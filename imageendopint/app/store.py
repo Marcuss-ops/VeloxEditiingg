@@ -19,6 +19,11 @@ class RedisJobStore:
     def __post_init__(self) -> None:
         self._redis = Redis.from_url(self.redis_url, decode_responses=True)
 
+    @property
+    def redis(self) -> Redis:
+        assert self._redis is not None
+        return self._redis
+
     def _job_key(self, job_id: str) -> str:
         return f"{self.job_key_prefix}:{job_id}"
 
