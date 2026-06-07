@@ -4,6 +4,8 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
 
 def _env_bool(name: str, default: bool) -> bool:
     value = os.getenv(name)
@@ -13,7 +15,10 @@ def _env_bool(name: str, default: bool) -> bool:
 
 
 def _expand(path: str) -> Path:
-    return Path(path).expanduser().resolve()
+    expanded = Path(path).expanduser()
+    if not expanded.is_absolute():
+        expanded = REPO_ROOT / expanded
+    return expanded.resolve()
 
 
 @dataclass(frozen=True)
@@ -29,11 +34,15 @@ class Settings:
     storage_state_path: Path | None
     headless: bool
     job_timeout_seconds: int
+    redis_url: str
+    redis_queue_name: str
+    redis_job_key_prefix: str
     project_url_template: str
     prompt_selector: str | None
     submit_selector: str | None
     result_poll_seconds: int
     max_result_wait_seconds: int
+    debug_screenshots: bool
 
 
 def load_settings() -> Settings:
@@ -57,12 +66,15 @@ def load_settings() -> Settings:
             else None
         ),
         storage_state_path=(
-            _expand(os.getenv("STORAGE_STATE_PATH"))
-            if os.getenv("STORAGE_STATE_PATH")
+            _expand(os.getenv("STORAGE_STATE_PATH", "outputs/flow-storage-state.json"))
+            if os.getenv("STORAGE_STATE_PATH", "outputs/flow-storage-state.json")
             else None
         ),
         headless=_env_bool("HEADLESS", True),
         job_timeout_seconds=int(os.getenv("JOB_TIMEOUT_SECONDS", "900")),
+        redis_url=os.getenv("REDIS_URL", "redis://127.0.0.1:6379/0"),
+        redis_queue_name=os.getenv("REDIS_QUEUE_NAME", "image-endpoint:jobs"),
+        redis_job_key_prefix=os.getenv("REDIS_JOB_KEY_PREFIX", "image-endpoint:job"),
         project_url_template=os.getenv(
             "PROJECT_URL_TEMPLATE",
             "https://labs.google/fx/tools/flow/project/{project_id}",
@@ -71,4 +83,5 @@ def load_settings() -> Settings:
         submit_selector=os.getenv("SUBMIT_SELECTOR") or None,
         result_poll_seconds=int(os.getenv("RESULT_POLL_SECONDS", "5")),
         max_result_wait_seconds=int(os.getenv("MAX_RESULT_WAIT_SECONDS", "300")),
+        debug_screenshots=_env_bool("DEBUG_SCREENSHOTS", False),
     )

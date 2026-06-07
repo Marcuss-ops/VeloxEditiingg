@@ -1,11 +1,12 @@
 # Image Endpoint
 
-Servizio HTTP minimale per lanciare Chromium/Chrome in modalità headless usando un profilo Google già autenticato e produrre immagini da un altro computer tramite API.
+Servizio HTTP per accodare richieste di generazione immagini, eseguirle in un worker separato e restituire artefatti scaricabili tramite API.
 
 ## Cosa fa
 
 - Espone `POST /v1/generate`
-- Esegue una singola generazione alla volta
+- Accoda i job in Redis
+- Esegue la generazione in un worker separato
 - Riusa i cookie e le sessioni del profilo Chrome copiandoli in un profilo di lavoro headless
 - Salva artefatti in `outputs/<job_id>/`
 
@@ -14,6 +15,7 @@ Servizio HTTP minimale per lanciare Chromium/Chrome in modalità headless usando
 - Python 3.11+
 - Google Chrome installato nel percorso configurato
 - Il profilo sorgente deve essere il root del profilo Chrome, di solito `~/.config/google-chrome`
+- Redis 7+ raggiungibile dal servizio
 
 ## Installazione
 
@@ -22,6 +24,12 @@ python -m venv .venv
 source .venv/bin/activate
 pip install -e .
 playwright install chromium
+```
+
+Per avviare Redis in locale:
+
+```bash
+docker run -p 6379:6379 --name image-endpoint-redis -d redis:7-alpine
 ```
 
 ## Configurazione
@@ -39,6 +47,9 @@ export STORAGE_STATE_PATH="/home/pierone/Pyt/imageendopint/outputs/flow-storage-
 export HEADLESS=true
 export HOST="0.0.0.0"
 export PORT="8000"
+export REDIS_URL="redis://127.0.0.1:6379/0"
+export REDIS_QUEUE_NAME="image-endpoint:jobs"
+export REDIS_JOB_KEY_PREFIX="image-endpoint:job"
 ```
 
 Se il sito Flow usa selettori stabili diversi, puoi forzarli:
@@ -79,11 +90,13 @@ Il flusso è:
 1. apri Chrome loggato una volta sola
 2. esporti lo stato sessione in `STORAGE_STATE_PATH`
 3. chiudi Chrome
-4. fai partire il server con `HEADLESS=true`
+4. fai partire API e worker con Redis attivo
 
 Da quel momento il backend:
 
-- apre Flow headless
+- riceve il prompt via API
+- accoda il job in Redis
+- il worker apre Flow headless
 - inserisce il prompt nella textbox
 - preme `Enter`
 - aspetta le immagini
@@ -99,7 +112,7 @@ Per fare login nel profilo che poi useremo per l'automazione:
 
 Poi usa quel Chrome per entrare su Flow e verificare che il progetto sia aperto.
 
-Quando mi dici di chiudere:
+Quando vuoi chiudere:
 
 ```bash
 ./scripts/chrome-session.sh close
@@ -109,14 +122,30 @@ Lo script salva il profilo in `.chrome-session/saved-sessions/<timestamp>/`.
 
 ## Avvio
 
+API:
+
 ```bash
 uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
-## Uso
+Worker:
 
 ```bash
-curl -X POST http://localhost:8000/v1/generate \
+image-endpoint-worker
+```
+
+In alternativa:
+
+```bash
+python -m app.worker
+```
+
+## Uso
+
+Invio job:
+
+```bash
+curl -X POST http://server-remoto:8000/v1/generate \
   -H "Authorization: Bearer una_chiave_lunga" \
   -H "Content-Type: application/json" \
   -d '{
@@ -131,11 +160,19 @@ Risposta:
 {"job_id":"...","status":"queued"}
 ```
 
-Poi:
+Stato job:
 
 ```bash
 curl -H "Authorization: Bearer una_chiave_lunga" \
-  http://localhost:8000/v1/jobs/<job_id>
+  http://server-remoto:8000/v1/jobs/<job_id>
+```
+
+Download artefatto:
+
+```bash
+curl -H "Authorization: Bearer una_chiave_lunga" \
+  http://server-remoto:8000/v1/jobs/<job_id>/artifact/generated-01.jpg \
+  --output generated-01.jpg
 ```
 
 Gli artefatti principali sono:
@@ -147,4 +184,4 @@ Gli artefatti principali sono:
 
 ## Nota importante
 
-La parte di automazione del sito Flow è volutamente generica. Se l'interfaccia usa pulsanti o campi con selettori diversi, imposta `PROMPT_SELECTOR` e `SUBMIT_SELECTOR` o adatta `app/browser.py` ai selettori reali.
+La parte di automazione del sito Flow è volutamente generica. Se l'interfaccia usa pulsanti o campi con selettori diversi, imposta `PROMPT_SELECTOR` e `SUBMIT_SELECTOR` o adatta `app/browser/` ai selettori reali.

@@ -1,4 +1,5 @@
 from __future__ import annotations
+import logging
 import asyncio
 import json
 import random
@@ -8,15 +9,30 @@ from typing import Any
 from playwright.async_api import async_playwright
 from playwright_stealth import Stealth
 
-from .utils import _copy_profile_tree, _load_netscape_cookie_jar, _unique_preserve_order
+from .utils import _load_netscape_cookie_jar, _unique_preserve_order
 from .extraction import _extract_image_sources, _download_images
 from .actions import _find_editable, _click_by_text, _select_4_images_layout
 from ..config import Settings
 
+logger = logging.getLogger("image_endpoint.worker")
+
+
+def _require_storage_state(settings: Settings) -> Path:
+    if settings.storage_state_path is None:
+        raise RuntimeError(
+            "STORAGE_STATE_PATH is required. Export a valid Flow session first."
+        )
+    if not settings.storage_state_path.exists():
+        raise FileNotFoundError(
+            f"storage state file not found: {settings.storage_state_path}"
+        )
+    return settings.storage_state_path
+
+
 async def run_generation(settings: Settings, request: Any, out_dir: Path) -> dict[str, Any]:
     # Random delay before starting to avoid saturation (1-5 seconds)
     start_delay = random.uniform(1.0, 5.0)
-    print(f"Starting generation for project {request.project_id} with {start_delay:.2f}s jitter...")
+    logger.info("starting generation project_id=%s jitter=%.2fs", request.project_id, start_delay)
     await asyncio.sleep(start_delay)
 
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -31,7 +47,9 @@ async def run_generation(settings: Settings, request: Any, out_dir: Path) -> dic
             if not launched_browser.contexts:
                 raise RuntimeError("No Chrome context available on the CDP endpoint")
             context = launched_browser.contexts[0]
-        elif settings.storage_state_path and settings.storage_state_path.exists():
+            auth_mode = "cdp"
+        else:
+            storage_state_path = _require_storage_state(settings)
             launched_browser = await p.chromium.launch(
                 executable_path=str(settings.chrome_executable),
                 headless=settings.headless,
@@ -42,24 +60,11 @@ async def run_generation(settings: Settings, request: Any, out_dir: Path) -> dic
                 ],
             )
             context = await launched_browser.new_context(
-                storage_state=str(settings.storage_state_path),
+                storage_state=str(storage_state_path),
                 viewport={"width": 1440, "height": 900},
             )
-        else:
-            profile_source = settings.profile_source_dir
-            profile_work = settings.profile_work_dir
-            _copy_profile_tree(profile_source, profile_work)
-            context = await p.chromium.launch_persistent_context(
-                user_data_dir=str(profile_work),
-                executable_path=str(settings.chrome_executable),
-                headless=settings.headless,
-                args=[
-                    "--disable-dev-shm-usage",
-                    "--no-first-run",
-                    "--no-default-browser-check",
-                ],
-                viewport={"width": 1440, "height": 900},
-            )
+            auth_mode = f"storage_state:{storage_state_path}"
+        logger.info("browser auth mode=%s", auth_mode)
 
         try:
             if settings.cookie_jar_path:
@@ -73,7 +78,8 @@ async def run_generation(settings: Settings, request: Any, out_dir: Path) -> dic
 
             await page.goto(url, wait_until="domcontentloaded")
             await page.wait_for_timeout(2_500)
-            await page.screenshot(path=str(out_dir / "01-landing.png"), full_page=True)
+            if settings.debug_screenshots:
+                await page.screenshot(path=str(out_dir / "01-landing.png"), full_page=True)
 
             await _click_by_text(page, "Understood")
             await page.wait_for_timeout(1_000)
@@ -84,12 +90,13 @@ async def run_generation(settings: Settings, request: Any, out_dir: Path) -> dic
 
             if "accounts.google.com" in page.url:
                 raise RuntimeError(
-                    "Google sign-in required. The cloned profile did not contain an active Flow session."
+                    f"Google sign-in required. The storage state file {settings.storage_state_path} did not contain a valid Flow session."
                 )
 
             # --- Layout selection ---
             await _select_4_images_layout(page)
-            await page.screenshot(path=str(out_dir / "02-after-layout-selection.png"), full_page=True)
+            if settings.debug_screenshots:
+                await page.screenshot(path=str(out_dir / "02-after-layout-selection.png"), full_page=True)
 
             editable = await _find_editable(page, settings.prompt_selector)
             if editable is None:
@@ -103,16 +110,20 @@ async def run_generation(settings: Settings, request: Any, out_dir: Path) -> dic
                 await editable.type(request.prompt, delay=20)
 
             await page.wait_for_timeout(500)
-            await page.screenshot(path=str(out_dir / "03-prompt-filled.png"), full_page=True)
+            if settings.debug_screenshots:
+                await page.screenshot(path=str(out_dir / "03-prompt-filled.png"), full_page=True)
 
             await page.keyboard.press("Enter")
+            await page.wait_for_timeout(1_500)
+            if settings.debug_screenshots:
+                await page.screenshot(path=str(out_dir / "04-after-submit.png"), full_page=True)
             
-            # Capture existing sources immediately after Enter
+            # Capture existing sources immediately after Enter.
             existing_sources = _unique_preserve_order(await _extract_image_sources(page))
 
             # Poll for results
-            max_wait = 80
-            poll_interval = 2.0 
+            max_wait = settings.max_result_wait_seconds
+            poll_interval = float(settings.result_poll_seconds)
             new_sources: list[str] = []
             
             for _ in range(int(max_wait / poll_interval)):
@@ -130,30 +141,41 @@ async def run_generation(settings: Settings, request: Any, out_dir: Path) -> dic
             # Download new images
             downloaded_paths = await _download_images(context, new_sources, out_dir)
 
-            await page.screenshot(path=str(screenshot_path), full_page=True)
+            if settings.debug_screenshots:
+                await page.screenshot(path=str(screenshot_path), full_page=True)
+            
             html_path.write_text(await page.content(), encoding="utf-8")
 
-            artifacts.append({"kind": "screenshot", "path": str(screenshot_path)})
+            if settings.debug_screenshots:
+                artifacts.append({"kind": "screenshot", "path": str(screenshot_path)})
+            
             artifacts.append({"kind": "html", "path": str(html_path)})
-            if new_sources:
-                artifacts.append({"kind": "image_sources", "value": new_sources})
-            if downloaded_paths:
-                artifacts.append({"kind": "downloaded_images", "value": downloaded_paths})
+            
+            # Filter for just JPGs if possible, or all correct ones
+            final_images = [p for p in downloaded_paths if p.lower().endswith(".jpg") or p.lower().endswith(".jpeg")]
+            # If no JPGs found (unlikely), fallback to all filtered downloads
+            if not final_images:
+                final_images = downloaded_paths
+
+            if final_images:
+                artifacts.append({"kind": "downloaded_images", "value": final_images})
 
             meta = {
                 "url": page.url,
                 "title": await page.title(),
-                "image_sources": new_sources,
-                "downloaded_images": downloaded_paths,
+                "downloaded_images": final_images,
                 "artifacts": artifacts,
             }
             meta_path.write_text(json.dumps(meta, indent=2, ensure_ascii=True), encoding="utf-8")
 
+            logger.info(
+                "generation finished project_id=%s images=%d",
+                request.project_id,
+                len(final_images),
+            )
             return meta
         finally:
             if not settings.chrome_cdp_url:
                 await context.close()
-                if launched_browser is not None and not (
-                    settings.storage_state_path and settings.storage_state_path.exists()
-                ):
+                if launched_browser is not None:
                     await launched_browser.close()
