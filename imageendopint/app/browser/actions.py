@@ -71,49 +71,68 @@ async def _click_by_text(page: Page, text: str) -> bool:
 async def _select_4_images_layout(page: Page) -> bool:
     """
     Specifically for Flow: 
-    1. Look for the 'Nano Banana' pill button at the bottom (prompt area)
-    2. Click it to open the settings popup
-    3. Look for the 'x4' button specifically and click it
+    1. Check if 'x4' is already active.
+    2. If not, click the 'Nano Banana' pill to open settings.
+    3. Click 'x4'.
+    4. Close the popup to ensure prompt area is clear.
     """
     try:
+        # Check if x4 is already visible and potentially active
+        # (This avoids opening the menu if not needed)
+        x4_btn = page.locator("button").filter(has_text=re.compile(r"^x4$", re.I))
+        if await x4_btn.count() > 0:
+            btn = x4_btn.first
+            if await btn.is_visible():
+                # Check if it's already "selected" (often has a specific class or aria attribute)
+                # For now, let's just see if it's there. If it's visible, we might be in the popup.
+                pass
+
         # Step 1: Click the agent/settings pill button
-        # We target buttons specifically in the bottom prompt container if possible,
-        # or filter by the unique structure of that pill.
-        # The pill usually has the agent name and layout info.
-        
-        # We search for buttons that are NOT inside the media gallery if possible
-        # but a safer way is to look for the one with 'x2' or 'x1' or 'x4' in the same text
         agent_btn = page.locator("button").filter(has_text=re.compile(r"Nano Banana", re.I))
-        
-        # If multiple found, the one in the bottom bar is usually later in the DOM 
-        # or has specific classes. Let's try to be specific about the button role.
         count = await agent_btn.count()
         if count > 0:
-            # We take the LAST one because images generated with that agent 
-            # might have the text, but the control pill is usually at the bottom.
-            target = agent_btn.last 
+            target = agent_btn.last # The pill in the bottom bar
             
+            # Check if current text already says 'x4'
+            current_text = await target.inner_text()
+            if "x4" in current_text:
+                logger.info("layout already set to x4 (detected in pill text)")
+                return True
+
             logger.info("clicking layout settings pill (found %d candidates)", count)
-            await target.click()
-            await page.wait_for_timeout(1500)
+            # Use shorter timeout to avoid 60s hang
+            await target.click(timeout=10000)
+            await page.wait_for_timeout(1000)
             
             # Step 2: Click the 'x4' button in the popup
             layout_x4 = page.locator("button").filter(has_text=re.compile(r"^x4$", re.I))
             
+            success = False
             if await layout_x4.count() > 0:
                 for i in range(await layout_x4.count()):
                     btn = layout_x4.nth(i)
                     if await btn.is_visible():
                         logger.info("selecting x4 layout")
-                        await btn.click()
-                        await page.wait_for_timeout(1000)
-                        return True
-            else:
+                        await btn.click(timeout=5000)
+                        await page.wait_for_timeout(500)
+                        success = True
+                        break
+            
+            if not success:
                 layout_4 = page.locator("button").filter(has_text=re.compile(r"^4$", re.I))
                 if await layout_4.count() > 0:
-                     await layout_4.first.click()
-                     return True
+                     await layout_4.first.click(timeout=5000)
+                     success = True
+            
+            # Step 3: CLOSE the popup by pressing Escape or clicking outside
+            # This ensures the prompt field is not obscured
+            await page.keyboard.press("Escape")
+            await page.wait_for_timeout(500)
+            return success
                      
     except Exception as e:
-        logger.warning("layout selection failed: %s", e)
+        logger.warning("layout selection failed or timed out: %s", e)
+        # Try to recover by closing any popup
+        try: await page.keyboard.press("Escape")
+        except: pass
     return False
