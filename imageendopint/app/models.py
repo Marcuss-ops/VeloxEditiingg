@@ -16,6 +16,7 @@ class GenerateRequest:
     prompt: str
     negative_prompt: str | None = None
     reference_image_url: str | None = None
+    webhook_url: str | None = None
     extra: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -24,6 +25,7 @@ class GenerateRequest:
             "prompt": self.prompt,
             "negative_prompt": self.negative_prompt,
             "reference_image_url": self.reference_image_url,
+            "webhook_url": self.webhook_url,
             "extra": self.extra,
         }
 
@@ -34,6 +36,7 @@ class GenerateRequest:
             prompt=str(data["prompt"]),
             negative_prompt=data.get("negative_prompt"),
             reference_image_url=data.get("reference_image_url"),
+            webhook_url=data.get("webhook_url"),
             extra=dict(data.get("extra") or {}),
         )
 

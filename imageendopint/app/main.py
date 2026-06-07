@@ -90,11 +90,11 @@ async def generate(
 
     req = GenerateRequest(
         project_id=str(project_id),
-
         prompt=str(prompt),
         negative_prompt=payload.get("negative_prompt"),
         reference_image_url=payload.get("reference_image_url"),
-        extra={k: v for k, v in payload.items() if k not in {"project_id", "prompt", "negative_prompt", "reference_image_url"}},
+        webhook_url=payload.get("webhook_url"),
+        extra={k: v for k, v in payload.items() if k not in {"project_id", "prompt", "negative_prompt", "reference_image_url", "webhook_url"}},
     )
     client_ip = _client_ip(request)
     user_agent = request.headers.get("user-agent")

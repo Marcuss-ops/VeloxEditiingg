@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from pathlib import Path
 
+import httpx
+
 from .browser import run_generation
 from .config import load_settings
+from .models import JobRecord
 from .store import RedisJobStore
 
 logger = logging.getLogger("image_endpoint.worker")
@@ -21,6 +25,28 @@ def _job_logger(job_id: str, out_dir: Path) -> tuple[logging.LoggerAdapter, logg
     job_logger.handlers = [file_handler]
     job_logger.propagate = True
     return logging.LoggerAdapter(job_logger, {"job_id": job_id}), file_handler
+
+
+async def _notify_webhook(job: JobRecord, out_dir: Path) -> None:
+    if not job.request.webhook_url:
+        return
+
+    logger.info("job_id=%s sending webhook to %s", job.id, job.request.webhook_url)
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            files = {}
+            if job.status == "succeeded" and job.result and "images" in job.result:
+                for img_name in job.result["images"]:
+                    img_path = out_dir / img_name
+                    if img_path.exists():
+                        files[img_name] = (img_name, img_path.read_bytes(), "image/jpeg")
+
+            # Send job data + files as multipart/form-data
+            data = {"job_json": json.dumps(job.to_dict())}
+            response = await client.post(job.request.webhook_url, data=data, files=files)
+            logger.info("job_id=%s webhook response status=%d", job.id, response.status_code)
+    except Exception as exc:
+        logger.error("job_id=%s webhook failed: %s", job.id, exc)
 
 
 async def _run_once(store: RedisJobStore, settings, job_id: str) -> None:
@@ -56,6 +82,8 @@ async def _run_once(store: RedisJobStore, settings, job_id: str) -> None:
         job_log.exception("job failed: %s", exc)
     finally:
         await store.update_job(job)
+        # Notify webhook if configured
+        await _notify_webhook(job, out_dir)
         file_handler.close()
 
 
