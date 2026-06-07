@@ -83,15 +83,14 @@ async def generate(
     if not project_id or not prompt:
         raise HTTPException(status_code=400, detail="project_id and prompt are required")
 
-    # If project_id is a placeholder or not a UUID, pick a random one from pool
-    is_uuid = bool(re.match(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", str(project_id), re.I))
-    if not is_uuid or project_id == "velox-test":
-        new_project_id = random.choice(settings.project_id_pool)
-        logger.info("invalid project_id='%s' substituted with random pool ID='%s'", project_id, new_project_id)
-        project_id = new_project_id
+    # Use a valid project ID from the pool if the provided one is a placeholder or not in our verified list
+    if project_id == "velox-test" or str(project_id) not in settings.project_id_pool:
+        project_id = random.choice(settings.project_id_pool)
+        logger.info("Assigned valid project_id='%s' for this request", project_id)
 
     req = GenerateRequest(
         project_id=str(project_id),
+
         prompt=str(prompt),
         negative_prompt=payload.get("negative_prompt"),
         reference_image_url=payload.get("reference_image_url"),
