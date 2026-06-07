@@ -43,9 +43,16 @@ class Settings:
     result_poll_seconds: int
     max_result_wait_seconds: int
     debug_screenshots: bool
+    project_id_pool: list[str]
 
 
 def load_settings() -> Settings:
+    pool_str = os.getenv(
+        "PROJECT_ID_POOL",
+        "6a001474-4561-4f81-9c0d-65af18805fec,cb0cedf9-ba06-430f-ac7b-bd4342d2f03e,d169c946-60d3-4b75-b185-ec7e1db44a6f",
+    )
+    project_id_pool = [s.strip() for s in pool_str.split(",") if s.strip()]
+
     return Settings(
         host=os.getenv("HOST", "0.0.0.0"),
         port=int(os.getenv("PORT", "8000")),
@@ -84,4 +91,5 @@ def load_settings() -> Settings:
         result_poll_seconds=int(os.getenv("RESULT_POLL_SECONDS", "5")),
         max_result_wait_seconds=int(os.getenv("MAX_RESULT_WAIT_SECONDS", "300")),
         debug_screenshots=_env_bool("DEBUG_SCREENSHOTS", False),
+        project_id_pool=project_id_pool,
     )
