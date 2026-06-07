@@ -49,7 +49,7 @@ class Settings:
 def load_settings() -> Settings:
     pool_str = os.getenv(
         "PROJECT_ID_POOL",
-        "6a001474-4561-4f81-9c0d-65af18805fec,cb0cedf9-ba06-430f-ac7b-bd4342d2f03e,d169c946-60d3-4b75-b185-ec7e1db44a6f",
+        "6a001474-4561-4f81-9c0d-65af18805fec,cb0cedf9-ba06-430f-ac7b-bd4342d2f03e,d169c946-60d3-4b75-b185-ec7e1db44a6f,e3053c71-7683-4110-aba3-95f43ac8acb7",
     )
     project_id_pool = [s.strip() for s in pool_str.split(",") if s.strip()]
 
