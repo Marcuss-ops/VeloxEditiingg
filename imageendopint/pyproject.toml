@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "image-endpoint"
+version = "0.1.0"
+description = "Headless Chrome image generation endpoint"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.30",
+  "playwright>=1.45",
+  "playwright-stealth>=2.0",
+]
+
+[tool.setuptools]
+packages = ["app"]
+

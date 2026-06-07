@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.cache/
+.chrome-session/
+outputs/
+.env
+venv/
+*.egg-info/
