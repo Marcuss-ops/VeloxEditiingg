@@ -146,24 +146,24 @@ async def run_generation(settings: Settings, request: Any, out_dir: Path) -> dic
             
             html_path.write_text(await page.content(), encoding="utf-8")
 
+            # Store only filenames in artifacts for easier remote access
             if settings.debug_screenshots:
-                artifacts.append({"kind": "screenshot", "path": str(screenshot_path)})
+                artifacts.append({"kind": "screenshot", "name": screenshot_path.name})
             
-            artifacts.append({"kind": "html", "path": str(html_path)})
+            artifacts.append({"kind": "html", "name": html_path.name})
             
-            # Filter for just JPGs if possible, or all correct ones
-            final_images = [p for p in downloaded_paths if p.lower().endswith(".jpg") or p.lower().endswith(".jpeg")]
-            # If no JPGs found (unlikely), fallback to all filtered downloads
-            if not final_images:
-                final_images = downloaded_paths
+            # Filter for just JPGs and keep only the filenames
+            final_filenames = [Path(p).name for p in downloaded_paths if p.lower().endswith(".jpg") or p.lower().endswith(".jpeg")]
+            if not final_filenames:
+                final_filenames = [Path(p).name for p in downloaded_paths]
 
-            if final_images:
-                artifacts.append({"kind": "downloaded_images", "value": final_images})
+            if final_filenames:
+                artifacts.append({"kind": "downloaded_images", "value": final_filenames})
 
             meta = {
                 "url": page.url,
                 "title": await page.title(),
-                "downloaded_images": final_images,
+                "images": final_filenames,
                 "artifacts": artifacts,
             }
             meta_path.write_text(json.dumps(meta, indent=2, ensure_ascii=True), encoding="utf-8")
