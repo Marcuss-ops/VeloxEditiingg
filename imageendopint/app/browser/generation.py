@@ -122,14 +122,16 @@ async def run_generation(settings: Settings, request: Any, out_dir: Path) -> dic
             existing_sources = _unique_preserve_order(await _extract_image_sources(page))
 
             # Poll for results
-            max_wait = settings.max_result_wait_seconds
-            poll_interval = float(settings.result_poll_seconds)
+            max_wait = 80  # Force 80 seconds maximum wait
+            poll_interval = 5.0 # 5 seconds as requested
             new_sources: list[str] = []
             took_40s_screenshot = False
             
-            logger.info("starting polling loop for project_id=%s", request.project_id)
+            logger.info("starting 5s-interval polling loop for project_id=%s (max 80s)", request.project_id)
+            start_poll_time = asyncio.get_event_loop().time()
+            
             for i in range(int(max_wait / poll_interval)):
-                elapsed = i * poll_interval
+                elapsed = asyncio.get_event_loop().time() - start_poll_time
                 
                 # Take requested screenshot after 40 seconds
                 if not took_40s_screenshot and elapsed >= 40:
@@ -140,19 +142,19 @@ async def run_generation(settings: Settings, request: Any, out_dir: Path) -> dic
                         logger.info("captured 40s mid-polling screenshot")
                     took_40s_screenshot = True
 
+                # Extract and compare
                 current_sources = _unique_preserve_order(await _extract_image_sources(page))
                 new_sources = [s for s in current_sources if s not in existing_sources]
                 
+                # We expect 4 images, but we'll accept what we find if we hit the limit
                 if len(new_sources) >= 4:
-                    logger.info("found %d images after %d attempts", len(new_sources), i+1)
+                    logger.info("found %d images after %.1fs", len(new_sources), elapsed)
                     break
                 
-                if i % 10 == 0:
-                    logger.info("polling... (attempt %d, found %d images)", i+1, len(new_sources))
-                    
+                logger.info("polling... (elapsed %.1fs, found %d images)", elapsed, len(new_sources))
                 await page.wait_for_timeout(int(poll_interval * 1000))
 
-            logger.info("finished polling, total new_sources=%d", len(new_sources))
+            logger.info("finished polling, final new_sources count=%d", len(new_sources))
             
             # Download new images
             logger.info("starting download of %d images", len(new_sources))
