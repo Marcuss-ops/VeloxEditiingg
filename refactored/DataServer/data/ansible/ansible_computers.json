@@ -1,0 +1,15 @@
+{
+  "host_57.129.132.133": {
+    "host": "57.129.132.133",
+    "ansible_user": "pierone",
+    "enabled": true,
+    "availability": "AVAILABLE",
+    "group": "",
+    "subgroup": "",
+    "tags": [],
+    "notes": "",
+    "created_at": "",
+    "updated_at": "",
+    "last_seen_at": "2026-06-07T14:29:22Z"
+  }
+}

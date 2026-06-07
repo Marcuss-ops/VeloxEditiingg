@@ -1,0 +1,498 @@
+# ============================================================
+# VELOX WORKER SYSTEMD SETUP - SINGLE SOURCE OF TRUTH
+# ============================================================
+# This file defines the ONLY valid systemd configuration for Velox workers.
+#
+# ACTIVE UNITS (Docker/Go):
+#   - velox-worker-<host>.service  → Docker container with Go binary
+#   - velox-worker-console.service → Docker UI console (port 8088)
+#   - velox-worker-watchdog.*      → Auto-restart monitor
+#   - velox-auto-update.*          → 12h OS + bundle update
+#
+# LEGACY UNITS (Python - DEPRECATED/MASKED):
+#   - velox-worker.service (generic, no hostname) → MASKED
+#   - velox-worker-<host>.service.d/ (override dir) → REMOVED
+#   - worker_bootstrap.py executions → REMOVED
+#
+# Single Source of Truth: velox-worker-<host>.service (Docker only)
+# ============================================================
+
+---
+- name: Write env file
+  copy:
+    dest: /etc/velox-worker.env
+    mode: "0600"
+    content: |
+      MASTER_URL={{ master_url }}
+      VELOX_HEARTBEAT_MASTERS={{ master_url }}{% if master_url_secondary is defined and master_url_secondary %},{{ master_url_secondary }}{% endif %}
+      VELOX_SECONDARY_MASTER_URL={% if master_url_secondary is defined and master_url_secondary %}{{ master_url_secondary }}{% else %}{% endif %}
+      WORKER_NAME={{ inventory_hostname }}
+      VELOX_DIR={{ velox_dir }}
+      VELOX_OVERLAY_ENGINE=remotion
+      VELOX_REMOTION_PROJECT_PATH={{ velox_dir }}/current/my-video
+
+- name: Detect current bundle layout (legacy refactored vs flat)
+  stat:
+    path: "{{ velox_dir }}/current/refactored/RemoteCodex/Dockerfile.worker"
+  register: legacy_layout_dockerfile
+
+- name: Set bundle layout paths
+  set_fact:
+    velox_current_root: >-
+      {{ (velox_dir + '/current/refactored') if (legacy_layout_dockerfile.stat.exists | default(false)) else (velox_dir + '/current') }}
+    velox_assets_cache_host_path: >-
+      {{ (velox_dir + '/current/refactored/RemoteCodex/assets_cache') if (legacy_layout_dockerfile.stat.exists | default(false)) else (velox_dir + '/current/RemoteCodex/assets_cache') }}
+
+- name: Ensure velox-worker Docker image (reuse installer build when available)
+  shell: |
+    set -e
+    DOCKERFILE="{{ velox_current_root }}/RemoteCodex/Dockerfile.worker"
+    CONTEXT="{{ velox_current_root }}/RemoteCodex"
+    if [ ! -f "$DOCKERFILE" ]; then
+      echo "Dockerfile.worker missing at $DOCKERFILE"
+      exit 1
+    fi
+    if /usr/bin/docker image inspect velox-worker:latest >/dev/null 2>&1; then
+      echo "Image velox-worker:latest already present (skip rebuild)"
+      exit 0
+    fi
+    if /usr/bin/docker buildx version >/dev/null 2>&1; then
+      export DOCKER_BUILDKIT=1
+    fi
+    /usr/bin/docker build \
+      -f "$DOCKERFILE" \
+      -t velox-worker:latest \
+      "$CONTEXT"
+    /usr/bin/docker image inspect velox-worker:latest >/dev/null 2>&1
+    echo "Image velox-worker:latest built successfully"
+  args:
+    executable: /bin/bash
+  register: worker_image_build
+  changed_when: "'built successfully' in (worker_image_build.stdout | default(''))"
+  failed_when: worker_image_build.rc != 0
+
+- name: Log Docker image preparation result
+  debug:
+    msg: "{{ worker_image_build.stdout | default('no output') }}"
+
+- name: Build velox-worker-console Docker image
+  shell: |
+    set -e
+    DOCKERFILE="{{ velox_current_root }}/RemoteCodex/worker-console/Dockerfile.console"
+    CONTEXT="{{ velox_current_root }}/RemoteCodex/worker-console"
+    if [ ! -f "$DOCKERFILE" ]; then
+      echo "Dockerfile.console missing at $DOCKERFILE"
+      exit 1
+    fi
+    if [ ! -f "{{ velox_current_root }}/RemoteCodex/worker-console/web/dist/index.html" ]; then
+      echo "worker-console dist missing (expected web/dist/index.html)"
+      exit 1
+    fi
+    if /usr/bin/docker buildx version >/dev/null 2>&1; then
+      export DOCKER_BUILDKIT=1
+    fi
+    /usr/bin/docker build \
+      -f "$DOCKERFILE" \
+      -t velox-worker-console:latest \
+      "$CONTEXT"
+    /usr/bin/docker image inspect velox-worker-console:latest >/dev/null 2>&1
+    echo "Image velox-worker-console:latest built successfully"
+  args:
+    executable: /bin/bash
+  register: console_image_build
+  changed_when: true
+  failed_when: console_image_build.rc != 0
+
+- name: Log worker-console image preparation result
+  debug:
+    msg: "{{ console_image_build.stdout | default('no output') }}"
+
+- name: Ensure velox console bin directory
+  file:
+    path: /opt/velox/bin
+    state: directory
+    mode: "0755"
+
+- name: Install worker-console opener script
+  copy:
+    dest: /opt/velox/bin/velox-worker-console-open.sh
+    mode: "0755"
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      URL="${VELOX_CONSOLE_URL:-http://127.0.0.1:8088/#/console}"
+      # Avoid opening duplicate windows for the same console URL.
+      if pgrep -af "epiphany.*${URL}|firefox.*${URL}" >/dev/null 2>&1; then
+        exit 0
+      fi
+      # Prefer a Linux app-style window (GNOME Web), not Chrome.
+      if command -v epiphany >/dev/null 2>&1; then
+        nohup epiphany --application-mode "$URL" >/dev/null 2>&1 &
+      elif command -v firefox >/dev/null 2>&1; then
+        nohup firefox --new-window "$URL" >/dev/null 2>&1 &
+      elif command -v xdg-open >/dev/null 2>&1; then
+        nohup xdg-open "$URL" >/dev/null 2>&1 &
+      else
+        echo "No opener found. Open manually: $URL"
+      fi
+
+- name: Install worker-console systemd service (Docker)
+  copy:
+    dest: /etc/systemd/system/velox-worker-console.service
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Velox Worker Console (Docker)
+      After=network-online.target docker.service
+      Wants=network-online.target docker.service
+      StartLimitIntervalSec=0
+
+      [Service]
+      Type=simple
+      ExecStartPre=/bin/sh -c '/usr/bin/docker rm -f velox-worker-console >/dev/null 2>&1 || true'
+      ExecStartPre=/bin/sh -c '/usr/bin/docker image inspect velox-worker-console:latest >/dev/null'
+      ExecStart=/usr/bin/docker run --name velox-worker-console --rm -e MASTER_URL={{ master_url }} -p 8088:8088 velox-worker-console:latest
+      ExecStop=/bin/sh -c '/usr/bin/docker stop -t 15 velox-worker-console >/dev/null 2>&1 || true'
+      ExecStopPost=/bin/sh -c '/usr/bin/docker rm -f velox-worker-console >/dev/null 2>&1 || true'
+      Restart=always
+      RestartSec=2
+      TimeoutStartSec=120
+      StandardOutput=journal
+      StandardError=journal
+      SyslogIdentifier=velox-worker-console
+
+      [Install]
+      WantedBy=multi-user.target
+
+- name: Ensure XDG autostart directory exists
+  file:
+    path: /etc/xdg/autostart
+    state: directory
+    mode: "0755"
+
+- name: Install worker-console desktop autostart
+  copy:
+    dest: /etc/xdg/autostart/velox-worker-console.desktop
+    mode: "0644"
+    content: |
+      [Desktop Entry]
+      Type=Application
+      Name=Velox Worker Console
+      Comment=Open Velox Worker Console on login
+      Exec=/opt/velox/bin/velox-worker-console-open.sh
+      Terminal=false
+      X-GNOME-Autostart-enabled=true
+      NoDisplay=false
+
+- name: Stop worker service before rewriting unit
+  systemd:
+    name: velox-worker-{{ inventory_hostname }}
+    state: stopped
+  failed_when: false
+
+- name: Preserve host-specific canonical override directory
+  file:
+    path: /etc/systemd/system/velox-worker-{{ inventory_hostname }}.service.d
+    state: directory
+    mode: "0755"
+
+# ── LEGACY PYTHON WORKER CLEANUP ──────────────────────────────
+- name: Stop legacy Python worker unit (no hostname suffix)
+  systemd:
+    name: velox-worker
+    state: stopped
+  failed_when: false
+
+- name: Mask legacy Python worker unit (no hostname suffix)
+  systemd:
+    name: velox-worker
+    masked: yes
+    enabled: no
+  failed_when: false
+
+- name: Remove legacy Python worker unit file
+  file:
+    path: /etc/systemd/system/velox-worker.service
+    state: absent
+  failed_when: false
+
+- name: Remove legacy Python worker bootstrap files
+  file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - "{{ velox_dir }}/current/worker_bootstrap.py"
+    - "{{ velox_dir }}/current/refactored/worker_bootstrap.py"
+    - "{{ velox_dir }}/current/refactored/modules/installation/worker_bootstrap.py"
+  failed_when: false
+
+- name: Verify no Python worker processes running
+  shell: |
+    set +e
+    # Kill any stray Python worker processes
+    pkill -f "job_worker.py" 2>/dev/null || true
+    pkill -f "worker_bootstrap.py" 2>/dev/null || true
+    echo "Legacy Python worker processes cleaned"
+  changed_when: false
+  failed_when: false
+
+# ── DOCKER GO WORKER SERVICE (Single Source of Truth) ──────────
+- name: Create systemd service
+  copy:
+    dest: /etc/systemd/system/velox-worker-{{ inventory_hostname }}.service
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Velox Worker - {{ inventory_hostname }}
+      After=network-online.target
+      Wants=network-online.target
+
+      [Service]
+      Type=simple
+      EnvironmentFile=/etc/velox-worker.env
+      WorkingDirectory={{ velox_dir }}/current
+      ExecStartPre=/bin/sh -c '/usr/bin/docker rm -f velox-worker-{{ inventory_hostname }} >/dev/null 2>&1 || true'
+      ExecStart=/usr/bin/docker run -e VELOX_REMOTION_PROJECT_PATH=/app/RemoteCodex/Remotion --name velox-worker-{{ inventory_hostname }} --rm --network host --shm-size=2g -v {{ velox_dir }}/cache:/root/.cache -v {{ velox_assets_cache_host_path }}:/app/RemoteCodex/assets_cache --entrypoint /bin/sh velox-worker:latest -lc 'CFG=/tmp/velox-worker/worker_config.json; mkdir -p /tmp/velox-worker; [ -f "$CFG" ] || /usr/local/bin/velox-worker-agent -generate-config -config "$CFG" -work-dir /app/RemoteCodex; exec /usr/local/bin/velox-worker-agent -config "$CFG" -master {{ master_url }} -worker-id {{ inventory_hostname }} -work-dir /app/RemoteCodex -api-mode new_api'
+      ExecStop=/bin/sh -c '/usr/bin/docker stop -t 20 velox-worker-{{ inventory_hostname }} >/dev/null 2>&1 || true'
+      ExecStopPost=/bin/sh -c '/usr/bin/docker rm -f velox-worker-{{ inventory_hostname }} >/dev/null 2>&1 || true'
+      TimeoutStopSec=35
+      KillMode=control-group
+      SuccessExitStatus=137 143
+      Restart=always
+      RestartSec=10
+      StandardOutput=journal
+      StandardError=journal
+      SyslogIdentifier=velox-worker-{{ inventory_hostname }}
+
+      [Install]
+      WantedBy=multi-user.target
+
+- name: Reload systemd
+  systemd:
+    daemon_reload: yes
+
+- name: Reset failed state for worker service
+  shell: systemctl reset-failed "velox-worker-{{ inventory_hostname }}" || true
+  args:
+    executable: /bin/bash
+  changed_when: false
+
+- name: Enable and start worker
+  systemd:
+    name: velox-worker-{{ inventory_hostname }}
+    enabled: yes
+    state: restarted
+
+- name: Enable and start worker-console service
+  systemd:
+    name: velox-worker-console
+    enabled: yes
+    state: restarted
+
+- name: Install showlog wrapper on controller (master)
+  copy:
+    src: "{{ playbook_dir }}/../../../../utils/admin/showlog"
+    dest: /usr/local/bin/showlog
+    mode: '0755'
+  delegate_to: localhost
+  become: yes
+  ignore_errors: yes
+  when: install_showlog_wrapper | default(false) | bool
+
+- name: Verifica stato servizio worker
+  shell: |
+    set +e
+    systemctl is-active "velox-worker-{{ inventory_hostname }}" 2>/dev/null || true
+  register: worker_service_active
+  changed_when: false
+  failed_when: false
+
+# ── EXECSTART VALIDATION (UNIT_POLICY.md compliance) ───────────
+- name: Read ExecStart from canonical worker unit
+  command: systemctl show "velox-worker-{{ inventory_hostname }}" --property=ExecStart --value
+  register: execstart_raw
+  changed_when: false
+  failed_when: false
+
+- name: Normalize ExecStart for validation
+  set_fact:
+    execstart_value: "{{ execstart_raw.stdout | default('') | trim }}"
+
+- name: Compute ExecStart validation code
+  set_fact:
+    execstart_validation_code: >-
+      {% set e = execstart_value | lower %}
+      {% if e | length == 0 %}EMPTY_EXECSTART{% elif 'job_worker.py' in e or 'worker_bootstrap.py' in e %}LEGACY_PYTHON{% elif 'velox-worker-agent' in e or 'docker run' in e %}PASS{% else %}UNKNOWN_FORMAT{% endif %}
+
+- name: Build ExecStart validation object
+  set_fact:
+    execstart_validation:
+      rc: "{% if execstart_validation_code == 'PASS' %}0{% elif execstart_validation_code == 'LEGACY_PYTHON' %}1{% elif execstart_validation_code == 'EMPTY_EXECSTART' %}2{% else %}3{% endif %}"
+      stdout: "{{ execstart_value }}"
+      stdout_lines:
+        - "VALIDATION_CODE={{ execstart_validation_code }}"
+        - "ExecStart={{ execstart_value }}"
+  changed_when: false
+
+- name: Log ExecStart validation result
+  debug:
+    msg: |
+      ExecStart Validation: {{ execstart_validation.stdout_lines | join('\n') }}
+      Validation Code: {{ execstart_validation_code }}
+
+- name: Fail if legacy Python ExecStart detected
+  fail:
+    msg: |
+      CRITICAL: Legacy Python worker detected after systemd setup!
+      Unit: velox-worker-{{ inventory_hostname }}
+      {{ execstart_validation.stdout }}
+      
+      This should not happen - the unit file was just created with Docker/Go ExecStart.
+      Possible causes:
+      1. Override file modified ExecStart
+      2. Unit file was replaced after creation
+      
+      Action: Check /etc/systemd/system/velox-worker-{{ inventory_hostname }}.service.d/ for overrides
+  when: execstart_validation_code == 'LEGACY_PYTHON'
+
+- name: Install velox-worker watchdog (auto-restart if service stopped)
+  copy:
+    dest: /etc/systemd/system/velox-worker-watchdog.service
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Velox Worker Watchdog (ensure service stays running)
+      After=network-online.target
+      Wants=network-online.target
+
+      [Service]
+      Type=oneshot
+      # Watchdog con safety check per evitare riattivazione unit legacy
+      # UNIT_POLICY.md: velox-worker.service (no hostname) è VIETATA
+      ExecStart=/bin/bash -lc '\
+        # List all velox-worker*.service units
+        units_all=$(systemctl list-unit-files "velox-worker*.service" --no-legend --no-pager 2>/dev/null | awk "{print \\$1}" | grep -E "^velox-worker.*\\.service$" | grep -v "velox-worker-watchdog" || true); \
+        \
+        # Filter: ONLY host-specific units (velox-worker-HOST.service), EXCLUDE legacy (velox-worker.service)
+        # Legacy unit has NO hostname suffix and is FORBIDDEN per UNIT_POLICY.md
+        units=""; \
+        for u in $units_all; do \
+          # Skip legacy unit (no hostname suffix) - it must stay masked
+          if [ "$u" = "velox-worker.service" ]; then \
+            echo "[watchdog] Skipping legacy unit: $u (masked per policy)"; \
+            continue; \
+          fi; \
+          # Only process host-specific units (must have hostname suffix)
+          if echo "$u" | grep -qE "^velox-worker-.+\\.service$"; then \
+            # Validate ExecStart is Docker/Go before restarting
+            exec_start=$(systemctl show "$u" --property=ExecStart --value 2>/dev/null || echo ""); \
+            if echo "$exec_start" | grep -qE "docker run.*velox-worker|velox-worker-agent"; then \
+              units="$units $u"; \
+            elif echo "$exec_start" | grep -qE "job_worker\\.py|worker_bootstrap\\.py"; then \
+              echo "[watchdog] WARNING: Skipping unit with legacy Python ExecStart: $u"; \
+              echo "[watchdog] ExecStart: $exec_start"; \
+            else \
+              echo "[watchdog] WARNING: Skipping unit with unknown ExecStart: $u"; \
+            fi; \
+          fi; \
+        done; \
+        \
+        # Restart only validated canonical units
+        for u in $units; do \
+          [ -z "$u" ] && continue; \
+          systemctl is-enabled "$u" >/dev/null 2>&1 || systemctl enable "$u" >/dev/null 2>&1 || true; \
+          systemctl is-active "$u" >/dev/null 2>&1 || { \
+            echo "[watchdog] Restarting canonical unit: $u"; \
+            systemctl restart "$u" >/dev/null 2>&1 || systemctl start "$u" >/dev/null 2>&1 || true; \
+          }; \
+        done'
+      StandardOutput=journal
+      StandardError=journal
+      SyslogIdentifier=velox-worker-watchdog
+
+- name: Install velox-worker watchdog timer (every 5 minutes)
+  copy:
+    dest: /etc/systemd/system/velox-worker-watchdog.timer
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Velox Worker Watchdog Timer
+
+      [Timer]
+      OnBootSec=5min
+      OnUnitActiveSec=5min
+      AccuracySec=30s
+      Unit=velox-worker-watchdog.service
+
+      [Install]
+      WantedBy=timers.target
+
+- name: Enable watchdog timer
+  systemd:
+    name: velox-worker-watchdog.timer
+    enabled: yes
+    state: started
+    daemon_reload: yes
+
+# ── 12h Auto-Update: OS + Bundle + Restart ────────────────────
+- name: Install velox-auto-update service (OS upgrade + bundle refresh)
+  copy:
+    dest: /etc/systemd/system/velox-auto-update.service
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Velox Worker Auto-Update (12h cycle)
+      After=network-online.target
+      Wants=network-online.target
+
+      [Service]
+      Type=oneshot
+      EnvironmentFile=/etc/velox-worker.env
+      # Step 1: OS update
+      ExecStart=/bin/bash -lc 'apt-get update -qq && apt-get upgrade -y -qq --no-install-recommends 2>&1 | tail -5'
+      # Step 2: Scarica e applica nuovo bundle dal master
+      ExecStart=/bin/bash -lc '\
+        MASTER=${MASTER_URL}; \
+        WORKER_ZIP=/tmp/velox-update-$(date +%%s).zip; \
+        if curl -sf --max-time 60 "$MASTER/api/worker/bundle?platform=linux&arch=x86_64" -o "$WORKER_ZIP" && [ -s "$WORKER_ZIP" ]; then \
+          python3 -c "import zipfile; z=zipfile.ZipFile(\"$WORKER_ZIP\"); print(z.namelist()[:3])" 2>/dev/null && \
+          INSTALLER={{ velox_dir }}/current/velox-installer; \
+          [ -x "$INSTALLER" ] && "$INSTALLER" --target-dir {{ velox_dir }} --package-source "$WORKER_ZIP" || true; \
+          rm -f "$WORKER_ZIP"; \
+        else \
+          echo "[auto-update] Bundle download skipped (master non raggiungibile)"; \
+        fi'
+      # Step 3: Restart worker service
+      ExecStart=/bin/bash -lc 'for u in $(systemctl list-unit-files "velox-worker*.service" --no-legend --no-pager 2>/dev/null | awk "{print $1}" | grep -Ev "watchdog|auto-update"); do systemctl restart "$u" 2>/dev/null || true; done; echo "[auto-update] Done at $(date)"'
+      StandardOutput=journal
+      StandardError=journal
+      SyslogIdentifier=velox-auto-update
+
+- name: Install velox-auto-update timer (ogni 12 ore)
+  copy:
+    dest: /etc/systemd/system/velox-auto-update.timer
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Velox Worker Auto-Update Timer (12h)
+
+      [Timer]
+      # Prima esecuzione 12h dopo il boot (worker stabile prima di aggiornare)
+      OnBootSec=12h
+      # Poi ogni 12 ore
+      OnUnitActiveSec=12h
+      # Jitter random fino a 30min per evitare che tutti i worker si aggiornino insieme
+      RandomizedDelaySec=1800
+      AccuracySec=60s
+      Unit=velox-auto-update.service
+      Persistent=true
+
+      [Install]
+      WantedBy=timers.target
+
+- name: Enable e avvia auto-update timer
+  systemd:
+    name: velox-auto-update.timer
+    enabled: yes
+    state: started
+    daemon_reload: yes

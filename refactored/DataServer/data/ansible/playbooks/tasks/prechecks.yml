@@ -1,0 +1,181 @@
+---
+- name: Pre-check | Verifica file locali richiesti dal controller
+  vars:
+    required_files:
+      - "{{ playbook_dir }}/tasks/installer_heartbeat.yml"
+      - "{{ playbook_dir }}/../../worker_downloads/worker_code.zip"
+  stat:
+    path: "{{ item }}"
+  loop: "{{ required_files }}"
+  register: required_files_stats
+  delegate_to: localhost
+  become: no
+
+- name: Pre-check | Fail se file locali mancanti
+  assert:
+    that:
+      - required_files_stats.results | selectattr('stat.exists', 'equalto', true) | list | length == (required_files_stats.results | length)
+    fail_msg: >-
+      File locale mancante sul controller: {{
+        (required_files_stats.results | selectattr('stat.exists','equalto',false) | map(attribute='invocation.module_args.path') | list) | join(', ')
+      }}
+
+- name: Pre-check | Resolve installer locale (nuovo Go preferito, fallback legacy)
+  vars:
+    installer_candidates:
+      - "{{ playbook_dir }}/../../../../RemoteCodex/native/worker-agent-go/bin/velox-installer"
+      - "{{ playbook_dir }}/../../../bin/velox-installer"
+  stat:
+    path: "{{ item }}"
+  loop: "{{ installer_candidates }}"
+  register: installer_candidates_stats
+  delegate_to: localhost
+  become: no
+
+- name: Pre-check | Set installer locale selezionato
+  set_fact:
+    installer_local_source: >-
+      {{
+        (
+          installer_candidates_stats.results
+          | selectattr('stat.exists', 'equalto', true)
+          | map(attribute='invocation.module_args.path')
+          | list
+          | first
+        ) | default('')
+      }}
+
+- name: Pre-check | Fail se installer locale mancante
+  assert:
+    that:
+      - installer_local_source | length > 0
+    fail_msg: >-
+      Nessun installer locale trovato sul controller.
+      Candidati: {{
+        (installer_candidates_stats.results | map(attribute='invocation.module_args.path') | list) | join(', ')
+      }}
+
+- name: Pre-check | Verifica ansible-playbook sul controller
+  command: ansible-playbook --version
+  register: ansible_playbook_check
+  changed_when: false
+  delegate_to: localhost
+  become: no
+
+- name: Pre-check | Verifica /usr/bin/python3 sul controller
+  stat:
+    path: /usr/bin/python3
+  register: python3_stat
+  delegate_to: localhost
+  become: no
+
+- name: Pre-check | Verifica curl sul controller (per showlog)
+  command: curl --version
+  register: curl_check
+  changed_when: false
+  delegate_to: localhost
+  become: no
+
+- name: Pre-check | Verifica script showlog sul controller
+  stat:
+    path: "{{ playbook_dir }}/../../../../utils/admin/showlog"
+  register: showlog_script_stat
+  delegate_to: localhost
+  become: no
+
+- name: Pre-check | Fail se script showlog mancante
+  assert:
+    that:
+      - showlog_script_stat.stat.exists
+      - showlog_script_stat.stat.mode is defined
+    fail_msg: "Script showlog mancante: {{ playbook_dir }}/../../../../utils/admin/showlog"
+
+- name: Pre-check | Fail se /usr/bin/python3 mancante
+  assert:
+    that:
+      - python3_stat.stat.exists
+      - python3_stat.stat.executable
+    fail_msg: "/usr/bin/python3 non esiste o non e' eseguibile sul controller"
+
+- name: Pre-check | Verifica endpoint bundle master
+  uri:
+    url: "{{ master_url }}/api/worker/bundle?platform=linux&arch=x86_64"
+    method: HEAD
+    return_content: no
+    status_code: [200, 405]
+    timeout: 15
+  delegate_to: localhost
+  become: no
+
+- name: Pre-check | Leggi bundle_manifest.json
+  uri:
+    url: "{{ master_url }}/bundle_manifest.json"
+    method: GET
+    return_content: yes
+    status_code: 200
+    timeout: 15
+  register: bundle_manifest_resp
+  delegate_to: localhost
+  become: no
+
+- name: Pre-check | Valida manifest (sha256 presente)
+  assert:
+    that:
+      - bundle_manifest_resp.json is defined
+      - bundle_manifest_resp.json.sha256 is defined
+      - (bundle_manifest_resp.json.sha256 | length) == 64
+    fail_msg: "bundle_manifest.json invalido o sha256 mancante"
+
+- name: Pre-check | Calcola sha256 bundle locale (master)
+  shell: |
+    set -euo pipefail
+    base="{{ playbook_dir }}/../.."
+    if [ -f "$base/worker_downloads/worker_code_linux_x86_64.zip" ]; then
+      file="$base/worker_downloads/worker_code_linux_x86_64.zip"
+    elif [ -f "$base/worker_downloads/worker_code.zip" ]; then
+      file="$base/worker_downloads/worker_code.zip"
+    else
+      echo "MISSING"
+      exit 1
+    fi
+    sha256sum "$file" | awk '{print $1}'
+  args:
+    executable: /bin/bash
+  register: local_bundle_sha
+  changed_when: false
+  delegate_to: localhost
+  become: no
+
+- name: Pre-check | Confronta sha256 manifest vs file locale
+  assert:
+    that:
+      - local_bundle_sha.stdout is defined
+      - local_bundle_sha.stdout | length == 64
+      - local_bundle_sha.stdout == bundle_manifest_resp.json.sha256
+    fail_msg: >-
+      SHA256 mismatch: manifest={{ bundle_manifest_resp.json.sha256 | default('n/a') }}
+      local={{ local_bundle_sha.stdout | default('n/a') }}.
+
+- name: Pre-check | Verifica download bundle (HEAD)
+  uri:
+    url: "{{ master_url }}/api/worker/bundle?platform=linux&arch=x86_64"
+    method: HEAD
+    return_content: no
+    status_code: [200, 405]
+    timeout: 15
+  register: bundle_head
+  delegate_to: localhost
+  become: no
+
+- name: Pre-check | Verifica download bundle (Range fallback)
+  when: bundle_head.status | int != 200
+  uri:
+    url: "{{ master_url }}/api/worker/bundle?platform=linux&arch=x86_64"
+    method: GET
+    headers:
+      Range: "bytes=0-1023"
+    return_content: no
+    status_code: [200, 206]
+    timeout: 20
+  delegate_to: localhost
+  become: no

@@ -1,0 +1,9 @@
+{"event":"created","job_id":"scene_a256124d-2371-4898-adbe-499ba79150b8","project_id":"","timestamp":"2026-06-07T16:08:13ZZ","video_name":"La storia del Colosseo"}
+{"event":"claimed","job_id":"scene_a256124d-2371-4898-adbe-499ba79150b8","timestamp":"2026-06-07T16:08:13ZZ","worker_id":"worker-smoke-1"}
+{"event":"deleted","job_id":"scene_a256124d-2371-4898-adbe-499ba79150b8","timestamp":"2026-06-07T16:10:07ZZ"}
+{"event":"created","job_id":"scene_56135142-9ef9-47fc-a5eb-26eeff1f79ab","project_id":"","timestamp":"2026-06-07T16:10:21ZZ","video_name":"La storia del Colosseo"}
+{"event":"claimed","job_id":"scene_56135142-9ef9-47fc-a5eb-26eeff1f79ab","timestamp":"2026-06-07T16:10:24ZZ","worker_id":"worker-smoke-1"}
+{"event":"created","job_id":"scene_e7aa3b08-c869-42f9-888f-580a9ab18121","project_id":"explainer","timestamp":"2026-06-07T16:41:46ZZ","video_name":"La storia del Colosseo"}
+{"event":"claimed","job_id":"scene_e7aa3b08-c869-42f9-888f-580a9ab18121","timestamp":"2026-06-07T16:41:47ZZ","worker_id":"host_57.129.132.133"}
+{"event":"created","job_id":"scene_a0d0bd88-a7da-45a9-b7b8-165883c5dd4e","project_id":"explainer","timestamp":"2026-06-07T16:43:32ZZ","video_name":"La storia del Colosseo"}
+{"event":"claimed","job_id":"scene_a0d0bd88-a7da-45a9-b7b8-165883c5dd4e","timestamp":"2026-06-07T16:43:32ZZ","worker_id":"worker-smoke-1"}
