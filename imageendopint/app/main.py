@@ -83,10 +83,14 @@ async def generate(
     if not project_id or not prompt:
         raise HTTPException(status_code=400, detail="project_id and prompt are required")
 
-    # Use a valid project ID from the pool if the provided one is a placeholder or not in our verified list
+    # If project_id is a placeholder or not in our verified list, use round-robin
     if project_id == "velox-test" or str(project_id) not in settings.project_id_pool:
-        project_id = random.choice(settings.project_id_pool)
-        logger.info("Assigned valid project_id='%s' for this request", project_id)
+        # Atomic increment in Redis to pick the next project index
+        # We access the redis client through the job_store
+        rotation_key = f"{settings.redis_job_key_prefix}:rotation_index"
+        idx = await job_store.redis.incr(rotation_key)
+        project_id = settings.project_id_pool[idx % len(settings.project_id_pool)]
+        logger.info("Assigned rotated project_id='%s' (index=%d) for this request", project_id, idx)
 
     req = GenerateRequest(
         project_id=str(project_id),
