@@ -63,5 +63,3 @@ frontend_standalone/web/.svelte-kit/
 .DS_Store
 Thumbs.db
 
-# ── Ansible ──────────────────────────────────────────────────
-DataServer/data/ansible/playbooks/inventory.ini
