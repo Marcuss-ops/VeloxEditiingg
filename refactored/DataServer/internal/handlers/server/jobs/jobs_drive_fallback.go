@@ -470,19 +470,47 @@ func findVideoYoutubeChildDriveID(rows []driveLinkRow, rootLocalID string, child
 		return ""
 	}
 	normChild := normalizeDriveFolderName(name)
+
+	// Phase 1: exact normalized match (highest confidence)
+	for _, r := range rows {
+		if !strings.EqualFold(strings.TrimSpace(r.ParentID), rootLocalID) {
+			continue
+		}
+		if normalizeDriveFolderName(r.Name) == normChild {
+			if id := extractDriveIDFromLink(r.Link); id != "" {
+				return id
+			}
+			if id := strings.TrimSpace(r.ID); id != "" && !strings.HasPrefix(id, "folder-") {
+				return id
+			}
+		}
+	}
+
+	// Phase 2: prefix/contains match with minimum length threshold to avoid
+	// false positives on short names (e.g. "ai" matching "train").
+	minFuzzyLen := 4
+	if len(normChild) < minFuzzyLen {
+		return ""
+	}
 	for _, r := range rows {
 		if !strings.EqualFold(strings.TrimSpace(r.ParentID), rootLocalID) {
 			continue
 		}
 		normRow := normalizeDriveFolderName(r.Name)
-		if normRow != normChild && !strings.Contains(normRow, normChild) && !strings.Contains(normChild, normRow) {
+		if len(normRow) < minFuzzyLen {
 			continue
 		}
-		if id := extractDriveIDFromLink(r.Link); id != "" {
-			return id
+		if normRow == normChild {
+			continue // already tried in phase 1
 		}
-		if id := strings.TrimSpace(r.ID); id != "" && !strings.HasPrefix(id, "folder-") {
-			return id
+		if strings.HasPrefix(normRow, normChild) || strings.HasPrefix(normChild, normRow) ||
+			strings.Contains(normRow, normChild) || strings.Contains(normChild, normRow) {
+			if id := extractDriveIDFromLink(r.Link); id != "" {
+				return id
+			}
+			if id := strings.TrimSpace(r.ID); id != "" && !strings.HasPrefix(id, "folder-") {
+				return id
+			}
 		}
 	}
 	return ""

@@ -9,11 +9,6 @@
 #   - velox-worker-watchdog.*      → Auto-restart monitor
 #   - velox-auto-update.*          → 12h OS + bundle update
 #
-# LEGACY UNITS (Python - DEPRECATED/MASKED):
-#   - velox-worker.service (generic, no hostname) → MASKED
-#   - velox-worker-<host>.service.d/ (override dir) → REMOVED
-#   - worker_bootstrap.py executions → REMOVED
-#
 # Single Source of Truth: velox-worker-<host>.service (Docker only)
 # ============================================================
 
@@ -195,46 +190,6 @@
     path: /etc/systemd/system/velox-worker-{{ inventory_hostname }}.service.d
     state: directory
     mode: "0755"
-
-# ── LEGACY PYTHON WORKER CLEANUP ──────────────────────────────
-- name: Stop legacy Python worker unit (no hostname suffix)
-  systemd:
-    name: velox-worker
-    state: stopped
-  failed_when: false
-
-- name: Mask legacy Python worker unit (no hostname suffix)
-  systemd:
-    name: velox-worker
-    masked: yes
-    enabled: no
-  failed_when: false
-
-- name: Remove legacy Python worker unit file
-  file:
-    path: /etc/systemd/system/velox-worker.service
-    state: absent
-  failed_when: false
-
-- name: Remove legacy Python worker bootstrap files
-  file:
-    path: "{{ item }}"
-    state: absent
-  loop:
-    - "{{ velox_dir }}/current/worker_bootstrap.py"
-    - "{{ velox_dir }}/current/refactored/worker_bootstrap.py"
-    - "{{ velox_dir }}/current/refactored/modules/installation/worker_bootstrap.py"
-  failed_when: false
-
-- name: Verify no Python worker processes running
-  shell: |
-    set +e
-    # Kill any stray Python worker processes
-    pkill -f "job_worker.py" 2>/dev/null || true
-    pkill -f "worker_bootstrap.py" 2>/dev/null || true
-    echo "Legacy Python worker processes cleaned"
-  changed_when: false
-  failed_when: false
 
 # ── DOCKER GO WORKER SERVICE (Single Source of Truth) ──────────
 - name: Create systemd service
