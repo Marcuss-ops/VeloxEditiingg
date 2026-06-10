@@ -70,9 +70,6 @@ type Config struct {
 	S3SecretAccessKey string
 	S3UseSSL          bool
 
-	// Enterprise features enabled
-	EnterpriseEnabled bool
-
 	// Remote Script Engine
 	RemoteEngineURL       string
 	RemoteEngineToken     string
@@ -240,9 +237,6 @@ func FromEnv() *Config {
 	c.S3AccessKeyID = os.Getenv("VELOX_S3_ACCESS_KEY_ID")
 	c.S3SecretAccessKey = os.Getenv("VELOX_S3_SECRET_ACCESS_KEY")
 	c.S3UseSSL = os.Getenv("VELOX_S3_USE_SSL") == "true" || os.Getenv("VELOX_S3_USE_SSL") == "1"
-
-	// Enterprise features enabled
-	c.EnterpriseEnabled = os.Getenv("VELOX_ENTERPRISE_ENABLED") == "true" || os.Getenv("VELOX_ENTERPRISE_ENABLED") == "1"
 
 	// Remote Script Engine configuration
 	c.RemoteEngineURL = os.Getenv("VELOX_REMOTE_ENGINE_URL")

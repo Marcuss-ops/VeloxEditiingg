@@ -9,23 +9,10 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// CutoverMetrics tracks request handling metrics
-type CutoverMetrics struct {
-	GoHandledRequests int64 // Requests handled natively by Go
-	BlockedRequests   int64 // Requests blocked (404)
-}
-
 var (
-	cutoverMetrics CutoverMetrics
+	goHandledRequests int64
+	blockedRequests   int64
 )
-
-// GetCutoverMetrics returns current metrics (thread-safe)
-func GetCutoverMetrics() CutoverMetrics {
-	return CutoverMetrics{
-		GoHandledRequests: atomic.LoadInt64(&cutoverMetrics.GoHandledRequests),
-		BlockedRequests:   atomic.LoadInt64(&cutoverMetrics.BlockedRequests),
-	}
-}
 
 // NoRouteHandler handles all unmatched routes.
 // Python backends have been completely removed.
@@ -47,7 +34,7 @@ func NoRouteHandler(serveSPA gin.HandlerFunc, landing gin.HandlerFunc, darkEdito
 		// CRITICAL: API routes MUST return JSON 404, never HTML
 		// This prevents frontend from receiving HTML when calling non-existent API endpoints
 		if strings.HasPrefix(path, "/api/") {
-			atomic.AddInt64(&cutoverMetrics.BlockedRequests, 1)
+			atomic.AddInt64(&blockedRequests, 1)
 			log.Printf("❌ API 404: %s %s (route not found in Go server)", c.Request.Method, path)
 			c.JSON(http.StatusNotFound, gin.H{
 				"error":  "API route not found",
@@ -74,26 +61,26 @@ func NoRouteHandler(serveSPA gin.HandlerFunc, landing gin.HandlerFunc, darkEdito
 			serveSPA(c)
 			// Check if SPA signaled that file was not found
 			if spaNotFound, exists := c.Get("spa_file_not_found"); exists && spaNotFound.(bool) {
-				atomic.AddInt64(&cutoverMetrics.BlockedRequests, 1)
+				atomic.AddInt64(&blockedRequests, 1)
 				c.JSON(http.StatusNotFound, gin.H{
 					"error": "resource not found",
 					"path":  path,
 				})
 				return
 			}
-			atomic.AddInt64(&cutoverMetrics.GoHandledRequests, 1)
+			atomic.AddInt64(&goHandledRequests, 1)
 			return
 		}
 
 		// Landing page for root
 		if (path == "/" || path == "") && landing != nil && (c.Request.Method == "GET" || c.Request.Method == "HEAD") {
-			atomic.AddInt64(&cutoverMetrics.GoHandledRequests, 1)
+			atomic.AddInt64(&goHandledRequests, 1)
 			landing(c)
 			return
 		}
 
 		// All other unmatched routes: return 404
-		atomic.AddInt64(&cutoverMetrics.BlockedRequests, 1)
+		atomic.AddInt64(&blockedRequests, 1)
 		log.Printf("❌ 404: %s %s (no Python fallback)", c.Request.Method, path)
 		c.JSON(http.StatusNotFound, gin.H{
 			"error":  "route not found",

@@ -11,14 +11,6 @@ import (
 	"path/filepath"
 )
 
-// APIMode determines which API endpoints to use for master communication.
-type APIMode string
-
-const (
-	// APIModeNewAPI uses Go master endpoints (/api/workers/*, /api/jobs/get)
-	APIModeNewAPI APIMode = "new_api"
-)
-
 // WorkerConfig holds the worker configuration loaded from JSON.
 // Example config file: /opt/velox/worker_config.json
 type WorkerConfig struct {
@@ -27,7 +19,6 @@ type WorkerConfig struct {
 	WorkerName string  `json:"worker_name"` // Human-readable worker name (e.g., video-worker-1)
 	WorkDir    string  `json:"work_dir"`    // Base directory for velox installations (e.g., /opt/velox)
 	LogLevel   string  `json:"log_level"`   // Log level: debug, info, warn, error
-	APIMode    APIMode `json:"api_mode"`    // API mode: new_api (default)
 
 	// Worker policy
 	MaxActiveJobs  int `json:"max_active_jobs"` // Maximum concurrent active jobs (default: 1)
@@ -103,7 +94,6 @@ func DefaultConfig(workDir string) *WorkerConfig {
 		WorkerName: "velox-worker",
 		WorkDir:    workDir,
 		LogLevel:   "info",
-		APIMode:    APIModeNewAPI, // Default to new API
 
 		MaxActiveJobs: 1, // 1 main job per VPS
 	}

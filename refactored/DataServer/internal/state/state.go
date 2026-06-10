@@ -35,17 +35,6 @@ var Global = &MasterState{
 	APIRequestsMax: 1000,
 }
 
-func init() {
-	Global.StartTime = 0 // Will be set at server start
-}
-
-// SetStartTime initializes the server start time
-func (s *MasterState) SetStartTime(t int64) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.StartTime = t
-}
-
 // GetStartTime returns the server start time
 func (s *MasterState) GetStartTime() int64 {
 	s.mu.RLock()

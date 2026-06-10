@@ -15,7 +15,6 @@ func (w *Worker) Start(ctx context.Context) error {
 	// Use structured event for startup
 	logger.LogStartup(w.config.WorkerID, w.version, w.config.MasterURL)
 	w.logger.Debug("Work Directory: %s", w.config.WorkDir)
-	w.logger.Debug("API Mode: %s", w.config.APIMode)
 
 	// Phase 1: Start concurrency limiter wait queue processor
 	w.concurrencyLimiter.Start(ctx)
@@ -34,7 +33,7 @@ func (w *Worker) Start(ctx context.Context) error {
 	w.wg.Add(1)
 	go w.jobLoop(ctx)
 
-	w.logger.Info("[COMMANDS] Command polling disabled (legacy feature)")
+	w.logger.Info("[COMMANDS] Command polling disabled")
 
 	// Wait for stop signal
 	<-w.stopChan

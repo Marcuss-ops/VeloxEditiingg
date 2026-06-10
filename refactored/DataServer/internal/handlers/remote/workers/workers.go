@@ -539,8 +539,6 @@ func CompleteJobEnhanced(cfg *config.Config, fileQ *queue.FileQueue) gin.Handler
 			log.Printf("📤 complete_job: trovato file in pending per job %s", jobID)
 			ytGroup, _ := pending.UploadInfo["youtube_group"].(string)
 			if ytGroup != "" {
-				// TODO: Integrate with YouTube uploader module
-				// For now, just log that upload would be scheduled
 				log.Printf("📺 Upload schedulato: verrà tentato YouTube (youtube_group=%s)", ytGroup)
 				uploadScheduled = true
 			}

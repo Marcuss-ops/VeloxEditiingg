@@ -438,12 +438,13 @@ func (s *Service) SubmitResult(ctx context.Context, req SubmitResultRequest) (bo
 	}
 	if err != nil {
 		return false, err
-	}	if strings.TrimSpace(req.WorkerID) != "" && s.reg != nil {
-			if err := s.reg.Heartbeat(ctx, req.WorkerID, "", "online", "", nil); err != nil {
-				log.Printf("service: online heartbeat (fail path) failed for %s: %v", req.WorkerID, err)
-			}
+	}
+	if strings.TrimSpace(req.WorkerID) != "" && s.reg != nil {
+		if err := s.reg.Heartbeat(ctx, req.WorkerID, "", "online", "", nil); err != nil {
+			log.Printf("service: online heartbeat (fail path) failed for %s: %v", req.WorkerID, err)
 		}
-		return false, nil
+	}
+	return false, nil
 }
 
 func (s *Service) CompleteJob(ctx context.Context, jobID, workerID string) error {

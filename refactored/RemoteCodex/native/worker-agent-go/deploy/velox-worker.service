@@ -1,0 +1,54 @@
+# Velox Worker Agent - Systemd Service
+# AGENT 14D - Deploy Cutover & Rollback
+#
+# Install: sudo cp deploy/velox-worker.service /etc/systemd/system/
+# Enable:  sudo systemctl enable velox-worker
+# Start:   sudo systemctl start velox-worker
+
+[Unit]
+Description=Velox Worker Agent (Go)
+Documentation=https://github.com/velox/worker-agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=velox
+Group=velox
+WorkingDirectory=/opt/velox
+
+# Go worker as default entrypoint
+ExecStart=/usr/local/bin/velox-worker-agent \
+    -config /opt/velox/worker_config.json \
+    -master {{MASTER_URL}} \
+    -work-dir /opt/velox
+
+# Fallback to Python worker (for rollback)
+# ExecStart=/opt/velox/venv/bin/python3 /opt/velox/ServerRemote/job_worker.py \
+#     --master {{MASTER_URL}} \
+#     --name {{WORKER_ID}}
+
+# Environment
+Environment=VELOX_WORKER_MODE=go
+Environment=VELOX_FALLBACK_ENABLED=true
+Environment=GIN_MODE=release
+
+# Restart policy
+Restart=always
+RestartSec=5
+
+# Resource limits
+LimitNOFILE=65536
+MemoryMax=4G
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=velox-worker
+
+# Security (optional, adjust as needed)
+# NoNewPrivileges=true
+# PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

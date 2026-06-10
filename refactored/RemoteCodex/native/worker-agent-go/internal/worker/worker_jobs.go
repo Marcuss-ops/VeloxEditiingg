@@ -176,10 +176,9 @@ func (w *Worker) pollJob(ctx context.Context) (*api.Job, error) {
 	if job != nil {
 		w.logger.Info("Received job: %s (type: %s, priority: %d)", job.JobID, job.JobType, job.Priority)
 
-		// Phase 2: Build render plan with render_plan_version
+		// Phase 2: Build render plan with canonical version
 		rp := renderplan.FromMap(map[string]interface{}{
-			"version":             renderplan.RenderPlanVersion, // Required by validator
-			"render_plan_version": renderplan.RenderPlanVersion, // Kept for backward compatibility
+			"version":   renderplan.RenderPlanVersion,
 			"job_id":              job.JobID,
 			"job_type":            job.JobType,
 			"created_at":          job.CreatedAt,
@@ -188,7 +187,7 @@ func (w *Worker) pollJob(ctx context.Context) (*api.Job, error) {
 		})
 
 		// Phase 2: Validate render plan with centralized entrypoint
-		if err := renderplan.ValidateRenderPlan(rp, nil); err != nil {
+		if err := renderplan.ValidateRenderPlan(rp); err != nil {
 			w.logger.Error("[RENDERPLAN] Job validation failed: %v", err)
 			// Log error code if it's a PlanError
 			if planErrs, ok := err.(renderplan.PlanErrors); ok {
@@ -485,7 +484,7 @@ func (w *Worker) uploadCompletedVideo(ctx context.Context, job *api.Job, output 
 	return output, nil
 }
 
-// runJobTask executes the actual job task (legacy single-threaded workflow).
+// runJobTask executes the actual job task (single-job workflow).
 func (w *Worker) runJobTask(ctx context.Context, job *api.Job) (map[string]interface{}, error) {
 	w.logger.Info("[JOB] Starting execution: id=%s type=%s", job.JobID, job.JobType)
 	// Check for job timeout

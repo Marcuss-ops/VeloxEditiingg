@@ -1,8 +1,6 @@
 // Package api provides endpoint adaptation for the canonical Go master API.
 package api
 
-import "velox-worker-agent/pkg/config"
-
 // EndpointSet represents a set of API endpoints for a specific API version.
 type EndpointSet struct {
 	RegisterWorker   string
@@ -29,24 +27,14 @@ var newAPIEndpoints = EndpointSet{
 	UpdateStatus:     "/api/workers/status",
 }
 
-// EndpointAdapter provides API endpoint resolution based on the configured mode.
+// EndpointAdapter provides API endpoint resolution for the canonical master API.
 type EndpointAdapter struct {
-	mode      config.APIMode
 	endpoints EndpointSet
 }
 
-// NewEndpointAdapter creates a new adapter for the given API mode.
-func NewEndpointAdapter(mode config.APIMode) *EndpointAdapter {
-	// All modes resolve to canonical Go master endpoints
-	return &EndpointAdapter{
-		mode:      mode,
-		endpoints: newAPIEndpoints,
-	}
-}
-
-// Mode returns the current API mode.
-func (a *EndpointAdapter) Mode() config.APIMode {
-	return a.mode
+// NewEndpointAdapter creates a new adapter for the canonical API.
+func NewEndpointAdapter() *EndpointAdapter {
+	return &EndpointAdapter{endpoints: newAPIEndpoints}
 }
 
 // Endpoints returns the current endpoint set.

@@ -15,7 +15,6 @@ import (
 	"gopkg.in/yaml.v3"
 	"velox-server/internal/config"
 	"velox-server/internal/integrations/drive"
-	"velox-server/internal/queue"
 	jobsservice "velox-server/internal/services/jobs"
 )
 
@@ -130,12 +129,13 @@ func (api *JobAPI) tryDriveFallbackUpload(jobID string) {
 			msg := "failed to create language variant folder in project folder"
 			if vErr != nil {
 				msg = vErr.Error()
-			}		if updErr := api.fileQ.UpdateJobFields(ctx, jobID, map[string]interface{}{
-			"last_drive_upload_result": map[string]interface{}{
-				"success": false,
-				"error":   msg,
-			},
-		}); updErr != nil {
+			}
+			if updErr := api.fileQ.UpdateJobFields(ctx, jobID, map[string]interface{}{
+				"last_drive_upload_result": map[string]interface{}{
+					"success": false,
+					"error":   msg,
+				},
+			}); updErr != nil {
 			log.Printf("drive_fallback: UpdateJobFields failed for %s: %v", jobID, updErr)
 		}
 		return

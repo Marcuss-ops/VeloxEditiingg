@@ -20,3 +20,8 @@
 {"event":"claimed","job_id":"b24d2ca8-5413-46b3-b938-0ff6dedd125f","timestamp":"2026-06-09T16:20:34ZZ","worker_id":"host_57.129.132.133"}
 {"event":"created","job_id":"bcc057c3-b08f-4715-b0e7-05a8503ca34c","project_id":"","timestamp":"2026-06-09T16:23:22ZZ","video_name":"Smoke clip stock retry 3"}
 {"event":"claimed","job_id":"bcc057c3-b08f-4715-b0e7-05a8503ca34c","timestamp":"2026-06-09T16:23:24ZZ","worker_id":"host_57.129.132.133"}
+{"event":"deleted","job_id":"bcc057c3-b08f-4715-b0e7-05a8503ca34c","timestamp":"2026-06-09T19:58:21ZZ"}
+{"event":"deleted","job_id":"6f34ff6e-bb98-4696-92cd-d59a293faa15","timestamp":"2026-06-09T19:58:21ZZ"}
+{"event":"deleted","job_id":"9d12800e-977f-4d1e-b49f-26d1c81b45d7","timestamp":"2026-06-09T19:58:21ZZ"}
+{"event":"deleted","job_id":"ba6c37e3-1221-486b-9a37-b2f6ee27b4c3","timestamp":"2026-06-09T19:58:21ZZ"}
+{"event":"deleted","job_id":"b24d2ca8-5413-46b3-b938-0ff6dedd125f","timestamp":"2026-06-09T19:58:21ZZ"}

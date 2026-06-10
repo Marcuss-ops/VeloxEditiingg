@@ -172,8 +172,7 @@ func (s *Service) loadChannels() {
 			log.Printf("⚠️ Failed to read tokens directory: %v", err)
 		}
 	}
-	// Legacy fallback removed (2026-04-01): DataDir/youtube/group/*/account_*.json
-	// Tokens are now only loaded from TokensDir (secrets/youtube/tokens/)
+	// Tokens are loaded from TokensDir (secrets/youtube/tokens/)
 	if len(s.channels) > 0 {
 		log.Printf("✅ Loaded %d YouTube channels", len(s.channels))
 	}
@@ -1096,7 +1095,7 @@ func (s *Service) ChannelGroupToGroup(cg *ChannelGroup) *Group {
 	}
 	group := &Group{
 		Name:      cg.Name,
-		CreatedAt: time.Now(), // TODO: store actual creation time
+		CreatedAt: time.Now(),
 		Channels:  make([]Channel, 0, len(cg.Channels)),
 	}
 	s.mu.RLock()

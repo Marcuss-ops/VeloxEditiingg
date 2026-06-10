@@ -1,5 +1,37 @@
 {
   "workers": {
+    "host_149.56.131.97": {
+      "worker_id": "host_149.56.131.97",
+      "worker_name": "velox-worker",
+      "display_name": "velox-worker",
+      "status": "online",
+      "last_heartbeat": "2026-06-09T20:56:39Z",
+      "first_seen": "2026-06-09T19:54:25Z",
+      "current_job": "",
+      "drain": false,
+      "schedulable": true,
+      "worker_group": "",
+      "ip_address": "149.56.131.97",
+      "host": "149.56.131.97",
+      "code_version": "",
+      "bundle_version": ""
+    },
+    "host_51.222.204.158": {
+      "worker_id": "host_51.222.204.158",
+      "worker_name": "velox-worker",
+      "display_name": "velox-worker",
+      "status": "online",
+      "last_heartbeat": "2026-06-09T19:54:23Z",
+      "first_seen": "2026-06-09T19:54:23Z",
+      "current_job": "",
+      "drain": false,
+      "schedulable": true,
+      "worker_group": "",
+      "ip_address": "51.222.204.158",
+      "host": "51.222.204.158",
+      "code_version": "",
+      "bundle_version": ""
+    },
     "worker-8e98ce85": {
       "worker_id": "worker-8e98ce85",
       "worker_name": "velox-worker",
@@ -21,7 +53,7 @@
       "worker_name": "velox-worker",
       "display_name": "velox-worker",
       "status": "online",
-      "last_heartbeat": "2026-06-09T16:03:54Z",
+      "last_heartbeat": "2026-06-09T20:56:39Z",
       "first_seen": "2026-06-05T14:50:53Z",
       "current_job": "",
       "drain": false,
@@ -34,14 +66,14 @@
     }
   },
   "revoked": [
-    "host_57.129.132.133",
-    "host_51.91.11.105",
     "test-worker-concurrent-20260409-104547",
-    "test-worker-shutdown",
     "compat-test-1",
-    "compat-test-2",
     "test-worker-contract-20260409-104547",
     "test-worker-status-20260409-104547",
-    "worker-smoke-1"
+    "host_57.129.132.133",
+    "compat-test-2",
+    "worker-smoke-1",
+    "host_51.91.11.105",
+    "test-worker-shutdown"
   ]
 }

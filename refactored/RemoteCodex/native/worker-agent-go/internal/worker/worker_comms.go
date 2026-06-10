@@ -27,7 +27,7 @@ func (w *Worker) register(ctx context.Context) error {
 		Version:  w.version,
 	}
 
-	w.logger.Debug("Registering with master at %s (api_mode: %s)", w.config.MasterURL, w.config.APIMode)
+	w.logger.Debug("Registering with master at %s", w.config.MasterURL)
 	if err := w.apiClient.RegisterWorker(ctx, info); err != nil {
 		logger.LogRegisterFailed(w.config.WorkerID, w.config.MasterURL, err)
 		return err
@@ -79,8 +79,8 @@ func (w *Worker) heartbeatLoop(ctx context.Context) {
 				// Apply exponential backoff
 				if consecutiveErrors >= maxConsecutiveErrors {
 					currentInterval = w.calculateBackoff(currentInterval)
-					w.logger.Warn("[HEARTBEAT_BACKOFF] Applying backoff, next heartbeat in %v (api_mode: %s)",
-						currentInterval, w.config.APIMode)
+					w.logger.Warn("[HEARTBEAT_BACKOFF] Applying backoff, next heartbeat in %v",
+						currentInterval)
 					ticker.Reset(currentInterval)
 				}
 			} else {
@@ -128,7 +128,6 @@ func (w *Worker) sendHeartbeat(ctx context.Context) error {
 	extra["worker_status"] = string(status)
 	extra["worker_id"] = w.config.WorkerID
 	extra["worker_name"] = w.config.WorkerName
-	extra["api_mode"] = string(w.config.APIMode)
 	if w.currentJob != nil {
 		extra["current_job"] = map[string]interface{}{
 			"job_id":       w.currentJob.JobID,
@@ -151,5 +150,4 @@ func (w *Worker) sendHeartbeat(ctx context.Context) error {
 
 	return w.apiClient.SendHeartbeat(ctx, payload)
 }
-
 

@@ -377,29 +377,17 @@ func FromMap(m map[string]interface{}) *RenderPlan {
 // ValidateRenderPlan - Centralized Entrypoint (Phase 2)
 // ============================================================================
 
-// ValidateRenderPlanOptions contains options for render plan validation.
-type ValidateRenderPlanOptions struct {
-	// AllowLegacyVersionFallback allows fallback from version field if render_plan_version is missing
-	AllowLegacyVersionFallback bool
-}
-
 // ValidateRenderPlan is the centralized entrypoint for render plan validation.
-// It validates the plan structure, required fields, and consistency (ANY_CLIP + VOICEOVER rule).
-func ValidateRenderPlan(plan *RenderPlan, opts *ValidateRenderPlanOptions) error {
+func ValidateRenderPlan(plan *RenderPlan) error {
 	var errs PlanErrors
 
 	// 1. Validate render_plan_version (required)
 	if plan.Version == "" {
-		if opts != nil && opts.AllowLegacyVersionFallback {
-			// Fallback: use legacy version field if present
-			plan.Version = RenderPlanVersion
-		} else {
-			errs = append(errs, &PlanError{
-				Code:    ERR_PLAN_REQUIRED_FIELD,
-				Field:   "render_plan_version",
-				Message: "render_plan_version is required",
-			})
-		}
+		errs = append(errs, &PlanError{
+			Code:    ERR_PLAN_REQUIRED_FIELD,
+			Field:   "render_plan_version",
+			Message: "render_plan_version is required",
+		})
 	}
 
 	// 2. Validate required fields
