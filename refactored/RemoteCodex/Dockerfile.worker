@@ -1,8 +1,8 @@
 # ============================================================================
-# Velox Worker - Multi-stage Build
+# Velox Worker - Multi-stage Build (LEGGERO: nessun Node/Remotion/Chrome)
 # ============================================================================
 # Stage 1: Build Go worker-agent binary
-# No golang or source code in final image
+# Stage 2: Runtime minimale con solo ffmpeg + Go binary
 # ============================================================================
 
 # ── Build stage ──────────────────────────────────────────────────────────────
@@ -21,33 +21,18 @@ COPY native/worker-agent-go/ ./native/worker-agent-go/
 RUN cd native/worker-agent-go && \
     CGO_ENABLED=1 GOOS=linux go build -ldflags="-s -w" -o velox-worker-agent ./cmd/velox-worker-agent
 
-# ── Runtime stage ────────────────────────────────────────────────────────────
-FROM node:20-bookworm-slim
+# ── Runtime stage (minimale) ────────────────────────────────────────────────
+FROM debian:bookworm-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
 
 WORKDIR /app
 
-# No golang-go in runtime image.
+# Solo dipendenze essenziali: ffmpeg per video, curl per comunicazioni
 RUN apt-get update -qq && apt-get install -y --no-install-recommends \
     ffmpeg \
     curl \
     ca-certificates \
-    libnss3 \
-    libnspr4 \
-    libatk1.0-0 \
-    libatk-bridge2.0-0 \
-    libcups2 \
-    libdrm2 \
-    libxkbcommon0 \
-    libxcomposite1 \
-    libxdamage1 \
-    libxfixes3 \
-    libxrandr2 \
-    libgbm1 \
-    libasound2 \
-    libpangocairo-1.0-0 \
-    libgtk-3-0 \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy only the prebuilt binary from builder stage
@@ -62,13 +47,9 @@ RUN chown -R velox:velox /app /usr/local/bin/velox-worker-agent
 USER velox
 
 # ============================================================================
-# ============================================================================
-# The Go worker-agent-go is the DEFAULT runtime.
-#
-# Architecture (Nominal Path):
-#   Go worker-agent-go (scheduler, master comms, retries)
-#
-# No Python. No Chrome/Headless. No Remotion.
+# Worker leggero: solo Go binary + ffmpeg.
+# Nessun Node.js, nessun Remotion, nessuna libreria Chrome/GTK.
+# Il motore grafico C++ nativo sara integrato separatamente.
 # ============================================================================
 
 # Health check via HTTP endpoint
@@ -76,8 +57,5 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
 # Default: Go worker-agent-go
-# The systemd unit or docker run command should specify the entrypoint.
-# Example:
-#   docker run velox-worker /usr/local/bin/velox-worker-agent --master http://master:8000
 ENTRYPOINT ["/usr/local/bin/velox-worker-agent"]
 CMD ["--master", "http://master:8000"]

@@ -23,8 +23,6 @@
       VELOX_SECONDARY_MASTER_URL={% if master_url_secondary is defined and master_url_secondary %}{{ master_url_secondary }}{% else %}{% endif %}
       WORKER_NAME={{ inventory_hostname }}
       VELOX_DIR={{ velox_dir }}
-      VELOX_OVERLAY_ENGINE=remotion
-      VELOX_REMOTION_PROJECT_PATH={{ velox_dir }}/current/my-video
 
 - name: Detect current bundle layout (legacy refactored vs flat)
   ansible.builtin.stat:
@@ -70,18 +68,18 @@
   ansible.builtin.debug:
     msg: "{{ worker_image_build.stdout | default('no output') }}"
 
-- name: Build velox-worker-console Docker image
+- name: Build velox-worker-console Docker image (optional)
   ansible.builtin.shell: |
     set -e
     DOCKERFILE="{{ velox_current_root }}/RemoteCodex/worker-console/Dockerfile.console"
     CONTEXT="{{ velox_current_root }}/RemoteCodex/worker-console"
     if [ ! -f "$DOCKERFILE" ]; then
-      echo "Dockerfile.console missing at $DOCKERFILE"
-      exit 1
+      echo "Dockerfile.console non presente — salto build worker-console"
+      exit 0
     fi
     if [ ! -f "{{ velox_current_root }}/RemoteCodex/worker-console/web/dist/index.html" ]; then
-      echo "worker-console dist missing (expected web/dist/index.html)"
-      exit 1
+      echo "worker-console dist missing — salto build"
+      exit 0
     fi
     if /usr/bin/docker buildx version >/dev/null 2>&1; then
       export DOCKER_BUILDKIT=1
@@ -95,15 +93,15 @@
   args:
     executable: /bin/bash
   register: console_image_build
-  changed_when: true
-  failed_when: console_image_build.rc != 0
+  changed_when: false
+  failed_when: false
 
 - name: Log worker-console image preparation result
   ansible.builtin.debug:
     msg: "{{ console_image_build.stdout | default('no output') }}"
 
 - name: Ensure velox console bin directory
-  ansible.builtin.  ansible.builtin.file:
+  ansible.builtin.file:
     path: /opt/velox/bin
     state: directory
     mode: "0755"
@@ -207,7 +205,7 @@
       EnvironmentFile=/etc/velox-worker.env
       WorkingDirectory={{ velox_dir }}/current
       ExecStartPre=/bin/sh -c '/usr/bin/docker rm -f velox-worker-{{ inventory_hostname }} >/dev/null 2>&1 || true'
-      ExecStart=/usr/bin/docker run -e VELOX_REMOTION_PROJECT_PATH=/app/RemoteCodex/Remotion --name velox-worker-{{ inventory_hostname }} --rm --network host --shm-size=2g -v {{ velox_dir }}/cache:/root/.cache -v {{ velox_assets_cache_host_path }}:/app/RemoteCodex/assets_cache --entrypoint /bin/sh velox-worker:latest -lc 'CFG=/tmp/velox-worker/worker_config.json; mkdir -p /tmp/velox-worker; [ -f "$CFG" ] || /usr/local/bin/velox-worker-agent -generate-config -config "$CFG" -work-dir /app/RemoteCodex; exec /usr/local/bin/velox-worker-agent -config "$CFG" -master {{ master_url }} -worker-id {{ inventory_hostname }} -work-dir /app/RemoteCodex -api-mode new_api'
+      ExecStart=/usr/bin/docker run --name velox-worker-{{ inventory_hostname }} --rm --network host -v {{ velox_dir }}/cache:/root/.cache -v {{ velox_assets_cache_host_path }}:/app/RemoteCodex/assets_cache --entrypoint /bin/sh velox-worker:latest -lc 'CFG=/tmp/velox-worker/worker_config.json; mkdir -p /tmp/velox-worker; [ -f "$CFG" ] || /usr/local/bin/velox-worker-agent -generate-config -config "$CFG" -work-dir /app/RemoteCodex; exec /usr/local/bin/velox-worker-agent -config "$CFG" -master {{ master_url }} -worker-id {{ inventory_hostname }} -work-dir /app/RemoteCodex -api-mode new_api'
       ExecStop=/bin/sh -c '/usr/bin/docker stop -t 20 velox-worker-{{ inventory_hostname }} >/dev/null 2>&1 || true'
       ExecStopPost=/bin/sh -c '/usr/bin/docker rm -f velox-worker-{{ inventory_hostname }} >/dev/null 2>&1 || true'
       TimeoutStopSec=35
@@ -238,11 +236,12 @@
     enabled: true
     state: restarted
 
-- name: Enable and start worker-console service
+- name: Enable and start worker-console service (optional)
   ansible.builtin.systemd:
     name: velox-worker-console
     enabled: true
     state: restarted
+  failed_when: false
 
 - name: Install showlog wrapper on controller (master)
   ansible.builtin.copy:

@@ -1,0 +1,142 @@
+---
+# ============================================================
+# UPDATE WORKERS — Aggiorna codice worker su computer remoti
+# ============================================================
+# Azioni:
+#   - Scarica bundle worker piu recente dal master
+#   - Ricostruisce immagine Docker
+#   - Riavvia servizio worker
+# ============================================================
+
+- name: Update workers
+  hosts: workers
+  gather_facts: no
+  vars:
+    velox_dir: "/opt/velox"
+    master_url: "{{ master_url | default('http://127.0.0.1:8000') }}"
+
+  tasks:
+    # ── PRE-CHECK: connesione ────────────────────────────────
+    - name: Update | Test connesione SSH
+      ansible.builtin.ping:
+
+    - name: Update | Verifica master_url impostato
+      ansible.builtin.assert:
+        that:
+          - master_url | length > 0
+        fail_msg: "master_url non impostato — impossibile scaricare bundle"
+
+    # ── DOWNLOAD NUOVO BUNDLE ────────────────────────────────
+    - name: Update | Scarica bundle worker dal master
+      ansible.builtin.get_url:
+        url: "{{ master_url }}/api/worker/bundle?platform=linux&arch=x86_64"
+        dest: "/tmp/velox_worker_update.zip"
+        timeout: 120
+        force: yes
+      register: bundle_download
+      failed_when: false
+
+    - name: Update | Verifica download bundle
+      ansible.builtin.stat:
+        path: "/tmp/velox_worker_update.zip"
+      register: bundle_stat
+
+    - name: "Update | Fallback: scarica bundle via curl"
+      ansible.builtin.shell: |
+        set -euo pipefail
+        curl -sf --max-time 120 "{{ master_url }}/api/worker/bundle?platform=linux&arch=x86_64" \
+          -o /tmp/velox_worker_update.zip
+      args:
+        executable: /bin/bash
+      when: bundle_download is failed or not bundle_stat.stat.exists or bundle_stat.stat.size == 0
+      register: bundle_fallback
+      failed_when: false
+
+    - name: Update | Verifica bundle scaricato
+      ansible.builtin.stat:
+        path: "/tmp/velox_worker_update.zip"
+      register: bundle_final
+      failed_when: not bundle_final.stat.exists or bundle_final.stat.size == 0
+
+    # ── ESTRAI BUNDLE ──────────────────────────────────────────
+    - name: "Update | Estrai bundle in {{ velox_dir }}/current"
+      ansible.builtin.unarchive:
+        src: /tmp/velox_worker_update.zip
+        dest: "{{ velox_dir }}/current"
+        remote_src: yes
+        mode: "0755"
+      register: bundle_extract
+      failed_when: false
+      when: bundle_final.stat is defined and bundle_final.stat.exists and bundle_final.stat.size > 0
+
+    - name: Update | Verifica estrazione (cerca Dockerfile)
+      ansible.builtin.stat:
+        path: "{{ velox_dir }}/current/RemoteCodex/Dockerfile.worker"
+      register: dockerfile_check
+
+    - name: Update | Log estrazione
+      ansible.builtin.debug:
+        msg: >-
+          {% if dockerfile_check.stat.exists %}
+          ✅ Bundle estratto, Dockerfile.worker trovato
+          {% else %}
+          ⚠️  Dockerfile.worker non trovato in {{ velox_dir }}/current/RemoteCodex/
+          {% endif %}
+
+    # ── RICOSTRUISCI DOCKER IMAGE ────────────────────────────
+    - name: Update | Ricostruisci immagine Docker worker
+      ansible.builtin.shell: |
+        set -e
+        DOCKERFILE="{{ velox_dir }}/current/RemoteCodex/Dockerfile.worker"
+        if [ ! -f "$DOCKERFILE" ]; then
+          DOCKERFILE="{{ velox_dir }}/current/refactored/RemoteCodex/Dockerfile.worker"
+        fi
+        if [ ! -f "$DOCKERFILE" ]; then
+          echo "Dockerfile.worker non trovato — salto build Docker"
+          exit 0
+        fi
+        CONTEXT="$(dirname "$DOCKERFILE")"
+        if /usr/bin/docker buildx version >/dev/null 2>&1; then
+          export DOCKER_BUILDKIT=1
+        fi
+        /usr/bin/docker build \
+          -f "$DOCKERFILE" \
+          -t velox-worker:latest \
+          "$CONTEXT"
+        echo "Docker image rebuilt successfully"
+      args:
+        executable: /bin/bash
+      register: docker_build
+      changed_when: "'successfully' in (docker_build.stdout | default(''))"
+      failed_when: false
+
+    # ── RIAVVIO SERVIZIO ─────────────────────────────────────
+    - name: Update | Riavvia servizio worker
+      ansible.builtin.systemd:
+        name: "velox-worker-{{ inventory_hostname }}"
+        state: restarted
+        daemon_reload: yes
+        enabled: yes
+      failed_when: false
+      register: service_restart
+
+    - name: Update | Verifica stato servizio dopo riavvio
+      ansible.builtin.systemd:
+        name: "velox-worker-{{ inventory_hostname }}"
+      register: service_status
+
+    - name: Update | Log risultato
+      ansible.builtin.debug:
+        msg: >-
+          {% if service_status.status.ActiveState == 'active' %}
+          ✅ Worker {{ inventory_hostname }} aggiornato e attivo
+          {% else %}
+          ⚠️  Worker {{ inventory_hostname }}: {{ service_status.status.ActiveState | default('unknown') }}
+          {% endif %}
+
+    # ── PULIZIA ──────────────────────────────────────────────
+    - name: Update | Rimuovi bundle temporaneo
+      ansible.builtin.file:
+        path: "/tmp/velox_worker_update.zip"
+        state: absent
+      when: bundle_final.stat is defined and bundle_final.stat.exists

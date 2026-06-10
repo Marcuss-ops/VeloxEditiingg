@@ -1,0 +1,162 @@
+# ============================================================
+# INSTALLER HEARTBEAT — Verifica master e installer
+# ============================================================
+# Questo task verifica che il controller (master) sia pronto
+# per distribuire/installare worker remoti.
+#
+# Include in: prechecks.yml (pre-flight check)
+# Eseguito su: localhost (controller/master)
+# ============================================================
+
+- name: Heartbeat | Verifica master server reachable
+  uri:
+    url: "{{ master_url }}/health"
+    method: GET
+    return_content: yes
+    status_code: 200
+    timeout: 10
+  register: master_health
+  delegate_to: localhost
+  become: no
+
+- name: Heartbeat | Log master health
+  debug:
+    msg: "✅ Master reachable: {{ master_health.json.status | default('ok') }}"
+  delegate_to: localhost
+  become: no
+
+- name: Heartbeat | Verifica heartbeat endpoint worker
+  uri:
+    url: "{{ master_url }}/api/workers/heartbeat"
+    method: POST
+    body_format: json
+    body: '{"worker_id": "__precheck__", "status": "idle"}'
+    status_code: [200, 401, 403]
+    timeout: 10
+  register: heartbeat_check
+  delegate_to: localhost
+  become: no
+  failed_when: false
+
+- name: Heartbeat | Log heartbeat endpoint status
+  debug:
+    msg: >-
+      {% if heartbeat_check.status == 200 %}
+      ✅ Heartbeat endpoint OK (status {{ heartbeat_check.status }})
+      {% else %}
+      ⚠️  Heartbeat endpoint: HTTP {{ heartbeat_check.status }}
+      (atteso 200 — se 401/403 il token non serve per heartbeat)
+      {% endif %}
+  delegate_to: localhost
+  become: no
+
+- name: Heartbeat | Verifica bundle manifest disponibile
+  uri:
+    url: "{{ master_url }}/bundle_manifest.json"
+    method: GET
+    return_content: yes
+    status_code: 200
+    timeout: 10
+  register: bundle_manifest
+  delegate_to: localhost
+  become: no
+  failed_when: false
+
+- name: Heartbeat | Log bundle manifest
+  debug:
+    msg: >-
+      {% if bundle_manifest.status == 200 %}
+      ✅ Bundle manifest: sha256={{ bundle_manifest.json.sha256 | default('presente') }}
+      {% else %}
+      ⚠️  Bundle manifest non disponibile (HTTP {{ bundle_manifest.status }})
+      {% endif %}
+  delegate_to: localhost
+  become: no
+
+- name: Heartbeat | Verifica bundle download endpoint
+  uri:
+    url: "{{ master_url }}/api/worker/bundle?platform=linux&arch=x86_64"
+    method: HEAD
+    status_code: [200, 405]
+    timeout: 15
+  register: bundle_endpoint
+  delegate_to: localhost
+  become: no
+  failed_when: false
+
+- name: Heartbeat | Log bundle endpoint
+  debug:
+    msg: >-
+      {% if bundle_endpoint.status == 200 or bundle_endpoint.status == 405 %}
+      ✅ Bundle download endpoint OK (HTTP {{ bundle_endpoint.status }})
+      {% else %}
+      ⚠️  Bundle download endpoint: HTTP {{ bundle_endpoint.status }}
+      {% endif %}
+  delegate_to: localhost
+  become: no
+
+- name: Heartbeat | Verifica installer endpoint
+  uri:
+    url: "{{ master_url }}/install_worker/download_install_script"
+    method: HEAD
+    status_code: [200, 302, 404]
+    timeout: 10
+  register: installer_endpoint
+  delegate_to: localhost
+  become: no
+  failed_when: false
+
+- name: Heartbeat | Log installer endpoint
+  debug:
+    msg: >-
+      {% if installer_endpoint.status == 200 %}
+      ✅ Installer endpoint OK (HTTP {{ installer_endpoint.status }})
+      {% elif installer_endpoint.status == 404 %}
+      ⚠️  Installer endpoint: HTTP 404 — velox-installer binario non presente sul master
+      {% else %}
+      ℹ️  Installer endpoint: HTTP {{ installer_endpoint.status }}
+      {% endif %}
+  delegate_to: localhost
+  become: no
+
+- name: Heartbeat | Verifica worker registration endpoint
+  uri:
+    url: "{{ master_url }}/api/workers/register"
+    method: POST
+    body_format: json
+    body: '{"worker_id": "__precheck__", "worker_name": "__precheck__"}'
+    status_code: [200, 400, 401, 403]
+    timeout: 10
+  register: register_check
+  delegate_to: localhost
+  become: no
+  failed_when: false
+
+- name: Heartbeat | Log registration endpoint
+  debug:
+    msg: >-
+      {% if register_check.status == 200 %}
+      ✅ Registration endpoint OK (HTTP {{ register_check.status }})
+      {% else %}
+      ℹ️  Registration endpoint: HTTP {{ register_check.status }}
+      (comportamento atteso con worker_id __precheck__)
+      {% endif %}
+  delegate_to: localhost
+  become: no
+
+- name: Heartbeat | Riepilogo finale
+  debug:
+    msg: |-
+      ========================================
+      INSTALLER HEARTBEAT — Riepilogo
+      ========================================
+      Master: {{ master_url }}
+      Health: ✅ ({{ master_health.status }})
+      Heartbeat: {{ '✅' if heartbeat_check.status == 200 else '⚠️' }} ({{ heartbeat_check.status }})
+      Bundle manifest: {{ '✅' if bundle_manifest.status == 200 else '⚠️' }} ({{ bundle_manifest.status }})
+      Bundle download: {{ '✅' if bundle_endpoint.status in [200,405] else '⚠️' }} ({{ bundle_endpoint.status }})
+      Installer: {{ '✅' if installer_endpoint.status == 200 else '⚠️' if installer_endpoint.status == 404 else 'ℹ️' }} ({{ installer_endpoint.status }})
+      Registration: {{ '✅' if register_check.status == 200 else 'ℹ️' }} ({{ register_check.status }})
+      ========================================
+  delegate_to: localhost
+  become: no

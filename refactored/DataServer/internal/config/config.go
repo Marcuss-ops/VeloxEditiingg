@@ -106,6 +106,10 @@ type Config struct {
 	// If empty, those routes are available only from localhost.
 	AdminToken string
 
+	// Playbook directory for Ansible playbooks
+	// Defaults to DataDir/ansible/playbooks if not set
+	PlaybookDir string
+
 	// Dev mode: allow localhost master URL for remote workers
 	// Set VELOX_ALLOW_LOCALHOST_MASTER=true for local development
 	AllowLocalhostMaster bool
@@ -356,6 +360,12 @@ func FromEnv() *Config {
 	c.AdminToken = os.Getenv("VELOX_ADMIN_TOKEN")
 	if c.AdminToken == "" {
 		c.AdminToken = os.Getenv("MASTER_ADMIN_TOKEN")
+	}
+
+	// Playbook directory: from env or default
+	c.PlaybookDir = os.Getenv("VELOX_ANSIBLE_PLAYBOOK_DIR")
+	if c.PlaybookDir == "" {
+		c.PlaybookDir = filepath.Join(c.DataDir, "ansible", "playbooks")
 	}
 
 	// Dev mode: allow localhost master URL for remote workers

@@ -21,6 +21,7 @@ DataServer/data/worker_downloads/
 DataServer/data/workers.json
 DataServer/data/ansible/ansible_computers.json
 DataServer/data/ansible/playbooks/inventory.ini
+DataServer/data/ansible_runs.json
 DataServer/completed_videos/
 
 # ── Build artifacts ──────────────────────────────────────────

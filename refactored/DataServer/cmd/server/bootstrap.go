@@ -136,6 +136,29 @@ func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
 	jobSubmitHandler := jobapi.NewJobSubmissionHandler(cfg, fileQ)
 	workerLifecycle := workersapi.NewWorkerLifecycle(cfg, reg, persistedReg, cfg.DataDir)
 
+	// ── Ansible (playbooks per worker remoti) ───────────────────────
+	var ansibleHandlers *remoteansible.AnsibleHandlers
+	if err := os.MkdirAll(cfg.PlaybookDir, 0755); err != nil {
+		log.Printf("⚠️  Cannot create ansible playbook dir %s: %v", cfg.PlaybookDir, err)
+	} else {
+		ansibleManager := remoteansible.NewAnsibleRunManager(cfg.PlaybookDir, cfg.DataDir)
+		computerMgr := remoteansible.NewAnsibleComputerManager(cfg.DataDir)
+		if err := computerMgr.LoadComputers(); err != nil {
+			log.Printf("⚠️  Failed to load ansible computers: %v", err)
+		}
+
+		ah := remoteansible.NewAnsibleHandlers(ansibleManager)
+		ah.SetComputerManager(computerMgr, cfg.DataDir)
+		ah.SetMasterURL(cfg.MasterURL)
+		ansibleHandlers = ah
+
+		if ansibleManager.Ready() {
+			log.Printf("✅ Ansible handlers initialized (playbooks: %s)", cfg.PlaybookDir)
+		} else {
+			log.Printf("⚠️  ansible-playbook not found in PATH — Ansible features disabled (install with: apt install ansible)")
+		}
+	}
+
 	return &serverDeps{
 		paths:            &serverPaths{dataDir: cfg.DataDir},
 		fileQ:            fileQ,
@@ -146,6 +169,7 @@ func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
 		workersRepo:      workersRepo,
 		sqliteStore:      sqliteStore,
 		workerLifecycle:  workerLifecycle,
+		ansibleHandlers:  ansibleHandlers,
 	}, nil
 }
 
