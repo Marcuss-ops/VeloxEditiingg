@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
+
+	"velox-shared/payload"
 )
 
 func (s *SQLiteStore) UpsertAnalyticsCache(cacheKey string, ts float64, dataJSON []byte) error {
@@ -329,27 +331,9 @@ func (s *SQLiteStore) GetAnalyticsTotals(period string) (map[string]any, error) 
 }
 
 func parseIntDef(s string, def int) int {
-	var n int
-	if _, err := fmt.Sscanf(s, "%d", &n); err != nil || n <= 0 {
-		return def
-	}
-	return n
+	return payload.ParseIntDef(s, def)
 }
 
 func asFloat(v any) float64 {
-	switch t := v.(type) {
-	case float64:
-		return t
-	case float32:
-		return float64(t)
-	case int:
-		return float64(t)
-	case int64:
-		return float64(t)
-	case json.Number:
-		n, _ := t.Float64()
-		return n
-	default:
-		return 0
-	}
+	return payload.AsFloat(v)
 }

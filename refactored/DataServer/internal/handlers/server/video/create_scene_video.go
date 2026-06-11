@@ -1,3 +1,9 @@
+// Package video fornisce handler HTTP per la creazione e l'inoltro di job video
+// (process_video). Include normalizzazione dei payload, fingerprinting per deduplicazione
+// e proxy verso master server per job draft.
+//
+// Endpoint:
+//   POST /api/v1/video/create-scene → CreateFromScenes
 package video
 
 import (
@@ -13,24 +19,27 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"velox-shared/contract"
+	"velox-shared/payload"
 	"velox-server/internal/config"
 	"velox-server/internal/queue"
 )
 
-// CreateFromScenes accepts POST /api/v1/video/create-scenes and enqueues a
-// process_video job built from a script plus per-scene image links.
+// CreateFromScenes accetta POST /api/v1/video/create-scenes e inoltra un job
+// process_video costruito da un payload con script + scene + voiceover.
+// Supporta modalità "draft" (proxy a master server) e enqueue diretto.
 func CreateFromScenes(cfg *config.Config, q *queue.FileQueue) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		var payload map[string]interface{}
-		if err := c.ShouldBindJSON(&payload); err != nil {
+		var payloadMap map[string]interface{}
+		if err := c.ShouldBindJSON(&payloadMap); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "Invalid JSON"})
 			return
 		}
-		if payload == nil {
-			payload = make(map[string]interface{})
+		if payloadMap == nil {
+			payloadMap = make(map[string]interface{})
 		}
 
-		normalized, err := normalizeSceneVideoPayload(payload)
+		normalized, err := normalizeSceneVideoPayload(payloadMap)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": err.Error()})
 			return
@@ -77,14 +86,15 @@ func CreateFromScenes(cfg *config.Config, q *queue.FileQueue) gin.HandlerFunc {
 	}
 }
 
-// EnqueueSceneVideoJob normalizes a scene-video payload and persists it to the queue.
-// It returns the same response shape as CreateFromScenes.
-func EnqueueSceneVideoJob(ctx context.Context, q *queue.FileQueue, payload map[string]interface{}) (map[string]interface{}, error) {
+// EnqueueSceneVideoJob normalizza un payload scene-video e lo persiste nella coda.
+// Restituisce la stessa struttura di risposta di CreateFromScenes.
+// Può essere chiamato direttamente da altri handler (es. script handler).
+func EnqueueSceneVideoJob(ctx context.Context, q *queue.FileQueue, payloadMap map[string]interface{}) (map[string]interface{}, error) {
 	if q == nil {
 		return nil, fmt.Errorf("queue unavailable")
 	}
 
-	normalized, err := normalizeSceneVideoPayload(payload)
+	normalized, err := normalizeSceneVideoPayload(payloadMap)
 	if err != nil {
 		return nil, err
 	}
@@ -102,18 +112,21 @@ func EnqueueSceneVideoJob(ctx context.Context, q *queue.FileQueue, payload map[s
 	return buildSceneVideoResponse(normalized), nil
 }
 
-func normalizeSceneVideoPayload(payload map[string]interface{}) (map[string]interface{}, error) {
-	title := strings.TrimSpace(firstString(payload, "video_name", "title", "project_name"))
+// normalizeSceneVideoPayload normalizza e valida un payload per un job scene video.
+// Richiede: video_name, script_text, almeno una scena, almeno un voiceover_path.
+// Genera job_id, run_id, correlation_id se non forniti e calcola fingerprint.
+func normalizeSceneVideoPayload(payloadMap map[string]interface{}) (map[string]interface{}, error) {
+	title := strings.TrimSpace(firstString(payloadMap, "video_name", "title", "project_name"))
 	if title == "" {
 		return nil, &validationError{field: "video_name", message: "is required"}
 	}
 
-	scriptText := strings.TrimSpace(firstString(payload, "script_text", "script"))
+	scriptText := strings.TrimSpace(firstString(payloadMap, "script_text", "script"))
 	if scriptText == "" {
 		return nil, &validationError{field: "script_text", message: "is required"}
 	}
 
-	scenesValue, scenesJSON, err := normalizeScenes(payload)
+	scenesValue, scenesJSON, err := normalizeScenes(payloadMap)
 	if err != nil {
 		return nil, err
 	}
@@ -121,20 +134,20 @@ func normalizeSceneVideoPayload(payload map[string]interface{}) (map[string]inte
 		return nil, &validationError{field: "scenes", message: "at least one scene is required"}
 	}
 
-	voiceovers := normalizeVoiceoverList(payload)
+	voiceovers := normalizeVoiceoverList(payloadMap)
 	if len(voiceovers) == 0 {
 		return nil, &validationError{field: "voiceover_paths", message: "at least one voiceover path is required"}
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
-	jobID := strings.TrimSpace(firstString(payload, "job_id", "id"))
+	jobID := strings.TrimSpace(firstString(payloadMap, "job_id", "id"))
 	if jobID == "" {
 		jobID = "scene_" + uuid.NewString()
 	}
-	jobRunID := strings.TrimSpace(firstString(payload, "job_run_id", "run_id"))
+	jobRunID := strings.TrimSpace(firstString(payloadMap, "job_run_id", "run_id"))
 	if jobRunID == "" {
 		jobRunID = "run_" + uuid.NewString()
 	}
-	correlationID := strings.TrimSpace(firstString(payload, "correlation_id"))
+	correlationID := strings.TrimSpace(firstString(payloadMap, "correlation_id"))
 	if correlationID == "" {
 		correlationID = "corr_" + uuid.NewString()
 	}
@@ -144,13 +157,13 @@ func normalizeSceneVideoPayload(payload map[string]interface{}) (map[string]inte
 		scriptText,
 		scenesJSON,
 		voiceovers,
-		firstString(payload, "youtube_group"),
-		firstString(payload, "output_path"),
-		firstString(payload, "audio_language_for_srt", "audio_lang"),
+		firstString(payloadMap, "youtube_group"),
+		firstString(payloadMap, "output_path"),
+		firstString(payloadMap, "audio_language_for_srt", "audio_lang"),
 	)
 
-	normalized := make(map[string]interface{}, len(payload)+16)
-	for k, v := range payload {
+	normalized := make(map[string]interface{}, len(payloadMap)+16)
+	for k, v := range payloadMap {
 		normalized[k] = v
 	}
 	normalized["job_id"] = jobID
@@ -159,8 +172,8 @@ func normalizeSceneVideoPayload(payload map[string]interface{}) (map[string]inte
 	normalized["run_id"] = jobRunID
 	normalized["correlation_id"] = correlationID
 	normalized["job_type"] = "process_video"
-	normalized["created_at"] = ensureRFC3339(firstString(payload, "created_at"), now)
-	normalized["updated_at"] = ensureRFC3339(firstString(payload, "updated_at"), now)
+	normalized["created_at"] = ensureRFC3339(firstString(payloadMap, "created_at"), now)
+	normalized["updated_at"] = ensureRFC3339(firstString(payloadMap, "updated_at"), now)
 	normalized["video_name"] = title
 	normalized["title"] = title
 	normalized["script_text"] = scriptText
@@ -169,8 +182,8 @@ func normalizeSceneVideoPayload(payload map[string]interface{}) (map[string]inte
 	normalized["voiceover_paths"] = voiceovers
 	normalized["voiceover_path"] = voiceovers[0]
 	normalized["audio_path"] = voiceovers[0]
-	normalized["priority"] = ensureInt(payload["priority"], 1)
-	normalized["timeout_secs"] = ensureInt(payload["timeout_secs"], 3600)
+	normalized["priority"] = ensureInt(payloadMap["priority"], 1)
+	normalized["timeout_secs"] = ensureInt(payloadMap["timeout_secs"], 3600)
 	normalized["scene_count"] = len(scenesValue)
 	normalized["voiceover_count"] = len(voiceovers)
 	normalized["submitted_via"] = "api_v1_scene_video"
@@ -190,32 +203,32 @@ func normalizeSceneVideoPayload(payload map[string]interface{}) (map[string]inte
 		"scenes":          scenesValue,
 		"voiceover_paths": voiceovers,
 		"audio_path":      voiceovers[0],
-		"youtube_group":   firstString(payload, "youtube_group"),
-		"output_path":     firstString(payload, "output_path"),
+		"youtube_group":   firstString(payloadMap, "youtube_group"),
+		"output_path":     firstString(payloadMap, "output_path"),
 		"job_fingerprint": jobFingerprint,
 		"submitted_via":   "api_v1_scene_video",
 		"source":          "scene_video_api",
 		"scene_count":     len(scenesValue),
 		"voiceover_count": len(voiceovers),
-		"priority":        ensureInt(payload["priority"], 1),
-		"timeout_secs":    ensureInt(payload["timeout_secs"], 3600),
+		"priority":        ensureInt(payloadMap["priority"], 1),
+		"timeout_secs":    ensureInt(payloadMap["timeout_secs"], 3600),
 	}
 
-	if v := strings.TrimSpace(firstString(payload, "youtube_group")); v != "" {
+	if v := strings.TrimSpace(firstString(payloadMap, "youtube_group")); v != "" {
 		normalized["youtube_group"] = v
 	}
-	if v := strings.TrimSpace(firstString(payload, "output_video_id")); v != "" {
+	if v := strings.TrimSpace(firstString(payloadMap, "output_video_id")); v != "" {
 		normalized["output_video_id"] = v
 	}
-	if v := strings.TrimSpace(firstString(payload, "audio_language_for_srt", "audio_lang")); v != "" {
+	if v := strings.TrimSpace(firstString(payloadMap, "audio_language_for_srt", "audio_lang")); v != "" {
 		normalized["audio_language_for_srt"] = v
 		normalized["parameters"].(map[string]interface{})["audio_language_for_srt"] = v
 	}
-	if v := strings.TrimSpace(firstString(payload, "output_path")); v != "" {
+	if v := strings.TrimSpace(firstString(payloadMap, "output_path")); v != "" {
 		normalized["output_path"] = v
 		normalized["parameters"].(map[string]interface{})["output_path"] = v
 	}
-	if v := strings.TrimSpace(firstString(payload, "scene_image_paths")); v != "" {
+	if v := strings.TrimSpace(firstString(payloadMap, "scene_image_paths")); v != "" {
 		normalized["scene_image_paths"] = v
 		normalized["parameters"].(map[string]interface{})["scene_image_paths"] = v
 	}
@@ -223,15 +236,17 @@ func normalizeSceneVideoPayload(payload map[string]interface{}) (map[string]inte
 	return normalized, nil
 }
 
+// extractSceneClipPaths estrae tutti i path/clip URL unici da un array di scene.
+// Cerca in image_link, image_url, image e image_links.
 func extractSceneClipPaths(scenes []map[string]interface{}) []string {
 	seen := make(map[string]struct{})
-	paths := make([]string, 0, len(scenes))
+	result := make([]string, 0, len(scenes))
 	for _, scene := range scenes {
 		candidates := []string{
 			firstString(scene, "image_link", "image_url", "image"),
 		}
 		if v, ok := scene["image_links"]; ok {
-			candidates = append(candidates, normalizeToStrings(v)...)
+			candidates = append(candidates, payload.NormalizeToStrings(v)...)
 		}
 		for _, candidate := range candidates {
 			trimmed := strings.TrimSpace(candidate)
@@ -242,12 +257,13 @@ func extractSceneClipPaths(scenes []map[string]interface{}) []string {
 				continue
 			}
 			seen[trimmed] = struct{}{}
-			paths = append(paths, trimmed)
+			result = append(result, trimmed)
 		}
 	}
-	return paths
+	return result
 }
 
+// buildSceneVideoResponse costruisce una risposta HTTP standard per un job scene video.
 func buildSceneVideoResponse(normalized map[string]interface{}) map[string]interface{} {
 	jobID, _ := normalized["job_id"].(string)
 	jobRunID := strings.TrimSpace(firstString(normalized, "job_run_id", "run_id"))
@@ -269,8 +285,11 @@ func buildSceneVideoResponse(normalized map[string]interface{}) map[string]inter
 	}
 }
 
-func normalizeScenes(payload map[string]interface{}) ([]map[string]interface{}, string, error) {
-	if v, ok := payload["scenes"]; ok {
+// normalizeScenes estrae e normalizza le scene da un payload.
+// Supporta: scenes ([]interface{} o []map[string]interface{}) e scenes_json (string).
+// Restituisce le scene normalizzate e la loro rappresentazione JSON.
+func normalizeScenes(payloadMap map[string]interface{}) ([]map[string]interface{}, string, error) {
+	if v, ok := payloadMap["scenes"]; ok {
 		switch scenes := v.(type) {
 		case []interface{}:
 			result := make([]map[string]interface{}, 0, len(scenes))
@@ -279,7 +298,7 @@ func normalizeScenes(payload map[string]interface{}) ([]map[string]interface{}, 
 				if !ok {
 					continue
 				}
-				result = append(result, normalizeSceneEntry(m))
+				result = append(result, contract.NormalizeSceneEntry(m))
 			}
 			data, err := json.Marshal(result)
 			if err != nil {
@@ -289,7 +308,7 @@ func normalizeScenes(payload map[string]interface{}) ([]map[string]interface{}, 
 		case []map[string]interface{}:
 			result := make([]map[string]interface{}, 0, len(scenes))
 			for _, item := range scenes {
-				result = append(result, normalizeSceneEntry(item))
+				result = append(result, contract.NormalizeSceneEntry(item))
 			}
 			data, err := json.Marshal(result)
 			if err != nil {
@@ -299,13 +318,13 @@ func normalizeScenes(payload map[string]interface{}) ([]map[string]interface{}, 
 		}
 	}
 
-	if s, ok := payload["scenes_json"].(string); ok && strings.TrimSpace(s) != "" {
+	if s, ok := payloadMap["scenes_json"].(string); ok && strings.TrimSpace(s) != "" {
 		var scenes []map[string]interface{}
 		if err := json.Unmarshal([]byte(s), &scenes); err != nil {
 			return nil, "", err
 		}
 		for i := range scenes {
-			scenes[i] = normalizeSceneEntry(scenes[i])
+			scenes[i] = contract.NormalizeSceneEntry(scenes[i])
 		}
 		data, err := json.Marshal(scenes)
 		if err != nil {
@@ -317,43 +336,20 @@ func normalizeScenes(payload map[string]interface{}) ([]map[string]interface{}, 
 	return nil, "", nil
 }
 
-func normalizeSceneEntry(scene map[string]interface{}) map[string]interface{} {
-	normalized := map[string]interface{}{}
-	for k, v := range scene {
-		normalized[k] = v
-	}
-	if text, ok := scene["text"].(string); ok {
-		normalized["text"] = strings.TrimSpace(text)
-	}
-	if link := strings.TrimSpace(firstString(scene, "image_link", "image_url", "image")); link != "" {
-		normalized["image_link"] = link
-	}
-	if links, ok := scene["image_links"].([]interface{}); ok && len(links) > 0 {
-		clean := make([]string, 0, len(links))
-		for _, item := range links {
-			if s, ok := item.(string); ok && strings.TrimSpace(s) != "" {
-				clean = append(clean, strings.TrimSpace(s))
-			}
-		}
-		normalized["image_links"] = clean
-	} else if link := strings.TrimSpace(firstString(scene, "image_link")); link != "" {
-		normalized["image_links"] = []string{link}
-	}
-	return normalized
-}
-
-func normalizeVoiceoverList(payload map[string]interface{}) []string {
+// normalizeVoiceoverList raccoglie e deduplica i path voiceover da un payload.
+// Cerca in voiceover_paths, voiceover_path, voiceover, voiceovers, voiceovers_urls e unified_voiceover_link.
+func normalizeVoiceoverList(payloadMap map[string]interface{}) []string {
 	candidates := []string{
-		firstString(payload, "voiceover_path", "voiceover", "unified_voiceover_link"),
+		firstString(payloadMap, "voiceover_path", "voiceover", "unified_voiceover_link"),
 	}
-	if v, ok := payload["voiceover_paths"]; ok {
-		candidates = append(candidates, normalizeToStrings(v)...)
+	if v, ok := payloadMap["voiceover_paths"]; ok {
+		candidates = append(candidates, payload.NormalizeToStrings(v)...)
 	}
-	if v, ok := payload["voiceovers"]; ok {
-		candidates = append(candidates, normalizeToStrings(v)...)
+	if v, ok := payloadMap["voiceovers"]; ok {
+		candidates = append(candidates, payload.NormalizeToStrings(v)...)
 	}
-	if v, ok := payload["voiceovers_urls"]; ok {
-		candidates = append(candidates, normalizeToStrings(v)...)
+	if v, ok := payloadMap["voiceovers_urls"]; ok {
+		candidates = append(candidates, payload.NormalizeToStrings(v)...)
 	}
 
 	result := make([]string, 0, len(candidates))
@@ -370,88 +366,28 @@ func normalizeVoiceoverList(payload map[string]interface{}) []string {
 	return result
 }
 
-func normalizeToStrings(v interface{}) []string {
-	switch val := v.(type) {
-	case []string:
-		return val
-	case []interface{}:
-		out := make([]string, 0, len(val))
-		for _, item := range val {
-			if s, ok := item.(string); ok && strings.TrimSpace(s) != "" {
-				out = append(out, strings.TrimSpace(s))
-			}
-		}
-		return out
-	case string:
-		s := strings.TrimSpace(val)
-		if s == "" {
-			return nil
-		}
-		if strings.Contains(s, "\n") {
-			lines := strings.Split(s, "\n")
-			out := make([]string, 0, len(lines))
-			for _, line := range lines {
-				if trimmed := strings.TrimSpace(line); trimmed != "" {
-					out = append(out, trimmed)
-				}
-			}
-			return out
-		}
-		return []string{s}
-	default:
-		return nil
-	}
-}
-
-func firstString(payload map[string]interface{}, keys ...string) string {
-	for _, key := range keys {
-		if val, ok := payload[key]; ok {
-			if s, ok := val.(string); ok {
-				if trimmed := strings.TrimSpace(s); trimmed != "" {
-					return trimmed
-				}
-			}
-		}
-	}
-	return ""
+func firstString(source map[string]interface{}, keys ...string) string {
+	return payload.FirstString(source, keys...)
 }
 
 func ensureRFC3339(value, fallback string) string {
-	if strings.TrimSpace(value) == "" {
-		return fallback
-	}
-	if _, err := time.Parse(time.RFC3339, value); err == nil {
-		return value
-	}
-	return fallback
+	return payload.EnsureRFC3339(value, fallback)
 }
 
 func ensureInt(value interface{}, fallback int) int {
-	switch v := value.(type) {
-	case int:
-		if v > 0 {
-			return v
-		}
-	case int64:
-		if v > 0 {
-			return int(v)
-		}
-	case float64:
-		if v > 0 {
-			return int(v)
-		}
-	}
-	return fallback
+	return payload.EnsureInt(value, fallback)
 }
 
-func sceneCountFromPayload(payload map[string]interface{}) int {
-	if scenes, ok := payload["scenes"].([]interface{}); ok {
+// sceneCountFromPayload conta le scene in un payload, supportando
+// scenes (array) e scenes_json (string).
+func sceneCountFromPayload(payloadMap map[string]interface{}) int {
+	if scenes, ok := payloadMap["scenes"].([]interface{}); ok {
 		return len(scenes)
 	}
-	if scenes, ok := payload["scenes"].([]map[string]interface{}); ok {
+	if scenes, ok := payloadMap["scenes"].([]map[string]interface{}); ok {
 		return len(scenes)
 	}
-	if s, ok := payload["scenes_json"].(string); ok && strings.TrimSpace(s) != "" {
+	if s, ok := payloadMap["scenes_json"].(string); ok && strings.TrimSpace(s) != "" {
 		var scenes []interface{}
 		if err := json.Unmarshal([]byte(s), &scenes); err == nil {
 			return len(scenes)
@@ -460,16 +396,20 @@ func sceneCountFromPayload(payload map[string]interface{}) int {
 	return 0
 }
 
-func voiceoverCountFromPayload(payload map[string]interface{}) int {
-	if arr, ok := payload["voiceover_paths"].([]string); ok {
+// voiceoverCountFromPayload conta i voiceover in un payload.
+func voiceoverCountFromPayload(payloadMap map[string]interface{}) int {
+	if arr, ok := payloadMap["voiceover_paths"].([]string); ok {
 		return len(arr)
 	}
-	if arr, ok := payload["voiceover_paths"].([]interface{}); ok {
+	if arr, ok := payloadMap["voiceover_paths"].([]interface{}); ok {
 		return len(arr)
 	}
-	return len(normalizeVoiceoverList(payload))
+	return len(normalizeVoiceoverList(payloadMap))
 }
 
+// sceneVideoFingerprint genera un fingerprint SHA-256 parziale (32 hex char) di un job
+// per deduplicazione. Combina jobID, title, script, scenes, voiceovers, youtube_group,
+// output_path e audio_language.
 func sceneVideoFingerprint(parts ...interface{}) string {
 	h := sha256.New()
 	for _, part := range parts {
@@ -497,10 +437,13 @@ func sceneVideoFingerprint(parts ...interface{}) string {
 	return hex.EncodeToString(h.Sum(nil))[:32]
 }
 
-func isDraftScenePayload(payload map[string]interface{}) bool {
-	return strings.TrimSpace(firstString(payload, "submission_mode")) == "draft"
+// isDraftScenePayload verifica se un payload è in modalità bozza (submission_mode == "draft"),
+// nel qual caso viene inoltrato al master server invece di essere accodato localmente.
+func isDraftScenePayload(payloadMap map[string]interface{}) bool {
+	return strings.TrimSpace(firstString(payloadMap, "submission_mode")) == "draft"
 }
 
+// validationError rappresenta un errore di validazione campo-specifico.
 type validationError struct {
 	field   string
 	message string

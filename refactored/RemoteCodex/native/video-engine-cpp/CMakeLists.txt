@@ -7,7 +7,8 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 add_executable(velox_video_engine
     src/main.cpp
+    src/video_builder.cpp
 )
 
-target_include_directories(velox_video_engine PRIVATE include)
+target_include_directories(velox_video_engine PRIVATE include src)
 

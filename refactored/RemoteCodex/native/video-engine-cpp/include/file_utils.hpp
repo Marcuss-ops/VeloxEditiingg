@@ -1,6 +1,13 @@
 #ifndef VELOX_FILE_UTILS_HPP
 #define VELOX_FILE_UTILS_HPP
 
+// Utility per I/O su filesystem, download di asset e risoluzione URL Google Drive.
+// Funzioni:
+//   - Lettura/scrittura file
+//   - Download via curl (con supporto Google Drive)
+//   - Esecuzione comandi shell
+//   - Copia file e creazione directory temporanee
+
 #include <array>
 #include <cstdlib>
 #include <filesystem>

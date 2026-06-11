@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"velox-shared/contract"
 	"velox-worker-agent/pkg/config"
 	"velox-worker-agent/pkg/logger"
 )
@@ -18,32 +19,10 @@ type VideoGenerationWorkflow struct {
 	tempFiles []string
 }
 
-// VideoGenerationInput groups all parameters needed to build a video job.
-// It keeps the worker-to-native contract extensible without a long argument list.
-type VideoGenerationInput struct {
-	AudioPath                         string
-	OutputPath                        string
-	ScenesJSON                        string
-	ScriptText                        string
-	StartClipPaths                    []string
-	MiddleClipPaths                   []string
-	StockClipSources                  []string
-	EndClipPaths                      []string
-	BackgroundMusicPaths              []string
-	BackgroundVideoForImgOverlaysPath string
-	AssociazioniFinaliConTimestamp    map[string]interface{}
-	FormattedImgEntities              map[string]interface{}
-	PreAssociatedEntities             map[string]interface{}
-	RawEntities                       map[string]interface{}
-	AudioLanguageForSRT               string
-	SegmentsForSRTGeneration          []interface{}
-	VideoMode                         string
-	IntroClipPaths                    []string
-	StockClipPaths                    []string
-	ClipSegments                      []interface{}
-	SceneImagePaths                   []string
-	DriveOutputFolder                 string
-}
+// VideoGenerationInput è un alias per contract.RenderJobParams.
+// Manteniamo l'alias per compatibilità verso l'esterno, ma i campi sono
+// definiti in shared/contract/contract.go per evitare duplicazione.
+type VideoGenerationInput = contract.RenderJobParams
 
 // NewVideoGenerationWorkflow creates a new workflow instance.
 func NewVideoGenerationWorkflow(cfg *config.WorkerConfig, log *logger.Logger) *VideoGenerationWorkflow {
@@ -67,7 +46,7 @@ func (w *VideoGenerationWorkflow) Cleanup() {
 
 // ProcessSingleVideo processes a single video using the provided parameters.
 func (w *VideoGenerationWorkflow) ProcessSingleVideo(ctx context.Context,
-	input VideoGenerationInput,
+	input contract.RenderJobParams,
 	statusCallback func(string, bool)) (string, error) {
 
 	w.logger.Info("Starting video generation process")
@@ -126,7 +105,8 @@ type MatchResult struct {
 	Text           string  `json:"text"`
 }
 
-// EntitaResult represents an entity without text (image-only).
+// EntitaResult represents an entity without text (image-only association result).
+// Usato nel processo di entity association per risultati puramente visivi.
 type EntitaResult struct {
 	LinkImmagine []string      `json:"Link immagine"`
 	Timestamps   []MatchResult `json:"Timestamps"`

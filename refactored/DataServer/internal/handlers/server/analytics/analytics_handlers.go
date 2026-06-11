@@ -1,13 +1,13 @@
 package analytics
 
 import (
-	"fmt"
 	"net/http"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"velox-shared/payload"
 )
 
 func AnalyticsSummaryHandler(c *gin.Context) {
@@ -136,13 +136,7 @@ func AnalyticsTopVideosHandler(c *gin.Context) {
 }
 
 func asString(v any) string {
-	if v == nil {
-		return ""
-	}
-	if s, ok := v.(string); ok {
-		return s
-	}
-	return fmt.Sprintf("%v", v)
+	return payload.AsString(v)
 }
 
 func AnalyticsTopChannelsHandler(c *gin.Context) {

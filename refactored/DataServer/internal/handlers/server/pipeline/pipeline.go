@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"velox-shared/payload"
 	"velox-server/internal/config"
 	scenevideo "velox-server/internal/handlers/server/video"
 	"velox-server/internal/queue"
@@ -80,11 +81,11 @@ func shouldForwardPipelineResult(result map[string]interface{}) bool {
 		return false
 	}
 	flat := flattenPipelineResult(result)
-	status := strings.ToLower(strings.TrimSpace(firstStringFromMap(flat, "status")))
+	status := strings.ToLower(strings.TrimSpace(payload.FirstString(flat, "status")))
 	if status != "" && status != "completed" && status != "succeeded" && status != "done" {
 		return false
 	}
-	if firstStringFromMap(flat, "scenes_json", "json_path") == "" && firstStringFromMap(flat, "scenes") == "" {
+	if payload.FirstString(flat, "scenes_json", "json_path") == "" && payload.FirstString(flat, "scenes") == "" {
 		return false
 	}
 	if len(extractVoiceoverPaths(flat)) == 0 {
@@ -94,11 +95,11 @@ func shouldForwardPipelineResult(result map[string]interface{}) bool {
 }
 
 func forwardPipelineResultToWorker(ctx context.Context, q *queue.FileQueue, result map[string]interface{}) (map[string]interface{}, error) {
-	payload, err := buildSceneVideoPayloadFromPipelineResult(result)
+	jobPayload, err := buildSceneVideoPayloadFromPipelineResult(result)
 	if err != nil {
 		return nil, err
 	}
-	return scenevideo.EnqueueSceneVideoJob(ctx, q, payload)
+	return scenevideo.EnqueueSceneVideoJob(ctx, q, jobPayload)
 }
 
 func buildSceneVideoPayloadFromPipelineResult(result map[string]interface{}) (map[string]interface{}, error) {
@@ -108,21 +109,21 @@ func buildSceneVideoPayloadFromPipelineResult(result map[string]interface{}) (ma
 
 	flat := flattenPipelineResult(result)
 
-	title := firstStringFromMap(flat, "video_name", "title", "script_title", "name")
+	title := payload.FirstString(flat, "video_name", "title", "script_title", "name")
 	if title == "" {
 		title = firstMetadataTitle(flat)
 	}
 
-	scriptText := firstStringFromMap(flat, "script_text", "script", "generated_script", "text")
+	scriptText := payload.FirstString(flat, "script_text", "script", "generated_script", "text")
 	if scriptText == "" {
-		if markdownPath := firstStringFromMap(flat, "markdown_path"); markdownPath != "" {
+		if markdownPath := payload.FirstString(flat, "markdown_path"); markdownPath != "" {
 			if data, readErr := os.ReadFile(markdownPath); readErr == nil {
 				scriptText = strings.TrimSpace(string(data))
 			}
 		}
 	}
 
-	scenesJSON := firstStringFromMap(flat, "scenes_json")
+	scenesJSON := payload.FirstString(flat, "scenes_json")
 	if scenesJSON == "" {
 		if scenesValue, ok := flat["scenes"]; ok {
 			if data, marshalErr := json.Marshal(scenesValue); marshalErr == nil {
@@ -131,7 +132,7 @@ func buildSceneVideoPayloadFromPipelineResult(result map[string]interface{}) (ma
 		}
 	}
 	if scenesJSON == "" {
-		if jsonPath := firstStringFromMap(flat, "json_path"); jsonPath != "" {
+		if jsonPath := payload.FirstString(flat, "json_path"); jsonPath != "" {
 			if extracted, extractErr := extractScenesJSONFromFile(jsonPath); extractErr == nil {
 				scenesJSON = extracted
 			}
@@ -152,11 +153,11 @@ func buildSceneVideoPayloadFromPipelineResult(result map[string]interface{}) (ma
 		return nil, fmt.Errorf("scenes payload missing from pipeline result")
 	}
 
-	payload := map[string]interface{}{
-		"job_id":                 firstStringFromMap(flat, "job_id", "script_id", "trace_id"),
-		"job_run_id":             firstStringFromMap(flat, "job_run_id", "run_id", "trace_id"),
-		"run_id":                 firstStringFromMap(flat, "run_id", "job_run_id", "trace_id"),
-		"correlation_id":         firstStringFromMap(flat, "correlation_id", "trace_id"),
+	jobPayload := map[string]interface{}{
+		"job_id":                 payload.FirstString(flat, "job_id", "script_id", "trace_id"),
+		"job_run_id":             payload.FirstString(flat, "job_run_id", "run_id", "trace_id"),
+		"run_id":                 payload.FirstString(flat, "run_id", "job_run_id", "trace_id"),
+		"correlation_id":         payload.FirstString(flat, "correlation_id", "trace_id"),
 		"video_name":             title,
 		"title":                  title,
 		"script_text":            scriptText,
@@ -164,9 +165,9 @@ func buildSceneVideoPayloadFromPipelineResult(result map[string]interface{}) (ma
 		"voiceover_paths":        voiceovers,
 		"voiceover_path":         voiceovers[0],
 		"audio_path":             voiceovers[0],
-		"output_path":            firstStringFromMap(flat, "output_path", "output_dir"),
-		"youtube_group":          firstStringFromMap(flat, "youtube_group"),
-		"audio_language_for_srt": firstStringFromMap(flat, "audio_language_for_srt", "audio_lang"),
+		"output_path":            payload.FirstString(flat, "output_path", "output_dir"),
+		"youtube_group":          payload.FirstString(flat, "youtube_group"),
+		"audio_language_for_srt": payload.FirstString(flat, "audio_language_for_srt", "audio_lang"),
 		"job_type":               "process_video",
 		"submitted_via":          "pipeline_generate_with_images",
 		"source":                 "pipeline_generate_with_images",
@@ -174,26 +175,26 @@ func buildSceneVideoPayloadFromPipelineResult(result map[string]interface{}) (ma
 		"timeout_secs":           3600,
 	}
 
-	if jobID := strings.TrimSpace(firstStringFromMap(flat, "job_id", "script_id", "trace_id")); jobID != "" {
-		payload["job_id"] = jobID
-		payload["id"] = jobID
+	if jobID := strings.TrimSpace(payload.FirstString(flat, "job_id", "script_id", "trace_id")); jobID != "" {
+		jobPayload["job_id"] = jobID
+		jobPayload["id"] = jobID
 	}
 
-	if runID := strings.TrimSpace(firstStringFromMap(flat, "job_run_id", "run_id", "trace_id")); runID != "" {
-		payload["job_run_id"] = runID
-		payload["run_id"] = runID
+	if runID := strings.TrimSpace(payload.FirstString(flat, "job_run_id", "run_id", "trace_id")); runID != "" {
+		jobPayload["job_run_id"] = runID
+		jobPayload["run_id"] = runID
 	}
 
-	if corrID := strings.TrimSpace(firstStringFromMap(flat, "correlation_id", "trace_id")); corrID != "" {
-		payload["correlation_id"] = corrID
+	if corrID := strings.TrimSpace(payload.FirstString(flat, "correlation_id", "trace_id")); corrID != "" {
+		jobPayload["correlation_id"] = corrID
 	}
 
 	if len(voiceovers) > 0 {
-		payload["voiceover_path"] = voiceovers[0]
-		payload["audio_path"] = voiceovers[0]
+		jobPayload["voiceover_path"] = voiceovers[0]
+		jobPayload["audio_path"] = voiceovers[0]
 	}
 
-	return payload, nil
+	return jobPayload, nil
 }
 
 func flattenPipelineResult(result map[string]interface{}) map[string]interface{} {
@@ -209,26 +210,8 @@ func flattenPipelineResult(result map[string]interface{}) map[string]interface{}
 	return flat
 }
 
-func firstStringFromMap(payload map[string]interface{}, keys ...string) string {
-	for _, key := range keys {
-		if val, ok := payload[key]; ok {
-			switch v := val.(type) {
-			case string:
-				if trimmed := strings.TrimSpace(v); trimmed != "" {
-					return trimmed
-				}
-			case fmt.Stringer:
-				if trimmed := strings.TrimSpace(v.String()); trimmed != "" {
-					return trimmed
-				}
-			}
-		}
-	}
-	return ""
-}
-
-func firstMetadataTitle(payload map[string]interface{}) string {
-	metadata, ok := payload["metadata"]
+func firstMetadataTitle(p map[string]interface{}) string {
+	metadata, ok := p["metadata"]
 	if !ok {
 		return ""
 	}
@@ -236,14 +219,14 @@ func firstMetadataTitle(payload map[string]interface{}) string {
 	case []interface{}:
 		for _, item := range v {
 			if m, ok := item.(map[string]interface{}); ok {
-				if title := firstStringFromMap(m, "title", "name"); title != "" {
+				if title := payload.FirstString(m, "title", "name"); title != "" {
 					return title
 				}
 			}
 		}
 	case []map[string]interface{}:
 		for _, item := range v {
-			if title := firstStringFromMap(item, "title", "name"); title != "" {
+			if title := payload.FirstString(item, "title", "name"); title != "" {
 				return title
 			}
 		}
@@ -251,24 +234,24 @@ func firstMetadataTitle(payload map[string]interface{}) string {
 	return ""
 }
 
-func extractVoiceoverPaths(payload map[string]interface{}) []string {
+func extractVoiceoverPaths(p map[string]interface{}) []string {
 	var candidates []string
 
-	if s := firstStringFromMap(payload, "voiceover_path", "audio_path", "voiceover"); s != "" {
+	if s := payload.FirstString(p, "voiceover_path", "audio_path", "voiceover"); s != "" {
 		candidates = append(candidates, s)
 	}
-	if v, ok := payload["voiceover_paths"]; ok {
-		candidates = append(candidates, normalizeStringList(v)...)
+	if v, ok := p["voiceover_paths"]; ok {
+		candidates = append(candidates, payload.NormalizeToStrings(v)...)
 	}
 
-	if voiceover, ok := payload["voiceover"].(map[string]interface{}); ok {
+	if voiceover, ok := p["voiceover"].(map[string]interface{}); ok {
 		candidates = append(candidates,
-			firstStringFromMap(voiceover, "local_path", "path", "drive_link", "url"),
+			payload.FirstString(voiceover, "local_path", "path", "drive_link", "url"),
 		)
 	}
-	if nested, ok := payload["voiceover_info"].(map[string]interface{}); ok {
+	if nested, ok := p["voiceover_info"].(map[string]interface{}); ok {
 		candidates = append(candidates,
-			firstStringFromMap(nested, "local_path", "path", "drive_link", "url"),
+			payload.FirstString(nested, "local_path", "path", "drive_link", "url"),
 		)
 	}
 
@@ -286,39 +269,6 @@ func extractVoiceoverPaths(payload map[string]interface{}) []string {
 		result = append(result, trimmed)
 	}
 	return result
-}
-
-func normalizeStringList(v interface{}) []string {
-	switch val := v.(type) {
-	case []string:
-		return val
-	case []interface{}:
-		out := make([]string, 0, len(val))
-		for _, item := range val {
-			if s, ok := item.(string); ok && strings.TrimSpace(s) != "" {
-				out = append(out, strings.TrimSpace(s))
-			}
-		}
-		return out
-	case string:
-		s := strings.TrimSpace(val)
-		if s == "" {
-			return nil
-		}
-		if strings.Contains(s, "\n") {
-			lines := strings.Split(s, "\n")
-			out := make([]string, 0, len(lines))
-			for _, line := range lines {
-				if trimmed := strings.TrimSpace(line); trimmed != "" {
-					out = append(out, trimmed)
-				}
-			}
-			return out
-		}
-		return []string{s}
-	default:
-		return nil
-	}
 }
 
 func extractScenesJSONFromFile(path string) (string, error) {

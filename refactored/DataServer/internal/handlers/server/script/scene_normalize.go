@@ -4,20 +4,20 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"os/exec"
-	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"velox-shared/contract"
+	"velox-shared/media"
+	"velox-shared/paths"
 	"velox-server/internal/config"
 )
 
 func (h *ScriptHandlers) buildSceneImagePayload(cfg *config.Config, payload map[string]interface{}) (map[string]interface{}, error) {
 	videoName := firstNonEmptyString(payload, "video_name", "title", "topic")
 	if videoName == "" {
-		videoName = sanitizeVideoName(firstNonEmptyString(payload, "topic", "source_text"))
+		videoName = paths.SanitizeVideoName(firstNonEmptyString(payload, "topic", "source_text"))
 	}
 	if videoName == "" {
 		videoName = "script_with_images_" + time.Now().UTC().Format("20060102_150405")
@@ -51,21 +51,18 @@ func (h *ScriptHandlers) buildSceneImagePayload(cfg *config.Config, payload map[
 	totalDuration := floatFromPayload(payload, 0, "total_duration_secs", "duration_secs", "video_duration_secs")
 	perSceneDuration := floatFromPayload(payload, 0, "scene_duration_secs", "image_duration_secs")
 
-	// Auto-detect audio duration when user hasn't specified any timing.
-	// Audio durata / sceneCount = durata per immagine.
-	// Esempio: audio 7 minuti, 7 scene → ogni scena dura 1 minuto.
 	if perSceneDuration <= 0 && totalDuration <= 0 {
 		if len(voiceoverPaths) > 0 {
-			detected := detectAudioDurationSecs(voiceoverPaths[0])
+			detected := media.DetectAudioDurationSecs(voiceoverPaths[0])
 			if detected > 0 {
 				totalDuration = detected
-				log.Printf("🎵 Audio duration auto-detected: %.1fs (%.1f min) from %s", totalDuration, totalDuration/60.0, voiceoverPaths[0])
+				log.Printf("Audio duration auto-detected: %.1fs (%.1f min) from %s", totalDuration, totalDuration/60.0, voiceoverPaths[0])
 			}
 		}
 	}
 	if perSceneDuration <= 0 && totalDuration > 0 {
 		perSceneDuration = totalDuration / float64(sceneCount)
-		log.Printf("🎵 Distributing audio across %d scenes: %.1fs per scene", sceneCount, perSceneDuration)
+		log.Printf("Distributing audio across %d scenes: %.1fs per scene", sceneCount, perSceneDuration)
 	}
 	if perSceneDuration <= 0 {
 		perSceneDuration = 5
@@ -74,8 +71,6 @@ func (h *ScriptHandlers) buildSceneImagePayload(cfg *config.Config, payload map[
 		totalDuration = perSceneDuration * float64(sceneCount)
 	}
 
-	// Propagate the calculated duration to each individual scene entry
-	// so the worker reads the correct per-scene duration.
 	for i := range sceneEntries {
 		sceneEntries[i]["duration_seconds"] = perSceneDuration
 	}
@@ -172,73 +167,11 @@ func (h *ScriptHandlers) buildSceneImagePayload(cfg *config.Config, payload map[
 }
 
 func (h *ScriptHandlers) defaultOutputPath(cfg *config.Config, videoName string) string {
-	base := ""
+	videosDir := ""
 	if cfg != nil {
-		base = strings.TrimSpace(cfg.VideosDir)
+		videosDir = cfg.VideosDir
 	}
-	if base == "" {
-		if h.dataDir != "" {
-			base = filepath.Join(h.dataDir, "generated_videos")
-		} else {
-			base = filepath.Join(".", "generated_videos")
-		}
-	}
-	slug := sanitizeVideoName(videoName)
-	if slug == "" {
-		slug = "script_with_images"
-	}
-	return filepath.Join(base, "script_with_images", slug+".mp4")
-}
-
-// detectAudioDurationSecs tries to detect the duration of an audio file from its URL
-// using ffprobe. Returns 0 if detection fails.
-func detectAudioDurationSecs(url string) float64 {
-	if url == "" {
-		return 0
-	}
-
-	// Resolve Google Drive links to direct download URLs
-	resolved := resolveAudioURL(url)
-
-	// Use ffprobe to get duration
-	cmd := exec.Command("ffprobe",
-		"-v", "error",
-		"-show_entries", "format=duration",
-		"-of", "default=noprint_wrappers=1:nokey=1",
-		resolved,
-	)
-	out, err := cmd.Output()
-	if err != nil {
-		log.Printf("⚠️ ffprobe failed for %s: %v", resolved[:min(80, len(resolved))], err)
-		return 0
-	}
-
-	duration, err := strconv.ParseFloat(strings.TrimSpace(string(out)), 64)
-	if err != nil || duration <= 0 {
-		log.Printf("⚠️ ffprobe returned invalid duration: %s", strings.TrimSpace(string(out)))
-		return 0
-	}
-
-	return duration
-}
-
-// resolveAudioURL converts Google Drive sharing links to direct download URLs
-// for ffprobe compatibility. Leaves other URLs unchanged.
-func resolveAudioURL(url string) string {
-	// Google Drive link: https://drive.google.com/file/d/FILE_ID/view
-	const drivePrefix = "https://drive.google.com/file/d/"
-	if strings.HasPrefix(url, drivePrefix) {
-		rest := strings.TrimPrefix(url, drivePrefix)
-		if idx := strings.Index(rest, "/"); idx > 0 {
-			fileID := rest[:idx]
-			return "https://drive.google.com/uc?export=download&id=" + fileID + "&confirm=t"
-		}
-	}
-	// Google Drive short: https://drive.google.com/uc?id=FILE_ID
-	if strings.Contains(url, "drive.google.com/uc") {
-		return url + "&confirm=t"
-	}
-	return url
+	return paths.DefaultOutputPath(videosDir, h.dataDir, videoName, "script_with_images")
 }
 
 func normalizeScenesPayload(payload map[string]interface{}) ([]map[string]interface{}, []string, error) {
@@ -247,7 +180,7 @@ func normalizeScenesPayload(payload map[string]interface{}) ([]map[string]interf
 		sceneImagePaths := make([]string, 0, len(scenes))
 		fallbacks := collectSceneImageCandidates(scenes)
 		for idx, scene := range scenes {
-			normalized := normalizeSceneEntry(scene)
+			normalized := contract.NormalizeSceneEntry(scene)
 			if image, ok := normalized["image_link"].(string); !ok || strings.TrimSpace(image) == "" {
 				if len(fallbacks) > 0 {
 					fallback := fallbacks[idx%len(fallbacks)]
@@ -255,12 +188,10 @@ func normalizeScenesPayload(payload map[string]interface{}) ([]map[string]interf
 					normalized["image_links"] = []string{fallback}
 				}
 			}
-			if image := firstSceneImageLink(normalized); image != "" {
+			if image := contract.FirstSceneImageLink(normalized); image != "" {
 				sceneImagePaths = append(sceneImagePaths, image)
 			}
 			if duration := normalizedDuration(normalized["duration_seconds"]); duration <= 0 {
-				// Default 5s — will be overwritten by buildSceneImagePayload
-				// with the auto-detected perSceneDuration value.
 				normalized["duration_seconds"] = 5.0
 			}
 			sceneEntries = append(sceneEntries, normalized)
@@ -316,7 +247,7 @@ func normalizeSceneArray(value interface{}) []map[string]interface{} {
 	case []map[string]interface{}:
 		out := make([]map[string]interface{}, 0, len(scenes))
 		for _, scene := range scenes {
-			out = append(out, normalizeSceneEntry(scene))
+			out = append(out, contract.NormalizeSceneEntry(scene))
 		}
 		return out
 	case []interface{}:
@@ -326,7 +257,7 @@ func normalizeSceneArray(value interface{}) []map[string]interface{} {
 			if !ok {
 				continue
 			}
-			out = append(out, normalizeSceneEntry(scene))
+			out = append(out, contract.NormalizeSceneEntry(scene))
 		}
 		return out
 	default:
@@ -334,32 +265,10 @@ func normalizeSceneArray(value interface{}) []map[string]interface{} {
 	}
 }
 
-func normalizeSceneEntry(scene map[string]interface{}) map[string]interface{} {
-	normalized := make(map[string]interface{}, len(scene)+4)
-	for k, v := range scene {
-		normalized[k] = v
-	}
-	if text := firstNonEmptyString(scene, "text"); text != "" {
-		normalized["text"] = text
-	}
-	if image := firstNonEmptyString(scene, "image_link", "image_url", "image"); image != "" {
-		normalized["image_link"] = image
-	}
-	if links := normalizeStringList(scene, "image_links"); len(links) > 0 {
-		normalized["image_links"] = links
-	} else if image := firstNonEmptyString(scene, "image_link"); image != "" {
-		normalized["image_links"] = []string{image}
-	}
-	if duration := normalizedDuration(normalized["duration_seconds"]); duration <= 0 {
-		normalized["duration_seconds"] = 5.0
-	}
-	return normalized
-}
-
 func collectSceneImageCandidates(scenes []map[string]interface{}) []string {
 	out := make([]string, 0, len(scenes))
 	for _, scene := range scenes {
-		if image := firstSceneImageLink(scene); image != "" {
+		if image := contract.FirstSceneImageLink(scene); image != "" {
 			out = append(out, image)
 		}
 	}
@@ -367,14 +276,13 @@ func collectSceneImageCandidates(scenes []map[string]interface{}) []string {
 }
 
 func firstSceneImageLink(scene map[string]interface{}) string {
-	if scene == nil {
-		return ""
-	}
-	if image := firstNonEmptyString(scene, "image_link", "image_url", "image"); image != "" {
-		return image
-	}
-	if links := normalizeStringList(scene, "image_links"); len(links) > 0 {
-		return links[0]
-	}
-	return ""
+	return contract.FirstSceneImageLink(scene)
+}
+
+func normalizeSceneEntry(scene map[string]interface{}) map[string]interface{} {
+	return contract.NormalizeSceneEntry(scene)
+}
+
+func detectAudioDurationSecs(url string) float64 {
+	return media.DetectAudioDurationSecs(url)
 }

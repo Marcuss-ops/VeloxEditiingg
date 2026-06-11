@@ -4,22 +4,15 @@
 #include <string>
 #include <vector>
 
+#include "video_contract.hpp"
+
 namespace velox {
 
-struct SceneRuntime {
-    std::string text;
-    std::string image_link;
-    std::vector<std::string> image_links;
-    double duration_seconds{0.0};
-};
-
-struct ClipRuntime {
-    std::string text;
-    std::string clip_link;
-    std::vector<std::string> clip_links;
-    double duration_seconds{0.0};
-    std::string kind;
-};
+// Le strutture SceneAsset/ClipAsset sono definite in video_contract.hpp (namespace velox::video)
+// e corrispondono a contract.SceneRequest/ClipRequest in Go (shared/contract/contract.go).
+// Qui usiamo alias per comodità nel namespace velox.
+using SceneRuntime = velox::video::SceneAsset;
+using ClipRuntime = velox::video::ClipAsset;
 
 double extractDurationValue(const std::string& json, const std::string& key, double fallback);
 ClipRuntime parseClipObject(const std::string& obj);

@@ -2,8 +2,12 @@ module velox-worker-agent
 
 go 1.25.0
 
-// NLP dependencies (lightweight, no heavy ML models)
-require github.com/jdkato/prose/v2 v2.0.0
+require (
+	velox-shared v0.0.0
+	github.com/jdkato/prose/v2 v2.0.0
+)
+
+replace velox-shared v0.0.0 => ../../../shared
 
 require (
 	github.com/bytedance/gopkg v0.1.3 // indirect

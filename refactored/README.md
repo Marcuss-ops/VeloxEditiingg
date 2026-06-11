@@ -174,13 +174,13 @@ Tutti gli endpoint protetti richiedono `Authorization: Bearer <admin_token>` (o 
 
 ### 3.1 Script con Immagini (Scene + Voiceover)
 
-Crea un video da scene predefinite con immagini e voiceover.
+Accoda un job video usando scene, immagini e voiceover gia prodotti upstream.
 
 **`POST /api/script/generate-with-images`**
 **`POST /api/v1/script/generate-with-images`**
 
 ```bash
-curl -X POST http://localhost:8000/api/script/generate-with-images \
+curl -X POST http://77.93.152.122:8081/api/script/generate-with-images \
   -H "Authorization: Bearer velox-dev-token" \
   -H "Content-Type: application/json" \
   -d '{
@@ -207,8 +207,8 @@ curl -X POST http://localhost:8000/api/script/generate-with-images \
 |-------|------|:---:|:-------:|------------|
 | `video_name` | string | ✅ | — | Titolo del video |
 | `scenes[]` | array | ✅ | — | Scene con `text` + `image_link` |
-| `voiceover_path` | string | ✅ | — | URL audio (Google Drive, MP3, WAV, M4A) |
-| `source_text` | string | ❌ | — | Testo sorgente (fallback per script_text) |
+| `voiceover_path` | string | ✅ | — | URL audio gia pronto (Google Drive, MP3, WAV, M4A) |
+| `source_text` | string | ❌ | — | Testo sorgente o metadato per il job |
 | `language` | string | ❌ | `it` | Lingua per SRT |
 | `drive_output_folder` | string | ❌ | — | Cartella Drive per upload |
 | `scene_duration_secs` | number | ❌ | `5` | Durata per scena |
@@ -216,6 +216,8 @@ curl -X POST http://localhost:8000/api/script/generate-with-images \
 | `priority` | number | ❌ | `1` | Priorità coda |
 | `timeout_secs` | number | ❌ | `3600` | Timeout job |
 | `youtube_group` | string | ❌ | — | Gruppo YouTube per upload automatico |
+
+Nota: questo endpoint non genera immagini o voiceover in locale. Le URL devono essere gia disponibili prima della chiamata.
 
 **Risposta (200 OK):**
 ```json
@@ -241,7 +243,7 @@ curl -X POST http://localhost:8000/api/script/generate-with-images \
 Come sopra ma con validazione più rigida (richiede `video_name`, `script_text`, `scenes[]`, `voiceover_paths`). Supporta **proxy mode**: se `submission_mode=draft` e `MasterServerURL` configurato, il job viene inoltrato a un master remoto.
 
 ```bash
-curl -X POST http://localhost:8000/api/v1/video/create-scenes \
+curl -X POST http://77.93.152.122:8081/api/v1/video/create-scenes \
   -H "Authorization: Bearer velox-dev-token" \
   -H "Content-Type: application/json" \
   -d '{
@@ -259,7 +261,7 @@ curl -X POST http://localhost:8000/api/v1/video/create-scenes \
 Endpoint legacy per creazione video con supporto **multi-title** (array `titles[]`). Accetta clip organizzate in slot (start, middle, end, stock).
 
 ```bash
-curl -X POST http://localhost:8000/api/v1/video/create-master \
+curl -X POST http://77.93.152.122:8081/api/v1/video/create-master \
   -H "Authorization: Bearer velox-dev-token" \
   -H "Content-Type: application/json" \
   -d '{
@@ -279,7 +281,7 @@ curl -X POST http://localhost:8000/api/v1/video/create-master \
 Job minimale per la pipeline clip+stock. Richiede `video_mode`, `intro_clip_paths`, `stock_clip_paths`, `voiceover_paths`.
 
 ```bash
-curl -X POST http://localhost:8000/api/v1/video/smoke-clip-stock \
+curl -X POST http://77.93.152.122:8081/api/v1/video/smoke-clip-stock \
   -H "Authorization: Bearer velox-dev-token" \
   -H "Content-Type: application/json" \
   -d '{
@@ -309,7 +311,7 @@ Usato dal worker per notificare il completamento dell'upload del video generato.
 **`GET /api/script/jobs/:job_id/full`** (dettaglio completo con history)
 
 ```bash
-curl http://localhost:8000/api/script/jobs/scriptimg_uuid \
+curl http://77.93.152.122:8081/api/script/jobs/scriptimg_uuid \
   -H "Authorization: Bearer velox-dev-token"
 ```
 
@@ -501,7 +503,7 @@ Il **bundle** (`worker_code.zip`) contiene il software eseguibile che viene dist
   --output /path/to/worker_downloads
 
 # Oppure via API
-curl -X POST "http://localhost:8000/install_worker/force_regenerate_zip?wait=1" \
+curl -X POST "http://77.93.152.122:8081/install_worker/force_regenerate_zip?wait=1" \
   -H "Authorization: Bearer velox-dev-token"
 ```
 
@@ -511,7 +513,7 @@ curl -X POST "http://localhost:8000/install_worker/force_regenerate_zip?wait=1" 
 ansible-playbook -i inventory.ini update_workers.yml
 
 # Via API
-curl -X POST http://localhost:8000/api/v1/admin/workers/update_all \
+curl -X POST http://77.93.152.122:8081/api/v1/admin/workers/update_all \
   -H "Authorization: Bearer velox-dev-token"
 ```
 
@@ -551,14 +553,14 @@ curl -X POST http://localhost:8000/api/v1/admin/workers/update_all \
 ```bash
 cd DataServer
 export VELOX_ADMIN_TOKEN=velox-dev-token
-export MASTER_PUBLIC_URL=http://localhost:8000
+export MASTER_PUBLIC_URL=http://77.93.152.122:8081
 go run ./cmd/server
-# Server su http://localhost:8000
+# Server su http://77.93.152.122:8081
 ```
 
 ### Invio Job di Test
 ```bash
-curl -X POST http://localhost:8000/api/script/generate-with-images \
+curl -X POST http://77.93.152.122:8081/api/script/generate-with-images \
   -H "Authorization: Bearer velox-dev-token" \
   -H "Content-Type: application/json" \
   -d '{
@@ -573,7 +575,7 @@ curl -X POST http://localhost:8000/api/script/generate-with-images \
 
 ### Verifica Stato
 ```bash
-curl http://localhost:8000/api/script/jobs/<job_id> \
+curl http://77.93.152.122:8081/api/script/jobs/<job_id> \
   -H "Authorization: Bearer velox-dev-token"
 ```
 

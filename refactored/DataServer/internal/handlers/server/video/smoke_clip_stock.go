@@ -2,11 +2,11 @@ package video
 
 import (
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"velox-shared/payload"
 	"velox-server/internal/config"
 	"velox-server/internal/queue"
 )
@@ -29,58 +29,58 @@ func CreateSmokeClipStock(cfg *config.Config, q *queue.FileQueue) gin.HandlerFun
 			body = map[string]interface{}{}
 		}
 
-		videoName := firstString(body, "video_name", "title", "project_name")
+		videoName := payload.FirstString(body, "video_name", "title", "project_name")
 		if videoName == "" {
 			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "missing video_name"})
 			return
 		}
-		scriptText := firstString(body, "script_text", "script")
+		scriptText := payload.FirstString(body, "script_text", "script")
 		if scriptText == "" {
 			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "missing script_text"})
 			return
 		}
-		videoMode := firstString(body, "video_mode")
+		videoMode := payload.FirstString(body, "video_mode")
 		if videoMode == "" {
 			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "missing video_mode"})
 			return
 		}
 
-		voiceoverPaths := normalizePaths(body, "voiceover_paths")
+		voiceoverPaths := payload.NormalizeToStrings(body["voiceover_paths"])
 		if len(voiceoverPaths) == 0 {
 			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "missing voiceover_paths"})
 			return
 		}
-		introClipPaths := normalizePaths(body, "intro_clip_paths")
+		introClipPaths := payload.NormalizeToStrings(body["intro_clip_paths"])
 		if len(introClipPaths) == 0 {
 			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "missing intro_clip_paths"})
 			return
 		}
-		stockClipPaths := normalizePaths(body, "stock_clip_paths")
+		stockClipPaths := payload.NormalizeToStrings(body["stock_clip_paths"])
 		if len(stockClipPaths) == 0 {
 			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "missing stock_clip_paths"})
 			return
 		}
 		clipSegments := body["clip_segments"]
 
-		jobID := firstString(body, "job_id", "id")
+		jobID := payload.FirstString(body, "job_id", "id")
 		if jobID == "" {
 			jobID = "smoke_clip_stock_" + uuid.NewString()
 		}
-		jobRunID := firstString(body, "job_run_id", "run_id")
+		jobRunID := payload.FirstString(body, "job_run_id", "run_id")
 		if jobRunID == "" {
 			jobRunID = "run_" + uuid.NewString()
 		}
-		correlationID := firstString(body, "correlation_id")
+		correlationID := payload.FirstString(body, "correlation_id")
 		if correlationID == "" {
 			correlationID = "corr_" + uuid.NewString()
 		}
 		now := time.Now().UTC().Format(time.RFC3339)
-		outputPath := firstString(body, "output_path", "output")
+		outputPath := payload.FirstString(body, "output_path", "output")
 		if outputPath == "" {
 			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "missing output_path"})
 			return
 		}
-		driveOutputFolder := firstString(body, "drive_output_folder", "output_directory")
+		driveOutputFolder := payload.FirstString(body, "drive_output_folder", "output_directory")
 
 		normalized := map[string]interface{}{
 			"job_id":                 jobID,
@@ -90,8 +90,8 @@ func CreateSmokeClipStock(cfg *config.Config, q *queue.FileQueue) gin.HandlerFun
 			"correlation_id":         correlationID,
 			"job_type":               "process_video",
 			"version":       "v1",
-			"created_at":    ensureRFC3339(firstString(body, "created_at"), now),
-			"updated_at":             ensureRFC3339(firstString(body, "updated_at"), now),
+			"created_at":    payload.EnsureRFC3339(payload.FirstString(body, "created_at"), now),
+			"updated_at":             payload.EnsureRFC3339(payload.FirstString(body, "updated_at"), now),
 			"video_name":             videoName,
 			"title":                  videoName,
 			"script_text":            scriptText,
@@ -106,9 +106,9 @@ func CreateSmokeClipStock(cfg *config.Config, q *queue.FileQueue) gin.HandlerFun
 			"scenes_json":            "[]",
 			"output_path":            outputPath,
 			"drive_output_folder":    driveOutputFolder,
-			"audio_language_for_srt": firstString(body, "audio_language_for_srt", "audio_lang"),
-			"priority":               ensureInt(body["priority"], 1),
-			"timeout_secs":           ensureInt(body["timeout_secs"], 3600),
+			"audio_language_for_srt": payload.FirstString(body, "audio_language_for_srt", "audio_lang"),
+			"priority":               payload.EnsureInt(body["priority"], 1),
+			"timeout_secs":           payload.EnsureInt(body["timeout_secs"], 3600),
 			"submitted_via":          "api_v1_smoke_clip_stock",
 			"source":                 "smoke_clip_stock_api",
 			"scene_count":            0,
@@ -133,9 +133,9 @@ func CreateSmokeClipStock(cfg *config.Config, q *queue.FileQueue) gin.HandlerFun
 			"clip_segments":          clipSegments,
 			"output_path":            outputPath,
 			"drive_output_folder":    driveOutputFolder,
-			"audio_language_for_srt": firstString(body, "audio_language_for_srt", "audio_lang"),
-			"priority":               ensureInt(body["priority"], 1),
-			"timeout_secs":           ensureInt(body["timeout_secs"], 3600),
+			"audio_language_for_srt": payload.FirstString(body, "audio_language_for_srt", "audio_lang"),
+			"priority":               payload.EnsureInt(body["priority"], 1),
+			"timeout_secs":           payload.EnsureInt(body["timeout_secs"], 3600),
 			"submitted_via":          "api_v1_smoke_clip_stock",
 			"source":                 "smoke_clip_stock_api",
 		}
@@ -161,38 +161,5 @@ func CreateSmokeClipStock(cfg *config.Config, q *queue.FileQueue) gin.HandlerFun
 			"status":              "PENDING",
 			"queue":               "queued_for_workers",
 		})
-	}
-}
-
-func normalizePaths(body map[string]interface{}, key string) []string {
-	val := body[key]
-	if val == nil {
-		return nil
-	}
-	switch v := val.(type) {
-	case []interface{}:
-		out := make([]string, 0, len(v))
-		for _, item := range v {
-			if s, ok := item.(string); ok && strings.TrimSpace(s) != "" {
-				out = append(out, strings.TrimSpace(s))
-			}
-		}
-		return out
-	case []string:
-		out := make([]string, 0, len(v))
-		for _, item := range v {
-			if strings.TrimSpace(item) != "" {
-				out = append(out, strings.TrimSpace(item))
-			}
-		}
-		return out
-	case string:
-		s := strings.TrimSpace(v)
-		if s == "" {
-			return nil
-		}
-		return []string{s}
-	default:
-		return nil
 	}
 }

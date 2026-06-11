@@ -1,10 +1,10 @@
 # POST /api/script/generate-with-images
 
-> Endpoint principale per generare video con scene, immagini e voiceover.
+> Endpoint principale per creare un job video da scene e asset gia pronti.
 
 ## Overview
 
-Questo endpoint accetta un payload JSON con scene, immagini, voiceover e parametri di configurazione, normalizza i dati (rilevando automaticamente la durata dell'audio se non specificata), e accoda un job `process_video` per il worker remoto.
+Questo endpoint accetta un payload JSON con scene, immagini, voiceover e parametri di configurazione gia generati upstream, normalizza i dati (rilevando automaticamente la durata dell'audio se non specificata), e accoda un job `process_video` per il worker remoto.
 
 ## Endpoint
 
@@ -22,7 +22,7 @@ Client → POST /api/script/generate-with-images
   │
   ▼
 Server (scene_normalize.go)
-  │  • Normalizza scene/immagini
+  │  • Normalizza scene/immagini gia presenti nel payload
   │  • Rileva durata audio (ffprobe) SE non specificata
   │  • Distribuisce durata equamente tra le scene
   │  • Prepara payload → scenes_json con duration_seconds
@@ -54,12 +54,12 @@ Job COMPLETED
 
 | Campo | Tipo | Descrizione |
 |-------|------|-------------|
-| `voiceover_path` | `string` | URL del file audio (Google Drive) |
+| `voiceover_path` | `string` | URL del file audio gia pronto (Google Drive, HTTP, locale accessibile) |
 | `scenes` | `array` | Array di oggetti scena (almeno 1) |
 
 **Oppure** al posto di `scenes` si può usare:
-| `images` | `array[string]` | Array di URL immagini (scene generate automaticamente) |
-| `source_text` | `string` | Testo descrittivo (usato se scenes non fornito) |
+| `images` | `array[string]` | Array di URL immagini gia generate upstream |
+| `source_text` | `string` | Testo descrittivo usato come metadato o fallback per il testo scena |
 
 ### Campi opzionali
 
@@ -93,6 +93,8 @@ Job COMPLETED
 ```
 Esempio: audio 336s, 3 scene → 112s per scena
 ```
+
+Nota: questo endpoint non genera immagini o voiceover in locale. Si aspetta che arrivino gia prodotti da un servizio upstream.
 
 #### Esempio completo
 
@@ -152,7 +154,7 @@ Stati possibili: `PENDING` → `PROCESSING` → `COMPLETED` | `FAILED`
 ## Casi d'uso
 
 ### 1. Video con durata automatica (raccomandato)
-Basta inviare audio + scene. Il server rileva la durata e distribuisce.
+Basta inviare audio + scene gia pronte. Il server rileva la durata e distribuisce.
 
 ### 2. Durata esplicita
 Specifica `total_duration_secs: 60` per forzare 60 secondi totali.

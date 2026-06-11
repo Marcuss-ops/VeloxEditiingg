@@ -19,6 +19,7 @@ import (
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
+	"velox-shared/payload"
 )
 
 type SQLiteStore struct {
@@ -200,26 +201,11 @@ func toISO(v any) string {
 }
 
 func asString(v any) string {
-	if v == nil {
-		return ""
-	}
-	if s, ok := v.(string); ok {
-		return s
-	}
-	return fmt.Sprintf("%v", v)
+	return payload.AsString(v)
 }
 
 func asInt(v any) int {
-	switch t := v.(type) {
-	case int:
-		return t
-	case int64:
-		return int(t)
-	case float64:
-		return int(t)
-	default:
-		return 0
-	}
+	return payload.AsInt(v)
 }
 
 func (s *SQLiteStore) columnExists(table, column string) (bool, error) {

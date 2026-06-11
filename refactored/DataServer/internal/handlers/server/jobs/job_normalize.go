@@ -4,8 +4,10 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
-	"regexp"
 	"strings"
+
+	"velox-shared/paths"
+	"velox-shared/payload"
 )
 
 func fingerprintPayload(data map[string]interface{}) string {
@@ -51,79 +53,19 @@ func getStringOrEmpty(data map[string]interface{}, keys ...string) string {
 }
 
 func normalizeList(val interface{}) string {
-	switch v := val.(type) {
-	case []interface{}:
-		var parts []string
-		for _, item := range v {
-			if s, ok := item.(string); ok {
-				parts = append(parts, strings.TrimSpace(s))
-			}
-		}
-		return strings.Join(parts, "\n")
-	case string:
-		return strings.TrimSpace(v)
-	}
-	return ""
+	return payload.NormalizeList(val)
 }
 
 func normalizeListToArray(val interface{}) []string {
-	if val == nil {
-		return nil
-	}
-
-	switch v := val.(type) {
-	case []interface{}:
-		var result []string
-		for _, item := range v {
-			if s, ok := item.(string); ok && strings.TrimSpace(s) != "" {
-				result = append(result, strings.TrimSpace(s))
-			}
-		}
-		return result
-	case string:
-		s := strings.TrimSpace(v)
-		if s == "" {
-			return nil
-		}
-		if strings.Contains(s, "\n") {
-			var result []string
-			for _, line := range strings.Split(s, "\n") {
-				if trimmed := strings.TrimSpace(line); trimmed != "" {
-					result = append(result, trimmed)
-				}
-			}
-			return result
-		}
-		return []string{s}
-	}
-	return nil
+	return payload.NormalizeListToArray(val)
 }
 
 func extractDriveID(url string) string {
-	s := strings.TrimSpace(url)
-	if s == "" {
-		return ""
-	}
-
-	patterns := []string{
-		`/d/([A-Za-z0-9_-]{10,})`,
-		`id=([A-Za-z0-9_-]{10,})`,
-	}
-
-	for _, pattern := range patterns {
-		re := regexp.MustCompile(pattern)
-		if m := re.FindStringSubmatch(s); len(m) > 1 {
-			return m[1]
-		}
-	}
-	return ""
+	return paths.ExtractDriveID(url)
 }
 
 func deepCopyMap(m map[string]interface{}) map[string]interface{} {
-	dataBytes, _ := json.Marshal(m)
-	var result map[string]interface{}
-	json.Unmarshal(dataBytes, &result)
-	return result
+	return payload.DeepCopyMap(m)
 }
 
 func pickMappingForVoiceover(mapping map[string]interface{}, voiceoverURL string) (string, map[string]interface{}) {

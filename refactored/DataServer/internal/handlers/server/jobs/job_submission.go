@@ -9,6 +9,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"velox-shared/payload"
 	"velox-server/internal/config"
 	"velox-server/internal/queue"
 )
@@ -248,31 +249,31 @@ func buildSingleJob(data map[string]interface{}) (string, map[string]interface{}
 	normalized["submitted_via"] = "api_v1_go"
 
 	if _, ok := data["start_clips"]; ok {
-		normalized["start_clips_urls"] = normalizeList(data["start_clips"])
+		normalized["start_clips_urls"] = payload.NormalizeList(data["start_clips"])
 	}
 	if _, ok := data["intro_clips"]; ok {
-		normalized["intro_clips_urls"] = normalizeList(data["intro_clips"])
+		normalized["intro_clips_urls"] = payload.NormalizeList(data["intro_clips"])
 	}
 	if _, ok := data["intro_clip_paths"]; ok {
-		normalized["intro_clip_paths"] = normalizeList(data["intro_clip_paths"])
+		normalized["intro_clip_paths"] = payload.NormalizeList(data["intro_clip_paths"])
 	}
 	if _, ok := data["middle_clips"]; ok {
-		normalized["middle_clips_urls"] = normalizeList(data["middle_clips"])
+		normalized["middle_clips_urls"] = payload.NormalizeList(data["middle_clips"])
 	}
 	if _, ok := data["end_clips"]; ok {
-		normalized["end_clips_urls"] = normalizeList(data["end_clips"])
+		normalized["end_clips_urls"] = payload.NormalizeList(data["end_clips"])
 	}
 	if _, ok := data["stock_clips"]; ok {
-		normalized["stock_clips_urls"] = normalizeList(data["stock_clips"])
+		normalized["stock_clips_urls"] = payload.NormalizeList(data["stock_clips"])
 	}
 	if _, ok := data["stock_clip_paths"]; ok {
-		normalized["stock_clip_paths"] = normalizeList(data["stock_clip_paths"])
+		normalized["stock_clip_paths"] = payload.NormalizeList(data["stock_clip_paths"])
 	}
 	if _, ok := data["clip_segments"]; ok {
 		normalized["clip_segments"] = data["clip_segments"]
 	}
 	if _, ok := data["voiceovers"]; ok {
-		normalized["voiceovers_urls"] = normalizeList(data["voiceovers"])
+		normalized["voiceovers_urls"] = payload.NormalizeList(data["voiceovers"])
 	}
 
 	if bg, ok := data["background"]; ok {
@@ -292,15 +293,15 @@ func buildSingleJob(data map[string]interface{}) (string, map[string]interface{}
 		}
 	}
 
-	startClips := normalizeListToArray(data["start_clips"])
-	introClips := normalizeListToArray(data["intro_clips"])
+	startClips := payload.NormalizeListToArray(data["start_clips"])
+	introClips := payload.NormalizeListToArray(data["intro_clips"])
 	if len(introClips) == 0 {
-		introClips = normalizeListToArray(data["intro_clip_paths"])
+		introClips = payload.NormalizeListToArray(data["intro_clip_paths"])
 	}
-	middleClips := normalizeListToArray(data["middle_clips"])
-	endClips := normalizeListToArray(data["end_clips"])
-	stockClips := normalizeListToArray(data["stock_clips"])
-	voiceovers := normalizeListToArray(data["voiceovers"])
+	middleClips := payload.NormalizeListToArray(data["middle_clips"])
+	endClips := payload.NormalizeListToArray(data["end_clips"])
+	stockClips := payload.NormalizeListToArray(data["stock_clips"])
+	voiceovers := payload.NormalizeListToArray(data["voiceovers"])
 	clipSegments, _ := data["clip_segments"].([]interface{})
 
 	var stockTS []interface{}

@@ -1,6 +1,17 @@
 #ifndef VELOX_JSON_UTILS_HPP
 #define VELOX_JSON_UTILS_HPP
 
+// Utility per parsing JSON via regex, usate dal C++ video engine.
+// Poiché il C++ engine non usa una libreria JSON completa (es. nlohmann),
+// queste funzioni estraggono valori da JSON serializzato usando regex e
+// scanning manuale di array/oggetti annidati.
+//
+// Limitazioni note:
+//   - Non gestisce JSON annidato oltre un livello di array/oggetti
+//   - Le regex non sono conformi allo standard JSON (non gestiscono escape
+//     complessi, Unicode, etc.)
+//   - Adeguato per il subset JSON prodotto dal Go serialization del progetto
+
 #include <cctype>
 #include <regex>
 #include <string>

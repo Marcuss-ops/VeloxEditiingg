@@ -3,6 +3,7 @@ module velox-server
 go 1.25.8
 
 require (
+	velox-shared v0.0.0
 	github.com/chai2010/webp v1.4.0
 	github.com/disintegration/imaging v1.6.2
 	github.com/gin-gonic/gin v1.12.0
@@ -15,6 +16,8 @@ require (
 	google.golang.org/api v0.283.0
 	gopkg.in/yaml.v3 v3.0.1
 )
+
+replace velox-shared v0.0.0 => ../shared
 
 require (
 	cloud.google.com/go/auth v0.20.0 // indirect

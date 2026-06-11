@@ -1,6 +1,12 @@
 #ifndef VELOX_MEDIA_UTILS_HPP
 #define VELOX_MEDIA_UTILS_HPP
 
+// Utility per operazioni multimediali tramite ffprobe/ffmpeg:
+//   - Rilevamento durata (audio/video)
+//   - Generazione segmenti video da immagini (con zoompan effect)
+//   - Concatenazione segmenti
+//   - Muxing audio su video
+
 #include <cmath>
 #include <filesystem>
 #include <sstream>
@@ -36,7 +42,7 @@ inline double probeMediaDurationSeconds(const fs::path& mediaPath) {
 
 inline bool buildSceneSegment(const fs::path& imagePath, const fs::path& segmentPath, double duration) {
     std::ostringstream cmd;
-    cmd << "ffmpeg -y ";
+    cmd << "ffmpeg -y -hide_banner -loglevel error ";
     if (!imagePath.empty() && fs::exists(imagePath)) {
         const int fps = 30;
         const int frames = std::max(1, static_cast<int>(std::round(duration * fps)));
@@ -47,23 +53,26 @@ inline bool buildSceneSegment(const fs::path& imagePath, const fs::path& segment
         cmd << "-loop 1 -i " << file::shellQuote(imagePath.string())
             << " -vf " << file::shellQuote(filter)
             << " -frames:v " << frames
-            << " -c:v libx264 -pix_fmt yuv420p -r 30 " << file::shellQuote(segmentPath.string());
+            << " -c:v libx264 -preset veryfast -tune stillimage -crf 20 -threads 0 -pix_fmt yuv420p -r 30 "
+            << file::shellQuote(segmentPath.string());
     } else {
         cmd << "-f lavfi -t " << duration
             << " -i " << file::shellQuote("color=c=black:s=1920x1080")
-            << " -c:v libx264 -pix_fmt yuv420p -r 30 " << file::shellQuote(segmentPath.string());
+            << " -c:v libx264 -preset veryfast -crf 20 -threads 0 -pix_fmt yuv420p -r 30 "
+            << file::shellQuote(segmentPath.string());
     }
     return file::runCommand(cmd.str());
 }
 
 inline bool buildVideoSegment(const fs::path& clipPath, const fs::path& segmentPath, double duration) {
     std::ostringstream cmd;
-    cmd << "ffmpeg -y ";
+    cmd << "ffmpeg -y -hide_banner -loglevel error ";
     if (!clipPath.empty() && fs::exists(clipPath)) {
         cmd << "-i " << file::shellQuote(clipPath.string())
             << " -t " << duration
             << " -vf " << file::shellQuote("scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,format=yuv420p")
-            << " -c:v libx264 -pix_fmt yuv420p -r 30 -an " << file::shellQuote(segmentPath.string());
+            << " -c:v libx264 -preset veryfast -crf 20 -threads 0 -pix_fmt yuv420p -r 30 -an "
+            << file::shellQuote(segmentPath.string());
     } else {
         return false;
     }
@@ -80,16 +89,17 @@ inline bool concatSegments(const std::vector<fs::path>& segments, const fs::path
         return false;
     }
     std::ostringstream cmd;
-    cmd << "ffmpeg -y -f concat -safe 0 -i " << file::shellQuote(listPath.string())
+    cmd << "ffmpeg -y -hide_banner -loglevel error -f concat -safe 0 -i " << file::shellQuote(listPath.string())
         << " -c copy " << file::shellQuote(outputPath.string());
     return file::runCommand(cmd.str());
 }
 
 inline bool muxAudio(const fs::path& videoPath, const fs::path& audioPath, const fs::path& outputPath) {
     std::ostringstream cmd;
-    cmd << "ffmpeg -y -i " << file::shellQuote(videoPath.string())
+    cmd << "ffmpeg -y -hide_banner -loglevel error -i " << file::shellQuote(videoPath.string())
         << " -i " << file::shellQuote(audioPath.string())
-        << " -c:v copy -c:a aac -shortest " << file::shellQuote(outputPath.string());
+        << " -map 0:v:0 -map 1:a:0 -c:v copy -c:a aac -shortest -movflags +faststart "
+        << file::shellQuote(outputPath.string());
     return file::runCommand(cmd.str());
 }
 

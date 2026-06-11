@@ -1,11 +1,13 @@
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
-#include <string>
+#include <thread>
 #include <vector>
 
+#include "video_builder.hpp"
 #include "file_utils.hpp"
 #include "json_utils.hpp"
 #include "media_utils.hpp"
@@ -15,122 +17,99 @@ namespace fs = std::filesystem;
 namespace json = velox::json;
 namespace file = velox::file;
 namespace media = velox::media;
+using velox::parseStringListField;
+using velox::parseScenes;
+using velox::parseClipSegments;
+using velox::firstAvailableClip;
+using velox::firstAvailableImage;
 
 namespace {
 
-struct SceneRuntime {
-    std::string text;
-    std::string image_link;
-    std::vector<std::string> image_links;
-    double duration_seconds{0.0};
+struct SceneWorkResult {
+    size_t index{0};
+    fs::path segmentPath;
+    bool success{false};
+    std::string error;
 };
 
-struct ClipRuntime {
-    std::string text;
-    std::string clip_link;
-    std::vector<std::string> clip_links;
-    double duration_seconds{0.0};
-    std::string kind;
-};
+size_t determineSceneWorkerCount(size_t renderCount) {
+    if (renderCount <= 1) {
+        return renderCount;
+    }
 
-double extractDurationValue(const std::string& json, const std::string& key, double fallback) {
-    return json::extractJsonNumberValue(json, key, fallback);
-}
-
-ClipRuntime parseClipObject(const std::string& obj) {
-    ClipRuntime clip;
-    clip.text = json::extractJsonStringValue(obj, "text");
-    clip.clip_link = json::extractJsonStringValue(obj, "clip_link");
-    clip.clip_links = json::extractArrayStrings(obj, "clip_links");
-    clip.duration_seconds = extractDurationValue(obj, "duration_seconds", 0.0);
-    clip.kind = json::extractJsonStringValue(obj, "kind");
-    if (clip.clip_link.empty() && !clip.clip_links.empty()) {
-        clip.clip_link = clip.clip_links.front();
-    }
-    if (clip.clip_links.empty() && !clip.clip_link.empty()) {
-        clip.clip_links.push_back(clip.clip_link);
-    }
-    return clip;
-}
-
-std::vector<SceneRuntime> parseScenes(const std::string& requestJson) {
-    std::vector<SceneRuntime> scenes;
-    auto arrayBlock = json::extractArrayBlock(requestJson, "scenes");
-    if (arrayBlock.empty()) {
-        return scenes;
-    }
-    for (const auto& obj : json::splitTopLevelObjects(arrayBlock)) {
-        SceneRuntime scene;
-        scene.text = json::extractJsonStringValue(obj, "text");
-        scene.image_link = json::extractJsonStringValue(obj, "image_link");
-        scene.image_links = json::extractArrayStrings(obj, "image_links");
-        scene.duration_seconds = json::extractJsonNumberValue(obj, "duration_seconds", 0.0);
-        if (scene.image_link.empty() && !scene.image_links.empty()) {
-            scene.image_link = scene.image_links.front();
-        }
-        if (scene.image_links.empty() && !scene.image_link.empty()) {
-            scene.image_links.push_back(scene.image_link);
-        }
-        scenes.push_back(scene);
-    }
-    return scenes;
-}
-
-std::vector<ClipRuntime> parseClipSegments(const std::string& requestJson) {
-    std::vector<ClipRuntime> clips;
-    auto arrayBlock = json::extractArrayBlock(requestJson, "clip_segments");
-    if (arrayBlock.empty()) {
-        arrayBlock = json::extractArrayBlock(requestJson, "segments");
-    }
-    if (arrayBlock.empty()) {
-        return clips;
-    }
-    for (const auto& obj : json::splitTopLevelObjects(arrayBlock)) {
-        clips.push_back(parseClipObject(obj));
-    }
-    return clips;
-}
-
-std::vector<std::string> parseStringListField(const std::string& requestJson, const std::string& key) {
-    auto values = json::extractArrayStrings(requestJson, key);
-    if (!values.empty()) {
-        return values;
-    }
-    auto raw = json::extractJsonStringValue(requestJson, key);
-    if (!raw.empty()) {
-        return {raw};
-    }
-    return {};
-}
-
-fs::path firstAvailableImage(const SceneRuntime& scene, const fs::path& workDir, size_t index) {
-    const auto imagePath = workDir / ("scene_" + std::to_string(index) + ".jpg");
-    std::vector<std::string> candidates = scene.image_links;
-    if (candidates.empty() && !scene.image_link.empty()) {
-        candidates.push_back(scene.image_link);
-    }
-    for (const auto& candidate : candidates) {
-        if (file::downloadAsset(candidate, imagePath)) {
-            return imagePath;
+    size_t configured = 0;
+    if (const char* env = std::getenv("VELOX_SCENE_BUILD_WORKERS")) {
+        try {
+            const int parsed = std::stoi(env);
+            if (parsed > 0) {
+                configured = static_cast<size_t>(parsed);
+            }
+        } catch (...) {
+            configured = 0;
         }
     }
-    return {};
+
+    if (configured > 0) {
+        return std::max<size_t>(1, std::min(renderCount, configured));
+    }
+
+    unsigned int hw = std::thread::hardware_concurrency();
+    if (hw == 0) {
+        hw = 4;
+    }
+    const size_t defaultWorkers = std::max<size_t>(2, static_cast<size_t>(hw / 2));
+    return std::max<size_t>(1, std::min(renderCount, defaultWorkers));
 }
 
-fs::path firstAvailableClip(const std::vector<std::string>& candidates, const fs::path& workDir, size_t index) {
-    const auto clipPath = workDir / ("clip_" + std::to_string(index) + ".mp4");
-    for (const auto& candidate : candidates) {
-        if (json::trim(candidate).empty()) {
-            continue;
+SceneWorkResult buildSceneWorkItem(
+    size_t index,
+    size_t renderCount,
+    const std::vector<std::string>& sceneImagePaths,
+    const std::vector<velox::video::SceneAsset>& scenes,
+    const fs::path& workDir,
+    double perSceneDuration,
+    double voiceoverDurationSeconds
+) {
+    SceneWorkResult result;
+    result.index = index;
+    result.segmentPath = workDir / ("segment_" + std::to_string(index) + ".mp4");
+
+    fs::path imagePath;
+    if (index < sceneImagePaths.size()) {
+        const auto imagePathStr = sceneImagePaths[index];
+        if (!json::trim(imagePathStr).empty()) {
+            const auto candidatePath = workDir / ("scene_" + std::to_string(index) + ".jpg");
+            if (file::downloadAsset(imagePathStr, candidatePath)) {
+                imagePath = candidatePath;
+            }
         }
-        if (file::isDriveFolderUrl(candidate)) {
-            continue;
-        }
-        if (file::downloadAsset(candidate, clipPath)) {
-            return clipPath;
-        }
+    } else if (index < scenes.size()) {
+        imagePath = firstAvailableImage(scenes[index], workDir, index);
     }
-    return {};
+
+    double duration = 0.0;
+    if (perSceneDuration > 0.0) {
+        duration = perSceneDuration;
+        if (index == renderCount - 1) {
+            const double consumed = perSceneDuration * static_cast<double>(renderCount - 1);
+            duration = std::max(0.1, voiceoverDurationSeconds - consumed);
+        }
+    } else if (index < scenes.size() && scenes[index].duration_seconds > 0.0) {
+        duration = scenes[index].duration_seconds;
+    }
+
+    if (duration <= 0.0) {
+        result.error = "no duration available for scene " + std::to_string(index);
+        return result;
+    }
+
+    if (!media::buildSceneSegment(imagePath, result.segmentPath, duration)) {
+        result.error = "failed to build segment " + std::to_string(index);
+        return result;
+    }
+
+    result.success = true;
+    return result;
 }
 
 } // namespace
@@ -276,46 +255,45 @@ int main(int argc, char** argv) {
             perSceneDuration = voiceoverDurationSeconds / static_cast<double>(renderCount);
             std::cerr << "voiceover_duration=" << voiceoverDurationSeconds << "s, scenes=" << renderCount << ", per_scene=" << perSceneDuration << "s\n";
         }
+        const size_t workerCount = determineSceneWorkerCount(renderCount);
+        std::vector<SceneWorkResult> results(renderCount);
+        std::atomic<size_t> nextIndex{0};
+        std::vector<std::thread> workers;
+        workers.reserve(workerCount);
+
+        for (size_t t = 0; t < workerCount; ++t) {
+            workers.emplace_back([&]() {
+                while (true) {
+                    const size_t index = nextIndex.fetch_add(1);
+                    if (index >= renderCount) {
+                        break;
+                    }
+                    results[index] = buildSceneWorkItem(
+                        index,
+                        renderCount,
+                        sceneImagePaths,
+                        scenes,
+                        workDir,
+                        perSceneDuration,
+                        voiceoverDurationSeconds
+                    );
+                }
+            });
+        }
+
+        for (auto& worker : workers) {
+            worker.join();
+        }
 
         for (size_t i = 0; i < renderCount; ++i) {
-            fs::path imagePath;
-            if (i < sceneImagePaths.size()) {
-                const auto imagePathStr = sceneImagePaths[i];
-                if (!json::trim(imagePathStr).empty()) {
-                    const auto candidatePath = workDir / ("scene_" + std::to_string(i) + ".jpg");
-                    if (file::downloadAsset(imagePathStr, candidatePath)) {
-                        imagePath = candidatePath;
-                    }
-                }
-            } else if (i < scenes.size()) {
-                imagePath = firstAvailableImage(scenes[i], workDir, i);
-            }
-            fs::path segmentPath = workDir / ("segment_" + std::to_string(i) + ".mp4");
-
-            double duration = 0.0;
-            if (perSceneDuration > 0.0) {
-                duration = perSceneDuration;
-                if (i == renderCount - 1) {
-                    const double consumed = perSceneDuration * static_cast<double>(renderCount - 1);
-                    duration = std::max(0.1, voiceoverDurationSeconds - consumed);
-                }
-            } else if (i < scenes.size() && scenes[i].duration_seconds > 0.0) {
-                duration = scenes[i].duration_seconds;
-            }
-
-            if (duration <= 0.0) {
-                std::cerr << "error: no duration available for scene " << i
+            if (!results[i].success) {
+                std::cerr << "error: " << results[i].error
                           << " (voiceover_duration=" << voiceoverDurationSeconds
                           << ", scene_duration=" << (i < scenes.size() ? scenes[i].duration_seconds : 0.0) << ")\n";
                 return 1;
             }
-
-            std::cerr << "scene " << i << " duration=" << duration << "s\n";
-            if (!media::buildSceneSegment(imagePath, segmentPath, duration)) {
-                std::cerr << "failed to build segment " << i << "\n";
-                return 1;
-            }
-            segments.push_back(segmentPath);
+            std::cerr << "scene " << i << " segment built at " << results[i].segmentPath << "\n";
+            segments.push_back(results[i].segmentPath);
         }
     }
 

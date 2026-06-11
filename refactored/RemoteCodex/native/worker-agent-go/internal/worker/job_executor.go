@@ -16,6 +16,12 @@ import (
 )
 
 // executeJob executes a job and reports the result.
+// executeJob esegue un job dall'acquisizione del concurrency slot fino alla
+// notifica del risultato al master. Gestisce:
+//   - Acquisizione concurrency slot
+//   - Transizione di stato (idle → busy → idle/error)
+//   - Upload del video completato
+//   - Submit del risultato (success/failure) al master
 func (w *Worker) executeJob(ctx context.Context, job *api.Job) {
 	if err := w.concurrencyLimiter.Acquire(ctx, job.JobID, job.Priority); err != nil {
 		w.logger.Warn("[CONCURRENCY] Failed to acquire slot for job %s: %v", job.JobID, err)
@@ -124,6 +130,8 @@ func (w *Worker) executeJob(ctx context.Context, job *api.Job) {
 }
 
 // runJobTask executes the actual job task.
+// runJobTask seleziona ed esegue il task appropriato in base a job.JobType.
+// Job types supportati: render, process_video, process_audio, health_check.
 func (w *Worker) runJobTask(ctx context.Context, job *api.Job) (map[string]interface{}, error) {
 	w.logger.Info("[JOB] Starting execution: id=%s type=%s", job.JobID, job.JobType)
 
@@ -166,7 +174,7 @@ func (w *Worker) executeWorkflowJob(ctx context.Context, job *api.Job, jobLabel 
 		LogLevel:   w.config.LogLevel,
 	}, wfLogger)
 
-	outputPath := p.outputPath
+	outputPath := p.OutputPath
 	if outputPath == "" {
 		outputPath = fmt.Sprintf("/tmp/velox/output/%s.%s", job.JobID, defaultExt)
 	}
@@ -183,30 +191,7 @@ func (w *Worker) executeWorkflowJob(ctx context.Context, job *api.Job, jobLabel 
 	}
 
 	resultPath, err := workflow.ProcessSingleVideo(ctx,
-		video.VideoGenerationInput{
-			AudioPath:                         p.audioPath,
-			OutputPath:                        outputPath,
-			ScenesJSON:                        p.scenesJSON,
-			ScriptText:                        p.scriptText,
-			StartClipPaths:                    p.startClipPaths,
-			MiddleClipPaths:                   p.middleClipPaths,
-			StockClipSources:                  p.stockClipSources,
-			EndClipPaths:                      p.endClipPaths,
-			BackgroundMusicPaths:              p.backgroundMusicPaths,
-			BackgroundVideoForImgOverlaysPath: p.backgroundVideoForImgOverlaysPath,
-			AssociazioniFinaliConTimestamp:    p.associazioniFinaliConTimestamp,
-			FormattedImgEntities:              p.formattedImgEntities,
-			PreAssociatedEntities:             p.preAssociatedEntities,
-			RawEntities:                       p.rawEntities,
-			AudioLanguageForSRT:               p.audioLanguageForSRT,
-			SegmentsForSRTGeneration:          p.segmentsForSRTGeneration,
-			VideoMode:                         p.videoMode,
-			IntroClipPaths:                    p.introClipPaths,
-			StockClipPaths:                    p.stockClipPaths,
-			ClipSegments:                      p.clipSegments,
-			SceneImagePaths:                   p.sceneImagePaths,
-			DriveOutputFolder:                 p.driveOutputFolder,
-		},
+		p,
 		statusCallback)
 
 	if err != nil {
