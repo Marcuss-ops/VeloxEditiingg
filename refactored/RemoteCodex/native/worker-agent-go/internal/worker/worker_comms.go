@@ -143,7 +143,7 @@ func (w *Worker) heartbeatLoop(ctx context.Context) {
 }
 
 // getStatus returns the current worker status (thread-safe).
-func (w *Worker) getStatus() WorkerStatus {
+func (w *Worker) getStatus() Status {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 	return w.status

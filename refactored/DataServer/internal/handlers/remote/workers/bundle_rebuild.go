@@ -22,15 +22,15 @@ func (h *WorkerUpdateHandler) ForceRegenerateZipHandler() gin.HandlerFunc {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "repo root not found for rebuild tool", "bundleDir": h.bundleDir})
 			return
 		}
-		scriptPath := filepath.Join(repoRoot, "DataServer", "cmd", "velox-bundler", "main.go")
-		if _, err := os.Stat(scriptPath); err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "velox-bundler entrypoint not found", "path": scriptPath})
+		bundleBinaryPath := filepath.Join(repoRoot, "DataServer", "bin", "velox-bundler")
+		if _, err := os.Stat(bundleBinaryPath); err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "velox-bundler binary not found", "path": bundleBinaryPath})
 			return
 		}
 
 		run := func() (string, error) {
 			outputDir := h.bundleDir
-			cmd := exec.Command("go", "run", "./cmd/velox-bundler", "--source", repoRoot, "--output", outputDir)
+			cmd := exec.Command(bundleBinaryPath, "--source", repoRoot, "--output", outputDir)
 			cmd.Dir = filepath.Join(repoRoot, "DataServer")
 
 			out, err := cmd.CombinedOutput()
@@ -56,7 +56,7 @@ func (h *WorkerUpdateHandler) ForceRegenerateZipHandler() gin.HandlerFunc {
 				"ok":              true,
 				"message":         "bundle rebuild completed",
 				"new_bundle_hash": newHash,
-				"script":          scriptPath,
+				"binary":          bundleBinaryPath,
 			})
 			return
 		}
@@ -65,7 +65,7 @@ func (h *WorkerUpdateHandler) ForceRegenerateZipHandler() gin.HandlerFunc {
 		c.JSON(http.StatusAccepted, gin.H{
 			"ok":      true,
 			"message": "bundle rebuild started",
-			"script":  scriptPath,
+			"binary":  bundleBinaryPath,
 		})
 	}
 }

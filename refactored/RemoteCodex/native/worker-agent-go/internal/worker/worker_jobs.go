@@ -19,25 +19,47 @@ func (w *Worker) jobLoop(ctx context.Context) {
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
 
+	pollCount := 0
+	lastSummaryLog := time.Now()
+	summaryInterval := 60 * time.Second // Log summary every 60s (~12 polls)
+
+	w.logger.Info("[POLLING] Worker polling started — checking for jobs every %v", pollInterval)
+
 	for {
 		select {
 		case <-ctx.Done():
-			w.logger.Debug("Job loop exiting (context done)")
+			w.logger.Info("[POLLING] Job loop exiting (context done)")
 			return
 		case <-w.stopChan:
-			w.logger.Debug("Job loop exiting (stop signal)")
+			w.logger.Info("[POLLING] Job loop exiting (stop signal)")
 			return
 		case <-ticker.C:
 			if w.Status() != StatusIdle || w.IsStopped() || w.drainMode.Load() {
 				continue
 			}
+
+			pollCount++
+
+			// Log every poll at DEBUG level for detailed tracing
+			w.logger.Debug("[POLLING] Attempt %d — checking master for jobs", pollCount)
+
 			job, err := w.pollJob(ctx)
 			if err != nil {
-				w.logger.Warn("Failed to poll for job: %v", err)
+				w.logger.Warn("[POLLING] Attempt %d failed: %v", pollCount, err)
 				continue
 			}
 			if job != nil {
+				w.logger.Info("[POLLING] Job acquired on attempt %d — executing", pollCount)
 				w.executeJob(ctx, job)
+				// Reset poll count after executing a job
+				pollCount = 0
+			}
+
+			// Periodic summary log at INFO level (every ~60s)
+			if time.Since(lastSummaryLog) >= summaryInterval {
+				w.logger.Info("[POLLING] Status: alive — %d polls sent, no jobs available (next check in %v)",
+					pollCount, pollInterval)
+				lastSummaryLog = time.Now()
 			}
 		}
 	}

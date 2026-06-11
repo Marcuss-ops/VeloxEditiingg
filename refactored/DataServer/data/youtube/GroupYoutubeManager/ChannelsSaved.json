@@ -1,1 +1,70 @@
-{}
+{
+  "groups": {
+    "amish": {
+      "name": "amish",
+      "created_at": "2026-06-11T13:10:45.051071543Z",
+      "channels": [
+        {
+          "id": "UCBxpiPLmm3DVQAsSkpIT38g",
+          "url": "https://www.youtube.com/channel/UCBxpiPLmm3DVQAsSkpIT38g",
+          "title": "Amish Stories ",
+          "name": "Amish Stories ",
+          "thumbnail": "https://yt3.ggpht.com/ql8cW2dlZnTPfGQOWQ2G-xgFQw-np0L4LpPWonMsQUCLyzyjnuDjymj4HPEVIiB4JLBN5W5W=s800-c-k-c0x00ffffff-no-rj",
+          "added_at": "2026-06-11T13:10:45.05325892Z",
+          "language": "en",
+          "last_sync": "0001-01-01T00:00:00Z"
+        },
+        {
+          "id": "UCIOwLlVOkyxhQzGhkm-6lAQ",
+          "url": "https://www.youtube.com/channel/UCIOwLlVOkyxhQzGhkm-6lAQ",
+          "title": "Amish Stories Pt",
+          "name": "Amish Stories Pt",
+          "thumbnail": "https://yt3.ggpht.com/Ksdr6wFSElNVxh9DMRHBkvC9GvXlFlEI5aRb8X7WNy8wxHx-GOqTpbI1BDZcDgrY6VPgDqOl0g=s800-c-k-c0x00ffffff-no-rj",
+          "added_at": "2026-06-11T13:10:45.053699272Z",
+          "language": "pt",
+          "last_sync": "0001-01-01T00:00:00Z"
+        },
+        {
+          "id": "UCLc_Lnxb052nejiMyTxnoOA",
+          "url": "https://www.youtube.com/channel/UCLc_Lnxb052nejiMyTxnoOA",
+          "title": "Amish Stories Pl",
+          "name": "Amish Stories Pl",
+          "thumbnail": "https://yt3.ggpht.com/Kx5hLeOeNiXnjD7lzXKqwYbBhOH7pO_be8IM9JqH0QMicJpSK0WgeZLysO2TqZImB5t6zCKtag=s800-c-k-c0x00ffffff-no-rj",
+          "added_at": "2026-06-11T13:10:45.053819112Z",
+          "language": "pl",
+          "last_sync": "0001-01-01T00:00:00Z"
+        },
+        {
+          "id": "UCawO0CgC8nEQhnrZNpqZCvg",
+          "url": "https://www.youtube.com/channel/UCawO0CgC8nEQhnrZNpqZCvg",
+          "title": "Amish Stories Fr",
+          "name": "Amish Stories Fr",
+          "thumbnail": "https://yt3.ggpht.com/kQ5lmXYKnbZjkkyDTwwqez3SRzOEqVbPUxhMwPAhn7oGwKfwhv8A3F705k6UxKKPy2kxIazSFg=s800-c-k-c0x00ffffff-no-rj",
+          "added_at": "2026-06-11T13:10:45.053914857Z",
+          "language": "fr",
+          "last_sync": "0001-01-01T00:00:00Z"
+        },
+        {
+          "id": "UCizstDS8VMLQpZndBW0-ZIg",
+          "url": "https://www.youtube.com/channel/UCizstDS8VMLQpZndBW0-ZIg",
+          "title": "Amish Stories De",
+          "name": "Amish Stories De",
+          "thumbnail": "https://yt3.ggpht.com/oOqkLyKDTTdeHAMNlWv3ysmiwQlH-OaPg3VSaLlybhOD61Bv-dLZNMumxkZitvqiJliN45hI=s800-c-k-c0x00ffffff-no-rj",
+          "added_at": "2026-06-11T13:10:45.05401288Z",
+          "language": "de",
+          "last_sync": "0001-01-01T00:00:00Z"
+        },
+        {
+          "id": "UCmeVwZ8n1ZmaV9qJOkMP-ug",
+          "url": "https://www.youtube.com/channel/UCmeVwZ8n1ZmaV9qJOkMP-ug",
+          "title": "Amish Stories RU",
+          "name": "Amish Stories RU",
+          "thumbnail": "https://yt3.ggpht.com/AMeKj0B-vUcDrGRSvGanJ0Fygzp5vAoCbGsob4umMqiNhrCKn9XiRqBxviFY-XvxmCdDLrvl1Q=s800-c-k-c0x00ffffff-no-rj",
+          "added_at": "2026-06-11T13:10:45.05412361Z",
+          "language": "ru",
+          "last_sync": "0001-01-01T00:00:00Z"
+        }
+      ]
+    }
+  }
+}

@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 )
 
@@ -75,6 +76,28 @@ func (w *VideoGenerationWorkflow) runNativeCxxEngine(
 			Text: strings.TrimSpace(input.ScriptText),
 		}}
 	}
+
+	// Auto-detect audio duration on worker side as fallback.
+	// If no scene has a duration set (all <= 0), detect from audio and distribute.
+	hasDuration := false
+	for _, s := range request.Scenes {
+		if s.DurationSeconds > 0 {
+			hasDuration = true
+			break
+		}
+	}
+	if !hasDuration && len(request.VoiceoverPaths) > 0 {
+		detected := detectAudioDurationSecs(request.VoiceoverPaths[0])
+		if detected > 0 {
+			perScene := detected / float64(len(request.Scenes))
+			w.logger.Info("[AUDIO_DURATION] Worker auto-detected audio: %.1fs total, %.1fs per scene (%d scenes)",
+				detected, perScene, len(request.Scenes))
+			for i := range request.Scenes {
+				request.Scenes[i].DurationSeconds = perScene
+			}
+		}
+	}
+
 	request.ClipSegments = parseNativeVideoClips(input.ClipSegments)
 	request.SceneImagePaths = sanitizeStrings(input.SceneImagePaths)
 
@@ -158,8 +181,9 @@ func parseNativeVideoScenes(scenesJSON string) []nativeVideoSceneRequest {
 	scenes := make([]nativeVideoSceneRequest, 0, len(raw))
 	for _, item := range raw {
 		scene := nativeVideoSceneRequest{
-			Text:      toSceneString(item["text"]),
-			ImageLink: firstSceneImageLink(item),
+			Text:            toSceneString(item["text"]),
+			ImageLink:       firstSceneImageLink(item),
+			DurationSeconds: sceneDuration(item),
 		}
 		scene.ImageLinks = sceneImageLinks(item)
 		if len(scene.ImageLinks) == 0 && scene.ImageLink != "" {
@@ -168,6 +192,26 @@ func parseNativeVideoScenes(scenesJSON string) []nativeVideoSceneRequest {
 		scenes = append(scenes, scene)
 	}
 	return scenes
+}
+
+// sceneDuration extracts the duration_seconds from a scene map.
+func sceneDuration(item map[string]interface{}) float64 {
+	if item == nil {
+		return 0
+	}
+	switch v := item["duration_seconds"].(type) {
+	case float64:
+		return v
+	case int:
+		return float64(v)
+	case int64:
+		return float64(v)
+	case json.Number:
+		if f, err := v.Float64(); err == nil {
+			return f
+		}
+	}
+	return 0
 }
 
 func firstSceneImageLink(scene map[string]interface{}) string {
@@ -286,6 +330,51 @@ func toSceneString(v interface{}) string {
 	default:
 		return ""
 	}
+}
+
+// detectAudioDurationSecs tries to detect the duration of an audio file from its URL
+// using ffprobe. Returns 0 if detection fails.
+func detectAudioDurationSecs(url string) float64 {
+	if url == "" {
+		return 0
+	}
+
+	resolved := resolveAudioURL(url)
+
+	cmd := exec.Command("ffprobe",
+		"-v", "error",
+		"-show_entries", "format=duration",
+		"-of", "default=noprint_wrappers=1:nokey=1",
+		resolved,
+	)
+	out, err := cmd.Output()
+	if err != nil {
+		return 0
+	}
+
+	duration, err := strconv.ParseFloat(strings.TrimSpace(string(out)), 64)
+	if err != nil || duration <= 0 {
+		return 0
+	}
+
+	return duration
+}
+
+// resolveAudioURL converts Google Drive sharing links to direct download URLs
+// for ffprobe compatibility. Leaves other URLs unchanged.
+func resolveAudioURL(url string) string {
+	const drivePrefix = "https://drive.google.com/file/d/"
+	if strings.HasPrefix(url, drivePrefix) {
+		rest := strings.TrimPrefix(url, drivePrefix)
+		if idx := strings.Index(rest, "/"); idx > 0 {
+			fileID := rest[:idx]
+			return "https://drive.google.com/uc?export=download&id=" + fileID + "&confirm=t"
+		}
+	}
+	if strings.Contains(url, "drive.google.com/uc") {
+		return url + "&confirm=t"
+	}
+	return url
 }
 
 func resolveNativeVideoEngineBinary() (string, error) {
