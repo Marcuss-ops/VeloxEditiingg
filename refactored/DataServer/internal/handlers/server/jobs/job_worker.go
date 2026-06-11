@@ -59,15 +59,29 @@ func GetJob(cfg *config.Config, q *queue.Queue, reg *workers.Registry) gin.Handl
 		// Check worker drain/schedulable status from registry
 		if !drain {
 			workerInfo := reg.GetWorker(c.Request.Context(), workerID)
-			if workerInfo != nil {
-				if workerInfo.Drain {
-					c.JSON(http.StatusOK, gin.H{"job": nil, "reason": "Worker draining"})
-					return
-				}
-				if !schedulable && !workerInfo.Schedulable {
-					c.JSON(http.StatusOK, gin.H{"job": nil, "reason": "Worker not schedulable"})
-					return
-				}
+			if workerInfo == nil {
+				c.JSON(http.StatusOK, gin.H{"job": nil, "reason": "Worker not registered"})
+				return
+			}
+			if workerInfo.Drain {
+				c.JSON(http.StatusOK, gin.H{"job": nil, "reason": "Worker draining"})
+				return
+			}
+			if !workerInfo.Schedulable {
+				c.JSON(http.StatusOK, gin.H{"job": nil, "reason": "Worker not schedulable"})
+				return
+			}
+			if strings.EqualFold(strings.TrimSpace(workerInfo.Status), "offline") {
+				c.JSON(http.StatusOK, gin.H{"job": nil, "reason": "Worker offline"})
+				return
+			}
+			if strings.TrimSpace(workerInfo.CurrentJob) != "" {
+				c.JSON(http.StatusOK, gin.H{"job": nil, "reason": "Worker busy"})
+				return
+			}
+			if !schedulable && !workerInfo.Schedulable {
+				c.JSON(http.StatusOK, gin.H{"job": nil, "reason": "Worker not schedulable"})
+				return
 			}
 		}
 

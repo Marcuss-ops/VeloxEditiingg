@@ -160,7 +160,7 @@ func (zt *ZombieTracker) CheckJob(job *Job) *ZombieState {
 
 	if prevLevel != state.WarningLevel && state.WarningLevel > 0 {
 		levelNames := []string{"normal", "warning", "critical", "zombie"}
-		log.Printf("🧟 Job %s zombie state: %s (age: %v, consecutive: %d)",
+		log.Printf("[ZOMBIE] Job %s zombie state: %s (age: %v, consecutive: %d)",
 			job.JobID[:8], levelNames[state.WarningLevel], state.Age.Round(time.Second), state.ConsecutiveChecks)
 	}
 
@@ -273,7 +273,7 @@ func (zaq *ZombieAwareFileQueue) ZombieCheckLoop(ctx context.Context, interval t
 func (zaq *ZombieAwareFileQueue) checkForZombies(ctx context.Context) {
 	jobs, err := zaq.GetProcessingJobs(ctx)
 	if err != nil {
-		log.Printf("⚠️ Zombie check failed to load jobs: %v", err)
+		log.Printf("[WARN] Zombie check failed to load jobs: %v", err)
 		return
 	}
 
@@ -318,7 +318,7 @@ func (zaq *ZombieAwareFileQueue) handleZombieNotification(ctx context.Context, s
 	state.Resolution = resolution
 	zaq.zombieTracker.ClearState(state.JobID)
 
-	log.Printf("🧟 Job %s resolved as zombie: %s (age: %v)", state.JobID[:8], resolution, state.Age.Round(time.Second))
+	log.Printf("[ZOMBIE] Job %s resolved as zombie: %s (age: %v)", state.JobID[:8], resolution, state.Age.Round(time.Second))
 }
 
 // requeueZombieJob requeues a zombie job with proper tracking
@@ -412,7 +412,7 @@ func (q *FileQueue) RequeueZombieJobs(ctx context.Context, timeout time.Duration
 			})
 
 			if err := PersistJob(job, q.dbStore); err != nil {
-				log.Printf("⚠️ Failed to persist zombie requeue for %s: %v", id, err)
+				log.Printf("[WARN] Failed to persist zombie requeue for %s: %v", id, err)
 				continue
 			}
 

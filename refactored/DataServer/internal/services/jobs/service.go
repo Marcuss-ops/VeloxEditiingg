@@ -60,6 +60,26 @@ func (s *Service) ClaimNextJob(ctx context.Context, req ClaimRequest) (*ClaimRes
 		return &ClaimResult{Reason: "missing worker_id"}, nil
 	}
 
+	var workerInfo *workers.WorkerInfo
+	if s.reg != nil {
+		workerInfo = s.reg.GetWorker(ctx, req.WorkerID)
+		if workerInfo == nil {
+			return &ClaimResult{Reason: "Worker not registered"}, nil
+		}
+		if workerInfo.Drain {
+			return &ClaimResult{Reason: "Worker draining"}, nil
+		}
+		if !workerInfo.Schedulable {
+			return &ClaimResult{Reason: "Worker not schedulable"}, nil
+		}
+		if strings.EqualFold(strings.TrimSpace(workerInfo.Status), "offline") {
+			return &ClaimResult{Reason: "Worker offline"}, nil
+		}
+		if strings.TrimSpace(workerInfo.CurrentJob) != "" && !strings.EqualFold(strings.TrimSpace(workerInfo.CurrentJob), req.WorkerID) {
+			return &ClaimResult{Reason: "Worker busy"}, nil
+		}
+	}
+
 	if s.cfg != nil && s.cfg.ForceSingleWorker != "" && s.cfg.ForceSingleWorker != "0" && !strings.EqualFold(s.cfg.ForceSingleWorker, "false") {
 		allowed := req.WorkerID == s.cfg.ForceSingleWorker || req.ClientIP == s.cfg.ForceSingleWorker
 		if !allowed {
@@ -92,14 +112,11 @@ func (s *Service) ClaimNextJob(ctx context.Context, req ClaimRequest) (*ClaimRes
 	}
 
 	if !req.Drain && s.reg != nil {
-		workerInfo := s.reg.GetWorker(ctx, req.WorkerID)
-		if workerInfo != nil {
-			if workerInfo.Drain {
-				return &ClaimResult{Reason: "Worker draining"}, nil
-			}
-			if !req.Schedulable && !workerInfo.Schedulable {
-				return &ClaimResult{Reason: "Worker not schedulable"}, nil
-			}
+		if workerInfo == nil {
+			return &ClaimResult{Reason: "Worker not registered"}, nil
+		}
+		if !req.Schedulable && !workerInfo.Schedulable {
+			return &ClaimResult{Reason: "Worker not schedulable"}, nil
 		}
 	}
 

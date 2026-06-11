@@ -391,5 +391,5 @@ func RegisterRoutes(r *gin.Engine, h *Handler, authMiddleware gin.HandlerFunc, d
 		share.POST("", h.ShareProject)
 	}
 
-	log.Printf("✅ Collaboration routes registered at /api/projects/:id/collaborators/*")
+	log.Printf("[OK] Collaboration routes registered at /api/projects/:id/collaborators/*")
 }

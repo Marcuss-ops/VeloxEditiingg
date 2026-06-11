@@ -218,6 +218,6 @@ func LoadActiveJobs(dbStore *store.SQLiteStore) (map[string]*Job, error) {
 		result[id] = job
 	}
 
-	log.Printf("✅ Loaded %d active jobs from SQLite (PENDING/PROCESSING only)", len(result))
+	log.Printf("[OK] Loaded %d active jobs from SQLite (PENDING/PROCESSING only)", len(result))
 	return result, nil
 }

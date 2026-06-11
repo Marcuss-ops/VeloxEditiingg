@@ -122,7 +122,7 @@ func validateJobPayload(payload map[string]interface{}) (bool, []string, map[str
 
 	videoName, _ := payload["video_name"].(string)
 	if videoName == "" || strings.TrimSpace(videoName) == "" {
-		errors = append(errors, "❌ video_name mancante o vuoto")
+		errors = append(errors, "[ERROR] video_name mancante o vuoto")
 	} else {
 		if len(videoName) > 50 {
 			details["video_name"] = videoName[:50]
@@ -149,13 +149,13 @@ func validateJobPayload(payload map[string]interface{}) (bool, []string, map[str
 	clipsDetail := []string{}
 	for _, cf := range clipFields {
 		if listVal, ok := payload[cf.listField].([]interface{}); ok && len(listVal) > 0 {
-			clipsDetail = append(clipsDetail, fmt.Sprintf("✅ %s: %d clip(s)", cf.display, len(listVal)))
+			clipsDetail = append(clipsDetail, fmt.Sprintf("[OK] %s: %d clip(s)", cf.display, len(listVal)))
 			hasAnyClip = true
 			details[cf.display] = fmt.Sprintf("%d clips", len(listVal))
 		}
 		if urlVal, ok := payload[cf.urlField].(string); ok && strings.TrimSpace(urlVal) != "" {
 			urlCount := len(strings.Split(strings.TrimSpace(urlVal), "\n"))
-			clipsDetail = append(clipsDetail, fmt.Sprintf("✅ %s: %d URL(s)", cf.display, urlCount))
+			clipsDetail = append(clipsDetail, fmt.Sprintf("[OK] %s: %d URL(s)", cf.display, urlCount))
 			hasAnyClip = true
 			details[cf.display] = fmt.Sprintf("%d URLs", urlCount)
 		}
@@ -169,7 +169,7 @@ func validateJobPayload(payload map[string]interface{}) (bool, []string, map[str
 	}
 
 	if !hasAnyClip {
-		errors = append(errors, "❌ NESSUN CLIP PRESENTE - Servono clip in intro/start/middle/end/stock oppure clip_segments")
+		errors = append(errors, "[ERROR] NESSUN CLIP PRESENTE - Servono clip in intro/start/middle/end/stock oppure clip_segments")
 	} else {
 		details["clips"] = clipsDetail
 	}
@@ -178,32 +178,32 @@ func validateJobPayload(payload map[string]interface{}) (bool, []string, map[str
 	voiceoverDetail := []string{}
 
 	if voList, ok := payload["voiceovers"].([]interface{}); ok && len(voList) > 0 {
-		voiceoverDetail = append(voiceoverDetail, fmt.Sprintf("✅ voiceovers: %d item(s)", len(voList)))
+		voiceoverDetail = append(voiceoverDetail, fmt.Sprintf("[OK] voiceovers: %d item(s)", len(voList)))
 		hasAnyVoiceover = true
 		details["voiceovers"] = fmt.Sprintf("%d voiceovers", len(voList))
 	} else if voStr, ok := payload["voiceovers"].(string); ok && strings.TrimSpace(voStr) != "" {
 		urlCount := len(strings.Split(strings.TrimSpace(voStr), "\n"))
-		voiceoverDetail = append(voiceoverDetail, fmt.Sprintf("✅ voiceovers: %d URL(s)", urlCount))
+		voiceoverDetail = append(voiceoverDetail, fmt.Sprintf("[OK] voiceovers: %d URL(s)", urlCount))
 		hasAnyVoiceover = true
 		details["voiceovers"] = fmt.Sprintf("%d voiceover URLs", urlCount)
 	}
 
 	if voURLs, ok := payload["voiceovers_urls"].(string); ok && strings.TrimSpace(voURLs) != "" {
 		urlCount := len(strings.Split(strings.TrimSpace(voURLs), "\n"))
-		voiceoverDetail = append(voiceoverDetail, fmt.Sprintf("✅ voiceovers_urls: %d URL(s)", urlCount))
+		voiceoverDetail = append(voiceoverDetail, fmt.Sprintf("[OK] voiceovers_urls: %d URL(s)", urlCount))
 		hasAnyVoiceover = true
 		details["voiceovers"] = fmt.Sprintf("%d voiceover URLs", urlCount)
 	}
 
 	if voItems, ok := payload["voiceover_items"].([]interface{}); ok && len(voItems) > 0 {
-		voiceoverDetail = append(voiceoverDetail, fmt.Sprintf("✅ voiceover_items: %d item(s)", len(voItems)))
+		voiceoverDetail = append(voiceoverDetail, fmt.Sprintf("[OK] voiceover_items: %d item(s)", len(voItems)))
 		hasAnyVoiceover = true
 		details["voiceover_items"] = fmt.Sprintf("%d items", len(voItems))
 	}
 
 	if !hasAnyVoiceover {
-		errors = append(errors, "❌ NESSUN VOICEOVER PRESENTE - Servono voiceover")
-		errors = append(errors, "   ℹ️ Usa: voiceovers (lista), voiceovers_urls (stringa), o voiceover_items (lista di dict)")
+		errors = append(errors, "[ERROR] NESSUN VOICEOVER PRESENTE - Servono voiceover")
+		errors = append(errors, "   [INFO] Usa: voiceovers (lista), voiceovers_urls (stringa), o voiceover_items (lista di dict)")
 	} else {
 		details["voiceover_detail"] = voiceoverDetail
 	}

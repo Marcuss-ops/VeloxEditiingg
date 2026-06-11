@@ -185,13 +185,13 @@ func registerDriveRoutes(r *gin.Engine, cfg *config.Config, deps *serverDeps) {
 		TokensDir:    cfg.DriveTokensDir,
 	})
 	if err != nil {
-		log.Printf("⚠️  Drive handlers init failed: %v", err)
+		log.Printf("[WARN]  Drive handlers init failed: %v", err)
 		return
 	}
 
 	// Register Drive API routes
 	drive.RegisterDriveRoutes(r, driveHandlers)
-	log.Printf("✅ Drive API routes registered at /api/drive/*")
+	log.Printf("[OK] Drive API routes registered at /api/drive/*")
 }
 
 func registerYouTubeRoutes(r *gin.Engine, cfg *config.Config, deps *serverDeps) {
@@ -205,7 +205,7 @@ func registerYouTubeRoutes(r *gin.Engine, cfg *config.Config, deps *serverDeps) 
 		NVIDIATextURL:      cfg.NVIDIATextURL,
 	})
 	if err != nil {
-		log.Printf("⚠️ YouTube service init failed: %v", err)
+		log.Printf("[WARN] YouTube service init failed: %v", err)
 		deps.youtubeHandlers = nil
 		deps.youtubeManager = nil
 		return
@@ -226,7 +226,7 @@ func registerYouTubeRoutes(r *gin.Engine, cfg *config.Config, deps *serverDeps) 
 	if deps.paths.dataDir != "" {
 		storage, storageErr := integrationsYoutube.NewStorage(deps.paths.dataDir)
 		if storageErr != nil {
-			log.Printf("⚠️ YouTube Storage init failed: %v", storageErr)
+			log.Printf("[WARN] YouTube Storage init failed: %v", storageErr)
 		} else {
 			youtubeStorage = storage
 		}
@@ -242,7 +242,7 @@ func registerYouTubeRoutes(r *gin.Engine, cfg *config.Config, deps *serverDeps) 
 		NVIDIATextURL:      cfg.NVIDIATextURL,
 	}, youtubeStorage, deps.sqliteStore)
 	if err != nil {
-		log.Printf("⚠️ YouTube handlers init failed: %v", err)
+		log.Printf("[WARN] YouTube handlers init failed: %v", err)
 		deps.youtubeHandlers = nil
 		// Don't return — manager may still work
 	}
@@ -258,7 +258,7 @@ func registerYouTubeRoutes(r *gin.Engine, cfg *config.Config, deps *serverDeps) 
 		r.GET("/youtube_channels/oauth/callback", deps.youtubeHandlers.OAuthCallback)
 		r.GET("/api/v1/youtube/oauth/callback", deps.youtubeHandlers.OAuthCallback)
 
-		log.Printf("✅ YouTube API routes registered at /api/v1/youtube/* (protected by Admin Token)")
+		log.Printf("[OK] YouTube API routes registered at /api/v1/youtube/* (protected by Admin Token)")
 	}
 
 	// Create YouTube Manager (for /api/youtube/manager/* routes — competitor tracking)
@@ -269,9 +269,9 @@ func registerYouTubeRoutes(r *gin.Engine, cfg *config.Config, deps *serverDeps) 
 		deps.youtubeManager = youtube.NewYouTubeManager(deps.paths.dataDir, apiKey, fallbackURL, youtubeStorage, youtubeService)
 		youtube.YouTubeRoutes(r, cfg, deps.youtubeManager)
 		if apiKey != "" {
-			log.Printf("✅ YouTube Manager routes registered at /api/youtube/manager/* (full mode)")
+			log.Printf("[OK] YouTube Manager routes registered at /api/youtube/manager/* (full mode)")
 		} else {
-			log.Printf("✅ YouTube Manager routes registered at /api/youtube/manager/* (groups only, no API key)")
+			log.Printf("[OK] YouTube Manager routes registered at /api/youtube/manager/* (groups only, no API key)")
 		}
 	}
 }

@@ -45,6 +45,14 @@ func adminAuthMiddleware(cfg *config.Config) gin.HandlerFunc {
 			return
 		}
 
+		// Allow read-only dashboard routes without an admin token.
+		// The workers/ansible UI is meant to stay live on public instances,
+		// but write operations must still remain protected.
+		if c.Request.Method == http.MethodGet && isPublicReadOnlyRoute(c.Request.URL.Path) {
+			c.Next()
+			return
+		}
+
 		expected := strings.TrimSpace(cfg.AdminToken)
 		if expected == "" {
 			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
@@ -67,6 +75,33 @@ func adminAuthMiddleware(cfg *config.Config) gin.HandlerFunc {
 
 		c.Next()
 	}
+}
+
+func isPublicReadOnlyRoute(path string) bool {
+	if path == "" {
+		return false
+	}
+
+	publicPrefixes := []string{
+		"/api/v1/jobs",
+		"/api/v1/workers",
+		"/api/v1/dashboard/summary",
+		"/api/v1/dashboard/realtime",
+		"/api/v1/dashboard/health",
+	}
+
+	for _, prefix := range publicPrefixes {
+		if strings.HasPrefix(path, prefix) {
+			return true
+		}
+	}
+
+	// Legacy compat paths used by the workers dashboard SPA.
+	if path == "/jobs" || path == "/workers" || path == "/workers_status" || path == "/api/workers_status" || path == "/api/v1/workers_status" {
+		return true
+	}
+
+	return false
 }
 
 // RegisterV1Routes registers all /api/v1/* routes (core API)
@@ -234,7 +269,7 @@ func RegisterV1Routes(r *gin.Engine, cfg *config.Config, fileQ *queue.FileQueue,
 		}
 	}
 
-	log.Printf("✅ API v1 routes registered at /api/v1/*")
+	log.Printf("[OK] API v1 routes registered at /api/v1/*")
 }
 
 // RegisterV2Routes registers all /api/v2/* routes (enterprise API)

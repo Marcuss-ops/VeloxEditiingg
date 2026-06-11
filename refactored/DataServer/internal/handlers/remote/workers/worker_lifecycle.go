@@ -75,7 +75,7 @@ func (lm *WorkerLifecycleManager) SetCallbacks(onOffline func(workerID string, a
 
 // Start begins the lifecycle management loops
 func (lm *WorkerLifecycleManager) Start(ctx context.Context) {
-	log.Printf("🔄 Worker Lifecycle Manager started")
+	log.Printf("[LIFECYCLE] Worker Lifecycle Manager started")
 
 	// Health check loop
 	go lm.healthCheckLoop(ctx)
@@ -175,9 +175,24 @@ func (lm *WorkerLifecycleManager) evaluateWorkerHealth(ctx context.Context, w wo
 		health.HealthScore = 0.6
 	}
 
+	// Populate job counts from worker metrics
+	if w.Metrics != nil {
+		if v, ok := w.Metrics["jobs_completed"].(float64); ok {
+			health.JobsCompleted = int64(v)
+		} else if v, ok := w.Metrics["jobs_completed"].(int64); ok {
+			health.JobsCompleted = v
+		}
+		if v, ok := w.Metrics["jobs_failed"].(float64); ok {
+			health.JobsFailed = int64(v)
+		} else if v, ok := w.Metrics["jobs_failed"].(int64); ok {
+			health.JobsFailed = v
+		}
+	}
+
 	// Consider error rate
-	if health.JobsCompleted > 0 {
-		errorRate := float64(health.JobsFailed) / float64(health.JobsCompleted+health.JobsFailed)
+	totalJobs := health.JobsCompleted + health.JobsFailed
+	if totalJobs > 0 {
+		errorRate := float64(health.JobsFailed) / float64(totalJobs)
 		if errorRate > 0.3 {
 			health.HealthScore *= 0.7
 			if health.Status == "healthy" {
@@ -195,7 +210,7 @@ func (lm *WorkerLifecycleManager) handleHealthStatusChange(ctx context.Context, 
 	if len(shortID) > 8 {
 		shortID = shortID[:8]
 	}
-	log.Printf("📊 Worker %s health changed: %s -> %s", shortID, oldStatus, newStatus)
+	log.Printf("[HEALTH] Worker %s health changed: %s -> %s", shortID, oldStatus, newStatus)
 
 	if lm.alertChan != nil {
 		lm.alertChan <- WorkerAlert{
@@ -226,15 +241,15 @@ func (lm *WorkerLifecycleManager) alertHandlerLoop(ctx context.Context) {
 
 // processAlert handles an alert
 func (lm *WorkerLifecycleManager) processAlert(alert WorkerAlert) {
-	emoji := "ℹ️"
+	prefix := "[INFO]"
 	switch alert.Severity {
 	case "warning":
-		emoji = "⚠️"
+		prefix = "[WARN]"
 	case "critical":
-		emoji = "🚨"
+		prefix = "[CRIT]"
 	}
 
-	log.Printf("%s Worker %s: %s [%s] %s", emoji, alert.WorkerID[:8], alert.Type, alert.Severity, alert.Message)
+	log.Printf("%s Worker %s: %s [%s] %s", prefix, alert.WorkerID[:8], alert.Type, alert.Severity, alert.Message)
 
 	// Here you would integrate with external alerting systems
 	// e.g., Slack, PagerDuty, email, etc.

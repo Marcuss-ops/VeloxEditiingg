@@ -113,6 +113,10 @@ type Config struct {
 	// Dev mode: allow localhost master URL for remote workers
 	// Set VELOX_ALLOW_LOCALHOST_MASTER=true for local development
 	AllowLocalhostMaster bool
+
+	// TLS configuration for HTTPS
+	TLSCertFile string // Path to TLS certificate file (PEM)
+	TLSKeyFile  string // Path to TLS private key file (PEM)
 }
 
 func FromEnv() *Config {
@@ -195,7 +199,7 @@ func FromEnv() *Config {
 	c.CodeVersion = os.Getenv("VELOX_CODE_VERSION")
 	c.VersionNumber = os.Getenv("VELOX_VERSION_NUMBER")
 	if c.VersionNumber == "" {
-		c.VersionNumber = "1.0.0"
+		c.VersionNumber = "v1.0.1"
 	}
 	// Worker heartbeat timeout (default 15 minutes)
 	c.WorkerHeartbeatTimeout = 900
@@ -356,6 +360,10 @@ func FromEnv() *Config {
 	c.AllowLocalhostMaster = os.Getenv("VELOX_ALLOW_LOCALHOST_MASTER") == "true" ||
 		os.Getenv("VELOX_ALLOW_LOCALHOST_MASTER") == "1" ||
 		os.Getenv("VELOX_DEV_MODE") == "true"
+
+	// TLS configuration for HTTPS
+	c.TLSCertFile = os.Getenv("VELOX_TLS_CERT_FILE")
+	c.TLSKeyFile = os.Getenv("VELOX_TLS_KEY_FILE")
 
 	return c
 }

@@ -23,7 +23,7 @@ func NewDriveHandlers(cfg *drive.ServiceConfig) (*DriveHandlers, error) {
 	storePath := filepath.Join(dataDir, "velox.db")
 	sqliteStore, err := store.NewSQLiteStore(storePath)
 	if err != nil {
-		log.Printf("⚠️ Drive SQLite store init failed: %v", err)
+		log.Printf("[WARN] Drive SQLite store init failed: %v", err)
 		sqliteStore = nil
 	}
 
@@ -84,5 +84,5 @@ func RegisterDriveRoutes(r *gin.Engine, h *DriveHandlers) {
 	// Drive Tokens
 	r.GET("/api/drive/tokens/list", ListDriveTokensHandler)
 
-	log.Printf("✅ Drive API routes registered at /api/drive/*")
+	log.Printf("[OK] Drive API routes registered at /api/drive/*")
 }

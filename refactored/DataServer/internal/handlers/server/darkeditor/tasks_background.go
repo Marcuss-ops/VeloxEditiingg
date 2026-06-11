@@ -128,7 +128,7 @@ func (h *BackgroundRemovalHandler) processBackgroundRemoval(taskID, inputPath, o
 		status.Status = "failed"
 		status.Error = err.Error()
 		status.EndedAt = time.Now()
-		log.Printf("❌ Background removal failed for task %s: %v", taskID, err)
+		log.Printf("[ERROR] Background removal failed for task %s: %v", taskID, err)
 		return
 	}
 
@@ -136,7 +136,7 @@ func (h *BackgroundRemovalHandler) processBackgroundRemoval(taskID, inputPath, o
 	status.Filename = result
 	status.URL = fmt.Sprintf("temp/%s", result)
 	status.EndedAt = time.Now()
-	log.Printf("✅ Background removal completed for task %s", taskID)
+	log.Printf("[OK] Background removal completed for task %s", taskID)
 }
 
 func (h *BackgroundRemovalHandler) removeBackgroundSync(inputPath, outputPath, model string) (string, error) {

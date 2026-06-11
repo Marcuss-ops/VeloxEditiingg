@@ -112,6 +112,12 @@ func UpdateJobFields(ctx context.Context, jobID string, fields map[string]interf
 
 	// Ensure history entry for status change
 	if newStatus, ok := fields["status"].(string); ok && newStatus == "COMPLETED" {
+		// A successful retry must not keep stale failure state in the persisted job.
+		job.LastError = ""
+		job.LastErrorAt = nil
+		job.ErrorMessage = ""
+		job.FailedAt = nil
+		job.FailedBy = ""
 		job.History = append(job.History, JobHistoryEntry{
 			Status:    "COMPLETED",
 			Timestamp: nowISOVal,

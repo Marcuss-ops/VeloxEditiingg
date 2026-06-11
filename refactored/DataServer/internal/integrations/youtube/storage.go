@@ -52,7 +52,7 @@ func NewStorage(dataDir string) (*Storage, error) {
 
 	// Load existing data
 	if err := s.load(); err != nil {
-		log.Printf("⚠️ YouTube storage: starting with empty data (%v)", err)
+		log.Printf("[WARN] YouTube storage: starting with empty data (%v)", err)
 	}
 
 	return s, nil

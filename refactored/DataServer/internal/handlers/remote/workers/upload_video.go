@@ -52,7 +52,7 @@ func UploadCompletedVideo(cfg *config.Config, fileQ *queue.FileQueue) gin.Handle
 	}
 
 	return func(c *gin.Context) {
-		log.Printf("🔔 RICEVUTA richiesta /upload_completed_video")
+		log.Printf("[RECV] RICEVUTA richiesta /upload_completed_video")
 
 		// Ensure directory exists
 		if err := os.MkdirAll(videosDir, 0755); err != nil {
@@ -71,13 +71,13 @@ func UploadCompletedVideo(cfg *config.Config, fileQ *queue.FileQueue) gin.Handle
 			return
 		}
 
-		log.Printf("📥 Ricezione video da worker %s per job %s", workerID, jobID)
+		log.Printf("[RECV] Ricezione video da worker %s per job %s", workerID, jobID)
 
 		// Parse upload_info if present
 		var uploadInfo map[string]interface{}
 		if uploadInfoStr != "" {
 			if err := json.Unmarshal([]byte(uploadInfoStr), &uploadInfo); err != nil {
-				log.Printf("⚠️ Impossibile parsare upload_info: %v", err)
+				log.Printf("[WARN] Impossibile parsare upload_info: %v", err)
 			}
 		}
 
@@ -195,7 +195,7 @@ func UploadCompletedVideo(cfg *config.Config, fileQ *queue.FileQueue) gin.Handle
 		}
 
 		fileSize := written / (1024 * 1024) // MB
-		log.Printf("✅ Video salvato: %s (%d MB)", finalPath, fileSize)
+		log.Printf("[OK] Video salvato: %s (%d MB)", finalPath, fileSize)
 
 		// Mark job as COMPLETED in file queue
 		if fileQ != nil {
@@ -210,9 +210,9 @@ func UploadCompletedVideo(cfg *config.Config, fileQ *queue.FileQueue) gin.Handle
 				"job_run_id":         jobRunID,
 			}
 			if err := fileQ.UpdateJobFields(c.Request.Context(), jobID, updates); err != nil {
-				log.Printf("⚠️ Impossibile marcare COMPLETED il job %s: %v", jobID, err)
+				log.Printf("[WARN] Impossibile marcare COMPLETED il job %s: %v", jobID, err)
 			} else {
-				log.Printf("✅ Job %s marcato COMPLETED via upload_completed_video", jobID)
+				log.Printf("[OK] Job %s marcato COMPLETED via upload_completed_video", jobID)
 			}
 		}
 
@@ -224,7 +224,7 @@ func UploadCompletedVideo(cfg *config.Config, fileQ *queue.FileQueue) gin.Handle
 			UploadInfo: canonicalUploadInfo,
 			ReceivedAt: time.Now(),
 		})
-		log.Printf("💾 Info upload salvate in pending_uploads per job %s", jobID)
+		log.Printf("[UPLOAD] Info upload salvate in pending_uploads per job %s", jobID)
 		if ytGroup, ok := canonicalUploadInfo["youtube_group"].(string); ok && ytGroup != "" {
 			log.Printf("   YouTube group: %s", ytGroup)
 		}

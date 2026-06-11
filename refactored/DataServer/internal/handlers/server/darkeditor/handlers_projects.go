@@ -30,7 +30,7 @@ func (h *Handler) ListProjects(c *gin.Context) {
 
 		projects, err := h.store.ListProjects(ctx, opts)
 		if err != nil {
-			log.Printf("❌ ListProjects (DB): %v", err)
+			log.Printf("[ERROR] ListProjects (DB): %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list projects"})
 			return
 		}
@@ -127,13 +127,13 @@ func (h *Handler) SaveProject(c *gin.Context) {
 			project.FolderID = existing.FolderID
 			project.CreatedAt = existing.CreatedAt
 			if err := h.store.UpdateProject(ctx, project); err != nil {
-				log.Printf("❌ SaveProject (DB update): %v", err)
+				log.Printf("[ERROR] SaveProject (DB update): %v", err)
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update project"})
 				return
 			}
 		} else {
 			if err := h.store.CreateProject(ctx, project); err != nil {
-				log.Printf("❌ SaveProject (DB create): %v", err)
+				log.Printf("[ERROR] SaveProject (DB create): %v", err)
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create project"})
 				return
 			}
@@ -150,7 +150,7 @@ func (h *Handler) SaveProject(c *gin.Context) {
 			if data, err := os.ReadFile(srcPath); err == nil {
 				_ = os.WriteFile(dstPath, data, 0644)
 			} else {
-				log.Printf("⚠️ SaveProject preview copy failed: %v", err)
+				log.Printf("[WARN] SaveProject preview copy failed: %v", err)
 			}
 		}
 		return
@@ -209,7 +209,7 @@ func (h *Handler) SaveProject(c *gin.Context) {
 		if data, err := os.ReadFile(srcPath); err == nil {
 			_ = os.WriteFile(dstPath, data, 0644)
 		} else {
-			log.Printf("⚠️ SaveProject preview copy failed: %v", err)
+			log.Printf("[WARN] SaveProject preview copy failed: %v", err)
 		}
 	}
 
@@ -227,7 +227,7 @@ func (h *Handler) LoadProject(c *gin.Context) {
 	if h.store != nil {
 		project, err := h.store.GetProject(ctx, projectID)
 		if err != nil {
-			log.Printf("❌ LoadProject (DB): %v", err)
+			log.Printf("[ERROR] LoadProject (DB): %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load project"})
 			return
 		}
@@ -277,7 +277,7 @@ func (h *Handler) DeleteProject(c *gin.Context) {
 
 	if h.store != nil {
 		if err := h.store.DeleteProject(ctx, projectID); err != nil {
-			log.Printf("❌ DeleteProject (DB): %v", err)
+			log.Printf("[ERROR] DeleteProject (DB): %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete project"})
 			return
 		}

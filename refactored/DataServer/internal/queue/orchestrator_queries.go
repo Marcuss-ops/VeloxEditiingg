@@ -46,10 +46,10 @@ func (o *Orchestrator) SubmitMultiStepJob(ctx context.Context, jobID string, ste
 	select {
 	case o.jobChan <- msj:
 	default:
-		log.Printf("⚠️ Orchestrator job channel full, job %s will be processed next cycle", jobID[:8])
+		log.Printf("[WARN] Orchestrator job channel full, job %s will be processed next cycle", jobID[:8])
 	}
 
-	log.Printf("📋 Multi-step job %s submitted with %d steps", jobID[:8], len(steps))
+	log.Printf("[JOB] Multi-step job %s submitted with %d steps", jobID[:8], len(steps))
 	return nil
 }
 
@@ -112,7 +112,7 @@ func (o *Orchestrator) ReportStepResult(result *StepResult) {
 	select {
 	case o.resultChan <- result:
 	default:
-		log.Printf("⚠️ Result channel full, result for step %s may be delayed", result.StepID)
+		log.Printf("[WARN] Result channel full, result for step %s may be delayed", result.StepID)
 	}
 }
 
@@ -186,7 +186,7 @@ func (o *Orchestrator) checkTimeouts(ctx context.Context) {
 
 			if step.StartedAt != nil && step.Timeout > 0 {
 				if now.Sub(*step.StartedAt) > step.Timeout {
-					log.Printf("⏰ Step %s timed out after %v", step.StepName, step.Timeout)
+					log.Printf("[STEP] Step %s timed out after %v", step.StepName, step.Timeout)
 
 					result := &StepResult{
 						JobID:   job.JobID,
@@ -228,7 +228,7 @@ func (o *Orchestrator) retryStep(jobID, stepID string) {
 			default:
 			}
 
-			log.Printf("🔄 Step %s manually retried", step.StepName)
+			log.Printf("[INFO] Step %s manually retried", step.StepName)
 			break
 		}
 	}
@@ -249,7 +249,7 @@ func (o *Orchestrator) skipStep(jobID, stepID string) {
 		if step.StepID == stepID {
 			step.Status = StepStatusSkipped
 			job.UpdatedAt = time.Now().UTC()
-			log.Printf("⏭️ Step %s skipped", step.StepName)
+			log.Printf("[SKIP] Step %s skipped", step.StepName)
 			break
 		}
 	}
@@ -279,6 +279,6 @@ func (o *Orchestrator) cancelJob(jobID string) {
 		}
 	}
 
-	log.Printf("🚫 Multi-step job %s cancelled", jobID[:8])
+	log.Printf("[JOB] Multi-step job %s cancelled", jobID[:8])
 	o.save()
 }

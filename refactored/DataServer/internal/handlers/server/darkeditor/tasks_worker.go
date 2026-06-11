@@ -68,7 +68,7 @@ func (w *TaskWorker) SetBackgroundRemover(h *BackgroundRemovalHandler) {
 
 // Start starts the worker
 func (w *TaskWorker) Start() {
-	log.Printf("🔄 Starting Dark Editor task worker for queues: %v", w.queues)
+	log.Printf("[INFO] Starting Dark Editor task worker for queues: %v", w.queues)
 
 	for _, queue := range w.queues {
 		w.wg.Add(1)
@@ -78,10 +78,10 @@ func (w *TaskWorker) Start() {
 
 // Stop stops the worker gracefully
 func (w *TaskWorker) Stop() {
-	log.Printf("🛑 Stopping Dark Editor task worker...")
+	log.Printf("[STOP] Stopping Dark Editor task worker...")
 	close(w.stop)
 	w.wg.Wait()
-	log.Printf("✅ Dark Editor task worker stopped")
+	log.Printf("[OK] Dark Editor task worker stopped")
 }
 
 func (w *TaskWorker) processQueue(queue string) {
@@ -98,7 +98,7 @@ func (w *TaskWorker) processQueue(queue string) {
 			cancel()
 
 			if err != nil {
-				log.Printf("❌ Error dequeuing task: %v", err)
+				log.Printf("[ERROR] Error dequeuing task: %v", err)
 				time.Sleep(time.Second)
 				continue
 			}
@@ -107,7 +107,7 @@ func (w *TaskWorker) processQueue(queue string) {
 				continue
 			}
 
-			log.Printf("📋 Processing task %s of type %s", task.ID, task.Type)
+			log.Printf("[TASK] Processing task %s of type %s", task.ID, task.Type)
 
 			ctx, cancel = context.WithTimeout(context.Background(), w.taskTimeout)
 			result, errMsg := w.processTask(ctx, task)
@@ -116,20 +116,20 @@ func (w *TaskWorker) processQueue(queue string) {
 			status := "completed"
 			if errMsg != "" {
 				status = "failed"
-				log.Printf("❌ Task %s failed: %s", task.ID, errMsg)
+				log.Printf("[ERROR] Task %s failed: %s", task.ID, errMsg)
 			} else {
-				log.Printf("✅ Task %s completed successfully", task.ID)
+				log.Printf("[OK] Task %s completed successfully", task.ID)
 			}
 
 			ctx, cancel = context.WithTimeout(context.Background(), 10*time.Second)
 			if err := w.redis.UpdateTaskStatus(ctx, task.ID, status, result, errMsg); err != nil {
-				log.Printf("❌ Failed to update task status: %v", err)
+				log.Printf("[ERROR] Failed to update task status: %v", err)
 			}
 			cancel()
 
 			ctx, cancel = context.WithTimeout(context.Background(), 5*time.Second)
 			if err := w.cacheService.PublishTaskCompletion(ctx, task.ID, task.Type, status, result); err != nil {
-				log.Printf("⚠️ Failed to publish task completion: %v", err)
+				log.Printf("[WARN] Failed to publish task completion: %v", err)
 			}
 			cancel()
 		}
@@ -169,7 +169,7 @@ func (w *TaskWorker) processUpscale(ctx context.Context, task *cache.Task) (map[
 
 	cached, err := w.cacheService.GetCachedUpscale(ctx, filename, scale)
 	if err == nil && cached != nil {
-		log.Printf("📦 Cache hit for upscale task %s", task.ID)
+		log.Printf("[CACHE] Cache hit for upscale task %s", task.ID)
 		return map[string]interface{}{
 			"filename": cached.Filename,
 			"url":      cached.URL,
@@ -205,7 +205,7 @@ func (w *TaskWorker) processUpscale(ctx context.Context, task *cache.Task) (map[
 		CreatedAt: time.Now(),
 	}
 	if err := w.cacheService.CacheUpscaleResult(ctx, filename, scale, cachedResult); err != nil {
-		log.Printf("⚠️ Failed to cache upscale result: %v", err)
+		log.Printf("[WARN] Failed to cache upscale result: %v", err)
 	}
 
 	return result, ""
@@ -229,7 +229,7 @@ func (w *TaskWorker) processRemoveBackground(ctx context.Context, task *cache.Ta
 
 	cached, err := w.cacheService.GetCachedBackgroundRemoval(ctx, filename, model)
 	if err == nil && cached != nil {
-		log.Printf("📦 Cache hit for background removal task %s", task.ID)
+		log.Printf("[CACHE] Cache hit for background removal task %s", task.ID)
 		return map[string]interface{}{
 			"filename": cached.Filename,
 			"url":      cached.URL,
@@ -274,7 +274,7 @@ func (w *TaskWorker) processRemoveBackground(ctx context.Context, task *cache.Ta
 		CreatedAt: time.Now(),
 	}
 	if err := w.cacheService.CacheBackgroundRemovalResult(ctx, filename, model, cachedResult); err != nil {
-		log.Printf("⚠️ Failed to cache background removal result: %v", err)
+		log.Printf("[WARN] Failed to cache background removal result: %v", err)
 	}
 
 	return result, ""
@@ -287,7 +287,7 @@ func (w *TaskWorker) processGenerate(ctx context.Context, task *cache.Task) (map
 	}
 
 	params, _ := task.Payload["params"].(map[string]interface{})
-	log.Printf("🎨 AI Generation request: %s (params: %v)", prompt, params)
+	log.Printf("[AI] AI Generation request: %s (params: %v)", prompt, params)
 
 	outputFilename := fmt.Sprintf("generated_%s.png", uuid.New().String()[:8])
 	outputPath := filepath.Join(w.tempDir, outputFilename)

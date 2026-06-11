@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -23,27 +25,128 @@ type Registry struct {
 	revoked  map[string]bool
 	useRedis bool
 	dbStore  *store.SQLiteStore
+
+	// File-based persistence (replaces WorkerRegistry)
+	filePath string
 }
 
 func New(rdb *redis.Client, useRedis bool, dbStore *store.SQLiteStore) *Registry {
 	return &Registry{redis: rdb, inMem: make(map[string]WorkerInfo), revoked: make(map[string]bool), useRedis: useRedis, dbStore: dbStore}
 }
 
+// NewWithPersistence creates a Registry with file-based persistence for revoked workers.
+// dataDir is the directory where workers.json will be stored.
+func NewWithPersistence(rdb *redis.Client, useRedis bool, dbStore *store.SQLiteStore, dataDir string) *Registry {
+	r := &Registry{
+		redis:    rdb,
+		inMem:    make(map[string]WorkerInfo),
+		revoked:  make(map[string]bool),
+		useRedis: useRedis,
+		dbStore:  dbStore,
+		filePath: filepath.Join(dataDir, "workers.json"),
+	}
+	r.load()
+	return r
+}
+
+// load reads workers and revoked list from the JSON file.
+func (r *Registry) load() {
+	if r.filePath == "" {
+		return
+	}
+
+	data, err := os.ReadFile(r.filePath)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			log.Printf("registry: failed to load workers file: %v", err)
+		}
+		return
+	}
+
+	var persisted struct {
+		Workers map[string]WorkerInfo `json:"workers"`
+		Revoked []string              `json:"revoked,omitempty"`
+	}
+
+	if err := json.Unmarshal(data, &persisted); err != nil {
+		log.Printf("registry: failed to parse workers file: %v", err)
+		return
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if persisted.Workers != nil {
+		r.inMem = persisted.Workers
+	}
+	for _, id := range persisted.Revoked {
+		r.revoked[id] = true
+	}
+}
+
+// save persists workers and revoked list to the JSON file atomically.
+// Must be called with r.mu held (at least RLock).
+func (r *Registry) save() error {
+	if r.filePath == "" {
+		return nil
+	}
+
+	var revoked []string
+	for id := range r.revoked {
+		revoked = append(revoked, id)
+	}
+
+	persisted := struct {
+		Workers map[string]WorkerInfo `json:"workers"`
+		Revoked []string              `json:"revoked,omitempty"`
+	}{
+		Workers: r.inMem,
+		Revoked: revoked,
+	}
+
+	data, err := json.MarshalIndent(persisted, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	tempPath := r.filePath + ".tmp"
+	if err := os.WriteFile(tempPath, data, 0644); err != nil {
+		return err
+	}
+	if err := os.Rename(tempPath, r.filePath); err != nil {
+		return err
+	}
+
+	// Best-effort dual-write to SQLite
+	if r.dbStore != nil {
+		rawWorkers := make(map[string][]byte, len(r.inMem))
+		for id, w := range r.inMem {
+			b, err := json.Marshal(w)
+			if err != nil {
+				continue
+			}
+			rawWorkers[id] = b
+		}
+		if err := r.dbStore.ReplaceWorkers(rawWorkers, r.revoked); err != nil {
+			log.Printf("registry: sqlite dual-write workers failed: %v", err)
+		}
+	}
+	return nil
+}
+
 func (r *Registry) Heartbeat(ctx context.Context, workerID, workerName, status, currentJob string, extra map[string]interface{}) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
 	// Reject heartbeat for revoked workers
-	r.mu.RLock()
 	if r.revoked[workerID] {
-		r.mu.RUnlock()
 		return fmt.Errorf("worker %s is revoked", workerID)
 	}
-	r.mu.RUnlock()
 
 	// Preserve existing state unless explicitly updated by heartbeat payload.
-	r.mu.Lock()
 	existing, hasExisting := r.inMem[workerID]
-	r.mu.Unlock()
 
 	info := WorkerInfo{
 		WorkerID:    workerID,
@@ -98,15 +201,26 @@ func (r *Registry) Heartbeat(ctx context.Context, workerID, workerName, status, 
 		if v, ok := extra["recent_errors"]; ok {
 			info.RecentErrors = extractStringSlice(v)
 		}
+		if v, ok := extra["jobs_completed"].(float64); ok {
+			if info.Metrics == nil {
+				info.Metrics = make(map[string]interface{})
+			}
+			info.Metrics["jobs_completed"] = int64(v)
+		}
+		if v, ok := extra["jobs_failed"].(float64); ok {
+			if info.Metrics == nil {
+				info.Metrics = make(map[string]interface{})
+			}
+			info.Metrics["jobs_failed"] = int64(v)
+		}
 	}
 
-	r.mu.Lock()
 	r.inMem[workerID] = info
-	r.mu.Unlock()
+
 	if r.dbStore != nil {
 		raw, _ := json.Marshal(info)
 		if err := r.dbStore.UpsertWorker(raw); err != nil {
-			log.Printf("sqlite upsert worker heartbeat failed: %v", err)
+			log.Printf("registry: sqlite upsert worker heartbeat failed: %v", err)
 		}
 	}
 	if r.useRedis && r.redis != nil {
@@ -264,10 +378,14 @@ func (r *Registry) RegisterWorker(ctx context.Context, workerID, workerName, ipA
 	}
 
 	r.inMem[workerID] = info
+	if err := r.save(); err != nil {
+		log.Printf("registry: failed to persist worker register: %v", err)
+	}
+
 	if r.dbStore != nil {
 		raw, _ := json.Marshal(info)
 		if err := r.dbStore.UpsertWorker(raw); err != nil {
-			log.Printf("sqlite upsert worker register failed: %v", err)
+			log.Printf("registry: sqlite upsert worker register failed: %v", err)
 		}
 	}
 
@@ -314,6 +432,9 @@ func (r *Registry) RevokeWorker(ctx context.Context, workerID string) {
 	r.mu.Lock()
 	r.revoked[workerID] = true
 	delete(r.inMem, workerID)
+	if err := r.save(); err != nil {
+		log.Printf("registry: failed to persist worker revoke: %v", err)
+	}
 	r.mu.Unlock()
 
 	if r.useRedis && r.redis != nil {
@@ -325,6 +446,9 @@ func (r *Registry) RevokeWorker(ctx context.Context, workerID string) {
 func (r *Registry) UnrevokeWorker(workerID string) {
 	r.mu.Lock()
 	delete(r.revoked, workerID)
+	if err := r.save(); err != nil {
+		log.Printf("registry: failed to persist worker unrevoke: %v", err)
+	}
 	r.mu.Unlock()
 }
 
@@ -337,6 +461,17 @@ func (r *Registry) LoadRevoked(ids []string) {
 		r.revoked[id] = true
 		delete(r.inMem, id)
 	}
+}
+
+// ListRevoked returns the list of revoked worker IDs.
+func (r *Registry) ListRevoked() []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	ids := make([]string, 0, len(r.revoked))
+	for id := range r.revoked {
+		ids = append(ids, id)
+	}
+	return ids
 }
 
 // UpdateWorker updates specific fields of a worker
@@ -399,7 +534,7 @@ func (r *Registry) UpdateWorker(ctx context.Context, workerID string, updates ma
 	if r.dbStore != nil {
 		raw, _ := json.Marshal(info)
 		if err := r.dbStore.UpsertWorker(raw); err != nil {
-			log.Printf("sqlite upsert worker update failed: %v", err)
+			log.Printf("registry: sqlite upsert worker update failed: %v", err)
 		}
 	}
 
@@ -493,8 +628,14 @@ func (r *Registry) CleanupStaleWorkers(ctx context.Context, maxAge time.Duration
 			if err == nil && now.Sub(t.UTC()) > maxAge {
 				delete(r.inMem, id)
 				count++
-				log.Printf("🧹 Cleaned up stale worker: %s (last seen %s)", id, w.LastHB)
+				log.Printf("registry: cleaned up stale worker: %s (last seen %s)", id, w.LastHB)
 			}
+		}
+	}
+
+	if count > 0 {
+		if err := r.save(); err != nil {
+			log.Printf("registry: failed to persist stale worker cleanup: %v", err)
 		}
 	}
 

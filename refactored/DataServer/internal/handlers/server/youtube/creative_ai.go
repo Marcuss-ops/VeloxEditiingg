@@ -539,7 +539,7 @@ func (h *YouTubeHandlers) persistCoverPackGeneration(
 
 		imageBytes, err := base64.StdEncoding.DecodeString(variant.ImageBase64)
 		if err != nil {
-			log.Printf("⚠️ Dark Editor: failed to decode generated cover %s: %v", variant.ID, err)
+			log.Printf("[WARN] Dark Editor: failed to decode generated cover %s: %v", variant.ID, err)
 			continue
 		}
 
@@ -574,7 +574,7 @@ func (h *YouTubeHandlers) persistCoverPackGeneration(
 		}
 
 		if err := h.store.CreateAsset(ctx, asset); err != nil {
-			log.Printf("⚠️ Dark Editor: failed to save cover asset %s: %v", variant.ID, err)
+			log.Printf("[WARN] Dark Editor: failed to save cover asset %s: %v", variant.ID, err)
 			continue
 		}
 
@@ -589,7 +589,7 @@ func (h *YouTubeHandlers) persistCoverPackGeneration(
 			AssetID:        &asset.ID,
 		}
 		if err := h.store.CreateGenerationRecord(ctx, record); err != nil {
-			log.Printf("⚠️ Dark Editor: failed to save generation record %s: %v", variant.ID, err)
+			log.Printf("[WARN] Dark Editor: failed to save generation record %s: %v", variant.ID, err)
 		}
 	}
 }

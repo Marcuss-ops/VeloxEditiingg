@@ -62,7 +62,7 @@ func (h *YouTubeHandlers) UploadVideo(c *gin.Context) {
 
 	result, err := h.service.UploadVideo(ctx, channelID, tempFile, config)
 	if err != nil {
-		log.Printf("❌ Upload failed: %v", err)
+		log.Printf("[ERROR] Upload failed: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"ok":    false,
 			"error": err.Error(),
@@ -124,7 +124,7 @@ func (h *YouTubeHandlers) UploadVideoFromPath(c *gin.Context) {
 
 	result, err := h.service.UploadVideo(ctx, req.ChannelID, req.FilePath, config)
 	if err != nil {
-		log.Printf("❌ Upload failed: %v", err)
+		log.Printf("[ERROR] Upload failed: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"ok":    false,
 			"error": err.Error(),
@@ -167,11 +167,11 @@ func (h *YouTubeHandlers) BatchUpload(c *gin.Context) {
 	}
 
 	results := make([]gin.H, 0, len(req.Videos))
-	log.Printf("📦 YouTube batch upload started: total=%d min_delay=%s", len(req.Videos), minDelay)
+	log.Printf("[UPLOAD] YouTube batch upload started: total=%d min_delay=%s", len(req.Videos), minDelay)
 
 	for i, video := range req.Videos {
 		startedAt := time.Now()
-		log.Printf("📤 Batch upload item %d/%d started: channel=%s file=%s title=%q", i+1, len(req.Videos), video.ChannelID, filepath.Base(video.FilePath), video.Title)
+		log.Printf("[UPLOAD] Batch upload item %d/%d started: channel=%s file=%s title=%q", i+1, len(req.Videos), video.ChannelID, filepath.Base(video.FilePath), video.Title)
 
 		// Check if file exists
 		if _, err := os.Stat(video.FilePath); os.IsNotExist(err) {
@@ -180,9 +180,9 @@ func (h *YouTubeHandlers) BatchUpload(c *gin.Context) {
 				"ok":    false,
 				"error": "File not found",
 			})
-			log.Printf("⚠️ Batch upload item %d/%d skipped: file not found (%s)", i+1, len(req.Videos), video.FilePath)
+			log.Printf("[WARN] Batch upload item %d/%d skipped: file not found (%s)", i+1, len(req.Videos), video.FilePath)
 			if i < len(req.Videos)-1 {
-				log.Printf("⏳ Waiting %s before next upload", minDelay)
+				log.Printf("[WAIT] Waiting %s before next upload", minDelay)
 				if err := sleepWithContext(c.Request.Context(), minDelay); err != nil {
 					c.JSON(http.StatusRequestTimeout, gin.H{"ok": false, "error": err.Error()})
 					return
@@ -214,18 +214,18 @@ func (h *YouTubeHandlers) BatchUpload(c *gin.Context) {
 				"ok":    false,
 				"error": err.Error(),
 			})
-			log.Printf("❌ Batch upload item %d/%d failed after %s: %v", i+1, len(req.Videos), time.Since(startedAt).Round(time.Second), err)
+			log.Printf("[ERROR] Batch upload item %d/%d failed after %s: %v", i+1, len(req.Videos), time.Since(startedAt).Round(time.Second), err)
 		} else {
 			results = append(results, gin.H{
 				"index":  i,
 				"ok":     true,
 				"result": result,
 			})
-			log.Printf("✅ Batch upload item %d/%d completed in %s: video_id=%s", i+1, len(req.Videos), time.Since(startedAt).Round(time.Second), result.VideoID)
+			log.Printf("[OK] Batch upload item %d/%d completed in %s: video_id=%s", i+1, len(req.Videos), time.Since(startedAt).Round(time.Second), result.VideoID)
 		}
 
 		if i < len(req.Videos)-1 {
-			log.Printf("⏳ Waiting %s before next upload", minDelay)
+			log.Printf("[WAIT] Waiting %s before next upload", minDelay)
 			if err := sleepWithContext(c.Request.Context(), minDelay); err != nil {
 				c.JSON(http.StatusRequestTimeout, gin.H{"ok": false, "error": err.Error()})
 				return

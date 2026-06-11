@@ -223,9 +223,9 @@ func (qm *QuotaManager) UpdateAnalyticsCache(ctx context.Context, channelID stri
 		_, err = db.Exec("INSERT OR REPLACE INTO analytics_cache (cache_key, ts, data_json, migrated_at) VALUES (?, ?, ?, ?)",
 			period, float64(time.Now().Unix()), string(jsonData), time.Now().UTC().Format(time.RFC3339))
 		if err != nil {
-			log.Printf("⚠️ SQLite analytics update failed: %v", err)
+			log.Printf("[WARN] SQLite analytics update failed: %v", err)
 		} else {
-			log.Printf("✅ SQLite analytics updated for period %s", period)
+			log.Printf("[OK] SQLite analytics updated for period %s", period)
 		}
 
 		// ALSO: Save historical metrics to structured tables
@@ -243,10 +243,10 @@ func (qm *QuotaManager) UpdateAnalyticsCache(ctx context.Context, channelID stri
 				channelID, dateStr, revenue, "USD", views,
 			)
 			if err != nil {
-				log.Printf("⚠️ Failed to save historical metric for %s on %s: %v", channelID, dateStr, err)
+				log.Printf("[WARN] Failed to save historical metric for %s on %s: %v", channelID, dateStr, err)
 			}
 		}
-		log.Printf("✅ YouTube historical metrics saved to SQLite for channel %s", channelID)
+		log.Printf("[OK] YouTube historical metrics saved to SQLite for channel %s", channelID)
 	}
 
 	// 2. Update JSON (for compatibility with existing handlers)
@@ -275,7 +275,7 @@ func (qm *QuotaManager) UpdateAnalyticsCache(ctx context.Context, channelID stri
 	if err := os.WriteFile(jsonPath, finalJSON, 0644); err != nil {
 		log.Printf("youtube/quota: WriteFile failed for %s: %v", jsonPath, err)
 	}
-	log.Printf("✅ JSON analytics cache updated at %s", jsonPath)
+	log.Printf("[OK] JSON analytics cache updated at %s", jsonPath)
 
 	return nil
 }

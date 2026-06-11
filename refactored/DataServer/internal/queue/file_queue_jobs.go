@@ -113,6 +113,11 @@ func (q *FileQueue) CompleteJob(ctx context.Context, jobID string) error {
 	job.Status = StatusCompleted
 	job.CompletedAt = nowISOVal
 	job.UpdatedAt = now
+	job.LastError = ""
+	job.LastErrorAt = nil
+	job.ErrorMessage = ""
+	job.FailedAt = nil
+	job.FailedBy = ""
 
 	job.History = append(job.History, JobHistoryEntry{
 		Status:    "COMPLETED",

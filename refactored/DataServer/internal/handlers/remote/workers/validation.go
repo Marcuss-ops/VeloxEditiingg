@@ -43,7 +43,7 @@ func InitValidationStore(db *store.SQLiteStore) {
 	if db != nil {
 		err := db.CreateValidationTableIfNotExists()
 		if err != nil {
-			log.Printf("⚠️ Failed to create validation table: %v", err)
+			log.Printf("[WARN] Failed to create validation table: %v", err)
 		}
 	}
 }
@@ -126,12 +126,12 @@ func HandleValidationReport() gin.HandlerFunc {
 		// Save to store
 		if globalValidationStore != nil {
 			if err := globalValidationStore.SaveValidation(&report); err != nil {
-				log.Printf("⚠️ Failed to save validation report for %s: %v", report.WorkerID, err)
+				log.Printf("[WARN] Failed to save validation report for %s: %v", report.WorkerID, err)
 			}
 		}
 
 		// Log the validation
-		log.Printf("📋 Validation Report: worker=%s code=%s unit=%s",
+		log.Printf("[VALID] Validation Report: worker=%s code=%s unit=%s",
 			report.WorkerID, report.ValidationCode, report.CanonicalUnit)
 
 		// Determine if worker is allowed to run jobs

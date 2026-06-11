@@ -74,7 +74,7 @@ func CompleteJobEnhanced(cfg *config.Config, fileQ *queue.FileQueue) gin.Handler
 		}
 
 		if !videoUploaded && pending == nil && allowCompleteWithoutVideo {
-			log.Printf("⚠️ complete_job senza video accettato per job %s (workflow script/voiceover)", jobID)
+			log.Printf("[WARN] complete_job senza video accettato per job %s (workflow script/voiceover)", jobID)
 		}
 
 		// Check idempotency on job_run_id
@@ -164,10 +164,10 @@ func CompleteJobEnhanced(cfg *config.Config, fileQ *queue.FileQueue) gin.Handler
 		// Check if we should schedule YouTube/Drive upload
 		uploadScheduled := false
 		if pending != nil {
-			log.Printf("📤 complete_job: trovato file in pending per job %s", jobID)
+			log.Printf("[JOB] complete_job: trovato file in pending per job %s", jobID)
 			ytGroup, _ := pending.UploadInfo["youtube_group"].(string)
 			if ytGroup != "" {
-				log.Printf("📺 Upload schedulato: verrà tentato YouTube (youtube_group=%s)", ytGroup)
+				log.Printf("[UPLOAD] Upload schedulato: verrà tentato YouTube (youtube_group=%s)", ytGroup)
 				uploadScheduled = true
 			}
 		}

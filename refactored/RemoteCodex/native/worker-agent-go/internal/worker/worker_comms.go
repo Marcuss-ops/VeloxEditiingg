@@ -12,11 +12,11 @@ import (
 
 // Heartbeat intervals based on worker status
 const (
-	heartbeatIntervalIdle   = 60 * time.Second // Idle: less frequent
-	heartbeatIntervalBusy   = 15 * time.Second // Busy: more frequent for progress updates
-	heartbeatIntervalError  = 10 * time.Second // Error: rapid recovery attempts
-	heartbeatMaxBackoff     = 5 * time.Minute  // Maximum backoff interval
-	heartbeatBackoffMultiplier = 2.0           // Backoff multiplier
+	heartbeatIntervalIdle      = 60 * time.Second // Idle: less frequent
+	heartbeatIntervalBusy      = 15 * time.Second // Busy: more frequent for progress updates
+	heartbeatIntervalError     = 10 * time.Second // Error: rapid recovery attempts
+	heartbeatMaxBackoff        = 5 * time.Minute  // Maximum backoff interval
+	heartbeatBackoffMultiplier = 2.0              // Backoff multiplier
 )
 
 // register registers the worker with the master server.
@@ -31,9 +31,11 @@ func (w *Worker) register(ctx context.Context) error {
 			"audio_processing": true,
 			"image_processing": true,
 		},
-		Hostname: hostname,
-		IP:       "", // Could be populated from network interface
-		Version:  w.version,
+		Hostname:      hostname,
+		IP:            "", // Could be populated from network interface
+		Version:       w.version,
+		CodeVersion:   w.version,
+		BundleVersion: w.config.BundleVersion,
 	}
 
 	w.logger.Debug("Registering with master at %s", w.config.MasterURL)
@@ -130,7 +132,7 @@ func (w *Worker) heartbeatLoop(ctx context.Context) {
 					logger.LogHeartbeatRecover(w.config.WorkerID, consecutiveErrors)
 				}
 				consecutiveErrors = 0
-				
+
 				// Reset to status-based interval
 				newInterval := w.getHeartbeatInterval()
 				if newInterval != currentInterval {
@@ -172,6 +174,10 @@ func (w *Worker) sendHeartbeat(ctx context.Context) error {
 	extra["worker_status"] = string(status)
 	extra["worker_id"] = w.config.WorkerID
 	extra["worker_name"] = w.config.WorkerName
+	extra["code_version"] = w.version
+	extra["bundle_version"] = w.config.BundleVersion
+	extra["jobs_completed"] = w.jobsCompleted.Load()
+	extra["jobs_failed"] = w.jobsFailed.Load()
 	if w.currentJob != nil {
 		extra["current_job"] = map[string]interface{}{
 			"job_id":       w.currentJob.JobID,
@@ -184,14 +190,15 @@ func (w *Worker) sendHeartbeat(ctx context.Context) error {
 	}
 
 	payload := &api.HeartbeatPayload{
-		WorkerID:   w.config.WorkerID,
-		WorkerName: w.config.WorkerName,
-		Status:     string(status),
-		JobID:      jobID,
-		CurrentJob: jobID,
-		Extra:      extra,
+		WorkerID:      w.config.WorkerID,
+		WorkerName:    w.config.WorkerName,
+		Status:        string(status),
+		JobID:         jobID,
+		CurrentJob:    jobID,
+		CodeVersion:   w.version,
+		BundleVersion: w.config.BundleVersion,
+		Extra:         extra,
 	}
 
 	return w.apiClient.SendHeartbeat(ctx, payload)
 }
-

@@ -18,7 +18,7 @@ type APIClient struct {
 
 func NewAPIClient(apiKey string, cache *Cache, fallbackURL string) *APIClient {
 	if apiKey == "" {
-		log.Printf("⚠️ YouTube API: no API key provided, will use fallback only")
+		log.Printf("[WARN] YouTube API: no API key provided, will use fallback only")
 	}
 
 	return &APIClient{

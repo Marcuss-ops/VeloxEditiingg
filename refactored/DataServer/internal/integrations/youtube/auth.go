@@ -156,7 +156,7 @@ func (am *AuthManager) LoadOAuthConfig() error {
 		Endpoint: google.Endpoint,
 	}
 
-	log.Printf("✅ YouTube OAuth config loaded from %s", secretPath)
+	log.Printf("[OK] YouTube OAuth config loaded from %s", secretPath)
 	return nil
 }
 
@@ -224,7 +224,7 @@ func (am *AuthManager) HandleOAuthCallback(ctx context.Context, code string, cha
 
 	// Save token to file
 	if err := am.saveChannelToken(channel); err != nil {
-		log.Printf("⚠️ Failed to save token: %v", err)
+		log.Printf("[WARN] Failed to save token: %v", err)
 	}
 
 	// Add to channels map
@@ -232,7 +232,7 @@ func (am *AuthManager) HandleOAuthCallback(ctx context.Context, code string, cha
 	am.service.channels[channel.ID] = channel
 	am.service.mu.Unlock()
 
-	log.Printf("✅ New YouTube channel added: %s", channel.Title)
+	log.Printf("[OK] New YouTube channel added: %s", channel.Title)
 	// Return public Channel (without sensitive tokens)
 	return AuthChannelToChannel(channel), nil
 }
@@ -357,21 +357,21 @@ func (am *AuthManager) RevokeToken(ctx context.Context, channelID string) error 
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		log.Printf("⚠️ Token revocation request failed: %v", err)
+		log.Printf("[WARN] Token revocation request failed: %v", err)
 		// Continue to remove local token anyway
 	} else {
 		resp.Body.Close()
 		if resp.StatusCode == http.StatusOK {
-			log.Printf("✅ Token revoked successfully for channel: %s", channelID)
+			log.Printf("[OK] Token revoked successfully for channel: %s", channelID)
 		} else {
-			log.Printf("⚠️ Token revocation returned status: %d", resp.StatusCode)
+			log.Printf("[WARN] Token revocation returned status: %d", resp.StatusCode)
 		}
 	}
 
 	// Remove token file
 	if channel.TokenPath != "" {
 		if err := os.Remove(channel.TokenPath); err != nil {
-			log.Printf("⚠️ Failed to remove token file: %v", err)
+			log.Printf("[WARN] Failed to remove token file: %v", err)
 		}
 	}
 
@@ -380,7 +380,7 @@ func (am *AuthManager) RevokeToken(ctx context.Context, channelID string) error 
 	delete(am.service.channels, channelID)
 	am.service.mu.Unlock()
 
-	log.Printf("✅ Channel removed: %s", channelID)
+	log.Printf("[OK] Channel removed: %s", channelID)
 	return nil
 }
 
@@ -412,7 +412,7 @@ func (am *AuthManager) saveChannelToken(channel *AuthChannel) error {
 		return fmt.Errorf("failed to save token: %w", err)
 	}
 
-	log.Printf("✅ Token saved for channel: %s", channel.ID)
+	log.Printf("[OK] Token saved for channel: %s", channel.ID)
 	return nil
 }
 

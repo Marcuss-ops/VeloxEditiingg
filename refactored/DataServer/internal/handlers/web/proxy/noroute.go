@@ -18,7 +18,7 @@ var (
 // Python backends have been completely removed.
 // All /api/* requests are handled by Go or return 404.
 func NoRouteHandler(serveSPA gin.HandlerFunc, landing gin.HandlerFunc, darkEditorProxy gin.HandlerFunc) gin.HandlerFunc {
-	log.Printf("🔒 Go-only mode: Python proxy disabled - all routes handled natively")
+	log.Printf("[INFO] Go-only mode: Python proxy disabled - all routes handled natively")
 
 	return func(c *gin.Context) {
 		path := c.Request.URL.Path
@@ -35,7 +35,7 @@ func NoRouteHandler(serveSPA gin.HandlerFunc, landing gin.HandlerFunc, darkEdito
 		// This prevents frontend from receiving HTML when calling non-existent API endpoints
 		if strings.HasPrefix(path, "/api/") {
 			atomic.AddInt64(&blockedRequests, 1)
-			log.Printf("❌ API 404: %s %s (route not found in Go server)", c.Request.Method, path)
+			log.Printf("[ERROR] API 404: %s %s (route not found in Go server)", c.Request.Method, path)
 			c.JSON(http.StatusNotFound, gin.H{
 				"error":  "API route not found",
 				"path":   path,
@@ -81,7 +81,7 @@ func NoRouteHandler(serveSPA gin.HandlerFunc, landing gin.HandlerFunc, darkEdito
 
 		// All other unmatched routes: return 404
 		atomic.AddInt64(&blockedRequests, 1)
-		log.Printf("❌ 404: %s %s (no Python fallback)", c.Request.Method, path)
+		log.Printf("[ERROR] 404: %s %s (no Python fallback)", c.Request.Method, path)
 		c.JSON(http.StatusNotFound, gin.H{
 			"error":  "route not found",
 			"path":   path,

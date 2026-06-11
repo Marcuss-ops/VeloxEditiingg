@@ -127,7 +127,7 @@ func (tm *TokenManager) SaveToken(name string, token *Token) error {
 		return fmt.Errorf("failed to write token file: %w", err)
 	}
 
-	log.Printf("💾 Token saved: %s", tokenPath)
+	log.Printf("[AUTH] Token saved: %s", tokenPath)
 	return nil
 }
 

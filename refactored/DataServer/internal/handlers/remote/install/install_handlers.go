@@ -114,7 +114,7 @@ func NewInstallHandler(cfg *Config) *InstallHandler {
 	// Only use hardcoded fallback in development mode
 	if masterURL == "" {
 		masterURL = "http://127.0.0.1:8000" // Dev fallback
-		log.Printf("⚠️ [INSTALL] No MASTER_PUBLIC_URL set, using dev fallback: %s", masterURL)
+		log.Printf("[WARN] [INSTALL] No MASTER_PUBLIC_URL set, using dev fallback: %s", masterURL)
 	}
 
 	// If BundleRoot not set, derive from ScriptDir
@@ -167,7 +167,7 @@ func (h *InstallHandler) checkAllowlist(c *gin.Context) bool {
 		}
 	}
 
-	log.Printf("🛑 Access denied for IP %s (not in allowlist)", clientIP)
+	log.Printf("[SECURITY] Access denied for IP %s (not in allowlist)", clientIP)
 	return false
 }
 
@@ -176,7 +176,7 @@ func (h *InstallHandler) checkAllowlist(c *gin.Context) bool {
 // Sends the compiled Go installer (velox-installer)
 func (h *InstallHandler) DownloadInstallScript() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		log.Printf("📥 [DOWNLOAD] Richiesta download install script from %s", c.ClientIP())
+		log.Printf("[DOWNLOAD] Richiesta download install script from %s", c.ClientIP())
 
 		// RUNTIME_CONTRACT_MINIMALE.md: Validate runtime mode from query params
 		if blocked, mode := validateRuntimeModeQuery(c); blocked {
@@ -205,7 +205,7 @@ func (h *InstallHandler) DownloadInstallScript() gin.HandlerFunc {
 		}
 
 		if scriptPath == "" {
-			log.Printf("❌ velox-installer non trovato (cercato in %v)", candidates)
+			log.Printf("[ERROR] velox-installer non trovato (cercato in %v)", candidates)
 			c.JSON(http.StatusNotFound, gin.H{
 				"error":      "velox-installer non trovato sul server",
 				"candidates": candidates,
@@ -213,7 +213,7 @@ func (h *InstallHandler) DownloadInstallScript() gin.HandlerFunc {
 			return
 		}
 
-		log.Printf("✅ Serving install script from: %s", scriptPath)
+		log.Printf("[OK] Serving install script from: %s", scriptPath)
 		c.FileAttachment(scriptPath, "velox-installer")
 	}
 }
@@ -237,7 +237,7 @@ func (h *InstallHandler) DownloadSetupScript() gin.HandlerFunc {
 			platform = "linux"
 		}
 
-		log.Printf("📥 [DOWNLOAD] Richiesta download setup script (platform=%s) from %s", platform, c.ClientIP())
+		log.Printf("[DOWNLOAD] Richiesta download setup script (platform=%s) from %s", platform, c.ClientIP())
 
 		masterURL := h.masterURL
 
@@ -248,13 +248,13 @@ set SCRIPT_NAME=velox-installer.exe
 echo ========================================
 echo INSTALLAZIONE AUTOMATICA WORKER
 echo ========================================
-echo 📡 Master URL: %%MASTER_URL%%
-echo ⏳ Download script di installazione...
+echo [INFO] Master URL: %%MASTER_URL%%
+echo [INFO] Download script di installazione...
 curl -s %%MASTER_URL%%/install_worker/download_install_script -o %%SCRIPT_NAME%%
-echo ✅ Script scaricato
-echo 🚀 Esecuzione installazione automatica...
+echo [OK] Script scaricato
+echo [INFO] Esecuzione installazione automatica...
 %%SCRIPT_NAME%% --master-url %%MASTER_URL%%
-echo ✅ Installazione completata!
+echo [OK] Installazione completata!
 `, masterURL)
 
 			c.Data(http.StatusOK, "text/plain; charset=utf-8", []byte(script))
@@ -270,14 +270,14 @@ SCRIPT_NAME="velox-installer"
 echo "========================================"
 echo "INSTALLAZIONE AUTOMATICA WORKER"
 echo "========================================"
-echo "📡 Master URL: $MASTER_URL"
-echo "⏳ Download installer in corso..."
+echo "[INFO] Master URL: $MASTER_URL"
+echo "[INFO] Download installer in corso..."
 curl -s "$MASTER_URL/install_worker/download_install_script" -o "$SCRIPT_NAME"
 chmod +x "$SCRIPT_NAME"
-echo "✅ Script scaricato"
-echo "🚀 Esecuzione installazione automatica..."
+echo "[OK] Script scaricato"
+echo "[INFO] Esecuzione installazione automatica..."
 ./"$SCRIPT_NAME" --master-url "$MASTER_URL"
-echo "✅ Installazione completata!"
+echo "[OK] Installazione completata!"
 `, masterURL)
 
 		c.Data(http.StatusOK, "text/x-shellscript; charset=utf-8", []byte(script))

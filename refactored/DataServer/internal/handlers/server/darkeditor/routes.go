@@ -53,5 +53,5 @@ func RegisterAPIRoutes(r *gin.Engine, h *Handler) {
 		api.POST("/api/logs/client", h.ClientLog)
 	}
 
-	log.Printf("✅ Dark Editor API routes registered at /dark_editor_v2/*")
+	log.Printf("[OK] Dark Editor API routes registered at /dark_editor_v2/*")
 }

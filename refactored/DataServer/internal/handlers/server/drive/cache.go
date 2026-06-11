@@ -26,7 +26,7 @@ func getDriveLinksFromCache() []DriveFolder {
 	defer driveLinksCache.mu.Unlock()
 
 	if err := loadDriveLinksFromDisk(); err != nil {
-		log.Printf("⚠️ Drive cache reload failed: %v", err)
+		log.Printf("[WARN] Drive cache reload failed: %v", err)
 	}
 	return driveLinksCache.folders
 }

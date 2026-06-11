@@ -55,7 +55,7 @@ func (u *Uploader) UploadVideo(ctx context.Context, channelID string, videoPath 
 	}
 	defer file.Close()
 
-	log.Printf("📤 YouTube upload started: channel=%s file=%s title=%q privacy=%s", channelID, filepath.Base(videoPath), config.Title, config.PrivacyStatus)
+	log.Printf("[UPLOAD] YouTube upload started: channel=%s file=%s title=%q privacy=%s", channelID, filepath.Base(videoPath), config.Title, config.PrivacyStatus)
 
 	// Prepare video metadata
 	video := &youtube.Video{
@@ -83,7 +83,7 @@ func (u *Uploader) UploadVideo(ctx context.Context, channelID string, videoPath 
 	for attempt := 1; attempt <= uploadMaxAttempts; attempt++ {
 		if attempt > 1 {
 			delay := uploadRetryDelay(attempt - 1)
-			log.Printf("🔁 YouTube upload retry %d/%d in %s: %v", attempt, uploadMaxAttempts, delay, uploadErr)
+			log.Printf("[UPLOAD] YouTube upload retry %d/%d in %s: %v", attempt, uploadMaxAttempts, delay, uploadErr)
 			if err := sleepWithContext(ctx, delay); err != nil {
 				return nil, fmt.Errorf("upload retry interrupted: %w", err)
 			}
@@ -116,13 +116,13 @@ func (u *Uploader) UploadVideo(ctx context.Context, channelID string, videoPath 
 	if config.ThumbnailPath != "" {
 		thumbResult, err := u.SetThumbnail(ctx, channelID, response.Id, config.ThumbnailPath)
 		if err != nil {
-			log.Printf("⚠️ Failed to upload thumbnail: %v", err)
+			log.Printf("[WARN] Failed to upload thumbnail: %v", err)
 		} else {
 			result.ThumbnailURL = thumbResult
 		}
 	}
 
-	log.Printf("✅ YouTube upload completed: channel=%s video_id=%s url=%s", channelID, result.VideoID, result.YouTubeURL)
+	log.Printf("[OK] YouTube upload completed: channel=%s video_id=%s url=%s", channelID, result.VideoID, result.YouTubeURL)
 	u.service.quotaManager.TrackUsage(CostUpload)
 	return result, nil
 }

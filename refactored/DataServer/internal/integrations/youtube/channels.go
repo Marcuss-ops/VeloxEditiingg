@@ -22,11 +22,11 @@ func (s *Service) loadChannels() {
 		if err == nil {
 			s.loadChannelsFromDir(tokensDir, entries)
 		} else {
-			log.Printf("⚠️ Failed to read tokens directory: %v", err)
+			log.Printf("[WARN] Failed to read tokens directory: %v", err)
 		}
 	}
 	if len(s.channels) > 0 {
-		log.Printf("✅ Loaded %d YouTube channels", len(s.channels))
+		log.Printf("[OK] Loaded %d YouTube channels", len(s.channels))
 	}
 }
 
@@ -148,7 +148,7 @@ func (s *Service) loadChannelsJSON() {
 	}
 
 	if err := json.Unmarshal(data, &channelsData); err != nil {
-		log.Printf("⚠️ Failed to parse channels.json: %v", err)
+		log.Printf("[WARN] Failed to parse channels.json: %v", err)
 		return
 	}
 
@@ -168,7 +168,7 @@ func (s *Service) loadChannelsJSON() {
 		}
 	}
 
-	log.Printf("✅ Loaded channel details from channels.json (%d entries)", len(channelsData))
+	log.Printf("[OK] Loaded channel details from channels.json (%d entries)", len(channelsData))
 }
 
 // UpdateChannelMetadata updates metadata fields in channels.json
@@ -290,7 +290,7 @@ func (s *Service) DeleteChannel(channelID string) error {
 		for i, chID := range group.Channels {
 			if chID == channelID {
 				group.Channels = append(group.Channels[:i], group.Channels[i+1:]...)
-				log.Printf("📦 Removed channel %s from group %s", channelID, groupName)
+				log.Printf("[YT] Removed channel %s from group %s", channelID, groupName)
 				break
 			}
 		}
@@ -298,16 +298,16 @@ func (s *Service) DeleteChannel(channelID string) error {
 
 	if channel.TokenPath != "" {
 		if err := os.Remove(channel.TokenPath); err != nil {
-			log.Printf("⚠️ Failed to remove token file: %v", err)
+			log.Printf("[WARN] Failed to remove token file: %v", err)
 		} else {
-			log.Printf("🗑️ Deleted token file: %s", channel.TokenPath)
+			log.Printf("[DEL] Deleted token file: %s", channel.TokenPath)
 		}
 	}
 
 	delete(s.channels, channelID)
 	s.saveGroups()
 
-	log.Printf("✅ Channel permanently deleted: %s", channelID)
+	log.Printf("[OK] Channel permanently deleted: %s", channelID)
 	return nil
 }
 
@@ -354,10 +354,10 @@ func (s *Service) RefreshChannelMetadata(ctx context.Context, channelID string) 
 	s.mu.Unlock()
 
 	if err := s.saveChannelToken(s.channels[channelID]); err != nil {
-		log.Printf("⚠️ Failed to save updated token for %s: %v", channelID, err)
+		log.Printf("[WARN] Failed to save updated token for %s: %v", channelID, err)
 	}
 
-	log.Printf("✅ Refreshed metadata for channel %s: title=%q", channelID, newTitle)
+	log.Printf("[OK] Refreshed metadata for channel %s: title=%q", channelID, newTitle)
 	return s.channels[channelID], nil
 }
 
@@ -373,13 +373,13 @@ func (s *Service) RefreshAllChannelsMetadata(ctx context.Context) (int, []error)
 		}
 		if _, err := s.RefreshChannelMetadata(ctx, ch.ID); err != nil {
 			errors = append(errors, err)
-			log.Printf("⚠️ Failed to refresh metadata for channel %s: %v", ch.ID, err)
+			log.Printf("[WARN] Failed to refresh metadata for channel %s: %v", ch.ID, err)
 		} else {
 			successCount++
 		}
 	}
 
-	log.Printf("✅ Refreshed metadata for %d/%d channels", successCount, len(channels))
+	log.Printf("[OK] Refreshed metadata for %d/%d channels", successCount, len(channels))
 	return successCount, errors
 }
 
@@ -409,6 +409,6 @@ func (s *Service) saveChannelToken(channel *AuthChannel) error {
 		return fmt.Errorf("failed to save token: %w", err)
 	}
 
-	log.Printf("✅ Token saved for channel: %s", channel.ID)
+	log.Printf("[OK] Token saved for channel: %s", channel.ID)
 	return nil
 }

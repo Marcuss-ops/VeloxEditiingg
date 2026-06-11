@@ -33,7 +33,7 @@ func NewCache(dataDir string, ttl time.Duration) *Cache {
 	// Ensure cache directory exists
 	cacheDir := filepath.Join(dataDir, "youtube")
 	if err := os.MkdirAll(cacheDir, 0755); err != nil {
-		log.Printf("⚠️ YouTube cache: could not create directory: %v", err)
+		log.Printf("[WARN] YouTube cache: could not create directory: %v", err)
 	}
 
 	filePath := filepath.Join(cacheDir, "youtube_api_cache.json")
@@ -112,7 +112,7 @@ func (c *Cache) Set(key string, value interface{}) {
 	// Save asynchronously to not block
 	go func() {
 		if err := c.save(); err != nil {
-			log.Printf("⚠️ YouTube cache: save error: %v", err)
+			log.Printf("[WARN] YouTube cache: save error: %v", err)
 		}
 	}()
 }
@@ -134,7 +134,7 @@ func (c *Cache) Clear() {
 
 	go func() {
 		if err := c.save(); err != nil {
-			log.Printf("⚠️ YouTube cache: clear save error: %v", err)
+			log.Printf("[WARN] YouTube cache: clear save error: %v", err)
 		}
 	}()
 }
@@ -157,7 +157,7 @@ func (c *Cache) Cleanup() int {
 	if count > 0 {
 		go func() {
 			if err := c.save(); err != nil {
-				log.Printf("⚠️ YouTube cache: cleanup save error: %v", err)
+				log.Printf("[WARN] YouTube cache: cleanup save error: %v", err)
 			}
 		}()
 	}
@@ -184,7 +184,7 @@ type feedCacheEntry struct {
 func NewFeedCache(dataDir string) *FeedCache {
 	cacheDir := filepath.Join(dataDir, "analytics")
 	if err := os.MkdirAll(cacheDir, 0755); err != nil {
-		log.Printf("⚠️ Feed cache: could not create directory: %v", err)
+		log.Printf("[WARN] Feed cache: could not create directory: %v", err)
 	}
 
 	fc := &FeedCache{
@@ -257,7 +257,7 @@ func (fc *FeedCache) Set(key string, feed *FeedResponse) {
 
 	go func() {
 		if err := fc.save(); err != nil {
-			log.Printf("⚠️ Feed cache: save error: %v", err)
+			log.Printf("[WARN] Feed cache: save error: %v", err)
 		}
 	}()
 }
@@ -271,7 +271,7 @@ func (fc *FeedCache) Clear() {
 
 	go func() {
 		if err := fc.save(); err != nil {
-			log.Printf("⚠️ Feed cache: clear save error: %v", err)
+			log.Printf("[WARN] Feed cache: clear save error: %v", err)
 		}
 	}()
 }

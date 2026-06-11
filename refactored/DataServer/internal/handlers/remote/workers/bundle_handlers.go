@@ -40,6 +40,12 @@ func (h *WorkerUpdateHandler) GetBundleDownloadHandler() gin.HandlerFunc {
 			return
 		}
 
+		// Include SHA256 checksum in response header for integrity verification
+		bundleHash := computeFileSHA256(bundlePath)
+		if bundleHash != "" {
+			c.Header("X-Bundle-SHA256", bundleHash)
+		}
+
 		c.FileAttachment(bundlePath, filepath.Base(bundlePath))
 	}
 }

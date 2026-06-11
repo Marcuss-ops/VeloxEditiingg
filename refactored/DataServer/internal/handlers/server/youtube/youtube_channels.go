@@ -320,7 +320,7 @@ func (ym *YouTubeManager) DeleteChannelPermanentlyHandler() gin.HandlerFunc {
 				if _, err := os.Stat(tp); err == nil {
 					if err := os.Remove(tp); err == nil {
 						tokenDeleted = true
-						log.Printf("🗑️ Deleted token file: %s", tp)
+						log.Printf("[DEL] Deleted token file: %s", tp)
 					}
 				}
 			}
@@ -430,7 +430,7 @@ func (ym *YouTubeManager) MoveChannelToGroupHandler() gin.HandlerFunc {
 				if _, err := os.Stat(sourceTokenPath); err == nil {
 					os.MkdirAll(targetDir, 0755)
 					if err := os.Rename(sourceTokenPath, targetTokenPath); err == nil {
-						log.Printf("📦 Moved token file to %s", targetGroup)
+						log.Printf("[MOVE] Moved token file to %s", targetGroup)
 					}
 				}
 			}
@@ -475,7 +475,7 @@ func (ym *YouTubeManager) MoveChannelToGroupHandler() gin.HandlerFunc {
 			if _, err := os.Stat(sourceTokenPath); err == nil {
 				os.MkdirAll(targetDir, 0755)
 				if err := os.Rename(sourceTokenPath, targetTokenPath); err == nil {
-					log.Printf("📦 Moved token file from %s to %s", sourceGroup, targetGroup)
+					log.Printf("[MOVE] Moved token file from %s to %s", sourceGroup, targetGroup)
 				}
 			}
 		}

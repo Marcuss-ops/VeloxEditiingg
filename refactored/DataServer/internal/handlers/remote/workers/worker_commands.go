@@ -139,7 +139,7 @@ func (wl *WorkerLifecycle) RequestUpdateHandler() gin.HandlerFunc {
 		})
 		wl.updateMgr.RequestUpdate(body.WorkerID, version)
 
-		log.Printf("📤 Update requested for worker %s (version: %s)", body.WorkerID[:min(16, len(body.WorkerID))]+"...", version)
+		log.Printf("[UPDATE] Update requested for worker %s (version: %s)", body.WorkerID[:min(16, len(body.WorkerID))]+"...", version)
 
 		c.JSON(http.StatusOK, gin.H{
 			"ok":      true,

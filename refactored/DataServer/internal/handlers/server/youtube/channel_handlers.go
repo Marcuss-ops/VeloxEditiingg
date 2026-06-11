@@ -289,7 +289,7 @@ func (h *YouTubeHandlers) UpdateChannel(c *gin.Context) {
 			for i := range group.Channels {
 				if group.Channels[i].ID == channelID {
 					if _, err := h.storage.UpdateChannelLanguage(group.Name, channelID, lang); err != nil {
-						log.Printf("⚠️ Failed to update language in storage for channel %s: %v", channelID, err)
+						log.Printf("[WARN] Failed to update language in storage for channel %s: %v", channelID, err)
 					}
 					break
 				}
@@ -333,7 +333,7 @@ func (h *YouTubeHandlers) AutoDetectLanguage(c *gin.Context) {
 		for i := range group.Channels {
 			if group.Channels[i].ID == channelID {
 				if _, err := h.storage.UpdateChannelLanguage(group.Name, channelID, lang); err != nil {
-					log.Printf("⚠️ Failed to save language in storage for channel %s: %v", channelID, err)
+					log.Printf("[WARN] Failed to save language in storage for channel %s: %v", channelID, err)
 				}
 				break
 			}
@@ -368,14 +368,14 @@ func languageCodeToName(code string) string {
 // Helper: map language code to flag emoji
 func languageCodeToFlag(code string) string {
 	flags := map[string]string{
-		"en": "🇬🇧", "it": "🇮🇹", "es": "🇪🇸", "fr": "🇫🇷", "de": "🇩🇪",
-		"pt": "🇵🇹", "ru": "🇷🇺", "ja": "🇯🇵", "ko": "🇰🇷", "zh": "🇨🇳",
-		"ar": "🇸🇦", "hi": "🇮🇳", "pl": "🇵🇱", "tr": "🇹🇷", "nl": "🇳🇱",
+		"en": "\U0001F1EC\U0001F1E7", "it": "\U0001F1EE\U0001F1F9", "es": "\U0001F1EA\U0001F1F8", "fr": "\U0001F1EB\U0001F1F7", "de": "\U0001F1E9\U0001F1EA",
+		"pt": "\U0001F1F5\U0001F1F9", "ru": "\U0001F1F7\U0001F1FA", "ja": "\U0001F1EF\U0001F1F5", "ko": "\U0001F1F0\U0001F1F7", "zh": "\U0001F1E8\U0001F1F3",
+		"ar": "\U0001F1F8\U0001F1E6", "hi": "\U0001F1EE\U0001F1F3", "pl": "\U0001F1F5\U0001F1F1", "tr": "\U0001F1F9\U0001F1F7", "nl": "\U0001F1F3\U0001F1F1",
 	}
 	if flag, ok := flags[code]; ok {
 		return flag
 	}
-	return "🌐"
+	return ""
 }
 
 // ListUndefinedChannels lists channels not in any upload group

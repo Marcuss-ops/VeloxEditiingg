@@ -57,11 +57,11 @@ func NewYouTubeManager(dataDir, apiKey, fallbackURL string, existingStorage *you
 
 func (ym *YouTubeManager) reviewAndRefreshChannels() {
 	time.Sleep(3 * time.Second)
-	log.Printf("🔍 YouTube Review: Starting background review of database channels...")
+	log.Printf("[REVIEW] YouTube Review: Starting background review of database channels...")
 
 	groups, err := ym.storage.ListGroups()
 	if err != nil {
-		log.Printf("⚠️ YouTube Review: Failed to list groups: %v", err)
+		log.Printf("[WARN] YouTube Review: Failed to list groups: %v", err)
 		return
 	}
 
@@ -74,7 +74,7 @@ func (ym *YouTubeManager) reviewAndRefreshChannels() {
 			needsLanguage := ch.Language == "" || ch.Language == "unknown"
 
 			if needsRefresh || needsLanguage {
-				log.Printf("🔄 YouTube Review: Refreshing metadata & language for channel %s in group %s...", ch.ID, group.Name)
+				log.Printf("[INFO] YouTube Review: Refreshing metadata & language for channel %s in group %s...", ch.ID, group.Name)
 
 				var realTitle string
 				var thumbnail string
@@ -87,7 +87,7 @@ func (ym *YouTubeManager) reviewAndRefreshChannels() {
 						if authCh.Language != "" && authCh.Language != "unknown" {
 							detectedLang = authCh.Language
 						}
-						log.Printf("✅ YouTube Review: Found OAuth metadata for %s -> %q (Preserved language: %s)", ch.ID, realTitle, detectedLang)
+						log.Printf("[OK] YouTube Review: Found OAuth metadata for %s -> %q (Preserved language: %s)", ch.ID, realTitle, detectedLang)
 					}
 				}
 
@@ -98,7 +98,7 @@ func (ym *YouTubeManager) reviewAndRefreshChannels() {
 						realTitle = info.Title
 						thumbnail = info.Thumbnail
 					} else {
-						log.Printf("⚠️ YouTube Review: Failed to fetch channel info for %s: %v", ch.ID, err)
+						log.Printf("[WARN] YouTube Review: Failed to fetch channel info for %s: %v", ch.ID, err)
 					}
 				}
 
@@ -116,7 +116,7 @@ func (ym *YouTubeManager) reviewAndRefreshChannels() {
 				_ = ym.storage.UpdateChannelMetadata(group.Name, ch.ID, realTitle, realTitle, thumbnail)
 				_, _ = ym.storage.UpdateChannelLanguage(group.Name, ch.ID, detectedLang)
 
-				log.Printf("✅ YouTube Review: Resolved channel %s -> %q [%s]", ch.ID, realTitle, detectedLang)
+				log.Printf("[OK] YouTube Review: Resolved channel %s -> %q [%s]", ch.ID, realTitle, detectedLang)
 			}
 		}
 	}
@@ -135,7 +135,7 @@ func (ym *YouTubeManager) CleanupCache() int {
 // DataRetentionCleanup performs a comprehensive cleanup of all YouTube cached data
 func (ym *YouTubeManager) DataRetentionCleanup() int {
 	if ym.dataDir == "" {
-		log.Printf("⚠️ YouTube Policy: dataDir not set, skipping data retention cleanup")
+		log.Printf("[WARN] YouTube Policy: dataDir not set, skipping data retention cleanup")
 		return 0
 	}
 
@@ -146,7 +146,7 @@ func (ym *YouTubeManager) DataRetentionCleanup() int {
 	youtubeAPICachePath := filepath.Join(ym.dataDir, "youtube", "youtube_api_cache.json")
 	if _, err := os.Stat(youtubeAPICachePath); err == nil {
 		if err := os.WriteFile(youtubeAPICachePath, []byte("{}"), 0644); err == nil {
-			log.Printf("🧹 YouTube Policy: cleared youtube_api_cache.json")
+			log.Printf("[CLEANUP] YouTube Policy: cleared youtube_api_cache.json")
 			total++
 		}
 	}
@@ -164,7 +164,7 @@ func (ym *YouTubeManager) DataRetentionCleanup() int {
 		fp := filepath.Join(analyticsDir, f)
 		if _, err := os.Stat(fp); err == nil {
 			if err := os.WriteFile(fp, []byte("{}"), 0644); err == nil {
-				log.Printf("🧹 YouTube Policy: cleared %s", f)
+				log.Printf("[CLEANUP] YouTube Policy: cleared %s", f)
 				total++
 			}
 		}
@@ -176,13 +176,13 @@ func (ym *YouTubeManager) DataRetentionCleanup() int {
 	for _, uploadHistoryPath := range uploadHistoryPaths {
 		if _, err := os.Stat(uploadHistoryPath); err == nil {
 			if err := os.WriteFile(uploadHistoryPath, []byte("[]"), 0644); err == nil {
-				log.Printf("🧹 YouTube Policy: cleared upload_history.json")
+				log.Printf("[CLEANUP] YouTube Policy: cleared upload_history.json")
 				total++
 			}
 		}
 	}
 
-	log.Printf("🧹 YouTube Policy: data retention cleanup complete (%d entries cleared)", total)
+	log.Printf("[CLEANUP] YouTube Policy: data retention cleanup complete (%d entries cleared)", total)
 	return total
 }
 

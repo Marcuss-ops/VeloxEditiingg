@@ -74,7 +74,7 @@ func (h *WorkerUpdateHandler) FullUpdateLinuxHandler() gin.HandlerFunc {
 			commandsQueued++
 		}
 
-		log.Printf("🔄 Full update Linux: %d workers, %d commands, maintenance_id=%s",
+		log.Printf("[UPDATE] Full update Linux: %d workers, %d commands, maintenance_id=%s",
 			len(eligible), commandsQueued, maintenanceID)
 
 		c.JSON(http.StatusOK, gin.H{
@@ -114,7 +114,7 @@ func (h *WorkerUpdateHandler) RestartAllHandler() gin.HandlerFunc {
 			h.cmdMgr.PushCommand(wid, "restart_worker", nil)
 		}
 
-		log.Printf("🔄 Restart all queued for %d workers", len(eligible))
+		log.Printf("[UPDATE] Restart all queued for %d workers", len(eligible))
 
 		c.JSON(http.StatusOK, gin.H{
 			"status":            "queued",
@@ -162,7 +162,7 @@ func (h *WorkerUpdateHandler) RolloutUpdateHandler() gin.HandlerFunc {
 
 		eligible := []string{}
 		for _, info := range allWorkers {
-			if h.persistedReg != nil && h.persistedReg.IsRevoked(info.WorkerID) {
+			if h.reg.IsRevoked(info.WorkerID) {
 				continue
 			}
 			if info.Drain {
@@ -215,7 +215,7 @@ func (h *WorkerUpdateHandler) RolloutUpdateHandler() gin.HandlerFunc {
 			h.updateMgr.RequestUpdate(wid, h.codeVersion)
 		}
 
-		log.Printf("🚀 Rollout update started (rollout_id=%s)", rolloutID)
+		log.Printf("[UPDATE] Rollout update started (rollout_id=%s)", rolloutID)
 		log.Printf("   Total eligible: %d, Canary: %d, Batches: %d", totalWorkers, len(canaryWorkers), len(batches))
 
 		c.JSON(http.StatusOK, gin.H{
@@ -257,7 +257,7 @@ func (h *WorkerUpdateHandler) UpdateStateHandler() gin.HandlerFunc {
 			return
 		}
 
-		if h.persistedReg != nil && h.persistedReg.IsRevoked(body.WorkerID) {
+		if h.reg.IsRevoked(body.WorkerID) {
 			c.Status(http.StatusNoContent)
 			return
 		}
@@ -281,12 +281,12 @@ func (h *WorkerUpdateHandler) UpdateStateHandler() gin.HandlerFunc {
 					artifactPreview = body.ArtifactSHA256
 				}
 			}
-			log.Printf("📥 Worker %s: UPDATE_DOWNLOADED - zip downloaded, hash=%s", workerName, artifactPreview)
+			log.Printf("[UPDATE] Worker %s: UPDATE_DOWNLOADED - zip downloaded, hash=%s", workerName, artifactPreview)
 
 		case "UPDATE_APPLIED":
-			log.Printf("✅ Worker %s: UPDATE_APPLIED - symlink updated, waiting for restart", workerName)
+			log.Printf("[OK] Worker %s: UPDATE_APPLIED - symlink updated, waiting for restart", workerName)
 			if body.UpdateInfo != nil {
-				log.Printf("   📁 Dirs updated: %v, Files updated: %v",
+				log.Printf("   [INFO] Dirs updated: %v, Files updated: %v",
 					body.UpdateInfo["dirs_updated"], body.UpdateInfo["files_updated"])
 			}
 
@@ -294,11 +294,11 @@ func (h *WorkerUpdateHandler) UpdateStateHandler() gin.HandlerFunc {
 			isAligned := body.ArtifactSHA256 != "" && body.ArtifactSHA256 == targetArtifactSHA
 			if isAligned {
 				log.Printf("")
-				log.Printf("✅ ========================================")
-				log.Printf("🎉 Worker %s UPDATED AND ONLINE!", workerName)
-				log.Printf("✅ ========================================")
-				log.Printf("   📦 Artifact: %s...", body.ArtifactSHA256[:min(16, len(body.ArtifactSHA256))])
-				log.Printf("   ✅ Aligned: YES")
+				log.Printf("[OK] ========================================")
+				log.Printf("[UPDATE] Worker %s UPDATED AND ONLINE!", workerName)
+				log.Printf("[OK] ========================================")
+				log.Printf("   [INFO] Artifact: %s...", body.ArtifactSHA256[:min(16, len(body.ArtifactSHA256))])
+				log.Printf("   [OK] Aligned: YES")
 				log.Printf("")
 				h.updateMgr.ClearUpdate(body.WorkerID)
 			} else {
@@ -306,7 +306,7 @@ func (h *WorkerUpdateHandler) UpdateStateHandler() gin.HandlerFunc {
 			}
 
 		case "UPDATE_FAILED":
-			log.Printf("❌ Worker %s: UPDATE_FAILED - %s", workerName, body.Error)
+			log.Printf("[ERROR] Worker %s: UPDATE_FAILED - %s", workerName, body.Error)
 		}
 
 		c.JSON(http.StatusOK, gin.H{
@@ -342,7 +342,7 @@ func (h *WorkerUpdateHandler) UpdateAckHandler() gin.HandlerFunc {
 			if worker != nil && worker.WorkerName != "" {
 				workerName = worker.WorkerName
 			}
-			log.Printf("📝 Worker %s: Legacy ACK received (version: %s)", workerName, body.LocalVersion)
+			log.Printf("[UPDATE] Worker %s: Legacy ACK received (version: %s)", workerName, body.LocalVersion)
 		}
 
 		c.JSON(http.StatusOK, gin.H{

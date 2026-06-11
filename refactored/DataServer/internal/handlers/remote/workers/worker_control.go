@@ -26,7 +26,7 @@ func (wl *WorkerLifecycle) RestartWorkerHandler() gin.HandlerFunc {
 
 		wl.cmdMgr.PushCommand(body.WorkerID, "restart_worker", nil)
 
-		log.Printf("🔄 Restart requested for worker %s", body.WorkerID[:min(16, len(body.WorkerID))]+"...")
+		log.Printf("[CONTROL] Restart requested for worker %s", body.WorkerID[:min(16, len(body.WorkerID))]+"...")
 
 		c.JSON(http.StatusOK, gin.H{
 			"ok":      true,
@@ -55,11 +55,7 @@ func (wl *WorkerLifecycle) RevokeWorkerHandler() gin.HandlerFunc {
 
 		wl.reg.RevokeWorker(ctx, body.WorkerID)
 
-		if wl.persistedReg != nil {
-			wl.persistedReg.RevokeWorker(body.WorkerID)
-		}
-
-		log.Printf("🚫 Worker revoked: %s", body.WorkerID[:min(16, len(body.WorkerID))]+"...")
+		log.Printf("Worker revoked: %s", body.WorkerID[:min(16, len(body.WorkerID))]+"...")
 
 		c.JSON(http.StatusOK, gin.H{
 			"ok":      true,
@@ -86,11 +82,7 @@ func (wl *WorkerLifecycle) UnrevokeWorkerHandler() gin.HandlerFunc {
 
 		wl.reg.UnrevokeWorker(body.WorkerID)
 
-		if wl.persistedReg != nil {
-			wl.persistedReg.UnrevokeWorker(body.WorkerID)
-		}
-
-		log.Printf("✅ Worker unrevoked: %s", body.WorkerID[:min(16, len(body.WorkerID))]+"...")
+		log.Printf("Worker unrevoked: %s", body.WorkerID[:min(16, len(body.WorkerID))]+"...")
 
 		c.JSON(http.StatusOK, gin.H{
 			"ok":      true,
@@ -126,7 +118,7 @@ func (wl *WorkerLifecycle) DrainWorkerHandler() gin.HandlerFunc {
 		if !body.Drain {
 			action = "undrain"
 		}
-		log.Printf("🔧 Worker %s set to %s", body.WorkerID[:min(16, len(body.WorkerID))]+"...", action)
+		log.Printf("[CONTROL] Worker %s set to %s", body.WorkerID[:min(16, len(body.WorkerID))]+"...", action)
 
 		c.JSON(http.StatusOK, gin.H{
 			"ok":      true,

@@ -147,5 +147,5 @@ func RegisterDashboardRoutes(r *gin.Engine, dataDir string, svc analyticsService
 		dashboard.GET("/health", handler.DashboardHealth)
 	}
 
-	log.Printf("✅ Dashboard routes registered at /api/v1/dashboard/*")
+	log.Printf("[OK] Dashboard routes registered at /api/v1/dashboard/*")
 }

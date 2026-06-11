@@ -40,7 +40,7 @@ func (s *Service) loadGroups() {
 				s.groups[g.Name] = g
 			}
 		}
-		log.Printf("✅ Loaded %d YouTube groups from array", len(s.groups))
+		log.Printf("[OK] Loaded %d YouTube groups from array", len(s.groups))
 		return
 	}
 
@@ -52,7 +52,7 @@ func (s *Service) loadGroups() {
 		groupCopy := group
 		s.groups[name] = &groupCopy
 	}
-	log.Printf("✅ Loaded %d YouTube groups", len(s.groups))
+	log.Printf("[OK] Loaded %d YouTube groups", len(s.groups))
 }
 
 // CreateGroup creates a new channel group and persists it
@@ -263,14 +263,14 @@ func (s *Service) saveGroups() {
 
 	data, err := json.MarshalIndent(groupsArray, "", "  ")
 	if err != nil {
-		log.Printf("⚠️ Failed to marshal groups: %v", err)
+		log.Printf("[WARN] Failed to marshal groups: %v", err)
 		return
 	}
 
 	if err := os.WriteFile(groupsPath, data, 0644); err != nil {
-		log.Printf("⚠️ Failed to save groups: %v", err)
+		log.Printf("[WARN] Failed to save groups: %v", err)
 		return
 	}
 
-	log.Printf("✅ Groups saved to %s", groupsPath)
+	log.Printf("[OK] Groups saved to %s", groupsPath)
 }

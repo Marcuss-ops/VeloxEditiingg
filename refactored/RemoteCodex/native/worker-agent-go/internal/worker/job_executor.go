@@ -77,6 +77,7 @@ func (w *Worker) executeJob(ctx context.Context, job *api.Job) {
 		result.Status = "failed"
 		result.Error = execErr.Error()
 		w.status = StatusError
+		w.jobsFailed.Add(1)
 		telemetry.RecordJobFailure(duration.Milliseconds())
 		telemetry.GetPrometheusMetrics().RecordJobRuntime(job.JobType, float64(duration.Milliseconds()))
 	} else {
@@ -84,6 +85,7 @@ func (w *Worker) executeJob(ctx context.Context, job *api.Job) {
 		result.Status = "success"
 		result.Output = output
 		w.status = StatusIdle
+		w.jobsCompleted.Add(1)
 		telemetry.RecordJobSuccess(duration.Milliseconds())
 		telemetry.GetPrometheusMetrics().RecordJobRuntime(job.JobType, float64(duration.Milliseconds()))
 	}

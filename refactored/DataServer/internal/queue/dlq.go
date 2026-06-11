@@ -85,7 +85,7 @@ func NewDeadLetterQueue(cfg *DLQConfig) (*DeadLetterQueue, error) {
 
 	// Load existing jobs
 	if err := dlq.load(); err != nil {
-		log.Printf("⚠️ DLQ load error (starting fresh): %v", err)
+		log.Printf("[WARN] DLQ load error (starting fresh): %v", err)
 	}
 
 	return dlq, nil
@@ -177,7 +177,7 @@ func (dlq *DeadLetterQueue) AddJob(ctx context.Context, job *Job, reason, error 
 		})
 	}
 
-	log.Printf("☠️ Job %s moved to DLQ: %s", job.JobID[:8], reason)
+	log.Printf("[DLQ] Job %s moved to DLQ: %s", job.JobID[:8], reason)
 	return nil
 }
 
@@ -263,10 +263,10 @@ func (dlq *DeadLetterQueue) ReplayJob(ctx context.Context, jobID string, fq *Fil
 	// Remove from DLQ
 	delete(dlq.jobs, jobID)
 	if err := dlq.save(); err != nil {
-		log.Printf("⚠️ DLQ save error after replay: %v", err)
+		log.Printf("[WARN] DLQ save error after replay: %v", err)
 	}
 
-	log.Printf("🔄 Job %s replayed from DLQ", jobID[:8])
+	log.Printf("[INFO] Job %s replayed from DLQ", jobID[:8])
 	return nil
 }
 
@@ -306,7 +306,7 @@ func (dlq *DeadLetterQueue) PurgeOldJobs(ctx context.Context) (int, error) {
 		if err := dlq.save(); err != nil {
 			return 0, err
 		}
-		log.Printf("🧹 DLQ purged %d old jobs", removed)
+		log.Printf("[DLQ] DLQ purged %d old jobs", removed)
 	}
 
 	return removed, nil
@@ -353,7 +353,7 @@ func (dlq *DeadLetterQueue) PurgeToLimit() (int, error) {
 		if err := dlq.save(); err != nil {
 			return 0, err
 		}
-		log.Printf("🧹 DLQ purged %d jobs to meet limit", removed)
+		log.Printf("[DLQ] DLQ purged %d jobs to meet limit", removed)
 	}
 
 	return removed, nil
@@ -418,12 +418,12 @@ func (dlq *DeadLetterQueue) ProcessLoop(ctx context.Context, interval time.Durat
 		case <-ticker.C:
 			// Purge old jobs
 			if _, err := dlq.PurgeOldJobs(ctx); err != nil {
-				log.Printf("⚠️ DLQ purge error: %v", err)
+				log.Printf("[WARN] DLQ purge error: %v", err)
 			}
 
 			// Enforce limit
 			if _, err := dlq.PurgeToLimit(); err != nil {
-				log.Printf("⚠️ DLQ limit enforcement error: %v", err)
+				log.Printf("[WARN] DLQ limit enforcement error: %v", err)
 			}
 
 			// Auto-replay if enabled
@@ -453,7 +453,7 @@ func (dlq *DeadLetterQueue) autoReplayJobs(ctx context.Context, fq *FileQueue) {
 		}
 
 		// Attempt replay
-		log.Printf("🔄 Auto-replaying job %s from DLQ", id[:8])
+		log.Printf("[INFO] Auto-replaying job %s from DLQ", id[:8])
 
 		// This will be handled by the main loop calling ReplayJob
 		// We just mark it for replay here

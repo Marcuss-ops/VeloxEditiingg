@@ -112,15 +112,15 @@ func (s *Service) getToken(ctx context.Context) (*Token, error) {
 
 	// Check if token needs refresh (5 minutes before expiry)
 	if time.Until(token.Expiry) < 5*time.Minute {
-		log.Printf("🔑 Token expired or expiring soon, refreshing...")
+		log.Printf("[AUTH] Token expired or expiring soon, refreshing...")
 		newToken, err := RefreshToken(ctx, s.oauthCfg, token.RefreshToken)
 		if err != nil {
-			log.Printf("🔑 Token refresh failed: %v", err)
+			log.Printf("[AUTH] Token refresh failed: %v", err)
 			return nil, fmt.Errorf("failed to refresh token: %w", err)
 		}
 		newToken.AccountEmail = token.AccountEmail
 		s.SetToken(newToken)
-		log.Printf("🔑 Token refreshed successfully, expires: %v", newToken.Expiry)
+		log.Printf("[AUTH] Token refreshed successfully, expires: %v", newToken.Expiry)
 		return newToken, nil
 	}
 
@@ -235,7 +235,7 @@ func (s *Service) CreateFolder(ctx context.Context, name string, parentID string
 		parentID = "root"
 	}
 
-	log.Printf("📁 Creating folder '%s' in parent '%s'", name, parentID)
+	log.Printf("[DRIVE] Creating folder '%s' in parent '%s'", name, parentID)
 
 	folderMeta := map[string]interface{}{
 		"name":     name,
@@ -250,11 +250,11 @@ func (s *Service) CreateFolder(ctx context.Context, name string, parentID string
 
 	var result File
 	if err := s.doAPIRequest(ctx, "POST", "/files?fields=id,name", bytes.NewReader(body), &result); err != nil {
-		log.Printf("📁 Failed to create folder: %v", err)
+		log.Printf("[DRIVE] Failed to create folder: %v", err)
 		return nil, err
 	}
 
-	log.Printf("📁 Created folder '%s' (ID: %s)", name, result.ID)
+	log.Printf("[DRIVE] Created folder '%s' (ID: %s)", name, result.ID)
 
 	// Verify folder exists by listing it
 	verifyCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
@@ -265,11 +265,11 @@ func (s *Service) CreateFolder(ctx context.Context, name string, parentID string
 		Files []File `json:"files"`
 	}
 	if err := s.doAPIRequest(verifyCtx, "GET", verifyEndpoint, nil, &verifyResult); err != nil {
-		log.Printf("📁 Warning: could not verify folder: %v", err)
+		log.Printf("[WARN] Warning: could not verify folder: %v", err)
 	} else if len(verifyResult.Files) == 0 {
-		log.Printf("📁 Warning: folder verification returned empty (folder may not be accessible)")
+		log.Printf("[WARN] Warning: folder verification returned empty (folder may not be accessible)")
 	} else {
-		log.Printf("📁 Folder verified: %s", verifyResult.Files[0].ID)
+		log.Printf("[DRIVE] Folder verified: %s", verifyResult.Files[0].ID)
 	}
 
 	return &Folder{
@@ -370,7 +370,7 @@ func (s *Service) UploadFile(ctx context.Context, filePath string, folderID stri
 		return nil, fmt.Errorf("failed to decode upload response: %w", err)
 	}
 
-	log.Printf("☁️ Uploaded '%s' to Drive (ID: %s)", fileName, result.ID)
+	log.Printf("[CLOUD] Uploaded '%s' to Drive (ID: %s)", fileName, result.ID)
 
 	folderLink := ""
 	if folderID != "" {
@@ -427,7 +427,7 @@ func (s *Service) DownloadFile(ctx context.Context, fileID string, destPath stri
 		return fmt.Errorf("failed to write file content: %w", err)
 	}
 
-	log.Printf("📥 Downloaded file %s to %s", fileID, destPath)
+	log.Printf("[DRIVE] Downloaded file %s to %s", fileID, destPath)
 	return nil
 }
 
@@ -467,7 +467,7 @@ func (s *Service) DownloadFilesFromFolder(ctx context.Context, folderID string, 
 
 		destPath := filepath.Join(destDir, file.Name)
 		if err := s.DownloadFile(ctx, file.ID, destPath); err != nil {
-			log.Printf("⚠️ Failed to download %s: %v", file.Name, err)
+			log.Printf("[WARN] Failed to download %s: %v", file.Name, err)
 			continue
 		}
 		downloadedFiles = append(downloadedFiles, destPath)

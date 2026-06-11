@@ -21,27 +21,27 @@ func APIExplorer(r *gin.Engine) gin.HandlerFunc {
 			var category string
 
 			if strings.Contains(path, "ansible") {
-				category = "🛠️ Ansible (Gestione Server)"
+				category = "[TOOL] Ansible (Gestione Server)"
 			} else if strings.Contains(path, "finance") {
-				category = "💰 Finance & Revenue"
+				category = "[NAV] Finance & Revenue"
 			} else if strings.Contains(path, "/summary") || strings.Contains(path, "/realtime") {
-				category = "📊 Panoramica & Dashboard Principale"
+				category = "[NAV] Panoramica & Dashboard Principale"
 			} else if strings.Contains(path, "dashboard") || strings.Contains(path, "analytics") {
-				category = "📈 Views & Metriche"
+				category = "[NAV] Views & Metriche"
 			} else if strings.Contains(path, "youtube") || strings.Contains(path, "channel") {
-				category = "▶️ YouTube Manager"
+				category = "[PLAY] YouTube Manager"
 			} else if strings.HasPrefix(path, "/api/v1/jobs") || path == "/jobs" || strings.HasPrefix(path, "/api/v1/queue") || strings.Contains(path, "job") {
-				category = "⚙️ Generazione & Jobs"
+				category = "[CONFIG] Generazione & Jobs"
 			} else if strings.Contains(path, "worker") {
-				category = "🤖 Gestione Worker"
+				category = "[NAV] Gestione Worker"
 			} else if strings.Contains(path, "drive") || strings.Contains(path, "clip") || strings.Contains(path, "stock") {
-				category = "📁 Cloud Storage & Assets"
+				category = "[NAV] Cloud Storage & Assets"
 			} else if strings.Contains(path, "script") || strings.Contains(path, "pipeline") {
-				category = "📝 Scripting & Pipeline AI"
+				category = "[NAV] Scripting & Pipeline AI"
 			} else if strings.Contains(path, "health") || strings.Contains(path, "status") || strings.Contains(path, "explorer") {
-				category = "🩺 Monitoraggio & API System"
+				category = "[NAV] Monitoraggio & API System"
 			} else {
-				category = "📦 Altri Endpoint API"
+				category = "[NAV] Altri Endpoint API"
 			}
 
 			grouped[category] = append(grouped[category], route)

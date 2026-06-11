@@ -14,6 +14,7 @@
   vars:
     velox_dir: "/opt/velox"
     master_url: "{{ master_url | default('http://127.0.0.1:8000') }}"
+    version_number: "{{ lookup('file', playbook_dir + '/../../../../VERSION.txt') | trim }}"
 
   tasks:
     # ── PRE-CHECK: connesione ────────────────────────────────
@@ -110,17 +111,16 @@
       changed_when: "'successfully' in (docker_build.stdout | default(''))"
       failed_when: false
 
-    # ── RIAVVIO SERVIZIO ─────────────────────────────────────
-    - name: Update | Riavvia servizio worker
-      ansible.builtin.systemd:
-        name: "velox-worker-{{ inventory_hostname }}"
-        state: restarted
-        daemon_reload: yes
-        enabled: yes
-      failed_when: false
-      register: service_restart
+    # ── RIAPPLICA PIPELINE SYSTEMD AGGIORNATA ────────────────
+    # L'update non deve limitarsi a rebuild/restart: i nodi vecchi devono
+    # ricevere anche la stessa unit/service pipeline usata dall'install.
+    - name: Update | Riapplica setup systemd worker aggiornato
+      ansible.builtin.include_tasks:
+        file: tasks/systemd_setup.yml
+      vars:
+        install_showlog_wrapper: false
 
-    - name: Update | Verifica stato servizio dopo riavvio
+    - name: Update | Verifica stato servizio dopo update
       ansible.builtin.systemd:
         name: "velox-worker-{{ inventory_hostname }}"
       register: service_status

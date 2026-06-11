@@ -435,7 +435,7 @@ func (sq *StreamsQueue) ReclaimStaleJobs(ctx context.Context, maxIdle time.Durat
 		job.UpdatedAt = time.Now().UTC()
 
 		if err := sq.storeJobMeta(ctx, job); err != nil {
-			log.Printf("⚠️ Failed to reclaim job %s: %v", job.JobID[:8], err)
+			log.Printf("[WARN] Failed to reclaim job %s: %v", job.JobID[:8], err)
 			continue
 		}
 		reclaimed++

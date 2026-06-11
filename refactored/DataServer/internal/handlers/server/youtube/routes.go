@@ -35,7 +35,7 @@ func (h *YouTubeHandlers) ListTokens(c *gin.Context) {
 	files := []string{}
 	entries, err := os.ReadDir(tokensDir)
 	if err != nil {
-		log.Printf("⚠️ Failed to read tokens directory %s: %v", tokensDir, err)
+		log.Printf("[WARN] Failed to read tokens directory %s: %v", tokensDir, err)
 		c.JSON(http.StatusOK, gin.H{
 			"ok":    true,
 			"files": []string{},

@@ -233,7 +233,7 @@ func (q *FileQueue) CleanupOldJobs(ctx context.Context, age time.Duration) (int,
 		return 0, err
 	}
 
-	log.Printf("🧹 Cleaned up %d old jobs from SQLite", count)
+	log.Printf("[CLEANUP] Cleaned up %d old jobs from SQLite", count)
 	return int(count), nil
 }
 

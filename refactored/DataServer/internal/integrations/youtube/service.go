@@ -72,7 +72,7 @@ func NewService(cfg *ServiceConfig) (*Service, error) {
 	s.quotaManager = NewQuotaManager(s)
 
 	if err := s.loadOAuthConfig(); err != nil {
-		log.Printf("⚠️ YouTube OAuth config not loaded: %v", err)
+		log.Printf("[WARN] YouTube OAuth config not loaded: %v", err)
 	}
 
 	s.loadChannels()

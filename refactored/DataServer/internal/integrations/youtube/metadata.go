@@ -63,7 +63,7 @@ func (vm *VideoManager) UpdateVideoMetadata(ctx context.Context, channelID strin
 		return fmt.Errorf("failed to update video: %w", err)
 	}
 
-	log.Printf("✅ Video metadata updated: %s", videoID)
+	log.Printf("[OK] Video metadata updated: %s", videoID)
 	return nil
 }
 
@@ -79,7 +79,7 @@ func (vm *VideoManager) DeleteVideo(ctx context.Context, channelID string, video
 		return fmt.Errorf("failed to delete video: %w", err)
 	}
 
-	log.Printf("✅ Video deleted: %s", videoID)
+	log.Printf("[OK] Video deleted: %s", videoID)
 	return nil
 }
 // ListVideos lists videos for a channel with cache support
@@ -121,7 +121,7 @@ func (vm *VideoManager) ListVideos(ctx context.Context, channelID string, maxRes
 	playlistResponse, err := playlistCall.Do()
 	if err != nil {
 		// Fallback to Search.List if playlist fetching fails
-		log.Printf("⚠️ PlaylistItems failed for %s, falling back to Search.List: %v", channelID, err)
+		log.Printf("[WARN] PlaylistItems failed for %s, falling back to Search.List: %v", channelID, err)
 		searchCall := service.Search.List([]string{"snippet"}).
 			ForMine(true).
 			Type("video").
@@ -225,12 +225,12 @@ func (vm *VideoManager) LogMetadataChange(ctx context.Context, channelID string,
 	// 1. Get current stats as "Before" snapshot
 	stats, err := vm.service.QuotaManager().FetchAnalytics(ctx, channelID, 7) // Last 7 days
 	if err == nil && stats != nil {
-		log.Printf("📊 Stats snapshot taken for video %s: %v", videoID, stats["totals"])
+		log.Printf("[YT] Stats snapshot taken for video %s: %v", videoID, stats["totals"])
 	}
 
 	// 2. Log to database
 	// This would use a sqlite table 'metadata_ab_tests'
-	log.Printf("📝 Logging A/B test: %s changed %s from '%s' to '%s'", videoID, testType, oldValue, newValue)
+	log.Printf("[YT] Logging A/B test: %s changed %s from '%s' to '%s'", videoID, testType, oldValue, newValue)
 	
 	return nil
 }
@@ -239,7 +239,7 @@ func (vm *VideoManager) LogMetadataChange(ctx context.Context, channelID string,
 // Note: Official Data API v3 doesn't support Community Posts directly yet.
 // This is a placeholder for when the API or a web-automation fallback is used.
 func (vm *VideoManager) PostToCommunity(ctx context.Context, channelID string, post CommunityPost) error {
-	log.Printf("📢 Preparing Community Post for channel %s: %s", channelID, post.Text)
+	log.Printf("[YT] Preparing Community Post for channel %s: %s", channelID, post.Text)
 	// Currently, YouTube requires the YouTube Social API or Partner API for community posts.
 	return fmt.Errorf("community posts are currently restricted by YouTube API v3")
 }

@@ -92,7 +92,8 @@ func (w *VideoGenerationWorkflow) runNativeCxxEngine(
 	}
 
 	w.logger.Info("Launching native C++ engine: %s", binaryPath)
-	cmd := exec.CommandContext(ctx, binaryPath, "--request", requestPath)
+	// The current C++ engine expects the explicit full pipeline subcommand.
+	cmd := exec.CommandContext(ctx, binaryPath, "--full-video", "--request", requestPath)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	cmd.Stdout = &stdout

@@ -73,6 +73,10 @@ type Worker struct {
 	commandMu    sync.Mutex
 	seenCommands map[string]time.Time
 
+	// Job completion stats for heartbeat reporting
+	jobsCompleted atomic.Int64
+	jobsFailed    atomic.Int64
+
 	recentLogs *recentLogBuffer
 
 	// Concurrency limiter (Phase 1: worker policy)
@@ -164,7 +168,12 @@ func New(cfg *config.WorkerConfig, version string) *Worker {
 	apiClient := api.NewClient(cfg.MasterURL,
 		api.WithWorkerID(cfg.WorkerID),
 		api.WithTimeout(30*time.Second),
-		api.WithRetry(3, 5*time.Second), // Add retry support
+		api.WithRetry(3, 5*time.Second),
+		api.WithCircuitBreaker(
+			cfg.CircuitBreakerFailureThreshold,
+			cfg.CircuitBreakerSuccessThreshold,
+			time.Duration(cfg.CircuitBreakerTimeoutSecs)*time.Second,
+		),
 	)
 
 	// Initialize stage executor for GOD workflow

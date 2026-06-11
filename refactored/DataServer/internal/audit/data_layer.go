@@ -242,9 +242,9 @@ func (r *DataLayerAuditResult) FailOnError() error {
 func (r *DataLayerAuditResult) String() string {
 	var sb strings.Builder
 	if r.Passed {
-		sb.WriteString("✅ Data Layer Audit PASSED\n")
+		sb.WriteString("[OK] Data Layer Audit PASSED\n")
 	} else {
-		sb.WriteString("❌ Data Layer Audit FAILED\n")
+		sb.WriteString("[ERROR] Data Layer Audit FAILED\n")
 	}
 	
 	sb.WriteString(fmt.Sprintf("DataDir: %s\n", r.DataDir))

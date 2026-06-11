@@ -1,6 +1,7 @@
 # Velox Worker Agent - Build System
 
-VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
+VERSION_FILE ?= ../../../VERSION.txt
+VERSION ?= $(shell if [ -f "$(VERSION_FILE)" ]; then cat "$(VERSION_FILE)"; else git describe --tags --always --dirty 2>/dev/null || echo "dev"; fi)
 BUILD_TIME ?= $(shell date -u '+%Y-%m-%d_%H:%M:%S')
 LDFLAGS := -ldflags "-X main.Version=$(VERSION) -X main.BuildTime=$(BUILD_TIME)"
 

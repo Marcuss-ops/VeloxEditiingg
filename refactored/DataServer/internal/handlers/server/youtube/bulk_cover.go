@@ -259,6 +259,6 @@ func (h *YouTubeHandlers) persistAppliedCoverAsset(ctx context.Context, req Bulk
 	}
 
 	if err := h.store.CreateAsset(ctx, asset); err != nil {
-		log.Printf("⚠️ Dark Editor: failed to save applied cover asset for channel %s: %v", req.ChannelID, err)
+		log.Printf("[WARN] Dark Editor: failed to save applied cover asset for channel %s: %v", req.ChannelID, err)
 	}
 }

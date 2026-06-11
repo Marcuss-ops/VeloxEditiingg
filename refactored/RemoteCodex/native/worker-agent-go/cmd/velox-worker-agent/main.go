@@ -99,6 +99,12 @@ func main() {
 	if *logLevel != "" {
 		cfg.LogLevel = *logLevel
 	}
+	if bundleVersion := os.Getenv("VELOX_BUNDLE_VERSION"); bundleVersion != "" {
+		cfg.BundleVersion = bundleVersion
+	}
+	if cfg.BundleVersion == "" {
+		cfg.BundleVersion = Version
+	}
 
 	// Validate config
 	if err := cfg.Validate(); err != nil {

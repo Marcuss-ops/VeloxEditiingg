@@ -186,7 +186,7 @@ func (h *YouTubeHandlers) ListVideos(c *gin.Context) {
 			strings.Contains(errMsg, "invalid_grant") ||
 			strings.Contains(errMsg, "refresh token is not set") ||
 			strings.Contains(errMsg, "oauth2:") {
-			log.Printf("⚠️ ListVideos skipped for %s: %s", channelID, errMsg)
+			log.Printf("[WARN] ListVideos skipped for %s: %s", channelID, errMsg)
 			c.JSON(http.StatusOK, gin.H{
 				"ok":     true,
 				"videos": []gin.H{},
@@ -280,7 +280,7 @@ func (h *YouTubeHandlers) ListGroupPrivateVideos(c *gin.Context) {
 
 		videos, err := h.service.ListVideos(ctx, chID, 50)
 		if err != nil {
-			log.Printf("⚠️ ListGroupPrivateVideos: skipped channel %s (%s): %v", ch.Title, chID, err)
+			log.Printf("[WARN] ListGroupPrivateVideos: skipped channel %s (%s): %v", ch.Title, chID, err)
 			continue
 		}
 
@@ -302,7 +302,7 @@ func (h *YouTubeHandlers) ListGroupPrivateVideos(c *gin.Context) {
 			}
 			pubTime, err := time.Parse(time.RFC3339, publishedAt)
 			if err != nil {
-				log.Printf("⚠️ ListGroupPrivateVideos: skipped video %s (%s) with invalid published_at %q: %v", vid, chID, publishedAt, err)
+				log.Printf("[WARN] ListGroupPrivateVideos: skipped video %s (%s) with invalid published_at %q: %v", vid, chID, publishedAt, err)
 				continue
 			}
 			if pubTime.Before(cutoff) {
@@ -360,7 +360,7 @@ func (h *YouTubeHandlers) RefreshAnalytics(c *gin.Context) {
 
 	data, err := h.service.FetchAnalytics(ctx, channelID, days)
 	if err != nil {
-		log.Printf("❌ Analytics fetch failed for %s: %v", channelID, err)
+		log.Printf("[ERROR] Analytics fetch failed for %s: %v", channelID, err)
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"ok":    false,
 			"error": err.Error(),
@@ -371,7 +371,7 @@ func (h *YouTubeHandlers) RefreshAnalytics(c *gin.Context) {
 	// Process and update cache
 	err = h.service.UpdateAnalyticsCache(ctx, channelID, days, data)
 	if err != nil {
-		log.Printf("❌ Analytics cache update failed for %s: %v", channelID, err)
+		log.Printf("[ERROR] Analytics cache update failed for %s: %v", channelID, err)
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"ok":    false,
 			"error": fmt.Sprintf("Failed to update cache: %v", err),

@@ -51,7 +51,7 @@ func MasterCodeVersion(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"ok":             true,
 		"server":         "velox-server",
-		"version_number": "1.0.0",
+		"version_number": "v1.0.1",
 		"timestamp":      now,
 	})
 }

@@ -20,7 +20,7 @@ func (h *Handler) ListFolders(c *gin.Context) {
 
 	folders, err := h.store.ListFolders(ctx)
 	if err != nil {
-		log.Printf("❌ ListFolders: %v", err)
+		log.Printf("[ERROR] ListFolders: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list folders"})
 		return
 	}
@@ -43,7 +43,7 @@ func (h *Handler) GetFolder(c *gin.Context) {
 
 	folder, err := h.store.GetFolder(ctx, folderID)
 	if err != nil {
-		log.Printf("❌ GetFolder: %v", err)
+		log.Printf("[ERROR] GetFolder: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve folder"})
 		return
 	}
@@ -72,7 +72,7 @@ func (h *Handler) CreateFolder(c *gin.Context) {
 		ParentID: req.ParentID,
 	}
 	if err := h.store.CreateFolder(ctx, folder); err != nil {
-		log.Printf("❌ CreateFolder: %v", err)
+		log.Printf("[ERROR] CreateFolder: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create folder"})
 		return
 	}
@@ -95,7 +95,7 @@ func (h *Handler) UpdateFolder(c *gin.Context) {
 	ctx := c.Request.Context()
 	folder, err := h.store.GetFolder(ctx, folderID)
 	if err != nil {
-		log.Printf("❌ UpdateFolder (fetch): %v", err)
+		log.Printf("[ERROR] UpdateFolder (fetch): %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load folder"})
 		return
 	}
@@ -112,7 +112,7 @@ func (h *Handler) UpdateFolder(c *gin.Context) {
 	}
 
 	if err := h.store.UpdateFolder(ctx, folder); err != nil {
-		log.Printf("❌ UpdateFolder: %v", err)
+		log.Printf("[ERROR] UpdateFolder: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update folder"})
 		return
 	}
@@ -129,7 +129,7 @@ func (h *Handler) DeleteFolder(c *gin.Context) {
 	ctx := c.Request.Context()
 
 	if err := h.store.DeleteFolder(ctx, folderID); err != nil {
-		log.Printf("❌ DeleteFolder: %v", err)
+		log.Printf("[ERROR] DeleteFolder: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete folder"})
 		return
 	}
@@ -154,7 +154,7 @@ func (h *Handler) AssignProjectToFolder(c *gin.Context) {
 		req.FolderID = nil
 	}
 	if err := h.store.AssignProjectFolder(ctx, projectID, req.FolderID); err != nil {
-		log.Printf("❌ AssignProjectToFolder: %v", err)
+		log.Printf("[ERROR] AssignProjectToFolder: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to assign folder"})
 		return
 	}

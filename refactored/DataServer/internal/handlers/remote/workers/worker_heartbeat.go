@@ -12,12 +12,14 @@ import (
 func (wl *WorkerLifecycle) HeartbeatCompatHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var body struct {
-			WorkerID   string                 `json:"worker_id"`
-			WorkerName string                 `json:"worker_name"`
-			Status     string                 `json:"status"`
-			CurrentJob string                 `json:"current_job"`
-			JobID      string                 `json:"job_id"`
-			Extra      map[string]interface{} `json:"extra"`
+			WorkerID      string                 `json:"worker_id"`
+			WorkerName    string                 `json:"worker_name"`
+			Status        string                 `json:"status"`
+			CurrentJob    string                 `json:"current_job"`
+			JobID         string                 `json:"job_id"`
+			CodeVersion   string                 `json:"code_version"`
+			BundleVersion string                 `json:"bundle_version"`
+			Extra         map[string]interface{} `json:"extra"`
 		}
 
 		if err := c.ShouldBindJSON(&body); err != nil {
@@ -144,7 +146,7 @@ func (wl *WorkerLifecycle) UpdateStatusCompatHandler() gin.HandlerFunc {
 			return
 		}
 
-		log.Printf("📡 Worker status update: worker=%s status=%s details=%v", body.WorkerID, body.Status, body.Details)
+		log.Printf("[UPDATE] Worker status update: worker=%s status=%s details=%v", body.WorkerID, body.Status, body.Details)
 
 		existing := wl.reg.GetWorker(c.Request.Context(), body.WorkerID)
 		recentLogs := []string{}

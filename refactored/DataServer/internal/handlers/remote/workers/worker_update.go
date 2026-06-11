@@ -22,7 +22,6 @@ import (
 type WorkerUpdateHandler struct {
 	cfg          *config.Config
 	reg          *workersreg.Registry
-	persistedReg *workersreg.WorkerRegistry
 	cmdMgr       *workersreg.CommandManager
 	updateMgr    *workersreg.UpdateManager
 	tokenMgr     *workersreg.TokenManager
@@ -120,7 +119,7 @@ func findRepoRootFrom(start string) string {
 }
 
 // NewWorkerUpdateHandler creates a new worker update handler
-func NewWorkerUpdateHandler(cfg *config.Config, reg *workersreg.Registry, persistedReg *workersreg.WorkerRegistry, cmdMgr *workersreg.CommandManager, updateMgr *workersreg.UpdateManager, tokenMgr *workersreg.TokenManager, dataDir string) *WorkerUpdateHandler {
+func NewWorkerUpdateHandler(cfg *config.Config, reg *workersreg.Registry, cmdMgr *workersreg.CommandManager, updateMgr *workersreg.UpdateManager, tokenMgr *workersreg.TokenManager, dataDir string) *WorkerUpdateHandler {
 	bundleDir := cfg.WorkerBundleDir
 	if bundleDir == "" {
 		for _, d := range bundleDirCandidates(dataDir) {
@@ -137,12 +136,11 @@ func NewWorkerUpdateHandler(cfg *config.Config, reg *workersreg.Registry, persis
 		}
 	}
 
-	log.Printf("📦 WORKER UPDATE: Using bundle directory: %s", bundleDir)
+	log.Printf("[UPDATE] Using bundle directory: %s", bundleDir)
 
 	return &WorkerUpdateHandler{
 		cfg:          cfg,
 		reg:          reg,
-		persistedReg: persistedReg,
 		cmdMgr:       cmdMgr,
 		updateMgr:    updateMgr,
 		tokenMgr:     tokenMgr,

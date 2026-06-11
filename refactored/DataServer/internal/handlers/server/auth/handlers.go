@@ -344,5 +344,5 @@ func RegisterRoutes(r *gin.Engine, h *Handler) {
 		auth.GET("/me", h.AuthMiddleware(), h.GetMe)
 	}
 
-	log.Printf("✅ Auth routes registered at /api/auth/*")
+	log.Printf("[OK] Auth routes registered at /api/auth/*")
 }

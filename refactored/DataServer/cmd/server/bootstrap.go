@@ -32,7 +32,6 @@ type serverDeps struct {
 	redisQ              *queue.Queue
 	streamsQ            *queue.StreamsQueue
 	reg                 *workersreg.Registry
-	persistedReg        *workersreg.WorkerRegistry
 	jobAPI              *jobapi.JobAPI
 	jobSubmitHandler    *jobapi.JobSubmissionHandler
 	workersRepo         store.WorkersRepository
@@ -127,14 +126,16 @@ func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
 		return nil, err
 	}
 
-	reg := workersreg.New(nil, false, sqliteStore)
-	persistedReg := workersreg.NewWorkerRegistry(cfg.DataDir, sqliteStore)
+	reg := workersreg.NewWithPersistence(nil, false, sqliteStore, cfg.DataDir)
 
-	// Load revoked workers from persisted file into in-memory registry
-	// so that revoked workers cannot heartbeat their way back in after a restart.
-	if revokedIDs := persistedReg.ListRevoked(); len(revokedIDs) > 0 {
-		reg.LoadRevoked(revokedIDs)
-		log.Printf("🔒 Loaded %d revoked workers from %s", len(revokedIDs), cfg.DataDir)
+	// Log loaded revoked workers
+	revokedCount := 0
+	for _, id := range reg.ListRevoked() {
+		_ = id
+		revokedCount++
+	}
+	if revokedCount > 0 {
+		log.Printf("[BOOTSTRAP] Loaded %d revoked workers from %s", revokedCount, cfg.DataDir)
 	}
 
 	jobsRepo := store.NewSQLiteJobsRepository(sqliteStore)
@@ -142,23 +143,23 @@ func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
 	jobService := jobservice.NewService(cfg, fileQ, nil, jobsRepo, nil, reg)
 	jobAPI := jobapi.NewJobAPI(cfg, fileQ, nil, jobService)
 	jobSubmitHandler := jobapi.NewJobSubmissionHandler(cfg, fileQ)
-	workerLifecycle := workersapi.NewWorkerLifecycle(cfg, reg, persistedReg, cfg.DataDir)
+	workerLifecycle := workersapi.NewWorkerLifecycle(cfg, reg, cfg.DataDir)
 
 	// ── Worker Update Handler (bundle download, manifest, etc.) ─────
 	cmdMgr := workersreg.NewCommandManager()
 	updateMgr := workersreg.NewUpdateManager()
 	tokenMgr := workersreg.NewTokenManager()
-	workerUpdateHandler := workersapi.NewWorkerUpdateHandler(cfg, reg, persistedReg, cmdMgr, updateMgr, tokenMgr, cfg.DataDir)
+	workerUpdateHandler := workersapi.NewWorkerUpdateHandler(cfg, reg, cmdMgr, updateMgr, tokenMgr, cfg.DataDir)
 
 	// ── Ansible (playbooks per worker remoti) ───────────────────────
 	var ansibleHandlers *remoteansible.AnsibleHandlers
 	if err := os.MkdirAll(cfg.PlaybookDir, 0755); err != nil {
-		log.Printf("⚠️  Cannot create ansible playbook dir %s: %v", cfg.PlaybookDir, err)
+		log.Printf("[BOOTSTRAP] Cannot create ansible playbook dir %s: %v", cfg.PlaybookDir, err)
 	} else {
 		ansibleManager := remoteansible.NewAnsibleRunManager(cfg.PlaybookDir, cfg.DataDir)
 		computerMgr := remoteansible.NewAnsibleComputerManager(cfg.DataDir)
 		if err := computerMgr.LoadComputers(); err != nil {
-			log.Printf("⚠️  Failed to load ansible computers: %v", err)
+			log.Printf("[BOOTSTRAP] Failed to load ansible computers: %v", err)
 		}
 
 		ah := remoteansible.NewAnsibleHandlers(ansibleManager)
@@ -167,9 +168,9 @@ func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
 		ansibleHandlers = ah
 
 		if ansibleManager.Ready() {
-			log.Printf("✅ Ansible handlers initialized (playbooks: %s)", cfg.PlaybookDir)
+			log.Printf("[BOOTSTRAP] Ansible handlers initialized (playbooks: %s)", cfg.PlaybookDir)
 		} else {
-			log.Printf("⚠️  ansible-playbook not found in PATH — Ansible features disabled (install with: apt install ansible)")
+			log.Printf("[BOOTSTRAP] ansible-playbook not found in PATH - Ansible features disabled (install with: apt install ansible)")
 		}
 	}
 
@@ -177,7 +178,6 @@ func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
 		paths:               &serverPaths{dataDir: cfg.DataDir},
 		fileQ:               fileQ,
 		reg:                 reg,
-		persistedReg:        persistedReg,
 		jobAPI:              jobAPI,
 		jobSubmitHandler:    jobSubmitHandler,
 		workersRepo:         workersRepo,
@@ -202,6 +202,13 @@ func runServer(cfg *config.Config) error {
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
-	log.Printf("🚀 Velox master listening on %s", addr)
+	log.Printf("[SERVER] Velox master listening on %s", addr)
+
+	// Use TLS if cert and key are configured
+	if cfg.TLSCertFile != "" && cfg.TLSKeyFile != "" {
+		log.Printf("[SERVER] TLS enabled (cert: %s, key: %s)", cfg.TLSCertFile, cfg.TLSKeyFile)
+		return srv.ListenAndServeTLS(cfg.TLSCertFile, cfg.TLSKeyFile)
+	}
+
 	return srv.ListenAndServe()
 }

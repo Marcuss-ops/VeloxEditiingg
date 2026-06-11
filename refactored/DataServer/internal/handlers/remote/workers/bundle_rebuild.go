@@ -15,9 +15,9 @@ import (
 func (h *WorkerUpdateHandler) ForceRegenerateZipHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		wait := c.DefaultQuery("wait", "0") == "1"
-		log.Printf("🔍 DEBUG: h.bundleDir = %q", h.bundleDir)
+		log.Printf("[DEBUG] DEBUG: h.bundleDir = %q", h.bundleDir)
 		repoRoot := findRepoRootFrom(h.bundleDir)
-		log.Printf("🔍 DEBUG: repoRoot = %q", repoRoot)
+		log.Printf("[DEBUG] DEBUG: repoRoot = %q", repoRoot)
 		if repoRoot == "" {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "repo root not found for rebuild tool", "bundleDir": h.bundleDir})
 			return
@@ -35,10 +35,10 @@ func (h *WorkerUpdateHandler) ForceRegenerateZipHandler() gin.HandlerFunc {
 
 			out, err := cmd.CombinedOutput()
 			if err != nil {
-				log.Printf("❌ rebuild bundle failed: %v | %s", err, strings.TrimSpace(string(out)))
+				log.Printf("[ERROR] rebuild bundle failed: %v | %s", err, strings.TrimSpace(string(out)))
 				return "", err
 			}
-			log.Printf("✅ rebuild bundle V2 completed: %s", strings.TrimSpace(string(out)))
+			log.Printf("[OK] rebuild bundle V2 completed: %s", strings.TrimSpace(string(out)))
 			bundlePath, _, err := resolveBundlePath(h.bundleDir, "linux", "x86_64")
 			if err != nil {
 				return "", err

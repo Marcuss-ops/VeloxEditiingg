@@ -13,7 +13,6 @@ import (
 type WorkerLifecycle struct {
 	cfg           *config.Config
 	reg           *workersreg.Registry
-	persistedReg  *workersreg.WorkerRegistry
 	cmdMgr        *workersreg.CommandManager
 	updateMgr     *workersreg.UpdateManager
 	tokenMgr      *workersreg.TokenManager
@@ -34,11 +33,10 @@ func (wl *WorkerLifecycle) authorizeWorkerRequest(c *gin.Context, workerID strin
 	return true
 }
 
-func NewWorkerLifecycle(cfg *config.Config, reg *workersreg.Registry, persistedReg *workersreg.WorkerRegistry, dataDir string) *WorkerLifecycle {
+func NewWorkerLifecycle(cfg *config.Config, reg *workersreg.Registry, dataDir string) *WorkerLifecycle {
 	return &WorkerLifecycle{
 		cfg:           cfg,
 		reg:           reg,
-		persistedReg:  persistedReg,
 		cmdMgr:        workersreg.NewCommandManager(),
 		updateMgr:     workersreg.NewUpdateManager(),
 		tokenMgr:      workersreg.NewTokenManager(),
@@ -77,7 +75,7 @@ func (wl *WorkerLifecycle) RegisterV2Handler() gin.HandlerFunc {
 			return
 		}
 
-		if wl.persistedReg != nil && wl.persistedReg.IsRevoked(body.WorkerID) {
+		if wl.reg.IsRevoked(body.WorkerID) {
 			c.Status(http.StatusNoContent)
 			return
 		}
@@ -112,16 +110,12 @@ func (wl *WorkerLifecycle) RegisterV2Handler() gin.HandlerFunc {
 			return
 		}
 
-		if wl.persistedReg != nil {
-			wl.persistedReg.Register(body.WorkerID, workerName, ipAddress)
-		}
-
 		pendingUpdate := wl.updateMgr.GetPendingUpdate(body.WorkerID)
 		if pendingUpdate != nil && pendingUpdate.Ack {
-			log.Printf("🔄 Worker %s reconnected after update (version: %s)", workerName, pendingUpdate.AckVersion)
+			log.Printf("[REGISTER] Worker %s reconnected after update (version: %s)", workerName, pendingUpdate.AckVersion)
 		}
 
-		log.Printf("✅ Worker registered: %s (%s) ip=%s", workerName, body.WorkerID[:min(16, len(body.WorkerID))]+"...", ipAddress)
+		log.Printf("[REGISTER] Worker registered: %s (%s) ip=%s", workerName, body.WorkerID[:min(16, len(body.WorkerID))]+"...", ipAddress)
 
 		c.JSON(http.StatusOK, gin.H{
 			"status":      "success",
@@ -134,13 +128,15 @@ func (wl *WorkerLifecycle) RegisterV2Handler() gin.HandlerFunc {
 func (wl *WorkerLifecycle) RegisterCompatHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var body struct {
-			WorkerID     string                 `json:"worker_id"`
-			WorkerName   string                 `json:"worker_name"`
-			Hostname     string                 `json:"hostname"`
-			IP           string                 `json:"ip"`
-			Version      string                 `json:"version"`
-			Capabilities map[string]bool        `json:"capabilities"`
-			Extra        map[string]interface{} `json:"extra"`
+			WorkerID      string                 `json:"worker_id"`
+			WorkerName    string                 `json:"worker_name"`
+			Hostname      string                 `json:"hostname"`
+			IP            string                 `json:"ip"`
+			Version       string                 `json:"version"`
+			CodeVersion   string                 `json:"code_version"`
+			BundleVersion string                 `json:"bundle_version"`
+			Capabilities  map[string]bool        `json:"capabilities"`
+			Extra         map[string]interface{} `json:"extra"`
 		}
 
 		if err := c.ShouldBindJSON(&body); err != nil {
@@ -153,7 +149,7 @@ func (wl *WorkerLifecycle) RegisterCompatHandler() gin.HandlerFunc {
 			return
 		}
 
-		if wl.persistedReg != nil && wl.persistedReg.IsRevoked(body.WorkerID) {
+		if wl.reg.IsRevoked(body.WorkerID) {
 			c.Status(http.StatusNoContent)
 			return
 		}
@@ -178,6 +174,12 @@ func (wl *WorkerLifecycle) RegisterCompatHandler() gin.HandlerFunc {
 		if body.Version != "" {
 			extra["code_version"] = body.Version
 		}
+		if body.CodeVersion != "" {
+			extra["code_version"] = body.CodeVersion
+		}
+		if body.BundleVersion != "" {
+			extra["bundle_version"] = body.BundleVersion
+		}
 		if body.Hostname != "" {
 			extra["host"] = body.Hostname
 		}
@@ -189,10 +191,6 @@ func (wl *WorkerLifecycle) RegisterCompatHandler() gin.HandlerFunc {
 		if err := wl.reg.RegisterWorker(ctx, body.WorkerID, workerName, ipAddress, extra); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": "registration failed"})
 			return
-		}
-
-		if wl.persistedReg != nil {
-			wl.persistedReg.Register(body.WorkerID, workerName, ipAddress)
 		}
 
 		c.JSON(http.StatusOK, gin.H{
@@ -256,7 +254,7 @@ func (wl *WorkerLifecycle) WorkerHelloHandler() gin.HandlerFunc {
 			return
 		}
 
-		if wl.persistedReg != nil && wl.persistedReg.IsRevoked(body.WorkerID) {
+		if wl.reg.IsRevoked(body.WorkerID) {
 			c.JSON(http.StatusForbidden, gin.H{
 				"status": "banned",
 				"reason": "Worker revoked",
@@ -266,7 +264,7 @@ func (wl *WorkerLifecycle) WorkerHelloHandler() gin.HandlerFunc {
 
 		token := wl.tokenMgr.GenerateToken(body.WorkerID)
 
-		log.Printf("👋 Handshake worker: %s (%s) bundle=%s",
+		log.Printf("[REGISTER] Handshake worker: %s (%s) bundle=%s",
 			body.WorkerName,
 			body.WorkerID[:min(16, len(body.WorkerID))]+"...",
 			body.BundleVersion)

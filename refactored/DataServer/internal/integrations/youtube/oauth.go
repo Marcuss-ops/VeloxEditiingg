@@ -51,7 +51,7 @@ func (s *Service) loadOAuthConfig() error {
 		s.authManager.oauthConfig = s.oauthConfig
 	}
 
-	log.Printf("✅ YouTube OAuth config loaded from %s", secretPath)
+	log.Printf("[OK] YouTube OAuth config loaded from %s", secretPath)
 	return nil
 }
 
@@ -67,7 +67,7 @@ func (pts *PersistedTokenSource) Token() (*oauth2.Token, error) {
 		return nil, err
 	}
 	if err := pts.save(t); err != nil {
-		log.Printf("⚠️ YouTube: Failed to save refreshed token: %v", err)
+		log.Printf("[WARN] YouTube: Failed to save refreshed token: %v", err)
 	}
 	return t, nil
 }
@@ -106,7 +106,7 @@ func (s *Service) GetYouTubeService(ctx context.Context, channelID string) (*you
 				if err := s.authManager.saveChannelToken(channel); err != nil {
 					return err
 				}
-				log.Printf("✅ YouTube token auto-refreshed and saved for channel: %s", channel.ID)
+				log.Printf("[OK] YouTube token auto-refreshed and saved for channel: %s", channel.ID)
 			}
 			return nil
 		},

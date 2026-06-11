@@ -145,7 +145,7 @@ func (c *APIClient) searchVideosAPI(ctx context.Context, query string, limit, da
 
 	videoDetails, err := c.fetchVideoDetails(ctx, videoIDs)
 	if err != nil {
-		log.Printf("⚠️ Failed to fetch video details: %v", err)
+		log.Printf("[WARN] Failed to fetch video details: %v", err)
 	}
 
 	var videos []Video

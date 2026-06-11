@@ -35,7 +35,7 @@ func (h *WorkerUpdateHandler) SendCommandHandler() gin.HandlerFunc {
 		}
 
 		// Check if worker is revoked
-		if h.persistedReg != nil && h.persistedReg.IsRevoked(workerID) {
+		if h.reg.IsRevoked(workerID) {
 			c.JSON(http.StatusForbidden, gin.H{"error": "Worker is revoked"})
 			return
 		}
@@ -51,7 +51,7 @@ func (h *WorkerUpdateHandler) SendCommandHandler() gin.HandlerFunc {
 		}
 		h.cmdMgr.PushCommand(workerID, command, params)
 
-		log.Printf("📤 Command '%s' queued for worker %s", command, workerID[:min(16, len(workerID))]+"...")
+		log.Printf("[COMMAND] Command '%s' queued for worker %s", command, workerID[:min(16, len(workerID))]+"...")
 
 		c.JSON(http.StatusOK, gin.H{
 			"status":    "queued",
@@ -128,7 +128,7 @@ func (h *WorkerUpdateHandler) SendCommandBulkHandler() gin.HandlerFunc {
 			}
 
 			// Check if revoked
-			if excludeRevoked && h.persistedReg != nil && h.persistedReg.IsRevoked(wid) {
+			if excludeRevoked && h.reg.IsRevoked(wid) {
 				skipped = append(skipped, wid)
 				continue
 			}
@@ -150,7 +150,7 @@ func (h *WorkerUpdateHandler) SendCommandBulkHandler() gin.HandlerFunc {
 			queued = append(queued, wid)
 		}
 
-		log.Printf("📤 Bulk command '%s': queued=%d skipped=%d invalid=%d",
+		log.Printf("[COMMAND] Bulk command '%s': queued=%d skipped=%d invalid=%d",
 			body.Command, len(queued), len(skipped), len(invalid))
 
 		c.JSON(http.StatusOK, gin.H{
@@ -172,7 +172,7 @@ func (h *WorkerUpdateHandler) eligibleWorkers(ctx context.Context, excludeLocal 
 	allWorkers := h.reg.List(ctx)
 	eligible := make([]string, 0, len(allWorkers))
 	for _, info := range allWorkers {
-		if h.persistedReg != nil && h.persistedReg.IsRevoked(info.WorkerID) {
+		if h.reg.IsRevoked(info.WorkerID) {
 			continue
 		}
 		if info.Drain {

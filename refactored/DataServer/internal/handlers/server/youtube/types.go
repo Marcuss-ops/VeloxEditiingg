@@ -42,7 +42,7 @@ func (h *YouTubeHandlers) ClearPrivateVideosCache() {
 	h.privateVideosCacheMu.Lock()
 	h.privateVideosCache = make(map[string]privateVideosCacheEntry)
 	h.privateVideosCacheMu.Unlock()
-	log.Printf("🧹 YouTubeHandlers: cleared private videos cache")
+	log.Printf("[CLEANUP] YouTubeHandlers: cleared private videos cache")
 }
 
 // GetService returns the underlying YouTube service for integration with other handlers

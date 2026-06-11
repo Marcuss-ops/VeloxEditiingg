@@ -62,7 +62,7 @@ func (h *YouTubeHandlers) OAuthCallback(c *gin.Context) {
 
 	channel, err := h.service.HandleOAuthCallback(ctx, code, channelName)
 	if err != nil {
-		log.Printf("❌ OAuth callback failed: %v", err)
+		log.Printf("[ERROR] OAuth callback failed: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": err.Error()})
 		return
 	}
@@ -77,7 +77,7 @@ func (h *YouTubeHandlers) OAuthCallback(c *gin.Context) {
 <html>
 <head><title>Authentication Successful</title></head>
 <body>
-<h2>✅ Authentication Successful!</h2>
+<h2>[OK] Authentication Successful!</h2>
 <p>Channel: %s</p>
 <p>You can close this window.</p>
 <script>

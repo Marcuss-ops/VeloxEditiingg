@@ -14,16 +14,21 @@ import (
 // WorkerConfig holds the worker configuration loaded from JSON.
 // Example config file: /opt/velox/worker_config.json
 type WorkerConfig struct {
-	MasterURL  string  `json:"master_url"`  // URL of the master server (e.g., http://master.example.com:8000)
-	WorkerID   string  `json:"worker_id"`   // Unique worker identifier (e.g., worker-001 or auto-generated)
-	WorkerName string  `json:"worker_name"` // Human-readable worker name (e.g., video-worker-1)
-	WorkDir    string  `json:"work_dir"`    // Base directory for velox installations (e.g., /opt/velox)
-	LogLevel   string  `json:"log_level"`   // Log level: debug, info, warn, error
+	MasterURL     string `json:"master_url"`  // URL of the master server (e.g., http://master.example.com:8000)
+	WorkerID      string `json:"worker_id"`   // Unique worker identifier (e.g., worker-001 or auto-generated)
+	WorkerName    string `json:"worker_name"` // Human-readable worker name (e.g., video-worker-1)
+	WorkDir       string `json:"work_dir"`    // Base directory for velox installations (e.g., /opt/velox)
+	LogLevel      string `json:"log_level"`   // Log level: debug, info, warn, error
+	BundleVersion string `json:"bundle_version,omitempty"`
 
 	// Worker policy
 	MaxActiveJobs  int `json:"max_active_jobs"` // Maximum concurrent active jobs (default: 1)
 	PrometheusPort int `json:"prometheus_port"` // Prometheus metrics port (default: 9090)
 
+	// Circuit breaker configuration
+	CircuitBreakerFailureThreshold int `json:"circuit_breaker_failure_threshold,omitempty"` // Failures to open circuit (default: 5)
+	CircuitBreakerSuccessThreshold int `json:"circuit_breaker_success_threshold,omitempty"` // Successes to close circuit (default: 3)
+	CircuitBreakerTimeoutSecs      int `json:"circuit_breaker_timeout_secs,omitempty"`      // Seconds before half-open (default: 60)
 }
 
 // ErrInvalidConfig is returned when configuration validation fails.
@@ -89,11 +94,12 @@ func DefaultConfig(workDir string) *WorkerConfig {
 	}
 
 	return &WorkerConfig{
-		MasterURL:  "http://localhost:8000",
-		WorkerID:   GenerateWorkerID(),
-		WorkerName: "velox-worker",
-		WorkDir:    workDir,
-		LogLevel:   "info",
+		MasterURL:     "http://localhost:8000",
+		WorkerID:      GenerateWorkerID(),
+		WorkerName:    "velox-worker",
+		WorkDir:       workDir,
+		LogLevel:      "info",
+		BundleVersion: "v1.0.1",
 
 		MaxActiveJobs: 1, // 1 main job per VPS
 	}

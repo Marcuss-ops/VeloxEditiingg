@@ -48,7 +48,7 @@ func (lm *WorkerLifecycleManager) RequestGracefulShutdown(ctx context.Context, w
 		})
 	}
 
-	log.Printf("📤 Graceful shutdown requested for worker %s: %s", workerID[:8], reason)
+	log.Printf("[SHUTDOWN] Graceful shutdown requested for worker %s: %s", workerID[:8], reason)
 	return nil
 }
 
@@ -120,7 +120,7 @@ func (lm *WorkerLifecycleManager) checkPendingShutdowns(ctx context.Context) {
 
 // forceWorkerShutdown forcibly removes a worker
 func (lm *WorkerLifecycleManager) forceWorkerShutdown(ctx context.Context, workerID string) {
-	log.Printf("⚠️ Force shutdown for worker %s", workerID[:8])
+	log.Printf("[SHUTDOWN] Force shutdown for worker %s", workerID[:8])
 
 	// Get remaining jobs first
 	var jobsToRecover []string
@@ -195,7 +195,7 @@ func (lm *WorkerLifecycleManager) handleWorkerOffline(ctx context.Context, worke
 
 // initiateJobRecovery attempts to recover jobs from offline worker
 func (lm *WorkerLifecycleManager) initiateJobRecovery(ctx context.Context, workerID string, jobIDs []string) {
-	log.Printf("🔧 Initiating job recovery for worker %s (%d jobs)", workerID[:8], len(jobIDs))
+	log.Printf("[RECOVERY] Initiating job recovery for worker %s (%d jobs)", workerID[:8], len(jobIDs))
 
 	for _, jobID := range jobIDs {
 		if lm.fileQueue != nil {

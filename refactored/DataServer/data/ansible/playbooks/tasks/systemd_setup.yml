@@ -23,6 +23,30 @@
       VELOX_SECONDARY_MASTER_URL={% if master_url_secondary is defined and master_url_secondary %}{{ master_url_secondary }}{% else %}{% endif %}
       WORKER_NAME={{ inventory_hostname }}
       VELOX_DIR={{ velox_dir }}
+      VELOX_BUNDLE_VERSION={{ version_number | default('v1.0.1') }}
+      VELOX_VERSION_NUMBER={{ version_number | default('v1.0.1') }}
+
+- name: Ensure worker config exists and disables Prometheus metrics
+  ansible.builtin.shell: |
+    set -euo pipefail
+    CFG=/tmp/velox-worker/worker_config.json
+    mkdir -p /tmp/velox-worker
+    if [ ! -f "$CFG" ]; then
+      /usr/local/bin/velox-worker-agent -generate-config -config "$CFG" -work-dir /app/RemoteCodex >/dev/null
+    fi
+    python3 - <<'PY'
+    import json
+    from pathlib import Path
+
+    cfg_path = Path("/tmp/velox-worker/worker_config.json")
+    data = json.loads(cfg_path.read_text())
+    data["prometheus_port"] = 0
+    cfg_path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+    PY
+  args:
+    executable: /bin/bash
+  register: worker_config_patch
+  changed_when: true
 
 - name: Detect current bundle layout (legacy refactored vs flat)
   ansible.builtin.stat:

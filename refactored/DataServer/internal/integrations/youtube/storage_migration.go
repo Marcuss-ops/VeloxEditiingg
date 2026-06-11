@@ -113,7 +113,7 @@ func (s *Storage) migrateGroupsArray(groups []struct {
 		if err := s.save(); err != nil {
 			return migrated, err
 		}
-		log.Printf("✅ Migrated %d upload groups from groups.json to unified Storage", migrated)
+		log.Printf("[OK] Migrated %d upload groups from groups.json to unified Storage", migrated)
 	}
 
 	return migrated, nil

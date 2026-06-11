@@ -32,7 +32,7 @@ func NewOrchestrator(cfg *OrchestratorConfig, fq *FileQueue, dlq *DeadLetterQueu
 	}
 
 	if err := o.load(); err != nil {
-		log.Printf("⚠️ Orchestrator load error (starting fresh): %v", err)
+		log.Printf("[WARN] Orchestrator load error (starting fresh): %v", err)
 	}
 
 	return o, nil
@@ -81,7 +81,7 @@ func (o *Orchestrator) SetJobFailCallback(cb func(job *MultiStepJob, reason stri
 }
 
 func (o *Orchestrator) Start(ctx context.Context) {
-	log.Printf("🚀 Orchestrator started")
+	log.Printf("[START] Orchestrator started")
 
 	ticker := time.NewTicker(o.config.CheckInterval)
 	defer ticker.Stop()
@@ -89,7 +89,7 @@ func (o *Orchestrator) Start(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			log.Printf("🛑 Orchestrator stopping...")
+			log.Printf("[STOP] Orchestrator stopping...")
 			o.save()
 			return
 
@@ -153,7 +153,7 @@ func (o *Orchestrator) advanceJob(ctx context.Context, job *MultiStepJob) {
 			if o.onStepReady != nil {
 				go func(s *JobStep) {
 					if err := o.onStepReady(s); err != nil {
-						log.Printf("⚠️ Step ready callback error for %s: %v", s.StepID, err)
+						log.Printf("[WARN] Step ready callback error for %s: %v", s.StepID, err)
 					}
 				}(step)
 			}
@@ -161,7 +161,7 @@ func (o *Orchestrator) advanceJob(ctx context.Context, job *MultiStepJob) {
 			select {
 			case o.stepChan <- step:
 			default:
-				log.Printf("⚠️ Step channel full, step %s will be processed next cycle", step.StepID)
+				log.Printf("[WARN] Step channel full, step %s will be processed next cycle", step.StepID)
 			}
 		}
 
@@ -196,7 +196,7 @@ func (o *Orchestrator) handleStepResult(ctx context.Context, result *StepResult)
 
 	job, ok := o.jobs[result.JobID]
 	if !ok {
-		log.Printf("⚠️ Received result for unknown job %s", result.JobID[:8])
+		log.Printf("[WARN] Received result for unknown job %s", result.JobID[:8])
 		return
 	}
 
@@ -209,7 +209,7 @@ func (o *Orchestrator) handleStepResult(ctx context.Context, result *StepResult)
 	}
 
 	if step == nil {
-		log.Printf("⚠️ Received result for unknown step %s in job %s", result.StepID, result.JobID[:8])
+		log.Printf("[WARN] Received result for unknown step %s in job %s", result.StepID, result.JobID[:8])
 		return
 	}
 
@@ -221,7 +221,7 @@ func (o *Orchestrator) handleStepResult(ctx context.Context, result *StepResult)
 		step.Result = result.Result
 		job.UpdatedAt = now
 
-		log.Printf("✅ Step %s completed for job %s", step.StepName, job.JobID[:8])
+		log.Printf("[OK] Step %s completed for job %s", step.StepName, job.JobID[:8])
 
 		o.advanceJob(ctx, job)
 	} else {
@@ -230,7 +230,7 @@ func (o *Orchestrator) handleStepResult(ctx context.Context, result *StepResult)
 
 		if o.config.EnableAutoRetry && step.RetryCount < step.MaxRetries {
 			step.Status = StepStatusReady
-			log.Printf("🔄 Step %s failed, retrying (%d/%d): %s",
+			log.Printf("[INFO] Step %s failed, retrying (%d/%d): %s",
 				step.StepName, step.RetryCount, step.MaxRetries, result.Error)
 
 			select {
@@ -252,7 +252,7 @@ func (o *Orchestrator) completeJob(job *MultiStepJob) {
 	job.CompletedAt = &now
 	job.UpdatedAt = now
 
-	log.Printf("✅ Multi-step job %s completed (%d steps)", job.JobID[:8], job.TotalSteps)
+	log.Printf("[OK] Multi-step job %s completed (%d steps)", job.JobID[:8], job.TotalSteps)
 
 	if o.onJobComplete != nil {
 		go o.onJobComplete(job)
@@ -261,7 +261,7 @@ func (o *Orchestrator) completeJob(job *MultiStepJob) {
 	if o.fileQueue != nil {
 		ctx := context.Background()
 		if err := o.fileQueue.CompleteJob(ctx, job.JobID); err != nil {
-			log.Printf("⚠️ Failed to mark main job %s as completed: %v", job.JobID[:8], err)
+			log.Printf("[WARN] Failed to mark main job %s as completed: %v", job.JobID[:8], err)
 		}
 	}
 
@@ -274,22 +274,22 @@ func (o *Orchestrator) failJob(job *MultiStepJob, reason string) {
 	job.CompletedAt = &now
 	job.UpdatedAt = now
 
-	log.Printf("❌ Multi-step job %s failed: %s", job.JobID[:8], reason)
+	log.Printf("[ERROR] Multi-step job %s failed: %s", job.JobID[:8], reason)
 
 	if o.dlq != nil && o.fileQueue != nil {
 		ctx := context.Background()
 		mainJob, err := o.fileQueue.GetJob(ctx, job.JobID)
 		if err != nil {
-			log.Printf("⚠️ Failed to retrieve main job %s for DLQ: %v", job.JobID[:8], err)
+			log.Printf("[WARN] Failed to retrieve main job %s for DLQ: %v", job.JobID[:8], err)
 		} else if mainJob != nil {
 			if err := o.dlq.AddJob(ctx, mainJob, "multi_step_failed", reason); err != nil {
-				log.Printf("⚠️ Failed to add job %s to DLQ: %v", job.JobID[:8], err)
+				log.Printf("[WARN] Failed to add job %s to DLQ: %v", job.JobID[:8], err)
 			} else {
-				log.Printf("📋 Job %s persisted to DLQ", job.JobID[:8])
+				log.Printf("[ZOMBIE] Job %s persisted to DLQ", job.JobID[:8])
 			}
 		}
 	} else {
-		log.Printf("⚠️ DLQ not available, failed job %s will not be retried", job.JobID[:8])
+		log.Printf("[WARN] DLQ not available, failed job %s will not be retried", job.JobID[:8])
 	}
 
 	o.save()
