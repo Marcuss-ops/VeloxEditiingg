@@ -124,6 +124,17 @@ func (api *JobAPI) GetJobCompatHandler() gin.HandlerFunc {
 			return
 		}
 		payload := result.Payload
+		if payload != nil {
+			if ic, ok := payload["intro_clips"]; ok && payload["intro_clip_paths"] == nil {
+				payload["intro_clip_paths"] = ic
+			}
+			if sc, ok := payload["stock_clips"]; ok && payload["stock_clip_paths"] == nil {
+				payload["stock_clip_paths"] = sc
+			}
+			if vo, ok := payload["voiceovers"]; ok && payload["voiceover_paths"] == nil {
+				payload["voiceover_paths"] = vo
+			}
+		}
 
 		// Return worker-agent-compatible envelope for new_api mode.
 		jobType := "render"

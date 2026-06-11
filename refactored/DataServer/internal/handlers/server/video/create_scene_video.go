@@ -125,8 +125,6 @@ func normalizeSceneVideoPayload(payload map[string]interface{}) (map[string]inte
 	if len(voiceovers) == 0 {
 		return nil, &validationError{field: "voiceover_paths", message: "at least one voiceover path is required"}
 	}
-	clipPaths := extractSceneClipPaths(scenesValue)
-
 	now := time.Now().UTC().Format(time.RFC3339)
 	jobID := strings.TrimSpace(firstString(payload, "job_id", "id"))
 	if jobID == "" {
@@ -171,7 +169,6 @@ func normalizeSceneVideoPayload(payload map[string]interface{}) (map[string]inte
 	normalized["voiceover_paths"] = voiceovers
 	normalized["voiceover_path"] = voiceovers[0]
 	normalized["audio_path"] = voiceovers[0]
-	normalized["stock_clip_paths"] = clipPaths
 	normalized["priority"] = ensureInt(payload["priority"], 1)
 	normalized["timeout_secs"] = ensureInt(payload["timeout_secs"], 3600)
 	normalized["scene_count"] = len(scenesValue)
@@ -181,28 +178,27 @@ func normalizeSceneVideoPayload(payload map[string]interface{}) (map[string]inte
 	normalized["job_fingerprint"] = jobFingerprint
 	normalized["version"] = "v1"
 	normalized["parameters"] = map[string]interface{}{
-		"version": "v1",
-		"job_id":              jobID,
-		"job_run_id":          jobRunID,
-		"run_id":              jobRunID,
-		"correlation_id":      correlationID,
-		"job_type":            "process_video",
-		"video_name":          title,
-		"script_text":         scriptText,
-		"scenes_json":         scenesJSON,
-		"scenes":              scenesValue,
-		"voiceover_paths":     voiceovers,
-		"audio_path":          voiceovers[0],
-		"stock_clip_paths":    clipPaths,
-		"youtube_group":       firstString(payload, "youtube_group"),
-		"output_path":         firstString(payload, "output_path"),
-		"job_fingerprint":     jobFingerprint,
-		"submitted_via":       "api_v1_scene_video",
-		"source":              "scene_video_api",
-		"scene_count":         len(scenesValue),
-		"voiceover_count":     len(voiceovers),
-		"priority":            ensureInt(payload["priority"], 1),
-		"timeout_secs":        ensureInt(payload["timeout_secs"], 3600),
+		"version":         "v1",
+		"job_id":          jobID,
+		"job_run_id":      jobRunID,
+		"run_id":          jobRunID,
+		"correlation_id":  correlationID,
+		"job_type":        "process_video",
+		"video_name":      title,
+		"script_text":     scriptText,
+		"scenes_json":     scenesJSON,
+		"scenes":          scenesValue,
+		"voiceover_paths": voiceovers,
+		"audio_path":      voiceovers[0],
+		"youtube_group":   firstString(payload, "youtube_group"),
+		"output_path":     firstString(payload, "output_path"),
+		"job_fingerprint": jobFingerprint,
+		"submitted_via":   "api_v1_scene_video",
+		"source":          "scene_video_api",
+		"scene_count":     len(scenesValue),
+		"voiceover_count": len(voiceovers),
+		"priority":        ensureInt(payload["priority"], 1),
+		"timeout_secs":    ensureInt(payload["timeout_secs"], 3600),
 	}
 
 	if v := strings.TrimSpace(firstString(payload, "youtube_group")); v != "" {
@@ -218,6 +214,10 @@ func normalizeSceneVideoPayload(payload map[string]interface{}) (map[string]inte
 	if v := strings.TrimSpace(firstString(payload, "output_path")); v != "" {
 		normalized["output_path"] = v
 		normalized["parameters"].(map[string]interface{})["output_path"] = v
+	}
+	if v := strings.TrimSpace(firstString(payload, "scene_image_paths")); v != "" {
+		normalized["scene_image_paths"] = v
+		normalized["parameters"].(map[string]interface{})["scene_image_paths"] = v
 	}
 
 	return normalized, nil

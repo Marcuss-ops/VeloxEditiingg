@@ -137,6 +137,7 @@ func (s *Service) ClaimNextJob(ctx context.Context, req ClaimRequest) (*ClaimRes
 	}
 	payload["job_id"] = jobID
 	payload["id"] = jobID
+	payload["render_plan_version"] = "v1"
 
 	if s.reg != nil {
 		if err := s.reg.Heartbeat(ctx, req.WorkerID, req.WorkerName, "busy", jobID, nil); err != nil {

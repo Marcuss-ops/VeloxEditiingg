@@ -38,6 +38,7 @@ type nativeVideoEngineRequest struct {
 	StockClipPaths      []string                  `json:"stock_clip_paths,omitempty"`
 	ClipSegments        []nativeVideoClipRequest  `json:"clip_segments,omitempty"`
 	ScenesJSON          string                    `json:"scenes_json,omitempty"`
+	SceneImagePaths     []string                  `json:"scene_image_paths,omitempty"`
 	OutputPath          string                    `json:"output_path"`
 	DriveOutputFolder   string                    `json:"drive_output_folder,omitempty"`
 	AudioLanguageForSRT string                    `json:"audio_language_for_srt,omitempty"`
@@ -76,6 +77,7 @@ func (w *VideoGenerationWorkflow) runNativeCxxEngine(
 		}}
 	}
 	request.ClipSegments = parseNativeVideoClips(input.ClipSegments)
+	request.SceneImagePaths = sanitizeStrings(input.SceneImagePaths)
 	for i := range request.Scenes {
 		if request.Scenes[i].DurationSeconds <= 0 {
 			request.Scenes[i].DurationSeconds = 5

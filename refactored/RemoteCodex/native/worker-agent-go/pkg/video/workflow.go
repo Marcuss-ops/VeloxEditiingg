@@ -41,6 +41,7 @@ type VideoGenerationInput struct {
 	IntroClipPaths                    []string
 	StockClipPaths                    []string
 	ClipSegments                      []interface{}
+	SceneImagePaths                   []string
 	DriveOutputFolder                 string
 }
 

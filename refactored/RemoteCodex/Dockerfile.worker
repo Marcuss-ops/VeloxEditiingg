@@ -30,6 +30,9 @@ WORKDIR /app
 
 # Solo dipendenze essenziali: ffmpeg per video, curl per comunicazioni
 RUN apt-get update -qq && apt-get install -y --no-install-recommends \
+    build-essential \
+    cmake \
+    g++ \
     ffmpeg \
     curl \
     ca-certificates \

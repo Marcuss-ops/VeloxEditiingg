@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cctype>
 #include <cstdio>
 #include <cstdlib>
@@ -403,6 +404,25 @@ bool downloadAsset(const std::string& source, const fs::path& dest) {
     return runCommand(cmd);
 }
 
+double probeMediaDurationSeconds(const fs::path& mediaPath) {
+    if (mediaPath.empty() || !fs::exists(mediaPath)) {
+        return 0.0;
+    }
+    std::ostringstream cmd;
+    cmd << "ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "
+        << shellQuote(mediaPath.string());
+    const std::string output = trim(captureCommandOutput(cmd.str()));
+    if (output.empty() || output == "N/A") {
+        return 0.0;
+    }
+    try {
+        const double duration = std::stod(output);
+        return duration > 0.0 ? duration : 0.0;
+    } catch (...) {
+        return 0.0;
+    }
+}
+
 fs::path firstAvailableImage(const SceneRuntime& scene, const fs::path& workDir, size_t index) {
     const auto imagePath = workDir / ("scene_" + std::to_string(index) + ".jpg");
     std::vector<std::string> candidates = scene.image_links;
@@ -437,8 +457,15 @@ bool buildSceneSegment(const fs::path& imagePath, const fs::path& segmentPath, d
     std::ostringstream cmd;
     cmd << "ffmpeg -y ";
     if (!imagePath.empty() && fs::exists(imagePath)) {
-        cmd << "-loop 1 -t " << duration << " -i " << shellQuote(imagePath.string())
-            << " -vf " << shellQuote("scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,format=yuv420p")
+        const int fps = 30;
+        const int frames = std::max(1, static_cast<int>(std::round(duration * fps)));
+        const std::string filter =
+            "scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,"
+            "zoompan=z='min(zoom+0.0008,1.10)':d=" + std::to_string(frames) + ":s=1920x1080:fps=30,"
+            "format=yuv420p";
+        cmd << "-loop 1 -i " << shellQuote(imagePath.string())
+            << " -vf " << shellQuote(filter)
+            << " -frames:v " << frames
             << " -c:v libx264 -pix_fmt yuv420p -r 30 " << shellQuote(segmentPath.string());
     } else {
         cmd << "-f lavfi -t " << duration
@@ -515,6 +542,7 @@ int main(int argc, char** argv) {
     const auto videoMode = trim(extractJsonStringValue(requestJson, "video_mode"));
     const auto driveOutputFolder = trim(extractJsonStringValue(requestJson, "drive_output_folder"));
     const auto voiceoverPaths = extractArrayStrings(requestJson, "voiceover_paths");
+    const auto sceneImagePaths = parseStringListField(requestJson, "scene_image_paths");
     const auto introClipPaths = parseStringListField(requestJson, "intro_clip_paths");
     auto stockClipPaths = parseStringListField(requestJson, "stock_clip_paths");
     if (stockClipPaths.empty()) {
@@ -522,6 +550,8 @@ int main(int argc, char** argv) {
     }
     const auto scenes = parseScenes(requestJson);
     const auto clipSegments = parseClipSegments(requestJson);
+    double voiceoverDurationSeconds = 0.0;
+    fs::path downloadedVoiceoverPath;
 
     if (outputPathStr.empty()) {
         std::cerr << "missing output_path in request\n";
@@ -542,6 +572,23 @@ int main(int argc, char** argv) {
         || !clipSegments.empty()
         || !introClipPaths.empty()
         || !stockClipPaths.empty();
+
+    if (!voiceoverPaths.empty()) {
+        fs::path audioPath = workDir / "voiceover_audio";
+        bool downloaded = false;
+        for (const auto& candidate : voiceoverPaths) {
+            if (downloadAsset(candidate, audioPath)) {
+                downloaded = true;
+                downloadedVoiceoverPath = audioPath;
+                break;
+            }
+        }
+        if (!downloaded) {
+            std::cerr << "failed to download voiceover audio\n";
+            return 1;
+        }
+        voiceoverDurationSeconds = probeMediaDurationSeconds(downloadedVoiceoverPath);
+    }
 
     std::vector<fs::path> segments;
     if (clipMode) {
@@ -598,14 +645,36 @@ int main(int argc, char** argv) {
             ++segmentIndex;
         }
     } else {
-        segments.reserve(std::max<size_t>(1, scenes.size()));
-        for (size_t i = 0; i < std::max<size_t>(1, scenes.size()); ++i) {
+        const size_t renderCount = !sceneImagePaths.empty()
+            ? sceneImagePaths.size()
+            : std::max<size_t>(1, scenes.size());
+        segments.reserve(renderCount);
+        const double sceneDurationOverride =
+            (voiceoverDurationSeconds > 0.0 && renderCount > 0)
+                ? (voiceoverDurationSeconds / static_cast<double>(renderCount))
+                : 0.0;
+        for (size_t i = 0; i < renderCount; ++i) {
             fs::path imagePath;
-            if (i < scenes.size()) {
+            if (i < sceneImagePaths.size()) {
+                const auto imagePathStr = sceneImagePaths[i];
+                if (!trim(imagePathStr).empty()) {
+                    const auto candidatePath = workDir / ("scene_" + std::to_string(i) + ".jpg");
+                    if (downloadAsset(imagePathStr, candidatePath)) {
+                        imagePath = candidatePath;
+                    }
+                }
+            } else if (i < scenes.size()) {
                 imagePath = firstAvailableImage(scenes[i], workDir, i);
             }
             fs::path segmentPath = workDir / ("segment_" + std::to_string(i) + ".mp4");
-            const double duration = i < scenes.size() ? scenes[i].duration_seconds : 5.0;
+            double duration = i < scenes.size() ? scenes[i].duration_seconds : 5.0;
+            if (sceneDurationOverride > 0.0) {
+                duration = sceneDurationOverride;
+                if (i == renderCount - 1) {
+                    const double consumed = sceneDurationOverride * static_cast<double>(renderCount - 1);
+                    duration = std::max(0.1, voiceoverDurationSeconds - consumed);
+                }
+            }
             if (!buildSceneSegment(imagePath, segmentPath, duration)) {
                 std::cerr << "failed to build segment " << i << "\n";
                 return 1;
@@ -622,26 +691,14 @@ int main(int argc, char** argv) {
 
     fs::path finalOutput = outputPath;
     if (!voiceoverPaths.empty()) {
-        fs::path audioPath = workDir / "voiceover_audio";
-        bool downloaded = false;
-        for (const auto& candidate : voiceoverPaths) {
-            if (downloadAsset(candidate, audioPath)) {
-                downloaded = true;
-                break;
-            }
-        }
-        if (downloaded) {
-            fs::path muxedOutput = workDir / "final_with_audio.mp4";
-            if (!muxAudio(videoOnlyPath, audioPath, muxedOutput)) {
-                std::cerr << "failed to mux audio into final video\n";
-                return 1;
-            }
-            std::error_code ec;
-            fs::copy_file(muxedOutput, finalOutput, fs::copy_options::overwrite_existing, ec);
-        } else {
-            std::cerr << "failed to download voiceover audio\n";
+        fs::path audioPath = downloadedVoiceoverPath.empty() ? workDir / "voiceover_audio" : downloadedVoiceoverPath;
+        fs::path muxedOutput = workDir / "final_with_audio.mp4";
+        if (!muxAudio(videoOnlyPath, audioPath, muxedOutput)) {
+            std::cerr << "failed to mux audio into final video\n";
             return 1;
         }
+        std::error_code ec;
+        fs::copy_file(muxedOutput, finalOutput, fs::copy_options::overwrite_existing, ec);
     } else {
         std::error_code ec;
         fs::copy_file(videoOnlyPath, finalOutput, fs::copy_options::overwrite_existing, ec);
@@ -649,7 +706,8 @@ int main(int argc, char** argv) {
 
     std::cout << "{\"success\":true,\"job_id\":\"" << jobId << "\",\"output_path\":\"" << finalOutput.string()
               << "\",\"video_name\":\"" << videoName << "\",\"audio_language_for_srt\":\"" << audioLanguage
-              << "\",\"video_mode\":\"" << (clipMode ? "clip_stock" : "scene_image") << "\"}" << std::endl;
+              << "\",\"video_mode\":\"" << (clipMode ? "clip_stock" : "scene_image")
+              << "\",\"audio_duration_seconds\":" << voiceoverDurationSeconds << "}" << std::endl;
     if (!driveOutputFolder.empty()) {
         std::cerr << "drive_output_folder_hint=" << driveOutputFolder << "\n";
     }

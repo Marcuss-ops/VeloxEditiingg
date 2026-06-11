@@ -90,6 +90,7 @@ type renderJobParams struct {
 	introClipPaths                    []string
 	stockClipPaths                    []string
 	clipSegments                      []interface{}
+	sceneImagePaths                   []string
 	driveOutputFolder                 string
 }
 
@@ -124,8 +125,9 @@ func extractRenderJobParams(params map[string]interface{}) renderJobParams {
 		videoMode:                         getStringParam(params, "video_mode", ""),
 		introClipPaths:                    introClipPaths,
 		stockClipPaths:                    stockClipPaths,
-		clipSegments:                      getSliceParam(params, "clip_segments"),
-		driveOutputFolder:                 getStringParam(params, "drive_output_folder", getStringParam(params, "output_directory", "")),
+	clipSegments:                      getSliceParam(params, "clip_segments"),
+	sceneImagePaths:                   convertToStringSlice(params["scene_image_paths"]),
+	driveOutputFolder:                 getStringParam(params, "drive_output_folder", getStringParam(params, "output_directory", "")),
 	}
 }
 
@@ -578,6 +580,7 @@ func (w *Worker) executeWorkflowJob(ctx context.Context, job *api.Job, jobLabel 
 			IntroClipPaths:                    p.introClipPaths,
 			StockClipPaths:                    p.stockClipPaths,
 			ClipSegments:                      p.clipSegments,
+			SceneImagePaths:                   p.sceneImagePaths,
 			DriveOutputFolder:                 p.driveOutputFolder,
 		},
 		statusCallback)
