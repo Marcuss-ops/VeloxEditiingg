@@ -72,17 +72,11 @@ func (w *VideoGenerationWorkflow) runNativeCxxEngine(
 	request.Scenes = parseNativeVideoScenes(input.ScenesJSON)
 	if len(request.Scenes) == 0 {
 		request.Scenes = []nativeVideoSceneRequest{{
-			Text:            strings.TrimSpace(input.ScriptText),
-			DurationSeconds: 5,
+			Text: strings.TrimSpace(input.ScriptText),
 		}}
 	}
 	request.ClipSegments = parseNativeVideoClips(input.ClipSegments)
 	request.SceneImagePaths = sanitizeStrings(input.SceneImagePaths)
-	for i := range request.Scenes {
-		if request.Scenes[i].DurationSeconds <= 0 {
-			request.Scenes[i].DurationSeconds = 5
-		}
-	}
 
 	requestPath := filepath.Join(tempDir, "native_video_request.json")
 	data, err := json.MarshalIndent(request, "", "  ")

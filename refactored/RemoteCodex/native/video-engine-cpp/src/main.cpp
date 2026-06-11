@@ -22,14 +22,14 @@ struct SceneRuntime {
     std::string text;
     std::string image_link;
     std::vector<std::string> image_links;
-    double duration_seconds{5.0};
+    double duration_seconds{0.0};
 };
 
 struct ClipRuntime {
     std::string text;
     std::string clip_link;
     std::vector<std::string> clip_links;
-    double duration_seconds{4.0};
+    double duration_seconds{0.0};
     std::string kind;
 };
 
@@ -259,10 +259,7 @@ ClipRuntime parseClipObject(const std::string& obj) {
     clip.text = extractJsonStringValue(obj, "text");
     clip.clip_link = extractJsonStringValue(obj, "clip_link");
     clip.clip_links = extractArrayStrings(obj, "clip_links");
-    clip.duration_seconds = extractDurationValue(obj, "duration_seconds", 4.0);
-    if (clip.duration_seconds <= 0.0) {
-        clip.duration_seconds = 4.0;
-    }
+    clip.duration_seconds = extractDurationValue(obj, "duration_seconds", 0.0);
     clip.kind = extractJsonStringValue(obj, "kind");
     if (clip.clip_link.empty() && !clip.clip_links.empty()) {
         clip.clip_link = clip.clip_links.front();
@@ -284,10 +281,7 @@ std::vector<SceneRuntime> parseScenes(const std::string& requestJson) {
         scene.text = extractJsonStringValue(obj, "text");
         scene.image_link = extractJsonStringValue(obj, "image_link");
         scene.image_links = extractArrayStrings(obj, "image_links");
-        scene.duration_seconds = extractJsonNumberValue(obj, "duration_seconds", 5.0);
-        if (scene.duration_seconds <= 0.0) {
-            scene.duration_seconds = 5.0;
-        }
+        scene.duration_seconds = extractJsonNumberValue(obj, "duration_seconds", 0.0);
         if (scene.image_link.empty() && !scene.image_links.empty()) {
             scene.image_link = scene.image_links.front();
         }
@@ -649,10 +643,14 @@ int main(int argc, char** argv) {
             ? sceneImagePaths.size()
             : std::max<size_t>(1, scenes.size());
         segments.reserve(renderCount);
-        const double sceneDurationOverride =
-            (voiceoverDurationSeconds > 0.0 && renderCount > 0)
-                ? (voiceoverDurationSeconds / static_cast<double>(renderCount))
-                : 0.0;
+
+        // Calculate per-scene duration from voiceover or scene explicit values
+        double perSceneDuration = 0.0;
+        if (voiceoverDurationSeconds > 0.0 && renderCount > 0) {
+            perSceneDuration = voiceoverDurationSeconds / static_cast<double>(renderCount);
+            std::cerr << "voiceover_duration=" << voiceoverDurationSeconds << "s, scenes=" << renderCount << ", per_scene=" << perSceneDuration << "s\n";
+        }
+
         for (size_t i = 0; i < renderCount; ++i) {
             fs::path imagePath;
             if (i < sceneImagePaths.size()) {
@@ -667,14 +665,28 @@ int main(int argc, char** argv) {
                 imagePath = firstAvailableImage(scenes[i], workDir, i);
             }
             fs::path segmentPath = workDir / ("segment_" + std::to_string(i) + ".mp4");
-            double duration = i < scenes.size() ? scenes[i].duration_seconds : 5.0;
-            if (sceneDurationOverride > 0.0) {
-                duration = sceneDurationOverride;
+
+            // Duration priority: voiceover-based > explicit scene duration
+            double duration = 0.0;
+            if (perSceneDuration > 0.0) {
+                duration = perSceneDuration;
+                // Last scene gets remaining time to match voiceover exactly
                 if (i == renderCount - 1) {
-                    const double consumed = sceneDurationOverride * static_cast<double>(renderCount - 1);
+                    const double consumed = perSceneDuration * static_cast<double>(renderCount - 1);
                     duration = std::max(0.1, voiceoverDurationSeconds - consumed);
                 }
+            } else if (i < scenes.size() && scenes[i].duration_seconds > 0.0) {
+                duration = scenes[i].duration_seconds;
             }
+
+            if (duration <= 0.0) {
+                std::cerr << "error: no duration available for scene " << i
+                          << " (voiceover_duration=" << voiceoverDurationSeconds
+                          << ", scene_duration=" << (i < scenes.size() ? scenes[i].duration_seconds : 0.0) << ")\n";
+                return 1;
+            }
+
+            std::cerr << "scene " << i << " duration=" << duration << "s\n";
             if (!buildSceneSegment(imagePath, segmentPath, duration)) {
                 std::cerr << "failed to build segment " << i << "\n";
                 return 1;
