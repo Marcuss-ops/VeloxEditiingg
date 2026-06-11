@@ -112,12 +112,15 @@ func (s *Service) getToken(ctx context.Context) (*Token, error) {
 
 	// Check if token needs refresh (5 minutes before expiry)
 	if time.Until(token.Expiry) < 5*time.Minute {
+		log.Printf("🔑 Token expired or expiring soon, refreshing...")
 		newToken, err := RefreshToken(ctx, s.oauthCfg, token.RefreshToken)
 		if err != nil {
+			log.Printf("🔑 Token refresh failed: %v", err)
 			return nil, fmt.Errorf("failed to refresh token: %w", err)
 		}
 		newToken.AccountEmail = token.AccountEmail
 		s.SetToken(newToken)
+		log.Printf("🔑 Token refreshed successfully, expires: %v", newToken.Expiry)
 		return newToken, nil
 	}
 
@@ -232,6 +235,8 @@ func (s *Service) CreateFolder(ctx context.Context, name string, parentID string
 		parentID = "root"
 	}
 
+	log.Printf("📁 Creating folder '%s' in parent '%s'", name, parentID)
+
 	folderMeta := map[string]interface{}{
 		"name":     name,
 		"mimeType": "application/vnd.google-apps.folder",
@@ -245,10 +250,28 @@ func (s *Service) CreateFolder(ctx context.Context, name string, parentID string
 
 	var result File
 	if err := s.doAPIRequest(ctx, "POST", "/files?fields=id,name", bytes.NewReader(body), &result); err != nil {
+		log.Printf("📁 Failed to create folder: %v", err)
 		return nil, err
 	}
 
 	log.Printf("📁 Created folder '%s' (ID: %s)", name, result.ID)
+
+	// Verify folder exists by listing it
+	verifyCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	verifyQuery := url.QueryEscape(fmt.Sprintf("'%s' in parents and trashed=false", result.ID))
+	verifyEndpoint := fmt.Sprintf("/files?q=%s&fields=files(id,name)&pageSize=1", verifyQuery)
+	var verifyResult struct {
+		Files []File `json:"files"`
+	}
+	if err := s.doAPIRequest(verifyCtx, "GET", verifyEndpoint, nil, &verifyResult); err != nil {
+		log.Printf("📁 Warning: could not verify folder: %v", err)
+	} else if len(verifyResult.Files) == 0 {
+		log.Printf("📁 Warning: folder verification returned empty (folder may not be accessible)")
+	} else {
+		log.Printf("📁 Folder verified: %s", verifyResult.Files[0].ID)
+	}
+
 	return &Folder{
 		ID:   result.ID,
 		Name: result.Name,

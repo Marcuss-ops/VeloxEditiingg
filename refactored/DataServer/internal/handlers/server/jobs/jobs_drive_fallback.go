@@ -29,7 +29,10 @@ type driveLinkRow struct {
 
 
 func (api *JobAPI) tryDriveFallbackUpload(jobID string) {
+	log.Printf("☁️ Drive fallback triggered for job %s", jobID)
+
 	if api == nil || api.fileQ == nil || api.cfg == nil {
+		log.Printf("☁️ Drive fallback skipped: api=%v, fileQ=%v, cfg=%v", api != nil, api.fileQ != nil, api.cfg != nil)
 		return
 	}
 
@@ -38,20 +41,25 @@ func (api *JobAPI) tryDriveFallbackUpload(jobID string) {
 
 	job, err := api.fileQ.GetJobAsMap(ctx, jobID)
 	if err != nil || job == nil {
+		log.Printf("☁️ Drive fallback skipped: job not found or error: %v", err)
 		return
 	}
 	if strings.ToUpper(strings.TrimSpace(toString(job["status"]))) != "COMPLETED" {
+		log.Printf("☁️ Drive fallback skipped: status=%s", job["status"])
 		return
 	}
 	if strings.TrimSpace(toString(job["drive_url"])) != "" {
+		log.Printf("☁️ Drive fallback skipped: drive_url already set")
 		return
 	}
 	if hasDriveSuccess(job["last_drive_upload_result"]) {
+		log.Printf("☁️ Drive fallback skipped: drive upload already successful")
 		return
 	}
 
 	videoPath := resolveVideoPath(api.cfg.VideosDir, jobID, job)
 	if videoPath == "" {
+		log.Printf("☁️ Drive fallback skipped: video file not found")
 		if err := api.fileQ.UpdateJobFields(ctx, jobID, map[string]interface{}{
 			"last_drive_upload_result": map[string]interface{}{
 				"success": false,
@@ -62,6 +70,7 @@ func (api *JobAPI) tryDriveFallbackUpload(jobID string) {
 		}
 		return
 	}
+	log.Printf("☁️ Drive fallback: video found at %s", videoPath)
 
 	service, err := drive.NewService(&drive.ServiceConfig{
 		ClientID:     api.cfg.DriveClientID,
