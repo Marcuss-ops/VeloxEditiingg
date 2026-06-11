@@ -433,13 +433,19 @@ func (h *Handler) YouTubeGrab(c *gin.Context) {
 		return
 	}
 
+	// HTTP client with timeout
+	client := &http.Client{Timeout: 10 * time.Second}
+	
+	// Max thumbnail size: 5MB
+	const maxThumbSize = 5 * 1024 * 1024
+
 	// Try to get maxresdefault first
 	thumbURL := fmt.Sprintf("https://img.youtube.com/vi/%s/maxresdefault.jpg", videoID)
-	resp, err := http.Get(thumbURL)
+	resp, err := client.Get(thumbURL)
 	if err != nil || resp.StatusCode != http.StatusOK {
 		// Fallback to hqdefault
 		thumbURL = fmt.Sprintf("https://img.youtube.com/vi/%s/hqdefault.jpg", videoID)
-		resp, err = http.Get(thumbURL)
+		resp, err = client.Get(thumbURL)
 		if err != nil || resp.StatusCode != http.StatusOK {
 			c.JSON(http.StatusNotFound, gin.H{"error": "Thumbnail not found"})
 			return
@@ -447,10 +453,14 @@ func (h *Handler) YouTubeGrab(c *gin.Context) {
 	}
 	defer resp.Body.Close()
 
-	// Read image data
-	imgData, err := io.ReadAll(resp.Body)
+	// Read image data with size limit
+	imgData, err := io.ReadAll(io.LimitReader(resp.Body, maxThumbSize+1))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to download thumbnail"})
+		return
+	}
+	if int64(len(imgData)) > maxThumbSize {
+		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "Thumbnail too large"})
 		return
 	}
 

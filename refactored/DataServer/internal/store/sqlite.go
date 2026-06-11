@@ -27,21 +27,21 @@ type SQLiteStore struct {
 
 func NewSQLiteStore(path string) (*SQLiteStore, error) {
 	if path == "" {
-		return nil, fmt.Errorf("empty sqlite path")
+		return nil, fmt.Errorf("store: empty sqlite path")
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("store: create directory: %w", err)
 	}
 
 	db, err := sql.Open("sqlite3", path+"?_busy_timeout=5000&_journal_mode=WAL")
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("store: open database: %w", err)
 	}
 	if err := db.Ping(); err != nil {
 		if closeErr := db.Close(); closeErr != nil {
 			log.Printf("sqlite: close after ping failure: %v", closeErr)
 		}
-		return nil, err
+		return nil, fmt.Errorf("store: ping database: %w", err)
 	}
 
 	// Performance PRAGMAs for optimal query speed
@@ -167,18 +167,21 @@ CREATE TABLE IF NOT EXISTS drive_links (
 CREATE INDEX IF NOT EXISTS idx_drive_links_parent ON drive_links(parent_id);
 `
 	if _, err := s.db.Exec(ddl); err != nil {
-		return err
+		return fmt.Errorf("store: init schema: %w", err)
 	}
 	// Initialize Dark Editor tables
 	if err := s.initDarkEditorSchema(); err != nil {
-		return err
+		return fmt.Errorf("store: init dark editor schema: %w", err)
 	}
 	// Initialize YouTube historical tables
 	if err := s.initYouTubeSchema(); err != nil {
-		return err
+		return fmt.Errorf("store: init youtube schema: %w", err)
 	}
 	// Initialize Calendar tables
-	return s.initCalendarSchema()
+	if err := s.initCalendarSchema(); err != nil {
+		return fmt.Errorf("store: init calendar schema: %w", err)
+	}
+	return nil
 }
 
 func toISO(v any) string {

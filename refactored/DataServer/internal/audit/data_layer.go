@@ -222,18 +222,20 @@ func (a *DataLayerAuditor) AllowLegacy(path string) {
 	a.allowedLegacy[path] = true
 }
 
-// FailOnError panics if audit fails.
-func (r *DataLayerAuditResult) FailOnError() {
+// FailOnError returns an error if audit fails, nil otherwise.
+func (r *DataLayerAuditResult) FailOnError() error {
 	if !r.Passed {
-		fmt.Fprintln(os.Stderr, "=== DATA LAYER AUDIT FAILED ===")
+		var sb strings.Builder
+		sb.WriteString("DATA LAYER AUDIT FAILED\n")
 		for _, e := range r.Errors {
-			fmt.Fprintf(os.Stderr, "  ERROR: %s\n", e)
+			sb.WriteString(fmt.Sprintf("  ERROR: %s\n", e))
 		}
 		for _, w := range r.Warnings {
-			fmt.Fprintf(os.Stderr, "  WARNING: %s\n", w)
+			sb.WriteString(fmt.Sprintf("  WARNING: %s\n", w))
 		}
-		os.Exit(1)
+		return fmt.Errorf(sb.String())
 	}
+	return nil
 }
 
 // String returns a human-readable audit report.

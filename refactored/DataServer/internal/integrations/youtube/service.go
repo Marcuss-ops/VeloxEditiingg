@@ -538,100 +538,31 @@ func (s *Service) HealthCheck(ctx context.Context, channelID string) (map[string
 
 // loadOAuthConfig loads OAuth2 configuration from client_secret.json
 func (s *Service) loadOAuthConfig() error {
-	// Try multiple paths for client_secret.json
-	secretPaths := []string{
-		filepath.Join(s.config.YoutubePostingPath, "Modules", "client_secret.json"),
-		filepath.Join(s.config.YoutubePostingPath, "client_secret.json"),
-		filepath.Join(s.config.TokensDir, "client_secret.json"),
-	}
-	if s.config.CredentialsDir != "" {
-		secretPaths = append([]string{
-			filepath.Join(s.config.CredentialsDir, "client_secret.json"),
-			filepath.Join(s.config.CredentialsDir, "credentials.json"),
-		}, secretPaths...)
-	}
-	if s.config.DataDir != "" {
-		secretPaths = append(secretPaths,
-			filepath.Join(s.config.DataDir, "secrets", "youtube", "credentials", "client_secret.json"),
-			filepath.Join(s.config.DataDir, "youtube", "credentials", "client_secret.json"),
-			filepath.Join(s.config.DataDir, "youtube", "Credentials", "client_secret.json"),
-			filepath.Join(s.config.DataDir, "youtube", "Credentials", "credentials.json"),
-		)
+	secretPath, secretData, err := findOAuthSecretFile(s.config)
+	if err != nil {
+		return err
 	}
 
-	var secretData []byte
-	var secretPath string
-	var err error
-
-	for _, path := range secretPaths {
-		secretData, err = os.ReadFile(path)
-		if err == nil {
-			secretPath = path
-			break
-		}
-	}
-
-	if secretData == nil {
-		return fmt.Errorf("client_secret.json not found in any known location")
-	}
-
-	// Parse the client secret
-	var clientSecret struct {
-		Installed struct {
-			ClientID     string   `json:"client_id"`
-			ClientSecret string   `json:"client_secret"`
-			RedirectUris []string `json:"redirect_uris"`
-			AuthURI      string   `json:"auth_uri"`
-			TokenURI     string   `json:"token_uri"`
-		} `json:"installed"`
-		Web struct {
-			ClientID     string   `json:"client_id"`
-			ClientSecret string   `json:"client_secret"`
-			RedirectUris []string `json:"redirect_uris"`
-			AuthURI      string   `json:"auth_uri"`
-			TokenURI     string   `json:"token_uri"`
-		} `json:"web"`
-	}
-
-	if err := json.Unmarshal(secretData, &clientSecret); err != nil {
-		return fmt.Errorf("failed to parse client_secret.json: %w", err)
-	}
-
-	// Use installed or web credentials
-	clientID := clientSecret.Installed.ClientID
-	clientSecretStr := clientSecret.Installed.ClientSecret
-	redirectURI := "http://localhost:8080/oauth2callback"
-	if len(clientSecret.Installed.RedirectUris) > 0 {
-		redirectURI = clientSecret.Installed.RedirectUris[0]
-	}
-
-	if clientID == "" {
-		clientID = clientSecret.Web.ClientID
-		clientSecretStr = clientSecret.Web.ClientSecret
-		if len(clientSecret.Web.RedirectUris) > 0 {
-			redirectURI = clientSecret.Web.RedirectUris[0]
-		}
-	}
-
-	if clientID == "" {
-		return fmt.Errorf("no valid OAuth credentials found in client_secret.json")
+	creds, err := parseOAuthCredentialsFile(secretData)
+	if err != nil {
+		return fmt.Errorf("load OAuth config: %w", err)
 	}
 
 	// Override with config values if provided
 	if s.config.ClientID != "" {
-		clientID = s.config.ClientID
+		creds.ClientID = s.config.ClientID
 	}
 	if s.config.ClientSecret != "" {
-		clientSecretStr = s.config.ClientSecret
+		creds.ClientSecret = s.config.ClientSecret
 	}
 	if s.config.RedirectURL != "" {
-		redirectURI = s.config.RedirectURL
+		creds.RedirectURI = s.config.RedirectURL
 	}
 
 	s.oauthConfig = &oauth2.Config{
-		ClientID:     clientID,
-		ClientSecret: clientSecretStr,
-		RedirectURL:  redirectURI,
+		ClientID:     creds.ClientID,
+		ClientSecret: creds.ClientSecret,
+		RedirectURL:  creds.RedirectURI,
 		Scopes: []string{
 			"https://www.googleapis.com/auth/youtube",
 			"https://www.googleapis.com/auth/youtube.upload",
@@ -642,7 +573,7 @@ func (s *Service) loadOAuthConfig() error {
 		Endpoint: google.Endpoint,
 	}
 
-	// Keep AuthManager in sync: StartOAuth/ValidateToken use authManager.oauthConfig.
+	// Keep AuthManager in sync
 	if s.authManager != nil {
 		s.authManager.oauthConfig = s.oauthConfig
 	}

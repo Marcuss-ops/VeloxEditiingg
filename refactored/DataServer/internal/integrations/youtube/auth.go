@@ -20,28 +20,58 @@ import (
 	"google.golang.org/api/youtube/v3"
 )
 
-// AuthManager handles OAuth authentication and token management for YouTube channels
-type AuthManager struct {
-	service     *Service
-	oauthConfig *oauth2.Config
-	tokenCache  map[string]*oauth2.Token
-	mu          sync.RWMutex
+// oauthCredentials holds parsed OAuth client credentials.
+type oauthCredentials struct {
+	ClientID     string
+	ClientSecret string
+	RedirectURI  string
 }
 
-// NewAuthManager creates a new AuthManager
-func NewAuthManager(s *Service) *AuthManager {
-	return &AuthManager{
-		service:    s,
-		tokenCache: make(map[string]*oauth2.Token),
+// parseOAuthCredentialsFile parses a client_secret.json file and returns credentials.
+func parseOAuthCredentialsFile(data []byte) (*oauthCredentials, error) {
+	var clientSecret struct {
+		Installed struct {
+			ClientID     string   `json:"client_id"`
+			ClientSecret string   `json:"client_secret"`
+			RedirectUris []string `json:"redirect_uris"`
+		} `json:"installed"`
+		Web struct {
+			ClientID     string   `json:"client_id"`
+			ClientSecret string   `json:"client_secret"`
+			RedirectUris []string `json:"redirect_uris"`
+		} `json:"web"`
 	}
+
+	if err := json.Unmarshal(data, &clientSecret); err != nil {
+		return nil, fmt.Errorf("parse client_secret.json: %w", err)
+	}
+
+	creds := &oauthCredentials{
+		RedirectURI: "http://localhost:8080/oauth2callback",
+	}
+
+	// Try installed first, then web
+	if clientSecret.Installed.ClientID != "" {
+		creds.ClientID = clientSecret.Installed.ClientID
+		creds.ClientSecret = clientSecret.Installed.ClientSecret
+		if len(clientSecret.Installed.RedirectUris) > 0 {
+			creds.RedirectURI = clientSecret.Installed.RedirectUris[0]
+		}
+	} else if clientSecret.Web.ClientID != "" {
+		creds.ClientID = clientSecret.Web.ClientID
+		creds.ClientSecret = clientSecret.Web.ClientSecret
+		if len(clientSecret.Web.RedirectUris) > 0 {
+			creds.RedirectURI = clientSecret.Web.RedirectUris[0]
+		}
+	} else {
+		return nil, fmt.Errorf("no valid OAuth credentials found")
+	}
+
+	return creds, nil
 }
 
-// LoadOAuthConfig loads OAuth2 configuration from client_secret.json
-func (am *AuthManager) LoadOAuthConfig() error {
-	s := am.service
-	cfg := s.config
-
-	// Try multiple paths for client_secret.json
+// findOAuthSecretFile searches for client_secret.json in multiple locations.
+func findOAuthSecretFile(cfg *ServiceConfig) (string, []byte, error) {
 	secretPaths := []string{
 		filepath.Join(cfg.YoutubePostingPath, "Modules", "client_secret.json"),
 		filepath.Join(cfg.YoutubePostingPath, "client_secret.json"),
@@ -62,79 +92,60 @@ func (am *AuthManager) LoadOAuthConfig() error {
 		)
 	}
 
-	var secretData []byte
-	var secretPath string
-	var err error
-
 	for _, path := range secretPaths {
-		secretData, err = os.ReadFile(path)
+		data, err := os.ReadFile(path)
 		if err == nil {
-			secretPath = path
-			break
+			return path, data, nil
 		}
 	}
+	return "", nil, fmt.Errorf("client_secret.json not found in any known location")
+}
 
-	if secretData == nil {
-		return fmt.Errorf("client_secret.json not found in any known location")
+// AuthManager handles OAuth authentication and token management for YouTube channels
+type AuthManager struct {
+	service     *Service
+	oauthConfig *oauth2.Config
+	tokenCache  map[string]*oauth2.Token
+	mu          sync.RWMutex
+}
+
+// NewAuthManager creates a new AuthManager
+func NewAuthManager(s *Service) *AuthManager {
+	return &AuthManager{
+		service:    s,
+		tokenCache: make(map[string]*oauth2.Token),
+	}
+}
+
+// LoadOAuthConfig loads OAuth2 configuration from client_secret.json
+func (am *AuthManager) LoadOAuthConfig() error {
+	cfg := am.service.config
+
+	secretPath, secretData, err := findOAuthSecretFile(cfg)
+	if err != nil {
+		return err
 	}
 
-	// Parse the client secret
-	var clientSecret struct {
-		Installed struct {
-			ClientID     string   `json:"client_id"`
-			ClientSecret string   `json:"client_secret"`
-			RedirectUris []string `json:"redirect_uris"`
-			AuthURI      string   `json:"auth_uri"`
-			TokenURI     string   `json:"token_uri"`
-		} `json:"installed"`
-		Web struct {
-			ClientID     string   `json:"client_id"`
-			ClientSecret string   `json:"client_secret"`
-			RedirectUris []string `json:"redirect_uris"`
-			AuthURI      string   `json:"auth_uri"`
-			TokenURI     string   `json:"token_uri"`
-		} `json:"web"`
-	}
-
-	if err := json.Unmarshal(secretData, &clientSecret); err != nil {
-		return fmt.Errorf("failed to parse client_secret.json: %w", err)
-	}
-
-	// Use installed or web credentials
-	clientID := clientSecret.Installed.ClientID
-	clientSecretStr := clientSecret.Installed.ClientSecret
-	redirectURI := "http://localhost:8080/oauth2callback"
-	if len(clientSecret.Installed.RedirectUris) > 0 {
-		redirectURI = clientSecret.Installed.RedirectUris[0]
-	}
-
-	if clientID == "" {
-		clientID = clientSecret.Web.ClientID
-		clientSecretStr = clientSecret.Web.ClientSecret
-		if len(clientSecret.Web.RedirectUris) > 0 {
-			redirectURI = clientSecret.Web.RedirectUris[0]
-		}
-	}
-
-	if clientID == "" {
-		return fmt.Errorf("no valid OAuth credentials found in client_secret.json")
+	creds, err := parseOAuthCredentialsFile(secretData)
+	if err != nil {
+		return fmt.Errorf("load OAuth config: %w", err)
 	}
 
 	// Override with config values if provided
 	if cfg.ClientID != "" {
-		clientID = cfg.ClientID
+		creds.ClientID = cfg.ClientID
 	}
 	if cfg.ClientSecret != "" {
-		clientSecretStr = cfg.ClientSecret
+		creds.ClientSecret = cfg.ClientSecret
 	}
 	if cfg.RedirectURL != "" {
-		redirectURI = cfg.RedirectURL
+		creds.RedirectURI = cfg.RedirectURL
 	}
 
 	am.oauthConfig = &oauth2.Config{
-		ClientID:     clientID,
-		ClientSecret: clientSecretStr,
-		RedirectURL:  redirectURI,
+		ClientID:     creds.ClientID,
+		ClientSecret: creds.ClientSecret,
+		RedirectURL:  creds.RedirectURI,
 		Scopes: []string{
 			"https://www.googleapis.com/auth/youtube",
 			"https://www.googleapis.com/auth/youtube.upload",
