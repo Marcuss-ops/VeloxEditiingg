@@ -71,28 +71,28 @@
 
     - name: Update | Verifica estrazione (cerca Dockerfile)
       ansible.builtin.stat:
-        path: "{{ velox_dir }}/current/RemoteCodex/Dockerfile.worker"
+        path: "{{ velox_dir }}/current/RemoteCodex/native/worker-agent-go/Dockerfile"
       register: dockerfile_check
 
     - name: Update | Log estrazione
       ansible.builtin.debug:
         msg: >-
           {% if dockerfile_check.stat.exists %}
-          ✅ Bundle estratto, Dockerfile.worker trovato
+          ✅ Bundle estratto, Dockerfile trovato
           {% else %}
-          ⚠️  Dockerfile.worker non trovato in {{ velox_dir }}/current/RemoteCodex/
+          ⚠️  Dockerfile non trovato in {{ velox_dir }}/current/RemoteCodex/native/worker-agent-go/
           {% endif %}
 
     # ── RICOSTRUISCI DOCKER IMAGE ────────────────────────────
     - name: Update | Ricostruisci immagine Docker worker
       ansible.builtin.shell: |
         set -e
-        DOCKERFILE="{{ velox_dir }}/current/RemoteCodex/Dockerfile.worker"
+        DOCKERFILE="{{ velox_dir }}/current/RemoteCodex/native/worker-agent-go/Dockerfile"
         if [ ! -f "$DOCKERFILE" ]; then
-          DOCKERFILE="{{ velox_dir }}/current/refactored/RemoteCodex/Dockerfile.worker"
+          DOCKERFILE="{{ velox_dir }}/current/refactored/RemoteCodex/native/worker-agent-go/Dockerfile"
         fi
         if [ ! -f "$DOCKERFILE" ]; then
-          echo "Dockerfile.worker non trovato — salto build Docker"
+          echo "Dockerfile non trovato — salto build Docker"
           exit 0
         fi
         CONTEXT="$(dirname "$DOCKERFILE")"

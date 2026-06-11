@@ -11,15 +11,14 @@ FROM golang:1.25-bookworm AS builder
 WORKDIR /build
 
 # Copy Go module files first for layer caching
-COPY native/worker-agent-go/go.mod native/worker-agent-go/go.sum ./native/worker-agent-go/
-RUN cd native/worker-agent-go && go mod download
+COPY go.mod go.sum ./
+RUN go mod download
 
 # Copy worker-agent source
-COPY native/worker-agent-go/ ./native/worker-agent-go/
+COPY . .
 
 # Build the binary
-RUN cd native/worker-agent-go && \
-    CGO_ENABLED=1 GOOS=linux go build -ldflags="-s -w" -o velox-worker-agent ./cmd/velox-worker-agent
+RUN CGO_ENABLED=1 GOOS=linux go build -ldflags="-s -w" -o velox-worker-agent ./cmd/velox-worker-agent
 
 # ── Runtime stage (minimale) ────────────────────────────────────────────────
 FROM debian:bookworm-slim
@@ -39,7 +38,7 @@ RUN apt-get update -qq && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy only the prebuilt binary from builder stage
-COPY --from=builder /build/native/worker-agent-go/velox-worker-agent /usr/local/bin/velox-worker-agent
+COPY --from=builder /build/velox-worker-agent /usr/local/bin/velox-worker-agent
 
 # Create non-root user for runtime
 RUN useradd -r -m -s /usr/sbin/nologin velox

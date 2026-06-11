@@ -26,12 +26,12 @@
 
 - name: Detect current bundle layout (legacy refactored vs flat)
   ansible.builtin.stat:
-    path: "{{ velox_dir }}/current/refactored/RemoteCodex/Dockerfile.worker"
+    path: "{{ velox_dir }}/current/refactored/RemoteCodex/native/worker-agent-go/Dockerfile"
   register: legacy_layout_dockerfile
 
 - name: Detect flat bundle layout
   ansible.builtin.stat:
-    path: "{{ velox_dir }}/current/RemoteCodex/Dockerfile.worker"
+    path: "{{ velox_dir }}/current/RemoteCodex/native/worker-agent-go/Dockerfile"
   register: flat_layout_dockerfile
 
 - name: Set bundle layout paths
@@ -42,20 +42,20 @@
       {{ (velox_dir + '/current/refactored/RemoteCodex/assets_cache') if (legacy_layout_dockerfile.stat.exists | default(false)) else (velox_dir + '/current/RemoteCodex/assets_cache') }}
     velox_worker_dockerfile_host: >-
       {{
-        (velox_dir + '/current/refactored/RemoteCodex/Dockerfile.worker')
+        (velox_dir + '/current/refactored/RemoteCodex/native/worker-agent-go/Dockerfile')
         if (legacy_layout_dockerfile.stat.exists | default(false))
         else (
-          (velox_dir + '/current/RemoteCodex/Dockerfile.worker')
+          (velox_dir + '/current/RemoteCodex/native/worker-agent-go/Dockerfile')
           if (flat_layout_dockerfile.stat.exists | default(false))
           else ''
         )
       }}
     velox_worker_docker_context: >-
       {{
-        (velox_dir + '/current/refactored/RemoteCodex')
+        (velox_dir + '/current/refactored/RemoteCodex/native/worker-agent-go')
         if (legacy_layout_dockerfile.stat.exists | default(false))
         else (
-          (velox_dir + '/current/RemoteCodex')
+          (velox_dir + '/current/RemoteCodex/native/worker-agent-go')
           if (flat_layout_dockerfile.stat.exists | default(false))
           else ''
         )

@@ -1,19 +1,37 @@
-# Velox Video Engine C++ Scaffold
+# Velox Video Engine C++
 
-Questo modulo prepara il motore pesante in C++ per la composizione video.
+Motore C++ nativo per la composizione video Velox. Riceve un payload JSON con parametri di scena, scarica asset, compone segmenti video con FFmpeg e produce il file finale.
 
-Obiettivi immediati:
-- ricevere un payload con `video_name`, `script_text`, `voiceover_paths` e `scenes_json`
-- normalizzare il progetto scena per scena
-- produrre un artefatto video finale quando il compositore FFmpeg/GPU sarà pronto
+## Struttura
 
-Estensione base già supportata:
-- `video_mode=clip_stock` per concat semplice di clip iniziali, clip di contenuto e stock footage
-- `intro_clip_paths`, `stock_clip_paths` e `clip_segments`
-- mux audio finale con `voiceover_paths`
+```
+video-engine-cpp/
+├── src/
+│   └── main.cpp              # Entrypoint, parsing scene, main()
+├── include/
+│   ├── video_contract.hpp     # Contratto video (struct/const)
+│   ├── json_utils.hpp         # Parsing JSON helper (namespace velox::json)
+│   ├── file_utils.hpp         # I/O file, download, Drive (namespace velox::file)
+│   └── media_utils.hpp        # Helpers FFmpeg/media (namespace velox::media)
+├── schemas/                   # JSON schema dei contratti
+│   ├── colosseo_scene_video.json
+│   └── smoke_video_to_video.json
+├── CMakeLists.txt
+└── README.md
+```
 
-Stato attuale:
-- contract definito
-- esempio payload disponibile
-- entrypoint minimale presente
-- rendering reale ancora da implementare
+## Build
+
+```bash
+mkdir -p build && cd build
+cmake ..
+cmake --build . -j$(nproc)
+```
+
+## Utilizzo
+
+```bash
+./build/velox_video_engine --request /path/to/payload.json
+```
+
+Il payload JSON deve contenere almeno `output_path` e parametri di scena/clip.
