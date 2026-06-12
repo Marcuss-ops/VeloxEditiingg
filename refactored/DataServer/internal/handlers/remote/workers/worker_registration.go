@@ -48,14 +48,18 @@ func NewWorkerLifecycle(cfg *config.Config, reg *workersreg.Registry, dataDir st
 func (wl *WorkerLifecycle) RegisterV2Handler() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var body struct {
-			WorkerID      string                 `json:"worker_id"`
-			WorkerName    string                 `json:"worker_name"`
-			APIVersion    string                 `json:"api_version"`
-			IPAddress     string                 `json:"ip_address"`
-			Host          string                 `json:"host"`
-			CodeVersion   string                 `json:"code_version"`
-			BundleVersion string                 `json:"bundle_version"`
-			Extra         map[string]interface{} `json:"extra"`
+			WorkerID        string                 `json:"worker_id"`
+			WorkerName      string                 `json:"worker_name"`
+			APIVersion      string                 `json:"api_version"`
+			IPAddress       string                 `json:"ip_address"`
+			Host            string                 `json:"host"`
+			CodeVersion     string                 `json:"code_version"`
+			BundleVersion   string                 `json:"bundle_version"`
+			BundleHash      string                 `json:"bundle_hash"`
+			ProtocolVersion string                 `json:"protocol_version"`
+			EngineVersion   string                 `json:"engine_version"`
+			Capabilities    map[string]interface{} `json:"capabilities"`
+			Extra           map[string]interface{} `json:"extra"`
 		}
 
 		if err := c.ShouldBindJSON(&body); err != nil {
@@ -103,6 +107,18 @@ func (wl *WorkerLifecycle) RegisterV2Handler() gin.HandlerFunc {
 		if body.BundleVersion != "" {
 			extra["bundle_version"] = body.BundleVersion
 		}
+		if body.BundleHash != "" {
+			extra["bundle_hash"] = body.BundleHash
+		}
+		if body.ProtocolVersion != "" {
+			extra["protocol_version"] = body.ProtocolVersion
+		}
+		if body.EngineVersion != "" {
+			extra["engine_version"] = body.EngineVersion
+		}
+		if body.Capabilities != nil {
+			extra["capabilities"] = body.Capabilities
+		}
 
 		ctx := c.Request.Context()
 		if err := wl.reg.RegisterWorker(ctx, body.WorkerID, workerName, ipAddress, extra); err != nil {
@@ -128,15 +144,18 @@ func (wl *WorkerLifecycle) RegisterV2Handler() gin.HandlerFunc {
 func (wl *WorkerLifecycle) RegisterCompatHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var body struct {
-			WorkerID      string                 `json:"worker_id"`
-			WorkerName    string                 `json:"worker_name"`
-			Hostname      string                 `json:"hostname"`
-			IP            string                 `json:"ip"`
-			Version       string                 `json:"version"`
-			CodeVersion   string                 `json:"code_version"`
-			BundleVersion string                 `json:"bundle_version"`
-			Capabilities  map[string]bool        `json:"capabilities"`
-			Extra         map[string]interface{} `json:"extra"`
+			WorkerID        string                 `json:"worker_id"`
+			WorkerName      string                 `json:"worker_name"`
+			Hostname        string                 `json:"hostname"`
+			IP              string                 `json:"ip"`
+			Version         string                 `json:"version"`
+			CodeVersion     string                 `json:"code_version"`
+			BundleVersion   string                 `json:"bundle_version"`
+			BundleHash      string                 `json:"bundle_hash"`
+			ProtocolVersion string                 `json:"protocol_version"`
+			EngineVersion   string                 `json:"engine_version"`
+			Capabilities    map[string]interface{} `json:"capabilities"`
+			Extra           map[string]interface{} `json:"extra"`
 		}
 
 		if err := c.ShouldBindJSON(&body); err != nil {
@@ -179,6 +198,15 @@ func (wl *WorkerLifecycle) RegisterCompatHandler() gin.HandlerFunc {
 		}
 		if body.BundleVersion != "" {
 			extra["bundle_version"] = body.BundleVersion
+		}
+		if body.BundleHash != "" {
+			extra["bundle_hash"] = body.BundleHash
+		}
+		if body.ProtocolVersion != "" {
+			extra["protocol_version"] = body.ProtocolVersion
+		}
+		if body.EngineVersion != "" {
+			extra["engine_version"] = body.EngineVersion
 		}
 		if body.Hostname != "" {
 			extra["host"] = body.Hostname

@@ -62,6 +62,33 @@ func readVersionFile(workDir string) string {
 	return ""
 }
 
+func readTextFileFirst(workDir, filename string) string {
+	candidates := []string{
+		filepath.Join(workDir, filename),
+		filepath.Join(workDir, "versions", "current", filename),
+		"/opt/velox/" + filename,
+	}
+	seen := make(map[string]bool)
+	for _, path := range candidates {
+		abs, err := filepath.Abs(path)
+		if err != nil {
+			continue
+		}
+		if seen[abs] {
+			continue
+		}
+		seen[abs] = true
+		data, err := os.ReadFile(abs)
+		if err == nil {
+			v := strings.TrimSpace(string(data))
+			if v != "" {
+				return v
+			}
+		}
+	}
+	return ""
+}
+
 func main() {
 	// Parse command-line flags
 	configPath := flag.String("config", defaultConfigPath, "path to config file")
@@ -165,6 +192,24 @@ func main() {
 	// Also ensure BundleVersion is set from resolved version if not already set
 	if cfg.BundleVersion == "" || cfg.BundleVersion == "dev" {
 		cfg.BundleVersion = resolvedVersion
+	}
+	if bundleHash := os.Getenv("VELOX_BUNDLE_HASH"); bundleHash != "" {
+		cfg.BundleHash = bundleHash
+	}
+	if cfg.BundleHash == "" {
+		cfg.BundleHash = readTextFileFirst(cfg.WorkDir, "BUNDLE_HASH.txt")
+	}
+	if protocolVersion := os.Getenv("VELOX_WORKER_PROTOCOL_VERSION"); protocolVersion != "" {
+		cfg.ProtocolVersion = protocolVersion
+	}
+	if cfg.ProtocolVersion == "" {
+		cfg.ProtocolVersion = "2026-06-worker-v1"
+	}
+	if engineVersion := os.Getenv("VELOX_ENGINE_VERSION"); engineVersion != "" {
+		cfg.EngineVersion = engineVersion
+	}
+	if cfg.EngineVersion == "" {
+		cfg.EngineVersion = resolvedVersion
 	}
 
 	// Create worker

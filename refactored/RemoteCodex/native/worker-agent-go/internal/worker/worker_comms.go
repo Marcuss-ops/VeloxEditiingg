@@ -26,16 +26,28 @@ func (w *Worker) register(ctx context.Context) error {
 	info := &api.WorkerInfo{
 		WorkerID:   w.config.WorkerID,
 		WorkerName: w.config.WorkerName,
-		Capabilities: map[string]bool{
-			"video_render":     true,
-			"audio_processing": true,
-			"image_processing": true,
+		Capabilities: map[string]interface{}{
+			"render_scene_image": true,
+			"render_clip_stock":  true,
+			"upload_drive":       true,
+			"ffmpeg":             true,
+			"cpp_engine":         true,
+			"max_parallel_jobs":  w.config.MaxActiveJobs,
+			"supported_job_types": []string{
+				"process_video",
+				"render",
+				"process_audio",
+				"health_check",
+			},
 		},
-		Hostname:      hostname,
-		IP:            "", // Could be populated from network interface
-		Version:       w.version,
-		CodeVersion:   w.version,
-		BundleVersion: w.config.BundleVersion,
+		Hostname:        hostname,
+		IP:              "",
+		Version:         w.version,
+		CodeVersion:     w.version,
+		BundleVersion:   w.config.BundleVersion,
+		BundleHash:      w.config.BundleHash,
+		ProtocolVersion: w.config.ProtocolVersion,
+		EngineVersion:   w.config.EngineVersion,
 	}
 
 	w.logger.Debug("Registering with master at %s", w.config.MasterURL)
@@ -185,6 +197,23 @@ func (w *Worker) sendHeartbeat(ctx context.Context) error {
 	extra["worker_name"] = w.config.WorkerName
 	extra["code_version"] = w.version
 	extra["bundle_version"] = w.config.BundleVersion
+	extra["bundle_hash"] = w.config.BundleHash
+	extra["protocol_version"] = w.config.ProtocolVersion
+	extra["engine_version"] = w.config.EngineVersion
+	extra["capabilities"] = map[string]interface{}{
+		"render_scene_image": true,
+		"render_clip_stock":  true,
+		"upload_drive":       true,
+		"ffmpeg":             true,
+		"cpp_engine":         true,
+		"max_parallel_jobs":  w.config.MaxActiveJobs,
+		"supported_job_types": []string{
+			"process_video",
+			"render",
+			"process_audio",
+			"health_check",
+		},
+	}
 	extra["jobs_completed"] = w.jobsCompleted.Load()
 	extra["jobs_failed"] = w.jobsFailed.Load()
 	if w.currentJob != nil {
@@ -199,14 +228,17 @@ func (w *Worker) sendHeartbeat(ctx context.Context) error {
 	}
 
 	payload := &api.HeartbeatPayload{
-		WorkerID:      w.config.WorkerID,
-		WorkerName:    w.config.WorkerName,
-		Status:        string(status),
-		JobID:         jobID,
-		CurrentJob:    jobID,
-		CodeVersion:   w.version,
-		BundleVersion: w.config.BundleVersion,
-		Extra:         extra,
+		WorkerID:        w.config.WorkerID,
+		WorkerName:      w.config.WorkerName,
+		Status:          string(status),
+		JobID:           jobID,
+		CurrentJob:      jobID,
+		CodeVersion:     w.version,
+		BundleVersion:   w.config.BundleVersion,
+		BundleHash:      w.config.BundleHash,
+		ProtocolVersion: w.config.ProtocolVersion,
+		EngineVersion:   w.config.EngineVersion,
+		Extra:           extra,
 	}
 
 	return w.apiClient.SendHeartbeat(ctx, payload)
@@ -220,4 +252,3 @@ func (w *Worker) calculateBackoff(current time.Duration) time.Duration {
 	}
 	return next
 }
-

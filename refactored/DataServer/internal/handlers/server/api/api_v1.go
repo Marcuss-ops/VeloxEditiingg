@@ -16,7 +16,6 @@ import (
 	"velox-server/internal/handlers/server/calendar"
 	"velox-server/internal/handlers/server/drive"
 	"velox-server/internal/handlers/server/groups"
-	"velox-server/internal/handlers/server/health"
 	"velox-server/internal/handlers/server/jobs"
 	"velox-server/internal/handlers/server/master"
 	"velox-server/internal/handlers/server/pipeline"
@@ -110,9 +109,6 @@ func RegisterV1Routes(r *gin.Engine, cfg *config.Config, fileQ *queue.FileQueue,
 	v1Admin := r.Group("/api/v1")
 	v1Admin.Use(adminAuthMiddleware(cfg))
 	{
-		// Health
-		v1.GET("/health", health.Health)
-
 		// Jobs - Core API
 		v1Admin.GET("/jobs", jobAPI.GetJobsHandler())
 		v1Admin.POST("/jobs", jobSubmitHandler.CreateJobHandler())
@@ -168,12 +164,14 @@ func RegisterV1Routes(r *gin.Engine, cfg *config.Config, fileQ *queue.FileQueue,
 		statusHandler := func(c *gin.Context) {
 			// Use Redis queue if available, otherwise return basic status
 			if redisQ != nil {
-				workers.WorkersStatus(reg, redisQ)(c)
+				workers.WorkersStatus(reg, redisQ, workerUpdateHandler)(c)
 			} else {
 				// Fallback: return basic worker list without job counts
+				master := workers.WorkerStatusMetadata(workerUpdateHandler)
 				list := reg.List(c.Request.Context())
 				c.JSON(http.StatusOK, gin.H{
 					"workers":         list,
+					"master":          master,
 					"active_workers":  len(list),
 					"total_workers":   len(list),
 					"pending_jobs":    0,

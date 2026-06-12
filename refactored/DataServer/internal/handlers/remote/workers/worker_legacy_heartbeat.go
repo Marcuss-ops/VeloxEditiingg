@@ -12,13 +12,17 @@ import (
 func Heartbeat(reg *workersreg.Registry) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var body struct {
-			WorkerID      string                 `json:"worker_id"`
-			WorkerName    string                 `json:"worker_name"`
-			Status        string                 `json:"status"`
-			CurrentJob    string                 `json:"current_job"`
-			CodeVersion   string                 `json:"code_version"`
-			BundleVersion string                 `json:"bundle_version"`
-			Extra         map[string]interface{} `json:"extra"`
+			WorkerID        string                 `json:"worker_id"`
+			WorkerName      string                 `json:"worker_name"`
+			Status          string                 `json:"status"`
+			CurrentJob      string                 `json:"current_job"`
+			CodeVersion     string                 `json:"code_version"`
+			BundleVersion   string                 `json:"bundle_version"`
+			BundleHash      string                 `json:"bundle_hash"`
+			ProtocolVersion string                 `json:"protocol_version"`
+			EngineVersion   string                 `json:"engine_version"`
+			Capabilities    map[string]interface{} `json:"capabilities"`
+			Extra           map[string]interface{} `json:"extra"`
 		}
 		if err := c.ShouldBindJSON(&body); err != nil {
 			log.Printf("workers/heartbeat: failed to bind JSON: %v", err)
@@ -40,6 +44,18 @@ func Heartbeat(reg *workersreg.Registry) gin.HandlerFunc {
 		}
 		if body.BundleVersion != "" {
 			extra["bundle_version"] = body.BundleVersion
+		}
+		if body.BundleHash != "" {
+			extra["bundle_hash"] = body.BundleHash
+		}
+		if body.ProtocolVersion != "" {
+			extra["protocol_version"] = body.ProtocolVersion
+		}
+		if body.EngineVersion != "" {
+			extra["engine_version"] = body.EngineVersion
+		}
+		if body.Capabilities != nil {
+			extra["capabilities"] = body.Capabilities
 		}
 
 		if err := reg.Heartbeat(c.Request.Context(), body.WorkerID, body.WorkerName, body.Status, body.CurrentJob, extra); err != nil {

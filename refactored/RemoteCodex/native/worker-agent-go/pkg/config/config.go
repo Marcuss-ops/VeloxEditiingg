@@ -14,17 +14,20 @@ import (
 // WorkerConfig holds the worker configuration loaded from JSON.
 // Example config file: /opt/velox/worker_config.json
 type WorkerConfig struct {
-	MasterURL     string `json:"master_url"`  // URL of the master server (e.g., http://master.example.com:8000)
-	WorkerID      string `json:"worker_id"`   // Unique worker identifier (e.g., worker-001 or auto-generated)
-	WorkerName    string `json:"worker_name"` // Human-readable worker name (e.g., video-worker-1)
-	WorkDir       string `json:"work_dir"`    // Base directory for velox installations (e.g., /opt/velox)
-	LogLevel      string `json:"log_level"`   // Log level: debug, info, warn, error
-	BundleVersion string `json:"bundle_version,omitempty"`
+	MasterURL       string `json:"master_url"`  // URL of the master server (e.g., http://master.example.com:8000)
+	WorkerID        string `json:"worker_id"`   // Unique worker identifier (e.g., worker-001 or auto-generated)
+	WorkerName      string `json:"worker_name"` // Human-readable worker name (e.g., video-worker-1)
+	WorkDir         string `json:"work_dir"`    // Base directory for velox installations (e.g., /opt/velox)
+	LogLevel        string `json:"log_level"`   // Log level: debug, info, warn, error
+	BundleVersion   string `json:"bundle_version,omitempty"`
+	BundleHash      string `json:"bundle_hash,omitempty"`
+	ProtocolVersion string `json:"protocol_version,omitempty"`
+	EngineVersion   string `json:"engine_version,omitempty"`
 
 	// Worker policy
-	MaxActiveJobs           int `json:"max_active_jobs"`              // Maximum concurrent active jobs (default: 1)
-	CommandPollIntervalSecs int `json:"command_poll_interval_secs"`   // Command polling interval in seconds (default: 30)
-	PrometheusPort          int `json:"prometheus_port"`              // Prometheus metrics port (default: 9090)
+	MaxActiveJobs           int `json:"max_active_jobs"`            // Maximum concurrent active jobs (default: 1)
+	CommandPollIntervalSecs int `json:"command_poll_interval_secs"` // Command polling interval in seconds (default: 30)
+	PrometheusPort          int `json:"prometheus_port"`            // Prometheus metrics port (default: 9090)
 
 	// Circuit breaker configuration
 	CircuitBreakerFailureThreshold int `json:"circuit_breaker_failure_threshold,omitempty"` // Failures to open circuit (default: 5)
@@ -95,12 +98,13 @@ func DefaultConfig(workDir string) *WorkerConfig {
 	}
 
 	return &WorkerConfig{
-		MasterURL:     "http://localhost:8000",
-		WorkerID:      GenerateWorkerID(),
-		WorkerName:    "velox-worker",
-		WorkDir:       workDir,
-		LogLevel:      "info",
+		MasterURL:               "http://localhost:8000",
+		WorkerID:                GenerateWorkerID(),
+		WorkerName:              "velox-worker",
+		WorkDir:                 workDir,
+		LogLevel:                "info",
 		BundleVersion:           "v1.0.1",
+		ProtocolVersion:         "2026-06-worker-v1",
 		MaxActiveJobs:           1,  // 1 main job per VPS
 		CommandPollIntervalSecs: 30, // Check for commands every 30 seconds
 	}

@@ -57,7 +57,7 @@ func TestRegisterWorker(t *testing.T) {
 	info := &WorkerInfo{
 		WorkerID:   "test-worker-001",
 		WorkerName: "Test Worker",
-		Capabilities: map[string]bool{
+		Capabilities: map[string]interface{}{
 			"video_render": true,
 		},
 		Hostname: "test-host",

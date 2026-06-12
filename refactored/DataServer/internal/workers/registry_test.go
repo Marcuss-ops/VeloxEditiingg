@@ -140,6 +140,51 @@ func TestRegistryHeartbeatRevokedWorker(t *testing.T) {
 	}
 }
 
+func TestRegistryHeartbeatMetadataPersistence(t *testing.T) {
+	dir := t.TempDir()
+	reg := NewWithPersistence(nil, false, nil, dir)
+	ctx := context.Background()
+
+	err := reg.Heartbeat(ctx, "w1", "worker-1", "idle", "", map[string]interface{}{
+		"code_version":     "v1.0.5",
+		"bundle_version":   "v1.0.5",
+		"bundle_hash":      "abc123",
+		"protocol_version": DefaultWorkerProtocolVersion,
+		"engine_version":   "v1.0.5",
+		"capabilities": map[string]interface{}{
+			"ffmpeg":              true,
+			"supported_job_types": []string{"health_check"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Heartbeat failed: %v", err)
+	}
+
+	reg2 := NewWithPersistence(nil, false, nil, dir)
+	info := reg2.GetWorker(ctx, "w1")
+	if info == nil {
+		t.Fatal("expected worker to exist")
+	}
+	if info.CodeVersion != "v1.0.5" {
+		t.Errorf("expected code_version v1.0.5, got %s", info.CodeVersion)
+	}
+	if info.BundleVersion != "v1.0.5" {
+		t.Errorf("expected bundle_version v1.0.5, got %s", info.BundleVersion)
+	}
+	if info.BundleHash != "abc123" {
+		t.Errorf("expected bundle_hash abc123, got %s", info.BundleHash)
+	}
+	if info.ProtocolVersion != DefaultWorkerProtocolVersion {
+		t.Errorf("expected protocol_version %s, got %s", DefaultWorkerProtocolVersion, info.ProtocolVersion)
+	}
+	if info.EngineVersion != "v1.0.5" {
+		t.Errorf("expected engine_version v1.0.5, got %s", info.EngineVersion)
+	}
+	if info.Capabilities == nil || info.Capabilities["ffmpeg"] != true {
+		t.Errorf("expected capabilities to persist")
+	}
+}
+
 func TestRegistryCleanupStaleWorkers(t *testing.T) {
 	dir := t.TempDir()
 	reg := NewWithPersistence(nil, false, nil, dir)

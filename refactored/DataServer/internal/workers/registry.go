@@ -183,12 +183,7 @@ func (r *Registry) Heartbeat(ctx context.Context, workerID, workerName, status, 
 				info.WorkerGroup = s
 			}
 		}
-		if v, ok := extra["code_version"].(string); ok && v != "" {
-			info.CodeVersion = v
-		}
-		if v, ok := extra["bundle_version"].(string); ok && v != "" {
-			info.BundleVersion = v
-		}
+		applyMetadataFields(extra, &info)
 		if v, ok := extra["readiness"].(map[string]interface{}); ok {
 			info.Readiness = v
 		}
@@ -217,7 +212,11 @@ func (r *Registry) Heartbeat(ctx context.Context, workerID, workerName, status, 
 
 	r.inMem[workerID] = info
 
-	if r.dbStore != nil {
+	if r.filePath != "" {
+		if err := r.save(); err != nil {
+			log.Printf("registry: failed to persist worker heartbeat: %v", err)
+		}
+	} else if r.dbStore != nil {
 		raw, _ := json.Marshal(info)
 		if err := r.dbStore.UpsertWorker(raw); err != nil {
 			log.Printf("registry: sqlite upsert worker heartbeat failed: %v", err)
@@ -226,6 +225,12 @@ func (r *Registry) Heartbeat(ctx context.Context, workerID, workerName, status, 
 	if r.useRedis && r.redis != nil {
 		key := workerPrefix + workerID
 		extraJSON, _ := json.Marshal(extra)
+		capabilitiesJSON := ""
+		if info.Capabilities != nil {
+			if b, err := json.Marshal(info.Capabilities); err == nil {
+				capabilitiesJSON = string(b)
+			}
+		}
 		return r.redis.HSet(ctx, key,
 			"worker_id", workerID,
 			"worker_name", workerName,
@@ -236,6 +241,12 @@ func (r *Registry) Heartbeat(ctx context.Context, workerID, workerName, status, 
 			"drain", strconv.FormatBool(info.Drain),
 			"schedulable", strconv.FormatBool(info.Schedulable),
 			"worker_group", info.WorkerGroup,
+			"code_version", info.CodeVersion,
+			"bundle_version", info.BundleVersion,
+			"bundle_hash", info.BundleHash,
+			"protocol_version", info.ProtocolVersion,
+			"engine_version", info.EngineVersion,
+			"capabilities", capabilitiesJSON,
 		).Err()
 	}
 	return nil
@@ -250,6 +261,38 @@ func (r *Registry) IsRegistered(ctx context.Context, workerID string) bool {
 	_, ok := r.inMem[workerID]
 	r.mu.RUnlock()
 	return ok
+}
+
+func parseWorkerRedisFields(m map[string]string, info *WorkerInfo) {
+	if v := m["code_version"]; v != "" {
+		info.CodeVersion = v
+	}
+	if v := m["bundle_version"]; v != "" {
+		info.BundleVersion = v
+	}
+	if v := m["bundle_hash"]; v != "" {
+		info.BundleHash = v
+	}
+	if v := m["protocol_version"]; v != "" {
+		info.ProtocolVersion = v
+	}
+	if v := m["engine_version"]; v != "" {
+		info.EngineVersion = v
+	}
+	if v := m["capabilities"]; v != "" {
+		var caps map[string]interface{}
+		if err := json.Unmarshal([]byte(v), &caps); err == nil {
+			info.Capabilities = caps
+		}
+	}
+	if extraRaw, ok := m["extra"]; ok && extraRaw != "" {
+		var extra map[string]interface{}
+		if err := json.Unmarshal([]byte(extraRaw), &extra); err == nil {
+			applyMetadataFields(extra, info)
+			info.RecentLogs = extractStringSlice(extra["recent_logs"])
+			info.RecentErrors = extractStringSlice(extra["recent_errors"])
+		}
+	}
 }
 
 // GetWorker returns a single worker's info by ID
@@ -271,13 +314,7 @@ func (r *Registry) GetWorker(ctx context.Context, workerID string) *WorkerInfo {
 			Schedulable: schedulable,
 			WorkerGroup: m["worker_group"],
 		}
-		if extraRaw, ok := m["extra"]; ok && extraRaw != "" {
-			var extra map[string]interface{}
-			if err := json.Unmarshal([]byte(extraRaw), &extra); err == nil {
-				info.RecentLogs = extractStringSlice(extra["recent_logs"])
-				info.RecentErrors = extractStringSlice(extra["recent_errors"])
-			}
-		}
+		parseWorkerRedisFields(m, info)
 		return info
 	}
 	r.mu.RLock()
@@ -307,13 +344,7 @@ func (r *Registry) List(ctx context.Context) []WorkerInfo {
 					LastHB:     m["last_heartbeat"],
 					CurrentJob: m["current_job"],
 				}
-				if extraRaw, ok := m["extra"]; ok && extraRaw != "" {
-					var extra map[string]interface{}
-					if err := json.Unmarshal([]byte(extraRaw), &extra); err == nil {
-						info.RecentLogs = extractStringSlice(extra["recent_logs"])
-						info.RecentErrors = extractStringSlice(extra["recent_errors"])
-					}
-				}
+				parseWorkerRedisFields(m, &info)
 				out = append(out, info)
 			}
 		}
@@ -376,6 +407,7 @@ func (r *Registry) RegisterWorker(ctx context.Context, workerID, workerName, ipA
 		Schedulable: true,
 		WorkerGroup: workerGroup,
 	}
+	applyMetadataFields(extra, &info)
 
 	r.inMem[workerID] = info
 	if err := r.save(); err != nil {
@@ -391,6 +423,12 @@ func (r *Registry) RegisterWorker(ctx context.Context, workerID, workerName, ipA
 
 	if r.useRedis && r.redis != nil {
 		key := workerPrefix + workerID
+		capabilitiesJSON := ""
+		if info.Capabilities != nil {
+			if b, err := json.Marshal(info.Capabilities); err == nil {
+				capabilitiesJSON = string(b)
+			}
+		}
 		return r.redis.HSet(ctx, key,
 			"worker_id", workerID,
 			"worker_name", workerName,
@@ -402,6 +440,12 @@ func (r *Registry) RegisterWorker(ctx context.Context, workerID, workerName, ipA
 			"host", ipAddress,
 			"schedulable", "true",
 			"worker_group", workerGroup,
+			"code_version", info.CodeVersion,
+			"bundle_version", info.BundleVersion,
+			"bundle_hash", info.BundleHash,
+			"protocol_version", info.ProtocolVersion,
+			"engine_version", info.EngineVersion,
+			"capabilities", capabilitiesJSON,
 		).Err()
 	}
 	return nil
@@ -512,6 +556,18 @@ func (r *Registry) UpdateWorker(ctx context.Context, workerID string, updates ma
 	if v, ok := updates["bundle_version"].(string); ok {
 		info.BundleVersion = v
 	}
+	if v, ok := updates["bundle_hash"].(string); ok {
+		info.BundleHash = v
+	}
+	if v, ok := updates["protocol_version"].(string); ok {
+		info.ProtocolVersion = v
+	}
+	if v, ok := updates["engine_version"].(string); ok {
+		info.EngineVersion = v
+	}
+	if v, ok := updates["capabilities"]; ok {
+		info.Capabilities = normalizeCapabilities(v)
+	}
 	if v, ok := updates["ip_address"].(string); ok {
 		info.IPAddress = v
 		info.Host = v
@@ -540,9 +596,28 @@ func (r *Registry) UpdateWorker(ctx context.Context, workerID string, updates ma
 
 	if r.useRedis && r.redis != nil {
 		key := workerPrefix + workerID
-		fields := make([]interface{}, 0, len(updates)*2)
-		for k, v := range updates {
-			fields = append(fields, k, fmt.Sprintf("%v", v))
+		capabilitiesJSON := ""
+		if info.Capabilities != nil {
+			if b, err := json.Marshal(info.Capabilities); err == nil {
+				capabilitiesJSON = string(b)
+			}
+		}
+		fields := []interface{}{
+			"worker_id", info.WorkerID,
+			"worker_name", info.WorkerName,
+			"display_name", info.DisplayName,
+			"status", info.Status,
+			"last_heartbeat", info.LastHB,
+			"current_job", info.CurrentJob,
+			"drain", strconv.FormatBool(info.Drain),
+			"schedulable", strconv.FormatBool(info.Schedulable),
+			"worker_group", info.WorkerGroup,
+			"code_version", info.CodeVersion,
+			"bundle_version", info.BundleVersion,
+			"bundle_hash", info.BundleHash,
+			"protocol_version", info.ProtocolVersion,
+			"engine_version", info.EngineVersion,
+			"capabilities", capabilitiesJSON,
 		}
 		if len(fields) > 0 {
 			return r.redis.HSet(ctx, key, fields...).Err()

@@ -12,14 +12,17 @@ const (
 
 // WorkerInfo represents worker identification sent to the master.
 type WorkerInfo struct {
-	WorkerID      string          `json:"worker_id"`
-	WorkerName    string          `json:"worker_name"`
-	Capabilities  map[string]bool `json:"capabilities"`
-	Hostname      string          `json:"hostname"`
-	IP            string          `json:"ip"`
-	Version       string          `json:"version"`
-	CodeVersion   string          `json:"code_version,omitempty"`
-	BundleVersion string          `json:"bundle_version,omitempty"`
+	WorkerID        string                 `json:"worker_id"`
+	WorkerName      string                 `json:"worker_name"`
+	Capabilities    map[string]interface{} `json:"capabilities"`
+	Hostname        string                 `json:"hostname"`
+	IP              string                 `json:"ip"`
+	Version         string                 `json:"version"`
+	CodeVersion     string                 `json:"code_version,omitempty"`
+	BundleVersion   string                 `json:"bundle_version,omitempty"`
+	BundleHash      string                 `json:"bundle_hash,omitempty"`
+	ProtocolVersion string                 `json:"protocol_version,omitempty"`
+	EngineVersion   string                 `json:"engine_version,omitempty"`
 }
 
 // JobRequest represents a request to get a job from the master.
@@ -52,14 +55,17 @@ type JobResult struct {
 
 // HeartbeatPayload represents a heartbeat message.
 type HeartbeatPayload struct {
-	WorkerID      string                 `json:"worker_id"`
-	WorkerName    string                 `json:"worker_name,omitempty"`
-	Status        string                 `json:"status"`
-	JobID         string                 `json:"job_id,omitempty"`
-	CurrentJob    string                 `json:"current_job,omitempty"`
-	CodeVersion   string                 `json:"code_version,omitempty"`
-	BundleVersion string                 `json:"bundle_version,omitempty"`
-	Extra         map[string]interface{} `json:"extra,omitempty"`
+	WorkerID        string                 `json:"worker_id"`
+	WorkerName      string                 `json:"worker_name,omitempty"`
+	Status          string                 `json:"status"`
+	JobID           string                 `json:"job_id,omitempty"`
+	CurrentJob      string                 `json:"current_job,omitempty"`
+	CodeVersion     string                 `json:"code_version,omitempty"`
+	BundleVersion   string                 `json:"bundle_version,omitempty"`
+	BundleHash      string                 `json:"bundle_hash,omitempty"`
+	ProtocolVersion string                 `json:"protocol_version,omitempty"`
+	EngineVersion   string                 `json:"engine_version,omitempty"`
+	Extra           map[string]interface{} `json:"extra,omitempty"`
 }
 
 // APIResponse represents a generic API response.
