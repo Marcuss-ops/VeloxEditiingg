@@ -1,6 +1,6 @@
 # Handlers – struttura per dominio
 
-La cartella `handlers` e ora separata per macro-dominio:
+La cartella `handlers` è separata per macro-dominio:
 
 - `web`: endpoint e adapter per UI/web layer.
 - `server`: logica API/server core.
@@ -12,27 +12,34 @@ La cartella `handlers` e ora separata per macro-dominio:
 handlers/
 ├── README.md
 ├── web/
-│   ├── dashboard/
-│   ├── explorer/
-│   ├── proxy/
-│   └── spa/
+│   ├── darkeditor/        # Dark Editor web proxy
+│   ├── dashboard/         # Worker dashboard
+│   ├── explorer/          # File explorer
+│   ├── proxy/             # NoRoute handler, compat, landing page
+│   └── spa/               # SPA serving (history fallback)
 ├── server/
-│   ├── analytics/
-│   ├── api/
-│   ├── db/
-│   ├── drive/
-│   ├── groups/
-│   ├── health/
-│   ├── jobs/
-│   ├── master/
-│   ├── pipeline/
-│   └── youtube/
+│   ├── api/               # Route /api/v1/* (api_v1.go, api_v1_native.go)
+│   ├── analytics/         # Dashboard BI, analytics (10 file)
+│   ├── auth/              # User auth (register, login, sessions)
+│   ├── calendar/          # Calendario produzione video (6 file)
+│   ├── collaboration/     # Project collaboration (enterprise)
+│   ├── darkeditor/        # Dark Editor - editor immagini AI (16 file)
+│   ├── diagnostics/       # Data layout diagnostics
+│   ├── drive/             # Google Drive handlers
+│   ├── groups/            # YouTube group management
+│   ├── health/            # Health check
+│   ├── jobs/              # Job CRUD, submission, normalization
+│   ├── master/            # Create-master (multi-title video)
+│   ├── pipeline/          # Pipeline generazione script
+│   ├── script/            # Script con immagini
+│   ├── video/             # Scene video, clip+stock, smoke test
+│   └── youtube/           # YouTube upload + management (22 file)
 └── remote/
-    ├── ansible/
-    ├── install/
-    ├── livestream/
-    ├── submission/
-    └── workers/
+    ├── ansible/           # Playbook Ansible per deploy
+    ├── install/           # Script installazione worker
+    ├── livestream/        # YouTube Live stream management
+    ├── submission/        # Multi-clip submission management
+    └── workers/           # Registrazione, heartbeat, bundle
 ```
 
 ## Convenzioni

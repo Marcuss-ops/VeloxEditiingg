@@ -28,7 +28,7 @@ Server (scene_normalize.go)
   │  • Prepara payload → scenes_json con duration_seconds
   │
   ▼
-FileQueue → Worker remoto (57.129.132.133)
+FileQueue → Worker remoto disponibile
   │
   ▼
 Worker (native_engine.go)
@@ -169,31 +169,15 @@ Specifica `scene_duration_secs: 30` per forzare 30 secondi per scena.
 }
 ```
 
-## Worker unico
+## Workers
 
-Da questa sessione, l'unico worker attivo è:
-
-```
-host_host_57_129_132_133 (IP: 57.129.132.133)
-```
-
-Tutti gli altri worker sono stati revocati per garantire comunicazione chiara e prevedibile.
+I worker sono gestiti dinamicamente dal server. Consulta `/api/v1/workers` per la lista dei worker attivi.
 
 ## Polling log (worker)
 
-Il worker ora logga l'attività di polling ogni 60 secondi:
+Il worker logga l'attività di polling con tag `[POLLING]`:
 
 ```
-[INFO] [host_57.129.132.133] [POLLING] Status: alive — 12 polls sent, no jobs available
-[INFO] [host_57.129.132.133] [POLLING] Job acquired on attempt 3 — executing
+[INFO] [host_xxx] [POLLING] Status: alive — 12 polls sent, no jobs available
+[INFO] [host_xxx] [POLLING] Job acquired on attempt 3 — executing
 ```
-
-## Modifiche recenti
-
-| Data | Modifica |
-|------|----------|
-| 2026-06-11 | Auto-detect durata audio (server + worker) |
-| 2026-06-11 | Fix: `parseNativeVideoScenes` ora estrae `duration_seconds` |
-| 2026-06-11 | Worker-side fallback: ffprobe se durata non presente |
-| 2026-06-11 | Worker unico: 57.129.132.133 |
-| 2026-06-11 | Polling log migliorato con tag `[POLLING]` |
