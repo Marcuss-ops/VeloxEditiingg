@@ -6,32 +6,32 @@ velox-master.pid
 *.pid
 
 # ── Secrets & credentials ────────────────────────────────────
-DataServer/data/secrets/
-DataServer/data/drive/credentials/
-DataServer/data/drive/tokens/
+refactored/DataServer/data/secrets/
+refactored/DataServer/data/drive/credentials/
+refactored/DataServer/data/drive/tokens/
 
 # ── Runtime directories ──────────────────────────────────────
-DataServer/data/analytics/
-DataServer/data/backups/
-DataServer/data/dark_editor/
-DataServer/data/drive/
-DataServer/data/jobs/
-DataServer/data/youtube/
-DataServer/data/worker_downloads/
-DataServer/data/workers.json
-DataServer/data/ansible/ansible_computers.json
-DataServer/data/ansible/playbooks/inventory.ini
-DataServer/data/ansible_runs.json
-DataServer/completed_videos/
+refactored/DataServer/data/analytics/
+refactored/DataServer/data/backups/
+refactored/DataServer/data/dark_editor/
+refactored/DataServer/data/drive/
+refactored/DataServer/data/jobs/
+refactored/DataServer/data/youtube/
+refactored/DataServer/data/worker_downloads/
+refactored/DataServer/data/workers.json
+refactored/DataServer/data/ansible/ansible_computers.json
+refactored/DataServer/data/ansible/playbooks/inventory.ini
+refactored/DataServer/data/ansible_runs.json
+refactored/DataServer/completed_videos/
 
 # ── Build artifacts ──────────────────────────────────────────
 *.tsbuildinfo
 *.tsbuildinfo.*
-DataServer/bin/
-DataServer/server
-DataServer/velox-server
-RemoteCodex/native/worker-agent-go/bin/
-RemoteCodex/native/video-engine-cpp/build/
+refactored/DataServer/bin/
+refactored/DataServer/server
+refactored/DataServer/velox-server
+refactored/RemoteCodex/native/worker-agent-go/bin/
+refactored/RemoteCodex/native/video-engine-cpp/build/
 
 # ── Environment & IDE ────────────────────────────────────────
 .env
@@ -65,4 +65,3 @@ frontend_standalone/web/.svelte-kit/
 # ── OS files ─────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
-

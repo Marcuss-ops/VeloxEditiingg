@@ -50,113 +50,33 @@ Velox è un sistema distribuito per la generazione e composizione video. È comp
 
 ## 1. Struttura del Repository
 
+La sorgente ufficiale è solo `refactored/`. Le vecchie cartelle root `DataServer/` e `RemoteCodex/` sono state rimosse per evitare deploy accidentali della copia legacy.
+
 ```
 .
-├── DataServer/                        # MASTER SERVER (Go)
-│   ├── cmd/server/                    # Entrypoint del server
-│   │   ├── main.go                    # main() - carica config e avvia server
-│   │   ├── bootstrap.go               # Build delle dipendenze (DI)
-│   │   └── router.go                  # Tutte le route API
-│   ├── internal/
-│   │   ├── handlers/
-│   │   │   ├── server/                # API REST pubbliche
-│   │   │   │   ├── api/               # Route /api/v1/* (api_v1.go, api_v1_native.go)
-│   │   │   │   ├── analytics/         # Dashboard BI, analytics (10 file)
-│   │   │   │   ├── auth/              # User auth (register, login, sessions)
-│   │   │   │   ├── calendar/          # Calendario produzione video (6 file)
-│   │   │   │   ├── collaboration/     # Project collaboration (enterprise)
-│   │   │   │   ├── darkeditor/        # Dark Editor - editor immagini AI (16 file)
-│   │   │   │   ├── diagnostics/       # Data layout diagnostics
-│   │   │   │   ├── drive/             # Google Drive handlers
-│   │   │   │   ├── groups/            # YouTube group management
-│   │   │   │   ├── jobs/              # Job CRUD, submission, normalization
-│   │   │   │   ├── master/            # Create-master (multi-title video)
-│   │   │   │   ├── pipeline/          # Pipeline generazione script
-│   │   │   │   ├── script/            # Script con immagini
-│   │   │   │   ├── video/             # Scene video, clip+stock, smoke test
-│   │   │   │   └── youtube/           # YouTube upload + management (22 file)
-│   │   │   ├── remote/                # API per worker remoti
-│   │   │   │   ├── workers/           # Registrazione, heartbeat, bundle
-│   │   │   │   ├── ansible/           # Playbook Ansible per deploy
-│   │   │   │   ├── install/           # Script installazione worker
-│   │   │   │   ├── livestream/        # YouTube Live stream management
-│   │   │   │   └── submission/        # Multi-clip submission management
-│   │   │   └── web/                   # Web layer
-│   │   │       ├── darkeditor/        # Dark Editor web proxy
-│   │   │       ├── dashboard/         # Worker dashboard
-│   │   │       ├── explorer/          # File explorer
-│   │   │       ├── proxy/             # NoRoute handler, compat, landing page
-│   │   │       └── spa/               # SPA serving (history fallback)
-│   │   ├── config/                    # Config da env vars
-│   │   ├── integrations/              # Servizi esterni
-│   │   │   ├── drive/                 # Google Drive API
-│   │   │   ├── news/                  # News fetching (Google News, NewsAPI, GNews)
-│   │   │   └── youtube/               # YouTube Data API v3, OAuth, QuotaManager
-│   │   ├── logging/                   # Structured logging, throttling
-│   │   ├── queue/                     # Code job
-│   │   │   ├── file_queue.go          # FileQueue (SQLite-backed)
-│   │   │   ├── redis.go               # Redis queue (legacy)
-│   │   │   ├── streams_queue.go       # StreamsQueue (per submissions)
-│   │   │   ├── orchestrator.go        # Job orchestration
-│   │   │   ├── dlq.go                 # Dead letter queue
-│   │   │   ├── events.go              # Queue events
-│   │   │   └── pipeline_templates.go  # Pipeline templates
-│   │   ├── remoteengine/              # Remote script engine client
-│   │   ├── services/
-│   │   │   ├── analytics/             # Analytics service layer
-│   │   │   └── jobs/                  # Job service layer
-│   │   ├── state/                     # Application state
-│   │   ├── store/                     # Persistenza (33+ file)
-│   │   │   ├── sqlite.go              # SQLite store
-│   │   │   ├── sqlite_*.go            # Domain-specific SQLite repos
-│   │   │   ├── postgres_store.go      # PostgreSQL store (enterprise)
-│   │   │   ├── postgres/              # PostgreSQL-specific repos
-│   │   │   ├── migrations/            # DB migrations
-│   │   │   └── interface.go           # Repository interfaces
-│   │   ├── workers/                   # Registry, CommandManager, TokenManager
-│   │   └── audit/                     # Data layer audit
-│   ├── bin/                           # Binary compilati
-│   │   ├── velox-server               # Server master
-│   │   └── velox-bundler              # Generatore bundle worker
-│   └── data/                          # Dati runtime
-│       ├── worker_downloads/          # Bundle per worker (worker_code.zip)
-│       ├── generated_videos/          # Video generati
-│       └── ansible/                   # Playbook Ansible
+├── refactored/                        # SORGENTE UFFICIALE
+│   ├── DataServer/                    # MASTER SERVER (Go)
+│   │   ├── cmd/server/                # Entrypoint master
+│   │   ├── internal/handlers/         # API server e worker remote
+│   │   ├── internal/workers/          # Registry, command manager, metadata
+│   │   ├── internal/queue/            # Code job SQLite/Redis
+│   │   ├── internal/config/           # Config da env vars
+│   │   ├── data/ansible/              # Playbook deploy worker
+│   │   └── bin/                       # Build artifacts ignorati
+│   ├── RemoteCodex/                   # SOFTWARE WORKER REMOTO
+│   │   └── native/
+│   │       ├── worker-agent-go/       # Worker agent Go
+│   │       └── video-engine-cpp/      # Motore video C++/FFmpeg
+│   ├── shared/                        # Libreria condivisa Go
+│   ├── frontend_standalone/web/dist/  # Build statica frontend
+│   ├── docs/                          # Documentazione API
+│   ├── scripts/                       # Scripts di deploy
+│   └── VERSION.txt                    # Versione bundle/codice
 │
-├── RemoteCodex/                       # SOFTWARE WORKER REMOTO
-│   └── native/
-│       ├── worker-agent-go/           # Worker agent in Go
-│       │   ├── cmd/                   # Entrypoints (velox-worker-agent, installer)
-│       │   ├── internal/
-│       │   │   ├── telemetry/         # Prometheus metrics, GC stats
-│       │   │   └── worker/            # Core worker logic (15 file)
-│       │   ├── pkg/
-│       │   │   ├── api/               # Client HTTP per master (+ renderplan/)
-│       │   │   ├── config/            # Worker configuration management
-│       │   │   ├── logger/            # Logging
-│       │   │   ├── nlp/               # Natural language processing
-│       │   │   └── video/             # Pipeline video (workflow, native_engine, fuzzy_match)
-│       │   ├── deploy/                # Systemd unit, install/rollback scripts
-│       │   ├── Makefile
-│       │   └── Dockerfile
-│       └── video-engine-cpp/          # Motore video C++ (FFmpeg)
-│           ├── include/               # Headers (video_contract.hpp, etc.)
-│           ├── src/                   # Source (main.cpp, video_builder.cpp)
-│           ├── schemas/               # JSON schema examples
-│           └── CMakeLists.txt
-│
-├── shared/                            # Libreria condivisa Go
-│   ├── contract/                      # Go<->C++ contract types
-│   ├── media/                         # Multimedia metadata (ffprobe)
-│   ├── paths/                         # Filesystem path utilities
-│   └── payload/                       # JSON map extraction utilities
-│
-├── frontend_standalone/               # SPA frontend
-│   └── web/dist/                      # Build statica frontend
-│
-├── docs/                              # Documentazione API
-├── scripts/                           # Scripts di deploy
-└── VERSION.txt                        # v1.0.3
+├── shared/                            # Shared runtime/data legacy compat
+├── docs/                              # Docs root legacy compat
+├── scripts/                           # Deploy wrapper root
+└── VERSION.txt                        # Versione radice
 ```
 
 ---
@@ -518,9 +438,9 @@ Deploy remoto worker via Ansible:
 ### Avvio Master Server
 
 ```bash
-cd DataServer
+cd refactored/DataServer
 export VELOX_ADMIN_TOKEN=velox-dev-token
-export VELOX_SPA_DIR=../frontend_standalone/web/dist
+export VELOX_SPA_DIR=../../frontend_standalone/web/dist
 export MASTER_PUBLIC_URL=http://51.91.11.36:8000
 go run ./cmd/server
 # Server su http://0.0.0.0:8000
@@ -552,9 +472,8 @@ curl http://localhost:8000/api/v1/jobs/summary \
 ### Installa Worker Remoto
 
 ```bash
-# Sul worker remoto:
-git clone https://github.com/Marcuss-ops/Imageeef.git
-cd Imageeef/RemoteCodex/native/worker-agent-go
+# Sul worker remoto, partendo dalla root del repository:
+cd refactored/RemoteCodex/native/worker-agent-go
 make build
 ./bin/velox-worker-agent -master http://<master-ip>:8000 -token <token>
 ```
