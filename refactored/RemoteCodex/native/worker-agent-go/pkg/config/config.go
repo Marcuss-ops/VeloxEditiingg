@@ -103,7 +103,7 @@ func DefaultConfig(workDir string) *WorkerConfig {
 		WorkerName:              "velox-worker",
 		WorkDir:                 workDir,
 		LogLevel:                "info",
-		BundleVersion:           "v1.0.1",
+		BundleVersion:           "",
 		ProtocolVersion:         "2026-06-worker-v1",
 		MaxActiveJobs:           1,  // 1 main job per VPS
 		CommandPollIntervalSecs: 30, // Check for commands every 30 seconds

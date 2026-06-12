@@ -150,6 +150,7 @@ func RegisterV1Routes(r *gin.Engine, cfg *config.Config, fileQ *queue.FileQueue,
 			v1.GET("/bundle/files", workerUpdateHandler.GetBundleFilesHandler())
 			v1.GET("/bundle/info", workerUpdateHandler.GetLatestBundleHandler())
 			v1.GET("/bundle/manifest", workerUpdateHandler.GetBundleManifestHandler())
+			v1Admin.POST("/bundle/manifest/generate", workerUpdateHandler.GenerateManifestV2Handler())
 		}
 
 		// Queue - Core API
@@ -243,7 +244,7 @@ func RegisterV1Routes(r *gin.Engine, cfg *config.Config, fileQ *queue.FileQueue,
 		v1Admin.GET("/endpoints-status", proxy.EndpointsStatus)
 		v1Admin.GET("/services/availability", proxy.ServicesAvailability)
 		v1Admin.POST("/services/ensure_started", proxy.ServicesEnsureStarted)
-		v1Admin.GET("/master/code-version", proxy.MasterCodeVersion)
+		v1Admin.GET("/master/code-version", proxy.MasterCodeVersion(cfg))
 
 		// Video - Core API
 		v1Admin.POST("/video/create-master", master.CreateMaster(cfg, redisQ))

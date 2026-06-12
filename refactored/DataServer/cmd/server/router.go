@@ -6,6 +6,7 @@ import (
 
 	"velox-server/internal/app"
 	"velox-server/internal/config"
+	remoteansible "velox-server/internal/handlers/remote/ansible"
 	"velox-server/internal/handlers/server/analytics"
 	"velox-server/internal/handlers/server/api"
 	jobhandlers "velox-server/internal/handlers/server/jobs"
@@ -64,8 +65,14 @@ func newRouter(cfg *config.Config, deps *serverDeps, registry *app.Registry) *gi
 	// ── Module routes (health, workers, youtube, drive, ansible, frontend) ──
 	registry.RegisterRoutes(r)
 
+	// Get ansible handlers from the module (created during RegisterRoutes)
+	var ansibleHandlers *remoteansible.AnsibleHandlers
+	if deps.ansibleModule != nil {
+		ansibleHandlers = deps.ansibleModule.Handlers()
+	}
+
 	// ── Remaining routes not yet in modules ──────────────────────────────────
-	registerAPIV1Routes(r, cfg, deps)
+	registerAPIV1Routes(r, cfg, deps, ansibleHandlers)
 	registerNativeV1Routes(r, deps)
 	registerScriptRoutes(r, cfg, deps)
 
@@ -75,19 +82,21 @@ func newRouter(cfg *config.Config, deps *serverDeps, registry *app.Registry) *gi
 	return r
 }
 
-func registerAPIV1Routes(r *gin.Engine, cfg *config.Config, deps *serverDeps) {
+func registerAPIV1Routes(r *gin.Engine, cfg *config.Config, deps *serverDeps, ansibleHandlers *remoteansible.AnsibleHandlers) {
 	// TODO: migrate remaining V1 routes to dedicated api module
 	jobRepo := store.NewSQLiteJobsRepository(deps.sqliteStore)
 	tokenMgr := deps.workerLifecycle.GetTokenManager()
 	jobSvc := jobservice.NewService(cfg, deps.fileQ, deps.redisQ, jobRepo, nil, deps.reg)
 	jobAPI := jobhandlers.NewJobAPI(cfg, deps.fileQ, tokenMgr, jobSvc)
 	jobSubmitHandler := jobhandlers.NewJobSubmissionHandler(cfg, deps.fileQ)
-	api.RegisterV1Routes(r, cfg, deps.fileQ, deps.redisQ, deps.reg, jobAPI, jobSubmitHandler, deps.workersRepo, deps.sqliteStore, deps.workerUpdateHandler, deps.workerLifecycle, nil)
+	api.RegisterV1Routes(r, cfg, deps.fileQ, deps.redisQ, deps.reg, jobAPI, jobSubmitHandler, deps.workersRepo, deps.sqliteStore, deps.workerUpdateHandler, deps.workerLifecycle, ansibleHandlers)
 	r.POST("/api/jobs/get", jobAPI.GetJobCompatHandler())
 	r.POST("/api/jobs/result", jobAPI.SubmitResultCompatHandler())
 	r.GET("/api/jobs/get", jobAPI.GetJobCompatHandler())
 	r.POST("/api/jobs/complete", jobAPI.CompleteJobHandler())
 	r.POST("/api/jobs/fail", jobAPI.FailJobHandler())
+
+	// Compat: commands endpoint for workers (registered by workers module above)
 }
 
 func registerNativeV1Routes(r *gin.Engine, deps *serverDeps) {

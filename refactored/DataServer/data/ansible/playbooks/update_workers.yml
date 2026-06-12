@@ -14,7 +14,7 @@
   vars:
     velox_dir: "/opt/velox"
     master_url: "{{ master_url | default('http://127.0.0.1:8000') }}"
-    version_number: "{{ lookup('file', playbook_dir + '/../../../../VERSION.txt') | trim }}"
+    version_number: "{{ lookup('file', playbook_dir + '/../../../../../VERSION.txt') | trim }}"
 
   tasks:
     # ── PRE-CHECK: connesione ────────────────────────────────

@@ -323,7 +323,7 @@ func loadWorkersConfig() WorkersConfig {
 	c := WorkersConfig{
 		MaxJobAttempts:   3,
 		HeartbeatTimeout: 900,
-		VersionNumber:    "v1.0.1",
+		VersionNumber:    "v1.0.6",
 	}
 	c.AllowedWorkers = os.Getenv("VELOX_ALLOWED_WORKERS")
 	c.ForceSingleWorker = os.Getenv("VELOX_FORCE_SINGLE_WORKER")
@@ -341,7 +341,7 @@ func loadWorkersConfig() WorkersConfig {
 		}
 	}
 	if c.VersionNumber == "" {
-		c.VersionNumber = "v1.0.1"
+		c.VersionNumber = "v1.0.6"
 	}
 	if c.CodeVersion == "" {
 		c.CodeVersion = c.VersionNumber

@@ -68,6 +68,7 @@ func (m *Module) RegisterRoutes(r *gin.Engine) {
 
 	if m.workerUpdateHandler != nil {
 		r.GET("/bundle_manifest.json", m.workerUpdateHandler.GetBundleManifestHandler())
+		r.POST("/bundle/manifest/generate", m.workerUpdateHandler.GenerateManifestV2Handler())
 		r.GET("/api/worker/bundle", m.workerUpdateHandler.GetBundleDownloadHandler())
 		r.HEAD("/api/worker/bundle", m.workerUpdateHandler.GetBundleDownloadHandler())
 		r.GET("/api/worker/v2/manifest", m.workerUpdateHandler.GetManifestV2Handler())

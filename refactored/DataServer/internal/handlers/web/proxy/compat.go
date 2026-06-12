@@ -46,14 +46,16 @@ func ServicesEnsureStarted(c *gin.Context) {
 }
 
 // MasterCodeVersion returns minimal JSON for GET /api/master/code-version.
-func MasterCodeVersion(c *gin.Context) {
-	now := time.Now().UTC().Format(time.RFC3339)
-	c.JSON(http.StatusOK, gin.H{
-		"ok":             true,
-		"server":         "velox-server",
-		"version_number": "v1.0.1",
-		"timestamp":      now,
-	})
+func MasterCodeVersion(cfg *config.Config) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		now := time.Now().UTC().Format(time.RFC3339)
+		c.JSON(http.StatusOK, gin.H{
+			"ok":             true,
+			"server":         "velox-server",
+			"version_number": cfg.VersionNumber,
+			"timestamp":      now,
+		})
+	}
 }
 
 // Root handles GET / so the UI doesn't get 500 when the request is proxied to a backend that may fail (e.g. template error).

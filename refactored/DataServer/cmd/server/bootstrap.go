@@ -39,6 +39,7 @@ type serverDeps struct {
 	sqliteStore         *store.SQLiteStore
 	workerUpdateHandler *workersapi.WorkerUpdateHandler
 	workerLifecycle     *workersapi.WorkerLifecycle
+	ansibleModule       *ansible.Module
 }
 
 func configureTrustedProxies(r *gin.Engine) {
@@ -165,7 +166,9 @@ func runServer(cfg *config.Config) error {
 	registry.Register(workers.New(cfg, deps.reg, deps.workerLifecycle, deps.workerUpdateHandler, auth))
 	registry.Register(youtube.New(cfg, deps.paths.dataDir, deps.sqliteStore, auth))
 	registry.Register(drive.New(cfg))
-	registry.Register(ansible.New(cfg, deps.paths.dataDir, auth))
+	ansibleMod := ansible.New(cfg, deps.paths.dataDir, auth)
+	deps.ansibleModule = ansibleMod
+	registry.Register(ansibleMod)
 	registry.Register(frontend.New(cfg))
 
 	// Create gin engine with middleware
