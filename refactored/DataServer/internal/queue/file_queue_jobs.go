@@ -237,6 +237,7 @@ func (q *FileQueue) LeaseJob(ctx context.Context, jobID, workerID string) error 
 	job.AssignedAt = nowISOVal
 	job.ClaimedBy = workerID
 	job.ClaimedAt = nowISOVal
+	job.LeaseExpiry = time.Now().UTC().Add(30 * time.Minute).Format(time.RFC3339)
 	job.UpdatedAt = now
 	job.RetryCount++
 

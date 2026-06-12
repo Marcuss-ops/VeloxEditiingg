@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"velox-worker-agent/internal/telemetry"
@@ -59,7 +60,7 @@ func (w *Worker) executeJob(ctx context.Context, job *api.Job) {
 	w.logger.Info("[JOB] Executing job %s via runJobTask", job.JobID)
 	output, execErr = w.runJobTask(ctx, job)
 
-	if execErr == nil {
+	if execErr == nil && shouldUploadCompletedVideo(job, output) {
 		updatedOutput, upErr := w.uploadCompletedVideo(ctx, job, output)
 		if upErr != nil {
 			execErr = fmt.Errorf("upload completed video failed: %w", upErr)
@@ -137,6 +138,16 @@ func (w *Worker) executeJob(ctx context.Context, job *api.Job) {
 			w.setStatus(StatusIdle)
 		}
 	}
+}
+
+func shouldUploadCompletedVideo(job *api.Job, output map[string]interface{}) bool {
+	if job == nil {
+		return false
+	}
+	if strings.EqualFold(strings.TrimSpace(job.JobType), "health_check") {
+		return false
+	}
+	return strings.TrimSpace(extractOutputVideoPath(output)) != ""
 }
 
 // runJobTask executes the actual job task.

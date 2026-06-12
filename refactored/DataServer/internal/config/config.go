@@ -336,7 +336,15 @@ func loadWorkersConfig() WorkersConfig {
 	c.CodeVersion = os.Getenv("VELOX_CODE_VERSION")
 	c.VersionNumber = os.Getenv("VELOX_VERSION_NUMBER")
 	if c.VersionNumber == "" {
+		if v, err := os.ReadFile("../VERSION.txt"); err == nil {
+			c.VersionNumber = strings.TrimSpace(string(v))
+		}
+	}
+	if c.VersionNumber == "" {
 		c.VersionNumber = "v1.0.1"
+	}
+	if c.CodeVersion == "" {
+		c.CodeVersion = c.VersionNumber
 	}
 	if n, _ := strconv.Atoi(os.Getenv("VELOX_WORKER_HEARTBEAT_TIMEOUT")); n > 0 {
 		c.HeartbeatTimeout = n

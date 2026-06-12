@@ -8,8 +8,10 @@ import (
 	"velox-server/internal/config"
 	"velox-server/internal/handlers/server/analytics"
 	"velox-server/internal/handlers/server/api"
+	jobhandlers "velox-server/internal/handlers/server/jobs"
 	scripthandlers "velox-server/internal/handlers/server/script"
-
+	jobservice "velox-server/internal/services/jobs"
+	"velox-server/internal/store"
 	"github.com/gin-gonic/gin"
 )
 
@@ -75,7 +77,17 @@ func newRouter(cfg *config.Config, deps *serverDeps, registry *app.Registry) *gi
 
 func registerAPIV1Routes(r *gin.Engine, cfg *config.Config, deps *serverDeps) {
 	// TODO: migrate remaining V1 routes to dedicated api module
-	api.RegisterV1Routes(r, cfg, deps.fileQ, deps.redisQ, deps.reg, nil, nil, deps.workersRepo, deps.sqliteStore, deps.workerUpdateHandler, deps.workerLifecycle, nil)
+	jobRepo := store.NewSQLiteJobsRepository(deps.sqliteStore)
+	tokenMgr := deps.workerLifecycle.GetTokenManager()
+	jobSvc := jobservice.NewService(cfg, deps.fileQ, deps.redisQ, jobRepo, nil, deps.reg)
+	jobAPI := jobhandlers.NewJobAPI(cfg, deps.fileQ, tokenMgr, jobSvc)
+	jobSubmitHandler := jobhandlers.NewJobSubmissionHandler(cfg, deps.fileQ)
+	api.RegisterV1Routes(r, cfg, deps.fileQ, deps.redisQ, deps.reg, jobAPI, jobSubmitHandler, deps.workersRepo, deps.sqliteStore, deps.workerUpdateHandler, deps.workerLifecycle, nil)
+	r.POST("/api/jobs/get", jobAPI.GetJobCompatHandler())
+	r.POST("/api/jobs/result", jobAPI.SubmitResultCompatHandler())
+	r.GET("/api/jobs/get", jobAPI.GetJobCompatHandler())
+	r.POST("/api/jobs/complete", jobAPI.CompleteJobHandler())
+	r.POST("/api/jobs/fail", jobAPI.FailJobHandler())
 }
 
 func registerNativeV1Routes(r *gin.Engine, deps *serverDeps) {

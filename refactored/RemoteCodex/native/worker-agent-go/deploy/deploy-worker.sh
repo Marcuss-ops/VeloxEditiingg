@@ -209,10 +209,12 @@ gen_docker_run_cmd() {
 
     # Comando di avvio per il worker (cmake + binario)
     local entrypoint_cmd="ENGINE_BIN=/app/RemoteCodex/native/video-engine-cpp/build/velox_video_engine; "
-    entrypoint_cmd+="if [ ! -x \"\$ENGINE_BIN\" ]; then "
-    entrypoint_cmd+="mkdir -p /app/RemoteCodex/native/video-engine-cpp/build && "
-    entrypoint_cmd+="cmake -S /app/RemoteCodex/native/video-engine-cpp -B /app/RemoteCodex/native/video-engine-cpp/build && "
-    entrypoint_cmd+="cmake --build /app/RemoteCodex/native/video-engine-cpp/build -j\"\$(nproc)\"; "
+    entrypoint_cmd+="ENGINE_SRC=/app/RemoteCodex/native/video-engine-cpp; "
+    entrypoint_cmd+="if [ ! -x \"\$ENGINE_BIN\" ] || ! ldd \"\$ENGINE_BIN\" >/tmp/velox-worker/engine-ldd.log 2>&1; then "
+    entrypoint_cmd+="rm -f \"\$ENGINE_BIN\" && "
+    entrypoint_cmd+="mkdir -p \"\$ENGINE_SRC\"/build /tmp/velox-worker && "
+    entrypoint_cmd+="cmake -S \"\$ENGINE_SRC\" -B \"\$ENGINE_SRC\"/build && "
+    entrypoint_cmd+="cmake --build \"\$ENGINE_SRC\"/build -j\"\$(nproc)\"; "
     entrypoint_cmd+="fi; "
     entrypoint_cmd+="export VELOX_VIDEO_ENGINE_CPP_BIN=\"\$ENGINE_BIN\"; "
     entrypoint_cmd+="CFG=/tmp/velox-worker/worker_config.json; "

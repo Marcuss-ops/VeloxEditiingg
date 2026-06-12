@@ -41,10 +41,18 @@ func AuthorizeWorkerToken(tokenMgr *TokenManager, token, workerID string, client
 	}
 	// Legacy and current worker agents do not always send a bearer token.
 	// Allow tokenless worker traffic so heartbeats, job polls, and command
-	// acknowledgements keep working, while still validating tokens when present.
+	// acknowledgements keep working.
+	//
+	// Tokens are also in-memory and are lost on master restart. In that case
+	// workers may continue sending an old bearer token until they re-register.
+	// Treat that as a best-effort auth hint instead of a hard failure so the
+	// existing worker fleet can recover without manual intervention.
 	if tokenMgr == nil || strings.TrimSpace(token) == "" {
 		return true
 	}
 	tokenWorkerID, ok := tokenMgr.ValidateToken(token)
-	return ok && tokenWorkerID == workerID
+	if ok {
+		return tokenWorkerID == workerID
+	}
+	return true
 }

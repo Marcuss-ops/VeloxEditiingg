@@ -33,6 +33,7 @@ type Job struct {
 	StartedAt    interface{} `json:"started_at,omitempty"`
 	CompletedAt  interface{} `json:"completed_at,omitempty"`
 	AssignedAt   interface{} `json:"assigned_at,omitempty"`
+	LeaseExpiry  interface{} `json:"lease_expiry,omitempty"`
 	ProcessingAt interface{} `json:"processing_at,omitempty"`
 
 	AssignedTo       string `json:"assigned_to,omitempty"`

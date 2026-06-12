@@ -1,6 +1,7 @@
 package jobs
 
 import (
+	"log"
 	"net/http"
 	"strings"
 
@@ -78,6 +79,15 @@ func GetJob(cfg *config.Config, q *queue.Queue, reg *workers.Registry) gin.Handl
 			if strings.TrimSpace(workerInfo.CurrentJob) != "" {
 				c.JSON(http.StatusOK, gin.H{"job": nil, "reason": "Worker busy"})
 				return
+			}
+			// Compatibility check: protocol_version
+			if workerInfo.ProtocolVersion != "" && workerInfo.ProtocolVersion != workers.DefaultWorkerProtocolVersion {
+				c.JSON(http.StatusOK, gin.H{"job": nil, "reason": "Worker protocol version mismatch (worker=" + workerInfo.ProtocolVersion + " master=" + workers.DefaultWorkerProtocolVersion + ")"})
+				return
+			}
+			// Compatibility check: code_version (warn but allow)
+			if workerInfo.CodeVersion != "" && cfg.CodeVersion != "" && workerInfo.CodeVersion != cfg.CodeVersion {
+				log.Printf("[COMPAT] Worker %s code_version=%s master=%s", workerInfo.WorkerID, workerInfo.CodeVersion, cfg.CodeVersion)
 			}
 			if !schedulable && !workerInfo.Schedulable {
 				c.JSON(http.StatusOK, gin.H{"job": nil, "reason": "Worker not schedulable"})

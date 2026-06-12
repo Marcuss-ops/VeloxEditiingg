@@ -1,6 +1,17 @@
 package jobs
 
-import "testing"
+import (
+	"bytes"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	"github.com/gin-gonic/gin"
+	"velox-server/internal/config"
+	"velox-server/internal/queue"
+	"velox-server/internal/store"
+)
 
 func TestBuildSingleJobSetsJobRunID(t *testing.T) {
 	data := map[string]interface{}{
@@ -24,5 +35,46 @@ func TestBuildSingleJobSetsJobRunID(t *testing.T) {
 	}
 	if fingerprint == "" {
 		t.Fatal("expected non-empty fingerprint")
+	}
+}
+
+func TestCreateJobHandlerAllowsHealthCheckSmokeJob(t *testing.T) {
+	cfg := config.FromEnv()
+	db, err := store.NewSQLiteStore(cfg.DBDSN)
+	if err != nil {
+		t.Skipf("SQLite unavailable: %v", err)
+	}
+	q, err := queue.NewFileQueue(&queue.FileQueueConfig{MaxRetries: cfg.MaxJobAttempts, DBStore: db})
+	if err != nil {
+		t.Skipf("File queue unavailable: %v", err)
+	}
+
+	h := NewJobSubmissionHandler(cfg, q)
+	r := gin.New()
+	r.POST("/api/v1/jobs", h.CreateJobHandler())
+
+	body, _ := json.Marshal(map[string]interface{}{
+		"job_type":   "health_check",
+		"video_name": "Smoke test health check",
+	})
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/jobs", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d body=%s", w.Code, w.Body.String())
+	}
+
+	var res map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &res); err != nil {
+		t.Fatalf("response JSON: %v", err)
+	}
+	if res["status"] != "PENDING" {
+		t.Fatalf("want PENDING, got %v", res["status"])
+	}
+	if res["job_id"] == "" {
+		t.Fatal("expected non-empty job_id")
 	}
 }

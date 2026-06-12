@@ -1,8 +1,12 @@
 package workers
 
 import (
+	"encoding/json"
+	"os"
 	"log"
 	"net/http"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -12,6 +16,14 @@ import (
 type updateAllRequest struct {
 	ExcludeLocal *bool `json:"exclude_local"`
 	DryRun       *bool `json:"dry_run"`
+}
+
+type bundleTargetInfo struct {
+	Version   string
+	Hash      string
+	Filename  string
+	UpdatedAt  string
+	Available bool
 }
 
 func (h *WorkerUpdateHandler) readUpdateAllOptions(c *gin.Context) (excludeLocal bool, dryRun bool) {
@@ -33,11 +45,103 @@ func (h *WorkerUpdateHandler) readUpdateAllOptions(c *gin.Context) (excludeLocal
 	return excludeLocal, dryRun
 }
 
+func (h *WorkerUpdateHandler) latestBundleTarget() bundleTargetInfo {
+	info := bundleTargetInfo{
+		Version:   h.codeVersion,
+		Available: false,
+	}
+	if h == nil {
+		return info
+	}
+
+	if bundlePath, stat, err := resolveBundlePath(h.bundleDir, "linux", "x86_64"); err == nil {
+		info.Hash = computeFileSHA256(bundlePath)
+		info.Filename = filepath.Base(bundlePath)
+		info.UpdatedAt = stat.ModTime().UTC().Format(time.RFC3339)
+		info.Available = true
+	}
+
+	manifestPaths := []string{
+		filepath.Join(h.bundleDir, "manifest_v2.json"),
+		filepath.Join(h.bundleDir, "release.json"),
+		filepath.Join(h.bundleDir, "VERSION.txt"),
+	}
+	for _, manifestPath := range manifestPaths {
+		raw, err := os.ReadFile(manifestPath)
+		if err != nil {
+			continue
+		}
+		trimmed := strings.TrimSpace(string(raw))
+		if trimmed == "" {
+			continue
+		}
+		if strings.HasSuffix(manifestPath, "VERSION.txt") {
+			info.Version = trimmed
+			break
+		}
+		var payload map[string]interface{}
+		if err := json.Unmarshal(raw, &payload); err != nil {
+			continue
+		}
+		if v, ok := payload["version"].(string); ok && strings.TrimSpace(v) != "" {
+			info.Version = strings.TrimSpace(v)
+		}
+		if info.Version == "" {
+			if v, ok := payload["code_version"].(string); ok && strings.TrimSpace(v) != "" {
+				info.Version = strings.TrimSpace(v)
+			}
+		}
+		if info.Hash == "" {
+			if v, ok := payload["build_hash"].(string); ok && strings.TrimSpace(v) != "" {
+				info.Hash = strings.TrimSpace(v)
+			}
+		}
+		break
+	}
+
+	if info.Version == "" {
+		info.Version = h.cfg.VersionNumber
+	}
+	if info.Version == "" {
+		info.Version = h.codeVersion
+	}
+	return info
+}
+
+func (h *WorkerUpdateHandler) queueBundleUpdateForWorkers(workerIDs []string, target bundleTargetInfo, dryRun bool, maintenanceID string) int {
+	commandsQueued := 0
+	for _, wid := range workerIDs {
+		h.cmdMgr.PushCommand(wid, "maintenance_full_update_linux", map[string]interface{}{
+			"id":        maintenanceID,
+			"dry_run":   dryRun,
+			"requested": time.Now().Unix(),
+		})
+		commandsQueued++
+
+		h.cmdMgr.PushCommand(wid, "update_code", map[string]interface{}{
+			"version":                target.Version,
+			"bundle_version":         target.Version,
+			"bundle_hash":            target.Hash,
+			"target_artifact_sha256": target.Hash,
+		})
+		h.updateMgr.RequestUpdate(wid, target.Version)
+		commandsQueued++
+
+		h.cmdMgr.PushCommand(wid, "restart_worker", nil)
+		commandsQueued++
+
+		h.cmdMgr.PushCommand(wid, "run_smoke_job", buildSmokeJobPayload(wid))
+		commandsQueued++
+	}
+	return commandsQueued
+}
+
 // FullUpdateLinuxHandler handles POST /workers/full_update_linux
 func (h *WorkerUpdateHandler) FullUpdateLinuxHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		excludeLocal, dryRun := h.readUpdateAllOptions(c)
 		eligible := h.eligibleWorkers(c.Request.Context(), excludeLocal)
+		target := h.latestBundleTarget()
 
 		if len(eligible) == 0 {
 			c.JSON(http.StatusOK, gin.H{
@@ -49,30 +153,7 @@ func (h *WorkerUpdateHandler) FullUpdateLinuxHandler() gin.HandlerFunc {
 		}
 
 		maintenanceID := uuid.New().String()
-		commandsQueued := 0
-		targetArtifactSHA := h.computeBundleSHA256()
-
-		for _, wid := range eligible {
-			h.cmdMgr.PushCommand(wid, "maintenance_full_update_linux", map[string]interface{}{
-				"id":        maintenanceID,
-				"dry_run":   dryRun,
-				"requested": time.Now().Unix(),
-			})
-			commandsQueued++
-
-			h.cmdMgr.PushCommand(wid, "update_code", map[string]interface{}{
-				"version":                h.codeVersion,
-				"target_artifact_sha256": targetArtifactSHA,
-			})
-			h.updateMgr.RequestUpdate(wid, h.codeVersion)
-			commandsQueued++
-
-			h.cmdMgr.PushCommand(wid, "restart_worker", nil)
-			commandsQueued++
-
-			h.cmdMgr.PushCommand(wid, "run_smoke_job", buildSmokeJobPayload(wid))
-			commandsQueued++
-		}
+		commandsQueued := h.queueBundleUpdateForWorkers(eligible, target, dryRun, maintenanceID)
 
 		log.Printf("[UPDATE] Full update Linux: %d workers, %d commands, maintenance_id=%s",
 			len(eligible), commandsQueued, maintenanceID)
@@ -83,6 +164,9 @@ func (h *WorkerUpdateHandler) FullUpdateLinuxHandler() gin.HandlerFunc {
 			"queued":          len(eligible),
 			"total_eligible":  len(eligible),
 			"commands_queued": commandsQueued,
+			"target_version":  target.Version,
+			"target_hash":     target.Hash,
+			"target_filename": target.Filename,
 			"worker_ids":      eligible,
 			"updated_workers": eligible,
 			"updated_count":   len(eligible),
@@ -93,6 +177,44 @@ func (h *WorkerUpdateHandler) FullUpdateLinuxHandler() gin.HandlerFunc {
 // UpdateAllHandler handles POST /workers/update_all
 func (h *WorkerUpdateHandler) UpdateAllHandler() gin.HandlerFunc {
 	return h.FullUpdateLinuxHandler()
+}
+
+// UpdateAllLatestBundleHandler handles POST /workers/update_all_latest_bundle
+func (h *WorkerUpdateHandler) UpdateAllLatestBundleHandler() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		excludeLocal, dryRun := h.readUpdateAllOptions(c)
+		eligible := h.eligibleWorkers(c.Request.Context(), excludeLocal)
+		target := h.latestBundleTarget()
+
+		if len(eligible) == 0 {
+			c.JSON(http.StatusOK, gin.H{
+				"status":  "no_workers",
+				"queued":  0,
+				"message": "No eligible workers",
+			})
+			return
+		}
+
+		maintenanceID := uuid.New().String()
+		commandsQueued := h.queueBundleUpdateForWorkers(eligible, target, dryRun, maintenanceID)
+
+		log.Printf("[UPDATE] Latest bundle update queued: workers=%d maintenance_id=%s version=%s hash=%s",
+			len(eligible), maintenanceID, target.Version, target.Hash)
+
+		c.JSON(http.StatusOK, gin.H{
+			"status":          "queued",
+			"maintenance_id":  maintenanceID,
+			"queued":          len(eligible),
+			"total_eligible":  len(eligible),
+			"commands_queued": commandsQueued,
+			"target_version":  target.Version,
+			"target_hash":     target.Hash,
+			"target_filename": target.Filename,
+			"worker_ids":      eligible,
+			"updated_workers": eligible,
+			"updated_count":   len(eligible),
+		})
+	}
 }
 
 // RestartAllHandler handles POST /workers/restart_all
@@ -205,14 +327,17 @@ func (h *WorkerUpdateHandler) RolloutUpdateHandler() gin.HandlerFunc {
 		}
 
 		targetArtifactSHA := h.computeBundleSHA256()
+		target := h.latestBundleTarget()
 		for _, wid := range canaryWorkers {
 			h.cmdMgr.PushCommand(wid, "update_code", map[string]interface{}{
-				"version":                h.codeVersion,
-				"target_artifact_sha256": targetArtifactSHA,
+				"version":                target.Version,
+				"bundle_version":         target.Version,
+				"bundle_hash":            target.Hash,
+				"target_artifact_sha256": target.Hash,
 			})
 			h.cmdMgr.PushCommand(wid, "restart_worker", nil)
 			h.cmdMgr.PushCommand(wid, "run_smoke_job", buildSmokeJobPayload(wid))
-			h.updateMgr.RequestUpdate(wid, h.codeVersion)
+			h.updateMgr.RequestUpdate(wid, target.Version)
 		}
 
 		log.Printf("[UPDATE] Rollout update started (rollout_id=%s)", rolloutID)
@@ -221,7 +346,8 @@ func (h *WorkerUpdateHandler) RolloutUpdateHandler() gin.HandlerFunc {
 		c.JSON(http.StatusOK, gin.H{
 			"status":         "queued",
 			"rollout_id":     rolloutID,
-			"target_version": h.codeVersion,
+			"target_version": target.Version,
+			"target_hash":    targetArtifactSHA,
 			"canary_workers": canaryWorkers,
 			"batches":        batches,
 			"total_workers":  totalWorkers,

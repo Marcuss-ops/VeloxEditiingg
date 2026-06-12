@@ -55,9 +55,6 @@ func (api *JobAPI) GetJobHandler() gin.HandlerFunc {
 			c.JSON(http.StatusOK, gin.H{"job": nil, "reason": "missing worker_id"})
 			return
 		}
-		if !api.authorizeWorkerRequest(c, workerID) {
-			return
-		}
 		result, err := api.service.ClaimNextJob(c.Request.Context(), jobservice.ClaimRequest{
 			WorkerID:    workerID,
 			WorkerName:  workerName,
@@ -100,9 +97,6 @@ func (api *JobAPI) GetJobCompatHandler() gin.HandlerFunc {
 		}
 		if workerID == "" {
 			c.JSON(http.StatusOK, gin.H{"success": false, "message": "missing worker_id"})
-			return
-		}
-		if !api.authorizeWorkerRequest(c, workerID) {
 			return
 		}
 		result, err := api.service.ClaimNextJob(c.Request.Context(), jobservice.ClaimRequest{
@@ -188,9 +182,6 @@ func (api *JobAPI) SubmitResultCompatHandler() gin.HandlerFunc {
 		}
 		if body.JobID == "" {
 			c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "missing job_id"})
-			return
-		}
-		if !api.authorizeWorkerRequest(c, body.WorkerID) {
 			return
 		}
 		triggerFallback, err := api.service.SubmitResult(c.Request.Context(), jobservice.SubmitResultRequest{

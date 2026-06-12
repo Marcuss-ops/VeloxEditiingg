@@ -42,6 +42,9 @@ func workerStatusMetadata(h *WorkerUpdateHandler) gin.H {
 	if h != nil {
 		version = h.cfg.VersionNumber
 		codeVersion = h.codeVersion
+		if codeVersion == "" {
+			codeVersion = h.cfg.VersionNumber
+		}
 	}
 	if codeVersion == "" {
 		codeVersion = version

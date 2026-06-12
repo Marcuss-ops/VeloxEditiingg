@@ -120,12 +120,13 @@ func RegisterV1Routes(r *gin.Engine, cfg *config.Config, fileQ *queue.FileQueue,
 		v1Admin.POST("/jobs/bulk_delete", jobSubmitHandler.BulkDeleteJobsHandler())
 
 		// Workers - Core API
-		v1Admin.GET("/workers", workers.WorkersList(reg, workersRepo))
+		v1Admin.GET("/workers", workers.WorkersList(reg, workersRepo, workerUpdateHandler))
 		v1Admin.GET("/workers/:id/logs", workers.WorkerLogsHandler(reg))
 		v1Admin.POST("/workers/clear_all", dashboard.WorkersClearAll(redisQ, reg))
 		if workerUpdateHandler != nil {
 			// Update orchestration endpoints used by the frontend and legacy bundle.
 			v1Admin.POST("/workers/update_all", workerUpdateHandler.UpdateAllHandler())
+			v1Admin.POST("/workers/update_all_latest_bundle", workerUpdateHandler.UpdateAllLatestBundleHandler())
 			v1Admin.POST("/workers/restart_all", workerUpdateHandler.RestartAllHandler())
 			v1Admin.POST("/workers/send_command_bulk", workerUpdateHandler.SendCommandBulkHandler())
 			v1Admin.POST("/workers/full_update_linux", workerUpdateHandler.FullUpdateLinuxHandler())

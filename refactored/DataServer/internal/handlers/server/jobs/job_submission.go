@@ -120,6 +120,16 @@ func validateJobPayload(payload map[string]interface{}) (bool, []string, map[str
 	errors := []string{}
 	details := make(map[string]interface{})
 
+	jobType := strings.ToLower(strings.TrimSpace(getStringOrEmpty(payload, "job_type")))
+	if jobType == "health_check" || jobType == "smoke_check" {
+		details["job_type"] = jobType
+		videoName, _ := payload["video_name"].(string)
+		if strings.TrimSpace(videoName) != "" {
+			details["video_name"] = strings.TrimSpace(videoName)
+		}
+		return true, nil, details
+	}
+
 	videoName, _ := payload["video_name"].(string)
 	if videoName == "" || strings.TrimSpace(videoName) == "" {
 		errors = append(errors, "[ERROR] video_name mancante o vuoto")

@@ -394,15 +394,30 @@ func (q *FileQueue) RequeueZombieJobs(ctx context.Context, timeout time.Duration
 			continue
 		}
 
-		if now.Sub(assignedTime) > timeout {
+		// Check lease expiry
+		leaseExpired := false
+		if job.LeaseExpiry != nil {
+			if leaseStr, ok := job.LeaseExpiry.(string); ok && leaseStr != "" {
+				if leaseTime, err := time.Parse(time.RFC3339, leaseStr); err == nil && now.After(leaseTime) {
+					leaseExpired = true
+				}
+			}
+		}
+
+		if now.Sub(assignedTime) > timeout || leaseExpired {
 			nowISOVal := NowISO()
+			reason := fmt.Sprintf("Zombie: no heartbeat for %v", now.Sub(assignedTime))
+			if leaseExpired {
+				reason = "Lease expired"
+			}
 			job.Status = StatusPending
-			job.LastError = fmt.Sprintf("Zombie: no heartbeat for %v", now.Sub(assignedTime))
+			job.LastError = reason
 			job.LastErrorAt = now.Unix()
 			job.AssignedTo = ""
 			job.AssignedAt = nil
 			job.ClaimedBy = ""
 			job.ClaimedAt = ""
+			job.LeaseExpiry = nil
 			job.RetryCount++
 
 			job.History = append(job.History, JobHistoryEntry{

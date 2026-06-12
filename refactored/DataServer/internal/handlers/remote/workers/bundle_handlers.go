@@ -186,6 +186,7 @@ func (h *WorkerUpdateHandler) GetBundleManifestHandler() gin.HandlerFunc {
 		manifest := gin.H{
 			"version":        h.cfg.VersionNumber,
 			"code_version":   h.codeVersion,
+			"protocol_version": "2026-06-worker-v1",
 			"platform":       platform,
 			"arch":           arch,
 			"filename":       filepath.Base(bundlePath),

@@ -61,11 +61,14 @@ func bundleDirCandidates(dataDir string) []string {
 		return []string{"worker_downloads"}
 	}
 	base := filepath.Join(dataDir, "..", "..")
+	// Also try sibling data/worker_downloads relative to DataServer root
+	dataServerRoot := filepath.Join(dataDir, "..", "..")
 	return []string{
 		filepath.Join(base, "worker_downloads"),
 		filepath.Join(base, "BundleRemote", "worker_downloads"),
 		filepath.Join(base, "BundleRemote"),
 		filepath.Join(dataDir, "worker_downloads"),
+		filepath.Join(dataServerRoot, "data", "worker_downloads"),
 	}
 }
 
