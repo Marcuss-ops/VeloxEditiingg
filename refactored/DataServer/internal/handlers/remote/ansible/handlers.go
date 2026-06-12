@@ -48,10 +48,22 @@ func (h *AnsibleHandlers) capabilitiesPayload() gin.H {
 			"reason":    "SSH ping, disk, Python/ffmpeg, worker status",
 		},
 		{
+			"name":      "deploy_workers",
+			"playbook":  "update_workers.yml",
+			"available": h.playbookExists("update_workers.yml"),
+			"reason":    "Deploy progressivo con canary e batch",
+		},
+		{
 			"name":      "update_workers",
 			"playbook":  "update_workers.yml",
 			"available": h.playbookExists("update_workers.yml"),
 			"reason":    "Aggiorna codice sui computer selezionati",
+		},
+		{
+			"name":      "rollout_update",
+			"playbook":  "update_workers.yml",
+			"available": h.playbookExists("update_workers.yml"),
+			"reason":    "Rollout progressivo con canary e batch",
 		},
 		{
 			"name":      "install_workers",
@@ -131,7 +143,9 @@ func (h *AnsibleHandlers) runActionForTargets(action string, targets []string) (
 	}
 
 	playbookByAction := map[string]string{
+		"deploy_workers":    "update_workers.yml",
 		"update_workers":    "update_workers.yml",
+		"rollout_update":    "update_workers.yml",
 		"install_workers":   "install_workers.yml",
 		"preflight_workers": "preflight_workers.yml",
 		"test_ssh":          "preflight_workers.yml",
@@ -147,5 +161,3 @@ func (h *AnsibleHandlers) runActionForTargets(action string, targets []string) (
 	}
 	return h.manager.RunPlaybook(context.Background(), strings.Join(targets, ","), playbook, vars)
 }
-
-

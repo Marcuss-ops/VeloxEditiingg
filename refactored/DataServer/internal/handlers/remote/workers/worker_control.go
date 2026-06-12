@@ -171,3 +171,25 @@ func (wl *WorkerLifecycle) CleanupStaleWorkersHandler() gin.HandlerFunc {
 		})
 	}
 }
+
+// ListRevokedWorkersHandler returns a list of all revoked worker IDs and their details.
+func (wl *WorkerLifecycle) ListRevokedWorkersHandler() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		revokedIDs := wl.reg.ListRevoked()
+
+		// Return just the worker IDs; the registry only tracks revoked IDs without timestamps.
+		// For full details, the dashboard should query /api/v1/workers (which excludes revoked workers).
+		type revokedInfo struct {
+			WorkerID string `json:"worker_id"`
+		}
+		workers := make([]revokedInfo, 0, len(revokedIDs))
+		for _, id := range revokedIDs {
+			workers = append(workers, revokedInfo{WorkerID: id})
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"workers": workers,
+			"count":   len(workers),
+		})
+	}
+}

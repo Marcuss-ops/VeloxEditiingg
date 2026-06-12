@@ -6,61 +6,69 @@ import (
 )
 
 func TestFromEnv_Defaults(t *testing.T) {
-	// Clear relevant env to test defaults
-	envVars := []string{
-		"VELOX_MASTER_PORT", "VELOX_STUDIO_PORT", "VELOX_STATIC_DIR",
-		"VELOX_REDIS_HOST", "VELOX_REDIS_PORT", "VELOX_REDIS_DB", "VELOX_REDIS_PASSWORD",
-		"VELOX_ALLOWED_WORKERS", "VELOX_FORCE_SINGLE_WORKER", "VELOX_MAX_JOB_ATTEMPTS",
-		"VELOX_ALLOWLIST_ALLOW_REGISTERED",
-		"VELOX_MASTER_SERVER_URL", "VELOX_REMOTE_WORKER_URL", "VELOX_REMOTE_SCRIPT_BACKEND", "VELOX_SCRIPT_BACKEND",
-	}
-	for _, k := range envVars {
-		os.Unsetenv(k)
-	}
-	defer func() {
-		for _, k := range envVars {
-			os.Unsetenv(k)
-		}
-	}()
+	// Clear env vars
+	os.Unsetenv("VELOX_MASTER_PORT")
+	os.Unsetenv("VELOX_DB_DRIVER")
+	os.Unsetenv("VELOX_ADMIN_TOKEN")
 
-	c := FromEnv()
-	if c.MasterPort != 8000 {
-		t.Errorf("MasterPort want 8000, got %d", c.MasterPort)
+	cfg := FromEnv()
+
+	// Check defaults
+	if cfg.MasterPort != 8000 {
+		t.Errorf("expected MasterPort=8000, got %d", cfg.MasterPort)
 	}
-	if c.RedisHost != "localhost" || c.RedisPort != "6379" {
-		t.Errorf("Redis default: got %s:%s", c.RedisHost, c.RedisPort)
+	if cfg.DBDriver != "sqlite3" {
+		t.Errorf("expected DBDriver=sqlite3, got %s", cfg.DBDriver)
 	}
-	if c.MaxJobAttempts != 3 {
-		t.Errorf("MaxJobAttempts want 3, got %d", c.MaxJobAttempts)
+	if cfg.MaxJobAttempts != 3 {
+		t.Errorf("expected MaxJobAttempts=3, got %d", cfg.MaxJobAttempts)
 	}
-	if c.AllowlistAllowRegistered {
-		t.Error("AllowlistAllowRegistered should default false")
+	if cfg.WorkerHeartbeatTimeout != 900 {
+		t.Errorf("expected WorkerHeartbeatTimeout=900, got %d", cfg.WorkerHeartbeatTimeout)
+	}
+
+	// Check sub-configs
+	if cfg.Server.Port != 8000 {
+		t.Errorf("expected Server.Port=8000, got %d", cfg.Server.Port)
+	}
+	if cfg.Database.Driver != "sqlite3" {
+		t.Errorf("expected Database.Driver=sqlite3, got %s", cfg.Database.Driver)
+	}
+	if cfg.Workers.MaxJobAttempts != 3 {
+		t.Errorf("expected Workers.MaxJobAttempts=3, got %d", cfg.Workers.MaxJobAttempts)
 	}
 }
 
-func TestFromEnv_Overrides(t *testing.T) {
+func TestFromEnv_CustomValues(t *testing.T) {
+	// Set custom env vars
 	os.Setenv("VELOX_MASTER_PORT", "9000")
-	os.Setenv("VELOX_REDIS_HOST", "redis.example.com")
-	os.Setenv("VELOX_MAX_JOB_ATTEMPTS", "5")
-	os.Setenv("VELOX_ALLOWLIST_ALLOW_REGISTERED", "true")
-	defer func() {
-		os.Unsetenv("VELOX_MASTER_PORT")
-		os.Unsetenv("VELOX_REDIS_HOST")
-		os.Unsetenv("VELOX_MAX_JOB_ATTEMPTS")
-		os.Unsetenv("VELOX_ALLOWLIST_ALLOW_REGISTERED")
-	}()
+	os.Setenv("VELOX_DB_DRIVER", "postgres")
+	os.Setenv("VELOX_ADMIN_TOKEN", "my-secret-token")
+	defer os.Unsetenv("VELOX_MASTER_PORT")
+	defer os.Unsetenv("VELOX_DB_DRIVER")
+	defer os.Unsetenv("VELOX_ADMIN_TOKEN")
 
-	c := FromEnv()
-	if c.MasterPort != 9000 {
-		t.Errorf("MasterPort want 9000, got %d", c.MasterPort)
+	cfg := FromEnv()
+
+	// Check custom values
+	if cfg.MasterPort != 9000 {
+		t.Errorf("expected MasterPort=9000, got %d", cfg.MasterPort)
 	}
-	if c.RedisHost != "redis.example.com" {
-		t.Errorf("RedisHost want redis.example.com, got %s", c.RedisHost)
+	if cfg.DBDriver != "postgres" {
+		t.Errorf("expected DBDriver=postgres, got %s", cfg.DBDriver)
 	}
-	if c.MaxJobAttempts != 5 {
-		t.Errorf("MaxJobAttempts want 5, got %d", c.MaxJobAttempts)
+	if cfg.AdminToken != "my-secret-token" {
+		t.Errorf("expected AdminToken=my-secret-token, got %s", cfg.AdminToken)
 	}
-	if !c.AllowlistAllowRegistered {
-		t.Error("AllowlistAllowRegistered should be true")
+
+	// Check sub-configs are also updated
+	if cfg.Server.Port != 9000 {
+		t.Errorf("expected Server.Port=9000, got %d", cfg.Server.Port)
+	}
+	if cfg.Database.Driver != "postgres" {
+		t.Errorf("expected Database.Driver=postgres, got %s", cfg.Database.Driver)
+	}
+	if cfg.Auth.AdminToken != "my-secret-token" {
+		t.Errorf("expected Auth.AdminToken=my-secret-token, got %s", cfg.Auth.AdminToken)
 	}
 }

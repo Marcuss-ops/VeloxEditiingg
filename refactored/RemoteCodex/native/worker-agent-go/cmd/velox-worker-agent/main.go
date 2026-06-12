@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"strings"
 	"syscall"
 
 	"velox-worker-agent/internal/telemetry"
@@ -27,6 +29,38 @@ const (
 	defaultConfigPath = "/opt/velox/worker_config.json"
 	defaultWorkDir    = "/opt/velox"
 )
+
+// readVersionFile attempts to read version from VERSION.txt in the work directory
+// as a fallback when the ldflags version is "dev".
+func readVersionFile(workDir string) string {
+	// Try several known locations for VERSION.txt
+	candidates := []string{
+		filepath.Join(workDir, "VERSION.txt"),
+		filepath.Join(workDir, "..", "VERSION.txt"),
+		filepath.Join(workDir, "..", "..", "VERSION.txt"),
+		"/opt/velox/VERSION.txt",
+		filepath.Join(workDir, "versions", "current", "VERSION.txt"),
+	}
+	seen := make(map[string]bool)
+	for _, path := range candidates {
+		abs, err := filepath.Abs(path)
+		if err != nil {
+			continue
+		}
+		if seen[abs] {
+			continue
+		}
+		seen[abs] = true
+		data, err := os.ReadFile(abs)
+		if err == nil {
+			v := strings.TrimSpace(string(data))
+			if v != "" {
+				return v
+			}
+		}
+	}
+	return ""
+}
 
 func main() {
 	// Parse command-line flags
@@ -119,8 +153,22 @@ func main() {
 		}
 	}
 
+	// Try to read VERSION.txt as a fallback for version reporting
+	// The Version from ldflags takes precedence, but if it's "dev" we try VERSION.txt
+	resolvedVersion := Version
+	if resolvedVersion == "dev" {
+		if v := readVersionFile(cfg.WorkDir); v != "" {
+			resolvedVersion = v
+			logger.Info("[VERSION] Loaded version from VERSION.txt: %s", resolvedVersion)
+		}
+	}
+	// Also ensure BundleVersion is set from resolved version if not already set
+	if cfg.BundleVersion == "" || cfg.BundleVersion == "dev" {
+		cfg.BundleVersion = resolvedVersion
+	}
+
 	// Create worker
-	w := worker.New(cfg, Version)
+	w := worker.New(cfg, resolvedVersion)
 
 	// Set up context with cancellation
 	ctx, cancel := context.WithCancel(context.Background())

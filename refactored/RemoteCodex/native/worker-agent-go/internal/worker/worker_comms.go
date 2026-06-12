@@ -45,6 +45,15 @@ func (w *Worker) register(ctx context.Context) error {
 	}
 
 	logger.LogRegisterSuccess(w.config.WorkerID, w.config.MasterURL)
+
+	// Log whether we received an auth token for future requests
+	token := w.apiClient.AuthToken()
+	if token != "" {
+		w.logger.Debug("[AUTH] Auth token received during registration (length: %d)", len(token))
+	} else {
+		w.logger.Debug("[AUTH] No auth token received — continuing without token (tokenless requests are allowed)")
+	}
+
 	return nil
 }
 

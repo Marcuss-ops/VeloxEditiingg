@@ -121,6 +121,11 @@ func (m *AnsibleRunManager) saveRun(run AnsibleRunRecord) error {
 	return m.persistRunsLocked()
 }
 
+// CreateRun stores a new run record.
+func (m *AnsibleRunManager) CreateRun(run AnsibleRunRecord) error {
+	return m.saveRun(run)
+}
+
 func (m *AnsibleRunManager) updateRun(runID string, mut func(*AnsibleRunRecord)) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -131,6 +136,11 @@ func (m *AnsibleRunManager) updateRun(runID string, mut func(*AnsibleRunRecord))
 	mut(&run)
 	m.runs[runID] = run
 	return m.persistRunsLocked()
+}
+
+// UpdateRun mutates an existing run record.
+func (m *AnsibleRunManager) UpdateRun(runID string, mut func(*AnsibleRunRecord)) error {
+	return m.updateRun(runID, mut)
 }
 
 // ListRuns returns all runs ordered by most recent first.
@@ -173,6 +183,11 @@ func (m *AnsibleRunManager) getRun(runID string) (AnsibleRunRecord, bool) {
 	defer m.mu.RUnlock()
 	run, ok := m.runs[runID]
 	return run, ok
+}
+
+// GetRun returns a stored run by ID.
+func (m *AnsibleRunManager) GetRun(runID string) (AnsibleRunRecord, bool) {
+	return m.getRun(runID)
 }
 
 func splitRequestedHosts(hosts string) []string {

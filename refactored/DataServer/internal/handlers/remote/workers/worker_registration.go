@@ -193,9 +193,13 @@ func (wl *WorkerLifecycle) RegisterCompatHandler() gin.HandlerFunc {
 			return
 		}
 
+		// Generate a token for the worker for subsequent authenticated requests
+		token := wl.tokenMgr.GenerateToken(body.WorkerID)
+
 		c.JSON(http.StatusOK, gin.H{
 			"success": true,
 			"message": "Worker registered",
+			"token":   token,
 			"data": gin.H{
 				"worker_id":   body.WorkerID,
 				"worker_name": workerName,

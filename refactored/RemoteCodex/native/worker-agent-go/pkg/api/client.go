@@ -30,6 +30,9 @@ type Client struct {
 	retryInterval  time.Duration
 	adapter        *EndpointAdapter
 	circuitBreaker *CircuitBreaker
+
+	// Auth token obtained during registration, sent as Bearer token on subsequent requests.
+	authToken string
 }
 
 // ClientOption is a functional option for configuring the Client.
@@ -77,6 +80,18 @@ func WithRetry(count int, interval time.Duration) ClientOption {
 // WithCircuitBreaker configures the circuit breaker.
 func WithCircuitBreaker(failureThreshold, successThreshold int, timeout time.Duration) ClientOption {
 	return func(c *Client) { c.circuitBreaker = NewCircuitBreaker(failureThreshold, successThreshold, timeout) }
+}
+
+// SetAuthToken sets the bearer token for authenticated requests.
+// This token is obtained from the registration response and sent as
+// "Authorization: Bearer <token>" on all subsequent API calls.
+func (c *Client) SetAuthToken(token string) {
+	c.authToken = token
+}
+
+// AuthToken returns the current auth token, if any.
+func (c *Client) AuthToken() string {
+	return c.authToken
 }
 
 func retryBackoff(attempt int, baseInterval time.Duration) time.Duration {
@@ -179,6 +194,12 @@ func (c *Client) doSingleRequest(ctx context.Context, method, path string, body 
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+
+	// Add auth token as Bearer token if available
+	if c.authToken != "" {
+		req.Header.Set("Authorization", "Bearer "+c.authToken)
+	}
+
 	for key, value := range c.headers {
 		req.Header.Set(key, value)
 	}
@@ -197,10 +218,38 @@ func (c *Client) doSingleRequest(ctx context.Context, method, path string, body 
 	return respBody, nil
 }
 
+// registerResponse is used to parse token and other fields from registration response.
+type registerResponse struct {
+	Success bool   `json:"success"`
+	Message string `json:"message,omitempty"`
+	Token   string `json:"token,omitempty"`
+	Error   string `json:"error,omitempty"`
+}
+
 // RegisterWorker registers this worker with the master server.
+// If the server returns a token, it is stored and used for subsequent authenticated requests.
 func (c *Client) RegisterWorker(ctx context.Context, info *WorkerInfo) error {
-	_, err := c.doRequest(ctx, "POST", c.adapter.RegisterWorker(), info)
-	return err
+	respBody, err := c.doRequest(ctx, "POST", c.adapter.RegisterWorker(), info)
+	if err != nil {
+		return err
+	}
+
+	// Parse response to extract optional auth token
+	var resp registerResponse
+	if err := json.Unmarshal(respBody, &resp); err != nil {
+		// Response body isn't valid JSON or doesn't have the expected shape;
+		// this is not fatal — registration succeeded (we got 200).
+		// Just log and continue without a token.
+		logger.Debug("[%s] Could not parse registration response for token: %v", EventAPIRequest, err)
+		return nil
+	}
+
+	if resp.Token != "" {
+		c.authToken = resp.Token
+		logger.Debug("[%s] Auth token received and stored (length: %d)", EventAPIRequest, len(resp.Token))
+	}
+
+	return nil
 }
 
 // UnregisterWorker unregisters this worker from the master server.

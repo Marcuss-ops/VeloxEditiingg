@@ -141,6 +141,13 @@ func RegisterV1Routes(r *gin.Engine, cfg *config.Config, fileQ *queue.FileQueue,
 		// a Gin radix tree conflict with the wildcard route /workers/:id/logs.
 		// They are registered directly in router.go under /worker/revoke and /worker/drain.
 
+		// Worker polling endpoints (backward compat with /api/v1/workers/commands)
+		// These do NOT conflict with /workers/:id/logs because they have different
+		// path depths (/:id/logs is 2 segments after /workers/, /commands is 1 segment).
+		v1.GET("/workers/commands", workerLifecycle.GetCommandsCompatHandler())
+		v1.POST("/workers/commands", workerLifecycle.GetCommandsCompatHandler())
+		v1.POST("/workers/commands/ack", workerLifecycle.AckCommandCompatHandler())
+
 		// Bundle Explorer - List files in bundle
 		if workerUpdateHandler != nil {
 			v1.GET("/bundle/files", workerUpdateHandler.GetBundleFilesHandler())
@@ -249,6 +256,7 @@ func RegisterV1Routes(r *gin.Engine, cfg *config.Config, fileQ *queue.FileQueue,
 		if ansibleHandlers != nil {
 			v1Admin.GET("/ansible/capabilities", ansibleHandlers.GetCapabilitiesHandler)
 			v1Admin.GET("/ansible/runs", ansibleHandlers.GetRunsHandler)
+			v1Admin.GET("/ansible/runs/:id", ansibleHandlers.GetRunHandler)
 			v1Admin.POST("/ansible/computers/run_action", ansibleHandlers.RunActionHandler)
 			v1Admin.POST("/ansible/computers/run_shell", ansibleHandlers.RunShellHandler)
 			v1Admin.POST("/ansible/computers/test_ssh", ansibleHandlers.TestSSHHandler)

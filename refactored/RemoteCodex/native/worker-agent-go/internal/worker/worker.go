@@ -33,7 +33,9 @@ func (w *Worker) Start(ctx context.Context) error {
 	w.wg.Add(1)
 	go w.jobLoop(ctx)
 
-	w.logger.Info("[COMMANDS] Command polling disabled")
+	// Start command polling goroutine (checks for update_code, restart, drain commands)
+	w.wg.Add(1)
+	go w.commandLoop(ctx)
 
 	// Wait for stop signal
 	<-w.stopChan

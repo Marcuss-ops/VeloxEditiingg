@@ -22,8 +22,9 @@ type WorkerConfig struct {
 	BundleVersion string `json:"bundle_version,omitempty"`
 
 	// Worker policy
-	MaxActiveJobs  int `json:"max_active_jobs"` // Maximum concurrent active jobs (default: 1)
-	PrometheusPort int `json:"prometheus_port"` // Prometheus metrics port (default: 9090)
+	MaxActiveJobs           int `json:"max_active_jobs"`              // Maximum concurrent active jobs (default: 1)
+	CommandPollIntervalSecs int `json:"command_poll_interval_secs"`   // Command polling interval in seconds (default: 30)
+	PrometheusPort          int `json:"prometheus_port"`              // Prometheus metrics port (default: 9090)
 
 	// Circuit breaker configuration
 	CircuitBreakerFailureThreshold int `json:"circuit_breaker_failure_threshold,omitempty"` // Failures to open circuit (default: 5)
@@ -99,9 +100,9 @@ func DefaultConfig(workDir string) *WorkerConfig {
 		WorkerName:    "velox-worker",
 		WorkDir:       workDir,
 		LogLevel:      "info",
-		BundleVersion: "v1.0.1",
-
-		MaxActiveJobs: 1, // 1 main job per VPS
+		BundleVersion:           "v1.0.1",
+		MaxActiveJobs:           1,  // 1 main job per VPS
+		CommandPollIntervalSecs: 30, // Check for commands every 30 seconds
 	}
 }
 

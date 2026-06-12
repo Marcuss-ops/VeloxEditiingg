@@ -188,6 +188,7 @@ func (w *Worker) executeWorkflowJob(ctx context.Context, job *api.Job, jobLabel 
 	if outputPath == "" {
 		outputPath = fmt.Sprintf("/tmp/velox/output/%s.%s", job.JobID, defaultExt)
 	}
+	p.OutputPath = outputPath
 	if err := os.MkdirAll(filepath.Dir(outputPath), 0o755); err != nil {
 		return nil, fmt.Errorf("create output directory %s: %w", filepath.Dir(outputPath), err)
 	}

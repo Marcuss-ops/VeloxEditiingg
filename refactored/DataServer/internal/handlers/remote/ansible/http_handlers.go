@@ -52,61 +52,76 @@ func (h *AnsibleHandlers) GetRunsHandler(c *gin.Context) {
 		return
 	}
 
-	type runPayload struct {
-		RunID       string   `json:"run_id"`
-		Action      string   `json:"action"`
-		ComputerIDs []string `json:"computer_ids"`
-		Status      string   `json:"status"`
-		StartedAt   string   `json:"started_at"`
-		CompletedAt string   `json:"completed_at,omitempty"`
-		ReturnCode  int      `json:"return_code,omitempty"`
-		Output      string   `json:"output,omitempty"`
-		Preamble    string   `json:"preamble,omitempty"`
-	}
-
 	runs := h.manager.ListRuns()
-	out := make([]runPayload, 0, len(runs))
+	out := make([]gin.H, 0, len(runs))
 	for _, run := range runs {
-		status := run.Status
-		switch status {
-		case "ok":
-			status = "completed"
-		case "running":
-			status = "running"
-		case "failed":
-			status = "failed"
-		default:
-			if status == "" {
-				status = "pending"
-			}
-		}
-
-		payload := runPayload{
-			RunID:       run.ID,
-			Action:      run.Action,
-			ComputerIDs: run.Hosts,
-			Status:      status,
-			StartedAt:   time.Unix(run.StartedAt, 0).UTC().Format(time.RFC3339),
-			ReturnCode:  run.ReturnCode,
-			Output:      run.Output,
-			Preamble:    run.Preamble,
-		}
-		if run.EndedAt > 0 {
-			payload.CompletedAt = time.Unix(run.EndedAt, 0).UTC().Format(time.RFC3339)
-		}
-		out = append(out, payload)
+		out = append(out, buildRunPayload(run))
 	}
 
 	c.JSON(http.StatusOK, out)
 }
 
+func (h *AnsibleHandlers) GetRunHandler(c *gin.Context) {
+	if h.manager == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "ansible run manager unavailable"})
+		return
+	}
+
+	runID := strings.TrimSpace(c.Param("id"))
+	if runID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "run_id required"})
+		return
+	}
+
+	run, ok := h.manager.GetRun(runID)
+	if !ok {
+		c.JSON(http.StatusNotFound, gin.H{"error": "run not found", "run_id": runID})
+		return
+	}
+
+	c.JSON(http.StatusOK, buildRunPayload(run))
+}
+
+func buildRunPayload(run AnsibleRunRecord) gin.H {
+	status := run.Status
+	switch status {
+	case "ok":
+		status = "completed"
+	case "running":
+		status = "running"
+	case "failed":
+		status = "failed"
+	default:
+		if status == "" {
+			status = "pending"
+		}
+	}
+
+	payload := gin.H{
+		"run_id":       run.ID,
+		"action":       run.Action,
+		"computer_ids": run.Hosts,
+		"status":       status,
+		"started_at":   time.Unix(run.StartedAt, 0).UTC().Format(time.RFC3339),
+		"return_code":  run.ReturnCode,
+		"output":       run.Output,
+		"preamble":     run.Preamble,
+	}
+	if run.EndedAt > 0 {
+		payload["completed_at"] = time.Unix(run.EndedAt, 0).UTC().Format(time.RFC3339)
+	}
+	return payload
+}
+
 func (h *AnsibleHandlers) RunActionHandler(c *gin.Context) {
 	var body struct {
-		ComputerIDs []string `json:"computer_ids"`
-		WorkerIDs   []string `json:"worker_ids"`
-		Workers     []string `json:"workers"`
-		Hosts       []string `json:"hosts"`
-		Action      string   `json:"action"`
+		ComputerIDs   []string `json:"computer_ids"`
+		WorkerIDs     []string `json:"worker_ids"`
+		Workers       []string `json:"workers"`
+		Hosts         []string `json:"hosts"`
+		Action        string   `json:"action"`
+		BatchSize     int      `json:"batch_size"`
+		CanaryPercent float64  `json:"canary_percent"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid JSON body"})
@@ -132,8 +147,23 @@ func (h *AnsibleHandlers) RunActionHandler(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "action required"})
 		return
 	}
-	if body.Action != "update_workers" && body.Action != "install_workers" && body.Action != "preflight_workers" && body.Action != "test_ssh" {
+	if body.Action != "update_workers" && body.Action != "deploy_workers" && body.Action != "rollout_update" && body.Action != "install_workers" && body.Action != "preflight_workers" && body.Action != "test_ssh" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported action"})
+		return
+	}
+
+	if body.Action == "deploy_workers" || body.Action == "rollout_update" {
+		runID, err := h.runDeployWorkers(targets, body.BatchSize, body.CanaryPercent)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"run_id":  runID,
+			"status":  "queued",
+			"action":  "deploy_workers",
+			"targets": targets,
+		})
 		return
 	}
 
