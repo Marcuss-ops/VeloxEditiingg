@@ -1,0 +1,63 @@
+# ============================================================================
+# Velox Worker - Multi-stage Build (LEGGERO: nessun Node/Remotion/Chrome)
+# ============================================================================
+# Stage 1: Build Go worker-agent binary
+# Stage 2: Runtime minimale con solo ffmpeg + Go binary
+# ============================================================================
+
+# ── Build stage ──────────────────────────────────────────────────────────────
+FROM golang:1.25-bookworm AS builder
+
+WORKDIR /build
+
+# Copy Go module files first for layer caching
+COPY go.mod go.sum ./
+RUN go mod download
+
+# Copy worker-agent source
+COPY . .
+
+# Build the binary
+RUN CGO_ENABLED=1 GOOS=linux go build -ldflags="-s -w" -o velox-worker-agent ./cmd/velox-worker-agent
+
+# ── Runtime stage (minimale) ────────────────────────────────────────────────
+FROM debian:bookworm-slim
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+WORKDIR /app
+
+# Solo dipendenze essenziali: ffmpeg per video, curl per comunicazioni
+RUN apt-get update -qq && apt-get install -y --no-install-recommends \
+    build-essential \
+    cmake \
+    g++ \
+    ffmpeg \
+    curl \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy only the prebuilt binary from builder stage
+COPY --from=builder /build/velox-worker-agent /usr/local/bin/velox-worker-agent
+
+# Create non-root user for runtime
+RUN useradd -r -m -s /usr/sbin/nologin velox
+
+# Set permissions
+RUN chown -R velox:velox /app /usr/local/bin/velox-worker-agent
+
+USER velox
+
+# ============================================================================
+# Worker leggero: solo Go binary + ffmpeg.
+# Nessun Node.js, nessun Remotion, nessuna libreria Chrome/GTK.
+# Il motore grafico C++ nativo sara integrato separatamente.
+# ============================================================================
+
+# Health check via HTTP endpoint
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+# Default: Go worker-agent-go
+ENTRYPOINT ["/usr/local/bin/velox-worker-agent"]
+CMD ["--master", "http://master:8000"]

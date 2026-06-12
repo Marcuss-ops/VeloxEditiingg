@@ -1,0 +1,96 @@
+---
+# ============================================================
+# INSTALL WORKERS — Reinstallazione completa worker
+# ============================================================
+# Azioni:
+#   - Preflight checks (OS, comandi, disco)
+#   - Setup directory worker
+#   - Docker build immagine worker
+#   - Config systemd + watchdog + auto-update
+#   - Avvio servizio
+#
+# Incluse: tasks/systemd_setup.yml (single source of truth)
+# ============================================================
+
+- name: Install workers
+  hosts: workers
+  gather_facts: yes
+  vars:
+    velox_dir: "/opt/velox"
+    master_url: "{{ master_url | default('http://127.0.0.1:8000') }}"
+    version_number: "{{ lookup('file', playbook_dir + '/../../../../VERSION.txt') | trim }}"
+
+  tasks:
+    # ── PREREQUISITI ─────────────────────────────────────────
+    - name: Install | Test connesione SSH
+      ansible.builtin.ping:
+
+    - name: Install | Verifica OS supportato
+      ansible.builtin.assert:
+        that:
+          - ansible_os_family == "Debian"
+        fail_msg: "OS {{ ansible_os_family }} non supportato — richiesto Debian/Ubuntu"
+
+    - name: Install | Verifica architettura
+      ansible.builtin.assert:
+        that:
+          - ansible_architecture in ["x86_64", "aarch64"]
+        fail_msg: "Architettura {{ ansible_architecture }} non supportata"
+
+    - name: Install | Verifica comandi essenziali
+      ansible.builtin.command: "which {{ item }}"
+      register: required_cmds
+      changed_when: false
+      failed_when: false
+      loop:
+        - python3
+        - curl
+        - docker
+        - systemctl
+
+    - name: Install | Fail se comandi essenziali mancanti
+      ansible.builtin.fail:
+        msg: "Comando mancante: {{ item.item }}"
+      loop: "{{ required_cmds.results }}"
+      when: item.rc != 0
+
+    # ── DIRECTORY WORKER ─────────────────────────────────────
+    - name: Install | Crea directory worker
+      ansible.builtin.file:
+        path: "{{ velox_dir }}/{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - current
+        - cache
+        - bin
+
+    - name: Install | Crea directory per override systemd
+      ansible.builtin.file:
+        path: "/etc/systemd/system/velox-worker-{{ inventory_hostname }}.service.d"
+        state: directory
+        mode: "0755"
+
+    # ── SYSTEMD SETUP (single source of truth) ──────────────
+    - name: Install | Configura sistema worker (systemd, Docker, watchdog)
+      ansible.builtin.include_tasks:
+        file: tasks/systemd_setup.yml
+      vars:
+        install_showlog_wrapper: true
+
+    # ── VERIFICA FINALE ──────────────────────────────────────
+    - name: Install | Verifica servizio attivo
+      ansible.builtin.systemd:
+        name: "velox-worker-{{ inventory_hostname }}"
+      register: final_status
+
+    - name: Install | Riepilogo installazione
+      ansible.builtin.debug:
+        msg: |-
+          ✅ Installazione completata per {{ inventory_hostname }}
+
+          Servizio: velox-worker-{{ inventory_hostname }}
+          Stato: {{ final_status.status.ActiveState | default('unknown') }}
+          Docker: velox-worker:latest
+          Directory: {{ velox_dir }}
+          Master: {{ master_url }}

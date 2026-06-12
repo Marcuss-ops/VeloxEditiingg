@@ -1,0 +1,52 @@
+# ============================================================
+# INSTALLER HEARTBEAT — Verifica master e installer
+# ============================================================
+# Questo task verifica che il controller (master) sia pronto
+# per distribuire/installare worker remoti.
+#
+# Include in: prechecks.yml (pre-flight check)
+# Eseguito su: localhost (controller/master)
+# ============================================================
+
+- name: Heartbeat | Verifica master server reachable
+  uri:
+    url: "{{ master_url }}/health"
+    method: GET
+    return_content: yes
+    status_code: 200
+    timeout: 10
+  register: master_health
+  delegate_to: localhost
+  become: no
+
+- name: Heartbeat | Log master health
+  debug:
+    msg: "✅ Master reachable: {{ master_health.json.status | default('ok') }}"
+  delegate_to: localhost
+  become: no
+
+- name: Heartbeat | Verifica worker registration endpoint
+  uri:
+    url: "{{ master_url }}/api/workers/register"
+    method: POST
+    body_format: json
+    body: '{"worker_id": "__precheck__", "worker_name": "__precheck__"}'
+    status_code: [200, 400, 401, 403]
+    timeout: 10
+  register: register_check
+  delegate_to: localhost
+  become: no
+  failed_when: false
+
+- name: Heartbeat | Riepilogo
+  debug:
+    msg: |-
+      ========================================
+      INSTALLER HEARTBEAT — Riepilogo
+      ========================================
+      Master: {{ master_url }}
+      Health: {{ '✅' if master_health.status == 200 else '❌' }} ({{ master_health.status }})
+      Registration: {{ '✅' if register_check.status in [200,400,401,403] else '❌' }} ({{ register_check.status }})
+      ========================================
+  delegate_to: localhost
+  become: no

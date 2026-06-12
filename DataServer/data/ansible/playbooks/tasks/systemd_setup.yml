@@ -1,0 +1,464 @@
+# ============================================================
+# VELOX WORKER SYSTEMD SETUP - SINGLE SOURCE OF TRUTH
+# ============================================================
+# This file defines the ONLY valid systemd configuration for Velox workers.
+#
+# ACTIVE UNITS (Docker/Go):
+#   - velox-worker-<host>.service  → Docker container with Go binary
+#   - velox-worker-console.service → Docker UI console (port 8088)
+#   - velox-worker-watchdog.*      → Auto-restart monitor
+#   - velox-auto-update.*          → 12h OS + bundle update
+#
+# Single Source of Truth: velox-worker-<host>.service (Docker only)
+# ============================================================
+
+---
+- name: Write env file
+  ansible.builtin.copy:
+    dest: /etc/velox-worker.env
+    mode: "0600"
+    content: |
+      MASTER_URL={{ master_url }}
+      VELOX_HEARTBEAT_MASTERS={{ master_url }}{% if master_url_secondary is defined and master_url_secondary %},{{ master_url_secondary }}{% endif %}
+      VELOX_SECONDARY_MASTER_URL={% if master_url_secondary is defined and master_url_secondary %}{{ master_url_secondary }}{% else %}{% endif %}
+      WORKER_NAME={{ inventory_hostname }}
+      VELOX_DIR={{ velox_dir }}
+      VELOX_BUNDLE_VERSION={{ version_number | default('v1.0.1') }}
+      VELOX_VERSION_NUMBER={{ version_number | default('v1.0.1') }}
+
+- name: Ensure worker config exists and disables Prometheus metrics
+  ansible.builtin.shell: |
+    set -euo pipefail
+    CFG=/tmp/velox-worker/worker_config.json
+    mkdir -p /tmp/velox-worker
+    if [ ! -f "$CFG" ]; then
+      /usr/local/bin/velox-worker-agent -generate-config -config "$CFG" -work-dir /app/RemoteCodex >/dev/null
+    fi
+    python3 - <<'PY'
+    import json
+    from pathlib import Path
+
+    cfg_path = Path("/tmp/velox-worker/worker_config.json")
+    data = json.loads(cfg_path.read_text())
+    data["prometheus_port"] = 0
+    cfg_path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+    PY
+  args:
+    executable: /bin/bash
+  register: worker_config_patch
+  changed_when: true
+
+- name: Detect current bundle layout (legacy refactored vs flat)
+  ansible.builtin.stat:
+    path: "{{ velox_dir }}/current/refactored/RemoteCodex/native/worker-agent-go/Dockerfile"
+  register: legacy_layout_dockerfile
+
+- name: Detect flat bundle layout
+  ansible.builtin.stat:
+    path: "{{ velox_dir }}/current/RemoteCodex/native/worker-agent-go/Dockerfile"
+  register: flat_layout_dockerfile
+
+- name: Set bundle layout paths
+  ansible.builtin.set_fact:
+    velox_current_root: >-
+      {{ (velox_dir + '/current/refactored') if (legacy_layout_dockerfile.stat.exists | default(false)) else (velox_dir + '/current') }}
+    velox_assets_cache_host_path: >-
+      {{ (velox_dir + '/current/refactored/RemoteCodex/assets_cache') if (legacy_layout_dockerfile.stat.exists | default(false)) else (velox_dir + '/current/RemoteCodex/assets_cache') }}
+    velox_worker_dockerfile_host: >-
+      {{
+        (velox_dir + '/current/refactored/RemoteCodex/native/worker-agent-go/Dockerfile')
+        if (legacy_layout_dockerfile.stat.exists | default(false))
+        else (
+          (velox_dir + '/current/RemoteCodex/native/worker-agent-go/Dockerfile')
+          if (flat_layout_dockerfile.stat.exists | default(false))
+          else ''
+        )
+      }}
+    velox_worker_docker_context: >-
+      {{
+        (velox_dir + '/current/refactored/RemoteCodex/native/worker-agent-go')
+        if (legacy_layout_dockerfile.stat.exists | default(false))
+        else (
+          (velox_dir + '/current/RemoteCodex/native/worker-agent-go')
+          if (flat_layout_dockerfile.stat.exists | default(false))
+          else ''
+        )
+      }}
+
+- name: Ensure velox-worker Docker image (reuse installer build when available)
+  ansible.builtin.shell: |
+    set -e
+    if /usr/bin/docker image inspect velox-worker:latest >/dev/null 2>&1; then
+      echo "Image velox-worker:latest already present (skip rebuild)"
+      exit 0
+    fi
+    DOCKERFILE="{{ velox_worker_dockerfile_host }}"
+    CONTEXT="{{ velox_worker_docker_context }}"
+    if [ -z "$DOCKERFILE" ] || [ -z "$CONTEXT" ]; then
+      echo "Dockerfile.worker missing and velox-worker:latest not present"
+      exit 1
+    fi
+    if [ ! -f "$DOCKERFILE" ]; then
+      echo "Dockerfile.worker missing at $DOCKERFILE"
+      exit 1
+    fi
+    if /usr/bin/docker buildx version >/dev/null 2>&1; then
+      export DOCKER_BUILDKIT=1
+    fi
+    /usr/bin/docker build \
+      -f "$DOCKERFILE" \
+      -t velox-worker:latest \
+      "$CONTEXT"
+    /usr/bin/docker image inspect velox-worker:latest >/dev/null 2>&1
+    echo "Image velox-worker:latest built successfully"
+  args:
+    executable: /bin/bash
+  register: worker_image_build
+  changed_when: "'built successfully' in (worker_image_build.stdout | default(''))"
+  failed_when: worker_image_build.rc != 0
+
+- name: Log Docker image preparation result
+  ansible.builtin.debug:
+    msg: "{{ worker_image_build.stdout | default('no output') }}"
+
+- name: Build velox-worker-console Docker image (optional)
+  ansible.builtin.shell: |
+    set -e
+    DOCKERFILE="{{ velox_current_root }}/RemoteCodex/worker-console/Dockerfile.console"
+    CONTEXT="{{ velox_current_root }}/RemoteCodex/worker-console"
+    if [ ! -f "$DOCKERFILE" ]; then
+      echo "Dockerfile.console non presente — salto build worker-console"
+      exit 0
+    fi
+    if [ ! -f "{{ velox_current_root }}/RemoteCodex/worker-console/web/dist/index.html" ]; then
+      echo "worker-console dist missing — salto build"
+      exit 0
+    fi
+    if /usr/bin/docker buildx version >/dev/null 2>&1; then
+      export DOCKER_BUILDKIT=1
+    fi
+    /usr/bin/docker build \
+      -f "$DOCKERFILE" \
+      -t velox-worker-console:latest \
+      "$CONTEXT"
+    /usr/bin/docker image inspect velox-worker-console:latest >/dev/null 2>&1
+    echo "Image velox-worker-console:latest built successfully"
+  args:
+    executable: /bin/bash
+  register: console_image_build
+  changed_when: false
+  failed_when: false
+
+- name: Log worker-console image preparation result
+  ansible.builtin.debug:
+    msg: "{{ console_image_build.stdout | default('no output') }}"
+
+- name: Ensure velox console bin directory
+  ansible.builtin.file:
+    path: /opt/velox/bin
+    state: directory
+    mode: "0755"
+
+- name: Install worker-console opener script
+  ansible.builtin.copy:
+    dest: /opt/velox/bin/velox-worker-console-open.sh
+    mode: "0755"
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      URL="${VELOX_CONSOLE_URL:-http://127.0.0.1:8088/#/console}"
+      # Avoid opening duplicate windows for the same console URL.
+      if pgrep -af "epiphany.*${URL}|firefox.*${URL}" >/dev/null 2>&1; then
+        exit 0
+      fi
+      # Prefer a Linux app-style window (GNOME Web), not Chrome.
+      if command -v epiphany >/dev/null 2>&1; then
+        nohup epiphany --application-mode "$URL" >/dev/null 2>&1 &
+      elif command -v firefox >/dev/null 2>&1; then
+        nohup firefox --new-window "$URL" >/dev/null 2>&1 &
+      elif command -v xdg-open >/dev/null 2>&1; then
+        nohup xdg-open "$URL" >/dev/null 2>&1 &
+      else
+        echo "No opener found. Open manually: $URL"
+      fi
+
+- name: Install worker-console systemd service (Docker)
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/velox-worker-console.service
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Velox Worker Console (Docker)
+      After=network-online.target docker.service
+      Wants=network-online.target docker.service
+      StartLimitIntervalSec=0
+
+      [Service]
+      Type=simple
+      ExecStartPre=/bin/sh -c '/usr/bin/docker rm -f velox-worker-console >/dev/null 2>&1 || true'
+      ExecStartPre=/bin/sh -c '/usr/bin/docker image inspect velox-worker-console:latest >/dev/null'
+      ExecStart=/usr/bin/docker run --name velox-worker-console --rm -e MASTER_URL={{ master_url }} -p 8088:8088 velox-worker-console:latest
+      ExecStop=/bin/sh -c '/usr/bin/docker stop -t 15 velox-worker-console >/dev/null 2>&1 || true'
+      ExecStopPost=/bin/sh -c '/usr/bin/docker rm -f velox-worker-console >/dev/null 2>&1 || true'
+      Restart=always
+      RestartSec=2
+      TimeoutStartSec=120
+      StandardOutput=journal
+      StandardError=journal
+      SyslogIdentifier=velox-worker-console
+
+      [Install]
+      WantedBy=multi-user.target
+
+- name: Ensure XDG autostart directory exists
+  ansible.builtin.file:
+    path: /etc/xdg/autostart
+    state: directory
+    mode: "0755"
+
+- name: Install worker-console desktop autostart
+  ansible.builtin.copy:
+    dest: /etc/xdg/autostart/velox-worker-console.desktop
+    mode: "0644"
+    content: |
+      [Desktop Entry]
+      Type=Application
+      Name=Velox Worker Console
+      Comment=Open Velox Worker Console on login
+      Exec=/opt/velox/bin/velox-worker-console-open.sh
+      Terminal=false
+      X-GNOME-Autostart-enabled=true
+      NoDisplay=false
+
+- name: Stop worker service before rewriting unit
+  ansible.builtin.systemd:
+    name: velox-worker-{{ inventory_hostname }}
+    state: stopped
+  failed_when: false
+
+- name: Preserve host-specific canonical override directory
+  ansible.builtin.file:
+    path: /etc/systemd/system/velox-worker-{{ inventory_hostname }}.service.d
+    state: directory
+    mode: "0755"
+
+# ── DOCKER GO WORKER SERVICE (Single Source of Truth) ──────────
+- name: Create systemd service
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/velox-worker-{{ inventory_hostname }}.service
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Velox Worker - {{ inventory_hostname }}
+      After=network-online.target
+      Wants=network-online.target
+
+      [Service]
+      Type=simple
+      EnvironmentFile=/etc/velox-worker.env
+      WorkingDirectory={{ velox_dir }}/current
+      ExecStartPre=/bin/sh -c '/usr/bin/docker rm -f velox-worker-{{ inventory_hostname }} >/dev/null 2>&1 || true'
+      ExecStart=/usr/bin/docker run --name velox-worker-{{ inventory_hostname }} --rm --network host -v {{ velox_dir }}/current/refactored:/app -v {{ velox_dir }}/cache:/root/.cache -v {{ velox_assets_cache_host_path }}:/app/RemoteCodex/assets_cache --entrypoint /bin/sh velox-worker:latest -lc 'ENGINE_BIN=/app/RemoteCodex/native/video-engine-cpp/build/velox_video_engine; if [ ! -x "$ENGINE_BIN" ]; then mkdir -p /app/RemoteCodex/native/video-engine-cpp/build; cmake -S /app/RemoteCodex/native/video-engine-cpp -B /app/RemoteCodex/native/video-engine-cpp/build && cmake --build /app/RemoteCodex/native/video-engine-cpp/build -j"$(nproc)"; fi; export VELOX_VIDEO_ENGINE_CPP_BIN="$ENGINE_BIN"; CFG=/tmp/velox-worker/worker_config.json; mkdir -p /tmp/velox-worker; [ -f "$CFG" ] || /usr/local/bin/velox-worker-agent -generate-config -config "$CFG" -work-dir /app/RemoteCodex; exec /usr/local/bin/velox-worker-agent -config "$CFG" -master {{ master_url }} -worker-id {{ inventory_hostname }} -work-dir /app/RemoteCodex'
+      ExecStop=/bin/sh -c '/usr/bin/docker stop -t 20 velox-worker-{{ inventory_hostname }} >/dev/null 2>&1 || true'
+      ExecStopPost=/bin/sh -c '/usr/bin/docker rm -f velox-worker-{{ inventory_hostname }} >/dev/null 2>&1 || true'
+      TimeoutStopSec=35
+      KillMode=control-group
+      SuccessExitStatus=137 143
+      Restart=always
+      RestartSec=10
+      StandardOutput=journal
+      StandardError=journal
+      SyslogIdentifier=velox-worker-{{ inventory_hostname }}
+
+      [Install]
+      WantedBy=multi-user.target
+
+- name: Reload systemd
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: Reset failed state for worker service
+  ansible.builtin.shell: systemctl reset-failed "velox-worker-{{ inventory_hostname }}" || true
+  args:
+    executable: /bin/bash
+  changed_when: false
+
+- name: Enable and start worker
+  ansible.builtin.systemd:
+    name: velox-worker-{{ inventory_hostname }}
+    enabled: true
+    state: restarted
+
+- name: Enable and start worker-console service (optional)
+  ansible.builtin.systemd:
+    name: velox-worker-console
+    enabled: true
+    state: restarted
+  failed_when: false
+
+- name: Install showlog wrapper on controller (master)
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../../../../utils/admin/showlog"
+    dest: /usr/local/bin/showlog
+    mode: '0755'
+  delegate_to: localhost
+  become: true
+  ignore_errors: true
+  when: install_showlog_wrapper | default(false) | bool
+
+- name: Verifica stato servizio worker
+  ansible.builtin.shell: |
+    set +e
+    systemctl is-active "velox-worker-{{ inventory_hostname }}" 2>/dev/null || true
+  register: worker_service_active
+  changed_when: false
+  failed_when: false
+
+- name: Install velox-worker watchdog (auto-restart if service stopped)
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/velox-worker-watchdog.service
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Velox Worker Watchdog (ensure service stays running)
+      After=network-online.target
+      Wants=network-online.target
+
+      [Service]
+      Type=oneshot
+      ExecStart=/bin/bash -lc '\
+        # List all host-specific velox-worker units
+        units=$(systemctl list-unit-files "velox-worker-*.service" --no-legend --no-pager 2>/dev/null | awk "{print \\$1}" | grep -E "^velox-worker-.+\\.service$" || true); \
+        \
+        # Restart any stopped workers
+        for u in $units; do \
+          [ -z "$u" ] && continue; \
+          systemctl is-enabled "$u" >/dev/null 2>&1 || systemctl enable "$u" >/dev/null 2>&1 || true; \
+          systemctl is-active "$u" >/dev/null 2>&1 || { \
+            echo "[watchdog] Restarting stopped unit: $u"; \
+            systemctl restart "$u" >/dev/null 2>&1 || systemctl start "$u" >/dev/null 2>&1 || true; \
+          }; \
+        done'
+      StandardOutput=journal
+      StandardError=journal
+      SyslogIdentifier=velox-worker-watchdog
+
+- name: Install velox-worker watchdog timer (every 5 minutes)
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/velox-worker-watchdog.timer
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Velox Worker Watchdog Timer
+
+      [Timer]
+      OnBootSec=5min
+      OnUnitActiveSec=5min
+      AccuracySec=30s
+      Unit=velox-worker-watchdog.service
+
+      [Install]
+      WantedBy=timers.target
+
+- name: Enable watchdog timer
+  ansible.builtin.systemd:
+    name: velox-worker-watchdog.timer
+    enabled: true
+    state: started
+    daemon_reload: true
+
+# ── 12h Auto-Update: OS + Bundle + Restart ────────────────────
+- name: Install velox-auto-update script
+  ansible.builtin.copy:
+    dest: /opt/velox/bin/auto-update.sh
+    mode: "0755"
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      
+      MASTER="${MASTER_URL:-}"
+      VELOX_DIR="{{ velox_dir }}"
+      LOG_PREFIX="[auto-update]"
+      
+      log() { echo "$LOG_PREFIX $(date '+%Y-%m-%d %H:%M:%S') $*"; }
+      
+      # Step 1: OS update
+      log "Starting OS update..."
+      apt-get update -qq 2>&1 | tail -3
+      apt-get upgrade -y -qq --no-install-recommends 2>&1 | tail -5 || log "WARNING: OS upgrade had issues"
+      
+      # Step 2: Download and apply new bundle from master
+      if [ -z "$MASTER" ]; then
+        log "MASTER_URL not set, skipping bundle update"
+      else
+        WORKER_ZIP="/tmp/velox-update-$(date +%s).zip"
+        log "Downloading bundle from $MASTER..."
+        if curl -sf --max-time 60 "$MASTER/api/worker/bundle?platform=linux&arch=x86_64" -o "$WORKER_ZIP" && [ -s "$WORKER_ZIP" ]; then
+          INSTALLER="$VELOX_DIR/current/velox-installer"
+          if [ -x "$INSTALLER" ]; then
+            log "Applying bundle update..."
+            "$INSTALLER" --target-dir "$VELOX_DIR" --package-source "$WORKER_ZIP" || log "WARNING: Installer had issues"
+          else
+            log "WARNING: velox-installer not found at $INSTALLER"
+          fi
+          rm -f "$WORKER_ZIP"
+        else
+          log "Bundle download skipped (master unreachable or no update available)"
+        fi
+      fi
+      
+      # Step 3: Restart worker services
+      log "Restarting worker services..."
+      for u in $(systemctl list-unit-files "velox-worker*.service" --no-legend --no-pager 2>/dev/null | awk '{print $1}' | grep -Ev "watchdog|auto-update"); do
+        systemctl restart "$u" 2>/dev/null || log "WARNING: Failed to restart $u"
+      done
+      
+      log "Auto-update completed successfully"
+
+- name: Install velox-auto-update service
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/velox-auto-update.service
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Velox Worker Auto-Update (12h cycle)
+      After=network-online.target
+      Wants=network-online.target
+
+      [Service]
+      Type=oneshot
+      EnvironmentFile=/etc/velox-worker.env
+      ExecStart=/opt/velox/bin/auto-update.sh
+      StandardOutput=journal
+      StandardError=journal
+      SyslogIdentifier=velox-auto-update
+      TimeoutStartSec=600
+
+- name: Install velox-auto-update timer (ogni 12 ore)
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/velox-auto-update.timer
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Velox Worker Auto-Update Timer (12h)
+
+      [Timer]
+      # Prima esecuzione 12h dopo il boot (worker stabile prima di aggiornare)
+      OnBootSec=12h
+      # Poi ogni 12 ore
+      OnUnitActiveSec=12h
+      # Jitter random fino a 30min per evitare che tutti i worker si aggiornino insieme
+      RandomizedDelaySec=1800
+      AccuracySec=60s
+      Unit=velox-auto-update.service
+      Persistent=true
+
+      [Install]
+      WantedBy=timers.target
+
+- name: Enable e avvia auto-update timer
+  ansible.builtin.systemd:
+    name: velox-auto-update.timer
+    enabled: true
+    state: started
+    daemon_reload: true

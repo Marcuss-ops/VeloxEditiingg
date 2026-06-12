@@ -1,0 +1,27 @@
+{
+  "video_name": "Smoke video to video",
+  "script_text": "Smoke test per il flusso video-to-video con voiceover, clip iniziale e stock footage.",
+  "video_mode": "clip_stock",
+  "voiceover_paths": [
+    "https://drive.google.com/file/d/1IbuPAnjH271dexZwODggpFsMH5RBBLMn/view?usp=drive_link"
+  ],
+  "intro_clip_paths": [
+    "https://drive.google.com/file/d/1rMDKastHQuEDHsnhdELrK69AaAiJW6M/view?usp=drive_link"
+  ],
+  "stock_clip_paths": [
+    "https://drive.google.com/drive/folders/1mLz3mwvemftZjVRk_JNfEJ9py7raHsIc?usp=drive_link"
+  ],
+  "clip_segments": [
+    {
+      "kind": "stock",
+      "text": "Segmento stock collegato al voiceover.",
+      "clip_links": [
+        "https://drive.google.com/drive/folders/1mLz3mwvemftZjVRk_JNfEJ9py7raHsIc?usp=drive_link"
+      ],
+      "duration_seconds": 5
+    }
+  ],
+  "drive_output_folder": "https://drive.google.com/drive/folders/1N4It7jfWy0R1anMJZUyKHLOgc2WCpgQ6?usp=drive_link",
+  "output_path": "/tmp/velox/output/smoke_video_to_video.mp4",
+  "audio_language_for_srt": "it"
+}
