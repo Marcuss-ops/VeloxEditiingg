@@ -186,10 +186,10 @@ func TestHeartbeatBackoff(t *testing.T) {
 	}
 
 	// Test max cap
-	current = 60 * time.Second
+	current = 5 * time.Minute
 	next = w.calculateBackoff(current)
-	if next != 60*time.Second {
-		t.Errorf("Expected backoff to cap at max %v, got %v", 60*time.Second, next)
+	if next != 5*time.Minute {
+		t.Errorf("Expected backoff to cap at max %v, got %v", 5*time.Minute, next)
 	}
 }
 

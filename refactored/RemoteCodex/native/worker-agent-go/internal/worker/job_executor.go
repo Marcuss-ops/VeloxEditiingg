@@ -65,6 +65,14 @@ func (w *Worker) executeJob(ctx context.Context, job *api.Job) {
 			execErr = fmt.Errorf("upload completed video failed: %w", upErr)
 		} else {
 			output = updatedOutput
+			// Clean up local completed video file to conserve disk space
+			if localVideoPath := extractOutputVideoPath(output); localVideoPath != "" {
+				if err := os.Remove(localVideoPath); err != nil {
+					w.logger.Warn("[CLEANUP] Failed to remove local video file %s: %v", localVideoPath, err)
+				} else {
+					w.logger.Info("[CLEANUP] Removed local video file %s after successful upload", localVideoPath)
+				}
+			}
 		}
 	}
 

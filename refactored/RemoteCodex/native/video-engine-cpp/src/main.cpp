@@ -421,6 +421,16 @@ static int cmdFullVideo(int argc, char** argv) {
         return 1;
     }
 
+    struct WorkDirCleanup {
+        fs::path path;
+        ~WorkDirCleanup() {
+            if (!path.empty()) {
+                std::error_code ec;
+                fs::remove_all(path, ec);
+            }
+        }
+    } cleanupGuard{workDir};
+
     const bool clipMode = videoMode == "clip_stock"
         || !clipSegments.empty()
         || !introClipPaths.empty()
