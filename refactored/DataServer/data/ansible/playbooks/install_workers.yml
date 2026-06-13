@@ -72,6 +72,22 @@
         state: directory
         mode: "0755"
 
+    # ── SYNC CODE FROM MASTER ───────────────────────────────
+    - name: Install | Synchronize worker code from master to host
+      ansible.posix.synchronize:
+        src: /opt/velox/current/refactored/
+        dest: /opt/velox/current/refactored/
+        delete: true
+        rsync_opts:
+          - "--exclude=.git"
+          - "--exclude=secrets"
+          - "--exclude=.velox"
+          - "--exclude=bin/velox-worker-agent"
+          - "--exclude=bin/velox-server"
+          - "--exclude=*.md"
+      delegate_to: localhost
+      become: false
+
     # ── SYSTEMD SETUP (single source of truth) ──────────────
     - name: Install | Configura sistema worker (systemd, Docker, watchdog)
       ansible.builtin.include_tasks:
