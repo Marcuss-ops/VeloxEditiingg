@@ -13,12 +13,14 @@ import (
 
 // DriveHandlers holds Drive links dependencies (legacy compatibility layer)
 type DriveHandlers struct {
-	dataDir string
-	store   *store.SQLiteStore
+	dataDir      string
+	store        *store.SQLiteStore
+	driveService *drive.Service
 }
 
-// NewDriveHandlers creates Drive handlers (legacy compatibility)
-func NewDriveHandlers(cfg *drive.ServiceConfig) (*DriveHandlers, error) {
+// NewDriveHandlers creates Drive handlers (legacy compatibility).
+// driveSvc may be nil if Drive integration is not configured.
+func NewDriveHandlers(cfg *drive.ServiceConfig, driveSvc *drive.Service) (*DriveHandlers, error) {
 	dataDir := resolveDriveDataDir(cfg.TokensDir)
 	storePath := filepath.Join(dataDir, "velox.db")
 	sqliteStore, err := store.NewSQLiteStore(storePath)
@@ -31,8 +33,9 @@ func NewDriveHandlers(cfg *drive.ServiceConfig) (*DriveHandlers, error) {
 	driveTokensDir = cfg.TokensDir
 
 	return &DriveHandlers{
-		dataDir: dataDir,
-		store:   sqliteStore,
+		dataDir:      dataDir,
+		store:        sqliteStore,
+		driveService: driveSvc,
 	}, nil
 }
 
@@ -83,6 +86,9 @@ func RegisterDriveRoutes(r *gin.Engine, h *DriveHandlers) {
 
 	// Drive Tokens
 	r.GET("/api/drive/tokens/list", ListDriveTokensHandler)
+
+	// Drive Health Check
+	r.GET("/api/drive/health", h.DriveHealthCheckHandler)
 
 	log.Printf("[OK] Drive API routes registered at /api/drive/*")
 }

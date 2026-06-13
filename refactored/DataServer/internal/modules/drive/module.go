@@ -37,13 +37,29 @@ func (m *Module) Handlers() *driveHandlers.DriveHandlers {
 
 // RegisterRoutes registers Drive endpoints.
 func (m *Module) RegisterRoutes(r *gin.Engine) {
+	// Initialize Drive service
+	var driveSvc *integrationsDrive.Service
+	if m.cfg.DriveClientID != "" && m.cfg.DriveClientSecret != "" {
+		svc, err := integrationsDrive.NewService(&integrationsDrive.ServiceConfig{
+			ClientID:     m.cfg.DriveClientID,
+			ClientSecret: m.cfg.DriveClientSecret,
+			RedirectURI:  m.cfg.DriveRedirectURI,
+			TokensDir:    m.cfg.DriveTokensDir,
+		})
+		if err != nil {
+			log.Printf("[DRIVE] Service init failed: %v", err)
+		} else {
+			driveSvc = svc
+		}
+	}
+
 	// Initialize Drive handlers
 	handlers, err := driveHandlers.NewDriveHandlers(&integrationsDrive.ServiceConfig{
 		ClientID:     m.cfg.DriveClientID,
 		ClientSecret: m.cfg.DriveClientSecret,
 		RedirectURI:  m.cfg.DriveRedirectURI,
 		TokensDir:    m.cfg.DriveTokensDir,
-	})
+	}, driveSvc)
 	if err != nil {
 		log.Printf("[DRIVE] Handlers init failed: %v", err)
 		return
