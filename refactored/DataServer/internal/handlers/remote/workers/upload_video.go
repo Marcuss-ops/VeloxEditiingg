@@ -214,7 +214,7 @@ func UploadCompletedVideo(cfg *config.Config, fileQ *queue.FileQueue) gin.Handle
 				"job_run_id":         jobRunID,
 			}
 			if err := fileQ.UpdateJobFields(c.Request.Context(), jobID, updates); err != nil {
-				log.Printf("[WARN] Impossibile marcare COMPLETED il job %s: %v", jobID, err)
+				log.Printf("[WARN] Impossibile marcare COMPLETED il job %s: %v (will be set by SubmitResult)", jobID, err)
 			} else {
 				log.Printf("[OK] Job %s marcato COMPLETED via upload_completed_video", jobID)
 			}

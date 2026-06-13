@@ -19,7 +19,7 @@ import (
 	"velox-server/internal/handlers/server/jobs"
 	"velox-server/internal/handlers/server/master"
 	"velox-server/internal/handlers/server/pipeline"
-	scenevideo "velox-server/internal/handlers/server/video"
+	"velox-server/internal/handlers/server/smoke"
 	"velox-server/internal/handlers/web/dashboard"
 	"velox-server/internal/handlers/web/proxy"
 	"velox-server/internal/queue"
@@ -238,7 +238,7 @@ func RegisterV1Routes(r *gin.Engine, cfg *config.Config, fileQ *queue.FileQueue,
 		v1Admin.POST("/script/multiple", pipeline.ScriptMultiple(cfg))
 
 		// Video smoke test - Core API
-		v1Admin.POST("/video/smoke-clip-stock", scenevideo.CreateSmokeClipStock(cfg, fileQ))
+		v1Admin.POST("/video/smoke-clip-stock", smoke.CreateSmokeClipStock(cfg, fileQ))
 
 		// Compat endpoints
 		v1Admin.GET("/endpoints-status", proxy.EndpointsStatus)
@@ -248,7 +248,6 @@ func RegisterV1Routes(r *gin.Engine, cfg *config.Config, fileQ *queue.FileQueue,
 
 		// Video - Core API
 		v1Admin.POST("/video/create-master", master.CreateMaster(cfg, redisQ))
-		v1Admin.POST("/video/create-scenes", scenevideo.CreateFromScenes(cfg, fileQ))
 		v1.POST("/video/upload-completed", workers.UploadCompletedVideo(cfg, fileQ))
 
 		// Ansible - Core API

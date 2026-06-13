@@ -13,6 +13,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"velox-server/internal/config"
+	"velox-server/internal/jobs/enqueue"
 	"velox-server/internal/queue"
 	"velox-server/internal/store"
 )
@@ -57,7 +58,7 @@ func TestBuildSceneVideoPayloadFromPipelineResult(t *testing.T) {
 		},
 	}
 
-	payload, err := buildSceneVideoPayloadFromPipelineResult(result)
+	payload, err := enqueue.BuildPipelinePayload(result)
 	if err != nil {
 		t.Fatalf("build payload: %v", err)
 	}

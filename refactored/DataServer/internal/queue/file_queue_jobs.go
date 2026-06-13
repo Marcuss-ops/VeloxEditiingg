@@ -97,14 +97,31 @@ func (q *FileQueue) ClaimNextJob(ctx context.Context, workerID string) (*Job, er
 	return job, nil
 }
 
-// CompleteJob marks a job as completed
+// CompleteJob marks a job as completed (idempotent).
+// If the job is already COMPLETED (e.g. via UploadCompletedVideo or SubmitResult),
+// the call succeeds without overwriting any fields — this prevents clobbering
+// master_video_path, drive_url, and other metadata set by those earlier steps.
 func (q *FileQueue) CompleteJob(ctx context.Context, jobID string) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
 	job, ok := q.activeJobs[jobID]
 	if !ok {
-		return fmt.Errorf("job not found: %s", jobID)
+		// Job already completed / removed from active cache → load from SQLite
+		m, dbErr := q.dbStore.GetJob(ctx, jobID)
+		if dbErr != nil {
+			return fmt.Errorf("job not found: %s", jobID)
+		}
+		job = MapToJob(m)
+		if job.Status == StatusCompleted {
+			// Already COMPLETED — idempotent, nothing to do
+			return nil
+		}
+		if job.Status != StatusPending && job.Status != StatusProcessing {
+			return fmt.Errorf("job %s in unexpected state %s", jobID, job.Status)
+		}
+		// Job was PENDING/PROCESSING in SQLite but not in active cache → add it back
+		q.activeJobs[jobID] = job
 	}
 
 	now := NowUnix()

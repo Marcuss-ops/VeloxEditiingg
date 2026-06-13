@@ -1,4 +1,4 @@
-package video
+package smoke
 
 import (
 	"net/http"

@@ -29,6 +29,26 @@ type driveLinkRow struct {
 
 
 func (api *JobAPI) tryDriveFallbackUpload(jobID string) {
+	// Recover from panics so a bug in the drive upload path never silently
+	// orphans a job without drive_url.
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[CLOUD] Drive fallback PANIC for job %s: %v", jobID, r)
+			if api != nil && api.fileQ != nil && api.cfg != nil {
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				if err := api.fileQ.UpdateJobFields(ctx, jobID, map[string]interface{}{
+					"last_drive_upload_result": map[string]interface{}{
+						"success": false,
+						"error":   fmt.Sprintf("drive fallback panic: %v", r),
+					},
+				}); err != nil {
+					log.Printf("drive_fallback: panic UpdateJobFields failed for %s: %v", jobID, err)
+				}
+			}
+		}
+	}()
+
 	log.Printf("[CLOUD] Drive fallback triggered for job %s", jobID)
 
 	if api == nil || api.fileQ == nil || api.cfg == nil {
@@ -42,6 +62,14 @@ func (api *JobAPI) tryDriveFallbackUpload(jobID string) {
 	job, err := api.fileQ.GetJobAsMap(ctx, jobID)
 	if err != nil || job == nil {
 		log.Printf("[CLOUD] Drive fallback skipped: job not found or error: %v", err)
+		if err := api.fileQ.UpdateJobFields(ctx, jobID, map[string]interface{}{
+			"last_drive_upload_result": map[string]interface{}{
+				"success": false,
+				"error":   fmt.Sprintf("job not found: %v", err),
+			},
+		}); err != nil {
+			log.Printf("drive_fallback: UpdateJobFields failed for %s: %v", jobID, err)
+		}
 		return
 	}
 	if strings.ToUpper(strings.TrimSpace(toString(job["status"]))) != "COMPLETED" {
@@ -80,6 +108,14 @@ func (api *JobAPI) tryDriveFallbackUpload(jobID string) {
 	})
 	if err != nil {
 		log.Printf("[WARN] Drive fallback disabled for job %s: %v", jobID, err)
+		if updErr := api.fileQ.UpdateJobFields(ctx, jobID, map[string]interface{}{
+			"last_drive_upload_result": map[string]interface{}{
+				"success": false,
+				"error":   fmt.Sprintf("drive service unavailable: %v", err),
+			},
+		}); updErr != nil {
+			log.Printf("drive_fallback: UpdateJobFields failed for %s: %v", jobID, updErr)
+		}
 		return
 	}
 

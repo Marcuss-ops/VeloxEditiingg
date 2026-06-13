@@ -7,7 +7,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"velox-server/internal/config"
-	scenevideo "velox-server/internal/handlers/server/video"
+	"velox-server/internal/jobs/enqueue"
 	"velox-server/internal/queue"
 	"velox-server/internal/store"
 )
@@ -61,13 +61,13 @@ func (h *ScriptHandlers) GenerateWithImagesHandler(cfg *config.Config) gin.Handl
 			payload = map[string]interface{}{}
 		}
 
-		normalized, err := h.buildSceneImagePayload(cfg, payload)
+		normalized, err := enqueue.BuildSceneImagePayload(payload, h.dataDir, cfg.VideosDir)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": err.Error()})
 			return
 		}
 
-		response, err := scenevideo.EnqueueSceneVideoJob(c.Request.Context(), h.queue, normalized)
+		response, err := enqueue.EnqueueSceneVideoJob(c.Request.Context(), h.queue, normalized)
 		if err != nil {
 			status := http.StatusInternalServerError
 			if strings.Contains(strings.ToLower(err.Error()), "queue unavailable") {
@@ -112,7 +112,7 @@ func (h *ScriptHandlers) ScriptJobHandler(full bool) gin.HandlerFunc {
 			c.JSON(http.StatusNotFound, gin.H{"ok": false, "error": "job not found"})
 			return
 		}
-		c.JSON(http.StatusOK, renderJobResponse(job, full))
+		c.JSON(http.StatusOK, enqueue.RenderJobResponse(job, full))
 	}
 }
 
@@ -132,7 +132,7 @@ func (h *ScriptHandlers) ScriptByIDHandler() gin.HandlerFunc {
 			c.JSON(http.StatusNotFound, gin.H{"ok": false, "error": "script not found"})
 			return
 		}
-		c.JSON(http.StatusOK, renderJobResponse(job, true))
+		c.JSON(http.StatusOK, enqueue.RenderJobResponse(job, true))
 	}
 }
 

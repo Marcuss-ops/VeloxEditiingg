@@ -1,18 +1,12 @@
 package pipeline
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
-	"fmt"
 	"net/http"
-	"os"
-	"strings"
 
 	"github.com/gin-gonic/gin"
-	"velox-shared/payload"
 	"velox-server/internal/config"
-	scenevideo "velox-server/internal/handlers/server/video"
+	"velox-server/internal/jobs/enqueue"
 	"velox-server/internal/queue"
 	"velox-server/internal/remoteengine"
 )
@@ -50,7 +44,7 @@ func PipelineGenerate(cfg *config.Config, q *queue.FileQueue) gin.HandlerFunc {
 				response[k] = v
 			}
 
-			if shouldForwardPipelineResult(result) {
+			if enqueue.ShouldForwardPipelineResult(result) {
 				if forwarded, forwardErr := forwardPipelineResultToWorker(c.Request.Context(), q, result); forwardErr != nil {
 					response["worker_forwarded"] = false
 					response["worker_forward_error"] = forwardErr.Error()
@@ -76,235 +70,12 @@ func PipelineGenerate(cfg *config.Config, q *queue.FileQueue) gin.HandlerFunc {
 	}
 }
 
-func shouldForwardPipelineResult(result map[string]interface{}) bool {
-	if result == nil {
-		return false
-	}
-	flat := flattenPipelineResult(result)
-	status := strings.ToLower(strings.TrimSpace(payload.FirstString(flat, "status")))
-	if status != "" && status != "completed" && status != "succeeded" && status != "done" {
-		return false
-	}
-	if payload.FirstString(flat, "scenes_json", "json_path") == "" && payload.FirstString(flat, "scenes") == "" {
-		return false
-	}
-	if len(extractVoiceoverPaths(flat)) == 0 {
-		return false
-	}
-	return true
-}
-
 func forwardPipelineResultToWorker(ctx context.Context, q *queue.FileQueue, result map[string]interface{}) (map[string]interface{}, error) {
-	jobPayload, err := buildSceneVideoPayloadFromPipelineResult(result)
+	jobPayload, err := enqueue.BuildPipelinePayload(result)
 	if err != nil {
 		return nil, err
 	}
-	return scenevideo.EnqueueSceneVideoJob(ctx, q, jobPayload)
-}
-
-func buildSceneVideoPayloadFromPipelineResult(result map[string]interface{}) (map[string]interface{}, error) {
-	if result == nil {
-		return nil, fmt.Errorf("pipeline result is empty")
-	}
-
-	flat := flattenPipelineResult(result)
-
-	title := payload.FirstString(flat, "video_name", "title", "script_title", "name")
-	if title == "" {
-		title = firstMetadataTitle(flat)
-	}
-
-	scriptText := payload.FirstString(flat, "script_text", "script", "generated_script", "text")
-	if scriptText == "" {
-		if markdownPath := payload.FirstString(flat, "markdown_path"); markdownPath != "" {
-			if data, readErr := os.ReadFile(markdownPath); readErr == nil {
-				scriptText = strings.TrimSpace(string(data))
-			}
-		}
-	}
-
-	scenesJSON := payload.FirstString(flat, "scenes_json")
-	if scenesJSON == "" {
-		if scenesValue, ok := flat["scenes"]; ok {
-			if data, marshalErr := json.Marshal(scenesValue); marshalErr == nil {
-				scenesJSON = string(data)
-			}
-		}
-	}
-	if scenesJSON == "" {
-		if jsonPath := payload.FirstString(flat, "json_path"); jsonPath != "" {
-			if extracted, extractErr := extractScenesJSONFromFile(jsonPath); extractErr == nil {
-				scenesJSON = extracted
-			}
-		}
-	}
-
-	voiceovers := extractVoiceoverPaths(flat)
-	if len(voiceovers) == 0 {
-		return nil, fmt.Errorf("voiceover path missing from pipeline result")
-	}
-	if title == "" {
-		return nil, fmt.Errorf("video title missing from pipeline result")
-	}
-	if scriptText == "" {
-		return nil, fmt.Errorf("script text missing from pipeline result")
-	}
-	if scenesJSON == "" {
-		return nil, fmt.Errorf("scenes payload missing from pipeline result")
-	}
-
-	jobPayload := map[string]interface{}{
-		"job_id":                 payload.FirstString(flat, "job_id", "script_id", "trace_id"),
-		"job_run_id":             payload.FirstString(flat, "job_run_id", "run_id", "trace_id"),
-		"run_id":                 payload.FirstString(flat, "run_id", "job_run_id", "trace_id"),
-		"correlation_id":         payload.FirstString(flat, "correlation_id", "trace_id"),
-		"video_name":             title,
-		"title":                  title,
-		"script_text":            scriptText,
-		"scenes_json":            scenesJSON,
-		"voiceover_paths":        voiceovers,
-		"voiceover_path":         voiceovers[0],
-		"audio_path":             voiceovers[0],
-		"output_path":            payload.FirstString(flat, "output_path", "output_dir"),
-		"youtube_group":          payload.FirstString(flat, "youtube_group"),
-		"audio_language_for_srt": payload.FirstString(flat, "audio_language_for_srt", "audio_lang"),
-		"job_type":               "process_video",
-		"submitted_via":          "pipeline_generate_with_images",
-		"source":                 "pipeline_generate_with_images",
-		"priority":               1,
-		"timeout_secs":           3600,
-	}
-
-	if jobID := strings.TrimSpace(payload.FirstString(flat, "job_id", "script_id", "trace_id")); jobID != "" {
-		jobPayload["job_id"] = jobID
-		jobPayload["id"] = jobID
-	}
-
-	if runID := strings.TrimSpace(payload.FirstString(flat, "job_run_id", "run_id", "trace_id")); runID != "" {
-		jobPayload["job_run_id"] = runID
-		jobPayload["run_id"] = runID
-	}
-
-	if corrID := strings.TrimSpace(payload.FirstString(flat, "correlation_id", "trace_id")); corrID != "" {
-		jobPayload["correlation_id"] = corrID
-	}
-
-	if len(voiceovers) > 0 {
-		jobPayload["voiceover_path"] = voiceovers[0]
-		jobPayload["audio_path"] = voiceovers[0]
-	}
-
-	return jobPayload, nil
-}
-
-func flattenPipelineResult(result map[string]interface{}) map[string]interface{} {
-	flat := make(map[string]interface{}, len(result)+8)
-	for k, v := range result {
-		flat[k] = v
-	}
-	if nested, ok := result["result"].(map[string]interface{}); ok {
-		for k, v := range nested {
-			flat[k] = v
-		}
-	}
-	return flat
-}
-
-func firstMetadataTitle(p map[string]interface{}) string {
-	metadata, ok := p["metadata"]
-	if !ok {
-		return ""
-	}
-	switch v := metadata.(type) {
-	case []interface{}:
-		for _, item := range v {
-			if m, ok := item.(map[string]interface{}); ok {
-				if title := payload.FirstString(m, "title", "name"); title != "" {
-					return title
-				}
-			}
-		}
-	case []map[string]interface{}:
-		for _, item := range v {
-			if title := payload.FirstString(item, "title", "name"); title != "" {
-				return title
-			}
-		}
-	}
-	return ""
-}
-
-func extractVoiceoverPaths(p map[string]interface{}) []string {
-	var candidates []string
-
-	if s := payload.FirstString(p, "voiceover_path", "audio_path", "voiceover"); s != "" {
-		candidates = append(candidates, s)
-	}
-	if v, ok := p["voiceover_paths"]; ok {
-		candidates = append(candidates, payload.NormalizeToStrings(v)...)
-	}
-
-	if voiceover, ok := p["voiceover"].(map[string]interface{}); ok {
-		candidates = append(candidates,
-			payload.FirstString(voiceover, "local_path", "path", "drive_link", "url"),
-		)
-	}
-	if nested, ok := p["voiceover_info"].(map[string]interface{}); ok {
-		candidates = append(candidates,
-			payload.FirstString(nested, "local_path", "path", "drive_link", "url"),
-		)
-	}
-
-	result := make([]string, 0, len(candidates))
-	seen := make(map[string]struct{}, len(candidates))
-	for _, item := range candidates {
-		trimmed := strings.TrimSpace(item)
-		if trimmed == "" {
-			continue
-		}
-		if _, exists := seen[trimmed]; exists {
-			continue
-		}
-		seen[trimmed] = struct{}{}
-		result = append(result, trimmed)
-	}
-	return result
-}
-
-func extractScenesJSONFromFile(path string) (string, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return "", err
-	}
-
-	var raw interface{}
-	if err := json.Unmarshal(bytes.TrimSpace(data), &raw); err != nil {
-		return "", err
-	}
-
-	switch v := raw.(type) {
-	case map[string]interface{}:
-		for _, key := range []string{"scenes_json", "scenes", "scene_plan", "scene_json"} {
-			if value, ok := v[key]; ok {
-				data, err := json.Marshal(value)
-				if err != nil {
-					return "", err
-				}
-				return string(data), nil
-			}
-		}
-		data, err := json.Marshal(v)
-		if err != nil {
-			return "", err
-		}
-		return string(data), nil
-	default:
-		data, err := json.Marshal(v)
-		if err != nil {
-			return "", err
-		}
-		return string(data), nil
-	}
+	return enqueue.EnqueueSceneVideoJob(ctx, q, jobPayload)
 }
 
 // PipelineStatus handles GET /api/remote/pipeline/status/<trace_id>
