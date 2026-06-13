@@ -262,7 +262,7 @@
       EnvironmentFile=/etc/velox-worker.env
       WorkingDirectory={{ velox_dir }}/current
       ExecStartPre=/bin/sh -c '/usr/bin/docker rm -f velox-worker-{{ inventory_hostname }} >/dev/null 2>&1 || true'
-      ExecStartPre=/bin/sh -c 'mkdir -p /tmp/velox-worker && chmod 775 /tmp/velox-worker && [ -f /tmp/velox-worker/worker_config.json ] || /usr/bin/docker run --rm --user root -v /tmp/velox-worker:/tmp/velox-worker velox-worker:latest -generate-config -config /tmp/velox-worker/worker_config.json -work-dir /app/RemoteCodex'
+      ExecStartPre=/bin/sh -c 'mkdir -p /tmp/velox-worker && chmod 775 /tmp/velox-worker && [ -f /tmp/velox-worker/worker_config.json ] || /usr/bin/docker run --rm --user root --entrypoint /usr/local/bin/velox-worker-agent -v /tmp/velox-worker:/tmp/velox-worker velox-worker:latest -generate-config -config /tmp/velox-worker/worker_config.json -work-dir /app/RemoteCodex'
       ExecStart=/usr/bin/docker run --name velox-worker-{{ inventory_hostname }} --rm --network host -e VELOX_BUNDLE_VERSION -e VELOX_VERSION_NUMBER -e VELOX_VIDEO_ENGINE_CPP_BIN=/usr/local/bin/velox_video_engine -v {{ velox_dir }}/current/refactored:/app -v {{ velox_dir }}/cache:/root/.cache -v {{ velox_dir }}/current/refactored/RemoteCodex/assets_cache:/app/RemoteCodex/assets_cache -v /tmp/velox-worker:/tmp/velox-worker velox-worker:latest -config /tmp/velox-worker/worker_config.json -master {{ master_url }} -worker-id {{ worker_id | default(inventory_hostname) }} -work-dir /app/RemoteCodex
       ExecStop=/bin/sh -c '/usr/bin/docker stop -t 20 velox-worker-{{ inventory_hostname }} >/dev/null 2>&1 || true'
       ExecStopPost=/bin/sh -c '/usr/bin/docker rm -f velox-worker-{{ inventory_hostname }} >/dev/null 2>&1 || true'
