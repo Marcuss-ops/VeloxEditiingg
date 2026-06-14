@@ -86,9 +86,6 @@ func (m *Module) RegisterRoutes(r *gin.Engine) {
 	m.handlers = handlers
 
 	ytGroup := r.Group("/api/v1/youtube")
-	if m.adminAuth != nil {
-		ytGroup.Use(m.adminAuth)
-	}
 	ytHandlers.RegisterYouTubeRoutes(ytGroup, m.handlers)
 
 	r.GET("/youtube_channels/oauth/callback", m.handlers.OAuthCallback)

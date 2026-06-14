@@ -1,18 +1,17 @@
--- Migration 008: DROP legacy tables and add CI guard
+-- Migration 008: Data migration from legacy tables to canonical (SAFE UPGRADE)
 --
--- Drops legacy tables that have been replaced by canonical models:
---   - youtube_channel_metadata  → replaced by youtube_channels (003)
---   - youtube_groups (old)      → replaced by youtube_groups_v2 (003)
---   - youtube_manager_channels  → data moved to youtube_channels + youtube_group_channels (003)
---   - youtube_manager_groups    → replaced by youtube_groups_v2 (003)
---   - ansible_computers         → replaced by ansible_hosts (004)
+-- This migration copies all remaining data from legacy tables into the
+-- canonical models. It does NOT drop any tables — that happens in migration 009.
 --
--- WARNING: This migration is irreversible. Ensure data has been migrated
--- before applying. The legacy_imports table provides an audit trail.
+-- Legacy tables migrated:
+--   - youtube_channel_metadata  → youtube_channels (003)
+--   - youtube_groups (old)      → youtube_groups_v2 + youtube_group_channels (003)
+--   - youtube_manager_channels  → youtube_channels + youtube_group_channels (003)
+--   - youtube_manager_groups    → youtube_groups_v2 (003)
+--   - ansible_computers         → ansible_hosts (004)
 --
--- SAFEGUARD: Before dropping, we INSERT any remaining legacy data into the
--- canonical tables so that installations upgrading from pre-migration-003/004
--- never lose data.
+-- SAFE: This migration only INSERTs. No data is removed.
+-- Rollback is safe by just deleting from canonical tables.
 
 -- ============================================================
 -- Phase 1: Migrate legacy youtube_channel_metadata → youtube_channels
@@ -129,19 +128,6 @@ SELECT
     datetime('now')
 FROM ansible_computers c
 WHERE c.host NOT IN (SELECT host FROM ansible_hosts);
-
--- ============================================================
--- Phase 6: Drop YouTube legacy tables
--- ============================================================
-DROP TABLE IF EXISTS youtube_channel_metadata;
-DROP TABLE IF EXISTS youtube_groups;
-DROP TABLE IF EXISTS youtube_manager_channels;
-DROP TABLE IF EXISTS youtube_manager_groups;
-
--- ============================================================
--- Phase 7: Drop Ansible legacy table
--- ============================================================
-DROP TABLE IF EXISTS ansible_computers;
 
 -- ============================================================
 -- CI guard: registry of known legacy JSON paths
