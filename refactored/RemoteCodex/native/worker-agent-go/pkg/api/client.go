@@ -185,10 +185,20 @@ func (c *Client) doSingleRequest(ctx context.Context, method, path string, body 
 		}
 		reqBody = bytes.NewReader(jsonBody)
 	}
-	fullURL, err := url.JoinPath(c.baseURL, path)
+
+	// Parse the path to separate base path from query parameters.
+	// url.JoinPath(c.baseURL, path) would URL-encode '?' as '%3F', breaking query params.
+	// Instead, use url.Parse on the full URL.
+	base, err := url.Parse(c.baseURL)
 	if err != nil {
-		return nil, fmt.Errorf("failed to join URL path: %w", err)
+		return nil, fmt.Errorf("failed to parse base URL: %w", err)
 	}
+	rel, err := url.Parse(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse request path: %w", err)
+	}
+	fullURL := base.ResolveReference(rel).String()
+
 	req, err := http.NewRequestWithContext(ctx, method, fullURL, reqBody)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
