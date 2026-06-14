@@ -143,6 +143,13 @@ else
     fail "build-video-engine.sh missing"
 fi
 
+# Check that the worker invokes the explicit full-video pipeline
+if grep -q -- '--full-video' "$REPO_ROOT/RemoteCodex/native/worker-agent-go/pkg/video/native_engine.go" 2>/dev/null; then
+    pass "Worker invokes the C++ engine with --full-video"
+else
+    fail "Worker does not pass --full-video to the C++ engine"
+fi
+
 # Check entrypoint validates GLIBC
 if [[ -f "$REPO_ROOT/RemoteCodex/scripts/worker-entrypoint.sh" ]]; then
     if grep -q "GLIBC\|ldd\|not found" "$REPO_ROOT/RemoteCodex/scripts/worker-entrypoint.sh"; then
@@ -216,10 +223,12 @@ header "Gate 7 — Healthcheck consistent"
 
 # Check HEALTHCHECK does NOT reference port 8000
 if grep -q 'HEALTHCHECK' "$DOCKERFILE" 2>/dev/null; then
-    if grep 'HEALTHCHECK' "$DOCKERFILE" | grep -q 'localhost:8000'; then
+    if grep 'HEALTHCHECK' "$DOCKERFILE" | grep -q 'localhost:8081/health'; then
+        pass "HEALTHCHECK targets the worker health server on 8081"
+    elif grep 'HEALTHCHECK' "$DOCKERFILE" | grep -q 'localhost:8000'; then
         fail "HEALTHCHECK references port 8000 (Prometheus is disabled)"
     else
-        pass "HEALTHCHECK does not reference port 8000"
+        warn "HEALTHCHECK present but endpoint not recognized"
     fi
 
     # Check it verifies something real
@@ -230,6 +239,14 @@ if grep -q 'HEALTHCHECK' "$DOCKERFILE" 2>/dev/null; then
     fi
 else
     warn "No HEALTHCHECK in Dockerfile"
+fi
+
+# Check the update flow rebuilds and reinjects the worker agent binary
+if grep -q 'Build Go worker agent on controller' "$REPO_ROOT/DataServer/data/ansible/playbooks/update_workers.yml" \
+    && grep -q 'Copy fresh worker agent binary into extracted bundle' "$REPO_ROOT/DataServer/data/ansible/playbooks/update_workers.yml"; then
+    pass "Update playbook rebuilds and reinjects the worker agent binary"
+else
+    fail "Update playbook does not guarantee a fresh worker agent binary"
 fi
 
 # ============================================================

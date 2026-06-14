@@ -31,42 +31,37 @@
       VELOX_WORKER_PROTOCOL_VERSION={{ worker_protocol_version | default('2026-06-worker-v1') }}
       VELOX_ENGINE_VERSION={{ engine_version | default(version_number | default('v1.0.6')) }}
 
-- name: Detect current bundle layout (legacy refactored vs flat)
-  ansible.builtin.stat:
-    path: "{{ velox_dir }}/current/refactored/RemoteCodex/native/worker-agent-go/Dockerfile"
-  register: legacy_layout_dockerfile
-
-- name: Detect flat bundle layout
+- name: Detect current bundle layout
   ansible.builtin.stat:
     path: "{{ velox_dir }}/current/RemoteCodex/native/worker-agent-go/Dockerfile"
-  register: flat_layout_dockerfile
+  register: legacy_layout_dockerfile
 
 - name: Set bundle layout paths
   ansible.builtin.set_fact:
-    velox_current_root: >-
-      {{ (velox_dir + '/current/refactored') if (legacy_layout_dockerfile.stat.exists | default(false)) else (velox_dir + '/current') }}
-    velox_assets_cache_host_path: >-
-      {{ (velox_dir + '/current/refactored/RemoteCodex/assets_cache') if (legacy_layout_dockerfile.stat.exists | default(false)) else (velox_dir + '/current/RemoteCodex/assets_cache') }}
-    velox_worker_dockerfile_host: >-
-      {{
-        (velox_dir + '/current/refactored/RemoteCodex/native/worker-agent-go/Dockerfile')
-        if (legacy_layout_dockerfile.stat.exists | default(false))
-        else (
-          (velox_dir + '/current/RemoteCodex/native/worker-agent-go/Dockerfile')
-          if (flat_layout_dockerfile.stat.exists | default(false))
-          else ''
-        )
-      }}
-    velox_worker_docker_context: >-
-      {{
-        (velox_dir + '/current/refactored/RemoteCodex')
-        if (legacy_layout_dockerfile.stat.exists | default(false))
-        else (
-          (velox_dir + '/current/RemoteCodex')
-          if (flat_layout_dockerfile.stat.exists | default(false))
-          else ''
-        )
-      }}
+    velox_current_root: "{{ velox_dir }}/current"
+    velox_assets_cache_host_path: "{{ velox_dir }}/current/RemoteCodex/assets_cache"
+    velox_worker_dockerfile_host: "{{ velox_dir }}/current/RemoteCodex/native/worker-agent-go/Dockerfile"
+    velox_worker_docker_context: "{{ velox_dir }}/current/RemoteCodex"
+
+- name: Patch worker Dockerfile healthcheck to master URL
+  ansible.builtin.replace:
+    path: "{{ velox_worker_dockerfile_host }}"
+    regexp: 'curl -f http://localhost:8000/health'
+    replace: 'curl -f {{ master_url }}/health'
+  when: velox_worker_dockerfile_host | length > 0
+
+- name: Verify worker agent binary is present in build context
+  ansible.builtin.stat:
+    path: "{{ velox_worker_docker_context }}/native/worker-agent-go/bin/velox-worker-agent"
+  register: worker_agent_binary_stat
+
+- name: Fail if worker agent binary is missing from build context
+  ansible.builtin.fail:
+    msg: >-
+      Missing velox-worker-agent binary at
+      {{ velox_worker_docker_context }}/native/worker-agent-go/bin/velox-worker-agent.
+      Rebuild the agent on the controller before running the Docker rebuild.
+  when: not worker_agent_binary_stat.stat.exists
 
 - name: Ensure velox-worker Docker image (always rebuild to pick up Go agent updates)
   ansible.builtin.shell: |
@@ -86,6 +81,7 @@
     fi
     /usr/bin/docker build \
       --pull \
+      --no-cache \
       -f "$DOCKERFILE" \
       -t velox-worker:latest \
       "$CONTEXT"
@@ -267,7 +263,7 @@
       WorkingDirectory={{ velox_dir }}/current
       ExecStartPre=/bin/sh -c '/usr/bin/docker rm -f velox-worker-{{ inventory_hostname }} >/dev/null 2>&1 || true'
       ExecStartPre=/bin/sh -c 'mkdir -p /tmp/velox-worker && chmod 775 /tmp/velox-worker && [ -f /tmp/velox-worker/worker_config.json ] || /usr/bin/docker run --rm --user root --entrypoint /usr/local/bin/velox-worker-agent -v /tmp/velox-worker:/tmp/velox-worker velox-worker:latest -generate-config -config /tmp/velox-worker/worker_config.json -work-dir /app/RemoteCodex'
-      ExecStart=/usr/bin/docker run --name velox-worker-{{ inventory_hostname }} --rm --network host --env-file /etc/velox-worker.env -e VELOX_VIDEO_ENGINE_CPP_BIN=/usr/local/bin/velox_video_engine -v {{ velox_dir }}/current/refactored:/app -v {{ velox_dir }}/cache:/root/.cache -v {{ velox_dir }}/current/refactored/RemoteCodex/assets_cache:/app/RemoteCodex/assets_cache -v /tmp/velox-worker:/tmp/velox-worker velox-worker:latest -config /tmp/velox-worker/worker_config.json -master {{ master_url }} -worker-id {{ worker_id | default(inventory_hostname) }} -work-dir /app/RemoteCodex
+      ExecStart=/usr/bin/docker run --name velox-worker-{{ inventory_hostname }} --rm --network host --env-file /etc/velox-worker.env -e VELOX_VIDEO_ENGINE_CPP_BIN=/usr/local/bin/velox_video_engine -v {{ velox_dir }}/current:/app -v {{ velox_dir }}/cache:/root/.cache -v {{ velox_dir }}/current/RemoteCodex/assets_cache:/app/RemoteCodex/assets_cache -v /tmp/velox-worker:/tmp/velox-worker velox-worker:latest -config /tmp/velox-worker/worker_config.json -master {{ master_url }} -worker-id {{ worker_id | default(inventory_hostname) }} -work-dir /app/RemoteCodex
       ExecStop=/bin/sh -c '/usr/bin/docker stop -t 20 velox-worker-{{ inventory_hostname }} >/dev/null 2>&1 || true'
       ExecStopPost=/bin/sh -c '/usr/bin/docker rm -f velox-worker-{{ inventory_hostname }} >/dev/null 2>&1 || true'
       TimeoutStopSec=35

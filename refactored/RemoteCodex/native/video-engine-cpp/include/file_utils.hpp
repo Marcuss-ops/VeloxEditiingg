@@ -78,7 +78,7 @@ inline std::string captureCommandOutput(const std::string& cmd) {
 inline std::string normalizeDriveUrl(const std::string& url) {
     std::smatch match;
     if (std::regex_search(url, match, std::regex(R"(/file/d/([^/]+))"))) {
-        return "https://drive.google.com/uc?export=download&id=" + match[1].str();
+        return "https://drive.usercontent.google.com/download?id=" + match[1].str() + "&export=download&authuser=0";
     }
     return url;
 }

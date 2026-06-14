@@ -27,13 +27,60 @@
           - master_url | length > 0
         fail_msg: "master_url non impostato — impossibile scaricare bundle"
 
+    - name: Update | Verifica bundle locale aggiornato sul controller
+      ansible.builtin.stat:
+        path: "{{ playbook_dir }}/../../worker_downloads/worker_code.zip"
+      delegate_to: localhost
+      become: false
+      run_once: true
+      register: local_bundle_zip
+
+    # ── BUILD BINARIO GO SULLA MACCHINA DI CONTROLLO ─────────
+    # Il bundle aggiornato viene poi estratto sul worker remoto; qui
+    # ricompiliamo l'agente sul controller e lo reiniettiamo nel tree
+    # estratto prima del rebuild Docker, così il binario non dipende
+    # da copie manuali nel container.
+    - name: Update | Build Go worker agent on controller
+      ansible.builtin.shell: |
+        set -euo pipefail
+        AGENT_DIR="{{ playbook_dir }}/../../../../RemoteCodex/native/worker-agent-go"
+        BINARY="$AGENT_DIR/bin/velox-worker-agent"
+
+        if [ -f "$BINARY" ]; then
+          NEWER=$(find "$AGENT_DIR" -name '*.go' -newer "$BINARY" -print -quit 2>/dev/null)
+          if [ -z "$NEWER" ]; then
+            echo "SKIP: binary up-to-date"
+            exit 0
+          fi
+        fi
+
+        cd "$AGENT_DIR"
+        make agent
+        echo "BUILT"
+      args:
+        executable: /bin/bash
+      delegate_to: localhost
+      become: false
+      run_once: true
+      register: agent_build
+      changed_when: "'BUILT' in (agent_build.stdout | default(''))"
+
     # ── DOWNLOAD NUOVO BUNDLE ────────────────────────────────
+    - name: Update | Copia bundle locale aggiornato sul worker
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../../worker_downloads/worker_code.zip"
+        dest: "/tmp/velox_worker_update.zip"
+        mode: "0644"
+      when: local_bundle_zip.stat.exists | default(false)
+      register: bundle_download
+
     - name: Update | Scarica bundle worker dal master
       ansible.builtin.get_url:
         url: "{{ master_url }}/api/worker/bundle?platform=linux&arch=x86_64"
         dest: "/tmp/velox_worker_update.zip"
         timeout: 120
         force: yes
+      when: not (local_bundle_zip.stat.exists | default(false))
       register: bundle_download
       failed_when: false
 
@@ -70,10 +117,65 @@
       failed_when: false
       when: bundle_final.stat is defined and bundle_final.stat.exists and bundle_final.stat.size > 0
 
+    - name: Update | Flatten legacy refactored bundle root into current
+      ansible.builtin.shell: |
+        set -euo pipefail
+        if [ -d "{{ velox_dir }}/current/refactored" ]; then
+          shopt -s dotglob nullglob
+          mv -f "{{ velox_dir }}/current/refactored"/* "{{ velox_dir }}/current"/ || true
+          rm -rf "{{ velox_dir }}/current/refactored"
+        fi
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: Update | Remove legacy refactored tree if still present
+      ansible.builtin.file:
+        path: "{{ velox_dir }}/current/refactored"
+        state: absent
+
     - name: Update | Verifica estrazione (cerca Dockerfile)
       ansible.builtin.stat:
         path: "{{ velox_dir }}/current/RemoteCodex/native/worker-agent-go/Dockerfile"
       register: dockerfile_check
+
+    - name: Update | Set layout paths
+      ansible.builtin.set_fact:
+        bundle_root: "{{ velox_dir }}/current"
+
+    - name: Update | Fail if worker bundle layout is missing
+      ansible.builtin.fail:
+        msg: "Impossibile individuare il layout del bundle worker in {{ velox_dir }}/current"
+      when: not dockerfile_check.stat.exists
+
+    - name: Update | Ensure worker agent binary directories exist
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - "{{ bundle_root }}/RemoteCodex/bin"
+        - "{{ bundle_root }}/RemoteCodex/native/worker-agent-go/bin"
+
+    - name: Update | Copy fresh worker agent binary into extracted bundle
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../../../../RemoteCodex/native/worker-agent-go/bin/velox-worker-agent"
+        dest: "{{ item }}"
+        mode: "0755"
+      loop:
+        - "{{ bundle_root }}/RemoteCodex/bin/velox-worker-agent"
+        - "{{ bundle_root }}/RemoteCodex/native/worker-agent-go/bin/velox-worker-agent"
+      register: worker_agent_copy
+
+    - name: Update | Copy fresh C++ engine helper scripts into extracted bundle
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../../../../RemoteCodex/scripts/{{ item.src }}"
+        dest: "{{ bundle_root }}/RemoteCodex/scripts/{{ item.dest }}"
+        mode: "0755"
+      loop:
+        - { src: "build-video-engine.sh", dest: "build-video-engine.sh" }
+        - { src: "worker-entrypoint.sh", dest: "worker-entrypoint.sh" }
+      register: worker_script_copy
 
     - name: Update | Log estrazione
       ansible.builtin.debug:

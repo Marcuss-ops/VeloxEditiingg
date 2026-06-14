@@ -3,9 +3,9 @@
 # ============================================================================
 # Build context: RemoteCodex/
 #
-# The C++ engine is compiled at container startup by worker-entrypoint.sh
-# using an out-of-source build in /tmp/velox-video-engine-build.
-# This guarantees the binary matches the container's GLIBC.
+# The C++ engine is compiled during image build and validated at container
+# startup. This keeps the binary persistent across container recreation while
+# still allowing a fallback rebuild if the binary is missing.
 #
 # Build:
 #   cd RemoteCodex/native/worker-agent-go
@@ -46,6 +46,10 @@ COPY native/video-engine-cpp /app/native/video-engine-cpp
 RUN chmod +x \
     /usr/local/bin/build-video-engine.sh \
     /usr/local/bin/worker-entrypoint.sh
+
+# Build the C++ engine into the image so recreated containers keep the binary.
+RUN /usr/local/bin/build-video-engine.sh && \
+    test -x /usr/local/bin/velox_video_engine
 
 # Copy Go worker agent binary (must be pre-built with 'make agent')
 COPY native/worker-agent-go/bin/velox-worker-agent /usr/local/bin/velox-worker-agent

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ENGINE_SRC="${VELOX_VIDEO_ENGINE_SRC:-/app/native/video-engine-cpp}"
+ENGINE_SRC="${VELOX_VIDEO_ENGINE_SRC:-}"
 OUT_BIN="${VELOX_VIDEO_ENGINE_OUT:-/usr/local/bin/velox_video_engine}"
 BUILD_DIR="${VELOX_VIDEO_ENGINE_BUILD_DIR:-/tmp/velox-video-engine-build}"
 
@@ -10,10 +10,33 @@ echo "Source: $ENGINE_SRC"
 echo "Output: $OUT_BIN"
 echo "Build dir: $BUILD_DIR"
 
-if [ ! -d "$ENGINE_SRC" ]; then
-  echo "ERROR: C++ engine source directory not found: $ENGINE_SRC" >&2
+resolve_engine_source() {
+  local candidate
+  for candidate in \
+    "${ENGINE_SRC}" \
+    /app/native/video-engine-cpp \
+    /app/RemoteCodex/native/video-engine-cpp \
+    /opt/velox/current/RemoteCodex/native/video-engine-cpp
+  do
+    [ -n "$candidate" ] || continue
+    if [ -d "$candidate" ]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+if [ -z "$ENGINE_SRC" ]; then
+  ENGINE_SRC="$(resolve_engine_source || true)"
+fi
+
+if [ -z "$ENGINE_SRC" ] || [ ! -d "$ENGINE_SRC" ]; then
+  echo "ERROR: C++ engine source directory not found. Tried /app/native/video-engine-cpp, /app/RemoteCodex/native/video-engine-cpp and /opt/velox/current/RemoteCodex/native/video-engine-cpp" >&2
   exit 10
 fi
+
+echo "Resolved source: $ENGINE_SRC"
 
 # Clean stale artifacts from bundle (never build inside the synced dir)
 rm -rf \

@@ -101,6 +101,41 @@ func TestBuildSceneImagePayload_WithScenesArray(t *testing.T) {
 	}
 }
 
+func TestBuildSceneImagePayload_PreservesYouTubeGroupAlias(t *testing.T) {
+	t.Parallel()
+
+	payload := map[string]interface{}{
+		"video_name":     "YT Alias Test",
+		"channel_id":     "amish",
+		"voiceover_path": "/tmp/test-voiceover.mp3",
+		"scenes": []interface{}{
+			map[string]interface{}{
+				"text":       "Scene 1",
+				"image_link": "https://example.com/img1.png",
+			},
+		},
+	}
+
+	result, err := BuildSceneImagePayload(payload, t.TempDir(), t.TempDir())
+	if err != nil {
+		t.Fatalf("BuildSceneImagePayload: %v", err)
+	}
+
+	if result["youtube_group"] != "amish" {
+		t.Fatalf("want youtube_group amish, got %v", result["youtube_group"])
+	}
+	if result["channel_id"] != "amish" {
+		t.Fatalf("want channel_id amish, got %v", result["channel_id"])
+	}
+	params, ok := result["parameters"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("want parameters map, got %T", result["parameters"])
+	}
+	if params["youtube_group"] != "amish" {
+		t.Fatalf("want parameters.youtube_group amish, got %v", params["youtube_group"])
+	}
+}
+
 func TestBuildSceneImagePayload_WithSceneImageFallbacks(t *testing.T) {
 	t.Parallel()
 
@@ -592,10 +627,10 @@ func TestBuildPipelinePayload_WithVoiceoverPaths(t *testing.T) {
 	result := map[string]interface{}{
 		"status": "completed",
 		"result": map[string]interface{}{
-			"title":            "Multi Voice Video",
-			"script_text":      "Test script.",
-			"json_path":        jsonPath,
-			"voiceover_paths":  []string{voicePath1, voicePath2},
+			"title":           "Multi Voice Video",
+			"script_text":     "Test script.",
+			"json_path":       jsonPath,
+			"voiceover_paths": []string{voicePath1, voicePath2},
 		},
 	}
 
@@ -699,10 +734,10 @@ func TestBuildPipelinePayload_FlatResult(t *testing.T) {
 
 	// Flat result without nested "result" key
 	result := map[string]interface{}{
-		"status":       "completed",
-		"title":        "Flat Video",
-		"script_text":  "Flat script text.",
-		"json_path":    jsonPath,
+		"status":         "completed",
+		"title":          "Flat Video",
+		"script_text":    "Flat script text.",
+		"json_path":      jsonPath,
 		"voiceover_path": voicePath,
 	}
 

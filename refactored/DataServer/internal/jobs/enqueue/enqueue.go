@@ -16,11 +16,11 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"velox-server/internal/queue"
 	"velox-shared/contract"
 	"velox-shared/media"
 	"velox-shared/paths"
 	"velox-shared/payload"
-	"velox-server/internal/queue"
 )
 
 // =============================================================================
@@ -176,6 +176,10 @@ func BuildSceneImagePayload(rawPayload map[string]interface{}, dataDir, videosDi
 	normalized["total_duration_secs"] = totalDuration
 	normalized["scene_duration_secs"] = perSceneDuration
 	normalized["scene_image_paths"] = sceneImagePaths
+	if youtubeGroup := firstNonEmpty(rawPayload, "youtube_group", "channel_id"); youtubeGroup != "" {
+		normalized["youtube_group"] = youtubeGroup
+		normalized["channel_id"] = youtubeGroup
+	}
 	normalized["priority"] = ensureInt(rawPayload["priority"], 1)
 	normalized["timeout_secs"] = ensureInt(rawPayload["timeout_secs"], 3600)
 	normalized["submitted_via"] = "api_script_generate_with_images"
@@ -204,6 +208,8 @@ func BuildSceneImagePayload(rawPayload map[string]interface{}, dataDir, videosDi
 		"total_duration_secs":    totalDuration,
 		"scene_duration_secs":    perSceneDuration,
 		"scene_image_paths":      sceneImagePaths,
+		"youtube_group":          normalized["youtube_group"],
+		"channel_id":             normalized["channel_id"],
 		"priority":               normalized["priority"],
 		"timeout_secs":           normalized["timeout_secs"],
 		"submitted_via":          "api_script_generate_with_images",

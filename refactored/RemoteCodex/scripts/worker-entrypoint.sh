@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-ENGINE_SOURCE="${VELOX_VIDEO_ENGINE_SRC:-/app/native/video-engine-cpp}"
+ENGINE_SOURCE="${VELOX_VIDEO_ENGINE_SRC:-}"
 ENGINE_BINARY="${VELOX_VIDEO_ENGINE_CPP_BIN:-/usr/local/bin/velox_video_engine}"
 BUILD_ROOT="${VELOX_VIDEO_ENGINE_BUILD_DIR:-/tmp/velox-video-engine-build}"
 
@@ -14,23 +14,54 @@ fail() {
     exit 1
 }
 
-log "Starting deterministic C++ engine build"
+log "Checking deterministic C++ engine binary"
 
-# Non usare mai build/ ricevuto dal bundle.
-rm -rf \
-    "$ENGINE_SOURCE/build" \
-    "$ENGINE_SOURCE/CMakeFiles" \
-    "$ENGINE_SOURCE/CMakeCache.txt" \
-    "$ENGINE_SOURCE/cmake_install.cmake"
+resolve_engine_source() {
+    local candidate
+    for candidate in \
+        "${ENGINE_SOURCE}" \
+        /app/native/video-engine-cpp \
+        /app/RemoteCodex/native/video-engine-cpp \
+        /opt/velox/current/RemoteCodex/native/video-engine-cpp
+    do
+        [ -n "$candidate" ] || continue
+        if [[ -d "$candidate" ]]; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+    return 1
+}
 
-rm -rf "$BUILD_ROOT"
-mkdir -p "$BUILD_ROOT"
+if [[ -z "$ENGINE_SOURCE" ]]; then
+    ENGINE_SOURCE="$(resolve_engine_source || true)"
+fi
 
-export VELOX_VIDEO_ENGINE_SRC="$ENGINE_SOURCE"
-export VELOX_VIDEO_ENGINE_BUILD_DIR="$BUILD_ROOT"
-export VELOX_VIDEO_ENGINE_OUT="$ENGINE_BINARY"
+if [[ -z "$ENGINE_SOURCE" || ! -d "$ENGINE_SOURCE" ]]; then
+    fail "C++ engine source directory not found; tried /app/native/video-engine-cpp, /app/RemoteCodex/native/video-engine-cpp and /opt/velox/current/RemoteCodex/native/video-engine-cpp"
+fi
 
-/usr/local/bin/build-video-engine.sh
+if [[ ! -x "$ENGINE_BINARY" ]]; then
+    log "Binary missing, rebuilding C++ engine"
+
+    # Non usare mai build/ ricevuto dal bundle.
+    rm -rf \
+        "$ENGINE_SOURCE/build" \
+        "$ENGINE_SOURCE/CMakeFiles" \
+        "$ENGINE_SOURCE/CMakeCache.txt" \
+        "$ENGINE_SOURCE/cmake_install.cmake"
+
+    rm -rf "$BUILD_ROOT"
+    mkdir -p "$BUILD_ROOT"
+
+    export VELOX_VIDEO_ENGINE_SRC="$ENGINE_SOURCE"
+    export VELOX_VIDEO_ENGINE_BUILD_DIR="$BUILD_ROOT"
+    export VELOX_VIDEO_ENGINE_OUT="$ENGINE_BINARY"
+
+    /usr/local/bin/build-video-engine.sh
+else
+    log "Using prebuilt C++ engine binary at $ENGINE_BINARY"
+fi
 
 test -x "$ENGINE_BINARY" ||
     fail "Engine binary missing or not executable: $ENGINE_BINARY"
