@@ -43,7 +43,7 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 DEFAULT_IMAGE_TAG="velox-worker:latest"
 DEFAULT_MASTER_URL="http://51.91.11.36:8000"
 DEFAULT_SSH_USER="pierone"
-DEFAULT_WORK_DIR="/opt/velox/current/refactored"
+DEFAULT_WORK_DIR="/opt/velox/current"
 DEFAULT_BINARY_PATH="bin/velox-worker-agent"
 DEFAULT_DOCKER_CONTEXT="$SCRIPT_DIR"
 
@@ -208,7 +208,7 @@ gen_docker_run_cmd() {
     local assets_cache="$WORK_DIR/RemoteCodex/assets_cache"
 
     # Comando di avvio per il worker (cmake + binario)
-    local entrypoint_cmd="ENGINE_BIN=/app/RemoteCodex/native/video-engine-cpp/build/velox_video_engine; "
+    local entrypoint_cmd="ENGINE_BIN=/usr/local/bin/velox_video_engine; "
     entrypoint_cmd+="ENGINE_SRC=/app/RemoteCodex/native/video-engine-cpp; "
     entrypoint_cmd+="if [ ! -x \"\$ENGINE_BIN\" ] || ! ldd \"\$ENGINE_BIN\" >/tmp/velox-worker/engine-ldd.log 2>&1; then "
     entrypoint_cmd+="rm -f \"\$ENGINE_BIN\" && "

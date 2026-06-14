@@ -84,6 +84,7 @@ else
     cd "$SCRIPT_DIR"
     zip -r "$BUNDLE_PATH" \
         RemoteCodex/ \
+        VERSION.txt \
         -x "RemoteCodex/native/worker-agent-go/bin/*" \
         -x "RemoteCodex/native/video-engine-cpp/build/*" \
         -x "RemoteCodex/native/video-engine-cpp/CMakeCache.txt" \
