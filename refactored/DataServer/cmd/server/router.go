@@ -94,7 +94,7 @@ func registerAPIV1Routes(r *gin.Engine, cfg *config.Config, deps *serverDeps, an
 	// TODO: migrate remaining V1 routes to dedicated api module
 	jobRepo := store.NewSQLiteJobsRepository(deps.sqliteStore)
 	tokenMgr := deps.workerLifecycle.GetTokenManager()
-	jobSvc := jobservice.NewService(cfg, deps.fileQ, nil, jobRepo, nil, deps.reg)
+	jobSvc := jobservice.NewService(cfg, deps.fileQ, jobRepo, nil, deps.reg)
 	if deps.workerUpdateHandler != nil {
 		if hash := deps.workerUpdateHandler.ComputeBundleSHA256(); hash != "" {
 			jobSvc.SetMasterBundleHash(hash)
