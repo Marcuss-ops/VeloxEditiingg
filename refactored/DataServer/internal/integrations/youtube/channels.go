@@ -118,55 +118,15 @@ func (s *Service) loadChannelFromToken(tokenPath string) *AuthChannel {
 	return channel
 }
 
-// loadChannelsJSON loads channel details from SQLite (legacy path).
-func (s *Service) loadChannelsJSON() {
-	if s.store != nil {
-		s.loadChannelsFromSQLite()
-	}
-}
-
-// loadChannelsFromSQLite loads channel metadata from legacy youtube_channel_metadata.
-func (s *Service) loadChannelsFromSQLite() bool {
-	rows, err := s.store.ListYouTubeChannelMetadata()
-	if err != nil || len(rows) == 0 {
-		return false
-	}
-
-	for id, info := range rows {
-		if ch, exists := s.channels[id]; exists {
-			if title, ok := info["title"].(string); ok && title != "" {
-				ch.Title = title
-			}
-			if lang, ok := info["language"].(string); ok {
-				ch.Language = lang
-			}
-		} else {
-			title, _ := info["title"].(string)
-			lang, _ := info["language"].(string)
-			s.channels[id] = &AuthChannel{
-				ID:       id,
-				Title:    title,
-				Name:     title,
-				Language: lang,
-			}
-		}
-	}
-
-	log.Printf("[OK] Loaded channel metadata from legacy SQLite (%d entries)", len(rows))
-	return true
-}
-
 // loadCanonicalChannels loads channel metadata from the canonical youtube_channels table.
 func (s *Service) loadCanonicalChannels() bool {
 	if s.store == nil {
-		// Fall back to legacy path
-		return s.loadChannelsFromSQLite()
+		return false
 	}
 
 	rows, err := s.store.ListYouTubeChannels()
 	if err != nil || len(rows) == 0 {
-		// Fall back to legacy if canonical is empty
-		return s.loadChannelsFromSQLite()
+		return false
 	}
 
 	for _, row := range rows {
@@ -203,8 +163,6 @@ func (s *Service) loadCanonicalChannels() bool {
 	log.Printf("[OK] Loaded channel metadata from canonical tables (%d entries)", len(rows))
 	return true
 }
-
-
 
 // UpdateChannelMetadata updates metadata fields in SQLite.
 func (s *Service) UpdateChannelMetadata(channelID string, metadata map[string]interface{}) error {

@@ -16,8 +16,7 @@ import (
 
 // YouTubeStore defines the interface for SQLite-backed YouTube persistence,
 // avoiding a direct import of the store package.
-// It includes both canonical methods (youtube_channels, youtube_groups_v2)
-// and legacy methods (youtube_channel_metadata, youtube_groups) for migration.
+// Uses only canonical tables (youtube_channels, youtube_groups_v2, youtube_group_channels).
 type YouTubeStore interface {
 	// Canonical: YouTube Channels (youtube_channels table)
 	ListYouTubeChannels() ([]map[string]interface{}, error)
@@ -32,15 +31,7 @@ type YouTubeStore interface {
 	ListGroupChannelsV2(groupID int64) ([]string, error)
 	ListAllGroupMembershipsV2() ([]map[string]interface{}, error)
 
-	// Legacy: YouTube Groups (kept for backward compat during migration)
-	ListYouTubeGroups() ([]map[string]interface{}, error)
-	UpsertYouTubeGroup(name, description, privacy string, channels []string, rawJSON string) error
-
-	// Legacy: YouTube Channel Metadata (kept for backward compat during migration)
-	ListYouTubeChannelMetadata() (map[string]map[string]interface{}, error)
-	UpsertYouTubeChannelMetadata(channelID, title, tokenPath, language, addedDate, lastUsed, rawJSON string) error
-
-	// Cache (shared, not legacy)
+	// Cache (shared)
 	GetYouTubeCache(key string) (int64, string, error)
 	SetYouTubeCache(key string, timestamp int64, dataJSON string) error
 	CleanupYouTubeCache(maxAge int64) (int64, error)

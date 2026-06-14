@@ -2,6 +2,7 @@ package store
 
 import (
 	"encoding/json"
+	"fmt"
 	"time"
 )
 
@@ -14,7 +15,7 @@ func (s *SQLiteStore) UpsertWorker(raw []byte) error {
 	}
 	workerID := asString(m["worker_id"])
 	if workerID == "" {
-		return nil
+		return fmt.Errorf("upsert worker: missing worker_id")
 	}
 
 	sched := 0

@@ -1,95 +1,12 @@
 package store
 
 import (
-	"database/sql"
 	"encoding/json"
-	"fmt"
 	"time"
 )
 
 // ============================================================
-// Legacy ansible_computers methods (stored as raw_json)
-// ============================================================
-
-type AnsibleComputerRow struct {
-	Host    string `json:"host"`
-	RawJSON string `json:"-"`
-}
-
-func (s *SQLiteStore) UpsertAnsibleComputer(host, rawJSON string) error {
-	now := time.Now().UTC().Format(time.RFC3339)
-	_, err := s.db.Exec(
-		`INSERT INTO ansible_computers (host, raw_json, updated_at) VALUES (?, ?, ?)
-		 ON CONFLICT(host) DO UPDATE SET raw_json=excluded.raw_json, updated_at=excluded.updated_at`,
-		host, rawJSON, now,
-	)
-	return err
-}
-
-func (s *SQLiteStore) DeleteAnsibleComputer(host string) error {
-	_, err := s.db.Exec(`DELETE FROM ansible_computers WHERE host=?`, host)
-	return err
-}
-
-func (s *SQLiteStore) GetAnsibleComputer(host string) (string, error) {
-	var rawJSON string
-	err := s.db.QueryRow(`SELECT raw_json FROM ansible_computers WHERE host=?`, host).Scan(&rawJSON)
-	if err == sql.ErrNoRows {
-		return "", nil
-	}
-	return rawJSON, err
-}
-
-func (s *SQLiteStore) ListAnsibleComputers() (map[string]json.RawMessage, error) {
-	rows, err := s.db.Query(`SELECT host, raw_json FROM ansible_computers`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	result := make(map[string]json.RawMessage)
-	for rows.Next() {
-		var host, rawJSON string
-		if err := rows.Scan(&host, &rawJSON); err != nil {
-			continue
-		}
-		result[host] = json.RawMessage(rawJSON)
-	}
-	return result, rows.Err()
-}
-
-func (s *SQLiteStore) MigrateAnsibleComputersFromJSON(computers map[string]json.RawMessage) (int, error) {
-	if len(computers) == 0 {
-		return 0, nil
-	}
-	tx, err := s.db.Begin()
-	if err != nil {
-		return 0, err
-	}
-	defer tx.Rollback()
-
-	now := time.Now().UTC().Format(time.RFC3339)
-	stmt, err := tx.Prepare(
-		`INSERT INTO ansible_computers (host, raw_json, updated_at) VALUES (?, ?, ?)
-		 ON CONFLICT(host) DO UPDATE SET raw_json=excluded.raw_json, updated_at=excluded.updated_at`)
-	if err != nil {
-		return 0, err
-	}
-	defer stmt.Close()
-
-	count := 0
-	for host, raw := range computers {
-		if _, err := stmt.Exec(host, string(raw), now); err != nil {
-			fmt.Printf("[WARN] migrate ansible: skip %s: %v\n", host, err)
-			continue
-		}
-		count++
-	}
-	return count, tx.Commit()
-}
-
-// ============================================================
-// New structured ansible_hosts methods (Migration 004)
+// Structured ansible_hosts methods (Migration 004)
 // ============================================================
 
 // AnsibleHostFields holds the structured fields for an ansible host.

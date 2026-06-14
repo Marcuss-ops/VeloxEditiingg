@@ -15,7 +15,7 @@
 
 ### 🎬 YouTube Canonical Model
 - **Service init order fixed**: `NewService()` now accepts `YouTubeStore` directly — data loaded immediately from constructor; `SetStore()` is a no-op if store already provided
-- **Canonical tables**: Groups/channels loaded from `youtube_groups_v2` + `youtube_group_channels` (canonical) with fallback to legacy `youtube_groups` / `youtube_channel_metadata`
+- **Canonical tables**: Groups/channels loaded exclusively from `youtube_groups_v2` + `youtube_group_channels` (canonical). Legacy fallback removed — tables dropped by migration 008.
 - **StorageStore**: Unified `load()` from canonical tables + legacy fallback; `save()` now propagates errors with `fmt.Errorf` instead of silently swallowing them
 
 ### 🛡️ Data-Layer Audit & CI

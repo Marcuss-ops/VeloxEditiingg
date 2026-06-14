@@ -390,57 +390,6 @@ func TestAnsibleRunHostsIdempotent(t *testing.T) {
 	}
 }
 
-// ============================================================
-// Legacy ansible_computers tests
-// ============================================================
-
-func TestAnsibleComputersLegacy(t *testing.T) {
-	s := openTestDB(t)
-	defer s.Close()
-
-	// Skip if legacy table doesn't exist (dropped by migration 008)
-	var exists int
-	_ = s.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='ansible_computers'`).Scan(&exists)
-	if exists == 0 {
-		t.Skip("ansible_computers table dropped by migration 008")
-	}
-
-	// Upsert
-	if err := s.UpsertAnsibleComputer("legacy-host", `{"host":"legacy-host","enabled":true}`); err != nil {
-		t.Fatalf("UpsertAnsibleComputer failed: %v", err)
-	}
-
-	// Get
-	raw, err := s.GetAnsibleComputer("legacy-host")
-	if err != nil {
-		t.Fatalf("GetAnsibleComputer failed: %v", err)
-	}
-	if raw == "" {
-		t.Fatal("expected non-empty raw JSON")
-	}
-
-	// List
-	computers, err := s.ListAnsibleComputers()
-	if err != nil {
-		t.Fatalf("ListAnsibleComputers failed: %v", err)
-	}
-	if len(computers) != 1 {
-		t.Fatalf("expected 1 legacy computer, got %d", len(computers))
-	}
-
-	// Delete
-	if err := s.DeleteAnsibleComputer("legacy-host"); err != nil {
-		t.Fatalf("DeleteAnsibleComputer failed: %v", err)
-	}
-	raw, err = s.GetAnsibleComputer("legacy-host")
-	if err != nil {
-		t.Fatalf("GetAnsibleComputer after delete failed: %v", err)
-	}
-	if raw != "" {
-		t.Error("expected empty after delete")
-	}
-}
-
 // openTestDB is a helper shared across store test files.
 func openTestDB(t *testing.T) *SQLiteStore {
 	t.Helper()

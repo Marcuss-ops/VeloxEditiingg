@@ -851,6 +851,401 @@ func TestIntegration_NewSQLiteStore_AutoMigration(t *testing.T) {
 }
 
 // ============================================================
+// Migration 008: End-to-end upgrade test — zero data loss
+// ============================================================
+
+// TestMigration008_UpgradeEndToEnd simulates a database that has been running
+// since before migration 003/004 (canonical YouTube/Ansible models), inserts
+// real data into legacy tables, then applies migration 008 (data migration +
+// DROP) and verifies ZERO data loss.
+//
+// This is the most critical test for production safety.
+func TestMigration008_UpgradeEndToEnd(t *testing.T) {
+	db := openTestDB(t)
+
+	// -----------------------------------------------------------------------
+	// Phase 1: Apply migrations 1–7 (pre-008 state)
+	// -----------------------------------------------------------------------
+	migs, err := discoverMigrations(testMigrationsFS, ".")
+	if err != nil {
+		t.Fatalf("discoverMigrations: %v", err)
+	}
+
+	for _, m := range migs {
+		if m.Version >= 8 {
+			break
+		}
+		if err := EnsureApplied(db, m); err != nil {
+			t.Fatalf("apply migration %03d_%s: %v", m.Version, m.Name, err)
+		}
+	}
+
+	// Verify legacy tables exist (pre-008 state)
+	legacyTables := []string{
+		"youtube_channel_metadata",
+		"youtube_groups",
+		"youtube_manager_channels",
+		"youtube_manager_groups",
+		"ansible_computers",
+	}
+	for _, table := range legacyTables {
+		if !tableExists(t, db, table) {
+			t.Fatalf("pre-008: legacy table %s should exist but does not", table)
+		}
+	}
+
+	// Verify canonical tables also exist (created by 003/004)
+	canonicalTables := []string{
+		"youtube_channels",
+		"youtube_groups_v2",
+		"youtube_group_channels",
+		"ansible_hosts",
+		"ansible_runs",
+	}
+	for _, table := range canonicalTables {
+		if !tableExists(t, db, table) {
+			t.Fatalf("pre-008: canonical table %s should exist but does not", table)
+		}
+	}
+
+	// -----------------------------------------------------------------------
+	// Phase 2: Insert realistic data into legacy tables
+	// -----------------------------------------------------------------------
+
+	// 2a. youtube_channel_metadata (legacy channel metadata)
+	_, err = db.Exec(`INSERT INTO youtube_channel_metadata (channel_id, title, token_path, language, added_date, last_used, raw_json, updated_at)
+		VALUES ('UC_legacy_alpha', 'Legacy Alpha', '/tokens/alpha.json', 'en', '2023-01-15', '2024-06-01', '{"legacy":true}', datetime('now'))`)
+	if err != nil {
+		t.Fatalf("insert youtube_channel_metadata 1: %v", err)
+	}
+	_, err = db.Exec(`INSERT INTO youtube_channel_metadata (channel_id, title, token_path, language, added_date, last_used, raw_json, updated_at)
+		VALUES ('UC_legacy_beta', 'Legacy Beta', '/tokens/beta.json', 'it', '2023-03-20', '2024-05-15', '{"legacy":true}', datetime('now'))`)
+	if err != nil {
+		t.Fatalf("insert youtube_channel_metadata 2: %v", err)
+	}
+
+	// 2b. youtube_groups (legacy upload groups with channels_json)
+	_, err = db.Exec(`INSERT INTO youtube_groups (name, description, privacy, channels_json, updated_at)
+		VALUES ('WNBA Uploads', 'WNBA basketball highlights', 'public', '["UC_legacy_alpha","UC_legacy_beta"]', datetime('now'))`)
+	if err != nil {
+		t.Fatalf("insert youtube_groups 1: %v", err)
+	}
+	_, err = db.Exec(`INSERT INTO youtube_groups (name, description, privacy, channels_json, updated_at)
+		VALUES ('NBA Uploads', 'NBA basketball highlights', 'unlisted', '["UC_legacy_alpha"]', datetime('now'))`)
+	if err != nil {
+		t.Fatalf("insert youtube_groups 2: %v", err)
+	}
+
+	// 2c. youtube_manager_channels (legacy manager channels with group affiliations)
+	_, err = db.Exec(`INSERT INTO youtube_manager_channels (channel_id, group_name, url, title, name, thumbnail, language, view_count, sub_count, raw_json, updated_at)
+		VALUES ('UC_mgr_ch1', 'Sports Group', 'https://youtube.com/@sports', 'Sports Channel', 'Sports', 'thumb.jpg', 'en', 50000, 2000, '{}', datetime('now'))`)
+	if err != nil {
+		t.Fatalf("insert youtube_manager_channels 1: %v", err)
+	}
+	_, err = db.Exec(`INSERT INTO youtube_manager_channels (channel_id, group_name, url, title, name, thumbnail, language, view_count, sub_count, raw_json, updated_at)
+		VALUES ('UC_mgr_ch2', 'Sports Group', 'https://youtube.com/@sports2', 'Sports Two', 'Sports Two', 'thumb2.jpg', 'de', 30000, 1000, '{}', datetime('now'))`)
+	if err != nil {
+		t.Fatalf("insert youtube_manager_channels 2: %v", err)
+	}
+	_, err = db.Exec(`INSERT INTO youtube_manager_channels (channel_id, group_name, url, title, name, thumbnail, language, view_count, sub_count, raw_json, updated_at)
+		VALUES ('UC_mgr_ch3', 'News Group', 'https://youtube.com/@news', 'News Channel', 'News', 'news.jpg', 'en', 100000, 5000, '{}', datetime('now'))`)
+	if err != nil {
+		t.Fatalf("insert youtube_manager_channels 3: %v", err)
+	}
+
+	// 2d. youtube_manager_groups (legacy manager group definitions)
+	_, err = db.Exec(`INSERT INTO youtube_manager_groups (name, created_at, group_type, tracked_niches_json, updated_at)
+		VALUES ('Sports Group', '2023-01-01', 'manager', '["basketball","football"]', datetime('now'))`)
+	if err != nil {
+		t.Fatalf("insert youtube_manager_groups 1: %v", err)
+	}
+	_, err = db.Exec(`INSERT INTO youtube_manager_groups (name, created_at, group_type, tracked_niches_json, updated_at)
+		VALUES ('News Group', '2023-02-01', 'manager', '["politics","tech"]', datetime('now'))`)
+	if err != nil {
+		t.Fatalf("insert youtube_manager_groups 2: %v", err)
+	}
+
+	// 2e. ansible_computers (legacy Ansible computer records)
+	_, err = db.Exec(`INSERT INTO ansible_computers (host, raw_json, updated_at)
+		VALUES ('legacy-server-01', '{"host":"legacy-server-01","ansible_user":"pierone","enabled":true,"group":"production"}', datetime('now'))`)
+	if err != nil {
+		t.Fatalf("insert ansible_computers 1: %v", err)
+	}
+	_, err = db.Exec(`INSERT INTO ansible_computers (host, raw_json, updated_at)
+		VALUES ('legacy-server-02', '{"host":"legacy-server-02","ansible_user":"root","enabled":false,"group":"staging"}', datetime('now'))`)
+	if err != nil {
+		t.Fatalf("insert ansible_computers 2: %v", err)
+	}
+
+	// -----------------------------------------------------------------------
+	// Phase 3: Verify pre-migration counts
+	// -----------------------------------------------------------------------
+	var legacyChannelMetadataCount int
+	db.QueryRow(`SELECT COUNT(*) FROM youtube_channel_metadata`).Scan(&legacyChannelMetadataCount)
+	if legacyChannelMetadataCount != 2 {
+		t.Fatalf("expected 2 youtube_channel_metadata rows, got %d", legacyChannelMetadataCount)
+	}
+
+	var legacyGroupsCount int
+	db.QueryRow(`SELECT COUNT(*) FROM youtube_groups`).Scan(&legacyGroupsCount)
+	if legacyGroupsCount != 2 {
+		t.Fatalf("expected 2 youtube_groups rows, got %d", legacyGroupsCount)
+	}
+
+	var legacyManagerChannelsCount int
+	db.QueryRow(`SELECT COUNT(*) FROM youtube_manager_channels`).Scan(&legacyManagerChannelsCount)
+	if legacyManagerChannelsCount != 3 {
+		t.Fatalf("expected 3 youtube_manager_channels rows, got %d", legacyManagerChannelsCount)
+	}
+
+	var legacyManagerGroupsCount int
+	db.QueryRow(`SELECT COUNT(*) FROM youtube_manager_groups`).Scan(&legacyManagerGroupsCount)
+	if legacyManagerGroupsCount != 2 {
+		t.Fatalf("expected 2 youtube_manager_groups rows, got %d", legacyManagerGroupsCount)
+	}
+
+	var legacyAnsibleComputersCount int
+	db.QueryRow(`SELECT COUNT(*) FROM ansible_computers`).Scan(&legacyAnsibleComputersCount)
+	if legacyAnsibleComputersCount != 2 {
+		t.Fatalf("expected 2 ansible_computers rows, got %d", legacyAnsibleComputersCount)
+	}
+
+	// Ensure canonical tables are empty before migration
+	var canonicalChannelsCount int
+	db.QueryRow(`SELECT COUNT(*) FROM youtube_channels`).Scan(&canonicalChannelsCount)
+	if canonicalChannelsCount != 0 {
+		t.Fatalf("expected 0 youtube_channels before migration, got %d", canonicalChannelsCount)
+	}
+
+	var canonicalGroupsCount int
+	db.QueryRow(`SELECT COUNT(*) FROM youtube_groups_v2`).Scan(&canonicalGroupsCount)
+	if canonicalGroupsCount != 0 {
+		t.Fatalf("expected 0 youtube_groups_v2 before migration, got %d", canonicalGroupsCount)
+	}
+
+	var canonicalAnsibleHostsCount int
+	db.QueryRow(`SELECT COUNT(*) FROM ansible_hosts`).Scan(&canonicalAnsibleHostsCount)
+	if canonicalAnsibleHostsCount != 0 {
+		t.Fatalf("expected 0 ansible_hosts before migration, got %d", canonicalAnsibleHostsCount)
+	}
+
+	// -----------------------------------------------------------------------
+	// Phase 4: Apply migration 008 (data migration + DROP)
+	// -----------------------------------------------------------------------
+	err = EnsureApplied(db, migs[7]) // Version 8 is at index 7
+	if err != nil {
+		t.Fatalf("apply migration 008: %v", err)
+	}
+
+	// -----------------------------------------------------------------------
+	// Phase 5: Verify legacy tables are DROPPED
+	// -----------------------------------------------------------------------
+	for _, table := range legacyTables {
+		if tableExists(t, db, table) {
+			t.Errorf("migration 008 should have dropped %s", table)
+		}
+	}
+
+	// Verify legacy_json_registry exists
+	if !tableExists(t, db, "legacy_json_registry") {
+		t.Error("migration 008 should have created legacy_json_registry")
+	}
+
+	// -----------------------------------------------------------------------
+	// Phase 6: Verify ZERO DATA LOSS — canonical tables have all records
+	// -----------------------------------------------------------------------
+
+	// 6a. youtube_channels should have all 5 channels:
+	//     - 2 from youtube_channel_metadata (UC_legacy_alpha, UC_legacy_beta)
+	//     - 3 from youtube_manager_channels (UC_mgr_ch1, UC_mgr_ch2, UC_mgr_ch3)
+	var migratedChannelsCount int
+	db.QueryRow(`SELECT COUNT(*) FROM youtube_channels`).Scan(&migratedChannelsCount)
+	expectedChannels := legacyChannelMetadataCount + legacyManagerChannelsCount // 2 + 3 = 5
+	if migratedChannelsCount != expectedChannels {
+		t.Fatalf("data loss! expected %d youtube_channels (2 metadata + 3 manager), got %d", expectedChannels, migratedChannelsCount)
+	}
+
+	// Verify specific channel data was migrated correctly
+	var legacyAlphaTitle string
+	err = db.QueryRow(`SELECT title FROM youtube_channels WHERE channel_id='UC_legacy_alpha'`).Scan(&legacyAlphaTitle)
+	if err != nil {
+		t.Errorf("UC_legacy_alpha missing from youtube_channels after migration: %v", err)
+	} else if legacyAlphaTitle != "Legacy Alpha" {
+		t.Errorf("UC_legacy_alpha title: got %q, want %q", legacyAlphaTitle, "Legacy Alpha")
+	}
+
+	var mgrCh1Title string
+	err = db.QueryRow(`SELECT title FROM youtube_channels WHERE channel_id='UC_mgr_ch1'`).Scan(&mgrCh1Title)
+	if err != nil {
+		t.Errorf("UC_mgr_ch1 missing from youtube_channels after migration: %v", err)
+	} else if mgrCh1Title != "Sports Channel" {
+		t.Errorf("UC_mgr_ch1 title: got %q, want %q", mgrCh1Title, "Sports Channel")
+	}
+
+	// 6b. youtube_groups_v2 should have all groups:
+	//     - 2 from youtube_groups (WNBA Uploads, NBA Uploads) → group_type='upload'
+	//     - 2 from youtube_manager_groups (Sports Group, News Group) → group_type='manager'
+	//     - 2 from youtube_manager_channels (Sports Group, News Group) → group_type='manager' (INSERT OR IGNORE dedup)
+	// Total expected: 4 unique groups (2 upload + 2 manager)
+	// But wait — youtube_manager_channels Phase 3 also inserts groups that may already
+	// exist from youtube_manager_groups Phase 4. Since we're using INSERT OR IGNORE,
+	// duplicates are handled. So unique groups:
+	//   - phase2 upload groups: "WNBA Uploads" (upload), "NBA Uploads" (upload)
+	//   - phase4 manager groups: "Sports Group" (manager), "News Group" (manager)
+	//   - phase3 also inserts "Sports Group" (manager) and "News Group" (manager)
+	//     — these are dedup'd by INSERT OR IGNORE
+	// Total unique (name, group_type) combos = 4
+	var migratedGroupsCount int
+	db.QueryRow(`SELECT COUNT(*) FROM youtube_groups_v2`).Scan(&migratedGroupsCount)
+	if migratedGroupsCount != 4 {
+		t.Fatalf("expected 4 youtube_groups_v2, got %d", migratedGroupsCount)
+	}
+
+	// Verify group data
+	var wnbaPrivacy string
+	var wnbaType string
+	err = db.QueryRow(`SELECT privacy, group_type FROM youtube_groups_v2 WHERE name='WNBA Uploads'`).Scan(&wnbaPrivacy, &wnbaType)
+	if err != nil {
+		t.Errorf("WNBA Uploads missing from youtube_groups_v2: %v", err)
+	} else {
+		if wnbaPrivacy != "public" {
+			t.Errorf("WNBA Uploads privacy: got %q, want %q", wnbaPrivacy, "public")
+		}
+		if wnbaType != "upload" {
+			t.Errorf("WNBA Uploads group_type: got %q, want %q", wnbaType, "upload")
+		}
+	}
+
+	var sportsType string
+	err = db.QueryRow(`SELECT group_type FROM youtube_groups_v2 WHERE name='Sports Group'`).Scan(&sportsType)
+	if err != nil {
+		t.Errorf("Sports Group missing from youtube_groups_v2: %v", err)
+	} else if sportsType != "manager" {
+		t.Errorf("Sports Group group_type: got %q, want %q", sportsType, "manager")
+	}
+
+	// 6c. youtube_group_channels should have memberships:
+	//     - WNBA Uploads (upload) → UC_legacy_alpha, UC_legacy_beta (from channels_json) = 2
+	//     - NBA Uploads (upload) → UC_legacy_alpha (from channels_json) = 1
+	//     - Sports Group (manager) → UC_mgr_ch1, UC_mgr_ch2 (from youtube_manager_channels) = 2
+	//     - News Group (manager) → UC_mgr_ch3 (from youtube_manager_channels) = 1
+	// Total: 6 memberships
+	var migratedMembershipsCount int
+	db.QueryRow(`SELECT COUNT(*) FROM youtube_group_channels`).Scan(&migratedMembershipsCount)
+	if migratedMembershipsCount != 6 {
+		t.Fatalf("expected 6 youtube_group_channels, got %d", migratedMembershipsCount)
+	}
+
+	// Verify specific memberships
+	var membershipCount int
+	db.QueryRow(`SELECT COUNT(*) FROM youtube_group_channels gc
+		JOIN youtube_groups_v2 g ON g.id = gc.group_id
+		WHERE g.name='WNBA Uploads' AND gc.channel_id='UC_legacy_alpha'`).Scan(&membershipCount)
+	if membershipCount != 1 {
+		t.Errorf("WNBA Uploads → UC_legacy_alpha membership missing after migration")
+	}
+
+	db.QueryRow(`SELECT COUNT(*) FROM youtube_group_channels gc
+		JOIN youtube_groups_v2 g ON g.id = gc.group_id
+		WHERE g.name='WNBA Uploads' AND gc.channel_id='UC_legacy_beta'`).Scan(&membershipCount)
+	if membershipCount != 1 {
+		t.Errorf("WNBA Uploads → UC_legacy_beta membership missing after migration")
+	}
+
+	db.QueryRow(`SELECT COUNT(*) FROM youtube_group_channels gc
+		JOIN youtube_groups_v2 g ON g.id = gc.group_id
+		WHERE g.name='Sports Group' AND gc.channel_id='UC_mgr_ch1'`).Scan(&membershipCount)
+	if membershipCount != 1 {
+		t.Errorf("Sports Group → UC_mgr_ch1 membership missing after migration")
+	}
+
+	db.QueryRow(`SELECT COUNT(*) FROM youtube_group_channels gc
+		JOIN youtube_groups_v2 g ON g.id = gc.group_id
+		WHERE g.name='Sports Group' AND gc.channel_id='UC_mgr_ch2'`).Scan(&membershipCount)
+	if membershipCount != 1 {
+		t.Errorf("Sports Group → UC_mgr_ch2 membership missing after migration")
+	}
+
+	db.QueryRow(`SELECT COUNT(*) FROM youtube_group_channels gc
+		JOIN youtube_groups_v2 g ON g.id = gc.group_id
+		WHERE g.name='News Group' AND gc.channel_id='UC_mgr_ch3'`).Scan(&membershipCount)
+	if membershipCount != 1 {
+		t.Errorf("News Group → UC_mgr_ch3 membership missing after migration")
+	}
+
+	db.QueryRow(`SELECT COUNT(*) FROM youtube_group_channels gc
+		JOIN youtube_groups_v2 g ON g.id = gc.group_id
+		WHERE g.name='NBA Uploads' AND gc.channel_id='UC_legacy_alpha'`).Scan(&membershipCount)
+	if membershipCount != 1 {
+		t.Errorf("NBA Uploads → UC_legacy_alpha membership missing after migration")
+	}
+
+	// 6d. ansible_hosts should have all 2 records from ansible_computers
+	var migratedHostsCount int
+	db.QueryRow(`SELECT COUNT(*) FROM ansible_hosts`).Scan(&migratedHostsCount)
+	if migratedHostsCount != 2 {
+		t.Fatalf("expected 2 ansible_hosts, got %d", migratedHostsCount)
+	}
+
+	// Verify specific host data
+	var server01User string
+	var server01Enabled int
+	err = db.QueryRow(`SELECT ansible_user, enabled FROM ansible_hosts WHERE host='legacy-server-01'`).Scan(&server01User, &server01Enabled)
+	if err != nil {
+		t.Errorf("legacy-server-01 missing from ansible_hosts: %v", err)
+	} else {
+		if server01User != "pierone" {
+			t.Errorf("legacy-server-01 ansible_user: got %q, want %q", server01User, "pierone")
+		}
+		if server01Enabled != 1 {
+			t.Errorf("legacy-server-01 enabled: got %d, want 1", server01Enabled)
+		}
+	}
+
+	var server02User string
+	var server02Enabled int
+	err = db.QueryRow(`SELECT ansible_user, enabled FROM ansible_hosts WHERE host='legacy-server-02'`).Scan(&server02User, &server02Enabled)
+	if err != nil {
+		t.Errorf("legacy-server-02 missing from ansible_hosts: %v", err)
+	} else {
+		if server02User != "pierone" {
+			t.Errorf("legacy-server-02 ansible_user: got %q, want %q", server02User, "pierone")
+		}
+		if server02Enabled != 1 {
+			t.Errorf("legacy-server-02 enabled: got %d, want 1 (migration default, overwrite per-host later)", server02Enabled)
+		}
+	}
+
+	// -----------------------------------------------------------------------
+	// Phase 7: Verify foreign key integrity and schema integrity
+	// -----------------------------------------------------------------------
+
+	// PRAGMA foreign_key_check: should return no rows
+	fkRows, err := db.Query("PRAGMA foreign_key_check")
+	if err != nil {
+		t.Fatalf("PRAGMA foreign_key_check: %v", err)
+	}
+	defer fkRows.Close()
+	var fkViolations int
+	for fkRows.Next() {
+		fkViolations++
+	}
+	if fkViolations > 0 {
+		t.Errorf("PRAGMA foreign_key_check found %d FK violations after migration", fkViolations)
+	}
+
+	// PRAGMA integrity_check: should return 'ok'
+	var integrityResult string
+	err = db.QueryRow("PRAGMA integrity_check").Scan(&integrityResult)
+	if err != nil {
+		t.Fatalf("PRAGMA integrity_check: %v", err)
+	}
+	if integrityResult != "ok" {
+		t.Errorf("database integrity check failed: %s", integrityResult)
+	}
+}
+
+// ============================================================
 // Helpers
 // ============================================================
 

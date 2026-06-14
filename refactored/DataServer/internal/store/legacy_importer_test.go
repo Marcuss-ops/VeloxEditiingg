@@ -557,7 +557,7 @@ func TestImportLegacyJSON_Idempotent(t *testing.T) {
 		t.Fatalf("Failed to create workers.json: %v", err)
 	}
 
-	// First import — should import
+	// First import — should import. After import, the file is archived to legacy_archive/
 	results1, err := s.ImportLegacyJSON(tmpDir)
 	if err != nil {
 		t.Fatalf("First ImportLegacyJSON failed: %v", err)
@@ -571,6 +571,12 @@ func TestImportLegacyJSON_Idempotent(t *testing.T) {
 	}
 	if imported1 == 0 {
 		t.Error("Expected at least one imported file on first import")
+	}
+
+	// Recreate the file with the same content to test idempotency
+	// (ImportLegacyJSON archives the file after successful import)
+	if err := os.WriteFile(filepath.Join(tmpDir, "workers.json"), workersData, 0644); err != nil {
+		t.Fatalf("Failed to recreate workers.json: %v", err)
 	}
 
 	// Second import — should be skipped (idempotent, same checksum)

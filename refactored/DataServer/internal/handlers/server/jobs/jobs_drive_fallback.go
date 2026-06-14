@@ -16,6 +16,7 @@ import (
 	"velox-server/internal/config"
 	"velox-server/internal/integrations/drive"
 	jobsservice "velox-server/internal/services/jobs"
+	"velox-shared/paths"
 )
 
 type driveLinkRow struct {
@@ -25,8 +26,6 @@ type driveLinkRow struct {
 	ParentID string `json:"parentId" yaml:"parentId"`
 	Language string `json:"language" yaml:"language"`
 }
-
-
 
 func (api *JobAPI) tryDriveFallbackUpload(jobID string) {
 	// Recover from panics so a bug in the drive upload path never silently
@@ -135,21 +134,30 @@ func (api *JobAPI) tryDriveFallbackUpload(jobID string) {
 
 	groupName := resolveGroupName(job)
 	projectName := resolveProjectName(job, videoPath)
-	targetParentID, resolvedGroup, resolveErr := resolveVideoYoutubeGroupTarget(api.cfg.DataDir, groupName)
-	if resolveErr != nil {
-		if updErr := api.fileQ.UpdateJobFields(ctx, jobID, map[string]interface{}{
-			"last_drive_upload_result": map[string]interface{}{
-				"success": false,
-				"error":   fmt.Sprintf("drive group mapping required: %v", resolveErr),
-			},
-		}); updErr != nil {
-			log.Printf("drive_fallback: UpdateJobFields failed for %s: %v", jobID, updErr)
+	resolvedGroup := groupName
+	targetParentID := extractDriveFolderIDFromLink(toString(job["drive_output_folder"]))
+	if targetParentID == "" {
+		targetParentID = extractDriveFolderIDFromLink(toString(job["output_directory"]))
+	}
+	if targetParentID == "" {
+		var resolveErr error
+		targetParentID, resolvedGroup, resolveErr = resolveVideoYoutubeGroupTarget(api.cfg.DataDir, groupName)
+		if resolveErr != nil {
+			if updErr := api.fileQ.UpdateJobFields(ctx, jobID, map[string]interface{}{
+				"last_drive_upload_result": map[string]interface{}{
+					"success": false,
+					"error":   fmt.Sprintf("drive group mapping required: %v", resolveErr),
+				},
+			}); updErr != nil {
+				log.Printf("drive_fallback: UpdateJobFields failed for %s: %v", jobID, updErr)
+			}
+			return
 		}
-		return
 	}
 
-	// Upload hierarchy (master-side):
-	// VideoYoutube / <Group> / <ProjectName> / <LanguageVariant> / final.mp4
+	// Upload hierarchy:
+	// - If drive_output_folder/output_directory is provided, use it as root.
+	// - Otherwise fall back to VideoYoutube / <Group> / <ProjectName> / <LanguageVariant> / final.mp4
 	projectFolder, err := service.GetOrCreateFolder(ctx, projectName, targetParentID)
 	if err != nil || projectFolder == nil || strings.TrimSpace(projectFolder.ID) == "" {
 		msg := "failed to create project folder in mapped group"
@@ -181,10 +189,10 @@ func (api *JobAPI) tryDriveFallbackUpload(jobID string) {
 					"error":   msg,
 				},
 			}); updErr != nil {
-			log.Printf("drive_fallback: UpdateJobFields failed for %s: %v", jobID, updErr)
+				log.Printf("drive_fallback: UpdateJobFields failed for %s: %v", jobID, updErr)
+			}
+			return
 		}
-		return
-	}
 		uploadParentID = variantFolder.ID
 	}
 
@@ -505,6 +513,27 @@ func findVideoYoutubeChildDriveID(rows []driveLinkRow, rootLocalID string, child
 func resolveVideoPath(videosDir, jobID string, job map[string]interface{}) string {
 	candidates := []string{
 		strings.TrimSpace(toString(job["master_video_path"])),
+		strings.TrimSpace(toString(job["output_path"])),
+		strings.TrimSpace(toString(job["result_path_worker"])),
+	}
+	if base := strings.TrimSpace(toString(job["video_name"])); base != "" {
+		jobRunID := strings.TrimSpace(toString(job["job_run_id"]))
+		if jobRunID == "" {
+			jobRunID = strings.TrimSpace(toString(job["run_id"]))
+		}
+		outputVideoID := strings.TrimSpace(toString(job["output_video_id"]))
+		if outputVideoID == "" {
+			outputVideoID = jobID
+		}
+		if jobRunID != "" && strings.TrimSpace(videosDir) != "" {
+			slug := paths.SanitizeVideoName(base)
+			if slug != "" {
+				candidates = append(candidates,
+					filepath.Join(videosDir, fmt.Sprintf("%s_%s_%s.mp4", slug, outputVideoID, jobRunID)),
+					filepath.Join(videosDir, fmt.Sprintf("%s_%s_%s.mov", slug, outputVideoID, jobRunID)),
+				)
+			}
+		}
 	}
 	if out, ok := job["worker_output"].(map[string]interface{}); ok {
 		candidates = append(candidates, jobsservice.ExtractOutputVideoPath(out))
@@ -559,6 +588,29 @@ func resolveVideoPath(videosDir, jobID string, job map[string]interface{}) strin
 		}
 	}
 	return ""
+}
+
+func extractDriveFolderIDFromLink(link string) string {
+	link = strings.TrimSpace(link)
+	if link == "" {
+		return ""
+	}
+	parts := []string{"/folders/", "id="}
+	for _, marker := range parts {
+		if idx := strings.Index(link, marker); idx >= 0 {
+			rest := link[idx+len(marker):]
+			if end := strings.IndexAny(rest, "/?&"); end > 0 {
+				rest = rest[:end]
+			}
+			if rest != "" {
+				return strings.TrimSpace(rest)
+			}
+		}
+	}
+	if strings.Contains(link, "drive.google.com") {
+		return ""
+	}
+	return link
 }
 
 func extractDriveIDFromLink(link string) string {

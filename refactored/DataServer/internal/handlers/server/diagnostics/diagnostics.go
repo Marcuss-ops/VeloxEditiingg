@@ -172,7 +172,7 @@ func (h *DataLayoutHandler) GetChannelCountsHandler() gin.HandlerFunc {
 			if channels, err := h.store.ListYouTubeChannels(); err == nil {
 				counts.YouTubeChannels = len(channels)
 			}
-			if groups, err := h.store.ListYouTubeGroups(); err == nil {
+			if groups, err := h.store.ListYouTubeGroupsV2(); err == nil {
 				counts.YouTubeGroups = len(groups)
 			}
 		}

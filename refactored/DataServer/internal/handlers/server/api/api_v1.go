@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"crypto/subtle"
 	"log"
 	"net/http"
@@ -120,6 +121,26 @@ func isPublicReadOnlyRoute(path string) bool {
 	return false
 }
 
+func workerStatusCounts(ctx context.Context, fileQ *queue.FileQueue, redisQ *queue.Queue) (pending, processing, completed, errorCount, total int64) {
+	if fileQ != nil {
+		if stats, err := fileQ.Stats(ctx); err == nil {
+			pending = stats["pending"]
+			processing = stats["processing"]
+			completed = stats["completed"]
+			errorCount = stats["error"]
+			total = stats["total"]
+			return
+		}
+	}
+
+	if redisQ != nil {
+		pending, _ = redisQ.ReadyCount(ctx)
+		processing, _ = redisQ.LeasedCount(ctx)
+		total = pending + processing
+	}
+	return
+}
+
 // RegisterV1Routes registers all /api/v1/* routes (core API)
 func RegisterV1Routes(r *gin.Engine, cfg *config.Config, fileQ *queue.FileQueue, redisQ *queue.Queue, reg *workersreg.Registry, jobAPI *jobs.JobAPI, jobSubmitHandler *jobs.JobSubmissionHandler, workersRepo store.WorkersRepository, db *store.SQLiteStore, workerUpdateHandler *workersapi.WorkerUpdateHandler, workerLifecycle *workersapi.WorkerLifecycle, ansibleHandlers *ansible.AnsibleHandlers) {
 	v1 := r.Group("/api/v1")
@@ -181,25 +202,22 @@ func RegisterV1Routes(r *gin.Engine, cfg *config.Config, fileQ *queue.FileQueue,
 
 		// Workers status - requires queue for job counts
 		statusHandler := func(c *gin.Context) {
-			// Use Redis queue if available, otherwise return basic status
-			if redisQ != nil {
-				workers.WorkersStatus(reg, redisQ, workerUpdateHandler)(c)
-			} else {
-				// Fallback: return basic worker list without job counts
-				master := workers.WorkerStatusMetadata(workerUpdateHandler)
-				list := reg.List(c.Request.Context())
-				c.JSON(http.StatusOK, gin.H{
-					"workers":         list,
-					"master":          master,
-					"active_workers":  len(list),
-					"total_workers":   len(list),
-					"pending_jobs":    0,
-					"processing_jobs": 0,
-					"completed_jobs":  0,
-					"error_jobs":      0,
-					"total_jobs":      0,
-				})
-			}
+			ctx := c.Request.Context()
+			master := workers.WorkerStatusMetadata(workerUpdateHandler)
+			list := reg.List(ctx)
+			pending, processing, completed, errorCount, total := workerStatusCounts(ctx, fileQ, redisQ)
+
+			c.JSON(http.StatusOK, gin.H{
+				"workers":         list,
+				"master":          master,
+				"active_workers":  len(list),
+				"total_workers":   len(list),
+				"pending_jobs":    pending,
+				"processing_jobs": processing,
+				"completed_jobs":  completed,
+				"error_jobs":      errorCount,
+				"total_jobs":      total,
+			})
 		}
 		v1Admin.GET("/workers/status", statusHandler)
 		v1Admin.GET("/workers_status", statusHandler)

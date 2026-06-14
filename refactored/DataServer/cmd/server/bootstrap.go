@@ -210,13 +210,13 @@ func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
 }
 
 func runServer(cfg *config.Config) error {
-	// Run data layer audit at startup
-	if err := runDataLayerAudit(cfg); err != nil {
+	deps, err := buildServerDeps(cfg)
+	if err != nil {
 		return err
 	}
 
-	deps, err := buildServerDeps(cfg)
-	if err != nil {
+	// Run data layer audit AFTER database init and legacy import
+	if err := runDataLayerAudit(cfg); err != nil {
 		return err
 	}
 
@@ -328,6 +328,10 @@ func runServer(cfg *config.Config) error {
 // runDataLayerAudit checks for legacy JSON files and data layer integrity.
 // Returns error if critical issues are found (hard block).
 // Warnings are logged but don't block startup.
+//
+// This runs AFTER the legacy JSON import, so all legacy files should already
+// have been archived to legacy_archive/. If any remain in their original
+// locations, they are reported as errors.
 func runDataLayerAudit(cfg *config.Config) error {
 	dataDir := cfg.DataDir
 	if dataDir == "" {
@@ -337,7 +341,7 @@ func runDataLayerAudit(cfg *config.Config) error {
 	secretsDir := filepath.Join(dataDir, "secrets")
 	auditor := audit.NewDataLayerAuditor(dataDir, secretsDir)
 
-	// Allow specific legacy files during transition period
+	// Allow specific files that are not migrated to SQLite (config, not runtime data)
 	auditor.AllowLegacy("drive/drive_links.json")
 	auditor.AllowLegacy("drive/drive_master_folders_list.json")
 	auditor.AllowLegacy("jobs/multi_step_jobs.json")

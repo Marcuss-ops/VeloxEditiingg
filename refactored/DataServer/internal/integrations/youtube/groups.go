@@ -7,52 +7,17 @@ import (
 	"time"
 )
 
-// loadGroups loads channel groups from SQLite (legacy path, kept for compat).
-func (s *Service) loadGroups() {
-	if s.store != nil {
-		s.loadGroupsFromSQLite()
-	}
-}
-
-// loadGroupsFromSQLite loads groups from the legacy youtube_groups table.
-func (s *Service) loadGroupsFromSQLite() bool {
-	rows, err := s.store.ListYouTubeGroups()
-	if err != nil || len(rows) == 0 {
-		return false
-	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	for _, row := range rows {
-		name, _ := row["name"].(string)
-		desc, _ := row["description"].(string)
-		privacy, _ := row["privacy"].(string)
-		channelsRaw, _ := row["channels"].([]string)
-		s.groups[name] = &ChannelGroup{
-			Name:        name,
-			Description: desc,
-			Privacy:     privacy,
-			Channels:    channelsRaw,
-		}
-	}
-	log.Printf("[OK] Loaded %d YouTube groups from legacy SQLite", len(s.groups))
-	return true
-}
-
 // loadCanonicalGroups loads groups from the canonical youtube_groups_v2 table
 // with channel memberships from youtube_group_channels.
 func (s *Service) loadCanonicalGroups() bool {
 	if s.store == nil {
-		// Fall back to legacy path
-		return s.loadGroupsFromSQLite()
+		return false
 	}
 
 	// Load groups from youtube_groups_v2
 	groupRows, err := s.store.ListYouTubeGroupsV2()
 	if err != nil || len(groupRows) == 0 {
-		// Fall back to legacy if canonical is empty
-		return s.loadGroupsFromSQLite()
+		return false
 	}
 
 	// Load all memberships at once
@@ -111,8 +76,7 @@ func (s *Service) CreateGroup(name, description string, channelIDs []string) err
 		Channels:    channelIDs,
 	}
 
-	s.saveGroups()
-	return nil
+	return s.saveGroups()
 }
 
 // DeleteGroup deletes a channel group and persists the change
@@ -125,8 +89,7 @@ func (s *Service) DeleteGroup(name string) error {
 	}
 
 	delete(s.groups, name)
-	s.saveGroups()
-	return nil
+	return s.saveGroups()
 }
 
 // AddChannelToGroup adds a channel to a group and persists the change
@@ -146,8 +109,7 @@ func (s *Service) AddChannelToGroup(groupName, channelID string) error {
 	}
 
 	group.Channels = append(group.Channels, channelID)
-	s.saveGroups()
-	return nil
+	return s.saveGroups()
 }
 
 // RemoveChannelFromGroup removes a channel from a group and persists the change
@@ -163,8 +125,7 @@ func (s *Service) RemoveChannelFromGroup(groupName, channelID string) error {
 	for i, chID := range group.Channels {
 		if chID == channelID {
 			group.Channels = append(group.Channels[:i], group.Channels[i+1:]...)
-			s.saveGroups()
-			return nil
+			return s.saveGroups()
 		}
 	}
 
@@ -346,22 +307,32 @@ func (s *Service) GetUndefinedChannels() []*Channel {
 }
 
 // saveGroups saves groups to canonical SQLite tables.
-func (s *Service) saveGroups() {
+// Returns the first error encountered, but continues processing remaining groups
+// so that partial persistence is still attempted.
+func (s *Service) saveGroups() error {
 	if s.store == nil {
-		return
+		return nil
 	}
+	var firstErr error
 	for _, g := range s.groups {
 		// Upsert into youtube_groups_v2 with group_type="upload"
 		groupID, err := s.store.UpsertYouTubeGroupV2(g.Name, "upload", g.Description, g.Privacy)
 		if err != nil {
 			log.Printf("[WARN] Failed to save group %q: %v", g.Name, err)
+			if firstErr == nil {
+				firstErr = fmt.Errorf("save group %q: %w", g.Name, err)
+			}
 			continue
 		}
 		// Sync channel memberships
 		for _, chID := range g.Channels {
 			if err := s.store.AddChannelToGroupV2(groupID, chID); err != nil {
 				log.Printf("[WARN] Failed to add channel %s to group %q: %v", chID[:8], g.Name, err)
+				if firstErr == nil {
+					firstErr = fmt.Errorf("add channel %s to group %q: %w", chID[:8], g.Name, err)
+				}
 			}
 		}
 	}
+	return firstErr
 }

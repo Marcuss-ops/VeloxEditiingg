@@ -21,17 +21,17 @@ Entrambi gli endpoint sono protetti da **admin token** (header `Authorization: B
 Client → POST /api/script/generate-with-images
   │
   ▼
-Server (scene_normalize.go)
+Server (internal/handlers/server/script/handler.go)
   │  • Normalizza scene/immagini gia presenti nel payload
   │  • Rileva durata audio (ffprobe) SE non specificata
   │  • Distribuisce durata equamente tra le scene
-  │  • Prepara payload → scenes_json con duration_seconds
+  │  • Prepara payload → internal/jobs/enqueue/enqueue.go
   │
   ▼
 FileQueue → Worker remoto disponibile
   │
   ▼
-Worker (native_engine.go)
+Worker (RemoteCodex/native/worker-agent-go/pkg/video/native_engine.go)
   │  • Parsa scenes_json → estrae duration_seconds ✅ (fixato)
   │  • Se nessuna scena ha durata → auto-detect ffprobe fallback
   │  • Prepara richiesta per C++ engine
@@ -95,6 +95,10 @@ Esempio: audio 336s, 3 scene → 112s per scena
 ```
 
 Nota: questo endpoint non genera immagini o voiceover in locale. Si aspetta che arrivino gia prodotti da un servizio upstream.
+Il codice che lo implementa oggi vive in:
+- [`DataServer/internal/handlers/server/script/handler.go`](/home/pierone/Pyt/VeloxLEgit/refactored/DataServer/internal/handlers/server/script/handler.go)
+- [`DataServer/internal/jobs/enqueue/enqueue.go`](/home/pierone/Pyt/VeloxLEgit/refactored/DataServer/internal/jobs/enqueue/enqueue.go)
+- [`RemoteCodex/native/worker-agent-go/pkg/video/native_engine.go`](/home/pierone/Pyt/VeloxLEgit/refactored/RemoteCodex/native/worker-agent-go/pkg/video/native_engine.go)
 
 #### Esempio completo
 
