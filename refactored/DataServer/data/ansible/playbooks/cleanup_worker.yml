@@ -77,8 +77,8 @@
     - name: Cleanup | Remove velox Docker images
       ansible.builtin.shell: |
         set -euo pipefail
-        docker rmi velox-worker:latest 2>/dev/null || true
-        docker rmi velox-worker-console:latest 2>/dev/null || true
+        docker images --filter "reference=velox-worker*" -q 2>/dev/null | xargs -r docker rmi 2>/dev/null || true
+        docker images --filter "reference=velox-worker-console*" -q 2>/dev/null | xargs -r docker rmi 2>/dev/null || true
         echo "Images removed"
       args:
         executable: /bin/bash

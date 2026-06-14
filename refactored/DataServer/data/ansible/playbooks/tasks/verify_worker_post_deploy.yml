@@ -55,7 +55,7 @@
       - docker
       - image
       - inspect
-      - velox-worker:latest
+      - "{{ _worker_image_tag | default('velox-worker:latest') }}"
       - --format
       - "{{ '{{json .Config.Entrypoint}}' }}"
   register: _image_entrypoint

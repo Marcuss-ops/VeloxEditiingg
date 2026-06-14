@@ -62,7 +62,6 @@
         state: directory
         mode: "0755"
       loop:
-        - current
         - cache
         - bin
 
@@ -100,7 +99,7 @@
       changed_when: "'BUILT' in (agent_build.stdout | default(''))"
 
     # ── SYNC CODE FROM CONTROLLER ─────────────────────────────
-    - name: Install | Ensure synchronized directory is writable
+    - name: Install | Ensure code directory exists and is writable
       ansible.builtin.file:
         path: "{{ velox_dir }}/current"
         state: directory
@@ -123,17 +122,16 @@
       delegate_to: localhost
       become: false
 
-    # ── SYSTEMD SETUP (single source of truth) ──────────────
-    - name: Install | Configura sistema worker (systemd, Docker, watchdog)
+    # ── UNIFIED DEPLOY (shared task) ─────────────────────────
+    # deploy_worker_release copies current → current.new, validates,
+    # swaps atomically, builds Docker, configures systemd, and verifies.
+    - name: Install | Deploy worker release (no bundle: code is in current/)
       ansible.builtin.include_tasks:
-        file: tasks/systemd_setup.yml
+        file: tasks/deploy_worker_release.yml
       vars:
-        install_showlog_wrapper: true
-
-    # ── VERIFICA POST-DEPLOY (shared task) ────────────────────
-    - name: Install | Verify worker health
-      ansible.builtin.include_tasks:
-        file: tasks/verify_worker_post_deploy.yml
+        bundle_zip_path: ""
+        reinject_agent_src: "{{ playbook_dir }}/../../../../RemoteCodex/native/worker-agent-go/bin/velox-worker-agent"
+        reinject_scripts_dir: "{{ playbook_dir }}/../../../../RemoteCodex/scripts"
 
     - name: Install | Riepilogo installazione
       ansible.builtin.debug:
@@ -141,6 +139,6 @@
           ✅ Installazione completata per {{ inventory_hostname }}
 
           Servizio: velox-worker-{{ inventory_hostname }}
-          Docker: velox-worker:latest
+          Docker: {{ _worker_image_tag | default('velox-worker:latest') }}
           Directory: {{ velox_dir }}
           Master: {{ master_url }}

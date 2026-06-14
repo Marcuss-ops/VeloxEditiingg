@@ -32,17 +32,21 @@
         state: stopped
       failed_when: false
 
-    # ── STEP 2: Prepare staging ───────────────────────────────
+    # ── STEP 2: Prepare staging (only when extracting bundle) ─
+    # When bundle_zip_path is empty (install/normalize), staging
+    # is populated by rsync or copied from current/ in STEP 3.
     - name: DeployWorker | Clean staging directory
       ansible.builtin.file:
         path: "{{ velox_dir }}/current.new"
         state: absent
+      when: bundle_zip_path | default('') | length > 0
 
     - name: DeployWorker | Create staging directory
       ansible.builtin.file:
         path: "{{ velox_dir }}/current.new"
         state: directory
         mode: "0755"
+      when: bundle_zip_path | default('') | length > 0
 
     # ── STEP 3: Extract or copy release ───────────────────────
     - name: DeployWorker | Extract bundle to staging (update path)

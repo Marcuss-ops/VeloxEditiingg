@@ -98,19 +98,13 @@
       register: removed_dirs
       changed_when: "'Removed dir:' in (removed_dirs.stdout | default(''))"
 
-    # ── STEP 3-6: Delega a systemd_setup.yml (single source of truth) ──
-    # Include: env file, Docker build, config gen, systemd unit,
-    #          console, watchdog, auto-update, daemon-reload, enable/start
-    - name: Normalize | Riapplica pipeline systemd completa
+    # ── STEP 3: Unified deploy pipeline (single source of truth) ──
+    # deploy_worker_release → stop → staging → validate → swap → Docker build → verify → rollback
+    - name: Normalize | Deploy and rebuild worker
       ansible.builtin.include_tasks:
-        file: tasks/systemd_setup.yml
+        file: tasks/deploy_worker_release.yml
       vars:
-        install_showlog_wrapper: false
-
-    # ── STEP 7: Verifica post-deploy (shared task) ────────────
-    - name: Normalize | Verify worker health
-      ansible.builtin.include_tasks:
-        file: tasks/verify_worker_post_deploy.yml
+        bundle_zip_path: ""
 
     - name: Normalize | Get journal logs
       ansible.builtin.shell: |

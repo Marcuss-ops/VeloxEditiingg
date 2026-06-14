@@ -130,14 +130,14 @@
         msg: "{% if docker_version.rc == 0 %}✅ Docker: {{ docker_version.stdout }}{% else %}⚠️  Docker non funzionante{% endif %}"
 
     - name: Preflight | Verifica immagine Docker worker
-      ansible.builtin.command: docker image inspect velox-worker:latest --format '{{ "{{.Id}}" }}'
+      ansible.builtin.command: docker image ls --filter "reference=velox-worker*" --format '{% raw %}{{.Repository}}:{{.Tag}}{% endraw %}'
       register: docker_image_check
       changed_when: false
       failed_when: false
 
     - name: Preflight | Log immagine Docker
       ansible.builtin.debug:
-        msg: "{% if docker_image_check.rc == 0 %}✅ Immagine velox-worker:latest presente{% else %}⚠️  Immagine velox-worker:latest non trovata{% endif %}"
+        msg: "{% if docker_image_check.rc == 0 and docker_image_check.stdout | length > 0 %}✅ Worker image(s): {{ docker_image_check.stdout | replace('\n', ', ') }}{% else %}⚠️  No worker image found{% endif %}"
 
     # ── RIEPILOGO ────────────────────────────────────────────
     - name: Preflight | Riepilogo finale

@@ -12,7 +12,26 @@
 # Single Source of Truth: velox-worker-<host>.service (Docker only)
 # ============================================================
 
----
+- name: Read BUILD_INFO.json for image tag
+  ansible.builtin.shell: |
+    set -euo pipefail
+    BUILD_INFO="{{ velox_dir }}/current/RemoteCodex/BUILD_INFO.json"
+    if [ -f "$BUILD_INFO" ]; then
+      python3 -c "import json,sys; d=json.load(open('$BUILD_INFO')); print(d.get('version','v1.0.6')); print(d.get('git_commit','unknown')[:7])"
+    else
+      echo "{{ version_number | default('v1.0.6') }}"
+      echo "unknown"
+    fi
+  register: _build_info
+  changed_when: false
+  failed_when: false
+
+- name: Set image tag variables
+  ansible.builtin.set_fact:
+    _worker_image_version: "{{ _build_info.stdout_lines[0] | default(version_number | default('v1.0.6')) }}"
+    _worker_image_commit: "{{ _build_info.stdout_lines[1] | default('unknown') }}"
+    _worker_image_tag: "velox-worker:{{ _build_info.stdout_lines[0] | default(version_number | default('v1.0.6')) }}-{{ (_build_info.stdout_lines[1] | default('unknown'))[:7] }}"
+
 - name: Write env file
   ansible.builtin.copy:
     dest: /etc/velox-worker.env
@@ -30,6 +49,9 @@
       VELOX_BUNDLE_HASH={{ bundle_hash | default('') }}
       VELOX_WORKER_PROTOCOL_VERSION={{ worker_protocol_version | default('2026-06-worker-v1') }}
       VELOX_ENGINE_VERSION={{ engine_version | default(version_number | default('v1.0.6')) }}
+      VELOX_WORKER_IMAGE={{ _worker_image_tag }}
+      VELOX_WORKER_IMAGE_VERSION={{ _worker_image_version }}
+      VELOX_WORKER_IMAGE_COMMIT={{ _worker_image_commit }}
 
 - name: Detect current bundle layout
   ansible.builtin.stat:
@@ -69,10 +91,10 @@
       --pull \
       --no-cache \
       -f "$DOCKERFILE" \
-      -t velox-worker:latest \
+      -t "{{ _worker_image_tag }}" \
       "$CONTEXT"
-    /usr/bin/docker image inspect velox-worker:latest >/dev/null 2>&1
-    echo "Image velox-worker:latest built successfully"
+    /usr/bin/docker image inspect "{{ _worker_image_tag }}" >/dev/null 2>&1
+    echo "Image {{ _worker_image_tag }} built successfully"
   args:
     executable: /bin/bash
   register: worker_image_build
@@ -83,7 +105,7 @@
   ansible.builtin.debug:
     msg: "{{ worker_image_build.stdout | default('no output') }}"
 
-# ── Config generation AFTER Docker build (needs velox-worker:latest image) ──
+# ── Config generation AFTER Docker build (needs worker image) ──
 - name: Ensure worker config exists and disables Prometheus metrics
   ansible.builtin.shell: |
     set -euo pipefail
@@ -94,7 +116,7 @@
         --user root \
         --entrypoint /usr/local/bin/velox-worker-agent \
         -v /tmp/velox-worker:/tmp/velox-worker \
-        velox-worker:latest \
+        "{{ _worker_image_tag }}" \
         -generate-config -config "$CFG" -work-dir /app/RemoteCodex >/dev/null
     fi
     python3 - <<'PY'
@@ -248,8 +270,8 @@
       EnvironmentFile=/etc/velox-worker.env
       WorkingDirectory={{ velox_dir }}/current
       ExecStartPre=/bin/sh -c '/usr/bin/docker rm -f velox-worker-{{ inventory_hostname }} >/dev/null 2>&1 || true'
-      ExecStartPre=/bin/sh -c 'mkdir -p /tmp/velox-worker && chmod 775 /tmp/velox-worker && [ -f /tmp/velox-worker/worker_config.json ] || /usr/bin/docker run --rm --user root --entrypoint /usr/local/bin/velox-worker-agent -v /tmp/velox-worker:/tmp/velox-worker velox-worker:latest -generate-config -config /tmp/velox-worker/worker_config.json -work-dir /app/RemoteCodex'
-      ExecStart=/usr/bin/docker run --name velox-worker-{{ inventory_hostname }} --rm --network host --env-file /etc/velox-worker.env -e VELOX_VIDEO_ENGINE_CPP_BIN=/usr/local/bin/velox_video_engine -v {{ velox_dir }}/current:/app -v {{ velox_dir }}/cache:/root/.cache -v {{ velox_dir }}/current/RemoteCodex/assets_cache:/app/RemoteCodex/assets_cache -v /tmp/velox-worker:/tmp/velox-worker velox-worker:latest -config /tmp/velox-worker/worker_config.json -master {{ master_url }} -worker-id {{ worker_id | default(inventory_hostname) }} -work-dir /app/RemoteCodex
+      ExecStartPre=/bin/sh -c 'mkdir -p /tmp/velox-worker && chmod 775 /tmp/velox-worker && [ -f /tmp/velox-worker/worker_config.json ] || /usr/bin/docker run --rm --user root --entrypoint /usr/local/bin/velox-worker-agent -v /tmp/velox-worker:/tmp/velox-worker ${VELOX_WORKER_IMAGE} -generate-config -config /tmp/velox-worker/worker_config.json -work-dir /app/RemoteCodex'
+      ExecStart=/usr/bin/docker run --name velox-worker-{{ inventory_hostname }} --rm --network host --env-file /etc/velox-worker.env -e VELOX_VIDEO_ENGINE_CPP_BIN=/usr/local/bin/velox_video_engine -v {{ velox_dir }}/current:/app -v {{ velox_dir }}/cache:/root/.cache -v {{ velox_dir }}/current/RemoteCodex/assets_cache:/app/RemoteCodex/assets_cache -v /tmp/velox-worker:/tmp/velox-worker ${VELOX_WORKER_IMAGE} -config /tmp/velox-worker/worker_config.json -master {{ master_url }} -worker-id {{ worker_id | default(inventory_hostname) }} -work-dir /app/RemoteCodex
       ExecStop=/bin/sh -c '/usr/bin/docker stop -t 20 velox-worker-{{ inventory_hostname }} >/dev/null 2>&1 || true'
       ExecStopPost=/bin/sh -c '/usr/bin/docker rm -f velox-worker-{{ inventory_hostname }} >/dev/null 2>&1 || true'
       TimeoutStopSec=35
