@@ -1,7 +1,6 @@
 package frontend
 
 import (
-	"context"
 	"log"
 	"os"
 
@@ -86,14 +85,4 @@ func (m *Module) RegisterRoutes(r *gin.Engine) {
 	log.Printf("[FRONTEND] Static files registered (SPA: %s)", m.spaDistDir)
 }
 
-// Start initializes the module.
-func (m *Module) Start(ctx context.Context) error {
-	log.Printf("[FRONTEND] Module started")
-	return nil
-}
 
-// Stop gracefully shuts down the module.
-func (m *Module) Stop(ctx context.Context) error {
-	log.Printf("[FRONTEND] Module stopped")
-	return nil
-}

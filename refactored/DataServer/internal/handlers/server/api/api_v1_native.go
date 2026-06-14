@@ -1,29 +1,20 @@
 package api
 
 import (
-	"net/http"
-
 	"github.com/gin-gonic/gin"
-	"velox-server/internal/handlers/remote/ansible"
 	"velox-server/internal/handlers/remote/livestream"
 	"velox-server/internal/handlers/remote/submission"
 	"velox-server/internal/integrations/youtube"
 	"velox-server/internal/queue"
-	workersreg "velox-server/internal/workers"
 )
-
-// submissionHandlers holds the submission handlers instance
-var submissionHandlers *submission.SubmissionHandlers
-
-// livestreamHandlers holds the livestream handlers instance
-var livestreamHandlers *livestream.LivestreamHandlers
 
 // RegisterV1NativeRoutes registers minimal GO-native v1 API endpoints so the
 // frontend can run without Python Job Master (port 8002).
-func RegisterV1NativeRoutes(r *gin.Engine, sq *queue.StreamsQueue, lq *queue.Queue, reg *workersreg.Registry, ansibleHandlers *ansible.AnsibleHandlers, ytService *youtube.Service, dataDir string) {
+func RegisterV1NativeRoutes(r *gin.Engine, sq *queue.StreamsQueue, dataDir string, ytService *youtube.Service) {
 	// Initialize livestream handlers
-	livestreamHandlers = livestream.NewLivestreamHandlers(ytService, dataDir)
+	livestreamHandlers := livestream.NewLivestreamHandlers(ytService, dataDir)
 	// Initialize submission handlers if queue is available
+	var submissionHandlers *submission.SubmissionHandlers
 	if sq != nil {
 		submissionHandlers = submission.NewSubmissionHandlers(sq)
 	}
@@ -42,10 +33,6 @@ func RegisterV1NativeRoutes(r *gin.Engine, sq *queue.StreamsQueue, lq *queue.Que
 		}
 
 		// Jobs: GET /jobs and GET/DELETE/POST /jobs/:id are registered in RegisterV1Routes (jobAPI).
-		// Only extra cleanup endpoints here to avoid duplicate route panic.
-		v1.POST("/jobs/queue/cleanup", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"ok": true}) })
-		v1.POST("/jobs/processing/cleanup", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"ok": true}) })
-		v1.POST("/jobs/processing/cleanup/:id", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"ok": true, "job_id": c.Param("id")}) })
 
 		// Workers, Analytics, Channels, Groups, YouTube, drive-links, Ansible: all in RegisterV1Routes.
 

@@ -1,7 +1,6 @@
 package drive
 
 import (
-	"context"
 	"log"
 
 	"github.com/gin-gonic/gin"
@@ -71,14 +70,4 @@ func (m *Module) RegisterRoutes(r *gin.Engine) {
 	log.Printf("[DRIVE] API routes registered at /api/drive/*")
 }
 
-// Start initializes the module.
-func (m *Module) Start(ctx context.Context) error {
-	log.Printf("[DRIVE] Module started")
-	return nil
-}
 
-// Stop gracefully shuts down the module.
-func (m *Module) Stop(ctx context.Context) error {
-	log.Printf("[DRIVE] Module stopped")
-	return nil
-}
