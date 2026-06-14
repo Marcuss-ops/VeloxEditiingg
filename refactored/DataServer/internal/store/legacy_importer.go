@@ -19,6 +19,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"velox-shared/payload"
 )
 
 // ============================================================
@@ -655,13 +657,6 @@ func importYouTubeManagerFlatFormat(s *SQLiteStore, m map[string]any) (int, erro
 	return imported, nil
 }
 
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
 // --- Ansible Hosts (canonical) ---
 
 // importAnsibleHostsJSON imports ansible/ansible_computers.json into ansible_hosts.
@@ -712,7 +707,7 @@ func importAnsibleHostsJSON(s *SQLiteStore, data []byte, absPath string) (int, e
 
 		fields := AnsibleHostFields{
 			Host:        host,
-			AnsibleUser: firstNonEmpty(user, "pierone"),
+			AnsibleUser: payload.FirstNonEmpty(user, "pierone"),
 			SSHKeyPath:  sshKeyPath,
 			SecretRef:   secretRef,
 			Enabled:     enabled,
@@ -888,16 +883,6 @@ func toInt64(v any) int64 {
 		}
 	}
 	return 0
-}
-
-// firstNonEmpty returns the first non-empty string in the list.
-func firstNonEmpty(values ...string) string {
-	for _, v := range values {
-		if v != "" {
-			return v
-		}
-	}
-	return ""
 }
 
 // newAnsibleSecretResolver creates a SecretResolver for password migration.
