@@ -2,12 +2,12 @@ package dashboard
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/gin-gonic/gin"
 	"github.com/redis/go-redis/v9"
 	"velox-server/internal/queue"
 	"velox-server/internal/workers"
+	"velox-shared/payload"
 )
 
 // Stats returns job statistics matching Python GET /stats
@@ -75,7 +75,7 @@ func Jobs(q *queue.Queue, reg *workers.Registry) gin.HandlerFunc {
 		statusFilter := c.Query("status")
 		limit := 100
 		if l := c.Query("limit"); l != "" {
-			if parsed, err := parseInt(l); err == nil && parsed > 0 {
+			if parsed, err := payload.ParseIntParam(l, 0); err == nil && parsed > 0 {
 				limit = parsed
 			}
 		}
@@ -259,9 +259,4 @@ func getJobByID(ctx context.Context, client *redis.Client, jobID string) (map[st
 	return job, nil
 }
 
-// Helper: parse int from string
-func parseInt(s string) (int, error) {
-	var n int
-	_, err := fmt.Sscanf(s, "%d", &n)
-	return n, err
-}
+
