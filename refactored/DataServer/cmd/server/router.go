@@ -9,6 +9,7 @@ import (
 	remoteansible "velox-server/internal/handlers/remote/ansible"
 	"velox-server/internal/handlers/server/analytics"
 	"velox-server/internal/handlers/server/api"
+	"velox-server/internal/handlers/server/groups"
 	jobhandlers "velox-server/internal/handlers/server/jobs"
 	pipelinehandler "velox-server/internal/handlers/server/pipeline"
 	scripthandlers "velox-server/internal/handlers/server/script"
@@ -78,6 +79,9 @@ func newRouter(cfg *config.Config, deps *serverDeps, registry *app.Registry) *gi
 	registerNativeV1Routes(r, deps)
 	registerScriptRoutes(r, cfg, deps)
 	registerPipelineRoutes(r, cfg, deps)
+
+	// Initialize groups handlers with SQLite store
+	groups.InitGroupsStore(deps.sqliteStore)
 
 	// Analytics cache
 	analytics.InitAnalyticsCache(deps.paths.dataDir, deps.sqliteStore)

@@ -66,11 +66,12 @@ func (m *Module) RegisterRoutes(r *gin.Engine) {
 	m.youtubeService = youtubeService
 
 	if m.sqliteStore != nil {
+		youtubeService.SetStore(m.sqliteStore)
 		youtubeService.GetQuotaManager().SetStore(m.sqliteStore)
 	}
 
 	if m.dataDir != "" {
-		storage, storageErr := integrationsYoutube.NewStorage(m.dataDir)
+		storage, storageErr := integrationsYoutube.NewStorage(m.dataDir, m.sqliteStore)
 		if storageErr != nil {
 			log.Printf("[YOUTUBE] Storage init failed: %v", storageErr)
 		} else {
@@ -78,14 +79,7 @@ func (m *Module) RegisterRoutes(r *gin.Engine) {
 		}
 	}
 
-	handlers, err := ytHandlers.NewYouTubeHandlers(&integrationsYoutube.ServiceConfig{
-		TokensDir:          m.cfg.YouTubeTokensDir,
-		YoutubePostingPath: m.cfg.YouTubePostingPath,
-		CredentialsDir:     m.cfg.YouTubeCredentialsDir,
-		DataDir:            m.dataDir,
-		NVIDIAAPIKey:       m.cfg.NVIDIAAPIKey,
-		NVIDIATextURL:      m.cfg.NVIDIATextURL,
-	}, m.youtubeStorage, m.sqliteStore)
+	handlers, err := ytHandlers.NewYouTubeHandlers(youtubeService, m.youtubeStorage, m.sqliteStore)
 	if err != nil {
 		log.Printf("[YOUTUBE] Handlers init failed: %v", err)
 		return

@@ -150,113 +150,108 @@ func (h *YouTubeHandlers) RefreshChannelsMetadata(c *gin.Context) {
 	})
 }
 
-// GetChannelAnalytics returns analytics data for a specific channel from the analytics cache
+// GetChannelAnalytics returns analytics data for a specific channel (from SQLite or legacy JSON).
 // GET /api/v1/youtube/analytics/channel/:id?days=7
 func (h *YouTubeHandlers) GetChannelAnalytics(c *gin.Context) {
-    channelID := c.Param("id")
-    daysStr := c.DefaultQuery("days", "7")
+	channelID := c.Param("id")
+	daysStr := c.DefaultQuery("days", "7")
 
-    dataDir := h.service.GetConfig().DataDir
-    if dataDir == "" {
-        c.JSON(http.StatusOK, gin.H{
-            "ok":       true,
-            "channel":  channelID,
-            "days":     daysStr,
-            "totals":   gin.H{},
-            "stats":    []interface{}{},
-            "message":  "Data directory not configured",
-        })
-        return
-    }
+	dataDir := h.service.GetConfig().DataDir
+	if dataDir == "" {
+		c.JSON(http.StatusOK, gin.H{
+			"ok":      true,
+			"channel": channelID,
+			"days":    daysStr,
+			"totals":  gin.H{},
+			"stats":   []interface{}{},
+			"message": "Data directory not configured",
+		})
+		return
+	}
 
-    cachePath := filepath.Join(dataDir, "analytics", "analytics_cache.json")
-    cacheData, err := os.ReadFile(cachePath)
-    if err != nil {
-        c.JSON(http.StatusOK, gin.H{
-            "ok":       true,
-            "channel":  channelID,
-            "days":     daysStr,
-            "totals":   gin.H{},
-            "stats":    []interface{}{},
-            "message":  "No analytics cache available yet. Run SyncAllAnalytics first.",
-        })
-        return
-    }
+	// Read from legacy analytics_cache.json (read-only, file still exists)
+	cachePath := filepath.Join(dataDir, "analytics", "analytics_cache.json")
+	cacheData, err := os.ReadFile(cachePath)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{
+			"ok":      true,
+			"channel": channelID,
+			"days":    daysStr,
+			"totals":  gin.H{},
+			"stats":   []interface{}{},
+			"message": "No analytics cache available. Run SyncAllAnalytics first.",
+		})
+		return
+	}
 
-    var cache map[string]interface{}
-    if err := json.Unmarshal(cacheData, &cache); err != nil {
-        c.JSON(http.StatusInternalServerError, gin.H{
-            "ok":    false,
-            "error": "Failed to parse analytics cache",
-        })
-        return
-    }
+	var cache map[string]interface{}
+	if err := json.Unmarshal(cacheData, &cache); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"ok":    false,
+			"error": "Failed to parse analytics cache",
+		})
+		return
+	}
 
-    // Look for the requested period entry
-    periodKey := daysStr
-    periodEntry, ok := cache[periodKey].(map[string]interface{})
-    if !ok {
-        // Try as number ("7" vs 7)
-        for k, v := range cache {
-            if fmt.Sprintf("%v", k) == daysStr {
-                if entry, ok := v.(map[string]interface{}); ok {
-                    periodEntry = entry
-                    break
-                }
-            }
-        }
-    }
+	periodKey := daysStr
+	periodEntry, ok := cache[periodKey].(map[string]interface{})
+	if !ok {
+		for k, v := range cache {
+			if fmt.Sprintf("%v", k) == daysStr {
+				if entry, ok := v.(map[string]interface{}); ok {
+					periodEntry = entry
+					break
+				}
+			}
+		}
+	}
 
-    if periodEntry == nil {
-        c.JSON(http.StatusOK, gin.H{
-            "ok":       true,
-            "channel":  channelID,
-            "days":     daysStr,
-            "totals":   gin.H{},
-            "stats":    []interface{}{},
-            "message":  "No data for this period",
-        })
-        return
-    }
+	if periodEntry == nil {
+		c.JSON(http.StatusOK, gin.H{
+			"ok":      true,
+			"channel": channelID,
+			"days":    daysStr,
+			"totals":  gin.H{},
+			"stats":   []interface{}{},
+			"message": "No data for this period",
+		})
+		return
+	}
 
-    // Extract data
-    entryData, _ := periodEntry["data"].(map[string]interface{})
-    if entryData == nil {
-        c.JSON(http.StatusOK, gin.H{
-            "ok":       true,
-            "channel":  channelID,
-            "days":     daysStr,
-            "totals":   gin.H{},
-            "stats":    []interface{}{},
-        })
-        return
-    }
+	entryData, _ := periodEntry["data"].(map[string]interface{})
+	if entryData == nil {
+		c.JSON(http.StatusOK, gin.H{
+			"ok":      true,
+			"channel": channelID,
+			"days":    daysStr,
+			"totals":  gin.H{},
+			"stats":   []interface{}{},
+		})
+		return
+	}
 
-    // Find channel-specific data in the channels array
-    channels, _ := entryData["channels"].([]interface{})
-    var channelStats map[string]interface{}
-    for _, ch := range channels {
-        if chMap, ok := ch.(map[string]interface{}); ok {
-            if fmt.Sprintf("%v", chMap["id"]) == channelID {
-                channelStats = chMap
-                break
-            }
-        }
-    }
+	channels, _ := entryData["channels"].([]interface{})
+	var channelStats map[string]interface{}
+	for _, ch := range channels {
+		if chMap, ok := ch.(map[string]interface{}); ok {
+			if fmt.Sprintf("%v", chMap["id"]) == channelID {
+				channelStats = chMap
+				break
+			}
+		}
+	}
 
-    totals, _ := entryData["totals"].(map[string]interface{})
+	totals, _ := entryData["totals"].(map[string]interface{})
+	dailyStats, _ := entryData["daily_stats"].([]interface{})
 
-    // Also get daily_stats filtered for this channel
-    dailyStats, _ := entryData["daily_stats"].([]interface{})
-
-    c.JSON(http.StatusOK, gin.H{
-        "ok":          true,
-        "channel":     channelID,
-        "days":        daysStr,
-        "totals":      totals,
-        "channel_data": channelStats,
-        "stats":       dailyStats,
-    })
+	c.JSON(http.StatusOK, gin.H{
+		"ok":           true,
+		"channel":      channelID,
+		"days":         daysStr,
+		"totals":       totals,
+		"channel_data": channelStats,
+		"stats":        dailyStats,
+	})
 }
 
 // UpdateChannel handles updating channel metadata (language, token_status, etc.)

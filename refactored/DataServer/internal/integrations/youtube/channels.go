@@ -118,128 +118,69 @@ func (s *Service) loadChannelFromToken(tokenPath string) *AuthChannel {
 	return channel
 }
 
-// loadChannelsJSON loads channel details from channels.json
+// loadChannelsJSON loads channel details from SQLite.
 func (s *Service) loadChannelsJSON() {
-	candidates := []string{
-		filepath.Join(s.config.DataDir, "youtube", "channels", "channels.json"),
-		filepath.Join(s.config.YoutubePostingPath, "Modules", "channels.json"),
-		filepath.Join("DataServer", "data", "youtube", "channels", "channels.json"),
+	if s.store != nil {
+		s.loadChannelsFromSQLite()
 	}
-
-	var data []byte
-	var err error
-	for _, path := range candidates {
-		data, err = os.ReadFile(path)
-		if err == nil {
-			break
-		}
-	}
-	if err != nil || data == nil {
-		return
-	}
-
-	var channelsData map[string]struct {
-		Title     string `json:"title"`
-		Token     string `json:"token"`
-		ClientID  string `json:"client_id"`
-		AddedDate string `json:"added_date"`
-		LastUsed  string `json:"last_used"`
-		Language  string `json:"language,omitempty"`
-	}
-
-	if err := json.Unmarshal(data, &channelsData); err != nil {
-		log.Printf("[WARN] Failed to parse channels.json: %v", err)
-		return
-	}
-
-	for id, info := range channelsData {
-		if ch, exists := s.channels[id]; exists {
-			if info.Title != "" {
-				ch.Title = info.Title
-			}
-			ch.Language = info.Language
-		} else {
-			s.channels[id] = &AuthChannel{
-				ID:       id,
-				Title:    info.Title,
-				Name:     info.Title,
-				Language: info.Language,
-			}
-		}
-	}
-
-	log.Printf("[OK] Loaded channel details from channels.json (%d entries)", len(channelsData))
 }
 
-// UpdateChannelMetadata updates metadata fields in channels.json
+// loadChannelsFromSQLite loads channel metadata from SQLite
+func (s *Service) loadChannelsFromSQLite() bool {
+	rows, err := s.store.ListYouTubeChannelMetadata()
+	if err != nil || len(rows) == 0 {
+		return false
+	}
+
+	for id, info := range rows {
+		if ch, exists := s.channels[id]; exists {
+			if title, ok := info["title"].(string); ok && title != "" {
+				ch.Title = title
+			}
+			if lang, ok := info["language"].(string); ok {
+				ch.Language = lang
+			}
+		} else {
+			title, _ := info["title"].(string)
+			lang, _ := info["language"].(string)
+			s.channels[id] = &AuthChannel{
+				ID:       id,
+				Title:    title,
+				Name:     title,
+				Language: lang,
+			}
+		}
+	}
+
+	log.Printf("[OK] Loaded channel metadata from SQLite (%d entries)", len(rows))
+	return true
+}
+
+
+
+// UpdateChannelMetadata updates metadata fields in SQLite.
 func (s *Service) UpdateChannelMetadata(channelID string, metadata map[string]interface{}) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if ch, exists := s.channels[channelID]; exists {
-		if lang, ok := metadata["language"].(string); ok {
-			ch.Language = lang
-		}
-	}
-
-	channelsPath := ""
-	for _, candidate := range []string{
-		filepath.Join(s.config.DataDir, "youtube", "channels", "channels.json"),
-		filepath.Join(s.config.YoutubePostingPath, "Modules", "channels.json"),
-		filepath.Join("DataServer", "data", "youtube", "channels", "channels.json"),
-	} {
-		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
-			channelsPath = candidate
-			break
-		}
-	}
-	if channelsPath == "" {
-		channelsPath = filepath.Join(s.config.DataDir, "youtube", "channels", "channels.json")
-	}
-
-	data, err := os.ReadFile(channelsPath)
-	if err != nil {
-		chMap := map[string]interface{}{
-			channelID: metadata,
-		}
-		return s.writeChannelsJSON(channelsPath, chMap)
-	}
-
-	var channelsData map[string]interface{}
-	if err := json.Unmarshal(data, &channelsData); err != nil {
-		return fmt.Errorf("failed to parse channels.json: %w", err)
-	}
-
-	if channelsData == nil {
-		channelsData = make(map[string]interface{})
-	}
-
-	entry, exists := channelsData[channelID]
+	ch, exists := s.channels[channelID]
 	if !exists {
-		channelsData[channelID] = metadata
-	} else {
-		if entryMap, ok := entry.(map[string]interface{}); ok {
-			for k, v := range metadata {
-				entryMap[k] = v
-			}
-		} else {
-			channelsData[channelID] = metadata
-		}
+		return fmt.Errorf("channel not found: %s", channelID)
 	}
 
-	return s.writeChannelsJSON(channelsPath, channelsData)
-}
+	if lang, ok := metadata["language"].(string); ok {
+		ch.Language = lang
+	}
+	if title, ok := metadata["title"].(string); ok {
+		ch.Title = title
+	}
 
-func (s *Service) writeChannelsJSON(path string, data interface{}) error {
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return err
+	// Persist to SQLite
+	if s.store != nil {
+		data, _ := json.Marshal(ch)
+		return s.store.UpsertYouTubeChannelMetadata(ch.ID, ch.Title, ch.TokenPath, ch.Language, "", "", string(data))
 	}
-	raw, err := json.MarshalIndent(data, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(path, raw, 0644)
+	return nil
 }
 
 // GetChannels returns all available channels

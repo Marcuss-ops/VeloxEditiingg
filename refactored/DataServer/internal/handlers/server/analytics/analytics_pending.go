@@ -99,42 +99,29 @@ func resolveAnalyticsDataDir() string {
 
 func loadYouTubeGroupChannels(dataDir string) map[string][]map[string]string {
 	out := make(map[string][]map[string]string)
-	if dataDir == "" {
+	if analyticsStore == nil {
 		return out
 	}
 
-	path := filepath.Join(dataDir, "youtube", "GroupYoutubeManager", "ChannelsSaved.json")
-	raw, err := os.ReadFile(path)
-	if err != nil {
+	groups, err := analyticsStore.ListYouTubeGroups()
+	if err != nil || len(groups) == 0 {
 		return out
 	}
 
-	var decoded struct {
-		Groups map[string]struct {
-			Name     string `json:"name"`
-			Channels []struct {
-				ID        string `json:"id"`
-				Title     string `json:"title"`
-				Name      string `json:"name"`
-				Thumbnail string `json:"thumbnail"`
-			} `json:"channels"`
-		} `json:"groups"`
-	}
-	if err := json.Unmarshal(raw, &decoded); err != nil {
-		return out
-	}
+	for _, group := range groups {
+		groupName, _ := group["name"].(string)
+		if groupName == "" {
+			continue
+		}
+		channelsJSON, _ := group["channels"].(string)
+		var channelIDs []string
+		_ = json.Unmarshal([]byte(channelsJSON), &channelIDs)
 
-	for groupName, group := range decoded.Groups {
-		channels := make([]map[string]string, 0, len(group.Channels))
-		for _, ch := range group.Channels {
-			title := ch.Title
-			if title == "" {
-				title = ch.Name
-			}
+		channels := make([]map[string]string, 0, len(channelIDs))
+		for _, id := range channelIDs {
 			channels = append(channels, map[string]string{
-				"id":        ch.ID,
-				"title":     title,
-				"thumbnail": ch.Thumbnail,
+				"id":    id,
+				"title": id,
 			})
 		}
 		out[groupName] = channels

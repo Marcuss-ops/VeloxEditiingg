@@ -19,6 +19,7 @@ import (
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
+	"velox-server/internal/store/migrations"
 	"velox-shared/payload"
 )
 
@@ -69,12 +70,23 @@ func NewSQLiteStore(path string) (*SQLiteStore, error) {
 	db.SetConnMaxLifetime(5 * time.Minute) // Recycle connections periodically
 
 	s := &SQLiteStore{db: db}
-	if err := s.initSchema(); err != nil {
+
+	// Run schema migrations
+	if err := migrations.RunMigrations(db, migrationsFS, "migrations"); err != nil {
 		if closeErr := db.Close(); closeErr != nil {
-			log.Printf("sqlite: close after schema failure: %v", closeErr)
+			log.Printf("sqlite: close after migration failure: %v", closeErr)
+		}
+		return nil, fmt.Errorf("store: run migrations: %w", err)
+	}
+
+	// Post-migration schema adjustments (ensureColumn for existing columns)
+	if err := s.postMigrationAdjustments(); err != nil {
+		if closeErr := db.Close(); closeErr != nil {
+			log.Printf("sqlite: close after post-migration: %v", closeErr)
 		}
 		return nil, err
 	}
+
 	return s, nil
 }
 
@@ -85,103 +97,51 @@ func (s *SQLiteStore) Close() error {
 	return s.db.Close()
 }
 
-func (s *SQLiteStore) initSchema() error {
-	ddl := `
-CREATE TABLE IF NOT EXISTS jobs (
-  job_id TEXT PRIMARY KEY,
-  status TEXT,
-  video_name TEXT,
-  project_id TEXT,
-  created_at TEXT,
-  updated_at TEXT,
-  assigned_to TEXT,
-  retry_count INTEGER,
-  last_error TEXT,
-  completed_at TEXT,
-  raw_json TEXT NOT NULL,
-  migrated_at TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
-CREATE INDEX IF NOT EXISTS idx_jobs_updated ON jobs(updated_at);
-
-CREATE TABLE IF NOT EXISTS job_history (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  job_id TEXT NOT NULL,
-  status TEXT,
-  event_ts TEXT,
-  worker_id TEXT,
-  message TEXT,
-  raw_json TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_job_history_job_id ON job_history(job_id);
-
-CREATE TABLE IF NOT EXISTS job_logs (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  job_id TEXT NOT NULL,
-  log_ts TEXT,
-  message TEXT,
-  worker_id TEXT,
-  is_error INTEGER DEFAULT 0,
-  raw_json TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_job_logs_job_id ON job_logs(job_id);
-
-CREATE TABLE IF NOT EXISTS workers (
-  worker_id TEXT PRIMARY KEY,
-  worker_name TEXT,
-  status TEXT,
-  last_heartbeat TEXT,
-  schedulable INTEGER,
-  drain INTEGER,
-  worker_group TEXT,
-  raw_json TEXT NOT NULL,
-  migrated_at TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_workers_last_hb ON workers(last_heartbeat);
-
-CREATE TABLE IF NOT EXISTS worker_flags (
-  worker_id TEXT PRIMARY KEY,
-  revoked INTEGER DEFAULT 0,
-  quarantined INTEGER DEFAULT 0,
-  raw_json TEXT NOT NULL,
-  migrated_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS analytics_cache (
-  cache_key TEXT PRIMARY KEY,
-  ts REAL,
-  data_json TEXT NOT NULL,
-  migrated_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS drive_links (
-  id TEXT PRIMARY KEY,
-  parent_id TEXT,
-  name TEXT,
-  link TEXT,
-  language TEXT,
-  created_at TEXT,
-  updated_at TEXT,
-  raw_json TEXT NOT NULL,
-  migrated_at TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_drive_links_parent ON drive_links(parent_id);
-`
-	if _, err := s.db.Exec(ddl); err != nil {
-		return fmt.Errorf("store: init schema: %w", err)
+// postMigrationAdjustments handles schema additions that can't be done via CREATE TABLE IF NOT EXISTS
+// (e.g., adding columns to existing tables, backfilling). This runs after all migrations.
+func (s *SQLiteStore) postMigrationAdjustments() error {
+	// Dark Editor: ensure folder_id column on existing databases
+	if err := s.ensureColumn("dark_editor_projects", "folder_id", "TEXT"); err != nil {
+		return fmt.Errorf("store: post-migration adjustments: %w", err)
 	}
-	// Initialize Dark Editor tables
-	if err := s.initDarkEditorSchema(); err != nil {
-		return fmt.Errorf("store: init dark editor schema: %w", err)
+
+	// Calendar: backfill schema additions
+	calendarColumns := []struct {
+		table      string
+		column     string
+		definition string
+	}{
+		{"calendar_events", "external_id", "TEXT DEFAULT ''"},
+		{"calendar_events", "source", "TEXT DEFAULT ''"},
+		{"calendar_events", "status", "TEXT DEFAULT 'draft'"},
+		{"calendar_events", "youtube_group", "TEXT DEFAULT ''"},
+		{"calendar_events", "titles_json", "TEXT DEFAULT '[]'"},
+		{"calendar_events", "script_text", "TEXT DEFAULT ''"},
+		{"calendar_events", "youtube_links_json", "TEXT DEFAULT '[]'"},
+		{"calendar_events", "voiceover_paths_json", "TEXT DEFAULT '[]'"},
+		{"calendar_events", "category", "TEXT DEFAULT ''"},
+		{"calendar_events", "job_id", "TEXT DEFAULT ''"},
+		{"calendar_events", "job_status", "TEXT DEFAULT ''"},
+		{"calendar_events", "queued_at", "TEXT"},
+		{"calendar_events", "queue_error", "TEXT DEFAULT ''"},
 	}
-	// Initialize YouTube historical tables
-	if err := s.initYouTubeSchema(); err != nil {
-		return fmt.Errorf("store: init youtube schema: %w", err)
+	for _, col := range calendarColumns {
+		if err := s.ensureColumn(col.table, col.column, col.definition); err != nil {
+			return err
+		}
 	}
-	// Initialize Calendar tables
-	if err := s.initCalendarSchema(); err != nil {
-		return fmt.Errorf("store: init calendar schema: %w", err)
+
+	// YouTube metrics: ensure calendar_output columns
+	if err := s.ensureColumn("calendar_events", "output_video_path", "TEXT"); err != nil {
+		return err
 	}
+	if err := s.ensureColumn("calendar_events", "output_video_url", "TEXT"); err != nil {
+		return err
+	}
+	if err := s.ensureColumn("calendar_events", "publish_status", "TEXT"); err != nil {
+		return err
+	}
+
 	return nil
 }
 

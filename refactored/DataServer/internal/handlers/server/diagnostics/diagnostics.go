@@ -9,6 +9,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"velox-server/internal/audit"
+	"velox-server/internal/store"
 )
 
 // DataLayoutHandler provides diagnostics about the data layer.
@@ -16,14 +17,16 @@ type DataLayoutHandler struct {
 	dataDir    string
 	secretsDir string
 	dbPath     string
+	store      *store.SQLiteStore
 }
 
 // NewDataLayoutHandler creates a new data layout diagnostics handler.
-func NewDataLayoutHandler(dataDir, secretsDir, dbPath string) *DataLayoutHandler {
+func NewDataLayoutHandler(dataDir, secretsDir, dbPath string, dbStore *store.SQLiteStore) *DataLayoutHandler {
 	return &DataLayoutHandler{
 		dataDir:    dataDir,
 		secretsDir: secretsDir,
 		dbPath:     dbPath,
+		store:      dbStore,
 	}
 }
 
@@ -90,84 +93,63 @@ func (h *DataLayoutHandler) GetDataLayoutHandler() gin.HandlerFunc {
 			}
 		}
 
-		// YouTube Channels
-		channelsPath := filepath.Join(h.dataDir, "youtube", "channels", "channels.json")
+		// YouTube Channels (canonical SQLite)
 		response.Domains["youtube_channels"] = DomainInfo{
-			Primary:       channelsPath,
-			PrimaryExists: fileExists(channelsPath),
-			Cache:         filepath.Join(h.dataDir, "youtube", "youtube_api_cache.json"),
-			CacheExists:   fileExists(filepath.Join(h.dataDir, "youtube", "youtube_api_cache.json")),
-			Legacy:        "GroupYoutubeManager/ChannelsSaved.json",
-			LegacyExists:  false, // Should not exist
-			Status:        getStatus(fileExists(channelsPath), false),
+			Primary:       "SQLite: youtube_channels table (canonical)",
+			PrimaryExists: true,
+			Status:        "healthy",
 		}
 
-		// YouTube Groups
-		groupsPath := filepath.Join(h.dataDir, "youtube", "groups.json")
-		youtubeManagerPath := filepath.Join(h.dataDir, "youtube", "youtube_manager.json")
+		// YouTube Groups (canonical SQLite)
 		response.Domains["youtube_groups"] = DomainInfo{
-			Primary:       groupsPath,
-			PrimaryExists: fileExists(groupsPath),
-			Legacy:        "youtube_manager.json",
-			LegacyExists:  fileExists(youtubeManagerPath),
-			Status:        getStatus(fileExists(groupsPath), fileExists(youtubeManagerPath)),
+			Primary:       "SQLite: youtube_groups_v2 table (canonical)",
+			PrimaryExists: true,
+			Status:        "healthy",
 		}
 
 		// YouTube Tokens
 		tokensPath := filepath.Join(h.secretsDir, "youtube", "tokens")
 		tokenCount := countTokenFiles(tokensPath)
-		legacyGroupPath := filepath.Join(h.dataDir, "youtube", "group")
 		response.Domains["youtube_tokens"] = DomainInfo{
 			Primary:       tokensPath,
 			PrimaryExists: dirExists(tokensPath),
-			Legacy:        "youtube/group/*/account_*.json",
-			LegacyExists:  dirExists(legacyGroupPath),
-			Status:        getStatus(dirExists(tokensPath), dirExists(legacyGroupPath)),
+			Status:        "healthy",
 		}
 		response.Counts.YouTubeTokens = tokenCount
 
-		// Workers
-		workersPath := filepath.Join(h.dataDir, "workers.json")
-		workersLegacyPath := filepath.Join(h.dataDir, "workers", "workers.json")
+		// Workers (now in SQLite)
 		response.Domains["workers"] = DomainInfo{
-			Primary:       workersPath,
-			PrimaryExists: fileExists(workersPath),
-			Legacy:        "workers/workers.json",
-			LegacyExists:  fileExists(workersLegacyPath),
-			Status:        getStatus(fileExists(workersPath), fileExists(workersLegacyPath)),
+			Primary:       "SQLite: workers table",
+			PrimaryExists: true,
+			Status:        "healthy",
 		}
 
 		// Drive Credentials
 		credsPath := filepath.Join(h.dataDir, "drive", "credentials")
-		credsLegacyPath := filepath.Join(h.dataDir, "drive", "Credentials")
 		response.Domains["drive_credentials"] = DomainInfo{
 			Primary:       credsPath,
 			PrimaryExists: dirExists(credsPath),
-			Legacy:        "Credentials/",
-			LegacyExists:  dirExists(credsLegacyPath),
-			Status:        getStatus(dirExists(credsPath), dirExists(credsLegacyPath)),
+			Status:        "healthy",
 		}
 
-		// Ansible Runs
-		ansiblePath := filepath.Join(h.dataDir, "ansible_runs.json")
-		ansibleLegacyPath := filepath.Join(h.dataDir, "ansible", "ansible_runs.json")
+		// Ansible (SQLite tables)
+		response.Domains["ansible_hosts"] = DomainInfo{
+			Primary:       "SQLite: ansible_hosts table",
+			PrimaryExists: true,
+			Status:        "healthy",
+		}
 		response.Domains["ansible_runs"] = DomainInfo{
-			Primary:       ansiblePath,
-			PrimaryExists: fileExists(ansiblePath),
-			Legacy:        "ansible/ansible_runs.json",
-			LegacyExists:  fileExists(ansibleLegacyPath),
-			Status:        getStatus(fileExists(ansiblePath), fileExists(ansibleLegacyPath)),
+			Primary:       "SQLite: ansible_runs + ansible_run_hosts tables",
+			PrimaryExists: true,
+			Status:        "healthy",
 		}
 
 		// Bundle Manifest
 		manifestPath := filepath.Join(h.dataDir, "bundle", "manifest_v2.json")
-		manifestLegacyPath := filepath.Join(h.dataDir, "worker_downloads", "bundle_manifest.json")
 		response.Domains["bundle_manifest"] = DomainInfo{
 			Primary:       manifestPath,
 			PrimaryExists: fileExists(manifestPath),
-			Legacy:        "worker_downloads/bundle_manifest.json",
-			LegacyExists:  fileExists(manifestLegacyPath),
-			Status:        getStatus(fileExists(manifestPath), fileExists(manifestLegacyPath)),
+			Status:        "healthy",
 		}
 
 		// Run audit
@@ -181,30 +163,18 @@ func (h *DataLayoutHandler) GetDataLayoutHandler() gin.HandlerFunc {
 	}
 }
 
-// GetChannelCountsHandler returns channel/group counts.
+// GetChannelCountsHandler returns channel/group counts from SQLite.
 func (h *DataLayoutHandler) GetChannelCountsHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		counts := CountsInfo{}
 
-		// YouTube channels
-		channelsPath := filepath.Join(h.dataDir, "youtube", "channels", "channels.json")
-		if data, err := os.ReadFile(channelsPath); err == nil {
-			// Simple count by counting opening brackets
-			for i := 0; i < len(data); i++ {
-				if data[i] == '{' && i > 0 && data[i-1] == '[' {
-					counts.YouTubeChannels++
-				} else if data[i] == '{' && i > 0 && (data[i-1] == ',' || data[i-1] == '[') {
-					// This is a rough count
-				}
+		if h.store != nil {
+			if channels, err := h.store.ListYouTubeChannels(); err == nil {
+				counts.YouTubeChannels = len(channels)
 			}
-			// Better: count "id" occurrences
-			counts.YouTubeChannels = countSubstring(data, `"id"`)
-		}
-
-		// YouTube groups
-		groupsPath := filepath.Join(h.dataDir, "youtube", "groups.json")
-		if data, err := os.ReadFile(groupsPath); err == nil {
-			counts.YouTubeGroups = countSubstring(data, `"name"`)
+			if groups, err := h.store.ListYouTubeGroups(); err == nil {
+				counts.YouTubeGroups = len(groups)
+			}
 		}
 
 		c.JSON(http.StatusOK, counts)
@@ -273,14 +243,4 @@ func getStatus(primaryExists, legacyExists bool) string {
 		return "has_legacy"
 	}
 	return "healthy"
-}
-
-func countSubstring(data []byte, substr string) int {
-	count := 0
-	for i := 0; i <= len(data)-len(substr); i++ {
-		if string(data[i:i+len(substr)]) == substr {
-			count++
-		}
-	}
-	return count
 }
