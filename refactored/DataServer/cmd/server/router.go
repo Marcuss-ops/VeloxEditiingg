@@ -93,7 +93,7 @@ func registerAPIV1Routes(r *gin.Engine, cfg *config.Config, deps *serverDeps, an
 	// TODO: migrate remaining V1 routes to dedicated api module
 	jobRepo := store.NewSQLiteJobsRepository(deps.sqliteStore)
 	tokenMgr := deps.workerLifecycle.GetTokenManager()
-	jobSvc := jobservice.NewService(cfg, deps.fileQ, deps.redisQ, jobRepo, nil, deps.reg)
+	jobSvc := jobservice.NewService(cfg, deps.fileQ, nil, jobRepo, nil, deps.reg)
 	if deps.workerUpdateHandler != nil {
 		if hash := deps.workerUpdateHandler.ComputeBundleSHA256(); hash != "" {
 			jobSvc.SetMasterBundleHash(hash)
@@ -101,7 +101,7 @@ func registerAPIV1Routes(r *gin.Engine, cfg *config.Config, deps *serverDeps, an
 	}
 	jobAPI := jobhandlers.NewJobAPI(cfg, deps.fileQ, tokenMgr, jobSvc)
 	jobSubmitHandler := jobhandlers.NewJobSubmissionHandler(cfg, deps.fileQ)
-	api.RegisterV1Routes(r, cfg, deps.fileQ, deps.redisQ, deps.reg, jobAPI, jobSubmitHandler, deps.workersRepo, deps.sqliteStore, deps.workerUpdateHandler, ansibleHandlers)
+	api.RegisterV1Routes(r, cfg, deps.fileQ, deps.reg, jobAPI, jobSubmitHandler, deps.workersRepo, deps.sqliteStore, deps.workerUpdateHandler, ansibleHandlers)
 	r.POST("/api/jobs/get", jobAPI.GetJobCompatHandler())
 	r.POST("/api/jobs/result", jobAPI.SubmitResultCompatHandler())
 	r.GET("/api/jobs/get", jobAPI.GetJobCompatHandler())
@@ -121,7 +121,7 @@ func registerNativeV1Routes(r *gin.Engine, deps *serverDeps) {
 	// V1 native routes need the youtube service from the youtube module.
 	// Since we don't have a reference here, we pass nil for now.
 	// TODO: extract youtube service from registry
-	api.RegisterV1NativeRoutes(r, deps.streamsQ, deps.paths.dataDir, nil)
+	api.RegisterV1NativeRoutes(r, nil, deps.paths.dataDir, nil)
 }
 
 func registerScriptRoutes(r *gin.Engine, cfg *config.Config, deps *serverDeps) {
