@@ -4,8 +4,6 @@ import (
 	"context"
 	"log"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -27,14 +25,8 @@ type YouTubeManager struct {
 // NewYouTubeManager creates a new YouTube manager handler instance.
 func NewYouTubeManager(dataDir, apiKey, fallbackURL string, existingStorage *youtube.Storage, ytService *youtube.Service) *YouTubeManager {
 	var storage *youtube.Storage
-	var err error
 	if existingStorage != nil {
 		storage = existingStorage
-	} else {
-		storage, err = youtube.NewStorage(dataDir)
-		if err != nil {
-			storage, _ = youtube.NewStorage("")
-		}
 	}
 
 	cache := youtube.NewCache(dataDir, 2*time.Hour)
@@ -132,7 +124,8 @@ func (ym *YouTubeManager) CleanupCache() int {
 	return ym.apiClient.CleanupCache()
 }
 
-// DataRetentionCleanup performs a comprehensive cleanup of all YouTube cached data
+// DataRetentionCleanup performs a comprehensive cleanup of all YouTube cached data.
+// SQLite is the single source of truth — no legacy JSON files are touched.
 func (ym *YouTubeManager) DataRetentionCleanup() int {
 	if ym.dataDir == "" {
 		log.Printf("[WARN] YouTube Policy: dataDir not set, skipping data retention cleanup")
@@ -140,47 +133,9 @@ func (ym *YouTubeManager) DataRetentionCleanup() int {
 	}
 
 	total := 0
-
 	total += ym.storage.CleanupOldData(13 * 24 * time.Hour)
-
-	youtubeAPICachePath := filepath.Join(ym.dataDir, "youtube", "youtube_api_cache.json")
-	if _, err := os.Stat(youtubeAPICachePath); err == nil {
-		if err := os.WriteFile(youtubeAPICachePath, []byte("{}"), 0644); err == nil {
-			log.Printf("[CLEANUP] YouTube Policy: cleared youtube_api_cache.json")
-			total++
-		}
-	}
-
 	ym.feedCache.Clear()
 	total++
-
-	analyticsDir := filepath.Join(ym.dataDir, "analytics")
-	analyticsFiles := []string{
-		"analytics_cache.json",
-		"analytics_realtime_cache.json",
-		"feed_cache.json",
-	}
-	for _, f := range analyticsFiles {
-		fp := filepath.Join(analyticsDir, f)
-		if _, err := os.Stat(fp); err == nil {
-			if err := os.WriteFile(fp, []byte("{}"), 0644); err == nil {
-				log.Printf("[CLEANUP] YouTube Policy: cleared %s", f)
-				total++
-			}
-		}
-	}
-
-	uploadHistoryPaths := []string{
-		filepath.Join(ym.dataDir, "youtube", "history", "upload_history.json"),
-	}
-	for _, uploadHistoryPath := range uploadHistoryPaths {
-		if _, err := os.Stat(uploadHistoryPath); err == nil {
-			if err := os.WriteFile(uploadHistoryPath, []byte("[]"), 0644); err == nil {
-				log.Printf("[CLEANUP] YouTube Policy: cleared upload_history.json")
-				total++
-			}
-		}
-	}
 
 	log.Printf("[CLEANUP] YouTube Policy: data retention cleanup complete (%d entries cleared)", total)
 	return total

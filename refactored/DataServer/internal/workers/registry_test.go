@@ -2,26 +2,25 @@ package workers
 
 import (
 	"context"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
+
+	"velox-server/internal/store"
 )
 
-func TestRegistryNewWithPersistence(t *testing.T) {
-	dir := t.TempDir()
-	reg := NewWithPersistence(nil, false, nil, dir)
-	if reg == nil {
-		t.Fatal("expected non-nil registry")
+func newTestRegistry(t *testing.T) *Registry {
+	t.Helper()
+	// Use a file-based SQLite store in the temp dir for persistence tests
+	s, err := store.NewSQLiteStore(t.TempDir() + "/test_workers.db")
+	if err != nil {
+		t.Fatalf("failed to create test SQLite store: %v", err)
 	}
-	if reg.filePath == "" {
-		t.Error("expected filePath to be set")
-	}
+	t.Cleanup(func() { s.Close() })
+	return New(nil, false, s)
 }
 
 func TestRegistryRegisterAndList(t *testing.T) {
-	dir := t.TempDir()
-	reg := NewWithPersistence(nil, false, nil, dir)
+	reg := newTestRegistry(t)
 	ctx := context.Background()
 
 	err := reg.RegisterWorker(ctx, "w1", "worker-1", "10.0.0.1", nil)
@@ -39,14 +38,18 @@ func TestRegistryRegisterAndList(t *testing.T) {
 }
 
 func TestRegistryRegisterPersistence(t *testing.T) {
-	dir := t.TempDir()
+	s, err := store.NewSQLiteStore(t.TempDir() + "/test_workers.db")
+	if err != nil {
+		t.Fatalf("failed to create test SQLite store: %v", err)
+	}
+	defer s.Close()
 
 	// Register a worker
-	reg1 := NewWithPersistence(nil, false, nil, dir)
+	reg1 := New(nil, false, s)
 	_ = reg1.RegisterWorker(context.Background(), "w1", "worker-1", "10.0.0.1", nil)
 
-	// Create new registry from same file
-	reg2 := NewWithPersistence(nil, false, nil, dir)
+	// Create new registry from same database
+	reg2 := New(nil, false, s)
 	workers := reg2.List(context.Background())
 	if len(workers) != 1 {
 		t.Fatalf("expected 1 worker after reload, got %d", len(workers))
@@ -57,8 +60,13 @@ func TestRegistryRegisterPersistence(t *testing.T) {
 }
 
 func TestRegistryRevokeAndPersist(t *testing.T) {
-	dir := t.TempDir()
-	reg := NewWithPersistence(nil, false, nil, dir)
+	s, err := store.NewSQLiteStore(t.TempDir() + "/test_workers.db")
+	if err != nil {
+		t.Fatalf("failed to create test SQLite store: %v", err)
+	}
+	defer s.Close()
+
+	reg := New(nil, false, s)
 	ctx := context.Background()
 
 	_ = reg.RegisterWorker(ctx, "w1", "worker-1", "10.0.0.1", nil)
@@ -77,16 +85,20 @@ func TestRegistryRevokeAndPersist(t *testing.T) {
 	}
 
 	// Reload and verify revoked persists
-	reg2 := NewWithPersistence(nil, false, nil, dir)
+	reg2 := New(nil, false, s)
 	if !reg2.IsRevoked("w1") {
 		t.Error("expected w1 to be revoked after reload")
 	}
 }
 
 func TestRegistryUnrevoke(t *testing.T) {
-	dir := t.TempDir()
-	reg := NewWithPersistence(nil, false, nil, dir)
+	s, err := store.NewSQLiteStore(t.TempDir() + "/test_workers.db")
+	if err != nil {
+		t.Fatalf("failed to create test SQLite store: %v", err)
+	}
+	defer s.Close()
 
+	reg := New(nil, false, s)
 	_ = reg.RegisterWorker(context.Background(), "w1", "worker-1", "10.0.0.1", nil)
 	reg.RevokeWorker(context.Background(), "w1")
 	reg.UnrevokeWorker("w1")
@@ -96,15 +108,14 @@ func TestRegistryUnrevoke(t *testing.T) {
 	}
 
 	// Reload and verify
-	reg2 := NewWithPersistence(nil, false, nil, dir)
+	reg2 := New(nil, false, s)
 	if reg2.IsRevoked("w1") {
 		t.Error("expected w1 to not be revoked after reload")
 	}
 }
 
 func TestRegistryHeartbeat(t *testing.T) {
-	dir := t.TempDir()
-	reg := NewWithPersistence(nil, false, nil, dir)
+	reg := newTestRegistry(t)
 	ctx := context.Background()
 
 	_ = reg.RegisterWorker(ctx, "w1", "worker-1", "10.0.0.1", nil)
@@ -127,8 +138,7 @@ func TestRegistryHeartbeat(t *testing.T) {
 }
 
 func TestRegistryHeartbeatRevokedWorker(t *testing.T) {
-	dir := t.TempDir()
-	reg := NewWithPersistence(nil, false, nil, dir)
+	reg := newTestRegistry(t)
 	ctx := context.Background()
 
 	_ = reg.RegisterWorker(ctx, "w1", "worker-1", "10.0.0.1", nil)
@@ -141,11 +151,16 @@ func TestRegistryHeartbeatRevokedWorker(t *testing.T) {
 }
 
 func TestRegistryHeartbeatMetadataPersistence(t *testing.T) {
-	dir := t.TempDir()
-	reg := NewWithPersistence(nil, false, nil, dir)
+	s, err := store.NewSQLiteStore(t.TempDir() + "/test_workers.db")
+	if err != nil {
+		t.Fatalf("failed to create test SQLite store: %v", err)
+	}
+	defer s.Close()
+
+	reg := New(nil, false, s)
 	ctx := context.Background()
 
-	err := reg.Heartbeat(ctx, "w1", "worker-1", "idle", "", map[string]interface{}{
+	err = reg.Heartbeat(ctx, "w1", "worker-1", "idle", "", map[string]interface{}{
 		"code_version":     "v1.0.5",
 		"bundle_version":   "v1.0.5",
 		"bundle_hash":      "abc123",
@@ -160,7 +175,7 @@ func TestRegistryHeartbeatMetadataPersistence(t *testing.T) {
 		t.Fatalf("Heartbeat failed: %v", err)
 	}
 
-	reg2 := NewWithPersistence(nil, false, nil, dir)
+	reg2 := New(nil, false, s)
 	info := reg2.GetWorker(ctx, "w1")
 	if info == nil {
 		t.Fatal("expected worker to exist")
@@ -186,8 +201,13 @@ func TestRegistryHeartbeatMetadataPersistence(t *testing.T) {
 }
 
 func TestRegistryCleanupStaleWorkers(t *testing.T) {
-	dir := t.TempDir()
-	reg := NewWithPersistence(nil, false, nil, dir)
+	s, err := store.NewSQLiteStore(t.TempDir() + "/test_workers.db")
+	if err != nil {
+		t.Fatalf("failed to create test SQLite store: %v", err)
+	}
+	defer s.Close()
+
+	reg := New(nil, false, s)
 	ctx := context.Background()
 
 	// Register a worker
@@ -206,7 +226,7 @@ func TestRegistryCleanupStaleWorkers(t *testing.T) {
 	}
 
 	// Verify persistence
-	reg2 := NewWithPersistence(nil, false, nil, dir)
+	reg2 := New(nil, false, s)
 	workers := reg2.List(ctx)
 	if len(workers) != 0 {
 		t.Fatalf("expected 0 workers after cleanup, got %d", len(workers))
@@ -214,8 +234,7 @@ func TestRegistryCleanupStaleWorkers(t *testing.T) {
 }
 
 func TestRegistryGetSchedulableWorkers(t *testing.T) {
-	dir := t.TempDir()
-	reg := NewWithPersistence(nil, false, nil, dir)
+	reg := newTestRegistry(t)
 	ctx := context.Background()
 
 	_ = reg.RegisterWorker(ctx, "w1", "worker-1", "10.0.0.1", nil)
@@ -234,8 +253,7 @@ func TestRegistryGetSchedulableWorkers(t *testing.T) {
 }
 
 func TestRegistryUpdateWorker(t *testing.T) {
-	dir := t.TempDir()
-	reg := NewWithPersistence(nil, false, nil, dir)
+	reg := newTestRegistry(t)
 	ctx := context.Background()
 
 	_ = reg.RegisterWorker(ctx, "w1", "worker-1", "10.0.0.1", nil)
@@ -258,8 +276,7 @@ func TestRegistryUpdateWorker(t *testing.T) {
 }
 
 func TestRegistryConcurrentAccess(t *testing.T) {
-	dir := t.TempDir()
-	reg := NewWithPersistence(nil, false, nil, dir)
+	reg := newTestRegistry(t)
 	ctx := context.Background()
 
 	// Concurrent registrations
@@ -288,8 +305,7 @@ func TestRegistryConcurrentAccess(t *testing.T) {
 }
 
 func TestRegistryWorkerGroup(t *testing.T) {
-	dir := t.TempDir()
-	reg := NewWithPersistence(nil, false, nil, dir)
+	reg := newTestRegistry(t)
 	ctx := context.Background()
 
 	_ = reg.RegisterWorker(ctx, "w1", "worker-1", "10.0.0.1", nil)
@@ -307,8 +323,7 @@ func TestRegistryWorkerGroup(t *testing.T) {
 }
 
 func TestRegistryGetActiveWorkers(t *testing.T) {
-	dir := t.TempDir()
-	reg := NewWithPersistence(nil, false, nil, dir)
+	reg := newTestRegistry(t)
 	ctx := context.Background()
 
 	_ = reg.RegisterWorker(ctx, "w1", "worker-1", "10.0.0.1", nil)
@@ -316,17 +331,5 @@ func TestRegistryGetActiveWorkers(t *testing.T) {
 	active := reg.GetActiveWorkers(ctx, 5*time.Minute)
 	if len(active) != 1 {
 		t.Fatalf("expected 1 active worker, got %d", len(active))
-	}
-}
-
-func TestRegistryFileCorrupt(t *testing.T) {
-	dir := t.TempDir()
-	filePath := filepath.Join(dir, "workers.json")
-	_ = os.WriteFile(filePath, []byte("not json"), 0644)
-
-	// Should not panic, just log error
-	reg := NewWithPersistence(nil, false, nil, dir)
-	if reg == nil {
-		t.Fatal("expected non-nil registry even with corrupt file")
 	}
 }

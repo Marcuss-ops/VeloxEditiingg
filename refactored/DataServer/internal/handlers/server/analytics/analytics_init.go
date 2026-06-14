@@ -100,24 +100,32 @@ func readJSONFile(path string, out any) error {
 }
 
 func loadYouTubeGroups() map[string]any {
-	if analyticsState.DataDir == "" {
-		return map[string]any{}
-	}
-	path := filepath.Join(analyticsState.DataDir, "youtube", "groups.json")
-	data, err := os.ReadFile(path)
-	if err != nil {
+	if analyticsStore == nil {
 		return map[string]any{}
 	}
 
-	var groupsArray []map[string]any
-	if err := json.Unmarshal(data, &groupsArray); err != nil {
+	rows, err := analyticsStore.ListYouTubeGroups()
+	if err != nil || len(rows) == 0 {
 		return map[string]any{}
 	}
 
 	groupsObj := make(map[string]any)
-	for _, g := range groupsArray {
-		if name, ok := g["name"].(string); ok {
-			groupsObj[name] = g
+	for _, row := range rows {
+		name, _ := row["name"].(string)
+		if name == "" {
+			continue
+		}
+		channelsJSON, _ := row["channels"].(string)
+		var channelIDs []string
+		_ = json.Unmarshal([]byte(channelsJSON), &channelIDs)
+
+		channels := make([]any, 0, len(channelIDs))
+		for _, id := range channelIDs {
+			channels = append(channels, map[string]any{"id": id, "channel_id": id})
+		}
+		groupsObj[name] = map[string]any{
+			"name":     name,
+			"channels": channels,
 		}
 	}
 

@@ -1,60 +1,46 @@
 package youtube
 
 import (
-	"encoding/json"
 	"fmt"
 	"log"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 )
 
-// loadGroups loads channel groups from groups.json
+// loadGroups loads channel groups from SQLite.
 func (s *Service) loadGroups() {
-	var data []byte
-	var err error
-	paths := []string{
-		filepath.Join(s.config.YoutubePostingPath, "Modules", "groups.json"),
+	if s.store != nil {
+		s.loadGroupsFromSQLite()
 	}
-	if s.config.DataDir != "" {
-		paths = append([]string{filepath.Join(s.config.DataDir, "youtube", "groups.json")}, paths...)
-	}
-	for _, groupsPath := range paths {
-		data, err = os.ReadFile(groupsPath)
-		if err == nil {
-			break
-		}
-	}
-	if err != nil || data == nil {
-		return
+}
+
+// loadGroupsFromSQLite loads groups from the SQLite store.
+func (s *Service) loadGroupsFromSQLite() bool {
+	rows, err := s.store.ListYouTubeGroups()
+	if err != nil || len(rows) == 0 {
+		return false
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	var groupsArray []ChannelGroup
-	if err := json.Unmarshal(data, &groupsArray); err == nil && len(groupsArray) > 0 {
-		for i := range groupsArray {
-			g := &groupsArray[i]
-			if g.Name != "" {
-				s.groups[g.Name] = g
-			}
+	for _, row := range rows {
+		name, _ := row["name"].(string)
+		desc, _ := row["description"].(string)
+		privacy, _ := row["privacy"].(string)
+		channelsRaw, _ := row["channels"].([]string)
+		s.groups[name] = &ChannelGroup{
+			Name:        name,
+			Description: desc,
+			Privacy:     privacy,
+			Channels:    channelsRaw,
 		}
-		log.Printf("[OK] Loaded %d YouTube groups from array", len(s.groups))
-		return
 	}
-
-	var groupsData map[string]ChannelGroup
-	if err := json.Unmarshal(data, &groupsData); err != nil {
-		return
-	}
-	for name, group := range groupsData {
-		groupCopy := group
-		s.groups[name] = &groupCopy
-	}
-	log.Printf("[OK] Loaded %d YouTube groups", len(s.groups))
+	log.Printf("[OK] Loaded %d YouTube groups from SQLite", len(s.groups))
+	return true
 }
+
+
 
 // CreateGroup creates a new channel group and persists it
 func (s *Service) CreateGroup(name, description string, channelIDs []string) error {
@@ -305,30 +291,11 @@ func (s *Service) GetUndefinedChannels() []*Channel {
 	return undefined
 }
 
-// saveGroups saves groups to groups.json
+// saveGroups saves groups to SQLite.
 func (s *Service) saveGroups() {
-	var groupsPath string
-	if s.config.DataDir != "" {
-		groupsPath = filepath.Join(s.config.DataDir, "youtube", "groups.json")
-	} else {
-		groupsPath = filepath.Join(s.config.YoutubePostingPath, "Modules", "groups.json")
+	if s.store != nil {
+		for _, g := range s.groups {
+			s.store.UpsertYouTubeGroup(g.Name, g.Description, g.Privacy, g.Channels, "")
+		}
 	}
-
-	groupsArray := make([]ChannelGroup, 0, len(s.groups))
-	for _, g := range s.groups {
-		groupsArray = append(groupsArray, *g)
-	}
-
-	data, err := json.MarshalIndent(groupsArray, "", "  ")
-	if err != nil {
-		log.Printf("[WARN] Failed to marshal groups: %v", err)
-		return
-	}
-
-	if err := os.WriteFile(groupsPath, data, 0644); err != nil {
-		log.Printf("[WARN] Failed to save groups: %v", err)
-		return
-	}
-
-	log.Printf("[OK] Groups saved to %s", groupsPath)
 }

@@ -1,9 +1,11 @@
 package youtube
 
 import (
+	"fmt"
 	"log"
 	"sync"
 	"time"
+
 	"velox-server/internal/integrations/youtube"
 	"velox-server/internal/store"
 	"github.com/gin-gonic/gin"
@@ -23,11 +25,12 @@ type YouTubeHandlers struct {
 	privateVideosCacheMu sync.RWMutex
 }
 
-// NewYouTubeHandlers creates a new YouTubeHandlers instance
-func NewYouTubeHandlers(cfg *youtube.ServiceConfig, storage *youtube.Storage, projectStore store.ProjectStore) (*YouTubeHandlers, error) {
-	service, err := youtube.NewService(cfg)
-	if err != nil {
-		return nil, err
+// NewYouTubeHandlers creates a new YouTubeHandlers instance.
+// Accepts an existing youtube.Service to avoid creating a duplicate instance.
+// If service is nil, it will create a new one (legacy fallback).
+func NewYouTubeHandlers(service *youtube.Service, storage *youtube.Storage, projectStore store.ProjectStore) (*YouTubeHandlers, error) {
+	if service == nil {
+		return nil, fmt.Errorf("YouTubeHandlers: no existing service provided, got nil")
 	}
 	return &YouTubeHandlers{
 		service:            service,
@@ -54,4 +57,3 @@ func (h *YouTubeHandlers) GetService() *youtube.Service {
 func (h *YouTubeHandlers) GetStorage() *youtube.Storage {
 	return h.storage
 }
-

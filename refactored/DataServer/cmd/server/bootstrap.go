@@ -168,11 +168,11 @@ func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
 		return nil, err
 	}
 
-	reg := workersreg.NewWithPersistence(nil, false, sqliteStore, cfg.DataDir)
+	reg := workersreg.New(nil, false, sqliteStore)
 
 	revokedCount := len(reg.ListRevoked())
 	if revokedCount > 0 {
-		log.Printf("[BOOTSTRAP] Loaded %d revoked workers from %s", revokedCount, cfg.DataDir)
+		log.Printf("[BOOTSTRAP] Loaded %d revoked workers from SQLite", revokedCount)
 	}
 
 	workersRepo := store.NewSQLiteWorkersRepository(sqliteStore)
@@ -212,7 +212,7 @@ func runServer(cfg *config.Config) error {
 	registry.Register(workers.New(cfg, deps.reg, deps.workerLifecycle, deps.workerUpdateHandler, auth))
 	registry.Register(youtube.New(cfg, deps.paths.dataDir, deps.sqliteStore, auth))
 	registry.Register(drive.New(cfg))
-	ansibleMod := ansible.New(cfg, deps.paths.dataDir, auth)
+	ansibleMod := ansible.New(cfg, deps.paths.dataDir, auth, deps.sqliteStore)
 	deps.ansibleModule = ansibleMod
 	registry.Register(ansibleMod)
 	registry.Register(frontend.New(cfg))

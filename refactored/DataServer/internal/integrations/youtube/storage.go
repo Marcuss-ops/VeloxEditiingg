@@ -4,9 +4,8 @@ package youtube
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
-	"os"
-	"path/filepath"
 	"sync"
 	"time"
 )
@@ -20,103 +19,144 @@ var (
 	ErrChannelNotFound     = errors.New("channel not found")
 )
 
-// Storage handles persistence of YouTube manager data
-type Storage struct {
-	mu       sync.RWMutex
-	data     *StorageData
-	filePath string
+// StorageStore defines the SQLite operations for YouTube manager persistence.
+type StorageStore interface {
+	UpsertYouTubeManagerChannel(channelID, groupName, url, title, name, thumbnail, notes, language string, keywords []string, addedAt, lastSync string, viewCount, subCount int64, rawJSON string) error
+	DeleteYouTubeManagerChannel(channelID string) error
+	GetYouTubeManagerChannel(channelID string) (string, error)
+	ListYouTubeManagerChannels() ([]map[string]interface{}, error)
+	UpsertYouTubeManagerGroup(name, createdAt, groupType string, trackedNiches []string) error
+	DeleteYouTubeManagerGroup(name string) error
+	ListYouTubeManagerGroups() ([]map[string]interface{}, error)
 }
 
-// NewStorage creates a new Storage instance
-func NewStorage(dataDir string) (*Storage, error) {
-	// Default data directory
-	if dataDir == "" {
-		dataDir = "./data"
+// Storage handles persistence of YouTube manager data
+type Storage struct {
+	mu    sync.RWMutex
+	data  *StorageData
+	store StorageStore
+}
+
+// NewStorage creates a new Storage instance backed by SQLite.
+func NewStorage(dataDir string, storageStore ...StorageStore) (*Storage, error) {
+	var stStore StorageStore
+	if len(storageStore) > 0 {
+		stStore = storageStore[0]
 	}
 
-	// Use the GroupYoutubeManager directory for ChannelsSaved.json
-	ytDir := filepath.Join(dataDir, "youtube", "GroupYoutubeManager")
-	if err := os.MkdirAll(ytDir, 0755); err != nil {
-		return nil, err
-	}
-
-	// Use ChannelsSaved.json as the storage file
-	filePath := filepath.Join(ytDir, "ChannelsSaved.json")
-
-	s := &Storage{
-		filePath: filePath,
+	st := &Storage{
+		store: stStore,
 		data: &StorageData{
 			Groups: make(map[string]*Group),
 		},
 	}
 
-	// Load existing data
-	if err := s.load(); err != nil {
+	// Load existing data from SQLite
+	if err := st.load(); err != nil {
 		log.Printf("[WARN] YouTube storage: starting with empty data (%v)", err)
 	}
 
-	return s, nil
+	return st, nil
 }
 
-// load reads data from the JSON file (accepts Python-style ISO times without timezone)
+// load reads data from SQLite store.
 func (s *Storage) load() error {
+	if s.store == nil {
+		return nil
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	data, err := os.ReadFile(s.filePath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil // File doesn't exist yet, use defaults
+	// Load groups
+	groupRows, err := s.store.ListYouTubeManagerGroups()
+	if err == nil && len(groupRows) > 0 {
+		for _, row := range groupRows {
+			name, _ := row["name"].(string)
+			createdAt, _ := row["created_at"].(string)
+			groupType, _ := row["group_type"].(string)
+
+			var trackedNiches []string
+			if niches, ok := row["tracked_niches"].(string); ok && niches != "" {
+				json.Unmarshal([]byte(niches), &trackedNiches)
+			}
+
+			createdAtTime := parseFlexTime(createdAt)
+
+			s.data.Groups[name] = &Group{
+				Name:      name,
+				CreatedAt: createdAtTime,
+				Channels:  []Channel{},
+				GroupType: groupType,
+			}
+			if len(trackedNiches) > 0 {
+				s.data.TrackedNiches = append(s.data.TrackedNiches, trackedNiches...)
+			}
 		}
-		return err
 	}
 
-	var raw storageDataLoad
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return err
-	}
-	s.data.TrackedNiches = raw.TrackedNiches
-	s.data.Groups = make(map[string]*Group)
-	for name, g := range raw.Groups {	group := &Group{Name: name}
-			group.CreatedAt = parseFlexTime(g.CreatedAt)
-			group.Channels = make([]Channel, 0, len(g.Channels))
-			for _, c := range g.Channels {
-				ch := Channel{
-					ID: c.ID, URL: c.URL, Title: c.Title, Name: c.Name, Thumbnail: c.Thumbnail,
-					Notes: c.Notes, Keywords: c.Keywords, ViewCount: c.ViewCount, SubCount: c.SubCount,
-					Language: c.Language,
-				}
-				ch.AddedAt = parseFlexTime(c.AddedAt)
-				ch.LastSync = parseFlexTime(c.LastSync)
-				group.Channels = append(group.Channels, ch)
+	// Load channels
+	channelRows, err := s.store.ListYouTubeManagerChannels()
+	if err == nil && len(channelRows) > 0 {
+		for _, row := range channelRows {
+			ch := channelFromRow(row)
+			if ch == nil {
+				continue
+			}
+			groupName, _ := row["group_name"].(string)
+			if group, ok := s.data.Groups[groupName]; ok {
+				group.Channels = append(group.Channels, *ch)
+			}
 		}
-		s.data.Groups[name] = group
 	}
+
+	log.Printf("[OK] Loaded %d groups and channels from SQLite", len(s.data.Groups))
 	return nil
 }
 
-type storageDataLoad struct {
-	Groups        map[string]*groupLoad `json:"groups"`
-	TrackedNiches []string              `json:"tracked_niches,omitempty"`
+func channelFromRow(row map[string]interface{}) *Channel {
+	ch := &Channel{
+		ID:        asStringField(row, "channel_id"),
+		URL:       asStringField(row, "url"),
+		Title:     asStringField(row, "title"),
+		Name:      asStringField(row, "name"),
+		Thumbnail: asStringField(row, "thumbnail"),
+		Notes:     asStringField(row, "notes"),
+		Language:  asStringField(row, "language"),
+		ViewCount: asInt64Field(row, "view_count"),
+		SubCount:  asInt64Field(row, "sub_count"),
+		AddedAt:   parseFlexTime(asStringField(row, "added_at")),
+		LastSync:  parseFlexTime(asStringField(row, "last_sync")),
+	}
+	if keywordsJSON, ok := row["keywords_json"].(string); ok && keywordsJSON != "" {
+		json.Unmarshal([]byte(keywordsJSON), &ch.Keywords)
+	}
+	if ch.ID == "" {
+		return nil
+	}
+	return ch
 }
-type groupLoad struct {
-	Name      string        `json:"name"`
-	CreatedAt string        `json:"created_at"`
-	Channels  []channelLoad `json:"channels"`
+
+func asStringField(m map[string]interface{}, key string) string {
+	v, _ := m[key].(string)
+	return v
 }
-type channelLoad struct {
-	ID        string   `json:"id"`
-	URL       string   `json:"url"`
-	Title     string   `json:"title"`
-	Name      string   `json:"name,omitempty"`
-	Thumbnail string   `json:"thumbnail"`
-	Notes     string   `json:"notes,omitempty"`
-	AddedAt   string   `json:"added_at"`
-	Keywords  []string `json:"keywords,omitempty"`
-	ViewCount int64    `json:"view_count,omitempty"`
-	SubCount  int64    `json:"subscriber_count,omitempty"`
-	Language  string   `json:"language,omitempty"`
-	LastSync  string   `json:"last_sync,omitempty"`
+
+func asInt64Field(m map[string]interface{}, key string) int64 {
+	switch v := m[key].(type) {
+	case float64:
+		return int64(v)
+	case int64:
+		return v
+	case int:
+		return int64(v)
+	case string:
+		var i int64
+		if _, err := fmt.Sscanf(v, "%d", &i); err == nil {
+			return i
+		}
+	}
+	return 0
 }
 
 func parseFlexTime(s string) time.Time {
@@ -140,20 +180,41 @@ func parseFlexTime(s string) time.Time {
 	return time.Time{}
 }
 
-// save writes data to the JSON file atomically
+// save persists data to SQLite.
 func (s *Storage) save() error {
-	data, err := json.MarshalIndent(s.data, "", "  ")
-	if err != nil {
-		return err
+	if s.store == nil {
+		return nil
 	}
 
-	// Atomic write: write to temp file then rename
-	tempPath := s.filePath + ".tmp"
-	if err := os.WriteFile(tempPath, data, 0644); err != nil {
-		return err
+	// Persist groups
+	for name, g := range s.data.Groups {
+		createdAt := ""
+		if !g.CreatedAt.IsZero() {
+			createdAt = g.CreatedAt.Format(time.RFC3339)
+		}
+		_ = s.store.UpsertYouTubeManagerGroup(name, createdAt, g.GroupType, nil)
 	}
 
-	return os.Rename(tempPath, s.filePath)
+	// Persist channels
+	for _, g := range s.data.Groups {
+		for _, ch := range g.Channels {
+			addedAt := ""
+			if !ch.AddedAt.IsZero() {
+				addedAt = ch.AddedAt.Format(time.RFC3339)
+			}
+			lastSync := ""
+			if !ch.LastSync.IsZero() {
+				lastSync = ch.LastSync.Format(time.RFC3339)
+			}
+			raw, _ := json.Marshal(ch)
+			_ = s.store.UpsertYouTubeManagerChannel(
+				ch.ID, g.Name, ch.URL, ch.Title, ch.Name, ch.Thumbnail,
+				ch.Notes, ch.Language, ch.Keywords, addedAt, lastSync,
+				ch.ViewCount, ch.SubCount, string(raw),
+			)
+		}
+	}
+	return nil
 }
 
 // LoadData returns the current storage data
@@ -183,5 +244,3 @@ func (s *Storage) SaveData(data *StorageData) error {
 	s.data = data
 	return s.save()
 }
-
-

@@ -249,34 +249,6 @@ func (qm *QuotaManager) UpdateAnalyticsCache(ctx context.Context, channelID stri
 		log.Printf("[OK] YouTube historical metrics saved to SQLite for channel %s", channelID)
 	}
 
-	// 2. Update JSON (for compatibility with existing handlers)
-	jsonPath := filepath.Join(dataDir, "analytics", "analytics_cache.json")
-	if err := os.MkdirAll(filepath.Dir(jsonPath), 0755); err != nil {
-		log.Printf("youtube/quota: MkdirAll failed for %s: %v", filepath.Dir(jsonPath), err)
-	}
-
-	var allCache map[string]interface{}
-	existing, err := os.ReadFile(jsonPath)
-	if err == nil {
-		if err := json.Unmarshal(existing, &allCache); err != nil {
-			log.Printf("youtube/quota: failed to unmarshal analytics cache: %v", err)
-		}
-	}
-	if allCache == nil {
-		allCache = make(map[string]interface{})
-	}
-
-	allCache[period] = map[string]interface{}{
-		"ts":   time.Now().Unix(),
-		"data": cacheEntry,
-	}
-
-	finalJSON, _ := json.MarshalIndent(allCache, "", "  ")
-	if err := os.WriteFile(jsonPath, finalJSON, 0644); err != nil {
-		log.Printf("youtube/quota: WriteFile failed for %s: %v", jsonPath, err)
-	}
-	log.Printf("[OK] JSON analytics cache updated at %s", jsonPath)
-
 	return nil
 }
 

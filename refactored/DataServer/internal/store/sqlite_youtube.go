@@ -34,49 +34,8 @@ type YouTubeVideoMetric struct {
 	Revenue      float64 `json:"revenue"`
 }
 
-func (s *SQLiteStore) initYouTubeSchema() error {
-	ddl := `
-CREATE TABLE IF NOT EXISTS youtube_channel_metrics (
-  channel_id TEXT NOT NULL,
-  ts TEXT NOT NULL,
-  subscriber_count INTEGER,
-  view_count INTEGER,
-  video_count INTEGER,
-  PRIMARY KEY (channel_id, ts)
-);
-CREATE INDEX IF NOT EXISTS idx_yt_metrics_ts ON youtube_channel_metrics(ts);
-
-CREATE TABLE IF NOT EXISTS youtube_revenue_metrics (
-  channel_id TEXT NOT NULL,
-  date TEXT NOT NULL,
-  estimated_revenue REAL,
-  currency TEXT DEFAULT 'USD',
-  views INTEGER,
-  PRIMARY KEY (channel_id, date)
-);
-CREATE INDEX IF NOT EXISTS idx_yt_revenue_date ON youtube_revenue_metrics(date);
-
-CREATE TABLE IF NOT EXISTS youtube_video_metrics (
-  video_id TEXT NOT NULL,
-  channel_id TEXT NOT NULL,
-  date TEXT NOT NULL,
-  title TEXT,
-  thumbnail_url TEXT,
-  views INTEGER DEFAULT 0,
-  revenue REAL DEFAULT 0.0,
-  PRIMARY KEY (video_id, date)
-);
-CREATE INDEX IF NOT EXISTS idx_yt_video_date ON youtube_video_metrics(date);
-CREATE INDEX IF NOT EXISTS idx_yt_video_channel ON youtube_video_metrics(channel_id);
-
-CREATE TABLE IF NOT EXISTS youtube_quota_usage (
-  date TEXT PRIMARY KEY,
-  units_used INTEGER DEFAULT 0
-);
-`
-	_, err := s.db.Exec(ddl)
-	return err
-}
+// initYouTubeSchema has been migrated to migrations/001_initial.sql.
+// DDL is no longer inlined here — schema is managed by the migration runner.
 
 // TrackQuotaUsage increments the units used for today
 func (s *SQLiteStore) TrackQuotaUsage(units int) error {

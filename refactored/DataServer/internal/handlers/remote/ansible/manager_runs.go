@@ -34,25 +34,43 @@ type AnsibleRunRecord struct {
 	MasterURLSource string   `json:"master_url_source,omitempty"`
 }
 
+// AnsibleRunStore defines the SQLite operations needed by AnsibleRunManager.
+type AnsibleRunStore interface {
+	UpsertAnsibleRun(runID, action, playbook, status string, startedAt, endedAt int64, returnCode int, commands, output, preamble, masterURL, masterURLSource string) error
+	GetAnsibleRun(runID string) (map[string]interface{}, error)
+	ListAnsibleRuns(limit int) ([]map[string]interface{}, error)
+	DeleteAnsibleRun(runID string) error
+	AddAnsibleRunHost(runID, host string) error
+	ListAnsibleRunHosts(runID string) ([]string, error)
+}
+
 // AnsibleRunManager manages playbook executions and run history.
 type AnsibleRunManager struct {
-	playbookDir string
-	dataDir     string
-	runsFile    string
-	mu          sync.RWMutex
-	runs        map[string]AnsibleRunRecord
+	playbookDir  string
+	dataDir      string
+	dbStore      AnsibleRunStore
+	computerMgr  *AnsibleComputerManager
+	mu           sync.RWMutex
+	runs         map[string]AnsibleRunRecord
 }
 
 // NewAnsibleRunManager creates a new Ansible run manager.
-func NewAnsibleRunManager(playbookDir, dataDir string) *AnsibleRunManager {
+func NewAnsibleRunManager(playbookDir, dataDir string, dbStore ...AnsibleRunStore) *AnsibleRunManager {
 	m := &AnsibleRunManager{
 		playbookDir: playbookDir,
 		dataDir:     dataDir,
-		runsFile:    filepath.Join(dataDir, "ansible_runs.json"),
 		runs:        make(map[string]AnsibleRunRecord),
+	}
+	if len(dbStore) > 0 {
+		m.dbStore = dbStore[0]
 	}
 	_ = m.loadRuns()
 	return m
+}
+
+// SetComputerManager injects the shared computer manager for inventory lookups.
+func (m *AnsibleRunManager) SetComputerManager(mgr *AnsibleComputerManager) {
+	m.computerMgr = mgr
 }
 
 func (m *AnsibleRunManager) PlaybookDir() string {
@@ -76,42 +94,103 @@ func (m *AnsibleRunManager) loadRuns() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	raw, err := os.ReadFile(m.runsFile)
+	if m.dbStore == nil {
+		return nil
+	}
+
+	rows, err := m.dbStore.ListAnsibleRuns(500)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
 		return err
 	}
 
-	var runs map[string]AnsibleRunRecord
-	if err := json.Unmarshal(raw, &runs); err != nil {
+	for _, row := range rows {
+		run := ansibleRunRecordFromRow(row)
+		if hosts, hErr := m.dbStore.ListAnsibleRunHosts(run.ID); hErr == nil {
+			run.Hosts = hosts
+		}
+		m.runs[run.ID] = run
+	}
+	return nil
+}
+
+func ansibleRunRecordFromRow(row map[string]interface{}) AnsibleRunRecord {
+	runID, _ := row["run_id"].(string)
+	action, _ := row["action"].(string)
+	playbook, _ := row["playbook"].(string)
+	status, _ := row["status"].(string)
+	startedAt, _ := row["started_at"].(int64)
+	endedAt, _ := row["ended_at"].(int64)
+	returnCode, _ := row["return_code"].(int)
+	output, _ := row["output"].(string)
+	preamble, _ := row["preamble"].(string)
+	masterURL, _ := row["master_url"].(string)
+	masterURLSource, _ := row["master_url_source"].(string)
+
+	var commands []string
+	if cmds, ok := row["commands"]; ok {
+		if cmdList, ok := cmds.([]string); ok {
+			commands = cmdList
+		}
+	}
+
+	// Get hosts from run_hosts table (or empty slice)
+	hosts := extractStringSlice(row["hosts"])
+
+	return AnsibleRunRecord{
+		ID: runID, Action: action, Playbook: playbook, Status: status,
+		StartedAt: startedAt, EndedAt: endedAt, ReturnCode: returnCode,
+		Hosts: hosts, Commands: commands,
+		Output: output, Preamble: preamble,
+		MasterURL: masterURL, MasterURLSource: masterURLSource,
+	}
+}
+
+func extractStringSlice(v interface{}) []string {
+	if v == nil {
+		return nil
+	}
+	if s, ok := v.([]string); ok {
+		return s
+	}
+	if arr, ok := v.([]interface{}); ok {
+		var result []string
+		for _, item := range arr {
+			if s, ok := item.(string); ok {
+				result = append(result, s)
+			}
+		}
+		return result
+	}
+	return nil
+}
+
+func (m *AnsibleRunManager) persistRunToSQLite(run AnsibleRunRecord) error {
+	if m.dbStore == nil {
+		return nil
+	}
+	commandsJSON, _ := json.Marshal(run.Commands)
+	if err := m.dbStore.UpsertAnsibleRun(
+		run.ID, run.Action, run.Playbook, run.Status,
+		run.StartedAt, run.EndedAt, run.ReturnCode,
+		string(commandsJSON), run.Output, run.Preamble,
+		run.MasterURL, run.MasterURLSource,
+	); err != nil {
 		return err
 	}
-	m.runs = runs
+	for _, host := range run.Hosts {
+		_ = m.dbStore.AddAnsibleRunHost(run.ID, host)
+	}
 	return nil
 }
 
 func (m *AnsibleRunManager) persistRunsLocked() error {
-	if err := os.MkdirAll(filepath.Dir(m.runsFile), 0755); err != nil {
-		return err
+	// SQLite is the single source of truth for run history.
+	if m.dbStore != nil {
+		for _, run := range m.runs {
+			_ = m.persistRunToSQLite(run)
+		}
 	}
-	tmpFile, err := os.CreateTemp(filepath.Dir(m.runsFile), "ansible_runs_*.json")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(tmpFile.Name())
-
-	enc := json.NewEncoder(tmpFile)
-	enc.SetIndent("", "  ")
-	if err := enc.Encode(m.runs); err != nil {
-		_ = tmpFile.Close()
-		return err
-	}
-	if err := tmpFile.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmpFile.Name(), m.runsFile)
+	return nil
 }
 
 func (m *AnsibleRunManager) saveRun(run AnsibleRunRecord) error {
@@ -248,12 +327,14 @@ func quoteShell(s string) string {
 }
 
 func (m *AnsibleRunManager) loadComputerInventory(hosts []string) (map[string]AnsibleComputer, map[string]string, error) {
-	manager := NewAnsibleComputerManager(m.dataDir)
-	if err := manager.LoadComputers(); err != nil {
+	if m.computerMgr == nil {
+		return nil, nil, fmt.Errorf("computer manager not configured")
+	}
+	if err := m.computerMgr.LoadComputers(); err != nil {
 		return nil, nil, err
 	}
 
-	allComputers := manager.ListComputers()
+	allComputers := m.computerMgr.ListComputers()
 	aliasByTarget := make(map[string]string, len(hosts))
 	selected := make(map[string]AnsibleComputer, len(hosts))
 

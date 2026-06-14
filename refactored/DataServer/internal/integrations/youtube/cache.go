@@ -4,18 +4,16 @@ package youtube
 import (
 	"encoding/json"
 	"log"
-	"os"
-	"path/filepath"
 	"sync"
 	"time"
 )
 
-// Cache provides a file-backed cache with TTL support
+// Cache provides a SQLite-backed cache with TTL support
 type Cache struct {
-	mu       sync.RWMutex
-	data     map[string]cacheEntry
-	filePath string
-	ttl      time.Duration
+	mu    sync.RWMutex
+	data  map[string]cacheEntry
+	ttl   time.Duration
+	store YouTubeStore
 }
 
 type cacheEntry struct {
@@ -24,79 +22,88 @@ type cacheEntry struct {
 }
 
 // NewCache creates a new cache instance
-func NewCache(dataDir string, ttl time.Duration) *Cache {
+func NewCache(dataDir string, ttl time.Duration, store ...YouTubeStore) *Cache {
 	// Default to 2 hours TTL
 	if ttl == 0 {
 		ttl = 2 * time.Hour
 	}
 
-	// Ensure cache directory exists
-	cacheDir := filepath.Join(dataDir, "youtube")
-	if err := os.MkdirAll(cacheDir, 0755); err != nil {
-		log.Printf("[WARN] YouTube cache: could not create directory: %v", err)
+	var ytStore YouTubeStore
+	if len(store) > 0 {
+		ytStore = store[0]
 	}
-
-	filePath := filepath.Join(cacheDir, "youtube_api_cache.json")
 
 	c := &Cache{
-		data:     make(map[string]cacheEntry),
-		filePath: filePath,
-		ttl:      ttl,
+		data:  make(map[string]cacheEntry),
+		ttl:   ttl,
+		store: ytStore,
 	}
 
-	// Load existing cache
+	// Load existing cache from SQLite
 	c.load()
 
 	return c
 }
 
-// load reads cache from file
-func (c *Cache) load() error {
+// SetStore sets the SQLite store for cache persistence
+func (c *Cache) SetStore(store YouTubeStore) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-
-	data, err := os.ReadFile(c.filePath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
-	}
-
-	return json.Unmarshal(data, &c.data)
+	c.store = store
 }
 
-// save writes cache to file
+// load reads cache from SQLite (without preloading all entries).
+func (c *Cache) load() error {
+	// Entries are fetched on-demand via Get() with SQLite fallback.
+	return nil
+}
+
+// save writes cache to SQLite.
 func (c *Cache) save() error {
-	data, err := json.MarshalIndent(c.data, "", "  ")
-	if err != nil {
-		return err
+	if c.store != nil {
+		for key, entry := range c.data {
+			dataJSON, _ := json.Marshal(entry.Data)
+			if err := c.store.SetYouTubeCache(key, entry.Timestamp, string(dataJSON)); err != nil {
+				log.Printf("[WARN] YouTube cache: SQLite save error for key %s: %v", key, err)
+			}
+		}
 	}
-
-	tempPath := c.filePath + ".tmp"
-	if err := os.WriteFile(tempPath, data, 0644); err != nil {
-		return err
-	}
-
-	return os.Rename(tempPath, c.filePath)
+	return nil
 }
 
-// Get retrieves a cached value if not expired
+// Get retrieves a cached value if not expired, falling back to SQLite if not in memory.
 func (c *Cache) Get(key string) (interface{}, bool) {
 	c.mu.RLock()
-	defer c.mu.RUnlock()
-
 	entry, ok := c.data[key]
-	if !ok {
-		return nil, false
+	c.mu.RUnlock()
+
+	if ok {
+		// Check if expired
+		if time.Since(time.Unix(entry.Timestamp, 0)) <= c.ttl {
+			return entry.Data, true
+		}
 	}
 
-	// Check if expired
-	if time.Since(time.Unix(entry.Timestamp, 0)) > c.ttl {
-		return nil, false
+	// Fallback: try SQLite if not found or expired in memory
+	if c.store != nil {
+		timestamp, dataJSON, err := c.store.GetYouTubeCache(key)
+		if err == nil && dataJSON != "" {
+			// Unmarshal the cached data
+			var data interface{}
+			if err := json.Unmarshal([]byte(dataJSON), &data); err == nil {
+				// Check TTL
+				if time.Since(time.Unix(timestamp, 0)) <= c.ttl {
+					// Populate back into memory
+					c.mu.Lock()
+					c.data[key] = cacheEntry{Timestamp: timestamp, Data: data}
+					c.mu.Unlock()
+					return data, true
+				}
+			}
+		}
 	}
 
-	return entry.Data, true
+	return nil, false
 }
 
 // Set stores a value in cache
@@ -167,12 +174,13 @@ func (c *Cache) Cleanup() int {
 
 // --- Feed Cache (10 hour TTL) ---
 
-// FeedCache provides a separate cache for video feeds
+// FeedCache provides an in-memory cache for video feeds.
+// No file persistence — the cache is rebuilt on each server restart.
+// TTL is 10 hours by default.
 type FeedCache struct {
-	mu       sync.RWMutex
-	data     map[string]feedCacheEntry
-	filePath string
-	ttl      time.Duration
+	mu   sync.RWMutex
+	data map[string]feedCacheEntry
+	ttl  time.Duration
 }
 
 type feedCacheEntry struct {
@@ -180,52 +188,12 @@ type feedCacheEntry struct {
 	Data      *FeedResponse `json:"data"`
 }
 
-// NewFeedCache creates a new feed cache with 10 hour TTL
+// NewFeedCache creates a new feed cache with 10 hour TTL.
 func NewFeedCache(dataDir string) *FeedCache {
-	cacheDir := filepath.Join(dataDir, "analytics")
-	if err := os.MkdirAll(cacheDir, 0755); err != nil {
-		log.Printf("[WARN] Feed cache: could not create directory: %v", err)
+	return &FeedCache{
+		data: make(map[string]feedCacheEntry),
+		ttl:  10 * time.Hour,
 	}
-
-	fc := &FeedCache{
-		data:     make(map[string]feedCacheEntry),
-		filePath: filepath.Join(cacheDir, "feed_cache.json"),
-		ttl:      10 * time.Hour,
-	}
-
-	fc.load()
-	return fc
-}
-
-// load reads feed cache from file
-func (fc *FeedCache) load() error {
-	fc.mu.Lock()
-	defer fc.mu.Unlock()
-
-	data, err := os.ReadFile(fc.filePath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
-	}
-
-	return json.Unmarshal(data, &fc.data)
-}
-
-// save writes feed cache to file
-func (fc *FeedCache) save() error {
-	data, err := json.MarshalIndent(fc.data, "", "  ")
-	if err != nil {
-		return err
-	}
-
-	tempPath := fc.filePath + ".tmp"
-	if err := os.WriteFile(tempPath, data, 0644); err != nil {
-		return err
-	}
-
-	return os.Rename(tempPath, fc.filePath)
 }
 
 // Get retrieves a cached feed if not expired
@@ -254,12 +222,6 @@ func (fc *FeedCache) Set(key string, feed *FeedResponse) {
 		Timestamp: time.Now().Unix(),
 		Data:      feed,
 	}
-
-	go func() {
-		if err := fc.save(); err != nil {
-			log.Printf("[WARN] Feed cache: save error: %v", err)
-		}
-	}()
 }
 
 // Clear removes all entries from feed cache
@@ -268,10 +230,4 @@ func (fc *FeedCache) Clear() {
 	defer fc.mu.Unlock()
 
 	fc.data = make(map[string]feedCacheEntry)
-
-	go func() {
-		if err := fc.save(); err != nil {
-			log.Printf("[WARN] Feed cache: clear save error: %v", err)
-		}
-	}()
 }

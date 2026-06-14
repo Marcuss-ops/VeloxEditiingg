@@ -1,0 +1,29 @@
+-- Migration 005: Legacy table verification and documentation
+--
+-- Legacy tables replaced by canonical models (migrations 003, 004) are kept
+-- as dead schema for now. They are no longer written to (dual-write removed),
+-- but they may still contain data from installations that haven't completed
+-- the migration cycle.
+--
+-- This migration adds verification queries to confirm data has been migrated
+-- before eventually dropping legacy tables.
+--
+-- Tables to drop in a future release (after verifying data migration):
+--   youtube_channel_metadata  → replaced by youtube_channels (migration 003)
+--   youtube_groups (old)      → replaced by youtube_groups_v2 (migration 003)
+--   youtube_manager_channels  → data moved to youtube_channels + youtube_group_channels (003)
+--   youtube_manager_groups    → replaced by youtube_groups_v2 (migration 003)
+--   ansible_computers         → replaced by ansible_hosts (migration 004)
+
+-- Verification: check if canonical tables have data
+-- SELECT COUNT(*) as canonical_channels FROM youtube_channels;
+-- SELECT COUNT(*) as legacy_channel_metadata FROM youtube_channel_metadata;
+-- SELECT COUNT(*) as canonical_groups_v2 FROM youtube_groups_v2;
+-- SELECT COUNT(*) as legacy_groups FROM youtube_groups;
+-- SELECT COUNT(*) as canonical_manager_channels FROM youtube_manager_channels;
+-- SELECT COUNT(*) as canonical_hosts FROM ansible_hosts;
+-- SELECT COUNT(*) as legacy_computers FROM ansible_computers;
+
+-- No DROP statements in this migration.
+-- Legacy code still references these tables during the transition period.
+-- Once all callers are migrated to canonical tables, create migration 006 to DROP them.

@@ -14,17 +14,15 @@ func TestDataLayerAuditorPassesWithCleanStructure(t *testing.T) {
 	secretsDir := filepath.Join(tmpDir, "secrets")
 	os.MkdirAll(secretsDir, 0755)
 
-	// Create ALL required primary files
-	os.MkdirAll(filepath.Join(tmpDir, "youtube", "GroupYoutubeManager"), 0755)
-	os.WriteFile(filepath.Join(tmpDir, "youtube", "GroupYoutubeManager", "ChannelsSaved.json"), []byte(`{}`), 0644)
-	os.MkdirAll(filepath.Join(tmpDir, "youtube", "channels"), 0755)
-	os.WriteFile(filepath.Join(tmpDir, "youtube", "channels", "channels.json"), []byte(`{}`), 0644)
-	os.WriteFile(filepath.Join(tmpDir, "workers.json"), []byte(`{}`), 0644)
+	// Create ONLY required primary files (no legacy files)
 	os.WriteFile(filepath.Join(tmpDir, "velox.db"), []byte(``), 0644)
-	os.WriteFile(filepath.Join(tmpDir, "ansible_runs.json"), []byte(`{}`), 0644)
 	bundleDir := filepath.Join(tmpDir, "bundle")
 	os.MkdirAll(bundleDir, 0755)
 	os.WriteFile(filepath.Join(bundleDir, "manifest_v2.json"), []byte(`{}`), 0644)
+
+	// Create YouTube tokens directory (required for audit)
+	ytTokensDir := filepath.Join(secretsDir, "youtube", "tokens")
+	os.MkdirAll(ytTokensDir, 0755)
 
 	// Create legacy archive (allowed)
 	archiveDir := filepath.Join(tmpDir, "legacy_archive", "2026-04-01")
@@ -96,17 +94,15 @@ func TestDataLayerAuditorAllowsArchivedLegacyFiles(t *testing.T) {
 	secretsDir := filepath.Join(tmpDir, "secrets")
 	os.MkdirAll(secretsDir, 0755)
 
-	// Create ALL required primary files
-	os.MkdirAll(filepath.Join(tmpDir, "youtube", "GroupYoutubeManager"), 0755)
-	os.WriteFile(filepath.Join(tmpDir, "youtube", "GroupYoutubeManager", "ChannelsSaved.json"), []byte(`{}`), 0644)
-	os.MkdirAll(filepath.Join(tmpDir, "youtube", "channels"), 0755)
-	os.WriteFile(filepath.Join(tmpDir, "youtube", "channels", "channels.json"), []byte(`{}`), 0644)
-	os.WriteFile(filepath.Join(tmpDir, "workers.json"), []byte(`{}`), 0644)
+	// Create ONLY required primary files (no legacy files)
 	os.WriteFile(filepath.Join(tmpDir, "velox.db"), []byte(``), 0644)
-	os.WriteFile(filepath.Join(tmpDir, "ansible_runs.json"), []byte(`{}`), 0644)
 	bundleDir := filepath.Join(tmpDir, "bundle")
 	os.MkdirAll(bundleDir, 0755)
 	os.WriteFile(filepath.Join(bundleDir, "manifest_v2.json"), []byte(`{}`), 0644)
+
+	// Create YouTube tokens directory (required for audit)
+	ytTokensDir := filepath.Join(secretsDir, "youtube", "tokens")
+	os.MkdirAll(ytTokensDir, 0755)
 
 	// Create legacy ONLY in archive (should pass)
 	archiveDir := filepath.Join(tmpDir, "legacy_archive", "2026-04-01")
