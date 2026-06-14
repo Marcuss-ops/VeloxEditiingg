@@ -37,8 +37,6 @@ type serverPaths struct {
 type serverDeps struct {
 	paths               *serverPaths
 	fileQ               *queue.FileQueue
-	redisQ              *queue.Queue
-	streamsQ            *queue.StreamsQueue
 	reg                 *workersreg.Registry
 	workersRepo         store.WorkersRepository
 	sqliteStore         *store.SQLiteStore
@@ -161,19 +159,6 @@ func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
 		return nil, err
 	}
 
-	// Import legacy JSON data into SQLite (idempotent, checksum-protected)
-	if cfg.DataDir != "" {
-		if results, err := sqliteStore.ImportLegacyJSON(cfg.DataDir); err != nil {
-			log.Printf("[BOOTSTRAP] Legacy JSON import error (non-fatal): %v", err)
-		} else {
-			for _, r := range results {
-				if r.Status == "imported" {
-					log.Printf("[BOOTSTRAP] Migrated: %s (%d records)", r.Source.Name, r.Imported)
-				}
-			}
-		}
-	}
-
 	fileQ, err := queue.NewFileQueue(&queue.FileQueueConfig{
 		DBStore:    sqliteStore,
 		MaxRetries: cfg.MaxJobAttempts,
@@ -215,7 +200,7 @@ func runServer(cfg *config.Config) error {
 		return err
 	}
 
-	// Run data layer audit AFTER database init and legacy import
+	// Run data layer audit AFTER database init
 	if err := runDataLayerAudit(cfg); err != nil {
 		return err
 	}

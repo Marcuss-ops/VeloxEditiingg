@@ -121,7 +121,7 @@ func isPublicReadOnlyRoute(path string) bool {
 	return false
 }
 
-func workerStatusCounts(ctx context.Context, fileQ *queue.FileQueue, redisQ *queue.Queue) (pending, processing, completed, errorCount, total int64) {
+func workerStatusCounts(ctx context.Context, fileQ *queue.FileQueue) (pending, processing, completed, errorCount, total int64) {
 	if fileQ != nil {
 		if stats, err := fileQ.Stats(ctx); err == nil {
 			pending = stats["pending"]
@@ -132,17 +132,11 @@ func workerStatusCounts(ctx context.Context, fileQ *queue.FileQueue, redisQ *que
 			return
 		}
 	}
-
-	if redisQ != nil {
-		pending, _ = redisQ.ReadyCount(ctx)
-		processing, _ = redisQ.LeasedCount(ctx)
-		total = pending + processing
-	}
 	return
 }
 
 // RegisterV1Routes registers all /api/v1/* routes (core API)
-func RegisterV1Routes(r *gin.Engine, cfg *config.Config, fileQ *queue.FileQueue, redisQ *queue.Queue, reg *workersreg.Registry, jobAPI *jobs.JobAPI, jobSubmitHandler *jobs.JobSubmissionHandler, workersRepo store.WorkersRepository, db *store.SQLiteStore, workerUpdateHandler *workersapi.WorkerUpdateHandler, ansibleHandlers *ansible.AnsibleHandlers) {
+func RegisterV1Routes(r *gin.Engine, cfg *config.Config, fileQ *queue.FileQueue, reg *workersreg.Registry, jobAPI *jobs.JobAPI, jobSubmitHandler *jobs.JobSubmissionHandler, workersRepo store.WorkersRepository, db *store.SQLiteStore, workerUpdateHandler *workersapi.WorkerUpdateHandler, ansibleHandlers *ansible.AnsibleHandlers) {
 	v1 := r.Group("/api/v1")
 	v1Admin := r.Group("/api/v1")
 	v1Admin.Use(adminAuthMiddleware(cfg))
@@ -160,7 +154,7 @@ func RegisterV1Routes(r *gin.Engine, cfg *config.Config, fileQ *queue.FileQueue,
 		// Workers - Core API
 		v1Admin.GET("/workers", workers.WorkersList(reg, workersRepo, workerUpdateHandler))
 		v1Admin.GET("/workers/:id/logs", workers.WorkerLogsHandler(reg))
-		v1Admin.POST("/workers/clear_all", dashboard.WorkersClearAll(redisQ, reg))
+		v1Admin.POST("/workers/clear_all", dashboard.WorkersClearAll(nil, reg))
 		if workerUpdateHandler != nil {
 			// Update orchestration endpoints used by the frontend and legacy bundle.
 			v1Admin.POST("/workers/update_all", workerUpdateHandler.UpdateAllHandler())
@@ -193,15 +187,15 @@ func RegisterV1Routes(r *gin.Engine, cfg *config.Config, fileQ *queue.FileQueue,
 		v1.POST("/queue/complete", jobAPI.CompleteJobHandler())
 		v1.POST("/queue/fail", jobAPI.FailJobHandler())
 
-		// Stats - Core API (uses Redis if available)
-		v1Admin.GET("/stats", dashboard.Stats(redisQ, reg))
+		// Stats - Core API
+		v1Admin.GET("/stats", dashboard.Stats(nil, reg))
 
 		// Workers status - requires queue for job counts
 		statusHandler := func(c *gin.Context) {
 			ctx := c.Request.Context()
 			master := workers.WorkerStatusMetadata(workerUpdateHandler)
 			list := reg.List(ctx)
-			pending, processing, completed, errorCount, total := workerStatusCounts(ctx, fileQ, redisQ)
+			pending, processing, completed, errorCount, total := workerStatusCounts(ctx, fileQ)
 
 			c.JSON(http.StatusOK, gin.H{
 				"workers":         list,
@@ -278,7 +272,7 @@ func RegisterV1Routes(r *gin.Engine, cfg *config.Config, fileQ *queue.FileQueue,
 		v1Admin.GET("/master/code-version", proxy.MasterCodeVersion(cfg))
 
 		// Video - Core API
-		v1Admin.POST("/video/create-master", master.CreateMaster(cfg, redisQ))
+		v1Admin.POST("/video/create-master", master.CreateMaster(cfg, nil))
 		v1.POST("/video/upload-completed", workers.UploadCompletedVideo(cfg, fileQ))
 
 		// Ansible - Core API
