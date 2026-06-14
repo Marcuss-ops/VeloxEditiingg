@@ -2,67 +2,697 @@
   "groups": {
     "amish": {
       "name": "amish",
-      "created_at": "2026-06-11T13:10:45.051071543Z",
+      "description": "Amish Stories multi-language",
+      "privacy": "private",
       "channels": [
         {
           "id": "UCBxpiPLmm3DVQAsSkpIT38g",
           "url": "https://www.youtube.com/channel/UCBxpiPLmm3DVQAsSkpIT38g",
-          "title": "Amish Stories ",
-          "name": "Amish Stories ",
-          "thumbnail": "https://yt3.ggpht.com/ql8cW2dlZnTPfGQOWQ2G-xgFQw-np0L4LpPWonMsQUCLyzyjnuDjymj4HPEVIiB4JLBN5W5W=s800-c-k-c0x00ffffff-no-rj",
-          "added_at": "2026-06-11T13:10:45.05325892Z",
-          "language": "en",
-          "last_sync": "0001-01-01T00:00:00Z"
+          "title": "Amish Stories",
+          "name": "Amish Stories",
+          "thumbnail": "https://yt3.ggpht.com/ql8cW2dlZnTPfGQOWQ2G-xgFQw-np0L4LpPWonMsQUCLyzyjnuDjymj4HPEVIiB4JLBN5W5W=s88-c-k-c0x00ffffff-no-rj",
+          "language": "en"
         },
         {
           "id": "UCIOwLlVOkyxhQzGhkm-6lAQ",
           "url": "https://www.youtube.com/channel/UCIOwLlVOkyxhQzGhkm-6lAQ",
           "title": "Amish Stories Pt",
           "name": "Amish Stories Pt",
-          "thumbnail": "https://yt3.ggpht.com/Ksdr6wFSElNVxh9DMRHBkvC9GvXlFlEI5aRb8X7WNy8wxHx-GOqTpbI1BDZcDgrY6VPgDqOl0g=s800-c-k-c0x00ffffff-no-rj",
-          "added_at": "2026-06-11T13:10:45.053699272Z",
-          "language": "pt",
-          "last_sync": "0001-01-01T00:00:00Z"
+          "thumbnail": "https://yt3.ggpht.com/Ksdr6wFSElNVxh9DMRHBkvC9GvXlFlEI5aRb8X7WNy8wxHx-GOqTpbI1BDZcDgrY6VPgDqOl0g=s88-c-k-c0x00ffffff-no-rj",
+          "language": "pt"
         },
         {
           "id": "UCLc_Lnxb052nejiMyTxnoOA",
           "url": "https://www.youtube.com/channel/UCLc_Lnxb052nejiMyTxnoOA",
           "title": "Amish Stories Pl",
           "name": "Amish Stories Pl",
-          "thumbnail": "https://yt3.ggpht.com/Kx5hLeOeNiXnjD7lzXKqwYbBhOH7pO_be8IM9JqH0QMicJpSK0WgeZLysO2TqZImB5t6zCKtag=s800-c-k-c0x00ffffff-no-rj",
-          "added_at": "2026-06-11T13:10:45.053819112Z",
-          "language": "pl",
-          "last_sync": "0001-01-01T00:00:00Z"
+          "thumbnail": "https://yt3.ggpht.com/Kx5hLeOeNiXnjD7lzXKqwYbBhOH7pO_be8IM9JqH0QMicJpSK0WgeZLysO2TqZImB5t6zCKtag=s88-c-k-c0x00ffffff-no-rj",
+          "language": "pl"
         },
         {
           "id": "UCawO0CgC8nEQhnrZNpqZCvg",
           "url": "https://www.youtube.com/channel/UCawO0CgC8nEQhnrZNpqZCvg",
           "title": "Amish Stories Fr",
           "name": "Amish Stories Fr",
-          "thumbnail": "https://yt3.ggpht.com/kQ5lmXYKnbZjkkyDTwwqez3SRzOEqVbPUxhMwPAhn7oGwKfwhv8A3F705k6UxKKPy2kxIazSFg=s800-c-k-c0x00ffffff-no-rj",
-          "added_at": "2026-06-11T13:10:45.053914857Z",
-          "language": "fr",
-          "last_sync": "0001-01-01T00:00:00Z"
+          "thumbnail": "https://yt3.ggpht.com/kQ5lmXYKnbZjkkyDTwwqez3SRzOEqVbPUxhMwPAhn7oGwKfwhv8A3F705k6UxKKPy2kxIazSFg=s88-c-k-c0x00ffffff-no-rj",
+          "language": "fr"
         },
         {
           "id": "UCizstDS8VMLQpZndBW0-ZIg",
           "url": "https://www.youtube.com/channel/UCizstDS8VMLQpZndBW0-ZIg",
           "title": "Amish Stories De",
           "name": "Amish Stories De",
-          "thumbnail": "https://yt3.ggpht.com/oOqkLyKDTTdeHAMNlWv3ysmiwQlH-OaPg3VSaLlybhOD61Bv-dLZNMumxkZitvqiJliN45hI=s800-c-k-c0x00ffffff-no-rj",
-          "added_at": "2026-06-11T13:10:45.05401288Z",
-          "language": "de",
-          "last_sync": "0001-01-01T00:00:00Z"
+          "thumbnail": "https://yt3.ggpht.com/oOqkLyKDTTdeHAMNlWv3ysmiwQlH-OaPg3VSaLlybhOD61Bv-dLZNMumxkZitvqiJliN45hI=s88-c-k-c0x00ffffff-no-rj",
+          "language": "de"
         },
         {
           "id": "UCmeVwZ8n1ZmaV9qJOkMP-ug",
           "url": "https://www.youtube.com/channel/UCmeVwZ8n1ZmaV9qJOkMP-ug",
           "title": "Amish Stories RU",
           "name": "Amish Stories RU",
-          "thumbnail": "https://yt3.ggpht.com/AMeKj0B-vUcDrGRSvGanJ0Fygzp5vAoCbGsob4umMqiNhrCKn9XiRqBxviFY-XvxmCdDLrvl1Q=s800-c-k-c0x00ffffff-no-rj",
-          "added_at": "2026-06-11T13:10:45.05412361Z",
-          "language": "ru",
-          "last_sync": "0001-01-01T00:00:00Z"
+          "thumbnail": "https://yt3.ggpht.com/AMeKj0B-vUcDrGRSvGanJ0Fygzp5vAoCbGsob4umMqiNhrCKn9XiRqBxviFY-XvxmCdDLrvl1Q=s88-c-k-c0x00ffffff-no-rj",
+          "language": "ru"
+        }
+      ]
+    },
+    "pop_prime": {
+      "name": "pop_prime",
+      "description": "Pop Prime - trivia & pop culture multi-language",
+      "privacy": "private",
+      "channels": [
+        {
+          "id": "UCG19KTqUtAs4XP-5RSkhbVg",
+          "url": "https://www.youtube.com/channel/UCG19KTqUtAs4XP-5RSkhbVg",
+          "title": "Pop Prime",
+          "name": "Pop Prime",
+          "thumbnail": "https://yt3.ggpht.com/kP4EqHNigsjW7JbZQc9-_bMvZtbAGNRLD4m2ghjXBZePAd9XYw_oDUdiUgI28XrW8VRmjGbl8w=s88-c-k-c0x00ffffff-no-rj",
+          "language": "en"
+        },
+        {
+          "id": "UCbE4dnQsSKFythDD49q5rPA",
+          "url": "https://www.youtube.com/channel/UCbE4dnQsSKFythDD49q5rPA",
+          "title": "Pop Prime IT",
+          "name": "Pop Prime IT",
+          "thumbnail": "https://yt3.ggpht.com/PY05E_dBvKUqGPcAOFnBbydNJU_HUti1hBEdo5yL24iSd_h7rNIdllFq2E-o3SbtIF4OjG0EkA=s88-c-k-c0x00ffffff-no-rj",
+          "language": ""
+        },
+        {
+          "id": "UC-XTrtWO3gG60uVzc7lDYaQ",
+          "url": "https://www.youtube.com/channel/UC-XTrtWO3gG60uVzc7lDYaQ",
+          "title": "Pop Prime ES",
+          "name": "Pop Prime ES",
+          "thumbnail": "https://yt3.ggpht.com/SYaFvtqDgnBNq6X4KAOT_nNC4L3LvnM_GQkTISC0l-5X-WvV60QmKDW_o9rD0q_UtNJD61b_JQ=s88-c-k-c0x00ffffff-no-rj",
+          "language": ""
+        },
+        {
+          "id": "UCItyBjvD3YtO8kMXrhUQZRg",
+          "url": "https://www.youtube.com/channel/UCItyBjvD3YtO8kMXrhUQZRg",
+          "title": "Pop Prim FR",
+          "name": "Pop Prim FR",
+          "thumbnail": "https://yt3.ggpht.com/i0QeVfxOqHRZd-NmxElikC4vpb618QL8vWOY_EVzQSNmboe24NjfpaAnGpRFwaSzEfIbY8V0=s88-c-k-c0x00ffffff-no-rj",
+          "language": ""
+        },
+        {
+          "id": "UCDiHw6Mka2GAP2a5rH0YEjQ",
+          "url": "https://www.youtube.com/channel/UCDiHw6Mka2GAP2a5rH0YEjQ",
+          "title": "Pop Prime DE",
+          "name": "Pop Prime DE",
+          "thumbnail": "https://yt3.ggpht.com/2px0f-JO_eETvzRnDk0g1Q_ZguC7hUonzylf0v7HEPo7ZLyYPg8rSVMslPjYA60hYozcQYqY9A=s88-c-k-c0x00ffffff-no-rj",
+          "language": "de"
+        },
+        {
+          "id": "UCpDFC4rqEZar0AKI0YWD-7A",
+          "url": "https://www.youtube.com/channel/UCpDFC4rqEZar0AKI0YWD-7A",
+          "title": "Pop Prime RU",
+          "name": "Pop Prime RU",
+          "thumbnail": "https://yt3.ggpht.com/zcrPT2KYTZUGH2UfUoYMJDCfXU1hcbFd0iZhTkjxA_bYN4CcuuTrj5-APpM-FzAFu3qsRiTl=s88-c-k-c0x00ffffff-no-rj",
+          "language": ""
+        },
+        {
+          "id": "UCkxfDc3F9X_CAKboELcjPpg",
+          "url": "https://www.youtube.com/channel/UCkxfDc3F9X_CAKboELcjPpg",
+          "title": "Pop Prime PT",
+          "name": "Pop Prime PT",
+          "thumbnail": "https://yt3.ggpht.com/kJHlWKqvqIakoysMvKAI0AtxOUFqQAdjFFNf-qaUiuusItemNoDgzXiiD9bVIuhdWfsZGbrA-g=s88-c-k-c0x00ffffff-no-rj",
+          "language": ""
+        },
+        {
+          "id": "UCtF-I6j1nv49g9w56ltGJmA",
+          "url": "https://www.youtube.com/channel/UCtF-I6j1nv49g9w56ltGJmA",
+          "title": "PopPrime Tr",
+          "name": "PopPrime Tr",
+          "thumbnail": "",
+          "language": ""
+        },
+        {
+          "id": "UC8bw2S2KFRJCtQ_E0aKnsYg",
+          "url": "https://www.youtube.com/channel/UC8bw2S2KFRJCtQ_E0aKnsYg",
+          "title": "PopPrime IND",
+          "name": "PopPrime IND",
+          "thumbnail": "",
+          "language": "id"
+        },
+        {
+          "id": "UC9mYKjAcALRhRTyI-PZxqOQ",
+          "url": "https://www.youtube.com/channel/UC9mYKjAcALRhRTyI-PZxqOQ",
+          "title": "Pop Discovery",
+          "name": "Pop Discovery",
+          "thumbnail": "",
+          "language": "en"
+        },
+        {
+          "id": "UCebi6Csdwym7ukeXsreuY1Q",
+          "url": "https://www.youtube.com/channel/UCebi6Csdwym7ukeXsreuY1Q",
+          "title": "Pop Verse",
+          "name": "Pop Verse",
+          "thumbnail": "https://yt3.ggpht.com/9g9gBHfXCb-oW43d-oW8ow-qPV548vy85c21hupKgn8wm4DeNQnre4FM3cOyodP9IjjgujjW=s88-c-k-c0x00ffffff-no-rj",
+          "language": "en"
+        }
+      ]
+    },
+    "crime_today": {
+      "name": "crime_today",
+      "description": "Crime Today - true crime stories multi-language",
+      "privacy": "private",
+      "channels": [
+        {
+          "id": "UC6af8s3k5_QAP9nkG6Ne0KA",
+          "url": "https://www.youtube.com/channel/UC6af8s3k5_QAP9nkG6Ne0KA",
+          "title": "Crime Today",
+          "name": "Crime Today",
+          "thumbnail": "https://yt3.ggpht.com/t--n4NwNU5kdPVItgq5esIfxYXi3xqf1FF7VW578McyNc-sIat1Mc305No9nwSbgnXYme5xjiQ=s88-c-k-c0x00ffffff-no-rj",
+          "language": "en"
+        },
+        {
+          "id": "UCF_d420CH_By8OUbY7BBfAQ",
+          "url": "https://www.youtube.com/channel/UCF_d420CH_By8OUbY7BBfAQ",
+          "title": "Crime Today ITA",
+          "name": "Crime Today ITA",
+          "thumbnail": "https://yt3.ggpht.com/XkNzHZxFQY_dPgn3JwKQgz5n5028HwblUECg7nL-nkBmnWa-iGwVVlmW3IvLYoG9P-fLljeF8s0=s88-c-k-c0x00ffffff-no-rj",
+          "language": "it"
+        },
+        {
+          "id": "UCAs1menLmoTs4J9KuKKduhw",
+          "url": "https://www.youtube.com/channel/UCAs1menLmoTs4J9KuKKduhw",
+          "title": "Crime Today FR",
+          "name": "Crime Today FR",
+          "thumbnail": "https://yt3.ggpht.com/t1VdVGIofG7xRR3TBLEm6zNxJEK7JI1x-nMqVdYLH0MY37Z7GN_0f5euh4bedY0eBt59q5w8=s88-c-k-c0x00ffffff-no-rj",
+          "language": "fr"
+        },
+        {
+          "id": "UCoHUxUobSOgoRTtzbXAzE1A",
+          "url": "https://www.youtube.com/channel/UCoHUxUobSOgoRTtzbXAzE1A",
+          "title": "Crime Today DE",
+          "name": "Crime Today DE",
+          "thumbnail": "https://yt3.ggpht.com/NjWdoogvMjazezXix1La_Njzk4KFRIfH6fXG0PevbgCbJh8qwokqRUz8OPrRnbtYhCdAnuVhGQ=s88-c-k-c0x00ffffff-no-rj",
+          "language": "de"
+        },
+        {
+          "id": "UCHgpEswzbsrSK-0mvwH5IFw",
+          "url": "https://www.youtube.com/channel/UCHgpEswzbsrSK-0mvwH5IFw",
+          "title": "Crime Today TR",
+          "name": "Crime Today TR",
+          "thumbnail": "https://yt3.ggpht.com/keJfXyvFNO_nMmSMIORBnH_ojks9raK5x_4halV027KAOSQ9DQcPqa8vjvW-I_00Yk9_AYQLIg=s88-c-k-c0x00ffffff-no-rj",
+          "language": "tr"
+        },
+        {
+          "id": "UCIHVr8ECZh47disqIEflzmg",
+          "url": "https://www.youtube.com/channel/UCIHVr8ECZh47disqIEflzmg",
+          "title": "Crime Today Ru",
+          "name": "Crime Today Ru",
+          "thumbnail": "https://yt3.ggpht.com/xjHty8nm6hKxqWhz_Tkt4ikB_h5je_r-5dAiU2PFITz47VTM-43KO2HCHnZUwPnHMfJnyiwJ=s88-c-k-c0x00ffffff-no-rj",
+          "language": "ru"
+        },
+        {
+          "id": "UCNRYJgo-ykeN7oj2yLpIdGw",
+          "url": "https://www.youtube.com/channel/UCNRYJgo-ykeN7oj2yLpIdGw",
+          "title": "Crime Today Pt",
+          "name": "Crime Today Pt",
+          "thumbnail": "https://yt3.ggpht.com/dNT3jHeQ-OXAonRrec2w5fmjAaFhNgqE1AISysw5KVkuQbBfWGMYXNuUlGkJdeCRppS4hHZ-CQ=s88-c-k-c0x00ffffff-no-rj",
+          "language": "pt"
+        },
+        {
+          "id": "UCp8BQpJfHRDiU8Zj7bYxDyA",
+          "url": "https://www.youtube.com/channel/UCp8BQpJfHRDiU8Zj7bYxDyA",
+          "title": "Crime Today Ind",
+          "name": "Crime Today Ind",
+          "thumbnail": "https://yt3.ggpht.com/uQf4PnYU8JOIoc9hJbpqoFUuHrzB4BmZ8rr-nafu3t-_Mk5Kq2AUQ-YMV9dSjKVtZCSryOyybQ=s88-c-k-c0x00ffffff-no-rj",
+          "language": "id"
+        },
+        {
+          "id": "UCpN0DsrBGpbGfpgHMsBzFEw",
+          "url": "https://www.youtube.com/channel/UCpN0DsrBGpbGfpgHMsBzFEw",
+          "title": "Crime Today Pl",
+          "name": "Crime Today Pl",
+          "thumbnail": "https://yt3.ggpht.com/7bGNvjrK46SV6eqI_BPIOhAUfEr5_uRxRI3OZjF7NjEwe-uwlSp7Q_E4C-VgJ03DL19nIYFErg=s88-c-k-c0x00ffffff-no-rj",
+          "language": "pl"
+        },
+        {
+          "id": "UCs2FnlzHMd-kWmDl4e7PhlA",
+          "url": "https://www.youtube.com/channel/UCs2FnlzHMd-kWmDl4e7PhlA",
+          "title": "Crime Today Esp",
+          "name": "Crime Today Esp",
+          "thumbnail": "",
+          "language": "en"
+        },
+        {
+          "id": "UCbawO0XqDT0SdsNpE776-qA",
+          "url": "https://www.youtube.com/channel/UCbawO0XqDT0SdsNpE776-qA",
+          "title": "Crimen Dia Esp",
+          "name": "Crimen Dia Esp",
+          "thumbnail": "",
+          "language": "es"
+        },
+        {
+          "id": "UCnoMg4FB7XfcWoy4gZsEvPg",
+          "url": "https://www.youtube.com/channel/UCnoMg4FB7XfcWoy4gZsEvPg",
+          "title": "Noticias Criminales",
+          "name": "Noticias Criminales",
+          "thumbnail": "",
+          "language": "es"
+        }
+      ]
+    },
+    "wrestling": {
+      "name": "wrestling",
+      "description": "WWE & Wrestling content multi-language",
+      "privacy": "private",
+      "channels": [
+        {
+          "id": "UCQhUklbTn8v4y-j-rvDMhDA",
+          "url": "https://www.youtube.com/channel/UCQhUklbTn8v4y-j-rvDMhDA",
+          "title": "Wwe Insider",
+          "name": "Wwe Insider",
+          "thumbnail": "",
+          "language": "en"
+        },
+        {
+          "id": "UC09RyPtMAr0hqXj2jJWJvvg",
+          "url": "https://www.youtube.com/channel/UC09RyPtMAr0hqXj2jJWJvvg",
+          "title": "Wwe Insider Italia",
+          "name": "Wwe Insider Italia",
+          "thumbnail": "",
+          "language": ""
+        },
+        {
+          "id": "UC3_l3HCxiOlq1WcFE-nWsBg",
+          "url": "https://www.youtube.com/channel/UC3_l3HCxiOlq1WcFE-nWsBg",
+          "title": "Wwe Insider Es",
+          "name": "Wwe Insider Es",
+          "thumbnail": "",
+          "language": ""
+        },
+        {
+          "id": "UCWuXVA0gtOzZq8thRLlC-8Q",
+          "url": "https://www.youtube.com/channel/UCWuXVA0gtOzZq8thRLlC-8Q",
+          "title": "Wwe Insider Fr",
+          "name": "Wwe Insider Fr",
+          "thumbnail": "https://yt3.ggpht.com/vUXdMt0FuBKGeCGYPrTTi4m9uNUAwZZHWCig79P7w9NLxdHa8iXsY2Imb6YrtsuDmugQ1VyvP7g=s88-c-k-c0x00ffffff-no-rj",
+          "language": ""
+        },
+        {
+          "id": "UCyv17QAuE4FUt9yRGkcYk-A",
+          "url": "https://www.youtube.com/channel/UCyv17QAuE4FUt9yRGkcYk-A",
+          "title": "Wwe Insider De",
+          "name": "Wwe Insider De",
+          "thumbnail": "",
+          "language": ""
+        },
+        {
+          "id": "UCDLOrtYzT4p3u6hZuf3NeSw",
+          "url": "https://www.youtube.com/channel/UCDLOrtYzT4p3u6hZuf3NeSw",
+          "title": "Wrestling Insider RU",
+          "name": "Wrestling Insider RU",
+          "thumbnail": "https://yt3.ggpht.com/ytc/AIdro_nPJ4joKBNG1QXoFUaaTix47BBZ4PIGkUGACXcHu1D3JB7O_rQyCsb15fk7nwY3T_gC1A=s88-c-k-c0x00ffffff-no-rj",
+          "language": ""
+        },
+        {
+          "id": "UCQg7y58dHD-ZDZ_bT2Aj6AA",
+          "url": "https://www.youtube.com/channel/UCQg7y58dHD-ZDZ_bT2Aj6AA",
+          "title": "Wwe Insider POL",
+          "name": "Wwe Insider POL",
+          "thumbnail": "https://yt3.ggpht.com/ytc/AIdro_kNJc9RnBGBiYAcGAPzRP2vQMy9skHrI069ZGthQ8UhrfNMbfsmOyYes_FyBWwe6GTSzg=s88-c-k-c0x00ffffff-no-rj",
+          "language": ""
+        },
+        {
+          "id": "UCKRvbWFSgGe7yDGXYNjfn6Q",
+          "url": "https://www.youtube.com/channel/UCKRvbWFSgGe7yDGXYNjfn6Q",
+          "title": "Wrestling Insider Tr",
+          "name": "Wrestling Insider Tr",
+          "thumbnail": "https://yt3.ggpht.com/ytc/AIdro_kXcXNFXCkBh31MGtJSSNkBOeLHU7OX0383DFyMC2iIhjWtPb0w016hQGARKj5onV-yDQ=s88-c-k-c0x00ffffff-no-rj",
+          "language": ""
+        },
+        {
+          "id": "UCpzUmOwQiq4-kMc0Df7XSqA",
+          "url": "https://www.youtube.com/channel/UCpzUmOwQiq4-kMc0Df7XSqA",
+          "title": "Wwe Insider Pt",
+          "name": "Wwe Insider Pt",
+          "thumbnail": "",
+          "language": ""
+        },
+        {
+          "id": "UCZbnUeKLJQ_5r38MxdLKMDw",
+          "url": "https://www.youtube.com/channel/UCZbnUeKLJQ_5r38MxdLKMDw",
+          "title": "Wwe Insider IND",
+          "name": "Wwe Insider IND",
+          "thumbnail": "",
+          "language": "id"
+        },
+        {
+          "id": "UCMIigAglpdYs9e-9BwBiW5w",
+          "url": "https://www.youtube.com/channel/UCMIigAglpdYs9e-9BwBiW5w",
+          "title": "Wwe Insider Tr",
+          "name": "Wwe Insider Tr",
+          "thumbnail": "https://yt3.ggpht.com/yIot3Zi3ompZKaRrOFXUNpGMlEiXiomxSAiEPiyhucVq3O-qZwZ_FusJCRMa-r6Rd8eLjyxzHw=s88-c-k-c0x00ffffff-no-rj",
+          "language": "tr"
+        },
+        {
+          "id": "UCrSKJfHDSPUUJ1lja7LtORw",
+          "url": "https://www.youtube.com/channel/UCrSKJfHDSPUUJ1lja7LtORw",
+          "title": "Wwe Insider Fr",
+          "name": "Wwe Insider Fr",
+          "thumbnail": "",
+          "language": ""
+        },
+        {
+          "id": "UCfOSRonSxhjLicSpodErq4A",
+          "url": "https://www.youtube.com/channel/UCfOSRonSxhjLicSpodErq4A",
+          "title": "WWE ZONE",
+          "name": "WWE ZONE",
+          "thumbnail": "",
+          "language": "en"
+        },
+        {
+          "id": "UCLnzW8y-m2--LRb28X_jILQ",
+          "url": "https://www.youtube.com/channel/UCLnzW8y-m2--LRb28X_jILQ",
+          "title": "Wwe Corner",
+          "name": "Wwe Corner",
+          "thumbnail": "",
+          "language": "en"
+        },
+        {
+          "id": "UCccMZuFXJPnMEVbaVW-uBPQ",
+          "url": "https://www.youtube.com/channel/UCccMZuFXJPnMEVbaVW-uBPQ",
+          "title": "Wrestling Discovery",
+          "name": "Wrestling Discovery",
+          "thumbnail": "",
+          "language": "en"
+        },
+        {
+          "id": "UC6gOwxsra6XYIA68egRqVrQ",
+          "url": "https://www.youtube.com/channel/UC6gOwxsra6XYIA68egRqVrQ",
+          "title": "WWE HOUSE",
+          "name": "WWE HOUSE",
+          "thumbnail": "",
+          "language": ""
+        },
+        {
+          "id": "UCB2v4G_hF341ARccbto_NdA",
+          "url": "https://www.youtube.com/channel/UCB2v4G_hF341ARccbto_NdA",
+          "title": "Wrestling Prime",
+          "name": "Wrestling Prime",
+          "thumbnail": "",
+          "language": "en"
+        },
+        {
+          "id": "UCrsrBC1Tbl37ha8Ih_G-6mQ",
+          "url": "https://www.youtube.com/channel/UCrsrBC1Tbl37ha8Ih_G-6mQ",
+          "title": "Wwe Insider Id",
+          "name": "Wwe Insider Id",
+          "thumbnail": "https://yt3.ggpht.com/VV_zTKyD09ZrzPC7gaxi4rk7ED3TUZr3cWaVeNWBFipIVW6U8JHiSGeoF57J8Palrxs1ccEd7Q=s88-c-k-c0x00ffffff-no-rj",
+          "language": "id"
+        }
+      ]
+    },
+    "boxing": {
+      "name": "boxing",
+      "description": "Boxing & fight sports multi-language",
+      "privacy": "private",
+      "channels": [
+        {
+          "id": "UCF-k1iDqwyWRWNWpl58Bakg",
+          "url": "https://www.youtube.com/channel/UCF-k1iDqwyWRWNWpl58Bakg",
+          "title": "Boxing Prime",
+          "name": "Boxing Prime",
+          "thumbnail": "",
+          "language": "en"
+        },
+        {
+          "id": "UCIy-Ct9gEUid9H2kVAmvrOQ",
+          "url": "https://www.youtube.com/channel/UCIy-Ct9gEUid9H2kVAmvrOQ",
+          "title": "BoxeClubFr",
+          "name": "BoxeClubFr",
+          "thumbnail": "https://yt3.ggpht.com/U2pUC4m2NUUf0RTT_d3tz4_4bJJv-qTBwlC8tbkjchvJ2Vx6EUyLPqf9PIecUK6r1mMgsjLLaw=s88-c-k-c0x00ffffff-no-rj",
+          "language": "fr"
+        },
+        {
+          "id": "UCVCB5_FKZrrd69HncT0YQTA",
+          "url": "https://www.youtube.com/channel/UCVCB5_FKZrrd69HncT0YQTA",
+          "title": "BoxeClubPOL",
+          "name": "BoxeClubPOL",
+          "thumbnail": "",
+          "language": ""
+        },
+        {
+          "id": "UCeu3ltLnBky2bCO_ggUkFtg",
+          "url": "https://www.youtube.com/channel/UCeu3ltLnBky2bCO_ggUkFtg",
+          "title": "BoxeClubEs",
+          "name": "BoxeClubEs",
+          "thumbnail": "https://yt3.ggpht.com/Wl70anYtak9Xn7BhbE7xEl2RdvtkESB_bqooicgmD38tvRAPFiuntIqkiyeZ5RgTOIWbDIsDbw=s88-c-k-c0x00ffffff-no-rj",
+          "language": "es"
+        },
+        {
+          "id": "UCiciBxhDn1kMgtxj9Na0gfQ",
+          "url": "https://www.youtube.com/channel/UCiciBxhDn1kMgtxj9Na0gfQ",
+          "title": "BoxeClubDE",
+          "name": "BoxeClubDE",
+          "thumbnail": "https://yt3.ggpht.com/Uayw7BYH59aYzKzlw19x4Dv-pWRfhPMAA6VyCITBZ2unajOGKdbwruiS2-Hzx9F8Qixd1mgvQA=s88-c-k-c0x00ffffff-no-rj",
+          "language": "de"
+        },
+        {
+          "id": "UCwBB1yXv494b-WPWbaxU0HA",
+          "url": "https://www.youtube.com/channel/UCwBB1yXv494b-WPWbaxU0HA",
+          "title": "BoxeClubPt",
+          "name": "BoxeClubPt",
+          "thumbnail": "https://yt3.ggpht.com/eg6IhN4FKFz93PC3xHYIgDbfcj67ge0KqUkN-m5w36cSNg8-vayC3DLc6yRvPfIVgFYUIpFsGA=s88-c-k-c0x00ffffff-no-rj",
+          "language": "pt"
+        },
+        {
+          "id": "UCy63BoQUjsOJ7nQenCafllw",
+          "url": "https://www.youtube.com/channel/UCy63BoQUjsOJ7nQenCafllw",
+          "title": "BoxeClub IND",
+          "name": "BoxeClub IND",
+          "thumbnail": "",
+          "language": "id"
+        },
+        {
+          "id": "UCNrMIxsLKPHRj1IQLeHpT5Q",
+          "url": "https://www.youtube.com/channel/UCNrMIxsLKPHRj1IQLeHpT5Q",
+          "title": "BoxeClubITA",
+          "name": "BoxeClubITA",
+          "thumbnail": "https://yt3.ggpht.com/fvHD7tSMyYk_GD6A4zK-e13d0WYYNQm1XGZSDmqbcOArVATuJ04-GIO_it036CyPkgFlAaxivA=s88-c-k-c0x00ffffff-no-rj",
+          "language": "it"
+        }
+      ]
+    },
+    "odyssey_explorers": {
+      "name": "odyssey_explorers",
+      "description": "Odyssey Explorers - travel & discovery multi-language",
+      "privacy": "private",
+      "channels": [
+        {
+          "id": "UCQSv66VjLII7jJKEdUPyztg",
+          "url": "https://www.youtube.com/channel/UCQSv66VjLII7jJKEdUPyztg",
+          "title": "Odyssey Explorers",
+          "name": "Odyssey Explorers",
+          "thumbnail": "",
+          "language": "en"
+        },
+        {
+          "id": "UCMJ9Q_tLgsQu-f8f5T5XAig",
+          "url": "https://www.youtube.com/channel/UCMJ9Q_tLgsQu-f8f5T5XAig",
+          "title": "Odyssey Explorers ITA",
+          "name": "Odyssey Explorers ITA",
+          "thumbnail": "https://yt3.ggpht.com/ZCugV4UTPeF41Ek53qRPXLeuXwQxVmkj_V4uFMNPm8FjRCba4S64WWxg5JqR0Xf-DCTwPINV=s88-c-k-c0x00ffffff-no-rj",
+          "language": "it"
+        },
+        {
+          "id": "UCiPvz2Bcun_GCwFOFBVJBCg",
+          "url": "https://www.youtube.com/channel/UCiPvz2Bcun_GCwFOFBVJBCg",
+          "title": "Odyssey Explorers Fr",
+          "name": "Odyssey Explorers Fr",
+          "thumbnail": "https://yt3.ggpht.com/Lcjk2VQlE8LB-kVlVmIe86BJZRHBrK1C9ayrkCTHGUE8MQK-rFxGm6i12LnZVxBuK8H6afKvjQ=s88-c-k-c0x00ffffff-no-rj",
+          "language": "fr"
+        },
+        {
+          "id": "UC1U4ja2yp0DCckMZMKbFWOA",
+          "url": "https://www.youtube.com/channel/UC1U4ja2yp0DCckMZMKbFWOA",
+          "title": "Odyssey Explorers PT",
+          "name": "Odyssey Explorers PT",
+          "thumbnail": "https://yt3.ggpht.com/n9ymWODzt4tz6RxClZSpCc_qD6rvK8Q0EB7GNUoi3mIp9AAm9JLQNqjie2Dewt2cDxD6oiqbRA=s88-c-k-c0x00ffffff-no-rj",
+          "language": "pt"
+        },
+        {
+          "id": "UC6eyNDK7lQ0mJZeRWOLzcVQ",
+          "url": "https://www.youtube.com/channel/UC6eyNDK7lQ0mJZeRWOLzcVQ",
+          "title": "Odyssey Explorers RU",
+          "name": "Odyssey Explorers RU",
+          "thumbnail": "",
+          "language": ""
+        },
+        {
+          "id": "UCmCQSjrnFJUV0zxs3jZ8eMg",
+          "url": "https://www.youtube.com/channel/UCmCQSjrnFJUV0zxs3jZ8eMg",
+          "title": "Odyssey Explorers TR",
+          "name": "Odyssey Explorers TR",
+          "thumbnail": "",
+          "language": ""
+        },
+        {
+          "id": "UCBCLUMHYbOWklIJIgjAo5Xw",
+          "url": "https://www.youtube.com/channel/UCBCLUMHYbOWklIJIgjAo5Xw",
+          "title": "Odysey Explorer IND",
+          "name": "Odysey Explorer IND",
+          "thumbnail": "",
+          "language": "id"
+        },
+        {
+          "id": "UCdZACWeMbyP286ZBUid2SEA",
+          "url": "https://www.youtube.com/channel/UCdZACWeMbyP286ZBUid2SEA",
+          "title": "Odysey Explorers POL",
+          "name": "Odysey Explorers POL",
+          "thumbnail": "",
+          "language": ""
+        }
+      ]
+    },
+    "rapgame": {
+      "name": "rapgame",
+      "description": "RapGame - music & rap content multi-language",
+      "privacy": "private",
+      "channels": [
+        {
+          "id": "UCIOkE7SvbwRN9MDjr45E1tQ",
+          "url": "https://www.youtube.com/channel/UCIOkE7SvbwRN9MDjr45E1tQ",
+          "title": "rapGamee",
+          "name": "rapGamee",
+          "thumbnail": "",
+          "language": "en"
+        },
+        {
+          "id": "UC-qnSuxCabYVFL67jq3BqFw",
+          "url": "https://www.youtube.com/channel/UC-qnSuxCabYVFL67jq3BqFw",
+          "title": "RapGameIt",
+          "name": "RapGameIt",
+          "thumbnail": "https://yt3.ggpht.com/PA8qkkol2jpZS0WaJ2HeaLiqrCs5M2KWNi8CbTtfFZzQbzhotfdq5w7S325QOe3felkjhig6j70=s88-c-k-c0x00ffffff-no-rj",
+          "language": "it"
+        },
+        {
+          "id": "UCM-IpgOjGCn8HrTtJwlAu4Q",
+          "url": "https://www.youtube.com/channel/UCM-IpgOjGCn8HrTtJwlAu4Q",
+          "title": "RapGameEsp",
+          "name": "RapGameEsp",
+          "thumbnail": "https://yt3.ggpht.com/x8XFuUL2APKJ2tBkjBY3k0xkdLbBl4D9oiilOopCJPR-yc_AMp8IFfqfhfsh2TnU_OJ1LxXX8w=s88-c-k-c0x00ffffff-no-rj",
+          "language": "es"
+        },
+        {
+          "id": "UCrRRpCE0dpv1EqhFsmr2REQ",
+          "url": "https://www.youtube.com/channel/UCrRRpCE0dpv1EqhFsmr2REQ",
+          "title": "RapGameFre",
+          "name": "RapGameFre",
+          "thumbnail": "https://yt3.ggpht.com/LaQwOYjcZwp4GKpwfa-VUobHKzQo_mi2legc8DTm2zZpwEwT5JnCxx4NkUKUZCbrfUGkLG5H=s88-c-k-c0x00ffffff-no-rj",
+          "language": "fr"
+        },
+        {
+          "id": "UCqvFRn8bj-QRM8AkOaQD9gw",
+          "url": "https://www.youtube.com/channel/UCqvFRn8bj-QRM8AkOaQD9gw",
+          "title": "RapGameDE",
+          "name": "RapGameDE",
+          "thumbnail": "https://yt3.ggpht.com/7-t3zUS3AvpELssts_zSpK3wU2UwGUOoY6bkH40IsiWTuL9mZYLQd9FtZ1cvNoiK8PB1P8mSaQ=s88-c-k-c0x00ffffff-no-rj",
+          "language": ""
+        },
+        {
+          "id": "UCId5KzzFuHoRuCUQrmLQVnA",
+          "url": "https://www.youtube.com/channel/UCId5KzzFuHoRuCUQrmLQVnA",
+          "title": "RapDay Pt",
+          "name": "RapDay Pt",
+          "thumbnail": "",
+          "language": ""
+        },
+        {
+          "id": "UCIxDPlbk2sWnSfjEKwvc5Zg",
+          "url": "https://www.youtube.com/channel/UCIxDPlbk2sWnSfjEKwvc5Zg",
+          "title": "RapGamePt",
+          "name": "RapGamePt",
+          "thumbnail": "",
+          "language": "en"
+        },
+        {
+          "id": "UC7ikPh6kN_gOH1N0_Zo5i4A",
+          "url": "https://www.youtube.com/channel/UC7ikPh6kN_gOH1N0_Zo5i4A",
+          "title": "RapGameRU",
+          "name": "RapGameRU",
+          "thumbnail": "https://yt3.ggpht.com/T6j9e89CIdeGnY1m9smoTQ-QWKSicuCsdD_-gQgCzfJs56zNkaYgW52-xRXSor-M62JVJrUYgA=s88-c-k-c0x00ffffff-no-rj",
+          "language": "ru"
+        },
+        {
+          "id": "UCe4nm5tMoIEFOqethfD42Dg",
+          "url": "https://www.youtube.com/channel/UCe4nm5tMoIEFOqethfD42Dg",
+          "title": "Rap Story",
+          "name": "Rap Story",
+          "thumbnail": "https://yt3.ggpht.com/Wu73brTGwSCYfjFmLPP1G65ADPua1QZU98jX8F7QKpCKnggPeAQbLykqHmaf45XPida8GZfU0w=s88-c-k-c0x00ffffff-no-rj",
+          "language": "es"
+        },
+        {
+          "id": "UCpdzgcuqRKyWBzqPyp5cODw",
+          "url": "https://www.youtube.com/channel/UCpdzgcuqRKyWBzqPyp5cODw",
+          "title": "TheRapGame",
+          "name": "TheRapGame",
+          "thumbnail": "https://yt3.ggpht.com/z-hhEy3g1B-QxdbQKYBAtRw0poAY4Q8WTV20CneNhOEF1ZUkAx3-6RBOiZEFt4t0cPoSKTfK-A=s88-c-k-c0x00ffffff-no-rj",
+          "language": ""
+        }
+      ]
+    },
+    "discovery_misc": {
+      "name": "discovery_misc",
+      "description": "Discovery & miscellaneous channels",
+      "privacy": "private",
+      "channels": [
+        {
+          "id": "UCbdNM4gFhHGdSleFoec20sg",
+          "url": "https://www.youtube.com/channel/UCbdNM4gFhHGdSleFoec20sg",
+          "title": "Discovery Corner",
+          "name": "Discovery Corner",
+          "thumbnail": "https://yt3.ggpht.com/OIWwYhdfMC9g8pfu1lOKo48gKY0thr8SY2cHuB1Q8ZkdRUpBuwgZhL-VAr9XyeXymQEkxVfD=s88-c-k-c0x00ffffff-no-rj",
+          "language": ""
+        },
+        {
+          "id": "UCFmBtE1gPKFaETS_PG28U9g",
+          "url": "https://www.youtube.com/channel/UCFmBtE1gPKFaETS_PG28U9g",
+          "title": "Discovery World DE",
+          "name": "Discovery World DE",
+          "thumbnail": "",
+          "language": "de"
+        },
+        {
+          "id": "UCWl90u-XJJKk_21xoZ2cxNg",
+          "url": "https://www.youtube.com/channel/UCWl90u-XJJKk_21xoZ2cxNg",
+          "title": "RedGloveTR",
+          "name": "RedGloveTR",
+          "thumbnail": "https://yt3.ggpht.com/xG1G9yI5q5Q2JG_fu0dDe_ykXgtpxJpuoZ3VuMLGumNCraW-W3UAukvXNtlz9FCGidLDqxeiy_Q=s88-c-k-c0x00ffffff-no-rj",
+          "language": "tr"
+        },
+        {
+          "id": "UCjgrBwF-5XgDc4n7bl5eaMQ",
+          "url": "https://www.youtube.com/channel/UCjgrBwF-5XgDc4n7bl5eaMQ",
+          "title": "RedGloveRU",
+          "name": "RedGloveRU",
+          "thumbnail": "https://yt3.ggpht.com/-6irrFwVOHgK9555vM1cPp7g0qEwyTHYPvBwQ8RoMKtTpk_L59xSmkU4-CnuFCIvMdl9SpMDGYo=s88-c-k-c0x00ffffff-no-rj",
+          "language": "ru"
+        },
+        {
+          "id": "UCep_HSh5yfFgaJCnkOj7xsQ",
+          "url": "https://www.youtube.com/channel/UCep_HSh5yfFgaJCnkOj7xsQ",
+          "title": "GeoPulse Tr",
+          "name": "GeoPulse Tr",
+          "thumbnail": "",
+          "language": ""
+        },
+        {
+          "id": "UCjDNlRbloYyKvTXF3Y4lhpg",
+          "url": "https://www.youtube.com/channel/UCjDNlRbloYyKvTXF3Y4lhpg",
+          "title": "Internet Drama  Sp",
+          "name": "Internet Drama  Sp",
+          "thumbnail": "https://yt3.ggpht.com/i38yrrwx4OmDnnZ_NMUu-34qZ_HzeYXiib-h3bfeT_cqaTLOT53ePG7ockEY1Elt-enKh9R1Lg=s88-c-k-c0x00ffffff-no-rj",
+          "language": "es"
+        },
+        {
+          "id": "UCEw1mJXuFa8XO0m6IRsuWWA",
+          "url": "https://www.youtube.com/channel/UCEw1mJXuFa8XO0m6IRsuWWA",
+          "title": "Internet Drama  Pt",
+          "name": "Internet Drama  Pt",
+          "thumbnail": "https://yt3.ggpht.com/0TctYEmEVR1UnIUlDnynWeBClm5OjMmnWk_sgx3W6aqgAESE1xl505vA0ZasgoWAV1IWbPVfVw=s88-c-k-c0x00ffffff-no-rj",
+          "language": "pt"
         }
       ]
     }

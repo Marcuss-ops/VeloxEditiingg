@@ -99,7 +99,7 @@ Supporting services:
 
 ## Adding a New Worker
 
-1. Add to `ansible_computers.json` with `worker_id` set to `host_<sanitized_ip>`
+1. Add the worker to `ansible_hosts` table (via SQLite or the `/api/v1/ansible/computers` API) with `worker_id` set to `host_<sanitized_ip>`
 2. Add to `inventory.ini` with `ansible_host=<ip>` and `ansible_user`
 3. Run `normalize_worker_systemd.yml`
 4. Verify heartbeat on master: `curl http://MASTER/api/v1/workers/status`

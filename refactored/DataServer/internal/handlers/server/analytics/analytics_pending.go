@@ -103,7 +103,7 @@ func loadYouTubeGroupChannels(dataDir string) map[string][]map[string]string {
 		return out
 	}
 
-	groups, err := analyticsStore.ListYouTubeGroups()
+	groups, err := analyticsStore.ListYouTubeGroupsV2()
 	if err != nil || len(groups) == 0 {
 		return out
 	}
@@ -113,9 +113,14 @@ func loadYouTubeGroupChannels(dataDir string) map[string][]map[string]string {
 		if groupName == "" {
 			continue
 		}
-		channelsJSON, _ := group["channels"].(string)
+		gid, _ := group["id"].(int64)
+
 		var channelIDs []string
-		_ = json.Unmarshal([]byte(channelsJSON), &channelIDs)
+		if gid > 0 {
+			if ids, err := analyticsStore.ListGroupChannelsV2(gid); err == nil {
+				channelIDs = ids
+			}
+		}
 
 		channels := make([]map[string]string, 0, len(channelIDs))
 		for _, id := range channelIDs {

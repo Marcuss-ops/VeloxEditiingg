@@ -29,6 +29,7 @@ import (
 type jsonSource struct {
 	Name     string // human-readable name for logging
 	Path     string // relative to dataDir
+	AltPath  string // alternative path (fallback if Path doesn't exist)
 	Domain   string // domain name used in legacy_imports.source_name
 }
 
@@ -41,7 +42,7 @@ func legacyJSONSources() []jsonSource {
 		{Name: "YouTube Groups", Path: "youtube/groups.json", Domain: "youtube_groups"},
 		{Name: "YouTube Manager", Path: "youtube/GroupYoutubeManager/ChannelsSaved.json", Domain: "youtube_manager"},
 		{Name: "Ansible Computers", Path: "ansible/ansible_computers.json", Domain: "ansible_hosts"},
-		{Name: "Ansible Runs", Path: "ansible/ansible_runs.json", Domain: "ansible_runs"},
+		{Name: "Ansible Runs", Path: "ansible_runs.json", Domain: "ansible_runs", AltPath: "ansible/ansible_runs.json"},
 		{Name: "Analytics Cache", Path: "analytics/analytics_cache.json", Domain: "analytics_cache"},
 		{Name: "YouTube API Cache", Path: "analytics/youtube_api_cache.json", Domain: "youtube_cache"},
 	}
@@ -67,13 +68,14 @@ type LegacyImportResult struct {
 // ============================================================
 
 // ImportLegacyJSON discovers legacy JSON files in dataDir, checks
-// the legacy_imports table for idempotency, creates backups, and
-// imports data into SQLite tables. It logs progress and returns
-// a summary of results for all discovered sources.
+// the legacy_imports table for idempotency, creates backups,
+// imports data into SQLite tables, and archives the source files
+// to legacy_archive/ after a successful import.
 //
 // Run this once at startup, after schema migrations are applied.
-// Errors do not block startup — the server continues with whatever
-// data was available. Missing JSON files are silently skipped.
+// Errors are logged but do not block startup — the server continues
+// with whatever data was available. Missing JSON files are silently skipped.
+// If any import fails, an aggregate error is returned.
 func (s *SQLiteStore) ImportLegacyJSON(dataDir string) ([]LegacyImportResult, error) {
 	if dataDir == "" {
 		return nil, nil
@@ -83,24 +85,46 @@ func (s *SQLiteStore) ImportLegacyJSON(dataDir string) ([]LegacyImportResult, er
 
 	for _, src := range legacyJSONSources() {
 		absPath := filepath.Join(dataDir, src.Path)
+		usedAlt := false
 		info, err := os.Stat(absPath)
 		if err != nil {
-			if os.IsNotExist(err) {
-				// File doesn't exist — skip silently (no legacy data to migrate)
+			if os.IsNotExist(err) && src.AltPath != "" {
+				// Try alternative path
+				absPath = filepath.Join(dataDir, src.AltPath)
+				info, err = os.Stat(absPath)
+				usedAlt = true
+			}
+			if err != nil {
+				if os.IsNotExist(err) {
+					continue
+				}
+				results = append(results, LegacyImportResult{
+					Source: src,
+					Status: "error",
+					Error:  fmt.Sprintf("stat: %v", err),
+				})
 				continue
 			}
-			results = append(results, LegacyImportResult{
-				Source: src,
-				Status: "error",
-				Error:  fmt.Sprintf("stat: %v", err),
-			})
-			continue
 		}
 		if info.IsDir() || info.Size() == 0 {
 			continue
 		}
 
 		result := s.importSource(absPath, src)
+
+		// After successful import, archive the source file to legacy_archive/
+		if result.Status == "imported" {
+			if err := archiveLegacyJSON(absPath, dataDir); err != nil {
+				log.Printf("[IMPORT] Warning: failed to archive %s: %v", absPath, err)
+			} else {
+				log.Printf("[IMPORT] Archived %s → legacy_archive/", absPath)
+				// Update the source path to reflect the new location
+				if usedAlt {
+					src.Path = src.AltPath
+				}
+			}
+		}
+
 		results = append(results, result)
 	}
 
@@ -108,6 +132,7 @@ func (s *SQLiteStore) ImportLegacyJSON(dataDir string) ([]LegacyImportResult, er
 	imported := 0
 	skipped := 0
 	errors := 0
+	hadErrors := false
 	for _, r := range results {
 		switch r.Status {
 		case "imported":
@@ -118,10 +143,21 @@ func (s *SQLiteStore) ImportLegacyJSON(dataDir string) ([]LegacyImportResult, er
 			log.Printf("[IMPORT] %s → %s (checksum match, %d records already imported)", r.Source.Name, r.Status, r.Records)
 		case "error":
 			errors++
+			hadErrors = true
 			log.Printf("[IMPORT] %s → error: %s", r.Source.Name, r.Error)
 		}
 	}
 	log.Printf("[IMPORT] Summary: %d imported, %d skipped (already up-to-date), %d errors", imported, skipped, errors)
+
+	if hadErrors {
+		var errs []string
+		for _, r := range results {
+			if r.Status == "error" && r.Error != "" {
+				errs = append(errs, fmt.Sprintf("%s: %s", r.Source.Name, r.Error))
+			}
+		}
+		return results, fmt.Errorf("legacy import completed with %d error(s): %s", errors, strings.Join(errs, "; "))
+	}
 
 	return results, nil
 }
@@ -273,7 +309,17 @@ func createJSONBackup(absPath string, data []byte) (string, error) {
 
 // countJSONRecords returns the number of top-level records in a JSON file.
 func countJSONRecords(domain string, data []byte) (int, error) {
-	// Try map first (most domains: workers, channels, ansible)
+	// Special case: workers domain uses { "workers": { ... }, "revoked": [...] }
+	// -> count the workers sub-object, not the top-level keys
+	if domain == "workers" {
+		var wf legacyWorkersFile
+		if err := json.Unmarshal(data, &wf); err == nil && len(wf.Workers) > 0 {
+			return len(wf.Workers), nil
+		}
+		// Fall through to generic map/array handling for flat format
+	}
+
+	// Try map first (most domains: workers flat, channels, ansible)
 	var m map[string]any
 	if err := json.Unmarshal(data, &m); err == nil {
 		return len(m), nil
@@ -319,17 +365,75 @@ func importJSONData(s *SQLiteStore, domain string, data []byte, absPath string) 
 
 // --- Workers ---
 
+// legacyWorkersFile represents the real workers.json format.
+type legacyWorkersFile struct {
+	Workers map[string]any    `json:"workers"`
+	Revoked []string          `json:"revoked"`
+}
+
 // importWorkersJSON imports workers.json into the workers table.
-// Format: { "worker_id": { ... worker fields ... }, ... }
+// Real format: { "workers": { "worker_id": { ... }, ... }, "revoked": ["worker_id", ...] }
+// Fallback: { "worker_id": { ... }, ... } (flat format)
 func importWorkersJSON(s *SQLiteStore, data []byte) (int, error) {
-	var m map[string]any
-	if err := json.Unmarshal(data, &m); err != nil {
-		return 0, fmt.Errorf("unmarshal workers: %w", err)
+	var wf legacyWorkersFile
+	if err := json.Unmarshal(data, &wf); err != nil || len(wf.Workers) == 0 {
+		// Fallback: try flat format { "worker_id": { ... }, ... }
+		var m map[string]any
+		if err2 := json.Unmarshal(data, &m); err2 != nil {
+			if err != nil {
+				return 0, fmt.Errorf("unmarshal workers: %w", err)
+			}
+			return 0, fmt.Errorf("unmarshal workers: %w", err2)
+		}
+		return importWorkersFlat(s, m)
 	}
 
 	imported := 0
-	for _, raw := range m {
+
+	// Import workers from the "workers" sub-object
+	for _, raw := range wf.Workers {
 		b, err := json.Marshal(raw)
+		if err != nil {
+			continue
+		}
+		if err := s.UpsertWorker(b); err != nil {
+			log.Printf("[IMPORT] worker: skip record: %v", err)
+			continue
+		}
+		imported++
+	}
+
+	// Import revoked list into worker_flags
+	for _, id := range wf.Revoked {
+		if id == "" {
+			continue
+		}
+		if err := s.SetWorkerRevoked(id, true); err != nil {
+			log.Printf("[IMPORT] revoked worker %s: %v", id, err)
+		}
+	}
+
+	return imported, nil
+}
+
+// importWorkersFlat handles the simple flat format { "worker_id": { ... }, ... }
+// The map key is the worker_id if not already present in the worker object.
+func importWorkersFlat(s *SQLiteStore, m map[string]any) (int, error) {
+	imported := 0
+	for key, raw := range m {
+		// Skip special keys used by the real {workers, revoked} format
+		if key == "workers" || key == "revoked" {
+			continue
+		}
+		workerObj, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		// Inject key as worker_id if not already present
+		if _, exists := workerObj["worker_id"]; !exists {
+			workerObj["worker_id"] = key
+		}
+		b, err := json.Marshal(workerObj)
 		if err != nil {
 			continue
 		}
@@ -424,17 +528,85 @@ func importYouTubeGroupsJSON(s *SQLiteStore, data []byte) (int, error) {
 // --- YouTube Manager Channels (canonical) ---
 
 // importYouTubeManagerJSON imports youtube/GroupYoutubeManager/ChannelsSaved.json
-// into youtube_channels (canonical), creating a "Manager" group in youtube_groups_v2
+// into youtube_channels (canonical), creating groups in youtube_groups_v2
 // and linking channels via youtube_group_channels.
 //
-// Format: { "channel_id": { "title": "...", "group": "...", "url": "...", ... }, ... }
+// Supports two formats:
+//   - Flat map: { "channel_id": { "title": "...", "group": "...", ... }, ... }
+//   - Groups object: { "groups": { "name": { "name": "...", "channels": [...], ... }, ... } }
 func importYouTubeManagerJSON(s *SQLiteStore, data []byte) (int, error) {
-	var m map[string]any
-	if err := json.Unmarshal(data, &m); err != nil {
+	var root map[string]any
+	if err := json.Unmarshal(data, &root); err != nil {
 		return 0, fmt.Errorf("unmarshal youtube manager: %w", err)
 	}
 
-	// Track groups we've already created
+	// Detect format: "groups" key means grouped format
+	if groupsRaw, ok := root["groups"].(map[string]any); ok {
+		return importYouTubeManagerGroupsFormat(s, groupsRaw)
+	}
+
+	// Otherwise treat as flat map
+	return importYouTubeManagerFlatFormat(s, root)
+}
+
+// importYouTubeManagerGroupsFormat handles: { "groups": { "name": { "channels": [...], ... } } }
+func importYouTubeManagerGroupsFormat(s *SQLiteStore, groupsRaw map[string]any) (int, error) {
+	imported := 0
+	for gname, gdataRaw := range groupsRaw {
+		gdata, ok := gdataRaw.(map[string]any)
+		if !ok {
+			continue
+		}
+
+		desc, _ := gdata["description"].(string)
+		privacy, _ := gdata["privacy"].(string)
+
+		groupID, err := s.UpsertYouTubeGroupV2(gname, "manager", desc, privacy)
+		if err != nil {
+			log.Printf("[IMPORT] youtube manager group %q: %v", gname, err)
+			continue
+		}
+
+		channels, ok := gdata["channels"].([]any)
+		if !ok {
+			continue
+		}
+
+		for _, chRaw := range channels {
+			ch, ok := chRaw.(map[string]any)
+			if !ok {
+				continue
+			}
+
+			id, _ := ch["id"].(string)
+			if id == "" {
+				continue
+			}
+
+			title, _ := ch["title"].(string)
+			name, _ := ch["name"].(string)
+			url, _ := ch["url"].(string)
+			thumbnail, _ := ch["thumbnail"].(string)
+			language, _ := ch["language"].(string)
+
+			displayName := name
+			if displayName == "" {
+				displayName = title
+			}
+			if err := s.UpsertYouTubeChannel(id, title, displayName, url, thumbnail, language, "", 0, 0, "", "", "{}"); err != nil {
+				log.Printf("[IMPORT] youtube manager channel %s: %v", id[:min(8, len(id))], err)
+				continue
+			}
+
+			_ = s.AddChannelToGroupV2(groupID, id)
+			imported++
+		}
+	}
+	return imported, nil
+}
+
+// importYouTubeManagerFlatFormat handles: { "channel_id": { "title": "...", "group": "...", ... } }
+func importYouTubeManagerFlatFormat(s *SQLiteStore, m map[string]any) (int, error) {
 	groupIDs := make(map[string]int64)
 
 	imported := 0
@@ -453,17 +625,15 @@ func importYouTubeManagerJSON(s *SQLiteStore, data []byte) (int, error) {
 		viewCount := toInt64(ch["view_count"])
 		subCount := toInt64(ch["sub_count"])
 
-		// Upsert into canonical youtube_channels
 		displayName := channelName
 		if displayName == "" {
 			displayName = title
 		}
 		if err := s.UpsertYouTubeChannel(id, title, displayName, url, thumbnail, language, "", viewCount, subCount, "", "", "{}"); err != nil {
-			log.Printf("[IMPORT] youtube manager channel %s: %v", id[:8], err)
+			log.Printf("[IMPORT] youtube manager channel %s: %v", id[:min(8, len(id))], err)
 			continue
 		}
 
-		// Create/ensure group in youtube_groups_v2 with group_type="manager"
 		if groupName != "" {
 			gid, exists := groupIDs[groupName]
 			if !exists {
@@ -483,6 +653,13 @@ func importYouTubeManagerJSON(s *SQLiteStore, data []byte) (int, error) {
 		imported++
 	}
 	return imported, nil
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // --- Ansible Hosts (canonical) ---
@@ -659,6 +836,37 @@ func importYouTubeCacheJSON(s *SQLiteStore, data []byte) (int, error) {
 		imported++
 	}
 	return imported, nil
+}
+
+// ============================================================
+// JSON archiving (move to legacy_archive/ after successful import)
+// ============================================================
+
+// archiveLegacyJSON moves a successfully imported JSON file to a legacy_archive/
+// subdirectory, organized by date. This prevents re-import loops and allows
+// the post-import data layer audit to pass without false positives.
+//
+// The archive directory structure is:
+//   <dataDir>/legacy_archive/<YYYY-MM-DD>/<filename>
+func archiveLegacyJSON(absPath, dataDir string) error {
+	archiveDir := filepath.Join(dataDir, "legacy_archive", time.Now().UTC().Format("2006-01-02"))
+	if err := os.MkdirAll(archiveDir, 0755); err != nil {
+		return fmt.Errorf("create archive dir: %w", err)
+	}
+
+	destPath := filepath.Join(archiveDir, filepath.Base(absPath))
+	// If destination already exists, add a suffix
+	if _, err := os.Stat(destPath); err == nil {
+		ext := filepath.Ext(absPath)
+		base := absPath[:len(absPath)-len(ext)]
+		destPath = filepath.Join(archiveDir, filepath.Base(base)+"_"+time.Now().UTC().Format("150405")+ext)
+	}
+
+	if err := os.Rename(absPath, destPath); err != nil {
+		return fmt.Errorf("move to archive: %w", err)
+	}
+
+	return nil
 }
 
 // ============================================================

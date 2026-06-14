@@ -1,7 +1,6 @@
 package ansible
 
 import (
-	"encoding/json"
 	"log"
 	"path/filepath"
 	"sync"
@@ -39,16 +38,7 @@ type AnsibleComputer struct {
 }
 
 // AnsibleComputerStore defines the SQLite operations for ansible computers.
-// Both the legacy raw_json interface and the new structured interface are provided.
 type AnsibleComputerStore interface {
-	// Legacy methods (ansible_computers table — raw_json)
-	GetAnsibleComputer(host string) (string, error)
-	ListAnsibleComputers() (map[string]json.RawMessage, error)
-	UpsertAnsibleComputer(host, rawJSON string) error
-	DeleteAnsibleComputer(host string) error
-	MigrateAnsibleComputersFromJSON(computers map[string]json.RawMessage) (int, error)
-
-	// New structured methods (ansible_hosts table)
 	UpsertAnsibleHost(fields store.AnsibleHostFields) error
 	DeleteAnsibleHost(host string) error
 	GetAnsibleHost(host string) (*store.AnsibleHostFields, error)
@@ -80,7 +70,7 @@ func (m *AnsibleComputerManager) SetStore(store AnsibleComputerStore) {
 	m.loadFromSQLite()
 }
 
-// loadFromSQLite loads computers from SQLite (legacy ansible_computers table).
+// loadFromSQLite loads computers from the structured ansible_hosts table.
 func (m *AnsibleComputerManager) loadFromSQLite() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -89,38 +79,16 @@ func (m *AnsibleComputerManager) loadFromSQLite() {
 		return
 	}
 
-	// Try loading from new structured ansible_hosts first
 	hosts, err := m.store.ListAnsibleHosts()
-	if err == nil && len(hosts) > 0 {
-		for _, h := range hosts {
-			computer := ansibleHostFieldsToComputer(h)
-			m.computers[computer.Host] = computer
-		}
-		log.Printf("[OK] Loaded %d Ansible computers from ansible_hosts", len(m.computers))
+	if err != nil || len(hosts) == 0 {
 		return
 	}
 
-	// Fallback: load from legacy ansible_computers (raw_json)
-	rows, legacyErr := m.store.ListAnsibleComputers()
-	if legacyErr != nil || len(rows) == 0 {
-		return
+	for _, h := range hosts {
+		computer := ansibleHostFieldsToComputer(h)
+		m.computers[computer.Host] = computer
 	}
-
-	for host, rawJSON := range rows {
-		var c AnsibleComputer
-		if err := json.Unmarshal(rawJSON, &c); err != nil {
-			continue
-		}
-		m.computers[host] = c
-	}
-
-	// Migrate legacy data to new structured table
-	log.Printf("[INFO] Migrating %d computers from ansible_computers to ansible_hosts", len(m.computers))
-	for _, c := range m.computers {
-		if err := m.persistToAnsibleHosts(c); err != nil {
-			log.Printf("[WARN] Failed to migrate computer %s to ansible_hosts: %v", c.Host, err)
-		}
-	}
+	log.Printf("[OK] Loaded %d Ansible computers from ansible_hosts", len(m.computers))
 }
 
 // ansibleHostFieldsToComputer converts structured fields to AnsibleComputer.

@@ -1,5 +1,7 @@
 # Velox v1.0.3 - Sistema di Generazione Video Distribuito
 
+![CI](https://github.com/Marcuss-ops/VeloxEditiingg/actions/workflows/ci.yml/badge.svg)
+
 ## Panoramica
 
 Velox è un sistema distribuito per la generazione e composizione video. È composto da un **master server** (DataServer) che gestisce la coda job e i worker remoti, e da **RemoteCodex** che contiene il software installato sui worker remoti per l'esecuzione effettiva dei job di rendering.

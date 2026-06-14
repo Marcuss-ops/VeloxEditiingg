@@ -72,11 +72,11 @@ func (q *FileQueue) SubmitJob(ctx context.Context, jobID string, payload map[str
 }
 
 // ClaimNextJob atomically claims the next pending job for a worker.
-func (q *FileQueue) ClaimNextJob(ctx context.Context, workerID string) (*Job, error) {
+func (q *FileQueue) ClaimNextJob(ctx context.Context, workerID string, allowedJobTypes []string) (*Job, error) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
-	rawJSON, ok, err := q.dbStore.ClaimNextPendingJob(workerID, time.Now().UTC())
+	rawJSON, ok, err := q.dbStore.ClaimNextPendingJob(workerID, allowedJobTypes, time.Now().UTC())
 	if err != nil {
 		return nil, err
 	}

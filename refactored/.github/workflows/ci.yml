@@ -1,0 +1,97 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache-dependency-path: |
+            DataServer/go.sum
+            RemoteCodex/native/worker-agent-go/go.sum
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            DataServer/.cache
+            RemoteCodex/native/worker-agent-go/.cache
+          key: ${{ runner.os }}-go-${{ hashFiles('DataServer/go.sum', 'RemoteCodex/native/worker-agent-go/go.sum') }}
+
+      - name: Build DataServer
+        working-directory: DataServer
+        run: go build ./...
+
+      - name: Build worker agent
+        working-directory: RemoteCodex/native/worker-agent-go
+        run: go build ./...
+
+      - name: Test DataServer
+        working-directory: DataServer
+        run: go test ./... -count=1 -short
+
+      - name: Test worker agent
+        working-directory: RemoteCodex/native/worker-agent-go
+        run: go test ./... -count=1 -short
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          working-directory: DataServer
+          version: latest
+
+  DoD:
+    runs-on: ubuntu-latest
+    needs: [test]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache-dependency-path: |
+            DataServer/go.sum
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: ~/go/pkg/mod
+          key: ${{ runner.os }}-go-dod-${{ hashFiles('DataServer/go.sum') }}
+
+      - name: Build DataServer
+        working-directory: DataServer
+        run: go build ./...
+
+      - name: Build worker agent
+        working-directory: RemoteCodex/native/worker-agent-go
+        run: make agent
+
+      - name: Install Ansible
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ansible
+
+      - name: Run DoD check
+        run: bash scripts/dod_check.sh --verbose

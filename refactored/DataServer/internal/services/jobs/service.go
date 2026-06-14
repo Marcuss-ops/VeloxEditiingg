@@ -140,7 +140,11 @@ func (s *Service) ClaimNextJob(ctx context.Context, req ClaimRequest) (*ClaimRes
 		err     error
 	)
 	if s.fileQ != nil {
-		job, claimErr := s.fileQ.ClaimNextJob(ctx, req.WorkerID)
+		var allowedJobTypes []string
+		if workerInfo != nil {
+			allowedJobTypes = workerInfo.GetSupportedJobTypes()
+		}
+		job, claimErr := s.fileQ.ClaimNextJob(ctx, req.WorkerID, allowedJobTypes)
 		if claimErr != nil {
 			return &ClaimResult{Reason: "lease failed"}, nil
 		}
@@ -206,7 +210,7 @@ func (s *Service) SubmitResult(ctx context.Context, req SubmitResultRequest) (bo
 			if len(req.Output) > 0 {
 				updates["worker_output"] = req.Output
 				if path := ExtractOutputVideoPath(req.Output); path != "" {
-					updates["master_video_path"] = path
+					updates["result_path_worker"] = path
 				}
 			}
 			err = s.fileQ.UpdateJobFields(ctx, req.JobID, updates)

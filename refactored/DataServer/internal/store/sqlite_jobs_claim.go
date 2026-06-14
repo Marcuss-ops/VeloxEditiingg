@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-func (s *SQLiteStore) ClaimNextPendingJob(workerID string, now time.Time) ([]byte, bool, error) {
+func (s *SQLiteStore) ClaimNextPendingJob(workerID string, allowedJobTypes []string, now time.Time) ([]byte, bool, error) {
 	tx, err := s.db.BeginTx(context.Background(), &sql.TxOptions{})
 	if err != nil {
 		return nil, false, err
@@ -52,6 +52,9 @@ func (s *SQLiteStore) ClaimNextPendingJob(workerID string, now time.Time) ([]byt
 			continue
 		}
 		if claimed := strings.TrimSpace(asString(payload["claimed_by"])); claimed != "" {
+			continue
+		}
+		if len(allowedJobTypes) > 0 && !jobTypeAllowed(payload, allowedJobTypes) {
 			continue
 		}
 
@@ -122,4 +125,27 @@ func (s *SQLiteStore) ClaimNextPendingJob(workerID string, now time.Time) ([]byt
 		return nil, false, err
 	}
 	return nil, false, nil
+}
+
+func jobTypeAllowed(payload map[string]any, allowedJobTypes []string) bool {
+	if len(allowedJobTypes) == 0 {
+		return true
+	}
+
+	jobType := strings.TrimSpace(asString(payload["job_type"]))
+	if jobType == "" {
+		if params, ok := payload["parameters"].(map[string]any); ok {
+			jobType = strings.TrimSpace(asString(params["job_type"]))
+		}
+	}
+	if jobType == "" {
+		return true
+	}
+
+	for _, allowed := range allowedJobTypes {
+		if strings.EqualFold(strings.TrimSpace(allowed), jobType) {
+			return true
+		}
+	}
+	return false
 }

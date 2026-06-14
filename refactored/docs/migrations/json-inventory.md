@@ -124,7 +124,7 @@ type WorkersRepository interface {
 - `ansible_runs` — Esecuzioni con colonne strutturate
 - `ansible_run_hosts` — Relazione many-to-many run↔host con CASCADE DELETE
 
-**SSHPassword:** Non migrato nella nuova tabella. Il campo `secret_ref` è presente ma il meccanismo di risoluzione (vault, file cifrato) va implementato separatamente.
+**SSHPassword:** Migrato in file segreti `secrets/ansible/ssh_host_*` (0600) durante l'import. `secret_ref` referenzia il file. Nessuna password in chiaro nel database.
 
 ### 4. Cache
 
@@ -161,20 +161,19 @@ Questo rende ogni importazione idempotente, verificabile e auditabile.
 
 ---
 
-## Tabelle legacy mantenute (dead schema)
+## Tabelle legacy eliminate (migration 008)
 
-Le seguenti tabelle non sono state droppate perché potrebbero contenere dati non ancora migrati.
-Sono **solo lettura** — nessun codice produttivo le scrive più.
+Le seguenti tabelle legacy sono state droppate dalla **migration 008** (`008_drop_legacy_tables.sql`) dopo aver migrato i dati esistenti nelle tabelle canoniche:
 
-| Tabella legacy | Sostituita da | Rischio drop |
+| Tabella legacy | Sostituita da | Stato |
 |---|---|---|
-| `ansible_computers` | `ansible_hosts` (004) | Medio — usata come fallback in `loadFromSQLite()` |
-| `youtube_channel_metadata` | `youtube_channels` (003) | Basso — solo metodi legacy in `sqlite_youtube_entities.go` |
-| `youtube_groups` (old) | `youtube_groups_v2` (003) | Basso |
-| `youtube_manager_channels` | `youtube_channels` + `youtube_group_channels` (003) | Basso |
-| `youtube_manager_groups` | `youtube_groups_v2` (003) | Basso |
+| `ansible_computers` | `ansible_hosts` (004) | ✅ Droppata — dati migrati via INSERT OR IGNORE INTO ansible_hosts |
+| `youtube_channel_metadata` | `youtube_channels` (003) | ✅ Droppata — dati migrati via INSERT OR IGNORE |
+| `youtube_groups` (old) | `youtube_groups_v2` (003) | ✅ Droppata — canali linkati via json_each in youtube_group_channels |
+| `youtube_manager_channels` | `youtube_channels` + `youtube_group_channels` (003) | ✅ Droppata — canali e gruppi manager uniti nel modello canonico |
+| `youtube_manager_groups` | `youtube_groups_v2` (003) | ✅ Droppata — gruppi manager migrati con group_type='manager' |
 
-**Procedura di drop:** Eseguire manualmente `DROP TABLE IF EXISTS ...` dopo aver verificato che tutte le istanze abbiano completato la migrazione. In alternativa, creare migration 006 con `DROP` condizionale.
+**Nessun codice produttivo:** Tutti i fallback legacy sono stati rimossi dal codice. Le interfacce `YouTubeStore` e `AnsibleComputerStore` espongono solo metodi canonici. I test `TestMigration008_UpgradeEndToEnd` verificano zero perdita dati.
 
 ---
 

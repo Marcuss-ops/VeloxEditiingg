@@ -20,10 +20,9 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 
 PLAYBOOK="$PROJECT_ROOT/refactored/DataServer/data/ansible/playbooks/update_workers.yml"
 
-# Inventory auto-discovery
+# Inventory auto-discovery (prefer inventory.ini over legacy JSON)
 INVENTORY=""
 for candidate in \
-    "$PROJECT_ROOT/refactored/DataServer/data/ansible/ansible_computers.json" \
     "$PROJECT_ROOT/refactored/DataServer/data/ansible/playbooks/inventory.ini" \
     "$PROJECT_ROOT/refactored/DataServer/data/ansible/playbooks/inventory.example.ini"
 do
@@ -34,7 +33,7 @@ do
 done
 
 if [ -z "$INVENTORY" ]; then
-    echo "ERROR: No inventory found. Provide -i <path> or create ansible_computers.json."
+    echo "ERROR: No inventory found. Create an inventory.ini or inventory.example.ini file."
     exit 1
 fi
 
