@@ -107,70 +107,15 @@
       register: bundle_final
       failed_when: not bundle_final.stat.exists or bundle_final.stat.size == 0
 
-    # ── ATOMIC BUNDLE DEPLOY (shared task) ───────────────────
-    - name: Update | Atomic bundle deploy
+    # ── UNIFIED DEPLOY + ROLLBACK (shared task) ──────────────
+    - name: Update | Deploy worker release
       ansible.builtin.include_tasks:
-        file: tasks/bundle_atomic_deploy.yml
+        file: tasks/deploy_worker_release.yml
       vars:
         bundle_zip_path: "/tmp/velox_worker_update.zip"
+        reinject_agent_src: "{{ playbook_dir }}/../../../../RemoteCodex/native/worker-agent-go/bin/velox-worker-agent"
+        reinject_scripts_dir: "{{ playbook_dir }}/../../../../RemoteCodex/scripts"
       when: bundle_final.stat is defined and bundle_final.stat.exists and bundle_final.stat.size > 0
-
-    # ── REINIETTA BINARI FRESCHI ─────────────────────────────
-    - name: Update | Ensure agent binary directories exist
-      ansible.builtin.file:
-        path: "{{ item }}"
-        state: directory
-        mode: "0755"
-      loop:
-        - "{{ velox_dir }}/current/RemoteCodex/bin"
-        - "{{ velox_dir }}/current/RemoteCodex/native/worker-agent-go/bin"
-
-    - name: Update | Copy fresh worker agent binary
-      ansible.builtin.copy:
-        src: "{{ playbook_dir }}/../../../../RemoteCodex/native/worker-agent-go/bin/velox-worker-agent"
-        dest: "{{ item }}"
-        mode: "0755"
-      loop:
-        - "{{ velox_dir }}/current/RemoteCodex/bin/velox-worker-agent"
-        - "{{ velox_dir }}/current/RemoteCodex/native/worker-agent-go/bin/velox-worker-agent"
-      register: worker_agent_copy
-
-    - name: Update | Copy fresh C++ helper scripts
-      ansible.builtin.copy:
-        src: "{{ playbook_dir }}/../../../../RemoteCodex/scripts/{{ item.src }}"
-        dest: "{{ velox_dir }}/current/RemoteCodex/scripts/{{ item.dest }}"
-        mode: "0755"
-      loop:
-        - { src: "build-video-engine.sh", dest: "build-video-engine.sh" }
-        - { src: "worker-entrypoint.sh", dest: "worker-entrypoint.sh" }
-      register: worker_script_copy
-      failed_when: false
-
-    - name: Update | Ensure scripts directory and copy scripts (fallback)
-      ansible.builtin.shell: |
-        set -euo pipefail
-        mkdir -p "{{ velox_dir }}/current/RemoteCodex/scripts"
-        cp -f "{{ playbook_dir }}/../../../../RemoteCodex/scripts/build-video-engine.sh" "{{ velox_dir }}/current/RemoteCodex/scripts/build-video-engine.sh"
-        cp -f "{{ playbook_dir }}/../../../../RemoteCodex/scripts/worker-entrypoint.sh" "{{ velox_dir }}/current/RemoteCodex/scripts/worker-entrypoint.sh"
-        chmod 755 "{{ velox_dir }}/current/RemoteCodex/scripts/"*.sh
-      args:
-        executable: /bin/bash
-      when: worker_script_copy is failed
-
-    # ── RIAPPLICA PIPELINE SYSTEMD AGGIORNATA ────────────────
-    # L'include di systemd_setup.yml gestisce: env file, Docker build
-    # (sempre, con --pull), generazione config, systemd unit, watchdog.
-    # Non serve un build Docker separato qui.
-    - name: Update | Riapplica setup systemd worker aggiornato
-      ansible.builtin.include_tasks:
-        file: tasks/systemd_setup.yml
-      vars:
-        install_showlog_wrapper: false
-
-    # ── VERIFICA POST-DEPLOY (shared task) ────────────────────
-    - name: Update | Verify worker health
-      ansible.builtin.include_tasks:
-        file: tasks/verify_worker_post_deploy.yml
 
     # ── PULIZIA ──────────────────────────────────────────────
     - name: Update | Rimuovi bundle temporaneo

@@ -1,0 +1,199 @@
+# ============================================================
+# SHARED — DEPLOY WORKER RELEASE (ATOMIC + ROLLBACK)
+# ============================================================
+# Single deploy pipeline used by install, update, and auto-update.
+#
+# Required vars:
+#   velox_dir           — base worker directory (e.g. /opt/velox)
+#   master_url          — master API base URL
+#   inventory_hostname  — set automatically by Ansible
+#   version_number      — current version
+#   bundle_zip_path     — path to the bundle .zip on the worker (update)
+#                         (install uses rsync instead; set bundle_zip_path="" to skip)
+#
+# Flow:
+#   block:
+#     1. Stop service
+#     2. Extract/copy release to staging (current.new)
+#     3. Validate staged release
+#     4. Atomic swap: current → current.old, current.new → current
+#     5. Docker build + systemd setup
+#     6. Post-deploy verify
+#   rescue:
+#     Rollback: stop service, restore current.old, restart
+# ============================================================
+
+- name: DeployWorker | Unified release pipeline
+  block:
+    # ── STEP 1: Stop service ──────────────────────────────────
+    - name: DeployWorker | Stop worker service
+      ansible.builtin.systemd:
+        name: "velox-worker-{{ inventory_hostname }}"
+        state: stopped
+      failed_when: false
+
+    # ── STEP 2: Prepare staging ───────────────────────────────
+    - name: DeployWorker | Clean staging directory
+      ansible.builtin.file:
+        path: "{{ velox_dir }}/current.new"
+        state: absent
+
+    - name: DeployWorker | Create staging directory
+      ansible.builtin.file:
+        path: "{{ velox_dir }}/current.new"
+        state: directory
+        mode: "0755"
+
+    # ── STEP 3: Extract or copy release ───────────────────────
+    - name: DeployWorker | Extract bundle to staging (update path)
+      ansible.builtin.unarchive:
+        src: "{{ bundle_zip_path }}"
+        dest: "{{ velox_dir }}/current.new"
+        remote_src: yes
+        mode: "0755"
+      when: bundle_zip_path | default('') | length > 0
+
+    - name: DeployWorker | Copy current to staging (install / no-bundle path)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        if [ "{{ bundle_zip_path | default('') }}" = "" ]; then
+          rsync -a "{{ velox_dir }}/current/" "{{ velox_dir }}/current.new/" --exclude=current.new --exclude=current.old
+        fi
+      args:
+        executable: /bin/bash
+      changed_when: false
+      when: bundle_zip_path | default('') | length == 0
+
+    - name: DeployWorker | Flatten legacy refactored layout in staging
+      ansible.builtin.shell: |
+        set -euo pipefail
+        if [ -d "{{ velox_dir }}/current.new/refactored" ]; then
+          shopt -s dotglob nullglob
+          mv -f "{{ velox_dir }}/current.new/refactored"/* "{{ velox_dir }}/current.new"/ || true
+          rm -rf "{{ velox_dir }}/current.new/refactored"
+        fi
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: DeployWorker | Remove legacy refactored tree
+      ansible.builtin.file:
+        path: "{{ velox_dir }}/current.new/refactored"
+        state: absent
+
+    # ── STEP 4: Validate staged release ───────────────────────
+    - name: DeployWorker | Verify Dockerfile in staging
+      ansible.builtin.stat:
+        path: "{{ velox_dir }}/current.new/RemoteCodex/native/worker-agent-go/Dockerfile"
+      register: _staging_dockerfile
+
+    - name: DeployWorker | Fail if bundle layout missing
+      ansible.builtin.fail:
+        msg: "No Dockerfile in staging: {{ velox_dir }}/current.new"
+      when: not _staging_dockerfile.stat.exists
+
+    - name: DeployWorker | Verify VERSION.txt in staging
+      ansible.builtin.stat:
+        path: "{{ velox_dir }}/current.new/VERSION.txt"
+      register: _staging_version
+
+    - name: DeployWorker | Warn if VERSION.txt missing
+      ansible.builtin.debug:
+        msg: "⚠️  VERSION.txt not found in staging"
+      when: not _staging_version.stat.exists
+
+    # ── STEP 4b: Optional binary reinjection (update path) ──
+    - name: DeployWorker | Ensure agent binary directories exist
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - "{{ velox_dir }}/current.new/RemoteCodex/bin"
+        - "{{ velox_dir }}/current.new/RemoteCodex/native/worker-agent-go/bin"
+      when: reinject_agent_src | default('') | length > 0
+
+    - name: DeployWorker | Copy fresh Go agent binary
+      ansible.builtin.copy:
+        src: "{{ reinject_agent_src }}"
+        dest: "{{ item }}"
+        mode: "0755"
+      loop:
+        - "{{ velox_dir }}/current.new/RemoteCodex/bin/velox-worker-agent"
+        - "{{ velox_dir }}/current.new/RemoteCodex/native/worker-agent-go/bin/velox-worker-agent"
+      when: reinject_agent_src | default('') | length > 0
+
+    - name: DeployWorker | Copy fresh C++ helper scripts
+      ansible.builtin.copy:
+        src: "{{ reinject_scripts_dir | default('') }}/{{ item }}"
+        dest: "{{ velox_dir }}/current.new/RemoteCodex/scripts/{{ item }}"
+        mode: "0755"
+      loop:
+        - build-video-engine.sh
+        - worker-entrypoint.sh
+      when: reinject_scripts_dir | default('') | length > 0
+
+    # ── STEP 5: Atomic swap ───────────────────────────────────
+    - name: DeployWorker | Atomic swap
+      ansible.builtin.shell: |
+        set -euo pipefail
+        rm -rf "{{ velox_dir }}/current.old"
+        if [ -d "{{ velox_dir }}/current" ]; then
+          mv "{{ velox_dir }}/current" "{{ velox_dir }}/current.old"
+        fi
+        mv "{{ velox_dir }}/current.new" "{{ velox_dir }}/current"
+      args:
+        executable: /bin/bash
+
+    # ── STEP 6: Systemd setup + Docker rebuild ────────────────
+    - name: DeployWorker | Configure and start worker
+      ansible.builtin.include_tasks:
+        file: systemd_setup.yml
+
+    # ── STEP 7: Post-deploy verification ──────────────────────
+    - name: DeployWorker | Verify deployed worker
+      ansible.builtin.include_tasks:
+        file: verify_worker_post_deploy.yml
+
+    # ── Cleanup old release ───────────────────────────────────
+    - name: DeployWorker | Remove old release
+      ansible.builtin.file:
+        path: "{{ velox_dir }}/current.old"
+        state: absent
+
+  rescue:
+    - name: DeployWorker | ROLLBACK — stop service
+      ansible.builtin.systemd:
+        name: "velox-worker-{{ inventory_hostname }}"
+        state: stopped
+      failed_when: false
+
+    - name: DeployWorker | ROLLBACK — remove failed release
+      ansible.builtin.file:
+        path: "{{ velox_dir }}/current.failed"
+        state: absent
+
+    - name: DeployWorker | ROLLBACK — restore previous release
+      ansible.builtin.shell: |
+        set -euo pipefail
+        if [ -d "{{ velox_dir }}/current" ]; then
+          mv "{{ velox_dir }}/current" "{{ velox_dir }}/current.failed"
+        fi
+        test -d "{{ velox_dir }}/current.old" || {
+          echo "FATAL: current.old not found — cannot rollback"
+          exit 1
+        }
+        mv "{{ velox_dir }}/current.old" "{{ velox_dir }}/current"
+      args:
+        executable: /bin/bash
+
+    - name: DeployWorker | ROLLBACK — restart service
+      ansible.builtin.systemd:
+        name: "velox-worker-{{ inventory_hostname }}"
+        state: restarted
+        enabled: yes
+        daemon_reload: yes
+
+    - name: DeployWorker | ROLLBACK — mark deployment failed
+      ansible.builtin.fail:
+        msg: "Deployment failed — rollback to previous release executed"

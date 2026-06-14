@@ -43,10 +43,10 @@ log "Building version: $VERSION"
 if ! $SKIP_TESTS; then
     log "Running tests..."
     cd "$DATASERVER_DIR"
-    go test ./internal/workers ./internal/handlers/remote/workers ./internal/services/jobs ./internal/queue ./internal/store ./internal/handlers/server/jobs -count=1 -short 2>&1 | tail -20 || warn "Some tests failed"
+    go test ./internal/workers ./internal/handlers/remote/workers ./internal/services/jobs ./internal/queue ./internal/store ./internal/handlers/server/jobs -count=1 -short 2>&1 | tail -20
 
     cd "$WORKER_DIR"
-    go test ./pkg/api ./pkg/config ./internal/worker ./cmd/velox-worker-agent -count=1 -short 2>&1 | tail -20 || warn "Some worker tests failed"
+    go test ./pkg/api ./pkg/config ./internal/worker ./cmd/velox-worker-agent -count=1 -short 2>&1 | tail -20
     ok "Tests completed"
 fi
 
@@ -73,16 +73,50 @@ if ! $SKIP_ENGINE; then
     fi
 fi
 
-# Step 4: Create bundle zip
+# Step 4: Write BUILD_INFO.json (before zip so sha256 covers it)
+log "Writing BUILD_INFO.json..."
+GIT_COMMIT=$(cd "$SCRIPT_DIR" && git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+NOW=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+if ! $DRY_RUN; then
+    SOURCE_HASH=$(cd "$SCRIPT_DIR" && find RemoteCodex \
+        -type f \
+        ! -path '*/bin/*' \
+        ! -path '*/build/*' \
+        ! -path '*/.git/*' \
+        ! -name BUILD_INFO.json \
+        -print0 |
+        sort -z |
+        xargs -0 sha256sum 2>/dev/null |
+        sha256sum | awk '{print $1}')
+    cat > "$SCRIPT_DIR/RemoteCodex/BUILD_INFO.json" << JSONEOF
+{
+  "version": "$VERSION",
+  "git_commit": "$GIT_COMMIT",
+  "source_hash": "$SOURCE_HASH",
+  "protocol_version": "2026-06-worker-v1",
+  "engine_version": "$VERSION",
+  "platform": "linux",
+  "arch": "x86_64",
+  "built_at": "$NOW"
+}
+JSONEOF
+    ok "BUILD_INFO.json written (source hash: ${SOURCE_HASH:0:16}...)"
+else
+    SOURCE_HASH="dry_run_source_hash"
+    log "[DRY-RUN] Would write BUILD_INFO.json"
+fi
+
+# Step 5: Create bundle zip (atomic: .tmp → mv)
 log "Creating bundle zip..."
 BUNDLE_PATH="$BUNDLE_DIR/$BUNDLE_NAME"
+TMP_BUNDLE="${BUNDLE_PATH}.tmp"
 
 if $DRY_RUN; then
     log "[DRY-RUN] zip $BUNDLE_PATH"
 else
-    rm -f "$BUNDLE_PATH"
+    rm -f "$TMP_BUNDLE" "$BUNDLE_PATH"
     cd "$SCRIPT_DIR"
-    zip -r "$BUNDLE_PATH" \
+    zip -r "$TMP_BUNDLE" \
         RemoteCodex/ \
         VERSION.txt \
         -x "RemoteCodex/native/worker-agent-go/bin/*" \
@@ -92,37 +126,21 @@ else
         -x "RemoteCodex/native/worker-agent-go/vendor/*" \
         -x "RemoteCodex/**/*.md" \
         2>&1 | tail -3
-    ok "Bundle created: $BUNDLE_PATH"
+    ok "Bundle created (tmp): $TMP_BUNDLE"
 fi
 
-# Step 5: Calculate SHA256
+# Step 6: Calculate SHA256 and atomic publish
 log "Calculating SHA256..."
 if $DRY_RUN; then
     BUNDLE_HASH="dry_run_hash_placeholder"
 else
-    BUNDLE_HASH=$(sha256sum "$BUNDLE_PATH" | cut -d' ' -f1)
+    BUNDLE_HASH=$(sha256sum "$TMP_BUNDLE" | cut -d' ' -f1)
+    echo -n "$BUNDLE_HASH  $BUNDLE_NAME" > "${TMP_BUNDLE}.sha256"
+    # Atomic publish: only replace final files after everything is verified
+    mv "$TMP_BUNDLE" "$BUNDLE_PATH"
+    mv "${TMP_BUNDLE}.sha256" "${BUNDLE_PATH}.sha256"
 fi
-ok "SHA256: ${BUNDLE_HASH:0:16}..."
-
-# Step 6: Write BUNDLE_HASH.txt
-# Compute a deterministic content hash from all source files (excluding build artifacts)
-log "Writing BUNDLE_HASH.txt (content-based)..."
-if ! $DRY_RUN; then
-    SOURCE_HASH=$(cd "$SCRIPT_DIR" && find RemoteCodex \
-        -type f \
-        ! -path '*/bin/*' \
-        ! -path '*/build/*' \
-        ! -path '*/.git/*' \
-        ! -name BUNDLE_HASH.txt \
-        -print0 |
-        sort -z |
-        xargs -0 sha256sum 2>/dev/null |
-        sha256sum | awk '{print $1}')
-    echo -n "$SOURCE_HASH" > "$SCRIPT_DIR/RemoteCodex/BUNDLE_HASH.txt"
-    ok "BUNDLE_HASH.txt written (content hash: ${SOURCE_HASH:0:16}...)"
-else
-    log "[DRY-RUN] Would write content-based BUNDLE_HASH.txt"
-fi
+ok "SHA256: ${BUNDLE_HASH:0:16}... (sidecar: ${BUNDLE_NAME}.sha256)"
 
 # Step 7: Write VERSION.txt
 log "Writing VERSION.txt..."
@@ -131,9 +149,8 @@ if ! $DRY_RUN; then
 fi
 ok "VERSION.txt: $VERSION"
 
-# Step 8: Generate manifest_v2.json
+# Step 8: Generate manifest_v2.json (master-side metadata)
 log "Generating manifest_v2.json..."
-NOW=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 MANIFEST="$BUNDLE_DIR/manifest_v2.json"
 
 if $DRY_RUN; then
@@ -142,10 +159,9 @@ else
     cat > "$MANIFEST" << JSONEOF
 {
   "version": "$VERSION",
-  "code_version": "$VERSION",
-  "bundle_version": "$VERSION",
-  "build_hash": "$BUNDLE_HASH",
+  "git_commit": "$GIT_COMMIT",
   "bundle_hash": "$BUNDLE_HASH",
+  "source_hash": "$SOURCE_HASH",
   "protocol_version": "2026-06-worker-v1",
   "engine_version": "$VERSION",
   "platform": "linux",
@@ -163,8 +179,33 @@ cd "$DATASERVER_DIR"
 if $DRY_RUN; then
     log "[DRY-RUN] go build ./cmd/server"
 else
-    go build -o bin/velox-server ./cmd/server 2>&1 | tail -3 || warn "DataServer build had warnings"
+    go build -o bin/velox-server ./cmd/server 2>&1 | tail -3
     ok "DataServer built"
+fi
+
+# Atomic publication: write to .tmp first, then rename
+log "Atomic publication..."
+if ! $DRY_RUN; then
+    TMP_BUNDLE="${BUNDLE_PATH}.tmp"
+    
+    # Validate bundle contains required files
+    for file in \
+        RemoteCodex/native/worker-agent-go/Dockerfile \
+        RemoteCodex/native/video-engine-cpp/CMakeLists.txt \
+        RemoteCodex/scripts/build-video-engine.sh \
+        RemoteCodex/scripts/worker-entrypoint.sh \
+        VERSION.txt
+    do
+        if ! unzip -Z1 "$BUNDLE_PATH" 2>/dev/null | grep -qx "$file"; then
+            fail "Bundle missing: $file"
+        fi
+    done
+    
+    # Verify no legacy layout leaked
+    if unzip -Z1 "$BUNDLE_PATH" 2>/dev/null | grep -q '^refactored/'; then
+        fail "Bundle contains legacy refactored/ layout"
+    fi
+    ok "Bundle validation passed"
 fi
 
 echo ""

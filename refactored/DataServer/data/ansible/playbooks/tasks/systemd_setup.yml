@@ -37,20 +37,6 @@
   register: legacy_layout_dockerfile
 
 - name: Set bundle layout paths
-  ansible.builtin.set_fact:
-    velox_current_root: "{{ velox_dir }}/current"
-    velox_assets_cache_host_path: "{{ velox_dir }}/current/RemoteCodex/assets_cache"
-    velox_worker_dockerfile_host: "{{ velox_dir }}/current/RemoteCodex/native/worker-agent-go/Dockerfile"
-    velox_worker_docker_context: "{{ velox_dir }}/current/RemoteCodex"
-
-- name: Patch worker Dockerfile healthcheck to master URL
-  ansible.builtin.replace:
-    path: "{{ velox_worker_dockerfile_host }}"
-    regexp: 'curl -f http://localhost:8000/health'
-    replace: 'curl -f {{ master_url }}/health'
-  when: velox_worker_dockerfile_host | length > 0
-
-- name: Verify worker agent binary is present in build context
   ansible.builtin.stat:
     path: "{{ velox_worker_docker_context }}/native/worker-agent-go/bin/velox-worker-agent"
   register: worker_agent_binary_stat

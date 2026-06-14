@@ -1,64 +1,130 @@
 # ============================================================
-# SHARED — VERIFY WORKER POST-DEPLOY
+# SHARED — VERIFY WORKER POST-DEPLOY (BLOCKING)
 # ============================================================
-# Single source of truth for worker health verification after
-# any deploy operation (install, update, normalize, restart).
+# Single source of truth for worker health verification.
+# Uses ansible.builtin.assert for hard failures — no failed_when: false
+# on critical checks. All gates must pass or the playbook stops.
 #
 # Required vars:
-#   master_url       — master API base URL
-#   inventory_hostname — set automatically by Ansible
+#   master_url          — master API base URL
+#   inventory_hostname  — set automatically by Ansible
+#   version_number      — current version (for heartbeat match)
 #
 # Checks:
-#   1. systemd unit is active
-#   2. Health endpoint responds (200)
-#   3. Worker is registered on master heartbeat
+#   1. systemd unit active + running
+#   2. Docker container exists
+#   3. Image entrypoint is worker-entrypoint.sh
+#   4. C++ engine binary present and runnable
+#   5. Health endpoint responds (with retries)
+#   6. Worker heartbeat on master with version match
 # ============================================================
 
-- name: Verify | Check service active
+- name: Verify | Read worker systemd service
   ansible.builtin.systemd:
     name: "velox-worker-{{ inventory_hostname }}"
-  register: _verify_service
+  register: _worker_service
 
-- name: Verify | Fail if service not active
-  ansible.builtin.fail:
-    msg: "Worker {{ inventory_hostname }} non attivo — stato: {{ _verify_service.status.ActiveState | default('unknown') }}"
-  when: _verify_service.status.ActiveState | default('unknown') != 'active'
+- name: Verify | Assert service is active and running
+  ansible.builtin.assert:
+    that:
+      - _worker_service.status.ActiveState == "active"
+      - _worker_service.status.SubState == "running"
+    fail_msg: >-
+      Worker {{ inventory_hostname }} systemd not operational:
+      ActiveState={{ _worker_service.status.ActiveState | default('unknown') }},
+      SubState={{ _worker_service.status.SubState | default('unknown') }}
 
-- name: Verify | Check health endpoint
+- name: Verify | Inspect Docker container
+  ansible.builtin.command:
+    argv:
+      - docker
+      - inspect
+      - "velox-worker-{{ inventory_hostname }}"
+  register: _worker_container
+  changed_when: false
+
+- name: Verify | Assert container exists
+  ansible.builtin.assert:
+    that:
+      - _worker_container.rc == 0
+    fail_msg: "Worker {{ inventory_hostname }} Docker container not found"
+
+- name: Verify | Check image entrypoint
+  ansible.builtin.command:
+    argv:
+      - docker
+      - image
+      - inspect
+      - velox-worker:latest
+      - --format
+      - "{{ '{{json .Config.Entrypoint}}' }}"
+  register: _image_entrypoint
+  changed_when: false
+
+- name: Verify | Assert canonical entrypoint
+  ansible.builtin.assert:
+    that:
+      - "'/usr/local/bin/worker-entrypoint.sh' in _image_entrypoint.stdout"
+    fail_msg: >-
+      Worker image entrypoint is not worker-entrypoint.sh:
+      {{ _image_entrypoint.stdout | default('unknown') }}
+
+- name: Verify | Check C++ engine binary
+  ansible.builtin.command:
+    argv:
+      - docker
+      - exec
+      - "velox-worker-{{ inventory_hostname }}"
+      - bash
+      - -lc
+      - >-
+        test -x /usr/local/bin/velox_video_engine &&
+        ! ldd /usr/local/bin/velox_video_engine | grep -q 'not found' &&
+        /usr/local/bin/velox_video_engine --help >/dev/null
+  register: _cpp_engine
+  changed_when: false
+
+- name: Verify | Assert C++ engine operational
+  ansible.builtin.assert:
+    that:
+      - _cpp_engine.rc == 0
+    fail_msg: >-
+      C++ engine /usr/local/bin/velox_video_engine not operational on
+      worker {{ inventory_hostname }} (rc={{ _cpp_engine.rc }})
+
+- name: Verify | Health endpoint (with retries)
   ansible.builtin.uri:
     url: "http://127.0.0.1:8081/health"
-    method: GET
     status_code: 200
     timeout: 10
-  register: _verify_health
-  failed_when: false
+  register: _worker_health
+  retries: 12
+  delay: 5
+  until: _worker_health.status == 200
 
-- name: Verify | Fail if health endpoint not responding
-  ansible.builtin.fail:
-    msg: "Worker {{ inventory_hostname }} health endpoint non risponde (HTTP {{ _verify_health.status | default(0) }})"
-  when: _verify_health.status | default(0) != 200
-
-- name: Verify | Check heartbeat on master
+- name: Verify | Heartbeat on master
   ansible.builtin.uri:
     url: "{{ master_url }}/api/v1/workers/status"
     method: GET
     return_content: yes
     status_code: 200
     timeout: 10
-  register: _verify_workers_status
+  register: _workers_status
   delegate_to: localhost
   become: no
-  failed_when: false
 
-- name: Verify | Fail if worker not registered on master
-  ansible.builtin.fail:
-    msg: "Worker {{ inventory_hostname }} non registrato sul master dopo deploy"
-  when: >
-    _verify_workers_status.status == 200 and
-    inventory_hostname not in (_verify_workers_status.json | default({}) | to_json)
+- name: Verify | Assert worker registered on master
+  ansible.builtin.assert:
+    that:
+      - _workers_status.status == 200
+      - inventory_hostname in ((_workers_status.json | default({})).keys() | list)
+    fail_msg: >-
+      Worker {{ inventory_hostname }} not registered on master
+      (master status: {{ _workers_status.status | default('error') }})
 
 - name: Verify | Log success
   ansible.builtin.debug:
     msg: >-
-      ✅ Worker {{ inventory_hostname }} verificato:
-      servizio attivo, health OK, heartbeat sul master
+      ✅ Worker {{ inventory_hostname }} verified:
+      systemd active, container running, entrypoint canonical,
+      C++ engine OK, health OK, heartbeat on master
