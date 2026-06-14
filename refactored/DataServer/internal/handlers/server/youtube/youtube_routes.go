@@ -33,6 +33,7 @@ func YouTubeRoutes(r *gin.Engine, cfg *config.Config, ym *YouTubeManager) {
 	r.DELETE("/api/youtube/manager/groups/:group_name/channels/:channel_id", ym.DeleteChannelHandler())
 	r.POST("/api/youtube/manager/groups/:group_name/channels/:channel_id/move", ym.MoveChannelHandler())
 	r.POST("/api/youtube/manager/groups/:group_name/channels/:channel_id/stats", ym.RefreshChannelStatsHandler())
+	r.POST("/api/youtube/manager/groups/auto-organize-undefined", ym.AutoOrganizeUndefinedChannelsHandler())
 
 	// ── Feed ──
 	r.GET("/api/youtube/manager/feed", ym.GetVideoFeedHandler())
@@ -74,6 +75,7 @@ func YouTubeRoutes(r *gin.Engine, cfg *config.Config, ym *YouTubeManager) {
 	r.DELETE("/api/v1/youtube/manager/groups/:group_name/channels/:channel_id", ym.DeleteChannelHandler())
 	r.POST("/api/v1/youtube/manager/groups/:group_name/channels/:channel_id/move", ym.MoveChannelHandler())
 	r.POST("/api/v1/youtube/manager/groups/:group_name/channels/:channel_id/stats", ym.RefreshChannelStatsHandler())
+	r.POST("/api/v1/youtube/manager/groups/auto-organize-undefined", ym.AutoOrganizeUndefinedChannelsHandler())
 	r.GET("/api/v1/youtube/manager/feed", ym.GetVideoFeedHandler())
 	r.POST("/api/v1/youtube/manager/feed/refresh", ym.RefreshFeedHandler())
 	r.GET("/api/v1/youtube/manager/news/trending", ym.TrendingNewsHandler())

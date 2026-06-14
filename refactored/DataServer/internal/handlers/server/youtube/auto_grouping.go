@@ -1,7 +1,6 @@
 package youtube
 
-import
-(
+import (
 	"fmt"
 	"net/http"
 	"sort"
@@ -49,12 +48,12 @@ func (ym *YouTubeManager) AutoOrganizeUndefinedChannelsHandler() gin.HandlerFunc
 		undefined := ym.service.GetUndefinedChannels()
 		if len(undefined) == 0 {
 			c.JSON(http.StatusOK, gin.H{
-				"ok":              true,
-				"moved":           0,
-				"skipped":         0,
-				"created_groups":  []string{},
-				"assignments":     []gin.H{},
-				"message":         "No undefined channels to organize",
+				"ok":             true,
+				"moved":          0,
+				"skipped":        0,
+				"created_groups": []string{},
+				"assignments":    []gin.H{},
+				"message":        "No undefined channels to organize",
 			})
 			return
 		}
@@ -113,12 +112,12 @@ func (ym *YouTubeManager) AutoOrganizeUndefinedChannelsHandler() gin.HandlerFunc
 
 			moved++
 			assigned = append(assigned, gin.H{
-				"id":       ch.ID,
-				"title":    channel.Title,
-				"name":     channel.Name,
-				"target":   target,
-				"reason":   reason,
-				"score":    score,
+				"id":     ch.ID,
+				"title":  channel.Title,
+				"name":   channel.Name,
+				"target": target,
+				"reason": reason,
+				"score":  score,
 			})
 		}
 
@@ -143,7 +142,7 @@ func (ym *YouTubeManager) AutoOrganizeUndefinedChannelsHandler() gin.HandlerFunc
 	}
 }
 
-func chooseAutoGroup(ch *yt.AuthChannel, existingGroups []string) (string, string, int) {
+func chooseAutoGroup(ch *yt.Channel, existingGroups []string) (string, string, int) {
 	textParts := []string{ch.ID, ch.Name, ch.Title, ch.Language}
 	text := strings.ToLower(strings.Join(textParts, " "))
 	bestName := ""
