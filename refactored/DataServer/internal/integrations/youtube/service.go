@@ -14,6 +14,23 @@ import (
 	ytanalytics "google.golang.org/api/youtubeanalytics/v2"
 )
 
+// YouTubeStore defines the interface for SQLite-backed YouTube persistence,
+// avoiding a direct import of the store package.
+type YouTubeStore interface {
+	ListYouTubeGroups() ([]map[string]interface{}, error)
+	UpsertYouTubeGroup(name, description, privacy string, channels []string, rawJSON string) error
+	GetYouTubeCache(key string) (int64, string, error)
+	SetYouTubeCache(key string, timestamp int64, dataJSON string) error
+	CleanupYouTubeCache(maxAge int64) (int64, error)
+	ClearYouTubeCache() error
+	MigrateYouTubeCache(entries map[string]struct {
+		Timestamp int64       `json:"timestamp"`
+		Data      interface{} `json:"data"`
+	}) (int, error)
+	ListYouTubeChannelMetadata() (map[string]map[string]interface{}, error)
+	UpsertYouTubeChannelMetadata(channelID, title, tokenPath, language, addedDate, lastUsed, rawJSON string) error
+}
+
 // Service provides YouTube API functionality
 type Service struct {
 	config      *ServiceConfig
@@ -22,6 +39,7 @@ type Service struct {
 	groups      map[string]*ChannelGroup
 	mu          sync.RWMutex
 	cache       *Cache
+	store       YouTubeStore
 
 	authManager  *AuthManager
 	uploader     *Uploader
@@ -100,6 +118,14 @@ func (s *Service) VideoManager() *VideoManager {
 // QuotaManager returns the quota manager
 func (s *Service) QuotaManager() *QuotaManager {
 	return s.quotaManager
+}
+
+// SetStore sets the SQLite store for persistence, type-asserting from interface{}.
+func (s *Service) SetStore(st interface{}) {
+	if store, ok := st.(YouTubeStore); ok {
+		s.store = store
+		s.cache.SetStore(store)
+	}
 }
 
 // --- Public API: OAuth (Delegated to AuthManager) ---

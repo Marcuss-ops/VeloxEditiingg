@@ -10,6 +10,7 @@ import (
 	"velox-server/internal/app"
 	"velox-server/internal/config"
 	remoteansible "velox-server/internal/handlers/remote/ansible"
+	"velox-server/internal/store"
 )
 
 // Module provides Ansible deployment endpoints.
@@ -20,9 +21,10 @@ type Module struct {
 	adminAuth gin.HandlerFunc
 	handlers  *remoteansible.AnsibleHandlers
 	masterURL string
+	store     *store.SQLiteStore
 }
 
-func New(cfg *config.Config, dataDir string, adminAuth gin.HandlerFunc) *Module {
+func New(cfg *config.Config, dataDir string, adminAuth gin.HandlerFunc, sqliteStore *store.SQLiteStore) *Module {
 	masterURL := cfg.MasterURL
 	if strings.TrimSpace(masterURL) == "" {
 		masterURL = os.Getenv("VELOX_MASTER_URL")
@@ -38,6 +40,7 @@ func New(cfg *config.Config, dataDir string, adminAuth gin.HandlerFunc) *Module 
 		dataDir:   dataDir,
 		adminAuth: adminAuth,
 		masterURL: masterURL,
+		store:     sqliteStore,
 	}
 }
 
@@ -55,8 +58,12 @@ func (m *Module) RegisterRoutes(r *gin.Engine) {
 		return
 	}
 
-	ansibleManager := remoteansible.NewAnsibleRunManager(m.cfg.PlaybookDir, m.dataDir)
+	ansibleManager := remoteansible.NewAnsibleRunManager(m.cfg.PlaybookDir, m.dataDir, m.store)
 	computerMgr := remoteansible.NewAnsibleComputerManager(m.dataDir)
+	if m.store != nil {
+		computerMgr.SetStore(m.store)
+	}
+	ansibleManager.SetComputerManager(computerMgr)
 	if err := computerMgr.LoadComputers(); err != nil {
 		log.Printf("[ANSIBLE] Failed to load computers: %v", err)
 	}

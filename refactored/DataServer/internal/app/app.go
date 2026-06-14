@@ -85,12 +85,12 @@ func (a *App) BuildDeps() error {
 		return fmt.Errorf("create file queue: %w", err)
 	}
 
-	reg := workersreg.NewWithPersistence(nil, false, sqliteStore, a.cfg.DataDir)
+	reg := workersreg.New(nil, false, sqliteStore)
 
 	// Log loaded revoked workers
 	revokedCount := len(reg.ListRevoked())
 	if revokedCount > 0 {
-		log.Printf("[APP] Loaded %d revoked workers from %s", revokedCount, a.cfg.DataDir)
+		log.Printf("[APP] Loaded %d revoked workers from SQLite", revokedCount)
 	}
 
 	a.deps = &Deps{

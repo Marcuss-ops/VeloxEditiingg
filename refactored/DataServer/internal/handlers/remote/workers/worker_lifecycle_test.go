@@ -9,7 +9,7 @@ import (
 )
 
 func TestNewWorkerLifecycleManager(t *testing.T) {
-	reg := workersreg.NewWithPersistence(nil, false, nil, t.TempDir())
+	reg := workersreg.New(nil, false, nil)
 	cfg := DefaultLifecycleConfig()
 	lm := NewWorkerLifecycleManager(cfg, reg, nil, nil)
 	if lm == nil {
@@ -18,7 +18,7 @@ func TestNewWorkerLifecycleManager(t *testing.T) {
 }
 
 func TestWorkerLifecycleManagerStart(t *testing.T) {
-	reg := workersreg.NewWithPersistence(nil, false, nil, t.TempDir())
+	reg := workersreg.New(nil, false, nil)
 	cfg := DefaultLifecycleConfig()
 	lm := NewWorkerLifecycleManager(cfg, reg, nil, nil)
 
@@ -31,7 +31,7 @@ func TestWorkerLifecycleManagerStart(t *testing.T) {
 }
 
 func TestEvaluateWorkerHealth_Healthy(t *testing.T) {
-	reg := workersreg.NewWithPersistence(nil, false, nil, t.TempDir())
+	reg := workersreg.New(nil, false, nil)
 	ctx := context.Background()
 	_ = reg.RegisterWorker(ctx, "w1", "worker-1", "10.0.0.1", nil)
 
@@ -51,7 +51,7 @@ func TestEvaluateWorkerHealth_Healthy(t *testing.T) {
 }
 
 func TestEvaluateWorkerHealth_Degraded(t *testing.T) {
-	reg := workersreg.NewWithPersistence(nil, false, nil, t.TempDir())
+	reg := workersreg.New(nil, false, nil)
 	ctx := context.Background()
 	_ = reg.RegisterWorker(ctx, "w1", "worker-1", "10.0.0.1", nil)
 
@@ -69,7 +69,7 @@ func TestEvaluateWorkerHealth_Degraded(t *testing.T) {
 }
 
 func TestEvaluateWorkerHealth_Unhealthy(t *testing.T) {
-	reg := workersreg.NewWithPersistence(nil, false, nil, t.TempDir())
+	reg := workersreg.New(nil, false, nil)
 	ctx := context.Background()
 	_ = reg.RegisterWorker(ctx, "w1", "worker-1", "10.0.0.1", nil)
 
@@ -87,7 +87,7 @@ func TestEvaluateWorkerHealth_Unhealthy(t *testing.T) {
 }
 
 func TestEvaluateWorkerHealth_Offline(t *testing.T) {
-	reg := workersreg.NewWithPersistence(nil, false, nil, t.TempDir())
+	reg := workersreg.New(nil, false, nil)
 	ctx := context.Background()
 	_ = reg.RegisterWorker(ctx, "w1", "worker-1", "10.0.0.1", nil)
 
@@ -108,7 +108,7 @@ func TestEvaluateWorkerHealth_Offline(t *testing.T) {
 }
 
 func TestEvaluateWorkerHealth_ErrorRate(t *testing.T) {
-	reg := workersreg.NewWithPersistence(nil, false, nil, t.TempDir())
+	reg := workersreg.New(nil, false, nil)
 	ctx := context.Background()
 	_ = reg.RegisterWorker(ctx, "w1", "worker-1", "10.0.0.1", nil)
 
@@ -139,7 +139,7 @@ func TestEvaluateWorkerHealth_ErrorRate(t *testing.T) {
 }
 
 func TestGetAllHealth(t *testing.T) {
-	reg := workersreg.NewWithPersistence(nil, false, nil, t.TempDir())
+	reg := workersreg.New(nil, false, nil)
 	ctx := context.Background()
 	_ = reg.RegisterWorker(ctx, "w1", "worker-1", "10.0.0.1", nil)
 	_ = reg.RegisterWorker(ctx, "w2", "worker-2", "10.0.0.2", nil)
@@ -162,7 +162,7 @@ func TestGetAllHealth(t *testing.T) {
 }
 
 func TestStats(t *testing.T) {
-	reg := workersreg.NewWithPersistence(nil, false, nil, t.TempDir())
+	reg := workersreg.New(nil, false, nil)
 	ctx := context.Background()
 	_ = reg.RegisterWorker(ctx, "w1", "worker-1", "10.0.0.1", nil)
 

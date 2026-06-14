@@ -3,12 +3,9 @@ package groups
 import (
 	"encoding/json"
 	"net/http"
-	"os"
-	"path/filepath"
-	"sync"
-	"time"
 
 	"github.com/gin-gonic/gin"
+	"velox-server/internal/store"
 )
 
 // Group represents a YouTube channel group
@@ -46,127 +43,102 @@ type Schedule struct {
 	PublishAt string `json:"publish_at,omitempty"`
 }
 
-// GroupsData holds the structure from youtube_manager.json
-type GroupsData struct {
-	Groups map[string]Group `json:"groups"`
+var groupsStore *store.SQLiteStore
+
+// InitGroupsStore sets the SQLite store for groups handlers.
+func InitGroupsStore(db *store.SQLiteStore) {
+	groupsStore = db
 }
 
-// groupsCache holds cached groups data
-type groupsCacheType struct {
-	data     GroupsData
-	lastLoad time.Time
-	mu       sync.RWMutex
-}
-
-var groupsCache groupsCacheType
-var groupsDataDir string
-
-// GetGroupsHandler returns all groups
+// GetGroupsHandler returns all groups from SQLite.
 func GetGroupsHandler(c *gin.Context) {
-	groups := getGroupsFromCache()
-	if groups == nil {
+	if groupsStore == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{
 			"ok":    false,
-			"error": "Groups data not available",
+			"error": "Groups store not initialized",
 		})
 		return
 	}
 
-	// Convert map to slice
-	result := make([]Group, 0, len(groups.Groups))
-	for name, g := range groups.Groups {
-		g.Name = name
+	rows, err := groupsStore.ListYouTubeGroups()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"ok":    false,
+			"error": err.Error(),
+		})
+		return
+	}
+
+	result := make([]Group, 0, len(rows))
+	for _, row := range rows {
+		g := Group{
+			Name:    row["name"].(string),
+			Privacy: row["privacy"].(string),
+		}
+		if desc, ok := row["description"].(string); ok {
+			g.DefaultLang = desc
+		}
+		if channelsJSON, ok := row["channels"].(string); ok {
+			var channelIDs []string
+			if err := json.Unmarshal([]byte(channelsJSON), &channelIDs); err == nil {
+				g.Channels = make([]Channel, 0, len(channelIDs))
+				for _, id := range channelIDs {
+					g.Channels = append(g.Channels, Channel{ID: id})
+				}
+			}
+		}
 		result = append(result, g)
 	}
 
 	c.JSON(http.StatusOK, result)
 }
 
-// GetGroupHandler returns a specific group
+// GetGroupHandler returns a specific group from SQLite.
 func GetGroupHandler(c *gin.Context) {
 	name := c.Param("name")
 
-	groups := getGroupsFromCache()
-	if groups == nil {
-		c.JSON(http.StatusNotFound, gin.H{
+	if groupsStore == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{
 			"ok":    false,
-			"error": "Group not found",
+			"error": "Groups store not initialized",
 		})
 		return
 	}
 
-	group, exists := groups.Groups[name]
-	if !exists {
-		c.JSON(http.StatusNotFound, gin.H{
-			"ok":    false,
-			"error": "Group not found",
-		})
-		return
-	}
-
-	group.Name = name
-	c.JSON(http.StatusOK, group)
-}
-
-// getGroupsFromCache returns cached groups data
-func getGroupsFromCache() *GroupsData {
-	groupsCache.mu.RLock()
-	if !groupsCache.lastLoad.IsZero() && time.Since(groupsCache.lastLoad) < 30*time.Second {
-		defer groupsCache.mu.RUnlock()
-		return &groupsCache.data
-	}
-	groupsCache.mu.RUnlock()
-
-	// Reload from disk
-	loadGroupsFromDisk()
-
-	groupsCache.mu.RLock()
-	defer groupsCache.mu.RUnlock()
-	return &groupsCache.data
-}
-
-// loadGroupsFromDisk loads groups from groups.json
-func loadGroupsFromDisk() {
-	if groupsDataDir == "" {
-		return
-	}
-
-	filePath := filepath.Join(groupsDataDir, "youtube", "groups.json")
-	data, err := os.ReadFile(filePath)
+	rows, err := groupsStore.ListYouTubeGroups()
 	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"ok":    false,
+			"error": err.Error(),
+		})
 		return
 	}
 
-	// Try array format first (groups.json uses array)
-	var groupsArray []Group
-	if err := json.Unmarshal(data, &groupsArray); err == nil && len(groupsArray) > 0 {
-		groupsData := GroupsData{Groups: make(map[string]Group)}
-		for _, g := range groupsArray {
-			if g.Name != "" {
-				groupsData.Groups[g.Name] = g
+	for _, row := range rows {
+		if row["name"].(string) == name {
+			g := Group{
+				Name:    name,
+				Privacy: row["privacy"].(string),
 			}
+			if desc, ok := row["description"].(string); ok {
+				g.DefaultLang = desc
+			}
+			if channelsJSON, ok := row["channels"].(string); ok {
+				var channelIDs []string
+				if err := json.Unmarshal([]byte(channelsJSON), &channelIDs); err == nil {
+					g.Channels = make([]Channel, 0, len(channelIDs))
+					for _, id := range channelIDs {
+						g.Channels = append(g.Channels, Channel{ID: id})
+					}
+				}
+			}
+			c.JSON(http.StatusOK, g)
+			return
 		}
-		groupsCache.mu.Lock()
-		groupsCache.data = groupsData
-		groupsCache.lastLoad = time.Now()
-		groupsCache.mu.Unlock()
-		return
 	}
 
-	// Fallback to map format (legacy youtube_manager.json format)
-	var groupsData GroupsData
-	if err := json.Unmarshal(data, &groupsData); err != nil {
-		return
-	}
-
-	groupsCache.mu.Lock()
-	groupsCache.data = groupsData
-	groupsCache.lastLoad = time.Now()
-	groupsCache.mu.Unlock()
-}
-
-// InitGroupsCache initializes the groups cache
-func InitGroupsCache(dataDirectory string) {
-	groupsDataDir = dataDirectory
-	loadGroupsFromDisk()
+	c.JSON(http.StatusNotFound, gin.H{
+		"ok":    false,
+		"error": "Group not found",
+	})
 }

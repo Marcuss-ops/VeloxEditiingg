@@ -2,9 +2,11 @@ package ansible
 
 import (
 	"encoding/json"
-	"os"
-	"path/filepath"
+	"log"
 	"sync"
+	"time"
+
+	"velox-server/internal/store"
 )
 
 // AnsibleComputer represents a computer in the Ansible inventory.
@@ -35,9 +37,27 @@ type AnsibleComputer struct {
 	WorkerID         string   `json:"worker_id,omitempty"`
 }
 
+// AnsibleComputerStore defines the SQLite operations for ansible computers.
+// Both the legacy raw_json interface and the new structured interface are provided.
+type AnsibleComputerStore interface {
+	// Legacy methods (ansible_computers table — raw_json)
+	GetAnsibleComputer(host string) (string, error)
+	ListAnsibleComputers() (map[string]json.RawMessage, error)
+	UpsertAnsibleComputer(host, rawJSON string) error
+	DeleteAnsibleComputer(host string) error
+	MigrateAnsibleComputersFromJSON(computers map[string]json.RawMessage) (int, error)
+
+	// New structured methods (ansible_hosts table)
+	UpsertAnsibleHost(fields store.AnsibleHostFields) error
+	DeleteAnsibleHost(host string) error
+	GetAnsibleHost(host string) (*store.AnsibleHostFields, error)
+	ListAnsibleHosts() ([]store.AnsibleHostFields, error)
+}
+
 // AnsibleComputerManager manages the Ansible computers inventory.
 type AnsibleComputerManager struct {
 	dataDir   string
+	store     AnsibleComputerStore
 	computers map[string]AnsibleComputer
 	mu        sync.RWMutex
 }
@@ -50,26 +70,127 @@ func NewAnsibleComputerManager(dataDir string) *AnsibleComputerManager {
 	}
 }
 
-// LoadComputers loads computers from ansible_computers.json.
-func (m *AnsibleComputerManager) LoadComputers() error {
+// SetStore sets the SQLite store and loads from it.
+func (m *AnsibleComputerManager) SetStore(store AnsibleComputerStore) {
+	m.store = store
+	m.loadFromSQLite()
+}
+
+// loadFromSQLite loads computers from SQLite (legacy ansible_computers table).
+func (m *AnsibleComputerManager) loadFromSQLite() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	filePath := filepath.Join(m.dataDir, "ansible", "ansible_computers.json")
-	data, err := os.ReadFile(filePath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
+	if m.store == nil {
+		return
+	}
+
+	// Try loading from new structured ansible_hosts first
+	hosts, err := m.store.ListAnsibleHosts()
+	if err == nil && len(hosts) > 0 {
+		for _, h := range hosts {
+			computer := ansibleHostFieldsToComputer(h)
+			m.computers[computer.Host] = computer
 		}
-		return err
+		log.Printf("[OK] Loaded %d Ansible computers from ansible_hosts", len(m.computers))
+		return
 	}
 
-	var computers map[string]AnsibleComputer
-	if err := json.Unmarshal(data, &computers); err != nil {
-		return err
+	// Fallback: load from legacy ansible_computers (raw_json)
+	rows, legacyErr := m.store.ListAnsibleComputers()
+	if legacyErr != nil || len(rows) == 0 {
+		return
 	}
 
-	m.computers = computers
+	for host, rawJSON := range rows {
+		var c AnsibleComputer
+		if err := json.Unmarshal(rawJSON, &c); err != nil {
+			continue
+		}
+		m.computers[host] = c
+	}
+
+	// Migrate legacy data to new structured table
+	log.Printf("[INFO] Migrating %d computers from ansible_computers to ansible_hosts", len(m.computers))
+	for _, c := range m.computers {
+		_ = m.persistToAnsibleHosts(c)
+	}
+}
+
+// ansibleHostFieldsToComputer converts structured fields to AnsibleComputer.
+func ansibleHostFieldsToComputer(h store.AnsibleHostFields) AnsibleComputer {
+	return AnsibleComputer{
+		Host:             h.Host,
+		AnsibleUser:      h.AnsibleUser,
+		SSHKeyPath:       h.SSHKeyPath,
+		SSHPassword:      "", // Not stored in plaintext — use secret_ref
+		Enabled:          h.Enabled,
+		Availability:     h.Availability,
+		Group:            h.Group,
+		Subgroup:         h.Subgroup,
+		Tags:             h.Tags,
+		Notes:            h.Notes,
+		LinkedWorkerID:   h.LinkedWorkerID,
+		WorkerID:         h.WorkerID,
+		LastSeenAt:       h.LastSeenAt,
+		LastErrorAt:      h.LastErrorAt,
+		LastErrorMessage: h.LastErrorMessage,
+		LastLinkedAt:     h.LastLinkedAt,
+		LastRunID:        h.LastRunID,
+		LastRunAction:    h.LastRunAction,
+		LastRunRC:        h.LastRunRC,
+		LastLogLevel:     h.LastLogLevel,
+		LastLogMessage:   h.LastLogMessage,
+		LastLogSource:    h.LastLogSource,
+		CreatedAt:        h.CreatedAt,
+		UpdatedAt:        h.UpdatedAt,
+	}
+}
+
+// computerToAnsibleHostFields converts AnsibleComputer to structured fields.
+// SSHPassword is NOT carried over — use secret_ref for secrets.
+func computerToAnsibleHostFields(c AnsibleComputer) store.AnsibleHostFields {
+	return store.AnsibleHostFields{
+		Host:             c.Host,
+		AnsibleUser:      c.AnsibleUser,
+		SSHKeyPath:       c.SSHKeyPath,
+		SecretRef:        "", // SSHPassword is replaced by secret_ref
+		Enabled:          c.Enabled,
+		Availability:     c.Availability,
+		Group:            c.Group,
+		Subgroup:         c.Subgroup,
+		Tags:             c.Tags,
+		Notes:            c.Notes,
+		LinkedWorkerID:   c.LinkedWorkerID,
+		WorkerID:         c.WorkerID,
+		LastSeenAt:       c.LastSeenAt,
+		LastErrorAt:      c.LastErrorAt,
+		LastErrorMessage: c.LastErrorMessage,
+		LastLinkedAt:     c.LastLinkedAt,
+		LastRunID:        c.LastRunID,
+		LastRunAction:    c.LastRunAction,
+		LastRunRC:        c.LastRunRC,
+		LastLogLevel:     c.LastLogLevel,
+		LastLogMessage:   c.LastLogMessage,
+		LastLogSource:    c.LastLogSource,
+		CreatedAt:        c.CreatedAt,
+		UpdatedAt:        c.UpdatedAt,
+	}
+}
+
+// persistToAnsibleHosts writes to the new structured table.
+func (m *AnsibleComputerManager) persistToAnsibleHosts(c AnsibleComputer) error {
+	if m.store == nil {
+		return nil
+	}
+	return m.store.UpsertAnsibleHost(computerToAnsibleHostFields(c))
+}
+
+// LoadComputers loads computers from SQLite.
+func (m *AnsibleComputerManager) LoadComputers() error {
+	if m.store != nil {
+		m.loadFromSQLite()
+	}
 	return nil
 }
 
@@ -94,12 +215,19 @@ func (m *AnsibleComputerManager) GetComputer(id string) (AnsibleComputer, bool) 
 }
 
 // SaveComputer saves or updates a computer.
+// SQLite (ansible_hosts) is the single source of truth.
 func (m *AnsibleComputerManager) SaveComputer(computer AnsibleComputer) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	computer.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 	m.computers[computer.Host] = computer
-	return m.saveToFile()
+
+	if m.store == nil {
+		return nil
+	}
+
+	return m.persistToAnsibleHosts(computer)
 }
 
 // DeleteComputer deletes a computer.
@@ -108,7 +236,11 @@ func (m *AnsibleComputerManager) DeleteComputer(id string) error {
 	defer m.mu.Unlock()
 
 	delete(m.computers, id)
-	return m.saveToFile()
+	if m.store == nil {
+		return nil
+	}
+
+	return m.store.DeleteAnsibleHost(id)
 }
 
 // Count returns the number of computers.
@@ -132,14 +264,13 @@ func (m *AnsibleComputerManager) CountEnabled() int {
 	return count
 }
 
-// saveToFile saves computers to ansible_computers.json.
-func (m *AnsibleComputerManager) saveToFile() error {
-	filePath := filepath.Join(m.dataDir, "ansible", "ansible_computers.json")
-
-	data, err := json.MarshalIndent(m.computers, "", "  ")
-	if err != nil {
-		return err
+// GetSecretRef returns the secret_ref for a host (for inventory generation).
+// Used by AnsibleRunManager to reference secrets instead of plaintext passwords.
+func (m *AnsibleComputerManager) GetSecretRef(host string) string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if _, ok := m.computers[host]; ok {
+		return "" // Return empty until secret management is implemented
 	}
-
-	return os.WriteFile(filePath, data, 0644)
+	return ""
 }

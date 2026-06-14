@@ -7,8 +7,6 @@ import (
 	"fmt"
 	"strings"
 	"time"
-
-	_ "embed"
 )
 
 // CalendarEvent represents a video production calendar event
@@ -65,46 +63,9 @@ type CalendarEventFilter struct {
 	Offset   int    `json:"offset"`
 }
 
-//go:embed migrations/sqlite/002_calendar.sql
-var calendarSchema string
-
-// initCalendarSchema creates the calendar_events table
-func (s *SQLiteStore) initCalendarSchema() error {
-	if calendarSchema == "" {
-		return fmt.Errorf("calendar schema is empty")
-	}
-	_, err := s.db.Exec(calendarSchema)
-	if err != nil {
-		return err
-	}
-
-	// Backfill schema additions for existing databases.
-	columns := []struct {
-		table      string
-		column     string
-		definition string
-	}{
-		{"calendar_events", "external_id", "TEXT DEFAULT ''"},
-		{"calendar_events", "source", "TEXT DEFAULT ''"},
-		{"calendar_events", "status", "TEXT DEFAULT 'draft'"},
-		{"calendar_events", "youtube_group", "TEXT DEFAULT ''"},
-		{"calendar_events", "titles_json", "TEXT DEFAULT '[]'"},
-		{"calendar_events", "script_text", "TEXT DEFAULT ''"},
-		{"calendar_events", "youtube_links_json", "TEXT DEFAULT '[]'"},
-		{"calendar_events", "voiceover_paths_json", "TEXT DEFAULT '[]'"},
-		{"calendar_events", "category", "TEXT DEFAULT ''"},
-		{"calendar_events", "job_id", "TEXT DEFAULT ''"},
-		{"calendar_events", "job_status", "TEXT DEFAULT ''"},
-		{"calendar_events", "queued_at", "TEXT"},
-		{"calendar_events", "queue_error", "TEXT DEFAULT ''"},
-	}
-	for _, col := range columns {
-		if err := s.ensureColumn(col.table, col.column, col.definition); err != nil {
-			return err
-		}
-	}
-	return nil
-}
+// initCalendarSchema has been migrated to migrations/001_initial.sql.
+// Post-migration column adjustments are handled in postMigrationAdjustments().
+// The embedded migrations/sqlite/002_calendar.sql can be removed once confirmed.
 
 // CreateCalendarEvent creates a new calendar event
 func (s *SQLiteStore) CreateCalendarEvent(ctx context.Context, event *CalendarEvent) error {

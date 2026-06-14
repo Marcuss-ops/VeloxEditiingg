@@ -48,7 +48,7 @@ func (a *DataLayerAuditor) Audit() *DataLayerAuditResult {
 	// Check for legacy files that should not exist
 	a.checkLegacyFiles(result)
 	
-	// Check for duplicate source of truth
+	// Check for duplicate source of truth (directory naming inconsistencies)
 	a.checkDuplicateSources(result)
 	
 	// Check for inconsistent naming
@@ -69,15 +69,18 @@ func (a *DataLayerAuditor) checkLegacyFiles(result *DataLayerAuditResult) {
 	legacyFiles := []string{
 		"youtube/youtube_manager.json",
 		"youtube/groups.json",
+		"youtube/channels/channels.json",
+		"youtube/GroupYoutubeManager/ChannelsSaved.json",
 		"youtube/group",
-		"workers/workers.json",
 		"drive/Credentials",
-		"ansible/ansible_runs.json", // Duplicate in root
+		"ansible/ansible_runs.json",
 		"job_queue.json",
 		"job_queue_recovered.json",
 		"jobs_queue.json",
 		"video_uploads.db",
 		"worker_downloads/bundle_manifest.json",
+		"analytics/feed_cache.json",
+		"youtube/history/upload_history.json",
 	}
 
 	for _, legacy := range legacyFiles {
@@ -90,12 +93,16 @@ func (a *DataLayerAuditor) checkLegacyFiles(result *DataLayerAuditResult) {
 
 // checkDuplicateSources detects multiple source of truth for same domain.
 func (a *DataLayerAuditor) checkDuplicateSources(result *DataLayerAuditResult) {
-	// Workers: should only have workers.json in root, not workers/workers.json
+	// workers.json is no longer a runtime source of truth since migrating to SQLite.
+	// If it still exists, it's a legacy backup — no action required.
 	workersRoot := filepath.Join(a.dataDir, "workers.json")
 	workersSubdir := filepath.Join(a.dataDir, "workers", "workers.json")
 	
-	if a.fileExists(workersRoot) && a.fileExists(workersSubdir) {
-		result.Errors = append(result.Errors, "Workers has duplicate source of truth: workers.json AND workers/workers.json")
+	if a.fileExists(workersRoot) {
+		result.Warnings = append(result.Warnings, "Legacy backup exists: workers.json (no longer used)")
+	}
+	if a.fileExists(workersSubdir) {
+		result.Warnings = append(result.Warnings, "Legacy backup exists: workers/workers.json (no longer used)")
 	}
 
 	// Drive Credentials: should only have lowercase credentials/
@@ -141,11 +148,8 @@ func (a *DataLayerAuditor) checkPrimaryFiles(result *DataLayerAuditResult) {
 		path     string
 		required bool
 	}{
-		{"youtube/channels/channels.json", true},
-		{"youtube/GroupYoutubeManager/ChannelsSaved.json", true},
-		{"workers.json", true},
-		{"velox.db", true},
-		{"ansible_runs.json", false}, // Optional
+		{"velox.db", true},           // SQLite is now the primary store
+		// ansible_runs.json is no longer a primary source — SQLite only
 		{"bundle/manifest_v2.json", false}, // Optional (generated)
 	}
 
