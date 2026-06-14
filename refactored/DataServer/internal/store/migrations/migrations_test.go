@@ -34,8 +34,8 @@ func TestDiscoverMigrations_AllVersions(t *testing.T) {
 		t.Fatalf("discoverMigrations failed: %v", err)
 	}
 
-	if len(migs) != 8 {
-		t.Fatalf("expected 8 migrations, got %d", len(migs))
+	if len(migs) != 9 {
+		t.Fatalf("expected 9 migrations, got %d", len(migs))
 	}
 
 	expected := []struct {
@@ -50,6 +50,7 @@ func TestDiscoverMigrations_AllVersions(t *testing.T) {
 		{6, "drive_links_source_of_truth"},
 		{7, "queue_persistence"},
 		{8, "drop_legacy_tables"},
+		{9, "drop_legacy_tables"},
 	}
 
 	for i, exp := range expected {
@@ -344,7 +345,7 @@ func TestMigration004_AnsibleHostsDefaults(t *testing.T) {
 }
 
 // ============================================================
-// Migration 005: Legacy cleanup (soft) + Migration 008: DROP legacy
+// Migration 005: Soft cleanup + Migration 008: Data copy + Migration 009: DROP
 // ============================================================
 
 func TestMigration005_AppliesCleanly(t *testing.T) {
@@ -361,14 +362,21 @@ func TestMigration005_AppliesCleanly(t *testing.T) {
 		t.Error("migration 005 checksum is empty")
 	}
 
-	// Verify migration 008 is recorded
+	// Verify migration 008 is recorded (data copy, no DROP)
 	var checksum008 string
 	err = db.QueryRow(`SELECT checksum FROM schema_migrations WHERE version = 8`).Scan(&checksum008)
 	if err != nil {
 		t.Fatalf("migration 008 not recorded: %v", err)
 	}
 
-	// Verify legacy tables are DROPPED by migration 008
+	// Verify migration 009 is recorded (DROP)
+	var checksum009 string
+	err = db.QueryRow(`SELECT checksum FROM schema_migrations WHERE version = 9`).Scan(&checksum009)
+	if err != nil {
+		t.Fatalf("migration 009 not recorded: %v", err)
+	}
+
+	// Verify legacy tables are DROPPED by migration 009
 	legacyTables := []string{
 		"youtube_channel_metadata",
 		"youtube_groups",
@@ -378,11 +386,11 @@ func TestMigration005_AppliesCleanly(t *testing.T) {
 	}
 	for _, table := range legacyTables {
 		if tableExists(t, db, table) {
-			t.Errorf("migration 008 should have dropped %s", table)
+			t.Errorf("migration 009 should have dropped %s", table)
 		}
 	}
 
-	// Verify legacy_json_registry exists
+	// Verify legacy_json_registry exists (created by migration 008)
 	if !tableExists(t, db, "legacy_json_registry") {
 		t.Error("migration 008 should have created legacy_json_registry")
 	}
@@ -744,7 +752,7 @@ func TestIntegration_MigrationRunner_EndToEnd(t *testing.T) {
 		t.Errorf("expected 0 run hosts after CASCADE, got %d", runHostCount)
 	}
 
-	// ---- Phase 6: Migration 008 — Legacy tables dropped ----
+	// ---- Phase 6: Migration 009 — Legacy tables dropped ----
 	legacyTables := []string{
 		"youtube_channel_metadata", "youtube_groups",
 		"youtube_manager_channels", "youtube_manager_groups",
@@ -752,11 +760,11 @@ func TestIntegration_MigrationRunner_EndToEnd(t *testing.T) {
 	}
 	for _, table := range legacyTables {
 		if tableExists(t, db, table) {
-			t.Errorf("migration 008 should have dropped %s", table)
+			t.Errorf("migration 009 should have dropped %s", table)
 		}
 	}
 
-	// Verify legacy_json_registry exists
+	// Verify legacy_json_registry exists (created by migration 008)
 	if !tableExists(t, db, "legacy_json_registry") {
 		t.Error("migration 008 should have created legacy_json_registry")
 	}
@@ -856,8 +864,8 @@ func TestIntegration_NewSQLiteStore_AutoMigration(t *testing.T) {
 
 // TestMigration008_UpgradeEndToEnd simulates a database that has been running
 // since before migration 003/004 (canonical YouTube/Ansible models), inserts
-// real data into legacy tables, then applies migration 008 (data migration +
-// DROP) and verifies ZERO data loss.
+// real data into legacy tables, then applies migration 008 (data copy) and
+// migration 009 (DROP) separately, verifying ZERO data loss at each step.
 //
 // This is the most critical test for production safety.
 func TestMigration008_UpgradeEndToEnd(t *testing.T) {
@@ -1030,25 +1038,38 @@ func TestMigration008_UpgradeEndToEnd(t *testing.T) {
 	}
 
 	// -----------------------------------------------------------------------
-	// Phase 4: Apply migration 008 (data migration + DROP)
+	// Phase 4: Apply migration 008 (data copy ONLY — no DROP)
 	// -----------------------------------------------------------------------
 	err = EnsureApplied(db, migs[7]) // Version 8 is at index 7
 	if err != nil {
 		t.Fatalf("apply migration 008: %v", err)
 	}
 
-	// -----------------------------------------------------------------------
-	// Phase 5: Verify legacy tables are DROPPED
-	// -----------------------------------------------------------------------
+	// Verify legacy tables are STILL PRESENT after migration 008 (not dropped yet)
 	for _, table := range legacyTables {
-		if tableExists(t, db, table) {
-			t.Errorf("migration 008 should have dropped %s", table)
+		if !tableExists(t, db, table) {
+			t.Errorf("migration 008 should NOT have dropped %s yet (data copy only)", table)
 		}
 	}
 
 	// Verify legacy_json_registry exists
 	if !tableExists(t, db, "legacy_json_registry") {
 		t.Error("migration 008 should have created legacy_json_registry")
+	}
+
+	// -----------------------------------------------------------------------
+	// Phase 5: Apply migration 009 (DROP legacy tables)
+	// -----------------------------------------------------------------------
+	err = EnsureApplied(db, migs[8]) // Version 9 is at index 8
+	if err != nil {
+		t.Fatalf("apply migration 009: %v", err)
+	}
+
+	// Verify legacy tables are now DROPPED
+	for _, table := range legacyTables {
+		if tableExists(t, db, table) {
+			t.Errorf("migration 009 should have dropped %s", table)
+		}
 	}
 
 	// -----------------------------------------------------------------------
