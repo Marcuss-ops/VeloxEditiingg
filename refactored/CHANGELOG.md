@@ -1,5 +1,37 @@
 # Changelog
 
+## 2026-06-14 — v1.1.0
+
+### 🚀 SQLite Persistence Migration
+- **JSON→SQLite legacy importer**: Created `legacy_importer.go` with SHA-256 checksum idempotency, automatic timestamped backups (`.bak`), and tracking via `legacy_imports` table
+- **velox-migrate-json CLI**: New command with `inventory`, `dry-run`, `apply` subcommands for managing legacy JSON data migration
+- **Queue persistence**: DLQ, EventLogger, Orchestrator now use SQLite as source of truth with JSON file fallback (migrations 007-008)
+- **SQLite persistence tables**: Created `queue_jobs`, `orchestrator_jobs`, `job_events`, `dlq_jobs`, `legacy_imports` tables
+
+### 🔐 Ansible Secret Resolver
+- **SSHPassword→secret_ref migration**: Credential secrets written to `secrets/ansible/ssh_host_*` files (0600 permissions), never stored in plaintext in SQLite
+- **SecretResolver**: New `secrets.go` with `StoreSSHPassword()`, `BuildSecretRef()`, `Resolve()` — used by `manager_computers.go` at save time
+- **Inventory generation**: `manager_runs.go` now resolves `secret_ref` at runtime instead of embedding passwords in inventory files
+
+### 🎬 YouTube Canonical Model
+- **Service init order fixed**: `NewService()` now accepts `YouTubeStore` directly — data loaded immediately from constructor; `SetStore()` is a no-op if store already provided
+- **Canonical tables**: Groups/channels loaded from `youtube_groups_v2` + `youtube_group_channels` (canonical) with fallback to legacy `youtube_groups` / `youtube_channel_metadata`
+- **StorageStore**: Unified `load()` from canonical tables + legacy fallback; `save()` now propagates errors with `fmt.Errorf` instead of silently swallowing them
+
+### 🛡️ Data-Layer Audit & CI
+- **DataLayerAuditor**: New `audit/data_layer.go` checks for legacy files, duplicate sources of truth, naming consistency, missing primary files, and database integrity
+- **JSON guard**: Integrated into `dod_check.sh` — checks 8 legacy JSON sources, validates data integrity via `velox-migrate-json dry-run`, monitors `legacy_imports` tracking table
+- **Ansible syntax fix**: Quoted `name` string in `install_workers.yml` to fix YAML colon-space parsing error
+
+### 🧪 Testing
+- **Audit tests**: 22 tests for `data_layer.go` covering duplicate sources, naming consistency, database checks, AllowLegacy, FailOnError, String output
+- **Legacy importer tests**: 24 tests for `legacy_importer.go` covering `countJSONRecords`, `createJSONBackup`, `toInt64`, `sanitizeFilename`, import functions (workers, youtube channels/groups), idempotency
+
+### 🔧 Code Quality
+- **Error propagation**: All SQLite errors in `storage.go`, `groups.go`, `manager_runs.go`, `manager_computers.go` — no more `_ =` ignored errors
+- **Channels type fix**: `row["channels"].(string)` → `row["channels"].([]string)` in handler `groups.go`; fixed `ListGroups()` misuse in `youtube_groups.go` (second return is tracked niches, not error)
+- **DoD scripts unified**: Merged `dod_check.sh` + `dod-check.sh` → single unified `dod_check.sh` (8 gates); extracted common framework → `scripts/lib/common.sh`
+
 ## 2026-06-13
 
 ### 🐛 Bug Fixes
