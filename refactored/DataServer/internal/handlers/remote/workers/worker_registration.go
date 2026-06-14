@@ -141,7 +141,7 @@ func (wl *WorkerLifecycle) RegisterV2Handler() gin.HandlerFunc {
 	}
 }
 
-func (wl *WorkerLifecycle) RegisterCompatHandler() gin.HandlerFunc {
+func (wl *WorkerLifecycle) RegisterHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var body struct {
 			WorkerID        string                 `json:"worker_id"`
@@ -236,7 +236,7 @@ func (wl *WorkerLifecycle) RegisterCompatHandler() gin.HandlerFunc {
 	}
 }
 
-func (wl *WorkerLifecycle) UnregisterCompatHandler() gin.HandlerFunc {
+func (wl *WorkerLifecycle) UnregisterHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var body struct {
 			WorkerID string `json:"worker_id"`

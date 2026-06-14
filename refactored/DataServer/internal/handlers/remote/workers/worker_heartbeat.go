@@ -9,78 +9,6 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func (wl *WorkerLifecycle) HeartbeatCompatHandler() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		var body struct {
-			WorkerID        string                 `json:"worker_id"`
-			WorkerName      string                 `json:"worker_name"`
-			Status          string                 `json:"status"`
-			CurrentJob      string                 `json:"current_job"`
-			JobID           string                 `json:"job_id"`
-			CodeVersion     string                 `json:"code_version"`
-			BundleVersion   string                 `json:"bundle_version"`
-			BundleHash      string                 `json:"bundle_hash"`
-			ProtocolVersion string                 `json:"protocol_version"`
-			EngineVersion   string                 `json:"engine_version"`
-			Capabilities    map[string]interface{} `json:"capabilities"`
-			Extra           map[string]interface{} `json:"extra"`
-		}
-
-		if err := c.ShouldBindJSON(&body); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "invalid JSON body"})
-			return
-		}
-
-		if body.WorkerID == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "missing worker_id"})
-			return
-		}
-		if !wl.authorizeWorkerRequest(c, body.WorkerID) {
-			return
-		}
-		if body.Status == "" {
-			body.Status = "online"
-		}
-		currentJob := body.CurrentJob
-		if currentJob == "" {
-			currentJob = body.JobID
-		}
-
-		extra := body.Extra
-		if extra == nil {
-			extra = make(map[string]interface{})
-		}
-		if body.CodeVersion != "" {
-			extra["code_version"] = body.CodeVersion
-		}
-		if body.BundleVersion != "" {
-			extra["bundle_version"] = body.BundleVersion
-		}
-		if body.BundleHash != "" {
-			extra["bundle_hash"] = body.BundleHash
-		}
-		if body.ProtocolVersion != "" {
-			extra["protocol_version"] = body.ProtocolVersion
-		}
-		if body.EngineVersion != "" {
-			extra["engine_version"] = body.EngineVersion
-		}
-		if body.Capabilities != nil {
-			extra["capabilities"] = body.Capabilities
-		}
-
-		if err := wl.reg.Heartbeat(c.Request.Context(), body.WorkerID, body.WorkerName, body.Status, currentJob, extra); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": "heartbeat failed"})
-			return
-		}
-
-		c.JSON(http.StatusOK, gin.H{
-			"success": true,
-			"message": "heartbeat ok",
-		})
-	}
-}
-
 func (wl *WorkerLifecycle) HeartbeatHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var body struct {
@@ -169,7 +97,7 @@ func (wl *WorkerLifecycle) HeartbeatHandler() gin.HandlerFunc {
 	}
 }
 
-func (wl *WorkerLifecycle) UpdateStatusCompatHandler() gin.HandlerFunc {
+func (wl *WorkerLifecycle) UpdateStatusHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var body struct {
 			WorkerID string                 `json:"worker_id"`

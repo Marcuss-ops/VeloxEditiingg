@@ -142,7 +142,7 @@ func workerStatusCounts(ctx context.Context, fileQ *queue.FileQueue, redisQ *que
 }
 
 // RegisterV1Routes registers all /api/v1/* routes (core API)
-func RegisterV1Routes(r *gin.Engine, cfg *config.Config, fileQ *queue.FileQueue, redisQ *queue.Queue, reg *workersreg.Registry, jobAPI *jobs.JobAPI, jobSubmitHandler *jobs.JobSubmissionHandler, workersRepo store.WorkersRepository, db *store.SQLiteStore, workerUpdateHandler *workersapi.WorkerUpdateHandler, workerLifecycle *workersapi.WorkerLifecycle, ansibleHandlers *ansible.AnsibleHandlers) {
+func RegisterV1Routes(r *gin.Engine, cfg *config.Config, fileQ *queue.FileQueue, redisQ *queue.Queue, reg *workersreg.Registry, jobAPI *jobs.JobAPI, jobSubmitHandler *jobs.JobSubmissionHandler, workersRepo store.WorkersRepository, db *store.SQLiteStore, workerUpdateHandler *workersapi.WorkerUpdateHandler, ansibleHandlers *ansible.AnsibleHandlers) {
 	v1 := r.Group("/api/v1")
 	v1Admin := r.Group("/api/v1")
 	v1Admin.Use(adminAuthMiddleware(cfg))
@@ -176,12 +176,8 @@ func RegisterV1Routes(r *gin.Engine, cfg *config.Config, fileQ *queue.FileQueue,
 		// a Gin radix tree conflict with the wildcard route /workers/:id/logs.
 		// They are registered directly in router.go under /worker/revoke and /worker/drain.
 
-		// Worker polling endpoints (backward compat with /api/v1/workers/commands)
-		// These do NOT conflict with /workers/:id/logs because they have different
-		// path depths (/:id/logs is 2 segments after /workers/, /commands is 1 segment).
-		v1.GET("/workers/commands", workerLifecycle.GetCommandsCompatHandler())
-		v1.POST("/workers/commands", workerLifecycle.GetCommandsCompatHandler())
-		v1.POST("/workers/commands/ack", workerLifecycle.AckCommandCompatHandler())
+		// Worker polling — canonical endpoints are registered by the workers module.
+		// The /api/v1/workers/commands* legacy endpoints have been removed.
 
 		// Bundle Explorer - List files in bundle
 		if workerUpdateHandler != nil {

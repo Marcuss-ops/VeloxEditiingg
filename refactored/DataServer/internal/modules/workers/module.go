@@ -38,16 +38,12 @@ func (m *Module) RegisterRoutes(r *gin.Engine) {
 	}
 
 	if m.workerLifecycle != nil {
-		r.POST("/api/workers/register", m.workerLifecycle.RegisterCompatHandler())
-		r.POST("/api/workers/unregister", m.workerLifecycle.UnregisterCompatHandler())
-		r.GET("/api/workers/commands", m.workerLifecycle.GetCommandsCompatHandler())
-		r.POST("/api/workers/commands", m.workerLifecycle.GetCommandsCompatHandler())
-		r.POST("/api/workers/commands/ack", m.workerLifecycle.AckCommandCompatHandler())
-		r.POST("/api/workers/status", m.workerLifecycle.UpdateStatusCompatHandler())
-
-		r.GET("/worker/command", m.workerLifecycle.WorkerCommandHandler())
-		r.POST("/worker/command", m.workerLifecycle.WorkerCommandHandler())
-		r.POST("/worker/command_ack", m.workerLifecycle.WorkerCommandAckHandler())
+		r.POST("/api/workers/register", m.workerLifecycle.RegisterHandler())
+		r.POST("/api/workers/unregister", m.workerLifecycle.UnregisterHandler())
+		r.GET("/api/workers/commands", m.workerLifecycle.GetCommandsHandler())
+		r.POST("/api/workers/commands", m.workerLifecycle.GetCommandsHandler())
+		r.POST("/api/workers/commands/ack", m.workerLifecycle.AckCommandHandler())
+		r.POST("/api/workers/status", m.workerLifecycle.UpdateStatusHandler())
 	}
 
 	if m.workerLifecycle != nil {
