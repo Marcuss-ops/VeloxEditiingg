@@ -1,7 +1,6 @@
 package workers
 
 import (
-	"context"
 	"log"
 
 	"github.com/gin-gonic/gin"
@@ -14,16 +13,14 @@ import (
 // Module provides worker management endpoints.
 type Module struct {
 	app.BaseModule
-	cfg                 *config.Config
 	reg                 *workersreg.Registry
 	adminAuth           gin.HandlerFunc
 	workerLifecycle     *workersapi.WorkerLifecycle
 	workerUpdateHandler *workersapi.WorkerUpdateHandler
 }
 
-func New(cfg *config.Config, reg *workersreg.Registry, lifecycle *workersapi.WorkerLifecycle, updateHandler *workersapi.WorkerUpdateHandler, adminAuth gin.HandlerFunc) *Module {
+func New(_ *config.Config, reg *workersreg.Registry, lifecycle *workersapi.WorkerLifecycle, updateHandler *workersapi.WorkerUpdateHandler, adminAuth gin.HandlerFunc) *Module {
 	return &Module{
-		cfg:                 cfg,
 		reg:                 reg,
 		workerLifecycle:     lifecycle,
 		workerUpdateHandler: updateHandler,
@@ -78,12 +75,4 @@ func (m *Module) RegisterRoutes(r *gin.Engine) {
 	log.Printf("[WORKERS] Routes registered")
 }
 
-func (m *Module) Start(ctx context.Context) error {
-	log.Printf("[WORKERS] Module started")
-	return nil
-}
 
-func (m *Module) Stop(ctx context.Context) error {
-	log.Printf("[WORKERS] Module stopped")
-	return nil
-}

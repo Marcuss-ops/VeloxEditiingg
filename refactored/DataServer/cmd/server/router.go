@@ -121,7 +121,7 @@ func registerNativeV1Routes(r *gin.Engine, deps *serverDeps) {
 	// V1 native routes need the youtube service from the youtube module.
 	// Since we don't have a reference here, we pass nil for now.
 	// TODO: extract youtube service from registry
-	api.RegisterV1NativeRoutes(r, deps.streamsQ, deps.redisQ, deps.reg, nil, nil, deps.paths.dataDir)
+	api.RegisterV1NativeRoutes(r, deps.streamsQ, deps.paths.dataDir, nil)
 }
 
 func registerScriptRoutes(r *gin.Engine, cfg *config.Config, deps *serverDeps) {

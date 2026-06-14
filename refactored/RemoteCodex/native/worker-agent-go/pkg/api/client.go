@@ -21,6 +21,20 @@ import (
 	"velox-worker-agent/pkg/logger"
 )
 
+// Canonical API endpoint paths.
+const (
+	endpointRegisterWorker   = "/api/workers/register"
+	endpointUnregisterWorker = "/api/workers/unregister"
+	endpointHeartbeat        = "/api/workers/heartbeat"
+	endpointGetJob           = "/api/jobs/get"
+	endpointSubmitResult     = "/api/jobs/result"
+	endpointCompleteJob      = "/api/jobs/complete"
+	endpointHealthCheck      = "/health"
+	endpointGetCommands      = "/api/workers/commands"
+	endpointAckCommand       = "/api/workers/commands/ack"
+	endpointUpdateStatus     = "/api/workers/status"
+)
+
 // Client is an HTTP client for the Velox Master API.
 type Client struct {
 	baseURL        string
@@ -28,7 +42,6 @@ type Client struct {
 	headers        map[string]string
 	retryCount     int
 	retryInterval  time.Duration
-	adapter        *EndpointAdapter
 	circuitBreaker *CircuitBreaker
 
 	// Auth token obtained during registration, sent as Bearer token on subsequent requests.
@@ -48,7 +61,6 @@ func NewClient(baseURL string, opts ...ClientOption) *Client {
 		headers:        make(map[string]string),
 		retryCount:     0,
 		retryInterval:  5 * time.Second,
-		adapter:        NewEndpointAdapter(),
 		circuitBreaker: NewCircuitBreaker(5, 3, 60*time.Second),
 	}
 	for _, opt := range opts {
@@ -239,7 +251,7 @@ type registerResponse struct {
 // RegisterWorker registers this worker with the master server.
 // If the server returns a token, it is stored and used for subsequent authenticated requests.
 func (c *Client) RegisterWorker(ctx context.Context, info *WorkerInfo) error {
-	respBody, err := c.doRequest(ctx, "POST", c.adapter.RegisterWorker(), info)
+	respBody, err := c.doRequest(ctx, "POST", endpointRegisterWorker, info)
 	if err != nil {
 		return err
 	}
@@ -264,13 +276,13 @@ func (c *Client) RegisterWorker(ctx context.Context, info *WorkerInfo) error {
 
 // UnregisterWorker unregisters this worker from the master server.
 func (c *Client) UnregisterWorker(ctx context.Context, workerID string) error {
-	_, err := c.doRequest(ctx, "POST", c.adapter.UnregisterWorker(), map[string]string{"worker_id": workerID})
+	_, err := c.doRequest(ctx, "POST", endpointUnregisterWorker, map[string]string{"worker_id": workerID})
 	return err
 }
 
 // GetJob fetches the next available job from the master.
 func (c *Client) GetJob(ctx context.Context, workerID string) (*Job, error) {
-	respBody, err := c.doRequest(ctx, "POST", c.adapter.GetJob(), &JobRequest{WorkerID: workerID})
+	respBody, err := c.doRequest(ctx, "POST", endpointGetJob, &JobRequest{WorkerID: workerID})
 	if err != nil {
 		return nil, err
 	}
@@ -294,13 +306,13 @@ func (c *Client) GetJob(ctx context.Context, workerID string) (*Job, error) {
 
 // SubmitJobResult submits the result of a completed job.
 func (c *Client) SubmitJobResult(ctx context.Context, result *JobResult) error {
-	_, err := c.doRequest(ctx, "POST", c.adapter.SubmitResult(), result)
+	_, err := c.doRequest(ctx, "POST", endpointSubmitResult, result)
 	return err
 }
 
 // CompleteJob notifies the master that a job has completed successfully.
 func (c *Client) CompleteJob(ctx context.Context, jobID, workerID string) error {
-	_, err := c.doRequest(ctx, "POST", c.adapter.CompleteJob(), map[string]string{
+	_, err := c.doRequest(ctx, "POST", endpointCompleteJob, map[string]string{
 		"job_id":    jobID,
 		"worker_id": workerID,
 	})
@@ -309,19 +321,19 @@ func (c *Client) CompleteJob(ctx context.Context, jobID, workerID string) error 
 
 // SendHeartbeat sends a heartbeat to the master server.
 func (c *Client) SendHeartbeat(ctx context.Context, payload *HeartbeatPayload) error {
-	_, err := c.doRequest(ctx, "POST", c.adapter.Heartbeat(), payload)
+	_, err := c.doRequest(ctx, "POST", endpointHeartbeat, payload)
 	return err
 }
 
 // HealthCheck checks if the master server is healthy.
 func (c *Client) HealthCheck(ctx context.Context) error {
-	_, err := c.doRequest(ctx, "GET", c.adapter.HealthCheck(), nil)
+	_, err := c.doRequest(ctx, "GET", endpointHealthCheck, nil)
 	return err
 }
 
 // GetCommands fetches pending commands for this worker from the master.
 func (c *Client) GetCommands(ctx context.Context, workerID string) ([]WorkerCommand, error) {
-	respBody, err := c.doRequest(ctx, "GET", c.adapter.GetCommands()+"?worker_id="+url.QueryEscape(workerID), nil)
+	respBody, err := c.doRequest(ctx, "GET", endpointGetCommands+"?worker_id="+url.QueryEscape(workerID), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -349,7 +361,7 @@ func (c *Client) GetCommands(ctx context.Context, workerID string) ([]WorkerComm
 
 // AckCommand acknowledges a command has been processed.
 func (c *Client) AckCommand(ctx context.Context, workerID, command string) error {
-	_, err := c.doRequest(ctx, "POST", c.adapter.AckCommand(), map[string]string{
+	_, err := c.doRequest(ctx, "POST", endpointAckCommand, map[string]string{
 		"worker_id": workerID, "command": command,
 	})
 	return err
@@ -357,7 +369,7 @@ func (c *Client) AckCommand(ctx context.Context, workerID, command string) error
 
 // UpdateStatus sends a status update to the master (for command responses).
 func (c *Client) UpdateStatus(ctx context.Context, workerID, status string, details map[string]interface{}) error {
-	_, err := c.doRequest(ctx, "POST", c.adapter.UpdateStatus(), map[string]interface{}{
+	_, err := c.doRequest(ctx, "POST", endpointUpdateStatus, map[string]interface{}{
 		"worker_id": workerID, "status": status, "details": details,
 	})
 	return err

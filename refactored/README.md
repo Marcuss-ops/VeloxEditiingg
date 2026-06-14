@@ -1,4 +1,4 @@
-# Velox v1.0.3 - Sistema di Generazione Video Distribuito
+# Velox v1.0.6 - Sistema di Generazione Video Distribuito
 
 ![CI](https://github.com/Marcuss-ops/VeloxEditiingg/actions/workflows/ci.yml/badge.svg)
 
@@ -158,7 +158,7 @@ Velox è un sistema distribuito per la generazione e composizione video. È comp
 │
 ├── docs/                              # Documentazione API
 ├── scripts/                           # Scripts di deploy
-└── VERSION.txt                        # v1.0.3
+└── VERSION.txt                        # v1.0.6
 ```
 
 ---

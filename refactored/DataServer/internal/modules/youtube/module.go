@@ -1,7 +1,6 @@
 package youtube
 
 import (
-	"context"
 	"log"
 
 	"github.com/gin-gonic/gin"
@@ -18,19 +17,17 @@ type Module struct {
 	cfg            *config.Config
 	dataDir        string
 	sqliteStore    *store.SQLiteStore
-	adminAuth      gin.HandlerFunc
 	youtubeService *integrationsYoutube.Service
 	youtubeStorage *integrationsYoutube.Storage
 	handlers       *ytHandlers.YouTubeHandlers
 	manager        *ytHandlers.YouTubeManager
 }
 
-func New(cfg *config.Config, dataDir string, sqliteStore *store.SQLiteStore, adminAuth gin.HandlerFunc) *Module {
+func New(cfg *config.Config, dataDir string, sqliteStore *store.SQLiteStore, _ gin.HandlerFunc) *Module {
 	return &Module{
 		cfg:         cfg,
 		dataDir:     dataDir,
 		sqliteStore: sqliteStore,
-		adminAuth:   adminAuth,
 	}
 }
 
@@ -106,12 +103,4 @@ func (m *Module) RegisterRoutes(r *gin.Engine) {
 	}
 }
 
-func (m *Module) Start(ctx context.Context) error {
-	log.Printf("[YOUTUBE] Module started")
-	return nil
-}
 
-func (m *Module) Stop(ctx context.Context) error {
-	log.Printf("[YOUTUBE] Module stopped")
-	return nil
-}
