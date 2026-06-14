@@ -77,6 +77,19 @@ func (a *App) BuildDeps() error {
 		return fmt.Errorf("open sqlite: %w", err)
 	}
 
+	// Import legacy JSON data into SQLite (idempotent, checksum-protected)
+	if a.cfg.DataDir != "" {
+		if results, err := sqliteStore.ImportLegacyJSON(a.cfg.DataDir); err != nil {
+			log.Printf("[APP] Legacy JSON import error (non-fatal): %v", err)
+		} else {
+			for _, r := range results {
+				if r.Status == "imported" {
+					log.Printf("[APP] Migrated: %s (%d records)", r.Source.Name, r.Imported)
+				}
+			}
+		}
+	}
+
 	fileQ, err := queue.NewFileQueue(&queue.FileQueueConfig{
 		DBStore:    sqliteStore,
 		MaxRetries: a.cfg.MaxJobAttempts,

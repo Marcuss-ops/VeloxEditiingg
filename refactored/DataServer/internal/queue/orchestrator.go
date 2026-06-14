@@ -7,9 +7,11 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"velox-server/internal/store"
 )
 
-func NewOrchestrator(cfg *OrchestratorConfig, fq *FileQueue, dlq *DeadLetterQueue) (*Orchestrator, error) {
+func NewOrchestrator(cfg *OrchestratorConfig, fq *FileQueue, dlq *DeadLetterQueue, dbStore *store.SQLiteStore) (*Orchestrator, error) {
 	if cfg == nil {
 		cfg = DefaultOrchestratorConfig("")
 	}
@@ -18,6 +20,7 @@ func NewOrchestrator(cfg *OrchestratorConfig, fq *FileQueue, dlq *DeadLetterQueu
 		config:      cfg,
 		jobs:        make(map[string]*MultiStepJob),
 		filePath:    filepath.Join(cfg.DataDir, "jobs", "multi_step_jobs.json"),
+		dbStore:     dbStore,
 		jobChan:     make(chan *MultiStepJob, 100),
 		stepChan:    make(chan *JobStep, 100),
 		resultChan:  make(chan *StepResult, 100),
@@ -39,6 +42,23 @@ func NewOrchestrator(cfg *OrchestratorConfig, fq *FileQueue, dlq *DeadLetterQueu
 }
 
 func (o *Orchestrator) load() error {
+	// SQLite is the source of truth
+	if o.dbStore != nil {
+		jobs, err := o.dbStore.ListOrchestratorJobs()
+		if err == nil && len(jobs) > 0 {
+			for _, raw := range jobs {
+				var job MultiStepJob
+				b, _ := json.Marshal(raw)
+				if err := json.Unmarshal(b, &job); err == nil {
+					o.jobs[job.JobID] = &job
+				}
+			}
+			log.Printf("[ORCH] Loaded %d jobs from SQLite", len(o.jobs))
+			return nil
+		}
+	}
+
+	// Fallback: legacy JSON file
 	data, err := os.ReadFile(o.filePath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -51,10 +71,30 @@ func (o *Orchestrator) load() error {
 		return nil
 	}
 
-	return json.Unmarshal(data, &o.jobs)
+	if err := json.Unmarshal(data, &o.jobs); err != nil {
+		return err
+	}
+
+	// Import into SQLite for next time
+	if o.dbStore != nil && len(o.jobs) > 0 {
+		for _, job := range o.jobs {
+			o.persistJob(job)
+		}
+		log.Printf("[MIGRATE] Imported %d orchestrator jobs from JSON to SQLite", len(o.jobs))
+	}
+
+	return nil
 }
 
 func (o *Orchestrator) save() error {
+	// SQLite is the source of truth
+	if o.dbStore != nil {
+		for _, job := range o.jobs {
+			o.persistJob(job)
+		}
+	}
+
+	// Backup: JSON file
 	data, err := json.MarshalIndent(o.jobs, "", "  ")
 	if err != nil {
 		return err
@@ -66,6 +106,20 @@ func (o *Orchestrator) save() error {
 	}
 
 	return os.Rename(tmpPath, o.filePath)
+}
+
+// persistJob saves a single job to SQLite.
+func (o *Orchestrator) persistJob(job *MultiStepJob) {
+	raw, _ := json.Marshal(job)
+	if err := o.dbStore.UpsertOrchestratorJob(
+		job.JobID, string(job.Status), job.PipelineType,
+		job.TotalSteps, job.CurrentStep, string(raw),
+	); err != nil {
+		log.Printf("[WARN] Failed to persist orchestrator job %s: %v", job.JobID[:8], err)
+	}
+	if err := o.dbStore.SetOrchestratorJobTimestamps(job.JobID, job.StartedAt, job.CompletedAt); err != nil {
+		log.Printf("[WARN] Failed to persist orchestrator job timestamps %s: %v", job.JobID[:8], err)
+	}
 }
 
 func (o *Orchestrator) SetStepReadyCallback(cb func(step *JobStep) error) {

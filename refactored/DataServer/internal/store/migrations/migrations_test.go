@@ -34,8 +34,8 @@ func TestDiscoverMigrations_AllVersions(t *testing.T) {
 		t.Fatalf("discoverMigrations failed: %v", err)
 	}
 
-	if len(migs) != 6 {
-		t.Fatalf("expected 6 migrations, got %d", len(migs))
+	if len(migs) != 8 {
+		t.Fatalf("expected 8 migrations, got %d", len(migs))
 	}
 
 	expected := []struct {
@@ -48,6 +48,8 @@ func TestDiscoverMigrations_AllVersions(t *testing.T) {
 		{4, "ansible"},
 		{5, "legacy_cleanup"},
 		{6, "drive_links_source_of_truth"},
+		{7, "queue_persistence"},
+		{8, "drop_legacy_tables"},
 	}
 
 	for i, exp := range expected {
@@ -342,7 +344,7 @@ func TestMigration004_AnsibleHostsDefaults(t *testing.T) {
 }
 
 // ============================================================
-// Migration 005: Legacy cleanup (soft)
+// Migration 005: Legacy cleanup (soft) + Migration 008: DROP legacy
 // ============================================================
 
 func TestMigration005_AppliesCleanly(t *testing.T) {
@@ -359,7 +361,14 @@ func TestMigration005_AppliesCleanly(t *testing.T) {
 		t.Error("migration 005 checksum is empty")
 	}
 
-	// Verify all legacy tables still exist (no DROP in migration 005)
+	// Verify migration 008 is recorded
+	var checksum008 string
+	err = db.QueryRow(`SELECT checksum FROM schema_migrations WHERE version = 8`).Scan(&checksum008)
+	if err != nil {
+		t.Fatalf("migration 008 not recorded: %v", err)
+	}
+
+	// Verify legacy tables are DROPPED by migration 008
 	legacyTables := []string{
 		"youtube_channel_metadata",
 		"youtube_groups",
@@ -368,9 +377,14 @@ func TestMigration005_AppliesCleanly(t *testing.T) {
 		"ansible_computers",
 	}
 	for _, table := range legacyTables {
-		if !tableExists(t, db, table) {
-			t.Errorf("migration 005 dropped %s unexpectedly (should be kept)", table)
+		if tableExists(t, db, table) {
+			t.Errorf("migration 008 should have dropped %s", table)
 		}
+	}
+
+	// Verify legacy_json_registry exists
+	if !tableExists(t, db, "legacy_json_registry") {
+		t.Error("migration 008 should have created legacy_json_registry")
 	}
 }
 
@@ -548,11 +562,11 @@ func TestIntegration_MigrationRunner_EndToEnd(t *testing.T) {
 	}
 
 	// ---- Phase 2: Verify tables from Migration 001 (initial schema) ----
+	// Note: legacy tables (ansible_computers, youtube_channel_metadata, youtube_groups,
+	// youtube_manager_channels, youtube_manager_groups) are created by 001 but dropped by 008.
 	tables001 := []string{
 		"jobs", "job_history", "job_logs", "workers", "worker_flags",
-		"analytics_cache", "drive_links", "ansible_computers",
-		"youtube_channel_metadata", "youtube_groups", "youtube_api_cache",
-		"youtube_manager_channels", "youtube_manager_groups",
+		"analytics_cache", "drive_links", "youtube_api_cache",
 		"dark_editor_projects", "dark_editor_folders", "dark_editor_assets",
 		"dark_editor_templates", "dark_editor_temp_files", "dark_editor_generations",
 		"youtube_channel_metrics", "youtube_revenue_metrics", "youtube_video_metrics",
@@ -730,16 +744,21 @@ func TestIntegration_MigrationRunner_EndToEnd(t *testing.T) {
 		t.Errorf("expected 0 run hosts after CASCADE, got %d", runHostCount)
 	}
 
-	// ---- Phase 6: Migration 005 — Legacy tables still exist ----
+	// ---- Phase 6: Migration 008 — Legacy tables dropped ----
 	legacyTables := []string{
 		"youtube_channel_metadata", "youtube_groups",
 		"youtube_manager_channels", "youtube_manager_groups",
 		"ansible_computers",
 	}
 	for _, table := range legacyTables {
-		if !tableExists(t, db, table) {
-			t.Errorf("migration 005 should keep %s, but it's missing", table)
+		if tableExists(t, db, table) {
+			t.Errorf("migration 008 should have dropped %s", table)
 		}
+	}
+
+	// Verify legacy_json_registry exists
+	if !tableExists(t, db, "legacy_json_registry") {
+		t.Error("migration 008 should have created legacy_json_registry")
 	}
 }
 

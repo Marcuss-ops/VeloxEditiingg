@@ -16,9 +16,31 @@ import (
 
 // YouTubeStore defines the interface for SQLite-backed YouTube persistence,
 // avoiding a direct import of the store package.
+// It includes both canonical methods (youtube_channels, youtube_groups_v2)
+// and legacy methods (youtube_channel_metadata, youtube_groups) for migration.
 type YouTubeStore interface {
+	// Canonical: YouTube Channels (youtube_channels table)
+	ListYouTubeChannels() ([]map[string]interface{}, error)
+	GetYouTubeChannel(channelID string) (map[string]interface{}, error)
+	UpsertYouTubeChannel(channelID, title, displayName, channelURL, thumbnailURL, language, notes string, viewCount, subCount int64, addedAt, lastSyncAt, metadataJSON string) error
+
+	// Canonical: YouTube Groups V2 (youtube_groups_v2 + youtube_group_channels)
+	ListYouTubeGroupsV2() ([]map[string]interface{}, error)
+	UpsertYouTubeGroupV2(name, groupType, description, privacy string) (int64, error)
+	AddChannelToGroupV2(groupID int64, channelID string) error
+	RemoveChannelFromGroupV2(groupID int64, channelID string) error
+	ListGroupChannelsV2(groupID int64) ([]string, error)
+	ListAllGroupMembershipsV2() ([]map[string]interface{}, error)
+
+	// Legacy: YouTube Groups (kept for backward compat during migration)
 	ListYouTubeGroups() ([]map[string]interface{}, error)
 	UpsertYouTubeGroup(name, description, privacy string, channels []string, rawJSON string) error
+
+	// Legacy: YouTube Channel Metadata (kept for backward compat during migration)
+	ListYouTubeChannelMetadata() (map[string]map[string]interface{}, error)
+	UpsertYouTubeChannelMetadata(channelID, title, tokenPath, language, addedDate, lastUsed, rawJSON string) error
+
+	// Cache (shared, not legacy)
 	GetYouTubeCache(key string) (int64, string, error)
 	SetYouTubeCache(key string, timestamp int64, dataJSON string) error
 	CleanupYouTubeCache(maxAge int64) (int64, error)
@@ -27,8 +49,6 @@ type YouTubeStore interface {
 		Timestamp int64       `json:"timestamp"`
 		Data      interface{} `json:"data"`
 	}) (int, error)
-	ListYouTubeChannelMetadata() (map[string]map[string]interface{}, error)
-	UpsertYouTubeChannelMetadata(channelID, title, tokenPath, language, addedDate, lastUsed, rawJSON string) error
 }
 
 // Service provides YouTube API functionality
@@ -47,8 +67,9 @@ type Service struct {
 	quotaManager *QuotaManager
 }
 
-// NewService creates a new YouTube service
-func NewService(cfg *ServiceConfig) (*Service, error) {
+// NewService creates a new YouTube service.
+// store is optional — if nil, in-memory-only mode is used.
+func NewService(cfg *ServiceConfig, store YouTubeStore) (*Service, error) {
 	if cfg.TokensDir == "" {
 		if env := os.Getenv("VELOX_YOUTUBE_TOKENS_DIR"); env != "" {
 			cfg.TokensDir = env
@@ -79,9 +100,10 @@ func NewService(cfg *ServiceConfig) (*Service, error) {
 
 	s := &Service{
 		config:   cfg,
+		store:    store,
 		channels: make(map[string]*AuthChannel),
 		groups:   make(map[string]*ChannelGroup),
-		cache:    NewCache(cfg.DataDir, 12*time.Hour),
+		cache:    NewCache(cfg.DataDir, 12*time.Hour, store),
 	}
 
 	s.authManager = NewAuthManager(s)
@@ -94,8 +116,9 @@ func NewService(cfg *ServiceConfig) (*Service, error) {
 	}
 
 	s.loadChannels()
-	s.loadChannelsJSON()
-	s.loadGroups()
+	// Load from canonical tables — store is already set, so this works immediately
+	s.loadCanonicalChannels()
+	s.loadCanonicalGroups()
 
 	return s, nil
 }
@@ -121,10 +144,17 @@ func (s *Service) QuotaManager() *QuotaManager {
 }
 
 // SetStore sets the SQLite store for persistence, type-asserting from interface{}.
+// If a store was already provided via NewService, this is a no-op.
+// If called for the first time, it reloads data from the store.
 func (s *Service) SetStore(st interface{}) {
+	if s.store != nil {
+		return // Already set via NewService
+	}
 	if store, ok := st.(YouTubeStore); ok {
 		s.store = store
 		s.cache.SetStore(store)
+		s.loadCanonicalChannels()
+		s.loadCanonicalGroups()
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"math/rand"
 	"os"
 	"os/exec"
@@ -177,20 +178,30 @@ func (m *AnsibleRunManager) persistRunToSQLite(run AnsibleRunRecord) error {
 	); err != nil {
 		return err
 	}
+	// Link hosts to run — log errors but don't fail the whole persist
 	for _, host := range run.Hosts {
-		_ = m.dbStore.AddAnsibleRunHost(run.ID, host)
+		if err := m.dbStore.AddAnsibleRunHost(run.ID, host); err != nil {
+			log.Printf("[WARN] Failed to link host %s to run %s: %v", host, run.ID[:8], err)
+		}
 	}
 	return nil
 }
 
 func (m *AnsibleRunManager) persistRunsLocked() error {
 	// SQLite is the single source of truth for run history.
-	if m.dbStore != nil {
-		for _, run := range m.runs {
-			_ = m.persistRunToSQLite(run)
+	if m.dbStore == nil {
+		return nil
+	}
+	var firstErr error
+	for _, run := range m.runs {
+		if err := m.persistRunToSQLite(run); err != nil {
+			log.Printf("[WARN] Failed to persist run %s: %v", run.ID[:8], err)
+			if firstErr == nil {
+				firstErr = err
+			}
 		}
 	}
-	return nil
+	return firstErr
 }
 
 func (m *AnsibleRunManager) saveRun(run AnsibleRunRecord) error {
@@ -408,9 +419,12 @@ func (m *AnsibleRunManager) writeInventoryFile(hosts []string) (string, map[stri
 		lines = append(lines, "          ansible_connection: ssh")
 		lines = append(lines, "          ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'")
 		lines = append(lines, "          ansible_python_interpreter: /usr/bin/python3")
-		if c.SSHPassword != "" {
-			lines = append(lines, fmt.Sprintf("          ansible_password: %s", c.SSHPassword))
-			lines = append(lines, fmt.Sprintf("          ansible_ssh_pass: %s", c.SSHPassword))
+		// Use secret_ref instead of plaintext password
+		if secretRef := m.computerMgr.GetSecretRef(c.Host); secretRef != "" {
+			if secret, err := m.computerMgr.ResolveSecret(secretRef); err == nil && secret != "" {
+				lines = append(lines, fmt.Sprintf("          ansible_password: %s", secret))
+				lines = append(lines, fmt.Sprintf("          ansible_ssh_pass: %s", secret))
+			}
 		}
 		if c.SSHKeyPath != "" {
 			lines = append(lines, fmt.Sprintf("          ansible_ssh_private_key_file: %s", c.SSHKeyPath))
@@ -422,8 +436,10 @@ func (m *AnsibleRunManager) writeInventoryFile(hosts []string) (string, map[stri
 		}
 		if c.Enabled {
 			lines = append(lines, "          ansible_become: true", "          ansible_become_method: sudo")
-			if c.SSHPassword != "" {
-				lines = append(lines, fmt.Sprintf("          ansible_become_password: %s", c.SSHPassword))
+			if secretRef := m.computerMgr.GetSecretRef(c.Host); secretRef != "" {
+				if secret, err := m.computerMgr.ResolveSecret(secretRef); err == nil && secret != "" {
+					lines = append(lines, fmt.Sprintf("          ansible_become_password: %s", secret))
+				}
 			}
 		}
 	}

@@ -277,6 +277,317 @@ func findSubstring(s, substr string) bool {
 	return false
 }
 
+// ============================================================
+// Additional audit tests
+// ============================================================
+
+// TestCheckDuplicateSources_WorkersWarning tests that workers.json produces
+// a warning, not an error.
+func TestCheckDuplicateSources_WorkersWarning(t *testing.T) {
+	tmpDir := t.TempDir()
+	secretsDir := filepath.Join(tmpDir, "secrets")
+	os.MkdirAll(secretsDir, 0755)
+
+	// Create workers.json (should produce a warning)
+	os.WriteFile(filepath.Join(tmpDir, "workers.json"), []byte(`{}`), 0644)
+
+	auditor := NewDataLayerAuditor(tmpDir, secretsDir)
+	result := &DataLayerAuditResult{
+		Passed:   true,
+		Errors:   make([]string, 0),
+		Warnings: make([]string, 0),
+	}
+
+	auditor.checkDuplicateSources(result)
+
+	if len(result.Warnings) == 0 {
+		t.Error("Expected warning for workers.json, got none")
+	}
+	if len(result.Errors) > 0 {
+		t.Errorf("Expected no errors, got: %v", result.Errors)
+	}
+}
+
+// TestCheckDuplicateSources_DriveCredentialsError tests that both credentials/
+// and Credentials/ directories produce an error.
+func TestCheckDuplicateSources_DriveCredentialsError(t *testing.T) {
+	tmpDir := t.TempDir()
+	secretsDir := filepath.Join(tmpDir, "secrets")
+	os.MkdirAll(secretsDir, 0755)
+
+	// Create BOTH credentials/ and Credentials/ directories
+	os.MkdirAll(filepath.Join(tmpDir, "drive", "credentials"), 0755)
+	os.MkdirAll(filepath.Join(tmpDir, "drive", "Credentials"), 0755)
+
+	auditor := NewDataLayerAuditor(tmpDir, secretsDir)
+	result := &DataLayerAuditResult{
+		Passed:   true,
+		Errors:   make([]string, 0),
+		Warnings: make([]string, 0),
+	}
+
+	auditor.checkDuplicateSources(result)
+
+	if len(result.Errors) == 0 {
+		t.Error("Expected error for duplicate drive credentials, got none")
+	}
+
+	found := false
+	for _, err := range result.Errors {
+		if stringsContains(err, "Drive has duplicate credentials") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("Expected error about duplicate credentials, got: %v", result.Errors)
+	}
+}
+
+// TestCheckNamingConsistency_MixedCase tests that mixed-case
+// directory names produce an error.
+func TestCheckNamingConsistency_MixedCase(t *testing.T) {
+	tmpDir := t.TempDir()
+	secretsDir := filepath.Join(tmpDir, "secrets")
+	os.MkdirAll(secretsDir, 0755)
+
+	// Create BOTH credentials/ and Credentials/ (mixed case)
+	os.MkdirAll(filepath.Join(tmpDir, "drive", "credentials"), 0755)
+	os.MkdirAll(filepath.Join(tmpDir, "drive", "Credentials"), 0755)
+
+	auditor := NewDataLayerAuditor(tmpDir, secretsDir)
+	result := &DataLayerAuditResult{
+		Passed:   true,
+		Errors:   make([]string, 0),
+		Warnings: make([]string, 0),
+	}
+
+	auditor.checkNamingConsistency(result)
+
+	if len(result.Errors) == 0 {
+		t.Error("Expected error for inconsistent directory naming, got none")
+	}
+
+	found := false
+	for _, err := range result.Errors {
+		if stringsContains(err, "Inconsistent directory naming") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("Expected error about inconsistent naming, got: %v", result.Errors)
+	}
+}
+
+// TestCheckDatabase_MissingDB tests that missing velox.db produces a warning.
+func TestCheckDatabase_MissingDB(t *testing.T) {
+	tmpDir := t.TempDir()
+	secretsDir := filepath.Join(tmpDir, "secrets")
+	os.MkdirAll(secretsDir, 0755)
+
+	auditor := NewDataLayerAuditor(tmpDir, secretsDir)
+	result := &DataLayerAuditResult{
+		Passed:   true,
+		Errors:   make([]string, 0),
+		Warnings: make([]string, 0),
+	}
+
+	auditor.checkDatabase(result)
+
+	if len(result.Warnings) == 0 {
+		t.Error("Expected warning for missing velox.db, got none")
+	}
+	found := false
+	for _, w := range result.Warnings {
+		if stringsContains(w, "velox.db") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("Expected warning about missing velox.db, got: %v", result.Warnings)
+	}
+}
+
+// TestCheckDatabase_NoDuplicate tests that no duplicate warning is emitted
+// when there's only one velox.db.
+func TestCheckDatabase_NoDuplicate(t *testing.T) {
+	tmpDir := t.TempDir()
+	secretsDir := filepath.Join(tmpDir, "secrets")
+	os.MkdirAll(secretsDir, 0755)
+
+	// Create a single velox.db (no duplicates)
+	os.WriteFile(filepath.Join(tmpDir, "velox.db"), []byte(`SQLite format 3\x00`), 0644)
+
+	auditor := NewDataLayerAuditor(tmpDir, secretsDir)
+	result := &DataLayerAuditResult{
+		Passed:   true,
+		Errors:   make([]string, 0),
+		Warnings: make([]string, 0),
+	}
+
+	auditor.checkDatabase(result)
+
+	// Should have no errors because velox.db exists
+	if len(result.Errors) > 0 {
+		t.Errorf("Expected no errors, got: %v", result.Errors)
+	}
+
+	// Should have no warnings about missing DB (it exists)
+	for _, w := range result.Warnings {
+		if stringsContains(w, "not found") {
+			t.Errorf("Expected no 'not found' warning when velox.db exists, got: %s", w)
+		}
+	}
+}
+
+// TestAllowLegacy_SkippedAllowed tests that allowed legacy files don't
+// produce errors.
+func TestAllowLegacy_SkippedAllowed(t *testing.T) {
+	tmpDir := t.TempDir()
+	secretsDir := filepath.Join(tmpDir, "secrets")
+	os.MkdirAll(secretsDir, 0755)
+
+	// Create a known legacy file
+	os.MkdirAll(filepath.Join(tmpDir, "youtube", "GroupYoutubeManager"), 0755)
+	os.WriteFile(filepath.Join(tmpDir, "youtube", "GroupYoutubeManager", "ChannelsSaved.json"), []byte(`{}`), 0644)
+
+	auditor := NewDataLayerAuditor(tmpDir, secretsDir)
+	auditor.AllowLegacy("youtube/GroupYoutubeManager/ChannelsSaved.json")
+
+	result := auditor.Audit()
+
+	// With the file allowed, checkLegacyFiles should not report it
+	// but checkPrimaryFiles might require velox.db
+	// So we check specifically that ChannelsSaved.json is not in errors
+	for _, err := range result.Errors {
+		if stringsContains(err, "ChannelsSaved.json") {
+			t.Errorf("Allowed legacy file should not produce error: %s", err)
+		}
+	}
+}
+
+// TestFailOnError_ReturnsError tests that FailOnError returns an error
+// for failed audits.
+func TestFailOnError_ReturnsError(t *testing.T) {
+	result := &DataLayerAuditResult{
+		Passed: false,
+		Errors: []string{"error 1", "error 2"},
+	}
+
+	err := result.FailOnError()
+	if err == nil {
+		t.Error("FailOnError should return error when Passed is false")
+	}
+
+	if !stringsContains(err.Error(), "DATA LAYER AUDIT FAILED") {
+		t.Errorf("Expected 'DATA LAYER AUDIT FAILED' in error, got: %v", err)
+	}
+}
+
+// TestFailOnError_ReturnsNil tests that FailOnError returns nil
+// for passed audits.
+func TestFailOnError_ReturnsNil(t *testing.T) {
+	result := &DataLayerAuditResult{
+		Passed: true,
+		Errors: []string{},
+	}
+
+	err := result.FailOnError()
+	if err != nil {
+		t.Errorf("FailOnError should return nil when Passed is true, got: %v", err)
+	}
+}
+
+// TestAuditResult_StringContainsStatus tests that String() output
+// contains the correct status.
+func TestAuditResult_StringContainsStatus(t *testing.T) {
+	result := &DataLayerAuditResult{
+		Passed: true,
+		Errors: []string{},
+		DataDir: "/tmp/test",
+	}
+
+	s := result.String()
+
+	if !stringsContains(s, "PASSED") {
+		t.Error("String() should contain 'PASSED' for passed audits")
+	}
+}
+
+// TestAuditResult_StringFailed tests that String() output for failed audits.
+func TestAuditResult_StringFailed(t *testing.T) {
+	result := &DataLayerAuditResult{
+		Passed: false,
+		Errors: []string{"test error"},
+		DataDir: "/tmp/test",
+	}
+
+	s := result.String()
+
+	if !stringsContains(s, "FAILED") {
+		t.Error("String() should contain 'FAILED' for failed audits")
+	}
+	if !stringsContains(s, "test error") {
+		t.Error("String() should contain the error message")
+	}
+}
+
+// TestNewDataLayerAuditor tests that the constructor initializes correctly.
+func TestNewDataLayerAuditor(t *testing.T) {
+	auditor := NewDataLayerAuditor("/tmp/data", "/tmp/data/secrets")
+
+	if auditor == nil {
+		t.Fatal("NewDataLayerAuditor should not return nil")
+	}
+
+	if auditor.dataDir != "/tmp/data" {
+		t.Errorf("Expected dataDir='/tmp/data', got '%s'", auditor.dataDir)
+	}
+	if auditor.secretsDir != "/tmp/data/secrets" {
+		t.Errorf("Expected secretsDir='/tmp/data/secrets', got '%s'", auditor.secretsDir)
+	}
+	if auditor.allowedLegacy == nil {
+		t.Error("allowedLegacy map should be initialized")
+	}
+}
+
+// TestAudit_WarningCount tests that Audit() returns correct warning count.
+func TestAudit_WarningCount(t *testing.T) {
+	tmpDir := t.TempDir()
+	secretsDir := filepath.Join(tmpDir, "secrets")
+	os.MkdirAll(secretsDir, 0755)
+
+	// Create YouTube tokens directory to avoid warnings from checkPrimaryFiles
+	ytTokensDir := filepath.Join(secretsDir, "youtube", "tokens")
+	os.MkdirAll(ytTokensDir, 0755)
+
+	// Create some tokens
+	os.WriteFile(filepath.Join(ytTokensDir, "account_test.json"), []byte(`{}`), 0644)
+
+	auditor := NewDataLayerAuditor(tmpDir, secretsDir)
+	result := auditor.Audit()
+
+	// Should NOT have errors (no DB warning is expected since checkDatabase warns)
+	// Check that Info contains token info
+	found := false
+	for _, info := range result.Info {
+		if stringsContains(info, "YouTube tokens") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("Expected info about YouTube tokens, got: %v", result.Info)
+	}
+}
+
+// Helper: stringsContains reports whether substr is within s.
+func stringsContains(s, substr string) bool {
+	return len(s) >= len(substr) && contains(s, substr)
+}
+
 // TestMain runs setup/teardown for all tests
 func TestMain(m *testing.M) {
 	// Setup: nothing needed

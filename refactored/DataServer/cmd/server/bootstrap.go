@@ -15,6 +15,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"velox-server/internal/app"
+	"velox-server/internal/audit"
 	"velox-server/internal/config"
 	workersapi "velox-server/internal/handlers/remote/workers"
 	"velox-server/internal/handlers/server/pipeline"
@@ -160,6 +161,19 @@ func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
 		return nil, err
 	}
 
+	// Import legacy JSON data into SQLite (idempotent, checksum-protected)
+	if cfg.DataDir != "" {
+		if results, err := sqliteStore.ImportLegacyJSON(cfg.DataDir); err != nil {
+			log.Printf("[BOOTSTRAP] Legacy JSON import error (non-fatal): %v", err)
+		} else {
+			for _, r := range results {
+				if r.Status == "imported" {
+					log.Printf("[BOOTSTRAP] Migrated: %s (%d records)", r.Source.Name, r.Imported)
+				}
+			}
+		}
+	}
+
 	fileQ, err := queue.NewFileQueue(&queue.FileQueueConfig{
 		DBStore:    sqliteStore,
 		MaxRetries: cfg.MaxJobAttempts,
@@ -196,6 +210,11 @@ func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
 }
 
 func runServer(cfg *config.Config) error {
+	// Run data layer audit at startup
+	if err := runDataLayerAudit(cfg); err != nil {
+		return err
+	}
+
 	deps, err := buildServerDeps(cfg)
 	if err != nil {
 		return err
@@ -303,5 +322,46 @@ func runServer(cfg *config.Config) error {
 	}
 
 	log.Println("[SERVER] Server stopped")
+	return nil
+}
+
+// runDataLayerAudit checks for legacy JSON files and data layer integrity.
+// Returns error if critical issues are found (hard block).
+// Warnings are logged but don't block startup.
+func runDataLayerAudit(cfg *config.Config) error {
+	dataDir := cfg.DataDir
+	if dataDir == "" {
+		dataDir = "."
+	}
+
+	secretsDir := filepath.Join(dataDir, "secrets")
+	auditor := audit.NewDataLayerAuditor(dataDir, secretsDir)
+
+	// Allow specific legacy files during transition period
+	auditor.AllowLegacy("drive/drive_links.json")
+	auditor.AllowLegacy("drive/drive_master_folders_list.json")
+	auditor.AllowLegacy("jobs/multi_step_jobs.json")
+	auditor.AllowLegacy("jobs/dead_letter_queue.json")
+	auditor.AllowLegacy("analytics/analytics_cache.json")
+
+	result := auditor.Audit()
+
+	if !result.Passed {
+		log.Printf("[AUDIT] Data layer audit FAILED with %d errors", len(result.Errors))
+		for _, e := range result.Errors {
+			log.Printf("[AUDIT] ERROR: %s", e)
+		}
+		return result.FailOnError()
+	}
+
+	if len(result.Warnings) > 0 {
+		log.Printf("[AUDIT] Data layer audit passed with %d warnings", len(result.Warnings))
+		for _, w := range result.Warnings {
+			log.Printf("[AUDIT] WARNING: %s", w)
+		}
+	} else {
+		log.Printf("[AUDIT] Data layer audit PASSED")
+	}
+
 	return nil
 }

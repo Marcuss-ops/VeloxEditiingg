@@ -58,7 +58,7 @@ func (m *Module) RegisterRoutes(r *gin.Engine) {
 		DataDir:            m.dataDir,
 		NVIDIAAPIKey:       m.cfg.NVIDIAAPIKey,
 		NVIDIATextURL:      m.cfg.NVIDIATextURL,
-	})
+	}, m.sqliteStore)
 	if err != nil {
 		log.Printf("[YOUTUBE] Service init failed: %v", err)
 		return
@@ -66,7 +66,6 @@ func (m *Module) RegisterRoutes(r *gin.Engine) {
 	m.youtubeService = youtubeService
 
 	if m.sqliteStore != nil {
-		youtubeService.SetStore(m.sqliteStore)
 		youtubeService.GetQuotaManager().SetStore(m.sqliteStore)
 	}
 

@@ -3,6 +3,8 @@ package queue
 import (
 	"sync"
 	"time"
+
+	"velox-server/internal/store"
 )
 
 type StepStatus string
@@ -75,6 +77,7 @@ type Orchestrator struct {
 	config   *OrchestratorConfig
 	jobs     map[string]*MultiStepJob
 	filePath string
+	dbStore  *store.SQLiteStore
 
 	jobChan     chan *MultiStepJob
 	stepChan    chan *JobStep
