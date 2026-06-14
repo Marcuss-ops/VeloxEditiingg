@@ -1,19 +1,13 @@
 package master
 
 import (
-	"fmt"
 	"net/http"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"velox-server/internal/state"
+	"velox-shared/payload"
 )
-
-func parseInt(s string) (int, error) {
-	var n int
-	_, err := fmt.Sscanf(s, "%d", &n)
-	return n, err
-}
 
 // MasterState returns the current master state
 func MasterState() gin.HandlerFunc {
@@ -84,7 +78,7 @@ func GetAPIRequestsLog() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		limit := 100
 		if l := c.Query("limit"); l != "" {
-			if parsed, err := parseInt(l); err == nil && parsed > 0 {
+			if parsed, err := payload.ParseIntParam(l, 0); err == nil && parsed > 0 {
 				limit = parsed
 			}
 		}
