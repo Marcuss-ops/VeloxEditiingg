@@ -1,0 +1,175 @@
+package store
+
+import (
+	"encoding/json"
+	"time"
+)
+
+// --- Orchestrator Jobs ---
+
+// UpsertOrchestratorJob creates or updates an orchestrator job.
+func (s *SQLiteStore) UpsertOrchestratorJob(jobID, status, pipelineType string, totalSteps, currentStep int, rawJSON string) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err := s.db.Exec(
+		`INSERT INTO orchestrator_jobs (job_id, status, total_steps, current_step, pipeline_type, created_at, updated_at, raw_json)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(job_id) DO UPDATE SET
+		   status=excluded.status, total_steps=excluded.total_steps, current_step=excluded.current_step,
+		   pipeline_type=excluded.pipeline_type, updated_at=excluded.updated_at, raw_json=excluded.raw_json`,
+		jobID, status, totalSteps, currentStep, pipelineType, now, now, rawJSON,
+	)
+	return err
+}
+
+// SetOrchestratorJobTimestamps updates started_at and completed_at for a job.
+func (s *SQLiteStore) SetOrchestratorJobTimestamps(jobID string, startedAt, completedAt *time.Time) error {
+	var started, completed *string
+	if startedAt != nil {
+		s := startedAt.UTC().Format(time.RFC3339)
+		started = &s
+	}
+	if completedAt != nil {
+		c := completedAt.UTC().Format(time.RFC3339)
+		completed = &c
+	}
+	_, err := s.db.Exec(
+		`UPDATE orchestrator_jobs SET started_at=?, completed_at=?, updated_at=? WHERE job_id=?`,
+		started, completed, time.Now().UTC().Format(time.RFC3339), jobID,
+	)
+	return err
+}
+
+// ListOrchestratorJobs returns all orchestrator jobs as raw JSON.
+func (s *SQLiteStore) ListOrchestratorJobs() ([]map[string]any, error) {
+	rows, err := s.db.Query(`SELECT raw_json FROM orchestrator_jobs ORDER BY updated_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []map[string]any
+	for rows.Next() {
+		var raw string
+		if err := rows.Scan(&raw); err != nil {
+			continue
+		}
+		var m map[string]any
+		if err := json.Unmarshal([]byte(raw), &m); err == nil {
+			result = append(result, m)
+		}
+	}
+	return result, rows.Err()
+}
+
+// GetOrchestratorJob returns a single job as raw JSON.
+func (s *SQLiteStore) GetOrchestratorJob(jobID string) (string, error) {
+	var raw string
+	err := s.db.QueryRow(`SELECT raw_json FROM orchestrator_jobs WHERE job_id=?`, jobID).Scan(&raw)
+	return raw, err
+}
+
+// DeleteOrchestratorJob removes an orchestrator job.
+func (s *SQLiteStore) DeleteOrchestratorJob(jobID string) error {
+	_, err := s.db.Exec(`DELETE FROM orchestrator_jobs WHERE job_id=?`, jobID)
+	return err
+}
+
+// --- Dead Letter Queue ---
+
+// UpsertDLQJob creates or updates a DLQ job.
+func (s *SQLiteStore) UpsertDLQJob(jobID, deadAt, deadReason, failReason string, failCount int, replayable bool, rawJSON string) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	replayInt := 0
+	if replayable {
+		replayInt = 1
+	}
+	_, err := s.db.Exec(
+		`INSERT INTO dlq_jobs (job_id, dead_at, dead_reason, fail_reason, fail_count, replayable, created_at, raw_json)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(job_id) DO UPDATE SET
+		   dead_at=excluded.dead_at, dead_reason=excluded.dead_reason, fail_reason=excluded.fail_reason,
+		   fail_count=excluded.fail_count, replayable=excluded.replayable, raw_json=excluded.raw_json`,
+		jobID, deadAt, deadReason, failReason, failCount, replayInt, now, rawJSON,
+	)
+	return err
+}
+
+// ListDLQJobs returns all DLQ jobs as raw JSON.
+func (s *SQLiteStore) ListDLQJobs() ([]map[string]any, error) {
+	rows, err := s.db.Query(`SELECT raw_json FROM dlq_jobs ORDER BY dead_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []map[string]any
+	for rows.Next() {
+		var raw string
+		if err := rows.Scan(&raw); err != nil {
+			continue
+		}
+		var m map[string]any
+		if err := json.Unmarshal([]byte(raw), &m); err == nil {
+			result = append(result, m)
+		}
+	}
+	return result, rows.Err()
+}
+
+// GetDLQJob returns a single DLQ job as raw JSON.
+func (s *SQLiteStore) GetDLQJob(jobID string) (string, error) {
+	var raw string
+	err := s.db.QueryRow(`SELECT raw_json FROM dlq_jobs WHERE job_id=?`, jobID).Scan(&raw)
+	return raw, err
+}
+
+// DeleteDLQJob removes a DLQ job.
+func (s *SQLiteStore) DeleteDLQJob(jobID string) error {
+	_, err := s.db.Exec(`DELETE FROM dlq_jobs WHERE job_id=?`, jobID)
+	return err
+}
+
+// PurgeDLQJobs removes DLQ jobs older than a given time.
+func (s *SQLiteStore) PurgeDLQJobs(olderThan time.Time) (int64, error) {
+	result, err := s.db.Exec(`DELETE FROM dlq_jobs WHERE dead_at < ?`, olderThan.UTC().Format(time.RFC3339))
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+// --- Job Events ---
+
+// InsertJobEvent logs a job event to SQLite.
+func (s *SQLiteStore) InsertJobEvent(timestamp, jobID, eventType, rawJSON string) error {
+	_, err := s.db.Exec(
+		`INSERT INTO job_events (timestamp, job_id, event, raw_json) VALUES (?, ?, ?, ?)`,
+		timestamp, jobID, eventType, rawJSON,
+	)
+	return err
+}
+
+// ListJobEvents returns recent events for a job.
+func (s *SQLiteStore) ListJobEvents(jobID string, limit int) ([]map[string]any, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	rows, err := s.db.Query(
+		`SELECT raw_json FROM job_events WHERE job_id=? ORDER BY timestamp DESC LIMIT ?`,
+		jobID, limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []map[string]any
+	for rows.Next() {
+		var raw string
+		if err := rows.Scan(&raw); err != nil {
+			continue
+		}
+		var m map[string]any
+		if err := json.Unmarshal([]byte(raw), &m); err == nil {
+			result = append(result, m)
+		}
+	}
+	return result, rows.Err()
+}

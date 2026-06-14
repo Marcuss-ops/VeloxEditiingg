@@ -3,6 +3,7 @@ package ansible
 import (
 	"encoding/json"
 	"log"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -56,17 +57,20 @@ type AnsibleComputerStore interface {
 
 // AnsibleComputerManager manages the Ansible computers inventory.
 type AnsibleComputerManager struct {
-	dataDir   string
-	store     AnsibleComputerStore
-	computers map[string]AnsibleComputer
-	mu        sync.RWMutex
+	dataDir      string
+	store        AnsibleComputerStore
+	computers    map[string]AnsibleComputer
+	secretResolver *SecretResolver
+	mu           sync.RWMutex
 }
 
 // NewAnsibleComputerManager creates a new Ansible computer manager.
 func NewAnsibleComputerManager(dataDir string) *AnsibleComputerManager {
+	secretsDir := filepath.Join(dataDir, "secrets", "ansible")
 	return &AnsibleComputerManager{
-		dataDir:   dataDir,
-		computers: make(map[string]AnsibleComputer),
+		dataDir:        dataDir,
+		computers:      make(map[string]AnsibleComputer),
+		secretResolver: NewSecretResolver(secretsDir),
 	}
 }
 
@@ -113,11 +117,15 @@ func (m *AnsibleComputerManager) loadFromSQLite() {
 	// Migrate legacy data to new structured table
 	log.Printf("[INFO] Migrating %d computers from ansible_computers to ansible_hosts", len(m.computers))
 	for _, c := range m.computers {
-		_ = m.persistToAnsibleHosts(c)
+		if err := m.persistToAnsibleHosts(c); err != nil {
+			log.Printf("[WARN] Failed to migrate computer %s to ansible_hosts: %v", c.Host, err)
+		}
 	}
 }
 
 // ansibleHostFieldsToComputer converts structured fields to AnsibleComputer.
+// The secret_ref is used to check if a password was stored — if the secret file
+// exists, BuildSecretRef will return the ref and we know auth is configured.
 func ansibleHostFieldsToComputer(h store.AnsibleHostFields) AnsibleComputer {
 	return AnsibleComputer{
 		Host:             h.Host,
@@ -148,13 +156,31 @@ func ansibleHostFieldsToComputer(h store.AnsibleHostFields) AnsibleComputer {
 }
 
 // computerToAnsibleHostFields converts AnsibleComputer to structured fields.
-// SSHPassword is NOT carried over — use secret_ref for secrets.
-func computerToAnsibleHostFields(c AnsibleComputer) store.AnsibleHostFields {
+// If c.SSHPassword is set, it is migrated to a secret file and the resulting
+// secret_ref is persisted. Plaintext passwords are never stored in the database.
+func computerToAnsibleHostFields(c AnsibleComputer, resolver *SecretResolver) store.AnsibleHostFields {
+	secretRef := ""
+
+	// If the computer already has a known secret_ref, use it
+	if c.SSHPassword != "" && resolver != nil {
+		ref, err := resolver.MigrateSSHPassword(c.Host, c.SSHPassword)
+		if err != nil {
+			log.Printf("[SECRET] Failed to migrate password for %s: %v", c.Host, err)
+		} else {
+			secretRef = ref
+		}
+	}
+
+	// If no password was set, check if a secret file already exists
+	if secretRef == "" && resolver != nil {
+		secretRef = resolver.BuildSecretRef(c.Host)
+	}
+
 	return store.AnsibleHostFields{
 		Host:             c.Host,
 		AnsibleUser:      c.AnsibleUser,
 		SSHKeyPath:       c.SSHKeyPath,
-		SecretRef:        "", // SSHPassword is replaced by secret_ref
+		SecretRef:        secretRef,
 		Enabled:          c.Enabled,
 		Availability:     c.Availability,
 		Group:            c.Group,
@@ -179,11 +205,12 @@ func computerToAnsibleHostFields(c AnsibleComputer) store.AnsibleHostFields {
 }
 
 // persistToAnsibleHosts writes to the new structured table.
+// SSHPassword is migrated to secret_ref before persisting.
 func (m *AnsibleComputerManager) persistToAnsibleHosts(c AnsibleComputer) error {
 	if m.store == nil {
 		return nil
 	}
-	return m.store.UpsertAnsibleHost(computerToAnsibleHostFields(c))
+	return m.store.UpsertAnsibleHost(computerToAnsibleHostFields(c, m.secretResolver))
 }
 
 // LoadComputers loads computers from SQLite.
@@ -216,6 +243,8 @@ func (m *AnsibleComputerManager) GetComputer(id string) (AnsibleComputer, bool) 
 
 // SaveComputer saves or updates a computer.
 // SQLite (ansible_hosts) is the single source of truth.
+// SSHPassword is migrated to a secret file by persistToAnsibleHosts —
+// plaintext passwords are never stored in the database.
 func (m *AnsibleComputerManager) SaveComputer(computer AnsibleComputer) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -270,7 +299,12 @@ func (m *AnsibleComputerManager) GetSecretRef(host string) string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	if _, ok := m.computers[host]; ok {
-		return "" // Return empty until secret management is implemented
+		return m.secretResolver.BuildSecretRef(host)
 	}
 	return ""
+}
+
+// ResolveSecret resolves a secret_ref to the actual secret value.
+func (m *AnsibleComputerManager) ResolveSecret(secretRef string) (string, error) {
+	return m.secretResolver.Resolve(secretRef)
 }

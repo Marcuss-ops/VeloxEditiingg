@@ -398,6 +398,13 @@ func TestAnsibleComputersLegacy(t *testing.T) {
 	s := openTestDB(t)
 	defer s.Close()
 
+	// Skip if legacy table doesn't exist (dropped by migration 008)
+	var exists int
+	_ = s.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='ansible_computers'`).Scan(&exists)
+	if exists == 0 {
+		t.Skip("ansible_computers table dropped by migration 008")
+	}
+
 	// Upsert
 	if err := s.UpsertAnsibleComputer("legacy-host", `{"host":"legacy-host","enabled":true}`); err != nil {
 		t.Fatalf("UpsertAnsibleComputer failed: %v", err)

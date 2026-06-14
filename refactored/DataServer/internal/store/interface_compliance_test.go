@@ -9,6 +9,7 @@ import (
 	"velox-server/internal/handlers/remote/ansible"
 	"velox-server/internal/integrations/youtube"
 	"velox-server/internal/store"
+	"velox-server/internal/store/migrations"
 )
 
 // ============================================================
@@ -110,6 +111,20 @@ func TestInterface_YouTubeStore_Cache(t *testing.T) {
 
 func TestInterface_YouTubeStore_LegacyGroups(t *testing.T) {
 	s := newTestStore(t)
+
+	// Skip if migration 008 has been applied (legacy tables dropped)
+	versions, _ := migrations.AppliedVersions(s.DB())
+	hasMigration008 := false
+	for _, v := range versions {
+		if v >= 8 {
+			hasMigration008 = true
+			break
+		}
+	}
+	if hasMigration008 {
+		t.Skip("youtube_groups table dropped by migration 008")
+	}
+
 	var ytStore youtube.YouTubeStore = s
 
 	// Upsert and List via interface
@@ -131,6 +146,20 @@ func TestInterface_YouTubeStore_LegacyGroups(t *testing.T) {
 
 func TestInterface_YouTubeStore_LegacyChannelMetadata(t *testing.T) {
 	s := newTestStore(t)
+
+	// Skip if migration 008 has been applied (legacy tables dropped)
+	versions, _ := migrations.AppliedVersions(s.DB())
+	hasMigration008 := false
+	for _, v := range versions {
+		if v >= 8 {
+			hasMigration008 = true
+			break
+		}
+	}
+	if hasMigration008 {
+		t.Skip("youtube_channel_metadata table dropped by migration 008")
+	}
+
 	var ytStore youtube.YouTubeStore = s
 
 	// Upsert and List via interface
@@ -209,6 +238,20 @@ func TestInterface_AnsibleComputerStore_StructuredHosts(t *testing.T) {
 
 func TestInterface_AnsibleComputerStore_LegacyComputers(t *testing.T) {
 	s := newTestStore(t)
+
+	// Skip if migration 008 has been applied (legacy tables dropped)
+	versions, _ := migrations.AppliedVersions(s.DB())
+	hasMigration008 := false
+	for _, v := range versions {
+		if v >= 8 {
+			hasMigration008 = true
+			break
+		}
+	}
+	if hasMigration008 {
+		t.Skip("ansible_computers table dropped by migration 008")
+	}
+
 	var acStore ansible.AnsibleComputerStore = s
 
 	// Upsert legacy via interface

@@ -1,7 +1,6 @@
 package groups
 
 import (
-	"encoding/json"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -50,7 +49,7 @@ func InitGroupsStore(db *store.SQLiteStore) {
 	groupsStore = db
 }
 
-// GetGroupsHandler returns all groups from SQLite.
+// GetGroupsHandler returns all groups from SQLite (canonical youtube_groups_v2).
 func GetGroupsHandler(c *gin.Context) {
 	if groupsStore == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{
@@ -60,7 +59,11 @@ func GetGroupsHandler(c *gin.Context) {
 		return
 	}
 
-	rows, err := groupsStore.ListYouTubeGroups()
+	// Try canonical tables first, fall back to legacy
+	rows, err := groupsStore.ListYouTubeGroupsV2()
+	if err != nil || len(rows) == 0 {
+		rows, err = groupsStore.ListYouTubeGroups()
+	}
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"ok":    false,
@@ -72,19 +75,25 @@ func GetGroupsHandler(c *gin.Context) {
 	result := make([]Group, 0, len(rows))
 	for _, row := range rows {
 		g := Group{
-			Name:    row["name"].(string),
-			Privacy: row["privacy"].(string),
+			Name:    safeString(row, "name"),
+			Privacy: safeString(row, "privacy"),
 		}
-		if desc, ok := row["description"].(string); ok {
-			g.DefaultLang = desc
-		}
-		if channelsJSON, ok := row["channels"].(string); ok {
-			var channelIDs []string
-			if err := json.Unmarshal([]byte(channelsJSON), &channelIDs); err == nil {
-				g.Channels = make([]Channel, 0, len(channelIDs))
-				for _, id := range channelIDs {
-					g.Channels = append(g.Channels, Channel{ID: id})
+		g.DefaultLang = safeString(row, "description")
+
+		// Load channel memberships from canonical group_channels if group ID is available
+		if gid, ok := row["id"].(int64); ok && gid > 0 {
+			channelIDs, err := groupsStore.ListGroupChannelsV2(gid)
+			if err == nil && len(channelIDs) > 0 {
+				g.Channels = make([]Channel, len(channelIDs))
+				for i, id := range channelIDs {
+					g.Channels[i] = Channel{ID: id}
 				}
+			}
+		} else if chIDs, ok := row["channels"].([]string); ok {
+			// Fallback: legacy youtube_groups.channels_json as []string
+			g.Channels = make([]Channel, len(chIDs))
+			for i, id := range chIDs {
+				g.Channels[i] = Channel{ID: id}
 			}
 		}
 		result = append(result, g)
@@ -105,7 +114,11 @@ func GetGroupHandler(c *gin.Context) {
 		return
 	}
 
-	rows, err := groupsStore.ListYouTubeGroups()
+	// Try canonical tables first, fall back to legacy
+	rows, err := groupsStore.ListYouTubeGroupsV2()
+	if err != nil || len(rows) == 0 {
+		rows, err = groupsStore.ListYouTubeGroups()
+	}
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"ok":    false,
@@ -115,23 +128,29 @@ func GetGroupHandler(c *gin.Context) {
 	}
 
 	for _, row := range rows {
-		if row["name"].(string) == name {
+		if safeString(row, "name") == name {
 			g := Group{
 				Name:    name,
-				Privacy: row["privacy"].(string),
+				Privacy: safeString(row, "privacy"),
 			}
-			if desc, ok := row["description"].(string); ok {
-				g.DefaultLang = desc
-			}
-			if channelsJSON, ok := row["channels"].(string); ok {
-				var channelIDs []string
-				if err := json.Unmarshal([]byte(channelsJSON), &channelIDs); err == nil {
-					g.Channels = make([]Channel, 0, len(channelIDs))
-					for _, id := range channelIDs {
-						g.Channels = append(g.Channels, Channel{ID: id})
+			g.DefaultLang = safeString(row, "description")
+
+			// Load channel memberships
+			if gid, ok := row["id"].(int64); ok && gid > 0 {
+				channelIDs, err := groupsStore.ListGroupChannelsV2(gid)
+				if err == nil && len(channelIDs) > 0 {
+					g.Channels = make([]Channel, len(channelIDs))
+					for i, id := range channelIDs {
+						g.Channels[i] = Channel{ID: id}
 					}
 				}
+			} else if chIDs, ok := row["channels"].([]string); ok {
+				g.Channels = make([]Channel, len(chIDs))
+				for i, id := range chIDs {
+					g.Channels[i] = Channel{ID: id}
+				}
 			}
+
 			c.JSON(http.StatusOK, g)
 			return
 		}
@@ -141,4 +160,13 @@ func GetGroupHandler(c *gin.Context) {
 		"ok":    false,
 		"error": "Group not found",
 	})
+}
+
+// safeString safely extracts a string value from a map.
+func safeString(m map[string]interface{}, key string) string {
+	if m == nil {
+		return ""
+	}
+	v, _ := m[key].(string)
+	return v
 }

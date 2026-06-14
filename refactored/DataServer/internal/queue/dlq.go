@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"velox-server/internal/store"
 )
 
 // DeadLetterJob represents a job that has failed and been moved to the DLQ
@@ -62,11 +64,12 @@ type DeadLetterQueue struct {
 	config   *DLQConfig
 	jobs     map[string]*DeadLetterJob
 	filePath string
+	dbStore  *store.SQLiteStore
 	onAlert  func(alertType string, data map[string]interface{})
 }
 
 // NewDeadLetterQueue creates a new DLQ
-func NewDeadLetterQueue(cfg *DLQConfig) (*DeadLetterQueue, error) {
+func NewDeadLetterQueue(cfg *DLQConfig, dbStore *store.SQLiteStore) (*DeadLetterQueue, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("DLQ config is required")
 	}
@@ -75,6 +78,7 @@ func NewDeadLetterQueue(cfg *DLQConfig) (*DeadLetterQueue, error) {
 		config:   cfg,
 		jobs:     make(map[string]*DeadLetterJob),
 		filePath: cfg.FilePath,
+		dbStore:  dbStore,
 	}
 
 	// Ensure directory exists
@@ -91,8 +95,25 @@ func NewDeadLetterQueue(cfg *DLQConfig) (*DeadLetterQueue, error) {
 	return dlq, nil
 }
 
-// load reads DLQ from file
+// load reads DLQ from SQLite (source of truth) with JSON fallback
 func (dlq *DeadLetterQueue) load() error {
+	// SQLite is the source of truth
+	if dlq.dbStore != nil {
+		jobs, err := dlq.dbStore.ListDLQJobs()
+		if err == nil && len(jobs) > 0 {
+			for _, raw := range jobs {
+				var job DeadLetterJob
+				b, _ := json.Marshal(raw)
+				if err := json.Unmarshal(b, &job); err == nil {
+					dlq.jobs[job.JobID] = &job
+				}
+			}
+			log.Printf("[DLQ] Loaded %d jobs from SQLite", len(dlq.jobs))
+			return nil
+		}
+	}
+
+	// Fallback: legacy JSON file
 	data, err := os.ReadFile(dlq.filePath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -105,11 +126,31 @@ func (dlq *DeadLetterQueue) load() error {
 		return nil
 	}
 
-	return json.Unmarshal(data, &dlq.jobs)
+	if err := json.Unmarshal(data, &dlq.jobs); err != nil {
+		return err
+	}
+
+	// Import into SQLite for next time
+	if dlq.dbStore != nil && len(dlq.jobs) > 0 {
+		for _, job := range dlq.jobs {
+			dlq.persistJob(job)
+		}
+		log.Printf("[MIGRATE] Imported %d DLQ jobs from JSON to SQLite", len(dlq.jobs))
+	}
+
+	return nil
 }
 
-// save writes DLQ to file atomically
+// save writes DLQ to SQLite (primary) and JSON file (backup)
 func (dlq *DeadLetterQueue) save() error {
+	// SQLite is the source of truth
+	if dlq.dbStore != nil {
+		for _, job := range dlq.jobs {
+			dlq.persistJob(job)
+		}
+	}
+
+	// Backup: JSON file
 	data, err := json.MarshalIndent(dlq.jobs, "", "  ")
 	if err != nil {
 		return err
@@ -121,6 +162,22 @@ func (dlq *DeadLetterQueue) save() error {
 	}
 
 	return os.Rename(tmpPath, dlq.filePath)
+}
+
+// persistJob saves a single DLQ job to SQLite.
+func (dlq *DeadLetterQueue) persistJob(job *DeadLetterJob) {
+	raw, _ := json.Marshal(job)
+	if err := dlq.dbStore.UpsertDLQJob(
+		job.JobID,
+		job.DeadAt.Format(time.RFC3339),
+		job.DeadReason,
+		job.FailReason,
+		job.FailCount,
+		job.Replayable,
+		string(raw),
+	); err != nil {
+		log.Printf("[WARN] Failed to persist DLQ job %s: %v", job.JobID[:8], err)
+	}
 }
 
 // AddJob adds a failed job to the DLQ
@@ -295,6 +352,14 @@ func (dlq *DeadLetterQueue) PurgeOldJobs(ctx context.Context) (int, error) {
 	cutoff := time.Now().UTC().Add(-dlq.config.MaxAge)
 	removed := 0
 
+	// Purge from SQLite
+	if dlq.dbStore != nil {
+		if n, err := dlq.dbStore.PurgeDLQJobs(cutoff); err == nil {
+			removed += int(n)
+		}
+	}
+
+	// Purge from in-memory cache
 	for id, job := range dlq.jobs {
 		if job.DeadAt.Before(cutoff) {
 			delete(dlq.jobs, id)
