@@ -126,6 +126,25 @@ type PipelineStatusResponse struct {
 	UpdatedAt time.Time              `json:"updated_at,omitempty"`
 }
 
+
+// remoteJobResponse is the remote engine's raw job response wrapper
+// The remote engine returns {"job": { ... }} at the top level
+type remoteJobResponse struct {
+	Job remoteJobEnvelope `json:"job"`
+}
+
+type remoteJobEnvelope struct {
+	ID        string                 `json:"id"`
+	Type      string                 `json:"type"`
+	Status    string                 `json:"status"`
+	Progress  int                    `json:"progress"`
+	Payload   map[string]interface{} `json:"payload,omitempty"`
+	Result    map[string]interface{} `json:"result,omitempty"`
+	Error     string                 `json:"error,omitempty"`
+	CreatedAt string                 `json:"created_at,omitempty"`
+	UpdatedAt string                 `json:"updated_at,omitempty"`
+}
+
 // GenerateSimpleScript generates a single script from a topic
 func (c *Client) GenerateSimpleScript(ctx context.Context, req SimpleScriptRequest) (*SimpleScriptResponse, error) {
 	if !c.IsConfigured() {
@@ -313,7 +332,8 @@ func (c *Client) GetPipelineStatus(ctx context.Context, traceID string) (*Pipeli
 }
 
 func (c *Client) doPipelineStatusRequest(ctx context.Context, traceID string) (*PipelineStatusResponse, error) {
-	url := fmt.Sprintf("%s/api/remote/pipeline/status/%s", strings.TrimSuffix(c.config.URL, "/"), traceID)
+	url := fmt.Sprintf("%s/api/jobs/%s", strings.TrimSuffix(c.config.URL, "/"), traceID)
+	log.Printf("[CLIENT] GetPipelineStatus GET %s", url)
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -325,8 +345,11 @@ func (c *Client) doPipelineStatusRequest(ctx context.Context, traceID string) (*
 		httpReq.Header.Set("Authorization", "Bearer "+c.config.Token)
 	}
 
+	startTime := time.Now()
 	resp, err := c.httpClient.Do(httpReq)
+	elapsed := time.Since(startTime).Round(time.Millisecond)
 	if err != nil {
+		log.Printf("[CLIENT] GetPipelineStatus FAILED after %s: %v", elapsed, err)
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
 	defer resp.Body.Close()
@@ -337,15 +360,48 @@ func (c *Client) doPipelineStatusRequest(ctx context.Context, traceID string) (*
 	}
 
 	if resp.StatusCode >= 400 {
+		log.Printf("[CLIENT] GetPipelineStatus HTTP %d after %s: %s", resp.StatusCode, elapsed, string(respBody))
 		return nil, fmt.Errorf("remote engine error: %s - %s", resp.Status, string(respBody))
 	}
 
-	var result PipelineStatusResponse
-	if err := json.Unmarshal(respBody, &result); err != nil {
+	// The remote engine wraps the job in {"job": {...}}
+	var wrapper remoteJobResponse
+	if err := json.Unmarshal(respBody, &wrapper); err != nil {
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 
-	return &result, nil
+	j := wrapper.Job
+	status := j.Status
+	ok := status == "completed" || status == "running" || status == "queued"
+
+	var createdAt, updatedAt time.Time
+	if j.CreatedAt != "" {
+		createdAt, _ = time.Parse(time.RFC3339, j.CreatedAt)
+	}
+	if j.UpdatedAt != "" {
+		updatedAt, _ = time.Parse(time.RFC3339, j.UpdatedAt)
+	}
+
+	// Use Result (output fields: title, script_text, scenes_json, voiceover_path)
+	// falling back to Payload (input params) if Result is nil
+	resultData := j.Result
+	if resultData == nil {
+		resultData = j.Payload
+	}
+
+	result := &PipelineStatusResponse{
+		OK:        ok,
+		TraceID:   j.ID,
+		Status:    j.Status,
+		Progress:  float64(j.Progress),
+		Result:    resultData,
+		Error:     j.Error,
+		CreatedAt: createdAt,
+		UpdatedAt: updatedAt,
+	}
+
+	log.Printf("[CLIENT] GetPipelineStatus OK job_id=%s status=%s progress=%d elapsed=%s", j.ID, j.Status, j.Progress, elapsed)
+	return result, nil
 }
 
 // StartPipeline starts a new pipeline job
@@ -359,7 +415,8 @@ func (c *Client) StartPipeline(ctx context.Context, payload map[string]interface
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	url := strings.TrimSuffix(c.config.URL, "/") + "/api/remote/pipeline/generate"
+	url := strings.TrimSuffix(c.config.URL, "/") + "/api/script/generate-with-images"
+	log.Printf("[CLIENT] StartPipeline POST %s body=%d bytes", url, len(body))
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
@@ -371,8 +428,11 @@ func (c *Client) StartPipeline(ctx context.Context, payload map[string]interface
 		httpReq.Header.Set("Authorization", "Bearer "+c.config.Token)
 	}
 
+	startTime := time.Now()
 	resp, err := c.httpClient.Do(httpReq)
+	elapsed := time.Since(startTime).Round(time.Millisecond)
 	if err != nil {
+		log.Printf("[CLIENT] StartPipeline FAILED after %s: %v", elapsed, err)
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
 	defer resp.Body.Close()
@@ -383,6 +443,7 @@ func (c *Client) StartPipeline(ctx context.Context, payload map[string]interface
 	}
 
 	if resp.StatusCode >= 400 {
+		log.Printf("[CLIENT] StartPipeline HTTP %d after %s: %s", resp.StatusCode, elapsed, string(respBody))
 		return nil, fmt.Errorf("remote engine error: %s - %s", resp.Status, string(respBody))
 	}
 
@@ -391,7 +452,49 @@ func (c *Client) StartPipeline(ctx context.Context, payload map[string]interface
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 
+	jobID, _ := result["job_id"].(string)
+	status, _ := result["status"].(string)
+	log.Printf("[CLIENT] StartPipeline OK job_id=%s status=%s elapsed=%s", jobID, status, elapsed)
+
 	return result, nil
+}
+
+// CancelPipeline cancels/deletes a running pipeline job
+func (c *Client) CancelPipeline(ctx context.Context, traceID string) error {
+	if !c.IsConfigured() {
+		return fmt.Errorf("remote engine not configured (set VELOX_REMOTE_ENGINE_URL)")
+	}
+
+	url := fmt.Sprintf("%s/api/jobs/%s", strings.TrimSuffix(c.config.URL, "/"), traceID)
+	log.Printf("[CLIENT] CancelPipeline DELETE %s", url)
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodDelete, url, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	httpReq.Header.Set("Content-Type", "application/json")
+	if c.config.Token != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+c.config.Token)
+	}
+
+	startTime := time.Now()
+	resp, err := c.httpClient.Do(httpReq)
+	elapsed := time.Since(startTime).Round(time.Millisecond)
+	if err != nil {
+		log.Printf("[CLIENT] CancelPipeline FAILED after %s: %v", elapsed, err)
+		return fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		respBody, _ := io.ReadAll(resp.Body)
+		log.Printf("[CLIENT] CancelPipeline HTTP %d after %s: %s", resp.StatusCode, elapsed, string(respBody))
+		return fmt.Errorf("remote engine error: %s - %s", resp.Status, string(respBody))
+	}
+
+	log.Printf("[CLIENT] CancelPipeline OK job_id=%s elapsed=%s", traceID, elapsed)
+	return nil
 }
 
 // Close closes the client

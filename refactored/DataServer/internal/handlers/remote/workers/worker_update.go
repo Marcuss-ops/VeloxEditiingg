@@ -179,6 +179,11 @@ func NewWorkerUpdateHandler(cfg *config.Config, reg *workersreg.Registry, cmdMgr
 	}
 }
 
+// CommandManager returns the command manager used to push commands to workers.
+func (h *WorkerUpdateHandler) CommandManager() *workersreg.CommandManager {
+	return h.cmdMgr
+}
+
 // Config returns the runtime config used by worker update handlers.
 func (h *WorkerUpdateHandler) Config() *config.Config {
 	return h.cfg

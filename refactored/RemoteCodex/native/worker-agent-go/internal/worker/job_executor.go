@@ -40,6 +40,11 @@ func (w *Worker) executeJob(ctx context.Context, job *api.Job) {
 	w.status = StatusBusy
 	w.mu.Unlock()
 
+	// Create cancellable context and register it for cancel_job command
+	jobCtx, jobCancel := context.WithCancel(ctx)
+	w.registerJobCancel(job.JobID, jobCancel)
+	defer w.unregisterJobCancel(job.JobID)
+
 	telemetry.GetPrometheusMetrics().SetWorkerStatus(w.config.WorkerID, 2)
 	telemetry.GetPrometheusMetrics().SetWorkerActiveJobs(w.config.WorkerID, float64(w.concurrencyLimiter.ActiveJobCount()))
 
@@ -58,7 +63,7 @@ func (w *Worker) executeJob(ctx context.Context, job *api.Job) {
 	var execErr error
 
 	w.logger.Info("[JOB] Executing job %s via runJobTask", job.JobID)
-	output, execErr = w.runJobTask(ctx, job)
+	output, execErr = w.runJobTask(jobCtx, job)
 
 	if execErr == nil && shouldUploadCompletedVideo(job, output) {
 		updatedOutput, upErr := w.uploadCompletedVideo(ctx, job, output)

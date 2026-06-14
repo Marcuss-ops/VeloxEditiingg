@@ -109,7 +109,7 @@ func TestPipelineGenerateForwardsCompletedResultToQueue(t *testing.T) {
 	}
 
 	mockEngine := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/remote/pipeline/generate" {
+		if r.URL.Path != "/api/script/generate-with-images" {
 			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
 		var ignored map[string]interface{}

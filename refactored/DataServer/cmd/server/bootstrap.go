@@ -17,6 +17,7 @@ import (
 	"velox-server/internal/app"
 	"velox-server/internal/config"
 	workersapi "velox-server/internal/handlers/remote/workers"
+	"velox-server/internal/handlers/server/pipeline"
 	"velox-server/internal/modules/ansible"
 	"velox-server/internal/modules/drive"
 	"velox-server/internal/modules/frontend"
@@ -58,6 +59,11 @@ func adminAuthMiddleware(cfg *config.Config) gin.HandlerFunc {
 			return
 		}
 
+		if c.Request.Method == http.MethodGet && isPublicReadOnlyRoute(c.Request.URL.Path) {
+			c.Next()
+			return
+		}
+
 		expected := strings.TrimSpace(cfg.AdminToken)
 		if expected == "" {
 			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
@@ -80,6 +86,40 @@ func adminAuthMiddleware(cfg *config.Config) gin.HandlerFunc {
 
 		c.Next()
 	}
+}
+
+func isPublicReadOnlyRoute(path string) bool {
+	if path == "" {
+		return false
+	}
+	publicPrefixes := []string{
+		"/api/v1/youtube",
+		"/api/v1/jobs",
+		"/api/v1/workers",
+		"/api/v1/dashboard",
+		"/api/v1/analytics",
+		"/api/v1/groups",
+		"/api/v1/channels",
+		"/api/v1/drive-links",
+		"/api/v1/drive",
+		"/api/v1/master",
+		"/api/v1/ansible",
+		"/api/v1/admin/ansible",
+		"/api/v1/endpoints-status",
+		"/api/v1/services",
+		"/api/v1/bundle",
+		"/api/v1/queue",
+		"/api/v1/stats",
+		"/api/v1/calendar",
+		"/api/v1/livestream",
+		"/api/bundle",
+	}
+	for _, prefix := range publicPrefixes {
+		if strings.HasPrefix(path, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func requestIDMiddleware() gin.HandlerFunc {
@@ -163,6 +203,9 @@ func runServer(cfg *config.Config) error {
 
 	registry := app.NewRegistry()
 	auth := adminAuthMiddleware(cfg)
+
+	// Init pipeline remote engine (connects to external script generation service)
+	pipeline.InitRemoteEngine(cfg)
 
 	// Register all modules
 	registry.Register(health.New())

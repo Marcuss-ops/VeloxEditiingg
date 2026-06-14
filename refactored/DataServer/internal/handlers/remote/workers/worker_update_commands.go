@@ -26,10 +26,11 @@ func (h *WorkerUpdateHandler) SendCommandHandler() gin.HandlerFunc {
 			"update_code":    true,
 			"reboot_host":    true,
 			"run_smoke_job":  true,
+			"cancel_job":     true,
 		}
 		if !allowedCommands[command] {
 			c.JSON(http.StatusBadRequest, gin.H{
-				"error": "Invalid command. Allowed: restart_worker, update_code, reboot_host",
+				"error": "Invalid command. Allowed: restart_worker, update_code, reboot_host, run_smoke_job, cancel_job",
 			})
 			return
 		}
@@ -98,10 +99,11 @@ func (h *WorkerUpdateHandler) SendCommandBulkHandler() gin.HandlerFunc {
 			"update_code":    true,
 			"reboot_host":    true,
 			"run_smoke_job":  true,
+			"cancel_job":     true,
 		}
 		if !allowedCommands[body.Command] {
 			c.JSON(http.StatusBadRequest, gin.H{
-				"error": "Invalid command. Allowed: restart_worker, update_code, reboot_host",
+				"error": "Invalid command. Allowed: restart_worker, update_code, reboot_host, run_smoke_job, cancel_job",
 			})
 			return
 		}

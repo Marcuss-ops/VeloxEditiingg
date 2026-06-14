@@ -7,6 +7,7 @@ velox-master.pid
 
 # ── Secrets & credentials ────────────────────────────────────
 DataServer/data/secrets/
+DataServer/secrets/
 DataServer/data/drive/credentials/
 DataServer/data/drive/tokens/
 

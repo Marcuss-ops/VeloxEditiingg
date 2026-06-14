@@ -109,10 +109,11 @@ type FrontendConfig struct {
 
 // RenderConfig holds remote rendering engine settings.
 type RenderConfig struct {
-	RemoteEngineURL       string
-	RemoteEngineToken     string
-	RemoteEngineTimeoutMS int
-	RemoteEngineRetries   int
+	RemoteEngineURL           string
+	RemoteEngineToken         string
+	RemoteEngineTimeoutMS     int
+	RemoteEngineRetries       int
+	RemoteEnginePollInterval  int // seconds between pipeline status polls, default 30
 }
 
 // NVIDIAConfig holds NVIDIA AI settings.
@@ -166,10 +167,11 @@ type Config struct {
 	S3SecretAccessKey string
 	S3UseSSL          bool
 
-	RemoteEngineURL       string
-	RemoteEngineToken     string
-	RemoteEngineTimeoutMS int
-	RemoteEngineRetries   int
+	RemoteEngineURL           string
+	RemoteEngineToken         string
+	RemoteEngineTimeoutMS     int
+	RemoteEngineRetries       int
+	RemoteEnginePollInterval  int
 
 	DriveClientID     string
 	DriveClientSecret string
@@ -482,6 +484,10 @@ func loadRenderConfig() RenderConfig {
 	if n, _ := strconv.Atoi(os.Getenv("VELOX_REMOTE_ENGINE_RETRIES")); n > 0 {
 		c.RemoteEngineRetries = n
 	}
+	c.RemoteEnginePollInterval = 30
+	if n, _ := strconv.Atoi(os.Getenv("VELOX_REMOTE_ENGINE_POLL_INTERVAL")); n >= 5 {
+		c.RemoteEnginePollInterval = n
+	}
 	return c
 }
 
@@ -605,10 +611,11 @@ func FromEnv() *Config {
 		DarkEditorDir:   frontend.DarkEditorDir,
 		DarkEditorProxyURL: frontend.DarkEditorProxy,
 
-		RemoteEngineURL:       render.RemoteEngineURL,
-		RemoteEngineToken:     render.RemoteEngineToken,
-		RemoteEngineTimeoutMS: render.RemoteEngineTimeoutMS,
-		RemoteEngineRetries:   render.RemoteEngineRetries,
+		RemoteEngineURL:           render.RemoteEngineURL,
+		RemoteEngineToken:         render.RemoteEngineToken,
+		RemoteEngineTimeoutMS:     render.RemoteEngineTimeoutMS,
+		RemoteEngineRetries:       render.RemoteEngineRetries,
+		RemoteEnginePollInterval:  render.RemoteEnginePollInterval,
 
 		NVIDIAAPIKey:  nvidia.APIKey,
 		NVIDIATextURL: nvidia.TextURL,

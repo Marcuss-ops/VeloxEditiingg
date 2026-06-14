@@ -2,6 +2,7 @@
 package worker
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -72,6 +73,10 @@ type Worker struct {
 	drainMode    atomic.Bool
 	commandMu    sync.Mutex
 	seenCommands map[string]time.Time
+
+	// Job cancellation: maps jobID -> cancel function for active jobs
+	jobCancelFuncs map[string]context.CancelFunc
+	jobCancelMu    sync.Mutex
 
 	// Job completion stats for heartbeat reporting
 	jobsCompleted atomic.Int64
@@ -202,6 +207,7 @@ func New(cfg *config.WorkerConfig, version string) *Worker {
 		commandChan:        make(chan api.WorkerCommand, 10),
 		seenCommands:       make(map[string]time.Time),
 		recentLogs:         recentLogs,
+		jobCancelFuncs:     make(map[string]context.CancelFunc),
 		concurrencyLimiter: NewConcurrencyLimiter(cfg.MaxActiveJobs),
 		stageExecutor:      stageExecutor,
 		exitFunc:           os.Exit, // Default to os.Exit
@@ -322,4 +328,39 @@ func (w *Worker) IsStopped() bool {
 // IsDraining returns true if the worker is in drain mode.
 func (w *Worker) IsDraining() bool {
 	return w.drainMode.Load()
+}
+
+// registerJobCancel stores a cancel function for a job.
+// Called when a job starts executing, allowing cancel_job command to abort it.
+func (w *Worker) registerJobCancel(jobID string, cancel context.CancelFunc) {
+	w.jobCancelMu.Lock()
+	defer w.jobCancelMu.Unlock()
+	w.jobCancelFuncs[jobID] = cancel
+	w.logger.Debug("[CANCEL] Registered cancel for job %s", jobID)
+}
+
+// unregisterJobCancel removes a stored cancel function for a job.
+// Called when a job finishes execution (success or failure).
+func (w *Worker) unregisterJobCancel(jobID string) {
+	w.jobCancelMu.Lock()
+	defer w.jobCancelMu.Unlock()
+	delete(w.jobCancelFuncs, jobID)
+	w.logger.Debug("[CANCEL] Unregistered cancel for job %s", jobID)
+}
+
+// cancelJob cancels a running job by calling its stored cancel function.
+// Called by the cancel_job command handler.
+func (w *Worker) cancelJob(jobID string) bool {
+	w.jobCancelMu.Lock()
+	defer w.jobCancelMu.Unlock()
+	cancel, ok := w.jobCancelFuncs[jobID]
+	if !ok {
+		w.logger.Warn("[CANCEL] No cancel function found for job %s (not running here?)", jobID)
+		return false
+	}
+	cancel()
+	delete(w.jobCancelFuncs, jobID)
+	w.logger.Info("[CANCEL] Cancel signal sent for job %s", jobID)
+	return true
+
 }

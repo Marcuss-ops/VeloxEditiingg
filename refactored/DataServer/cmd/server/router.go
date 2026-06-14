@@ -10,9 +10,11 @@ import (
 	"velox-server/internal/handlers/server/analytics"
 	"velox-server/internal/handlers/server/api"
 	jobhandlers "velox-server/internal/handlers/server/jobs"
+	pipelinehandler "velox-server/internal/handlers/server/pipeline"
 	scripthandlers "velox-server/internal/handlers/server/script"
 	jobservice "velox-server/internal/services/jobs"
 	"velox-server/internal/store"
+	workersreg "velox-server/internal/workers"
 	"github.com/gin-gonic/gin"
 )
 
@@ -75,6 +77,7 @@ func newRouter(cfg *config.Config, deps *serverDeps, registry *app.Registry) *gi
 	registerAPIV1Routes(r, cfg, deps, ansibleHandlers)
 	registerNativeV1Routes(r, deps)
 	registerScriptRoutes(r, cfg, deps)
+	registerPipelineRoutes(r, cfg, deps)
 
 	// Analytics cache
 	analytics.InitAnalyticsCache(deps.paths.dataDir, deps.sqliteStore)
@@ -101,6 +104,12 @@ func registerAPIV1Routes(r *gin.Engine, cfg *config.Config, deps *serverDeps, an
 	r.POST("/api/jobs/complete", jobAPI.CompleteJobHandler())
 	r.POST("/api/jobs/fail", jobAPI.FailJobHandler())
 
+	// Bundle compat routes (frontend calls /api/bundle/* without /v1/)
+	if deps.workerUpdateHandler != nil {
+		r.GET("/api/bundle/info", deps.workerUpdateHandler.GetLatestBundleHandler())
+		r.GET("/api/bundle/files", deps.workerUpdateHandler.GetBundleFilesHandler())
+	}
+
 	// Compat: commands endpoint for workers (registered by workers module above)
 }
 
@@ -122,4 +131,25 @@ func registerScriptRoutes(r *gin.Engine, cfg *config.Config, deps *serverDeps) {
 	v1Group := r.Group("/api/v1/script")
 	v1Group.Use(adminAuthMiddleware(cfg))
 	scripthandlers.RegisterRoutes(v1Group, cfg, deps.fileQ, deps.sqliteStore)
+}
+
+func registerPipelineRoutes(r *gin.Engine, cfg *config.Config, deps *serverDeps) {
+	// Public pipeline endpoint: forwards to remote engine (77.93.152.122) then to workers
+	r.POST("/api/remote/pipeline/generate", pipelinehandler.PipelineGenerate(cfg, deps.fileQ))
+
+	// Pipeline status check
+	r.GET("/api/remote/pipeline/status/:trace_id", pipelinehandler.PipelineStatus(cfg))
+
+	// Cancel a running pipeline job — cancels on remote engine, local queue, and worker
+	var cmdMgr *workersreg.CommandManager
+	if deps.workerUpdateHandler != nil {
+		cmdMgr = deps.workerUpdateHandler.CommandManager()
+	}
+	r.DELETE("/api/remote/pipeline/cancel/:trace_id", pipelinehandler.PipelineCancel(cfg, deps.fileQ, cmdMgr))
+
+	// Simple script generation (single topic)
+	r.POST("/api/script-simple", pipelinehandler.ScriptSimple(cfg))
+
+	// Batch script generation (multiple topics)
+	r.POST("/api/script-multiple", pipelinehandler.ScriptMultiple(cfg))
 }

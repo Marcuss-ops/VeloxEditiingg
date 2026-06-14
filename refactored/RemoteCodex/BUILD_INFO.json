@@ -1,10 +1,10 @@
 {
   "version": "v1.0.6",
-  "git_commit": "8dfba85b",
-  "source_hash": "773220a1e6d07a063c884b46dc9b506ae345dc44476a8cc5a9b1726f652f1b1a",
+  "git_commit": "be5ca1e0",
+  "source_hash": "556892995b861d4d6822df1b53367b28543cc8c5b5eb11bb53beecda43eb1e65",
   "protocol_version": "2026-06-worker-v1",
   "engine_version": "v1.0.6",
   "platform": "linux",
   "arch": "x86_64",
-  "built_at": "2026-06-14T10:31:12Z"
+  "built_at": "2026-06-14T13:25:04Z"
 }

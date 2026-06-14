@@ -87,6 +87,23 @@ func isPublicReadOnlyRoute(path string) bool {
 		"/api/v1/dashboard/summary",
 		"/api/v1/dashboard/realtime",
 		"/api/v1/dashboard/health",
+		"/api/v1/youtube",
+		"/api/v1/analytics",
+		"/api/v1/groups",
+		"/api/v1/channels",
+		"/api/v1/drive-links",
+		"/api/v1/drive",
+		"/api/v1/master",
+		"/api/v1/ansible",
+		"/api/v1/admin/ansible",
+		"/api/v1/endpoints-status",
+		"/api/v1/services",
+		"/api/v1/bundle",
+		"/api/v1/queue",
+		"/api/v1/stats",
+		"/api/v1/calendar",
+		"/api/v1/livestream",
+		"/api/bundle",
 	}
 
 	for _, prefix := range publicPrefixes {

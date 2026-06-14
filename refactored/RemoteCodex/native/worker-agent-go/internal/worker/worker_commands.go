@@ -110,6 +110,23 @@ func (w *Worker) processCommand(ctx context.Context, cmd api.WorkerCommand) {
 		w.drainMode.Store(true)
 		// Host reboot is handled by an external script/playbook.
 
+	case "cancel_job":
+		jobID := ""
+		if cmd.Payload != nil {
+			if j, ok := cmd.Payload["job_id"].(string); ok {
+				jobID = j
+			}
+		}
+		if jobID == "" {
+			w.logger.Warn("[COMMANDS] cancel_job command missing job_id in payload")
+			resultErr = fmt.Errorf("cancel_job: missing job_id")
+		} else {
+			w.logger.Info("[COMMANDS] Cancel requested for job %s", jobID)
+			if !w.cancelJob(jobID) {
+				w.logger.Warn("[COMMANDS] Job %s not found on this worker — may be running elsewhere or already finished", jobID)
+			}
+		}
+
 	default:
 		w.logger.Warn("[COMMANDS] Unknown command type: %s", cmd.Command)
 		resultErr = fmt.Errorf("unknown command: %s", cmd.Command)
