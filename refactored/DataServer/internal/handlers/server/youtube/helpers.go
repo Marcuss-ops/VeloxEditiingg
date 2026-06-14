@@ -67,9 +67,3 @@ func generateMockTags(title, customPrompt string) []string {
 	return result[:min(10, len(result))]
 }
 
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}

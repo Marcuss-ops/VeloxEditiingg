@@ -304,20 +304,6 @@ func ExtractOutputVideoPath(output map[string]interface{}) string {
 	return ""
 }
 
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
-
 func asJobString(v interface{}) string {
 	if v == nil {
 		return ""

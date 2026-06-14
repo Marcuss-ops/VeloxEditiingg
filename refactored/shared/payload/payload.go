@@ -502,6 +502,16 @@ func DeepCopyMap(m map[string]interface{}) map[string]interface{} {
 	return result
 }
 
+// FirstNonEmpty returns the first non-empty (after trimming) string from the list.
+func FirstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return ""
+}
+
 // IsLikelyMediaSource verifica se una stringa sembra essere una fonte multimediale
 // (URL con http/https/file, o estensione video/audio comune).
 func IsLikelyMediaSource(value string) bool {

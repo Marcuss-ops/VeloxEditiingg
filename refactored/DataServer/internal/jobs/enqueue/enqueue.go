@@ -62,15 +62,15 @@ func EnqueueSceneVideoJob(ctx context.Context, q *queue.FileQueue, payloadMap ma
 // endpoint. It auto-detects audio duration, normalizes scenes with image fallbacks,
 // and computes per-scene durations.
 func BuildSceneImagePayload(rawPayload map[string]interface{}, dataDir, videosDir string) (map[string]interface{}, error) {
-	videoName := firstNonEmpty(rawPayload, "video_name", "title", "topic")
+	videoName := payload.FirstString(rawPayload, "video_name", "title", "topic")
 	if videoName == "" {
-		videoName = paths.SanitizeVideoName(firstNonEmpty(rawPayload, "topic", "source_text"))
+		videoName = paths.SanitizeVideoName(payload.FirstString(rawPayload, "topic", "source_text"))
 	}
 	if videoName == "" {
 		videoName = "script_with_images_" + time.Now().UTC().Format("20060102_150405")
 	}
 
-	scriptText := firstNonEmpty(rawPayload, "script_text", "script", "source_text")
+	scriptText := payload.FirstString(rawPayload, "script_text", "script", "source_text")
 	if scriptText == "" {
 		scriptText = buildScriptText(rawPayload)
 	}
@@ -83,9 +83,9 @@ func BuildSceneImagePayload(rawPayload map[string]interface{}, dataDir, videosDi
 		return nil, fmt.Errorf("at least one scene or image is required")
 	}
 
-	voiceoverPaths := normalizeStringList(rawPayload, "voiceover_paths", "voiceover_path", "audio_path", "source_media", "source_media_url", "audio_source")
+	voiceoverPaths := payload.NormalizeStringList(rawPayload, "voiceover_paths", "voiceover_path", "audio_path", "source_media", "source_media_url", "audio_source")
 	if len(voiceoverPaths) == 0 {
-		if src := firstNonEmpty(rawPayload, "source_text"); payload.IsLikelyMediaSource(src) {
+		if src := payload.FirstString(rawPayload, "source_text"); payload.IsLikelyMediaSource(src) {
 			voiceoverPaths = []string{src}
 		}
 	}
@@ -95,8 +95,8 @@ func BuildSceneImagePayload(rawPayload map[string]interface{}, dataDir, videosDi
 
 	sceneCount := len(sceneEntries)
 
-	totalDuration := floatParam(rawPayload, 0, "total_duration_secs", "duration_secs", "video_duration_secs")
-	perSceneDuration := floatParam(rawPayload, 0, "scene_duration_secs", "image_duration_secs")
+	totalDuration := payload.FloatParam(rawPayload, 0, "total_duration_secs", "duration_secs", "video_duration_secs")
+	perSceneDuration := payload.FloatParam(rawPayload, 0, "scene_duration_secs", "image_duration_secs")
 
 	if perSceneDuration <= 0 && totalDuration <= 0 {
 		if len(voiceoverPaths) > 0 {
@@ -122,26 +122,26 @@ func BuildSceneImagePayload(rawPayload map[string]interface{}, dataDir, videosDi
 		sceneEntries[i]["duration_seconds"] = perSceneDuration
 	}
 
-	outputPath := firstNonEmpty(rawPayload, "output_path")
+	outputPath := payload.FirstString(rawPayload, "output_path")
 	if outputPath == "" {
 		outputPath = paths.DefaultOutputPath(videosDir, dataDir, videoName, "script_with_images")
 	}
 
-	jobID := firstNonEmpty(rawPayload, "job_id", "script_id")
+	jobID := payload.FirstString(rawPayload, "job_id", "script_id")
 	if jobID == "" {
 		jobID = "scriptimg_" + uuid.NewString()
 	}
-	jobRunID := firstNonEmpty(rawPayload, "job_run_id", "run_id")
+	jobRunID := payload.FirstString(rawPayload, "job_run_id", "run_id")
 	if jobRunID == "" {
 		jobRunID = "run_" + uuid.NewString()
 	}
-	correlationID := firstNonEmpty(rawPayload, "correlation_id")
+	correlationID := payload.FirstString(rawPayload, "correlation_id")
 	if correlationID == "" {
 		correlationID = "corr_" + uuid.NewString()
 	}
 
 	now := time.Now().UTC().Format(time.RFC3339)
-	audioLanguage := firstNonEmpty(rawPayload, "audio_language_for_srt", "language")
+	audioLanguage := payload.FirstString(rawPayload, "audio_language_for_srt", "language")
 	if audioLanguage == "" {
 		audioLanguage = "it"
 	}
@@ -157,31 +157,31 @@ func BuildSceneImagePayload(rawPayload map[string]interface{}, dataDir, videosDi
 	normalized["correlation_id"] = correlationID
 	normalized["job_type"] = "process_video"
 	normalized["version"] = "v1"
-	normalized["created_at"] = ensureRFC3339(firstNonEmpty(rawPayload, "created_at"), now)
-	normalized["updated_at"] = ensureRFC3339(firstNonEmpty(rawPayload, "updated_at"), now)
+	normalized["created_at"] = payload.EnsureRFC3339(payload.FirstString(rawPayload, "created_at"), now)
+	normalized["updated_at"] = payload.EnsureRFC3339(payload.FirstString(rawPayload, "updated_at"), now)
 	normalized["video_name"] = videoName
 	normalized["title"] = videoName
 	normalized["script_text"] = scriptText
 	normalized["scenes"] = sceneEntries
-	normalized["scenes_json"] = mustJSON(sceneEntries)
+	normalized["scenes_json"] = payload.MustJSON(sceneEntries)
 	normalized["voiceover_paths"] = voiceoverPaths
 	normalized["voiceover_path"] = voiceoverPaths[0]
 	normalized["audio_path"] = voiceoverPaths[0]
 	normalized["audio_language_for_srt"] = audioLanguage
 	normalized["video_mode"] = "scene_image"
 	normalized["output_path"] = outputPath
-	normalized["drive_output_folder"] = firstNonEmpty(rawPayload, "drive_output_folder", "output_directory")
+	normalized["drive_output_folder"] = payload.FirstString(rawPayload, "drive_output_folder", "output_directory")
 	normalized["scene_count"] = sceneCount
 	normalized["voiceover_count"] = len(voiceoverPaths)
 	normalized["total_duration_secs"] = totalDuration
 	normalized["scene_duration_secs"] = perSceneDuration
 	normalized["scene_image_paths"] = sceneImagePaths
-	if youtubeGroup := firstNonEmpty(rawPayload, "youtube_group", "channel_id"); youtubeGroup != "" {
+	if youtubeGroup := payload.FirstString(rawPayload, "youtube_group", "channel_id"); youtubeGroup != "" {
 		normalized["youtube_group"] = youtubeGroup
 		normalized["channel_id"] = youtubeGroup
 	}
-	normalized["priority"] = ensureInt(rawPayload["priority"], 1)
-	normalized["timeout_secs"] = ensureInt(rawPayload["timeout_secs"], 3600)
+	normalized["priority"] = payload.EnsureInt(rawPayload["priority"], 1)
+	normalized["timeout_secs"] = payload.EnsureInt(rawPayload["timeout_secs"], 3600)
 	normalized["submitted_via"] = "api_script_generate_with_images"
 	normalized["source"] = "script_generate_with_images"
 
@@ -244,10 +244,10 @@ func NormalizeScenesPayload(payloadMap map[string]interface{}) ([]map[string]int
 			}
 			sceneEntries = append(sceneEntries, normalized)
 		}
-		return sceneEntries, dedupeStrings(sceneImagePaths), nil
+		return sceneEntries, payload.DedupeStrings(sceneImagePaths), nil
 	}
 
-	if raw := firstNonEmpty(payloadMap, "scenes_json"); raw != "" {
+	if raw := payload.FirstString(payloadMap, "scenes_json"); raw != "" {
 		var scenes []map[string]interface{}
 		if err := json.Unmarshal([]byte(raw), &scenes); err != nil {
 			return nil, nil, fmt.Errorf("invalid scenes_json: %w", err)
@@ -255,16 +255,16 @@ func NormalizeScenesPayload(payloadMap map[string]interface{}) ([]map[string]int
 		return NormalizeScenesPayload(map[string]interface{}{"scenes": scenes})
 	}
 
-	images := normalizeStringList(payloadMap, "images", "image_links", "image_urls", "image_paths")
+	images := payload.NormalizeStringList(payloadMap, "images", "image_links", "image_urls", "image_paths")
 	if len(images) == 0 {
 		return nil, nil, fmt.Errorf("scenes or images are required")
 	}
-	sceneCount := intParam(payloadMap, len(images), "scene_count")
+	sceneCount := payload.IntParam(payloadMap, len(images), "scene_count")
 	if sceneCount <= 0 {
 		sceneCount = len(images)
 	}
-	perSceneDuration := floatParam(payloadMap, 5, "scene_duration_secs", "image_duration_secs")
-	totalDuration := floatParam(payloadMap, 0, "total_duration_secs", "duration_secs", "video_duration_secs")
+	perSceneDuration := payload.FloatParam(payloadMap, 5, "scene_duration_secs", "image_duration_secs")
+	totalDuration := payload.FloatParam(payloadMap, 0, "total_duration_secs", "duration_secs", "video_duration_secs")
 	if totalDuration > 0 {
 		perSceneDuration = totalDuration / float64(sceneCount)
 	}
@@ -287,7 +287,7 @@ func NormalizeScenesPayload(payloadMap map[string]interface{}) ([]map[string]int
 		sceneEntries = append(sceneEntries, scene)
 		sceneImagePaths = append(sceneImagePaths, img)
 	}
-	return sceneEntries, dedupeStrings(sceneImagePaths), nil
+	return sceneEntries, payload.DedupeStrings(sceneImagePaths), nil
 }
 
 // =============================================================================
@@ -434,23 +434,23 @@ func RenderJobResponse(job map[string]interface{}, full bool) map[string]interfa
 	}
 	response := map[string]interface{}{
 		"ok":                  true,
-		"job_id":              firstString(job, "job_id"),
-		"script_id":           firstString(job, "job_id", "script_id"),
-		"status":              firstString(job, "status"),
-		"video_name":          firstString(job, "video_name", "title"),
-		"job_run_id":          firstString(job, "job_run_id", "run_id"),
-		"run_id":              firstString(job, "run_id", "job_run_id"),
+		"job_id":              payload.FirstString(job, "job_id"),
+		"script_id":           payload.FirstString(job, "job_id", "script_id"),
+		"status":              payload.FirstString(job, "status"),
+		"video_name":          payload.FirstString(job, "video_name", "title"),
+		"job_run_id":          payload.FirstString(job, "job_run_id", "run_id"),
+		"run_id":              payload.FirstString(job, "run_id", "job_run_id"),
 		"created_at":          job["created_at"],
 		"updated_at":          job["updated_at"],
 		"started_at":          job["started_at"],
 		"completed_at":        job["completed_at"],
-		"output_path":         firstString(job, "output_path"),
-		"drive_output_folder": firstString(job, "drive_output_folder"),
+		"output_path":         payload.FirstString(job, "output_path"),
+		"drive_output_folder": payload.FirstString(job, "drive_output_folder"),
 		"scene_count":         job["scene_count"],
 		"voiceover_count":     job["voiceover_count"],
-		"video_mode":          firstString(job, "video_mode"),
+		"video_mode":          payload.FirstString(job, "video_mode"),
 	}
-	if errMsg := firstString(job, "error", "last_error", "error_message"); errMsg != "" {
+	if errMsg := payload.FirstString(job, "error", "last_error", "error_message"); errMsg != "" {
 		response["error"] = errMsg
 	}
 	if result := job["result"]; result != nil {
@@ -468,12 +468,12 @@ func RenderJobResponse(job map[string]interface{}, full bool) map[string]interfa
 // =============================================================================
 
 func normalizeSceneVideoPayload(payloadMap map[string]interface{}) (map[string]interface{}, error) {
-	title := strings.TrimSpace(firstString(payloadMap, "video_name", "title", "project_name"))
+	title := strings.TrimSpace(payload.FirstString(payloadMap, "video_name", "title", "project_name"))
 	if title == "" {
 		return nil, &validationError{field: "video_name", message: "is required"}
 	}
 
-	scriptText := strings.TrimSpace(firstString(payloadMap, "script_text", "script", "source_text", "title", "video_name"))
+	scriptText := strings.TrimSpace(payload.FirstString(payloadMap, "script_text", "script", "source_text", "title", "video_name"))
 	if scriptText == "" {
 		scriptText = title
 	}
@@ -494,15 +494,15 @@ func normalizeSceneVideoPayload(payloadMap map[string]interface{}) (map[string]i
 		return nil, &validationError{field: "voiceover_paths", message: "at least one voiceover path is required"}
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
-	jobID := strings.TrimSpace(firstString(payloadMap, "job_id", "id"))
+	jobID := strings.TrimSpace(payload.FirstString(payloadMap, "job_id", "id"))
 	if jobID == "" {
 		jobID = "scene_" + uuid.NewString()
 	}
-	jobRunID := strings.TrimSpace(firstString(payloadMap, "job_run_id", "run_id"))
+	jobRunID := strings.TrimSpace(payload.FirstString(payloadMap, "job_run_id", "run_id"))
 	if jobRunID == "" {
 		jobRunID = "run_" + uuid.NewString()
 	}
-	correlationID := strings.TrimSpace(firstString(payloadMap, "correlation_id"))
+	correlationID := strings.TrimSpace(payload.FirstString(payloadMap, "correlation_id"))
 	if correlationID == "" {
 		correlationID = "corr_" + uuid.NewString()
 	}
@@ -512,9 +512,9 @@ func normalizeSceneVideoPayload(payloadMap map[string]interface{}) (map[string]i
 		scriptText,
 		scenesJSON,
 		voiceovers,
-		firstString(payloadMap, "youtube_group"),
-		firstString(payloadMap, "output_path"),
-		firstString(payloadMap, "audio_language_for_srt", "audio_lang"),
+		payload.FirstString(payloadMap, "youtube_group"),
+		payload.FirstString(payloadMap, "output_path"),
+		payload.FirstString(payloadMap, "audio_language_for_srt", "audio_lang"),
 	)
 
 	normalized := make(map[string]interface{}, len(payloadMap)+16)
@@ -527,8 +527,8 @@ func normalizeSceneVideoPayload(payloadMap map[string]interface{}) (map[string]i
 	normalized["run_id"] = jobRunID
 	normalized["correlation_id"] = correlationID
 	normalized["job_type"] = "process_video"
-	normalized["created_at"] = ensureRFC3339(firstString(payloadMap, "created_at"), now)
-	normalized["updated_at"] = ensureRFC3339(firstString(payloadMap, "updated_at"), now)
+	normalized["created_at"] = payload.EnsureRFC3339(payload.FirstString(payloadMap, "created_at"), now)
+	normalized["updated_at"] = payload.EnsureRFC3339(payload.FirstString(payloadMap, "updated_at"), now)
 	normalized["video_name"] = title
 	normalized["title"] = title
 	normalized["script_text"] = scriptText
@@ -537,8 +537,8 @@ func normalizeSceneVideoPayload(payloadMap map[string]interface{}) (map[string]i
 	normalized["voiceover_paths"] = voiceovers
 	normalized["voiceover_path"] = voiceovers[0]
 	normalized["audio_path"] = voiceovers[0]
-	normalized["priority"] = ensureInt(payloadMap["priority"], 1)
-	normalized["timeout_secs"] = ensureInt(payloadMap["timeout_secs"], 3600)
+	normalized["priority"] = payload.EnsureInt(payloadMap["priority"], 1)
+	normalized["timeout_secs"] = payload.EnsureInt(payloadMap["timeout_secs"], 3600)
 	normalized["scene_count"] = len(scenesValue)
 	normalized["voiceover_count"] = len(voiceovers)
 	normalized["submitted_via"] = "api_v1_scene_video"
@@ -558,32 +558,32 @@ func normalizeSceneVideoPayload(payloadMap map[string]interface{}) (map[string]i
 		"scenes":          scenesValue,
 		"voiceover_paths": voiceovers,
 		"audio_path":      voiceovers[0],
-		"youtube_group":   firstString(payloadMap, "youtube_group"),
-		"output_path":     firstString(payloadMap, "output_path"),
+		"youtube_group":   payload.FirstString(payloadMap, "youtube_group"),
+		"output_path":     payload.FirstString(payloadMap, "output_path"),
 		"job_fingerprint": jobFingerprint,
 		"submitted_via":   "api_v1_scene_video",
 		"source":          "scene_video_api",
 		"scene_count":     len(scenesValue),
 		"voiceover_count": len(voiceovers),
-		"priority":        ensureInt(payloadMap["priority"], 1),
-		"timeout_secs":    ensureInt(payloadMap["timeout_secs"], 3600),
+		"priority":        payload.EnsureInt(payloadMap["priority"], 1),
+		"timeout_secs":    payload.EnsureInt(payloadMap["timeout_secs"], 3600),
 	}
 
-	if v := strings.TrimSpace(firstString(payloadMap, "youtube_group")); v != "" {
+	if v := strings.TrimSpace(payload.FirstString(payloadMap, "youtube_group")); v != "" {
 		normalized["youtube_group"] = v
 	}
-	if v := strings.TrimSpace(firstString(payloadMap, "output_video_id")); v != "" {
+	if v := strings.TrimSpace(payload.FirstString(payloadMap, "output_video_id")); v != "" {
 		normalized["output_video_id"] = v
 	}
-	if v := strings.TrimSpace(firstString(payloadMap, "audio_language_for_srt", "audio_lang")); v != "" {
+	if v := strings.TrimSpace(payload.FirstString(payloadMap, "audio_language_for_srt", "audio_lang")); v != "" {
 		normalized["audio_language_for_srt"] = v
 		normalized["parameters"].(map[string]interface{})["audio_language_for_srt"] = v
 	}
-	if v := strings.TrimSpace(firstString(payloadMap, "output_path")); v != "" {
+	if v := strings.TrimSpace(payload.FirstString(payloadMap, "output_path")); v != "" {
 		normalized["output_path"] = v
 		normalized["parameters"].(map[string]interface{})["output_path"] = v
 	}
-	if v := strings.TrimSpace(firstString(payloadMap, "scene_image_paths")); v != "" {
+	if v := strings.TrimSpace(payload.FirstString(payloadMap, "scene_image_paths")); v != "" {
 		normalized["scene_image_paths"] = v
 		normalized["parameters"].(map[string]interface{})["scene_image_paths"] = v
 	}
@@ -593,9 +593,9 @@ func normalizeSceneVideoPayload(payloadMap map[string]interface{}) (map[string]i
 
 func buildSceneVideoResponse(normalized map[string]interface{}) map[string]interface{} {
 	jobID, _ := normalized["job_id"].(string)
-	jobRunID := strings.TrimSpace(firstString(normalized, "job_run_id", "run_id"))
-	correlationID := strings.TrimSpace(firstString(normalized, "correlation_id"))
-	jobFingerprint := strings.TrimSpace(firstString(normalized, "job_fingerprint"))
+	jobRunID := strings.TrimSpace(payload.FirstString(normalized, "job_run_id", "run_id"))
+	correlationID := strings.TrimSpace(payload.FirstString(normalized, "correlation_id"))
+	jobFingerprint := strings.TrimSpace(payload.FirstString(normalized, "job_fingerprint"))
 
 	return map[string]interface{}{
 		"ok":                true,
@@ -666,7 +666,7 @@ func normalizeScenes(payloadMap map[string]interface{}) ([]map[string]interface{
 
 func normalizeVoiceoverList(payloadMap map[string]interface{}) []string {
 	candidates := []string{
-		firstString(payloadMap, "voiceover_path", "voiceover", "unified_voiceover_link"),
+		payload.FirstString(payloadMap, "voiceover_path", "voiceover", "unified_voiceover_link"),
 	}
 	if v, ok := payloadMap["voiceover_paths"]; ok {
 		candidates = append(candidates, payload.NormalizeToStrings(v)...)
@@ -722,7 +722,7 @@ func collectSceneImageCandidates(scenes []map[string]interface{}) []string {
 			out = append(out, image)
 		}
 	}
-	return dedupeStrings(out)
+	return payload.DedupeStrings(out)
 }
 
 func extractVoiceoverPaths(p map[string]interface{}) []string {
@@ -819,10 +819,10 @@ func firstMetadataTitle(p map[string]interface{}) string {
 
 func buildScriptText(payloadMap map[string]interface{}) string {
 	var parts []string
-	if s := firstNonEmpty(payloadMap, "topic", "title"); s != "" {
+	if s := payload.FirstString(payloadMap, "topic", "title"); s != "" {
 		parts = append(parts, s)
 	}
-	if s := firstNonEmpty(payloadMap, "source_text"); s != "" {
+	if s := payload.FirstString(payloadMap, "source_text"); s != "" {
 		parts = append(parts, s)
 	}
 	if len(parts) == 0 {
@@ -831,45 +831,7 @@ func buildScriptText(payloadMap map[string]interface{}) string {
 	return strings.Join(parts, " - ")
 }
 
-// =============================================================================
-// Utility helpers
-// =============================================================================
 
-func firstString(source map[string]interface{}, keys ...string) string {
-	return payload.FirstString(source, keys...)
-}
-
-func firstNonEmpty(source map[string]interface{}, keys ...string) string {
-	return payload.FirstString(source, keys...)
-}
-
-func normalizeStringList(source map[string]interface{}, keys ...string) []string {
-	return payload.NormalizeStringList(source, keys...)
-}
-
-func floatParam(source map[string]interface{}, fallback float64, keys ...string) float64 {
-	return payload.FloatParam(source, fallback, keys...)
-}
-
-func intParam(source map[string]interface{}, fallback int, key string) int {
-	return payload.IntParam(source, fallback, key)
-}
-
-func ensureRFC3339(value, fallback string) string {
-	return payload.EnsureRFC3339(value, fallback)
-}
-
-func ensureInt(value interface{}, fallback int) int {
-	return payload.EnsureInt(value, fallback)
-}
-
-func dedupeStrings(values []string) []string {
-	return payload.DedupeStrings(values)
-}
-
-func mustJSON(v interface{}) string {
-	return payload.MustJSON(v)
-}
 
 func sceneCountFromPayload(payloadMap map[string]interface{}) int {
 	if scenes, ok := payloadMap["scenes"].([]interface{}); ok {

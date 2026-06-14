@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"velox-shared/payload"
 )
 
 // AnsibleRunRecord stores the execution state for a playbook or ad-hoc command.
@@ -415,7 +416,7 @@ func (m *AnsibleRunManager) writeInventoryFile(hosts []string) (string, map[stri
 
 		lines = append(lines, fmt.Sprintf("        %s:", alias))
 		lines = append(lines, fmt.Sprintf("          ansible_host: %s", c.Host))
-		lines = append(lines, fmt.Sprintf("          ansible_user: %s", firstNonEmpty(c.AnsibleUser, "pierone")))
+		lines = append(lines, fmt.Sprintf("          ansible_user: %s", payload.FirstNonEmpty(c.AnsibleUser, "pierone")))
 		lines = append(lines, "          ansible_connection: ssh")
 		lines = append(lines, "          ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'")
 		lines = append(lines, "          ansible_python_interpreter: /usr/bin/python3")
@@ -454,15 +455,6 @@ func (m *AnsibleRunManager) writeInventoryFile(hosts []string) (string, map[stri
 	}
 
 	return tmpFile.Name(), aliasByTarget, nil
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return value
-		}
-	}
-	return ""
 }
 
 func (m *AnsibleRunManager) buildCommand(playbookPath, inventoryPath string, limitAliases []string, extraVars []string) []string {

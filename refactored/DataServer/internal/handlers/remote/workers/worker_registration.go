@@ -326,9 +326,3 @@ func (wl *WorkerLifecycle) Config() *config.Config {
 	return wl.cfg
 }
 
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}

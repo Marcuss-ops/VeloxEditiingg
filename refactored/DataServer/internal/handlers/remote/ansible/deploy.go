@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"velox-shared/payload"
 )
 
 type deployPlan struct {
@@ -121,7 +122,7 @@ func (h *AnsibleHandlers) runDeployWorkers(targets []string, batchSize int, cana
 
 	go func() {
 		bgCtx := context.Background()
-		masterURL := firstNonEmpty(
+		masterURL := payload.FirstNonEmpty(
 			h.masterURL,
 			os.Getenv("VELOX_MASTER_URL"),
 			os.Getenv("VELOX_MASTER_SERVER_URL"),

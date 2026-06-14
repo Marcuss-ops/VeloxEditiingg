@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 	"time"
 
@@ -397,14 +398,9 @@ func (dlq *DeadLetterQueue) PurgeToLimit() (int, error) {
 		sorted = append(sorted, jobWithTime{id, job.DeadAt})
 	}
 
-	// Simple bubble sort for small datasets (could use sort.Slice)
-	for i := 0; i < len(sorted); i++ {
-		for j := i + 1; j < len(sorted); j++ {
-			if sorted[j].deadAt.Before(sorted[i].deadAt) {
-				sorted[i], sorted[j] = sorted[j], sorted[i]
-			}
-		}
-	}
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].deadAt.Before(sorted[j].deadAt)
+	})
 
 	toRemove := len(dlq.jobs) - dlq.config.MaxItems
 	removed := 0

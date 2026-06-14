@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"velox-shared/payload"
 )
 
 // ============================================================
@@ -175,32 +177,32 @@ func TestToInt64_Nil(t *testing.T) {
 }
 
 // ============================================================
-// firstNonEmpty tests
+// payload.FirstNonEmpty tests
 // ============================================================
 
 func TestFirstNonEmpty_First(t *testing.T) {
-	result := firstNonEmpty("hello", "", "world")
+	result := payload.FirstNonEmpty("hello", "", "world")
 	if result != "hello" {
 		t.Errorf("Expected 'hello', got '%s'", result)
 	}
 }
 
 func TestFirstNonEmpty_Second(t *testing.T) {
-	result := firstNonEmpty("", "world")
+	result := payload.FirstNonEmpty("", "world")
 	if result != "world" {
 		t.Errorf("Expected 'world', got '%s'", result)
 	}
 }
 
 func TestFirstNonEmpty_AllEmpty(t *testing.T) {
-	result := firstNonEmpty("", "", "")
+	result := payload.FirstNonEmpty("", "", "")
 	if result != "" {
 		t.Errorf("Expected empty string, got '%s'", result)
 	}
 }
 
 func TestFirstNonEmpty_NoArgs(t *testing.T) {
-	result := firstNonEmpty()
+	result := payload.FirstNonEmpty()
 	if result != "" {
 		t.Errorf("Expected empty string, got '%s'", result)
 	}
