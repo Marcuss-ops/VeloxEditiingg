@@ -108,8 +108,27 @@ func GetDriveLinksByGroupHandler(c *gin.Context) {
 	})
 }
 
-// GetMasterFoldersHandler returns master folders from drive_master_folders_list.json
+// GetMasterFoldersHandler returns master folders from SQLite (source of truth)
 func GetMasterFoldersHandler(c *gin.Context) {
+	masters := make(gin.H)
+
+	// SQLite is the source of truth
+	if driveLinksStore != nil {
+		dbMasters, err := driveLinksStore.ListMasterFolders()
+		if err == nil && len(dbMasters) > 0 {
+			for _, m := range dbMasters {
+				language, _ := m["language"].(string)
+				if language == "" {
+					continue
+				}
+				masters[language] = m
+			}
+			c.JSON(http.StatusOK, gin.H{"success": true, "data": gin.H{"masters": masters}})
+			return
+		}
+	}
+
+	// Fallback: legacy JSON file
 	if driveLinksDataDir == "" {
 		c.JSON(http.StatusOK, gin.H{"success": true, "data": gin.H{"masters": gin.H{}}})
 		return
