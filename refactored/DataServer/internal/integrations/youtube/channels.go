@@ -118,14 +118,14 @@ func (s *Service) loadChannelFromToken(tokenPath string) *AuthChannel {
 	return channel
 }
 
-// loadChannelsJSON loads channel details from SQLite.
+// loadChannelsJSON loads channel details from SQLite (legacy path).
 func (s *Service) loadChannelsJSON() {
 	if s.store != nil {
 		s.loadChannelsFromSQLite()
 	}
 }
 
-// loadChannelsFromSQLite loads channel metadata from SQLite
+// loadChannelsFromSQLite loads channel metadata from legacy youtube_channel_metadata.
 func (s *Service) loadChannelsFromSQLite() bool {
 	rows, err := s.store.ListYouTubeChannelMetadata()
 	if err != nil || len(rows) == 0 {
@@ -152,7 +152,55 @@ func (s *Service) loadChannelsFromSQLite() bool {
 		}
 	}
 
-	log.Printf("[OK] Loaded channel metadata from SQLite (%d entries)", len(rows))
+	log.Printf("[OK] Loaded channel metadata from legacy SQLite (%d entries)", len(rows))
+	return true
+}
+
+// loadCanonicalChannels loads channel metadata from the canonical youtube_channels table.
+func (s *Service) loadCanonicalChannels() bool {
+	if s.store == nil {
+		// Fall back to legacy path
+		return s.loadChannelsFromSQLite()
+	}
+
+	rows, err := s.store.ListYouTubeChannels()
+	if err != nil || len(rows) == 0 {
+		// Fall back to legacy if canonical is empty
+		return s.loadChannelsFromSQLite()
+	}
+
+	for _, row := range rows {
+		id, _ := row["channel_id"].(string)
+		if id == "" {
+			continue
+		}
+		title, _ := row["title"].(string)
+		displayName, _ := row["display_name"].(string)
+		language, _ := row["language"].(string)
+		thumbnailURL, _ := row["thumbnail_url"].(string)
+
+		if ch, exists := s.channels[id]; exists {
+			if title != "" {
+				ch.Title = title
+			}
+			if language != "" {
+				ch.Language = language
+			}
+			if thumbnailURL != "" && ch.Thumbnail == "" {
+				ch.Thumbnail = thumbnailURL
+			}
+		} else {
+			s.channels[id] = &AuthChannel{
+				ID:        id,
+				Title:     title,
+				Name:      displayName,
+				Language:  language,
+				Thumbnail: thumbnailURL,
+			}
+		}
+	}
+
+	log.Printf("[OK] Loaded channel metadata from canonical tables (%d entries)", len(rows))
 	return true
 }
 
@@ -175,10 +223,12 @@ func (s *Service) UpdateChannelMetadata(channelID string, metadata map[string]in
 		ch.Title = title
 	}
 
-	// Persist to SQLite
+	// Persist to canonical youtube_channels
 	if s.store != nil {
-		data, _ := json.Marshal(ch)
-		return s.store.UpsertYouTubeChannelMetadata(ch.ID, ch.Title, ch.TokenPath, ch.Language, "", "", string(data))
+		rawMetadata, _ := json.Marshal(map[string]string{
+			"token_path": ch.TokenPath,
+		})
+		return s.store.UpsertYouTubeChannel(ch.ID, ch.Title, ch.Name, "", ch.Thumbnail, ch.Language, "", 0, 0, "", "", string(rawMetadata))
 	}
 	return nil
 }

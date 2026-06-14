@@ -51,9 +51,9 @@ func (ym *YouTubeManager) reviewAndRefreshChannels() {
 	time.Sleep(3 * time.Second)
 	log.Printf("[REVIEW] YouTube Review: Starting background review of database channels...")
 
-	groups, err := ym.storage.ListGroups()
-	if err != nil {
-		log.Printf("[WARN] YouTube Review: Failed to list groups: %v", err)
+	groups, _ := ym.storage.ListGroups()
+	if len(groups) == 0 {
+		log.Printf("[INFO] YouTube Review: No groups found, skipping review")
 		return
 	}
 

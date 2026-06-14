@@ -7,13 +7,16 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"velox-server/internal/store"
 )
 
-// EventLogger logs job events to a JSONL file (compatible with Python job_events.jsonl)
+// EventLogger logs job events to SQLite (primary) and JSONL file (backup)
 type EventLogger struct {
 	filePath string
 	mu       sync.Mutex
 	file     *os.File
+	dbStore  *store.SQLiteStore
 }
 
 // JobEvent represents a job event entry
@@ -25,7 +28,7 @@ type JobEvent struct {
 }
 
 // NewEventLogger creates a new event logger
-func NewEventLogger(filePath string) (*EventLogger, error) {
+func NewEventLogger(filePath string, dbStore *store.SQLiteStore) (*EventLogger, error) {
 	// Ensure directory exists
 	dir := filepath.Dir(filePath)
 	if err := os.MkdirAll(dir, 0755); err != nil {
@@ -41,16 +44,19 @@ func NewEventLogger(filePath string) (*EventLogger, error) {
 	return &EventLogger{
 		filePath: filePath,
 		file:     file,
+		dbStore:  dbStore,
 	}, nil
 }
 
-// LogEvent logs a job event
+// LogEvent logs a job event to SQLite (primary) and JSONL (backup)
 func (l *EventLogger) LogEvent(jobID, eventType string, extra map[string]interface{}) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
+	now := time.Now().UTC().Format(time.RFC3339) + "Z"
+
 	event := map[string]interface{}{
-		"timestamp": time.Now().UTC().Format(time.RFC3339) + "Z",
+		"timestamp": now,
 		"job_id":    jobID,
 		"event":     eventType,
 	}
@@ -65,6 +71,17 @@ func (l *EventLogger) LogEvent(jobID, eventType string, extra map[string]interfa
 		return
 	}
 
+	// SQLite is the source of truth
+	if l.dbStore != nil {
+		if err := l.dbStore.InsertJobEvent(now, jobID, eventType, string(data)); err != nil {
+			// Log to file as fallback
+			l.file.Write(data)
+			l.file.Write([]byte("\n"))
+		}
+		return
+	}
+
+	// Fallback: JSONL file
 	l.file.Write(data)
 	l.file.Write([]byte("\n"))
 }
@@ -84,8 +101,17 @@ func (l *EventLogger) Close() error {
 	return nil
 }
 
-// GetRecentEvents returns recent events from the log file
+// GetRecentEvents returns recent events from SQLite (primary) or JSONL (fallback)
 func (l *EventLogger) GetRecentEvents(jobID string, limit int) ([]map[string]interface{}, error) {
+	// SQLite is the source of truth
+	if l.dbStore != nil {
+		events, err := l.dbStore.ListJobEvents(jobID, limit)
+		if err == nil && len(events) > 0 {
+			return events, nil
+		}
+	}
+
+	// Fallback: JSONL file
 	l.mu.Lock()
 	defer l.mu.Unlock()
 

@@ -125,7 +125,7 @@
     # ── UNIFIED DEPLOY (shared task) ─────────────────────────
     # deploy_worker_release copies current → current.new, validates,
     # swaps atomically, builds Docker, configures systemd, and verifies.
-    - name: Install | Deploy worker release (no bundle: code is in current/)
+    - name: "Install | Deploy worker release (no bundle: code is in current/)"
       ansible.builtin.include_tasks:
         file: tasks/deploy_worker_release.yml
       vars:
