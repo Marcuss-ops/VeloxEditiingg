@@ -6,13 +6,14 @@ import (
 	"velox-server/internal/handlers/remote/submission"
 	"velox-server/internal/integrations/youtube"
 	"velox-server/internal/queue"
+	"velox-server/internal/store"
 )
 
 // RegisterV1NativeRoutes registers minimal GO-native v1 API endpoints so the
 // frontend can run without Python Job Master (port 8002).
-func RegisterV1NativeRoutes(r *gin.Engine, sq *queue.StreamsQueue, dataDir string, ytService *youtube.Service) {
+func RegisterV1NativeRoutes(r *gin.Engine, sq *queue.StreamsQueue, ytService *youtube.Service, dbStore *store.SQLiteStore) {
 	// Initialize livestream handlers
-	livestreamHandlers := livestream.NewLivestreamHandlers(ytService, dataDir)
+	livestreamHandlers := livestream.NewLivestreamHandlers(ytService, dbStore)
 	// Initialize submission handlers if queue is available
 	var submissionHandlers *submission.SubmissionHandlers
 	if sq != nil {

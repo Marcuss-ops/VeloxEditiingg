@@ -1,17 +1,13 @@
-// Package livestream provides livestream management handlers.
+// Package livestream provides livestream management handlers backed by SQLite.
 package livestream
 
 import (
-	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"net/http"
-	"os"
-	"path/filepath"
-	"sync"
 	"time"
 
 	"velox-server/internal/integrations/youtube"
+	"velox-server/internal/store"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -19,87 +15,52 @@ import (
 )
 
 type LiveStreamConfig struct {
-	ID                  string    `json:"id"`
-	Name                string    `json:"name"`
-	Platform            string    `json:"platform"`
-	StreamKey           string    `json:"stream_key"`
-	StreamURL           string    `json:"stream_url"`
-	Description         string    `json:"description"`
-	IsForKids           bool      `json:"is_for_kids"`
-	VideoBitrate        int       `json:"video_bitrate"`
-	AudioBitrate        int       `json:"audio_bitrate"`
-	Status              string    `json:"status"` // "created", "testing", "live", "complete", "revoked"
-	VideoOrder          string    `json:"video_order"`
-	Protocol            string    `json:"protocol"`
-	AutoStart           bool      `json:"auto_start"`
-	AutoStop            bool      `json:"auto_stop"`
-	ScheduledStartTime  string    `json:"scheduled_start_time,omitempty"`
-	ScheduledEndTime    string    `json:"scheduled_end_time,omitempty"`
-	CreatedAt           time.Time `json:"created_at"`
-	Duration            int       `json:"duration"`
-	MaxViewers          int       `json:"max_viewers"`
-	LatencyPreference   string    `json:"latency_preference"`
-	ChannelID           string    `json:"channel_id"`
-	BroadcastID         string    `json:"broadcast_id,omitempty"`
-	YouTubeStreamID     string    `json:"youtube_stream_id,omitempty"`
+	ID                 string    `json:"id"`
+	Name               string    `json:"name"`
+	Platform           string    `json:"platform"`
+	StreamKey          string    `json:"stream_key"`
+	StreamURL          string    `json:"stream_url"`
+	Description        string    `json:"description"`
+	IsForKids          bool      `json:"is_for_kids"`
+	VideoBitrate       int       `json:"video_bitrate"`
+	AudioBitrate       int       `json:"audio_bitrate"`
+	Status             string    `json:"status"` // "created", "testing", "live", "complete", "revoked"
+	VideoOrder         string    `json:"video_order"`
+	Protocol           string    `json:"protocol"`
+	AutoStart          bool      `json:"auto_start"`
+	AutoStop           bool      `json:"auto_stop"`
+	ScheduledStartTime string    `json:"scheduled_start_time,omitempty"`
+	ScheduledEndTime   string    `json:"scheduled_end_time,omitempty"`
+	CreatedAt          time.Time `json:"created_at"`
+	Duration           int       `json:"duration"`
+	MaxViewers         int       `json:"max_viewers"`
+	LatencyPreference  string    `json:"latency_preference"`
+	ChannelID          string    `json:"channel_id"`
+	BroadcastID        string    `json:"broadcast_id,omitempty"`
+	YouTubeStreamID    string    `json:"youtube_stream_id,omitempty"`
 }
 
 type LivestreamHandlers struct {
 	ytService *youtube.Service
-	filePath  string
-	mu        sync.RWMutex
+	dbStore   *store.SQLiteStore
 }
 
 // NewLivestreamHandlers creates a new LivestreamHandlers instance.
-func NewLivestreamHandlers(ytService *youtube.Service, dataDir string) *LivestreamHandlers {
-	h := &LivestreamHandlers{
+func NewLivestreamHandlers(ytService *youtube.Service, dbStore *store.SQLiteStore) *LivestreamHandlers {
+	return &LivestreamHandlers{
 		ytService: ytService,
-		filePath:  filepath.Join(dataDir, "livestreams.json"),
+		dbStore:   dbStore,
 	}
-	_ = os.MkdirAll(filepath.Dir(h.filePath), 0755)
-	return h
-}
-
-func (h *LivestreamHandlers) loadStreams() ([]LiveStreamConfig, error) {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-
-	if _, err := os.Stat(h.filePath); os.IsNotExist(err) {
-		return []LiveStreamConfig{}, nil
-	}
-
-	data, err := ioutil.ReadFile(h.filePath)
-	if err != nil {
-		return nil, err
-	}
-
-	var streams []LiveStreamConfig
-	if err := json.Unmarshal(data, &streams); err != nil {
-		return nil, err
-	}
-	return streams, nil
-}
-
-func (h *LivestreamHandlers) saveStreams(streams []LiveStreamConfig) error {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-
-	data, err := json.MarshalIndent(streams, "", "  ")
-	if err != nil {
-		return err
-	}
-
-	return ioutil.WriteFile(h.filePath, data, 0644)
 }
 
 // ListStreams returns a list of all livestreams.
 func (h *LivestreamHandlers) ListStreams(c *gin.Context) {
-	streams, err := h.loadStreams()
+	rows, err := h.dbStore.ListLivestreams()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"streams": streams})
+	c.JSON(http.StatusOK, gin.H{"streams": store.ToLivestreamConfigs(rows)})
 }
 
 // CreateStream creates a new livestream.
@@ -142,17 +103,15 @@ func (h *LivestreamHandlers) CreateStream(c *gin.Context) {
 				Description: req.Description,
 			},
 			Status: &yt.LiveBroadcastStatus{
-				PrivacyStatus:           "private", // Default to private for safety
+				PrivacyStatus:           "private",
 				SelfDeclaredMadeForKids: req.IsForKids,
 			},
 		}
-
 		if req.ScheduledStartTime != "" {
 			broadcast.Snippet.ScheduledStartTime = req.ScheduledStartTime
 		} else {
 			broadcast.Snippet.ScheduledStartTime = time.Now().Add(10 * time.Minute).Format(time.RFC3339)
 		}
-
 		if req.ScheduledEndTime != "" {
 			broadcast.Snippet.ScheduledEndTime = req.ScheduledEndTime
 		}
@@ -198,14 +157,23 @@ func (h *LivestreamHandlers) CreateStream(c *gin.Context) {
 		}
 	}
 
-	streams, err := h.loadStreams()
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": err.Error()})
-		return
+	// Persist to SQLite
+	cfg := map[string]interface{}{
+		"id": req.ID, "name": req.Name, "platform": req.Platform,
+		"stream_key": req.StreamKey, "stream_url": req.StreamURL,
+		"description": req.Description, "is_for_kids": req.IsForKids,
+		"video_bitrate": req.VideoBitrate, "audio_bitrate": req.AudioBitrate,
+		"status": req.Status, "video_order": req.VideoOrder,
+		"protocol": req.Protocol, "auto_start": req.AutoStart,
+		"auto_stop": req.AutoStop, "scheduled_start_time": req.ScheduledStartTime,
+		"scheduled_end_time": req.ScheduledEndTime,
+		"created_at": req.CreatedAt.Format(time.RFC3339),
+		"duration": req.Duration, "max_viewers": req.MaxViewers,
+		"latency_preference": req.LatencyPreference,
+		"channel_id": req.ChannelID, "broadcast_id": req.BroadcastID,
+		"youtube_stream_id": req.YouTubeStreamID,
 	}
-
-	streams = append(streams, req)
-	if err := h.saveStreams(streams); err != nil {
+	if err := h.dbStore.UpsertLivestream(store.ConfigToRow(cfg)); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": err.Error()})
 		return
 	}
@@ -216,19 +184,16 @@ func (h *LivestreamHandlers) CreateStream(c *gin.Context) {
 // GetStream returns a specific livestream by ID.
 func (h *LivestreamHandlers) GetStream(c *gin.Context) {
 	id := c.Param("id")
-	streams, err := h.loadStreams()
+	row, err := h.dbStore.GetLivestream(id)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": err.Error()})
+		c.JSON(http.StatusNotFound, gin.H{"ok": false, "error": "Stream not found"})
 		return
 	}
-
-	for _, s := range streams {
-		if s.ID == id {
-			c.JSON(http.StatusOK, s)
-			return
-		}
+	if row == nil {
+		c.JSON(http.StatusNotFound, gin.H{"ok": false, "error": "Stream not found"})
+		return
 	}
-	c.JSON(http.StatusNotFound, gin.H{"ok": false, "error": "Stream not found"})
+	c.JSON(http.StatusOK, store.ToLivestreamConfigs([]*store.LivestreamRow{row})[0])
 }
 
 // UpdateStream updates a livestream.
@@ -240,78 +205,50 @@ func (h *LivestreamHandlers) UpdateStream(c *gin.Context) {
 		return
 	}
 
-	streams, err := h.loadStreams()
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": err.Error()})
-		return
-	}
-
-	idx := -1
-	for i, s := range streams {
-		if s.ID == id {
-			idx = i
-			break
-		}
-	}
-
-	if idx == -1 {
+	row, err := h.dbStore.GetLivestream(id)
+	if err != nil || row == nil {
 		c.JSON(http.StatusNotFound, gin.H{"ok": false, "error": "Stream not found"})
 		return
 	}
 
-	streams[idx].Name = req.Name
-	streams[idx].Description = req.Description
-	streams[idx].VideoOrder = req.VideoOrder
-	streams[idx].AutoStart = req.AutoStart
-	streams[idx].AutoStop = req.AutoStop
-	streams[idx].ScheduledStartTime = req.ScheduledStartTime
-	streams[idx].ScheduledEndTime = req.ScheduledEndTime
+	row.Name = req.Name
+	row.Description = req.Description
+	row.VideoOrder = req.VideoOrder
+	row.AutoStart = req.AutoStart
+	row.AutoStop = req.AutoStop
+	row.SchedStart = req.ScheduledStartTime
+	row.SchedEnd = req.ScheduledEndTime
 
-	if err := h.saveStreams(streams); err != nil {
+	if err := h.dbStore.UpsertLivestream(row); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": err.Error()})
 		return
 	}
 
-	c.JSON(http.StatusOK, streams[idx])
+	c.JSON(http.StatusOK, store.ToLivestreamConfigs([]*store.LivestreamRow{row})[0])
 }
 
 // DeleteStream deletes a livestream.
 func (h *LivestreamHandlers) DeleteStream(c *gin.Context) {
 	id := c.Param("id")
-	streams, err := h.loadStreams()
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": err.Error()})
-		return
-	}
-
-	idx := -1
-	for i, s := range streams {
-		if s.ID == id {
-			idx = i
-			break
-		}
-	}
-
-	if idx == -1 {
+	row, err := h.dbStore.GetLivestream(id)
+	if err != nil || row == nil {
 		c.JSON(http.StatusNotFound, gin.H{"ok": false, "error": "Stream not found"})
 		return
 	}
 
-	stream := streams[idx]
-
-	if stream.Platform == "youtube" && stream.BroadcastID != "" && h.ytService != nil {
+	// Delete YouTube resources if present
+	if row.Platform == "youtube" && row.BroadcastID != "" && h.ytService != nil {
 		ctx := c.Request.Context()
-		ytClient, err := h.ytService.GetYouTubeService(ctx, stream.ChannelID)
+		ytClient, err := h.ytService.GetYouTubeService(ctx, row.ChannelID)
 		if err == nil {
-			_ = ytClient.LiveBroadcasts.Delete(stream.BroadcastID).Do()
-			if stream.YouTubeStreamID != "" {
-				_ = ytClient.LiveStreams.Delete(stream.YouTubeStreamID).Do()
+			_ = ytClient.LiveBroadcasts.Delete(row.BroadcastID).Do()
+			if row.YTStreamID != "" {
+				_ = ytClient.LiveStreams.Delete(row.YTStreamID).Do()
 			}
 		}
 	}
 
-	streams = append(streams[:idx], streams[idx+1:]...)
-	if err := h.saveStreams(streams); err != nil {
+	if err := h.dbStore.DeleteLivestream(id); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": err.Error()})
 		return
 	}
@@ -327,87 +264,62 @@ func (h *LivestreamHandlers) GetStatus(c *gin.Context) {
 		return
 	}
 
-	streams, err := h.loadStreams()
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": err.Error()})
-		return
-	}
-
-	for _, s := range streams {
-		if s.ID == streamID {
-			health := "good"
-			bitrate := 4500.0
-			fps := 30
-			res := "1080p"
-
-			if s.Platform == "youtube" && s.YouTubeStreamID != "" && h.ytService != nil {
-				ctx := c.Request.Context()
-				ytClient, err := h.ytService.GetYouTubeService(ctx, s.ChannelID)
-				if err == nil {
-					call := ytClient.LiveStreams.List([]string{"status"}).Id(s.YouTubeStreamID)
-					resp, err := call.Do()
-					if err == nil && len(resp.Items) > 0 {
-						ytStatus := resp.Items[0].Status
-						if ytStatus.StreamStatus == "inactive" {
-							health = "error"
-						} else if ytStatus.HealthStatus != nil {
-							health = ytStatus.HealthStatus.Status
-						}
-					}
-				}
-			}
-
-			c.JSON(http.StatusOK, gin.H{
-				"ok":     true,
-				"id":     s.ID,
-				"status": s.Status,
-				"health": gin.H{
-					"status":      health,
-					"bitrate":     bitrate,
-					"framerate":   fps,
-					"resolution":  res,
-					"packetsLost": 0,
-				},
-			})
-			return
-		}
-	}
-
-	c.JSON(http.StatusNotFound, gin.H{"ok": false, "error": "Stream not found"})
-}
-
-func (h *LivestreamHandlers) transitionStream(c *gin.Context, transitionState string) {
-	id := c.Param("id")
-	streams, err := h.loadStreams()
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": err.Error()})
-		return
-	}
-
-	idx := -1
-	for i, s := range streams {
-		if s.ID == id {
-			idx = i
-			break
-		}
-	}
-
-	if idx == -1 {
+	row, err := h.dbStore.GetLivestream(streamID)
+	if err != nil || row == nil {
 		c.JSON(http.StatusNotFound, gin.H{"ok": false, "error": "Stream not found"})
 		return
 	}
 
-	stream := streams[idx]
+	health := "good"
+	status := row.Status
 
-	if stream.Platform == "youtube" && stream.BroadcastID != "" && h.ytService != nil {
+	if row.Platform == "youtube" && row.YTStreamID != "" && h.ytService != nil {
 		ctx := c.Request.Context()
-		ytClient, err := h.ytService.GetYouTubeService(ctx, stream.ChannelID)
+		ytClient, err := h.ytService.GetYouTubeService(ctx, row.ChannelID)
+		if err == nil {
+			call := ytClient.LiveStreams.List([]string{"status"}).Id(row.YTStreamID)
+			resp, err := call.Do()
+			if err == nil && len(resp.Items) > 0 {
+				ytStatus := resp.Items[0].Status
+				if ytStatus.StreamStatus == "inactive" {
+					health = "error"
+				} else if ytStatus.HealthStatus != nil {
+					health = ytStatus.HealthStatus.Status
+				}
+			}
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"ok":     true,
+		"id":     row.ID,
+		"status": status,
+		"health": gin.H{
+			"status":  health,
+			"bitrate": row.VideoBitrate,
+			"framerate": 30,
+			"resolution": "1080p",
+			"packetsLost": 0,
+		},
+	})
+}
+
+func (h *LivestreamHandlers) transitionStream(c *gin.Context, transitionState string) {
+	id := c.Param("id")
+	row, err := h.dbStore.GetLivestream(id)
+	if err != nil || row == nil {
+		c.JSON(http.StatusNotFound, gin.H{"ok": false, "error": "Stream not found"})
+		return
+	}
+
+	if row.Platform == "youtube" && row.BroadcastID != "" && h.ytService != nil {
+		ctx := c.Request.Context()
+		ytClient, err := h.ytService.GetYouTubeService(ctx, row.ChannelID)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": err.Error()})
 			return
 		}
-
-		call := ytClient.LiveBroadcasts.Transition(transitionState, stream.BroadcastID, []string{"id", "status"})
+		call := ytClient.LiveBroadcasts.Transition(transitionState, row.BroadcastID, []string{"id", "status"})
 		_, err = call.Do()
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": fmt.Sprintf("YouTube transition to %s failed: %v", transitionState, err)})
@@ -415,8 +327,8 @@ func (h *LivestreamHandlers) transitionStream(c *gin.Context, transitionState st
 		}
 	}
 
-	streams[idx].Status = transitionState
-	if err := h.saveStreams(streams); err != nil {
+	row.Status = transitionState
+	if err := h.dbStore.UpsertLivestream(row); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": err.Error()})
 		return
 	}

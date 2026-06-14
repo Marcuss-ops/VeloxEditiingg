@@ -14,6 +14,7 @@ import (
 	pipelinehandler "velox-server/internal/handlers/server/pipeline"
 	scripthandlers "velox-server/internal/handlers/server/script"
 	jobservice "velox-server/internal/services/jobs"
+	"velox-server/internal/integrations/youtube"
 	"velox-server/internal/store"
 	workersreg "velox-server/internal/workers"
 	"github.com/gin-gonic/gin"
@@ -118,10 +119,11 @@ func registerAPIV1Routes(r *gin.Engine, cfg *config.Config, deps *serverDeps, an
 }
 
 func registerNativeV1Routes(r *gin.Engine, deps *serverDeps) {
-	// V1 native routes need the youtube service from the youtube module.
-	// Since we don't have a reference here, we pass nil for now.
-	// TODO: extract youtube service from registry
-	api.RegisterV1NativeRoutes(r, nil, deps.paths.dataDir, nil)
+	var ytService *youtube.Service
+	if deps.youtubeModule != nil {
+		ytService = deps.youtubeModule.Service()
+	}
+	api.RegisterV1NativeRoutes(r, nil, ytService, deps.sqliteStore)
 }
 
 func registerScriptRoutes(r *gin.Engine, cfg *config.Config, deps *serverDeps) {

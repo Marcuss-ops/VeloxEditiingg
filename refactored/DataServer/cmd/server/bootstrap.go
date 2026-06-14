@@ -43,6 +43,7 @@ type serverDeps struct {
 	workerUpdateHandler *workersapi.WorkerUpdateHandler
 	workerLifecycle     *workersapi.WorkerLifecycle
 	ansibleModule       *ansible.Module
+	youtubeModule       *youtube.Module
 }
 
 func configureTrustedProxies(r *gin.Engine) {
@@ -214,7 +215,9 @@ func runServer(cfg *config.Config) error {
 	// Register all modules
 	registry.Register(health.New())
 	registry.Register(workers.New(cfg, deps.reg, deps.workerLifecycle, deps.workerUpdateHandler, auth))
-	registry.Register(youtube.New(cfg, deps.paths.dataDir, deps.sqliteStore, auth))
+	ytMod := youtube.New(cfg, deps.paths.dataDir, deps.sqliteStore, auth)
+	deps.youtubeModule = ytMod
+	registry.Register(ytMod)
 	registry.Register(drive.New(cfg))
 	ansibleMod := ansible.New(cfg, deps.paths.dataDir, auth, deps.sqliteStore)
 	deps.ansibleModule = ansibleMod
