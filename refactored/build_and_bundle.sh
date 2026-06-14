@@ -75,16 +75,22 @@ fi
 
 # Step 4: Create bundle zip
 log "Creating bundle zip..."
-cd "$WORKER_DIR"
 BUNDLE_PATH="$BUNDLE_DIR/$BUNDLE_NAME"
 
 if $DRY_RUN; then
     log "[DRY-RUN] zip $BUNDLE_PATH"
 else
-    # Package the code directory
     rm -f "$BUNDLE_PATH"
-    cd "$DATASERVER_DIR"
-    zip -r "$BUNDLE_PATH"         internal/         cmd/         go.mod go.sum         -x "*_test.go" "*.db" "bin/*" 2>&1 | tail -3
+    cd "$SCRIPT_DIR"
+    zip -r "$BUNDLE_PATH" \
+        RemoteCodex/ \
+        -x "RemoteCodex/native/worker-agent-go/bin/*" \
+        -x "RemoteCodex/native/video-engine-cpp/build/*" \
+        -x "RemoteCodex/native/video-engine-cpp/CMakeCache.txt" \
+        -x "RemoteCodex/native/video-engine-cpp/CMakeFiles/*" \
+        -x "RemoteCodex/native/worker-agent-go/vendor/*" \
+        -x "RemoteCodex/**/*.md" \
+        2>&1 | tail -3
     ok "Bundle created: $BUNDLE_PATH"
 fi
 

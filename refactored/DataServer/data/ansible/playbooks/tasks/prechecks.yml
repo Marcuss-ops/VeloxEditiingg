@@ -3,7 +3,7 @@
   vars:
     required_files:
       - "{{ playbook_dir }}/tasks/installer_heartbeat.yml"
-      - "{{ playbook_dir }}/../../worker_downloads/worker_code.zip"
+      - "{{ playbook_dir }}/../../worker_downloads/worker_code_linux_x86_64.zip"
   stat:
     path: "{{ item }}"
   loop: "{{ required_files }}"

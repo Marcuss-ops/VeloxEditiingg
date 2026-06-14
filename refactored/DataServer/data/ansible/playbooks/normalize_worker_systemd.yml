@@ -107,14 +107,10 @@
       vars:
         install_showlog_wrapper: false
 
-    # ── STEP 7: Verifica stato servizio ───────────────────────
-    - name: Normalize | Check service status
-      ansible.builtin.shell: |
-        set +e
-        systemctl is-active "velox-worker-{{ inventory_hostname }}" 2>/dev/null
-      register: service_active
-      changed_when: false
-      failed_when: false
+    # ── STEP 7: Verifica post-deploy (shared task) ────────────
+    - name: Normalize | Verify worker health
+      ansible.builtin.include_tasks:
+        file: tasks/verify_worker_post_deploy.yml
 
     - name: Normalize | Get journal logs
       ansible.builtin.shell: |
@@ -125,44 +121,11 @@
       changed_when: false
       failed_when: false
 
-    - name: Normalize | Log service status
-      ansible.builtin.debug:
-        msg: >-
-          {% if service_active.stdout == 'active' %}
-          ✅ Worker {{ inventory_hostname }} ({{ worker_id | default(inventory_hostname) }}) — servizio attivo
-          {% else %}
-          ⚠️  Worker {{ inventory_hostname }} — stato: {{ service_active.stdout | default('unknown') }}
-          {% endif %}
-
     - name: Normalize | Show recent journal
       ansible.builtin.debug:
         msg: "{{ journal_output.stdout_lines | default([]) }}"
 
-    # ── STEP 8: Verifica heartbeat sul master ──────────────────
-    - name: Normalize | Verify heartbeat on master
-      ansible.builtin.uri:
-        url: "{{ master_url }}/api/v1/workers/status"
-        method: GET
-        return_content: yes
-        status_code: 200
-        timeout: 10
-      register: workers_status
-      delegate_to: localhost
-      become: no
-      failed_when: false
-
-    - name: Normalize | Log master workers status
-      ansible.builtin.debug:
-        msg: >-
-          {% if workers_status.status == 200 %}
-          Master workers: {{ workers_status.json | default({}) | to_nice_json | truncate(500) }}
-          {% else %}
-          ⚠️  Cannot reach master status endpoint ({{ workers_status.status | default('error') }})
-          {% endif %}
-      delegate_to: localhost
-      become: no
-
-    # ── STEP 9: Riepilogo finale ──────────────────────────────
+    # ── STEP 8: Riepilogo finale ──────────────────────────────
     - name: Normalize | Final summary
       ansible.builtin.debug:
         msg: |-
@@ -171,7 +134,6 @@
           ========================================
           Worker ID: {{ worker_id | default(inventory_hostname) }}
           Service:   velox-worker-{{ inventory_hostname }}
-          Status:    {{ service_active.stdout | default('unknown') }}
           Env file:  /etc/velox-worker.env
           Master:    {{ master_url }}
           ========================================

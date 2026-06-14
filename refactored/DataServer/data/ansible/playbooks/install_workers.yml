@@ -102,7 +102,7 @@
     # ── SYNC CODE FROM CONTROLLER ─────────────────────────────
     - name: Install | Ensure synchronized directory is writable
       ansible.builtin.file:
-        path: "{{ velox_dir }}/current/refactored"
+        path: "{{ velox_dir }}/current"
         state: directory
         owner: "{{ ansible_user }}"
         group: "{{ ansible_user }}"
@@ -111,7 +111,7 @@
     - name: Install | Synchronize worker code from controller to host
       ansible.posix.synchronize:
         src: "{{ playbook_dir }}/../../../../"
-        dest: "{{ velox_dir }}/current/refactored/"
+        dest: "{{ velox_dir }}/current/"
         delete: true
         rsync_opts:
           - "--exclude=.git"
@@ -119,6 +119,7 @@
           - "--exclude=.velox"
           - "--exclude=bin/velox-server"
           - "--exclude=*.md"
+          - "--exclude=DataServer"
       delegate_to: localhost
       become: false
 
@@ -129,11 +130,10 @@
       vars:
         install_showlog_wrapper: true
 
-    # ── VERIFICA FINALE ──────────────────────────────────────
-    - name: Install | Verifica servizio attivo
-      ansible.builtin.systemd:
-        name: "velox-worker-{{ inventory_hostname }}"
-      register: final_status
+    # ── VERIFICA POST-DEPLOY (shared task) ────────────────────
+    - name: Install | Verify worker health
+      ansible.builtin.include_tasks:
+        file: tasks/verify_worker_post_deploy.yml
 
     - name: Install | Riepilogo installazione
       ansible.builtin.debug:
@@ -141,7 +141,6 @@
           ✅ Installazione completata per {{ inventory_hostname }}
 
           Servizio: velox-worker-{{ inventory_hostname }}
-          Stato: {{ final_status.status.ActiveState | default('unknown') }}
           Docker: velox-worker:latest
           Directory: {{ velox_dir }}
           Master: {{ master_url }}

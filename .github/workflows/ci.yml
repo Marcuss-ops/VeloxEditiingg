@@ -26,17 +26,17 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version-file: DataServer/go.mod
+          go-version-file: refactored/DataServer/go.mod
           cache-dependency-path: |
-            DataServer/go.sum
-            shared/go.sum
+            refactored/DataServer/go.sum
+            refactored/shared/go.sum
 
       - name: Run tests
-        working-directory: DataServer
+        working-directory: refactored/DataServer
         run: go test ./... -count=1 -short
 
       - name: Build server binary
-        working-directory: DataServer
+        working-directory: refactored/DataServer
         run: go build -o /dev/null ./cmd/server
 
   # ── Go tests: Worker Agent ───────────────────────────────────
@@ -48,17 +48,17 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version-file: RemoteCodex/native/worker-agent-go/go.mod
+          go-version-file: refactored/RemoteCodex/native/worker-agent-go/go.mod
           cache-dependency-path: |
-            RemoteCodex/native/worker-agent-go/go.sum
-            shared/go.sum
+            refactored/RemoteCodex/native/worker-agent-go/go.sum
+            refactored/shared/go.sum
 
       - name: Run tests
-        working-directory: RemoteCodex/native/worker-agent-go
+        working-directory: refactored/RemoteCodex/native/worker-agent-go
         run: go test ./... -count=1 -short
 
       - name: Build agent binary
-        working-directory: RemoteCodex/native/worker-agent-go
+        working-directory: refactored/RemoteCodex/native/worker-agent-go
         run: go build -o /dev/null ./cmd/velox-worker-agent
 
   # ── Docker build: Worker image ───────────────────────────────
@@ -71,13 +71,13 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version-file: RemoteCodex/native/worker-agent-go/go.mod
+          go-version-file: refactored/RemoteCodex/native/worker-agent-go/go.mod
           cache-dependency-path: |
-            RemoteCodex/native/worker-agent-go/go.sum
-            shared/go.sum
+            refactored/RemoteCodex/native/worker-agent-go/go.sum
+            refactored/shared/go.sum
 
       - name: Build Go agent binary
-        working-directory: RemoteCodex/native/worker-agent-go
+        working-directory: refactored/RemoteCodex/native/worker-agent-go
         run: make agent
 
       - name: Set up Docker Buildx
@@ -86,8 +86,8 @@ jobs:
       - name: Build Docker image
         uses: docker/build-push-action@v6
         with:
-          context: RemoteCodex
-          file: RemoteCodex/native/worker-agent-go/Dockerfile
+          context: refactored/RemoteCodex
+          file: refactored/RemoteCodex/native/worker-agent-go/Dockerfile
           push: false
           tags: velox-worker:ci
           cache-from: type=gha
@@ -106,19 +106,17 @@ jobs:
       - name: Syntax-check playbooks
         run: |
           ansible-playbook --syntax-check \
-            -i DataServer/data/ansible/playbooks/inventory.example.ini \
-            DataServer/data/ansible/playbooks/install_workers.yml \
-            DataServer/data/ansible/playbooks/update_workers.yml \
-            DataServer/data/ansible/playbooks/restart_workers.yml \
-            DataServer/data/ansible/playbooks/preflight_workers.yml \
-            DataServer/data/ansible/playbooks/cleanup_worker.yml \
-            DataServer/data/ansible/playbooks/normalize_worker_systemd.yml
+            -i refactored/DataServer/data/ansible/playbooks/inventory.example.ini \
+            refactored/DataServer/data/ansible/playbooks/install_workers.yml \
+            refactored/DataServer/data/ansible/playbooks/update_workers.yml \
+            refactored/DataServer/data/ansible/playbooks/restart_workers.yml \
+            refactored/DataServer/data/ansible/playbooks/preflight_workers.yml \
+            refactored/DataServer/data/ansible/playbooks/normalize_worker_systemd.yml
 
       - name: Lint playbooks
         run: |
           ansible-lint \
-            DataServer/data/ansible/playbooks/*.yml \
-            DataServer/data/ansible/playbooks/tasks/*.yml \
+            refactored/DataServer/data/ansible/playbooks/*.yml \
+            refactored/DataServer/data/ansible/playbooks/tasks/*.yml \
             --skip-list yaml[line-length],name[template],role-name[path] \
             -x deprecated-command-syntax
-

@@ -1,0 +1,64 @@
+# ============================================================
+# SHARED — VERIFY WORKER POST-DEPLOY
+# ============================================================
+# Single source of truth for worker health verification after
+# any deploy operation (install, update, normalize, restart).
+#
+# Required vars:
+#   master_url       — master API base URL
+#   inventory_hostname — set automatically by Ansible
+#
+# Checks:
+#   1. systemd unit is active
+#   2. Health endpoint responds (200)
+#   3. Worker is registered on master heartbeat
+# ============================================================
+
+- name: Verify | Check service active
+  ansible.builtin.systemd:
+    name: "velox-worker-{{ inventory_hostname }}"
+  register: _verify_service
+
+- name: Verify | Fail if service not active
+  ansible.builtin.fail:
+    msg: "Worker {{ inventory_hostname }} non attivo — stato: {{ _verify_service.status.ActiveState | default('unknown') }}"
+  when: _verify_service.status.ActiveState | default('unknown') != 'active'
+
+- name: Verify | Check health endpoint
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:8081/health"
+    method: GET
+    status_code: 200
+    timeout: 10
+  register: _verify_health
+  failed_when: false
+
+- name: Verify | Fail if health endpoint not responding
+  ansible.builtin.fail:
+    msg: "Worker {{ inventory_hostname }} health endpoint non risponde (HTTP {{ _verify_health.status | default(0) }})"
+  when: _verify_health.status | default(0) != 200
+
+- name: Verify | Check heartbeat on master
+  ansible.builtin.uri:
+    url: "{{ master_url }}/api/v1/workers/status"
+    method: GET
+    return_content: yes
+    status_code: 200
+    timeout: 10
+  register: _verify_workers_status
+  delegate_to: localhost
+  become: no
+  failed_when: false
+
+- name: Verify | Fail if worker not registered on master
+  ansible.builtin.fail:
+    msg: "Worker {{ inventory_hostname }} non registrato sul master dopo deploy"
+  when: >
+    _verify_workers_status.status == 200 and
+    inventory_hostname not in (_verify_workers_status.json | default({}) | to_json)
+
+- name: Verify | Log success
+  ansible.builtin.debug:
+    msg: >-
+      ✅ Worker {{ inventory_hostname }} verificato:
+      servizio attivo, health OK, heartbeat sul master

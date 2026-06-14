@@ -36,15 +36,15 @@
         name: "velox-worker-{{ inventory_hostname }}"
       register: final_status
 
+    - name: Restart | Fail if service not active
+      ansible.builtin.fail:
+        msg: "Worker {{ inventory_hostname }} non attivo dopo restart — stato: {{ final_status.status.ActiveState | default('unknown') }}"
+      when: final_status.status.ActiveState | default('unknown') != 'active'
+
     - name: Restart | Log risultato
       ansible.builtin.debug:
         msg: >-
-          {% if final_status.status.ActiveState == 'active' %}
           ✅ Worker {{ inventory_hostname }} riavviato con successo
-          {% else %}
-          ⚠️  Worker {{ inventory_hostname }}: {{ final_status.status.ActiveState | default('unknown') }}
-          ({{ final_status.status.SubState | default('') }})
-          {% endif %}
 
     - name: Restart | Mostra log recenti del servizio
       ansible.builtin.shell: |

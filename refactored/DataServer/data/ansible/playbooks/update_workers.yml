@@ -11,6 +11,7 @@
 - name: Update workers
   hosts: workers
   gather_facts: no
+  become: true
   vars:
     velox_dir: "/opt/velox"
     master_url: "{{ master_url | default('http://127.0.0.1:8000') }}"
@@ -29,7 +30,7 @@
 
     - name: Update | Verifica bundle locale aggiornato sul controller
       ansible.builtin.stat:
-        path: "{{ playbook_dir }}/../../worker_downloads/worker_code.zip"
+        path: "{{ playbook_dir }}/../../worker_downloads/worker_code_linux_x86_64.zip"
       delegate_to: localhost
       become: false
       run_once: true
@@ -68,7 +69,7 @@
     # ── DOWNLOAD NUOVO BUNDLE ────────────────────────────────
     - name: Update | Copia bundle locale aggiornato sul worker
       ansible.builtin.copy:
-        src: "{{ playbook_dir }}/../../worker_downloads/worker_code.zip"
+        src: "{{ playbook_dir }}/../../worker_downloads/worker_code_linux_x86_64.zip"
         dest: "/tmp/velox_worker_update.zip"
         mode: "0644"
       when: local_bundle_zip.stat.exists | default(false)
@@ -106,85 +107,55 @@
       register: bundle_final
       failed_when: not bundle_final.stat.exists or bundle_final.stat.size == 0
 
-    # ── ESTRAI BUNDLE ──────────────────────────────────────────
-    - name: "Update | Estrai bundle in {{ velox_dir }}/current"
-      ansible.builtin.unarchive:
-        src: /tmp/velox_worker_update.zip
-        dest: "{{ velox_dir }}/current"
-        remote_src: yes
-        mode: "0755"
-      register: bundle_extract
-      failed_when: false
+    # ── ATOMIC BUNDLE DEPLOY (shared task) ───────────────────
+    - name: Update | Atomic bundle deploy
+      ansible.builtin.include_tasks:
+        file: tasks/bundle_atomic_deploy.yml
+      vars:
+        bundle_zip_path: "/tmp/velox_worker_update.zip"
       when: bundle_final.stat is defined and bundle_final.stat.exists and bundle_final.stat.size > 0
 
-    - name: Update | Flatten legacy refactored bundle root into current
-      ansible.builtin.shell: |
-        set -euo pipefail
-        if [ -d "{{ velox_dir }}/current/refactored" ]; then
-          shopt -s dotglob nullglob
-          mv -f "{{ velox_dir }}/current/refactored"/* "{{ velox_dir }}/current"/ || true
-          rm -rf "{{ velox_dir }}/current/refactored"
-        fi
-      args:
-        executable: /bin/bash
-      changed_when: false
-
-    - name: Update | Remove legacy refactored tree if still present
-      ansible.builtin.file:
-        path: "{{ velox_dir }}/current/refactored"
-        state: absent
-
-    - name: Update | Verifica estrazione (cerca Dockerfile)
-      ansible.builtin.stat:
-        path: "{{ velox_dir }}/current/RemoteCodex/native/worker-agent-go/Dockerfile"
-      register: dockerfile_check
-
-    - name: Update | Set layout paths
-      ansible.builtin.set_fact:
-        bundle_root: "{{ velox_dir }}/current"
-
-    - name: Update | Fail if worker bundle layout is missing
-      ansible.builtin.fail:
-        msg: "Impossibile individuare il layout del bundle worker in {{ velox_dir }}/current"
-      when: not dockerfile_check.stat.exists
-
-    - name: Update | Ensure worker agent binary directories exist
+    # ── REINIETTA BINARI FRESCHI ─────────────────────────────
+    - name: Update | Ensure agent binary directories exist
       ansible.builtin.file:
         path: "{{ item }}"
         state: directory
         mode: "0755"
       loop:
-        - "{{ bundle_root }}/RemoteCodex/bin"
-        - "{{ bundle_root }}/RemoteCodex/native/worker-agent-go/bin"
+        - "{{ velox_dir }}/current/RemoteCodex/bin"
+        - "{{ velox_dir }}/current/RemoteCodex/native/worker-agent-go/bin"
 
-    - name: Update | Copy fresh worker agent binary into extracted bundle
+    - name: Update | Copy fresh worker agent binary
       ansible.builtin.copy:
         src: "{{ playbook_dir }}/../../../../RemoteCodex/native/worker-agent-go/bin/velox-worker-agent"
         dest: "{{ item }}"
         mode: "0755"
       loop:
-        - "{{ bundle_root }}/RemoteCodex/bin/velox-worker-agent"
-        - "{{ bundle_root }}/RemoteCodex/native/worker-agent-go/bin/velox-worker-agent"
+        - "{{ velox_dir }}/current/RemoteCodex/bin/velox-worker-agent"
+        - "{{ velox_dir }}/current/RemoteCodex/native/worker-agent-go/bin/velox-worker-agent"
       register: worker_agent_copy
 
-    - name: Update | Copy fresh C++ engine helper scripts into extracted bundle
+    - name: Update | Copy fresh C++ helper scripts
       ansible.builtin.copy:
         src: "{{ playbook_dir }}/../../../../RemoteCodex/scripts/{{ item.src }}"
-        dest: "{{ bundle_root }}/RemoteCodex/scripts/{{ item.dest }}"
+        dest: "{{ velox_dir }}/current/RemoteCodex/scripts/{{ item.dest }}"
         mode: "0755"
       loop:
         - { src: "build-video-engine.sh", dest: "build-video-engine.sh" }
         - { src: "worker-entrypoint.sh", dest: "worker-entrypoint.sh" }
       register: worker_script_copy
+      failed_when: false
 
-    - name: Update | Log estrazione
-      ansible.builtin.debug:
-        msg: >-
-          {% if dockerfile_check.stat.exists %}
-          ✅ Bundle estratto, Dockerfile trovato
-          {% else %}
-          ⚠️  Dockerfile non trovato in {{ velox_dir }}/current/RemoteCodex/native/worker-agent-go/
-          {% endif %}
+    - name: Update | Ensure scripts directory and copy scripts (fallback)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        mkdir -p "{{ velox_dir }}/current/RemoteCodex/scripts"
+        cp -f "{{ playbook_dir }}/../../../../RemoteCodex/scripts/build-video-engine.sh" "{{ velox_dir }}/current/RemoteCodex/scripts/build-video-engine.sh"
+        cp -f "{{ playbook_dir }}/../../../../RemoteCodex/scripts/worker-entrypoint.sh" "{{ velox_dir }}/current/RemoteCodex/scripts/worker-entrypoint.sh"
+        chmod 755 "{{ velox_dir }}/current/RemoteCodex/scripts/"*.sh
+      args:
+        executable: /bin/bash
+      when: worker_script_copy is failed
 
     # ── RIAPPLICA PIPELINE SYSTEMD AGGIORNATA ────────────────
     # L'include di systemd_setup.yml gestisce: env file, Docker build
@@ -196,19 +167,10 @@
       vars:
         install_showlog_wrapper: false
 
-    - name: Update | Verifica stato servizio dopo update
-      ansible.builtin.systemd:
-        name: "velox-worker-{{ inventory_hostname }}"
-      register: service_status
-
-    - name: Update | Log risultato
-      ansible.builtin.debug:
-        msg: >-
-          {% if service_status.status.ActiveState == 'active' %}
-          ✅ Worker {{ inventory_hostname }} aggiornato e attivo
-          {% else %}
-          ⚠️  Worker {{ inventory_hostname }}: {{ service_status.status.ActiveState | default('unknown') }}
-          {% endif %}
+    # ── VERIFICA POST-DEPLOY (shared task) ────────────────────
+    - name: Update | Verify worker health
+      ansible.builtin.include_tasks:
+        file: tasks/verify_worker_post_deploy.yml
 
     # ── PULIZIA ──────────────────────────────────────────────
     - name: Update | Rimuovi bundle temporaneo

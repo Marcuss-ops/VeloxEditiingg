@@ -86,10 +86,18 @@
       changed_when: false
 
     # ── STEP 4: Remove old bundle, cache, config files ────────
-    - name: Cleanup | Remove old bundle directory
+    - name: Cleanup | Remove current bundle directory
       ansible.builtin.file:
-        path: "{{ velox_dir }}/current/refactored"
+        path: "{{ velox_dir }}/current"
         state: absent
+
+    - name: Cleanup | Remove staging directories
+      ansible.builtin.shell: |
+        rm -rf "{{ velox_dir }}/current.new" "{{ velox_dir }}/current.old"
+      args:
+        executable: /bin/bash
+      changed_when: false
+      failed_when: false
 
     - name: Cleanup | Clear cache directory
       ansible.builtin.shell: rm -rf {{ velox_dir }}/cache/*

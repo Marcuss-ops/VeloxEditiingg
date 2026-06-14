@@ -312,12 +312,14 @@
   when: install_showlog_wrapper | default(false) | bool
 
 - name: Verifica stato servizio worker
-  ansible.builtin.shell: |
-    set +e
-    systemctl is-active "velox-worker-{{ inventory_hostname }}" 2>/dev/null || true
-  register: worker_service_active
-  changed_when: false
-  failed_when: false
+  ansible.builtin.systemd:
+    name: "velox-worker-{{ inventory_hostname }}"
+  register: worker_service_status
+
+- name: Fail if worker service not active after setup
+  ansible.builtin.fail:
+    msg: "Worker service not active after systemd setup — state: {{ worker_service_status.status.ActiveState | default('unknown') }}"
+  when: worker_service_status.status.ActiveState | default('unknown') != 'active'
 
 - name: Install velox-worker watchdog (auto-restart if service stopped)
   ansible.builtin.copy:
@@ -392,19 +394,42 @@
       apt-get update -qq 2>&1 | tail -3
       apt-get upgrade -y -qq --no-install-recommends 2>&1 | tail -5 || log "WARNING: OS upgrade had issues"
       
-      # Step 2: Download and apply new bundle from master
+      # Step 2: Download and apply new bundle from master (atomic staging)
       if [ -z "$MASTER" ]; then
         log "MASTER_URL not set, skipping bundle update"
       else
         WORKER_ZIP="/tmp/velox-update-$(date +%s).zip"
         log "Downloading bundle from $MASTER..."
         if curl -sf --max-time 60 "$MASTER/api/worker/bundle?platform=linux&arch=x86_64" -o "$WORKER_ZIP" && [ -s "$WORKER_ZIP" ]; then
-          INSTALLER="$VELOX_DIR/current/velox-installer"
-          if [ -x "$INSTALLER" ]; then
-            log "Applying bundle update..."
-            "$INSTALLER" --target-dir "$VELOX_DIR" --package-source "$WORKER_ZIP" || log "WARNING: Installer had issues"
+          log "Applying bundle update with atomic staging..."
+          
+          # Atomic staging: extract to current.new, then swap
+          rm -rf "$VELOX_DIR/current.new"
+          mkdir -p "$VELOX_DIR/current.new"
+          
+          if unzip -qo "$WORKER_ZIP" -d "$VELOX_DIR/current.new"; then
+            # Flatten legacy refactored layout if present
+            if [ -d "$VELOX_DIR/current.new/refactored" ]; then
+              shopt -s dotglob nullglob
+              mv -f "$VELOX_DIR/current.new/refactored"/* "$VELOX_DIR/current.new"/ || true
+              rm -rf "$VELOX_DIR/current.new/refactored"
+            fi
+            
+            # Verify Dockerfile exists in new bundle
+            if [ -f "$VELOX_DIR/current.new/RemoteCodex/native/worker-agent-go/Dockerfile" ]; then
+              # Atomic swap
+              rm -rf "$VELOX_DIR/current.old"
+              [ -d "$VELOX_DIR/current" ] && mv "$VELOX_DIR/current" "$VELOX_DIR/current.old"
+              mv "$VELOX_DIR/current.new" "$VELOX_DIR/current"
+              rm -rf "$VELOX_DIR/current.old"
+              log "Bundle update applied successfully"
+            else
+              log "WARNING: New bundle missing Dockerfile — reverting"
+              rm -rf "$VELOX_DIR/current.new"
+            fi
           else
-            log "WARNING: velox-installer not found at $INSTALLER"
+            log "WARNING: Failed to extract bundle"
+            rm -rf "$VELOX_DIR/current.new"
           fi
           rm -f "$WORKER_ZIP"
         else
@@ -416,6 +441,15 @@
       log "Restarting worker services..."
       for u in $(systemctl list-unit-files "velox-worker*.service" --no-legend --no-pager 2>/dev/null | awk '{print $1}' | grep -Ev "watchdog|auto-update"); do
         systemctl restart "$u" 2>/dev/null || log "WARNING: Failed to restart $u"
+      done
+      
+      # Step 4: Verify service is active
+      sleep 5
+      for u in $(systemctl list-unit-files "velox-worker*.service" --no-legend --no-pager 2>/dev/null | awk '{print $1}' | grep -Ev "watchdog|auto-update"); do
+        if ! systemctl is-active --quiet "$u" 2>/dev/null; then
+          log "ERROR: $u not active after restart"
+          exit 1
+        fi
       done
       
       log "Auto-update completed successfully"
