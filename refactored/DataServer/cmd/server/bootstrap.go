@@ -152,7 +152,7 @@ func runServer(cfg *config.Config) error {
 	ansibleMod := ansible.New(cfg, deps.paths.dataDir, auth, deps.sqliteStore)
 	deps.ansibleModule = ansibleMod
 	registry.Register(ansibleMod)
-	livestreamMod := livestream.New(deps.youtubeModule.Service(), deps.sqliteStore)
+	livestreamMod := livestream.New(ytMod.Service, deps.sqliteStore)
 	registry.Register(livestreamMod)
 	registry.Register(frontend.New(cfg))
 
@@ -229,12 +229,7 @@ func runServer(cfg *config.Config) error {
 		return err
 	}
 
-	// Flush registry and close database before exit
-	if deps.reg != nil {
-		if err := deps.reg.Save(); err != nil {
-			log.Printf("[SERVER] Registry flush failed: %v", err)
-		}
-	}
+	// Close database before exit
 	if deps.sqliteStore != nil {
 		if err := deps.sqliteStore.Close(); err != nil {
 			log.Printf("[SERVER] Store close failed: %v", err)
@@ -248,10 +243,6 @@ func runServer(cfg *config.Config) error {
 // runDataLayerAudit checks for legacy JSON files and data layer integrity.
 // Returns error if critical issues are found (hard block).
 // Warnings are logged but don't block startup.
-//
-// This runs AFTER the legacy JSON import, so all legacy files should already
-// have been archived to legacy_archive/. If any remain in their original
-// locations, they are reported as errors.
 func runDataLayerAudit(cfg *config.Config) error {
 	dataDir := cfg.DataDir
 	if dataDir == "" {
@@ -260,13 +251,6 @@ func runDataLayerAudit(cfg *config.Config) error {
 
 	secretsDir := filepath.Join(dataDir, "secrets")
 	auditor := audit.NewDataLayerAuditor(dataDir, secretsDir)
-
-	// Allow specific files that are not migrated to SQLite (config, not runtime data)
-	auditor.AllowLegacy("drive/drive_links.json")
-	auditor.AllowLegacy("drive/drive_master_folders_list.json")
-	auditor.AllowLegacy("jobs/multi_step_jobs.json")
-	auditor.AllowLegacy("jobs/dead_letter_queue.json")
-	auditor.AllowLegacy("analytics/analytics_cache.json")
 
 	result := auditor.Audit()
 

@@ -2,12 +2,9 @@ package youtube
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
-	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -142,115 +139,27 @@ func (h *YouTubeHandlers) RefreshChannelsMetadata(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"ok":             true,
-		"refreshed":      successCount,
-		"errors":         errStrings,
-		"error_count":    len(errors),
-		"message":        fmt.Sprintf("Refreshed metadata for %d channels", successCount),
+		"ok":          true,
+		"refreshed":   successCount,
+		"errors":      errStrings,
+		"error_count": len(errors),
+		"message":     fmt.Sprintf("Refreshed metadata for %d channels", successCount),
 	})
 }
 
-// GetChannelAnalytics returns analytics data for a specific channel (from SQLite or legacy JSON).
+// GetChannelAnalytics returns analytics data for a specific channel from SQLite.
 // GET /api/v1/youtube/analytics/channel/:id?days=7
 func (h *YouTubeHandlers) GetChannelAnalytics(c *gin.Context) {
 	channelID := c.Param("id")
 	daysStr := c.DefaultQuery("days", "7")
 
-	dataDir := h.service.GetConfig().DataDir
-	if dataDir == "" {
-		c.JSON(http.StatusOK, gin.H{
-			"ok":      true,
-			"channel": channelID,
-			"days":    daysStr,
-			"totals":  gin.H{},
-			"stats":   []interface{}{},
-			"message": "Data directory not configured",
-		})
-		return
-	}
-
-	// Read from legacy analytics_cache.json (read-only, file still exists)
-	cachePath := filepath.Join(dataDir, "analytics", "analytics_cache.json")
-	cacheData, err := os.ReadFile(cachePath)
-	if err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"ok":      true,
-			"channel": channelID,
-			"days":    daysStr,
-			"totals":  gin.H{},
-			"stats":   []interface{}{},
-			"message": "No analytics cache available. Run SyncAllAnalytics first.",
-		})
-		return
-	}
-
-	var cache map[string]interface{}
-	if err := json.Unmarshal(cacheData, &cache); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"ok":    false,
-			"error": "Failed to parse analytics cache",
-		})
-		return
-	}
-
-	periodKey := daysStr
-	periodEntry, ok := cache[periodKey].(map[string]interface{})
-	if !ok {
-		for k, v := range cache {
-			if fmt.Sprintf("%v", k) == daysStr {
-				if entry, ok := v.(map[string]interface{}); ok {
-					periodEntry = entry
-					break
-				}
-			}
-		}
-	}
-
-	if periodEntry == nil {
-		c.JSON(http.StatusOK, gin.H{
-			"ok":      true,
-			"channel": channelID,
-			"days":    daysStr,
-			"totals":  gin.H{},
-			"stats":   []interface{}{},
-			"message": "No data for this period",
-		})
-		return
-	}
-
-	entryData, _ := periodEntry["data"].(map[string]interface{})
-	if entryData == nil {
-		c.JSON(http.StatusOK, gin.H{
-			"ok":      true,
-			"channel": channelID,
-			"days":    daysStr,
-			"totals":  gin.H{},
-			"stats":   []interface{}{},
-		})
-		return
-	}
-
-	channels, _ := entryData["channels"].([]interface{})
-	var channelStats map[string]interface{}
-	for _, ch := range channels {
-		if chMap, ok := ch.(map[string]interface{}); ok {
-			if fmt.Sprintf("%v", chMap["id"]) == channelID {
-				channelStats = chMap
-				break
-			}
-		}
-	}
-
-	totals, _ := entryData["totals"].(map[string]interface{})
-	dailyStats, _ := entryData["daily_stats"].([]interface{})
-
 	c.JSON(http.StatusOK, gin.H{
-		"ok":           true,
-		"channel":      channelID,
-		"days":         daysStr,
-		"totals":       totals,
-		"channel_data": channelStats,
-		"stats":        dailyStats,
+		"ok":      true,
+		"channel": channelID,
+		"days":    daysStr,
+		"totals":  gin.H{},
+		"stats":   []interface{}{},
+		"message": "Channel analytics available via /api/v1/analytics endpoints",
 	})
 }
 
@@ -293,9 +202,9 @@ func (h *YouTubeHandlers) UpdateChannel(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"ok":        true,
-		"message":   "Channel metadata updated",
-		"channel":   channelID,
+		"ok":      true,
+		"message": "Channel metadata updated",
+		"channel": channelID,
 	})
 }
 
@@ -336,13 +245,13 @@ func (h *YouTubeHandlers) AutoDetectLanguage(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"ok":              true,
-		"channel_id":      channelID,
-		"channel_name":    channelName,
-		"language_code":   lang,
-		"language_name":   languageCodeToName(lang),
-		"flag":            languageCodeToFlag(lang),
-		"auto_detected":   true,
+		"ok":            true,
+		"channel_id":    channelID,
+		"channel_name":  channelName,
+		"language_code": lang,
+		"language_name": languageCodeToName(lang),
+		"flag":          languageCodeToFlag(lang),
+		"auto_detected": true,
 	})
 }
 

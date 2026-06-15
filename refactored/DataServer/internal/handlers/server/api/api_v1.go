@@ -6,7 +6,6 @@ import (
 	"log"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/gin-gonic/gin"
 	"velox-server/internal/config"
@@ -26,15 +25,6 @@ import (
 	"velox-server/internal/store"
 	workersreg "velox-server/internal/workers"
 )
-
-// APIVersionInfo represents API version information
-type APIVersionInfo struct {
-	Version     string    `json:"version"`
-	ReleasedAt  time.Time `json:"released_at"`
-	Description string    `json:"description"`
-	Deprecated  bool      `json:"deprecated"`
-	SunsetDate  string    `json:"sunset_date,omitempty"`
-}
 
 func AdminAuthMiddleware(cfg *config.Config) gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -166,20 +156,14 @@ func RegisterV1Routes(r *gin.Engine, cfg *config.Config, fileQ *queue.FileQueue,
 		}
 		// NOTE: /workers/revoke and /workers/drain are NOT registered here to avoid
 		// a Gin radix tree conflict with the wildcard route /workers/:id/logs.
-		// They are registered directly in router.go under /worker/revoke and /worker/drain.
+		// They are registered directly in router.go under /worker/revoke and /worker/drain.		// Worker polling — canonical endpoints are registered by the workers module.
 
-		// Worker polling — canonical endpoints are registered by the workers module.
-		// The /api/v1/workers/commands* legacy endpoints have been removed.
-
-		// Bundle Explorer - List files in bundle
+		// Bundle compat routes for frontend
 		if workerUpdateHandler != nil {
 			v1.GET("/bundle/files", workerUpdateHandler.GetBundleFilesHandler())
 			v1.GET("/bundle/info", workerUpdateHandler.GetLatestBundleHandler())
 			v1.GET("/bundle/manifest", workerUpdateHandler.GetBundleManifestHandler())
-			v1Admin.POST("/bundle/manifest/generate", workerUpdateHandler.GenerateManifestV2Handler())
 		}
-
-		// Queue - Core API
 		v1.GET("/queue/job", jobAPI.GetJobHandler())
 		v1.POST("/queue/start", jobAPI.StartJobHandler())
 		v1.POST("/queue/complete", jobAPI.CompleteJobHandler())
@@ -205,7 +189,6 @@ func RegisterV1Routes(r *gin.Engine, cfg *config.Config, fileQ *queue.FileQueue,
 			})
 		}
 		v1Admin.GET("/workers/status", statusHandler)
-		v1Admin.GET("/workers_status", statusHandler)
 
 		// Analytics - Core API
 		v1Admin.GET("/analytics/summary", analytics.AnalyticsSummaryHandler)

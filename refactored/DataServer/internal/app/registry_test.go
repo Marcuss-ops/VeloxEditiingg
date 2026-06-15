@@ -1,7 +1,6 @@
 package app
 
 import (
-	"context"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -9,7 +8,6 @@ import (
 
 // TestModule is a simple module for testing.
 type TestModule struct {
-	BaseModule
 	name   string
 	routes []string
 }
@@ -55,23 +53,5 @@ func TestRegistry_RegisterRoutes(t *testing.T) {
 	// Check that routes were registered
 	if len(m.routes) != 1 {
 		t.Errorf("expected 1 route registration, got %d", len(m.routes))
-	}
-}
-
-func TestRegistry_StartStop(t *testing.T) {
-	r := NewRegistry()
-	m := NewTestModule("test")
-	r.Register(m)
-
-	ctx := context.Background()
-
-	err := r.Start(ctx)
-	if err != nil {
-		t.Errorf("Start failed: %v", err)
-	}
-
-	err = r.Stop(ctx)
-	if err != nil {
-		t.Errorf("Stop failed: %v", err)
 	}
 }

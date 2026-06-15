@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
-	"velox-server/internal/app"
 	"velox-server/internal/config"
 	remoteansible "velox-server/internal/handlers/remote/ansible"
 	"velox-server/internal/store"
@@ -14,7 +13,6 @@ import (
 
 // Module provides Ansible deployment endpoints.
 type Module struct {
-	app.BaseModule
 	cfg       *config.Config
 	dataDir   string
 	adminAuth gin.HandlerFunc

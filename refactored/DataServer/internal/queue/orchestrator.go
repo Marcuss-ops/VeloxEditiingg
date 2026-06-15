@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"log"
-	"os"
-	"path/filepath"
 	"time"
 
 	"velox-server/internal/store"
@@ -19,7 +17,6 @@ func NewOrchestrator(cfg *OrchestratorConfig, fq *FileQueue, dlq *DeadLetterQueu
 	o := &Orchestrator{
 		config:      cfg,
 		jobs:        make(map[string]*MultiStepJob),
-		filePath:    filepath.Join(cfg.DataDir, "jobs", "multi_step_jobs.json"),
 		dbStore:     dbStore,
 		jobChan:     make(chan *MultiStepJob, 100),
 		stepChan:    make(chan *JobStep, 100),
@@ -27,11 +24,6 @@ func NewOrchestrator(cfg *OrchestratorConfig, fq *FileQueue, dlq *DeadLetterQueu
 		commandChan: make(chan orchestratorCommand, 50),
 		fileQueue:   fq,
 		dlq:         dlq,
-	}
-
-	dir := filepath.Dir(o.filePath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return nil, err
 	}
 
 	if err := o.load(); err != nil {
@@ -42,7 +34,6 @@ func NewOrchestrator(cfg *OrchestratorConfig, fq *FileQueue, dlq *DeadLetterQueu
 }
 
 func (o *Orchestrator) load() error {
-	// SQLite is the source of truth
 	if o.dbStore != nil {
 		jobs, err := o.dbStore.ListOrchestratorJobs()
 		if err == nil && len(jobs) > 0 {
@@ -57,55 +48,16 @@ func (o *Orchestrator) load() error {
 			return nil
 		}
 	}
-
-	// Fallback: legacy JSON file
-	data, err := os.ReadFile(o.filePath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
-	}
-
-	if len(data) == 0 {
-		return nil
-	}
-
-	if err := json.Unmarshal(data, &o.jobs); err != nil {
-		return err
-	}
-
-	// Import into SQLite for next time
-	if o.dbStore != nil && len(o.jobs) > 0 {
-		for _, job := range o.jobs {
-			o.persistJob(job)
-		}
-		log.Printf("[MIGRATE] Imported %d orchestrator jobs from JSON to SQLite", len(o.jobs))
-	}
-
 	return nil
 }
 
 func (o *Orchestrator) save() error {
-	// SQLite is the source of truth
 	if o.dbStore != nil {
 		for _, job := range o.jobs {
 			o.persistJob(job)
 		}
 	}
-
-	// Backup: JSON file
-	data, err := json.MarshalIndent(o.jobs, "", "  ")
-	if err != nil {
-		return err
-	}
-
-	tmpPath := o.filePath + ".tmp"
-	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
-		return err
-	}
-
-	return os.Rename(tmpPath, o.filePath)
+	return nil
 }
 
 // persistJob saves a single job to SQLite.

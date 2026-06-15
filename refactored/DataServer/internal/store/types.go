@@ -2,7 +2,7 @@ package store
 
 import "time"
 
-// Project represents a Dark Editor project
+// Project represents a Dark Editor project.
 type Project struct {
 	ID         string                 `json:"id"`
 	UserID     *string                `json:"user_id,omitempty"`
@@ -29,16 +29,16 @@ type Folder struct {
 	UpdatedAt     time.Time `json:"updated_at"`
 }
 
-// Asset represents a project asset (image, generated content, etc.)
+// Asset represents a project asset.
 type Asset struct {
 	ID               string                 `json:"id"`
 	ProjectID        *string                `json:"project_id,omitempty"`
 	UserID           *string                `json:"user_id,omitempty"`
-	Type             string                 `json:"type"` // 'image', 'generated', 'uploaded', 'youtube_thumb'
+	Type             string                 `json:"type"`
 	Filename         string                 `json:"filename"`
 	OriginalFilename string                 `json:"original_filename,omitempty"`
 	StoragePath      string                 `json:"storage_path"`
-	StorageType      string                 `json:"storage_type"` // 'local', 's3', 'minio'
+	StorageType      string                 `json:"storage_type"`
 	MimeType         string                 `json:"mime_type,omitempty"`
 	SizeBytes        int64                  `json:"size_bytes,omitempty"`
 	Width            int                    `json:"width,omitempty"`
@@ -47,7 +47,7 @@ type Asset struct {
 	CreatedAt        time.Time              `json:"created_at"`
 }
 
-// Template represents a reusable project template
+// Template represents a reusable project template.
 type Template struct {
 	ID          string                 `json:"id"`
 	Name        string                 `json:"name"`
@@ -63,7 +63,7 @@ type Template struct {
 	UpdatedAt   time.Time              `json:"updated_at"`
 }
 
-// TempFile represents a temporary uploaded file
+// TempFile represents a temporary uploaded file.
 type TempFile struct {
 	ID               string    `json:"id"`
 	Filename         string    `json:"filename"`
@@ -75,7 +75,7 @@ type TempFile struct {
 	CreatedAt        time.Time `json:"created_at"`
 }
 
-// GenerationRecord represents an AI generation history entry
+// GenerationRecord represents an AI generation history entry.
 type GenerationRecord struct {
 	ID             string    `json:"id"`
 	UserID         *string   `json:"user_id,omitempty"`
@@ -91,7 +91,7 @@ type GenerationRecord struct {
 	CreatedAt      time.Time `json:"created_at"`
 }
 
-// ProjectListOptions defines options for listing projects
+// ProjectListOptions defines options for listing projects.
 type ProjectListOptions struct {
 	UserID     string
 	Type       string
@@ -99,11 +99,11 @@ type ProjectListOptions struct {
 	IsPublic   *bool
 	Limit      int
 	Offset     int
-	OrderBy    string // 'created_at', 'updated_at', 'name'
-	OrderDir   string // 'asc', 'desc'
+	OrderBy    string
+	OrderDir   string
 }
 
-// TemplateListOptions defines options for listing templates
+// TemplateListOptions defines options for listing templates.
 type TemplateListOptions struct {
 	Category string
 	IsPublic *bool
@@ -114,7 +114,7 @@ type TemplateListOptions struct {
 	OrderDir string
 }
 
-// GenerationListOptions defines options for listing generation history
+// GenerationListOptions defines options for listing generation history.
 type GenerationListOptions struct {
 	UserID    string
 	ProjectID string

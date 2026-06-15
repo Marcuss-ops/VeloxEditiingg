@@ -76,7 +76,6 @@ type Orchestrator struct {
 	mu       sync.RWMutex
 	config   *OrchestratorConfig
 	jobs     map[string]*MultiStepJob
-	filePath string
 	dbStore  *store.SQLiteStore
 
 	jobChan     chan *MultiStepJob

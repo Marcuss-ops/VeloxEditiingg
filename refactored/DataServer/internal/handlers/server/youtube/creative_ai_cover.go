@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"math/rand"
 	"net/http"
 	"os"
@@ -16,8 +15,6 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-
-	"velox-server/internal/store"
 )
 
 // =============================================================================
@@ -127,8 +124,6 @@ func (h *YouTubeHandlers) GenerateCoverPack(c *gin.Context) {
 			variant.Translation = translatedTitle
 		}
 	}
-
-	h.persistCoverPackGeneration(c.Request.Context(), req, sanitizedTitle, sanitizedBody, translatedTitle, translatedBody, targetLang, provider, variants)
 
 	c.JSON(http.StatusOK, CoverPackResponse{
 		OK:              true,
@@ -366,83 +361,4 @@ func (h *YouTubeHandlers) getCoverTempDir() string {
 	return filepath.Join(os.TempDir(), "velox-youtube-covers")
 }
 
-// =============================================================================
-// Persist cover pack to store (Dark Editor asset tracking)
-// =============================================================================
 
-func (h *YouTubeHandlers) persistCoverPackGeneration(
-	ctx context.Context,
-	req CoverPackRequest,
-	sanitizedTitle string,
-	sanitizedBody string,
-	translatedTitle string,
-	translatedBody string,
-	targetLanguage string,
-	provider string,
-	variants []CoverVariant,
-) {
-	if h.store == nil {
-		return
-	}
-
-	for _, variant := range variants {
-		if variant.Filename == "" || variant.ImageBase64 == "" {
-			continue
-		}
-
-		imageBytes, err := base64.StdEncoding.DecodeString(variant.ImageBase64)
-		if err != nil {
-			log.Printf("[WARN] Dark Editor: failed to decode generated cover %s: %v", variant.ID, err)
-			continue
-		}
-
-		assetPath := filepath.Join(h.getCoverTempDir(), variant.Filename)
-		asset := &store.Asset{
-			Type:             "youtube_cover",
-			Filename:         variant.Filename,
-			OriginalFilename: variant.Filename,
-			StoragePath:      assetPath,
-			StorageType:      "local",
-			MimeType:         "image/png",
-			SizeBytes:        int64(len(imageBytes)),
-			Width:            variant.Width,
-			Height:           variant.Height,
-			Metadata: map[string]interface{}{
-				"source":           "youtube_cover_pack",
-				"variant_id":       variant.ID,
-				"variant_label":    variant.Label,
-				"title":            req.Title,
-				"sanitized_title":  sanitizedTitle,
-				"sanitized_body":   sanitizedBody,
-				"translated_title": translatedTitle,
-				"translated_body":  translatedBody,
-				"target_language":  targetLanguage,
-				"style":            req.Style,
-				"extra_prompt":     req.ExtraPrompt,
-				"provider":         provider,
-				"nvidia_provider":  variant.Provider,
-				"prompt":           variant.Prompt,
-				"negative_prompt":  variant.NegativePrompt,
-			},
-		}
-
-		if err := h.store.CreateAsset(ctx, asset); err != nil {
-			log.Printf("[WARN] Dark Editor: failed to save cover asset %s: %v", variant.ID, err)
-			continue
-		}
-
-		record := &store.GenerationRecord{
-			Prompt:         variant.Prompt,
-			NegativePrompt: variant.NegativePrompt,
-			Model:          "flux.1-schnell",
-			Width:          variant.Width,
-			Height:         variant.Height,
-			Steps:          req.Steps,
-			Seed:           int(variant.Seed),
-			AssetID:        &asset.ID,
-		}
-		if err := h.store.CreateGenerationRecord(ctx, record); err != nil {
-			log.Printf("[WARN] Dark Editor: failed to save generation record %s: %v", variant.ID, err)
-		}
-	}
-}

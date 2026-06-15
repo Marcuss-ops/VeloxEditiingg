@@ -1,12 +1,6 @@
 package analytics
 
 import (
-	"encoding/json"
-	"log"
-	"os"
-	"path/filepath"
-	"time"
-
 	"velox-server/internal/store"
 )
 
@@ -20,83 +14,6 @@ var analyticsStore *store.SQLiteStore
 func InitAnalyticsCache(dataDirectory string, s *store.SQLiteStore) {
 	analyticsState.DataDir = dataDirectory
 	analyticsStore = s
-	if analyticsStore != nil && dataDirectory != "" {
-		path := filepath.Join(dataDirectory, "analytics", "analytics_cache.json")
-		var raw map[string]any
-		if err := readJSONFile(path, &raw); err == nil {
-			log.Printf("Starting deep migration from %s to SQLite...", path)
-			for _, entry := range raw {
-				em, ok := entry.(map[string]any)
-				if !ok {
-					continue
-				}
-				dataMap, _ := em["data"].(map[string]any)
-				if dataMap == nil {
-					continue
-				}
-
-				if daily, ok := dataMap["daily_stats"].([]any); ok {
-					for _, d := range daily {
-						if m, ok := d.(map[string]any); ok {
-							dateStr := toStr(m["date"])
-							if dateStr == "" {
-								continue
-							}
-							dt, err := time.Parse("2006-01-02", dateStr)
-							if err != nil {
-								continue
-							}
-							_ = analyticsStore.SaveYouTubeRevenueMetric(store.YouTubeRevenueMetric{
-								ChannelID:        "GLOBAL_TOTAL",
-								Date:             dt,
-								EstimatedRevenue: toFloat(m["revenue"]),
-								Views:            int64(toInt(m["views"])),
-								Currency:         "EUR",
-							})
-						}
-					}
-				}
-
-				if channels, ok := dataMap["channels"].([]any); ok {
-					for _, ch := range channels {
-						cm, ok := ch.(map[string]any)
-						if !ok {
-							continue
-						}
-						channelID := toStr(cm["channel_id"])
-						if daily, ok := cm["daily_stats"].(map[string]any); ok {
-							for dateStr, stats := range daily {
-								sm, ok := stats.(map[string]any)
-								if !ok {
-									continue
-								}
-								dt, err := time.Parse("2006-01-02", dateStr)
-								if err != nil {
-									continue
-								}
-								_ = analyticsStore.SaveYouTubeRevenueMetric(store.YouTubeRevenueMetric{
-									ChannelID:        channelID,
-									Date:             dt,
-									EstimatedRevenue: toFloat(sm["revenue"]),
-									Views:            int64(toInt(sm["views"])),
-									Currency:         "EUR",
-								})
-							}
-						}
-					}
-				}
-			}
-			log.Printf("Deep migration completed.")
-		}
-	}
-}
-
-func readJSONFile(path string, out any) error {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return err
-	}
-	return json.Unmarshal(b, out)
 }
 
 func loadYouTubeGroups() map[string]any {
