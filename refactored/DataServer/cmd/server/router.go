@@ -4,6 +4,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/gin-gonic/gin"
 	"velox-server/internal/app"
 	"velox-server/internal/config"
 	remoteansible "velox-server/internal/handlers/remote/ansible"
@@ -13,10 +14,10 @@ import (
 	jobhandlers "velox-server/internal/handlers/server/jobs"
 	pipelinehandler "velox-server/internal/handlers/server/pipeline"
 	scripthandlers "velox-server/internal/handlers/server/script"
+	ytservice "velox-server/internal/integrations/youtube"
 	jobservice "velox-server/internal/services/jobs"
 	"velox-server/internal/store"
 	workersreg "velox-server/internal/workers"
-	"github.com/gin-gonic/gin"
 )
 
 func corsMiddleware() gin.HandlerFunc {
@@ -100,7 +101,11 @@ func registerAPIV1Routes(r *gin.Engine, cfg *config.Config, deps *serverDeps, an
 	}
 	jobAPI := jobhandlers.NewJobAPI(cfg, deps.fileQ, tokenMgr, jobSvc)
 	jobSubmitHandler := jobhandlers.NewJobSubmissionHandler(cfg, deps.fileQ)
-	api.RegisterV1Routes(r, cfg, deps.fileQ, deps.reg, jobAPI, jobSubmitHandler, deps.workersRepo, deps.sqliteStore, deps.workerUpdateHandler, ansibleHandlers)
+	var youtubeService *ytservice.Service
+	if deps.youtubeModule != nil {
+		youtubeService = deps.youtubeModule.Service()
+	}
+	api.RegisterV1Routes(r, cfg, deps.fileQ, deps.reg, jobAPI, jobSubmitHandler, deps.workersRepo, deps.sqliteStore, deps.workerUpdateHandler, youtubeService, ansibleHandlers)
 	r.POST("/api/jobs/get", jobAPI.GetJobCompatHandler())
 	r.POST("/api/jobs/result", jobAPI.SubmitResultCompatHandler())
 	r.GET("/api/jobs/get", jobAPI.GetJobCompatHandler())

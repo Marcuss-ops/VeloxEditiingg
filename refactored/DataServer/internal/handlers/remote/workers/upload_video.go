@@ -14,6 +14,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"velox-server/internal/config"
+	ytservice "velox-server/internal/integrations/youtube"
 	"velox-server/internal/queue"
 )
 
@@ -45,7 +46,7 @@ func slugify(s string) string {
 // - Marks job as COMPLETED in file queue
 // - Tracks in pending_uploads for YouTube/Drive upload workflow
 // - Supports video naming with video_name from job spec
-func UploadCompletedVideo(cfg *config.Config, fileQ *queue.FileQueue) gin.HandlerFunc {
+func UploadCompletedVideo(cfg *config.Config, fileQ *queue.FileQueue, youtubeService *ytservice.Service) gin.HandlerFunc {
 	videosDir := cfg.VideosDir
 	if videosDir == "" {
 		videosDir = "./completed_videos"
@@ -231,6 +232,7 @@ func UploadCompletedVideo(cfg *config.Config, fileQ *queue.FileQueue) gin.Handle
 		log.Printf("[UPLOAD] Info upload salvate in pending_uploads per job %s", jobID)
 		if ytGroup, ok := canonicalUploadInfo["youtube_group"].(string); ok && ytGroup != "" {
 			log.Printf("   YouTube group: %s", ytGroup)
+			maybeAutoUploadYouTube(fileQ, youtubeService, jobID, canonicalUploadInfo, finalPath)
 		}
 		if vidName, ok := canonicalUploadInfo["video_name"].(string); ok && vidName != "" {
 			log.Printf("   Video name: %s", vidName)
@@ -243,5 +245,56 @@ func UploadCompletedVideo(cfg *config.Config, fileQ *queue.FileQueue) gin.Handle
 			"video_path":  absFinalPath,
 			"upload_info": canonicalUploadInfo,
 		})
+	}
+}
+
+// WorkerAssetHandler serves master-staged media assets to remote workers.
+type WorkerAssetHandler struct {
+	dataDir string
+}
+
+func NewWorkerAssetHandler(cfg *config.Config) *WorkerAssetHandler {
+	dataDir := ""
+	if cfg != nil {
+		dataDir = strings.TrimSpace(cfg.DataDir)
+		if dataDir == "" {
+			dataDir = strings.TrimSpace(cfg.Runtime.DataDir)
+		}
+	}
+	return &WorkerAssetHandler{dataDir: dataDir}
+}
+
+func (h *WorkerAssetHandler) ServeVoiceoverAsset() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if h == nil || strings.TrimSpace(h.dataDir) == "" {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "asset storage unavailable"})
+			return
+		}
+
+		jobID := strings.TrimSpace(c.Param("job_id"))
+		filename := strings.TrimSpace(c.Param("filename"))
+		if jobID == "" || filename == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "job_id and filename required"})
+			return
+		}
+
+		filename = filepath.Base(filename)
+		if filename == "." || filename == string(filepath.Separator) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid filename"})
+			return
+		}
+
+		filePath := filepath.Join(h.dataDir, "worker_downloads", "script_assets", jobID, filename)
+		if !strings.HasPrefix(filepath.Clean(filePath), filepath.Clean(filepath.Join(h.dataDir, "worker_downloads", "script_assets"))) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid asset path"})
+			return
+		}
+
+		if _, err := os.Stat(filePath); os.IsNotExist(err) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "asset not found"})
+			return
+		}
+
+		c.File(filePath)
 	}
 }
