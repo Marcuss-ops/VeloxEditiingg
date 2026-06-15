@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+
 	"velox-server/internal/integrations/youtube"
 )
 
@@ -30,9 +31,6 @@ func (ym *YouTubeManager) ScrapeToolHandler() gin.HandlerFunc {
 			})
 			return
 		}
-
-		info, err := ym.apiClient.GetRecentChannelVideos(ctx, videoID, 1, 365)
-		_ = info
 
 		videoInfo, err := ym.apiClient.SearchVideos(ctx, req.URL, 1, 365, 0, 0, false)
 		if err != nil {

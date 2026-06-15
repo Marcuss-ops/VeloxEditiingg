@@ -161,7 +161,7 @@ func uploadRetryDelay(attempt int) time.Duration {
 	if attempt < 1 {
 		attempt = 1
 	}
-	return uploadRetryBaseDelay * time.Duration(1<<(attempt-1))
+	return uploadRetryBaseDelay * (1 << (attempt - 1))
 }
 
 func isRetryableUploadError(err error) bool {

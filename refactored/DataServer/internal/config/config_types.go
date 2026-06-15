@@ -107,13 +107,13 @@ type NVIDIAConfig struct {
 
 // Config is the top-level configuration.
 type Config struct {
-	MasterPort    int
-	StudioPort    int
-	StaticDir     string
-	VideosDir     string
-	DataDir       string
-	RuntimeDir    string
-	JobQueueFile  string
+	MasterPort   int
+	StudioPort   int
+	StaticDir    string
+	VideosDir    string
+	DataDir      string
+	RuntimeDir   string
+	JobQueueFile string
 
 	AllowedWorkers           string
 	ForceSingleWorker        string

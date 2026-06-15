@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+
 	"velox-server/internal/config"
 	remoteansible "velox-server/internal/handlers/remote/ansible"
 	"velox-server/internal/store"
@@ -86,5 +87,3 @@ func (m *Module) RegisterRoutes(r *gin.Engine) {
 		log.Printf("[ANSIBLE] Routes registered (ansible-playbook not found)")
 	}
 }
-
-

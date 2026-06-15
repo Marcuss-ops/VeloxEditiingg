@@ -143,13 +143,13 @@ func (h *WorkerUpdateHandler) GenerateManifestV2Handler() gin.HandlerFunc {
 			version, actualSHA[:min(16, len(actualSHA))]+"...")
 
 		c.JSON(http.StatusOK, gin.H{
-			"ok":             true,
-			"message":        "Manifest regenerated",
-			"path":           manifestPath,
-			"version":        version,
-			"code_version":   h.codeVersion,
-			"build_hash":     actualSHA,
-			"bundle_path":    bundlePath,
+			"ok":              true,
+			"message":         "Manifest regenerated",
+			"path":            manifestPath,
+			"version":         version,
+			"code_version":    h.codeVersion,
+			"build_hash":      actualSHA,
+			"bundle_path":     bundlePath,
 			"bundle_basename": filepath.Base(bundlePath),
 		})
 	}

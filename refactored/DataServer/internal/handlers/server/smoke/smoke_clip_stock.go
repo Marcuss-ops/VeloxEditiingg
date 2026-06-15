@@ -4,9 +4,11 @@ import (
 	"net/http"
 	"time"
 
+	"velox-shared/payload"
+
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
-	"velox-shared/payload"
+
 	"velox-server/internal/config"
 	"velox-server/internal/queue"
 )
@@ -89,8 +91,8 @@ func CreateSmokeClipStock(cfg *config.Config, q *queue.FileQueue) gin.HandlerFun
 			"run_id":                 jobRunID,
 			"correlation_id":         correlationID,
 			"job_type":               "process_video",
-			"version":       "v1",
-			"created_at":    payload.EnsureRFC3339(payload.FirstString(body, "created_at"), now),
+			"version":                "v1",
+			"created_at":             payload.EnsureRFC3339(payload.FirstString(body, "created_at"), now),
 			"updated_at":             payload.EnsureRFC3339(payload.FirstString(body, "updated_at"), now),
 			"video_name":             videoName,
 			"title":                  videoName,
@@ -116,7 +118,7 @@ func CreateSmokeClipStock(cfg *config.Config, q *queue.FileQueue) gin.HandlerFun
 		}
 
 		normalized["parameters"] = map[string]interface{}{
-			"version": "v1",
+			"version":                "v1",
 			"job_id":                 jobID,
 			"job_run_id":             jobRunID,
 			"run_id":                 jobRunID,

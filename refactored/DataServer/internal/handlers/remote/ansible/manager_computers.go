@@ -47,11 +47,11 @@ type AnsibleComputerStore interface {
 
 // AnsibleComputerManager manages the Ansible computers inventory.
 type AnsibleComputerManager struct {
-	dataDir      string
-	store        AnsibleComputerStore
-	computers    map[string]AnsibleComputer
+	dataDir        string
+	store          AnsibleComputerStore
+	computers      map[string]AnsibleComputer
 	secretResolver *SecretResolver
-	mu           sync.RWMutex
+	mu             sync.RWMutex
 }
 
 // NewAnsibleComputerManager creates a new Ansible computer manager.

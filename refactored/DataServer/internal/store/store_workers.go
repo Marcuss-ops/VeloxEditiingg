@@ -126,8 +126,8 @@ func (s *SQLiteStore) SetWorkerRevoked(workerID string, revoked bool) error {
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
 	raw, _ := json.Marshal(map[string]any{
-		"worker_id": workerID,
-		"revoked":   revoked,
+		"worker_id":  workerID,
+		"revoked":    revoked,
 		"updated_at": now,
 	})
 	_, err := s.db.Exec(

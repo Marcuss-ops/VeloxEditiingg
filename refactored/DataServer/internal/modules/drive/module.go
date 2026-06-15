@@ -4,6 +4,7 @@ import (
 	"log"
 
 	"github.com/gin-gonic/gin"
+
 	"velox-server/internal/config"
 	driveHandlers "velox-server/internal/handlers/server/drive"
 	integrationsDrive "velox-server/internal/integrations/drive"
@@ -67,5 +68,3 @@ func (m *Module) RegisterRoutes(r *gin.Engine) {
 	driveHandlers.RegisterDriveRoutes(r, m.handlers)
 	log.Printf("[DRIVE] API routes registered at /api/drive/*")
 }
-
-

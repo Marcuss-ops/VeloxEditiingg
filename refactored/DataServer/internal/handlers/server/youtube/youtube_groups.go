@@ -8,18 +8,19 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+
 	"velox-server/internal/integrations/news"
 	"velox-server/internal/integrations/youtube"
 )
 
 // YouTubeManager holds the dependencies for YouTube manager handlers
 type YouTubeManager struct {
-	storage      *youtube.Storage
-	apiClient    *youtube.APIClient
-	feedCache    *youtube.FeedCache
-	newsFetcher  *news.Fetcher
-	dataDir      string
-	service      *youtube.Service
+	storage     *youtube.Storage
+	apiClient   *youtube.APIClient
+	feedCache   *youtube.FeedCache
+	newsFetcher *news.Fetcher
+	dataDir     string
+	service     *youtube.Service
 }
 
 // NewYouTubeManager creates a new YouTube manager handler instance.

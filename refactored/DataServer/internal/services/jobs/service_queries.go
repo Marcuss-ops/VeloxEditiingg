@@ -108,7 +108,7 @@ func (s *Service) GetJob(ctx context.Context, jobID string) (map[string]interfac
 
 	job, err := s.fileQ.GetJob(ctx, jobID)
 	if err != nil {
-		return nil, false, nil
+		return nil, false, err
 	}
 
 	result := map[string]interface{}{

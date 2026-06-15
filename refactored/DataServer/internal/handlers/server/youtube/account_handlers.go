@@ -42,9 +42,9 @@ func (ym *YouTubeManager) ListAccountsHandler() gin.HandlerFunc {
 		}
 
 		c.JSON(http.StatusOK, gin.H{
-			"ok":      true,
+			"ok":       true,
 			"accounts": accounts,
-			"count":   len(accounts),
+			"count":    len(accounts),
 		})
 	}
 }
@@ -105,10 +105,10 @@ func (ym *YouTubeManager) RefreshAccountHandler() gin.HandlerFunc {
 		}
 
 		c.JSON(http.StatusOK, gin.H{
-			"ok":      true,
+			"ok":        true,
 			"refreshed": result["refreshed"],
-			"valid":   result["valid"],
-			"message": "Token refreshed",
+			"valid":     result["valid"],
+			"message":   "Token refreshed",
 		})
 	}
 }

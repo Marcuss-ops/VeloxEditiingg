@@ -9,24 +9,24 @@ import (
 
 // Group-to-folder mappings
 var groupToClipFolder = map[string]string{
-	"wwe":      "WWE",
-	"hiphop":   "Hip Hop",
-	"news":     "News",
-	"tech":     "Tech",
+	"wwe":    "WWE",
+	"hiphop": "Hip Hop",
+	"news":   "News",
+	"tech":   "Tech",
 }
 
 var groupToVoiceoverFolder = map[string]string{
-	"wwe":      "WWE Voice",
-	"hiphop":   "Hip Hop Voice",
-	"news":     "News Voice",
-	"tech":     "Tech Voice",
+	"wwe":    "WWE Voice",
+	"hiphop": "Hip Hop Voice",
+	"news":   "News Voice",
+	"tech":   "Tech Voice",
 }
 
 var stockFolderAliases = map[string]string{
-	"wwe":      "WWE Stock",
-	"hiphop":   "Hip Hop Stock",
-	"news":     "News Stock",
-	"tech":     "Tech Stock",
+	"wwe":    "WWE Stock",
+	"hiphop": "Hip Hop Stock",
+	"news":   "News Stock",
+	"tech":   "Tech Stock",
 }
 
 // findMasterIDByName finds a master folder (ParentID=="") whose name matches any in names[]

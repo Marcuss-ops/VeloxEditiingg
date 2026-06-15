@@ -4,6 +4,7 @@ import (
 	"log"
 
 	"github.com/gin-gonic/gin"
+
 	"velox-server/internal/config"
 	workersapi "velox-server/internal/handlers/remote/workers"
 	workersreg "velox-server/internal/workers"
@@ -71,4 +72,3 @@ func (m *Module) RegisterRoutes(r *gin.Engine) {
 
 	log.Printf("[WORKERS] Routes registered")
 }
-

@@ -23,4 +23,3 @@ func TestAuthorizeWorkerTokenRejectsMissingWorkerID(t *testing.T) {
 		t.Fatal("expected empty worker id to be rejected")
 	}
 }
-

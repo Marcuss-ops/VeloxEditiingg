@@ -3,6 +3,7 @@ package youtube
 import (
 	"context"
 	"fmt"
+	"log"
 	"net/http"
 	"sort"
 	"strconv"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+
 	"velox-server/internal/integrations/news"
 	"velox-server/internal/integrations/youtube"
 )
@@ -87,37 +89,40 @@ func (ym *YouTubeManager) GetVideoFeedHandler() gin.HandlerFunc {
 		ctx := c.Request.Context()
 		var aggregatedVideos []youtube.Video
 
-		for i, ch := range uniqueChannels {
-			if i >= 15 {
-				break
-			}
-
-			channelID, err := ym.apiClient.GetChannelID(ctx, ch.URL)
-			if err != nil {
-				continue
-			}
-
-			var videos []youtube.Video
-			if channelID != "" {
-				videos, err = ym.apiClient.GetRecentChannelVideos(ctx, channelID, limitPerChannel, daysBack)
-			}
-
-			if len(videos) == 0 {
-				videos, _ = ym.apiClient.SearchVideos(ctx, ch.Title, limitPerChannel, daysBack, 0, 0, false)
-			}
-
-			for i := range videos {
-				videos[i].SourceChannel = ch.Title
-				videos[i].GroupName = groupName
-				if videos[i].Thumbnail == "" && ch.Thumbnail != "" {
-					videos[i].Thumbnail = ch.Thumbnail
-				}
-			}
-
-			aggregatedVideos = append(aggregatedVideos, videos...)
+	for i, ch := range uniqueChannels {
+		if i >= 15 {
+			break
 		}
 
-		if sortBy == "views" {
+		channelID, err := ym.apiClient.GetChannelID(ctx, ch.URL)
+		if err != nil {
+			continue
+		}
+
+		var videos []youtube.Video
+		if channelID != "" {
+			videos, err = ym.apiClient.GetRecentChannelVideos(ctx, channelID, limitPerChannel, daysBack)
+			if err != nil {
+				log.Printf("[FEED] GetRecentChannelVideos failed for %s: %v", ch.Title, err)
+			}
+		}
+
+		if len(videos) == 0 {
+			videos, _ = ym.apiClient.SearchVideos(ctx, ch.Title, limitPerChannel, daysBack, 0, 0, false)
+		}
+
+		for i := range videos {
+			videos[i].SourceChannel = ch.Title
+			videos[i].GroupName = groupName
+			if videos[i].Thumbnail == "" && ch.Thumbnail != "" {
+				videos[i].Thumbnail = ch.Thumbnail
+			}
+		}
+
+		aggregatedVideos = append(aggregatedVideos, videos...)
+	}
+
+	if sortBy == "views" {
 			sort.Slice(aggregatedVideos, func(i, j int) bool {
 				return aggregatedVideos[i].ViewCount > aggregatedVideos[j].ViewCount
 			})
@@ -186,6 +191,9 @@ func (ym *YouTubeManager) refreshGroupFeed(ctx context.Context, groupName string
 		var videos []youtube.Video
 		if channelID != "" {
 			videos, err = ym.apiClient.GetRecentChannelVideos(ctx, channelID, limitPerChannel, daysBack)
+			if err != nil {
+				log.Printf("[FEED] GetRecentChannelVideos failed for %s: %v", ch.Title, err)
+			}
 		}
 
 		if len(videos) == 0 {

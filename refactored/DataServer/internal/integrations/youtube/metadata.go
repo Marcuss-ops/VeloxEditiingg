@@ -82,6 +82,7 @@ func (vm *VideoManager) DeleteVideo(ctx context.Context, channelID string, video
 	log.Printf("[OK] Video deleted: %s", videoID)
 	return nil
 }
+
 // ListVideos lists videos for a channel with cache support
 func (vm *VideoManager) ListVideos(ctx context.Context, channelID string, maxResults int64) ([]*youtube.Video, error) {
 	// 1. Check cache first
@@ -130,7 +131,7 @@ func (vm *VideoManager) ListVideos(ctx context.Context, channelID string, maxRes
 		if err != nil {
 			return nil, fmt.Errorf("failed to list videos (search fallback): %w", err)
 		}
-		
+
 		videoIDs := make([]string, 0, len(searchResponse.Items))
 		for _, item := range searchResponse.Items {
 			videoIDs = append(videoIDs, item.Id.VideoId)
@@ -179,6 +180,7 @@ func (vm *VideoManager) ListVideos(ctx context.Context, channelID string, maxRes
 
 	return videosResponse.Items, nil
 }
+
 // --- Advanced Automation Methods ---
 
 // CheckCopyrightStatus queries the API for copyright claims on a video
@@ -231,7 +233,7 @@ func (vm *VideoManager) LogMetadataChange(ctx context.Context, channelID string,
 	// 2. Log to database
 	// This would use a sqlite table 'metadata_ab_tests'
 	log.Printf("[YT] Logging A/B test: %s changed %s from '%s' to '%s'", videoID, testType, oldValue, newValue)
-	
+
 	return nil
 }
 

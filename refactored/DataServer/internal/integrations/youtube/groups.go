@@ -59,8 +59,6 @@ func (s *Service) loadCanonicalGroups() bool {
 	return true
 }
 
-
-
 // CreateGroup creates a new channel group and persists it
 func (s *Service) CreateGroup(name, description string, channelIDs []string) error {
 	s.mu.Lock()

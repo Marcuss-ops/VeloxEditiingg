@@ -7,9 +7,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gin-gonic/gin"
-	yt "velox-server/internal/integrations/youtube"
 	"velox-shared/payload"
+
+	"github.com/gin-gonic/gin"
+
+	yt "velox-server/internal/integrations/youtube"
 )
 
 type topicRule struct {
@@ -94,8 +96,8 @@ func (ym *YouTubeManager) AutoOrganizeUndefinedChannelsHandler() gin.HandlerFunc
 			channel := yt.Channel{
 				ID:        ch.ID,
 				URL:       fmt.Sprintf("https://www.youtube.com/channel/%s", ch.ID),
-			Title:     payload.FirstNonEmpty(ch.Title, ch.Name, ch.ID),
-			Name:      payload.FirstNonEmpty(ch.Name, ch.Title, ch.ID),
+				Title:     payload.FirstNonEmpty(ch.Title, ch.Name, ch.ID),
+				Name:      payload.FirstNonEmpty(ch.Name, ch.Title, ch.ID),
 				Thumbnail: ch.Thumbnail,
 				AddedAt:   time.Now(),
 				Language:  ch.Language,

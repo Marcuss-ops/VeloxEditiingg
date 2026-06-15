@@ -184,7 +184,6 @@ type remoteFallbackVideo struct {
 
 func (r *RemoteFallback) transformVideos(videos []remoteFallbackVideo) []Video {
 	result := make([]Video, len(videos))
-	now := time.Now()
 
 	for i, v := range videos {
 		// Calculate velocity if not provided
@@ -224,8 +223,9 @@ func (r *RemoteFallback) transformVideos(videos []remoteFallbackVideo) []Video {
 		}
 
 		daysOld := v.DaysOld
+		// If upstream omitted DaysOld, default to 1 so velocity-style math stays sane.
 		if daysOld == 0 {
-			daysOld = int(now.Sub(time.Now()).Hours()/24) + 1
+			daysOld = 1
 		}
 
 		result[i] = Video{

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+
 	"velox-server/internal/audit"
 	"velox-server/internal/store"
 )
@@ -32,33 +33,33 @@ func NewDataLayoutHandler(dataDir, secretsDir, dbPath string, dbStore *store.SQL
 
 // DataLayoutResponse represents the response from /diagnostics/data-layout.
 type DataLayoutResponse struct {
-	OK           bool                   `json:"ok"`
-	Timestamp    string                 `json:"timestamp"`
-	DataDir      string                 `json:"data_dir"`
-	SecretsDir   string                 `json:"secrets_dir"`
-	Database     DatabaseInfo           `json:"database"`
-	Domains      map[string]DomainInfo  `json:"domains"`
-	Audit        *audit.DataLayerAuditResult `json:"audit,omitempty"`
-	Counts       CountsInfo             `json:"counts"`
+	OK         bool                        `json:"ok"`
+	Timestamp  string                      `json:"timestamp"`
+	DataDir    string                      `json:"data_dir"`
+	SecretsDir string                      `json:"secrets_dir"`
+	Database   DatabaseInfo                `json:"database"`
+	Domains    map[string]DomainInfo       `json:"domains"`
+	Audit      *audit.DataLayerAuditResult `json:"audit,omitempty"`
+	Counts     CountsInfo                  `json:"counts"`
 }
 
 // DatabaseInfo contains database diagnostics.
 type DatabaseInfo struct {
-	Path       string `json:"path"`
-	Exists     bool   `json:"exists"`
-	SizeBytes  int64  `json:"size_bytes"`
+	Path          string `json:"path"`
+	Exists        bool   `json:"exists"`
+	SizeBytes     int64  `json:"size_bytes"`
 	SizeFormatted string `json:"size_formatted"`
 }
 
 // DomainInfo contains diagnostics for a specific domain.
 type DomainInfo struct {
-	Primary      string `json:"primary"`
-	PrimaryExists bool  `json:"primary_exists"`
-	Cache        string `json:"cache,omitempty"`
-	CacheExists  bool   `json:"cache_exists,omitempty"`
-	Legacy       string `json:"legacy,omitempty"`
-	LegacyExists bool   `json:"legacy_exists,omitempty"`
-	Status       string `json:"status"`
+	Primary       string `json:"primary"`
+	PrimaryExists bool   `json:"primary_exists"`
+	Cache         string `json:"cache,omitempty"`
+	CacheExists   bool   `json:"cache_exists,omitempty"`
+	Legacy        string `json:"legacy,omitempty"`
+	LegacyExists  bool   `json:"legacy_exists,omitempty"`
+	Status        string `json:"status"`
 }
 
 // CountsInfo contains file counts.
@@ -74,11 +75,11 @@ type CountsInfo struct {
 func (h *DataLayoutHandler) GetDataLayoutHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		response := DataLayoutResponse{
-			OK:        true,
-			Timestamp: time.Now().UTC().Format(time.RFC3339),
-			DataDir:   h.dataDir,
+			OK:         true,
+			Timestamp:  time.Now().UTC().Format(time.RFC3339),
+			DataDir:    h.dataDir,
 			SecretsDir: h.secretsDir,
-			Domains:   make(map[string]DomainInfo),
+			Domains:    make(map[string]DomainInfo),
 		}
 
 		// Database info
@@ -155,7 +156,7 @@ func (h *DataLayoutHandler) GetDataLayoutHandler() gin.HandlerFunc {
 		// Run audit
 		auditor := audit.NewDataLayerAuditor(h.dataDir, h.secretsDir)
 		response.Audit = auditor.Audit()
-		
+
 		// Overall status
 		response.OK = response.Audit.Passed
 
@@ -198,18 +199,18 @@ func countTokenFiles(dir string) int {
 	if !dirExists(dir) {
 		return 0
 	}
-	
+
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return 0
 	}
-	
+
 	count := 0
 	for _, e := range entries {
-		if !e.IsDir() && 
-		   len(e.Name()) > 12 && 
-		   e.Name()[:8] == "account_" && 
-		   e.Name()[len(e.Name())-5:] == ".json" {
+		if !e.IsDir() &&
+			len(e.Name()) > 12 &&
+			e.Name()[:8] == "account_" &&
+			e.Name()[len(e.Name())-5:] == ".json" {
 			count++
 		}
 	}
@@ -222,7 +223,7 @@ func formatSize(bytes int64) string {
 		MB = KB * 1024
 		GB = MB * 1024
 	)
-	
+
 	switch {
 	case bytes >= GB:
 		return fmt.Sprintf("%.1f GB", float64(bytes)/GB)

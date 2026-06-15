@@ -4,6 +4,7 @@ import (
 	"log"
 
 	"github.com/gin-gonic/gin"
+
 	"velox-server/internal/config"
 	ytHandlers "velox-server/internal/handlers/server/youtube"
 	integrationsYoutube "velox-server/internal/integrations/youtube"
@@ -100,5 +101,3 @@ func (m *Module) RegisterRoutes(r *gin.Engine) {
 		}
 	}
 }
-
-

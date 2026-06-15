@@ -21,16 +21,16 @@ type DataLayerAuditResult struct {
 
 // DataLayerAuditor validates data layer structure and detects legacy files.
 type DataLayerAuditor struct {
-	dataDir     string
-	secretsDir  string
+	dataDir       string
+	secretsDir    string
 	allowedLegacy map[string]bool // Explicitly allowed legacy files
 }
 
 // NewDataLayerAuditor creates a new data layer auditor.
 func NewDataLayerAuditor(dataDir, secretsDir string) *DataLayerAuditor {
 	return &DataLayerAuditor{
-		dataDir:    dataDir,
-		secretsDir: secretsDir,
+		dataDir:       dataDir,
+		secretsDir:    secretsDir,
 		allowedLegacy: make(map[string]bool),
 	}
 }
@@ -38,25 +38,25 @@ func NewDataLayerAuditor(dataDir, secretsDir string) *DataLayerAuditor {
 // Audit performs a complete data layer audit.
 func (a *DataLayerAuditor) Audit() *DataLayerAuditResult {
 	result := &DataLayerAuditResult{
-		Passed: true,
-		Info:   make([]string, 0),
-		Errors: make([]string, 0),
+		Passed:   true,
+		Info:     make([]string, 0),
+		Errors:   make([]string, 0),
 		Warnings: make([]string, 0),
-		DataDir: a.dataDir,
+		DataDir:  a.dataDir,
 	}
 
 	// Check for legacy files that should not exist
 	a.checkLegacyFiles(result)
-	
+
 	// Check for duplicate source of truth (directory naming inconsistencies)
 	a.checkDuplicateSources(result)
-	
+
 	// Check for inconsistent naming
 	a.checkNamingConsistency(result)
-	
+
 	// Check primary files exist
 	a.checkPrimaryFiles(result)
-	
+
 	// Check database integrity
 	a.checkDatabase(result)
 
@@ -140,7 +140,7 @@ func (a *DataLayerAuditor) checkPrimaryFiles(result *DataLayerAuditResult) {
 		path     string
 		required bool
 	}{
-		{"velox.db", true},           // SQLite is now the primary store
+		{"velox.db", true}, // SQLite is now the primary store
 		// ansible_runs.json is no longer a primary source — SQLite only
 		{"bundle/manifest_v2.json", false}, // Optional (generated)
 	}
@@ -187,7 +187,7 @@ func (a *DataLayerAuditor) checkDatabase(result *DataLayerAuditResult) {
 		filepath.Join(a.dataDir, "worker_runtime", "velox.db"),
 		filepath.Join(a.dataDir, "..", "data", "velox.db"),
 	}
-	
+
 	for _, p := range paths {
 		if a.fileExists(p) {
 			result.Warnings = append(result.Warnings, fmt.Sprintf("Duplicate velox.db found: %s", p))
@@ -242,26 +242,26 @@ func (r *DataLayerAuditResult) String() string {
 	} else {
 		sb.WriteString("[ERROR] Data Layer Audit FAILED\n")
 	}
-	
+
 	sb.WriteString(fmt.Sprintf("DataDir: %s\n", r.DataDir))
-	
+
 	if len(r.Errors) > 0 {
 		sb.WriteString(fmt.Sprintf("Errors: %d\n", len(r.Errors)))
 		for _, e := range r.Errors {
 			sb.WriteString(fmt.Sprintf("  - %s\n", e))
 		}
 	}
-	
+
 	if len(r.Warnings) > 0 {
 		sb.WriteString(fmt.Sprintf("Warnings: %d\n", len(r.Warnings)))
 		for _, w := range r.Warnings {
 			sb.WriteString(fmt.Sprintf("  - %s\n", w))
 		}
 	}
-	
+
 	if len(r.Info) > 0 {
 		sb.WriteString(fmt.Sprintf("Info: %d items\n", len(r.Info)))
 	}
-	
+
 	return sb.String()
 }

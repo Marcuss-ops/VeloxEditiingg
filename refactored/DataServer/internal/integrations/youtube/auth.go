@@ -281,7 +281,7 @@ func (am *AuthManager) ValidateToken(ctx context.Context, channelID string) (map
 		result["ok"] = false
 		result["valid"] = false
 		result["error"] = err.Error()
-		return result, nil
+		return result, nil //nolint:nilerr // status endpoint embeds error in result map
 	}
 
 	// Try to get channel info to verify token works

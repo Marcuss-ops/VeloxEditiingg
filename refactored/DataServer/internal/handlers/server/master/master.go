@@ -4,9 +4,11 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/gin-gonic/gin"
-	"velox-server/internal/state"
 	"velox-shared/payload"
+
+	"github.com/gin-gonic/gin"
+
+	"velox-server/internal/state"
 )
 
 // MasterState returns the current master state
