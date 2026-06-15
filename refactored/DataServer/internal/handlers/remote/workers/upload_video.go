@@ -146,14 +146,14 @@ func UploadCompletedVideo(cfg *config.Config, fileQ *queue.FileQueue, youtubeSer
 			return
 		}
 
-	// Set max multipart memory to 10MB (larger files stream to disk)
-	if err := c.Request.ParseMultipartForm(10 << 20); err != nil { // 10 MB
-		c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "invalid multipart form: " + err.Error()})
-		return
-	}
+		// Set max multipart memory to 10MB (larger files stream to disk)
+		if err := c.Request.ParseMultipartForm(10 << 20); err != nil { // 10 MB
+			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "invalid multipart form: " + err.Error()})
+			return
+		}
 
-	// Get the file
-	file, header, err := c.Request.FormFile("video_file")
+		// Get the file
+		file, header, err := c.Request.FormFile("video_file")
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "video_file required"})
 			return
