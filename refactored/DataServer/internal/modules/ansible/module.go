@@ -1,7 +1,6 @@
 package ansible
 
 import (
-	"context"
 	"log"
 	"os"
 	"strings"
@@ -90,12 +89,4 @@ func (m *Module) RegisterRoutes(r *gin.Engine) {
 	}
 }
 
-func (m *Module) Start(ctx context.Context) error {
-	log.Printf("[ANSIBLE] Module started")
-	return nil
-}
 
-func (m *Module) Stop(ctx context.Context) error {
-	log.Printf("[ANSIBLE] Module stopped")
-	return nil
-}

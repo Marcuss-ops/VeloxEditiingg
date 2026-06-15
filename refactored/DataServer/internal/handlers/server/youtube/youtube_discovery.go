@@ -245,10 +245,11 @@ func (ym *YouTubeManager) TrendsHandler() gin.HandlerFunc {
 
 		var trends []youtube.TrendTopic
 		for _, v := range videos {
+			viewStr := fmt.Sprintf("%d", v.ViewCount)
 			trends = append(trends, youtube.TrendTopic{
 				Title:     v.Title,
 				URL:       v.URL,
-				Views:     v.ChannelTitle,
+				Views:     viewStr,
 				Thumbnail: v.Thumbnail,
 			})
 		}

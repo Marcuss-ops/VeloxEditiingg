@@ -3,18 +3,17 @@ module velox-server
 go 1.25.8
 
 require (
-	velox-shared v0.0.0
 	github.com/chai2010/webp v1.4.0
 	github.com/disintegration/imaging v1.6.2
 	github.com/gin-gonic/gin v1.12.0
 	github.com/google/uuid v1.6.0
 	github.com/lib/pq v1.12.3
 	github.com/mattn/go-sqlite3 v1.14.45
-	github.com/redis/go-redis/v9 v9.20.0
 	golang.org/x/crypto v0.53.0
 	golang.org/x/oauth2 v0.36.0
 	google.golang.org/api v0.283.0
 	gopkg.in/yaml.v3 v3.0.1
+	velox-shared v0.0.0
 )
 
 replace velox-shared v0.0.0 => ../shared
@@ -58,7 +57,6 @@ require (
 	go.opentelemetry.io/otel v1.43.0 // indirect
 	go.opentelemetry.io/otel/metric v1.43.0 // indirect
 	go.opentelemetry.io/otel/trace v1.43.0 // indirect
-	go.uber.org/atomic v1.11.0 // indirect
 	golang.org/x/arch v0.22.0 // indirect
 	golang.org/x/image v0.0.0-20211028202545-6944b10bf410 // indirect
 	golang.org/x/net v0.55.0 // indirect

@@ -1,7 +1,6 @@
 package jobs
 
 import (
-	"context"
 	"log"
 
 	"github.com/gin-gonic/gin"
@@ -45,14 +44,4 @@ func (m *Module) RegisterRoutes(r *gin.Engine) {
 	log.Printf("[JOBS MODULE] Routes registered")
 }
 
-// Start initializes the module.
-func (m *Module) Start(ctx context.Context) error {
-	log.Printf("[JOBS MODULE] Started")
-	return nil
-}
 
-// Stop gracefully shuts down the module.
-func (m *Module) Stop(ctx context.Context) error {
-	log.Printf("[JOBS MODULE] Stopped")
-	return nil
-}

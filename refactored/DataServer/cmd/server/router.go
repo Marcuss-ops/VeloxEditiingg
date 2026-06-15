@@ -14,7 +14,6 @@ import (
 	pipelinehandler "velox-server/internal/handlers/server/pipeline"
 	scripthandlers "velox-server/internal/handlers/server/script"
 	jobservice "velox-server/internal/services/jobs"
-	"velox-server/internal/integrations/youtube"
 	"velox-server/internal/store"
 	workersreg "velox-server/internal/workers"
 	"github.com/gin-gonic/gin"
@@ -77,7 +76,6 @@ func newRouter(cfg *config.Config, deps *serverDeps, registry *app.Registry) *gi
 
 	// ── Remaining routes not yet in modules ──────────────────────────────────
 	registerAPIV1Routes(r, cfg, deps, ansibleHandlers)
-	registerNativeV1Routes(r, deps)
 	registerScriptRoutes(r, cfg, deps)
 	registerPipelineRoutes(r, cfg, deps)
 
@@ -94,7 +92,7 @@ func registerAPIV1Routes(r *gin.Engine, cfg *config.Config, deps *serverDeps, an
 	// TODO: migrate remaining V1 routes to dedicated api module
 	jobRepo := store.NewSQLiteJobsRepository(deps.sqliteStore)
 	tokenMgr := deps.workerLifecycle.GetTokenManager()
-	jobSvc := jobservice.NewService(cfg, deps.fileQ, nil, jobRepo, nil, deps.reg)
+	jobSvc := jobservice.NewService(cfg, deps.fileQ, jobRepo, nil, deps.reg)
 	if deps.workerUpdateHandler != nil {
 		if hash := deps.workerUpdateHandler.ComputeBundleSHA256(); hash != "" {
 			jobSvc.SetMasterBundleHash(hash)
@@ -118,24 +116,16 @@ func registerAPIV1Routes(r *gin.Engine, cfg *config.Config, deps *serverDeps, an
 	// Compat: commands endpoint for workers (registered by workers module above)
 }
 
-func registerNativeV1Routes(r *gin.Engine, deps *serverDeps) {
-	var ytService *youtube.Service
-	if deps.youtubeModule != nil {
-		ytService = deps.youtubeModule.Service()
-	}
-	api.RegisterV1NativeRoutes(r, nil, ytService, deps.sqliteStore)
-}
-
 func registerScriptRoutes(r *gin.Engine, cfg *config.Config, deps *serverDeps) {
 	if deps == nil || deps.fileQ == nil {
 		return
 	}
 	rootGroup := r.Group("/api/script")
-	rootGroup.Use(adminAuthMiddleware(cfg))
+	rootGroup.Use(api.AdminAuthMiddleware(cfg))
 	scripthandlers.RegisterRoutes(rootGroup, cfg, deps.fileQ, deps.sqliteStore)
 
 	v1Group := r.Group("/api/v1/script")
-	v1Group.Use(adminAuthMiddleware(cfg))
+	v1Group.Use(api.AdminAuthMiddleware(cfg))
 	scripthandlers.RegisterRoutes(v1Group, cfg, deps.fileQ, deps.sqliteStore)
 }
 

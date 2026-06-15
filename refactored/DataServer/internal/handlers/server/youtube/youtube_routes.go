@@ -16,6 +16,11 @@ import (
 //
 // Both paths are registered because the Vite dev server proxies /api/youtube/ -> /api/v1/youtube/.
 func YouTubeRoutes(r *gin.Engine, cfg *config.Config, ym *YouTubeManager) {
+	// ── Accounts (frontend OAuth account management) ──
+	r.GET("/api/youtube/accounts", ym.ListAccountsHandler())
+	r.GET("/api/youtube/accounts/:id", ym.GetAccountHandler())
+	r.POST("/api/youtube/accounts/:id/refresh", ym.RefreshAccountHandler())
+
 	// ── Groups (legacy /api/youtube/groups — without /manager/ segment) ──
 	r.GET("/api/youtube/groups", ym.ListGroupsHandler())
 	r.POST("/api/youtube/groups", ym.CreateGroupHandler())

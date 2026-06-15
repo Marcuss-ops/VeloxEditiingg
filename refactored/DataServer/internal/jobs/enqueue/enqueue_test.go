@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -227,6 +228,52 @@ func TestBuildSceneImagePayload_WithFlatImages(t *testing.T) {
 		if text, _ := scene["text"].(string); text == "" {
 			t.Fatalf("scene %d should have text", i)
 		}
+	}
+}
+
+func TestBuildSceneImagePayloadForMaster_StagesVoiceover(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	videosDir := filepath.Join(tempDir, "videos")
+	srcVoice := filepath.Join(tempDir, "voiceover.mp3")
+	if err := os.WriteFile(srcVoice, []byte("fake-audio"), 0o600); err != nil {
+		t.Fatalf("write voiceover: %v", err)
+	}
+
+	payload := map[string]interface{}{
+		"video_name":     "Master Stage Test",
+		"voiceover_path": srcVoice,
+		"scenes": []interface{}{
+			map[string]interface{}{
+				"text":       "Scene 1",
+				"image_link": "https://example.com/img1.png",
+			},
+		},
+	}
+
+	result, err := BuildSceneImagePayloadForMaster(payload, tempDir, videosDir, "http://master.example")
+	if err != nil {
+		t.Fatalf("BuildSceneImagePayloadForMaster: %v", err)
+	}
+
+	voiceoverPath, _ := result["voiceover_path"].(string)
+	if !strings.HasPrefix(voiceoverPath, "http://master.example/api/worker/assets/voiceover/") {
+		t.Fatalf("want staged voiceover url, got %q", voiceoverPath)
+	}
+
+	jobID, _ := result["job_id"].(string)
+	if jobID == "" {
+		t.Fatal("expected job_id to be populated")
+	}
+
+	stagedLocal := filepath.Join(tempDir, "worker_downloads", "script_assets", jobID, filepath.Base(srcVoice))
+	content, err := os.ReadFile(stagedLocal)
+	if err != nil {
+		t.Fatalf("read staged asset: %v", err)
+	}
+	if string(content) != "fake-audio" {
+		t.Fatalf("staged asset content mismatch: %q", string(content))
 	}
 }
 

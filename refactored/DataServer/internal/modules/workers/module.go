@@ -17,14 +17,16 @@ type Module struct {
 	adminAuth           gin.HandlerFunc
 	workerLifecycle     *workersapi.WorkerLifecycle
 	workerUpdateHandler *workersapi.WorkerUpdateHandler
+	workerAssetHandler  *workersapi.WorkerAssetHandler
 }
 
-func New(_ *config.Config, reg *workersreg.Registry, lifecycle *workersapi.WorkerLifecycle, updateHandler *workersapi.WorkerUpdateHandler, adminAuth gin.HandlerFunc) *Module {
+func New(cfg *config.Config, reg *workersreg.Registry, lifecycle *workersapi.WorkerLifecycle, updateHandler *workersapi.WorkerUpdateHandler, adminAuth gin.HandlerFunc) *Module {
 	return &Module{
 		reg:                 reg,
 		workerLifecycle:     lifecycle,
 		workerUpdateHandler: updateHandler,
 		adminAuth:           adminAuth,
+		workerAssetHandler:  workersapi.NewWorkerAssetHandler(cfg),
 	}
 }
 
@@ -66,6 +68,10 @@ func (m *Module) RegisterRoutes(r *gin.Engine) {
 		r.HEAD("/api/worker/bundle", m.workerUpdateHandler.GetBundleDownloadHandler())
 		r.GET("/api/worker/v2/manifest", m.workerUpdateHandler.GetManifestV2Handler())
 		r.GET("/api/worker/v2/chunk/:chunkName", m.workerUpdateHandler.GetChunkV2Handler())
+	}
+
+	if m.workerAssetHandler != nil {
+		r.GET("/api/worker/assets/voiceover/:job_id/:filename", m.workerAssetHandler.ServeVoiceoverAsset())
 	}
 
 	log.Printf("[WORKERS] Routes registered")

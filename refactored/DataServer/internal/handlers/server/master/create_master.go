@@ -19,8 +19,8 @@ const placeholderScriptPrefix1 = "[SCRIPT WILL BE GENERATED"
 const placeholderScriptPrefix2 = "SCRIPT WILL BE GENERATED"
 const placeholderScriptPrefix3 = "[VOICEOVER ONLY"
 
-// CreateMaster accepts POST /api/video/create-master: multi-title, validation, optional proxy, enqueue to Redis.
-func CreateMaster(cfg *config.Config, q *queue.Queue) gin.HandlerFunc {
+// CreateMaster accepts POST /api/video/create-master: multi-title, validation, optional proxy, enqueue to SQLite-backed queue.
+func CreateMaster(cfg *config.Config, q *queue.FileQueue) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var payload map[string]interface{}
 		if err := c.ShouldBindJSON(&payload); err != nil {
@@ -115,7 +115,7 @@ func CreateMaster(cfg *config.Config, q *queue.Queue) gin.HandlerFunc {
 	}
 }
 
-func processSingleCreateMaster(ctx context.Context, q *queue.Queue, payload map[string]interface{}) (gin.H, int) {
+func processSingleCreateMaster(ctx context.Context, q *queue.FileQueue, payload map[string]interface{}) (gin.H, int) {
 	clipCount := countClips(payload)
 	voiceoverCount := countVoiceovers(payload)
 	hasScript := hasScript(payload)
