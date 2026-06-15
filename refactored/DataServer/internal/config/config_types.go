@@ -105,9 +105,8 @@ type NVIDIAConfig struct {
 	TextURL string
 }
 
-// Config is the top-level configuration. Kept for backward compatibility.
+// Config is the top-level configuration.
 type Config struct {
-	// Flat fields (legacy) - retained for compatibility with older code paths.
 	MasterPort    int
 	StudioPort    int
 	StaticDir     string
