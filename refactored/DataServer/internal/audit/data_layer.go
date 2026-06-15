@@ -81,6 +81,7 @@ func (a *DataLayerAuditor) checkLegacyFiles(result *DataLayerAuditResult) {
 		"worker_downloads/bundle_manifest.json",
 		"analytics/feed_cache.json",
 		"youtube/history/upload_history.json",
+		"youtube/youtube_api_cache.json",
 		"drive/drive_links.json",
 		"drive/drive_links.yaml",
 		"drive/drive_links.yml",
