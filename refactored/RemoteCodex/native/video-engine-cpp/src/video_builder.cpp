@@ -76,36 +76,34 @@ std::vector<std::string> parseStringListField(const std::string& requestJson, co
         return {raw};
     }
     return {};
+}fs::path firstAvailableImage(const SceneRuntime& scene, const fs::path& workDir, size_t index, const std::string& cacheDir) {
+	const auto imagePath = workDir / ("scene_" + std::to_string(index) + ".jpg");
+	std::vector<std::string> candidates = scene.image_links;
+	if (candidates.empty() && !scene.image_link.empty()) {
+		candidates.push_back(scene.image_link);
+	}
+	for (const auto& candidate : candidates) {
+		if (file::downloadAsset(candidate, imagePath, cacheDir)) {
+			return imagePath;
+		}
+	}
+	return {};
 }
 
-fs::path firstAvailableImage(const SceneRuntime& scene, const fs::path& workDir, size_t index) {
-    const auto imagePath = workDir / ("scene_" + std::to_string(index) + ".jpg");
-    std::vector<std::string> candidates = scene.image_links;
-    if (candidates.empty() && !scene.image_link.empty()) {
-        candidates.push_back(scene.image_link);
-    }
-    for (const auto& candidate : candidates) {
-        if (file::downloadAsset(candidate, imagePath)) {
-            return imagePath;
-        }
-    }
-    return {};
-}
-
-fs::path firstAvailableClip(const std::vector<std::string>& candidates, const fs::path& workDir, size_t index) {
-    const auto clipPath = workDir / ("clip_" + std::to_string(index) + ".mp4");
-    for (const auto& candidate : candidates) {
-        if (json::trim(candidate).empty()) {
-            continue;
-        }
-        if (file::isDriveFolderUrl(candidate)) {
-            continue;
-        }
-        if (file::downloadAsset(candidate, clipPath)) {
-            return clipPath;
-        }
-    }
-    return {};
+fs::path firstAvailableClip(const std::vector<std::string>& candidates, const fs::path& workDir, size_t index, const std::string& cacheDir) {
+	const auto clipPath = workDir / ("clip_" + std::to_string(index) + ".mp4");
+	for (const auto& candidate : candidates) {
+		if (json::trim(candidate).empty()) {
+			continue;
+		}
+		if (file::isDriveFolderUrl(candidate)) {
+			continue;
+		}
+		if (file::downloadAsset(candidate, clipPath, cacheDir)) {
+			return clipPath;
+		}
+	}
+	return {};
 }
 
 } // namespace velox

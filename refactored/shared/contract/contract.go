@@ -4,12 +4,12 @@
 //
 // Mapping Go ↔ C++:
 //
-//   Go (shared/contract)        C++ (video_contract.hpp)
-//   ─────────────────────        ─────────────────────────
-//   SceneRequest                 video::SceneAsset (alias velox::SceneRuntime)
-//   ClipRequest                  video::ClipAsset  (alias velox::ClipRuntime)
-//   VideoEngineRequest           video::SceneVideoRequest
-//   (nessun equivalente)         video::SceneVideoResult
+//	Go (shared/contract)        C++ (video_contract.hpp)
+//	─────────────────────        ─────────────────────────
+//	SceneRequest                 video::SceneAsset (alias velox::SceneRuntime)
+//	ClipRequest                  video::ClipAsset  (alias velox::ClipRuntime)
+//	VideoEngineRequest           video::SceneVideoRequest
+//	(nessun equivalente)         video::SceneVideoResult
 package contract
 
 import (
@@ -43,6 +43,7 @@ type ClipRequest struct {
 // intro_clip_paths, stock_clip_paths, clip_segments (C++: clip_segments_json string),
 // scenes_json, scene_image_paths, output_path, drive_output_folder, audio_language_for_srt
 type VideoEngineRequest struct {
+	ContractVersion     int            `json:"contract_version,omitempty"`
 	JobID               string         `json:"job_id"`
 	VideoName           string         `json:"video_name"`
 	ScriptText          string         `json:"script_text"`
@@ -57,15 +58,15 @@ type VideoEngineRequest struct {
 	OutputPath          string         `json:"output_path"`
 	DriveOutputFolder   string         `json:"drive_output_folder,omitempty"`
 	AudioLanguageForSRT string         `json:"audio_language_for_srt,omitempty"`
+	AssetCacheDir       string         `json:"asset_cache_dir,omitempty"`
 }
 
 // RenderJobParams raggruppa tutti i parametri necessari per l'elaborazione di un job video.
 // Viene popolato da ExtractRenderJobParams a partire da una mappa di parametri
 // (tipicamente da JSON job).
-//
-// Nota: è l'unione di parametri per pipeline render + video + SRT.
-// I campi sovrapposti con VideoEngineRequest vengono riconciliati in
-// native_engine.go prima di inviare la richiesta al C++ engine.
+//	// Nota: è l'unione di parametri per pipeline render + video + SRT.
+	// I campi sovrapposti con VideoEngineRequest vengono riconciliati in
+	// native_engine.go prima di inviare la richiesta al C++ engine.
 type RenderJobParams struct {
 	AudioPath                         string
 	OutputPath                        string
@@ -89,6 +90,7 @@ type RenderJobParams struct {
 	ClipSegments                      []interface{}
 	SceneImagePaths                   []string
 	DriveOutputFolder                 string
+	AssetCacheDir                     string
 }
 
 // ExtractRenderJobParams estrae i parametri di un job da una mappa generica
@@ -126,9 +128,9 @@ func ExtractRenderJobParams(params map[string]interface{}) RenderJobParams {
 		VideoMode:                         payload.StringParam(params, "video_mode", ""),
 		IntroClipPaths:                    introClipPaths,
 		StockClipPaths:                    stockClipPaths,
-		ClipSegments:                      payload.SliceParam(params, "clip_segments"),
-		SceneImagePaths:                   payload.ToSliceString(params["scene_image_paths"]),
-		DriveOutputFolder:                 payload.StringParam(params, "drive_output_folder", payload.StringParam(params, "output_directory", "")),
+		ClipSegments:                      payload.SliceParam(params, "clip_segments"),		SceneImagePaths:     payload.ToSliceString(params["scene_image_paths"]),
+		DriveOutputFolder:   payload.StringParam(params, "drive_output_folder", payload.StringParam(params, "output_directory", "")),
+		AssetCacheDir:       payload.StringParam(params, "asset_cache_dir", ""),
 	}
 }
 

@@ -206,6 +206,20 @@ func (w *Worker) runJobTask(ctx context.Context, job *api.Job) (map[string]inter
 // executeWorkflowJob is a shared implementation for render/video/audio jobs.
 func (w *Worker) executeWorkflowJob(ctx context.Context, job *api.Job, jobLabel string, defaultExt string) (map[string]interface{}, error) {
 	p := extractRenderJobParams(job.Parameters)
+	// Inject asset cache dir from worker config if not set in job params
+	assetCacheDir := strings.TrimSpace(p.AssetCacheDir)
+	if assetCacheDir == "" {
+		assetCacheDir = strings.TrimSpace(w.config.AssetCacheDir)
+	}
+	p.AssetCacheDir = assetCacheDir
+	if assetCacheDir != "" {
+		if err := os.MkdirAll(assetCacheDir, 0755); err == nil {
+			w.logger.Info("[CACHE] Asset cache enabled: %s", assetCacheDir)
+		} else {
+			w.logger.Warn("[CACHE] Cannot create asset cache dir %s: %v, caching disabled", assetCacheDir, err)
+			p.AssetCacheDir = ""
+		}
+	}
 
 	wfLogger := logger.New(logger.DebugLevel, os.Stdout)
 	wfLogger.SetPrefix("[WORKFLOW]")

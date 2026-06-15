@@ -46,6 +46,12 @@ func GetJobPayload(ctx context.Context, jobID string, dbStore *store.SQLiteStore
 	payload["status"] = string(job.Status)
 	payload["video_name"] = job.VideoName
 	payload["project_id"] = job.ProjectID
+	if job.LeaseID != "" {
+		payload["lease_id"] = job.LeaseID
+	}
+	if job.LeaseExpiry != nil {
+		payload["lease_expiry"] = job.LeaseExpiry
+	}
 	return payload, nil
 }
 
@@ -132,13 +138,19 @@ func GetJobAsMap(ctx context.Context, jobID string, dbStore *store.SQLiteStore, 
 	result["assigned_to"] = job.AssignedTo
 	result["claimed_by"] = job.ClaimedBy
 	result["claimed_at"] = job.ClaimedAt
+	result["lease_id"] = job.LeaseID
+	result["lease_expiry"] = job.LeaseExpiry
 	result["worker_name"] = job.WorkerName
 	result["retry_count"] = job.RetryCount
+	result["attempt"] = job.Attempt
 	result["max_retries"] = job.MaxRetries
 	result["last_error"] = job.LastError
 	result["error_message"] = job.ErrorMessage
 	result["video_uploaded"] = job.VideoUploaded
 	result["master_video_path"] = job.MasterVideoPath
+	result["artifact_id"] = job.ArtifactID
+	result["output_sha256"] = job.OutputSHA256
+	result["upload_idempotency_key"] = job.IdempotencyKey
 	result["output_video_id"] = job.OutputVideoID
 	result["run_id"] = job.RunID
 	result["job_run_id"] = job.RunID

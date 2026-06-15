@@ -44,7 +44,11 @@ func UpdateJobFields(ctx context.Context, jobID string, fields map[string]interf
 		switch key {
 		case "status":
 			if s, ok := value.(string); ok {
-				job.Status = JobStatus(s)
+				next := normalizeJobStatus(s)
+				if !isValidJobStatusTransition(job.Status, next) {
+					continue
+				}
+				job.Status = next
 			}
 		case "completed_at":
 			job.CompletedAt = value
@@ -78,6 +82,35 @@ func UpdateJobFields(ctx context.Context, jobID string, fields map[string]interf
 		case "assigned_to":
 			if s, ok := value.(string); ok {
 				job.AssignedTo = s
+			}
+		case "attempt":
+			switch v := value.(type) {
+			case int:
+				job.Attempt = v
+			case int64:
+				job.Attempt = int(v)
+			case float64:
+				job.Attempt = int(v)
+			case string:
+				job.Attempt = asInt(v)
+			}
+		case "lease_id":
+			if s, ok := value.(string); ok {
+				job.LeaseID = s
+			}
+		case "lease_expiry":
+			job.LeaseExpiry = value
+		case "artifact_id":
+			if s, ok := value.(string); ok {
+				job.ArtifactID = s
+			}
+		case "output_sha256":
+			if s, ok := value.(string); ok {
+				job.OutputSHA256 = s
+			}
+		case "upload_idempotency_key":
+			if s, ok := value.(string); ok {
+				job.IdempotencyKey = s
 			}
 		case "result_path":
 			if s, ok := value.(string); ok {
@@ -137,6 +170,30 @@ func UpdateJobFields(ctx context.Context, jobID string, fields map[string]interf
 	}
 
 	return nil
+}
+
+// asInt converte un valore any in int, fallback a 0.
+func asInt(v any) int {
+	switch val := v.(type) {
+	case int:
+		return val
+	case int64:
+		return int(val)
+	case float64:
+		return int(val)
+	case string:
+		n := 0
+		for _, c := range val {
+			if c >= '0' && c <= '9' {
+				n = n*10 + int(c-'0')
+			} else {
+				break
+			}
+		}
+		return n
+	default:
+		return 0
+	}
 }
 
 // UpdateJobLogs appends logs to a job

@@ -28,8 +28,8 @@ func TestDiscoverMigrations_AllVersions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("discoverMigrations failed: %v", err)
 	}
-	if len(migs) != 9 {
-		t.Fatalf("expected 9 migrations, got %d", len(migs))
+	if len(migs) != 10 {
+		t.Fatalf("expected 10 migrations, got %d", len(migs))
 	}
 	expected := []struct {
 		Version int
@@ -38,6 +38,7 @@ func TestDiscoverMigrations_AllVersions(t *testing.T) {
 		{1, "initial"}, {2, "legacy_imports"}, {3, "youtube_canonical"},
 		{4, "ansible"}, {5, "legacy_cleanup"}, {6, "drive_links_source_of_truth"},
 		{7, "queue_persistence"}, {8, "drop_legacy_tables"}, {9, "drop_legacy_tables"},
+		{10, "job_attempts_and_artifacts"},
 	}
 	for i, exp := range expected {
 		if migs[i].Version != exp.Version || migs[i].Name != exp.Name {

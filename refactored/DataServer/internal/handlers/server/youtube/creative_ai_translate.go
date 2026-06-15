@@ -96,10 +96,6 @@ func (h *YouTubeHandlers) TranslateText(c *gin.Context) {
 	})
 }
 
-func (h *YouTubeHandlers) sanitizeCreativeTextInput(text string) string {
-	return sanitizeCreativeText(text, false)
-}
-
 // =============================================================================
 // NVIDIA chat translation (best-effort with fallback)
 // =============================================================================

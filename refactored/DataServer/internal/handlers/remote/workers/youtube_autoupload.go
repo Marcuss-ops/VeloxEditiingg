@@ -146,6 +146,35 @@ func maybeAutoUploadYouTube(fileQ *queue.FileQueue, youtubeService *ytservice.Se
 			return
 		}
 
+		health, healthErr := youtubeService.HealthCheck(uploadCtx, channel.ID)
+		if healthErr != nil {
+			health = map[string]interface{}{
+				"ok":    false,
+				"error": healthErr.Error(),
+			}
+		}
+		if ok, _ := health["ok"].(bool); !ok {
+			errMsg, _ := health["error"].(string)
+			if errMsg == "" {
+				errMsg = "YouTube channel authentication is not ready"
+			}
+			_ = fileQ.UpdateJobFields(uploadCtx, jobID, map[string]interface{}{
+				"youtube_upload_status": "needs_reauth",
+				"last_youtube_upload_result": map[string]interface{}{
+					"success":      false,
+					"error":        errMsg,
+					"group":        groupName,
+					"language":     language,
+					"channel_id":   channel.ID,
+					"channel_name": channel.Name,
+					"job_run_id":   jobRunID,
+					"uploaded_at":  time.Now().UTC().Format(time.RFC3339),
+				},
+			})
+			log.Printf("[UPLOAD] YouTube auto-upload deferred for %s: %s", jobID, errMsg)
+			return
+		}
+
 		result, uploadErr := youtubeService.UploadVideo(uploadCtx, channel.ID, videoPath, ytservice.UploadConfig{
 			Title:         title,
 			Description:   description,

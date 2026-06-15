@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 func (s *SQLiteStore) ClaimNextPendingJob(workerID string, allowedJobTypes []string, now time.Time) ([]byte, bool, error) {
@@ -59,6 +61,8 @@ func (s *SQLiteStore) ClaimNextPendingJob(workerID string, allowedJobTypes []str
 		}
 
 		retryCount := asInt(payload["retry_count"]) + 1
+		leaseID := uuid.NewString()
+		leaseExpiry := now.UTC().Add(30 * time.Minute).Format(time.RFC3339)
 		history := make([]map[string]any, 0)
 		switch entries := payload["history"].(type) {
 		case []any:
@@ -80,9 +84,13 @@ func (s *SQLiteStore) ClaimNextPendingJob(workerID string, allowedJobTypes []str
 		payload["assigned_at"] = nowISO
 		payload["claimed_by"] = workerID
 		payload["claimed_at"] = nowISO
+		payload["lease_id"] = leaseID
+		payload["lease_expiry"] = leaseExpiry
+		payload["lease_expires_at"] = leaseExpiry
+		payload["attempt"] = retryCount
+		payload["contract_version"] = 2
 		payload["updated_at"] = nowUnix
 		payload["retry_count"] = retryCount
-		payload["lease_expiry"] = now.UTC().Add(30 * time.Minute).Format(time.RFC3339)
 		payload["history"] = history
 
 		updatedRaw, err := json.Marshal(payload)
@@ -114,6 +122,13 @@ func (s *SQLiteStore) ClaimNextPendingJob(workerID string, allowedJobTypes []str
 		}
 		if err := tx.Commit(); err != nil {
 			return nil, false, err
+		}
+		// Record job_attempt and log event outside transaction (own row each)
+		insertedID, attemptErr := s.InsertJobAttempt(jobID, retryCount, workerID, leaseID)
+		if attemptErr == nil && insertedID > 0 {
+		_ = s.LogJobEvent(jobID, "job_claimed", map[string]interface{}{
+			"worker_id": workerID, "lease_id": leaseID, "attempt": retryCount,
+		})
 		}
 		return bytes.Clone(updatedRaw), true, nil
 	}

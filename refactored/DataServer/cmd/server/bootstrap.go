@@ -44,6 +44,7 @@ type serverDeps struct {
 	workerLifecycle     *workersapi.WorkerLifecycle
 	ansibleModule       *ansible.Module
 	youtubeModule       *youtube.Module
+	orchestrator        *queue.Orchestrator
 }
 
 func configureTrustedProxies(r *gin.Engine) {
@@ -114,6 +115,12 @@ func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
 	workerUpdateHandler := workersapi.NewWorkerUpdateHandler(cfg, reg, cmdMgr, updateMgr, tokenMgr, cfg.DataDir)
 	workerLifecycle := workersapi.NewWorkerLifecycle(cfg, reg, cfg.DataDir)
 
+	// Create orchestrator for multi-step job pipelines
+	orch, err := queue.NewOrchestrator(nil, fileQ, sqliteStore)
+	if err != nil {
+		return nil, fmt.Errorf("orchestrator init: %w", err)
+	}
+
 	return &serverDeps{
 		paths:               &serverPaths{dataDir: cfg.DataDir},
 		fileQ:               fileQ,
@@ -122,6 +129,7 @@ func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
 		sqliteStore:         sqliteStore,
 		workerUpdateHandler: workerUpdateHandler,
 		workerLifecycle:     workerLifecycle,
+		orchestrator:        orch,
 	}, nil
 }
 
@@ -175,6 +183,12 @@ func runServer(cfg *config.Config) error {
 				log.Printf("[BOOTSTRAP] Manifest auto-generation skipped: %v", err)
 			}
 		}()
+	}
+
+	// Start orchestrator for multi-step job pipelines
+	if deps.orchestrator != nil {
+		go deps.orchestrator.Start(context.Background())
+		log.Printf("[BOOTSTRAP] Orchestrator started — polling multi-step jobs")
 	}
 
 	// Zombie job reaper: requeue jobs with expired leases or stuck too long

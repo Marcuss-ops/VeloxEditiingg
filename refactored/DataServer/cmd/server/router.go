@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"strings"
 
@@ -8,6 +9,7 @@ import (
 	"velox-server/internal/app"
 	"velox-server/internal/config"
 	remoteansible "velox-server/internal/handlers/remote/ansible"
+	"velox-server/internal/handlers/remote/workers"
 	"velox-server/internal/handlers/server/analytics"
 	"velox-server/internal/handlers/server/api"
 	"velox-server/internal/handlers/server/groups"
@@ -16,6 +18,7 @@ import (
 	scripthandlers "velox-server/internal/handlers/server/script"
 	ytservice "velox-server/internal/integrations/youtube"
 	jobservice "velox-server/internal/services/jobs"
+	"velox-server/internal/queue"
 	"velox-server/internal/store"
 	workersreg "velox-server/internal/workers"
 )
@@ -106,11 +109,27 @@ func registerAPIV1Routes(r *gin.Engine, cfg *config.Config, deps *serverDeps, an
 		youtubeService = deps.youtubeModule.Service()
 	}
 	api.RegisterV1Routes(r, cfg, deps.fileQ, deps.reg, jobAPI, jobSubmitHandler, deps.workersRepo, deps.sqliteStore, deps.workerUpdateHandler, youtubeService, ansibleHandlers)
+
+	// V2 job routes: /api/v1/jobs/{id}/lease|complete|fail|progress|attempts|artifacts|events
+	v2JobsGroup := r.Group("/api/v1")
+	jobhandlers.RegisterV2JobRoutes(v2JobsGroup, cfg, deps.fileQ, deps.sqliteStore, jobSvc)
+
+	// Orchestrator multi-step pipeline routes (admin-protected, same as v1Admin)
+	orchAdmin := r.Group("/api/v1")
+	orchAdmin.Use(api.AdminAuthMiddleware(cfg))
+	registerOrchestratorRoutes(orchAdmin, deps)
+
 	r.POST("/api/jobs/get", jobAPI.GetJobCompatHandler())
 	r.POST("/api/jobs/result", jobAPI.SubmitResultCompatHandler())
 	r.GET("/api/jobs/get", jobAPI.GetJobCompatHandler())
+	r.POST("/api/jobs/lease", jobAPI.RenewLeaseHandler())
 	r.POST("/api/jobs/complete", jobAPI.CompleteJobHandler())
 	r.POST("/api/jobs/fail", jobAPI.FailJobHandler())
+
+	// Chunked upload routes (resumable worker→master video upload)
+	r.POST("/api/v1/video/chunked/init", workers.InitChunkedUpload())
+	r.POST("/api/v1/video/chunked/:job_id/:chunk_index", workers.UploadChunk(cfg))
+	r.POST("/api/v1/video/chunked/:job_id/complete", workers.CompleteChunkedUpload(cfg, deps.fileQ))
 
 	// Bundle compat routes (frontend calls /api/bundle/* without /v1/)
 	if deps.workerUpdateHandler != nil {
@@ -132,6 +151,90 @@ func registerScriptRoutes(r *gin.Engine, cfg *config.Config, deps *serverDeps) {
 	v1Group := r.Group("/api/v1/script")
 	v1Group.Use(api.AdminAuthMiddleware(cfg))
 	scripthandlers.RegisterRoutes(v1Group, cfg, deps.fileQ, deps.sqliteStore)
+}
+
+func registerOrchestratorRoutes(v1Admin gin.IRoutes, deps *serverDeps) {
+	if deps.orchestrator == nil {
+		return
+	}
+	orch := deps.orchestrator
+
+	v1Admin.POST("/orchestrator/jobs", func(c *gin.Context) {
+		var req struct {
+			JobID        string                   `json:"job_id"`
+			PipelineType string                   `json:"pipeline_type"`
+			Steps        []map[string]interface{} `json:"steps"`
+			Metadata     map[string]interface{}   `json:"metadata,omitempty"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(400, gin.H{"error": "invalid JSON: " + err.Error()})
+			return
+		}
+		if req.JobID == "" || len(req.Steps) == 0 {
+			c.JSON(400, gin.H{"error": "job_id and steps required"})
+			return
+		}
+
+		steps := make([]*queue.JobStep, len(req.Steps))
+		for i, s := range req.Steps {
+			stepID, _ := s["step_id"].(string)
+			if stepID == "" {
+				stepID = fmt.Sprintf("step-%d", i)
+			}
+			stepName, _ := s["step_name"].(string)
+			if stepName == "" {
+				stepName = stepID
+			}
+			jobType, _ := s["job_type"].(string)
+			payload, _ := s["payload"].(map[string]interface{})
+			depsRaw, _ := s["dependencies"].([]interface{})
+			var deps []string
+			for _, d := range depsRaw {
+				if ds, ok := d.(string); ok {
+					deps = append(deps, ds)
+				}
+			}
+			maxRetries := 2
+			if mr, ok := s["max_retries"].(float64); ok {
+				maxRetries = int(mr)
+			}
+
+			steps[i] = &queue.JobStep{
+				StepID:       stepID,
+				StepName:     stepName,
+				StepOrder:    i,
+				JobType:      jobType,
+				Payload:      payload,
+				Dependencies: deps,
+				MaxRetries:   maxRetries,
+			}
+		}
+
+		if err := orch.SubmitMultiStepJob(c.Request.Context(), req.JobID, steps, req.PipelineType, req.Metadata); err != nil {
+			c.JSON(409, gin.H{"error": err.Error()})
+			return
+		}
+
+		c.JSON(201, gin.H{"job_id": req.JobID, "total_steps": len(steps), "status": "PENDING"})
+	})
+
+	v1Admin.GET("/orchestrator/jobs/:id", func(c *gin.Context) {
+		job := orch.GetJob(c.Param("id"))
+		if job == nil {
+			c.JSON(404, gin.H{"error": "orchestrator job not found"})
+			return
+		}
+		c.JSON(200, job)
+	})
+
+	v1Admin.GET("/orchestrator/jobs", func(c *gin.Context) {
+		jobs := orch.ListJobs()
+		c.JSON(200, gin.H{"jobs": jobs, "total": len(jobs)})
+	})
+
+	v1Admin.GET("/orchestrator/stats", func(c *gin.Context) {
+		c.JSON(200, orch.Stats())
+	})
 }
 
 func registerPipelineRoutes(r *gin.Engine, cfg *config.Config, deps *serverDeps) {

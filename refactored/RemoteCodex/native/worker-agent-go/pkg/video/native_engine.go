@@ -45,6 +45,7 @@ func (w *VideoGenerationWorkflow) runNativeCxxEngine(
 		IntroClipPaths:      paths.SanitizeStrings(input.IntroClipPaths),
 		StockClipPaths:      paths.SanitizeStrings(input.StockClipPaths),
 		DriveOutputFolder:   strings.TrimSpace(input.DriveOutputFolder),
+		AssetCacheDir:       strings.TrimSpace(input.AssetCacheDir),
 	}
 	if strings.TrimSpace(input.AudioPath) != "" {
 		request.VoiceoverPaths = []string{strings.TrimSpace(input.AudioPath)}

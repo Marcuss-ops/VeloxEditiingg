@@ -30,19 +30,6 @@ func NewJobAPI(cfg *config.Config, fileQ *queue.FileQueue, tokenMgr *workers.Tok
 	}
 }
 
-func (api *JobAPI) authorizeWorkerRequest(c *gin.Context, workerID string) bool {
-	token := workers.ExtractBearerToken(
-		c.GetHeader("Authorization"),
-		c.GetHeader("X-Admin-Token"),
-		c.Query("token"),
-	)
-	if !workers.AuthorizeWorkerToken(api.tokenMgr, token, workerID, c.ClientIP()) {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid worker token"})
-		return false
-	}
-	return true
-}
-
 // GetJobHandler handles GET /api/v1/queue/job (worker polls for jobs)
 func (api *JobAPI) GetJobHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -153,12 +140,17 @@ func (api *JobAPI) GetJobCompatHandler() gin.HandlerFunc {
 			"success": true,
 			"message": "job available",
 			"data": gin.H{
-				"job_id":       result.JobID,
-				"job_type":     jobType,
-				"priority":     0,
-				"parameters":   payload,
-				"created_at":   createdAt,
-				"timeout_secs": timeoutSecs,
+				"job_id":           result.JobID,
+				"job_type":         jobType,
+				"priority":         0,
+				"parameters":       payload,
+				"created_at":       createdAt,
+				"timeout_secs":     timeoutSecs,
+				"lease_id":         result.LeaseID,
+				"lease_expiry":     result.LeaseExpiresAt,
+				"lease_expires_at": result.LeaseExpiresAt,
+				"attempt":          result.Attempt,
+				"contract_version": result.ContractVersion,
 			},
 		})
 	}
@@ -168,13 +160,19 @@ func (api *JobAPI) GetJobCompatHandler() gin.HandlerFunc {
 func (api *JobAPI) SubmitResultCompatHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var body struct {
-			JobID     string                 `json:"job_id"`
-			WorkerID  string                 `json:"worker_id"`
-			Status    string                 `json:"status"`
-			Error     string                 `json:"error"`
-			Output    map[string]interface{} `json:"output"`
-			StartTime string                 `json:"start_time"`
-			EndTime   string                 `json:"end_time"`
+			JobID           string                 `json:"job_id"`
+			WorkerID        string                 `json:"worker_id"`
+			Status          string                 `json:"status"`
+			Error           string                 `json:"error"`
+			Output          map[string]interface{} `json:"output"`
+			StartTime       string                 `json:"start_time"`
+			EndTime         string                 `json:"end_time"`
+			LeaseID         string                 `json:"lease_id"`
+			Attempt         int                    `json:"attempt"`
+			ContractVersion int                    `json:"contract_version"`
+			ArtifactID      string                 `json:"artifact_id"`
+			OutputSHA256    string                 `json:"output_sha256"`
+			IdempotencyKey  string                 `json:"idempotency_key"`
 		}
 		if err := c.ShouldBindJSON(&body); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
@@ -185,12 +183,15 @@ func (api *JobAPI) SubmitResultCompatHandler() gin.HandlerFunc {
 			return
 		}
 		triggerFallback, err := api.service.SubmitResult(c.Request.Context(), jobservice.SubmitResultRequest{
-			JobID:    body.JobID,
-			WorkerID: body.WorkerID,
-			Status:   body.Status,
-			Error:    body.Error,
-			Output:   body.Output,
-			EndTime:  body.EndTime,
+			JobID:           body.JobID,
+			WorkerID:        body.WorkerID,
+			Status:          body.Status,
+			Error:           body.Error,
+			Output:          body.Output,
+			EndTime:         body.EndTime,
+			LeaseID:         body.LeaseID,
+			Attempt:         body.Attempt,
+			ContractVersion: body.ContractVersion,
 		})
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
@@ -230,11 +231,70 @@ func (api *JobAPI) CompleteJobHandler() gin.HandlerFunc {
 		}
 
 		workerID, _ := body["worker_id"].(string)
+		leaseID, _ := body["lease_id"].(string)
+		if err := api.service.ValidateJobLease(c.Request.Context(), jobID, workerID, leaseID); err != nil {
+			c.JSON(http.StatusConflict, gin.H{"ok": false, "error": err.Error()})
+			return
+		}
 		if err := api.service.CompleteJob(c.Request.Context(), jobID, workerID); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": err.Error()})
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"ok": true})
+	}
+}
+
+// RenewLeaseHandler handles POST /jobs/:id/lease
+func (api *JobAPI) RenewLeaseHandler() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var body struct {
+			JobID           string `json:"job_id"`
+			WorkerID        string `json:"worker_id"`
+			LeaseID         string `json:"lease_id"`
+			LeaseExpiresAt  string `json:"lease_expires_at"`
+			Attempt         int    `json:"attempt"`
+			ContractVersion int    `json:"contract_version"`
+		}
+		if err := c.ShouldBindJSON(&body); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": err.Error()})
+			return
+		}
+		if body.JobID == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "missing job_id"})
+			return
+		}
+		if body.ContractVersion != 0 && body.ContractVersion != 2 {
+			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "unsupported contract_version"})
+			return
+		}
+		if api.fileQ == nil {
+			c.JSON(http.StatusNotFound, gin.H{"ok": false, "error": "job not found"})
+			return
+		}
+		leaseExpiry := time.Now().UTC().Add(30 * time.Minute).Format(time.RFC3339)
+		if strings.TrimSpace(body.LeaseExpiresAt) != "" {
+			leaseExpiry = strings.TrimSpace(body.LeaseExpiresAt)
+		}
+		job, err := api.fileQ.GetJobAsMap(c.Request.Context(), body.JobID)
+		if err != nil || job == nil {
+			c.JSON(http.StatusNotFound, gin.H{"ok": false, "error": "job not found"})
+			return
+		}
+		currentLease := asJobString(job["lease_id"])
+		if currentLease != "" && body.LeaseID != "" && !strings.EqualFold(strings.TrimSpace(currentLease), strings.TrimSpace(body.LeaseID)) {
+			c.JSON(http.StatusConflict, gin.H{"ok": false, "error": "lease mismatch"})
+			return
+		}
+		if err := api.fileQ.RenewJobLease(c.Request.Context(), body.JobID, body.WorkerID, body.LeaseID, parseLeaseExpiry(leaseExpiry)); err != nil {
+			c.JSON(http.StatusConflict, gin.H{"ok": false, "error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"ok":               true,
+			"job_id":           body.JobID,
+			"lease_id":         body.LeaseID,
+			"lease_expires_at": leaseExpiry,
+		})
 	}
 }
 
@@ -244,6 +304,7 @@ func (api *JobAPI) FailJobHandler() gin.HandlerFunc {
 		var body struct {
 			JobID    string `json:"job_id"`
 			WorkerID string `json:"worker_id"`
+			LeaseID  string `json:"lease_id"`
 			Error    string `json:"error"`
 		}
 		if err := c.ShouldBindJSON(&body); err != nil {
@@ -252,6 +313,10 @@ func (api *JobAPI) FailJobHandler() gin.HandlerFunc {
 		}
 		if body.JobID == "" {
 			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "missing job_id"})
+			return
+		}
+		if err := api.service.ValidateJobLease(c.Request.Context(), body.JobID, body.WorkerID, body.LeaseID); err != nil {
+			c.JSON(http.StatusConflict, gin.H{"ok": false, "error": err.Error()})
 			return
 		}
 		if err := api.service.FailJob(c.Request.Context(), body.JobID, body.WorkerID, body.Error); err != nil {
@@ -323,6 +388,17 @@ func asJobString(v interface{}) string {
 		return s
 	}
 	return ""
+}
+
+func parseLeaseExpiry(raw string) time.Time {
+	expiry := time.Now().UTC().Add(30 * time.Minute)
+	if strings.TrimSpace(raw) == "" {
+		return expiry
+	}
+	if parsed, err := time.Parse(time.RFC3339, strings.TrimSpace(raw)); err == nil {
+		return parsed
+	}
+	return expiry
 }
 
 // DeleteJobHandler handles DELETE /jobs/:id

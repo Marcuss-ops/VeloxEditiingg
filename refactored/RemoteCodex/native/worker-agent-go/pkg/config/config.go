@@ -31,6 +31,10 @@ type WorkerConfig struct {
 	PrometheusPort          int `json:"prometheus_port"`            // Prometheus metrics port (default: 9090, 0=disabled)
 	HealthPort              int `json:"health_port"`                // Health HTTP port (default: 8081, 0=disabled)
 
+	// Asset cache: shared directory for caching downloaded scene images, clips, and audio.
+	// Default: "" (disabled — each job downloads its own assets)
+	AssetCacheDir string `json:"asset_cache_dir,omitempty"`
+
 	// Circuit breaker configuration
 	CircuitBreakerFailureThreshold int `json:"circuit_breaker_failure_threshold,omitempty"` // Failures to open circuit (default: 5)
 	CircuitBreakerSuccessThreshold int `json:"circuit_breaker_success_threshold,omitempty"` // Successes to close circuit (default: 3)

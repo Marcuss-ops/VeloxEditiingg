@@ -234,13 +234,3 @@ func formatSize(bytes int64) string {
 		return fmt.Sprintf("%d B", bytes)
 	}
 }
-
-func getStatus(primaryExists, legacyExists bool) string {
-	if !primaryExists {
-		return "missing_primary"
-	}
-	if legacyExists {
-		return "has_legacy"
-	}
-	return "healthy"
-}

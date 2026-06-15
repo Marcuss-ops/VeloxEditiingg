@@ -11,7 +11,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"golang.org/x/oauth2"
@@ -106,7 +105,6 @@ type AuthManager struct {
 	service     *Service
 	oauthConfig *oauth2.Config
 	tokenCache  map[string]*oauth2.Token
-	mu          sync.RWMutex
 }
 
 // NewAuthManager creates a new AuthManager

@@ -34,11 +34,6 @@ func (h *Handler) getTempPath(filename string) string {
 	return filepath.Join(h.cfg.TempDir, filename)
 }
 
-// getProjectsPath returns the full path for a project directory
-func (h *Handler) getProjectsPath(projectID string) string {
-	return filepath.Join(h.cfg.ProjectsDir, projectID)
-}
-
 // ============================================================================
 // MULTIPART BUILDER
 // ============================================================================

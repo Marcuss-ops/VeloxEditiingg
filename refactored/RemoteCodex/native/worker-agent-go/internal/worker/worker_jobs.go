@@ -75,6 +75,11 @@ func (w *Worker) pollJob(ctx context.Context) (*api.Job, error) {
 
 	if job != nil {
 		w.logger.Info("Received job: %s (type: %s, priority: %d)", job.JobID, job.JobType, job.Priority)
+		if job.ContractVersion != 0 && job.ContractVersion != api.ContractVersionV2 {
+			w.logger.Error("[RENDERPLAN] Job contract version mismatch: got=%d want=%d", job.ContractVersion, api.ContractVersionV2)
+			telemetry.GetPrometheusMetrics().RecordIdempotencyConflict("contract_version")
+			return nil, fmt.Errorf("unsupported contract version: %d", job.ContractVersion)
+		}
 
 		rp := renderplan.FromMap(map[string]interface{}{
 			"version":    renderplan.RenderPlanVersion,
