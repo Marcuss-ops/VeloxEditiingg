@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -13,6 +14,7 @@ import (
 	"velox-server/internal/handlers/server/analytics"
 	"velox-server/internal/handlers/server/api"
 	"velox-server/internal/handlers/server/groups"
+	"velox-server/internal/handlers/server/darkeditor"
 	jobhandlers "velox-server/internal/handlers/server/jobs"
 	pipelinehandler "velox-server/internal/handlers/server/pipeline"
 	scripthandlers "velox-server/internal/handlers/server/script"
@@ -88,6 +90,17 @@ func newRouter(cfg *config.Config, deps *serverDeps, registry *app.Registry) *gi
 
 	// Analytics cache
 	analytics.InitAnalyticsCache(deps.paths.dataDir, deps.sqliteStore)
+
+	// Dark Editor API routes
+	deCfg := &darkeditor.Config{
+		TempDir:     filepath.Join(cfg.DataDir, "dark_editor", "temp"),
+		ProjectsDir: filepath.Join(cfg.DataDir, "dark_editor", "projects"),
+		LogDir:      filepath.Join(cfg.DataDir, "dark_editor", "logs"),
+		NVIDIAAPIKey: cfg.NVIDIAAPIKey,
+	}
+	deHandler := darkeditor.NewHandler(deCfg)
+	deHandler.SetDBStore(deps.sqliteStore)
+	darkeditor.RegisterAPIRoutes(r, deHandler)
 
 	return r
 }
