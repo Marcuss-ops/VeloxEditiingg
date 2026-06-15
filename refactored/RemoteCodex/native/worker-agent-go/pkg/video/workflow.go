@@ -14,9 +14,10 @@ import (
 
 // VideoGenerationWorkflow orchestrates the complete video generation process.
 type VideoGenerationWorkflow struct {
-	config    *config.WorkerConfig
-	logger    *logger.Logger
-	tempFiles []string
+	config          *config.WorkerConfig
+	logger          *logger.Logger
+	tempFiles       []string
+	progressCallback func(percent, scene, total int, stage string)
 }
 
 // VideoGenerationInput è un alias per contract.RenderJobParams.
@@ -31,6 +32,11 @@ func NewVideoGenerationWorkflow(cfg *config.WorkerConfig, log *logger.Logger) *V
 		logger:    log,
 		tempFiles: make([]string, 0),
 	}
+}
+
+// SetProgressCallback sets a callback for progress updates during video generation.
+func (w *VideoGenerationWorkflow) SetProgressCallback(fn func(percent, scene, total int, stage string)) {
+	w.progressCallback = fn
 }
 
 // Cleanup removes temporary files and resources.

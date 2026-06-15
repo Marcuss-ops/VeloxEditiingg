@@ -3,7 +3,9 @@ package worker
 
 import (
 	"context"
+	"math"
 	"os"
+	"runtime"
 	"time"
 
 	"velox-worker-agent/internal/telemetry"
@@ -20,9 +22,27 @@ const (
 	heartbeatBackoffMultiplier = 2.0              // Backoff multiplier
 )
 
+// detectMaxParallelJobs calculates the optimal concurrency based on hardware.
+// Formula: clamp(NumCPU / 2, min=1, max=8)
+func detectMaxParallelJobs() int {
+	cpuCount := runtime.NumCPU()
+	if cpuCount <= 0 {
+		cpuCount = 2
+	}
+	// Use half the CPUs, minimum 1, maximum 8
+	parallel := int(math.Max(1, math.Min(8, float64(cpuCount/2))))
+	return parallel
+}
+
 // register registers the worker with the master server.
 func (w *Worker) register(ctx context.Context) error {
 	hostname, _ := os.Hostname()
+
+	maxParallel := detectMaxParallelJobs()
+	// Override with config if explicitly set > 0
+	if w.config.MaxActiveJobs > 1 {
+		maxParallel = w.config.MaxActiveJobs
+	}
 
 	info := &api.WorkerInfo{
 		WorkerID:   w.config.WorkerID,
@@ -33,7 +53,8 @@ func (w *Worker) register(ctx context.Context) error {
 			"upload_drive":       true,
 			"ffmpeg":             true,
 			"cpp_engine":         true,
-			"max_parallel_jobs":  w.config.MaxActiveJobs,
+			"max_parallel_jobs":  maxParallel,
+			"cpu_count":          runtime.NumCPU(),
 			"supported_job_types": []string{
 				"process_video",
 				"render",
@@ -211,7 +232,8 @@ func (w *Worker) sendHeartbeat(ctx context.Context) error {
 		"upload_drive":       true,
 		"ffmpeg":             true,
 		"cpp_engine":         true,
-		"max_parallel_jobs":  w.config.MaxActiveJobs,
+		"max_parallel_jobs":  w.concurrencyLimiter.MaxActiveJobs(),
+		"cpu_count":          runtime.NumCPU(),
 		"supported_job_types": []string{
 			"process_video",
 			"render",
@@ -222,14 +244,26 @@ func (w *Worker) sendHeartbeat(ctx context.Context) error {
 	extra["jobs_completed"] = w.jobsCompleted.Load()
 	extra["jobs_failed"] = w.jobsFailed.Load()
 	if w.currentJob != nil {
-		extra["current_job"] = map[string]interface{}{
+		currentJob := map[string]interface{}{
 			"job_id":       w.currentJob.JobID,
 			"job_run_id":   w.currentJob.JobRunID,
 			"run_id":       w.currentJob.JobRunID,
 			"job_type":     w.currentJob.JobType,
 			"priority":     w.currentJob.Priority,
 			"timeout_secs": w.currentJob.TimeoutSecs,
+			"lease_id":     resolveLeaseID(w.currentJob),
+			"attempt":      resolveJobAttempt(w.currentJob),
 		}
+		// Include progress if available
+		if pct := w.progressPercent.Load(); pct > 0 {
+			currentJob["progress_percent"] = pct
+			currentJob["progress_scene"] = w.progressScene.Load()
+			currentJob["progress_total"] = w.progressTotal.Load()
+			if stage, ok := w.progressStage.Load().(string); ok && stage != "" {
+				currentJob["progress_stage"] = stage
+			}
+		}
+		extra["current_job"] = currentJob
 	}
 
 	payload := &api.HeartbeatPayload{
@@ -245,8 +279,19 @@ func (w *Worker) sendHeartbeat(ctx context.Context) error {
 		EngineVersion:   w.config.EngineVersion,
 		Extra:           extra,
 	}
-
-	return w.apiClient.SendHeartbeat(ctx, payload)
+	if err := w.apiClient.SendHeartbeat(ctx, payload); err != nil {
+		return err
+	}
+	if w.currentJob != nil {
+		leaseID := resolveLeaseID(w.currentJob)
+		if leaseID != "" {
+			leaseExpiry := time.Now().UTC().Add(30 * time.Minute).Format(time.RFC3339)
+			if err := w.apiClient.RenewJobLease(ctx, w.currentJob.JobID, w.config.WorkerID, leaseID, resolveJobAttempt(w.currentJob), leaseExpiry); err != nil {
+				w.logger.Warn("[LEASE] Failed to renew lease for job %s: %v", w.currentJob.JobID, err)
+			}
+		}
+	}
+	return nil
 }
 
 // calculateBackoff returns the next backoff interval capped at heartbeatMaxBackoff.

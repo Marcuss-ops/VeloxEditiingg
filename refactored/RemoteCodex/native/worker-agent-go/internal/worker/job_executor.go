@@ -52,11 +52,14 @@ func (w *Worker) executeJob(ctx context.Context, job *api.Job) {
 
 	startTime := time.Now()
 	result := &api.JobResult{
-		JobID:     job.JobID,
-		JobRunID:  resolveJobRunID(job),
-		WorkerID:  w.config.WorkerID,
-		StartTime: startTime.Format(time.RFC3339),
-		Output:    make(map[string]interface{}),
+		JobID:           job.JobID,
+		JobRunID:        resolveJobRunID(job),
+		WorkerID:        w.config.WorkerID,
+		StartTime:       startTime.Format(time.RFC3339),
+		Output:          make(map[string]interface{}),
+		ContractVersion: api.ContractVersionV2,
+		LeaseID:         resolveLeaseID(job),
+		Attempt:         resolveJobAttempt(job),
 	}
 
 	var output map[string]interface{}
@@ -84,6 +87,10 @@ func (w *Worker) executeJob(ctx context.Context, job *api.Job) {
 
 	w.mu.Lock()
 	w.currentJob = nil
+	w.progressPercent.Store(0)
+	w.progressScene.Store(0)
+	w.progressTotal.Store(0)
+	w.progressStage.Store("idle")
 	duration := time.Since(startTime)
 
 	if execErr != nil {
@@ -113,6 +120,7 @@ func (w *Worker) executeJob(ctx context.Context, job *api.Job) {
 	if result.Output == nil {
 		result.Output = make(map[string]interface{})
 	}
+	result.Output["contract_version"] = api.ContractVersionV2
 	result.Output["worker_id"] = w.config.WorkerID
 	result.Output["worker_name"] = w.config.WorkerName
 	result.Output["worker_status"] = string(w.Status())
@@ -124,6 +132,8 @@ func (w *Worker) executeJob(ctx context.Context, job *api.Job) {
 		result.Output["job_type"] = job.JobType
 		result.Output["job_priority"] = job.Priority
 		result.Output["job_run_id"] = resolveJobRunID(job)
+		result.Output["lease_id"] = resolveLeaseID(job)
+		result.Output["attempt"] = resolveJobAttempt(job)
 	}
 
 	submitCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -136,7 +146,7 @@ func (w *Worker) executeJob(ctx context.Context, job *api.Job) {
 		w.logger.Debug("Job result submitted: %s (status: %s)", job.JobID, result.Status)
 		telemetry.GetPrometheusMetrics().RecordJobCompleteAck(job.JobType, float64(time.Since(ackStartTime).Milliseconds()))
 		completeCtx, completeCancel := context.WithTimeout(context.Background(), 30*time.Second)
-		if err := w.apiClient.CompleteJob(completeCtx, job.JobID, w.config.WorkerID); err != nil {
+		if err := w.apiClient.CompleteJob(completeCtx, job.JobID, w.config.WorkerID, resolveLeaseID(job), resolveJobAttempt(job)); err != nil {
 			w.logger.Warn("[JOB] Complete notification failed for %s: %v", job.JobID, err)
 		} else {
 			w.logger.Info("[JOB] Complete notification sent for %s", job.JobID)
@@ -206,6 +216,13 @@ func (w *Worker) executeWorkflowJob(ctx context.Context, job *api.Job, jobLabel 
 		MasterURL:  w.config.MasterURL,
 		LogLevel:   w.config.LogLevel,
 	}, wfLogger)
+
+	workflow.SetProgressCallback(func(percent, scene, total int, stage string) {
+		w.progressPercent.Store(int32(percent))
+		w.progressScene.Store(int32(scene))
+		w.progressTotal.Store(int32(total))
+		w.progressStage.Store(stage)
+	})
 
 	outputPath := p.OutputPath
 	if outputPath == "" {
