@@ -1,9 +1,9 @@
 # JSON → SQLite Migration Inventory
 
-> Data: 2026-06-14  
+> Data: 2026-06-15  
 > Repository: VeloxEditing  
 > Branch: `main`  
-> Stato: **Tutte le fasi completate**
+> Stato: **Tutte le fasi completate — zero legacy JSON su disco**
 
 ---
 
@@ -56,14 +56,16 @@ Il migration runner è in `internal/store/migrations/migrations.go`:
 | `ansible_runs.json` | `ansible_runs` + `ansible_run_hosts` | Cronologia esecuzioni Ansible | Memorizzato con host associati in tabella separata. |
 | `youtube_api_cache.json` | `youtube_api_cache` (SQLite) | Cache risposte API YouTube | TTL gestito via timestamp. Get con fallback SQLite. |
 | `analytics_cache.json` | `analytics_cache` (SQLite) | Cache analytics canali | Solo lettura legacy in `channel_handlers.go` per backward compat. |
+| `drive_links.yaml` / `drive_links.json` | `drive_links` (SQLite) | Struttura cartelle Google Drive | Import YAML-first con fallback JSON. File-based `loadVideoYoutubeRows()` rimosso — ora `loadVideoYoutubeRowsFromDB()` via SQLite. |
 
 ### ✅ Eliminati (nessuna persistenza)
 
 | File | Cosa era | Motivo |
 |---|---|---|
-| `feed_cache.json` | Cache feed video (10h TTL) | Ora solo in-memory (`FeedCache` struct senza file). |
+| `feed_cache.json` | Cache feed video (10h TTL) | Ora solo in-memory (`FeedCache` struct senza file). Fisicamente eliminato dal data dir. |
 | `upload_history.json` | Storico upload YouTube | Non più usato dalla codebase. |
 | `analytics_realtime_cache.json` | Cache analytics realtime | Non più scritto da `DataRetentionCleanup`. |
+| `youtube_api_cache.json` (in `youtube/`) | Copia stale della cache | Eliminato — la cache canonica è in `analytics/youtube_api_cache.json` (migrata in SQLite). |
 
 ### 📁 Mantenuti come file (non runtime)
 
@@ -130,7 +132,17 @@ type WorkersRepository interface {
 
 **SSHPassword:** Migrato in file segreti `secrets/ansible/ssh_host_*` (0600) durante l'import. `secret_ref` referenzia il file. Nessuna password in chiaro nel database.
 
-### 4. Cache
+### 4. Drive Links
+
+**Prima:** `drive_links.yaml` (o `drive_links.json`) letto direttamente da disco da `loadVideoYoutubeRows()` nel package `jobs`.
+
+**Dopo:**
+- `drive_links` (SQLite) — Tabella con colonne strutturate (`id`, `parent_id`, `name`, `link`, `language`, `raw_json`, `migrated_at`)
+- `loadVideoYoutubeRowsFromDB()` — Query SQLite via `ListDriveLinks()`, nessuna lettura file
+- Il file `drive_links.yaml` è stato importato via `velox-migrate-json apply` e archiviato
+- `resolveVideoYoutubeGroupTarget()` ora accetta `*store.SQLiteStore` al posto di `dataDir string`
+
+### 5. Cache
 
 **Prima:** `youtube_api_cache.json` (file), `feed_cache.json` (file), `analytics_cache.json` (file)
 
@@ -139,7 +151,17 @@ type WorkersRepository interface {
 - `FeedCache` — Solo in-memory, nessuna persistenza su file
 - `analytics_cache` (SQLite) — Cache analytics
 
-### 5. Legacy Imports Tracking
+### 6. Dark Editor
+
+**Prima:** Progetti salvati/caricati come file JSON (`meta.json`, `canvas.json`) su disco.
+
+**Dopo:**
+- `dark_editor_projects` (SQLite) — Progetti con canvas JSON, metadati, folder assignment
+- Handler `darkeditor.Handler` con `dbStore *store.SQLiteStore` iniettato via `SetDBStore()`
+- Fallback file-based mantenuto per compatibilità (preview images restano su file)
+- Route registrate in `newRouter()` a `/dark_editor_v2/*`
+
+### 7. Legacy Imports Tracking
 
 La tabella `legacy_imports` traccia ogni operazione di import JSON→SQLite:
 
@@ -213,9 +235,9 @@ SELECT 'canonical_groups', COUNT(*) FROM youtube_groups_v2 WHERE group_type='upl
 
 Il file `internal/audit/data_layer.go` implementa un audit che:
 
-1. **Blocca la reintroduzione** di file JSON legacy: `youtube_manager.json`, `groups.json`, `channels.json`, `ChannelsSaved.json`, `workers.json`, `ansible_runs.json`, `feed_cache.json`, `upload_history.json`, ecc.
-2. **Rileva sorgenti duplicate** di dati (es. `workers.json` in root + `workers/workers.json`).
-3. **Verifica consistenza** dei path (es. `credentials` vs `Credentials`).
+1. **Blocca la reintroduzione** di file JSON legacy: `youtube_manager.json`, `groups.json`, `channels.json`, `ChannelsSaved.json`, `ansible_runs.json`, `feed_cache.json`, `upload_history.json`, `drive_links.json`, `drive_links.yaml`, `drive_links.yml`, ecc.
+2. **Verifica consistenza** dei path (es. `credentials` vs `Credentials`).
+3. **Nota:** `workers.json` non genera più warning — completamente migrato e archiviato.
 
 L'audit viene eseguito all'avvio del server e può essere usato in CI tramite `FailOnError()`:
 
@@ -266,3 +288,7 @@ Se una migration causa problemi:
 - [x] I token OAuth YouTube non sono in tabelle normali (restano su file protetto).
 - [x] SSHPassword non è in chiaro nel database (solo `secret_ref`).
 - [x] Tutte le migrazioni sono idempotenti (CREATE TABLE IF NOT EXISTS, UPSERT).
+- [x] Drive links migrati da YAML a SQLite — zero lettura file in produzione.
+- [x] Dark Editor progetti persistiti via SQLite con fallback file.
+- [x] Zero file legacy JSON/YAML su disco (verificato con `velox-migrate-json inventory`).
+- [x] `velox-migrate-json` traccia 9 sorgenti legacy (incluso `drive_links.yaml`).
