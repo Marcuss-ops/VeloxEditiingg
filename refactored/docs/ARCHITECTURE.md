@@ -400,10 +400,192 @@ I test verificano che i field name JSON corrispondano esattamente alle struct C+
 | Commands | `worker-agent-go/internal/worker/worker_commands.go` | Processamento comandi |
 | Go workflow | `worker-agent-go/pkg/video/workflow.go` | Orchestrazione Go→C++ |
 | Native engine | `worker-agent-go/pkg/video/native_engine.go` | Lancia binary C++ |
-| C++ engine | `video-engine-cpp/src/main.cpp` | Pipeline video FFmpeg |
+| C++ engine | `video-engine-cpp/src/main.cpp` | Sotto-comandi + dispatcher |
+| C++ full video | `video-engine-cpp/src/cmd_full_video.cpp` | Pipeline completa |
 | C++ contract | `video-engine-cpp/include/video_contract.hpp` | Strutture JSON↔C++ |
 | Go contract | `shared/contract/contract.go` | Strutture Go↔JSON |
-| Payload | `shared/payload/payload.go` | RenderJobParams |
 | Deploy script | `data/deploy/install-server.sh` | Install master server |
-| Systemd service | `data/deploy/velox-server.service` | Service file |
-| Env template | `data/deploy/velox-server.env` | Configurazione |
+
+---
+
+## 8. Progress Streaming (FFmpeg → Dashboard)
+
+Il worker mostra progresso reale durante il rendering, non solo "Busy".
+
+### Flusso
+
+```
+C++ engine (stderr)           Go worker                    Master
+  │                             │                            │
+  │ emitProgress(45,3,10,       │                            │
+  │   "building_scene")         │                            │
+  │ ──→ StderrPipe ───────────→ │                            │
+  │                             │  parse JSON lines          │
+  │                             │  progressPercent.Store(45) │
+  │                             │  progressScene.Store(3)    │
+  │                             │  progressTotal.Store(10)   │
+  │                             │  progressStage.Store(...)  │
+  │                             │                            │
+  │                             │  heartbeat()               │
+  │                             │ ──→ extra["current_job"] ──→│
+  │                             │     progress_percent = 45  │
+  │                             │     progress_scene = 3     │
+  │                             │     progress_total = 10    │
+  │                             │     progress_stage = ...   │
+  │                             │                            │
+  │                             │                  Dashboard:│
+  │                             │  [████░░░░░░] 45%         │
+  │                             │  scene 3/10 building_scene │
+```
+
+### C++ side
+
+`cmd_full_video.cpp` emette JSON lines su stderr ad ogni step:
+- Voiceover download → `{"progress":5,"stage":"voiceover_ready"}`
+- Ogni scena/clip → `{"progress":N,"scene":N,"total_scenes":N,"stage":"building_scene"}`
+- Concat → `{"progress":85,"stage":"concatenating"}`
+- Mux audio → `{"progress":92,"stage":"muxing_audio"}`
+- Completato → `{"progress":100,"stage":"completed"}`
+
+### Go side
+
+`native_engine.go` usa `cmd.StderrPipe()` per leggere lo stream in tempo reale.
+Ogni riga JSON viene parsata e passata al callback → `Worker.progressPercent` (atomic).
+
+### Heartbeat
+
+I campi progress vengono inclusi nel payload del heartbeat ogni 15s (busy mode):
+```json
+{
+  "current_job": {
+    "job_id": "job-xyz",
+    "progress_percent": 45,
+    "progress_scene": 3,
+    "progress_total": 10,
+    "progress_stage": "building_scene"
+  }
+}
+```
+
+---
+
+## 9. Dynamic Concurrency
+
+Il worker adatta la concorrenza all'hardware della macchina.
+
+### Calcolo
+
+```
+runtime.NumCPU() → 32
+detectMaxParallelJobs() → clamp(32/2, min=1, max=8) = 8
+```
+
+| Hardware | NumCPU | Max Parallel Jobs |
+|----------|--------|-------------------|
+| VPS piccola | 2 | 1 |
+| VPS media | 4 | 2 |
+| Server dedicato | 8 | 4 |
+| GPU server | 32 | 8 |
+
+### Registrazione
+
+Il worker informa il master durante `POST /api/workers/register`:
+```json
+{
+  "capabilities": {
+    "max_parallel_jobs": 8,
+    "cpu_count": 32
+  }
+}
+```
+
+### ConcurrencyLimiter
+
+Il `ConcurrencyLimiter` (semaphore-based) gestisce l'acquisizione slot.
+Job ad alta priorità (priority ≥ 3) non vengono mai rifiutati.
+Job in coda vengono processati quando uno slot si libera.
+
+---
+
+## 10. Struttura File (Post-Reorganization)
+
+### DataServer (Go)
+
+```
+internal/
+├── store/                    # 15 src + 3 test (era 28)
+│   ├── sqlite.go             # Core SQLiteStore
+│   ├── store_darkeditor.go   # DarkEditor: projects, folders, assets, templates
+│   ├── store_jobs.go         # Jobs: CRUD, claim, queries, history, logs
+│   ├── store_workers.go      # Workers: CRUD, validations, repository
+│   ├── sqlite_youtube.go     # YouTube metrics
+│   ├── sqlite_youtube_entities.go  # YouTube channels, groups, cache
+│   ├── sqlite_ansible.go     # Ansible hosts, runs
+│   ├── sqlite_calendar.go    # Calendar events
+│   ├── sqlite_analytics.go   # Analytics cache, stats
+│   ├── sqlite_drive_links.go # Google Drive links
+│   ├── sqlite_livestream.go  # Livestream CRUD
+│   ├── sqlite_queue.go       # Orchestrator queue, DLQ
+│   ├── types.go              # Domain types
+│   └── legacy_importer.go    # JSON→SQLite migration
+├── handlers/remote/workers/  # 22 src (era 25)
+│   ├── worker_registration.go
+│   ├── worker_heartbeat.go
+│   ├── worker_commands.go
+│   ├── worker_control.go
+│   ├── worker_complete.go
+│   ├── worker_update.go      # + helpers merged
+│   ├── worker_status.go
+│   ├── bundle_*.go
+│   ├── sse.go
+│   ├── showlog.go
+│   ├── validation.go
+│   ├── upload_video.go       # + asset_handlers merged
+│   ├── youtube_autoupload.go
+│   └── workers.go            # + upload_manager merged
+├── handlers/server/youtube/  # 23 src (era 26)
+│   ├── helpers.go            # + youtube_helpers merged
+│   ├── youtube_feed.go       # + youtube_news merged
+│   ├── account_handlers.go   # + status_handlers merged
+│   ├── creative_ai_cover.go
+│   ├── creative_ai_translate.go
+│   └── ...
+├── integrations/youtube/     # 15 src (era 20)
+│   ├── api.go                # api_client + api_video + api_channel
+│   ├── storage.go            # storage + storage_channels + storage_groups + storage_cleanup
+│   └── ...
+└── queue/                    # 14 src (invariato, già organizzato)
+```
+
+### RemoteCodex (Go + C++)
+
+```
+worker-agent-go/
+├── internal/worker/          # 16 src (era 18, split in 2)
+│   ├── worker_types.go       # Status, Worker struct, recentLogBuffer
+│   ├── worker_init.go        # New(), command dedup
+│   ├── worker.go             # Start(), Stop()
+│   ├── worker_comms.go       # Heartbeat, register, progress
+│   ├── worker_commands.go    # Command polling
+│   ├── worker_jobs.go        # Job polling
+│   ├── job_executor.go       # Job dispatch + execution
+│   ├── job_params.go         # Parameter extraction
+│   ├── job_upload.go         # Video upload to master
+│   ├── concurrency.go        # ConcurrencyLimiter
+│   ├── stage_executor.go     # Stage/chunk execution
+│   └── ...
+├── pkg/api/                  # 5 src (era 4)
+│   ├── client.go             # Core HTTP, retry, circuit breaker
+│   ├── client_endpoints.go   # Register, GetJob, Heartbeat, etc.
+│   └── ...
+└── pkg/video/
+    ├── workflow.go           # VideoGenerationWorkflow
+    └── native_engine.go      # Lancia C++ con progress streaming
+
+video-engine-cpp/
+├── src/
+│   ├── main.cpp              # Dispatcher + sotto-comandi semplici (287 LOC)
+│   └── cmd_full_video.cpp    # Pipeline completa (310 LOC)
+└── include/
+    └── video_contract.hpp    # Strutture JSON↔C++
+```
