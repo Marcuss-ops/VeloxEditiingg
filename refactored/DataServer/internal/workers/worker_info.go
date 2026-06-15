@@ -129,6 +129,7 @@ func (w *WorkerInfo) GetSupportedJobTypes() []string {
 // NormalizeWorkerID normalizes IP-derived worker IDs by:
 //   - Stripping all leading "host_" prefixes (handles host_host_...)
 //   - Replacing dots with underscores (handles host_57.129... old format)
+//
 // This ensures that malformed IDs like host_host_57_129_132_133 or
 // host_57.129.132.133 are treated as the canonical host_57_129_132_133.
 // Non-IP-derived IDs (e.g. worker-8e98ce85, w1) are returned unchanged.

@@ -14,7 +14,6 @@ import (
 	"time"
 )
 
-
 // NewService creates a new Drive service
 func NewService(cfg *ServiceConfig) (*Service, error) {
 	if cfg.TokensDir == "" {
@@ -241,7 +240,6 @@ func (s *Service) GetOrCreateFolder(ctx context.Context, name string, parentID s
 
 	return s.CreateFolder(ctx, name, parentID)
 }
-
 
 // ShareFile shares a file with specific permissions
 func (s *Service) ShareFile(ctx context.Context, fileID string, email string, role string) error {

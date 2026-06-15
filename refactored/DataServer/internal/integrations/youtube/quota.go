@@ -86,6 +86,7 @@ func (qm *QuotaManager) GetQuotaUsage(ctx context.Context) map[string]interface{
 		"reset_time":          "midnight Pacific Time",
 	}
 }
+
 // GetAnalyticsService creates a YouTube Analytics API service for a channel
 func (qm *QuotaManager) GetAnalyticsService(ctx context.Context, channelID string) (*ytanalytics.Service, error) {
 	channel := qm.service.GetChannel(channelID)
@@ -353,14 +354,17 @@ func (qm *QuotaManager) UpdateVideoAnalyticsCache(ctx context.Context, channelID
 
 		_, err = db.Exec(
 			`INSERT INTO youtube_video_metrics (video_id, channel_id, date, title, thumbnail_url, views, revenue)
-			 VALUES (?, ?, ?, ?, ?, ?, ?)
-			 ON CONFLICT(video_id, date) DO UPDATE SET
-			   views=excluded.views,
-			   revenue=excluded.revenue,
-			   title=excluded.title,
-			   thumbnail_url=excluded.thumbnail_url`,
+		 VALUES (?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(video_id, date) DO UPDATE SET
+		   views=excluded.views,
+		   revenue=excluded.revenue,
+		   title=excluded.title,
+		   thumbnail_url=excluded.thumbnail_url`,
 			videoID, channelID, today, title, thumbnail, views, revenue,
 		)
+		if err != nil {
+			log.Printf("[WARN] Failed to save video metric for %s: %v", videoID, err)
+		}
 	}
 
 	return nil

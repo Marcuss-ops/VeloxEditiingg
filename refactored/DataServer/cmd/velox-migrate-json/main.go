@@ -41,9 +41,11 @@ func main() {
 		runInventory(dataDir)
 	case "dry-run":
 		fs.Parse(os.Args[2:])
+		dbPath = resolveDBPath(dataDir, dbPath)
 		runDryRun(dataDir, dbPath)
 	case "apply":
 		fs.Parse(os.Args[2:])
+		dbPath = resolveDBPath(dataDir, dbPath)
 		runApply(dataDir, dbPath)
 	case "":
 		fmt.Fprintf(os.Stderr, "Usage: velox-migrate-json <inventory|dry-run|apply> [flags]\n")
@@ -128,13 +130,18 @@ func runInventory(dataDir string) {
 	}
 }
 
+// resolveDBPath returns the explicit dbPath if set, otherwise defaults to <dataDir>/velox.db.
+func resolveDBPath(dataDir, dbPath string) string {
+	if dbPath != "" {
+		return dbPath
+	}
+	return filepath.Join(dataDir, "velox.db")
+}
+
 // dry-run validates what would be imported without writing.
 func runDryRun(dataDir, dbPath string) {
 	if dataDir == "" {
 		dataDir = "."
-	}
-	if dbPath == "" {
-		dbPath = filepath.Join(dataDir, "velox.db")
 	}
 
 	files := knownJSONFiles(dataDir)
@@ -179,9 +186,6 @@ func runDryRun(dataDir, dbPath string) {
 func runApply(dataDir, dbPath string) {
 	if dataDir == "" {
 		dataDir = "."
-	}
-	if dbPath == "" {
-		dbPath = filepath.Join(dataDir, "velox.db")
 	}
 
 	s, err := store.NewSQLiteStore(dbPath)

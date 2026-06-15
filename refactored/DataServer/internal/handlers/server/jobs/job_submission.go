@@ -1,15 +1,18 @@
 package jobs
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
 	"time"
 
+	"velox-shared/payload"
+
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
-	"velox-shared/payload"
+
 	"velox-server/internal/config"
 	"velox-server/internal/queue"
 )
@@ -392,7 +395,7 @@ func (h *JobSubmissionHandler) findDuplicate(fingerprint string, normalized map[
 		return ""
 	}
 
-	jobs, err := h.fileQ.GetAllJobs(nil)
+	jobs, err := h.fileQ.GetAllJobs(context.TODO())
 	if err != nil {
 		return ""
 	}

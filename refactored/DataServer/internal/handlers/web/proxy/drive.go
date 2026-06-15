@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+
 	"velox-server/internal/config"
 )
 
@@ -59,5 +60,3 @@ func DriveProxy(cfg *config.Config) gin.HandlerFunc {
 		c.Data(resp.StatusCode, "application/json", respBody)
 	}
 }
-
-

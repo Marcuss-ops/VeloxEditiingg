@@ -7,20 +7,21 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+
 	"velox-server/internal/app"
 	"velox-server/internal/config"
 	remoteansible "velox-server/internal/handlers/remote/ansible"
 	"velox-server/internal/handlers/remote/workers"
 	"velox-server/internal/handlers/server/analytics"
 	"velox-server/internal/handlers/server/api"
-	"velox-server/internal/handlers/server/groups"
 	"velox-server/internal/handlers/server/darkeditor"
+	"velox-server/internal/handlers/server/groups"
 	jobhandlers "velox-server/internal/handlers/server/jobs"
 	pipelinehandler "velox-server/internal/handlers/server/pipeline"
 	scripthandlers "velox-server/internal/handlers/server/script"
 	ytservice "velox-server/internal/integrations/youtube"
-	jobservice "velox-server/internal/services/jobs"
 	"velox-server/internal/queue"
+	jobservice "velox-server/internal/services/jobs"
 	"velox-server/internal/store"
 	workersreg "velox-server/internal/workers"
 )
@@ -93,9 +94,9 @@ func newRouter(cfg *config.Config, deps *serverDeps, registry *app.Registry) *gi
 
 	// Dark Editor API routes
 	deCfg := &darkeditor.Config{
-		TempDir:     filepath.Join(cfg.DataDir, "dark_editor", "temp"),
-		ProjectsDir: filepath.Join(cfg.DataDir, "dark_editor", "projects"),
-		LogDir:      filepath.Join(cfg.DataDir, "dark_editor", "logs"),
+		TempDir:      filepath.Join(cfg.DataDir, "dark_editor", "temp"),
+		ProjectsDir:  filepath.Join(cfg.DataDir, "dark_editor", "projects"),
+		LogDir:       filepath.Join(cfg.DataDir, "dark_editor", "logs"),
 		NVIDIAAPIKey: cfg.NVIDIAAPIKey,
 	}
 	deHandler := darkeditor.NewHandler(deCfg)

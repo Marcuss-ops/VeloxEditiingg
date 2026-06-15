@@ -231,11 +231,11 @@ func (s *SQLiteStore) ListAllGroupMembershipsV2() ([]map[string]interface{}, err
 			continue
 		}
 		result = append(result, map[string]interface{}{
-			"group_id":    groupID,
-			"channel_id":  channelID,
-			"position":    position,
-			"group_name":  groupName,
-			"group_type":  groupType,
+			"group_id":   groupID,
+			"channel_id": channelID,
+			"position":   position,
+			"group_name": groupName,
+			"group_type": groupType,
 		})
 	}
 	return result, rows.Err()

@@ -24,10 +24,10 @@ type NewsItem struct {
 
 // TrendingResponse is the response from the trending news endpoint
 type TrendingResponse struct {
-	OK    bool      `json:"ok"`
-	Query string    `json:"query"`
+	OK    bool       `json:"ok"`
+	Query string     `json:"query"`
 	News  []NewsItem `json:"news"`
-	Count int       `json:"count"`
+	Count int        `json:"count"`
 }
 
 // Fetcher fetches trending news from external APIs
@@ -150,9 +150,9 @@ func (f *Fetcher) fetchFromNewsAPI(ctx context.Context, query string, apiKey str
 	}
 
 	var result struct {
-		Status    string `json:"status"`
-		TotalResults int `json:"totalResults"`
-		Articles  []struct {
+		Status       string `json:"status"`
+		TotalResults int    `json:"totalResults"`
+		Articles     []struct {
 			Title       string `json:"title"`
 			Description string `json:"description"`
 			URL         string `json:"url"`

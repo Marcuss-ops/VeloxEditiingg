@@ -219,14 +219,14 @@ func (s *Service) SubmitResult(ctx context.Context, req SubmitResultRequest) (bo
 	if status == "" || status == "success" || status == "completed" {
 		var err error
 		if s.fileQ != nil {
-			if err := s.ValidateJobLease(ctx, req.JobID, req.WorkerID, req.LeaseID); err != nil {
-				return false, err
+			if leaseErr := s.ValidateJobLease(ctx, req.JobID, req.WorkerID, req.LeaseID); leaseErr != nil {
+				return false, leaseErr
 			}
 			if len(req.Output) > 0 {
 				logEntries := ExtractWorkerLogEntries(req.Output, req.WorkerID)
 				if len(logEntries) > 0 {
-					if err := s.fileQ.UpdateJobLogs(ctx, req.JobID, logEntries); err != nil {
-						log.Printf("service: failed to update job logs for %s: %v", req.JobID, err)
+					if logErr := s.fileQ.UpdateJobLogs(ctx, req.JobID, logEntries); logErr != nil {
+						log.Printf("service: failed to update job logs for %s: %v", req.JobID, logErr)
 					}
 				}
 			}
@@ -270,14 +270,14 @@ func (s *Service) SubmitResult(ctx context.Context, req SubmitResultRequest) (bo
 
 	var err error
 	if s.fileQ != nil {
-		if err := s.ValidateJobLease(ctx, req.JobID, req.WorkerID, req.LeaseID); err != nil {
-			return false, err
+		if leaseErr := s.ValidateJobLease(ctx, req.JobID, req.WorkerID, req.LeaseID); leaseErr != nil {
+			return false, leaseErr
 		}
 		if len(req.Output) > 0 {
 			logEntries := ExtractWorkerLogEntries(req.Output, req.WorkerID)
 			if len(logEntries) > 0 {
-				if err := s.fileQ.UpdateJobLogs(ctx, req.JobID, logEntries); err != nil {
-					log.Printf("service: failed to update job logs on fail for %s: %v", req.JobID, err)
+				if logErr := s.fileQ.UpdateJobLogs(ctx, req.JobID, logEntries); logErr != nil {
+					log.Printf("service: failed to update job logs on fail for %s: %v", req.JobID, logErr)
 				}
 			}
 		}

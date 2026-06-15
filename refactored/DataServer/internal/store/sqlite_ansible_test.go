@@ -15,16 +15,16 @@ func TestAnsibleHostsCRUD(t *testing.T) {
 
 	// Create
 	host := AnsibleHostFields{
-		Host:         "test-vm-01",
-		AnsibleUser:  "pierone",
-		SSHKeyPath:   "/home/pierone/.ssh/id_ed25519",
-		SecretRef:    "vault://ssh/pierone@test-vm-01",
-		Enabled:      true,
-		Availability: "online",
-		Group:        "production",
-		Subgroup:     "web",
-		Tags:         []string{"nginx", "letsencrypt"},
-		Notes:        "Main web server",
+		Host:           "test-vm-01",
+		AnsibleUser:    "pierone",
+		SSHKeyPath:     "/home/pierone/.ssh/id_ed25519",
+		SecretRef:      "vault://ssh/pierone@test-vm-01",
+		Enabled:        true,
+		Availability:   "online",
+		Group:          "production",
+		Subgroup:       "web",
+		Tags:           []string{"nginx", "letsencrypt"},
+		Notes:          "Main web server",
 		LinkedWorkerID: "worker-01",
 	}
 	if err := s.UpsertAnsibleHost(host); err != nil {

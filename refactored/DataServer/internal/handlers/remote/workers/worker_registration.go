@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+
 	"velox-server/internal/config"
 	workersreg "velox-server/internal/workers"
 )
@@ -325,4 +326,3 @@ func (wl *WorkerLifecycle) GetTokenManager() *workersreg.TokenManager {
 func (wl *WorkerLifecycle) Config() *config.Config {
 	return wl.cfg
 }
-

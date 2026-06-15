@@ -8,8 +8,6 @@ import (
 	"github.com/google/uuid"
 )
 
-
-
 // FullUpdateLinuxHandler handles POST /workers/full_update_linux
 func (h *WorkerUpdateHandler) FullUpdateLinuxHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {

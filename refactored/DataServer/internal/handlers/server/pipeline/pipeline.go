@@ -8,13 +8,15 @@ import (
 	"strings"
 	"time"
 
+	"velox-shared/payload"
+
 	"github.com/gin-gonic/gin"
+
 	"velox-server/internal/config"
 	"velox-server/internal/jobs/enqueue"
 	"velox-server/internal/queue"
 	"velox-server/internal/remoteengine"
 	"velox-server/internal/workers"
-	"velox-shared/payload"
 )
 
 var remoteEngineClient *remoteengine.Client
@@ -41,7 +43,8 @@ func InitRemoteEngine(cfg *config.Config) {
 }
 
 // PipelineGenerate handles POST /api/remote/pipeline/generate
-func PipelineGenerate(cfg *config.Config, q *queue.FileQueue) gin.HandlerFunc {	return func(c *gin.Context) {
+func PipelineGenerate(cfg *config.Config, q *queue.FileQueue) gin.HandlerFunc {
+	return func(c *gin.Context) {
 		var reqPayload map[string]interface{}
 		if err := c.ShouldBindJSON(&reqPayload); err != nil {
 			pipelineLog("REQUEST: invalid JSON from %s: %v", c.ClientIP(), err)
@@ -457,5 +460,3 @@ func ScriptMultiple(cfg *config.Config) gin.HandlerFunc {
 		})
 	}
 }
-
-

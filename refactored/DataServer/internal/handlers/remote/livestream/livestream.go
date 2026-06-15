@@ -167,10 +167,10 @@ func (h *LivestreamHandlers) CreateStream(c *gin.Context) {
 		"protocol": req.Protocol, "auto_start": req.AutoStart,
 		"auto_stop": req.AutoStop, "scheduled_start_time": req.ScheduledStartTime,
 		"scheduled_end_time": req.ScheduledEndTime,
-		"created_at": req.CreatedAt.Format(time.RFC3339),
-		"duration": req.Duration, "max_viewers": req.MaxViewers,
+		"created_at":         req.CreatedAt.Format(time.RFC3339),
+		"duration":           req.Duration, "max_viewers": req.MaxViewers,
 		"latency_preference": req.LatencyPreference,
-		"channel_id": req.ChannelID, "broadcast_id": req.BroadcastID,
+		"channel_id":         req.ChannelID, "broadcast_id": req.BroadcastID,
 		"youtube_stream_id": req.YouTubeStreamID,
 	}
 	if err := h.dbStore.UpsertLivestream(store.ConfigToRow(cfg)); err != nil {
@@ -295,10 +295,10 @@ func (h *LivestreamHandlers) GetStatus(c *gin.Context) {
 		"id":     row.ID,
 		"status": status,
 		"health": gin.H{
-			"status":  health,
-			"bitrate": row.VideoBitrate,
-			"framerate": 30,
-			"resolution": "1080p",
+			"status":      health,
+			"bitrate":     row.VideoBitrate,
+			"framerate":   30,
+			"resolution":  "1080p",
 			"packetsLost": 0,
 		},
 	})

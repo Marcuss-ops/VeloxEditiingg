@@ -20,8 +20,9 @@ import (
 	"strings"
 	"time"
 
-	"gopkg.in/yaml.v3"
 	"velox-shared/payload"
+
+	"gopkg.in/yaml.v3"
 )
 
 // ============================================================
@@ -30,10 +31,10 @@ import (
 
 // jsonSource describes a legacy JSON file that can be imported.
 type jsonSource struct {
-	Name     string // human-readable name for logging
-	Path     string // relative to dataDir
-	AltPath  string // alternative path (fallback if Path doesn't exist)
-	Domain   string // domain name used in legacy_imports.source_name
+	Name    string // human-readable name for logging
+	Path    string // relative to dataDir
+	AltPath string // alternative path (fallback if Path doesn't exist)
+	Domain  string // domain name used in legacy_imports.source_name
 }
 
 // legacyJSONSources returns the canonical list of legacy JSON files to import,
@@ -58,13 +59,13 @@ func legacyJSONSources() []jsonSource {
 
 // LegacyImportResult describes the outcome of importing a single JSON source.
 type LegacyImportResult struct {
-	Source    jsonSource `json:"-"`
-	Status    string     `json:"status"`   // "imported", "skipped", "error"
-	SHA256    string     `json:"sha256"`   // first 16 hex chars
-	Records   int        `json:"records"`  // total records in file
-	Imported  int        `json:"imported"` // successfully imported
-	Backup    string     `json:"backup"`   // backup file path, if created
-	Error     string     `json:"error,omitempty"`
+	Source   jsonSource `json:"-"`
+	Status   string     `json:"status"`   // "imported", "skipped", "error"
+	SHA256   string     `json:"sha256"`   // first 16 hex chars
+	Records  int        `json:"records"`  // total records in file
+	Imported int        `json:"imported"` // successfully imported
+	Backup   string     `json:"backup"`   // backup file path, if created
+	Error    string     `json:"error,omitempty"`
 }
 
 // ============================================================
@@ -382,8 +383,8 @@ func importJSONData(s *SQLiteStore, domain string, data []byte, absPath string) 
 
 // legacyWorkersFile represents the real workers.json format.
 type legacyWorkersFile struct {
-	Workers map[string]any    `json:"workers"`
-	Revoked []string          `json:"revoked"`
+	Workers map[string]any `json:"workers"`
+	Revoked []string       `json:"revoked"`
 }
 
 // importWorkersJSON imports workers.json into the workers table.
@@ -880,7 +881,8 @@ func importDriveLinksJSON(s *SQLiteStore, data []byte) (int, error) {
 // the post-import data layer audit to pass without false positives.
 //
 // The archive directory structure is:
-//   <dataDir>/legacy_archive/<YYYY-MM-DD>/<filename>
+//
+//	<dataDir>/legacy_archive/<YYYY-MM-DD>/<filename>
 func archiveLegacyJSON(absPath, dataDir string) error {
 	archiveDir := filepath.Join(dataDir, "legacy_archive", time.Now().UTC().Format("2006-01-02"))
 	if err := os.MkdirAll(archiveDir, 0755); err != nil {

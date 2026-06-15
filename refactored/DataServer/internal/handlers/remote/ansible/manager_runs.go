@@ -15,8 +15,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
 	"velox-shared/payload"
+
+	"github.com/google/uuid"
 )
 
 // AnsibleRunRecord stores the execution state for a playbook or ad-hoc command.
@@ -48,12 +49,12 @@ type AnsibleRunStore interface {
 
 // AnsibleRunManager manages playbook executions and run history.
 type AnsibleRunManager struct {
-	playbookDir  string
-	dataDir      string
-	dbStore      AnsibleRunStore
-	computerMgr  *AnsibleComputerManager
-	mu           sync.RWMutex
-	runs         map[string]AnsibleRunRecord
+	playbookDir string
+	dataDir     string
+	dbStore     AnsibleRunStore
+	computerMgr *AnsibleComputerManager
+	mu          sync.RWMutex
+	runs        map[string]AnsibleRunRecord
 }
 
 // NewAnsibleRunManager creates a new Ansible run manager.

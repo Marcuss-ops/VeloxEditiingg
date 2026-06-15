@@ -11,18 +11,18 @@ import (
 
 // JobAttempt represents a single execution attempt of a job.
 type JobAttempt struct {
-	ID             int    `json:"id"`
-	JobID          string `json:"job_id"`
-	AttemptNumber  int    `json:"attempt_number"`
-	WorkerID       string `json:"worker_id"`
-	LeaseID        string `json:"lease_id"`
-	Status         string `json:"status"`
-	StartedAt      string `json:"started_at,omitempty"`
-	FinishedAt     string `json:"finished_at,omitempty"`
-	ErrorCode      string `json:"error_code,omitempty"`
-	EngineVersion  string `json:"engine_version,omitempty"`
-	BundleHash     string `json:"bundle_hash,omitempty"`
-	CreatedAt      string `json:"created_at"`
+	ID            int    `json:"id"`
+	JobID         string `json:"job_id"`
+	AttemptNumber int    `json:"attempt_number"`
+	WorkerID      string `json:"worker_id"`
+	LeaseID       string `json:"lease_id"`
+	Status        string `json:"status"`
+	StartedAt     string `json:"started_at,omitempty"`
+	FinishedAt    string `json:"finished_at,omitempty"`
+	ErrorCode     string `json:"error_code,omitempty"`
+	EngineVersion string `json:"engine_version,omitempty"`
+	BundleHash    string `json:"bundle_hash,omitempty"`
+	CreatedAt     string `json:"created_at"`
 }
 
 func (s *SQLiteStore) InsertJobAttempt(jobID string, attemptNumber int, workerID, leaseID string) (int64, error) {
@@ -38,7 +38,9 @@ func (s *SQLiteStore) InsertJobAttempt(jobID string, attemptNumber int, workerID
 	return result.LastInsertId()
 }
 
-func (s *SQLiteStore) InsertJobAttemptTx(tx interface{ Exec(string, ...interface{}) (sql.Result, error) }, jobID string, attemptNumber int, workerID, leaseID string) (int64, error) {
+func (s *SQLiteStore) InsertJobAttemptTx(tx interface {
+	Exec(string, ...interface{}) (sql.Result, error)
+}, jobID string, attemptNumber int, workerID, leaseID string) (int64, error) {
 	now := time.Now().UTC().Format(time.RFC3339)
 	result, err := tx.Exec(
 		`INSERT INTO job_attempts (job_id, attempt_number, worker_id, lease_id, status, started_at, created_at)
@@ -209,9 +211,9 @@ func (s *SQLiteStore) GetArtifactsByJob(jobID string, limit int) ([]Artifact, er
 func (s *SQLiteStore) LogJobEvent(jobID, eventType string, extra map[string]interface{}) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 	payload := map[string]interface{}{
-		"event":      eventType,
-		"job_id":     jobID,
-		"timestamp":  now,
+		"event":     eventType,
+		"job_id":    jobID,
+		"timestamp": now,
 	}
 	for k, v := range extra {
 		payload[k] = v

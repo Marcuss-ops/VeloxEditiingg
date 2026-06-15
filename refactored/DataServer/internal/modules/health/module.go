@@ -27,5 +27,3 @@ func (m *Module) RegisterRoutes(r *gin.Engine) {
 func (m *Module) health(c *gin.Context) {
 	c.JSON(200, gin.H{"status": "healthy"})
 }
-
-

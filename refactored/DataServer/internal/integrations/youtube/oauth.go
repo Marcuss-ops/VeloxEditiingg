@@ -134,7 +134,7 @@ func (s *Service) HealthCheck(ctx context.Context, channelID string) (map[string
 		return map[string]interface{}{
 			"ok":    false,
 			"error": err.Error(),
-		}, nil
+		}, nil //nolint:nilerr // status endpoint embeds error in result map
 	}
 
 	_, err = service.Channels.List([]string{"snippet"}).Mine(true).Do()

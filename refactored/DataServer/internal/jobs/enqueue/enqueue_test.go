@@ -63,7 +63,7 @@ func TestBuildSceneImagePayload(t *testing.T) {
 func TestBuildSceneImagePayload_YoutubeGroupAlias(t *testing.T) {
 	t.Parallel()
 	payload := map[string]interface{}{
-		"video_name":     "YT Test", "channel_id": "amish",
+		"video_name": "YT Test", "channel_id": "amish",
 		"voiceover_path": "/tmp/v.mp3",
 		"scenes":         []interface{}{map[string]interface{}{"text": "S1", "image_link": "https://example.com/i.png"}},
 	}

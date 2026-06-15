@@ -14,8 +14,6 @@ import (
 	"time"
 )
 
-
-
 // DefaultConfig returns config from environment
 func DefaultConfig() Config {
 	timeoutMS := 60000 // default 60s
@@ -56,8 +54,6 @@ func NewClient(cfg Config) *Client {
 func (c *Client) IsConfigured() bool {
 	return c.config.URL != ""
 }
-
-
 
 // GenerateSimpleScript generates a single script from a topic
 func (c *Client) GenerateSimpleScript(ctx context.Context, req SimpleScriptRequest) (*SimpleScriptResponse, error) {

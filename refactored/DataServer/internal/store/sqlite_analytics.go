@@ -177,9 +177,12 @@ func (s *SQLiteStore) GetTopChannels(limit int, period string) ([]ChannelStat, e
 	if !ok {
 		return nil, nil
 	}
-	
+
 	// Get historical totals from structured table for enrichment
-	historicalTotals := make(map[string]struct{ Views int64; Revenue float64 })
+	historicalTotals := make(map[string]struct {
+		Views   int64
+		Revenue float64
+	})
 	rows, _ := s.db.Query(`SELECT channel_id, SUM(views), SUM(estimated_revenue) FROM youtube_revenue_metrics GROUP BY channel_id`)
 	if rows != nil {
 		defer rows.Close()
@@ -188,7 +191,10 @@ func (s *SQLiteStore) GetTopChannels(limit int, period string) ([]ChannelStat, e
 			var v int64
 			var r float64
 			if err := rows.Scan(&id, &v, &r); err == nil {
-				historicalTotals[id] = struct{ Views int64; Revenue float64 }{v, r}
+				historicalTotals[id] = struct {
+					Views   int64
+					Revenue float64
+				}{v, r}
 			}
 		}
 	}
@@ -203,11 +209,11 @@ func (s *SQLiteStore) GetTopChannels(limit int, period string) ([]ChannelStat, e
 		if b, ok := chMap["auth_error"].(bool); ok && b {
 			authErr = true
 		}
-		
+
 		id := asString(chMap["channel_id"])
 		views := asInt(chMap["views"])
 		revenue := asFloat(chMap["revenue"])
-		
+
 		// Enrich with historical if larger
 		if h, ok := historicalTotals[id]; ok {
 			if int(h.Views) > views {
@@ -271,7 +277,7 @@ func (s *SQLiteStore) GetDailyStats(days int) ([]DailyStat, error) {
 
 func (s *SQLiteStore) GetAnalyticsTotals(period string) (map[string]any, error) {
 	days := parseIntDef(period, 30)
-	
+
 	// Try structured data first
 	stats, err := s.GetYouTubeHistoricalStats(days)
 	if err == nil && len(stats) > 0 {
@@ -281,10 +287,10 @@ func (s *SQLiteStore) GetAnalyticsTotals(period string) (map[string]any, error) 
 			totalViews += ds.Views
 			totalRevenue += ds.Revenue
 		}
-		
+
 		// Get channel count
 		var channelCount int
-		row := s.db.QueryRow(`SELECT COUNT(DISTINCT channel_id) FROM youtube_revenue_metrics WHERE date >= ?`, 
+		row := s.db.QueryRow(`SELECT COUNT(DISTINCT channel_id) FROM youtube_revenue_metrics WHERE date >= ?`,
 			time.Now().AddDate(0, 0, -days).Format("2006-01-02"))
 		row.Scan(&channelCount)
 

@@ -16,6 +16,7 @@ import (
 
 	"github.com/disintegration/imaging"
 	"github.com/gin-gonic/gin"
+
 	"velox-server/internal/integrations/youtube"
 )
 
@@ -228,5 +229,3 @@ func compressCoverToLimit(src []byte, maxBytes int) ([]byte, string, error) {
 	}
 	return nil, "", fmt.Errorf("unable to compress cover below size limit")
 }
-
-

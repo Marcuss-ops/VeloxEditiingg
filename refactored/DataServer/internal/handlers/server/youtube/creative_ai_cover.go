@@ -360,5 +360,3 @@ func (h *YouTubeHandlers) getCoverTempDir() string {
 	}
 	return filepath.Join(os.TempDir(), "velox-youtube-covers")
 }
-
-

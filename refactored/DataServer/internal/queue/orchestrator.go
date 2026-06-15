@@ -47,17 +47,17 @@ type JobStep struct {
 
 // MultiStepJob represents a pipeline composed of multiple steps.
 type MultiStepJob struct {
-	JobID        string     `json:"job_id"`
-	PipelineType string     `json:"pipeline_type"` // e.g. "video_generation", "audio_video_sync"
-	Status       StepStatus `json:"status"`
-	Steps        []*JobStep `json:"steps"`
-	TotalSteps   int        `json:"total_steps"`
-	CurrentStep  int        `json:"current_step"`
+	JobID        string                 `json:"job_id"`
+	PipelineType string                 `json:"pipeline_type"` // e.g. "video_generation", "audio_video_sync"
+	Status       StepStatus             `json:"status"`
+	Steps        []*JobStep             `json:"steps"`
+	TotalSteps   int                    `json:"total_steps"`
+	CurrentStep  int                    `json:"current_step"`
 	Metadata     map[string]interface{} `json:"metadata,omitempty"`
-	CreatedAt    string     `json:"created_at"`
-	UpdatedAt    string     `json:"updated_at"`
-	StartedAt    *string    `json:"started_at,omitempty"`
-	CompletedAt  *string    `json:"completed_at,omitempty"`
+	CreatedAt    string                 `json:"created_at"`
+	UpdatedAt    string                 `json:"updated_at"`
+	StartedAt    *string                `json:"started_at,omitempty"`
+	CompletedAt  *string                `json:"completed_at,omitempty"`
 }
 
 // stepDispatchEvent is sent when a step should be dispatched as a FileQueue job.
@@ -80,10 +80,10 @@ type stepCompleteEvent struct {
 
 // Orchestrator manages multi-step job pipelines.
 type Orchestrator struct {
-	mu       sync.RWMutex
-	jobs     map[string]*MultiStepJob
-	fileQ    *FileQueue
-	dbStore  *store.SQLiteStore
+	mu      sync.RWMutex
+	jobs    map[string]*MultiStepJob
+	fileQ   *FileQueue
+	dbStore *store.SQLiteStore
 
 	// Channels for internal event processing
 	dispatchCh chan *stepDispatchEvent
@@ -99,8 +99,8 @@ type Orchestrator struct {
 
 // OrchestratorConfig holds configuration for the orchestrator.
 type OrchestratorConfig struct {
-	PollInterval     time.Duration // how often to check for ready steps
-	JobTimeout       time.Duration // max time a step can be processing before considered stuck
+	PollInterval      time.Duration // how often to check for ready steps
+	JobTimeout        time.Duration // max time a step can be processing before considered stuck
 	DefaultMaxRetries int
 }
 
@@ -114,10 +114,7 @@ func DefaultOrchestratorConfig() *OrchestratorConfig {
 }
 
 // NewOrchestrator creates a new orchestrator.
-func NewOrchestrator(cfg *OrchestratorConfig, fileQ *FileQueue, dbStore *store.SQLiteStore) (*Orchestrator, error) {
-	if cfg == nil {
-		cfg = DefaultOrchestratorConfig()
-	}
+func NewOrchestrator(_ *OrchestratorConfig, fileQ *FileQueue, dbStore *store.SQLiteStore) (*Orchestrator, error) {
 	if fileQ == nil {
 		return nil, fmt.Errorf("orchestrator: FileQueue is required")
 	}
@@ -126,12 +123,12 @@ func NewOrchestrator(cfg *OrchestratorConfig, fileQ *FileQueue, dbStore *store.S
 	}
 
 	o := &Orchestrator{
-		jobs:        make(map[string]*MultiStepJob),
-		fileQ:       fileQ,
-		dbStore:     dbStore,
-		dispatchCh:  make(chan *stepDispatchEvent, 100),
-		completeCh:  make(chan *stepCompleteEvent, 100),
-		stopCh:      make(chan struct{}),
+		jobs:       make(map[string]*MultiStepJob),
+		fileQ:      fileQ,
+		dbStore:    dbStore,
+		dispatchCh: make(chan *stepDispatchEvent, 100),
+		completeCh: make(chan *stepCompleteEvent, 100),
+		stopCh:     make(chan struct{}),
 	}
 
 	// Load existing orchestrator jobs from SQLite
@@ -643,12 +640,12 @@ func (o *Orchestrator) Stats() map[string]interface{} {
 	}
 
 	return map[string]interface{}{
-		"total_jobs":        total,
-		"pending_jobs":      pending,
-		"running_jobs":      running,
-		"completed_jobs":    completed,
-		"failed_jobs":       failed,
-		"dispatch_channel":  len(o.dispatchCh),
-		"complete_channel":  len(o.completeCh),
+		"total_jobs":       total,
+		"pending_jobs":     pending,
+		"running_jobs":     running,
+		"completed_jobs":   completed,
+		"failed_jobs":      failed,
+		"dispatch_channel": len(o.dispatchCh),
+		"complete_channel": len(o.completeCh),
 	}
 }

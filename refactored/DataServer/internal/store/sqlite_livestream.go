@@ -39,29 +39,29 @@ func (s *SQLiteStore) CreateLivestreamTable() error {
 
 // LivestreamRow is the SQLite-compatible representation of a livestream.
 type LivestreamRow struct {
-	ID            string `json:"id"`
-	Name          string `json:"name"`
-	Platform      string `json:"platform"`
-	StreamKey     string `json:"stream_key"`
-	StreamURL     string `json:"stream_url"`
-	Description   string `json:"description"`
-	IsForKids     bool   `json:"is_for_kids"`
-	VideoBitrate  int    `json:"video_bitrate"`
-	AudioBitrate  int    `json:"audio_bitrate"`
-	Status        string `json:"status"`
-	VideoOrder    string `json:"video_order"`
-	Protocol      string `json:"protocol"`
-	AutoStart     bool   `json:"auto_start"`
-	AutoStop      bool   `json:"auto_stop"`
-	SchedStart    string `json:"scheduled_start"`
-	SchedEnd      string `json:"scheduled_end"`
-	CreatedAt     string `json:"created_at"`
-	Duration      int    `json:"duration"`
-	MaxViewers    int    `json:"max_viewers"`
-	LatencyPref   string `json:"latency_pref"`
-	ChannelID     string `json:"channel_id"`
-	BroadcastID   string `json:"broadcast_id"`
-	YTStreamID    string `json:"yt_stream_id"`
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	Platform     string `json:"platform"`
+	StreamKey    string `json:"stream_key"`
+	StreamURL    string `json:"stream_url"`
+	Description  string `json:"description"`
+	IsForKids    bool   `json:"is_for_kids"`
+	VideoBitrate int    `json:"video_bitrate"`
+	AudioBitrate int    `json:"audio_bitrate"`
+	Status       string `json:"status"`
+	VideoOrder   string `json:"video_order"`
+	Protocol     string `json:"protocol"`
+	AutoStart    bool   `json:"auto_start"`
+	AutoStop     bool   `json:"auto_stop"`
+	SchedStart   string `json:"scheduled_start"`
+	SchedEnd     string `json:"scheduled_end"`
+	CreatedAt    string `json:"created_at"`
+	Duration     int    `json:"duration"`
+	MaxViewers   int    `json:"max_viewers"`
+	LatencyPref  string `json:"latency_pref"`
+	ChannelID    string `json:"channel_id"`
+	BroadcastID  string `json:"broadcast_id"`
+	YTStreamID   string `json:"yt_stream_id"`
 }
 
 // UpsertLivestream inserts or replaces a livestream record.
@@ -215,28 +215,74 @@ func ToLivestreamConfigs(rows []*LivestreamRow) []map[string]interface{} {
 // ConfigToRow converts a livestream config map to a SQLite row.
 func ConfigToRow(cfg map[string]interface{}) *LivestreamRow {
 	r := &LivestreamRow{}
-	if v, ok := cfg["id"].(string); ok { r.ID = v }
-	if v, ok := cfg["name"].(string); ok { r.Name = v }
-	if v, ok := cfg["platform"].(string); ok { r.Platform = v }
-	if v, ok := cfg["stream_key"].(string); ok { r.StreamKey = v }
-	if v, ok := cfg["stream_url"].(string); ok { r.StreamURL = v }
-	if v, ok := cfg["description"].(string); ok { r.Description = v }
-	if v, ok := cfg["is_for_kids"].(bool); ok { r.IsForKids = v }
-	if v, ok := cfg["video_bitrate"].(float64); ok { r.VideoBitrate = int(v) }
-	if v, ok := cfg["audio_bitrate"].(float64); ok { r.AudioBitrate = int(v) }
-	if v, ok := cfg["status"].(string); ok { r.Status = v }
-	if v, ok := cfg["video_order"].(string); ok { r.VideoOrder = v }
-	if v, ok := cfg["protocol"].(string); ok { r.Protocol = v }
-	if v, ok := cfg["auto_start"].(bool); ok { r.AutoStart = v }
-	if v, ok := cfg["auto_stop"].(bool); ok { r.AutoStop = v }
-	if v, ok := cfg["scheduled_start_time"].(string); ok { r.SchedStart = v }
-	if v, ok := cfg["scheduled_end_time"].(string); ok { r.SchedEnd = v }
-	if v, ok := cfg["created_at"].(string); ok { r.CreatedAt = v }
-	if v, ok := cfg["duration"].(float64); ok { r.Duration = int(v) }
-	if v, ok := cfg["max_viewers"].(float64); ok { r.MaxViewers = int(v) }
-	if v, ok := cfg["latency_preference"].(string); ok { r.LatencyPref = v }
-	if v, ok := cfg["channel_id"].(string); ok { r.ChannelID = v }
-	if v, ok := cfg["broadcast_id"].(string); ok { r.BroadcastID = v }
-	if v, ok := cfg["youtube_stream_id"].(string); ok { r.YTStreamID = v }
+	if v, ok := cfg["id"].(string); ok {
+		r.ID = v
+	}
+	if v, ok := cfg["name"].(string); ok {
+		r.Name = v
+	}
+	if v, ok := cfg["platform"].(string); ok {
+		r.Platform = v
+	}
+	if v, ok := cfg["stream_key"].(string); ok {
+		r.StreamKey = v
+	}
+	if v, ok := cfg["stream_url"].(string); ok {
+		r.StreamURL = v
+	}
+	if v, ok := cfg["description"].(string); ok {
+		r.Description = v
+	}
+	if v, ok := cfg["is_for_kids"].(bool); ok {
+		r.IsForKids = v
+	}
+	if v, ok := cfg["video_bitrate"].(float64); ok {
+		r.VideoBitrate = int(v)
+	}
+	if v, ok := cfg["audio_bitrate"].(float64); ok {
+		r.AudioBitrate = int(v)
+	}
+	if v, ok := cfg["status"].(string); ok {
+		r.Status = v
+	}
+	if v, ok := cfg["video_order"].(string); ok {
+		r.VideoOrder = v
+	}
+	if v, ok := cfg["protocol"].(string); ok {
+		r.Protocol = v
+	}
+	if v, ok := cfg["auto_start"].(bool); ok {
+		r.AutoStart = v
+	}
+	if v, ok := cfg["auto_stop"].(bool); ok {
+		r.AutoStop = v
+	}
+	if v, ok := cfg["scheduled_start_time"].(string); ok {
+		r.SchedStart = v
+	}
+	if v, ok := cfg["scheduled_end_time"].(string); ok {
+		r.SchedEnd = v
+	}
+	if v, ok := cfg["created_at"].(string); ok {
+		r.CreatedAt = v
+	}
+	if v, ok := cfg["duration"].(float64); ok {
+		r.Duration = int(v)
+	}
+	if v, ok := cfg["max_viewers"].(float64); ok {
+		r.MaxViewers = int(v)
+	}
+	if v, ok := cfg["latency_preference"].(string); ok {
+		r.LatencyPref = v
+	}
+	if v, ok := cfg["channel_id"].(string); ok {
+		r.ChannelID = v
+	}
+	if v, ok := cfg["broadcast_id"].(string); ok {
+		r.BroadcastID = v
+	}
+	if v, ok := cfg["youtube_stream_id"].(string); ok {
+		r.YTStreamID = v
+	}
 	return r
 }

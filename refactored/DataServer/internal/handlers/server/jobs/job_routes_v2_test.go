@@ -12,11 +12,12 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+
 	"velox-server/internal/config"
 	"velox-server/internal/queue"
+	jobservice "velox-server/internal/services/jobs"
 	"velox-server/internal/store"
 	"velox-server/internal/workers"
-	jobservice "velox-server/internal/services/jobs"
 )
 
 func setupV2Test(t *testing.T) (*gin.Engine, *queue.FileQueue, *store.SQLiteStore, *jobservice.Service, *workers.Registry) {

@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+
 	"velox-server/internal/store"
 	workersreg "velox-server/internal/workers"
 )
@@ -62,4 +63,3 @@ func workerStatusMetadata(h *WorkerUpdateHandler) gin.H {
 		"engine_version":   codeVersion,
 	}
 }
-

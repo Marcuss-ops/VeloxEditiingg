@@ -265,4 +265,3 @@ echo "[OK] Installazione completata!"
 		c.Header("Content-Disposition", "attachment; filename=INSTALLA_WORKER.sh")
 	}
 }
-

@@ -6,8 +6,9 @@ import (
 	"sync"
 	"time"
 
-	"velox-server/internal/integrations/youtube"
 	"github.com/gin-gonic/gin"
+
+	"velox-server/internal/integrations/youtube"
 )
 
 type privateVideosCacheEntry struct {

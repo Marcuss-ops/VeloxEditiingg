@@ -11,9 +11,11 @@ import (
 	"path/filepath"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
-	"velox-server/internal/store/migrations"
 	"velox-shared/payload"
+
+	_ "github.com/mattn/go-sqlite3"
+
+	"velox-server/internal/store/migrations"
 )
 
 type SQLiteStore struct {
@@ -41,13 +43,13 @@ func NewSQLiteStore(path string) (*SQLiteStore, error) {
 
 	// Performance PRAGMAs for optimal query speed
 	pragmas := []string{
-		"PRAGMA synchronous = NORMAL",         // Faster writes, safe with WAL
-		"PRAGMA cache_size = -16000",          // 16MB cache (negative = KB)
-		"PRAGMA temp_store = MEMORY",           // In-memory temp tables
-		"PRAGMA mmap_size = 268435456",        // 256MB memory-mapped I/O
-		"PRAGMA page_size = 4096",              // Larger pages for better I/O
-		"PRAGMA foreign_keys = ON",             // Enforce referential integrity
-		"PRAGMA wal_autocheckpoint = 1000",     // Checkpoint every 1000 pages
+		"PRAGMA synchronous = NORMAL",      // Faster writes, safe with WAL
+		"PRAGMA cache_size = -16000",       // 16MB cache (negative = KB)
+		"PRAGMA temp_store = MEMORY",       // In-memory temp tables
+		"PRAGMA mmap_size = 268435456",     // 256MB memory-mapped I/O
+		"PRAGMA page_size = 4096",          // Larger pages for better I/O
+		"PRAGMA foreign_keys = ON",         // Enforce referential integrity
+		"PRAGMA wal_autocheckpoint = 1000", // Checkpoint every 1000 pages
 	}
 
 	for _, pragma := range pragmas {
@@ -58,8 +60,8 @@ func NewSQLiteStore(path string) (*SQLiteStore, error) {
 	}
 
 	// Connection pool tuning for optimal throughput
-	db.SetMaxOpenConns(4)  // SQLite handles concurrent reads well, limit writes
-	db.SetMaxIdleConns(2)  // Keep 2 idle connections ready
+	db.SetMaxOpenConns(4)                  // SQLite handles concurrent reads well, limit writes
+	db.SetMaxIdleConns(2)                  // Keep 2 idle connections ready
 	db.SetConnMaxLifetime(5 * time.Minute) // Recycle connections periodically
 
 	s := &SQLiteStore{db: db}
