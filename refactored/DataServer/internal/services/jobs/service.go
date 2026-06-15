@@ -15,7 +15,6 @@ import (
 type Service struct {
 	cfg              *config.Config
 	fileQ            *queue.FileQueue
-	redisQ           *queue.Queue
 	jobsRepo         store.JobsRepository
 	logger           *queue.EventLogger
 	reg              *workers.Registry
@@ -51,11 +50,10 @@ type SubmitResultRequest struct {
 	EndTime  string
 }
 
-func NewService(cfg *config.Config, fileQ *queue.FileQueue, redisQ *queue.Queue, jobsRepo store.JobsRepository, logger *queue.EventLogger, reg *workers.Registry) *Service {
+func NewService(cfg *config.Config, fileQ *queue.FileQueue, jobsRepo store.JobsRepository, logger *queue.EventLogger, reg *workers.Registry) *Service {
 	return &Service{
 		cfg:      cfg,
 		fileQ:    fileQ,
-		redisQ:   redisQ,
 		jobsRepo: jobsRepo,
 		logger:   logger,
 		reg:      reg,
@@ -137,7 +135,6 @@ func (s *Service) ClaimNextJob(ctx context.Context, req ClaimRequest) (*ClaimRes
 	var (
 		payload map[string]interface{}
 		jobID   string
-		err     error
 	)
 	if s.fileQ != nil {
 		var allowedJobTypes []string
@@ -153,16 +150,6 @@ func (s *Service) ClaimNextJob(ctx context.Context, req ClaimRequest) (*ClaimRes
 		}
 		jobID = job.JobID
 		payload = job.Payload
-	} else if s.redisQ != nil {
-		jobID, err = s.redisQ.GetNextJobID(ctx)
-		if err != nil || jobID == "" {
-			return &ClaimResult{}, nil
-		}
-		payload, _ = s.redisQ.GetJobPayload(ctx, jobID)
-		err = s.redisQ.LeaseJob(ctx, jobID, req.WorkerID)
-		if err != nil {
-			return &ClaimResult{Reason: "lease failed"}, nil
-		}
 	}
 
 	if payload == nil {
@@ -214,8 +201,6 @@ func (s *Service) SubmitResult(ctx context.Context, req SubmitResultRequest) (bo
 				}
 			}
 			err = s.fileQ.UpdateJobFields(ctx, req.JobID, updates)
-		} else if s.redisQ != nil {
-			err = s.redisQ.CompleteJob(ctx, req.JobID)
 		}
 		if err != nil {
 			return false, err
@@ -239,8 +224,6 @@ func (s *Service) SubmitResult(ctx context.Context, req SubmitResultRequest) (bo
 			}
 		}
 		err = s.fileQ.FailJob(ctx, req.JobID, req.Error, true)
-	} else if s.redisQ != nil {
-		err = s.redisQ.FailJob(ctx, req.JobID, req.Error, true)
 	}
 	if err != nil {
 		return false, err
@@ -257,8 +240,6 @@ func (s *Service) CompleteJob(ctx context.Context, jobID, workerID string) error
 	var err error
 	if s.fileQ != nil {
 		err = s.fileQ.CompleteJob(ctx, jobID)
-	} else if s.redisQ != nil {
-		err = s.redisQ.CompleteJob(ctx, jobID)
 	}
 	if err != nil {
 		return err
@@ -275,8 +256,6 @@ func (s *Service) FailJob(ctx context.Context, jobID, workerID, errMsg string) e
 	var attempt int
 	if s.fileQ != nil {
 		attempt, _ = s.fileQ.GetJobAttempt(ctx, jobID)
-	} else if s.redisQ != nil {
-		attempt, _ = s.redisQ.GetJobAttempt(ctx, jobID)
 	}
 
 	maxAttempts := 3
@@ -288,8 +267,6 @@ func (s *Service) FailJob(ctx context.Context, jobID, workerID, errMsg string) e
 	var err error
 	if s.fileQ != nil {
 		err = s.fileQ.FailJob(ctx, jobID, errMsg, requeue)
-	} else if s.redisQ != nil {
-		err = s.redisQ.FailJob(ctx, jobID, errMsg, requeue)
 	}
 	if err != nil {
 		return err

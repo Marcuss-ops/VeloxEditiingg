@@ -2,10 +2,8 @@ package workers
 
 import (
 	"net/http"
-	"time"
 
 	"github.com/gin-gonic/gin"
-	"velox-server/internal/queue"
 	"velox-server/internal/store"
 	workersreg "velox-server/internal/workers"
 )
@@ -113,50 +111,3 @@ func stringFromAny(v interface{}) string {
 	return ""
 }
 
-// WorkersStatus returns same shape as Python GET /workers_status for installer/dashboard
-func WorkersStatus(reg *workersreg.Registry, q *queue.Queue, updateHandler ...*WorkerUpdateHandler) gin.HandlerFunc {
-	const heartbeatTimeoutSec = 900 // 15 min like Python
-	return func(c *gin.Context) {
-		ctx := c.Request.Context()
-		master := workerStatusMetadata(firstUpdateHandler(updateHandler))
-		list := reg.List(ctx)
-		now := time.Now().UTC()
-		var workersList []gin.H
-		activeCount := 0
-		for _, w := range list {
-			var since float64
-			if w.LastHB != "" {
-				if t, err := time.Parse(time.RFC3339, w.LastHB); err == nil {
-					since = now.Sub(t.UTC()).Seconds()
-				}
-			}
-			active := since < heartbeatTimeoutSec
-			if active {
-				activeCount++
-			}
-			item := workerStatusItem(w, master)
-			item["time_since_heartbeat"] = since
-			item["active"] = active
-			workersList = append(workersList, item)
-		}
-		pending, _ := q.ReadyCount(ctx)
-		processing, _ := q.LeasedCount(ctx)
-
-		// Include revoked workers count for dashboard awareness
-		revokedList := reg.ListRevoked()
-
-		c.JSON(http.StatusOK, gin.H{
-			"workers":         workersList,
-			"master":          master,
-			"active_workers":  activeCount,
-			"total_workers":   len(workersList),
-			"revoked_workers": len(revokedList),
-			"revoked_ids":     revokedList,
-			"pending_jobs":    pending,
-			"processing_jobs": processing,
-			"completed_jobs":  0,
-			"error_jobs":      0,
-			"total_jobs":      pending + processing,
-		})
-	}
-}

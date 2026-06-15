@@ -10,8 +10,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
+	neturl "net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -62,6 +66,17 @@ func EnqueueSceneVideoJob(ctx context.Context, q *queue.FileQueue, payloadMap ma
 // endpoint. It auto-detects audio duration, normalizes scenes with image fallbacks,
 // and computes per-scene durations.
 func BuildSceneImagePayload(rawPayload map[string]interface{}, dataDir, videosDir string) (map[string]interface{}, error) {
+	return BuildSceneImagePayloadForMaster(rawPayload, dataDir, videosDir, "")
+}
+
+// BuildSceneImagePayloadForMaster builds the canonical script-with-images payload
+// and stages remote voiceover assets behind the master so workers can fetch them
+// from a local master URL instead of Google Drive.
+func BuildSceneImagePayloadForMaster(rawPayload map[string]interface{}, dataDir, videosDir, masterURL string) (map[string]interface{}, error) {
+	return buildSceneImagePayload(rawPayload, dataDir, videosDir, masterURL)
+}
+
+func buildSceneImagePayload(rawPayload map[string]interface{}, dataDir, videosDir, masterURL string) (map[string]interface{}, error) {
 	videoName := payload.FirstString(rawPayload, "video_name", "title", "topic")
 	if videoName == "" {
 		videoName = paths.SanitizeVideoName(payload.FirstString(rawPayload, "topic", "source_text"))
@@ -95,6 +110,19 @@ func BuildSceneImagePayload(rawPayload map[string]interface{}, dataDir, videosDi
 
 	sceneCount := len(sceneEntries)
 
+	jobID := payload.FirstString(rawPayload, "job_id", "script_id")
+	if jobID == "" {
+		jobID = "scriptimg_" + uuid.NewString()
+	}
+	jobRunID := payload.FirstString(rawPayload, "job_run_id", "run_id")
+	if jobRunID == "" {
+		jobRunID = "run_" + uuid.NewString()
+	}
+	correlationID := payload.FirstString(rawPayload, "correlation_id")
+	if correlationID == "" {
+		correlationID = "corr_" + uuid.NewString()
+	}
+
 	totalDuration := payload.FloatParam(rawPayload, 0, "total_duration_secs", "duration_secs", "video_duration_secs")
 	perSceneDuration := payload.FloatParam(rawPayload, 0, "scene_duration_secs", "image_duration_secs")
 
@@ -118,6 +146,11 @@ func BuildSceneImagePayload(rawPayload map[string]interface{}, dataDir, videosDi
 		totalDuration = perSceneDuration * float64(sceneCount)
 	}
 
+	stagedVoiceoverPaths, err := stageVoiceoverAssets(dataDir, masterURL, jobID, voiceoverPaths)
+	if err != nil {
+		return nil, err
+	}
+
 	for i := range sceneEntries {
 		sceneEntries[i]["duration_seconds"] = perSceneDuration
 	}
@@ -125,19 +158,6 @@ func BuildSceneImagePayload(rawPayload map[string]interface{}, dataDir, videosDi
 	outputPath := payload.FirstString(rawPayload, "output_path")
 	if outputPath == "" {
 		outputPath = paths.DefaultOutputPath(videosDir, dataDir, videoName, "script_with_images")
-	}
-
-	jobID := payload.FirstString(rawPayload, "job_id", "script_id")
-	if jobID == "" {
-		jobID = "scriptimg_" + uuid.NewString()
-	}
-	jobRunID := payload.FirstString(rawPayload, "job_run_id", "run_id")
-	if jobRunID == "" {
-		jobRunID = "run_" + uuid.NewString()
-	}
-	correlationID := payload.FirstString(rawPayload, "correlation_id")
-	if correlationID == "" {
-		correlationID = "corr_" + uuid.NewString()
 	}
 
 	now := time.Now().UTC().Format(time.RFC3339)
@@ -164,9 +184,9 @@ func BuildSceneImagePayload(rawPayload map[string]interface{}, dataDir, videosDi
 	normalized["script_text"] = scriptText
 	normalized["scenes"] = sceneEntries
 	normalized["scenes_json"] = payload.MustJSON(sceneEntries)
-	normalized["voiceover_paths"] = voiceoverPaths
-	normalized["voiceover_path"] = voiceoverPaths[0]
-	normalized["audio_path"] = voiceoverPaths[0]
+	normalized["voiceover_paths"] = stagedVoiceoverPaths
+	normalized["voiceover_path"] = stagedVoiceoverPaths[0]
+	normalized["audio_path"] = stagedVoiceoverPaths[0]
 	normalized["audio_language_for_srt"] = audioLanguage
 	normalized["video_mode"] = "scene_image"
 	normalized["output_path"] = outputPath
@@ -196,9 +216,9 @@ func BuildSceneImagePayload(rawPayload map[string]interface{}, dataDir, videosDi
 		"script_text":            scriptText,
 		"scenes_json":            normalized["scenes_json"],
 		"scenes":                 sceneEntries,
-		"voiceover_paths":        voiceoverPaths,
-		"voiceover_path":         voiceoverPaths[0],
-		"audio_path":             voiceoverPaths[0],
+		"voiceover_paths":        stagedVoiceoverPaths,
+		"voiceover_path":         stagedVoiceoverPaths[0],
+		"audio_path":             stagedVoiceoverPaths[0],
 		"audio_language_for_srt": audioLanguage,
 		"video_mode":             "scene_image",
 		"output_path":            outputPath,
@@ -217,6 +237,111 @@ func BuildSceneImagePayload(rawPayload map[string]interface{}, dataDir, videosDi
 	}
 
 	return normalized, nil
+}
+
+func stageVoiceoverAssets(dataDir, masterURL, jobID string, voiceoverPaths []string) ([]string, error) {
+	if len(voiceoverPaths) == 0 {
+		return nil, fmt.Errorf("voiceover_path or source_media is required")
+	}
+
+	staged := make([]string, 0, len(voiceoverPaths))
+	if strings.TrimSpace(masterURL) == "" {
+		return append(staged, voiceoverPaths...), nil
+	}
+
+	assetDir := filepath.Join(dataDir, "worker_downloads", "script_assets", jobID)
+	if err := os.MkdirAll(assetDir, 0o755); err != nil {
+		return nil, fmt.Errorf("create script asset dir: %w", err)
+	}
+
+	baseMasterURL := strings.TrimRight(strings.TrimSpace(masterURL), "/")
+	client := &http.Client{Timeout: 90 * time.Second}
+	for idx, source := range voiceoverPaths {
+		filename := stagedAssetFilename(source, idx)
+		if filename == "" {
+			filename = fmt.Sprintf("voiceover_%d", idx+1)
+		}
+		destPath := filepath.Join(assetDir, filename)
+		if err := copyOrDownloadAsset(client, source, destPath); err != nil {
+			return nil, fmt.Errorf("stage voiceover %d: %w", idx+1, err)
+		}
+		staged = append(staged, fmt.Sprintf("%s/api/worker/assets/voiceover/%s/%s", baseMasterURL, jobID, filename))
+	}
+
+	return staged, nil
+}
+
+func stagedAssetFilename(source string, idx int) string {
+	if trimmed := strings.TrimSpace(source); trimmed != "" {
+		if _, err := os.Stat(trimmed); err == nil {
+			base := filepath.Base(trimmed)
+			if base != "" && base != "." && base != string(filepath.Separator) {
+				return base
+			}
+		}
+		if u, err := neturl.Parse(trimmed); err == nil && u.Scheme != "" {
+			base := filepath.Base(u.Path)
+			if base != "" && base != "." && base != "uc" && base != "download" {
+				return base
+			}
+		}
+	}
+	return fmt.Sprintf("voiceover_%d", idx+1)
+}
+
+func copyOrDownloadAsset(client *http.Client, source, destPath string) error {
+	if source == "" {
+		return fmt.Errorf("empty source")
+	}
+	if info, err := os.Stat(source); err == nil && !info.IsDir() {
+		input, err := os.Open(source)
+		if err != nil {
+			return err
+		}
+		defer input.Close()
+		return writeStreamToFile(input, destPath)
+	}
+
+	resolved := paths.NormalizeDriveURL(source)
+	req, err := http.NewRequest(http.MethodGet, resolved, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("download failed: %s", resp.Status)
+	}
+	return writeStreamToFile(resp.Body, destPath)
+}
+
+func writeStreamToFile(r io.Reader, destPath string) error {
+	if err := os.MkdirAll(filepath.Dir(destPath), 0o755); err != nil {
+		return err
+	}
+	tmpPath := destPath + ".tmp"
+	out, err := os.Create(tmpPath)
+	if err != nil {
+		return err
+	}
+	_, copyErr := io.Copy(out, r)
+	closeErr := out.Close()
+	if copyErr != nil {
+		_ = os.Remove(tmpPath)
+		return copyErr
+	}
+	if closeErr != nil {
+		_ = os.Remove(tmpPath)
+		return closeErr
+	}
+	if err := os.Rename(tmpPath, destPath); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	return nil
 }
 
 // NormalizeScenesPayload normalizes a scenes payload from various input shapes.
@@ -830,8 +955,6 @@ func buildScriptText(payloadMap map[string]interface{}) string {
 	}
 	return strings.Join(parts, " - ")
 }
-
-
 
 func sceneCountFromPayload(payloadMap map[string]interface{}) int {
 	if scenes, ok := payloadMap["scenes"].([]interface{}); ok {

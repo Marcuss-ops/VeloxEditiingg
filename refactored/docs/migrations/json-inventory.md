@@ -35,6 +35,10 @@ Il migration runner è in `internal/store/migrations/migrations.go`:
 | 003 | `003_youtube_canonical.sql` | Modello YouTube canonico (`youtube_channels`, `youtube_groups_v2`, `youtube_group_channels`, `youtube_tracked_niches`) |
 | 004 | `004_ansible.sql` | Tabelle Ansible strutturate (`ansible_hosts`, `ansible_runs`, `ansible_run_hosts`) |
 | 005 | `005_legacy_cleanup.sql` | Migration soft (solo documentazione — nessun DROP) |
+| 006 | `006_drive_links_source_of_truth.sql` | Drive links SQLite fonte di verità, `drive_master_folders` |
+| 007 | `007_queue_persistence.sql` | Coda persistente (orchestrator_jobs, dlq_jobs, job_events) |
+| 008 | `008_drop_legacy_tables.sql` | **Data copy SAFE** — INSERT OR IGNORE da tabelle legacy → canoniche. Nessun DROP. + CI guard `legacy_json_registry` |
+| 009 | `009_drop_legacy_tables.sql` | **DROP IRREVERSIBILE** delle tabelle legacy dopo verifica dati. Applicare solo dopo 008. |
 
 ---
 
@@ -161,19 +165,47 @@ Questo rende ogni importazione idempotente, verificabile e auditabile.
 
 ---
 
-## Tabelle legacy eliminate (migration 008)
+## Two-step legacy cleanup: migration 008 (data copy) + 009 (DROP)
 
-Le seguenti tabelle legacy sono state droppate dalla **migration 008** (`008_drop_legacy_tables.sql`) dopo aver migrato i dati esistenti nelle tabelle canoniche:
+Per garantire un upgrade **production-safe**, la rimozione delle tabelle legacy è stata suddivisa in due migrazioni distinte:
 
-| Tabella legacy | Sostituita da | Stato |
+### Migration 008 — Data copy (SAFE, rollbackabile)
+
+`008_drop_legacy_tables.sql` esegue solo INSERT OR IGNORE dalle tabelle legacy in quelle canoniche. **Non droppa nulla.**
+
+| Fase | Operazione |
+|------|-----------|
+| 1-4 | INSERT OR IGNORE da `youtube_channel_metadata`, `youtube_groups`, `youtube_manager_channels`, `youtube_manager_groups` → `youtube_channels`, `youtube_groups_v2`, `youtube_group_channels` |
+| 5 | INSERT OR IGNORE da `ansible_computers` → `ansible_hosts` |
+| CI guard | Crea `legacy_json_registry` con tutti i path JSON legacy da bannare |
+
+**Rollback:** Cancellare i record inseriti dalle tabelle canoniche. Le tabelle legacy sono intatte.
+
+### Migration 009 — DROP (IRREVERSIBILE)
+
+`009_drop_legacy_tables.sql` va applicata **solo dopo aver verificato** che i dati siano stati copiati correttamente. Droppa 5 tabelle legacy:
+
+| Tabella legacy | Sostituita da | Note |
 |---|---|---|
-| `ansible_computers` | `ansible_hosts` (004) | ✅ Droppata — dati migrati via INSERT OR IGNORE INTO ansible_hosts |
-| `youtube_channel_metadata` | `youtube_channels` (003) | ✅ Droppata — dati migrati via INSERT OR IGNORE |
-| `youtube_groups` (old) | `youtube_groups_v2` (003) | ✅ Droppata — canali linkati via json_each in youtube_group_channels |
-| `youtube_manager_channels` | `youtube_channels` + `youtube_group_channels` (003) | ✅ Droppata — canali e gruppi manager uniti nel modello canonico |
-| `youtube_manager_groups` | `youtube_groups_v2` (003) | ✅ Droppata — gruppi manager migrati con group_type='manager' |
+| `ansible_computers` | `ansible_hosts` (004) | Dati migrati via 008 Phase 5 |
+| `youtube_channel_metadata` | `youtube_channels` (003) | Dati migrati via 008 Phase 1 |
+| `youtube_groups` (old) | `youtube_groups_v2` (003) | Canali linkati via json_each in youtube_group_channels — 008 Phase 2 |
+| `youtube_manager_channels` | `youtube_channels` + `youtube_group_channels` (003) | Canali e gruppi manager uniti nel modello canonico — 008 Phase 3 |
+| `youtube_manager_groups` | `youtube_groups_v2` (003) | Gruppi manager migrati con group_type='manager' — 008 Phase 4 |
 
-**Nessun codice produttivo:** Tutti i fallback legacy sono stati rimossi dal codice. Le interfacce `YouTubeStore` e `AnsibleComputerStore` espongono solo metodi canonici. I test `TestMigration008_UpgradeEndToEnd` verificano zero perdita dati.
+**Verifica pre-009:**
+```sql
+-- Verificare che i conteggi corrispondano
+SELECT 'legacy_channels', COUNT(*) FROM youtube_channel_metadata
+UNION ALL
+SELECT 'canonical_channels', COUNT(*) FROM youtube_channels;
+
+SELECT 'legacy_groups', COUNT(*) FROM youtube_groups
+UNION ALL
+SELECT 'canonical_groups', COUNT(*) FROM youtube_groups_v2 WHERE group_type='upload';
+```
+
+**Nessun codice produttivo:** Tutti i fallback legacy sono stati rimossi dal codice. Le interfacce `YouTubeStore` e `AnsibleComputerStore` espongono solo metodi canonici. I test `TestMigration008_UpgradeEndToEnd` verificano zero perdita dati in entrambi gli step (008 preserva le tabelle legacy, 009 le droppa).
 
 ---
 

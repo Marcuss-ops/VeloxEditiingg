@@ -16,7 +16,7 @@ func newTestRegistry(t *testing.T) *Registry {
 		t.Fatalf("failed to create test SQLite store: %v", err)
 	}
 	t.Cleanup(func() { s.Close() })
-	return New(nil, false, s)
+	return New(s)
 }
 
 func TestRegistryRegisterAndList(t *testing.T) {
@@ -45,11 +45,11 @@ func TestRegistryRegisterPersistence(t *testing.T) {
 	defer s.Close()
 
 	// Register a worker
-	reg1 := New(nil, false, s)
+	reg1 := New(s)
 	_ = reg1.RegisterWorker(context.Background(), "w1", "worker-1", "10.0.0.1", nil)
 
 	// Create new registry from same database
-	reg2 := New(nil, false, s)
+	reg2 := New(s)
 	workers := reg2.List(context.Background())
 	if len(workers) != 1 {
 		t.Fatalf("expected 1 worker after reload, got %d", len(workers))
@@ -66,7 +66,7 @@ func TestRegistryRevokeAndPersist(t *testing.T) {
 	}
 	defer s.Close()
 
-	reg := New(nil, false, s)
+	reg := New(s)
 	ctx := context.Background()
 
 	_ = reg.RegisterWorker(ctx, "w1", "worker-1", "10.0.0.1", nil)
@@ -85,7 +85,7 @@ func TestRegistryRevokeAndPersist(t *testing.T) {
 	}
 
 	// Reload and verify revoked persists
-	reg2 := New(nil, false, s)
+	reg2 := New(s)
 	if !reg2.IsRevoked("w1") {
 		t.Error("expected w1 to be revoked after reload")
 	}
@@ -98,7 +98,7 @@ func TestRegistryUnrevoke(t *testing.T) {
 	}
 	defer s.Close()
 
-	reg := New(nil, false, s)
+	reg := New(s)
 	_ = reg.RegisterWorker(context.Background(), "w1", "worker-1", "10.0.0.1", nil)
 	reg.RevokeWorker(context.Background(), "w1")
 	reg.UnrevokeWorker("w1")
@@ -108,7 +108,7 @@ func TestRegistryUnrevoke(t *testing.T) {
 	}
 
 	// Reload and verify
-	reg2 := New(nil, false, s)
+	reg2 := New(s)
 	if reg2.IsRevoked("w1") {
 		t.Error("expected w1 to not be revoked after reload")
 	}
@@ -157,7 +157,7 @@ func TestRegistryHeartbeatMetadataPersistence(t *testing.T) {
 	}
 	defer s.Close()
 
-	reg := New(nil, false, s)
+	reg := New(s)
 	ctx := context.Background()
 
 	err = reg.Heartbeat(ctx, "w1", "worker-1", "idle", "", map[string]interface{}{
@@ -175,7 +175,7 @@ func TestRegistryHeartbeatMetadataPersistence(t *testing.T) {
 		t.Fatalf("Heartbeat failed: %v", err)
 	}
 
-	reg2 := New(nil, false, s)
+	reg2 := New(s)
 	info := reg2.GetWorker(ctx, "w1")
 	if info == nil {
 		t.Fatal("expected worker to exist")
@@ -207,7 +207,7 @@ func TestRegistryCleanupStaleWorkers(t *testing.T) {
 	}
 	defer s.Close()
 
-	reg := New(nil, false, s)
+	reg := New(s)
 	ctx := context.Background()
 
 	// Register a worker
@@ -226,7 +226,7 @@ func TestRegistryCleanupStaleWorkers(t *testing.T) {
 	}
 
 	// Verify persistence
-	reg2 := New(nil, false, s)
+	reg2 := New(s)
 	workers := reg2.List(ctx)
 	if len(workers) != 0 {
 		t.Fatalf("expected 0 workers after cleanup, got %d", len(workers))

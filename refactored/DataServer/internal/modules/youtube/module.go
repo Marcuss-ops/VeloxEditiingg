@@ -23,7 +23,7 @@ type Module struct {
 	manager        *ytHandlers.YouTubeManager
 }
 
-func New(cfg *config.Config, dataDir string, sqliteStore *store.SQLiteStore, _ gin.HandlerFunc) *Module {
+func New(cfg *config.Config, dataDir string, sqliteStore *store.SQLiteStore) *Module {
 	return &Module{
 		cfg:         cfg,
 		dataDir:     dataDir,

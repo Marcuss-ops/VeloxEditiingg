@@ -21,7 +21,7 @@ func (w *Worker) jobLoop(ctx context.Context) {
 
 	pollCount := 0
 	lastSummaryLog := time.Now()
-	summaryInterval := 60 * time.Second // Log summary every 60s (~12 polls)
+	summaryInterval := 10 * time.Minute // Log summary every 10 minutes
 
 	w.logger.Info("[POLLING] Worker polling started — checking for jobs every %v", pollInterval)
 
@@ -55,10 +55,10 @@ func (w *Worker) jobLoop(ctx context.Context) {
 				pollCount = 0
 			}
 
-			// Periodic summary log at INFO level (every ~60s)
+			// Periodic summary log at DEBUG level (every ~10 minutes)
 			if time.Since(lastSummaryLog) >= summaryInterval {
-				w.logger.Info("[POLLING] Status: alive — %d polls sent, no jobs available (next check in %v)",
-					pollCount, pollInterval)
+				w.logger.Debug("[POLLING] Status: alive — %d polls sent, no jobs available",
+					pollCount)
 				lastSummaryLog = time.Now()
 			}
 		}
