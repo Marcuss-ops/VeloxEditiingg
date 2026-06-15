@@ -94,24 +94,12 @@ func (a *DataLayerAuditor) checkLegacyFiles(result *DataLayerAuditResult) {
 	}
 }
 
-// checkDuplicateSources detects multiple source of truth for same domain.
+// checkDuplicateSources detects multiple sources of truth for the same domain.
 func (a *DataLayerAuditor) checkDuplicateSources(result *DataLayerAuditResult) {
-	// workers.json is no longer a runtime source of truth since migrating to SQLite.
-	// If it still exists, it's a legacy backup — no action required.
-	workersRoot := filepath.Join(a.dataDir, "workers.json")
-	workersSubdir := filepath.Join(a.dataDir, "workers", "workers.json")
-	
-	if a.fileExists(workersRoot) {
-		result.Warnings = append(result.Warnings, "Legacy backup exists: workers.json (no longer used)")
-	}
-	if a.fileExists(workersSubdir) {
-		result.Warnings = append(result.Warnings, "Legacy backup exists: workers/workers.json (no longer used)")
-	}
-
 	// Drive Credentials: should only have lowercase credentials/
 	credsLower := filepath.Join(a.dataDir, "drive", "credentials")
 	credsUpper := filepath.Join(a.dataDir, "drive", "Credentials")
-	
+
 	if a.dirExists(credsLower) && a.dirExists(credsUpper) {
 		result.Errors = append(result.Errors, "Drive has duplicate credentials: credentials/ AND Credentials/")
 	}
