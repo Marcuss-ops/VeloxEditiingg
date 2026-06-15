@@ -71,8 +71,8 @@ func upscaleWithRealESRGAN(img image.Image, opts UpscaleOptions, outputPath stri
 
 	// Save input image to temp file
 	inputPath := filepath.Join(tempDir, "input.png")
-	if err := imaging.Save(img, inputPath); err != nil {
-		return nil, fmt.Errorf("failed to save input image: %w", err)
+	if saveErr := imaging.Save(img, inputPath); saveErr != nil {
+		return nil, fmt.Errorf("failed to save input image: %w", saveErr)
 	}
 
 	// Determine model based on scale
@@ -123,8 +123,8 @@ func upscaleWithImaging(img image.Image, opts UpscaleOptions, outputPath string)
 
 	// Save to output path
 	if outputPath != "" {
-		if err := imaging.Save(upscaled, outputPath); err != nil {
-			return nil, fmt.Errorf("failed to save upscaled image: %w", err)
+		if saveErr := imaging.Save(upscaled, outputPath); saveErr != nil {
+			return nil, fmt.Errorf("failed to save upscaled image: %w", saveErr)
 		}
 	}
 
@@ -198,11 +198,11 @@ func SmartUpscale(img image.Image, targetWidth, targetHeight int, outputPath str
 		finalImg := imaging.Resize(result.Image, targetWidth, targetHeight, imaging.Lanczos)
 		bounds = finalImg.Bounds()
 
-		if outputPath != "" {
-			if err := imaging.Save(finalImg, outputPath); err != nil {
-				return nil, fmt.Errorf("failed to save final image: %w", err)
-			}
+	if outputPath != "" {
+		if saveErr := imaging.Save(finalImg, outputPath); saveErr != nil {
+			return nil, fmt.Errorf("failed to save final image: %w", saveErr)
 		}
+	}
 
 		return &UpscaleResult{
 			Image:      finalImg,

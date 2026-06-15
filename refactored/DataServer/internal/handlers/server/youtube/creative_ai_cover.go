@@ -112,9 +112,9 @@ func (h *YouTubeHandlers) GenerateCoverPack(c *gin.Context) {
 	if h.service.GetConfig().NVIDIAAPIKey != "" {
 		for i := range variants {
 			variant := &variants[i]
-			imageBytes, filename, err := h.generateNVIDIAThumbnail(c.Request.Context(), variant.Prompt, variant.NegativePrompt, req.Width, req.Height, req.Steps, variant.Seed)
-			if err != nil {
-				warnings = append(warnings, fmt.Sprintf("%s: %v", variant.ID, err))
+			imageBytes, filename, genErr := h.generateNVIDIAThumbnail(c.Request.Context(), variant.Prompt, variant.NegativePrompt, req.Width, req.Height, req.Steps, variant.Seed)
+			if genErr != nil {
+				warnings = append(warnings, fmt.Sprintf("%s: %v", variant.ID, genErr))
 				continue
 			}
 
