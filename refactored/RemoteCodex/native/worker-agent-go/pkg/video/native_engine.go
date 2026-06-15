@@ -1,6 +1,7 @@
 package video
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -10,6 +11,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
+	"time"
 
 	"velox-shared/contract"
 	"velox-shared/media"
@@ -92,21 +95,99 @@ func (w *VideoGenerationWorkflow) runNativeCxxEngine(
 	}
 
 	w.logger.Info("Launching native C++ engine: %s", binaryPath)
-	// The current C++ engine expects the explicit full pipeline subcommand.
-	cmd := exec.CommandContext(ctx, binaryPath, "--full-video", "--request", requestPath)
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	cmd := exec.Command(binaryPath, "--full-video", "--request", requestPath)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("native C++ engine failed: %w (stderr=%s stdout=%s)", err, strings.TrimSpace(stderr.String()), strings.TrimSpace(stdout.String()))
+	stdoutPipe, err := cmd.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("stdout pipe: %w", err)
+	}
+	stderrPipe, err := cmd.StderrPipe()
+	if err != nil {
+		return fmt.Errorf("stderr pipe: %w", err)
 	}
 
-	if trimmed := strings.TrimSpace(stdout.String()); trimmed != "" {
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("start native engine: %w", err)
+	}
+
+	// Stream stderr for progress parsing + log capture
+	var stderrBuf bytes.Buffer
+	stderrReader := bufio.NewReader(stderrPipe)
+	progressDone := make(chan struct{})
+
+	go func() {
+		defer close(progressDone)
+		for {
+			line, err := stderrReader.ReadString('\n')
+			if len(line) > 0 {
+				line = strings.TrimRight(line, "\n\r")
+				stderrBuf.WriteString(line)
+				stderrBuf.WriteString("\n")
+				// Try to parse as progress JSON
+				var prog struct {
+					Percent int    `json:"percent"`
+					Scene   int    `json:"scene"`
+					Total   int    `json:"total_scenes"`
+					Stage   string `json:"stage"`
+				}
+				if json.Unmarshal([]byte(line), &prog) == nil && prog.Percent > 0 {
+					if w.progressCallback != nil {
+						w.progressCallback(prog.Percent, prog.Scene, prog.Total, prog.Stage)
+					}
+				}
+			}
+			if err != nil {
+				break
+			}
+		}
+	}()
+
+	// Stream stdout for final result
+	var stdoutBuf bytes.Buffer
+	stdoutReader := bufio.NewReader(stdoutPipe)
+	go func() {
+		for {
+			line, err := stdoutReader.ReadString('\n')
+			if len(line) > 0 {
+				stdoutBuf.WriteString(line)
+			}
+			if err != nil {
+				break
+			}
+		}
+	}()
+
+	// Wait for process with context cancellation
+	done := make(chan error, 1)
+	go func() {
+		done <- cmd.Wait()
+	}()
+
+	select {
+	case <-ctx.Done():
+		if cmd.Process != nil {
+			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
+			select {
+			case <-done:
+			case <-time.After(10 * time.Second):
+				_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+			}
+		}
+		<-progressDone
+		return ctx.Err()
+	case execErr := <-done:
+		<-progressDone
+		if execErr != nil {
+			return fmt.Errorf("native C++ engine failed: %w (stderr=%s stdout=%s)",
+				execErr, strings.TrimSpace(stderrBuf.String()), strings.TrimSpace(stdoutBuf.String()))
+		}
+	}
+
+	if trimmed := strings.TrimSpace(stdoutBuf.String()); trimmed != "" {
 		w.logger.Info("Native engine stdout: %s", trimmed)
 	}
-	if trimmed := strings.TrimSpace(stderr.String()); trimmed != "" {
+	if trimmed := strings.TrimSpace(stderrBuf.String()); trimmed != "" {
 		w.logger.Info("Native engine stderr: %s", trimmed)
 	}
 

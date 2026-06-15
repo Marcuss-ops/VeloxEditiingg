@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -90,6 +91,12 @@ type Worker struct {
 	// Stage executor (Step 2: stage/chunk execution with retry)
 	stageExecutor *StageExecutor
 
+	// Progress tracking for current job
+	progressPercent atomic.Int32
+	progressScene   atomic.Int32
+	progressTotal   atomic.Int32
+	progressStage   atomic.Value // string
+
 	// Exit function (for testing, defaults to os.Exit)
 	exitFunc ExitFunc
 }
@@ -170,6 +177,13 @@ func New(cfg *config.WorkerConfig, version string) *Worker {
 	log := logger.New(logLevel, logOut)
 	log.SetPrefix(fmt.Sprintf("[%s]", cfg.WorkerID))
 
+	// Detect optimal concurrency from hardware
+	detectedConcurrency := detectMaxParallelJobs()
+	if cfg.MaxActiveJobs > 1 {
+		detectedConcurrency = cfg.MaxActiveJobs
+	}
+	log.Info("[CONCURRENCY] Detected %d CPUs, using %d max parallel jobs", runtime.NumCPU(), detectedConcurrency)
+
 	apiClient := api.NewClient(cfg.MasterURL,
 		api.WithWorkerID(cfg.WorkerID),
 		api.WithTimeout(30*time.Second),
@@ -191,7 +205,7 @@ func New(cfg *config.WorkerConfig, version string) *Worker {
 	}
 	stageExecutor := NewStageExecutor(stageExecCfg)
 
-	return &Worker{
+	w := &Worker{
 		config:    cfg,
 		apiClient: apiClient,
 		logger:    log,
@@ -208,10 +222,12 @@ func New(cfg *config.WorkerConfig, version string) *Worker {
 		seenCommands:       make(map[string]time.Time),
 		recentLogs:         recentLogs,
 		jobCancelFuncs:     make(map[string]context.CancelFunc),
-		concurrencyLimiter: NewConcurrencyLimiter(cfg.MaxActiveJobs),
+		concurrencyLimiter: NewConcurrencyLimiter(detectedConcurrency),
 		stageExecutor:      stageExecutor,
-		exitFunc:           os.Exit, // Default to os.Exit
+		exitFunc:           os.Exit,
 	}
+	w.progressStage.Store("idle")
+	return w
 }
 
 const (

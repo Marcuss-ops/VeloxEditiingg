@@ -58,6 +58,17 @@ using velox::firstAvailableClip;
 using velox::firstAvailableImage;
 
 // ──────────────────────────────────────────────
+// Progress emission (JSON lines on stderr)
+// ──────────────────────────────────────────────
+
+static void emitProgress(int percent, int scene, int totalScenes, const char* stage) {
+    std::cerr << "{\"progress\":" << percent
+              << ",\"scene\":" << scene
+              << ",\"total_scenes\":" << totalScenes
+              << ",\"stage\":\"" << stage << "\"}" << std::endl;
+}
+
+// ──────────────────────────────────────────────
 // Help
 // ──────────────────────────────────────────────
 
@@ -454,6 +465,8 @@ static int cmdFullVideo(int argc, char** argv) {
         voiceoverDurationSeconds = media::probeMediaDurationSeconds(downloadedVoiceoverPath);
     }
 
+    emitProgress(5, 0, 0, "voiceover_ready");
+
     std::vector<fs::path> segments;
 
     if (clipMode) {
@@ -473,6 +486,9 @@ static int cmdFullVideo(int argc, char** argv) {
             }
             segments.push_back(segmentPath);
             ++segmentIndex;
+            int totalClips = introClipPaths.size() + clipSegments.size() + stockClipPaths.size();
+            int pct = 10 + static_cast<int>((static_cast<double>(segmentIndex) / static_cast<double>(std::max<size_t>(1, totalClips))) * 70);
+            emitProgress(pct, static_cast<int>(segmentIndex), static_cast<int>(totalClips), "building_clip");
         }
         // Clip segments
         for (size_t i = 0; i < clipSegments.size(); ++i) {
@@ -509,6 +525,9 @@ static int cmdFullVideo(int argc, char** argv) {
             }
             segments.push_back(segmentPath);
             ++segmentIndex;
+            int totalClips = introClipPaths.size() + clipSegments.size() + stockClipPaths.size();
+            int pct = 10 + static_cast<int>((static_cast<double>(segmentIndex) / static_cast<double>(std::max<size_t>(1, totalClips))) * 70);
+            emitProgress(pct, static_cast<int>(segmentIndex), static_cast<int>(totalClips), "building_clip");
         }
     } else {
         // Scene image mode
@@ -553,10 +572,13 @@ static int cmdFullVideo(int argc, char** argv) {
             }
             std::cerr << "scene " << i << " segment built at " << results[i].segmentPath << "\n";
             segments.push_back(results[i].segmentPath);
+            int pct = 10 + static_cast<int>((static_cast<double>(i + 1) / static_cast<double>(renderCount)) * 70);
+            emitProgress(pct, static_cast<int>(i + 1), static_cast<int>(renderCount), "building_scene");
         }
     }
 
     // Concat segments
+    emitProgress(85, 0, 0, "concatenating");
     fs::path videoOnlyPath = workDir / "video_only.mp4";
     if (!media::concatSegments(segments, videoOnlyPath, workDir)) {
         std::cerr << "errore: failed to concat segments\n";
@@ -564,6 +586,7 @@ static int cmdFullVideo(int argc, char** argv) {
     }
 
     // Mux audio
+    emitProgress(92, 0, 0, "muxing_audio");
     fs::path finalOutput = outputPath;
     if (!voiceoverPaths.empty()) {
         fs::path audioPath = downloadedVoiceoverPath.empty() ? workDir / "voiceover_audio" : downloadedVoiceoverPath;
@@ -579,6 +602,7 @@ static int cmdFullVideo(int argc, char** argv) {
         fs::copy_file(videoOnlyPath, finalOutput, fs::copy_options::overwrite_existing, ec);
     }
 
+    emitProgress(100, 0, 0, "completed");
     std::cout << "{\"success\":true,\"job_id\":\"" << jobId
               << "\",\"output_path\":\"" << finalOutput.string()
               << "\",\"video_name\":\"" << videoName
