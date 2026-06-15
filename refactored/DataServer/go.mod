@@ -9,6 +9,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/mattn/go-sqlite3 v1.14.45
 	golang.org/x/oauth2 v0.36.0
+	golang.org/x/text v0.38.0
 	google.golang.org/api v0.283.0
 	gopkg.in/yaml.v3 v3.0.1
 	velox-shared v0.0.0
@@ -60,7 +61,6 @@ require (
 	golang.org/x/image v0.0.0-20211028202545-6944b10bf410 // indirect
 	golang.org/x/net v0.55.0 // indirect
 	golang.org/x/sys v0.46.0 // indirect
-	golang.org/x/text v0.38.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260523011958-0a33c5d7ca68 // indirect
 	google.golang.org/grpc v1.81.1 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect

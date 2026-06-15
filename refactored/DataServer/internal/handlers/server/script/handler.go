@@ -123,12 +123,8 @@ func (h *ScriptHandlers) ScriptJobHandler(full bool) gin.HandlerFunc {
 			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "job_id required"})
 			return
 		}
-		job, err := h.loadJob(c.Request.Context(), jobID)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": err.Error()})
-			return
-		}
-		if job == nil {
+		job, ok := h.loadJob(c.Request.Context(), jobID)
+		if !ok {
 			c.JSON(http.StatusNotFound, gin.H{"ok": false, "error": "job not found"})
 			return
 		}
@@ -143,12 +139,8 @@ func (h *ScriptHandlers) ScriptByIDHandler() gin.HandlerFunc {
 			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "script_id required"})
 			return
 		}
-		job, err := h.loadJob(c.Request.Context(), scriptID)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": err.Error()})
-			return
-		}
-		if job == nil {
+		job, ok := h.loadJob(c.Request.Context(), scriptID)
+		if !ok {
 			c.JSON(http.StatusNotFound, gin.H{"ok": false, "error": "script not found"})
 			return
 		}
@@ -156,13 +148,13 @@ func (h *ScriptHandlers) ScriptByIDHandler() gin.HandlerFunc {
 	}
 }
 
-func (h *ScriptHandlers) loadJob(ctx context.Context, jobID string) (map[string]interface{}, error) {
+func (h *ScriptHandlers) loadJob(ctx context.Context, jobID string) (map[string]interface{}, bool) {
 	if h.sqliteDB == nil {
-		return nil, nil
+		return nil, false
 	}
 	job, err := h.sqliteDB.GetJob(ctx, jobID)
-	if err != nil {
-		return nil, nil
+	if err != nil || job == nil {
+		return nil, false
 	}
-	return job, nil
+	return job, true
 }

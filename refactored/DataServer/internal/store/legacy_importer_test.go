@@ -16,10 +16,7 @@ import (
 
 func TestCountJSONRecords_MapFormat(t *testing.T) {
 	data := []byte(`{"a": 1, "b": 2, "c": 3}`)
-	count, err := countJSONRecords("workers", data)
-	if err != nil {
-		t.Fatalf("countJSONRecords failed: %v", err)
-	}
+	count := countJSONRecords("workers", data)
 	if count != 3 {
 		t.Errorf("Expected 3 records, got %d", count)
 	}
@@ -27,10 +24,7 @@ func TestCountJSONRecords_MapFormat(t *testing.T) {
 
 func TestCountJSONRecords_ArrayFormat(t *testing.T) {
 	data := []byte(`[{"name": "a"}, {"name": "b"}]`)
-	count, err := countJSONRecords("youtube_groups", data)
-	if err != nil {
-		t.Fatalf("countJSONRecords failed: %v", err)
-	}
+	count := countJSONRecords("youtube_groups", data)
 	if count != 2 {
 		t.Errorf("Expected 2 records, got %d", count)
 	}
@@ -38,10 +32,7 @@ func TestCountJSONRecords_ArrayFormat(t *testing.T) {
 
 func TestCountJSONRecords_EmptyObject(t *testing.T) {
 	data := []byte(`{}`)
-	count, err := countJSONRecords("workers", data)
-	if err != nil {
-		t.Fatalf("countJSONRecords failed: %v", err)
-	}
+	count := countJSONRecords("workers", data)
 	if count != 0 {
 		t.Errorf("Expected 0 records for empty object, got %d", count)
 	}
@@ -49,10 +40,7 @@ func TestCountJSONRecords_EmptyObject(t *testing.T) {
 
 func TestCountJSONRecords_EmptyArray(t *testing.T) {
 	data := []byte(`[]`)
-	count, err := countJSONRecords("youtube_groups", data)
-	if err != nil {
-		t.Fatalf("countJSONRecords failed: %v", err)
-	}
+	count := countJSONRecords("youtube_groups", data)
 	if count != 0 {
 		t.Errorf("Expected 0 records for empty array, got %d", count)
 	}
@@ -60,11 +48,7 @@ func TestCountJSONRecords_EmptyArray(t *testing.T) {
 
 func TestCountJSONRecords_InvalidJSON(t *testing.T) {
 	data := []byte(`{invalid json}`)
-	count, err := countJSONRecords("workers", data)
-	if err != nil {
-		// Error is acceptable — function returns 0 on error
-		t.Logf("Got expected error for invalid JSON: %v", err)
-	}
+	count := countJSONRecords("workers", data)
 	if count != 0 {
 		t.Errorf("Expected 0 records for invalid JSON, got %d", count)
 	}

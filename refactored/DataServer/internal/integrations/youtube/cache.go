@@ -59,7 +59,7 @@ func (c *Cache) load() error {
 }
 
 // save writes cache to SQLite.
-func (c *Cache) save() error {
+func (c *Cache) save() {
 	if c.store != nil {
 		for key, entry := range c.data {
 			dataJSON, _ := json.Marshal(entry.Data)
@@ -68,7 +68,6 @@ func (c *Cache) save() error {
 			}
 		}
 	}
-	return nil
 }
 
 // Get retrieves a cached value if not expired, falling back to SQLite if not in memory.
@@ -117,11 +116,7 @@ func (c *Cache) Set(key string, value interface{}) {
 	}
 
 	// Save asynchronously to not block
-	go func() {
-		if err := c.save(); err != nil {
-			log.Printf("[WARN] YouTube cache: save error: %v", err)
-		}
-	}()
+	go c.save()
 }
 
 // Delete removes a key from cache
@@ -139,11 +134,7 @@ func (c *Cache) Clear() {
 
 	c.data = make(map[string]cacheEntry)
 
-	go func() {
-		if err := c.save(); err != nil {
-			log.Printf("[WARN] YouTube cache: clear save error: %v", err)
-		}
-	}()
+	go c.save()
 }
 
 // Cleanup removes expired entries
@@ -162,11 +153,7 @@ func (c *Cache) Cleanup() int {
 	}
 
 	if count > 0 {
-		go func() {
-			if err := c.save(); err != nil {
-				log.Printf("[WARN] YouTube cache: cleanup save error: %v", err)
-			}
-		}()
+		go c.save()
 	}
 
 	return count

@@ -4,7 +4,12 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+
+	"golang.org/x/text/cases"
+	"golang.org/x/text/language"
 )
+
+var titleCaser = cases.Title(language.Und)
 
 func parseTags(tagsStr string) []string {
 	if tagsStr == "" {
@@ -19,11 +24,11 @@ func generateMockTitles(fileName, customPrompt string) []string {
 	baseName = strings.ReplaceAll(baseName, "-", " ")
 
 	return []string{
-		fmt.Sprintf("%s - Complete Guide 2025", strings.Title(baseName)),
-		fmt.Sprintf("How to Master %s in 10 Minutes", strings.Title(baseName)),
-		fmt.Sprintf("%s Explained: Everything You Need to Know", strings.Title(baseName)),
-		fmt.Sprintf("The Ultimate %s Tutorial", strings.Title(baseName)),
-		fmt.Sprintf("%s Tips and Tricks You Need to See", strings.Title(baseName)),
+		fmt.Sprintf("%s - Complete Guide 2025", titleCaser.String(baseName)),
+		fmt.Sprintf("How to Master %s in 10 Minutes", titleCaser.String(baseName)),
+		fmt.Sprintf("%s Explained: Everything You Need to Know", titleCaser.String(baseName)),
+		fmt.Sprintf("The Ultimate %s Tutorial", titleCaser.String(baseName)),
+		fmt.Sprintf("%s Tips and Tricks You Need to See", titleCaser.String(baseName)),
 	}
 }
 
