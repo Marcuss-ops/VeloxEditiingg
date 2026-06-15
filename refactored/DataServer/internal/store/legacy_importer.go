@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"gopkg.in/yaml.v3"
 	"velox-shared/payload"
 )
 
@@ -47,6 +48,7 @@ func legacyJSONSources() []jsonSource {
 		{Name: "Ansible Runs", Path: "ansible_runs.json", Domain: "ansible_runs", AltPath: "ansible/ansible_runs.json"},
 		{Name: "Analytics Cache", Path: "analytics/analytics_cache.json", Domain: "analytics_cache"},
 		{Name: "YouTube API Cache", Path: "analytics/youtube_api_cache.json", Domain: "youtube_cache"},
+		{Name: "Drive Links", Path: "drive/drive_links.yaml", AltPath: "drive/drive_links.json", Domain: "drive_links"},
 	}
 }
 
@@ -311,6 +313,18 @@ func createJSONBackup(absPath string, data []byte) (string, error) {
 
 // countJSONRecords returns the number of top-level records in a JSON file.
 func countJSONRecords(domain string, data []byte) (int, error) {
+	// Special case: drive_links can be YAML array
+	if domain == "drive_links" {
+		var list []map[string]any
+		if err := json.Unmarshal(data, &list); err == nil {
+			return len(list), nil
+		}
+		if err := yaml.Unmarshal(data, &list); err == nil {
+			return len(list), nil
+		}
+		return 0, nil
+	}
+
 	// Special case: workers domain uses { "workers": { ... }, "revoked": [...] }
 	// -> count the workers sub-object, not the top-level keys
 	if domain == "workers" {
@@ -360,6 +374,8 @@ func importJSONData(s *SQLiteStore, domain string, data []byte, absPath string) 
 		return importAnalyticsCacheJSON(s, data)
 	case "youtube_cache":
 		return importYouTubeCacheJSON(s, data)
+	case "drive_links":
+		return importDriveLinksJSON(s, data, absPath)
 	default:
 		return 0, fmt.Errorf("unknown import domain: %s", domain)
 	}
@@ -829,6 +845,31 @@ func importYouTubeCacheJSON(s *SQLiteStore, data []byte) (int, error) {
 			continue
 		}
 		imported++
+	}
+	return imported, nil
+}
+
+// --- Drive Links (YAML/JSON) ---
+
+// importDriveLinksJSON imports drive/drive_links.yaml (or .json) into drive_links.
+// Format: array of { "id": "...", "name": "...", "link": "...", "parentId": "...", "language": "..." }
+func importDriveLinksJSON(s *SQLiteStore, data []byte, absPath string) (int, error) {
+	var list []map[string]any
+
+	// Try JSON first, then YAML
+	if err := json.Unmarshal(data, &list); err != nil {
+		if yamlErr := yaml.Unmarshal(data, &list); yamlErr != nil {
+			return 0, fmt.Errorf("unmarshal drive links: json=%v, yaml=%v", err, yamlErr)
+		}
+	}
+
+	if len(list) == 0 {
+		return 0, nil
+	}
+
+	imported, err := s.MigrateDriveLinksFromJSON(list)
+	if err != nil {
+		return 0, fmt.Errorf("import drive links: %w", err)
 	}
 	return imported, nil
 }

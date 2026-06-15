@@ -81,6 +81,7 @@ func knownJSONFiles(dataDir string) []jsonFile {
 		{name: "Ansible Runs", path: "ansible_runs.json", domain: "ansible_runs"},
 		{name: "Analytics Cache", path: "analytics/analytics_cache.json", domain: "analytics_cache"},
 		{name: "YouTube API Cache", path: "analytics/youtube_api_cache.json", domain: "youtube_cache"},
+		{name: "Drive Links", path: "drive/drive_links.yaml", domain: "drive_links"},
 	}
 
 	var files []jsonFile
