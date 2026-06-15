@@ -68,7 +68,13 @@ func (w *Worker) jobLoop(ctx context.Context) {
 // pollJob checks for an available job from the master.
 func (w *Worker) pollJob(ctx context.Context) (*api.Job, error) {
 	w.logger.Debug("Polling for job...")
-	job, err := w.apiClient.GetJob(ctx, w.config.WorkerID)
+	var job *api.Job
+	var err error
+	if w.config.UseV2Endpoints != nil && *w.config.UseV2Endpoints {
+		job, err = w.apiClient.GetJobV2(ctx, w.config.WorkerID)
+	} else {
+		job, err = w.apiClient.GetJob(ctx, w.config.WorkerID)
+	}
 	if err != nil {
 		return nil, err
 	}

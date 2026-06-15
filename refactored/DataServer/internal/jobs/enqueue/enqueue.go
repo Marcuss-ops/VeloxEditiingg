@@ -146,14 +146,22 @@ func buildSceneImagePayload(rawPayload map[string]interface{}, dataDir, videosDi
 		totalDuration = perSceneDuration * float64(sceneCount)
 	}
 
-	stagedVoiceoverPaths, err := stageVoiceoverAssets(dataDir, masterURL, jobID, voiceoverPaths)
-	if err != nil {
-		return nil, err
-	}
+    stagedVoiceoverPaths, err := stageVoiceoverAssets(dataDir, masterURL, jobID, voiceoverPaths)
+    if err != nil {
+        return nil, err
+    }
+    stagedSceneImagePaths, err := stageSceneImageAssets(dataDir, masterURL, jobID, sceneEntries, sceneImagePaths)
+    if err != nil {
+        return nil, err
+    }
 
-	for i := range sceneEntries {
-		sceneEntries[i]["duration_seconds"] = perSceneDuration
-	}
+    for i := range sceneEntries {
+        sceneEntries[i]["duration_seconds"] = perSceneDuration
+        if i < len(stagedSceneImagePaths) && stagedSceneImagePaths[i] != "" {
+            sceneEntries[i]["image_link"] = stagedSceneImagePaths[i]
+            sceneEntries[i]["image_links"] = []string{stagedSceneImagePaths[i]}
+        }
+    }
 
 	outputPath := payload.FirstString(rawPayload, "output_path")
 	if outputPath == "" {
@@ -195,7 +203,7 @@ func buildSceneImagePayload(rawPayload map[string]interface{}, dataDir, videosDi
 	normalized["voiceover_count"] = len(voiceoverPaths)
 	normalized["total_duration_secs"] = totalDuration
 	normalized["scene_duration_secs"] = perSceneDuration
-	normalized["scene_image_paths"] = sceneImagePaths
+    normalized["scene_image_paths"] = stagedSceneImagePaths
 	if youtubeGroup := payload.FirstString(rawPayload, "youtube_group", "channel_id"); youtubeGroup != "" {
 		normalized["youtube_group"] = youtubeGroup
 		normalized["channel_id"] = youtubeGroup
@@ -227,7 +235,7 @@ func buildSceneImagePayload(rawPayload map[string]interface{}, dataDir, videosDi
 		"voiceover_count":        len(voiceoverPaths),
 		"total_duration_secs":    totalDuration,
 		"scene_duration_secs":    perSceneDuration,
-		"scene_image_paths":      sceneImagePaths,
+        "scene_image_paths":      stagedSceneImagePaths,
 		"youtube_group":          normalized["youtube_group"],
 		"channel_id":             normalized["channel_id"],
 		"priority":               normalized["priority"],
@@ -269,6 +277,38 @@ func stageVoiceoverAssets(dataDir, masterURL, jobID string, voiceoverPaths []str
 	}
 
 	return staged, nil
+}
+
+func stageSceneImageAssets(dataDir, masterURL, jobID string, sceneEntries []map[string]interface{}, sceneImagePaths []string) ([]string, error) {
+    if len(sceneImagePaths) == 0 {
+        return nil, nil
+    }
+    if strings.TrimSpace(masterURL) == "" {
+        return append([]string{}, sceneImagePaths...), nil
+    }
+
+    assetDir := filepath.Join(dataDir, "worker_downloads", "script_assets", jobID)
+    if err := os.MkdirAll(assetDir, 0o755); err != nil {
+        return nil, fmt.Errorf("create script asset dir: %w", err)
+    }
+
+    baseMasterURL := strings.TrimRight(strings.TrimSpace(masterURL), "/")
+    client := &http.Client{Timeout: 90 * time.Second}
+    staged := make([]string, 0, len(sceneImagePaths))
+
+    for idx, source := range sceneImagePaths {
+        filename := stagedAssetFilename(source, idx)
+        if filename == "" {
+            filename = fmt.Sprintf("scene_image_%d", idx+1)
+        }
+        destPath := filepath.Join(assetDir, filename)
+        if err := copyOrDownloadAsset(client, source, destPath); err != nil {
+            return nil, fmt.Errorf("stage scene image %d: %w", idx+1, err)
+        }
+        staged = append(staged, fmt.Sprintf("%s/api/worker/assets/scene-image/%s/%s", baseMasterURL, jobID, filename))
+    }
+
+    return staged, nil
 }
 
 func stagedAssetFilename(source string, idx int) string {

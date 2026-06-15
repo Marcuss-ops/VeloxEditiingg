@@ -167,8 +167,6 @@ func RegisterV1Routes(r *gin.Engine, cfg *config.Config, fileQ *queue.FileQueue,
 		}
 		v1.GET("/queue/job", jobAPI.GetJobHandler())
 		v1.POST("/queue/start", jobAPI.StartJobHandler())
-		v1.POST("/queue/complete", jobAPI.CompleteJobHandler())
-		v1.POST("/queue/fail", jobAPI.FailJobHandler())
 
 		// Workers status - requires queue for job counts
 		statusHandler := func(c *gin.Context) {

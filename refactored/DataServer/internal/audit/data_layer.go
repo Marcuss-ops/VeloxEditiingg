@@ -81,6 +81,9 @@ func (a *DataLayerAuditor) checkLegacyFiles(result *DataLayerAuditResult) {
 		"worker_downloads/bundle_manifest.json",
 		"analytics/feed_cache.json",
 		"youtube/history/upload_history.json",
+		"drive/drive_links.json",
+		"drive/drive_links.yaml",
+		"drive/drive_links.yml",
 	}
 
 	for _, legacy := range legacyFiles {

@@ -120,15 +120,18 @@ func (s *SQLiteStore) ClaimNextPendingJob(workerID string, allowedJobTypes []str
 		if err := s.replaceJobHistoryTx(tx, jobID, history); err != nil {
 			return nil, false, err
 		}
+		// Record job_attempt inside the same transaction so claim and attempt are atomic
+		insertedID, attemptErr := s.InsertJobAttemptTx(tx, jobID, retryCount, workerID, leaseID)
+		if attemptErr != nil {
+			return nil, false, fmt.Errorf("failed to record job attempt: %w", attemptErr)
+		}
 		if err := tx.Commit(); err != nil {
 			return nil, false, err
 		}
-		// Record job_attempt and log event outside transaction (own row each)
-		insertedID, attemptErr := s.InsertJobAttempt(jobID, retryCount, workerID, leaseID)
-		if attemptErr == nil && insertedID > 0 {
-		_ = s.LogJobEvent(jobID, "job_claimed", map[string]interface{}{
-			"worker_id": workerID, "lease_id": leaseID, "attempt": retryCount,
-		})
+		if insertedID > 0 {
+			_ = s.LogJobEvent(jobID, "job_claimed", map[string]interface{}{
+				"worker_id": workerID, "lease_id": leaseID, "attempt": retryCount,
+			})
 		}
 		return bytes.Clone(updatedRaw), true, nil
 	}

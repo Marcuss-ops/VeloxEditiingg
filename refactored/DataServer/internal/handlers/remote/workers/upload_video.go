@@ -43,11 +43,11 @@ func slugify(s string) string {
 	return s
 }
 
-// UploadCompletedVideo handles video file upload from workers
-// Enhanced version matching Python implementation:
+// UploadCompletedVideo handles video file upload from workers.
 // - Accepts upload_info JSON form field
+// - Saves the file locally and creates an artifact record
 // - Marks job as COMPLETED in file queue
-// - Tracks in pending_uploads for YouTube/Drive upload workflow
+// - Triggers YouTube auto-upload directly if youtube_group is configured
 // - Supports video naming with video_name from job spec
 func UploadCompletedVideo(cfg *config.Config, fileQ *queue.FileQueue, youtubeService *ytservice.Service) gin.HandlerFunc {
 	videosDir := cfg.VideosDir
@@ -307,21 +307,13 @@ func UploadCompletedVideo(cfg *config.Config, fileQ *queue.FileQueue, youtubeSer
 			}
 		}
 
-		// Add to pending uploads for YouTube/Drive workflow
-		globalUploadManager.AddPendingUpload(jobID, &PendingUpload{
-			VideoPath:  finalPath,
-			WorkerID:   workerID,
-			JobRunID:   jobRunID,
-			UploadInfo: canonicalUploadInfo,
-			ReceivedAt: time.Now(),
-		})
-		log.Printf("[UPLOAD] Info upload salvate in pending_uploads per job %s", jobID)
+		// Trigger YouTube auto-upload if group is configured
 		if ytGroup, ok := canonicalUploadInfo["youtube_group"].(string); ok && ytGroup != "" {
-			log.Printf("   YouTube group: %s", ytGroup)
+			log.Printf("[UPLOAD] YouTube group: %s", ytGroup)
 			maybeAutoUploadYouTube(fileQ, youtubeService, jobID, canonicalUploadInfo, finalPath)
 		}
 		if vidName, ok := canonicalUploadInfo["video_name"].(string); ok && vidName != "" {
-			log.Printf("   Video name: %s", vidName)
+			log.Printf("[UPLOAD] Video name: %s", vidName)
 		}
 
 		c.JSON(http.StatusOK, gin.H{
@@ -354,6 +346,14 @@ func NewWorkerAssetHandler(cfg *config.Config) *WorkerAssetHandler {
 }
 
 func (h *WorkerAssetHandler) ServeVoiceoverAsset() gin.HandlerFunc {
+	return h.serveScriptAsset("voiceover")
+}
+
+func (h *WorkerAssetHandler) ServeSceneImageAsset() gin.HandlerFunc {
+	return h.serveScriptAsset("scene-image")
+}
+
+func (h *WorkerAssetHandler) serveScriptAsset(kind string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if h == nil || strings.TrimSpace(h.dataDir) == "" {
 			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "asset storage unavailable"})
@@ -373,14 +373,15 @@ func (h *WorkerAssetHandler) ServeVoiceoverAsset() gin.HandlerFunc {
 			return
 		}
 
-		filePath := filepath.Join(h.dataDir, "worker_downloads", "script_assets", jobID, filename)
-		if !strings.HasPrefix(filepath.Clean(filePath), filepath.Clean(filepath.Join(h.dataDir, "worker_downloads", "script_assets"))) {
+		baseDir := filepath.Clean(filepath.Join(h.dataDir, "worker_downloads", "script_assets"))
+		filePath := filepath.Join(baseDir, jobID, filename)
+		if !strings.HasPrefix(filepath.Clean(filePath), baseDir) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid asset path"})
 			return
 		}
 
 		if _, err := os.Stat(filePath); os.IsNotExist(err) {
-			c.JSON(http.StatusNotFound, gin.H{"error": "asset not found"})
+			c.JSON(http.StatusNotFound, gin.H{"error": kind + " asset not found"})
 			return
 		}
 

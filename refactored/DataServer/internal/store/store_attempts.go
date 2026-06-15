@@ -1,6 +1,7 @@
 package store
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -27,6 +28,19 @@ type JobAttempt struct {
 func (s *SQLiteStore) InsertJobAttempt(jobID string, attemptNumber int, workerID, leaseID string) (int64, error) {
 	now := time.Now().UTC().Format(time.RFC3339)
 	result, err := s.db.Exec(
+		`INSERT INTO job_attempts (job_id, attempt_number, worker_id, lease_id, status, started_at, created_at)
+		 VALUES (?, ?, ?, ?, 'processing', ?, ?)`,
+		jobID, attemptNumber, workerID, leaseID, now, now,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.LastInsertId()
+}
+
+func (s *SQLiteStore) InsertJobAttemptTx(tx interface{ Exec(string, ...interface{}) (sql.Result, error) }, jobID string, attemptNumber int, workerID, leaseID string) (int64, error) {
+	now := time.Now().UTC().Format(time.RFC3339)
+	result, err := tx.Exec(
 		`INSERT INTO job_attempts (job_id, attempt_number, worker_id, lease_id, status, started_at, created_at)
 		 VALUES (?, ?, ?, ?, 'processing', ?, ?)`,
 		jobID, attemptNumber, workerID, leaseID, now, now,

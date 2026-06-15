@@ -102,7 +102,7 @@ func registerAPIV1Routes(r *gin.Engine, cfg *config.Config, deps *serverDeps, an
 			jobSvc.SetMasterBundleHash(hash)
 		}
 	}
-	jobAPI := jobhandlers.NewJobAPI(cfg, deps.fileQ, tokenMgr, jobSvc)
+	jobAPI := jobhandlers.NewJobAPI(cfg, deps.fileQ, tokenMgr, jobSvc, deps.sqliteStore)
 	jobSubmitHandler := jobhandlers.NewJobSubmissionHandler(cfg, deps.fileQ)
 	var youtubeService *ytservice.Service
 	if deps.youtubeModule != nil {
@@ -118,13 +118,6 @@ func registerAPIV1Routes(r *gin.Engine, cfg *config.Config, deps *serverDeps, an
 	orchAdmin := r.Group("/api/v1")
 	orchAdmin.Use(api.AdminAuthMiddleware(cfg))
 	registerOrchestratorRoutes(orchAdmin, deps)
-
-	r.POST("/api/jobs/get", jobAPI.GetJobCompatHandler())
-	r.POST("/api/jobs/result", jobAPI.SubmitResultCompatHandler())
-	r.GET("/api/jobs/get", jobAPI.GetJobCompatHandler())
-	r.POST("/api/jobs/lease", jobAPI.RenewLeaseHandler())
-	r.POST("/api/jobs/complete", jobAPI.CompleteJobHandler())
-	r.POST("/api/jobs/fail", jobAPI.FailJobHandler())
 
 	// Chunked upload routes (resumable worker→master video upload)
 	r.POST("/api/v1/video/chunked/init", workers.InitChunkedUpload())

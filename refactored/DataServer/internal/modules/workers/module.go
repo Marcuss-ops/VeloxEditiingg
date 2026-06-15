@@ -66,9 +66,9 @@ func (m *Module) RegisterRoutes(r *gin.Engine) {
 
 	if m.workerAssetHandler != nil {
 		r.GET("/api/worker/assets/voiceover/:job_id/:filename", m.workerAssetHandler.ServeVoiceoverAsset())
+		r.GET("/api/worker/assets/scene-image/:job_id/:filename", m.workerAssetHandler.ServeSceneImageAsset())
 	}
 
 	log.Printf("[WORKERS] Routes registered")
 }
-
 

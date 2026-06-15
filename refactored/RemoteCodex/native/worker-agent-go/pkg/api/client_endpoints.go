@@ -43,7 +43,7 @@ func (c *Client) UnregisterWorker(ctx context.Context, workerID string) error {
 	return err
 }
 
-// GetJob fetches the next available job from the master.
+// GetJob fetches the next available job from the master (legacy endpoint).
 func (c *Client) GetJob(ctx context.Context, workerID string) (*Job, error) {
 	respBody, err := c.doRequest(ctx, "POST", endpointGetJob, &JobRequest{WorkerID: workerID})
 	if err != nil {
@@ -67,13 +67,37 @@ func (c *Client) GetJob(ctx context.Context, workerID string) (*Job, error) {
 	return &job, nil
 }
 
-// SubmitJobResult submits the result of a completed job.
+// GetJobV2 fetches the next available job via the canonical v2 endpoint.
+func (c *Client) GetJobV2(ctx context.Context, workerID string) (*Job, error) {
+	path := endpointV2GetJob + "?worker_id=" + url.QueryEscape(workerID)
+	respBody, err := c.doRequest(ctx, "GET", path, nil)
+	if err != nil {
+		return nil, err
+	}
+	var apiResp struct {
+		Job    *Job   `json:"job"`
+		Reason string `json:"reason,omitempty"`
+	}
+	if err := json.Unmarshal(respBody, &apiResp); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+	return apiResp.Job, nil
+}
+
+// SubmitJobResult submits the result of a completed job (legacy endpoint).
 func (c *Client) SubmitJobResult(ctx context.Context, result *JobResult) error {
 	_, err := c.doRequest(ctx, "POST", endpointSubmitResult, result)
 	return err
 }
 
-// CompleteJob notifies the master that a job has completed successfully.
+// SubmitJobResultV2 submits the result via the canonical v2 endpoint.
+func (c *Client) SubmitJobResultV2(ctx context.Context, jobID string, result *JobResult) error {
+	path := fmt.Sprintf(endpointV2SubmitResult, url.PathEscape(jobID))
+	_, err := c.doRequest(ctx, "POST", path, result)
+	return err
+}
+
+// CompleteJob notifies the master that a job has completed successfully (legacy).
 func (c *Client) CompleteJob(ctx context.Context, jobID, workerID, leaseID string, attempt int) error {
 	body := map[string]interface{}{
 		"job_id":    jobID,
@@ -89,7 +113,23 @@ func (c *Client) CompleteJob(ctx context.Context, jobID, workerID, leaseID strin
 	return err
 }
 
-// RenewJobLease tells the master the worker is still processing the job.
+// CompleteJobV2 notifies completion via the canonical v2 endpoint.
+func (c *Client) CompleteJobV2(ctx context.Context, jobID, workerID, leaseID string, attempt int) error {
+	path := fmt.Sprintf(endpointV2CompleteJob, url.PathEscape(jobID))
+	body := map[string]interface{}{
+		"worker_id": workerID,
+	}
+	if strings.TrimSpace(leaseID) != "" {
+		body["lease_id"] = strings.TrimSpace(leaseID)
+	}
+	if attempt > 0 {
+		body["attempt"] = attempt
+	}
+	_, err := c.doRequest(ctx, "POST", path, body)
+	return err
+}
+
+// RenewJobLease tells the master the worker is still processing the job (legacy).
 func (c *Client) RenewJobLease(ctx context.Context, jobID, workerID, leaseID string, attempt int, leaseExpiresAt string) error {
 	body := map[string]interface{}{
 		"job_id":    jobID,
@@ -106,6 +146,26 @@ func (c *Client) RenewJobLease(ctx context.Context, jobID, workerID, leaseID str
 	}
 	body["contract_version"] = ContractVersionV2
 	_, err := c.doRequest(ctx, "POST", endpointRenewLease, body)
+	return err
+}
+
+// RenewJobLeaseV2 renews lease via the canonical v2 endpoint.
+func (c *Client) RenewJobLeaseV2(ctx context.Context, jobID, workerID, leaseID string, attempt int, leaseExpiresAt string) error {
+	path := fmt.Sprintf(endpointV2RenewLease, url.PathEscape(jobID))
+	body := map[string]interface{}{
+		"worker_id": workerID,
+	}
+	if strings.TrimSpace(leaseID) != "" {
+		body["lease_id"] = strings.TrimSpace(leaseID)
+	}
+	if attempt > 0 {
+		body["attempt"] = attempt
+	}
+	if strings.TrimSpace(leaseExpiresAt) != "" {
+		body["lease_expires_at"] = strings.TrimSpace(leaseExpiresAt)
+	}
+	body["contract_version"] = ContractVersionV2
+	_, err := c.doRequest(ctx, "POST", path, body)
 	return err
 }
 

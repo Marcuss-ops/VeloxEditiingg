@@ -2,7 +2,6 @@ package jobs
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -11,10 +10,10 @@ import (
 	"sort"
 	"strings"
 
-	"gopkg.in/yaml.v3"
 	"velox-server/internal/config"
 	"velox-server/internal/integrations/drive"
 	jobsservice "velox-server/internal/services/jobs"
+	"velox-server/internal/store"
 	"velox-shared/paths"
 )
 
@@ -176,13 +175,13 @@ func normalizeDriveFolderName(raw string) string {
 }
 
 // =============================================================================
-// VideoYoutube group target resolution (drive_links.yaml/json)
+// VideoYoutube group target resolution (SQLite drive_links)
 // =============================================================================
 
-func resolveVideoYoutubeGroupTarget(dataDir string, preferredGroup string) (groupDriveID string, resolvedGroup string, err error) {
-	rows, rootDriveID, rootLocalID := loadVideoYoutubeRows(dataDir)
+func resolveVideoYoutubeGroupTarget(dbStore *store.SQLiteStore, preferredGroup string) (groupDriveID string, resolvedGroup string, err error) {
+	rows, rootDriveID, rootLocalID := loadVideoYoutubeRowsFromDB(dbStore)
 	if len(rows) == 0 || rootDriveID == "" {
-		return "", "", fmt.Errorf("VideoYoutube root not found in drive_links.yaml/json")
+		return "", "", fmt.Errorf("VideoYoutube root not found in drive_links")
 	}
 
 	if g := strings.TrimSpace(preferredGroup); g != "" && !strings.EqualFold(g, "Ungrouped") {
@@ -194,38 +193,27 @@ func resolveVideoYoutubeGroupTarget(dataDir string, preferredGroup string) (grou
 	return "", "", fmt.Errorf("youtube group missing or invalid")
 }
 
-func loadVideoYoutubeRows(dataDir string) (rows []driveLinkRow, rootDriveID string, rootLocalID string) {
-	if strings.TrimSpace(dataDir) == "" {
+func loadVideoYoutubeRowsFromDB(dbStore *store.SQLiteStore) (rows []driveLinkRow, rootDriveID string, rootLocalID string) {
+	if dbStore == nil {
 		return nil, "", ""
 	}
-	candidates := []string{
-		filepath.Join(dataDir, "drive", "drive_links.yaml"),
-		filepath.Join(dataDir, "drive", "drive_links.yml"),
-		filepath.Join(dataDir, "drive", "drive_links.json"),
-	}
-	for _, path := range candidates {
-		raw, err := os.ReadFile(path)
-		if err != nil || len(raw) == 0 {
-			continue
-		}
-		rows = []driveLinkRow{}
-		if strings.HasSuffix(strings.ToLower(path), ".json") {
-			if err := json.Unmarshal(raw, &rows); err != nil {
-				continue
-			}
-		} else {
-			if err := yaml.Unmarshal(raw, &rows); err != nil {
-				continue
-			}
-		}
-		if len(rows) == 0 {
-			continue
-		}
-		break
-	}
-	if len(rows) == 0 {
+	dbLinks, err := dbStore.ListDriveLinks()
+	if err != nil || len(dbLinks) == 0 {
 		return nil, "", ""
 	}
+
+	rows = make([]driveLinkRow, 0, len(dbLinks))
+	for _, link := range dbLinks {
+		row := driveLinkRow{
+			ID:       asJobString(link["id"]),
+			Name:     asJobString(link["name"]),
+			Link:     asJobString(link["link"]),
+			ParentID: asJobString(link["parentId"]),
+			Language: asJobString(link["language"]),
+		}
+		rows = append(rows, row)
+	}
+
 	for _, r := range rows {
 		if strings.EqualFold(strings.TrimSpace(r.Name), "VideoYoutube") {
 			rootLocalID = strings.TrimSpace(r.ID)

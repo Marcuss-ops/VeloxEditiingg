@@ -282,16 +282,53 @@ func (w *Worker) sendHeartbeat(ctx context.Context) error {
 	if err := w.apiClient.SendHeartbeat(ctx, payload); err != nil {
 		return err
 	}
-	if w.currentJob != nil {
-		leaseID := resolveLeaseID(w.currentJob)
-		if leaseID != "" {
+	return nil
+}
+
+// leaseRenewLoop sends periodic lease renewals for the current job, decoupled from heartbeat.
+func (w *Worker) leaseRenewLoop(ctx context.Context) {
+	defer w.wg.Done()
+
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			w.logger.Debug("Lease renew loop exiting (context done)")
+			return
+		case <-w.stopChan:
+			w.logger.Debug("Lease renew loop exiting (stop signal)")
+			return
+		case <-ticker.C:
+			w.mu.RLock()
+			job := w.currentJob
+			w.mu.RUnlock()
+
+			if job == nil {
+				continue
+			}
+
+			leaseID := resolveLeaseID(job)
+			if leaseID == "" {
+				continue
+			}
+
 			leaseExpiry := time.Now().UTC().Add(30 * time.Minute).Format(time.RFC3339)
-			if err := w.apiClient.RenewJobLease(ctx, w.currentJob.JobID, w.config.WorkerID, leaseID, resolveJobAttempt(w.currentJob), leaseExpiry); err != nil {
-				w.logger.Warn("[LEASE] Failed to renew lease for job %s: %v", w.currentJob.JobID, err)
+			attempt := resolveJobAttempt(job)
+			var err error
+			if w.config.UseV2Endpoints != nil && *w.config.UseV2Endpoints {
+				err = w.apiClient.RenewJobLeaseV2(ctx, job.JobID, w.config.WorkerID, leaseID, attempt, leaseExpiry)
+			} else {
+				err = w.apiClient.RenewJobLease(ctx, job.JobID, w.config.WorkerID, leaseID, attempt, leaseExpiry)
+			}
+			if err != nil {
+				w.logger.Warn("[LEASE] Failed to renew lease for job %s: %v", job.JobID, err)
+			} else {
+				w.logger.Debug("[LEASE] Renewed lease for job %s (lease_id=%s)", job.JobID, leaseID)
 			}
 		}
 	}
-	return nil
 }
 
 // calculateBackoff returns the next backoff interval capped at heartbeatMaxBackoff.

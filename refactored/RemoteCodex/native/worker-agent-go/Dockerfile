@@ -20,6 +20,7 @@ FROM debian:bookworm-slim
 ENV DEBIAN_FRONTEND=noninteractive
 ENV VELOX_VIDEO_ENGINE_CPP_BIN=/usr/local/bin/velox_video_engine
 ENV VELOX_VIDEO_ENGINE_BUILD_DIR=/tmp/velox-video-engine-build
+ENV VELOX_HEALTH_PORT=8081
 
 WORKDIR /app
 
@@ -60,7 +61,7 @@ RUN useradd -r -m -s /usr/sbin/nologin velox && \
 
 # Health check: verify worker agent HTTP endpoint is responding
 HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=3 \
-    CMD curl -sf http://localhost:8081/health || exit 1
+    CMD /bin/sh -c 'curl -sf "http://localhost:${VELOX_HEALTH_PORT:-8081}/health" || exit 1'
 
 ENTRYPOINT ["/usr/local/bin/worker-entrypoint.sh"]
 CMD ["-master", "http://master:8000"]
