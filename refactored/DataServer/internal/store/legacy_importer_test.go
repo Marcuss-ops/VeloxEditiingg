@@ -253,8 +253,8 @@ func TestSanitizeFilename_Empty(t *testing.T) {
 
 func TestLegacyJSONSources_Count(t *testing.T) {
 	sources := legacyJSONSources()
-	if len(sources) != 8 {
-		t.Errorf("Expected 8 legacy JSON sources, got %d", len(sources))
+	if len(sources) != 9 {
+		t.Errorf("Expected 9 legacy JSON sources, got %d", len(sources))
 	}
 }
 
@@ -275,7 +275,7 @@ func TestLegacyJSONSources_Domains(t *testing.T) {
 	}
 
 	expectedDomains := []string{"workers", "youtube_channels", "youtube_groups", "youtube_manager",
-		"ansible_hosts", "ansible_runs", "analytics_cache", "youtube_cache"}
+		"ansible_hosts", "ansible_runs", "analytics_cache", "youtube_cache", "drive_links"}
 	for _, d := range expectedDomains {
 		if !domains[d] {
 			t.Errorf("Missing expected domain: %s", d)
