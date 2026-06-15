@@ -97,8 +97,6 @@ Velox è un sistema distribuito per la generazione e composizione video. È comp
 │   │   ├── logging/                   # Structured logging, throttling
 │   │   ├── queue/                     # Code job
 │   │   │   ├── file_queue.go          # FileQueue (SQLite-backed)
-│   │   │   ├── redis.go               # Redis queue (legacy)
-│   │   │   ├── streams_queue.go       # StreamsQueue (per submissions)
 │   │   │   ├── orchestrator.go        # Job orchestration
 │   │   │   ├── dlq.go                 # Dead letter queue
 │   │   │   ├── events.go              # Queue events
@@ -111,8 +109,6 @@ Velox è un sistema distribuito per la generazione e composizione video. È comp
 │   │   ├── store/                     # Persistenza (33+ file)
 │   │   │   ├── sqlite.go              # SQLite store
 │   │   │   ├── sqlite_*.go            # Domain-specific SQLite repos
-│   │   │   ├── postgres_store.go      # PostgreSQL store (enterprise)
-│   │   │   ├── postgres/              # PostgreSQL-specific repos
 │   │   │   ├── migrations/            # DB migrations
 │   │   │   └── interface.go           # Repository interfaces
 │   │   ├── workers/                   # Registry, CommandManager, TokenManager
@@ -257,7 +253,7 @@ Deploy remoto worker via Ansible:
 |-----------|---------|-------------|
 | `VELOX_DATA_DIR` | `.velox/data` | Directory dati principale |
 | `VELOX_RUNTIME_DIR` | `.velox` | Runtime root |
-| `VELOX_DB_DRIVER` | `sqlite3` | Driver DB (`sqlite3` o `postgres`) |
+| `VELOX_DB_DRIVER` | `sqlite3` | Driver DB (`sqlite3`) |
 | `VELOX_DB_DSN` | `DataDir/velox.db` | Database connection string |
 | `VELOX_DB_MAX_OPEN_CONNS` | `50` | Max connessioni DB aperte |
 | `VELOX_DB_MAX_IDLE_CONNS` | `10` | Max connessioni DB idle |
@@ -567,6 +563,5 @@ make build
 
 - **Go-only mode** è permanente. Le variabili `GoOnlyMode` e `GoOnlyWhitelist` sono state rimosse.
 - **Python backend** non esiste più. La variabile `PythonBackendURL` è stata rimossa.
-- **PostgreSQL** è supportato come database enterprise (`VELOX_DB_DRIVER=postgres`).
 - **TLS** è supportato via `VELOX_TLS_CERT_FILE` e `VELOX_TLS_KEY_FILE`.
 - **S3/MinIO/R2** è supportato per storage oggetti.
