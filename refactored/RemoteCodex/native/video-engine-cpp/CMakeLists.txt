@@ -7,6 +7,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 add_executable(velox_video_engine
     src/main.cpp
+    src/cmd_full_video.cpp
     src/video_builder.cpp
 )
 
