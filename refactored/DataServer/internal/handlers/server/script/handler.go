@@ -2,6 +2,9 @@ package script
 
 import (
 	"context"
+	"database/sql"
+	"errors"
+	"log"
 	"net/http"
 	"os/exec"
 	"strings"
@@ -16,6 +19,11 @@ import (
 )
 
 const scriptSceneMode = "scene_image"
+
+// errScriptHandlerNotConfigured is returned by loadJob when the handler's
+// SQLiteStore dependency was never wired up. It is a distinct sentinel so
+// operators can tell handler-misconfiguration apart from real DB failures.
+var errScriptHandlerNotConfigured = errors.New("script handler sqliteDB not configured")
 
 // ScriptHandlers exposes the script-with-images workflow.
 type ScriptHandlers struct {
@@ -124,9 +132,14 @@ func (h *ScriptHandlers) ScriptJobHandler(full bool) gin.HandlerFunc {
 			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "job_id required"})
 			return
 		}
-		job, ok := h.loadJob(c.Request.Context(), jobID)
-		if !ok {
-			c.JSON(http.StatusNotFound, gin.H{"ok": false, "error": "job not found"})
+		job, err := h.loadJob(c.Request.Context(), jobID)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				c.JSON(http.StatusNotFound, gin.H{"ok": false, "error": "job not found"})
+				return
+			}
+			log.Printf("[SCRIPT] loadJob failed for job %s: %v", jobID, err)
+			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": "failed to load job"})
 			return
 		}
 		c.JSON(http.StatusOK, enqueue.RenderJobResponse(job, full))
@@ -140,22 +153,30 @@ func (h *ScriptHandlers) ScriptByIDHandler() gin.HandlerFunc {
 			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "script_id required"})
 			return
 		}
-		job, ok := h.loadJob(c.Request.Context(), scriptID)
-		if !ok {
-			c.JSON(http.StatusNotFound, gin.H{"ok": false, "error": "script not found"})
+		job, err := h.loadJob(c.Request.Context(), scriptID)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				c.JSON(http.StatusNotFound, gin.H{"ok": false, "error": "script not found"})
+				return
+			}
+			log.Printf("[SCRIPT] loadJob failed for script %s: %v", scriptID, err)
+			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": "failed to load script"})
 			return
 		}
 		c.JSON(http.StatusOK, enqueue.RenderJobResponse(job, true))
 	}
 }
 
-func (h *ScriptHandlers) loadJob(ctx context.Context, jobID string) (map[string]interface{}, bool) {
+func (h *ScriptHandlers) loadJob(ctx context.Context, jobID string) (map[string]interface{}, error) {
 	if h.sqliteDB == nil {
-		return nil, false
+		return nil, errScriptHandlerNotConfigured
 	}
 	job, err := h.sqliteDB.GetJob(ctx, jobID)
-	if err != nil || job == nil {
-		return nil, false
+	if err != nil {
+		return nil, err
 	}
-	return job, true
+	if job == nil {
+		return nil, sql.ErrNoRows
+	}
+	return job, nil
 }
