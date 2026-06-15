@@ -25,6 +25,7 @@ func RegisterV2JobRoutes(rg *gin.RouterGroup, cfg *config.Config, fileQ *queue.F
 	rg.POST("/jobs/:id/lease", h.RenewLease())
 	rg.POST("/jobs/:id/complete", h.CompleteJob())
 	rg.POST("/jobs/:id/fail", h.FailJob())
+	rg.POST("/jobs/:id/result", h.SubmitResult())
 	rg.POST("/jobs/:id/progress", h.Progress())
 	rg.GET("/jobs/:id/attempts", h.ListAttempts())
 	rg.GET("/jobs/:id/artifacts", h.ListArtifacts())
@@ -148,6 +149,69 @@ func (h *jobV2Handler) CompleteJob() gin.HandlerFunc {
 		}
 
 		c.JSON(http.StatusOK, gin.H{"ok": true, "job_id": jobID})
+	}
+}
+
+func (h *jobV2Handler) SubmitResult() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		jobID := c.Param("id")
+		var body struct {
+			WorkerID        string                 `json:"worker_id"`
+			LeaseID         string                 `json:"lease_id"`
+			Status          string                 `json:"status"`
+			Error           string                 `json:"error"`
+			Output          map[string]interface{} `json:"output"`
+			Attempt         int                    `json:"attempt"`
+			ContractVersion int                    `json:"contract_version"`
+			ArtifactID      string                 `json:"artifact_id"`
+			OutputSHA256    string                 `json:"output_sha256"`
+			IdempotencyKey  string                 `json:"idempotency_key"`
+		}
+		if err := c.ShouldBindJSON(&body); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "invalid request"})
+			return
+		}
+		if jobID == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "job_id required"})
+			return
+		}
+
+		// Validate lease
+		if err := h.svc.ValidateJobLease(c.Request.Context(), jobID, body.WorkerID, body.LeaseID); err != nil {
+			c.JSON(http.StatusConflict, gin.H{"ok": false, "error": err.Error()})
+			return
+		}
+
+		req := jobservice.SubmitResultRequest{
+			JobID:           jobID,
+			WorkerID:        body.WorkerID,
+			Status:          body.Status,
+			Error:           body.Error,
+			Output:          body.Output,
+			LeaseID:         body.LeaseID,
+			Attempt:         body.Attempt,
+			ContractVersion: body.ContractVersion,
+			ArtifactID:      body.ArtifactID,
+			OutputSHA256:    body.OutputSHA256,
+			IdempotencyKey:  body.IdempotencyKey,
+			EndTime:         time.Now().UTC().Format(time.RFC3339),
+		}
+		ok, err := h.svc.SubmitResult(c.Request.Context(), req)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": err.Error()})
+			return
+		}
+
+		// Auto-log event
+		if h.dbStore != nil {
+			_ = h.dbStore.LogJobEvent(jobID, "job_result_submitted", map[string]interface{}{
+				"worker_id": body.WorkerID, "lease_id": body.LeaseID,
+				"status": body.Status, "artifact_id": body.ArtifactID,
+				"output_sha256": body.OutputSHA256,
+			})
+		}
+
+		c.JSON(http.StatusOK, gin.H{"ok": true, "job_id": jobID, "completed": ok})
 	}
 }
 

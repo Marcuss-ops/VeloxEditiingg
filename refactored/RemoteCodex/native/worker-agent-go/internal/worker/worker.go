@@ -29,6 +29,10 @@ func (w *Worker) Start(ctx context.Context) error {
 	w.wg.Add(1)
 	go w.heartbeatLoop(ctx)
 
+	// Start dedicated lease renewal goroutine (decoupled from heartbeat)
+	w.wg.Add(1)
+	go w.leaseRenewLoop(ctx)
+
 	// Start job polling goroutine
 	w.wg.Add(1)
 	go w.jobLoop(ctx)

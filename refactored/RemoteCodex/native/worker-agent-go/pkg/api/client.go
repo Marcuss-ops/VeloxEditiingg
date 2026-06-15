@@ -34,6 +34,12 @@ const (
 	endpointGetCommands      = "/api/workers/commands"
 	endpointAckCommand       = "/api/workers/commands/ack"
 	endpointUpdateStatus     = "/api/workers/status"
+
+	// V2 canonical endpoints
+	endpointV2GetJob      = "/api/v1/queue/job"
+	endpointV2SubmitResult = "/api/v1/jobs/%s/result"
+	endpointV2CompleteJob = "/api/v1/jobs/%s/complete"
+	endpointV2RenewLease  = "/api/v1/jobs/%s/lease"
 )
 
 // Client is an HTTP client for the Velox Master API.

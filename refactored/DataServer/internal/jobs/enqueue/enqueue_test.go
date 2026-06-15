@@ -117,10 +117,12 @@ func TestBuildSceneImagePayloadForMaster(t *testing.T) {
 	tempDir := t.TempDir()
 	srcVoice := filepath.Join(tempDir, "voiceover.mp3")
 	os.WriteFile(srcVoice, []byte("fake-audio"), 0o600)
+	srcImage := filepath.Join(tempDir, "scene.jpg")
+	os.WriteFile(srcImage, []byte("fake-image"), 0o600)
 
 	payload := map[string]interface{}{
 		"video_name": "Master Test", "voiceover_path": srcVoice,
-		"scenes": []interface{}{map[string]interface{}{"text": "S1", "image_link": "https://example.com/i.png"}},
+		"scenes": []interface{}{map[string]interface{}{"text": "S1", "image_link": srcImage}},
 	}
 	result, err := BuildSceneImagePayloadForMaster(payload, tempDir, filepath.Join(tempDir, "videos"), "http://master.example")
 	if err != nil {
@@ -130,11 +132,27 @@ func TestBuildSceneImagePayloadForMaster(t *testing.T) {
 	if !strings.HasPrefix(vp, "http://master.example/api/worker/assets/voiceover/") {
 		t.Errorf("want staged voiceover url, got %q", vp)
 	}
+	sp, _ := result["scene_image_paths"].([]string)
+	if len(sp) != 1 || !strings.HasPrefix(sp[0], "http://master.example/api/worker/assets/scene-image/") {
+		t.Fatalf("want staged scene image url, got %v", sp)
+	}
+	scenes, _ := result["scenes"].([]map[string]interface{})
+	if len(scenes) != 1 {
+		t.Fatalf("want 1 scene, got %d", len(scenes))
+	}
+	if img, _ := scenes[0]["image_link"].(string); !strings.HasPrefix(img, "http://master.example/api/worker/assets/scene-image/") {
+		t.Fatalf("want staged scene image link, got %q", img)
+	}
 	jobID, _ := result["job_id"].(string)
 	staged := filepath.Join(tempDir, "worker_downloads", "script_assets", jobID, "voiceover.mp3")
 	data, _ := os.ReadFile(staged)
 	if string(data) != "fake-audio" {
 		t.Errorf("staged content mismatch: %q", string(data))
+	}
+	sceneStaged := filepath.Join(tempDir, "worker_downloads", "script_assets", jobID, "scene.jpg")
+	sceneData, _ := os.ReadFile(sceneStaged)
+	if string(sceneData) != "fake-image" {
+		t.Errorf("scene staged content mismatch: %q", string(sceneData))
 	}
 }
 

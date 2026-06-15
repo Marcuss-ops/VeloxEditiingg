@@ -125,8 +125,6 @@ func maybeAutoUploadYouTube(fileQ *queue.FileQueue, youtubeService *ytservice.Se
 	})
 
 	go func() {
-		defer globalUploadManager.RemovePendingUpload(jobID)
-
 		uploadCtx, uploadCancel := context.WithTimeout(context.Background(), 10*time.Minute)
 		defer uploadCancel()
 

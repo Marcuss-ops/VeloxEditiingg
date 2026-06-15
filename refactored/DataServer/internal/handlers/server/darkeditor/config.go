@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"velox-server/internal/store"
 )
 
 // ============================================================================
@@ -147,8 +149,9 @@ type Config struct {
 
 // Handler holds the dark editor handlers
 type Handler struct {
-	cfg    *Config
-	logger *Logger // Persistent logger
+	cfg     *Config
+	logger  *Logger // Persistent logger
+	dbStore *store.SQLiteStore
 }
 
 // NewHandler creates a new dark editor handler
@@ -171,6 +174,11 @@ func NewHandler(cfg *Config) *Handler {
 	}
 
 	return h
+}
+
+// SetDBStore sets the SQLite store for database-backed persistence
+func (h *Handler) SetDBStore(db *store.SQLiteStore) {
+	h.dbStore = db
 }
 
 // SetLogger sets the logger (for late initialization)

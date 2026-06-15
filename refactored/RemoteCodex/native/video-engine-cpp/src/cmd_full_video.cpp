@@ -50,6 +50,22 @@ static std::string escapeJsonString(const std::string& s) {
 
 namespace {
 
+int ffmpegThreadsForSceneWorkers(size_t workerCount) {
+    const char* existing = std::getenv("VELOX_FFMPEG_THREADS");
+    if (existing != nullptr && std::string(existing).size() > 0) {
+        return 0;
+    }
+    unsigned int hw = std::thread::hardware_concurrency();
+    if (hw == 0) {
+        hw = 4;
+    }
+    if (workerCount == 0) {
+        workerCount = 1;
+    }
+    const size_t threads = std::max<size_t>(1, static_cast<size_t>(hw / workerCount));
+    return static_cast<int>(threads);
+}
+
 struct SceneWorkResult {
     size_t index{0};
     fs::path segmentPath;
@@ -290,6 +306,12 @@ int cmdFullVideo(int argc, char** argv) {
         }
 
         const size_t workerCount = determineSceneWorkerCount(renderCount);
+        const int ffmpegThreads = ffmpegThreadsForSceneWorkers(workerCount);
+        if (ffmpegThreads > 0) {
+            const std::string threadValue = std::to_string(ffmpegThreads);
+            setenv("VELOX_FFMPEG_THREADS", threadValue.c_str(), 1);
+            std::cerr << "ffmpeg_threads=" << ffmpegThreads << " (workerCount=" << workerCount << ")\n";
+        }
         std::vector<SceneWorkResult> results(renderCount);
         std::atomic<size_t> nextIndex{0};
         std::vector<std::thread> workers;

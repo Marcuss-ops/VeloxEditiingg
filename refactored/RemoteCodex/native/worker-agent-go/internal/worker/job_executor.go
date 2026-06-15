@@ -140,14 +140,26 @@ func (w *Worker) executeJob(ctx context.Context, job *api.Job) {
 	defer cancel()
 
 	ackStartTime := time.Now()
-	if err := w.apiClient.SubmitJobResult(submitCtx, result); err != nil {
-		w.logger.Error("Failed to submit job result for %s: %v", job.JobID, err)
+	var submitErr error
+	if w.config.UseV2Endpoints != nil && *w.config.UseV2Endpoints {
+		submitErr = w.apiClient.SubmitJobResultV2(submitCtx, job.JobID, result)
+	} else {
+		submitErr = w.apiClient.SubmitJobResult(submitCtx, result)
+	}
+	if submitErr != nil {
+		w.logger.Error("Failed to submit job result for %s: %v", job.JobID, submitErr)
 	} else {
 		w.logger.Debug("Job result submitted: %s (status: %s)", job.JobID, result.Status)
 		telemetry.GetPrometheusMetrics().RecordJobCompleteAck(job.JobType, float64(time.Since(ackStartTime).Milliseconds()))
 		completeCtx, completeCancel := context.WithTimeout(context.Background(), 30*time.Second)
-		if err := w.apiClient.CompleteJob(completeCtx, job.JobID, w.config.WorkerID, resolveLeaseID(job), resolveJobAttempt(job)); err != nil {
-			w.logger.Warn("[JOB] Complete notification failed for %s: %v", job.JobID, err)
+		var completeErr error
+		if w.config.UseV2Endpoints != nil && *w.config.UseV2Endpoints {
+			completeErr = w.apiClient.CompleteJobV2(completeCtx, job.JobID, w.config.WorkerID, resolveLeaseID(job), resolveJobAttempt(job))
+		} else {
+			completeErr = w.apiClient.CompleteJob(completeCtx, job.JobID, w.config.WorkerID, resolveLeaseID(job), resolveJobAttempt(job))
+		}
+		if completeErr != nil {
+			w.logger.Warn("[JOB] Complete notification failed for %s: %v", job.JobID, completeErr)
 		} else {
 			w.logger.Info("[JOB] Complete notification sent for %s", job.JobID)
 		}

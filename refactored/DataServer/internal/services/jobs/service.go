@@ -56,6 +56,9 @@ type SubmitResultRequest struct {
 	LeaseID         string
 	Attempt         int
 	ContractVersion int
+	ArtifactID      string
+	OutputSHA256    string
+	IdempotencyKey  string
 }
 
 func NewService(cfg *config.Config, fileQ *queue.FileQueue, jobsRepo store.JobsRepository, logger *queue.EventLogger, reg *workers.Registry) *Service {
@@ -242,6 +245,15 @@ func (s *Service) SubmitResult(ctx context.Context, req SubmitResultRequest) (bo
 				if path := ExtractOutputVideoPath(req.Output); path != "" {
 					updates["result_path_worker"] = path
 				}
+			}
+			if strings.TrimSpace(req.ArtifactID) != "" {
+				updates["artifact_id"] = strings.TrimSpace(req.ArtifactID)
+			}
+			if strings.TrimSpace(req.OutputSHA256) != "" {
+				updates["output_sha256"] = strings.TrimSpace(req.OutputSHA256)
+			}
+			if strings.TrimSpace(req.IdempotencyKey) != "" {
+				updates["upload_idempotency_key"] = strings.TrimSpace(req.IdempotencyKey)
 			}
 			err = s.fileQ.UpdateJobFields(ctx, req.JobID, updates)
 		}

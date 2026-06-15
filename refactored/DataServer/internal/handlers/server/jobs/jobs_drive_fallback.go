@@ -132,7 +132,7 @@ func (api *JobAPI) tryDriveFallbackUpload(jobID string) {
 	}
 	if targetParentID == "" {
 		var resolveErr error
-		targetParentID, resolvedGroup, resolveErr = resolveVideoYoutubeGroupTarget(api.cfg.DataDir, groupName)
+		targetParentID, resolvedGroup, resolveErr = resolveVideoYoutubeGroupTarget(api.dbStore, groupName)
 		if resolveErr != nil {
 			if updErr := api.fileQ.UpdateJobFields(ctx, jobID, map[string]interface{}{
 				"last_drive_upload_result": map[string]interface{}{
