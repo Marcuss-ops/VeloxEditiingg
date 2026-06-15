@@ -1,13 +1,14 @@
 package youtube
 
 import (
+	"context"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
 
-// AccountInfo represents an OAuth account for the frontend.
 type AccountInfo struct {
 	ID           string `json:"id"`
 	Title        string `json:"title"`
@@ -18,8 +19,6 @@ type AccountInfo struct {
 	Email        string `json:"email,omitempty"`
 }
 
-// ListAccountsHandler returns all YouTube OAuth accounts.
-// GET /api/youtube/accounts
 func (ym *YouTubeManager) ListAccountsHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if ym.service == nil {
@@ -50,8 +49,6 @@ func (ym *YouTubeManager) ListAccountsHandler() gin.HandlerFunc {
 	}
 }
 
-// GetAccountHandler returns a single YouTube OAuth account.
-// GET /api/youtube/accounts/:id
 func (ym *YouTubeManager) GetAccountHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		channelID := c.Param("id")
@@ -82,8 +79,6 @@ func (ym *YouTubeManager) GetAccountHandler() gin.HandlerFunc {
 	}
 }
 
-// RefreshAccountHandler refreshes the OAuth token for a YouTube account.
-// POST /api/youtube/accounts/:id/refresh
 func (ym *YouTubeManager) RefreshAccountHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		channelID := c.Param("id")
@@ -116,4 +111,98 @@ func (ym *YouTubeManager) RefreshAccountHandler() gin.HandlerFunc {
 			"message": "Token refreshed",
 		})
 	}
+}
+
+func (h *YouTubeHandlers) GetHealth(c *gin.Context) {
+	channelID := c.Query("channel_id")
+
+	if channelID == "" {
+		channels := h.service.GetChannels()
+		c.JSON(http.StatusOK, gin.H{
+			"ok":       true,
+			"channels": len(channels),
+			"message":  "YouTube service is running",
+		})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
+	defer cancel()
+
+	health, err := h.service.HealthCheck(ctx, channelID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, health)
+}
+
+func (h *YouTubeHandlers) ValidateToken(c *gin.Context) {
+	channelID := c.Param("id")
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
+	defer cancel()
+
+	result, err := h.service.ValidateToken(ctx, channelID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, result)
+}
+
+func (h *YouTubeHandlers) RevokeToken(c *gin.Context) {
+	channelID := c.Param("id")
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
+	defer cancel()
+
+	err := h.service.RevokeToken(ctx, channelID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"ok":      true,
+		"message": fmt.Sprintf("Channel '%s' token revoked and removed", channelID),
+	})
+}
+
+func (h *YouTubeHandlers) RefreshToken(c *gin.Context) {
+	channelID := c.Param("id")
+
+	channel := h.service.GetChannel(channelID)
+	if channel == nil {
+		c.JSON(http.StatusNotFound, gin.H{
+			"ok":    false,
+			"error": "Channel not found",
+		})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
+	defer cancel()
+
+	result, err := h.service.ValidateToken(ctx, channelID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, result)
+}
+
+func (h *YouTubeHandlers) GetQuota(c *gin.Context) {
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
+	defer cancel()
+
+	quota := h.service.GetQuotaUsage(ctx)
+
+	c.JSON(http.StatusOK, gin.H{
+		"ok":    true,
+		"quota": quota,
+	})
 }

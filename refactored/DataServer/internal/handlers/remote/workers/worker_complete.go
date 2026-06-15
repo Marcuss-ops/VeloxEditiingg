@@ -9,6 +9,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"velox-server/internal/config"
+	ytservice "velox-server/internal/integrations/youtube"
 	"velox-server/internal/queue"
 )
 
@@ -17,7 +18,7 @@ import (
 // - Validates video upload via pending_uploads
 // - Returns 409 if video not received
 // - Triggers YouTube/Drive upload workflow
-func CompleteJobEnhanced(cfg *config.Config, fileQ *queue.FileQueue) gin.HandlerFunc {
+func CompleteJobEnhanced(cfg *config.Config, fileQ *queue.FileQueue, youtubeService *ytservice.Service) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		jobID := c.Query("job_id")
 		workerID := c.Query("worker_id")
@@ -169,6 +170,7 @@ func CompleteJobEnhanced(cfg *config.Config, fileQ *queue.FileQueue) gin.Handler
 			if ytGroup != "" {
 				log.Printf("[UPLOAD] Upload schedulato: verrà tentato YouTube (youtube_group=%s)", ytGroup)
 				uploadScheduled = true
+				maybeAutoUploadYouTube(fileQ, youtubeService, jobID, pending.UploadInfo, pending.VideoPath)
 			}
 		}
 

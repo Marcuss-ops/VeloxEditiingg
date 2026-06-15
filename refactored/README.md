@@ -519,7 +519,7 @@ Deploy remoto worker via Ansible:
 cd DataServer
 export VELOX_ADMIN_TOKEN=velox-dev-token
 export VELOX_SPA_DIR=../frontend_standalone/web/dist
-export MASTER_PUBLIC_URL=http://51.91.11.36:8000
+export MASTER_PUBLIC_URL=http://100.74.74.124:8000
 go run ./cmd/server
 # Server su http://0.0.0.0:8000
 ```

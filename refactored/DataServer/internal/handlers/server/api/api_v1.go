@@ -20,6 +20,7 @@ import (
 	"velox-server/internal/handlers/server/pipeline"
 	"velox-server/internal/handlers/server/smoke"
 	"velox-server/internal/handlers/web/proxy"
+	ytservice "velox-server/internal/integrations/youtube"
 	"velox-server/internal/queue"
 	analyticsService "velox-server/internal/services/analytics"
 	"velox-server/internal/store"
@@ -124,7 +125,7 @@ func workerStatusCounts(ctx context.Context, fileQ *queue.FileQueue) (pending, p
 }
 
 // RegisterV1Routes registers all /api/v1/* routes (core API)
-func RegisterV1Routes(r *gin.Engine, cfg *config.Config, fileQ *queue.FileQueue, reg *workersreg.Registry, jobAPI *jobs.JobAPI, jobSubmitHandler *jobs.JobSubmissionHandler, workersRepo store.WorkersRepository, db *store.SQLiteStore, workerUpdateHandler *workers.WorkerUpdateHandler, ansibleHandlers *ansible.AnsibleHandlers) {
+func RegisterV1Routes(r *gin.Engine, cfg *config.Config, fileQ *queue.FileQueue, reg *workersreg.Registry, jobAPI *jobs.JobAPI, jobSubmitHandler *jobs.JobSubmissionHandler, workersRepo store.WorkersRepository, db *store.SQLiteStore, workerUpdateHandler *workers.WorkerUpdateHandler, youtubeService *ytservice.Service, ansibleHandlers *ansible.AnsibleHandlers) {
 	v1 := r.Group("/api/v1")
 	v1Admin := r.Group("/api/v1")
 	v1Admin.Use(AdminAuthMiddleware(cfg))
@@ -251,7 +252,7 @@ func RegisterV1Routes(r *gin.Engine, cfg *config.Config, fileQ *queue.FileQueue,
 
 		// Video - Core API
 		v1Admin.POST("/video/create-master", master.CreateMaster(cfg, fileQ))
-		v1.POST("/video/upload-completed", workers.UploadCompletedVideo(cfg, fileQ))
+		v1.POST("/video/upload-completed", workers.UploadCompletedVideo(cfg, fileQ, youtubeService))
 
 		// Ansible - Core API
 		// Registered here so both /api/v1 and legacy /ansible paths share the same implementation.

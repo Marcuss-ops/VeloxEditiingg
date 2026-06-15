@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-MASTER_URL="${MASTER_URL:-http://51.91.11.36:8000}"
+MASTER_URL="${MASTER_URL:-http://100.74.74.124:8000}"
 VELOX_DIR="${VELOX_DIR:-/opt/velox}"
 
 log() { echo "[$(date '+%H:%M:%S')] $*"; }
