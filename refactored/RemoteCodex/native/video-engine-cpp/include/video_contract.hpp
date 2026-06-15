@@ -22,25 +22,24 @@ struct ClipAsset {
     std::vector<std::string> clip_links;
     double duration_seconds{4.0};
     std::string kind;
-};
-
-// SceneVideoRequest: l'intero request JSON per il video engine.
-// Corrisponde a contract.VideoEngineRequest in Go (shared/contract/contract.go).
-struct SceneVideoRequest {
-    std::string job_id;
-    std::string video_name;
-    std::string script_text;
-    std::vector<std::string> voiceover_paths;
-    std::vector<SceneAsset> scenes;
-    std::string scenes_json;
-    std::string output_path;
-    std::string video_mode;
-    std::vector<std::string> intro_clip_paths;
-    std::vector<std::string> stock_clip_paths;
-    std::string clip_segments_json;
-    std::string drive_output_folder;
-    std::string audio_language_for_srt;
-};
+};	// SceneVideoRequest: l'intero request JSON per il video engine.
+	// Corrisponde a contract.VideoEngineRequest in Go (shared/contract/contract.go).
+	struct SceneVideoRequest {
+	    std::string job_id;
+	    std::string video_name;
+	    std::string script_text;
+	    std::vector<std::string> voiceover_paths;
+	    std::vector<SceneAsset> scenes;
+	    std::string scenes_json;
+	    std::string output_path;
+	    std::string video_mode;
+	    std::vector<std::string> intro_clip_paths;
+	    std::vector<std::string> stock_clip_paths;
+	    std::string clip_segments_json;
+	    std::string drive_output_folder;
+	    std::string audio_language_for_srt;
+	    std::string asset_cache_dir;
+	};
 
 // SceneVideoResult: risultato dell'elaborazione video.
 // Non ha un corrispettivo Go diretto (usato internamente dal C++ engine).

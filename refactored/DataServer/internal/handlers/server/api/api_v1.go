@@ -6,13 +6,11 @@ import (
 	"log"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/gin-gonic/gin"
 	"velox-server/internal/config"
 	"velox-server/internal/handlers/remote/ansible"
 	"velox-server/internal/handlers/remote/workers"
-	workersapi "velox-server/internal/handlers/remote/workers"
 	"velox-server/internal/handlers/server/analytics"
 	"velox-server/internal/handlers/server/calendar"
 	"velox-server/internal/handlers/server/drive"
@@ -21,24 +19,15 @@ import (
 	"velox-server/internal/handlers/server/master"
 	"velox-server/internal/handlers/server/pipeline"
 	"velox-server/internal/handlers/server/smoke"
-	"velox-server/internal/handlers/web/dashboard"
 	"velox-server/internal/handlers/web/proxy"
+	ytservice "velox-server/internal/integrations/youtube"
 	"velox-server/internal/queue"
 	analyticsService "velox-server/internal/services/analytics"
 	"velox-server/internal/store"
 	workersreg "velox-server/internal/workers"
 )
 
-// APIVersionInfo represents API version information
-type APIVersionInfo struct {
-	Version     string    `json:"version"`
-	ReleasedAt  time.Time `json:"released_at"`
-	Description string    `json:"description"`
-	Deprecated  bool      `json:"deprecated"`
-	SunsetDate  string    `json:"sunset_date,omitempty"`
-}
-
-func adminAuthMiddleware(cfg *config.Config) gin.HandlerFunc {
+func AdminAuthMiddleware(cfg *config.Config) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if workersreg.IsLocalRequestIP(c.ClientIP()) {
 			c.Next()
@@ -48,7 +37,7 @@ func adminAuthMiddleware(cfg *config.Config) gin.HandlerFunc {
 		// Allow read-only dashboard routes without an admin token.
 		// The workers/ansible UI is meant to stay live on public instances,
 		// but write operations must still remain protected.
-		if c.Request.Method == http.MethodGet && isPublicReadOnlyRoute(c.Request.URL.Path) {
+		if c.Request.Method == http.MethodGet && IsPublicReadOnlyRoute(c.Request.URL.Path) {
 			c.Next()
 			return
 		}
@@ -77,7 +66,7 @@ func adminAuthMiddleware(cfg *config.Config) gin.HandlerFunc {
 	}
 }
 
-func isPublicReadOnlyRoute(path string) bool {
+func IsPublicReadOnlyRoute(path string) bool {
 	if path == "" {
 		return false
 	}
@@ -136,10 +125,10 @@ func workerStatusCounts(ctx context.Context, fileQ *queue.FileQueue) (pending, p
 }
 
 // RegisterV1Routes registers all /api/v1/* routes (core API)
-func RegisterV1Routes(r *gin.Engine, cfg *config.Config, fileQ *queue.FileQueue, reg *workersreg.Registry, jobAPI *jobs.JobAPI, jobSubmitHandler *jobs.JobSubmissionHandler, workersRepo store.WorkersRepository, db *store.SQLiteStore, workerUpdateHandler *workersapi.WorkerUpdateHandler, ansibleHandlers *ansible.AnsibleHandlers) {
+func RegisterV1Routes(r *gin.Engine, cfg *config.Config, fileQ *queue.FileQueue, reg *workersreg.Registry, jobAPI *jobs.JobAPI, jobSubmitHandler *jobs.JobSubmissionHandler, workersRepo store.WorkersRepository, db *store.SQLiteStore, workerUpdateHandler *workers.WorkerUpdateHandler, youtubeService *ytservice.Service, ansibleHandlers *ansible.AnsibleHandlers) {
 	v1 := r.Group("/api/v1")
 	v1Admin := r.Group("/api/v1")
-	v1Admin.Use(adminAuthMiddleware(cfg))
+	v1Admin.Use(AdminAuthMiddleware(cfg))
 	{
 		// Jobs - Core API
 		v1Admin.GET("/jobs", jobAPI.GetJobsHandler())
@@ -154,7 +143,7 @@ func RegisterV1Routes(r *gin.Engine, cfg *config.Config, fileQ *queue.FileQueue,
 		// Workers - Core API
 		v1Admin.GET("/workers", workers.WorkersList(reg, workersRepo, workerUpdateHandler))
 		v1Admin.GET("/workers/:id/logs", workers.WorkerLogsHandler(reg))
-		v1Admin.POST("/workers/clear_all", dashboard.WorkersClearAll(nil, reg))
+
 		if workerUpdateHandler != nil {
 			// Update orchestration endpoints used by the frontend and legacy bundle.
 			v1Admin.POST("/workers/update_all", workerUpdateHandler.UpdateAllHandler())
@@ -168,27 +157,16 @@ func RegisterV1Routes(r *gin.Engine, cfg *config.Config, fileQ *queue.FileQueue,
 		}
 		// NOTE: /workers/revoke and /workers/drain are NOT registered here to avoid
 		// a Gin radix tree conflict with the wildcard route /workers/:id/logs.
-		// They are registered directly in router.go under /worker/revoke and /worker/drain.
+		// They are registered directly in router.go under /worker/revoke and /worker/drain.		// Worker polling — canonical endpoints are registered by the workers module.
 
-		// Worker polling — canonical endpoints are registered by the workers module.
-		// The /api/v1/workers/commands* legacy endpoints have been removed.
-
-		// Bundle Explorer - List files in bundle
+		// Bundle compat routes for frontend
 		if workerUpdateHandler != nil {
 			v1.GET("/bundle/files", workerUpdateHandler.GetBundleFilesHandler())
 			v1.GET("/bundle/info", workerUpdateHandler.GetLatestBundleHandler())
 			v1.GET("/bundle/manifest", workerUpdateHandler.GetBundleManifestHandler())
-			v1Admin.POST("/bundle/manifest/generate", workerUpdateHandler.GenerateManifestV2Handler())
 		}
-
-		// Queue - Core API
 		v1.GET("/queue/job", jobAPI.GetJobHandler())
 		v1.POST("/queue/start", jobAPI.StartJobHandler())
-		v1.POST("/queue/complete", jobAPI.CompleteJobHandler())
-		v1.POST("/queue/fail", jobAPI.FailJobHandler())
-
-		// Stats - Core API
-		v1Admin.GET("/stats", dashboard.Stats(nil, reg))
 
 		// Workers status - requires queue for job counts
 		statusHandler := func(c *gin.Context) {
@@ -210,7 +188,6 @@ func RegisterV1Routes(r *gin.Engine, cfg *config.Config, fileQ *queue.FileQueue,
 			})
 		}
 		v1Admin.GET("/workers/status", statusHandler)
-		v1Admin.GET("/workers_status", statusHandler)
 
 		// Analytics - Core API
 		v1Admin.GET("/analytics/summary", analytics.AnalyticsSummaryHandler)
@@ -272,8 +249,8 @@ func RegisterV1Routes(r *gin.Engine, cfg *config.Config, fileQ *queue.FileQueue,
 		v1Admin.GET("/master/code-version", proxy.MasterCodeVersion(cfg))
 
 		// Video - Core API
-		v1Admin.POST("/video/create-master", master.CreateMaster(cfg, nil))
-		v1.POST("/video/upload-completed", workers.UploadCompletedVideo(cfg, fileQ))
+		v1Admin.POST("/video/create-master", master.CreateMaster(cfg, fileQ))
+		v1.POST("/video/upload-completed", workers.UploadCompletedVideo(cfg, fileQ, youtubeService))
 
 		// Ansible - Core API
 		// Registered here so both /api/v1 and legacy /ansible paths share the same implementation.

@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"velox-server/internal/config"
-	"velox-server/internal/handlers/remote/ansible"
 
 	"github.com/gin-gonic/gin"
 )
@@ -134,24 +133,6 @@ func NewInstallHandler(cfg *Config) *InstallHandler {
 // SetConfig sets the application config for dynamic master URL resolution
 func (h *InstallHandler) SetConfig(appCfg *config.Config) {
 	h.cfg = appCfg
-}
-
-// resolveMasterURL resolves the master URL using the centralized resolver
-// Falls back to the handler's configured masterURL if no gin.Context available
-func (h *InstallHandler) resolveMasterURL(c *gin.Context) string {
-	// Use centralized resolver if config is available
-	if h.cfg != nil && c != nil {
-		resolved := ansible.ResolveMasterURL(h.cfg, c, "")
-		if resolved.URL != "" && !ansible.IsLocalhostURL(resolved.URL) {
-			return resolved.URL
-		}
-		// In dev mode, allow localhost
-		if h.cfg.AllowLocalhostMaster && resolved.URL != "" {
-			return resolved.URL
-		}
-	}
-	// Fallback to configured master URL
-	return h.masterURL
 }
 
 // checkAllowlist verifies if client IP is allowed

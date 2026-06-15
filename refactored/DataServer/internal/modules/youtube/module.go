@@ -4,7 +4,6 @@ import (
 	"log"
 
 	"github.com/gin-gonic/gin"
-	"velox-server/internal/app"
 	"velox-server/internal/config"
 	ytHandlers "velox-server/internal/handlers/server/youtube"
 	integrationsYoutube "velox-server/internal/integrations/youtube"
@@ -13,7 +12,6 @@ import (
 
 // Module provides YouTube integration endpoints.
 type Module struct {
-	app.BaseModule
 	cfg            *config.Config
 	dataDir        string
 	sqliteStore    *store.SQLiteStore
@@ -23,7 +21,7 @@ type Module struct {
 	manager        *ytHandlers.YouTubeManager
 }
 
-func New(cfg *config.Config, dataDir string, sqliteStore *store.SQLiteStore, _ gin.HandlerFunc) *Module {
+func New(cfg *config.Config, dataDir string, sqliteStore *store.SQLiteStore) *Module {
 	return &Module{
 		cfg:         cfg,
 		dataDir:     dataDir,
@@ -75,7 +73,7 @@ func (m *Module) RegisterRoutes(r *gin.Engine) {
 		}
 	}
 
-	handlers, err := ytHandlers.NewYouTubeHandlers(youtubeService, m.youtubeStorage, m.sqliteStore)
+	handlers, err := ytHandlers.NewYouTubeHandlers(youtubeService, m.youtubeStorage)
 	if err != nil {
 		log.Printf("[YOUTUBE] Handlers init failed: %v", err)
 		return

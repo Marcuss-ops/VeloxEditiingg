@@ -8,7 +8,6 @@ import (
 	"image"
 	"image/jpeg"
 	_ "image/png"
-	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -18,7 +17,6 @@ import (
 	"github.com/disintegration/imaging"
 	"github.com/gin-gonic/gin"
 	"velox-server/internal/integrations/youtube"
-	"velox-server/internal/store"
 )
 
 type BulkCoverApplyRequest struct {
@@ -89,8 +87,6 @@ func (h *YouTubeHandlers) ApplyBulkCover(c *gin.Context) {
 		return
 	}
 	defer os.Remove(tempFile)
-
-	h.persistAppliedCoverAsset(c.Request.Context(), req, tempFile, compressed)
 
 	results := make([]BulkCoverItemResult, 0, len(req.VideoIDs))
 	appliedCount := 0
@@ -233,32 +229,4 @@ func compressCoverToLimit(src []byte, maxBytes int) ([]byte, string, error) {
 	return nil, "", fmt.Errorf("unable to compress cover below size limit")
 }
 
-func (h *YouTubeHandlers) persistAppliedCoverAsset(ctx context.Context, req BulkCoverApplyRequest, tempFile string, compressed []byte) {
-	if h.store == nil {
-		return
-	}
 
-	asset := &store.Asset{
-		Type:             "youtube_cover_applied",
-		Filename:         filepath.Base(tempFile),
-		OriginalFilename: req.CoverFilename,
-		StoragePath:      tempFile,
-		StorageType:      "local",
-		MimeType:         "image/jpeg",
-		SizeBytes:        int64(len(compressed)),
-		Metadata: map[string]interface{}{
-			"source":         "youtube_bulk_cover",
-			"channel_id":     req.ChannelID,
-			"video_ids":      req.VideoIDs,
-			"variant_id":     req.VariantID,
-			"publish":        req.Publish,
-			"privacy":        req.Privacy,
-			"max_size_mb":    req.MaxSizeMB,
-			"cover_filename": req.CoverFilename,
-		},
-	}
-
-	if err := h.store.CreateAsset(ctx, asset); err != nil {
-		log.Printf("[WARN] Dark Editor: failed to save applied cover asset for channel %s: %v", req.ChannelID, err)
-	}
-}

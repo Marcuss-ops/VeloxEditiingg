@@ -2,14 +2,12 @@ package main
 
 import (
 	"context"
-	"crypto/subtle"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strings"
 	"syscall"
 	"time"
 
@@ -17,12 +15,14 @@ import (
 	"velox-server/internal/app"
 	"velox-server/internal/audit"
 	"velox-server/internal/config"
-	workersapi "velox-server/internal/handlers/remote/workers"
+	"velox-server/internal/handlers/server/api"
 	"velox-server/internal/handlers/server/pipeline"
+	workersapi "velox-server/internal/handlers/remote/workers"
 	"velox-server/internal/modules/ansible"
 	"velox-server/internal/modules/drive"
 	"velox-server/internal/modules/frontend"
 	"velox-server/internal/modules/health"
+	"velox-server/internal/modules/livestream"
 	"velox-server/internal/modules/workers"
 	"velox-server/internal/modules/youtube"
 	"velox-server/internal/queue"
@@ -44,82 +44,13 @@ type serverDeps struct {
 	workerLifecycle     *workersapi.WorkerLifecycle
 	ansibleModule       *ansible.Module
 	youtubeModule       *youtube.Module
+	orchestrator        *queue.Orchestrator
 }
 
 func configureTrustedProxies(r *gin.Engine) {
 	if err := r.SetTrustedProxies([]string{"127.0.0.1", "::1"}); err != nil {
 		log.Printf("bootstrap: SetTrustedProxies failed: %v", err)
 	}
-}
-
-func adminAuthMiddleware(cfg *config.Config) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		if workersreg.IsLocalRequestIP(c.ClientIP()) {
-			c.Next()
-			return
-		}
-
-		if c.Request.Method == http.MethodGet && isPublicReadOnlyRoute(c.Request.URL.Path) {
-			c.Next()
-			return
-		}
-
-		expected := strings.TrimSpace(cfg.AdminToken)
-		if expected == "" {
-			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
-				"error": "admin token required for remote access",
-			})
-			return
-		}
-
-		token := workersreg.ExtractBearerToken(
-			c.GetHeader("Authorization"),
-			c.GetHeader("X-Admin-Token"),
-			c.Query("token"),
-		)
-		if token == "" || subtle.ConstantTimeCompare([]byte(token), []byte(expected)) != 1 {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
-				"error": "invalid admin token",
-			})
-			return
-		}
-
-		c.Next()
-	}
-}
-
-func isPublicReadOnlyRoute(path string) bool {
-	if path == "" {
-		return false
-	}
-	publicPrefixes := []string{
-		"/api/v1/youtube",
-		"/api/v1/jobs",
-		"/api/v1/workers",
-		"/api/v1/dashboard",
-		"/api/v1/analytics",
-		"/api/v1/groups",
-		"/api/v1/channels",
-		"/api/v1/drive-links",
-		"/api/v1/drive",
-		"/api/v1/master",
-		"/api/v1/ansible",
-		"/api/v1/admin/ansible",
-		"/api/v1/endpoints-status",
-		"/api/v1/services",
-		"/api/v1/bundle",
-		"/api/v1/queue",
-		"/api/v1/stats",
-		"/api/v1/calendar",
-		"/api/v1/livestream",
-		"/api/bundle",
-	}
-	for _, prefix := range publicPrefixes {
-		if strings.HasPrefix(path, prefix) {
-			return true
-		}
-	}
-	return false
 }
 
 func requestIDMiddleware() gin.HandlerFunc {
@@ -168,7 +99,7 @@ func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
 		return nil, err
 	}
 
-	reg := workersreg.New(nil, false, sqliteStore)
+	reg := workersreg.New(sqliteStore)
 
 	revokedCount := len(reg.ListRevoked())
 	if revokedCount > 0 {
@@ -184,6 +115,12 @@ func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
 	workerUpdateHandler := workersapi.NewWorkerUpdateHandler(cfg, reg, cmdMgr, updateMgr, tokenMgr, cfg.DataDir)
 	workerLifecycle := workersapi.NewWorkerLifecycle(cfg, reg, cfg.DataDir)
 
+	// Create orchestrator for multi-step job pipelines
+	orch, err := queue.NewOrchestrator(nil, fileQ, sqliteStore)
+	if err != nil {
+		return nil, fmt.Errorf("orchestrator init: %w", err)
+	}
+
 	return &serverDeps{
 		paths:               &serverPaths{dataDir: cfg.DataDir},
 		fileQ:               fileQ,
@@ -192,6 +129,7 @@ func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
 		sqliteStore:         sqliteStore,
 		workerUpdateHandler: workerUpdateHandler,
 		workerLifecycle:     workerLifecycle,
+		orchestrator:        orch,
 	}, nil
 }
 
@@ -207,7 +145,7 @@ func runServer(cfg *config.Config) error {
 	}
 
 	registry := app.NewRegistry()
-	auth := adminAuthMiddleware(cfg)
+	auth := api.AdminAuthMiddleware(cfg)
 
 	// Init pipeline remote engine (connects to external script generation service)
 	pipeline.InitRemoteEngine(cfg)
@@ -215,13 +153,15 @@ func runServer(cfg *config.Config) error {
 	// Register all modules
 	registry.Register(health.New())
 	registry.Register(workers.New(cfg, deps.reg, deps.workerLifecycle, deps.workerUpdateHandler, auth))
-	ytMod := youtube.New(cfg, deps.paths.dataDir, deps.sqliteStore, auth)
+	ytMod := youtube.New(cfg, deps.paths.dataDir, deps.sqliteStore)
 	deps.youtubeModule = ytMod
 	registry.Register(ytMod)
 	registry.Register(drive.New(cfg))
 	ansibleMod := ansible.New(cfg, deps.paths.dataDir, auth, deps.sqliteStore)
 	deps.ansibleModule = ansibleMod
 	registry.Register(ansibleMod)
+	livestreamMod := livestream.New(ytMod.Service, deps.sqliteStore)
+	registry.Register(livestreamMod)
 	registry.Register(frontend.New(cfg))
 
 	// Create gin engine with middleware
@@ -243,6 +183,12 @@ func runServer(cfg *config.Config) error {
 				log.Printf("[BOOTSTRAP] Manifest auto-generation skipped: %v", err)
 			}
 		}()
+	}
+
+	// Start orchestrator for multi-step job pipelines
+	if deps.orchestrator != nil {
+		go deps.orchestrator.Start(context.Background())
+		log.Printf("[BOOTSTRAP] Orchestrator started — polling multi-step jobs")
 	}
 
 	// Zombie job reaper: requeue jobs with expired leases or stuck too long
@@ -297,12 +243,7 @@ func runServer(cfg *config.Config) error {
 		return err
 	}
 
-	// Flush registry and close database before exit
-	if deps.reg != nil {
-		if err := deps.reg.Save(); err != nil {
-			log.Printf("[SERVER] Registry flush failed: %v", err)
-		}
-	}
+	// Close database before exit
 	if deps.sqliteStore != nil {
 		if err := deps.sqliteStore.Close(); err != nil {
 			log.Printf("[SERVER] Store close failed: %v", err)
@@ -316,10 +257,6 @@ func runServer(cfg *config.Config) error {
 // runDataLayerAudit checks for legacy JSON files and data layer integrity.
 // Returns error if critical issues are found (hard block).
 // Warnings are logged but don't block startup.
-//
-// This runs AFTER the legacy JSON import, so all legacy files should already
-// have been archived to legacy_archive/. If any remain in their original
-// locations, they are reported as errors.
 func runDataLayerAudit(cfg *config.Config) error {
 	dataDir := cfg.DataDir
 	if dataDir == "" {
@@ -328,13 +265,6 @@ func runDataLayerAudit(cfg *config.Config) error {
 
 	secretsDir := filepath.Join(dataDir, "secrets")
 	auditor := audit.NewDataLayerAuditor(dataDir, secretsDir)
-
-	// Allow specific files that are not migrated to SQLite (config, not runtime data)
-	auditor.AllowLegacy("drive/drive_links.json")
-	auditor.AllowLegacy("drive/drive_master_folders_list.json")
-	auditor.AllowLegacy("jobs/multi_step_jobs.json")
-	auditor.AllowLegacy("jobs/dead_letter_queue.json")
-	auditor.AllowLegacy("analytics/analytics_cache.json")
 
 	result := auditor.Audit()
 

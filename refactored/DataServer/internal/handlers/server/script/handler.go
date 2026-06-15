@@ -3,10 +3,12 @@ package script
 import (
 	"context"
 	"net/http"
+	"os/exec"
 	"strings"
 
 	"github.com/gin-gonic/gin"
 	"velox-server/internal/config"
+	remoteansible "velox-server/internal/handlers/remote/ansible"
 	"velox-server/internal/jobs/enqueue"
 	"velox-server/internal/queue"
 	"velox-server/internal/store"
@@ -61,7 +63,11 @@ func (h *ScriptHandlers) GenerateWithImagesHandler(cfg *config.Config) gin.Handl
 			payload = map[string]interface{}{}
 		}
 
-		normalized, err := enqueue.BuildSceneImagePayload(payload, h.dataDir, cfg.VideosDir)
+		resolvedMasterURL := remoteansible.ResolveMasterURL(cfg, c, "").URL
+		if resolvedMasterURL == "" || remoteansible.IsLocalhostURL(resolvedMasterURL) {
+			resolvedMasterURL = detectPublicMasterURL()
+		}
+		normalized, err := enqueue.BuildSceneImagePayloadForMaster(payload, h.dataDir, cfg.VideosDir, resolvedMasterURL)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": err.Error()})
 			return
@@ -94,6 +100,20 @@ func (h *ScriptHandlers) GenerateWithImagesHandler(cfg *config.Config) gin.Handl
 			"enqueue":             response,
 		})
 	}
+}
+
+func detectPublicMasterURL() string {
+	out, err := exec.Command("hostname", "-I").Output()
+	if err == nil {
+		fields := strings.Fields(string(out))
+		if len(fields) > 0 {
+			ip := strings.TrimSpace(fields[0])
+			if ip != "" && !remoteansible.IsLocalhostURL(ip) {
+				return "http://" + ip + ":8000"
+			}
+		}
+	}
+	return remoteansible.DetectLocalMasterURL()
 }
 
 func (h *ScriptHandlers) ScriptJobHandler(full bool) gin.HandlerFunc {

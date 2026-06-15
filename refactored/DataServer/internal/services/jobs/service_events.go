@@ -2,40 +2,12 @@ package jobs
 
 import (
 	"context"
-	"sort"
 	"strings"
 	"time"
 
 	"velox-server/internal/queue"
 	"velox-server/internal/workers"
 )
-
-func (s *Service) GetJobEvents(ctx context.Context, jobID string, limit int) ([]map[string]interface{}, error) {
-	events := make([]map[string]interface{}, 0, limit)
-	if s.logger != nil {
-		loggedEvents, err := s.logger.GetRecentEvents(jobID, limit)
-		if err != nil {
-			return nil, err
-		}
-		events = append(events, loggedEvents...)
-	}
-
-	if jobID != "" && s.fileQ != nil {
-		jobMap, err := s.fileQ.GetJobAsMap(ctx, jobID)
-		if err == nil && jobMap != nil {
-			events = append(events, buildJobLogEvents(jobID, jobMap["logs"])...)
-			events = append(events, BuildWorkerRecentLogEvents(ctx, s.reg, jobMap, jobID)...)
-		}
-	}
-
-	if len(events) > 1 {
-		events = DedupeAndSortEvents(events)
-	}
-	if len(events) > limit {
-		events = events[:limit]
-	}
-	return events, nil
-}
 
 func (s *Service) enrichJobWithProcessingLogs(ctx context.Context, job map[string]interface{}, jobID string) {
 	if s == nil || s.reg == nil || len(job) == 0 || strings.TrimSpace(jobID) == "" {
@@ -131,103 +103,6 @@ func BuildWorkerRecentLogEvents(ctx context.Context, reg *workers.Registry, job 
 		})
 	}
 	return out
-}
-
-func DedupeAndSortEvents(events []map[string]interface{}) []map[string]interface{} {
-	seen := make(map[string]struct{}, len(events))
-	out := make([]map[string]interface{}, 0, len(events))
-	for _, event := range events {
-		key := strings.TrimSpace(asJobString(event["timestamp"])) + "|" +
-			strings.TrimSpace(asJobString(event["event"])) + "|" +
-			strings.TrimSpace(asJobString(event["message"]))
-		if _, ok := seen[key]; ok {
-			continue
-		}
-		seen[key] = struct{}{}
-		out = append(out, event)
-	}
-	sort.SliceStable(out, func(i, j int) bool {
-		ti := strings.TrimSpace(asJobString(out[i]["timestamp"]))
-		tj := strings.TrimSpace(asJobString(out[j]["timestamp"]))
-		return ti > tj
-	})
-	return out
-}
-
-func buildJobLogEvents(jobID string, rawLogs interface{}) []map[string]interface{} {
-	switch logs := rawLogs.(type) {
-	case []queue.JobLogEntry:
-		out := make([]map[string]interface{}, 0, len(logs))
-		for _, row := range logs {
-			msg := strings.TrimSpace(row.Message)
-			if msg == "" {
-				continue
-			}
-			ts := strings.TrimSpace(row.Timestamp)
-			if ts == "" {
-				ts = strings.TrimSpace(row.Time)
-			}
-			if ts == "" {
-				ts = time.Now().UTC().Format(time.RFC3339)
-			}
-			eventType := "worker_log"
-			if strings.TrimSpace(row.Level) != "" {
-				eventType = strings.ToLower(strings.TrimSpace(row.Level))
-			}
-			if row.IsError {
-				eventType = "error"
-			}
-			out = append(out, map[string]interface{}{
-				"timestamp":  ts,
-				"job_id":     jobID,
-				"event":      eventType,
-				"event_type": eventType,
-				"message":    msg,
-				"worker_id":  row.WorkerID,
-				"source":     "job_logs",
-			})
-		}
-		return out
-	case []interface{}:
-		out := make([]map[string]interface{}, 0, len(logs))
-		for _, row := range logs {
-			m, ok := row.(map[string]interface{})
-			if !ok {
-				continue
-			}
-			msg := strings.TrimSpace(asJobString(m["message"]))
-			if msg == "" {
-				continue
-			}
-			ts := strings.TrimSpace(asJobString(m["timestamp"]))
-			if ts == "" {
-				ts = strings.TrimSpace(asJobString(m["time"]))
-			}
-			if ts == "" {
-				ts = time.Now().UTC().Format(time.RFC3339)
-			}
-			workerID := strings.TrimSpace(asJobString(m["worker_id"]))
-			eventType := "worker_log"
-			if strings.TrimSpace(asJobString(m["level"])) != "" {
-				eventType = strings.ToLower(strings.TrimSpace(asJobString(m["level"])))
-			}
-			if v, ok := m["is_error"].(bool); ok && v {
-				eventType = "error"
-			}
-			out = append(out, map[string]interface{}{
-				"timestamp":  ts,
-				"job_id":     jobID,
-				"event":      eventType,
-				"event_type": eventType,
-				"message":    msg,
-				"worker_id":  workerID,
-				"source":     "job_logs",
-			})
-		}
-		return out
-	default:
-		return nil
-	}
 }
 
 func ExtractWorkerLogEntries(output map[string]interface{}, workerID string) []queue.JobLogEntry {

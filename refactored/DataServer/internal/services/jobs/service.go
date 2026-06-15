@@ -2,6 +2,7 @@ package jobs
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"strings"
 
@@ -36,18 +37,28 @@ type ClaimRequest struct {
 }
 
 type ClaimResult struct {
-	JobID   string
-	Payload map[string]interface{}
-	Reason  string
+	JobID           string
+	Payload         map[string]interface{}
+	Reason          string
+	LeaseID         string
+	LeaseExpiresAt  string
+	Attempt         int
+	ContractVersion int
 }
 
 type SubmitResultRequest struct {
-	JobID    string
-	WorkerID string
-	Status   string
-	Error    string
-	Output   map[string]interface{}
-	EndTime  string
+	JobID           string
+	WorkerID        string
+	Status          string
+	Error           string
+	Output          map[string]interface{}
+	EndTime         string
+	LeaseID         string
+	Attempt         int
+	ContractVersion int
+	ArtifactID      string
+	OutputSHA256    string
+	IdempotencyKey  string
 }
 
 func NewService(cfg *config.Config, fileQ *queue.FileQueue, jobsRepo store.JobsRepository, logger *queue.EventLogger, reg *workers.Registry) *Service {
@@ -133,8 +144,11 @@ func (s *Service) ClaimNextJob(ctx context.Context, req ClaimRequest) (*ClaimRes
 	}
 
 	var (
-		payload map[string]interface{}
-		jobID   string
+		payload  map[string]interface{}
+		jobID    string
+		leaseID  string
+		leaseExp string
+		attempt  int
 	)
 	if s.fileQ != nil {
 		var allowedJobTypes []string
@@ -150,6 +164,17 @@ func (s *Service) ClaimNextJob(ctx context.Context, req ClaimRequest) (*ClaimRes
 		}
 		jobID = job.JobID
 		payload = job.Payload
+		leaseID = job.LeaseID
+		if exp, ok := payload["lease_expiry"].(string); ok {
+			leaseExp = strings.TrimSpace(exp)
+		}
+		if leaseExp == "" {
+			leaseExp = strings.TrimSpace(stringValue(payload["lease_expires_at"]))
+		}
+		attempt = job.Attempt
+		if attempt == 0 {
+			attempt = job.RetryCount
+		}
 	}
 
 	if payload == nil {
@@ -158,6 +183,17 @@ func (s *Service) ClaimNextJob(ctx context.Context, req ClaimRequest) (*ClaimRes
 	payload["job_id"] = jobID
 	payload["id"] = jobID
 	payload["render_plan_version"] = "v1"
+	if leaseID != "" {
+		payload["lease_id"] = leaseID
+	}
+	if leaseExp != "" {
+		payload["lease_expiry"] = leaseExp
+		payload["lease_expires_at"] = leaseExp
+	}
+	if attempt > 0 {
+		payload["attempt"] = attempt
+	}
+	payload["contract_version"] = 2
 
 	if s.reg != nil {
 		if err := s.reg.Heartbeat(ctx, req.WorkerID, req.WorkerName, "busy", jobID, nil); err != nil {
@@ -166,16 +202,26 @@ func (s *Service) ClaimNextJob(ctx context.Context, req ClaimRequest) (*ClaimRes
 	}
 
 	return &ClaimResult{
-		JobID:   jobID,
-		Payload: payload,
+		JobID:           jobID,
+		Payload:         payload,
+		LeaseID:         leaseID,
+		LeaseExpiresAt:  leaseExp,
+		Attempt:         attempt,
+		ContractVersion: 2,
 	}, nil
 }
 
 func (s *Service) SubmitResult(ctx context.Context, req SubmitResultRequest) (bool, error) {
+	if req.ContractVersion != 0 && req.ContractVersion != 2 {
+		return false, fmt.Errorf("unsupported contract version: %d", req.ContractVersion)
+	}
 	status := strings.ToLower(strings.TrimSpace(req.Status))
 	if status == "" || status == "success" || status == "completed" {
 		var err error
 		if s.fileQ != nil {
+			if err := s.ValidateJobLease(ctx, req.JobID, req.WorkerID, req.LeaseID); err != nil {
+				return false, err
+			}
 			if len(req.Output) > 0 {
 				logEntries := ExtractWorkerLogEntries(req.Output, req.WorkerID)
 				if len(logEntries) > 0 {
@@ -200,6 +246,15 @@ func (s *Service) SubmitResult(ctx context.Context, req SubmitResultRequest) (bo
 					updates["result_path_worker"] = path
 				}
 			}
+			if strings.TrimSpace(req.ArtifactID) != "" {
+				updates["artifact_id"] = strings.TrimSpace(req.ArtifactID)
+			}
+			if strings.TrimSpace(req.OutputSHA256) != "" {
+				updates["output_sha256"] = strings.TrimSpace(req.OutputSHA256)
+			}
+			if strings.TrimSpace(req.IdempotencyKey) != "" {
+				updates["upload_idempotency_key"] = strings.TrimSpace(req.IdempotencyKey)
+			}
 			err = s.fileQ.UpdateJobFields(ctx, req.JobID, updates)
 		}
 		if err != nil {
@@ -215,6 +270,9 @@ func (s *Service) SubmitResult(ctx context.Context, req SubmitResultRequest) (bo
 
 	var err error
 	if s.fileQ != nil {
+		if err := s.ValidateJobLease(ctx, req.JobID, req.WorkerID, req.LeaseID); err != nil {
+			return false, err
+		}
 		if len(req.Output) > 0 {
 			logEntries := ExtractWorkerLogEntries(req.Output, req.WorkerID)
 			if len(logEntries) > 0 {
@@ -250,6 +308,39 @@ func (s *Service) CompleteJob(ctx context.Context, jobID, workerID string) error
 		}
 	}
 	return nil
+}
+
+func (s *Service) ValidateJobLease(ctx context.Context, jobID, workerID, leaseID string) error {
+	if s.fileQ == nil || strings.TrimSpace(jobID) == "" {
+		return nil
+	}
+	job, err := s.fileQ.GetJobAsMap(ctx, jobID)
+	if err != nil || job == nil {
+		return fmt.Errorf("job not found: %s", jobID)
+	}
+	currentLease := strings.TrimSpace(stringValue(job["lease_id"]))
+	if currentLease == "" {
+		return nil
+	}
+	if strings.TrimSpace(leaseID) == "" {
+		return fmt.Errorf("missing lease_id for job %s", jobID)
+	}
+	if !strings.EqualFold(strings.TrimSpace(currentLease), strings.TrimSpace(leaseID)) {
+		return fmt.Errorf("lease mismatch for job %s", jobID)
+	}
+	if workerID != "" {
+		if assigned := strings.TrimSpace(stringValue(job["assigned_to"])); assigned != "" && !strings.EqualFold(assigned, strings.TrimSpace(workerID)) {
+			return fmt.Errorf("worker mismatch for job %s", jobID)
+		}
+	}
+	return nil
+}
+
+func stringValue(v any) string {
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return ""
 }
 
 func (s *Service) FailJob(ctx context.Context, jobID, workerID, errMsg string) error {

@@ -203,6 +203,9 @@ func main() {
 	if bundleHash := os.Getenv("VELOX_BUNDLE_HASH"); bundleHash != "" {
 		cfg.BundleHash = bundleHash
 	}
+	if assetCacheDir := os.Getenv("VELOX_ASSET_CACHE_DIR"); strings.TrimSpace(assetCacheDir) != "" {
+		cfg.AssetCacheDir = strings.TrimSpace(assetCacheDir)
+	}
 	if cfg.BundleHash == "" {
 		cfg.BundleHash = readTextFileFirst(cfg.WorkDir, "BUNDLE_HASH.txt")
 	}

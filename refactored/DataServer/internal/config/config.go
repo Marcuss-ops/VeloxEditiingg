@@ -90,28 +90,6 @@ func loadDatabaseConfig(dataDir, runtimeDir string) DatabaseConfig {
 	return c
 }
 
-func loadRedisConfig() RedisConfig {
-	c := RedisConfig{
-		Host:   "localhost",
-		Port:   "6379",
-		DB:     0,
-		Prefix: "velox",
-	}
-	if h := os.Getenv("VELOX_REDIS_HOST"); h != "" {
-		c.Host = h
-	}
-	if p := os.Getenv("VELOX_REDIS_PORT"); p != "" {
-		c.Port = p
-	}
-	if db := os.Getenv("VELOX_REDIS_DB"); db != "" {
-		if v, _ := strconv.Atoi(db); v >= 0 {
-			c.DB = v
-		}
-	}
-	c.Password = os.Getenv("VELOX_REDIS_PASSWORD")
-	return c
-}
-
 func loadWorkersConfig() WorkersConfig {
 	c := WorkersConfig{
 		MaxJobAttempts:   3,
@@ -314,7 +292,6 @@ func FromEnv() *Config {
 	server := loadServerConfig()
 	runtime := loadRuntimeConfig(dataDir)
 	database := loadDatabaseConfig(runtime.DataDir, runtime.RuntimeDir)
-	redis := loadRedisConfig()
 	workers := loadWorkersConfig()
 	auth := loadAuthConfig()
 	storage := loadStorageConfig()
@@ -326,20 +303,17 @@ func FromEnv() *Config {
 	nvidia := loadNVIDIAConfig()
 
 	// Proxy draft create-master to remote
-	masterServerURL := ""
-	for _, key := range []string{"VELOX_MASTER_SERVER_URL", "VELOX_REMOTE_WORKER_URL", "VELOX_REMOTE_SCRIPT_BACKEND", "VELOX_SCRIPT_BACKEND"} {
-		if u := os.Getenv(key); u != "" {
-			masterServerURL = u
-			break
-		}
+	masterServerURL := os.Getenv("VELOX_MASTER_SERVER_URL")
+	if masterServerURL == "" {
+		masterServerURL = os.Getenv("VELOX_REMOTE_WORKER_URL")
 	}
 
 	// Build flat Config for backward compatibility
 	c := &Config{
-		MasterPort:    server.Port,
-		StudioPort:    server.StudioPort,
-		TLSCertFile:   server.TLSCertFile,
-		TLSKeyFile:    server.TLSKeyFile,
+		MasterPort:           server.Port,
+		StudioPort:           server.StudioPort,
+		TLSCertFile:          server.TLSCertFile,
+		TLSKeyFile:           server.TLSKeyFile,
 		AllowLocalhostMaster: server.AllowLocalhost,
 
 		DataDir:      runtime.DataDir,
@@ -356,23 +330,17 @@ func FromEnv() *Config {
 		DBConnMaxLifetime: database.ConnMaxLifetime,
 		DBConnMaxIdleTime: database.ConnMaxIdleTime,
 
-		RedisHost:     redis.Host,
-		RedisPort:     redis.Port,
-		RedisDB:       redis.DB,
-		RedisPassword: redis.Password,
-		QueuePrefix:   redis.Prefix,
-
-		AllowedWorkers:          workers.AllowedWorkers,
-		ForceSingleWorker:       workers.ForceSingleWorker,
+		AllowedWorkers:           workers.AllowedWorkers,
+		ForceSingleWorker:        workers.ForceSingleWorker,
 		AllowlistAllowRegistered: workers.AllowlistRegistered,
-		MaxJobAttempts:          workers.MaxJobAttempts,
-		WorkerBundleDir:         workers.BundleDir,
-		WorkerHeartbeatTimeout:  workers.HeartbeatTimeout,
-		CodeVersion:             workers.CodeVersion,
-		VersionNumber:           workers.VersionNumber,
-		ScriptDir:               workers.ScriptDir,
-		MasterURL:               workers.MasterURL,
-		AllowedWorkerIPs:        workers.AllowedIPs,
+		MaxJobAttempts:           workers.MaxJobAttempts,
+		WorkerBundleDir:          workers.BundleDir,
+		WorkerHeartbeatTimeout:   workers.HeartbeatTimeout,
+		CodeVersion:              workers.CodeVersion,
+		VersionNumber:            workers.VersionNumber,
+		ScriptDir:                workers.ScriptDir,
+		MasterURL:                workers.MasterURL,
+		AllowedWorkerIPs:         workers.AllowedIPs,
 
 		AdminToken: auth.AdminToken,
 
@@ -383,10 +351,10 @@ func FromEnv() *Config {
 		S3SecretAccessKey: storage.SecretKey,
 		S3UseSSL:          storage.UseSSL,
 
-		DriveClientID:     drive.ClientID,
-		DriveClientSecret: drive.ClientSecret,
-		DriveRedirectURI:  drive.RedirectURI,
-		DriveTokensDir:    drive.TokensDir,
+		DriveClientID:       drive.ClientID,
+		DriveClientSecret:   drive.ClientSecret,
+		DriveRedirectURI:    drive.RedirectURI,
+		DriveTokensDir:      drive.TokensDir,
 		DriveCredentialsDir: drive.CredentialsDir,
 
 		YouTubeAPIKey:         youtube.APIKey,
@@ -397,16 +365,16 @@ func FromEnv() *Config {
 
 		PlaybookDir: ansible.PlaybookDir,
 
-		SPADir:          frontend.SPADir,
-		GradioAppURL:    frontend.GradioAppURL,
-		DarkEditorDir:   frontend.DarkEditorDir,
+		GradioAppURL:       frontend.GradioAppURL,
+		SPADir:             frontend.SPADir,
+		DarkEditorDir:      frontend.DarkEditorDir,
 		DarkEditorProxyURL: frontend.DarkEditorProxy,
 
-		RemoteEngineURL:           render.RemoteEngineURL,
-		RemoteEngineToken:         render.RemoteEngineToken,
-		RemoteEngineTimeoutMS:     render.RemoteEngineTimeoutMS,
-		RemoteEngineRetries:       render.RemoteEngineRetries,
-		RemoteEnginePollInterval:  render.RemoteEnginePollInterval,
+		RemoteEngineURL:          render.RemoteEngineURL,
+		RemoteEngineToken:        render.RemoteEngineToken,
+		RemoteEngineTimeoutMS:    render.RemoteEngineTimeoutMS,
+		RemoteEngineRetries:      render.RemoteEngineRetries,
+		RemoteEnginePollInterval: render.RemoteEnginePollInterval,
 
 		NVIDIAAPIKey:  nvidia.APIKey,
 		NVIDIATextURL: nvidia.TextURL,
@@ -418,7 +386,6 @@ func FromEnv() *Config {
 		Server:   server,
 		Runtime:  runtime,
 		Database: database,
-		Redis:    redis,
 		Workers:  workers,
 		Auth:     auth,
 		Storage:  storage,
@@ -427,7 +394,6 @@ func FromEnv() *Config {
 		Ansible:  ansible,
 		Frontend: frontend,
 		Render:   render,
-		NVIDIA:   nvidia,
 	}
 
 	// Load Drive OAuth from credentials.json if not explicitly set

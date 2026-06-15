@@ -5,21 +5,41 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/gin-gonic/gin"
 	"velox-server/internal/config"
 	"velox-server/internal/queue"
+	"velox-server/internal/store"
 )
 
-func TestCreateMaster_InvalidJSON(t *testing.T) {
-	cfg := config.FromEnv()
-	q, err := queue.New(cfg)
+func newTestFileQueue(t *testing.T) *queue.FileQueue {
+	t.Helper()
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+	sqlStore, err := store.NewSQLiteStore(dbPath)
 	if err != nil {
-		t.Skipf("Redis not available: %v", err)
+		t.Fatalf("failed to create SQLite store: %v", err)
 	}
+	t.Cleanup(func() { sqlStore.Close() })
+	fq, err := queue.NewFileQueue(&queue.FileQueueConfig{
+		DBStore:    sqlStore,
+		MaxRetries: 3,
+	})
+	if err != nil {
+		t.Fatalf("failed to create FileQueue: %v", err)
+	}
+	return fq
+}
+
+func TestCreateMaster_InvalidJSON(t *testing.T) {
+	fq := newTestFileQueue(t)
+	cfg := config.FromEnv()
+	cfg.DataDir = t.TempDir()
 	r := gin.New()
-	r.POST("/api/video/create-master", CreateMaster(config.FromEnv(), q))
+	r.POST("/api/video/create-master", CreateMaster(cfg, fq))
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/video/create-master", bytes.NewReader([]byte("not json")))
@@ -37,13 +57,12 @@ func TestCreateMaster_InvalidJSON(t *testing.T) {
 }
 
 func TestCreateMaster_Enqueue(t *testing.T) {
+	fq := newTestFileQueue(t)
 	cfg := config.FromEnv()
-	q, err := queue.New(cfg)
-	if err != nil {
-		t.Skipf("Redis not available: %v", err)
-	}
+	cfg.DataDir = t.TempDir()
+	_ = os.MkdirAll(cfg.DataDir, 0o755)
 	r := gin.New()
-	r.POST("/api/video/create-master", CreateMaster(config.FromEnv(), q))
+	r.POST("/api/video/create-master", CreateMaster(cfg, fq))
 
 	payload := map[string]interface{}{
 		"video_name":      "Test Video",
@@ -79,13 +98,11 @@ func TestCreateMaster_Enqueue(t *testing.T) {
 }
 
 func TestCreateMaster_ValidationNoClips(t *testing.T) {
+	fq := newTestFileQueue(t)
 	cfg := config.FromEnv()
-	q, err := queue.New(cfg)
-	if err != nil {
-		t.Skipf("Redis not available: %v", err)
-	}
+	cfg.DataDir = t.TempDir()
 	r := gin.New()
-	r.POST("/api/video/create-master", CreateMaster(config.FromEnv(), q))
+	r.POST("/api/video/create-master", CreateMaster(cfg, fq))
 
 	payload := map[string]interface{}{
 		"video_name":  "No clips",
@@ -108,13 +125,12 @@ func TestCreateMaster_ValidationNoClips(t *testing.T) {
 }
 
 func TestCreateMaster_MultiTitle(t *testing.T) {
+	fq := newTestFileQueue(t)
 	cfg := config.FromEnv()
-	q, err := queue.New(cfg)
-	if err != nil {
-		t.Skipf("Redis not available: %v", err)
-	}
+	cfg.DataDir = t.TempDir()
+	_ = os.MkdirAll(cfg.DataDir, 0o755)
 	r := gin.New()
-	r.POST("/api/video/create-master", CreateMaster(config.FromEnv(), q))
+	r.POST("/api/video/create-master", CreateMaster(cfg, fq))
 
 	payload := map[string]interface{}{
 		"titles":          []interface{}{"Title One", "Title Two"},

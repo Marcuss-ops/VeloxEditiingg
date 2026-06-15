@@ -40,33 +40,22 @@ func TestFromEnv_Defaults(t *testing.T) {
 }
 
 func TestFromEnv_CustomValues(t *testing.T) {
-	// Set custom env vars
 	os.Setenv("VELOX_MASTER_PORT", "9000")
-	os.Setenv("VELOX_DB_DRIVER", "postgres")
 	os.Setenv("VELOX_ADMIN_TOKEN", "my-secret-token")
 	defer os.Unsetenv("VELOX_MASTER_PORT")
-	defer os.Unsetenv("VELOX_DB_DRIVER")
 	defer os.Unsetenv("VELOX_ADMIN_TOKEN")
 
 	cfg := FromEnv()
 
-	// Check custom values
 	if cfg.MasterPort != 9000 {
 		t.Errorf("expected MasterPort=9000, got %d", cfg.MasterPort)
-	}
-	if cfg.DBDriver != "postgres" {
-		t.Errorf("expected DBDriver=postgres, got %s", cfg.DBDriver)
 	}
 	if cfg.AdminToken != "my-secret-token" {
 		t.Errorf("expected AdminToken=my-secret-token, got %s", cfg.AdminToken)
 	}
 
-	// Check sub-configs are also updated
 	if cfg.Server.Port != 9000 {
 		t.Errorf("expected Server.Port=9000, got %d", cfg.Server.Port)
-	}
-	if cfg.Database.Driver != "postgres" {
-		t.Errorf("expected Database.Driver=postgres, got %s", cfg.Database.Driver)
 	}
 	if cfg.Auth.AdminToken != "my-secret-token" {
 		t.Errorf("expected Auth.AdminToken=my-secret-token, got %s", cfg.Auth.AdminToken)

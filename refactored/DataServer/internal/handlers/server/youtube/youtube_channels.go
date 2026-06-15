@@ -246,7 +246,9 @@ func (ym *YouTubeManager) RefreshChannelStatsHandler() gin.HandlerFunc {
 		}
 
 		ctx := c.Request.Context()
-		info, err := ym.apiClient.GetChannelInfo(ctx, channel.URL)
+
+		// Use ValidateToken which returns view_count and subscriber_count
+		validation, err := ym.service.ValidateToken(ctx, channelID)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, youtube.APIResponse{
 				OK:    false,
@@ -256,9 +258,15 @@ func (ym *YouTubeManager) RefreshChannelStatsHandler() gin.HandlerFunc {
 		}
 
 		var viewCount, subCount int64
-		if info != nil {
-			_ = viewCount
-			_ = subCount
+		if vc, ok := validation["view_count"].(int64); ok {
+			viewCount = vc
+		} else if vc, ok := validation["view_count"].(float64); ok {
+			viewCount = int64(vc)
+		}
+		if sc, ok := validation["subscriber_count"].(int64); ok {
+			subCount = sc
+		} else if sc, ok := validation["subscriber_count"].(float64); ok {
+			subCount = int64(sc)
 		}
 
 		if err := ym.storage.UpdateChannelStats(groupName, channelID, viewCount, subCount); err != nil {

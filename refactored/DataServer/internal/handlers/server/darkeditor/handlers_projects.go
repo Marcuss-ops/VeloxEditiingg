@@ -1,6 +1,7 @@
 package darkeditor
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -11,48 +12,50 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
-
 	"velox-server/internal/store"
 )
 
 // ListProjects lists all projects
 func (h *Handler) ListProjects(c *gin.Context) {
 	projectType := c.Query("type")
-	ctx := c.Request.Context()
 
-	if h.store != nil {
-		opts := store.ProjectListOptions{
-			Type:     projectType,
-			Limit:    100,
-			OrderBy:  "updated_at",
-			OrderDir: "desc",
-		}
-
-		projects, err := h.store.ListProjects(ctx, opts)
-		if err != nil {
-			log.Printf("[ERROR] ListProjects (DB): %v", err)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list projects"})
-			return
-		}
-
-		result := make([]Project, len(projects))
-		for i, p := range projects {
-			result[i] = Project{
-				ID:         p.ID,
-				Name:       p.Name,
-				Type:       p.Type,
-				CanvasJSON: p.CanvasJSON,
-				PreviewURL: p.PreviewURL,
-				CreatedAt:  p.CreatedAt,
-				UpdatedAt:  p.UpdatedAt,
-				FolderID:   p.FolderID,
-			}
-		}
-
-		c.JSON(http.StatusOK, result)
+	if h.dbStore == nil {
+		// Fallback to file-based listing
+		h.listProjectsFromFile(c, projectType)
 		return
 	}
 
+	ctx := context.Background()
+	opts := store.ProjectListOptions{
+		Type:  projectType,
+		Limit: 200,
+	}
+	dbProjects, err := h.dbStore.ListProjects(ctx, opts)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list projects"})
+		return
+	}
+
+	projects := []Project{}
+	for _, p := range dbProjects {
+		proj := Project{
+			ID:         p.ID,
+			Name:       p.Name,
+			Type:       p.Type,
+			CanvasJSON: p.CanvasJSON,
+			PreviewURL: p.PreviewURL,
+			CreatedAt:  p.CreatedAt,
+			UpdatedAt:  p.UpdatedAt,
+			FolderID:   p.FolderID,
+		}
+		projects = append(projects, proj)
+	}
+
+	c.JSON(http.StatusOK, projects)
+}
+
+// listProjectsFromFile is the legacy file-based fallback for listing projects.
+func (h *Handler) listProjectsFromFile(c *gin.Context, projectType string) {
 	if err := h.ensureDir(h.cfg.ProjectsDir); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to access projects directory"})
 		return
@@ -107,45 +110,56 @@ func (h *Handler) SaveProject(c *gin.Context) {
 		req.Type = "project"
 	}
 
-	ctx := c.Request.Context()
+	if h.dbStore != nil {
+		h.saveProjectToDB(c, req)
+		return
+	}
 
-	if h.store != nil {
+	// Fallback to file-based persistence
+	h.saveProjectToFile(c, req)
+}
+
+func (h *Handler) saveProjectToDB(c *gin.Context, req SaveProjectRequest) {
+	ctx := context.Background()
+
+	now := time.Now()
+	project := &store.Project{
+		ID:         req.ID,
+		Name:       req.Name,
+		Type:       req.Type,
+		CanvasJSON: req.CanvasJSON,
+		PreviewURL: fmt.Sprintf("/dark_editor_v2/projects/%s/preview.png", req.ID),
+		UpdatedAt:  now,
+	}
+
+	// Check if project already exists
+	existing, err := h.dbStore.GetProject(ctx, req.ID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to check existing project"})
+		return
+	}
+
+	if existing != nil {
+		// Preserve original created_at
+		project.CreatedAt = existing.CreatedAt
+		project.FolderID = existing.FolderID
+		if err := h.dbStore.UpdateProject(ctx, project); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update project"})
+			return
+		}
+	} else {
+		project.CreatedAt = now
+		if err := h.dbStore.CreateProject(ctx, project); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save project"})
+			return
+		}
+	}
+
+	// Handle preview file if provided
+	if req.PreviewFilename != "" {
+		srcPath := h.getTempPath(req.PreviewFilename)
 		projectDir := filepath.Join(h.cfg.ProjectsDir, req.ID)
-		_ = h.ensureDir(projectDir)
-
-		existing, _ := h.store.GetProject(ctx, req.ID)
-
-		project := &store.Project{
-			ID:         req.ID,
-			Name:       req.Name,
-			Type:       req.Type,
-			CanvasJSON: req.CanvasJSON,
-			PreviewURL: fmt.Sprintf("/dark_editor_v2/projects/%s/preview.png", req.ID),
-		}
-
-		if existing != nil {
-			project.FolderID = existing.FolderID
-			project.CreatedAt = existing.CreatedAt
-			if err := h.store.UpdateProject(ctx, project); err != nil {
-				log.Printf("[ERROR] SaveProject (DB update): %v", err)
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update project"})
-				return
-			}
-		} else {
-			if err := h.store.CreateProject(ctx, project); err != nil {
-				log.Printf("[ERROR] SaveProject (DB create): %v", err)
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create project"})
-				return
-			}
-		}
-
-		c.JSON(http.StatusOK, gin.H{
-			"id":      project.ID,
-			"message": "Project saved successfully",
-		})
-
-		if req.PreviewFilename != "" {
-			srcPath := h.getTempPath(req.PreviewFilename)
+		if err := h.ensureDir(projectDir); err == nil {
 			dstPath := filepath.Join(projectDir, "preview.png")
 			if data, err := os.ReadFile(srcPath); err == nil {
 				_ = os.WriteFile(dstPath, data, 0644)
@@ -153,9 +167,15 @@ func (h *Handler) SaveProject(c *gin.Context) {
 				log.Printf("[WARN] SaveProject preview copy failed: %v", err)
 			}
 		}
-		return
 	}
 
+	c.JSON(http.StatusOK, gin.H{
+		"id":      project.ID,
+		"message": "Project saved successfully",
+	})
+}
+
+func (h *Handler) saveProjectToFile(c *gin.Context, req SaveProjectRequest) {
 	projectDir := filepath.Join(h.cfg.ProjectsDir, req.ID)
 	if err := h.ensureDir(projectDir); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create project directory"})
@@ -222,12 +242,11 @@ func (h *Handler) SaveProject(c *gin.Context) {
 // LoadProject loads a project by ID
 func (h *Handler) LoadProject(c *gin.Context) {
 	projectID := c.Param("id")
-	ctx := c.Request.Context()
 
-	if h.store != nil {
-		project, err := h.store.GetProject(ctx, projectID)
+	if h.dbStore != nil {
+		ctx := context.Background()
+		project, err := h.dbStore.GetProject(ctx, projectID)
 		if err != nil {
-			log.Printf("[ERROR] LoadProject (DB): %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load project"})
 			return
 		}
@@ -237,18 +256,13 @@ func (h *Handler) LoadProject(c *gin.Context) {
 		}
 
 		c.JSON(http.StatusOK, gin.H{
-			"id":          project.ID,
+			"id":          projectID,
 			"canvas_json": project.CanvasJSON,
-			"name":        project.Name,
-			"type":        project.Type,
-			"preview_url": project.PreviewURL,
-			"folder_id":   project.FolderID,
-			"created_at":  project.CreatedAt,
-			"updated_at":  project.UpdatedAt,
 		})
 		return
 	}
 
+	// Fallback to file-based loading
 	projectDir := filepath.Join(h.cfg.ProjectsDir, projectID)
 	canvasPath := filepath.Join(projectDir, "canvas.json")
 
@@ -273,18 +287,18 @@ func (h *Handler) LoadProject(c *gin.Context) {
 // DeleteProject deletes a project
 func (h *Handler) DeleteProject(c *gin.Context) {
 	projectID := c.Param("id")
-	ctx := c.Request.Context()
 
-	if h.store != nil {
-		if err := h.store.DeleteProject(ctx, projectID); err != nil {
-			log.Printf("[ERROR] DeleteProject (DB): %v", err)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete project"})
+	if h.dbStore != nil {
+		ctx := context.Background()
+		if err := h.dbStore.DeleteProject(ctx, projectID); err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Project not found"})
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"success": true})
 		return
 	}
 
+	// Fallback to file-based deletion
 	projectDir := filepath.Join(h.cfg.ProjectsDir, projectID)
 	if err := os.RemoveAll(projectDir); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete project"})

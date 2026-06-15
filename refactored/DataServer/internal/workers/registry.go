@@ -5,37 +5,27 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"strconv"
-	"strings"
 	"sync"
 	"time"
 
-	"github.com/redis/go-redis/v9"
 	"velox-server/internal/store"
 )
 
-const workerPrefix = "velox:worker:"
-
 // Registry manages worker registration, heartbeats, and revocation.
 // SQLite is the single source of truth; in-memory map is a cache rebuilt at startup.
-// Redis is optional for distributed coordination.
 type Registry struct {
-	mu       sync.RWMutex
-	redis    *redis.Client
-	inMem    map[string]WorkerInfo
-	revoked  map[string]bool
-	useRedis bool
-	dbStore  *store.SQLiteStore
+	mu      sync.RWMutex
+	inMem   map[string]WorkerInfo
+	revoked map[string]bool
+	dbStore *store.SQLiteStore
 }
 
 // New creates a Registry with SQLite as the backing store.
-func New(rdb *redis.Client, useRedis bool, dbStore *store.SQLiteStore) *Registry {
+func New(dbStore *store.SQLiteStore) *Registry {
 	r := &Registry{
-		redis:    rdb,
-		inMem:    make(map[string]WorkerInfo),
-		revoked:  make(map[string]bool),
-		useRedis: useRedis,
-		dbStore:  dbStore,
+		inMem:   make(map[string]WorkerInfo),
+		revoked: make(map[string]bool),
+		dbStore: dbStore,
 	}
 	r.load()
 	return r
@@ -170,105 +160,20 @@ func (r *Registry) Heartbeat(ctx context.Context, workerID, workerName, status, 
 			log.Printf("registry: sqlite upsert worker heartbeat failed: %v", err)
 		}
 	}
-
-	// Optional Redis mirror for distributed coordination
-	if r.useRedis && r.redis != nil {
-		key := workerPrefix + workerID
-		extraJSON, _ := json.Marshal(extra)
-		capabilitiesJSON := ""
-		if info.Capabilities != nil {
-			if b, err := json.Marshal(info.Capabilities); err == nil {
-				capabilitiesJSON = string(b)
-			}
-		}
-		return r.redis.HSet(ctx, key,
-			"worker_id", workerID,
-			"worker_name", workerName,
-			"status", status,
-			"last_heartbeat", now,
-			"current_job", currentJob,
-			"extra", string(extraJSON),
-			"drain", strconv.FormatBool(info.Drain),
-			"schedulable", strconv.FormatBool(info.Schedulable),
-			"worker_group", info.WorkerGroup,
-			"code_version", info.CodeVersion,
-			"bundle_version", info.BundleVersion,
-			"bundle_hash", info.BundleHash,
-			"protocol_version", info.ProtocolVersion,
-			"engine_version", info.EngineVersion,
-			"capabilities", capabilitiesJSON,
-		).Err()
-	}
 	return nil
 }
 
 func (r *Registry) IsRegistered(ctx context.Context, workerID string) bool {
 	workerID = NormalizeWorkerID(workerID)
-	if r.useRedis && r.redis != nil {
-		n, _ := r.redis.Exists(ctx, workerPrefix+workerID).Result()
-		return n > 0
-	}
 	r.mu.RLock()
 	_, ok := r.inMem[workerID]
 	r.mu.RUnlock()
 	return ok
 }
 
-func parseWorkerRedisFields(m map[string]string, info *WorkerInfo) {
-	if v := m["code_version"]; v != "" {
-		info.CodeVersion = v
-	}
-	if v := m["bundle_version"]; v != "" {
-		info.BundleVersion = v
-	}
-	if v := m["bundle_hash"]; v != "" {
-		info.BundleHash = v
-	}
-	if v := m["protocol_version"]; v != "" {
-		info.ProtocolVersion = v
-	}
-	if v := m["engine_version"]; v != "" {
-		info.EngineVersion = v
-	}
-	if v := m["capabilities"]; v != "" {
-		var caps map[string]interface{}
-		if err := json.Unmarshal([]byte(v), &caps); err == nil {
-			info.Capabilities = caps
-		}
-	}
-	if extraRaw, ok := m["extra"]; ok && extraRaw != "" {
-		var extra map[string]interface{}
-		if err := json.Unmarshal([]byte(extraRaw), &extra); err == nil {
-			applyMetadataFields(extra, info)
-			info.RecentLogs = ExtractStringSlice(extra["recent_logs"])
-			info.RecentErrors = ExtractStringSlice(extra["recent_errors"])
-		}
-	}
-}
-
 // GetWorker returns a single worker's info by ID
 func (r *Registry) GetWorker(ctx context.Context, workerID string) *WorkerInfo {
 	workerID = NormalizeWorkerID(workerID)
-	if r.useRedis && r.redis != nil {
-		m, err := r.redis.HGetAll(ctx, workerPrefix+workerID).Result()
-		if err != nil || len(m) == 0 {
-			return nil
-		}
-		drain := m["drain"] == "true"
-		schedulable := m["schedulable"] != "false"
-		info := &WorkerInfo{
-			WorkerID:    m["worker_id"],
-			WorkerName:  m["worker_name"],
-			Status:      m["status"],
-			LastHB:      m["last_heartbeat"],
-			CurrentJob:  m["current_job"],
-			Drain:       drain,
-			Schedulable: schedulable,
-			WorkerGroup: m["worker_group"],
-		}
-		parseWorkerRedisFields(m, info)
-		return info
-	}
 	r.mu.RLock()
 	info, ok := r.inMem[workerID]
 	r.mu.RUnlock()
@@ -279,29 +184,6 @@ func (r *Registry) GetWorker(ctx context.Context, workerID string) *WorkerInfo {
 }
 
 func (r *Registry) List(ctx context.Context) []WorkerInfo {
-	if r.useRedis && r.redis != nil {
-		var out []WorkerInfo
-		iter := r.redis.Scan(ctx, 0, workerPrefix+"*", 100).Iterator()
-		for iter.Next(ctx) {
-			workerID := strings.TrimPrefix(iter.Val(), workerPrefix)
-			if r.IsRevoked(workerID) {
-				continue
-			}
-			m, _ := r.redis.HGetAll(ctx, iter.Val()).Result()
-			if len(m) > 0 {
-				info := WorkerInfo{
-					WorkerID:   workerID,
-					WorkerName: m["worker_name"],
-					Status:     m["status"],
-					LastHB:     m["last_heartbeat"],
-					CurrentJob: m["current_job"],
-				}
-				parseWorkerRedisFields(m, &info)
-				out = append(out, info)
-			}
-		}
-		return out
-	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	list := make([]WorkerInfo, 0, len(r.inMem))
@@ -371,34 +253,6 @@ func (r *Registry) RegisterWorker(ctx context.Context, workerID, workerName, ipA
 			log.Printf("registry: sqlite upsert worker register failed: %v", err)
 		}
 	}
-
-	if r.useRedis && r.redis != nil {
-		key := workerPrefix + workerID
-		capabilitiesJSON := ""
-		if info.Capabilities != nil {
-			if b, err := json.Marshal(info.Capabilities); err == nil {
-				capabilitiesJSON = string(b)
-			}
-		}
-		return r.redis.HSet(ctx, key,
-			"worker_id", workerID,
-			"worker_name", workerName,
-			"display_name", displayName,
-			"status", "online",
-			"last_heartbeat", now,
-			"first_seen", firstSeen,
-			"ip_address", ipAddress,
-			"host", ipAddress,
-			"schedulable", "true",
-			"worker_group", workerGroup,
-			"code_version", info.CodeVersion,
-			"bundle_version", info.BundleVersion,
-			"bundle_hash", info.BundleHash,
-			"protocol_version", info.ProtocolVersion,
-			"engine_version", info.EngineVersion,
-			"capabilities", capabilitiesJSON,
-		).Err()
-	}
 	return nil
 }
 
@@ -414,10 +268,6 @@ func (r *Registry) UnregisterWorker(ctx context.Context, workerID string) error 
 		if err := r.dbStore.DeleteWorker(workerID); err != nil {
 			log.Printf("registry: failed to delete worker %s: %v", workerID, err)
 		}
-	}
-
-	if r.useRedis && r.redis != nil {
-		return r.redis.Del(ctx, workerPrefix+workerID).Err()
 	}
 	return nil
 }
@@ -443,10 +293,6 @@ func (r *Registry) RevokeWorker(ctx context.Context, workerID string) {
 		}
 	}
 	r.mu.Unlock()
-
-	if r.useRedis && r.redis != nil {
-		_ = r.redis.Del(ctx, workerPrefix+workerID).Err()
-	}
 }
 
 // UnrevokeWorker removes a worker from the revoked list
@@ -563,36 +409,6 @@ func (r *Registry) UpdateWorker(ctx context.Context, workerID string, updates ma
 			log.Printf("registry: sqlite upsert worker update failed: %v", err)
 		}
 	}
-
-	if r.useRedis && r.redis != nil {
-		key := workerPrefix + workerID
-		capabilitiesJSON := ""
-		if info.Capabilities != nil {
-			if b, err := json.Marshal(info.Capabilities); err == nil {
-				capabilitiesJSON = string(b)
-			}
-		}
-		fields := []interface{}{
-			"worker_id", info.WorkerID,
-			"worker_name", info.WorkerName,
-			"display_name", info.DisplayName,
-			"status", info.Status,
-			"last_heartbeat", info.LastHB,
-			"current_job", info.CurrentJob,
-			"drain", strconv.FormatBool(info.Drain),
-			"schedulable", strconv.FormatBool(info.Schedulable),
-			"worker_group", info.WorkerGroup,
-			"code_version", info.CodeVersion,
-			"bundle_version", info.BundleVersion,
-			"bundle_hash", info.BundleHash,
-			"protocol_version", info.ProtocolVersion,
-			"engine_version", info.EngineVersion,
-			"capabilities", capabilitiesJSON,
-		}
-		if len(fields) > 0 {
-			return r.redis.HSet(ctx, key, fields...).Err()
-		}
-	}
 	return nil
 }
 
@@ -657,13 +473,6 @@ func (r *Registry) GetSchedulableWorkers(ctx context.Context) []WorkerInfo {
 		}
 	}
 	return result
-}
-
-// Save persists the current registry state to SQLite immediately.
-// This is a no-op now since every mutation already writes to SQLite.
-// Kept for API compatibility; can be removed in a future cleanup.
-func (r *Registry) Save() error {
-	return nil
 }
 
 // CleanupStaleWorkers removes workers that haven't sent a heartbeat in the given duration

@@ -48,7 +48,7 @@ func NewBackgroundRemovalHandler(cfg *BackgroundRemovalConfig, tempDir string) *
 	}
 }
 
-// Async task storage (in production, use Redis or database)
+// Async task storage (in-memory, not persisted)
 var backgroundTasks = make(map[string]*BackgroundRemovalStatus)
 
 // RemoveBackground handles background removal requests

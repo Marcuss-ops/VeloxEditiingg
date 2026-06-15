@@ -24,6 +24,8 @@ SERVICE_SRC="$DEPLOY_DIR/velox-server.service"
 SERVICE_DST="/etc/systemd/system/$SERVICE_NAME.service"
 ENV_TEMPLATE="$DEPLOY_DIR/velox-server.env"
 ENV_DST="/etc/velox-server.env"
+YOUTUBE_RUNTIME_CREDS_DIR="/opt/velox/current/.velox/secrets/youtube/credentials"
+YOUTUBE_RUNTIME_CREDS_FILE="$YOUTUBE_RUNTIME_CREDS_DIR/credentials.json"
 
 VELOX_USER="velox"
 VELOX_GROUP="velox"
@@ -84,10 +86,34 @@ log "Ensuring target directory tree and permissions..."
 mkdir -p /opt/velox/current
 mkdir -p "$(dirname "$BINARY_DST")"
 mkdir -p /opt/velox/current/.velox/data
+mkdir -p "$YOUTUBE_RUNTIME_CREDS_DIR"
 chown "$VELOX_USER:$VELOX_GROUP" /opt/velox/current
 chmod 755 /opt/velox/current
 chown -R "$VELOX_USER:$VELOX_GROUP" /opt/velox/current/.velox
 ok "Directory tree ready: /opt/velox/current"
+
+# ─── Step 3b: Sync YouTube OAuth credentials ───────────────────────────────
+
+YOUTUBE_SOURCE_CREDS=""
+for candidate in \
+    "$DATASERVER_DIR/data/youtube/credentials/credentials.json" \
+    "$DATASERVER_DIR/.velox/secrets/youtube/credentials/credentials.json"
+do
+    if [[ -f "$candidate" ]]; then
+        YOUTUBE_SOURCE_CREDS="$candidate"
+        break
+    fi
+done
+
+if [[ -n "$YOUTUBE_SOURCE_CREDS" ]]; then
+    log "Syncing YouTube OAuth credentials to runtime..."
+    cp "$YOUTUBE_SOURCE_CREDS" "$YOUTUBE_RUNTIME_CREDS_FILE"
+    chown "$VELOX_USER:$VELOX_GROUP" "$YOUTUBE_RUNTIME_CREDS_FILE"
+    chmod 600 "$YOUTUBE_RUNTIME_CREDS_FILE"
+    ok "YouTube OAuth credentials deployed"
+else
+    warn "YouTube OAuth credentials not found in source tree; runtime will rely on existing files"
+fi
 
 # ─── Step 4: Copy binary ────────────────────────────────────────────────────
 

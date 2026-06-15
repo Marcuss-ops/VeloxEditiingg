@@ -1,13 +1,6 @@
 // Package store provides database access layers for Velox.
-//
-// Database Strategy:
-//   - SQLite (sqlite.go): Primary database for all environments. Used for jobs, workers,
-//     analytics, calendar, drive links, and YouTube data. Configured via VELOX_DB_DSN.
-//   - PostgreSQL (postgres_store.go): Optional enterprise store for projects, assets,
-//     templates, and folders. Only used when VELOX_DB_DRIVER=postgres.
-//
-// SQLite is the default and recommended database. PostgreSQL support exists for
-// enterprise deployments requiring concurrent access or advanced features.
+// SQLite is the single database used for jobs, workers, analytics, calendar,
+// drive links, YouTube data, and dark editor projects.
 package store
 
 import (

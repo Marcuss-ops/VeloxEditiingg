@@ -1,6 +1,8 @@
 package workers
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -14,7 +16,9 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"velox-server/internal/config"
+	ytservice "velox-server/internal/integrations/youtube"
 	"velox-server/internal/queue"
+	"velox-server/internal/store"
 )
 
 // slugify converts a string to a safe filename
@@ -39,13 +43,13 @@ func slugify(s string) string {
 	return s
 }
 
-// UploadCompletedVideo handles video file upload from workers
-// Enhanced version matching Python implementation:
+// UploadCompletedVideo handles video file upload from workers.
 // - Accepts upload_info JSON form field
+// - Saves the file locally and creates an artifact record
 // - Marks job as COMPLETED in file queue
-// - Tracks in pending_uploads for YouTube/Drive upload workflow
+// - Triggers YouTube auto-upload directly if youtube_group is configured
 // - Supports video naming with video_name from job spec
-func UploadCompletedVideo(cfg *config.Config, fileQ *queue.FileQueue) gin.HandlerFunc {
+func UploadCompletedVideo(cfg *config.Config, fileQ *queue.FileQueue, youtubeService *ytservice.Service) gin.HandlerFunc {
 	videosDir := cfg.VideosDir
 	if videosDir == "" {
 		videosDir = "./completed_videos"
@@ -65,6 +69,9 @@ func UploadCompletedVideo(cfg *config.Config, fileQ *queue.FileQueue) gin.Handle
 		workerID := c.PostForm("worker_id")
 		uploadInfoStr := c.PostForm("upload_info")
 		jobRunID := c.PostForm("job_run_id")
+		leaseID := c.PostForm("lease_id")
+		attempt := c.PostForm("attempt")
+		contractVersion := c.PostForm("contract_version")
 
 		if jobID == "" {
 			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "job_id required"})
@@ -116,6 +123,26 @@ func UploadCompletedVideo(cfg *config.Config, fileQ *queue.FileQueue) gin.Handle
 					jobRunID = strings.TrimSpace(v)
 				}
 			}
+			if leaseID == "" {
+				if v, ok := jobData["lease_id"].(string); ok && strings.TrimSpace(v) != "" {
+					leaseID = strings.TrimSpace(v)
+				}
+			}
+			if attempt == "" {
+				if v, ok := jobData["attempt"]; ok {
+					attempt = fmt.Sprintf("%v", v)
+				}
+			}
+		}
+		if jobData != nil && leaseID != "" {
+			if currentLease, ok := jobData["lease_id"].(string); ok && strings.TrimSpace(currentLease) != "" && !strings.EqualFold(strings.TrimSpace(currentLease), leaseID) {
+				c.JSON(http.StatusConflict, gin.H{"ok": false, "error": "lease mismatch"})
+				return
+			}
+		}
+		if contractVersion != "" && contractVersion != "2" {
+			c.JSON(http.StatusConflict, gin.H{"ok": false, "error": "unsupported contract version"})
+			return
 		}
 
 		// Set max multipart memory to 10MB (larger files stream to disk)
@@ -177,7 +204,8 @@ func UploadCompletedVideo(cfg *config.Config, fileQ *queue.FileQueue) gin.Handle
 		}
 
 		// Copy file content
-		written, err := io.Copy(out, file)
+		hash := sha256.New()
+		written, err := io.Copy(out, io.TeeReader(file, hash))
 		if err != nil {
 			out.Close()
 			os.Remove(tempPath)
@@ -197,21 +225,80 @@ func UploadCompletedVideo(cfg *config.Config, fileQ *queue.FileQueue) gin.Handle
 		if absErr != nil {
 			absFinalPath = finalPath
 		}
+		outputSHA256 := hex.EncodeToString(hash.Sum(nil))
+		if outputSHA256 == "" {
+			outputSHA256 = computeFileSHA256(finalPath)
+		}
+		artifactID := ""
+		if outputSHA256 != "" {
+			seed := fmt.Sprintf("%s:%s:%s:%s", jobID, jobRunID, attempt, outputSHA256)
+			sum := sha256.Sum256([]byte(seed))
+			artifactID = "artifact_" + hex.EncodeToString(sum[:])[:24]
+		}
+		idempotencyKey := ""
+		if outputSHA256 != "" {
+			seed := fmt.Sprintf("%s:%s:%s", jobID, attempt, outputSHA256)
+			sum := sha256.Sum256([]byte(seed))
+			idempotencyKey = hex.EncodeToString(sum[:])
+		}
 
 		fileSize := written / (1024 * 1024) // MB
 		log.Printf("[OK] Video salvato: %s (%d MB)", finalPath, fileSize)
 
 		// Mark job as COMPLETED in file queue
 		if fileQ != nil {
+			// Create artifact record in the artifacts table
+			if dbStore := fileQ.GetDBStore(); dbStore != nil && artifactID != "" {
+				attemptNum := 1
+				if a := strings.TrimSpace(attempt); a != "" {
+					if n, err := fmt.Sscanf(a, "%d", &attemptNum); err != nil || n == 0 {
+						attemptNum = 1
+					}
+				}
+				artifact := &store.Artifact{
+					ID:              artifactID,
+					JobID:           jobID,
+					AttemptID:       attemptNum,
+					Type:            "video",
+					StorageProvider: "local",
+					StorageKey:      outputSHA256,
+					LocalPath:       absFinalPath,
+					SHA256:          outputSHA256,
+					SizeBytes:       written,
+					Status:          "completed",
+				}
+				if err := dbStore.InsertArtifact(artifact); err != nil {
+					log.Printf("[WARN] Failed to insert artifact record for %s: %v", jobID, err)
+				} else {
+					log.Printf("[ARTIFACT] Created artifact %s for job %s (sha256=%s, size=%d bytes)",
+						artifactID, jobID, outputSHA256, written)
+				}
+				_ = dbStore.LogJobEvent(jobID, "artifact_uploaded", map[string]interface{}{
+					"artifact_id": artifactID, "sha256": outputSHA256, "size_bytes": written,
+					"worker_id": workerID, "lease_id": leaseID,
+				})
+			}
+
+
 			now := time.Now().UTC().Format(time.RFC3339)
 			updates := map[string]interface{}{
-				"status":             "COMPLETED",
-				"completed_at":       now,
-				"completed_by":       workerID,
-				"video_uploaded":     true,
-				"master_video_path":  absFinalPath,
-				"result_path_worker": absFinalPath,
-				"job_run_id":         jobRunID,
+				"status":                 "COMPLETED",
+				"completed_at":           now,
+				"completed_by":           workerID,
+				"video_uploaded":         true,
+				"master_video_path":      absFinalPath,
+				"result_path_worker":     absFinalPath,
+				"job_run_id":             jobRunID,
+				"lease_id":               leaseID,
+				"artifact_id":            artifactID,
+				"output_sha256":          outputSHA256,
+				"upload_idempotency_key": idempotencyKey,
+			}
+			if attempt != "" {
+				updates["attempt"] = attempt
+			}
+			if contractVersion != "" {
+				updates["contract_version"] = contractVersion
 			}
 			if err := fileQ.UpdateJobFields(c.Request.Context(), jobID, updates); err != nil {
 				log.Printf("[WARN] Impossibile marcare COMPLETED il job %s: %v (will be set by SubmitResult)", jobID, err)
@@ -220,28 +307,84 @@ func UploadCompletedVideo(cfg *config.Config, fileQ *queue.FileQueue) gin.Handle
 			}
 		}
 
-		// Add to pending uploads for YouTube/Drive workflow
-		globalUploadManager.AddPendingUpload(jobID, &PendingUpload{
-			VideoPath:  finalPath,
-			WorkerID:   workerID,
-			JobRunID:   jobRunID,
-			UploadInfo: canonicalUploadInfo,
-			ReceivedAt: time.Now(),
-		})
-		log.Printf("[UPLOAD] Info upload salvate in pending_uploads per job %s", jobID)
+		// Trigger YouTube auto-upload if group is configured
 		if ytGroup, ok := canonicalUploadInfo["youtube_group"].(string); ok && ytGroup != "" {
-			log.Printf("   YouTube group: %s", ytGroup)
+			log.Printf("[UPLOAD] YouTube group: %s", ytGroup)
+			maybeAutoUploadYouTube(fileQ, youtubeService, jobID, canonicalUploadInfo, finalPath)
 		}
 		if vidName, ok := canonicalUploadInfo["video_name"].(string); ok && vidName != "" {
-			log.Printf("   Video name: %s", vidName)
+			log.Printf("[UPLOAD] Video name: %s", vidName)
 		}
 
 		c.JSON(http.StatusOK, gin.H{
-			"success":     true,
-			"message":     fmt.Sprintf("Video ricevuto e salvato: %s", videoFilename),
-			"job_id":      jobID,
-			"video_path":  absFinalPath,
-			"upload_info": canonicalUploadInfo,
+			"success":         true,
+			"message":         fmt.Sprintf("Video ricevuto e salvato: %s", videoFilename),
+			"job_id":          jobID,
+			"video_path":      absFinalPath,
+			"artifact_id":     artifactID,
+			"output_sha256":   outputSHA256,
+			"idempotency_key": idempotencyKey,
+			"upload_info":     canonicalUploadInfo,
 		})
+	}
+}
+
+// WorkerAssetHandler serves master-staged media assets to remote workers.
+type WorkerAssetHandler struct {
+	dataDir string
+}
+
+func NewWorkerAssetHandler(cfg *config.Config) *WorkerAssetHandler {
+	dataDir := ""
+	if cfg != nil {
+		dataDir = strings.TrimSpace(cfg.DataDir)
+		if dataDir == "" {
+			dataDir = strings.TrimSpace(cfg.Runtime.DataDir)
+		}
+	}
+	return &WorkerAssetHandler{dataDir: dataDir}
+}
+
+func (h *WorkerAssetHandler) ServeVoiceoverAsset() gin.HandlerFunc {
+	return h.serveScriptAsset("voiceover")
+}
+
+func (h *WorkerAssetHandler) ServeSceneImageAsset() gin.HandlerFunc {
+	return h.serveScriptAsset("scene-image")
+}
+
+func (h *WorkerAssetHandler) serveScriptAsset(kind string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if h == nil || strings.TrimSpace(h.dataDir) == "" {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "asset storage unavailable"})
+			return
+		}
+
+		jobID := strings.TrimSpace(c.Param("job_id"))
+		filename := strings.TrimSpace(c.Param("filename"))
+		if jobID == "" || filename == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "job_id and filename required"})
+			return
+		}
+
+		filename = filepath.Base(filename)
+		if filename == "." || filename == string(filepath.Separator) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid filename"})
+			return
+		}
+
+		baseDir := filepath.Clean(filepath.Join(h.dataDir, "worker_downloads", "script_assets"))
+		filePath := filepath.Join(baseDir, jobID, filename)
+		if !strings.HasPrefix(filepath.Clean(filePath), baseDir) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid asset path"})
+			return
+		}
+
+		if _, err := os.Stat(filePath); os.IsNotExist(err) {
+			c.JSON(http.StatusNotFound, gin.H{"error": kind + " asset not found"})
+			return
+		}
+
+		c.File(filePath)
 	}
 }

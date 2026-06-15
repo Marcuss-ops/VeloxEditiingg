@@ -21,7 +21,7 @@ func (w *Worker) jobLoop(ctx context.Context) {
 
 	pollCount := 0
 	lastSummaryLog := time.Now()
-	summaryInterval := 60 * time.Second // Log summary every 60s (~12 polls)
+	summaryInterval := 10 * time.Minute // Log summary every 10 minutes
 
 	w.logger.Info("[POLLING] Worker polling started — checking for jobs every %v", pollInterval)
 
@@ -55,10 +55,10 @@ func (w *Worker) jobLoop(ctx context.Context) {
 				pollCount = 0
 			}
 
-			// Periodic summary log at INFO level (every ~60s)
+			// Periodic summary log at DEBUG level (every ~10 minutes)
 			if time.Since(lastSummaryLog) >= summaryInterval {
-				w.logger.Info("[POLLING] Status: alive — %d polls sent, no jobs available (next check in %v)",
-					pollCount, pollInterval)
+				w.logger.Debug("[POLLING] Status: alive — %d polls sent, no jobs available",
+					pollCount)
 				lastSummaryLog = time.Now()
 			}
 		}
@@ -68,13 +68,24 @@ func (w *Worker) jobLoop(ctx context.Context) {
 // pollJob checks for an available job from the master.
 func (w *Worker) pollJob(ctx context.Context) (*api.Job, error) {
 	w.logger.Debug("Polling for job...")
-	job, err := w.apiClient.GetJob(ctx, w.config.WorkerID)
+	var job *api.Job
+	var err error
+	if w.config.UseV2Endpoints != nil && *w.config.UseV2Endpoints {
+		job, err = w.apiClient.GetJobV2(ctx, w.config.WorkerID)
+	} else {
+		job, err = w.apiClient.GetJob(ctx, w.config.WorkerID)
+	}
 	if err != nil {
 		return nil, err
 	}
 
 	if job != nil {
 		w.logger.Info("Received job: %s (type: %s, priority: %d)", job.JobID, job.JobType, job.Priority)
+		if job.ContractVersion != 0 && job.ContractVersion != api.ContractVersionV2 {
+			w.logger.Error("[RENDERPLAN] Job contract version mismatch: got=%d want=%d", job.ContractVersion, api.ContractVersionV2)
+			telemetry.GetPrometheusMetrics().RecordIdempotencyConflict("contract_version")
+			return nil, fmt.Errorf("unsupported contract version: %d", job.ContractVersion)
+		}
 
 		rp := renderplan.FromMap(map[string]interface{}{
 			"version":    renderplan.RenderPlanVersion,

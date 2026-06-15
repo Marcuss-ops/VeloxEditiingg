@@ -32,14 +32,26 @@
     _worker_image_commit: "{{ _build_info.stdout_lines[1] | default('unknown') }}"
     _worker_image_tag: "velox-worker:{{ _build_info.stdout_lines[0] | default(version_number | default('v1.0.6')) }}-{{ (_build_info.stdout_lines[1] | default('unknown'))[:7] }}"
 
+- name: Set worker runtime paths and health port
+  ansible.builtin.set_fact:
+    velox_worker_env_path: "/etc/velox-worker-{{ inventory_hostname }}.env"
+    velox_worker_runtime_dir: "/tmp/velox-worker-{{ inventory_hostname }}"
+    velox_worker_health_port: "{{ 8081 + ((worker_id | default(inventory_hostname) | regex_replace('^host_([0-9]+)_.*$', '\\1')) | int) }}"
+    velox_worker_health_url: "http://127.0.0.1:{{ 8081 + ((worker_id | default(inventory_hostname) | regex_replace('^host_([0-9]+)_.*$', '\\1')) | int) }}/health"
+
+- name: Set worker master URL env values
+  ansible.builtin.set_fact:
+    velox_worker_heartbeat_masters: "{{ master_url }}{% if master_url_secondary is defined and master_url_secondary %},{{ master_url_secondary }}{% endif %}"
+    velox_worker_secondary_master_url: "{{ master_url_secondary | default('') }}"
+
 - name: Write env file
   ansible.builtin.copy:
-    dest: /etc/velox-worker.env
+    dest: "{{ velox_worker_env_path }}"
     mode: "0600"
     content: |
       MASTER_URL={{ master_url }}
-      VELOX_HEARTBEAT_MASTERS={{ master_url }}{% if master_url_secondary is defined and master_url_secondary %},{{ master_url_secondary }}{% endif %}
-      VELOX_SECONDARY_MASTER_URL={% if master_url_secondary is defined and master_url_secondary %}{{ master_url_secondary }}{% else %}{% endif %}
+      VELOX_HEARTBEAT_MASTERS={{ velox_worker_heartbeat_masters }}
+      VELOX_SECONDARY_MASTER_URL={{ velox_worker_secondary_master_url }}
       WORKER_NAME={{ inventory_hostname }}
       VELOX_WORKER_ID={{ worker_id | default(inventory_hostname) }}
       VELOX_DIR={{ velox_dir }}
@@ -49,6 +61,7 @@
       VELOX_BUNDLE_HASH={{ bundle_hash | default('') }}
       VELOX_WORKER_PROTOCOL_VERSION={{ worker_protocol_version | default('2026-06-worker-v1') }}
       VELOX_ENGINE_VERSION={{ engine_version | default(version_number | default('v1.0.6')) }}
+      VELOX_HEALTH_PORT={{ velox_worker_health_port }}
       VELOX_WORKER_IMAGE={{ _worker_image_tag }}
       VELOX_WORKER_IMAGE_VERSION={{ _worker_image_version }}
       VELOX_WORKER_IMAGE_COMMIT={{ _worker_image_commit }}
@@ -116,13 +129,13 @@
 - name: Ensure worker config exists and disables Prometheus metrics
   ansible.builtin.shell: |
     set -euo pipefail
-    CFG=/tmp/velox-worker/worker_config.json
-    mkdir -p /tmp/velox-worker
+    CFG={{ velox_worker_runtime_dir }}/worker_config.json
+    mkdir -p {{ velox_worker_runtime_dir }}
     if [ ! -f "$CFG" ]; then
       /usr/bin/docker run --rm \
         --user root \
         --entrypoint /usr/local/bin/velox-worker-agent \
-        -v /tmp/velox-worker:/tmp/velox-worker \
+        -v {{ velox_worker_runtime_dir }}:{{ velox_worker_runtime_dir }} \
         "{{ _worker_image_tag }}" \
         -generate-config -config "$CFG" -work-dir /app/RemoteCodex >/dev/null
     fi
@@ -130,9 +143,10 @@
     import json
     from pathlib import Path
 
-    cfg_path = Path("/tmp/velox-worker/worker_config.json")
+    cfg_path = Path("{{ velox_worker_runtime_dir }}/worker_config.json")
     data = json.loads(cfg_path.read_text())
     data["prometheus_port"] = 0
+    data["health_port"] = {{ velox_worker_health_port }}
     cfg_path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
     PY
   args:
@@ -274,11 +288,11 @@
 
       [Service]
       Type=simple
-      EnvironmentFile=/etc/velox-worker.env
+      EnvironmentFile={{ velox_worker_env_path }}
       WorkingDirectory={{ velox_dir }}/current
       ExecStartPre=/bin/sh -c '/usr/bin/docker rm -f velox-worker-{{ inventory_hostname }} >/dev/null 2>&1 || true'
-      ExecStartPre=/bin/sh -c 'mkdir -p /tmp/velox-worker && chmod 775 /tmp/velox-worker && [ -f /tmp/velox-worker/worker_config.json ] || /usr/bin/docker run --rm --user root --entrypoint /usr/local/bin/velox-worker-agent -v /tmp/velox-worker:/tmp/velox-worker ${VELOX_WORKER_IMAGE} -generate-config -config /tmp/velox-worker/worker_config.json -work-dir /app/RemoteCodex'
-      ExecStart=/usr/bin/docker run --name velox-worker-{{ inventory_hostname }} --rm --network host --env-file /etc/velox-worker.env -e VELOX_VIDEO_ENGINE_CPP_BIN=/usr/local/bin/velox_video_engine -v {{ velox_dir }}/current:/app -v {{ velox_dir }}/cache:/root/.cache -v {{ velox_dir }}/current/RemoteCodex/assets_cache:/app/RemoteCodex/assets_cache -v /tmp/velox-worker:/tmp/velox-worker ${VELOX_WORKER_IMAGE} -config /tmp/velox-worker/worker_config.json -master {{ master_url }} -worker-id {{ worker_id | default(inventory_hostname) }} -work-dir /app/RemoteCodex
+      ExecStartPre=/bin/sh -c 'mkdir -p {{ velox_worker_runtime_dir }} && chmod 775 {{ velox_worker_runtime_dir }} && [ -f {{ velox_worker_runtime_dir }}/worker_config.json ] || /usr/bin/docker run --rm --user root --entrypoint /usr/local/bin/velox-worker-agent -v {{ velox_worker_runtime_dir }}:{{ velox_worker_runtime_dir }} ${VELOX_WORKER_IMAGE} -generate-config -config {{ velox_worker_runtime_dir }}/worker_config.json -work-dir /app/RemoteCodex'
+      ExecStart=/usr/bin/docker run --name velox-worker-{{ inventory_hostname }} --rm --network host --env-file {{ velox_worker_env_path }} -e VELOX_VIDEO_ENGINE_CPP_BIN=/usr/local/bin/velox_video_engine -v {{ velox_dir }}/current:/app -v {{ velox_dir }}/cache:/root/.cache -v {{ velox_dir }}/current/RemoteCodex/assets_cache:/app/RemoteCodex/assets_cache -v {{ velox_worker_runtime_dir }}:{{ velox_worker_runtime_dir }} ${VELOX_WORKER_IMAGE} -config {{ velox_worker_runtime_dir }}/worker_config.json -master {{ master_url }} -worker-id {{ worker_id | default(inventory_hostname) }} -work-dir /app/RemoteCodex
       ExecStop=/bin/sh -c '/usr/bin/docker stop -t 20 velox-worker-{{ inventory_hostname }} >/dev/null 2>&1 || true'
       ExecStopPost=/bin/sh -c '/usr/bin/docker rm -f velox-worker-{{ inventory_hostname }} >/dev/null 2>&1 || true'
       TimeoutStopSec=35
