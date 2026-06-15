@@ -39,7 +39,7 @@ func (h *Handler) UploadImage(c *gin.Context) {
 
 	filename := h.getUniqueFilename(ext)
 
-	if err := h.ensureDir(h.cfg.TempDir); err != nil {
+	if dirErr := h.ensureDir(h.cfg.TempDir); dirErr != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create temp directory"})
 		return
 	}
@@ -347,9 +347,9 @@ func (h *Handler) UpscaleImage(c *gin.Context) {
 		SaveInPlace: req.SaveInPlace,
 	}
 
-	result, err := processors.Upscale(img, upscaleOpts, outputPath)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to upscale image: %v", err)})
+	result, upscaleErr := processors.Upscale(img, upscaleOpts, outputPath)
+	if upscaleErr != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to upscale image: %v", upscaleErr)})
 		return
 	}
 
