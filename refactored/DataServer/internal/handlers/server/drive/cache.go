@@ -21,14 +21,12 @@ func getDriveLinksFromCache() []DriveFolder {
 	driveLinksCache.mu.Lock()
 	defer driveLinksCache.mu.Unlock()
 
-	if err := loadDriveLinksFromDisk(); err != nil {
-		log.Printf("[WARN] Drive cache reload failed: %v", err)
-	}
+	loadDriveLinksFromDisk()
 	return driveLinksCache.folders
 }
 
 // loadDriveLinksFromDisk loads folders from SQLite (source of truth).
-func loadDriveLinksFromDisk() error {
+func loadDriveLinksFromDisk() {
 	if driveLinksStore != nil {
 		dbFolders, err := driveLinksStore.ListDriveLinks()
 		if err == nil && len(dbFolders) > 0 {
@@ -48,12 +46,11 @@ func loadDriveLinksFromDisk() error {
 			}
 			driveLinksCache.folders = folders
 			driveLinksCache.lastLoad = time.Now()
-			return nil
+			return
 		}
 	}
 	driveLinksCache.folders = nil
 	driveLinksCache.lastLoad = time.Now()
-	return nil
 }
 
 // saveDriveLinksToDisk persists folders to SQLite only.

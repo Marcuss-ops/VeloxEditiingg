@@ -202,10 +202,7 @@ func (s *SQLiteStore) importSource(absPath string, src jsonSource) LegacyImportR
 	}
 
 	// 3. Parse and count records
-	count, err := countJSONRecords(src.Domain, data)
-	if err != nil {
-		return LegacyImportResult{Source: src, Status: "error", SHA256: shaShort, Error: fmt.Sprintf("parse: %v", err)}
-	}
+	count := countJSONRecords(src.Domain, data)
 
 	// 4. Create backup before importing (pass data to avoid re-reading)
 	backupPath, err := createJSONBackup(absPath, data)
@@ -312,17 +309,17 @@ func createJSONBackup(absPath string, data []byte) (string, error) {
 // ============================================================
 
 // countJSONRecords returns the number of top-level records in a JSON file.
-func countJSONRecords(domain string, data []byte) (int, error) {
+func countJSONRecords(domain string, data []byte) int {
 	// Special case: drive_links can be YAML array
 	if domain == "drive_links" {
 		var list []map[string]any
 		if err := json.Unmarshal(data, &list); err == nil {
-			return len(list), nil
+			return len(list)
 		}
 		if err := yaml.Unmarshal(data, &list); err == nil {
-			return len(list), nil
+			return len(list)
 		}
-		return 0, nil
+		return 0
 	}
 
 	// Special case: workers domain uses { "workers": { ... }, "revoked": [...] }
@@ -330,7 +327,7 @@ func countJSONRecords(domain string, data []byte) (int, error) {
 	if domain == "workers" {
 		var wf legacyWorkersFile
 		if err := json.Unmarshal(data, &wf); err == nil && len(wf.Workers) > 0 {
-			return len(wf.Workers), nil
+			return len(wf.Workers)
 		}
 		// Fall through to generic map/array handling for flat format
 	}
@@ -338,16 +335,16 @@ func countJSONRecords(domain string, data []byte) (int, error) {
 	// Try map first (most domains: workers flat, channels, ansible)
 	var m map[string]any
 	if err := json.Unmarshal(data, &m); err == nil {
-		return len(m), nil
+		return len(m)
 	}
 
 	// Fallback to array (youtube_groups, etc.)
 	var a []any
 	if err := json.Unmarshal(data, &a); err == nil {
-		return len(a), nil
+		return len(a)
 	}
 
-	return 0, nil
+	return 0
 }
 
 // ============================================================
@@ -375,7 +372,7 @@ func importJSONData(s *SQLiteStore, domain string, data []byte, absPath string) 
 	case "youtube_cache":
 		return importYouTubeCacheJSON(s, data)
 	case "drive_links":
-		return importDriveLinksJSON(s, data, absPath)
+		return importDriveLinksJSON(s, data)
 	default:
 		return 0, fmt.Errorf("unknown import domain: %s", domain)
 	}
@@ -853,7 +850,7 @@ func importYouTubeCacheJSON(s *SQLiteStore, data []byte) (int, error) {
 
 // importDriveLinksJSON imports drive/drive_links.yaml (or .json) into drive_links.
 // Format: array of { "id": "...", "name": "...", "link": "...", "parentId": "...", "language": "..." }
-func importDriveLinksJSON(s *SQLiteStore, data []byte, absPath string) (int, error) {
+func importDriveLinksJSON(s *SQLiteStore, data []byte) (int, error) {
 	var list []map[string]any
 
 	// Try JSON first, then YAML

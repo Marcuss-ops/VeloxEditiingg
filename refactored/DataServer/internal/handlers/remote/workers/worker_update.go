@@ -233,12 +233,12 @@ func (h *WorkerUpdateHandler) readUpdateAllOptions(c *gin.Context) (excludeLocal
 
 func (h *WorkerUpdateHandler) latestBundleTarget() bundleTargetInfo {
 	info := bundleTargetInfo{
-		Version:   h.codeVersion,
 		Available: false,
 	}
 	if h == nil {
 		return info
 	}
+	info.Version = h.codeVersion
 
 	if bundlePath, stat, err := resolveBundlePath(h.bundleDir, "linux", "x86_64"); err == nil {
 		info.Hash = computeFileSHA256(bundlePath)

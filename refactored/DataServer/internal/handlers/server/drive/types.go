@@ -56,5 +56,5 @@ var driveLinksStore *store.SQLiteStore
 func InitDriveLinksCache(dataDirectory string, store *store.SQLiteStore) {
 	driveLinksStore = store
 	// Trigger initial load
-	_ = loadDriveLinksFromDisk()
+	loadDriveLinksFromDisk()
 }

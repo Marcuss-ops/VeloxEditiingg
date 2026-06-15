@@ -82,10 +82,9 @@ func (h *WorkerUpdateHandler) GetBundleFilesHandler() gin.HandlerFunc {
 				if err != nil || rel == ".." || filepath.IsAbs(rel) {
 					continue
 				}
-			}
-
-			if searchPath != "" && !filepath.HasPrefix(f.Name, searchPath) {
-				continue
+				if rel == "." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+					continue
+				}
 			}
 
 			results = append(results, gin.H{
