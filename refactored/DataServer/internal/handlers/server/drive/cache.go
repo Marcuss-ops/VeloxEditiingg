@@ -68,18 +68,6 @@ func saveDriveLinksToDisk(folders []DriveFolder) error {
 	return nil
 }
 
-// saveMasterFoldersToDisk persists master folders to SQLite only.
-func saveMasterFoldersToDisk(masters map[string]MasterFolderInfo) error {
-	if driveLinksStore != nil {
-		for language, info := range masters {
-			if err := driveLinksStore.UpsertMasterFolder(info.ID, info.Name, info.URL, language, info.SubfoldersCount); err != nil {
-				log.Printf("[WARN] Master folder SQLite save failed for %s: %v", language, err)
-			}
-		}
-	}
-	return nil
-}
-
 // normalizeName normalizes a folder name for matching
 func normalizeName(s string) string {
 	s = strings.ToLower(s)

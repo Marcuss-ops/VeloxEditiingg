@@ -47,10 +47,17 @@ func TestUpdateJobFieldsClearsFailureStateOnComplete(t *testing.T) {
 		t.Fatalf("persist initial job: %v", err)
 	}
 
+	// Must go through PROCESSING first (PENDING→COMPLETED is not a valid transition)
+	if err := UpdateJobFields(ctx, job.JobID, map[string]interface{}{
+		"status": "PROCESSING",
+	}, dbStore, q.activeJobs); err != nil {
+		t.Fatalf("update job fields to processing: %v", err)
+	}
+
 	if err := UpdateJobFields(ctx, job.JobID, map[string]interface{}{
 		"status": "COMPLETED",
 	}, dbStore, q.activeJobs); err != nil {
-		t.Fatalf("update job fields: %v", err)
+		t.Fatalf("update job fields to completed: %v", err)
 	}
 
 	saved, err := dbStore.GetJob(ctx, job.JobID)

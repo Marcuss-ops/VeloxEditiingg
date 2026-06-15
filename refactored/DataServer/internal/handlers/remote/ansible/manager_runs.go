@@ -334,10 +334,6 @@ func buildExtraVars(vars map[string]interface{}) []string {
 	return out
 }
 
-func quoteShell(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
-}
-
 func (m *AnsibleRunManager) loadComputerInventory(hosts []string) (map[string]AnsibleComputer, map[string]string, error) {
 	if m.computerMgr == nil {
 		return nil, nil, fmt.Errorf("computer manager not configured")

@@ -199,30 +199,6 @@ func (h *WorkerUpdateHandler) LoadPendingUpdates() error {
 	return nil
 }
 
-// splitVersion splits a version string like "1.0.0|abc123" into parts
-func splitVersion(v string) []string {
-	parts := []string{}
-	current := ""
-	for _, c := range v {
-		if c == '|' {
-			parts = append(parts, current)
-			current = ""
-		} else {
-			current += string(c)
-		}
-	}
-	if current != "" {
-		parts = append(parts, current)
-	}
-	return parts
-}
-
-// marshalJSON is a helper for JSON marshaling
-func marshalJSON(v interface{}) string {
-	data, _ := json.Marshal(v)
-	return string(data)
-}
-
 type updateAllRequest struct {
 	ExcludeLocal *bool `json:"exclude_local"`
 	DryRun       *bool `json:"dry_run"`

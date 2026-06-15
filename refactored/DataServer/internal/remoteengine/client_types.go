@@ -2,7 +2,6 @@ package remoteengine
 
 import (
 	"net/http"
-	"sync"
 	"time"
 )
 
@@ -18,7 +17,6 @@ type Config struct {
 type Client struct {
 	config     Config
 	httpClient *http.Client
-	mu         sync.RWMutex
 }
 
 // SimpleScriptRequest is the input for simple script generation

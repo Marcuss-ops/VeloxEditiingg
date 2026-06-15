@@ -49,13 +49,11 @@ type driveLinksCacheType struct {
 }
 
 var driveLinksCache driveLinksCacheType
-var driveLinksDataDir string
 var driveTokensDir string
 var driveLinksStore *store.SQLiteStore
 
 // InitDriveLinksCache initializes the cache with data directory and store
 func InitDriveLinksCache(dataDirectory string, store *store.SQLiteStore) {
-	driveLinksDataDir = dataDirectory
 	driveLinksStore = store
 	// Trigger initial load
 	_ = loadDriveLinksFromDisk()

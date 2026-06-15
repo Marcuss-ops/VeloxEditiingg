@@ -25,6 +25,14 @@ func CompleteJobEnhanced(cfg *config.Config, fileQ *queue.FileQueue, youtubeServ
 		videoUploaded := c.Query("video_uploaded") == "true"
 		resultPath := c.Query("result_path")
 		jobRunID := c.Query("job_run_id")
+		leaseID := c.Query("lease_id")
+		if leaseID == "" {
+			leaseID = c.PostForm("lease_id")
+		}
+		attempt := c.Query("attempt")
+		if attempt == "" {
+			attempt = c.PostForm("attempt")
+		}
 
 		if jobID == "" {
 			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "job_id required"})
@@ -56,6 +64,22 @@ func CompleteJobEnhanced(cfg *config.Config, fileQ *queue.FileQueue, youtubeServ
 				jobRunID = strings.TrimSpace(v)
 			} else if v, ok := job["run_id"].(string); ok && strings.TrimSpace(v) != "" {
 				jobRunID = strings.TrimSpace(v)
+			}
+		}
+		if leaseID == "" {
+			if v, ok := job["lease_id"].(string); ok && strings.TrimSpace(v) != "" {
+				leaseID = strings.TrimSpace(v)
+			}
+		}
+		if leaseID != "" {
+			if v, ok := job["lease_id"].(string); ok && strings.TrimSpace(v) != "" && !strings.EqualFold(strings.TrimSpace(v), leaseID) {
+				c.JSON(http.StatusConflict, gin.H{"ok": false, "error": "lease mismatch"})
+				return
+			}
+		}
+		if attempt == "" {
+			if v, ok := job["attempt"]; ok {
+				attempt = fmt.Sprintf("%v", v)
 			}
 		}
 
@@ -108,6 +132,10 @@ func CompleteJobEnhanced(cfg *config.Config, fileQ *queue.FileQueue, youtubeServ
 			"completed_at":   now,
 			"assigned_to":    workerID,
 			"video_uploaded": videoUploaded,
+			"lease_id":       leaseID,
+		}
+		if attempt != "" {
+			updates["attempt"] = attempt
 		}
 		if resultPath != "" {
 			updates["result_path"] = resultPath

@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strings"
 	"time"
 )
 
@@ -282,13 +281,3 @@ func (r *RemoteFallback) post(ctx context.Context, path string, payload interfac
 }
 
 // --- Helper functions ---
-
-// isVideoURL checks if a URL is a YouTube video URL
-func isVideoURL(url string) bool {
-	url = strings.ToLower(url)
-	return strings.Contains(url, "watch?v=") ||
-		strings.Contains(url, "youtu.be/") ||
-		strings.Contains(url, "/shorts/") ||
-		strings.Contains(url, "/embed/") ||
-		strings.Contains(url, "/live/")
-}

@@ -22,18 +22,6 @@ import (
 // Drive token resolution
 // =============================================================================
 
-func loadFirstDriveToken(tm *drive.TokenManager) (*drive.Token, error) {
-	names, err := tm.ListTokens()
-	if err != nil {
-		return nil, err
-	}
-	if len(names) == 0 {
-		return nil, os.ErrNotExist
-	}
-	sort.Strings(names)
-	return tm.LoadToken(names[0])
-}
-
 func loadAllDriveTokens(tm *drive.TokenManager) ([]*drive.Token, error) {
 	names, err := tm.ListTokens()
 	if err != nil {

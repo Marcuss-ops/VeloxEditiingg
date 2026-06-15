@@ -52,10 +52,6 @@ func getStringOrEmpty(data map[string]interface{}, keys ...string) string {
 	return ""
 }
 
-func normalizeList(val interface{}) string {
-	return payload.NormalizeList(val)
-}
-
 func normalizeListToArray(val interface{}) []string {
 	return payload.NormalizeListToArray(val)
 }

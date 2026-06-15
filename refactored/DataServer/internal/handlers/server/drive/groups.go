@@ -7,13 +7,6 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// Master folder ID globals (can be overridden via SetMasterFolderIDs)
-var (
-	clipMasterFolderID      = "default_clip_id"
-	stockMasterFolderID     = "default_stock_id"
-	voiceoverMasterFolderID = "default_voiceover_id"
-)
-
 // Group-to-folder mappings
 var groupToClipFolder = map[string]string{
 	"wwe":      "WWE",
@@ -36,13 +29,6 @@ var stockFolderAliases = map[string]string{
 	"tech":     "Tech Stock",
 }
 
-// SetMasterFolderIDs overrides the default master folder IDs from config
-func SetMasterFolderIDs(clipID, stockID, voiceoverID string) {
-	clipMasterFolderID = clipID
-	stockMasterFolderID = stockID
-	voiceoverMasterFolderID = voiceoverID
-}
-
 // findMasterIDByName finds a master folder (ParentID=="") whose name matches any in names[]
 func findMasterIDByName(folders []DriveFolder, names []string) string {
 	for _, name := range names {
@@ -54,29 +40,6 @@ func findMasterIDByName(folders []DriveFolder, names []string) string {
 		}
 	}
 	return ""
-}
-
-// findChildByGroup finds a child by matching Language field or Name (normalized comparison)
-func findChildByGroup(children []DriveFolder, groupName string) *DriveFolder {
-	normGroup := normalizeName(groupName)
-	for i := range children {
-		childLang := normalizeName(children[i].Language)
-		childName := normalizeName(children[i].Name)
-		if childLang == normGroup || strings.Contains(childName, normGroup) {
-			return &children[i]
-		}
-	}
-	return nil
-}
-
-// findParentFolder performs a linear search for a folder by ID
-func findParentFolder(parentID string, folders []DriveFolder) (DriveFolder, bool) {
-	for _, f := range folders {
-		if f.ID == parentID {
-			return f, true
-		}
-	}
-	return DriveFolder{}, false
 }
 
 // resolveDriveFolderID finds matching cache folder and returns its ID

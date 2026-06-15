@@ -116,28 +116,6 @@ func (h *AnsibleHandlers) resolveComputerIDs(ids []string) []string {
 	return out
 }
 
-func (h *AnsibleHandlers) collectTargets(c *gin.Context) []string {
-	var body struct {
-		ComputerIDs []string `json:"computer_ids"`
-		WorkerIDs   []string `json:"worker_ids"`
-		Workers     []string `json:"workers"`
-		Hosts       []string `json:"hosts"`
-	}
-	_ = c.ShouldBindJSON(&body)
-
-	targets := body.ComputerIDs
-	if len(targets) == 0 {
-		targets = body.WorkerIDs
-	}
-	if len(targets) == 0 {
-		targets = body.Workers
-	}
-	if len(targets) == 0 {
-		targets = body.Hosts
-	}
-	return h.resolveComputerIDs(targets)
-}
-
 func (h *AnsibleHandlers) runActionForTargets(action string, targets []string) (string, error) {
 	if h.manager == nil {
 		return "", context.Canceled
