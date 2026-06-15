@@ -87,6 +87,11 @@ func (cl *ConcurrencyLimiter) Release() {
 	}
 }
 
+// MaxActiveJobs returns the configured maximum concurrent jobs.
+func (cl *ConcurrencyLimiter) MaxActiveJobs() int {
+	return cl.maxActiveJobs
+}
+
 // shouldReject determines if a job should be rejected based on priority.
 func (cl *ConcurrencyLimiter) shouldReject(priority int) bool {
 	// Critical jobs (priority 3) are never rejected

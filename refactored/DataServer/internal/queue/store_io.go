@@ -39,6 +39,12 @@ func MapToJob(m map[string]any) *Job {
 	if s, ok := m["claimed_at"].(string); ok {
 		job.ClaimedAt = s
 	}
+	if s, ok := m["lease_id"].(string); ok {
+		job.LeaseID = s
+	}
+	if v, ok := m["lease_expiry"]; ok {
+		job.LeaseExpiry = v
+	}
 	if s, ok := m["output_video_id"].(string); ok {
 		job.OutputVideoID = s
 	}
@@ -57,6 +63,15 @@ func MapToJob(m map[string]any) *Job {
 	if s, ok := m["master_video_path"].(string); ok {
 		job.MasterVideoPath = s
 	}
+	if s, ok := m["artifact_id"].(string); ok {
+		job.ArtifactID = s
+	}
+	if s, ok := m["output_sha256"].(string); ok {
+		job.OutputSHA256 = s
+	}
+	if s, ok := m["upload_idempotency_key"].(string); ok {
+		job.IdempotencyKey = s
+	}
 	if s, ok := m["run_id"].(string); ok {
 		job.RunID = s
 	}
@@ -70,6 +85,11 @@ func MapToJob(m map[string]any) *Job {
 		job.RetryCount = i
 	} else if f, ok := m["retry_count"].(float64); ok {
 		job.RetryCount = int(f)
+	}
+	if i, ok := m["attempt"].(int); ok {
+		job.Attempt = i
+	} else if f, ok := m["attempt"].(float64); ok {
+		job.Attempt = int(f)
 	}
 	if i, ok := m["max_retries"].(int); ok {
 		job.MaxRetries = i
@@ -170,7 +190,10 @@ func PersistJob(job *Job, dbStore *store.SQLiteStore) error {
 	m["worker_name"] = job.WorkerName
 	m["claimed_by"] = job.ClaimedBy
 	m["claimed_at"] = job.ClaimedAt
+	m["lease_id"] = job.LeaseID
+	m["lease_expiry"] = job.LeaseExpiry
 	m["retry_count"] = job.RetryCount
+	m["attempt"] = job.Attempt
 	m["max_retries"] = job.MaxRetries
 	m["last_error"] = job.LastError
 	m["error_message"] = job.ErrorMessage
@@ -178,6 +201,9 @@ func PersistJob(job *Job, dbStore *store.SQLiteStore) error {
 	m["failed_by"] = job.FailedBy
 	m["video_uploaded"] = job.VideoUploaded
 	m["master_video_path"] = job.MasterVideoPath
+	m["artifact_id"] = job.ArtifactID
+	m["output_sha256"] = job.OutputSHA256
+	m["upload_idempotency_key"] = job.IdempotencyKey
 	m["output_video_id"] = job.OutputVideoID
 	m["drive_url"] = job.DriveURL
 	m["run_id"] = job.RunID

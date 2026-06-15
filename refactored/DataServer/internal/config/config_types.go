@@ -29,15 +29,6 @@ type DatabaseConfig struct {
 	ConnMaxIdleTime int
 }
 
-// RedisConfig holds Redis connection settings (legacy).
-type RedisConfig struct {
-	Host     string
-	Port     string
-	DB       int
-	Password string
-	Prefix   string
-}
-
 // WorkersConfig holds worker management settings.
 type WorkersConfig struct {
 	AllowedWorkers      string
@@ -79,11 +70,11 @@ type DriveConfig struct {
 
 // YouTubeConfig holds YouTube integration settings.
 type YouTubeConfig struct {
-	APIKey          string
-	TokensDir       string
-	PostingPath     string
-	CredentialsDir  string
-	RemoteFallback  string
+	APIKey         string
+	TokensDir      string
+	PostingPath    string
+	CredentialsDir string
+	RemoteFallback string
 }
 
 // AnsibleConfig holds Ansible deployment settings.
@@ -101,11 +92,11 @@ type FrontendConfig struct {
 
 // RenderConfig holds remote rendering engine settings.
 type RenderConfig struct {
-	RemoteEngineURL           string
-	RemoteEngineToken         string
-	RemoteEngineTimeoutMS     int
-	RemoteEngineRetries       int
-	RemoteEnginePollInterval  int // seconds between pipeline status polls, default 30
+	RemoteEngineURL          string
+	RemoteEngineToken        string
+	RemoteEngineTimeoutMS    int
+	RemoteEngineRetries      int
+	RemoteEnginePollInterval int // seconds between pipeline status polls, default 30
 }
 
 // NVIDIAConfig holds NVIDIA AI settings.
@@ -114,36 +105,30 @@ type NVIDIAConfig struct {
 	TextURL string
 }
 
-// Config is the top-level configuration. Kept for backward compatibility.
+// Config is the top-level configuration.
 type Config struct {
-	// Flat fields (legacy) - all sub-configs below
 	MasterPort    int
 	StudioPort    int
 	StaticDir     string
 	VideosDir     string
-	RedisHost     string
-	RedisPort     string
-	RedisDB       int
-	RedisPassword string
-	QueuePrefix   string
 	DataDir       string
 	RuntimeDir    string
 	JobQueueFile  string
 
-	AllowedWorkers          string
-	ForceSingleWorker       string
+	AllowedWorkers           string
+	ForceSingleWorker        string
 	AllowlistAllowRegistered bool
-	MaxJobAttempts          int
-	MasterServerURL         string
-	JobMasterURL            string
-	GradioAppURL            string
-	SPADir                  string
-	DarkEditorDir           string
-	DarkEditorProxyURL      string
-	WorkerBundleDir         string
-	CodeVersion             string
-	VersionNumber           string
-	WorkerHeartbeatTimeout  int
+	MaxJobAttempts           int
+	MasterServerURL          string
+	JobMasterURL             string
+	GradioAppURL             string
+	SPADir                   string
+	DarkEditorDir            string
+	DarkEditorProxyURL       string
+	WorkerBundleDir          string
+	CodeVersion              string
+	VersionNumber            string
+	WorkerHeartbeatTimeout   int
 
 	DBDriver          string
 	DBDSN             string
@@ -159,11 +144,11 @@ type Config struct {
 	S3SecretAccessKey string
 	S3UseSSL          bool
 
-	RemoteEngineURL           string
-	RemoteEngineToken         string
-	RemoteEngineTimeoutMS     int
-	RemoteEngineRetries       int
-	RemoteEnginePollInterval  int
+	RemoteEngineURL          string
+	RemoteEngineToken        string
+	RemoteEngineTimeoutMS    int
+	RemoteEngineRetries      int
+	RemoteEnginePollInterval int
 
 	DriveClientID     string
 	DriveClientSecret string
@@ -197,7 +182,6 @@ type Config struct {
 	Server   ServerConfig
 	Runtime  RuntimeConfig
 	Database DatabaseConfig
-	Redis    RedisConfig
 	Workers  WorkersConfig
 	Auth     AuthConfig
 	Storage  StorageConfig
@@ -206,5 +190,4 @@ type Config struct {
 	Ansible  AnsibleConfig
 	Frontend FrontendConfig
 	Render   RenderConfig
-	NVIDIA   NVIDIAConfig
 }

@@ -39,6 +39,9 @@ done
 
 log "Building version: $VERSION"
 
+# Ensure output directory exists (self-healing after clean)
+mkdir -p "$BUNDLE_DIR"
+
 # Step 1: Tests
 if ! $SKIP_TESTS; then
     log "Running tests..."

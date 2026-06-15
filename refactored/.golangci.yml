@@ -1,0 +1,65 @@
+run:
+  timeout: 5m
+
+linters:
+  enable:
+    - errcheck
+    - gosimple
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - bodyclose
+    - durationcheck
+    - exportloopref
+    - goconst
+    - gocritic
+    - gofmt
+    - goimports
+    - gosec
+    - misspell
+    - nilerr
+    - prealloc
+    - unconvert
+    - unparam
+    - wastedassign
+
+linters-settings:
+  govet:
+    enable:
+      - shadow
+  goconst:
+    min-len: 3
+    min-occurrences: 3
+  gocritic:
+    enabled-tags:
+      - diagnostic
+      - performance
+      - style
+    disabled-checks:
+      - hugeParam
+      - rangeValCopy
+  goimports:
+    local-prefixes: velox-server
+
+issues:
+  exclude-rules:
+    # Test files can be more relaxed
+    - path: _test\.go
+      linters:
+        - goconst
+        - gosec
+        - unparam
+    # Allow dot imports in test files
+    - path: _test\.go
+      text: "dot imports"
+    # Generated code
+    - path: ".*\\.generated\\.go"
+      linters:
+        - all
+    # Intentional blank identifiers
+    - linters:
+        - errcheck
+      text: "Error return value of .* is not checked"
+  max-issues-per-linter: 0
+  max-same-issues: 0

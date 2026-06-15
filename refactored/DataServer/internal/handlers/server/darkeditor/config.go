@@ -149,9 +149,9 @@ type Config struct {
 
 // Handler holds the dark editor handlers
 type Handler struct {
-	cfg    *Config
-	store  store.ProjectStore // Optional PostgreSQL store (nil = file-based)
-	logger *Logger            // Persistent logger
+	cfg     *Config
+	logger  *Logger // Persistent logger
+	dbStore *store.SQLiteStore
 }
 
 // NewHandler creates a new dark editor handler
@@ -176,16 +176,9 @@ func NewHandler(cfg *Config) *Handler {
 	return h
 }
 
-// NewHandlerWithStore creates a new dark editor handler with PostgreSQL store
-func NewHandlerWithStore(cfg *Config, projectStore store.ProjectStore) *Handler {
-	h := NewHandler(cfg)
-	h.store = projectStore
-	return h
-}
-
-// SetStore sets the project store (for late initialization)
-func (h *Handler) SetStore(s store.ProjectStore) {
-	h.store = s
+// SetDBStore sets the SQLite store for database-backed persistence
+func (h *Handler) SetDBStore(db *store.SQLiteStore) {
+	h.dbStore = db
 }
 
 // SetLogger sets the logger (for late initialization)

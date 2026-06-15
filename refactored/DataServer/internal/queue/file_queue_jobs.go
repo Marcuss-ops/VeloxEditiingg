@@ -142,6 +142,9 @@ func (q *FileQueue) CompleteJob(ctx context.Context, jobID string) error {
 		WorkerID:  job.AssignedTo,
 		Message:   "Job completed successfully",
 	})
+	job.LeaseID = ""
+	job.LeaseExpiry = nil
+	job.Attempt = job.RetryCount
 
 	if err := PersistJob(job, q.dbStore); err != nil {
 		return err
@@ -178,6 +181,8 @@ func (q *FileQueue) FailJob(ctx context.Context, jobID, errMsg string, requeue b
 		job.AssignedAt = nil
 		job.ClaimedBy = ""
 		job.ClaimedAt = ""
+		job.LeaseID = ""
+		job.LeaseExpiry = nil
 		job.ProcessingAt = nil
 
 		job.History = append(job.History, JobHistoryEntry{
@@ -197,6 +202,8 @@ func (q *FileQueue) FailJob(ctx context.Context, jobID, errMsg string, requeue b
 		job.LastErrorAt = now
 		job.FailedAt = nowISOVal
 		job.FailedBy = workerID
+		job.LeaseID = ""
+		job.LeaseExpiry = nil
 
 		job.History = append(job.History, JobHistoryEntry{
 			Status:    "ERROR",

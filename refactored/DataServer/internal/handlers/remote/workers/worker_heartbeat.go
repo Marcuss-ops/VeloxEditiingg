@@ -9,32 +9,28 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// HeartbeatHandler gestisce gli heartbeat dei worker con autorizzazione via token.
+// Unifica la logica della precedente funzione standalone Heartbeat() con il metodo
+// su WorkerLifecycle, aggiungendo il controllo di autorizzazione.
 func (wl *WorkerLifecycle) HeartbeatHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var body struct {
-			WorkerID         string                 `json:"worker_id"`
-			WorkerName       string                 `json:"worker_name"`
-			Status           string                 `json:"status"`
-			CurrentJob       string                 `json:"current_job"`
-			CodeVersion      string                 `json:"code_version"`
-			BundleVersion    string                 `json:"bundle_version"`
-			BundleHash       string                 `json:"bundle_hash"`
-			ProtocolVersion  string                 `json:"protocol_version"`
-			EngineVersion    string                 `json:"engine_version"`
-			Capabilities     map[string]interface{} `json:"capabilities"`
-			Metrics          map[string]interface{} `json:"metrics"`
-			RecentLogs       []string               `json:"recent_logs"`
-			RecentErrors     []string               `json:"recent_errors"`
-			Readiness        map[string]interface{} `json:"readiness"`
-			ConnectionStatus string                 `json:"connection_status"`
-			Extra            map[string]interface{} `json:"extra"`
+			WorkerID        string                 `json:"worker_id"`
+			WorkerName      string                 `json:"worker_name"`
+			Status          string                 `json:"status"`
+			CurrentJob      string                 `json:"current_job"`
+			CodeVersion     string                 `json:"code_version"`
+			BundleVersion   string                 `json:"bundle_version"`
+			BundleHash      string                 `json:"bundle_hash"`
+			ProtocolVersion string                 `json:"protocol_version"`
+			EngineVersion   string                 `json:"engine_version"`
+			Capabilities    map[string]interface{} `json:"capabilities"`
+			Extra           map[string]interface{} `json:"extra"`
 		}
 
 		if err := c.ShouldBindJSON(&body); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "invalid JSON body"})
-			return
+			log.Printf("workers/heartbeat: failed to bind JSON: %v", err)
 		}
-
 		if body.WorkerID == "" {
 			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "missing worker_id"})
 			return
@@ -70,30 +66,11 @@ func (wl *WorkerLifecycle) HeartbeatHandler() gin.HandlerFunc {
 		if body.Capabilities != nil {
 			extra["capabilities"] = body.Capabilities
 		}
-		if len(body.RecentLogs) > 0 {
-			extra["recent_logs"] = body.RecentLogs
-		}
-		if len(body.RecentErrors) > 0 {
-			extra["recent_errors"] = body.RecentErrors
-		}
-		if body.Readiness != nil {
-			extra["readiness"] = body.Readiness
-		}
-		if body.Metrics != nil {
-			extra["metrics"] = body.Metrics
-		}
 
-		ctx := c.Request.Context()
-		if err := wl.reg.Heartbeat(ctx, body.WorkerID, body.WorkerName, status, body.CurrentJob, extra); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": "heartbeat failed"})
-			return
+		if err := wl.reg.Heartbeat(c.Request.Context(), body.WorkerID, body.WorkerName, status, body.CurrentJob, extra); err != nil {
+			log.Printf("workers/heartbeat: heartbeat failed for %s: %v", body.WorkerID, err)
 		}
-
-		c.JSON(http.StatusOK, gin.H{
-			"ok":        true,
-			"message":   "success",
-			"timestamp": time.Now().UTC().Format(time.RFC3339),
-		})
+		c.JSON(http.StatusOK, gin.H{"ok": true})
 	}
 }
 

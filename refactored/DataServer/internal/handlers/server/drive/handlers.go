@@ -1,7 +1,6 @@
 package drive
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -108,11 +107,10 @@ func GetDriveLinksByGroupHandler(c *gin.Context) {
 	})
 }
 
-// GetMasterFoldersHandler returns master folders from SQLite (source of truth)
+// GetMasterFoldersHandler returns master folders from SQLite.
 func GetMasterFoldersHandler(c *gin.Context) {
 	masters := make(gin.H)
 
-	// SQLite is the source of truth
 	if driveLinksStore != nil {
 		dbMasters, err := driveLinksStore.ListMasterFolders()
 		if err == nil && len(dbMasters) > 0 {
@@ -123,31 +121,10 @@ func GetMasterFoldersHandler(c *gin.Context) {
 				}
 				masters[language] = m
 			}
-			c.JSON(http.StatusOK, gin.H{"success": true, "data": gin.H{"masters": masters}})
-			return
 		}
 	}
 
-	// Fallback: legacy JSON file
-	if driveLinksDataDir == "" {
-		c.JSON(http.StatusOK, gin.H{"success": true, "data": gin.H{"masters": gin.H{}}})
-		return
-	}
-
-	masterPath := filepath.Join(driveLinksDataDir, "drive", "drive_master_folders_list.json")
-	data, err := os.ReadFile(masterPath)
-	if err != nil {
-		c.JSON(http.StatusOK, gin.H{"success": true, "data": gin.H{"masters": gin.H{}}})
-		return
-	}
-
-	var result map[string]interface{}
-	if err := json.Unmarshal(data, &result); err != nil {
-		c.JSON(http.StatusOK, gin.H{"success": true, "data": gin.H{"masters": gin.H{}}})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{"success": true, "data": result})
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": gin.H{"masters": masters}})
 }
 
 // SaveDriveLinksHandler replaces all drive links (bulk save)

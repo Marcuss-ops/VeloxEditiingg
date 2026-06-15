@@ -19,7 +19,7 @@ ClipRuntime parseClipObject(const std::string& obj);
 std::vector<SceneRuntime> parseScenes(const std::string& requestJson);
 std::vector<ClipRuntime> parseClipSegments(const std::string& requestJson);
 std::vector<std::string> parseStringListField(const std::string& requestJson, const std::string& key);
-std::filesystem::path firstAvailableImage(const SceneRuntime& scene, const std::filesystem::path& workDir, size_t index);
-std::filesystem::path firstAvailableClip(const std::vector<std::string>& candidates, const std::filesystem::path& workDir, size_t index);
+std::filesystem::path firstAvailableImage(const SceneRuntime& scene, const std::filesystem::path& workDir, size_t index, const std::string& cacheDir = "");
+std::filesystem::path firstAvailableClip(const std::vector<std::string>& candidates, const std::filesystem::path& workDir, size_t index, const std::string& cacheDir = "");
 
 } // namespace velox

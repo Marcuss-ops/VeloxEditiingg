@@ -43,6 +43,30 @@ inline bool writeFile(const fs::path& path, const std::string& content) {
     return static_cast<bool>(out);
 }
 
+// Helper: sanitize a URL to a safe filename for use as a cache key.
+// Replaces non-alphanumeric chars with underscores to avoid filesystem issues.
+inline std::string cacheFilename(const std::string& source) {
+    std::string name;
+    name.reserve(source.size());
+    for (char c : source) {
+        if (std::isalnum(static_cast<unsigned char>(c))) {
+            name.push_back(c);
+        } else {
+            name.push_back('_');
+        }
+    }
+    // Limit length to avoid path length issues
+    if (name.size() > 200) {
+        name.resize(200);
+    }
+    return name + ".cache";
+}
+
+// cacheAssetPath returns the full path for a cached asset given cache dir and source URL.
+inline fs::path cacheAssetPath(const fs::path& cacheDir, const std::string& source) {
+    return cacheDir / cacheFilename(source);
+}
+
 inline std::string shellQuote(const std::string& s) {
     std::string out = "'";
     for (char c : s) {
@@ -132,25 +156,59 @@ inline fs::path makeTempDir(const fs::path& base, const std::string& prefix) {
         }
     }
     return {};
-}
+}inline bool downloadAsset(const std::string& source, const fs::path& dest, const std::string& cacheDir = "") {
+	if (source.empty()) {
+		return false;
+	}
 
-inline bool downloadAsset(const std::string& source, const fs::path& dest) {
-    if (source.empty()) {
-        return false;
-    }
-    if (fs::exists(source)) {
-        return copyFile(source, dest);
-    }
-    std::string resolvedSource = source;
-    if (isDriveFolderUrl(source)) {
-        resolvedSource = resolveDriveFolderToFileUrl(source);
-        if (resolvedSource.empty()) {
-            return false;
-        }
-    }
-    const auto url = normalizeDriveUrl(resolvedSource);
-    std::string cmd = "curl -L --fail --silent --show-error -o " + shellQuote(dest.string()) + " " + shellQuote(url);
-    return runCommand(cmd);
+	// Local file: just copy directly (no caching needed)
+	if (fs::exists(source)) {
+		return copyFile(source, dest);
+	}
+
+	// Check cache first if a cache directory is configured
+	if (!cacheDir.empty()) {
+		fs::create_directories(cacheDir);
+		auto cachedPath = cacheAssetPath(cacheDir, source);
+		if (fs::exists(cachedPath)) {
+			return copyFile(cachedPath, dest);
+		}
+	}
+
+	// Resolve Google Drive URLs if needed
+	std::string resolvedSource = source;
+	if (isDriveFolderUrl(source)) {
+		resolvedSource = resolveDriveFolderToFileUrl(source);
+		if (resolvedSource.empty()) {
+			return false;
+		}
+	}
+	const auto url = normalizeDriveUrl(resolvedSource);
+
+	// Download to a temp file first, then copy to both dest and cache
+	auto tempDest = fs::path(dest.string() + ".download_tmp");
+	std::string cmd = "curl -L --fail --silent --show-error -o " + shellQuote(tempDest.string()) + " " + shellQuote(url);
+	if (!runCommand(cmd)) {
+		// Clean up temp file on failure
+		std::error_code ec;
+		fs::remove(tempDest, ec);
+		return false;
+	}
+
+	// Copy to final destination
+	bool ok = copyFile(tempDest, dest);
+
+	// Save to cache if configured
+	if (!cacheDir.empty() && ok) {
+		auto cachedPath = cacheAssetPath(cacheDir, source);
+		copyFile(tempDest, cachedPath);
+	}
+
+	// Clean up temp file
+	std::error_code ec;
+	fs::remove(tempDest, ec);
+
+	return ok;
 }
 
 } // namespace file

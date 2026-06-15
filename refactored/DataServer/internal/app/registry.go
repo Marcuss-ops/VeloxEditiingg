@@ -1,8 +1,6 @@
 package app
 
 import (
-	"context"
-	"fmt"
 	"log"
 	"sync"
 
@@ -38,37 +36,6 @@ func (r *Registry) RegisterRoutes(router *gin.Engine) {
 		log.Printf("[MODULE] Registering routes for: %s", m.Name())
 		m.RegisterRoutes(router)
 	}
-}
-
-// Start initializes all modules in registration order.
-func (r *Registry) Start(ctx context.Context) error {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	for _, m := range r.modules {
-		log.Printf("[MODULE] Starting: %s", m.Name())
-		if err := m.Start(ctx); err != nil {
-			return fmt.Errorf("module %s failed to start: %w", m.Name(), err)
-		}
-	}
-	return nil
-}
-
-// Stop gracefully shuts down all modules in reverse order.
-func (r *Registry) Stop(ctx context.Context) error {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	var lastErr error
-	for i := len(r.modules) - 1; i >= 0; i-- {
-		m := r.modules[i]
-		log.Printf("[MODULE] Stopping: %s", m.Name())
-		if err := m.Stop(ctx); err != nil {
-			log.Printf("[MODULE] Error stopping %s: %v", m.Name(), err)
-			lastErr = err
-		}
-	}
-	return lastErr
 }
 
 // List returns the names of all registered modules.

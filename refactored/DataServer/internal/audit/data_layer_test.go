@@ -42,16 +42,15 @@ func TestDataLayerAuditorPassesWithCleanStructure(t *testing.T) {
 }
 
 // TestDataLayerAuditorFailsOnDuplicateSourceOfTruth tests that audit fails
-// when duplicate sources of truth are detected.
+// when duplicate drive credentials directories exist.
 func TestDataLayerAuditorFailsOnDuplicateSourceOfTruth(t *testing.T) {
 	tmpDir := t.TempDir()
 	secretsDir := filepath.Join(tmpDir, "secrets")
 	os.MkdirAll(secretsDir, 0755)
 
-	// Create BOTH primary AND legacy workers files (should fail)
-	os.WriteFile(filepath.Join(tmpDir, "workers.json"), []byte(`{}`), 0644)
-	os.MkdirAll(filepath.Join(tmpDir, "workers"), 0755)
-	os.WriteFile(filepath.Join(tmpDir, "workers", "workers.json"), []byte(`{}`), 0644)
+	// Create BOTH credentials/ and Credentials/ directories (should fail)
+	os.MkdirAll(filepath.Join(tmpDir, "drive", "credentials"), 0755)
+	os.MkdirAll(filepath.Join(tmpDir, "drive", "Credentials"), 0755)
 
 	auditor := NewDataLayerAuditor(tmpDir, secretsDir)
 	result := auditor.Audit()
@@ -281,14 +280,14 @@ func findSubstring(s, substr string) bool {
 // Additional audit tests
 // ============================================================
 
-// TestCheckDuplicateSources_WorkersWarning tests that workers.json produces
-// a warning, not an error.
-func TestCheckDuplicateSources_WorkersWarning(t *testing.T) {
+// TestCheckDuplicateSources_NoWorkersWarning tests that workers.json no longer
+// produces a warning (fully migrated to SQLite).
+func TestCheckDuplicateSources_NoWorkersWarning(t *testing.T) {
 	tmpDir := t.TempDir()
 	secretsDir := filepath.Join(tmpDir, "secrets")
 	os.MkdirAll(secretsDir, 0755)
 
-	// Create workers.json (should produce a warning)
+	// Create workers.json — should NOT produce any warning
 	os.WriteFile(filepath.Join(tmpDir, "workers.json"), []byte(`{}`), 0644)
 
 	auditor := NewDataLayerAuditor(tmpDir, secretsDir)
@@ -300,8 +299,8 @@ func TestCheckDuplicateSources_WorkersWarning(t *testing.T) {
 
 	auditor.checkDuplicateSources(result)
 
-	if len(result.Warnings) == 0 {
-		t.Error("Expected warning for workers.json, got none")
+	if len(result.Warnings) > 0 {
+		t.Errorf("Expected no warnings for workers.json, got: %v", result.Warnings)
 	}
 	if len(result.Errors) > 0 {
 		t.Errorf("Expected no errors, got: %v", result.Errors)

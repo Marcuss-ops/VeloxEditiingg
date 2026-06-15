@@ -20,6 +20,13 @@ const (
 	StatusCompleted  JobStatus = "COMPLETED"
 	StatusError      JobStatus = "ERROR"
 	StatusFailed     JobStatus = "FAILED"
+	StatusQueued     JobStatus = "QUEUED"
+	StatusAssigned   JobStatus = "ASSIGNED"
+	StatusLeased     JobStatus = "LEASED"
+	StatusCancelling JobStatus = "CANCELLING"
+	StatusCancelled  JobStatus = "CANCELLED"
+	StatusLost       JobStatus = "LOST"
+	StatusRetrying   JobStatus = "RETRYING"
 )
 
 // Job represents a job in the queue (compatible with Python schema)
@@ -41,8 +48,10 @@ type Job struct {
 	WorkerName       string `json:"worker_name,omitempty"`
 	ClaimedBy        string `json:"claimed_by,omitempty"`
 	ClaimedAt        string `json:"claimed_at,omitempty"`
+	LeaseID          string `json:"lease_id,omitempty"`
 
 	RetryCount int `json:"retry_count,omitempty"`
+	Attempt    int `json:"attempt,omitempty"`
 	MaxRetries int `json:"max_retries,omitempty"`
 
 	LastError    string      `json:"last_error,omitempty"`
@@ -66,6 +75,9 @@ type Job struct {
 	LastUploadAttemptAt   string `json:"last_upload_attempt_at,omitempty"`
 	LastDriveUploadResult string `json:"last_drive_upload_result,omitempty"`
 	RemoteStatus          string `json:"remote_status,omitempty"`
+	ArtifactID            string `json:"artifact_id,omitempty"`
+	OutputSHA256          string `json:"output_sha256,omitempty"`
+	IdempotencyKey        string `json:"upload_idempotency_key,omitempty"`
 
 	JobFingerprint string `json:"job_fingerprint,omitempty"`
 

@@ -31,6 +31,15 @@ type WorkerConfig struct {
 	PrometheusPort          int `json:"prometheus_port"`            // Prometheus metrics port (default: 9090, 0=disabled)
 	HealthPort              int `json:"health_port"`                // Health HTTP port (default: 8081, 0=disabled)
 
+	// Asset cache: shared directory for caching downloaded scene images, clips, and audio.
+	// Default: "" (disabled — each job downloads its own assets)
+	AssetCacheDir string `json:"asset_cache_dir,omitempty"`
+
+	// UseV2Endpoints switches the worker to canonical v2 master API endpoints.
+	// Legacy endpoints remain as fallback when false.
+	// Defaults to true if not explicitly set in the config file.
+	UseV2Endpoints *bool `json:"use_v2_endpoints,omitempty"`
+
 	// Circuit breaker configuration
 	CircuitBreakerFailureThreshold int `json:"circuit_breaker_failure_threshold,omitempty"` // Failures to open circuit (default: 5)
 	CircuitBreakerSuccessThreshold int `json:"circuit_breaker_success_threshold,omitempty"` // Successes to close circuit (default: 3)
@@ -123,6 +132,10 @@ func (c *WorkerConfig) applyDefaults() {
 	}
 	if c.HealthPort == 0 {
 		c.HealthPort = 8081
+	}
+	if c.UseV2Endpoints == nil {
+		v := true
+		c.UseV2Endpoints = &v
 	}
 }
 

@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"velox-shared/payload"
 )
 
 func AnalyticsSummaryHandler(c *gin.Context) {
@@ -133,10 +132,6 @@ func AnalyticsTopVideosHandler(c *gin.Context) {
 		videos = videos[:limit]
 	}
 	c.JSON(http.StatusOK, gin.H{"videos": videos})
-}
-
-func asString(v any) string {
-	return payload.AsString(v)
 }
 
 func AnalyticsTopChannelsHandler(c *gin.Context) {

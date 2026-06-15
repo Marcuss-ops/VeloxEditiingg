@@ -4,7 +4,6 @@ import (
 	"log"
 
 	"github.com/gin-gonic/gin"
-	"velox-server/internal/app"
 	"velox-server/internal/config"
 	driveHandlers "velox-server/internal/handlers/server/drive"
 	integrationsDrive "velox-server/internal/integrations/drive"
@@ -12,7 +11,6 @@ import (
 
 // Module provides Google Drive integration endpoints.
 type Module struct {
-	app.BaseModule
 	cfg      *config.Config
 	handlers *driveHandlers.DriveHandlers
 }

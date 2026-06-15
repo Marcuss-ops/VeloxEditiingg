@@ -1,13 +1,11 @@
 package ansible
 
 import (
-	"context"
 	"log"
 	"os"
 	"strings"
 
 	"github.com/gin-gonic/gin"
-	"velox-server/internal/app"
 	"velox-server/internal/config"
 	remoteansible "velox-server/internal/handlers/remote/ansible"
 	"velox-server/internal/store"
@@ -15,7 +13,6 @@ import (
 
 // Module provides Ansible deployment endpoints.
 type Module struct {
-	app.BaseModule
 	cfg       *config.Config
 	dataDir   string
 	adminAuth gin.HandlerFunc
@@ -90,12 +87,4 @@ func (m *Module) RegisterRoutes(r *gin.Engine) {
 	}
 }
 
-func (m *Module) Start(ctx context.Context) error {
-	log.Printf("[ANSIBLE] Module started")
-	return nil
-}
 
-func (m *Module) Stop(ctx context.Context) error {
-	log.Printf("[ANSIBLE] Module stopped")
-	return nil
-}

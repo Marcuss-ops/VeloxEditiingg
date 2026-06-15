@@ -4,7 +4,6 @@ import (
 	"log"
 
 	"github.com/gin-gonic/gin"
-	"velox-server/internal/app"
 	"velox-server/internal/config"
 	workersapi "velox-server/internal/handlers/remote/workers"
 	workersreg "velox-server/internal/workers"
@@ -12,19 +11,20 @@ import (
 
 // Module provides worker management endpoints.
 type Module struct {
-	app.BaseModule
 	reg                 *workersreg.Registry
 	adminAuth           gin.HandlerFunc
 	workerLifecycle     *workersapi.WorkerLifecycle
 	workerUpdateHandler *workersapi.WorkerUpdateHandler
+	workerAssetHandler  *workersapi.WorkerAssetHandler
 }
 
-func New(_ *config.Config, reg *workersreg.Registry, lifecycle *workersapi.WorkerLifecycle, updateHandler *workersapi.WorkerUpdateHandler, adminAuth gin.HandlerFunc) *Module {
+func New(cfg *config.Config, reg *workersreg.Registry, lifecycle *workersapi.WorkerLifecycle, updateHandler *workersapi.WorkerUpdateHandler, adminAuth gin.HandlerFunc) *Module {
 	return &Module{
 		reg:                 reg,
 		workerLifecycle:     lifecycle,
 		workerUpdateHandler: updateHandler,
 		adminAuth:           adminAuth,
+		workerAssetHandler:  workersapi.NewWorkerAssetHandler(cfg),
 	}
 }
 
@@ -33,15 +33,11 @@ func (m *Module) Name() string {
 }
 
 func (m *Module) RegisterRoutes(r *gin.Engine) {
-	if m.reg != nil {
-		r.POST("/api/workers/heartbeat", workersapi.Heartbeat(m.reg))
-	}
-
 	if m.workerLifecycle != nil {
+		r.POST("/api/workers/heartbeat", m.workerLifecycle.HeartbeatHandler())
 		r.POST("/api/workers/register", m.workerLifecycle.RegisterHandler())
 		r.POST("/api/workers/unregister", m.workerLifecycle.UnregisterHandler())
 		r.GET("/api/workers/commands", m.workerLifecycle.GetCommandsHandler())
-		r.POST("/api/workers/commands", m.workerLifecycle.GetCommandsHandler())
 		r.POST("/api/workers/commands/ack", m.workerLifecycle.AckCommandHandler())
 		r.POST("/api/workers/status", m.workerLifecycle.UpdateStatusHandler())
 	}
@@ -68,7 +64,11 @@ func (m *Module) RegisterRoutes(r *gin.Engine) {
 		r.GET("/api/worker/v2/chunk/:chunkName", m.workerUpdateHandler.GetChunkV2Handler())
 	}
 
+	if m.workerAssetHandler != nil {
+		r.GET("/api/worker/assets/voiceover/:job_id/:filename", m.workerAssetHandler.ServeVoiceoverAsset())
+		r.GET("/api/worker/assets/scene-image/:job_id/:filename", m.workerAssetHandler.ServeSceneImageAsset())
+	}
+
 	log.Printf("[WORKERS] Routes registered")
 }
-
 
