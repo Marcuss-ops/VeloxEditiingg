@@ -34,18 +34,6 @@ func RegisterAPIRoutes(r *gin.Engine, h *Handler) {
 		api.POST("/api/projects", h.SaveProject)
 		api.GET("/api/projects/:id", h.LoadProject)
 		api.DELETE("/api/projects/:id", h.DeleteProject)
-		api.PUT("/api/projects/:id/folder", h.AssignProjectToFolder)
-
-		api.GET("/api/folders", h.ListFolders)
-		api.GET("/api/folders/:id", h.GetFolder)
-		api.POST("/api/folders", h.CreateFolder)
-		api.PUT("/api/folders/:id", h.UpdateFolder)
-		api.DELETE("/api/folders/:id", h.DeleteFolder)
-
-		// ============== FILE SERVING ==============
-
-		api.GET("/temp/:filename", h.ServeTempFile)
-		api.GET("/projects/:id/:filename", h.ServeProjectFile)
 
 		// ============== LOGS ==============
 

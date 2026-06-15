@@ -5,7 +5,6 @@ import (
 	"os"
 
 	"github.com/gin-gonic/gin"
-	"velox-server/internal/app"
 	"velox-server/internal/config"
 	"velox-server/internal/handlers/web/proxy"
 	"velox-server/internal/handlers/web/spa"
@@ -13,7 +12,6 @@ import (
 
 // Module provides SPA and static file serving.
 type Module struct {
-	app.BaseModule
 	cfg            *config.Config
 	spaDistDir     string
 	spaAssetsDir   string

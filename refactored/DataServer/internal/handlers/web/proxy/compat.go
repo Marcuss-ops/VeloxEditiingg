@@ -63,12 +63,8 @@ func Root(c *gin.Context) {
 	c.Redirect(http.StatusFound, "/api/health")
 }
 
-// LandingPage returns a handler that serves a minimal HTML when SPA is not built (Fase 1: un solo entry point).
+// LandingPage returns a handler that serves a minimal HTML when SPA is not built.
 func LandingPage(cfg *config.Config) gin.HandlerFunc {
-	gradioURL := cfg.GradioAppURL
-	if gradioURL == "" {
-		gradioURL = "http://127.0.0.1:7860"
-	}
 	html := `<!DOCTYPE html>
 <html lang="it">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Velox</title></head>
@@ -77,8 +73,6 @@ func LandingPage(cfg *config.Config) gin.HandlerFunc {
 <p>Entry point unico: <strong>:8000</strong></p>
 <ul>
 <li><a href="/api/health">API Health</a></li>
-<li><a href="/api/docs">API Docs (OpenAPI)</a> – se il backend Python è in ascolto</li>
-<li><a href="` + gradioURL + `">Studio avanzato (Gradio)</a> – interfaccia su :7860</li>
 </ul>
 <p>Per servire la SPA React su <code>/</code>: build <code>frontend_standalone/web</code> (<code>npm run build</code>) e imposta <code>VELOX_SPA_DIR</code> al path di <code>dist/</code>.</p>
 </body>

@@ -475,13 +475,6 @@ func (r *Registry) GetSchedulableWorkers(ctx context.Context) []WorkerInfo {
 	return result
 }
 
-// Save persists the current registry state to SQLite immediately.
-// This is a no-op now since every mutation already writes to SQLite.
-// Kept for API compatibility; can be removed in a future cleanup.
-func (r *Registry) Save() error {
-	return nil
-}
-
 // CleanupStaleWorkers removes workers that haven't sent a heartbeat in the given duration
 func (r *Registry) CleanupStaleWorkers(ctx context.Context, maxAge time.Duration) int {
 	r.mu.Lock()

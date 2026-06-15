@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"velox-server/internal/integrations/youtube"
-	"velox-server/internal/store"
 	"github.com/gin-gonic/gin"
 )
 
@@ -20,22 +19,18 @@ type privateVideosCacheEntry struct {
 type YouTubeHandlers struct {
 	service              *youtube.Service
 	storage              *youtube.Storage // Shared storage with YouTubeManager for unified group data
-	store                store.ProjectStore
 	privateVideosCache   map[string]privateVideosCacheEntry
 	privateVideosCacheMu sync.RWMutex
 }
 
 // NewYouTubeHandlers creates a new YouTubeHandlers instance.
-// Accepts an existing youtube.Service to avoid creating a duplicate instance.
-// If service is nil, it will create a new one (legacy fallback).
-func NewYouTubeHandlers(service *youtube.Service, storage *youtube.Storage, projectStore store.ProjectStore) (*YouTubeHandlers, error) {
+func NewYouTubeHandlers(service *youtube.Service, storage *youtube.Storage) (*YouTubeHandlers, error) {
 	if service == nil {
 		return nil, fmt.Errorf("YouTubeHandlers: no existing service provided, got nil")
 	}
 	return &YouTubeHandlers{
 		service:            service,
 		storage:            storage,
-		store:              projectStore,
 		privateVideosCache: make(map[string]privateVideosCacheEntry),
 	}, nil
 }

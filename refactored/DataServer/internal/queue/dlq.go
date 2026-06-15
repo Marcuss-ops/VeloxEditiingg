@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"os"
 	"path/filepath"
 	"sort"
 	"sync"
@@ -64,7 +63,6 @@ type DeadLetterQueue struct {
 	mu       sync.RWMutex
 	config   *DLQConfig
 	jobs     map[string]*DeadLetterJob
-	filePath string
 	dbStore  *store.SQLiteStore
 	onAlert  func(alertType string, data map[string]interface{})
 }
@@ -76,16 +74,9 @@ func NewDeadLetterQueue(cfg *DLQConfig, dbStore *store.SQLiteStore) (*DeadLetter
 	}
 
 	dlq := &DeadLetterQueue{
-		config:   cfg,
-		jobs:     make(map[string]*DeadLetterJob),
-		filePath: cfg.FilePath,
-		dbStore:  dbStore,
-	}
-
-	// Ensure directory exists
-	dir := filepath.Dir(cfg.FilePath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return nil, fmt.Errorf("failed to create DLQ directory: %w", err)
+		config:  cfg,
+		jobs:    make(map[string]*DeadLetterJob),
+		dbStore: dbStore,
 	}
 
 	// Load existing jobs
@@ -96,9 +87,8 @@ func NewDeadLetterQueue(cfg *DLQConfig, dbStore *store.SQLiteStore) (*DeadLetter
 	return dlq, nil
 }
 
-// load reads DLQ from SQLite (source of truth) with JSON fallback
+// load reads DLQ from SQLite (source of truth).
 func (dlq *DeadLetterQueue) load() error {
-	// SQLite is the source of truth
 	if dlq.dbStore != nil {
 		jobs, err := dlq.dbStore.ListDLQJobs()
 		if err == nil && len(jobs) > 0 {
@@ -113,56 +103,17 @@ func (dlq *DeadLetterQueue) load() error {
 			return nil
 		}
 	}
-
-	// Fallback: legacy JSON file
-	data, err := os.ReadFile(dlq.filePath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
-	}
-
-	if len(data) == 0 {
-		return nil
-	}
-
-	if err := json.Unmarshal(data, &dlq.jobs); err != nil {
-		return err
-	}
-
-	// Import into SQLite for next time
-	if dlq.dbStore != nil && len(dlq.jobs) > 0 {
-		for _, job := range dlq.jobs {
-			dlq.persistJob(job)
-		}
-		log.Printf("[MIGRATE] Imported %d DLQ jobs from JSON to SQLite", len(dlq.jobs))
-	}
-
 	return nil
 }
 
-// save writes DLQ to SQLite (primary) and JSON file (backup)
+// save writes DLQ to SQLite (source of truth).
 func (dlq *DeadLetterQueue) save() error {
-	// SQLite is the source of truth
 	if dlq.dbStore != nil {
 		for _, job := range dlq.jobs {
 			dlq.persistJob(job)
 		}
 	}
-
-	// Backup: JSON file
-	data, err := json.MarshalIndent(dlq.jobs, "", "  ")
-	if err != nil {
-		return err
-	}
-
-	tmpPath := dlq.filePath + ".tmp"
-	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
-		return err
-	}
-
-	return os.Rename(tmpPath, dlq.filePath)
+	return nil
 }
 
 // persistJob saves a single DLQ job to SQLite.

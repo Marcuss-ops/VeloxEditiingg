@@ -4,7 +4,6 @@ import (
 	"log"
 
 	"github.com/gin-gonic/gin"
-	"velox-server/internal/app"
 	"velox-server/internal/config"
 	workersapi "velox-server/internal/handlers/remote/workers"
 	workersreg "velox-server/internal/workers"
@@ -12,7 +11,6 @@ import (
 
 // Module provides worker management endpoints.
 type Module struct {
-	app.BaseModule
 	reg                 *workersreg.Registry
 	adminAuth           gin.HandlerFunc
 	workerLifecycle     *workersapi.WorkerLifecycle
@@ -43,7 +41,6 @@ func (m *Module) RegisterRoutes(r *gin.Engine) {
 		r.POST("/api/workers/register", m.workerLifecycle.RegisterHandler())
 		r.POST("/api/workers/unregister", m.workerLifecycle.UnregisterHandler())
 		r.GET("/api/workers/commands", m.workerLifecycle.GetCommandsHandler())
-		r.POST("/api/workers/commands", m.workerLifecycle.GetCommandsHandler())
 		r.POST("/api/workers/commands/ack", m.workerLifecycle.AckCommandHandler())
 		r.POST("/api/workers/status", m.workerLifecycle.UpdateStatusHandler())
 	}
