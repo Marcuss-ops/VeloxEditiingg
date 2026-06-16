@@ -377,4 +377,111 @@ func (s *SQLiteStore) MigrateYouTubeCache(entries map[string]struct {
 	return count, tx.Commit()
 }
 
+// ============================================================
+// --- Canonical YouTube OAuth Tokens (Migration 011) ---
+// ============================================================
+//
+// All three methods on this block accept / return ALREADY-ENCRYPTED BLOB
+// values. The encryption-decision policy lives in the service layer (which
+// holds the AES-GCM cipher resolved from env vars via internal/secrets/aesgcm).
+// Keeping the store free of crypto concerns means a future cipher rotation
+// only touches the encryptor package + maybe a per-row re-encryption
+// migration — the SQL contract stays unchanged.
+
+// UpsertYouTubeOAuthToken stores or replaces the OAuth credentials for one
+// channel. Arguments are:
+//   - channelID: the YouTube channel ID; PK + FK to youtube_channels
+//   - accessTokenEnc: AES-GCM encrypted access token bytes (NOT NULL)
+//   - refreshTokenEnc: AES-GCM encrypted refresh token bytes (NULL when the
+//     grant flow did not issue one)
+//   - tokenType: usually "Bearer"
+//   - expiry: RFC3339 timestamp; empty when the token never expires
+//   - scopes: space-separated OAuth scope list
+//   - keyVersion: the cipher key rotation stamp; persisted so future
+//     rotation can detect old rows that still need migration
+//
+// Conflict policy: ON CONFLICT(channel_id) DO UPDATE replaces the row
+// atomically. The `revoked_at` column is intentionally NOT updated by
+// this method: revoking is a separate, audit-logged action via
+// MarkYouTubeOAuthTokenRevoked (we don't want a token refresh or
+// re-grant silently wiping a revocation that another operator set).
+func (s *SQLiteStore) UpsertYouTubeOAuthToken(channelID string, accessTokenEnc, refreshTokenEnc []byte, tokenType, expiry, scopes string, keyVersion int) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err := s.db.Exec(
+		`INSERT INTO youtube_oauth_tokens
+		 (channel_id, access_token_encrypted, refresh_token_encrypted, token_type, expiry, scopes, key_version, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(channel_id) DO UPDATE SET
+		   access_token_encrypted  = excluded.access_token_encrypted,
+		   refresh_token_encrypted = excluded.refresh_token_encrypted,
+		   token_type              = excluded.token_type,
+		   expiry                  = excluded.expiry,
+		   scopes                  = excluded.scopes,
+		   key_version             = excluded.key_version,
+		   updated_at              = excluded.updated_at`,
+		channelID, accessTokenEnc, refreshTokenEnc, tokenType, expiry, scopes, keyVersion, now, now,
+	)
+	return err
+}
+
+// GetYouTubeOAuthToken returns the row for channelID, or (nil, nil) when
+// the channel has no OAuth entry. BLOB columns surface as []byte. A nil
+// Encryptor at the call site is responsible for translating these bytes
+// back into plaintext; a non-nil key_version lets the caller decide
+// whether the row needs re-encryption on the next write.
+//
+// revoked_at is nullable (the column is only set after MarkYouTubeOAuthTokenRevoked)
+// so it is scanned into sql.NullString and surfaced as "" when unset — the
+// map[string]interface{} shape stays simple so callers don't have to import
+// database/sql just to read the rows.
+func (s *SQLiteStore) GetYouTubeOAuthToken(channelID string) (map[string]interface{}, error) {
+	row := s.db.QueryRow(
+		`SELECT channel_id, access_token_encrypted, refresh_token_encrypted, token_type, expiry, scopes, key_version, revoked_at, created_at, updated_at
+		 FROM youtube_oauth_tokens WHERE channel_id = ?`,
+		channelID,
+	)
+	var cid, tokenType, scopes, expiry, createdAt, updatedAt string
+	var accessBlob, refreshBlob []byte
+	var keyVersion int64
+	var revokedAt sql.NullString
+	if err := row.Scan(&cid, &accessBlob, &refreshBlob, &tokenType, &expiry, &scopes, &keyVersion, &revokedAt, &createdAt, &updatedAt); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	revokedAtStr := ""
+	if revokedAt.Valid {
+		revokedAtStr = revokedAt.String
+	}
+	return map[string]interface{}{
+		"channel_id":              cid,
+		"access_token_encrypted":  accessBlob,
+		"refresh_token_encrypted": refreshBlob,
+		"token_type":              tokenType,
+		"expiry":                  expiry,
+		"scopes":                  scopes,
+		"key_version":             keyVersion,
+		"revoked_at":              revokedAtStr,
+		"created_at":              createdAt,
+		"updated_at":              updatedAt,
+	}, nil
+}
+
+// MarkYouTubeOAuthTokenRevoked records a revocation timestamp on the OAuth
+// row. Idempotent: WHERE revoked_at IS NULL means a second call is a no-op
+// and the original timestamp stays intact (audit-friendly). This method
+// does NOT delete the row \u2014 the existing Service.DeleteChannel remains the
+// single deletion entry point so cascades behave consistently. Revoke =
+// disable; Delete = remove.
+func (s *SQLiteStore) MarkYouTubeOAuthTokenRevoked(channelID string) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err := s.db.Exec(
+		`UPDATE youtube_oauth_tokens SET revoked_at = ?, updated_at = ?
+		 WHERE channel_id = ? AND revoked_at IS NULL`,
+		now, now, channelID,
+	)
+	return err
+}
+
 // (Legacy manager tables youtube_manager_channels and youtube_manager_groups have been dropped by migration 008)
