@@ -13,6 +13,7 @@ import (
 	ytanalytics "google.golang.org/api/youtubeanalytics/v2"
 
 	"velox-server/internal/config"
+	"velox-server/internal/secrets/aesgcm"
 )
 
 // YouTubeStore defines the interface for SQLite-backed YouTube persistence,
@@ -23,7 +24,29 @@ type YouTubeStore interface {
 	ListYouTubeChannels() ([]map[string]interface{}, error)
 	GetYouTubeChannel(channelID string) (map[string]interface{}, error)
 	UpsertYouTubeChannel(channelID, title, displayName, channelURL, thumbnailURL, language, notes string, viewCount, subCount int64, addedAt, lastSyncAt, metadataJSON string) error
+	// UpdateYouTubeChannelMetadata persists a YouTube-API metadata refresh into
+	// youtube_channels targeting only title and thumbnail. Distinct from the
+	// wide UpsertYouTubeChannel above: refresh never writes metadata_json nor
+	// any user-edited column (display_name, language, view/sub counts, notes,
+	// channel_url), so it cannot silently wipe them. Use this from
+	// Service.RefreshChannelMetadata; use UpsertYouTubeChannel for initial
+	// channel ingest.
+	UpdateYouTubeChannelMetadata(channelID, title, thumbnailURL string) error
 	DeleteYouTubeChannel(channelID string) error
+
+	// Canonical: YouTube OAuth Tokens (youtube_oauth_tokens — encryption at-rest
+	// is the caller's responsibility via internal/secrets/aesgcm).
+	// UpsertYouTubeOAuthToken stores already-encrypted BLOBs; the store layer
+	// does not hold a cipher. Use a Read-Modify-Write cycle in the service
+	// layer when only one of (access, refresh) needs to change.
+	UpsertYouTubeOAuthToken(channelID string, accessTokenEnc, refreshTokenEnc []byte, tokenType, expiry, scopes string, keyVersion int) error
+	// GetYouTubeOAuthToken returns the encrypted row for channelID, or
+	// (nil, nil) when the row does not exist. BLOB columns surface as
+	// []byte; the caller decrypts via a matching aesgcm.Encryptor.
+	GetYouTubeOAuthToken(channelID string) (map[string]interface{}, error)
+	// MarkYouTubeOAuthTokenRevoked records a revocation timestamp on the
+	// OAuth row. Idempotent (does not overwrite an existing revoked_at).
+	MarkYouTubeOAuthTokenRevoked(channelID string) error
 
 	// Canonical: YouTube Groups V2 (youtube_groups_v2 + youtube_group_channels)
 	ListYouTubeGroupsV2() ([]map[string]interface{}, error)
@@ -57,6 +80,14 @@ type Service struct {
 	mu          sync.RWMutex
 	cache       *Cache
 	store       YouTubeStore
+
+	// oauthBuf holds the AES-GCM cipher used by HandleOAuthCallback and
+	// the OAuth auto-refresh path to encrypt credentials before writing
+	// them to youtube_oauth_tokens. nil means OAuth writes go to the
+	// legacy JSON file only (no SQLite row); see SetOAuthSecretCipher.
+	// Set once at module wiring time and read-only afterwards, so no
+	// mutex is needed.
+	oauthBuf *aesgcm.Encryptor
 
 	authManager  *AuthManager
 	uploader     *Uploader
@@ -142,6 +173,16 @@ func (s *Service) SetStore(st interface{}) {
 		s.loadCanonicalChannels()
 		s.loadCanonicalGroups()
 	}
+}
+
+// SetOAuthSecretCipher installs the AES-GCM cipher used by HandleOAuthCallback
+// and the OAuth auto-refresh path to encrypt tokens before persisting them to
+// youtube_oauth_tokens. Safe to call once at module wiring time. A nil cipher
+// degrades the OAuth write path to the legacy JSON file only; in that mode
+// no SQLite row is created and HandleOAuthCallback logs a WARN. Idempotent —
+// last-call-wins for symmetry with SetStore.
+func (s *Service) SetOAuthSecretCipher(c *aesgcm.Encryptor) {
+	s.oauthBuf = c
 }
 
 // --- Public API: OAuth (Delegated to AuthManager) ---

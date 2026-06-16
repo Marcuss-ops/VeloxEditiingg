@@ -57,8 +57,44 @@ func (am *AuthManager) HandleOAuthCallback(ctx context.Context, code string, cha
 		channel.ID = channelInfo.Id
 	}
 
+	// Persist the OAuth credentials encrypted at-rest into the canonical
+	// youtube_oauth_tokens row. From this commit forward, SQLite is the
+	// SINGLE source of truth for tokens: the JSON write below is kept only
+	// as a deprecation trail so installs that boot without
+	// VELOX_YT_OAUTH_TOKEN_KEY still have a working OAuth flow. Once the
+	// key is widely deployed the JSON write is removed (Fix C). A nil
+	// oauthBuf is a degraded mode: no SQLite row, JSON only.
+	//
+	// Note: we encrypt FIRST and bail out before any RAM update if the
+	// cipher fails — that way a partially-persisted state (JSON written but
+	// SQLite not) is never observed for the SAME callback.
+	if am.service.store != nil && am.service.oauthBuf != nil {
+		accessEnc, err := am.service.oauthBuf.Encrypt([]byte(token.AccessToken))
+		if err != nil {
+			return nil, fmt.Errorf("oauth callback: encrypt access token: %w", err)
+		}
+		var refreshEnc []byte
+		if token.RefreshToken != "" {
+			r, rerr := am.service.oauthBuf.Encrypt([]byte(token.RefreshToken))
+			if rerr != nil {
+				return nil, fmt.Errorf("oauth callback: encrypt refresh token: %w", rerr)
+			}
+			refreshEnc = r
+		}
+		var expiry string
+		if !token.Expiry.IsZero() {
+			expiry = token.Expiry.Format(time.RFC3339)
+		}
+		if err := am.service.store.UpsertYouTubeOAuthToken(channel.ID, accessEnc, refreshEnc, "Bearer", expiry, "", am.service.oauthBuf.KeyVersion()); err != nil {
+			return nil, fmt.Errorf("oauth callback: persist to sqlite: %w", err)
+		}
+	} else {
+		log.Printf("[WARN] OAuth secret cipher unavailable: persisting channel %s to JSON only, youtube_oauth_tokens will not be populated", channel.ID)
+	}
+
+	// Existing JSON write kept for backward compat (one release).
 	if err := am.saveChannelToken(channel); err != nil {
-		log.Printf("[WARN] Failed to save token: %v", err)
+		log.Printf("[WARN] Failed to save token (JSON compat): %v", err)
 	}
 
 	am.service.mu.Lock()
