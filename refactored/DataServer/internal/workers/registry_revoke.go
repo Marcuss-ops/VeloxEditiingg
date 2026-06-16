@@ -4,11 +4,12 @@ import (
 	"context"
 
 	"velox-server/internal/logging"
+	"velox-shared/identity"
 )
 
 // IsRevoked checks if a worker has been revoked
 func (r *Registry) IsRevoked(workerID string) bool {
-	workerID = NormalizeWorkerID(workerID)
+	workerID = identity.NormalizeWorkerID(workerID)
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.revoked[workerID]
@@ -16,7 +17,7 @@ func (r *Registry) IsRevoked(workerID string) bool {
 
 // RevokeWorker marks a worker as revoked and removes it from the active set
 func (r *Registry) RevokeWorker(ctx context.Context, workerID string) {
-	workerID = NormalizeWorkerID(workerID)
+	workerID = identity.NormalizeWorkerID(workerID)
 	r.mu.Lock()
 	r.revoked[workerID] = true
 	delete(r.inMem, workerID)
@@ -33,7 +34,7 @@ func (r *Registry) RevokeWorker(ctx context.Context, workerID string) {
 
 // UnrevokeWorker removes a worker from the revoked list
 func (r *Registry) UnrevokeWorker(workerID string) {
-	workerID = NormalizeWorkerID(workerID)
+	workerID = identity.NormalizeWorkerID(workerID)
 	r.mu.Lock()
 	delete(r.revoked, workerID)
 
@@ -53,7 +54,7 @@ func (r *Registry) LoadRevoked(ids []string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for _, id := range ids {
-		normID := NormalizeWorkerID(id)
+		normID := identity.NormalizeWorkerID(id)
 		r.revoked[normID] = true
 		delete(r.inMem, normID)
 	}

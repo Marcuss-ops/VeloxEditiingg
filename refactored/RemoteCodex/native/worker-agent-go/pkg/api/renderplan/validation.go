@@ -1,10 +1,16 @@
-// Package renderplan provides the RenderPlan v1 contract for job validation.
+// Package renderplan: render-plan validation logic.
+//
+// The error aggregation uses pkg/validation.FieldErrors so other Velox
+// components can reuse the same pattern. Business rules (which job types
+// need clips and voiceover) live here because they are render-specific.
 package renderplan
 
 import (
 	"fmt"
 	"strings"
 	"time"
+
+	"velox-worker-agent/pkg/validation"
 )
 
 var requiredFields = []string{"job_id", "job_type", "created_at"}
@@ -25,56 +31,41 @@ var ValidPriorities = map[int]bool{
 
 // Validate performs fail-fast validation on the RenderPlan.
 func (rp *RenderPlan) Validate() error {
-	var errs ValidationErrors
+	errs := validation.FieldErrors{}
 
 	if rp.JobID == "" {
-		errs = append(errs, &ValidationError{Field: "job_id", Message: "is required"})
+		errs.AddMsg("job_id", "is required")
 	}
 	if rp.JobType == "" {
-		errs = append(errs, &ValidationError{Field: "job_type", Message: "is required"})
+		errs.AddMsg("job_type", "is required")
 	} else if !ValidJobTypes[rp.JobType] {
-		errs = append(errs, &ValidationError{
-			Field:   "job_type",
-			Message: fmt.Sprintf("must be one of: %s", strings.Join(validJobTypeNames(), ", ")),
-			Value:   rp.JobType,
-		})
+		errs.Add("job_type",
+			fmt.Sprintf("must be one of: %s", strings.Join(validJobTypeNames(), ", ")),
+			rp.JobType)
 	}
 	if rp.CreatedAt == "" {
-		errs = append(errs, &ValidationError{Field: "created_at", Message: "is required"})
+		errs.AddMsg("created_at", "is required")
 	} else if _, err := time.Parse(time.RFC3339, rp.CreatedAt); err != nil {
-		errs = append(errs, &ValidationError{
-			Field:   "created_at",
-			Message: fmt.Sprintf("must be valid RFC3339 timestamp: %v", err),
-			Value:   rp.CreatedAt,
-		})
+		errs.Add("created_at",
+			fmt.Sprintf("must be valid RFC3339 timestamp: %v", err),
+			rp.CreatedAt)
 	}
 	if rp.Priority != 0 && !ValidPriorities[rp.Priority] {
-		errs = append(errs, &ValidationError{
-			Field:   "priority",
-			Message: "must be 0 (low), 1 (normal), 2 (high), or 3 (critical)",
-			Value:   fmt.Sprintf("%d", rp.Priority),
-		})
+		errs.Add("priority",
+			"must be 0 (low), 1 (normal), 2 (high), or 3 (critical)",
+			fmt.Sprintf("%d", rp.Priority))
 	}
 	if rp.MaxRetries < 0 {
-		errs = append(errs, &ValidationError{
-			Field: "max_retries", Message: "must be >= 0", Value: fmt.Sprintf("%d", rp.MaxRetries),
-		})
+		errs.Add("max_retries", "must be >= 0", fmt.Sprintf("%d", rp.MaxRetries))
 	}
 	if rp.TimeoutSecs < 0 {
-		errs = append(errs, &ValidationError{
-			Field: "timeout_secs", Message: "must be >= 0", Value: fmt.Sprintf("%d", rp.TimeoutSecs),
-		})
+		errs.Add("timeout_secs", "must be >= 0", fmt.Sprintf("%d", rp.TimeoutSecs))
 	}
-	if rp.JobRunID != "" && !isValidID(rp.JobRunID) {
-		errs = append(errs, &ValidationError{
-			Field: "job_run_id", Message: "must be alphanumeric with hyphens/underscores", Value: rp.JobRunID,
-		})
+	if rp.JobRunID != "" && !validation.IsAlphanumericID(rp.JobRunID) {
+		errs.Add("job_run_id", "must be alphanumeric with hyphens/underscores", rp.JobRunID)
 	}
 
-	if errs.HasErrors() {
-		return errs
-	}
-	return nil
+	return errs.OrNil()
 }
 
 // SetDefaults applies default values to optional fields.
@@ -114,7 +105,7 @@ func (rp *RenderPlan) ValidateAndSetDefaults() error {
 
 // ValidateRenderPlan is the centralized entrypoint for render plan validation.
 func ValidateRenderPlan(plan *RenderPlan) error {
-	var errs PlanErrors
+	errs := PlanErrors{}
 
 	if plan.Version == "" {
 		errs = append(errs, &PlanError{
@@ -167,10 +158,12 @@ func validateAnyClipVoiceover(plan *RenderPlan) *PlanError {
 	for _, field := range clipFields {
 		if clips, ok := params[field]; ok {
 			if clipList, ok := clips.([]interface{}); ok && len(clipList) > 0 {
-				hasClip = true; break
+				hasClip = true
+				break
 			}
 			if clipList, ok := clips.([]string); ok && len(clipList) > 0 {
-				hasClip = true; break
+				hasClip = true
+				break
 			}
 		}
 	}
@@ -181,16 +174,26 @@ func validateAnyClipVoiceover(plan *RenderPlan) *PlanError {
 		if val, ok := params[field]; ok {
 			switch v := val.(type) {
 			case []interface{}:
-				if len(v) > 0 { hasScenePlan = true }
+				if len(v) > 0 {
+					hasScenePlan = true
+				}
 			case []string:
-				if len(v) > 0 { hasScenePlan = true }
+				if len(v) > 0 {
+					hasScenePlan = true
+				}
 			case map[string]interface{}:
-				if len(v) > 0 { hasScenePlan = true }
+				if len(v) > 0 {
+					hasScenePlan = true
+				}
 			case string:
-				if strings.TrimSpace(v) != "" { hasScenePlan = true }
+				if strings.TrimSpace(v) != "" {
+					hasScenePlan = true
+				}
 			}
 		}
-		if hasScenePlan { break }
+		if hasScenePlan {
+			break
+		}
 	}
 
 	hasVoiceover := false
@@ -198,13 +201,16 @@ func validateAnyClipVoiceover(plan *RenderPlan) *PlanError {
 	for _, field := range voiceoverFields {
 		if vo, ok := params[field]; ok {
 			if voList, ok := vo.([]interface{}); ok && len(voList) > 0 {
-				hasVoiceover = true; break
+				hasVoiceover = true
+				break
 			}
 			if voList, ok := vo.([]string); ok && len(voList) > 0 {
-				hasVoiceover = true; break
+				hasVoiceover = true
+				break
 			}
 			if voStr, ok := vo.(string); ok && voStr != "" {
-				hasVoiceover = true; break
+				hasVoiceover = true
+				break
 			}
 		}
 	}
@@ -230,16 +236,4 @@ func validJobTypeNames() []string {
 		names = append(names, k)
 	}
 	return names
-}
-
-func isValidID(id string) bool {
-	if len(id) == 0 || len(id) > 128 {
-		return false
-	}
-	for _, c := range id {
-		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_') {
-			return false
-		}
-	}
-	return true
 }

@@ -1,9 +1,19 @@
-// Package renderplan provides the RenderPlan v1 contract for job validation.
+// Package renderplan: render-plan validation error types.
+//
+// PlanError/PlanErrors are render-plan specific: they carry an explicit
+// typed ErrorCode in addition to a field+message, suitable for surfacing
+// structured API errors.
+//
+// ValidationError/ValidationErrors are aliases to the reusable
+// pkg/validation.FieldError/FieldErrors so other Velox consumers (and tests)
+// can share the same aggregation primitive.
 package renderplan
 
 import (
 	"fmt"
 	"strings"
+
+	"velox-worker-agent/pkg/validation"
 )
 
 // RenderPlanVersion is the current contract version.
@@ -13,9 +23,9 @@ const RenderPlanVersion = "v1"
 type ErrorCode string
 
 const (
-	ERR_PLAN_SCHEMA          ErrorCode = "ERR_PLAN_SCHEMA"
-	ERR_PLAN_REQUIRED_FIELD  ErrorCode = "ERR_PLAN_REQUIRED_FIELD"
-	ERR_PLAN_INCONSISTENT    ErrorCode = "ERR_PLAN_INCONSISTENT"
+	ERR_PLAN_SCHEMA         ErrorCode = "ERR_PLAN_SCHEMA"
+	ERR_PLAN_REQUIRED_FIELD ErrorCode = "ERR_PLAN_REQUIRED_FIELD"
+	ERR_PLAN_INCONSISTENT   ErrorCode = "ERR_PLAN_INCONSISTENT"
 )
 
 // PlanError represents a typed error with code, field, and message.
@@ -25,6 +35,7 @@ type PlanError struct {
 	Message string    `json:"message"`
 }
 
+// Error formats the error for human-readable logs / HTTP responses.
 func (e *PlanError) Error() string {
 	if e.Field != "" {
 		return fmt.Sprintf("[%s] %s: %s", e.Code, e.Field, e.Message)
@@ -35,6 +46,7 @@ func (e *PlanError) Error() string {
 // PlanErrors is a collection of plan errors.
 type PlanErrors []*PlanError
 
+// Error joins every individual PlanError into a single message.
 func (errs PlanErrors) Error() string {
 	msgs := make([]string, len(errs))
 	for i, e := range errs {
@@ -43,35 +55,16 @@ func (errs PlanErrors) Error() string {
 	return fmt.Sprintf("render plan validation failed: %s", strings.Join(msgs, "; "))
 }
 
+// HasErrors returns true if there is at least one error.
 func (errs PlanErrors) HasErrors() bool {
 	return len(errs) > 0
 }
 
-// ValidationError represents a contract validation failure.
-type ValidationError struct {
-	Field   string `json:"field"`
-	Message string `json:"message"`
-	Value   string `json:"value,omitempty"`
-}
+// ValidationError is an alias for the reusable pkg/validation.FieldError.
+// Keep the old name so the existing API surface is stable; the type itself
+// (struct, not pointer) lives in pkg/validation so other packages can
+// consume it without an extra dependency.
+type ValidationError = validation.FieldError
 
-func (e *ValidationError) Error() string {
-	if e.Value != "" {
-		return fmt.Sprintf("validation error on field '%s': %s (got: %s)", e.Field, e.Message, e.Value)
-	}
-	return fmt.Sprintf("validation error on field '%s': %s", e.Field, e.Message)
-}
-
-// ValidationErrors is a collection of validation errors.
-type ValidationErrors []*ValidationError
-
-func (errs ValidationErrors) Error() string {
-	msgs := make([]string, len(errs))
-	for i, e := range errs {
-		msgs[i] = e.Error()
-	}
-	return fmt.Sprintf("render plan validation failed: %s", strings.Join(msgs, "; "))
-}
-
-func (errs ValidationErrors) HasErrors() bool {
-	return len(errs) > 0
-}
+// ValidationErrors is an alias for pkg/validation.FieldErrors.
+type ValidationErrors = validation.FieldErrors

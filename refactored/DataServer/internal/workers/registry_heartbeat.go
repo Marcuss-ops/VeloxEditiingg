@@ -7,12 +7,13 @@ import (
 	"time"
 
 	"velox-server/internal/logging"
+	"velox-shared/identity"
 )
 
 func (r *Registry) Heartbeat(ctx context.Context, workerID, workerName, status, currentJob string, extra map[string]interface{}) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 
-	workerID = NormalizeWorkerID(workerID)
+	workerID = identity.NormalizeWorkerID(workerID)
 
 	r.mu.Lock()
 	defer r.mu.Unlock()

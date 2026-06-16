@@ -172,6 +172,131 @@ func TestGetJobNoJob(t *testing.T) {
 	}
 }
 
+func TestGetJobV2FallsBackToLegacy(t *testing.T) {
+	var v2Hits, legacyHits int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/queue/job":
+			v2Hits++
+			w.WriteHeader(http.StatusNotFound)
+			w.Write([]byte("API route not found"))
+		case "/api/jobs/get":
+			legacyHits++
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(APIResponse{
+				Success: true,
+				Data: Job{
+					JobID:    "job-legacy",
+					JobRunID: "run-legacy",
+					JobType:  "render",
+				},
+			})
+		default:
+			t.Errorf("unexpected path %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL)
+	ctx := context.Background()
+
+	job, err := client.GetJobV2(ctx, "test-worker-001")
+	if err != nil {
+		t.Fatalf("Expected no error, got %v", err)
+	}
+	if job == nil || job.JobID != "job-legacy" {
+		t.Fatalf("Expected legacy job, got %#v", job)
+	}
+	if v2Hits != 1 || legacyHits != 1 {
+		t.Fatalf("Expected 1 v2 hit and 1 legacy hit, got v2=%d legacy=%d", v2Hits, legacyHits)
+	}
+}
+
+func TestSubmitJobResultV2FallsBackToLegacy(t *testing.T) {
+	var v2Hits, legacyHits int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/jobs/job-001/result":
+			v2Hits++
+			w.WriteHeader(http.StatusNotFound)
+			w.Write([]byte("API route not found"))
+		case "/api/jobs/result":
+			legacyHits++
+			var result JobResult
+			if err := json.NewDecoder(r.Body).Decode(&result); err != nil {
+				t.Fatalf("Failed to decode job result: %v", err)
+			}
+			if result.LeaseID != "lease-123" {
+				t.Fatalf("Expected lease_id lease-123, got %s", result.LeaseID)
+			}
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(APIResponse{Success: true})
+		default:
+			t.Errorf("unexpected path %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL)
+	ctx := context.Background()
+
+	result := &JobResult{
+		JobID:    "job-001",
+		JobRunID: "run-001",
+		WorkerID: "test-worker-001",
+		Status:   "success",
+		LeaseID:  "lease-123",
+	}
+
+	err := client.SubmitJobResultV2(ctx, result.JobID, result)
+	if err != nil {
+		t.Fatalf("Expected no error, got %v", err)
+	}
+	if v2Hits != 1 || legacyHits != 1 {
+		t.Fatalf("Expected 1 v2 hit and 1 legacy hit, got v2=%d legacy=%d", v2Hits, legacyHits)
+	}
+}
+
+func TestCompleteJobV2FallsBackToLegacy(t *testing.T) {
+	var v2Hits, legacyHits int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/jobs/job-001/complete":
+			v2Hits++
+			w.WriteHeader(http.StatusNotFound)
+			w.Write([]byte("API route not found"))
+		case "/api/jobs/complete":
+			legacyHits++
+			var body map[string]interface{}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatalf("Failed to decode complete payload: %v", err)
+			}
+			if body["lease_id"] != "lease-123" {
+				t.Fatalf("Expected lease_id lease-123, got %#v", body["lease_id"])
+			}
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(APIResponse{Success: true})
+		default:
+			t.Errorf("unexpected path %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL)
+	ctx := context.Background()
+
+	err := client.CompleteJobV2(ctx, "job-001", "worker-001", "lease-123", 3)
+	if err != nil {
+		t.Fatalf("Expected no error, got %v", err)
+	}
+	if v2Hits != 1 || legacyHits != 1 {
+		t.Fatalf("Expected 1 v2 hit and 1 legacy hit, got v2=%d legacy=%d", v2Hits, legacyHits)
+	}
+}
+
 // TestSubmitJobResult tests job result submission.
 func TestSubmitJobResult(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

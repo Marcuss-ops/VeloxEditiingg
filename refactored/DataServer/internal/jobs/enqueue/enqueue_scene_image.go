@@ -162,7 +162,7 @@ func buildSceneImagePayload(rawPayload map[string]interface{}, dataDir, videosDi
 	normalized["audio_language_for_srt"] = audioLanguage
 	normalized["video_mode"] = "scene_image"
 	normalized["output_path"] = outputPath
-	normalized["drive_output_folder"] = payload.FirstString(rawPayload, "drive_output_folder", "output_directory")
+	normalized["drive_output_folder"] = ResolveDriveOutputFolderReference(dataDir, payload.FirstString(rawPayload, "drive_output_folder", "output_directory"))
 	normalized["scene_count"] = sceneCount
 	normalized["voiceover_count"] = len(voiceoverPaths)
 	normalized["total_duration_secs"] = totalDuration

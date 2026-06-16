@@ -202,10 +202,19 @@ func (s *Service) DownloadFilesFromFolder(ctx context.Context, folderID string, 
 
 // UploadVideo uploads a video file to a project folder
 func (s *Service) UploadVideo(ctx context.Context, filePath string, projectName string, parentFolderID string) (*UploadResult, error) {
-	// Get or create project folder
+	// Create or reuse a project subfolder under the resolved parent folder.
+	// If no parent is provided we fall back to a top-level folder with the project name.
 	var folderID string
 	if parentFolderID != "" {
-		folderID = parentFolderID
+		if strings.TrimSpace(projectName) != "" {
+			folder, err := s.GetOrCreateFolder(ctx, projectName, parentFolderID)
+			if err != nil {
+				return nil, fmt.Errorf("failed to get/create project folder: %w", err)
+			}
+			folderID = folder.ID
+		} else {
+			folderID = parentFolderID
+		}
 	} else {
 		folder, err := s.GetOrCreateFolder(ctx, projectName, "")
 		if err != nil {

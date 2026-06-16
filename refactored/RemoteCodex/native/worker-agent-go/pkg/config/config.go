@@ -2,14 +2,13 @@
 package config
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
+
+	"velox-shared/identity"
 )
 
 // WorkerConfig holds the worker configuration loaded from JSON.
@@ -93,14 +92,12 @@ func SaveConfig(path string, config *WorkerConfig) error {
 }
 
 // GenerateWorkerID creates a unique worker ID in the format "worker-{8-char-hex}".
-// This matches the Python implementation: f"worker-{uuid.uuid4().hex[:8]}"
+//
+// Implementation lives in shared/identity so that the Velox master server and
+// the worker agent share the exact same entropy source and format. This
+// keeps ID-generation stable across the ecosystem and avoids drift.
 func GenerateWorkerID() string {
-	bytes := make([]byte, 4) // 4 bytes = 8 hex chars
-	if _, err := rand.Read(bytes); err != nil {
-		// Fallback to a deterministic ID if random fails (should never happen)
-		return "worker-00000000"
-	}
-	return "worker-" + hex.EncodeToString(bytes)
+	return identity.GenerateWorkerID()
 }
 
 // DefaultConfig creates a WorkerConfig with sensible default values.
@@ -188,22 +185,12 @@ func (c *WorkerConfig) Validate() error {
 }
 
 // NormalizeWorkerID normalizes IP-derived worker IDs by stripping all leading
-// "host_" prefixes and replacing dots with underscores. This ensures that
-// malformed IDs like host_host_57_129_132_133 or host_57.129.132.133 are
-// treated as the canonical host_57_129_132_133.
+// "host_" prefixes and replacing dots with underscores.
+//
+// Implementation lives in shared/identity so the canonical rules are shared
+// with the Velox master server. Test cases live in shared/identity_test.go.
 func NormalizeWorkerID(id string) string {
-	s := strings.TrimSpace(id)
-	if !strings.HasPrefix(s, "host_") && !strings.Contains(s, ".") {
-		return id
-	}
-	for strings.HasPrefix(s, "host_") {
-		s = strings.TrimPrefix(s, "host_")
-	}
-	s = strings.ReplaceAll(s, ".", "_")
-	if s != "" {
-		return "host_" + s
-	}
-	return id
+	return identity.NormalizeWorkerID(id)
 }
 
 // String returns a formatted string representation of the config (for logging).

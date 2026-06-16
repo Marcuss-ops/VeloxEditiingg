@@ -2,6 +2,7 @@ package store
 
 import (
 	"encoding/json"
+	"strings"
 	"time"
 
 	"velox-server/internal/logging"
@@ -121,15 +122,18 @@ func (s *SQLiteStore) GetDriveLink(id string) (map[string]any, error) {
 // MasterFolders: structured master folder CRUD
 
 // UpsertMasterFolder creates or updates a master folder.
-func (s *SQLiteStore) UpsertMasterFolder(id, name, url, language string, subfoldersCount int) error {
+func (s *SQLiteStore) UpsertMasterFolder(id, name, url, language string, subfoldersCount int, metadataJSON string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
+	if strings.TrimSpace(metadataJSON) == "" {
+		metadataJSON = "{}"
+	}
 	_, err := s.db.Exec(
-		`INSERT INTO drive_master_folders (id, name, url, subfolders_count, language, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)
+		`INSERT INTO drive_master_folders (id, name, url, subfolders_count, language, created_at, updated_at, metadata_json)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(id) DO UPDATE SET
 		   name=excluded.name, url=excluded.url, subfolders_count=excluded.subfolders_count,
-		   language=excluded.language, updated_at=excluded.updated_at`,
-		id, name, url, subfoldersCount, language, now, now,
+		   language=excluded.language, updated_at=excluded.updated_at, metadata_json=excluded.metadata_json`,
+		id, name, url, subfoldersCount, language, now, now, metadataJSON,
 	)
 	return err
 }

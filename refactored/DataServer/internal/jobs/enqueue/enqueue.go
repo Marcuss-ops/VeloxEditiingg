@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -73,7 +74,7 @@ func RenderJobResponse(job map[string]interface{}, full bool) map[string]interfa
 		"started_at":          job["started_at"],
 		"completed_at":        job["completed_at"],
 		"output_path":         payload.FirstString(job, "output_path"),
-		"drive_output_folder": payload.FirstString(job, "drive_output_folder"),
+		"drive_output_folder": ResolveDriveOutputFolderReference(os.Getenv("VELOX_DATA_DIR"), payload.FirstString(job, "drive_output_folder")),
 		"scene_count":         job["scene_count"],
 		"voiceover_count":     job["voiceover_count"],
 		"video_mode":          payload.FirstString(job, "video_mode"),

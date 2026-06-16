@@ -15,13 +15,14 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"velox-server/internal/config"
+	driveapi "velox-server/internal/integrations/drive"
 	ytservice "velox-server/internal/integrations/youtube"
 	"velox-server/internal/queue"
 )
 
 // UploadCompletedVideo handles video file upload from workers.
 // POST /api/v1/video/upload-completed
-func UploadCompletedVideo(cfg *config.Config, fileQ *queue.FileQueue, youtubeService *ytservice.Service) gin.HandlerFunc {
+func UploadCompletedVideo(cfg *config.Config, fileQ *queue.FileQueue, youtubeService *ytservice.Service, driveService *driveapi.Service) gin.HandlerFunc {
 	videosDir := cfg.VideosDir
 	if videosDir == "" {
 		videosDir = "./completed_videos"
@@ -137,17 +138,20 @@ func UploadCompletedVideo(cfg *config.Config, fileQ *queue.FileQueue, youtubeSer
 		// Trigger YouTube auto-upload (async, best-effort)
 		maybeAutoUploadYouTube(fileQ, youtubeService, jobID, uploadInfo, videoPath)
 
+		// Trigger Drive auto-upload (async, best-effort)
+		maybeAutoUploadDrive(fileQ, driveService, cfg.DataDir, jobID, uploadInfo, videoPath)
+
 		log.Printf("[UPLOAD] Video upload completed: job=%s worker=%s size=%d sha256=%s",
 			jobID, workerID, size, sha256Hash[:min(16, len(sha256Hash))]+"...")
 
 		c.JSON(http.StatusOK, gin.H{
-			"ok":               true,
-			"job_id":           jobID,
-			"video_path":       videoPath,
-			"size":             size,
-			"sha256":           sha256Hash,
-			"video_id":         safeName,
-			"youtube_url":      "",
+			"ok":          true,
+			"job_id":      jobID,
+			"video_path":  videoPath,
+			"size":        size,
+			"sha256":      sha256Hash,
+			"video_id":    safeName,
+			"youtube_url": "",
 		})
 	}
 }

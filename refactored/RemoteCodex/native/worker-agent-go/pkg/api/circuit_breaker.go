@@ -1,107 +1,36 @@
-// Package api provides HTTP client for communicating with the Velox Master server.
+// Package api: this file is a thin backwards-compatibility shim around the
+// reusable pkg/resilience.CircuitBreaker. The CRUD lives in pkg/resilience;
+// the legacy constants/types are preserved here as aliases so existing
+// imports of velox-worker-agent/pkg/api continue to compile during the
+// deprecation window. New code should import pkg/resilience directly.
 package api
 
 import (
-	"sync"
 	"time"
 
-	"velox-worker-agent/pkg/logger"
+	"velox-worker-agent/pkg/resilience"
 )
 
-// Circuit breaker states
+// Backwards-compat constants for callers that referenced the old
+// CircuitClosed/CircuitOpen/CircuitHalfOpen string constants.
 const (
-	CircuitClosed   = "closed"
-	CircuitOpen     = "open"
-	CircuitHalfOpen = "half-open"
+	CircuitClosed   = resilience.StateClosed
+	CircuitOpen     = resilience.StateOpen
+	CircuitHalfOpen = resilience.StateHalfOpen
 )
 
-// CircuitBreaker implements the circuit breaker pattern to prevent cascading failures.
-type CircuitBreaker struct {
-	mu               sync.RWMutex
-	state            string
-	failureCount     int
-	successCount     int
-	lastFailureTime  time.Time
-	failureThreshold int
-	successThreshold int
-	timeout          time.Duration
-	halfOpenMax      int
-}
+// CircuitBreaker is an alias for resilience.CircuitBreaker so existing
+// references (e.g. Client.circuitBreaker) keep working.
+type CircuitBreaker = resilience.CircuitBreaker
 
-// NewCircuitBreaker creates a new circuit breaker.
+// NewCircuitBreaker creates a new circuit breaker with the legacy
+// (failureThreshold, successThreshold, timeout) signature. Internally it
+// builds a resilience.Config and delegates to resilience.New.
 func NewCircuitBreaker(failureThreshold, successThreshold int, timeout time.Duration) *CircuitBreaker {
-	return &CircuitBreaker{
-		state:            CircuitClosed,
-		failureThreshold: failureThreshold,
-		successThreshold: successThreshold,
-		timeout:          timeout,
-		halfOpenMax:      3,
-	}
-}
-
-// CanExecute checks if a request can be executed.
-func (cb *CircuitBreaker) CanExecute() bool {
-	cb.mu.RLock()
-	defer cb.mu.RUnlock()
-
-	switch cb.state {
-	case CircuitClosed:
-		return true
-	case CircuitOpen:
-		if time.Since(cb.lastFailureTime) > cb.timeout {
-			return true
-		}
-		return false
-	case CircuitHalfOpen:
-		return true
-	default:
-		return true
-	}
-}
-
-// RecordSuccess records a successful request.
-func (cb *CircuitBreaker) RecordSuccess() {
-	cb.mu.Lock()
-	defer cb.mu.Unlock()
-
-	switch cb.state {
-	case CircuitClosed:
-		cb.failureCount = 0
-	case CircuitHalfOpen:
-		cb.successCount++
-		if cb.successCount >= cb.successThreshold {
-			cb.state = CircuitClosed
-			cb.failureCount = 0
-			cb.successCount = 0
-			logger.Info("[CIRCUIT_BREAKER] Circuit closed - service recovered")
-		}
-	}
-}
-
-// RecordFailure records a failed request.
-func (cb *CircuitBreaker) RecordFailure() {
-	cb.mu.Lock()
-	defer cb.mu.Unlock()
-
-	cb.lastFailureTime = time.Now()
-
-	switch cb.state {
-	case CircuitClosed:
-		cb.failureCount++
-		if cb.failureCount >= cb.failureThreshold {
-			cb.state = CircuitOpen
-			logger.Warn("[CIRCUIT_BREAKER] Circuit opened - too many failures")
-		}
-	case CircuitHalfOpen:
-		cb.state = CircuitOpen
-		cb.successCount = 0
-		logger.Warn("[CIRCUIT_BREAKER] Circuit reopened - test request failed")
-	}
-}
-
-// GetState returns the current circuit breaker state.
-func (cb *CircuitBreaker) GetState() string {
-	cb.mu.RLock()
-	defer cb.mu.RUnlock()
-	return cb.state
+	return resilience.New(resilience.Config{
+		FailureThreshold: failureThreshold,
+		SuccessThreshold: successThreshold,
+		OpenTimeout:      timeout,
+		HalfOpenMaxCalls: 3, // preserve the original hard-coded halfOpenMax behaviour
+	})
 }

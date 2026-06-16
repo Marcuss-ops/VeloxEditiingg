@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 )
@@ -279,6 +280,29 @@ func (s *Service) DeleteFile(ctx context.Context, fileID string) error {
 // GetTokenManager returns the token manager for authentication operations
 func (s *Service) GetTokenManager() *TokenManager {
 	return s.tokenManager
+}
+
+// LoadFirstToken loads the first available token from the configured token store
+// and sets it as the active token for subsequent API calls.
+func (s *Service) LoadFirstToken() error {
+	if s == nil || s.tokenManager == nil {
+		return fmt.Errorf("token manager not configured")
+	}
+	names, err := s.tokenManager.ListTokens()
+	if err != nil {
+		return err
+	}
+	if len(names) == 0 {
+		return fmt.Errorf("no Drive tokens found")
+	}
+	sort.Strings(names)
+	token, err := s.tokenManager.LoadToken(names[0])
+	if err != nil {
+		return err
+	}
+	s.SetToken(token)
+	log.Printf("[DRIVE] Loaded Drive token: %s", names[0])
+	return nil
 }
 
 // GetOAuthConfig returns the OAuth2 configuration
