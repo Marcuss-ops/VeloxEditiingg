@@ -130,22 +130,89 @@ func (ym *YouTubeManager) DeleteChannelPermanentlyHandler() gin.HandlerFunc {
 
 // legacyAccountTokenPaths returns every legacy on-disk location an OAuth
 // token for channelID might exist at. Used by DeleteChannelPermanentlyHandler
-// to sweep every known copy when a channel is removed.
+// to sweep every known copy when a channel is removed, and by
+// consolidateLegacyTokenFor to migrate stray copies into the canonical
+// secrets/youtube/tokens/ path. Includes the per-group directory
+// youtube/group/*/ because accounts were historically stored one-per-group
+// and the startup migration enumerates those subdirs too.
 func (ym *YouTubeManager) legacyAccountTokenPaths(channelID string) []string {
 	if ym.dataDir == "" || channelID == "" {
 		return nil
 	}
 	fileName := "account_" + channelID + ".json"
-	return []string{
+	paths := []string{
 		filepath.Join(ym.dataDir, "youtube", "tokens", fileName),
 		filepath.Join(ym.dataDir, "secrets", "youtube", "tokens", fileName),
 		filepath.Join(ym.dataDir, "youtube", "Token", fileName),
 	}
+	groupRoot := filepath.Join(ym.dataDir, "youtube", "group")
+	entries, err := os.ReadDir(groupRoot)
+	if err != nil {
+		return paths
+	}
+	for _, e := range entries {
+		// Skip symlinks explicitly: e.IsDir() may follow them on some
+		// platforms, and a malicious symlink here could redirect
+		// os.Remove / os.Rename calls at this listing out of the data
+		// root. We only want real subdirectories.
+		if e.Type()&os.ModeSymlink != 0 || !e.Type().IsDir() {
+			continue
+		}
+		paths = append(paths, filepath.Join(groupRoot, e.Name(), fileName))
+	}
+	return paths
 }
 
 var youtubeChannelIDRegex = regexp.MustCompile(`^UC[\w-]{21,22}$`)
 
-// MoveChannelToGroupHandler moves a channel to a target group
+// consolidateLegacyTokenFor safely consolidates any pre-migration token file
+// for channelID into the canonical secrets/youtube/tokens/ path. If the
+// canonical file already has content, the legacy copy is discarded instead
+// of being os.Rename-d over the top of it (POSIX rename replaces the
+// destination atomically, which would silently clobber a fresher canonical
+// copy). No-op if ym.dataDir is empty.
+func (ym *YouTubeManager) consolidateLegacyTokenFor(channelID string) {
+	if ym.dataDir == "" || channelID == "" {
+		return
+	}
+	canonicalPath := youtube.CanonicalOAuthTokenPath(ym.dataDir, channelID)
+	if canonicalPath == "" {
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(canonicalPath), 0755); err != nil {
+		log.Printf("[WARN] Cannot create canonical token dir for %s: %v", channelID, err)
+		return
+	}
+	canonicalClean := filepath.Clean(canonicalPath)
+	canonicalPopulated := func() bool {
+		info, statErr := os.Stat(canonicalPath)
+		return statErr == nil && info.Size() > 0
+	}
+	for _, src := range ym.legacyAccountTokenPaths(channelID) {
+		if filepath.Clean(src) == canonicalClean {
+			continue
+		}
+		if _, err := os.Stat(src); err != nil {
+			continue
+		}
+		if canonicalPopulated() {
+			_ = os.Remove(src)
+			log.Printf("[MOVE] Legacy token file discarded (canonical already present): %s", src)
+			continue
+		}
+		if renameErr := os.Rename(src, canonicalPath); renameErr == nil {
+			log.Printf("[MOVE] Consolidated token file from %s to canonical path", src)
+		}
+	}
+}
+
+// MoveChannelToGroupHandler moves a channel to a target group. If the channel
+// does not currently belong to any group, it is added to targetGroup as if it
+// were a freshly-imported channel (used by drag-and-drop / bulk move from the
+// UI). In either case, any pre-migration legacy token-file copies are
+// consolidated into the canonical secrets/youtube/tokens/ path with a
+// preserve-canonical guard so a stale legacy file cannot clobber the
+// freshly-migrated canonical one.
 func (ym *YouTubeManager) MoveChannelToGroupHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		channelID := c.Param("channel_id")
@@ -164,6 +231,14 @@ func (ym *YouTubeManager) MoveChannelToGroupHandler() gin.HandlerFunc {
 				break
 			}
 		}
+
+		// Always consolidate legacy token copies into the canonical path
+		// before any DB write, so service.DeleteChannel (called during a
+		// later teardown) sees only the canonical file. The bootstrap
+		// migration covers the same ground on startup; this branch is a
+		// belt-and-suspenders guard against a write that races the
+		// migration on a cold start.
+		ym.consolidateLegacyTokenFor(channelID)
 
 		if sourceGroup == "" {
 			if !youtubeChannelIDRegex.MatchString(channelID) {
@@ -225,73 +300,51 @@ func (ym *YouTubeManager) MoveChannelToGroupHandler() gin.HandlerFunc {
 				return
 			}
 
-		if ym.dataDir != "" {
-			oldPath := filepath.Join(ym.dataDir, "youtube", "Token", "account_"+channelID+".json")
-			if _, err := os.Stat(oldPath); err == nil {
-				canonicalDir := filepath.Join(ym.dataDir, "secrets", "youtube", "tokens")
-				_ = os.MkdirAll(canonicalDir, 0755)
-				canonicalPath := filepath.Join(canonicalDir, "account_"+channelID+".json")
-				if err := os.Rename(oldPath, canonicalPath); err == nil {
-					log.Printf("[MOVE] Consolidated token file for %s to canonical path", channelID)
-				}
-			}
-		}
+			ym.feedCache.Clear()
 
-		ym.feedCache.Clear()
-
-		c.JSON(http.StatusOK, youtube.APIResponse{
-			OK:      true,
-			Message: "Channel added to group",
-			Data: gin.H{
-				"channel_id":   channelID,
-				"source_group": nil,
-				"target_group": targetGroup,
-			},
-		})
-		return
-	}
-
-	if _, ok := ym.storage.GetGroup(targetGroup); !ok {
-		if err := ym.storage.CreateGroup(targetGroup, "manager"); err != nil {
-			c.JSON(http.StatusInternalServerError, youtube.APIResponse{
-				OK:    false,
-				Error: "Failed to create target group: " + err.Error(),
+			c.JSON(http.StatusOK, youtube.APIResponse{
+				OK:      true,
+				Message: "Channel added to group",
+				Data: gin.H{
+					"channel_id":   channelID,
+					"source_group": nil,
+					"target_group": targetGroup,
+				},
 			})
 			return
 		}
-	}
 
-	if err := ym.storage.MoveChannel(sourceGroup, channelID, targetGroup); err != nil {
-		c.JSON(http.StatusInternalServerError, youtube.APIResponse{
-			OK:    false,
-			Error: err.Error(),
-		})
-		return
-	}
-
-	if ym.dataDir != "" {
-		// Legacy token-file locations may still carry ACCOUNT_* per-group tokens
-		// from before the consolidation migration. Move any that exist into the
-		// canonical secrets/youtube/tokens/ path so there is a single source.
-		legacyDirs := []string{
-			filepath.Join(ym.dataDir, "youtube", "group", sourceGroup),
-			filepath.Join(ym.dataDir, "youtube", "Token"),
+		if sourceGroup == targetGroup {
+			ym.feedCache.Clear()
+			c.JSON(http.StatusOK, youtube.APIResponse{
+				OK:      true,
+				Message: "Channel already in target group",
+				Data: gin.H{
+					"channel_id":   channelID,
+					"source_group": sourceGroup,
+					"target_group": targetGroup,
+				},
+			})
+			return
 		}
-		canonicalDir := filepath.Join(ym.dataDir, "secrets", "youtube", "tokens")
-		_ = os.MkdirAll(canonicalDir, 0755)
-		fileName := "account_" + channelID + ".json"
-		canonicalPath := filepath.Join(canonicalDir, fileName)
-		for _, dir := range legacyDirs {
-			src := filepath.Join(dir, fileName)
-			if _, err := os.Stat(src); err != nil {
-				continue
-			}
-			if err := os.Rename(src, canonicalPath); err == nil {
-				log.Printf("[MOVE] Consolidated token file from %s to canonical path", dir)
-				break
+
+		if _, ok := ym.storage.GetGroup(targetGroup); !ok {
+			if err := ym.storage.CreateGroup(targetGroup, "manager"); err != nil {
+				c.JSON(http.StatusInternalServerError, youtube.APIResponse{
+					OK:    false,
+					Error: "Failed to create target group: " + err.Error(),
+				})
+				return
 			}
 		}
-	}
+
+		if err := ym.storage.MoveChannel(sourceGroup, channelID, targetGroup); err != nil {
+			c.JSON(http.StatusInternalServerError, youtube.APIResponse{
+				OK:    false,
+				Error: err.Error(),
+			})
+			return
+		}
 
 		ym.feedCache.Clear()
 

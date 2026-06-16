@@ -113,11 +113,13 @@ func (s *Storage) LoadData() *StorageData {
 	return data
 }
 
-// SaveData replaces the storage data with a full snapshot supplied by the
-// caller. Goes through save() (NOT saveAllReconcile): a partial snapshot
-// the caller accidentally hands in is still subject to the safety guard,
-// so a small/empty memory set won't silently wipe the DB. Callers who
-// genuinely want destructive reconciliation should call saveAllReconcile().
+// SaveData replaces the storage data with a caller-supplied snapshot.
+//
+// NOTE: SaveData is NOT destructive-bypass. It runs through save() with
+// bypassGuard=false so an accidentally tiny in-memory set cannot silently
+// wipe the DB. Callers that genuinely want a destructive full-state
+// reconciliation (import, repair, manual rebuild) must call
+// saveAllReconcile() instead.
 func (s *Storage) SaveData(data *StorageData) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

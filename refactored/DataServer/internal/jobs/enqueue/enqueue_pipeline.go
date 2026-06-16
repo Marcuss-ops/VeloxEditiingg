@@ -81,6 +81,7 @@ func BuildPipelinePayload(result map[string]interface{}) (map[string]interface{}
 		"voiceover_path":         voiceovers[0],
 		"audio_path":             voiceovers[0],
 		"output_path":            payload.FirstString(flat, "output_path", "output_dir"),
+		"drive_output_folder":    payload.FirstString(flat, "drive_output_folder", "output_directory"),
 		"youtube_group":          payload.FirstString(flat, "youtube_group"),
 		"audio_language_for_srt": payload.FirstString(flat, "audio_language_for_srt", "audio_lang"),
 		"job_type":               "process_video",

@@ -13,6 +13,12 @@ import (
 // persisted data on a rewrite.
 var ErrSaveRefusedBySafetyGuard = errors.New("save refused by safety guard: in-memory group set too small relative to DB")
 
+// ErrGroupMembershipRefusedEmptyMemory is returned by diffGroupMemberships when
+// the in-memory channel slice for a group is empty while the DB has
+// memberships for the same group. Used to refuse destructive wipes that could
+// happen from a stale partial load.
+var ErrGroupMembershipRefusedEmptyMemory = errors.New("group membership refused: empty in-memory channel slice would wipe persisted memberships")
+
 // safetyGuardMinRatio is the minimum acceptable ratio of in-memory groups to
 // DB groups. If the ratio falls below this and the DB has more than
 // safetyGuardMinDBGroups groups, save() refuses the destructive rewrite.
@@ -460,6 +466,16 @@ func (s *Storage) diffGroupMemberships(groupID int64, groupName string, g *Group
 	currentIDs, err := s.store.ListGroupChannelsV2(groupID)
 	if err != nil {
 		return fmt.Errorf("list memberships for group %q: %w", groupName, err)
+	}
+
+	// Empty-channel wipe guard: if the in-memory list for this group is empty
+	// while the DB has memberships, refuse to remove every row. Catches stale
+	// partial loads where a per-group mutation runs against an un-hydrated
+	// Channels slice. The full safety guard on save() catches whole-table wipes;
+	// this catches per-group wipes from un-hydrated per-group state.
+	if len(desired) == 0 && len(currentIDs) > 0 {
+		log.Printf("[WARN] diffGroupMemberships: empty desired slice for group %q (DB has %d memberships); refusing to remove every row to avoid destructive wipe", groupName, len(currentIDs))
+		return fmt.Errorf("%w (group=%q, db_had=%d, memory_was_empty)", ErrGroupMembershipRefusedEmptyMemory, groupName, len(currentIDs))
 	}
 
 	// Remove stale memberships: in DB but no longer in memory for this group.
