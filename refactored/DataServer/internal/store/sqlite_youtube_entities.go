@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"time"
 )
 
@@ -482,6 +483,46 @@ func (s *SQLiteStore) MarkYouTubeOAuthTokenRevoked(channelID string) error {
 		now, now, channelID,
 	)
 	return err
+}
+
+// DeleteChannelAtomic atomically removes a youtube_channels row + its
+// youtube_group_channels memberships + (FK-cascade) the matching
+// youtube_oauth_tokens row in a single SQLite transaction. Returns the
+// number of group memberships cleared for telemetry.
+//
+// Used by Service.DeleteChannel so the deactivation is consistently
+// atomic: a mid-txn failure leaves NO partial state in the canonical
+// tables — either the channel is fully gone or untouched. Pairs with
+// RevokeToken (which marks revoked_at on the oauth row but keeps the
+// channel entry) to give the operator two distinct semantics.
+//
+// Note: we explicitly DELETE from youtube_group_channels before the
+// parent youtube_channels row even though FK CASCADE would handle it,
+// because doing so lets us return the membership count for the audit
+// endpoint and protects against a misconfigured FK pragma at startup
+// (foreign_keys=OFF on legacy DBs).
+func (s *SQLiteStore) DeleteChannelAtomic(channelID string) (int64, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, fmt.Errorf("delete atomic: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }() // safe even after explicit Commit
+
+	res, err := tx.Exec(`DELETE FROM youtube_group_channels WHERE channel_id = ?`, channelID)
+	if err != nil {
+		return 0, fmt.Errorf("delete atomic: memberships: %w", err)
+	}
+	membershipsDeleted, _ := res.RowsAffected()
+
+	if _, err := tx.Exec(`DELETE FROM youtube_channels WHERE channel_id = ?`, channelID); err != nil {
+		return 0, fmt.Errorf("delete atomic: channel row: %w", err)
+	}
+	// youtube_oauth_tokens row is wiped by FK CASCADE on the channel row.
+
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("delete atomic: commit: %w", err)
+	}
+	return membershipsDeleted, nil
 }
 
 // (Legacy manager tables youtube_manager_channels and youtube_manager_groups have been dropped by migration 008)
