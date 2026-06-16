@@ -11,6 +11,7 @@ import (
 	integrationsYoutube "velox-server/internal/integrations/youtube"
 	"velox-server/internal/secrets/aesgcm"
 	"velox-server/internal/store"
+	"context"
 )
 
 // Module provides YouTube integration endpoints.
@@ -77,6 +78,7 @@ func (m *Module) RegisterRoutes(r *gin.Engine) {
 		log.Printf("[YOUTUBE] OAuth secret cipher unavailable: %v — new OAuth callbacks will degrade to JSON-only persistence", err)
 	} else if cipher != nil {
 		youtubeService.SetOAuthSecretCipher(cipher)
+		_, _ = youtubeService.BackfillOAuthTokensFromJSON(context.Background())
 		log.Printf("[OK] YouTube OAuth secret cipher initialised (key_version=%d)", cipher.KeyVersion())
 	} else {
 		log.Printf("[WARN] VELOX_YT_OAUTH_TOKEN_KEY not set: new OAuth callbacks will persist credentials to JSON only, youtube_oauth_tokens will not be populated")
