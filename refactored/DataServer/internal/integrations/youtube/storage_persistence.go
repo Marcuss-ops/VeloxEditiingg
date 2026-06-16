@@ -7,24 +7,13 @@ import (
 	"time"
 )
 
-// ErrSaveRefusedBySafetyGuard is returned by save() when the in-memory group set
-// is suspiciously smaller than the DB set, which would risk destroying
-// persisted data on a rewrite.
-var ErrSaveRefusedBySafetyGuard = errors.New("save refused by safety guard: in-memory group set too small relative to DB")
-
-// ErrGroupMembershipRefusedEmptyMemory is returned by diffGroupMemberships when
-// the in-memory channel slice for a group is empty while the DB has
-// memberships for the same group. Used to refuse destructive wipes that could
-// happen from a stale partial load.
-var ErrGroupMembershipRefusedEmptyMemory = errors.New("group membership refused: empty in-memory channel slice would wipe persisted memberships")
-
-// safetyGuardMinRatio is the minimum acceptable ratio of in-memory groups to
-// DB groups. If the ratio falls below this and the DB has more than
-// safetyGuardMinDBGroups groups, save() refuses the destructive rewrite.
-const (
-	safetyGuardMinRatio    = 0.5
-	safetyGuardMinDBGroups = 4
-)
+// ErrSaveRefusedBySafetyGuard + ErrGroupMembershipRefusedEmptyMemory +
+// safetyGuard tuning constants + SaveStatus struct are OWNED by
+// save_status.go (S11 cutover: extract shared audit-persistence types
+// out of storage_persistence.go so a later Storage-struct-drop commit
+// doesn't have to chase them across files). The runtime semantics still
+// flow through *Storage's recordStatus / checkSafetyGuard paths; the
+// moved declarations are pure refactors without behaviour change.
 
 // load reads data from canonical SQLite tables (youtube_groups_v2, youtube_channels).
 func (s *Storage) load() error {
@@ -180,22 +169,6 @@ func (s *Storage) checkSafetyGuard() error {
 		}
 	}
 	return nil
-}
-
-// SaveStatus records the outcome of the most recent save() / SyncGroup /
-// SaveData / saveAllReconcile invocation. Surfaced by the
-// /api/v1/audit/persistence endpoint so operators can verify the safety
-// guard, the per-group path, and the live counts are coherent end-to-end.
-type SaveStatus struct {
-	Timestamp     time.Time `json:"timestamp"`
-	Operation     string    `json:"operation"`              // "save", "save_all_reconcile", "sync_group", "save_data", "cleanup"
-	GroupTarget   string    `json:"group,omitempty"`        // name when Operation = "sync_group"
-	Result        string    `json:"result"`                 // "ok" | "refused_safety_guard" | "error: ..."
-	Error         string    `json:"error,omitempty"`
-	MemoryGroups  int       `json:"memory_groups"`
-	DBGroupCount  int       `json:"db_group_count"`
-	Ratio         float64   `json:"memory_db_ratio"`
-	BypassGuard   bool      `json:"bypass_safety_guard,omitempty"`
 }
 
 // save persists the full in-memory state to canonical SQLite tables using a

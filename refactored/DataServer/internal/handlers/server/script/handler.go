@@ -12,6 +12,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"velox-server/internal/config"
+	"velox-server/internal/creatorflow"
 	remoteansible "velox-server/internal/handlers/remote/ansible"
 	"velox-server/internal/jobs/enqueue"
 	"velox-server/internal/queue"
@@ -30,6 +31,7 @@ type ScriptHandlers struct {
 	queue    *queue.FileQueue
 	sqliteDB *store.SQLiteStore
 	dataDir  string
+	creator  *creatorflow.Service
 }
 
 func NewScriptHandlers(cfg *config.Config, q *queue.FileQueue, sqliteDB *store.SQLiteStore) *ScriptHandlers {
@@ -41,6 +43,7 @@ func NewScriptHandlers(cfg *config.Config, q *queue.FileQueue, sqliteDB *store.S
 		queue:    q,
 		sqliteDB: sqliteDB,
 		dataDir:  dataDir,
+		creator:  creatorflow.New(cfg, q),
 	}
 }
 
@@ -76,6 +79,15 @@ func (h *ScriptHandlers) GenerateWithImagesHandler(cfg *config.Config) gin.Handl
 		if resolvedMasterURL == "" || remoteansible.IsLocalhostURL(resolvedMasterURL) {
 			resolvedMasterURL = detectPublicMasterURL()
 		}
+		if h.creator != nil {
+			if creatorResponse, used, err := h.creator.Forward(c.Request.Context(), payload); err != nil {
+				log.Printf("[SCRIPT] creator stage failed, falling back to local enqueue: %v", err)
+			} else if used {
+				c.JSON(http.StatusOK, creatorResponse)
+				return
+			}
+		}
+
 		normalized, err := enqueue.BuildSceneImagePayloadForMaster(payload, h.dataDir, cfg.VideosDir, resolvedMasterURL)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": err.Error()})
