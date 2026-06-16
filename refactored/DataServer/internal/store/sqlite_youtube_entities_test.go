@@ -2,9 +2,11 @@ package store
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 	"time"
 
+	"velox-server/internal/integrations/youtube"
 	"velox-server/internal/store/youtubetypes"
 )
 
@@ -1245,3 +1247,158 @@ func TestConnectChannelAtomic_ResetsRevokedAtOnReauth(t *testing.T) {
 //  were dropped by migration 008. Use canonical tables
 //  youtube_channels and youtube_groups_v2 instead.)
 // ============================================================
+
+// ============================================================
+// Service.Membership / Service.BulkMembership — real *SQLiteStore fixture
+// ============================================================
+//
+// These tests replace the membershipStoreMock harness from
+// internal/integrations/youtube/membership_test.go. The fixture exercises
+// the SAME canonical table paths that *Storage and the boot hydrator
+// already use, so a regression in canonical-row layout would surface here
+// rather than passing silently against a hand-rolled mock.
+//
+// The Membership view translates a *SQLiteStore.GetYouTubeChannel row
+// into a typed *youtube.Channel via Service.Membership; the fixture
+// covers the (nil, nil) row-missing case, the populated row case, the
+// DB-closed / surface-error case, the empty input case, and the
+// mixed-presence BulkMembership case.
+
+// TestMembership_NoStore asserts the nil-store sentinel still returns
+// (nil, nil) without error — no fixture needed because the early-return
+// is checked before any store fan-out. The test runs first so a broken
+// nil-check would fail before fixture-side noise.
+func TestMembership_NoStore(t *testing.T) {
+	svc := youtube.ServiceWithStore(nil)
+	ch, err := svc.Membership("UC_any")
+	if err != nil {
+		t.Fatalf("Membership with nil store must NOT error; got %v", err)
+	}
+	if ch != nil {
+		t.Fatalf("Membership with nil store must return nil channel; got %+v", ch)
+	}
+}
+
+func TestMembership_RowMissing(t *testing.T) {
+	s := openTestDB(t)
+	defer s.Close()
+	svc := youtube.ServiceWithStore(s)
+	ch, err := svc.Membership("UC_missing")
+	if err != nil {
+		t.Fatalf("Membership for missing row must NOT error; got %v", err)
+	}
+	if ch != nil {
+		t.Fatalf("Membership for missing row must return nil channel; got %+v", ch)
+	}
+}
+
+func TestMembership_RowPresent(t *testing.T) {
+	s := openTestDB(t)
+	defer s.Close()
+	// Seed a canonical row with the columns Membership surfaces so the
+	// typed-view decode is exercised end-to-end through the SQL layer.
+	if err := s.UpsertYouTubeChannel(
+		"UC_present", "Present Channel", "Present Display",
+		"https://youtube.com/@present", "https://example/thumb.jpg",
+		"en", "", 1234, 567,
+		"2024-01-01T00:00:00Z", "2024-06-01T00:00:00Z",
+	); err != nil {
+		t.Fatalf("seed UpsertYouTubeChannel: %v", err)
+	}
+	svc := youtube.ServiceWithStore(s)
+	ch, err := svc.Membership("UC_present")
+	if err != nil {
+		t.Fatalf("Membership for present row must NOT error; got %v", err)
+	}
+	if ch == nil {
+		t.Fatalf("Membership for present row must return non-nil channel")
+	}
+	if ch.ID != "UC_present" {
+		t.Errorf("ID: got %q, want UC_present", ch.ID)
+	}
+	if ch.Title != "Present Channel" {
+		t.Errorf("Title: got %q, want Present Channel", ch.Title)
+	}
+	if ch.Language != "en" {
+		t.Errorf("Language: got %q, want en", ch.Language)
+	}
+	if ch.SubCount != 567 {
+		t.Errorf("SubCount: got %d, want 567", ch.SubCount)
+	}
+	if ch.ViewCount != 1234 {
+		t.Errorf("ViewCount: got %d, want 1234", ch.ViewCount)
+	}
+}
+
+// TestMembership_StoreErrorSurfaced pins the DB-first invariant: a
+// failing SQL op must surface the error wrapped with the failing channel
+// id so the handler can abort its response rather than render stale RAM
+// data. Stand-in for "SQL write failed": close the SQLite handle
+// BEFORE the Membership call so any subsequent read errors out.
+func TestMembership_StoreErrorSurfaced(t *testing.T) {
+	s := openTestDB(t)
+	s.Close() // close BEFORE the Membership call
+	svc := youtube.ServiceWithStore(s)
+	_, err := svc.Membership("UC_any")
+	if err == nil {
+		t.Fatalf("Membership MUST surface SQL errors (DB-first invariant); got nil")
+	}
+	if !strings.Contains(err.Error(), "UC_any") {
+		t.Fatalf("Membership error must wrap the failing channel id; got %v", err)
+	}
+}
+
+func TestBulkMembership_EmptyInput(t *testing.T) {
+	s := openTestDB(t)
+	defer s.Close()
+	svc := youtube.ServiceWithStore(s)
+	out, err := svc.BulkMembership(nil)
+	if err != nil {
+		t.Fatalf("BulkMembership with nil input must NOT error; got %v", err)
+	}
+	if out != nil {
+		t.Fatalf("BulkMembership with nil input must return nil; got %+v", out)
+	}
+}
+
+func TestBulkMembership_MixedPresence(t *testing.T) {
+	s := openTestDB(t)
+	defer s.Close()
+	// Seed two of the four ids; the empty id and UC_missing stay absent.
+	if err := s.UpsertYouTubeChannel("UC_a", "A", "", "", "", "", "", 0, 0, "", ""); err != nil {
+		t.Fatalf("seed A: %v", err)
+	}
+	if err := s.UpsertYouTubeChannel("UC_b", "B", "", "", "", "", "", 0, 0, "", ""); err != nil {
+		t.Fatalf("seed B: %v", err)
+	}
+	svc := youtube.ServiceWithStore(s)
+	out, err := svc.BulkMembership([]string{"UC_a", "", "UC_b", "UC_missing"})
+	if err != nil {
+		t.Fatalf("BulkMembership mixed-presence must NOT error; got %v", err)
+	}
+	if len(out) != 4 {
+		t.Fatalf("BulkMembership must preserve input order; got %d entries", len(out))
+	}
+	if out[0] == nil || out[0].ID != "UC_a" || out[0].Title != "A" {
+		t.Fatalf("BulkMembership[0] expected UC_a/A; got %+v", out[0])
+	}
+	if out[1] != nil {
+		t.Fatalf("BulkMembership[1] (empty id) must be nil; got %+v", out[1])
+	}
+	if out[2] == nil || out[2].ID != "UC_b" || out[2].Title != "B" {
+		t.Fatalf("BulkMembership[2] expected UC_b/B; got %+v", out[2])
+	}
+	if out[3] != nil {
+		t.Fatalf("BulkMembership[3] (missing id) must be nil; got %+v", out[3])
+	}
+}
+
+func TestBulkMembership_StoreErrorPropagates(t *testing.T) {
+	s := openTestDB(t)
+	s.Close() // close BEFORE call so SQL op errors
+	svc := youtube.ServiceWithStore(s)
+	_, err := svc.BulkMembership([]string{"UC_a", "UC_b"})
+	if err == nil {
+		t.Fatalf("BulkMembership MUST propagate SQL errors; got nil")
+	}
+}

@@ -471,3 +471,22 @@ func (s *Service) FetchAnalytics(ctx context.Context, channelID string, days int
 func (s *Service) UpdateAnalyticsCache(ctx context.Context, channelID string, days int, data map[string]interface{}) error {
 	return s.quotaManager.UpdateAnalyticsCache(ctx, channelID, days, data)
 }
+
+// --- Test-only contract helpers (cross-package fixtures) ---
+
+// ServiceWithStore builds a *Service with ONLY the store field populated.
+// Used by cross-package tests (e.g. store/sqlite_youtube_entities_test.go)
+// that need to exercise store-driven methods like Service.Membership or
+// Service.BulkMembership against a real *SQLiteStore fixture without
+// booting the full NewService path (which requires an AES cipher and
+// initialises authManager / uploader / videoManager / quotaManager).
+//
+// Do NOT call from production code. NewService is the only path that
+// wires the AES cipher and the manager fields; ServiceWithStore leaves
+// them nil, so any production method that touches auth/uploader/etc on
+// a ServiceWithStore-built instance will panic. Tests targeting
+// membership / bulk membership only use this; tests that need a fully-
+// wired Service must call NewService.
+func ServiceWithStore(store ServiceStore) *Service {
+	return &Service{store: store}
+}
