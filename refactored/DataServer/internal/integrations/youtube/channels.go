@@ -244,16 +244,31 @@ func (s *Service) GetConfig() *ServiceConfig {
 	return s.config
 }
 
-// DeleteChannel permanently deletes a channel
+// DeleteChannel permanently deletes a channel: removes the channel row,
+// every group membership, the OAuth token row (FK CASCADE), the canonical
+// JSON token file, and the in-memory entry — all in a coherent
+// "everything-or-nothing" pass. Distinct from RevokeToken which keeps the
+// channel row and only marks oauth as revoked (disable, not destroy).
+//
+// The SQL cleanup is delegated to store.DeleteChannelAtomic so a
+// failed mid-transaction leaves no orphan rows in the canonical tables.
+// If the SQL store is unavailable, DeleteChannel returns the error so
+// the operator knows the channel is still considered alive server-side.
+// JSON file delete and RAM cleanup happen only after the SQL transaction
+// commits to preserve the "everything or nothing" invariant.
 func (s *Service) DeleteChannel(channelID string) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	channel, exists := s.channels[channelID]
+	s.mu.Unlock()
 	if !exists {
 		return fmt.Errorf("channel not found")
 	}
 
+	// Remove the channel from each group's in-memory slice so the
+	// listing endpoints stop surfacing it immediately. We do this BEFORE
+	// the SQL pass so a failed SQL delete still has the user-facing
+	// surface consistent with the error.
+	s.mu.Lock()
 	for groupName, group := range s.groups {
 		for i, chID := range group.Channels {
 			if chID == channelID {
@@ -263,28 +278,27 @@ func (s *Service) DeleteChannel(channelID string) error {
 			}
 		}
 	}
+	s.mu.Unlock()
 
+	// Atomic SQL cleanup: group memberships + channel row + oauth tokens.
 	if s.store != nil {
-		if err := s.store.DeleteYouTubeGroupChannelsByChannelID(channelID); err != nil {
-			log.Printf("[WARN] Failed to remove DB memberships for channel %s: %v", channelID, err)
+		if _, err := s.store.DeleteChannelAtomic(channelID); err != nil {
+			return fmt.Errorf("delete channel: transactional cleanup failed for %s: %w", channelID, err)
 		}
-		if err := s.store.DeleteYouTubeChannel(channelID); err != nil {
-			log.Printf("[WARN] Failed to delete canonical channel %s: %v", channelID, err)
-		}
+		log.Printf("[DEL] Atomic SQL cleanup for channel %s completed", channelID)
 	}
 
 	if channel.TokenPath != "" {
-		if err := os.Remove(channel.TokenPath); err != nil {
+		if err := os.Remove(channel.TokenPath); err != nil && !os.IsNotExist(err) {
 			log.Printf("[WARN] Failed to remove token file: %v", err)
 		} else {
 			log.Printf("[DEL] Deleted token file: %s", channel.TokenPath)
 		}
 	}
 
+	s.mu.Lock()
 	delete(s.channels, channelID)
-	// Persisted in-place above via DeleteYouTubeGroupChannelsByChannelID +
-	// DeleteYouTubeChannel. No need to call saveGroups() (which would
-	// destructively rewrite every group in DB).
+	s.mu.Unlock()
 
 	log.Printf("[OK] Channel permanently deleted: %s", channelID)
 	return nil

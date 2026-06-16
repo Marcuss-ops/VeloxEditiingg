@@ -3,8 +3,12 @@ package youtube
 
 import (
 	"context"
+	"fmt"
 	"log"
+	"net/http"
+	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -33,6 +37,13 @@ type YouTubeStore interface {
 	// channel ingest.
 	UpdateYouTubeChannelMetadata(channelID, title, thumbnailURL string) error
 	DeleteYouTubeChannel(channelID string) error
+	// DeleteChannelAtomic removes the channel row, all group memberships,
+	// and (via FK CASCADE) the matching youtube_oauth_tokens row in a
+	// single SQLite transaction. Returns the count of memberships cleared
+	// for the audit endpoint. Used by Service.DeleteChannel (full remove);
+	// distinct from MarkYouTubeOAuthTokenRevoked (used by Service.RevokeToken
+	// for the disable-but-keep semantics).
+	DeleteChannelAtomic(channelID string) (int64, error)
 
 	// Canonical: YouTube OAuth Tokens (youtube_oauth_tokens — encryption at-rest
 	// is the caller's responsibility via internal/secrets/aesgcm).
@@ -199,8 +210,100 @@ func (s *Service) ValidateToken(ctx context.Context, channelID string) (map[stri
 	return s.authManager.ValidateToken(ctx, channelID)
 }
 
+// RevokeToken is the canonical orchestration for taking a channel's OAuth
+// credentials out of service WITHOUT removing the channel row from
+// youtube_channels. Distinct from DeleteChannel (which nukes the channel
+// + oauth row + groups + JSON, FK-cascaded) — see verdict/rationale in
+// docs/youtube_sqlite_migration_plan.md step S5d.
+//
+// Sequence (deterministic order):
+//  1. HTTP POST to Google oauth2 revoke endpoint (best-effort: the credential
+//     may already be invalid, so a non-200 is logged but does not abort).
+//  2. UPDATE youtube_oauth_tokens SET revoked_at = now WHERE channel_id = ? AND
+//     revoked_at IS NULL (atomic SQL via the repository's
+//     MarkYouTubeOAuthTokenRevoked; idempotent).
+//  3. Remove the canonical account_<channel>.json on disk (best-effort:
+//     orphan JSON is acceptable and garbage-collected later).
+//  4. Delete the channel from the in-memory s.channels under the service's
+//     RWMutex (so concurrent reads cannot see a half-revoked entry).
+//
+// Returns nil on success; returns an error if the repository step fails
+// so the caller can retry without leaving SQL state / RAM state
+// inconsistent. The RAM delete still happens even on SQL error so the
+// user-facing surface stays consistent (the SQL row will be flagged as
+// revoked by the next attach attempt or by an admin audit).
 func (s *Service) RevokeToken(ctx context.Context, channelID string) error {
-	return s.authManager.RevokeToken(ctx, channelID)
+	s.mu.RLock()
+	ch, exists := s.channels[channelID]
+	s.mu.RUnlock()
+	if !exists {
+		return fmt.Errorf("revoke: channel not found: %s", channelID)
+	}
+
+	// Step 1: best-effort Google revocation POST. The provider may already
+	// refuse an expired token; non-2xx is logged but does not abort so a
+	// local flag is still set even when the provider is unreachable.
+	if ch.AccessToken != "" {
+		if err := s.revokeAtGoogle(ctx, ch.AccessToken); err != nil {
+			log.Printf("[WARN] revoke: Google endpoint POST failed for %s: %v", channelID, err)
+		}
+	}
+
+	// Step 2: atomic SQLite mark-revoked. This is THE single source-of-truth
+	// step. A non-nil error here means the credential is still considered
+	// active server-side, so we return the error WITHOUT the RAM delete
+	// happening so the operator can retry on the SAME cached state.
+	if s.store != nil {
+		if err := s.store.MarkYouTubeOAuthTokenRevoked(channelID); err != nil {
+			return fmt.Errorf("revoke: persist revoked_at to sqlite: %w", err)
+		}
+	}
+
+	// Step 3: best-effort delete of the canonical JSON token file. An
+	// orphan JSON is tolerable because loadChannels() error-skips and the
+	// S6 deprecation will eventually remove the JSON code path entirely.
+	if ch.TokenPath != "" {
+		if err := os.Remove(ch.TokenPath); err != nil && !os.IsNotExist(err) {
+			log.Printf("[WARN] revoke: JSON token file removal failed for %s: %v", channelID, err)
+		}
+	}
+
+	// Step 4: in-memory delete only after the canonical store has accepted
+	// the revocation, so concurrent readers don't see a half-revoked
+	// channel. Done under the write lock so the map iteration order is
+	// deterministic in tests.
+	s.mu.Lock()
+	delete(s.channels, channelID)
+	s.mu.Unlock()
+
+	log.Printf("[OK] Channel %s credentials revoked and removed from cache", channelID)
+	return nil
+}
+
+// revokeAtGoogle POSTs to the Google OAuth2 token revocation endpoint.
+// Returns nil on 200; non-200 responses are returned as error so the
+// caller can decide whether to fail-closed (preferred for token-bearing
+// endpoints) or just log (preferred for best-effort orchestration like
+// RevokeToken, which already commits the local SQLite state).
+//
+// The HTTP body is discarded after the status check — Google's revoke
+// endpoint returns no JSON body.
+func (s *Service) revokeAtGoogle(ctx context.Context, accessToken string) error {
+	const revokeURL = "https://oauth2.googleapis.com/revoke"
+	req, err := http.NewRequestWithContext(ctx, "POST", revokeURL, strings.NewReader("token="+accessToken))
+	if err != nil {
+		return fmt.Errorf("build request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("network: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("google revoke status=%d", resp.StatusCode)
+	}
+	return nil
 }
 
 // --- Public API: Upload (Delegated to Uploader) ---
