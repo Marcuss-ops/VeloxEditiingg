@@ -130,3 +130,90 @@ func TestGenerateWithImages_EnqueuesSceneImageJob(t *testing.T) {
 		t.Fatalf("expected job_id %s, got %v", jobID, statusRes["job_id"])
 	}
 }
+
+func TestGenerateWithImages_UsesCreatorStageWhenConfigured(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "velox.db")
+	db, err := store.NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("new sqlite store: %v", err)
+	}
+	q, err := queue.NewFileQueue(&queue.FileQueueConfig{MaxRetries: 3, DBStore: db})
+	if err != nil {
+		t.Fatalf("new file queue: %v", err)
+	}
+
+	mockCreator := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/script/generate-with-images" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		var incoming map[string]interface{}
+		if err := json.NewDecoder(r.Body).Decode(&incoming); err != nil {
+			t.Fatalf("decode incoming payload: %v", err)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"ok":       true,
+			"status":   "completed",
+			"trace_id": "creator-trace-1",
+			"result": map[string]interface{}{
+				"title":       "Creator Video",
+				"script_text": "Creator generated script",
+				"scenes_json": `[
+					{"text":"Scene 1","image_link":"https://example.com/scene1.png","duration_seconds":4}
+				]`,
+				"voiceover_path": "https://example.com/voice.mp3",
+				"youtube_group":  "amish",
+			},
+		})
+	}))
+	defer mockCreator.Close()
+
+	cfg := &config.Config{
+		DataDir:               tempDir,
+		VideosDir:             filepath.Join(tempDir, "videos"),
+		DBDSN:                 dbPath,
+		RemoteEngineURL:       mockCreator.URL,
+		RemoteEngineTimeoutMS: 5000,
+		RemoteEngineRetries:   1,
+	}
+
+	r := gin.New()
+	RegisterRoutes(r.Group("/api/script"), cfg, q, db)
+
+	reqBody, _ := json.Marshal(map[string]interface{}{
+		"video_name":     "Creator Video",
+		"voiceover_path": "https://example.com/voice.mp3",
+		"scenes": []interface{}{
+			map[string]interface{}{"text": "Scene 1", "image_link": "https://example.com/scene1.png"},
+		},
+	})
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/script/generate-with-images", bytes.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+	req.RemoteAddr = "127.0.0.1:12345"
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d body=%s", w.Code, w.Body.String())
+	}
+
+	var res map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &res); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if res["creator_stage"] != "remote_engine" {
+		t.Fatalf("want creator_stage remote_engine, got %v", res["creator_stage"])
+	}
+	if res["creator_job_id"] != "creator-trace-1" {
+		t.Fatalf("want creator_job_id creator-trace-1, got %v", res["creator_job_id"])
+	}
+	if res["job_id"] == "" {
+		t.Fatalf("want worker job_id, got empty")
+	}
+	if res["status"] != "PENDING" {
+		t.Fatalf("want worker status PENDING, got %v", res["status"])
+	}
+}
