@@ -2,6 +2,7 @@ package youtube
 
 import (
 	"fmt"
+	"log"
 	"net/http"
 	"time"
 
@@ -53,34 +54,67 @@ func (h *YouTubeHandlers) ResolveChannelByLanguage(c *gin.Context) {
 
 // ListGroups lists all upload channel groups with channel details
 // GET /api/v1/youtube/groups
-// Now reads from the unified Storage (shared with YouTubeManager) instead of Service.groups.
+//
+// S11 POC migration (group_handlers.go is the first handler file to
+// drop h.storage on the READ path):
+//
+//   Previously: groups, _ := h.storage.ListGroups() returned a
+//   map[name]*Group where each Group carried a full []Channel slice
+//   the legacy Storage struct mirrored into in-RAM. The handler loop
+//   read ch.Title / ch.Name / ch.Thumbnail / ch.Language directly off
+//   that slice, enriching with h.service.GetAuthChannel metadata.
+//
+//   Now: h.service.GetGroups() returns map[name]*ChannelGroup where
+//   Channels is []string (channel IDs only — the canonical S11
+//   membership shape). For each ID, the handler fetches the typed
+//   canonical row via h.service.BulkMembership (added in commit
+//   8e74bd99) so the channel metadata stays sourced from the SQLite
+//   youtube_channels table rather than from a stale in-RAM copy.
+//   BulkMembership preserves input order and surfaces SQL errors via
+//   fail-closed propagation; we log + degrade to an empty channels
+//   slice rather than returning 500 because partial data is still
+//   operator-actionable, and the next handler call retries the read.
+//
+// Mutations on this file (CreateGroup / DeleteGroup / AddChannelToGroup
+// / RemoveChannelFromGroup) still call h.storage; their per-handler
+// audit-pass migration queues separately.
 func (h *YouTubeHandlers) ListGroups(c *gin.Context) {
-	groups, _ := h.storage.ListGroups()
+	groups := h.service.GetGroups()
 
-	// Return all groups found in storage
 	result := make([]map[string]interface{}, 0, len(groups))
 	for _, g := range groups {
-		groupData := map[string]interface{}{
-			"name":        g.Name,
-			"description": "",
-			"privacy":     "",
-			"channels":    make([]map[string]interface{}, 0, len(g.Channels)),
-			"count":       len(g.Channels),
-			"group_type":  g.GroupType,
+		// Fetch the canonical channel rows via BulkMembership. nil entries
+		// indicate a membership pointing at a channel whose youtube_channels
+		// row has gone away (e.g. a deleted channel) — render as empty so
+		// the SPA doesn't see a phantom {"id":"","title":""} entry.
+		channels, err := h.service.BulkMembership(g.Channels)
+		if err != nil {
+			log.Printf("[WARN] ListGroups: bulk membership fetch failed for group %s: %v (returning empty channel slice)", g.Name, err)
+			channels = nil
 		}
 
-		// Enrich channels with metadata from Service OAuth channels
-		channelsList := groupData["channels"].([]map[string]interface{})
-		for _, ch := range g.Channels {
-			authCh := h.service.GetAuthChannel(ch.ID)
+		groupData := map[string]interface{}{
+			"name":        g.Name,
+			"description": g.Description,
+			"privacy":     g.Privacy,
+			"group_type":  g.GroupType,
+			"channels":    make([]map[string]interface{}, 0, len(channels)),
+			"count":       len(channels),
+		}
 
-			// Start with data from Storage, override with Auth data if available
-			channelID := ch.ID
+		channelsList := groupData["channels"].([]map[string]interface{})
+		for _, ch := range channels {
+			if ch == nil {
+				continue
+			}
+
+			// Auth data overrides canonical row values when AuthChannel
+			// has fresher fields (live OAuth sessions take precedence).
+			authCh := h.service.GetAuthChannel(ch.ID)
 			title := ch.Title
 			name := ch.Name
 			thumbnail := ch.Thumbnail
 			language := ch.Language
-
 			if authCh != nil {
 				if authCh.Title != "" {
 					title = authCh.Title
@@ -97,7 +131,7 @@ func (h *YouTubeHandlers) ListGroups(c *gin.Context) {
 			}
 
 			channelsList = append(channelsList, map[string]interface{}{
-				"id":        channelID,
+				"id":        ch.ID,
 				"title":     title,
 				"name":      name,
 				"thumbnail": thumbnail,

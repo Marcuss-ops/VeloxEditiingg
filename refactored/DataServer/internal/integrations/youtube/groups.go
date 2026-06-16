@@ -44,6 +44,7 @@ func (s *Service) loadCanonicalGroups() bool {
 		if name == "" {
 			continue
 		}
+		groupType, _ := row["group_type"].(string)
 		desc, _ := row["description"].(string)
 		privacy, _ := row["privacy"].(string)
 		gid, _ := row["id"].(int64)
@@ -52,6 +53,7 @@ func (s *Service) loadCanonicalGroups() bool {
 			Name:        name,
 			Description: desc,
 			Privacy:     privacy,
+			GroupType:   groupType,
 			Channels:    groupChannels[gid],
 		}
 	}
