@@ -13,6 +13,6 @@ func loadStorageConfig() StorageConfig {
 	c.Bucket = os.Getenv("VELOX_S3_BUCKET")
 	c.AccessKeyID = os.Getenv("VELOX_S3_ACCESS_KEY_ID")
 	c.SecretKey = os.Getenv("VELOX_S3_SECRET_ACCESS_KEY")
-	c.UseSSL = os.Getenv("VELOX_S3_USE_SSL") == "true" || os.Getenv("VELOX_S3_USE_SSL") == "1"
+	c.UseSSL = boolFromEnv("VELOX_S3_USE_SSL", false)
 	return c
 }
