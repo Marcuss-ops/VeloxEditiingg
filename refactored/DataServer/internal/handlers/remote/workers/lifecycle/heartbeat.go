@@ -1,4 +1,4 @@
-package workers
+package lifecycle
 
 import (
 	"fmt"
@@ -9,10 +9,8 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// HeartbeatHandler gestisce gli heartbeat dei worker con autorizzazione via token.
-// Unifica la logica della precedente funzione standalone Heartbeat() con il metodo
-// su WorkerLifecycle, aggiungendo il controllo di autorizzazione.
-func (wl *WorkerLifecycle) HeartbeatHandler() gin.HandlerFunc {
+// HeartbeatHandler handles worker heartbeats with token authorization.
+func (h *Handler) HeartbeatHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var body struct {
 			WorkerID        string                 `json:"worker_id"`
@@ -35,7 +33,7 @@ func (wl *WorkerLifecycle) HeartbeatHandler() gin.HandlerFunc {
 			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "missing worker_id"})
 			return
 		}
-		if !wl.authorizeWorkerRequest(c, body.WorkerID) {
+		if !h.authorizeWorkerRequest(c, body.WorkerID) {
 			return
 		}
 
@@ -67,14 +65,14 @@ func (wl *WorkerLifecycle) HeartbeatHandler() gin.HandlerFunc {
 			extra["capabilities"] = body.Capabilities
 		}
 
-		if err := wl.reg.Heartbeat(c.Request.Context(), body.WorkerID, body.WorkerName, status, body.CurrentJob, extra); err != nil {
+		if err := h.reg.Heartbeat(c.Request.Context(), body.WorkerID, body.WorkerName, status, body.CurrentJob, extra); err != nil {
 			log.Printf("workers/heartbeat: heartbeat failed for %s: %v", body.WorkerID, err)
 		}
 		c.JSON(http.StatusOK, gin.H{"ok": true})
 	}
 }
 
-func (wl *WorkerLifecycle) UpdateStatusHandler() gin.HandlerFunc {
+func (h *Handler) UpdateStatusHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var body struct {
 			WorkerID string                 `json:"worker_id"`
@@ -90,13 +88,13 @@ func (wl *WorkerLifecycle) UpdateStatusHandler() gin.HandlerFunc {
 			c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "worker_id required"})
 			return
 		}
-		if !wl.authorizeWorkerRequest(c, body.WorkerID) {
+		if !h.authorizeWorkerRequest(c, body.WorkerID) {
 			return
 		}
 
 		log.Printf("[UPDATE] Worker status update: worker=%s status=%s details=%v", body.WorkerID, body.Status, body.Details)
 
-		existing := wl.reg.GetWorker(c.Request.Context(), body.WorkerID)
+		existing := h.reg.GetWorker(c.Request.Context(), body.WorkerID)
 		recentLogs := []string{}
 		recentErrors := []string{}
 		if existing != nil {
@@ -114,7 +112,7 @@ func (wl *WorkerLifecycle) UpdateStatusHandler() gin.HandlerFunc {
 				recentErrors = recentErrors[len(recentErrors)-120:]
 			}
 		}
-		_ = wl.reg.UpdateWorker(c.Request.Context(), body.WorkerID, map[string]interface{}{
+		_ = h.reg.UpdateWorker(c.Request.Context(), body.WorkerID, map[string]interface{}{
 			"recent_logs":   recentLogs,
 			"recent_errors": recentErrors,
 		})

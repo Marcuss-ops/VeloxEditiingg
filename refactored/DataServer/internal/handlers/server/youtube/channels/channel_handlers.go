@@ -1,4 +1,4 @@
-package youtube
+package channels
 
 import (
 	"context"
@@ -12,7 +12,7 @@ import (
 
 // ListChannels lists all available YouTube channels
 // GET /api/v1/youtube/channels
-func (h *YouTubeHandlers) ListChannels(c *gin.Context) {
+func (h *Handler) ListChannels(c *gin.Context) {
 	validateParam := c.Query("validate_tokens")
 	if validateParam == "" {
 		validateParam = c.Query("validate")
@@ -32,7 +32,6 @@ func (h *YouTubeHandlers) ListChannels(c *gin.Context) {
 			"language":  ch.Language,
 		}
 
-		// Optionally validate tokens
 		if validate {
 			ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
 			defer cancel()
@@ -48,7 +47,7 @@ func (h *YouTubeHandlers) ListChannels(c *gin.Context) {
 				channelData["token_valid"] = false
 			}
 		} else {
-			channelData["token_valid"] = true // Assume valid if not validating
+			channelData["token_valid"] = true
 		}
 
 		result = append(result, channelData)
@@ -63,7 +62,7 @@ func (h *YouTubeHandlers) ListChannels(c *gin.Context) {
 
 // GetChannel gets a specific channel
 // GET /api/v1/youtube/channels/:id
-func (h *YouTubeHandlers) GetChannel(c *gin.Context) {
+func (h *Handler) GetChannel(c *gin.Context) {
 	channelID := c.Param("id")
 
 	channel := h.service.GetChannel(channelID)
@@ -87,12 +86,11 @@ func (h *YouTubeHandlers) GetChannel(c *gin.Context) {
 	})
 }
 
-// DeleteChannel deletes a channel permanently (removes from all groups, Storage, and deletes token)
+// DeleteChannel deletes a channel permanently
 // DELETE /api/v1/youtube/channels/:id
-func (h *YouTubeHandlers) DeleteChannel(c *gin.Context) {
+func (h *Handler) DeleteChannel(c *gin.Context) {
 	channelID := c.Param("id")
 
-	// Remove from unified Storage groups first (all types)
 	groups, _ := h.storage.ListGroups()
 	for groupName, group := range groups {
 		for _, ch := range group.Channels {
@@ -103,7 +101,6 @@ func (h *YouTubeHandlers) DeleteChannel(c *gin.Context) {
 		}
 	}
 
-	// Then remove via Service (handles token deletion and in-memory cleanup)
 	err := h.service.DeleteChannel(channelID)
 	if err != nil {
 		if err.Error() == "channel not found" {
@@ -126,9 +123,9 @@ func (h *YouTubeHandlers) DeleteChannel(c *gin.Context) {
 	})
 }
 
-// RefreshChannelsMetadata refreshes the title and thumbnail for all channels with OAuth tokens
+// RefreshChannelsMetadata refreshes the title and thumbnail for all channels
 // POST /api/v1/youtube/channels/refresh-metadata
-func (h *YouTubeHandlers) RefreshChannelsMetadata(c *gin.Context) {
+func (h *Handler) RefreshChannelsMetadata(c *gin.Context) {
 	ctx := c.Request.Context()
 
 	successCount, errors := h.service.RefreshAllChannelsMetadata(ctx)
@@ -147,9 +144,9 @@ func (h *YouTubeHandlers) RefreshChannelsMetadata(c *gin.Context) {
 	})
 }
 
-// GetChannelAnalytics returns analytics data for a specific channel from SQLite.
+// GetChannelAnalytics returns analytics data for a specific channel
 // GET /api/v1/youtube/analytics/channel/:id?days=7
-func (h *YouTubeHandlers) GetChannelAnalytics(c *gin.Context) {
+func (h *Handler) GetChannelAnalytics(c *gin.Context) {
 	channelID := c.Param("id")
 	daysStr := c.DefaultQuery("days", "7")
 
@@ -163,9 +160,9 @@ func (h *YouTubeHandlers) GetChannelAnalytics(c *gin.Context) {
 	})
 }
 
-// UpdateChannel handles updating channel metadata (language, token_status, etc.)
+// UpdateChannel handles updating channel metadata
 // PATCH /api/v1/youtube/channels/:id
-func (h *YouTubeHandlers) UpdateChannel(c *gin.Context) {
+func (h *Handler) UpdateChannel(c *gin.Context) {
 	channelID := c.Param("id")
 
 	var req map[string]interface{}
@@ -177,7 +174,6 @@ func (h *YouTubeHandlers) UpdateChannel(c *gin.Context) {
 		return
 	}
 
-	// Update Service first (OAuth channels.json)
 	if err := h.service.UpdateChannelMetadata(channelID, req); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"ok":    false,
@@ -186,7 +182,6 @@ func (h *YouTubeHandlers) UpdateChannel(c *gin.Context) {
 		return
 	}
 
-	// Then sync language to Storage if present in request
 	if lang, ok := req["language"].(string); ok && lang != "" {
 		groups, _ := h.storage.ListGroups()
 		for _, group := range groups {
@@ -208,13 +203,12 @@ func (h *YouTubeHandlers) UpdateChannel(c *gin.Context) {
 	})
 }
 
-// AutoDetectLanguage auto-detects the language for a channel and saves it.
+// AutoDetectLanguage auto-detects the language for a channel
 // POST /api/v1/youtube/channels/:id/language/auto-detect
-func (h *YouTubeHandlers) AutoDetectLanguage(c *gin.Context) {
+func (h *Handler) AutoDetectLanguage(c *gin.Context) {
 	channelID := c.Param("id")
 	channelName := c.Query("channel_name")
 
-	// Get channel name from service if not provided
 	if channelName == "" {
 		if ch := h.service.GetAuthChannel(channelID); ch != nil {
 			channelName = ch.Title
@@ -226,12 +220,10 @@ func (h *YouTubeHandlers) AutoDetectLanguage(c *gin.Context) {
 
 	lang := h.service.DetectChannelLanguage(c.Request.Context(), channelID, channelName)
 
-	// Save to Service (AuthChannel channels.json)
 	_ = h.service.UpdateChannelMetadata(channelID, map[string]interface{}{
 		"language": lang,
 	})
 
-	// Save to Storage (all groups where this channel exists)
 	groups, _ := h.storage.ListGroups()
 	for _, group := range groups {
 		for i := range group.Channels {
@@ -255,7 +247,6 @@ func (h *YouTubeHandlers) AutoDetectLanguage(c *gin.Context) {
 	})
 }
 
-// Helper: map language code to readable name
 func languageCodeToName(code string) string {
 	names := map[string]string{
 		"en": "English", "it": "Italiano", "es": "Español", "fr": "Français",
@@ -269,7 +260,6 @@ func languageCodeToName(code string) string {
 	return "Unknown"
 }
 
-// Helper: map language code to flag emoji
 func languageCodeToFlag(code string) string {
 	flags := map[string]string{
 		"en": "\U0001F1EC\U0001F1E7", "it": "\U0001F1EE\U0001F1F9", "es": "\U0001F1EA\U0001F1F8", "fr": "\U0001F1EB\U0001F1F7", "de": "\U0001F1E9\U0001F1EA",
@@ -284,15 +274,11 @@ func languageCodeToFlag(code string) string {
 
 // ListUndefinedChannels lists channels not in any upload group
 // GET /api/v1/youtube/channels/undefined
-// Uses the unified Storage to check group membership instead of Service.groups.
-func (h *YouTubeHandlers) ListUndefinedChannels(c *gin.Context) {
-	// Get all OAuth channels from Service
+func (h *Handler) ListUndefinedChannels(c *gin.Context) {
 	authChannels := h.service.GetAuthChannels()
 
-	// Get all upload groups from unified Storage
 	groups, _ := h.storage.ListGroups()
 
-	// Build set of channel IDs assigned to upload groups
 	assigned := make(map[string]bool, len(authChannels))
 	for _, g := range groups {
 		if g.GroupType != "" && g.GroupType != "upload" {
@@ -303,7 +289,6 @@ func (h *YouTubeHandlers) ListUndefinedChannels(c *gin.Context) {
 		}
 	}
 
-	// Find channels not in any upload group
 	result := make([]gin.H, 0)
 	for _, ac := range authChannels {
 		if !assigned[ac.ID] {

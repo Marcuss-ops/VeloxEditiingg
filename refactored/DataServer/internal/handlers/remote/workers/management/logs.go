@@ -1,4 +1,4 @@
-package workers
+package management
 
 import (
 	"net/http"
@@ -62,9 +62,6 @@ func workerLogsResponse(c *gin.Context, found *workersreg.WorkerInfo, limit int)
 }
 
 // ShowlogHandler returns recent worker logs (showlog push) from registry.
-// Query params:
-// - worker (preferred), or worker_id / worker_name / ip
-// - limit (default 200, max 1000)
 func ShowlogHandler(reg *workersreg.Registry) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		worker := strings.TrimSpace(c.Query("worker"))
@@ -93,8 +90,7 @@ func ShowlogHandler(reg *workersreg.Registry) gin.HandlerFunc {
 	}
 }
 
-// WorkerLogsHandler returns worker logs from path-param route:
-// GET /api/v1/workers/:id/logs?tail=200
+// WorkerLogsHandler returns worker logs from path-param route.
 func WorkerLogsHandler(reg *workersreg.Registry) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		workerID := strings.TrimSpace(c.Param("id"))

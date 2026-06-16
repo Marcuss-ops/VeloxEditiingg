@@ -9,6 +9,10 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+
+	"velox-server/internal/handlers/server/youtube/channels"
+	"velox-server/internal/handlers/server/youtube/creative"
+	"velox-server/internal/handlers/server/youtube/videos"
 )
 
 // ListTokens lists all YouTube token files
@@ -65,25 +69,29 @@ func (h *YouTubeHandlers) ListTokens(c *gin.Context) {
 
 // RegisterYouTubeRoutes registers all YouTube API routes
 func RegisterYouTubeRoutes(rg gin.IRouter, h *YouTubeHandlers) {
+	ch := channels.NewHandler(h.GetService(), h.GetStorage())
+	vh := videos.NewHandler(h.GetService(), h.ClearPrivateVideosCache)
+	cr := creative.NewHandler(h.GetService())
+
 	// Tokens
 	rg.GET("/tokens/list", h.ListTokens)
 
 	// Channels
-	rg.GET("/channels", h.ListChannels)
-	rg.GET("/channels/undefined", h.ListUndefinedChannels)
-	rg.POST("/channels/refresh-metadata", h.RefreshChannelsMetadata)
-	rg.POST("/channels/validate-all", h.ValidateAllTokens)
-	rg.POST("/channels/bulk-delete", h.BulkDeleteChannels)
-	rg.POST("/channels/batch-language", h.BatchUpdateLanguage)
-	rg.GET("/channels/stats", h.GetChannelStats)
-	rg.GET("/channels/duplicates", h.DetectDuplicateChannels)
-	rg.GET("/channels/export", h.ExportChannels)
-	rg.GET("/channels/:id", h.GetChannel)
-	rg.GET("/channels/:id/groups", h.GetChannelGroups)
-	rg.PATCH("/channels/:id", h.UpdateChannel)
-	rg.POST("/channels/:id/move", h.MoveChannelToGroup)
-	rg.POST("/channels/:id/language/auto-detect", h.AutoDetectLanguage)
-	rg.DELETE("/channels/:id", h.DeleteChannel)
+	rg.GET("/channels", ch.ListChannels)
+	rg.GET("/channels/undefined", ch.ListUndefinedChannels)
+	rg.POST("/channels/refresh-metadata", ch.RefreshChannelsMetadata)
+	rg.POST("/channels/validate-all", ch.ValidateAllTokens)
+	rg.POST("/channels/bulk-delete", ch.BulkDeleteChannels)
+	rg.POST("/channels/batch-language", ch.BatchUpdateLanguage)
+	rg.GET("/channels/stats", ch.GetChannelStats)
+	rg.GET("/channels/duplicates", ch.DetectDuplicateChannels)
+	rg.GET("/channels/export", ch.ExportChannels)
+	rg.GET("/channels/:id", ch.GetChannel)
+	rg.GET("/channels/:id/groups", ch.GetChannelGroups)
+	rg.PATCH("/channels/:id", ch.UpdateChannel)
+	rg.POST("/channels/:id/move", ch.MoveChannelToGroup)
+	rg.POST("/channels/:id/language/auto-detect", ch.AutoDetectLanguage)
+	rg.DELETE("/channels/:id", ch.DeleteChannel)
 
 	// Groups
 	rg.GET("/groups", h.ListGroups)
@@ -93,16 +101,16 @@ func RegisterYouTubeRoutes(rg gin.IRouter, h *YouTubeHandlers) {
 	rg.DELETE("/groups/:name/channels/:channel", h.RemoveChannelFromGroup)
 
 	// Upload
-	rg.POST("/upload", h.UploadVideo)
-	rg.POST("/upload-path", h.UploadVideoFromPath)
-	rg.POST("/batch-upload", h.BatchUpload)
+	rg.POST("/upload", vh.UploadVideo)
+	rg.POST("/upload-path", vh.UploadVideoFromPath)
+	rg.POST("/batch-upload", vh.BatchUpload)
 
 	// Video Management
 	rg.GET("/videos", h.ListVideos)
-	rg.POST("/videos/:video_id/thumbnail", h.SetThumbnail)
-	rg.POST("/videos/:video_id/metadata", h.UpdateMetadata)
-	rg.POST("/videos/:video_id/publish", h.PublishVideo)
-	rg.DELETE("/videos/:video_id", h.DeleteVideo)
+	rg.POST("/videos/:video_id/thumbnail", vh.SetThumbnail)
+	rg.POST("/videos/:video_id/metadata", vh.UpdateMetadata)
+	rg.POST("/videos/:video_id/publish", vh.PublishVideo)
+	rg.DELETE("/videos/:video_id", vh.DeleteVideo)
 
 	// Group Private Videos
 	rg.GET("/group-private-videos", h.ListGroupPrivateVideos)
@@ -121,14 +129,14 @@ func RegisterYouTubeRoutes(rg gin.IRouter, h *YouTubeHandlers) {
 	rg.POST("/credentials/refresh/:id", h.RefreshToken)
 
 	// Analytics
-	rg.GET("/analytics/channel/:id", h.GetChannelAnalytics)
+	rg.GET("/analytics/channel/:id", ch.GetChannelAnalytics)
 	rg.POST("/analytics/refresh/:id", h.RefreshAnalytics)
 	rg.GET("/analytics/refresh/:id", h.RefreshAnalytics) // Allow GET for easier testing
 
 	// AI Generation
-	rg.POST("/ai/titles", h.GenerateTitles)
-	rg.POST("/ai/description", h.GenerateDescription)
-	rg.POST("/ai/tags", h.GenerateTags)
-	rg.POST("/ai/translate", h.TranslateText)
-	rg.POST("/ai/covers", h.GenerateCoverPack)
+	rg.POST("/ai/titles", cr.GenerateTitles)
+	rg.POST("/ai/description", cr.GenerateDescription)
+	rg.POST("/ai/tags", cr.GenerateTags)
+	rg.POST("/ai/translate", cr.TranslateText)
+	rg.POST("/ai/covers", cr.GenerateCoverPack)
 }

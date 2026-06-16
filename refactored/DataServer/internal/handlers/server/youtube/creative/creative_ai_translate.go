@@ -1,4 +1,4 @@
-package youtube
+package creative
 
 import (
 	"bytes"
@@ -76,7 +76,7 @@ func sanitizeCreativeText(text string, preserveHashtags bool) string {
 // Translation handler
 // =============================================================================
 
-func (h *YouTubeHandlers) TranslateText(c *gin.Context) {
+func (h *Handler) TranslateText(c *gin.Context) {
 	var req TranslateTextRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "invalid request: " + err.Error()})
@@ -100,13 +100,13 @@ func (h *YouTubeHandlers) TranslateText(c *gin.Context) {
 // NVIDIA chat translation (best-effort with fallback)
 // =============================================================================
 
-func (h *YouTubeHandlers) translateTextBestEffort(ctx context.Context, text, targetLanguage, tone string) (string, string) {
+func (h *Handler) translateTextBestEffort(ctx context.Context, text, targetLanguage, tone string) (string, string) {
 	text = sanitizeCreativeText(text, true)
 	if text == "" {
 		return "", "fallback"
 	}
 
-	textURL := strings.TrimSpace(h.service.GetConfig().NVIDIATextURL)
+	textURL := strings.TrimSpace(h.svc.GetConfig().NVIDIATextURL)
 	if textURL == "" {
 		return fallbackTranslate(text, targetLanguage), "fallback"
 	}
@@ -139,7 +139,7 @@ func (h *YouTubeHandlers) translateTextBestEffort(ctx context.Context, text, tar
 	if err != nil {
 		return fallbackTranslate(text, targetLanguage), "fallback"
 	}
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", h.service.GetConfig().NVIDIAAPIKey))
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", h.svc.GetConfig().NVIDIAAPIKey))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 

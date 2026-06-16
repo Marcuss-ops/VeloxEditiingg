@@ -1,4 +1,4 @@
-package workers
+package lifecycle
 
 import (
 	"log"
@@ -7,18 +7,18 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func (wl *WorkerLifecycle) GetCommandsHandler() gin.HandlerFunc {
+func (h *Handler) GetCommandsHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		workerID := c.Query("worker_id")
 		if workerID == "" {
 			c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "worker_id required"})
 			return
 		}
-		if !wl.authorizeWorkerRequest(c, workerID) {
+		if !h.authorizeWorkerRequest(c, workerID) {
 			return
 		}
 
-		pending := wl.cmdMgr.GetPendingCommands(workerID)
+		pending := h.cmdMgr.GetPendingCommands(workerID)
 		commands := make([]gin.H, 0, len(pending))
 		for _, cmd := range pending {
 			commands = append(commands, gin.H{
@@ -35,7 +35,7 @@ func (wl *WorkerLifecycle) GetCommandsHandler() gin.HandlerFunc {
 	}
 }
 
-func (wl *WorkerLifecycle) AckCommandHandler() gin.HandlerFunc {
+func (h *Handler) AckCommandHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var body struct {
 			WorkerID string `json:"worker_id"`
@@ -50,16 +50,16 @@ func (wl *WorkerLifecycle) AckCommandHandler() gin.HandlerFunc {
 			c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "worker_id and command required"})
 			return
 		}
-		if !wl.authorizeWorkerRequest(c, body.WorkerID) {
+		if !h.authorizeWorkerRequest(c, body.WorkerID) {
 			return
 		}
 
-		wl.cmdMgr.AckCommand(body.WorkerID, body.Command)
+		h.cmdMgr.AckCommand(body.WorkerID, body.Command)
 		c.JSON(http.StatusOK, gin.H{"success": true, "message": "acknowledged"})
 	}
 }
 
-func (wl *WorkerLifecycle) RequestUpdateHandler() gin.HandlerFunc {
+func (h *Handler) RequestUpdateHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var body struct {
 			WorkerID string `json:"worker_id"`
@@ -75,19 +75,19 @@ func (wl *WorkerLifecycle) RequestUpdateHandler() gin.HandlerFunc {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "worker_id required"})
 			return
 		}
-		if !wl.authorizeWorkerRequest(c, body.WorkerID) {
+		if !h.authorizeWorkerRequest(c, body.WorkerID) {
 			return
 		}
 
 		version := body.Version
 		if version == "" {
-			version = wl.codeVersion
+			version = h.codeVersion
 		}
 
-		wl.cmdMgr.PushCommand(body.WorkerID, "update_code", map[string]interface{}{
+		h.cmdMgr.PushCommand(body.WorkerID, "update_code", map[string]interface{}{
 			"version": version,
 		})
-		wl.updateMgr.RequestUpdate(body.WorkerID, version)
+		h.updateMgr.RequestUpdate(body.WorkerID, version)
 
 		log.Printf("[UPDATE] Update requested for worker %s (version: %s)", body.WorkerID[:min(16, len(body.WorkerID))]+"...", version)
 

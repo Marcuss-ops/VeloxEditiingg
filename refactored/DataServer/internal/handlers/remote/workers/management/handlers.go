@@ -1,4 +1,4 @@
-package workers
+package management
 
 import (
 	"net/http"
@@ -28,7 +28,6 @@ func RenameWorker(reg *workersreg.Registry) gin.HandlerFunc {
 			return
 		}
 
-		// Get current worker info
 		workerInfo := reg.GetWorker(c.Request.Context(), body.WorkerID)
 		if workerInfo == nil {
 			c.JSON(http.StatusNotFound, gin.H{"ok": false, "error": "worker not found"})
@@ -36,7 +35,6 @@ func RenameWorker(reg *workersreg.Registry) gin.HandlerFunc {
 		}
 
 		oldName := workerInfo.WorkerName
-		// Update worker name via heartbeat
 		_ = reg.Heartbeat(c.Request.Context(), body.WorkerID, body.NewName, workerInfo.Status, workerInfo.CurrentJob, nil)
 
 		c.JSON(http.StatusOK, gin.H{
@@ -64,14 +62,12 @@ func SetWorkerGroup(reg *workersreg.Registry) gin.HandlerFunc {
 			return
 		}
 
-		// Get current worker info
 		workerInfo := reg.GetWorker(c.Request.Context(), body.WorkerID)
 		if workerInfo == nil {
 			c.JSON(http.StatusNotFound, gin.H{"ok": false, "error": "worker not found"})
 			return
 		}
 
-		// Update worker group via heartbeat with extra
 		extra := map[string]interface{}{
 			"worker_group": body.WorkerGroup,
 		}
@@ -102,9 +98,6 @@ func ReportWorkerError(reg *workersreg.Registry) gin.HandlerFunc {
 			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "worker_id required"})
 			return
 		}
-
-		// Log the error (in production, this would go to a logger or error tracking system)
-		// For now, we just acknowledge receipt
 
 		c.JSON(http.StatusOK, gin.H{
 			"ok":        true,

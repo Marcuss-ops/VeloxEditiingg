@@ -1,4 +1,4 @@
-package youtube
+package channels
 
 import (
 	"context"
@@ -17,7 +17,7 @@ type BulkDeleteRequest struct {
 
 // BulkDeleteChannels deletes multiple channels in a single operation.
 // POST /api/v1/youtube/channels/bulk-delete
-func (h *YouTubeHandlers) BulkDeleteChannels(c *gin.Context) {
+func (h *Handler) BulkDeleteChannels(c *gin.Context) {
 	var req BulkDeleteRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "Invalid request: " + err.Error()})
@@ -65,7 +65,7 @@ type MoveChannelRequest struct {
 
 // MoveChannelToGroup moves a channel from one group to another.
 // POST /api/v1/youtube/channels/:id/move
-func (h *YouTubeHandlers) MoveChannelToGroup(c *gin.Context) {
+func (h *Handler) MoveChannelToGroup(c *gin.Context) {
 	channelID := c.Param("id")
 
 	var req MoveChannelRequest
@@ -110,7 +110,7 @@ func (h *YouTubeHandlers) MoveChannelToGroup(c *gin.Context) {
 
 // ValidateAllTokens validates all channel OAuth tokens in parallel.
 // POST /api/v1/youtube/channels/validate-all
-func (h *YouTubeHandlers) ValidateAllTokens(c *gin.Context) {
+func (h *Handler) ValidateAllTokens(c *gin.Context) {
 	channels := h.service.GetAuthChannels()
 	if len(channels) == 0 {
 		c.JSON(http.StatusOK, gin.H{"ok": true, "results": []gin.H{}, "total": 0})
