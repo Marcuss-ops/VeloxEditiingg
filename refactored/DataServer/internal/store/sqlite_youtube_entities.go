@@ -119,9 +119,7 @@ func (s *SQLiteStore) GetYouTubeChannel(channelID string) (map[string]interface{
 func (s *SQLiteStore) DeleteYouTubeChannel(channelID string) error {
 	_, err := s.db.Exec(`DELETE FROM youtube_channels WHERE channel_id=?`, channelID)
 	return err
-}
-
-// UpdateYouTubeChannelMetadata persists a YouTube-API metadata refresh into
+}// UpdateYouTubeChannelMetadata persists a YouTube-API metadata refresh into
 // the canonical youtube_channels row. Only the columns the refresh can
 // actually change from a YouTube channels.list response are written:
 // title, thumbnail_url, last_sync_at, updated_at.
@@ -139,9 +137,66 @@ func (s *SQLiteStore) UpdateYouTubeChannelMetadata(channelID, title, thumbnailUR
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, err := s.db.Exec(
 		`UPDATE youtube_channels
-		 SET title = ?, thumbnail_url = ?, last_sync_at = ?, updated_at = ?
-		 WHERE channel_id = ?`,
+	 SET title = ?, thumbnail_url = ?, last_sync_at = ?, updated_at = ?
+	 WHERE channel_id = ?`,
 		title, thumbnailURL, now, now, channelID,
+	)
+	return err
+}
+
+// UpdateChannelTitle sets ONLY the title column of a single channel row.
+// Repeatedly preserves every other column — including display_name,
+// language, notes, view_count, subscriber_count, channel_url, added_at.
+// This is the typed update for the S11 spec: an operator-driven title
+// edit MUST not silently wipe the user-set notes/language that the
+// previous mega-upsert could clobber via empty/zero fill. Errors are
+// surfaced (not logged-and-swallowed) so the caller can abort before
+// mutating the in-RAM copy (DB-first ordering).
+func (s *SQLiteStore) UpdateChannelTitle(channelID, title string) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err := s.db.Exec(
+		`UPDATE youtube_channels SET title = ?, updated_at = ? WHERE channel_id = ?`,
+		title, now, channelID,
+	)
+	return err
+}
+
+// UpdateChannelLanguage sets ONLY the language column of a single
+// channel row. Distinct from the refresh path (which deliberately
+// doesn't touch language) and from the wide upsert (which can wipe
+// language via empty-fill).
+func (s *SQLiteStore) UpdateChannelLanguage(channelID, language string) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err := s.db.Exec(
+		`UPDATE youtube_channels SET language = ?, updated_at = ? WHERE channel_id = ?`,
+		language, now, channelID,
+	)
+	return err
+}
+
+// UpdateChannelNotes sets ONLY the notes column of a single channel row.
+// Notes are operator-curated free text; no API path ever touches them.
+// Refreshing the channel from YouTube MUST NOT clobber notes (the
+// previous UpsertYouTubeChannel path could — this typed method is the
+// fix).
+func (s *SQLiteStore) UpdateChannelNotes(channelID, notes string) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err := s.db.Exec(
+		`UPDATE youtube_channels SET notes = ?, updated_at = ? WHERE channel_id = ?`,
+		notes, now, channelID,
+	)
+	return err
+}
+
+// UpdateChannelStats sets ONLY the view_count + subscriber_count +
+// last_sync_at columns of a single channel row. Refreshing from
+// YouTube writes through this path; user-edited typed columns (notes,
+// language, display_name, channel_url) remain untouched.
+func (s *SQLiteStore) UpdateChannelStats(channelID string, viewCount, subCount int64, lastSyncAt string) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err := s.db.Exec(
+		`UPDATE youtube_channels SET view_count = ?, subscriber_count = ?, last_sync_at = ?, updated_at = ? WHERE channel_id = ?`,
+		viewCount, subCount, lastSyncAt, now, channelID,
 	)
 	return err
 }

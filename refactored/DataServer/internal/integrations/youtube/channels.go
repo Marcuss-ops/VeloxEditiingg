@@ -160,6 +160,15 @@ func (s *Service) loadCanonicalChannels() bool {
 }
 
 // UpdateChannelMetadata updates metadata fields in SQLite.
+//
+// Typed-update path (S11): the operator may set ONLY language or ONLY
+// title, never both. Each typed column is written via its own
+// UpdateChannel* method so user-set notes / view_count /
+// subscriber_count / display_name / channel_url are NOT wiped by
+// empty-fill side effects of the wide UpsertYouTubeChannel path.
+// DB-first: the SQLite write happens under s.mu (read+write atomically)
+// so a transient SQL failure aborts the operator edit before any RAM
+// update is visible.
 func (s *Service) UpdateChannelMetadata(channelID string, metadata map[string]interface{}) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -169,19 +178,30 @@ func (s *Service) UpdateChannelMetadata(channelID string, metadata map[string]in
 		return fmt.Errorf("channel not found: %s", channelID)
 	}
 
-	if lang, ok := metadata["language"].(string); ok {
-		ch.Language = lang
-	}
-	if title, ok := metadata["title"].(string); ok {
-		ch.Title = title
-	}
-
-	// Persist to canonical youtube_channels. metadata_json was retired in
-	// S7/S8 of the verdict plan and is no longer part of the channel upsert
-	// contract (the column was dropped by migration 014). Use the typed
-	// columns for any operator-readable metadata.
+	// Typed title update (if provided). One column, no clobber.
 	if s.store != nil {
-		return s.store.UpsertYouTubeChannel(ch.ID, ch.Title, ch.Name, ch.URL, ch.Thumbnail, ch.Language, "", 0, 0, "", "")
+		if title, ok := metadata["title"].(string); ok && title != "" {
+			if err := s.store.UpdateChannelTitle(channelID, title); err != nil {
+				return fmt.Errorf("typed update title: %w", err)
+			}
+			ch.Title = title // mirror to RAM only after a successful SQL write
+		}
+		if lang, ok := metadata["language"].(string); ok && lang != "" {
+			if err := s.store.UpdateChannelLanguage(channelID, lang); err != nil {
+				return fmt.Errorf("typed update language: %w", err)
+			}
+			ch.Language = lang // mirror to RAM only after a successful SQL write
+		}
+	} else {
+		// No store: degrade gracefully — keep the RAM update so the
+		// in-memory surface is coherent (the canonical SQL row will be
+		// reconciled on the next process restart by loadCanonicalChannels).
+		if title, ok := metadata["title"].(string); ok && title != "" {
+			ch.Title = title
+		}
+		if lang, ok := metadata["language"].(string); ok && lang != "" {
+			ch.Language = lang
+		}
 	}
 	return nil
 }
@@ -310,6 +330,18 @@ func (s *Service) RefreshChannelMetadata(ctx context.Context, channelID string) 
 	newTitle := item.Snippet.Title
 	newThumbnail := item.Snippet.Thumbnails.Default.Url
 
+	// DB-first persistence (S11). The SQL write happens BEFORE the in-RAM
+	// mirror update so a transient SQLite failure can never leak into the
+	// runtime cache. Refresh is a metadata operation, NOT an OAuth
+	// operation — it goes through the typed metadata repository method
+	// (UpdateYouTubeChannelMetadata) which only touches title and
+	// thumbnail, never user-edited columns.
+	if s.store != nil {
+		if err := s.store.UpdateYouTubeChannelMetadata(channelID, newTitle, newThumbnail); err != nil {
+			return nil, fmt.Errorf("persist refreshed metadata for %s: %w", channelID, err)
+		}
+	}
+
 	s.mu.Lock()
 	if ch, ok := s.channels[channelID]; ok {
 		ch.Title = newTitle
@@ -319,15 +351,6 @@ func (s *Service) RefreshChannelMetadata(ctx context.Context, channelID string) 
 		}
 	}
 	s.mu.Unlock()
-
-	// Persist the refreshed title+thumbnail to SQLite. Refresh is a metadata
-	// operation, NOT an OAuth operation, so it MUST go through the metadata
-	// repository path — never the now-removed saveChannelToken JSON path.
-	if s.store != nil {
-		if err := s.store.UpdateYouTubeChannelMetadata(channelID, newTitle, newThumbnail); err != nil {
-			log.Printf("[WARN] Failed to persist refreshed metadata for %s: %v", channelID, err)
-		}
-	}
 
 	log.Printf("[OK] Refreshed metadata for channel %s: title=%q", channelID, newTitle)
 	return s.channels[channelID], nil

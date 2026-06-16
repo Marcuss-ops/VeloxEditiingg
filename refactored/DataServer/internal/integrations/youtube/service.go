@@ -51,6 +51,17 @@ type YouTubeStore interface {
 	// channel_url), so it cannot silently wipe them. Use this from
 	// Service.RefreshChannelMetadata; use UpsertYouTubeChannel for initial
 	// channel ingest.
+	// Typed update methods. Each touches ONE column (or a small typed
+	// cluster) without clobbering the others. Use these from operator-
+	// edit paths and from targeted refresh / stats endpoints. Use
+	// UpsertYouTubeChannel only on first-time channel ingest where every
+	// column needs to be seeded. Errors are surfaced — callers must
+	// adopt DB-first ordering (write to the store, mirror to RAM only
+	// after the write returns nil).
+	UpdateChannelTitle(channelID, title string) error
+	UpdateChannelLanguage(channelID, language string) error
+	UpdateChannelNotes(channelID, notes string) error
+	UpdateChannelStats(channelID string, viewCount, subCount int64, lastSyncAt string) error
 	UpdateYouTubeChannelMetadata(channelID, title, thumbnailURL string) error
 	DeleteYouTubeChannel(channelID string) error
 	// DeleteChannelAtomic removes the channel row, all group memberships,
