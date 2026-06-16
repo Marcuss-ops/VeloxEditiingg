@@ -1,4 +1,4 @@
-package workers
+package validation
 
 import (
 	"log"
@@ -52,10 +52,9 @@ func InitValidationStore(db *store.SQLiteStore) {
 // SaveValidation saves a validation report to the store
 func (vs *ValidationStore) SaveValidation(report *ValidationReport) error {
 	if vs.db == nil {
-		return nil // No persistence if no DB
+		return nil
 	}
 
-	// Parse timestamp
 	var validatedAt time.Time
 	if report.Timestamp != "" {
 		if t, err := time.Parse(time.RFC3339, report.Timestamp); err == nil {
@@ -66,11 +65,9 @@ func (vs *ValidationStore) SaveValidation(report *ValidationReport) error {
 		validatedAt = time.Now()
 	}
 
-	// Determine failure reason for non-PASS codes
 	failureReason := ""
 	switch report.ValidationCode {
 	case "PASS":
-		// No failure reason for successful validation
 	case "MISSING_UNIT":
 		failureReason = "Canonical unit does not exist"
 	case "EMPTY_EXECSTART":
@@ -105,7 +102,6 @@ func HandleValidationReport() gin.HandlerFunc {
 			return
 		}
 
-		// Validate required fields
 		if report.WorkerID == "" {
 			c.JSON(http.StatusBadRequest, gin.H{
 				"ok":    false,
@@ -122,18 +118,15 @@ func HandleValidationReport() gin.HandlerFunc {
 			return
 		}
 
-		// Save to store
 		if globalValidationStore != nil {
 			if err := globalValidationStore.SaveValidation(&report); err != nil {
 				log.Printf("[WARN] Failed to save validation report for %s: %v", report.WorkerID, err)
 			}
 		}
 
-		// Log the validation
 		log.Printf("[VALID] Validation Report: worker=%s code=%s unit=%s",
 			report.WorkerID, report.ValidationCode, report.CanonicalUnit)
 
-		// Determine if worker is allowed to run jobs
 		isValid := report.ValidationCode == "PASS"
 
 		c.JSON(http.StatusOK, gin.H{
@@ -161,7 +154,7 @@ func GetWorkerValidationHandler() gin.HandlerFunc {
 		if globalValidationStore == nil {
 			c.JSON(http.StatusOK, gin.H{
 				"worker_id": workerID,
-				"valid":     true, // Assume valid if no store
+				"valid":     true,
 				"code":      "UNKNOWN",
 				"message":   "Validation store not initialized",
 			})
@@ -226,15 +219,14 @@ func GetAllValidationsHandler() gin.HandlerFunc {
 }
 
 // CheckWorkerValidation checks if a worker is validated and allowed to run jobs
-// Returns true if the worker is valid or if validation is not available
 func CheckWorkerValidation(workerID string) (bool, string) {
 	if globalValidationStore == nil {
-		return true, "" // Allow if no store
+		return true, ""
 	}
 
 	status, err := globalValidationStore.GetValidation(workerID)
 	if err != nil || status == nil {
-		return true, "" // Allow if no status (not yet validated)
+		return true, ""
 	}
 
 	return status.ValidationCode == "PASS", status.FailureReason

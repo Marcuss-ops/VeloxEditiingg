@@ -1,4 +1,4 @@
-package youtube
+package videos
 
 import (
 	"html/template"
@@ -11,8 +11,8 @@ import (
 // UploadFormPage serves a minimal HTML UI for uploading a video.
 // This is intentionally backend-rendered to avoid depending on the SPA build.
 // GET /youtube/upload
-func (h *YouTubeHandlers) UploadFormPage(c *gin.Context) {
-	channels := h.service.GetChannels()
+func (h *Handler) UploadFormPage(c *gin.Context) {
+	channels := h.svc.GetChannels()
 
 	var b strings.Builder
 	b.WriteString(`<!doctype html><html lang="it"><head><meta charset="utf-8" />`)
@@ -128,7 +128,7 @@ f.addEventListener('submit', async (e) => {
     }
     out.textContent = data ? JSON.stringify(data, null, 2) : txt;
     const url = data && data.result && (data.result.youtube_url || data.result.YouTubeURL);
-    if (url) out.innerHTML += '\\n\\nLink: <a target=\"_blank\" rel=\"noreferrer\" href=\"' + url + '\">' + url + '</a>';
+    if (url) out.innerHTML += '\\n\\nLink: <a target=\\"_blank\\" rel=\\"noreferrer\\" href=\\"' + url + '\\">' + url + '</a>';
   } catch (err) {
     out.textContent = String(err);
   } finally {

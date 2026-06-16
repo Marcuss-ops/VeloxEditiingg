@@ -12,6 +12,8 @@ import (
 	"velox-server/internal/config"
 	"velox-server/internal/handlers/remote/ansible"
 	"velox-server/internal/handlers/remote/workers"
+	"velox-server/internal/handlers/remote/workers/management"
+	"velox-server/internal/handlers/remote/workers/uploads"
 	"velox-server/internal/handlers/server/analytics"
 	"velox-server/internal/handlers/server/calendar"
 	"velox-server/internal/handlers/server/drive"
@@ -143,7 +145,7 @@ func RegisterV1Routes(r *gin.Engine, cfg *config.Config, fileQ *queue.FileQueue,
 
 		// Workers - Core API
 		v1Admin.GET("/workers", workers.WorkersList(reg, workersRepo, workerUpdateHandler))
-		v1Admin.GET("/workers/:id/logs", workers.WorkerLogsHandler(reg))
+		v1Admin.GET("/workers/:id/logs", management.WorkerLogsHandler(reg))
 
 		if workerUpdateHandler != nil {
 			// Update orchestration endpoints used by the frontend and legacy bundle.
@@ -251,7 +253,7 @@ func RegisterV1Routes(r *gin.Engine, cfg *config.Config, fileQ *queue.FileQueue,
 
 		// Video - Core API
 		v1Admin.POST("/video/create-master", master.CreateMaster(cfg, fileQ))
-		v1.POST("/video/upload-completed", workers.UploadCompletedVideo(cfg, fileQ, youtubeService))
+		v1.POST("/video/upload-completed", uploads.UploadCompletedVideo(cfg, fileQ, youtubeService))
 
 		// Ansible - Core API
 		// Registered here so both /api/v1 and legacy /ansible paths share the same implementation.

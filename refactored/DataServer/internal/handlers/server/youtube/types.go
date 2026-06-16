@@ -11,7 +11,8 @@ import (
 	"velox-server/internal/integrations/youtube"
 )
 
-type privateVideosCacheEntry struct {
+// PrivateVideosCacheEntry holds cached private videos with timestamp.
+type PrivateVideosCacheEntry struct {
 	Videos    []gin.H
 	Timestamp time.Time
 }
@@ -19,8 +20,8 @@ type privateVideosCacheEntry struct {
 // YouTubeHandlers contains handlers for YouTube API endpoints
 type YouTubeHandlers struct {
 	service              *youtube.Service
-	storage              *youtube.Storage // Shared storage with YouTubeManager for unified group data
-	privateVideosCache   map[string]privateVideosCacheEntry
+	storage              *youtube.Storage
+	privateVideosCache   map[string]PrivateVideosCacheEntry
 	privateVideosCacheMu sync.RWMutex
 }
 
@@ -32,16 +33,26 @@ func NewYouTubeHandlers(service *youtube.Service, storage *youtube.Storage) (*Yo
 	return &YouTubeHandlers{
 		service:            service,
 		storage:            storage,
-		privateVideosCache: make(map[string]privateVideosCacheEntry),
+		privateVideosCache: make(map[string]PrivateVideosCacheEntry),
 	}, nil
 }
 
 // ClearPrivateVideosCache clears the cached private videos list (e.g. after upload)
 func (h *YouTubeHandlers) ClearPrivateVideosCache() {
 	h.privateVideosCacheMu.Lock()
-	h.privateVideosCache = make(map[string]privateVideosCacheEntry)
+	h.privateVideosCache = make(map[string]PrivateVideosCacheEntry)
 	h.privateVideosCacheMu.Unlock()
 	log.Printf("[CLEANUP] YouTubeHandlers: cleared private videos cache")
+}
+
+// PrivVideosCache returns the private videos cache (for sub-package access).
+func (h *YouTubeHandlers) PrivVideosCache() map[string]PrivateVideosCacheEntry {
+	return h.privateVideosCache
+}
+
+// PrivVideosCacheMu returns the private videos cache mutex (for sub-package access).
+func (h *YouTubeHandlers) PrivVideosCacheMu() *sync.RWMutex {
+	return &h.privateVideosCacheMu
 }
 
 // GetService returns the underlying YouTube service for integration with other handlers

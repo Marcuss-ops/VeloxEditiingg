@@ -1,4 +1,4 @@
-package youtube
+package creative
 
 import (
 	"bytes"
@@ -67,7 +67,7 @@ type CoverPackResponse struct {
 // Cover pack generation handler
 // =============================================================================
 
-func (h *YouTubeHandlers) GenerateCoverPack(c *gin.Context) {
+func (h *Handler) GenerateCoverPack(c *gin.Context) {
 	var req CoverPackRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "invalid request: " + err.Error()})
@@ -105,11 +105,11 @@ func (h *YouTubeHandlers) GenerateCoverPack(c *gin.Context) {
 
 	variants := buildCoverVariants(translatedTitle, translatedBody, req.Style, req.ExtraPrompt, req.Width, req.Height)
 	var warnings []string
-	if h.service.GetConfig().NVIDIAAPIKey == "" {
+	if h.svc.GetConfig().NVIDIAAPIKey == "" {
 		warnings = append(warnings, "NVIDIA API key not configured: images will not be generated")
 	}
 
-	if h.service.GetConfig().NVIDIAAPIKey != "" {
+	if h.svc.GetConfig().NVIDIAAPIKey != "" {
 		for i := range variants {
 			variant := &variants[i]
 			imageBytes, filename, genErr := h.generateNVIDIAThumbnail(c.Request.Context(), variant.Prompt, variant.NegativePrompt, req.Width, req.Height, req.Steps, variant.Seed)
@@ -272,8 +272,8 @@ func shortenHeadline(text string, maxWords int) string {
 // NVIDIA image generation
 // =============================================================================
 
-func (h *YouTubeHandlers) generateNVIDIAThumbnail(ctx context.Context, prompt, negativePrompt string, width, height, steps int, seed int64) ([]byte, string, error) {
-	if h.service.GetConfig().NVIDIAAPIKey == "" {
+func (h *Handler) generateNVIDIAThumbnail(ctx context.Context, prompt, negativePrompt string, width, height, steps int, seed int64) ([]byte, string, error) {
+	if h.svc.GetConfig().NVIDIAAPIKey == "" {
 		return nil, "", fmt.Errorf("NVIDIA API key not configured")
 	}
 
@@ -295,7 +295,7 @@ func (h *YouTubeHandlers) generateNVIDIAThumbnail(ctx context.Context, prompt, n
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to create NVIDIA request: %w", err)
 	}
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", h.service.GetConfig().NVIDIAAPIKey))
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", h.svc.GetConfig().NVIDIAAPIKey))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 
@@ -335,13 +335,13 @@ func (h *YouTubeHandlers) generateNVIDIAThumbnail(ctx context.Context, prompt, n
 	return imageBytes, filename, nil
 }
 
-func (h *YouTubeHandlers) buildCoverFilename() string {
+func (h *Handler) buildCoverFilename() string {
 	ts := time.Now().Unix()
 	token := rand.New(rand.NewSource(ts)).Int63()
 	return fmt.Sprintf("yt_cover_%d_%d.png", ts, token%100000)
 }
 
-func (h *YouTubeHandlers) writeCoverFile(filename string, data []byte) error {
+func (h *Handler) writeCoverFile(filename string, data []byte) error {
 	dir := h.getCoverTempDir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("failed to create cover dir: %w", err)
@@ -353,8 +353,8 @@ func (h *YouTubeHandlers) writeCoverFile(filename string, data []byte) error {
 	return nil
 }
 
-func (h *YouTubeHandlers) getCoverTempDir() string {
-	cfg := h.service.GetConfig()
+func (h *Handler) getCoverTempDir() string {
+	cfg := h.svc.GetConfig()
 	if cfg.DataDir != "" {
 		return filepath.Join(cfg.DataDir, "youtube", "generated_covers")
 	}

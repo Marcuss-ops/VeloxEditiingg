@@ -11,7 +11,7 @@ import (
 	"velox-server/internal/app"
 	"velox-server/internal/config"
 	remoteansible "velox-server/internal/handlers/remote/ansible"
-	"velox-server/internal/handlers/remote/workers"
+	"velox-server/internal/handlers/remote/workers/uploads"
 	"velox-server/internal/handlers/server/analytics"
 	"velox-server/internal/handlers/server/api"
 	"velox-server/internal/handlers/server/darkeditor"
@@ -134,9 +134,9 @@ func registerAPIV1Routes(r *gin.Engine, cfg *config.Config, deps *serverDeps, an
 	registerOrchestratorRoutes(orchAdmin, deps)
 
 	// Chunked upload routes (resumable worker→master video upload)
-	r.POST("/api/v1/video/chunked/init", workers.InitChunkedUpload())
-	r.POST("/api/v1/video/chunked/:job_id/:chunk_index", workers.UploadChunk(cfg))
-	r.POST("/api/v1/video/chunked/:job_id/complete", workers.CompleteChunkedUpload(cfg, deps.fileQ))
+	r.POST("/api/v1/video/chunked/init", uploads.InitChunkedUpload())
+	r.POST("/api/v1/video/chunked/:job_id/:chunk_index", uploads.UploadChunk(cfg))
+	r.POST("/api/v1/video/chunked/:job_id/complete", uploads.CompleteChunkedUpload(cfg, deps.fileQ))
 
 	// Bundle compat routes (frontend calls /api/bundle/* without /v1/)
 	if deps.workerUpdateHandler != nil {

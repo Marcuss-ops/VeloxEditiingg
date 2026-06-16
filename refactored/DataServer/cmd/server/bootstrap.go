@@ -17,6 +17,7 @@ import (
 	"velox-server/internal/audit"
 	"velox-server/internal/config"
 	workersapi "velox-server/internal/handlers/remote/workers"
+	"velox-server/internal/handlers/remote/workers/lifecycle"
 	"velox-server/internal/handlers/server/api"
 	"velox-server/internal/handlers/server/pipeline"
 	"velox-server/internal/modules/ansible"
@@ -42,7 +43,7 @@ type serverDeps struct {
 	workersRepo         store.WorkersRepository
 	sqliteStore         *store.SQLiteStore
 	workerUpdateHandler *workersapi.WorkerUpdateHandler
-	workerLifecycle     *workersapi.WorkerLifecycle
+	workerLifecycle     *lifecycle.Handler
 	ansibleModule       *ansible.Module
 	youtubeModule       *youtube.Module
 	orchestrator        *queue.Orchestrator
@@ -114,7 +115,7 @@ func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
 	updateMgr := workersreg.NewUpdateManager()
 	tokenMgr := workersreg.NewTokenManager()
 	workerUpdateHandler := workersapi.NewWorkerUpdateHandler(cfg, reg, cmdMgr, updateMgr, tokenMgr, cfg.DataDir)
-	workerLifecycle := workersapi.NewWorkerLifecycle(cfg, reg, cfg.DataDir)
+	workerLifecycle := lifecycle.NewHandler(cfg, reg, cfg.DataDir)
 
 	// Create orchestrator for multi-step job pipelines
 	orch, err := queue.NewOrchestrator(nil, fileQ, sqliteStore)

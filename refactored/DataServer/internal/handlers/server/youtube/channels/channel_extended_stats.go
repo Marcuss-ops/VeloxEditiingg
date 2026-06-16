@@ -1,4 +1,4 @@
-package youtube
+package channels
 
 import (
 	"encoding/csv"
@@ -21,7 +21,7 @@ type DuplicateChannel struct {
 
 // GetChannelGroups returns all groups a channel belongs to.
 // GET /api/v1/youtube/channels/:id/groups
-func (h *YouTubeHandlers) GetChannelGroups(c *gin.Context) {
+func (h *Handler) GetChannelGroups(c *gin.Context) {
 	channelID := c.Param("id")
 
 	groups, _ := h.storage.ListGroups()
@@ -49,7 +49,7 @@ func (h *YouTubeHandlers) GetChannelGroups(c *gin.Context) {
 
 // DetectDuplicateChannels finds channels that appear in multiple groups.
 // GET /api/v1/youtube/channels/duplicates
-func (h *YouTubeHandlers) DetectDuplicateChannels(c *gin.Context) {
+func (h *Handler) DetectDuplicateChannels(c *gin.Context) {
 	groups, _ := h.storage.ListGroups()
 
 	channelGroups := make(map[string][]string)
@@ -84,7 +84,7 @@ func (h *YouTubeHandlers) DetectDuplicateChannels(c *gin.Context) {
 
 // ExportChannels exports all channels as JSON or CSV.
 // GET /api/v1/youtube/channels/export?format=json|csv
-func (h *YouTubeHandlers) ExportChannels(c *gin.Context) {
+func (h *Handler) ExportChannels(c *gin.Context) {
 	format := c.DefaultQuery("format", "json")
 
 	channels := h.service.GetAuthChannels()
@@ -158,7 +158,7 @@ type ChannelStats struct {
 
 // GetChannelStats returns aggregated channel statistics.
 // GET /api/v1/youtube/channels/stats
-func (h *YouTubeHandlers) GetChannelStats(c *gin.Context) {
+func (h *Handler) GetChannelStats(c *gin.Context) {
 	channels := h.service.GetAuthChannels()
 	groups, _ := h.storage.ListGroups()
 
@@ -205,7 +205,7 @@ type BatchUpdateLanguageRequest struct {
 
 // BatchUpdateLanguage updates the language for multiple channels.
 // POST /api/v1/youtube/channels/batch-language
-func (h *YouTubeHandlers) BatchUpdateLanguage(c *gin.Context) {
+func (h *Handler) BatchUpdateLanguage(c *gin.Context) {
 	var req BatchUpdateLanguageRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "Invalid request: " + err.Error()})

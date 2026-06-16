@@ -1,4 +1,4 @@
-package workers
+package lifecycle
 
 import (
 	"log"
@@ -8,7 +8,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func (wl *WorkerLifecycle) RestartWorkerHandler() gin.HandlerFunc {
+func (h *Handler) RestartWorkerHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var body struct {
 			WorkerID string `json:"worker_id"`
@@ -24,7 +24,7 @@ func (wl *WorkerLifecycle) RestartWorkerHandler() gin.HandlerFunc {
 			return
 		}
 
-		wl.cmdMgr.PushCommand(body.WorkerID, "restart_worker", nil)
+		h.cmdMgr.PushCommand(body.WorkerID, "restart_worker", nil)
 
 		log.Printf("[CONTROL] Restart requested for worker %s", body.WorkerID[:min(16, len(body.WorkerID))]+"...")
 
@@ -35,7 +35,7 @@ func (wl *WorkerLifecycle) RestartWorkerHandler() gin.HandlerFunc {
 	}
 }
 
-func (wl *WorkerLifecycle) RevokeWorkerHandler() gin.HandlerFunc {
+func (h *Handler) RevokeWorkerHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var body struct {
 			WorkerID string `json:"worker_id"`
@@ -53,7 +53,7 @@ func (wl *WorkerLifecycle) RevokeWorkerHandler() gin.HandlerFunc {
 
 		ctx := c.Request.Context()
 
-		wl.reg.RevokeWorker(ctx, body.WorkerID)
+		h.reg.RevokeWorker(ctx, body.WorkerID)
 
 		log.Printf("Worker revoked: %s", body.WorkerID[:min(16, len(body.WorkerID))]+"...")
 
@@ -64,7 +64,7 @@ func (wl *WorkerLifecycle) RevokeWorkerHandler() gin.HandlerFunc {
 	}
 }
 
-func (wl *WorkerLifecycle) UnrevokeWorkerHandler() gin.HandlerFunc {
+func (h *Handler) UnrevokeWorkerHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var body struct {
 			WorkerID string `json:"worker_id"`
@@ -80,7 +80,7 @@ func (wl *WorkerLifecycle) UnrevokeWorkerHandler() gin.HandlerFunc {
 			return
 		}
 
-		wl.reg.UnrevokeWorker(body.WorkerID)
+		h.reg.UnrevokeWorker(body.WorkerID)
 
 		log.Printf("Worker unrevoked: %s", body.WorkerID[:min(16, len(body.WorkerID))]+"...")
 
@@ -91,7 +91,7 @@ func (wl *WorkerLifecycle) UnrevokeWorkerHandler() gin.HandlerFunc {
 	}
 }
 
-func (wl *WorkerLifecycle) DrainWorkerHandler() gin.HandlerFunc {
+func (h *Handler) DrainWorkerHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var body struct {
 			WorkerID string `json:"worker_id"`
@@ -109,7 +109,7 @@ func (wl *WorkerLifecycle) DrainWorkerHandler() gin.HandlerFunc {
 		}
 
 		ctx := c.Request.Context()
-		if err := wl.reg.SetWorkerDrain(ctx, body.WorkerID, body.Drain); err != nil {
+		if err := h.reg.SetWorkerDrain(ctx, body.WorkerID, body.Drain); err != nil {
 			c.JSON(http.StatusNotFound, gin.H{"error": "worker not found"})
 			return
 		}
@@ -128,7 +128,7 @@ func (wl *WorkerLifecycle) DrainWorkerHandler() gin.HandlerFunc {
 	}
 }
 
-func (wl *WorkerLifecycle) GetWorkerDetailsHandler() gin.HandlerFunc {
+func (h *Handler) GetWorkerDetailsHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		workerID := c.Param("id")
 		if workerID == "" {
@@ -137,7 +137,7 @@ func (wl *WorkerLifecycle) GetWorkerDetailsHandler() gin.HandlerFunc {
 		}
 
 		ctx := c.Request.Context()
-		worker := wl.reg.GetWorker(ctx, workerID)
+		worker := h.reg.GetWorker(ctx, workerID)
 		if worker == nil {
 			c.JSON(http.StatusNotFound, gin.H{"error": "worker not found"})
 			return
@@ -147,7 +147,7 @@ func (wl *WorkerLifecycle) GetWorkerDetailsHandler() gin.HandlerFunc {
 	}
 }
 
-func (wl *WorkerLifecycle) CleanupStaleWorkersHandler() gin.HandlerFunc {
+func (h *Handler) CleanupStaleWorkersHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var body struct {
 			MaxAgeMinutes int `json:"max_age_minutes"`
@@ -162,7 +162,7 @@ func (wl *WorkerLifecycle) CleanupStaleWorkersHandler() gin.HandlerFunc {
 		}
 
 		ctx := c.Request.Context()
-		count := wl.reg.CleanupStaleWorkers(ctx, maxAge)
+		count := h.reg.CleanupStaleWorkers(ctx, maxAge)
 
 		c.JSON(http.StatusOK, gin.H{
 			"ok":      true,
@@ -173,12 +173,10 @@ func (wl *WorkerLifecycle) CleanupStaleWorkersHandler() gin.HandlerFunc {
 }
 
 // ListRevokedWorkersHandler returns a list of all revoked worker IDs and their details.
-func (wl *WorkerLifecycle) ListRevokedWorkersHandler() gin.HandlerFunc {
+func (h *Handler) ListRevokedWorkersHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		revokedIDs := wl.reg.ListRevoked()
+		revokedIDs := h.reg.ListRevoked()
 
-		// Return just the worker IDs; the registry only tracks revoked IDs without timestamps.
-		// For full details, the dashboard should query /api/v1/workers (which excludes revoked workers).
 		type revokedInfo struct {
 			WorkerID string `json:"worker_id"`
 		}

@@ -6,6 +6,8 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"velox-server/internal/config"
+	"velox-server/internal/handlers/remote/workers/assets"
+	"velox-server/internal/handlers/remote/workers/lifecycle"
 	workersapi "velox-server/internal/handlers/remote/workers"
 	workersreg "velox-server/internal/workers"
 )
@@ -14,18 +16,18 @@ import (
 type Module struct {
 	reg                 *workersreg.Registry
 	adminAuth           gin.HandlerFunc
-	workerLifecycle     *workersapi.WorkerLifecycle
+	workerLifecycle     *lifecycle.Handler
 	workerUpdateHandler *workersapi.WorkerUpdateHandler
-	workerAssetHandler  *workersapi.WorkerAssetHandler
+	workerAssetHandler  *assets.Handler
 }
 
-func New(cfg *config.Config, reg *workersreg.Registry, lifecycle *workersapi.WorkerLifecycle, updateHandler *workersapi.WorkerUpdateHandler, adminAuth gin.HandlerFunc) *Module {
+func New(cfg *config.Config, reg *workersreg.Registry, lifecycle *lifecycle.Handler, updateHandler *workersapi.WorkerUpdateHandler, adminAuth gin.HandlerFunc) *Module {
 	return &Module{
 		reg:                 reg,
 		workerLifecycle:     lifecycle,
 		workerUpdateHandler: updateHandler,
 		adminAuth:           adminAuth,
-		workerAssetHandler:  workersapi.NewWorkerAssetHandler(cfg),
+		workerAssetHandler:  assets.NewHandler(cfg),
 	}
 }
 

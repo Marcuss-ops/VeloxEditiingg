@@ -1,4 +1,4 @@
-package youtube
+package videos
 
 import (
 	"context"
@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"velox-server/internal/integrations/youtube"
@@ -14,9 +15,16 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+func parseTags(tagsStr string) []string {
+	if tagsStr == "" {
+		return []string{}
+	}
+	return strings.Split(tagsStr, ",")
+}
+
 // UploadVideo uploads a video to YouTube
 // POST /api/v1/youtube/upload
-func (h *YouTubeHandlers) UploadVideo(c *gin.Context) {
+func (h *Handler) UploadVideo(c *gin.Context) {
 	// Parse multipart form
 	file, header, err := c.Request.FormFile("video")
 	if err != nil {
@@ -60,7 +68,7 @@ func (h *YouTubeHandlers) UploadVideo(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Minute)
 	defer cancel()
 
-	result, err := h.service.UploadVideo(ctx, channelID, tempFile, config)
+	result, err := h.svc.UploadVideo(ctx, channelID, tempFile, config)
 	if err != nil {
 		log.Printf("[ERROR] Upload failed: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{
@@ -71,7 +79,7 @@ func (h *YouTubeHandlers) UploadVideo(c *gin.Context) {
 	}
 
 	// Clear cache after successful upload
-	h.ClearPrivateVideosCache()
+	h.clearCache()
 
 	c.JSON(http.StatusOK, gin.H{
 		"ok":     true,
@@ -81,7 +89,7 @@ func (h *YouTubeHandlers) UploadVideo(c *gin.Context) {
 
 // UploadVideoFromPath uploads a video from a local path
 // POST /api/v1/youtube/upload-path
-func (h *YouTubeHandlers) UploadVideoFromPath(c *gin.Context) {
+func (h *Handler) UploadVideoFromPath(c *gin.Context) {
 	var req struct {
 		FilePath      string   `json:"file_path" binding:"required"`
 		ChannelID     string   `json:"channel_id" binding:"required"`
@@ -122,7 +130,7 @@ func (h *YouTubeHandlers) UploadVideoFromPath(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Minute)
 	defer cancel()
 
-	result, err := h.service.UploadVideo(ctx, req.ChannelID, req.FilePath, config)
+	result, err := h.svc.UploadVideo(ctx, req.ChannelID, req.FilePath, config)
 	if err != nil {
 		log.Printf("[ERROR] Upload failed: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{
@@ -133,7 +141,7 @@ func (h *YouTubeHandlers) UploadVideoFromPath(c *gin.Context) {
 	}
 
 	// Clear cache after successful upload
-	h.ClearPrivateVideosCache()
+	h.clearCache()
 
 	c.JSON(http.StatusOK, gin.H{
 		"ok":     true,
@@ -143,7 +151,7 @@ func (h *YouTubeHandlers) UploadVideoFromPath(c *gin.Context) {
 
 // BatchUpload uploads multiple videos
 // POST /api/v1/youtube/batch-upload
-func (h *YouTubeHandlers) BatchUpload(c *gin.Context) {
+func (h *Handler) BatchUpload(c *gin.Context) {
 	var req struct {
 		Videos []struct {
 			FilePath    string   `json:"file_path" binding:"required"`
@@ -205,7 +213,7 @@ func (h *YouTubeHandlers) BatchUpload(c *gin.Context) {
 		}
 
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Minute)
-		result, err := h.service.UploadVideo(ctx, video.ChannelID, video.FilePath, config)
+		result, err := h.svc.UploadVideo(ctx, video.ChannelID, video.FilePath, config)
 		cancel()
 
 		if err != nil {
@@ -242,7 +250,7 @@ func (h *YouTubeHandlers) BatchUpload(c *gin.Context) {
 		}
 	}
 	if hasSuccess {
-		h.ClearPrivateVideosCache()
+		h.clearCache()
 	}
 
 	c.JSON(http.StatusOK, gin.H{

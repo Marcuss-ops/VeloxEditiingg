@@ -9,153 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"velox-server/internal/integrations/youtube"
-
 	"github.com/gin-gonic/gin"
 )
-
-// SetThumbnail sets the thumbnail for a video
-// POST /api/v1/youtube/videos/:video_id/thumbnail
-func (h *YouTubeHandlers) SetThumbnail(c *gin.Context) {
-	videoID := c.Param("video_id")
-
-	var req struct {
-		ChannelID     string `json:"channel_id" binding:"required"`
-		ThumbnailPath string `json:"thumbnail_path" binding:"required"`
-	}
-
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": err.Error()})
-		return
-	}
-
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
-	defer cancel()
-
-	result, err := h.service.SetThumbnail(ctx, req.ChannelID, videoID, req.ThumbnailPath)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": err.Error()})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"ok":       true,
-		"video_id": videoID,
-		"result":   result,
-	})
-}
-
-// UpdateMetadata updates video metadata
-// POST /api/v1/youtube/videos/:video_id/metadata
-func (h *YouTubeHandlers) UpdateMetadata(c *gin.Context) {
-	videoID := c.Param("video_id")
-
-	var req struct {
-		ChannelID   string   `json:"channel_id" binding:"required"`
-		Title       string   `json:"title"`
-		Description string   `json:"description"`
-		Tags        []string `json:"tags"`
-		Privacy     string   `json:"privacy"`
-	}
-
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": err.Error()})
-		return
-	}
-
-	config := youtube.UploadConfig{
-		Title:         req.Title,
-		Description:   req.Description,
-		Tags:          req.Tags,
-		PrivacyStatus: req.Privacy,
-	}
-
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
-	defer cancel()
-
-	err := h.service.UpdateVideoMetadata(ctx, req.ChannelID, videoID, config)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": err.Error()})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"ok":       true,
-		"video_id": videoID,
-		"message":  "Metadata updated successfully",
-	})
-}
-
-// PublishVideo changes video privacy to public or unlisted
-// POST /api/v1/youtube/videos/:video_id/publish
-func (h *YouTubeHandlers) PublishVideo(c *gin.Context) {
-	videoID := c.Param("video_id")
-
-	var req struct {
-		ChannelID string `json:"channel_id" binding:"required"`
-		Privacy   string `json:"privacy"` // public, unlisted
-	}
-
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": err.Error()})
-		return
-	}
-
-	privacy := req.Privacy
-	if privacy == "" {
-		privacy = "public"
-	}
-
-	config := youtube.UploadConfig{
-		PrivacyStatus: privacy,
-	}
-
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
-	defer cancel()
-
-	err := h.service.UpdateVideoMetadata(ctx, req.ChannelID, videoID, config)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": err.Error()})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"ok":       true,
-		"video_id": videoID,
-		"privacy":  privacy,
-		"message":  fmt.Sprintf("Video published as %s", privacy),
-	})
-}
-
-// DeleteVideo deletes a video
-// DELETE /api/v1/youtube/videos/:video_id
-func (h *YouTubeHandlers) DeleteVideo(c *gin.Context) {
-	videoID := c.Param("video_id")
-
-	channelID := c.Query("channel_id")
-	if channelID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "channel_id query parameter is required"})
-		return
-	}
-
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
-	defer cancel()
-
-	err := h.service.DeleteVideo(ctx, channelID, videoID)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": err.Error()})
-		return
-	}
-
-	// Clear cache after a successful deletion
-	h.ClearPrivateVideosCache()
-
-	c.JSON(http.StatusOK, gin.H{
-		"ok":       true,
-		"video_id": videoID,
-		"message":  "Video deleted successfully",
-	})
-}
 
 // ListVideos lists videos for a channel
 // GET /api/v1/youtube/videos
@@ -248,7 +103,6 @@ func (h *YouTubeHandlers) ListGroupPrivateVideos(c *gin.Context) {
 		return
 	}
 
-	// Check cache (unless refresh=true or force=true)
 	refresh := c.Query("refresh") == "true" || c.Query("force") == "true"
 	if !refresh {
 		h.privateVideosCacheMu.RLock()
@@ -328,9 +182,8 @@ func (h *YouTubeHandlers) ListGroupPrivateVideos(c *gin.Context) {
 		}
 	}
 
-	// Store in cache
 	h.privateVideosCacheMu.Lock()
-	h.privateVideosCache[cacheKey] = privateVideosCacheEntry{
+	h.privateVideosCache[cacheKey] = PrivateVideosCacheEntry{
 		Videos:    allVideos,
 		Timestamp: time.Now(),
 	}
@@ -368,7 +221,6 @@ func (h *YouTubeHandlers) RefreshAnalytics(c *gin.Context) {
 		return
 	}
 
-	// Process and update cache
 	err = h.service.UpdateAnalyticsCache(ctx, channelID, days, data)
 	if err != nil {
 		log.Printf("[ERROR] Analytics cache update failed for %s: %v", channelID, err)

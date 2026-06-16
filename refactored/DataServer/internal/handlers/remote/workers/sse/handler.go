@@ -1,4 +1,4 @@
-package workers
+package sse
 
 import (
 	"fmt"
@@ -57,7 +57,6 @@ func (b *SSEBroker) Broadcast(event SSEEvent) {
 		select {
 		case ch <- event:
 		default:
-			// Client channel full, skip to avoid blocking
 		}
 	}
 }
@@ -90,7 +89,6 @@ func (b *SSEBroker) NotifyWorkerStatus(workerID, status string) {
 // SSEHandler returns a Gin handler for SSE connections
 func (b *SSEBroker) SSEHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		// Set SSE headers
 		c.Header("Content-Type", "text/event-stream")
 		c.Header("Cache-Control", "no-cache")
 		c.Header("Connection", "keep-alive")
@@ -102,11 +100,9 @@ func (b *SSEBroker) SSEHandler() gin.HandlerFunc {
 			return
 		}
 
-		// Subscribe to events
 		ch := b.Subscribe()
 		defer b.Unsubscribe(ch)
 
-		// Send initial snapshot
 		if b.workers != nil {
 			ctx := c.Request.Context()
 			stats, _ := b.workers.Stats(ctx)
@@ -131,7 +127,6 @@ func (b *SSEBroker) SSEHandler() gin.HandlerFunc {
 			flusher.Flush()
 		}
 
-		// Stream events
 		for {
 			select {
 			case <-c.Request.Context().Done():
@@ -143,7 +138,6 @@ func (b *SSEBroker) SSEHandler() gin.HandlerFunc {
 				c.SSEvent("message", event)
 				flusher.Flush()
 			case <-time.After(30 * time.Second):
-				// Send keepalive
 				fmt.Fprintf(c.Writer, ": keepalive\n\n")
 				flusher.Flush()
 			}
