@@ -2,9 +2,14 @@ package youtube
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -12,6 +17,13 @@ import (
 	"velox-server/internal/integrations/news"
 	"velox-server/internal/integrations/youtube"
 )
+
+// managerStatsCacheTTL bounds the in-memory cache for the aggregated
+// manager-stats response. YouTube Data API v3 charges quota per ValidateToken
+// call (channels.list uses 1 unit); keeping the cache above the typical
+// 5-minute operator refresh interval avoids burning ~50-200 units per dashboard
+// refresh while keeping the visible state "fresh enough" for ops decisions.
+const managerStatsCacheTTL = 5 * time.Minute
 
 // YouTubeManager holds the dependencies for YouTube manager handlers
 type YouTubeManager struct {
@@ -21,6 +33,61 @@ type YouTubeManager struct {
 	newsFetcher *news.Fetcher
 	dataDir     string
 	service     *youtube.Service
+
+	// statsCacheMu guards statsCacheEntry. Reads are via RLock so concurrent
+	// refreshes can proceed while dashboards serve cached payloads.
+	statsCacheMu    sync.RWMutex
+	statsCacheEntry *statsCacheEntry
+}
+
+// statsCacheEntry is the cached aggregate payload + its freshness horizon.
+type statsCacheEntry struct {
+	data        ManagerStatsResponse
+	generatedAt time.Time
+	expiresAt   time.Time
+}
+
+// ManagerStatsResponse is the JSON shape returned by ManagerStatsHandler.
+// `CacheHit` lets callers distinguish fresh aggregations from cached ones;
+// `QuotaSkippedChannels` reports how many channels were served from the
+// channel-file presence check alone (no ValidateToken API call) so dashboards
+// can flag quota-skip behavior.
+type ManagerStatsResponse struct {
+	OK                   bool                         `json:"ok"`
+	Cached               bool                         `json:"cached"`
+	GeneratedAt          time.Time                    `json:"generated_at"`
+	ExpiresAt            time.Time                    `json:"expires_at"`
+	CacheAgeSeconds      int                          `json:"cache_age_seconds"`
+	TotalGroups          int                          `json:"total_groups"`
+	TotalChannels        int                          `json:"total_channels"`
+	ValidChannels        int                          `json:"valid_channels"`
+	InvalidChannels      int                          `json:"invalid_channels"`
+	QuotaSkippedChannels int                          `json:"quota_skipped_channels"`
+	ServiceConfigured    bool                         `json:"service_configured"`
+	Groups               map[string]ManagerGroupStats `json:"groups"`
+	Error                string                       `json:"error,omitempty"`
+}
+
+// ManagerGroupStats is the per-group breakdown embedded in ManagerStatsResponse.
+type ManagerGroupStats struct {
+	GroupName    string                `json:"group_name"`
+	ChannelCount int                   `json:"channel_count"`
+	ValidCount   int                   `json:"valid_count"`
+	InvalidCount int                   `json:"invalid_count"`
+	Channels     []ManagerChannelStats `json:"channels"`
+}
+
+// ManagerChannelStats is the per-channel row; only the fields that came back
+// from ValidateToken are populated (Title is filled when present).
+type ManagerChannelStats struct {
+	ChannelID         string `json:"channel_id"`
+	Title             string `json:"title,omitempty"`
+	HasTokenFile      bool   `json:"has_token_file"`
+	Valid             bool   `json:"valid"`
+	IsExpired         bool   `json:"is_expired"`
+	HasRefreshToken   bool   `json:"has_refresh_token"`
+	RefreshedThisCall bool   `json:"refreshed_this_call"`
+	ErrorMessage      string `json:"error,omitempty"`
 }
 
 // NewYouTubeManager creates a new YouTube manager handler instance.
@@ -263,4 +330,187 @@ func extractKeywords(s string) []string {
 	}
 
 	return keywords
+}
+
+// --- Manager Stats endpoint ---
+//
+// ManagerStatsHandler returns the aggregate per-group channel + token-validity
+// snapshot. Cached for managerStatsCacheTTL to bound YouTube Data API quota
+// consumption (each ValidateToken is a channels.list call).
+//
+// Query params:
+//   - refresh=1|true  force a fresh aggregation (skips cache, repopulates it).
+//
+// Cache strategy:
+//   - Cache HIT  -> returns the cached payload immediately with X-Cache: HIT
+//     and X-Cache-Age-Seconds header.  Bodies still flag cached=true.
+//   - Cache MISS -> invokes aggregateManagerStats under a 30s timeout,
+//     populates the cache, returns with X-Cache: MISS and cached=false.
+//   - Concurrent-miss race: between RUnlock and Lock a sibling goroutine may
+//     have populated statsCacheEntry; we then redundantly aggregate and
+//     overwrite.  This is best-effort / last-writer-wins and is intentional
+//     (the small extra API cost is bounded by managerStatsCacheTTL).
+func (ym *YouTubeManager) ManagerStatsHandler() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		forceRefresh := isTruthyQuery(c.Query("refresh"))
+
+		if !forceRefresh {
+			ym.statsCacheMu.RLock()
+			cached := ym.statsCacheEntry
+			ym.statsCacheMu.RUnlock()
+
+			if cached != nil && time.Now().Before(cached.expiresAt) {
+				resp := cached.data
+				resp.Cached = true
+				resp.CacheAgeSeconds = int(time.Since(cached.generatedAt).Seconds())
+				c.Header("X-Cache", "HIT")
+				c.Header("X-Cache-Age-Seconds", strconv.Itoa(resp.CacheAgeSeconds))
+				c.JSON(http.StatusOK, resp)
+				return
+			}
+		}
+
+		ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
+		defer cancel()
+
+		resp, err := ym.aggregateManagerStats(ctx)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, ManagerStatsResponse{
+				OK:     false,
+				Groups: map[string]ManagerGroupStats{}, // keep schema stable on error
+				Error:  err.Error(),
+			})
+			return
+		}
+		resp.Cached = false
+		resp.CacheAgeSeconds = 0
+		resp.GeneratedAt = time.Now().UTC()
+		resp.ExpiresAt = resp.GeneratedAt.Add(managerStatsCacheTTL)
+
+		ym.statsCacheMu.Lock()
+		ym.statsCacheEntry = &statsCacheEntry{
+			data:        resp,
+			generatedAt: resp.GeneratedAt,
+			expiresAt:   resp.ExpiresAt,
+		}
+		ym.statsCacheMu.Unlock()
+
+		c.Header("X-Cache", "MISS")
+		c.JSON(http.StatusOK, resp)
+	}
+}
+
+// isTruthyQuery accepts the canonical truthy spellings from query strings:
+// "1", "true", "t", "yes", "y" (case-insensitive, trimmed).  Keeps the
+// bool-parse behavior consistent with internal/config[boolFromEnv] so ops
+// don't need to remember two separate vocabularies.
+func isTruthyQuery(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "1", "true", "t", "yes", "y":
+		return true
+	}
+	return false
+}
+
+// aggregateManagerStats builds the JSON aggregation by walking the storage
+// groups and calling ValidateToken per channel. If ym.service is nil
+// (e.g. minimal install), the response degrades gracefully (valid=false,
+// error_message set, but file-presence still reported).
+func (ym *YouTubeManager) aggregateManagerStats(ctx context.Context) (ManagerStatsResponse, error) {
+	if ym.storage == nil {
+		return ManagerStatsResponse{}, fmt.Errorf("storage not configured")
+	}
+
+	groups, _ := ym.storage.ListGroups()
+
+	resp := ManagerStatsResponse{
+		OK:                true,
+		Groups:            make(map[string]ManagerGroupStats, len(groups)),
+		ServiceConfigured: ym.service != nil,
+	}
+
+	for _, group := range groups {
+		gs := ManagerGroupStats{
+			GroupName: group.Name,
+			Channels:  make([]ManagerChannelStats, 0, len(group.Channels)),
+		}
+		for _, ch := range group.Channels {
+			stat := ManagerChannelStats{
+				ChannelID:    ch.ID,
+				Title:        ch.Title,
+				HasTokenFile: ym.channelHasTokenFile(ch.ID),
+				Valid:        false,
+			}
+
+			if ym.service != nil {
+				result, _ := ym.service.ValidateToken(ctx, ch.ID)
+				stat.Valid = asBool(result, "valid")
+				stat.IsExpired = asBool(result, "is_expired")
+				stat.HasRefreshToken = asBool(result, "has_refresh_token")
+				stat.RefreshedThisCall = asBool(result, "refreshed")
+				stat.ErrorMessage = asString(result, "error")
+				if title, ok := result["channel_title"].(string); ok && title != "" && stat.Title == "" {
+					stat.Title = title
+				}
+			} else {
+				stat.ErrorMessage = "service not configured (degraded mode)"
+				resp.QuotaSkippedChannels++
+			}
+
+			gs.Channels = append(gs.Channels, stat)
+			gs.ChannelCount++
+			if stat.Valid {
+				gs.ValidCount++
+			} else {
+				gs.InvalidCount++
+			}
+		}
+		resp.Groups[group.Name] = gs
+		resp.TotalChannels += gs.ChannelCount
+		resp.ValidChannels += gs.ValidCount
+		resp.InvalidChannels += gs.InvalidCount
+	}
+	resp.TotalGroups = len(groups)
+
+	return resp, nil
+}
+
+// channelHasTokenFile reports whether a token file exists for this channel.
+// The token-dir candidates mirror the storage fallback chain in
+// `service.go::NewService`.
+func (ym *YouTubeManager) channelHasTokenFile(channelID string) bool {
+	if ym.dataDir == "" || channelID == "" {
+		return false
+	}
+	candidates := []string{
+		filepath.Join(ym.dataDir, "youtube", "tokens", "account_"+channelID+".json"),
+		filepath.Join(ym.dataDir, "secrets", "youtube", "tokens", "account_"+channelID+".json"),
+		filepath.Join(ym.dataDir, "youtube", "Token", "account_"+channelID+".json"),
+	}
+	for _, p := range candidates {
+		if _, err := os.Stat(p); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// asBool safely extracts a bool from a ValidateToken response map.
+// Local to this file because ValidateToken's return shape (map[string]any)
+// is not a stable cross-package contract — other packages use typed structs
+// (TokenChannelInfo, AuthChannel) and have their own typed extractors.
+func asBool(m map[string]interface{}, key string) bool {
+	if v, ok := m[key].(bool); ok {
+		return v
+	}
+	return false
+}
+
+// asString safely extracts a string from a ValidateToken response map.
+// See asBool for rationale on file-local scope.
+func asString(m map[string]interface{}, key string) string {
+	if v, ok := m[key].(string); ok {
+		return v
+	}
+	return ""
 }
