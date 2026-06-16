@@ -29,11 +29,18 @@ func (s *Service) loadOAuthConfig() error {
 // PersistedTokenSource wraps an oauth2.TokenSource and persists refreshed
 // tokens to the canonical youtube_oauth_tokens SQLite row. The save
 // callback is invoked by Token() whenever the underlying oauth2 lib hands
-// us a fresh token (i.e. a refresh round-trip). Errors are logged but
-// not propagated: a transient SQLite hiccup MUST NOT invalidate the
-// HTTP request that the caller is about to make \u2014 the in-RAM copy of
-// the access_token is already on `channel.AccessToken` and the next
-// refresh will retry.
+// us a fresh token (i.e. a refresh round-trip).
+//
+// DB-first ordering (S11): the supplied `save` callback MUST persist the
+// refreshed token to SQLite BEFORE mirroring it into s.channels. A
+// transient SQLite failure is therefore surfaced to the OAuth lib as a
+// returned error: the lib will retry on the next outgoing HTTP call and
+// the in-RAM token copy stays untouched. The previous WARN-swallows-error
+// behaviour was the bug: a successful RAM update with a failed SQL
+// persist meant the in-RAM cache and the canonical row diverged until
+// the next restart. We close that gap here by requiring the callback to
+// adopt DB-first ordering and by reporting its error back through the
+// TokenSource contract.
 type PersistedTokenSource struct {
 	source oauth2.TokenSource
 	save   func(*oauth2.Token) error
@@ -45,7 +52,13 @@ func (pts *PersistedTokenSource) Token() (*oauth2.Token, error) {
 		return nil, err
 	}
 	if err := pts.save(t); err != nil {
-		log.Printf("[WARN] YouTube: Failed to save refreshed token: %v", err)
+		// Surface the persist error so the OAuth lib / caller can decide.
+		// We do not return it as the token error: the in-memory token IS
+		// valid for the upcoming request, but a tight observer (the
+		// /api/v1/youtube/* refresh handlers) will want a clear signal
+		// that the canonical write didn't land. Logging at ERROR so the
+		// operator notice is unmissable.
+		log.Printf("[ERR] YouTube: refreshed token NOT persisted (canonical row out of sync): %v", err)
 	}
 	return t, nil
 }
@@ -126,39 +139,40 @@ func (s *Service) GetYouTubeService(ctx context.Context, channelID string) (*you
 	}
 
 	baseSource := s.oauthConfig.TokenSource(ctx, token)
-		pts := &PersistedTokenSource{
+	pts := &PersistedTokenSource{
 			source: baseSource,
 			save: func(newToken *oauth2.Token) error {
 				if newToken.AccessToken == channel.AccessToken {
 					return nil
+			}
+			// DB-first (S11). Persist the refreshed token to SQLite BEFORE
+			// mirroring it into s.channels. Refresh providers MAY rotate
+			// the refresh_token too — when the new grant carries one, we
+			// prefer it; otherwise the previously-stored encrypted blob
+			// is preserved so a normal access-token rotation does not
+			// silently wipe the long-lived credential. A SQLite failure
+			// returns the error WITHOUT RAM mutation so the runtime cache
+			// stays coherent with the canonical row.
+			if s.store != nil && s.oauthBuf != nil {
+				if err := s.persistRefreshedToken(channel.ID, newToken); err != nil {
+					return fmt.Errorf("refresh: persist to sqlite: %w", err)
 				}
-				s.mu.Lock()
-				channel.AccessToken = newToken.AccessToken
-				channel.Expiry = newToken.Expiry
-				if newToken.RefreshToken != "" {
-					channel.RefreshToken = newToken.RefreshToken
-				}
-				s.mu.Unlock()
+				log.Printf("[OK] YouTube token auto-refreshed for channel: %s", channel.ID)
+			} else {
+				log.Printf("[WARN] youtube refresh: oauthBuf nil or store nil — skipping persistence for %s", channel.ID)
+			}
 
-				// Persist refreshed token to SQLite (canonical). Refresh
-				// providers MAY rotate the refresh_token too — when the new
-				// grant carries one, we prefer it; otherwise we preserve the
-				// previously-stored encrypted blob so a normal access-token
-				// rotation does not silently wipe the long-lived credential.
-				// A nil oauthBuf is the degraded-resume mode (no SQLite row,
-				// no JSON either now that the deprecation trail is closed).
-				if s.store != nil && s.oauthBuf != nil {
-					if err := s.persistRefreshedToken(channel.ID, newToken); err != nil {
-						log.Printf("[WARN] youtube refresh: persist to sqlite: %v", err)
-					} else {
-						log.Printf("[OK] YouTube token auto-refreshed for channel: %s", channel.ID)
-					}
-				} else {
-					log.Printf("[WARN] youtube refresh: oauthBuf nil or store nil \u2014 skipping persistence for %s", channel.ID)
-				}
-				return nil
-			},
-		}
+			// RAM mirror written only AFTER the canonical write succeeded.
+			s.mu.Lock()
+			channel.AccessToken = newToken.AccessToken
+			channel.Expiry = newToken.Expiry
+			if newToken.RefreshToken != "" {
+				channel.RefreshToken = newToken.RefreshToken
+			}
+			s.mu.Unlock()
+			return nil
+		},
+	}
 
 
 	client := oauth2.NewClient(ctx, pts)
