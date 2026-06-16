@@ -214,6 +214,18 @@ DataServer/internal/queue/orchestrator.go
 DataServer/internal/store/store_jobs.go (ClaimNextPendingJob)
 ```
 
+### Fase 2b: Worker Creator / Computer Creator
+
+In alcuni flussi il job passa prima da un computer creator che prepara o restituisce il payload completo
+prima del rendering finale sul worker remoto.
+
+```
+Queue job → worker creator / computer creator → ritorno payload completo → worker finale
+```
+
+Questo step non sostituisce il worker remoto: lo precede quando il flusso richiede una fase intermedia
+di composizione o arricchimento degli asset.
+
 ### Fase 3: Job Acquisition (Worker)
 
 Il worker ogni 5s controlla se ci sono job:
@@ -251,6 +263,7 @@ executeJob()
   │   └── Lancia C++ engine (exec.CommandContext)
   │
   └── uploadCompletedVideo() → POST /api/video/upload-completed
+      └── upload sul canale selezionato / Google Drive
 ```
 
 ### Fase 5: C++ Video Processing
