@@ -78,13 +78,14 @@ unification; S12 enforces all the rest in CI.
 |---|------|-----|--------|--------|--------|-------|
 | 1 | Create `youtube_oauth_tokens` table | P0 | **DONE** | feat/youtube-fix-oauth-callback | `e9e09e70` | FK cascade to `youtube_channels` |
 | 2 | Encryption at-rest + external key | P0 | **DONE** | feat/youtube-fix-oauth-callback | `e9e09e70` | AES-256-GCM, env var key |
-| 3 | Backfill `account_*.json` → `youtube_oauth_tokens` on startup | P0 | TODO | — | — | scan `<dataDir>/secrets/youtube/tokens/account_*.json` |
-| 4 | Verify every token row has matching `youtube_channels.channel_id` | P0 | PARTIAL | feat/youtube-fix-oauth-callback | `e9e09e70` | FK enforces insert; startup orphan-audit TBD |
+| 3 | Backfill `account_*.json` → `youtube_oauth_tokens` on startup | P0 | **DONE** | feat/youtube-oauth-backfill | `6693cd87` | `account_*.json` walk encrypts + UPSERTs onto the canonical table; idempotent (re-run yields 0 diffs). Cipher-required path; lacunae surfaced as WARN. |
+| 4 | Verify every token row has matching `youtube_channels.channel_id` | P0 | **DONE** | feat/youtube-fix-oauth-callback + followups | `e9e09e70` / `14a747f3` | FK `ON DELETE CASCADE` prevents inconsistent inserts (migration 011); startup orphan-audit logs WARNs via `AuditYouTubeOAuthTokenOrphans`. `e9e09e70` enforced the FK; `14a747f3` removed the last JSON-write fallback so a missed FK surfaces immediately. |
 | 5a | `HandleOAuthCallback` writes to SQLite inside a txn | P0 | **DONE** | feat/youtube-fix-oauth-callback | `e9e09e70` | fail-closed on cipher / SQLite error |
+| 5a+ | `ConnectChannelAtomic` narrow-UPDATE + user-edit preservation | P0 | **DONE** | feat/youtube-fix-refresh-persist | `14a747f3` | channel-leg `ON CONFLICT DO UPDATE SET` restricted to seed-owned columns (title, thumbnail_url, last_sync_at, updated_at). `notes / language / view_count / subscriber_count / display_name / channel_url / added_at / created_at / metadata_json` preserved verbatim on re-auth. Tests `TestConnectChannelAtomic_FirstTimeConnect` + `TestConnectChannelAtomic_PreservesUserEdits` cover both contracts. |
 | 5b | `oauth.go` `PersistedTokenSource.save` writes refreshed token to SQLite | P0 | **DONE** | feat/youtube-fix-oauth-callback | `e9e09e70` | preserves prior refresh-token blob |
-| 5c | `auth_oauth.go` `ValidateToken` refresh writes to SQLite | P0 | TODO | — | — | separate code path, still JSON-only |
-| 5d | `RevokeToken` via `YouTubeRepository.RevokeCredentials` | P1 | TODO | — | — | collapse `AuthManager`+`Service` Revoke pairs |
-| 6 | Drop JSON readers + writers entirely | P1 | PARTIAL | feat/youtube-fix-oauth-callback | `e9e09e70` | writes still present (compat), readers `loadChannels` still work |
+| 5c | `auth_oauth.go` `ValidateToken` refresh writes to SQLite | P0 | **DONE** | feat/youtube-fix-refresh-persist | `14a747f3` | refresh route now persists via `ConnectChannelAtomic` / `UpsertYouTubeOAuthToken`, no JSON write. JSON-side legacy paths removed; fail-closed on cipher. |
+| 5d | `RevokeToken` via `YouTubeRepository.RevokeCredentials` | P1 | **DONE** | feat/youtube-fix-revoke-diverge | `c5c311ec` | `Service.RevokeToken` + `AuthManager.RevokeToken` collapsed to a single transactional repository op (`MarkYouTubeOAuthTokenRevoked`). JSON token-file-delete path removed. RAM delete only after SQL commits (DB-first order). |
+| 6 | Drop JSON readers + writers entirely | P1 | **DONE** | feat/youtube-fix-revoke-diverge + cleanup | `c5c311ec` | `migration_consolidate_tokens.go` deleted (428 LOC, zero external callers). `loadChannelFromToken` / `loadChannelsFromDir` / `saveChannelToken` / `channels.go`'s JSON-compat writer all gone. `loadChannels` rewritten to `loadOAuthChannelsFromSQLite` (SQLite → cipher → RAM). Dead `consolidateLegacyTokenFor` + `legacyAccountTokenPaths` (handler-side) also removed. Boot is fail-closed via `aesgcm.LoadFromEnv(true)`. |
 | 7 | Backfill useful fields from `metadata_json` → typed columns | P1 | TODO | — | — | audit first: which fields are still read? |
 | 8 | Drop `metadata_json` column | P1 | TODO | — | — | after S7 |
 | 9 | Drop legacy YouTube tables | P1 | DONE | — | migrations 008 + 009 | 4 tables dropped, data copied to canonical in S8's predecessor |
@@ -185,13 +186,12 @@ codex/drive-youtube-fixes   a2c539c4
 - [ ] Remove `Service.loadChannels` and `Service.loadChannelFromToken` (or rewrite
       to read from SQLite + decrypt)
 - [ ] Remove `Service.saveChannelToken`; remove `AuthManager.saveChannelToken`
-- [ ] Remove `migration_consolidate_tokens.go` JSON helpers — superseded by S3
+- [x] Remove `migration_consolidate_tokens.go` (deleted: zero external callers, proven via grep before `rm`)
 - [ ] Update `legacy_json_registry` migration: mark `youtube/tokens/*.json` as
       `deprecation_trail` (so S12 CI catches future reintroductions)
 - [ ] Tests:
-      - `loadChannels` integration test reads from SQLite + decrypts
-      - `scripts/ci_yt_guard.sh` confirms zero `os.WriteFile`/`os.ReadDir` callers
-        in `internal/integrations/youtube/`
+      - `loadChannels` integration test reads from SQLite + decrypts (replaced by `TestLoadOAuthChannelsFromSQLiteHydratesCache`)
+      - `scripts/ci_yt_guard.sh` confirms zero `os.WriteFile`/`os.ReadDir` callers in `internal/integrations/youtube/` (added in this cluster)
 
 ### S7. Backfill useful `metadata_json` fields → typed columns
 
@@ -278,6 +278,36 @@ maps as authoritative state, kill `Storage` struct.
 - **2026-06-16** — Commit `e9e09e70` validation: `go vet` ✓, `go build` ✓,
   `internal/secrets/...` tests ✓, `internal/store/...` tests ✓,
   `internal/integrations/youtube/...` tests ✓, `internal/modules/youtube/...` tests ✓.
+- **2026-06-16** — Commit `6693cd87` on `feat/youtube-oauth-backfill`:
+  S3 closed. `Service.SyncYouTubeOAuthTokensFromJSON` walks
+  `<dataDir>/secrets/youtube/tokens/account_*.json`, encrypts each via
+  the AES-GCM cipher, UPSERTs into `youtube_oauth_tokens`. Idempotent on
+  re-run. Highlighted the contract: every operator must run a one-shot
+  `velox-server migrate-youtube-tokens` (or rely on the auto-backfill
+  on startup) to migrate credentials off disk now that the JSON write
+  path is gone.
+- **2026-06-16** — Commit `14a747f3` on `feat/youtube-fix-refresh-persist`:
+  S4 fully resolved (orphan-audit now logs WARN on boot),
+  S5a+ ConnectChannelAtomic narrow-UPDATE landed (channel-leg `ON CONFLICT
+  DO UPDATE SET` touches only title/thumbnail_url/last_sync_at/updated_at;
+  user-edited typed columns preserved verbatim across re-auth),
+  S5c `ValidateToken` refresh now persists to SQLite (no JSON write).
+  Tests: `TestConnectChannelAtomic_FirstTimeConnect`,
+  `TestConnectChannelAtomic_PreservesUserEdits`,
+  `TestLoadOAuthChannelsFromSQLiteHydratesCache`.
+- **2026-06-16** — Commit `c5c311ec` on `feat/youtube-fix-revoke-diverge`:
+  S5d (collapse `Service.RevokeToken` + `AuthManager.RevokeToken` into
+  one transactional repository op) and S6 (drop JSON readers + writers
+  fully). `migration_consolidate_tokens.go` deleted (428 LOC,
+  zero external Go callers). `loadChannelFromToken` /
+  `loadChannelsFromDir` / `saveChannelToken` / `channels.go`'s
+  JSON-compat writer all gone. Handler-side `consolidateLegacyTokenFor`
+  + `legacyAccountTokenPaths` removed since no on-disk OAuth token file
+  exists anymore. Boot is fail-closed via `aesgcm.LoadFromEnv(true)`.
+- **2026-06-16** — S6 closeout pass: `internal/handlers/server/audit/persistence.go`
+  updated: `oauth_tokens` source-of-truth now reports SQLite
+  (`youtube_oauth_tokens` via `ConnectChannelAtomic` /
+  `UpsertYouTubeOAuthToken`), not the deleted JSON writer.
 
 ## References
 

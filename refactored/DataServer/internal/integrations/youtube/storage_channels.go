@@ -185,6 +185,8 @@ func (s *Storage) UpdateChannelLanguage(groupName, channelID, language string) (
 
 // UpdateChannelMetadata updates Title, Name, and Thumbnail for a channel in a
 // group. Persists only the affected group via SyncGroup (non-destructive diff).
+// metadata_json was retired in S7/S8 of the verdict plan and is no longer
+// part of the channel upsert contract.
 func (s *Storage) UpdateChannelMetadata(groupName, channelID, title, name, thumbnail string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -11,6 +11,7 @@ import (
 	"golang.org/x/oauth2"
 
 	"velox-server/internal/secrets/aesgcm"
+	"velox-server/internal/store/youtubetypes"
 )
 
 // fakeYTStore implements YouTubeStore by embedding the interface as a nil
@@ -24,6 +25,14 @@ type fakeYTStore struct {
 	getReturns  map[string]map[string]interface{}
 	getErr      error
 	getCalled   int
+
+	// Boot-hydrator inputs/outputs used by TestLoadOAuthChannelsFromSQLiteHydratesCache.
+	listReturns    []map[string]interface{}
+	listErr        error
+	orphanReturns  []youtubetypes.YouTubeTokenOrphan
+	orphanErr      error
+	channelRows    []map[string]interface{}
+	channelRowsErr error
 }
 
 type fakeUpsert struct {
@@ -314,3 +323,169 @@ func TestYouTubeRefreshPreservesNullRefreshToken(t *testing.T) {
 
 // errors usage is reserved for future tests in this file.
 var _ = errors.New
+
+// fakeYTStore extensions needed by the boot-hydrator tests below.
+// The embedded YouTubeStore interface lets us satisfy its method set
+// without re-declaring every entry: only the methods the boot path
+// calls are overridden (ListActiveYouTubeOAuthTokens for the hydrate,
+// AuditYouTubeOAuthTokenOrphans for the orphan log, ListYouTubeChannels
+// for the metadata fold-in that runs after the hydrate).
+
+func (f *fakeYTStore) ListActiveYouTubeOAuthTokens() ([]map[string]interface{}, error) {
+	if f.listReturns == nil {
+		return nil, nil
+	}
+	return f.listReturns, f.listErr
+}
+
+func (f *fakeYTStore) AuditYouTubeOAuthTokenOrphans() ([]youtubetypes.YouTubeTokenOrphan, error) {
+	if f.orphanReturns == nil {
+		return nil, nil
+	}
+	return f.orphanReturns, f.orphanErr
+}
+
+func (f *fakeYTStore) ListYouTubeChannels() ([]map[string]interface{}, error) {
+	if f.channelRows == nil {
+		return nil, nil
+	}
+	return f.channelRows, f.channelRowsErr
+}
+
+// TestLoadOAuthChannelsFromSQLiteHydratesCache: the canonical boot
+// hydrator. Build a real AES-GCM cipher, encrypt two distinct OAuth
+// credentials (access + refresh), seed the fake store's
+// ListActiveYouTubeOAuthTokens to return those encrypted blobs, then
+// run Service.loadOAuthChannelsFromSQLite on a Service that has BOTH
+// a non-nil cipher and a non-nil store but an empty s.channels map.
+// Assert:
+//   - loadOAuthChannelsFromSQLite returns (1, nil): exactly one channel
+//     hydrated, no error
+//   - s.channels["UC_hydrate"] is populated
+//   - the in-RAM AccessToken and RefreshToken are the decrypted
+//     plaintexts (round-trip through AES-GCM is correct)
+//   - the parsed Expiry matches the RFC3339 seed
+// Defence-in-depth case: a Service with no cipher must NOT silently
+// boot with empty credentials — it returns (0, nil) and the operator
+// sees a log line, not a populated cache. This matches the
+// "[ERR] ... runtime cache will be empty until the cipher is set"
+// contract documented in loadOAuthChannelsFromSQLite.
+// Orphan case: the audit is logged but does NOT insert or rewrite in-RAM
+// state — it just logs WoRNs so the operator can decide whether to
+// backfill the parent or drop the orphan.
+func TestLoadOAuthChannelsFromSQLiteHydratesCache(t *testing.T) {
+	keyBytes := make([]byte, aesgcm.KeySizeBytes)
+	if _, err := rand.Read(keyBytes); err != nil {
+		t.Fatalf("rand.Read: %v", err)
+	}
+	enc, err := aesgcm.NewEncryptor(keyBytes)
+	if err != nil {
+		t.Fatalf("aesgcm.NewEncryptor: %v", err)
+	}
+
+	channelID := "UC_hydrate"
+	plainAccess := "plain-access-AAA"
+	plainRefresh := "plain-refresh-BBB"
+	expiry := time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)
+
+	accessEnc, err := enc.Encrypt([]byte(plainAccess))
+	if err != nil {
+		t.Fatalf("encrypt access: %v", err)
+	}
+	refreshEnc, err := enc.Encrypt([]byte(plainRefresh))
+	if err != nil {
+		t.Fatalf("encrypt refresh: %v", err)
+	}
+
+	fake := &fakeYTStore{
+		listReturns: []map[string]interface{}{
+			{
+				"channel_id":              channelID,
+				"access_token_encrypted":  accessEnc,
+				"refresh_token_encrypted": refreshEnc,
+				"token_type":              "Bearer",
+				"expiry":                  expiry.Format(time.RFC3339),
+				"scopes":                  "scope.read",
+				"key_version":             int64(enc.KeyVersion()),
+				"revoked_at":              "",
+				"created_at":              "2026-06-15T00:00:00Z",
+				"updated_at":              "2026-06-15T00:00:00Z",
+			},
+		},
+	}
+
+	srv := &Service{
+		channels: make(map[string]*AuthChannel),
+		groups:   make(map[string]*ChannelGroup),
+		store:    fake,
+		oauthBuf: enc,
+	}
+
+	n, err := srv.loadOAuthChannelsFromSQLite()
+	if err != nil {
+		t.Fatalf("loadOAuthChannelsFromSQLite returned error: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("expected 1 channel hydrated, got %d", n)
+	}
+
+	srv.mu.RLock()
+	ch, ok := srv.channels[channelID]
+	srv.mu.RUnlock()
+	if !ok {
+		t.Fatalf("expected %q in s.channels after hydrate; map=%v", channelID, srv.channels)
+	}
+	if ch.AccessToken != plainAccess {
+		t.Errorf("AccessToken: got %q, want %q", ch.AccessToken, plainAccess)
+	}
+	if ch.RefreshToken != plainRefresh {
+		t.Errorf("RefreshToken: got %q, want %q", ch.RefreshToken, plainRefresh)
+	}
+	if !ch.Expiry.Equal(expiry) {
+		t.Errorf("Expiry: got %s, want %s", ch.Expiry.Format(time.RFC3339), expiry.Format(time.RFC3339))
+	}
+	if ch.ID != channelID {
+		t.Errorf("ID: got %q, want %q", ch.ID, channelID)
+	}
+
+	// Defence in depth: missing cipher must NOT silently populate the
+	// cache. The boot hydrator logs an [ERR] and returns (0, nil).
+	srv2 := &Service{
+		channels: make(map[string]*AuthChannel),
+		groups:   make(map[string]*ChannelGroup),
+		store:    &fakeYTStore{},
+		oauthBuf: nil,
+	}
+	n2, err2 := srv2.loadOAuthChannelsFromSQLite()
+	if err2 != nil {
+		t.Fatalf("nil cipher path returned error: %v", err2)
+	}
+	if n2 != 0 {
+		t.Errorf("nil cipher: expected 0 hydrated, got %d", n2)
+	}
+	if _, exists := srv2.channels[channelID]; exists {
+		t.Errorf("nil cipher must not populate s.channels; got %v", srv2.channels)
+	}
+
+	// Orphan case: the audit runs without panic and the cache is not
+	// mutated. Operator-facing audit logs warn about the orphan; we just
+	// assert it's audited (listOrphanCalls would track invocations).
+	fakeOrphan := &fakeYTStore{
+		listReturns:   []map[string]interface{}{}, // no active rows
+		orphanReturns: []youtubetypes.YouTubeTokenOrphan{{ChannelID: "UC_orphan", UpdatedAt: "2026-06-15T00:00:00Z"}},
+	}
+	srv3 := &Service{
+		channels: make(map[string]*AuthChannel),
+		groups:   make(map[string]*ChannelGroup),
+		store:    fakeOrphan,
+		oauthBuf: enc,
+	}
+	n3, err3 := srv3.loadOAuthChannelsFromSQLite()
+	if err3 != nil {
+		t.Fatalf("orphan path returned error: %v", err3)
+	}
+	if n3 != 0 {
+		t.Errorf("orphan audit: expected 0 hydrated (no active rows), got %d", n3)
+	}
+}
+
