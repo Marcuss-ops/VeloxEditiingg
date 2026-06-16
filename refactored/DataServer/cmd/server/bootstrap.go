@@ -160,40 +160,14 @@ func runServer(cfg *config.Config) error {
 	// while keeping same-path detection).
 	runDuadDBBootCheck(deps, cfg)
 
-	// One-shot consolidation: legacy OAuth tokens may still live in
-	// <DataDir>/youtube/Token or <DataDir>/youtube/group/<name>/ from older
-	// Velox releases. The catalog itself (channels, groups) is already in
-	// SQLite; only the OAuth-secret files drift across locations. Move
-	// everything to <DataDir>/secrets/youtube/tokens/ and prune empty
-	// legacy directories. Idempotent — safe to run every startup.
-	//
-	// Failure semantics:
-	//   - canonical-dir MkdirAll failure: HARD FAIL startup. Without the
-	//     canonical path the suite cannot persist new tokens. Better to
-	//     abort early than silently break OAuth.
-	//   - per-file errors during consolidation: WARN + log. Transient
-	//     read errors on individual files should not block boot — the
-	//     canonical for that channel falls back to whatever legacy copy
-	//     was discovered, and the next start retries.
-	if cfg.DataDir != "" {
-		canonicalDir := filepath.Join(cfg.DataDir, integrationsYoutube.CanonicalOAuthTokenSubPath)
-		if err := os.MkdirAll(canonicalDir, 0755); err != nil {
-			log.Printf("[ERROR] Cannot create canonical OAuth token dir %s: %v", canonicalDir, err)
-			return fmt.Errorf("bootstrap: canonical oauth directory unwritable: %w", err)
-		}
-		res, err := integrationsYoutube.ConsolidateOAuthTokens(cfg.DataDir, false)
-		if err != nil {
-			log.Printf("[ERROR] OAuth token consolidation failed: %v", err)
-			return fmt.Errorf("bootstrap: oauth token consolidation failed: %w", err)
-		}
-		if res.Found > 0 || res.Moved > 0 || res.Merged > 0 || res.RemovedEmptyDirs > 0 || len(res.Errors) > 0 {
-			log.Printf("[OK] OAuth token consolidation: found=%d moved=%d merged=%d deleted_legacy=%d removed_dirs=%d errors=%d",
-				res.Found, res.Moved, res.Merged, res.DeletedLegacyFiles, res.RemovedEmptyDirs, len(res.Errors))
-			for _, e := range res.Errors {
-				log.Printf("[WARN] OAuth consolidation: %s", e)
-			}
-		}
-	}
+	// Boot-time OAuth-token consolidation has been REMOVED. The
+	// runtime path is SQLite-only (S6 verdict) and no server
+	// component reads from <DataDir>/secrets/youtube/tokens/*.json
+	// on boot. Operators migrate from the legacy JSON layout
+	// explicitly via `velox-server migrate youtube-oauth-json`
+	// (defined in cmd/server/migrate.go). Keeping the old block
+	// here would resurrect the dual-write drift the verdict
+	// eliminated.
 
 	registry := app.NewRegistry()
 	auth := api.AdminAuthMiddleware(cfg)
