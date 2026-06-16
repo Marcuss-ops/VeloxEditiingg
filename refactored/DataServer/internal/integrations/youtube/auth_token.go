@@ -2,14 +2,11 @@ package youtube
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strings"
-	"time"
 )
 
 // RevokeToken revokes a channel's OAuth token
@@ -54,37 +51,13 @@ func (am *AuthManager) RevokeToken(ctx context.Context, channelID string) error 
 	return nil
 }
 
-// saveChannelToken saves an AuthChannel's token to file
+// saveChannelToken persists an AuthChannel's OAuth credentials. Delegates
+// to Service.saveChannelToken so the two save paths stay byte-for-byte
+// identical (canonical path, JSON-secrets-only payload). Logged via the
+// service path so operators see one consistent message source.
 func (am *AuthManager) saveChannelToken(channel *AuthChannel) error {
-	cfg := am.service.config
-
-	if channel.TokenPath == "" {
-		channel.TokenPath = filepath.Join(cfg.TokensDir, fmt.Sprintf("account_%s.json", channel.ID))
+	if am == nil || am.service == nil {
+		return fmt.Errorf("saveChannelToken: auth manager not wired to service")
 	}
-
-	tokenData := map[string]interface{}{
-		"token":         channel.AccessToken,
-		"refresh_token": channel.RefreshToken,
-		"token_uri":     "https://oauth2.googleapis.com/token",
-		"expiry":        channel.Expiry.Format(time.RFC3339),
-		"channel_title": channel.Title,
-		"channel_id":    channel.ID,
-		"label":         channel.Name,
-		"thumbnail_url": channel.Thumbnail,
-	}
-
-	tokenJSON, err := json.MarshalIndent(tokenData, "", "  ")
-	if err != nil {
-		return fmt.Errorf("failed to marshal token: %w", err)
-	}
-
-	if err := os.MkdirAll(filepath.Dir(channel.TokenPath), 0755); err != nil {
-		return fmt.Errorf("failed to create token directory: %w", err)
-	}
-	if err := os.WriteFile(channel.TokenPath, tokenJSON, 0600); err != nil {
-		return fmt.Errorf("failed to save token: %w", err)
-	}
-
-	log.Printf("[OK] Token saved for channel: %s", channel.ID)
-	return nil
+	return am.service.saveChannelToken(channel)
 }

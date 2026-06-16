@@ -64,53 +64,49 @@ func (s *Service) loadChannelFromToken(tokenPath string) *AuthChannel {
 		return nil
 	}
 
-	var tokenData struct {
-		Token        string   `json:"token"`
-		RefreshToken string   `json:"refresh_token"`
-		TokenURI     string   `json:"token_uri"`
-		ClientID     string   `json:"client_id"`
-		ClientSecret string   `json:"client_secret"`
-		Scopes       []string `json:"scopes"`
-		Expiry       string   `json:"expiry"`
-		ChannelTitle string   `json:"channel_title"`
-		ChannelID    string   `json:"channel_id"`
-		Label        string   `json:"label"`
-		ThumbnailURL string   `json:"thumbnail_url"`
-		AccessToken  string   `json:"access_token"`
-		Email        string   `json:"email"`
-		Thumbnail    string   `json:"thumbnail"`
+	// Read ONLY OAuth secret fields. The legacy schema included
+	// channel_title, label, thumbnail_url, thumbnail, email — those fields
+	// are still accepted by the JSON decoder (encoding/json silently
+	// ignores extra fields) so on-disk token files written by older
+	// releases still parse cleanly, but we DROP them here: the canonical
+	// source for channel Title/Name/Thumbnail/Language/Email is the
+	// SQLite youtube_channels table, loaded afterward by
+	// loadCanonicalChannels. Reading stale JSON-derived values would
+	// create a transient window where an orphan OAuth channel (no
+	// SQLite row yet) carries metadata that drifts from SQLite until
+	// the next RefreshChannelMetadata call.
+	var tokenSecrets struct {
+		Token        string `json:"token"`
+		RefreshToken string `json:"refresh_token"`
+		TokenURI     string `json:"token_uri"`
+		ClientID     string `json:"client_id"`
+		ClientSecret string `json:"client_secret"`
+		Scopes       string `json:"scopes"`
+		Expiry       string `json:"expiry"`
+		ChannelID    string `json:"channel_id"`
+		AccessToken  string `json:"access_token"`
 	}
 
-	if err := json.Unmarshal(data, &tokenData); err != nil {
+	if err := json.Unmarshal(data, &tokenSecrets); err != nil {
 		return nil
 	}
 
-	accessToken := tokenData.Token
+	accessToken := tokenSecrets.Token
 	if accessToken == "" {
-		accessToken = tokenData.AccessToken
-	}
-
-	thumbnail := tokenData.ThumbnailURL
-	if thumbnail == "" {
-		thumbnail = tokenData.Thumbnail
+		accessToken = tokenSecrets.AccessToken
 	}
 
 	channel := &AuthChannel{
-		ID:           tokenData.ChannelID,
-		Name:         tokenData.Label,
-		Title:        tokenData.ChannelTitle,
-		Thumbnail:    thumbnail,
+		ID:           tokenSecrets.ChannelID,
 		AccessToken:  accessToken,
-		RefreshToken: tokenData.RefreshToken,
-		Email:        tokenData.Email,
+		RefreshToken: tokenSecrets.RefreshToken,
 	}
 
-	if tokenData.Label != "" && channel.Name == "" {
-		channel.Name = tokenData.Label
-	}
-
-	if tokenData.Expiry != "" {
-		if t, err := time.Parse(time.RFC3339, tokenData.Expiry); err == nil {
+	// OAuth-token expiry is a SECRET VALIDITY metadata, not domain data.
+	// It belongs in JSON so token refresh / ValidateToken can reason about
+	// the credential's own lifetime without going through SQLite.
+	if tokenSecrets.Expiry != "" {
+		if t, err := time.Parse(time.RFC3339, tokenSecrets.Expiry); err == nil {
 			channel.Expiry = t
 		}
 	}
@@ -365,15 +361,15 @@ func (s *Service) saveChannelToken(channel *AuthChannel) error {
 	}
 	channel.TokenPath = canonical
 
+	// JSON token file holds OAuth SECRETS ONLY — domain metadata is owned
+	// by SQLite (youtube_channels table). Writing Title/Name/Thumbnail to
+	// JSON here would create a dual source-of-truth that drifts on edits.
 	tokenData := map[string]interface{}{
 		"token":         channel.AccessToken,
 		"refresh_token": channel.RefreshToken,
 		"token_uri":     "https://oauth2.googleapis.com/token",
 		"expiry":        channel.Expiry.Format(time.RFC3339),
-		"channel_title": channel.Title,
 		"channel_id":    channel.ID,
-		"label":         channel.Name,
-		"thumbnail_url": channel.Thumbnail,
 	}
 
 	tokenJSON, err := json.MarshalIndent(tokenData, "", "  ")
