@@ -26,7 +26,14 @@ func (s *Service) loadOAuthConfig() error {
 	return nil
 }
 
-// PersistedTokenSource wraps an oauth2.TokenSource and saves refreshed tokens to disk.
+// PersistedTokenSource wraps an oauth2.TokenSource and persists refreshed
+// tokens to the canonical youtube_oauth_tokens SQLite row. The save
+// callback is invoked by Token() whenever the underlying oauth2 lib hands
+// us a fresh token (i.e. a refresh round-trip). Errors are logged but
+// not propagated: a transient SQLite hiccup MUST NOT invalidate the
+// HTTP request that the caller is about to make \u2014 the in-RAM copy of
+// the access_token is already on `channel.AccessToken` and the next
+// refresh will retry.
 type PersistedTokenSource struct {
 	source oauth2.TokenSource
 	save   func(*oauth2.Token) error
@@ -41,6 +48,63 @@ func (pts *PersistedTokenSource) Token() (*oauth2.Token, error) {
 		log.Printf("[WARN] YouTube: Failed to save refreshed token: %v", err)
 	}
 	return t, nil
+}
+
+// persistRefreshedToken writes a freshly-refreshed oauth2.Token into the
+// canonical youtube_oauth_tokens row. Extracted so both PersistedTokenSource.save
+// (the implicit refresh fired by oauth2.NewClient) and the explicit
+// ValidateToken refresh path run through the SAME persistence primitive —
+// one place to fix when the row schema or cipher policy changes.
+//
+// Behaviour:
+//   - AccessToken is encrypted and written unconditionally.
+//   - RefreshToken is encrypted and written when newToken.RefreshToken != "".
+//   - When the refresh provider did NOT rotate the refresh_token, we read
+//     the existing row and copy its encrypted refresh_token BLOB forward
+//     so a normal access-token rotation cannot wipe the long-lived credential.
+//   - Expiry is written in RFC3339 when non-zero; empty otherwise.
+//
+// Failures (encrypt or SQL) are surfaced so the caller can decide whether
+// to fail-closed (preferred for the OAuth callback) or just log (preferred
+// for the auto-refresh path, since the in-RAM access_token is already
+// advanced on `channel.AccessToken` and the next refresh retry will overwrite).
+func (s *Service) persistRefreshedToken(channelID string, newToken *oauth2.Token) error {
+	if s.store == nil || s.oauthBuf == nil {
+		return nil // degraded mode (no cipher / no store): nothing to persist
+	}
+
+	accessEnc, err := s.oauthBuf.Encrypt([]byte(newToken.AccessToken))
+	if err != nil {
+		return fmt.Errorf("encrypt access token: %w", err)
+	}
+
+	var refreshEnc []byte
+	if newToken.RefreshToken != "" {
+		r, rerr := s.oauthBuf.Encrypt([]byte(newToken.RefreshToken))
+		if rerr != nil {
+			return fmt.Errorf("encrypt refresh token: %w", rerr)
+		}
+		refreshEnc = r
+	}
+	if refreshEnc == nil {
+		// Preserve the previously-stored encrypted refresh_token blob.
+		cur, gerr := s.store.GetYouTubeOAuthToken(channelID)
+		if gerr == nil && cur != nil {
+			if v, ok := cur["refresh_token_encrypted"].([]byte); ok && len(v) > 0 {
+				refreshEnc = v
+			}
+		}
+	}
+
+	var expiry string
+	if !newToken.Expiry.IsZero() {
+		expiry = newToken.Expiry.Format(time.RFC3339)
+	}
+
+	if err := s.store.UpsertYouTubeOAuthToken(channelID, accessEnc, refreshEnc, "Bearer", expiry, "", s.oauthBuf.KeyVersion()); err != nil {
+		return fmt.Errorf("upsert youtube_oauth_tokens: %w", err)
+	}
+	return nil
 }
 
 // GetYouTubeService returns a YouTube service for a channel
@@ -62,62 +126,40 @@ func (s *Service) GetYouTubeService(ctx context.Context, channelID string) (*you
 	}
 
 	baseSource := s.oauthConfig.TokenSource(ctx, token)
-	pts := &PersistedTokenSource{
-		source: baseSource,
-		save: func(newToken *oauth2.Token) error {
-			if newToken.AccessToken == channel.AccessToken {
-				return nil
-			}
-			s.mu.Lock()
-			channel.AccessToken = newToken.AccessToken
-			channel.Expiry = newToken.Expiry
-			if newToken.RefreshToken != "" {
-				channel.RefreshToken = newToken.RefreshToken
-			}
-			s.mu.Unlock()
-
-			// Persist refreshed token to SQLite (canonical). Refresh
-			// providers may rotate the refresh_token too — prefer the new
-			// one when present, else preserve the previously-stored encrypted
-			// blob so we don't accidentally wipe it on a normal access-token
-			// rotation.
-			if s.store != nil && s.oauthBuf != nil {
-				accessEnc, err := s.oauthBuf.Encrypt([]byte(newToken.AccessToken))
-				if err != nil {
-					log.Printf("[WARN] youtube refresh: encrypt access token: %v", err)
-				} else {
-					var refreshEnc []byte
-					if newToken.RefreshToken != "" {
-						if e, eerr := s.oauthBuf.Encrypt([]byte(newToken.RefreshToken)); eerr == nil {
-							refreshEnc = e
-						}
-					}
-					if refreshEnc == nil {
-						cur, gerr := s.store.GetYouTubeOAuthToken(channel.ID)
-						if gerr == nil && cur != nil {
-							if v, ok := cur["refresh_token_encrypted"].([]byte); ok {
-								refreshEnc = v
-							}
-						}
-					}
-					var expiry string
-					if !newToken.Expiry.IsZero() {
-						expiry = newToken.Expiry.Format(time.RFC3339)
-					}
-					if err := s.store.UpsertYouTubeOAuthToken(channel.ID, accessEnc, refreshEnc, "Bearer", expiry, "", s.oauthBuf.KeyVersion()); err != nil {
-						log.Printf("[WARN] youtube refresh: persist to sqlite: %v", err)
-					}
+		pts := &PersistedTokenSource{
+			source: baseSource,
+			save: func(newToken *oauth2.Token) error {
+				if newToken.AccessToken == channel.AccessToken {
+					return nil
 				}
-			}
+				s.mu.Lock()
+				channel.AccessToken = newToken.AccessToken
+				channel.Expiry = newToken.Expiry
+				if newToken.RefreshToken != "" {
+					channel.RefreshToken = newToken.RefreshToken
+				}
+				s.mu.Unlock()
 
-			// Existing JSON write kept for compat (one release).
-			if err := s.authManager.saveChannelToken(channel); err != nil {
-				return err
-			}
-			log.Printf("[OK] YouTube token auto-refreshed for channel: %s", channel.ID)
-			return nil
-		},
-	}
+				// Persist refreshed token to SQLite (canonical). Refresh
+				// providers MAY rotate the refresh_token too — when the new
+				// grant carries one, we prefer it; otherwise we preserve the
+				// previously-stored encrypted blob so a normal access-token
+				// rotation does not silently wipe the long-lived credential.
+				// A nil oauthBuf is the degraded-resume mode (no SQLite row,
+				// no JSON either now that the deprecation trail is closed).
+				if s.store != nil && s.oauthBuf != nil {
+					if err := s.persistRefreshedToken(channel.ID, newToken); err != nil {
+						log.Printf("[WARN] youtube refresh: persist to sqlite: %v", err)
+					} else {
+						log.Printf("[OK] YouTube token auto-refreshed for channel: %s", channel.ID)
+					}
+				} else {
+					log.Printf("[WARN] youtube refresh: oauthBuf nil or store nil \u2014 skipping persistence for %s", channel.ID)
+				}
+				return nil
+			},
+		}
+
 
 	client := oauth2.NewClient(ctx, pts)
 
