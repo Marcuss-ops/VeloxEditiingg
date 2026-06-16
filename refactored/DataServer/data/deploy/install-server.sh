@@ -86,6 +86,7 @@ log "Ensuring target directory tree and permissions..."
 mkdir -p /opt/velox/current
 mkdir -p "$(dirname "$BINARY_DST")"
 mkdir -p /opt/velox/current/.velox/data
+mkdir -p /opt/velox/current/.velox/secrets/youtube/tokens
 mkdir -p "$YOUTUBE_RUNTIME_CREDS_DIR"
 chown "$VELOX_USER:$VELOX_GROUP" /opt/velox/current
 chmod 755 /opt/velox/current

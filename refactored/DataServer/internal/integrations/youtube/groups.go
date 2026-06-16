@@ -59,7 +59,9 @@ func (s *Service) loadCanonicalGroups() bool {
 	return true
 }
 
-// CreateGroup creates a new channel group and persists it
+// CreateGroup creates a new channel group and persists only that group via a
+// direct SQL upsert. It does NOT rewrite every other group in DB (no full
+// destructive sweep).
 func (s *Service) CreateGroup(name, description string, channelIDs []string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -71,13 +73,26 @@ func (s *Service) CreateGroup(name, description string, channelIDs []string) err
 	s.groups[name] = &ChannelGroup{
 		Name:        name,
 		Description: description,
-		Channels:    channelIDs,
+		Channels:    append([]string{}, channelIDs...),
 	}
 
-	return s.saveGroups()
+	if s.store == nil {
+		return nil
+	}
+	groupID, err := s.store.UpsertYouTubeGroupV2(name, "upload", description, "")
+	if err != nil {
+		return fmt.Errorf("create upload group %q: %w", name, err)
+	}
+	for _, chID := range channelIDs {
+		if err := s.store.AddChannelToGroupV2(groupID, chID); err != nil {
+			log.Printf("[WARN] CreateGroup: add channel %s to %q: %v", safeChannelID(chID), name, err)
+		}
+	}
+	return nil
 }
 
-// DeleteGroup deletes a channel group and persists the change
+// DeleteGroup deletes a channel group and persists the change via direct SQL
+// on this group only. Does NOT rewrite every other group in DB.
 func (s *Service) DeleteGroup(name string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -87,10 +102,25 @@ func (s *Service) DeleteGroup(name string) error {
 	}
 
 	delete(s.groups, name)
-	return s.saveGroups()
+
+	if s.store == nil {
+		return nil
+	}
+	groupID, err := s.store.GetYouTubeGroupV2ID(name, "upload")
+	if err != nil {
+		return err
+	}
+	if groupID == 0 {
+		return nil
+	}
+	if err := s.store.DeleteYouTubeGroupChannelsByGroupID(groupID); err != nil {
+		return err
+	}
+	return s.store.DeleteYouTubeGroupV2(groupID)
 }
 
-// AddChannelToGroup adds a channel to a group and persists the change
+// AddChannelToGroup adds a channel to a group and persists only the affected
+// group via direct SQL. Does NOT rewrite every other group in DB.
 func (s *Service) AddChannelToGroup(groupName, channelID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -105,12 +135,26 @@ func (s *Service) AddChannelToGroup(groupName, channelID string) error {
 			return fmt.Errorf("channel '%s' already in group '%s'", channelID, groupName)
 		}
 	}
-
 	group.Channels = append(group.Channels, channelID)
-	return s.saveGroups()
+
+	if s.store == nil {
+		return nil
+	}
+	groupID, err := s.store.GetYouTubeGroupV2ID(groupName, "upload")
+	if err != nil {
+		return fmt.Errorf("resolve upload group %q: %w", groupName, err)
+	}
+	if groupID == 0 {
+		groupID, err = s.store.UpsertYouTubeGroupV2(groupName, "upload", group.Description, group.Privacy)
+		if err != nil {
+			return err
+		}
+	}
+	return s.store.AddChannelToGroupV2(groupID, channelID)
 }
 
-// RemoveChannelFromGroup removes a channel from a group and persists the change
+// RemoveChannelFromGroup removes a channel from a group and persists only the
+// affected group via direct SQL. Does NOT rewrite every other group in DB.
 func (s *Service) RemoveChannelFromGroup(groupName, channelID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -123,10 +167,19 @@ func (s *Service) RemoveChannelFromGroup(groupName, channelID string) error {
 	for i, chID := range group.Channels {
 		if chID == channelID {
 			group.Channels = append(group.Channels[:i], group.Channels[i+1:]...)
-			return s.saveGroups()
+			if s.store == nil {
+				return nil
+			}
+			groupID, err := s.store.GetYouTubeGroupV2ID(groupName, "upload")
+			if err != nil {
+				return err
+			}
+			if groupID == 0 {
+				return nil
+			}
+			return s.store.RemoveChannelFromGroupV2(groupID, channelID)
 		}
 	}
-
 	return fmt.Errorf("channel '%s' not found in group '%s'", channelID, groupName)
 }
 
@@ -138,6 +191,7 @@ func (s *Service) GetGroups() map[string]*ChannelGroup {
 	groups := make(map[string]*ChannelGroup, len(s.groups))
 	for name, group := range s.groups {
 		groupCopy := *group
+		groupCopy.Channels = append([]string{}, group.Channels...)
 		groups[name] = &groupCopy
 	}
 	return groups
@@ -213,7 +267,9 @@ func AuthChannelToChannel(ac *AuthChannel) *Channel {
 	}
 	return &Channel{
 		ID:        ac.ID,
+		URL:       ac.URL,
 		Title:     ac.Title,
+		Name:      ac.Name,
 		Thumbnail: ac.Thumbnail,
 		Notes:     ac.Name,
 		Language:  ac.Language,
@@ -262,6 +318,7 @@ func (s *Service) GetGroupsWithChannels() []map[string]interface{} {
 			if ch, exists := s.channels[chID]; exists {
 				groupData["channels"] = append(groupData["channels"].([]map[string]interface{}), map[string]interface{}{
 					"id":        ch.ID,
+					"url":       ch.URL,
 					"title":     ch.Title,
 					"name":      ch.Name,
 					"thumbnail": ch.Thumbnail,
@@ -270,6 +327,7 @@ func (s *Service) GetGroupsWithChannels() []map[string]interface{} {
 			} else {
 				groupData["channels"] = append(groupData["channels"].([]map[string]interface{}), map[string]interface{}{
 					"id":    chID,
+					"url":   "",
 					"title": "Unknown",
 					"name":  chID,
 				})
@@ -304,33 +362,18 @@ func (s *Service) GetUndefinedChannels() []*Channel {
 	return undefined
 }
 
-// saveGroups saves groups to canonical SQLite tables.
-// Returns the first error encountered, but continues processing remaining groups
-// so that partial persistence is still attempted.
+// saveGroups is retained as a backwards-compatible entry point. It is no
+// longer destructive: it just no-ops because per-operation methods
+// (CreateGroup / DeleteGroup / AddChannelToGroup / RemoveChannelFromGroup /
+// DeleteChannel) now write the affected rows directly to SQLite. Persisting
+// through this method would only re-do work already done atomically by the
+// callers. Keeping the symbol alive avoids breaking external callers that
+// may still invoke it.
 func (s *Service) saveGroups() error {
 	if s.store == nil {
 		return nil
 	}
-	var firstErr error
-	for _, g := range s.groups {
-		// Upsert into youtube_groups_v2 with group_type="upload"
-		groupID, err := s.store.UpsertYouTubeGroupV2(g.Name, "upload", g.Description, g.Privacy)
-		if err != nil {
-			log.Printf("[WARN] Failed to save group %q: %v", g.Name, err)
-			if firstErr == nil {
-				firstErr = fmt.Errorf("save group %q: %w", g.Name, err)
-			}
-			continue
-		}
-		// Sync channel memberships
-		for _, chID := range g.Channels {
-			if err := s.store.AddChannelToGroupV2(groupID, chID); err != nil {
-				log.Printf("[WARN] Failed to add channel %s to group %q: %v", chID[:8], g.Name, err)
-				if firstErr == nil {
-					firstErr = fmt.Errorf("add channel %s to group %q: %w", chID[:8], g.Name, err)
-				}
-			}
-		}
-	}
-	return firstErr
+	// Intentionally empty: per-operation methods own their persistence.
+	// See per-operation methods (CreateGroup / DeleteGroup / etc.).
+	return nil
 }

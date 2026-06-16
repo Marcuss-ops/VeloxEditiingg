@@ -226,6 +226,8 @@ func RegisterV1Routes(r *gin.Engine, cfg *config.Config, fileQ *queue.FileQueue,
 		v1.POST("/drive-links/add", drive.AddDriveFolderHandler)
 		v1.PUT("/drive-links/:folder_id", drive.UpdateDriveFolderHandler)
 		v1.DELETE("/drive-links/:folder_id", drive.DeleteDriveFolderHandler)
+		v1.GET("/drive/oauth/start", drive.DriveOAuthStartHandlerFunc(driveService))
+		v1.GET("/drive/oauth/callback", drive.DriveOAuthCallbackHandlerFunc(driveService))
 
 		// YouTube - Core API
 		v1.GET("/youtube/pending-tasks", analytics.YouTubePendingTasksHandler)

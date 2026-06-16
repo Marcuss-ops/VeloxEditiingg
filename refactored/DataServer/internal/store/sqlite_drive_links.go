@@ -162,6 +162,62 @@ func (s *SQLiteStore) ListMasterFolders() ([]map[string]any, error) {
 	return result, rows.Err()
 }
 
+// ListMasterFoldersDetailed returns all master folders including metadata_json.
+func (s *SQLiteStore) ListMasterFoldersDetailed() ([]map[string]any, error) {
+	rows, err := s.db.Query(`SELECT id, name, url, subfolders_count, language, created_at, updated_at, metadata_json FROM drive_master_folders ORDER BY name`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []map[string]any
+	for rows.Next() {
+		var id, name, url, language, createdAt, updatedAt, metadataJSON string
+		var subfoldersCount int
+		if err := rows.Scan(&id, &name, &url, &subfoldersCount, &language, &createdAt, &updatedAt, &metadataJSON); err != nil {
+			continue
+		}
+		result = append(result, map[string]any{
+			"id":               id,
+			"name":             name,
+			"url":              url,
+			"subfolders_count": subfoldersCount,
+			"language":         language,
+			"created_at":       createdAt,
+			"updated_at":       updatedAt,
+			"metadata_json":    metadataJSON,
+		})
+	}
+	return result, rows.Err()
+}
+
+// FindMasterFolderByLanguage returns the first master folder matching the given language.
+func (s *SQLiteStore) FindMasterFolderByLanguage(language string) (map[string]any, error) {
+	language = strings.TrimSpace(strings.ToLower(language))
+	if language == "" {
+		return nil, nil
+	}
+
+	rows, err := s.ListMasterFoldersDetailed()
+	if err != nil {
+		return nil, err
+	}
+
+	for _, row := range rows {
+		rowLanguage := strings.TrimSpace(strings.ToLower(asString(row["language"])))
+		if rowLanguage == language {
+			return row, nil
+		}
+
+		meta := strings.ToLower(asString(row["metadata_json"]))
+		if strings.Contains(meta, `"type":"outro"`) && strings.Contains(meta, `"language":"`+language+`"`) {
+			return row, nil
+		}
+	}
+
+	return nil, nil
+}
+
 // DeleteMasterFolder removes a master folder by ID.
 func (s *SQLiteStore) DeleteMasterFolder(id string) error {
 	_, err := s.db.Exec(`DELETE FROM drive_master_folders WHERE id = ?`, id)

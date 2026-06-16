@@ -24,7 +24,10 @@ type StorageStore interface {
 	DeleteYouTubeChannel(channelID string) error
 	UpsertYouTubeGroupV2(name, groupType, description, privacy string) (int64, error)
 	ListYouTubeGroupsV2() ([]map[string]interface{}, error)
+	GetYouTubeGroupV2ID(name, groupType string) (int64, error)
 	DeleteYouTubeGroupV2(id int64) error
+	DeleteYouTubeGroupChannelsByGroupID(groupID int64) error
+	DeleteYouTubeGroupChannelsByChannelID(channelID string) error
 	AddChannelToGroupV2(groupID int64, channelID string) error
 	RemoveChannelFromGroupV2(groupID int64, channelID string) error
 	ListGroupChannelsV2(groupID int64) ([]string, error)
@@ -35,9 +38,11 @@ type StorageStore interface {
 
 // Storage handles persistence of YouTube manager data
 type Storage struct {
-	mu    sync.RWMutex
-	data  *StorageData
-	store StorageStore
+	mu           sync.RWMutex
+	data         *StorageData
+	store        StorageStore
+	lastStatusMu sync.RWMutex
+	lastStatus   *SaveStatus
 }
 
 // NewStorage creates a new Storage instance backed by SQLite.
@@ -108,13 +113,17 @@ func (s *Storage) LoadData() *StorageData {
 	return data
 }
 
-// SaveData replaces the storage data
+// SaveData replaces the storage data with a full snapshot supplied by the
+// caller. Goes through save() (NOT saveAllReconcile): a partial snapshot
+// the caller accidentally hands in is still subject to the safety guard,
+// so a small/empty memory set won't silently wipe the DB. Callers who
+// genuinely want destructive reconciliation should call saveAllReconcile().
 func (s *Storage) SaveData(data *StorageData) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	s.data = data
-	return s.save()
+	return s.saveWithStatus("save_data", "", false)
 }
 
 // ClearCache invalidates any cached data.

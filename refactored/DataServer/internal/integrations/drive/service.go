@@ -13,6 +13,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"velox-server/internal/config"
 )
 
 // NewService creates a new Drive service
@@ -28,7 +30,12 @@ func NewService(cfg *ServiceConfig) (*Service, error) {
 
 	scopes := DefaultScopes()
 	if len(cfg.RedirectURI) == 0 {
-		cfg.RedirectURI = "https://veloxmanager.duckdns.org/api/drive/oauth/callback"
+		if envRedirect := strings.TrimSpace(config.GetMasterURL()); envRedirect != "" {
+			cfg.RedirectURI = strings.TrimRight(envRedirect, "/") + "/api/drive/oauth/callback"
+		}
+	}
+	if len(cfg.RedirectURI) == 0 {
+		cfg.RedirectURI = "http://localhost:8000/api/drive/oauth/callback"
 	}
 
 	return &Service{
@@ -296,13 +303,30 @@ func (s *Service) LoadFirstToken() error {
 		return fmt.Errorf("no Drive tokens found")
 	}
 	sort.Strings(names)
-	token, err := s.tokenManager.LoadToken(names[0])
-	if err != nil {
-		return err
+	var lastErr error
+	for _, name := range names {
+		token, loadErr := s.tokenManager.LoadToken(name)
+		if loadErr != nil {
+			lastErr = loadErr
+			continue
+		}
+		if token == nil {
+			continue
+		}
+		s.SetToken(token)
+		checkCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		_, aboutErr := s.GetAbout(checkCtx)
+		cancel()
+		if aboutErr == nil {
+			log.Printf("[DRIVE] Loaded Drive token: %s", name)
+			return nil
+		}
+		lastErr = aboutErr
 	}
-	s.SetToken(token)
-	log.Printf("[DRIVE] Loaded Drive token: %s", names[0])
-	return nil
+	if lastErr != nil {
+		return lastErr
+	}
+	return fmt.Errorf("no valid Drive token found")
 }
 
 // GetOAuthConfig returns the OAuth2 configuration

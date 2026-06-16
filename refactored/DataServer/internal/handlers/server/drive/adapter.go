@@ -75,6 +75,8 @@ func RegisterDriveRoutes(r *gin.Engine, h *DriveHandlers) {
 	r.DELETE("/api/drive/links/:folder_id", DeleteDriveFolderHandler)
 	r.GET("/api/drive/links/master", GetMasterFoldersHandler)
 	r.POST("/api/drive/links/master/upsert", UpsertMasterFolderHandler)
+	r.GET("/api/drive/oauth/start", h.DriveOAuthStartHandler)
+	r.GET("/api/drive/oauth/callback", h.DriveOAuthCallbackHandler)
 
 	// Drive Groups & Folders routes
 	r.GET("/api/drive/groups", GetDriveGroupsHandler)
@@ -84,6 +86,9 @@ func RegisterDriveRoutes(r *gin.Engine, h *DriveHandlers) {
 	r.GET("/api/drive/folders/clip", ClipFolderIDHandler)
 	r.GET("/api/drive/files/list", DriveFilesHandler)
 	r.POST("/api/drive/upload/text", UploadTextHandler)
+	r.GET("/api/drive/outros", h.ListOutroFoldersHandler)
+	r.GET("/api/drive/outros/:language", h.GetOutroFolderContentsHandler)
+	r.GET("/api/drive/outros-by-id/:folder_id", h.GetOutroFolderContentsByIDHandler)
 
 	// Drive Tokens
 	r.GET("/api/drive/tokens/list", ListDriveTokensHandler)

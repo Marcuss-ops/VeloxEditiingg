@@ -6,47 +6,17 @@ import (
 	"log"
 
 	"golang.org/x/oauth2"
-	"golang.org/x/oauth2/google"
 	"google.golang.org/api/option"
 	"google.golang.org/api/youtube/v3"
 )
 
 // loadOAuthConfig loads OAuth2 configuration from client_secret.json
 func (s *Service) loadOAuthConfig() error {
-	secretPath, secretData, err := findOAuthSecretFile(s.config)
+	oauthConfig, secretPath, err := buildOAuthConfig(s.config)
 	if err != nil {
 		return err
 	}
-
-	creds, err := parseOAuthCredentialsFile(secretData)
-	if err != nil {
-		return fmt.Errorf("load OAuth config: %w", err)
-	}
-
-	if s.config.ClientID != "" {
-		creds.ClientID = s.config.ClientID
-	}
-	if s.config.ClientSecret != "" {
-		creds.ClientSecret = s.config.ClientSecret
-	}
-	if s.config.RedirectURL != "" {
-		creds.RedirectURI = s.config.RedirectURL
-	}
-
-	s.oauthConfig = &oauth2.Config{
-		ClientID:     creds.ClientID,
-		ClientSecret: creds.ClientSecret,
-		RedirectURL:  creds.RedirectURI,
-		Scopes: []string{
-			"https://www.googleapis.com/auth/youtube",
-			"https://www.googleapis.com/auth/youtube.upload",
-			"https://www.googleapis.com/auth/youtube.readonly",
-			"https://www.googleapis.com/auth/yt-analytics.readonly",
-			"https://www.googleapis.com/auth/yt-analytics-monetary.readonly",
-		},
-		Endpoint: google.Endpoint,
-	}
-
+	s.oauthConfig = oauthConfig
 	if s.authManager != nil {
 		s.authManager.oauthConfig = s.oauthConfig
 	}

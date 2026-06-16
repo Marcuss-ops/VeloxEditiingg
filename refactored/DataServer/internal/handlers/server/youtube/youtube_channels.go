@@ -95,8 +95,16 @@ func (ym *YouTubeManager) AddChannelHandler() gin.HandlerFunc {
 			keywords = unique
 		}
 
+		channelID := req.ChannelID
+		if channelID == "" && channelInfo != nil && channelInfo.ChannelID != "" {
+			channelID = channelInfo.ChannelID
+		}
+		if channelID == "" {
+			channelID = strconv.FormatInt(time.Now().UnixMilli(), 10)
+		}
+
 		channel := youtube.Channel{
-			ID:        strconv.FormatInt(time.Now().UnixMilli(), 10),
+			ID:        channelID,
 			URL:       resolvedURL,
 			Title:     channelTitle,
 			Thumbnail: channelThumbnail,

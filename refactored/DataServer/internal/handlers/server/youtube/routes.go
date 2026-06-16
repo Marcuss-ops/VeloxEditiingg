@@ -20,10 +20,9 @@ import (
 func (h *YouTubeHandlers) ListTokens(c *gin.Context) {
 	tokensDir := h.service.GetConfig().TokensDir
 	if tokensDir == "" {
-		// Try to use DataDir
 		dataDir := h.service.GetConfig().DataDir
 		if dataDir != "" {
-			tokensDir = filepath.Join(dataDir, "youtube", "tokens")
+			tokensDir = filepath.Join(dataDir, "secrets", "youtube", "tokens")
 		}
 	}
 

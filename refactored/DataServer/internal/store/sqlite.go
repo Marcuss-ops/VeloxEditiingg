@@ -19,7 +19,8 @@ import (
 )
 
 type SQLiteStore struct {
-	db *sql.DB
+	db   *sql.DB
+	path string
 }
 
 func NewSQLiteStore(path string) (*SQLiteStore, error) {
@@ -64,7 +65,7 @@ func NewSQLiteStore(path string) (*SQLiteStore, error) {
 	db.SetMaxIdleConns(2)                  // Keep 2 idle connections ready
 	db.SetConnMaxLifetime(5 * time.Minute) // Recycle connections periodically
 
-	s := &SQLiteStore{db: db}
+	s := &SQLiteStore{db: db, path: path}
 
 	// Run schema migrations
 	if err := migrations.RunMigrations(db, migrationsFS, "migrations"); err != nil {
@@ -209,4 +210,15 @@ func (s *SQLiteStore) Ping() error {
 // DB returns the underlying sql.DB handle for direct queries (e.g. maintenance tasks)
 func (s *SQLiteStore) DB() *sql.DB {
 	return s.db
+}
+
+// Path returns the on-disk file path this SQLiteStore was opened against.
+// Used by the /api/v1/audit/persistence endpoint to surface the live DB path
+// and detect duplicate copies (the previous dual-DB issue caused groups to
+// silently disappear because the runtime was reading a stale source copy).
+func (s *SQLiteStore) Path() string {
+	if s == nil {
+		return ""
+	}
+	return s.path
 }

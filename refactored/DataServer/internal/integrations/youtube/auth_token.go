@@ -78,6 +78,9 @@ func (am *AuthManager) saveChannelToken(channel *AuthChannel) error {
 		return fmt.Errorf("failed to marshal token: %w", err)
 	}
 
+	if err := os.MkdirAll(filepath.Dir(channel.TokenPath), 0755); err != nil {
+		return fmt.Errorf("failed to create token directory: %w", err)
+	}
 	if err := os.WriteFile(channel.TokenPath, tokenJSON, 0600); err != nil {
 		return fmt.Errorf("failed to save token: %w", err)
 	}

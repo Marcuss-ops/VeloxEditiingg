@@ -381,6 +381,89 @@
     })();
   </script>
 
+  <script>
+    (function () {
+      var replacements = [
+        ['DataServer/data/youtube/channels/channels.json', '/opt/velox/current/.velox/data/velox.db'],
+        ['DataServer/data/youtube/groups.json', '/opt/velox/current/.velox/data/velox.db'],
+        ['Mappa channel_id → info', 'Source of truth: tabelle SQLite youtube_*'],
+        ['Definizione dei gruppi', 'Definizione persistita dei gruppi e membership']
+      ];
+
+      function applyReplacements(root) {
+        if (!root) return;
+        var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null, false);
+        var nodes = [];
+        var node;
+        while ((node = walker.nextNode())) nodes.push(node);
+        nodes.forEach(function (textNode) {
+          var value = textNode.nodeValue;
+          var next = value;
+          for (var i = 0; i < replacements.length; i++) {
+            var from = replacements[i][0];
+            var to = replacements[i][1];
+            if (next.indexOf(from) !== -1) next = next.split(from).join(to);
+          }
+          if (next !== value) textNode.nodeValue = next;
+        });
+      }
+
+      function boot() {
+        applyReplacements(document.body);
+        var observer = new MutationObserver(function () {
+          applyReplacements(document.body);
+        });
+        observer.observe(document.body, { childList: true, subtree: true });
+      }
+
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', boot, { once: true });
+      } else {
+        boot();
+      }
+    })();
+  </script>
+
+  <script>
+    (function () {
+      function formatHandleText(text) {
+        if (!text) return text;
+        var trimmed = String(text).trim();
+        if (!trimmed) return trimmed;
+        if (trimmed.charAt(0) === '@') return trimmed;
+        return '@' + trimmed.replace(/^@+/, '');
+      }
+
+      function patchChannelHandles(root) {
+        if (!root || !location.pathname.startsWith('/youtube-suite')) return;
+
+        var nodes = root.querySelectorAll('span.text-xs.text-gray-500.truncate');
+        for (var i = 0; i < nodes.length; i++) {
+          var node = nodes[i];
+          var text = node.textContent || '';
+          var formatted = formatHandleText(text);
+          if (formatted !== text) {
+            node.textContent = formatted;
+          }
+        }
+      }
+
+      function boot() {
+        patchChannelHandles(document.body);
+        var observer = new MutationObserver(function () {
+          patchChannelHandles(document.body);
+        });
+        observer.observe(document.body, { childList: true, subtree: true });
+      }
+
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', boot, { once: true });
+      } else {
+        boot();
+      }
+    })();
+  </script>
+
 </body>
 
 </html>

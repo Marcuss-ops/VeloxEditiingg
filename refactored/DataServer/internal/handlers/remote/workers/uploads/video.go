@@ -32,6 +32,9 @@ func UploadCompletedVideo(cfg *config.Config, fileQ *queue.FileQueue, youtubeSer
 		// Parse multipart form
 		file, header, err := c.Request.FormFile("video")
 		if err != nil {
+			file, header, err = c.Request.FormFile("video_file")
+		}
+		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "Video file is required"})
 			return
 		}

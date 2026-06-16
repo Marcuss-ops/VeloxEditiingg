@@ -61,7 +61,7 @@ type ChannelInfo struct {
 	ChannelID   string `json:"channel_id,omitempty"`
 }
 
-// StorageData represents the root structure of youtube_manager.json
+// StorageData represents the in-memory snapshot mirrored to SQLite.
 type StorageData struct {
 	Groups        map[string]*Group `json:"groups"`
 	TrackedNiches []string          `json:"tracked_niches,omitempty"`
@@ -77,6 +77,7 @@ type CreateGroupRequest struct {
 // AddChannelRequest represents a request to add a channel to a group
 type AddChannelRequest struct {
 	URL       string `json:"url" binding:"required"`
+	ChannelID string `json:"channel_id,omitempty"`
 	Title     string `json:"title,omitempty"`
 	Thumbnail string `json:"thumbnail,omitempty"`
 	Notes     string `json:"notes,omitempty"`
@@ -207,6 +208,7 @@ type VideoInfoResponse struct {
 // AuthChannel represents a YouTube channel with its OAuth token (for upload/auth operations)
 type AuthChannel struct {
 	ID           string    `json:"id"`
+	URL          string    `json:"url,omitempty"`
 	Name         string    `json:"name"`
 	Title        string    `json:"title,omitempty"`
 	Thumbnail    string    `json:"thumbnail,omitempty"`
