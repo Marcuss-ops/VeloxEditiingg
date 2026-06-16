@@ -2,22 +2,24 @@ package youtube
 
 import (
 	"errors"
+	"io"
 	"strings"
 	"testing"
+	"time"
 )
 
-// membershipStore is the narrow subset of YouTubeStore the Membership /
-// BulkMembership paths actually call (GetYouTubeChannel only). The full
-// interface is much wider; declaring a local interface keeps the test
-// fixtures compact and prevents vet from complaining about missing
-// methods on a half-implemented mock.
-type membershipStore interface {
-	GetYouTubeChannel(channelID string) (map[string]interface{}, error)
-}
-
-// membershipStoreMock satisfies the narrow membershipStore interface.
-// Tests for the wider YouTubeStore surface (groups, oauth tokens,
-// api cache, etc.) live in sqlite_youtube_entities_test.go.
+// membershipStoreMock is a YouTubeStore stub used only by the Membership /
+// BulkMembership tests in this file. It deliberately implements only the
+// GetYouTubeChannel method usefully; every other YouTubeStore method is
+// stubbed with a zero-returning body so the type SATISFIES the wider
+// interface at compile time but does NOT introduce real behaviour the
+// test path depends on. If a future test in this file accidentally
+// dispatches through one of them, the test will get zero values back
+// rather than a panic — both are safe for this narrowly-scoped test.
+//
+// Wider-surface tests (groups, oauth tokens, API cache) live in
+// sqlite_youtube_entities_test.go with a real SQLite fixture; do not
+// extend this mock for those paths.
 type membershipStoreMock struct {
 	rows map[string]map[string]interface{}
 	err  error
@@ -33,20 +35,115 @@ func (m *membershipStoreMock) GetYouTubeChannel(channelID string) (map[string]in
 	return nil, nil
 }
 
-// newTestServiceWithStore builds a Service fixture with the supplied store
-// for the Membership / BulkMembership paths. Other fields are zero-valued —
-// these tests do not need cipher, OAuth, or channels map. The local
-// membershipStore interface keeps `store` assignment permissive (any
-// narrow provider that satisfies GetYouTubeChannel works).
-func newTestServiceWithStore(s membershipStore) *Service {
-	if svcStore, ok := s.(YouTubeStore); ok {
-		return &Service{store: svcStore}
-	}
-	// Tests never reach here because the concrete mock satisfies the full
-	// interface via the membershipStore subset; if a future mock does
-	// not, fail fast with a clear compile-time signal at this call site.
-	panic("membershipStore mock must satisfy GetYouTubeChannel")
+// --- Zero-return stubs below. Do not call these from the test bodies. ---
+
+func (m *membershipStoreMock) ListYouTubeChannels() ([]map[string]interface{}, error) {
+	return nil, nil
 }
+func (m *membershipStoreMock) UpsertYouTubeChannel(channelID, title, displayName, channelURL, thumbnailURL, language, notes string, viewCount, subCount int64, addedAt, lastSyncAt string) error {
+	return nil
+}
+func (m *membershipStoreMock) UpdateChannelTitle(channelID, title string) error {
+	return nil
+}
+func (m *membershipStoreMock) UpdateChannelLanguage(channelID, language string) error {
+	return nil
+}
+func (m *membershipStoreMock) UpdateChannelNotes(channelID, notes string) error {
+	return nil
+}
+func (m *membershipStoreMock) UpdateChannelStats(channelID string, viewCount, subCount int64, lastSyncAt string) error {
+	return nil
+}
+func (m *membershipStoreMock) UpdateYouTubeChannelMetadata(channelID, title, thumbnailURL string) error {
+	return nil
+}
+func (m *membershipStoreMock) DeleteYouTubeChannel(channelID string) error {
+	return nil
+}
+func (m *membershipStoreMock) DeleteChannelAtomic(channelID string) (int64, error) {
+	return 0, nil
+}
+func (m *membershipStoreMock) UpsertYouTubeOAuthToken(channelID string, accessTokenEnc, refreshTokenEnc []byte, tokenType, expiry, scopes string, keyVersion int) error {
+	return nil
+}
+func (m *membershipStoreMock) ListActiveYouTubeOAuthTokens() ([]map[string]interface{}, error) {
+	return nil, nil
+}
+func (m *membershipStoreMock) AuditYouTubeOAuthTokenOrphans() (interface{}, error) {
+	return nil, nil
+}
+func (m *membershipStoreMock) ConnectChannelAtomic(channel interface{}, accessTokenEnc, refreshTokenEnc []byte, tokenType, expiry, scopes string, keyVersion int) error {
+	return nil
+}
+func (m *membershipStoreMock) GetYouTubeOAuthToken(channelID string) (map[string]interface{}, error) {
+	return nil, nil
+}
+func (m *membershipStoreMock) MarkYouTubeOAuthTokenRevoked(channelID string) error {
+	return nil
+}
+func (m *membershipStoreMock) ListYouTubeGroupsV2() ([]map[string]interface{}, error) {
+	return nil, nil
+}
+func (m *membershipStoreMock) UpsertYouTubeGroupV2(name, groupType, description, privacy string) (int64, error) {
+	return 0, nil
+}
+func (m *membershipStoreMock) GetYouTubeGroupV2ID(name, groupType string) (int64, error) {
+	return 0, nil
+}
+func (m *membershipStoreMock) DeleteYouTubeGroupV2(id int64) error {
+	return nil
+}
+func (m *membershipStoreMock) AddChannelToGroupV2(groupID int64, channelID string) error {
+	return nil
+}
+func (m *membershipStoreMock) RemoveChannelFromGroupV2(groupID int64, channelID string) error {
+	return nil
+}
+func (m *membershipStoreMock) DeleteYouTubeGroupChannelsByGroupID(groupID int64) error {
+	return nil
+}
+func (m *membershipStoreMock) DeleteYouTubeGroupChannelsByChannelID(channelID string) error {
+	return nil
+}
+func (m *membershipStoreMock) ListGroupChannelsV2(groupID int64) ([]string, error) {
+	return nil, nil
+}
+func (m *membershipStoreMock) ListAllGroupMembershipsV2() ([]map[string]interface{}, error) {
+	return nil, nil
+}
+func (m *membershipStoreMock) GetYouTubeCache(key string) (int64, string, error) {
+	return 0, "", nil
+}
+func (m *membershipStoreMock) SetYouTubeCache(key string, timestamp int64, dataJSON string) error {
+	return nil
+}
+func (m *membershipStoreMock) CleanupYouTubeCache(maxAge int64) (int64, error) {
+	return 0, nil
+}
+func (m *membershipStoreMock) ClearYouTubeCache() error {
+	return nil
+}
+func (m *membershipStoreMock) MigrateYouTubeCache(entries map[string]struct {
+	Timestamp int64       `json:"timestamp"`
+	Data      interface{} `json:"data"`
+}) (int, error) {
+	return 0, nil
+}
+
+// unused-import guards: the file references `errors`, `strings`, `testing`,
+// and `time` only via indirect paths; force-link `io` via a no-op _ = io.EOF
+// to keep the import list minimal if a future contributor deletes the
+// other imports. (Removed in cleanup below if no longer needed.)
+
+var _ = io.EOF
+var _ = time.RFC3339
+
+func newTestServiceWithStore(s YouTubeStore) *Service {
+	return &Service{store: s}
+}
+
+// --- Tests ---
 
 func TestMembership_NoStore(t *testing.T) {
 	svc := &Service{store: nil}
@@ -60,8 +157,7 @@ func TestMembership_NoStore(t *testing.T) {
 }
 
 func TestMembership_RowMissing(t *testing.T) {
-	store := &membershipStoreMock{rows: map[string]map[string]interface{}{}}
-	svc := newTestServiceWithStore(store)
+	svc := newTestServiceWithStore(&membershipStoreMock{rows: map[string]map[string]interface{}{}})
 	ch, err := svc.Membership("UC_missing")
 	if err != nil {
 		t.Fatalf("Membership for missing row must NOT error; got %v", err)
@@ -100,13 +196,12 @@ func TestMembership_RowPresent(t *testing.T) {
 }
 
 func TestMembership_StoreErrorSurfaced(t *testing.T) {
-	store := &membershipStoreMock{err: errors.New("sqlite: disk full")}
-	svc := newTestServiceWithStore(store)
+	svc := newTestServiceWithStore(&membershipStoreMock{err: errors.New("sqlite: disk full")})
 	_, err := svc.Membership("UC_any")
 	if err == nil {
 		t.Fatalf("Membership MUST surface SQL errors (DB-first invariant); got nil")
 	}
-	if err.Error() == "" || !strings.Contains(err.Error(), "UC_any") {
+	if !strings.Contains(err.Error(), "UC_any") {
 		t.Fatalf("Membership error must wrap the failing channel id; got %v", err)
 	}
 }
@@ -152,8 +247,7 @@ func TestBulkMembership_MixedPresence(t *testing.T) {
 }
 
 func TestBulkMembership_StoreErrorPropagates(t *testing.T) {
-	store := &membershipStoreMock{err: errors.New("sqlite: I/O error")}
-	svc := newTestServiceWithStore(store)
+	svc := newTestServiceWithStore(&membershipStoreMock{err: errors.New("sqlite: I/O error")})
 	_, err := svc.BulkMembership([]string{"UC_a", "UC_b"})
 	if err == nil {
 		t.Fatalf("BulkMembership MUST propagate SQL errors; got nil")
