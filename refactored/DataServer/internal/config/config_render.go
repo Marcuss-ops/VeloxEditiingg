@@ -1,26 +1,14 @@
 package config
 
-import (
-	"os"
-	"strconv"
-)
+import "os"
 
 func loadRenderConfig() RenderConfig {
 	c := RenderConfig{
 		RemoteEngineURL:   os.Getenv("VELOX_REMOTE_ENGINE_URL"),
 		RemoteEngineToken: os.Getenv("VELOX_REMOTE_ENGINE_TOKEN"),
 	}
-	c.RemoteEngineTimeoutMS = 60000
-	if n, _ := strconv.Atoi(os.Getenv("VELOX_REMOTE_ENGINE_TIMEOUT_MS")); n > 0 {
-		c.RemoteEngineTimeoutMS = n
-	}
-	c.RemoteEngineRetries = 3
-	if n, _ := strconv.Atoi(os.Getenv("VELOX_REMOTE_ENGINE_RETRIES")); n > 0 {
-		c.RemoteEngineRetries = n
-	}
-	c.RemoteEnginePollInterval = 30
-	if n, _ := strconv.Atoi(os.Getenv("VELOX_REMOTE_ENGINE_POLL_INTERVAL")); n >= 5 {
-		c.RemoteEnginePollInterval = n
-	}
+	c.RemoteEngineTimeoutMS = intFromEnv("VELOX_REMOTE_ENGINE_TIMEOUT_MS", 60000, 1)
+	c.RemoteEngineRetries = intFromEnv("VELOX_REMOTE_ENGINE_RETRIES", 3, 1)
+	c.RemoteEnginePollInterval = intFromEnv("VELOX_REMOTE_ENGINE_POLL_INTERVAL", 30, 5)
 	return c
 }

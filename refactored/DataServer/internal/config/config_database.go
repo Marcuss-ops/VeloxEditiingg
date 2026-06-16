@@ -3,7 +3,6 @@ package config
 import (
 	"os"
 	"path/filepath"
-	"strconv"
 )
 
 func loadDatabaseConfig(dataDir, runtimeDir string) DatabaseConfig {
@@ -23,17 +22,9 @@ func loadDatabaseConfig(dataDir, runtimeDir string) DatabaseConfig {
 	} else if c.DSN == "" {
 		c.DSN = filepath.Join(runtimeDir, "data", "velox.db")
 	}
-	if n, _ := strconv.Atoi(os.Getenv("VELOX_DB_MAX_OPEN_CONNS")); n > 0 {
-		c.MaxOpenConns = n
-	}
-	if n, _ := strconv.Atoi(os.Getenv("VELOX_DB_MAX_IDLE_CONNS")); n > 0 {
-		c.MaxIdleConns = n
-	}
-	if n, _ := strconv.Atoi(os.Getenv("VELOX_DB_CONN_MAX_LIFETIME")); n > 0 {
-		c.ConnMaxLifetime = n
-	}
-	if n, _ := strconv.Atoi(os.Getenv("VELOX_DB_CONN_MAX_IDLE_TIME")); n > 0 {
-		c.ConnMaxIdleTime = n
-	}
+	c.MaxOpenConns = intFromEnv("VELOX_DB_MAX_OPEN_CONNS", 50, 1)
+	c.MaxIdleConns = intFromEnv("VELOX_DB_MAX_IDLE_CONNS", 10, 1)
+	c.ConnMaxLifetime = intFromEnv("VELOX_DB_CONN_MAX_LIFETIME", 1800, 1)
+	c.ConnMaxIdleTime = intFromEnv("VELOX_DB_CONN_MAX_IDLE_TIME", 300, 1)
 	return c
 }
