@@ -60,12 +60,7 @@ func (s *Service) Forward(ctx context.Context, rawPayload map[string]interface{}
 		return nil, false, nil
 	}
 
-	workerPayload, err := enqueue.BuildPipelinePayload(creatorResult)
-	if err != nil {
-		return nil, false, err
-	}
-
-	workerResponse, err := enqueue.EnqueueSceneVideoJob(ctx, s.queue, workerPayload)
+	workerResponse, err := ForwardCompletedResult(ctx, s.queue, creatorResult)
 	if err != nil {
 		return nil, false, err
 	}
@@ -91,4 +86,22 @@ func firstString(m map[string]interface{}, keys ...string) string {
 		}
 	}
 	return ""
+}
+
+// ForwardCompletedResult converts a completed creator payload into a worker job
+// and enqueues it for the remote worker pool.
+func ForwardCompletedResult(ctx context.Context, q *queue.FileQueue, result map[string]interface{}) (map[string]interface{}, error) {
+	if q == nil {
+		return nil, nil
+	}
+	if !enqueue.ShouldForwardPipelineResult(result) {
+		return nil, nil
+	}
+
+	workerPayload, err := enqueue.BuildPipelinePayload(result)
+	if err != nil {
+		return nil, err
+	}
+
+	return enqueue.EnqueueSceneVideoJob(ctx, q, workerPayload)
 }
