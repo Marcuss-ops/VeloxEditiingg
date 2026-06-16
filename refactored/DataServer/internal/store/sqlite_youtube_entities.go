@@ -110,6 +110,33 @@ func (s *SQLiteStore) DeleteYouTubeChannel(channelID string) error {
 	return err
 }
 
+// UpdateYouTubeChannelMetadata persists a YouTube-API metadata refresh into
+// the canonical youtube_channels row. Only the columns the refresh can
+// actually change from a YouTube channels.list response are written:
+// title, thumbnail_url, last_sync_at, updated_at.
+//
+// Every other column is intentionally left alone: refresh is the system
+// source of truth for title and thumbnail only. Display name, language,
+// view/sub counts, notes, channel_url, and metadata_json are owned by the
+// initial AddChannel path (or by user edits afterwards) and MUST NOT be
+// silently wiped by an API roundtrip — otherwise a single refresh would
+// erase user-set notes and language, or overwrite the canonical
+// youtube_channels row with the stale metadata_json blob that some
+// call-sites still write (see channels.go Service.UpdateChannelMetadata).
+//
+// Use this explicitly on metadata refresh paths. Use UpsertYouTubeChannel
+// for initial channel ingest where every column needs to be seeded.
+func (s *SQLiteStore) UpdateYouTubeChannelMetadata(channelID, title, thumbnailURL string) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err := s.db.Exec(
+		`UPDATE youtube_channels
+		 SET title = ?, thumbnail_url = ?, last_sync_at = ?, updated_at = ?
+		 WHERE channel_id = ?`,
+		title, thumbnailURL, now, now, channelID,
+	)
+	return err
+}
+
 // --- Canonical Groups V2 ---
 
 // UpsertYouTubeGroupV2 creates or updates a group in youtube_groups_v2.

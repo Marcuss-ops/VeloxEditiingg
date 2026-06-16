@@ -119,6 +119,66 @@ func TestYouTubeChannelListAndDelete(t *testing.T) {
 	}
 }
 
+func TestYouTubeChannelUpdateMetadataRefresh(t *testing.T) {
+	s := openTestDB(t)
+	defer s.Close()
+
+	// Seed with rich data so we can assert WHICH columns the refresh
+	// changes vs which it preserves. Refresh is metadata-only: title and
+	// thumbnail. User-edited columns (display_name, language, notes,
+	// channel_url, view_count, subscriber_count, metadata_json) MUST
+	// NOT be touched.
+	if err := s.UpsertYouTubeChannel(
+		"UC_refresh_test", "Original Title", "Original Display",
+		"https://youtube.com/@orig", "https://img.example.com/orig.jpg",
+		"en", "user notes", 1234, 567,
+		"2024-01-01T00:00:00Z", "2024-01-01T00:00:00Z", `{"user_meta": true}`,
+	); err != nil {
+		t.Fatalf("seed UpsertYouTubeChannel: %v", err)
+	}
+
+	if err := s.UpdateYouTubeChannelMetadata(
+		"UC_refresh_test", "Refreshed Title", "https://img.example.com/refresh.jpg",
+	); err != nil {
+		t.Fatalf("UpdateYouTubeChannelMetadata: %v", err)
+	}
+
+	got, err := s.GetYouTubeChannel("UC_refresh_test")
+	if err != nil {
+		t.Fatalf("GetYouTubeChannel: %v", err)
+	}
+	if got["title"] != "Refreshed Title" {
+		t.Errorf("title: got %v, want Refreshed Title", got["title"])
+	}
+	if got["thumbnail_url"] != "https://img.example.com/refresh.jpg" {
+		t.Errorf("thumbnail_url: got %v, want refreshed thumbnail", got["thumbnail_url"])
+	}
+	for _, c := range []struct {
+		col, want string
+	}{
+		{"display_name", "Original Display"},
+		{"language", "en"},
+		{"notes", "user notes"},
+		{"channel_url", "https://youtube.com/@orig"},
+	} {
+		if got[c.col] != c.want {
+			t.Errorf("%s was clobbered by refresh: got %v, want %q", c.col, got[c.col], c.want)
+		}
+	}
+	if got["view_count"] != int64(1234) {
+		t.Errorf("view_count was clobbered: got %v, want 1234", got["view_count"])
+	}
+	if got["subscriber_count"] != int64(567) {
+		t.Errorf("subscriber_count was clobbered: got %v, want 567", got["subscriber_count"])
+	}
+	if got["metadata_json"] != `{"user_meta": true}` {
+		t.Errorf("metadata_json was clobbered: got %v, want preserved user_meta JSON", got["metadata_json"])
+	}
+	if lastSyncAt, _ := got["last_sync_at"].(string); lastSyncAt == "" {
+		t.Errorf("last_sync_at is empty after refresh; want recent RFC3339 timestamp")
+	}
+}
+
 func TestYouTubeChannelEmptyDefaultValues(t *testing.T) {
 	s := openTestDB(t)
 	defer s.Close()
