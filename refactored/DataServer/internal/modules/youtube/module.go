@@ -6,6 +6,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"velox-server/internal/config"
+	"velox-server/internal/handlers/server/audit"
 	ytHandlers "velox-server/internal/handlers/server/youtube"
 	integrationsYoutube "velox-server/internal/integrations/youtube"
 	"velox-server/internal/store"
@@ -72,6 +73,15 @@ func (m *Module) RegisterRoutes(r *gin.Engine) {
 		} else {
 			m.youtubeStorage = storage
 		}
+	}
+
+	// Register the /api/v1/audit/persistence endpoint. Lives here because the
+	// YouTube Storage is the only component that records safety-guard state and
+	// knows the live channel/group counts; the audit handler reads both.
+	if m.youtubeStorage != nil || m.sqliteStore != nil {
+		auditHandler := audit.NewPersistenceHandler(m.cfg, m.sqliteStore, m.youtubeStorage)
+		r.GET("/api/v1/audit/persistence", auditHandler.Handle)
+		log.Printf("[YOUTUBE] Audit endpoint registered at /api/v1/audit/persistence")
 	}
 
 	handlers, err := ytHandlers.NewYouTubeHandlers(youtubeService, m.youtubeStorage)

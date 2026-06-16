@@ -57,40 +57,52 @@ func (h *YouTubeHandlers) ResolveChannelByLanguage(c *gin.Context) {
 func (h *YouTubeHandlers) ListGroups(c *gin.Context) {
 	groups, _ := h.storage.ListGroups()
 
-	// Filter to upload groups (GroupType == "upload" or empty for backward compat)
+	// Return all groups found in storage
 	result := make([]map[string]interface{}, 0, len(groups))
 	for _, g := range groups {
-		if g.GroupType != "" && g.GroupType != "upload" {
-			continue
-		}
-
 		groupData := map[string]interface{}{
 			"name":        g.Name,
 			"description": "",
 			"privacy":     "",
 			"channels":    make([]map[string]interface{}, 0, len(g.Channels)),
 			"count":       len(g.Channels),
+			"group_type":  g.GroupType,
 		}
 
 		// Enrich channels with metadata from Service OAuth channels
 		channelsList := groupData["channels"].([]map[string]interface{})
 		for _, ch := range g.Channels {
 			authCh := h.service.GetAuthChannel(ch.ID)
+
+			// Start with data from Storage, override with Auth data if available
+			channelID := ch.ID
+			title := ch.Title
+			name := ch.Name
+			thumbnail := ch.Thumbnail
+			language := ch.Language
+
 			if authCh != nil {
-				channelsList = append(channelsList, map[string]interface{}{
-					"id":        ch.ID,
-					"title":     authCh.Title,
-					"name":      authCh.Name,
-					"thumbnail": authCh.Thumbnail,
-					"language":  authCh.Language,
-				})
-			} else {
-				channelsList = append(channelsList, map[string]interface{}{
-					"id":    ch.ID,
-					"title": ch.Title,
-					"name":  ch.Name,
-				})
+				if authCh.Title != "" {
+					title = authCh.Title
+				}
+				if authCh.Name != "" {
+					name = authCh.Name
+				}
+				if authCh.Thumbnail != "" {
+					thumbnail = authCh.Thumbnail
+				}
+				if authCh.Language != "" {
+					language = authCh.Language
+				}
 			}
+
+			channelsList = append(channelsList, map[string]interface{}{
+				"id":        channelID,
+				"title":     title,
+				"name":      name,
+				"thumbnail": thumbnail,
+				"language":  language,
+			})
 		}
 		groupData["channels"] = channelsList
 

@@ -25,6 +25,7 @@ func (h *Handler) ListChannels(c *gin.Context) {
 	for _, ch := range channels {
 		channelData := gin.H{
 			"id":        ch.ID,
+			"url":       ch.URL,
 			"name":      ch.Name,
 			"title":     ch.Title,
 			"thumbnail": ch.Thumbnail,
@@ -78,6 +79,7 @@ func (h *Handler) GetChannel(c *gin.Context) {
 		"ok": true,
 		"channel": gin.H{
 			"id":        channel.ID,
+			"url":       channel.URL,
 			"name":      channel.Name,
 			"title":     channel.Title,
 			"thumbnail": channel.Thumbnail,

@@ -8,11 +8,24 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
+
+	"velox-server/internal/config"
 )
+
+func youtubeOAuthScopes() []string {
+	return []string{
+		"https://www.googleapis.com/auth/youtube",
+		"https://www.googleapis.com/auth/youtube.upload",
+		"https://www.googleapis.com/auth/youtube.readonly",
+		"https://www.googleapis.com/auth/yt-analytics.readonly",
+		"https://www.googleapis.com/auth/yt-analytics-monetary.readonly",
+	}
+}
 
 type oauthCredentials struct {
 	ClientID     string
@@ -91,6 +104,38 @@ func findOAuthSecretFile(cfg *ServiceConfig) (string, []byte, error) {
 	return "", nil, fmt.Errorf("client_secret.json not found in any known location")
 }
 
+func buildOAuthConfig(cfg *ServiceConfig) (*oauth2.Config, string, error) {
+	secretPath, secretData, err := findOAuthSecretFile(cfg)
+	if err != nil {
+		return nil, "", err
+	}
+
+	creds, err := parseOAuthCredentialsFile(secretData)
+	if err != nil {
+		return nil, "", fmt.Errorf("load OAuth config: %w", err)
+	}
+
+	if cfg.ClientID != "" {
+		creds.ClientID = cfg.ClientID
+	}
+	if cfg.ClientSecret != "" {
+		creds.ClientSecret = cfg.ClientSecret
+	}
+	if cfg.RedirectURL != "" {
+		creds.RedirectURI = cfg.RedirectURL
+	} else if masterURL := config.GetMasterURL(); masterURL != "" {
+		creds.RedirectURI = strings.TrimRight(masterURL, "/") + "/api/v1/youtube/oauth/callback"
+	}
+
+	return &oauth2.Config{
+		ClientID:     creds.ClientID,
+		ClientSecret: creds.ClientSecret,
+		RedirectURL:  creds.RedirectURI,
+		Scopes:       youtubeOAuthScopes(),
+		Endpoint:     google.Endpoint,
+	}, secretPath, nil
+}
+
 // AuthManager handles OAuth authentication and token management for YouTube channels
 type AuthManager struct {
 	service     *Service
@@ -110,52 +155,28 @@ func NewAuthManager(s *Service) *AuthManager {
 func (am *AuthManager) LoadOAuthConfig() error {
 	cfg := am.service.config
 
-	secretPath, secretData, err := findOAuthSecretFile(cfg)
+	oauthConfig, secretPath, err := buildOAuthConfig(cfg)
 	if err != nil {
 		return err
 	}
-
-	creds, err := parseOAuthCredentialsFile(secretData)
-	if err != nil {
-		return fmt.Errorf("load OAuth config: %w", err)
-	}
-
-	if cfg.ClientID != "" {
-		creds.ClientID = cfg.ClientID
-	}
-	if cfg.ClientSecret != "" {
-		creds.ClientSecret = cfg.ClientSecret
-	}
-	if cfg.RedirectURL != "" {
-		creds.RedirectURI = cfg.RedirectURL
-	}
-
-	am.oauthConfig = &oauth2.Config{
-		ClientID:     creds.ClientID,
-		ClientSecret: creds.ClientSecret,
-		RedirectURL:  creds.RedirectURI,
-		Scopes: []string{
-			"https://www.googleapis.com/auth/youtube",
-			"https://www.googleapis.com/auth/youtube.upload",
-			"https://www.googleapis.com/auth/youtube.readonly",
-			"https://www.googleapis.com/auth/yt-analytics.readonly",
-			"https://www.googleapis.com/auth/yt-analytics-monetary.readonly",
-		},
-		Endpoint: google.Endpoint,
-	}
-
+	am.oauthConfig = oauthConfig
 	log.Printf("[OK] YouTube OAuth config loaded from %s", secretPath)
 	return nil
 }
 
 // GetOAuthStartURL returns the URL to start OAuth flow
-func (am *AuthManager) GetOAuthStartURL(channelName string) string {
+func (am *AuthManager) GetOAuthStartURL(channelName string, redirectURL string) string {
 	if am.oauthConfig == nil {
 		return ""
 	}
 
+	cfg := *am.oauthConfig
+	if redirectURL != "" {
+		cfg.RedirectURL = redirectURL
+	}
+
 	state := fmt.Sprintf("youtube_%s_%d", channelName, time.Now().Unix())
-	return am.oauthConfig.AuthCodeURL(
+	return cfg.AuthCodeURL(
 		state,
 		oauth2.AccessTypeOffline,
 		oauth2.SetAuthURLParam("prompt", "consent select_account"),

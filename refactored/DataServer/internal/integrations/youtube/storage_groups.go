@@ -1,6 +1,10 @@
 package youtube
 
-import "time"
+import (
+	"fmt"
+	"log"
+	"time"
+)
 
 // ListGroups returns all groups
 func (s *Storage) ListGroups() (map[string]*Group, []string) {
@@ -34,7 +38,9 @@ func (s *Storage) GetGroup(name string) (*Group, bool) {
 	return &g, true
 }
 
-// CreateGroup creates a new group with the specified type
+// CreateGroup creates a new group with the specified type. Persists only this
+// group's row via a direct UpsertYouTubeGroupV2 call — does NOT touch any
+// other groups in the DB (avoids the destructive full-state rewrite).
 func (s *Storage) CreateGroup(name string, groupType string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -50,23 +56,56 @@ func (s *Storage) CreateGroup(name string, groupType string) error {
 		GroupType: groupType,
 	}
 
-	return s.save()
+	if s.store == nil {
+		return nil
+	}
+	_, err := s.store.UpsertYouTubeGroupV2(name, groupType, "", "")
+	if err != nil {
+		return fmt.Errorf("create group %q: %w", name, err)
+	}
+	return nil
 }
 
-// DeleteGroup removes a group
+// DeleteGroup removes a group. Persists only via direct SQL on this single
+// group's row and membership rows — does NOT touch any other groups.
 func (s *Storage) DeleteGroup(name string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if _, exists := s.data.Groups[name]; !exists {
+	group, exists := s.data.Groups[name]
+	if !exists {
 		return ErrGroupNotFound
 	}
 
 	delete(s.data.Groups, name)
-	return s.save()
+	if s.store == nil {
+		return nil
+	}
+
+	groupType := group.GroupType
+	if groupType == "" {
+		groupType = "manager"
+	}
+
+	groupID, err := s.store.GetYouTubeGroupV2ID(name, groupType)
+	if err != nil {
+		return err
+	}
+	if groupID > 0 {
+		if err := s.store.DeleteYouTubeGroupChannelsByGroupID(groupID); err != nil {
+			return err
+		}
+		if err := s.store.DeleteYouTubeGroupV2(groupID); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // CleanupOldData removes cached channel metadata older than the retention period.
+// Persists every affected group individually via SyncGroup (non-destructive
+// per-group diff) so untouched groups are left alone. Previously this called
+// the global save() which destructively rewrote every group.
 func (s *Storage) CleanupOldData(retention time.Duration) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -74,7 +113,11 @@ func (s *Storage) CleanupOldData(retention time.Duration) int {
 	now := time.Now()
 	removedCount := 0
 
-	for _, group := range s.data.Groups {
+	for name, group := range s.data.Groups {
+		if group == nil {
+			continue
+		}
+		groupDirty := false
 		for i := range group.Channels {
 			ch := &group.Channels[i]
 			if !ch.LastSync.IsZero() && now.Sub(ch.LastSync) > retention {
@@ -84,12 +127,14 @@ func (s *Storage) CleanupOldData(retention time.Duration) int {
 				ch.SubCount = 0
 				ch.Keywords = nil
 				removedCount++
+				groupDirty = true
 			}
 		}
-	}
-
-	if removedCount > 0 {
-		s.save()
+		if groupDirty && s.store != nil {
+			if err := s.syncGroupLocked(name, group); err != nil {
+				log.Printf("[WARN] CleanupOldData: per-group sync failed for %q: %v", name, err)
+			}
+		}
 	}
 	return removedCount
 }

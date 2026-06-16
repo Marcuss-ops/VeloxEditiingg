@@ -136,12 +136,19 @@ func (s *Service) loadCanonicalChannels() bool {
 		}
 		title, _ := row["title"].(string)
 		displayName, _ := row["display_name"].(string)
+		channelURL, _ := row["channel_url"].(string)
 		language, _ := row["language"].(string)
 		thumbnailURL, _ := row["thumbnail_url"].(string)
 
 		if ch, exists := s.channels[id]; exists {
 			if title != "" {
 				ch.Title = title
+			}
+			if displayName != "" {
+				ch.Name = displayName
+			}
+			if channelURL != "" {
+				ch.URL = channelURL
 			}
 			if language != "" {
 				ch.Language = language
@@ -152,6 +159,7 @@ func (s *Service) loadCanonicalChannels() bool {
 		} else {
 			s.channels[id] = &AuthChannel{
 				ID:        id,
+				URL:       channelURL,
 				Title:     title,
 				Name:      displayName,
 				Language:  language,
@@ -186,7 +194,7 @@ func (s *Service) UpdateChannelMetadata(channelID string, metadata map[string]in
 		rawMetadata, _ := json.Marshal(map[string]string{
 			"token_path": ch.TokenPath,
 		})
-		return s.store.UpsertYouTubeChannel(ch.ID, ch.Title, ch.Name, "", ch.Thumbnail, ch.Language, "", 0, 0, "", "", string(rawMetadata))
+		return s.store.UpsertYouTubeChannel(ch.ID, ch.Title, ch.Name, ch.URL, ch.Thumbnail, ch.Language, "", 0, 0, "", "", string(rawMetadata))
 	}
 	return nil
 }
@@ -245,6 +253,15 @@ func (s *Service) DeleteChannel(channelID string) error {
 		}
 	}
 
+	if s.store != nil {
+		if err := s.store.DeleteYouTubeGroupChannelsByChannelID(channelID); err != nil {
+			log.Printf("[WARN] Failed to remove DB memberships for channel %s: %v", channelID, err)
+		}
+		if err := s.store.DeleteYouTubeChannel(channelID); err != nil {
+			log.Printf("[WARN] Failed to delete canonical channel %s: %v", channelID, err)
+		}
+	}
+
 	if channel.TokenPath != "" {
 		if err := os.Remove(channel.TokenPath); err != nil {
 			log.Printf("[WARN] Failed to remove token file: %v", err)
@@ -254,7 +271,9 @@ func (s *Service) DeleteChannel(channelID string) error {
 	}
 
 	delete(s.channels, channelID)
-	s.saveGroups()
+	// Persisted in-place above via DeleteYouTubeGroupChannelsByChannelID +
+	// DeleteYouTubeChannel. No need to call saveGroups() (which would
+	// destructively rewrite every group in DB).
 
 	log.Printf("[OK] Channel permanently deleted: %s", channelID)
 	return nil

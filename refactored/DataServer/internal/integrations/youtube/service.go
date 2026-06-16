@@ -4,7 +4,6 @@ package youtube
 import (
 	"context"
 	"log"
-	"os"
 	"path/filepath"
 	"sync"
 	"time"
@@ -24,12 +23,17 @@ type YouTubeStore interface {
 	ListYouTubeChannels() ([]map[string]interface{}, error)
 	GetYouTubeChannel(channelID string) (map[string]interface{}, error)
 	UpsertYouTubeChannel(channelID, title, displayName, channelURL, thumbnailURL, language, notes string, viewCount, subCount int64, addedAt, lastSyncAt, metadataJSON string) error
+	DeleteYouTubeChannel(channelID string) error
 
 	// Canonical: YouTube Groups V2 (youtube_groups_v2 + youtube_group_channels)
 	ListYouTubeGroupsV2() ([]map[string]interface{}, error)
 	UpsertYouTubeGroupV2(name, groupType, description, privacy string) (int64, error)
+	GetYouTubeGroupV2ID(name, groupType string) (int64, error)
+	DeleteYouTubeGroupV2(id int64) error
 	AddChannelToGroupV2(groupID int64, channelID string) error
 	RemoveChannelFromGroupV2(groupID int64, channelID string) error
+	DeleteYouTubeGroupChannelsByGroupID(groupID int64) error
+	DeleteYouTubeGroupChannelsByChannelID(channelID string) error
 	ListGroupChannelsV2(groupID int64) ([]string, error)
 	ListAllGroupMembershipsV2() ([]map[string]interface{}, error)
 
@@ -66,21 +70,10 @@ func NewService(cfg *ServiceConfig, store YouTubeStore) (*Service, error) {
 	if cfg.TokensDir == "" {
 		if env := config.GetYouTubeTokensDir(); env != "" {
 			cfg.TokensDir = env
+		} else if cfg.DataDir != "" {
+			cfg.TokensDir = filepath.Join(cfg.DataDir, "secrets", "youtube", "tokens")
 		} else {
-			for _, candidate := range []string{
-				filepath.Join(cfg.DataDir, "secrets", "youtube", "tokens"),
-				filepath.Join(cfg.DataDir, "youtube", "tokens"),
-				filepath.Join("DataServer", "data", "secrets", "youtube", "tokens"),
-				filepath.Join("DataServer", "data", "youtube", "tokens"),
-			} {
-				if info, err := os.Stat(candidate); err == nil && info.IsDir() {
-					cfg.TokensDir = candidate
-					break
-				}
-			}
-			if cfg.TokensDir == "" {
-				cfg.TokensDir = filepath.Join(cfg.DataDir, "secrets", "youtube", "tokens")
-			}
+			cfg.TokensDir = filepath.Join(".velox", "secrets", "youtube", "tokens")
 		}
 	}
 	if cfg.YoutubePostingPath == "" {
@@ -153,12 +146,12 @@ func (s *Service) SetStore(st interface{}) {
 
 // --- Public API: OAuth (Delegated to AuthManager) ---
 
-func (s *Service) GetOAuthStartURL(channelName string) string {
-	return s.authManager.GetOAuthStartURL(channelName)
+func (s *Service) GetOAuthStartURL(channelName string, redirectURL string) string {
+	return s.authManager.GetOAuthStartURL(channelName, redirectURL)
 }
 
-func (s *Service) HandleOAuthCallback(ctx context.Context, code string, channelName string) (*Channel, error) {
-	return s.authManager.HandleOAuthCallback(ctx, code, channelName)
+func (s *Service) HandleOAuthCallback(ctx context.Context, code string, channelName string, redirectURL string) (*Channel, error) {
+	return s.authManager.HandleOAuthCallback(ctx, code, channelName, redirectURL)
 }
 
 func (s *Service) ValidateToken(ctx context.Context, channelID string) (map[string]interface{}, error) {

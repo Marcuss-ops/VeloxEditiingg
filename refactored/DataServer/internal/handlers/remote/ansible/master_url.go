@@ -15,14 +15,14 @@ type MasterResolution struct {
 }
 
 func ResolveMasterURL(cfg interface{}, c interface{}, fallback string) MasterResolution {
-	if cfg != nil {
-		if v, ok := extractMasterURLFromConfig(cfg); ok && v != "" {
-			return MasterResolution{URL: v, Source: "config"}
-		}
-	}
 	if c != nil {
 		if v, ok := extractMasterURLFromContext(c); ok && v != "" {
 			return MasterResolution{URL: v, Source: "request"}
+		}
+	}
+	if cfg != nil {
+		if v, ok := extractMasterURLFromConfig(cfg); ok && v != "" {
+			return MasterResolution{URL: v, Source: "config"}
 		}
 	}
 	return MasterResolution{URL: fallback, Source: "fallback"}

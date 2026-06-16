@@ -3,6 +3,7 @@ package frontend
 import (
 	"log"
 	"os"
+	"path/filepath"
 
 	"github.com/gin-gonic/gin"
 
@@ -34,11 +35,28 @@ func (m *Module) Name() string {
 // RegisterRoutes registers frontend endpoints.
 func (m *Module) RegisterRoutes(r *gin.Engine) {
 	// Determine SPA directories
-	m.spaAssetsDir = "frontend_standalone/web/dist/assets"
+	candidates := []string{}
 	if m.cfg.SPADir != "" {
-		m.spaAssetsDir = m.cfg.SPADir + "/assets"
-		m.spaDistDir = m.cfg.SPADir
+		candidates = append(candidates, m.cfg.SPADir)
+	}
+	candidates = append(candidates,
+		"../frontend_standalone/web/dist",
+		"frontend_standalone/web/dist",
+	)
+	m.spaDistDir = ""
+	for _, candidate := range candidates {
+		if candidate == "" {
+			continue
+		}
+		if _, err := os.Stat(candidate); err == nil {
+			m.spaDistDir = candidate
+			break
+		}
+	}
+	if m.spaDistDir != "" {
+		m.spaAssetsDir = filepath.Join(m.spaDistDir, "assets")
 	} else {
+		m.spaAssetsDir = "frontend_standalone/web/dist/assets"
 		m.spaDistDir = "frontend_standalone/web/dist"
 	}
 
@@ -61,11 +79,8 @@ func (m *Module) RegisterRoutes(r *gin.Engine) {
 	})
 
 	// SPA handler — use SPADir from env or fall back to the default relative path
-	spaDir := m.cfg.SPADir
-	if spaDir == "" {
-		spaDir = "frontend_standalone/web/dist"
-	}
-	if _, err := os.Stat(spaDir); err == nil {
+	spaDir := m.spaDistDir
+	if spaDir != "" {
 		// Clone cfg so we can override SPADir without mutating the original
 		spaCfg := *m.cfg
 		spaCfg.SPADir = spaDir
@@ -76,6 +91,11 @@ func (m *Module) RegisterRoutes(r *gin.Engine) {
 			c.Next()
 		}
 	}
+
+	// Explicit suite entrypoints so direct hits to /youtube-suite never fall
+	// through to the JSON 404 handler when the SPA is available.
+	r.GET("/youtube-suite", m.serveSPAHandler)
+	r.GET("/youtube-suite/", m.serveSPAHandler)
 
 	// NoRoute handler (SPA fallback + landing page)
 	landing := proxy.LandingPage(m.cfg)

@@ -119,18 +119,30 @@ func (ym *YouTubeManager) reviewAndRefreshChannels() {
 	time.Sleep(3 * time.Second)
 	log.Printf("[REVIEW] YouTube Review: Starting background review of database channels...")
 
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	defer cancel()
+
+	// 1. Refresh OAuth channels first
+	if ym.service != nil {
+		log.Printf("[REVIEW] YouTube Review: Refreshing metadata for all OAuth channels...")
+		success, errors := ym.service.RefreshAllChannelsMetadata(ctx)
+		if len(errors) > 0 {
+			log.Printf("[REVIEW] YouTube Review: OAuth refresh completed with %d errors (success: %d)", len(errors), success)
+		} else {
+			log.Printf("[REVIEW] YouTube Review: OAuth refresh completed successfully (success: %d)", success)
+		}
+	}
+
+	// 2. Refresh channels in groups (Manager channels, includes both OAuth and Tracked)
 	groups, _ := ym.storage.ListGroups()
 	if len(groups) == 0 {
-		log.Printf("[INFO] YouTube Review: No groups found, skipping review")
+		log.Printf("[INFO] YouTube Review: No groups found, skipping group review")
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-	defer cancel()
-
 	for _, group := range groups {
 		for _, ch := range group.Channels {
-			needsRefresh := ch.Title == "" || ch.Title == ch.ID || ch.Name == "" || ch.Name == ch.ID
+			needsRefresh := ch.Title == "" || ch.Title == ch.ID || ch.Name == "" || ch.Name == ch.ID || ch.Thumbnail == ""
 			needsLanguage := ch.Language == "" || ch.Language == "unknown"
 
 			if needsRefresh || needsLanguage {
@@ -147,16 +159,20 @@ func (ym *YouTubeManager) reviewAndRefreshChannels() {
 						if authCh.Language != "" && authCh.Language != "unknown" {
 							detectedLang = authCh.Language
 						}
-						log.Printf("[OK] YouTube Review: Found OAuth metadata for %s -> %q (Preserved language: %s)", ch.ID, realTitle, detectedLang)
+						log.Printf("[OK] YouTube Review: Found OAuth metadata for %s -> %q", ch.ID, realTitle)
 					}
 				}
 
 				if realTitle == "" {
-					channelURL := "https://www.youtube.com/channel/" + ch.ID
+					channelURL := ch.URL
+					if channelURL == "" || !strings.HasPrefix(channelURL, "http") {
+						channelURL = "https://www.youtube.com/channel/" + ch.ID
+					}
 					info, err := ym.apiClient.GetChannelInfo(ctx, channelURL)
 					if err == nil && info != nil {
 						realTitle = info.Title
 						thumbnail = info.Thumbnail
+						log.Printf("[OK] YouTube Review: Fetched API info for %s -> %q", ch.ID, realTitle)
 					} else {
 						log.Printf("[WARN] YouTube Review: Failed to fetch channel info for %s: %v", ch.ID, err)
 					}
@@ -175,6 +191,15 @@ func (ym *YouTubeManager) reviewAndRefreshChannels() {
 
 				_ = ym.storage.UpdateChannelMetadata(group.Name, ch.ID, realTitle, realTitle, thumbnail)
 				_, _ = ym.storage.UpdateChannelLanguage(group.Name, ch.ID, detectedLang)
+
+				// If it's an OAuth channel, sync back to Service too
+				if ym.service != nil && ym.service.GetAuthChannel(ch.ID) != nil {
+					_ = ym.service.UpdateChannelMetadata(ch.ID, map[string]interface{}{
+						"title":     realTitle,
+						"thumbnail": thumbnail,
+						"language":  detectedLang,
+					})
+				}
 
 				log.Printf("[OK] YouTube Review: Resolved channel %s -> %q [%s]", ch.ID, realTitle, detectedLang)
 			}
@@ -215,6 +240,11 @@ func (ym *YouTubeManager) DataRetentionCleanup() int {
 func (ym *YouTubeManager) ListGroupsHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		groups, trackedNiches := ym.storage.ListGroups()
+		for name, group := range groups {
+			if group == nil || len(group.Channels) == 0 {
+				delete(groups, name)
+			}
+		}
 
 		c.JSON(http.StatusOK, youtube.GroupsListResponse{
 			OK:            true,

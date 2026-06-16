@@ -172,6 +172,18 @@ func (s *SQLiteStore) DeleteYouTubeGroupV2(id int64) error {
 	return err
 }
 
+// DeleteYouTubeGroupChannelsByGroupID removes all memberships for a group.
+func (s *SQLiteStore) DeleteYouTubeGroupChannelsByGroupID(groupID int64) error {
+	_, err := s.db.Exec(`DELETE FROM youtube_group_channels WHERE group_id=?`, groupID)
+	return err
+}
+
+// DeleteYouTubeGroupChannelsByChannelID removes a channel from all groups.
+func (s *SQLiteStore) DeleteYouTubeGroupChannelsByChannelID(channelID string) error {
+	_, err := s.db.Exec(`DELETE FROM youtube_group_channels WHERE channel_id=?`, channelID)
+	return err
+}
+
 // --- Group-Channel Memberships ---
 
 // AddChannelToGroupV2 adds a channel membership with position.

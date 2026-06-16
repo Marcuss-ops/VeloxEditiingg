@@ -12,17 +12,22 @@ import (
 )
 
 // HandleOAuthCallback handles OAuth callback and saves token
-func (am *AuthManager) HandleOAuthCallback(ctx context.Context, code string, channelName string) (*Channel, error) {
+func (am *AuthManager) HandleOAuthCallback(ctx context.Context, code string, channelName string, redirectURL string) (*Channel, error) {
 	if am.oauthConfig == nil {
 		return nil, fmt.Errorf("OAuth not configured")
 	}
 
-	token, err := am.oauthConfig.Exchange(ctx, code)
+	cfg := *am.oauthConfig
+	if redirectURL != "" {
+		cfg.RedirectURL = redirectURL
+	}
+
+	token, err := cfg.Exchange(ctx, code)
 	if err != nil {
 		return nil, fmt.Errorf("failed to exchange token: %w", err)
 	}
 
-	client := am.oauthConfig.Client(ctx, token)
+	client := cfg.Client(ctx, token)
 	service, err := youtube.NewService(ctx, option.WithHTTPClient(client))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create YouTube service: %w", err)
