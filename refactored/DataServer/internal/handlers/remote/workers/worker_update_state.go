@@ -1,11 +1,14 @@
 package workers
 
 import (
-	"log"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+
+	"velox-server/internal/logging"
 )
+
+var workerUpdateLog = logging.NewLogger("workers.update_handler")
 
 // UpdateStateHandler handles POST /worker/update_state
 func (h *WorkerUpdateHandler) UpdateStateHandler() gin.HandlerFunc {
@@ -57,32 +60,25 @@ func (h *WorkerUpdateHandler) UpdateStateHandler() gin.HandlerFunc {
 					artifactPreview = body.ArtifactSHA256
 				}
 			}
-			log.Printf("[UPDATE] Worker %s: UPDATE_DOWNLOADED - zip downloaded, hash=%s", workerName, artifactPreview)
+			workerUpdateLog.InfoWithMsg(logging.CodeWorkerUpdateDownloaded, "UPDATE_DOWNLOADED - zip downloaded", map[string]interface{}{"worker": workerName, "artifact_sha": artifactPreview})
 
 		case "UPDATE_APPLIED":
-			log.Printf("[OK] Worker %s: UPDATE_APPLIED - symlink updated, waiting for restart", workerName)
-			if body.UpdateInfo != nil {
-				log.Printf("   [INFO] Dirs updated: %v, Files updated: %v",
-					body.UpdateInfo["dirs_updated"], body.UpdateInfo["files_updated"])
-			}
+		workerUpdateLog.InfoWithMsg(logging.CodeWorkerUpdateApplied, "UPDATE_APPLIED - symlink updated, waiting for restart", map[string]interface{}{"worker": workerName})
+		if body.UpdateInfo != nil {
+			workerUpdateLog.InfoWithMsg(logging.CodeWorkerUpdateFinalized, "Dirs/files updated", map[string]interface{}{"dirs": body.UpdateInfo["dirs_updated"], "files": body.UpdateInfo["files_updated"]})
+		}
 
 		case "WORKER_ONLINE":
 			isAligned := body.ArtifactSHA256 != "" && body.ArtifactSHA256 == targetArtifactSHA
-			if isAligned {
-				log.Printf("")
-				log.Printf("[OK] ========================================")
-				log.Printf("[UPDATE] Worker %s UPDATED AND ONLINE!", workerName)
-				log.Printf("[OK] ========================================")
-				log.Printf("   [INFO] Artifact: %s...", body.ArtifactSHA256[:min(16, len(body.ArtifactSHA256))])
-				log.Printf("   [OK] Aligned: YES")
-				log.Printf("")
-				h.updateMgr.ClearUpdate(body.WorkerID)
-			} else {
-				log.Printf("Worker %s online with different artifact (not yet updated)", workerName)
-			}
+		if isAligned {
+			workerUpdateLog.InfoWithMsg(logging.CodeWorkerOnlineAligned, "UPDATED AND ONLINE", map[string]interface{}{"worker": workerName, "artifact_sha": body.ArtifactSHA256[:min(16, len(body.ArtifactSHA256))], "aligned": true})
+			h.updateMgr.ClearUpdate(body.WorkerID)
+		} else {
+			workerUpdateLog.InfoWithMsg(logging.CodeWorkerOnlineMisaligned, "online with different artifact (not yet updated)", map[string]interface{}{"worker": workerName, "aligned": false})
+		}
 
 		case "UPDATE_FAILED":
-			log.Printf("[ERROR] Worker %s: UPDATE_FAILED - %s", workerName, body.Error)
+			workerUpdateLog.ErrorWithMsg(logging.CodeWorkerUpdateFailed, "UPDATE_FAILED", map[string]interface{}{"worker": workerName, "err": body.Error})
 		}
 
 		c.JSON(http.StatusOK, gin.H{
@@ -118,7 +114,7 @@ func (h *WorkerUpdateHandler) UpdateAckHandler() gin.HandlerFunc {
 			if worker != nil && worker.WorkerName != "" {
 				workerName = worker.WorkerName
 			}
-			log.Printf("[UPDATE] Worker %s: Legacy ACK received (version: %s)", workerName, body.LocalVersion)
+			workerUpdateLog.InfoWithMsg(logging.CodeWorkerUpdateAck, "Legacy ACK received", map[string]interface{}{"worker": workerName, "local_version": body.LocalVersion})
 		}
 
 		c.JSON(http.StatusOK, gin.H{
