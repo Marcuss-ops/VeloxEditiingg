@@ -10,8 +10,8 @@ import (
 	"image/png"
 	"io"
 	"log"
-	"math/rand"
 	"math"
+	"math/rand"
 	"net/http"
 	"os"
 	"strconv"
@@ -163,20 +163,26 @@ func buildBridgeResult(jobID string, payload map[string]interface{}, state *brid
 
 	scenesJSON, _ := json.Marshal(scenes)
 	return map[string]interface{}{
-		"ok":              true,
-		"job_id":          jobID,
-		"trace_id":        jobID,
-		"status":          "completed",
-		"progress":        100,
-		"doc_url":         baseURL + "/docs/" + jobID,
-		"script_text":     "Bridge generated script for " + topic,
-		"scenes_json":     string(scenesJSON),
-		"scenes":          scenes,
-		"voiceover_path":  voiceovers[0],
-		"voiceover_paths": voiceovers,
-		"voiceover_url":   voiceovers[0],
-		"voiceovers":      voiceovers,
-		"title":           topic,
+		"ok":                     true,
+		"job_id":                 jobID,
+		"trace_id":               jobID,
+		"status":                 "completed",
+		"progress":               100,
+		"doc_url":                baseURL + "/docs/" + jobID,
+		"script_text":            "Bridge generated script for " + topic,
+		"scenes_json":            string(scenesJSON),
+		"scenes":                 scenes,
+		"voiceover_path":         voiceovers[0],
+		"voiceover_paths":        voiceovers,
+		"voiceover_url":          voiceovers[0],
+		"voiceovers":             voiceovers,
+		"title":                  topic,
+		"youtube_group":          firstString(payload, "youtube_group"),
+		"audio_language_for_srt": firstString(payload, "audio_language_for_srt", "language"),
+		"language":               firstString(payload, "language", "audio_language_for_srt"),
+		"drive_output_folder":    firstString(payload, "drive_output_folder", "output_directory"),
+		"output_path":            firstString(payload, "output_path"),
+		"video_mode":             firstString(payload, "video_mode"),
 	}
 }
 

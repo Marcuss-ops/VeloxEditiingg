@@ -351,11 +351,19 @@ func (s *Service) RefreshAllChannelsMetadata(ctx context.Context) (int, []error)
 	return successCount, errors
 }
 
-// saveChannelToken saves an AuthChannel's token to file
+// saveChannelToken saves an AuthChannel's token to the canonical OAuth
+// directory (dataDir/secrets/youtube/tokens/). Always forces the canonical
+// path; any pre-existing channel.TokenPath that points to a legacy
+// location is overwritten so callers cannot accidentally split source-of-truth.
 func (s *Service) saveChannelToken(channel *AuthChannel) error {
-	if channel.TokenPath == "" {
-		channel.TokenPath = filepath.Join(s.config.TokensDir, fmt.Sprintf("account_%s.json", channel.ID))
+	if channel == nil {
+		return fmt.Errorf("saveChannelToken: nil channel")
 	}
+	canonical := CanonicalOAuthTokenPath(s.config.DataDir, channel.ID)
+	if canonical == "" {
+		return fmt.Errorf("saveChannelToken: cannot resolve canonical path (dataDir=%q, channelID=%q)", s.config.DataDir, channel.ID)
+	}
+	channel.TokenPath = canonical
 
 	tokenData := map[string]interface{}{
 		"token":         channel.AccessToken,
@@ -373,10 +381,13 @@ func (s *Service) saveChannelToken(channel *AuthChannel) error {
 		return fmt.Errorf("failed to marshal token: %w", err)
 	}
 
-	if err := os.WriteFile(channel.TokenPath, tokenJSON, 0600); err != nil {
+	if err := os.MkdirAll(filepath.Dir(canonical), 0755); err != nil {
+		return fmt.Errorf("failed to create token directory: %w", err)
+	}
+	if err := os.WriteFile(canonical, tokenJSON, 0600); err != nil {
 		return fmt.Errorf("failed to save token: %w", err)
 	}
 
-	log.Printf("[OK] Token saved for channel: %s", channel.ID)
+	log.Printf("[OK] Token saved for channel: %s at %s", channel.ID, canonical)
 	return nil
 }

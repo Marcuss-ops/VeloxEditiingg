@@ -64,9 +64,15 @@ func (s *Storage) RemoveChannel(groupName, channelID string) error {
 // MoveChannel moves a channel from one group to another. Persists only the
 // affected source and target groups via SyncGroup (non-destructive diff).
 //
-// On any DB error during the source half, both source and target in-memory
-// state are restored from the pre-move snapshot so the next save() does not
-// see a half-completed move.
+// Atomicity contract:
+//   - Snapshots both source and target channel slices BEFORE any mutation.
+//   - Persists the target group FIRST so the channel is at-rest in its new
+//     home, then removes the channel from the source group.
+//   - On any DB error during the target phase, both in-memory slices are
+//     restored from the pre-move snapshot.
+//   - On DB error during the source phase, the channel membership that was
+//     just added to the target in the DB is explicitly removed before the
+//     in-memory slices are restored, so memory and DB stay coherent.
 func (s *Storage) MoveChannel(sourceGroup, channelID, targetGroup string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -93,50 +99,59 @@ func (s *Storage) MoveChannel(sourceGroup, channelID, targetGroup string) error 
 		return ErrChannelNotFound
 	}
 
-	// Snapshot pre-move state for rollback on partial-failure.
-	sourceLen := len(source.Channels)
-	targetLen := len(target.Channels)
+	// Snapshot pre-move state for safe rollback. We allocate FRESH slices so
+	// that restoring them later cannot accidentally alias already-mutated state.
+	originalSource := append([]Channel{}, source.Channels...)
+	originalTarget := append([]Channel{}, target.Channels...)
+
+	// Collision path: target already has a channel with the same URL. Treat
+	// as a drop-from-source only — no channel goes to target.
 	for _, ch := range target.Channels {
 		if ch.URL == channel.URL {
-			// Channel collides on URL with an existing target entry: treat
-			// as a no-op move (drop from source only).
 			source.Channels = append(source.Channels[:channelIdx], source.Channels[channelIdx+1:]...)
 			if s.store == nil {
 				return nil
 			}
 			if err := s.syncGroupLocked(sourceGroup, source); err != nil {
-				source.Channels = make([]Channel, sourceLen)
+				source.Channels = originalSource
 				return err
 			}
 			return nil
 		}
 	}
 
-	// Apply the move to memory, then persist target FIRST. If the target
-	// write succeeds, the channel is at-rest in its new home; we then
-	// persist the source removal. If target write fails, restore both halves
-	// so memory and DB stay consistent.
+	// Apply the move in memory first; then persist target, then source.
 	source.Channels = append(source.Channels[:channelIdx], source.Channels[channelIdx+1:]...)
 	target.Channels = append(target.Channels, channel)
 
 	if s.store == nil {
 		return nil
 	}
+
+	// Persist target first.
 	if err := s.syncGroupLocked(targetGroup, target); err != nil {
-		target.Channels = target.Channels[:targetLen]
-		source.Channels = make([]Channel, sourceLen)
-		copy(source.Channels, append([]Channel{channel}, make([]Channel, sourceLen-1)...))
-		// Rebuild source slice to its original order.
-		for j, ch := range s.data.Groups[sourceGroup].Channels {
-			source.Channels[j] = ch
-		}
-		_ = sourceLen
+		source.Channels = originalSource
+		target.Channels = originalTarget
 		return err
 	}
+
+	// Persist source removal.
 	if err := s.syncGroupLocked(sourceGroup, source); err != nil {
-		// Source removal failed but target write succeeded. Roll back target.
-		target.Channels = target.Channels[:targetLen]
-		source.Channels = append(source.Channels[:channelIdx], append([]Channel{channel}, source.Channels[channelIdx:]...)...)
+		// DB-target succeeded; undo the membership in DB before restoring
+		// in-memory state so SQLite and memory stay aligned. The type passed
+		// to GetYouTubeGroupV2ID must match UpsertYouTubeGroupV2's
+		// normalisation: an empty GroupType becomes "manager" on insert,
+		// so the rollback lookup has to use the same value or the row
+		// won't be found.
+		targetType := target.GroupType
+		if targetType == "" {
+			targetType = "manager"
+		}
+		if targetID, terr := s.store.GetYouTubeGroupV2ID(targetGroup, targetType); terr == nil && targetID > 0 {
+			_ = s.store.RemoveChannelFromGroupV2(targetID, channel.ID)
+		}
+		source.Channels = originalSource
+		target.Channels = originalTarget
 		return err
 	}
 	return nil
