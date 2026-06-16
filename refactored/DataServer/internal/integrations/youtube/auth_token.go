@@ -3,52 +3,24 @@ package youtube
 import (
 	"context"
 	"fmt"
-	"log"
-	"net/http"
-	"os"
-	"strings"
 )
 
-// RevokeToken revokes a channel's OAuth token
+// RevokeToken is the AuthManager-side façade for OAuth revocation. The
+// canonical orchestration lives in Service.RevokeToken (which routes
+// through the repository: HTTP Google revoke + MarkYouTubeOAuthTokenRevoked
+// + JSON file delete + RAM delete). This method exists for
+// source-compatibility with handlers and tests that held a *AuthManager
+// reference; new callers should invoke Service.RevokeToken directly.
+//
+// Distinct from AuthManager.SaveChannelToken (which persists), distinct
+// from AuthManager.DeleteChannel (which doesn't exist here \u2014 channel
+// removal lives on Service.DeleteChannel and uses
+// SQLiteStore.DeleteChannelAtomic for transactional cleanup).
 func (am *AuthManager) RevokeToken(ctx context.Context, channelID string) error {
-	channel := am.service.GetChannel(channelID)
-	if channel == nil {
-		return fmt.Errorf("channel not found: %s", channelID)
+	if am == nil || am.service == nil {
+		return fmt.Errorf("revoke: auth manager not wired")
 	}
-
-	revokeURL := "https://oauth2.googleapis.com/revoke"
-
-	req, err := http.NewRequestWithContext(ctx, "POST", revokeURL, strings.NewReader("token="+channel.AccessToken))
-	if err != nil {
-		return fmt.Errorf("failed to create revocation request: %w", err)
-	}
-
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		log.Printf("[WARN] Token revocation request failed: %v", err)
-	} else {
-		resp.Body.Close()
-		if resp.StatusCode == http.StatusOK {
-			log.Printf("[OK] Token revoked successfully for channel: %s", channelID)
-		} else {
-			log.Printf("[WARN] Token revocation returned status: %d", resp.StatusCode)
-		}
-	}
-
-	if channel.TokenPath != "" {
-		if err := os.Remove(channel.TokenPath); err != nil {
-			log.Printf("[WARN] Failed to remove token file: %v", err)
-		}
-	}
-
-	am.service.mu.Lock()
-	delete(am.service.channels, channelID)
-	am.service.mu.Unlock()
-
-	log.Printf("[OK] Channel removed: %s", channelID)
-	return nil
+	return am.service.RevokeToken(ctx, channelID)
 }
 
 // saveChannelToken persists an AuthChannel's OAuth credentials. Delegates

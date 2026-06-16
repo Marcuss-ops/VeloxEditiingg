@@ -689,6 +689,84 @@ func TestYouTubeOAuthTokenChannelFKDeleteCascade(t *testing.T) {
 	}
 }
 
+func TestYouTubeChannelDeleteAtomic(t *testing.T) {
+	s := openTestDB(t)
+	defer s.Close()
+	_, _ = s.db.Exec("PRAGMA foreign_keys = ON")
+
+	if err := s.UpsertYouTubeChannel("UC_atomic", "Atomic Test", "", "", "", "", "", 0, 0, "", "", `{}`); err != nil {
+		t.Fatalf("seed channel: %v", err)
+	}
+	// Seed oauth token row directly (without encryption — the row only needs
+	// to exist for FK cascade verification).
+	if err := s.UpsertYouTubeOAuthToken("UC_atomic", []byte("enc-access"), []byte("enc-refresh"), "Bearer", "", "", 1); err != nil {
+		t.Fatalf("seed oauth token: %v", err)
+	}
+
+	groupID, err := s.UpsertYouTubeGroupV2("Atomic Group", "manager", "", "")
+	if err != nil {
+		t.Fatalf("seed group: %v", err)
+	}
+	if err := s.AddChannelToGroupV2(groupID, "UC_atomic"); err != nil {
+		t.Fatalf("seed membership: %v", err)
+	}
+
+	// Sanity: all three rows present before the call.
+	if row, _ := s.GetYouTubeChannel("UC_atomic"); row == nil {
+		t.Fatal("setup: youtube_channels UC_atomic missing")
+	}
+	if row, _ := s.GetYouTubeOAuthToken("UC_atomic"); row == nil {
+		t.Fatal("setup: youtube_oauth_tokens UC_atomic missing")
+	}
+	memberships, _ := s.ListGroupChannelsV2(groupID)
+	if len(memberships) != 1 || memberships[0] != "UC_atomic" {
+		t.Fatalf("setup: expected 1 membership for group, got %v", memberships)
+	}
+
+	deleted, err := s.DeleteChannelAtomic("UC_atomic")
+	if err != nil {
+		t.Fatalf("DeleteChannelAtomic: %v", err)
+	}
+	if deleted != 1 {
+		t.Errorf("expected 1 membership deleted, got %d", deleted)
+	}
+
+	// Assert: youtube_channels row gone
+	if row, _ := s.GetYouTubeChannel("UC_atomic"); row != nil {
+		t.Errorf("expected youtube_channels UC_atomic gone, got %v", row)
+	}
+	// Assert: youtube_oauth_tokens row gone (FK cascade from channels)
+	if row, _ := s.GetYouTubeOAuthToken("UC_atomic"); row != nil {
+		t.Errorf("expected youtube_oauth_tokens UC_atomic cascade-deleted, got %v", row)
+	}
+	// Assert: membership row gone
+	memberships, _ = s.ListGroupChannelsV2(groupID)
+	for _, m := range memberships {
+		if m == "UC_atomic" {
+			t.Errorf("expected membership UC_atomic to be gone in group %d, still present", groupID)
+		}
+	}
+	// Group row itself remains (we only removed the membership, not the group).
+	groups, _ := s.ListYouTubeGroupsV2()
+	if len(groups) != 1 {
+		t.Errorf("expected group row to remain, total groups = %d", len(groups))
+	}
+}
+
+func TestYouTubeChannelDeleteAtomicMissingChannel(t *testing.T) {
+	s := openTestDB(t)
+	defer s.Close()
+	_, _ = s.db.Exec("PRAGMA foreign_keys = ON")
+
+	deleted, err := s.DeleteChannelAtomic("UC_nonexistent")
+	if err != nil {
+		t.Errorf("expected no error on missing channel, got %v", err)
+	}
+	if deleted != 0 {
+		t.Errorf("expected 0 memberships deleted, got %d", deleted)
+	}
+}
+
 func TestYouTubeCacheClear(t *testing.T) {
 	s := openTestDB(t)
 	defer s.Close()
