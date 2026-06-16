@@ -11,6 +11,14 @@ import (
 )
 
 // migrateUsage prints the usage text for the `migrate` subcommand.
+//
+// Note for the operator: `migrate youtube-oauth-json` is FILESYSTEM-ONLY
+// — it moves legacy Token files into the canonical path and prunes
+// empty legacy directories. It does NOT write to SQLite. After this
+// command succeeds the operator must still import the canonical JSON
+// into youtube_oauth_tokens (currently via Service.BackfillOAuthTokensFromJSON,
+// either invoked directly by the operator or wired into the next
+// planned `velox-server migrate youtube-oauth-sqlite` subcommand).
 func migrateUsage() {
 	fmt.Fprintf(os.Stderr, "Usage: velox-server migrate <subcommand> [<args>]\n\n")
 	fmt.Fprintf(os.Stderr, "Subcommands:\n")
@@ -18,8 +26,11 @@ func migrateUsage() {
 	fmt.Fprintf(os.Stderr, "      Move legacy OAuth token files under <DataDir>/youtube/\n")
 	fmt.Fprintf(os.Stderr, "      into the canonical path <DataDir>/%s/.\n", integrationsYoutube.CanonicalOAuthTokenSubPath)
 	fmt.Fprintf(os.Stderr, "      Prints a summary: Found/Moved/Merged/DeletedLegacyFiles/RemovedEmptyDirs/Errors.\n")
-	fmt.Fprintf(os.Stderr, "      SQL import into youtube_oauth_tokens is NOT performed;\n")
-	fmt.Fprintf(os.Stderr, "      run `velox-server migrate youtube-oauth-sqlite` (TODO) afterwards.\n")
+	fmt.Fprintf(os.Stderr, "      FILESYSTEM-ONLY: SQL import into youtube_oauth_tokens is NOT performed.\n")
+	fmt.Fprintf(os.Stderr, "      To import the canonical JSON into youtube_oauth_tokens, run a\n")
+	fmt.Fprintf(os.Stderr, "      future `velox-server migrate youtube-oauth-sqlite` subcommand\n")
+	fmt.Fprintf(os.Stderr, "      (planned) or invoke Service.BackfillOAuthTokensFromJSON manually\n")
+	fmt.Fprintf(os.Stderr, "      in a host process with the cipher mounted.\n")
 }
 
 // runMigrate dispatches `velox-server migrate <sub> [<args>]`. Each
@@ -97,8 +108,11 @@ func runMigrateOAuthJSON(cfg *config.Config, args []string) error {
 			fmt.Printf("  - %s\n", e)
 		}
 	}
-	if !dryRun && (res.Found > 0 || len(res.Errors) > 0) {
-		log.Printf("[MIGRATE] youtube-oauth-json: legacy files relocated; now run migration tools to import the canonical JSON into youtube_oauth_tokens (TODO: velox-server migrate youtube-oauth-sqlite).")
+	if !dryRun && res.Found > 0 {
+		log.Printf("[MIGRATE] youtube-oauth-json: %d legacy files relocated. SQL import is a separate operator action — see migration plan S6/S11 for the future `velox-server migrate youtube-oauth-sqlite` subcommand.", res.Moved+res.Merged)
+	}
+	if len(res.Errors) > 0 {
+		log.Printf("[MIGRATE] youtube-oauth-json: reconciliation required for %d per-file errors (see stdout above).", len(res.Errors))
 	}
 	return nil
 }
