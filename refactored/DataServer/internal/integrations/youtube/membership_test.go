@@ -130,10 +130,6 @@ func (m *membershipStoreMock) MigrateYouTubeCache(entries map[string]struct {
 	return 0, nil
 }
 
-func newTestServiceWithStore(s YouTubeStore) *Service {
-	return &Service{store: s}
-}
-
 // --- Tests ---
 
 func TestMembership_NoStore(t *testing.T) {
@@ -148,7 +144,7 @@ func TestMembership_NoStore(t *testing.T) {
 }
 
 func TestMembership_RowMissing(t *testing.T) {
-	svc := newTestServiceWithStore(&membershipStoreMock{rows: map[string]map[string]interface{}{}})
+	svc := &Service{store: &membershipStoreMock{rows: map[string]map[string]interface{}{}}}
 	ch, err := svc.Membership("UC_missing")
 	if err != nil {
 		t.Fatalf("Membership for missing row must NOT error; got %v", err)
@@ -173,7 +169,7 @@ func TestMembership_RowPresent(t *testing.T) {
 			},
 		},
 	}
-	svc := newTestServiceWithStore(store)
+	svc := &Service{store: store}
 	ch, err := svc.Membership("UC_present")
 	if err != nil {
 		t.Fatalf("Membership for present row must NOT error; got %v", err)
@@ -187,7 +183,7 @@ func TestMembership_RowPresent(t *testing.T) {
 }
 
 func TestMembership_StoreErrorSurfaced(t *testing.T) {
-	svc := newTestServiceWithStore(&membershipStoreMock{err: errors.New("sqlite: disk full")})
+	svc := &Service{store: &membershipStoreMock{err: errors.New("sqlite: disk full")}}
 	_, err := svc.Membership("UC_any")
 	if err == nil {
 		t.Fatalf("Membership MUST surface SQL errors (DB-first invariant); got nil")
@@ -198,7 +194,7 @@ func TestMembership_StoreErrorSurfaced(t *testing.T) {
 }
 
 func TestBulkMembership_EmptyInput(t *testing.T) {
-	svc := newTestServiceWithStore(&membershipStoreMock{})
+	svc := &Service{store: &membershipStoreMock{}}
 	out, err := svc.BulkMembership(nil)
 	if err != nil {
 		t.Fatalf("BulkMembership with nil input must NOT error; got %v", err)
@@ -215,7 +211,7 @@ func TestBulkMembership_MixedPresence(t *testing.T) {
 			"UC_b": {"channel_id": "UC_b", "title": "B"},
 		},
 	}
-	svc := newTestServiceWithStore(store)
+	svc := &Service{store: store}
 	out, err := svc.BulkMembership([]string{"UC_a", "", "UC_b", "UC_missing"})
 	if err != nil {
 		t.Fatalf("BulkMembership mixed-presence must NOT error; got %v", err)
@@ -238,7 +234,7 @@ func TestBulkMembership_MixedPresence(t *testing.T) {
 }
 
 func TestBulkMembership_StoreErrorPropagates(t *testing.T) {
-	svc := newTestServiceWithStore(&membershipStoreMock{err: errors.New("sqlite: I/O error")})
+	svc := &Service{store: &membershipStoreMock{err: errors.New("sqlite: I/O error")}}
 	_, err := svc.BulkMembership([]string{"UC_a", "UC_b"})
 	if err == nil {
 		t.Fatalf("BulkMembership MUST propagate SQL errors; got nil")
