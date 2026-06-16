@@ -189,10 +189,15 @@ func TestV2SubmitResultJobNotFound(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(w, req)
 
-	// TODO: a missing job should ideally return 404, but the current handler returns
-	// 409 because ValidateJobLease treats it as a lease error.
-	if w.Code != http.StatusConflict {
-		t.Fatalf("want 409, got %d body=%s", w.Code, w.Body.String())
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("want 404, got %d body=%s", w.Code, w.Body.String())
+	}
+	var res map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &res); err != nil {
+		t.Fatalf("response JSON: %v", err)
+	}
+	if res["ok"] == true {
+		t.Fatalf("want ok=false, got %v", res["ok"])
 	}
 }
 

@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -18,6 +17,8 @@ import (
 	"golang.org/x/oauth2"
 	"google.golang.org/api/option"
 	ytanalytics "google.golang.org/api/youtubeanalytics/v2"
+
+	"velox-server/internal/config"
 )
 
 const (
@@ -207,7 +208,7 @@ func (qm *QuotaManager) UpdateAnalyticsCache(ctx context.Context, channelID stri
 	}
 
 	// Determine cache path and DB path
-	dataDir := os.Getenv("VELOX_DATA_DIR")
+	dataDir := config.GetDataDir()
 	if dataDir == "" {
 		// Default to relative path from working directory
 		dataDir = "data"
@@ -325,7 +326,7 @@ func (qm *QuotaManager) UpdateVideoAnalyticsCache(ctx context.Context, channelID
 	}
 
 	// 2. Save to structured SQLite table
-	dataDir := os.Getenv("VELOX_DATA_DIR")
+	dataDir := config.GetDataDir()
 	if dataDir == "" {
 		dataDir = "data"
 	}

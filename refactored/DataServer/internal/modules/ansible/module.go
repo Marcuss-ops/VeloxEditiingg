@@ -25,10 +25,7 @@ type Module struct {
 func New(cfg *config.Config, dataDir string, adminAuth gin.HandlerFunc, sqliteStore *store.SQLiteStore) *Module {
 	masterURL := cfg.MasterURL
 	if strings.TrimSpace(masterURL) == "" {
-		masterURL = os.Getenv("VELOX_MASTER_URL")
-	}
-	if strings.TrimSpace(masterURL) == "" {
-		masterURL = os.Getenv("VELOX_MASTER_SERVER_URL")
+		masterURL = config.GetAnsibleMasterURL()
 	}
 	if strings.TrimSpace(masterURL) == "" {
 		masterURL = remoteansible.DetectLocalMasterURL()

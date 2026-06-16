@@ -4,10 +4,10 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"os"
 	"strings"
 	"time"
 
+	"velox-server/internal/config"
 	"velox-shared/payload"
 
 	"github.com/google/uuid"
@@ -125,8 +125,7 @@ func (h *AnsibleHandlers) runDeployWorkers(targets []string, batchSize int, cana
 		bgCtx := context.Background()
 		masterURL := payload.FirstNonEmpty(
 			h.masterURL,
-			os.Getenv("VELOX_MASTER_URL"),
-			os.Getenv("VELOX_MASTER_SERVER_URL"),
+			config.GetAnsibleMasterURL(),
 			DetectLocalMasterURL(),
 		)
 		summary := []string{
