@@ -1,10 +1,19 @@
 # POST /api/script/generate-with-images
 
-> Endpoint principale per creare un job video da scene e asset gia pronti.
+> Endpoint operativo per il flusso "script with images" attualmente disponibile in questa repo.
+
+## Regola operativa
+
+Questo endpoint non avvia `generate-from-clips` e non usa una pipeline "clip-first".
+Il flusso reale oggi e:
+
+`POST /api/script/generate-with-images` -> normalizzazione payload -> enqueue job `process_video` -> worker remoto registrato -> render video -> upload risultato.
+
+Il worker non e un id fisso tipo "77": il master usa i `worker_id` registrati/heartbeatati, di solito alias come `host_<ip_sanitizzato>`.
 
 ## Overview
 
-Questo endpoint accetta un payload JSON con scene, immagini, voiceover e parametri di configurazione gia generati upstream, normalizza i dati (rilevando automaticamente la durata dell'audio se non specificata), e accoda un job `process_video` per il worker remoto.
+Questo endpoint accetta un payload JSON con scene, immagini, voiceover e parametri gia pronti, normalizza i dati (rilevando automaticamente la durata dell'audio se non specificata), e accoda un job `process_video` per il worker remoto disponibile.
 
 ## Endpoint
 
@@ -94,7 +103,8 @@ Job COMPLETED
 Esempio: audio 336s, 3 scene → 112s per scena
 ```
 
-Nota: questo endpoint non genera immagini o voiceover in locale. Si aspetta che arrivino gia prodotti da un servizio upstream.
+Nota: questo endpoint non genera immagini o voiceover in locale. Si aspetta che arrivino gia prodotti da un servizio upstream o gia presenti nel payload.
+Non fa partire la logica `generate-from-clips`.
 Il codice che lo implementa oggi vive in:
 - [`DataServer/internal/handlers/server/script/handler.go`](/home/pierone/Pyt/VeloxLEgit/refactored/DataServer/internal/handlers/server/script/handler.go)
 - [`DataServer/internal/jobs/enqueue/enqueue.go`](/home/pierone/Pyt/VeloxLEgit/refactored/DataServer/internal/jobs/enqueue/enqueue.go)
@@ -175,7 +185,8 @@ Specifica `scene_duration_secs: 30` per forzare 30 secondi per scena.
 
 ## Workers
 
-I worker sono gestiti dinamicamente dal server. Consulta `/api/v1/workers` per la lista dei worker attivi.
+I worker sono gestiti dinamicamente dal server. Consulta `/api/v1/workers` o `/api/v1/workers/status` per la lista dei worker attivi.
+Il master assegna il job al primo worker compatibile disponibile tramite la coda, non a un worker numerato fisso.
 
 ## Polling log (worker)
 
