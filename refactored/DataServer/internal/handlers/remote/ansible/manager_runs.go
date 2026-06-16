@@ -416,7 +416,7 @@ func (m *AnsibleRunManager) writeInventoryFile(hosts []string) (string, map[stri
 		lines = append(lines, fmt.Sprintf("          ansible_user: %s", payload.FirstNonEmpty(c.AnsibleUser, "pierone")))
 		lines = append(lines, "          ansible_connection: ssh")
 		lines = append(lines, "          ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'")
-		lines = append(lines, "          ansible_python_interpreter: /usr/bin/python3")
+		lines = append(lines, "          ansible_python_interpreter: auto")
 		// Use secret_ref instead of plaintext password
 		if secretRef := m.computerMgr.GetSecretRef(c.Host); secretRef != "" {
 			if secret, err := m.computerMgr.ResolveSecret(secretRef); err == nil && secret != "" {

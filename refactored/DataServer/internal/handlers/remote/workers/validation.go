@@ -71,14 +71,12 @@ func (vs *ValidationStore) SaveValidation(report *ValidationReport) error {
 	switch report.ValidationCode {
 	case "PASS":
 		// No failure reason for successful validation
-	case "LEGACY_PYTHON":
-		failureReason = "Unit contains legacy Python worker (job_worker.py or worker_bootstrap.py)"
 	case "MISSING_UNIT":
 		failureReason = "Canonical unit does not exist"
 	case "EMPTY_EXECSTART":
 		failureReason = "Unit exists but ExecStart is empty or invalid"
 	case "UNKNOWN_FORMAT":
-		failureReason = "ExecStart format not recognized as Docker or Python"
+		failureReason = "ExecStart format not recognized as Docker"
 	default:
 		failureReason = "Unknown validation code: " + report.ValidationCode
 	}
@@ -246,8 +244,6 @@ func getValidationMessage(code string) string {
 	switch code {
 	case "PASS":
 		return "Canonical Docker/Go worker unit validated"
-	case "LEGACY_PYTHON":
-		return "Legacy Python unit detected - reinstall required"
 	case "MISSING_UNIT":
 		return "Canonical unit missing - install required"
 	case "EMPTY_EXECSTART":

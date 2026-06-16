@@ -395,7 +395,7 @@ func (h *JobSubmissionHandler) findDuplicate(fingerprint string, normalized map[
 		return ""
 	}
 
-	jobs, err := h.fileQ.GetAllJobs(context.TODO())
+	jobs, err := h.fileQ.GetAllJobs(context.Background())
 	if err != nil {
 		return ""
 	}

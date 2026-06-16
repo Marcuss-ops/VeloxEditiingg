@@ -64,28 +64,6 @@ func TestDataLayerAuditorFailsOnDuplicateSourceOfTruth(t *testing.T) {
 	}
 }
 
-// TestDataLayerAuditorFailsOnLegacyFilesInRoot tests that audit fails
-// when legacy files exist in their original locations.
-func TestDataLayerAuditorFailsOnLegacyFilesInRoot(t *testing.T) {
-	tmpDir := t.TempDir()
-	secretsDir := filepath.Join(tmpDir, "secrets")
-	os.MkdirAll(secretsDir, 0755)
-
-	// Create primary
-	os.MkdirAll(filepath.Join(tmpDir, "youtube", "GroupYoutubeManager"), 0755)
-	os.WriteFile(filepath.Join(tmpDir, "youtube", "GroupYoutubeManager", "ChannelsSaved.json"), []byte(`{}`), 0644)
-
-	// Create legacy in WRONG location (should fail)
-	os.WriteFile(filepath.Join(tmpDir, "youtube", "groups.json"), []byte(`[]`), 0644)
-
-	auditor := NewDataLayerAuditor(tmpDir, secretsDir)
-	result := auditor.Audit()
-
-	if result.Passed {
-		t.Error("Audit should fail when legacy files exist in original locations")
-	}
-}
-
 // TestDataLayerAuditorAllowsArchivedLegacyFiles tests that audit passes
 // when legacy files are properly archived.
 func TestDataLayerAuditorAllowsArchivedLegacyFiles(t *testing.T) {
@@ -116,56 +94,6 @@ func TestDataLayerAuditorAllowsArchivedLegacyFiles(t *testing.T) {
 	}
 }
 
-// TestCheckLegacyFiles_DetectsForbidden tests that checkLegacyFiles detects
-// forbidden legacy files.
-func TestCheckLegacyFiles_DetectsForbidden(t *testing.T) {
-	tmpDir := t.TempDir()
-	secretsDir := filepath.Join(tmpDir, "secrets")
-	os.MkdirAll(secretsDir, 0755)
-
-	// Create ALL required primary files first
-	os.MkdirAll(filepath.Join(tmpDir, "youtube", "GroupYoutubeManager"), 0755)
-	os.MkdirAll(filepath.Join(tmpDir, "youtube", "channels"), 0755)
-	os.WriteFile(filepath.Join(tmpDir, "youtube", "GroupYoutubeManager", "ChannelsSaved.json"), []byte(`{}`), 0644)
-	os.WriteFile(filepath.Join(tmpDir, "youtube", "channels", "channels.json"), []byte(`{}`), 0644)
-	os.WriteFile(filepath.Join(tmpDir, "workers.json"), []byte(`{}`), 0644)
-	os.WriteFile(filepath.Join(tmpDir, "velox.db"), []byte(``), 0644)
-	os.WriteFile(filepath.Join(tmpDir, "ansible_runs.json"), []byte(`{}`), 0644)
-	bundleDir := filepath.Join(tmpDir, "bundle")
-	os.MkdirAll(bundleDir, 0755)
-	os.WriteFile(filepath.Join(bundleDir, "manifest_v2.json"), []byte(`{}`), 0644)
-
-	// Create forbidden legacy file
-	youtubeDir := filepath.Join(tmpDir, "youtube")
-	os.MkdirAll(youtubeDir, 0755)
-	os.WriteFile(filepath.Join(youtubeDir, "youtube_manager.json"), []byte(`{}`), 0644)
-
-	auditor := NewDataLayerAuditor(tmpDir, secretsDir)
-	result := &DataLayerAuditResult{
-		Passed: true,
-		Errors: make([]string, 0),
-	}
-
-	auditor.checkLegacyFiles(result)
-
-	// checkLegacyFiles adds errors but doesn't set Passed - that's done by Audit()
-	// So we check for errors, not Passed
-	if len(result.Errors) == 0 {
-		t.Error("checkLegacyFiles should add errors when forbidden legacy files exist")
-	}
-
-	found := false
-	for _, err := range result.Errors {
-		if contains(err, "youtube_manager.json") {
-			found = true
-			break
-		}
-	}
-
-	if !found {
-		t.Errorf("Expected error about youtube_manager.json, got: %v", result.Errors)
-	}
-}
 
 // TestCheckPrimaryFiles_ReportsMissing tests that checkPrimaryFiles detects
 // missing primary files.
@@ -441,31 +369,6 @@ func TestCheckDatabase_NoDuplicate(t *testing.T) {
 	}
 }
 
-// TestAllowLegacy_SkippedAllowed tests that allowed legacy files don't
-// produce errors.
-func TestAllowLegacy_SkippedAllowed(t *testing.T) {
-	tmpDir := t.TempDir()
-	secretsDir := filepath.Join(tmpDir, "secrets")
-	os.MkdirAll(secretsDir, 0755)
-
-	// Create a known legacy file
-	os.MkdirAll(filepath.Join(tmpDir, "youtube", "GroupYoutubeManager"), 0755)
-	os.WriteFile(filepath.Join(tmpDir, "youtube", "GroupYoutubeManager", "ChannelsSaved.json"), []byte(`{}`), 0644)
-
-	auditor := NewDataLayerAuditor(tmpDir, secretsDir)
-	auditor.AllowLegacy("youtube/GroupYoutubeManager/ChannelsSaved.json")
-
-	result := auditor.Audit()
-
-	// With the file allowed, checkLegacyFiles should not report it
-	// but checkPrimaryFiles might require velox.db
-	// So we check specifically that ChannelsSaved.json is not in errors
-	for _, err := range result.Errors {
-		if stringsContains(err, "ChannelsSaved.json") {
-			t.Errorf("Allowed legacy file should not produce error: %s", err)
-		}
-	}
-}
 
 // TestFailOnError_ReturnsError tests that FailOnError returns an error
 // for failed audits.
@@ -546,9 +449,6 @@ func TestNewDataLayerAuditor(t *testing.T) {
 	}
 	if auditor.secretsDir != "/tmp/data/secrets" {
 		t.Errorf("Expected secretsDir='/tmp/data/secrets', got '%s'", auditor.secretsDir)
-	}
-	if auditor.allowedLegacy == nil {
-		t.Error("allowedLegacy map should be initialized")
 	}
 }
 

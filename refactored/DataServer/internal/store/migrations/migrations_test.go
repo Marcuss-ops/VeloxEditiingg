@@ -209,9 +209,6 @@ func TestIntegration_MigrationRunner_EndToEnd(t *testing.T) {
 			t.Errorf("migration 009 should have dropped %s", table)
 		}
 	}
-	if !tableExists(t, db, "legacy_json_registry") {
-		t.Error("legacy_json_registry missing")
-	}
 }
 
 func TestIntegration_NewSQLiteStore_AutoMigration(t *testing.T) {

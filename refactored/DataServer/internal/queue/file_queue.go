@@ -29,7 +29,7 @@ const (
 	StatusRetrying   JobStatus = "RETRYING"
 )
 
-// Job represents a job in the queue (compatible with Python schema)
+// Job represents a job in the queue
 type Job struct {
 	JobID        string      `json:"job_id"`
 	Status       JobStatus   `json:"status"`

@@ -9,7 +9,7 @@ import (
 	workersreg "velox-server/internal/workers"
 )
 
-// WorkersList same response shape as Python GET /workers
+// WorkersList response shape for GET /workers
 func WorkersList(reg *workersreg.Registry, workersRepo store.WorkersRepository, updateHandler ...*WorkerUpdateHandler) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		master := workerStatusMetadata(firstUpdateHandler(updateHandler))
