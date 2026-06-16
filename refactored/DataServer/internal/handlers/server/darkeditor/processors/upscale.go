@@ -11,7 +11,15 @@ import (
 	"strings"
 
 	"github.com/disintegration/imaging"
+
+	"velox-server/internal/logging"
 )
+
+// Package-level structured logger for upscaling operations.
+var upgradeLog = logging.NewLogger("darkeditor.upscale")
+
+// Reference upgradeLog so it stays in the file even if individual callsites are later removed.
+var _ = upgradeLog
 
 // UpscaleOptions contains options for image upscaling
 type UpscaleOptions struct {
@@ -51,7 +59,12 @@ func Upscale(img image.Image, opts UpscaleOptions, outputPath string) (*UpscaleR
 	}
 
 	// Fallback to simple upscaling with imaging
-	fmt.Printf("Real-ESRGAN not available, using fallback: %v\n", err)
+	upgradeLog.WarnWithMsg("darkeditor_upscale_fallback",
+		"Real-ESRGAN unavailable, falling back to imaging.Lanczos",
+		map[string]interface{}{
+			"fallback": "imaging.Lanczos",
+			"err":      err.Error(),
+		})
 	return upscaleWithImaging(img, opts, outputPath)
 }
 

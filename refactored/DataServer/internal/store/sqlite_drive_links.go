@@ -2,9 +2,13 @@ package store
 
 import (
 	"encoding/json"
-	"fmt"
 	"time"
+
+	"velox-server/internal/logging"
 )
+
+// Package-level structured logger for drive link migration warnings.
+var storeLog = logging.NewLogger("store.drive_links")
 
 func (s *SQLiteStore) ReplaceDriveLinks(rawList []byte) error {
 	var list []map[string]any
@@ -221,7 +225,12 @@ func (s *SQLiteStore) MigrateDriveLinksFromJSON(folders []map[string]any) (int, 
 
 		raw, _ := json.Marshal(f)
 		if _, err := stmt.Exec(id, parentID, name, link, language, masterInt, subfoldersCount, createdAt, updatedAt, string(raw), now); err != nil {
-			fmt.Printf("[WARN] migrate drive link: skip %s: %v\n", id, err)
+			storeLog.WarnWithMsg("drive_link_migrate_skip",
+				"Skipping drive link during migration",
+				map[string]interface{}{
+					"id":  id,
+					"err": err.Error(),
+				})
 			continue
 		}
 		count++
@@ -270,7 +279,12 @@ func (s *SQLiteStore) MigrateMasterFoldersFromJSON(masters map[string]any) (int,
 		}
 		raw, _ := json.Marshal(infoMap)
 		if _, err := stmt.Exec(id, name, url, subfoldersCount, language, now, now, string(raw)); err != nil {
-			fmt.Printf("[WARN] migrate master folder: skip %s: %v\n", id, err)
+			storeLog.WarnWithMsg("master_folder_migrate_skip",
+				"Skipping master folder during migration",
+				map[string]interface{}{
+					"id":  id,
+					"err": err.Error(),
+				})
 			continue
 		}
 		count++

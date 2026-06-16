@@ -2,12 +2,11 @@ package drive
 
 import (
 	"log"
-	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/gin-gonic/gin"
 
+	"velox-server/internal/config"
 	"velox-server/internal/integrations/drive"
 	"velox-server/internal/store"
 )
@@ -41,8 +40,8 @@ func NewDriveHandlers(cfg *drive.ServiceConfig, driveSvc *drive.Service) (*Drive
 }
 
 func resolveDriveDataDir(tokensDir string) string {
-	if env := os.Getenv("VELOX_DATA_DIR"); strings.TrimSpace(env) != "" {
-		return filepath.Clean(env)
+	if dir := config.GetDataDir(); dir != "" {
+		return filepath.Clean(dir)
 	}
 
 	cleaned := filepath.Clean(tokensDir)

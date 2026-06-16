@@ -12,6 +12,8 @@ import (
 	"golang.org/x/oauth2"
 	"google.golang.org/api/youtube/v3"
 	ytanalytics "google.golang.org/api/youtubeanalytics/v2"
+
+	"velox-server/internal/config"
 )
 
 // YouTubeStore defines the interface for SQLite-backed YouTube persistence,
@@ -62,7 +64,7 @@ type Service struct {
 // store is optional — if nil, in-memory-only mode is used.
 func NewService(cfg *ServiceConfig, store YouTubeStore) (*Service, error) {
 	if cfg.TokensDir == "" {
-		if env := os.Getenv("VELOX_YOUTUBE_TOKENS_DIR"); env != "" {
+		if env := config.GetYouTubeTokensDir(); env != "" {
 			cfg.TokensDir = env
 		} else {
 			for _, candidate := range []string{
@@ -82,7 +84,7 @@ func NewService(cfg *ServiceConfig, store YouTubeStore) (*Service, error) {
 		}
 	}
 	if cfg.YoutubePostingPath == "" {
-		if env := os.Getenv("VELOX_YOUTUBE_POSTING_PATH"); env != "" {
+		if env := config.GetYouTubePostingPath(); env != "" {
 			cfg.YoutubePostingPath = env
 		} else {
 			cfg.YoutubePostingPath = "YoutubePosting"

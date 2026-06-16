@@ -128,6 +128,11 @@ func (h *jobV2Handler) CompleteJob() gin.HandlerFunc {
 			body.LeaseID = c.Query("lease_id")
 		}
 
+		// 404 first if the job is missing — distinguishes from a true lease conflict.
+		if !h.ensureJobExists(c, jobID) {
+			return
+		}
+
 		// Validate lease
 		if err := h.svc.ValidateJobLease(c.Request.Context(), jobID, body.WorkerID, body.LeaseID); err != nil {
 			c.JSON(http.StatusConflict, gin.H{"ok": false, "error": err.Error()})
@@ -174,6 +179,11 @@ func (h *jobV2Handler) SubmitResult() gin.HandlerFunc {
 		}
 		if jobID == "" {
 			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "job_id required"})
+			return
+		}
+
+		// 404 first if the job is missing — distinguishes from a true lease conflict.
+		if !h.ensureJobExists(c, jobID) {
 			return
 		}
 
@@ -228,6 +238,11 @@ func (h *jobV2Handler) FailJob() gin.HandlerFunc {
 
 		if jobID == "" {
 			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "job_id required"})
+			return
+		}
+
+		// 404 first if the job is missing — distinguishes from a true lease conflict.
+		if !h.ensureJobExists(c, jobID) {
 			return
 		}
 
@@ -332,6 +347,22 @@ func (h *jobV2Handler) ListArtifacts() gin.HandlerFunc {
 		}
 		c.JSON(http.StatusOK, gin.H{"job_id": jobID, "artifacts": artifacts})
 	}
+}
+
+// ensureJobExists verifies the job exists before continuing. It writes a 404
+// response and returns false when the queue is reachable but the job is missing.
+// When the queue is unavailable for lookup the helper falls through so the existing
+// lease validation path can take over.
+func (h *jobV2Handler) ensureJobExists(c *gin.Context, jobID string) bool {
+	if h.fileQ == nil {
+		return true
+	}
+	job, err := h.fileQ.GetJobAsMap(c.Request.Context(), jobID)
+	if err != nil || job == nil {
+		c.JSON(http.StatusNotFound, gin.H{"ok": false, "error": "job not found"})
+		return false
+	}
+	return true
 }
 
 func (h *jobV2Handler) ListEvents() gin.HandlerFunc {

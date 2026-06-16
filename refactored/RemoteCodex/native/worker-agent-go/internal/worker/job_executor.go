@@ -134,6 +134,7 @@ func (w *Worker) executeJob(ctx context.Context, job *api.Job) {
 		result.Output["job_run_id"] = resolveJobRunID(job)
 		result.Output["lease_id"] = resolveLeaseID(job)
 		result.Output["attempt"] = resolveJobAttempt(job)
+		result.LeaseID = resolveLeaseID(job)
 	}
 
 	submitCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

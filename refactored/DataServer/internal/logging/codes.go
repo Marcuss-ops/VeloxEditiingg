@@ -47,11 +47,33 @@ const (
 	CodeWorkerAlert           = "WORKER_ALERT"
 )
 
+// Worker registry codes (mirrors log.Printf messages in internal/workers/registry_*.go)
+const (
+	CodeRegistryLoadWorkersFail      = "REGISTRY_LOAD_WORKERS_FAIL"
+	CodeRegistryLoadRevokedFail      = "REGISTRY_LOAD_REVOKED_FAIL"
+	CodeRegistryLoadedSummary        = "REGISTRY_LOADED_SUMMARY"
+	CodeSQLiteUpsertHeartbeatFail    = "REGISTRY_UPSERT_HEARTBEAT_FAIL"
+	CodeSQLiteUpsertRegisterFail     = "REGISTRY_UPSERT_REGISTER_FAIL"
+	CodeSQLiteUpsertWorkerUpdateFail = "REGISTRY_UPSERT_WORKER_UPDATE_FAIL"
+	CodeRegistryDeleteWorkerFail     = "REGISTRY_DELETE_WORKER_FAIL"
+	CodeRegistryDeleteStaleWorkerFail = "REGISTRY_DELETE_STALE_WORKER_FAIL"
+	CodeRegistryPersistRevokeFail    = "REGISTRY_PERSIST_REVOKE_FAIL"
+	CodeRegistryPersistUnrevokeFail  = "REGISTRY_PERSIST_UNREVOKE_FAIL"
+	CodeRegistryStaleWorkerCleanup   = "REGISTRY_STALE_WORKER_CLEANUP"
+)
+
 // Queue/Job codes
 const (
 	CodeJobRequeued = "JOB_REQUEUED"
 	CodeJobFailed   = "JOB_FAILED"
 	CodeNoTargets   = "NO_TARGETS"
+)
+
+// Dark-editor / migration codes
+const (
+	CodeDarkEditorUpscaleFallback = "DARKEDITOR_UPSCALER_FALLBACK"
+	CodeDriveLinkMigrateSkip      = "DRIVE_LINK_MIGRATE_SKIP"
+	CodeMasterFolderMigrateSkip   = "MASTER_FOLDER_MIGRATE_SKIP"
 )
 
 // Component identifiers for structured logging
@@ -103,6 +125,22 @@ var CodeDescriptions = map[string]string{
 	CodeJobRequeued:           "Job requeued",
 	CodeJobFailed:             "Job failed",
 	CodeNoTargets:             "No target computers selected",
+
+	CodeDarkEditorUpscaleFallback: "Real-ESRGAN unavailable, falling back to imaging.Lanczos",
+	CodeDriveLinkMigrateSkip:      "Skipping drive link during migration",
+	CodeMasterFolderMigrateSkip:   "Skipping master folder during migration",
+
+	CodeRegistryLoadWorkersFail:       "Failed to load workers from SQLite",
+	CodeRegistryLoadRevokedFail:       "Failed to load revoked workers from SQLite",
+	CodeRegistryLoadedSummary:         "Workers loaded from SQLite",
+	CodeSQLiteUpsertHeartbeatFail:     "SQLite upsert worker heartbeat failed",
+	CodeSQLiteUpsertRegisterFail:      "SQLite upsert worker register failed",
+	CodeSQLiteUpsertWorkerUpdateFail:  "SQLite upsert worker update failed",
+	CodeRegistryDeleteWorkerFail:      "Failed to delete worker",
+	CodeRegistryDeleteStaleWorkerFail: "Failed to delete stale worker",
+	CodeRegistryPersistRevokeFail:     "Failed to persist worker revoke",
+	CodeRegistryPersistUnrevokeFail:   "Failed to persist worker unrevoke",
+	CodeRegistryStaleWorkerCleanup:    "Cleaned up stale worker",
 }
 
 // GetDescription returns the human-readable description for a code

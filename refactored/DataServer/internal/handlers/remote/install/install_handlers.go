@@ -76,17 +76,12 @@ type Config struct {
 // The master URL is resolved using the centralized resolver in ansible package.
 // Priority: MASTER_PUBLIC_URL env > VELOX_MASTER_URL env > MASTER_URL env > hardcoded fallback
 func NewInstallHandler(cfg *Config) *InstallHandler {
-	// MasterURL will be resolved dynamically using the centralized resolver
-	// Keep a fallback for backward compatibility
+	// MasterURL will be resolved dynamically using the centralized resolver in
+	// the config package (Priority: MASTER_PUBLIC_URL > VELOX_MASTER_URL > MASTER_URL).
+	// Keep a fallback for backward compatibility.
 	masterURL := cfg.MasterURL
 	if masterURL == "" {
-		masterURL = os.Getenv("MASTER_PUBLIC_URL")
-	}
-	if masterURL == "" {
-		masterURL = os.Getenv("VELOX_MASTER_URL")
-	}
-	if masterURL == "" {
-		masterURL = os.Getenv("MASTER_URL")
+		masterURL = config.GetMasterURL()
 	}
 	// Only use hardcoded fallback in development mode
 	if masterURL == "" {

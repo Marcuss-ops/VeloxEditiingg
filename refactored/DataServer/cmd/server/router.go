@@ -82,7 +82,14 @@ func newRouter(cfg *config.Config, deps *serverDeps, registry *app.Registry) *gi
 	}
 
 	// ── Remaining routes not yet in modules ──────────────────────────────────
-	registerAPIV1Routes(r, cfg, deps, ansibleHandlers)
+	// V1 routes are delegated entirely to the dedicated `api` package module; the helpers
+	// below isolate V2 jobs, orchestrator admin, chunked upload, and bundle compatibility
+	// into dedicated registration calls so concerns stay distinct.
+	jrs := buildJobRoutes(cfg, deps)
+	registerAPIV1Routes(r, cfg, deps, ansibleHandlers, jrs)
+	registerV2JobRoutes(r, cfg, deps, jrs)
+	registerOrchestratorAdminRoutes(r, cfg, deps)
+	registerUploadAndBundleCompatRoutes(r, cfg, deps)
 	registerScriptRoutes(r, cfg, deps)
 	registerPipelineRoutes(r, cfg, deps)
 
@@ -106,8 +113,25 @@ func newRouter(cfg *config.Config, deps *serverDeps, registry *app.Registry) *gi
 	return r
 }
 
-func registerAPIV1Routes(r *gin.Engine, cfg *config.Config, deps *serverDeps, ansibleHandlers *remoteansible.AnsibleHandlers) {
-	// TODO: migrate remaining V1 routes to dedicated api module
+func registerAPIV1Routes(r *gin.Engine, cfg *config.Config, deps *serverDeps, ansibleHandlers *remoteansible.AnsibleHandlers, jrs *jobRouteState) {
+	// V1 routes live entirely in the dedicated `api` package module; this helper is kept
+	// thin so future V1-only changes have a single, obvious landing spot.
+	var youtubeService *ytservice.Service
+	if deps.youtubeModule != nil {
+		youtubeService = deps.youtubeModule.Service()
+	}
+	api.RegisterV1Routes(r, cfg, deps.fileQ, deps.reg, jrs.jobAPI, jrs.submitHandler, deps.workersRepo, deps.sqliteStore, deps.workerUpdateHandler, youtubeService, ansibleHandlers)
+}
+
+// jobRouteState bundles shared job-route dependencies so V1 and V2 registration paths
+// stay consistent (same service, same job API, same submission handler).
+type jobRouteState struct {
+	jobSvc        *jobservice.Service
+	jobAPI        *jobhandlers.JobAPI
+	submitHandler *jobhandlers.JobSubmissionHandler
+}
+
+func buildJobRoutes(cfg *config.Config, deps *serverDeps) *jobRouteState {
 	jobRepo := store.NewSQLiteJobsRepository(deps.sqliteStore)
 	tokenMgr := deps.workerLifecycle.GetTokenManager()
 	jobSvc := jobservice.NewService(cfg, deps.fileQ, jobRepo, nil, deps.reg)
@@ -117,22 +141,28 @@ func registerAPIV1Routes(r *gin.Engine, cfg *config.Config, deps *serverDeps, an
 		}
 	}
 	jobAPI := jobhandlers.NewJobAPI(cfg, deps.fileQ, tokenMgr, jobSvc, deps.sqliteStore)
-	jobSubmitHandler := jobhandlers.NewJobSubmissionHandler(cfg, deps.fileQ)
-	var youtubeService *ytservice.Service
-	if deps.youtubeModule != nil {
-		youtubeService = deps.youtubeModule.Service()
+	submitHandler := jobhandlers.NewJobSubmissionHandler(cfg, deps.fileQ)
+	return &jobRouteState{
+		jobSvc:        jobSvc,
+		jobAPI:        jobAPI,
+		submitHandler: submitHandler,
 	}
-	api.RegisterV1Routes(r, cfg, deps.fileQ, deps.reg, jobAPI, jobSubmitHandler, deps.workersRepo, deps.sqliteStore, deps.workerUpdateHandler, youtubeService, ansibleHandlers)
+}
 
+func registerV2JobRoutes(r *gin.Engine, cfg *config.Config, deps *serverDeps, jrs *jobRouteState) {
 	// V2 job routes: /api/v1/jobs/{id}/lease|complete|fail|progress|attempts|artifacts|events
 	v2JobsGroup := r.Group("/api/v1")
-	jobhandlers.RegisterV2JobRoutes(v2JobsGroup, cfg, deps.fileQ, deps.sqliteStore, jobSvc)
+	jobhandlers.RegisterV2JobRoutes(v2JobsGroup, cfg, deps.fileQ, deps.sqliteStore, jrs.jobSvc)
+}
 
+func registerOrchestratorAdminRoutes(r *gin.Engine, cfg *config.Config, deps *serverDeps) {
 	// Orchestrator multi-step pipeline routes (admin-protected, same as v1Admin)
 	orchAdmin := r.Group("/api/v1")
 	orchAdmin.Use(api.AdminAuthMiddleware(cfg))
 	registerOrchestratorRoutes(orchAdmin, deps)
+}
 
+func registerUploadAndBundleCompatRoutes(r *gin.Engine, cfg *config.Config, deps *serverDeps) {
 	// Chunked upload routes (resumable worker→master video upload)
 	r.POST("/api/v1/video/chunked/init", uploads.InitChunkedUpload())
 	r.POST("/api/v1/video/chunked/:job_id/:chunk_index", uploads.UploadChunk(cfg))
@@ -143,8 +173,6 @@ func registerAPIV1Routes(r *gin.Engine, cfg *config.Config, deps *serverDeps, an
 		r.GET("/api/bundle/info", deps.workerUpdateHandler.GetLatestBundleHandler())
 		r.GET("/api/bundle/files", deps.workerUpdateHandler.GetBundleFilesHandler())
 	}
-
-	// Compat: commands endpoint for workers (registered by workers module above)
 }
 
 func registerScriptRoutes(r *gin.Engine, cfg *config.Config, deps *serverDeps) {
