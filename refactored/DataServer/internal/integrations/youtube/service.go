@@ -131,10 +131,50 @@ type YouTubeStore interface {
 	}) (int, error)
 }
 
-// ServiceStore mirrors the full store contract used by Service so the
-// service can be wired with a *SQLiteStore without extra adapters.
+// ServiceStore is the narrower contract *Service.store depends on —
+// every method that Service body code calls via s.store.X() across
+// channels.go / backfill.go / groups.go / oauth.go / service.go /
+// storage_*.go. Strict SUBSET of YouTubeStore; explicit list (NOT an
+// embedding) so Go's structural interface typing does NOT widen it
+// back to the full YouTubeStore surface.
+//
+// Module wiring hands a wider YouTubeStore (a *SQLiteStore) into
+// NewService which satisfies ServiceStore implicitly via structural
+// typing — values implementing YouTubeStore also implement any subset
+// declared explicitly here.
+//
+// Generated from `rg 's\.store\.' internal/integrations/youtube`. If
+// a future S11 repo migration adds a new s.store.X call site, regenerate
+// the membership test mock AND add the matching method on this interface.
+// If the call site lives on *Storage (legacy) rather than *Service, leave
+// both untouched.
 type ServiceStore interface {
-	YouTubeStore
+	// --- Channels (canonical: youtube_channels) ---
+	ListYouTubeChannels() ([]map[string]interface{}, error)
+	GetYouTubeChannel(channelID string) (map[string]interface{}, error)
+	UpsertYouTubeChannel(channelID, title, displayName, channelURL, thumbnailURL, language, notes string, viewCount, subCount int64, addedAt, lastSyncAt string) error
+	UpdateChannelTitle(channelID, title string) error
+	UpdateChannelLanguage(channelID, language string) error
+	UpdateYouTubeChannelMetadata(channelID, title, thumbnailURL string) error
+	DeleteChannelAtomic(channelID string) (int64, error)
+
+	// --- OAuth tokens (canonical: youtube_oauth_tokens) ---
+	UpsertYouTubeOAuthToken(channelID string, accessTokenEnc, refreshTokenEnc []byte, tokenType, expiry, scopes string, keyVersion int) error
+	ListActiveYouTubeOAuthTokens() ([]map[string]interface{}, error)
+	AuditYouTubeOAuthTokenOrphans() ([]youtubetypes.YouTubeTokenOrphan, error)
+	GetYouTubeOAuthToken(channelID string) (map[string]interface{}, error)
+	MarkYouTubeOAuthTokenRevoked(channelID string) error
+
+	// --- Groups V2 (canonical: youtube_groups_v2 + youtube_group_channels) ---
+	ListYouTubeGroupsV2() ([]map[string]interface{}, error)
+	UpsertYouTubeGroupV2(name, groupType, description, privacy string) (int64, error)
+	GetYouTubeGroupV2ID(name, groupType string) (int64, error)
+	DeleteYouTubeGroupV2(id int64) error
+	AddChannelToGroupV2(groupID int64, channelID string) error
+	RemoveChannelFromGroupV2(groupID int64, channelID string) error
+	DeleteYouTubeGroupChannelsByGroupID(groupID int64) error
+	ListGroupChannelsV2(groupID int64) ([]string, error)
+	ListAllGroupMembershipsV2() ([]map[string]interface{}, error)
 }
 
 // Service provides YouTube API functionality
