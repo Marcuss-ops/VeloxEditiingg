@@ -167,7 +167,21 @@ func (am *AuthManager) ValidateToken(ctx context.Context, channelID string) (map
 			channel.Expiry = newToken.Expiry
 			am.service.mu.Unlock()
 
-			am.saveChannelToken(channel)
+			// Extend Fix B's encrypted-SoT pattern to the ValidateToken refresh
+			// path so a crash mid-refresh leaves SQLite consistent with the
+			// in-RAM copy. The JSON write path is kept as a one-release-compat
+			// trail matching HandleOAuthCallback; it will be removed when the
+			// AES-GCM key is everywhere (see migration plan step S6).
+			if am.service.store != nil && am.service.oauthBuf != nil {
+				if perr := am.service.persistRefreshedToken(channelID, newToken); perr != nil {
+					log.Printf("[WARN] validateToken refresh: persist to sqlite: %v", perr)
+				}
+			} else {
+				log.Printf("[WARN] validateToken refresh: oauthBuf or store nil for %s; refresh not persisted", channelID)
+			}
+			if err := am.saveChannelToken(channel); err != nil {
+				log.Printf("[WARN] validateToken refresh: save JSON compat trail failed: %v", err)
+			}
 
 			result["ok"] = true
 			result["valid"] = true
