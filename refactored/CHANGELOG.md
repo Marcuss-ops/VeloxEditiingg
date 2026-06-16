@@ -2,6 +2,48 @@
 
 ## Unreleased
 
+### 🔐 YouTube SQLite-only contract (S3 / S4 / S5a+ / S5c / S5d / S6 closed)
+
+The YouTube integration is now SQLite-only for OAuth credentials and
+runtime state. The "no runtime filesystem persistence for credentials"
+verdict is in effect end-to-end. The contract every operator and code
+path must honour:
+
+- **Cipher mandatory**: `aesgcm.LoadFromEnv(true)` (`requireIfMissing=true`)
+  gates boot. With no `VELOX_YT_OAUTH_TOKEN_KEY` (or `_FILE` sibling) the
+  server fails closed — no degraded JSON fallback is available any more.
+  `internal/modules/youtube/module.go` wires the cipher into the
+  service before any OAuth route registers.
+- **No JSON dual-write**: `Service.saveChannelToken` / `channels.go`'s
+  JSON-compat writer / `migration_consolidate_tokens.go` are all gone.
+  `RevokeToken`'s `os.Remove`-on-`account_*.json` step is removed;
+  `RevokeCredentials` is the single repository op. There is no second
+  write path that could race the canonical SQLite write and silently
+  overwrite fresh credentials.
+- **`ConnectChannelAtomic` narrow UPDATE**: re-auth on an existing
+  channel only touches seed-owned columns (`title`, `thumbnail_url`,
+  `last_sync_at`, `updated_at`). User-edited typed columns (`notes`,
+  `language`, `view_count`, `subscriber_count`, `display_name`,
+  `channel_url`, `added_at`, `created_at`) and the metadata blob are
+  preserved verbatim across re-auth.
+- **`DeleteChannel` is DB-first**: `Service.DeleteChannel` calls
+  `store.DeleteChannelAtomic` (transactional cleanup of memberships +
+  channel row + FK-cascade on the oauth row) BEFORE the in-RAM entry
+  is deleted. A failed SQL leaves RAM untouched, so retry runs against
+  the same state. Decrypted plaintext tokens never touch the network
+  after this call.
+- **Tests pinning the contract**: `TestConnectChannelAtomic_FirstTimeConnect`,
+  `TestConnectChannelAtomic_PreservesUserEdits`,
+  `TestLoadOAuthChannelsFromSQLiteHydratesCache`,
+  `TestYouTubeOAuthTokenChannelFKDeleteCascade`. A regression on any
+  of the four contract bullets above trips one of these tests.
+- **Operator pre-flight for SQLite < 3.35.0**: migration `014_drop_metadata_json.sql`
+  uses `ALTER TABLE … DROP COLUMN` which is unsupported before
+  SQLite 3.35.0. Run the audit query documented in
+  `internal/store/migrations/013_metadata_json_backfill.sql` before
+  applying the 014 migration on a deployment pinned to an older
+  system SQLite.
+
 ### 🧹 Legacy Cleanup
 - **Orphan diagnostics endpoint removed**: `internal/handlers/server/diagnostics/diagnostics.go` deleted after a 4-step orphan verification (0 imports of `"velox-server/internal/handlers/server/diagnostics"` anywhere in the codebase, 0 module-registry references in `internal/app/registry.go`, 0 wiring in `cmd/server/router.go`, 0 path-string occurrences in any `*.go` file). The exposed `Legacy`/`LegacyExists` JSON telemetry had no downstream consumers outside the audit subsystem (which uses its own internal fields, not from this package). See commit `1ec7c411` for the full commit message and kept-with-reason notes.
 - **Stale build artifacts reclaimed (~107MB)**: physically deleted `bin/velox-server` (56.5MB build from June 14) and `velox-server` (50.3MB build from June 10, project root). Both already covered by `DataServer/bin/` + `DataServer/velox-server` patterns in `.gitignore` (repo root) so fresh clones do not surface them as untracked noise.

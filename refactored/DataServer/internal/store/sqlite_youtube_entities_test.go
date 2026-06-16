@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"testing"
 	"time"
+
+	"velox-server/internal/store/youtubetypes"
 )
 
 // ============================================================
@@ -55,7 +57,7 @@ func TestYouTubeChannelUpdatePreservesAddedAt(t *testing.T) {
 
 	// First insert with specific added_at
 	s.UpsertYouTubeChannel("UC_test456", "Original Title", "", "", "", "", "", 0, 0,
-		"2024-01-15T00:00:00Z", "", `{}`)
+		"2024-01-15T00:00:00Z", "")
 
 	// Update title and stats, pass empty added_at — should preserve original
 	s.UpsertYouTubeChannel("UC_test456", "Updated Title", "", "", "", "", "", 200, 100,
@@ -90,8 +92,8 @@ func TestYouTubeChannelListAndDelete(t *testing.T) {
 	}
 
 	// Insert two channels
-	s.UpsertYouTubeChannel("UC_a", "Alpha", "", "", "", "", "", 0, 0, "", "", `{}`)
-	s.UpsertYouTubeChannel("UC_b", "Beta", "", "", "", "", "", 0, 0, "", "", `{}`)
+	s.UpsertYouTubeChannel("UC_a", "Alpha", "", "", "", "", "", 0, 0, "", "")
+	s.UpsertYouTubeChannel("UC_b", "Beta", "", "", "", "", "", 0, 0, "", "")
 
 	channels, err = s.ListYouTubeChannels()
 	if err != nil {
@@ -314,7 +316,7 @@ func TestGroupChannelsAddAndList(t *testing.T) {
 	defer s.Close()
 
 	// Create channel and group
-	s.UpsertYouTubeChannel("UC_group_a", "Channel A", "", "", "", "", "", 0, 0, "", "", `{}`)
+	s.UpsertYouTubeChannel("UC_group_a", "Channel A", "", "", "", "", "", 0, 0, "", "")
 	groupID, _ := s.UpsertYouTubeGroupV2("Test Group", "manager", "", "")
 
 	// Add channel to group
@@ -336,7 +338,7 @@ func TestGroupChannelsRemove(t *testing.T) {
 	s := openTestDB(t)
 	defer s.Close()
 
-	s.UpsertYouTubeChannel("UC_remove", "Remove Me", "", "", "", "", "", 0, 0, "", "", `{}`)
+	s.UpsertYouTubeChannel("UC_remove", "Remove Me", "", "", "", "", "", 0, 0, "", "")
 	groupID, _ := s.UpsertYouTubeGroupV2("Remove Group", "manager", "", "")
 	s.AddChannelToGroupV2(groupID, "UC_remove")
 
@@ -355,7 +357,7 @@ func TestGroupChannelsIdempotentAdd(t *testing.T) {
 	s := openTestDB(t)
 	defer s.Close()
 
-	s.UpsertYouTubeChannel("UC_idem", "Idempotent", "", "", "", "", "", 0, 0, "", "", `{}`)
+	s.UpsertYouTubeChannel("UC_idem", "Idempotent", "", "", "", "", "", 0, 0, "", "")
 	groupID, _ := s.UpsertYouTubeGroupV2("Idem Group", "manager", "", "")
 
 	// Add twice — ON CONFLICT DO NOTHING
@@ -372,8 +374,8 @@ func TestGroupChannelsPositionAutoIncrement(t *testing.T) {
 	s := openTestDB(t)
 	defer s.Close()
 
-	s.UpsertYouTubeChannel("UC_pos1", "Pos1", "", "", "", "", "", 0, 0, "", "", `{}`)
-	s.UpsertYouTubeChannel("UC_pos2", "Pos2", "", "", "", "", "", 0, 0, "", "", `{}`)
+	s.UpsertYouTubeChannel("UC_pos1", "Pos1", "", "", "", "", "", 0, 0, "", "")
+	s.UpsertYouTubeChannel("UC_pos2", "Pos2", "", "", "", "", "", 0, 0, "", "")
 	groupID, _ := s.UpsertYouTubeGroupV2("Pos Group", "manager", "", "")
 
 	s.AddChannelToGroupV2(groupID, "UC_pos1")
@@ -401,9 +403,9 @@ func TestGroupChannelsAllMembershipsJoin(t *testing.T) {
 	defer s.Close()
 
 	// Two groups with channels
-	s.UpsertYouTubeChannel("UC_g1a", "G1A", "", "", "", "", "", 0, 0, "", "", `{}`)
-	s.UpsertYouTubeChannel("UC_g1b", "G1B", "", "", "", "", "", 0, 0, "", "", `{}`)
-	s.UpsertYouTubeChannel("UC_g2a", "G2A", "", "", "", "", "", 0, 0, "", "", `{}`)
+	s.UpsertYouTubeChannel("UC_g1a", "G1A", "", "", "", "", "", 0, 0, "", "")
+	s.UpsertYouTubeChannel("UC_g1b", "G1B", "", "", "", "", "", 0, 0, "", "")
+	s.UpsertYouTubeChannel("UC_g2a", "G2A", "", "", "", "", "", 0, 0, "", "")
 
 	g1, _ := s.UpsertYouTubeGroupV2("Group One", "manager", "", "")
 	g2, _ := s.UpsertYouTubeGroupV2("Group Two", "upload", "", "")
@@ -577,7 +579,7 @@ func TestYouTubeOAuthTokenUpsertGetRevoke(t *testing.T) {
 	_, _ = s.db.Exec("PRAGMA foreign_keys = ON")
 
 	// Seed a parent channel so the FK constraint allows the token row.
-	if err := s.UpsertYouTubeChannel("UC_oauth_test", "OAuth Test", "", "", "", "", "", 0, 0, "", "", `{}`); err != nil {
+	if err := s.UpsertYouTubeChannel("UC_oauth_test", "OAuth Test", "", "", "", "", "", 0, 0, "", ""); err != nil {
 		t.Fatalf("seed channel: %v", err)
 	}
 
@@ -667,7 +669,7 @@ func TestYouTubeOAuthTokenChannelFKDeleteCascade(t *testing.T) {
 	defer s.Close()
 	_, _ = s.db.Exec("PRAGMA foreign_keys = ON")
 
-	if err := s.UpsertYouTubeChannel("UC_cascade", "", "", "", "", "", "", 0, 0, "", "", `{}`); err != nil {
+	if err := s.UpsertYouTubeChannel("UC_cascade", "", "", "", "", "", "", 0, 0, "", ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.UpsertYouTubeOAuthToken("UC_cascade", []byte("a"), []byte("r"), "Bearer", "", "", 1); err != nil {
@@ -694,7 +696,7 @@ func TestYouTubeChannelDeleteAtomic(t *testing.T) {
 	defer s.Close()
 	_, _ = s.db.Exec("PRAGMA foreign_keys = ON")
 
-	if err := s.UpsertYouTubeChannel("UC_atomic", "Atomic Test", "", "", "", "", "", 0, 0, "", "", `{}`); err != nil {
+	if err := s.UpsertYouTubeChannel("UC_atomic", "Atomic Test", "", "", "", "", "", 0, 0, "", ""); err != nil {
 		t.Fatalf("seed channel: %v", err)
 	}
 	// Seed oauth token row directly (without encryption — the row only needs
@@ -781,6 +783,253 @@ func TestYouTubeCacheClear(t *testing.T) {
 	_, data, _ := s.GetYouTubeCache("a")
 	if data != "" {
 		t.Error("expected empty data after clear")
+	}
+}
+
+// ============================================================
+// --- YouTubeChannelSeed / ConnectChannelAtomic tests (S5a+) ---
+// ============================================================
+//
+// ConnectChannelAtomic must (a) commit both legs in one SQLite transaction
+// on first-time connect (the bug that motivated the method: FK violation
+// from upserting into youtube_oauth_tokens before any youtube_channels row
+// exists), and (b) on re-auth / re-connect, only overwrite the seed-owned
+// metadata columns (title / thumbnail_url / last_sync_at) and preserve
+// user-edited typed columns (notes / language / view_count /
+// subscriber_count / display_name / channel_url). These two tests pin
+// both contracts; regressions either way should flip a CI guard.
+
+// TestConnectChannelAtomic_FirstTimeConnect: the parent channel row is
+// missing at the moment the method is called. We assert that:
+//   - the call returns no error
+//   - the youtube_channels row exists with the seeded columns
+//   - the youtube_oauth_tokens row exists with the seeded encrypted blobs
+//   - the FK on youtube_oauth_tokens is respected: a child row could
+//     not have been written had the parent not committed in the same
+//     transaction. We then delete the channel row and assert the oauth
+//     row was cascade-deleted, confirming the parent-child FK committed
+//     through the same transaction.
+func TestConnectChannelAtomic_FirstTimeConnect(t *testing.T) {
+	s := openTestDB(t)
+	defer s.Close()
+	// Force FK = ON so we exercise the missing-parent failure mode
+	// the method is meant to repair.
+	if _, err := s.db.Exec("PRAGMA foreign_keys = ON"); err != nil {
+		t.Fatalf("enable FK pragma: %v", err)
+	}
+
+	// Parent row absent at start.
+	if row, _ := s.GetYouTubeChannel("UC_first_connect"); row != nil {
+		t.Fatalf("setup: expected UC_first_connect absent, got %v", row)
+	}
+
+	access := []byte("encrypted-access-bb")
+	refresh := []byte("encrypted-refresh-cc")
+	expiry := "2027-01-15T00:00:00Z"
+	seed := &youtubetypes.YouTubeChannelSeed{
+		ChannelID:    "UC_first_connect",
+		Title:        "Atomic First Connect",
+		DisplayName:  "atomic-channel",
+		ChannelURL:   "https://youtube.com/@atomic",
+		ThumbnailURL: "https://img.example.com/atomic.jpg",
+		Language:     "en",
+		Notes:        "first connect notes",
+		ViewCount:    100,
+		SubCount:     10,
+		LastSyncAt:   expiry,
+	}
+	if err := s.ConnectChannelAtomic(seed, access, refresh, "Bearer", expiry, "scope.read scope.write", 1); err != nil {
+		t.Fatalf("ConnectChannelAtomic (first time): %v", err)
+	}
+
+	ch, err := s.GetYouTubeChannel("UC_first_connect")
+	if err != nil || ch == nil {
+		t.Fatalf("expected channel row after atomic upsert: err=%v row=%v", err, ch)
+	}
+	if ch["title"] != "Atomic First Connect" {
+		t.Errorf("title: got %v, want %q", ch["title"], "Atomic First Connect")
+	}
+	if ch["language"] != "en" {
+		t.Errorf("language: got %v, want %q", ch["language"], "en")
+	}
+
+	tok, err := s.GetYouTubeOAuthToken("UC_first_connect")
+	if err != nil || tok == nil {
+		t.Fatalf("expected oauth row after atomic upsert: err=%v row=%v", err, tok)
+	}
+	if !bytes.Equal(tok["access_token_encrypted"].([]byte), access) {
+		t.Errorf("access blob mismatch: got %v, want %v", tok["access_token_encrypted"], access)
+	}
+	if !bytes.Equal(tok["refresh_token_encrypted"].([]byte), refresh) {
+		t.Errorf("refresh blob mismatch: got %v, want %v", tok["refresh_token_encrypted"], refresh)
+	}
+	if tok["expiry"] != expiry {
+		t.Errorf("expiry: got %v, want %s", tok["expiry"], expiry)
+	}
+
+	// Cascade sanity: deleting the channel row must cascade the oauth
+	// row off, confirming the FK was committed atomically with the parent.
+	if err := s.DeleteYouTubeChannel("UC_first_connect"); err != nil {
+		t.Fatalf("DeleteYouTubeChannel: %v", err)
+	}
+	if row, _ := s.GetYouTubeOAuthToken("UC_first_connect"); row != nil {
+		t.Errorf("expected oauth row cascade-deleted after channel delete, got %v", row)
+	}
+}
+
+// TestConnectChannelAtomic_PreservesUserEdits: pre-seed the channel row
+// with values an operator would set (notes, language, view_count,
+// subscriber_count, display_name, channel_url) and a known added_at. Call
+// ConnectChannelAtomic again with a NEW title/thumbnail_url/last_sync_at
+// (the only columns the OAuth grant can legitimately overwrite). Assert:
+//   - title/thumbnail_url/last_sync_at/updated_at are updated
+//   - notes/language/view_count/subscriber_count/display_name/channel_url
+//     are preserved verbatim
+//   - added_at and created_at are preserved (they are NOT in the UPDATE SET)
+//   - metadata_json is preserved (not in the UPDATE SET)
+func TestConnectChannelAtomic_PreservesUserEdits(t *testing.T) {
+	s := openTestDB(t)
+	defer s.Close()
+	if _, err := s.db.Exec("PRAGMA foreign_keys = ON"); err != nil {
+		t.Fatalf("enable FK pragma: %v", err)
+	}
+
+	// Seed an "existing" channel the way an operator would have filled
+	// it via the post-OAuth edit path (notes/language/view/sub counts are
+	// hand-curated values an operator can set, not OAuth-grant values).
+	if err := s.UpsertYouTubeChannel(
+		"UC_edits", "Original Title", "Operator Label",
+		"https://youtube.com/@original", "https://img.example.com/orig.jpg",
+		"it", "operator-curated notes", 99999, 5555,
+		"2025-01-01T00:00:00Z", "2025-01-01T00:00:00Z", `{"curated": true}`,
+	); err != nil {
+		t.Fatalf("seed UpsertYouTubeChannel: %v", err)
+	}
+	// Seed an OAuth blob so the test exercises the FULL atomic path
+	// (token upsert included).
+	if err := s.UpsertYouTubeOAuthToken("UC_edits", []byte("orig-access"), []byte("orig-refresh"), "Bearer", "2026-01-01T00:00:00Z", "", 1); err != nil {
+		t.Fatalf("seed oauth token: %v", err)
+	}
+
+	// Snapshot pre-update values for comparison.
+	before, err := s.GetYouTubeChannel("UC_edits")
+	if err != nil || before == nil {
+		t.Fatalf("snapshot read: err=%v row=%v", err, before)
+	}
+	origAddedAt, _ := before["added_at"].(string)
+	origCreatedAt, _ := before["created_at"].(string)
+	origNotes, _ := before["notes"].(string)
+	origLanguage, _ := before["language"].(string)
+	origDisplayName, _ := before["display_name"].(string)
+	origChannelURL, _ := before["channel_url"].(string)
+	origViewCount := before["view_count"].(int64)
+	origSubCount := before["subscriber_count"].(int64)
+	origMeta, _ := before["metadata_json"].(string)
+	if origAddedAt == "" {
+		t.Fatalf("pre: added_at must be set")
+	}
+
+	// Slept to ensure updated_at advances past second-resolution so the
+	// lexicographic RFC3339 compare at the end is well-defined.
+	time.Sleep(20 * time.Millisecond)
+
+	// New grant arrives with new title / thumbnail / last_sync_at and a
+	// different oauth blob. Other seed columns are intentionally noisy /
+	// contradictory to make the test fail loudly if any of them leaks
+	// into the UPDATE branch.
+	newExpiry := "2030-06-30T00:00:00Z"
+	seed := &youtubetypes.YouTubeChannelSeed{
+		ChannelID:    "UC_edits",
+		Title:        "Refreshed By OAuth",
+		DisplayName:  "OVERWRITTEN-LABEL-MUST-NOT-WIN",
+		ChannelURL:   "https://youtube.com/@overwritten",
+		ThumbnailURL: "https://img.example.com/refresh.jpg",
+		Language:     "OVERWRITTEN-LANG-MUST-NOT-WIN",
+		Notes:        "OVERWRITTEN-NOTES-MUST-NOT-WIN",
+		ViewCount:    1,
+		SubCount:     1,
+		AddedAt:      "OVERWRITTEN-ADDED-MUST-NOT-WIN", // sentinel
+		LastSyncAt:   newExpiry,
+	}
+	newAccess := []byte("new-access-encrypted")
+	newRefresh := []byte("new-refresh-encrypted")
+	if err := s.ConnectChannelAtomic(seed, newAccess, newRefresh, "Bearer", newExpiry, "scope.read", 1); err != nil {
+		t.Fatalf("ConnectChannelAtomic (re-auth): %v", err)
+	}
+
+	after, err := s.GetYouTubeChannel("UC_edits")
+	if err != nil || after == nil {
+		t.Fatalf("post read: err=%v row=%v", err, after)
+	}
+
+	// Seed-owned columns SHOULD have been overwritten.
+	if after["title"] != "Refreshed By OAuth" {
+		t.Errorf("title was not updated: got %v, want %q", after["title"], "Refreshed By OAuth")
+	}
+	if after["thumbnail_url"] != "https://img.example.com/refresh.jpg" {
+		t.Errorf("thumbnail_url was not updated: got %v, want refreshed thumbnail", after["thumbnail_url"])
+	}
+	if last, _ := after["last_sync_at"].(string); last != newExpiry {
+		t.Errorf("last_sync_at was not updated: got %v, want %s", last, newExpiry)
+	}
+
+	// User-edited typed columns SHOULD be preserved verbatim.
+	if after["notes"] != origNotes {
+		t.Errorf("notes was clobbered: got %v, want preserved %q", after["notes"], origNotes)
+	}
+	if after["language"] != origLanguage {
+		t.Errorf("language was clobbered: got %v, want preserved %q", after["language"], origLanguage)
+	}
+	if after["display_name"] != origDisplayName {
+		t.Errorf("display_name was clobbered: got %v, want preserved %q", after["display_name"], origDisplayName)
+	}
+	if after["channel_url"] != origChannelURL {
+		t.Errorf("channel_url was clobbered: got %v, want preserved %q", after["channel_url"], origChannelURL)
+	}
+	if got := after["view_count"].(int64); got != origViewCount {
+		t.Errorf("view_count was clobbered: got %d, want preserved %d", got, origViewCount)
+	}
+	if got := after["subscriber_count"].(int64); got != origSubCount {
+		t.Errorf("subscriber_count was clobbered: got %d, want preserved %d", got, origSubCount)
+	}
+
+	// added_at / created_at / metadata_json SHOULD be preserved too
+	// (none of them are in the UPDATE SET; metadata_json preservation
+	// is implicit because the column is omitted from the SET clause).
+	if after["added_at"] != origAddedAt {
+		t.Errorf("added_at was clobbered: got %v, want preserved %s", after["added_at"], origAddedAt)
+	}
+	if after["created_at"] != origCreatedAt {
+		t.Errorf("created_at was clobbered: got %v, want preserved %s", after["created_at"], origCreatedAt)
+	}
+	if after["metadata_json"] != origMeta {
+		t.Errorf("metadata_json was clobbered: got %v, want preserved %q", after["metadata_json"], origMeta)
+	}
+
+	// OAuth blob side: the atomic call SHOULD have updated the new
+	// encrypted blobs. (Same channel_id, so the OAuth leg's UPDATE SET
+	// applies in full.)
+	tok, err := s.GetYouTubeOAuthToken("UC_edits")
+	if err != nil || tok == nil {
+		t.Fatalf("oauth read after atomic: err=%v", err)
+	}
+	if !bytes.Equal(tok["access_token_encrypted"].([]byte), newAccess) {
+		t.Errorf("oauth access blob not updated: got %v, want %v", tok["access_token_encrypted"], newAccess)
+	}
+	if !bytes.Equal(tok["refresh_token_encrypted"].([]byte), newRefresh) {
+		t.Errorf("oauth refresh blob not updated: got %v, want %v", tok["refresh_token_encrypted"], newRefresh)
+	}
+	if tok["expiry"] != newExpiry {
+		t.Errorf("oauth expiry not updated: got %v, want %s", tok["expiry"], newExpiry)
+	}
+
+	// updated_at must advance past created_at (we slept 20ms above to
+	// dodge the sub-second edge case). Lexicographic compare is safe for
+	// fixed-width RFC3339 with Z-suffixed times.
+	if updatedAfter, _ := after["updated_at"].(string); updatedAfter == "" {
+		t.Errorf("updated_at is empty after re-auth")
+	} else if updatedAfter < origCreatedAt {
+		t.Errorf("updated_at did not advance: created_at=%s updated_at=%s", origCreatedAt, updatedAfter)
 	}
 }
 

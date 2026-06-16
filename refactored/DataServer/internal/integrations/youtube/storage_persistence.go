@@ -1,7 +1,6 @@
 package youtube
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -451,13 +450,12 @@ func (s *Storage) diffGroupMemberships(groupID int64, groupName string, g *Group
 		if !ch.LastSync.IsZero() {
 			lastSync = ch.LastSync.Format(time.RFC3339)
 		}
-		rawMetadata, _ := json.Marshal(ch)
 
 		if err := s.store.UpsertYouTubeChannel(
 			ch.ID, ch.Title, ch.Name, ch.URL, ch.Thumbnail,
 			ch.Language, ch.Notes,
 			ch.ViewCount, ch.SubCount,
-			addedAt, lastSync, string(rawMetadata),
+			addedAt, lastSync,
 		); err != nil {
 			return fmt.Errorf("upsert channel %s: %w", safeChannelID(ch.ID), err)
 		}
@@ -523,12 +521,11 @@ func (s *Storage) replaceGroupMemberships(groupID int64, g *Group) error {
 		if !ch.LastSync.IsZero() {
 			lastSync = ch.LastSync.Format(time.RFC3339)
 		}
-		rawMetadata, _ := json.Marshal(ch)
 		if err := s.store.UpsertYouTubeChannel(
 			ch.ID, ch.Title, ch.Name, ch.URL, ch.Thumbnail,
 			ch.Language, ch.Notes,
 			ch.ViewCount, ch.SubCount,
-			addedAt, lastSync, string(rawMetadata),
+			addedAt, lastSync,
 		); err != nil {
 			return fmt.Errorf("upsert channel %s: %w", safeChannelID(ch.ID), err)
 		}

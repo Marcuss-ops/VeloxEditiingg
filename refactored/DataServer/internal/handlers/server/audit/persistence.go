@@ -86,11 +86,11 @@ func (h *PersistenceHandler) sourceOfTruth() gin.H {
 			"primary": true,
 		},
 		"oauth_tokens": gin.H{
-			"backend": "json",
-			"path":    "<dataDir>/secrets/youtube/tokens/account_<channel_id>.json",
-			"owner":   "DataServer/internal/integrations/youtube/channels.go (saveChannelToken)",
-			"primary": false,
-			"note":    "OAuth-specific; Google OAuth2 library expects on-disk token files.",
+			"backend": "sqlite",
+			"table":   "youtube_oauth_tokens",
+			"owner":   "DataServer/internal/integrations/youtube/auth_oauth.go (ConnectChannelAtomic / UpsertYouTubeOAuthToken)",
+			"primary": true,
+			"note":    "Encrypted at-rest via AES-256-GCM (access_token_encrypted / refresh_token_encrypted BLOBs). `channels.go` JSON writer was removed in S6.",
 		},
 		"google_credentials": gin.H{
 			"backend": "json",

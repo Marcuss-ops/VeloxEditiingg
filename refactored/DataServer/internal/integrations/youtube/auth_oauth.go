@@ -9,9 +9,23 @@ import (
 	"golang.org/x/oauth2"
 	"google.golang.org/api/option"
 	"google.golang.org/api/youtube/v3"
+
+	"velox-server/internal/store/youtubetypes"
 )
 
-// HandleOAuthCallback handles OAuth callback and saves token
+// HandleOAuthCallback handles OAuth callback and persists the channel +
+// credentials in ONE SQLite transaction via ConnectChannelAtomic.
+//
+// Pre-fix: UpsertYouTubeOAuthToken was called directly, which the FK from
+// youtube_oauth_tokens.channel_id → youtube_channels.channel_id turned into
+// a FK violation when the channel had never been inserted before (very
+// first connect). ConnectChannelAtomic fixes that by upserting the channel
+// row first, then the oauth row, in one transaction.
+//
+// Fail-closed: if the cipher or store is missing, the callback returns an
+// error BEFORE any RAM update, so the operator sees a coherent error and
+// no half-persisted state. The module enforces a non-nil cipher at wire-up
+// time (requireIfMissing=true in module.go).
 func (am *AuthManager) HandleOAuthCallback(ctx context.Context, code string, channelName string, redirectURL string) (*Channel, error) {
 	if am.oauthConfig == nil {
 		return nil, fmt.Errorf("OAuth not configured")
@@ -57,46 +71,48 @@ func (am *AuthManager) HandleOAuthCallback(ctx context.Context, code string, cha
 		channel.ID = channelInfo.Id
 	}
 
-	// Persist the OAuth credentials encrypted at-rest into the canonical
-	// youtube_oauth_tokens row. From this commit forward, SQLite is the
-	// SINGLE source of truth for tokens: the JSON write below is kept only
-	// as a deprecation trail so installs that boot without
-	// VELOX_YT_OAUTH_TOKEN_KEY still have a working OAuth flow. Once the
-	// key is widely deployed the JSON write is removed (Fix C). A nil
-	// oauthBuf is a degraded mode: no SQLite row, JSON only.
-	//
-	// Note: we encrypt FIRST and bail out before any RAM update if the
-	// cipher fails — that way a partially-persisted state (JSON written but
-	// SQLite not) is never observed for the SAME callback.
-	if am.service.store != nil && am.service.oauthBuf != nil {
-		accessEnc, err := am.service.oauthBuf.Encrypt([]byte(token.AccessToken))
-		if err != nil {
-			return nil, fmt.Errorf("oauth callback: encrypt access token: %w", err)
-		}
-		var refreshEnc []byte
-		if token.RefreshToken != "" {
-			r, rerr := am.service.oauthBuf.Encrypt([]byte(token.RefreshToken))
-			if rerr != nil {
-				return nil, fmt.Errorf("oauth callback: encrypt refresh token: %w", rerr)
-			}
-			refreshEnc = r
-		}
-		var expiry string
-		if !token.Expiry.IsZero() {
-			expiry = token.Expiry.Format(time.RFC3339)
-		}
-		if err := am.service.store.UpsertYouTubeOAuthToken(channel.ID, accessEnc, refreshEnc, "Bearer", expiry, "", am.service.oauthBuf.KeyVersion()); err != nil {
-			return nil, fmt.Errorf("oauth callback: persist to sqlite: %w", err)
-		}
-	} else {
-		log.Printf("[WARN] OAuth secret cipher unavailable: persisting channel %s to JSON only, youtube_oauth_tokens will not be populated", channel.ID)
+	// Fail-closed on missing cipher/store: refuse rather than degrade to
+	// JSON-only persistence (which is the old dual-write path that
+	// produced drift). The module wiring guarantees a cipher is present
+	// when OAuth is configured.
+	if am.service.store == nil || am.service.oauthBuf == nil {
+		return nil, fmt.Errorf("oauth callback: cipher or store not configured; refusing to persist %s without AES encryption", channel.ID)
 	}
 
-	// Existing JSON write kept for backward compat (one release).
-	if err := am.saveChannelToken(channel); err != nil {
-		log.Printf("[WARN] Failed to save token (JSON compat): %v", err)
+	accessEnc, err := am.service.oauthBuf.Encrypt([]byte(token.AccessToken))
+	if err != nil {
+		return nil, fmt.Errorf("oauth callback: encrypt access token: %w", err)
+	}
+	var refreshEnc []byte
+	if token.RefreshToken != "" {
+		r, rerr := am.service.oauthBuf.Encrypt([]byte(token.RefreshToken))
+		if rerr != nil {
+			return nil, fmt.Errorf("oauth callback: encrypt refresh token: %w", rerr)
+		}
+		refreshEnc = r
+	}
+	var expiry string
+	if !token.Expiry.IsZero() {
+		expiry = token.Expiry.Format(time.RFC3339)
 	}
 
+	// Single-transaction upsert (channel + oauth token). On the channel
+	// leg's UPDATE branch, only seed-owned columns change — user-edited
+	// notes/language/view/sub are preserved by the SQLiteStore
+	// implementation.
+	seed := &youtubetypes.YouTubeChannelSeed{
+		ChannelID:    channel.ID,
+		Title:        channel.Title,
+		DisplayName:  channel.Name,
+		ChannelURL:   channel.URL,
+		ThumbnailURL: channel.Thumbnail,
+		Language:     channel.Language,
+	}
+	if err := am.service.store.ConnectChannelAtomic(seed, accessEnc, refreshEnc, "Bearer", expiry, "", am.service.oauthBuf.KeyVersion()); err != nil {
+		return nil, fmt.Errorf("oauth callback: persist to sqlite: %w", err)
+	}
+
+	// Only commit RAM after SQLite has persisted. No JSON dual-write.
 	am.service.mu.Lock()
 	am.service.channels[channel.ID] = channel
 	am.service.mu.Unlock()
@@ -105,7 +121,11 @@ func (am *AuthManager) HandleOAuthCallback(ctx context.Context, code string, cha
 	return AuthChannelToChannel(channel), nil
 }
 
-// ValidateToken validates a channel's OAuth token and returns detailed status
+// ValidateToken validates a channel's OAuth token and returns detailed
+// status. When a refresh round-trip succeeds, the new credentials are
+// persisted via Service.persistRefreshedToken (single-write to SQLite, no
+// JSON dual-write) — the previous "JSON compat fallback" path has been
+// removed because module.go now requires the cipher.
 func (am *AuthManager) ValidateToken(ctx context.Context, channelID string) (map[string]interface{}, error) {
 	channel := am.service.GetChannel(channelID)
 	if channel == nil {
@@ -167,20 +187,23 @@ func (am *AuthManager) ValidateToken(ctx context.Context, channelID string) (map
 			channel.Expiry = newToken.Expiry
 			am.service.mu.Unlock()
 
-			// Extend Fix B's encrypted-SoT pattern to the ValidateToken refresh
-			// path so a crash mid-refresh leaves SQLite consistent with the
-			// in-RAM copy. The JSON write path is kept as a one-release-compat
-			// trail matching HandleOAuthCallback; it will be removed when the
-			// AES-GCM key is everywhere (see migration plan step S6).
-			if am.service.store != nil && am.service.oauthBuf != nil {
-				if perr := am.service.persistRefreshedToken(channelID, newToken); perr != nil {
-					log.Printf("[WARN] validateToken refresh: persist to sqlite: %v", perr)
-				}
-			} else {
-				log.Printf("[WARN] validateToken refresh: oauthBuf or store nil for %s; refresh not persisted", channelID)
+			// Single SQLite write via the shared persistence primitive.
+			// If the SQLite write fails, return the error so the caller
+			// sees the refresh was NOT persistently successful — the
+			// previously-present "JSON compat trail" is gone. Both
+			// previous fail-soft paths (warn-and-continue) are removed:
+			// either SQLite wrote the new token or the operator is told.
+			if am.service.store == nil || am.service.oauthBuf == nil {
+				result["ok"] = false
+				result["valid"] = false
+				result["error"] = "refresh not persisted: cipher or store missing"
+				return result, nil
 			}
-			if err := am.saveChannelToken(channel); err != nil {
-				log.Printf("[WARN] validateToken refresh: save JSON compat trail failed: %v", err)
+			if perr := am.service.persistRefreshedToken(channelID, newToken); perr != nil {
+				result["ok"] = false
+				result["valid"] = false
+				result["error"] = fmt.Sprintf("Token refresh not persisted: %v", perr)
+				return result, nil
 			}
 
 			result["ok"] = true

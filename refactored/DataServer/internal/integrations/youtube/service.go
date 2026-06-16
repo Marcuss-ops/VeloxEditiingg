@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -18,7 +17,14 @@ import (
 
 	"velox-server/internal/config"
 	"velox-server/internal/secrets/aesgcm"
+	"velox-server/internal/store/youtubetypes"
 )
+
+// os shim: previously used by the deleted saveChannelToken JSON writer and
+// the deleted RevokeToken JSON file-delete step. Both paths are removed in
+// step S6. The import is dropped from the top because module uses of os
+// outside those paths do not exist (see channels.go, which was rewritten
+// to drop the same os/path/filepath/strings imports).
 
 // YouTubeStore defines the interface for SQLite-backed YouTube persistence,
 // avoiding a direct import of the store package.
@@ -37,7 +43,7 @@ type YouTubeStore interface {
 	// Canonical: YouTube Channels (youtube_channels table)
 	ListYouTubeChannels() ([]map[string]interface{}, error)
 	GetYouTubeChannel(channelID string) (map[string]interface{}, error)
-	UpsertYouTubeChannel(channelID, title, displayName, channelURL, thumbnailURL, language, notes string, viewCount, subCount int64, addedAt, lastSyncAt, metadataJSON string) error
+	UpsertYouTubeChannel(channelID, title, displayName, channelURL, thumbnailURL, language, notes string, viewCount, subCount int64, addedAt, lastSyncAt string) error
 	// UpdateYouTubeChannelMetadata persists a YouTube-API metadata refresh into
 	// youtube_channels targeting only title and thumbnail. Distinct from the
 	// wide UpsertYouTubeChannel above: refresh never writes metadata_json nor
@@ -61,6 +67,21 @@ type YouTubeStore interface {
 	// does not hold a cipher. Use a Read-Modify-Write cycle in the service
 	// layer when only one of (access, refresh) needs to change.
 	UpsertYouTubeOAuthToken(channelID string, accessTokenEnc, refreshTokenEnc []byte, tokenType, expiry, scopes string, keyVersion int) error
+	// ListActiveYouTubeOAuthTokens returns every non-revoked oauth row for
+	// the boot hydrator (loadOAuthChannelsFromSQLite). Decryption is the
+	// caller's responsibility. Returns an empty slice when no active rows
+	// exist (never (nil, nil) wrapped in nil-row for missing entries).
+	ListActiveYouTubeOAuthTokens() ([]map[string]interface{}, error)
+	// AuditYouTubeOAuthTokenOrphans returns channel_ids in
+	// youtube_oauth_tokens whose parent youtube_channels row is missing.
+	// The boot hydrator logs these on startup so operators know whether
+	// the canonical set is fully consistent.
+	AuditYouTubeOAuthTokenOrphans() ([]youtubetypes.YouTubeTokenOrphan, error)
+	// ConnectChannelAtomic creates a youtube_channels row and the matching
+	// youtube_oauth_tokens row in ONE SQLite transaction. Fixes the FK
+	// cascade failure mode where UpsertYouTubeOAuthToken was called before
+	// the parent channel row existed.
+	ConnectChannelAtomic(channel *youtubetypes.YouTubeChannelSeed, accessTokenEnc, refreshTokenEnc []byte, tokenType, expiry, scopes string, keyVersion int) error
 	// GetYouTubeOAuthToken returns the encrypted row for channelID, or
 	// (nil, nil) when the row does not exist. BLOB columns surface as
 	// []byte; the caller decrypts via a matching aesgcm.Encryptor.
@@ -154,7 +175,21 @@ func NewService(cfg *ServiceConfig, store YouTubeStore) (*Service, error) {
 		log.Printf("[WARN] YouTube OAuth config not loaded: %v", err)
 	}
 
-	s.loadChannels()
+	// Boot hydrator two-phase:
+	//   1. SQLite-first: loadOAuthChannelsFromSQLite reads every non-revoked
+	//      youtube_oauth_tokens row, decrypts, and rebuilds s.channels.
+	//      This is the canonical path; it runs whenever a cipher is wired.
+	//   2. JSON-fallback (deprecated, see step S6 of the migration plan):
+	//      if the cipher is missing we still walk account_*.json so an
+	//      operator installing without VELOX_YT_OAUTH_TOKEN_KEY can boot.
+	//      Once the module becomes fail-closed on a missing cipher, the
+	//      fallback is removed entirely.
+	// SQLite-only boot: AES-GCM credentials are decrypted from
+	// youtube_oauth_tokens and rebuilt into s.channels. JSON fallbacks are
+	// gone (step S6 of the migration plan). The module wires the cipher
+	// via SetOAuthSecretCipher before NewService is called and fails
+	// closed if VELOX_YT_OAUTH_TOKEN_KEY is missing.
+	s.loadOAuthChannelsFromSQLite()
 	// Load from canonical tables — store is already set, so this works immediately
 	s.loadCanonicalChannels()
 	s.loadCanonicalGroups()
@@ -258,31 +293,26 @@ func (s *Service) RevokeToken(ctx context.Context, channelID string) error {
 		if err := s.revokeAtGoogle(ctx, ch.AccessToken); err != nil {
 			log.Printf("[WARN] revoke: Google endpoint POST failed for %s: %v", channelID, err)
 		}
-	}
-
-	// Step 2: atomic SQLite mark-revoked. This is THE single source-of-truth
-	// step. A non-nil error here means the credential is still considered
-	// active server-side, so we return the error WITHOUT the RAM delete
-	// happening so the operator can retry on the SAME cached state.
-	if s.store != nil {
-		if err := s.store.MarkYouTubeOAuthTokenRevoked(channelID); err != nil {
-			return fmt.Errorf("revoke: persist revoked_at to sqlite: %w", err)
+	}		// Step 2: atomic SQLite mark-revoked. This is THE single source-of-truth
+		// step. A non-nil error here means the credential is still considered
+		// active server-side, so we return the error WITHOUT the RAM delete
+		// happening so the operator can retry on the SAME cached state.
+		if s.store != nil {
+			if err := s.store.MarkYouTubeOAuthTokenRevoked(channelID); err != nil {
+				return fmt.Errorf("revoke: persist revoked_at to sqlite: %w", err)
+			}
 		}
-	}
 
-	// Step 3: best-effort delete of the canonical JSON token file. An
-	// orphan JSON is tolerable because loadChannels() error-skips and the
-	// S6 deprecation will eventually remove the JSON code path entirely.
-	if ch.TokenPath != "" {
-		if err := os.Remove(ch.TokenPath); err != nil && !os.IsNotExist(err) {
-			log.Printf("[WARN] revoke: JSON token file removal failed for %s: %v", channelID, err)
-		}
-	}
+		// JSON-token-file delete is gone (step S6 verbatim). SQLite
+		// owns the credential; any orphan JSON on disk is harmless
+		// because the boot hydrator (loadOAuthChannelsFromSQLite)
+		// never reads from `account_*.json` and the boot never reaches
+		// it now that requireIfMissing=true is in effect.
 
-	// Step 4: in-memory delete only after the canonical store has accepted
-	// the revocation, so concurrent readers don't see a half-revoked
-	// channel. Done under the write lock so the map iteration order is
-	// deterministic in tests.
+		// Step 4: in-memory delete only after the canonical store has accepted
+		// the revocation, so concurrent readers don't see a half-revoked
+		// channel. Done under the write lock so the map iteration order is
+		// deterministic in tests.
 	s.mu.Lock()
 	delete(s.channels, channelID)
 	s.mu.Unlock()

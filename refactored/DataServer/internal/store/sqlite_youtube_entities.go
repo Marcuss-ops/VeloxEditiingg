@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
+
+	"velox-server/internal/store/youtubetypes"
 )
 
 // ============================================================
@@ -14,7 +16,13 @@ import (
 // UpsertYouTubeChannel canonical: creates or updates a channel in youtube_channels.
 // If addedAt is empty on INSERT, it is auto-set to now().
 // If addedAt is empty on UPDATE, the existing value is preserved.
-func (s *SQLiteStore) UpsertYouTubeChannel(channelID, title, displayName, channelURL, thumbnailURL, language, notes string, viewCount, subCount int64, addedAt, lastSyncAt, metadataJSON string) error {
+//
+// `metadataJSON` was retired in S7/S8 of the verdict plan: the column was
+// DROPPED by migration 014. There is no typed column to back it, so the
+// blob (which historically held `token_path` from the now-deleted
+// `saveChannelToken` JSON writer) is simply gone. New writes should use
+// the typed columns for any operator-readable metadata.
+func (s *SQLiteStore) UpsertYouTubeChannel(channelID, title, displayName, channelURL, thumbnailURL, language, notes string, viewCount, subCount int64, addedAt, lastSyncAt string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 
 	// On INSERT, set addedAt to now if empty.
@@ -33,24 +41,24 @@ func (s *SQLiteStore) UpsertYouTubeChannel(channelID, title, displayName, channe
 	_, err = s.db.Exec(
 		`INSERT INTO youtube_channels
 		 (channel_id, title, display_name, channel_url, thumbnail_url, language, notes,
-		  view_count, subscriber_count, added_at, last_sync_at, metadata_json, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		  view_count, subscriber_count, added_at, last_sync_at, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(channel_id) DO UPDATE SET
 		   title=excluded.title, display_name=excluded.display_name, channel_url=excluded.channel_url,
 		   thumbnail_url=excluded.thumbnail_url, language=excluded.language, notes=excluded.notes,
 		   view_count=excluded.view_count, subscriber_count=excluded.subscriber_count,
 		   added_at=COALESCE(NULLIF(excluded.added_at, ''), youtube_channels.added_at),
 		   last_sync_at=excluded.last_sync_at,
-		   metadata_json=excluded.metadata_json, updated_at=excluded.updated_at`,
+		   updated_at=excluded.updated_at`,
 		channelID, title, displayName, channelURL, thumbnailURL, language, notes,
-		viewCount, subCount, addedAt, lastSyncAt, metadataJSON, now, now,
+		viewCount, subCount, addedAt, lastSyncAt, now, now,
 	)
 	return err
 }
 
 // ListYouTubeChannels returns all canonical channels.
 func (s *SQLiteStore) ListYouTubeChannels() ([]map[string]interface{}, error) {
-	rows, err := s.db.Query(`SELECT channel_id, title, display_name, channel_url, thumbnail_url, language, notes, view_count, subscriber_count, added_at, last_sync_at, metadata_json FROM youtube_channels ORDER BY title`)
+	rows, err := s.db.Query(`SELECT channel_id, title, display_name, channel_url, thumbnail_url, language, notes, view_count, subscriber_count, added_at, last_sync_at, created_at, updated_at FROM youtube_channels ORDER BY title`)
 	if err != nil {
 		return nil, err
 	}
@@ -58,9 +66,9 @@ func (s *SQLiteStore) ListYouTubeChannels() ([]map[string]interface{}, error) {
 
 	var result []map[string]interface{}
 	for rows.Next() {
-		var channelID, title, displayName, channelURL, thumbnailURL, language, notes, addedAt, lastSyncAt, metadataJSON string
+		var channelID, title, displayName, channelURL, thumbnailURL, language, notes, addedAt, lastSyncAt, createdAt, updatedAt string
 		var viewCount, subCount int64
-		if err := rows.Scan(&channelID, &title, &displayName, &channelURL, &thumbnailURL, &language, &notes, &viewCount, &subCount, &addedAt, &lastSyncAt, &metadataJSON); err != nil {
+		if err := rows.Scan(&channelID, &title, &displayName, &channelURL, &thumbnailURL, &language, &notes, &viewCount, &subCount, &addedAt, &lastSyncAt, &createdAt, &updatedAt); err != nil {
 			continue
 		}
 		result = append(result, map[string]interface{}{
@@ -75,7 +83,8 @@ func (s *SQLiteStore) ListYouTubeChannels() ([]map[string]interface{}, error) {
 			"subscriber_count": subCount,
 			"added_at":         addedAt,
 			"last_sync_at":     lastSyncAt,
-			"metadata_json":    metadataJSON,
+			"created_at":       createdAt,
+			"updated_at":       updatedAt,
 		})
 	}
 	return result, rows.Err()
@@ -83,10 +92,10 @@ func (s *SQLiteStore) ListYouTubeChannels() ([]map[string]interface{}, error) {
 
 // GetYouTubeChannel returns a single canonical channel.
 func (s *SQLiteStore) GetYouTubeChannel(channelID string) (map[string]interface{}, error) {
-	row := s.db.QueryRow(`SELECT channel_id, title, display_name, channel_url, thumbnail_url, language, notes, view_count, subscriber_count, added_at, last_sync_at, metadata_json FROM youtube_channels WHERE channel_id=?`, channelID)
-	var cid, title, displayName, channelURL, thumbnailURL, language, notes, addedAt, lastSyncAt, metadataJSON string
+	row := s.db.QueryRow(`SELECT channel_id, title, display_name, channel_url, thumbnail_url, language, notes, view_count, subscriber_count, added_at, last_sync_at, created_at, updated_at FROM youtube_channels WHERE channel_id=?`, channelID)
+	var cid, title, displayName, channelURL, thumbnailURL, language, notes, addedAt, lastSyncAt, createdAt, updatedAt string
 	var viewCount, subCount int64
-	if err := row.Scan(&cid, &title, &displayName, &channelURL, &thumbnailURL, &language, &notes, &viewCount, &subCount, &addedAt, &lastSyncAt, &metadataJSON); err != nil {
+	if err := row.Scan(&cid, &title, &displayName, &channelURL, &thumbnailURL, &language, &notes, &viewCount, &subCount, &addedAt, &lastSyncAt, &createdAt, &updatedAt); err != nil {
 		return nil, err
 	}
 	return map[string]interface{}{
@@ -101,7 +110,8 @@ func (s *SQLiteStore) GetYouTubeChannel(channelID string) (map[string]interface{
 		"subscriber_count": subCount,
 		"added_at":         addedAt,
 		"last_sync_at":     lastSyncAt,
-		"metadata_json":    metadataJSON,
+		"created_at":       createdAt,
+		"updated_at":       updatedAt,
 	}, nil
 }
 
@@ -118,12 +128,10 @@ func (s *SQLiteStore) DeleteYouTubeChannel(channelID string) error {
 //
 // Every other column is intentionally left alone: refresh is the system
 // source of truth for title and thumbnail only. Display name, language,
-// view/sub counts, notes, channel_url, and metadata_json are owned by the
-// initial AddChannel path (or by user edits afterwards) and MUST NOT be
-// silently wiped by an API roundtrip — otherwise a single refresh would
-// erase user-set notes and language, or overwrite the canonical
-// youtube_channels row with the stale metadata_json blob that some
-// call-sites still write (see channels.go Service.UpdateChannelMetadata).
+// view/sub counts, notes, channel_url are owned by the initial AddChannel
+// path (or by user edits afterwards) and MUST NOT be silently wiped by an
+// API roundtrip — otherwise a single refresh would erase user-set notes
+// and language.
 //
 // Use this explicitly on metadata refresh paths. Use UpsertYouTubeChannel
 // for initial channel ingest where every column needs to be seeded.
@@ -138,9 +146,20 @@ func (s *SQLiteStore) UpdateYouTubeChannelMetadata(channelID, title, thumbnailUR
 	return err
 }
 
-// --- Canonical Groups V2 ---
+// --- Canonical Groups ---
+//
+// NOTE: the V2 suffix on the method names is intentional and STAYS even
+// after migration 012 renamed the table from `youtube_groups_v2` to
+// `youtube_groups` (S10 of the verdict plan). Reasons:
+//   1. The old `youtube_groups` table (with its `channels_json` BLOB) is
+//      what the suffix used to disambiguate against. The legacy table
+//      is gone (migration 009). The suffix is now decorative only.
+//   2. Keeping the V2 suffix on the *method* names keeps the rename
+//      a pure SQL-only change, avoiding a propagation storm across the
+//      ~20 callsites in service.go / storage.go / storage_*.go.
+//   3. A future cleanup pass (post-S11) can drop the suffix cleanly.
 
-// UpsertYouTubeGroupV2 creates or updates a group in youtube_groups_v2.
+// UpsertYouTubeGroupV2 creates or updates a group in youtube_groups.
 func (s *SQLiteStore) UpsertYouTubeGroupV2(name, groupType, description, privacy string) (int64, error) {
 	now := time.Now().UTC().Format(time.RFC3339)
 	if groupType == "" {
@@ -148,7 +167,7 @@ func (s *SQLiteStore) UpsertYouTubeGroupV2(name, groupType, description, privacy
 	}
 	// Use INSERT OR IGNORE + UPDATE to handle the UNIQUE(name, group_type) constraint
 	_, err := s.db.Exec(
-		`INSERT INTO youtube_groups_v2 (name, group_type, description, privacy, created_at, updated_at)
+		`INSERT INTO youtube_groups (name, group_type, description, privacy, created_at, updated_at)
 		 VALUES (?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(name, group_type) DO UPDATE SET
 		   description=excluded.description, privacy=excluded.privacy, updated_at=excluded.updated_at`,
@@ -159,20 +178,20 @@ func (s *SQLiteStore) UpsertYouTubeGroupV2(name, groupType, description, privacy
 	}
 	// Return the group ID
 	var id int64
-	err = s.db.QueryRow(`SELECT id FROM youtube_groups_v2 WHERE name=? AND group_type=?`, name, groupType).Scan(&id)
+	err = s.db.QueryRow(`SELECT id FROM youtube_groups WHERE name=? AND group_type=?`, name, groupType).Scan(&id)
 	return id, err
 }
 
 // GetYouTubeGroupV2ID returns the group ID for a given name and type.
 func (s *SQLiteStore) GetYouTubeGroupV2ID(name, groupType string) (int64, error) {
 	var id int64
-	err := s.db.QueryRow(`SELECT id FROM youtube_groups_v2 WHERE name=? AND group_type=?`, name, groupType).Scan(&id)
+	err := s.db.QueryRow(`SELECT id FROM youtube_groups WHERE name=? AND group_type=?`, name, groupType).Scan(&id)
 	return id, err
 }
 
 // ListYouTubeGroupsV2 returns all groups.
 func (s *SQLiteStore) ListYouTubeGroupsV2() ([]map[string]interface{}, error) {
-	rows, err := s.db.Query(`SELECT id, name, group_type, description, privacy, created_at, updated_at FROM youtube_groups_v2 ORDER BY name`)
+	rows, err := s.db.Query(`SELECT id, name, group_type, description, privacy, created_at, updated_at FROM youtube_groups ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
@@ -196,7 +215,7 @@ func (s *SQLiteStore) ListYouTubeGroupsV2() ([]map[string]interface{}, error) {
 
 // DeleteYouTubeGroupV2 deletes a group by ID.
 func (s *SQLiteStore) DeleteYouTubeGroupV2(id int64) error {
-	_, err := s.db.Exec(`DELETE FROM youtube_groups_v2 WHERE id=?`, id)
+	_, err := s.db.Exec(`DELETE FROM youtube_groups WHERE id=?`, id)
 	return err
 }
 
@@ -213,6 +232,11 @@ func (s *SQLiteStore) DeleteYouTubeGroupChannelsByChannelID(channelID string) er
 }
 
 // --- Group-Channel Memberships ---
+//
+// Membership table is `youtube_group_channels`. Its FK to groups points at
+// the renamed `youtube_groups` (S10). ON DELETE CASCADE keeps
+// removal atomic. The V2 suffix on the methods is decorative (see note
+// on the Groups section above); renaming these methods is post-S11.
 
 // AddChannelToGroupV2 adds a channel membership with position.
 func (s *SQLiteStore) AddChannelToGroupV2(groupID int64, channelID string) error {
@@ -255,7 +279,7 @@ func (s *SQLiteStore) ListGroupChannelsV2(groupID int64) ([]string, error) {
 func (s *SQLiteStore) ListAllGroupMembershipsV2() ([]map[string]interface{}, error) {
 	rows, err := s.db.Query(`SELECT gc.group_id, gc.channel_id, gc.position, g.name as group_name, g.group_type
 		FROM youtube_group_channels gc
-		JOIN youtube_groups_v2 g ON g.id = gc.group_id
+		JOIN youtube_groups g ON g.id = gc.group_id
 		ORDER BY g.name, gc.position`)
 	if err != nil {
 		return nil, err
@@ -469,6 +493,158 @@ func (s *SQLiteStore) GetYouTubeOAuthToken(channelID string) (map[string]interfa
 	}, nil
 }
 
+// ListActiveYouTubeOAuthTokens enumerates every non-revoked OAuth credential
+// row for startup hydration. The boot path uses this to rehydrate the in-RAM
+// AuthChannel cache without ever touching the JSON token directory. Returns
+// a slice of the same row shape produced by GetYouTubeOAuthToken (BLOBs
+// surface as []byte; the caller decrypts via a matching aesgcm.Encryptor).
+//
+// "Active" semantics: revoked_at IS NULL. Revoked rows are deliberately
+// omitted so a stale revoked credential cannot silently re-enter the runtime
+// cache after a server restart.
+func (s *SQLiteStore) ListActiveYouTubeOAuthTokens() ([]map[string]interface{}, error) {
+	rows, err := s.db.Query(
+		`SELECT channel_id, access_token_encrypted, refresh_token_encrypted, token_type, expiry, scopes, key_version, revoked_at, created_at, updated_at
+		 FROM youtube_oauth_tokens
+		 WHERE revoked_at IS NULL`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []map[string]interface{}
+	for rows.Next() {
+		var cid, tokenType, scopes, expiry, createdAt, updatedAt string
+		var accessBlob, refreshBlob []byte
+		var keyVersion int64
+		var revokedAt sql.NullString
+		if err := rows.Scan(&cid, &accessBlob, &refreshBlob, &tokenType, &expiry, &scopes, &keyVersion, &revokedAt, &createdAt, &updatedAt); err != nil {
+			return nil, err
+		}
+		revokedAtStr := ""
+		if revokedAt.Valid {
+			revokedAtStr = revokedAt.String
+		}
+		result = append(result, map[string]interface{}{
+			"channel_id":              cid,
+			"access_token_encrypted":  accessBlob,
+			"refresh_token_encrypted": refreshBlob,
+			"token_type":              tokenType,
+			"expiry":                  expiry,
+			"scopes":                  scopes,
+			"key_version":             keyVersion,
+			"revoked_at":              revokedAtStr,
+			"created_at":              createdAt,
+			"updated_at":              updatedAt,
+		})
+	}
+	return result, rows.Err()
+}
+
+// ConnectChannelAtomic creates (or upserts) a youtube_channels row and the
+// matching youtube_oauth_tokens row in ONE SQLite transaction. Returns a
+// typed error if either leg of the transaction fails so the operator sees
+// a single failure rather than half-persisted state.
+//
+// This is the canonical entry point for "first-time connect". The previous
+// HandleOAuthCallback path performed two separate non-transactional calls
+// (UpsertYouTubeOAuthToken alone) which would fail with a FK violation when
+// the OAuth row tried to insert into youtube_oauth_tokens before any
+// youtube_channels row existed. ConnectChannelAtomic fixes that.
+// Both legs run before any RAM update so a partial failure leaves the DB
+// consistent with the operator-visible error.
+func (s *SQLiteStore) ConnectChannelAtomic(channel *youtubetypes.YouTubeChannelSeed, accessTokenEnc, refreshTokenEnc []byte, tokenType, expiry, scopes string, keyVersion int) error {
+	if channel == nil {
+		return fmt.Errorf("connect atomic: nil channel seed")
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("connect atomic: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	addedAt := channel.AddedAt
+	if addedAt == "" {
+		addedAt = time.Now().UTC().Format(time.RFC3339)
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	// Channel leg: the UPDATE branch touches ONLY seed-owned columns
+	// (title, thumbnail_url, last_sync_at, updated_at). User-edited
+	// typed columns — notes, language, view_count, subscriber_count,
+	// display_name, channel_url — are preserved verbatim across re-auth.
+	// added_at / created_at are also preserved because they are not in
+	// the SET clause at all.
+	if _, err := tx.Exec(
+		`INSERT INTO youtube_channels
+		 (channel_id, title, display_name, channel_url, thumbnail_url, language, notes,
+		  view_count, subscriber_count, added_at, last_sync_at, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(channel_id) DO UPDATE SET
+		   title         = excluded.title,
+		   thumbnail_url = excluded.thumbnail_url,
+		   last_sync_at  = excluded.last_sync_at,
+		   updated_at    = excluded.updated_at`,
+		channel.ChannelID, channel.Title, channel.DisplayName, channel.ChannelURL, channel.ThumbnailURL,
+		channel.Language, channel.Notes, channel.ViewCount, channel.SubCount,
+		addedAt, channel.LastSyncAt, now, now,
+	); err != nil {
+		return fmt.Errorf("connect atomic: upsert channel: %w", err)
+	}
+
+	// Always hire the OAuth leg in the same transaction. A "key refresh on
+	// existing channel" path also uses this entry point: the channel
+	// upsert is a no-op when the row already exists.
+	if _, err := tx.Exec(
+		`INSERT INTO youtube_oauth_tokens
+		 (channel_id, access_token_encrypted, refresh_token_encrypted, token_type, expiry, scopes, key_version, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(channel_id) DO UPDATE SET
+		   access_token_encrypted=excluded.access_token_encrypted,
+		   refresh_token_encrypted=excluded.refresh_token_encrypted,
+		   token_type=excluded.token_type,
+		   expiry=excluded.expiry,
+		   scopes=excluded.scopes,
+		   key_version=excluded.key_version,
+		   updated_at=excluded.updated_at`,
+		channel.ChannelID, accessTokenEnc, refreshTokenEnc, tokenType, expiry, scopes, keyVersion, now, now,
+	); err != nil {
+		return fmt.Errorf("connect atomic: upsert oauth token: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("connect atomic: commit: %w", err)
+	}
+	return nil
+}
+
+// AuditYouTubeOAuthTokenOrphans returns the channel_ids present in
+// youtube_oauth_tokens but missing from youtube_channels. The caller is
+// expected to log these on boot so post-bootstrap operators know whether the
+// canonical set is fully consistent.
+func (s *SQLiteStore) AuditYouTubeOAuthTokenOrphans() ([]youtubetypes.YouTubeTokenOrphan, error) {
+	rows, err := s.db.Query(
+		`SELECT t.channel_id, t.updated_at
+		 FROM youtube_oauth_tokens t
+		 LEFT JOIN youtube_channels c ON c.channel_id = t.channel_id
+		 WHERE c.channel_id IS NULL`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var orphans []youtubetypes.YouTubeTokenOrphan
+	for rows.Next() {
+		var o youtubetypes.YouTubeTokenOrphan
+		if err := rows.Scan(&o.ChannelID, &o.UpdatedAt); err != nil {
+			return nil, err
+		}
+		orphans = append(orphans, o)
+	}
+	return orphans, rows.Err()
+}
+
 // MarkYouTubeOAuthTokenRevoked records a revocation timestamp on the OAuth
 // row. Idempotent: WHERE revoked_at IS NULL means a second call is a no-op
 // and the original timestamp stays intact (audit-friendly). This method
@@ -523,6 +699,6 @@ func (s *SQLiteStore) DeleteChannelAtomic(channelID string) (int64, error) {
 		return 0, fmt.Errorf("delete atomic: commit: %w", err)
 	}
 	return membershipsDeleted, nil
-}
+}	// (Legacy manager tables youtube_manager_channels and youtube_manager_groups have been dropped by migration 008.
+	//  metadata_json column on youtube_channels dropped by migration 014.)
 
-// (Legacy manager tables youtube_manager_channels and youtube_manager_groups have been dropped by migration 008)
