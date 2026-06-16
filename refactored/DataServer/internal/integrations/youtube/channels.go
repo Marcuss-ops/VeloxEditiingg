@@ -2,6 +2,8 @@ package youtube
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"log"
 	"time"
@@ -181,7 +183,13 @@ func (s *Service) Membership(channelID string) (*Channel, error) {
 		return nil, nil
 	}
 	row, err := s.store.GetYouTubeChannel(channelID)
-	if err != nil {
+	// sql.ErrNoRows is the canonical "row absent" sentinel from
+	// *SQLiteStore.QueryRow().Scan(...); treat it as (nil, nil) so the
+	// Membership typed view matches its doc-comment contract ("Returns
+	// (nil, nil) when no row exists"). The legacy mock-based tests hid
+	// this branch because GetYouTubeChannel's mock returned (nil, nil)
+	// directly; the S11 SQLite-fixture cutover pinned it.
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("membership for %s: %w", channelID, err)
 	}
 	if row == nil {
