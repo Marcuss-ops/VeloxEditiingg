@@ -77,18 +77,23 @@ func (pts *PersistedTokenSource) Token() (*oauth2.Token, error) {
 //     so a normal access-token rotation cannot wipe the long-lived credential.
 //   - Expiry is written in RFC3339 when non-zero; empty otherwise.
 //
-// DB-first ordering (S11): this is the single canonical write primitive
-// for refreshed OAuth credentials. Callers MUST persist through this
-// method BEFORE mirroring the new access/refresh/expiry into the
-// in-RAM channel entry under s.mu. The PersistedTokenSource.save
-// closure supplied by GetYouTubeService already follows this rule —
-// it returns a non-nil error on SQL or encrypt failure so the OAuth
-// lib's cache stays coherent with the canonical row. The previous
-// "auto-refresh path logs the SQL error and proceeds" behaviour
-// ("in-RAM access_token is already advanced on channel.AccessToken")
-// has been removed in S11: a divergence between the runtime cache and
-// the canonical youtube_oauth_tokens row no longer goes unnoticed —
-// the [ERR] log inside PersistedTokenSource.Token surfaces it.
+// DB-first ordering (the SQLite-only auto-refresh path): this is the
+// single canonical write primitive for refreshed OAuth credentials.
+// Callers MUST persist through this method BEFORE mirroring the new
+// access/refresh/expiry into the in-RAM channel entry under s.mu.
+// The PersistedTokenSource.save closure supplied by GetYouTubeService
+// already follows this rule — it returns a non-nil error on SQL or
+// encrypt failure so the in-RAM `channel.AccessToken` stays untouched
+// on a failed persist. (PersistedTokenSource.Token always returns the
+// freshly-refreshed `source.Token` to its caller regardless: the
+// OAuth lib's own cache is unaffected, and the next successful
+// refresh repopulates channel.AccessToken from SQL at boot hydration.)
+// The previous "auto-refresh path logs the SQL error and proceeds"
+// behaviour ("in-RAM access_token is already advanced on
+// channel.AccessToken") has been removed: a divergence between the
+// runtime cache and the canonical youtube_oauth_tokens row no longer
+// goes unnoticed — the [ERR] log inside PersistedTokenSource.Token
+// surfaces it.
 func (s *Service) persistRefreshedToken(channelID string, newToken *oauth2.Token) error {
 	if s.store == nil || s.oauthBuf == nil {
 		return nil // degraded mode (no cipher / no store): nothing to persist
