@@ -190,10 +190,13 @@ func (s *Service) Membership(channelID string) (*Channel, error) {
 	if ch := channelFromCanonicalRow(row); ch != nil {
 		return ch, nil
 	}
-	// Defensive fallback: row exists with non-empty channel_id but the
-	// helper couldn't decode any field. Represent the channel by ID only
-	// so the handler still has a stable *Channel return shape.
-	return &Channel{ID: channelID}, nil
+	// The only path to channelFromCanonicalRow returning nil while the row
+	// is non-nil is when row["channel_id"] fails the string type assertion
+	// (DB corruption / schema drift). Returning (nil, nil) here is the
+	// right shape: callers map to their own not-found response, and we do
+	// NOT synthesise a *Channel with the caller's id (which would silently
+	// mask bad data behind an unhelpful 200 + wrong payload).
+	return nil, nil
 }
 
 // BulkMembership returns one *Channel per id, in the same order as the
@@ -222,7 +225,7 @@ func (s *Service) BulkMembership(ids []string) ([]*Channel, error) {
 	return out, nil
 }
 
-// updateChannelMetadata updates metadata fields in SQLite.
+// UpdateChannelMetadata updates metadata fields in SQLite.
 //
 // Typed-update path (S11): the operator may set ONLY language or ONLY
 // title, never both. Each typed column is written via its own

@@ -7,13 +7,13 @@
 Questo endpoint non avvia `generate-from-clips` e non usa una pipeline "clip-first".
 Il flusso reale oggi e:
 
-`POST /api/script/generate-with-images` -> normalizzazione payload -> enqueue job `process_video` -> worker remoto registrato -> render video -> upload risultato.
+`POST /api/script/generate-with-images` -> normalizzazione payload -> enqueue job `process_video` -> worker creator / computer creator -> ritorno payload completo -> worker remoto registrato -> render video -> upload sul canale selezionato.
 
 Il worker non e un id fisso tipo "77": il master usa i `worker_id` registrati/heartbeatati, di solito alias come `host_<ip_sanitizzato>`.
 
 ## Overview
 
-Questo endpoint accetta un payload JSON con scene, immagini, voiceover e parametri gia pronti, normalizza i dati (rilevando automaticamente la durata dell'audio se non specificata), e accoda un job `process_video` per il worker remoto disponibile.
+Questo endpoint accetta un payload JSON con scene, immagini, voiceover e parametri gia pronti, normalizza i dati (rilevando automaticamente la durata dell'audio se non specificata), e accoda un job `process_video` per il worker remoto disponibile. Se nel tuo flusso c'e un passaggio intermedio sul computer creator, va considerato parte della catena tra queue e worker finale.
 
 ## Endpoint
 
@@ -40,6 +40,15 @@ Server (internal/handlers/server/script/handler.go)
 FileQueue → Worker remoto disponibile
   │
   ▼
+Worker creator / computer creator
+  │  • Riceve il job gia normalizzato dalla queue
+  │  • Completa o ritorna payload/asset upstream se necessario
+  │  • Mantiene il flusso coerente prima del rendering finale
+  │
+  ▼
+Ritorno payload completo al master/runtime
+  │
+  ▼
 Worker (RemoteCodex/native/worker-agent-go/pkg/video/native_engine.go)
   │  • Parsa scenes_json → estrae duration_seconds ✅ (fixato)
   │  • Se nessuna scena ha durata → auto-detect ffprobe fallback
@@ -51,7 +60,7 @@ C++ Video Engine (velox_video_engine)
   │  • Genera video con audio + immagini + durata corretta
   │
   ▼
-Worker → Upload risultato su Google Drive
+Worker → Upload risultato sul canale selezionato / Google Drive
   │
   ▼
 Job COMPLETED
@@ -103,7 +112,7 @@ Job COMPLETED
 Esempio: audio 336s, 3 scene → 112s per scena
 ```
 
-Nota: questo endpoint non genera immagini o voiceover in locale. Si aspetta che arrivino gia prodotti da un servizio upstream o gia presenti nel payload.
+Nota: questo endpoint non genera immagini o voiceover in locale. Si aspetta che arrivino gia prodotti da un servizio upstream, dal computer creator, o gia presenti nel payload.
 Non fa partire la logica `generate-from-clips`.
 Il codice che lo implementa oggi vive in:
 - [`DataServer/internal/handlers/server/script/handler.go`](/home/pierone/Pyt/VeloxLEgit/refactored/DataServer/internal/handlers/server/script/handler.go)

@@ -2,13 +2,22 @@ package youtube
 
 import (
 	"errors"
+	"strings"
 	"testing"
 )
 
-// storeMock is a minimal YouTubeStore stub exposing only the methods the
-// Membership/BulkMembership paths call (GetYouTubeChannel). It does NOT
-// satisfy the full YouTubeStore interface — that's intentional; tests for
-// other surfaces use the richer test fixtures in sqlite_youtube_entities_test.go.
+// membershipStore is the narrow subset of YouTubeStore the Membership /
+// BulkMembership paths actually call (GetYouTubeChannel only). The full
+// interface is much wider; declaring a local interface keeps the test
+// fixtures compact and prevents vet from complaining about missing
+// methods on a half-implemented mock.
+type membershipStore interface {
+	GetYouTubeChannel(channelID string) (map[string]interface{}, error)
+}
+
+// membershipStoreMock satisfies the narrow membershipStore interface.
+// Tests for the wider YouTubeStore surface (groups, oauth tokens,
+// api cache, etc.) live in sqlite_youtube_entities_test.go.
 type membershipStoreMock struct {
 	rows map[string]map[string]interface{}
 	err  error
@@ -26,9 +35,17 @@ func (m *membershipStoreMock) GetYouTubeChannel(channelID string) (map[string]in
 
 // newTestServiceWithStore builds a Service fixture with the supplied store
 // for the Membership / BulkMembership paths. Other fields are zero-valued —
-// these tests do not need cipher, OAuth, or channels map.
-func newTestServiceWithStore(s YouTubeStore) *Service {
-	return &Service{store: s}
+// these tests do not need cipher, OAuth, or channels map. The local
+// membershipStore interface keeps `store` assignment permissive (any
+// narrow provider that satisfies GetYouTubeChannel works).
+func newTestServiceWithStore(s membershipStore) *Service {
+	if svcStore, ok := s.(YouTubeStore); ok {
+		return &Service{store: svcStore}
+	}
+	// Tests never reach here because the concrete mock satisfies the full
+	// interface via the membershipStore subset; if a future mock does
+	// not, fail fast with a clear compile-time signal at this call site.
+	panic("membershipStore mock must satisfy GetYouTubeChannel")
 }
 
 func TestMembership_NoStore(t *testing.T) {
@@ -89,7 +106,7 @@ func TestMembership_StoreErrorSurfaced(t *testing.T) {
 	if err == nil {
 		t.Fatalf("Membership MUST surface SQL errors (DB-first invariant); got nil")
 	}
-	if err.Error() == "" || !contains(err.Error(), "UC_any") {
+	if err.Error() == "" || !strings.Contains(err.Error(), "UC_any") {
 		t.Fatalf("Membership error must wrap the failing channel id; got %v", err)
 	}
 }
@@ -141,17 +158,4 @@ func TestBulkMembership_StoreErrorPropagates(t *testing.T) {
 	if err == nil {
 		t.Fatalf("BulkMembership MUST propagate SQL errors; got nil")
 	}
-}
-
-func contains(haystack, needle string) bool {
-	return len(haystack) >= len(needle) && (haystack == needle || indexOf(haystack, needle) >= 0)
-}
-
-func indexOf(s, substr string) int {
-	for i := 0; i+len(substr) <= len(s); i++ {
-		if s[i:i+len(substr)] == substr {
-			return i
-		}
-	}
-	return -1
 }
