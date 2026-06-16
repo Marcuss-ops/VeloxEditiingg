@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"time"
 
 	"golang.org/x/oauth2"
 	"google.golang.org/api/option"
@@ -64,20 +65,56 @@ func (s *Service) GetYouTubeService(ctx context.Context, channelID string) (*you
 	pts := &PersistedTokenSource{
 		source: baseSource,
 		save: func(newToken *oauth2.Token) error {
-			if newToken.AccessToken != channel.AccessToken {
-				s.mu.Lock()
-				channel.AccessToken = newToken.AccessToken
-				channel.Expiry = newToken.Expiry
-				if newToken.RefreshToken != "" {
-					channel.RefreshToken = newToken.RefreshToken
-				}
-				s.mu.Unlock()
-
-				if err := s.authManager.saveChannelToken(channel); err != nil {
-					return err
-				}
-				log.Printf("[OK] YouTube token auto-refreshed and saved for channel: %s", channel.ID)
+			if newToken.AccessToken == channel.AccessToken {
+				return nil
 			}
+			s.mu.Lock()
+			channel.AccessToken = newToken.AccessToken
+			channel.Expiry = newToken.Expiry
+			if newToken.RefreshToken != "" {
+				channel.RefreshToken = newToken.RefreshToken
+			}
+			s.mu.Unlock()
+
+			// Persist refreshed token to SQLite (canonical). Refresh
+			// providers may rotate the refresh_token too — prefer the new
+			// one when present, else preserve the previously-stored encrypted
+			// blob so we don't accidentally wipe it on a normal access-token
+			// rotation.
+			if s.store != nil && s.oauthBuf != nil {
+				accessEnc, err := s.oauthBuf.Encrypt([]byte(newToken.AccessToken))
+				if err != nil {
+					log.Printf("[WARN] youtube refresh: encrypt access token: %v", err)
+				} else {
+					var refreshEnc []byte
+					if newToken.RefreshToken != "" {
+						if e, eerr := s.oauthBuf.Encrypt([]byte(newToken.RefreshToken)); eerr == nil {
+							refreshEnc = e
+						}
+					}
+					if refreshEnc == nil {
+						cur, gerr := s.store.GetYouTubeOAuthToken(channel.ID)
+						if gerr == nil && cur != nil {
+							if v, ok := cur["refresh_token_encrypted"].([]byte); ok {
+								refreshEnc = v
+							}
+						}
+					}
+					var expiry string
+					if !newToken.Expiry.IsZero() {
+						expiry = newToken.Expiry.Format(time.RFC3339)
+					}
+					if err := s.store.UpsertYouTubeOAuthToken(channel.ID, accessEnc, refreshEnc, "Bearer", expiry, "", s.oauthBuf.KeyVersion()); err != nil {
+						log.Printf("[WARN] youtube refresh: persist to sqlite: %v", err)
+					}
+				}
+			}
+
+			// Existing JSON write kept for compat (one release).
+			if err := s.authManager.saveChannelToken(channel); err != nil {
+				return err
+			}
+			log.Printf("[OK] YouTube token auto-refreshed for channel: %s", channel.ID)
 			return nil
 		},
 	}

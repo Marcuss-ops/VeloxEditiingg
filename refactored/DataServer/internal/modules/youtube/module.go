@@ -9,6 +9,7 @@ import (
 	"velox-server/internal/handlers/server/audit"
 	ytHandlers "velox-server/internal/handlers/server/youtube"
 	integrationsYoutube "velox-server/internal/integrations/youtube"
+	"velox-server/internal/secrets/aesgcm"
 	"velox-server/internal/store"
 )
 
@@ -64,6 +65,21 @@ func (m *Module) RegisterRoutes(r *gin.Engine) {
 
 	if m.sqliteStore != nil {
 		youtubeService.GetQuotaManager().SetStore(m.sqliteStore)
+	}
+
+	// Resolve the OAuth secret cipher used by HandleOAuthCallback and the
+	// OAuth auto-refresh path. requireIfMissing=false so an operator
+	// bootstrapping without the env var can still start the server — but
+	// log a loud warning so they know new OAuth writes will persist to
+	// JSON only and the canonical SQLite row will not be populated.
+	cipher, err := aesgcm.LoadFromEnv(false)
+	if err != nil {
+		log.Printf("[YOUTUBE] OAuth secret cipher unavailable: %v — new OAuth callbacks will degrade to JSON-only persistence", err)
+	} else if cipher != nil {
+		youtubeService.SetOAuthSecretCipher(cipher)
+		log.Printf("[OK] YouTube OAuth secret cipher initialised (key_version=%d)", cipher.KeyVersion())
+	} else {
+		log.Printf("[WARN] VELOX_YT_OAUTH_TOKEN_KEY not set: new OAuth callbacks will persist credentials to JSON only, youtube_oauth_tokens will not be populated")
 	}
 
 	if m.dataDir != "" {
