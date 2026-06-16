@@ -4,6 +4,10 @@
 
 Generate a video script from text and optional images. Creates a processing job.
 
+The operational chain is:
+
+`request -> queue -> worker creator / computer creator -> payload returned -> worker remote -> upload to selected channel`
+
 ### Request body
 
 ```json
@@ -31,6 +35,8 @@ Generate a video script from text and optional images. Creates a processing job.
   "message": "Script generation started"
 }
 ```
+
+If the creator stage is enabled in the flow, the job can return an enriched payload before the final worker renders and uploads the video.
 
 ## GET /api/script/jobs/:job_id
 
