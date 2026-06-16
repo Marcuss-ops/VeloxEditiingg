@@ -2,10 +2,10 @@ package youtube
 
 import (
 	"errors"
-	"io"
 	"strings"
 	"testing"
-	"time"
+
+	"velox-server/internal/store/youtubetypes"
 )
 
 // membershipStoreMock is a YouTubeStore stub used only by the Membership /
@@ -16,7 +16,6 @@ import (
 // test path depends on. If a future test in this file accidentally
 // dispatches through one of them, the test will get zero values back
 // rather than a panic — both are safe for this narrowly-scoped test.
-//
 // Wider-surface tests (groups, oauth tokens, API cache) live in
 // sqlite_youtube_entities_test.go with a real SQLite fixture; do not
 // extend this mock for those paths.
@@ -70,10 +69,10 @@ func (m *membershipStoreMock) UpsertYouTubeOAuthToken(channelID string, accessTo
 func (m *membershipStoreMock) ListActiveYouTubeOAuthTokens() ([]map[string]interface{}, error) {
 	return nil, nil
 }
-func (m *membershipStoreMock) AuditYouTubeOAuthTokenOrphans() (interface{}, error) {
+func (m *membershipStoreMock) AuditYouTubeOAuthTokenOrphans() ([]youtubetypes.YouTubeTokenOrphan, error) {
 	return nil, nil
 }
-func (m *membershipStoreMock) ConnectChannelAtomic(channel interface{}, accessTokenEnc, refreshTokenEnc []byte, tokenType, expiry, scopes string, keyVersion int) error {
+func (m *membershipStoreMock) ConnectChannelAtomic(channel *youtubetypes.YouTubeChannelSeed, accessTokenEnc, refreshTokenEnc []byte, tokenType, expiry, scopes string, keyVersion int) error {
 	return nil
 }
 func (m *membershipStoreMock) GetYouTubeOAuthToken(channelID string) (map[string]interface{}, error) {
@@ -130,14 +129,6 @@ func (m *membershipStoreMock) MigrateYouTubeCache(entries map[string]struct {
 }) (int, error) {
 	return 0, nil
 }
-
-// unused-import guards: the file references `errors`, `strings`, `testing`,
-// and `time` only via indirect paths; force-link `io` via a no-op _ = io.EOF
-// to keep the import list minimal if a future contributor deletes the
-// other imports. (Removed in cleanup below if no longer needed.)
-
-var _ = io.EOF
-var _ = time.RFC3339
 
 func newTestServiceWithStore(s YouTubeStore) *Service {
 	return &Service{store: s}
