@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### 🧹 Legacy Cleanup
+- **Orphan diagnostics endpoint removed**: `internal/handlers/server/diagnostics/diagnostics.go` deleted after a 4-step orphan verification (0 imports of `"velox-server/internal/handlers/server/diagnostics"` anywhere in the codebase, 0 module-registry references in `internal/app/registry.go`, 0 wiring in `cmd/server/router.go`, 0 path-string occurrences in any `*.go` file). The exposed `Legacy`/`LegacyExists` JSON telemetry had no downstream consumers outside the audit subsystem (which uses its own internal fields, not from this package). See commit `1ec7c411` for the full commit message and kept-with-reason notes.
+- **Stale build artifacts reclaimed (~107MB)**: physically deleted `bin/velox-server` (56.5MB build from June 14) and `velox-server` (50.3MB build from June 10, project root). Both already covered by `DataServer/bin/` + `DataServer/velox-server` patterns in `.gitignore` (repo root) so fresh clones do not surface them as untracked noise.
+- **Stale backups reclaimed**: `data/backups/` (~7 `*.tar.gz` from June 7-10) physically deleted. Already covered by the `DataServer/data/backups/` pattern in `.gitignore`.
+- **Cleanup pass intent**: continued removal of legacy/dead code paths while preserving intentional fallback behavior. The cleanup explicitly **kept** unchanged: SQL migration files (`internal/store/migrations/0XX_*.sql`, sequential SQLite migrations required for fresh-DB installs); commented `legacy`/`backward compat` references in `config/config.go`, `integrations/youtube/models.go`, `workers/auth.go`, etc. (intentional fallbacks actively exercised by tests such as `data_layer_test.go`); `RemoteCodex/*` (separate codebase). Runtime state dirs (`DataServer/data/{analytics,dark_editor,drive,jobs,secrets,worker_downloads,youtube}/`, `completed_videos/`, `secrets/`, `drive/{credentials,tokens}/`) and database files (`*.db`/`*.db-shm`/`*.db-wal`) are already covered in `.gitignore`.
+- **Validation gate**: `go build ./...` + `go vet ./...` + test sweep on `internal/audit/...` + `internal/handlers/...` + `internal/logging/...` + `internal/store/...` + `internal/workers/...` — all green pre/post deletion.
+
 ## 2026-06-14 — v1.1.0
 
 ### 🚀 SQLite Persistence Migration
