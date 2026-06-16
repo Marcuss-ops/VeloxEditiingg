@@ -11,6 +11,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"velox-server/internal/config"
+	"velox-server/internal/creatorflow"
 	"velox-server/internal/jobs/enqueue"
 	"velox-server/internal/queue"
 	"velox-server/internal/remoteengine"
@@ -128,24 +129,21 @@ func PipelineGenerate(cfg *config.Config, q *queue.FileQueue) gin.HandlerFunc {
 
 func forwardPipelineResultToWorker(ctx context.Context, q *queue.FileQueue, result map[string]interface{}) (map[string]interface{}, error) {
 	pipelineLog("FORWARD: building worker payload...")
-	jobPayload, err := enqueue.BuildPipelinePayload(result)
+	enqueued, err := creatorflow.ForwardCompletedResult(ctx, q, result)
 	if err != nil {
-		pipelineLog("FORWARD: BuildPipelinePayload FAILED: %v", err)
+		pipelineLog("FORWARD: ForwardCompletedResult FAILED: %v", err)
 		return nil, err
 	}
 
-	payloadJSON, _ := json.Marshal(jobPayload)
-	if len(payloadJSON) > 500 {
-		pipelineLog("FORWARD: payload built size=%d bytes title=%s scenes=%v",
-			len(payloadJSON), jobPayload["title"], jobPayload["scene_count"])
-	} else {
-		pipelineLog("FORWARD: payload built: %s", string(payloadJSON))
-	}
-
-	enqueued, err := enqueue.EnqueueSceneVideoJob(ctx, q, jobPayload)
-	if err != nil {
-		pipelineLog("FORWARD: EnqueueSceneVideoJob FAILED: %v", err)
-		return nil, err
+	jobPayload, buildErr := enqueue.BuildPipelinePayload(result)
+	if buildErr == nil {
+		payloadJSON, _ := json.Marshal(jobPayload)
+		if len(payloadJSON) > 500 {
+			pipelineLog("FORWARD: payload built size=%d bytes title=%s scenes=%v",
+				len(payloadJSON), jobPayload["title"], jobPayload["scene_count"])
+		} else {
+			pipelineLog("FORWARD: payload built: %s", string(payloadJSON))
+		}
 	}
 	pipelineLog("FORWARD: enqueued to Velox queue job_id=%v", enqueued["job_id"])
 	return enqueued, nil

@@ -89,8 +89,24 @@ func (h *YouTubeHandlers) ListGroups(c *gin.Context) {
 		// the SPA doesn't see a phantom {"id":"","title":""} entry.
 		channels, err := h.service.BulkMembership(g.Channels)
 		if err != nil {
-			log.Printf("[WARN] ListGroups: bulk membership fetch failed for group %s: %v (returning empty channel slice)", g.Name, err)
-			channels = nil
+			// DB-first invariant: SQL failures MUST be surfaced, not
+			// silently swallowed (consistent with TestMembership_StoreError
+			// Surfaced in commit 8e74bd99 and the persistRefreshedToken
+			// doc-comment corrections in 40a31421). Returning 500 lets
+			// the SPA distinguish "0 groups" from "SQL failed" rather
+			// than render a misleading empty list. The pre-migration
+			// h.storage.ListGroups() path also discarded the error but
+			// only because its caller had no better choice on a list
+			// endpoint; the S11 path has a typed error to surface.
+			log.Printf("[ERR] ListGroups: bulk membership fetch failed for group %s: %v", g.Name, err)
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"ok":         false,
+				"error":      fmt.Sprintf("bulk membership fetch for group %s failed: %v", g.Name, err),
+				"group_name": g.Name,
+			})
+			return
+		} else if channels == nil {
+			channels = []*youtube.Channel{}
 		}
 
 		groupData := map[string]interface{}{
