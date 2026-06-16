@@ -76,6 +76,9 @@ func (m *membershipStoreMock) ListActiveYouTubeOAuthTokens() ([]map[string]inter
 func (m *membershipStoreMock) AuditYouTubeOAuthTokenOrphans() ([]youtubetypes.YouTubeTokenOrphan, error) {
 	return nil, nil
 }
+func (m *membershipStoreMock) ConnectChannelAtomic(channel *youtubetypes.YouTubeChannelSeed, accessTokenEnc, refreshTokenEnc []byte, tokenType, expiry, scopes string, keyVersion int) error {
+	return nil
+}
 func (m *membershipStoreMock) GetYouTubeOAuthToken(channelID string) (map[string]interface{}, error) {
 	return nil, nil
 }

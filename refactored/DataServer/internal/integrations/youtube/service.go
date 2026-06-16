@@ -162,6 +162,7 @@ type ServiceStore interface {
 	UpsertYouTubeOAuthToken(channelID string, accessTokenEnc, refreshTokenEnc []byte, tokenType, expiry, scopes string, keyVersion int) error
 	ListActiveYouTubeOAuthTokens() ([]map[string]interface{}, error)
 	AuditYouTubeOAuthTokenOrphans() ([]youtubetypes.YouTubeTokenOrphan, error)
+	ConnectChannelAtomic(channel *youtubetypes.YouTubeChannelSeed, accessTokenEnc, refreshTokenEnc []byte, tokenType, expiry, scopes string, keyVersion int) error
 	GetYouTubeOAuthToken(channelID string) (map[string]interface{}, error)
 	MarkYouTubeOAuthTokenRevoked(channelID string) error
 
@@ -213,7 +214,16 @@ type Service struct {
 // non-OAuth paths can still construct *Service via the struct literal
 // directly (oauthBuf field), which keeps the unit tests independent
 // of this fail-closed gate.
-func NewService(cfg *ServiceConfig, store ServiceStore, cipher *aesgcm.Encryptor) (*Service, error) {
+// NewService takes the wider YouTubeStore (not the narrower ServiceStore)
+// because Cache.SetStore / NewCache both need the broader surface
+// (GetYouTubeCache / SetYouTubeCache / MigrateYouTubeCache etc. live
+// there). The assignment `s.store = store` is a structural narrowing
+// inside the constructor — Go recognises that any YouTubeStore value
+// also satisfies the ServiceStore interface at runtime via the same
+// duck-typed subtyping rule module.go (passing *SQLiteStore) already
+// relies on. Reverse direction (ServiceStore -> YouTubeStore) does NOT
+// type-check because ServiceStore lacks Cache methods.
+func NewService(cfg *ServiceConfig, store YouTubeStore, cipher *aesgcm.Encryptor) (*Service, error) {
 	if cfg.TokensDir == "" {
 		if env := config.GetYouTubeTokensDir(); env != "" {
 			cfg.TokensDir = env
