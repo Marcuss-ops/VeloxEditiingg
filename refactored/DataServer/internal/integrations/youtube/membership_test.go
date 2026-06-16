@@ -8,21 +8,34 @@ import (
 	"velox-server/internal/store/youtubetypes"
 )
 
-// membershipStoreMock is a YouTubeStore stub used only by the Membership /
+// membershipStoreMock is a ServiceStore stub used only by the Membership /
 // BulkMembership tests in this file. It deliberately implements only the
-// GetYouTubeChannel method usefully; every other YouTubeStore method is
-// stubbed with a zero-returning body so the type SATISFIES the wider
-// interface at compile time but does NOT introduce real behaviour the
-// test path depends on. If a future test in this file accidentally
-// dispatches through one of them, the test will get zero values back
-// rather than a panic — both are safe for this narrowly-scoped test.
+// GetYouTubeChannel method usefully; every other ServiceStore method is
+// stubbed with a zero-returning body so the type SATISFIES the narrower
+// ServiceStore interface (compile-time verified by the var _ assertion
+// below) but does NOT introduce real behaviour the test path depends on.
+// If a future test in this file accidentally dispatches through one of
+// them, the test will get zero values back rather than a panic — both are
+// safe for this narrowly-scoped test.
+//
 // Wider-surface tests (groups, oauth tokens, API cache) live in
 // sqlite_youtube_entities_test.go with a real SQLite fixture; do not
 // extend this mock for those paths.
+//
+// Keep this mock in lockstep with the ServiceStore interface in service.go —
+// if ServiceStore gains or loses a method, this mock must too, or the
+// assertion below fails to build.
 type membershipStoreMock struct {
 	rows map[string]map[string]interface{}
 	err  error
 }
+
+// Compile-time assertion: *membershipStoreMock must satisfy ServiceStore.
+// Single guard replaces the 30-stubs-everywhere pattern now that Service.body
+// only references a ServiceStore subset of YouTubeStore. The build fails
+// the moment a new s.store.X call lands in Service and the matching stub
+// is not added here.
+var _ ServiceStore = (*membershipStoreMock)(nil)
 
 func (m *membershipStoreMock) GetYouTubeChannel(channelID string) (map[string]interface{}, error) {
 	if m.err != nil {
@@ -34,7 +47,7 @@ func (m *membershipStoreMock) GetYouTubeChannel(channelID string) (map[string]in
 	return nil, nil
 }
 
-// --- Zero-return stubs below. Do not call these from the test bodies. ---
+// --- Zero-return stubs below. Keep in lockstep with ServiceStore in service.go. ---
 
 func (m *membershipStoreMock) ListYouTubeChannels() ([]map[string]interface{}, error) {
 	return nil, nil
@@ -48,16 +61,7 @@ func (m *membershipStoreMock) UpdateChannelTitle(channelID, title string) error 
 func (m *membershipStoreMock) UpdateChannelLanguage(channelID, language string) error {
 	return nil
 }
-func (m *membershipStoreMock) UpdateChannelNotes(channelID, notes string) error {
-	return nil
-}
-func (m *membershipStoreMock) UpdateChannelStats(channelID string, viewCount, subCount int64, lastSyncAt string) error {
-	return nil
-}
 func (m *membershipStoreMock) UpdateYouTubeChannelMetadata(channelID, title, thumbnailURL string) error {
-	return nil
-}
-func (m *membershipStoreMock) DeleteYouTubeChannel(channelID string) error {
 	return nil
 }
 func (m *membershipStoreMock) DeleteChannelAtomic(channelID string) (int64, error) {
@@ -71,9 +75,6 @@ func (m *membershipStoreMock) ListActiveYouTubeOAuthTokens() ([]map[string]inter
 }
 func (m *membershipStoreMock) AuditYouTubeOAuthTokenOrphans() ([]youtubetypes.YouTubeTokenOrphan, error) {
 	return nil, nil
-}
-func (m *membershipStoreMock) ConnectChannelAtomic(channel *youtubetypes.YouTubeChannelSeed, accessTokenEnc, refreshTokenEnc []byte, tokenType, expiry, scopes string, keyVersion int) error {
-	return nil
 }
 func (m *membershipStoreMock) GetYouTubeOAuthToken(channelID string) (map[string]interface{}, error) {
 	return nil, nil
@@ -102,32 +103,11 @@ func (m *membershipStoreMock) RemoveChannelFromGroupV2(groupID int64, channelID 
 func (m *membershipStoreMock) DeleteYouTubeGroupChannelsByGroupID(groupID int64) error {
 	return nil
 }
-func (m *membershipStoreMock) DeleteYouTubeGroupChannelsByChannelID(channelID string) error {
-	return nil
-}
 func (m *membershipStoreMock) ListGroupChannelsV2(groupID int64) ([]string, error) {
 	return nil, nil
 }
 func (m *membershipStoreMock) ListAllGroupMembershipsV2() ([]map[string]interface{}, error) {
 	return nil, nil
-}
-func (m *membershipStoreMock) GetYouTubeCache(key string) (int64, string, error) {
-	return 0, "", nil
-}
-func (m *membershipStoreMock) SetYouTubeCache(key string, timestamp int64, dataJSON string) error {
-	return nil
-}
-func (m *membershipStoreMock) CleanupYouTubeCache(maxAge int64) (int64, error) {
-	return 0, nil
-}
-func (m *membershipStoreMock) ClearYouTubeCache() error {
-	return nil
-}
-func (m *membershipStoreMock) MigrateYouTubeCache(entries map[string]struct {
-	Timestamp int64       `json:"timestamp"`
-	Data      interface{} `json:"data"`
-}) (int, error) {
-	return 0, nil
 }
 
 // --- Tests ---

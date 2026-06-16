@@ -26,19 +26,26 @@ import (
 // outside those paths do not exist (see channels.go, which was rewritten
 // to drop the same os/path/filepath/strings imports).
 
-// YouTubeStore defines the interface for SQLite-backed YouTube persistence,
-// avoiding a direct import of the store package.
-// Uses only canonical tables (youtube_channels, youtube_groups_v2, youtube_group_channels).
+// YouTubeStore defines the full SQLite-backed YouTube persistence
+// interface, avoiding a direct import of the store package. Uses only
+// canonical tables (youtube_channels, youtube_groups_v2,
+// youtube_group_channels, youtube_cache).
 //
 // Relationship to YouTubeRepository (repository.go): YouTubeStore is the
-// *narrow* SQL-only contract every existing caller (Service.store field,
-// module wiring, tests, handlers) depends on. *SQLiteStore satisfies it
-// today. YouTubeRepository is the wider single canonical interface that
-// embeds YouTubeStore and adds the four in-memory methods (LoadData,
-// SaveData, syncGroupLocked, saveAllReconcile). Code on this branch keeps
-// depending on YouTubeStore; new code MUST depend on YouTubeRepository
-// directly. A future compose(...) helper will yield a single concrete
-// type satisfying both interfaces (YouTubeRepository ⊃ YouTubeStore).
+// SQL-only contract Code on this branch keeps depending on. *SQLiteStore
+// satisfies it today. YouTubeRepository is the wider single canonical
+// interface that embeds YouTubeStore and adds the four in-memory
+// methods (LoadData, SaveData, syncGroupLocked, saveAllReconcile).
+// Code on this branch keeps depending on YouTubeStore; new code MUST
+// depend on YouTubeRepository directly. A future compose(...) helper
+// will yield a single concrete type satisfying both interfaces
+// (YouTubeRepository ⊃ YouTubeStore).
+//
+// Module-level consumers (Cache.SetStore, the boot hydrator wiring,
+// the quota manager) all depend on the full YouTubeStore. The Service
+// runtime depends on a STRICT SUBSET — see ServiceStore below. Module
+// wiring hands a wider YouTubeStore into NewService which satisfies
+// ServiceStore implicitly via Go's structural interface typing.
 type YouTubeStore interface {
 	// Canonical: YouTube Channels (youtube_channels table)
 	ListYouTubeChannels() ([]map[string]interface{}, error)
@@ -124,6 +131,11 @@ type YouTubeStore interface {
 	}) (int, error)
 }
 
+// ServiceStore mirrors the full store contract used by Service so the
+// service can be wired with a *SQLiteStore without extra adapters.
+type ServiceStore interface {
+	YouTubeStore
+}
 
 // Service provides YouTube API functionality
 type Service struct {
@@ -133,7 +145,7 @@ type Service struct {
 	groups      map[string]*ChannelGroup
 	mu          sync.RWMutex
 	cache       *Cache
-	store       YouTubeStore
+	store       ServiceStore
 
 	// oauthBuf holds the AES-GCM cipher used by HandleOAuthCallback and
 	// the OAuth auto-refresh path to encrypt credentials before writing
@@ -161,7 +173,7 @@ type Service struct {
 // non-OAuth paths can still construct *Service via the struct literal
 // directly (oauthBuf field), which keeps the unit tests independent
 // of this fail-closed gate.
-func NewService(cfg *ServiceConfig, store YouTubeStore, cipher *aesgcm.Encryptor) (*Service, error) {
+func NewService(cfg *ServiceConfig, store ServiceStore, cipher *aesgcm.Encryptor) (*Service, error) {
 	if cfg.TokensDir == "" {
 		if env := config.GetYouTubeTokensDir(); env != "" {
 			cfg.TokensDir = env
@@ -314,26 +326,26 @@ func (s *Service) RevokeToken(ctx context.Context, channelID string) error {
 		if err := s.revokeAtGoogle(ctx, ch.AccessToken); err != nil {
 			log.Printf("[WARN] revoke: Google endpoint POST failed for %s: %v", channelID, err)
 		}
-	}		// Step 2: atomic SQLite mark-revoked. This is THE single source-of-truth
-		// step. A non-nil error here means the credential is still considered
-		// active server-side, so we return the error WITHOUT the RAM delete
-		// happening so the operator can retry on the SAME cached state.
-		if s.store != nil {
-			if err := s.store.MarkYouTubeOAuthTokenRevoked(channelID); err != nil {
-				return fmt.Errorf("revoke: persist revoked_at to sqlite: %w", err)
-			}
+	} // Step 2: atomic SQLite mark-revoked. This is THE single source-of-truth
+	// step. A non-nil error here means the credential is still considered
+	// active server-side, so we return the error WITHOUT the RAM delete
+	// happening so the operator can retry on the SAME cached state.
+	if s.store != nil {
+		if err := s.store.MarkYouTubeOAuthTokenRevoked(channelID); err != nil {
+			return fmt.Errorf("revoke: persist revoked_at to sqlite: %w", err)
 		}
+	}
 
-		// JSON-token-file delete is gone (step S6 verbatim). SQLite
-		// owns the credential; any orphan JSON on disk is harmless
-		// because the boot hydrator (loadOAuthChannelsFromSQLite)
-		// never reads from `account_*.json` and the boot never reaches
-		// it now that requireIfMissing=true is in effect.
+	// JSON-token-file delete is gone (step S6 verbatim). SQLite
+	// owns the credential; any orphan JSON on disk is harmless
+	// because the boot hydrator (loadOAuthChannelsFromSQLite)
+	// never reads from `account_*.json` and the boot never reaches
+	// it now that requireIfMissing=true is in effect.
 
-		// Step 4: in-memory delete only after the canonical store has accepted
-		// the revocation, so concurrent readers don't see a half-revoked
-		// channel. Done under the write lock so the map iteration order is
-		// deterministic in tests.
+	// Step 4: in-memory delete only after the canonical store has accepted
+	// the revocation, so concurrent readers don't see a half-revoked
+	// channel. Done under the write lock so the map iteration order is
+	// deterministic in tests.
 	s.mu.Lock()
 	delete(s.channels, channelID)
 	s.mu.Unlock()
