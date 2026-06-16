@@ -23,6 +23,14 @@ type YouTubeStore interface {
 	ListYouTubeChannels() ([]map[string]interface{}, error)
 	GetYouTubeChannel(channelID string) (map[string]interface{}, error)
 	UpsertYouTubeChannel(channelID, title, displayName, channelURL, thumbnailURL, language, notes string, viewCount, subCount int64, addedAt, lastSyncAt, metadataJSON string) error
+	// UpdateYouTubeChannelMetadata persists a YouTube-API metadata refresh into
+	// youtube_channels targeting only title and thumbnail. Distinct from the
+	// wide UpsertYouTubeChannel above: refresh never writes metadata_json nor
+	// any user-edited column (display_name, language, view/sub counts, notes,
+	// channel_url), so it cannot silently wipe them. Use this from
+	// Service.RefreshChannelMetadata; use UpsertYouTubeChannel for initial
+	// channel ingest.
+	UpdateYouTubeChannelMetadata(channelID, title, thumbnailURL string) error
 	DeleteYouTubeChannel(channelID string) error
 
 	// Canonical: YouTube Groups V2 (youtube_groups_v2 + youtube_group_channels)
