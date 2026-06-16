@@ -547,11 +547,23 @@ func (s *SQLiteStore) ListActiveYouTubeOAuthTokens() ([]map[string]interface{}, 
 // typed error if either leg of the transaction fails so the operator sees
 // a single failure rather than half-persisted state.
 //
-// This is the canonical entry point for "first-time connect". The previous
-// HandleOAuthCallback path performed two separate non-transactional calls
-// (UpsertYouTubeOAuthToken alone) which would fail with a FK violation when
-// the OAuth row tried to insert into youtube_oauth_tokens before any
-// youtube_channels row existed. ConnectChannelAtomic fixes that.
+// This is the canonical entry point for both "first-time connect" and
+// "explicit re-auth" (a user redoing OAuth on a previously-revoked channel).
+// The previous HandleOAuthCallback path performed two separate
+// non-transactional calls (UpsertYouTubeOAuthToken alone) which would fail
+// with a FK violation when the OAuth row tried to insert into
+// youtube_oauth_tokens before any youtube_channels row existed.
+// ConnectChannelAtomic fixes that.
+//
+// On the OAuth leg's UPDATE branch, revoked_at is reset to NULL. This is
+// the explicit new-auth semantic: a user who revoked a channel and then
+// chose to reconnect MUST be reactivated by the new grant, otherwise
+// ListActiveYouTubeOAuthTokens (the boot hydrator and the validate-all
+// route) would silently filter the row out after every restart and the
+// operator would be stuck in "channels look active but tokens don't
+// load" limbo. A normal token refresh does NOT call this method; it goes
+// through UpsertYouTubeOAuthToken which preserves revoked_at verbatim.
+//
 // Both legs run before any RAM update so a partial failure leaves the DB
 // consistent with the operator-visible error.
 func (s *SQLiteStore) ConnectChannelAtomic(channel *youtubetypes.YouTubeChannelSeed, accessTokenEnc, refreshTokenEnc []byte, tokenType, expiry, scopes string, keyVersion int) error {
@@ -590,23 +602,27 @@ func (s *SQLiteStore) ConnectChannelAtomic(channel *youtubetypes.YouTubeChannelS
 		addedAt, channel.LastSyncAt, now, now,
 	); err != nil {
 		return fmt.Errorf("connect atomic: upsert channel: %w", err)
-	}
-
-	// Always hire the OAuth leg in the same transaction. A "key refresh on
-	// existing channel" path also uses this entry point: the channel
-	// upsert is a no-op when the row already exists.
+	}	// Always fire the OAuth leg in the same transaction. A re-auth flow
+	// (user redoing OAuth on an existing channel) also enters through
+	// here: the channel upsert is a no-op when the row already exists,
+	// and the OAuth leg's UPDATE branch below resets revoked_at so the
+	// channel is reactivated on the next boot hydrator pass.
 	if _, err := tx.Exec(
 		`INSERT INTO youtube_oauth_tokens
-		 (channel_id, access_token_encrypted, refresh_token_encrypted, token_type, expiry, scopes, key_version, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-		 ON CONFLICT(channel_id) DO UPDATE SET
-		   access_token_encrypted=excluded.access_token_encrypted,
-		   refresh_token_encrypted=excluded.refresh_token_encrypted,
-		   token_type=excluded.token_type,
-		   expiry=excluded.expiry,
-		   scopes=excluded.scopes,
-		   key_version=excluded.key_version,
-		   updated_at=excluded.updated_at`,
+	 (channel_id, access_token_encrypted, refresh_token_encrypted, token_type, expiry, scopes, key_version, created_at, updated_at)
+	 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	 ON CONFLICT(channel_id) DO UPDATE SET
+	   access_token_encrypted=excluded.access_token_encrypted,
+	   refresh_token_encrypted=excluded.refresh_token_encrypted,
+	   token_type=excluded.token_type,
+	   expiry=excluded.expiry,
+	   scopes=excluded.scopes,
+	   key_version=excluded.key_version,
+	   -- Explicit re-auth resets revocation (see doc comment above).
+	   -- Cannot be silently wiped by UpsertYouTubeOAuthToken (the
+	   -- refresh path) because that method never touches revoked_at.
+	   revoked_at=NULL,
+	   updated_at=excluded.updated_at`,
 		channel.ChannelID, accessTokenEnc, refreshTokenEnc, tokenType, expiry, scopes, keyVersion, now, now,
 	); err != nil {
 		return fmt.Errorf("connect atomic: upsert oauth token: %w", err)

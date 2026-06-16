@@ -18,7 +18,7 @@ func TestYouTubeChannelCRUD(t *testing.T) {
 
 	err := s.UpsertYouTubeChannel("UC_test123", "Test Channel", "Test Display", "https://youtube.com/@test",
 		"https://img.example.com/thumb.jpg", "en", "A test channel", 1500, 500,
-		"2024-01-01T00:00:00Z", "2024-06-01T00:00:00Z", `{"source": "import"}`)
+		"2024-01-01T00:00:00Z", "2024-06-01T00:00:00Z")
 	if err != nil {
 		t.Fatalf("UpsertYouTubeChannel failed: %v", err)
 	}
@@ -61,7 +61,7 @@ func TestYouTubeChannelUpdatePreservesAddedAt(t *testing.T) {
 
 	// Update title and stats, pass empty added_at — should preserve original
 	s.UpsertYouTubeChannel("UC_test456", "Updated Title", "", "", "", "", "", 200, 100,
-		"", "2024-06-15T00:00:00Z", `{"updated": true}`)
+		"", "2024-06-15T00:00:00Z")
 
 	ch, err := s.GetYouTubeChannel("UC_test456")
 	if err != nil {
@@ -130,13 +130,13 @@ func TestYouTubeChannelUpdateMetadataRefresh(t *testing.T) {
 	// Seed with rich data so we can assert WHICH columns the refresh
 	// changes vs which it preserves. Refresh is metadata-only: title and
 	// thumbnail. User-edited columns (display_name, language, notes,
-	// channel_url, view_count, subscriber_count, metadata_json) MUST
-	// NOT be touched.
+	// channel_url, view_count, subscriber_count) MUST NOT be touched.
+	// (metadata_json was dropped by migration 014; no longer a column.)
 	if err := s.UpsertYouTubeChannel(
 		"UC_refresh_test", "Original Title", "Original Display",
 		"https://youtube.com/@orig", "https://img.example.com/orig.jpg",
 		"en", "user notes", 1234, 567,
-		"2024-01-01T00:00:00Z", "2024-01-01T00:00:00Z", `{"user_meta": true}`,
+		"2024-01-01T00:00:00Z", "2024-01-01T00:00:00Z",
 	); err != nil {
 		t.Fatalf("seed UpsertYouTubeChannel: %v", err)
 	}
@@ -175,9 +175,6 @@ func TestYouTubeChannelUpdateMetadataRefresh(t *testing.T) {
 	if got["subscriber_count"] != int64(567) {
 		t.Errorf("subscriber_count was clobbered: got %v, want 567", got["subscriber_count"])
 	}
-	if got["metadata_json"] != `{"user_meta": true}` {
-		t.Errorf("metadata_json was clobbered: got %v, want preserved user_meta JSON", got["metadata_json"])
-	}
 	if lastSyncAt, _ := got["last_sync_at"].(string); lastSyncAt == "" {
 		t.Errorf("last_sync_at is empty after refresh; want recent RFC3339 timestamp")
 	}
@@ -188,7 +185,7 @@ func TestYouTubeChannelEmptyDefaultValues(t *testing.T) {
 	defer s.Close()
 
 	// Insert with minimal fields
-	s.UpsertYouTubeChannel("UC_minimal", "", "", "", "", "", "", 0, 0, "", "", "")
+	s.UpsertYouTubeChannel("UC_minimal", "", "", "", "", "", "", 0, 0, "", "")
 
 	ch, err := s.GetYouTubeChannel("UC_minimal")
 	if err != nil {
@@ -886,7 +883,6 @@ func TestConnectChannelAtomic_FirstTimeConnect(t *testing.T) {
 //   - notes/language/view_count/subscriber_count/display_name/channel_url
 //     are preserved verbatim
 //   - added_at and created_at are preserved (they are NOT in the UPDATE SET)
-//   - metadata_json is preserved (not in the UPDATE SET)
 func TestConnectChannelAtomic_PreservesUserEdits(t *testing.T) {
 	s := openTestDB(t)
 	defer s.Close()
@@ -901,7 +897,7 @@ func TestConnectChannelAtomic_PreservesUserEdits(t *testing.T) {
 		"UC_edits", "Original Title", "Operator Label",
 		"https://youtube.com/@original", "https://img.example.com/orig.jpg",
 		"it", "operator-curated notes", 99999, 5555,
-		"2025-01-01T00:00:00Z", "2025-01-01T00:00:00Z", `{"curated": true}`,
+		"2025-01-01T00:00:00Z", "2025-01-01T00:00:00Z",
 	); err != nil {
 		t.Fatalf("seed UpsertYouTubeChannel: %v", err)
 	}
@@ -924,7 +920,6 @@ func TestConnectChannelAtomic_PreservesUserEdits(t *testing.T) {
 	origChannelURL, _ := before["channel_url"].(string)
 	origViewCount := before["view_count"].(int64)
 	origSubCount := before["subscriber_count"].(int64)
-	origMeta, _ := before["metadata_json"].(string)
 	if origAddedAt == "" {
 		t.Fatalf("pre: added_at must be set")
 	}
@@ -993,17 +988,13 @@ func TestConnectChannelAtomic_PreservesUserEdits(t *testing.T) {
 		t.Errorf("subscriber_count was clobbered: got %d, want preserved %d", got, origSubCount)
 	}
 
-	// added_at / created_at / metadata_json SHOULD be preserved too
-	// (none of them are in the UPDATE SET; metadata_json preservation
-	// is implicit because the column is omitted from the SET clause).
+	// added_at / created_at SHOULD be preserved (neither is in the
+	// UPDATE SET clause).
 	if after["added_at"] != origAddedAt {
 		t.Errorf("added_at was clobbered: got %v, want preserved %s", after["added_at"], origAddedAt)
 	}
 	if after["created_at"] != origCreatedAt {
 		t.Errorf("created_at was clobbered: got %v, want preserved %s", after["created_at"], origCreatedAt)
-	}
-	if after["metadata_json"] != origMeta {
-		t.Errorf("metadata_json was clobbered: got %v, want preserved %q", after["metadata_json"], origMeta)
 	}
 
 	// OAuth blob side: the atomic call SHOULD have updated the new
@@ -1030,6 +1021,222 @@ func TestConnectChannelAtomic_PreservesUserEdits(t *testing.T) {
 		t.Errorf("updated_at is empty after re-auth")
 	} else if updatedAfter < origCreatedAt {
 		t.Errorf("updated_at did not advance: created_at=%s updated_at=%s", origCreatedAt, updatedAfter)
+	}
+}
+
+// ============================================================
+// TestUpsertYouTubeOAuthToken_PreservesRevokedAt
+// ============================================================
+//
+// Converse pin to TestConnectChannelAtomic_ResetsRevokedAtOnReauth.
+// The OAuth-leg UPDATE in ConnectChannelAtomic resets revoked_at to
+// NULL because that path is the explicit new-auth flow (a user
+// redoing OAuth must be reactivated). The auto-refresh path goes
+// through UpsertYouTubeOAuthToken, which must NOT reset revoked_at
+// — otherwise a routine token refresh would silently un-revoke a
+// credential an operator explicitly revoked. This test pins that
+// invariant by calling UpsertYouTubeOAuthToken on a previously-
+// revoked channel and asserting revoked_at is preserved verbatim.
+func TestUpsertYouTubeOAuthToken_PreservesRevokedAt(t *testing.T) {
+	s := openTestDB(t)
+	defer s.Close()
+	_, _ = s.db.Exec("PRAGMA foreign_keys = ON")
+
+	const channel = "UC_refresh_preserves_revoke"
+	if err := s.UpsertYouTubeChannel(channel, "Refresh Preserves Revoke", "", "", "", "", "", 0, 0, "", ""); err != nil {
+		t.Fatalf("seed channel: %v", err)
+	}
+	if err := s.UpsertYouTubeOAuthToken(channel, []byte("orig-access"), []byte("orig-refresh"), "Bearer", "2026-01-01T00:00:00Z", "scope.read", 1); err != nil {
+		t.Fatalf("seed oauth: %v", err)
+	}
+
+	// Mark the row revoked; persistRefreshedToken will later be called
+	// on this row to simulate a token refresh.
+	if err := s.MarkYouTubeOAuthTokenRevoked(channel); err != nil {
+		t.Fatalf("MarkYouTubeOAuthTokenRevoked: %v", err)
+	}
+	row, _ := s.GetYouTubeOAuthToken(channel)
+	if row == nil {
+		t.Fatal("setup: expected oauth row present after revoke")
+	}
+	originalRevokedAt, _ := row["revoked_at"].(string)
+	if originalRevokedAt == "" {
+		t.Fatal("setup: revoked_at empty after MarkRevoked")
+	}
+	originalUpdatedAt, _ := row["updated_at"].(string)
+	if originalUpdatedAt == "" {
+		t.Fatal("setup: updated_at empty")
+	}
+
+	// Simulate the refresh path: new encrypted access blob, same key
+	// version, new expiry. The other columns that persistRefreshedToken
+	// updates (refresh_token blob, scopes) are exercised too.
+	time.Sleep(20 * time.Millisecond) // ensure updated_at advances
+	newAccess := []byte("refresh-access-encrypted")
+	newRefresh := []byte("refresh-rotated-encrypted")
+	if err := s.UpsertYouTubeOAuthToken(channel, newAccess, newRefresh, "Bearer", "2030-12-31T23:59:59Z", "scope.read", 1); err != nil {
+		t.Fatalf("Upsert after revoke: %v", err)
+	}
+
+	row, _ = s.GetYouTubeOAuthToken(channel)
+	if row == nil {
+		t.Fatal("post: expected oauth row to remain after refresh upsert")
+	}
+
+	// The crucial invariant: revoked_at is NOT touched by the refresh path.
+	if gotRevokedAt, _ := row["revoked_at"].(string); gotRevokedAt != originalRevokedAt {
+		t.Errorf("revoked_at was reset on refresh path (was %q, now %q); auto-refresh MUST NOT un-revoke",
+			originalRevokedAt, gotRevokedAt)
+	}
+
+	// Sanity: the access blob did get rotated (this is the whole point
+	// of the refresh), so the test is exercising the right call.
+	if !bytes.Equal(row["access_token_encrypted"].([]byte), newAccess) {
+		t.Errorf("access blob not rotated by refresh: got %v, want %v", row["access_token_encrypted"], newAccess)
+	}
+	if !bytes.Equal(row["refresh_token_encrypted"].([]byte), newRefresh) {
+		t.Errorf("refresh blob not rotated by refresh: got %v, want %v", row["refresh_token_encrypted"], newRefresh)
+	}
+	if row["expiry"] != "2030-12-31T23:59:59Z" {
+		t.Errorf("expiry not updated by refresh: got %v, want 2030-12-31T23:59:59Z", row["expiry"])
+	}
+	if upd, _ := row["updated_at"].(string); upd == "" {
+		t.Error("updated_at is empty after refresh")
+	} else if upd < originalUpdatedAt {
+		t.Errorf("updated_at did not advance (was %s, now %s)", originalUpdatedAt, upd)
+	}
+
+	// And the boot hydrator's view: ListActiveYouTubeOAuthTokens must
+	// still skip this channel even though the access blob was rotated.
+	active, err := s.ListActiveYouTubeOAuthTokens()
+	if err != nil {
+		t.Fatalf("ListActive: %v", err)
+	}
+	for _, r := range active {
+		if r["channel_id"] == channel {
+			t.Errorf("ListActiveYouTubeOAuthTokens should still skip the revoked-and-refreshed channel; got %v", r)
+			break
+		}
+	}
+}
+
+// ============================================================
+// TestConnectChannelAtomic_ResetsRevokedAtOnReauth:
+// ============================================================
+//
+// Pinned-issue: a previously-revoked channel that the user re-authenticates
+// must NOT be silently filtered by ListActiveYouTubeOAuthTokens after the
+// next server restart. Before this fix, the OAuth leg's UPDATE clause did
+// not touch revoked_at, so a re-auth flow produced a "row exists, but
+// revoked_at != NULL, so loader skips it" limbo. The fix is a single
+// `revoked_at = NULL` line in the SQL UPDATE branch; the test pins it.
+//
+// Outline:
+//  1. Seed channel + oauth row in a SQL transaction.
+//  2. MarkYouTubeOAuthTokenRevoked → assert revoked_at != "".
+//  3. ListActiveYouTubeOAuthTokens → assert channel is omitted (revoked).
+//  4. Call ConnectChannelAtomic with a fresh grant (this is the re-auth
+//     path the OAuth callback now exercises).
+//  5. Assert revoked_at is now "" on the stored row.
+//  6. Assert ListActiveYouTubeOAuthTokens now returns the channel.
+func TestConnectChannelAtomic_ResetsRevokedAtOnReauth(t *testing.T) {
+	s := openTestDB(t)
+	defer s.Close()
+	_, _ = s.db.Exec("PRAGMA foreign_keys = ON")
+
+	const channel = "UC_reauth_after_revoke"
+	if err := s.UpsertYouTubeChannel(channel, "Reauth Test", "", "", "", "", "", 0, 0, "", ""); err != nil {
+		t.Fatalf("seed channel: %v", err)
+	}
+	if err := s.UpsertYouTubeOAuthToken(channel, []byte("orig-access"), []byte("orig-refresh"), "Bearer", "2026-01-01T00:00:00Z", "scope.read", 1); err != nil {
+		t.Fatalf("seed oauth: %v", err)
+	}
+
+	// Mark revoked; the row must appear "non-active" to the loader.
+	if err := s.MarkYouTubeOAuthTokenRevoked(channel); err != nil {
+		t.Fatalf("MarkYouTubeOAuthTokenRevoked: %v", err)
+	}
+	row, _ := s.GetYouTubeOAuthToken(channel)
+	if row == nil {
+		t.Fatal("setup: expected oauth row present after revoke")
+	}
+	if row["revoked_at"] == "" {
+		t.Fatalf("setup: revoked_at empty after MarkYouTubeOAuthTokenRevoked: %v", row)
+	}
+	active, err := s.ListActiveYouTubeOAuthTokens()
+	if err != nil {
+		t.Fatalf("ListActive: %v", err)
+	}
+	for _, r := range active {
+		if r["channel_id"] == channel {
+			t.Fatalf("setup: ListActiveYouTubeOAuthTokens should NOT include a revoked channel; got %v", r)
+		}
+	}
+
+	// Step 4: explicit re-auth (HandleOAuthCallback -> ConnectChannelAtomic)
+	// with a fresh grant.
+	newAccess := []byte("reauth-access-encrypted")
+	newRefresh := []byte("reauth-refresh-encrypted")
+	newExpiry := "2030-09-09T00:00:00Z"
+	seed := &youtubetypes.YouTubeChannelSeed{
+		ChannelID:    channel,
+		Title:        "Channel After Reauth",
+		DisplayName:  "",
+		ChannelURL:   "",
+		ThumbnailURL: "https://img.example.com/reauth.jpg",
+		Language:     "",
+		Notes:        "",
+		ViewCount:    0,
+		SubCount:     0,
+		AddedAt:      "",
+		LastSyncAt:   newExpiry,
+	}
+	if err := s.ConnectChannelAtomic(seed, newAccess, newRefresh, "Bearer", newExpiry, "scope.read", 1); err != nil {
+		t.Fatalf("ConnectChannelAtomic on re-auth: %v", err)
+	}
+
+	// Step 5: revoked_at MUST be NULL again.
+	row, _ = s.GetYouTubeOAuthToken(channel)
+	if row == nil {
+		t.Fatal("post: expected oauth row still present after re-auth atomic")
+	}
+	if row["revoked_at"] != "" {
+		t.Errorf("revoked_at should be reset on re-auth; got %v", row["revoked_at"])
+	}
+	if !bytes.Equal(row["access_token_encrypted"].([]byte), newAccess) {
+		t.Errorf("access blob not refreshed: got %v, want %v", row["access_token_encrypted"], newAccess)
+	}
+	if !bytes.Equal(row["refresh_token_encrypted"].([]byte), newRefresh) {
+		t.Errorf("refresh blob not refreshed: got %v, want %v", row["refresh_token_encrypted"], newRefresh)
+	}
+	if row["expiry"] != newExpiry {
+		t.Errorf("expiry not refreshed: got %v, want %s", row["expiry"], newExpiry)
+	}
+
+	// Step 6: ListActiveYouTubeOAuthTokens MUST now return the channel.
+	active, _ = s.ListActiveYouTubeOAuthTokens()
+	found := false
+	for _, r := range active {
+		if r["channel_id"] == channel {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("ListActiveYouTubeOAuthTokens should include the re-authed channel; full list: %v", active)
+	}
+
+	// Sanity: the channel-row leg of the atomic should have updated only
+	// seed-owned columns (title, thumbnail_url, last_sync_at). User-edited
+	// typed columns were never set in this test (everything was empty), so
+	// the only assertion we can make is that the channel row's title/thumb
+	// got the new values.
+	ch, _ := s.GetYouTubeChannel(channel)
+	if ch["title"] != "Channel After Reauth" {
+		t.Errorf("title not updated by re-auth atomic: got %v, want %q", ch["title"], "Channel After Reauth")
+	}
+	if ch["thumbnail_url"] != "https://img.example.com/reauth.jpg" {
+		t.Errorf("thumbnail_url not updated by re-auth atomic: got %v", ch["thumbnail_url"])
 	}
 }
 

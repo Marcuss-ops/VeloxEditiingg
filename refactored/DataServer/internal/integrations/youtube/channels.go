@@ -18,12 +18,16 @@ const expiryTimeLayout = time.RFC3339
 // canonical boot hydrator — the JSON-directory scan (loadChannels /
 // loadChannelFromToken) has been removed.
 //
-// Requires s.oauthBuf != nil (the AES cipher). The module wires the cipher
-// via SetOAuthSecretCipher before NewService is called and fails closed
-// (requireIfMissing=true) if VELOX_YT_OAUTH_TOKEN_KEY is missing, so a
-// runtime invocation without a cipher reflects a programmer error rather
-// than an operator choice — we log + return early rather than panic so the
-// failure surfaces in the log instead of crashing the server.
+// Requires s.oauthBuf != nil (the AES cipher). The cipher is mounted on
+// s.oauthBuf directly inside NewService (fail-closed: a nil cipher
+// returns an error from NewService, so this service cannot exist
+// without a mounted cipher). The module enforces requireIfMissing=true
+// via aesgcm.LoadFromEnv(true) so a server without
+// VELOX_YT_OAUTH_TOKEN_KEY (or _FILE variant) refuses to boot the
+// YouTube route surface; a runtime invocation without a cipher
+// therefore reflects a programmer error rather than an operator
+// choice — we log + return early rather than panic so the failure
+// surfaces in the log instead of crashing the server.
 //
 // Title / thumbnail / language metadata is folded into the same in-memory
 // channel entry by loadCanonicalChannels (next step in NewService), so a
