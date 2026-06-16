@@ -100,5 +100,9 @@ func YouTubeRoutes(r *gin.Engine, cfg *config.Config, ym *YouTubeManager) {
 	r.GET("/api/v1/youtube/manager/generate-script", ym.GenerateScriptHandler())
 	r.GET("/api/v1/youtube/manager/download_thumbnail", ym.DownloadThumbnailHandler())
 
+	// ── Manager Stats (aggregated per-group channel + token-validity) ──
+	r.GET("/api/youtube/manager/stats", ym.ManagerStatsHandler())
+	r.GET("/api/v1/youtube/manager/stats", ym.ManagerStatsHandler())
+
 	log.Printf("[OK] YouTube Manager routes registered")
 }
