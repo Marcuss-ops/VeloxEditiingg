@@ -11,6 +11,21 @@ import (
 	"time"
 )
 
+// OAuth-secret payload literals. Centralised so the JSON write path
+// (Service.saveChannelToken) and the JSON read path
+// (Service.loadChannelFromToken) agree on the token-URI endpoint and the
+// expiry-time layout forever. Without these, a future second writer (or
+// a copy/paste mistake) could pick a different endpoint or RFC string and
+// silently break token round-tripping.
+//
+// Kept unexported on purpose: nothing outside the youtube integration
+// package needs these, and surfacing them risks two callers disagreeing
+// about which endpoint "the YouTube OAuth flow" should use.
+const (
+	oauthTokenRefreshURL = "https://oauth2.googleapis.com/token"
+	expiryTimeLayout     = time.RFC3339
+)
+
 // loadChannels loads available channels from token files
 func (s *Service) loadChannels() {
 	tokensDir := s.config.TokensDir
@@ -106,7 +121,7 @@ func (s *Service) loadChannelFromToken(tokenPath string) *AuthChannel {
 	// It belongs in JSON so token refresh / ValidateToken can reason about
 	// the credential's own lifetime without going through SQLite.
 	if tokenSecrets.Expiry != "" {
-		if t, err := time.Parse(time.RFC3339, tokenSecrets.Expiry); err == nil {
+		if t, err := time.Parse(expiryTimeLayout, tokenSecrets.Expiry); err == nil {
 			channel.Expiry = t
 		}
 	}
@@ -367,8 +382,8 @@ func (s *Service) saveChannelToken(channel *AuthChannel) error {
 	tokenData := map[string]interface{}{
 		"token":         channel.AccessToken,
 		"refresh_token": channel.RefreshToken,
-		"token_uri":     "https://oauth2.googleapis.com/token",
-		"expiry":        channel.Expiry.Format(time.RFC3339),
+		"token_uri":     oauthTokenRefreshURL,
+		"expiry":        channel.Expiry.Format(expiryTimeLayout),
 		"channel_id":    channel.ID,
 	}
 
