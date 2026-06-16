@@ -16,7 +16,38 @@ var (
 	ErrChannelNotFound     = errors.New("channel not found")
 )
 
-// StorageStore defines the SQLite operations for YouTube manager persistence.
+// NicheStore is the orthogonal tracked-niche contract used by *Storage.
+// Pulled out so callers that only care about niche persistence can hand
+// a NicheStore-conforming value to a method that needs just the niche
+// surface (rare — *Storage is the main consumer). Listed separately so
+// storage_persistence.go's `s.store.ListYouTubeTrackedNiches()` /
+// `s.store.UpsertYouTubeTrackedNiche(...)` calls have a named contract
+// instead of appearing as drift on YouTubeStore / ServiceStore.
+type NicheStore interface {
+	ListYouTubeTrackedNiches() ([]string, error)
+	UpsertYouTubeTrackedNiche(niche string) error
+}
+
+// StorageStore defines the SQLite operations for YouTube MANAGER
+// persistence — the *Storage type's own store field. Pulled out of
+// YouTubeStore because *Storage calls niche methods which *Service.body
+// NEVER calls and module-level wiring doesn't expose. Embedding
+// NicheStore keeps the niche contract explicit at the type level so
+// future readers don't have to grep storage_persistence.go to know
+// which methods *Storage.store expects. *SQLiteStore already implements
+// every method here, so the embedding is transparent to module wiring.
+//
+// Companion interfaces in this package (do NOT collapse them):
+//   - ServiceStore  — what *Service.body uses (21-method subset)
+//   - YouTubeStore  — what module-level consumers (Cache.SetStore,
+//   QuotaManager.SetStore, etc.) use (full SQL surface)
+//   - StorageStore  — what *Storage uses (channel/group V2 + NicheStore)
+//
+// Each is a purpose-built typed contract. The S11 cleanup commits have
+// repeatedly chased drift across these three; new code MUST pick the
+// narrowest interface that fits its call site, and consumers whose
+// call patterns span categories should hand a wider type rather than
+// mutating the narrower contract.
 type StorageStore interface {
 	UpsertYouTubeChannel(channelID, title, displayName, channelURL, thumbnailURL, language, notes string, viewCount, subCount int64, addedAt, lastSyncAt string) error
 	ListYouTubeChannels() ([]map[string]interface{}, error)
@@ -32,8 +63,11 @@ type StorageStore interface {
 	RemoveChannelFromGroupV2(groupID int64, channelID string) error
 	ListGroupChannelsV2(groupID int64) ([]string, error)
 	ListAllGroupMembershipsV2() ([]map[string]interface{}, error)
-	UpsertYouTubeTrackedNiche(niche string) error
-	ListYouTubeTrackedNiches() ([]string, error)
+
+	// Tracked niches — orthogonal to groups. Embedded sub-interface,
+	// not an inline method list, so future readers can refer to
+	// NicheStore by name instead of inferring niche usage from grep.
+	NicheStore
 }
 
 // Storage handles persistence of YouTube manager data
