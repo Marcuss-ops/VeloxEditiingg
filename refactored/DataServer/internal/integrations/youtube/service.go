@@ -23,6 +23,16 @@ import (
 // YouTubeStore defines the interface for SQLite-backed YouTube persistence,
 // avoiding a direct import of the store package.
 // Uses only canonical tables (youtube_channels, youtube_groups_v2, youtube_group_channels).
+//
+// Relationship to YouTubeRepository (repository.go): YouTubeStore is the
+// *narrow* SQL-only contract every existing caller (Service.store field,
+// module wiring, tests, handlers) depends on. *SQLiteStore satisfies it
+// today. YouTubeRepository is the wider single canonical interface that
+// embeds YouTubeStore and adds the four in-memory methods (LoadData,
+// SaveData, syncGroupLocked, saveAllReconcile). Code on this branch keeps
+// depending on YouTubeStore; new code MUST depend on YouTubeRepository
+// directly. A future compose(...) helper will yield a single concrete
+// type satisfying both interfaces (YouTubeRepository ⊃ YouTubeStore).
 type YouTubeStore interface {
 	// Canonical: YouTube Channels (youtube_channels table)
 	ListYouTubeChannels() ([]map[string]interface{}, error)
@@ -81,6 +91,7 @@ type YouTubeStore interface {
 		Data      interface{} `json:"data"`
 	}) (int, error)
 }
+
 
 // Service provides YouTube API functionality
 type Service struct {
