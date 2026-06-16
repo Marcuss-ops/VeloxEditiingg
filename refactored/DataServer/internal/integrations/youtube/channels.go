@@ -159,7 +159,70 @@ func (s *Service) loadCanonicalChannels() bool {
 	return true
 }
 
-// UpdateChannelMetadata updates metadata fields in SQLite.
+// Membership returns the typed canonical channel row for channelID from
+// the SQLite-backed youtube_channels table. Returns (nil, nil) when no
+// row exists so callers can map the not-found case to their own response
+// (HTTP 404 / 200 with stub / etc.) without inspecting errors.
+//
+// This is the typed view the S11 migration exposes so handler files
+// can replace the legacy in-RAM "for _, ch := range group.Channels
+// { ... ch.Title ... }" pattern (where group.Channels was []Channel
+// the previous Storage struct carried in its data.Groups map) with a
+// single SQL-backed per-channel read. Handlers migrating to the S11
+// canonical shape iterate group.ChannelIDs ([]string) and call
+// Membership(id) for each instead of dereferencing a full Channel
+// slice off the group struct.
+//
+// DB-first: errors are surfaced (not logged-and-swallowed) so callers
+// can abort an outgoing response rather than render stale RAM data
+// that no longer matches the canonical row.
+func (s *Service) Membership(channelID string) (*Channel, error) {
+	if s.store == nil {
+		return nil, nil
+	}
+	row, err := s.store.GetYouTubeChannel(channelID)
+	if err != nil {
+		return nil, fmt.Errorf("membership for %s: %w", channelID, err)
+	}
+	if row == nil {
+		return nil, nil
+	}
+	if ch := channelFromCanonicalRow(row); ch != nil {
+		return ch, nil
+	}
+	// Defensive fallback: row exists with non-empty channel_id but the
+	// helper couldn't decode any field. Represent the channel by ID only
+	// so the handler still has a stable *Channel return shape.
+	return &Channel{ID: channelID}, nil
+}
+
+// BulkMembership returns one *Channel per id, in the same order as the
+// input slice. nil entries indicate not-found / no canonical row. A
+// single SQLite read is NOT issued per id: callers can batch the lookup
+// with the YouTubeStore.ListYouTubeChannels() snapshot in higher layers
+// when handler fan-outs are large. The default implementation here is
+// sequential Membership() calls; per-handler commits can swap to a
+// single batched read where the fan-out is meaningful.
+func (s *Service) BulkMembership(ids []string) ([]*Channel, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	out := make([]*Channel, 0, len(ids))
+	for _, id := range ids {
+		if id == "" {
+			out = append(out, nil)
+			continue
+		}
+		ch, err := s.Membership(id)
+		if err != nil {
+			return nil, err // fail-closed; caller decides abort-vs-skip
+		}
+		out = append(out, ch)
+	}
+	return out, nil
+}
+
+// updateChannelMetadata updates metadata fields in SQLite.
 //
 // Typed-update path (S11): the operator may set ONLY language or ONLY
 // title, never both. Each typed column is written via its own
