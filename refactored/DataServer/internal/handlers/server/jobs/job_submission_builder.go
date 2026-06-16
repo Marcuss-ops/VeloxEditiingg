@@ -3,12 +3,15 @@ package jobs
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
 	"velox-shared/payload"
 
 	"github.com/google/uuid"
+
+	"velox-server/internal/jobs/enqueue"
 )
 
 func buildSingleJob(data map[string]interface{}) (string, map[string]interface{}, string) {
@@ -159,7 +162,7 @@ func buildSingleJob(data map[string]interface{}) (string, map[string]interface{}
 		"raw_entities":              data["raw_entities"],
 		"project_id":                projectID,
 		"video_mode":                getStringOrEmpty(data, "video_mode"),
-		"drive_output_folder":       getStringOrEmpty(data, "drive_output_folder", "output_directory"),
+		"drive_output_folder":       enqueue.ResolveDriveOutputFolderReference(os.Getenv("VELOX_DATA_DIR"), getStringOrEmpty(data, "drive_output_folder", "output_directory")),
 	}
 
 	if _, ok := slotData["voiceover_channel_mapping"].(map[string]interface{}); !ok {

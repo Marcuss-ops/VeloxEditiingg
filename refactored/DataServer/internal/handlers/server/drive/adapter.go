@@ -74,6 +74,7 @@ func RegisterDriveRoutes(r *gin.Engine, h *DriveHandlers) {
 	r.PUT("/api/drive/links/:folder_id", UpdateDriveFolderHandler)
 	r.DELETE("/api/drive/links/:folder_id", DeleteDriveFolderHandler)
 	r.GET("/api/drive/links/master", GetMasterFoldersHandler)
+	r.POST("/api/drive/links/master/upsert", UpsertMasterFolderHandler)
 
 	// Drive Groups & Folders routes
 	r.GET("/api/drive/groups", GetDriveGroupsHandler)

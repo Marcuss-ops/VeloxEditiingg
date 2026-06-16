@@ -14,6 +14,7 @@ import (
 type Module struct {
 	cfg      *config.Config
 	handlers *driveHandlers.DriveHandlers
+	service  *integrationsDrive.Service
 }
 
 // New creates a new Drive module.
@@ -31,6 +32,11 @@ func (m *Module) Name() string {
 // Handlers returns the Drive handlers (for use by other modules).
 func (m *Module) Handlers() *driveHandlers.DriveHandlers {
 	return m.handlers
+}
+
+// Service returns the underlying Drive API service.
+func (m *Module) Service() *integrationsDrive.Service {
+	return m.service
 }
 
 // RegisterRoutes registers Drive endpoints.
@@ -51,6 +57,12 @@ func (m *Module) RegisterRoutes(r *gin.Engine) {
 		}
 	}
 
+	if driveSvc != nil {
+		if err := driveSvc.LoadFirstToken(); err != nil {
+			log.Printf("[DRIVE] No initial token loaded: %v", err)
+		}
+	}
+
 	// Initialize Drive handlers
 	handlers, err := driveHandlers.NewDriveHandlers(&integrationsDrive.ServiceConfig{
 		ClientID:     m.cfg.DriveClientID,
@@ -63,6 +75,7 @@ func (m *Module) RegisterRoutes(r *gin.Engine) {
 		return
 	}
 	m.handlers = handlers
+	m.service = driveSvc
 
 	// Register Drive API routes
 	driveHandlers.RegisterDriveRoutes(r, m.handlers)

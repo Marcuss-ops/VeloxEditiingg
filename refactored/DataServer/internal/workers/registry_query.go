@@ -5,10 +5,11 @@ import (
 	"time"
 
 	"velox-server/internal/logging"
+	"velox-shared/identity"
 )
 
 func (r *Registry) IsRegistered(ctx context.Context, workerID string) bool {
-	workerID = NormalizeWorkerID(workerID)
+	workerID = identity.NormalizeWorkerID(workerID)
 	r.mu.RLock()
 	_, ok := r.inMem[workerID]
 	r.mu.RUnlock()
@@ -17,7 +18,7 @@ func (r *Registry) IsRegistered(ctx context.Context, workerID string) bool {
 
 // GetWorker returns a single worker's info by ID
 func (r *Registry) GetWorker(ctx context.Context, workerID string) *WorkerInfo {
-	workerID = NormalizeWorkerID(workerID)
+	workerID = identity.NormalizeWorkerID(workerID)
 	r.mu.RLock()
 	info, ok := r.inMem[workerID]
 	r.mu.RUnlock()

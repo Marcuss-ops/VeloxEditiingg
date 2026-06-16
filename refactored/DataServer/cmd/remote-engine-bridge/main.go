@@ -1,9 +1,17 @@
 package main
 
 import (
+	"bytes"
+	"encoding/binary"
 	"encoding/json"
+	"fmt"
+	"image"
+	"image/color"
+	"image/png"
+	"io"
 	"log"
 	"math/rand"
+	"math"
 	"net/http"
 	"os"
 	"strconv"
@@ -11,6 +19,11 @@ import (
 	"sync"
 	"time"
 )
+
+type bridgeAsset struct {
+	ContentType string
+	Body        []byte
+}
 
 type bridgeJob struct {
 	ID        string                 `json:"id"`
@@ -24,30 +37,35 @@ type bridgeJob struct {
 }
 
 type bridgeState struct {
-	mu   sync.Mutex
-	jobs map[string]*bridgeJob
+	mu     sync.Mutex
+	jobs   map[string]*bridgeJob
+	assets map[string]bridgeAsset
 }
 
 func newBridgeState() *bridgeState {
-	return &bridgeState{jobs: make(map[string]*bridgeJob)}
+	return &bridgeState{
+		jobs:   make(map[string]*bridgeJob),
+		assets: make(map[string]bridgeAsset),
+	}
 }
 
 func (s *bridgeState) createJob(payload map[string]interface{}) *bridgeJob {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	id := newBridgeID()
 	now := time.Now().UTC().Format(time.RFC3339)
+	result := buildBridgeResult(id, payload, s)
 	job := &bridgeJob{
 		ID:        id,
 		Status:    "completed",
 		Progress:  100,
 		Payload:   payload,
-		Result:    buildBridgeResult(id, payload),
+		Result:    result,
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
+
+	s.mu.Lock()
 	s.jobs[id] = job
+	s.mu.Unlock()
 	return job
 }
 
@@ -59,6 +77,20 @@ func (s *bridgeState) getJob(id string) (*bridgeJob, bool) {
 		return nil, false
 	}
 	return job, true
+}
+
+func (s *bridgeState) putAsset(path string, contentType string, body []byte) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.assets[path] = bridgeAsset{ContentType: contentType, Body: body}
+	return path
+}
+
+func (s *bridgeState) getAsset(path string) (bridgeAsset, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	asset, ok := s.assets[path]
+	return asset, ok
 }
 
 func newBridgeID() string {
@@ -76,7 +108,7 @@ func firstString(m map[string]interface{}, keys ...string) string {
 	return ""
 }
 
-func buildBridgeResult(jobID string, payload map[string]interface{}) map[string]interface{} {
+func buildBridgeResult(jobID string, payload map[string]interface{}, state *bridgeState) map[string]interface{} {
 	topic := firstString(payload, "topic", "title", "source_text")
 	if topic == "" {
 		topic = "bridge test"
@@ -96,22 +128,37 @@ func buildBridgeResult(jobID string, payload map[string]interface{}) map[string]
 		sceneCount = n
 	}
 
+	baseURL := firstString(payload, "bridge_base_url", "public_base_url")
+	if baseURL == "" {
+		baseURL = "http://127.0.0.1:8081"
+	}
+	baseURL = strings.TrimRight(baseURL, "/")
+
 	scenes := make([]map[string]interface{}, 0, sceneCount)
 	for i := 0; i < sceneCount; i++ {
+		imagePath := fmt.Sprintf("/assets/%s/scene-%d.png", jobID, i+1)
+		imageURL := baseURL + imagePath
+		state.putAsset(imagePath, "image/png", makeBridgePNG(topic, i))
 		scenes = append(scenes, map[string]interface{}{
 			"text":             topic + " - scena " + strconv.Itoa(i+1),
-			"image_link":       "https://example.com/bridge-image-" + strconv.Itoa(i+1) + ".jpg",
-			"image_links":      []string{"https://example.com/bridge-image-" + strconv.Itoa(i+1) + ".jpg"},
+			"image_link":       imageURL,
+			"image_links":      []string{imageURL},
 			"duration_seconds": 5,
 		})
 	}
 
 	voiceovers := make([]string, 0, len(languages))
 	for _, lang := range languages {
-		voiceovers = append(voiceovers, "https://example.com/bridge-voiceover-"+lang+".mp3")
+		audioPath := fmt.Sprintf("/assets/%s/voiceover-%s.wav", jobID, sanitizeAssetName(lang))
+		audioURL := baseURL + audioPath
+		state.putAsset(audioPath, "audio/wav", makeBridgeWAV(float64(1100+len(lang)*40), 16000, 1*time.Second))
+		voiceovers = append(voiceovers, audioURL)
 	}
 	if len(voiceovers) == 0 {
-		voiceovers = []string{"https://example.com/bridge-voiceover-it.mp3"}
+		audioPath := fmt.Sprintf("/assets/%s/voiceover-it.wav", jobID)
+		audioURL := baseURL + audioPath
+		state.putAsset(audioPath, "audio/wav", makeBridgeWAV(1100, 16000, 1*time.Second))
+		voiceovers = []string{audioURL}
 	}
 
 	scenesJSON, _ := json.Marshal(scenes)
@@ -121,7 +168,7 @@ func buildBridgeResult(jobID string, payload map[string]interface{}) map[string]
 		"trace_id":        jobID,
 		"status":          "completed",
 		"progress":        100,
-		"doc_url":         "https://example.com/docs/" + jobID,
+		"doc_url":         baseURL + "/docs/" + jobID,
 		"script_text":     "Bridge generated script for " + topic,
 		"scenes_json":     string(scenesJSON),
 		"scenes":          scenes,
@@ -131,6 +178,102 @@ func buildBridgeResult(jobID string, payload map[string]interface{}) map[string]
 		"voiceovers":      voiceovers,
 		"title":           topic,
 	}
+}
+
+func sanitizeAssetName(input string) string {
+	if strings.TrimSpace(input) == "" {
+		return "it"
+	}
+	var b strings.Builder
+	for _, r := range strings.ToLower(strings.TrimSpace(input)) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+			b.WriteRune(r)
+			continue
+		}
+		b.WriteRune('_')
+	}
+	out := strings.Trim(b.String(), "_")
+	if out == "" {
+		return "it"
+	}
+	return out
+}
+
+func makeBridgePNG(topic string, idx int) []byte {
+	img := image.NewRGBA(image.Rect(0, 0, 1280, 720))
+	base := color.RGBA{R: uint8(32 + (idx*33)%120), G: uint8(58 + (idx*19)%120), B: uint8(88 + (idx*27)%120), A: 255}
+	accent := color.RGBA{R: 240, G: 210, B: 160, A: 255}
+	for y := 0; y < 720; y++ {
+		for x := 0; x < 1280; x++ {
+			if y > 560 {
+				img.SetRGBA(x, y, accent)
+				continue
+			}
+			img.SetRGBA(x, y, base)
+		}
+	}
+	// Simple high-contrast stripe to make frames visually distinct.
+	for y := 60; y < 120; y++ {
+		for x := 80; x < 1200; x++ {
+			img.SetRGBA(x, y, color.RGBA{R: 250, G: 250, B: 250, A: 255})
+		}
+	}
+	// Encode without text to keep the dependency footprint small.
+	var buf bytes.Buffer
+	_ = png.Encode(&buf, img)
+	return buf.Bytes()
+}
+
+func makeBridgeWAV(frequencyHz float64, sampleRate int, duration time.Duration) []byte {
+	samples := int(float64(sampleRate) * duration.Seconds())
+	const bitsPerSample = 16
+	const numChannels = 1
+	byteRate := sampleRate * numChannels * bitsPerSample / 8
+	blockAlign := numChannels * bitsPerSample / 8
+	dataSize := samples * numChannels * bitsPerSample / 8
+	riffSize := 36 + dataSize
+
+	var buf bytes.Buffer
+	writeString := func(s string) {
+		_, _ = buf.WriteString(s)
+	}
+	writeU32 := func(v uint32) {
+		_ = binary.Write(&buf, binary.LittleEndian, v)
+	}
+	writeU16 := func(v uint16) {
+		_ = binary.Write(&buf, binary.LittleEndian, v)
+	}
+
+	writeString("RIFF")
+	writeU32(uint32(riffSize))
+	writeString("WAVE")
+	writeString("fmt ")
+	writeU32(16)
+	writeU16(1)
+	writeU16(numChannels)
+	writeU32(uint32(sampleRate))
+	writeU32(uint32(byteRate))
+	writeU16(uint16(blockAlign))
+	writeU16(bitsPerSample)
+	writeString("data")
+	writeU32(uint32(dataSize))
+
+	// 1 second sine wave, gently faded to avoid clicks.
+	for i := 0; i < samples; i++ {
+		t := float64(i) / float64(sampleRate)
+		envelope := 1.0
+		if t < 0.02 {
+			envelope = t / 0.02
+		} else if remaining := duration.Seconds() - t; remaining < 0.02 {
+			envelope = remaining / 0.02
+		}
+		if envelope < 0 {
+			envelope = 0
+		}
+		sample := int16(0.28 * envelope * 32767 * math.Sin(2*math.Pi*frequencyHz*t))
+		_ = binary.Write(&buf, binary.LittleEndian, sample)
+	}
+	return buf.Bytes()
 }
 
 func toStringSlice(v interface{}) []string {
@@ -188,6 +331,31 @@ func main() {
 			"progress": 100,
 			"result":   job.Result,
 		})
+	})
+
+	mux.HandleFunc("/assets/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		path := r.URL.Path
+		asset, ok := state.getAsset(path)
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", asset.ContentType)
+		w.Header().Set("Content-Length", strconv.Itoa(len(asset.Body)))
+		_, _ = io.Copy(w, bytes.NewReader(asset.Body))
+	})
+
+	mux.HandleFunc("/docs/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		_, _ = w.Write([]byte("bridge document placeholder: " + r.URL.Path))
 	})
 
 	mux.HandleFunc("/api/jobs/", func(w http.ResponseWriter, r *http.Request) {

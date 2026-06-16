@@ -46,6 +46,7 @@ type serverDeps struct {
 	workerLifecycle     *lifecycle.Handler
 	ansibleModule       *ansible.Module
 	youtubeModule       *youtube.Module
+	driveModule         *drive.Module
 	orchestrator        *queue.Orchestrator
 }
 
@@ -158,7 +159,9 @@ func runServer(cfg *config.Config) error {
 	ytMod := youtube.New(cfg, deps.paths.dataDir, deps.sqliteStore)
 	deps.youtubeModule = ytMod
 	registry.Register(ytMod)
-	registry.Register(drive.New(cfg))
+	driveMod := drive.New(cfg)
+	deps.driveModule = driveMod
+	registry.Register(driveMod)
 	ansibleMod := ansible.New(cfg, deps.paths.dataDir, auth, deps.sqliteStore)
 	deps.ansibleModule = ansibleMod
 	registry.Register(ansibleMod)

@@ -45,43 +45,62 @@ jobs:
         working-directory: RemoteCodex/native/worker-agent-go
         run: go test ./... -count=1 -short
 
-  lint:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.22'
-
-      - name: golangci-lint
-        uses: golangci/golangci-lint-action@v6
-        with:
-          working-directory: DataServer
-          version: latest
-
-  lint-bugs:
-    name: golangci-lint (bug-catching only)
+  golangci-lint:
+    name: golangci-lint (${{ matrix.label }})
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: shared
+            working-directory: shared
+          - label: DataServer
+            working-directory: DataServer
+          - label: worker-agent-go
+            working-directory: RemoteCodex/native/worker-agent-go
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
         with:
-          fetch-depth: 0
+          go-version: '1.25'
+      - uses: golangci/golangci-lint-action@v6
+        with:
+          working-directory: ${{ matrix.working-directory }}
+          version: latest
+          args: --timeout=5m
+
+  vet:
+    name: go vet (3 modules)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
 
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          go-version: '1.25'
+          cache-dependency-path: |
+            DataServer/go.sum
+            RemoteCodex/native/worker-agent-go/go.sum
 
-      - name: golangci-lint
-        uses: golangci/golangci-lint-action@v6
+      - name: Cache Go modules
+        uses: actions/cache@v4
         with:
-          working-directory: DataServer
-          version: latest
-          only-new-issues: true
-          args: --no-config --disable-all --enable=gosec,govet,errcheck
+          path: ~/go/pkg/mod
+          key: ${{ runner.os }}-go-vet-${{ hashFiles('DataServer/go.sum', 'RemoteCodex/native/worker-agent-go/go.sum') }}
+
+      - name: go vet shared
+        working-directory: shared
+        run: go vet ./...
+
+      - name: go vet DataServer
+        working-directory: DataServer
+        run: go vet ./...
+
+      - name: go vet worker-agent-go
+        working-directory: RemoteCodex/native/worker-agent-go
+        run: go vet ./...
 
   DoD:
     runs-on: ubuntu-latest

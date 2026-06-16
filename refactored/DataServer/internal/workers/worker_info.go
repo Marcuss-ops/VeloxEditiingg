@@ -1,10 +1,6 @@
 package workers
 
-import (
-	"crypto/rand"
-	"encoding/hex"
-	"strings"
-)
+import "strings"
 
 // WorkerInfo contains all information about a registered worker
 type WorkerInfo struct {
@@ -107,12 +103,6 @@ func normalizeStringSlice(v interface{}) []string {
 	}
 }
 
-// GenerateWorkerID generates a unique worker ID
-func GenerateWorkerID() string {
-	b := make([]byte, 16)
-	rand.Read(b)
-	return hex.EncodeToString(b)
-}
 
 // GetSupportedJobTypes returns the list of job types a worker supports.
 func (w *WorkerInfo) GetSupportedJobTypes() []string {
@@ -126,32 +116,7 @@ func (w *WorkerInfo) GetSupportedJobTypes() []string {
 	return ExtractStringSlice(v)
 }
 
-// NormalizeWorkerID normalizes IP-derived worker IDs by:
-//   - Stripping all leading "host_" prefixes (handles host_host_...)
-//   - Replacing dots with underscores (handles host_57.129... old format)
-//
-// This ensures that malformed IDs like host_host_57_129_132_133 or
-// host_57.129.132.133 are treated as the canonical host_57_129_132_133.
-// Non-IP-derived IDs (e.g. worker-8e98ce85, w1) are returned unchanged.
-func NormalizeWorkerID(id string) string {
-	s := strings.TrimSpace(id)
-	// Only normalize IDs that have the host_ prefix (IP-derived) or contain dots
-	// (old format like host_57.129.132.133). Other IDs like worker-xxx are left as-is.
-	if !strings.HasPrefix(s, "host_") && !strings.Contains(s, ".") {
-		return id
-	}
-	// Strip ALL leading "host_" prefixes
-	for strings.HasPrefix(s, "host_") {
-		s = strings.TrimPrefix(s, "host_")
-	}
-	// Replace remaining dots with underscores
-	s = strings.ReplaceAll(s, ".", "_")
-	// Re-add the canonical prefix
-	if s != "" {
-		return "host_" + s
-	}
-	return id
-}
+
 
 // ExtractStringSlice converts various slice-like types to []string.
 func ExtractStringSlice(v interface{}) []string {

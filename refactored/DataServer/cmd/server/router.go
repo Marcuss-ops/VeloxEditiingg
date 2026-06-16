@@ -19,6 +19,7 @@ import (
 	jobhandlers "velox-server/internal/handlers/server/jobs"
 	pipelinehandler "velox-server/internal/handlers/server/pipeline"
 	scripthandlers "velox-server/internal/handlers/server/script"
+	integrationsDrive "velox-server/internal/integrations/drive"
 	ytservice "velox-server/internal/integrations/youtube"
 	"velox-server/internal/queue"
 	jobservice "velox-server/internal/services/jobs"
@@ -120,7 +121,11 @@ func registerAPIV1Routes(r *gin.Engine, cfg *config.Config, deps *serverDeps, an
 	if deps.youtubeModule != nil {
 		youtubeService = deps.youtubeModule.Service()
 	}
-	api.RegisterV1Routes(r, cfg, deps.fileQ, deps.reg, jrs.jobAPI, jrs.submitHandler, deps.workersRepo, deps.sqliteStore, deps.workerUpdateHandler, youtubeService, ansibleHandlers)
+	var driveService *integrationsDrive.Service
+	if deps.driveModule != nil {
+		driveService = deps.driveModule.Service()
+	}
+	api.RegisterV1Routes(r, cfg, deps.fileQ, deps.reg, jrs.jobAPI, jrs.submitHandler, deps.workersRepo, deps.sqliteStore, deps.workerUpdateHandler, youtubeService, driveService, ansibleHandlers)
 }
 
 // jobRouteState bundles shared job-route dependencies so V1 and V2 registration paths

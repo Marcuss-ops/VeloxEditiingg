@@ -91,7 +91,7 @@ func (w *Worker) pollJob(ctx context.Context) (*api.Job, error) {
 			"version":    renderplan.RenderPlanVersion,
 			"job_id":     job.JobID,
 			"job_type":   job.JobType,
-			"created_at": job.CreatedAt,
+			"created_at": resolveJobCreatedAt(job),
 			"priority":   job.Priority,
 			"parameters": job.Parameters,
 		})

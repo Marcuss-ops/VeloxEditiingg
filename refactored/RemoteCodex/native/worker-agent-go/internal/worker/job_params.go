@@ -3,6 +3,7 @@ package worker
 import (
 	"strconv"
 	"strings"
+	"time"
 
 	"velox-shared/contract"
 	"velox-worker-agent/pkg/api"
@@ -53,4 +54,34 @@ func resolveJobAttempt(job *api.Job) int {
 		}
 	}
 	return 0
+}
+
+func resolveJobCreatedAt(job *api.Job) string {
+	if job == nil {
+		return ""
+	}
+	switch v := job.CreatedAt.(type) {
+	case string:
+		return strings.TrimSpace(v)
+	case time.Time:
+		return v.UTC().Format(time.RFC3339)
+	case int:
+		return time.Unix(int64(v), 0).UTC().Format(time.RFC3339)
+	case int32:
+		return time.Unix(int64(v), 0).UTC().Format(time.RFC3339)
+	case int64:
+		return time.Unix(v, 0).UTC().Format(time.RFC3339)
+	case float64:
+		return time.Unix(int64(v), 0).UTC().Format(time.RFC3339)
+	case float32:
+		return time.Unix(int64(v), 0).UTC().Format(time.RFC3339)
+	case uint:
+		return time.Unix(int64(v), 0).UTC().Format(time.RFC3339)
+	case uint32:
+		return time.Unix(int64(v), 0).UTC().Format(time.RFC3339)
+	case uint64:
+		return time.Unix(int64(v), 0).UTC().Format(time.RFC3339)
+	default:
+		return ""
+	}
 }

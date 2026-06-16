@@ -1,64 +1,33 @@
 run:
   timeout: 5m
 
+# Minimal linter set focused on the four cross-module correctness checks
+# requested for Velox: typecheck (govet), imports (goimports),
+# ineffassign, and unused.
+#
+# Notes:
+#   - `govet` always enables `typecheck` (Go's standard type-checker).
+#     Additional sub-rules (e.g. shadow) are intentionally NOT enabled.
+#   - `goimports` covers the "imports" rule: grouping, ordering, local
+#     prefix detection. Configure local-prefixes per module via env if
+#     needed; left empty here because each module's local prefix differs
+#     (velox-server / velox-worker-agent / velox-shared) and the
+#     default empty value is enough for the four required checks.
 linters:
+  disable-all: true
   enable:
-    - errcheck
-    - gosimple
-    - govet
+    - govet      # typecheck + standard Go vet
+    - goimports  # imports (grouping, formatting)
     - ineffassign
-    - staticcheck
     - unused
-    - bodyclose
-    - durationcheck
-    - goconst
-    - gocritic
-    - gofmt
-    - goimports
-    - gosec
-    - misspell
-    - nilerr
-    - prealloc
-    - unconvert
-    - unparam
-    - wastedassign
-
-linters-settings:
-  govet:
-    enable:
-      - shadow
-  goconst:
-    min-len: 3
-    min-occurrences: 3
-  gocritic:
-    enabled-tags:
-      - diagnostic
-      - performance
-      - style
-    disabled-checks:
-      - hugeParam
-      - rangeValCopy
-  goimports:
-    local-prefixes: velox-server
 
 issues:
   exclude-rules:
-    # Test files can be more relaxed
-    - path: _test\.go
-      linters:
-        - goconst
-        - gosec
-        - unparam
-    # Allow dot imports in test files
-    - path: _test\.go
-      text: "dot imports"
-    # Generated code
+    # Generated code (migrations, generated mocks, …)
     - path: ".*\\.generated\\.go"
       linters:
         - all
-    # Intentional blank identifiers
+    # Intentional blank identifiers in test helpers / cleanup paths
     - linters:
         - errcheck
       text: "Error return value of .* is not checked"
-  max-issues-per-linter: 0
-  max-same-issues: 0

@@ -75,6 +75,15 @@ type UploadTextRequest struct {
 	ParentID string `json:"parentId,omitempty"`
 }
 
+type UpsertMasterFolderRequest struct {
+	ID              string `json:"id"`
+	Name            string `json:"name"`
+	URL             string `json:"url"`
+	Language        string `json:"language,omitempty"`
+	SubfoldersCount int    `json:"subfolders_count,omitempty"`
+	MetadataJSON    string `json:"metadata_json,omitempty"`
+}
+
 // GetDriveLinksHandler returns all drive links
 func GetDriveLinksHandler(c *gin.Context) {
 	folders := getDriveLinksFromCache()
@@ -125,6 +134,37 @@ func GetMasterFoldersHandler(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"success": true, "data": gin.H{"masters": masters}})
+}
+
+// UpsertMasterFolderHandler inserts or updates a master Drive folder in SQLite.
+func UpsertMasterFolderHandler(c *gin.Context) {
+	if driveLinksStore == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"success": false, "error": "drive store not configured"})
+		return
+	}
+
+	var req UpsertMasterFolderRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	if req.ID == "" || req.Name == "" || req.URL == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "id, name and url are required"})
+		return
+	}
+
+	if err := driveLinksStore.UpsertMasterFolder(req.ID, req.Name, req.URL, req.Language, req.SubfoldersCount, req.MetadataJSON); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"id":      req.ID,
+		"name":    req.Name,
+		"url":     req.URL,
+	})
 }
 
 // SaveDriveLinksHandler replaces all drive links (bulk save)

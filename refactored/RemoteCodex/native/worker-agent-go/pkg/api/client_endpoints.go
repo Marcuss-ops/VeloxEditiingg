@@ -11,6 +11,18 @@ import (
 	"velox-worker-agent/pkg/logger"
 )
 
+func shouldFallbackToLegacyEndpoint(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "status 404") ||
+		strings.Contains(msg, "status 405") ||
+		strings.Contains(msg, "api route not found") ||
+		strings.Contains(msg, "endpoint does not exist") ||
+		strings.Contains(msg, "not found")
+}
+
 // registerResponse is used to parse token and other fields from registration response.
 type registerResponse struct {
 	Success bool   `json:"success"`
@@ -72,6 +84,10 @@ func (c *Client) GetJobV2(ctx context.Context, workerID string) (*Job, error) {
 	path := endpointV2GetJob + "?worker_id=" + url.QueryEscape(workerID)
 	respBody, err := c.doRequest(ctx, "GET", path, nil)
 	if err != nil {
+		if shouldFallbackToLegacyEndpoint(err) {
+			logger.Warn("[API_FALLBACK] Falling back to legacy job poll endpoint after v2 failure: %v", err)
+			return c.GetJob(ctx, workerID)
+		}
 		return nil, err
 	}
 	var apiResp struct {
@@ -94,6 +110,10 @@ func (c *Client) SubmitJobResult(ctx context.Context, result *JobResult) error {
 func (c *Client) SubmitJobResultV2(ctx context.Context, jobID string, result *JobResult) error {
 	path := fmt.Sprintf(endpointV2SubmitResult, url.PathEscape(jobID))
 	_, err := c.doRequest(ctx, "POST", path, result)
+	if shouldFallbackToLegacyEndpoint(err) {
+		logger.Warn("[API_FALLBACK] Falling back to legacy result submit after v2 failure for job %s: %v", jobID, err)
+		return c.SubmitJobResult(ctx, result)
+	}
 	return err
 }
 
@@ -126,6 +146,10 @@ func (c *Client) CompleteJobV2(ctx context.Context, jobID, workerID, leaseID str
 		body["attempt"] = attempt
 	}
 	_, err := c.doRequest(ctx, "POST", path, body)
+	if shouldFallbackToLegacyEndpoint(err) {
+		logger.Warn("[API_FALLBACK] Falling back to legacy complete endpoint after v2 failure for job %s: %v", jobID, err)
+		return c.CompleteJob(ctx, jobID, workerID, leaseID, attempt)
+	}
 	return err
 }
 
@@ -166,6 +190,10 @@ func (c *Client) RenewJobLeaseV2(ctx context.Context, jobID, workerID, leaseID s
 	}
 	body["contract_version"] = ContractVersionV2
 	_, err := c.doRequest(ctx, "POST", path, body)
+	if shouldFallbackToLegacyEndpoint(err) {
+		logger.Warn("[API_FALLBACK] Falling back to legacy lease renewal after v2 failure for job %s: %v", jobID, err)
+		return c.RenewJobLease(ctx, jobID, workerID, leaseID, attempt, leaseExpiresAt)
+	}
 	return err
 }
 

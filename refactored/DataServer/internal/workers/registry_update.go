@@ -7,11 +7,12 @@ import (
 	"time"
 
 	"velox-server/internal/logging"
+	"velox-shared/identity"
 )
 
 // RegisterWorker registers a new worker or updates an existing one
 func (r *Registry) RegisterWorker(ctx context.Context, workerID, workerName, ipAddress string, extra map[string]interface{}) error {
-	workerID = NormalizeWorkerID(workerID)
+	workerID = identity.NormalizeWorkerID(workerID)
 	now := time.Now().UTC().Format(time.RFC3339)
 
 	r.mu.Lock()
@@ -73,7 +74,7 @@ func (r *Registry) RegisterWorker(ctx context.Context, workerID, workerName, ipA
 
 // UnregisterWorker removes a worker from the registry
 func (r *Registry) UnregisterWorker(ctx context.Context, workerID string) error {
-	workerID = NormalizeWorkerID(workerID)
+	workerID = identity.NormalizeWorkerID(workerID)
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -91,7 +92,7 @@ func (r *Registry) UnregisterWorker(ctx context.Context, workerID string) error 
 
 // UpdateWorker updates specific fields of a worker
 func (r *Registry) UpdateWorker(ctx context.Context, workerID string, updates map[string]interface{}) error {
-	workerID = NormalizeWorkerID(workerID)
+	workerID = identity.NormalizeWorkerID(workerID)
 	r.mu.Lock()
 	defer r.mu.Unlock()
 

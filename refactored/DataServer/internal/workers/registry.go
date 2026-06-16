@@ -6,6 +6,7 @@ import (
 
 	"velox-server/internal/logging"
 	"velox-server/internal/store"
+	"velox-shared/identity"
 )
 
 // registryLog is the structured logger for the worker registry package.
@@ -52,7 +53,7 @@ func (r *Registry) load() {
 			if err := json.Unmarshal(raw, &info); err != nil {
 				continue
 			}
-			normID := NormalizeWorkerID(info.WorkerID)
+			normID := identity.NormalizeWorkerID(info.WorkerID)
 			info.WorkerID = normID
 			r.inMem[normID] = info
 		}
@@ -68,7 +69,7 @@ func (r *Registry) load() {
 	} else {
 		r.mu.Lock()
 		for _, id := range revokedIDs {
-			r.revoked[NormalizeWorkerID(id)] = true
+			r.revoked[identity.NormalizeWorkerID(id)] = true
 		}
 		r.mu.Unlock()
 	}

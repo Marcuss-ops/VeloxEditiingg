@@ -1,13 +1,22 @@
 // Package api provides HTTP client for communicating with the Velox Master server.
 package api
 
-// API event names for structured logging.
+import (
+	"velox-worker-agent/pkg/obs"
+)
+
+// API event names for structured logging. The cross-component transport
+// codes (Retry/Error/Success) are aliased to pkg/obs so the canonical
+// owners live there — pkg/api just re-exports the typed EventCode values.
+// Local-only codes (Request, Fallback) stay defined directly here.
 const (
 	EventAPIRequest  = "API_REQUEST"
-	EventAPIRetry    = "API_RETRY"
-	EventAPIError    = "API_ERROR"
-	EventAPISuccess  = "API_SUCCESS"
 	EventAPIFallback = "API_FALLBACK"
+
+	// Aliases to pkg/obs.EventCode constants.
+	EventAPIRetry   = obs.EventAPIRetry
+	EventAPIError   = obs.EventAPIError
+	EventAPISuccess = obs.EventAPISuccess
 
 	// ContractVersionV2 is the current worker/master job contract.
 	ContractVersionV2 = 2
@@ -40,7 +49,7 @@ type Job struct {
 	JobType         string                 `json:"job_type"`
 	Priority        int                    `json:"priority"`
 	Parameters      map[string]interface{} `json:"parameters"`
-	CreatedAt       string                 `json:"created_at"`
+	CreatedAt       interface{}            `json:"created_at"`
 	TimeoutSecs     int                    `json:"timeout_secs"`
 	ContractVersion int                    `json:"contract_version,omitempty"`
 	LeaseID         string                 `json:"lease_id,omitempty"`
