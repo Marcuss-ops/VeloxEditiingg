@@ -14,7 +14,6 @@ import (
 
 // ServeSPA serves the SPA from cfg.SPADir: static files if present, else index.html (history fallback).
 // Safe to call only when cfg.SPADir != "" and the dir exists.
-// Returns false in context if file not found, so NoRoute can proxy to Python.
 func ServeSPA(cfg *config.Config) gin.HandlerFunc {
 	root := strings.TrimRight(cfg.SPADir, string(os.PathSeparator))
 	indexPath := filepath.Join(root, "index.html")

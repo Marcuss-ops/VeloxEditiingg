@@ -11,12 +11,7 @@ const (
 	CodeMasterURLResolved    = "MASTER_URL_RESOLVED"
 )
 
-// Runtime/Legacy codes
-const (
-	CodeRuntimeModeNotAllowed = "RUNTIME_MODE_NOT_ALLOWED"
-	CodeLegacyUnitDetected    = "LEGACY_UNIT_DETECTED"
-	CodeLegacyParamBlocked    = "LEGACY_PARAM_BLOCKED"
-)
+
 
 // Ansible/Playbook codes
 const (
@@ -82,9 +77,7 @@ var CodeDescriptions = map[string]string{
 	CodeLocalhostForRemote:    "Cannot use localhost URL for remote workers",
 	CodeMasterURLFallback:     "Master URL using fallback resolution",
 	CodeMasterURLResolved:     "Master URL resolved successfully",
-	CodeRuntimeModeNotAllowed: "Legacy runtime mode requested but not allowed",
-	CodeLegacyUnitDetected:    "Legacy systemd unit detected on worker",
-	CodeLegacyParamBlocked:    "Legacy runtime parameter blocked",
+
 	CodePlaybookNotFound:      "Ansible playbook file not found",
 	CodeAnsibleNotFound:       "ansible-playbook binary not found",
 	CodeUnsupportedAction:     "Action not supported",

@@ -35,26 +35,6 @@ func validateRuntimeModeQuery(c *gin.Context) (blocked bool, requestedMode strin
 		return true, runtime
 	}
 
-	// Check use_venv query parameter
-	if c.Query("use_venv") == "true" {
-		return true, "venv"
-	}
-
-	// Check use_python query parameter
-	if c.Query("use_python") == "true" {
-		return true, "python"
-	}
-
-	// Check python_path query parameter
-	if pythonPath := c.Query("python_path"); pythonPath != "" {
-		return true, "python"
-	}
-
-	// Check venv_path query parameter
-	if venvPath := c.Query("venv_path"); venvPath != "" {
-		return true, "venv"
-	}
-
 	return false, ""
 }
 
@@ -70,9 +50,7 @@ func runtimeModeBlockedResponse(c *gin.Context, requestedMode string) {
 	})
 }
 
-// InstallHandler handles worker installation endpoints
-// These endpoints were migrated from Python FastAPI (install_routes.py)
-// to eliminate Python dependency for initial worker setup.
+// InstallHandler handles worker installation endpoints.
 type InstallHandler struct {
 	scriptDir    string         // Directory containing scripts (typically RemoteCodex)
 	bundleRoot   string         // Root directory for bundles

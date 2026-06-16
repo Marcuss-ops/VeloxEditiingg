@@ -579,7 +579,7 @@ func (s *Storage) CleanupOldData(retention time.Duration) int {
 	return removedCount
 }
 
-// ClearCache invalidates any cached data (for compatibility with Python)
+// ClearCache invalidates any cached data.
 func (s *Storage) ClearCache() {
 	// No-op for now since we don't cache reads
 	// In future, this could clear feed cache

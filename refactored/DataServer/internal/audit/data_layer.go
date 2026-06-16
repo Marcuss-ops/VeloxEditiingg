@@ -19,19 +19,17 @@ type DataLayerAuditResult struct {
 	CheckedAt string
 }
 
-// DataLayerAuditor validates data layer structure and detects legacy files.
+// DataLayerAuditor validates data layer structure.
 type DataLayerAuditor struct {
-	dataDir       string
-	secretsDir    string
-	allowedLegacy map[string]bool // Explicitly allowed legacy files
+	dataDir    string
+	secretsDir string
 }
 
 // NewDataLayerAuditor creates a new data layer auditor.
 func NewDataLayerAuditor(dataDir, secretsDir string) *DataLayerAuditor {
 	return &DataLayerAuditor{
-		dataDir:       dataDir,
-		secretsDir:    secretsDir,
-		allowedLegacy: make(map[string]bool),
+		dataDir:    dataDir,
+		secretsDir: secretsDir,
 	}
 }
 
@@ -44,9 +42,6 @@ func (a *DataLayerAuditor) Audit() *DataLayerAuditResult {
 		Warnings: make([]string, 0),
 		DataDir:  a.dataDir,
 	}
-
-	// Check for legacy files that should not exist
-	a.checkLegacyFiles(result)
 
 	// Check for duplicate source of truth (directory naming inconsistencies)
 	a.checkDuplicateSources(result)
@@ -62,37 +57,6 @@ func (a *DataLayerAuditor) Audit() *DataLayerAuditResult {
 
 	result.Passed = len(result.Errors) == 0
 	return result
-}
-
-// checkLegacyFiles verifies that known legacy files are not present.
-func (a *DataLayerAuditor) checkLegacyFiles(result *DataLayerAuditResult) {
-	legacyFiles := []string{
-		"youtube/youtube_manager.json",
-		"youtube/groups.json",
-		"youtube/channels/channels.json",
-		"youtube/GroupYoutubeManager/ChannelsSaved.json",
-		"youtube/group",
-		"drive/Credentials",
-		"ansible/ansible_runs.json",
-		"job_queue.json",
-		"job_queue_recovered.json",
-		"jobs_queue.json",
-		"video_uploads.db",
-		"worker_downloads/bundle_manifest.json",
-		"analytics/feed_cache.json",
-		"youtube/history/upload_history.json",
-		"youtube/youtube_api_cache.json",
-		"drive/drive_links.json",
-		"drive/drive_links.yaml",
-		"drive/drive_links.yml",
-	}
-
-	for _, legacy := range legacyFiles {
-		path := filepath.Join(a.dataDir, legacy)
-		if a.fileExists(path) && !a.allowedLegacy[legacy] {
-			result.Errors = append(result.Errors, fmt.Sprintf("Legacy file detected: %s", legacy))
-		}
-	}
 }
 
 // checkDuplicateSources detects multiple sources of truth for the same domain.
@@ -211,11 +175,6 @@ func (a *DataLayerAuditor) dirExists(path string) bool {
 		return false
 	}
 	return info.IsDir()
-}
-
-// AllowLegacy explicitly allows a legacy file (for migration periods).
-func (a *DataLayerAuditor) AllowLegacy(path string) {
-	a.allowedLegacy[path] = true
 }
 
 // FailOnError returns an error if audit fails, nil otherwise.

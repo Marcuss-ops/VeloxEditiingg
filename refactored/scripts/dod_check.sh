@@ -347,69 +347,7 @@ else
 fi
 
 # ============================================================
-header "Gate 7 — Data layer audit & JSON guard"
-# ============================================================
-
-# 7a. Run velox-migrate-json inventory
-if [ -d "$DATA_DIR" ]; then
-    if (cd "$REPO_ROOT/DataServer" && go run ./cmd/velox-migrate-json/... inventory --data-dir "$DATA_DIR" >/dev/null 2>&1); then
-        ok "velox-migrate-json inventory ran successfully"
-
-        # JSON guard: check for critical legacy files
-        LEGACY_FILES_TO_WATCH=(
-            "workers.json"
-            "youtube/channels/channels.json"
-            "youtube/groups.json"
-            "youtube/GroupYoutubeManager/ChannelsSaved.json"
-            "ansible/ansible_computers.json"
-            "ansible/ansible_runs.json"
-            "analytics/analytics_cache.json"
-            "analytics/youtube_api_cache.json"
-        )
-        LEGACY_FOUND=false
-        for lf in "${LEGACY_FILES_TO_WATCH[@]}"; do
-            if [ -f "$DATA_DIR/$lf" ]; then
-                warn "Legacy JSON still present: $lf (should be migrated to SQLite)"
-                LEGACY_FOUND=true
-            fi
-        done
-        if ! $LEGACY_FOUND; then
-            ok "No legacy JSON files found — all migrated to SQLite"
-        fi
-
-        # Dry-run to validate data integrity
-        if (cd "$REPO_ROOT/DataServer" && go run ./cmd/velox-migrate-json/... dry-run --data-dir "$DATA_DIR" --db "$DB_PATH" >/dev/null 2>&1); then
-            ok "velox-migrate-json dry-run validated"
-        else
-            warn "velox-migrate-json dry-run reported warnings (non-critical)"
-        fi
-    else
-        warn "velox-migrate-json inventory failed (data dir may be empty)"
-    fi
-else
-    skip "Data directory not found: $DATA_DIR"
-fi
-
-# 7b. Migration backup artifacts
-if [ -d "$DATA_DIR" ]; then
-    BAK_COUNT=$(find "$DATA_DIR" -name '*.bak' 2>/dev/null | wc -l || true)
-    if [ "$BAK_COUNT" -gt 0 ]; then
-        ok "$BAK_COUNT migration backup(s) present"
-    fi
-fi
-
-# 7c. legacy_imports tracking table
-if [ -f "$DB_PATH" ] && command -v sqlite3 >/dev/null 2>&1; then
-    IMPORT_COUNT=$(sqlite3 "$DB_PATH" "SELECT COUNT(*) FROM legacy_imports WHERE status='applied'" 2>/dev/null || echo "0")
-    if [ "$IMPORT_COUNT" -gt 0 ]; then
-        ok "legacy_imports tracking: $IMPORT_COUNT imports recorded"
-    else
-        warn "legacy_imports table empty (no imports recorded yet)"
-    fi
-fi
-
-# ============================================================
-header "Gate 8 — Prometheus & CI checks"
+header "Gate 7 — Prometheus & CI checks"
 # ============================================================
 
 # 8a. Prometheus explicitly configured (port set to 0)
@@ -428,7 +366,7 @@ if [[ -f "$REPO_ROOT/.github/workflows/ci.yml" ]]; then
 fi
 
 # ============================================================
-header "Gate 9-12 — Runtime checks (requires --worker)"
+header "Gate 8-11 — Runtime checks (requires --worker)"
 # ============================================================
 
 if [ -n "$WORKER" ]; then

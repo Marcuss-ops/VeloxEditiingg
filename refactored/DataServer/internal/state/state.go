@@ -4,8 +4,8 @@ import (
 	"sync"
 )
 
-// Global state for master server controls
-// Matches Python modules/core/state.py
+// Global state for master server controls.
+//
 
 type MasterState struct {
 	mu sync.RWMutex

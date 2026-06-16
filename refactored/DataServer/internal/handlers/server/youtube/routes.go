@@ -103,7 +103,6 @@ func RegisterYouTubeRoutes(rg gin.IRouter, h *YouTubeHandlers) {
 	rg.POST("/videos/:video_id/metadata", h.UpdateMetadata)
 	rg.POST("/videos/:video_id/publish", h.PublishVideo)
 	rg.DELETE("/videos/:video_id", h.DeleteVideo)
-	rg.POST("/videos/bulk-cover", h.ApplyBulkCover)
 
 	// Group Private Videos
 	rg.GET("/group-private-videos", h.ListGroupPrivateVideos)
