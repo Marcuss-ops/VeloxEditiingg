@@ -226,6 +226,13 @@ type ChannelGroup struct {
 	Channels    []string `json:"channels"`
 	Description string   `json:"description,omitempty"`
 	Privacy     string   `json:"privacy,omitempty"`
+	// GroupType discriminates between manager groups ("manager") and upload
+	// groups ("upload"). Promoted from the legacy *Group struct so the SPA
+	// /manager/* endpoints keep receiving the discriminator field. The
+	// canonical row in youtube_groups supplies it via loadCanonicalGroups.
+	// Stored as the same stringly-typed value the previous Storage used so
+	// no DB migration is required.
+	GroupType string `json:"group_type,omitempty"`
 }
 
 // ServiceConfig holds configuration for the YouTube service
