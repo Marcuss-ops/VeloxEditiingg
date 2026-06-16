@@ -105,9 +105,21 @@ func (h *YouTubeHandlers) ListGroups(c *gin.Context) {
 				"group_name": g.Name,
 			})
 			return
-		} else if channels == nil {
-			channels = []*youtube.Channel{}
 		}
+		// Pre-filter nil entries so count and rendered channels stay
+		// aligned. Previously `count: len(channels)` inflated the count
+		// when BulkMembership returned non-nil entries mixed with nil
+		// pointers (deleted-channel memberships, until pruned by the next
+		// membership diff). The render loop's `if ch == nil { continue }`
+		// skipped them at render time so the SPA saw fewer JSON entries
+		// than count claimed -- a real off-by-nils bug.
+		nonNil := make([]*youtube.Channel, 0, len(channels))
+		for _, ch := range channels {
+			if ch != nil {
+				nonNil = append(nonNil, ch)
+			}
+		}
+		channels = nonNil
 
 		groupData := map[string]interface{}{
 			"name":        g.Name,
@@ -120,9 +132,8 @@ func (h *YouTubeHandlers) ListGroups(c *gin.Context) {
 
 		channelsList := groupData["channels"].([]map[string]interface{})
 		for _, ch := range channels {
-			if ch == nil {
-				continue
-			}
+			_ = ch // pre-filtered above; the inner nil check is defensive
+			// against a future Membership-returning-nil contract change.
 
 			// Auth data overrides canonical row values when AuthChannel
 			// has fresher fields (live OAuth sessions take precedence).
