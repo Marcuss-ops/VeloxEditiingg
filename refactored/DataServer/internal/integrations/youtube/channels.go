@@ -332,8 +332,20 @@ func (s *Service) RefreshChannelMetadata(ctx context.Context, channelID string) 
 	}
 	s.mu.Unlock()
 
-	if err := s.saveChannelToken(s.channels[channelID]); err != nil {
-		log.Printf("[WARN] Failed to save updated token for %s: %v", channelID, err)
+	// Persist the refreshed title+thumbnail to SQLite. Refresh is a metadata
+	// operation, NOT an OAuth operation, so it MUST go through the metadata
+	// repository path — not saveChannelToken, which only writes OAuth
+	// secrets (token, refresh_token, token_uri, expiry, channel_id) to the
+	// local JSON file. Calling saveChannelToken here would silently drop
+	// title and thumbnail: the JSON schema has nowhere to store them, so
+	// the refresh would appear successful in RAM but never reach SQLite,
+	// and loadCanonicalChannels would then overwrite the in-memory update
+	// with the still-stale SQLite row on the next restart — exactly the
+	// ghost-channel class of bug we want to eliminate.
+	if s.store != nil {
+		if err := s.store.UpdateYouTubeChannelMetadata(channelID, newTitle, newThumbnail); err != nil {
+			log.Printf("[WARN] Failed to persist refreshed metadata for %s: %v", channelID, err)
+		}
 	}
 
 	log.Printf("[OK] Refreshed metadata for channel %s: title=%q", channelID, newTitle)
