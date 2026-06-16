@@ -16,9 +16,13 @@ import (
 // migrates each into youtube_oauth_tokens encrypted with the configured
 // AES-GCM cipher.
 //
-// Run once at server startup, AFTER SetOAuthSecretCipher is wired so the
-// cipher is mounted. Skipped silently with a WARN log when (store == nil)
-// or (oauthBuf == nil) - degraded mode has no place to encrypt.
+// Run once at server startup, AFTER NewService has mounted the cipher
+// on s.oauthBuf (the constructor returns an error if cipher is nil, so
+// invoking this method requires a booted service). Skipped silently
+// with a WARN log when (store == nil). The boot hydrator now performs
+// this work exclusively via loadOAuthChannelsFromSQLite; this helper
+// remains as a one-shot primitive for the planned `velox migrate
+// youtube-oauth-json` admin command and for legacy data recovery.
 //
 // Idempotency: rows already present in SQLite are PRESERVED. From Fix B
 // onward HandleOAuthCallback writes the canonical row directly to SQLite

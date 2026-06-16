@@ -1,12 +1,7 @@
 package youtube
 
 import (
-	"fmt"
-	"log"
 	"net/http"
-	"os"
-	"path/filepath"
-	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -15,66 +10,47 @@ import (
 	"velox-server/internal/handlers/server/youtube/videos"
 )
 
-// ListTokens lists all YouTube token files
-// GET /api/v1/youtube/tokens/list
-func (h *YouTubeHandlers) ListTokens(c *gin.Context) {
-	tokensDir := h.service.GetConfig().TokensDir
-	if tokensDir == "" {
-		dataDir := h.service.GetConfig().DataDir
-		if dataDir != "" {
-			tokensDir = filepath.Join(dataDir, "secrets", "youtube", "tokens")
-		}
-	}
-
-	if tokensDir == "" {
-		c.JSON(http.StatusOK, gin.H{
-			"ok":    true,
-			"files": []string{},
-			"count": 0,
-		})
-		return
-	}
-
-	files := []string{}
-	entries, err := os.ReadDir(tokensDir)
-	if err != nil {
-		log.Printf("[WARN] Failed to read tokens directory %s: %v", tokensDir, err)
-		c.JSON(http.StatusOK, gin.H{
-			"ok":    true,
-			"files": []string{},
-			"count": 0,
-		})
-		return
-	}
-
-	for _, entry := range entries {
-		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".json") {
-			// Get file info for size
-			info, err := entry.Info()
-			if err != nil {
-				continue
-			}
-			files = append(files, fmt.Sprintf("%s (%.1f KB)", entry.Name(), float64(info.Size())/1024))
-		}
-	}
-
+// ListTokensStub is the deprecated stub for GET /api/v1/youtube/tokens/list.
+// The runtime path is SQLite-only (S6 verdict): no server component
+// enumerates <TokensDir>/account_*.json at runtime. The original
+// ListTokens handler read the directory and returned the on-disk JSON
+// token files; that surface is gone. This stub keeps the route registered
+// so the existing frontend bundle (which still calls the endpoint from
+// the related-files panel) does not 404. The empty-list response is
+// semantically correct ("no token files tracked at runtime") and the
+// `deprecated` flag tells any future operator / frontend reader that
+// the endpoint is intentional noise, not a real backing-list.
+//
+// Frontend patch should switch this call off in a followup; the stub
+// keeps the panel visually clean without any other server-side change.
+func (h *YouTubeHandlers) ListTokensStub(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
-		"ok":    true,
-		"files": files,
-		"count": len(files),
-		"path":  tokensDir,
+		"ok":         true,
+		"files":      []string{},
+		"count":      0,
+		"deprecated": true,
 	})
 }
 
-// RegisterYouTubeRoutes registers all YouTube API routes
+// RegisterYouTubeRoutes registers all YouTube API routes.
+// ListTokens / GET /api/v1/youtube/tokens/list is registered as a
+// deprecated stub: the runtime path is SQLite-only (S6 verdict) and
+// no server component reads from <TokensDir>/account_*.json any more.
+// The stub returns an empty file list with a `deprecated` flag so the
+// existing frontend bundle's call to /api/v1/youtube/tokens/list does
+// not 404 (the related-files panel in the YouTube Manager UI surfaces
+// the empty list cleanly). It exists solely to avoid a frontend
+// regression on this commit; remove the route + frontend call in a
+// follow-up.
 func RegisterYouTubeRoutes(rg gin.IRouter, h *YouTubeHandlers) {
 	ch := channels.NewHandler(h.GetService(), h.GetStorage())
 	vh := videos.NewHandler(h.GetService(), h.ClearPrivateVideosCache)
 	cr := creative.NewHandler(h.GetService())
 
-	// Tokens
-	rg.GET("/tokens/list", h.ListTokens)
+	// Tokens (legacy JSON directory enumeration — deprecated, returns empty).
+	rg.GET("/tokens/list", h.ListTokensStub)
 
+	// Channels
 	// Channels
 	rg.GET("/channels", ch.ListChannels)
 	rg.GET("/channels/undefined", ch.ListUndefinedChannels)

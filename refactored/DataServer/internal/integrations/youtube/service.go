@@ -126,10 +126,10 @@ type Service struct {
 
 	// oauthBuf holds the AES-GCM cipher used by HandleOAuthCallback and
 	// the OAuth auto-refresh path to encrypt credentials before writing
-	// them to youtube_oauth_tokens. nil means OAuth writes go to the
-	// legacy JSON file only (no SQLite row); see SetOAuthSecretCipher.
-	// Set once at module wiring time and read-only afterwards, so no
-	// mutex is needed.
+	// them to youtube_oauth_tokens. Always non-nil after construction:
+	// NewService returns an error when cipher == nil, so the field is
+	// set once at construction time inside NewService (fail-closed).
+	// The previously-present SetOAuthSecretCipher side-channel is gone.
 	oauthBuf *aesgcm.Encryptor
 
 	authManager  *AuthManager
@@ -140,7 +140,17 @@ type Service struct {
 
 // NewService creates a new YouTube service.
 // store is optional — if nil, in-memory-only mode is used.
-func NewService(cfg *ServiceConfig, store YouTubeStore) (*Service, error) {
+// cipher is required: the OAuth callback, the auto-refresh path, and the
+// boot hydrator all need an AES-GCM cipher to read/write the encrypted
+// blobs in youtube_oauth_tokens. Passing nil returns an error so the
+// module wiring fails closed instead of silently degrading. The
+// previously-present SetOAuthSecretCipher side-channel is gone — a
+// service without a cipher is a programmer error at construction
+// time, not an operator choice. Integration tests that exercise
+// non-OAuth paths can still construct *Service via the struct literal
+// directly (oauthBuf field), which keeps the unit tests independent
+// of this fail-closed gate.
+func NewService(cfg *ServiceConfig, store YouTubeStore, cipher *aesgcm.Encryptor) (*Service, error) {
 	if cfg.TokensDir == "" {
 		if env := config.GetYouTubeTokensDir(); env != "" {
 			cfg.TokensDir = env
@@ -158,12 +168,22 @@ func NewService(cfg *ServiceConfig, store YouTubeStore) (*Service, error) {
 		}
 	}
 
+	if cipher == nil {
+		return nil, fmt.Errorf("youtube.NewService: oauth cipher required (set VELOX_YT_OAUTH_TOKEN_KEY); refusing to construct service without AES key")
+	}
+
 	s := &Service{
 		config:   cfg,
 		store:    store,
 		channels: make(map[string]*AuthChannel),
 		groups:   make(map[string]*ChannelGroup),
 		cache:    NewCache(cfg.DataDir, 12*time.Hour, store),
+		// Cipher is mounted at construction time. The boot hydrator
+		// (loadOAuthChannelsFromSQLite) can now read encrypted blobs
+		// immediately, before any external SetOAuthSecretCipher call
+		// — eliminating the "cipher nil on first boot" race called
+		// out in the re-analysis.
+		oauthBuf: cipher,
 	}
 
 	s.authManager = NewAuthManager(s)
@@ -230,16 +250,6 @@ func (s *Service) SetStore(st interface{}) {
 		s.loadCanonicalChannels()
 		s.loadCanonicalGroups()
 	}
-}
-
-// SetOAuthSecretCipher installs the AES-GCM cipher used by HandleOAuthCallback
-// and the OAuth auto-refresh path to encrypt tokens before persisting them to
-// youtube_oauth_tokens. Safe to call once at module wiring time. A nil cipher
-// degrades the OAuth write path to the legacy JSON file only; in that mode
-// no SQLite row is created and HandleOAuthCallback logs a WARN. Idempotent —
-// last-call-wins for symmetry with SetStore.
-func (s *Service) SetOAuthSecretCipher(c *aesgcm.Encryptor) {
-	s.oauthBuf = c
 }
 
 // --- Public API: OAuth (Delegated to AuthManager) ---

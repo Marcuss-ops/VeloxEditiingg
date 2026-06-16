@@ -11,7 +11,6 @@ import (
 	integrationsYoutube "velox-server/internal/integrations/youtube"
 	"velox-server/internal/secrets/aesgcm"
 	"velox-server/internal/store"
-	"context"
 )
 
 // Module provides YouTube integration endpoints.
@@ -50,6 +49,30 @@ func (m *Module) Service() *integrationsYoutube.Service {
 }
 
 func (m *Module) RegisterRoutes(r *gin.Engine) {
+	// Resolve the OAuth secret cipher FIRST, BEFORE NewService. The cipher must be
+	// available to the constructor because loadOAuthChannelsFromSQLite (the boot
+	// hydrator) reads through it on the same call. The previous "wire cipher
+	// after construction" pattern produced the failure mode called out in the
+	// re-analysis: the boot hydrator exited early with `oauth cipher nil`, the
+	// operator saw YouTube OAuth routes registered but every channel came up
+	// credential-less after a restart.
+	//
+	// requireIfMissing=true is the contract: a server without
+	// VELOX_YT_OAUTH_TOKEN_KEY cannot meaningfully persist OAuth credentials
+	// (SQLite-only contract, S6), so the only safe boot is to refuse. The
+	// entire YouTube route surface is gated on this. Operators see a clear
+	// startup failure rather than a later runtime surprise.
+	cipher, err := aesgcm.LoadFromEnv(true)
+	if err != nil {
+		log.Printf("[YOUTUBE][FAIL] OAuth secret cipher unavailable: %v — VELOX_YT_OAUTH_TOKEN_KEY (or _FILE variant) must be configured. YouTube routes will NOT be registered.", err)
+		return
+	}
+	if cipher == nil {
+		log.Printf("[YOUTUBE][FAIL] OAuth secret cipher nil: VELOX_YT_OAUTH_TOKEN_KEY resolved but did not produce a key — refusing to start YouTube routes.")
+		return
+	}
+	log.Printf("[OK] YouTube OAuth secret cipher initialised (key_version=%d)", cipher.KeyVersion())
+
 	youtubeService, err := integrationsYoutube.NewService(&integrationsYoutube.ServiceConfig{
 		TokensDir:          m.cfg.YouTubeTokensDir,
 		YoutubePostingPath: m.cfg.YouTubePostingPath,
@@ -57,7 +80,7 @@ func (m *Module) RegisterRoutes(r *gin.Engine) {
 		DataDir:            m.dataDir,
 		NVIDIAAPIKey:       m.cfg.NVIDIAAPIKey,
 		NVIDIATextURL:      m.cfg.NVIDIATextURL,
-	}, m.sqliteStore)
+	}, m.sqliteStore, cipher)
 	if err != nil {
 		log.Printf("[YOUTUBE] Service init failed: %v", err)
 		return
@@ -68,29 +91,12 @@ func (m *Module) RegisterRoutes(r *gin.Engine) {
 		youtubeService.GetQuotaManager().SetStore(m.sqliteStore)
 	}
 
-	// Resolve the OAuth secret cipher used by HandleOAuthCallback and the
-	// OAuth auto-refresh path. requireIfMissing=true is enforced here:
-	// step S6 of the migration plan removes JSON dual-write paths, so a
-	// server without VELOX_YT_OAUTH_TOKEN_KEY cannot meaningfully persist
-	// OAuth credentials, and the only safe boot is to refuse. The previous
-	// "warn-and-continue" mode produced the dual-write drift the verdict
-	// called out (json + sqlite could diverge on ValidateToken).
-	//
-	// We surface the missing-key error as a registration failure so the
-	// /api/v1/youtube/* routes are NOT registered when the cipher is
-	// missing. Operators see a clear startup failure rather than a
-	// later runtime surprise (Service.HandleOAuthCallback returns "cipher
-	// not configured" only when a real OAuth flow is attempted).
-	cipher, err := aesgcm.LoadFromEnv(true)
-	if err != nil {
-		log.Printf("[YOUTUBE][FAIL] OAuth secret cipher unavailable: %v — VELOX_YT_OAUTH_TOKEN_KEY (or _FILE variant) must be configured. YouTube OAuth routes will NOT be registered; SQLite-only flow cannot be reached without at-rest encryption.", err)
-	} else if cipher == nil {
-		log.Printf("[YOUTUBE][FAIL] OAuth secret cipher nil: VELOX_YT_OAUTH_TOKEN_KEY resolved but did not produce a key — refusing to start OAuth routes.")
-	} else {
-		youtubeService.SetOAuthSecretCipher(cipher)
-		_, _ = youtubeService.BackfillOAuthTokensFromJSON(context.Background())
-		log.Printf("[OK] YouTube OAuth secret cipher initialised (key_version=%d)", cipher.KeyVersion())
-	}
+	// BackfillOAuthTokensFromJSON is no longer called from boot. The runtime
+	// path now rehydrates exclusively from youtube_oauth_tokens via
+	// loadOAuthChannelsFromSQLite (the S6 contract). The
+	// BackfillOAuthTokensFromJSON helper is retained as a one-shot
+	// primitive for the planned `velox migrate youtube-oauth-json` admin
+	// command and for legacy data recovery; nothing runs it automatically.
 
 	if m.dataDir != "" {
 		storage, storageErr := integrationsYoutube.NewStorage(m.dataDir, m.sqliteStore)
@@ -99,18 +105,6 @@ func (m *Module) RegisterRoutes(r *gin.Engine) {
 		} else {
 			m.youtubeStorage = storage
 		}
-	}
-
-	// Fail-closed gate: if the AES cipher did not resolve above, do NOT
-	// register any YouTube route that would touch OAuth secrets. Otherwise
-	// HandleOAuthCallback would refuse every connect attempt with a runtime
-	// 500 ("cipher not configured") which would look indistinguishable
-	// from a normal OAuth error and tempt operators into "maybe try again"
-	// loops. Either the server boots with a usable cipher or it does not
-	// expose the OAuth surface.
-	if cipher == nil || err != nil {
-		log.Printf("[YOUTUBE][FAIL] YouTube OAuth routes disabled until VELOX_YT_OAUTH_TOKEN_KEY is configured.")
-		return
 	}
 
 	// Register the /api/v1/audit/persistence endpoint. Lives here because the
