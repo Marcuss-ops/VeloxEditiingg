@@ -86,8 +86,11 @@ func (pts *PersistedTokenSource) Token() (*oauth2.Token, error) {
 // encrypt failure so the in-RAM `channel.AccessToken` stays untouched
 // on a failed persist. (PersistedTokenSource.Token always returns the
 // freshly-refreshed `source.Token` to its caller regardless: the
-// OAuth lib's own cache is unaffected, and the next successful
-// refresh repopulates channel.AccessToken from SQL at boot hydration.)
+// OAuth lib's own cache is unaffected, and the next DB-first
+// refresh closure repopulates channel.AccessToken from SQL on the
+// next round-trip. Boot hydration via loadOAuthChannelsFromSQLite
+// only fires on a cold start; runtime recovery is the closure
+// path itself.)
 // The previous "auto-refresh path logs the SQL error and proceeds"
 // behaviour ("in-RAM access_token is already advanced on
 // channel.AccessToken") has been removed: a divergence between the
