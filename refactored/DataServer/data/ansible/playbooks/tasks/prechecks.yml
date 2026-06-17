@@ -3,7 +3,7 @@
   vars:
     required_files:
       - "{{ playbook_dir }}/tasks/installer_heartbeat.yml"
-      - "/home/pierone/Pyt/VeloxLEgit/refactored/DataServer/data/worker_downloads/worker_code_linux_x86_64.zip"
+      - "{{ playbook_dir }}/../../../../DataServer/data/worker_downloads/worker_code_linux_x86_64.zip"
   stat:
     path: "{{ item }}"
   loop: "{{ required_files }}"
@@ -129,7 +129,7 @@
 - name: Pre-check | Calcola sha256 bundle locale (master)
   shell: |
     set -euo pipefail
-    base="/home/pierone/Pyt/VeloxLEgit/refactored/DataServer"
+    base="{{ playbook_dir }}/../../../../DataServer"
     if [ -f "$base/data/worker_downloads/worker_code_linux_x86_64.zip" ]; then
       file="$base/data/worker_downloads/worker_code_linux_x86_64.zip"
     elif [ -f "$base/data/worker_downloads/worker_code.zip" ]; then

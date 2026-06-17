@@ -34,11 +34,14 @@ else
     ok "CI workflow present"
 fi
 
-# 1b. No legacy layout references in playbooks
-if grep -RnsE 'current/refactored|/app/refactored' "$PLAYBOOKS" 2>/dev/null | grep -v '.yml.bak' | grep -v '# '; then
-    fail "Legacy layout still present in playbooks"
+# 1b. No legacy layout references in playbooks. The trailing `(/|$|")`
+# anchor is required so that paths like `something_refactored.md` (a doc
+# or filename that *mentions* the refactor) don't trip the gate — we only
+# want to flag actual path components ending in `/refactored/`.
+if grep -RnsE 'current/refactored(/|$|")|/app/refactored(/|$|")|/home/[a-z]+/(Pyt|Documents|Projects|work)/[^ "]*refactored(/|$|")' "$PLAYBOOKS" 2>/dev/null | grep -v '.yml.bak' | grep -v '# '; then
+    fail "Legacy layout or absolute dev-machine path still present in playbooks"
 else
-    ok "No legacy layout references in playbooks"
+    ok "No legacy layout or absolute-dev-path references in playbooks"
 fi
 
 # 1c. inventory.ini not tracked by git
