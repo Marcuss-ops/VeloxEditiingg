@@ -1,140 +1,64 @@
 // Package worker provides job processing logic for the worker agent.
+// Job polling is now handled by the ControlTransport; the receiveLoop in
+// worker.go routes JobOffer messages to executeJob. This file retains
+// job validation helpers used by the receive loop and job executor.
 package worker
 
 import (
-	"context"
 	"fmt"
-	"time"
 
 	"velox-worker-agent/internal/telemetry"
 	"velox-worker-agent/pkg/api"
 	"velox-worker-agent/pkg/api/renderplan"
 )
 
-// jobLoop polls for jobs and executes them.
-func (w *Worker) jobLoop(ctx context.Context) {
-	defer w.wg.Done()
-
-	pollInterval := 5 * time.Second
-	ticker := time.NewTicker(pollInterval)
-	defer ticker.Stop()
-
-	pollCount := 0
-	lastSummaryLog := time.Now()
-	summaryInterval := 10 * time.Minute // Log summary every 10 minutes
-
-	w.logger.Info("[POLLING] Worker polling started — checking for jobs every %v", pollInterval)
-
-	for {
-		select {
-		case <-ctx.Done():
-			w.logger.Info("[POLLING] Job loop exiting (context done)")
-			return
-		case <-w.stopChan:
-			w.logger.Info("[POLLING] Job loop exiting (stop signal)")
-			return
-		case <-ticker.C:
-			if w.IsStopped() || w.drainMode.Load() {
-				continue
-			}
-
-			// Check concurrency: only poll if we have capacity
-			w.activeJobsMu.RLock()
-			activeCount := len(w.activeJobs)
-			w.activeJobsMu.RUnlock()
-			if activeCount >= w.config.MaxActiveJobs {
-				continue
-			}
-
-			pollCount++
-
-			// Log every poll at DEBUG level for detailed tracing
-			w.logger.Debug("[POLLING] Attempt %d — checking master for jobs (active: %d/%d)",
-				pollCount, activeCount, w.config.MaxActiveJobs)
-
-			job, err := w.pollJob(ctx)
-			if err != nil {
-				w.logger.Warn("[POLLING] Attempt %d failed: %v", pollCount, err)
-				continue
-			}
-			if job != nil {
-				w.logger.Info("[POLLING] Job acquired on attempt %d — executing in goroutine", pollCount)
-				go w.executeJob(ctx, job)
-				// Reset poll count after acquiring a job
-				pollCount = 0
-			}
-
-			// Periodic summary log at DEBUG level (every ~10 minutes)
-			if time.Since(lastSummaryLog) >= summaryInterval {
-				w.activeJobsMu.RLock()
-				activeCount = len(w.activeJobs)
-				w.activeJobsMu.RUnlock()
-				w.logger.Debug("[POLLING] Status: alive — %d polls sent, %d active jobs",
-					pollCount, activeCount)
-				lastSummaryLog = time.Now()
-			}
-		}
-	}
-}
-
-// pollJob checks for an available job from the master.
-func (w *Worker) pollJob(ctx context.Context) (*api.Job, error) {
-	w.logger.Debug("Polling for job...")
-	var job *api.Job
-	var err error
-	if w.config.UseV2Endpoints != nil && *w.config.UseV2Endpoints {
-		job, err = w.apiClient.GetJobV2(ctx, w.config.WorkerID)
-	} else {
-		job, err = w.apiClient.GetJob(ctx, w.config.WorkerID)
-	}
-	if err != nil {
-		return nil, err
+// validateJobOffer validates a job received via transport JobOffer message.
+// Checks contract version, render plan validity, and concurrency capacity.
+func (w *Worker) validateJobOffer(job *api.Job) error {
+	if job == nil {
+		return fmt.Errorf("nil job")
 	}
 
-	if job != nil {
-		w.logger.Info("Received job: %s (type: %s, priority: %d)", job.JobID, job.JobType, job.Priority)
-		if job.ContractVersion != 0 && job.ContractVersion != api.ContractVersionV2 {
-			w.logger.Error("[RENDERPLAN] Job contract version mismatch: got=%d want=%d", job.ContractVersion, api.ContractVersionV2)
-			telemetry.GetPrometheusMetrics().RecordIdempotencyConflict("contract_version")
-			return nil, fmt.Errorf("unsupported contract version: %d", job.ContractVersion)
-		}
-
-		rp := renderplan.FromMap(map[string]interface{}{
-			"version":    renderplan.RenderPlanVersion,
-			"job_id":     job.JobID,
-			"job_type":   job.JobType,
-			"created_at": resolveJobCreatedAt(job),
-			"priority":   job.Priority,
-			"parameters": job.Parameters,
-		})
-
-		if err := renderplan.ValidateRenderPlan(rp); err != nil {
-			w.logger.Error("[RENDERPLAN] Job validation failed: %v", err)
-			if planErrs, ok := err.(renderplan.PlanErrors); ok {
-				for _, planErr := range planErrs {
-					w.logger.Error("[RENDERPLAN] error_code=%s field=%s message=%s", planErr.Code, planErr.Field, planErr.Message)
-				}
-			}
-			telemetry.GetPrometheusMetrics().RecordIdempotencyConflict("validation_failed")
-			return nil, fmt.Errorf("job validation failed: %w", err)
-		}
-
-		rp.SetDefaults()
-		if rp.Priority != job.Priority {
-			w.logger.Debug("[RENDERPLAN] Applied default priority: %d -> %d", job.Priority, rp.Priority)
-			job.Priority = rp.Priority
-		}
-
-		w.logger.Info("[RENDERPLAN] Job %s validated: render_plan_version=%s", job.JobID, rp.Version)
-
-		if !w.concurrencyLimiter.CanAcceptJob(job.Priority) {
-			w.logger.Warn("[CONCURRENCY] Cannot accept job %s: concurrency limit reached", job.JobID)
-			telemetry.GetPrometheusMetrics().RecordIdempotencyConflict("concurrency_limit")
-			return nil, fmt.Errorf("concurrency limit reached for job %s", job.JobID)
-		}
-
-		telemetry.RecordJobReceived()
+	if job.ContractVersion != 0 && job.ContractVersion != api.ContractVersionV2 {
+		w.logger.Error("[RENDERPLAN] Job contract version mismatch: got=%d want=%d", job.ContractVersion, api.ContractVersionV2)
+		telemetry.GetPrometheusMetrics().RecordIdempotencyConflict("contract_version")
+		return fmt.Errorf("unsupported contract version: %d", job.ContractVersion)
 	}
 
-	return job, nil
+	rp := renderplan.FromMap(map[string]interface{}{
+		"version":    renderplan.RenderPlanVersion,
+		"job_id":     job.JobID,
+		"job_type":   job.JobType,
+		"created_at": resolveJobCreatedAt(job),
+		"priority":   job.Priority,
+		"parameters": job.Parameters,
+	})
+
+	if err := renderplan.ValidateRenderPlan(rp); err != nil {
+		w.logger.Error("[RENDERPLAN] Job validation failed: %v", err)
+		if planErrs, ok := err.(renderplan.PlanErrors); ok {
+			for _, planErr := range planErrs {
+				w.logger.Error("[RENDERPLAN] error_code=%s field=%s message=%s", planErr.Code, planErr.Field, planErr.Message)
+			}
+		}
+		telemetry.GetPrometheusMetrics().RecordIdempotencyConflict("validation_failed")
+		return fmt.Errorf("job validation failed: %w", err)
+	}
+
+	rp.SetDefaults()
+	if rp.Priority != job.Priority {
+		w.logger.Debug("[RENDERPLAN] Applied default priority: %d -> %d", job.Priority, rp.Priority)
+		job.Priority = rp.Priority
+	}
+
+	w.logger.Info("[RENDERPLAN] Job %s validated: render_plan_version=%s", job.JobID, rp.Version)
+
+	if !w.concurrencyLimiter.CanAcceptJob(job.Priority) {
+		w.logger.Warn("[CONCURRENCY] Cannot accept job %s: concurrency limit reached", job.JobID)
+		telemetry.GetPrometheusMetrics().RecordIdempotencyConflict("concurrency_limit")
+		return fmt.Errorf("concurrency limit reached for job %s", job.JobID)
+	}
+
+	telemetry.RecordJobReceived()
+	return nil
 }

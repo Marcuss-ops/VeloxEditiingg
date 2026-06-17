@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"velox-worker-agent/internal/transport"
 	"velox-worker-agent/pkg/api"
 	"velox-worker-agent/pkg/config"
 	"velox-worker-agent/pkg/logger"
@@ -51,9 +52,15 @@ func New(cfg *config.WorkerConfig, version string) *Worker {
 	}
 	stageExecutor := NewStageExecutor(stageExecCfg)
 
+	// Initialize control-plane transport based on configuration.
+	// Supports: polling (HTTP, default), grpc (gRPC bidirectional stream).
+	// When grpc is selected and fallback is enabled, polling is used as a safety net.
+	ctrlTransport := newControlTransport(apiClient, cfg, log)
+
 	w := &Worker{
 		config:    cfg,
 		apiClient: apiClient,
+		transport: ctrlTransport,
 		logger:    log,
 		status:    StatusIdle,
 		stopChan:  make(chan struct{}),

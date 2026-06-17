@@ -1,15 +1,15 @@
 // Package worker provides communication and heartbeat logic for the worker agent.
+// All control-plane messages are sent via ControlTransport.Send() instead of
+// calling the HTTP API client directly.
 package worker
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"math"
-	"os"
 	"runtime"
 	"time"
 
+	"velox-shared/controltransport"
 	"velox-worker-agent/internal/telemetry"
 	"velox-worker-agent/pkg/api"
 	"velox-worker-agent/pkg/logger"
@@ -36,82 +36,6 @@ func detectMaxParallelJobs() int {
 	return parallel
 }
 
-// register registers the worker with the master server.
-func (w *Worker) register(ctx context.Context) error {
-	hostname, _ := os.Hostname()
-
-	maxParallel := detectMaxParallelJobs()
-	// Override with config if explicitly set > 0
-	if w.config.MaxActiveJobs > 1 {
-		maxParallel = w.config.MaxActiveJobs
-	}
-
-	info := &api.WorkerInfo{
-		WorkerID:   w.config.WorkerID,
-		WorkerName: w.config.WorkerName,
-		Capabilities: map[string]interface{}{
-			"render_scene_image": true,
-			"render_clip_stock":  true,
-			"upload_drive":       true,
-			"ffmpeg":             true,
-			"cpp_engine":         true,
-			"max_parallel_jobs":  maxParallel,
-			"cpu_count":          runtime.NumCPU(),
-			"supported_job_types": []string{
-				"process_video",
-				"render",
-				"process_audio",
-				"health_check",
-			},
-		},
-		Hostname:        hostname,
-		IP:              "",
-		Version:         w.version,
-		CodeVersion:     w.version,
-		BundleVersion:   w.config.BundleVersion,
-		BundleHash:      w.config.BundleHash,
-		ProtocolVersion: w.config.ProtocolVersion,
-		EngineVersion:   w.config.EngineVersion,
-	}
-
-	// Compute persistent credential hash if worker secret is configured.
-	// Credential = SHA-256(workerID + ":" + workerSecret)
-	if w.config.WorkerSecret != "" {
-		h := sha256.New()
-		h.Write([]byte(w.config.WorkerID + ":" + w.config.WorkerSecret))
-		info.Credential = hex.EncodeToString(h.Sum(nil))
-		w.logger.Debug("[AUTH] Credential hash computed for registration")
-	}
-
-	w.logger.Debug("Registering with master at %s", w.config.MasterURL)
-	if err := w.apiClient.RegisterWorker(ctx, info); err != nil {
-		logger.LogRegisterFailed(w.config.WorkerID, w.config.MasterURL, err)
-		return err
-	}
-
-	logger.LogRegisterSuccess(w.config.WorkerID, w.config.MasterURL)
-
-	// Mark worker as registered for the /health endpoint
-	telemetry.SetHealthRegistered(true)
-
-	// Log whether we received an auth token for future requests
-	token := w.apiClient.AuthToken()
-	if token != "" {
-		w.logger.Debug("[AUTH] Auth token received during registration (length: %d)", len(token))
-	} else {
-		w.logger.Debug("[AUTH] No auth token received — continuing without token (tokenless requests are allowed)")
-	}
-
-	return nil
-}
-
-// unregister unregisters the worker from the master server.
-func (w *Worker) unregister(ctx context.Context) error {
-	w.logger.Debug("Unregistering from master...")
-	telemetry.SetHealthRegistered(false)
-	return w.apiClient.UnregisterWorker(ctx, w.config.WorkerID)
-}
-
 // getHeartbeatInterval returns the appropriate heartbeat interval based on worker status.
 func (w *Worker) getHeartbeatInterval() time.Duration {
 	w.mu.RLock()
@@ -127,7 +51,7 @@ func (w *Worker) getHeartbeatInterval() time.Duration {
 	}
 }
 
-// heartbeatLoop sends periodic heartbeats to the master with adaptive intervals.
+// heartbeatLoop sends periodic heartbeats to the master via transport.Send().
 func (w *Worker) heartbeatLoop(ctx context.Context) {
 	defer w.wg.Done()
 
@@ -207,29 +131,30 @@ func (w *Worker) getStatus() Status {
 	return w.Status()
 }
 
-// sendHeartbeat sends a single heartbeat to the master.
+// sendHeartbeat sends a single heartbeat to the master via transport.Send().
 func (w *Worker) sendHeartbeat(ctx context.Context) error {
 	status := w.Status()
 
 	recentLogs, recentErrors := w.recentLogs.Snapshot(300, 100)
-	extra := map[string]interface{}{}
+	payload := map[string]interface{}{}
 	if len(recentLogs) > 0 {
-		extra["recent_logs"] = recentLogs
-		extra["recent_logs_count"] = len(recentLogs)
+		payload["recent_logs"] = recentLogs
+		payload["recent_logs_count"] = len(recentLogs)
 	}
 	if len(recentErrors) > 0 {
-		extra["recent_errors"] = recentErrors
-		extra["recent_errors_count"] = len(recentErrors)
+		payload["recent_errors"] = recentErrors
+		payload["recent_errors_count"] = len(recentErrors)
 	}
-	extra["worker_status"] = string(status)
-	extra["worker_id"] = w.config.WorkerID
-	extra["worker_name"] = w.config.WorkerName
-	extra["code_version"] = w.version
-	extra["bundle_version"] = w.config.BundleVersion
-	extra["bundle_hash"] = w.config.BundleHash
-	extra["protocol_version"] = w.config.ProtocolVersion
-	extra["engine_version"] = w.config.EngineVersion
-	extra["capabilities"] = map[string]interface{}{
+	payload["worker_status"] = string(status)
+	payload["worker_id"] = w.config.WorkerID
+	payload["worker_name"] = w.config.WorkerName
+	payload["status"] = string(status)
+	payload["code_version"] = w.version
+	payload["bundle_version"] = w.config.BundleVersion
+	payload["bundle_hash"] = w.config.BundleHash
+	payload["protocol_version"] = w.config.ProtocolVersion
+	payload["engine_version"] = w.config.EngineVersion
+	payload["capabilities"] = map[string]interface{}{
 		"render_scene_image": true,
 		"render_clip_stock":  true,
 		"upload_drive":       true,
@@ -244,8 +169,8 @@ func (w *Worker) sendHeartbeat(ctx context.Context) error {
 			"health_check",
 		},
 	}
-	extra["jobs_completed"] = w.jobsCompleted.Load()
-	extra["jobs_failed"] = w.jobsFailed.Load()
+	payload["jobs_completed"] = w.jobsCompleted.Load()
+	payload["jobs_failed"] = w.jobsFailed.Load()
 
 	// Report all active jobs with their individual progress
 	w.activeJobsMu.RLock()
@@ -276,30 +201,25 @@ func (w *Worker) sendHeartbeat(ctx context.Context) error {
 	w.activeJobsMu.RUnlock()
 
 	if len(activeJobList) > 0 {
-		extra["active_jobs"] = activeJobList
-		extra["active_jobs_count"] = len(activeJobList)
+		payload["active_jobs"] = activeJobList
+		payload["active_jobs_count"] = len(activeJobList)
 	}
+	payload["current_job"] = primaryJobID
 
-	payload := &api.HeartbeatPayload{
-		WorkerID:        w.config.WorkerID,
-		WorkerName:      w.config.WorkerName,
-		Status:          string(status),
-		JobID:           primaryJobID,
-		CurrentJob:      primaryJobID,
-		CodeVersion:     w.version,
-		BundleVersion:   w.config.BundleVersion,
-		BundleHash:      w.config.BundleHash,
-		ProtocolVersion: w.config.ProtocolVersion,
-		EngineVersion:   w.config.EngineVersion,
-		Extra:           extra,
-	}
-	if err := w.apiClient.SendHeartbeat(ctx, payload); err != nil {
+	msg := controltransport.NewMessageWithPayload(
+		controltransport.MsgHeartbeat,
+		w.config.WorkerID,
+		w.config.ProtocolVersion,
+		payload,
+	)
+
+	if err := w.transport.Send(ctx, msg); err != nil {
 		return err
 	}
 	return nil
 }
 
-// leaseRenewLoop sends periodic lease renewals for all active jobs, decoupled from heartbeat.
+// leaseRenewLoop sends periodic lease renewals for all active jobs via transport.Send().
 func (w *Worker) leaseRenewLoop(ctx context.Context) {
 	defer w.wg.Done()
 
@@ -334,13 +254,22 @@ func (w *Worker) leaseRenewLoop(ctx context.Context) {
 
 				leaseExpiry := time.Now().UTC().Add(30 * time.Minute).Format(time.RFC3339)
 				attempt := resolveJobAttempt(aj.Job)
-				var err error
-				if w.config.UseV2Endpoints != nil && *w.config.UseV2Endpoints {
-					err = w.apiClient.RenewJobLeaseV2(ctx, aj.Job.JobID, w.config.WorkerID, leaseID, attempt, leaseExpiry)
-				} else {
-					err = w.apiClient.RenewJobLease(ctx, aj.Job.JobID, w.config.WorkerID, leaseID, attempt, leaseExpiry)
+
+				payload := map[string]interface{}{
+					"job_id":           aj.Job.JobID,
+					"lease_id":         leaseID,
+					"attempt":          attempt,
+					"lease_expires_at": leaseExpiry,
 				}
-				if err != nil {
+
+				msg := controltransport.NewMessageWithPayload(
+					controltransport.MsgLeaseRenewal,
+					w.config.WorkerID,
+					w.config.ProtocolVersion,
+					payload,
+				)
+
+				if err := w.transport.Send(ctx, msg); err != nil {
 					w.logger.Warn("[LEASE] Failed to renew lease for job %s: %v", aj.Job.JobID, err)
 				} else {
 					w.logger.Debug("[LEASE] Renewed lease for job %s (lease_id=%s)", aj.Job.JobID, leaseID)

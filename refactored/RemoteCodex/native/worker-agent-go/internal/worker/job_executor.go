@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"velox-shared/controltransport"
 	"velox-worker-agent/internal/telemetry"
 	"velox-worker-agent/pkg/api"
 	"velox-worker-agent/pkg/config"
@@ -143,30 +144,33 @@ func (w *Worker) executeJob(ctx context.Context, job *api.Job) {
 	defer cancel()
 
 	ackStartTime := time.Now()
-	var submitErr error
-	if w.config.UseV2Endpoints != nil && *w.config.UseV2Endpoints {
-		submitErr = w.apiClient.SubmitJobResultV2(submitCtx, job.JobID, result)
-	} else {
-		submitErr = w.apiClient.SubmitJobResult(submitCtx, result)
+
+	// Send job result via transport (handles both submit and complete)
+	resultPayload := map[string]interface{}{
+		"job_id":           result.JobID,
+		"job_run_id":       result.JobRunID,
+		"status":           result.Status,
+		"error":            result.Error,
+		"start_time":       result.StartTime,
+		"end_time":         result.EndTime,
+		"lease_id":         result.LeaseID,
+		"attempt":          result.Attempt,
+		"output":           result.Output,
+		"contract_version": result.ContractVersion,
 	}
-	if submitErr != nil {
+
+	resultMsg := controltransport.NewMessageWithPayload(
+		controltransport.MsgJobResult,
+		w.config.WorkerID,
+		w.config.ProtocolVersion,
+		resultPayload,
+	)
+
+	if submitErr := w.transport.Send(submitCtx, resultMsg); submitErr != nil {
 		w.logger.Error("Failed to submit job result for %s: %v", job.JobID, submitErr)
 	} else {
-		w.logger.Debug("Job result submitted: %s (status: %s)", job.JobID, result.Status)
+		w.logger.Info("[JOB] Result submitted and completed for %s (status: %s)", job.JobID, result.Status)
 		telemetry.GetPrometheusMetrics().RecordJobCompleteAck(job.JobType, float64(time.Since(ackStartTime).Milliseconds()))
-		completeCtx, completeCancel := context.WithTimeout(context.Background(), 30*time.Second)
-		var completeErr error
-		if w.config.UseV2Endpoints != nil && *w.config.UseV2Endpoints {
-			completeErr = w.apiClient.CompleteJobV2(completeCtx, job.JobID, w.config.WorkerID, resolveLeaseID(job), resolveJobAttempt(job))
-		} else {
-			completeErr = w.apiClient.CompleteJob(completeCtx, job.JobID, w.config.WorkerID, resolveLeaseID(job), resolveJobAttempt(job))
-		}
-		if completeErr != nil {
-			w.logger.Warn("[JOB] Complete notification failed for %s: %v", job.JobID, completeErr)
-		} else {
-			w.logger.Info("[JOB] Complete notification sent for %s", job.JobID)
-		}
-		completeCancel()
 	}
 
 	if execErr != nil {

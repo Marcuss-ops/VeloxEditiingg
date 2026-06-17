@@ -1,0 +1,41 @@
+// Proto definition for Velox Worker-Control bidirectional stream.
+// Both master (DataServer) and worker (worker-agent-go) use this contract
+// for typed, versioned control-plane communication.
+syntax = "proto3";
+
+package velox.control;
+
+option go_package = "velox-shared/controltransport/pb";
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/struct.proto";
+
+// TransportMessage is the wire format for all control-plane messages.
+// It mirrors controltransport.ControlMessage in shared/controltransport/message.go.
+message TransportMessage {
+    string message_id = 1;
+    string type = 2;                     // Maps to ControlMessageType (e.g. "heartbeat", "job_offer")
+    string worker_id = 3;
+    string session_id = 4;
+    int64 sequence_number = 5;
+    google.protobuf.Timestamp sent_at = 6;
+    string protocol_version = 7;
+    google.protobuf.Struct payload = 8;  // JSON-like payload for existing ControlMessage.Payload
+}
+
+// WorkerControl provides a single bidirectional stream for all worker↔master
+// control-plane communication. The worker opens the stream and the master
+// responds on the same stream, creating a persistent session.
+//
+// Lifecycle:
+//   1. Worker opens stream and sends Hello
+//   2. Master responds with HelloAck (establishes session)
+//   3. Worker sends Heartbeat / LeaseRenewal / JobProgress
+//   4. Master sends JobOffer / Command / CancelJob / Drain
+//   5. Worker sends JobAccepted / JobRejected / CommandAck / JobResult
+//   6. Worker sends Goodbye to terminate
+service WorkerControl {
+    // Stream establishes a bidirectional control channel.
+    // The worker is the initiator; the master responds on the same stream.
+    rpc Stream(stream TransportMessage) returns (stream TransportMessage);
+}
