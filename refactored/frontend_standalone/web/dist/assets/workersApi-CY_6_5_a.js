@@ -1,1 +1,0 @@
-import{f as t}from"./index-Di_vB6o1.js";const l={list:()=>t("/workers"),status:()=>t("/workers_status"),logs:(r,e=100)=>t(`/workers/${r}/logs?tail=${e}`),updateAll:(r=!0)=>t("/workers/update_all",{method:"POST",body:JSON.stringify({exclude_local:r})}),restartAll:(r=!0)=>t("/workers/restart_all",{method:"POST",body:JSON.stringify({exclude_local:r})})};export{l as w};
