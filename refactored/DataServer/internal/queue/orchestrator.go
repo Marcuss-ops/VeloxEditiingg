@@ -3,9 +3,14 @@
 //
 // The in-memory job map is a read-through cache only — SQLite is always authoritative.
 // State changes and outbox entries are written in the same SQLite transaction.
+//
+// PR5b — Durable worker assignments: worker-to-step assignments are persisted
+// in orchestrator_jobs.raw_json and survive restarts. Stale worker recovery
+// resets PROCESSING steps to READY when a worker's heartbeat times out.
 package queue
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -42,6 +47,10 @@ type JobStep struct {
 	MaxRetries   int                    `json:"max_retries"`
 	CreatedAt    string                 `json:"created_at"`
 	CompletedAt  *string                `json:"completed_at,omitempty"`
+
+	// PR5b: Persistent worker assignment — survives restarts via SQLite persistence.
+	AssignedWorker string  `json:"assigned_worker,omitempty"`
+	AssignedAt     *string `json:"assigned_at,omitempty"`
 }
 
 // MultiStepJob represents a pipeline composed of multiple steps.
@@ -81,32 +90,48 @@ type Orchestrator struct {
 	onJobFail     func(job *MultiStepJob, reason string)
 
 	// Config
-	pollInterval      time.Duration
-	jobTimeout        time.Duration
-	defaultMaxRetries int
-	outboxBatchSize   int
+	pollInterval       time.Duration
+	jobTimeout         time.Duration
+	defaultMaxRetries  int
+	outboxBatchSize    int
+	staleWorkerTimeout time.Duration
+
+	// PR5b: Worker registry reference for heartbeat-based recovery.
+	workerRegistry WorkerRegistry
+}
+
+// WorkerRegistry is the minimal interface the orchestrator needs for worker heartbeat queries.
+type WorkerRegistry interface {
+	GetStaleWorkers(ctx context.Context, timeout time.Duration) []WorkerInfoStub
+}
+
+// WorkerInfoStub is the minimal worker info the orchestrator needs.
+type WorkerInfoStub struct {
+	WorkerID string
 }
 
 // OrchestratorConfig holds configuration for the orchestrator.
 type OrchestratorConfig struct {
-	PollInterval      time.Duration
-	JobTimeout        time.Duration
-	DefaultMaxRetries int
-	OutboxBatchSize   int
+	PollInterval       time.Duration
+	JobTimeout         time.Duration
+	DefaultMaxRetries  int
+	OutboxBatchSize    int
+	StaleWorkerTimeout time.Duration // PR5b: how long before a worker is considered stale
 }
 
 // DefaultOrchestratorConfig returns sensible defaults.
 func DefaultOrchestratorConfig() *OrchestratorConfig {
 	return &OrchestratorConfig{
-		PollInterval:      15 * time.Second,
-		JobTimeout:        30 * time.Minute,
-		DefaultMaxRetries: 2,
-		OutboxBatchSize:   20,
+		PollInterval:       15 * time.Second,
+		JobTimeout:         30 * time.Minute,
+		DefaultMaxRetries:  2,
+		OutboxBatchSize:    20,
+		StaleWorkerTimeout: 5 * time.Minute,
 	}
 }
 
 // NewOrchestrator creates a new orchestrator with SQLite-authoritative state.
-func NewOrchestrator(cfg *OrchestratorConfig, fileQ *FileQueue, dbStore *store.SQLiteStore) (*Orchestrator, error) {
+func NewOrchestrator(cfg *OrchestratorConfig, fileQ *FileQueue, dbStore *store.SQLiteStore, workerReg WorkerRegistry) (*Orchestrator, error) {
 	if fileQ == nil {
 		return nil, fmt.Errorf("orchestrator: FileQueue is required")
 	}
@@ -118,15 +143,17 @@ func NewOrchestrator(cfg *OrchestratorConfig, fileQ *FileQueue, dbStore *store.S
 	}
 
 	o := &Orchestrator{
-		jobs:              make(map[string]*MultiStepJob),
-		fileQ:             fileQ,
-		dbStore:           dbStore,
-		notifyCh:          make(chan struct{}, 5),
-		stopCh:            make(chan struct{}),
-		pollInterval:      cfg.PollInterval,
-		jobTimeout:        cfg.JobTimeout,
-		defaultMaxRetries: cfg.DefaultMaxRetries,
-		outboxBatchSize:   cfg.OutboxBatchSize,
+		jobs:               make(map[string]*MultiStepJob),
+		fileQ:              fileQ,
+		dbStore:            dbStore,
+		notifyCh:           make(chan struct{}, 5),
+		stopCh:             make(chan struct{}),
+		pollInterval:       cfg.PollInterval,
+		jobTimeout:         cfg.JobTimeout,
+		defaultMaxRetries:  cfg.DefaultMaxRetries,
+		outboxBatchSize:    cfg.OutboxBatchSize,
+		staleWorkerTimeout: cfg.StaleWorkerTimeout,
+		workerRegistry:     workerReg,
 	}
 
 	// Load existing jobs from SQLite into cache (PR5: SQLite is authoritative)

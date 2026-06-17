@@ -18,6 +18,7 @@ import (
 	"velox-server/internal/handlers/server/api"
 	"velox-server/internal/handlers/server/pipeline"
 	workersapi "velox-server/internal/handlers/remote/workers"
+	"velox-server/internal/handlers/remote/workers/lifecycle"
 	"velox-server/internal/modules/ansible"
 	"velox-server/internal/modules/drive"
 	"velox-server/internal/modules/frontend"
@@ -41,7 +42,7 @@ type serverDeps struct {
 	workersRepo         store.WorkersRepository
 	sqliteStore         *store.SQLiteStore
 	workerUpdateHandler *workersapi.WorkerUpdateHandler
-	workerLifecycle     *workersapi.WorkerLifecycle
+	workerLifecycle     *lifecycle.Handler
 	ansibleModule       *ansible.Module
 	youtubeModule       *youtube.Module
 	orchestrator        *queue.Orchestrator
@@ -109,14 +110,14 @@ func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
 	workersRepo := store.NewSQLiteWorkersRepository(sqliteStore)
 
 	// Worker Update Handler (bundle download, manifest, etc.)
-	cmdMgr := workersreg.NewCommandManager()
+	cmdMgr := workersreg.NewCommandManager(sqliteStore)
 	updateMgr := workersreg.NewUpdateManager()
-	tokenMgr := workersreg.NewTokenManager()
+	tokenMgr := workersreg.NewTokenManager(sqliteStore)
 	workerUpdateHandler := workersapi.NewWorkerUpdateHandler(cfg, reg, cmdMgr, updateMgr, tokenMgr, cfg.Runtime.DataDir)
-	workerLifecycle := workersapi.NewWorkerLifecycle(cfg, reg, cfg.Runtime.DataDir)
+	workerLifecycle := lifecycle.NewHandler(cfg, reg, sqliteStore, cfg.Runtime.DataDir)
 
-	// Create orchestrator for multi-step job pipelines
-	orch, err := queue.NewOrchestrator(nil, fileQ, sqliteStore)
+	// Create orchestrator for multi-step job pipelines (PR5b: with worker registry for heartbeat recovery)
+	orch, err := queue.NewOrchestrator(nil, fileQ, sqliteStore, &orchestratorWorkerRegistry{reg: reg})
 	if err != nil {
 		return nil, fmt.Errorf("orchestrator init: %w", err)
 	}
@@ -257,6 +258,20 @@ func runServer(cfg *config.Config) error {
 // runDataLayerAudit checks for legacy JSON files and data layer integrity.
 // Returns error if critical issues are found (hard block).
 // Warnings are logged but don't block startup.
+// orchestratorWorkerRegistry adapts workersreg.Registry to queue.WorkerRegistry.
+type orchestratorWorkerRegistry struct {
+	reg *workersreg.Registry
+}
+
+func (a *orchestratorWorkerRegistry) GetStaleWorkers(ctx context.Context, timeout time.Duration) []queue.WorkerInfoStub {
+	stale := a.reg.GetStaleWorkers(ctx, timeout)
+	out := make([]queue.WorkerInfoStub, len(stale))
+	for i, w := range stale {
+		out[i] = queue.WorkerInfoStub{WorkerID: w.WorkerID}
+	}
+	return out
+}
+
 func runDataLayerAudit(cfg *config.Config) error {
 	dataDir := cfg.Runtime.DataDir
 	if dataDir == "" {
