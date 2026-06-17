@@ -94,7 +94,7 @@ func maybeAutoUploadYouTube(fileQ interface{ UpdateJobFields(ctx context.Context
 			channelName = cfg.ChannelName
 		} else {
 			// Fallback: resolve channel at upload time (for targets created without pre-resolution)
-			groupName := cfg.Language // stored as language in config from youtube_group
+			groupName := cfg.GroupName
 			language := cfg.Language
 			if groupName == "" {
 				// Try to extract from original upload info

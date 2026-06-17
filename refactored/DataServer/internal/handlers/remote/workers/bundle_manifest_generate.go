@@ -26,7 +26,7 @@ func (h *WorkerUpdateHandler) GenerateManifestV2() error {
 	actualSHA := computeFileSHA256(bundlePath)
 	now := time.Now().UTC().Format(time.RFC3339)
 
-	version := h.cfg.VersionNumber
+	version := h.cfg.Workers.VersionNumber
 	if version == "" {
 		version = h.codeVersion
 	}

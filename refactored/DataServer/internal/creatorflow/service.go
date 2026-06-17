@@ -31,21 +31,21 @@ func New(cfg *config.Config, q *queue.FileQueue) *Service {
 	if cfg == nil || q == nil {
 		return nil
 	}
-	if strings.TrimSpace(cfg.RemoteEngineURL) == "" {
+	if strings.TrimSpace(cfg.Render.RemoteEngineURL) == "" {
 		return nil
 	}
 
 	return &Service{
 		queue: q,
 		client: remoteengine.NewClient(remoteengine.Config{
-			URL:       cfg.RemoteEngineURL,
-			Token:     cfg.RemoteEngineToken,
-			TimeoutMS: cfg.RemoteEngineTimeoutMS,
-			Retries:   cfg.RemoteEngineRetries,
+			URL:       cfg.Render.RemoteEngineURL,
+			Token:     cfg.Render.RemoteEngineToken,
+			TimeoutMS: cfg.Render.RemoteEngineTimeoutMS,
+			Retries:   cfg.Render.RemoteEngineRetries,
 		}),
-		pollInterval: time.Duration(max(cfg.RemoteEnginePollInterval, 5)) * time.Second,
-		dataDir:      strings.TrimSpace(cfg.DataDir),
-		videosDir:    strings.TrimSpace(cfg.VideosDir),
+		pollInterval: time.Duration(max(cfg.Render.RemoteEnginePollInterval, 5)) * time.Second,
+		dataDir:      strings.TrimSpace(cfg.Runtime.DataDir),
+		videosDir:    strings.TrimSpace(cfg.Runtime.VideosDir),
 		masterURL:    resolvePublicMasterURL(cfg),
 	}
 }
@@ -220,7 +220,7 @@ func max(a, b int) int {
 
 func resolvePublicMasterURL(cfg *config.Config) string {
 	if cfg != nil {
-		if v := strings.TrimSpace(cfg.MasterURL); v != "" {
+		if v := strings.TrimSpace(cfg.Workers.MasterURL); v != "" {
 			return v
 		}
 	}

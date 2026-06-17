@@ -21,7 +21,7 @@ import (
 // UploadCompletedVideo handles video file upload from workers.
 // POST /api/v1/video/upload-completed
 func UploadCompletedVideo(cfg *config.Config, fileQ *queue.FileQueue, youtubeService YouTubeAutoUploader, driveService DriveAutoUploader) gin.HandlerFunc {
-	videosDir := cfg.VideosDir
+	videosDir := cfg.Runtime.VideosDir
 	if videosDir == "" {
 		videosDir = "./completed_videos"
 	}
@@ -144,7 +144,7 @@ func UploadCompletedVideo(cfg *config.Config, fileQ *queue.FileQueue, youtubeSer
 		maybeAutoUploadYouTube(fileQ, youtubeService, jobID, uploadInfo, videoPath, deliveryTargets)
 
 		// Trigger Drive auto-upload (async, best-effort) with resolved targets
-		maybeAutoUploadDrive(fileQ, driveService, cfg.DataDir, jobID, uploadInfo, videoPath, deliveryTargets)
+		maybeAutoUploadDrive(fileQ, driveService, cfg.Runtime.DataDir, jobID, uploadInfo, videoPath, deliveryTargets)
 
 		log.Printf("[UPLOAD] Video upload completed: job=%s worker=%s size=%d sha256=%s",
 			jobID, workerID, size, sha256Hash[:min(16, len(sha256Hash))]+"...")

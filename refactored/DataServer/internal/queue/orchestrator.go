@@ -1,11 +1,12 @@
-// Package queue implements multi-step job orchestration.
+// Package queue implements multi-step job orchestration with SQLite-authoritative
+// workflow state and transactional outbox (PR5: no events lost, SQLite is source of truth).
 //
-// The Orchestrator manages jobs that consist of multiple sequential or
-// dependency-ordered steps. It persists state via the orchestrator_jobs
-// SQLite table and dispatches ready steps as individual FileQueue jobs.
+// The in-memory job map is a read-through cache only — SQLite is always authoritative.
+// State changes and outbox entries are written in the same SQLite transaction.
 package queue
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"sync"
@@ -32,8 +33,8 @@ type JobStep struct {
 	StepName     string                 `json:"step_name"`
 	StepOrder    int                    `json:"step_order"`
 	Status       StepStatus             `json:"status"`
-	JobType      string                 `json:"job_type"`          // e.g. "render", "process_video", "process_audio"
-	Payload      map[string]interface{} `json:"payload,omitempty"` // parameters for this step's job
+	JobType      string                 `json:"job_type"`
+	Payload      map[string]interface{} `json:"payload,omitempty"`
 	Dependencies []string               `json:"dependencies,omitempty"`
 	Result       map[string]interface{} `json:"result,omitempty"`
 	Error        string                 `json:"error,omitempty"`
@@ -46,7 +47,7 @@ type JobStep struct {
 // MultiStepJob represents a pipeline composed of multiple steps.
 type MultiStepJob struct {
 	JobID        string                 `json:"job_id"`
-	PipelineType string                 `json:"pipeline_type"` // e.g. "video_generation", "audio_video_sync"
+	PipelineType string                 `json:"pipeline_type"`
 	Status       StepStatus             `json:"status"`
 	Steps        []*JobStep             `json:"steps"`
 	TotalSteps   int                    `json:"total_steps"`
@@ -58,44 +59,40 @@ type MultiStepJob struct {
 	CompletedAt  *string                `json:"completed_at,omitempty"`
 }
 
-// stepDispatchEvent is sent when a step should be dispatched as a FileQueue job.
-type stepDispatchEvent struct {
-	JobID  string
-	StepID string
-}
-
-// stepCompleteEvent is sent when a FileQueue job completes (polled by the loop).
-type stepCompleteEvent struct {
-	JobID  string
-	StepID string
-	Result map[string]interface{}
-	Error  string
-}
-
 // Orchestrator manages multi-step job pipelines.
+// SQLite is the authoritative source; the in-memory map is a read-through cache.
 type Orchestrator struct {
-	mu      sync.RWMutex
-	jobs    map[string]*MultiStepJob
+	mu   sync.RWMutex
+	jobs map[string]*MultiStepJob // read-through cache (SQLite is authoritative)
+
 	fileQ   *FileQueue
 	dbStore *store.SQLiteStore
 
-	// Channels for internal event processing
-	dispatchCh chan *stepDispatchEvent
-	completeCh chan *stepCompleteEvent
-	stopCh     chan struct{}
-	stopped    bool
+	// notifyCh wakes the poll loop when a new outbox entry is written
+	// (avoids waiting for the next ticker cycle).
+	notifyCh chan struct{}
 
-	// Callbacks (optional, for integration with external systems)
+	stopCh chan struct{}
+	stopped bool
+
+	// Callbacks
 	onStepReady   func(step *JobStep) error
 	onJobComplete func(job *MultiStepJob)
 	onJobFail     func(job *MultiStepJob, reason string)
+
+	// Config
+	pollInterval      time.Duration
+	jobTimeout        time.Duration
+	defaultMaxRetries int
+	outboxBatchSize   int
 }
 
 // OrchestratorConfig holds configuration for the orchestrator.
 type OrchestratorConfig struct {
-	PollInterval      time.Duration // how often to check for ready steps
-	JobTimeout        time.Duration // max time a step can be processing before considered stuck
+	PollInterval      time.Duration
+	JobTimeout        time.Duration
 	DefaultMaxRetries int
+	OutboxBatchSize   int
 }
 
 // DefaultOrchestratorConfig returns sensible defaults.
@@ -104,31 +101,48 @@ func DefaultOrchestratorConfig() *OrchestratorConfig {
 		PollInterval:      15 * time.Second,
 		JobTimeout:        30 * time.Minute,
 		DefaultMaxRetries: 2,
+		OutboxBatchSize:   20,
 	}
 }
 
-// NewOrchestrator creates a new orchestrator.
-func NewOrchestrator(_ *OrchestratorConfig, fileQ *FileQueue, dbStore *store.SQLiteStore) (*Orchestrator, error) {
+// NewOrchestrator creates a new orchestrator with SQLite-authoritative state.
+func NewOrchestrator(cfg *OrchestratorConfig, fileQ *FileQueue, dbStore *store.SQLiteStore) (*Orchestrator, error) {
 	if fileQ == nil {
 		return nil, fmt.Errorf("orchestrator: FileQueue is required")
 	}
 	if dbStore == nil {
 		return nil, fmt.Errorf("orchestrator: SQLiteStore is required")
 	}
-
-	o := &Orchestrator{
-		jobs:       make(map[string]*MultiStepJob),
-		fileQ:      fileQ,
-		dbStore:    dbStore,
-		dispatchCh: make(chan *stepDispatchEvent, 100),
-		completeCh: make(chan *stepCompleteEvent, 100),
-		stopCh:     make(chan struct{}),
+	if cfg == nil {
+		cfg = DefaultOrchestratorConfig()
 	}
 
-	// Load existing orchestrator jobs from SQLite
+	o := &Orchestrator{
+		jobs:              make(map[string]*MultiStepJob),
+		fileQ:             fileQ,
+		dbStore:           dbStore,
+		notifyCh:          make(chan struct{}, 5),
+		stopCh:            make(chan struct{}),
+		pollInterval:      cfg.PollInterval,
+		jobTimeout:        cfg.JobTimeout,
+		defaultMaxRetries: cfg.DefaultMaxRetries,
+		outboxBatchSize:   cfg.OutboxBatchSize,
+	}
+
+	// Load existing jobs from SQLite into cache (PR5: SQLite is authoritative)
 	if err := o.load(); err != nil {
 		log.Printf("[ORCH] Warning: could not load existing jobs: %v", err)
 	}
 
 	return o, nil
+}
+
+// marshalJob serializes a MultiStepJob to JSON for SQLite storage.
+func marshalJob(msj *MultiStepJob) string {
+	raw, err := json.Marshal(msj)
+	if err != nil {
+		log.Printf("[ORCH] Failed to marshal job %s: %v", msj.JobID[:min(8, len(msj.JobID))], err)
+		return "{}"
+	}
+	return string(raw)
 }

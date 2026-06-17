@@ -24,8 +24,8 @@ func NewHandler(cfg *config.Config, reg *workersreg.Registry, dataDir string) *H
 		cmdMgr:        workersreg.NewCommandManager(),
 		updateMgr:     workersreg.NewUpdateManager(),
 		tokenMgr:      workersreg.NewTokenManager(),
-		codeVersion:   cfg.CodeVersion,
-		versionNumber: cfg.VersionNumber,
+		codeVersion:   cfg.Workers.CodeVersion,
+		versionNumber: cfg.Workers.VersionNumber,
 	}
 }
 
