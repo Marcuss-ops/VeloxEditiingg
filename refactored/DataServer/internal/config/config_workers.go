@@ -32,6 +32,7 @@ func loadWorkersConfig() WorkersConfig {
 	c.HeartbeatTimeout = intFromEnv("VELOX_WORKER_HEARTBEAT_TIMEOUT", 900, 1)
 	c.ScriptDir = os.Getenv("VELOX_SCRIPT_DIR")
 	c.MasterURL = GetMasterURL()
+	c.MasterServerURL = GetMasterServerURL()
 	if ips := os.Getenv("VELOX_ALLOWED_WORKER_IPS"); ips != "" {
 		c.AllowedIPs = parseCommaList(ips)
 	}

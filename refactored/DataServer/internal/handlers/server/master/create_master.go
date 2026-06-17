@@ -72,9 +72,9 @@ func CreateMaster(cfg *config.Config, q *queue.FileQueue) gin.HandlerFunc {
 			return
 		}
 
-		// Proxy draft to remote master when configured
-		if cfg.MasterServerURL != "" && isDraft(payload) {
-			url := strings.TrimSuffix(cfg.MasterServerURL, "/") + "/api/video/create-master"
+	// Proxy draft to remote master when configured
+	if cfg.Workers.MasterServerURL != "" && isDraft(payload) {
+		url := strings.TrimSuffix(cfg.Workers.MasterServerURL, "/") + "/api/video/create-master"
 			proxyPayload := clonePayload(payload)
 			proxyPayload["save_to_docs"] = false
 			proxyPayload["gdocs"] = false
