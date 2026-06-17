@@ -38,6 +38,7 @@ type ControlTransport interface {
 }
 
 // ControlMessage represents a typed message exchanged over the control transport.
+// Payload is deprecated in favor of TypedPayload for proto-typed messages.
 type ControlMessage struct {
 	MessageID       string                 `json:"message_id"`
 	Type            ControlMessageType     `json:"type"`
@@ -46,7 +47,8 @@ type ControlMessage struct {
 	SequenceNumber  int64                  `json:"sequence_number,omitempty"`
 	SentAt          time.Time              `json:"sent_at"`
 	ProtocolVersion string                 `json:"protocol_version"`
-	Payload         map[string]interface{} `json:"payload,omitempty"`
+	Payload         map[string]interface{} `json:"payload,omitempty"`   // deprecated: use TypedPayload
+	TypedPayload    interface{}            `json:"-"`                    // typed proto message (e.g. *pb.JobOffer, *pb.Command)
 }
 
 // WorkerHello contains the data sent during initial connection/registration.

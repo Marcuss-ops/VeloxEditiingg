@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"velox-shared/controltransport"
+	pb "velox-shared/controltransport/pb"
 	"velox-worker-agent/internal/telemetry"
 	"velox-worker-agent/pkg/api"
 	"velox-worker-agent/pkg/logger"
@@ -276,12 +277,12 @@ func (w *Worker) receiveLoop(ctx context.Context, recvCh <-chan controltransport
 			case controltransport.MsgJobLeaseGranted:
 				// P0 protocol fix: master confirms the lease.
 				// Only now can the worker safely execute the job.
-				jobID := ""
-				if msg.Payload != nil {
-					if j, ok := msg.Payload["job_id"].(string); ok {
-						jobID = j
-					}
+				leaseGranted, ok := msg.TypedPayload.(*pb.JobLeaseGranted)
+				if !ok || leaseGranted == nil {
+					w.logger.Warn("[RECEIVE] JobLeaseGranted without typed payload")
+					continue
 				}
+				jobID := leaseGranted.GetJobId()
 				if jobID == "" {
 					w.logger.Warn("[RECEIVE] JobLeaseGranted without job_id")
 					continue
@@ -302,15 +303,13 @@ func (w *Worker) receiveLoop(ctx context.Context, recvCh <-chan controltransport
 				w.processCommand(ctx, cmd)
 
 			case controltransport.MsgCancelJob:
-				jobID := ""
-				if msg.Payload != nil {
-					if j, ok := msg.Payload["job_id"].(string); ok {
-						jobID = j
+				cancelJob, ok := msg.TypedPayload.(*pb.CancelJob)
+				if ok && cancelJob != nil {
+					jobID := cancelJob.GetJobId()
+					w.logger.Info("[RECEIVE] CancelJob received for job %s", jobID)
+					if jobID != "" {
+						w.cancelJob(jobID)
 					}
-				}
-				w.logger.Info("[RECEIVE] CancelJob received for job %s", jobID)
-				if jobID != "" {
-					w.cancelJob(jobID)
 				}
 
 			case controltransport.MsgDrain:
@@ -321,13 +320,11 @@ func (w *Worker) receiveLoop(ctx context.Context, recvCh <-chan controltransport
 				w.logger.Info("[RECEIVE] ConfigurationUpdate received")
 
 			case controltransport.MsgLeaseRevoked:
-				jobID := ""
-				if msg.Payload != nil {
-					if j, ok := msg.Payload["job_id"].(string); ok {
-						jobID = j
-					}
+				leaseRevoked, ok := msg.TypedPayload.(*pb.LeaseRevoked)
+				if ok && leaseRevoked != nil {
+					w.logger.Warn("[RECEIVE] Lease revoked for job %s: %s",
+						leaseRevoked.GetJobId(), leaseRevoked.GetReason())
 				}
-				w.logger.Warn("[RECEIVE] Lease revoked for job %s", jobID)
 
 			case controltransport.MsgPing:
 				// Reply with a heartbeat via Send
@@ -343,64 +340,83 @@ func (w *Worker) receiveLoop(ctx context.Context, recvCh <-chan controltransport
 	}
 }
 
-// msgToJob converts a ControlMessage (MsgJobOffer) back to an api.Job.
+// msgToJob converts a ControlMessage (MsgJobOffer) to an api.Job using typed proto fields.
 func msgToJob(msg controltransport.ControlMessage) *api.Job {
-	if msg.Payload == nil {
+	offer, ok := msg.TypedPayload.(*pb.JobOffer)
+	if !ok || offer == nil {
 		return nil
 	}
 
-	jobID, _ := msg.Payload["job_id"].(string)
+	jobID := offer.GetJobId()
 	if jobID == "" {
 		return nil
 	}
 
-	// Handle both gRPC push-mode field names and HTTP poll fallback names.
-	// gRPC: run_id, video_name, max_retries
-	// HTTP: job_run_id, job_type, priority, parameters, timeout_secs, contract_version
-	runID := getMsgString(msg.Payload, "run_id")
-	if runID == "" {
-		runID = getMsgString(msg.Payload, "job_run_id")
+	// Extract dynamic fields from job_payload (job_type, priority, parameters, timeout_secs, contract_version)
+	var parameters map[string]interface{}
+	if jp := offer.GetJobPayload(); jp != nil {
+		parameters = jp.AsMap()
 	}
-	videoName := getMsgString(msg.Payload, "video_name")
-	jobType := getMsgString(msg.Payload, "job_type")
+
+	createdAt := ""
+	if offer.GetCreatedAt() != nil {
+		createdAt = offer.GetCreatedAt().AsTime().UTC().Format(time.RFC3339)
+	}
+
+	leaseExpiry := ""
+	if offer.GetLeaseExpiry() != nil {
+		leaseExpiry = offer.GetLeaseExpiry().AsTime().UTC().Format(time.RFC3339)
+	}
 
 	return &api.Job{
 		JobID:           jobID,
-		JobRunID:        runID,
-		JobType:         coalesceStr(videoName, jobType),
-		Priority:        getMsgInt(msg.Payload, "priority"),
-		Parameters:      getMsgMap(msg.Payload, "parameters"),
-		CreatedAt:       msg.Payload["created_at"],
-		TimeoutSecs:     getMsgInt(msg.Payload, "max_retries"),
-		ContractVersion: getMsgInt(msg.Payload, "contract_version"),
-		LeaseID:         getMsgString(msg.Payload, "lease_id"),
-		LeaseExpiry:     getMsgString(msg.Payload, "lease_expiry"),
-		Attempt:         getMsgInt(msg.Payload, "attempt"),
+		JobRunID:        offer.GetRunId(),
+		JobType:         getStrParam(parameters, "job_type"),
+		Priority:        getIntParam(parameters, "priority"),
+		Parameters:      parameters,
+		CreatedAt:       createdAt,
+		TimeoutSecs:     getIntParam(parameters, "timeout_secs"),
+		ContractVersion: getIntParam(parameters, "contract_version"),
+		LeaseID:         offer.GetLeaseId(),
+		LeaseExpiry:     leaseExpiry,
+		Attempt:         int(offer.GetAttempt()),
 	}
 }
 
-// msgToCommand converts a ControlMessage (MsgCommand) to an api.WorkerCommand.
+// msgToCommand converts a ControlMessage (MsgCommand) to an api.WorkerCommand using typed proto fields.
 func msgToCommand(msg controltransport.ControlMessage) api.WorkerCommand {
-	cmd := api.WorkerCommand{
-		CommandID: getMsgString(msg.Payload, "command_id"),
-		Command:   getMsgString(msg.Payload, "command"),
-		Timestamp: getMsgString(msg.Payload, "timestamp"),
+	cmd, ok := msg.TypedPayload.(*pb.Command)
+	if !ok || cmd == nil {
+		return api.WorkerCommand{}
 	}
-	if params, ok := msg.Payload["params"].(map[string]interface{}); ok {
-		cmd.Payload = params
+
+	ts := ""
+	if cmd.GetTimestamp() != nil {
+		ts = cmd.GetTimestamp().AsTime().UTC().Format(time.RFC3339)
 	}
-	return cmd
+
+	wc := api.WorkerCommand{
+		CommandID: cmd.GetCommandId(),
+		Command:   cmd.GetCommand(),
+		Timestamp: ts,
+	}
+	if p := cmd.GetParams(); p != nil {
+		wc.Payload = p.AsMap()
+	}
+	return wc
 }
 
-func getMsgString(m map[string]interface{}, key string) string {
-	if v, ok := m[key].(string); ok {
+// getStrParam extracts a string value from a parameters map, returning "" if missing.
+func getStrParam(params map[string]interface{}, key string) string {
+	if v, ok := params[key].(string); ok {
 		return v
 	}
 	return ""
 }
 
-func getMsgInt(m map[string]interface{}, key string) int {
-	switch v := m[key].(type) {
+// getIntParam extracts an int value from a parameters map, returning 0 if missing.
+func getIntParam(params map[string]interface{}, key string) int {
+	switch v := params[key].(type) {
 	case float64:
 		return int(v)
 	case int:
@@ -411,21 +427,6 @@ func getMsgInt(m map[string]interface{}, key string) int {
 	return 0
 }
 
-func getMsgMap(m map[string]interface{}, key string) map[string]interface{} {
-	if v, ok := m[key].(map[string]interface{}); ok {
-		return v
-	}
-	return nil
-}
-
-func coalesceStr(a, b string) string {
-	if a != "" {
-		return a
-	}
-	return b
-}
-
-// setConnState updates the connection state.
 func (w *Worker) setConnState(state ConnectionState) {
 	w.connStateMu.Lock()
 	defer w.connStateMu.Unlock()

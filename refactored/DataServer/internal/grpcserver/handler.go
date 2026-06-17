@@ -1,10 +1,13 @@
 // Package grpcserver provides the master-side gRPC handler for the
-// WorkerControl bidirectional stream service using generated protobuf types.
+// WorkerControl bidirectional stream service using typed protobuf envelopes.
 //
 // The handler manages persistent worker streams, forwarding heartbeats,
 // lease renewals, job claims, and commands between the gRPC stream and
 // the existing HTTP-based control plane components (Registry, CommandManager,
 // TransitionService).
+//
+// Phase 2 (typed protobuf): uses WorkerToMasterEnvelope / MasterToWorkerEnvelope
+// with typed oneof messages instead of TransportMessage { string type; Struct payload }.
 package grpcserver
 
 import (
@@ -46,15 +49,15 @@ type Handler struct {
 	dbStore       *store.SQLiteStore
 	config        *HandlerConfig
 
-	mu              sync.Mutex
-	sessions        map[string]*workerSession // sessionID → active stream session
-	workerSessions  map[string]string         // workerID → sessionID (for lookup)
+	mu             sync.Mutex
+	sessions       map[string]*workerSession // sessionID → active stream session
+	workerSessions map[string]string         // workerID → sessionID (for lookup)
 }
 
 // HandlerConfig holds configuration for the gRPC handler.
 type HandlerConfig struct {
-	ShadowMode  bool // Phase 4: notify workers, still claim via HTTP
-	PushMode    bool // Phase 5+: send JobOffer directly, workers respond JobAccepted
+	ShadowMode    bool // Phase 4: notify workers, still claim via HTTP
+	PushMode      bool // Phase 5+: send JobOffer directly, workers respond JobAccepted
 	AllowInsecure bool // Dev-only: allow insecure gRPC connections (VELOX_GRPC_ALLOW_INSECURE_DEV)
 }
 
@@ -62,9 +65,10 @@ type HandlerConfig struct {
 type workerSession struct {
 	workerID     string
 	sessionID    string
-	stream       grpc.BidiStreamingServer[pb.TransportMessage, pb.TransportMessage]
+	stream       grpc.BidiStreamingServer[pb.WorkerToMasterEnvelope, pb.MasterToWorkerEnvelope]
 	done         chan struct{}
-	pendingOffer *queue.Job // JobOffer sent, awaiting JobAccepted/JobRejected
+	pendingOffer *queue.Job    // JobOffer sent, awaiting JobAccepted/JobRejected
+	sendMu       sync.Mutex    // serializes stream.Send() across goroutines (notifier + main loop)
 }
 
 // NewHandler creates a new gRPC WorkerControl handler.
@@ -92,25 +96,25 @@ func NewHandler(
 }
 
 // Stream handles a bidirectional gRPC stream from a single worker.
-func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.TransportMessage, pb.TransportMessage]) error {
+// Receives WorkerToMasterEnvelope, sends MasterToWorkerEnvelope.
+func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMasterEnvelope, pb.MasterToWorkerEnvelope]) error {
 	// P0 security: extract worker identity from client certificate (mTLS).
-	// The worker_id declared in the Hello message is validated against the cert.
 	certWorkerID := h.extractWorkerIDFromStream(stream)
 
 	// Wait for Hello message to identify the worker
-	msg, err := stream.Recv()
+	env, err := stream.Recv()
 	if err != nil {
 		return fmt.Errorf("stream: recv hello: %w", err)
 	}
-	if msg.Type != string(controltransport.MsgHello) {
-		return fmt.Errorf("stream: expected hello, got %s", msg.Type)
+
+	hello := env.GetHello()
+	if hello == nil {
+		return fmt.Errorf("stream: expected hello, got %T", env.Msg)
 	}
 
 	// P0 security: validate the declared worker_id against the client certificate.
-	// In production (mTLS), the CN/SAN must match. In insecure dev mode, we trust the declared ID.
-	declaredWorkerID := msg.WorkerId
+	declaredWorkerID := env.WorkerId
 	if certWorkerID != "" {
-		// mTLS mode: validate that the declared ID matches the certificate
 		if certWorkerID != declaredWorkerID {
 			return fmt.Errorf("stream: worker_id mismatch: cert=%s, declared=%s", certWorkerID, declaredWorkerID)
 		}
@@ -120,7 +124,7 @@ func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.TransportMessage, pb
 	}
 
 	// P0 security: validate credential_hash against stored worker credentials
-	if err := h.validateCredentialHash(declaredWorkerID, msg); err != nil {
+	if err := h.validateCredentialHash(declaredWorkerID, hello.GetCredentialHash()); err != nil {
 		return fmt.Errorf("stream: credential validation failed: %w", err)
 	}
 
@@ -128,7 +132,6 @@ func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.TransportMessage, pb
 	sessionID := fmt.Sprintf("grpc-%s-%d", workerID, time.Now().UnixNano())
 
 	// Register session — keyed by sessionID to prevent defer from deleting a newer session.
-	// Close any existing session for this workerID before registering the new one.
 	h.mu.Lock()
 	h.closeOldSessionLocked(workerID)
 
@@ -142,11 +145,10 @@ func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.TransportMessage, pb
 	h.workerSessions[workerID] = sessionID
 	h.mu.Unlock()
 
-	log.Printf("[GRPC] Worker %s connected (session: %s)", workerID, sessionID)
+	log.Printf("[GRPC] Worker %s connected (session: %s, name: %s)", workerID, sessionID, hello.GetWorkerName())
 
 	defer func() {
 		h.mu.Lock()
-		// Only delete this session if it's still the current one for this worker
 		if currentSID, ok := h.workerSessions[workerID]; ok && currentSID == sessionID {
 			delete(h.workerSessions, workerID)
 		}
@@ -156,15 +158,15 @@ func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.TransportMessage, pb
 		log.Printf("[GRPC] Worker %s disconnected (session: %s)", workerID, sessionID)
 	}()
 
-	// Send HelloAck
-	ack := &pb.TransportMessage{
+	// Send typed HelloAck
+	ack := &pb.MasterToWorkerEnvelope{
 		MessageId:       fmt.Sprintf("ack-%s-%d", workerID, time.Now().UnixNano()),
-		Type:            string(controltransport.MsgHelloAck),
 		WorkerId:        workerID,
 		SessionId:       sessionID,
 		SequenceNumber:  1,
 		SentAt:          timestamppb.Now(),
-		ProtocolVersion: msg.ProtocolVersion,
+		ProtocolVersion: env.ProtocolVersion,
+		Msg:             &pb.MasterToWorkerEnvelope_HelloAck{HelloAck: &pb.HelloAck{}},
 	}
 	if err := stream.Send(ack); err != nil {
 		return fmt.Errorf("stream: send hello_ack: %w", err)
@@ -187,9 +189,9 @@ func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.TransportMessage, pb
 		defer notifyStop()
 	}
 
-	// Main message loop
+	// Main message loop — type-switch on the oneof Msg field
 	for {
-		msg, err := stream.Recv()
+		env, err := stream.Recv()
 		if err == io.EOF {
 			return nil
 		}
@@ -197,10 +199,14 @@ func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.TransportMessage, pb
 			return fmt.Errorf("stream: recv: %w", err)
 		}
 
-		switch controltransport.ControlMessageType(msg.Type) {
-		case controltransport.MsgHeartbeat:
-			h.handleHeartbeat(workerID, msg)
-			// Dispatch any pending commands on each heartbeat
+		// P0: drop messages from stale sessions (zombie connections after reconnect).
+		if !h.isCurrentSession(workerID, sessionID) {
+			continue
+		}
+
+		switch m := env.Msg.(type) {
+		case *pb.WorkerToMasterEnvelope_Heartbeat:
+			h.handleHeartbeat(workerID, m.Heartbeat)
 			h.dispatchCommands(workerID, sess)
 			if notifyCh != nil {
 				select {
@@ -209,29 +215,29 @@ func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.TransportMessage, pb
 				}
 			}
 
-		case controltransport.MsgLeaseRenewal:
-			h.handleLeaseRenewal(workerID, msg)
+		case *pb.WorkerToMasterEnvelope_LeaseRenewal:
+			h.handleLeaseRenewal(workerID, m.LeaseRenewal)
 
-		case controltransport.MsgJobAccepted:
-			h.handleJobAccepted(workerID, msg)
+		case *pb.WorkerToMasterEnvelope_JobAccepted:
+			h.handleJobAccepted(workerID, m.JobAccepted)
 
-		case controltransport.MsgJobRejected:
-			h.handleJobRejected(workerID, msg)
+		case *pb.WorkerToMasterEnvelope_JobRejected:
+			h.handleJobRejected(workerID, m.JobRejected)
 
-		case controltransport.MsgJobProgress:
-			h.handleJobProgress(workerID, msg)
+		case *pb.WorkerToMasterEnvelope_JobProgress:
+			h.handleJobProgress(workerID, m.JobProgress)
 
-		case controltransport.MsgCommandAck:
-			h.handleCommandAck(workerID, msg)
+		case *pb.WorkerToMasterEnvelope_CommandAck:
+			h.handleCommandAck(workerID, m.CommandAck)
 
-		case controltransport.MsgJobResult:
-			h.handleJobResult(workerID, msg)
+		case *pb.WorkerToMasterEnvelope_JobResult:
+			h.handleJobResult(workerID, m.JobResult)
 
-		case controltransport.MsgGoodbye:
+		case *pb.WorkerToMasterEnvelope_Goodbye:
 			return nil
 
 		default:
-			log.Printf("[GRPC] Unknown message type from worker %s: %s", workerID, msg.Type)
+			log.Printf("[GRPC] Unknown message type from worker %s: %T", workerID, env.Msg)
 		}
 	}
 }
@@ -261,26 +267,11 @@ func (h *Handler) notifyJobsAvailable(ctx context.Context, workerID string, trig
 	}
 }
 
-// sendJobAvailable sends a lightweight JobAvailable notification (Shadow mode).
-// The worker will claim the job via HTTP after receiving this signal.
+// sendJobAvailable sends a typed JobAvailable notification (Shadow mode).
 func (h *Handler) sendJobAvailable(ctx context.Context, workerID string) {
 	jobID, err := h.transitionSvc.GetNextJobID(ctx)
 	if err != nil || jobID == "" {
 		return
-	}
-
-	payload, _ := structpb.NewStruct(map[string]interface{}{
-		"compatible_job_exists": true,
-		"message":              "Job available for claim",
-	})
-
-	msg := &pb.TransportMessage{
-		MessageId:       fmt.Sprintf("javail-%s-%d", workerID, time.Now().UnixNano()),
-		Type:            string(controltransport.MsgJobAvailable),
-		WorkerId:        workerID,
-		SentAt:          timestamppb.Now(),
-		ProtocolVersion: controltransport.ProtocolVersionCurrent,
-		Payload:         payload,
 	}
 
 	sess := h.getSession(workerID)
@@ -288,13 +279,40 @@ func (h *Handler) sendJobAvailable(ctx context.Context, workerID string) {
 		return
 	}
 
-	_ = sess.stream.Send(msg)
+	env := &pb.MasterToWorkerEnvelope{
+		MessageId:       fmt.Sprintf("javail-%s-%d", workerID, time.Now().UnixNano()),
+		WorkerId:        workerID,
+		SentAt:          timestamppb.Now(),
+		ProtocolVersion: controltransport.ProtocolVersionCurrent,
+		Msg: &pb.MasterToWorkerEnvelope_JobAvailable{
+			JobAvailable: &pb.JobAvailable{
+				CompatibleJobExists: true,
+				Message:             "Job available for claim",
+			},
+		},
+	}
+
+	sess.sendMu.Lock()
+	_ = sess.stream.Send(env)
+	sess.sendMu.Unlock()
 }
 
-// sendPushJobOffer does a real SQLite CAS claim and sends a full JobOffer
-// with lease_id, job_id, job_type, and parameters (Push mode).
+// sendPushJobOffer does a real SQLite CAS claim and sends a typed JobOffer (Push mode).
 func (h *Handler) sendPushJobOffer(ctx context.Context, workerID string) {
-	// P0 fix: real SQLite CAS claim — the master atomically claims the job
+	sess := h.getSession(workerID)
+	if sess == nil {
+		return
+	}
+
+	// P0: prevent multiple concurrent offers — only one claim at a time.
+	// If a previous offer is still pending (not yet accepted/rejected), wait for it.
+	h.mu.Lock()
+	hasPending := sess.pendingOffer != nil
+	h.mu.Unlock()
+	if hasPending {
+		return
+	}
+
 	job, err := h.transitionSvc.ClaimNextJob(ctx, workerID, nil)
 	if err != nil {
 		log.Printf("[GRPC] ClaimNextJob failed for worker %s: %v", workerID, err)
@@ -304,44 +322,56 @@ func (h *Handler) sendPushJobOffer(ctx context.Context, workerID string) {
 		return
 	}
 
-	payloadMap := map[string]interface{}{
-		"job_id":       job.JobID,
-		"run_id":       job.RunID,
-		"video_name":   job.VideoName,
-		"created_at":   job.CreatedAt,
-		"lease_id":     job.LeaseID,
-		"lease_expiry": job.LeaseExpiry,
-		"attempt":      job.Attempt,
-		"max_retries":  job.MaxRetries,
-	}
-	// Include the full job payload (scenes, clips, parameters) from the SQLite job
+	// Build job payload struct from job.Payload map
+	var jobPayload *structpb.Struct
 	if job.Payload != nil {
-		for k, v := range job.Payload {
-			if _, exists := payloadMap[k]; !exists {
-				payloadMap[k] = v
+		jobPayload, _ = structpb.NewStruct(job.Payload)
+	}
+
+	// Parse CreatedAt timestamp if present
+	var createdAt *timestamppb.Timestamp
+	if job.CreatedAt != nil {
+		switch t := job.CreatedAt.(type) {
+		case time.Time:
+			createdAt = timestamppb.New(t)
+		case string:
+			if parsed, err := time.Parse(time.RFC3339, t); err == nil {
+				createdAt = timestamppb.New(parsed)
 			}
 		}
 	}
 
-	payload, _ := structpb.NewStruct(payloadMap)
-
-	msg := &pb.TransportMessage{
+	env := &pb.MasterToWorkerEnvelope{
 		MessageId:       fmt.Sprintf("joboffer-%s-%s", workerID, job.JobID),
-		Type:            string(controltransport.MsgJobOffer),
 		WorkerId:        workerID,
 		SentAt:          timestamppb.Now(),
 		ProtocolVersion: controltransport.ProtocolVersionCurrent,
-		Payload:         payload,
+		Msg: &pb.MasterToWorkerEnvelope_JobOffer{
+			JobOffer: &pb.JobOffer{
+				JobId:      job.JobID,
+				RunId:      job.RunID,
+				VideoName:  job.VideoName,
+				CreatedAt:  createdAt,
+				LeaseId:    job.LeaseID,
+				Attempt:    int32(job.Attempt),
+				MaxRetries: int32(job.MaxRetries),
+				JobPayload: jobPayload,
+			},
+		},
 	}
 
-	sess := h.getSession(workerID)
-	if sess == nil {
-		log.Printf("[GRPC] Worker %s disconnected before JobOffer sent for %s", workerID, job.JobID)
-		return
-	}
+	// P0: serialize stream.Send() — notifier goroutine shares the stream with the main loop.
+	sess.sendMu.Lock()
+	sendErr := sess.stream.Send(env)
+	sess.sendMu.Unlock()
 
-	if err := sess.stream.Send(msg); err != nil {
-		log.Printf("[GRPC] Failed to send JobOffer to worker %s for job %s: %v", workerID, job.JobID, err)
+	if sendErr != nil {
+		log.Printf("[GRPC] Failed to send JobOffer to worker %s for job %s: %v", workerID, job.JobID, sendErr)
+		// P0: rollback the claim — release the job so it can be retried by another worker.
+		// Don't increment retry count since the worker never received the job.
+		if releaseErr := h.transitionSvc.ReleaseClaim(ctx, job.JobID); releaseErr != nil {
+			log.Printf("[GRPC] Failed to release claim for job %s after send failure: %v", job.JobID, releaseErr)
+		}
 		return
 	}
 
@@ -351,84 +381,105 @@ func (h *Handler) sendPushJobOffer(ctx context.Context, workerID string) {
 	h.mu.Unlock()
 }
 
-// handleHeartbeat processes a worker heartbeat received via gRPC stream.
-func (h *Handler) handleHeartbeat(workerID string, msg *pb.TransportMessage) {
-	payload := msg.Payload.AsMap()
-	workerName := getPayloadString(payload, "worker_name")
-	status := getPayloadString(payload, "status")
-	currentJob := getPayloadString(payload, "current_job")
-
+// handleHeartbeat processes a typed Heartbeat received via gRPC stream.
+func (h *Handler) handleHeartbeat(workerID string, hb *pb.Heartbeat) {
 	extra := make(map[string]interface{})
-	for k, v := range payload {
-		extra[k] = v
+	// Populate extra from typed fields for backward compat with registry
+	extra["worker_name"] = hb.GetWorkerName()
+	extra["worker_status"] = hb.GetWorkerStatus()
+	extra["status"] = hb.GetStatus()
+	extra["current_job"] = hb.GetCurrentJob()
+	extra["code_version"] = hb.GetCodeVersion()
+	extra["bundle_version"] = hb.GetBundleVersion()
+	extra["bundle_hash"] = hb.GetBundleHash()
+	extra["protocol_version"] = hb.GetProtocolVersion()
+	extra["engine_version"] = hb.GetEngineVersion()
+	extra["jobs_completed"] = hb.GetJobsCompleted()
+	extra["jobs_failed"] = hb.GetJobsFailed()
+	extra["active_jobs_count"] = hb.GetActiveJobsCount()
+
+	if hb.GetExtra() != nil {
+		for k, v := range hb.GetExtra().AsMap() {
+			extra[k] = v
+		}
 	}
 
-	if err := h.registry.Heartbeat(context.Background(), workerID, workerName, status, currentJob, extra); err != nil {
+	if err := h.registry.Heartbeat(context.Background(), workerID, hb.GetWorkerName(), hb.GetStatus(), hb.GetCurrentJob(), extra); err != nil {
 		log.Printf("[GRPC] Heartbeat failed for worker %s: %v", workerID, err)
 	}
 }
 
-// handleLeaseRenewal processes a lease renewal via gRPC stream.
-func (h *Handler) handleLeaseRenewal(workerID string, msg *pb.TransportMessage) {
-	payload := msg.Payload.AsMap()
-	jobID := getPayloadString(payload, "job_id")
-	leaseID := getPayloadString(payload, "lease_id")
-
+// handleLeaseRenewal processes a typed LeaseRenewal via gRPC stream.
+func (h *Handler) handleLeaseRenewal(workerID string, lr *pb.LeaseRenewal) {
 	leaseExpiry := time.Now().UTC().Add(30 * time.Minute)
-	if expiryStr := getPayloadString(payload, "lease_expires_at"); expiryStr != "" {
-		if parsed, err := time.Parse(time.RFC3339, expiryStr); err == nil {
-			leaseExpiry = parsed
-		}
+	if lr.GetLeaseExpiresAt() != nil {
+		leaseExpiry = lr.GetLeaseExpiresAt().AsTime()
 	}
-	if err := h.transitionSvc.RenewLease(context.Background(), jobID, workerID, leaseID, leaseExpiry); err != nil {
-		log.Printf("[GRPC] Lease renewal failed for job %s worker %s: %v", jobID, workerID, err)
+	if err := h.transitionSvc.RenewLease(context.Background(), lr.GetJobId(), workerID, lr.GetLeaseId(), leaseExpiry); err != nil {
+		log.Printf("[GRPC] Lease renewal failed for job %s worker %s: %v", lr.GetJobId(), workerID, err)
 	}
 }
 
-// handleJobAccepted processes JobAccepted — Phase 5+ real push mode.
-// Confirms the lease in SQLite and sends JobLeaseGranted so the worker can begin.
-func (h *Handler) handleJobAccepted(workerID string, msg *pb.TransportMessage) {
+// handleJobAccepted processes typed JobAccepted — Phase 5+ real push mode.
+// The lease was already created by ClaimNextJob; we just verify and grant.
+func (h *Handler) handleJobAccepted(workerID string, ja *pb.JobAccepted) {
 	if !h.config.PushMode {
 		return
 	}
-	payload := msg.Payload.AsMap()
-	jobID := getPayloadString(payload, "job_id")
+	jobID := ja.GetJobId()
 
 	sess := h.getSession(workerID)
 	if sess == nil {
 		return
 	}
 
-	// Confirm the lease in SQLite
-	if jobID != "" {
-		if err := h.transitionSvc.LeaseJob(context.Background(), jobID, workerID); err != nil {
-			log.Printf("[GRPC] Job accepted lease failed for %s: %v", jobID, err)
-			return
-		}
-	}
+	// P0 fix: don't call LeaseJob() — ClaimNextJob already created the lease.
+	// Calling LeaseJob again would generate a NEW lease_id and increment retry count.
+	// The worker's JobAccepted includes its lease_id from the JobOffer, which must match.
+	h.mu.Lock()
+	offer := sess.pendingOffer
+	h.mu.Unlock()
 
-	// Send JobLeaseGranted — the worker must wait for this before executing
-	grantedPayload, _ := structpb.NewStruct(map[string]interface{}{
-		"job_id":   jobID,
-		"worker_id": workerID,
-		"status":   "granted",
-	})
-
-	grantedMsg := &pb.TransportMessage{
-		MessageId:       fmt.Sprintf("leasegrant-%s-%s", workerID, jobID),
-		Type:            string(controltransport.MsgJobLeaseGranted),
-		WorkerId:        workerID,
-		SentAt:          timestamppb.Now(),
-		ProtocolVersion: controltransport.ProtocolVersionCurrent,
-		Payload:         grantedPayload,
-	}
-
-	if err := sess.stream.Send(grantedMsg); err != nil {
-		log.Printf("[GRPC] Failed to send JobLeaseGranted to worker %s: %v", workerID, err)
+	if offer == nil || offer.JobID != jobID {
+		log.Printf("[GRPC] Worker %s accepted job %s but no matching pending offer", workerID, jobID)
 		return
 	}
 
-	// Clear pending offer
+	// Verify the lease_id the worker is accepting matches what we offered.
+	// If they don't match, the worker may be responding to a stale offer.
+	declaredLeaseID := ja.GetLeaseId()
+	if declaredLeaseID != "" && declaredLeaseID != offer.LeaseID {
+		log.Printf("[GRPC] Worker %s accepted job %s with mismatched lease_id: got %s, want %s",
+			workerID, jobID, declaredLeaseID, offer.LeaseID)
+		return
+	}
+
+	// Send typed JobLeaseGranted — confirms the lease created by ClaimNextJob.
+	env := &pb.MasterToWorkerEnvelope{
+		MessageId:       fmt.Sprintf("leasegrant-%s-%s", workerID, jobID),
+		WorkerId:        workerID,
+		SentAt:          timestamppb.Now(),
+		ProtocolVersion: controltransport.ProtocolVersionCurrent,
+		Msg: &pb.MasterToWorkerEnvelope_JobLeaseGranted{
+			JobLeaseGranted: &pb.JobLeaseGranted{
+				JobId:    jobID,
+				WorkerId: workerID,
+				Status:   "granted",
+			},
+		},
+	}
+
+	sess.sendMu.Lock()
+	sendErr := sess.stream.Send(env)
+	sess.sendMu.Unlock()
+
+	if sendErr != nil {
+		log.Printf("[GRPC] Failed to send JobLeaseGranted to worker %s: %v", workerID, sendErr)
+		// Don't clear pendingOffer — let the notifier retry or the lease expire.
+		return
+	}
+
+	// Clear pending offer — job is now running on this worker.
 	h.mu.Lock()
 	if sess.pendingOffer != nil && sess.pendingOffer.JobID == jobID {
 		sess.pendingOffer = nil
@@ -436,14 +487,12 @@ func (h *Handler) handleJobAccepted(workerID string, msg *pb.TransportMessage) {
 	h.mu.Unlock()
 }
 
-// handleJobRejected processes JobRejected — releases the claimed job for requeue.
-func (h *Handler) handleJobRejected(workerID string, msg *pb.TransportMessage) {
-	payload := msg.Payload.AsMap()
-	jobID := getPayloadString(payload, "job_id")
-	reason := getPayloadString(payload, "reason")
+// handleJobRejected processes typed JobRejected — releases the claimed job for requeue.
+func (h *Handler) handleJobRejected(workerID string, jr *pb.JobRejected) {
+	jobID := jr.GetJobId()
+	reason := jr.GetReason()
 	log.Printf("[GRPC] Worker %s rejected job %s: %s", workerID, jobID, reason)
 
-	// Release the claimed job — fail it so it can be retried or requeued
 	if jobID != "" {
 		if err := h.transitionSvc.FailJob(context.Background(), jobID, reason, workerID, true, 3); err != nil {
 			log.Printf("[GRPC] Failed to release rejected job %s: %v", jobID, err)
@@ -463,33 +512,30 @@ func (h *Handler) handleJobRejected(workerID string, msg *pb.TransportMessage) {
 	h.mu.Unlock()
 }
 
-// handleJobProgress tracks per-job progress (forwarded via heartbeat for now).
-func (h *Handler) handleJobProgress(workerID string, msg *pb.TransportMessage) {
+// handleJobProgress tracks per-job progress (typed, forwarded via heartbeat for now).
+func (h *Handler) handleJobProgress(workerID string, jp *pb.JobProgress) {
 	// Progress updates are informational; the registry already tracks them
 	// via the heartbeat's active_jobs payload.
+	log.Printf("[GRPC] Worker %s progress on job %s: stage=%s %d%% (scene %d/%d)",
+		workerID, jp.GetJobId(), jp.GetStage(), jp.GetProgressPercent(), jp.GetScene(), jp.GetTotalScenes())
 }
 
-// handleCommandAck processes command acknowledgments via gRPC stream.
-func (h *Handler) handleCommandAck(workerID string, msg *pb.TransportMessage) {
-	payload := msg.Payload.AsMap()
-	commandID := getPayloadString(payload, "command_id")
-	command := getPayloadString(payload, "command")
-
-	if commandID != "" {
-		if err := h.cmdMgr.AckCommandByID(commandID); err != nil {
-			log.Printf("[GRPC] Command ACK failed for %s: %v", commandID, err)
+// handleCommandAck processes typed CommandAck via gRPC stream.
+func (h *Handler) handleCommandAck(workerID string, ca *pb.CommandAck) {
+	if ca.GetCommandId() != "" {
+		if err := h.cmdMgr.AckCommandByID(ca.GetCommandId()); err != nil {
+			log.Printf("[GRPC] Command ACK failed for %s: %v", ca.GetCommandId(), err)
 		}
-	} else if command != "" {
-		h.cmdMgr.AckCommand(workerID, command)
+	} else if ca.GetCommand() != "" {
+		h.cmdMgr.AckCommand(workerID, ca.GetCommand())
 	}
 }
 
-// handleJobResult processes job results via gRPC stream.
-func (h *Handler) handleJobResult(workerID string, msg *pb.TransportMessage) {
-	payload := msg.Payload.AsMap()
-	jobID := getPayloadString(payload, "job_id")
-	status := getPayloadString(payload, "status")
-	errMsg := getPayloadString(payload, "error")
+// handleJobResult processes typed JobResult via gRPC stream.
+func (h *Handler) handleJobResult(workerID string, jr *pb.JobResult) {
+	jobID := jr.GetJobId()
+	status := jr.GetStatus()
+	errMsg := jr.GetError()
 
 	if status == "success" {
 		if err := h.transitionSvc.CompleteJob(context.Background(), jobID); err != nil {
@@ -517,7 +563,6 @@ func StartGRPCServer(port int, handler *Handler, certFile, keyFile, caFile strin
 	var grpcOpts []grpc.ServerOption
 
 	if certFile != "" && keyFile != "" {
-		// Load server certificate
 		serverCert, err := tls.LoadX509KeyPair(certFile, keyFile)
 		if err != nil {
 			return nil, nil, fmt.Errorf("grpc: load server cert/key: %w", err)
@@ -528,7 +573,6 @@ func StartGRPCServer(port int, handler *Handler, certFile, keyFile, caFile strin
 			MinVersion:   tls.VersionTLS12,
 		}
 
-		// If CA file provided, enable mTLS (require and verify client certs)
 		if caFile != "" {
 			caPEM, err := os.ReadFile(caFile)
 			if err != nil {
@@ -545,7 +589,6 @@ func StartGRPCServer(port int, handler *Handler, certFile, keyFile, caFile strin
 
 		grpcOpts = append(grpcOpts, grpc.Creds(credentials.NewTLS(tlsConfig)))
 	} else {
-		// No TLS files provided — check if insecure mode is allowed
 		allowInsecure := os.Getenv("VELOX_GRPC_ALLOW_INSECURE_DEV") == "true"
 		if !allowInsecure {
 			return nil, nil, fmt.Errorf("grpc: TLS cert/key required in production (set VELOX_GRPC_ALLOW_INSECURE_DEV=true for dev)")
@@ -569,9 +612,7 @@ func StartGRPCServer(port int, handler *Handler, certFile, keyFile, caFile strin
 }
 
 // dispatchCommands reads pending commands from SQLite for the worker,
-// sends each on the gRPC stream, and marks them as delivered.
-// Called on initial connect and on each heartbeat — the Stream() message
-// loop goroutine is single-threaded so stream.Send() is safe.
+// sends each as a typed Command on the gRPC stream, and marks them as delivered.
 func (h *Handler) dispatchCommands(workerID string, sess *workerSession) {
 	cmds := h.cmdMgr.GetPendingCommandsAndMarkDelivered(workerID)
 	if len(cmds) == 0 {
@@ -580,25 +621,38 @@ func (h *Handler) dispatchCommands(workerID string, sess *workerSession) {
 
 	log.Printf("[GRPC] Dispatching %d pending commands to worker %s", len(cmds), workerID)
 
-	for _, cmd := range cmds {
-		payload, _ := structpb.NewStruct(map[string]interface{}{
-			"command_id": cmd.CommandID,
-			"command":    cmd.Command,
-			"timestamp":  cmd.Timestamp,
-			"params":     cmd.Params,
-		})
+	// P0: lock once for the batch — single goroutine (Stream() main loop) sends commands.
+	sess.sendMu.Lock()
+	defer sess.sendMu.Unlock()
 
-		msg := &pb.TransportMessage{
+	for _, cmd := range cmds {
+		var params *structpb.Struct
+		if cmd.Params != nil {
+			params, _ = structpb.NewStruct(cmd.Params)
+		}
+
+		ts, err := time.Parse(time.RFC3339, cmd.Timestamp)
+		if err != nil {
+			ts = time.Now().UTC()
+		}
+
+		env := &pb.MasterToWorkerEnvelope{
 			MessageId:       fmt.Sprintf("cmd-%s-%s", workerID, cmd.CommandID),
-			Type:            string(controltransport.MsgCommand),
 			WorkerId:        workerID,
 			SessionId:       sess.sessionID,
 			SentAt:          timestamppb.Now(),
 			ProtocolVersion: controltransport.ProtocolVersionCurrent,
-			Payload:         payload,
+			Msg: &pb.MasterToWorkerEnvelope_Command{
+				Command: &pb.Command{
+					CommandId: cmd.CommandID,
+					Command:   cmd.Command,
+					Timestamp: timestamppb.New(ts),
+					Params:    params,
+				},
+			},
 		}
 
-		if err := sess.stream.Send(msg); err != nil {
+		if err := sess.stream.Send(env); err != nil {
 			log.Printf("[GRPC] Failed to send command %s to worker %s: %v", cmd.CommandID, workerID, err)
 			return
 		}
@@ -606,8 +660,6 @@ func (h *Handler) dispatchCommands(workerID string, sess *workerSession) {
 }
 
 // closeOldSessionLocked removes any existing session for the given workerID.
-// The old Stream() goroutine will return naturally when it detects the session
-// was removed (next Recv/operation will fail or the client disconnects).
 // Must be called with h.mu held.
 func (h *Handler) closeOldSessionLocked(workerID string) {
 	oldSID, ok := h.workerSessions[workerID]
@@ -619,12 +671,19 @@ func (h *Handler) closeOldSessionLocked(workerID string) {
 	}
 	delete(h.sessions, oldSID)
 	delete(h.workerSessions, workerID)
-	// Don't close oldSess.done — the old defer handles it when Stream() returns.
-	// Don't call stream methods — BidiStreamingServer has no CloseSend on server side.
+	// Messages from the old session are dropped by isCurrentSession() check in the main loop.
+}
+
+// isCurrentSession returns true if the given sessionID is still the active
+// session for workerID. Used to drop messages from stale/zombie connections.
+func (h *Handler) isCurrentSession(workerID, sessionID string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	sid, ok := h.workerSessions[workerID]
+	return ok && sid == sessionID
 }
 
 // getSession returns the active session for a workerID, or nil if none.
-// Thread-safe: acquires h.mu.
 func (h *Handler) getSession(workerID string) *workerSession {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -638,8 +697,6 @@ func (h *Handler) getSession(workerID string) *workerSession {
 // ---- Security Helpers ----
 
 // extractWorkerIDFromStream extracts the worker identity from the client TLS certificate.
-// Returns the Common Name (CN) from the client cert, or empty string if no cert is present
-// (insecure mode). In production mTLS mode, this must return a non-empty worker ID.
 func (h *Handler) extractWorkerIDFromStream(stream grpc.ServerStream) string {
 	p, ok := peer.FromContext(stream.Context())
 	if !ok {
@@ -658,7 +715,6 @@ func (h *Handler) extractWorkerIDFromStream(stream grpc.ServerStream) string {
 	clientCert := tlsInfo.State.PeerCertificates[0]
 	cn := clientCert.Subject.CommonName
 	if cn == "" {
-		// Fallback: try the first DNS SAN
 		if len(clientCert.DNSNames) > 0 {
 			cn = clientCert.DNSNames[0]
 		}
@@ -669,16 +725,12 @@ func (h *Handler) extractWorkerIDFromStream(stream grpc.ServerStream) string {
 
 // validateCredentialHash checks the worker's credential_hash against the
 // stored persistent credential in SQLite (worker_credentials table).
-// Missing credentials result in rejection in production mode.
-func (h *Handler) validateCredentialHash(workerID string, msg *pb.TransportMessage) error {
-	payload := msg.Payload.AsMap()
-	declaredHash, _ := payload["credential_hash"].(string)
-
+// Accepts the credential hash string directly from typed Hello message.
+func (h *Handler) validateCredentialHash(workerID string, declaredHash string) error {
 	// Check if this worker has a stored credential
 	hasCred, err := h.dbStore.HasWorkerCredential(workerID)
 	if err != nil {
 		log.Printf("[GRPC] Credential lookup failed for worker %s: %v", workerID, err)
-		// Don't fail — allow fallback to insecure dev mode
 		if h.config.AllowInsecure {
 			return nil
 		}
@@ -694,7 +746,6 @@ func (h *Handler) validateCredentialHash(workerID string, msg *pb.TransportMessa
 			log.Printf("[GRPC] Worker %s: initial credential stored", workerID)
 			return nil
 		}
-		// No credential provided — allow in dev mode, reject in production
 		if h.config.AllowInsecure {
 			log.Printf("[GRPC] Worker %s: no credential — allowing in insecure dev mode", workerID)
 			return nil
@@ -716,13 +767,4 @@ func (h *Handler) validateCredentialHash(workerID string, msg *pb.TransportMessa
 	}
 
 	return nil
-}
-
-// ---- Helpers ----
-
-func getPayloadString(payload map[string]interface{}, key string) string {
-	if v, ok := payload[key].(string); ok {
-		return v
-	}
-	return ""
 }

@@ -620,6 +620,45 @@ func (ts *TransitionService) LeaseJob(ctx context.Context, jobID, workerID strin
 	return PersistJob(job, ts.dbStore)
 }
 
+// ReleaseClaim resets a claimed job back to PENDING status without incrementing
+// retry count. Used when the JobOffer could not be delivered to the worker
+// (e.g., gRPC send failure after a successful ClaimNextJob).
+// Uses direct PersistJob (like RequeueZombieJobs) since PROCESSING→PENDING
+// is not in the canonical transition table (RUNNING only allows SUCCEEDED/FAILED/RETRY_WAIT/CANCELLED).
+func (ts *TransitionService) ReleaseClaim(ctx context.Context, jobID string) error {
+	m, err := ts.dbStore.GetJob(ctx, jobID)
+	if err != nil {
+		return fmt.Errorf("job not found: %s", jobID)
+	}
+	job := MapToJob(m)
+
+	normalized := normalizeJobStatus(string(job.Status))
+	if normalized != StatusRunning {
+		return fmt.Errorf("job %s is in state %s, expected PROCESSING/RUNNING for claim release", jobID, normalized)
+	}
+
+	// Direct update — bypass CAS transition since PROCESSING→PENDING is not
+	// in the canonical table. Don't increment retry count (job was never processed).
+	job.Status = StatusPending
+	job.AssignedTo = ""
+	job.AssignedAt = nil
+	job.ClaimedBy = ""
+	job.ClaimedAt = ""
+	job.LeaseID = ""
+	job.LeaseExpiry = nil
+	job.UpdatedAt = NowUnix()
+
+	if err := PersistJob(job, ts.dbStore); err != nil {
+		return fmt.Errorf("persist claim release: %w", err)
+	}
+
+	ts.dbStore.LogJobEvent(jobID, "claim_released", map[string]interface{}{
+		"reason": "send_failure",
+	})
+
+	return nil
+}
+
 // getIntField extracts an integer field from a job map, returning 0 if not found.
 func getIntField(m map[string]interface{}, key string) int {
 	if m == nil {
