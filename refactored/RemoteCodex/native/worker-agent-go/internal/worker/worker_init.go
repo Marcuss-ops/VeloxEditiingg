@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"velox-shared/controltransport"
 	"velox-worker-agent/internal/transport"
 	"velox-worker-agent/pkg/api"
 	"velox-worker-agent/pkg/config"
@@ -52,15 +53,18 @@ func New(cfg *config.WorkerConfig, version string) *Worker {
 	}
 	stageExecutor := NewStageExecutor(stageExecCfg)
 
-	// Initialize control-plane transport based on configuration.
-	// Supports: polling (HTTP, default), grpc (gRPC bidirectional stream).
-	// When grpc is selected and fallback is enabled, polling is used as a safety net.
-	ctrlTransport := newControlTransport(apiClient, cfg, log)
+	// Store a transport factory that creates fresh instances per session.
+	// After Close(), transports are not reusable (channels + sync.Once),
+	// so each reconnect loop iteration gets a brand-new transport.
+	transportFactory := func() controltransport.ControlTransport {
+		return newControlTransport(apiClient, cfg, log)
+	}
 
 	w := &Worker{
-		config:    cfg,
-		apiClient: apiClient,
-		transport: ctrlTransport,
+		config:           cfg,
+		apiClient:        apiClient,
+		transportFactory: transportFactory,
+		transport:        transportFactory(), // Initial instance for first session
 		logger:    log,
 		status:    StatusIdle,
 		stopChan:  make(chan struct{}),
@@ -76,6 +80,7 @@ func New(cfg *config.WorkerConfig, version string) *Worker {
 		recentLogs:         recentLogs,
 		jobCancelFuncs:     make(map[string]context.CancelFunc),
 		activeJobs:         make(map[string]*ActiveJob),
+		pendingLeaseJobs:   make(map[string]*api.Job),
 		connState:          ConnDisconnected,
 		concurrencyLimiter: NewConcurrencyLimiter(detectedConcurrency),
 		stageExecutor:      stageExecutor,

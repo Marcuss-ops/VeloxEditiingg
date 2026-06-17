@@ -3,6 +3,7 @@ package lifecycle
 import (
 	"log"
 	"net/http"
+	"os"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -48,13 +49,30 @@ func (h *Handler) RegisterV2Handler() gin.HandlerFunc {
 			return
 		}
 
-		// Validate persistent credential if provided
-		if body.Credential != "" {
-			hasCred, _ := h.store.HasWorkerCredential(body.WorkerID)
+		// P0 security: credential is mandatory unless VELOX_HTTP_ALLOW_NO_CREDENTIAL=true (dev).
+		// If a credential already exists for this worker, it MUST match.
+		// If no credential exists yet, one MUST be provided for first registration.
+		allowNoCred := os.Getenv("VELOX_HTTP_ALLOW_NO_CREDENTIAL") == "true"
+		hasCred, _ := h.store.HasWorkerCredential(body.WorkerID)
+
+		if body.Credential == "" {
+			if hasCred {
+				c.JSON(http.StatusUnauthorized, gin.H{
+					"error": "credential required — this worker already has a stored credential",
+				})
+				return
+			}
+			if !allowNoCred {
+				c.JSON(http.StatusUnauthorized, gin.H{
+					"error": "credential required for first registration (set VELOX_HTTP_ALLOW_NO_CREDENTIAL=true for dev)",
+				})
+				return
+			}
+			log.Printf("[REGISTER] Worker %s: no credential — allowing in dev mode", body.WorkerID)
+		} else {
 			match, _ := h.store.ValidateWorkerCredential(body.WorkerID, body.Credential)
 
 			if hasCred && !match {
-				// A credential exists but the provided one doesn't match — reject
 				c.JSON(http.StatusUnauthorized, gin.H{
 					"error": "credential mismatch — possible impersonation",
 				})

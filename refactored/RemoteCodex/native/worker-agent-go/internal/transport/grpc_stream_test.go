@@ -315,7 +315,7 @@ func TestGRPCStreamTransport_ReceiveJobOffer(t *testing.T) {
 	}
 
 	// Start receiving
-	recvCh, err := transport.Receive(ctx)
+	recvCh, _, err := transport.Receive(ctx)
 	if err != nil {
 		t.Fatalf("Receive failed: %v", err)
 	}
@@ -449,7 +449,7 @@ func TestGRPCStreamTransport_ReceiveBeforeConnect(t *testing.T) {
 	transport := NewGRPCStreamTransport("127.0.0.1:0", "test-worker")
 
 	ctx := context.Background()
-	_, err := transport.Receive(ctx)
+	_, _, err := transport.Receive(ctx)
 	if err != controltransport.ErrNotConnected {
 		t.Errorf("Receive before connect error = %v, want ErrNotConnected", err)
 	}

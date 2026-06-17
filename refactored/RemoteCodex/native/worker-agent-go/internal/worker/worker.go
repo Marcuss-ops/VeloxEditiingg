@@ -18,8 +18,7 @@ import (
 )
 
 // Start begins the worker's main loop with automatic re-registration on failure.
-// Uses ControlTransport for all master communication, making the worker
-// transport-agnostic (HTTP polling today, gRPC stream tomorrow).
+// Creates a fresh transport instance per session attempt (reconnect P0 fix).
 func (w *Worker) Start(ctx context.Context) error {
 	logger.LogStartup(w.config.WorkerID, w.version, w.config.MasterURL)
 	w.logger.Debug("Work Directory: %s", w.config.WorkDir)
@@ -31,6 +30,10 @@ func (w *Worker) Start(ctx context.Context) error {
 	backoff := registrationInitialBackoff
 
 	for !w.IsStopped() {
+		// P0 reconnect fix: create a fresh transport each session attempt.
+		// After Close(), transports are not reusable (channels + sync.Once).
+		w.transport = w.newTransport()
+
 		w.setConnState(ConnConnecting)
 		w.connFailureCount = 0
 
@@ -39,6 +42,7 @@ func (w *Worker) Start(ctx context.Context) error {
 			w.connFailureCount++
 			w.logger.Warn("[CONNECT] Registration failed (attempt %d): %v", w.connFailureCount, err)
 			w.setConnState(ConnDisconnected)
+			_ = w.transport.Close()
 
 			// Exponential backoff with jitter
 			jitter := time.Duration(rand.Float64() * float64(backoff) * 0.25)
@@ -67,13 +71,19 @@ func (w *Worker) Start(ctx context.Context) error {
 		w.logger.Info("[CONNECT] Registration successful — running session")
 
 		// Run session: start all loops, manage lifecycle
-		w.runSession(ctx)
+		sessionEnded := w.runSession(ctx)
+
+		_ = w.transport.Close()
 
 		// Session ended — either through stop or disconnect
 		if w.IsStopped() {
 			break
 		}
-		w.logger.Warn("[SESSION] Session ended — will reconnect")
+		if sessionEnded {
+			w.logger.Warn("[SESSION] Session ended — will reconnect")
+		} else {
+			w.logger.Info("[SESSION] Session ended cleanly")
+		}
 	}
 
 	w.setConnState(ConnDisconnected)
@@ -129,16 +139,17 @@ func (w *Worker) buildHello() controltransport.WorkerHello {
 	return hello
 }
 
-// runSession starts all communication loops and waits for shutdown or disconnect.
-func (w *Worker) runSession(ctx context.Context) {
+// runSession starts all communication loops and returns true if the session
+// ended due to disconnect (should reconnect), false if stopped gracefully.
+func (w *Worker) runSession(ctx context.Context) bool {
 	sessionCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	// Start the receive channel for messages from master (jobs, commands)
-	recvCh, err := w.transport.Receive(sessionCtx)
+	recvCh, errCh, err := w.transport.Receive(sessionCtx)
 	if err != nil {
 		w.logger.Error("Failed to start receive channel: %v", err)
-		return
+		return false
 	}
 
 	// Start heartbeat goroutine (uses transport.Send)
@@ -153,7 +164,8 @@ func (w *Worker) runSession(ctx context.Context) {
 	w.wg.Add(1)
 	go w.receiveLoop(sessionCtx, recvCh)
 
-	// Wait for stop signal or session disconnect
+	// P0 reconnect fix: also watch the error channel for stream failures
+	sessionEnded := false
 	select {
 	case <-w.stopChan:
 		w.logger.Info("Worker stopping...")
@@ -162,13 +174,18 @@ func (w *Worker) runSession(ctx context.Context) {
 	case <-ctx.Done():
 		w.logger.Warn("Parent context cancelled — draining")
 		w.setConnState(ConnDraining)
+	case streamErr, ok := <-errCh:
+		if ok {
+			w.logger.Warn("[SESSION] Transport error — session ended: %v", streamErr)
+		} else {
+			w.logger.Info("[SESSION] Transport closed cleanly")
+		}
+		w.setConnState(ConnDisconnected)
+		sessionEnded = true // Signal caller to reconnect
 	}
 
 	// Cancel session context to stop all loops
 	cancel()
-
-	// Unregister via transport
-	_ = w.transport.Close()
 
 	// Wait for goroutines to finish with timeout
 	done := make(chan struct{})
@@ -183,6 +200,8 @@ func (w *Worker) runSession(ctx context.Context) {
 	case <-time.After(30 * time.Second):
 		w.logger.Warn("Timeout waiting for goroutines, forcing exit")
 	}
+
+	return sessionEnded
 }
 
 // receiveLoop processes incoming messages from the transport receive channel.
@@ -207,6 +226,11 @@ func (w *Worker) receiveLoop(ctx context.Context, recvCh <-chan controltransport
 			}
 
 			switch msg.Type {
+			case controltransport.MsgJobAvailable:
+				// Shadow mode: master notifies that jobs exist.
+				// Worker claims via HTTP (existing GetJobV2/ClaimNext flow).
+				w.logger.Debug("[RECEIVE] JobAvailable notification — will claim via HTTP")
+
 			case controltransport.MsgJobOffer:
 				if w.IsStopped() || w.drainMode.Load() {
 					w.logger.Debug("[RECEIVE] Ignoring job offer — worker stopped/draining")
@@ -233,38 +257,43 @@ func (w *Worker) receiveLoop(ctx context.Context, recvCh <-chan controltransport
 				// Validate job offer (contract version, render plan, concurrency)
 				if err := w.validateJobOffer(job); err != nil {
 					w.logger.Warn("[RECEIVE] Job offer validation failed: %v", err)
-					// Send JobRejected message
-					rejectPayload := map[string]interface{}{
-						"job_id": job.JobID,
-						"reason": err.Error(),
-					}
-					rejectMsg := controltransport.NewMessageWithPayload(
-						controltransport.MsgJobRejected,
-						w.config.WorkerID,
-						w.config.ProtocolVersion,
-						rejectPayload,
-					)
-					_ = w.transport.Send(ctx, rejectMsg)
+					_ = w.sendReject(ctx, job.JobID, err.Error())
 					continue
 				}
 
-				w.logger.Info("[RECEIVE] JobOffer received: %s (type: %s)", job.JobID, job.JobType)
+				w.logger.Info("[RECEIVE] JobOffer received: %s (type: %s, lease: %s)", job.JobID, job.JobType, job.LeaseID)
 
 				// Send JobAccepted via transport
-				acceptPayload := map[string]interface{}{
-					"job_id":     job.JobID,
-					"job_run_id": job.JobRunID,
-					"lease_id":   job.LeaseID,
+				if err := w.sendAccept(ctx, job); err != nil {
+					w.logger.Warn("[RECEIVE] Failed to send JobAccepted: %v", err)
+					continue
 				}
-				acceptMsg := controltransport.NewMessageWithPayload(
-					controltransport.MsgJobAccepted,
-					w.config.WorkerID,
-					w.config.ProtocolVersion,
-					acceptPayload,
-				)
-				_ = w.transport.Send(ctx, acceptMsg)
 
-				// Launch job execution in a goroutine
+				// P0 protocol fix: store pending job, wait for JobLeaseGranted before executing.
+				// The master confirms the lease atomically in SQLite before sending JobLeaseGranted.
+				w.storePendingJob(job)
+
+			case controltransport.MsgJobLeaseGranted:
+				// P0 protocol fix: master confirms the lease.
+				// Only now can the worker safely execute the job.
+				jobID := ""
+				if msg.Payload != nil {
+					if j, ok := msg.Payload["job_id"].(string); ok {
+						jobID = j
+					}
+				}
+				if jobID == "" {
+					w.logger.Warn("[RECEIVE] JobLeaseGranted without job_id")
+					continue
+				}
+
+				job := w.takePendingJob(jobID)
+				if job == nil {
+					w.logger.Warn("[RECEIVE] JobLeaseGranted for unknown job %s", jobID)
+					continue
+				}
+
+				w.logger.Info("[RECEIVE] JobLeaseGranted for %s — starting execution", jobID)
 				go w.executeJob(ctx, job)
 
 			case controltransport.MsgCommand:
@@ -325,14 +354,24 @@ func msgToJob(msg controltransport.ControlMessage) *api.Job {
 		return nil
 	}
 
+	// Handle both gRPC push-mode field names and HTTP poll fallback names.
+	// gRPC: run_id, video_name, max_retries
+	// HTTP: job_run_id, job_type, priority, parameters, timeout_secs, contract_version
+	runID := getMsgString(msg.Payload, "run_id")
+	if runID == "" {
+		runID = getMsgString(msg.Payload, "job_run_id")
+	}
+	videoName := getMsgString(msg.Payload, "video_name")
+	jobType := getMsgString(msg.Payload, "job_type")
+
 	return &api.Job{
 		JobID:           jobID,
-		JobRunID:        getMsgString(msg.Payload, "job_run_id"),
-		JobType:         getMsgString(msg.Payload, "job_type"),
+		JobRunID:        runID,
+		JobType:         coalesceStr(videoName, jobType),
 		Priority:        getMsgInt(msg.Payload, "priority"),
 		Parameters:      getMsgMap(msg.Payload, "parameters"),
 		CreatedAt:       msg.Payload["created_at"],
-		TimeoutSecs:     getMsgInt(msg.Payload, "timeout_secs"),
+		TimeoutSecs:     getMsgInt(msg.Payload, "max_retries"),
 		ContractVersion: getMsgInt(msg.Payload, "contract_version"),
 		LeaseID:         getMsgString(msg.Payload, "lease_id"),
 		LeaseExpiry:     getMsgString(msg.Payload, "lease_expiry"),
@@ -379,6 +418,13 @@ func getMsgMap(m map[string]interface{}, key string) map[string]interface{} {
 	return nil
 }
 
+func coalesceStr(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
+}
+
 // setConnState updates the connection state.
 func (w *Worker) setConnState(state ConnectionState) {
 	w.connStateMu.Lock()
@@ -393,6 +439,60 @@ func (w *Worker) ConnState() ConnectionState {
 	w.connStateMu.RLock()
 	defer w.connStateMu.RUnlock()
 	return w.connState
+}
+
+// newTransport creates a fresh transport instance for a new session attempt.
+func (w *Worker) newTransport() controltransport.ControlTransport {
+	return w.transportFactory()
+}
+
+// sendAccept sends a JobAccepted message via the transport.
+func (w *Worker) sendAccept(ctx context.Context, job *api.Job) error {
+	acceptPayload := map[string]interface{}{
+		"job_id":     job.JobID,
+		"job_run_id": job.JobRunID,
+		"lease_id":   job.LeaseID,
+	}
+	acceptMsg := controltransport.NewMessageWithPayload(
+		controltransport.MsgJobAccepted,
+		w.config.WorkerID,
+		w.config.ProtocolVersion,
+		acceptPayload,
+	)
+	return w.transport.Send(ctx, acceptMsg)
+}
+
+// sendReject sends a JobRejected message via the transport.
+func (w *Worker) sendReject(ctx context.Context, jobID, reason string) error {
+	rejectPayload := map[string]interface{}{
+		"job_id": jobID,
+		"reason": reason,
+	}
+	rejectMsg := controltransport.NewMessageWithPayload(
+		controltransport.MsgJobRejected,
+		w.config.WorkerID,
+		w.config.ProtocolVersion,
+		rejectPayload,
+	)
+	return w.transport.Send(ctx, rejectMsg)
+}
+
+// storePendingJob records a job that has been accepted but is waiting for
+// JobLeaseGranted before execution.
+func (w *Worker) storePendingJob(job *api.Job) {
+	w.pendingLeaseMu.Lock()
+	defer w.pendingLeaseMu.Unlock()
+	w.pendingLeaseJobs[job.JobID] = job
+}
+
+// takePendingJob retrieves and removes a pending job by ID.
+// Returns nil if the job was not found.
+func (w *Worker) takePendingJob(jobID string) *api.Job {
+	w.pendingLeaseMu.Lock()
+	defer w.pendingLeaseMu.Unlock()
+	job := w.pendingLeaseJobs[jobID]
+	delete(w.pendingLeaseJobs, jobID)
+	return job
 }
 
 // Stop signals the worker to stop gracefully.

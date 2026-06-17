@@ -13,11 +13,18 @@ type ControlTransport interface {
 	// Connect establishes the connection and authenticates the worker.
 	// In HTTP polling mode this is a no-op (auth happens during register).
 	// In gRPC mode this opens a bidirectional stream and completes the handshake.
+	// Must be called before Receive() or Send().
+	// Each call creates a new underlying connection; the transport is NOT reusable
+	// after Close().
 	Connect(ctx context.Context, hello WorkerHello) error
 
-	// Receive returns a channel that yields messages from the master.
-	// The channel is closed when the transport is closed or an unrecoverable error occurs.
-	Receive(ctx context.Context) (<-chan ControlMessage, error)
+	// Receive returns a message channel (master→worker) and an error channel.
+	// The message channel is closed when the transport is closed or an unrecoverable
+	// error occurs. The error channel receives the terminal error (if any) and is
+	// then closed. If the transport closes cleanly, the error channel is closed
+	// with no value sent.
+	// Must be called after a successful Connect().
+	Receive(ctx context.Context) (<-chan ControlMessage, <-chan error, error)
 
 	// Send transmits a message to the master.
 	// Returns an error if the transport is closed or the send fails.
@@ -26,6 +33,7 @@ type ControlTransport interface {
 	// Close gracefully terminates the transport.
 	// Sends a Goodbye message and closes the underlying connection.
 	// Idempotent: calling Close on an already-closed transport is a no-op.
+	// After Close(), the transport must NOT be reused — create a new instance.
 	Close() error
 }
 
