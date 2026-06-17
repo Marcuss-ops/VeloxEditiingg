@@ -37,7 +37,7 @@ type ScriptHandlers struct {
 func NewScriptHandlers(cfg *config.Config, q *queue.FileQueue, sqliteDB *store.SQLiteStore) *ScriptHandlers {
 	dataDir := ""
 	if cfg != nil {
-		dataDir = strings.TrimSpace(cfg.DataDir)
+		dataDir = strings.TrimSpace(cfg.Runtime.DataDir)
 	}
 	return &ScriptHandlers{
 		queue:    q,
@@ -88,7 +88,7 @@ func (h *ScriptHandlers) GenerateWithImagesHandler(cfg *config.Config) gin.Handl
 			}
 		}
 
-		normalized, err := enqueue.BuildSceneImagePayloadForMaster(payload, h.dataDir, cfg.VideosDir, resolvedMasterURL)
+		normalized, err := enqueue.BuildSceneImagePayloadForMaster(payload, h.dataDir, cfg.Runtime.VideosDir, resolvedMasterURL)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": err.Error()})
 			return
