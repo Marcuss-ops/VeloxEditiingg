@@ -229,5 +229,42 @@ func (r *SQLiteJobRepository) ListByStatus(ctx context.Context, statuses []JobSt
 	return jobs, rows.Err()
 }
 
+// RenewLease extends the lease on an active job atomically.
+// Validates internally that the job is in LEASED, RUNNING, or PROCESSING
+// status (the renewable states) via a single UPDATE with WHERE clause.
+// Returns ErrTransitionConflict if no rows matched.
+func (r *SQLiteJobRepository) RenewLease(ctx context.Context, params RenewLeaseParams) error {
+	if params.JobID == "" {
+		return fmt.Errorf("job repository: empty jobID in RenewLease")
+	}
+	if params.LeaseID == "" {
+		return fmt.Errorf("job repository: empty leaseID in RenewLease")
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	leaseExpiry := params.LeaseExpiry.UTC().Format(time.RFC3339)
+	result, err := r.store.db.ExecContext(ctx,
+		`UPDATE jobs
+		 SET lease_id = ?,
+		     lease_expiry = ?,
+		     updated_at = ?,
+		     revision = revision + 1,
+		     attempt = CASE WHEN attempt = 0 THEN retry_count ELSE attempt END
+		 WHERE job_id = ?
+		   AND UPPER(status) IN ('LEASED', 'RUNNING', 'PROCESSING')`,
+		params.LeaseID, leaseExpiry, now, params.JobID,
+	)
+	if err != nil {
+		return fmt.Errorf("renew lease exec: %w", err)
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("renew lease rows: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("renew lease %s: %w", params.JobID, ErrTransitionConflict)
+	}
+	return nil
+}
+
 // Compile-time interface check.
 var _ JobRepository = (*SQLiteJobRepository)(nil)
