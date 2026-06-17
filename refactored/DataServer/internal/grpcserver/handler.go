@@ -63,12 +63,27 @@ type HandlerConfig struct {
 
 // workerSession tracks a single worker's gRPC stream connection.
 type workerSession struct {
-	workerID     string
-	sessionID    string
-	stream       grpc.BidiStreamingServer[pb.WorkerToMasterEnvelope, pb.MasterToWorkerEnvelope]
-	done         chan struct{}
-	pendingOffer *queue.Job    // JobOffer sent, awaiting JobAccepted/JobRejected
-	sendMu       sync.Mutex    // serializes stream.Send() across goroutines (notifier + main loop)
+	workerID  string
+	sessionID string
+	stream    grpc.BidiStreamingServer[pb.WorkerToMasterEnvelope, pb.MasterToWorkerEnvelope]
+	done      chan struct{}
+	cancel    context.CancelFunc // cancels the session context to terminate old goroutines
+
+	// Serialized output: all stream.Send() calls go through sendCh → sessionWriter.
+	// No other goroutine may call stream.Send() directly.
+	sendCh chan *pb.MasterToWorkerEnvelope
+
+	// Job offering synchronization (Issue 4 fix).
+	pendingOffer *queue.Job   // JobOffer sent, awaiting JobAccepted/JobRejected
+	claimMu      sync.Mutex   // serializes the claim+send+set flow; also guards pendingOffer r/w
+
+	// Worker capacity tracking (for max_parallel_jobs check).
+	// Updated by handleHeartbeat, read by sendPushJobOffer under claimMu.
+	maxParallelJobs int32
+	activeJobsCount int32
+
+	// Sequence numbers for replay protection (Issue 7 fix).
+	lastRecvSeq int64 // last received sequence number from worker
 }
 
 // NewHandler creates a new gRPC WorkerControl handler.
@@ -131,6 +146,12 @@ func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMasterEnvelo
 	workerID := declaredWorkerID
 	sessionID := fmt.Sprintf("grpc-%s-%d", workerID, time.Now().UnixNano())
 
+	// Issue 6 fix: create a cancellable context for the session.
+	sessionCtx, sessionCancel := context.WithCancel(context.Background())
+
+	// Issue 5 fix: create the send channel (buffered to avoid blocking producers).
+	sendCh := make(chan *pb.MasterToWorkerEnvelope, 64)
+
 	// Register session — keyed by sessionID to prevent defer from deleting a newer session.
 	h.mu.Lock()
 	h.closeOldSessionLocked(workerID)
@@ -140,6 +161,8 @@ func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMasterEnvelo
 		sessionID: sessionID,
 		stream:    stream,
 		done:      make(chan struct{}),
+		cancel:    sessionCancel,
+		sendCh:    sendCh,
 	}
 	h.sessions[sessionID] = sess
 	h.workerSessions[workerID] = sessionID
@@ -147,39 +170,74 @@ func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMasterEnvelo
 
 	log.Printf("[GRPC] Worker %s connected (session: %s, name: %s)", workerID, sessionID, hello.GetWorkerName())
 
+	// Issue 7 fix: persist the session to SQLite worker_sessions table.
+	if h.dbStore != nil {
+		_ = h.dbStore.InsertSession(&store.PersistedSession{
+			SessionID: sessionID,
+			WorkerID:  workerID,
+			TokenHash: store.HashCredential(hello.GetCredentialHash()),
+			IPAddress: h.extractPeerIP(stream),
+			ExpiresAt: time.Now().UTC().Add(24 * time.Hour),
+		})
+	}
+
+	// Issue 5 fix: start the dedicated session writer goroutine.
+	// All stream.Send() calls go through sendCh → sessionWriter from this point on.
+	go h.sessionWriter(sess)
+
 	defer func() {
+		// Issue 6 fix: cancel session context first to stop notifier goroutines
+		// BEFORE closing sendCh (prevents panic on send to closed channel).
+		sessionCancel()
+
+		// Issue 5 fix: close sendCh to stop the sessionWriter goroutine.
+		// At this point no goroutine should be sending on sendCh.
+		close(sendCh)
+
 		h.mu.Lock()
 		if currentSID, ok := h.workerSessions[workerID]; ok && currentSID == sessionID {
 			delete(h.workerSessions, workerID)
 		}
 		delete(h.sessions, sessionID)
 		h.mu.Unlock()
+
+		// Issue 7 fix: revoke the session in SQLite on disconnect.
+		if h.dbStore != nil {
+			_ = h.dbStore.RevokeSession(sessionID)
+		}
+
 		close(sess.done)
 		log.Printf("[GRPC] Worker %s disconnected (session: %s)", workerID, sessionID)
 	}()
 
-	// Send typed HelloAck
+	// Issue 7 fix: validate protocol version from Hello (string comparison).
+	if env.ProtocolVersion != "" && env.ProtocolVersion != controltransport.ProtocolVersionCurrent {
+		log.Printf("[GRPC] Worker %s protocol version mismatch: got %q, want %q",
+			workerID, env.ProtocolVersion, controltransport.ProtocolVersionCurrent)
+	}
+
+	// Send typed HelloAck via sendCh (sessionWriter handles the actual Send).
 	ack := &pb.MasterToWorkerEnvelope{
 		MessageId:       fmt.Sprintf("ack-%s-%d", workerID, time.Now().UnixNano()),
 		WorkerId:        workerID,
 		SessionId:       sessionID,
 		SequenceNumber:  1,
 		SentAt:          timestamppb.Now(),
-		ProtocolVersion: env.ProtocolVersion,
+		ProtocolVersion: controltransport.ProtocolVersionCurrent,
 		Msg:             &pb.MasterToWorkerEnvelope_HelloAck{HelloAck: &pb.HelloAck{}},
 	}
-	if err := stream.Send(ack); err != nil {
-		return fmt.Errorf("stream: send hello_ack: %w", err)
+	if !safeSend(sendCh, ack) {
+		return fmt.Errorf("stream: sendCh full for hello_ack")
 	}
 
 	// Dispatch any pending commands that arrived while worker was disconnected
 	h.dispatchCommands(workerID, sess)
 
-	// Start shadow/push mode job notifier
+	// Start shadow/push mode job notifier (Issue 6 fix: use sessionCtx for cleanup).
 	var notifyCh chan struct{}
 	var notifyStop context.CancelFunc
 	if h.config.ShadowMode || h.config.PushMode {
-		notifyCtx, cancel := context.WithCancel(context.Background())
+		notifyCtx, cancel := context.WithCancel(sessionCtx)
 		notifyStop = cancel
 		notifyCh = make(chan struct{}, 1)
 		go h.notifyJobsAvailable(notifyCtx, workerID, notifyCh, sess.done)
@@ -199,14 +257,24 @@ func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMasterEnvelo
 			return fmt.Errorf("stream: recv: %w", err)
 		}
 
-		// P0: drop messages from stale sessions (zombie connections after reconnect).
+		// Issue 6 fix: drop messages from stale sessions (zombie connections after reconnect).
 		if !h.isCurrentSession(workerID, sessionID) {
 			continue
 		}
 
+		// Issue 7 fix: sequence number check for replay protection.
+		if env.SequenceNumber > 0 {
+			if env.SequenceNumber <= sess.lastRecvSeq {
+				log.Printf("[GRPC] Duplicate or replayed message from worker %s: seq=%d, last=%d",
+					workerID, env.SequenceNumber, sess.lastRecvSeq)
+				continue
+			}
+			sess.lastRecvSeq = env.SequenceNumber
+		}
+
 		switch m := env.Msg.(type) {
 		case *pb.WorkerToMasterEnvelope_Heartbeat:
-			h.handleHeartbeat(workerID, m.Heartbeat)
+			h.handleHeartbeat(workerID, sessionID, m.Heartbeat)
 			h.dispatchCommands(workerID, sess)
 			if notifyCh != nil {
 				select {
@@ -271,6 +339,7 @@ func (h *Handler) notifyJobsAvailable(ctx context.Context, workerID string, trig
 }
 
 // sendJobAvailable sends a typed JobAvailable notification (Shadow mode).
+// Issue 5 fix: sends via sendCh instead of direct stream.Send().
 func (h *Handler) sendJobAvailable(ctx context.Context, workerID string) {
 	jobID, err := h.transitionSvc.GetNextJobID(ctx)
 	if err != nil || jobID == "" {
@@ -295,25 +364,38 @@ func (h *Handler) sendJobAvailable(ctx context.Context, workerID string) {
 		},
 	}
 
-	sess.sendMu.Lock()
-	_ = sess.stream.Send(env)
-	sess.sendMu.Unlock()
+	// Issue 5 fix: send via sendCh — non-blocking (drop if channel full, next tick will retry).
+	if !safeSend(sess.sendCh, env) {
+		log.Printf("[GRPC] sendCh full/closed for JobAvailable to worker %s", workerID)
+	}
 }
 
 // sendPushJobOffer does a real SQLite CAS claim and sends a typed JobOffer (Push mode).
+// Issue 4 fix: claimMu serializes the entire check+claim+send+set flow to prevent
+// TOCTOU races between concurrent notifyJobsAvailable calls.
 func (h *Handler) sendPushJobOffer(ctx context.Context, workerID string) {
 	sess := h.getSession(workerID)
 	if sess == nil {
 		return
 	}
 
-	// P0: prevent multiple concurrent offers — only one claim at a time.
-	// If a previous offer is still pending (not yet accepted/rejected), wait for it.
-	h.mu.Lock()
-	hasPending := sess.pendingOffer != nil
-	h.mu.Unlock()
-	if hasPending {
+	// Issue 4 fix: atomically check pendingOffer, claim, send, and store.
+	// claimMu prevents concurrent offers from racing ClaimNextJob.
+	sess.claimMu.Lock()
+	defer sess.claimMu.Unlock()
+
+	// If a previous offer is still pending (not yet accepted/rejected), skip.
+	if sess.pendingOffer != nil {
 		return
+	}
+
+	// Respect max_parallel_jobs: don't offer if worker is at capacity.
+	// pendingOffer is nil here (checked above), so the pending count is 1 (this offer).
+	if sess.maxParallelJobs > 0 {
+		capacity := int(sess.maxParallelJobs) - int(sess.activeJobsCount) - 1
+		if capacity < 0 {
+			return
+		}
 	}
 
 	job, err := h.transitionSvc.ClaimNextJob(ctx, workerID, nil)
@@ -363,29 +445,22 @@ func (h *Handler) sendPushJobOffer(ctx context.Context, workerID string) {
 		},
 	}
 
-	// P0: serialize stream.Send() — notifier goroutine shares the stream with the main loop.
-	sess.sendMu.Lock()
-	sendErr := sess.stream.Send(env)
-	sess.sendMu.Unlock()
-
-	if sendErr != nil {
-		log.Printf("[GRPC] Failed to send JobOffer to worker %s for job %s: %v", workerID, job.JobID, sendErr)
-		// P0: rollback the claim — release the job so it can be retried by another worker.
-		// Don't increment retry count since the worker never received the job.
+	// Issue 5 fix: send via sendCh instead of direct stream.Send().
+	if !safeSend(sess.sendCh, env) {
+		log.Printf("[GRPC] sendCh full/closed for JobOffer to worker %s — releasing claim", workerID)
 		if releaseErr := h.transitionSvc.ReleaseClaim(ctx, job.JobID); releaseErr != nil {
 			log.Printf("[GRPC] Failed to release claim for job %s after send failure: %v", job.JobID, releaseErr)
 		}
 		return
 	}
 
-	// Store the offer so we can match JobAccepted
-	h.mu.Lock()
+	// Issue 4 fix: store the offer under claimMu so we can match JobAccepted.
 	sess.pendingOffer = job
-	h.mu.Unlock()
 }
 
 // handleHeartbeat processes a typed Heartbeat received via gRPC stream.
-func (h *Handler) handleHeartbeat(workerID string, hb *pb.Heartbeat) {
+// Issue 7 fix: accepts sessionID and updates last_seen in worker_sessions table.
+func (h *Handler) handleHeartbeat(workerID, sessionID string, hb *pb.Heartbeat) {
 	extra := make(map[string]interface{})
 	// Populate extra from typed fields for backward compat with registry
 	extra["worker_name"] = hb.GetWorkerName()
@@ -407,8 +482,35 @@ func (h *Handler) handleHeartbeat(workerID string, hb *pb.Heartbeat) {
 		}
 	}
 
+	// Update capacity tracking on the session (for max_parallel_jobs check).
+	// max_parallel_jobs comes from extra (not a typed field in the proto).
+	sess := h.getSession(workerID)
+	if sess != nil {
+		sess.activeJobsCount = hb.GetActiveJobsCount()
+		if hb.GetExtra() != nil {
+			if mpj, ok := hb.GetExtra().AsMap()["max_parallel_jobs"]; ok {
+				switch v := mpj.(type) {
+				case float64:
+					sess.maxParallelJobs = int32(v)
+				case int64:
+					sess.maxParallelJobs = int32(v)
+				}
+			}
+		}
+	}
+
 	if err := h.registry.Heartbeat(context.Background(), workerID, hb.GetWorkerName(), hb.GetStatus(), hb.GetCurrentJob(), extra); err != nil {
 		log.Printf("[GRPC] Heartbeat failed for worker %s: %v", workerID, err)
+	}
+
+	// Issue 7 fix: update last_seen and validate session not revoked/expired.
+	if h.dbStore != nil && sessionID != "" {
+		if sess, err := h.dbStore.ValidateSessionByID(sessionID); err != nil || sess == nil || sess.Revoked {
+			log.Printf("[GRPC] Session %s for worker %s is invalid (revoked=%v, err=%v)",
+				sessionID, workerID, sess != nil && sess.Revoked, err)
+		} else {
+			_ = h.dbStore.UpdateSessionLastSeen(sessionID)
+		}
 	}
 }
 
@@ -425,6 +527,7 @@ func (h *Handler) handleLeaseRenewal(workerID string, lr *pb.LeaseRenewal) {
 
 // handleJobAccepted processes typed JobAccepted — Phase 5+ real push mode.
 // The lease was already created by ClaimNextJob; we just verify and grant.
+// Issue 4 fix: uses claimMu instead of h.mu for pendingOffer access.
 func (h *Handler) handleJobAccepted(workerID string, ja *pb.JobAccepted) {
 	if !h.config.PushMode {
 		return
@@ -436,14 +539,17 @@ func (h *Handler) handleJobAccepted(workerID string, ja *pb.JobAccepted) {
 		return
 	}
 
-	// P0 fix: don't call LeaseJob() — ClaimNextJob already created the lease.
-	// Calling LeaseJob again would generate a NEW lease_id and increment retry count.
-	// The worker's JobAccepted includes its lease_id from the JobOffer, which must match.
-	h.mu.Lock()
+	// Issue 4 fix: lock claimMu to safely read and clear pendingOffer.
+	sess.claimMu.Lock()
 	offer := sess.pendingOffer
-	h.mu.Unlock()
+	var offerJobID, offerLeaseID string
+	if offer != nil {
+		offerJobID = offer.JobID
+		offerLeaseID = offer.LeaseID
+	}
+	sess.claimMu.Unlock()
 
-	if offer == nil || offer.JobID != jobID {
+	if offer == nil || offerJobID != jobID {
 		log.Printf("[GRPC] Worker %s accepted job %s but no matching pending offer", workerID, jobID)
 		return
 	}
@@ -451,13 +557,13 @@ func (h *Handler) handleJobAccepted(workerID string, ja *pb.JobAccepted) {
 	// Verify the lease_id the worker is accepting matches what we offered.
 	// If they don't match, the worker may be responding to a stale offer.
 	declaredLeaseID := ja.GetLeaseId()
-	if declaredLeaseID != "" && declaredLeaseID != offer.LeaseID {
+	if declaredLeaseID != "" && declaredLeaseID != offerLeaseID {
 		log.Printf("[GRPC] Worker %s accepted job %s with mismatched lease_id: got %s, want %s",
-			workerID, jobID, declaredLeaseID, offer.LeaseID)
+			workerID, jobID, declaredLeaseID, offerLeaseID)
 		return
 	}
 
-	// Send typed JobLeaseGranted — confirms the lease created by ClaimNextJob.
+	// Issue 5 fix: send via sendCh instead of direct stream.Send().
 	env := &pb.MasterToWorkerEnvelope{
 		MessageId:       fmt.Sprintf("leasegrant-%s-%s", workerID, jobID),
 		WorkerId:        workerID,
@@ -472,25 +578,22 @@ func (h *Handler) handleJobAccepted(workerID string, ja *pb.JobAccepted) {
 		},
 	}
 
-	sess.sendMu.Lock()
-	sendErr := sess.stream.Send(env)
-	sess.sendMu.Unlock()
-
-	if sendErr != nil {
-		log.Printf("[GRPC] Failed to send JobLeaseGranted to worker %s: %v", workerID, sendErr)
+	if !safeSend(sess.sendCh, env) {
+		log.Printf("[GRPC] sendCh full/closed for JobLeaseGranted to worker %s", workerID)
 		// Don't clear pendingOffer — let the notifier retry or the lease expire.
 		return
 	}
 
-	// Clear pending offer — job is now running on this worker.
-	h.mu.Lock()
+	// Issue 4 fix: clear pending offer under claimMu — job is now running on this worker.
+	sess.claimMu.Lock()
 	if sess.pendingOffer != nil && sess.pendingOffer.JobID == jobID {
 		sess.pendingOffer = nil
 	}
-	h.mu.Unlock()
+	sess.claimMu.Unlock()
 }
 
 // handleJobRejected processes typed JobRejected — releases the claimed job for requeue.
+// Issue 4 fix: uses claimMu instead of h.mu for pendingOffer access.
 func (h *Handler) handleJobRejected(workerID string, jr *pb.JobRejected) {
 	jobID := jr.GetJobId()
 	reason := jr.GetReason()
@@ -502,17 +605,16 @@ func (h *Handler) handleJobRejected(workerID string, jr *pb.JobRejected) {
 		}
 	}
 
-	// Clear pending offer (inline lookup to avoid double-lock with getSession)
-	h.mu.Lock()
-	sid, ok := h.workerSessions[workerID]
-	var sess *workerSession
-	if ok {
-		sess = h.sessions[sid]
+	// Issue 4 fix: lock claimMu to safely access and clear pendingOffer.
+	sess := h.getSession(workerID)
+	if sess == nil {
+		return
 	}
-	if sess != nil && sess.pendingOffer != nil && sess.pendingOffer.JobID == jobID {
+	sess.claimMu.Lock()
+	if sess.pendingOffer != nil && sess.pendingOffer.JobID == jobID {
 		sess.pendingOffer = nil
 	}
-	h.mu.Unlock()
+	sess.claimMu.Unlock()
 }
 
 // handleJobProgress tracks per-job progress (typed, forwarded via heartbeat for now).
@@ -632,7 +734,8 @@ func StartGRPCServer(port int, handler *Handler, certFile, keyFile, caFile strin
 }
 
 // dispatchCommands reads pending commands from SQLite for the worker,
-// sends each as a typed Command on the gRPC stream, and marks them as delivered.
+// sends each as a typed Command via sendCh, and marks them as delivered.
+// Issue 5 fix: sends via sendCh instead of direct stream.Send().
 func (h *Handler) dispatchCommands(workerID string, sess *workerSession) {
 	cmds := h.cmdMgr.GetPendingCommandsAndMarkDelivered(workerID)
 	if len(cmds) == 0 {
@@ -640,10 +743,6 @@ func (h *Handler) dispatchCommands(workerID string, sess *workerSession) {
 	}
 
 	log.Printf("[GRPC] Dispatching %d pending commands to worker %s", len(cmds), workerID)
-
-	// P0: lock once for the batch — single goroutine (Stream() main loop) sends commands.
-	sess.sendMu.Lock()
-	defer sess.sendMu.Unlock()
 
 	for _, cmd := range cmds {
 		var params *structpb.Struct
@@ -672,9 +771,9 @@ func (h *Handler) dispatchCommands(workerID string, sess *workerSession) {
 			},
 		}
 
-		if err := sess.stream.Send(env); err != nil {
-			log.Printf("[GRPC] Failed to send command %s to worker %s: %v", cmd.CommandID, workerID, err)
-			return
+		// Issue 5 fix: send via sendCh — non-blocking (sessionWriter drains).
+		if !safeSend(sess.sendCh, env) {
+			log.Printf("[GRPC] sendCh full/closed — dropping command %s for worker %s", cmd.CommandID, workerID)
 		}
 	}
 }
@@ -686,12 +785,20 @@ func (h *Handler) closeOldSessionLocked(workerID string) {
 	if !ok {
 		return
 	}
-	if _, exists := h.sessions[oldSID]; exists {
-		log.Printf("[GRPC] Worker %s reconnecting — removing old session %s", workerID, oldSID)
+	oldSess, exists := h.sessions[oldSID]
+	if exists {
+		log.Printf("[GRPC] Worker %s reconnecting — cancelling old session %s", workerID, oldSID)
+		// Issue 6 fix: cancel the old session's context to stop its goroutines.
+		if oldSess.cancel != nil {
+			oldSess.cancel()
+		}
+		// Issue 7 fix: revoke the old session in SQLite.
+		if h.dbStore != nil {
+			_ = h.dbStore.RevokeSession(oldSID)
+		}
 	}
 	delete(h.sessions, oldSID)
 	delete(h.workerSessions, workerID)
-	// Messages from the old session are dropped by isCurrentSession() check in the main loop.
 }
 
 // isCurrentSession returns true if the given sessionID is still the active
@@ -701,6 +808,32 @@ func (h *Handler) isCurrentSession(workerID, sessionID string) bool {
 	defer h.mu.Unlock()
 	sid, ok := h.workerSessions[workerID]
 	return ok && sid == sessionID
+}
+
+// sessionWriter is the sole goroutine allowed to call stream.Send().
+// All message producers write to sendCh; this goroutine drains and sends.
+// Exits when sendCh is closed (signaling session teardown).
+func (h *Handler) sessionWriter(sess *workerSession) {
+	for env := range sess.sendCh {
+		if err := sess.stream.Send(env); err != nil {
+			log.Printf("[GRPC] sessionWriter send error for worker %s (session %s): %v",
+				sess.workerID, sess.sessionID, err)
+			// Don't break — the stream may recover; the caller handles errors via context.
+		}
+	}
+	log.Printf("[GRPC] sessionWriter exiting for worker %s (session %s)", sess.workerID, sess.sessionID)
+}
+
+// safeSend attempts to send an envelope on the channel, returning true on success.
+// Returns false if the channel is full or closed (uses recover to handle closed channel panic).
+func safeSend(ch chan *pb.MasterToWorkerEnvelope, env *pb.MasterToWorkerEnvelope) bool {
+	defer func() { recover() }()
+	select {
+	case ch <- env:
+		return true
+	default:
+		return false
+	}
 }
 
 // getSession returns the active session for a workerID, or nil if none.
@@ -715,6 +848,20 @@ func (h *Handler) getSession(workerID string) *workerSession {
 }
 
 // ---- Security Helpers ----
+
+// extractPeerIP extracts the client IP address from the gRPC stream context
+// without the port (if possible).
+func (h *Handler) extractPeerIP(stream grpc.ServerStream) string {
+	p, ok := peer.FromContext(stream.Context())
+	if !ok {
+		return ""
+	}
+	addr := p.Addr.String()
+	if host, _, err := net.SplitHostPort(addr); err == nil {
+		return host
+	}
+	return addr
+}
 
 // extractWorkerIDFromStream extracts the worker identity from the client TLS certificate.
 func (h *Handler) extractWorkerIDFromStream(stream grpc.ServerStream) string {

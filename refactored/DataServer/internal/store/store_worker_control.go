@@ -301,6 +301,38 @@ func (s *SQLiteStore) ValidateSession(tokenHash string) (*PersistedSession, erro
 	return &sess, nil
 }
 
+// ValidateSessionByID looks up a session by ID and returns it if valid (not expired, not revoked).
+func (s *SQLiteStore) ValidateSessionByID(sessionID string) (*PersistedSession, error) {
+	now := time.Now().UTC().Format(time.RFC3339)
+	row := s.db.QueryRow(
+		`SELECT session_id, worker_id, token_hash, ip_address, created_at, expires_at, last_seen, revoked
+		 FROM worker_sessions
+		 WHERE session_id = ? AND revoked = 0 AND expires_at > ?`,
+		sessionID, now,
+	)
+	var sess PersistedSession
+	var createdAt, expiresAt, lastSeen string
+	err := row.Scan(&sess.SessionID, &sess.WorkerID, &sess.TokenHash, &sess.IPAddress,
+		&createdAt, &expiresAt, &lastSeen, &sess.Revoked)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	sess.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
+	sess.ExpiresAt, _ = time.Parse(time.RFC3339, expiresAt)
+	sess.LastSeen, _ = time.Parse(time.RFC3339, lastSeen)
+	return &sess, nil
+}
+
+// UpdateSessionLastSeen bumps the last_seen timestamp for a session.
+func (s *SQLiteStore) UpdateSessionLastSeen(sessionID string) error {
+	_, err := s.db.Exec(`UPDATE worker_sessions SET last_seen = ? WHERE session_id = ?`,
+		time.Now().UTC().Format(time.RFC3339), sessionID)
+	return err
+}
+
 // RevokeWorkerSessions revokes all sessions for a worker.
 func (s *SQLiteStore) RevokeWorkerSessions(workerID string) error {
 	_, err := s.db.Exec(`UPDATE worker_sessions SET revoked = 1 WHERE worker_id = ?`, workerID)
