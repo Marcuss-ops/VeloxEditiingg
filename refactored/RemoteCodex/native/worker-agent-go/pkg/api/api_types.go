@@ -35,6 +35,7 @@ type WorkerInfo struct {
 	BundleHash      string                 `json:"bundle_hash,omitempty"`
 	ProtocolVersion string                 `json:"protocol_version,omitempty"`
 	EngineVersion   string                 `json:"engine_version,omitempty"`
+	Credential      string                 `json:"credential,omitempty"`
 }
 
 // JobRequest represents a request to get a job from the master.
@@ -100,6 +101,7 @@ type APIResponse struct {
 
 // WorkerCommand represents a command from the master to the worker.
 type WorkerCommand struct {
+	CommandID string                 `json:"command_id,omitempty"`
 	Command   string                 `json:"command"`
 	Timestamp string                 `json:"timestamp"`
 	Payload   map[string]interface{} `json:"payload,omitempty"`

@@ -21,6 +21,7 @@ func (h *Handler) RegisterV2Handler() gin.HandlerFunc {
 			BundleHash      string                 `json:"bundle_hash"`
 			ProtocolVersion string                 `json:"protocol_version"`
 			EngineVersion   string                 `json:"engine_version"`
+			Credential      string                 `json:"credential"`
 			Capabilities    map[string]interface{} `json:"capabilities"`
 			Extra           map[string]interface{} `json:"extra"`
 		}
@@ -45,6 +46,29 @@ func (h *Handler) RegisterV2Handler() gin.HandlerFunc {
 		if h.reg.IsRevoked(body.WorkerID) {
 			c.Status(http.StatusNoContent)
 			return
+		}
+
+		// Validate persistent credential if provided
+		if body.Credential != "" {
+			hasCred, _ := h.store.HasWorkerCredential(body.WorkerID)
+			match, _ := h.store.ValidateWorkerCredential(body.WorkerID, body.Credential)
+
+			if hasCred && !match {
+				// A credential exists but the provided one doesn't match — reject
+				c.JSON(http.StatusUnauthorized, gin.H{
+					"error": "credential mismatch — possible impersonation",
+				})
+				return
+			}
+
+			if match {
+				log.Printf("[REGISTER] Worker %s authenticated via credential", body.WorkerID)
+			}
+
+			// Store/update credential (new worker or matching)
+			if err := h.store.SetWorkerCredential(body.WorkerID, body.Credential); err != nil {
+				log.Printf("[REGISTER] Failed to persist credential for worker %s: %v", body.WorkerID, err)
+			}
 		}
 
 		ipAddress := body.IPAddress
@@ -117,6 +141,7 @@ func (h *Handler) RegisterHandler() gin.HandlerFunc {
 			BundleHash      string                 `json:"bundle_hash"`
 			ProtocolVersion string                 `json:"protocol_version"`
 			EngineVersion   string                 `json:"engine_version"`
+			Credential      string                 `json:"credential"`
 			Capabilities    map[string]interface{} `json:"capabilities"`
 			Extra           map[string]interface{} `json:"extra"`
 		}
@@ -134,6 +159,28 @@ func (h *Handler) RegisterHandler() gin.HandlerFunc {
 		if h.reg.IsRevoked(body.WorkerID) {
 			c.Status(http.StatusNoContent)
 			return
+		}
+
+		// Validate persistent credential if provided
+		if body.Credential != "" {
+			hasCred, _ := h.store.HasWorkerCredential(body.WorkerID)
+			match, _ := h.store.ValidateWorkerCredential(body.WorkerID, body.Credential)
+
+			if hasCred && !match {
+				c.JSON(http.StatusUnauthorized, gin.H{
+					"success": false,
+					"error":   "credential mismatch — possible impersonation",
+				})
+				return
+			}
+
+			if match {
+				log.Printf("[REGISTER] Worker %s authenticated via credential", body.WorkerID)
+			}
+
+			if err := h.store.SetWorkerCredential(body.WorkerID, body.Credential); err != nil {
+				log.Printf("[REGISTER] Failed to persist credential for worker %s: %v", body.WorkerID, err)
+			}
 		}
 
 		workerName := strings.TrimSpace(body.WorkerName)

@@ -91,6 +91,25 @@ func (cm *CommandManager) GetPendingCommands(workerID string) []WorkerCommand {
 	return result
 }
 
+// GetPendingCommandsAndMarkDelivered returns pending commands and marks them as delivered.
+// This transitions: pending → delivered (sets delivered_at, increments attempt_count).
+func (cm *CommandManager) GetPendingCommandsAndMarkDelivered(workerID string) []WorkerCommand {
+	result := cm.GetPendingCommands(workerID)
+	if cm.store == nil {
+		return result
+	}
+
+	for _, cmd := range result {
+		if cmd.CommandID != "" {
+			if err := cm.store.MarkCommandDelivered(cmd.CommandID); err != nil {
+				registryLog.ErrorWithMsg("cmd.deliver.fail", "Failed to mark command delivered",
+					map[string]interface{}{"command_id": cmd.CommandID, "worker_id": workerID, "err": err.Error()})
+			}
+		}
+	}
+	return result
+}
+
 // AckCommand marks a command type as acknowledged for a worker.
 func (cm *CommandManager) AckCommand(workerID string, cmdType string) {
 	if cm.store == nil {

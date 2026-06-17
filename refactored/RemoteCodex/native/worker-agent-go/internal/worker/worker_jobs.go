@@ -34,14 +34,23 @@ func (w *Worker) jobLoop(ctx context.Context) {
 			w.logger.Info("[POLLING] Job loop exiting (stop signal)")
 			return
 		case <-ticker.C:
-			if w.Status() != StatusIdle || w.IsStopped() || w.drainMode.Load() {
+			if w.IsStopped() || w.drainMode.Load() {
+				continue
+			}
+
+			// Check concurrency: only poll if we have capacity
+			w.activeJobsMu.RLock()
+			activeCount := len(w.activeJobs)
+			w.activeJobsMu.RUnlock()
+			if activeCount >= w.config.MaxActiveJobs {
 				continue
 			}
 
 			pollCount++
 
 			// Log every poll at DEBUG level for detailed tracing
-			w.logger.Debug("[POLLING] Attempt %d — checking master for jobs", pollCount)
+			w.logger.Debug("[POLLING] Attempt %d — checking master for jobs (active: %d/%d)",
+				pollCount, activeCount, w.config.MaxActiveJobs)
 
 			job, err := w.pollJob(ctx)
 			if err != nil {
@@ -49,16 +58,19 @@ func (w *Worker) jobLoop(ctx context.Context) {
 				continue
 			}
 			if job != nil {
-				w.logger.Info("[POLLING] Job acquired on attempt %d — executing", pollCount)
-				w.executeJob(ctx, job)
-				// Reset poll count after executing a job
+				w.logger.Info("[POLLING] Job acquired on attempt %d — executing in goroutine", pollCount)
+				go w.executeJob(ctx, job)
+				// Reset poll count after acquiring a job
 				pollCount = 0
 			}
 
 			// Periodic summary log at DEBUG level (every ~10 minutes)
 			if time.Since(lastSummaryLog) >= summaryInterval {
-				w.logger.Debug("[POLLING] Status: alive — %d polls sent, no jobs available",
-					pollCount)
+				w.activeJobsMu.RLock()
+				activeCount = len(w.activeJobs)
+				w.activeJobsMu.RUnlock()
+				w.logger.Debug("[POLLING] Status: alive — %d polls sent, %d active jobs",
+					pollCount, activeCount)
 				lastSummaryLog = time.Now()
 			}
 		}

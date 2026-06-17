@@ -356,6 +356,18 @@ func (s *SQLiteStore) ValidateWorkerCredential(workerID, credentialHash string) 
 	return stored == credentialHash, nil
 }
 
+// HasWorkerCredential returns true if a credential already exists for this worker.
+func (s *SQLiteStore) HasWorkerCredential(workerID string) (bool, error) {
+	var count int
+	err := s.db.QueryRow(
+		`SELECT COUNT(*) FROM worker_credentials WHERE worker_id = ?`, workerID,
+	).Scan(&count)
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
 // HashCredential creates a SHA-256 hex digest of a credential string.
 func HashCredential(credential string) string {
 	h := sha256.Sum256([]byte(credential))

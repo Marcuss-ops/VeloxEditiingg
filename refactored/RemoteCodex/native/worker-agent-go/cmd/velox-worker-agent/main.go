@@ -215,6 +215,9 @@ func main() {
 	if cfg.ProtocolVersion == "" {
 		cfg.ProtocolVersion = "2026-06-worker-v1"
 	}
+	if workerSecret := os.Getenv("VELOX_WORKER_SECRET"); workerSecret != "" {
+		cfg.WorkerSecret = workerSecret
+	}
 	if engineVersion := os.Getenv("VELOX_ENGINE_VERSION"); engineVersion != "" {
 		cfg.EngineVersion = engineVersion
 	}

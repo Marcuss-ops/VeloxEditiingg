@@ -33,6 +33,7 @@ const (
 	endpointHealthCheck      = "/health"
 	endpointGetCommands      = "/api/workers/commands"
 	endpointAckCommand       = "/api/workers/commands/ack"
+	endpointAckCommandByID   = "/api/workers/commands/ack"
 	endpointUpdateStatus     = "/api/workers/status"
 
 	// V2 canonical endpoints

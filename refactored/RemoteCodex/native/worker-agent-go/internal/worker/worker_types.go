@@ -23,6 +23,41 @@ const (
 	StatusStopped Status = "stopped"
 )
 
+// ConnectionState represents the worker's connection state to the master.
+type ConnectionState string
+
+const (
+	ConnDisconnected   ConnectionState = "disconnected"
+	ConnConnecting     ConnectionState = "connecting"
+	ConnAuthenticating ConnectionState = "authenticating"
+	ConnReady          ConnectionState = "ready"
+	ConnDraining       ConnectionState = "draining"
+)
+
+// Registration backoff constants
+const (
+	registrationInitialBackoff = 5 * time.Second
+	registrationMaxBackoff     = 5 * time.Minute
+	registrationBackoffMult    = 2.0
+)
+
+// ActiveJob represents a job currently being executed by the worker.
+type ActiveJob struct {
+	Job       *api.Job
+	LeaseID   string
+	StartedAt time.Time
+	Cancel    context.CancelFunc
+	Progress  JobProgress
+}
+
+// JobProgress tracks per-job execution progress.
+type JobProgress struct {
+	Percent     int32
+	Scene       int32
+	TotalScenes int32
+	Stage       string
+}
+
 // backoffConfig configures exponential backoff for retry operations.
 type backoffConfig struct {
 	initialInterval time.Duration
@@ -43,6 +78,15 @@ type Worker struct {
 	status     Status
 	currentJob *api.Job
 	mu         sync.RWMutex
+
+	// Multi-job support: maps jobID -> ActiveJob for parallel execution
+	activeJobs   map[string]*ActiveJob
+	activeJobsMu sync.RWMutex
+
+	// Connection state machine
+	connState     ConnectionState
+	connStateMu   sync.RWMutex
+	connFailureCount int
 
 	// Lifecycle management
 	stopChan chan struct{}

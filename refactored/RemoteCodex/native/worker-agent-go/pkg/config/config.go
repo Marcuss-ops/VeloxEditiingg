@@ -30,6 +30,10 @@ type WorkerConfig struct {
 	PrometheusPort          int `json:"prometheus_port"`            // Prometheus metrics port (default: 9090, 0=disabled)
 	HealthPort              int `json:"health_port"`                // Health HTTP port (default: 8081, 0=disabled)
 
+	// WorkerSecret is the pre-shared secret used to derive the persistent credential hash.
+	// Set via VELOX_WORKER_SECRET env var. Combined with WorkerID to produce SHA-256 credential.
+	WorkerSecret string `json:"-"`
+
 	// Asset cache: shared directory for caching downloaded scene images, clips, and audio.
 	// Default: "" (disabled — each job downloads its own assets)
 	AssetCacheDir string `json:"asset_cache_dir,omitempty"`
@@ -118,6 +122,7 @@ func DefaultConfig(workDir string) *WorkerConfig {
 		MaxActiveJobs:           1,    // 1 main job per VPS
 		CommandPollIntervalSecs: 30,   // Check for commands every 30 seconds
 		HealthPort:              8081, // Health HTTP endpoint for Docker HEALTHCHECK
+		WorkerSecret:            "",   // Set via VELOX_WORKER_SECRET env var
 	}
 }
 
