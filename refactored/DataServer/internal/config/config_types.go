@@ -39,8 +39,25 @@ type WorkersConfig struct {
 	CodeVersion         string
 	VersionNumber       string
 	ScriptDir           string
-	MasterURL           string
-	AllowedIPs          []string
+	// MasterURL is the publicly-advertised master URL (workers download bundles through it).
+	// Populated from the MASTER_PUBLIC_URL > VELOX_MASTER_URL > MASTER_URL chain.
+	MasterURL string
+	// MasterServerURL is the server-facing master URL used for upstream proxying
+	// (e.g. draft forwarding to a sibling master). Populated from
+	// VELOX_MASTER_SERVER_URL > VELOX_REMOTE_WORKER_URL. Previously lived at the root
+	// of Config as `MasterServerURL`; see Config.LegacyMasterServerURL for the
+	// deprecation shim.
+	MasterServerURL string
+	AllowedIPs      []string
+}
+
+// PipelineConfig groups configuration that controls the production-pipeline
+// integration (Drive proxy target, job-to-master routing, etc.).
+type PipelineConfig struct {
+	// JobMasterURL is the destination for proxying /api/drive/* and other job-routed
+	// requests. Populated from VELOX_JOB_MASTER_URL. Previously lived at the root
+	// of Config as `JobMasterURL`.
+	JobMasterURL string
 }
 
 // AuthConfig holds authentication settings.
@@ -119,8 +136,9 @@ type Config struct {
 	Frontend FrontendConfig
 	Render   RenderConfig
 	NVIDIA   NVIDIAConfig
+	Pipeline PipelineConfig
 
-	// Derived fields (set by FromEnv)
-	MasterServerURL string
-	JobMasterURL    string
+	// MasterServerURL and JobMasterURL have been moved into sub-configs (Workers and
+	// Pipeline respectively, per spec §8). Use the accessors below until all
+	// callers have been migrated.
 }
