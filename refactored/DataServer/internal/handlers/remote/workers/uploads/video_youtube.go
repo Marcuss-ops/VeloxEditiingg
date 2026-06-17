@@ -4,74 +4,48 @@ import (
 	"context"
 	"log"
 	"os"
-	"strings"
 	"time"
 
 	ytservice "velox-server/internal/integrations/youtube"
-	"velox-server/internal/queue"
+	"velox-server/internal/store"
 )
 
-// maybeAutoUploadYouTube checks job metadata and if conditions are met,
-// triggers a YouTube auto-upload for the completed video.
-func maybeAutoUploadYouTube(fileQ *queue.FileQueue, youtubeService YouTubeAutoUploader, jobID string, uploadInfo map[string]interface{}, videoPath string) {
-	if fileQ == nil || youtubeService == nil || strings.TrimSpace(jobID) == "" {
+// maybeAutoUploadYouTube triggers a YouTube upload if a resolved delivery_target of type "youtube" exists.
+// Uses the pre-resolved config from the delivery_target (PR4: target resolved at enqueue).
+// Falls back to resolving the channel at upload time if channel_id is not in the config.
+func maybeAutoUploadYouTube(fileQ interface{ UpdateJobFields(ctx context.Context, jobID string, fields map[string]interface{}) error }, youtubeService YouTubeAutoUploader, jobID string, uploadInfo map[string]interface{}, videoPath string, targets []store.DeliveryTarget) {
+	if youtubeService == nil || jobID == "" {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	job, err := fileQ.GetJobAsMap(ctx, jobID)
-	if err != nil || job == nil {
-		log.Printf("[UPLOAD] YouTube auto-upload skipped for %s: job not found (%v)", jobID, err)
+	// Find the youtube delivery target (PR4: resolved at enqueue time)
+	var ytTarget *store.DeliveryTarget
+	for i, t := range targets {
+		if t.TargetType == "youtube" && (t.Status == "pending" || t.Status == "scheduled") {
+			ytTarget = &targets[i]
+			break
+		}
+	}
+	if ytTarget == nil {
 		return
 	}
 
-	if shouldSkipYouTubeUpload(job) {
+	// Parse the pre-resolved config (may have channel_id if resolved at enqueue)
+	cfg, err := store.ParseTargetConfig(ytTarget.Config)
+	if err != nil {
+		log.Printf("[UPLOAD] YouTube auto-upload skipped for %s: invalid target config (%v)", jobID, err)
 		return
 	}
 
-	groupName := firstNonEmptyString(
-		asString(uploadInfo["youtube_group"]),
-		asString(job["youtube_group"]),
-		asStringFromSlot(job, "youtube_group"),
-	)
-	if groupName == "" {
-		return
-	}
-
-	language := firstNonEmptyString(
-		asString(uploadInfo["audio_language_for_srt"]),
-		asString(uploadInfo["target_language"]),
-		asString(uploadInfo["language"]),
-		asString(uploadInfo["voice_language"]),
-		asString(uploadInfo["lang"]),
-		asString(job["audio_language_for_srt"]),
-		asString(job["target_language"]),
-		asString(job["language"]),
-		asString(job["voice_language"]),
-		asString(job["lang"]),
-		asStringFromSlot(job, "audio_language_for_srt"),
-		asStringFromSlot(job, "target_language"),
-		asStringFromSlot(job, "language"),
-		asStringFromSlot(job, "voice_language"),
-		asStringFromSlot(job, "lang"),
-	)
-	if language == "" {
-		language = "en"
-	}
-
-	if strings.TrimSpace(videoPath) == "" {
+	// Resolve video path
+	if videoPath == "" {
 		videoPath = firstNonEmptyString(
 			asString(uploadInfo["master_video_path"]),
 			asString(uploadInfo["result_path_worker"]),
 			asString(uploadInfo["result_path"]),
-			asString(job["master_video_path"]),
-			asString(job["result_path_worker"]),
-			asString(job["result_path"]),
 		)
 	}
-	if strings.TrimSpace(videoPath) == "" {
+	if videoPath == "" {
 		log.Printf("[UPLOAD] YouTube auto-upload skipped for %s: missing video path", jobID)
 		return
 	}
@@ -80,73 +54,79 @@ func maybeAutoUploadYouTube(fileQ *queue.FileQueue, youtubeService YouTubeAutoUp
 		return
 	}
 
+	// Title
 	title := firstNonEmptyString(
 		asString(uploadInfo["video_name"]),
 		asString(uploadInfo["title"]),
-		asString(job["video_name"]),
-		asString(job["title"]),
-	)
-	if title == "" {
-		title = jobID
-	}
-
-	description := firstNonEmptyString(
-		asString(uploadInfo["script_text"]),
-		asString(uploadInfo["source_text"]),
-		asString(job["script_text"]),
-		asString(job["source_text"]),
+		cfg.Title,
+		jobID,
 	)
 
-	privacy := firstNonEmptyString(
-		asString(uploadInfo["privacy_status"]),
-		asString(uploadInfo["privacy"]),
-		asString(job["privacy_status"]),
-		asString(job["privacy"]),
-	)
-	if privacy == "" {
-		privacy = "private"
-	}
-
-	tags := mergeStringSlices(
-		asStringSlice(uploadInfo["tags"]),
-		asStringSlice(job["tags"]),
-		asStringSliceFromSlot(job, "tags"),
-	)
-
-	jobRunID := firstNonEmptyString(
-		asString(uploadInfo["job_run_id"]),
-		asString(uploadInfo["run_id"]),
-		asString(job["job_run_id"]),
-		asString(job["run_id"]),
-	)
-
-	now := time.Now().UTC().Format(time.RFC3339)
-	_ = fileQ.UpdateJobFields(ctx, jobID, map[string]interface{}{
+	// Schedule delivery
+	_ = fileQ.UpdateJobFields(context.Background(), jobID, map[string]interface{}{
 		"youtube_upload_status": "scheduled",
-		"youtube_upload_at":     now,
 	})
 
 	go func() {
 		uploadCtx, uploadCancel := context.WithTimeout(context.Background(), 10*time.Minute)
 		defer uploadCancel()
 
-		channel, chErr := youtubeService.ResolveChannelByLanguage(groupName, language)
-		if chErr != nil {
-			_ = fileQ.UpdateJobFields(uploadCtx, jobID, map[string]interface{}{
-				"youtube_upload_status": "failed",
-				"last_youtube_upload_result": map[string]interface{}{
-					"success":     false,
-					"error":       chErr.Error(),
-					"group":       groupName,
-					"language":    language,
-					"uploaded_at": time.Now().UTC().Format(time.RFC3339),
-				},
+		dbStore := getDBStore(fileQ)
+		attemptNumber := ytTarget.AttemptCount + 1
+		now := time.Now().UTC().Format(time.RFC3339)
+
+		// Record delivery attempt
+		var attemptID int64
+		if dbStore != nil {
+			attemptID, _ = dbStore.InsertDeliveryAttempt(&store.DeliveryAttempt{
+				DeliveryTargetID: ytTarget.ID,
+				AttemptNumber:    attemptNumber,
+				Status:           "uploading",
+				StartedAt:        now,
+				WorkerID:         "auto_youtube",
 			})
-			log.Printf("[UPLOAD] YouTube auto-upload failed for %s: resolve channel: %v", jobID, chErr)
+		}
+
+		// Resolve channel (may already be in config, otherwise resolve at upload time)
+		var channelID, channelName string
+		if cfg.ChannelID != "" {
+			channelID = cfg.ChannelID
+			channelName = cfg.ChannelName
+		} else {
+			// Fallback: resolve channel at upload time (for targets created without pre-resolution)
+			groupName := cfg.Language // stored as language in config from youtube_group
+			language := cfg.Language
+			if groupName == "" {
+				// Try to extract from original upload info
+				groupName = firstNonEmptyString(
+					asString(uploadInfo["youtube_group"]),
+				)
+			}
+			if language == "" {
+				language = "en"
+			}
+			if groupName != "" {
+				channel, chErr := youtubeService.ResolveChannelByLanguage(groupName, language)
+				if chErr != nil {
+					log.Printf("[UPLOAD] YouTube auto-upload failed for %s: resolve channel: %v", jobID, chErr)
+					failDelivery(dbStore, ytTarget.ID, attemptID, chErr.Error(), "needs_reauth")
+					_ = fileQ.UpdateJobFields(uploadCtx, jobID, map[string]interface{}{
+						"youtube_upload_status": "needs_reauth",
+					})
+					return
+				}
+				channelID = channel.ID
+				channelName = channel.Name
+			}
+		}
+
+		if channelID == "" {
+			log.Printf("[UPLOAD] YouTube auto-upload skipped for %s: no channel resolved", jobID)
 			return
 		}
 
-		health, healthErr := youtubeService.HealthCheck(uploadCtx, channel.ID)
+		// Health check
+		health, healthErr := youtubeService.HealthCheck(uploadCtx, channelID)
 		if healthErr != nil {
 			health = map[string]interface{}{
 				"ok":    false,
@@ -158,96 +138,94 @@ func maybeAutoUploadYouTube(fileQ *queue.FileQueue, youtubeService YouTubeAutoUp
 			if errMsg == "" {
 				errMsg = "YouTube channel authentication is not ready"
 			}
+			failDelivery(dbStore, ytTarget.ID, attemptID, errMsg, "needs_reauth")
 			_ = fileQ.UpdateJobFields(uploadCtx, jobID, map[string]interface{}{
 				"youtube_upload_status": "needs_reauth",
-				"last_youtube_upload_result": map[string]interface{}{
-					"success":      false,
-					"error":        errMsg,
-					"group":        groupName,
-					"language":     language,
-					"channel_id":   channel.ID,
-					"channel_name": channel.Name,
-					"job_run_id":   jobRunID,
-					"uploaded_at":  time.Now().UTC().Format(time.RFC3339),
-				},
 			})
 			log.Printf("[UPLOAD] YouTube auto-upload deferred for %s: %s", jobID, errMsg)
 			return
 		}
 
-		result, uploadErr := youtubeService.UploadVideo(uploadCtx, channel.ID, videoPath, ytservice.UploadConfig{
+		// Upload
+		tags := cfg.Tags
+		privacy := cfg.Privacy
+		if privacy == "" {
+			privacy = "private"
+		}
+		description := cfg.Description
+
+		result, uploadErr := youtubeService.UploadVideo(uploadCtx, channelID, videoPath, ytservice.UploadConfig{
 			Title:         title,
 			Description:   description,
 			Tags:          tags,
 			PrivacyStatus: privacy,
-			ChannelID:     channel.ID,
-			ChannelName:   channel.Name,
+			ChannelID:     channelID,
+			ChannelName:   channelName,
 		})
+
+		var status string
+		var targetResult store.DeliveryTargetResult
 		if uploadErr != nil {
-			_ = fileQ.UpdateJobFields(uploadCtx, jobID, map[string]interface{}{
-				"youtube_upload_status": "failed",
-				"last_youtube_upload_result": map[string]interface{}{
-					"success":      false,
-					"error":        uploadErr.Error(),
-					"group":        groupName,
-					"language":     language,
-					"channel_id":   channel.ID,
-					"channel_name": channel.Name,
-					"job_run_id":   jobRunID,
-					"uploaded_at":  time.Now().UTC().Format(time.RFC3339),
-				},
-			})
+			status = "failed"
+			targetResult = store.DeliveryTargetResult{
+				Success: false,
+				Error:   uploadErr.Error(),
+			}
 			log.Printf("[UPLOAD] YouTube auto-upload failed for %s: %v", jobID, uploadErr)
-			return
+		} else {
+			status = "completed"
+			targetResult = store.DeliveryTargetResult{
+				Success: true,
+				URL:     result.YouTubeURL,
+				VideoID: result.VideoID,
+			}
 		}
 
+		resultJSON := store.MustTargetResultJSON(&targetResult)
+
+		// Update delivery target
+		if dbStore != nil {
+			_ = dbStore.UpdateDeliveryTargetResult(ytTarget.ID, status, resultJSON)
+		}
+
+		// Update delivery attempt
+		if dbStore != nil && attemptID > 0 {
+			attemptStatus := "completed"
+			errMsg := ""
+			if uploadErr != nil {
+				attemptStatus = "failed"
+				errMsg = uploadErr.Error()
+			}
+			_ = dbStore.UpdateDeliveryAttempt(int(attemptID), attemptStatus, resultJSON, errMsg)
+		}
+
+		// DEPRECATED: Update job fields for backward compat
 		update := map[string]interface{}{
-			"youtube_upload_status":    "completed",
-			"youtube_url":              result.YouTubeURL,
-			"youtube_video_id":         result.VideoID,
-			"youtube_channel_id":       channel.ID,
-			"youtube_channel_name":     channel.Name,
-			"youtube_channel_language": channel.Language,
-			"last_youtube_upload_result": map[string]interface{}{
-				"success":      true,
-				"youtube_url":  result.YouTubeURL,
-				"video_id":     result.VideoID,
-				"channel_id":   channel.ID,
-				"channel_name": channel.Name,
-				"group":        groupName,
-				"language":     language,
-				"job_run_id":   jobRunID,
-				"uploaded_at":  time.Now().UTC().Format(time.RFC3339),
-				"privacy":      privacy,
-			},
+			"youtube_upload_status": status,
 		}
-		if err := fileQ.UpdateJobFields(uploadCtx, jobID, update); err != nil {
-			log.Printf("[UPLOAD] YouTube auto-upload persisted with warning for %s: %v", jobID, err)
+		if uploadErr == nil {
+			update["youtube_url"] = result.YouTubeURL
+			update["youtube_video_id"] = result.VideoID
+			update["youtube_channel_id"] = channelID
+			update["youtube_channel_name"] = channelName
 		}
-		log.Printf("[UPLOAD] YouTube auto-upload completed for %s -> %s", jobID, result.YouTubeURL)
+		_ = fileQ.UpdateJobFields(uploadCtx, jobID, update)
+
+		log.Printf("[UPLOAD] YouTube auto-upload %s for %s -> %v", status, jobID, targetResult.URL)
 	}()
 }
 
-func shouldSkipYouTubeUpload(job map[string]interface{}) bool {
-	if job == nil {
-		return true
+// failDelivery records a failed delivery attempt and updates the target status.
+func failDelivery(dbStore *store.SQLiteStore, targetID int, attemptID int64, errMsg, status string) {
+	if dbStore == nil {
+		return
 	}
-	if strings.TrimSpace(asString(job["youtube_url"])) != "" {
-		return true
+	result := store.MustTargetResultJSON(&store.DeliveryTargetResult{
+		Success: false,
+		Error:   errMsg,
+	})
+	_ = dbStore.UpdateDeliveryTargetResult(targetID, status, result)
+	if attemptID > 0 {
+		_ = dbStore.UpdateDeliveryAttempt(int(attemptID), "failed", result, errMsg)
 	}
-	if strings.EqualFold(strings.TrimSpace(asString(job["youtube_upload_status"])), "scheduled") {
-		return true
-	}
-	if strings.EqualFold(strings.TrimSpace(asString(job["youtube_upload_status"])), "uploading") {
-		return true
-	}
-	if strings.EqualFold(strings.TrimSpace(asString(job["youtube_upload_status"])), "completed") {
-		return true
-	}
-	if result, ok := job["last_youtube_upload_result"].(map[string]interface{}); ok {
-		if success, _ := result["success"].(bool); success {
-			return true
-		}
-	}
-	return false
 }

@@ -2,10 +2,37 @@ package queue
 
 import "strings"
 
+// normalizeJobStatus maps any status string (including legacy) to a canonical status.
+// Legacy statuses are silently promoted to their canonical equivalent.
 func normalizeJobStatus(status string) JobStatus {
-	return JobStatus(strings.ToUpper(strings.TrimSpace(status)))
+	s := JobStatus(strings.ToUpper(strings.TrimSpace(status)))
+	switch s {
+	case StatusProcessing, StatusAssigned:
+		return StatusRunning
+	case StatusCompleted:
+		return StatusSucceeded
+	case StatusError, StatusLost:
+		return StatusFailed
+	case StatusQueued:
+		return StatusPending
+	case StatusCancelling:
+		return StatusCancelled
+	case StatusRetrying:
+		return StatusRetryWait
+	default:
+		return s
+	}
 }
 
+// isValidJobStatusTransition validates the canonical 7-state machine:
+//
+//	"" / PENDING → LEASED, RUNNING, RETRY_WAIT, FAILED, CANCELLED
+//	LEASED       → RUNNING, FAILED, CANCELLED
+//	RUNNING      → SUCCEEDED, FAILED, RETRY_WAIT, CANCELLED
+//	RETRY_WAIT   → PENDING, FAILED, CANCELLED
+//	SUCCEEDED    → (terminal)
+//	FAILED       → (terminal)
+//	CANCELLED    → (terminal)
 func isValidJobStatusTransition(from, to JobStatus) bool {
 	if to == "" {
 		return true
@@ -14,34 +41,38 @@ func isValidJobStatusTransition(from, to JobStatus) bool {
 		return true
 	}
 
+	// Normalize legacy statuses
+	from = normalizeJobStatus(string(from))
+	to = normalizeJobStatus(string(to))
+
+	if from == to {
+		return true
+	}
+
 	switch from {
 	case "", StatusPending:
 		switch to {
-		case StatusPending, StatusQueued, StatusProcessing, StatusAssigned, StatusLeased, StatusFailed, StatusError, StatusCancelled, StatusLost, StatusRetrying:
+		case StatusLeased, StatusRunning, StatusRetryWait, StatusFailed, StatusCancelled:
 			return true
 		}
-	case StatusQueued:
+	case StatusLeased:
 		switch to {
-		case StatusQueued, StatusPending, StatusProcessing, StatusAssigned, StatusLeased, StatusFailed, StatusError, StatusCancelled, StatusLost, StatusRetrying:
+		case StatusRunning, StatusFailed, StatusCancelled:
 			return true
 		}
-	case StatusProcessing, StatusAssigned, StatusLeased, StatusRetrying:
+	case StatusRunning:
 		switch to {
-		case StatusProcessing, StatusCompleted, StatusFailed, StatusError, StatusCancelling, StatusCancelled, StatusLost, StatusRetrying:
+		case StatusSucceeded, StatusFailed, StatusRetryWait, StatusCancelled:
 			return true
 		}
-	case StatusCancelling:
+	case StatusRetryWait:
 		switch to {
-		case StatusCancelling, StatusCancelled, StatusLost:
+		case StatusPending, StatusFailed, StatusCancelled:
 			return true
 		}
-	case StatusCompleted, StatusError, StatusFailed, StatusCancelled, StatusLost:
+	case StatusSucceeded, StatusFailed, StatusCancelled:
+		// Terminal states — no transitions out
 		return false
-	default:
-		switch to {
-		case StatusCompleted, StatusFailed, StatusError, StatusCancelled, StatusLost:
-			return true
-		}
 	}
 
 	return false
