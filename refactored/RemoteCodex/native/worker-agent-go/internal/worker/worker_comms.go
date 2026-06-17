@@ -202,18 +202,14 @@ func (w *Worker) heartbeatLoop(ctx context.Context) {
 	}
 }
 
-// getStatus returns the current worker status (thread-safe).
+// getStatus returns the current worker status, derived from activeJobs and error state.
 func (w *Worker) getStatus() Status {
-	w.mu.RLock()
-	defer w.mu.RUnlock()
-	return w.status
+	return w.Status()
 }
 
 // sendHeartbeat sends a single heartbeat to the master.
 func (w *Worker) sendHeartbeat(ctx context.Context) error {
-	w.mu.RLock()
-	status := w.status
-	w.mu.RUnlock()
+	status := w.Status()
 
 	recentLogs, recentErrors := w.recentLogs.Snapshot(300, 100)
 	extra := map[string]interface{}{}

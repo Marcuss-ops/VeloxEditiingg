@@ -74,10 +74,9 @@ type Worker struct {
 	apiClient *api.Client
 	logger    *logger.Logger
 
-	// Status management
-	status     Status
-	currentJob *api.Job
-	mu         sync.RWMutex
+	// Status management — error state only; busy/idle derived from activeJobs
+	status Status
+	mu     sync.RWMutex
 
 	// Multi-job support: maps jobID -> ActiveJob for parallel execution
 	activeJobs   map[string]*ActiveJob
@@ -123,12 +122,6 @@ type Worker struct {
 
 	// Stage executor (Step 2: stage/chunk execution with retry)
 	stageExecutor *StageExecutor
-
-	// Progress tracking for current job
-	progressPercent atomic.Int32
-	progressScene   atomic.Int32
-	progressTotal   atomic.Int32
-	progressStage   atomic.Value // string
 
 	// Exit function (for testing, defaults to os.Exit)
 	exitFunc ExitFunc
