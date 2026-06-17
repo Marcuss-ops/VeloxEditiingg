@@ -2,88 +2,78 @@ package postgres
 
 import (
 	"context"
-	"time"
 
 	"velox-server/internal/store"
 )
 
-// JobRepository is the upcoming Postgres implementation of JobRepository
-// (spec §5). Scaffolding only — see package doc.
+// JobRepository is the Postgres implementation of store.JobRepository
+// (spec §5). Currently returns store.ErrNotImplemented until §5b lands a
+// pgx-backed driver. The compile-time guard below pins the contract so that
+// any drift between this stub and store.JobRepository is caught at build time.
 //
-// Full PR is deferred (PR-2): the spec calls for CreateJob / ClaimNext /
-// Transition / ListByStatus. To avoid forcing package store to expose types
-// it doesn't yet own, we declare minimal local types here; PR-2 will move
-// them to package store once CreateJobParams / ClaimParams / etc. become
-// cross-package contracts.
-
-// CreateJobParams (staging) — final home will be package store; PR-2 will
-// re-export these along with the SQLite impl.
-type CreateJobParams struct {
-	JobID     string
-	VideoName string
-	ProjectID string
-	Payload   map[string]interface{}
-}
-
-// ClaimParams (staging).
-type ClaimParams struct {
-	WorkerID        string
-	AllowedJobTypes []string
-	Now             time.Time
-}
-
-// ClaimResult (staging).
-type ClaimResult struct {
-	JobID        string
-	ResultJSON   []byte
-	Attempt      int
-	LeaseID      string
-	LeaseExpires time.Time
-}
-
-// TransitionParams (staging). Models a CAS-style status change.
-type TransitionParams struct {
-	JobID          string
-	ExpectedStatus string
-	NewStatus      string
-	Revision       int
-}
-
-// JobRow (staging). Minimal projection of the jobs table.
-type JobRow struct {
-	JobID    string
-	Status   string
-	Revision int
-}
-
-// JobRepository is a Postgres-backed placeholder.
+// Implementation roadmap per method (referenced verbatim by method name so
+// reviewers can grep):
+//
+//   CreateJob  → INSERT INTO jobs (...) VALUES (..., ?, ...); commit.
+//   GetJob     → SELECT job_id, status, … FROM jobs WHERE job_id = $1.
+//   ClaimNext  → BEGIN; SELECT … FOR UPDATE SKIP LOCKED LIMIT 1; UPDATE …; INSERT INTO job_attempts; COMMIT.
+//   Transition → UPDATE jobs SET status=$newStatus, revision=revision+1 WHERE job_id=$id AND status=$expected AND revision=$rev;
+//                IF ROW_COUNT = 0: raise store.ErrTransitionConflict, rollback semantic via no-op.
+//   ListByStatus → SELECT … FROM jobs WHERE status = ANY($1) ORDER BY updated_at DESC LIMIT $2.
+//
+// Atomicity stays inside each method; callers never see Begin/Commit.
 type JobRepository struct {
 	dsn string
 }
 
-// NewJobRepository is a placeholder constructor.
-func NewJobRepository(dsn string) *JobRepository { return &JobRepository{dsn: dsn} }
+// NewJobRepository constructs a Postgres-backed JobRepository stub. When the
+// pgxpool is wired, the constructor will accept a *pgxpool.Pool and stash it
+// in an unexported field; until then the dsn is the only state.
+func NewJobRepository(dsn string) *JobRepository {
+	return &JobRepository{dsn: dsn}
+}
 
-// CreateJob returns ErrNotImplemented.
-func (r *JobRepository) CreateJob(ctx context.Context, params CreateJobParams) error {
-	_, _ = ctx, params
+// CreateJob — TODO §5b: see roadmap above.
+func (r *JobRepository) CreateJob(ctx context.Context, params store.CreateJobParams) error {
+	_, _, _ = ctx, params, r.dsn
 	return store.ErrNotImplemented
 }
 
-// ClaimNext returns ErrNotImplemented.
-func (r *JobRepository) ClaimNext(ctx context.Context, claim ClaimParams) (*ClaimResult, error) {
+// GetJob returns (nil, nil) on missing AND (nil, ErrNotImplemented) when the
+// backend is unavailable — distinguish via errors.Is(err, ErrNotImplemented)
+// if you need to fall back to the SQLite mirror.
+func (r *JobRepository) GetJob(ctx context.Context, jobID string) (*store.Job, error) {
+	_, _, _ = ctx, jobID, r.dsn
+	return nil, store.ErrNotImplemented
+}
+
+// ClaimNext — TODO §5b: use FOR UPDATE SKIP LOCKED so concurrent workers do
+// not contend. See roadmap comment at top of file.
+func (r *JobRepository) ClaimNext(ctx context.Context, claim store.ClaimParams) (*store.ClaimResult, error) {
 	_, _ = ctx, claim
+	_ = r.dsn
 	return nil, store.ErrNotImplemented
 }
 
-// Transition returns ErrNotImplemented.
-func (r *JobRepository) Transition(ctx context.Context, t TransitionParams) error {
-	_, _ = ctx, t
+// Transition — TODO §5b: CAS via `status = $expected AND revision = $rev`.
+// Raise ErrTransitionConflict when zero rows affected.
+func (r *JobRepository) Transition(ctx context.Context, t store.TransitionParams) error {
+	_, _, _ = ctx, t, r.dsn
 	return store.ErrNotImplemented
 }
 
-// ListByStatus returns ErrNotImplemented.
-func (r *JobRepository) ListByStatus(ctx context.Context, statuses []string, limit int) ([]JobRow, error) {
+// ListByStatus — TODO §5b: SELECT ANY(statuses).
+func (r *JobRepository) ListByStatus(ctx context.Context, statuses []store.JobStatus, limit int) ([]store.Job, error) {
 	_, _, _ = ctx, statuses, limit
+	_ = r.dsn
 	return nil, store.ErrNotImplemented
 }
+
+// Compile-time guard — keeps PostgreSQL implementation honest with the
+// SQLite-side contract. PR-1's README promised this; PR-2 delivers it.
+var _ store.JobRepository = (*JobRepository)(nil)
+
+// dead-code removed: dsnAccessor() and TimeNow used to expose hooks for §5b's
+// test factories and time injection. They were unreachable from production
+// paths and would have leaked the DSN via the helper. Reintroduce only when
+// the pgx-backed driver lands and the test harness actually needs them.
