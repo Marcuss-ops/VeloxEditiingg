@@ -8,20 +8,16 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strconv"
-	"strings"
 	"syscall"
 	"time"
 
 	"github.com/gin-gonic/gin"
-
 	"velox-server/internal/app"
 	"velox-server/internal/audit"
 	"velox-server/internal/config"
-	workersapi "velox-server/internal/handlers/remote/workers"
-	"velox-server/internal/handlers/remote/workers/lifecycle"
 	"velox-server/internal/handlers/server/api"
 	"velox-server/internal/handlers/server/pipeline"
+	workersapi "velox-server/internal/handlers/remote/workers"
 	"velox-server/internal/modules/ansible"
 	"velox-server/internal/modules/drive"
 	"velox-server/internal/modules/frontend"
@@ -45,10 +41,9 @@ type serverDeps struct {
 	workersRepo         store.WorkersRepository
 	sqliteStore         *store.SQLiteStore
 	workerUpdateHandler *workersapi.WorkerUpdateHandler
-	workerLifecycle     *lifecycle.Handler
+	workerLifecycle     *workersapi.WorkerLifecycle
 	ansibleModule       *ansible.Module
 	youtubeModule       *youtube.Module
-	driveModule         *drive.Module
 	orchestrator        *queue.Orchestrator
 }
 
@@ -87,18 +82,18 @@ func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
 		cfg = config.FromEnv()
 	}
 
-	if err := os.MkdirAll(filepath.Dir(cfg.DBDSN), 0o755); err != nil {
+	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
 
-	sqliteStore, err := store.NewSQLiteStore(cfg.DBDSN)
+	sqliteStore, err := store.NewSQLiteStore(cfg.Database.DBPath)
 	if err != nil {
 		return nil, err
 	}
 
 	fileQ, err := queue.NewFileQueue(&queue.FileQueueConfig{
 		DBStore:    sqliteStore,
-		MaxRetries: cfg.MaxJobAttempts,
+		MaxRetries: cfg.Workers.MaxJobAttempts,
 	})
 	if err != nil {
 		return nil, err
@@ -117,8 +112,8 @@ func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
 	cmdMgr := workersreg.NewCommandManager()
 	updateMgr := workersreg.NewUpdateManager()
 	tokenMgr := workersreg.NewTokenManager()
-	workerUpdateHandler := workersapi.NewWorkerUpdateHandler(cfg, reg, cmdMgr, updateMgr, tokenMgr, cfg.DataDir)
-	workerLifecycle := lifecycle.NewHandler(cfg, reg, cfg.DataDir)
+	workerUpdateHandler := workersapi.NewWorkerUpdateHandler(cfg, reg, cmdMgr, updateMgr, tokenMgr, cfg.Runtime.DataDir)
+	workerLifecycle := workersapi.NewWorkerLifecycle(cfg, reg, cfg.Runtime.DataDir)
 
 	// Create orchestrator for multi-step job pipelines
 	orch, err := queue.NewOrchestrator(nil, fileQ, sqliteStore)
@@ -127,7 +122,7 @@ func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
 	}
 
 	return &serverDeps{
-		paths:               &serverPaths{dataDir: cfg.DataDir},
+		paths:               &serverPaths{dataDir: cfg.Runtime.DataDir},
 		fileQ:               fileQ,
 		reg:                 reg,
 		workersRepo:         workersRepo,
@@ -149,25 +144,6 @@ func runServer(cfg *config.Config) error {
 		return err
 	}
 
-	// Boot-time dual-DB check: compare the runtime velox.db against every
-	// well-known source candidate (../data/velox.db, .velox/data/velox.db,
-	// worker_runtime/velox.db, ...). Catches the "two DB copies" race that
-	// historically caused YouTube groups to disappear after deploys when
-	// the runtime DBDSN pointed at a stale or shared file. Same-path hits
-	// are always reported; staleness check is gated by
-	// VELOX_DB_STALE_HOURS (default 24h; 0 disables the staleness check
-	// while keeping same-path detection).
-	runDuadDBBootCheck(deps, cfg)
-
-	// Boot-time OAuth-token consolidation has been REMOVED. The
-	// runtime path is SQLite-only (S6 verdict) and no server
-	// component reads from <DataDir>/secrets/youtube/tokens/*.json
-	// on boot. Operators migrate from the legacy JSON layout
-	// explicitly via `velox-server migrate youtube-oauth-json`
-	// (defined in cmd/server/migrate.go). Keeping the old block
-	// here would resurrect the dual-write drift the verdict
-	// eliminated.
-
 	registry := app.NewRegistry()
 	auth := api.AdminAuthMiddleware(cfg)
 
@@ -180,9 +156,7 @@ func runServer(cfg *config.Config) error {
 	ytMod := youtube.New(cfg, deps.paths.dataDir, deps.sqliteStore)
 	deps.youtubeModule = ytMod
 	registry.Register(ytMod)
-	driveMod := drive.New(cfg)
-	deps.driveModule = driveMod
-	registry.Register(driveMod)
+	registry.Register(drive.New(cfg, deps.sqliteStore))
 	ansibleMod := ansible.New(cfg, deps.paths.dataDir, auth, deps.sqliteStore)
 	deps.ansibleModule = ansibleMod
 	registry.Register(ansibleMod)
@@ -193,7 +167,7 @@ func runServer(cfg *config.Config) error {
 	// Create gin engine with middleware
 	r := newRouter(cfg, deps, registry)
 
-	addr := fmt.Sprintf(":%d", cfg.MasterPort)
+	addr := fmt.Sprintf(":%d", cfg.Server.Port)
 	srv := &http.Server{
 		Addr:              addr,
 		Handler:           r,
@@ -237,9 +211,9 @@ func runServer(cfg *config.Config) error {
 	errChan := make(chan error, 1)
 	go func() {
 		var err error
-		if cfg.TLSCertFile != "" && cfg.TLSKeyFile != "" {
-			log.Printf("[SERVER] TLS enabled (cert: %s, key: %s)", cfg.TLSCertFile, cfg.TLSKeyFile)
-			err = srv.ListenAndServeTLS(cfg.TLSCertFile, cfg.TLSKeyFile)
+		if cfg.Server.TLSCertFile != "" && cfg.Server.TLSKeyFile != "" {
+			log.Printf("[SERVER] TLS enabled (cert: %s, key: %s)", cfg.Server.TLSCertFile, cfg.Server.TLSKeyFile)
+			err = srv.ListenAndServeTLS(cfg.Server.TLSCertFile, cfg.Server.TLSKeyFile)
 		} else {
 			err = srv.ListenAndServe()
 		}
@@ -280,56 +254,17 @@ func runServer(cfg *config.Config) error {
 	return nil
 }
 
-// runDuadDBBootCheck (legacy spelling kept for greppability) compares the
-// runtime velox.db against every well-known source candidate and logs a
-// WARN for any same-path hit or source-newer-than-runtime lag. Non-fatal:
-// the operator can decide whether to flip DBDSN, restore from backup, or
-// accept the state. Threshold is configurable via VELOX_DB_STALE_HOURS;
-// default 24h. Set to 0 to disable the staleness check.
-func runDuadDBBootCheck(deps *serverDeps, cfg *config.Config) {
-	if deps == nil || cfg == nil {
-		return
-	}
-	staleHours := 24
-	if v := strings.TrimSpace(os.Getenv("VELOX_DB_STALE_HOURS")); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
-			staleHours = n
-		}
-	}
-	threshold := time.Duration(staleHours) * time.Hour
-	runtimeDBPath := ""
-	if deps.sqliteStore != nil {
-		runtimeDBPath = deps.sqliteStore.Path()
-	}
-	if runtimeDBPath == "" {
-		log.Printf("[DUAL-DB] runtime velox.db path could not be resolved; skipping boot check")
-		return
-	}
-	report := audit.CheckDualDatabase(cfg.DataDir, runtimeDBPath, threshold)
-	if len(report.Warnings) == 0 {
-		log.Printf("[DUAL-DB] OK: runtime velox.db (%s) clear of source candidates (checked %d, threshold=%s)",
-			report.RuntimePath, len(report.Sources), threshold)
-		return
-	}
-	for _, w := range report.Warnings {
-		log.Printf("[DUAL-DB] WARNING: %s", w)
-	}
-	log.Printf("[DUAL-DB] runtime=%s checked=%d same_path=%v source_newer=%v lag_hours=%.2f",
-		report.RuntimePath, len(report.Sources), report.SamePathHit,
-		report.SourceNewerThanRuntime, report.LagHours)
-}
-
 // runDataLayerAudit checks for legacy JSON files and data layer integrity.
 // Returns error if critical issues are found (hard block).
 // Warnings are logged but don't block startup.
 func runDataLayerAudit(cfg *config.Config) error {
-	dataDir := cfg.DataDir
+	dataDir := cfg.Runtime.DataDir
 	if dataDir == "" {
 		dataDir = "."
 	}
 
 	secretsDir := filepath.Join(dataDir, "secrets")
-	auditor := audit.NewDataLayerAuditor(dataDir, secretsDir)
+	auditor := audit.NewDataLayerAuditor(dataDir, secretsDir, cfg.Database.DBPath)
 
 	result := auditor.Audit()
 

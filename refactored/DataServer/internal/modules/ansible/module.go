@@ -23,7 +23,7 @@ type Module struct {
 }
 
 func New(cfg *config.Config, dataDir string, adminAuth gin.HandlerFunc, sqliteStore *store.SQLiteStore) *Module {
-	masterURL := cfg.MasterURL
+	masterURL := cfg.Workers.MasterURL
 	if strings.TrimSpace(masterURL) == "" {
 		masterURL = config.GetAnsibleMasterURL()
 	}
@@ -48,12 +48,12 @@ func (m *Module) Handlers() *remoteansible.AnsibleHandlers {
 }
 
 func (m *Module) RegisterRoutes(r *gin.Engine) {
-	if err := os.MkdirAll(m.cfg.PlaybookDir, 0755); err != nil {
-		log.Printf("[ANSIBLE] Cannot create playbook dir %s: %v", m.cfg.PlaybookDir, err)
+	if err := os.MkdirAll(m.cfg.Ansible.PlaybookDir, 0755); err != nil {
+		log.Printf("[ANSIBLE] Cannot create playbook dir %s: %v", m.cfg.Ansible.PlaybookDir, err)
 		return
 	}
 
-	ansibleManager := remoteansible.NewAnsibleRunManager(m.cfg.PlaybookDir, m.dataDir, m.store)
+	ansibleManager := remoteansible.NewAnsibleRunManager(m.cfg.Ansible.PlaybookDir, m.dataDir, m.store)
 	computerMgr := remoteansible.NewAnsibleComputerManager(m.dataDir)
 	if m.store != nil {
 		computerMgr.SetStore(m.store)
@@ -79,7 +79,7 @@ func (m *Module) RegisterRoutes(r *gin.Engine) {
 	v1Admin.GET("/ansible/computers/logs/:id", m.handlers.AnsibleComputersLogsHandler)
 
 	if ansibleManager.Ready() {
-		log.Printf("[ANSIBLE] Routes registered (playbooks: %s)", m.cfg.PlaybookDir)
+		log.Printf("[ANSIBLE] Routes registered (playbooks: %s)", m.cfg.Ansible.PlaybookDir)
 	} else {
 		log.Printf("[ANSIBLE] Routes registered (ansible-playbook not found)")
 	}

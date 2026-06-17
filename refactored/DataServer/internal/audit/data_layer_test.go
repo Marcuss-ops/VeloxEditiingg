@@ -29,7 +29,7 @@ func TestDataLayerAuditorPassesWithCleanStructure(t *testing.T) {
 	os.MkdirAll(archiveDir, 0755)
 	os.WriteFile(filepath.Join(archiveDir, "youtube_manager.json"), []byte(`{}`), 0644)
 
-	auditor := NewDataLayerAuditor(tmpDir, secretsDir)
+	auditor := NewDataLayerAuditor(tmpDir, secretsDir, filepath.Join(tmpDir, "velox.db"))
 	result := auditor.Audit()
 
 	if !result.Passed {
@@ -42,8 +42,11 @@ func TestDataLayerAuditorPassesWithCleanStructure(t *testing.T) {
 }
 
 // TestDataLayerAuditorFailsOnDuplicateSourceOfTruth tests that audit fails
-// when duplicate drive credentials directories exist.
+// when duplicate drive credentials directories exist (Unix only — Windows FS is case-insensitive).
 func TestDataLayerAuditorFailsOnDuplicateSourceOfTruth(t *testing.T) {
+	if os.PathSeparator == '\\' {
+		t.Skip("Skipping on Windows: filesystem is case-insensitive")
+	}
 	tmpDir := t.TempDir()
 	secretsDir := filepath.Join(tmpDir, "secrets")
 	os.MkdirAll(secretsDir, 0755)
@@ -52,7 +55,7 @@ func TestDataLayerAuditorFailsOnDuplicateSourceOfTruth(t *testing.T) {
 	os.MkdirAll(filepath.Join(tmpDir, "drive", "credentials"), 0755)
 	os.MkdirAll(filepath.Join(tmpDir, "drive", "Credentials"), 0755)
 
-	auditor := NewDataLayerAuditor(tmpDir, secretsDir)
+	auditor := NewDataLayerAuditor(tmpDir, secretsDir, filepath.Join(tmpDir, "velox.db"))
 	result := auditor.Audit()
 
 	if result.Passed {
@@ -61,6 +64,28 @@ func TestDataLayerAuditorFailsOnDuplicateSourceOfTruth(t *testing.T) {
 
 	if len(result.Errors) == 0 {
 		t.Error("Expected errors for duplicate source of truth")
+	}
+}
+
+// TestDataLayerAuditorFailsOnLegacyFilesInRoot tests that audit fails
+// when legacy files exist in their original locations.
+func TestDataLayerAuditorFailsOnLegacyFilesInRoot(t *testing.T) {
+	tmpDir := t.TempDir()
+	secretsDir := filepath.Join(tmpDir, "secrets")
+	os.MkdirAll(secretsDir, 0755)
+
+	// Create primary
+	os.MkdirAll(filepath.Join(tmpDir, "youtube", "GroupYoutubeManager"), 0755)
+	os.WriteFile(filepath.Join(tmpDir, "youtube", "GroupYoutubeManager", "ChannelsSaved.json"), []byte(`{}`), 0644)
+
+	// Create legacy in WRONG location (should fail)
+	os.WriteFile(filepath.Join(tmpDir, "youtube", "groups.json"), []byte(`[]`), 0644)
+
+	auditor := NewDataLayerAuditor(tmpDir, secretsDir, filepath.Join(tmpDir, "velox.db"))
+	result := auditor.Audit()
+
+	if result.Passed {
+		t.Error("Audit should fail when legacy files exist in original locations")
 	}
 }
 
@@ -86,7 +111,7 @@ func TestDataLayerAuditorAllowsArchivedLegacyFiles(t *testing.T) {
 	os.MkdirAll(archiveDir, 0755)
 	os.WriteFile(filepath.Join(archiveDir, "youtube_manager.json"), []byte(`{}`), 0644)
 
-	auditor := NewDataLayerAuditor(tmpDir, secretsDir)
+	auditor := NewDataLayerAuditor(tmpDir, secretsDir, filepath.Join(tmpDir, "velox.db"))
 	result := auditor.Audit()
 
 	if !result.Passed {
@@ -94,6 +119,56 @@ func TestDataLayerAuditorAllowsArchivedLegacyFiles(t *testing.T) {
 	}
 }
 
+// TestCheckLegacyFiles_DetectsForbidden tests that checkLegacyFiles detects
+// forbidden legacy files.
+func TestCheckLegacyFiles_DetectsForbidden(t *testing.T) {
+	tmpDir := t.TempDir()
+	secretsDir := filepath.Join(tmpDir, "secrets")
+	os.MkdirAll(secretsDir, 0755)
+
+	// Create ALL required primary files first
+	os.MkdirAll(filepath.Join(tmpDir, "youtube", "GroupYoutubeManager"), 0755)
+	os.MkdirAll(filepath.Join(tmpDir, "youtube", "channels"), 0755)
+	os.WriteFile(filepath.Join(tmpDir, "youtube", "GroupYoutubeManager", "ChannelsSaved.json"), []byte(`{}`), 0644)
+	os.WriteFile(filepath.Join(tmpDir, "youtube", "channels", "channels.json"), []byte(`{}`), 0644)
+	os.WriteFile(filepath.Join(tmpDir, "workers.json"), []byte(`{}`), 0644)
+	os.WriteFile(filepath.Join(tmpDir, "velox.db"), []byte(``), 0644)
+	os.WriteFile(filepath.Join(tmpDir, "ansible_runs.json"), []byte(`{}`), 0644)
+	bundleDir := filepath.Join(tmpDir, "bundle")
+	os.MkdirAll(bundleDir, 0755)
+	os.WriteFile(filepath.Join(bundleDir, "manifest_v2.json"), []byte(`{}`), 0644)
+
+	// Create forbidden legacy file
+	youtubeDir := filepath.Join(tmpDir, "youtube")
+	os.MkdirAll(youtubeDir, 0755)
+	os.WriteFile(filepath.Join(youtubeDir, "youtube_manager.json"), []byte(`{}`), 0644)
+
+	auditor := NewDataLayerAuditor(tmpDir, secretsDir, filepath.Join(tmpDir, "velox.db"))
+	result := &DataLayerAuditResult{
+		Passed: true,
+		Errors: make([]string, 0),
+	}
+
+	auditor.checkLegacyFiles(result)
+
+	// checkLegacyFiles adds errors but doesn't set Passed - that's done by Audit()
+	// So we check for errors, not Passed
+	if len(result.Errors) == 0 {
+		t.Error("checkLegacyFiles should add errors when forbidden legacy files exist")
+	}
+
+	found := false
+	for _, err := range result.Errors {
+		if contains(err, "youtube_manager.json") {
+			found = true
+			break
+		}
+	}
+
+	if !found {
+		t.Errorf("Expected error about youtube_manager.json, got: %v", result.Errors)
+	}
+}
 
 // TestCheckPrimaryFiles_ReportsMissing tests that checkPrimaryFiles detects
 // missing primary files.
@@ -104,7 +179,7 @@ func TestCheckPrimaryFiles_ReportsMissing(t *testing.T) {
 
 	// Don't create any primary files
 
-	auditor := NewDataLayerAuditor(tmpDir, secretsDir)
+	auditor := NewDataLayerAuditor(tmpDir, secretsDir, filepath.Join(tmpDir, "velox.db"))
 	result := &DataLayerAuditResult{
 		Passed: true,
 		Errors: make([]string, 0),
@@ -132,12 +207,12 @@ func TestCheckPrimaryFiles_PassesWhenPresent(t *testing.T) {
 	os.WriteFile(filepath.Join(tmpDir, "workers.json"), []byte(`{}`), 0644)
 	os.WriteFile(filepath.Join(tmpDir, "velox.db"), []byte(``), 0644)
 	os.WriteFile(filepath.Join(tmpDir, "ansible_runs.json"), []byte(`{}`), 0644)
-
+	
 	bundleDir := filepath.Join(tmpDir, "bundle")
 	os.MkdirAll(bundleDir, 0755)
 	os.WriteFile(filepath.Join(bundleDir, "manifest_v2.json"), []byte(`{}`), 0644)
 
-	auditor := NewDataLayerAuditor(tmpDir, secretsDir)
+	auditor := NewDataLayerAuditor(tmpDir, secretsDir, filepath.Join(tmpDir, "velox.db"))
 	result := &DataLayerAuditResult{
 		Passed: true,
 		Errors: make([]string, 0),
@@ -218,7 +293,7 @@ func TestCheckDuplicateSources_NoWorkersWarning(t *testing.T) {
 	// Create workers.json — should NOT produce any warning
 	os.WriteFile(filepath.Join(tmpDir, "workers.json"), []byte(`{}`), 0644)
 
-	auditor := NewDataLayerAuditor(tmpDir, secretsDir)
+	auditor := NewDataLayerAuditor(tmpDir, secretsDir, filepath.Join(tmpDir, "velox.db"))
 	result := &DataLayerAuditResult{
 		Passed:   true,
 		Errors:   make([]string, 0),
@@ -236,8 +311,11 @@ func TestCheckDuplicateSources_NoWorkersWarning(t *testing.T) {
 }
 
 // TestCheckDuplicateSources_DriveCredentialsError tests that both credentials/
-// and Credentials/ directories produce an error.
+// and Credentials/ directories produce an error (Unix only — Windows FS is case-insensitive).
 func TestCheckDuplicateSources_DriveCredentialsError(t *testing.T) {
+	if os.PathSeparator == '\\' {
+		t.Skip("Skipping on Windows: filesystem is case-insensitive")
+	}
 	tmpDir := t.TempDir()
 	secretsDir := filepath.Join(tmpDir, "secrets")
 	os.MkdirAll(secretsDir, 0755)
@@ -246,7 +324,7 @@ func TestCheckDuplicateSources_DriveCredentialsError(t *testing.T) {
 	os.MkdirAll(filepath.Join(tmpDir, "drive", "credentials"), 0755)
 	os.MkdirAll(filepath.Join(tmpDir, "drive", "Credentials"), 0755)
 
-	auditor := NewDataLayerAuditor(tmpDir, secretsDir)
+	auditor := NewDataLayerAuditor(tmpDir, secretsDir, filepath.Join(tmpDir, "velox.db"))
 	result := &DataLayerAuditResult{
 		Passed:   true,
 		Errors:   make([]string, 0),
@@ -272,8 +350,11 @@ func TestCheckDuplicateSources_DriveCredentialsError(t *testing.T) {
 }
 
 // TestCheckNamingConsistency_MixedCase tests that mixed-case
-// directory names produce an error.
+// directory names produce an error (Unix only — Windows FS is case-insensitive).
 func TestCheckNamingConsistency_MixedCase(t *testing.T) {
+	if os.PathSeparator == '\\' {
+		t.Skip("Skipping on Windows: filesystem is case-insensitive")
+	}
 	tmpDir := t.TempDir()
 	secretsDir := filepath.Join(tmpDir, "secrets")
 	os.MkdirAll(secretsDir, 0755)
@@ -282,7 +363,7 @@ func TestCheckNamingConsistency_MixedCase(t *testing.T) {
 	os.MkdirAll(filepath.Join(tmpDir, "drive", "credentials"), 0755)
 	os.MkdirAll(filepath.Join(tmpDir, "drive", "Credentials"), 0755)
 
-	auditor := NewDataLayerAuditor(tmpDir, secretsDir)
+	auditor := NewDataLayerAuditor(tmpDir, secretsDir, filepath.Join(tmpDir, "velox.db"))
 	result := &DataLayerAuditResult{
 		Passed:   true,
 		Errors:   make([]string, 0),
@@ -307,13 +388,13 @@ func TestCheckNamingConsistency_MixedCase(t *testing.T) {
 	}
 }
 
-// TestCheckDatabase_MissingDB tests that missing velox.db produces a warning.
+// TestCheckDatabase_MissingDB tests that missing DB (empty dbPath) produces a warning.
 func TestCheckDatabase_MissingDB(t *testing.T) {
 	tmpDir := t.TempDir()
 	secretsDir := filepath.Join(tmpDir, "secrets")
 	os.MkdirAll(secretsDir, 0755)
 
-	auditor := NewDataLayerAuditor(tmpDir, secretsDir)
+	auditor := NewDataLayerAuditor(tmpDir, secretsDir, "") // empty dbPath
 	result := &DataLayerAuditResult{
 		Passed:   true,
 		Errors:   make([]string, 0),
@@ -323,31 +404,31 @@ func TestCheckDatabase_MissingDB(t *testing.T) {
 	auditor.checkDatabase(result)
 
 	if len(result.Warnings) == 0 {
-		t.Error("Expected warning for missing velox.db, got none")
+		t.Error("Expected warning for empty dbPath, got none")
 	}
 	found := false
 	for _, w := range result.Warnings {
-		if stringsContains(w, "velox.db") {
+		if stringsContains(w, "VELOX_DB_PATH") {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Errorf("Expected warning about missing velox.db, got: %v", result.Warnings)
+		t.Errorf("Expected warning about VELOX_DB_PATH not configured, got: %v", result.Warnings)
 	}
 }
 
-// TestCheckDatabase_NoDuplicate tests that no duplicate warning is emitted
-// when there's only one velox.db.
+// TestCheckDatabase_NoDuplicate tests that a valid DB path produces no warning.
 func TestCheckDatabase_NoDuplicate(t *testing.T) {
 	tmpDir := t.TempDir()
 	secretsDir := filepath.Join(tmpDir, "secrets")
 	os.MkdirAll(secretsDir, 0755)
 
-	// Create a single velox.db (no duplicates)
-	os.WriteFile(filepath.Join(tmpDir, "velox.db"), []byte(`SQLite format 3\x00`), 0644)
+	// Create velox.db at configured path
+	dbPath := filepath.Join(tmpDir, "velox.db")
+	os.WriteFile(dbPath, []byte(`SQLite format 3\x00`), 0644)
 
-	auditor := NewDataLayerAuditor(tmpDir, secretsDir)
+	auditor := NewDataLayerAuditor(tmpDir, secretsDir, dbPath)
 	result := &DataLayerAuditResult{
 		Passed:   true,
 		Errors:   make([]string, 0),
@@ -356,19 +437,44 @@ func TestCheckDatabase_NoDuplicate(t *testing.T) {
 
 	auditor.checkDatabase(result)
 
-	// Should have no errors because velox.db exists
+	// Should have no errors because DB exists at configured path
 	if len(result.Errors) > 0 {
 		t.Errorf("Expected no errors, got: %v", result.Errors)
 	}
 
 	// Should have no warnings about missing DB (it exists)
 	for _, w := range result.Warnings {
-		if stringsContains(w, "not found") {
-			t.Errorf("Expected no 'not found' warning when velox.db exists, got: %s", w)
+		if stringsContains(w, "not found") || stringsContains(w, "not accessible") {
+			t.Errorf("Expected no 'not found/accessible' warning when DB exists, got: %s", w)
 		}
 	}
 }
 
+// TestAllowLegacy_SkippedAllowed tests that allowed legacy files don't
+// produce errors.
+func TestAllowLegacy_SkippedAllowed(t *testing.T) {
+	tmpDir := t.TempDir()
+	secretsDir := filepath.Join(tmpDir, "secrets")
+	os.MkdirAll(secretsDir, 0755)
+
+	// Create a known legacy file
+	os.MkdirAll(filepath.Join(tmpDir, "youtube", "GroupYoutubeManager"), 0755)
+	os.WriteFile(filepath.Join(tmpDir, "youtube", "GroupYoutubeManager", "ChannelsSaved.json"), []byte(`{}`), 0644)
+
+	auditor := NewDataLayerAuditor(tmpDir, secretsDir, filepath.Join(tmpDir, "velox.db"))
+	auditor.AllowLegacy("youtube/GroupYoutubeManager/ChannelsSaved.json")
+
+	result := auditor.Audit()
+
+	// With the file allowed, checkLegacyFiles should not report it
+	// but checkPrimaryFiles might require velox.db
+	// So we check specifically that ChannelsSaved.json is not in errors
+	for _, err := range result.Errors {
+		if stringsContains(err, "ChannelsSaved.json") {
+			t.Errorf("Allowed legacy file should not produce error: %s", err)
+		}
+	}
+}
 
 // TestFailOnError_ReturnsError tests that FailOnError returns an error
 // for failed audits.
@@ -406,8 +512,8 @@ func TestFailOnError_ReturnsNil(t *testing.T) {
 // contains the correct status.
 func TestAuditResult_StringContainsStatus(t *testing.T) {
 	result := &DataLayerAuditResult{
-		Passed:  true,
-		Errors:  []string{},
+		Passed: true,
+		Errors: []string{},
 		DataDir: "/tmp/test",
 	}
 
@@ -421,8 +527,8 @@ func TestAuditResult_StringContainsStatus(t *testing.T) {
 // TestAuditResult_StringFailed tests that String() output for failed audits.
 func TestAuditResult_StringFailed(t *testing.T) {
 	result := &DataLayerAuditResult{
-		Passed:  false,
-		Errors:  []string{"test error"},
+		Passed: false,
+		Errors: []string{"test error"},
 		DataDir: "/tmp/test",
 	}
 
@@ -438,7 +544,7 @@ func TestAuditResult_StringFailed(t *testing.T) {
 
 // TestNewDataLayerAuditor tests that the constructor initializes correctly.
 func TestNewDataLayerAuditor(t *testing.T) {
-	auditor := NewDataLayerAuditor("/tmp/data", "/tmp/data/secrets")
+	auditor := NewDataLayerAuditor("/tmp/data", "/tmp/data/secrets", "/tmp/data/velox.db")
 
 	if auditor == nil {
 		t.Fatal("NewDataLayerAuditor should not return nil")
@@ -449,6 +555,9 @@ func TestNewDataLayerAuditor(t *testing.T) {
 	}
 	if auditor.secretsDir != "/tmp/data/secrets" {
 		t.Errorf("Expected secretsDir='/tmp/data/secrets', got '%s'", auditor.secretsDir)
+	}
+	if auditor.allowedLegacy == nil {
+		t.Error("allowedLegacy map should be initialized")
 	}
 }
 
@@ -465,7 +574,7 @@ func TestAudit_WarningCount(t *testing.T) {
 	// Create some tokens
 	os.WriteFile(filepath.Join(ytTokensDir, "account_test.json"), []byte(`{}`), 0644)
 
-	auditor := NewDataLayerAuditor(tmpDir, secretsDir)
+	auditor := NewDataLayerAuditor(tmpDir, secretsDir, filepath.Join(tmpDir, "velox.db"))
 	result := auditor.Audit()
 
 	// Should NOT have errors (no DB warning is expected since checkDatabase warns)

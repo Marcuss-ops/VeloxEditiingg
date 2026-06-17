@@ -97,15 +97,15 @@ func (s *Service) ClaimNextJob(ctx context.Context, req ClaimRequest) (*ClaimRes
 		}
 	}
 
-	if s.cfg != nil && s.cfg.ForceSingleWorker != "" && s.cfg.ForceSingleWorker != "0" && !strings.EqualFold(s.cfg.ForceSingleWorker, "false") {
-		allowed := req.WorkerID == s.cfg.ForceSingleWorker || req.ClientIP == s.cfg.ForceSingleWorker
+	if s.cfg != nil && s.cfg.Workers.ForceSingleWorker != "" && s.cfg.Workers.ForceSingleWorker != "0" && !strings.EqualFold(s.cfg.Workers.ForceSingleWorker, "false") {
+		allowed := req.WorkerID == s.cfg.Workers.ForceSingleWorker || req.ClientIP == s.cfg.Workers.ForceSingleWorker
 		if !allowed {
-			return &ClaimResult{Reason: "Single-worker mode active (" + s.cfg.ForceSingleWorker + ")"}, nil
+			return &ClaimResult{Reason: "Single-worker mode active (" + s.cfg.Workers.ForceSingleWorker + ")"}, nil
 		}
 	}
 
 	if s.cfg != nil {
-		allowedWorkers := strings.TrimSpace(s.cfg.AllowedWorkers)
+		allowedWorkers := strings.TrimSpace(s.cfg.Workers.AllowedWorkers)
 		if allowedWorkers != "" && !strings.EqualFold(allowedWorkers, "*") && !strings.EqualFold(allowedWorkers, "ALL") {
 			parts := strings.Split(allowedWorkers, ",")
 			allowlistOK := false
@@ -119,7 +119,7 @@ func (s *Service) ClaimNextJob(ctx context.Context, req ClaimRequest) (*ClaimRes
 					break
 				}
 			}
-			if !allowlistOK && s.cfg.AllowlistAllowRegistered && s.reg != nil && s.reg.IsRegistered(ctx, req.WorkerID) {
+			if !allowlistOK && s.cfg.Workers.AllowlistRegistered && s.reg != nil && s.reg.IsRegistered(ctx, req.WorkerID) {
 				allowlistOK = true
 			}
 			if !allowlistOK {
@@ -334,7 +334,7 @@ func (s *Service) SubmitResult(ctx context.Context, req SubmitResultRequest) (bo
 				}
 			}
 		}
-		err = s.fileQ.FailJob(ctx, req.JobID, req.Error, true)
+		err = s.fileQ.FailJob(ctx, req.JobID, req.Error, req.WorkerID, true)
 	}
 	if err != nil {
 		return false, err
@@ -403,14 +403,14 @@ func (s *Service) FailJob(ctx context.Context, jobID, workerID, errMsg string) e
 	}
 
 	maxAttempts := 3
-	if s.cfg != nil && s.cfg.MaxJobAttempts > 0 {
-		maxAttempts = s.cfg.MaxJobAttempts
+	if s.cfg != nil && s.cfg.Workers.MaxJobAttempts > 0 {
+		maxAttempts = s.cfg.Workers.MaxJobAttempts
 	}
 	requeue := attempt < maxAttempts
 
 	var err error
 	if s.fileQ != nil {
-		err = s.fileQ.FailJob(ctx, jobID, errMsg, requeue)
+		err = s.fileQ.FailJob(ctx, jobID, errMsg, workerID, requeue)
 	}
 	if err != nil {
 		return err
