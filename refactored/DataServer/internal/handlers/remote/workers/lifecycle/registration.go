@@ -1,4 +1,4 @@
-package lifecycle
+package workers
 
 import (
 	"log"
@@ -6,24 +6,46 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
-
+	"velox-server/internal/config"
 	workersreg "velox-server/internal/workers"
 )
 
-func (h *Handler) authorizeWorkerRequest(c *gin.Context, workerID string) bool {
+type WorkerLifecycle struct {
+	cfg           *config.Config
+	reg           *workersreg.Registry
+	cmdMgr        *workersreg.CommandManager
+	updateMgr     *workersreg.UpdateManager
+	tokenMgr      *workersreg.TokenManager
+	codeVersion   string
+	versionNumber string
+}
+
+func (wl *WorkerLifecycle) authorizeWorkerRequest(c *gin.Context, workerID string) bool {
 	token := workersreg.ExtractBearerToken(
 		c.GetHeader("Authorization"),
 		c.GetHeader("X-Admin-Token"),
 		c.Query("token"),
 	)
-	if !workersreg.AuthorizeWorkerToken(h.tokenMgr, token, workerID, c.ClientIP()) {
+	if !workersreg.AuthorizeWorkerToken(wl.tokenMgr, token, workerID, c.ClientIP()) {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid worker token"})
 		return false
 	}
 	return true
 }
 
-func (h *Handler) RegisterV2Handler() gin.HandlerFunc {
+func NewWorkerLifecycle(cfg *config.Config, reg *workersreg.Registry, dataDir string) *WorkerLifecycle {
+	return &WorkerLifecycle{
+		cfg:           cfg,
+		reg:           reg,
+		cmdMgr:        workersreg.NewCommandManager(),
+		updateMgr:     workersreg.NewUpdateManager(),
+		tokenMgr:      workersreg.NewTokenManager(),
+		codeVersion:   cfg.Workers.CodeVersion,
+		versionNumber: cfg.Workers.VersionNumber,
+	}
+}
+
+func (wl *WorkerLifecycle) RegisterV2Handler() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var body struct {
 			WorkerID        string                 `json:"worker_id"`
@@ -57,7 +79,7 @@ func (h *Handler) RegisterV2Handler() gin.HandlerFunc {
 			return
 		}
 
-		if h.reg.IsRevoked(body.WorkerID) {
+		if wl.reg.IsRevoked(body.WorkerID) {
 			c.Status(http.StatusNoContent)
 			return
 		}
@@ -99,12 +121,12 @@ func (h *Handler) RegisterV2Handler() gin.HandlerFunc {
 		}
 
 		ctx := c.Request.Context()
-		if err := h.reg.RegisterWorker(ctx, body.WorkerID, workerName, ipAddress, extra); err != nil {
+		if err := wl.reg.RegisterWorker(ctx, body.WorkerID, workerName, ipAddress, extra); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "registration failed"})
 			return
 		}
 
-		pendingUpdate := h.updateMgr.GetPendingUpdate(body.WorkerID)
+		pendingUpdate := wl.updateMgr.GetPendingUpdate(body.WorkerID)
 		if pendingUpdate != nil && pendingUpdate.Ack {
 			log.Printf("[REGISTER] Worker %s reconnected after update (version: %s)", workerName, pendingUpdate.AckVersion)
 		}
@@ -119,7 +141,7 @@ func (h *Handler) RegisterV2Handler() gin.HandlerFunc {
 	}
 }
 
-func (h *Handler) RegisterHandler() gin.HandlerFunc {
+func (wl *WorkerLifecycle) RegisterHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var body struct {
 			WorkerID        string                 `json:"worker_id"`
@@ -146,7 +168,7 @@ func (h *Handler) RegisterHandler() gin.HandlerFunc {
 			return
 		}
 
-		if h.reg.IsRevoked(body.WorkerID) {
+		if wl.reg.IsRevoked(body.WorkerID) {
 			c.Status(http.StatusNoContent)
 			return
 		}
@@ -194,12 +216,13 @@ func (h *Handler) RegisterHandler() gin.HandlerFunc {
 		}
 
 		ctx := c.Request.Context()
-		if err := h.reg.RegisterWorker(ctx, body.WorkerID, workerName, ipAddress, extra); err != nil {
+		if err := wl.reg.RegisterWorker(ctx, body.WorkerID, workerName, ipAddress, extra); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": "registration failed"})
 			return
 		}
 
-		token := h.tokenMgr.GenerateToken(body.WorkerID)
+		// Generate a token for the worker for subsequent authenticated requests
+		token := wl.tokenMgr.GenerateToken(body.WorkerID)
 
 		c.JSON(http.StatusOK, gin.H{
 			"success": true,
@@ -213,7 +236,7 @@ func (h *Handler) RegisterHandler() gin.HandlerFunc {
 	}
 }
 
-func (h *Handler) UnregisterHandler() gin.HandlerFunc {
+func (wl *WorkerLifecycle) UnregisterHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var body struct {
 			WorkerID string `json:"worker_id"`
@@ -228,11 +251,11 @@ func (h *Handler) UnregisterHandler() gin.HandlerFunc {
 			c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "worker_id required"})
 			return
 		}
-		if !h.authorizeWorkerRequest(c, body.WorkerID) {
+		if !wl.authorizeWorkerRequest(c, body.WorkerID) {
 			return
 		}
 
-		_ = h.reg.UnregisterWorker(c.Request.Context(), body.WorkerID)
+		_ = wl.reg.UnregisterWorker(c.Request.Context(), body.WorkerID)
 
 		c.JSON(http.StatusOK, gin.H{
 			"success": true,
@@ -241,7 +264,7 @@ func (h *Handler) UnregisterHandler() gin.HandlerFunc {
 	}
 }
 
-func (h *Handler) WorkerHelloHandler() gin.HandlerFunc {
+func (wl *WorkerLifecycle) WorkerHelloHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var body struct {
 			WorkerID      string                 `json:"worker_id"`
@@ -263,7 +286,7 @@ func (h *Handler) WorkerHelloHandler() gin.HandlerFunc {
 			return
 		}
 
-		if h.reg.IsRevoked(body.WorkerID) {
+		if wl.reg.IsRevoked(body.WorkerID) {
 			c.JSON(http.StatusForbidden, gin.H{
 				"status": "banned",
 				"reason": "Worker revoked",
@@ -271,7 +294,7 @@ func (h *Handler) WorkerHelloHandler() gin.HandlerFunc {
 			return
 		}
 
-		token := h.tokenMgr.GenerateToken(body.WorkerID)
+		token := wl.tokenMgr.GenerateToken(body.WorkerID)
 
 		log.Printf("[REGISTER] Handshake worker: %s (%s) bundle=%s",
 			body.WorkerName,
@@ -286,3 +309,20 @@ func (h *Handler) WorkerHelloHandler() gin.HandlerFunc {
 		})
 	}
 }
+
+func (wl *WorkerLifecycle) GetCommandManager() *workersreg.CommandManager {
+	return wl.cmdMgr
+}
+
+func (wl *WorkerLifecycle) GetUpdateManager() *workersreg.UpdateManager {
+	return wl.updateMgr
+}
+
+func (wl *WorkerLifecycle) GetTokenManager() *workersreg.TokenManager {
+	return wl.tokenMgr
+}
+
+func (wl *WorkerLifecycle) Config() *config.Config {
+	return wl.cfg
+}
+

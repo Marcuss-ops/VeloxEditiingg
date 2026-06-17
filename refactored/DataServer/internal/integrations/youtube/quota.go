@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -17,8 +16,6 @@ import (
 	"golang.org/x/oauth2"
 	"google.golang.org/api/option"
 	ytanalytics "google.golang.org/api/youtubeanalytics/v2"
-
-	"velox-server/internal/config"
 )
 
 const (
@@ -33,6 +30,7 @@ const (
 // QuotaManager handles quota tracking and analytics for YouTube channels
 type QuotaManager struct {
 	service *Service
+	db      *sql.DB // Primary store connection (set via SetDB)
 	store   interface {
 		TrackQuotaUsage(units int) error
 		GetDailyQuotaUsage() (int, error)
@@ -44,6 +42,11 @@ func NewQuotaManager(s *Service) *QuotaManager {
 	return &QuotaManager{
 		service: s,
 	}
+}
+
+// SetDB sets the primary store database connection.
+func (qm *QuotaManager) SetDB(db *sql.DB) {
+	qm.db = db
 }
 
 // SetStore sets the store for quota tracking
@@ -87,7 +90,6 @@ func (qm *QuotaManager) GetQuotaUsage(ctx context.Context) map[string]interface{
 		"reset_time":          "midnight Pacific Time",
 	}
 }
-
 // GetAnalyticsService creates a YouTube Analytics API service for a channel
 func (qm *QuotaManager) GetAnalyticsService(ctx context.Context, channelID string) (*ytanalytics.Service, error) {
 	channel := qm.service.GetChannel(channelID)
@@ -207,22 +209,12 @@ func (qm *QuotaManager) UpdateAnalyticsCache(ctx context.Context, channelID stri
 		"daily_stats": dailyStats,
 	}
 
-	// Determine cache path and DB path
-	dataDir := config.GetDataDir()
-	if dataDir == "" {
-		// Default to relative path from working directory
-		dataDir = "data"
-	}
-
 	period := strconv.Itoa(days)
 
-	// 1. Update SQLite (primary for new Go dashboard)
-	dbPath := filepath.Join(dataDir, "velox.db")
-	db, err := sql.Open("sqlite3", dbPath)
-	if err == nil {
-		defer db.Close()
+	// 1. Update SQLite via primary store connection
+	if qm.db != nil {
 		jsonData, _ := json.Marshal(cacheEntry)
-		_, err = db.Exec("INSERT OR REPLACE INTO analytics_cache (cache_key, ts, data_json, migrated_at) VALUES (?, ?, ?, ?)",
+		_, err := qm.db.Exec("INSERT OR REPLACE INTO analytics_cache (cache_key, ts, data_json, migrated_at) VALUES (?, ?, ?, ?)",
 			period, float64(time.Now().Unix()), string(jsonData), time.Now().UTC().Format(time.RFC3339))
 		if err != nil {
 			log.Printf("[WARN] SQLite analytics update failed: %v", err)
@@ -236,7 +228,7 @@ func (qm *QuotaManager) UpdateAnalyticsCache(ctx context.Context, channelID stri
 			views := int64(ds["views"].(float64))
 			revenue := ds["revenue"].(float64)
 
-			_, err = db.Exec(
+			_, err = qm.db.Exec(
 				`INSERT INTO youtube_revenue_metrics (channel_id, date, estimated_revenue, currency, views)
 				 VALUES (?, ?, ?, ?, ?)
 				 ON CONFLICT(channel_id, date) DO UPDATE SET
@@ -249,6 +241,8 @@ func (qm *QuotaManager) UpdateAnalyticsCache(ctx context.Context, channelID stri
 			}
 		}
 		log.Printf("[OK] YouTube historical metrics saved to SQLite for channel %s", channelID)
+	} else {
+		return fmt.Errorf("quota: database connection not set — analytics not persisted")
 	}
 
 	return nil
@@ -325,17 +319,10 @@ func (qm *QuotaManager) UpdateVideoAnalyticsCache(ctx context.Context, channelID
 		}
 	}
 
-	// 2. Save to structured SQLite table
-	dataDir := config.GetDataDir()
-	if dataDir == "" {
-		dataDir = "data"
+	// 2. Save to structured SQLite table via primary store connection
+	if qm.db == nil {
+		return fmt.Errorf("quota: database connection not set")
 	}
-	dbPath := filepath.Join(dataDir, "velox.db")
-	db, err := sql.Open("sqlite3", dbPath)
-	if err != nil {
-		return err
-	}
-	defer db.Close()
 
 	today := time.Now().Format("2006-01-02")
 	for _, row := range rows {
@@ -353,19 +340,16 @@ func (qm *QuotaManager) UpdateVideoAnalyticsCache(ctx context.Context, channelID
 			thumbnail = m.Thumbnail
 		}
 
-		_, err = db.Exec(
+		_, err = qm.db.Exec(
 			`INSERT INTO youtube_video_metrics (video_id, channel_id, date, title, thumbnail_url, views, revenue)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)
-		 ON CONFLICT(video_id, date) DO UPDATE SET
-		   views=excluded.views,
-		   revenue=excluded.revenue,
-		   title=excluded.title,
-		   thumbnail_url=excluded.thumbnail_url`,
+			 VALUES (?, ?, ?, ?, ?, ?, ?)
+			 ON CONFLICT(video_id, date) DO UPDATE SET
+			   views=excluded.views,
+			   revenue=excluded.revenue,
+			   title=excluded.title,
+			   thumbnail_url=excluded.thumbnail_url`,
 			videoID, channelID, today, title, thumbnail, views, revenue,
 		)
-		if err != nil {
-			log.Printf("[WARN] Failed to save video metric for %s: %v", videoID, err)
-		}
 	}
 
 	return nil

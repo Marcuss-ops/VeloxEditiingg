@@ -147,7 +147,7 @@ func findRepoRootFrom(start string) string {
 
 // NewWorkerUpdateHandler creates a new worker update handler
 func NewWorkerUpdateHandler(cfg *config.Config, reg *workersreg.Registry, cmdMgr *workersreg.CommandManager, updateMgr *workersreg.UpdateManager, tokenMgr *workersreg.TokenManager, dataDir string) *WorkerUpdateHandler {
-	bundleDir := cfg.WorkerBundleDir
+	bundleDir := cfg.Workers.BundleDir
 	if bundleDir != "" {
 		if _, err := os.Stat(filepath.Join(bundleDir, "worker_code.zip")); err != nil {
 			bundleDir = ""
@@ -175,7 +175,7 @@ func NewWorkerUpdateHandler(cfg *config.Config, reg *workersreg.Registry, cmdMgr
 		tokenMgr:    tokenMgr,
 		dataDir:     dataDir,
 		bundleDir:   bundleDir,
-		codeVersion: cfg.CodeVersion,
+		codeVersion: cfg.Workers.CodeVersion,
 	}
 }
 

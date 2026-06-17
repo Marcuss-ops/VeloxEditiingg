@@ -34,7 +34,7 @@ func TestGenerateWithImages_EnqueuesSceneImageJob(t *testing.T) {
 	cfg := &config.Config{
 		DataDir:   tempDir,
 		VideosDir: filepath.Join(tempDir, "videos"),
-		DBDSN:     dbPath,
+		DBPath:    dbPath,
 	}
 
 	r := gin.New()

@@ -20,14 +20,9 @@ type DriveHandlers struct {
 
 // NewDriveHandlers creates Drive handlers (legacy compatibility).
 // driveSvc may be nil if Drive integration is not configured.
-func NewDriveHandlers(cfg *drive.ServiceConfig, driveSvc *drive.Service) (*DriveHandlers, error) {
+// sqliteStore must be the primary store (opened once at bootstrap).
+func NewDriveHandlers(cfg *drive.ServiceConfig, driveSvc *drive.Service, sqliteStore *store.SQLiteStore) (*DriveHandlers, error) {
 	dataDir := resolveDriveDataDir(cfg.TokensDir)
-	storePath := filepath.Join(dataDir, "velox.db")
-	sqliteStore, err := store.NewSQLiteStore(storePath)
-	if err != nil {
-		log.Printf("[WARN] Drive SQLite store init failed: %v", err)
-		sqliteStore = nil
-	}
 
 	InitDriveLinksCache(dataDir, sqliteStore)
 	driveTokensDir = cfg.TokensDir

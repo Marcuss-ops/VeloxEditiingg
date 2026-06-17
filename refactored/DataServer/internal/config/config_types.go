@@ -21,12 +21,7 @@ type RuntimeConfig struct {
 
 // DatabaseConfig holds database connection settings.
 type DatabaseConfig struct {
-	Driver          string
-	DSN             string
-	MaxOpenConns    int
-	MaxIdleConns    int
-	ConnMaxLifetime int
-	ConnMaxIdleTime int
+	DBPath string // Absolute path to SQLite database file (required)
 }
 
 // WorkersConfig holds worker management settings.
@@ -96,7 +91,7 @@ type RenderConfig struct {
 	RemoteEngineToken        string
 	RemoteEngineTimeoutMS    int
 	RemoteEngineRetries      int
-	RemoteEnginePollInterval int // seconds between pipeline status polls, default 30
+	RemoteEnginePollInterval int
 }
 
 // NVIDIAConfig holds NVIDIA AI settings.
@@ -107,36 +102,40 @@ type NVIDIAConfig struct {
 
 // Config is the top-level configuration.
 type Config struct {
-	MasterPort   int
-	StudioPort   int
-	StaticDir    string
-	VideosDir    string
+	MasterPort           int
+	StudioPort           int
+	TLSCertFile          string
+	TLSKeyFile           string
+	AllowLocalhostMaster bool
+
+	// Runtime
 	DataDir      string
 	RuntimeDir   string
+	VideosDir    string
+	StaticDir    string
 	JobQueueFile string
+	SecretsDir   string
 
+	// Database
+	DBPath string
+
+	// Workers
 	AllowedWorkers           string
 	ForceSingleWorker        string
 	AllowlistAllowRegistered bool
 	MaxJobAttempts           int
-	MasterServerURL          string
-	JobMasterURL             string
-	GradioAppURL             string
-	SPADir                   string
-	DarkEditorDir            string
-	DarkEditorProxyURL       string
 	WorkerBundleDir          string
+	WorkerHeartbeatTimeout   int
 	CodeVersion              string
 	VersionNumber            string
-	WorkerHeartbeatTimeout   int
+	ScriptDir                string
+	MasterURL                string
+	AllowedWorkerIPs         []string
 
-	DBDriver          string
-	DBDSN             string
-	DBMaxOpenConns    int
-	DBMaxIdleConns    int
-	DBConnMaxLifetime int
-	DBConnMaxIdleTime int
+	// Auth
+	AdminToken string
 
+	// S3
 	S3Endpoint        string
 	S3Region          string
 	S3Bucket          string
@@ -144,41 +143,45 @@ type Config struct {
 	S3SecretAccessKey string
 	S3UseSSL          bool
 
+	// Drive
+	DriveClientID       string
+	DriveClientSecret   string
+	DriveRedirectURI    string
+	DriveTokensDir      string
+	DriveCredentialsDir string
+
+	// YouTube
+	YouTubeAPIKey         string
+	YouTubeTokensDir      string
+	YouTubePostingPath    string
+	YouTubeCredentialsDir string
+	RemoteFallbackURL     string
+
+	// Ansible
+	PlaybookDir string
+
+	// Frontend
+	GradioAppURL       string
+	SPADir             string
+	DarkEditorDir      string
+	DarkEditorProxyURL string
+
+	// Render
 	RemoteEngineURL          string
 	RemoteEngineToken        string
 	RemoteEngineTimeoutMS    int
 	RemoteEngineRetries      int
 	RemoteEnginePollInterval int
 
-	DriveClientID     string
-	DriveClientSecret string
-	DriveRedirectURI  string
-	DriveTokensDir    string
-
+	// NVIDIA
 	NVIDIAAPIKey  string
 	NVIDIATextURL string
 
-	YouTubeAPIKey      string
-	YouTubeTokensDir   string
-	YouTubePostingPath string
-	RemoteFallbackURL  string
+	// Derived
+	MasterServerURL string
+	JobMasterURL    string
 
-	SecretsDir            string
-	DriveCredentialsDir   string
-	YouTubeCredentialsDir string
-
-	ScriptDir        string
-	MasterURL        string
-	AllowedWorkerIPs []string
-	AdminToken       string
-
-	PlaybookDir          string
-	AllowLocalhostMaster bool
-
-	TLSCertFile string
-	TLSKeyFile  string
-
-	// Sub-configs (populated alongside flat fields)
+	// Sub-configs
 	Server   ServerConfig
 	Runtime  RuntimeConfig
 	Database DatabaseConfig
@@ -190,4 +193,5 @@ type Config struct {
 	Ansible  AnsibleConfig
 	Frontend FrontendConfig
 	Render   RenderConfig
+	NVIDIA   NVIDIAConfig
 }

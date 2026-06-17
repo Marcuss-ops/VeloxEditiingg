@@ -4,7 +4,6 @@ package queue
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 
 	"velox-server/internal/store"
 )
@@ -230,20 +229,4 @@ func PersistJob(job *Job, dbStore *store.SQLiteStore) error {
 	return dbStore.UpsertJob(job.JobID, rawJSON)
 }
 
-// LoadActiveJobs loads only PENDING and PROCESSING jobs from SQLite into memory
-// This minimizes memory usage by not caching completed/historical jobs
-func LoadActiveJobs(dbStore *store.SQLiteStore) (map[string]*Job, error) {
-	activeJobs, err := dbStore.GetActiveJobs()
-	if err != nil {
-		return nil, err
-	}
 
-	result := make(map[string]*Job)
-	for id, m := range activeJobs {
-		job := MapToJob(m)
-		result[id] = job
-	}
-
-	log.Printf("[OK] Loaded %d active jobs from SQLite (PENDING/PROCESSING only)", len(result))
-	return result, nil
-}

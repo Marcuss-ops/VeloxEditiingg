@@ -225,7 +225,7 @@ func UploadChunk(cfg *config.Config) gin.HandlerFunc {
 
 // CompleteChunkedUpload assembles all chunks into the final file
 func CompleteChunkedUpload(cfg *config.Config, fileQ *queue.FileQueue) gin.HandlerFunc {
-	videosDir := cfg.VideosDir
+	videosDir := cfg.Runtime.VideosDir
 	if videosDir == "" {
 		videosDir = "./completed_videos"
 	}

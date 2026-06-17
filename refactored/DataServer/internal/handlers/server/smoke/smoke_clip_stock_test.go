@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -16,7 +17,10 @@ import (
 
 func TestCreateSmokeClipStock_Validation(t *testing.T) {
 	cfg := config.FromEnv()
-	db, err := store.NewSQLiteStore(cfg.DBDSN)
+	if cfg.DBPath == "" {
+		cfg.DBPath = filepath.Join(t.TempDir(), "velox.db")
+	}
+	db, err := store.NewSQLiteStore(cfg.DBPath)
 	if err != nil {
 		t.Skipf("SQLite unavailable: %v", err)
 	}
@@ -40,7 +44,10 @@ func TestCreateSmokeClipStock_Validation(t *testing.T) {
 
 func TestCreateSmokeClipStock_Enqueue(t *testing.T) {
 	cfg := config.FromEnv()
-	db, err := store.NewSQLiteStore(cfg.DBDSN)
+	if cfg.DBPath == "" {
+		cfg.DBPath = filepath.Join(t.TempDir(), "velox.db")
+	}
+	db, err := store.NewSQLiteStore(cfg.DBPath)
 	if err != nil {
 		t.Skipf("SQLite unavailable: %v", err)
 	}

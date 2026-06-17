@@ -53,7 +53,7 @@ func MasterCodeVersion(cfg *config.Config) gin.HandlerFunc {
 		c.JSON(http.StatusOK, gin.H{
 			"ok":             true,
 			"server":         "velox-server",
-			"version_number": cfg.VersionNumber,
+			"version_number": cfg.Workers.VersionNumber,
 			"timestamp":      now,
 		})
 	}

@@ -18,12 +18,9 @@ func TestUpdateJobFieldsClearsFailureStateOnComplete(t *testing.T) {
 	}
 	defer dbStore.Close()
 
-	q := &FileQueue{
-		dbStore:    dbStore,
-		activeJobs: map[string]*Job{},
-		maxRetries: 3,
-	}
+	ts := NewTransitionService(dbStore)
 
+	// Submit a job with stale failure state
 	job := &Job{
 		JobID:        "job-complete-clears-error",
 		Status:       StatusPending,
@@ -41,22 +38,21 @@ func TestUpdateJobFieldsClearsFailureStateOnComplete(t *testing.T) {
 			Message:   "Job created",
 		}},
 	}
-	q.activeJobs[job.JobID] = job
-
 	if err := PersistJob(job, dbStore); err != nil {
 		t.Fatalf("persist initial job: %v", err)
 	}
 
-	// Must go through PROCESSING first (PENDING→COMPLETED is not a valid transition)
-	if err := UpdateJobFields(ctx, job.JobID, map[string]interface{}{
+	// Must go through PROCESSING first
+	if err := ts.UpdateJobFields(ctx, job.JobID, map[string]interface{}{
 		"status": "PROCESSING",
-	}, dbStore, q.activeJobs); err != nil {
+	}); err != nil {
 		t.Fatalf("update job fields to processing: %v", err)
 	}
 
-	if err := UpdateJobFields(ctx, job.JobID, map[string]interface{}{
+	// Then complete
+	if err := ts.UpdateJobFields(ctx, job.JobID, map[string]interface{}{
 		"status": "COMPLETED",
-	}, dbStore, q.activeJobs); err != nil {
+	}); err != nil {
 		t.Fatalf("update job fields to completed: %v", err)
 	}
 
@@ -89,12 +85,9 @@ func TestCompleteJobClearsFailureState(t *testing.T) {
 	}
 	defer dbStore.Close()
 
-	q := &FileQueue{
-		dbStore:    dbStore,
-		activeJobs: map[string]*Job{},
-		maxRetries: 3,
-	}
+	ts := NewTransitionService(dbStore)
 
+	// Persist a processing job with stale failure state
 	job := &Job{
 		JobID:        "job-complete-clears-error-2",
 		Status:       StatusProcessing,
@@ -113,13 +106,11 @@ func TestCompleteJobClearsFailureState(t *testing.T) {
 			Message:   "Job started",
 		}},
 	}
-	q.activeJobs[job.JobID] = job
-
 	if err := PersistJob(job, dbStore); err != nil {
 		t.Fatalf("persist initial job: %v", err)
 	}
 
-	if err := q.CompleteJob(ctx, job.JobID); err != nil {
+	if err := ts.CompleteJob(ctx, job.JobID); err != nil {
 		t.Fatalf("complete job: %v", err)
 	}
 

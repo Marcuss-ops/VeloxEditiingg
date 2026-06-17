@@ -19,44 +19,82 @@ type DataLayerAuditResult struct {
 	CheckedAt string
 }
 
-// DataLayerAuditor validates data layer structure.
+// DataLayerAuditor validates data layer structure and detects legacy files.
 type DataLayerAuditor struct {
-	dataDir    string
-	secretsDir string
+	dataDir       string
+	secretsDir    string
+	dbPath        string
+	allowedLegacy map[string]bool // Explicitly allowed legacy files
 }
 
 // NewDataLayerAuditor creates a new data layer auditor.
-func NewDataLayerAuditor(dataDir, secretsDir string) *DataLayerAuditor {
+func NewDataLayerAuditor(dataDir, secretsDir, dbPath string) *DataLayerAuditor {
 	return &DataLayerAuditor{
-		dataDir:    dataDir,
-		secretsDir: secretsDir,
+		dataDir:       dataDir,
+		secretsDir:    secretsDir,
+		dbPath:        dbPath,
+		allowedLegacy: make(map[string]bool),
 	}
 }
 
 // Audit performs a complete data layer audit.
 func (a *DataLayerAuditor) Audit() *DataLayerAuditResult {
 	result := &DataLayerAuditResult{
-		Passed:   true,
-		Info:     make([]string, 0),
-		Errors:   make([]string, 0),
+		Passed: true,
+		Info:   make([]string, 0),
+		Errors: make([]string, 0),
 		Warnings: make([]string, 0),
-		DataDir:  a.dataDir,
+		DataDir: a.dataDir,
 	}
 
+	// Check for legacy files that should not exist
+	a.checkLegacyFiles(result)
+	
 	// Check for duplicate source of truth (directory naming inconsistencies)
 	a.checkDuplicateSources(result)
-
+	
 	// Check for inconsistent naming
 	a.checkNamingConsistency(result)
-
+	
 	// Check primary files exist
 	a.checkPrimaryFiles(result)
-
+	
 	// Check database integrity
 	a.checkDatabase(result)
 
 	result.Passed = len(result.Errors) == 0
 	return result
+}
+
+// checkLegacyFiles verifies that known legacy files are not present.
+func (a *DataLayerAuditor) checkLegacyFiles(result *DataLayerAuditResult) {
+	legacyFiles := []string{
+		"youtube/youtube_manager.json",
+		"youtube/groups.json",
+		"youtube/channels/channels.json",
+		"youtube/GroupYoutubeManager/ChannelsSaved.json",
+		"youtube/group",
+		"drive/Credentials",
+		"ansible/ansible_runs.json",
+		"job_queue.json",
+		"job_queue_recovered.json",
+		"jobs_queue.json",
+		"video_uploads.db",
+		"worker_downloads/bundle_manifest.json",
+		"analytics/feed_cache.json",
+		"youtube/history/upload_history.json",
+		"youtube/youtube_api_cache.json",
+		"drive/drive_links.json",
+		"drive/drive_links.yaml",
+		"drive/drive_links.yml",
+	}
+
+	for _, legacy := range legacyFiles {
+		path := filepath.Join(a.dataDir, legacy)
+		if a.fileExists(path) && !a.allowedLegacy[legacy] {
+			result.Errors = append(result.Errors, fmt.Sprintf("Legacy file detected: %s", legacy))
+		}
+	}
 }
 
 // checkDuplicateSources detects multiple sources of truth for the same domain.
@@ -100,12 +138,19 @@ func (a *DataLayerAuditor) checkNamingConsistency(result *DataLayerAuditResult) 
 
 // checkPrimaryFiles verifies that primary source of truth files exist.
 func (a *DataLayerAuditor) checkPrimaryFiles(result *DataLayerAuditResult) {
+	// Verify the configured DB path exists
+	if a.dbPath != "" {
+		if !a.fileExists(a.dbPath) {
+			result.Errors = append(result.Errors, fmt.Sprintf("Database not found at VELOX_DB_PATH: %s", a.dbPath))
+		} else {
+			result.Info = append(result.Info, fmt.Sprintf("Database OK: %s", a.dbPath))
+		}
+	}
+
 	primaryFiles := []struct {
 		path     string
 		required bool
 	}{
-		{"velox.db", true}, // SQLite is now the primary store
-		// ansible_runs.json is no longer a primary source — SQLite only
 		{"bundle/manifest_v2.json", false}, // Optional (generated)
 	}
 
@@ -140,23 +185,19 @@ func (a *DataLayerAuditor) checkPrimaryFiles(result *DataLayerAuditResult) {
 
 // checkDatabase verifies SQLite database integrity.
 func (a *DataLayerAuditor) checkDatabase(result *DataLayerAuditResult) {
-	dbPath := filepath.Join(a.dataDir, "velox.db")
-	if !a.fileExists(dbPath) {
-		result.Warnings = append(result.Warnings, "SQLite database not found: velox.db")
+	// Database existence is checked via the configured path in checkPrimaryFiles.
+	// No additional duplicate checks needed since VELOX_DB_PATH is the single source of truth.
+	if a.dbPath == "" {
+		result.Warnings = append(result.Warnings, "VELOX_DB_PATH not configured")
 		return
 	}
 
-	// Check for duplicate velox.db files
-	paths := []string{
-		filepath.Join(a.dataDir, "worker_runtime", "velox.db"),
-		filepath.Join(a.dataDir, "..", "data", "velox.db"),
+	info, err := os.Stat(a.dbPath)
+	if err != nil {
+		result.Warnings = append(result.Warnings, fmt.Sprintf("Database not accessible: %s (%v)", a.dbPath, err))
+		return
 	}
-
-	for _, p := range paths {
-		if a.fileExists(p) {
-			result.Warnings = append(result.Warnings, fmt.Sprintf("Duplicate velox.db found: %s", p))
-		}
-	}
+	result.Info = append(result.Info, fmt.Sprintf("Database size: %d bytes", info.Size()))
 }
 
 // fileExists checks if a file exists.
@@ -175,6 +216,11 @@ func (a *DataLayerAuditor) dirExists(path string) bool {
 		return false
 	}
 	return info.IsDir()
+}
+
+// AllowLegacy explicitly allows a legacy file (for migration periods).
+func (a *DataLayerAuditor) AllowLegacy(path string) {
+	a.allowedLegacy[path] = true
 }
 
 // FailOnError returns an error if audit fails, nil otherwise.
@@ -201,26 +247,26 @@ func (r *DataLayerAuditResult) String() string {
 	} else {
 		sb.WriteString("[ERROR] Data Layer Audit FAILED\n")
 	}
-
+	
 	sb.WriteString(fmt.Sprintf("DataDir: %s\n", r.DataDir))
-
+	
 	if len(r.Errors) > 0 {
 		sb.WriteString(fmt.Sprintf("Errors: %d\n", len(r.Errors)))
 		for _, e := range r.Errors {
 			sb.WriteString(fmt.Sprintf("  - %s\n", e))
 		}
 	}
-
+	
 	if len(r.Warnings) > 0 {
 		sb.WriteString(fmt.Sprintf("Warnings: %d\n", len(r.Warnings)))
 		for _, w := range r.Warnings {
 			sb.WriteString(fmt.Sprintf("  - %s\n", w))
 		}
 	}
-
+	
 	if len(r.Info) > 0 {
 		sb.WriteString(fmt.Sprintf("Info: %d items\n", len(r.Info)))
 	}
-
+	
 	return sb.String()
 }

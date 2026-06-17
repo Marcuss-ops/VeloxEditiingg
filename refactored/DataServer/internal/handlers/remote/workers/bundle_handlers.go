@@ -82,9 +82,10 @@ func (h *WorkerUpdateHandler) GetBundleFilesHandler() gin.HandlerFunc {
 				if err != nil || rel == ".." || filepath.IsAbs(rel) {
 					continue
 				}
-				if rel == "." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-					continue
-				}
+			}
+
+			if searchPath != "" && !filepath.HasPrefix(f.Name, searchPath) {
+				continue
 			}
 
 			results = append(results, gin.H{
@@ -183,18 +184,18 @@ func (h *WorkerUpdateHandler) GetBundleManifestHandler() gin.HandlerFunc {
 		actualSHA := computeFileSHA256(bundlePath)
 
 		manifest := gin.H{
-			"version":          h.cfg.VersionNumber,
-			"code_version":     h.codeVersion,
+			"version":        h.cfg.Workers.VersionNumber,
+			"code_version":   h.codeVersion,
 			"protocol_version": "2026-06-worker-v1",
-			"platform":         platform,
-			"arch":             arch,
-			"filename":         filepath.Base(bundlePath),
-			"url":              fmt.Sprintf("/api/worker/bundle?platform=%s&arch=%s", platform, arch),
-			"sha256":           actualSHA,
-			"size":             info.Size(),
-			"size_formatted":   formatSize(info.Size()),
-			"updated_at":       info.ModTime().UTC().Format(time.RFC3339),
-			"created_at":       info.ModTime().UTC().Format(time.RFC3339),
+			"platform":       platform,
+			"arch":           arch,
+			"filename":       filepath.Base(bundlePath),
+			"url":            fmt.Sprintf("/api/worker/bundle?platform=%s&arch=%s", platform, arch),
+			"sha256":         actualSHA,
+			"size":           info.Size(),
+			"size_formatted": formatSize(info.Size()),
+			"updated_at":     info.ModTime().UTC().Format(time.RFC3339),
+			"created_at":     info.ModTime().UTC().Format(time.RFC3339),
 		}
 
 		if insp, err := inspectBundleZip(bundlePath); err == nil {

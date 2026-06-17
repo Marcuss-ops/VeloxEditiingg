@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -41,7 +42,10 @@ func TestBuildSingleJobSetsJobRunID(t *testing.T) {
 
 func TestCreateJobHandlerAllowsHealthCheckSmokeJob(t *testing.T) {
 	cfg := config.FromEnv()
-	db, err := store.NewSQLiteStore(cfg.DBDSN)
+	if cfg.DBPath == "" {
+		cfg.DBPath = filepath.Join(t.TempDir(), "velox.db")
+	}
+	db, err := store.NewSQLiteStore(cfg.DBPath)
 	if err != nil {
 		t.Skipf("SQLite unavailable: %v", err)
 	}
