@@ -34,7 +34,7 @@ func setupV2Test(t *testing.T) (*gin.Engine, *queue.FileQueue, *store.SQLiteStor
 	reg := workers.New(db)
 	svc := jobservice.NewService(cfg, q, store.NewSQLiteJobsRepository(db), nil, reg)
 
-	jobAPI := NewJobAPI(cfg, q, workers.NewTokenManager(), svc, db)
+	jobAPI := NewJobAPI(cfg, q, workers.NewTokenManager(db), svc, db)
 
 	r := gin.New()
 	RegisterV2JobRoutes(r.Group("/api/v1"), cfg, q, db, svc)

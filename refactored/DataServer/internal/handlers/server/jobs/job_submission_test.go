@@ -42,14 +42,14 @@ func TestBuildSingleJobSetsJobRunID(t *testing.T) {
 
 func TestCreateJobHandlerAllowsHealthCheckSmokeJob(t *testing.T) {
 	cfg := config.FromEnv()
-	if cfg.DBPath == "" {
-		cfg.DBPath = filepath.Join(t.TempDir(), "velox.db")
+	if cfg.Database.DBPath == "" {
+		cfg.Database.DBPath = filepath.Join(t.TempDir(), "velox.db")
 	}
-	db, err := store.NewSQLiteStore(cfg.DBPath)
+	db, err := store.NewSQLiteStore(cfg.Database.DBPath)
 	if err != nil {
 		t.Skipf("SQLite unavailable: %v", err)
 	}
-	q, err := queue.NewFileQueue(&queue.FileQueueConfig{MaxRetries: cfg.MaxJobAttempts, DBStore: db})
+	q, err := queue.NewFileQueue(&queue.FileQueueConfig{MaxRetries: cfg.Workers.MaxJobAttempts, DBStore: db})
 	if err != nil {
 		t.Skipf("File queue unavailable: %v", err)
 	}
