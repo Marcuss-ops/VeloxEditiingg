@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"velox-shared/controltransport"
 	"velox-worker-agent/pkg/api"
 	"velox-worker-agent/pkg/config"
 	"velox-worker-agent/pkg/logger"
@@ -71,7 +72,8 @@ type ExitFunc func(int)
 // Worker represents a Velox worker agent.
 type Worker struct {
 	config    *config.WorkerConfig
-	apiClient *api.Client
+	apiClient *api.Client          // Retained for data-plane operations (upload, asset download)
+	transport controltransport.ControlTransport // Control-plane communication
 	logger    *logger.Logger
 
 	// Status management — error state only; busy/idle derived from activeJobs

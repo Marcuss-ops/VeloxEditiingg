@@ -4,8 +4,12 @@ package config
 type ServerConfig struct {
 	Port           int
 	StudioPort     int
+	GRPCPort       int    // gRPC port for worker control stream (0 = disabled)
 	TLSCertFile    string
 	TLSKeyFile     string
+	GRPCTLSCertFile string // gRPC server certificate (PEM). Required when GRPCPort > 0 with mTLS.
+	GRPCTLSKeyFile  string // gRPC server private key (PEM)
+	GRPCTLSCAFile   string // CA cert for verifying client certificates (mTLS). Empty = no client auth.
 	AllowLocalhost bool
 }
 

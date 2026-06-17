@@ -30,6 +30,39 @@ type WorkerConfig struct {
 	PrometheusPort          int `json:"prometheus_port"`            // Prometheus metrics port (default: 9090, 0=disabled)
 	HealthPort              int `json:"health_port"`                // Health HTTP port (default: 8081, 0=disabled)
 
+	// ControlTransport selects the transport mechanism for worker↔master communication.
+	// Values: "polling" (HTTP polling, default), "grpc" (gRPC bidirectional stream).
+	// When "grpc", set ControlGRPCURL to the master's gRPC endpoint.
+	ControlTransport string `json:"control_transport,omitempty"`
+
+	// ControlGRPCURL is the gRPC endpoint when control_transport is "grpc".
+	// Example: "master.example.com:8443"
+	ControlGRPCURL string `json:"control_grpc_url,omitempty"`
+
+	// FallbackToHTTPPolling enables automatic fallback to HTTP polling when gRPC
+	// connection fails. Only relevant when control_transport = "grpc".
+	// Default: true
+	FallbackToHTTPPolling *bool `json:"fallback_to_http_polling,omitempty"`
+
+	// DisableHTTPPolling removes HTTP polling loops entirely. When true, the
+	// PollingHTTPTransport only uses Send() (heartbeat, lease, results) without
+	// spawning background poll goroutines. This is Phase 6 — gRPC stream delivers
+	// all master→worker messages.
+	// Default: false (polling goroutines run for backward compat)
+	DisableHTTPPolling bool `json:"disable_http_polling,omitempty"`
+
+	// mTLS configuration for gRPC transport (Phase 7).
+	// TLSCertFile is the path to the worker's client certificate (PEM).
+	// If empty, insecure transport is used.
+	TLSCertFile string `json:"tls_cert_file,omitempty"`
+
+	// TLSKeyFile is the path to the worker's private key (PEM).
+	TLSKeyFile string `json:"tls_key_file,omitempty"`
+
+	// TLSCAFile is the path to the CA certificate that signed the server's cert.
+	// Required to verify the server's identity.
+	TLSCAFile string `json:"tls_ca_file,omitempty"`
+
 	// WorkerSecret is the pre-shared secret used to derive the persistent credential hash.
 	// Set via VELOX_WORKER_SECRET env var. Combined with WorkerID to produce SHA-256 credential.
 	WorkerSecret string `json:"-"`
@@ -139,6 +172,16 @@ func (c *WorkerConfig) applyDefaults() {
 		v := true
 		c.UseV2Endpoints = &v
 	}
+	if c.FallbackToHTTPPolling == nil {
+		v := true
+		c.FallbackToHTTPPolling = &v
+	}
+	if c.ControlTransport == "" {
+		c.ControlTransport = "polling"
+	}
+	if c.CommandPollIntervalSecs <= 0 {
+		c.CommandPollIntervalSecs = 30
+	}
 }
 
 // Validate checks that all required configuration fields are set.
@@ -172,6 +215,15 @@ func (c *WorkerConfig) Validate() error {
 	}
 	if !validLogLevels[c.LogLevel] {
 		errs = append(errs, fmt.Sprintf("invalid log_level: %s (valid: debug, info, warn, error)", c.LogLevel))
+	}
+
+	// Validate transport settings
+	validTransports := map[string]bool{"polling": true, "grpc": true, "": true}
+	if !validTransports[c.ControlTransport] {
+		errs = append(errs, fmt.Sprintf("invalid control_transport: %s (valid: polling, grpc)", c.ControlTransport))
+	}
+	if c.ControlTransport == "grpc" && c.ControlGRPCURL == "" {
+		errs = append(errs, "control_grpc_url is required when control_transport is grpc")
 	}
 
 	if len(errs) > 0 {

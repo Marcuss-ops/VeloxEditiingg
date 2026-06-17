@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -15,6 +16,7 @@ import (
 	"velox-server/internal/app"
 	"velox-server/internal/audit"
 	"velox-server/internal/config"
+	"velox-server/internal/grpcserver"
 	"velox-server/internal/handlers/server/api"
 	"velox-server/internal/handlers/server/pipeline"
 	workersapi "velox-server/internal/handlers/remote/workers"
@@ -29,6 +31,8 @@ import (
 	"velox-server/internal/queue"
 	"velox-server/internal/store"
 	workersreg "velox-server/internal/workers"
+
+	"google.golang.org/grpc"
 )
 
 type serverPaths struct {
@@ -177,6 +181,33 @@ func runServer(cfg *config.Config) error {
 
 	log.Printf("[SERVER] Velox master listening on %s", addr)
 
+	// Start gRPC server for worker control stream (Phase 3+)
+	// Phase 4: Shadow mode — notifies workers about available jobs via stream
+	// Phase 5: Push mode — sends JobOffer directly, workers respond JobAccepted
+	var grpcSrv *grpcServer // Use interface for graceful shutdown
+	if cfg.Server.GRPCPort > 0 {
+		transitionSvc := queue.NewTransitionService(deps.sqliteStore)
+		cmdMgr := workersreg.NewCommandManager(deps.sqliteStore)
+		tokenMgr := workersreg.NewTokenManager(deps.sqliteStore)
+
+		grpcHandlerConfig := &grpcserver.HandlerConfig{
+			ShadowMode: true, // Phase 4: notify workers, still claim via HTTP
+		}
+		grpcHandler := grpcserver.NewHandler(
+			deps.reg, cmdMgr, tokenMgr, transitionSvc, deps.sqliteStore, grpcHandlerConfig,
+		)
+
+		grpcServer, lis, err := grpcserver.StartGRPCServer(
+			cfg.Server.GRPCPort, grpcHandler,
+			cfg.Server.GRPCTLSCertFile, cfg.Server.GRPCTLSKeyFile, cfg.Server.GRPCTLSCAFile,
+		)
+		if err != nil {
+			log.Printf("[SERVER] gRPC server failed to start: %v", err)
+		} else if grpcServer != nil {
+			grpcSrv = &grpcServerWrapper{Server: grpcServer, Listener: lis}
+		}
+	}
+
 	// Auto-generate manifest_v2.json at startup
 	if deps.workerUpdateHandler != nil {
 		go func() {
@@ -239,6 +270,13 @@ func runServer(cfg *config.Config) error {
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+
+	// Shutdown gRPC server first
+	if grpcSrv != nil {
+		grpcSrv.GracefulStop()
+		log.Println("[SERVER] gRPC server stopped")
+	}
+
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		log.Printf("[SERVER] Graceful shutdown failed: %v", err)
 		return err
@@ -270,6 +308,16 @@ func (a *orchestratorWorkerRegistry) GetStaleWorkers(ctx context.Context, timeou
 		out[i] = queue.WorkerInfoStub{WorkerID: w.WorkerID}
 	}
 	return out
+}
+
+// grpcServer abstracts the gRPC server lifecycle for graceful shutdown.
+type grpcServer interface {
+	GracefulStop()
+}
+
+type grpcServerWrapper struct {
+	*grpc.Server
+	Listener net.Listener
 }
 
 func runDataLayerAudit(cfg *config.Config) error {
