@@ -192,7 +192,7 @@ func runServer(cfg *config.Config) error {
 	// Start gRPC server for worker control stream (Phase 3+)
 	// Phase 4: Shadow mode — notifies workers about available jobs via stream
 	// Phase 5: Push mode — sends JobOffer directly, workers respond JobAccepted
-	var grpcSrv *grpcServer // Use interface for graceful shutdown
+	var grpcSrv grpcServer // Use interface for graceful shutdown
 	if cfg.Server.GRPCPort > 0 {
 		transitionSvc := queue.NewTransitionService(deps.sqliteStore)
 		cmdMgr := workersreg.NewCommandManager(deps.sqliteStore)

@@ -208,11 +208,11 @@ func (h *PersistenceHandler) dualDBStatus() gin.H {
 		live = canonicalAbs(h.sqliteStore.Path())
 	}
 	candidates := []string{}
-	if h.cfg != nil && h.cfg.DataDir != "" {
+	if h.cfg != nil && h.cfg.Runtime.DataDir != "" {
 		candidates = append(candidates,
-			filepath.Join(h.cfg.DataDir, "..", "data", "velox.db"),
-			filepath.Join(h.cfg.DataDir, "worker_runtime", "velox.db"),
-			filepath.Join(h.cfg.DataDir, ".velox", "data", "velox.db"),
+			filepath.Join(h.cfg.Runtime.DataDir, "..", "data", "velox.db"),
+			filepath.Join(h.cfg.Runtime.DataDir, "worker_runtime", "velox.db"),
+			filepath.Join(h.cfg.Runtime.DataDir, ".velox", "data", "velox.db"),
 		)
 	}
 	dups := []string{}

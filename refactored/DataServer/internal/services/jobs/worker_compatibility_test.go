@@ -9,7 +9,7 @@ import (
 )
 
 func TestCheckWorkerCompatibility_ValidWorker(t *testing.T) {
-	s := &Service{cfg: &config.Config{VersionNumber: "v1.0.6"}}
+	s := &Service{cfg: &config.Config{Workers: config.WorkersConfig{VersionNumber: "v1.0.6"}}}
 	worker := &workers.WorkerInfo{
 		WorkerID:        "test-worker",
 		ProtocolVersion: workers.DefaultWorkerProtocolVersion,

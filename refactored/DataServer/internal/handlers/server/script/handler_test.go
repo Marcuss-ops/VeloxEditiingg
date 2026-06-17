@@ -32,9 +32,13 @@ func TestGenerateWithImages_EnqueuesSceneImageJob(t *testing.T) {
 	}
 
 	cfg := &config.Config{
-		DataDir:   tempDir,
-		VideosDir: filepath.Join(tempDir, "videos"),
-		DBPath:    dbPath,
+		Runtime: config.RuntimeConfig{
+			DataDir:   tempDir,
+			VideosDir: filepath.Join(tempDir, "videos"),
+		},
+		Database: config.DatabaseConfig{
+			DBPath: dbPath,
+		},
 	}
 
 	r := gin.New()
@@ -180,12 +184,18 @@ func TestGenerateWithImages_UsesCreatorStageWhenConfigured(t *testing.T) {
 	defer mockCreator.Close()
 
 	cfg := &config.Config{
-		DataDir:               tempDir,
-		VideosDir:             filepath.Join(tempDir, "videos"),
-		DBDSN:                 dbPath,
-		RemoteEngineURL:       mockCreator.URL,
-		RemoteEngineTimeoutMS: 5000,
-		RemoteEngineRetries:   1,
+		Runtime: config.RuntimeConfig{
+			DataDir:   tempDir,
+			VideosDir: filepath.Join(tempDir, "videos"),
+		},
+		Database: config.DatabaseConfig{
+			DBPath: dbPath,
+		},
+		Render: config.RenderConfig{
+			RemoteEngineURL:       mockCreator.URL,
+			RemoteEngineTimeoutMS: 5000,
+			RemoteEngineRetries:   1,
+		},
 	}
 
 	r := gin.New()
@@ -261,12 +271,18 @@ func TestGenerateWithImages_BypassesCreatorForRenderReadyPayload(t *testing.T) {
 	defer mockCreator.Close()
 
 	cfg := &config.Config{
-		DataDir:               tempDir,
-		VideosDir:             filepath.Join(tempDir, "videos"),
-		DBDSN:                 dbPath,
-		RemoteEngineURL:       mockCreator.URL,
-		RemoteEngineTimeoutMS: 5000,
-		RemoteEngineRetries:   1,
+		Runtime: config.RuntimeConfig{
+			DataDir:   tempDir,
+			VideosDir: filepath.Join(tempDir, "videos"),
+		},
+		Database: config.DatabaseConfig{
+			DBPath: dbPath,
+		},
+		Render: config.RenderConfig{
+			RemoteEngineURL:       mockCreator.URL,
+			RemoteEngineTimeoutMS: 5000,
+			RemoteEngineRetries:   1,
+		},
 	}
 
 	r := gin.New()

@@ -114,8 +114,10 @@ func TestUploadCompletedVideo_AutoUploadsToYouTubeAndDrive(t *testing.T) {
 	}
 
 	cfg := &config.Config{
-		DataDir:   tempDir,
-		VideosDir: filepath.Join(tempDir, "completed_videos"),
+		Runtime: config.RuntimeConfig{
+			DataDir:   tempDir,
+			VideosDir: filepath.Join(tempDir, "completed_videos"),
+		},
 	}
 
 	jobID := "upload-e2e-1"
@@ -290,7 +292,7 @@ func TestMaybeAutoUploadDrive_FallsBackToJobLanguage(t *testing.T) {
 	}
 
 	driveSvc := &fakeDriveAutoUploader{}
-	maybeAutoUploadDrive(q, driveSvc, tempDir, jobID, map[string]interface{}{}, videoPath)
+	maybeAutoUploadDrive(q, driveSvc, tempDir, jobID, map[string]interface{}{}, videoPath, nil)
 
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
