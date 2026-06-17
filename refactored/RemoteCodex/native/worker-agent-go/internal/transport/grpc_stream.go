@@ -41,6 +41,8 @@ type GRPCStreamTransport struct {
 	closeCh     chan struct{}
 	closeOnce   sync.Once
 	recvCh      chan controltransport.ControlMessage
+	errCh       chan error
+	errCloseOnce sync.Once
 	recvOnce    sync.Once
 	msgSeq      int64
 	sendMu      sync.Mutex
@@ -54,6 +56,7 @@ func NewGRPCStreamTransport(grpcURL, workerID string) *GRPCStreamTransport {
 		state:    stateDisconnected,
 		closeCh:  make(chan struct{}),
 		recvCh:   make(chan controltransport.ControlMessage, 64),
+		errCh:    make(chan error, 1),
 	}
 }
 
@@ -163,18 +166,18 @@ func (t *GRPCStreamTransport) Connect(ctx context.Context, hello controltranspor
 	return nil
 }
 
-// Receive starts a background goroutine that reads from the gRPC stream and
-// pushes messages onto the returned channel. The channel is closed when the
-// stream is closed.
-func (t *GRPCStreamTransport) Receive(ctx context.Context) (<-chan controltransport.ControlMessage, error) {
+// Receive returns the message channel (master→worker) and an error channel.
+// The message channel is closed when the transport is closed or the stream fails.
+// The error channel receives the terminal error (if any) and is then closed.
+func (t *GRPCStreamTransport) Receive(ctx context.Context) (<-chan controltransport.ControlMessage, <-chan error, error) {
 	t.mu.Lock()
 	if t.closed {
 		t.mu.Unlock()
-		return nil, controltransport.ErrTransportClosed
+		return nil, nil, controltransport.ErrTransportClosed
 	}
 	if t.stream == nil {
 		t.mu.Unlock()
-		return nil, controltransport.ErrNotConnected
+		return nil, nil, controltransport.ErrNotConnected
 	}
 	t.mu.Unlock()
 
@@ -182,12 +185,18 @@ func (t *GRPCStreamTransport) Receive(ctx context.Context) (<-chan controltransp
 		go t.recvLoop()
 	})
 
-	return t.recvCh, nil
+	return t.recvCh, t.errCh, nil
 }
 
 // recvLoop reads messages from the gRPC stream and pushes them to recvCh.
-// Close() handles closing recvCh after signaling closeCh to stop this loop.
+// When the stream fails, it closes errCh to signal the worker's runSession(),
+// which then cancels the session context, causing receiveLoop to exit via ctx.Done().
+// Close() handles closing recvCh safely after all goroutines have stopped.
 func (t *GRPCStreamTransport) recvLoop() {
+	defer t.errCloseOnce.Do(func() {
+		close(t.errCh)
+	})
+
 	for {
 		pb, err := t.stream.Recv()
 		if err != nil {
@@ -258,10 +267,13 @@ func (t *GRPCStreamTransport) Close() error {
 		_ = stream.CloseSend()
 	}
 
-	// Close receive channel safely: all goroutines are signaled via closeCh.
+	// Close receive channel and error channel safely
 	if t.recvCh != nil {
 		close(t.recvCh)
 	}
+	t.errCloseOnce.Do(func() {
+		close(t.errCh)
+	})
 
 	if conn != nil {
 		_ = conn.Close()

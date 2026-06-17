@@ -10,6 +10,15 @@ DataServer/data/secrets/
 DataServer/secrets/
 DataServer/data/drive/credentials/
 DataServer/data/drive/tokens/
+certs/
+*.key
+*.pem
+*.p12
+*.pfx
+*.csr
+*.srl
+!**/testdata/**/*.pem
+!**/testdata/**/*.key
 
 # ── Runtime directories ──────────────────────────────────────
 DataServer/data/analytics/

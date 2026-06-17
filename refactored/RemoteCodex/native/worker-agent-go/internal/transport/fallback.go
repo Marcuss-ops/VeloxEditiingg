@@ -65,12 +65,12 @@ func (f *FallbackTransport) Connect(ctx context.Context, hello controltransport.
 }
 
 // Receive delegates to the active transport.
-func (f *FallbackTransport) Receive(ctx context.Context) (<-chan controltransport.ControlMessage, error) {
+func (f *FallbackTransport) Receive(ctx context.Context) (<-chan controltransport.ControlMessage, <-chan error, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
 	if !f.connected || f.active == nil {
-		return nil, controltransport.ErrNotConnected
+		return nil, nil, controltransport.ErrNotConnected
 	}
 	return f.active.Receive(ctx)
 }

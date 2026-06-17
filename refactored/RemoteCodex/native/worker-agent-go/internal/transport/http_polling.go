@@ -38,6 +38,7 @@ type PollingHTTPTransport struct {
 	closed     bool
 	closeCh    chan struct{}
 	recvCh     chan controltransport.ControlMessage
+	errCh      chan error
 	msgSeq     int64
 	pollCtx    context.Context
 	pollCancel context.CancelFunc
@@ -95,19 +96,19 @@ func (t *PollingHTTPTransport) Connect(ctx context.Context, hello controltranspo
 	return nil
 }
 
-// Receive starts background polling goroutines for jobs and commands and returns
-// a channel that yields ControlMessage events. The channel is closed when the
-// transport is closed or an unrecoverable error occurs.
-func (t *PollingHTTPTransport) Receive(ctx context.Context) (<-chan controltransport.ControlMessage, error) {
+// Receive returns the message channel and an error channel (HTTP poll fatal errors).
+// The message channel is closed when the transport is closed.
+func (t *PollingHTTPTransport) Receive(ctx context.Context) (<-chan controltransport.ControlMessage, <-chan error, error) {
 	t.mu.Lock()
 	if t.closed {
 		t.mu.Unlock()
-		return nil, controltransport.ErrTransportClosed
+		return nil, nil, controltransport.ErrTransportClosed
 	}
 	t.mu.Unlock()
 
 	t.recvOnce.Do(func() {
 		t.recvCh = make(chan controltransport.ControlMessage, 64)
+		t.errCh = make(chan error, 1)
 		t.pollCtx, t.pollCancel = context.WithCancel(ctx)
 		if !t.DisablePolling {
 			go t.pollJobsLoop(t.pollCtx)
@@ -115,7 +116,7 @@ func (t *PollingHTTPTransport) Receive(ctx context.Context) (<-chan controltrans
 		}
 	})
 
-	return t.recvCh, nil
+	return t.recvCh, t.errCh, nil
 }
 
 // pollJobsLoop polls the master for available jobs every 5 seconds.
@@ -282,6 +283,10 @@ func (t *PollingHTTPTransport) Close() error {
 	// via closeCh and pollCancel, so no one will send on recvCh anymore.
 	if t.recvCh != nil {
 		close(t.recvCh)
+	}
+	// Close error channel
+	if t.errCh != nil {
+		close(t.errCh)
 	}
 
 	return nil

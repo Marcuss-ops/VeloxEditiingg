@@ -73,7 +73,8 @@ type ExitFunc func(int)
 type Worker struct {
 	config    *config.WorkerConfig
 	apiClient *api.Client          // Retained for data-plane operations (upload, asset download)
-	transport controltransport.ControlTransport // Control-plane communication
+	transport controltransport.ControlTransport // Current session's transport (recreated per connect)
+	transportFactory func() controltransport.ControlTransport // Factory for new transport instances
 	logger    *logger.Logger
 
 	// Status management — error state only; busy/idle derived from activeJobs
@@ -112,6 +113,10 @@ type Worker struct {
 	// Job cancellation: maps jobID -> cancel function for active jobs
 	jobCancelFuncs map[string]context.CancelFunc
 	jobCancelMu    sync.Mutex
+
+	// Pending lease jobs: accepted but waiting for JobLeaseGranted before execution
+	pendingLeaseJobs map[string]*api.Job
+	pendingLeaseMu   sync.Mutex
 
 	// Job completion stats for heartbeat reporting
 	jobsCompleted atomic.Int64

@@ -28,7 +28,9 @@ const (
 // --- Master → Worker ---
 const (
 	MsgHelloAck          ControlMessageType = "hello_ack"
-	MsgJobOffer          ControlMessageType = "job_offer"
+	MsgJobAvailable      ControlMessageType = "job_available"  // Phase 5: notify worker jobs exist, worker then claims via HTTP (shadow mode)
+	MsgJobOffer          ControlMessageType = "job_offer"      // Phase 5+: full job with lease_id from SQLite CAS (push mode)
+	MsgJobLeaseGranted   ControlMessageType = "job_lease_granted" // Phase 5+: master confirms lease, worker may now execute
 	MsgCommand           ControlMessageType = "command"
 	MsgCancelJob         ControlMessageType = "cancel_job"
 	MsgDrain             ControlMessageType = "drain"
@@ -51,7 +53,7 @@ func (t ControlMessageType) IsWorkerToMaster() bool {
 // IsMasterToWorker returns true for messages sent from master to worker.
 func (t ControlMessageType) IsMasterToWorker() bool {
 	switch t {
-	case MsgHelloAck, MsgJobOffer, MsgCommand, MsgCancelJob,
+	case MsgHelloAck, MsgJobAvailable, MsgJobOffer, MsgJobLeaseGranted, MsgCommand, MsgCancelJob,
 		MsgDrain, MsgConfigurationUpdate, MsgLeaseRevoked, MsgPing:
 		return true
 	}
