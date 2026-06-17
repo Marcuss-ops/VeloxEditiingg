@@ -17,6 +17,15 @@ import (
 	"velox-worker-agent/pkg/video"
 )
 
+type videoWorkflow interface {
+	SetProgressCallback(func(percent, scene, total int, stage string))
+	ProcessSingleVideo(ctx context.Context, input renderJobParams, statusCallback func(string, bool)) (string, error)
+}
+
+var newVideoWorkflow = func(cfg *config.WorkerConfig, log *logger.Logger) videoWorkflow {
+	return video.NewVideoGenerationWorkflow(cfg, log)
+}
+
 // executeJob executes a job and reports the result.
 // executeJob esegue un job dall'acquisizione del concurrency slot fino alla
 // notifica del risultato al master. Gestisce:
@@ -225,6 +234,12 @@ func (w *Worker) runJobTask(ctx context.Context, job *api.Job) (map[string]inter
 // executeWorkflowJob is a shared implementation for render/video/audio jobs.
 func (w *Worker) executeWorkflowJob(ctx context.Context, job *api.Job, jobLabel string, defaultExt string) (map[string]interface{}, error) {
 	p := extractRenderJobParams(job.Parameters)
+	resolvedAudioPath, err := w.resolveVoiceoverAudioPath(ctx, p.AudioPath, job.Parameters)
+	if err != nil {
+		return nil, err
+	}
+	p.AudioPath = resolvedAudioPath
+
 	// Inject asset cache dir from worker config if not set in job params
 	assetCacheDir := strings.TrimSpace(p.AssetCacheDir)
 	if assetCacheDir == "" {
@@ -243,7 +258,7 @@ func (w *Worker) executeWorkflowJob(ctx context.Context, job *api.Job, jobLabel 
 	wfLogger := logger.New(logger.DebugLevel, os.Stdout)
 	wfLogger.SetPrefix("[WORKFLOW]")
 
-	workflow := video.NewVideoGenerationWorkflow(&config.WorkerConfig{
+	workflow := newVideoWorkflow(&config.WorkerConfig{
 		WorkerID:   w.config.WorkerID,
 		WorkerName: w.config.WorkerName,
 		MasterURL:  w.config.MasterURL,

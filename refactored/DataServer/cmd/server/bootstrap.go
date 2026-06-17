@@ -14,13 +14,13 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"velox-server/internal/app"
+	voiceoverassets "velox-server/internal/assets"
 	"velox-server/internal/audit"
 	"velox-server/internal/config"
 	"velox-server/internal/grpcserver"
 	"velox-server/internal/handlers/server/api"
 	"velox-server/internal/handlers/server/pipeline"
-	workersapi "velox-server/internal/handlers/remote/workers"
-	"velox-server/internal/handlers/remote/workers/lifecycle"
+	"velox-server/internal/jobs/enqueue"
 	"velox-server/internal/modules/ansible"
 	"velox-server/internal/modules/drive"
 	"velox-server/internal/modules/frontend"
@@ -169,7 +169,17 @@ func runServer(cfg *config.Config) error {
 	ytMod := youtube.New(cfg, deps.paths.dataDir, deps.sqliteStore)
 	deps.youtubeModule = ytMod
 	registry.Register(ytMod)
-	registry.Register(drive.New(cfg, deps.sqliteStore))
+	driveMod := drive.New(cfg)
+	deps.driveModule = driveMod
+	registry.Register(driveMod)
+	maxVoiceoverBytes := int64(256 * 1024 * 1024)
+	if raw := strings.TrimSpace(os.Getenv("VELOX_MAX_VOICEOVER_BYTES")); raw != "" {
+		if parsed, err := strconv.ParseInt(raw, 10, 64); err == nil && parsed > 0 {
+			maxVoiceoverBytes = parsed
+		}
+	}
+	voiceoverBridge := voiceoverassets.NewService(cfg.DataDir, []string{cfg.DataDir}, maxVoiceoverBytes, driveMod.Service())
+	enqueue.SetVoiceoverAssetService(voiceoverBridge)
 	ansibleMod := ansible.New(cfg, deps.paths.dataDir, auth, deps.sqliteStore)
 	deps.ansibleModule = ansibleMod
 	registry.Register(ansibleMod)
