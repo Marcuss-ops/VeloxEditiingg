@@ -1,6 +1,7 @@
 package uploads
 
 import (
+	"regexp"
 	"strings"
 
 	"velox-server/internal/queue"
@@ -106,4 +107,15 @@ func asStringSliceFromSlot(job map[string]interface{}, key string) []string {
 		return nil
 	}
 	return asStringSlice(slot[key])
+}
+
+// sanitizeDriveFolderName sanitizes a video name for use as a Drive folder name.
+func sanitizeDriveFolderName(name string) string {
+	reg := regexp.MustCompile(`[^a-zA-Z0-9_\- ]+`)
+	cleaned := reg.ReplaceAllString(name, "")
+	cleaned = strings.TrimSpace(cleaned)
+	if cleaned == "" {
+		return ""
+	}
+	return cleaned
 }

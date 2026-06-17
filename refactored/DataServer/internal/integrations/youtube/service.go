@@ -9,6 +9,8 @@ import (
 	"sync"
 	"time"
 
+	"velox-server/internal/store/youtubetypes"
+
 	"golang.org/x/oauth2"
 	"google.golang.org/api/youtube/v3"
 	ytanalytics "google.golang.org/api/youtubeanalytics/v2"
@@ -20,7 +22,7 @@ type YouTubeStore interface {
 	// Canonical: YouTube Channels (youtube_channels table)
 	ListYouTubeChannels() ([]map[string]interface{}, error)
 	GetYouTubeChannel(channelID string) (map[string]interface{}, error)
-	UpsertYouTubeChannel(channelID, title, displayName, channelURL, thumbnailURL, language, notes string, viewCount, subCount int64, addedAt, lastSyncAt, metadataJSON string) error
+	UpsertYouTubeChannel(channelID, title, displayName, channelURL, thumbnailURL, language, notes string, viewCount, subCount int64, addedAt, lastSyncAt string) error
 
 	// Canonical: YouTube Groups V2 (youtube_groups_v2 + youtube_group_channels)
 	ListYouTubeGroupsV2() ([]map[string]interface{}, error)
@@ -34,16 +36,16 @@ type YouTubeStore interface {
 	UpsertYouTubeOAuthToken(channelID string, accessTokenEnc, refreshTokenEnc []byte, tokenType, expiry, scopes string, keyVersion int) error
 	GetYouTubeOAuthToken(channelID string) (map[string]interface{}, error)
 	ListActiveYouTubeOAuthTokens() ([]map[string]interface{}, error)
-	AuditYouTubeOAuthTokenOrphans() ([]interface{}, error)
+	AuditYouTubeOAuthTokenOrphans() ([]youtubetypes.YouTubeTokenOrphan, error)
 
 	// Channel mutation methods
 	UpdateChannelTitle(channelID, title string) error
 	UpdateChannelLanguage(channelID, language string) error
-	DeleteChannelAtomic(channelID string, tx interface{}) error
-	UpdateYouTubeChannelMetadata(channelID, metadataJSON string) error
+	DeleteChannelAtomic(channelID string) (int64, error)
+	UpdateYouTubeChannelMetadata(channelID, title, thumbnailURL string) error
 
 	// Group mutation methods
-	GetYouTubeGroupV2ID(name string) (int64, error)
+	GetYouTubeGroupV2ID(name, groupType string) (int64, error)
 	DeleteYouTubeGroupChannelsByGroupID(groupID int64) error
 	DeleteYouTubeGroupV2(groupID int64) error
 
@@ -117,7 +119,6 @@ func NewService(cfg *ServiceConfig, store YouTubeStore) (*Service, error) {
 		log.Printf("[WARN] YouTube OAuth config not loaded: %v", err)
 	}
 
-	s.loadChannels()
 	// Load from canonical tables — store is already set, so this works immediately
 	s.loadCanonicalChannels()
 	s.loadCanonicalGroups()

@@ -47,7 +47,7 @@ func AdminAuthMiddleware(cfg *config.Config) gin.HandlerFunc {
 			return
 		}
 
-		expected := strings.TrimSpace(cfg.AdminToken)
+		expected := strings.TrimSpace(cfg.Auth.AdminToken)
 		if expected == "" {
 			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
 				"error": "admin token required for remote access",
@@ -177,8 +177,8 @@ func RegisterV1Routes(r *gin.Engine, cfg *config.Config, fileQ *queue.FileQueue,
 		statusHandler := func(c *gin.Context) {
 			ctx := c.Request.Context()
 			master := workers.WorkerStatusMetadata(workerUpdateHandler)
-			registered, live := reg.StatusSnapshot(ctx, time.Duration(cfg.WorkerHeartbeatTimeout)*time.Second)
-			stale := reg.GetStaleWorkers(ctx, time.Duration(cfg.WorkerHeartbeatTimeout)*time.Second)
+		registered, live := reg.StatusSnapshot(ctx, time.Duration(cfg.Workers.HeartbeatTimeout)*time.Second)
+		stale := reg.GetStaleWorkers(ctx, time.Duration(cfg.Workers.HeartbeatTimeout)*time.Second)
 			pending, processing, completed, errorCount, total := workerStatusCounts(ctx, fileQ)
 
 			c.JSON(http.StatusOK, gin.H{
@@ -277,9 +277,9 @@ func RegisterV1Routes(r *gin.Engine, cfg *config.Config, fileQ *queue.FileQueue,
 
 		// Dashboard - BI & Analytics Dashboard (NEW)
 		// Uses dependency injection: AnalyticsService wraps the store
-		if db != nil && cfg != nil && cfg.DataDir != "" {
+		if db != nil && cfg != nil && cfg.Runtime.DataDir != "" {
 			analyticsSvc := analyticsService.NewAnalyticsService(db)
-			analytics.RegisterDashboardRoutes(r, cfg.DataDir, analyticsSvc)
+			analytics.RegisterDashboardRoutes(r, cfg.Runtime.DataDir, analyticsSvc)
 		}
 
 		// Calendar - Video Production Calendar (public, no admin auth required)

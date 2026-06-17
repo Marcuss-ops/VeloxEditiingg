@@ -82,7 +82,7 @@ func (h *YouTubeHandlers) StartOAuth(c *gin.Context) {
 		})
 		return
 	}
-	authURL := h.service.GetOAuthStartURL(channelName, redirectURL)
+	authURL := h.service.GetOAuthStartURL(channelName)
 	if authURL == "" {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"ok":    false,
@@ -130,7 +130,7 @@ func (h *YouTubeHandlers) OAuthCallback(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
 	defer cancel()
 
-	channel, err := h.service.HandleOAuthCallback(ctx, code, channelName, redirectURL)
+	channel, err := h.service.HandleOAuthCallback(ctx, code, channelName)
 	if err != nil {
 		log.Printf("[ERROR] OAuth callback failed: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": err.Error()})

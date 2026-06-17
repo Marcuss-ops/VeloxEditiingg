@@ -2,14 +2,102 @@ package youtube
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
 	"time"
 
 	"golang.org/x/oauth2"
+	"golang.org/x/oauth2/google"
 	"google.golang.org/api/option"
 	"google.golang.org/api/youtube/v3"
 )
+
+// buildOAuthConfig locates client_secret.json, parses it, and returns a
+// configured *oauth2.Config plus the secret file path it was loaded from.
+func buildOAuthConfig(cfg *ServiceConfig) (*oauth2.Config, string, error) {
+	if cfg.CredentialsDir == "" {
+		return nil, "", fmt.Errorf("YouTube CredentialsDir not configured")
+	}
+
+	secretPaths := []string{
+		filepath.Join(cfg.CredentialsDir, "client_secret.json"),
+		filepath.Join(cfg.CredentialsDir, "credentials.json"),
+	}
+
+	var secretPath string
+	var secretData []byte
+	for _, p := range secretPaths {
+		d, err := os.ReadFile(p)
+		if err == nil {
+			secretPath = p
+			secretData = d
+			break
+		}
+	}
+	if secretPath == "" {
+		return nil, "", fmt.Errorf("client_secret.json not found in %s", cfg.CredentialsDir)
+	}
+
+	var parsed struct {
+		Installed struct {
+			ClientID     string   `json:"client_id"`
+			ClientSecret string   `json:"client_secret"`
+			RedirectUris []string `json:"redirect_uris"`
+		} `json:"installed"`
+		Web struct {
+			ClientID     string   `json:"client_id"`
+			ClientSecret string   `json:"client_secret"`
+			RedirectUris []string `json:"redirect_uris"`
+		} `json:"web"`
+	}
+	if err := json.Unmarshal(secretData, &parsed); err != nil {
+		return nil, "", fmt.Errorf("parse client_secret.json: %w", err)
+	}
+
+	var clientID, clientSecret, redirectURI string
+	if parsed.Installed.ClientID != "" {
+		clientID = parsed.Installed.ClientID
+		clientSecret = parsed.Installed.ClientSecret
+		if len(parsed.Installed.RedirectUris) > 0 {
+			redirectURI = parsed.Installed.RedirectUris[0]
+		}
+	} else if parsed.Web.ClientID != "" {
+		clientID = parsed.Web.ClientID
+		clientSecret = parsed.Web.ClientSecret
+		if len(parsed.Web.RedirectUris) > 0 {
+			redirectURI = parsed.Web.RedirectUris[0]
+		}
+	} else {
+		return nil, "", fmt.Errorf("no valid OAuth credentials found")
+	}
+
+	if cfg.ClientID != "" {
+		clientID = cfg.ClientID
+	}
+	if cfg.ClientSecret != "" {
+		clientSecret = cfg.ClientSecret
+	}
+	if cfg.RedirectURL != "" {
+		redirectURI = cfg.RedirectURL
+	}
+
+	return &oauth2.Config{
+		ClientID:     clientID,
+		ClientSecret: clientSecret,
+		RedirectURL:  redirectURI,
+		Scopes: []string{
+			"https://www.googleapis.com/auth/youtube",
+			"https://www.googleapis.com/auth/youtube.upload",
+			"https://www.googleapis.com/auth/youtube.readonly",
+			"https://www.googleapis.com/auth/yt-analytics.readonly",
+			"https://www.googleapis.com/auth/yt-analytics-monetary.readonly",
+		},
+		Endpoint: google.Endpoint,
+	}, secretPath, nil
+}
 
 // loadOAuthConfig loads OAuth2 configuration from client_secret.json
 func (s *Service) loadOAuthConfig() error {
