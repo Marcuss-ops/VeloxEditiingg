@@ -8,6 +8,13 @@ import (
 	"time"
 )
 
+// GetRecentChannelVideos returns up to `limit` recent uploads for the given
+// YouTube channel, restricted to the trailing `days` window. The implementation
+// is YouTube Data API v3 only: there used to be a remote-scraper fallback
+// here that kicked in when the API quota was exhausted, but that path has
+// been removed in the S6 cleanup. Operators see an empty result if the API
+// has no items to return, rather than being silently masked by a third-party
+// scraper.
 func (c *APIClient) GetRecentChannelVideos(ctx context.Context, channelID string, limit, days int) ([]Video, error) {
 	cacheKey := fmt.Sprintf("channel_uploads:%s_%d_%d", channelID, limit, days)
 
@@ -22,16 +29,6 @@ func (c *APIClient) GetRecentChannelVideos(ctx context.Context, channelID string
 
 	if c.apiKey != "" {
 		videos, err = c.fetchChannelVideos(ctx, channelID, limit, days)
-	}
-
-	if len(videos) == 0 {
-		channelURL := "https://www.youtube.com/channel/" + channelID
-		fallbackVideos, ferr := c.fallback.GetChannelVideos(ctx, channelURL, limit, days)
-		if ferr == nil {
-			videos = fallbackVideos
-		} else if err == nil {
-			err = ferr
-		}
 	}
 
 	if len(videos) > 0 {

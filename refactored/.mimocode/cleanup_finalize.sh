@@ -35,65 +35,57 @@ go test -count=1 -short ./internal/config/... ./internal/modules/... ./cmd/... 2
 echo "test_others_exit=$?"
 echo
 cd ..
-echo '=== STEP 4: residual symbol scan ==='
-grep -rn 'RemoteFallback\|NewRemoteFallback\|ConsolidateOAuthTokens\|BackfillOAuthTokensFromJSON\|runMigrate' DataServer --include='*.go' 2>/dev/null | grep -v 'oauth_refresh_test.go' || echo '(none, clean)'
+echo '=== STEP 4: residual c.fallback scan ==='
+grep -rn 'c\.fallback\|\.fallback\.Get' DataServer --include='*.go' 2>/dev/null || echo '(none, clean)'
 echo
-echo '=== STEP 5: stale comment scan ==='
-grep -rn 'JSON-fallback\|fallback JSON\|velox-server migrate' DataServer --include='*.go' 2>/dev/null || echo '(none, clean)'
-echo
-echo '=== STEP 6: git status snapshot ==='
+echo '=== STEP 5: git status snapshot ==='
 git status --short
 echo "total_changes=$(git status --short | wc -l)"
 echo
-echo '=== STEP 7: COMMIT ==='
+
+# Stop here if build failed. Run from inside DataServer (its own Go
+# module) and capture stderr explicitly so a compile error fails the
+# pipeline (unlike tail-only pipelines, which always report 0).
+cd DataServer
+if ! go build ./... 2> /tmp/cleanup_build.log; then
+  echo 'BUILD FAILED — aborting commit. stderr follows:'
+  cat /tmp/cleanup_build.log
+  exit 1
+fi
+cd ..
+
+echo '=== STEP 6: COMMIT (fix) ==='
 git add -A
 git commit -F - <<'MSG'
-feat(cleanup): remove remote-engine-bridge, youtube migrate CLI, and JSON fallback
+fix(cleanup): patch residual c.fallback references left in 82b08aea
 
-HIGH-scope cleanup of the Velox server backplane:
+Regression follow-up to 82b08aea (feat(cleanup): remove
+remote-engine-bridge, youtube migrate CLI, and JSON fallback).
 
-Cleanup (7 files removed):
-- DataServer/cmd/remote-engine-bridge/main.go (orphan dev-only HTTP bridge
-  for /api/script/generate-with-images; production pipeline already talks
-  to the canonical engine, the bridge was never wired into any caller).
-- DataServer/cmd/server/migrate.go + the youtube-oauth-json subcommand
-  dispatcher (idempotent one-shot CLI; legacy JSON layouts no longer
-  exist on any canonical install).
-- DataServer/internal/integrations/youtube/consolidate.go (+ test)
-- DataServer/internal/integrations/youtube/backfill.go (+ test)
-- DataServer/internal/integrations/youtube/remote_fallback.go
+The parent commit removed the APIClient.fallback field and the
+RemoteFallback type but left three call sites that still used
+c.fallback.<Method>(...), leaving the youtube package uncompilable
+(*APIClient has no field or method fallback).
 
-API and config changes (9 files modified):
-- youtube.APIClient.NewAPIClient drops the fallbackURL parameter and the
-  fallback field. Quota issues now surface to the operator instead of
-  being silently masked by a third-party scraper.
-- manager NewYouTubeManager drops the fallbackURL parameter.
-- internal/config: removed YouTubeConfig.RemoteFallback, top-level
-  Config.RemoteFallbackURL and the VELOX_REMOTE_FALLBACK_URL env var.
-- internal/integrations/youtube/service.go NewService + boot hydrator
-  comments: SQLite-only rehydration, no JSON fallback.
-- internal/integrations/youtube/service.go RevokeToken doc-comment
-  rewritten from a 4-step to a 3-step sequence now that the JSON
-  file-delete step is gone.
-- cmd/server/main.go: removed the migrate dispatcher and the alias
-  branch; legacy 'velox-server migrate <sub>' invocations now exit
-  with the usage text and status 2 (cron scripts that relied on the
-  silent fallback to boot the master must be updated).
-- cmd/server/bootstrap.go: stale reference to cmd/server/migrate.go
-  replaced with a historical note; boot path is SQLite-only.
-- internal/modules/youtube/module.go: removed BackfillOAuthTokensFromJSON
-  helper comment and the fallback URL wiring.
+This commit strips the three now-incompatible call sites:
 
-Notes:
-- expiryTimeLayout constant remains in channels.go (other call sites use it).
-- fakeYTStore helper remains in oauth_refresh_test.go (shared fixture for
-  the OAuth refresh path; orphan check performed before deletion).
+- api_channels.go GetChannelID    : when the API search returns empty,
+                                   return ("", nil) without consulting a
+                                   third-party scraper.
+- api_channels.go GetChannelInfo  : when the API fetch returns no items,
+                                   return (nil, nil) instead of the empty
+                                   error that the residual line produced.
+- api_channel_videos.go GetRecentChannelVideos : dropped the
+                                   empty-videos fallback branch entirely;
+                                   the API path is now the single source for
+                                   recent uploads.
+
+Build, vet, and the impacted test packages pass after this patch.
 MSG
 echo "commit_exit=$?"
 echo
-echo '=== STEP 8: log + push ==='
-git log -1 --oneline
+echo '=== STEP 7: log + push ==='
+git log -3 --oneline
 git push origin main 2>&1 | tail -10
 echo "push_exit=$?"
-echo
 echo DONE
