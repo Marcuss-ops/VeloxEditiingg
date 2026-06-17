@@ -11,6 +11,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	voiceoverassets "velox-server/internal/assets"
 	"velox-server/internal/config"
 	"velox-server/internal/creatorflow"
 	remoteansible "velox-server/internal/handlers/remote/ansible"
@@ -81,6 +82,16 @@ func (h *ScriptHandlers) GenerateWithImagesHandler(cfg *config.Config) gin.Handl
 		}
 		if h.creator != nil && !shouldBypassCreator(payload) {
 			if creatorResponse, used, err := h.creator.Forward(c.Request.Context(), payload); err != nil {
+				if assetErr, ok := voiceoverassets.AsAcquisitionError(err); ok {
+					c.JSON(http.StatusUnprocessableEntity, gin.H{
+						"ok":          false,
+						"code":        assetErr.Code,
+						"field":       assetErr.Field,
+						"message":     assetErr.Message,
+						"source_type": assetErr.SourceType,
+					})
+					return
+				}
 				log.Printf("[SCRIPT] creator stage failed, falling back to local enqueue: %v", err)
 			} else if used {
 				c.JSON(http.StatusOK, creatorResponse)
@@ -90,12 +101,32 @@ func (h *ScriptHandlers) GenerateWithImagesHandler(cfg *config.Config) gin.Handl
 
 		normalized, err := enqueue.BuildSceneImagePayloadForMaster(payload, h.dataDir, cfg.Runtime.VideosDir, resolvedMasterURL)
 		if err != nil {
+			if assetErr, ok := voiceoverassets.AsAcquisitionError(err); ok {
+				c.JSON(http.StatusUnprocessableEntity, gin.H{
+					"ok":          false,
+					"code":        assetErr.Code,
+					"field":       assetErr.Field,
+					"message":     assetErr.Message,
+					"source_type": assetErr.SourceType,
+				})
+				return
+			}
 			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": err.Error()})
 			return
 		}
 
 		response, err := enqueue.EnqueueSceneVideoJob(c.Request.Context(), h.queue, normalized)
 		if err != nil {
+			if assetErr, ok := voiceoverassets.AsAcquisitionError(err); ok {
+				c.JSON(http.StatusUnprocessableEntity, gin.H{
+					"ok":          false,
+					"code":        assetErr.Code,
+					"field":       assetErr.Field,
+					"message":     assetErr.Message,
+					"source_type": assetErr.SourceType,
+				})
+				return
+			}
 			status := http.StatusInternalServerError
 			if strings.Contains(strings.ToLower(err.Error()), "queue unavailable") {
 				status = http.StatusServiceUnavailable

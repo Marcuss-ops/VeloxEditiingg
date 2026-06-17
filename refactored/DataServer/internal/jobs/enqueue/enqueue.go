@@ -10,8 +10,10 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
+	assetbridge "velox-server/internal/assets"
 	"velox-shared/contract"
 	"velox-shared/payload"
 
@@ -21,6 +23,24 @@ import (
 
 	"velox-server/internal/queue"
 )
+
+var (
+	voiceoverAssetServiceMu sync.RWMutex
+	voiceoverAssetService   *assetbridge.Service
+)
+
+// SetVoiceoverAssetService configures the canonical asset bridge used before job submission.
+func SetVoiceoverAssetService(service *assetbridge.Service) {
+	voiceoverAssetServiceMu.Lock()
+	defer voiceoverAssetServiceMu.Unlock()
+	voiceoverAssetService = service
+}
+
+func getVoiceoverAssetService() *assetbridge.Service {
+	voiceoverAssetServiceMu.RLock()
+	defer voiceoverAssetServiceMu.RUnlock()
+	return voiceoverAssetService
+}
 
 // =============================================================================
 // Core enqueue entry point
@@ -32,6 +52,10 @@ import (
 func EnqueueSceneVideoJob(ctx context.Context, q *queue.FileQueue, payloadMap map[string]interface{}) (map[string]interface{}, error) {
 	if q == nil {
 		return nil, fmt.Errorf("queue unavailable")
+	}
+
+	if err := resolveVoiceoverPayload(ctx, payloadMap); err != nil {
+		return nil, err
 	}
 
 	normalized, err := normalizeSceneVideoPayload(payloadMap)
@@ -191,6 +215,7 @@ func normalizeSceneVideoPayload(payloadMap map[string]interface{}) (map[string]i
 		"scenes_json":     scenesJSON,
 		"scenes":          scenesValue,
 		"voiceover_paths": voiceovers,
+		"voiceover_path":  voiceovers[0],
 		"audio_path":      voiceovers[0],
 		"youtube_group":   payload.FirstString(payloadMap, "youtube_group"),
 		"output_path":     payload.FirstString(payloadMap, "output_path"),
@@ -373,6 +398,14 @@ func voiceoverCountFromPayload(payloadMap map[string]interface{}) int {
 		return len(arr)
 	}
 	return len(normalizeVoiceoverList(payloadMap))
+}
+
+func resolveVoiceoverPayload(ctx context.Context, payloadMap map[string]interface{}) error {
+	service := getVoiceoverAssetService()
+	if service == nil || payloadMap == nil {
+		return nil
+	}
+	return service.RewriteVoiceoverPayload(ctx, payloadMap)
 }
 
 func sceneVideoFingerprint(parts ...interface{}) string {

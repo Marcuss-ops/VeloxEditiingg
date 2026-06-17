@@ -6,9 +6,9 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"velox-server/internal/config"
+	workersapi "velox-server/internal/handlers/remote/workers"
 	"velox-server/internal/handlers/remote/workers/assets"
 	"velox-server/internal/handlers/remote/workers/lifecycle"
-	workersapi "velox-server/internal/handlers/remote/workers"
 	workersreg "velox-server/internal/workers"
 )
 
@@ -22,12 +22,16 @@ type Module struct {
 }
 
 func New(cfg *config.Config, reg *workersreg.Registry, lifecycle *lifecycle.Handler, updateHandler *workersapi.WorkerUpdateHandler, adminAuth gin.HandlerFunc) *Module {
+	var tokenMgr *workersreg.TokenManager
+	if lifecycle != nil {
+		tokenMgr = lifecycle.GetTokenManager()
+	}
 	return &Module{
 		reg:                 reg,
 		workerLifecycle:     lifecycle,
 		workerUpdateHandler: updateHandler,
 		adminAuth:           adminAuth,
-		workerAssetHandler:  assets.NewHandler(cfg),
+		workerAssetHandler:  assets.NewHandler(cfg, tokenMgr),
 	}
 }
 
@@ -68,6 +72,7 @@ func (m *Module) RegisterRoutes(r *gin.Engine) {
 	}
 
 	if m.workerAssetHandler != nil {
+		r.GET("/api/v1/worker-assets/:asset_id", m.workerAssetHandler.ServeAsset())
 		r.GET("/api/worker/assets/voiceover/:job_id/:filename", m.workerAssetHandler.ServeVoiceoverAsset())
 		r.GET("/api/worker/assets/scene-image/:job_id/:filename", m.workerAssetHandler.ServeSceneImageAsset())
 	}
