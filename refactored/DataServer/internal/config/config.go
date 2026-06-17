@@ -6,6 +6,18 @@ import (
 	"path/filepath"
 )
 
+// LegacyMasterServerURL returns the master server URL previously exposed as a
+// flat field on Config. Callers should be migrated to Config.Workers.MasterServerURL.
+// Kept temporarily to avoid breaking out-of-tree callers (anecdotal integrations).
+// DEPRECATED: removed in the next release that bumps the minor version of
+// VERSION.txt (currently v1.0.6). See spec §8. Use Config.Workers.MasterServerURL.
+func (c *Config) LegacyMasterServerURL() string {
+	if c == nil {
+		return ""
+	}
+	return c.Workers.MasterServerURL
+}
+
 // FromEnv loads configuration from environment variables.
 // Only sub-configs are populated — no flat field aliases.
 func FromEnv() *Config {
@@ -40,28 +52,22 @@ func FromEnv() *Config {
 	frontend := loadFrontendConfig()
 	render := loadRenderConfig()
 	nvidia := loadNVIDIAConfig()
-
-	// Derived fields
-	masterServerURL := os.Getenv("VELOX_MASTER_SERVER_URL")
-	if masterServerURL == "" {
-		masterServerURL = os.Getenv("VELOX_REMOTE_WORKER_URL")
-	}
+	pipeline := loadPipelineConfig()
 
 	return &Config{
-		Server:          server,
-		Runtime:         runtime,
-		Database:        database,
-		Workers:         workers,
-		Auth:            auth,
-		Storage:         storage,
-		Drive:           drive,
-		YouTube:         youtube,
-		Ansible:         ansible,
-		Frontend:        frontend,
-		Render:          render,
-		NVIDIA:          nvidia,
-		MasterServerURL: masterServerURL,
-		JobMasterURL:    os.Getenv("VELOX_JOB_MASTER_URL"),
+		Server:   server,
+		Runtime:  runtime,
+		Database: database,
+		Workers:  workers,
+		Auth:     auth,
+		Storage:  storage,
+		Drive:    drive,
+		YouTube:  youtube,
+		Ansible:  ansible,
+		Frontend: frontend,
+		Render:   render,
+		NVIDIA:   nvidia,
+		Pipeline: pipeline,
 	}
 }
 
