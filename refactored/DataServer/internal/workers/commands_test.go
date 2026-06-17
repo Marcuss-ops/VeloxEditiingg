@@ -181,3 +181,39 @@ func TestWorkerCommandToJSON(t *testing.T) {
 		t.Error("expected non-empty JSON")
 	}
 }
+
+func TestCommandManager_GetPendingCommandsAndMarkDelivered_NilStore(t *testing.T) {
+	cm := NewCommandManager(nil)
+	cmds := cm.GetPendingCommandsAndMarkDelivered("w1")
+	if len(cmds) != 0 {
+		t.Fatalf("expected 0 commands with nil store, got %d", len(cmds))
+	}
+}
+
+func TestCommandManager_AckCommandByID_NilStore(t *testing.T) {
+	cm := NewCommandManager(nil)
+	err := cm.AckCommandByID("cmd-nonexistent")
+	if err == nil {
+		t.Error("expected error from AckCommandByID with nil store")
+	}
+	if err.Error() != "no store" {
+		t.Errorf("expected 'no store' error, got %q", err.Error())
+	}
+}
+
+func TestCommandManager_PushCommand_ReturnsCommandID(t *testing.T) {
+	cm := NewCommandManager(nil)
+	cmdID := cm.PushCommand("w1", "drain", map[string]interface{}{"reason": "test"})
+	if cmdID == "" {
+		t.Error("expected non-empty command_id")
+	}
+}
+
+func TestCommandManager_GetPendingCommands_NilStore(t *testing.T) {
+	cm := NewCommandManager(nil)
+	cm.PushCommand("w1", "restart_worker", nil)
+	cmds := cm.GetPendingCommands("w1")
+	if len(cmds) != 0 {
+		t.Fatalf("expected 0 commands with nil store, got %d", len(cmds))
+	}
+}

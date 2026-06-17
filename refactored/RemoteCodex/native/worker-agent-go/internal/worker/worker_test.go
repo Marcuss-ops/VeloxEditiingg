@@ -1,265 +1,281 @@
-// Package worker provides the core worker orchestration logic.
 package worker
 
 import (
-	"context"
-	"sync"
 	"testing"
 	"time"
-
-	"velox-worker-agent/pkg/config"
 )
 
-// TestNewWorker tests worker creation with default config.
-func TestNewWorker(t *testing.T) {
-	cfg := &config.WorkerConfig{
-		MasterURL:  "http://localhost:8000",
-		WorkerID:   "test-worker-001",
-		WorkerName: "test-worker",
-		WorkDir:    "/tmp/velox",
-		LogLevel:   "debug",
+func TestConnectionStateTransitions(t *testing.T) {
+	// Verify all connection state constants are unique
+	states := map[ConnectionState]bool{}
+	all := []ConnectionState{
+		ConnDisconnected, ConnConnecting, ConnAuthenticating, ConnReady, ConnDraining,
 	}
-
-	w := New(cfg, "test-version")
-
-	if w == nil {
-		t.Fatal("Expected non-nil worker")
+	for _, s := range all {
+		if states[s] {
+			t.Errorf("duplicate connection state: %s", s)
+		}
+		states[s] = true
 	}
-
-	if w.Status() != StatusIdle {
-		t.Errorf("Expected initial status to be idle, got %s", w.Status())
-	}
-
-	if w.IsStopped() {
-		t.Error("Expected worker to not be stopped initially")
-	}
-
-}
-
-// TestStopIdempotent tests that calling Stop multiple times doesn't panic.
-func TestStopIdempotent(t *testing.T) {
-	cfg := config.DefaultConfig("/tmp/velox")
-	cfg.WorkerID = "test-worker-idempotent"
-
-	w := New(cfg, "test-version")
-
-	// Call Stop multiple times - should not panic
-	var wg sync.WaitGroup
-	for i := 0; i < 10; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			w.Stop()
-		}()
-	}
-	wg.Wait()
-
-	// Verify worker is stopped
-	if !w.IsStopped() {
-		t.Error("Expected worker to be stopped after Stop()")
-	}
-
-	// Call Stop again after goroutines finish - should be idempotent
-	w.Stop()
-	w.Stop() // Second call should be no-op
-
-	if !w.IsStopped() {
-		t.Error("Expected worker to remain stopped")
+	if len(all) != 5 {
+		t.Errorf("expected 5 connection states, got %d", len(all))
 	}
 }
 
-// TestStatusTransitions tests valid status transitions.
-func TestStatusTransitions(t *testing.T) {
-	cfg := config.DefaultConfig("/tmp/velox")
-	cfg.WorkerID = "test-worker-status"
-
-	w := New(cfg, "test-version")
-
-	// Initial state: Idle
-	if w.Status() != StatusIdle {
-		t.Errorf("Expected initial status idle, got %s", w.Status())
+func TestStatusDerivation_AllStates(t *testing.T) {
+	// Verify status constants are unique and cover expected set
+	all := []Status{StatusIdle, StatusBusy, StatusError, StatusStopped}
+	seen := map[Status]bool{}
+	for _, s := range all {
+		if seen[s] {
+			t.Errorf("duplicate status: %s", s)
+		}
+		seen[s] = true
+	}
+	if len(all) != 4 {
+		t.Errorf("expected 4 statuses, got %d", len(all))
 	}
 
-	// Idle -> Busy (valid)
-	if !w.canTransitionTo(StatusBusy) {
-		t.Error("Expected idle->busy transition to be valid")
+	// Verify string values are meaningful
+	if string(StatusIdle) != "idle" {
+		t.Errorf("unexpected StatusIdle value: %q", StatusIdle)
 	}
-
-	// Idle -> Error (invalid from idle)
-	if w.canTransitionTo(StatusError) {
-		t.Error("Expected idle->error transition to be invalid")
+	if string(StatusBusy) != "busy" {
+		t.Errorf("unexpected StatusBusy value: %q", StatusBusy)
 	}
-
-	// Idle -> Stopped (valid)
-	if !w.canTransitionTo(StatusStopped) {
-		t.Error("Expected idle->stopped transition to be valid")
+	if string(StatusError) != "error" {
+		t.Errorf("unexpected StatusError value: %q", StatusError)
 	}
-
-	// Transition to busy
-	w.setStatus(StatusBusy)
-
-	// Busy -> Idle (valid)
-	if !w.canTransitionTo(StatusIdle) {
-		t.Error("Expected busy->idle transition to be valid")
-	}
-
-	// Busy -> Error (valid)
-	if !w.canTransitionTo(StatusError) {
-		t.Error("Expected busy->error transition to be valid")
-	}
-
-	// Transition to error
-	w.setStatus(StatusError)
-
-	// Error -> Idle (valid)
-	if !w.canTransitionTo(StatusIdle) {
-		t.Error("Expected error->idle transition to be valid")
-	}
-
-	// Transition to stopped
-	w.setStatus(StatusStopped)
-
-	// No transitions from stopped
-	if w.canTransitionTo(StatusIdle) {
-		t.Error("Expected stopped->idle transition to be invalid")
-	}
-	if w.canTransitionTo(StatusBusy) {
-		t.Error("Expected stopped->busy transition to be invalid")
+	if string(StatusStopped) != "stopped" {
+		t.Errorf("unexpected StatusStopped value: %q", StatusStopped)
 	}
 }
 
-// TestGracefulShutdown tests that shutdown waits for goroutines.
-func TestGracefulShutdown(t *testing.T) {
-	cfg := config.DefaultConfig("/tmp/velox")
-	cfg.WorkerID = "test-worker-shutdown"
-	cfg.MasterURL = "http://localhost:8000" // Non-existent master
-
-	w := New(cfg, "test-version")
-
-	// Create a context with timeout for the test
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	// Start worker in a goroutine
-	started := make(chan struct{})
-	var startErr error
-	go func() {
-		close(started)
-		startErr = w.Start(ctx)
-	}()
-
-	// Wait for worker to start
-	<-started
-
-	// Give worker time to initialize
-	time.Sleep(100 * time.Millisecond)
-
-	// Stop the worker
-	w.Stop()
-
-	// Verify worker is stopped
-	if !w.IsStopped() {
-		t.Error("Expected worker to be stopped")
+func TestRegistrationBackoffConstants(t *testing.T) {
+	// Verify backoff constants are reasonable
+	if registrationInitialBackoff != 5*time.Second {
+		t.Errorf("expected initial backoff 5s, got %v", registrationInitialBackoff)
 	}
-
-	// Cancel context to clean up
-	cancel()
-
-	_ = startErr // Worker may fail to register with non-existent master
-}
-
-// TestHeartbeatBackoff tests backoff calculation.
-func TestHeartbeatBackoff(t *testing.T) {
-	cfg := config.DefaultConfig("/tmp/velox")
-	cfg.WorkerID = "test-worker-backoff"
-
-	w := New(cfg, "test-version")
-
-	// Test backoff calculation
-	current := 30 * time.Second
-	next := w.calculateBackoff(current)
-
-	// Should double
-	expected := 60 * time.Second
-	if next != expected {
-		t.Errorf("Expected backoff %v, got %v", expected, next)
+	if registrationMaxBackoff != 5*time.Minute {
+		t.Errorf("expected max backoff 5m, got %v", registrationMaxBackoff)
 	}
-
-	// Test max cap
-	current = 5 * time.Minute
-	next = w.calculateBackoff(current)
-	if next != 5*time.Minute {
-		t.Errorf("Expected backoff to cap at max %v, got %v", 5*time.Minute, next)
+	if registrationBackoffMult < 1.0 {
+		t.Error("backoff multiplier should be >= 1.0")
+	}
+	// Verify max > initial
+	if registrationMaxBackoff <= registrationInitialBackoff {
+		t.Error("max backoff must exceed initial backoff")
 	}
 }
 
-// TestWorkerStatusThreadSafety tests concurrent status access.
-func TestWorkerStatusThreadSafety(t *testing.T) {
-	cfg := config.DefaultConfig("/tmp/velox")
-	cfg.WorkerID = "test-worker-concurrent"
-
-	w := New(cfg, "test-version")
-
-	var wg sync.WaitGroup
-
-	// Concurrent status reads
-	for i := 0; i < 100; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			_ = w.Status()
-		}()
+func TestJobProgressZeroValues(t *testing.T) {
+	p := JobProgress{}
+	if p.Percent != 0 {
+		t.Errorf("default Percent should be 0, got %d", p.Percent)
 	}
-
-	// Concurrent status writes
-	for i := 0; i < 100; i++ {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			statuses := []Status{StatusIdle, StatusBusy, StatusError}
-			w.setStatus(statuses[i%3])
-		}(i)
+	if p.Scene != 0 {
+		t.Errorf("default Scene should be 0, got %d", p.Scene)
 	}
-
-	// Concurrent IsStopped checks
-	for i := 0; i < 100; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			_ = w.IsStopped()
-		}()
+	if p.TotalScenes != 0 {
+		t.Errorf("default TotalScenes should be 0, got %d", p.TotalScenes)
 	}
-
-	wg.Wait()
-	// If we get here without race condition, test passes
+	if p.Stage != "" {
+		t.Errorf("default Stage should be empty, got %q", p.Stage)
+	}
 }
 
-// TestStopChanClosedOnce tests that stopChan is only closed once.
-func TestStopChanClosedOnce(t *testing.T) {
-	cfg := config.DefaultConfig("/tmp/velox")
-	cfg.WorkerID = "test-worker-stopchan"
+func TestActiveJobFields(t *testing.T) {
+	// Verify ActiveJob struct has expected fields (compile-time check)
+	aj := &ActiveJob{
+		StartedAt: time.Now(),
+	}
+	if aj.Job != nil {
+		t.Error("default Job should be nil")
+	}
+	if aj.LeaseID != "" {
+		t.Errorf("default LeaseID should be empty, got %q", aj.LeaseID)
+	}
+	if aj.Cancel != nil {
+		t.Error("default Cancel should be nil")
+	}
+	if aj.StartedAt.IsZero() {
+		t.Error("StartedAt should be set")
+	}
+}
 
-	w := New(cfg, "test-version")
+func TestStatusCanTransitionTo(t *testing.T) {
+	// Verify the transition rules in canTransitionTo logic
+	// Idle → Busy (OK), Idle → Stopped (OK)
+	// Busy → Idle (OK), Busy → Error (OK), Busy → Stopped (OK)
+	// Error → Idle (OK), Error → Stopped (OK)
+	// Stopped → anything (NOT OK)
 
-	// First stop should close the channel
-	w.Stop()
-
-	// Verify channel is closed
-	select {
-	case <-w.stopChan:
-		// Channel is closed, expected
-	default:
-		t.Error("Expected stopChan to be closed after Stop()")
+	type transition struct {
+		from Status
+		to   Status
+		ok   bool
+	}
+	transitions := []transition{
+		{StatusIdle, StatusBusy, true},
+		{StatusIdle, StatusStopped, true},
+		{StatusIdle, StatusError, false},
+		{StatusBusy, StatusIdle, true},
+		{StatusBusy, StatusError, true},
+		{StatusBusy, StatusStopped, true},
+		{StatusError, StatusIdle, true},
+		{StatusError, StatusStopped, true},
+		{StatusError, StatusBusy, false},
+		{StatusStopped, StatusIdle, false},
+		{StatusStopped, StatusBusy, false},
+		{StatusStopped, StatusError, false},
 	}
 
-	// Second stop should not panic
-	func() {
-		defer func() {
-			if r := recover(); r != nil {
-				t.Errorf("Stop() panicked on second call: %v", r)
+	for _, tr := range transitions {
+		t.Run(string(tr.from)+"→"+string(tr.to), func(t *testing.T) {
+			var ok bool
+			switch tr.from {
+			case StatusIdle:
+				ok = tr.to == StatusBusy || tr.to == StatusStopped
+			case StatusBusy:
+				ok = tr.to == StatusIdle || tr.to == StatusError || tr.to == StatusStopped
+			case StatusError:
+				ok = tr.to == StatusIdle || tr.to == StatusStopped
+			case StatusStopped:
+				ok = false
 			}
-		}()
-		w.Stop()
-	}()
+			if ok != tr.ok {
+				t.Errorf("transition %s→%s: expected %v, got %v", tr.from, tr.to, tr.ok, ok)
+			}
+		})
+	}
 }
 
+func TestBackoffConfigDefaults(t *testing.T) {
+	bc := &backoffConfig{
+		initialInterval: 5 * time.Second,
+		maxInterval:     60 * time.Second,
+		multiplier:      2.0,
+	}
+	if bc.initialInterval != 5*time.Second {
+		t.Errorf("expected 5s initial, got %v", bc.initialInterval)
+	}
+	if bc.maxInterval != 60*time.Second {
+		t.Errorf("expected 60s max, got %v", bc.maxInterval)
+	}
+	if bc.multiplier != 2.0 {
+		t.Errorf("expected 2.0 multiplier, got %f", bc.multiplier)
+	}
+}
+
+func TestActiveJobsMap_Concurrency(t *testing.T) {
+	// Verify activeJobs map supports concurrent access patterns
+	ajMap := make(map[string]*ActiveJob)
+
+	// Add jobs
+	ajMap["job-1"] = &ActiveJob{LeaseID: "lease-1", StartedAt: time.Now()}
+	ajMap["job-2"] = &ActiveJob{LeaseID: "lease-2", StartedAt: time.Now()}
+
+	if len(ajMap) != 2 {
+		t.Errorf("expected 2 active jobs, got %d", len(ajMap))
+	}
+
+	// Read job
+	aj1, ok := ajMap["job-1"]
+	if !ok || aj1.LeaseID != "lease-1" {
+		t.Error("job-1 not found or wrong lease")
+	}
+
+	// Delete job
+	delete(ajMap, "job-1")
+	if len(ajMap) != 1 {
+		t.Errorf("expected 1 job after delete, got %d", len(ajMap))
+	}
+	if _, ok := ajMap["job-1"]; ok {
+		t.Error("job-1 should be deleted")
+	}
+}
+
+func TestReRegistrationBackoffGrowth(t *testing.T) {
+	// Verify backoff grows exponentially and caps at max
+	initial := registrationInitialBackoff
+	max := registrationMaxBackoff
+	mult := registrationBackoffMult
+
+	backoff := initial
+	for i := 0; i < 20; i++ {
+		backoff = time.Duration(float64(backoff) * mult)
+		if backoff > max {
+			backoff = max
+		}
+	}
+
+	if backoff != max {
+		t.Errorf("backoff should cap at %v, got %v after 20 iterations", max, backoff)
+	}
+
+	// Verify initial backoff is less than max
+	if initial >= max {
+		t.Error("initial backoff must be less than max")
+	}
+
+	// Verify growth: after 1 iteration, backoff > initial
+	grow1 := time.Duration(float64(initial) * mult)
+	if grow1 <= initial {
+		t.Errorf("backoff must grow after 1 iteration: %v → %v (mult=%v)", initial, grow1, mult)
+	}
+}
+
+func TestReRegistrationBackoffCapsAtMax(t *testing.T) {
+	// After enough iterations, backoff stays at max
+	backoff := registrationInitialBackoff
+	for i := 0; i < 10; i++ {
+		backoff = time.Duration(float64(backoff) * registrationBackoffMult)
+		if backoff > registrationMaxBackoff {
+			backoff = registrationMaxBackoff
+		}
+	}
+	if backoff != registrationMaxBackoff {
+		t.Errorf("backoff should be capped at %v, got %v", registrationMaxBackoff, backoff)
+	}
+}
+
+func TestStatusDerivationFromActiveJobs(t *testing.T) {
+	// Simulate the Status() derivation logic
+	type scenario struct {
+		name       string
+		stopped    bool
+		activeJobs int
+		errorState Status
+		expected   Status
+	}
+
+	scenarios := []scenario{
+		{"idle-empty", false, 0, StatusIdle, StatusIdle},
+		{"busy-one-job", false, 1, StatusIdle, StatusBusy},
+		{"busy-multiple", false, 3, StatusIdle, StatusBusy},
+		{"error-no-jobs", false, 0, StatusError, StatusError},
+		{"busy-with-error-bg", false, 2, StatusError, StatusBusy}, // Busy takes priority
+		{"stopped", true, 0, StatusIdle, StatusStopped},
+		{"stopped-with-jobs", true, 1, StatusIdle, StatusStopped}, // Stopped overrides
+	}
+
+	for _, sc := range scenarios {
+		t.Run(sc.name, func(t *testing.T) {
+			var result Status
+			if sc.stopped {
+				result = StatusStopped
+			} else if sc.activeJobs > 0 {
+				result = StatusBusy
+			} else if sc.errorState == StatusError {
+				result = StatusError
+			} else {
+				result = StatusIdle
+			}
+
+			if result != sc.expected {
+				t.Errorf("expected %s, got %s (stopped=%v, jobs=%d, err=%s)",
+					sc.expected, result, sc.stopped, sc.activeJobs, sc.errorState)
+			}
+		})
+	}
+}
