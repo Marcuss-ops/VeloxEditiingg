@@ -121,12 +121,13 @@ func (cm *CommandManager) AckCommand(workerID string, cmdType string) {
 	}
 }
 
-// AckCommandByID marks a specific command as acknowledged.
-func (cm *CommandManager) AckCommandByID(commandID string) error {
+// AckCommandByID marks a specific command as acknowledged, scoped to its worker.
+// The workerID prevents workers from ACKing commands owned by other workers.
+func (cm *CommandManager) AckCommandByID(workerID, commandID string) error {
 	if cm.store == nil {
 		return fmt.Errorf("no store")
 	}
-	return cm.store.AckCommandByID(commandID)
+	return cm.store.AckCommandByID(workerID, commandID)
 }
 
 // GetAckTime is kept for backward compatibility; queries SQLite for acked_at.

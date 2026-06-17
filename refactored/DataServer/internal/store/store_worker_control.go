@@ -91,19 +91,20 @@ func (s *SQLiteStore) GetPendingCommands(workerID string) ([]*PersistedCommand, 
 	return scanCommands(rows)
 }
 
-// AckCommandByID marks a specific command as acknowledged by its command_id.
-func (s *SQLiteStore) AckCommandByID(commandID string) error {
+// AckCommandByID marks a specific command as acknowledged by its command_id AND worker_id.
+// The worker_id check prevents a worker from ACKing another worker's command.
+func (s *SQLiteStore) AckCommandByID(workerID, commandID string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 	result, err := s.db.Exec(
-		`UPDATE worker_commands SET status = 'acked', acked_at = ? WHERE command_id = ? AND status IN ('pending', 'delivered')`,
-		now, commandID,
+		`UPDATE worker_commands SET status = 'acked', acked_at = ? WHERE command_id = ? AND worker_id = ? AND status IN ('pending', 'delivered')`,
+		now, commandID, workerID,
 	)
 	if err != nil {
 		return err
 	}
 	n, _ := result.RowsAffected()
 	if n == 0 {
-		return fmt.Errorf("command %s not found or already acked", commandID)
+		return fmt.Errorf("command %s not found, not owned by worker %s, or already acked", commandID, workerID)
 	}
 	return nil
 }

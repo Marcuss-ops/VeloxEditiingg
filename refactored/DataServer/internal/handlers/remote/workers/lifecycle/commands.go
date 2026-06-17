@@ -58,10 +58,10 @@ func (h *Handler) AckCommandHandler() gin.HandlerFunc {
 			return
 		}
 
-		// Prefer ACK by command_id for precise acknowledgement
+		// Prefer ACK by command_id for precise acknowledgement, scoped to worker
 		if body.CommandID != "" {
-			if err := h.cmdMgr.AckCommandByID(body.CommandID); err != nil {
-				log.Printf("[CMD_ACK] Failed to ack by id %s: %v", body.CommandID, err)
+			if err := h.cmdMgr.AckCommandByID(body.WorkerID, body.CommandID); err != nil {
+				log.Printf("[CMD_ACK] Failed to ack by id %s for worker %s: %v", body.CommandID, body.WorkerID, err)
 				c.JSON(http.StatusNotFound, gin.H{"success": false, "error": err.Error()})
 				return
 			}

@@ -192,7 +192,7 @@ func TestCommandManager_GetPendingCommandsAndMarkDelivered_NilStore(t *testing.T
 
 func TestCommandManager_AckCommandByID_NilStore(t *testing.T) {
 	cm := NewCommandManager(nil)
-	err := cm.AckCommandByID("cmd-nonexistent")
+	err := cm.AckCommandByID("w1", "cmd-nonexistent")
 	if err == nil {
 		t.Error("expected error from AckCommandByID with nil store")
 	}

@@ -233,6 +233,9 @@ func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMasterEnvelo
 		case *pb.WorkerToMasterEnvelope_JobResult:
 			h.handleJobResult(workerID, m.JobResult)
 
+		case *pb.WorkerToMasterEnvelope_ArtifactUploaded:
+			h.handleArtifactUploaded(workerID, m.ArtifactUploaded)
+
 		case *pb.WorkerToMasterEnvelope_Goodbye:
 			return nil
 
@@ -523,8 +526,8 @@ func (h *Handler) handleJobProgress(workerID string, jp *pb.JobProgress) {
 // handleCommandAck processes typed CommandAck via gRPC stream.
 func (h *Handler) handleCommandAck(workerID string, ca *pb.CommandAck) {
 	if ca.GetCommandId() != "" {
-		if err := h.cmdMgr.AckCommandByID(ca.GetCommandId()); err != nil {
-			log.Printf("[GRPC] Command ACK failed for %s: %v", ca.GetCommandId(), err)
+		if err := h.cmdMgr.AckCommandByID(workerID, ca.GetCommandId()); err != nil {
+			log.Printf("[GRPC] Command ACK failed for %s (worker %s): %v", ca.GetCommandId(), workerID, err)
 		}
 	} else if ca.GetCommand() != "" {
 		h.cmdMgr.AckCommand(workerID, ca.GetCommand())
@@ -545,6 +548,23 @@ func (h *Handler) handleJobResult(workerID string, jr *pb.JobResult) {
 		if err := h.transitionSvc.FailJob(context.Background(), jobID, errMsg, workerID, true, 3); err != nil {
 			log.Printf("[GRPC] Job failure transition failed for %s: %v", jobID, err)
 		}
+	}
+}
+
+// handleArtifactUploaded processes typed ArtifactUploaded via gRPC stream.
+func (h *Handler) handleArtifactUploaded(workerID string, a *pb.ArtifactUploaded) {
+	log.Printf("[GRPC] Worker %s uploaded artifact %s (type: %s, size: %d bytes, status: %s)",
+		workerID, a.GetArtifactId(), a.GetArtifactType(), a.GetArtifactSize(), a.GetUploadStatus())
+
+	if a.GetJobId() == "" || a.GetArtifactId() == "" {
+		log.Printf("[GRPC] ArtifactUploaded from worker %s missing job_id or artifact_id — skipping DB update", workerID)
+		return
+	}
+
+	if err := h.dbStore.UpdateJobSupplementary(a.GetJobId(), map[string]interface{}{
+		"artifact_id": a.GetArtifactId(),
+	}); err != nil {
+		log.Printf("[GRPC] Failed to update job %s with artifact %s: %v", a.GetJobId(), a.GetArtifactId(), err)
 	}
 }
 

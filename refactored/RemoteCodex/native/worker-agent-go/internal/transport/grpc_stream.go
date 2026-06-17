@@ -422,6 +422,19 @@ func (t *GRPCStreamTransport) messageToEnvelope(msg controltransport.ControlMess
 				Attempt:   int32(getPayloadInt64(msg.Payload, "attempt")),
 			},
 		}
+
+	case controltransport.MsgArtifactUploaded:
+		env.Msg = &pb.WorkerToMasterEnvelope_ArtifactUploaded{
+			ArtifactUploaded: &pb.ArtifactUploaded{
+				JobId:        getPayloadStr(msg.Payload, "job_id"),
+				ArtifactId:   getPayloadStr(msg.Payload, "artifact_id"),
+				ArtifactType: getPayloadStr(msg.Payload, "artifact_type"),
+				ArtifactPath: getPayloadStr(msg.Payload, "artifact_path"),
+				ArtifactSize: getPayloadInt64(msg.Payload, "artifact_size"),
+				UploadStatus: getPayloadStr(msg.Payload, "upload_status"),
+				Error:        getPayloadStr(msg.Payload, "error"),
+			},
+		}
 	}
 
 	return env

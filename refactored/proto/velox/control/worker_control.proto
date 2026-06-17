@@ -41,6 +41,7 @@ message WorkerToMasterEnvelope {
         JobProgress job_progress = 15;
         CommandAck command_ack = 16;
         JobResult job_result = 17;
+        ArtifactUploaded artifact_uploaded = 18;
         Goodbye goodbye = 19;
     }
 }
@@ -116,6 +117,16 @@ message JobResult {
 }
 
 message Goodbye {}
+
+message ArtifactUploaded {
+    string job_id = 1;
+    string artifact_id = 2;
+    string artifact_type = 3;
+    string artifact_path = 4;
+    int64 artifact_size = 5;
+    string upload_status = 6;
+    string error = 7;
+}
 
 // ---------------------------------------------------------
 // Master -> Worker
