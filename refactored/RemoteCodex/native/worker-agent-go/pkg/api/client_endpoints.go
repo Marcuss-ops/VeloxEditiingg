@@ -237,10 +237,19 @@ func (c *Client) GetCommands(ctx context.Context, workerID string) ([]WorkerComm
 	return commands, nil
 }
 
-// AckCommand acknowledges a command has been processed.
+// AckCommand acknowledges a command has been processed (legacy — by type).
 func (c *Client) AckCommand(ctx context.Context, workerID, command string) error {
 	_, err := c.doRequest(ctx, "POST", endpointAckCommand, map[string]string{
 		"worker_id": workerID, "command": command,
+	})
+	return err
+}
+
+// AckCommandByID acknowledges a specific command by its command_id.
+func (c *Client) AckCommandByID(ctx context.Context, workerID, commandID string) error {
+	_, err := c.doRequest(ctx, "POST", endpointAckCommandByID, map[string]string{
+		"worker_id":  workerID,
+		"command_id": commandID,
 	})
 	return err
 }

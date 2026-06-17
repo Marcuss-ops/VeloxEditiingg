@@ -40,6 +40,21 @@ func (w *Worker) executeJob(ctx context.Context, job *api.Job) {
 	w.status = StatusBusy
 	w.mu.Unlock()
 
+	// Register in activeJobs map for multi-job tracking
+	activeJob := &ActiveJob{
+		Job:       job,
+		LeaseID:   resolveLeaseID(job),
+		StartedAt: time.Now(),
+	}
+	w.activeJobsMu.Lock()
+	w.activeJobs[job.JobID] = activeJob
+	w.activeJobsMu.Unlock()
+	defer func() {
+		w.activeJobsMu.Lock()
+		delete(w.activeJobs, job.JobID)
+		w.activeJobsMu.Unlock()
+	}()
+
 	// Create cancellable context and register it for cancel_job command
 	jobCtx, jobCancel := context.WithCancel(ctx)
 	w.registerJobCancel(job.JobID, jobCancel)
@@ -91,6 +106,13 @@ func (w *Worker) executeJob(ctx context.Context, job *api.Job) {
 	w.progressScene.Store(0)
 	w.progressTotal.Store(0)
 	w.progressStage.Store("idle")
+	
+	// Update activeJobs progress on completion
+	w.activeJobsMu.Lock()
+	if aj, ok := w.activeJobs[job.JobID]; ok {
+		aj.Progress = JobProgress{}
+	}
+	w.activeJobsMu.Unlock()
 	duration := time.Since(startTime)
 
 	if execErr != nil {

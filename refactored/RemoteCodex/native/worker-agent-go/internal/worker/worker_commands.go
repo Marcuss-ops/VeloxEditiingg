@@ -132,11 +132,20 @@ func (w *Worker) processCommand(ctx context.Context, cmd api.WorkerCommand) {
 		resultErr = fmt.Errorf("unknown command: %s", cmd.Command)
 	}
 
-	// Ack the command so the master knows it was received (even on error).
-	if ackErr := w.apiClient.AckCommand(ctx, w.config.WorkerID, cmd.Command); ackErr != nil {
-		w.logger.Warn("[COMMANDS] Failed to ack command %s: %v", cmd.Command, ackErr)
+	// Ack the command by command_id so the master knows it was received (even on error).
+	if cmd.CommandID != "" {
+		if ackErr := w.apiClient.AckCommandByID(ctx, w.config.WorkerID, cmd.CommandID); ackErr != nil {
+			w.logger.Warn("[COMMANDS] Failed to ack command %s (id=%s): %v", cmd.Command, cmd.CommandID, ackErr)
+		} else {
+			w.logger.Debug("[COMMANDS] Acknowledged command: %s (id=%s)", cmd.Command, cmd.CommandID)
+		}
 	} else {
-		w.logger.Debug("[COMMANDS] Acknowledged command: %s", cmd.Command)
+		// Legacy fallback: ack by type
+		if ackErr := w.apiClient.AckCommand(ctx, w.config.WorkerID, cmd.Command); ackErr != nil {
+			w.logger.Warn("[COMMANDS] Failed to ack command %s: %v", cmd.Command, ackErr)
+		} else {
+			w.logger.Debug("[COMMANDS] Acknowledged command (legacy): %s", cmd.Command)
+		}
 	}
 
 	if resultErr != nil {

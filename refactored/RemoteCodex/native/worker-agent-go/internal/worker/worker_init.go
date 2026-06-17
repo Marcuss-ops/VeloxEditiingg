@@ -68,6 +68,8 @@ func New(cfg *config.WorkerConfig, version string) *Worker {
 		seenCommands:       make(map[string]time.Time),
 		recentLogs:         recentLogs,
 		jobCancelFuncs:     make(map[string]context.CancelFunc),
+		activeJobs:         make(map[string]*ActiveJob),
+		connState:          ConnDisconnected,
 		concurrencyLimiter: NewConcurrencyLimiter(detectedConcurrency),
 		stageExecutor:      stageExecutor,
 		exitFunc:           os.Exit,

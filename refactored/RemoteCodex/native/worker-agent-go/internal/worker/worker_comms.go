@@ -3,6 +3,8 @@ package worker
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"math"
 	"os"
 	"runtime"
@@ -70,6 +72,15 @@ func (w *Worker) register(ctx context.Context) error {
 		BundleHash:      w.config.BundleHash,
 		ProtocolVersion: w.config.ProtocolVersion,
 		EngineVersion:   w.config.EngineVersion,
+	}
+
+	// Compute persistent credential hash if worker secret is configured.
+	// Credential = SHA-256(workerID + ":" + workerSecret)
+	if w.config.WorkerSecret != "" {
+		h := sha256.New()
+		h.Write([]byte(w.config.WorkerID + ":" + w.config.WorkerSecret))
+		info.Credential = hex.EncodeToString(h.Sum(nil))
+		w.logger.Debug("[AUTH] Credential hash computed for registration")
 	}
 
 	w.logger.Debug("Registering with master at %s", w.config.MasterURL)
@@ -202,10 +213,6 @@ func (w *Worker) getStatus() Status {
 func (w *Worker) sendHeartbeat(ctx context.Context) error {
 	w.mu.RLock()
 	status := w.status
-	jobID := ""
-	if w.currentJob != nil {
-		jobID = w.currentJob.JobID
-	}
 	w.mu.RUnlock()
 
 	recentLogs, recentErrors := w.recentLogs.Snapshot(300, 100)
@@ -243,35 +250,46 @@ func (w *Worker) sendHeartbeat(ctx context.Context) error {
 	}
 	extra["jobs_completed"] = w.jobsCompleted.Load()
 	extra["jobs_failed"] = w.jobsFailed.Load()
-	if w.currentJob != nil {
-		currentJob := map[string]interface{}{
-			"job_id":       w.currentJob.JobID,
-			"job_run_id":   w.currentJob.JobRunID,
-			"run_id":       w.currentJob.JobRunID,
-			"job_type":     w.currentJob.JobType,
-			"priority":     w.currentJob.Priority,
-			"timeout_secs": w.currentJob.TimeoutSecs,
-			"lease_id":     resolveLeaseID(w.currentJob),
-			"attempt":      resolveJobAttempt(w.currentJob),
+
+	// Report all active jobs with their individual progress
+	w.activeJobsMu.RLock()
+	activeJobList := make([]map[string]interface{}, 0, len(w.activeJobs))
+	var primaryJobID string
+	for _, aj := range w.activeJobs {
+		if primaryJobID == "" {
+			primaryJobID = aj.Job.JobID
 		}
-		// Include progress if available
-		if pct := w.progressPercent.Load(); pct > 0 {
-			currentJob["progress_percent"] = pct
-			currentJob["progress_scene"] = w.progressScene.Load()
-			currentJob["progress_total"] = w.progressTotal.Load()
-			if stage, ok := w.progressStage.Load().(string); ok && stage != "" {
-				currentJob["progress_stage"] = stage
+		jobInfo := map[string]interface{}{
+			"job_id":     aj.Job.JobID,
+			"job_run_id": aj.Job.JobRunID,
+			"job_type":   aj.Job.JobType,
+			"priority":   aj.Job.Priority,
+			"lease_id":   aj.LeaseID,
+			"attempt":    resolveJobAttempt(aj.Job),
+		}
+		if aj.Progress.Percent > 0 {
+			jobInfo["progress_percent"] = aj.Progress.Percent
+			jobInfo["progress_scene"] = aj.Progress.Scene
+			jobInfo["progress_total"] = aj.Progress.TotalScenes
+			if aj.Progress.Stage != "" {
+				jobInfo["progress_stage"] = aj.Progress.Stage
 			}
 		}
-		extra["current_job"] = currentJob
+		activeJobList = append(activeJobList, jobInfo)
+	}
+	w.activeJobsMu.RUnlock()
+
+	if len(activeJobList) > 0 {
+		extra["active_jobs"] = activeJobList
+		extra["active_jobs_count"] = len(activeJobList)
 	}
 
 	payload := &api.HeartbeatPayload{
 		WorkerID:        w.config.WorkerID,
 		WorkerName:      w.config.WorkerName,
 		Status:          string(status),
-		JobID:           jobID,
-		CurrentJob:      jobID,
+		JobID:           primaryJobID,
+		CurrentJob:      primaryJobID,
 		CodeVersion:     w.version,
 		BundleVersion:   w.config.BundleVersion,
 		BundleHash:      w.config.BundleHash,
@@ -285,7 +303,7 @@ func (w *Worker) sendHeartbeat(ctx context.Context) error {
 	return nil
 }
 
-// leaseRenewLoop sends periodic lease renewals for the current job, decoupled from heartbeat.
+// leaseRenewLoop sends periodic lease renewals for all active jobs, decoupled from heartbeat.
 func (w *Worker) leaseRenewLoop(ctx context.Context) {
 	defer w.wg.Done()
 
@@ -301,31 +319,36 @@ func (w *Worker) leaseRenewLoop(ctx context.Context) {
 			w.logger.Debug("Lease renew loop exiting (stop signal)")
 			return
 		case <-ticker.C:
-			w.mu.RLock()
-			job := w.currentJob
-			w.mu.RUnlock()
-
-			if job == nil {
-				continue
+			w.activeJobsMu.RLock()
+			jobs := make([]*ActiveJob, 0, len(w.activeJobs))
+			for _, aj := range w.activeJobs {
+				jobs = append(jobs, aj)
 			}
+			w.activeJobsMu.RUnlock()
 
-			leaseID := resolveLeaseID(job)
-			if leaseID == "" {
-				continue
-			}
+			for _, aj := range jobs {
+				if aj == nil || aj.Job == nil {
+					continue
+				}
 
-			leaseExpiry := time.Now().UTC().Add(30 * time.Minute).Format(time.RFC3339)
-			attempt := resolveJobAttempt(job)
-			var err error
-			if w.config.UseV2Endpoints != nil && *w.config.UseV2Endpoints {
-				err = w.apiClient.RenewJobLeaseV2(ctx, job.JobID, w.config.WorkerID, leaseID, attempt, leaseExpiry)
-			} else {
-				err = w.apiClient.RenewJobLease(ctx, job.JobID, w.config.WorkerID, leaseID, attempt, leaseExpiry)
-			}
-			if err != nil {
-				w.logger.Warn("[LEASE] Failed to renew lease for job %s: %v", job.JobID, err)
-			} else {
-				w.logger.Debug("[LEASE] Renewed lease for job %s (lease_id=%s)", job.JobID, leaseID)
+				leaseID := aj.LeaseID
+				if leaseID == "" {
+					continue
+				}
+
+				leaseExpiry := time.Now().UTC().Add(30 * time.Minute).Format(time.RFC3339)
+				attempt := resolveJobAttempt(aj.Job)
+				var err error
+				if w.config.UseV2Endpoints != nil && *w.config.UseV2Endpoints {
+					err = w.apiClient.RenewJobLeaseV2(ctx, aj.Job.JobID, w.config.WorkerID, leaseID, attempt, leaseExpiry)
+				} else {
+					err = w.apiClient.RenewJobLease(ctx, aj.Job.JobID, w.config.WorkerID, leaseID, attempt, leaseExpiry)
+				}
+				if err != nil {
+					w.logger.Warn("[LEASE] Failed to renew lease for job %s: %v", aj.Job.JobID, err)
+				} else {
+					w.logger.Debug("[LEASE] Renewed lease for job %s (lease_id=%s)", aj.Job.JobID, leaseID)
+				}
 			}
 		}
 	}
