@@ -96,6 +96,17 @@ type ClaimResult struct {
 	LeaseExpires time.Time `json:"lease_expires,omitempty"`
 }
 
+// RenewLeaseParams carries the information needed to extend a job lease.
+// The repository validates internally that the job is in a renewable status
+// (LEASED, RUNNING, PROCESSING) and bumps the revision atomically.
+// WorkerID is recorded for audit purposes.
+type RenewLeaseParams struct {
+	JobID       string
+	WorkerID    string
+	LeaseID     string
+	LeaseExpiry time.Time
+}
+
 // TransitionParams encodes a CAS-style state change.
 //
 // ExpectedStatus is the status the caller last observed; NewStatus is the
@@ -148,4 +159,8 @@ type JobRepository interface {
 	// ListByStatus returns up to limit jobs in any of the supplied statuses,
 	// newest-updated first. limit <= 0 is treated as "all".
 	ListByStatus(ctx context.Context, statuses []JobStatus, limit int) ([]Job, error)
+	// RenewLease extends the lease on an active job atomically. Returns
+	// ErrTransitionConflict if the job is not in a renewable state
+	// (LEASED, RUNNING, PROCESSING).
+	RenewLease(ctx context.Context, params RenewLeaseParams) error
 }
