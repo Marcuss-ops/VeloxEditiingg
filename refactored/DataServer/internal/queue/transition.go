@@ -399,36 +399,26 @@ func (ts *TransitionService) RequeueZombieJobs(ctx context.Context, timeout time
 
 // RenewLease extends the lease for an active job.
 func (ts *TransitionService) RenewLease(ctx context.Context, jobID, workerID, leaseID string, leaseExpiry time.Time) error {
-	// Spec §5 path: validate existence + status via narrow JobRepository,
-	// then load full state from dbStore for the rich write (PersistJob).
+	// Spec §5 path: delegate to JobRepository.RenewLease (single targeted
+	// UPDATE, no double-read). History entry is a best-effort side-effect
+	// through the legacy store (not in the repo contract).
 	if ts.jobRepo != nil {
-		sj, err := ts.jobRepo.GetJob(ctx, jobID)
-		if err != nil {
-			return fmt.Errorf("job not found: %s", jobID)
+		if err := ts.jobRepo.RenewLease(ctx, store.RenewLeaseParams{
+			JobID:       jobID,
+			WorkerID:    workerID,
+			LeaseID:     leaseID,
+			LeaseExpiry: leaseExpiry.UTC(),
+		}); err != nil {
+			return fmt.Errorf("renew lease: %w", err)
 		}
-		if err := ts.Validate(JobStatus(normalizeJobStatus(string(sj.Status))), StatusProcessing); err != nil {
-			return fmt.Errorf("job %s is not renewable in state %s", jobID, sj.Status)
-		}
-		// repo has no RenewLease method; full state still via dbStore for PersistJob.
-		m, err := ts.dbStore.GetJob(ctx, jobID)
-		if err != nil {
-			return fmt.Errorf("job not found: %s", jobID)
-		}
-		job := MapToJob(m)
+		// History entry (best-effort — not in repo contract).
 		nowISO := NowISO()
-		job.LeaseID = leaseID
-		job.LeaseExpiry = leaseExpiry.UTC().Format(time.RFC3339)
-		job.UpdatedAt = NowUnix()
-		if job.Attempt == 0 {
-			job.Attempt = job.RetryCount
-		}
-		job.History = append(job.History, JobHistoryEntry{
-			Status:    "PROCESSING",
-			Timestamp: nowISO,
-			WorkerID:  workerID,
-			Message:   "Lease renewed",
+		ts.dbStore.LogJobEvent(jobID, "lease_renewed", map[string]interface{}{
+			"worker_id": workerID,
+			"lease_id":  leaseID,
+			"timestamp": nowISO,
 		})
-		return PersistJob(job, ts.dbStore)
+		return nil
 	}
 
 	// Legacy path (dbStore-direct).

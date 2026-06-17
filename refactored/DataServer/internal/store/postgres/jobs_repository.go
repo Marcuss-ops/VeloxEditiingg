@@ -69,6 +69,13 @@ func (r *JobRepository) ListByStatus(ctx context.Context, statuses []store.JobSt
 	return nil, store.ErrNotImplemented
 }
 
+// RenewLease — TODO §5b: UPDATE jobs SET lease_id=$1, lease_expiry=$2, … WHERE id=$3 AND status IN (…).
+// Must raise ErrTransitionConflict when zero rows affected.
+func (r *JobRepository) RenewLease(ctx context.Context, params store.RenewLeaseParams) error {
+	_, _, _ = ctx, params, r.dsn
+	return store.ErrNotImplemented
+}
+
 // Compile-time guard — keeps PostgreSQL implementation honest with the
 // SQLite-side contract. PR-1's README promised this; PR-2 delivers it.
 var _ store.JobRepository = (*JobRepository)(nil)
