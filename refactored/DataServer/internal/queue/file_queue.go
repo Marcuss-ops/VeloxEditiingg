@@ -132,6 +132,13 @@ type FileQueue struct {
 	dbStore    *store.SQLiteStore
 	ts         *TransitionService
 
+	// jobRepo is the narrow JobRepository wired through to TransitionService
+	// (spec §5). Stored at FileQueue boundary for visibility — producers can
+	// call SetJobRepository on FileQueue rather than reaching into ts. The
+	// underlying claim path lives in TransitionService.ClaimNextJob which
+	// delegates to repo.ClaimNext when set.
+	jobRepo store.JobRepository
+
 	eventLogger func(jobID, eventType string, extra map[string]interface{})
 }
 
@@ -321,4 +328,18 @@ func (q *FileQueue) GetDBStore() *store.SQLiteStore {
 // TransitionService returns the transition service for direct use.
 func (q *FileQueue) TransitionService() *TransitionService {
 	return q.ts
+}
+
+// SetJobRepository wires a narrow JobRepository (spec §5) into both the
+// FileQueue surface and the embedded TransitionService. Idempotent and safe
+// to call multiple times during startup. nil disables the narrow path
+// (dbStore is used as fallback).
+func (q *FileQueue) SetJobRepository(repo store.JobRepository) {
+	q.jobRepo = repo
+	q.ts.SetJobRepository(repo)
+}
+
+// JobRepository returns the configured narrow repository, if any.
+func (q *FileQueue) JobRepository() store.JobRepository {
+	return q.jobRepo
 }

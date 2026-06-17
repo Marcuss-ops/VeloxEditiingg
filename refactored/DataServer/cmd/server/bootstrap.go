@@ -121,6 +121,14 @@ func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
 	workerLifecycle := lifecycle.NewHandler(cfg, reg, sqliteStore, cfg.Runtime.DataDir)
 
 	// Create orchestrator for multi-step job pipelines (PR5b: with worker registry for heartbeat recovery)
+	// Wire narrow JobRepository (spec §5) for TransitionService. PR-2:
+	// ClaimNextJob delegates to this; other methods still use dbStore until
+	// Wire narrow JobRepository (spec §5) into FileQueue — SetJobRepository
+	// forwards into the embedded TransitionService. PR-2 wires ClaimNext;
+	// PR-2b will widen to other methods.
+	jobRepo := store.NewSQLiteJobRepository(sqliteStore)
+	fileQ.SetJobRepository(jobRepo)
+
 	orch, err := queue.NewOrchestrator(nil, fileQ, sqliteStore, &orchestratorWorkerRegistry{reg: reg})
 	if err != nil {
 		return nil, fmt.Errorf("orchestrator init: %w", err)

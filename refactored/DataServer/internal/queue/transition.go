@@ -4,6 +4,7 @@ package queue
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -15,11 +16,30 @@ import (
 // All status changes flow through this service to ensure consistency.
 type TransitionService struct {
 	dbStore *store.SQLiteStore
+
+	// jobRepo is an optional narrow JobRepository (spec §5). When set,
+	// ClaimNextJob delegates to it for the atomic lease acquisition step.
+	// Nil falls back to the older dbStore path. PR-2 wires it; the rollout
+	// to other methods (Complete/Fail/UpdateFields) is planned for PR-2b.
+	jobRepo store.JobRepository
 }
 
 // NewTransitionService creates a new transition service.
 func NewTransitionService(dbStore *store.SQLiteStore) *TransitionService {
 	return &TransitionService{dbStore: dbStore}
+}
+
+// SetJobRepository wires a narrow JobRepository for spec §5 callers.
+// Passing nil disables the fast-path (dbStore is used). The setter is
+// non-blocking and idempotent; multiple calls in startup are fine.
+func (ts *TransitionService) SetJobRepository(repo store.JobRepository) {
+	ts.jobRepo = repo
+}
+
+// JobRepository returns the wired narrow repository (or nil if unconfigured).
+// Tests use this to swap implementations; production code should not need it.
+func (ts *TransitionService) JobRepository() store.JobRepository {
+	return ts.jobRepo
 }
 
 // Validate checks whether a transition from one status to another is allowed.
@@ -32,7 +52,42 @@ func (ts *TransitionService) Validate(from, to JobStatus) error {
 
 // ClaimNextJob atomically claims the next pending job for a worker directly from SQLite.
 // Returns the claimed job (with updated status), or nil if no pending jobs.
+//
+// When a JobRepository is wired (SetJobRepository) the atomic lease step
+// delegates to its narrow ClaimNext method, satisfying spec §5 single-method
+// atomicity end-to-end. Otherwise it falls back to the legacy dbStore path.
+//
+// NOTE: After the atomic claim, the path calls dbStore.GetJob + MapToJob to
+// load the rich payload. On SQLite single-writer this is safe (the lease is
+// committed before the read sees the row). On Postgres or any MVCC backend
+// the read could observe a stale snapshot; the map's result_json blob is the
+// authoritative post-claim state at that moment, not an eventually-consistent view.
 func (ts *TransitionService) ClaimNextJob(ctx context.Context, workerID string, allowedJobTypes []string) (*Job, error) {
+	if ts.jobRepo != nil {
+		result, err := ts.jobRepo.ClaimNext(ctx, store.ClaimParams{
+			WorkerID:        workerID,
+			AllowedJobTypes: allowedJobTypes,
+			Now:             time.Now().UTC(),
+		})
+		if err != nil {
+			if errors.Is(err, store.ErrNoClaimableJob) {
+				return nil, nil
+			}
+			return nil, fmt.Errorf("job repository claim: %w", err)
+		}
+		if result == nil || result.JobID == "" {
+			return nil, nil
+		}
+		// Spec §5: ClaimResult is opaque; the rich payload still needs the legacy
+		// MapToJob pipeline so callers see the full request/result/history blobs.
+		// Pull the canonical row via dbStore.GetJob and project through MapToJob.
+		m, err := ts.dbStore.GetJob(ctx, result.JobID)
+		if err != nil {
+			return nil, fmt.Errorf("post-claim job fetch: %w", err)
+		}
+		return MapToJob(m), nil
+	}
+	// Legacy path (dbStore-direct).
 	claimedJSON, ok, err := ts.dbStore.ClaimNextPendingJob(workerID, allowedJobTypes, time.Now().UTC())
 	if err != nil {
 		return nil, err
