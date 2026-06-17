@@ -1,0 +1,21 @@
+# Build artifacts of the standalone SvelteKit frontend.
+# `dist/` is the build output of `npm run build`; the master server consumes
+# it via VELOX_SPA_DIR. As of the velox-core split, this directory lives in
+# its own repository and is no longer shipped alongside the Go backend.
+web/dist/
+web/.svelte-kit/
+web/node_modules/
+web/test-results/
+web/build/
+
+dark_editor/node_modules/
+dark_editor/dist/
+dark_editor/build/
+dark_editor/.cache/
+
+# Editor / system files
+*.log
+.DS_Store
+Thumbs.db
+.env
+.env.*

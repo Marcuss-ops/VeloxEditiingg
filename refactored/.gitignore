@@ -44,6 +44,7 @@ logs/
 
 # ── Node ─────────────────────────────────────────────────────
 node_modules/
+frontend_standalone/web/dist/
 frontend_standalone/web/node_modules/
 frontend_standalone/web/test-results/
 frontend_standalone/web/.svelte-kit/

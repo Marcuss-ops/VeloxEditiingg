@@ -107,10 +107,21 @@ shared/                        # Libreria condivisa Go
 ```bash
 cd DataServer
 export VELOX_ADMIN_TOKEN=velox-dev-token
-export VELOX_SPA_DIR=../frontend_standalone/web/dist
+# VELOX_SPA_DIR è OPZIONALE: senza, il master gira in modalità API-only
+# Se usi il bundle SPA, punta a una directory che contiene index.html
+export VELOX_SPA_DIR=/srv/velox/frontend-velox/build
 go run ./cmd/server
 # → http://0.0.0.0:8000
 ```
+
+> **Frontend ora vive (in prospettiva) in un repository separato**.
+> La directory `frontend_standalone/` contiene le sorgenti (`web/`,
+> `dark_editor/`) ma `web/dist/` non è più committato: il master lo consuma
+> via `VELOX_SPA_DIR`. Quando `VELOX_SPA_DIR` non è impostato o punta a una
+> directory senza `index.html`, il server parte normalmente e serve solo le
+> API; richieste UI ricevono una *landing page* con le istruzioni di
+> installazione. Vedi `frontend_standalone/README.md` per la roadmap di
+> split.
 
 ### Invio Job di Test
 
