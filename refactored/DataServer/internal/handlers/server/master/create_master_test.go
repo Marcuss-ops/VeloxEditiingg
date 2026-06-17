@@ -38,7 +38,7 @@ func newTestFileQueue(t *testing.T) *queue.FileQueue {
 func TestCreateMaster_InvalidJSON(t *testing.T) {
 	fq := newTestFileQueue(t)
 	cfg := config.FromEnv()
-	cfg.DataDir = t.TempDir()
+	cfg.Runtime.DataDir = t.TempDir()
 	r := gin.New()
 	r.POST("/api/video/create-master", CreateMaster(cfg, fq))
 
@@ -60,8 +60,8 @@ func TestCreateMaster_InvalidJSON(t *testing.T) {
 func TestCreateMaster_Enqueue(t *testing.T) {
 	fq := newTestFileQueue(t)
 	cfg := config.FromEnv()
-	cfg.DataDir = t.TempDir()
-	_ = os.MkdirAll(cfg.DataDir, 0o755)
+	cfg.Runtime.DataDir = t.TempDir()
+	_ = os.MkdirAll(cfg.Runtime.DataDir, 0o755)
 	r := gin.New()
 	r.POST("/api/video/create-master", CreateMaster(cfg, fq))
 
@@ -101,7 +101,7 @@ func TestCreateMaster_Enqueue(t *testing.T) {
 func TestCreateMaster_ValidationNoClips(t *testing.T) {
 	fq := newTestFileQueue(t)
 	cfg := config.FromEnv()
-	cfg.DataDir = t.TempDir()
+	cfg.Runtime.DataDir = t.TempDir()
 	r := gin.New()
 	r.POST("/api/video/create-master", CreateMaster(cfg, fq))
 
@@ -128,8 +128,8 @@ func TestCreateMaster_ValidationNoClips(t *testing.T) {
 func TestCreateMaster_MultiTitle(t *testing.T) {
 	fq := newTestFileQueue(t)
 	cfg := config.FromEnv()
-	cfg.DataDir = t.TempDir()
-	_ = os.MkdirAll(cfg.DataDir, 0o755)
+	cfg.Runtime.DataDir = t.TempDir()
+	_ = os.MkdirAll(cfg.Runtime.DataDir, 0o755)
 	r := gin.New()
 	r.POST("/api/video/create-master", CreateMaster(cfg, fq))
 
