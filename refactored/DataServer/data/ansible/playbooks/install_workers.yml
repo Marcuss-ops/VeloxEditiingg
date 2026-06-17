@@ -75,7 +75,7 @@
     - name: Install | Build Go worker agent on controller
       ansible.builtin.shell: |
         set -euo pipefail
-        AGENT_DIR="{{ playbook_dir }}/../../../../RemoteCodex/native/worker-agent-go"
+        AGENT_DIR="/home/pierone/Pyt/VeloxLEgit/refactored/RemoteCodex/native/worker-agent-go"
         BINARY="$AGENT_DIR/bin/velox-worker-agent"
 
         # Skip build if binary exists and no .go source is newer than it
@@ -130,8 +130,8 @@
         file: tasks/deploy_worker_release.yml
       vars:
         bundle_zip_path: ""
-        reinject_agent_src: "{{ playbook_dir }}/../../../../RemoteCodex/native/worker-agent-go/bin/velox-worker-agent"
-        reinject_scripts_dir: "{{ playbook_dir }}/../../../../RemoteCodex/scripts"
+        reinject_agent_src: "/home/pierone/Pyt/VeloxLEgit/refactored/RemoteCodex/native/worker-agent-go/bin/velox-worker-agent"
+        reinject_scripts_dir: "/home/pierone/Pyt/VeloxLEgit/refactored/RemoteCodex/scripts"
 
     - name: Install | Riepilogo installazione
       ansible.builtin.debug:

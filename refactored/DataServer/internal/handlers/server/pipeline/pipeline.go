@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 
@@ -133,6 +134,9 @@ func forwardPipelineResultToWorker(ctx context.Context, q *queue.FileQueue, resu
 	if err != nil {
 		pipelineLog("FORWARD: ForwardCompletedResult FAILED: %v", err)
 		return nil, err
+	}
+	if enqueued == nil {
+		return nil, fmt.Errorf("forward completed result returned no enqueue response")
 	}
 
 	jobPayload, buildErr := enqueue.BuildPipelinePayload(result)

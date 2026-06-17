@@ -13,7 +13,7 @@ import (
 
 // maybeAutoUploadYouTube checks job metadata and if conditions are met,
 // triggers a YouTube auto-upload for the completed video.
-func maybeAutoUploadYouTube(fileQ *queue.FileQueue, youtubeService *ytservice.Service, jobID string, uploadInfo map[string]interface{}, videoPath string) {
+func maybeAutoUploadYouTube(fileQ *queue.FileQueue, youtubeService YouTubeAutoUploader, jobID string, uploadInfo map[string]interface{}, videoPath string) {
 	if fileQ == nil || youtubeService == nil || strings.TrimSpace(jobID) == "" {
 		return
 	}
@@ -202,11 +202,11 @@ func maybeAutoUploadYouTube(fileQ *queue.FileQueue, youtubeService *ytservice.Se
 		}
 
 		update := map[string]interface{}{
-			"youtube_upload_status": "completed",
-			"youtube_url":           result.YouTubeURL,
-			"youtube_video_id":      result.VideoID,
-			"youtube_channel_id":    channel.ID,
-			"youtube_channel_name":  channel.Name,
+			"youtube_upload_status":    "completed",
+			"youtube_url":              result.YouTubeURL,
+			"youtube_video_id":         result.VideoID,
+			"youtube_channel_id":       channel.ID,
+			"youtube_channel_name":     channel.Name,
 			"youtube_channel_language": channel.Language,
 			"last_youtube_upload_result": map[string]interface{}{
 				"success":      true,

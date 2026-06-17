@@ -333,3 +333,54 @@ func TestRegistryGetActiveWorkers(t *testing.T) {
 		t.Fatalf("expected 1 active worker, got %d", len(active))
 	}
 }
+
+func TestRegistryStatusSnapshotSeparatesRegisteredFromLive(t *testing.T) {
+	reg := newTestRegistry(t)
+	ctx := context.Background()
+
+	_ = reg.RegisterWorker(ctx, "w1", "worker-1", "10.0.0.1", nil)
+	_ = reg.RegisterWorker(ctx, "w2", "worker-2", "10.0.0.2", nil)
+	_ = reg.Heartbeat(ctx, "w1", "worker-1", "idle", "", nil)
+	_ = reg.Heartbeat(ctx, "w2", "worker-2", "idle", "", nil)
+
+	reg.mu.Lock()
+	stale := reg.inMem["w2"]
+	stale.LastHB = time.Now().UTC().Add(-2 * time.Hour).Format(time.RFC3339)
+	reg.inMem["w2"] = stale
+	reg.mu.Unlock()
+
+	registered, live := reg.StatusSnapshot(ctx, 5*time.Minute)
+	if len(registered) != 2 {
+		t.Fatalf("expected 2 registered workers, got %d", len(registered))
+	}
+	if len(live) != 1 {
+		t.Fatalf("expected 1 live worker, got %d", len(live))
+	}
+	if live[0].WorkerID != "w1" {
+		t.Fatalf("expected w1 to be live, got %s", live[0].WorkerID)
+	}
+}
+
+func TestRegistryGetStaleWorkers(t *testing.T) {
+	reg := newTestRegistry(t)
+	ctx := context.Background()
+
+	_ = reg.RegisterWorker(ctx, "w1", "worker-1", "10.0.0.1", nil)
+	_ = reg.RegisterWorker(ctx, "w2", "worker-2", "10.0.0.2", nil)
+	_ = reg.Heartbeat(ctx, "w1", "worker-1", "idle", "", nil)
+	_ = reg.Heartbeat(ctx, "w2", "worker-2", "idle", "", nil)
+
+	reg.mu.Lock()
+	stale := reg.inMem["w2"]
+	stale.LastHB = time.Now().UTC().Add(-2 * time.Hour).Format(time.RFC3339)
+	reg.inMem["w2"] = stale
+	reg.mu.Unlock()
+
+	staleWorkers := reg.GetStaleWorkers(ctx, 5*time.Minute)
+	if len(staleWorkers) != 1 {
+		t.Fatalf("expected 1 stale worker, got %d", len(staleWorkers))
+	}
+	if staleWorkers[0].WorkerID != "w2" {
+		t.Fatalf("expected w2 to be stale, got %s", staleWorkers[0].WorkerID)
+	}
+}

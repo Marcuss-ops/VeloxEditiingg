@@ -231,10 +231,14 @@ func (q *FileQueue) GetJobAsMap(ctx context.Context, jobID string) (map[string]i
 // ============== Merge/Patch Methods (delegated to job_merge.go) ==============
 
 func (q *FileQueue) UpdateJobFields(ctx context.Context, jobID string, fields map[string]interface{}) error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
 	return UpdateJobFields(ctx, jobID, fields, q.dbStore, q.activeJobs)
 }
 
 func (q *FileQueue) UpdateJobLogs(ctx context.Context, jobID string, logs []JobLogEntry) error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
 	return UpdateJobLogs(ctx, jobID, logs, q.dbStore, q.activeJobs)
 }
 

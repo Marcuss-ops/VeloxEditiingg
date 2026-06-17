@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -136,6 +137,14 @@ func TestGenerateWithImages_UsesCreatorStageWhenConfigured(t *testing.T) {
 
 	tempDir := t.TempDir()
 	dbPath := filepath.Join(tempDir, "velox.db")
+	voicePath := filepath.Join(tempDir, "voice.mp3")
+	imagePath := filepath.Join(tempDir, "scene1.png")
+	if err := os.WriteFile(voicePath, []byte("voice"), 0o644); err != nil {
+		t.Fatalf("write voice: %v", err)
+	}
+	if err := os.WriteFile(imagePath, []byte("image"), 0o644); err != nil {
+		t.Fatalf("write image: %v", err)
+	}
 	db, err := store.NewSQLiteStore(dbPath)
 	if err != nil {
 		t.Fatalf("new sqlite store: %v", err)
@@ -161,9 +170,9 @@ func TestGenerateWithImages_UsesCreatorStageWhenConfigured(t *testing.T) {
 				"title":       "Creator Video",
 				"script_text": "Creator generated script",
 				"scenes_json": `[
-					{"text":"Scene 1","image_link":"https://example.com/scene1.png","duration_seconds":4}
+					{"text":"Scene 1","image_link":"` + imagePath + `","duration_seconds":4}
 				]`,
-				"voiceover_path": "https://example.com/voice.mp3",
+				"voiceover_path": voicePath,
 				"youtube_group":  "amish",
 			},
 		})
@@ -215,5 +224,75 @@ func TestGenerateWithImages_UsesCreatorStageWhenConfigured(t *testing.T) {
 	}
 	if res["status"] != "PENDING" {
 		t.Fatalf("want worker status PENDING, got %v", res["status"])
+	}
+
+	payload, payloadErr := q.GetJobPayload(context.Background(), res["job_id"].(string))
+	if payloadErr != nil {
+		t.Fatalf("GetJobPayload: %v", payloadErr)
+	}
+	if got := payload["voiceover_path"]; got == voicePath {
+		t.Fatalf("want staged voiceover path, got raw local creator path %v", got)
+	}
+}
+
+func TestGenerateWithImages_BypassesCreatorForRenderReadyPayload(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "velox.db")
+	voicePath := filepath.Join(tempDir, "roman_voiceover.mp3")
+	if err := os.WriteFile(voicePath, []byte("voice"), 0o644); err != nil {
+		t.Fatalf("write voice: %v", err)
+	}
+	db, err := store.NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("new sqlite store: %v", err)
+	}
+	q, err := queue.NewFileQueue(&queue.FileQueueConfig{MaxRetries: 3, DBStore: db})
+	if err != nil {
+		t.Fatalf("new file queue: %v", err)
+	}
+
+	creatorCalled := false
+	mockCreator := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		creatorCalled = true
+		http.Error(w, `{"ok":false,"error":"creator should be bypassed"}`, http.StatusBadRequest)
+	}))
+	defer mockCreator.Close()
+
+	cfg := &config.Config{
+		DataDir:               tempDir,
+		VideosDir:             filepath.Join(tempDir, "videos"),
+		DBDSN:                 dbPath,
+		RemoteEngineURL:       mockCreator.URL,
+		RemoteEngineTimeoutMS: 5000,
+		RemoteEngineRetries:   1,
+	}
+
+	r := gin.New()
+	RegisterRoutes(r.Group("/api/script"), cfg, q, db)
+
+	reqBody, _ := json.Marshal(map[string]interface{}{
+		"skip_creator":   true,
+		"video_name":     "Roman Aqueducts Fixed Job",
+		"script_text":    "Roman engineering script",
+		"voiceover_path": voicePath,
+		"scenes_json": `[
+			{"text":"Scene 1","image_link":"https://drive.google.com/file/d/1QoPBq8z2DB9OUXyjIT3HwgKOYzihF8Mh/view","duration_seconds":5},
+			{"text":"Scene 2","image_link":"https://drive.google.com/file/d/1S6NiFUeLEAQwtGZISX96nRsv6sv_p7f_/view","duration_seconds":5}
+		]`,
+	})
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/script/generate-with-images", bytes.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+	req.RemoteAddr = "127.0.0.1:12345"
+	r.ServeHTTP(w, req)
+
+	if creatorCalled {
+		t.Fatalf("creator must not be called for render-ready payload")
+	}
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d body=%s", w.Code, w.Body.String())
 	}
 }

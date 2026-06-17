@@ -2,11 +2,14 @@ package creatorflow
 
 import (
 	"context"
+	"fmt"
 	"log"
+	"os/exec"
 	"strings"
 	"time"
 
 	"velox-server/internal/config"
+	remoteansible "velox-server/internal/handlers/remote/ansible"
 	"velox-server/internal/jobs/enqueue"
 	"velox-server/internal/queue"
 	"velox-server/internal/remoteengine"
@@ -18,6 +21,9 @@ type Service struct {
 	queue        *queue.FileQueue
 	client       *remoteengine.Client
 	pollInterval time.Duration
+	dataDir      string
+	videosDir    string
+	masterURL    string
 }
 
 // New creates a creator-flow service from runtime config.
@@ -38,6 +44,9 @@ func New(cfg *config.Config, q *queue.FileQueue) *Service {
 			Retries:   cfg.RemoteEngineRetries,
 		}),
 		pollInterval: time.Duration(max(cfg.RemoteEnginePollInterval, 5)) * time.Second,
+		dataDir:      strings.TrimSpace(cfg.DataDir),
+		videosDir:    strings.TrimSpace(cfg.VideosDir),
+		masterURL:    resolvePublicMasterURL(cfg),
 	}
 }
 
@@ -59,7 +68,7 @@ func (s *Service) Forward(ctx context.Context, rawPayload map[string]interface{}
 	}
 
 	if enqueue.ShouldForwardPipelineResult(creatorResult) {
-		workerResponse, err := ForwardCompletedResult(ctx, s.queue, creatorResult)
+		workerResponse, err := s.forwardCompletedResult(ctx, creatorResult)
 		if err != nil {
 			return nil, false, err
 		}
@@ -84,11 +93,11 @@ func (s *Service) Forward(ctx context.Context, rawPayload map[string]interface{}
 
 	s.scheduleCreatorPolling(creatorJobID)
 	return map[string]interface{}{
-		"ok":             true,
-		"creator_stage":  "remote_engine",
-		"creator_job_id": creatorJobID,
-		"creator_status": creatorResult["status"],
-		"creator_polling": true,
+		"ok":               true,
+		"creator_stage":    "remote_engine",
+		"creator_job_id":   creatorJobID,
+		"creator_status":   creatorResult["status"],
+		"creator_polling":  true,
 		"creator_response": creatorResult,
 	}, true, nil
 }
@@ -108,7 +117,7 @@ func firstString(m map[string]interface{}, keys ...string) string {
 // and enqueues it for the remote worker pool.
 func ForwardCompletedResult(ctx context.Context, q *queue.FileQueue, result map[string]interface{}) (map[string]interface{}, error) {
 	if q == nil {
-		return nil, nil
+		return nil, fmt.Errorf("queue unavailable")
 	}
 	if !enqueue.ShouldForwardPipelineResult(result) {
 		return nil, nil
@@ -120,6 +129,36 @@ func ForwardCompletedResult(ctx context.Context, q *queue.FileQueue, result map[
 	}
 
 	return enqueue.EnqueueSceneVideoJob(ctx, q, workerPayload)
+}
+
+func (s *Service) forwardCompletedResult(ctx context.Context, result map[string]interface{}) (map[string]interface{}, error) {
+	if s == nil {
+		return nil, fmt.Errorf("service unavailable")
+	}
+	if s.queue == nil {
+		return nil, fmt.Errorf("queue unavailable")
+	}
+	if !enqueue.ShouldForwardPipelineResult(result) {
+		return nil, nil
+	}
+
+	workerPayload, err := enqueue.BuildPipelinePayload(result)
+	if err != nil {
+		return nil, err
+	}
+
+	masterURL := strings.TrimSpace(s.masterURL)
+	if masterURL == "" || remoteansible.IsLocalhostURL(masterURL) {
+		masterURL = detectPublicMasterURL()
+	}
+	if s.dataDir != "" && masterURL != "" {
+		workerPayload, err = enqueue.BuildSceneImagePayloadForMaster(workerPayload, s.dataDir, s.videosDir, masterURL)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return enqueue.EnqueueSceneVideoJob(ctx, s.queue, workerPayload)
 }
 
 func (s *Service) scheduleCreatorPolling(creatorJobID string) {
@@ -151,7 +190,7 @@ func (s *Service) scheduleCreatorPolling(creatorJobID string) {
 					"trace_id": creatorJobID,
 					"result":   status.Result,
 				}
-				if forwarded, err := ForwardCompletedResult(context.Background(), s.queue, result); err != nil {
+				if forwarded, err := s.forwardCompletedResult(context.Background(), result); err != nil {
 					log.Printf("[CREATOR] forward after poll failed job_id=%s: %v", creatorJobID, err)
 				} else {
 					log.Printf("[CREATOR] forward after poll succeeded job_id=%s worker_job_id=%v", creatorJobID, forwarded["job_id"])
@@ -177,4 +216,30 @@ func max(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func resolvePublicMasterURL(cfg *config.Config) string {
+	if cfg != nil {
+		if v := strings.TrimSpace(cfg.MasterURL); v != "" {
+			return v
+		}
+	}
+	if v := strings.TrimSpace(config.GetMasterURL()); v != "" {
+		return v
+	}
+	return detectPublicMasterURL()
+}
+
+func detectPublicMasterURL() string {
+	out, err := exec.Command("hostname", "-I").Output()
+	if err == nil {
+		fields := strings.Fields(string(out))
+		if len(fields) > 0 {
+			ip := strings.TrimSpace(fields[0])
+			if ip != "" && !remoteansible.IsLocalhostURL(ip) {
+				return "http://" + ip + ":8000"
+			}
+		}
+	}
+	return remoteansible.DetectLocalMasterURL()
 }

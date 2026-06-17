@@ -15,14 +15,12 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"velox-server/internal/config"
-	driveapi "velox-server/internal/integrations/drive"
-	ytservice "velox-server/internal/integrations/youtube"
 	"velox-server/internal/queue"
 )
 
 // UploadCompletedVideo handles video file upload from workers.
 // POST /api/v1/video/upload-completed
-func UploadCompletedVideo(cfg *config.Config, fileQ *queue.FileQueue, youtubeService *ytservice.Service, driveService *driveapi.Service) gin.HandlerFunc {
+func UploadCompletedVideo(cfg *config.Config, fileQ *queue.FileQueue, youtubeService YouTubeAutoUploader, driveService DriveAutoUploader) gin.HandlerFunc {
 	videosDir := cfg.VideosDir
 	if videosDir == "" {
 		videosDir = "./completed_videos"

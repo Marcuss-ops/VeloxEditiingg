@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"time"
 
 	"velox-server/internal/config"
 	"velox-server/internal/queue"
@@ -145,6 +146,7 @@ func (s *Service) ClaimNextJob(ctx context.Context, req ClaimRequest) (*ClaimRes
 
 	var (
 		payload  map[string]interface{}
+		job      *queue.Job
 		jobID    string
 		leaseID  string
 		leaseExp string
@@ -155,7 +157,8 @@ func (s *Service) ClaimNextJob(ctx context.Context, req ClaimRequest) (*ClaimRes
 		if workerInfo != nil {
 			allowedJobTypes = workerInfo.GetSupportedJobTypes()
 		}
-		job, claimErr := s.fileQ.ClaimNextJob(ctx, req.WorkerID, allowedJobTypes)
+		var claimErr error
+		job, claimErr = s.fileQ.ClaimNextJob(ctx, req.WorkerID, allowedJobTypes)
 		if claimErr != nil {
 			return &ClaimResult{Reason: "lease failed"}, nil
 		}
@@ -179,6 +182,29 @@ func (s *Service) ClaimNextJob(ctx context.Context, req ClaimRequest) (*ClaimRes
 
 	if payload == nil {
 		payload = make(map[string]interface{})
+	}
+	payload["created_at"] = normalizeJobTimestamp(job.CreatedAt)
+	if ts := normalizeJobTimestamp(job.UpdatedAt); ts != "" {
+		payload["updated_at"] = ts
+	}
+	if ts := normalizeJobTimestamp(job.StartedAt); ts != "" {
+		payload["started_at"] = ts
+	}
+	if ts := normalizeJobTimestamp(job.CompletedAt); ts != "" {
+		payload["completed_at"] = ts
+	}
+	if ts := normalizeJobTimestamp(job.AssignedAt); ts != "" {
+		payload["assigned_at"] = ts
+	}
+	if ts := normalizeJobTimestamp(job.LeaseExpiry); ts != "" {
+		payload["lease_expiry"] = ts
+		payload["lease_expires_at"] = ts
+	}
+	if ts := normalizeJobTimestamp(job.LastErrorAt); ts != "" {
+		payload["last_error_at"] = ts
+	}
+	if ts := normalizeJobTimestamp(job.FailedAt); ts != "" {
+		payload["failed_at"] = ts
 	}
 	payload["job_id"] = jobID
 	payload["id"] = jobID
@@ -209,6 +235,33 @@ func (s *Service) ClaimNextJob(ctx context.Context, req ClaimRequest) (*ClaimRes
 		Attempt:         attempt,
 		ContractVersion: 2,
 	}, nil
+}
+
+func normalizeJobTimestamp(v interface{}) string {
+	switch t := v.(type) {
+	case string:
+		return strings.TrimSpace(t)
+	case time.Time:
+		return t.UTC().Format(time.RFC3339)
+	case int:
+		return time.Unix(int64(t), 0).UTC().Format(time.RFC3339)
+	case int32:
+		return time.Unix(int64(t), 0).UTC().Format(time.RFC3339)
+	case int64:
+		return time.Unix(t, 0).UTC().Format(time.RFC3339)
+	case float32:
+		return time.Unix(int64(t), 0).UTC().Format(time.RFC3339)
+	case float64:
+		return time.Unix(int64(t), 0).UTC().Format(time.RFC3339)
+	case uint:
+		return time.Unix(int64(t), 0).UTC().Format(time.RFC3339)
+	case uint32:
+		return time.Unix(int64(t), 0).UTC().Format(time.RFC3339)
+	case uint64:
+		return time.Unix(int64(t), 0).UTC().Format(time.RFC3339)
+	default:
+		return ""
+	}
 }
 
 func (s *Service) SubmitResult(ctx context.Context, req SubmitResultRequest) (bool, error) {
