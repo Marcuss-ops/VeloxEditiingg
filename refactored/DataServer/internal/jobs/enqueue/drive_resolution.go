@@ -37,18 +37,18 @@ func ResolveDriveOutputFolderReference(dataDir, ref string) string {
 	defer db.Close()
 
 	normRef := normalizeDriveAlias(ref)
-	rows, err := db.Query(`SELECT id, name, url, metadata_json FROM drive_master_folders`)
+	rows, err := db.Query(`SELECT id, name, url, language, metadata_json FROM drive_master_folders`)
 	if err != nil {
 		return ref
 	}
 	defer rows.Close()
 
 	for rows.Next() {
-		var id, name, url, meta string
-		if err := rows.Scan(&id, &name, &url, &meta); err != nil {
+		var id, name, url, language, meta string
+		if err := rows.Scan(&id, &name, &url, &language, &meta); err != nil {
 			continue
 		}
-		if driveFolderMatches(ref, normRef, id, name, url, meta) {
+		if driveFolderMatches(ref, normRef, id, name, url, language, meta) {
 			return id
 		}
 	}
@@ -84,7 +84,7 @@ func normalizeDriveAlias(s string) string {
 	return b.String()
 }
 
-func driveFolderMatches(rawRef, normRef, id, name, url, meta string) bool {
+func driveFolderMatches(rawRef, normRef, id, name, url, language, meta string) bool {
 	if normRef == "" {
 		return false
 	}
@@ -92,6 +92,9 @@ func driveFolderMatches(rawRef, normRef, id, name, url, meta string) bool {
 		return true
 	}
 	if normalizeDriveAlias(name) == normRef {
+		return true
+	}
+	if normalizeDriveAlias(language) == normRef {
 		return true
 	}
 	if normalizeDriveAlias(url) == normRef {

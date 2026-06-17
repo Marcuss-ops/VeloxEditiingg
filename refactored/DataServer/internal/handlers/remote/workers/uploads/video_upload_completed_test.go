@@ -7,6 +7,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -255,5 +256,59 @@ func TestUploadCompletedVideo_AutoUploadsToYouTubeAndDrive(t *testing.T) {
 	}
 	if driveSvc.lastParentID != "folder1234567890A" {
 		t.Fatalf("want drive parent folder folder1234567890A, got %q", driveSvc.lastParentID)
+	}
+}
+
+func TestMaybeAutoUploadDrive_FallsBackToJobLanguage(t *testing.T) {
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "velox.db")
+	db, err := store.NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("new sqlite store: %v", err)
+	}
+	if err := db.UpsertMasterFolder("drive-folder-it", "Italian Master", "https://drive.google.com/drive/folders/drive-folder-it", "it", 0, `{"type":"outro"}`); err != nil {
+		t.Fatalf("upsert master folder: %v", err)
+	}
+	q, err := queue.NewFileQueue(&queue.FileQueueConfig{MaxRetries: 3, DBStore: db})
+	if err != nil {
+		t.Fatalf("new file queue: %v", err)
+	}
+
+	jobID := "upload-drive-fallback-1"
+	jobPayload := map[string]interface{}{
+		"video_name": "Fallback Drive Upload",
+		"language":   "it",
+		"status":     "PROCESSING",
+	}
+	if err := q.SubmitJob(context.Background(), jobID, jobPayload); err != nil {
+		t.Fatalf("submit job: %v", err)
+	}
+
+	videoPath := filepath.Join(tempDir, "rendered.mp4")
+	if err := os.WriteFile(videoPath, []byte("fake-video-bytes"), 0o644); err != nil {
+		t.Fatalf("write video: %v", err)
+	}
+
+	driveSvc := &fakeDriveAutoUploader{}
+	maybeAutoUploadDrive(q, driveSvc, tempDir, jobID, map[string]interface{}{}, videoPath)
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		driveSvc.mu.Lock()
+		calls := driveSvc.uploadCalls
+		driveSvc.mu.Unlock()
+		if calls > 0 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	driveSvc.mu.Lock()
+	defer driveSvc.mu.Unlock()
+	if driveSvc.uploadCalls != 1 {
+		t.Fatalf("want 1 drive upload call, got %d", driveSvc.uploadCalls)
+	}
+	if driveSvc.lastParentID != "drive-folder-it" {
+		t.Fatalf("want fallback parent folder drive-folder-it, got %q", driveSvc.lastParentID)
 	}
 }

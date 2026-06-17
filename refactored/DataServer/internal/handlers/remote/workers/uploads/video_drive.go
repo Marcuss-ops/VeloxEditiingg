@@ -32,6 +32,17 @@ func maybeAutoUploadDrive(fileQ *queue.FileQueue, driveService DriveAutoUploader
 		asString(uploadInfo["drive_output_folder"]),
 		asString(job["drive_output_folder"]),
 		asStringFromSlot(job, "drive_output_folder"),
+		asString(job["output_directory"]),
+		asStringFromSlot(job, "output_directory"),
+		asString(uploadInfo["language"]),
+		asString(uploadInfo["audio_language_for_srt"]),
+		asString(job["language"]),
+		asString(job["audio_language_for_srt"]),
+		asStringFromSlot(job, "language"),
+		asStringFromSlot(job, "audio_language_for_srt"),
+		asString(uploadInfo["youtube_group"]),
+		asString(job["youtube_group"]),
+		asStringFromSlot(job, "youtube_group"),
 	)
 	if folderRef == "" {
 		return
