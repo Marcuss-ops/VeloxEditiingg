@@ -23,9 +23,9 @@ func NewSQLiteDeliveryRepositoryFactory(t *testing.T) (store.DeliveryRepository,
 	// Seed one job + one artifact + one delivery target so the contracts run.
 	now := time.Now().UTC().Format(time.RFC3339)
 	if _, err := dbStore.DB().Exec(
-		`INSERT INTO jobs (job_id, status, revision, video_name, project_id, created_at, updated_at, raw_json, request_json, result_json)
-		 VALUES ('job_test', 'PROCESSING', 0, 'v1', 'p1', ?, ?, '{}', '{}', '{}')`,
-		now, now,
+		`INSERT INTO jobs (job_id, status, revision, video_name, project_id, created_at, updated_at, migrated_at, raw_json, request_json, result_json)
+		 VALUES ('job_test', 'PROCESSING', 0, 'v1', 'p1', ?, ?, ?, '{}', '{}', '{}')`,
+		now, now, now,
 	); err != nil {
 		t.Fatalf("seed job: %v", err)
 	}

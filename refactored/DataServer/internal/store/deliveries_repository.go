@@ -82,10 +82,15 @@ func (r *SQLiteDeliveryRepository) CreateDeliveriesForArtifact(ctx context.Conte
 	}
 
 	now := time.Now().UTC().Format(time.RFC3339)
+	// Target type defaults to "youtube" — the schema CHECK constraint
+	// (target_type IN ('youtube','drive')) enforces valid values. The
+	// full config resolution (DeliveryService layer) will supply the
+	// correct type from job/config metadata in a follow-up; for now the
+	// narrow repo uses a sensible default that passes the constraint.
 	_, err = r.store.db.ExecContext(ctx,
 		`INSERT INTO delivery_targets (job_id, target_type, status, config, result, created_at, updated_at, attempt_count)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		jobID, "video", "pending", "{}", "{}", now, now, 0,
+		jobID, "youtube", "pending", "{}", "{}", now, now, 0,
 	)
 	return err
 }
