@@ -11,6 +11,7 @@ import (
 	"velox-server/internal/config"
 	remoteansible "velox-server/internal/handlers/remote/ansible"
 	workersuploads "velox-server/internal/handlers/remote/workers/uploads"
+	integrationsDrive "velox-server/internal/integrations/drive" (fix: add missing jobs columns migration (023), fix CompleteJob CAS, patch UpdateJobFields whitelist)
 	"velox-server/internal/handlers/server/analytics"
 	"velox-server/internal/handlers/server/api"
 	"velox-server/internal/handlers/server/groups"
@@ -121,7 +122,11 @@ func registerAPIV1Routes(r *gin.Engine, cfg *config.Config, deps *serverDeps, an
 	if deps.youtubeModule != nil {
 		youtubeService = deps.youtubeModule.Service()
 	}
-	api.RegisterV1Routes(r, cfg, deps.fileQ, deps.reg, jobAPI, jobSubmitHandler, deps.workersRepo, deps.sqliteStore, deps.workerUpdateHandler, youtubeService, nil, ansibleHandlers) // TODO: wire driveService
+	var driveService *integrationsDrive.Service
+	if deps.driveModule != nil {
+		driveService = deps.driveModule.Service()
+	}
+	api.RegisterV1Routes(r, cfg, deps.fileQ, deps.reg, jobAPI, jobSubmitHandler, deps.workersRepo, deps.sqliteStore, deps.workerUpdateHandler, youtubeService, driveService, ansibleHandlers) (fix: add missing jobs columns migration (023), fix CompleteJob CAS, patch UpdateJobFields whitelist)
 
 	// V2 job routes: /api/v1/jobs/{id}/lease|complete|fail|progress|attempts|artifacts|events
 	v2JobsGroup := r.Group("/api/v1")
@@ -135,7 +140,7 @@ func registerAPIV1Routes(r *gin.Engine, cfg *config.Config, deps *serverDeps, an
 	// Chunked upload routes (resumable worker→master video upload)
 	r.POST("/api/v1/video/chunked/init", workersuploads.InitChunkedUpload())
 	r.POST("/api/v1/video/chunked/:job_id/:chunk_index", workersuploads.UploadChunk(cfg))
-	r.POST("/api/v1/video/chunked/:job_id/complete", workersuploads.CompleteChunkedUpload(cfg, deps.fileQ))
+	r.POST("/api/v1/video/chunked/:job_id/complete", workersuploads.CompleteChunkedUpload(cfg, deps.fileQ)) (fix: add missing jobs columns migration (023), fix CompleteJob CAS, patch UpdateJobFields whitelist)
 
 	// Bundle compat routes (frontend calls /api/bundle/* without /v1/)
 	if deps.workerUpdateHandler != nil {

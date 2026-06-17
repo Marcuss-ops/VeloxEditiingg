@@ -105,7 +105,7 @@ func maybeAutoUploadDrive(fileQ interface{ UpdateJobFields(ctx context.Context, 
 				attemptStatus = "failed"
 				errMsg = uploadErr.Error()
 			}
-			_ = dbStore.UpdateDeliveryAttempt(int(attemptID), attemptStatus, resultJSON, errMsg)
+			_ = dbStore.UpdateDeliveryAttemptByLegacyTargetID(int(attemptID), attemptStatus, resultJSON, errMsg)
 		}
 
 		// DEPRECATED: Update job fields for backward compat

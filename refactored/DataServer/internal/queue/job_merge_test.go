@@ -70,8 +70,8 @@ func TestUpdateJobFieldsClearsFailureStateOnComplete(t *testing.T) {
 	if v, ok := saved["failed_at"]; ok && v != nil {
 		t.Fatalf("expected failed_at cleared, got %#v", v)
 	}
-	if status := stringValue(saved["status"]); status != "COMPLETED" {
-		t.Fatalf("expected status COMPLETED, got %q", status)
+	if status := stringValue(saved["status"]); status != "SUCCEEDED" {
+		t.Fatalf("expected status SUCCEEDED, got %q", status)
 	}
 }
 
@@ -128,8 +128,8 @@ func TestCompleteJobClearsFailureState(t *testing.T) {
 	if v, ok := saved["failed_at"]; ok && v != nil {
 		t.Fatalf("expected failed_at cleared, got %#v", v)
 	}
-	if status := stringValue(saved["status"]); status != "COMPLETED" {
-		t.Fatalf("expected status COMPLETED, got %q", status)
+	if status := stringValue(saved["status"]); status != "SUCCEEDED" {
+		t.Fatalf("expected status SUCCEEDED, got %q", status)
 	}
 }
 

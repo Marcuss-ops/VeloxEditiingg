@@ -118,7 +118,10 @@ type Artifact struct {
 	SHA256          string  `json:"sha256,omitempty"`
 	SizeBytes       int64   `json:"size_bytes"`
 	DurationSeconds float64 `json:"duration_seconds,omitempty"`
+	DurationMs      int64   `json:"duration_ms,omitempty"`
 	Status          string  `json:"status"`
+	VerifiedAt      string  `json:"verified_at,omitempty"`
+	MimeType        string  `json:"mime_type,omitempty"`
 	CreatedAt       string  `json:"created_at"`
 }
 
@@ -139,12 +142,15 @@ func (s *SQLiteStore) InsertArtifact(artifact *Artifact) error {
 
 	_, err := s.db.Exec(
 		`INSERT INTO artifacts (id, job_id, attempt_id, type, storage_provider, storage_key,
-		                        storage_url, local_path, sha256, size_bytes, duration_seconds, status, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	                        storage_url, local_path, sha256, size_bytes, duration_seconds,
+	                        duration_ms, mime_type, verified_at, status, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		artifact.ID, artifact.JobID, nullInt(artifact.AttemptID), artifact.Type,
 		artifact.StorageProvider, artifact.StorageKey, artifact.StorageURL,
 		artifact.LocalPath, artifact.SHA256, artifact.SizeBytes,
-		artifact.DurationSeconds, artifact.Status, artifact.CreatedAt,
+		artifact.DurationSeconds, artifact.DurationMs,
+		nullIfEmpty(artifact.MimeType), nullIfEmpty(artifact.VerifiedAt),
+		artifact.Status, artifact.CreatedAt,
 	)
 	return err
 }
@@ -162,13 +168,16 @@ func (s *SQLiteStore) GetArtifact(id string) (*Artifact, error) {
 		`SELECT id, job_id, COALESCE(attempt_id,0), type, storage_provider,
 		        COALESCE(storage_key,''), COALESCE(storage_url,''), COALESCE(local_path,''),
 		        COALESCE(sha256,''), COALESCE(size_bytes,0), COALESCE(duration_seconds,0.0),
+		        COALESCE(duration_ms,0), COALESCE(mime_type,''), COALESCE(verified_at,''),
 		        status, created_at
 		 FROM artifacts WHERE id=?`, id,
 	)
 	var a Artifact
 	err := row.Scan(&a.ID, &a.JobID, &a.AttemptID, &a.Type, &a.StorageProvider,
 		&a.StorageKey, &a.StorageURL, &a.LocalPath, &a.SHA256,
-		&a.SizeBytes, &a.DurationSeconds, &a.Status, &a.CreatedAt)
+		&a.SizeBytes, &a.DurationSeconds,
+		&a.DurationMs, &a.MimeType, &a.VerifiedAt,
+		&a.Status, &a.CreatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -183,6 +192,7 @@ func (s *SQLiteStore) GetArtifactsByJob(jobID string, limit int) ([]Artifact, er
 		`SELECT id, job_id, COALESCE(attempt_id,0), type, storage_provider,
 		        COALESCE(storage_key,''), COALESCE(storage_url,''), COALESCE(local_path,''),
 		        COALESCE(sha256,''), COALESCE(size_bytes,0), COALESCE(duration_seconds,0.0),
+		        COALESCE(duration_ms,0), COALESCE(mime_type,''), COALESCE(verified_at,''),
 		        status, created_at
 		 FROM artifacts WHERE job_id=? ORDER BY created_at DESC LIMIT ?`,
 		jobID, limit,
@@ -197,7 +207,9 @@ func (s *SQLiteStore) GetArtifactsByJob(jobID string, limit int) ([]Artifact, er
 		var a Artifact
 		if err := rows.Scan(&a.ID, &a.JobID, &a.AttemptID, &a.Type, &a.StorageProvider,
 			&a.StorageKey, &a.StorageURL, &a.LocalPath, &a.SHA256,
-			&a.SizeBytes, &a.DurationSeconds, &a.Status, &a.CreatedAt); err != nil {
+			&a.SizeBytes, &a.DurationSeconds,
+			&a.DurationMs, &a.MimeType, &a.VerifiedAt,
+			&a.Status, &a.CreatedAt); err != nil {
 			continue
 		}
 		artifacts = append(artifacts, a)

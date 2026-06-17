@@ -2,6 +2,7 @@ package drive
 
 import (
 	"log"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"velox-server/internal/config"
@@ -14,21 +15,35 @@ import (
 type Module struct {
 	cfg         *config.Config
 	sqliteStore *store.SQLiteStore
-	handlers    *driveHandlers.DriveHandlers
+
+	// Lazy-initialized on RegisterRoutes so the constructor doesn't pay the
+	// cost when Drive isn't wired up.
+	service  *integrationsDrive.Service
+	handlers *driveHandlers.DriveHandlers
 }
 
 // New creates a new Drive module.
-func New(cfg *config.Config) *Module {
+func New(cfg *config.Config, sqliteStore *store.SQLiteStore) *Module {
 	m := &Module{
-		cfg: cfg,
+		cfg:         cfg,
+		sqliteStore: sqliteStore,
 	}
-	_ = m.init()
 	return m
 }
 
 // Name returns the module identifier.
 func (m *Module) Name() string {
 	return "drive"
+}
+
+// Service exposes the lazy-initialized Drive service for downstream
+// consumers (bootstrap threads it through RegisterV1Routes). Returns nil
+// when credentials are absent or init hasn't run.
+func (m *Module) Service() *integrationsDrive.Service {
+	if m == nil {
+		return nil
+	}
+	return m.service
 }
 
 // Handlers returns the Drive handlers (for use by other modules).
@@ -58,8 +73,18 @@ func (m *Module) init() error {
 		return nil
 	}
 
-	// Initialize Drive service
-	if m.service == nil && m.cfg.DriveClientID != "" && m.cfg.DriveClientSecret != "" {
+	// Defensive guard: Drive is an optional integration. If credentials
+	// are absent, don't construct handlers — RegisterRoutes will skip them.
+	// This avoids NewDriveHandlers validating empty config and panicking.
+	if strings.TrimSpace(m.cfg.Drive.ClientID) == "" || strings.TrimSpace(m.cfg.Drive.ClientSecret) == "" {
+		log.Printf("[DRIVE] credentials missing; Drive module will run in disabled mode (no handlers, no routes)")
+		return nil
+	}
+
+	// Initialize Drive service. The cfg.Drive sub-struct is the canonical
+	// source post-PR0a refactor; legacy cfg.DriveClientID/Secret accesses
+	// were retired along with the flat Config field aliases.
+	if m.service == nil {
 		svc, err := integrationsDrive.NewService(&integrationsDrive.ServiceConfig{
 			ClientID:     m.cfg.Drive.ClientID,
 			ClientSecret: m.cfg.Drive.ClientSecret,
@@ -83,16 +108,14 @@ func (m *Module) init() error {
 		return nil
 	}
 	handlers, err := driveHandlers.NewDriveHandlers(&integrationsDrive.ServiceConfig{
-		ClientID:     m.cfg.DriveClientID,
-		ClientSecret: m.cfg.DriveClientSecret,
-		RedirectURI:  m.cfg.DriveRedirectURI,
-		TokensDir:    m.cfg.DriveTokensDir,
-	}, m.service)
+		ClientID:     m.cfg.Drive.ClientID,
+		ClientSecret: m.cfg.Drive.ClientSecret,
+		RedirectURI:  m.cfg.Drive.RedirectURI,
+		TokensDir:    m.cfg.Drive.TokensDir,
+	}, m.service, m.sqliteStore)
 	if err != nil {
 		return err
 	}
 	m.handlers = handlers
 	return nil
 }
-
-
