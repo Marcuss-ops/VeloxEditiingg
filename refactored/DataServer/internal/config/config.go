@@ -97,7 +97,6 @@ func FromEnv() *Config {
 		YouTubeTokensDir:      youtube.TokensDir,
 		YouTubePostingPath:    youtube.PostingPath,
 		YouTubeCredentialsDir: youtube.CredentialsDir,
-		RemoteFallbackURL:     youtube.RemoteFallback,
 
 		PlaybookDir: ansible.PlaybookDir,
 

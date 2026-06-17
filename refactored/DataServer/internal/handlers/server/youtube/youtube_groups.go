@@ -91,7 +91,10 @@ type ManagerChannelStats struct {
 }
 
 // NewYouTubeManager creates a new YouTube manager handler instance.
-func NewYouTubeManager(dataDir, apiKey, fallbackURL string, existingStorage *youtube.Storage, ytService *youtube.Service) *YouTubeManager {
+// The remote-scraper fallback URL has been removed: when apiKey is empty
+// the manager degrades to file-presence stats only (no ValidateToken
+// calls) and the operator sees a clear "service not configured" signal.
+func NewYouTubeManager(dataDir, apiKey string, existingStorage *youtube.Storage, ytService *youtube.Service) *YouTubeManager {
 	var storage *youtube.Storage
 	if existingStorage != nil {
 		storage = existingStorage
@@ -103,7 +106,7 @@ func NewYouTubeManager(dataDir, apiKey, fallbackURL string, existingStorage *you
 
 	ym := &YouTubeManager{
 		storage:     storage,
-		apiClient:   youtube.NewAPIClient(apiKey, cache, fallbackURL),
+		apiClient:   youtube.NewAPIClient(apiKey, cache),
 		feedCache:   feedCache,
 		newsFetcher: newsFetcher,
 		dataDir:     dataDir,

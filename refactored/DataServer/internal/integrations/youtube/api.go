@@ -4,7 +4,6 @@ package youtube
 
 import (
 	"fmt"
-	"log"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -15,21 +14,20 @@ type APIClient struct {
 	apiKey     string
 	httpClient *http.Client
 	cache      *Cache
-	fallback   *RemoteFallback
 }
 
-func NewAPIClient(apiKey string, cache *Cache, fallbackURL string) *APIClient {
-	if apiKey == "" {
-		log.Printf("[WARN] YouTube API: no API key provided, will use fallback only")
-	}
-
+// NewAPIClient constructs a YouTube Data API v3 client. The remote-scraper
+// fallback that used to live here (when the Google API key was missing or
+// the quota was exhausted) has been removed: callers must supply a real
+// API key via VELOX_YOUTUBE_API_KEY and let the operator handle quota
+// via the official channels.
+func NewAPIClient(apiKey string, cache *Cache) *APIClient {
 	return &APIClient{
 		apiKey: apiKey,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
-		cache:    cache,
-		fallback: NewRemoteFallback(fallbackURL, cache),
+		cache: cache,
 	}
 }
 

@@ -214,6 +214,14 @@ type Service struct {
 // non-OAuth paths can still construct *Service via the struct literal
 // directly (oauthBuf field), which keeps the unit tests independent
 // of this fail-closed gate.
+//
+// The previous two-phase boot hydrator (SQLite-first followed by a
+// JSON-fallback) has been collapsed to a single SQLite-only path
+// since the S6 verdict and the cleanup of remote-engine-bridge +
+// the OAuth JSON consolidate / migrate CLIs. New installs are
+// expected to land credentials directly via the canonical OAuth
+// callback; legacy JSON layouts in <DataDir>/youtube/tokens/ are
+// no longer read or written at runtime.
 // NewService takes the wider YouTubeStore (not the narrower ServiceStore)
 // because Cache.SetStore / NewCache both need the broader surface
 // (GetYouTubeCache / SetYouTubeCache / MigrateYouTubeCache etc. live
@@ -268,20 +276,15 @@ func NewService(cfg *ServiceConfig, store YouTubeStore, cipher *aesgcm.Encryptor
 		log.Printf("[WARN] YouTube OAuth config not loaded: %v", err)
 	}
 
-	// Boot hydrator two-phase:
-	//   1. SQLite-first: loadOAuthChannelsFromSQLite reads every non-revoked
-	//      youtube_oauth_tokens row, decrypts, and rebuilds s.channels.
-	//      This is the canonical path; it runs whenever a cipher is wired.
-	//   2. JSON-fallback (deprecated, see step S6 of the migration plan):
-	//      if the cipher is missing we still walk account_*.json so an
-	//      operator installing without VELOX_YT_OAUTH_TOKEN_KEY can boot.
-	//      Once the module becomes fail-closed on a missing cipher, the
-	//      fallback is removed entirely.
-	// SQLite-only boot: AES-GCM credentials are decrypted from
-	// youtube_oauth_tokens and rebuilt into s.channels. JSON fallbacks are
-	// gone (step S6 of the migration plan). The module wires the cipher
-	// via SetOAuthSecretCipher before NewService is called and fails
-	// closed if VELOX_YT_OAUTH_TOKEN_KEY is missing.
+	// SQLite-only boot rehydration: loadOAuthChannelsFromSQLite reads
+	// every non-revoked youtube_oauth_tokens row, decrypts via the
+	// cipher mounted at construction time, and rebuilds s.channels.
+	// This is the only path; the JSON dual-write + JSON-fallback paths
+	// have been removed under the S6/S11 verdict (S6 = SQLite-only
+	// canonical layout, S11 = DB-first ordering). The module wiring
+	// gates OAuth on a non-nil cipher (requireIfMissing=true in
+	// module.go) so a missing VELOX_YT_OAUTH_TOKEN_KEY refuses to
+	// boot rather than degrading into a JSON reader.
 	s.loadOAuthChannelsFromSQLite()
 	// Load from canonical tables — store is already set, so this works immediately
 	s.loadCanonicalChannels()
@@ -342,25 +345,23 @@ func (s *Service) ValidateToken(ctx context.Context, channelID string) (map[stri
 // RevokeToken is the canonical orchestration for taking a channel's OAuth
 // credentials out of service WITHOUT removing the channel row from
 // youtube_channels. Distinct from DeleteChannel (which nukes the channel
-// + oauth row + groups + JSON, FK-cascaded) — see verdict/rationale in
+// + oauth row + groups, FK-cascaded) — see verdict/rationale in
 // docs/youtube_sqlite_migration_plan.md step S5d.
 //
-// Sequence (deterministic order):
+// Sequence (deterministic order, three steps now that the JSON-fallback
+// file-delete path has been removed under S6):
 //  1. HTTP POST to Google oauth2 revoke endpoint (best-effort: the credential
 //     may already be invalid, so a non-200 is logged but does not abort).
 //  2. UPDATE youtube_oauth_tokens SET revoked_at = now WHERE channel_id = ? AND
 //     revoked_at IS NULL (atomic SQL via the repository's
 //     MarkYouTubeOAuthTokenRevoked; idempotent).
-//  3. Remove the canonical account_<channel>.json on disk (best-effort:
-//     orphan JSON is acceptable and garbage-collected later).
-//  4. Delete the channel from the in-memory s.channels under the service's
+//  3. Delete the channel from the in-memory s.channels under the service's
 //     RWMutex (so concurrent reads cannot see a half-revoked entry).
 //
-// Returns nil on success; returns an error if the repository step fails
-// so the caller can retry without leaving SQL state / RAM state
-// inconsistent. The RAM delete still happens even on SQL error so the
-// user-facing surface stays consistent (the SQL row will be flagged as
-// revoked by the next attach attempt or by an admin audit).
+// Returns nil on success; returns an error if step 2 fails so the caller
+// can retry without leaving SQL state / RAM state inconsistent. Step 3
+// is gated on step 2 succeeding so the in-RAM cache never diverges from
+// the canonical row.
 func (s *Service) RevokeToken(ctx context.Context, channelID string) error {
 	s.mu.RLock()
 	ch, exists := s.channels[channelID]

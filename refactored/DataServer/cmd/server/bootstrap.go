@@ -161,14 +161,12 @@ func runServer(cfg *config.Config) error {
 	// while keeping same-path detection).
 	runDuadDBBootCheck(deps, cfg)
 
-	// Boot-time OAuth-token consolidation has been REMOVED. The
-	// runtime path is SQLite-only (S6 verdict) and no server
-	// component reads from <DataDir>/secrets/youtube/tokens/*.json
-	// on boot. Operators migrate from the legacy JSON layout
-	// explicitly via `velox-server migrate youtube-oauth-json`
-	// (defined in cmd/server/migrate.go). Keeping the old block
-	// here would resurrect the dual-write drift the verdict
-	// eliminated.
+	// Boot-time OAuth-token consolidation: REMOVED. The runtime path is
+	// SQLite-only (S6 verdict) and no server component reads from
+	// <DataDir>/secrets/youtube/tokens/*.json on boot. The legacy
+	// migrate CLI and the OAuth JSON consolidator have been removed
+	// entirely; fresh installs are expected to land credentials
+	// directly via the canonical OAuth callback.
 
 	registry := app.NewRegistry()
 	auth := api.AdminAuthMiddleware(cfg)

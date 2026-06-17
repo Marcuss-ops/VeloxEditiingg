@@ -91,13 +91,6 @@ func (m *Module) RegisterRoutes(r *gin.Engine) {
 		youtubeService.GetQuotaManager().SetStore(m.sqliteStore)
 	}
 
-	// BackfillOAuthTokensFromJSON is no longer called from boot. The runtime
-	// path now rehydrates exclusively from youtube_oauth_tokens via
-	// loadOAuthChannelsFromSQLite (the S6 contract). The
-	// BackfillOAuthTokensFromJSON helper is retained as a one-shot
-	// primitive for the planned `velox migrate youtube-oauth-json` admin
-	// command and for legacy data recovery; nothing runs it automatically.
-
 	if m.dataDir != "" {
 		storage, storageErr := integrationsYoutube.NewStorage(m.dataDir, m.sqliteStore)
 		if storageErr != nil {
@@ -133,8 +126,7 @@ func (m *Module) RegisterRoutes(r *gin.Engine) {
 
 	if m.dataDir != "" {
 		apiKey := m.cfg.YouTubeAPIKey
-		fallbackURL := m.cfg.RemoteFallbackURL
-		m.manager = ytHandlers.NewYouTubeManager(m.dataDir, apiKey, fallbackURL, m.youtubeStorage, youtubeService)
+		m.manager = ytHandlers.NewYouTubeManager(m.dataDir, apiKey, m.youtubeStorage, youtubeService)
 		ytHandlers.YouTubeRoutes(r, m.cfg, m.manager)
 		if apiKey != "" {
 			log.Printf("[YOUTUBE] Manager routes registered at /api/youtube/manager/* (full mode)")

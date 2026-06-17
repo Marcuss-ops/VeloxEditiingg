@@ -25,17 +25,12 @@ func (c *APIClient) SearchVideos(ctx context.Context, query string, limit, days 
 	var videos []Video
 	var err error
 
+	// YouTube Data API v3 only. The remote-scraper fallback used to be
+	// invoked when the API key was missing or quota was exhausted; that
+	// path has been removed so quota issues surface to the operator
+	// instead of silently masking them through a third-party scraper.
 	if c.apiKey != "" {
 		videos, err = c.searchVideosAPI(ctx, query, limit, days)
-	}
-
-	if len(videos) == 0 {
-		fallbackVideos, ferr := c.fallback.SearchVideos(ctx, query, limit, days)
-		if ferr == nil {
-			videos = fallbackVideos
-		} else if err == nil {
-			err = ferr
-		}
 	}
 
 	if len(videos) > 0 {

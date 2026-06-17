@@ -74,7 +74,6 @@ type YouTubeConfig struct {
 	TokensDir      string
 	PostingPath    string
 	CredentialsDir string
-	RemoteFallback string
 }
 
 // AnsibleConfig holds Ansible deployment settings.
@@ -161,7 +160,6 @@ type Config struct {
 	YouTubeAPIKey      string
 	YouTubeTokensDir   string
 	YouTubePostingPath string
-	RemoteFallbackURL  string
 
 	SecretsDir            string
 	DriveCredentialsDir   string
