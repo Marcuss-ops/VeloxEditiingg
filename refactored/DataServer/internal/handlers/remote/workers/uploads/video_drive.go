@@ -6,12 +6,11 @@ import (
 	"strings"
 	"time"
 
-	driveapi "velox-server/internal/integrations/drive"
 	"velox-server/internal/jobs/enqueue"
 	"velox-server/internal/queue"
 )
 
-func maybeAutoUploadDrive(fileQ *queue.FileQueue, driveService *driveapi.Service, dataDir string, jobID string, uploadInfo map[string]interface{}, videoPath string) {
+func maybeAutoUploadDrive(fileQ *queue.FileQueue, driveService DriveAutoUploader, dataDir string, jobID string, uploadInfo map[string]interface{}, videoPath string) {
 	if fileQ == nil || driveService == nil || strings.TrimSpace(jobID) == "" || strings.TrimSpace(videoPath) == "" {
 		return
 	}

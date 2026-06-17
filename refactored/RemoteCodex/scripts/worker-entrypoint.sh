@@ -33,15 +33,16 @@ resolve_engine_source() {
     return 1
 }
 
-if [[ -z "$ENGINE_SOURCE" ]]; then
-    ENGINE_SOURCE="$(resolve_engine_source || true)"
-fi
+if [[ -x "$ENGINE_BINARY" ]]; then
+    log "Using prebuilt C++ engine binary at $ENGINE_BINARY"
+else
+    if [[ -z "$ENGINE_SOURCE" ]]; then
+        ENGINE_SOURCE="$(resolve_engine_source || true)"
+    fi
+    if [[ -z "$ENGINE_SOURCE" || ! -d "$ENGINE_SOURCE" ]]; then
+        fail "C++ engine binary missing and source directory not found; tried /app/native/video-engine-cpp, /app/RemoteCodex/native/video-engine-cpp and /opt/velox/current/RemoteCodex/native/video-engine-cpp"
+    fi
 
-if [[ -z "$ENGINE_SOURCE" || ! -d "$ENGINE_SOURCE" ]]; then
-    fail "C++ engine source directory not found; tried /app/native/video-engine-cpp, /app/RemoteCodex/native/video-engine-cpp and /opt/velox/current/RemoteCodex/native/video-engine-cpp"
-fi
-
-if [[ ! -x "$ENGINE_BINARY" ]]; then
     log "Binary missing, rebuilding C++ engine"
 
     # Non usare mai build/ ricevuto dal bundle.
@@ -59,8 +60,6 @@ if [[ ! -x "$ENGINE_BINARY" ]]; then
     export VELOX_VIDEO_ENGINE_OUT="$ENGINE_BINARY"
 
     /usr/local/bin/build-video-engine.sh
-else
-    log "Using prebuilt C++ engine binary at $ENGINE_BINARY"
 fi
 
 test -x "$ENGINE_BINARY" ||

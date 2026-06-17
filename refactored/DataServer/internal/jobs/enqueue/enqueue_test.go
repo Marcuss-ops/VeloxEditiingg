@@ -144,13 +144,19 @@ func TestBuildSceneImagePayloadForMaster(t *testing.T) {
 		t.Fatalf("want staged scene image link, got %q", img)
 	}
 	jobID, _ := result["job_id"].(string)
-	staged := filepath.Join(tempDir, "worker_downloads", "script_assets", jobID, "voiceover.mp3")
-	data, _ := os.ReadFile(staged)
+	staged := filepath.Join(tempDir, "worker_downloads", "script_assets", jobID, filepath.Base(vp))
+	data, err := os.ReadFile(staged)
+	if err != nil {
+		t.Fatalf("read staged voiceover: %v", err)
+	}
 	if string(data) != "fake-audio" {
 		t.Errorf("staged content mismatch: %q", string(data))
 	}
-	sceneStaged := filepath.Join(tempDir, "worker_downloads", "script_assets", jobID, "scene.jpg")
-	sceneData, _ := os.ReadFile(sceneStaged)
+	sceneStaged := filepath.Join(tempDir, "worker_downloads", "script_assets", jobID, filepath.Base(sp[0]))
+	sceneData, err := os.ReadFile(sceneStaged)
+	if err != nil {
+		t.Fatalf("read staged scene image: %v", err)
+	}
 	if string(sceneData) != "fake-image" {
 		t.Errorf("scene staged content mismatch: %q", string(sceneData))
 	}

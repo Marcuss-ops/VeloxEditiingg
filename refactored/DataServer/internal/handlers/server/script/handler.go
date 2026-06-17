@@ -79,7 +79,7 @@ func (h *ScriptHandlers) GenerateWithImagesHandler(cfg *config.Config) gin.Handl
 		if resolvedMasterURL == "" || remoteansible.IsLocalhostURL(resolvedMasterURL) {
 			resolvedMasterURL = detectPublicMasterURL()
 		}
-		if h.creator != nil {
+		if h.creator != nil && !shouldBypassCreator(payload) {
 			if creatorResponse, used, err := h.creator.Forward(c.Request.Context(), payload); err != nil {
 				log.Printf("[SCRIPT] creator stage failed, falling back to local enqueue: %v", err)
 			} else if used {
@@ -135,6 +135,70 @@ func detectPublicMasterURL() string {
 		}
 	}
 	return remoteansible.DetectLocalMasterURL()
+}
+
+func shouldBypassCreator(payload map[string]interface{}) bool {
+	if payload == nil {
+		return false
+	}
+	if isTruthyFlag(payload, "skip_creator", "bypass_creator", "disable_creator", "use_creator") {
+		return true
+	}
+	hasScenes := false
+	if raw := strings.TrimSpace(firstStringValue(payload, "scenes_json")); raw != "" {
+		hasScenes = true
+	}
+	hasVoiceover := false
+	if raw := strings.TrimSpace(firstStringValue(payload, "voiceover_path", "audio_path")); raw != "" {
+		hasVoiceover = true
+	}
+	if !hasVoiceover {
+		switch v := payload["voiceover_paths"].(type) {
+		case []string:
+			hasVoiceover = len(v) > 0
+		case []interface{}:
+			hasVoiceover = len(v) > 0
+		}
+	}
+	hasScript := strings.TrimSpace(firstStringValue(payload, "script_text", "script")) != ""
+	return hasScenes && hasVoiceover && hasScript
+}
+
+func isTruthyFlag(payload map[string]interface{}, keys ...string) bool {
+	for _, key := range keys {
+		value, ok := payload[key]
+		if !ok {
+			continue
+		}
+		switch v := value.(type) {
+		case bool:
+			if key == "use_creator" {
+				return !v
+			}
+			return v
+		case string:
+			trimmed := strings.ToLower(strings.TrimSpace(v))
+			if trimmed == "" {
+				continue
+			}
+			if key == "use_creator" {
+				return trimmed == "false" || trimmed == "0" || trimmed == "no"
+			}
+			return trimmed == "true" || trimmed == "1" || trimmed == "yes"
+		}
+	}
+	return false
+}
+
+func firstStringValue(payload map[string]interface{}, keys ...string) string {
+	for _, key := range keys {
+		if raw, ok := payload[key]; ok {
+			if value, ok := raw.(string); ok {
+				return value
+			}
+		}
+	}
+	return ""
 }
 
 func (h *ScriptHandlers) ScriptJobHandler(full bool) gin.HandlerFunc {

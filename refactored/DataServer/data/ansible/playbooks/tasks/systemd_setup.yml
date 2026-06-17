@@ -41,8 +41,8 @@
 
 - name: Set worker master URL env values
   ansible.builtin.set_fact:
-    velox_worker_heartbeat_masters: "{{ master_url }}{% if master_url_secondary is defined and master_url_secondary %},{{ master_url_secondary }}{% endif %}"
-    velox_worker_secondary_master_url: "{{ master_url_secondary | default('') }}"
+    velox_worker_heartbeat_masters: "{{ master_url }}"
+    velox_worker_secondary_master_url: ""
 
 - name: Write env file
   ansible.builtin.copy:
@@ -145,6 +145,9 @@
 
     cfg_path = Path("{{ velox_worker_runtime_dir }}/worker_config.json")
     data = json.loads(cfg_path.read_text())
+    data["master_url"] = "{{ master_url }}"
+    data["worker_id"] = "{{ worker_id | default(inventory_hostname) }}"
+    data["worker_name"] = "{{ inventory_hostname }}"
     data["prometheus_port"] = 0
     data["health_port"] = {{ velox_worker_health_port }}
     cfg_path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
@@ -289,10 +292,13 @@
       [Service]
       Type=simple
       EnvironmentFile={{ velox_worker_env_path }}
-      WorkingDirectory={{ velox_dir }}/current
+      UnsetEnvironment=MASTER_PUBLIC_URL VELOX_MASTER_URL VELOX_MASTER_SERVER_URL VELOX_REMOTE_WORKER_URL
+      Environment=MASTER_URL={{ master_url }}
+      Environment=VELOX_HEARTBEAT_MASTERS={{ velox_worker_heartbeat_masters }}
+      WorkingDirectory={{ velox_dir }}
       ExecStartPre=/bin/sh -c '/usr/bin/docker rm -f velox-worker-{{ inventory_hostname }} >/dev/null 2>&1 || true'
       ExecStartPre=/bin/sh -c 'mkdir -p {{ velox_worker_runtime_dir }} && chmod 775 {{ velox_worker_runtime_dir }} && [ -f {{ velox_worker_runtime_dir }}/worker_config.json ] || /usr/bin/docker run --rm --user root --entrypoint /usr/local/bin/velox-worker-agent -v {{ velox_worker_runtime_dir }}:{{ velox_worker_runtime_dir }} ${VELOX_WORKER_IMAGE} -generate-config -config {{ velox_worker_runtime_dir }}/worker_config.json -work-dir /app/RemoteCodex'
-      ExecStart=/usr/bin/docker run --name velox-worker-{{ inventory_hostname }} --rm --network host --env-file {{ velox_worker_env_path }} -e VELOX_VIDEO_ENGINE_CPP_BIN=/usr/local/bin/velox_video_engine -v {{ velox_dir }}/current:/app -v {{ velox_dir }}/cache:/root/.cache -v {{ velox_dir }}/current/RemoteCodex/assets_cache:/app/RemoteCodex/assets_cache -v {{ velox_worker_runtime_dir }}:{{ velox_worker_runtime_dir }} ${VELOX_WORKER_IMAGE} -config {{ velox_worker_runtime_dir }}/worker_config.json -master {{ master_url }} -worker-id {{ worker_id | default(inventory_hostname) }} -work-dir /app/RemoteCodex
+      ExecStart=/usr/bin/docker run --name velox-worker-{{ inventory_hostname }} --rm --network host --env-file {{ velox_worker_env_path }} -e VELOX_VIDEO_ENGINE_CPP_BIN=/usr/local/bin/velox_video_engine -v {{ velox_dir }}/current:/app -v {{ velox_dir }}/cache:/root/.cache -v {{ velox_dir }}/current/RemoteCodex/assets_cache:/app/RemoteCodex/assets_cache -v {{ velox_worker_runtime_dir }}:{{ velox_worker_runtime_dir }} ${VELOX_WORKER_IMAGE} -config {{ velox_worker_runtime_dir }}/worker_config.json -master ${MASTER_URL} -worker-id ${VELOX_WORKER_ID} -work-dir /app/RemoteCodex
       ExecStop=/bin/sh -c '/usr/bin/docker stop -t 20 velox-worker-{{ inventory_hostname }} >/dev/null 2>&1 || true'
       ExecStopPost=/bin/sh -c '/usr/bin/docker rm -f velox-worker-{{ inventory_hostname }} >/dev/null 2>&1 || true'
       TimeoutStopSec=35

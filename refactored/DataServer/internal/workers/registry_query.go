@@ -41,6 +41,35 @@ func (r *Registry) List(ctx context.Context) []WorkerInfo {
 	return list
 }
 
+// StatusSnapshot returns both the registered worker list and the live worker list.
+// Registered workers exclude revoked entries; live workers are filtered by heartbeat freshness.
+func (r *Registry) StatusSnapshot(ctx context.Context, timeout time.Duration) (registered []WorkerInfo, live []WorkerInfo) {
+	return r.List(ctx), r.GetActiveWorkers(ctx, timeout)
+}
+
+// GetStaleWorkers returns registered workers that have not heartbeated within timeout.
+func (r *Registry) GetStaleWorkers(ctx context.Context, timeout time.Duration) []WorkerInfo {
+	registered := r.List(ctx)
+	live := r.GetActiveWorkers(ctx, timeout)
+	if len(registered) == 0 {
+		return nil
+	}
+
+	liveSet := make(map[string]struct{}, len(live))
+	for _, w := range live {
+		liveSet[w.WorkerID] = struct{}{}
+	}
+
+	stale := make([]WorkerInfo, 0, len(registered))
+	for _, w := range registered {
+		if _, ok := liveSet[w.WorkerID]; ok {
+			continue
+		}
+		stale = append(stale, w)
+	}
+	return stale
+}
+
 // GetWorkersByGroup returns all workers in a specific group
 func (r *Registry) GetWorkersByGroup(ctx context.Context, group string) []WorkerInfo {
 	r.mu.RLock()

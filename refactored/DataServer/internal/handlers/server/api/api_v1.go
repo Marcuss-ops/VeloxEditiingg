@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -176,19 +177,24 @@ func RegisterV1Routes(r *gin.Engine, cfg *config.Config, fileQ *queue.FileQueue,
 		statusHandler := func(c *gin.Context) {
 			ctx := c.Request.Context()
 			master := workers.WorkerStatusMetadata(workerUpdateHandler)
-			list := reg.List(ctx)
+			registered, live := reg.StatusSnapshot(ctx, time.Duration(cfg.WorkerHeartbeatTimeout)*time.Second)
+			stale := reg.GetStaleWorkers(ctx, time.Duration(cfg.WorkerHeartbeatTimeout)*time.Second)
 			pending, processing, completed, errorCount, total := workerStatusCounts(ctx, fileQ)
 
 			c.JSON(http.StatusOK, gin.H{
-				"workers":         list,
-				"master":          master,
-				"active_workers":  len(list),
-				"total_workers":   len(list),
-				"pending_jobs":    pending,
-				"processing_jobs": processing,
-				"completed_jobs":  completed,
-				"error_jobs":      errorCount,
-				"total_jobs":      total,
+				"workers":             registered,
+				"live_workers":        live,
+				"stale_workers":       stale,
+				"master":              master,
+				"active_workers":      len(live),
+				"registered_workers":  len(registered),
+				"stale_workers_count": len(stale),
+				"total_workers":       len(registered),
+				"pending_jobs":        pending,
+				"processing_jobs":     processing,
+				"completed_jobs":      completed,
+				"error_jobs":          errorCount,
+				"total_jobs":          total,
 			})
 		}
 		v1Admin.GET("/workers/status", statusHandler)

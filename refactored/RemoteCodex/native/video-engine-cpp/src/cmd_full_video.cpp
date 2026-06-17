@@ -355,7 +355,7 @@ int cmdFullVideo(int argc, char** argv) {
     // Mux audio
     emitProgress(92, 0, 0, "muxing_audio");
     fs::path finalOutput = outputPath;
-    if (!voiceoverPaths.empty()) {
+    if (!voiceoverPaths.empty() && voiceoverDurationSeconds > 0.0) {
         fs::path audioPath = downloadedVoiceoverPath.empty() ? workDir / "voiceover_audio" : downloadedVoiceoverPath;
         fs::path muxedOutput = workDir / "final_with_audio.mp4";
         if (!media::muxAudio(videoOnlyPath, audioPath, muxedOutput)) {
@@ -365,6 +365,9 @@ int cmdFullVideo(int argc, char** argv) {
         std::error_code ec;
         fs::copy_file(muxedOutput, finalOutput, fs::copy_options::overwrite_existing, ec);
     } else {
+        if (!voiceoverPaths.empty()) {
+            std::cerr << "warning: voiceover audio missing or invalid, exporting video without audio\n";
+        }
         std::error_code ec;
         fs::copy_file(videoOnlyPath, finalOutput, fs::copy_options::overwrite_existing, ec);
     }

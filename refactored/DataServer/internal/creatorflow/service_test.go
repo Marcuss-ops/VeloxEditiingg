@@ -3,9 +3,11 @@ package creatorflow
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -18,6 +20,14 @@ import (
 func TestForwardSchedulesAsyncPollAndWorkerHandoff(t *testing.T) {
 	tempDir := t.TempDir()
 	dbPath := filepath.Join(tempDir, "velox.db")
+	voicePath := filepath.Join(tempDir, "voice.mp3")
+	imagePath := filepath.Join(tempDir, "scene.png")
+	if err := os.WriteFile(voicePath, []byte("voice"), 0o644); err != nil {
+		t.Fatalf("write voice: %v", err)
+	}
+	if err := os.WriteFile(imagePath, []byte("image"), 0o644); err != nil {
+		t.Fatalf("write image: %v", err)
+	}
 	db, err := store.NewSQLiteStore(dbPath)
 	if err != nil {
 		t.Fatalf("sqlite store: %v", err)
@@ -66,8 +76,8 @@ func TestForwardSchedulesAsyncPollAndWorkerHandoff(t *testing.T) {
 					"result": map[string]interface{}{
 						"title":          "Async Creator Video",
 						"script_text":    "Async creator script",
-						"scenes_json":    `[{"text":"Scene 1","image_link":"https://example.com/scene1.png"}]`,
-						"voiceover_path": "https://example.com/voice.mp3",
+						"scenes_json":    `[{"text":"Scene 1","image_link":"` + imagePath + `"}]`,
+						"voiceover_path": voicePath,
 					},
 				},
 			})
@@ -87,6 +97,9 @@ func TestForwardSchedulesAsyncPollAndWorkerHandoff(t *testing.T) {
 			})
 		}(),
 		pollInterval: 10 * time.Millisecond,
+		dataDir:      tempDir,
+		videosDir:    filepath.Join(tempDir, "videos"),
+		masterURL:    "http://master.test",
 	}
 
 	response, used, err := svc.Forward(context.Background(), map[string]interface{}{
@@ -112,11 +125,87 @@ func TestForwardSchedulesAsyncPollAndWorkerHandoff(t *testing.T) {
 			if job.VideoName != "Async Creator Video" {
 				t.Fatalf("want Async Creator Video, got %s", job.VideoName)
 			}
+			payload, payloadErr := q.GetJobPayload(context.Background(), "creator-async-1")
+			if payloadErr != nil {
+				t.Fatalf("GetJobPayload: %v", payloadErr)
+			}
+			if got := payload["voiceover_path"]; got == nil || !strings.HasPrefix(got.(string), "http://master.test/api/worker/assets/voiceover/creator-async-1/voiceover_1_") {
+				t.Fatalf("want staged voiceover path, got %v", got)
+			}
 			return
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("job not enqueued after async poll: %v", jobErr)
 		}
 		time.Sleep(25 * time.Millisecond)
+	}
+}
+
+func TestForwardCompletedResultEnqueuesWorkerJob(t *testing.T) {
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "velox.db")
+	db, err := store.NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("sqlite store: %v", err)
+	}
+	q, err := queue.NewFileQueue(&queue.FileQueueConfig{MaxRetries: 3, DBStore: db})
+	if err != nil {
+		t.Fatalf("file queue: %v", err)
+	}
+
+	result := map[string]interface{}{
+		"ok":       true,
+		"status":   "completed",
+		"trace_id": "creator-complete-1",
+		"result": map[string]interface{}{
+			"title":          "Creator Video",
+			"script_text":    "Creator script",
+			"scenes_json":    `[{"text":"Scene 1","image_link":"https://example.com/scene1.png"}]`,
+			"voiceover_path": "https://example.com/voice.mp3",
+		},
+	}
+
+	response, err := ForwardCompletedResult(context.Background(), q, result)
+	if err != nil {
+		t.Fatalf("ForwardCompletedResult: %v", err)
+	}
+	if response["ok"] != true {
+		t.Fatalf("want ok=true, got %v", response["ok"])
+	}
+	if response["job_id"] != "creator-complete-1" {
+		t.Fatalf("want job_id creator-complete-1, got %v", response["job_id"])
+	}
+	if response["status"] != "PENDING" {
+		t.Fatalf("want pending response, got %v", response["status"])
+	}
+
+	job, jobErr := q.GetJob(context.Background(), "creator-complete-1")
+	if jobErr != nil {
+		t.Fatalf("GetJob: %v", jobErr)
+	}
+	if job == nil {
+		t.Fatalf("want job")
+	}
+	if job.JobID != "creator-complete-1" {
+		t.Fatalf("want job_id creator-complete-1, got %s", job.JobID)
+	}
+	if job.VideoName != "Creator Video" {
+		t.Fatalf("want video name Creator Video, got %s", job.VideoName)
+	}
+	if job.RunID != "creator-complete-1" {
+		t.Fatalf("want run_id creator-complete-1, got %s", job.RunID)
+	}
+	payload, payloadErr := q.GetJobPayload(context.Background(), "creator-complete-1")
+	if payloadErr != nil {
+		t.Fatalf("GetJobPayload: %v", payloadErr)
+	}
+	if payload["submitted_via"] != "api_v1_scene_video" {
+		t.Fatalf("want submitted_via api_v1_scene_video, got %v", payload["submitted_via"])
+	}
+	if payload["source"] != "scene_video_api" {
+		t.Fatalf("want source scene_video_api, got %v", payload["source"])
+	}
+	if payload["voiceover_path"] != "https://example.com/voice.mp3" {
+		t.Fatalf("want voiceover_path preserved, got %v", payload["voiceover_path"])
 	}
 }

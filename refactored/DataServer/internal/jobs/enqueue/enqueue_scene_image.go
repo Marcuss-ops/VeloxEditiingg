@@ -229,7 +229,7 @@ func stageVoiceoverAssets(dataDir, masterURL, jobID string, voiceoverPaths []str
 	baseMasterURL := strings.TrimRight(strings.TrimSpace(masterURL), "/")
 	client := &http.Client{Timeout: 90 * time.Second}
 	for idx, source := range voiceoverPaths {
-		filename := stagedAssetFilename(source, idx)
+		filename := stagedAssetFilename("voiceover", source, idx)
 		if filename == "" {
 			filename = fmt.Sprintf("voiceover_%d", idx+1)
 		}
@@ -261,7 +261,7 @@ func stageSceneImageAssets(dataDir, masterURL, jobID string, sceneEntries []map[
 	staged := make([]string, 0, len(sceneImagePaths))
 
 	for idx, source := range sceneImagePaths {
-		filename := stagedAssetFilename(source, idx)
+		filename := stagedAssetFilename("scene_image", source, idx)
 		if filename == "" {
 			filename = fmt.Sprintf("scene_image_%d", idx+1)
 		}
@@ -275,22 +275,29 @@ func stageSceneImageAssets(dataDir, masterURL, jobID string, sceneEntries []map[
 	return staged, nil
 }
 
-func stagedAssetFilename(source string, idx int) string {
+func stagedAssetFilename(kind, source string, idx int) string {
 	if trimmed := strings.TrimSpace(source); trimmed != "" {
+		prefix := strings.TrimSpace(kind)
+		if prefix == "" {
+			prefix = "asset"
+		}
 		if _, err := os.Stat(trimmed); err == nil {
 			base := filepath.Base(trimmed)
 			if base != "" && base != "." && base != string(filepath.Separator) {
-				return base
+				return fmt.Sprintf("%s_%d_%s", prefix, idx+1, base)
 			}
 		}
 		if u, err := neturl.Parse(trimmed); err == nil && u.Scheme != "" {
 			base := filepath.Base(u.Path)
 			if base != "" && base != "." && base != "uc" && base != "download" {
-				return base
+				return fmt.Sprintf("%s_%d_%s", prefix, idx+1, base)
 			}
 		}
 	}
-	return fmt.Sprintf("voiceover_%d", idx+1)
+	if strings.TrimSpace(kind) == "scene_image" {
+		return fmt.Sprintf("scene_image_%d", idx+1)
+	}
+	return fmt.Sprintf("%s_%d", strings.TrimSpace(kind), idx+1)
 }
 
 func copyOrDownloadAsset(client *http.Client, source, destPath string) error {
