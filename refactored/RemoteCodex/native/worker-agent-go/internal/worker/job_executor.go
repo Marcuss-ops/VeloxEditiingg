@@ -35,12 +35,7 @@ func (w *Worker) executeJob(ctx context.Context, job *api.Job) {
 		return
 	}
 
-	w.mu.Lock()
-	w.currentJob = job
-	w.status = StatusBusy
-	w.mu.Unlock()
-
-	// Register in activeJobs map for multi-job tracking
+	// Register in activeJobs map for multi-job tracking (status derived from map length)
 	activeJob := &ActiveJob{
 		Job:       job,
 		LeaseID:   resolveLeaseID(job),
@@ -100,26 +95,13 @@ func (w *Worker) executeJob(ctx context.Context, job *api.Job) {
 		}
 	}
 
-	w.mu.Lock()
-	w.currentJob = nil
-	w.progressPercent.Store(0)
-	w.progressScene.Store(0)
-	w.progressTotal.Store(0)
-	w.progressStage.Store("idle")
-	
-	// Update activeJobs progress on completion
-	w.activeJobsMu.Lock()
-	if aj, ok := w.activeJobs[job.JobID]; ok {
-		aj.Progress = JobProgress{}
-	}
-	w.activeJobsMu.Unlock()
 	duration := time.Since(startTime)
 
 	if execErr != nil {
 		logger.LogJobFailedWithType(w.config.WorkerID, job.JobID, job.JobType, execErr, duration)
 		result.Status = "failed"
 		result.Error = execErr.Error()
-		w.status = StatusError
+		w.setStatus(StatusError)
 		w.jobsFailed.Add(1)
 		telemetry.RecordJobFailure(duration.Milliseconds())
 		telemetry.GetPrometheusMetrics().RecordJobRuntime(job.JobType, float64(duration.Milliseconds()))
@@ -127,12 +109,10 @@ func (w *Worker) executeJob(ctx context.Context, job *api.Job) {
 		logger.LogJobSuccess(w.config.WorkerID, job.JobID, job.JobType, duration)
 		result.Status = "success"
 		result.Output = output
-		w.status = StatusIdle
 		w.jobsCompleted.Add(1)
 		telemetry.RecordJobSuccess(duration.Milliseconds())
 		telemetry.GetPrometheusMetrics().RecordJobRuntime(job.JobType, float64(duration.Milliseconds()))
 	}
-	w.mu.Unlock()
 
 	telemetry.GetPrometheusMetrics().SetWorkerStatus(w.config.WorkerID, 1)
 	telemetry.GetPrometheusMetrics().SetWorkerActiveJobs(w.config.WorkerID, float64(w.concurrencyLimiter.ActiveJobCount()))
@@ -266,11 +246,17 @@ func (w *Worker) executeWorkflowJob(ctx context.Context, job *api.Job, jobLabel 
 		LogLevel:   w.config.LogLevel,
 	}, wfLogger)
 
+	// Capture jobID for per-job progress tracking via activeJobs map
+	jobID := job.JobID
 	workflow.SetProgressCallback(func(percent, scene, total int, stage string) {
-		w.progressPercent.Store(int32(percent))
-		w.progressScene.Store(int32(scene))
-		w.progressTotal.Store(int32(total))
-		w.progressStage.Store(stage)
+		w.activeJobsMu.Lock()
+		if aj, ok := w.activeJobs[jobID]; ok {
+			aj.Progress.Percent = int32(percent)
+			aj.Progress.Scene = int32(scene)
+			aj.Progress.TotalScenes = int32(total)
+			aj.Progress.Stage = stage
+		}
+		w.activeJobsMu.Unlock()
 	})
 
 	outputPath := p.OutputPath

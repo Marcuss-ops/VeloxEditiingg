@@ -74,7 +74,6 @@ func New(cfg *config.WorkerConfig, version string) *Worker {
 		stageExecutor:      stageExecutor,
 		exitFunc:           os.Exit,
 	}
-	w.progressStage.Store("idle")
 	return w
 }
 
@@ -148,27 +147,41 @@ func (w *Worker) SetExitFunc(fn ExitFunc) {
 	w.exitFunc = fn
 }
 
-// Status returns the current worker status.
+// Status returns the current worker status, derived from activeJobs count and error state.
+// Busy = at least one active job. Error = last job failed (status field). Idle = no jobs, no error.
 func (w *Worker) Status() Status {
+	if w.stopped.Load() {
+		return StatusStopped
+	}
+	w.activeJobsMu.RLock()
+	activeCount := len(w.activeJobs)
+	w.activeJobsMu.RUnlock()
+	if activeCount > 0 {
+		return StatusBusy
+	}
 	w.mu.RLock()
-	defer w.mu.RUnlock()
-	return w.status
+	s := w.status
+	w.mu.RUnlock()
+	if s == StatusError {
+		return StatusError
+	}
+	return StatusIdle
 }
 
-// setStatus updates the current worker status.
-func (w *Worker) setStatus(status Status) {
+// setStatus updates the persisted error/idle state.
+// Busy is derived from activeJobs and should NOT be set via this method.
+func (w *Worker) setStatus(s Status) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	oldStatus := w.status
-	w.status = status
-	w.logger.Debug("Status transition: %s -> %s", oldStatus, status)
+	w.status = s
+	w.logger.Debug("Status transition: %s -> %s", oldStatus, s)
 }
 
 // canTransitionTo checks if a status transition is valid.
+// Current status is derived from activeJobs and error state.
 func (w *Worker) canTransitionTo(newStatus Status) bool {
-	w.mu.RLock()
-	currentStatus := w.status
-	w.mu.RUnlock()
+	currentStatus := w.Status()
 
 	switch currentStatus {
 	case StatusIdle:
