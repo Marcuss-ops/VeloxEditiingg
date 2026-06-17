@@ -19,12 +19,6 @@
   vars:
     velox_dir: "/opt/velox"
     master_url: "{{ master_url | default('http://127.0.0.1:8000') }}"
-    # layout root = repo root (the directory that contains DataServer/).
-    # From DataServer/data/ansible/playbooks/ it takes exactly 4 '..' to reach
-    # the repo root. The previous 5 levels silently resolved outside the repo
-    # and was inherited from the pre-split layout — corrected here so that
-    # version_number tracks VERSION.txt consistently across both playbooks.
-    version_number: "{{ lookup('file', playbook_dir + '/../../../../VERSION.txt') | trim }}"
 
   tasks:
     # ── PREREQUISITI ─────────────────────────────────────────
