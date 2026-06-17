@@ -7,6 +7,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"math/big"
@@ -470,26 +471,89 @@ func TestGRPCStreamTransport_ReceiveBeforeConnect(t *testing.T) {
 
 // ---- mTLS Integration Tests (Phase 7) ----
 
-// certsBaseDir resolves the path to the refactored/certs/ directory relative
-// to the test package directory.
-func certsBaseDir(t *testing.T) string {
+// generateTestCertsDir generates CA, server, and client certificates in a temp
+// directory for mTLS testing. This avoids dependency on committed cert files.
+func generateTestCertsDir(t *testing.T) string {
 	t.Helper()
-	abs, err := filepath.Abs(filepath.Join("..", "..", "..", "..", "..", "certs"))
+	dir := t.TempDir()
+
+	// Generate CA key and cert
+	caKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
-		t.Fatalf("cannot resolve certs directory: %v", err)
+		t.Fatalf("Generate CA key: %v", err)
 	}
-	if _, err := os.Stat(abs); err != nil {
-		t.Fatalf("certs directory not found at %s: %v", abs, err)
+	caTemplate := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "Test CA"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
 	}
-	return abs
+	caDER, err := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatalf("Create CA cert: %v", err)
+	}
+	caCert, err := x509.ParseCertificate(caDER)
+	if err != nil {
+		t.Fatalf("Parse CA cert: %v", err)
+	}
+
+	// Write CA cert and key
+	os.WriteFile(filepath.Join(dir, "ca.crt"), pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER}), 0o644)
+	caKeyBytes, _ := x509.MarshalPKCS8PrivateKey(caKey)
+	os.WriteFile(filepath.Join(dir, "ca.key"), pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: caKeyBytes}), 0o644)
+
+	// Generate server cert signed by CA
+	serverKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("Generate server key: %v", err)
+	}
+	serverTemplate := &x509.Certificate{
+		SerialNumber: big.NewInt(2),
+		Subject:      pkix.Name{CommonName: "Test Server"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	serverDER, err := x509.CreateCertificate(rand.Reader, serverTemplate, caCert, &serverKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatalf("Create server cert: %v", err)
+	}
+	os.WriteFile(filepath.Join(dir, "server.crt"), pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: serverDER}), 0o644)
+	serverKeyBytes, _ := x509.MarshalPKCS8PrivateKey(serverKey)
+	os.WriteFile(filepath.Join(dir, "server.key"), pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: serverKeyBytes}), 0o644)
+
+	// Generate client cert signed by CA with worker ID in CommonName
+	clientKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("Generate client key: %v", err)
+	}
+	clientTemplate := &x509.Certificate{
+		SerialNumber: big.NewInt(3),
+		Subject:      pkix.Name{CommonName: "test-worker-mtls"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+	}
+	clientDER, err := x509.CreateCertificate(rand.Reader, clientTemplate, caCert, &clientKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatalf("Create client cert: %v", err)
+	}
+	os.WriteFile(filepath.Join(dir, "client.crt"), pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: clientDER}), 0o644)
+	clientKeyBytes, _ := x509.MarshalPKCS8PrivateKey(clientKey)
+	os.WriteFile(filepath.Join(dir, "client.key"), pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: clientKeyBytes}), 0o644)
+
+	return dir
 }
 
 // startTestMTLSServer creates a gRPC server with mTLS requiring client
-// certificates signed by the test CA. Returns server + address.
+// certificates signed by the test CA. Certificates are generated dynamically.
 func startTestMTLSServer(t *testing.T, srv pb.WorkerControlServer) (*grpc.Server, string) {
 	t.Helper()
 
-	certsDir := certsBaseDir(t)
+	certsDir := generateTestCertsDir(t)
 
 	serverCert, err := tls.LoadX509KeyPair(
 		filepath.Join(certsDir, "server.crt"),
@@ -536,7 +600,7 @@ func TestGRPCStreamTransport_mTLS_Handshake(t *testing.T) {
 	srv, addr := startTestMTLSServer(t, ts)
 	defer srv.Stop()
 
-	certsDir := certsBaseDir(t)
+	certsDir := generateTestCertsDir(t)
 
 	transport := NewGRPCStreamTransport(addr, "test-worker-mtls-001")
 	if err := transport.WithTLS(
@@ -619,7 +683,7 @@ func TestGRPCStreamTransport_mTLS_WrongCA(t *testing.T) {
 	transport := NewGRPCStreamTransport(addr, "test-worker-wrongca")
 
 	// Trust the server's CA (needed to verify the server during handshake)
-	certsDir := certsBaseDir(t)
+	certsDir := generateTestCertsDir(t)
 	caPEM, err := os.ReadFile(filepath.Join(certsDir, "ca.crt"))
 	if err != nil {
 		t.Fatalf("Read CA cert: %v", err)
@@ -684,7 +748,7 @@ func TestGRPCStreamTransport_mTLS_HeartbeatSend(t *testing.T) {
 	srv, addr := startTestMTLSServer(t, ts)
 	defer srv.Stop()
 
-	certsDir := certsBaseDir(t)
+	certsDir := generateTestCertsDir(t)
 
 	transport := NewGRPCStreamTransport(addr, "test-worker-mtls-hb")
 	if err := transport.WithTLS(

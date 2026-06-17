@@ -244,7 +244,8 @@ func runServer(cfg *config.Config) error {
 		tokenMgr := workersreg.NewTokenManager(deps.sqliteStore)
 
 		grpcHandlerConfig := &grpcserver.HandlerConfig{
-			ShadowMode: true,
+			ShadowMode: cfg.Server.GRPCShadowMode,
+			PushMode:   cfg.Server.GRPCPushMode,
 		}
 		grpcHandler := grpcserver.NewHandler(
 			deps.reg, cmdMgr, tokenMgr, transitionSvc, deps.sqliteStore, grpcHandlerConfig,

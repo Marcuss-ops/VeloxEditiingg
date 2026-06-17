@@ -1,10 +1,12 @@
 package config
 
-// ServerConfig holds HTTP server settings.
+// ServerConfig holds HTTP and gRPC server settings.
 type ServerConfig struct {
 	Port           int
 	StudioPort     int
-	GRPCPort       int    // gRPC port for worker control stream (0 = disabled)
+	GRPCPort        int    // gRPC port for worker control stream (0 = disabled)
+	GRPCShadowMode  bool   // Phase 4: notify workers about available jobs, still claim via HTTP
+	GRPCPushMode    bool   // Phase 5+: send JobOffer directly, workers respond JobAccepted
 	TLSCertFile    string
 	TLSKeyFile     string
 	GRPCTLSCertFile string // gRPC server certificate (PEM). Required when GRPCPort > 0 with mTLS.

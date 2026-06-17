@@ -9,6 +9,51 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// validateWorkerCredential checks the worker's credential against stored credentials.
+// In V2 mode (and now V1), credential is mandatory unless VELOX_HTTP_ALLOW_NO_CREDENTIAL=true.
+// Returns true if validation passes, false if rejected (response already set).
+func (h *Handler) validateWorkerCredential(c *gin.Context, workerID, credential string) bool {
+	allowNoCred := os.Getenv("VELOX_HTTP_ALLOW_NO_CREDENTIAL") == "true"
+	hasCred, _ := h.store.HasWorkerCredential(workerID)
+
+	if credential == "" {
+		if hasCred {
+			c.JSON(http.StatusUnauthorized, gin.H{
+				"error": "credential required — this worker already has a stored credential",
+			})
+			return false
+		}
+		if !allowNoCred {
+			c.JSON(http.StatusUnauthorized, gin.H{
+				"error": "credential required (set VELOX_HTTP_ALLOW_NO_CREDENTIAL=true for dev)",
+			})
+			return false
+		}
+		log.Printf("[REGISTER] Worker %s: no credential — allowing in dev mode", workerID)
+		return true
+	}
+
+	match, _ := h.store.ValidateWorkerCredential(workerID, credential)
+
+	if hasCred && !match {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"error": "credential mismatch — possible impersonation",
+		})
+		return false
+	}
+
+	if match {
+		log.Printf("[REGISTER] Worker %s authenticated via credential", workerID)
+	}
+
+	// Store/update credential (new worker or matching)
+	if err := h.store.SetWorkerCredential(workerID, credential); err != nil {
+		log.Printf("[REGISTER] Failed to persist credential for worker %s: %v", workerID, err)
+	}
+
+	return true
+}
+
 func (h *Handler) RegisterV2Handler() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var body struct {
@@ -50,43 +95,8 @@ func (h *Handler) RegisterV2Handler() gin.HandlerFunc {
 		}
 
 		// P0 security: credential is mandatory unless VELOX_HTTP_ALLOW_NO_CREDENTIAL=true (dev).
-		// If a credential already exists for this worker, it MUST match.
-		// If no credential exists yet, one MUST be provided for first registration.
-		allowNoCred := os.Getenv("VELOX_HTTP_ALLOW_NO_CREDENTIAL") == "true"
-		hasCred, _ := h.store.HasWorkerCredential(body.WorkerID)
-
-		if body.Credential == "" {
-			if hasCred {
-				c.JSON(http.StatusUnauthorized, gin.H{
-					"error": "credential required — this worker already has a stored credential",
-				})
-				return
-			}
-			if !allowNoCred {
-				c.JSON(http.StatusUnauthorized, gin.H{
-					"error": "credential required for first registration (set VELOX_HTTP_ALLOW_NO_CREDENTIAL=true for dev)",
-				})
-				return
-			}
-			log.Printf("[REGISTER] Worker %s: no credential — allowing in dev mode", body.WorkerID)
-		} else {
-			match, _ := h.store.ValidateWorkerCredential(body.WorkerID, body.Credential)
-
-			if hasCred && !match {
-				c.JSON(http.StatusUnauthorized, gin.H{
-					"error": "credential mismatch — possible impersonation",
-				})
-				return
-			}
-
-			if match {
-				log.Printf("[REGISTER] Worker %s authenticated via credential", body.WorkerID)
-			}
-
-			// Store/update credential (new worker or matching)
-			if err := h.store.SetWorkerCredential(body.WorkerID, body.Credential); err != nil {
-				log.Printf("[REGISTER] Failed to persist credential for worker %s: %v", body.WorkerID, err)
-			}
+		if !h.validateWorkerCredential(c, body.WorkerID, body.Credential) {
+			return
 		}
 
 		ipAddress := body.IPAddress
@@ -179,26 +189,9 @@ func (h *Handler) RegisterHandler() gin.HandlerFunc {
 			return
 		}
 
-		// Validate persistent credential if provided
-		if body.Credential != "" {
-			hasCred, _ := h.store.HasWorkerCredential(body.WorkerID)
-			match, _ := h.store.ValidateWorkerCredential(body.WorkerID, body.Credential)
-
-			if hasCred && !match {
-				c.JSON(http.StatusUnauthorized, gin.H{
-					"success": false,
-					"error":   "credential mismatch — possible impersonation",
-				})
-				return
-			}
-
-			if match {
-				log.Printf("[REGISTER] Worker %s authenticated via credential", body.WorkerID)
-			}
-
-			if err := h.store.SetWorkerCredential(body.WorkerID, body.Credential); err != nil {
-				log.Printf("[REGISTER] Failed to persist credential for worker %s: %v", body.WorkerID, err)
-			}
+		// Validate persistent credential (mandatory unless VELOX_HTTP_ALLOW_NO_CREDENTIAL=true)
+		if !h.validateWorkerCredential(c, body.WorkerID, body.Credential) {
+			return
 		}
 
 		workerName := strings.TrimSpace(body.WorkerName)
