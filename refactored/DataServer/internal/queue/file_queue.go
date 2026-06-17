@@ -81,8 +81,9 @@ type Job struct {
 	LogsUpdatedAt string        `json:"logs_updated_at,omitempty"`
 
 	SlotData      map[string]interface{} `json:"slot_data,omitempty"`
-	OutputVideoID string                 `json:"output_video_id,omitempty"`
-	DriveURL      string                 `json:"drive_url,omitempty"`
+	// DEPRECATED (PR4): Delivery state moved to delivery_targets + delivery_attempts.
+	OutputVideoID string `json:"output_video_id,omitempty"`
+	DriveURL      string `json:"drive_url,omitempty"`
 
 	// DEPRECATED (PR4): Drive/YouTube delivery state moved to delivery_targets + delivery_attempts tables.
 	// Kept for backward compat — no longer written by delivery code.

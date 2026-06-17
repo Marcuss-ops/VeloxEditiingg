@@ -20,10 +20,7 @@ type Handler struct {
 func NewHandler(cfg *config.Config) *Handler {
 	dataDir := ""
 	if cfg != nil {
-		dataDir = strings.TrimSpace(cfg.DataDir)
-		if dataDir == "" {
-			dataDir = strings.TrimSpace(cfg.Runtime.DataDir)
-		}
+		dataDir = strings.TrimSpace(cfg.Runtime.DataDir)
 	}
 	return &Handler{dataDir: dataDir}
 }

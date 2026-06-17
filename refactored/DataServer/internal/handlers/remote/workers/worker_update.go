@@ -286,7 +286,7 @@ func (h *WorkerUpdateHandler) latestBundleTarget() bundleTargetInfo {
 	}
 
 	if info.Version == "" {
-		info.Version = h.cfg.VersionNumber
+		info.Version = h.cfg.Workers.VersionNumber
 	}
 	if info.Version == "" {
 		info.Version = h.codeVersion

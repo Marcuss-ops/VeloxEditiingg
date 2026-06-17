@@ -102,86 +102,7 @@ type NVIDIAConfig struct {
 
 // Config is the top-level configuration.
 type Config struct {
-	MasterPort           int
-	StudioPort           int
-	TLSCertFile          string
-	TLSKeyFile           string
-	AllowLocalhostMaster bool
-
-	// Runtime
-	DataDir      string
-	RuntimeDir   string
-	VideosDir    string
-	StaticDir    string
-	JobQueueFile string
-	SecretsDir   string
-
-	// Database
-	DBPath string
-
-	// Workers
-	AllowedWorkers           string
-	ForceSingleWorker        string
-	AllowlistAllowRegistered bool
-	MaxJobAttempts           int
-	WorkerBundleDir          string
-	WorkerHeartbeatTimeout   int
-	CodeVersion              string
-	VersionNumber            string
-	ScriptDir                string
-	MasterURL                string
-	AllowedWorkerIPs         []string
-
-	// Auth
-	AdminToken string
-
-	// S3
-	S3Endpoint        string
-	S3Region          string
-	S3Bucket          string
-	S3AccessKeyID     string
-	S3SecretAccessKey string
-	S3UseSSL          bool
-
-	// Drive
-	DriveClientID       string
-	DriveClientSecret   string
-	DriveRedirectURI    string
-	DriveTokensDir      string
-	DriveCredentialsDir string
-
-	// YouTube
-	YouTubeAPIKey         string
-	YouTubeTokensDir      string
-	YouTubePostingPath    string
-	YouTubeCredentialsDir string
-	RemoteFallbackURL     string
-
-	// Ansible
-	PlaybookDir string
-
-	// Frontend
-	GradioAppURL       string
-	SPADir             string
-	DarkEditorDir      string
-	DarkEditorProxyURL string
-
-	// Render
-	RemoteEngineURL          string
-	RemoteEngineToken        string
-	RemoteEngineTimeoutMS    int
-	RemoteEngineRetries      int
-	RemoteEnginePollInterval int
-
-	// NVIDIA
-	NVIDIAAPIKey  string
-	NVIDIATextURL string
-
-	// Derived
-	MasterServerURL string
-	JobMasterURL    string
-
-	// Sub-configs
+	// Sub-configs only — no flat field aliases.
 	Server   ServerConfig
 	Runtime  RuntimeConfig
 	Database DatabaseConfig
@@ -194,4 +115,8 @@ type Config struct {
 	Frontend FrontendConfig
 	Render   RenderConfig
 	NVIDIA   NVIDIAConfig
+
+	// Derived fields (set by FromEnv)
+	MasterServerURL string
+	JobMasterURL    string
 }
