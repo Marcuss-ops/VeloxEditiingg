@@ -54,6 +54,7 @@ func (h *Handler) RevokeWorkerHandler() gin.HandlerFunc {
 		ctx := c.Request.Context()
 
 		h.reg.RevokeWorker(ctx, body.WorkerID)
+		h.tokenMgr.RevokeWorkerTokens(body.WorkerID)
 
 		log.Printf("Worker revoked: %s", body.WorkerID[:min(16, len(body.WorkerID))]+"...")
 

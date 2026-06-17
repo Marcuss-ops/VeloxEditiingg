@@ -31,6 +31,8 @@ func IsLocalRequestIP(raw string) bool {
 }
 
 // AuthorizeWorkerToken validates the worker token for a given worker ID.
+// SQLite is the source of truth. Local IPs still bypass token validation for
+// backward compatibility with agents that predate token support.
 func AuthorizeWorkerToken(tokenMgr *TokenManager, token, workerID string, clientIP string) bool {
 	workerID = strings.TrimSpace(workerID)
 	if workerID == "" {
@@ -39,14 +41,6 @@ func AuthorizeWorkerToken(tokenMgr *TokenManager, token, workerID string, client
 	if IsLocalRequestIP(clientIP) {
 		return true
 	}
-	// Legacy and current worker agents do not always send a bearer token.
-	// Allow tokenless worker traffic so heartbeats, job polls, and command
-	// acknowledgements keep working.
-	//
-	// Tokens are also in-memory and are lost on master restart. In that case
-	// workers may continue sending an old bearer token until they re-register.
-	// Treat that as a best-effort auth hint instead of a hard failure so the
-	// existing worker fleet can recover without manual intervention.
 	if tokenMgr == nil || strings.TrimSpace(token) == "" {
 		return true
 	}
@@ -54,5 +48,6 @@ func AuthorizeWorkerToken(tokenMgr *TokenManager, token, workerID string, client
 	if ok {
 		return tokenWorkerID == workerID
 	}
-	return true
+	// Token not found or expired — deny. Workers must re-register to get a fresh token.
+	return false
 }

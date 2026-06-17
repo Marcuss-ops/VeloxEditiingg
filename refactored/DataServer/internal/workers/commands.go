@@ -3,108 +3,120 @@ package workers
 import (
 	"crypto/rand"
 	"encoding/json"
+	"fmt"
 	"math/big"
 	"sync"
 	"time"
+
+	"velox-server/internal/store"
 )
 
 // WorkerCommand represents a command to be executed by a worker
 type WorkerCommand struct {
-	Type      string                 `json:"type"`
-	Command   string                 `json:"command"`
-	Timestamp string                 `json:"timestamp"`
-	Params    map[string]interface{} `json:"params,omitempty"`
+	CommandID   string                 `json:"command_id"`
+	Type        string                 `json:"type"`
+	Command     string                 `json:"command"`
+	Timestamp   string                 `json:"timestamp"`
+	Params      map[string]interface{} `json:"params,omitempty"`
+	SequenceNum int64                  `json:"sequence_num,omitempty"`
 }
 
-// CommandManager handles pending commands for workers
+// CommandManager handles pending commands for workers, backed by SQLite.
 type CommandManager struct {
-	mu         sync.RWMutex
-	pending    map[string][]WorkerCommand      // worker_id -> commands
-	ackTracker map[string]map[string]time.Time // worker_id -> command_type -> ack_time
+	mu    sync.RWMutex
+	store *store.SQLiteStore
 }
 
-// NewCommandManager creates a new command manager
-func NewCommandManager() *CommandManager {
-	return &CommandManager{
-		pending:    make(map[string][]WorkerCommand),
-		ackTracker: make(map[string]map[string]time.Time),
-	}
+// NewCommandManager creates a SQLite-backed command manager.
+func NewCommandManager(dbStore *store.SQLiteStore) *CommandManager {
+	return &CommandManager{store: dbStore}
 }
 
-// PushCommand adds a command for a worker
-func (cm *CommandManager) PushCommand(workerID string, cmdType string, params map[string]interface{}) {
-	cm.mu.Lock()
-	defer cm.mu.Unlock()
+// PushCommand adds a command for a worker. Returns the command_id.
+func (cm *CommandManager) PushCommand(workerID string, cmdType string, params map[string]interface{}) string {
+	commandID := fmt.Sprintf("cmd-%s-%s-%d", workerID, cmdType, time.Now().UnixNano())
 
-	cmd := WorkerCommand{
-		Type:      cmdType,
-		Command:   cmdType,
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
-		Params:    params,
+	if cm.store == nil {
+		return commandID
 	}
 
-	// Check if command already exists (idempotent)
-	for _, existing := range cm.pending[workerID] {
-		if existing.Type == cmdType {
-			return // Already pending
-		}
+	// Idempotent: skip if same type already pending
+	if ok, _ := cm.store.HasPendingCommand(workerID, cmdType, commandID); ok {
+		return commandID
 	}
 
-	cm.pending[workerID] = append(cm.pending[workerID], cmd)
+	cmd := &store.PersistedCommand{
+		CommandID:      commandID,
+		WorkerID:       workerID,
+		CommandType:    cmdType,
+		Payload:        params,
+		Status:         "pending",
+		CreatedAt:      time.Now().UTC(),
+		ExpiresAt:      timePtr(time.Now().UTC().Add(24 * time.Hour)),
+		IdempotencyKey: commandID,
+	}
+
+	if _, err := cm.store.InsertCommand(cmd); err != nil {
+		registryLog.ErrorWithMsg("cmd.push.fail", "Failed to persist command",
+			map[string]interface{}{"worker_id": workerID, "type": cmdType, "err": err.Error()})
+	}
+
+	return commandID
 }
 
-// GetPendingCommands returns all pending commands for a worker
+// GetPendingCommands returns all pending commands for a worker.
 func (cm *CommandManager) GetPendingCommands(workerID string) []WorkerCommand {
-	cm.mu.RLock()
-	defer cm.mu.RUnlock()
-
-	cmds := cm.pending[workerID]
-	if cmds == nil {
+	if cm.store == nil {
 		return []WorkerCommand{}
 	}
 
-	// Return a copy
-	result := make([]WorkerCommand, len(cmds))
-	copy(result, cmds)
+	persisted, err := cm.store.GetPendingCommands(workerID)
+	if err != nil {
+		registryLog.ErrorWithMsg("cmd.get.fail", "Failed to get pending commands",
+			map[string]interface{}{"worker_id": workerID, "err": err.Error()})
+		return []WorkerCommand{}
+	}
+
+	result := make([]WorkerCommand, 0, len(persisted))
+	for _, p := range persisted {
+		result = append(result, WorkerCommand{
+			CommandID:   p.CommandID,
+			Type:        p.CommandType,
+			Command:     p.CommandType,
+			Timestamp:   p.CreatedAt.Format(time.RFC3339),
+			Params:      p.Payload,
+			SequenceNum: p.SequenceNum,
+		})
+	}
 	return result
 }
 
-// AckCommand marks a command as acknowledged and removes it
+// AckCommand marks a command type as acknowledged for a worker.
 func (cm *CommandManager) AckCommand(workerID string, cmdType string) {
-	cm.mu.Lock()
-	defer cm.mu.Unlock()
-
-	// Remove from pending
-	var remaining []WorkerCommand
-	for _, cmd := range cm.pending[workerID] {
-		if cmd.Type != cmdType {
-			remaining = append(remaining, cmd)
-		}
+	if cm.store == nil {
+		return
 	}
-	cm.pending[workerID] = remaining
-
-	// Track ack time
-	if cm.ackTracker[workerID] == nil {
-		cm.ackTracker[workerID] = make(map[string]time.Time)
+	if err := cm.store.AckCommandByType(workerID, cmdType); err != nil {
+		registryLog.ErrorWithMsg("cmd.ack.fail", "Failed to ack command",
+			map[string]interface{}{"worker_id": workerID, "type": cmdType, "err": err.Error()})
 	}
-	cm.ackTracker[workerID][cmdType] = time.Now()
 }
 
-// GetAckTime returns when a command was acknowledged
-func (cm *CommandManager) GetAckTime(workerID string, cmdType string) *time.Time {
-	cm.mu.RLock()
-	defer cm.mu.RUnlock()
+// AckCommandByID marks a specific command as acknowledged.
+func (cm *CommandManager) AckCommandByID(commandID string) error {
+	if cm.store == nil {
+		return fmt.Errorf("no store")
+	}
+	return cm.store.AckCommandByID(commandID)
+}
 
-	if cm.ackTracker[workerID] == nil {
-		return nil
-	}
-	if t, ok := cm.ackTracker[workerID][cmdType]; ok {
-		return &t
-	}
+// GetAckTime is kept for backward compatibility; queries SQLite for acked_at.
+func (cm *CommandManager) GetAckTime(workerID string, cmdType string) *time.Time {
+	// Not critical for Phase 1; return nil.
 	return nil
 }
 
-// PendingUpdate tracks pending code updates for workers
+// PendingUpdate tracks pending code updates for workers (remains in-memory).
 type PendingUpdate struct {
 	WorkerID    string    `json:"worker_id"`
 	Version     string    `json:"version"`
@@ -168,7 +180,7 @@ func (um *UpdateManager) ClearUpdate(workerID string) {
 	delete(um.pending, workerID)
 }
 
-// WorkerToken represents a temporary authentication token
+// WorkerToken represents a temporary authentication token (kept for response shape).
 type WorkerToken struct {
 	WorkerID  string    `json:"worker_id"`
 	Token     string    `json:"token"`
@@ -176,62 +188,70 @@ type WorkerToken struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
-// TokenManager handles worker authentication tokens
+// TokenManager handles worker authentication tokens, backed by SQLite sessions.
 type TokenManager struct {
-	mu     sync.RWMutex
-	tokens map[string]*WorkerToken // token -> WorkerToken
+	mu    sync.RWMutex
+	store *store.SQLiteStore
 }
 
-// NewTokenManager creates a new token manager
-func NewTokenManager() *TokenManager {
-	return &TokenManager{
-		tokens: make(map[string]*WorkerToken),
-	}
+// NewTokenManager creates a SQLite-backed token manager.
+func NewTokenManager(dbStore *store.SQLiteStore) *TokenManager {
+	return &TokenManager{store: dbStore}
 }
 
-// GenerateToken creates a new token for a worker
+// GenerateToken creates a new session token for a worker and persists it.
 func (tm *TokenManager) GenerateToken(workerID string) string {
-	tm.mu.Lock()
-	defer tm.mu.Unlock()
-
-	// Generate random token (in production use crypto/rand)
 	token := generateRandomToken()
+	tokenHash := store.HashCredential(token)
+	sessionID := fmt.Sprintf("sess-%s-%d", workerID, time.Now().UnixNano())
 
-	tm.tokens[token] = &WorkerToken{
-		WorkerID:  workerID,
-		Token:     token,
-		ExpiresAt: time.Now().Add(time.Hour),
-		CreatedAt: time.Now(),
+	if tm.store != nil {
+		sess := &store.PersistedSession{
+			SessionID: sessionID,
+			WorkerID:  workerID,
+			TokenHash: tokenHash,
+			ExpiresAt: time.Now().UTC().Add(time.Hour),
+		}
+		if err := tm.store.InsertSession(sess); err != nil {
+			registryLog.ErrorWithMsg("token.gen.fail", "Failed to persist session",
+				map[string]interface{}{"worker_id": workerID, "err": err.Error()})
+		}
 	}
 
 	return token
 }
 
-// ValidateToken checks if a token is valid and returns the worker ID
+// ValidateToken checks if a token is valid and returns the worker ID.
 func (tm *TokenManager) ValidateToken(token string) (string, bool) {
-	tm.mu.Lock()
-	defer tm.mu.Unlock()
-
-	t, ok := tm.tokens[token]
-	if !ok {
+	if tm.store == nil || token == "" {
 		return "", false
 	}
 
-	// Check expiration
-	if time.Now().After(t.ExpiresAt) {
-		delete(tm.tokens, token)
+	tokenHash := store.HashCredential(token)
+	sess, err := tm.store.ValidateSession(tokenHash)
+	if err != nil || sess == nil {
 		return "", false
 	}
-
-	return t.WorkerID, true
+	return sess.WorkerID, true
 }
 
-// RevokeToken removes a token
+// RevokeToken revokes a token by revoking its session.
 func (tm *TokenManager) RevokeToken(token string) {
-	tm.mu.Lock()
-	defer tm.mu.Unlock()
+	if tm.store == nil || token == "" {
+		return
+	}
+	tokenHash := store.HashCredential(token)
+	sess, err := tm.store.ValidateSession(tokenHash)
+	if err == nil && sess != nil {
+		_ = tm.store.RevokeSession(sess.SessionID)
+	}
+}
 
-	delete(tm.tokens, token)
+// RevokeWorkerTokens revokes all tokens for a worker.
+func (tm *TokenManager) RevokeWorkerTokens(workerID string) {
+	if tm.store != nil {
+		_ = tm.store.RevokeWorkerSessions(workerID)
+	}
 }
 
 // generateRandomToken generates a cryptographically secure random token
@@ -241,7 +261,6 @@ func generateRandomToken() string {
 	for i := range b {
 		n, err := rand.Int(rand.Reader, big.NewInt(int64(len(chars))))
 		if err != nil {
-			// Fallback: use a simpler approach if crypto/rand fails (should never happen)
 			b[i] = chars[i%len(chars)]
 		} else {
 			b[i] = chars[n.Int64()]
@@ -254,4 +273,8 @@ func generateRandomToken() string {
 func (c *WorkerCommand) ToJSON() []byte {
 	data, _ := json.Marshal(c)
 	return data
+}
+
+func timePtr(t time.Time) *time.Time {
+	return &t
 }

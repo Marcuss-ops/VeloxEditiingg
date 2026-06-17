@@ -139,7 +139,8 @@ func (o *Orchestrator) handleStepFailed(ctx context.Context, msj *MultiStepJob, 
 // Polling & Advancement
 // ────────────────────────────────────────────────────────────────────────────
 
-// poll checks active orchestrator jobs for ready steps and job timeouts.
+// poll checks active orchestrator jobs for ready steps, job timeouts,
+// and stale worker recovery (PR5b: heartbeat-based step reassignment).
 func (o *Orchestrator) poll(ctx context.Context) {
 	o.mu.RLock()
 	snapshots := make([]*MultiStepJob, 0, len(o.jobs))
@@ -150,6 +151,12 @@ func (o *Orchestrator) poll(ctx context.Context) {
 		snapshots = append(snapshots, j)
 	}
 	o.mu.RUnlock()
+
+	// PR5b: Sync worker assignments from FileQueue (read-only cross-check)
+	o.syncWorkerAssignments(ctx)
+
+	// PR5b: Recover steps assigned to stale/dead workers
+	o.recoverStaleWorkerSteps(ctx)
 
 	for _, msj := range snapshots {
 		o.advanceJob(ctx, msj)

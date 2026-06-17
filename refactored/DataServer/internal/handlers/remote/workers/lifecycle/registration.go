@@ -184,6 +184,7 @@ func (h *Handler) RegisterHandler() gin.HandlerFunc {
 			return
 		}
 
+		h.tokenMgr.RevokeWorkerTokens(body.WorkerID)
 		token := h.tokenMgr.GenerateToken(body.WorkerID)
 
 		c.JSON(http.StatusOK, gin.H{
@@ -218,6 +219,7 @@ func (h *Handler) UnregisterHandler() gin.HandlerFunc {
 		}
 
 		_ = h.reg.UnregisterWorker(c.Request.Context(), body.WorkerID)
+		h.tokenMgr.RevokeWorkerTokens(body.WorkerID)
 
 		c.JSON(http.StatusOK, gin.H{
 			"success": true,
@@ -256,6 +258,7 @@ func (h *Handler) WorkerHelloHandler() gin.HandlerFunc {
 			return
 		}
 
+		h.tokenMgr.RevokeWorkerTokens(body.WorkerID)
 		token := h.tokenMgr.GenerateToken(body.WorkerID)
 
 		log.Printf("[REGISTER] Handshake worker: %s (%s) bundle=%s",

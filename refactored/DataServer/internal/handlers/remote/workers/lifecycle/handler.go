@@ -5,6 +5,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"velox-server/internal/config"
+	"velox-server/internal/store"
 	workersreg "velox-server/internal/workers"
 )
 
@@ -12,6 +13,7 @@ import (
 type Handler struct {
 	cfg           *config.Config
 	reg           *workersreg.Registry
+	store         *store.SQLiteStore
 	cmdMgr        *workersreg.CommandManager
 	updateMgr     *workersreg.UpdateManager
 	tokenMgr      *workersreg.TokenManager
@@ -19,14 +21,15 @@ type Handler struct {
 	versionNumber string
 }
 
-// NewHandler creates a new lifecycle Handler.
-func NewHandler(cfg *config.Config, reg *workersreg.Registry, dataDir string) *Handler {
+// NewHandler creates a new lifecycle Handler with SQLite-backed managers.
+func NewHandler(cfg *config.Config, reg *workersreg.Registry, dbStore *store.SQLiteStore, dataDir string) *Handler {
 	return &Handler{
 		cfg:           cfg,
 		reg:           reg,
-		cmdMgr:        workersreg.NewCommandManager(),
+		store:         dbStore,
+		cmdMgr:        workersreg.NewCommandManager(dbStore),
 		updateMgr:     workersreg.NewUpdateManager(),
-		tokenMgr:      workersreg.NewTokenManager(),
+		tokenMgr:      workersreg.NewTokenManager(dbStore),
 		codeVersion:   cfg.Workers.CodeVersion,
 		versionNumber: cfg.Workers.VersionNumber,
 	}
