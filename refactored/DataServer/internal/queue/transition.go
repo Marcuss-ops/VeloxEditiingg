@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/google/uuid"
@@ -336,7 +337,8 @@ func (ts *TransitionService) SubmitJob(ctx context.Context, jobID string, payloa
 		Payload: payload,
 	}
 
-	// Extract known fields from payload
+	// Extract known fields from payload (must run BEFORE the jobRepo branch
+	// so both paths populate JobFingerprint, RunID, and SlotData on the returned *Job).
 	if s, ok := payload["video_name"].(string); ok {
 		job.VideoName = s
 	}
@@ -353,6 +355,28 @@ func (ts *TransitionService) SubmitJob(ctx context.Context, jobID string, payloa
 	}
 	if m, ok := payload["slot_data"].(map[string]interface{}); ok {
 		job.SlotData = m
+	}
+
+	// Spec §5 path: delegate base job row to narrow JobRepository.
+	// History and request_json still go through the legacy store (not in repo contract).
+	if ts.jobRepo != nil {
+		params := store.CreateJobParams{
+			JobID:      jobID,
+			Payload:    payload,
+			VideoName:  job.VideoName,
+			ProjectID:  job.ProjectID,
+			MaxRetries: maxRetries,
+		}
+		if err := ts.jobRepo.CreateJob(ctx, params); err != nil {
+			return nil, fmt.Errorf("job repo create: %w", err)
+		}
+		// Add history entry (best-effort — the job row already exists).
+		_ = ts.dbStore.AddJobHistory(jobID, "PENDING", job.WorkerID, "", "Job created", nil)
+		// Persist the raw request payload separately so request_json table stays populated.
+		if err := PersistJobRequest(jobID, payload, ts.dbStore); err != nil {
+			return nil, fmt.Errorf("failed to persist request_json: %w", err)
+		}
+		return job, nil
 	}
 
 	if err := PersistJob(job, ts.dbStore); err != nil {
@@ -532,6 +556,26 @@ func (ts *TransitionService) GetJobAttempt(ctx context.Context, jobID string) (i
 
 // GetJobsByStatus returns all jobs with a given status directly from SQLite.
 func (ts *TransitionService) GetJobsByStatus(ctx context.Context, status JobStatus) ([]*Job, error) {
+	// Spec §5 path: narrow JobRepository.ListByStatus for filtering, then re-fetch
+	// each result for the rich payload via the legacy path (MapToJob via dbStore).
+	// This is the same pattern used by ClaimNextJob — the repo drives the query,
+	// the store provides the full projection.
+	if ts.jobRepo != nil {
+		storeJobs, err := ts.jobRepo.ListByStatus(ctx, []store.JobStatus{toStoreJobStatus(status)}, 1000)
+		if err != nil {
+			return nil, fmt.Errorf("job repo list by status: %w", err)
+		}
+		result := make([]*Job, 0, len(storeJobs))
+		for _, sj := range storeJobs {
+			m, err := ts.dbStore.GetJob(ctx, sj.JobID)
+			if err != nil {
+				log.Printf("GetJobsByStatus: GetJob(%s) failed after ListByStatus returned it: %v", sj.JobID, err)
+				continue
+			}
+			result = append(result, MapToJob(m))
+		}
+		return result, nil
+	}
 	jobs, err := ts.dbStore.ListJobsByStatus([]string{string(status)}, 1000)
 	if err != nil {
 		return nil, err
@@ -673,6 +717,21 @@ func (ts *TransitionService) LeaseJob(ctx context.Context, jobID, workerID strin
 	})
 
 	return PersistJob(job, ts.dbStore)
+}
+
+// toStoreJobStatus maps a queue.JobStatus to the equivalent store.JobStatus for
+// ListByStatus queries. The store persists legacy status strings internally
+// ("PROCESSING", not "RUNNING"; "COMPLETED", not "SUCCEEDED"), so canonical
+// queue constants must be translated to match the persisted values.
+func toStoreJobStatus(s JobStatus) store.JobStatus {
+	switch s {
+	case StatusRunning:
+		return store.JobStatusProcessing
+	case StatusCompleted:
+		return store.JobStatusSucceeded
+	default:
+		return store.JobStatus(s)
+	}
 }
 
 // getIntField extracts an integer field from a job map, returning 0 if not found.
