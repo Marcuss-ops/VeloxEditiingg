@@ -1,6 +1,11 @@
 // Proto definition for Velox Worker-Control bidirectional stream.
 // Both master (DataServer) and worker (worker-agent-go) use this contract
 // for typed, versioned control-plane communication.
+//
+// Phase 2 (typed protobuf): message types are strongly typed with oneof
+// instead of the legacy TransportMessage { string type; Struct payload; }.
+// google.protobuf.Struct is retained only for genuinely dynamic fields
+// (capabilities, extra, job_payload, params, configuration).
 syntax = "proto3";
 
 package velox.control;
@@ -10,32 +15,180 @@ option go_package = "velox-shared/controltransport/pb";
 import "google/protobuf/timestamp.proto";
 import "google/protobuf/struct.proto";
 
-// TransportMessage is the wire format for all control-plane messages.
-// It mirrors controltransport.ControlMessage in shared/controltransport/message.go.
-message TransportMessage {
-    string message_id = 1;
-    string type = 2;                     // Maps to ControlMessageType (e.g. "heartbeat", "job_offer")
-    string worker_id = 3;
-    string session_id = 4;
-    int64 sequence_number = 5;
-    google.protobuf.Timestamp sent_at = 6;
-    string protocol_version = 7;
-    google.protobuf.Struct payload = 8;  // JSON-like payload for existing ControlMessage.Payload
+service WorkerControl {
+    // Stream establishes a bidirectional control channel with typed messages.
+    // Worker sends WorkerToMasterEnvelope, master responds with MasterToWorkerEnvelope.
+    rpc Stream(stream WorkerToMasterEnvelope) returns (stream MasterToWorkerEnvelope);
 }
 
-// WorkerControl provides a single bidirectional stream for all worker↔master
-// control-plane communication. The worker opens the stream and the master
-// responds on the same stream, creating a persistent session.
-//
-// Lifecycle:
-//   1. Worker opens stream and sends Hello
-//   2. Master responds with HelloAck (establishes session)
-//   3. Worker sends Heartbeat / LeaseRenewal / JobProgress
-//   4. Master sends JobOffer / Command / CancelJob / Drain
-//   5. Worker sends JobAccepted / JobRejected / CommandAck / JobResult
-//   6. Worker sends Goodbye to terminate
-service WorkerControl {
-    // Stream establishes a bidirectional control channel.
-    // The worker is the initiator; the master responds on the same stream.
-    rpc Stream(stream TransportMessage) returns (stream TransportMessage);
+// ---------------------------------------------------------
+// Worker -> Master
+// ---------------------------------------------------------
+message WorkerToMasterEnvelope {
+    string message_id = 1;
+    string worker_id = 2;
+    string session_id = 3;
+    int64 sequence_number = 4;
+    google.protobuf.Timestamp sent_at = 5;
+    string protocol_version = 6;
+
+    oneof msg {
+        Hello hello = 10;
+        Heartbeat heartbeat = 11;
+        LeaseRenewal lease_renewal = 12;
+        JobAccepted job_accepted = 13;
+        JobRejected job_rejected = 14;
+        JobProgress job_progress = 15;
+        CommandAck command_ack = 16;
+        JobResult job_result = 17;
+        Goodbye goodbye = 19;
+    }
 }
+
+message Hello {
+    string worker_name = 1;
+    string hostname = 2;
+    string version = 3;
+    string bundle_version = 4;
+    string bundle_hash = 5;
+    string engine_version = 6;
+    string credential_hash = 7;
+    google.protobuf.Struct capabilities = 8;
+}
+
+message Heartbeat {
+    string worker_name = 1;
+    string worker_status = 2;
+    string status = 3;
+    string current_job = 4;
+    string code_version = 5;
+    string bundle_version = 6;
+    string bundle_hash = 7;
+    string protocol_version = 8;
+    string engine_version = 9;
+    int64 jobs_completed = 10;
+    int64 jobs_failed = 11;
+    int32 active_jobs_count = 12;
+    google.protobuf.Struct extra = 13;
+}
+
+message LeaseRenewal {
+    string job_id = 1;
+    string lease_id = 2;
+    int32 attempt = 3;
+    google.protobuf.Timestamp lease_expires_at = 4;
+}
+
+message JobAccepted {
+    string job_id = 1;
+    string job_run_id = 2;
+    string lease_id = 3;
+}
+
+message JobRejected {
+    string job_id = 1;
+    string reason = 2;
+}
+
+message JobProgress {
+    string job_id = 1;
+    string stage = 2;
+    int32 progress_percent = 3;
+    int32 scene = 4;
+    int32 total_scenes = 5;
+}
+
+message CommandAck {
+    string command_id = 1;
+    string command = 2;
+    string error = 3;
+}
+
+message JobResult {
+    string job_id = 1;
+    string job_run_id = 2;
+    string status = 3;
+    string error = 4;
+    string start_time = 5;
+    string end_time = 6;
+    string lease_id = 7;
+    int32 attempt = 8;
+}
+
+message Goodbye {}
+
+// ---------------------------------------------------------
+// Master -> Worker
+// ---------------------------------------------------------
+message MasterToWorkerEnvelope {
+    string message_id = 1;
+    string worker_id = 2;  // target worker
+    string session_id = 3;
+    int64 sequence_number = 4;
+    google.protobuf.Timestamp sent_at = 5;
+    string protocol_version = 6;
+
+    oneof msg {
+        HelloAck hello_ack = 20;
+        JobAvailable job_available = 21;
+        JobOffer job_offer = 22;
+        JobLeaseGranted job_lease_granted = 23;
+        Command command = 24;
+        CancelJob cancel_job = 25;
+        Drain drain = 26;
+        ConfigurationUpdate configuration_update = 27;
+        LeaseRevoked lease_revoked = 28;
+        Ping ping = 29;
+    }
+}
+
+message HelloAck {}
+
+message JobAvailable {
+    bool compatible_job_exists = 1;
+    string message = 2;
+}
+
+message JobOffer {
+    string job_id = 1;
+    string run_id = 2;
+    string video_name = 3;
+    google.protobuf.Timestamp created_at = 4;
+    string lease_id = 5;
+    google.protobuf.Timestamp lease_expiry = 6;
+    int32 attempt = 7;
+    int32 max_retries = 8;
+    google.protobuf.Struct job_payload = 9;
+}
+
+message JobLeaseGranted {
+    string job_id = 1;
+    string worker_id = 2;
+    string status = 3;
+}
+
+message Command {
+    string command_id = 1;
+    string command = 2;
+    google.protobuf.Timestamp timestamp = 3;
+    google.protobuf.Struct params = 4;
+}
+
+message CancelJob {
+    string job_id = 1;
+}
+
+message Drain {
+    string reason = 1;
+}
+
+message ConfigurationUpdate {
+    google.protobuf.Struct configuration = 1;
+}
+
+message LeaseRevoked {
+    string job_id = 1;
+    string reason = 2;
+}
+
+message Ping {}

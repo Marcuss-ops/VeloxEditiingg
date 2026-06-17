@@ -1,6 +1,8 @@
 // Package transport — gRPC bidirectional stream transport for worker↔master.
 // grpc_stream.go provides GRPCStreamTransport that satisfies ControlTransport
-// via a single bidirectional gRPC stream using generated protobuf types.
+// via a single bidirectional gRPC stream using typed protobuf envelopes.
+// Phase 2 (typed protobuf): eliminates TransportMessage { string type; Struct payload }
+// in favor of WorkerToMasterEnvelope / MasterToWorkerEnvelope with typed oneof messages.
 package transport
 
 import (
@@ -34,7 +36,7 @@ type GRPCStreamTransport struct {
 
 	mu          sync.Mutex
 	conn        *grpc.ClientConn
-	stream      grpc.BidiStreamingClient[pb.TransportMessage, pb.TransportMessage]
+	stream      grpc.BidiStreamingClient[pb.WorkerToMasterEnvelope, pb.MasterToWorkerEnvelope]
 	sessionID   string
 	state       transportState
 	closed      bool
@@ -91,7 +93,7 @@ func (t *GRPCStreamTransport) WithTLS(certFile, keyFile, caFile string) error {
 }
 
 // Connect establishes a gRPC connection, opens a bidirectional stream,
-// and completes the Hello/HelloAck handshake.
+// and completes the Hello/HelloAck handshake using typed envelopes.
 func (t *GRPCStreamTransport) Connect(ctx context.Context, hello controltransport.WorkerHello) error {
 	t.mu.Lock()
 	t.state = stateConnecting
@@ -127,9 +129,9 @@ func (t *GRPCStreamTransport) Connect(ctx context.Context, hello controltranspor
 
 	t.stream = stream
 
-	// Send Hello on the stream
-	helloMsg := t.helloToProto(hello)
-	if err := stream.Send(helloMsg); err != nil {
+	// Build typed Hello envelope
+	helloEnv := t.helloToEnvelope(hello)
+	if err := stream.Send(helloEnv); err != nil {
 		stream.CloseSend()
 		conn.Close()
 		t.mu.Lock()
@@ -149,13 +151,14 @@ func (t *GRPCStreamTransport) Connect(ctx context.Context, hello controltranspor
 		return fmt.Errorf("grpc transport: recv hello_ack: %w", err)
 	}
 
-	if resp.Type != string(controltransport.MsgHelloAck) {
+	// Verify response is HelloAck
+	if resp.GetHelloAck() == nil {
 		stream.CloseSend()
 		conn.Close()
 		t.mu.Lock()
 		t.state = stateDisconnected
 		t.mu.Unlock()
-		return fmt.Errorf("grpc transport: expected hello_ack, got %s", resp.Type)
+		return fmt.Errorf("grpc transport: expected hello_ack, got %T", resp.Msg)
 	}
 
 	t.mu.Lock()
@@ -188,22 +191,20 @@ func (t *GRPCStreamTransport) Receive(ctx context.Context) (<-chan controltransp
 	return t.recvCh, t.errCh, nil
 }
 
-// recvLoop reads messages from the gRPC stream and pushes them to recvCh.
-// When the stream fails, it closes errCh to signal the worker's runSession(),
-// which then cancels the session context, causing receiveLoop to exit via ctx.Done().
-// Close() handles closing recvCh safely after all goroutines have stopped.
+// recvLoop reads typed MasterToWorkerEnvelope messages from the gRPC stream
+// and converts them to ControlMessage for the worker's receiveLoop.
 func (t *GRPCStreamTransport) recvLoop() {
 	defer t.errCloseOnce.Do(func() {
 		close(t.errCh)
 	})
 
 	for {
-		pb, err := t.stream.Recv()
+		env, err := t.stream.Recv()
 		if err != nil {
 			return
 		}
 
-		msg := t.protoToMessage(pb)
+		msg := t.envelopeToMessage(env)
 
 		select {
 		case t.recvCh <- msg:
@@ -213,7 +214,7 @@ func (t *GRPCStreamTransport) recvLoop() {
 	}
 }
 
-// Send transmits a ControlMessage over the gRPC stream.
+// Send transmits a ControlMessage over the gRPC stream as a typed envelope.
 func (t *GRPCStreamTransport) Send(ctx context.Context, msg controltransport.ControlMessage) error {
 	t.mu.Lock()
 	if t.closed {
@@ -230,8 +231,8 @@ func (t *GRPCStreamTransport) Send(ctx context.Context, msg controltransport.Con
 	t.sendMu.Lock()
 	defer t.sendMu.Unlock()
 
-	pbMsg := t.messageToProto(msg)
-	return stream.Send(pbMsg)
+	env := t.messageToEnvelope(msg)
+	return stream.Send(env)
 }
 
 // Close gracefully terminates the gRPC stream and connection.
@@ -253,12 +254,13 @@ func (t *GRPCStreamTransport) Close() error {
 	})
 
 	if stream != nil {
-		// Send Goodbye before closing
-		goodbye := &pb.TransportMessage{
-			Type:            string(controltransport.MsgGoodbye),
+		// Send typed Goodbye before closing
+		goodbye := &pb.WorkerToMasterEnvelope{
+			MessageId:       fmt.Sprintf("goodbye-%s-%d", t.workerID, time.Now().UnixNano()),
 			WorkerId:        t.workerID,
 			ProtocolVersion: controltransport.ProtocolVersionCurrent,
 			SentAt:          timestamppb.Now(),
+			Msg:             &pb.WorkerToMasterEnvelope_Goodbye{Goodbye: &pb.Goodbye{}},
 		}
 
 		_, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -282,76 +284,257 @@ func (t *GRPCStreamTransport) Close() error {
 	return nil
 }
 
-// ---- Proto ↔ ControlMessage conversion ----
+// ---- Typed Proto ↔ ControlMessage conversion ----
 
-func (t *GRPCStreamTransport) helloToProto(hello controltransport.WorkerHello) *pb.TransportMessage {
-	payload, _ := structpb.NewStruct(map[string]interface{}{
-		"worker_name":     hello.WorkerName,
-		"hostname":        hello.Hostname,
-		"version":         hello.Version,
-		"bundle_version":  hello.BundleVersion,
-		"bundle_hash":     hello.BundleHash,
-		"engine_version":  hello.EngineVersion,
-		"credential_hash": hello.CredentialHash,
-		"capabilities":    hello.Capabilities,
-	})
+// helloToEnvelope builds a typed WorkerToMasterEnvelope with a Hello message.
+func (t *GRPCStreamTransport) helloToEnvelope(hello controltransport.WorkerHello) *pb.WorkerToMasterEnvelope {
+	var caps *structpb.Struct
+	if hello.Capabilities != nil {
+		caps, _ = structpb.NewStruct(hello.Capabilities)
+	}
 
 	t.mu.Lock()
 	t.msgSeq++
 	seq := t.msgSeq
 	t.mu.Unlock()
 
-	return &pb.TransportMessage{
+	return &pb.WorkerToMasterEnvelope{
 		MessageId:       fmt.Sprintf("grpc-%s-%d", t.workerID, time.Now().UnixNano()),
-		Type:            string(controltransport.MsgHello),
 		WorkerId:        hello.WorkerID,
 		SequenceNumber:  seq,
 		SentAt:          timestamppb.Now(),
 		ProtocolVersion: hello.ProtocolVersion,
-		Payload:         payload,
+		Msg: &pb.WorkerToMasterEnvelope_Hello{
+			Hello: &pb.Hello{
+				WorkerName:     hello.WorkerName,
+				Hostname:       hello.Hostname,
+				Version:        hello.Version,
+				BundleVersion:  hello.BundleVersion,
+				BundleHash:     hello.BundleHash,
+				EngineVersion:  hello.EngineVersion,
+				CredentialHash: hello.CredentialHash,
+				Capabilities:   caps,
+			},
+		},
 	}
 }
 
-func (t *GRPCStreamTransport) messageToProto(msg controltransport.ControlMessage) *pb.TransportMessage {
-	payload, _ := structpb.NewStruct(msg.Payload)
-
+// messageToEnvelope converts a ControlMessage to a typed WorkerToMasterEnvelope.
+func (t *GRPCStreamTransport) messageToEnvelope(msg controltransport.ControlMessage) *pb.WorkerToMasterEnvelope {
 	t.mu.Lock()
 	t.msgSeq++
 	seq := t.msgSeq
 	sid := t.sessionID
 	t.mu.Unlock()
 
-	return &pb.TransportMessage{
+	env := &pb.WorkerToMasterEnvelope{
 		MessageId:       msg.MessageID,
-		Type:            string(msg.Type),
 		WorkerId:        msg.WorkerID,
 		SessionId:       sid,
 		SequenceNumber:  seq,
 		SentAt:          timestamppb.New(msg.SentAt),
 		ProtocolVersion: msg.ProtocolVersion,
-		Payload:         payload,
 	}
+
+	switch msg.Type {
+	case controltransport.MsgHeartbeat:
+		hb := &pb.Heartbeat{
+			WorkerName:      getPayloadStr(msg.Payload, "worker_name"),
+			WorkerStatus:    getPayloadStr(msg.Payload, "worker_status"),
+			Status:          getPayloadStr(msg.Payload, "status"),
+			CurrentJob:      getPayloadStr(msg.Payload, "current_job"),
+			CodeVersion:     getPayloadStr(msg.Payload, "code_version"),
+			BundleVersion:   getPayloadStr(msg.Payload, "bundle_version"),
+			BundleHash:      getPayloadStr(msg.Payload, "bundle_hash"),
+			ProtocolVersion: getPayloadStr(msg.Payload, "protocol_version"),
+			EngineVersion:   getPayloadStr(msg.Payload, "engine_version"),
+			JobsCompleted:   getPayloadInt64(msg.Payload, "jobs_completed"),
+			JobsFailed:      getPayloadInt64(msg.Payload, "jobs_failed"),
+			ActiveJobsCount: int32(getPayloadInt64(msg.Payload, "active_jobs_count")),
+		}
+		// Collect remaining dynamic fields into Extra (recent_logs, capabilities, active_jobs, etc.)
+		hb.Extra = collectPayloadExtra(msg.Payload,
+			"worker_name", "worker_status", "status", "current_job", "code_version",
+			"bundle_version", "bundle_hash", "protocol_version", "engine_version",
+			"jobs_completed", "jobs_failed", "active_jobs_count")
+		env.Msg = &pb.WorkerToMasterEnvelope_Heartbeat{Heartbeat: hb}
+
+	case controltransport.MsgLeaseRenewal:
+		lr := &pb.LeaseRenewal{
+			JobId:   getPayloadStr(msg.Payload, "job_id"),
+			LeaseId: getPayloadStr(msg.Payload, "lease_id"),
+			Attempt: int32(getPayloadInt64(msg.Payload, "attempt")),
+		}
+		if ts := getPayloadStr(msg.Payload, "lease_expires_at"); ts != "" {
+			if t, err := time.Parse(time.RFC3339, ts); err == nil {
+				lr.LeaseExpiresAt = timestamppb.New(t)
+			}
+		}
+		env.Msg = &pb.WorkerToMasterEnvelope_LeaseRenewal{LeaseRenewal: lr}
+
+	case controltransport.MsgJobAccepted:
+		env.Msg = &pb.WorkerToMasterEnvelope_JobAccepted{
+			JobAccepted: &pb.JobAccepted{
+				JobId:    getPayloadStr(msg.Payload, "job_id"),
+				JobRunId: getPayloadStr(msg.Payload, "job_run_id"),
+				LeaseId:  getPayloadStr(msg.Payload, "lease_id"),
+			},
+		}
+
+	case controltransport.MsgJobRejected:
+		env.Msg = &pb.WorkerToMasterEnvelope_JobRejected{
+			JobRejected: &pb.JobRejected{
+				JobId:  getPayloadStr(msg.Payload, "job_id"),
+				Reason: getPayloadStr(msg.Payload, "reason"),
+			},
+		}
+
+	case controltransport.MsgJobProgress:
+		env.Msg = &pb.WorkerToMasterEnvelope_JobProgress{
+			JobProgress: &pb.JobProgress{
+				JobId:           getPayloadStr(msg.Payload, "job_id"),
+				Stage:           getPayloadStr(msg.Payload, "stage"),
+				ProgressPercent: int32(getPayloadInt64(msg.Payload, "progress_percent")),
+				Scene:           int32(getPayloadInt64(msg.Payload, "scene")),
+				TotalScenes:     int32(getPayloadInt64(msg.Payload, "total_scenes")),
+			},
+		}
+
+	case controltransport.MsgCommandAck:
+		env.Msg = &pb.WorkerToMasterEnvelope_CommandAck{
+			CommandAck: &pb.CommandAck{
+				CommandId: getPayloadStr(msg.Payload, "command_id"),
+				Command:   getPayloadStr(msg.Payload, "command"),
+				Error:     getPayloadStr(msg.Payload, "error"),
+			},
+		}
+
+	case controltransport.MsgJobResult:
+		env.Msg = &pb.WorkerToMasterEnvelope_JobResult{
+			JobResult: &pb.JobResult{
+				JobId:     getPayloadStr(msg.Payload, "job_id"),
+				JobRunId:  getPayloadStr(msg.Payload, "job_run_id"),
+				Status:    getPayloadStr(msg.Payload, "status"),
+				Error:     getPayloadStr(msg.Payload, "error"),
+				StartTime: getPayloadStr(msg.Payload, "start_time"),
+				EndTime:   getPayloadStr(msg.Payload, "end_time"),
+				LeaseId:   getPayloadStr(msg.Payload, "lease_id"),
+				Attempt:   int32(getPayloadInt64(msg.Payload, "attempt")),
+			},
+		}
+	}
+
+	return env
 }
 
-func (t *GRPCStreamTransport) protoToMessage(pbMsg *pb.TransportMessage) controltransport.ControlMessage {
-	var payload map[string]interface{}
-	if pbMsg.Payload != nil {
-		payload = pbMsg.Payload.AsMap()
-	}
-
+// envelopeToMessage converts a typed MasterToWorkerEnvelope to a ControlMessage.
+// Populates the Payload map for backward compatibility with the worker's
+// receiveLoop (msgToJob, msgToCommand, etc.).
+func (t *GRPCStreamTransport) envelopeToMessage(env *pb.MasterToWorkerEnvelope) controltransport.ControlMessage {
 	sentAt := time.Now().UTC()
-	if pbMsg.SentAt != nil {
-		sentAt = pbMsg.SentAt.AsTime()
+	if env.SentAt != nil {
+		sentAt = env.SentAt.AsTime()
 	}
 
-	return controltransport.ControlMessage{
-		MessageID:       pbMsg.MessageId,
-		Type:            controltransport.ControlMessageType(pbMsg.Type),
-		WorkerID:        pbMsg.WorkerId,
-		SessionID:       pbMsg.SessionId,
-		SequenceNumber:  pbMsg.SequenceNumber,
+	msg := controltransport.ControlMessage{
+		MessageID:       env.MessageId,
+		WorkerID:        env.WorkerId,
+		SessionID:       env.SessionId,
+		SequenceNumber:  env.SequenceNumber,
 		SentAt:          sentAt,
-		ProtocolVersion: pbMsg.ProtocolVersion,
-		Payload:         payload,
+		ProtocolVersion: env.ProtocolVersion,
 	}
+
+	switch m := env.Msg.(type) {
+	case *pb.MasterToWorkerEnvelope_HelloAck:
+		msg.Type = controltransport.MsgHelloAck
+
+	case *pb.MasterToWorkerEnvelope_JobAvailable:
+		msg.Type = controltransport.MsgJobAvailable
+		msg.TypedPayload = m.JobAvailable
+
+	case *pb.MasterToWorkerEnvelope_JobOffer:
+		msg.Type = controltransport.MsgJobOffer
+		msg.TypedPayload = m.JobOffer
+
+	case *pb.MasterToWorkerEnvelope_JobLeaseGranted:
+		msg.Type = controltransport.MsgJobLeaseGranted
+		msg.TypedPayload = m.JobLeaseGranted
+
+	case *pb.MasterToWorkerEnvelope_Command:
+		msg.Type = controltransport.MsgCommand
+		msg.TypedPayload = m.Command
+
+	case *pb.MasterToWorkerEnvelope_CancelJob:
+		msg.Type = controltransport.MsgCancelJob
+		msg.TypedPayload = m.CancelJob
+
+	case *pb.MasterToWorkerEnvelope_Drain:
+		msg.Type = controltransport.MsgDrain
+		msg.TypedPayload = m.Drain
+
+	case *pb.MasterToWorkerEnvelope_ConfigurationUpdate:
+		msg.Type = controltransport.MsgConfigurationUpdate
+		msg.TypedPayload = m.ConfigurationUpdate
+
+	case *pb.MasterToWorkerEnvelope_LeaseRevoked:
+		msg.Type = controltransport.MsgLeaseRevoked
+		msg.TypedPayload = m.LeaseRevoked
+
+	case *pb.MasterToWorkerEnvelope_Ping:
+		msg.Type = controltransport.MsgPing
+	}
+
+	return msg
+}
+
+// ---- Payload helpers (used by messageToEnvelope for ControlMessage.Payload access) ----
+
+func getPayloadStr(m map[string]interface{}, key string) string {
+	if v, ok := m[key].(string); ok {
+		return v
+	}
+	return ""
+}
+
+func getPayloadInt64(m map[string]interface{}, key string) int64 {
+	switch v := m[key].(type) {
+	case float64:
+		return int64(v)
+	case int:
+		return int64(v)
+	case int64:
+		return v
+	case int32:
+		return int64(v)
+	}
+	return 0
+}
+
+// collectPayloadExtra builds a *structpb.Struct from payload fields that are
+// NOT in the namedKeys set. Used to forward dynamic telemetry fields (e.g.
+// recent_logs, capabilities, active_jobs) that don't map to proto typed fields.
+// Returns nil if no extra fields exist.
+func collectPayloadExtra(payload map[string]interface{}, namedKeys ...string) *structpb.Struct {
+	known := make(map[string]bool, len(namedKeys))
+	for _, k := range namedKeys {
+		known[k] = true
+	}
+
+	extraMap := make(map[string]interface{})
+	for k, v := range payload {
+		if !known[k] {
+			extraMap[k] = v
+		}
+	}
+
+	if len(extraMap) == 0 {
+		return nil
+	}
+
+	extra, err := structpb.NewStruct(extraMap)
+	if err != nil {
+		return nil
+	}
+	return extra
 }

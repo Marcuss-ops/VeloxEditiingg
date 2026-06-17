@@ -28,13 +28,14 @@ import (
 )
 
 // testStreamServer implements a minimal pb.WorkerControlServer for integration testing.
-// It handles Hello → HelloAck, tracks received heartbeats, and sends JobOffer on demand.
+// Uses typed envelopes (WorkerToMasterEnvelope / MasterToWorkerEnvelope).
 type testStreamServer struct {
 	pb.UnimplementedWorkerControlServer
 
 	mu           sync.Mutex
-	lastHello    *pb.TransportMessage
-	heartbeats   []*pb.TransportMessage
+	lastHello    *pb.Hello
+	lastWorkerID string
+	heartbeats   []*pb.Heartbeat
 	jobOfferCh   chan struct{} // signals when to send a JobOffer
 	sendJobOffer bool
 	gotGoodbye   bool
@@ -50,29 +51,32 @@ func newTestStreamServer() *testStreamServer {
 	}
 }
 
-func (s *testStreamServer) Stream(stream grpc.BidiStreamingServer[pb.TransportMessage, pb.TransportMessage]) error {
+func (s *testStreamServer) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMasterEnvelope, pb.MasterToWorkerEnvelope]) error {
 	// Wait for Hello
-	msg, err := stream.Recv()
+	env, err := stream.Recv()
 	if err != nil {
 		return err
 	}
-	if msg.Type != string(controltransport.MsgHello) {
-		return fmt.Errorf("expected hello, got %s", msg.Type)
+
+	hello := env.GetHello()
+	if hello == nil {
+		return fmt.Errorf("expected hello, got %T", env.Msg)
 	}
 
 	s.mu.Lock()
-	s.lastHello = msg
+	s.lastHello = hello
+	s.lastWorkerID = env.WorkerId
 	s.mu.Unlock()
 
-	// Send HelloAck
-	ack := &pb.TransportMessage{
+	// Send typed HelloAck
+	ack := &pb.MasterToWorkerEnvelope{
 		MessageId:       "ack-test-001",
-		Type:            string(controltransport.MsgHelloAck),
-		WorkerId:        msg.WorkerId,
+		WorkerId:        env.WorkerId,
 		SessionId:       "test-session-001",
 		SequenceNumber:  1,
 		SentAt:          timestamppb.Now(),
-		ProtocolVersion: msg.ProtocolVersion,
+		ProtocolVersion: env.ProtocolVersion,
+		Msg:             &pb.MasterToWorkerEnvelope_HelloAck{HelloAck: &pb.HelloAck{}},
 	}
 	if err := stream.Send(ack); err != nil {
 		return err
@@ -80,33 +84,41 @@ func (s *testStreamServer) Stream(stream grpc.BidiStreamingServer[pb.TransportMe
 
 	// If configured to send a JobOffer, do it after a short delay
 	if s.sendJobOffer {
+		workerID := env.WorkerId
 		go func() {
 			select {
 			case <-s.jobOfferCh:
-				payload, _ := structpb.NewStruct(map[string]interface{}{
-					"job_id":     "test-job-001",
-					"job_type":   "render",
-					"priority":   1,
-					"parameters": map[string]interface{}{"video_name": "test-video"},
+				jobPayload, _ := structpb.NewStruct(map[string]interface{}{
+					"video_name": "test-video",
+					"priority":   1.0,
 				})
-				jobOffer := &pb.TransportMessage{
+				jobOfferEnv := &pb.MasterToWorkerEnvelope{
 					MessageId:       "job-offer-001",
-					Type:            string(controltransport.MsgJobOffer),
-					WorkerId:        msg.WorkerId,
+					WorkerId:        workerID,
 					SessionId:       "test-session-001",
 					SentAt:          timestamppb.Now(),
-					ProtocolVersion: msg.ProtocolVersion,
-					Payload:         payload,
+					ProtocolVersion: env.ProtocolVersion,
+					Msg: &pb.MasterToWorkerEnvelope_JobOffer{
+						JobOffer: &pb.JobOffer{
+							JobId:      "test-job-001",
+							RunId:      "test-run-001",
+							VideoName:  "test-video",
+							LeaseId:    "lease-001",
+							Attempt:    1,
+							MaxRetries: 3,
+							JobPayload: jobPayload,
+						},
+					},
 				}
-				_ = stream.Send(jobOffer)
+				_ = stream.Send(jobOfferEnv)
 			case <-time.After(5 * time.Second):
 			}
 		}()
 	}
 
-	// Main loop: receive messages until stream closes
+	// Main loop: receive typed messages until stream closes
 	for {
-		msg, err := stream.Recv()
+		env, err := stream.Recv()
 		if err == io.EOF {
 			return nil
 		}
@@ -114,19 +126,17 @@ func (s *testStreamServer) Stream(stream grpc.BidiStreamingServer[pb.TransportMe
 			return fmt.Errorf("stream recv: %w", err)
 		}
 
-		switch controltransport.ControlMessageType(msg.Type) {
-		case controltransport.MsgHeartbeat:
+		switch m := env.Msg.(type) {
+		case *pb.WorkerToMasterEnvelope_Heartbeat:
 			s.mu.Lock()
-			s.heartbeats = append(s.heartbeats, msg)
+			s.heartbeats = append(s.heartbeats, m.Heartbeat)
 			n := len(s.heartbeats)
 			s.mu.Unlock()
 
-			// Signal first heartbeat (for test synchronization)
 			if n == 1 {
 				close(s.heartbeatCh)
 			}
 
-			// Signal to send JobOffer after first heartbeat
 			if s.sendJobOffer && n == 1 {
 				select {
 				case s.jobOfferCh <- struct{}{}:
@@ -134,17 +144,17 @@ func (s *testStreamServer) Stream(stream grpc.BidiStreamingServer[pb.TransportMe
 				}
 			}
 
-		case controltransport.MsgGoodbye:
+		case *pb.WorkerToMasterEnvelope_Goodbye:
 			s.mu.Lock()
 			s.gotGoodbye = true
 			s.mu.Unlock()
 			close(s.goodbyeCh)
 			return nil
 
-		case controltransport.MsgJobAccepted:
+		case *pb.WorkerToMasterEnvelope_JobAccepted:
 			// Track it; no action needed for test
 
-		case controltransport.MsgJobRejected:
+		case *pb.WorkerToMasterEnvelope_JobRejected:
 			// Track it; no action needed for test
 		}
 	}
@@ -201,16 +211,17 @@ func TestGRPCStreamTransport_HelloHandshake(t *testing.T) {
 	// Verify server received Hello with correct fields
 	ts.mu.Lock()
 	lastHello := ts.lastHello
+	lastWorkerID := ts.lastWorkerID
 	ts.mu.Unlock()
 
 	if lastHello == nil {
 		t.Fatal("Server did not receive Hello message")
 	}
-	if lastHello.WorkerId != "test-worker-001" {
-		t.Errorf("Hello WorkerId = %q, want %q", lastHello.WorkerId, "test-worker-001")
+	if lastWorkerID != "test-worker-001" {
+		t.Errorf("Hello WorkerId = %q, want %q", lastWorkerID, "test-worker-001")
 	}
-	if lastHello.Type != string(controltransport.MsgHello) {
-		t.Errorf("Hello Type = %q, want %q", lastHello.Type, controltransport.MsgHello)
+	if lastHello.GetWorkerName() != "test-worker" {
+		t.Errorf("Hello WorkerName = %q, want %q", lastHello.GetWorkerName(), "test-worker")
 	}
 
 	// Verify transport state is ready
@@ -282,11 +293,11 @@ func TestGRPCStreamTransport_SendHeartbeat(t *testing.T) {
 	hb := ts.heartbeats[0]
 	ts.mu.Unlock()
 
-	if hb.Type != string(controltransport.MsgHeartbeat) {
-		t.Errorf("Heartbeat Type = %q, want %q", hb.Type, controltransport.MsgHeartbeat)
+	if hb.GetStatus() != "idle" {
+		t.Errorf("Heartbeat Status = %q, want %q", hb.GetStatus(), "idle")
 	}
-	if hb.WorkerId != "test-worker-002" {
-		t.Errorf("Heartbeat WorkerId = %q, want %q", hb.WorkerId, "test-worker-002")
+	if hb.GetWorkerName() != "test-worker" {
+		t.Errorf("Heartbeat WorkerName = %q, want %q", hb.GetWorkerName(), "test-worker")
 	}
 }
 
@@ -354,14 +365,16 @@ func TestGRPCStreamTransport_ReceiveJobOffer(t *testing.T) {
 		t.Errorf("Received message type = %q, want %q", receivedJobOffer.Type, controltransport.MsgJobOffer)
 	}
 
-	// Verify JobOffer payload contains job details
-	jobID, ok := receivedJobOffer.Payload["job_id"].(string)
-	if !ok || jobID != "test-job-001" {
-		t.Errorf("JobOffer payload job_id = %q, want %q", jobID, "test-job-001")
+	// Verify JobOffer typed payload contains job details
+	offer, ok := receivedJobOffer.TypedPayload.(*pb.JobOffer)
+	if !ok || offer == nil {
+		t.Fatalf("JobOffer TypedPayload is not *pb.JobOffer: %T", receivedJobOffer.TypedPayload)
 	}
-	jobType, ok := receivedJobOffer.Payload["job_type"].(string)
-	if !ok || jobType != "render" {
-		t.Errorf("JobOffer payload job_type = %q, want %q", jobType, "render")
+	if offer.GetJobId() != "test-job-001" {
+		t.Errorf("JobOffer JobId = %q, want %q", offer.GetJobId(), "test-job-001")
+	}
+	if offer.GetVideoName() != "test-video" {
+		t.Errorf("JobOffer VideoName = %q, want %q", offer.GetVideoName(), "test-video")
 	}
 }
 
@@ -461,9 +474,6 @@ func TestGRPCStreamTransport_ReceiveBeforeConnect(t *testing.T) {
 // to the test package directory.
 func certsBaseDir(t *testing.T) string {
 	t.Helper()
-	// Test runs from: refactored/RemoteCodex/native/worker-agent-go/internal/transport/
-	// Target:         refactored/certs/
-	// Path: 5 levels up → certs/
 	abs, err := filepath.Abs(filepath.Join("..", "..", "..", "..", "..", "certs"))
 	if err != nil {
 		t.Fatalf("cannot resolve certs directory: %v", err)
@@ -520,9 +530,7 @@ func startTestMTLSServer(t *testing.T, srv pb.WorkerControlServer) (*grpc.Server
 	return gsrv, lis.Addr().String()
 }
 
-// TestGRPCStreamTransport_mTLS_Handshake verifies the full mTLS handshake:
-// client presents its certificate, server verifies it against the CA,
-// and the Hello/HelloAck exchange completes successfully.
+// TestGRPCStreamTransport_mTLS_Handshake verifies the full mTLS handshake.
 func TestGRPCStreamTransport_mTLS_Handshake(t *testing.T) {
 	ts := newTestStreamServer()
 	srv, addr := startTestMTLSServer(t, ts)
@@ -563,8 +571,8 @@ func TestGRPCStreamTransport_mTLS_Handshake(t *testing.T) {
 	if lastHello == nil {
 		t.Fatal("Server did not receive Hello over mTLS")
 	}
-	if lastHello.WorkerId != "test-worker-mtls-001" {
-		t.Errorf("Hello WorkerId = %q, want %q", lastHello.WorkerId, "test-worker-mtls-001")
+	if lastHello.GetWorkerName() != "test-worker-mtls" {
+		t.Errorf("Hello WorkerName = %q, want %q", lastHello.GetWorkerName(), "test-worker-mtls")
 	}
 
 	// Verify transport is ready
@@ -599,8 +607,7 @@ func TestGRPCStreamTransport_mTLS_NoClientCert(t *testing.T) {
 }
 
 // TestGRPCStreamTransport_mTLS_WrongCA verifies that a client with a
-// certificate signed by a different CA (self-signed, not by the test CA)
-// is rejected by the mTLS server.
+// certificate signed by a different CA is rejected.
 func TestGRPCStreamTransport_mTLS_WrongCA(t *testing.T) {
 	ts := newTestStreamServer()
 	srv, addr := startTestMTLSServer(t, ts)
@@ -644,8 +651,7 @@ func TestGRPCStreamTransport_mTLS_WrongCA(t *testing.T) {
 	}
 }
 
-// generateSelfSignedCert creates a real self-signed TLS certificate that
-// is NOT signed by the test CA. Used for negative mTLS tests.
+// generateSelfSignedCert creates a real self-signed TLS certificate.
 func generateSelfSignedCert(t *testing.T) tls.Certificate {
 	t.Helper()
 
