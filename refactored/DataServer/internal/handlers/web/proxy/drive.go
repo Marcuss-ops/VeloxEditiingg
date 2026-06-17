@@ -13,7 +13,7 @@ import (
 // DriveProxy handles all routes /api/drive/* by proxying to Job Master backend
 func DriveProxy(cfg *config.Config) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if cfg.JobMasterURL == "" {
+		if cfg.Pipeline.JobMasterURL == "" {
 			c.JSON(http.StatusServiceUnavailable, gin.H{
 				"ok":    false,
 				"error": "Drive not available - configure VELOX_JOB_MASTER_URL",
@@ -23,7 +23,7 @@ func DriveProxy(cfg *config.Config) gin.HandlerFunc {
 
 		// Build the backend URL
 		path := c.Request.URL.Path
-		backendURL := cfg.JobMasterURL + path
+		backendURL := cfg.Pipeline.JobMasterURL + path
 		if c.Request.URL.RawQuery != "" {
 			backendURL += "?" + c.Request.URL.RawQuery
 		}

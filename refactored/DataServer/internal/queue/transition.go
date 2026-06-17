@@ -4,7 +4,9 @@ package queue
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/google/uuid"
@@ -15,11 +17,30 @@ import (
 // All status changes flow through this service to ensure consistency.
 type TransitionService struct {
 	dbStore *store.SQLiteStore
+
+	// jobRepo is an optional narrow JobRepository (spec §5). When set,
+	// ClaimNextJob delegates to it for the atomic lease acquisition step.
+	// Nil falls back to the older dbStore path. PR-2 wires it; the rollout
+	// to other methods (Complete/Fail/UpdateFields) is planned for PR-2b.
+	jobRepo store.JobRepository
 }
 
 // NewTransitionService creates a new transition service.
 func NewTransitionService(dbStore *store.SQLiteStore) *TransitionService {
 	return &TransitionService{dbStore: dbStore}
+}
+
+// SetJobRepository wires a narrow JobRepository for spec §5 callers.
+// Passing nil disables the fast-path (dbStore is used). The setter is
+// non-blocking and idempotent; multiple calls in startup are fine.
+func (ts *TransitionService) SetJobRepository(repo store.JobRepository) {
+	ts.jobRepo = repo
+}
+
+// JobRepository returns the wired narrow repository (or nil if unconfigured).
+// Tests use this to swap implementations; production code should not need it.
+func (ts *TransitionService) JobRepository() store.JobRepository {
+	return ts.jobRepo
 }
 
 // Validate checks whether a transition from one status to another is allowed.
@@ -32,7 +53,42 @@ func (ts *TransitionService) Validate(from, to JobStatus) error {
 
 // ClaimNextJob atomically claims the next pending job for a worker directly from SQLite.
 // Returns the claimed job (with updated status), or nil if no pending jobs.
+//
+// When a JobRepository is wired (SetJobRepository) the atomic lease step
+// delegates to its narrow ClaimNext method, satisfying spec §5 single-method
+// atomicity end-to-end. Otherwise it falls back to the legacy dbStore path.
+//
+// NOTE: After the atomic claim, the path calls dbStore.GetJob + MapToJob to
+// load the rich payload. On SQLite single-writer this is safe (the lease is
+// committed before the read sees the row). On Postgres or any MVCC backend
+// the read could observe a stale snapshot; the map's result_json blob is the
+// authoritative post-claim state at that moment, not an eventually-consistent view.
 func (ts *TransitionService) ClaimNextJob(ctx context.Context, workerID string, allowedJobTypes []string) (*Job, error) {
+	if ts.jobRepo != nil {
+		result, err := ts.jobRepo.ClaimNext(ctx, store.ClaimParams{
+			WorkerID:        workerID,
+			AllowedJobTypes: allowedJobTypes,
+			Now:             time.Now().UTC(),
+		})
+		if err != nil {
+			if errors.Is(err, store.ErrNoClaimableJob) {
+				return nil, nil
+			}
+			return nil, fmt.Errorf("job repository claim: %w", err)
+		}
+		if result == nil || result.JobID == "" {
+			return nil, nil
+		}
+		// Spec §5: ClaimResult is opaque; the rich payload still needs the legacy
+		// MapToJob pipeline so callers see the full request/result/history blobs.
+		// Pull the canonical row via dbStore.GetJob and project through MapToJob.
+		m, err := ts.dbStore.GetJob(ctx, result.JobID)
+		if err != nil {
+			return nil, fmt.Errorf("post-claim job fetch: %w", err)
+		}
+		return MapToJob(m), nil
+	}
+	// Legacy path (dbStore-direct).
 	claimedJSON, ok, err := ts.dbStore.ClaimNextPendingJob(workerID, allowedJobTypes, time.Now().UTC())
 	if err != nil {
 		return nil, err
@@ -281,7 +337,8 @@ func (ts *TransitionService) SubmitJob(ctx context.Context, jobID string, payloa
 		Payload: payload,
 	}
 
-	// Extract known fields from payload
+	// Extract known fields from payload (must run BEFORE the jobRepo branch
+	// so both paths populate JobFingerprint, RunID, and SlotData on the returned *Job).
 	if s, ok := payload["video_name"].(string); ok {
 		job.VideoName = s
 	}
@@ -298,6 +355,28 @@ func (ts *TransitionService) SubmitJob(ctx context.Context, jobID string, payloa
 	}
 	if m, ok := payload["slot_data"].(map[string]interface{}); ok {
 		job.SlotData = m
+	}
+
+	// Spec §5 path: delegate base job row to narrow JobRepository.
+	// History and request_json still go through the legacy store (not in repo contract).
+	if ts.jobRepo != nil {
+		params := store.CreateJobParams{
+			JobID:      jobID,
+			Payload:    payload,
+			VideoName:  job.VideoName,
+			ProjectID:  job.ProjectID,
+			MaxRetries: maxRetries,
+		}
+		if err := ts.jobRepo.CreateJob(ctx, params); err != nil {
+			return nil, fmt.Errorf("job repo create: %w", err)
+		}
+		// Add history entry (best-effort — the job row already exists).
+		_ = ts.dbStore.AddJobHistory(jobID, "PENDING", "", "Job created", nil)
+		// Persist the raw request payload separately so request_json table stays populated.
+		if err := PersistJobRequest(jobID, payload, ts.dbStore); err != nil {
+			return nil, fmt.Errorf("failed to persist request_json: %w", err)
+		}
+		return job, nil
 	}
 
 	if err := PersistJob(job, ts.dbStore); err != nil {
@@ -477,6 +556,26 @@ func (ts *TransitionService) GetJobAttempt(ctx context.Context, jobID string) (i
 
 // GetJobsByStatus returns all jobs with a given status directly from SQLite.
 func (ts *TransitionService) GetJobsByStatus(ctx context.Context, status JobStatus) ([]*Job, error) {
+	// Spec §5 path: narrow JobRepository.ListByStatus for filtering, then re-fetch
+	// each result for the rich payload via the legacy path (MapToJob via dbStore).
+	// This is the same pattern used by ClaimNextJob — the repo drives the query,
+	// the store provides the full projection.
+	if ts.jobRepo != nil {
+		storeJobs, err := ts.jobRepo.ListByStatus(ctx, []store.JobStatus{toStoreJobStatus(status)}, 1000)
+		if err != nil {
+			return nil, fmt.Errorf("job repo list by status: %w", err)
+		}
+		result := make([]*Job, 0, len(storeJobs))
+		for _, sj := range storeJobs {
+			m, err := ts.dbStore.GetJob(ctx, sj.JobID)
+			if err != nil {
+				log.Printf("GetJobsByStatus: GetJob(%s) failed after ListByStatus returned it: %v", sj.JobID, err)
+				continue
+			}
+			result = append(result, MapToJob(m))
+		}
+		return result, nil
+	}
 	jobs, err := ts.dbStore.ListJobsByStatus([]string{string(status)}, 1000)
 	if err != nil {
 		return nil, err
@@ -657,6 +756,21 @@ func (ts *TransitionService) ReleaseClaim(ctx context.Context, jobID string) err
 	})
 
 	return nil
+}
+
+// toStoreJobStatus maps a queue.JobStatus to the equivalent store.JobStatus for
+// ListByStatus queries. The store persists legacy status strings internally
+// ("PROCESSING", not "RUNNING"; "COMPLETED", not "SUCCEEDED"), so canonical
+// queue constants must be translated to match the persisted values.
+func toStoreJobStatus(s JobStatus) store.JobStatus {
+	switch s {
+	case StatusRunning:
+		return store.JobStatusProcessing
+	case StatusCompleted:
+		return store.JobStatusSucceeded
+	default:
+		return store.JobStatus(s)
+	}
 }
 
 // getIntField extracts an integer field from a job map, returning 0 if not found.

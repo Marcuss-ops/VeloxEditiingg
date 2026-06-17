@@ -286,7 +286,11 @@ func (s *SQLiteStore) TransitionJobStatus(ctx context.Context, jobID string, exp
 		return 0, fmt.Errorf("transition rows affected: %w", err)
 	}
 	if affected == 0 {
-		return 0, fmt.Errorf("transition conflict: job %s not in status %s with revision %d", jobID, expectedStatus, revision)
+		// Returns the canonical sentinel wrapped with %w so callers can use
+		// errors.Is(err, store.ErrTransitionConflict). The wrap preserves the
+		// structured "where it failed" detail in the error chain.
+		return 0, fmt.Errorf("transition conflict: job %s expected status %q revision %d: %w",
+			jobID, expectedStatus, revision, ErrTransitionConflict)
 	}
 
 	return newRevision, nil
