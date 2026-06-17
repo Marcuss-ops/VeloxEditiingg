@@ -19,9 +19,11 @@ type Module struct {
 
 // New creates a new Drive module.
 func New(cfg *config.Config) *Module {
-	return &Module{
+	m := &Module{
 		cfg: cfg,
 	}
+	_ = m.init()
+	return m
 }
 
 // Name returns the module identifier.
@@ -41,9 +43,28 @@ func (m *Module) Service() *integrationsDrive.Service {
 
 // RegisterRoutes registers Drive endpoints.
 func (m *Module) RegisterRoutes(r *gin.Engine) {
+	if err := m.init(); err != nil {
+		log.Printf("[DRIVE] Init failed: %v", err)
+		return
+	}
+	if m.handlers == nil {
+		log.Printf("[DRIVE] Handlers unavailable after init")
+		return
+	}
+	driveHandlers.RegisterDriveRoutes(r, m.handlers)
+	log.Printf("[DRIVE] API routes registered at /api/drive/*")
+}
+
+func (m *Module) init() error {
+	if m == nil || m.cfg == nil {
+		return nil
+	}
+	if m.service != nil && m.handlers != nil {
+		return nil
+	}
+
 	// Initialize Drive service
-	var driveSvc *integrationsDrive.Service
-	if m.cfg.DriveClientID != "" && m.cfg.DriveClientSecret != "" {
+	if m.service == nil && m.cfg.DriveClientID != "" && m.cfg.DriveClientSecret != "" {
 		svc, err := integrationsDrive.NewService(&integrationsDrive.ServiceConfig{
 			ClientID:     m.cfg.DriveClientID,
 			ClientSecret: m.cfg.DriveClientSecret,
@@ -51,33 +72,30 @@ func (m *Module) RegisterRoutes(r *gin.Engine) {
 			TokensDir:    m.cfg.DriveTokensDir,
 		})
 		if err != nil {
-			log.Printf("[DRIVE] Service init failed: %v", err)
-		} else {
-			driveSvc = svc
+			return err
 		}
+		m.service = svc
 	}
 
-	if driveSvc != nil {
-		if err := driveSvc.LoadFirstToken(); err != nil {
+	if m.service != nil {
+		if err := m.service.LoadFirstToken(); err != nil {
 			log.Printf("[DRIVE] No initial token loaded: %v", err)
 		}
 	}
 
 	// Initialize Drive handlers
+	if m.handlers != nil {
+		return nil
+	}
 	handlers, err := driveHandlers.NewDriveHandlers(&integrationsDrive.ServiceConfig{
 		ClientID:     m.cfg.DriveClientID,
 		ClientSecret: m.cfg.DriveClientSecret,
 		RedirectURI:  m.cfg.DriveRedirectURI,
 		TokensDir:    m.cfg.DriveTokensDir,
-	}, driveSvc)
+	}, m.service)
 	if err != nil {
-		log.Printf("[DRIVE] Handlers init failed: %v", err)
-		return
+		return err
 	}
 	m.handlers = handlers
-	m.service = driveSvc
-
-	// Register Drive API routes
-	driveHandlers.RegisterDriveRoutes(r, m.handlers)
-	log.Printf("[DRIVE] API routes registered at /api/drive/*")
+	return nil
 }

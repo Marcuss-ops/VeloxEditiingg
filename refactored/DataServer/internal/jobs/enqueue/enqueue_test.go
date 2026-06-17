@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"velox-shared/paths"
 )
 
 func TestBuildSceneImagePayload(t *testing.T) {
@@ -159,6 +161,49 @@ func TestBuildSceneImagePayloadForMaster(t *testing.T) {
 	}
 	if string(sceneData) != "fake-image" {
 		t.Errorf("scene staged content mismatch: %q", string(sceneData))
+	}
+}
+
+func TestBuildSceneImagePayloadForMaster_PreservesRemoteSources(t *testing.T) {
+	t.Parallel()
+	tempDir := t.TempDir()
+
+	voiceURL := "https://drive.google.com/file/d/voice-drive-id/view?usp=sharing"
+	sceneURL := "https://drive.google.com/file/d/scene-drive-id/view?usp=sharing"
+	payload := map[string]interface{}{
+		"video_name":     "Remote Sources",
+		"voiceover_path": voiceURL,
+		"scenes":         []interface{}{map[string]interface{}{"text": "S1", "image_link": sceneURL}},
+	}
+
+	result, err := BuildSceneImagePayloadForMaster(payload, tempDir, filepath.Join(tempDir, "videos"), "http://master.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	wantVoice := paths.NormalizeDriveURL(voiceURL)
+	if got, _ := result["voiceover_path"].(string); got != wantVoice {
+		t.Fatalf("want remote voiceover normalized to %q, got %q", wantVoice, got)
+	}
+	if got, _ := result["audio_path"].(string); got != wantVoice {
+		t.Fatalf("want remote audio_path normalized to %q, got %q", wantVoice, got)
+	}
+
+	sp, _ := result["scene_image_paths"].([]string)
+	wantScene := paths.NormalizeDriveURL(sceneURL)
+	if len(sp) != 1 || sp[0] != wantScene {
+		t.Fatalf("want remote scene image preserved, got %v", sp)
+	}
+
+	scenes, _ := result["scenes"].([]map[string]interface{})
+	if len(scenes) != 1 {
+		t.Fatalf("want 1 scene, got %d", len(scenes))
+	}
+	if img, _ := scenes[0]["image_link"].(string); img != wantScene {
+		t.Fatalf("want remote scene image link normalized to %q, got %q", wantScene, img)
+	}
+	if _, err := os.Stat(filepath.Join(tempDir, "worker_downloads")); !os.IsNotExist(err) {
+		t.Fatalf("did not expect staged assets for remote sources")
 	}
 }
 

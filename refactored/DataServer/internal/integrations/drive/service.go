@@ -278,6 +278,18 @@ func (s *Service) GetFileLink(ctx context.Context, fileID string) (string, error
 	return result.WebViewLink, nil
 }
 
+// GetFileMetadata returns the basic metadata needed to validate and stage a Drive file.
+func (s *Service) GetFileMetadata(ctx context.Context, fileID string) (*File, error) {
+	endpoint := fmt.Sprintf("/files/%s?fields=id,name,mimeType,size", fileID)
+
+	var result File
+	if err := s.doAPIRequest(ctx, "GET", endpoint, nil, &result); err != nil {
+		return nil, err
+	}
+
+	return &result, nil
+}
+
 // DeleteFile moves a file to trash
 func (s *Service) DeleteFile(ctx context.Context, fileID string) error {
 	endpoint := fmt.Sprintf("/files/%s", fileID)
