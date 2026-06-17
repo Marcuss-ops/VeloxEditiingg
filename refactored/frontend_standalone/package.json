@@ -1,0 +1,19 @@
+{
+  "name": "frontend-velox",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Velox frontend (Creator Studio + YouTube Manager + Drive + Livestream + Dark Editor). Produces the SPA dist consumed by the Velox master server via VELOX_SPA_DIR.",
+  "workspaces": [
+    "web"
+  ],
+  "scripts": {
+    "dev:web": "npm --workspace web run dev",
+    "build": "npm --workspace web run build",
+    "lint": "npm --workspace web run lint --if-present",
+    "test": "npm --workspace web run test --if-present"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "license": "UNLICENSED"
+}
