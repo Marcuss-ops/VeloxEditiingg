@@ -11,6 +11,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	voiceoverassets "velox-server/internal/assets"
 	"velox-server/internal/config"
 	"velox-server/internal/creatorflow"
 	"velox-server/internal/jobs/enqueue"
@@ -92,6 +93,16 @@ func PipelineGenerate(cfg *config.Config, q *queue.FileQueue) gin.HandlerFunc {
 		if enqueue.ShouldForwardPipelineResult(result) {
 			pipelineLog("FORWARD: result complete — forwarding to Velox workers (sync)")
 			if forwarded, forwardErr := forwardPipelineResultToWorker(c.Request.Context(), q, result); forwardErr != nil {
+				if assetErr, ok := voiceoverassets.AsAcquisitionError(forwardErr); ok {
+					c.JSON(http.StatusUnprocessableEntity, gin.H{
+						"ok":          false,
+						"code":        assetErr.Code,
+						"field":       assetErr.Field,
+						"message":     assetErr.Message,
+						"source_type": assetErr.SourceType,
+					})
+					return
+				}
 				pipelineLog("FORWARD: FAILED: %v", forwardErr)
 				response["worker_forwarded"] = false
 				response["worker_forward_error"] = forwardErr.Error()

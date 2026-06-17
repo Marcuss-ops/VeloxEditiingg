@@ -18,11 +18,12 @@ type Module struct {
 }
 
 // New creates a new Drive module.
-func New(cfg *config.Config, sqliteStore *store.SQLiteStore) *Module {
-	return &Module{
-		cfg:         cfg,
-		sqliteStore: sqliteStore,
+func New(cfg *config.Config) *Module {
+	m := &Module{
+		cfg: cfg,
 	}
+	_ = m.init()
+	return m
 }
 
 // Name returns the module identifier.
@@ -37,9 +38,28 @@ func (m *Module) Handlers() *driveHandlers.DriveHandlers {
 
 // RegisterRoutes registers Drive endpoints.
 func (m *Module) RegisterRoutes(r *gin.Engine) {
+	if err := m.init(); err != nil {
+		log.Printf("[DRIVE] Init failed: %v", err)
+		return
+	}
+	if m.handlers == nil {
+		log.Printf("[DRIVE] Handlers unavailable after init")
+		return
+	}
+	driveHandlers.RegisterDriveRoutes(r, m.handlers)
+	log.Printf("[DRIVE] API routes registered at /api/drive/*")
+}
+
+func (m *Module) init() error {
+	if m == nil || m.cfg == nil {
+		return nil
+	}
+	if m.service != nil && m.handlers != nil {
+		return nil
+	}
+
 	// Initialize Drive service
-	var driveSvc *integrationsDrive.Service
-	if m.cfg.Drive.ClientID != "" && m.cfg.Drive.ClientSecret != "" {
+	if m.service == nil && m.cfg.DriveClientID != "" && m.cfg.DriveClientSecret != "" {
 		svc, err := integrationsDrive.NewService(&integrationsDrive.ServiceConfig{
 			ClientID:     m.cfg.Drive.ClientID,
 			ClientSecret: m.cfg.Drive.ClientSecret,
@@ -47,28 +67,32 @@ func (m *Module) RegisterRoutes(r *gin.Engine) {
 			TokensDir:    m.cfg.Drive.TokensDir,
 		})
 		if err != nil {
-			log.Printf("[DRIVE] Service init failed: %v", err)
-		} else {
-			driveSvc = svc
+			return err
+		}
+		m.service = svc
+	}
+
+	if m.service != nil {
+		if err := m.service.LoadFirstToken(); err != nil {
+			log.Printf("[DRIVE] No initial token loaded: %v", err)
 		}
 	}
 
-	// Initialize Drive handlers (pass existing store, no secondary connection)
+	// Initialize Drive handlers
+	if m.handlers != nil {
+		return nil
+	}
 	handlers, err := driveHandlers.NewDriveHandlers(&integrationsDrive.ServiceConfig{
-		ClientID:     m.cfg.Drive.ClientID,
-		ClientSecret: m.cfg.Drive.ClientSecret,
-		RedirectURI:  m.cfg.Drive.RedirectURI,
-		TokensDir:    m.cfg.Drive.TokensDir,
-	}, driveSvc, m.sqliteStore)
+		ClientID:     m.cfg.DriveClientID,
+		ClientSecret: m.cfg.DriveClientSecret,
+		RedirectURI:  m.cfg.DriveRedirectURI,
+		TokensDir:    m.cfg.DriveTokensDir,
+	}, m.service)
 	if err != nil {
-		log.Printf("[DRIVE] Handlers init failed: %v", err)
-		return
+		return err
 	}
 	m.handlers = handlers
-
-	// Register Drive API routes
-	driveHandlers.RegisterDriveRoutes(r, m.handlers)
-	log.Printf("[DRIVE] API routes registered at /api/drive/*")
+	return nil
 }
 
 

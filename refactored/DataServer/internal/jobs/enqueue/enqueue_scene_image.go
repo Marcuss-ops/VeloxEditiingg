@@ -2,6 +2,7 @@
 package enqueue
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -208,6 +209,10 @@ func buildSceneImagePayload(rawPayload map[string]interface{}, dataDir, videosDi
 		"source":                 "script_generate_with_images",
 	}
 
+	if err := resolveVoiceoverPayload(context.Background(), normalized); err != nil {
+		return nil, err
+	}
+
 	return normalized, nil
 }
 
@@ -215,20 +220,28 @@ func stageVoiceoverAssets(dataDir, masterURL, jobID string, voiceoverPaths []str
 	if len(voiceoverPaths) == 0 {
 		return nil, fmt.Errorf("voiceover_path or source_media is required")
 	}
+	if getVoiceoverAssetService() != nil {
+		return append([]string{}, voiceoverPaths...), nil
+	}
 
 	staged := make([]string, 0, len(voiceoverPaths))
 	if strings.TrimSpace(masterURL) == "" {
 		return append(staged, voiceoverPaths...), nil
 	}
 
-	assetDir := filepath.Join(dataDir, "worker_downloads", "script_assets", jobID)
-	if err := os.MkdirAll(assetDir, 0o755); err != nil {
-		return nil, fmt.Errorf("create script asset dir: %w", err)
-	}
-
 	baseMasterURL := strings.TrimRight(strings.TrimSpace(masterURL), "/")
 	client := &http.Client{Timeout: 90 * time.Second}
 	for idx, source := range voiceoverPaths {
+		if !isLocalAssetSource(source) {
+			staged = append(staged, paths.NormalizeDriveURL(source))
+			continue
+		}
+
+		assetDir := filepath.Join(dataDir, "worker_downloads", "script_assets", jobID)
+		if err := os.MkdirAll(assetDir, 0o755); err != nil {
+			return nil, fmt.Errorf("create script asset dir: %w", err)
+		}
+
 		filename := stagedAssetFilename("voiceover", source, idx)
 		if filename == "" {
 			filename = fmt.Sprintf("voiceover_%d", idx+1)
@@ -251,16 +264,21 @@ func stageSceneImageAssets(dataDir, masterURL, jobID string, sceneEntries []map[
 		return append([]string{}, sceneImagePaths...), nil
 	}
 
-	assetDir := filepath.Join(dataDir, "worker_downloads", "script_assets", jobID)
-	if err := os.MkdirAll(assetDir, 0o755); err != nil {
-		return nil, fmt.Errorf("create script asset dir: %w", err)
-	}
-
 	baseMasterURL := strings.TrimRight(strings.TrimSpace(masterURL), "/")
 	client := &http.Client{Timeout: 90 * time.Second}
 	staged := make([]string, 0, len(sceneImagePaths))
 
 	for idx, source := range sceneImagePaths {
+		if !isLocalAssetSource(source) {
+			staged = append(staged, paths.NormalizeDriveURL(source))
+			continue
+		}
+
+		assetDir := filepath.Join(dataDir, "worker_downloads", "script_assets", jobID)
+		if err := os.MkdirAll(assetDir, 0o755); err != nil {
+			return nil, fmt.Errorf("create script asset dir: %w", err)
+		}
+
 		filename := stagedAssetFilename("scene_image", source, idx)
 		if filename == "" {
 			filename = fmt.Sprintf("scene_image_%d", idx+1)
@@ -273,6 +291,13 @@ func stageSceneImageAssets(dataDir, masterURL, jobID string, sceneEntries []map[
 	}
 
 	return staged, nil
+}
+
+func isLocalAssetSource(source string) bool {
+	if info, err := os.Stat(strings.TrimSpace(source)); err == nil && !info.IsDir() {
+		return true
+	}
+	return false
 }
 
 func stagedAssetFilename(kind, source string, idx int) string {
