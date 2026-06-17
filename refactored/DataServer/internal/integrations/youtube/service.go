@@ -16,7 +16,6 @@ import (
 
 // YouTubeStore defines the interface for SQLite-backed YouTube persistence,
 // avoiding a direct import of the store package.
-// Uses only canonical tables (youtube_channels, youtube_groups_v2, youtube_group_channels).
 type YouTubeStore interface {
 	// Canonical: YouTube Channels (youtube_channels table)
 	ListYouTubeChannels() ([]map[string]interface{}, error)
@@ -30,6 +29,23 @@ type YouTubeStore interface {
 	RemoveChannelFromGroupV2(groupID int64, channelID string) error
 	ListGroupChannelsV2(groupID int64) ([]string, error)
 	ListAllGroupMembershipsV2() ([]map[string]interface{}, error)
+
+	// OAuth token persistence (youtube_oauth_tokens table)
+	UpsertYouTubeOAuthToken(channelID string, accessTokenEnc, refreshTokenEnc []byte, tokenType, expiry, scopes string, keyVersion int) error
+	GetYouTubeOAuthToken(channelID string) (map[string]interface{}, error)
+	ListActiveYouTubeOAuthTokens() ([]map[string]interface{}, error)
+	AuditYouTubeOAuthTokenOrphans() ([]interface{}, error)
+
+	// Channel mutation methods
+	UpdateChannelTitle(channelID, title string) error
+	UpdateChannelLanguage(channelID, language string) error
+	DeleteChannelAtomic(channelID string, tx interface{}) error
+	UpdateYouTubeChannelMetadata(channelID, metadataJSON string) error
+
+	// Group mutation methods
+	GetYouTubeGroupV2ID(name string) (int64, error)
+	DeleteYouTubeGroupChannelsByGroupID(groupID int64) error
+	DeleteYouTubeGroupV2(groupID int64) error
 
 	// Cache (shared)
 	GetYouTubeCache(key string) (int64, string, error)
@@ -51,11 +67,19 @@ type Service struct {
 	mu          sync.RWMutex
 	cache       *Cache
 	store       YouTubeStore
+	oauthBuf    OAuthCipher // Encryption cipher for OAuth token persistence
 
 	authManager  *AuthManager
 	uploader     *Uploader
 	videoManager *VideoManager
 	quotaManager *QuotaManager
+}
+
+// OAuthCipher is an interface for encrypting/decrypting OAuth tokens.
+type OAuthCipher interface {
+	Encrypt(plaintext []byte) ([]byte, error)
+	Decrypt(ciphertext []byte) ([]byte, error)
+	KeyVersion() int
 }
 
 // NewService creates a new YouTube service.

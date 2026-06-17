@@ -27,18 +27,18 @@ func pipelineLog(format string, args ...interface{}) {
 
 // InitRemoteEngine initializes the remote engine client
 func InitRemoteEngine(cfg *config.Config) {
-	if cfg.RemoteEngineURL == "" {
+	if cfg.Render.RemoteEngineURL == "" {
 		pipelineLog("INIT: remote engine NOT configured (VELOX_REMOTE_ENGINE_URL empty)")
 		return
 	}
 	remoteEngineClient = remoteengine.NewClient(remoteengine.Config{
-		URL:       cfg.RemoteEngineURL,
-		Token:     cfg.RemoteEngineToken,
-		TimeoutMS: cfg.RemoteEngineTimeoutMS,
-		Retries:   cfg.RemoteEngineRetries,
+		URL:       cfg.Render.RemoteEngineURL,
+		Token:     cfg.Render.RemoteEngineToken,
+		TimeoutMS: cfg.Render.RemoteEngineTimeoutMS,
+		Retries:   cfg.Render.RemoteEngineRetries,
 	})
 	pipelineLog("INIT: remote engine configured url=%s timeout_ms=%d retries=%d poll_interval=%ds",
-		cfg.RemoteEngineURL, cfg.RemoteEngineTimeoutMS, cfg.RemoteEngineRetries, cfg.RemoteEnginePollInterval)
+		cfg.Render.RemoteEngineURL, cfg.Render.RemoteEngineTimeoutMS, cfg.Render.RemoteEngineRetries, cfg.Render.RemoteEnginePollInterval)
 }
 
 // PipelineGenerate handles POST /api/remote/pipeline/generate
@@ -67,7 +67,7 @@ func PipelineGenerate(cfg *config.Config, q *queue.FileQueue) gin.HandlerFunc {
 			return
 		}
 
-		pipelineLog("REMOTE: forwarding to %s/api/script/generate-with-images", cfg.RemoteEngineURL)
+		pipelineLog("REMOTE: forwarding to %s/api/script/generate-with-images", cfg.Render.RemoteEngineURL)
 		result, err := remoteEngineClient.StartPipeline(c.Request.Context(), reqPayload)
 		if err != nil {
 			pipelineLog("REMOTE: request FAILED: %v", err)
@@ -103,7 +103,7 @@ func PipelineGenerate(cfg *config.Config, q *queue.FileQueue) gin.HandlerFunc {
 			}
 		} else if jobID != "" && !isTerminalStatus(status) {
 			// Async: start background polling
-			pollInterval := cfg.RemoteEnginePollInterval
+			pollInterval := cfg.Render.RemoteEnginePollInterval
 			if pollInterval <= 0 {
 				pollInterval = 30
 			}
