@@ -3,7 +3,6 @@ package uploads
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -16,6 +15,7 @@ import (
 
 	"velox-server/internal/config"
 	"velox-server/internal/queue"
+	"velox-server/internal/store"
 )
 
 // UploadCompletedVideo handles video file upload from workers.
@@ -103,7 +103,7 @@ func UploadCompletedVideo(cfg *config.Config, fileQ *queue.FileQueue, youtubeSer
 			"master_video_path":     videoPath,
 			"upload_info":           uploadInfo,
 			"video_sha256":          sha256Hash,
-			"youtube_upload_status": "pending",
+			"youtube_upload_status": "pending", // DEPRECATED: kept for backward compat
 		}
 
 		if workerID != "" {
@@ -119,40 +119,57 @@ func UploadCompletedVideo(cfg *config.Config, fileQ *queue.FileQueue, youtubeSer
 			return
 		}
 
-		// Create artifact record
-		artifact := map[string]interface{}{
-			"type":       "video",
-			"path":       videoPath,
-			"size":       size,
-			"sha256":     sha256Hash,
-			"filename":   safeName,
-			"created_at": now,
-		}
-		if artifactBytes, err := json.Marshal(artifact); err == nil {
-			_ = fileQ.UpdateJobFields(ctx, jobID, map[string]interface{}{
-				"artifacts": string(artifactBytes),
-			})
-		} else {
-			log.Printf("[UPLOAD] Failed to marshal artifact for %s: %v", jobID, err)
+		// Create artifact record via the artifacts table (PR4: normalized artifact tracking)
+		dbStore := fileQ.GetDBStore()
+		if dbStore != nil {
+			artifact := &store.Artifact{
+				JobID:           jobID,
+				Type:            "video",
+				StorageProvider: "local",
+				LocalPath:       videoPath,
+				SHA256:          sha256Hash,
+				SizeBytes:       size,
+				Status:          "completed",
+				CreatedAt:       now,
+			}
+			if err := dbStore.InsertArtifact(artifact); err != nil {
+				log.Printf("[UPLOAD] Failed to insert artifact for %s: %v", jobID, err)
+			}
 		}
 
-		// Trigger YouTube auto-upload (async, best-effort)
-		maybeAutoUploadYouTube(fileQ, youtubeService, jobID, uploadInfo, videoPath)
+		// Query delivery targets (PR4: targets resolved at enqueue time)
+		deliveryTargets := getDeliveryTargets(dbStore, jobID)
 
-		// Trigger Drive auto-upload (async, best-effort)
-		maybeAutoUploadDrive(fileQ, driveService, cfg.DataDir, jobID, uploadInfo, videoPath)
+		// Trigger YouTube auto-upload (async, best-effort) with resolved targets
+		maybeAutoUploadYouTube(fileQ, youtubeService, jobID, uploadInfo, videoPath, deliveryTargets)
+
+		// Trigger Drive auto-upload (async, best-effort) with resolved targets
+		maybeAutoUploadDrive(fileQ, driveService, cfg.DataDir, jobID, uploadInfo, videoPath, deliveryTargets)
 
 		log.Printf("[UPLOAD] Video upload completed: job=%s worker=%s size=%d sha256=%s",
 			jobID, workerID, size, sha256Hash[:min(16, len(sha256Hash))]+"...")
 
 		c.JSON(http.StatusOK, gin.H{
-			"ok":          true,
-			"job_id":      jobID,
-			"video_path":  videoPath,
-			"size":        size,
-			"sha256":      sha256Hash,
-			"video_id":    safeName,
-			"youtube_url": "",
+			"ok":         true,
+			"job_id":     jobID,
+			"video_path": videoPath,
+			"size":       size,
+			"sha256":     sha256Hash,
+			"video_id":   safeName,
 		})
 	}
+}
+
+// getDeliveryTargets queries delivery_targets for a job (PR4).
+// Falls back gracefully if the store is nil or table doesn't exist yet.
+func getDeliveryTargets(dbStore *store.SQLiteStore, jobID string) []store.DeliveryTarget {
+	if dbStore == nil {
+		return nil
+	}
+	targets, err := dbStore.GetDeliveryTargetsByJob(jobID)
+	if err != nil {
+		log.Printf("[UPLOAD] Failed to query delivery targets for %s: %v", jobID, err)
+		return nil
+	}
+	return targets
 }

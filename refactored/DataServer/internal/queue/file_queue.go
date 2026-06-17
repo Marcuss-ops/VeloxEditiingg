@@ -10,22 +10,38 @@ import (
 	"velox-server/internal/store"
 )
 
-// JobStatus represents the current state of a job
+// JobStatus represents the current state of a job.
+// Canonical statuses (7 total):
+//
+//	PENDING → LEASED → RUNNING → SUCCEEDED
+//	                   ↓
+//	              RETRY_WAIT → PENDING (retry)
+//	                   ↓
+//	              FAILED
+//	PENDING → CANCELLED
 type JobStatus string
 
 const (
-	StatusPending    JobStatus = "PENDING"
-	StatusProcessing JobStatus = "PROCESSING"
-	StatusCompleted  JobStatus = "COMPLETED"
-	StatusError      JobStatus = "ERROR"
-	StatusFailed     JobStatus = "FAILED"
-	StatusQueued     JobStatus = "QUEUED"
-	StatusAssigned   JobStatus = "ASSIGNED"
-	StatusLeased     JobStatus = "LEASED"
-	StatusCancelling JobStatus = "CANCELLING"
-	StatusCancelled  JobStatus = "CANCELLED"
-	StatusLost       JobStatus = "LOST"
-	StatusRetrying   JobStatus = "RETRYING"
+	StatusPending   JobStatus = "PENDING"
+	StatusLeased    JobStatus = "LEASED"
+	StatusRunning   JobStatus = "RUNNING"
+	StatusRetryWait JobStatus = "RETRY_WAIT"
+	StatusSucceeded JobStatus = "SUCCEEDED"
+	StatusFailed    JobStatus = "FAILED"
+	StatusCancelled JobStatus = "CANCELLED"
+)
+
+// Legacy status aliases for backward compatibility during migration.
+// New code MUST use the canonical statuses above.
+const (
+	StatusProcessing JobStatus = "PROCESSING" // alias → RUNNING
+	StatusCompleted  JobStatus = "COMPLETED"  // alias → SUCCEEDED
+	StatusError      JobStatus = "ERROR"      // alias → FAILED
+	StatusQueued     JobStatus = "QUEUED"     // alias → PENDING
+	StatusAssigned   JobStatus = "ASSIGNED"   // alias → LEASED
+	StatusCancelling JobStatus = "CANCELLING" // alias → CANCELLED
+	StatusLost       JobStatus = "LOST"       // alias → FAILED
+	StatusRetrying   JobStatus = "RETRYING"   // alias → RETRY_WAIT
 )
 
 // Job represents a job in the queue (compatible with Python schema)
@@ -68,15 +84,18 @@ type Job struct {
 	OutputVideoID string                 `json:"output_video_id,omitempty"`
 	DriveURL      string                 `json:"drive_url,omitempty"`
 
+	// DEPRECATED (PR4): Drive/YouTube delivery state moved to delivery_targets + delivery_attempts tables.
+	// Kept for backward compat — no longer written by delivery code.
 	VideoUploaded         bool   `json:"video_uploaded,omitempty"`
 	MasterVideoPath       string `json:"master_video_path,omitempty"`
 	LastUploadResult      string `json:"last_upload_result,omitempty"`
 	LastUploadAttemptAt   string `json:"last_upload_attempt_at,omitempty"`
 	LastDriveUploadResult string `json:"last_drive_upload_result,omitempty"`
 	RemoteStatus          string `json:"remote_status,omitempty"`
-	ArtifactID            string `json:"artifact_id,omitempty"`
-	OutputSHA256          string `json:"output_sha256,omitempty"`
-	IdempotencyKey        string `json:"upload_idempotency_key,omitempty"`
+	// DEPRECATED (PR4): Artifact tracking moved to artifacts table via store.InsertArtifact.
+	ArtifactID     string `json:"artifact_id,omitempty"`
+	OutputSHA256   string `json:"output_sha256,omitempty"`
+	IdempotencyKey string `json:"upload_idempotency_key,omitempty"`
 
 	JobFingerprint string `json:"job_fingerprint,omitempty"`
 

@@ -3,62 +3,41 @@ package uploads
 import (
 	"context"
 	"log"
-	"strings"
 	"time"
 
-	"velox-server/internal/jobs/enqueue"
-	"velox-server/internal/queue"
+	"velox-server/internal/store"
 )
 
-func maybeAutoUploadDrive(fileQ *queue.FileQueue, driveService DriveAutoUploader, dataDir string, jobID string, uploadInfo map[string]interface{}, videoPath string) {
-	if fileQ == nil || driveService == nil || strings.TrimSpace(jobID) == "" || strings.TrimSpace(videoPath) == "" {
+// maybeAutoUploadDrive triggers a Drive upload if a resolved delivery_target of type "drive" exists.
+// Uses the pre-resolved config from the delivery_target (PR4: target resolved at enqueue).
+func maybeAutoUploadDrive(fileQ interface{ UpdateJobFields(ctx context.Context, jobID string, fields map[string]interface{}) error }, driveService DriveAutoUploader, dataDir string, jobID string, uploadInfo map[string]interface{}, videoPath string, targets []store.DeliveryTarget) {
+	if driveService == nil || jobID == "" || videoPath == "" {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
-	defer cancel()
-
-	job, err := fileQ.GetJobAsMap(ctx, jobID)
-	if err != nil || job == nil {
-		log.Printf("[DRIVE] Auto-upload skipped for %s: job not found (%v)", jobID, err)
+	// Find the drive delivery target (PR4: resolved at enqueue time)
+	var driveTarget *store.DeliveryTarget
+	for i, t := range targets {
+		if t.TargetType == "drive" && (t.Status == "pending" || t.Status == "scheduled") {
+			driveTarget = &targets[i]
+			break
+		}
+	}
+	if driveTarget == nil {
 		return
 	}
 
-	if shouldSkipDriveUpload(job) {
-		return
-	}
-
-	folderRef := firstNonEmptyString(
-		asString(uploadInfo["drive_output_folder"]),
-		asString(job["drive_output_folder"]),
-		asStringFromSlot(job, "drive_output_folder"),
-		asString(job["output_directory"]),
-		asStringFromSlot(job, "output_directory"),
-		asString(uploadInfo["language"]),
-		asString(uploadInfo["audio_language_for_srt"]),
-		asString(job["language"]),
-		asString(job["audio_language_for_srt"]),
-		asStringFromSlot(job, "language"),
-		asStringFromSlot(job, "audio_language_for_srt"),
-		asString(uploadInfo["youtube_group"]),
-		asString(job["youtube_group"]),
-		asStringFromSlot(job, "youtube_group"),
-	)
-	if folderRef == "" {
-		return
-	}
-
-	rootFolderID := enqueue.ResolveDriveOutputFolderReference(dataDir, folderRef)
-	if rootFolderID == "" {
-		log.Printf("[DRIVE] Auto-upload skipped for %s: could not resolve folder %q", jobID, folderRef)
+	// Parse the pre-resolved config
+	cfg, err := store.ParseTargetConfig(driveTarget.Config)
+	if err != nil || cfg.FolderID == "" {
+		log.Printf("[DRIVE] Auto-upload skipped for %s: invalid target config (%v)", jobID, err)
 		return
 	}
 
 	videoName := firstNonEmptyString(
 		asString(uploadInfo["video_name"]),
 		asString(uploadInfo["title"]),
-		asString(job["video_name"]),
-		asString(job["title"]),
+		cfg.VideoName,
 		jobID,
 	)
 	subfolderName := sanitizeDriveFolderName(videoName)
@@ -66,7 +45,8 @@ func maybeAutoUploadDrive(fileQ *queue.FileQueue, driveService DriveAutoUploader
 		subfolderName = jobID
 	}
 
-	_ = fileQ.UpdateJobFields(ctx, jobID, map[string]interface{}{
+	// Schedule delivery
+	_ = fileQ.UpdateJobFields(context.Background(), jobID, map[string]interface{}{
 		"drive_upload_status": "scheduled",
 	})
 
@@ -74,90 +54,71 @@ func maybeAutoUploadDrive(fileQ *queue.FileQueue, driveService DriveAutoUploader
 		uploadCtx, uploadCancel := context.WithTimeout(context.Background(), 15*time.Minute)
 		defer uploadCancel()
 
-		uploadResult, uploadErr := driveService.UploadVideo(uploadCtx, videoPath, subfolderName, rootFolderID)
-		if uploadErr != nil {
-			_ = fileQ.UpdateJobFields(uploadCtx, jobID, map[string]interface{}{
-				"drive_upload_status": "failed",
-				"last_drive_upload_result": map[string]interface{}{
-					"success":     false,
-					"error":       uploadErr.Error(),
-					"folder_ref":  folderRef,
-					"folder_id":   rootFolderID,
-					"uploaded_at": time.Now().UTC().Format(time.RFC3339),
-				},
+		dbStore := getDBStore(fileQ)
+		attemptNumber := driveTarget.AttemptCount + 1
+		now := time.Now().UTC().Format(time.RFC3339)
+
+		// Record delivery attempt
+		var attemptID int64
+		if dbStore != nil {
+			attemptID, _ = dbStore.InsertDeliveryAttempt(&store.DeliveryAttempt{
+				DeliveryTargetID: driveTarget.ID,
+				AttemptNumber:    attemptNumber,
+				Status:           "uploading",
+				StartedAt:        now,
+				WorkerID:         "auto_drive",
 			})
+		}
+
+		uploadResult, uploadErr := driveService.UploadVideo(uploadCtx, videoPath, subfolderName, cfg.FolderID)
+
+		var status string
+		var result store.DeliveryTargetResult
+		if uploadErr != nil {
+			status = "failed"
+			result = store.DeliveryTargetResult{
+				Success: false,
+				Error:   uploadErr.Error(),
+			}
 			log.Printf("[DRIVE] Auto-upload failed for %s: %v", jobID, uploadErr)
-			return
+		} else {
+			status = "completed"
+			result = store.DeliveryTargetResult{
+				Success:     true,
+				WebViewLink: uploadResult.WebViewLink,
+				FolderLink:  uploadResult.FolderLink,
+			}
 		}
 
+		resultJSON := store.MustTargetResultJSON(&result)
+
+		// Update delivery target status
+		if dbStore != nil {
+			_ = dbStore.UpdateDeliveryTargetResult(driveTarget.ID, status, resultJSON)
+		}
+
+		// Update delivery attempt
+		if dbStore != nil && attemptID > 0 {
+			attemptStatus := "completed"
+			errMsg := ""
+			if uploadErr != nil {
+				attemptStatus = "failed"
+				errMsg = uploadErr.Error()
+			}
+			_ = dbStore.UpdateDeliveryAttempt(int(attemptID), attemptStatus, resultJSON, errMsg)
+		}
+
+		// DEPRECATED: Update job fields for backward compat
 		update := map[string]interface{}{
-			"drive_upload_status": "completed",
-			"drive_url":           uploadResult.WebViewLink,
-			"drive_folder_url":    uploadResult.FolderLink,
-			"drive_folder_id":     rootFolderID,
-			"last_drive_upload_result": map[string]interface{}{
-				"success":     true,
-				"drive_url":   uploadResult.WebViewLink,
-				"folder_url":  uploadResult.FolderLink,
-				"folder_id":   rootFolderID,
-				"subfolder":   subfolderName,
-				"uploaded_at": time.Now().UTC().Format(time.RFC3339),
-			},
+			"drive_upload_status": status,
 		}
-		if err := fileQ.UpdateJobFields(uploadCtx, jobID, update); err != nil {
-			log.Printf("[DRIVE] Auto-upload persisted with warning for %s: %v", jobID, err)
+		if uploadErr == nil {
+			update["drive_url"] = uploadResult.WebViewLink
+			update["drive_folder_url"] = uploadResult.FolderLink
+			update["drive_folder_id"] = cfg.FolderID
 		}
-		log.Printf("[DRIVE] Auto-upload completed for %s -> %s", jobID, uploadResult.WebViewLink)
+		_ = fileQ.UpdateJobFields(uploadCtx, jobID, update)
+
+		log.Printf("[DRIVE] Auto-upload %s for %s -> %v", status, jobID, result.WebViewLink)
 	}()
-}
-
-func shouldSkipDriveUpload(job map[string]interface{}) bool {
-	if job == nil {
-		return true
-	}
-	if strings.TrimSpace(asString(job["drive_url"])) != "" {
-		return true
-	}
-	if strings.EqualFold(strings.TrimSpace(asString(job["drive_upload_status"])), "scheduled") {
-		return true
-	}
-	if strings.EqualFold(strings.TrimSpace(asString(job["drive_upload_status"])), "uploading") {
-		return true
-	}
-	if strings.EqualFold(strings.TrimSpace(asString(job["drive_upload_status"])), "completed") {
-		return true
-	}
-	if result, ok := job["last_drive_upload_result"].(map[string]interface{}); ok {
-		if ok, _ := result["success"].(bool); ok {
-			return true
-		}
-	}
-	return false
-}
-
-func sanitizeDriveFolderName(name string) string {
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return ""
-	}
-	var b strings.Builder
-	for _, r := range name {
-		switch {
-		case r >= 'a' && r <= 'z':
-			b.WriteRune(r)
-		case r >= 'A' && r <= 'Z':
-			b.WriteRune(r + ('a' - 'A'))
-		case r >= '0' && r <= '9':
-			b.WriteRune(r)
-		case r == '-' || r == '_' || r == ' ':
-			b.WriteRune('_')
-		default:
-			b.WriteRune('_')
-		}
-	}
-	out := strings.Trim(b.String(), "_")
-	if out == "" {
-		return "drive_upload"
-	}
-	return out
 }

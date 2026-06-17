@@ -12,6 +12,9 @@ import (
 	"github.com/google/uuid"
 )
 
+// ClaimNextPendingJob atomically claims the next pending/queued job for a worker.
+// Reads columns directly (not raw_json), then writes the claim via result_json.
+// Returns the updated result_json blob and true if a job was claimed.
 func (s *SQLiteStore) ClaimNextPendingJob(workerID string, allowedJobTypes []string, now time.Time) ([]byte, bool, error) {
 	tx, err := s.db.BeginTx(context.Background(), &sql.TxOptions{})
 	if err != nil {
@@ -19,8 +22,10 @@ func (s *SQLiteStore) ClaimNextPendingJob(workerID string, allowedJobTypes []str
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	// Read candidate jobs with their status and assigned_to columns (not raw_json)
 	rows, err := tx.Query(
-		`SELECT job_id, raw_json
+		`SELECT job_id, status, assigned_to, claimed_by, job_fingerprint, run_id, job_run_id,
+		        video_name, project_id, retry_count, request_json, result_json
 		 FROM jobs
 		 WHERE UPPER(status) IN ('PENDING', 'QUEUED')
 		   AND COALESCE(assigned_to, '') = ''
@@ -29,111 +34,124 @@ func (s *SQLiteStore) ClaimNextPendingJob(workerID string, allowedJobTypes []str
 	if err != nil {
 		return nil, false, err
 	}
-	defer rows.Close()
 
 	nowISO := now.UTC().Format(time.RFC3339)
 	nowUnix := now.UTC().Unix()
 
 	for rows.Next() {
-		var jobID string
-		var raw string
-		if err := rows.Scan(&jobID, &raw); err != nil {
+		var (
+			jobID, status, assignedTo, claimedBy, jobFingerprint, runID, jobRunID sql.NullString
+			videoName, projectID                                                   sql.NullString
+			retryCount                                                             sql.NullInt64
+			requestJSON, resultJSON                                                sql.NullString
+		)
+		if err := rows.Scan(&jobID, &status, &assignedTo, &claimedBy, &jobFingerprint, &runID, &jobRunID,
+			&videoName, &projectID, &retryCount, &requestJSON, &resultJSON); err != nil {
+			rows.Close()
+			return nil, false, err
+		}
+
+		// Double-check safety: already claimed
+		if assignedTo.Valid && strings.TrimSpace(assignedTo.String) != "" {
+			continue
+		}
+		if claimedBy.Valid && strings.TrimSpace(claimedBy.String) != "" {
 			continue
 		}
 
-		var payload map[string]any
-		if err := json.Unmarshal([]byte(raw), &payload); err != nil {
-			continue
-		}
-
-		status := strings.ToUpper(asString(payload["status"]))
-		if status != "PENDING" && status != "QUEUED" {
-			continue
-		}
-		if assigned := strings.TrimSpace(asString(payload["assigned_to"])); assigned != "" {
-			continue
-		}
-		if claimed := strings.TrimSpace(asString(payload["claimed_by"])); claimed != "" {
-			continue
-		}
-		if len(allowedJobTypes) > 0 && !jobTypeAllowed(payload, allowedJobTypes) {
-			continue
-		}
-
-		retryCount := asInt(payload["retry_count"]) + 1
-		leaseID := uuid.NewString()
-		leaseExpiry := now.UTC().Add(30 * time.Minute).Format(time.RFC3339)
-		history := make([]map[string]any, 0)
-		switch entries := payload["history"].(type) {
-		case []any:
-			for _, entry := range entries {
-				if hm, ok := entry.(map[string]any); ok {
-					history = append(history, hm)
+		// Check job type filter if specified (parse request_json properly to avoid substring false positives)
+		if len(allowedJobTypes) > 0 && requestJSON.Valid && requestJSON.String != "" {
+			var req map[string]any
+			if err := json.Unmarshal([]byte(requestJSON.String), &req); err == nil {
+				if !jobTypeAllowed(req, allowedJobTypes) {
+					continue
 				}
 			}
 		}
-		history = append(history, map[string]any{
-			"status":    "PROCESSING",
-			"timestamp": nowISO,
-			"worker_id": workerID,
-			"message":   fmt.Sprintf("Job assigned to worker %s", workerID),
-		})
 
-		payload["status"] = "PROCESSING"
-		payload["assigned_to"] = workerID
-		payload["assigned_at"] = nowISO
-		payload["claimed_by"] = workerID
-		payload["claimed_at"] = nowISO
-		payload["lease_id"] = leaseID
-		payload["lease_expiry"] = leaseExpiry
-		payload["lease_expires_at"] = leaseExpiry
-		payload["attempt"] = retryCount
-		payload["contract_version"] = 2
-		payload["updated_at"] = nowUnix
-		payload["retry_count"] = retryCount
-		payload["history"] = history
+		newRetry := int(retryCount.Int64) + 1
+		leaseID := uuid.NewString()
+		leaseExpiry := now.UTC().Add(30 * time.Minute).Format(time.RFC3339)
 
-		updatedRaw, err := json.Marshal(payload)
+		// Build the updated result_json blob with claim data
+		resultMap := make(map[string]any)
+		if resultJSON.Valid && resultJSON.String != "" {
+			_ = json.Unmarshal([]byte(resultJSON.String), &resultMap)
+		}
+		resultMap["status"] = "PROCESSING"
+		resultMap["assigned_to"] = workerID
+		resultMap["assigned_at"] = nowISO
+		resultMap["claimed_by"] = workerID
+		resultMap["claimed_at"] = nowISO
+		resultMap["lease_id"] = leaseID
+		resultMap["lease_expiry"] = leaseExpiry
+		resultMap["lease_expires_at"] = leaseExpiry
+		resultMap["attempt"] = newRetry
+		resultMap["contract_version"] = 2
+		resultMap["updated_at"] = nowUnix
+		resultMap["retry_count"] = newRetry
+
+		updatedResult, err := json.Marshal(resultMap)
 		if err != nil {
+			rows.Close()
 			return nil, false, err
 		}
 
 		result, err := tx.Exec(
 			`UPDATE jobs
-			 SET status = ?, assigned_to = ?, retry_count = ?, raw_json = ?, updated_at = ?, migrated_at = ?
+			 SET status = ?, assigned_to = ?, retry_count = ?,
+			     result_json = ?, raw_json = ?, updated_at = ?, migrated_at = ?
 			 WHERE job_id = ?
 			   AND UPPER(status) IN ('PENDING', 'QUEUED')
 			   AND COALESCE(assigned_to, '') = ''`,
-			"PROCESSING", workerID, retryCount, string(updatedRaw), nowISO, nowISO, jobID,
+			"PROCESSING", workerID, newRetry,
+			string(updatedResult), string(updatedResult), nowISO, nowISO,
+			jobID.String,
 		)
 		if err != nil {
+			rows.Close()
 			return nil, false, err
 		}
 		affected, err := result.RowsAffected()
 		if err != nil {
+			rows.Close()
 			return nil, false, err
 		}
 		if affected == 0 {
 			continue
 		}
 
-		if err := s.replaceJobHistoryTx(tx, jobID, history); err != nil {
+		// Record history (not in blob — separate table)
+		history := []map[string]any{{
+			"status":    "PROCESSING",
+			"timestamp": nowISO,
+			"worker_id": workerID,
+			"message":   fmt.Sprintf("Job assigned to worker %s", workerID),
+		}}
+		if err := s.replaceJobHistoryTx(tx, jobID.String, history); err != nil {
+			rows.Close()
 			return nil, false, err
 		}
-		// Record job_attempt inside the same transaction so claim and attempt are atomic
-		insertedID, attemptErr := s.InsertJobAttemptTx(tx, jobID, retryCount, workerID, leaseID)
+
+		// Record job attempt
+		insertedID, attemptErr := s.InsertJobAttemptTx(tx, jobID.String, newRetry, workerID, leaseID)
 		if attemptErr != nil {
+			rows.Close()
 			return nil, false, fmt.Errorf("failed to record job attempt: %w", attemptErr)
 		}
+
 		if err := tx.Commit(); err != nil {
+			rows.Close()
 			return nil, false, err
 		}
+		rows.Close()
+
 		if insertedID > 0 {
-			_ = s.LogJobEvent(jobID, "job_claimed", map[string]interface{}{
-				"worker_id": workerID, "lease_id": leaseID, "attempt": retryCount,
+			_ = s.LogJobEvent(jobID.String, "job_claimed", map[string]interface{}{
+				"worker_id": workerID, "lease_id": leaseID, "attempt": newRetry,
 			})
 		}
-		return bytes.Clone(updatedRaw), true, nil
+		return bytes.Clone(updatedResult), true, nil
 	}
 
 	if err := rows.Err(); err != nil {

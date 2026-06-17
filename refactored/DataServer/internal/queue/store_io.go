@@ -8,96 +8,93 @@ import (
 	"velox-server/internal/store"
 )
 
-// MapToJob converts a map[string]any to a Job struct
+// MapToJob converts a map[string]any (from SQLite query) to a Job struct.
+// Merge priority (lowest to highest): raw_json → request_json → result_json → DB columns.
+// History and logs are NOT read from blob — they are stored in separate tables.
 func MapToJob(m map[string]any) *Job {
 	job := &Job{
-		Payload: m,
+		Payload: make(map[string]interface{}),
 	}
 
-	if s, ok := m["job_id"].(string); ok {
-		job.JobID = s
+	// ── Step 1: raw_json fallback (backward compat during migration) ──
+	if raw, ok := m["raw_json"].(map[string]any); ok && len(raw) > 0 {
+		mergeMap(job.Payload, raw)
+	} else if raw, ok := m["raw_json"].(string); ok && raw != "" {
+		var parsed map[string]any
+		if err := json.Unmarshal([]byte(raw), &parsed); err == nil {
+			mergeMap(job.Payload, parsed)
+		}
 	}
-	if s, ok := m["status"].(string); ok {
-		job.Status = JobStatus(s)
+
+	// ── Step 2: request_json (immutable request payload) ──
+	if req, ok := m["request_json"].(map[string]any); ok && len(req) > 0 {
+		mergeMap(job.Payload, req)
+	} else if req, ok := m["request_json"].(string); ok && req != "" {
+		var parsed map[string]any
+		if err := json.Unmarshal([]byte(req), &parsed); err == nil {
+			mergeMap(job.Payload, parsed)
+		}
 	}
-	if s, ok := m["video_name"].(string); ok {
-		job.VideoName = s
+
+	// ── Step 3: result_json (mutable operational state) ──
+	if res, ok := m["result_json"].(map[string]any); ok && len(res) > 0 {
+		mergeMap(job.Payload, res)
+	} else if res, ok := m["result_json"].(string); ok && res != "" {
+		var parsed map[string]any
+		if err := json.Unmarshal([]byte(res), &parsed); err == nil {
+			mergeMap(job.Payload, parsed)
+		}
 	}
-	if s, ok := m["project_id"].(string); ok {
-		job.ProjectID = s
-	}
-	if s, ok := m["assigned_to"].(string); ok {
-		job.AssignedTo = s
-	}
-	if s, ok := m["worker_name"].(string); ok {
-		job.WorkerName = s
-	}
-	if s, ok := m["claimed_by"].(string); ok {
-		job.ClaimedBy = s
-	}
-	if s, ok := m["claimed_at"].(string); ok {
-		job.ClaimedAt = s
-	}
-	if s, ok := m["lease_id"].(string); ok {
-		job.LeaseID = s
-	}
-	if v, ok := m["lease_expiry"]; ok {
-		job.LeaseExpiry = v
-	}
-	if s, ok := m["output_video_id"].(string); ok {
-		job.OutputVideoID = s
-	}
-	if s, ok := m["drive_url"].(string); ok {
-		job.DriveURL = s
-	}
-	if s, ok := m["job_fingerprint"].(string); ok {
-		job.JobFingerprint = s
-	}
-	if s, ok := m["last_error"].(string); ok {
-		job.LastError = s
-	}
-	if s, ok := m["error_message"].(string); ok {
-		job.ErrorMessage = s
-	}
-	if s, ok := m["master_video_path"].(string); ok {
-		job.MasterVideoPath = s
-	}
-	if s, ok := m["artifact_id"].(string); ok {
-		job.ArtifactID = s
-	}
-	if s, ok := m["output_sha256"].(string); ok {
-		job.OutputSHA256 = s
-	}
-	if s, ok := m["upload_idempotency_key"].(string); ok {
-		job.IdempotencyKey = s
-	}
+
+	// ── Step 4: Populate struct fields from Payload/raw_json (will be overridden by columns below) ──
+	job.JobID = asString(m["job_id"])
+	job.Status = JobStatus(asString(m["status"]))
+	job.VideoName = asString(m["video_name"])
+	job.ProjectID = asString(m["project_id"])
+	job.AssignedTo = asString(m["assigned_to"])
+	job.WorkerName = asString(m["worker_name"])
+	job.ClaimedBy = asString(m["claimed_by"])
+	job.ClaimedAt = asString(m["claimed_at"])
+	job.LeaseID = asString(m["lease_id"])
+	job.LeaseExpiry = m["lease_expiry"]
+	job.OutputVideoID = asString(m["output_video_id"])
+	job.DriveURL = asString(m["drive_url"])
+	job.JobFingerprint = asString(m["job_fingerprint"])
+	job.LastError = asString(m["last_error"])
+	job.ErrorMessage = asString(m["error_message"])
+	job.MasterVideoPath = asString(m["master_video_path"])
+	job.ArtifactID = asString(m["artifact_id"])
+	job.OutputSHA256 = asString(m["output_sha256"])
+	job.IdempotencyKey = asString(m["upload_idempotency_key"])
+	job.LogsUpdatedAt = asString(m["logs_updated_at"])
+	job.LastUploadResult = asString(m["last_upload_result"])
+	job.LastUploadAttemptAt = asString(m["last_upload_attempt_at"])
+	job.LastDriveUploadResult = asString(m["last_drive_upload_result"])
+	job.RemoteStatus = asString(m["remote_status"])
+	job.SubmittedVia = asString(m["submitted_via"])
+	job.LastActivity = asString(m["last_activity"])
+	job.FailedBy = asString(m["failed_by"])
+
 	if s, ok := m["run_id"].(string); ok {
 		job.RunID = s
 	}
 	if s, ok := m["job_run_id"].(string); ok && s != "" {
 		job.RunID = s
 	}
-	if s, ok := m["logs_updated_at"].(string); ok {
-		job.LogsUpdatedAt = s
-	}
-	if i, ok := m["retry_count"].(int); ok {
-		job.RetryCount = i
-	} else if f, ok := m["retry_count"].(float64); ok {
-		job.RetryCount = int(f)
-	}
-	if i, ok := m["attempt"].(int); ok {
-		job.Attempt = i
-	} else if f, ok := m["attempt"].(float64); ok {
-		job.Attempt = int(f)
-	}
-	if i, ok := m["max_retries"].(int); ok {
-		job.MaxRetries = i
-	} else if f, ok := m["max_retries"].(float64); ok {
-		job.MaxRetries = int(f)
-	}
+
+	// Integer fields
+	job.RetryCount = asIntFromMap(m, "retry_count")
+	job.Attempt = asIntFromMap(m, "attempt")
+	job.MaxRetries = asIntFromMap(m, "max_retries")
+
+	// Boolean fields
 	if b, ok := m["video_uploaded"].(bool); ok {
 		job.VideoUploaded = b
+	} else if s, ok := m["video_uploaded"].(string); ok && s == "1" {
+		job.VideoUploaded = true
 	}
+
+	// Timestamp fields (leave as interface{} from m)
 	job.CreatedAt = m["created_at"]
 	job.UpdatedAt = m["updated_at"]
 	job.StartedAt = m["started_at"]
@@ -107,11 +104,13 @@ func MapToJob(m map[string]any) *Job {
 	job.LastErrorAt = m["last_error_at"]
 	job.FailedAt = m["failed_at"]
 
-	if m, ok := m["slot_data"].(map[string]any); ok {
-		job.SlotData = m
+	// Slot data
+	if slot, ok := m["slot_data"].(map[string]any); ok {
+		job.SlotData = slot
 	}
 
-	// Parse history
+	// History and logs are NOT read from the blob — they live in separate tables.
+	// If present in the map (from raw_json fallback), populate for read-only access.
 	if hist, ok := m["history"].([]any); ok {
 		job.History = make([]JobHistoryEntry, 0, len(hist))
 		for _, h := range hist {
@@ -132,7 +131,6 @@ func MapToJob(m map[string]any) *Job {
 		}
 	}
 
-	// Parse logs
 	if logs, ok := m["logs"].([]any); ok {
 		job.Logs = make([]JobLogEntry, 0, len(logs))
 		for _, l := range logs {
@@ -164,17 +162,25 @@ func MapToJob(m map[string]any) *Job {
 	return job
 }
 
-// PersistJob saves a job to SQLite (primary source of truth)
-// Exported for use by other queue modules
-func PersistJob(job *Job, dbStore *store.SQLiteStore) error {
-	// Build full job map for storage
-	m := make(map[string]any)
-	if job.Payload != nil {
-		for k, v := range job.Payload {
-			m[k] = v
-		}
+// mergeMap copies keys from src to dst (shallow).
+func mergeMap(dst, src map[string]any) {
+	for k, v := range src {
+		dst[k] = v
 	}
-	// Overwrite with struct fields
+}
+
+// PersistJob saves a job to SQLite using the new result_json path.
+// Delegates to PersistJobResult — no longer serializes history/logs into the blob.
+func PersistJob(job *Job, dbStore *store.SQLiteStore) error {
+	return PersistJobResult(job, dbStore)
+}
+
+// PersistJobResult stores the mutable operational state of a job in result_json.
+// History and logs are NOT included (they live in separate tables).
+// Operational columns are set from struct fields (authoritative).
+func PersistJobResult(job *Job, dbStore *store.SQLiteStore) error {
+	// Build result_json blob with mutable fields only (no history, no logs, no request payload)
+	m := make(map[string]any)
 	m["job_id"] = job.JobID
 	m["status"] = string(job.Status)
 	m["video_name"] = job.VideoName
@@ -209,24 +215,85 @@ func PersistJob(job *Job, dbStore *store.SQLiteStore) error {
 	m["job_run_id"] = job.RunID
 	m["logs_updated_at"] = job.LogsUpdatedAt
 	m["job_fingerprint"] = job.JobFingerprint
+	m["last_upload_result"] = job.LastUploadResult
+	m["last_upload_attempt_at"] = job.LastUploadAttemptAt
+	m["last_drive_upload_result"] = job.LastDriveUploadResult
+	m["remote_status"] = job.RemoteStatus
+	m["submitted_via"] = job.SubmittedVia
+	m["last_activity"] = job.LastActivity
 	m["slot_data"] = job.SlotData
+	m["last_error_at"] = job.LastErrorAt
 
-	// Marshal history
-	if len(job.History) > 0 {
-		m["history"] = job.History
+	// Also include any extra payload fields that don't have dedicated struct fields
+	if job.Payload != nil {
+		for k, v := range job.Payload {
+			if _, exists := m[k]; !exists {
+				m[k] = v
+			}
+		}
 	}
 
-	// Marshal logs
-	if len(job.Logs) > 0 {
-		m["logs"] = job.Logs
-	}
+	// NOTE: history and logs are intentionally NOT included here.
+	// They are stored in job_history and job_logs tables respectively.
 
 	rawJSON, err := json.Marshal(m)
 	if err != nil {
-		return fmt.Errorf("failed to marshal job: %w", err)
+		return fmt.Errorf("failed to marshal result_json: %w", err)
 	}
 
-	return dbStore.UpsertJob(job.JobID, rawJSON)
+	return dbStore.UpsertJobResult(job.JobID, rawJSON)
 }
 
+// PersistJobRequest stores the immutable request payload in request_json.
+// Only called once at job creation.
+func PersistJobRequest(jobID string, payload map[string]interface{}, dbStore *store.SQLiteStore) error {
+	m := make(map[string]any)
+	for k, v := range payload {
+		m[k] = v
+	}
+	// Remove mutable fields that don't belong in request
+	delete(m, "status")
+	delete(m, "assigned_to")
+	delete(m, "claimed_by")
+	delete(m, "claimed_at")
+	delete(m, "lease_id")
+	delete(m, "lease_expiry")
+	delete(m, "retry_count")
+	delete(m, "attempt")
+	delete(m, "last_error")
+	delete(m, "error_message")
+	delete(m, "history")
+	delete(m, "logs")
 
+	rawJSON, err := json.Marshal(m)
+	if err != nil {
+		return fmt.Errorf("failed to marshal request_json: %w", err)
+	}
+
+	return dbStore.SetJobRequest(jobID, rawJSON)
+}
+
+// ── Helpers ──
+
+func asString(v interface{}) string {
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return ""
+}
+
+func asIntFromMap(m map[string]any, key string) int {
+	switch v := m[key].(type) {
+	case int:
+		return v
+	case int64:
+		return int(v)
+	case float64:
+		return int(v)
+	case string:
+		var n int
+		_ = json.Unmarshal([]byte(v), &n)
+		return n
+	}
+	return 0
+}

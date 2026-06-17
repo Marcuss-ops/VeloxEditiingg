@@ -49,6 +49,11 @@ func EnqueueSceneVideoJob(ctx context.Context, q *queue.FileQueue, payloadMap ma
 		return nil, err
 	}
 
+	// PR4: Create delivery targets for the newly enqueued job
+	if dbStore := q.GetDBStore(); dbStore != nil {
+		CreateDeliveryTargetsForJob(dbStore, jobID, normalized)
+	}
+
 	return buildSceneVideoResponse(normalized), nil
 }
 

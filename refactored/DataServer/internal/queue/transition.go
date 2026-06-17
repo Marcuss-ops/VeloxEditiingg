@@ -58,7 +58,8 @@ func (ts *TransitionService) ClaimNextJob(ctx context.Context, workerID string, 
 	return MapToJob(m), nil
 }
 
-// CompleteJob marks a job as completed, with idempotent behavior.
+// CompleteJob marks a job as SUCCEEDED using CAS (compare-and-swap on revision).
+// Idempotent: returns nil if already succeeded.
 func (ts *TransitionService) CompleteJob(ctx context.Context, jobID string) error {
 	m, err := ts.dbStore.GetJob(ctx, jobID)
 	if err != nil {
@@ -66,92 +67,103 @@ func (ts *TransitionService) CompleteJob(ctx context.Context, jobID string) erro
 	}
 	job := MapToJob(m)
 
-	if job.Status == StatusCompleted {
+	normalized := normalizeJobStatus(string(job.Status))
+	if normalized == StatusSucceeded {
 		return nil // idempotent
 	}
-	if err := ts.Validate(job.Status, StatusCompleted); err != nil {
+
+	revision := getIntField(m, "revision")
+	if err := ts.Validate(job.Status, StatusSucceeded); err != nil {
 		return err
 	}
 
-	now := NowUnix()
 	nowISO := NowISO()
-	job.Status = StatusCompleted
-	job.CompletedAt = nowISO
-	job.UpdatedAt = now
-	job.LastError = ""
-	job.LastErrorAt = nil
-	job.ErrorMessage = ""
-	job.FailedAt = nil
-	job.FailedBy = ""
-	job.LeaseID = ""
-	job.LeaseExpiry = nil
-	job.Attempt = job.RetryCount
+	newRevision, err := ts.dbStore.TransitionJobStatus(ctx, jobID, string(normalized), string(StatusSucceeded), revision)
+	if err != nil {
+		return fmt.Errorf("CAS transition failed: %w", err)
+	}
 
-	job.History = append(job.History, JobHistoryEntry{
-		Status:    "COMPLETED",
-		Timestamp: nowISO,
-		WorkerID:  job.AssignedTo,
-		Message:   "Job completed successfully",
+	// Update supplementary fields (non-CAS, but after successful transition)
+	ts.dbStore.UpdateJobSupplementary(jobID, map[string]interface{}{
+		"completed_at":  nowISO,
+		"last_error":    "",
+		"error_message": "",
+		"failed_at":     nil,
+		"failed_by":     nil,
+		"lease_id":      "",
+		"lease_expiry":  nil,
+		"assigned_to":   job.AssignedTo,
 	})
 
-	return PersistJob(job, ts.dbStore)
+	ts.dbStore.LogJobEvent(jobID, "job_succeeded", map[string]interface{}{
+		"worker_id": job.AssignedTo,
+		"revision":  newRevision,
+	})
+
+	return nil
 }
 
-// FailJob marks a job as failed, optionally requeueing for retry.
+// FailJob marks a job as FAILED or RETRY_WAIT using CAS.
+// If requeue is true and retries remain, transitions to RETRY_WAIT → PENDING.
 func (ts *TransitionService) FailJob(ctx context.Context, jobID, errMsg, workerID string, requeue bool, maxRetries int) error {
 	m, err := ts.dbStore.GetJob(ctx, jobID)
 	if err != nil {
 		return fmt.Errorf("job not found: %s", jobID)
 	}
 	job := MapToJob(m)
+	normalized := normalizeJobStatus(string(job.Status))
 
-	now := NowUnix()
+	revision := getIntField(m, "revision")
 	nowISO := NowISO()
 
 	if requeue && job.RetryCount < maxRetries {
-		if err := ts.Validate(job.Status, StatusPending); err != nil {
+		if err := ts.Validate(job.Status, StatusRetryWait); err != nil {
 			return err
 		}
-		job.Status = StatusPending
-		job.LastError = errMsg
-		job.LastErrorAt = now
-		job.AssignedTo = ""
-		job.AssignedAt = nil
-		job.ClaimedBy = ""
-		job.ClaimedAt = ""
-		job.LeaseID = ""
-		job.LeaseExpiry = nil
-		job.ProcessingAt = nil
+		newRevision, err := ts.dbStore.TransitionJobStatus(ctx, jobID, string(normalized), string(StatusRetryWait), revision)
+		if err != nil {
+			return fmt.Errorf("CAS transition to RETRY_WAIT failed: %w", err)
+		}
 
-		job.History = append(job.History, JobHistoryEntry{
-			Status:    "PENDING",
-			Timestamp: nowISO,
-			WorkerID:  workerID,
-			Message:   fmt.Sprintf("Job requeued after failure: %s", errMsg),
+		ts.dbStore.UpdateJobSupplementary(jobID, map[string]interface{}{
+			"last_error":   errMsg,
+			"assigned_to":  "",
+			"claimed_by":   "",
+			"lease_id":     "",
+			"lease_expiry": nil,
+		})
+
+		ts.dbStore.LogJobEvent(jobID, "job_retry_wait", map[string]interface{}{
+			"worker_id": workerID,
+			"error":     errMsg,
+			"revision":  newRevision,
 		})
 	} else {
-		if err := ts.Validate(job.Status, StatusError); err != nil {
+		if err := ts.Validate(job.Status, StatusFailed); err != nil {
 			return err
 		}
-		job.Status = StatusError
-		job.ErrorMessage = errMsg
-		job.LastError = errMsg
-		job.LastErrorAt = now
-		job.FailedAt = nowISO
-		job.FailedBy = workerID
-		job.LeaseID = ""
-		job.LeaseExpiry = nil
+		newRevision, err := ts.dbStore.TransitionJobStatus(ctx, jobID, string(normalized), string(StatusFailed), revision)
+		if err != nil {
+			return fmt.Errorf("CAS transition to FAILED failed: %w", err)
+		}
 
-		job.History = append(job.History, JobHistoryEntry{
-			Status:    "ERROR",
-			Timestamp: nowISO,
-			WorkerID:  workerID,
-			Message:   fmt.Sprintf("Job failed: %s", errMsg),
+		ts.dbStore.UpdateJobSupplementary(jobID, map[string]interface{}{
+			"error_message": errMsg,
+			"last_error":    errMsg,
+			"failed_at":     nowISO,
+			"failed_by":     workerID,
+			"lease_id":      "",
+			"lease_expiry":  nil,
+		})
+
+		ts.dbStore.LogJobEvent(jobID, "job_failed", map[string]interface{}{
+			"worker_id": workerID,
+			"error":     errMsg,
+			"revision":  newRevision,
 		})
 	}
 
-	job.UpdatedAt = now
-	return PersistJob(job, ts.dbStore)
+	return nil
 }
 
 // RequeueZombieJobs finds processing jobs with expired leases and requeues them.
@@ -606,4 +618,25 @@ func (ts *TransitionService) LeaseJob(ctx context.Context, jobID, workerID strin
 	})
 
 	return PersistJob(job, ts.dbStore)
+}
+
+// getIntField extracts an integer field from a job map, returning 0 if not found.
+func getIntField(m map[string]interface{}, key string) int {
+	if m == nil {
+		return 0
+	}
+	v, ok := m[key]
+	if !ok || v == nil {
+		return 0
+	}
+	switch n := v.(type) {
+	case int:
+		return n
+	case int64:
+		return int(n)
+	case float64:
+		return int(n)
+	default:
+		return 0
+	}
 }

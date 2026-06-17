@@ -41,13 +41,16 @@ func (s *SQLiteStore) ReplaceJobs(rawJobs map[string][]byte) error {
 		}
 		completedAt := toISO(m["completed_at"])
 
+		rawStr := string(raw)
 		if _, err := tx.Exec(
 			`INSERT INTO jobs (
 				job_id, status, video_name, project_id, created_at, updated_at,
-				assigned_to, retry_count, last_error, completed_at, raw_json, migrated_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				assigned_to, retry_count, last_error, completed_at,
+				raw_json, request_json, result_json, migrated_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			jobID, status, videoName, projectID, createdAt, updatedAt,
-			assignedTo, retryCount, lastError, completedAt, string(raw), now,
+			assignedTo, retryCount, lastError, completedAt,
+			rawStr, rawStr, rawStr, now,
 		); err != nil {
 			return err
 		}
@@ -98,6 +101,8 @@ func (s *SQLiteStore) ReplaceJobs(rawJobs map[string][]byte) error {
 	return tx.Commit()
 }
 
+// UpsertJob inserts or updates a job from its raw_json blob (legacy path).
+// Also populates request_json and result_json from raw_json during migration.
 func (s *SQLiteStore) UpsertJob(jobID string, rawJSON []byte) error {
 	var m map[string]any
 	if err := json.Unmarshal(rawJSON, &m); err != nil {
@@ -118,11 +123,13 @@ func (s *SQLiteStore) UpsertJob(jobID string, rawJSON []byte) error {
 	}
 	completedAt := toISO(m["completed_at"])
 
+	rawStr := string(rawJSON)
 	_, err := s.db.Exec(
 		`INSERT INTO jobs (
 			job_id, status, video_name, project_id, created_at, updated_at,
-			assigned_to, retry_count, last_error, completed_at, raw_json, migrated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			assigned_to, retry_count, last_error, completed_at,
+			raw_json, request_json, result_json, migrated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(job_id) DO UPDATE SET
 			status=excluded.status,
 			video_name=excluded.video_name,
@@ -135,7 +142,65 @@ func (s *SQLiteStore) UpsertJob(jobID string, rawJSON []byte) error {
 			raw_json=excluded.raw_json,
 			migrated_at=excluded.migrated_at`,
 		jobID, status, videoName, projectID, createdAt, updatedAt,
-		assignedTo, retryCount, lastError, completedAt, string(rawJSON), now,
+		assignedTo, retryCount, lastError, completedAt,
+		rawStr, rawStr, rawStr, now,
+	)
+	return err
+}
+
+// UpsertJobResult updates the mutable operational columns and result_json blob.
+// Does NOT touch request_json (immutable) or raw_json (legacy).
+func (s *SQLiteStore) UpsertJobResult(jobID string, resultJSON []byte) error {
+	var m map[string]any
+	if err := json.Unmarshal(resultJSON, &m); err != nil {
+		return err
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	status := asString(m["status"])
+	videoName := asString(m["video_name"])
+	projectID := asString(m["project_id"])
+	createdAt := toISO(m["created_at"])
+	updatedAt := toISO(m["updated_at"])
+	assignedTo := asString(m["assigned_to"])
+	retryCount := asInt(m["retry_count"])
+	lastError := asString(m["last_error"])
+	if lastError == "" {
+		lastError = asString(m["error_message"])
+	}
+	completedAt := toISO(m["completed_at"])
+
+	_, err := s.db.Exec(
+		`INSERT INTO jobs (
+			job_id, status, video_name, project_id, created_at, updated_at,
+			assigned_to, retry_count, last_error, completed_at,
+			result_json, raw_json, migrated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(job_id) DO UPDATE SET
+			status=excluded.status,
+			video_name=excluded.video_name,
+			project_id=excluded.project_id,
+			updated_at=excluded.updated_at,
+			assigned_to=excluded.assigned_to,
+			retry_count=excluded.retry_count,
+			last_error=excluded.last_error,
+			completed_at=excluded.completed_at,
+			result_json=excluded.result_json,
+			raw_json=excluded.raw_json,
+			migrated_at=excluded.migrated_at`,
+		jobID, status, videoName, projectID, createdAt, updatedAt,
+		assignedTo, retryCount, lastError, completedAt,
+		string(resultJSON), string(resultJSON), now,
+	)
+	return err
+}
+
+// SetJobRequest stores the immutable request payload in request_json.
+// Only used at job creation — never updates after initial write.
+func (s *SQLiteStore) SetJobRequest(jobID string, requestJSON []byte) error {
+	_, err := s.db.Exec(
+		`UPDATE jobs SET request_json = ? WHERE job_id = ?`,
+		string(requestJSON), jobID,
 	)
 	return err
 }
