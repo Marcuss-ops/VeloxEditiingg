@@ -7,11 +7,26 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"sort"
+	"sync" (fix: add missing jobs columns migration (023), fix CompleteJob CAS, patch UpdateJobFields whitelist)
 	"time"
 
 	"github.com/google/uuid"
 	"velox-server/internal/store"
 )
+
+// legacyKeyWarnLog is a sync.Map keyed by jobID + key to dedupe the WARN
+// output. Upload handlers retry in tight loops so without this dedupe a
+// single job's legacy writes could log dozens of lines. Operators see at
+// most one WARN per (jobID, key) for the life of the process.
+var legacyKeyWarnLog sync.Map
+
+func logLegacyKeyOnce(jobID, key string) {
+	ck := jobID + "|" + key
+	if _, seen := legacyKeyWarnLog.LoadOrStore(ck, struct{}{}); !seen {
+		log.Printf("[QUEUE] WARN: UpdateJobFields legacy key=%q job=%s — migrate to artifacts/job_deliveries", key, jobID)
+	}
+}
 
 // TransitionService validates and executes job status transitions.
 // All status changes flow through this service to ensure consistency.
@@ -179,7 +194,11 @@ func (ts *TransitionService) CompleteJob(ctx context.Context, jobID string) erro
 	}
 
 	nowISO := NowISO()
-	newRevision, err := ts.dbStore.TransitionJobStatus(ctx, jobID, string(normalized), string(StatusSucceeded), revision)
+	// Pass the actual DB status (not the normalized one) for the CAS check,
+	// so the UPDATE's WHERE status=? matches the stored value. PersistJob
+	// and UpsertJobResult store the raw status; UpdateJobFields normalizes
+	// before persisting, so job.Status always reflects what is in the row.
+	newRevision, err := ts.dbStore.TransitionJobStatus(ctx, jobID, string(job.Status), string(StatusSucceeded), revision)
 	if err != nil {
 		return fmt.Errorf("CAS transition failed: %w", err)
 	}
@@ -522,9 +541,104 @@ func (ts *TransitionService) SubmitJob(ctx context.Context, jobID string, payloa
 	return job, nil
 }
 
-// UpdateJobFields reads the job from SQLite, applies field updates via merge logic,
-// validates any status transition, and persists back.
+// UpdateJobFieldsStrictWhitelistKey is the set of canonical keys that may be
+// merged into the Job via UpdateJobFields. Anything outside this set is a
+// programmer error and is rejected with ErrJobFieldNotWhitelisted so typo'd
+// callers cannot silently pollute job.Payload.
+//
+// The list is split in two halves for readability:
+//   * CURRENT — canonical columns moving forward
+//   * LEGACY  — flat fields marked DEPRECATED in the Job struct; accepted
+//               for one migration cycle. Calls log a warning so we can
+//               detect them when they're finally cut over. New features
+//               must NEVER rely on LEGACY entries; pin them on the new
+//               surface (artifacts / job_deliveries).
+var UpdateJobFieldsStrictWhitelistKey = map[string]struct{}{
+	// CURRENT canonical fields
+	"status":                {},
+	"completed_at":          {},
+	"completed_by":          {},
+	"assigned_to":           {},
+	"attempt":               {},
+	"lease_id":              {},
+	"lease_expiry":          {},
+	"job_run_id":            {},
+	"result_path_worker":    {},
+	"error_message":         {},
+	"last_error":            {},
+	"failed_at":             {},
+	"failed_by":             {},
+	"started_at":            {},
+	"claimed_by":            {},
+	"claimed_at":            {},
+	"worker_name":           {},
+	"max_retries":           {},
+	"youtube_upload_status": {},
+	"drive_upload_status":   {},
+	"worker_id":             {},
+	"result_path":           {},
+	"video_sha256":          {},
+	"upload_info":           {},
+
+	// LEGACY — still written by upload handlers / legacy services;
+	// each must be migrated to the canonical source (artifacts /
+	// job_deliveries + JobViewAssembler). Logged at runtime via TS so
+	// we can grep for remaining callers before removal.
+	"master_video_path":      {},
+	"drive_url":              {},
+	"drive_folder_id":        {},
+	"youtube_url":            {},
+	"video_uploaded":         {},
+	"artifact_id":            {},
+	"output_sha256":          {},
+	"upload_idempotency_key": {},
+}
+
+// UpdateJobFieldsLegacyKeys are accepted but logged at runtime.
+var UpdateJobFieldsLegacyKeys = map[string]struct{}{
+	"master_video_path":      {},
+	"drive_url":              {},
+	"drive_folder_id":        {},
+	"youtube_url":            {},
+	"video_uploaded":         {},
+	"artifact_id":            {},
+	"output_sha256":          {},
+	"upload_idempotency_key": {},
+}
+
+// ErrJobFieldNotWhitelisted is returned by UpdateJobFields for keys outside
+// the canonical whitelist. Callers should treat this as a programmer error
+// and migrate to the new architecture.
+var ErrJobFieldNotWhitelisted = errors.New("queue: job field not in UpdateJobFields whitelist")
+
+// UpdateJobFields reads the job from SQLite, applies field updates via a
+// STRICT WHITELIST (no default catch-all), validates any status transition,
+// and persists back. Unknown keys return ErrJobFieldNotWhitelisted which
+// fails fast at the merge layer instead of silently polluting job.Payload.
+//
+// Legacy flat fields (master_video_path / drive_url / video_uploaded /
+// artifact_id / output_sha256 / upload_idempotency_key) are still accepted
+// for the migration window — each write logs a warning so we can detect
+// remaining callers. Once the upload handlers and services/jobs paths are
+// rewired to the JobViewAssembler surface these keys will be promoted to
+// the deny list.
 func (ts *TransitionService) UpdateJobFields(ctx context.Context, jobID string, fields map[string]interface{}) error {
+	if len(fields) == 0 {
+		return nil
+	}
+	for key := range fields {
+		if _, allowed := UpdateJobFieldsStrictWhitelistKey[key]; !allowed {
+			return fmt.Errorf("%w: %q (canonical: %v; legacy allowed: %v)",
+				ErrJobFieldNotWhitelisted, key, whitelistKeysSorted(), whitelistLegacyKeysSorted())
+		}
+		if _, isLegacy := UpdateJobFieldsLegacyKeys[key]; isLegacy {
+			// One-shot WARN per (jobID, key) so we can see who's still
+			// depending on the LEGACY surface, but tight retry loops won't
+			// flood the log.
+			logLegacyKeyOnce(jobID, key)
+		}
+	}
+
 	m, err := ts.dbStore.GetJob(ctx, jobID)
 	if err != nil {
 		return fmt.Errorf("job not found: %s", jobID)
@@ -535,14 +649,13 @@ func (ts *TransitionService) UpdateJobFields(ctx context.Context, jobID string, 
 	nowISO := NowISO()
 	job.UpdatedAt = now
 
-	// Apply fields dynamically (same merge logic as before)
 	for key, value := range fields {
 		switch key {
 		case "status":
 			if s, ok := value.(string); ok {
 				next := normalizeJobStatus(s)
 				if err := ts.Validate(job.Status, next); err != nil {
-					continue
+					return fmt.Errorf("transition rejected: %w", err)
 				}
 				job.Status = next
 			}
@@ -551,29 +664,6 @@ func (ts *TransitionService) UpdateJobFields(ctx context.Context, jobID string, 
 		case "completed_by":
 			if s, ok := value.(string); ok {
 				job.AssignedTo = s
-			}
-		case "video_uploaded":
-			if b, ok := value.(bool); ok {
-				job.VideoUploaded = b
-			}
-		case "master_video_path":
-			if s, ok := value.(string); ok {
-				job.MasterVideoPath = s
-			}
-		case "drive_url":
-			if s, ok := value.(string); ok {
-				job.DriveURL = s
-			}
-		case "result_path_worker":
-			if s, ok := value.(string); ok {
-				if job.Payload == nil {
-					job.Payload = make(map[string]interface{})
-				}
-				job.Payload["result_path_worker"] = s
-			}
-		case "job_run_id":
-			if s, ok := value.(string); ok {
-				job.RunID = s
 			}
 		case "assigned_to":
 			if s, ok := value.(string); ok {
@@ -594,6 +684,125 @@ func (ts *TransitionService) UpdateJobFields(ctx context.Context, jobID string, 
 			}
 		case "lease_expiry":
 			job.LeaseExpiry = value
+		case "job_run_id":
+			if s, ok := value.(string); ok {
+				job.RunID = s
+			}
+		case "result_path_worker":
+			if s, ok := value.(string); ok {
+				if job.Payload == nil {
+					job.Payload = make(map[string]interface{})
+				}
+				job.Payload["result_path_worker"] = s
+			}
+		case "error_message":
+			if s, ok := value.(string); ok {
+				job.ErrorMessage = s
+			}
+		case "last_error":
+			if s, ok := value.(string); ok {
+				job.LastError = s
+			}
+		case "failed_at":
+			job.FailedAt = value
+		case "failed_by":
+			if s, ok := value.(string); ok {
+				job.FailedBy = s
+			}
+		case "started_at":
+			job.StartedAt = value
+		case "claimed_by":
+			if s, ok := value.(string); ok {
+				job.ClaimedBy = s
+			}
+		case "claimed_at":
+			if s, ok := value.(string); ok {
+				job.ClaimedAt = s
+			}
+		case "worker_name":
+			if s, ok := value.(string); ok {
+				job.WorkerName = s
+			}
+		case "max_retries":
+			switch v := value.(type) {
+			case int:
+				job.MaxRetries = v
+			case int64:
+				job.MaxRetries = int(v)
+			case float64:
+				job.MaxRetries = int(v)
+			}
+		case "worker_id":
+		if s, ok := value.(string); ok {
+			if job.Payload == nil {
+				job.Payload = make(map[string]interface{})
+			}
+			job.Payload["worker_id"] = s
+		}
+	case "result_path":
+		if s, ok := value.(string); ok {
+			if job.Payload == nil {
+				job.Payload = make(map[string]interface{})
+			}
+			job.Payload["result_path"] = s
+		}
+	case "video_sha256":
+		if s, ok := value.(string); ok {
+			if job.Payload == nil {
+				job.Payload = make(map[string]interface{})
+			}
+			job.Payload["video_sha256"] = s
+		}
+	case "upload_info":
+		if job.Payload == nil {
+			job.Payload = make(map[string]interface{})
+		}
+		job.Payload["upload_info"] = value
+	case "youtube_upload_status":
+		if s, ok := value.(string); ok {
+			if job.Payload == nil {
+				job.Payload = make(map[string]interface{})
+			}
+			job.Payload["youtube_upload_status"] = s
+		}
+	case "drive_upload_status":
+		if s, ok := value.(string); ok {
+			if job.Payload == nil {
+				job.Payload = make(map[string]interface{})
+			}
+			job.Payload["drive_upload_status"] = s
+		}
+	case "youtube_url":
+		if s, ok := value.(string); ok {
+			if job.Payload == nil {
+				job.Payload = make(map[string]interface{})
+			}
+			job.Payload["youtube_url"] = s
+		}
+	case "drive_folder_id":
+		if s, ok := value.(string); ok {
+			if job.Payload == nil {
+				job.Payload = make(map[string]interface{})
+			}
+			job.Payload["drive_folder_id"] = s
+		}
+
+	// ── LEGACY column passthrough — these still exist on the jobs row
+	// but per the architecture they belong on artifacts / job_deliveries.
+	// Continuing to write them lets existing upload handlers run while
+	// the legacy readers (store_io.go) keep layering them into the Job.
+	case "master_video_path":
+			if s, ok := value.(string); ok {
+				job.MasterVideoPath = s
+			}
+		case "drive_url":
+			if s, ok := value.(string); ok {
+				job.DriveURL = s
+			}
+		case "video_uploaded":
+			if b, ok := value.(bool); ok {
+				job.VideoUploaded = b
+			}
 		case "artifact_id":
 			if s, ok := value.(string); ok {
 				job.ArtifactID = s
@@ -606,30 +815,50 @@ func (ts *TransitionService) UpdateJobFields(ctx context.Context, jobID string, 
 			if s, ok := value.(string); ok {
 				job.IdempotencyKey = s
 			}
-		default:
-			if job.Payload == nil {
-				job.Payload = make(map[string]interface{})
-			}
-			job.Payload[key] = value
 		}
 	}
 
-	// Ensure history entry for status change
-	if newStatus, ok := fields["status"].(string); ok && newStatus == "COMPLETED" {
-		job.LastError = ""
-		job.LastErrorAt = nil
-		job.ErrorMessage = ""
-		job.FailedAt = nil
-		job.FailedBy = ""
-		job.History = append(job.History, JobHistoryEntry{
-			Status:    "COMPLETED",
-			Timestamp: nowISO,
-			WorkerID:  job.AssignedTo,
-			Message:   "Job completed",
-		})
+	// Ensure history entry for status change. Match both raw "COMPLETED"
+	// and normalized "SUCCEEDED" since callers pass either.
+	if newStatusRaw, ok := fields["status"].(string); ok {
+		if normalizeJobStatus(newStatusRaw) == StatusSucceeded {
+			job.LastError = ""
+			job.LastErrorAt = nil
+			job.ErrorMessage = ""
+			job.FailedAt = nil
+			job.FailedBy = ""
+			job.History = append(job.History, JobHistoryEntry{
+				Status:    string(job.Status),
+				Timestamp: nowISO,
+				WorkerID:  job.AssignedTo,
+				Message:   "Job completed",
+			})
+		}
 	}
 
 	return PersistJob(job, ts.dbStore)
+}
+
+// whitelistKeysSorted returns the whitelist keys in canonical (sorted) order
+// so error messages are stable across runs.
+func whitelistKeysSorted() []string {
+	keys := make([]string, 0, len(UpdateJobFieldsStrictWhitelistKey))
+	for k := range UpdateJobFieldsStrictWhitelistKey {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// whitelistLegacyKeysSorted returns the legacy-flagged keys (sorted) for
+// error message stability.
+func whitelistLegacyKeysSorted() []string {
+	keys := make([]string, 0, len(UpdateJobFieldsLegacyKeys))
+	for k := range UpdateJobFieldsLegacyKeys {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // UpdateJobLogs persists worker log entries directly to the job_logs table.

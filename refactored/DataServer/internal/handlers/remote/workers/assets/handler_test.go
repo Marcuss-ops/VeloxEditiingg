@@ -20,8 +20,8 @@ func TestServeAssetRequiresWorkerAuthentication(t *testing.T) {
 	assetID := strings.Repeat("a", 64)
 	writeTestAsset(t, tempDir, assetID, []byte("voiceover-bytes"))
 
-	tokenMgr := workersreg.NewTokenManager()
-	handler := NewHandler(&config.Config{DataDir: tempDir}, tokenMgr)
+	tokenMgr := workersreg.NewTokenManager(nil)
+	handler := NewHandler(&config.Config{Runtime: config.RuntimeConfig{DataDir: tempDir}}, tokenMgr)
 	r := gin.New()
 	r.GET("/api/v1/worker-assets/:asset_id", handler.ServeAsset())
 
@@ -40,10 +40,10 @@ func TestServeAssetSupportsContentLengthTypeAndRange(t *testing.T) {
 	assetBytes := []byte("0123456789abcdef")
 	writeTestAsset(t, tempDir, assetID, assetBytes)
 
-	tokenMgr := workersreg.NewTokenManager()
+	tokenMgr := workersreg.NewTokenManager(nil)
 	token := tokenMgr.GenerateToken("worker-1")
 
-	handler := NewHandler(&config.Config{DataDir: tempDir}, tokenMgr)
+	handler := NewHandler(&config.Config{Runtime: config.RuntimeConfig{DataDir: tempDir}}, tokenMgr)
 	r := gin.New()
 	r.GET("/api/v1/worker-assets/:asset_id", handler.ServeAsset())
 
@@ -83,9 +83,9 @@ func TestServeAssetSupportsContentLengthTypeAndRange(t *testing.T) {
 func TestServeAssetRejectsTraversalAndUnknownAssets(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	tempDir := t.TempDir()
-	tokenMgr := workersreg.NewTokenManager()
+	tokenMgr := workersreg.NewTokenManager(nil)
 	token := tokenMgr.GenerateToken("worker-1")
-	handler := NewHandler(&config.Config{DataDir: tempDir}, tokenMgr)
+	handler := NewHandler(&config.Config{Runtime: config.RuntimeConfig{DataDir: tempDir}}, tokenMgr)
 
 	w := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(w)

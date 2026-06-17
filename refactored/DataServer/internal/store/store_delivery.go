@@ -179,13 +179,18 @@ func (s *SQLiteStore) InsertDeliveryAttempt(attempt *DeliveryAttempt) (int64, er
 	return result.LastInsertId()
 }
 
-// UpdateDeliveryAttempt updates a delivery attempt with completion data.
-func (s *SQLiteStore) UpdateDeliveryAttempt(id int, status, resultJSON, errorMsg string) error {
+// UpdateDeliveryAttemptByLegacyTargetID updates a delivery attempt via the
+// legacy integer delivery_target_id. Renamed from `UpdateDeliveryAttempt` so
+// the canonical `(ctx, string deliveryID, …)` method on store_deliveries.go
+// can coexist — callers (video_drive.go, video_youtube.go) updated accordingly.
+// This path will be retired once the legacy auto-upload code is rewired
+// through internal/deliveries.DeliveryRunner.
+func (s *SQLiteStore) UpdateDeliveryAttemptByLegacyTargetID(id int, status, resultJSON, errorMsg string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, err := s.db.Exec(
 		`UPDATE delivery_attempts
 		 SET status = ?, result = ?, completed_at = ?, error_message = ?
-		 WHERE id = ?`,
+		 WHERE delivery_target_id = ?`,
 		status, resultJSON, now, toNullString(errorMsg), id,
 	)
 	return err

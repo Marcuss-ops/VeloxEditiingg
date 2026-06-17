@@ -9,6 +9,8 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -18,6 +20,8 @@ import (
 	"velox-server/internal/audit"
 	"velox-server/internal/config"
 	"velox-server/internal/grpcserver"
+	workerhandlers "velox-server/internal/handlers/remote/workers"
+	"velox-server/internal/handlers/remote/workers/lifecycle" (fix: add missing jobs columns migration (023), fix CompleteJob CAS, patch UpdateJobFields whitelist)
 	"velox-server/internal/handlers/server/api"
 	"velox-server/internal/handlers/server/pipeline"
 	"velox-server/internal/jobs/enqueue"
@@ -45,10 +49,11 @@ type serverDeps struct {
 	reg                 *workersreg.Registry
 	workersRepo         store.WorkersRepository
 	sqliteStore         *store.SQLiteStore
-	workerUpdateHandler *workersapi.WorkerUpdateHandler
+	workerUpdateHandler *workerhandlers.WorkerUpdateHandler
 	workerLifecycle     *lifecycle.Handler
 	ansibleModule       *ansible.Module
 	youtubeModule       *youtube.Module
+	driveModule         *drive.Module
 	orchestrator        *queue.Orchestrator
 }
 
@@ -117,7 +122,7 @@ func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
 	cmdMgr := workersreg.NewCommandManager(sqliteStore)
 	updateMgr := workersreg.NewUpdateManager()
 	tokenMgr := workersreg.NewTokenManager(sqliteStore)
-	workerUpdateHandler := workersapi.NewWorkerUpdateHandler(cfg, reg, cmdMgr, updateMgr, tokenMgr, cfg.Runtime.DataDir)
+	workerUpdateHandler := workerhandlers.NewWorkerUpdateHandler(cfg, reg, cmdMgr, updateMgr, tokenMgr, cfg.Runtime.DataDir)
 	workerLifecycle := lifecycle.NewHandler(cfg, reg, sqliteStore, cfg.Runtime.DataDir)
 
 	// Create orchestrator for multi-step job pipelines (PR5b: with worker registry for heartbeat recovery)
@@ -169,16 +174,18 @@ func runServer(cfg *config.Config) error {
 	ytMod := youtube.New(cfg, deps.paths.dataDir, deps.sqliteStore)
 	deps.youtubeModule = ytMod
 	registry.Register(ytMod)
-	driveMod := drive.New(cfg)
+	driveMod := drive.New(cfg, deps.sqliteStore)
 	deps.driveModule = driveMod
-	registry.Register(driveMod)
+	if driveMod != nil {
+		registry.Register(driveMod)
+	}
 	maxVoiceoverBytes := int64(256 * 1024 * 1024)
 	if raw := strings.TrimSpace(os.Getenv("VELOX_MAX_VOICEOVER_BYTES")); raw != "" {
 		if parsed, err := strconv.ParseInt(raw, 10, 64); err == nil && parsed > 0 {
 			maxVoiceoverBytes = parsed
 		}
 	}
-	voiceoverBridge := voiceoverassets.NewService(cfg.DataDir, []string{cfg.DataDir}, maxVoiceoverBytes, driveMod.Service())
+	voiceoverBridge := voiceoverassets.NewService(cfg.Runtime.DataDir, []string{cfg.Runtime.DataDir}, maxVoiceoverBytes, driveMod.Service())
 	enqueue.SetVoiceoverAssetService(voiceoverBridge)
 	ansibleMod := ansible.New(cfg, deps.paths.dataDir, auth, deps.sqliteStore)
 	deps.ansibleModule = ansibleMod

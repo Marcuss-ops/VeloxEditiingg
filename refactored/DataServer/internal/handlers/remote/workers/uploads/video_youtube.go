@@ -196,7 +196,7 @@ func maybeAutoUploadYouTube(fileQ interface{ UpdateJobFields(ctx context.Context
 				attemptStatus = "failed"
 				errMsg = uploadErr.Error()
 			}
-			_ = dbStore.UpdateDeliveryAttempt(int(attemptID), attemptStatus, resultJSON, errMsg)
+			_ = dbStore.UpdateDeliveryAttemptByLegacyTargetID(int(attemptID), attemptStatus, resultJSON, errMsg)
 		}
 
 		// DEPRECATED: Update job fields for backward compat
@@ -226,6 +226,6 @@ func failDelivery(dbStore *store.SQLiteStore, targetID int, attemptID int64, err
 	})
 	_ = dbStore.UpdateDeliveryTargetResult(targetID, status, result)
 	if attemptID > 0 {
-		_ = dbStore.UpdateDeliveryAttempt(int(attemptID), "failed", result, errMsg)
+		_ = dbStore.UpdateDeliveryAttemptByLegacyTargetID(int(attemptID), "failed", result, errMsg)
 	}
 }

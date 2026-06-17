@@ -117,7 +117,7 @@ func TestUploadCompletedVideo_AutoUploadsToYouTubeAndDrive(t *testing.T) {
 		Runtime: config.RuntimeConfig{
 			DataDir:   tempDir,
 			VideosDir: filepath.Join(tempDir, "completed_videos"),
-		},
+		}, (fix: add missing jobs columns migration (023), fix CompleteJob CAS, patch UpdateJobFields whitelist)
 	}
 
 	jobID := "upload-e2e-1"
@@ -138,6 +138,20 @@ func TestUploadCompletedVideo_AutoUploadsToYouTubeAndDrive(t *testing.T) {
 
 	youtubeSvc := &fakeYouTubeAutoUploader{}
 	driveSvc := &fakeDriveAutoUploader{}
+
+	// Pre-create delivery targets for YouTube and Drive (PR4: required for auto-upload)
+	db.InsertDeliveryTarget(&store.DeliveryTarget{
+		JobID:      jobID,
+		TargetType: "youtube",
+		Status:     "pending",
+		Config:     `{"group_name":"Amish","language":"it","title":"Upload E2E","description":"Upload E2E script"}`,
+	})
+	db.InsertDeliveryTarget(&store.DeliveryTarget{
+		JobID:      jobID,
+		TargetType: "drive",
+		Status:     "pending",
+		Config:     `{"folder_id":"folder1234567890A","video_name":"Upload E2E"}`,
+	})
 
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
@@ -292,7 +306,12 @@ func TestMaybeAutoUploadDrive_FallsBackToJobLanguage(t *testing.T) {
 	}
 
 	driveSvc := &fakeDriveAutoUploader{}
-	maybeAutoUploadDrive(q, driveSvc, tempDir, jobID, map[string]interface{}{}, videoPath, nil)
+	targets := []store.DeliveryTarget{{
+		TargetType: "drive",
+		Status:     "pending",
+		Config:     `{"folder_id":"drive-folder-it"}`,
+	}}
+	maybeAutoUploadDrive(q, driveSvc, tempDir, jobID, map[string]interface{}{}, videoPath, targets) (fix: add missing jobs columns migration (023), fix CompleteJob CAS, patch UpdateJobFields whitelist)
 
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
