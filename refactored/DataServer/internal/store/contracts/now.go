@@ -14,15 +14,21 @@ func nanoNow() int64 {
 	return realNano()
 }
 
-func init() {
-	// Bind once to avoid per-call indirection cost.
-	realNano = realTimeNow
-}
+// realNano is the indirection variable; set in time_now.go by the first init to run.
+var realNano func() int64
 
 // realTimeNow is the actual time source; overridden in tests would require build tags.
 var realTimeNow = func() int64 {
-	// Implemented in time_now.go (kept separate to avoid a `time` import in this file).
+	// Overridden in time_now.go by a later init to avoid a `time` import in this file.
 	return 0
+}
+
+func init() {
+	// Bind once to avoid per-call indirection cost.
+	// If time_now.go's init already ran (file order undefined), realNano keeps its value.
+	if realNano == nil {
+		realNano = realTimeNow
+	}
 }
 
 // randSuffix returns a 12-char hex nonce for test isolation.

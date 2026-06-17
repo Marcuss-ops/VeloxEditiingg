@@ -21,12 +21,12 @@ func NewSQLiteArtifactRepositoryFactory(t *testing.T) (store.ArtifactRepository,
 	t.Helper()
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "contract_artifacts.db")
-	store, err := store.NewSQLiteStore(dbPath)
+	sqliteStore, err := store.NewSQLiteStore(dbPath)
 	if err != nil {
 		t.Fatalf("NewSQLiteStore: %v", err)
 	}
-	cleanup := func() { _ = store.Close() }
-	return store.NewSQLiteArtifactRepository(store), cleanup
+	cleanup := func() { _ = sqliteStore.Close() }
+	return store.NewSQLiteArtifactRepository(sqliteStore), cleanup
 }
 
 // ArtifactRepositoryContract runs the cross-backend test suite for artifacts.
@@ -135,18 +135,6 @@ func ArtifactRepositoryContract(t *testing.T, factory ArtifactRepositoryFactory)
 // TestArtifactRepositoryContract_SQLite drives the suite against the SQLite backend.
 func TestArtifactRepositoryContract_SQLite(t *testing.T) {
 	ArtifactRepositoryContract(t, NewSQLiteArtifactRepositoryFactory)
-}
-
-// randSuffix avoids name collisions in multi-test runs without pulling in a UUID dep.
-func randSuffix() string {
-	const charset = "abcdefghijklmnopqrstuvwxyz0123456789"
-	b := make([]byte, 6)
-	// math/rand is fine here — this is a test helper, never a secret.
-	//nolint:gosec // test-only random
-	for i := range b {
-		b[i] = charset[int(timeNowUnixNano())%len(charset)]
-	}
-	return string(b)
 }
 
 // timeNowUnixNano is a tiny indirection to keep the import surface lean.

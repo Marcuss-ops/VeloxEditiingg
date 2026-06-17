@@ -117,6 +117,51 @@ func (ts *TransitionService) ClaimNextJob(ctx context.Context, workerID string, 
 // CompleteJob marks a job as SUCCEEDED using CAS (compare-and-swap on revision).
 // Idempotent: returns nil if already succeeded.
 func (ts *TransitionService) CompleteJob(ctx context.Context, jobID string) error {
+	// Spec §5 path: delegate read + CAS to narrow JobRepository.
+	if ts.jobRepo != nil {
+		sj, err := ts.jobRepo.GetJob(ctx, jobID)
+		if err != nil {
+			return fmt.Errorf("job not found: %s", jobID)
+		}
+
+		normalized := normalizeJobStatus(string(sj.Status))
+		if normalized == StatusSucceeded {
+			return nil // idempotent
+		}
+
+		if err := ts.Validate(JobStatus(normalized), StatusSucceeded); err != nil {
+			return err
+		}
+
+		nowISO := NowISO()
+		if err := ts.jobRepo.Transition(ctx, store.TransitionParams{
+			JobID:          jobID,
+			ExpectedStatus: sj.Status,
+			NewStatus:      store.JobStatusSucceeded,
+			Revision:       sj.Revision,
+		}); err != nil {
+			return fmt.Errorf("CAS transition failed: %w", err)
+		}
+
+		// Side effects (not in repo contract)
+		ts.dbStore.UpdateJobSupplementary(jobID, map[string]interface{}{
+			"completed_at":  nowISO,
+			"last_error":    "",
+			"error_message": "",
+			"failed_at":     nil,
+			"failed_by":     nil,
+			"lease_id":      "",
+			"lease_expiry":  nil,
+			"assigned_to":   sj.AssignedTo,
+		})
+		ts.dbStore.LogJobEvent(jobID, "job_succeeded", map[string]interface{}{
+			"worker_id": sj.AssignedTo,
+			"revision":  sj.Revision + 1,
+		})
+		return nil
+	}
+
+	// Legacy path (dbStore-direct).
 	m, err := ts.dbStore.GetJob(ctx, jobID)
 	if err != nil {
 		return fmt.Errorf("job not found: %s", jobID)
@@ -162,6 +207,71 @@ func (ts *TransitionService) CompleteJob(ctx context.Context, jobID string) erro
 // FailJob marks a job as FAILED or RETRY_WAIT using CAS.
 // If requeue is true and retries remain, transitions to RETRY_WAIT → PENDING.
 func (ts *TransitionService) FailJob(ctx context.Context, jobID, errMsg, workerID string, requeue bool, maxRetries int) error {
+	// Spec §5 path: delegate read + CAS to narrow JobRepository.
+	if ts.jobRepo != nil {
+		sj, err := ts.jobRepo.GetJob(ctx, jobID)
+		if err != nil {
+			return fmt.Errorf("job not found: %s", jobID)
+		}
+
+		nowISO := NowISO()
+
+		if requeue && sj.RetryCount < maxRetries {
+			if err := ts.Validate(JobStatus(normalizeJobStatus(string(sj.Status))), StatusRetryWait); err != nil {
+				return err
+			}
+			if err := ts.jobRepo.Transition(ctx, store.TransitionParams{
+				JobID:          jobID,
+				ExpectedStatus: sj.Status,
+				NewStatus:      store.JobStatusRetryWait,
+				Revision:       sj.Revision,
+			}); err != nil {
+				return fmt.Errorf("CAS transition to RETRY_WAIT failed: %w", err)
+			}
+
+			ts.dbStore.UpdateJobSupplementary(jobID, map[string]interface{}{
+				"last_error":   errMsg,
+				"assigned_to":  "",
+				"claimed_by":   "",
+				"lease_id":     "",
+				"lease_expiry": nil,
+			})
+			ts.dbStore.LogJobEvent(jobID, "job_retry_wait", map[string]interface{}{
+				"worker_id": workerID,
+				"error":     errMsg,
+				"revision":  sj.Revision + 1,
+			})
+		} else {
+			if err := ts.Validate(JobStatus(normalizeJobStatus(string(sj.Status))), StatusFailed); err != nil {
+				return err
+			}
+			if err := ts.jobRepo.Transition(ctx, store.TransitionParams{
+				JobID:          jobID,
+				ExpectedStatus: sj.Status,
+				NewStatus:      store.JobStatusFailed,
+				Revision:       sj.Revision,
+			}); err != nil {
+				return fmt.Errorf("CAS transition to FAILED failed: %w", err)
+			}
+
+			ts.dbStore.UpdateJobSupplementary(jobID, map[string]interface{}{
+				"error_message": errMsg,
+				"last_error":    errMsg,
+				"failed_at":     nowISO,
+				"failed_by":     workerID,
+				"lease_id":      "",
+				"lease_expiry":  nil,
+			})
+			ts.dbStore.LogJobEvent(jobID, "job_failed", map[string]interface{}{
+				"worker_id": workerID,
+				"error":     errMsg,
+				"revision":  sj.Revision + 1,
+			})
+		}
+		return nil
+	}
+
+	// Legacy path (dbStore-direct).
 	m, err := ts.dbStore.GetJob(ctx, jobID)
 	if err != nil {
 		return fmt.Errorf("job not found: %s", jobID)
@@ -289,6 +399,39 @@ func (ts *TransitionService) RequeueZombieJobs(ctx context.Context, timeout time
 
 // RenewLease extends the lease for an active job.
 func (ts *TransitionService) RenewLease(ctx context.Context, jobID, workerID, leaseID string, leaseExpiry time.Time) error {
+	// Spec §5 path: validate existence + status via narrow JobRepository,
+	// then load full state from dbStore for the rich write (PersistJob).
+	if ts.jobRepo != nil {
+		sj, err := ts.jobRepo.GetJob(ctx, jobID)
+		if err != nil {
+			return fmt.Errorf("job not found: %s", jobID)
+		}
+		if err := ts.Validate(JobStatus(normalizeJobStatus(string(sj.Status))), StatusProcessing); err != nil {
+			return fmt.Errorf("job %s is not renewable in state %s", jobID, sj.Status)
+		}
+		// repo has no RenewLease method; full state still via dbStore for PersistJob.
+		m, err := ts.dbStore.GetJob(ctx, jobID)
+		if err != nil {
+			return fmt.Errorf("job not found: %s", jobID)
+		}
+		job := MapToJob(m)
+		nowISO := NowISO()
+		job.LeaseID = leaseID
+		job.LeaseExpiry = leaseExpiry.UTC().Format(time.RFC3339)
+		job.UpdatedAt = NowUnix()
+		if job.Attempt == 0 {
+			job.Attempt = job.RetryCount
+		}
+		job.History = append(job.History, JobHistoryEntry{
+			Status:    "PROCESSING",
+			Timestamp: nowISO,
+			WorkerID:  workerID,
+			Message:   "Lease renewed",
+		})
+		return PersistJob(job, ts.dbStore)
+	}
+
+	// Legacy path (dbStore-direct).
 	m, err := ts.dbStore.GetJob(ctx, jobID)
 	if err != nil {
 		return fmt.Errorf("job not found: %s", jobID)

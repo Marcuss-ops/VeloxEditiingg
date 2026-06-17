@@ -138,9 +138,11 @@ func TestPipelineGenerateForwardsCompletedResultToQueue(t *testing.T) {
 	originalClient := remoteEngineClient
 	defer func() { remoteEngineClient = originalClient }()
 	InitRemoteEngine(&config.Config{
-		RemoteEngineURL:       mockEngine.URL,
-		RemoteEngineTimeoutMS: 5000,
-		RemoteEngineRetries:   1,
+		Render: config.RenderConfig{
+			RemoteEngineURL:       mockEngine.URL,
+			RemoteEngineTimeoutMS: 5000,
+			RemoteEngineRetries:   1,
+		},
 	})
 
 	dbPath := filepath.Join(tempDir, "velox.db")
