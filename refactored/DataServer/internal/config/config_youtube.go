@@ -7,10 +7,9 @@ import (
 
 func loadYouTubeConfig(secretsDir, dataDir string) YouTubeConfig {
 	c := YouTubeConfig{
-		APIKey:         os.Getenv("VELOX_YOUTUBE_API_KEY"),
-		TokensDir:      os.Getenv("VELOX_YOUTUBE_TOKENS_DIR"),
-		PostingPath:    os.Getenv("VELOX_YOUTUBE_POSTING_PATH"),
-		RemoteFallback: os.Getenv("VELOX_REMOTE_FALLBACK_URL"),
+		APIKey:      os.Getenv("VELOX_YOUTUBE_API_KEY"),
+		TokensDir:   os.Getenv("VELOX_YOUTUBE_TOKENS_DIR"),
+		PostingPath: os.Getenv("VELOX_YOUTUBE_POSTING_PATH"),
 	}
 	c.CredentialsDir = os.Getenv("VELOX_YOUTUBE_CREDENTIALS_DIR")
 	if c.TokensDir == "" {

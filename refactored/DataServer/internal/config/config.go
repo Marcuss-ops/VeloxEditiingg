@@ -41,11 +41,78 @@ func FromEnv() *Config {
 	render := loadRenderConfig()
 	nvidia := loadNVIDIAConfig()
 
-	// Derived fields
-	masterServerURL := os.Getenv("VELOX_MASTER_SERVER_URL")
-	if masterServerURL == "" {
-		masterServerURL = os.Getenv("VELOX_REMOTE_WORKER_URL")
-	}
+	// Proxy draft create-master to remote
+	masterServerURL := GetMasterServerURL()
+
+	// Build flat Config for backward compatibility
+	c := &Config{
+		MasterPort:           server.Port,
+		StudioPort:           server.StudioPort,
+		TLSCertFile:          server.TLSCertFile,
+		TLSKeyFile:           server.TLSKeyFile,
+		AllowLocalhostMaster: server.AllowLocalhost,
+
+		DataDir:      runtime.DataDir,
+		RuntimeDir:   runtime.RuntimeDir,
+		VideosDir:    runtime.VideosDir,
+		StaticDir:    runtime.StaticDir,
+		JobQueueFile: runtime.JobQueueFile,
+		SecretsDir:   runtime.SecretsDir,
+
+		DBDriver:          database.Driver,
+		DBDSN:             database.DSN,
+		DBMaxOpenConns:    database.MaxOpenConns,
+		DBMaxIdleConns:    database.MaxIdleConns,
+		DBConnMaxLifetime: database.ConnMaxLifetime,
+		DBConnMaxIdleTime: database.ConnMaxIdleTime,
+
+		AllowedWorkers:           workers.AllowedWorkers,
+		ForceSingleWorker:        workers.ForceSingleWorker,
+		AllowlistAllowRegistered: workers.AllowlistRegistered,
+		MaxJobAttempts:           workers.MaxJobAttempts,
+		WorkerBundleDir:          workers.BundleDir,
+		WorkerHeartbeatTimeout:   workers.HeartbeatTimeout,
+		CodeVersion:              workers.CodeVersion,
+		VersionNumber:            workers.VersionNumber,
+		ScriptDir:                workers.ScriptDir,
+		MasterURL:                workers.MasterURL,
+		AllowedWorkerIPs:         workers.AllowedIPs,
+
+		AdminToken: auth.AdminToken,
+
+		S3Endpoint:        storage.Endpoint,
+		S3Region:          storage.Region,
+		S3Bucket:          storage.Bucket,
+		S3AccessKeyID:     storage.AccessKeyID,
+		S3SecretAccessKey: storage.SecretKey,
+		S3UseSSL:          storage.UseSSL,
+
+		DriveClientID:       drive.ClientID,
+		DriveClientSecret:   drive.ClientSecret,
+		DriveRedirectURI:    drive.RedirectURI,
+		DriveTokensDir:      drive.TokensDir,
+		DriveCredentialsDir: drive.CredentialsDir,
+
+		YouTubeAPIKey:         youtube.APIKey,
+		YouTubeTokensDir:      youtube.TokensDir,
+		YouTubePostingPath:    youtube.PostingPath,
+		YouTubeCredentialsDir: youtube.CredentialsDir,
+
+		PlaybookDir: ansible.PlaybookDir,
+
+		GradioAppURL:       frontend.GradioAppURL,
+		SPADir:             frontend.SPADir,
+		DarkEditorDir:      frontend.DarkEditorDir,
+		DarkEditorProxyURL: frontend.DarkEditorProxy,
+
+		RemoteEngineURL:          render.RemoteEngineURL,
+		RemoteEngineToken:        render.RemoteEngineToken,
+		RemoteEngineTimeoutMS:    render.RemoteEngineTimeoutMS,
+		RemoteEngineRetries:      render.RemoteEngineRetries,
+		RemoteEnginePollInterval: render.RemoteEnginePollInterval,
+
+		NVIDIAAPIKey:  nvidia.APIKey,
+		NVIDIATextURL: nvidia.TextURL,
 
 	return &Config{
 		Server:          server,

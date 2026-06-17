@@ -145,6 +145,23 @@ func runServer(cfg *config.Config) error {
 		return err
 	}
 
+	// Boot-time dual-DB check: compare the runtime velox.db against every
+	// well-known source candidate (../data/velox.db, .velox/data/velox.db,
+	// worker_runtime/velox.db, ...). Catches the "two DB copies" race that
+	// historically caused YouTube groups to disappear after deploys when
+	// the runtime DBDSN pointed at a stale or shared file. Same-path hits
+	// are always reported; staleness check is gated by
+	// VELOX_DB_STALE_HOURS (default 24h; 0 disables the staleness check
+	// while keeping same-path detection).
+	runDuadDBBootCheck(deps, cfg)
+
+	// Boot-time OAuth-token consolidation: REMOVED. The runtime path is
+	// SQLite-only (S6 verdict) and no server component reads from
+	// <DataDir>/secrets/youtube/tokens/*.json on boot. The legacy
+	// migrate CLI and the OAuth JSON consolidator have been removed
+	// entirely; fresh installs are expected to land credentials
+	// directly via the canonical OAuth callback.
+
 	registry := app.NewRegistry()
 	auth := api.AdminAuthMiddleware(cfg)
 

@@ -90,9 +90,8 @@ func (m *Module) RegisterRoutes(r *gin.Engine) {
 	log.Printf("[YOUTUBE] API routes registered at /api/v1/youtube/*")
 
 	if m.dataDir != "" {
-		apiKey := m.cfg.YouTube.APIKey
-		fallbackURL := m.cfg.YouTube.RemoteFallback
-		m.manager = ytHandlers.NewYouTubeManager(m.dataDir, apiKey, fallbackURL, m.youtubeStorage, youtubeService)
+		apiKey := m.cfg.YouTubeAPIKey
+		m.manager = ytHandlers.NewYouTubeManager(m.dataDir, apiKey, m.youtubeStorage, youtubeService)
 		ytHandlers.YouTubeRoutes(r, m.cfg, m.manager)
 		if apiKey != "" {
 			log.Printf("[YOUTUBE] Manager routes registered at /api/youtube/manager/* (full mode)")
