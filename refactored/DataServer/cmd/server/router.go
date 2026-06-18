@@ -2,13 +2,17 @@ package main
 
 import (
 	"fmt"
+	"log"
+	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/gin-gonic/gin"
 	"velox-server/internal/app"
 	"velox-server/internal/config"
+	"velox-server/internal/deprecation"
 	remoteansible "velox-server/internal/handlers/remote/ansible"
 	workersuploads "velox-server/internal/handlers/remote/workers/uploads"
 	integrationsDrive "velox-server/internal/integrations/drive"
@@ -82,9 +86,22 @@ func newRouter(cfg *config.Config, deps *serverDeps, registry *app.Registry) *gi
 	}
 
 	// ── Remaining routes not yet in modules ──────────────────────────────────
-	registerAPIV1Routes(r, cfg, deps, ansibleHandlers)
-	registerScriptRoutes(r, cfg, deps)
-	registerPipelineRoutes(r, cfg, deps)
+	// V1 routes are delegated entirely to the dedicated `api` package module; the helpers
+	// below isolate V2 jobs, orchestrator admin, chunked upload, and bundle compatibility
+	// into dedicated registration calls so concerns stay distinct.
+	jrs := buildJobRoutes(cfg, deps)
+		dep := buildDeprecationRegistry()
+		snap := dep.Snapshot()
+		log.Printf("[DEPRECATION] %d legacy endpoints tracked; sunset %s (override via VELOX_LEGACY_SUNSET_DAYS, default 14d, max 30d). Read counters at /api/_internal/deprecation_stats.",
+			len(snap.Stats), snap.SunsetAt)
+		registerDeprecationStatsRoute(r, cfg, dep)
+		registerAPIV1Routes(r, cfg, deps, ansibleHandlers, jrs)
+		registerV2JobRoutes(r, cfg, deps, jrs)
+		registerOrchestratorAdminRoutes(r, cfg, deps)
+		registerUploadAndBundleCompatRoutes(r, cfg, deps)
+		registerScriptRoutes(r, cfg, deps)
+		registerLegacyJobCompatRoutes(r, deps, jrs, dep)
+		registerPipelineRoutes(r, cfg, deps, dep)
 
 	// Initialize groups handlers with SQLite store
 	groups.InitGroupsStore(deps.sqliteStore)
@@ -167,10 +184,246 @@ func registerScriptRoutes(r *gin.Engine, cfg *config.Config, deps *serverDeps) {
 	scripthandlers.RegisterRoutes(v1Group, cfg, deps.fileQ, deps.sqliteStore)
 }
 
-func registerOrchestratorRoutes(v1Admin gin.IRoutes, repo workflow.Repository) {
-	if repo == nil {
+// buildDeprecationRegistry returns the in-memory Registry used to track
+// calls to legacy endpoints (post-split), wired with a sunset window.
+// PR 2 of the velox-core verdict: keep legacy endpoints alive for 7-14
+// days while the operator confirms zero callers, then delete them.
+//
+// Sunset is configurable via VELOX_LEGACY_SUNSET_DAYS (default 14, max 30).
+func buildDeprecationRegistry() *deprecation.Registry {
+	now := time.Now().UTC()
+	sunsetDays := 14
+	if v := strings.TrimSpace(os.Getenv("VELOX_LEGACY_SUNSET_DAYS")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 1 && n <= 30 {
+			sunsetDays = n
+		}
+	}
+	reg := deprecation.New(now, now.Add(time.Duration(sunsetDays)*24*time.Hour))
+
+	// Legacy /api/jobs/* worker polling endpoints (superceded by /api/v1/jobs/* V2 routes
+	// for new workers; these four endpoints carry the historical worker contract).
+	reg.Register("POST", "/api/jobs/get", "")
+	reg.Register("POST", "/api/jobs/result", "POST /api/v1/jobs/:id/result")
+	reg.Register("POST", "/api/jobs/complete", "POST /api/v1/jobs/:id/complete")
+	reg.Register("POST", "/api/jobs/lease", "PUT /api/v1/jobs/:id/lease")
+
+	// Legacy /api/remote/pipeline/* + /api/script-{simple,multiple} endpoints.
+	reg.Register("POST", "/api/remote/pipeline/generate", "POST /api/v1/pipeline/generate")
+	reg.Register("GET", "/api/remote/pipeline/status/:trace_id", "GET /api/v1/pipeline/status/:trace_id")
+	reg.Register("DELETE", "/api/remote/pipeline/cancel/:trace_id", "DELETE /api/v1/pipeline/cancel/:trace_id")
+	reg.Register("POST", "/api/script-simple", "POST /api/v1/script/generate-with-images")
+	reg.Register("POST", "/api/script-multiple", "POST /api/v1/script (batch)")
+
+	return reg
+}
+
+// registerDeprecationStatsRoute exposes /api/_internal/deprecation_stats
+// behind the admin auth middleware. Operators poll this endpoint to
+// confirm caller counts are zero before scheduling the next PR that
+// actually removes the legacy handlers.
+func registerDeprecationStatsRoute(r *gin.Engine, cfg *config.Config, dep *deprecation.Registry) {
+	if dep == nil {
 		return
 	}
+	internal := r.Group("/api/_internal")
+	internal.Use(api.AdminAuthMiddleware(cfg))
+	internal.GET("/deprecation_stats", func(c *gin.Context) {
+		c.JSON(http.StatusOK, dep.Snapshot())
+	})
+}
+
+func registerLegacyJobCompatRoutes(r *gin.Engine, deps *serverDeps, jrs *jobRouteState, dep *deprecation.Registry) {
+	if deps == nil || jrs == nil || jrs.jobSvc == nil {
+		return
+	}
+
+	// Loadability note: every legacy endpoint is wrapped in dep.Track(...)
+	// so hits are counted and Deprecation/Sunset/Link headers are set.
+	// The handler bodies are unchanged.
+	legacy := r.Group("/api")
+
+	legacy.POST("/jobs/get", dep.Track("POST", "/api/jobs/get"), func(c *gin.Context) {
+		var body struct {
+			WorkerID    string `json:"worker_id"`
+			WorkerName  string `json:"worker_name"`
+			Drain       bool   `json:"drain"`
+			Schedulable bool   `json:"schedulable"`
+		}
+		if err := c.ShouldBindJSON(&body); err != nil {
+			c.JSON(200, gin.H{
+				"success": false,
+				"message": "invalid request",
+				"error":   err.Error(),
+			})
+			return
+		}
+
+		result, err := jrs.jobSvc.ClaimNextJob(c.Request.Context(), jobservice.ClaimRequest{
+			WorkerID:    strings.TrimSpace(body.WorkerID),
+			WorkerName:  strings.TrimSpace(body.WorkerName),
+			ClientIP:    c.ClientIP(),
+			Drain:       body.Drain,
+			Schedulable: body.Schedulable,
+		})
+		if err != nil {
+			c.JSON(200, gin.H{
+				"success": false,
+				"message": err.Error(),
+			})
+			return
+		}
+		if result == nil || strings.TrimSpace(result.JobID) == "" {
+			resp := gin.H{"success": false}
+			if result != nil && strings.TrimSpace(result.Reason) != "" {
+				resp["message"] = result.Reason
+			}
+			c.JSON(200, resp)
+			return
+		}
+
+		payload := map[string]interface{}{}
+		for k, v := range result.Payload {
+			payload[k] = v
+		}
+		if createdAt, ok := payload["created_at"]; ok {
+			payload["created_at"] = normalizeLegacyJobTime(createdAt)
+		}
+		if updatedAt, ok := payload["updated_at"]; ok {
+			payload["updated_at"] = normalizeLegacyJobTime(updatedAt)
+		}
+		if startedAt, ok := payload["started_at"]; ok {
+			payload["started_at"] = normalizeLegacyJobTime(startedAt)
+		}
+		if leaseExp, ok := payload["lease_expiry"]; ok {
+			payload["lease_expiry"] = normalizeLegacyJobTime(leaseExp)
+		}
+
+		c.JSON(200, gin.H{
+			"success": true,
+			"data":    payload,
+		})
+	})
+
+	legacy.POST("/jobs/result", dep.Track("POST", "/api/jobs/result"), func(c *gin.Context) {
+		var body struct {
+			JobID           string                 `json:"job_id"`
+			JobRunID        string                 `json:"job_run_id"`
+			WorkerID        string                 `json:"worker_id"`
+			Status          string                 `json:"status"`
+			Output          map[string]interface{} `json:"output"`
+			Error           string                 `json:"error"`
+			StartTime       string                 `json:"start_time"`
+			EndTime         string                 `json:"end_time"`
+			ContractVersion int                    `json:"contract_version"`
+			LeaseID         string                 `json:"lease_id"`
+			Attempt         int                    `json:"attempt"`
+			ArtifactID      string                 `json:"artifact_id"`
+			OutputSHA256    string                 `json:"output_sha256"`
+			IdempotencyKey  string                 `json:"idempotency_key"`
+		}
+		if err := c.ShouldBindJSON(&body); err != nil {
+			c.JSON(200, gin.H{"success": false, "error": "invalid request"})
+			return
+		}
+		ok, err := jrs.jobSvc.SubmitResult(c.Request.Context(), jobservice.SubmitResultRequest{
+			JobID:           strings.TrimSpace(body.JobID),
+			WorkerID:        strings.TrimSpace(body.WorkerID),
+			Status:          strings.TrimSpace(body.Status),
+			Error:           body.Error,
+			Output:          body.Output,
+			EndTime:         strings.TrimSpace(body.EndTime),
+			LeaseID:         strings.TrimSpace(body.LeaseID),
+			Attempt:         body.Attempt,
+			ContractVersion: body.ContractVersion,
+			ArtifactID:      strings.TrimSpace(body.ArtifactID),
+			OutputSHA256:    strings.TrimSpace(body.OutputSHA256),
+			IdempotencyKey:  strings.TrimSpace(body.IdempotencyKey),
+		})
+		if err != nil {
+			c.JSON(200, gin.H{"success": false, "error": err.Error()})
+			return
+		}
+		c.JSON(200, gin.H{"success": ok})
+	})
+
+	legacy.POST("/jobs/complete", dep.Track("POST", "/api/jobs/complete"), func(c *gin.Context) {
+		var body struct {
+			JobID    string `json:"job_id"`
+			WorkerID string `json:"worker_id"`
+			LeaseID  string `json:"lease_id"`
+			Attempt  int    `json:"attempt"`
+		}
+		if err := c.ShouldBindJSON(&body); err != nil {
+			c.JSON(200, gin.H{"success": false, "error": "invalid request"})
+			return
+		}
+		if err := jrs.jobSvc.ValidateJobLease(c.Request.Context(), strings.TrimSpace(body.JobID), strings.TrimSpace(body.WorkerID), strings.TrimSpace(body.LeaseID)); err != nil {
+			c.JSON(200, gin.H{"success": false, "error": err.Error()})
+			return
+		}
+		if err := jrs.jobSvc.CompleteJob(c.Request.Context(), strings.TrimSpace(body.JobID), strings.TrimSpace(body.WorkerID)); err != nil {
+			c.JSON(200, gin.H{"success": false, "error": err.Error()})
+			return
+		}
+		c.JSON(200, gin.H{"success": true})
+	})
+
+	legacy.POST("/jobs/lease", dep.Track("POST", "/api/jobs/lease"), func(c *gin.Context) {
+		var body struct {
+			JobID           string `json:"job_id"`
+			WorkerID        string `json:"worker_id"`
+			LeaseID         string `json:"lease_id"`
+			LeaseExpiresAt  string `json:"lease_expires_at"`
+			Attempt         int    `json:"attempt"`
+			ContractVersion int    `json:"contract_version"`
+		}
+		if err := c.ShouldBindJSON(&body); err != nil {
+			c.JSON(200, gin.H{"success": false, "error": "invalid request"})
+			return
+		}
+		if err := jrs.jobSvc.ValidateJobLease(c.Request.Context(), strings.TrimSpace(body.JobID), strings.TrimSpace(body.WorkerID), strings.TrimSpace(body.LeaseID)); err != nil {
+			c.JSON(200, gin.H{"success": false, "error": err.Error()})
+			return
+		}
+		if deps.fileQ == nil {
+			c.JSON(200, gin.H{"success": false, "error": "queue unavailable"})
+			return
+		}
+		if err := deps.fileQ.RenewJobLease(c.Request.Context(), strings.TrimSpace(body.JobID), strings.TrimSpace(body.WorkerID), strings.TrimSpace(body.LeaseID), time.Now().UTC().Add(30*time.Minute)); err != nil {
+			c.JSON(200, gin.H{"success": false, "error": err.Error()})
+			return
+		}
+		c.JSON(200, gin.H{"success": true})
+	})
+}
+
+func normalizeLegacyJobTime(v interface{}) interface{} {
+	switch tv := v.(type) {
+	case string:
+		if strings.TrimSpace(tv) != "" {
+			return tv
+		}
+	case int64:
+		if tv > 0 {
+			return time.Unix(tv, 0).UTC().Format(time.RFC3339)
+		}
+	case int:
+		if tv > 0 {
+			return time.Unix(int64(tv), 0).UTC().Format(time.RFC3339)
+		}
+	case float64:
+		if tv > 0 {
+			return time.Unix(int64(tv), 0).UTC().Format(time.RFC3339)
+		}
+	}
+	return v
+}
+
+func registerOrchestratorRoutes(v1Admin gin.IRoutes, deps *serverDeps) {
+	if deps.orchestrator == nil {
+		return
+	}
+	orch := deps.orchestrator
 
 	v1Admin.POST("/orchestrator/jobs", func(c *gin.Context) {
 		var req struct {
@@ -283,16 +536,36 @@ func registerOrchestratorRoutes(v1Admin gin.IRoutes, repo workflow.Repository) {
 	})
 }
 
-func registerPipelineRoutes(r *gin.Engine, cfg *config.Config, deps *serverDeps) {
-	r.POST("/api/remote/pipeline/generate", pipelinehandler.PipelineGenerate(cfg, deps.fileQ))
-	r.GET("/api/remote/pipeline/status/:trace_id", pipelinehandler.PipelineStatus(cfg))
-
+func registerPipelineRoutes(r *gin.Engine, cfg *config.Config, deps *serverDeps, dep *deprecation.Registry) {
+	// Legacy pipeline endpoints: still alive for the sunset window so existing
+	// callers keep working. Each is wrapped by dep.Track(name) to:
+	//   - bump per-endpoint hit/error counters
+	//   - emit RFC 8594 Deprecation/Sunset + Link: <successor>
+	//   - write a one-line [DEPRECATED] entry to server.log
+	// Once the 7-14 day window elapses with zero hits, a follow-up PR
+	// deletes these routes and the corresponding handlers.
 	var cmdMgr *workersreg.CommandManager
 	if deps.workerUpdateHandler != nil {
 		cmdMgr = deps.workerUpdateHandler.CommandManager()
 	}
-	r.DELETE("/api/remote/pipeline/cancel/:trace_id", pipelinehandler.PipelineCancel(cfg, deps.fileQ, cmdMgr))
 
-	r.POST("/api/script-simple", pipelinehandler.ScriptSimple(cfg))
-	r.POST("/api/script-multiple", pipelinehandler.ScriptMultiple(cfg))
+	r.POST("/api/remote/pipeline/generate",
+		dep.Track("POST", "/api/remote/pipeline/generate"),
+		pipelinehandler.PipelineGenerate(cfg, deps.fileQ))
+
+	r.GET("/api/remote/pipeline/status/:trace_id",
+		dep.Track("GET", "/api/remote/pipeline/status/:trace_id"),
+		pipelinehandler.PipelineStatus(cfg))
+
+	r.DELETE("/api/remote/pipeline/cancel/:trace_id",
+		dep.Track("DELETE", "/api/remote/pipeline/cancel/:trace_id"),
+		pipelinehandler.PipelineCancel(cfg, deps.fileQ, cmdMgr))
+
+	r.POST("/api/script-simple",
+		dep.Track("POST", "/api/script-simple"),
+		pipelinehandler.ScriptSimple(cfg))
+
+	r.POST("/api/script-multiple",
+		dep.Track("POST", "/api/script-multiple"),
+		pipelinehandler.ScriptMultiple(cfg))
 }

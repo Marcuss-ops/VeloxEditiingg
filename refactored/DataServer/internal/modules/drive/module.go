@@ -76,10 +76,10 @@ func (m *Module) init() error {
 	// Initialize Drive service
 	if m.service == nil && m.cfg.DriveClientID != "" && m.cfg.DriveClientSecret != "" {
 		svc, err := integrationsDrive.NewService(&integrationsDrive.ServiceConfig{
-			ClientID:     m.cfg.Drive.ClientID,
-			ClientSecret: m.cfg.Drive.ClientSecret,
-			RedirectURI:  m.cfg.Drive.RedirectURI,
-			TokensDir:    m.cfg.Drive.TokensDir,
+			ClientID:     m.cfg.DriveClientID,
+			ClientSecret: m.cfg.DriveClientSecret,
+			RedirectURI:  m.cfg.DriveRedirectURI,
+			TokensDir:    m.cfg.DriveTokensDir,
 		})
 		if err != nil {
 			return err
