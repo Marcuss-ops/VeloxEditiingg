@@ -24,6 +24,7 @@ import (
 	"velox-server/internal/grpcserver"
 	workerhandlers "velox-server/internal/handlers/remote/workers"
 	"velox-server/internal/handlers/remote/workers/lifecycle"
+	handlersoutbox "velox-server/internal/handlers/outbox"
 	"velox-server/internal/handlers/server/api"
 	"velox-server/internal/handlers/server/pipeline"
 	"velox-server/internal/jobs/enqueue"
@@ -34,9 +35,11 @@ import (
 	"velox-server/internal/modules/livestream"
 	"velox-server/internal/modules/workers"
 	"velox-server/internal/modules/youtube"
+	"velox-server/internal/outbox"
 	"velox-server/internal/queue"
 	"velox-server/internal/store"
 	workersreg "velox-server/internal/workers"
+	"velox-server/internal/workflow"
 
 	"google.golang.org/grpc"
 )
@@ -56,7 +59,9 @@ type serverDeps struct {
 	ansibleModule       *ansible.Module
 	youtubeModule       *youtube.Module
 	driveModule         *drive.Module
-	orchestrator        *queue.Orchestrator
+	workflowRepo        workflow.Repository
+	outboxStore         *outbox.Store
+	outboxDispatcher    *outbox.Dispatcher
 	deliveryRunner      *deliveries.DeliveryRunner
 	blobStore           store.BlobStore
 }
@@ -105,6 +110,13 @@ func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
 		return nil, err
 	}
 
+	// PR 8: outbox.Store wraps the same SQLite handle so CompleteJobTx
+	// (write JOB_SUCCEEDED) and FinalizeArtifactVerified (write
+	// ARTIFACT_READY) emit through the generic outbox pipeline rather
+	// than the legacy orchestrator_outbox.
+	outboxStore := outbox.NewStore(sqliteStore.DB())
+	sqliteStore.SetOutbox(outboxStore)
+
 	fileQ, err := queue.NewFileQueue(&queue.FileQueueConfig{
 		DBStore:    sqliteStore,
 		MaxRetries: cfg.Workers.MaxJobAttempts,
@@ -122,23 +134,20 @@ func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
 
 	workersRepo := store.NewSQLiteWorkersRepository(sqliteStore)
 
-	// Worker Update Handler (bundle download, manifest, etc.)
 	cmdMgr := workersreg.NewCommandManager(sqliteStore)
 	updateMgr := workersreg.NewUpdateManager()
 	tokenMgr := workersreg.NewTokenManager(sqliteStore)
 	workerUpdateHandler := workerhandlers.NewWorkerUpdateHandler(cfg, reg, cmdMgr, updateMgr, tokenMgr, cfg.Runtime.DataDir)
 	workerLifecycle := lifecycle.NewHandler(cfg, reg, sqliteStore, cfg.Runtime.DataDir)
 
-	// Create orchestrator for multi-step job pipelines
 	jobRepo := store.NewSQLiteJobRepository(sqliteStore)
 	fileQ.SetJobRepository(jobRepo)
 
-	orch, err := queue.NewOrchestrator(nil, fileQ, sqliteStore, &orchestratorWorkerRegistry{reg: reg})
-	if err != nil {
-		return nil, fmt.Errorf("orchestrator init: %w", err)
-	}
+	// PR 9: workflow.Repository replaces the legacy *queue.Orchestrator.
+	// WorkflowSpec -> workflow_runs/workflow_steps (PR 8 schema).
+	workflowRepo := workflow.NewSQLiteRepository(sqliteStore.DB())
+	workflowRepo.SetOutbox(outboxStore)
 
-	// Build BlobStore for artifact staging/promotion (PR2b).
 	var blobStore store.BlobStore
 	var bsErr error
 	blobStore, bsErr = store.NewLocalBlobStore(cfg.Runtime.StagingDir, cfg.Runtime.StorageDir)
@@ -148,6 +157,32 @@ func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
 	}
 	log.Printf("[BOOTSTRAP] BlobStore ready: staging=%s storage=%s", blobStore.StagingDir(), blobStore.FinalDir())
 
+	// PR 8: outbox.Registry is the single mapping event_type -> handler.
+	// Build AFTER fileQ so workflowStepReadyHandler can submit jobs.
+	outboxRegistry := outbox.NewRegistry()
+	stepReady := handlersoutbox.StepReadyHandler{Wf: workflowRepo, Q: fileQ}
+	jobSucceeded := handlersoutbox.JobSucceededHandler{Wf: workflowRepo}
+	artifactReady := handlersoutbox.ArtifactReadyHandler{Wf: workflowRepo}
+	deliveryCreated := handlersoutbox.DeliveryCreatedHandler{Wf: workflowRepo}
+	if err := outboxRegistry.Register(stepReady); err != nil {
+		return nil, fmt.Errorf("outbox register stepReady: %w", err)
+	}
+	if err := outboxRegistry.Register(jobSucceeded); err != nil {
+		return nil, fmt.Errorf("outbox register jobSucceeded: %w", err)
+	}
+	if err := outboxRegistry.Register(artifactReady); err != nil {
+		return nil, fmt.Errorf("outbox register artifactReady: %w", err)
+	}
+	if err := outboxRegistry.Register(deliveryCreated); err != nil {
+		return nil, fmt.Errorf("outbox register deliveryCreated: %w", err)
+	}
+	outboxDispatcher := outbox.NewDispatcher(outboxStore, outboxRegistry, outbox.Config{
+		PollInterval: 750 * time.Millisecond,
+		BatchSize:    32,
+		LockDuration: 30 * time.Second,
+		MaxAttempts:  5,
+	})
+
 	return &serverDeps{
 		paths:               &serverPaths{dataDir: cfg.Runtime.DataDir},
 		fileQ:               fileQ,
@@ -156,7 +191,9 @@ func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
 		sqliteStore:         sqliteStore,
 		workerUpdateHandler: workerUpdateHandler,
 		workerLifecycle:     workerLifecycle,
-		orchestrator:        orch,
+		workflowRepo:        workflowRepo,
+		outboxStore:         outboxStore,
+		outboxDispatcher:    outboxDispatcher,
 		blobStore:           blobStore,
 	}, nil
 }
@@ -167,7 +204,6 @@ func runServer(cfg *config.Config) error {
 		return err
 	}
 
-	// Run data layer audit AFTER database init
 	if err := runDataLayerAudit(cfg); err != nil {
 		return err
 	}
@@ -175,12 +211,10 @@ func runServer(cfg *config.Config) error {
 	registry := app.NewRegistry()
 	auth := api.AdminAuthMiddleware(cfg)
 
-	// Init pipeline remote engine
 	pipeline.InitRemoteEngine(cfg)
 
-	// Register all modules
 	registry.Register(health.New())
-	registry.Register(workers.New(cfg, deps.reg, deps.workerLifecycle, deps.workerUpdateHandler, auth))
+	registry.Register(workers.New(cfg, deps.reg, deps.workerLifecycle, deps.workerUpdateH, auth))
 	ytMod := youtube.New(cfg, deps.paths.dataDir, deps.sqliteStore)
 	deps.youtubeModule = ytMod
 	registry.Register(ytMod)
@@ -204,7 +238,6 @@ func runServer(cfg *config.Config) error {
 	registry.Register(livestreamMod)
 	registry.Register(frontend.New(cfg))
 
-	// ── Wire DeliveryRunner (PR4d) ──────────────────────────────────────────
 	deliveryReg := deliveries.NewRegistry()
 	if ytMod != nil && ytMod.Service() != nil {
 		ytProvider := deliveryProviders.NewYouTubeProvider(ytMod.Service(), deps.blobStore)
@@ -224,9 +257,7 @@ func runServer(cfg *config.Config) error {
 		fmt.Sprintf("delivery-runner-%d", time.Now().UnixNano()),
 	)
 	deps.deliveryRunner = deliveryRunner
-	// ────────────────────────────────────────────────────────────────────────
 
-	// Create gin engine with middleware
 	r := newRouter(cfg, deps, registry)
 
 	addr := fmt.Sprintf(":%d", cfg.Server.Port)
@@ -238,7 +269,6 @@ func runServer(cfg *config.Config) error {
 
 	log.Printf("[SERVER] Velox master listening on %s", addr)
 
-	// Start gRPC server for worker control stream
 	var grpcSrv grpcServer
 	if cfg.Server.GRPCPort > 0 {
 		transitionSvc := queue.NewTransitionService(deps.sqliteStore)
@@ -264,7 +294,6 @@ func runServer(cfg *config.Config) error {
 		}
 	}
 
-	// Auto-generate manifest_v2.json at startup
 	if deps.workerUpdateHandler != nil {
 		go func() {
 			if err := deps.workerUpdateHandler.GenerateManifestV2(); err != nil {
@@ -273,13 +302,16 @@ func runServer(cfg *config.Config) error {
 		}()
 	}
 
-	// Start orchestrator for multi-step job pipelines
-	if deps.orchestrator != nil {
-		go deps.orchestrator.Start(context.Background())
-		log.Printf("[BOOTSTRAP] Orchestrator started — polling multi-step jobs")
+	// PR 9 cutover: outbox dispatcher replaces the legacy Orchestrator loop.
+	if deps.outboxDispatcher != nil {
+		go func() {
+			log.Printf("[BOOTSTRAP] Outbox dispatcher started — polling outbox_events")
+			if err := deps.outboxDispatcher.Run(context.Background()); err != nil {
+				log.Printf("[BOOTSTRAP] Outbox dispatcher exited: %v", err)
+			}
+		}()
 	}
 
-	// Start DeliveryRunner for artifact delivery (Drive/YouTube/S3)
 	if deps.deliveryRunner != nil {
 		go func() {
 			log.Printf("[BOOTSTRAP] DeliveryRunner started — polling PENDING job_deliveries")
@@ -289,7 +321,6 @@ func runServer(cfg *config.Config) error {
 		}()
 	}
 
-	// Zombie job reaper: requeue jobs with expired leases or stuck too long
 	if deps.fileQ != nil {
 		go func() {
 			ticker := time.NewTicker(60 * time.Second)
@@ -305,8 +336,6 @@ func runServer(cfg *config.Config) error {
 		}()
 	}
 
-	// Staging reconciler: clean up orphaned staging files (artifact DB row
-	// missing or stuck in STAGING/QUARANTINED for > 1 hour).
 	if deps.blobStore != nil {
 		go func() {
 			ticker := time.NewTicker(15 * time.Minute)
@@ -323,7 +352,6 @@ func runServer(cfg *config.Config) error {
 		log.Printf("[BOOTSTRAP] Staging reconciler started — cleanup orphaned files every 15m")
 	}
 
-	// Start server in a goroutine so shutdown can be handled gracefully
 	errChan := make(chan error, 1)
 	go func() {
 		var err error
@@ -339,7 +367,6 @@ func runServer(cfg *config.Config) error {
 		errChan <- err
 	}()
 
-	// Wait for interrupt signal or startup failure
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 
@@ -355,7 +382,6 @@ func runServer(cfg *config.Config) error {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// Shutdown gRPC server first
 	if grpcSrv != nil {
 		grpcSrv.GracefulStop()
 		log.Println("[SERVER] gRPC server stopped")
@@ -366,7 +392,6 @@ func runServer(cfg *config.Config) error {
 		return err
 	}
 
-	// Close database before exit
 	if deps.sqliteStore != nil {
 		if err := deps.sqliteStore.Close(); err != nil {
 			log.Printf("[SERVER] Store close failed: %v", err)
@@ -377,24 +402,6 @@ func runServer(cfg *config.Config) error {
 	return nil
 }
 
-// runDataLayerAudit checks for legacy JSON files and data layer integrity.
-// Returns error if critical issues are found (hard block).
-// Warnings are logged but don't block startup.
-// orchestratorWorkerRegistry adapts workersreg.Registry to queue.WorkerRegistry.
-type orchestratorWorkerRegistry struct {
-	reg *workersreg.Registry
-}
-
-func (a *orchestratorWorkerRegistry) GetStaleWorkers(ctx context.Context, timeout time.Duration) []queue.WorkerInfoStub {
-	stale := a.reg.GetStaleWorkers(ctx, timeout)
-	out := make([]queue.WorkerInfoStub, len(stale))
-	for i, w := range stale {
-		out[i] = queue.WorkerInfoStub{WorkerID: w.WorkerID}
-	}
-	return out
-}
-
-// grpcServer abstracts the gRPC server lifecycle for graceful shutdown.
 type grpcServer interface {
 	GracefulStop()
 }
@@ -427,7 +434,6 @@ func reconcileStaging(dbStore *store.SQLiteStore, blobStore store.BlobStore) (in
 		}
 		path := filepath.Join(stagingDir, entry.Name())
 
-		// Check modification time: skip files newer than 1 hour.
 		info, err := entry.Info()
 		if err != nil {
 			continue
@@ -436,14 +442,12 @@ func reconcileStaging(dbStore *store.SQLiteStore, blobStore store.BlobStore) (in
 			continue
 		}
 
-		// Try to find an artifact row whose storage_key or local_path matches.
 		var status string
 		err = dbStore.DB().QueryRowContext(ctx,
 			`SELECT status FROM artifacts WHERE storage_key = ? OR local_path = ? LIMIT 1`,
 			path, path,
 		).Scan(&status)
 		if err != nil {
-			// No matching artifact — orphaned file, remove it.
 			if rmErr := os.Remove(path); rmErr == nil {
 				removed++
 				log.Printf("[STAGING] Removed orphaned file: %s", path)
@@ -451,9 +455,7 @@ func reconcileStaging(dbStore *store.SQLiteStore, blobStore store.BlobStore) (in
 			continue
 		}
 
-		// Artifact exists but is stuck in non-terminal state for > 1h.
 		if status == "STAGING" || status == "QUARANTINED" {
-			// Check if it's been in this state for > 1 hour.
 			var createdAt string
 			_ = dbStore.DB().QueryRowContext(ctx,
 				`SELECT created_at FROM artifacts WHERE (storage_key = ? OR local_path = ?) AND status = ?`,

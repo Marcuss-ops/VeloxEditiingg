@@ -4,6 +4,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"log"
@@ -15,12 +16,65 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 
+	"velox-server/internal/outbox"
 	"velox-server/internal/store/migrations"
 )
 
 type SQLiteStore struct {
-	db   *sql.DB
-	path string
+	db     *sql.DB
+	path   string
+	outbox OutboxEmitter // optional; nil disables ARTIFACT_READY/JOB_SUCCEEDED emission
+}
+
+// OutboxEmitter is the minimal interface SQLiteStore uses to write
+// outbox events (ARTIFACT_READY from FinalizeArtifactVerified and
+// JOB_SUCCEEDED from CompleteJobTx). Bootstrap wires an *outbox.Store;
+// nil is a safe no-op (log + skip) so callers that have not yet
+// completed the cutover still work.
+//
+// The `txn` parameter lets the producer enqueue the outbox row in the
+// same transaction as its state-change writes — this guarantees the
+// "atomic write-then-enqueue" guarantee of the transactional outbox
+// pattern. Pass nil for auto-commit (the helper uses s.db).
+//
+// The interface lives in store/sqlite.go (rather than being a method
+// on *outbox.Store) so test fakes in the store package only need a
+// one-method stub and so callers in the store package don't pull the
+// full outbox surface area — they only need the producer side.
+type OutboxEmitter interface {
+	Insert(ctx context.Context, txn outbox.Executor, params outbox.InsertParams) (string, error)
+}
+
+// SetOutbox wires (or unwires, when o is nil) the outbox emitter. Idempotent.
+func (s *SQLiteStore) SetOutbox(o OutboxEmitter) { s.outbox = o }
+
+// emitOutbox writes a PENDING outbox event via the wired emitter.
+//
+// Returns the wrapped error from the emitter's Insert when the write
+// fails. Callers MUST check this and rollback their surrounding *sql.Tx
+// to honor the transactional outbox guarantee — if the state change
+// committed but the event INSERT failed, downstream handlers would
+// never see the transition.
+//
+// `txn` is forwarded to the emitter so callers in a *sql.Tx can keep
+// the outbox enqueue atomic with their state-change writes. Pass nil
+// for auto-commit (the helper uses s.db).
+//
+// Behavior with no wired emitter (s.outbox == nil): returns nil and
+// logs the skip — callers that have not yet completed the outbox
+// cutover still work without the master blowing up on every commit.
+func (s *SQLiteStore) emitOutbox(ctx context.Context, txn outbox.Executor, p outbox.InsertParams) error {
+	if s.outbox == nil {
+		log.Printf("[STORE] outbox not wired — skipping %s aggregate=%s", p.EventType, p.AggregateID)
+		return nil
+	}
+	if txn == nil {
+		txn = s.db
+	}
+	if _, err := s.outbox.Insert(ctx, txn, p); err != nil {
+		return fmt.Errorf("store: emitOutbox %s aggregate=%s: %w", p.EventType, p.AggregateID, err)
+	}
+	return nil
 }
 
 func NewSQLiteStore(path string) (*SQLiteStore, error) {

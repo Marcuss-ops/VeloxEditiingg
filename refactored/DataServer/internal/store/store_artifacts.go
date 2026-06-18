@@ -12,6 +12,10 @@
 // same row. The application layer enforces state machine legality; SQL
 // CHECK constraints are not added so legacy rows from before migration 021
 // continue to load.
+//
+// PR 8 + PR 9 cutover: ARTIFACT_READY outbox emission goes through the
+// generic outbox.Store (outbox_events table) instead of the legacy
+// orchestrator_outbox table.
 package store
 
 import (
@@ -20,6 +24,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"velox-server/internal/outbox"
 )
 
 // ErrArtifactTransitionConflict is returned when TransitionArtifactStatus
@@ -77,6 +83,14 @@ func (s *SQLiteStore) TransitionArtifactStatus(ctx context.Context, artifactID, 
 // Idempotent on re-run: once a row is in READY, the WHERE filter (status =
 // 'VERIFYING') matches zero rows and the function returns ErrArtifactTransitionConflict;
 // callers must treat this as success (already finalized).
+//
+// PR 8 + PR 9: an ARTIFACT_READY outbox event is enqueued INSIDE the
+// same transaction as the artifact status flip (transactional-outbox
+// pattern). Aggregate_id = artifact_id so downstream consumers
+// (DeliveryRunner, JobSummary projection) can recover the source
+// artifact directly. Build the payload BEFORE commit so a crash between
+// the state-change commit and the outbox INSERT cannot silently drop the
+// event.
 func (s *SQLiteStore) FinalizeArtifactVerified(ctx context.Context, artifactID, sha256 string, sizeBytes int64, mimeType string) (*Artifact, error) {
 	if artifactID == "" {
 		return nil, fmt.Errorf("artifact: FinalizeArtifactVerified: missing artifact_id")
@@ -109,7 +123,9 @@ func (s *SQLiteStore) FinalizeArtifactVerified(ctx context.Context, artifactID, 
 		case nil:
 			if status == "READY" {
 				// Idempotent re-run: return the current row without re-stamping it.
-				_ = tx.Commit()
+				if err := tx.Commit(); err != nil {
+					return nil, fmt.Errorf("artifact: FinalizeArtifactVerified: idempotent commit: %w", err)
+				}
 				return s.GetArtifact(artifactID)
 			}
 			return nil, fmt.Errorf("%w: artifact=%s current=%s",
@@ -119,8 +135,6 @@ func (s *SQLiteStore) FinalizeArtifactVerified(ctx context.Context, artifactID, 
 		}
 	}
 
-	// duration_ms may not yet be set — leave undefined for the verifier;
-	// the meta dict for callers is the Artifact pointer.
 	row := tx.QueryRowContext(ctx,
 		`SELECT id, job_id, COALESCE(attempt_id, 0), type, storage_provider,
 		        COALESCE(storage_key, ''), COALESCE(storage_url, ''),
@@ -138,22 +152,33 @@ func (s *SQLiteStore) FinalizeArtifactVerified(ctx context.Context, artifactID, 
 		return nil, fmt.Errorf("artifact: FinalizeArtifactVerified scan: %w", err)
 	}
 
-	// Stash verified as an outbox event so downstream consumers (DeliveryRunner,
-	// JobSummary projection) react without polling.
-	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO orchestrator_outbox (event_type, job_id, step_id, payload, created_at)
-		 VALUES ('artifact_ready', ?, '', ?, ?)`,
-		a.JobID,
-		fmt.Sprintf(`{"artifact_id":"%s","sha256":"%s","size_bytes":%d,"mime_type":"%s"}`,
-			a.ID, a.SHA256, a.SizeBytes, mimeType),
-		now,
-	); err != nil {
-		return nil, fmt.Errorf("artifact: FinalizeArtifactVerified outbox: %w", err)
+	// Enqueue the outbox event INSIDE the same tx so commit is the
+	// single atomicity boundary. emitOutbox forwards `tx` as the Executor
+	// so the INSERT joins the same write tx as the UPDATE above — a
+	// crash before commit means both state change and event roll back;
+	// a successful commit makes both rows durably visible in one step.
+	//
+	// If the outbox INSERT fails (busy DB, schema drift, etc.), we
+	// rollback the tx rather than commit a state change with no
+	// downstream notification. That preserves the transactional outbox
+	// guarantee: either both rows become visible, or neither does.
+	payload := []byte(fmt.Sprintf(
+		`{"artifact_id":"%s","sha256":"%s","size_bytes":%d,"mime_type":"%s","job_id":%q}`,
+		a.ID, a.SHA256, a.SizeBytes, mimeType, a.JobID,
+	))
+	if err := s.emitOutbox(ctx, tx, outbox.InsertParams{
+		AggregateType: "artifact",
+		AggregateID:   a.ID,
+		EventType:     "ARTIFACT_READY",
+		Payload:       payload,
+	}); err != nil {
+		return nil, fmt.Errorf("artifact: FinalizeArtifactVerified: outbox: %w", err)
 	}
 
 	if err := tx.Commit(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("artifact: FinalizeArtifactVerified: commit: %w", err)
 	}
+
 	return &a, nil
 }
 

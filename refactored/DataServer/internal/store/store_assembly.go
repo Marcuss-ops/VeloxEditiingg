@@ -7,10 +7,11 @@
 // between (jobs, artifacts, job_deliveries, delivery_attempts, delivery_destinations)
 // and projects back to the JobView shape expected by handlers.
 //
-// PR1c — CompleteJobTx is the atomic "jobs SUCCEEDED + close attempt + outbox"
-// transaction required by the orchestrator. The same transaction captures
-// all three changes so a process crash after the status flip but before
-// the attempt-close leaves no rows half-promoted.
+// CompleteJobTx is the atomic "jobs SUCCEEDED + close attempt + outbox
+// event" transition (PR 8 + PR 9: outbox_events replaces the legacy
+// orchestrator_outbox). The same transaction captures all three changes
+// so a process crash after the status flip but before the attempt-close
+// leaves no rows half-promoted.
 package store
 
 import (
@@ -19,6 +20,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"velox-server/internal/outbox"
 )
 
 // AssembleJobView returns the legacy-flat-fields projection of a job for
@@ -34,9 +37,6 @@ func (s *SQLiteStore) AssembleJobView(ctx context.Context, jobID string) (map[st
 		return nil, fmt.Errorf("store: AssembleJobView missing jobID")
 	}
 
-	// Authoritative columns from jobs — primary artifact (smallest artifact ID
-	// with status='READY' for that job) supplies master_video_path; video_uploaded
-	// is true when ANY such READY artifact exists.
 	const jobQuery = `
 SELECT
   j.job_id, COALESCE(j.job_type, '') AS job_type, j.status, COALESCE(j.revision, 0) AS revision,
@@ -66,12 +66,12 @@ LIMIT 1
 	row := s.db.QueryRowContext(ctx, jobQuery, jobID)
 	out := map[string]interface{}{}
 	var (
-		jobIDOut, status, jobType, videoName, projectID                                                       sql.NullString
-		createdAt, updatedAt, startedAt, completedAt                                                          sql.NullString
-		lastError, errorMessage                                                                               sql.NullString
-		revision                                                                                             sql.NullInt64
-		primaryArtifactID, driveURL, youtubeVideoID                                                           sql.NullString
-		videoUploaded                                                                                         sql.NullInt64
+		jobIDOut, status, jobType, videoName, projectID sql.NullString
+		createdAt, updatedAt, startedAt, completedAt    sql.NullString
+		lastError, errorMessage                        sql.NullString
+		revision                                      sql.NullInt64
+		primaryArtifactID, driveURL, youtubeVideoID    sql.NullString
+		videoUploaded                                  sql.NullInt64
 	)
 	if err := row.Scan(
 		&jobIDOut, &jobType, &status, &revision,
@@ -111,8 +111,6 @@ LIMIT 1
 	if videoUploaded.Valid && videoUploaded.Int64 != 0 {
 		out["video_uploaded"] = true
 	}
-	// master_video_path targets the storage_key of the primary READY artifact
-	// (per architecture doc).
 	if primaryArtifactID.Valid && primaryArtifactID.String != "" {
 		storageKey, storageURL, sha256, mime, _ := s.loadArtifactStorageFields(ctx, primaryArtifactID.String)
 		out["master_video_path"] = selectStorageValue(storageKey, storageURL)
@@ -156,17 +154,29 @@ func selectStorageValue(storageKey, storageURL string) string {
 	return storageKey
 }
 
-// ── PR1c — atomic CompleteJobTx ────────────────────────────────────────────
+// ── PR1c — atomic CompleteJobTx ──────────────────────────────────────────────
 
 // CompleteJobTx atomically marks a job SUCCEEDED, closes the latest
-// job_attempts row, and emits a job_completed outbox event in a single
+// job_attempts row, and emits a JOB_SUCCEEDED outbox event in a single
 // BEGIN IMMEDIATE transaction.
 //
+// PR 9 cutover: writes to outbox_events (replacing orchestrator_outbox).
+// Aggregate_id = job_id so the JobSucceededHandler can recover the
+// owning workflow step via workflow_steps.job_id.
+//
 // Idempotent: re-running on a job already in COMPLETED/SUCCEEDED returns
-// nil error (the event is also written at most once under outbox idempotency).
+// nil error and skips the outbox emit (the event is also idempotent
+// because the dispatcher marks PROCESSED only once per event_id).
 //
 // attemptID = 0 closes "any current attempt" (uses latest by started_at);
 // attemptID > 0 targets the specific attempt row.
+//
+// Tx boundary: jobs UPDATE + job_attempts UPDATE + outbox INSERT all
+// happen inside the same *sql.Tx and a single Commit. A crash before
+// commit rolls back ALL three changes — no orphan event, no half-promoted
+// job. (PR 9 cutover tightened this from the previous best-effort
+// post-commit emit, which could lose events if the process died
+// between commit and emit.)
 func (s *SQLiteStore) CompleteJobTx(ctx context.Context, jobID string, attemptID int64, outboxPayload string) error {
 	if jobID == "" {
 		return fmt.Errorf("store: CompleteJobTx: missing jobID")
@@ -179,9 +189,9 @@ func (s *SQLiteStore) CompleteJobTx(ctx context.Context, jobID string, attemptID
 
 	now := time.Now().UTC().Format(time.RFC3339)
 
-	// 1. Flip jobs.status COMPLETED + stamp completed_at. Use the formula
-	//    UPPER(status) NOT IN ('SUCCEEDED', 'COMPLETED') as the no-op guard
-	//    so repeated calls do not bump revision on already-completed jobs.
+	// 1. Flip jobs.status COMPLETED + stamp completed_at. The no-op guard
+	//    uses UPPER(status) NOT IN ('SUCCEEDED', 'COMPLETED') so repeated
+	//    calls do not bump revision on already-completed jobs.
 	res, err := tx.ExecContext(ctx,
 		`UPDATE jobs
 		 SET status = 'COMPLETED', completed_at = ?, updated_at = ?
@@ -192,9 +202,11 @@ func (s *SQLiteStore) CompleteJobTx(ctx context.Context, jobID string, attemptID
 		return fmt.Errorf("store: CompleteJobTx: jobs UPDATE: %w", err)
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
-		// Already completed — still emit idempotent outbox but skip attempt close
-		// because attempt closure happens once.
-		_ = tx.Commit()
+		// Already completed — skip both attempt close and outbox emit.
+		// Commit needed to release the tx's locks either way.
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("store: CompleteJobTx: idempotent commit: %w", err)
+		}
 		return nil
 	}
 
@@ -219,19 +231,22 @@ func (s *SQLiteStore) CompleteJobTx(ctx context.Context, jobID string, attemptID
 		return fmt.Errorf("store: CompleteJobTx: job_attempts UPDATE: %w", err)
 	}
 
-	// 3. Emit job_completed outbox for downstream consumers (delivery runner,
-	//    webhook fan-out, dashboard projection).
+	// 3. Enqueue JOB_SUCCEEDED inside the tx so commit is the single
+	//    atomicity boundary. emitOutbox forwards `tx` as the Executor —
+	//    the INSERT joins the same write tx as the UPDATEs above.
+	//    aggregate_id=job_id is what makes the handler's
+	//    GetStepByJobID lookup possible.
 	if outboxPayload == "" {
 		outboxPayload = "{}"
 	}
-	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO orchestrator_outbox (event_type, job_id, step_id, payload, created_at)
-		 VALUES ('job_completed', ?, '', ?, ?)`,
-		jobID, outboxPayload, now,
-	); err != nil {
-		return fmt.Errorf("store: CompleteJobTx: outbox INSERT: %w", err)
+	if err := s.emitOutbox(ctx, tx, outbox.InsertParams{
+		AggregateType: "job",
+		AggregateID:   jobID,
+		EventType:     "JOB_SUCCEEDED",
+		Payload:       []byte(outboxPayload),
+	}); err != nil {
+		return fmt.Errorf("store: CompleteJobTx: outbox: %w", err)
 	}
-
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("store: CompleteJobTx: commit: %w", err)
 	}

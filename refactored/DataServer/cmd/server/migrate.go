@@ -14,6 +14,63 @@ import (
 	"velox-server/internal/store/migrations"
 )
 
+// runMigrateWorkflowsV2 implements `velox-server migrate workflows-v2`. It
+// reads the legacy `orchestrator_jobs.raw_json` blobs and replays them as
+// workflow_runs + workflow_steps + workflow_dependencies rows (PR 8 + PR 9).
+//
+// Flags:
+//
+//	--dry-run             Report what would be applied (default).
+//	--apply               Actually write the new rows.
+//
+// The output is a single JSON blob summarising runs_found/runs_migrated/
+// steps_found/steps_migrated/invalid_runs/invalid_steps; when invalid > 0
+// the command exits non-zero so an operator must reconcile before --apply.
+//
+// The legacy tables (orchestrator_jobs, orchestrator_outbox) are kept on
+// disk until the operator runs the separate cleanup migration (028);
+// this command is idempotent and safe to re-run.
+func runMigrateWorkflowsV2(cfg *config.Config, args []string) error {
+	fullArgs := append([]string{"workflows-v2"}, args...)
+	return migrateWorkflowsV2Impl(cfg, fullArgs)
+}
+
+// migrateWorkflowsV2Impl is a thin wrapper so cmd/server/main.go can be
+// tested by injecting a custom run; the real entrypoint is
+// runMigrateWorkflowsV2 above.
+func migrateWorkflowsV2Impl(cfg *config.Config, args []string) error {
+	db, err := openMigrateDB(cfg.Database.DBPath)
+	if err != nil {
+		return fmt.Errorf("migrate workflows-v2: open database: %w", err)
+	}
+	defer db.Close()
+
+	repo := workflow.NewSQLiteRepository(db)
+	// Migration is a one-shot CLI: run BEFORE the outbox dispatcher is
+	// up, so we don't wire outbox emissions here. workflow_events are
+	// still appended (a single WORKFLOW_RUN_CREATED via CreateRun).
+
+	rawJSONProvider := func(_ context.Context) ([][]byte, error) {
+		rows, err := db.Query(`SELECT raw_json FROM orchestrator_jobs`)
+		if err != nil {
+			return nil, fmt.Errorf("read legacy orchestrator_jobs: %w", err)
+		}
+		defer rows.Close()
+		var out [][]byte
+		for rows.Next() {
+			var raw string
+			if err := rows.Scan(&raw); err != nil {
+				continue
+			}
+			out = append(out, []byte(raw))
+		}
+		return out, rows.Err()
+	}
+
+	os.Stdout.Sync() // best-effort, no-op on Windows
+	return workflow.Command(args, repo, rawJSONProvider, os.Stdout)
+}
+
 // migrateUsage prints the usage text for the `migrate` subcommand.
 //
 // Note for the operator: `migrate youtube-oauth-json` is FILESYSTEM-ONLY
@@ -28,6 +85,11 @@ func migrateUsage() {
 	fmt.Fprintf(os.Stderr, "Subcommands:\n")
 	fmt.Fprintf(os.Stderr, "  status\n")
 	fmt.Fprintf(os.Stderr, "      Show status of all schema migrations (applied/pending/checksum_mismatch).\n")
+	fmt.Fprintf(os.Stderr, "  workflows-v2 [--dry-run|--apply]\n")
+	fmt.Fprintf(os.Stderr, "      Replay legacy orchestrator_jobs.raw_json MultiStepJob blobs\n")
+	fmt.Fprintf(os.Stderr, "      into workflow_runs + workflow_steps + workflow_dependencies\n")
+	fmt.Fprintf(os.Stderr, "      (PR 8 + PR 9 cutover). --dry-run is default; pass --apply to write.\n")
+	fmt.Fprintf(os.Stderr, "      Output is JSON: runs_found/runs_migrated/invalid_runs etc.\n")
 	fmt.Fprintf(os.Stderr, "  youtube-oauth-json [--dry-run] [--data-dir=PATH]\n")
 	fmt.Fprintf(os.Stderr, "      Move legacy OAuth token files under <DataDir>/youtube/\n")
 	fmt.Fprintf(os.Stderr, "      into the canonical path <DataDir>/%s/.\n", integrationsYoutube.CanonicalOAuthTokenSubPath)
@@ -55,6 +117,8 @@ func runMigrate(cfg *config.Config, args []string) error {
 		return runMigrateStatus(cfg)
 	case "youtube-oauth-json":
 		return runMigrateOAuthJSON(cfg, args[1:])
+	case "workflows-v2":
+		return runMigrateWorkflowsV2(cfg, args[1:])
 	case "--help", "-h", "help":
 		migrateUsage()
 		return nil

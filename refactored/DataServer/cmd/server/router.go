@@ -106,7 +106,6 @@ func newRouter(cfg *config.Config, deps *serverDeps, registry *app.Registry) *gi
 	return r
 }
 
-func registerAPIV1Routes(r *gin.Engine, cfg *config.Config, deps *serverDeps, ansibleHandlers *remoteansible.AnsibleHandlers) {
 	jobRepo := store.NewSQLiteJobsRepository(deps.sqliteStore)
 	tokenMgr := deps.workerLifecycle.GetTokenManager()
 	jobSvc := jobservice.NewService(cfg, deps.fileQ, jobRepo, nil, deps.reg)
@@ -115,6 +114,7 @@ func registerAPIV1Routes(r *gin.Engine, cfg *config.Config, deps *serverDeps, an
 			jobSvc.SetMasterBundleHash(hash)
 		}
 	}
+	// (Placeholder for additional wiring — kept for compatibility.)
 	jobAPI := jobhandlers.NewJobAPI(cfg, deps.fileQ, tokenMgr, jobSvc, deps.sqliteStore)
 	jobSubmitHandler := jobhandlers.NewJobSubmissionHandler(cfg, deps.fileQ)
 	var youtubeService *ytservice.Service
@@ -131,10 +131,11 @@ func registerAPIV1Routes(r *gin.Engine, cfg *config.Config, deps *serverDeps, an
 	v2JobsGroup := r.Group("/api/v1")
 	jobhandlers.RegisterV2JobRoutes(v2JobsGroup, cfg, deps.fileQ, deps.sqliteStore, jobSvc)
 
-	// Orchestrator multi-step pipeline routes
+	// Orchestrator multi-step pipeline routes (PR 9 cutover: backed by
+	// workflow.Repository rather than the legacy *queue.Orchestrator).
 	orchAdmin := r.Group("/api/v1")
 	orchAdmin.Use(api.AdminAuthMiddleware(cfg))
-	registerOrchestratorRoutes(orchAdmin, deps)
+	registerOrchestratorRoutes(orchAdmin, deps.workflowRepo)
 
 	// PR2b/PR4d: upload-completed now uses BlobStore + ArtifactFinalizationService
 	// instead of the old direct-save + maybeAutoUpload pattern.
@@ -166,11 +167,10 @@ func registerScriptRoutes(r *gin.Engine, cfg *config.Config, deps *serverDeps) {
 	scripthandlers.RegisterRoutes(v1Group, cfg, deps.fileQ, deps.sqliteStore)
 }
 
-func registerOrchestratorRoutes(v1Admin gin.IRoutes, deps *serverDeps) {
-	if deps.orchestrator == nil {
+func registerOrchestratorRoutes(v1Admin gin.IRoutes, repo workflow.Repository) {
+	if repo == nil {
 		return
 	}
-	orch := deps.orchestrator
 
 	v1Admin.POST("/orchestrator/jobs", func(c *gin.Context) {
 		var req struct {
@@ -188,15 +188,20 @@ func registerOrchestratorRoutes(v1Admin gin.IRoutes, deps *serverDeps) {
 			return
 		}
 
-		steps := make([]*queue.JobStep, len(req.Steps))
+		spec := workflow.WorkflowSpec{
+			RunID:        req.JobID,
+			WorkflowType: req.PipelineType,
+			Input:        req.Metadata,
+			Steps:        make([]workflow.WorkflowStepSpec, len(req.Steps)),
+		}
 		for i, s := range req.Steps {
-			stepID, _ := s["step_id"].(string)
-			if stepID == "" {
-				stepID = fmt.Sprintf("step-%d", i)
+			stepKey, _ := s["step_id"].(string)
+			if stepKey == "" {
+				stepKey = fmt.Sprintf("step-%d", i)
 			}
 			stepName, _ := s["step_name"].(string)
 			if stepName == "" {
-				stepName = stepID
+				stepName = stepKey
 			}
 			jobType, _ := s["job_type"].(string)
 			payload, _ := s["payload"].(map[string]interface{})
@@ -212,41 +217,69 @@ func registerOrchestratorRoutes(v1Admin gin.IRoutes, deps *serverDeps) {
 				maxRetries = int(mr)
 			}
 
-			steps[i] = &queue.JobStep{
-				StepID:       stepID,
-				StepName:     stepName,
-				StepOrder:    i,
-				JobType:      jobType,
-				Payload:      payload,
-				Dependencies: deps,
-				MaxRetries:   maxRetries,
+			jobTypeBuf := jobType
+			stepKeyVal := stepName // step_key defaults to step_name for stability
+			_ = stepKey
+			_ = jobTypeBuf
+			spec.Steps[i] = workflow.WorkflowStepSpec{
+				StepKey:       stepKeyVal,
+				JobType:       jobType,
+				Input:         payload,
+				DependsOnKeys: deps,
+				MaxAttempts:   maxRetries,
 			}
 		}
 
-		if err := orch.SubmitMultiStepJob(c.Request.Context(), req.JobID, steps, req.PipelineType, req.Metadata); err != nil {
+		run, err := repo.CreateRun(c.Request.Context(), spec)
+		if err != nil {
 			c.JSON(409, gin.H{"error": err.Error()})
 			return
 		}
 
-		c.JSON(201, gin.H{"job_id": req.JobID, "total_steps": len(steps), "status": "PENDING"})
+		c.JSON(201, gin.H{
+			"job_id":         run.RunID,
+			"workflow_type":  run.WorkflowType,
+			"total_steps":    len(run.Input),
+			"steps_count":    len(spec.Steps),
+			"status":         string(run.Status),
+			"created_at":     run.CreatedAt,
+		})
 	})
 
 	v1Admin.GET("/orchestrator/jobs/:id", func(c *gin.Context) {
-		job := orch.GetJob(c.Param("id"))
-		if job == nil {
-			c.JSON(404, gin.H{"error": "orchestrator job not found"})
+		run, err := repo.GetRun(c.Request.Context(), c.Param("id"))
+		if err != nil {
+			c.JSON(500, gin.H{"error": err.Error()})
 			return
 		}
-		c.JSON(200, job)
+		if run == nil {
+			c.JSON(404, gin.H{"error": "workflow run not found"})
+			return
+		}
+		steps, err := repo.ListSteps(c.Request.Context(), run.RunID)
+		if err != nil {
+			c.JSON(500, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(200, gin.H{"run": run, "steps": steps})
 	})
 
 	v1Admin.GET("/orchestrator/jobs", func(c *gin.Context) {
-		jobs := orch.ListJobs()
-		c.JSON(200, gin.H{"jobs": jobs, "total": len(jobs)})
+		runs, err := repo.ListRuns(c.Request.Context(), 100)
+		if err != nil {
+			c.JSON(500, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(200, gin.H{"jobs": runs, "total": len(runs)})
 	})
 
 	v1Admin.GET("/orchestrator/stats", func(c *gin.Context) {
-		c.JSON(200, orch.Stats())
+		stats, err := repo.Stats(c.Request.Context())
+		if err != nil {
+			c.JSON(500, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(200, stats)
 	})
 }
 
