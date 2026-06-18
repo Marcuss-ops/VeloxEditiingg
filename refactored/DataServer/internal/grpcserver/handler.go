@@ -24,6 +24,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"velox-server/internal/artifacts"
 	"velox-server/internal/queue"
 	"velox-server/internal/store"
 	workersreg "velox-server/internal/workers"
@@ -46,10 +47,14 @@ import (
 // `workers.TokenManager` remains available in the `workers` package for
 // the HTTP control plane (worker_update.go, HTTP lifecycle routes).
 //
-// Artifact-success-gate: `artifactSvc` is the authoritative STAGING →
-// VERIFYING → READY pipeline. Wired via NewHandler; nil-rejected by
-// handleArtifactUploaded at runtime so misconfiguration surfaces as
-// dropped uploads rather than a SUCCEEDED job with no verification.
+// PR 2 (chunk 4): `artifactSvc` is now *artifacts.Service (the new
+// single-tx, master-computed-hash pipeline). The PR 1 STAGING →
+// VERIFYING → READY 2-tx pipeline (queue.ArtifactFinalizationService)
+// was REMOVED from the gRPC path - it is still importable for any
+// reverse-compat needs but no handler reaches it. Bootstrap wires a
+// real *artifacts.Service; nil is rejected at runtime by
+// handleArtifactUploaded so misconfiguration surfaces as dropped
+// uploads rather than a SUCCEEDED job with no verification.
 type Handler struct {
 	pb.UnimplementedWorkerControlServer
 
@@ -58,7 +63,7 @@ type Handler struct {
 	tokenMgr      *workersreg.TokenManager
 	lifecycleSvc  *queue.LifecycleService
 	transitionSvc *queue.TransitionService
-	artifactSvc   *queue.ArtifactFinalizationService
+	artifactSvc   *artifacts.Service
 	dbStore       *store.SQLiteStore
 	config        *HandlerConfig
 
@@ -120,17 +125,19 @@ type workerSession struct {
 // workers.TokenManager. Bootstrap no longer constructs a stray TokenManager
 // just to satisfy this signature.
 //
-// Artifact-success-gate: artifactSvc is the STAGING → VERIFYING → READY
-// pipeline. Nil is REJECTED at runtime by handleArtifactUploaded — every
-// ArtifactUploaded is refused with a misconfiguration log when this is
-// unwired. Bootstrap must supply a real *queue.ArtifactFinalizationService.
+// PR 2 (chunk 4): artifactSvc type changed from *queue.ArtifactFinalizationService
+// (the old 2-tx STAGING→VERIFYING→READY gate) to *artifacts.Service (the
+// new single-tx session-based gate). The handler rejects ArtifactUploaded
+// messages when artifactSvc is nil so misconfiguration surfaces as
+// dropped uploads rather than a SUCCEEDED job with no verification.
+// Bootstrap must supply a real *artifacts.Service.
 func NewHandler(
 	registry *workersreg.Registry,
 	cmdMgr *workersreg.CommandManager,
 	tokenMgr *workersreg.TokenManager,
 	lifecycleSvc *queue.LifecycleService,
 	transitionSvc *queue.TransitionService,
-	artifactSvc *queue.ArtifactFinalizationService,
+	artifactSvc *artifacts.Service,
 	dbStore *store.SQLiteStore,
 	config *HandlerConfig,
 ) *Handler {

@@ -91,6 +91,108 @@ func MustDropLegacyOrchestrator(db *sql.DB, version int) error {
 		ErrLegacyOrchestratorNotMigrated, orchRows, workflowRows)
 }
 
+// ErrStorageKeyDuplicates is returned when migration 029 would attempt to
+// CREATE UNIQUE INDEX on artifacts(storage_provider, storage_key) but legacy
+// rows already contain duplicates for that pair. Operators must clean up
+// duplicates before migration 029 can proceed.
+var ErrStorageKeyDuplicates = errors.New(
+	"migrations: artifacts(storage_provider, storage_key) has duplicates; " +
+		"run `SELECT storage_provider, storage_key, COUNT(*) FROM artifacts " +
+		"WHERE storage_key <> '' GROUP BY 1,2 HAVING COUNT(*) > 1` to inspect, " +
+		"delete or coalesce the duplicates, then re-run migrations",
+)
+
+// MustEnsureNoStorageKeyDuplicates is invoked by RunMigrations before
+// migration 029 to enforce the precondition that no two rows in
+// `artifacts` share the same (storage_provider, storage_key) pair.
+//
+// Migration 029_artifact_uploads.sql installs:
+//
+//	CREATE UNIQUE INDEX idx_artifacts_storage_key
+//	  ON artifacts(storage_provider, storage_key)
+//	  WHERE storage_key <> '';
+//
+// SQLite refuses to apply that CREATE UNIQUE INDEX if duplicates already
+// exist for the partial key. We surface those duplicates up-front so the
+// operator gets a clean error (with a sample of the offending rows)
+// instead of a generic SQLite constraint failure.
+//
+// Returns nil when no duplicates exist; returns ErrStorageKeyDuplicates
+// (wrapped with COUNT and a sample) when they do. Versions other than 29
+// are no-ops so this hook can sit in the RunMigrations loop without
+// touching unrelated migrations.
+func MustEnsureNoStorageKeyDuplicates(db *sql.DB, version int) error {
+	if version != 29 {
+		// Defence in depth — only meaningful for 029_artifact_uploads.
+		return nil
+	}
+	if db == nil {
+		return fmt.Errorf("migrations: pre_check: nil db handle")
+	}
+
+	exists, err := tableExistsOrError(db, "artifacts")
+	if err != nil {
+		return fmt.Errorf("migrations: pre_check: artifacts lookup: %w", err)
+	}
+	if !exists {
+		// Pre-029 schema (older install) — no rows to conflict against.
+		return nil
+	}
+
+	// Count groups that have >1 row.
+	var dupGroups int64
+	if err := db.QueryRow(`
+		SELECT COUNT(*)
+		FROM (
+			SELECT storage_provider, storage_key
+			FROM artifacts
+			WHERE storage_key <> ''
+			GROUP BY storage_provider, storage_key
+			HAVING COUNT(*) > 1
+		)`).Scan(&dupGroups); err != nil {
+		return fmt.Errorf("migrations: pre_check: count duplicates: %w", err)
+	}
+	if dupGroups == 0 {
+		return nil
+	}
+
+	// Pull a sample of the offending rows for the operator runbook —
+	// we want the message to be actionable, not a bare count.
+	rows, err := db.Query(`
+		SELECT storage_provider, storage_key, COUNT(*) AS n, MIN(id) AS sample_id
+		FROM artifacts
+		WHERE storage_key <> ''
+		GROUP BY storage_provider, storage_key
+		HAVING COUNT(*) > 1
+		ORDER BY n DESC, storage_key ASC
+		LIMIT 10`)
+	if err != nil {
+		return fmt.Errorf("migrations: pre_check: sample duplicates: %w", err)
+	}
+	defer rows.Close()
+
+	type dupSample struct {
+		provider   string
+		key        string
+		count      int64
+		sampleID   string
+	}
+	var samples []dupSample
+	for rows.Next() {
+		var s dupSample
+		if err := rows.Scan(&s.provider, &s.key, &s.count, &s.sampleID); err != nil {
+			return fmt.Errorf("migrations: pre_check: scan sample: %w", err)
+		}
+		samples = append(samples, s)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("migrations: pre_check: rows err: %w", err)
+	}
+
+	return fmt.Errorf("%w (%d duplicate groups; first 10: %v)",
+		ErrStorageKeyDuplicates, dupGroups, samples)
+}
+
 // tableExists is a small helper that survives older SQLite snapshots where
 // sqlite_master exists but the named table does not.
 //

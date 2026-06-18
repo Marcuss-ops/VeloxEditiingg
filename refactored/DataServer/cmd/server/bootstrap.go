@@ -16,6 +16,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"velox-server/internal/app"
+	"velox-server/internal/artifacts"
 	"velox-server/internal/audit"
 	"velox-server/internal/config"
 	"velox-server/internal/deliveries"
@@ -64,6 +65,14 @@ type serverDeps struct {
 	outboxDispatcher    *outbox.Dispatcher
 	deliveryRunner      *deliveries.DeliveryRunner
 	blobStore           store.BlobStore
+
+	// PR 2 (chunk 4): artifacts.Service is the single-tx, master-computed-
+	// hash gate for ArtifactUploaded. Bootstrap owns it (the only place
+	// outside grpcserver that holds a reference); the handler can READ
+	// artifacts/artifacts.Service via deps.artifactSvc but cannot bypass
+	// it. Closely parallels the lifecyclePR3 / artifactGate pattern below:
+	// bootstrap is the composition root, never anything else.
+	artifactSvc *artifacts.Service
 
 	// ── PR 3 composition ──────────────────────────────────────────────────
 	//
@@ -227,6 +236,24 @@ func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
 	}
 	log.Printf("[BOOTSTRAP] BlobStore ready: staging=%s storage=%s", blobStore.StagingDir(), blobStore.FinalDir())
 
+	// PR 2 (chunk 4): artifacts.Service. The same *sql.DB that
+	// store.SQLiteStore uses for migrations/journaling is passed in so
+	// FinalizeArtifactAndCompleteJob can join its multi-table tx with the
+	// artifact_uploads UPDATE. Clock is nil → defaults to realClock{}
+	// inside NewService.
+	//
+	// The repository uses SQLiteRepository against the same connection —
+	// SQLite serializes writers so concurrent uploads on the same job_id
+	// are race-free at the SQL layer. The state-machine legality (which
+	// status transitions are allowed) lives in Service not in the repo.
+	artifactSvc := artifacts.NewService(
+		artifacts.NewSQLiteRepository(sqliteStore.DB()),
+		blobStore,
+		sqliteStore.DB(),
+		nil, // RealClock default
+	)
+	log.Printf("[BOOTSTRAP] artifacts.Service ready (single-tx, master-computed-hash gate for ArtifactUploaded)")
+
 	outboxRegistry := outbox.NewRegistry()
 	stepReady := handlersoutbox.StepReadyHandler{Wf: workflowRepo, Q: fileQ}
 	jobSucceeded := handlersoutbox.JobSucceededHandler{Wf: workflowRepo}
@@ -263,6 +290,7 @@ func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
 		outboxStore:         outboxStore,
 		outboxDispatcher:    outboxDispatcher,
 		blobStore:           blobStore,
+		artifactSvc:         artifactSvc,
 		lifecyclePR3:        lcPR3,
 		artifactGate:        artifactGate,
 	}, nil
@@ -357,12 +385,12 @@ func runServer(cfg *config.Config) error {
 			transitionSvc := queue.NewTransitionService(lcSvc)
 			cmdMgr := workersreg.NewCommandManager(deps.sqliteStore)
 			tokenMgr := workersreg.NewTokenManager(deps.sqliteStore)
-			// PR-2 (full artifact gate closure): the gRPC artifact handler
-			// regressed to trusting the worker, so we wire the authoritative
-			// STAGING → VERIFYING → READY pipeline. nil is rejected at
+			// PR 2 (chunk 4): the gRPC artifact handler no longer trusts
+			// worker-declared path/size/sha. Wiring flows bootstrap's
+			// already-built artifacts.Service (the *artifacts.Service that
+			// owns artifact_uploads + canonical-key promotion + single-tx
+			// CAS) into grpcserver.NewHandler; the handler rejects nil at
 			// handleArtifactUploaded time as a defense-in-depth check.
-			artifactSvc := queue.NewArtifactFinalizationService(deps.sqliteStore)
-
 			grpcHandlerConfig := &grpcserver.HandlerConfig{
 				PushMode: cfg.Server.GRPCPushMode,
 			}

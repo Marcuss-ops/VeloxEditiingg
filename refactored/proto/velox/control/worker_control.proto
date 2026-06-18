@@ -118,14 +118,51 @@ message JobResult {
 
 message Goodbye {}
 
+// ArtifactUploaded — PR 2 (chunk 4) trust boundary.
+//
+// DEPRECATED FIELDS (kept for wire-compat with old workers; never trusted
+// by the master): artifact_path (4), artifact_size (5), upload_status (6),
+// error (7). The master recomputes size / sha / mime from the streamed
+// bytes; the worker-supplied path and size are NEVER used as sources of
+// truth in the new pipeline authorized via Service.Finalize.
+//
+// NEW REQUIRED FIELDS:
+//   * upload_id (8)        — the master-side session identifier returned
+//                            by Service.BeginUpload. The worker forwards
+//                            this and the master uses it to recover the
+//                            artifact_uploads row + the streamed bytes.
+//   * lease_id   (9)       — copied from the JOB_RUNNING state, CAS-gated
+//                            in Service.FinalizeArtifactAndCompleteJob.
+//   * attempt    (10)      — attempt_number the worker finished.
+//   * expected_revision (11) — the job.revision the worker observed when
+//                            it accepted the lease; CAS-gated in
+//                            Service.FinalizeArtifactAndCompleteJob.
+//
+// All five (upload_id + lease_id + attempt + expected_revision +
+// artifact_id for diagnostic correlation) must be supplied by the worker.
+// A missing/empty upload_id is rejected by the handler because the master
+// cannot resolve the artifact_uploads row without it.
+//
+// .pb.go regeneration (chunk 4+r follow-up): once the regenerated Go types
+// land, handler_artifacts.go can drop its UploadID-proxy-via-artifact_id
+// workaround and use the real upload_id field directly.
 message ArtifactUploaded {
     string job_id = 1;
     string artifact_id = 2;
     string artifact_type = 3;
-    string artifact_path = 4;
-    int64 artifact_size = 5;
-    string upload_status = 6;
-    string error = 7;
+
+    // Deprecated PR 1 fields. Kept on the wire by tag number for
+    // backwards-compat with old workers but the master ignores them.
+    string artifact_path = 4;     // DEPRECATED — master recomputes from bytes
+    int64 artifact_size = 5;      // DEPRECATED — master recomputes from bytes
+    string upload_status = 6;     // DEPRECATED — replaced by upload row
+    string error = 7;             // Diagnostic only, surfaced in logs
+
+    // PR 2 required fields.
+    string upload_id = 8;         // master-side session id (BeginUpload)
+    string lease_id = 9;          // CAS-gate for finalization
+    int32 attempt = 10;           // attempt_number
+    int32 expected_revision = 11; // job.revision at lease acceptance
 }
 
 // ---------------------------------------------------------

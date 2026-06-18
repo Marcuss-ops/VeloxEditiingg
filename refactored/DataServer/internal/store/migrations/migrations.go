@@ -61,9 +61,13 @@ func RunMigrations(db *sql.DB, migrationsFS embed.FS, dir string) error {
 			continue
 		}
 
-		// Pre-flight check before destructive migrations. Today this only
-		// fires for 028_legacy_drop — see pre_check.go.
+		// Pre-flight check before destructive migrations. Today this fires for
+		// 028_legacy_drop (workflow_v2 precondition) and 029_artifact_uploads
+		// (artifacts.storage_key uniqueness precondition).
 		if err := MustDropLegacyOrchestrator(db, m.Version); err != nil {
+			return fmt.Errorf("migrations: pre_check %03d_%s: %w", m.Version, m.Name, err)
+		}
+		if err := MustEnsureNoStorageKeyDuplicates(db, m.Version); err != nil {
 			return fmt.Errorf("migrations: pre_check %03d_%s: %w", m.Version, m.Name, err)
 		}
 
