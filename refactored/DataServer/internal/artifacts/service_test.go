@@ -530,7 +530,8 @@ func TestFinalize_BlobPromotedButDBCASMissed(t *testing.T) {
 	require.Equal(t, "STAGING", artStatus)
 
 	// Orphan blob must exist on disk (reconciler will reclaim).
-	_, absFinal, err := FinalStorageKey(env.bs, sha256Hex(payload), ".bin")
+	// Extension matches mimeToExt("video/mp4") from beginUploadDefaultCmd.
+	_, absFinal, err := FinalStorageKey(env.bs, sha256Hex(payload), ".mp4")
 	require.NoError(t, err)
 	_, err = os.Stat(absFinal)
 	require.NoError(t, err, "orphan blob at %s must exist", absFinal)
@@ -587,8 +588,8 @@ func TestFinalize_DeliveryIsIdempotent(t *testing.T) {
 	// Manually re-run the delivery INSERT to verify WHERE NOT EXISTS
 	// makes it a no-op.
 	now := env.clock.Now().UTC().Format(time.RFC3339)
-	_, err = env.db.Exec(`INSERT INTO job_deliveries (artifact_id, destination_id, payload, status, created_at)
-		SELECT ?, 'primary', '{}', 'PENDING', ?
+	_, err = env.db.Exec(`INSERT INTO job_deliveries (artifact_id, destination_id, status, created_at)
+		SELECT ?, 'primary', 'PENDING', ?
 		WHERE NOT EXISTS (SELECT 1 FROM job_deliveries WHERE artifact_id=? AND destination_id='primary')`,
 		sess.ArtifactID, now, sess.ArtifactID)
 	require.NoError(t, err)

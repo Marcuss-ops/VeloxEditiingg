@@ -390,8 +390,9 @@ func TestCalendarAPI_StatusLifecycleAndOutputs(t *testing.T) {
 		t.Fatalf("expected processing, got %q", processing.Status)
 	}
 
-	// Complete the job
-	if err := q.CompleteJob(ctx, event.JobID); err != nil {
+	// Complete the job via DB update (CompleteJob removed from FileQueue)
+	_, err := q.GetDBStore().DB().ExecContext(ctx, "UPDATE jobs SET status = 'SUCCEEDED', completed_at = datetime('now') WHERE job_id = ?", event.JobID)
+	if err != nil {
 		t.Fatalf("complete job: %v", err)
 	}
 

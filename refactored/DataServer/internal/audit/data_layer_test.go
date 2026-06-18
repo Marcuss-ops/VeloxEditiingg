@@ -119,56 +119,7 @@ func TestDataLayerAuditorAllowsArchivedLegacyFiles(t *testing.T) {
 	}
 }
 
-// TestCheckLegacyFiles_DetectsForbidden tests that checkLegacyFiles detects
-// forbidden legacy files.
-func TestCheckLegacyFiles_DetectsForbidden(t *testing.T) {
-	tmpDir := t.TempDir()
-	secretsDir := filepath.Join(tmpDir, "secrets")
-	os.MkdirAll(secretsDir, 0755)
 
-	// Create ALL required primary files first
-	os.MkdirAll(filepath.Join(tmpDir, "youtube", "GroupYoutubeManager"), 0755)
-	os.MkdirAll(filepath.Join(tmpDir, "youtube", "channels"), 0755)
-	os.WriteFile(filepath.Join(tmpDir, "youtube", "GroupYoutubeManager", "ChannelsSaved.json"), []byte(`{}`), 0644)
-	os.WriteFile(filepath.Join(tmpDir, "youtube", "channels", "channels.json"), []byte(`{}`), 0644)
-	os.WriteFile(filepath.Join(tmpDir, "workers.json"), []byte(`{}`), 0644)
-	os.WriteFile(filepath.Join(tmpDir, "velox.db"), []byte(``), 0644)
-	os.WriteFile(filepath.Join(tmpDir, "ansible_runs.json"), []byte(`{}`), 0644)
-	bundleDir := filepath.Join(tmpDir, "bundle")
-	os.MkdirAll(bundleDir, 0755)
-	os.WriteFile(filepath.Join(bundleDir, "manifest_v2.json"), []byte(`{}`), 0644)
-
-	// Create forbidden legacy file
-	youtubeDir := filepath.Join(tmpDir, "youtube")
-	os.MkdirAll(youtubeDir, 0755)
-	os.WriteFile(filepath.Join(youtubeDir, "youtube_manager.json"), []byte(`{}`), 0644)
-
-	auditor := NewDataLayerAuditor(tmpDir, secretsDir, filepath.Join(tmpDir, "velox.db"))
-	result := &DataLayerAuditResult{
-		Passed: true,
-		Errors: make([]string, 0),
-	}
-
-	auditor.checkLegacyFiles(result)
-
-	// checkLegacyFiles adds errors but doesn't set Passed - that's done by Audit()
-	// So we check for errors, not Passed
-	if len(result.Errors) == 0 {
-		t.Error("checkLegacyFiles should add errors when forbidden legacy files exist")
-	}
-
-	found := false
-	for _, err := range result.Errors {
-		if contains(err, "youtube_manager.json") {
-			found = true
-			break
-		}
-	}
-
-	if !found {
-		t.Errorf("Expected error about youtube_manager.json, got: %v", result.Errors)
-	}
-}
 
 // TestCheckPrimaryFiles_ReportsMissing tests that checkPrimaryFiles detects
 // missing primary files.

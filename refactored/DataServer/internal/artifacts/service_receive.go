@@ -78,6 +78,7 @@ func (s *Service) Receive(ctx context.Context, uploadID string, reader io.Reader
 
 	if _, err := io.Copy(writer, reader); err != nil {
 		cleanup()
+		_ = s.markFailed(ctx, uploadID, "io.Copy error")
 		return nil, fmt.Errorf("%w: io.Copy: %v", ErrBlobWriteFailed, err)
 	}
 
