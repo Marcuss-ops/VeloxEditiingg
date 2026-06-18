@@ -27,7 +27,9 @@ import (
 // workflow migrator before the legacy orchestrator tables can be dropped.
 var ErrLegacyOrchestratorNotMigrated = errors.New(
 	"migrations: legacy orchestrator data is still present and workflow_runs is empty; " +
-		"run `velox-server migrate workflows-v2 --apply` before upgrading past 028",
+		"the `velox-server migrate` subcommand has been removed — " +
+		"manually migrate orchestrator_jobs data into workflow_runs before upgrading past 028, " +
+		"or export and drop the legacy tables if the data is no longer needed",
 )
 
 // MustDropLegacyOrchestrator is invoked by RunMigrations before migration 028

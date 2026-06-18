@@ -3,7 +3,6 @@ package youtube
 import (
 	"github.com/gin-gonic/gin"
 
-	"velox-server/internal/handlers/server/youtube/channels"
 	"velox-server/internal/handlers/server/youtube/creative"
 	"velox-server/internal/handlers/server/youtube/videos"
 )
@@ -18,26 +17,25 @@ import (
 // deprecation stub is needed once both sides agree the surface is
 // gone.
 func RegisterYouTubeRoutes(rg gin.IRouter, h *YouTubeHandlers) {
-	ch := channels.NewHandler(h.GetService(), h.GetStorage())
 	vh := videos.NewHandler(h.GetService(), h.ClearPrivateVideosCache)
 	cr := creative.NewHandler(h.GetService())
 
 	// Channels
-	rg.GET("/channels", ch.ListChannels)
-	rg.GET("/channels/undefined", ch.ListUndefinedChannels)
-	rg.POST("/channels/refresh-metadata", ch.RefreshChannelsMetadata)
-	rg.POST("/channels/validate-all", ch.ValidateAllTokens)
-	rg.POST("/channels/bulk-delete", ch.BulkDeleteChannels)
-	rg.POST("/channels/batch-language", ch.BatchUpdateLanguage)
-	rg.GET("/channels/stats", ch.GetChannelStats)
-	rg.GET("/channels/duplicates", ch.DetectDuplicateChannels)
-	rg.GET("/channels/export", ch.ExportChannels)
-	rg.GET("/channels/:id", ch.GetChannel)
-	rg.GET("/channels/:id/groups", ch.GetChannelGroups)
-	rg.PATCH("/channels/:id", ch.UpdateChannel)
-	rg.POST("/channels/:id/move", ch.MoveChannelToGroup)
-	rg.POST("/channels/:id/language/auto-detect", ch.AutoDetectLanguage)
-	rg.DELETE("/channels/:id", ch.DeleteChannel)
+	rg.GET("/channels", h.ListChannels)
+	rg.GET("/channels/undefined", h.ListUndefinedChannels)
+	rg.POST("/channels/refresh-metadata", h.RefreshChannelsMetadata)
+	rg.POST("/channels/validate-all", h.ValidateAllTokens)
+	rg.POST("/channels/bulk-delete", h.BulkDeleteChannels)
+	rg.POST("/channels/batch-language", h.BatchUpdateLanguage)
+	rg.GET("/channels/stats", h.GetChannelStats)
+	rg.GET("/channels/duplicates", h.DetectDuplicateChannels)
+	rg.GET("/channels/export", h.ExportChannels)
+	rg.GET("/channels/:id", h.GetChannel)
+	rg.GET("/channels/:id/groups", h.GetChannelGroups)
+	rg.PATCH("/channels/:id", h.UpdateChannel)
+	rg.POST("/channels/:id/move", h.MoveChannelToGroupV1)
+	rg.POST("/channels/:id/language/auto-detect", h.AutoDetectLanguage)
+	rg.DELETE("/channels/:id", h.DeleteChannel)
 
 	// Groups
 	rg.GET("/groups", h.ListGroups)
@@ -75,7 +73,7 @@ func RegisterYouTubeRoutes(rg gin.IRouter, h *YouTubeHandlers) {
 	rg.POST("/credentials/refresh/:id", h.RefreshToken)
 
 	// Analytics
-	rg.GET("/analytics/channel/:id", ch.GetChannelAnalytics)
+	rg.GET("/analytics/channel/:id", h.GetChannelAnalytics)
 	rg.POST("/analytics/refresh/:id", h.RefreshAnalytics)
 	rg.GET("/analytics/refresh/:id", h.RefreshAnalytics) // Allow GET for easier testing
 
