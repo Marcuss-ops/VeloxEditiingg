@@ -22,16 +22,7 @@ func YouTubeRoutes(r *gin.Engine, cfg *config.Config, ym *YouTubeManager) {
 	r.GET("/api/youtube/accounts/:id", ym.GetAccountHandler())
 	r.POST("/api/youtube/accounts/:id/refresh", ym.RefreshAccountHandler())
 
-	// ── Groups (legacy /api/youtube/groups — without /manager/ segment) ──
-	r.GET("/api/youtube/groups", ym.ListGroupsHandler())
-	r.POST("/api/youtube/groups", ym.CreateGroupHandler())
-	r.DELETE("/api/youtube/groups/:group_name", ym.DeleteGroupHandler())
-	r.POST("/api/youtube/groups/:group_name/channels", ym.AddChannelHandler())
-	r.DELETE("/api/youtube/groups/:group_name/channels/:channel_id", ym.DeleteChannelHandler())
-	r.POST("/api/youtube/groups/:group_name/channels/:channel_id/move", ym.MoveChannelHandler())
-	r.POST("/api/youtube/groups/:group_name/channels/:channel_id/stats", ym.RefreshChannelStatsHandler())
-
-	// ── Manager Groups (legacy /api/youtube/manager/*) ──
+	// ── Manager Groups (/api/youtube/manager/* + /api/v1/youtube/manager/*) ──
 	r.GET("/api/youtube/manager/groups", ym.ListGroupsHandler())
 	r.POST("/api/youtube/manager/groups", ym.CreateGroupHandler())
 	r.DELETE("/api/youtube/manager/groups/:group_name", ym.DeleteGroupHandler())
