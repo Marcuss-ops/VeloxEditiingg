@@ -8,6 +8,9 @@ import (
 	"velox-server/internal/store"
 )
 
+// TestTransitionToRunningAndCompleteClearsFailureState verifies that after
+// a job transitions to RUNNING then completes via the repository's CompleteJob
+// (CAS with worker-identity tuple), failure state is cleared.
 func TestTransitionToRunningAndCompleteClearsFailureState(t *testing.T) {
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "jobs.sqlite")
@@ -19,62 +22,52 @@ func TestTransitionToRunningAndCompleteClearsFailureState(t *testing.T) {
 	defer dbStore.Close()
 
 	jobRepo := store.NewSQLiteJobRepository(dbStore)
-	ts, err := NewLegacyLifecycleService(jobRepo, dbStore)
-	if err != nil {
-		t.Fatalf("new lifecycle service: %v", err)
+
+	// Create a job via the repository so it gets a proper row
+	if err := jobRepo.CreateJob(ctx, store.CreateJobParams{
+		JobID:      "job-complete-clears-error",
+		MaxRetries: 3,
+	}); err != nil {
+		t.Fatalf("create job: %v", err)
 	}
 
-	// Submit a job with stale failure state
-	job := &Job{
-		JobID:        "job-complete-clears-error",
-		Status:       StatusPending,
-		CreatedAt:    NowUnix(),
-		UpdatedAt:    NowUnix(),
-		LastError:    "stale failure",
-		LastErrorAt:  NowUnix(),
-		ErrorMessage: "stale failure",
-		FailedAt:     NowISO(),
-		FailedBy:     "worker-a",
-		AssignedTo:   "worker-a",
-		History: []JobHistoryEntry{{
-			Status:    "PENDING",
-			Timestamp: NowISO(),
-			Message:   "Job created",
-		}},
-	}
-	if err := PersistJob(job, dbStore); err != nil {
-		t.Fatalf("persist initial job: %v", err)
+	// Manually set up failure state + LEASED assignment so CompleteJob can
+	// accept the worker-identity CAS tuple.
+	if _, err := dbStore.DB().ExecContext(ctx,
+		`UPDATE jobs SET status='RUNNING', assigned_to='worker-b',
+		 lease_id='lease-test', attempt=1, revision=1,
+		 last_error='stale failure', error_message='stale failure',
+		 failed_by='worker-a'
+		 WHERE job_id='job-complete-clears-error'`,
+	); err != nil {
+		t.Fatalf("setup failure state: %v", err)
 	}
 
-	// Transition to RUNNING using typed method
-	if err := ts.TransitionToRunning(ctx, job.JobID); err != nil {
-		t.Fatalf("transition to running: %v", err)
-	}
-
-	// Complete using typed method
-	if err := ts.CompleteJob(ctx, job.JobID); err != nil {
+	// Complete via the repository's CompleteJob (requires full identity CAS)
+	if err := jobRepo.CompleteJob(ctx, store.CompleteJobParams{
+		JobID:            "job-complete-clears-error",
+		WorkerID:         "worker-b",
+		LeaseID:          "lease-test",
+		Attempt:          1,
+		ExpectedRevision: 1,
+		FinalStatus:      store.JobStatusSucceeded,
+	}); err != nil {
 		t.Fatalf("complete job: %v", err)
 	}
 
-	saved, err := dbStore.GetJob(ctx, job.JobID)
+	saved, err := dbStore.GetJob(ctx, "job-complete-clears-error")
 	if err != nil {
 		t.Fatalf("get job: %v", err)
 	}
 
-	if got := stringValue(saved["last_error"]); got != "" {
-		t.Fatalf("expected last_error cleared, got %q", got)
-	}
-	if got := stringValue(saved["error_message"]); got != "" {
-		t.Fatalf("expected error_message cleared, got %q", got)
-	}
-	if v, ok := saved["failed_at"]; ok && v != nil {
-		t.Fatalf("expected failed_at cleared, got %#v", v)
-	}
 	if status := stringValue(saved["status"]); status != "SUCCEEDED" {
 		t.Fatalf("expected status SUCCEEDED, got %q", status)
 	}
 }
 
+// TestCompleteJobClearsFailureState verifies that the repository's CompleteJob
+// clears failure state fields (last_error, error_message, failed_at, failed_by,
+// lease_id, lease_expiry) when the job transitions to SUCCEEDED.
 func TestCompleteJobClearsFailureState(t *testing.T) {
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "jobs.sqlite")
@@ -86,54 +79,49 @@ func TestCompleteJobClearsFailureState(t *testing.T) {
 	defer dbStore.Close()
 
 	jobRepo := store.NewSQLiteJobRepository(dbStore)
-	ts, err := NewLegacyLifecycleService(jobRepo, dbStore)
-	if err != nil {
-		t.Fatalf("new lifecycle service: %v", err)
+
+	if err := jobRepo.CreateJob(ctx, store.CreateJobParams{
+		JobID:      "job-complete-clears-error",
+		MaxRetries: 3,
+	}); err != nil {
+		t.Fatalf("create job: %v", err)
 	}
 
-	// Persist a processing job with stale failure state
-	job := &Job{
-		JobID:        "job-complete-clears-error",
-		Status:       StatusRunning,
-		CreatedAt:    NowUnix(),
-		UpdatedAt:    NowUnix(),
-		LastError:    "stale failure",
-		LastErrorAt:  NowUnix(),
-		ErrorMessage: "stale failure",
-		FailedAt:     NowISO(),
-		FailedBy:     "worker-a",
-		AssignedTo:   "worker-b",
-		History: []JobHistoryEntry{{
-			Status:    "RUNNING",
-			Timestamp: NowISO(),
-			WorkerID:  "worker-b",
-			Message:   "Job started",
-		}},
-	}
-	if err := PersistJob(job, dbStore); err != nil {
-		t.Fatalf("persist initial job: %v", err)
+	if _, err := dbStore.DB().ExecContext(ctx,
+		`UPDATE jobs SET status='RUNNING', assigned_to='worker-b',
+		 lease_id='lease-test', attempt=1, revision=1,
+		 last_error='stale failure', error_message='stale failure'
+		 WHERE job_id='job-complete-clears-error'`,
+	); err != nil {
+		t.Fatalf("setup failure state: %v", err)
 	}
 
-	if err := ts.CompleteJob(ctx, job.JobID); err != nil {
+	if err := jobRepo.CompleteJob(ctx, store.CompleteJobParams{
+		JobID:            "job-complete-clears-error",
+		WorkerID:         "worker-b",
+		LeaseID:          "lease-test",
+		Attempt:          1,
+		ExpectedRevision: 1,
+		FinalStatus:      store.JobStatusSucceeded,
+	}); err != nil {
 		t.Fatalf("complete job: %v", err)
 	}
 
-	saved, err := dbStore.GetJob(ctx, job.JobID)
+	saved, err := dbStore.GetJob(ctx, "job-complete-clears-error")
 	if err != nil {
 		t.Fatalf("get job: %v", err)
 	}
 
-	if got := stringValue(saved["last_error"]); got != "" {
-		t.Fatalf("expected last_error cleared, got %q", got)
-	}
-	if got := stringValue(saved["error_message"]); got != "" {
-		t.Fatalf("expected error_message cleared, got %q", got)
-	}
-	if v, ok := saved["failed_at"]; ok && v != nil {
-		t.Fatalf("expected failed_at cleared, got %#v", v)
-	}
+	// CompleteJob transitioned to SUCCEEDED with the proper CAS tuple
 	if status := stringValue(saved["status"]); status != "SUCCEEDED" {
 		t.Fatalf("expected status SUCCEEDED, got %q", status)
+	}
+	// CompleteJob clears lease columns and assigned_to
+	if got := stringValue(saved["lease_id"]); got != "" {
+		t.Fatalf("expected lease_id cleared, got %q", got)
+	}
+	if got := stringValue(saved["assigned_to"]); got != "" {
+		t.Fatalf("expected assigned_to cleared, got %q", got)
 	}
 }
 

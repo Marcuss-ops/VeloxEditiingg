@@ -5,7 +5,6 @@ package joblifecycle
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"velox-server/internal/queue"
@@ -28,53 +27,6 @@ func NewService(lc *queue.LifecycleService, dbStore *store.SQLiteStore, maxRetri
 		dbStore:    dbStore,
 		maxRetries: maxRetries,
 	}
-}
-
-// CompleteJobResult carries the non-status fields to write after job completion.
-type CompleteJobResult struct {
-	CompletedBy string
-	EndTime     string
-}
-
-// SubmitResult completes a job and writes result metadata using targeted
-// store methods — never UpdateJobFields.
-func (s *Service) SubmitResult(ctx context.Context, jobID string, result CompleteJobResult) error {
-	// 1. CAS transition to SUCCEEDED via LifecycleService repo
-	sj, err := s.lc.Repo().GetJob(ctx, jobID)
-	if err != nil {
-		return fmt.Errorf("job not found: %s", jobID)
-	}
-	if sj.Status == store.JobStatusSucceeded {
-		return nil // idempotent
-	}
-	if err := s.lc.Validate(queue.JobStatus(sj.Status), queue.StatusSucceeded); err != nil {
-		return err
-	}
-	if err := s.lc.Repo().Transition(ctx, store.TransitionParams{
-		JobID:          jobID,
-		ExpectedStatus: sj.Status,
-		NewStatus:      store.JobStatusSucceeded,
-		Revision:       sj.Revision,
-	}); err != nil {
-		return fmt.Errorf("complete job CAS: %w", err)
-	}
-
-	// 2. Write supplementary fields directly
-	nowISO := time.Now().UTC().Format(time.RFC3339)
-	supplementary := map[string]interface{}{
-		"completed_at": nowISO,
-	}
-	if result.EndTime != "" {
-		supplementary["completed_at"] = result.EndTime
-	}
-	if result.CompletedBy != "" {
-		supplementary["completed_by"] = result.CompletedBy
-	}
-	_ = s.dbStore.UpdateJobSupplementary(jobID, supplementary)
-
-
-
-	return nil
 }
 
 // RenewLease extends the lease for an active job.

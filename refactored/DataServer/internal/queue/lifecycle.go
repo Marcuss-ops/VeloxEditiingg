@@ -38,48 +38,6 @@ func (l *LifecycleService) Validate(from, to JobStatus) error {
 	return nil
 }
 
-// CompleteJob marks a job as SUCCEEDED using CAS (compare-and-swap on revision).
-func (l *LifecycleService) CompleteJob(ctx context.Context, jobID string) error {
-	sj, err := l.jobRepo.GetJob(ctx, jobID)
-	if err != nil {
-		return fmt.Errorf("job not found: %s", jobID)
-	}
-
-	if sj.Status == store.JobStatusSucceeded {
-		return nil // idempotent
-	}
-
-	if err := l.Validate(JobStatus(sj.Status), StatusSucceeded); err != nil {
-		return err
-	}
-
-	nowISO := NowISO()
-	if err := l.jobRepo.Transition(ctx, store.TransitionParams{
-		JobID:          jobID,
-		ExpectedStatus: sj.Status,
-		NewStatus:      store.JobStatusSucceeded,
-		Revision:       sj.Revision,
-	}); err != nil {
-		return fmt.Errorf("CAS transition failed: %w", err)
-	}
-
-	l.eventStore.UpdateJobSupplementary(jobID, map[string]interface{}{
-		"completed_at":  nowISO,
-		"last_error":    "",
-		"error_message": "",
-		"failed_at":     nil,
-		"failed_by":     nil,
-		"lease_id":      "",
-		"lease_expiry":  nil,
-		"assigned_to":   sj.AssignedTo,
-	})
-	l.eventStore.LogJobEvent(jobID, "job_succeeded", map[string]interface{}{
-		"worker_id": sj.AssignedTo,
-		"revision":  sj.Revision + 1,
-	})
-	return nil
-}
-
 // RecordRenderFinished records that a worker has completed rendering.
 func (l *LifecycleService) RecordRenderFinished(ctx context.Context, cmd store.RecordRenderFinishedCommand) error {
 	if l.repo != nil {

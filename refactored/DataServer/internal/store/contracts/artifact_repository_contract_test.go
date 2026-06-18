@@ -108,28 +108,9 @@ func ArtifactRepositoryContract(t *testing.T, factory ArtifactRepositoryFactory)
 		}
 	})
 
-	t.Run("FinalizeAndComplete with no jobID only touches artifact", func(t *testing.T) {
-		repo, cleanup := factory(t)
-		defer cleanup()
-		ctx := context.Background()
-		id := "art_finalize_" + randSuffix()
-		if err := repo.Insert(ctx, &store.Artifact{
-			ID: id, JobID: "job_x", Type: "video",
-			StorageProvider: "local", SHA256: "abc",
-		}); err != nil {
-			t.Fatalf("Insert: %v", err)
-		}
-		if err := repo.FinalizeAndComplete(ctx, id, "completed", "https://example/v.mp4", "", ""); err != nil {
-			t.Fatalf("FinalizeAndComplete: %v", err)
-		}
-		got, err := repo.GetByID(ctx, id)
-		if err != nil || got == nil {
-			t.Fatalf("GetByID after finalize: %v %v", got, err)
-		}
-		if got.Status != "completed" || got.StorageURL != "https://example/v.mp4" {
-			t.Errorf("status/url not updated: %+v", got)
-		}
-	})
+	// ── FinalizeAndComplete removed in PR 3.5-b (sole SUCCEEDED writer is
+	//     FinalizationRepository.FinalizeVerified). The contract test now
+	//     validates Insert + GetByID + ListByJob + direct status update.
 }
 
 // TestArtifactRepositoryContract_SQLite drives the suite against the SQLite backend.
