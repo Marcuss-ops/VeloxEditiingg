@@ -28,8 +28,8 @@ func TestDiscoverMigrations_AllVersions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("discoverMigrations failed: %v", err)
 	}
-	if len(migs) != 11 {
-		t.Fatalf("expected 11 migrations, got %d", len(migs))
+	if len(migs) != 24 {
+		t.Fatalf("expected 24 migrations, got %d", len(migs))
 	}
 	expected := []struct {
 		Version int
@@ -39,6 +39,13 @@ func TestDiscoverMigrations_AllVersions(t *testing.T) {
 		{4, "ansible"}, {5, "legacy_cleanup"}, {6, "drive_links_source_of_truth"},
 		{7, "queue_persistence"}, {8, "drop_legacy_tables"}, {9, "drop_legacy_tables"},
 		{10, "job_attempts_and_artifacts"}, {11, "youtube_oauth_tokens"},
+		{12, "youtube_groups_rename"}, {13, "delivery_targets"},
+		{14, "orchestrator_outbox"}, {15, "delivery_and_revision"},
+		{16, "job_indices"}, {17, "job_normalization"},
+		{18, "metadata_json_backfill"}, {19, "drop_metadata_json"},
+		{20, "worker_control_plane"}, {21, "artifact_states"},
+		{22, "split_deliveries"}, {23, "add_job_columns"},
+		{24, "legacy_state_cleanup"},
 	}
 	for i, exp := range expected {
 		if migs[i].Version != exp.Version || migs[i].Name != exp.Name {
@@ -204,7 +211,9 @@ func TestIntegration_MigrationRunner_EndToEnd(t *testing.T) {
 	}
 
 	// Legacy tables dropped (migration 009)
-	for _, table := range []string{"youtube_channel_metadata", "youtube_groups", "youtube_manager_channels", "youtube_manager_groups", "ansible_computers"} {
+	// Note: youtube_groups is NOT in this list because migration 012
+	// renames youtube_groups_v2 → youtube_groups (canonical name).
+	for _, table := range []string{"youtube_channel_metadata", "youtube_manager_channels", "youtube_manager_groups", "ansible_computers"} {
 		if tableExists(t, db, table) {
 			t.Errorf("migration 009 should have dropped %s", table)
 		}

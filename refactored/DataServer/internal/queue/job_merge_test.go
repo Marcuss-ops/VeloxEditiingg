@@ -18,7 +18,11 @@ func TestUpdateJobFieldsClearsFailureStateOnComplete(t *testing.T) {
 	}
 	defer dbStore.Close()
 
-	ts := NewTransitionService(dbStore)
+	jobRepo := store.NewSQLiteJobRepository(dbStore)
+	ts, err := NewTransitionService(jobRepo, dbStore)
+	if err != nil {
+		t.Fatalf("new transition service: %v", err)
+	}
 
 	// Submit a job with stale failure state
 	job := &Job{
@@ -85,7 +89,11 @@ func TestCompleteJobClearsFailureState(t *testing.T) {
 	}
 	defer dbStore.Close()
 
-	ts := NewTransitionService(dbStore)
+	jobRepo := store.NewSQLiteJobRepository(dbStore)
+	ts, err := NewTransitionService(jobRepo, dbStore)
+	if err != nil {
+		t.Fatalf("new transition service: %v", err)
+	}
 
 	// Persist a processing job with stale failure state
 	job := &Job{

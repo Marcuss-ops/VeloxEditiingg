@@ -67,7 +67,7 @@ type workerSession struct {
 	sessionID string
 	stream    grpc.BidiStreamingServer[pb.WorkerToMasterEnvelope, pb.MasterToWorkerEnvelope]
 	done      chan struct{}
-	doneOnce  sync.Once    // P0 #6: prevents double-close on session teardown/reconnect
+	doneOnce  sync.Once          // P0 #6: prevents double-close on session teardown/reconnect
 	cancel    context.CancelFunc // cancels the session context to terminate old goroutines
 
 	// Serialized output: all stream.Send() calls go through sendCh → sessionWriter.
@@ -75,8 +75,8 @@ type workerSession struct {
 	sendCh chan *pb.MasterToWorkerEnvelope
 
 	// Job offering synchronization (Issue 4 fix).
-	pendingOffer *queue.Job   // JobOffer sent, awaiting JobAccepted/JobRejected
-	claimMu      sync.Mutex   // serializes the claim+send+set flow; also guards pendingOffer r/w
+	pendingOffer *queue.Job // JobOffer sent, awaiting JobAccepted/JobRejected
+	claimMu      sync.Mutex // serializes the claim+send+set flow; also guards pendingOffer r/w
 
 	// Worker capacity tracking (for max_parallel_jobs check).
 	// Updated by handleHeartbeat, read by sendPushJobOffer under claimMu.
@@ -200,7 +200,8 @@ func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMasterEnvelo
 		h.mu.Lock()
 		if currentSID, ok := h.workerSessions[workerID]; ok && currentSID == sessionID {
 			delete(h.workerSessions, workerID)
-		}		delete(h.sessions, sessionID)
+		}
+		delete(h.sessions, sessionID)
 		h.mu.Unlock()
 
 		// Issue 7 fix: revoke the session in SQLite on disconnect.

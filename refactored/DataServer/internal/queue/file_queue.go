@@ -113,18 +113,11 @@ type JobLogEntry struct {
 }
 
 // FileQueue implements a SQLite-backed job queue with a centralized transition service.
-// All reads and writes go directly through SQLite — no in-memory cache.
+// All reads and writes go through the injected TransitionService.
 type FileQueue struct {
 	maxRetries int
 	dbStore    *store.SQLiteStore
 	ts         *TransitionService
-
-	// jobRepo is the narrow JobRepository wired through to TransitionService
-	// (spec §5). Stored at FileQueue boundary for visibility — producers can
-	// call SetJobRepository on FileQueue rather than reaching into ts. The
-	// underlying claim path lives in TransitionService.ClaimNextJob which
-	// delegates to repo.ClaimNext when set.
-	jobRepo store.JobRepository
 
 	eventLogger func(jobID, eventType string, extra map[string]interface{})
 }
@@ -135,8 +128,12 @@ type FileQueueConfig struct {
 	DBStore    *store.SQLiteStore
 }
 
-// NewFileQueue creates a new SQLite-backed queue
-func NewFileQueue(cfg *FileQueueConfig) (*FileQueue, error) {
+// NewFileQueue creates a new SQLite-backed queue.
+// TransitionService is mandatory — injected via dependency injection.
+func NewFileQueue(cfg *FileQueueConfig, ts *TransitionService) (*FileQueue, error) {
+	if ts == nil {
+		return nil, fmt.Errorf("TransitionService is required")
+	}
 	if cfg.DBStore == nil {
 		return nil, fmt.Errorf("SQLiteStore is required for FileQueue")
 	}
@@ -147,7 +144,7 @@ func NewFileQueue(cfg *FileQueueConfig) (*FileQueue, error) {
 	q := &FileQueue{
 		maxRetries: cfg.MaxRetries,
 		dbStore:    cfg.DBStore,
-		ts:         NewTransitionService(cfg.DBStore),
+		ts:         ts,
 	}
 
 	return q, nil
@@ -317,16 +314,4 @@ func (q *FileQueue) TransitionService() *TransitionService {
 	return q.ts
 }
 
-// SetJobRepository wires a narrow JobRepository (spec §5) into both the
-// FileQueue surface and the embedded TransitionService. Idempotent and safe
-// to call multiple times during startup. nil disables the narrow path
-// (dbStore is used as fallback).
-func (q *FileQueue) SetJobRepository(repo store.JobRepository) {
-	q.jobRepo = repo
-	q.ts.SetJobRepository(repo)
-}
 
-// JobRepository returns the configured narrow repository, if any.
-func (q *FileQueue) JobRepository() store.JobRepository {
-	return q.jobRepo
-}

@@ -26,7 +26,11 @@ func TestGenerateWithImages_EnqueuesSceneImageJob(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new sqlite store: %v", err)
 	}
-	q, err := queue.NewFileQueue(&queue.FileQueueConfig{MaxRetries: 3, DBStore: db})
+	ts, err := queue.NewTransitionService(store.NewSQLiteJobRepository(db), db)
+	if err != nil {
+		t.Fatalf("new transition service: %v", err)
+	}
+	q, err := queue.NewFileQueue(&queue.FileQueueConfig{MaxRetries: 3, DBStore: db}, ts)
 	if err != nil {
 		t.Fatalf("new file queue: %v", err)
 	}
@@ -153,7 +157,11 @@ func TestGenerateWithImages_UsesCreatorStageWhenConfigured(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new sqlite store: %v", err)
 	}
-	q, err := queue.NewFileQueue(&queue.FileQueueConfig{MaxRetries: 3, DBStore: db})
+	ts, err := queue.NewTransitionService(store.NewSQLiteJobRepository(db), db)
+	if err != nil {
+		t.Fatalf("new transition service: %v", err)
+	}
+	q, err := queue.NewFileQueue(&queue.FileQueueConfig{MaxRetries: 3, DBStore: db}, ts)
 	if err != nil {
 		t.Fatalf("new file queue: %v", err)
 	}
@@ -190,7 +198,7 @@ func TestGenerateWithImages_UsesCreatorStageWhenConfigured(t *testing.T) {
 		},
 		Database: config.DatabaseConfig{
 			DBPath: dbPath,
-		}, (fix: add missing jobs columns migration (023), fix CompleteJob CAS, patch UpdateJobFields whitelist)
+		},
 		Render: config.RenderConfig{
 			RemoteEngineURL:       mockCreator.URL,
 			RemoteEngineTimeoutMS: 5000,
@@ -258,7 +266,11 @@ func TestGenerateWithImages_BypassesCreatorForRenderReadyPayload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new sqlite store: %v", err)
 	}
-	q, err := queue.NewFileQueue(&queue.FileQueueConfig{MaxRetries: 3, DBStore: db})
+	ts, err := queue.NewTransitionService(store.NewSQLiteJobRepository(db), db)
+	if err != nil {
+		t.Fatalf("new transition service: %v", err)
+	}
+	q, err := queue.NewFileQueue(&queue.FileQueueConfig{MaxRetries: 3, DBStore: db}, ts)
 	if err != nil {
 		t.Fatalf("new file queue: %v", err)
 	}
@@ -277,7 +289,7 @@ func TestGenerateWithImages_BypassesCreatorForRenderReadyPayload(t *testing.T) {
 		},
 		Database: config.DatabaseConfig{
 			DBPath: dbPath,
-		}, (fix: add missing jobs columns migration (023), fix CompleteJob CAS, patch UpdateJobFields whitelist)
+		},
 		Render: config.RenderConfig{
 			RemoteEngineURL:       mockCreator.URL,
 			RemoteEngineTimeoutMS: 5000,

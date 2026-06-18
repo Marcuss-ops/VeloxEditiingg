@@ -105,14 +105,6 @@ func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
 		return nil, err
 	}
 
-	fileQ, err := queue.NewFileQueue(&queue.FileQueueConfig{
-		DBStore:    sqliteStore,
-		MaxRetries: cfg.Workers.MaxJobAttempts,
-	})
-	if err != nil {
-		return nil, err
-	}
-
 	reg := workersreg.New(sqliteStore)
 
 	revokedCount := len(reg.ListRevoked())
@@ -131,7 +123,18 @@ func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
 
 	// Create orchestrator for multi-step job pipelines
 	jobRepo := store.NewSQLiteJobRepository(sqliteStore)
-	fileQ.SetJobRepository(jobRepo)
+	ts, err := queue.NewTransitionService(jobRepo, sqliteStore)
+	if err != nil {
+		return nil, err
+	}
+
+	fileQ, err := queue.NewFileQueue(&queue.FileQueueConfig{
+		DBStore:    sqliteStore,
+		MaxRetries: cfg.Workers.MaxJobAttempts,
+	}, ts)
+	if err != nil {
+		return nil, err
+	}
 
 	orch, err := queue.NewOrchestrator(nil, fileQ, sqliteStore, &orchestratorWorkerRegistry{reg: reg})
 	if err != nil {
@@ -139,10 +142,13 @@ func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
 	}
 
 	// Build BlobStore for artifact staging/promotion (PR2b).
-	blobStore, bsErr := store.NewLocalBlobStore(cfg.Runtime.StagingDir, cfg.Runtime.StorageDir)
+	var blobStore store.BlobStore
+	localBS, bsErr := store.NewLocalBlobStore(cfg.Runtime.StagingDir, cfg.Runtime.StorageDir)
 	if bsErr != nil {
 		log.Printf("[BOOTSTRAP] BlobStore init warning: %v — using nop blob store", bsErr)
 		blobStore = store.NewNopBlobStore(cfg.Runtime.DataDir)
+	} else {
+		blobStore = localBS
 	}
 	log.Printf("[BOOTSTRAP] BlobStore ready: staging=%s storage=%s", blobStore.StagingDir(), blobStore.FinalDir())
 
@@ -239,7 +245,7 @@ func runServer(cfg *config.Config) error {
 	// Start gRPC server for worker control stream
 	var grpcSrv grpcServer
 	if cfg.Server.GRPCPort > 0 {
-		transitionSvc := queue.NewTransitionService(deps.sqliteStore)
+		transitionSvc := deps.fileQ.TransitionService()
 		cmdMgr := workersreg.NewCommandManager(deps.sqliteStore)
 		tokenMgr := workersreg.NewTokenManager(deps.sqliteStore)
 

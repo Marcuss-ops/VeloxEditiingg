@@ -33,29 +33,17 @@ func logLegacyKeyOnce(jobID, key string) {
 type TransitionService struct {
 	dbStore *store.SQLiteStore
 
-	// jobRepo is an optional narrow JobRepository (spec §5). When set,
-	// ClaimNextJob delegates to it for the atomic lease acquisition step.
-	// Nil falls back to the older dbStore path. PR-2 wires it; the rollout
-	// to other methods (Complete/Fail/UpdateFields) is planned for PR-2b.
+	// jobRepo is a mandatory JobRepository.
 	jobRepo store.JobRepository
 }
 
 // NewTransitionService creates a new transition service.
-func NewTransitionService(dbStore *store.SQLiteStore) *TransitionService {
-	return &TransitionService{dbStore: dbStore}
-}
-
-// SetJobRepository wires a narrow JobRepository for spec §5 callers.
-// Passing nil disables the fast-path (dbStore is used). The setter is
-// non-blocking and idempotent; multiple calls in startup are fine.
-func (ts *TransitionService) SetJobRepository(repo store.JobRepository) {
-	ts.jobRepo = repo
-}
-
-// JobRepository returns the wired narrow repository (or nil if unconfigured).
-// Tests use this to swap implementations; production code should not need it.
-func (ts *TransitionService) JobRepository() store.JobRepository {
-	return ts.jobRepo
+// The JobRepository is mandatory. Returns an error if nil.
+func NewTransitionService(repo store.JobRepository, dbStore *store.SQLiteStore) (*TransitionService, error) {
+	if repo == nil {
+		return nil, errors.New("job repository is required")
+	}
+	return &TransitionService{jobRepo: repo, dbStore: dbStore}, nil
 }
 
 // Validate checks whether a transition from one status to another is allowed.
@@ -69,7 +57,7 @@ func (ts *TransitionService) Validate(from, to JobStatus) error {
 // ClaimNextJob atomically claims the next pending job for a worker directly from SQLite.
 // Returns the claimed job (with updated status), or nil if no pending jobs.
 //
-// When a JobRepository is wired (SetJobRepository) the atomic lease step
+// The atomic lease step delegates to the mandatory JobRepository
 // delegates to its narrow ClaimNext method, satisfying spec §5 single-method
 // atomicity end-to-end. Otherwise it falls back to the legacy dbStore path.
 //
@@ -79,129 +67,56 @@ func (ts *TransitionService) Validate(from, to JobStatus) error {
 // the read could observe a stale snapshot; the map's result_json blob is the
 // authoritative post-claim state at that moment, not an eventually-consistent view.
 func (ts *TransitionService) ClaimNextJob(ctx context.Context, workerID string, allowedJobTypes []string) (*Job, error) {
-	if ts.jobRepo != nil {
-		result, err := ts.jobRepo.ClaimNext(ctx, store.ClaimParams{
-			WorkerID:        workerID,
-			AllowedJobTypes: allowedJobTypes,
-			Now:             time.Now().UTC(),
-		})
-		if err != nil {
-			if errors.Is(err, store.ErrNoClaimableJob) {
-				return nil, nil
-			}
-			return nil, fmt.Errorf("job repository claim: %w", err)
-		}
-		if result == nil || result.JobID == "" {
+	result, err := ts.jobRepo.ClaimNext(ctx, store.ClaimParams{
+		WorkerID:        workerID,
+		AllowedJobTypes: allowedJobTypes,
+		Now:             time.Now().UTC(),
+	})
+	if err != nil {
+		if errors.Is(err, store.ErrNoClaimableJob) {
 			return nil, nil
 		}
-		// Spec §5: ClaimResult is opaque; the rich payload still needs the legacy
-		// MapToJob pipeline so callers see the full request/result/history blobs.
-		// Pull the canonical row via dbStore.GetJob and project through MapToJob.
-		m, err := ts.dbStore.GetJob(ctx, result.JobID)
-		if err != nil {
-			return nil, fmt.Errorf("post-claim job fetch: %w", err)
-		}
-		return MapToJob(m), nil
+		return nil, fmt.Errorf("job repository claim: %w", err)
 	}
-	// Legacy path (dbStore-direct).
-	claimedJSON, ok, err := ts.dbStore.ClaimNextPendingJob(workerID, allowedJobTypes, time.Now().UTC())
-	if err != nil {
-		return nil, err
-	}
-	if !ok {
+	if result == nil || result.JobID == "" {
 		return nil, nil
 	}
-	// Parse claimed result to get the job_id, then fetch full job from SQLite
-	claimed, _ := parseRawJSON(claimedJSON)
-	jobID := ""
-	if id, ok := claimed["job_id"].(string); ok {
-		jobID = id
-	} else if id, ok := claimed["job_id"]; ok {
-		jobID = fmt.Sprintf("%v", id)
-	}
-	if jobID == "" {
-		return nil, fmt.Errorf("claimed job missing job_id")
-	}
-	m, err := ts.dbStore.GetJob(ctx, jobID)
+	m, err := ts.dbStore.GetJob(ctx, result.JobID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get claimed job: %w", err)
+		return nil, fmt.Errorf("post-claim job fetch: %w", err)
 	}
 	return MapToJob(m), nil
 }
 
 // CompleteJob marks a job as SUCCEEDED using CAS (compare-and-swap on revision).
 // Idempotent: returns nil if already succeeded.
+// CompleteJob marks a job as SUCCEEDED using CAS (compare-and-swap on revision).
+// Idempotent: returns nil if already succeeded.
 func (ts *TransitionService) CompleteJob(ctx context.Context, jobID string) error {
-	// Spec §5 path: delegate read + CAS to narrow JobRepository.
-	if ts.jobRepo != nil {
-		sj, err := ts.jobRepo.GetJob(ctx, jobID)
-		if err != nil {
-			return fmt.Errorf("job not found: %s", jobID)
-		}
-
-		if sj.Status == store.JobStatusSucceeded {
-			return nil // idempotent
-		}
-
-		if err := ts.Validate(JobStatus(sj.Status), StatusSucceeded); err != nil {
-			return err
-		}
-
-		nowISO := NowISO()
-		if err := ts.jobRepo.Transition(ctx, store.TransitionParams{
-			JobID:          jobID,
-			ExpectedStatus: sj.Status,
-			NewStatus:      store.JobStatusSucceeded,
-			Revision:       sj.Revision,
-		}); err != nil {
-			return fmt.Errorf("CAS transition failed: %w", err)
-		}
-
-		// Side effects (not in repo contract)
-		ts.dbStore.UpdateJobSupplementary(jobID, map[string]interface{}{
-			"completed_at":  nowISO,
-			"last_error":    "",
-			"error_message": "",
-			"failed_at":     nil,
-			"failed_by":     nil,
-			"lease_id":      "",
-			"lease_expiry":  nil,
-			"assigned_to":   sj.AssignedTo,
-		})
-		ts.dbStore.LogJobEvent(jobID, "job_succeeded", map[string]interface{}{
-			"worker_id": sj.AssignedTo,
-			"revision":  sj.Revision + 1,
-		})
-		return nil
-	}
-
-	// Legacy path (dbStore-direct).
-	m, err := ts.dbStore.GetJob(ctx, jobID)
+	sj, err := ts.jobRepo.GetJob(ctx, jobID)
 	if err != nil {
 		return fmt.Errorf("job not found: %s", jobID)
 	}
-	job := MapToJob(m)
 
-	if job.Status == StatusSucceeded {
+	if sj.Status == store.JobStatusSucceeded {
 		return nil // idempotent
 	}
 
-	revision := getIntField(m, "revision")
-	if err := ts.Validate(job.Status, StatusSucceeded); err != nil {
+	if err := ts.Validate(JobStatus(sj.Status), StatusSucceeded); err != nil {
 		return err
 	}
 
 	nowISO := NowISO()
-	// Pass the actual DB status (not the normalized one) for the CAS check,
-	// so the UPDATE's WHERE status=? matches the stored value. PersistJob
-	// and UpsertJobResult store the raw status; UpdateJobFields normalizes
-	// before persisting, so job.Status always reflects what is in the row.
-	newRevision, err := ts.dbStore.TransitionJobStatus(ctx, jobID, string(job.Status), string(StatusSucceeded), revision)
-	if err != nil {
+	if err := ts.jobRepo.Transition(ctx, store.TransitionParams{
+		JobID:          jobID,
+		ExpectedStatus: sj.Status,
+		NewStatus:      store.JobStatusSucceeded,
+		Revision:       sj.Revision,
+	}); err != nil {
 		return fmt.Errorf("CAS transition failed: %w", err)
 	}
 
-	// Update supplementary fields (non-CAS, but after successful transition)
+	// Side effects (not in repo contract)
 	ts.dbStore.UpdateJobSupplementary(jobID, map[string]interface{}{
 		"completed_at":  nowISO,
 		"last_error":    "",
@@ -210,100 +125,37 @@ func (ts *TransitionService) CompleteJob(ctx context.Context, jobID string) erro
 		"failed_by":     nil,
 		"lease_id":      "",
 		"lease_expiry":  nil,
-		"assigned_to":   job.AssignedTo,
+		"assigned_to":   sj.AssignedTo,
 	})
-
 	ts.dbStore.LogJobEvent(jobID, "job_succeeded", map[string]interface{}{
-		"worker_id": job.AssignedTo,
-		"revision":  newRevision,
+		"worker_id": sj.AssignedTo,
+		"revision":  sj.Revision + 1,
 	})
-
 	return nil
 }
 
 // FailJob marks a job as FAILED or RETRY_WAIT using CAS.
 // If requeue is true and retries remain, transitions to RETRY_WAIT → PENDING.
+// FailJob marks a job as FAILED or RETRY_WAIT using CAS.
+// If requeue is true and retries remain, transitions to RETRY_WAIT.
 func (ts *TransitionService) FailJob(ctx context.Context, jobID, errMsg, workerID string, requeue bool, maxRetries int) error {
-	// Spec §5 path: delegate read + CAS to narrow JobRepository.
-	if ts.jobRepo != nil {
-		sj, err := ts.jobRepo.GetJob(ctx, jobID)
-		if err != nil {
-			return fmt.Errorf("job not found: %s", jobID)
-		}
-
-		nowISO := NowISO()
-
-		if requeue && sj.RetryCount < maxRetries {
-			if err := ts.Validate(JobStatus(sj.Status), StatusRetryWait); err != nil {
-				return err
-			}
-			if err := ts.jobRepo.Transition(ctx, store.TransitionParams{
-				JobID:          jobID,
-				ExpectedStatus: sj.Status,
-				NewStatus:      store.JobStatusRetryWait,
-				Revision:       sj.Revision,
-			}); err != nil {
-				return fmt.Errorf("CAS transition to RETRY_WAIT failed: %w", err)
-			}
-
-			ts.dbStore.UpdateJobSupplementary(jobID, map[string]interface{}{
-				"last_error":   errMsg,
-				"assigned_to":  "",
-				"claimed_by":   "",
-				"lease_id":     "",
-				"lease_expiry": nil,
-			})
-			ts.dbStore.LogJobEvent(jobID, "job_retry_wait", map[string]interface{}{
-				"worker_id": workerID,
-				"error":     errMsg,
-				"revision":  sj.Revision + 1,
-			})
-		} else {
-			if err := ts.Validate(JobStatus(sj.Status), StatusFailed); err != nil {
-				return err
-			}
-			if err := ts.jobRepo.Transition(ctx, store.TransitionParams{
-				JobID:          jobID,
-				ExpectedStatus: sj.Status,
-				NewStatus:      store.JobStatusFailed,
-				Revision:       sj.Revision,
-			}); err != nil {
-				return fmt.Errorf("CAS transition to FAILED failed: %w", err)
-			}
-
-			ts.dbStore.UpdateJobSupplementary(jobID, map[string]interface{}{
-				"error_message": errMsg,
-				"last_error":    errMsg,
-				"failed_at":     nowISO,
-				"failed_by":     workerID,
-				"lease_id":      "",
-				"lease_expiry":  nil,
-			})
-			ts.dbStore.LogJobEvent(jobID, "job_failed", map[string]interface{}{
-				"worker_id": workerID,
-				"error":     errMsg,
-				"revision":  sj.Revision + 1,
-			})
-		}
-		return nil
-	}
-
-	// Legacy path (dbStore-direct).
-	m, err := ts.dbStore.GetJob(ctx, jobID)
+	sj, err := ts.jobRepo.GetJob(ctx, jobID)
 	if err != nil {
 		return fmt.Errorf("job not found: %s", jobID)
 	}
-	job := MapToJob(m)
 
-	revision := getIntField(m, "revision")
 	nowISO := NowISO()
 
-	if requeue && job.RetryCount < maxRetries {
-		if err := ts.Validate(job.Status, StatusRetryWait); err != nil {
+	if requeue && sj.RetryCount < maxRetries {
+		if err := ts.Validate(JobStatus(sj.Status), StatusRetryWait); err != nil {
 			return err
 		}
-		newRevision, err := ts.dbStore.TransitionJobStatus(ctx, jobID, string(job.Status), string(StatusRetryWait), revision)
-		if err != nil {
+		if err := ts.jobRepo.Transition(ctx, store.TransitionParams{
+			JobID:          jobID,
+			ExpectedStatus: sj.Status,
+			NewStatus:      store.JobStatusRetryWait,
+			Revision:       sj.Revision,
+		}); err != nil {
 			return fmt.Errorf("CAS transition to RETRY_WAIT failed: %w", err)
 		}
 
@@ -314,18 +166,21 @@ func (ts *TransitionService) FailJob(ctx context.Context, jobID, errMsg, workerI
 			"lease_id":     "",
 			"lease_expiry": nil,
 		})
-
 		ts.dbStore.LogJobEvent(jobID, "job_retry_wait", map[string]interface{}{
 			"worker_id": workerID,
 			"error":     errMsg,
-			"revision":  newRevision,
+			"revision":  sj.Revision + 1,
 		})
 	} else {
-		if err := ts.Validate(job.Status, StatusFailed); err != nil {
+		if err := ts.Validate(JobStatus(sj.Status), StatusFailed); err != nil {
 			return err
 		}
-		newRevision, err := ts.dbStore.TransitionJobStatus(ctx, jobID, string(job.Status), string(StatusFailed), revision)
-		if err != nil {
+		if err := ts.jobRepo.Transition(ctx, store.TransitionParams{
+			JobID:          jobID,
+			ExpectedStatus: sj.Status,
+			NewStatus:      store.JobStatusFailed,
+			Revision:       sj.Revision,
+		}); err != nil {
 			return fmt.Errorf("CAS transition to FAILED failed: %w", err)
 		}
 
@@ -337,14 +192,12 @@ func (ts *TransitionService) FailJob(ctx context.Context, jobID, errMsg, workerI
 			"lease_id":      "",
 			"lease_expiry":  nil,
 		})
-
 		ts.dbStore.LogJobEvent(jobID, "job_failed", map[string]interface{}{
 			"worker_id": workerID,
 			"error":     errMsg,
-			"revision":  newRevision,
+			"revision":  sj.Revision + 1,
 		})
 	}
-
 	return nil
 }
 
@@ -414,59 +267,28 @@ func (ts *TransitionService) RequeueZombieJobs(ctx context.Context, timeout time
 }
 
 // RenewLease extends the lease for an active job.
+// RenewLease extends the lease for an active job via JobRepository.
 func (ts *TransitionService) RenewLease(ctx context.Context, jobID, workerID, leaseID string, leaseExpiry time.Time) error {
-	// Spec §5 path: delegate to JobRepository.RenewLease (single targeted
-	// UPDATE, no double-read). History entry is a best-effort side-effect
-	// through the legacy store (not in the repo contract).
-	if ts.jobRepo != nil {
-		if err := ts.jobRepo.RenewLease(ctx, store.RenewLeaseParams{
-			JobID:       jobID,
-			WorkerID:    workerID,
-			LeaseID:     leaseID,
-			LeaseExpiry: leaseExpiry.UTC(),
-		}); err != nil {
-			return fmt.Errorf("renew lease: %w", err)
-		}
-		// History entry (best-effort — not in repo contract).
-		nowISO := NowISO()
-		ts.dbStore.LogJobEvent(jobID, "lease_renewed", map[string]interface{}{
-			"worker_id": workerID,
-			"lease_id":  leaseID,
-			"timestamp": nowISO,
-		})
-		return nil
+	if err := ts.jobRepo.RenewLease(ctx, store.RenewLeaseParams{
+		JobID:       jobID,
+		WorkerID:    workerID,
+		LeaseID:     leaseID,
+		LeaseExpiry: leaseExpiry.UTC(),
+	}); err != nil {
+		return fmt.Errorf("renew lease: %w", err)
 	}
-
-	// Legacy path (dbStore-direct).
-	m, err := ts.dbStore.GetJob(ctx, jobID)
-	if err != nil {
-		return fmt.Errorf("job not found: %s", jobID)
-	}
-	job := MapToJob(m)
-
-	if job.Status != StatusRunning && job.Status != StatusLeased {
-		return fmt.Errorf("job %s is not renewable in state %s", jobID, job.Status)
-	}
-
+	// History entry (best-effort — not in repo contract).
 	nowISO := NowISO()
-	job.Status = StatusRunning
-	job.LeaseID = leaseID
-	job.LeaseExpiry = leaseExpiry.UTC().Format(time.RFC3339)
-	job.UpdatedAt = NowUnix()
-	if job.Attempt == 0 {
-		job.Attempt = job.RetryCount
-	}
-	job.History = append(job.History, JobHistoryEntry{
-		Status:    "LEASED",
-		Timestamp: nowISO,
-		WorkerID:  workerID,
-		Message:   "Lease renewed",
+	ts.dbStore.LogJobEvent(jobID, "lease_renewed", map[string]interface{}{
+		"worker_id": workerID,
+		"lease_id":  leaseID,
+		"timestamp": nowISO,
 	})
-
-	return PersistJob(job, ts.dbStore)
+	return nil
 }
 
 // SubmitJob creates a new job in SQLite.
+// SubmitJob creates a new job via the JobRepository.
 func (ts *TransitionService) SubmitJob(ctx context.Context, jobID string, payload map[string]interface{}, maxRetries int) (*Job, error) {
 	now := NowUnix()
 	nowISO := NowISO()
@@ -486,8 +308,7 @@ func (ts *TransitionService) SubmitJob(ctx context.Context, jobID string, payloa
 		Payload: payload,
 	}
 
-	// Extract known fields from payload (must run BEFORE the jobRepo branch
-	// so both paths populate JobFingerprint, RunID, and SlotData on the returned *Job).
+	// Extract known fields from payload.
 	if s, ok := payload["video_name"].(string); ok {
 		job.VideoName = s
 	}
@@ -506,32 +327,19 @@ func (ts *TransitionService) SubmitJob(ctx context.Context, jobID string, payloa
 		job.SlotData = m
 	}
 
-	// Spec §5 path: delegate base job row to narrow JobRepository.
-	// History and request_json still go through the legacy store (not in repo contract).
-	if ts.jobRepo != nil {
-		params := store.CreateJobParams{
-			JobID:      jobID,
-			Payload:    payload,
-			VideoName:  job.VideoName,
-			ProjectID:  job.ProjectID,
-			MaxRetries: maxRetries,
-		}
-		if err := ts.jobRepo.CreateJob(ctx, params); err != nil {
-			return nil, fmt.Errorf("job repo create: %w", err)
-		}
-		// Add history entry (best-effort — the job row already exists).
-		_ = ts.dbStore.AddJobHistory(jobID, "PENDING", "", "Job created", nil)
-		// Persist the raw request payload separately so request_json table stays populated.
-		if err := PersistJobRequest(jobID, payload, ts.dbStore); err != nil {
-			return nil, fmt.Errorf("failed to persist request_json: %w", err)
-		}
-		return job, nil
+	params := store.CreateJobParams{
+		JobID:      jobID,
+		Payload:    payload,
+		VideoName:  job.VideoName,
+		ProjectID:  job.ProjectID,
+		MaxRetries: maxRetries,
 	}
-
-	if err := PersistJob(job, ts.dbStore); err != nil {
-		return nil, err
+	if err := ts.jobRepo.CreateJob(ctx, params); err != nil {
+		return nil, fmt.Errorf("job repo create: %w", err)
 	}
-	// Store the immutable request payload separately
+	// Add history entry (best-effort — the job row already exists).
+	_ = ts.dbStore.AddJobHistory(jobID, "PENDING", "", "Job created", nil)
+	// Persist the raw request payload separately.
 	if err := PersistJobRequest(jobID, payload, ts.dbStore); err != nil {
 		return nil, fmt.Errorf("failed to persist request_json: %w", err)
 	}
@@ -913,33 +721,19 @@ func (ts *TransitionService) GetJobAttempt(ctx context.Context, jobID string) (i
 }
 
 // GetJobsByStatus returns all jobs with a given status directly from SQLite.
+// GetJobsByStatus returns all jobs with a given status via JobRepository.
 func (ts *TransitionService) GetJobsByStatus(ctx context.Context, status JobStatus) ([]*Job, error) {
-	// Spec §5 path: narrow JobRepository.ListByStatus for filtering, then re-fetch
-	// each result for the rich payload via the legacy path (MapToJob via dbStore).
-	// This is the same pattern used by ClaimNextJob — the repo drives the query,
-	// the store provides the full projection.
-	if ts.jobRepo != nil {
-		storeJobs, err := ts.jobRepo.ListByStatus(ctx, []store.JobStatus{toStoreJobStatus(status)}, 1000)
-		if err != nil {
-			return nil, fmt.Errorf("job repo list by status: %w", err)
-		}
-		result := make([]*Job, 0, len(storeJobs))
-		for _, sj := range storeJobs {
-			m, err := ts.dbStore.GetJob(ctx, sj.JobID)
-			if err != nil {
-				log.Printf("GetJobsByStatus: GetJob(%s) failed after ListByStatus returned it: %v", sj.JobID, err)
-				continue
-			}
-			result = append(result, MapToJob(m))
-		}
-		return result, nil
-	}
-	jobs, err := ts.dbStore.ListJobsByStatus([]string{string(status)}, 1000)
+	storeJobs, err := ts.jobRepo.ListByStatus(ctx, []store.JobStatus{toStoreJobStatus(status)}, 1000)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("job repo list by status: %w", err)
 	}
-	result := make([]*Job, 0, len(jobs))
-	for _, m := range jobs {
+	result := make([]*Job, 0, len(storeJobs))
+	for _, sj := range storeJobs {
+		m, err := ts.dbStore.GetJob(ctx, sj.JobID)
+		if err != nil {
+			log.Printf("GetJobsByStatus: GetJob(%s) failed after ListByStatus returned it: %v", sj.JobID, err)
+			continue
+		}
 		result = append(result, MapToJob(m))
 	}
 	return result, nil

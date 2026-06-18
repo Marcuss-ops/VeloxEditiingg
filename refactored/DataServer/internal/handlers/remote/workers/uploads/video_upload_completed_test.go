@@ -17,64 +17,9 @@ import (
 
 	"velox-server/internal/config"
 	driveapi "velox-server/internal/integrations/drive"
-	ytservice "velox-server/internal/integrations/youtube"
 	"velox-server/internal/queue"
 	"velox-server/internal/store"
 )
-
-type fakeYouTubeAutoUploader struct {
-	mu             sync.Mutex
-	resolveCalls   int
-	healthCalls    int
-	uploadCalls    int
-	lastGroupName  string
-	lastLanguage   string
-	lastChannelID  string
-	lastUploadPath string
-	lastUploadCfg  ytservice.UploadConfig
-}
-
-func (f *fakeYouTubeAutoUploader) ResolveChannelByLanguage(groupName, language string) (*ytservice.AuthChannel, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	f.resolveCalls++
-	f.lastGroupName = groupName
-	f.lastLanguage = language
-
-	return &ytservice.AuthChannel{
-		ID:       "yt-channel-it",
-		Name:     "Italian Channel",
-		Language: language,
-	}, nil
-}
-
-func (f *fakeYouTubeAutoUploader) HealthCheck(ctx context.Context, channelID string) (map[string]interface{}, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	f.healthCalls++
-	f.lastChannelID = channelID
-
-	return map[string]interface{}{"ok": true}, nil
-}
-
-func (f *fakeYouTubeAutoUploader) UploadVideo(ctx context.Context, channelID string, videoPath string, cfg ytservice.UploadConfig) (*ytservice.UploadResult, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	f.uploadCalls++
-	f.lastChannelID = channelID
-	f.lastUploadPath = videoPath
-	f.lastUploadCfg = cfg
-
-	return &ytservice.UploadResult{
-		ID:         "yt-video-123",
-		VideoID:    "yt-video-123",
-		Status:     "uploaded",
-		YouTubeURL: "https://youtube.example/watch?v=yt-video-123",
-	}, nil
-}
 
 type fakeDriveAutoUploader struct {
 	mu           sync.Mutex
@@ -108,7 +53,12 @@ func TestUploadCompletedVideo_AutoUploadsToYouTubeAndDrive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new sqlite store: %v", err)
 	}
-	q, err := queue.NewFileQueue(&queue.FileQueueConfig{MaxRetries: 3, DBStore: db})
+	jobRepo := store.NewSQLiteJobRepository(db)
+	ts, tsErr := queue.NewTransitionService(jobRepo, db)
+	if tsErr != nil {
+		t.Fatalf("new transition service: %v", tsErr)
+	}
+	q, err := queue.NewFileQueue(&queue.FileQueueConfig{MaxRetries: 3, DBStore: db}, ts)
 	if err != nil {
 		t.Fatalf("new file queue: %v", err)
 	}
@@ -136,9 +86,6 @@ func TestUploadCompletedVideo_AutoUploadsToYouTubeAndDrive(t *testing.T) {
 		t.Fatalf("claim job: %v", err)
 	}
 
-	youtubeSvc := &fakeYouTubeAutoUploader{}
-	driveSvc := &fakeDriveAutoUploader{}
-
 	// Pre-create delivery targets for YouTube and Drive (PR4: required for auto-upload)
 	db.InsertDeliveryTarget(&store.DeliveryTarget{
 		JobID:      jobID,
@@ -155,7 +102,8 @@ func TestUploadCompletedVideo_AutoUploadsToYouTubeAndDrive(t *testing.T) {
 
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	r.POST("/api/v1/video/upload-completed", UploadCompletedVideo(cfg, q, youtubeSvc, driveSvc))
+	blobStore := store.NewNopBlobStore(tempDir)
+	r.POST("/api/v1/video/upload-completed", UploadCompletedVideo(cfg, q, blobStore))
 
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
@@ -194,84 +142,29 @@ func TestUploadCompletedVideo_AutoUploadsToYouTubeAndDrive(t *testing.T) {
 		t.Fatalf("expected video_path in response, got %#v", resp["video_path"])
 	}
 
+	// Wait for the job to be marked SUCCEEDED by the artifact pipeline.
+	// DeliveryRunner handles youtube/drive uploads asynchronously (not tested here).
 	jobDone := false
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
 		job, err := q.GetJobAsMap(context.Background(), jobID)
-		if err == nil && job != nil {
-			if job["youtube_upload_status"] == "completed" && job["drive_upload_status"] == "completed" {
-				jobDone = true
-				break
-			}
+		if err == nil && job != nil && job["status"] == "SUCCEEDED" {
+			jobDone = true
+			break
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
 	if !jobDone {
 		job, _ := q.GetJobAsMap(context.Background(), jobID)
-		t.Fatalf("upload jobs not completed in time: %#v", job)
+		t.Fatalf("job not SUCCEEDED in time: %#v", job)
 	}
 
 	job, err := q.GetJobAsMap(context.Background(), jobID)
 	if err != nil {
 		t.Fatalf("get job as map: %v", err)
 	}
-	if job["status"] != "COMPLETED" {
-		t.Fatalf("want status COMPLETED, got %v", job["status"])
-	}
-	if job["youtube_url"] != "https://youtube.example/watch?v=yt-video-123" {
-		t.Fatalf("want youtube_url persisted, got %v", job["youtube_url"])
-	}
-	if job["drive_url"] != "https://drive.example/file/drive-file-123" {
-		t.Fatalf("want drive_url persisted, got %v", job["drive_url"])
-	}
-	if job["drive_folder_id"] != "folder1234567890A" {
-		t.Fatalf("want drive_folder_id persisted, got %v", job["drive_folder_id"])
-	}
-
-	youtubeSvc.mu.Lock()
-	if youtubeSvc.resolveCalls != 1 || youtubeSvc.healthCalls != 1 || youtubeSvc.uploadCalls != 1 {
-		youtubeSvc.mu.Unlock()
-		t.Fatalf("unexpected youtube call counts: resolve=%d health=%d upload=%d", youtubeSvc.resolveCalls, youtubeSvc.healthCalls, youtubeSvc.uploadCalls)
-	}
-	if youtubeSvc.lastGroupName != "Amish" {
-		youtubeSvc.mu.Unlock()
-		t.Fatalf("want group Amish, got %q", youtubeSvc.lastGroupName)
-	}
-	if youtubeSvc.lastLanguage != "it" {
-		youtubeSvc.mu.Unlock()
-		t.Fatalf("want language it, got %q", youtubeSvc.lastLanguage)
-	}
-	if youtubeSvc.lastUploadCfg.Title != "Upload E2E" {
-		youtubeSvc.mu.Unlock()
-		t.Fatalf("want upload title Upload E2E, got %q", youtubeSvc.lastUploadCfg.Title)
-	}
-	if youtubeSvc.lastUploadCfg.Description != "Upload E2E script" {
-		youtubeSvc.mu.Unlock()
-		t.Fatalf("want upload description preserved, got %q", youtubeSvc.lastUploadCfg.Description)
-	}
-	if youtubeSvc.lastUploadCfg.PrivacyStatus != "private" {
-		youtubeSvc.mu.Unlock()
-		t.Fatalf("want default privacy private, got %q", youtubeSvc.lastUploadCfg.PrivacyStatus)
-	}
-	if youtubeSvc.lastUploadPath != savedVideoPath {
-		youtubeSvc.mu.Unlock()
-		t.Fatalf("want video path %q, got %q", savedVideoPath, youtubeSvc.lastUploadPath)
-	}
-	youtubeSvc.mu.Unlock()
-
-	driveSvc.mu.Lock()
-	defer driveSvc.mu.Unlock()
-	if driveSvc.uploadCalls != 1 {
-		t.Fatalf("want 1 drive upload call, got %d", driveSvc.uploadCalls)
-	}
-	if driveSvc.lastFilePath != savedVideoPath {
-		t.Fatalf("want drive upload path %q, got %q", savedVideoPath, driveSvc.lastFilePath)
-	}
-	if driveSvc.lastProject != "upload_e2e" {
-		t.Fatalf("want drive project Upload E2E, got %q", driveSvc.lastProject)
-	}
-	if driveSvc.lastParentID != "folder1234567890A" {
-		t.Fatalf("want drive parent folder folder1234567890A, got %q", driveSvc.lastParentID)
+	if job["status"] != "SUCCEEDED" {
+		t.Fatalf("want status SUCCEEDED, got %v", job["status"])
 	}
 }
 
@@ -285,7 +178,12 @@ func TestMaybeAutoUploadDrive_FallsBackToJobLanguage(t *testing.T) {
 	if err := db.UpsertMasterFolder("drive-folder-it", "Italian Master", "https://drive.google.com/drive/folders/drive-folder-it", "it", 0, `{"type":"outro"}`); err != nil {
 		t.Fatalf("upsert master folder: %v", err)
 	}
-	q, err := queue.NewFileQueue(&queue.FileQueueConfig{MaxRetries: 3, DBStore: db})
+	jobRepo := store.NewSQLiteJobRepository(db)
+	ts, tsErr := queue.NewTransitionService(jobRepo, db)
+	if tsErr != nil {
+		t.Fatalf("new transition service: %v", tsErr)
+	}
+	q, err := queue.NewFileQueue(&queue.FileQueueConfig{MaxRetries: 3, DBStore: db}, ts)
 	if err != nil {
 		t.Fatalf("new file queue: %v", err)
 	}
