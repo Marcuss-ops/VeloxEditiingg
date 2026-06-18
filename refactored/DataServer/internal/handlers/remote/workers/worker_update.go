@@ -1,8 +1,6 @@
 package workers
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -96,19 +94,6 @@ func bundleDirCandidates(dataDir string) []string {
 	}
 
 	return candidates
-}
-
-func computeStringSHA256Hex(s string) string {
-	h := sha256.Sum256([]byte(s))
-	return hex.EncodeToString(h[:])
-}
-
-func readTextFileTrim(path string) (string, bool) {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return "", false
-	}
-	return strings.TrimSpace(string(b)), true
 }
 
 func resolveBundlePath(bundleDir, platform, arch string) (string, os.FileInfo, error) {

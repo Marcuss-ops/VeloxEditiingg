@@ -96,69 +96,6 @@ func computeBundleHashFromManifest(bundleDir string) string {
 	return ""
 }
 
-// bundleInspection holds result of inspecting zip contents
-type bundleInspection struct {
-	FileCount int                    `json:"file_count"`
-	TopDirs   []gin.H                `json:"top_dirs"`
-	Runtime   map[string]interface{} `json:"runtime"`
-}
-
-// inspectBundleZip opens the zip and returns file count, top-level dirs, and runtime presence flags.
-func inspectBundleZip(bundlePath string) (bundleInspection, error) {
-	out := bundleInspection{
-		TopDirs: []gin.H{},
-		Runtime: map[string]interface{}{
-			"node": false, "npm": false,
-		},
-	}
-	r, err := zip.OpenReader(bundlePath)
-	if err != nil {
-		return out, err
-	}
-	defer r.Close()
-
-	dirSizes := make(map[string]int64)
-	dirCounts := make(map[string]int)
-
-	for _, f := range r.File {
-		out.FileCount++
-		name := strings.TrimPrefix(filepath.ToSlash(f.Name), "./")
-		if name == "" || strings.HasSuffix(name, "/") {
-			continue
-		}
-		parts := strings.SplitN(name, "/", 2)
-		top := parts[0]
-		dirSizes[top] += int64(f.UncompressedSize64)
-		dirCounts[top]++
-
-		lower := strings.ToLower(name)
-		if strings.Contains(lower, "runtime/node") || strings.HasPrefix(lower, "node/") || top == "node" {
-			out.Runtime["node"] = true
-		}
-		if strings.Contains(lower, "node_modules") || strings.Contains(lower, "package.json") || top == "npm" {
-			out.Runtime["npm"] = true
-		}
-		if strings.Contains(lower, "voiceover") || strings.Contains(lower, "voices") {
-			out.Runtime["voiceover_deps"] = true
-		}
-		if strings.HasPrefix(lower, "refactored/") || top == "refactored" {
-			out.Runtime["refactored_root"] = true
-		}
-	}
-
-	for name, size := range dirSizes {
-		out.TopDirs = append(out.TopDirs, gin.H{
-			"name":           name,
-			"type":           "folder",
-			"size":           size,
-			"size_formatted": formatSize(size),
-			"file_count":     dirCounts[name],
-		})
-	}
-
-	return out, nil
-}
-
 func listZipFilesWithHashes(bundlePath string) ([]gin.H, map[string]string, error) {
 	r, err := zip.OpenReader(bundlePath)
 	if err != nil {

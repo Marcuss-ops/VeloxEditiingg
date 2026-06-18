@@ -116,9 +116,6 @@ func registerScriptRoutes(r *gin.Engine, cfg *config.Config, deps *serverDeps) {
 	if deps == nil || deps.fileQ == nil {
 		return
 	}
-	rootGroup := r.Group("/api/script")
-	rootGroup.Use(api.AdminAuthMiddleware(cfg))
-	scripthandlers.RegisterRoutes(rootGroup, cfg, deps.fileQ, deps.sqliteStore)
 
 	v1Group := r.Group("/api/v1/script")
 	v1Group.Use(api.AdminAuthMiddleware(cfg))
