@@ -267,6 +267,20 @@ func TestInterface_AnsibleComputerStore_LegacyComputers(t *testing.T) {
 	if raw == nil {
 		t.Fatal("expected non-nil AnsibleHostFields")
 	}
+	// Field round-trip: a stubbed GetAnsibleHost returning non-nil would
+	// silently pass the nil check; verify the upserted fields survive.
+	if raw.Host != "legacy-host" {
+		t.Errorf("round-trip Host mismatch: got %q want %q", raw.Host, "legacy-host")
+	}
+	if !raw.Enabled {
+		t.Errorf("round-trip Enabled mismatch: got %v want true", raw.Enabled)
+	}
+	if raw.Group != "legacy" {
+		t.Errorf("round-trip Group mismatch: got %q want %q", raw.Group, "legacy")
+	}
+	if raw.AnsibleUser != "pierone" {
+		t.Errorf("round-trip AnsibleUser mismatch: got %q want %q", raw.AnsibleUser, "pierone")
+	}
 
 	// List legacy via interface
 	computers, err := acStore.ListAnsibleComputers()
