@@ -50,22 +50,20 @@ var allowedWriters = map[string]bool{
 	// Interface + commands: contains the regex literal in a doc
 	// comment EXPLAINING the contract. No executable SQL update.
 	filepath.Join("internal", "artifacts", "finalization_repository.go"): true,
-	// SEPARATE legacy lifecycle: internal/store/store_assembly.go's
-	// `CompleteJobTx` (PR1c legacy atomic SUCCEEDED transition) — to
-	// be retired in PR 3.5-b 4.6 by routing through the new verified
-	// finalization. Until then, this is the ONLY other writer that
-	// targets jobs.status='SUCCEEDED', so it MUST be on the allowlist
-	// — PR 3.5-a intentionally does NOT remove it (removal is in the
-	// next session's scope).
-	filepath.Join("internal", "store", "store_assembly.go"): true,
+	// store_assembly.go's CompleteJobTx was removed in PR 3.5-b.
+	// The only writer of jobs.status='SUCCEEDED' is now
+	// sqlite_finalization_repository.go.
 	// SEPARATE lifecycle: UPDATE job_deliveries SET status='SUCCEEDED'
 	// is delivery-completion (NOT jobs). PR 3.5-a does NOT touch
 	// delivery completion.
-	filepath.Join("internal", "store", "store_deliveries.go"): true,
+	filepath.Join("internal", "store", "store_deliveries.go"):      true,
+	filepath.Join("internal", "store", "store_deliveries_lease.go"): true,
 	// SEPARATE lifecycles: UPDATE workflow_steps / workflow_runs SET
 	// status='SUCCEEDED' is workflow-completion (NOT jobs).
 	// PR 3.5-a does NOT touch workflow completion.
-	filepath.Join("internal", "workflow", "sqlite_repository.go"): true,
+	filepath.Join("internal", "workflow", "sqlite_repository.go"):        true,
+	filepath.Join("internal", "workflow", "sqlite_repository_queries.go"): true,
+	filepath.Join("internal", "workflow", "sqlite_repository_steps.go"):   true,
 }
 
 // allowedTestFiles are files that legitimately contain the SQL

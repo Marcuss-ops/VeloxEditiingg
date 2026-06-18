@@ -21,16 +21,16 @@ import (
 // UploadCompletedVideo handles video file upload from workers.
 // POST /api/v1/video/upload-completed
 //
-// Rewritten PR2b/PR4d: uses staging → ArtifactFinalizationService →
-// CompleteJobTx → job_deliveries PENDING pipeline instead of the old
-// save-directly + COMPLETED + maybeAutoUpload pattern.
+// Rewritten PR3.5-b: uses staging → ArtifactFinalizationService →
+// job_deliveries PENDING pipeline. Job completion (SUCCEEDED) is
+// deferred to the canonical FinalizationRepository.FinalizeVerified path.
 //
 // Flow:
 //  1. Save upload to staging directory (BlobStore staging path)
 //  2. Create artifact in STAGING status
 //  3. Call ArtifactFinalizationService.FinalizeRender for verification
 //     (re-hashes SHA-256, sniffs MIME, measures size)
-//  4. On success, atomically CompleteJobTx (SUCCEEDED + close attempt + outbox)
+//  4. Promote staged file to final storage
 //  5. Insert PENDING job_deliveries for delivery targets
 //  6. DeliveryRunner picks up the PENDING deliveries asynchronously
 func UploadCompletedVideo(cfg *config.Config, fileQ *queue.FileQueue, blobStore store.BlobStore) gin.HandlerFunc {
@@ -180,19 +180,11 @@ func UploadCompletedVideo(cfg *config.Config, fileQ *queue.FileQueue, blobStore 
 			_ = dbStore.UpdateArtifactStorageKey(ctx, artifactID, storageKey, finalPath)
 		}
 
-		// Step 4: Atomically complete the job (SUCCEEDED + close attempt + outbox).
-		// Fetch job revision for CAS gate.
-		var jobRevision int
-		if jobMap, jobErr := dbStore.GetJob(ctx, jobID); jobErr == nil && jobMap != nil {
-			if rev, ok := jobMap["revision"].(int64); ok {
-				jobRevision = int(rev)
-			} else if rev, ok := jobMap["revision"].(int); ok {
-				jobRevision = rev
-			}
-		}
-		if err := dbStore.CompleteJobTx(ctx, jobID, attemptID, "", leaseID, jobRevision); err != nil {
-			log.Printf("[UPLOAD] Failed to complete job %s: %v", jobID, err)
-		}
+		// Step 4: Job completion is deferred to the canonical
+		// FinalizationRepository.FinalizeVerified path (sole legal
+		// writer of jobs.status='SUCCEEDED'). CompleteJobTx was
+		// removed in PR 3.5-b.
+		log.Printf("[UPLOAD] Artifact verified for job %s — completion deferred to canonical finalization", jobID)
 
 		// Step 5: Create PENDING job_deliveries for legacy delivery_targets.
 		if dbStore != nil {

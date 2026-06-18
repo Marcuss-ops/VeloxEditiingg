@@ -7,11 +7,8 @@
 // between (jobs, artifacts, job_deliveries, delivery_attempts, delivery_destinations)
 // and projects back to the JobView shape expected by handlers.
 //
-// CompleteJobTx is the atomic "jobs SUCCEEDED + close attempt + outbox
-// event" transition (PR 8 + PR 9: outbox_events replaces the legacy
-// orchestrator_outbox). The same transaction captures all three changes
-// so a process crash after the status flip but before the attempt-close
-// leaves no rows half-promoted.
+// CompleteJobTx was removed in PR 3.5-b — the sole legal writer of
+// jobs.status='SUCCEEDED' is FinalizationRepository.FinalizeVerified.
 package store
 
 import (
@@ -19,9 +16,6 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
-	"time"
-
-	"velox-server/internal/outbox"
 )
 
 // AssembleJobView returns the legacy-flat-fields projection of a job for
@@ -154,122 +148,6 @@ func selectStorageValue(storageKey, storageURL string) string {
 	return storageKey
 }
 
-// ── PR1c — atomic CompleteJobTx ──────────────────────────────────────────────
-
-// CompleteJobTx atomically marks a job SUCCEEDED, closes the latest
-// job_attempts row, and emits a JOB_SUCCEEDED outbox event in a single
-// BEGIN IMMEDIATE transaction.
-//
-// PR 9 cutover: writes to outbox_events (replacing orchestrator_outbox).
-// Aggregate_id = job_id so the JobSucceededHandler can recover the
-// owning workflow step via workflow_steps.job_id.
-//
-// Idempotent: re-running on a job already in COMPLETED/SUCCEEDED returns
-// nil error and skips the outbox emit (the event is also idempotent
-// because the dispatcher marks PROCESSED only once per event_id).
-//
-// attemptID = 0 closes "any current attempt" (uses latest by started_at);
-// attemptID > 0 targets the specific attempt row.
-//
-// PR-2 second-line CAS (gRPC strict-path): pass expectedLeaseID non-empty
-// AND expectedRevision > 0 to also assert lease_id and revision tuples.
-// The WHERE clause is augmented with `AND lease_id = ?` and
-// `AND revision = ?` so a retried/stale orchestration cannot promote a
-// job whose lease has been reaped or whose revision has moved. RowsAffected
-// is checked; 0 means the CAS failed and the caller should treat the
-// call as a no-op (idempotent) — same behaviour as the existing
-// SUCCEEDED/COMPLETED guard.
-//
-// Tx boundary: jobs UPDATE + job_attempts UPDATE + outbox INSERT all
-// happen inside the same *sql.Tx and a single Commit. A crash before
-// commit rolls back ALL three changes — no orphan event, no half-promoted
-// job. (PR 9 cutover tightened this from the previous best-effort
-// post-commit emit, which could lose events if the process died
-// between commit and emit.)
-func (s *SQLiteStore) CompleteJobTx(ctx context.Context, jobID string, attemptID int64, outboxPayload string, expectedLeaseID string, expectedRevision int) error {
-	if jobID == "" {
-		return fmt.Errorf("store: CompleteJobTx: missing jobID")
-	}
-	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{})
-	if err != nil {
-		return fmt.Errorf("store: CompleteJobTx: begin: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	now := time.Now().UTC().Format(time.RFC3339)
-
-	// 1. Flip jobs.status COMPLETED + stamp completed_at. The no-op guard
-	//    uses UPPER(status) NOT IN ('SUCCEEDED', 'COMPLETED') so repeated
-	//    calls do not bump revision on already-completed jobs. Optional
-	//    second-line CAS on lease_id + revision when caller supplies them.
-	casClauses := `UPPER(COALESCE(status, '')) NOT IN ('SUCCEEDED', 'COMPLETED')`
-	args := []interface{}{now, now, jobID}
-	if expectedLeaseID != "" {
-		casClauses += ` AND lease_id = ?`
-		args = append(args, expectedLeaseID)
-	}
-	if expectedRevision > 0 {
-		casClauses += ` AND revision = ?`
-		args = append(args, expectedRevision)
-	}
-	res, err := tx.ExecContext(ctx,
-		`UPDATE jobs
-		 SET status = 'COMPLETED', completed_at = ?, updated_at = ?
-		 WHERE job_id = ? AND `+casClauses,
-		args...,
-	)
-	if err != nil {
-		return fmt.Errorf("store: CompleteJobTx: jobs UPDATE: %w", err)
-	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		// Either already completed OR the optional CAS rejected the
-		// update because lease/revision moved. Both are no-ops for the
-		// caller — commit to release the tx's locks either way.
-		if err := tx.Commit(); err != nil {
-			return fmt.Errorf("store: CompleteJobTx: idempotent commit: %w", err)
-		}
-		return nil
-	}
-
-	// 2. Close job_attempts (latest by created_at if attemptID=0 else specific).
-	if attemptID > 0 {
-		_, err = tx.ExecContext(ctx,
-			`UPDATE job_attempts
-			 SET status = 'succeeded', finished_at = ?
-			 WHERE id = ? AND status NOT IN ('succeeded', 'failed', 'expired')`,
-			now, attemptID,
-		)
-	} else {
-		_, err = tx.ExecContext(ctx,
-			`UPDATE job_attempts
-			 SET status = 'succeeded', finished_at = ?
-			 WHERE job_id = ? AND status NOT IN ('succeeded', 'failed', 'expired')
-			 ORDER BY id DESC LIMIT 1`,
-			now, jobID,
-		)
-	}
-	if err != nil {
-		return fmt.Errorf("store: CompleteJobTx: job_attempts UPDATE: %w", err)
-	}
-
-	// 3. Enqueue JOB_SUCCEEDED inside the tx so commit is the single
-	//    atomicity boundary. emitOutbox forwards `tx` as the Executor —
-	//    the INSERT joins the same write tx as the UPDATEs above.
-	//    aggregate_id=job_id is what makes the handler's
-	//    GetStepByJobID lookup possible.
-	if outboxPayload == "" {
-		outboxPayload = "{}"
-	}
-	if err := s.emitOutbox(ctx, tx, outbox.InsertParams{
-		AggregateType: "job",
-		AggregateID:   jobID,
-		EventType:     "JOB_SUCCEEDED",
-		Payload:       []byte(outboxPayload),
-	}); err != nil {
-		return fmt.Errorf("store: CompleteJobTx: outbox: %w", err)
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("store: CompleteJobTx: commit: %w", err)
-	}
-	return nil
-}
+// CompleteJobTx removed in PR 3.5-b — the sole legal writer of
+// jobs.status='SUCCEEDED' is FinalizationRepository.FinalizeVerified
+// (see internal/artifacts/sqlite_finalization_repository.go).

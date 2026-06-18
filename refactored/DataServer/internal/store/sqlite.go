@@ -28,9 +28,9 @@ type SQLiteStore struct {
 
 // OutboxEmitter is the minimal interface SQLiteStore uses to write
 // outbox events (ARTIFACT_READY from FinalizeArtifactVerified and
-// JOB_SUCCEEDED from CompleteJobTx). Bootstrap wires an *outbox.Store;
-// nil is a safe no-op (log + skip) so callers that have not yet
-// completed the cutover still work.
+// JOB_SUCCEEDED / JOB_FAILED from PR 3 transactional methods).
+// Bootstrap wires an *outbox.Store; nil is a safe no-op (log + skip)
+// so callers that have not yet completed the cutover still work.
 //
 // The `txn` parameter lets the producer enqueue the outbox row in the
 // same transaction as its state-change writes — this guarantees the

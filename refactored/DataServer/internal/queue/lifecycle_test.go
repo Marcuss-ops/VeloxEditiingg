@@ -111,8 +111,6 @@ func (e *eventStoreStub) DeleteJob(jobID string) error { return nil }
 func (e *eventStoreStub) ArchiveOldJobs(olderThan time.Time) (int64, error) { return 0, nil }
 func (e *eventStoreStub) TransitionJobStatus(ctx context.Context, jobID, expected, newStatus string, revision int) (int, error) { return 0, nil }
 func (e *eventStoreStub) UpdateArtifactStatus(ctx context.Context, artifactID, status string) error { return nil }
-func (e *eventStoreStub) CompleteJobTx(_ context.Context, _ string, _ int64, _ string, _ string, _ int) error { return nil }
-
 var _ store.EventStore = (*eventStoreStub)(nil)
 
 func TestNewLifecycleService_SucceedsWithBothDeps(t *testing.T) {
