@@ -122,24 +122,9 @@ func (ym *YouTubeManager) reviewAndRefreshChannels() {
 	time.Sleep(3 * time.Second)
 	log.Printf("[REVIEW] YouTube Review: Starting background review of database channels...")
 
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
-	defer cancel()
-
-	// 1. Refresh OAuth channels first
-	if ym.service != nil {
-		log.Printf("[REVIEW] YouTube Review: Refreshing metadata for all OAuth channels...")
-		success, errors := ym.service.RefreshAllChannelsMetadata(ctx)
-		if len(errors) > 0 {
-			log.Printf("[REVIEW] YouTube Review: OAuth refresh completed with %d errors (success: %d)", len(errors), success)
-		} else {
-			log.Printf("[REVIEW] YouTube Review: OAuth refresh completed successfully (success: %d)", success)
-		}
-	}
-
-	// 2. Refresh channels in groups (Manager channels, includes both OAuth and Tracked)
 	groups, _ := ym.storage.ListGroups()
 	if len(groups) == 0 {
-		log.Printf("[INFO] YouTube Review: No groups found, skipping group review")
+		log.Printf("[INFO] YouTube Review: No groups found, skipping review")
 		return
 	}
 

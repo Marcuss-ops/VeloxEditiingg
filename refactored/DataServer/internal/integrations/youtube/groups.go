@@ -7,10 +7,17 @@ import (
 	"time"
 )
 
-// loadCanonicalGroups loads groups from the canonical youtube_groups_v2 table
-// with channel memberships from youtube_group_channels.
-func (s *Service) loadCanonicalGroups() bool {
-	if s.store == nil {
+// loadGroups loads channel groups from SQLite (legacy path, kept for compat).
+func (s *Service) loadGroups() {
+	if s.store != nil {
+		s.loadGroupsFromSQLite()
+	}
+}
+
+// loadGroupsFromSQLite loads groups from the legacy youtube_groups table.
+func (s *Service) loadGroupsFromSQLite() bool {
+	rows, err := s.store.ListYouTubeGroups()
+	if err != nil || len(rows) == 0 {
 		return false
 	}
 
@@ -54,6 +61,60 @@ func (s *Service) loadCanonicalGroups() bool {
 			Description: desc,
 			Privacy:     privacy,
 			GroupType:   groupType,
+			Channels:    groupChannels[gid],
+		}
+	}
+	log.Printf("[OK] Loaded %d YouTube groups from legacy SQLite", len(s.groups))
+	return true
+}
+
+// loadCanonicalGroups loads groups from the canonical youtube_groups_v2 table
+// with channel memberships from youtube_group_channels.
+func (s *Service) loadCanonicalGroups() bool {
+	if s.store == nil {
+		// Fall back to legacy path
+		return s.loadGroupsFromSQLite()
+	}
+
+	// Load groups from youtube_groups_v2
+	groupRows, err := s.store.ListYouTubeGroupsV2()
+	if err != nil || len(groupRows) == 0 {
+		// Fall back to legacy if canonical is empty
+		return s.loadGroupsFromSQLite()
+	}
+
+	// Load all memberships at once
+	memberships, err := s.store.ListAllGroupMembershipsV2()
+	if err != nil {
+		memberships = nil
+	}
+
+	// Build a map of group_id → channel IDs
+	groupChannels := make(map[int64][]string)
+	for _, m := range memberships {
+		gid, _ := m["group_id"].(int64)
+		chID, _ := m["channel_id"].(string)
+		if gid > 0 && chID != "" {
+			groupChannels[gid] = append(groupChannels[gid], chID)
+		}
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for _, row := range groupRows {
+		name, _ := row["name"].(string)
+		if name == "" {
+			continue
+		}
+		desc, _ := row["description"].(string)
+		privacy, _ := row["privacy"].(string)
+		gid, _ := row["id"].(int64)
+
+		s.groups[name] = &ChannelGroup{
+			Name:        name,
+			Description: desc,
+			Privacy:     privacy,
 			Channels:    groupChannels[gid],
 		}
 	}
@@ -364,16 +425,24 @@ func (s *Service) GetUndefinedChannels() []*Channel {
 	return undefined
 }
 
-// saveGroups is retained as a backwards-compatible entry point. It is no
-// longer destructive: it just no-ops because per-operation methods
-// (CreateGroup / DeleteGroup / AddChannelToGroup / RemoveChannelFromGroup /
-// DeleteChannel) now write the affected rows directly to SQLite. Persisting
-// through this method would only re-do work already done atomically by the
-// callers. Keeping the symbol alive avoids breaking external callers that
-// may still invoke it.
-func (s *Service) saveGroups() error {
+// saveGroups saves groups to canonical SQLite tables.
+func (s *Service) saveGroups() {
 	if s.store == nil {
-		return nil
+		return
+	}
+	for _, g := range s.groups {
+		// Upsert into youtube_groups_v2 with group_type="upload"
+		groupID, err := s.store.UpsertYouTubeGroupV2(g.Name, "upload", g.Description, g.Privacy)
+		if err != nil {
+			log.Printf("[WARN] Failed to save group %q: %v", g.Name, err)
+			continue
+		}
+		// Sync channel memberships
+		for _, chID := range g.Channels {
+			if err := s.store.AddChannelToGroupV2(groupID, chID); err != nil {
+				log.Printf("[WARN] Failed to add channel %s to group %q: %v", chID[:8], g.Name, err)
+			}
+		}
 	}
 	// Intentionally empty: per-operation methods own their persistence.
 	// See per-operation methods (CreateGroup / DeleteGroup / etc.).

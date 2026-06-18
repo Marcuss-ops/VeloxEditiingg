@@ -18,11 +18,13 @@ import (
 
 // YouTubeStore defines the interface for SQLite-backed YouTube persistence,
 // avoiding a direct import of the store package.
+// It includes both canonical methods (youtube_channels, youtube_groups_v2)
+// and legacy methods (youtube_channel_metadata, youtube_groups) for migration.
 type YouTubeStore interface {
 	// Canonical: YouTube Channels (youtube_channels table)
 	ListYouTubeChannels() ([]map[string]interface{}, error)
 	GetYouTubeChannel(channelID string) (map[string]interface{}, error)
-	UpsertYouTubeChannel(channelID, title, displayName, channelURL, thumbnailURL, language, notes string, viewCount, subCount int64, addedAt, lastSyncAt string) error
+	UpsertYouTubeChannel(channelID, title, displayName, channelURL, thumbnailURL, language, notes string, viewCount, subCount int64, addedAt, lastSyncAt, metadataJSON string) error
 
 	// Canonical: YouTube Groups V2 (youtube_groups_v2 + youtube_group_channels)
 	ListYouTubeGroupsV2() ([]map[string]interface{}, error)
@@ -32,24 +34,15 @@ type YouTubeStore interface {
 	ListGroupChannelsV2(groupID int64) ([]string, error)
 	ListAllGroupMembershipsV2() ([]map[string]interface{}, error)
 
-	// OAuth token persistence (youtube_oauth_tokens table)
-	UpsertYouTubeOAuthToken(channelID string, accessTokenEnc, refreshTokenEnc []byte, tokenType, expiry, scopes string, keyVersion int) error
-	GetYouTubeOAuthToken(channelID string) (map[string]interface{}, error)
-	ListActiveYouTubeOAuthTokens() ([]map[string]interface{}, error)
-	AuditYouTubeOAuthTokenOrphans() ([]youtubetypes.YouTubeTokenOrphan, error)
+	// Legacy: YouTube Groups (kept for backward compat during migration)
+	ListYouTubeGroups() ([]map[string]interface{}, error)
+	UpsertYouTubeGroup(name, description, privacy string, channels []string, rawJSON string) error
 
-	// Channel mutation methods
-	UpdateChannelTitle(channelID, title string) error
-	UpdateChannelLanguage(channelID, language string) error
-	DeleteChannelAtomic(channelID string) (int64, error)
-	UpdateYouTubeChannelMetadata(channelID, title, thumbnailURL string) error
+	// Legacy: YouTube Channel Metadata (kept for backward compat during migration)
+	ListYouTubeChannelMetadata() (map[string]map[string]interface{}, error)
+	UpsertYouTubeChannelMetadata(channelID, title, tokenPath, language, addedDate, lastUsed, rawJSON string) error
 
-	// Group mutation methods
-	GetYouTubeGroupV2ID(name, groupType string) (int64, error)
-	DeleteYouTubeGroupChannelsByGroupID(groupID int64) error
-	DeleteYouTubeGroupV2(groupID int64) error
-
-	// Cache (shared)
+	// Cache (shared, not legacy)
 	GetYouTubeCache(key string) (int64, string, error)
 	SetYouTubeCache(key string, timestamp int64, dataJSON string) error
 	CleanupYouTubeCache(maxAge int64) (int64, error)
@@ -77,43 +70,9 @@ type Service struct {
 	quotaManager *QuotaManager
 }
 
-// OAuthCipher is an interface for encrypting/decrypting OAuth tokens.
-type OAuthCipher interface {
-	Encrypt(plaintext []byte) ([]byte, error)
-	Decrypt(ciphertext []byte) ([]byte, error)
-	KeyVersion() int
-}
-
 // NewService creates a new YouTube service.
 // store is optional — if nil, in-memory-only mode is used.
-// cipher is required: the OAuth callback, the auto-refresh path, and the
-// boot hydrator all need an AES-GCM cipher to read/write the encrypted
-// blobs in youtube_oauth_tokens. Passing nil returns an error so the
-// module wiring fails closed instead of silently degrading. The
-// previously-present SetOAuthSecretCipher side-channel is gone — a
-// service without a cipher is a programmer error at construction
-// time, not an operator choice. Integration tests that exercise
-// non-OAuth paths can still construct *Service via the struct literal
-// directly (oauthBuf field), which keeps the unit tests independent
-// of this fail-closed gate.
-//
-// The previous two-phase boot hydrator (SQLite-first followed by a
-// JSON-fallback) has been collapsed to a single SQLite-only path
-// since the S6 verdict and the cleanup of remote-engine-bridge +
-// the OAuth JSON consolidate / migrate CLIs. New installs are
-// expected to land credentials directly via the canonical OAuth
-// callback; legacy JSON layouts in <DataDir>/youtube/tokens/ are
-// no longer read or written at runtime.
-// NewService takes the wider YouTubeStore (not the narrower ServiceStore)
-// because Cache.SetStore / NewCache both need the broader surface
-// (GetYouTubeCache / SetYouTubeCache / MigrateYouTubeCache etc. live
-// there). The assignment `s.store = store` is a structural narrowing
-// inside the constructor — Go recognises that any YouTubeStore value
-// also satisfies the ServiceStore interface at runtime via the same
-// duck-typed subtyping rule module.go (passing *SQLiteStore) already
-// relies on. Reverse direction (ServiceStore -> YouTubeStore) does NOT
-// type-check because ServiceStore lacks Cache methods.
-func NewService(cfg *ServiceConfig, store YouTubeStore, cipher *aesgcm.Encryptor) (*Service, error) {
+func NewService(cfg *ServiceConfig, store YouTubeStore) (*Service, error) {
 	if cfg.TokensDir == "" {
 		if env := os.Getenv("VELOX_YOUTUBE_TOKENS_DIR"); env != "" {
 			cfg.TokensDir = env
@@ -146,16 +105,7 @@ func NewService(cfg *ServiceConfig, store YouTubeStore, cipher *aesgcm.Encryptor
 		log.Printf("[WARN] YouTube OAuth config not loaded: %v", err)
 	}
 
-	// SQLite-only boot rehydration: loadOAuthChannelsFromSQLite reads
-	// every non-revoked youtube_oauth_tokens row, decrypts via the
-	// cipher mounted at construction time, and rebuilds s.channels.
-	// This is the only path; the JSON dual-write + JSON-fallback paths
-	// have been removed under the S6/S11 verdict (S6 = SQLite-only
-	// canonical layout, S11 = DB-first ordering). The module wiring
-	// gates OAuth on a non-nil cipher (requireIfMissing=true in
-	// module.go) so a missing VELOX_YT_OAUTH_TOKEN_KEY refuses to
-	// boot rather than degrading into a JSON reader.
-	s.loadOAuthChannelsFromSQLite()
+	s.loadChannels()
 	// Load from canonical tables — store is already set, so this works immediately
 	s.loadCanonicalChannels()
 	s.loadCanonicalGroups()

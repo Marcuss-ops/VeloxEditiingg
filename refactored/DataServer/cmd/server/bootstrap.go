@@ -16,7 +16,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"velox-server/internal/app"
-	voiceoverassets "velox-server/internal/assets"
 	"velox-server/internal/audit"
 	"velox-server/internal/config"
 	"velox-server/internal/deliveries"
@@ -110,7 +109,28 @@ func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
 		return nil, err
 	}
 
-	reg := workersreg.New(sqliteStore)
+	// Import legacy JSON data into SQLite (idempotent, checksum-protected)
+	if cfg.DataDir != "" {
+		if results, err := sqliteStore.ImportLegacyJSON(cfg.DataDir); err != nil {
+			log.Printf("[BOOTSTRAP] Legacy JSON import error (non-fatal): %v", err)
+		} else {
+			for _, r := range results {
+				if r.Status == "imported" {
+					log.Printf("[BOOTSTRAP] Migrated: %s (%d records)", r.Source.Name, r.Imported)
+				}
+			}
+		}
+	}
+
+	fileQ, err := queue.NewFileQueue(&queue.FileQueueConfig{
+		DBStore:    sqliteStore,
+		MaxRetries: cfg.MaxJobAttempts,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	reg := workersreg.New(nil, false, sqliteStore)
 
 	revokedCount := len(reg.ListRevoked())
 	if revokedCount > 0 {
@@ -201,6 +221,11 @@ func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
 }
 
 func runServer(cfg *config.Config) error {
+	// Run data layer audit at startup
+	if err := runDataLayerAudit(cfg); err != nil {
+		return err
+	}
+
 	deps, err := buildServerDeps(cfg)
 	if err != nil {
 		return err
@@ -417,84 +442,24 @@ func runServer(cfg *config.Config) error {
 	return nil
 }
 
-type grpcServer interface {
-	GracefulStop()
-}
-
-type grpcServerWrapper struct {
-	*grpc.Server
-	Listener net.Listener
-}
-
-// reconcileStaging scans the staging directory for files that are orphaned
-// (no matching artifact row) or whose artifact has been in STAGING/QUARANTINED
-// for more than 1 hour. Removes the orphaned files from disk.
-func reconcileStaging(dbStore *store.SQLiteStore, blobStore store.BlobStore) (int, error) {
-	stagingDir := blobStore.StagingDir()
-	entries, err := os.ReadDir(stagingDir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return 0, nil
-		}
-		return 0, fmt.Errorf("read staging dir: %w", err)
-	}
-
-	ctx := context.Background()
-	cutoff := time.Now().UTC().Add(-1 * time.Hour).Format(time.RFC3339)
-	removed := 0
-
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		path := filepath.Join(stagingDir, entry.Name())
-
-		info, err := entry.Info()
-		if err != nil {
-			continue
-		}
-		if time.Since(info.ModTime()) < 1*time.Hour {
-			continue
-		}
-
-		var status string
-		err = dbStore.DB().QueryRowContext(ctx,
-			`SELECT status FROM artifacts WHERE storage_key = ? OR local_path = ? LIMIT 1`,
-			path, path,
-		).Scan(&status)
-		if err != nil {
-			if rmErr := os.Remove(path); rmErr == nil {
-				removed++
-				log.Printf("[STAGING] Removed orphaned file: %s", path)
-			}
-			continue
-		}
-
-		if status == "STAGING" || status == "QUARANTINED" {
-			var createdAt string
-			_ = dbStore.DB().QueryRowContext(ctx,
-				`SELECT created_at FROM artifacts WHERE (storage_key = ? OR local_path = ?) AND status = ?`,
-				path, path, status,
-			).Scan(&createdAt)
-			if createdAt != "" && createdAt < cutoff {
-				if rmErr := os.Remove(path); rmErr == nil {
-					removed++
-					log.Printf("[STAGING] Removed stuck artifact file (%s): %s", status, path)
-				}
-			}
-		}
-	}
-	return removed, nil
-}
-
+// runDataLayerAudit checks for legacy JSON files and data layer integrity.
+// Returns error if critical issues are found (hard block).
+// Warnings are logged but don't block startup.
 func runDataLayerAudit(cfg *config.Config) error {
-	dataDir := cfg.Runtime.DataDir
+	dataDir := cfg.DataDir
 	if dataDir == "" {
 		dataDir = "."
 	}
 
 	secretsDir := filepath.Join(dataDir, "secrets")
-	auditor := audit.NewDataLayerAuditor(dataDir, secretsDir, cfg.Database.DBPath)
+	auditor := audit.NewDataLayerAuditor(dataDir, secretsDir)
+
+	// Allow specific legacy files during transition period
+	auditor.AllowLegacy("drive/drive_links.json")
+	auditor.AllowLegacy("drive/drive_master_folders_list.json")
+	auditor.AllowLegacy("jobs/multi_step_jobs.json")
+	auditor.AllowLegacy("jobs/dead_letter_queue.json")
+	auditor.AllowLegacy("analytics/analytics_cache.json")
 
 	result := auditor.Audit()
 

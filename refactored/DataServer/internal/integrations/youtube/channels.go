@@ -58,45 +58,13 @@ func (s *Service) loadOAuthChannelsFromSQLite() (int, error) {
 		}
 	}
 
-	hydrated := 0
-	for _, row := range tokenRows {
-		cid, _ := row["channel_id"].(string)
-		if cid == "" {
-			continue
-		}
-		accessBlob, _ := row["access_token_encrypted"].([]byte)
-		refreshBlob, _ := row["refresh_token_encrypted"].([]byte)
-		access, aerr := s.oauthBuf.Decrypt(accessBlob)
-		if aerr != nil {
-			log.Printf("[WARN] decrypt access_token for %s: %v (skipping hydration)", cid, aerr)
-			continue
-		}
-		var refresh string
-		if len(refreshBlob) > 0 {
-			plain, rerr := s.oauthBuf.Decrypt(refreshBlob)
-			if rerr != nil {
-				log.Printf("[WARN] decrypt refresh_token for %s: %v (continuing with empty refresh)", cid, rerr)
-			} else {
-				refresh = string(plain)
-			}
-		}
-		var expiry time.Time
-		if raw, ok := row["expiry"].(string); ok && raw != "" {
-			if t, perr := time.Parse(expiryTimeLayout, raw); perr == nil {
-				expiry = t
-			}
-		}
-		s.mu.Lock()
-		ch, exists := s.channels[cid]
-		if !exists {
-			ch = &AuthChannel{ID: cid}
-			s.channels[cid] = ch
-		}
-		ch.AccessToken = string(access)
-		ch.RefreshToken = refresh
-		ch.Expiry = expiry
-		s.mu.Unlock()
-		hydrated++
+	return channel
+}
+
+// loadChannelsJSON loads channel details from SQLite (legacy path).
+func (s *Service) loadChannelsJSON() {
+	if s.store != nil {
+		s.loadChannelsFromSQLite()
 	}
 	if hydrated > 0 {
 		log.Printf("[OK] Hydrated %d OAuth credentials from youtube_oauth_tokens", hydrated)
@@ -104,16 +72,9 @@ func (s *Service) loadOAuthChannelsFromSQLite() (int, error) {
 	return hydrated, nil
 }
 
-// loadCanonicalChannels loads channel metadata from the canonical
-// youtube_channels table and folds it into the in-RAM AuthChannel entries
-// populated by loadOAuthChannelsFromSQLite. Pure read: no filesystem, no
-// JSON.
-func (s *Service) loadCanonicalChannels() bool {
-	if s.store == nil {
-		return false
-	}
-
-	rows, err := s.store.ListYouTubeChannels()
+// loadChannelsFromSQLite loads channel metadata from legacy youtube_channel_metadata.
+func (s *Service) loadChannelsFromSQLite() bool {
+	rows, err := s.store.ListYouTubeChannelMetadata()
 	if err != nil || len(rows) == 0 {
 		return false
 	}
@@ -149,6 +110,54 @@ func (s *Service) loadCanonicalChannels() bool {
 			s.channels[id] = &AuthChannel{
 				ID:        id,
 				URL:       channelURL,
+				Title:     title,
+				Name:      displayName,
+				Language:  language,
+				Thumbnail: thumbnailURL,
+			}
+		}
+	}
+
+	log.Printf("[OK] Loaded channel metadata from legacy SQLite (%d entries)", len(rows))
+	return true
+}
+
+// loadCanonicalChannels loads channel metadata from the canonical youtube_channels table.
+func (s *Service) loadCanonicalChannels() bool {
+	if s.store == nil {
+		// Fall back to legacy path
+		return s.loadChannelsFromSQLite()
+	}
+
+	rows, err := s.store.ListYouTubeChannels()
+	if err != nil || len(rows) == 0 {
+		// Fall back to legacy if canonical is empty
+		return s.loadChannelsFromSQLite()
+	}
+
+	for _, row := range rows {
+		id, _ := row["channel_id"].(string)
+		if id == "" {
+			continue
+		}
+		title, _ := row["title"].(string)
+		displayName, _ := row["display_name"].(string)
+		language, _ := row["language"].(string)
+		thumbnailURL, _ := row["thumbnail_url"].(string)
+
+		if ch, exists := s.channels[id]; exists {
+			if title != "" {
+				ch.Title = title
+			}
+			if language != "" {
+				ch.Language = language
+			}
+			if thumbnailURL != "" && ch.Thumbnail == "" {
+				ch.Thumbnail = thumbnailURL
+			}
+		} else {
+			s.channels[id] = &AuthChannel{
+				ID:        id,
 				Title:     title,
 				Name:      displayName,
 				Language:  language,
@@ -252,30 +261,19 @@ func (s *Service) UpdateChannelMetadata(channelID string, metadata map[string]in
 		return fmt.Errorf("channel not found: %s", channelID)
 	}
 
-	// Typed title update (if provided). One column, no clobber.
+	if lang, ok := metadata["language"].(string); ok {
+		ch.Language = lang
+	}
+	if title, ok := metadata["title"].(string); ok {
+		ch.Title = title
+	}
+
+	// Persist to canonical youtube_channels
 	if s.store != nil {
-		if title, ok := metadata["title"].(string); ok && title != "" {
-			if err := s.store.UpdateChannelTitle(channelID, title); err != nil {
-				return fmt.Errorf("typed update title: %w", err)
-			}
-			ch.Title = title // mirror to RAM only after a successful SQL write
-		}
-		if lang, ok := metadata["language"].(string); ok && lang != "" {
-			if err := s.store.UpdateChannelLanguage(channelID, lang); err != nil {
-				return fmt.Errorf("typed update language: %w", err)
-			}
-			ch.Language = lang // mirror to RAM only after a successful SQL write
-		}
-	} else {
-		// No store: degrade gracefully — keep the RAM update so the
-		// in-memory surface is coherent (the canonical SQL row will be
-		// reconciled on the next process restart by loadCanonicalChannels).
-		if title, ok := metadata["title"].(string); ok && title != "" {
-			ch.Title = title
-		}
-		if lang, ok := metadata["language"].(string); ok && lang != "" {
-			ch.Language = lang
-		}
+		rawMetadata, _ := json.Marshal(map[string]string{
+			"token_path": ch.TokenPath,
+		})
+		return s.store.UpsertYouTubeChannel(ch.ID, ch.Title, ch.Name, "", ch.Thumbnail, ch.Language, "", 0, 0, "", "", string(rawMetadata))
 	}
 	return nil
 }

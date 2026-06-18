@@ -60,7 +60,11 @@ func GetGroupsHandler(c *gin.Context) {
 		return
 	}
 
+	// Try canonical tables first, fall back to legacy
 	rows, err := groupsStore.ListYouTubeGroupsV2()
+	if err != nil || len(rows) == 0 {
+		rows, err = groupsStore.ListYouTubeGroups()
+	}
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"ok":    false,
@@ -86,6 +90,12 @@ func GetGroupsHandler(c *gin.Context) {
 					g.Channels[i] = Channel{ID: id}
 				}
 			}
+		} else if chIDs, ok := row["channels"].([]string); ok {
+			// Fallback: legacy youtube_groups.channels_json as []string
+			g.Channels = make([]Channel, len(chIDs))
+			for i, id := range chIDs {
+				g.Channels[i] = Channel{ID: id}
+			}
 		}
 		result = append(result, g)
 	}
@@ -105,7 +115,11 @@ func GetGroupHandler(c *gin.Context) {
 		return
 	}
 
+	// Try canonical tables first, fall back to legacy
 	rows, err := groupsStore.ListYouTubeGroupsV2()
+	if err != nil || len(rows) == 0 {
+		rows, err = groupsStore.ListYouTubeGroups()
+	}
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"ok":    false,
@@ -130,6 +144,11 @@ func GetGroupHandler(c *gin.Context) {
 					for i, id := range channelIDs {
 						g.Channels[i] = Channel{ID: id}
 					}
+				}
+			} else if chIDs, ok := row["channels"].([]string); ok {
+				g.Channels = make([]Channel, len(chIDs))
+				for i, id := range chIDs {
+					g.Channels[i] = Channel{ID: id}
 				}
 			}
 

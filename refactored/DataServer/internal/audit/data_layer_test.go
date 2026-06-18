@@ -283,17 +283,17 @@ func findSubstring(s, substr string) bool {
 // Additional audit tests
 // ============================================================
 
-// TestCheckDuplicateSources_NoWorkersWarning tests that workers.json no longer
-// produces a warning (fully migrated to SQLite).
-func TestCheckDuplicateSources_NoWorkersWarning(t *testing.T) {
+// TestCheckDuplicateSources_WorkersWarning tests that workers.json produces
+// a warning, not an error.
+func TestCheckDuplicateSources_WorkersWarning(t *testing.T) {
 	tmpDir := t.TempDir()
 	secretsDir := filepath.Join(tmpDir, "secrets")
 	os.MkdirAll(secretsDir, 0755)
 
-	// Create workers.json — should NOT produce any warning
+	// Create workers.json (should produce a warning)
 	os.WriteFile(filepath.Join(tmpDir, "workers.json"), []byte(`{}`), 0644)
 
-	auditor := NewDataLayerAuditor(tmpDir, secretsDir, filepath.Join(tmpDir, "velox.db"))
+	auditor := NewDataLayerAuditor(tmpDir, secretsDir)
 	result := &DataLayerAuditResult{
 		Passed:   true,
 		Errors:   make([]string, 0),
@@ -302,8 +302,8 @@ func TestCheckDuplicateSources_NoWorkersWarning(t *testing.T) {
 
 	auditor.checkDuplicateSources(result)
 
-	if len(result.Warnings) > 0 {
-		t.Errorf("Expected no warnings for workers.json, got: %v", result.Warnings)
+	if len(result.Warnings) == 0 {
+		t.Error("Expected warning for workers.json, got none")
 	}
 	if len(result.Errors) > 0 {
 		t.Errorf("Expected no errors, got: %v", result.Errors)
@@ -311,11 +311,8 @@ func TestCheckDuplicateSources_NoWorkersWarning(t *testing.T) {
 }
 
 // TestCheckDuplicateSources_DriveCredentialsError tests that both credentials/
-// and Credentials/ directories produce an error (Unix only — Windows FS is case-insensitive).
+// and Credentials/ directories produce an error.
 func TestCheckDuplicateSources_DriveCredentialsError(t *testing.T) {
-	if os.PathSeparator == '\\' {
-		t.Skip("Skipping on Windows: filesystem is case-insensitive")
-	}
 	tmpDir := t.TempDir()
 	secretsDir := filepath.Join(tmpDir, "secrets")
 	os.MkdirAll(secretsDir, 0755)
@@ -324,7 +321,7 @@ func TestCheckDuplicateSources_DriveCredentialsError(t *testing.T) {
 	os.MkdirAll(filepath.Join(tmpDir, "drive", "credentials"), 0755)
 	os.MkdirAll(filepath.Join(tmpDir, "drive", "Credentials"), 0755)
 
-	auditor := NewDataLayerAuditor(tmpDir, secretsDir, filepath.Join(tmpDir, "velox.db"))
+	auditor := NewDataLayerAuditor(tmpDir, secretsDir)
 	result := &DataLayerAuditResult{
 		Passed:   true,
 		Errors:   make([]string, 0),
@@ -350,11 +347,8 @@ func TestCheckDuplicateSources_DriveCredentialsError(t *testing.T) {
 }
 
 // TestCheckNamingConsistency_MixedCase tests that mixed-case
-// directory names produce an error (Unix only — Windows FS is case-insensitive).
+// directory names produce an error.
 func TestCheckNamingConsistency_MixedCase(t *testing.T) {
-	if os.PathSeparator == '\\' {
-		t.Skip("Skipping on Windows: filesystem is case-insensitive")
-	}
 	tmpDir := t.TempDir()
 	secretsDir := filepath.Join(tmpDir, "secrets")
 	os.MkdirAll(secretsDir, 0755)
@@ -363,7 +357,7 @@ func TestCheckNamingConsistency_MixedCase(t *testing.T) {
 	os.MkdirAll(filepath.Join(tmpDir, "drive", "credentials"), 0755)
 	os.MkdirAll(filepath.Join(tmpDir, "drive", "Credentials"), 0755)
 
-	auditor := NewDataLayerAuditor(tmpDir, secretsDir, filepath.Join(tmpDir, "velox.db"))
+	auditor := NewDataLayerAuditor(tmpDir, secretsDir)
 	result := &DataLayerAuditResult{
 		Passed:   true,
 		Errors:   make([]string, 0),
@@ -388,13 +382,13 @@ func TestCheckNamingConsistency_MixedCase(t *testing.T) {
 	}
 }
 
-// TestCheckDatabase_MissingDB tests that missing DB (empty dbPath) produces a warning.
+// TestCheckDatabase_MissingDB tests that missing velox.db produces a warning.
 func TestCheckDatabase_MissingDB(t *testing.T) {
 	tmpDir := t.TempDir()
 	secretsDir := filepath.Join(tmpDir, "secrets")
 	os.MkdirAll(secretsDir, 0755)
 
-	auditor := NewDataLayerAuditor(tmpDir, secretsDir, "") // empty dbPath
+	auditor := NewDataLayerAuditor(tmpDir, secretsDir)
 	result := &DataLayerAuditResult{
 		Passed:   true,
 		Errors:   make([]string, 0),
@@ -404,31 +398,31 @@ func TestCheckDatabase_MissingDB(t *testing.T) {
 	auditor.checkDatabase(result)
 
 	if len(result.Warnings) == 0 {
-		t.Error("Expected warning for empty dbPath, got none")
+		t.Error("Expected warning for missing velox.db, got none")
 	}
 	found := false
 	for _, w := range result.Warnings {
-		if stringsContains(w, "VELOX_DB_PATH") {
+		if stringsContains(w, "velox.db") {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Errorf("Expected warning about VELOX_DB_PATH not configured, got: %v", result.Warnings)
+		t.Errorf("Expected warning about missing velox.db, got: %v", result.Warnings)
 	}
 }
 
-// TestCheckDatabase_NoDuplicate tests that a valid DB path produces no warning.
+// TestCheckDatabase_NoDuplicate tests that no duplicate warning is emitted
+// when there's only one velox.db.
 func TestCheckDatabase_NoDuplicate(t *testing.T) {
 	tmpDir := t.TempDir()
 	secretsDir := filepath.Join(tmpDir, "secrets")
 	os.MkdirAll(secretsDir, 0755)
 
-	// Create velox.db at configured path
-	dbPath := filepath.Join(tmpDir, "velox.db")
-	os.WriteFile(dbPath, []byte(`SQLite format 3\x00`), 0644)
+	// Create a single velox.db (no duplicates)
+	os.WriteFile(filepath.Join(tmpDir, "velox.db"), []byte(`SQLite format 3\x00`), 0644)
 
-	auditor := NewDataLayerAuditor(tmpDir, secretsDir, dbPath)
+	auditor := NewDataLayerAuditor(tmpDir, secretsDir)
 	result := &DataLayerAuditResult{
 		Passed:   true,
 		Errors:   make([]string, 0),
@@ -437,15 +431,15 @@ func TestCheckDatabase_NoDuplicate(t *testing.T) {
 
 	auditor.checkDatabase(result)
 
-	// Should have no errors because DB exists at configured path
+	// Should have no errors because velox.db exists
 	if len(result.Errors) > 0 {
 		t.Errorf("Expected no errors, got: %v", result.Errors)
 	}
 
 	// Should have no warnings about missing DB (it exists)
 	for _, w := range result.Warnings {
-		if stringsContains(w, "not found") || stringsContains(w, "not accessible") {
-			t.Errorf("Expected no 'not found/accessible' warning when DB exists, got: %s", w)
+		if stringsContains(w, "not found") {
+			t.Errorf("Expected no 'not found' warning when velox.db exists, got: %s", w)
 		}
 	}
 }
@@ -461,7 +455,7 @@ func TestAllowLegacy_SkippedAllowed(t *testing.T) {
 	os.MkdirAll(filepath.Join(tmpDir, "youtube", "GroupYoutubeManager"), 0755)
 	os.WriteFile(filepath.Join(tmpDir, "youtube", "GroupYoutubeManager", "ChannelsSaved.json"), []byte(`{}`), 0644)
 
-	auditor := NewDataLayerAuditor(tmpDir, secretsDir, filepath.Join(tmpDir, "velox.db"))
+	auditor := NewDataLayerAuditor(tmpDir, secretsDir)
 	auditor.AllowLegacy("youtube/GroupYoutubeManager/ChannelsSaved.json")
 
 	result := auditor.Audit()
@@ -544,7 +538,7 @@ func TestAuditResult_StringFailed(t *testing.T) {
 
 // TestNewDataLayerAuditor tests that the constructor initializes correctly.
 func TestNewDataLayerAuditor(t *testing.T) {
-	auditor := NewDataLayerAuditor("/tmp/data", "/tmp/data/secrets", "/tmp/data/velox.db")
+	auditor := NewDataLayerAuditor("/tmp/data", "/tmp/data/secrets")
 
 	if auditor == nil {
 		t.Fatal("NewDataLayerAuditor should not return nil")
@@ -574,7 +568,7 @@ func TestAudit_WarningCount(t *testing.T) {
 	// Create some tokens
 	os.WriteFile(filepath.Join(ytTokensDir, "account_test.json"), []byte(`{}`), 0644)
 
-	auditor := NewDataLayerAuditor(tmpDir, secretsDir, filepath.Join(tmpDir, "velox.db"))
+	auditor := NewDataLayerAuditor(tmpDir, secretsDir)
 	result := auditor.Audit()
 
 	// Should NOT have errors (no DB warning is expected since checkDatabase warns)

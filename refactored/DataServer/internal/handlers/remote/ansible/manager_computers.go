@@ -47,11 +47,11 @@ type AnsibleComputerStore interface {
 
 // AnsibleComputerManager manages the Ansible computers inventory.
 type AnsibleComputerManager struct {
-	dataDir        string
-	store          AnsibleComputerStore
-	computers      map[string]AnsibleComputer
+	dataDir      string
+	store        AnsibleComputerStore
+	computers    map[string]AnsibleComputer
 	secretResolver *SecretResolver
-	mu             sync.RWMutex
+	mu           sync.RWMutex
 }
 
 // NewAnsibleComputerManager creates a new Ansible computer manager.
@@ -84,9 +84,26 @@ func (m *AnsibleComputerManager) loadFromSQLite() {
 		return
 	}
 
-	for _, h := range hosts {
-		computer := ansibleHostFieldsToComputer(h)
-		m.computers[computer.Host] = computer
+	// Fallback: load from legacy ansible_computers (raw_json)
+	rows, legacyErr := m.store.ListAnsibleComputers()
+	if legacyErr != nil || len(rows) == 0 {
+		return
+	}
+
+	for host, rawJSON := range rows {
+		var c AnsibleComputer
+		if err := json.Unmarshal(rawJSON, &c); err != nil {
+			continue
+		}
+		m.computers[host] = c
+	}
+
+	// Migrate legacy data to new structured table
+	log.Printf("[INFO] Migrating %d computers from ansible_computers to ansible_hosts", len(m.computers))
+	for _, c := range m.computers {
+		if err := m.persistToAnsibleHosts(c); err != nil {
+			log.Printf("[WARN] Failed to migrate computer %s to ansible_hosts: %v", c.Host, err)
+		}
 	}
 	log.Printf("[OK] Loaded %d Ansible computers from ansible_hosts", len(m.computers))
 }

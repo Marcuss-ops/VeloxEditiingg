@@ -51,8 +51,8 @@ func (m *Module) RegisterRoutes(r *gin.Engine) {
 		YoutubePostingPath: m.cfg.YouTube.PostingPath,
 		CredentialsDir:     m.cfg.YouTube.CredentialsDir,
 		DataDir:            m.dataDir,
-		NVIDIAAPIKey:       m.cfg.NVIDIA.APIKey,
-		NVIDIATextURL:      m.cfg.NVIDIA.TextURL,
+		NVIDIAAPIKey:       m.cfg.NVIDIAAPIKey,
+		NVIDIATextURL:      m.cfg.NVIDIATextURL,
 	}, m.sqliteStore)
 	if err != nil {
 		log.Printf("[YOUTUBE] Service init failed: %v", err)

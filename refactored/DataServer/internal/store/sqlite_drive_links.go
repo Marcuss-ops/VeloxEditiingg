@@ -2,7 +2,7 @@ package store
 
 import (
 	"encoding/json"
-	"strings"
+	"fmt"
 	"time"
 
 	"velox-server/internal/logging"
@@ -122,18 +122,15 @@ func (s *SQLiteStore) GetDriveLink(id string) (map[string]any, error) {
 // MasterFolders: structured master folder CRUD
 
 // UpsertMasterFolder creates or updates a master folder.
-func (s *SQLiteStore) UpsertMasterFolder(id, name, url, language string, subfoldersCount int, metadataJSON string) error {
+func (s *SQLiteStore) UpsertMasterFolder(id, name, url, language string, subfoldersCount int) error {
 	now := time.Now().UTC().Format(time.RFC3339)
-	if strings.TrimSpace(metadataJSON) == "" {
-		metadataJSON = "{}"
-	}
 	_, err := s.db.Exec(
-		`INSERT INTO drive_master_folders (id, name, url, subfolders_count, language, created_at, updated_at, metadata_json)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		`INSERT INTO drive_master_folders (id, name, url, subfolders_count, language, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(id) DO UPDATE SET
 		   name=excluded.name, url=excluded.url, subfolders_count=excluded.subfolders_count,
-		   language=excluded.language, updated_at=excluded.updated_at, metadata_json=excluded.metadata_json`,
-		id, name, url, subfoldersCount, language, now, now, metadataJSON,
+		   language=excluded.language, updated_at=excluded.updated_at`,
+		id, name, url, subfoldersCount, language, now, now,
 	)
 	return err
 }
@@ -160,62 +157,6 @@ func (s *SQLiteStore) ListMasterFolders() ([]map[string]any, error) {
 		})
 	}
 	return result, rows.Err()
-}
-
-// ListMasterFoldersDetailed returns all master folders including metadata_json.
-func (s *SQLiteStore) ListMasterFoldersDetailed() ([]map[string]any, error) {
-	rows, err := s.db.Query(`SELECT id, name, url, subfolders_count, language, created_at, updated_at, metadata_json FROM drive_master_folders ORDER BY name`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var result []map[string]any
-	for rows.Next() {
-		var id, name, url, language, createdAt, updatedAt, metadataJSON string
-		var subfoldersCount int
-		if err := rows.Scan(&id, &name, &url, &subfoldersCount, &language, &createdAt, &updatedAt, &metadataJSON); err != nil {
-			continue
-		}
-		result = append(result, map[string]any{
-			"id":               id,
-			"name":             name,
-			"url":              url,
-			"subfolders_count": subfoldersCount,
-			"language":         language,
-			"created_at":       createdAt,
-			"updated_at":       updatedAt,
-			"metadata_json":    metadataJSON,
-		})
-	}
-	return result, rows.Err()
-}
-
-// FindMasterFolderByLanguage returns the first master folder matching the given language.
-func (s *SQLiteStore) FindMasterFolderByLanguage(language string) (map[string]any, error) {
-	language = strings.TrimSpace(strings.ToLower(language))
-	if language == "" {
-		return nil, nil
-	}
-
-	rows, err := s.ListMasterFoldersDetailed()
-	if err != nil {
-		return nil, err
-	}
-
-	for _, row := range rows {
-		rowLanguage := strings.TrimSpace(strings.ToLower(asString(row["language"])))
-		if rowLanguage == language {
-			return row, nil
-		}
-
-		meta := strings.ToLower(asString(row["metadata_json"]))
-		if strings.Contains(meta, `"type":"outro"`) && strings.Contains(meta, `"language":"`+language+`"`) {
-			return row, nil
-		}
-	}
-
-	return nil, nil
 }
 
 // DeleteMasterFolder removes a master folder by ID.
@@ -285,12 +226,7 @@ func (s *SQLiteStore) MigrateDriveLinksFromJSON(folders []map[string]any) (int, 
 
 		raw, _ := json.Marshal(f)
 		if _, err := stmt.Exec(id, parentID, name, link, language, masterInt, subfoldersCount, createdAt, updatedAt, string(raw), now); err != nil {
-			storeLog.WarnWithMsg("drive_link_migrate_skip",
-				"Skipping drive link during migration",
-				map[string]interface{}{
-					"id":  id,
-					"err": err.Error(),
-				})
+			fmt.Printf("[WARN] migrate drive link: skip %s: %v\n", id, err)
 			continue
 		}
 		count++
@@ -339,12 +275,7 @@ func (s *SQLiteStore) MigrateMasterFoldersFromJSON(masters map[string]any) (int,
 		}
 		raw, _ := json.Marshal(infoMap)
 		if _, err := stmt.Exec(id, name, url, subfoldersCount, language, now, now, string(raw)); err != nil {
-			storeLog.WarnWithMsg("master_folder_migrate_skip",
-				"Skipping master folder during migration",
-				map[string]interface{}{
-					"id":  id,
-					"err": err.Error(),
-				})
+			fmt.Printf("[WARN] migrate master folder: skip %s: %v\n", id, err)
 			continue
 		}
 		count++
