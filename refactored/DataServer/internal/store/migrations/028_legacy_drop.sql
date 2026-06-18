@@ -3,34 +3,19 @@
 -- Permanently drops the legacy orchestrator_jobs + orchestrator_outbox tables
 -- that were replaced by workflow_runs + outbox_events in PR 8 + PR 9.
 --
--- ┌────────────────────────────────────────────────────────────────────────┐
--- │  ⚠  OPERATOR PREREQUISITE                                              │
--- │                                                                         │
--- │  This migration will NOT complete unless workflow_runs has at least   │
--- │  one row. Run the workflow migrator first and verify its output:       │
--- │                                                                         │
--- │    velox-server migrate workflows-v2 --apply                           │
--- │    # Expect: runs_found > 0, runs_migrated == runs_found,             │
--- │    #         invalid_runs == 0                                          │
--- │                                                                         │
--- │  Only after that finishes cleanly (invalid_runs == 0) is running       │
--- │  028_legacy_drop safe. The guard below refuses to drop the legacy       │
--- │  tables if workflow_runs is empty.                                      │
--- └────────────────────────────────────────────────────────────────────────┘
+-- The precondition for this migration lives in Go (see
+-- internal/store/migrations/pre_check.go — MustDropLegacyOrchestrator):
+--   * if workflow_runs is non-empty: proceed;
+--   * if workflow_runs is empty AND orchestrator_* are empty: drop anyway;
+--   * if workflow_runs is empty AND orchestrator_* are non-empty: abort
+--     with an explicit Go-level error and instruct the operator to run
+--     `velox-server migrate workflows-v2 --apply` first.
 --
--- Backing SQLite-RAISE pattern: SELECT CASE WHEN … THEN RAISE(ABORT, msg)
--- END returns the RAISE() expression only when the precondition fails, which
--- causes the migration transaction to abort. Otherwise the CASE returns
--- NULL and the migration continues to the DROP TABLE statements.
-SELECT CASE
-    WHEN NOT EXISTS (SELECT 1 FROM workflow_runs)
-    THEN RAISE(ABORT,
-        '028_legacy_drop refused: workflow_runs is empty. '
-        || 'Run `velox-server migrate workflows-v2 --apply` first, '
-        || 'then re-run the migration to drop orchestrator_jobs + '
-        || 'orchestrator_outbox.')
-END;
-
+-- This file is therefore intentionally unconditional — the previous version
+-- used `SELECT CASE WHEN … RAISE(ABORT, …)`, but RAISE() may only be invoked
+-- from inside a trigger, so the in-SQL guard aborted fresh installs without
+-- ever reaching the DROP statements.
+--
 -- DOWN-MIGRATION NOTE
 -- No downgrade path is provided. The legacy orchestrator types
 -- (*queue.Orchestrator, queue.JobStep, queue.MultiStepJob) and store

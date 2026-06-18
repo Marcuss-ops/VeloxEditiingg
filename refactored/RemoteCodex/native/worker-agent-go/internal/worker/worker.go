@@ -227,14 +227,28 @@ func (w *Worker) receiveLoop(ctx context.Context, recvCh <-chan controltransport
 			}
 
 			switch msg.Type {
-			case controltransport.MsgJobAvailable:
-				// Shadow mode: master notifies that jobs exist.
-				// Worker claims via HTTP (existing GetJobV2/ClaimNext flow).
-				w.logger.Debug("[RECEIVE] JobAvailable notification — will claim via HTTP")
-
 			case controltransport.MsgJobOffer:
-				if w.IsStopped() || w.drainMode.Load() {
-					w.logger.Debug("[RECEIVE] Ignoring job offer — worker stopped/draining")
+				// Parse the offer exactly once — every reject path needs the
+				// job_id, and the accepted path also needs the typed payload.
+				offer := msgToJob(msg)
+				jobID := ""
+				if offer != nil {
+					jobID = offer.JobID
+				}
+
+				// P5 cleanup: never silently drop an offer. Send JobRejected so
+				// the master can re-route/retry instead of holding a
+				// pendingOffer and waiting on the lease expire timer.
+				if w.IsStopped() {
+					if err := w.sendReject(ctx, jobID, "stopped"); err != nil {
+						w.logger.Warn("[RECEIVE] Failed to send JobRejected (stopped): %v", err)
+					}
+					continue
+				}
+				if w.drainMode.Load() {
+					if err := w.sendReject(ctx, jobID, "draining"); err != nil {
+						w.logger.Warn("[RECEIVE] Failed to send JobRejected (draining): %v", err)
+					}
 					continue
 				}
 
@@ -243,17 +257,18 @@ func (w *Worker) receiveLoop(ctx context.Context, recvCh <-chan controltransport
 				activeCount := len(w.activeJobs)
 				w.activeJobsMu.RUnlock()
 				if activeCount >= w.config.MaxActiveJobs {
-					w.logger.Debug("[RECEIVE] Ignoring job offer — at max capacity (%d/%d)",
-						activeCount, w.config.MaxActiveJobs)
+					if err := w.sendReject(ctx, jobID, "capacity_full"); err != nil {
+						w.logger.Warn("[RECEIVE] Failed to send JobRejected (capacity): %v", err)
+					}
 					continue
 				}
 
-				// Parse job from payload
-				job := msgToJob(msg)
-				if job == nil {
+				// Parse job from payload (already parsed above)
+				if offer == nil {
 					w.logger.Warn("[RECEIVE] Failed to parse job from JobOffer message")
 					continue
 				}
+				job := offer
 
 				// Validate job offer (contract version, render plan, concurrency)
 				if err := w.validateJobOffer(job); err != nil {

@@ -63,16 +63,16 @@ func (h *WorkerUpdateHandler) UpdateStateHandler() gin.HandlerFunc {
 			workerUpdateLog.InfoWithMsg(logging.CodeWorkerUpdateDownloaded, "UPDATE_DOWNLOADED - zip downloaded", map[string]interface{}{"worker": workerName, "artifact_sha": artifactPreview})
 
 		case "UPDATE_APPLIED":
-		workerUpdateLog.InfoWithMsg(logging.CodeWorkerUpdateApplied, "UPDATE_APPLIED - symlink updated, waiting for restart", map[string]interface{}{"worker": workerName})
-		if body.UpdateInfo != nil {
-			workerUpdateLog.InfoWithMsg(logging.CodeWorkerUpdateFinalized, "Dirs/files updated", map[string]interface{}{"dirs": body.UpdateInfo["dirs_updated"], "files": body.UpdateInfo["files_updated"]})
-		}
-
+			workerUpdateLog.InfoWithMsg(logging.CodeWorkerUpdateApplied, "UPDATE_APPLIED - symlink updated, waiting for restart", map[string]interface{}{"worker": workerName})
+			if body.UpdateInfo != nil {
+				workerUpdateLog.InfoWithMsg(logging.CodeWorkerUpdateFinalized, "Dirs/files updated", map[string]interface{}{"dirs": body.UpdateInfo["dirs_updated"], "files": body.UpdateInfo["files_updated"]})
+			}
 		case "WORKER_ONLINE":
-			isAligned := body.ArtifactSHA256 != "" && body.ArtifactSHA256 == targetArtifactSHA
+		isAligned := body.ArtifactSHA256 != "" && body.ArtifactSHA256 == targetArtifactSHA
 		if isAligned {
 			workerUpdateLog.InfoWithMsg(logging.CodeWorkerOnlineAligned, "UPDATED AND ONLINE", map[string]interface{}{"worker": workerName, "artifact_sha": body.ArtifactSHA256[:min(16, len(body.ArtifactSHA256))], "aligned": true})
-			h.updateMgr.ClearUpdate(body.WorkerID)
+			// Phase 4.4: ClearUpdate removed — alignment is reflected by
+			// the worker_commands row for `update_code` being acked.
 		} else {
 			workerUpdateLog.InfoWithMsg(logging.CodeWorkerOnlineMisaligned, "online with different artifact (not yet updated)", map[string]interface{}{"worker": workerName, "aligned": false})
 		}
@@ -106,15 +106,17 @@ func (h *WorkerUpdateHandler) UpdateAckHandler() gin.HandlerFunc {
 		}
 
 		if body.WorkerID != "" && body.LocalVersion != "" {
-			h.updateMgr.AckUpdate(body.WorkerID, body.LocalVersion)
-
+			// Phase 4.4: AckUpdate removal. The legacy POST /worker/update_ack
+			// endpoint remains in place for downgrade paths but is a no-op
+			// for the in-memory mirror; the canonical record is now in
+			// worker_commands (acked via AckCommandByID from gRPC CommandAck).
 			ctx := c.Request.Context()
 			worker := h.reg.GetWorker(ctx, body.WorkerID)
 			workerName := body.WorkerID[:min(16, len(body.WorkerID))] + "..."
 			if worker != nil && worker.WorkerName != "" {
 				workerName = worker.WorkerName
 			}
-			workerUpdateLog.InfoWithMsg(logging.CodeWorkerUpdateAck, "Legacy ACK received", map[string]interface{}{"worker": workerName, "local_version": body.LocalVersion})
+			workerUpdateLog.InfoWithMsg(logging.CodeWorkerUpdateAck, "Legacy ACK received (no-op for in-memory mirror)", map[string]interface{}{"worker": workerName, "local_version": body.LocalVersion})
 		}
 
 		c.JSON(http.StatusOK, gin.H{
@@ -126,6 +128,9 @@ func (h *WorkerUpdateHandler) UpdateAckHandler() gin.HandlerFunc {
 }
 
 // GetUpdateStatusHandler handles GET /workers/update_status
+// Phase 4.4: derives status from worker_commands instead of the
+// in-memory UpdateManager. Pending update_code rows surface here with
+// status="pending" or "delivered".
 func (h *WorkerUpdateHandler) GetUpdateStatusHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		ctx := c.Request.Context()
@@ -135,15 +140,26 @@ func (h *WorkerUpdateHandler) GetUpdateStatusHandler() gin.HandlerFunc {
 		targetArtifactSHA := h.computeBundleSHA256()
 
 		for _, info := range allWorkers {
-			pending := h.updateMgr.GetPendingUpdate(info.WorkerID)
-			if pending != nil {
+			if info == nil || info.WorkerID == "" {
+				continue
+			}
+			pendingCmds := h.cmdMgr.GetPendingCommands(info.WorkerID)
+			hasUpdate := false
+			var updateVersion string
+			for _, pc := range pendingCmds {
+				if pc.Command == "update_code" {
+					hasUpdate = true
+					if v, ok := pc.Params["version"].(string); ok {
+						updateVersion = v
+					}
+					break
+				}
+			}
+			if hasUpdate {
 				status[info.WorkerID] = map[string]interface{}{
 					"worker_name":            info.WorkerName,
-					"target_version":         pending.Version,
+					"target_version":         updateVersion,
 					"target_artifact_sha256": targetArtifactSHA,
-					"requested_at":           pending.RequestedAt,
-					"ack":                    pending.Ack,
-					"ack_version":            pending.AckVersion,
 				}
 			}
 		}

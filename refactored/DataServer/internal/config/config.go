@@ -6,18 +6,6 @@ import (
 	"path/filepath"
 )
 
-// LegacyMasterServerURL returns the master server URL previously exposed as a
-// flat field on Config. Callers should be migrated to Config.Workers.MasterServerURL.
-// Kept temporarily to avoid breaking out-of-tree callers (anecdotal integrations).
-// DEPRECATED: removed in the next release that bumps the minor version of
-// VERSION.txt (currently v1.0.6). See spec §8. Use Config.Workers.MasterServerURL.
-func (c *Config) LegacyMasterServerURL() string {
-	if c == nil {
-		return ""
-	}
-	return c.Workers.MasterServerURL
-}
-
 // FromEnv loads configuration from environment variables.
 // Only sub-configs are populated — no flat field aliases.
 func FromEnv() *Config {
@@ -82,6 +70,16 @@ func (c *Config) Validate() error {
 	}
 	if !filepath.IsAbs(c.Database.DBPath) {
 		return fmt.Errorf("config: VELOX_DB_PATH must be an absolute path, got: %s", c.Database.DBPath)
+	}
+	// GRPC control-plane fail-fast: if push mode is the primary delivery
+	// channel then gRPC must be enabled, otherwise the master accepts HTTP
+	// API calls but workers have no way to receive JobOffer/JobLeaseGranted
+	// and silently degrade to "no jobs ever picked up".
+	if c.Server.GRPCPushMode && c.Server.GRPCPort <= 0 {
+		return fmt.Errorf(
+			"config: GRPCPushMode=true requires VELOX_GRPC_PORT>0 (got %d). " +
+				"Either set VELOX_GRPC_PORT or disable VELOX_GRPC_PUSH_MODE.",
+			c.Server.GRPCPort)
 	}
 	return nil
 }

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"velox-server/internal/dbutil"
 	"velox-server/internal/store"
 )
 
@@ -171,7 +172,7 @@ func (ts *TransitionService) CompleteJob(ctx context.Context, jobID string) erro
 		return nil // idempotent
 	}
 
-	revision := getIntField(m, "revision")
+	revision := dbutil.IntFromMap(m, "revision")
 	if err := ts.Validate(job.Status, StatusSucceeded); err != nil {
 		return err
 	}
@@ -280,7 +281,7 @@ func (ts *TransitionService) FailJob(ctx context.Context, jobID, errMsg, workerI
 	}
 	job := MapToJob(m)
 
-	revision := getIntField(m, "revision")
+	revision := dbutil.IntFromMap(m, "revision")
 	nowISO := NowISO()
 
 	if requeue && job.RetryCount < maxRetries {
@@ -789,23 +790,3 @@ func toStoreJobStatus(s JobStatus) store.JobStatus {
 	return store.JobStatus(s)
 }
 
-// getIntField extracts an integer field from a job map, returning 0 if not found.
-func getIntField(m map[string]interface{}, key string) int {
-	if m == nil {
-		return 0
-	}
-	v, ok := m[key]
-	if !ok || v == nil {
-		return 0
-	}
-	switch n := v.(type) {
-	case int:
-		return n
-	case int64:
-		return int(n)
-	case float64:
-		return int(n)
-	default:
-		return 0
-	}
-}

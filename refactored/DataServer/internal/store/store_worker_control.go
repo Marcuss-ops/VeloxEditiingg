@@ -108,18 +108,6 @@ func (s *SQLiteStore) AckCommandByID(workerID, commandID string) error {
 	return nil
 }
 
-// AckCommandByType marks the oldest pending command of a given type for a worker as acknowledged.
-func (s *SQLiteStore) AckCommandByType(workerID, commandType string) error {
-	now := time.Now().UTC().Format(time.RFC3339)
-	_, err := s.db.Exec(
-		`UPDATE worker_commands SET status = 'acked', acked_at = ?
-		 WHERE worker_id = ? AND command_type = ? AND status IN ('pending', 'delivered')
-		 ORDER BY sequence_num ASC LIMIT 1`,
-		now, workerID, commandType,
-	)
-	return err
-}
-
 // MarkCommandDelivered marks a command as delivered.
 func (s *SQLiteStore) MarkCommandDelivered(commandID string) error {
 	now := time.Now().UTC().Format(time.RFC3339)

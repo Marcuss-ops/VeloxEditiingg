@@ -45,7 +45,7 @@ func (h *WorkerUpdateHandler) SendCommandHandler() gin.HandlerFunc {
 		params := map[string]interface{}{}
 		if command == "update_code" {
 			params["version"] = h.codeVersion
-			h.updateMgr.RequestUpdate(workerID, h.codeVersion)
+			// Phase 4.4: in-memory mirror removed; worker_commands is SoT
 		}
 		if command == "run_smoke_job" {
 			params = buildSmokeJobPayload(workerID)
@@ -137,11 +137,11 @@ func (h *WorkerUpdateHandler) SendCommandBulkHandler() gin.HandlerFunc {
 
 			// Push command
 			params := map[string]interface{}{}
-			if body.Command == "update_code" {
-				params["version"] = h.codeVersion
-				params["target_artifact_sha256"] = targetArtifactSHA
-				h.updateMgr.RequestUpdate(wid, h.codeVersion)
-			} else if body.Command == "run_smoke_job" {
+		if body.Command == "update_code" {
+			params["version"] = h.codeVersion
+			params["target_artifact_sha256"] = targetArtifactSHA
+			// Phase 4.4: in-memory mirror removed
+		} else if body.Command == "run_smoke_job" {
 				if len(body.Payload) > 0 {
 					params = body.Payload
 				} else {

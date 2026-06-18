@@ -49,6 +49,14 @@ type WorkerConfig struct {
 	// Set via VELOX_WORKER_SECRET env var. Combined with WorkerID to produce SHA-256 credential.
 	WorkerSecret string `json:"-"`
 
+	// AllowInsecureGRPC enables unencrypted gRPC transport. Only valid in
+	// dev; transport_factory.go refuses to start without VELOX_ALLOW_INSECURE_GRPC_DEV=true.
+	AllowInsecureGRPC bool `json:"allow_insecure_grpc_dev,omitempty"`
+
+	// RequiresWorkerSecret flips on the server-side credential_hash authentication.
+	// The transport factory refuses to start when this is true and WorkerSecret is empty.
+	RequiresWorkerSecret bool `json:"requires_worker_secret,omitempty"`
+
 	// Asset cache: shared directory for caching downloaded scene images, clips, and audio.
 	// Default: "" (disabled — each job downloads its own assets)
 	AssetCacheDir string `json:"asset_cache_dir,omitempty"`

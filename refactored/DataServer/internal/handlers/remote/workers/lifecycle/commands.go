@@ -31,7 +31,8 @@ func (h *Handler) RequestUpdateHandler() gin.HandlerFunc {
 		h.cmdMgr.PushCommand(body.WorkerID, "update_code", map[string]interface{}{
 			"version": version,
 		})
-		h.updateMgr.RequestUpdate(body.WorkerID, version)
+		// Phase 4.4: no in-memory mirror; persistent worker_commands is the
+		// single source of truth.
 
 		log.Printf("[UPDATE] Update requested for worker %s (version: %s)", body.WorkerID[:min(16, len(body.WorkerID))]+"...", version)
 

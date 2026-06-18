@@ -2,17 +2,16 @@ package config
 
 // ServerConfig holds HTTP and gRPC server settings.
 type ServerConfig struct {
-	Port           int
-	StudioPort     int
-	GRPCPort        int    // gRPC port for worker control stream (0 = disabled)
-	GRPCShadowMode  bool   // Phase 4: notify workers about available jobs, still claim via HTTP
-	GRPCPushMode    bool   // Phase 5+: send JobOffer directly, workers respond JobAccepted
-	TLSCertFile    string
-	TLSKeyFile     string
-	GRPCTLSCertFile string // gRPC server certificate (PEM). Required when GRPCPort > 0 with mTLS.
-	GRPCTLSKeyFile  string // gRPC server private key (PEM)
-	GRPCTLSCAFile   string // CA cert for verifying client certificates (mTLS). Empty = no client auth.
-	AllowLocalhost bool
+	Port             int
+	StudioPort       int
+	GRPCPort         int    // gRPC port for worker control stream (0 = disabled)
+	GRPCPushMode     bool   // Phase 5+: send JobOffer directly, workers respond JobAccepted (requires GRPCPort > 0)
+	TLSCertFile      string
+	TLSKeyFile       string
+	GRPCTLSCertFile  string // gRPC server certificate (PEM). Required when GRPCPort > 0 with mTLS.
+	GRPCTLSKeyFile   string // gRPC server private key (PEM)
+	GRPCTLSCAFile    string // CA cert for verifying client certificates (mTLS). Empty = no client auth.
+	AllowLocalhost   bool
 }
 
 // RuntimeConfig holds filesystem and data directory settings.
@@ -49,7 +48,7 @@ type WorkersConfig struct {
 	// MasterServerURL is the server-facing master URL used for upstream proxying
 	// (e.g. draft forwarding to a sibling master). Populated from
 	// VELOX_MASTER_SERVER_URL > VELOX_REMOTE_WORKER_URL. Previously lived at the root
-	// of Config as `MasterServerURL`; see Config.LegacyMasterServerURL for the
+	// of Config as `MasterServerURL` (formerly exposed as the deprecated
 	// deprecation shim.
 	MasterServerURL string
 	AllowedIPs      []string

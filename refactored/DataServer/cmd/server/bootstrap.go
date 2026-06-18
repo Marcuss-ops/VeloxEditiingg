@@ -135,10 +135,13 @@ func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
 	workersRepo := store.NewSQLiteWorkersRepository(sqliteStore)
 
 	cmdMgr := workersreg.NewCommandManager(sqliteStore)
-	updateMgr := workersreg.NewUpdateManager()
+	// tokenMgr is required by worker_update.authorizeWorkerRequest.
+	// Phase 5 hygiene: this is the SINGLE TokenManager instance — lifecycle
+	// and grpcserver both used to build their own and pass it via params,
+	// but neither actually consumed a TokenManager.
 	tokenMgr := workersreg.NewTokenManager(sqliteStore)
-	workerUpdateHandler := workerhandlers.NewWorkerUpdateHandler(cfg, reg, cmdMgr, updateMgr, tokenMgr, cfg.Runtime.DataDir)
-	workerLifecycle := lifecycle.NewHandler(cfg, reg, sqliteStore, cfg.Runtime.DataDir)
+	workerUpdateHandler := workerhandlers.NewWorkerUpdateHandler(cfg, reg, cmdMgr, tokenMgr, cfg.Runtime.DataDir)
+	workerLifecycle := lifecycle.NewHandler(cfg, reg, sqliteStore)
 
 	jobRepo := store.NewSQLiteJobRepository(sqliteStore)
 	fileQ.SetJobRepository(jobRepo)
@@ -273,14 +276,12 @@ func runServer(cfg *config.Config) error {
 	if cfg.Server.GRPCPort > 0 {
 		transitionSvc := queue.NewTransitionService(deps.sqliteStore)
 		cmdMgr := workersreg.NewCommandManager(deps.sqliteStore)
-		tokenMgr := workersreg.NewTokenManager(deps.sqliteStore)
 
 		grpcHandlerConfig := &grpcserver.HandlerConfig{
-			ShadowMode: cfg.Server.GRPCShadowMode,
-			PushMode:   cfg.Server.GRPCPushMode,
+			PushMode: cfg.Server.GRPCPushMode,
 		}
 		grpcHandler := grpcserver.NewHandler(
-			deps.reg, cmdMgr, tokenMgr, transitionSvc, deps.sqliteStore, grpcHandlerConfig,
+			deps.reg, cmdMgr, transitionSvc, deps.sqliteStore, grpcHandlerConfig,
 		)
 
 		grpcServer, lis, err := grpcserver.StartGRPCServer(

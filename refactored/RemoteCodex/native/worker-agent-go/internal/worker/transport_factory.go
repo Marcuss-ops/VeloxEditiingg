@@ -3,6 +3,9 @@
 package worker
 
 import (
+	"fmt"
+	"os"
+
 	"velox-shared/controltransport"
 	"velox-worker-agent/internal/transport"
 	"velox-worker-agent/pkg/config"
@@ -11,25 +14,97 @@ import (
 
 // newControlTransport creates a GRPCStreamTransport based on config.
 // gRPC is the only transport mode. The worker will not start if gRPC
-// is not properly configured.
-func newControlTransport(cfg *config.WorkerConfig, log *logger.Logger) controltransport.ControlTransport {
-	grpcURL := cfg.ControlGRPCURL
-	if grpcURL == "" {
-		log.Error("[TRANSPORT] control_grpc_url is required — worker cannot start")
-		return nil
+// is not properly configured. Returns (nil, err) on any configuration
+// problem so Worker.Start can propagate the failure instead of nil-panicking
+// on the first Connect call.
+//
+// Validations enforced here:
+//   - `control_grpc_url` must be non-empty.
+//   - At least one of `tls_cert_file` / `tls_key_file` / `tls_ca_file` must
+//     be present OR none of them must be present. Mixing partial
+//     triple-presence is rejected.
+//   - Server-side auth mode requires `worker_secret`.
+//   - Unauthenticated gRPC requires VELOX_ALLOW_INSECURE_GRPC_DEV=true
+//     (or `AllowInsecureGRPC` set on WorkerConfig) — this prevents
+//     accidental cleartext in production.
+func newControlTransport(cfg *config.WorkerConfig, log *logger.Logger) (controltransport.ControlTransport, error) {
+	if cfg == nil {
+		return nil, fmt.Errorf("transport factory: nil WorkerConfig")
 	}
 
-	grpcTransport := transport.NewGRPCStreamTransport(grpcURL, cfg.WorkerID)
+	if cfg.ControlGRPCURL == "" {
+		return nil, fmt.Errorf("transport factory: control_grpc_url is required — worker cannot start")
+	}
 
-	// Apply mTLS when configured
-	if cfg.TLSCertFile != "" && cfg.TLSKeyFile != "" && cfg.TLSCAFile != "" {
+	if err := validateTLSConfigTriple(cfg); err != nil {
+		return nil, err
+	}
+
+	if cfg.AllowInsecureGRPC {
+		if !insecureDevFlagSet() {
+			return nil, fmt.Errorf("transport factory: insecure gRPC requested but VELOX_ALLOW_INSECURE_GRPC_DEV=true not set")
+		}
+		log.Info("[TRANSPORT] Insecure gRPC allowed by dev flag — NEVER USE IN PRODUCTION")
+	} else if !hasAnyTLS(cfg) {
+		return nil, fmt.Errorf("transport factory: no TLS configured. Set tls_cert_file/tls_key_file/tls_ca_file, " +
+			"or enable allow_insecure_grpc_dev=true only for local development")
+	}
+
+	if cfg.RequiresWorkerSecret && cfg.WorkerSecret == "" {
+		return nil, fmt.Errorf("transport factory: auth mode requires worker_secret to be set")
+	}
+
+	grpcTransport := transport.NewGRPCStreamTransport(cfg.ControlGRPCURL, cfg.WorkerID)
+
+	if hasAnyTLS(cfg) {
 		if err := grpcTransport.WithTLS(cfg.TLSCertFile, cfg.TLSKeyFile, cfg.TLSCAFile); err != nil {
-			log.Error("[TRANSPORT] mTLS setup failed: %v", err)
-			return nil
+			return nil, fmt.Errorf("transport factory: mTLS setup failed: %w", err)
 		}
 		log.Info("[TRANSPORT] mTLS enabled for gRPC stream (cert=%s)", cfg.TLSCertFile)
 	}
 
-	log.Info("[TRANSPORT] Using gRPC stream transport (url=%s)", grpcURL)
-	return grpcTransport
+	log.Info("[TRANSPORT] Using gRPC stream transport (url=%s)", cfg.ControlGRPCURL)
+	return grpcTransport, nil
+}
+
+// validateTLSConfigTriple rejects partial TLS configuration.
+// Either the triple (cert + key + ca) is fully set, or none of the three is set.
+func validateTLSConfigTriple(cfg *config.WorkerConfig) error {
+	hasCert := cfg.TLSCertFile != ""
+	hasKey := cfg.TLSKeyFile != ""
+	hasCA := cfg.TLSCAFile != ""
+
+	if !hasCert && !hasKey && !hasCA {
+		return nil
+	}
+	if hasCert && hasKey && hasCA {
+		return nil
+	}
+	missing := []string{}
+	if !hasCert {
+		missing = append(missing, "tls_cert_file")
+	}
+	if !hasKey {
+		missing = append(missing, "tls_key_file")
+	}
+	if !hasCA {
+		missing = append(missing, "tls_ca_file")
+	}
+	return fmt.Errorf("transport factory: partial TLS configuration. "+
+		"Provide all three (cert/key/ca) or none. Missing: %v", missing)
+}
+
+// hasAnyTLS reports whether any TLS file is configured.
+func hasAnyTLS(cfg *config.WorkerConfig) bool {
+	return cfg.TLSCertFile != "" || cfg.TLSKeyFile != "" || cfg.TLSCAFile != ""
+}
+
+// insecureDevFlagSet returns true when VELOX_ALLOW_INSECURE_GRPC_DEV is enabled.
+// Reads the environment directly via os.Getenv — no platform-specific wrappers.
+func insecureDevFlagSet() bool {
+	v := os.Getenv("VELOX_ALLOW_INSECURE_GRPC_DEV")
+	if v == "" {
+		return false
+	}
+	return v == "1" || v == "true" || v == "TRUE" || v == "yes"
 }

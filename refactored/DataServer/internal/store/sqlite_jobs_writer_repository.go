@@ -266,5 +266,63 @@ func (r *SQLiteJobRepository) RenewLease(ctx context.Context, params RenewLeaseP
 	return nil
 }
 
+// StartJob performs the atomic LEASED → RUNNING transition.
+//
+// All four identity fields (worker_id, lease_id, attempt, revision) AND the
+// precondition status='LEASED' are evaluated in a single CAS UPDATE so a
+// stale message from a zombie session cannot promote a job that is no longer
+// his. The started_at timestamp is recorded and revision is bumped to make
+// the state observable to subsequent Transition calls.
+//
+// Returns ErrTransitionConflict when no row matches — callers should reject
+// the JobAccepted at the gRPC layer with a "stale lease" signal.
+func (r *SQLiteJobRepository) StartJob(ctx context.Context, params StartJobParams) error {
+	if r.store == nil || r.store.db == nil {
+		return fmt.Errorf("job repository: store not initialized")
+	}
+	if params.JobID == "" || params.WorkerID == "" || params.LeaseID == "" {
+		return fmt.Errorf("job repository: StartJob requires jobID+workerID+leaseID")
+	}
+	if params.ExpectedRevision < 0 {
+		params.ExpectedRevision = 0
+	}
+	if params.Now.IsZero() {
+		params.Now = time.Now().UTC()
+	}
+	nowRFC := params.Now.Format(time.RFC3339)
+
+	res, err := r.store.db.ExecContext(ctx,
+		`UPDATE jobs
+		 SET status         = 'RUNNING',
+		     started_at     = COALESCE(started_at, ?),
+		     updated_at     = ?,
+		     revision       = revision + 1,
+		     attempt        = CASE WHEN attempt = 0 THEN ? ELSE attempt END
+		 WHERE job_id        = ?
+		   AND assigned_to   = ?
+		   AND lease_id      = ?
+		   AND COALESCE(attempt, 0) = ?
+		   AND revision      = ?
+		   AND UPPER(status) = 'LEASED'`,
+		nowRFC, nowRFC,
+		params.Attempt,
+		params.JobID, params.WorkerID, params.LeaseID,
+		params.Attempt, params.ExpectedRevision,
+	)
+	if err != nil {
+		return fmt.Errorf("start job exec: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("start job rows: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("start job %s: %w (worker=%s lease=%s attempt=%d rev=%d)",
+			params.JobID, ErrTransitionConflict,
+			params.WorkerID, params.LeaseID, params.Attempt, params.ExpectedRevision)
+	}
+	return nil
+}
+
 // Compile-time interface check.
 var _ JobRepository = (*SQLiteJobRepository)(nil)

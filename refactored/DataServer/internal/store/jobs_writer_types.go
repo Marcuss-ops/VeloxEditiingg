@@ -116,6 +116,28 @@ type TransitionParams struct {
 	Revision       int
 }
 
+// StartJobParams encodes the LEASED → RUNNING transition.
+//
+// It carries the full identity of the worker that the master must verify
+// atomically: JobID + WorkerID + LeaseID + Attempt + ExpectedRevision. The
+// repository performs a single CAS UPDATE against (job_id, worker_id,
+// lease_id, attempt, status=LEASED, revision=ExpectedRevision) and bumps
+// the revision + writes a started_at timestamp on success. Mismatch on any
+// field raises ErrTransitionConflict (so handleJobAccepted can refuse the
+// acceptance and the worker can be told its view is stale).
+//
+// This is the missing piece that Phase 5 push-mode forgot: ClaimNext
+// already created the lease, but nothing transitioned LEASED → RUNNING,
+// so a fast-completing job could try LEASED → SUCCEEDED and fail.
+type StartJobParams struct {
+	JobID            string
+	WorkerID         string
+	LeaseID          string
+	Attempt          int
+	ExpectedRevision int
+	Now              time.Time // optional; defaults to time.Now().UTC()
+}
+
 // ErrTransitionConflict is returned when the CAS predicate does not match
 // (ExpectedStatus wrong OR Revision stale). The repository layer raises this
 // so callers can distinguish it from infrastructure errors. SQLiteStore.
@@ -159,4 +181,10 @@ type JobRepository interface {
 	// ErrTransitionConflict if the job is not in a renewable state
 	// (LEASED, RUNNING, PROCESSING).
 	RenewLease(ctx context.Context, params RenewLeaseParams) error
+	// StartJob atomically transitions LEASED → RUNNING on the supplied job.
+	// Verifies JobID, WorkerID, LeaseID, Attempt, and revision in a single
+	// CAS UPDATE. Returns ErrTransitionConflict on mismatch; bubbles up
+	// ErrNoClaimableJob-equivalent condition as the same sentinel if the
+	// job is not in LEASED state.
+	StartJob(ctx context.Context, params StartJobParams) error
 }

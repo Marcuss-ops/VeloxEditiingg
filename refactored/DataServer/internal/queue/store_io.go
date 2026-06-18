@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"velox-server/internal/dbutil"
 	"velox-server/internal/store"
 )
 
@@ -82,10 +83,10 @@ func MapToJob(m map[string]any) *Job {
 		job.RunID = s
 	}
 
-	// Integer fields
-	job.RetryCount = asIntFromMap(m, "retry_count")
-	job.Attempt = asIntFromMap(m, "attempt")
-	job.MaxRetries = asIntFromMap(m, "max_retries")
+	// Integer fields (dbutil.IntFromMap accepts int/int64/float64/string)
+	job.RetryCount = dbutil.IntFromMap(m, "retry_count")
+	job.Attempt = dbutil.IntFromMap(m, "attempt")
+	job.MaxRetries = dbutil.IntFromMap(m, "max_retries")
 
 	// Boolean fields
 	if b, ok := m["video_uploaded"].(bool); ok {
@@ -282,18 +283,3 @@ func asString(v interface{}) string {
 	return ""
 }
 
-func asIntFromMap(m map[string]any, key string) int {
-	switch v := m[key].(type) {
-	case int:
-		return v
-	case int64:
-		return int(v)
-	case float64:
-		return int(v)
-	case string:
-		var n int
-		_ = json.Unmarshal([]byte(v), &n)
-		return n
-	}
-	return 0
-}

@@ -19,11 +19,13 @@ import (
 )
 
 // WorkerUpdateHandler handles worker update pipeline operations
+// (Phase 4.4: updateMgr removed — the persistent `update_code` command
+// in worker_commands is the single source of truth. The in-memory
+// UpdateManager was a duplicate write path).
 type WorkerUpdateHandler struct {
 	cfg         *config.Config
 	reg         *workersreg.Registry
 	cmdMgr      *workersreg.CommandManager
-	updateMgr   *workersreg.UpdateManager
 	tokenMgr    *workersreg.TokenManager
 	dataDir     string
 	bundleDir   string
@@ -145,8 +147,11 @@ func findRepoRootFrom(start string) string {
 	return ""
 }
 
-// NewWorkerUpdateHandler creates a new worker update handler
-func NewWorkerUpdateHandler(cfg *config.Config, reg *workersreg.Registry, cmdMgr *workersreg.CommandManager, updateMgr *workersreg.UpdateManager, tokenMgr *workersreg.TokenManager, dataDir string) *WorkerUpdateHandler {
+// NewWorkerUpdateHandler creates a new worker update handler.
+// Phase 4.4: the UpdateManager argument was dropped — the persistent
+// update_code command is the single source of truth. The signature is
+// reduced to the actually-used dependencies.
+func NewWorkerUpdateHandler(cfg *config.Config, reg *workersreg.Registry, cmdMgr *workersreg.CommandManager, tokenMgr *workersreg.TokenManager, dataDir string) *WorkerUpdateHandler {
 	bundleDir := cfg.Workers.BundleDir
 	if bundleDir != "" {
 		if _, err := os.Stat(filepath.Join(bundleDir, "worker_code.zip")); err != nil {
@@ -171,7 +176,6 @@ func NewWorkerUpdateHandler(cfg *config.Config, reg *workersreg.Registry, cmdMgr
 		cfg:         cfg,
 		reg:         reg,
 		cmdMgr:      cmdMgr,
-		updateMgr:   updateMgr,
 		tokenMgr:    tokenMgr,
 		dataDir:     dataDir,
 		bundleDir:   bundleDir,
@@ -304,13 +308,16 @@ func (h *WorkerUpdateHandler) queueBundleUpdateForWorkers(workerIDs []string, ta
 		})
 		commandsQueued++
 
+		// Phase 4.4: the persistent `update_code` command is the single
+		// source of truth. The component acks via AckCommandByID once the
+		// worker reports readiness; there is no longer an in-memory
+		// UpdateManager write to mirror.
 		h.cmdMgr.PushCommand(wid, "update_code", map[string]interface{}{
 			"version":                target.Version,
 			"bundle_version":         target.Version,
 			"bundle_hash":            target.Hash,
 			"target_artifact_sha256": target.Hash,
 		})
-		h.updateMgr.RequestUpdate(wid, target.Version)
 		commandsQueued++
 
 		h.cmdMgr.PushCommand(wid, "restart_worker", nil)

@@ -55,15 +55,31 @@ func New(cfg *config.WorkerConfig, version string) *Worker {
 	// Store a transport factory that creates fresh instances per session.
 	// After Close(), transports are not reusable (channels + sync.Once),
 	// so each reconnect loop iteration gets a brand-new transport.
+	// Phase 2.1: the factory now returns (Transport, error); a non-nil error
+	// surface here would mean config validation failed at startup time.
 	transportFactory := func() controltransport.ControlTransport {
-		return newControlTransport(cfg, log)
+		t, err := newControlTransport(cfg, log)
+		if err != nil {
+			log.Error("[INIT] transport factory returned error: %v", err)
+			return nil
+		}
+		return t
+	}
+
+	initialTransport, err := newControlTransport(cfg, log)
+	if err != nil {
+		// Config problem on the very first attempt — fail the worker init
+		// immediately so operators do not enter the reconnect loop with a
+		// broken transport (previously this nil-panicked on first Connect).
+		log.Error("[INIT] initial transport setup failed: %v", err)
+		return nil
 	}
 
 	w := &Worker{
 		config:           cfg,
 		apiClient:        apiClient,
 		transportFactory: transportFactory,
-		transport:        transportFactory(), // Initial instance for first session
+		transport:        initialTransport,
 		logger:    log,
 		status:    StatusIdle,
 		stopChan:  make(chan struct{}),

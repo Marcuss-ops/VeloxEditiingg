@@ -20,6 +20,10 @@ package queue
 
 import (
 	"context"
+	"fmt"
+
+	"velox-server/internal/dbutil"
+	"velox-server/internal/store"
 )
 
 // ClaimJob atomically claims the next pending job for a worker.
@@ -87,7 +91,7 @@ func (ts *TransitionService) RequestCancel(ctx context.Context, jobID string) er
 	if err := ts.Validate(job.Status, StatusCancelled); err != nil {
 		return err
 	}
-	revision := getIntField(m, "revision")
+	revision := dbutil.IntFromMap(m, "revision")
 	if _, err := ts.dbStore.TransitionJobStatus(ctx, jobID, string(job.Status), string(StatusCancelled), revision); err != nil {
 		return err
 	}
@@ -150,4 +154,24 @@ func (ts *TransitionService) CompleteJobTx(ctx context.Context, jobID string, at
 // FailAttempt / ScheduleRetry so cluster policy is honored.
 func (ts *TransitionService) maxRetries() int {
 	return 3
+}
+
+// StartJobWithLease is the typed LEASED → RUNNING transition used by the
+// gRPC handler when a JobAccepted arrives. It delegates to the wired
+// JobRepository so the full identity (workerID, leaseID, attempt, revision)
+// is checked atomically in a single CAS UPDATE (spec §5 single-method
+// atomicity).
+//
+// Returning ErrTransitionConflict means one of: the lease was lost (expired
+// or reassigned), the worker identity does not match, or the job's status
+// is no longer LEASED. Callers should reject the JobAccepted at the gRPC
+// layer with a "stale lease" signal so the worker drops its pending state.
+func (ts *TransitionService) StartJobWithLease(ctx context.Context, params store.StartJobParams) error {
+	if ts == nil {
+		return fmt.Errorf("transition service: nil receiver")
+	}
+	if ts.jobRepo == nil {
+		return fmt.Errorf("transition service: job repository not wired (call SetJobRepository at startup)")
+	}
+	return ts.jobRepo.StartJob(ctx, params)
 }

@@ -61,6 +61,12 @@ func RunMigrations(db *sql.DB, migrationsFS embed.FS, dir string) error {
 			continue
 		}
 
+		// Pre-flight check before destructive migrations. Today this only
+		// fires for 028_legacy_drop — see pre_check.go.
+		if err := MustDropLegacyOrchestrator(db, m.Version); err != nil {
+			return fmt.Errorf("migrations: pre_check %03d_%s: %w", m.Version, m.Name, err)
+		}
+
 		if err := applyMigration(db, m); err != nil {
 			return fmt.Errorf("migrations: apply %03d_%s: %w", m.Version, m.Name, err)
 		}

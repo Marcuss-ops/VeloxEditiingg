@@ -64,7 +64,11 @@ func TestAckCommandByID_NotFound(t *testing.T) {
 }
 
 func TestAckCommand_LegacyType(t *testing.T) {
-	// ACK by type (legacy, no command_id) → falls back to AckCommandByType
+	// Phase 4.5: the type-based fallback was REMOVED. Body shape parsing
+	// still works, but the handler now REJECTS requests without command_id
+	// (400 Bad Request, not the old "AckCommandByType" fallback). This test
+	// only verifies the JSON parses; the dispatch contract is in TestAckCommandByID_*
+	// and TestAckCommand_MissingBoth below.
 	body := `{"worker_id":"w1","command":"restart_worker"}`
 	var parsed struct {
 		WorkerID  string `json:"worker_id"`
@@ -79,7 +83,7 @@ func TestAckCommand_LegacyType(t *testing.T) {
 		t.Fatal("worker_id and command required")
 	}
 
-	// No command_id → legacy path
+	// No command_id → handler now returns 400 (legacy path eliminated).
 	if parsed.CommandID != "" {
 		t.Fatal("command_id should be empty for legacy ACK")
 	}
@@ -89,7 +93,8 @@ func TestAckCommand_LegacyType(t *testing.T) {
 }
 
 func TestAckCommand_MissingBoth(t *testing.T) {
-	// Neither command nor command_id → 400 Bad Request
+	// Neither command nor command_id → 400 Bad Request (Phase 4.5: legacy
+	// type-based fallback is rejected outright now, not silently degraded).
 	body := `{"worker_id":"w1"}`
 	var parsed struct {
 		WorkerID  string `json:"worker_id"`

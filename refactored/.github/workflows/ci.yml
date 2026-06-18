@@ -39,11 +39,11 @@ jobs:
 
       - name: Test DataServer
         working-directory: DataServer
-        run: go test ./... -count=1 -short
+        run: go test ./... -count=1 -short -race -timeout 180s
 
       - name: Test worker agent
         working-directory: RemoteCodex/native/worker-agent-go
-        run: go test ./... -count=1 -short
+        run: go test ./... -count=1 -short -race -timeout 180s
 
   golangci-lint:
     name: golangci-lint (${{ matrix.label }})

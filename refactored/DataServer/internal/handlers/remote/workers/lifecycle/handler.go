@@ -6,43 +6,45 @@ import (
 	workersreg "velox-server/internal/workers"
 )
 
-// Handler manages worker lifecycle operations (registration, heartbeat, commands, control).
+// Handler manages worker lifecycle operations (registration, heartbeat,
+// commands, control). The fields below are consumed by the sibling files
+// in this package (commands.go: RequestUpdateHandler — h.cmdMgr,
+// h.codeVersion; control.go: RestartWorkerHandler/RevokeWorkerHandler/
+// DrainWorkerHandler/GetWorkerDetailsHandler/CleanupStaleWorkersHandler/
+// ListRevokedWorkersHandler — h.cmdMgr, h.reg, h.tokenMgr) and by router.go
+// + internal/modules/workers via the GetTokenManager getter.
+//
+// Phase 5 hygiene pass (dead references after Phase 4.4 UpdateManager removal):
+//   - field `store`        — never read (was set from dbStore only to be passed
+//                            into workersreg.NewCommandManager / NewTokenManager
+//                            which already takes dbStore).
+//   - field `versionNumber` — assigned, never read.
+//   - param  `dataDir`     — never referenced in the body.
+//   - method `GetCommandManager` — no external callers anywhere in DataServer;
+//                              sister files in the package access h.cmdMgr
+//                              directly.
 type Handler struct {
-	cfg           *config.Config
-	reg           *workersreg.Registry
-	store         *store.SQLiteStore
-	cmdMgr        *workersreg.CommandManager
-	updateMgr     *workersreg.UpdateManager
-	tokenMgr      *workersreg.TokenManager
-	codeVersion   string
-	versionNumber string
+	cfg         *config.Config
+	reg         *workersreg.Registry
+	cmdMgr      *workersreg.CommandManager
+	tokenMgr    *workersreg.TokenManager
+	codeVersion string
 }
 
 // NewHandler creates a new lifecycle Handler with SQLite-backed managers.
-func NewHandler(cfg *config.Config, reg *workersreg.Registry, dbStore *store.SQLiteStore, dataDir string) *Handler {
+func NewHandler(cfg *config.Config, reg *workersreg.Registry, dbStore *store.SQLiteStore) *Handler {
 	return &Handler{
-		cfg:           cfg,
-		reg:           reg,
-		store:         dbStore,
-		cmdMgr:        workersreg.NewCommandManager(dbStore),
-		updateMgr:     workersreg.NewUpdateManager(),
-		tokenMgr:      workersreg.NewTokenManager(dbStore),
-		codeVersion:   cfg.Workers.CodeVersion,
-		versionNumber: cfg.Workers.VersionNumber,
+		cfg:         cfg,
+		reg:         reg,
+		cmdMgr:      workersreg.NewCommandManager(dbStore),
+		tokenMgr:    workersreg.NewTokenManager(dbStore),
+		codeVersion: cfg.Workers.CodeVersion,
 	}
 }
 
-// GetCommandManager returns the command manager.
-func (h *Handler) GetCommandManager() *workersreg.CommandManager {
-	return h.cmdMgr
-}
-
-// GetUpdateManager returns the update manager.
-func (h *Handler) GetUpdateManager() *workersreg.UpdateManager {
-	return h.updateMgr
-}
-
-// GetTokenManager returns the token manager.
+// GetTokenManager returns the token manager used by the HTTP-based worker
+// auth middleware. Do NOT remove without also fixing router.go and
+// internal/modules/workers — both access it directly.
 func (h *Handler) GetTokenManager() *workersreg.TokenManager {
 	return h.tokenMgr
 }

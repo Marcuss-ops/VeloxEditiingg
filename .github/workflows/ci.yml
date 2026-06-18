@@ -33,7 +33,7 @@ jobs:
 
       - name: Run tests
         working-directory: refactored/DataServer
-        run: go test ./... -count=1 -short
+        run: go test ./... -count=1 -short -race -timeout 120s
 
       - name: Build server binary
         working-directory: refactored/DataServer
@@ -55,7 +55,7 @@ jobs:
 
       - name: Run tests
         working-directory: refactored/RemoteCodex/native/worker-agent-go
-        run: go test ./... -count=1 -short
+        run: go test ./... -count=1 -short -race -timeout 120s
 
       - name: Build agent binary
         working-directory: refactored/RemoteCodex/native/worker-agent-go

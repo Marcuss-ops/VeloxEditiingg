@@ -209,7 +209,7 @@ func (h *WorkerUpdateHandler) RolloutUpdateHandler() gin.HandlerFunc {
 			})
 			h.cmdMgr.PushCommand(wid, "restart_worker", nil)
 			h.cmdMgr.PushCommand(wid, "run_smoke_job", buildSmokeJobPayload(wid))
-			h.updateMgr.RequestUpdate(wid, target.Version)
+			// Phase 4.4: in-memory UpdateManager mirror removed
 		}
 
 		log.Printf("[UPDATE] Rollout update started (rollout_id=%s)", rolloutID)

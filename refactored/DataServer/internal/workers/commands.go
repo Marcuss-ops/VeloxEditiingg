@@ -11,7 +11,7 @@ import (
 	"velox-server/internal/store"
 )
 
-// WorkerCommand represents a command to be executed by a worker
+// WorkerCommand represents a command to be executed by a worker.
 type WorkerCommand struct {
 	CommandID   string                 `json:"command_id"`
 	Type        string                 `json:"type"`
@@ -22,6 +22,16 @@ type WorkerCommand struct {
 }
 
 // CommandManager handles pending commands for workers, backed by SQLite.
+//
+// Single-source-of-truth invariant (Phase 4.4+):
+//   * Commands are persisted in `worker_commands` (SQLite) — the only path.
+//   * Acknowledgements are by command_id (AckCommandByID) — the legacy
+//     "by type" path is removed: AckCommand(workerID, cmdType) was a footgun
+//     because two pending commands of the same type on the same worker could
+//     be ACK'd by the wrong worker. AckCommandByID is tied to the exact
+//     command_id and is only callable by the owning worker.
+//   * GetAckTime is removed — callers should query worker_commands directly
+//     if they need ack timestamps.
 type CommandManager struct {
 	mu    sync.RWMutex
 	store *store.SQLiteStore
@@ -110,94 +120,17 @@ func (cm *CommandManager) GetPendingCommandsAndMarkDelivered(workerID string) []
 	return result
 }
 
-// AckCommand marks a command type as acknowledged for a worker.
-func (cm *CommandManager) AckCommand(workerID string, cmdType string) {
-	if cm.store == nil {
-		return
-	}
-	if err := cm.store.AckCommandByType(workerID, cmdType); err != nil {
-		registryLog.ErrorWithMsg("cmd.ack.fail", "Failed to ack command",
-			map[string]interface{}{"worker_id": workerID, "type": cmdType, "err": err.Error()})
-	}
-}
-
-// AckCommandByID marks a specific command as acknowledged, scoped to its worker.
+// AckCommandByID marks a specific command as acknowledged, scoped to its owning worker.
 // The workerID prevents workers from ACKing commands owned by other workers.
+//
+// This is the ONLY surviving ACK path — the type-based fallback was removed in
+// Phase 4.5 because it allowed a worker to ack the wrong command when two
+// pending commands of the same type coexisted on the same worker.
 func (cm *CommandManager) AckCommandByID(workerID, commandID string) error {
 	if cm.store == nil {
 		return fmt.Errorf("no store")
 	}
 	return cm.store.AckCommandByID(workerID, commandID)
-}
-
-// GetAckTime is kept for backward compatibility; queries SQLite for acked_at.
-func (cm *CommandManager) GetAckTime(workerID string, cmdType string) *time.Time {
-	// Not critical for Phase 1; return nil.
-	return nil
-}
-
-// PendingUpdate tracks pending code updates for workers (remains in-memory).
-type PendingUpdate struct {
-	WorkerID    string    `json:"worker_id"`
-	Version     string    `json:"version"`
-	RequestedAt time.Time `json:"requested_at"`
-	Ack         bool      `json:"ack"`
-	AckVersion  string    `json:"ack_version,omitempty"`
-	AckTime     time.Time `json:"ack_time,omitempty"`
-}
-
-// UpdateManager handles pending code updates for workers
-type UpdateManager struct {
-	mu      sync.RWMutex
-	pending map[string]*PendingUpdate // worker_id -> update
-}
-
-// NewUpdateManager creates a new update manager
-func NewUpdateManager() *UpdateManager {
-	return &UpdateManager{
-		pending: make(map[string]*PendingUpdate),
-	}
-}
-
-// RequestUpdate schedules a code update for a worker
-func (um *UpdateManager) RequestUpdate(workerID string, version string) {
-	um.mu.Lock()
-	defer um.mu.Unlock()
-
-	um.pending[workerID] = &PendingUpdate{
-		WorkerID:    workerID,
-		Version:     version,
-		RequestedAt: time.Now(),
-		Ack:         false,
-	}
-}
-
-// GetPendingUpdate returns the pending update for a worker
-func (um *UpdateManager) GetPendingUpdate(workerID string) *PendingUpdate {
-	um.mu.RLock()
-	defer um.mu.RUnlock()
-
-	return um.pending[workerID]
-}
-
-// AckUpdate marks an update as acknowledged
-func (um *UpdateManager) AckUpdate(workerID string, ackVersion string) {
-	um.mu.Lock()
-	defer um.mu.Unlock()
-
-	if update, ok := um.pending[workerID]; ok {
-		update.Ack = true
-		update.AckVersion = ackVersion
-		update.AckTime = time.Now()
-	}
-}
-
-// ClearUpdate removes a pending update
-func (um *UpdateManager) ClearUpdate(workerID string) {
-	um.mu.Lock()
-	defer um.mu.Unlock()
-
-	delete(um.pending, workerID)
 }
 
 // WorkerToken represents a temporary authentication token (kept for response shape).
