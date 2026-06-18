@@ -292,19 +292,6 @@ func (m *AnsibleRunManager) GetRun(runID string) (AnsibleRunRecord, bool) {
 	return m.getRun(runID)
 }
 
-func quoteShell(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return value
-		}
-	}
-	return ""
-}
-
 // RunPlaybook is a backwards-compatible thin wrapper around the (intentionally
 // deleted) executor path. The async executor was split into manager_runs_inventory.go
 // and manager_runs_executor.go which were removed as part of the dedup cleanup in

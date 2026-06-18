@@ -1,7 +1,6 @@
 package api
 
 import (
-	"context"
 	"crypto/subtle"
 	"net/http"
 	"strings"
@@ -9,7 +8,6 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"velox-server/internal/config"
-	"velox-server/internal/queue"
 	workersreg "velox-server/internal/workers"
 )
 
@@ -92,19 +90,5 @@ func IsPublicReadOnlyRoute(path string) bool {
 	}
 
 	return false
-}
-
-func workerStatusCounts(ctx context.Context, fileQ *queue.FileQueue) (pending, processing, completed, errorCount, total int64) {
-	if fileQ != nil {
-		if stats, err := fileQ.Stats(ctx); err == nil {
-			pending = stats["pending"]
-			processing = stats["processing"]
-			completed = stats["completed"]
-			errorCount = stats["error"]
-			total = stats["total"]
-			return
-		}
-	}
-	return
 }
 

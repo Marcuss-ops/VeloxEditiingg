@@ -7,20 +7,8 @@ import (
 	"time"
 )
 
-// loadGroups loads channel groups from SQLite (legacy path, kept for compat).
-func (s *Service) loadGroups() {
-	if s.store != nil {
-		s.loadGroupsFromSQLite()
-	}
-}
-
-// loadGroupsFromSQLite loads groups from the legacy youtube_groups table.
+// loadGroupsFromSQLite loads groups from the canonical youtube_groups_v2 table.
 func (s *Service) loadGroupsFromSQLite() bool {
-	rows, err := s.store.ListYouTubeGroups()
-	if err != nil || len(rows) == 0 {
-		return false
-	}
-
 	// Load groups from youtube_groups_v2
 	groupRows, err := s.store.ListYouTubeGroupsV2()
 	if err != nil || len(groupRows) == 0 {
@@ -423,27 +411,4 @@ func (s *Service) GetUndefinedChannels() []*Channel {
 	}
 
 	return undefined
-}
-
-// saveGroups saves groups to canonical SQLite tables.
-func (s *Service) saveGroups() {
-	if s.store == nil {
-		return
-	}
-	for _, g := range s.groups {
-		// Upsert into youtube_groups_v2 with group_type="upload"
-		groupID, err := s.store.UpsertYouTubeGroupV2(g.Name, "upload", g.Description, g.Privacy)
-		if err != nil {
-			log.Printf("[WARN] Failed to save group %q: %v", g.Name, err)
-			continue
-		}
-		// Sync channel memberships
-		for _, chID := range g.Channels {
-			if err := s.store.AddChannelToGroupV2(groupID, chID); err != nil {
-				log.Printf("[WARN] Failed to add channel %s to group %q: %v", chID[:8], g.Name, err)
-			}
-		}
-	}
-	// Intentionally empty: per-operation methods own their persistence.
-	// See per-operation methods (CreateGroup / DeleteGroup / etc.).
 }

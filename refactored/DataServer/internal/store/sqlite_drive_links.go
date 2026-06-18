@@ -4,12 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
-
-	"velox-server/internal/logging"
 )
-
-// Package-level structured logger for drive link migration warnings.
-var storeLog = logging.NewLogger("store.drive_links")
 
 func (s *SQLiteStore) ReplaceDriveLinks(rawList []byte) error {
 	var list []map[string]any

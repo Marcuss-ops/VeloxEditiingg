@@ -168,6 +168,7 @@ func (r *SQLiteRepository) GetUploadSession(ctx context.Context, uploadID string
 		       status, temporary_storage_key,
 		       COALESCE(expected_size_bytes, 0), COALESCE(expected_sha256, ''),
 		       COALESCE(received_size_bytes, 0), COALESCE(received_sha256, ''),
+		       COALESCE(expected_revision, 0),
 		       created_at, expires_at, completed_at
 		FROM artifact_uploads WHERE upload_id = ?`, uploadID)
 
@@ -179,6 +180,7 @@ func (r *SQLiteRepository) GetUploadSession(ctx context.Context, uploadID string
 		&s.Status, &s.TemporaryStorageKey,
 		&s.ExpectedSizeBytes, &s.ExpectedSHA256,
 		&s.ReceivedSizeBytes, &s.ReceivedSHA256,
+		&s.ExpectedRevision,
 		&createdAt, &expiresAt, &completedAt,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -289,6 +291,7 @@ func (r *SQLiteRepository) FindStuckStaging(ctx context.Context, olderThan time.
 		       status, temporary_storage_key,
 		       COALESCE(expected_size_bytes, 0), COALESCE(expected_sha256, ''),
 		       COALESCE(received_size_bytes, 0), COALESCE(received_sha256, ''),
+		       COALESCE(expected_revision, 0),
 		       created_at, expires_at, completed_at
 		FROM artifact_uploads
 		WHERE status IN ('CREATED', 'UPLOADING', 'FINALIZING')
@@ -310,6 +313,7 @@ func (r *SQLiteRepository) FindStuckStaging(ctx context.Context, olderThan time.
 			&s.Status, &s.TemporaryStorageKey,
 			&s.ExpectedSizeBytes, &s.ExpectedSHA256,
 			&s.ReceivedSizeBytes, &s.ReceivedSHA256,
+			&s.ExpectedRevision,
 			&createdAt, &expiresAt, &completedAt,
 		); err != nil {
 			return nil, fmt.Errorf("artifacts: FindStuckStaging scan: %w", err)
@@ -355,13 +359,6 @@ func nilOrStringPtr(p *string) interface{} {
 		return nil
 	}
 	return *p
-}
-
-func formatTimeNullable(t time.Time) interface{} {
-	if t.IsZero() {
-		return nil
-	}
-	return t.UTC().Format(time.RFC3339)
 }
 
 func formatTimePtr(p *time.Time) interface{} {

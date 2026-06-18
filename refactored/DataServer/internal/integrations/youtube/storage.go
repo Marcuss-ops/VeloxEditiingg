@@ -1,7 +1,6 @@
 package youtube
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -82,29 +81,6 @@ func NewStorage(dataDir string, storageStore ...StorageStore) (*Storage, error) 
 // per-package method dispatch picks up the single canonical
 // implementation in storage_persistence.go. The struct + storage
 // lifecycle (NewStorage, LoadData, SaveData, ClearCache) stays here.
-
-func channelFromRow(row map[string]interface{}) *Channel {
-	ch := &Channel{
-		ID:        asStringField(row, "channel_id"),
-		URL:       asStringField(row, "url"),
-		Title:     asStringField(row, "title"),
-		Name:      asStringField(row, "name"),
-		Thumbnail: asStringField(row, "thumbnail"),
-		Notes:     asStringField(row, "notes"),
-		Language:  asStringField(row, "language"),
-		ViewCount: asInt64Field(row, "view_count"),
-		SubCount:  asInt64Field(row, "sub_count"),
-		AddedAt:   parseFlexTime(asStringField(row, "added_at")),
-		LastSync:  parseFlexTime(asStringField(row, "last_sync")),
-	}
-	if keywordsJSON, ok := row["keywords_json"].(string); ok && keywordsJSON != "" {
-		json.Unmarshal([]byte(keywordsJSON), &ch.Keywords)
-	}
-	if ch.ID == "" {
-		return nil
-	}
-	return ch
-}
 
 func safeChannelID(id string) string {
 	if len(id) > 8 {
