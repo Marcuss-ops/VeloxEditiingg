@@ -21,13 +21,15 @@ import (
 type JobStatus string
 
 const (
-	StatusPending   JobStatus = "PENDING"
-	StatusLeased    JobStatus = "LEASED"
-	StatusRunning   JobStatus = "RUNNING"
-	StatusRetryWait JobStatus = "RETRY_WAIT"
-	StatusSucceeded JobStatus = "SUCCEEDED"
-	StatusFailed    JobStatus = "FAILED"
-	StatusCancelled JobStatus = "CANCELLED"
+	StatusPending        JobStatus = "PENDING"
+	StatusLeased         JobStatus = "LEASED"
+	StatusRunning        JobStatus = "RUNNING"
+	StatusRenderFinished JobStatus = "RENDER_FINISHED"
+	StatusAwaitingArtifact JobStatus = "AWAITING_ARTIFACT"
+	StatusRetryWait      JobStatus = "RETRY_WAIT"
+	StatusSucceeded      JobStatus = "SUCCEEDED"
+	StatusFailed         JobStatus = "FAILED"
+	StatusCancelled      JobStatus = "CANCELLED"
 )
 
 // Job represents a job in the queue (compatible with Python schema)

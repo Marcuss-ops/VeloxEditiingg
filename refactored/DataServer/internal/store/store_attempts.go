@@ -164,6 +164,44 @@ func (s *SQLiteStore) FinalizeArtifact(id, status, storageURL string) error {
 	return err
 }
 
+// FinalizeAndCompleteJob atomically transitions an artifact to READY and
+// its parent job to SUCCEEDED in a single transaction. This is the
+// artifact success gate — the only path to SUCCEEDED for gRPC-submitted jobs.
+func (s *SQLiteStore) FinalizeAndCompleteJob(artifactID, artifactStatus, jobID string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	// Update artifact status
+	if _, err := tx.Exec(
+		`UPDATE artifacts SET status=?, verified_at=? WHERE id=?`,
+		artifactStatus, now, artifactID); err != nil {
+		return fmt.Errorf("artifact status update: %w", err)
+	}
+
+	// Transition job to SUCCEEDED (only if not already terminal)
+	if _, err := tx.Exec(
+		`UPDATE jobs SET status='SUCCEEDED', completed_at=?, updated_at=?
+		 WHERE job_id=? AND UPPER(COALESCE(status,'')) NOT IN ('SUCCEEDED','COMPLETED','CANCELLED','FAILED')`,
+		now, now, jobID); err != nil {
+		return fmt.Errorf("job status update: %w", err)
+	}
+
+	// Clear lease fields on success
+	if _, err := tx.Exec(
+		`UPDATE jobs SET lease_id='', lease_expiry=NULL, last_error='', error_message=''
+		 WHERE job_id=? AND status='SUCCEEDED'`,
+		jobID); err != nil {
+		return fmt.Errorf("job lease cleanup: %w", err)
+	}
+
+	return tx.Commit()
+}
+
 func (s *SQLiteStore) GetArtifact(id string) (*Artifact, error) {
 	row := s.db.QueryRow(
 		`SELECT id, job_id, COALESCE(attempt_id,0), type, storage_provider,

@@ -1,0 +1,164 @@
+package store
+
+import "time"
+
+// ============================================================
+// --- Canonical Groups ---
+// ============================================================
+//
+// NOTE: the V2 suffix on the method names is intentional and STAYS even
+// after migration 012 renamed the table from `youtube_groups_v2` to
+// `youtube_groups` (S10 of the verdict plan). Reasons:
+//   1. The old `youtube_groups` table (with its `channels_json` BLOB) is
+//      what the suffix used to disambiguate against. The legacy table
+//      is gone (migration 009). The suffix is now decorative only.
+//   2. Keeping the V2 suffix on the *method* names keeps the rename
+//      a pure SQL-only change, avoiding a propagation storm across the
+//      ~20 callsites in service.go / storage.go / storage_*.go.
+//   3. A future cleanup pass (post-S11) can drop the suffix cleanly.
+
+// UpsertYouTubeGroupV2 creates or updates a group in youtube_groups.
+func (s *SQLiteStore) UpsertYouTubeGroupV2(name, groupType, description, privacy string) (int64, error) {
+	now := time.Now().UTC().Format(time.RFC3339)
+	if groupType == "" {
+		groupType = "manager"
+	}
+	// Use INSERT OR IGNORE + UPDATE to handle the UNIQUE(name, group_type) constraint
+	_, err := s.db.Exec(
+		`INSERT INTO youtube_groups (name, group_type, description, privacy, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(name, group_type) DO UPDATE SET
+		   description=excluded.description, privacy=excluded.privacy, updated_at=excluded.updated_at`,
+		name, groupType, description, privacy, now, now,
+	)
+	if err != nil {
+		return 0, err
+	}
+	// Return the group ID
+	var id int64
+	err = s.db.QueryRow(`SELECT id FROM youtube_groups WHERE name=? AND group_type=?`, name, groupType).Scan(&id)
+	return id, err
+}
+
+// GetYouTubeGroupV2ID returns the group ID for a given name and type.
+func (s *SQLiteStore) GetYouTubeGroupV2ID(name, groupType string) (int64, error) {
+	var id int64
+	err := s.db.QueryRow(`SELECT id FROM youtube_groups WHERE name=? AND group_type=?`, name, groupType).Scan(&id)
+	return id, err
+}
+
+// ListYouTubeGroupsV2 returns all groups.
+func (s *SQLiteStore) ListYouTubeGroupsV2() ([]map[string]interface{}, error) {
+	rows, err := s.db.Query(`SELECT id, name, group_type, description, privacy, created_at, updated_at FROM youtube_groups ORDER BY name`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []map[string]interface{}
+	for rows.Next() {
+		var id int64
+		var name, groupType, description, privacy, createdAt, updatedAt string
+		if err := rows.Scan(&id, &name, &groupType, &description, &privacy, &createdAt, &updatedAt); err != nil {
+			continue
+		}
+		result = append(result, map[string]interface{}{
+			"id": id, "name": name, "group_type": groupType,
+			"description": description, "privacy": privacy,
+			"created_at": createdAt, "updated_at": updatedAt,
+		})
+	}
+	return result, rows.Err()
+}
+
+// DeleteYouTubeGroupV2 deletes a group by ID.
+func (s *SQLiteStore) DeleteYouTubeGroupV2(id int64) error {
+	_, err := s.db.Exec(`DELETE FROM youtube_groups WHERE id=?`, id)
+	return err
+}
+
+// DeleteYouTubeGroupChannelsByGroupID removes all memberships for a group.
+func (s *SQLiteStore) DeleteYouTubeGroupChannelsByGroupID(groupID int64) error {
+	_, err := s.db.Exec(`DELETE FROM youtube_group_channels WHERE group_id=?`, groupID)
+	return err
+}
+
+// DeleteYouTubeGroupChannelsByChannelID removes a channel from all groups.
+func (s *SQLiteStore) DeleteYouTubeGroupChannelsByChannelID(channelID string) error {
+	_, err := s.db.Exec(`DELETE FROM youtube_group_channels WHERE channel_id=?`, channelID)
+	return err
+}
+
+// --- Group-Channel Memberships ---
+//
+// Membership table is `youtube_group_channels`. Its FK to groups points at
+// the renamed `youtube_groups` (S10). ON DELETE CASCADE keeps
+// removal atomic. The V2 suffix on the methods is decorative (see note
+// on the Groups section above); renaming these methods is post-S11.
+
+// AddChannelToGroupV2 adds a channel membership with position.
+func (s *SQLiteStore) AddChannelToGroupV2(groupID int64, channelID string) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err := s.db.Exec(
+		`INSERT INTO youtube_group_channels (group_id, channel_id, position, added_at)
+		 VALUES (?, ?, (SELECT COALESCE(MAX(position), -1) + 1 FROM youtube_group_channels WHERE group_id=?), ?)
+		 ON CONFLICT(group_id, channel_id) DO NOTHING`,
+		groupID, channelID, groupID, now,
+	)
+	return err
+}
+
+// RemoveChannelFromGroupV2 removes a channel membership.
+func (s *SQLiteStore) RemoveChannelFromGroupV2(groupID int64, channelID string) error {
+	_, err := s.db.Exec(`DELETE FROM youtube_group_channels WHERE group_id=? AND channel_id=?`, groupID, channelID)
+	return err
+}
+
+// ListGroupChannelsV2 returns channel IDs for a group.
+func (s *SQLiteStore) ListGroupChannelsV2(groupID int64) ([]string, error) {
+	rows, err := s.db.Query(`SELECT channel_id FROM youtube_group_channels WHERE group_id=? ORDER BY position`, groupID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			continue
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+// ListAllGroupMembershipsV2 returns all group-channel memberships (for loading full state).
+func (s *SQLiteStore) ListAllGroupMembershipsV2() ([]map[string]interface{}, error) {
+	rows, err := s.db.Query(`SELECT gc.group_id, gc.channel_id, gc.position, g.name as group_name, g.group_type
+		FROM youtube_group_channels gc
+		JOIN youtube_groups g ON g.id = gc.group_id
+		ORDER BY g.name, gc.position`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []map[string]interface{}
+	for rows.Next() {
+		var groupID int64
+		var channelID, groupName, groupType string
+		var position int
+		if err := rows.Scan(&groupID, &channelID, &position, &groupName, &groupType); err != nil {
+			continue
+		}
+		result = append(result, map[string]interface{}{
+			"group_id":   groupID,
+			"channel_id": channelID,
+			"position":   position,
+			"group_name": groupName,
+			"group_type": groupType,
+		})
+	}
+	return result, rows.Err()
+}

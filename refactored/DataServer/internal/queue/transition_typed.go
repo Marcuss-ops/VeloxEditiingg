@@ -125,6 +125,12 @@ func (ts *TransitionService) CompleteJob(ctx context.Context, jobID string) erro
 	return ts.lc.CompleteJob(ctx, jobID)
 }
 
+// RecordRenderFinished transitions a RUNNING job to RENDER_FINISHED.
+// Called by the gRPC handler when a worker reports success.
+func (ts *TransitionService) RecordRenderFinished(ctx context.Context, jobID, workerID, leaseID string, attempt, revision int) error {
+	return ts.lc.RecordRenderFinished(ctx, jobID, workerID, leaseID, attempt, revision)
+}
+
 // RenewLease extends a lease (delegates to LifecycleService).
 func (ts *TransitionService) RenewLease(ctx context.Context, jobID, workerID, leaseID string, leaseExpiry time.Time) error {
 	return ts.lc.RenewLease(ctx, jobID, workerID, leaseID, leaseExpiry)
