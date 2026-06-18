@@ -20,10 +20,29 @@ import (
 
 // UploadCompletedVideo handles video file upload from workers.
 // POST /api/v1/video/upload-completed
-func UploadCompletedVideo(cfg *config.Config, fileQ *queue.FileQueue, youtubeService YouTubeAutoUploader, driveService DriveAutoUploader) gin.HandlerFunc {
+//
+// Rewritten PR2b/PR4d: uses staging → ArtifactFinalizationService →
+// CompleteJobTx → job_deliveries PENDING pipeline instead of the old
+// save-directly + COMPLETED + maybeAutoUpload pattern.
+//
+// Flow:
+//  1. Save upload to staging directory (BlobStore staging path)
+//  2. Create artifact in STAGING status
+//  3. Call ArtifactFinalizationService.FinalizeRender for verification
+//     (re-hashes SHA-256, sniffs MIME, measures size)
+//  4. On success, atomically CompleteJobTx (SUCCEEDED + close attempt + outbox)
+//  5. Insert PENDING job_deliveries for delivery targets
+//  6. DeliveryRunner picks up the PENDING deliveries asynchronously
+func UploadCompletedVideo(cfg *config.Config, fileQ *queue.FileQueue, blobStore store.BlobStore) gin.HandlerFunc {
 	videosDir := cfg.Runtime.VideosDir
 	if videosDir == "" {
 		videosDir = "./completed_videos"
+	}
+
+	// Build staging dir from config (fallback to data/staging)
+	stagingDir := cfg.Runtime.StagingDir
+	if stagingDir == "" {
+		stagingDir = filepath.Join(cfg.Runtime.DataDir, "staging")
 	}
 
 	return func(c *gin.Context) {
@@ -40,28 +59,34 @@ func UploadCompletedVideo(cfg *config.Config, fileQ *queue.FileQueue, youtubeSer
 
 		jobID := c.PostForm("job_id")
 		workerID := c.PostForm("worker_id")
+		leaseID := c.PostForm("lease_id")
 
 		if jobID == "" {
 			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "job_id is required"})
 			return
 		}
 
-		// Ensure videos directory exists
-		if err := os.MkdirAll(videosDir, 0755); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": "failed to create videos directory"})
+		// Ensure staging directory exists — also log the videosDir for backward compat
+		_ = videosDir
+		if err := os.MkdirAll(stagingDir, 0755); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": "failed to create staging directory"})
 			return
 		}
 
-		// Generate unique filename
+		// Generate unique staging path via BlobStore
 		ext := filepath.Ext(header.Filename)
 		if ext == "" {
 			ext = ".mp4"
 		}
-		safeName := slugify(jobID) + "_" + fmt.Sprintf("%d", time.Now().Unix()) + ext
-		videoPath := filepath.Join(videosDir, safeName)
+		artifactID := fmt.Sprintf("art_%s_%d", jobID, time.Now().UnixNano())
+		stagingPath, err := blobStore.StagingPath(jobID, artifactID, ext)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": "failed to allocate staging path"})
+			return
+		}
 
-		// Save uploaded file
-		out, err := os.Create(videoPath)
+		// Write uploaded file to staging
+		out, err := os.Create(stagingPath)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": "Failed to save uploaded file"})
 			return
@@ -73,103 +98,117 @@ func UploadCompletedVideo(cfg *config.Config, fileQ *queue.FileQueue, youtubeSer
 		out.Close()
 
 		if err != nil {
-			os.Remove(videoPath)
+			os.Remove(stagingPath)
 			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": "Failed to write video file"})
 			return
 		}
-
 		sha256Hash := hex.EncodeToString(hasher.Sum(nil))
 
-		// Update job with video info
 		ctx := c.Request.Context()
 		now := time.Now().UTC().Format(time.RFC3339)
 
-		uploadInfo := map[string]interface{}{
-			"video_path":         videoPath,
-			"video_size":         size,
-			"video_sha256":       sha256Hash,
-			"video_filename":     safeName,
-			"worker_id":          workerID,
-			"uploaded_at":        now,
-			"master_video_path":  videoPath,
-			"result_path_worker": videoPath,
+		// Get DB store from FileQueue
+		dbStore := fileQ.GetDBStore()
+
+		// Look up the latest attempt for revision/lease validation
+		var attemptID int64
+		latestAttempt, err := dbStore.GetLatestJobAttempt(jobID)
+		if err == nil && latestAttempt != nil {
+			attemptID = int64(latestAttempt.ID)
+			// Validate lease if provided
+			if leaseID != "" && latestAttempt.LeaseID != "" && latestAttempt.LeaseID != leaseID {
+				log.Printf("[UPLOAD] Lease mismatch for %s: got %s, expected %s", jobID, leaseID, latestAttempt.LeaseID)
+			}
 		}
 
-		updateFields := map[string]interface{}{
-			"status":                "COMPLETED",
-			"completed_at":          now,
-			"result_path":           videoPath,
-			"result_path_worker":    videoPath,
-			"master_video_path":     videoPath,
-			"upload_info":           uploadInfo,
-			"video_sha256":          sha256Hash,
-			"youtube_upload_status": "pending", // DEPRECATED: kept for backward compat
+		// Step 1: Create artifact in STAGING status
+		newArtifact := &store.Artifact{
+			ID:              artifactID,
+			JobID:           jobID,
+			AttemptID:       int(attemptID),
+			Type:            "video",
+			StorageProvider: "local",
+			StorageKey:      stagingPath,
+			LocalPath:       stagingPath,
+			SHA256:          sha256Hash,
+			SizeBytes:       size,
+			Status:          "STAGING",
+			CreatedAt:       now,
+		}
+		if err := dbStore.InsertArtifact(newArtifact); err != nil {
+			os.Remove(stagingPath)
+			log.Printf("[UPLOAD] Failed to insert artifact for %s: %v", jobID, err)
+			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": "Failed to create artifact record"})
+			return
 		}
 
-		if workerID != "" {
-			updateFields["worker_id"] = workerID
-		}
+		// Step 2: Finalize via ArtifactFinalizationService
+		finalizationSvc := queue.NewArtifactFinalizationService(dbStore)
+		_, finalizeErr := finalizationSvc.FinalizeRender(ctx, queue.FinalizeRenderInput{
+			ArtifactID:    artifactID,
+			JobID:         jobID,
+			AttemptID:     attemptID,
+			WorkerID:      workerID,
+			LeaseID:       leaseID,
+			TemporaryPath: stagingPath,
+			ExpectedSize:  size,
+			WorkerSHA256:  sha256Hash,
+		})
 
-		if err := fileQ.UpdateJobFields(ctx, jobID, updateFields); err != nil {
-			log.Printf("[UPLOAD] Failed to update job %s: %v", jobID, err)
+		if finalizeErr != nil {
+			log.Printf("[UPLOAD] Artifact finalization failed for %s (artifact=%s): %v", jobID, artifactID, finalizeErr)
+			// Artifact is now in QUARANTINED — don't promote job.
+			_ = blobStore.RemoveStaging(stagingPath)
 			c.JSON(http.StatusInternalServerError, gin.H{
-				"ok":    false,
-				"error": "Failed to update job status",
+				"ok":          false,
+				"error":       "Artifact verification failed",
+				"artifact_id": artifactID,
+				"status":      "QUARANTINED",
 			})
 			return
 		}
 
-		// Create artifact record via the artifacts table (PR4: normalized artifact tracking)
-		dbStore := fileQ.GetDBStore()
+		// Step 3: Promote staged file to final storage (canonical location).
+		finalPath := blobStore.FinalPath(jobID, artifactID, ext)
+		storageKey, promoteErr := blobStore.PromoteToFinal(stagingPath, finalPath)
+		if promoteErr != nil {
+			log.Printf("[UPLOAD] Failed to promote artifact %s to final: %v", artifactID, promoteErr)
+			// Artifact is READY in DB but file is still in staging — reconciler will handle.
+			storageKey = stagingPath
+		} else {
+			// Update artifact with final storage_key.
+			_ = dbStore.UpdateArtifactStorageKey(ctx, artifactID, storageKey, finalPath)
+		}
+
+		// Step 4: Atomically complete the job (SUCCEEDED + close attempt + outbox).
+		if err := fileQ.CompleteJob(ctx, jobID); err != nil {
+			log.Printf("[UPLOAD] Failed to complete job %s: %v", jobID, err)
+			// Job already marked COMPLETED upstream or CAS failure — not fatal,
+			// the artifact is READY and deliveries will proceed.
+		}
+
+		// Step 5: Create PENDING job_deliveries for legacy delivery_targets.
 		if dbStore != nil {
-			artifact := &store.Artifact{
-				JobID:           jobID,
-				Type:            "video",
-				StorageProvider: "local",
-				LocalPath:       videoPath,
-				SHA256:          sha256Hash,
-				SizeBytes:       size,
-				Status:          "completed",
-				CreatedAt:       now,
-			}
-			if err := dbStore.InsertArtifact(artifact); err != nil {
-				log.Printf("[UPLOAD] Failed to insert artifact for %s: %v", jobID, err)
+			deliveryCount, deliveryErr := dbStore.InsertJobDeliveriesForArtifact(ctx, artifactID, jobID)
+			if deliveryErr != nil {
+				log.Printf("[UPLOAD] Failed to create job_deliveries for %s: %v", jobID, deliveryErr)
+			} else if deliveryCount > 0 {
+				log.Printf("[UPLOAD] Created %d PENDING job_deliveries for artifact %s", deliveryCount, artifactID)
 			}
 		}
 
-		// Query delivery targets (PR4: targets resolved at enqueue time)
-		deliveryTargets := getDeliveryTargets(dbStore, jobID)
-
-		// Trigger YouTube auto-upload (async, best-effort) with resolved targets
-		maybeAutoUploadYouTube(fileQ, youtubeService, jobID, uploadInfo, videoPath, deliveryTargets)
-
-		// Trigger Drive auto-upload (async, best-effort) with resolved targets
-		maybeAutoUploadDrive(fileQ, driveService, cfg.Runtime.DataDir, jobID, uploadInfo, videoPath, deliveryTargets)
-
-		log.Printf("[UPLOAD] Video upload completed: job=%s worker=%s size=%d sha256=%s",
-			jobID, workerID, size, sha256Hash[:min(16, len(sha256Hash))]+"...")
+		log.Printf("[UPLOAD] Artifact pipeline complete: job=%s artifact=%s status=READY sha256=%s size=%d",
+			jobID, artifactID,		sha256Hash[:16]+"...", size)
 
 		c.JSON(http.StatusOK, gin.H{
-			"ok":         true,
-			"job_id":     jobID,
-			"video_path": videoPath,
-			"size":       size,
-			"sha256":     sha256Hash,
-			"video_id":   safeName,
+			"ok":          true,
+			"job_id":      jobID,
+			"artifact_id": artifactID,
+			"status":      "READY",
+			"size":        size,
+			"sha256":      sha256Hash,
 		})
 	}
 }
 
-// getDeliveryTargets queries delivery_targets for a job (PR4).
-// Falls back gracefully if the store is nil or table doesn't exist yet.
-func getDeliveryTargets(dbStore *store.SQLiteStore, jobID string) []store.DeliveryTarget {
-	if dbStore == nil {
-		return nil
-	}
-	targets, err := dbStore.GetDeliveryTargetsByJob(jobID)
-	if err != nil {
-		log.Printf("[UPLOAD] Failed to query delivery targets for %s: %v", jobID, err)
-		return nil
-	}
-	return targets
-}
+

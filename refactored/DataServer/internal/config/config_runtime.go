@@ -27,5 +27,15 @@ func loadRuntimeConfig(dataDir string) RuntimeConfig {
 	if c.SecretsDir == "" {
 		c.SecretsDir = filepath.Join(c.RuntimeDir, "secrets")
 	}
+	// Staging directory for artifact uploads (before verification).
+	c.StagingDir = os.Getenv("VELOX_STAGING_DIR")
+	if c.StagingDir == "" {
+		c.StagingDir = filepath.Join(c.DataDir, "staging")
+	}
+	// Final storage directory for verified artifacts.
+	c.StorageDir = os.Getenv("VELOX_STORAGE_DIR")
+	if c.StorageDir == "" {
+		c.StorageDir = filepath.Join(c.DataDir, "storage")
+	}
 	return c
 }

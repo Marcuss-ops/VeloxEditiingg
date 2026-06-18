@@ -38,7 +38,7 @@ func TestGenerateWithImages_EnqueuesSceneImageJob(t *testing.T) {
 		},
 		Database: config.DatabaseConfig{
 			DBPath: dbPath,
-		}, (fix: add missing jobs columns migration (023), fix CompleteJob CAS, patch UpdateJobFields whitelist)
+		},
 	}
 
 	r := gin.New()

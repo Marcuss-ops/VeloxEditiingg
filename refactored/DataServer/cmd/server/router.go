@@ -11,7 +11,7 @@ import (
 	"velox-server/internal/config"
 	remoteansible "velox-server/internal/handlers/remote/ansible"
 	workersuploads "velox-server/internal/handlers/remote/workers/uploads"
-	integrationsDrive "velox-server/internal/integrations/drive" (fix: add missing jobs columns migration (023), fix CompleteJob CAS, patch UpdateJobFields whitelist)
+	integrationsDrive "velox-server/internal/integrations/drive"
 	"velox-server/internal/handlers/server/analytics"
 	"velox-server/internal/handlers/server/api"
 	"velox-server/internal/handlers/server/groups"
@@ -75,7 +75,7 @@ func newRouter(cfg *config.Config, deps *serverDeps, registry *app.Registry) *gi
 	// ── Module routes (health, workers, youtube, drive, ansible, frontend) ──
 	registry.RegisterRoutes(r)
 
-	// Get ansible handlers from the module (created during RegisterRoutes)
+	// Get ansible handlers from the module
 	var ansibleHandlers *remoteansible.AnsibleHandlers
 	if deps.ansibleModule != nil {
 		ansibleHandlers = deps.ansibleModule.Handlers()
@@ -107,7 +107,6 @@ func newRouter(cfg *config.Config, deps *serverDeps, registry *app.Registry) *gi
 }
 
 func registerAPIV1Routes(r *gin.Engine, cfg *config.Config, deps *serverDeps, ansibleHandlers *remoteansible.AnsibleHandlers) {
-	// TODO: migrate remaining V1 routes to dedicated api module
 	jobRepo := store.NewSQLiteJobsRepository(deps.sqliteStore)
 	tokenMgr := deps.workerLifecycle.GetTokenManager()
 	jobSvc := jobservice.NewService(cfg, deps.fileQ, jobRepo, nil, deps.reg)
@@ -126,29 +125,32 @@ func registerAPIV1Routes(r *gin.Engine, cfg *config.Config, deps *serverDeps, an
 	if deps.driveModule != nil {
 		driveService = deps.driveModule.Service()
 	}
-	api.RegisterV1Routes(r, cfg, deps.fileQ, deps.reg, jobAPI, jobSubmitHandler, deps.workersRepo, deps.sqliteStore, deps.workerUpdateHandler, youtubeService, driveService, ansibleHandlers) (fix: add missing jobs columns migration (023), fix CompleteJob CAS, patch UpdateJobFields whitelist)
+	api.RegisterV1Routes(r, cfg, deps.fileQ, deps.reg, jobAPI, jobSubmitHandler, deps.workersRepo, deps.sqliteStore, deps.workerUpdateHandler, youtubeService, driveService, ansibleHandlers)
 
-	// V2 job routes: /api/v1/jobs/{id}/lease|complete|fail|progress|attempts|artifacts|events
+	// V2 job routes
 	v2JobsGroup := r.Group("/api/v1")
 	jobhandlers.RegisterV2JobRoutes(v2JobsGroup, cfg, deps.fileQ, deps.sqliteStore, jobSvc)
 
-	// Orchestrator multi-step pipeline routes (admin-protected, same as v1Admin)
+	// Orchestrator multi-step pipeline routes
 	orchAdmin := r.Group("/api/v1")
 	orchAdmin.Use(api.AdminAuthMiddleware(cfg))
 	registerOrchestratorRoutes(orchAdmin, deps)
 
+	// PR2b/PR4d: upload-completed now uses BlobStore + ArtifactFinalizationService
+	// instead of the old direct-save + maybeAutoUpload pattern.
+	// The blobStore handles staging → verification → final promotion.
+	r.POST("/api/v1/video/upload-completed", workersuploads.UploadCompletedVideo(cfg, deps.fileQ, deps.blobStore))
+
 	// Chunked upload routes (resumable worker→master video upload)
 	r.POST("/api/v1/video/chunked/init", workersuploads.InitChunkedUpload())
 	r.POST("/api/v1/video/chunked/:job_id/:chunk_index", workersuploads.UploadChunk(cfg))
-	r.POST("/api/v1/video/chunked/:job_id/complete", workersuploads.CompleteChunkedUpload(cfg, deps.fileQ)) (fix: add missing jobs columns migration (023), fix CompleteJob CAS, patch UpdateJobFields whitelist)
+	r.POST("/api/v1/video/chunked/:job_id/complete", workersuploads.CompleteChunkedUpload(cfg, deps.fileQ))
 
-	// Bundle compat routes (frontend calls /api/bundle/* without /v1/)
+	// Bundle compat routes
 	if deps.workerUpdateHandler != nil {
 		r.GET("/api/bundle/info", deps.workerUpdateHandler.GetLatestBundleHandler())
 		r.GET("/api/bundle/files", deps.workerUpdateHandler.GetBundleFilesHandler())
 	}
-
-	// Compat: commands endpoint for workers (registered by workers module above)
 }
 
 func registerScriptRoutes(r *gin.Engine, cfg *config.Config, deps *serverDeps) {
@@ -249,22 +251,15 @@ func registerOrchestratorRoutes(v1Admin gin.IRoutes, deps *serverDeps) {
 }
 
 func registerPipelineRoutes(r *gin.Engine, cfg *config.Config, deps *serverDeps) {
-	// Public pipeline endpoint: forwards to remote engine (77.93.152.122) then to workers
 	r.POST("/api/remote/pipeline/generate", pipelinehandler.PipelineGenerate(cfg, deps.fileQ))
-
-	// Pipeline status check
 	r.GET("/api/remote/pipeline/status/:trace_id", pipelinehandler.PipelineStatus(cfg))
 
-	// Cancel a running pipeline job — cancels on remote engine, local queue, and worker
 	var cmdMgr *workersreg.CommandManager
 	if deps.workerUpdateHandler != nil {
 		cmdMgr = deps.workerUpdateHandler.CommandManager()
 	}
 	r.DELETE("/api/remote/pipeline/cancel/:trace_id", pipelinehandler.PipelineCancel(cfg, deps.fileQ, cmdMgr))
 
-	// Simple script generation (single topic)
 	r.POST("/api/script-simple", pipelinehandler.ScriptSimple(cfg))
-
-	// Batch script generation (multiple topics)
 	r.POST("/api/script-multiple", pipelinehandler.ScriptMultiple(cfg))
 }

@@ -21,6 +21,8 @@ type RuntimeConfig struct {
 	StaticDir    string
 	JobQueueFile string
 	SecretsDir   string
+	StagingDir   string // Staging directory for artifact uploads (before verification)
+	StorageDir   string // Final storage directory for verified artifacts
 }
 
 // DatabaseConfig holds database connection settings.

@@ -14,7 +14,6 @@ import (
 	"velox-server/internal/handlers/remote/ansible"
 	"velox-server/internal/handlers/remote/workers"
 	"velox-server/internal/handlers/remote/workers/management"
-	"velox-server/internal/handlers/remote/workers/uploads"
 	"velox-server/internal/handlers/server/analytics"
 	"velox-server/internal/handlers/server/calendar"
 	"velox-server/internal/handlers/server/drive"
@@ -262,7 +261,9 @@ func RegisterV1Routes(r *gin.Engine, cfg *config.Config, fileQ *queue.FileQueue,
 
 		// Video - Core API
 		v1Admin.POST("/video/create-master", master.CreateMaster(cfg, fileQ))
-		v1.POST("/video/upload-completed", uploads.UploadCompletedVideo(cfg, fileQ, youtubeService, driveService))
+		// NOTE: /video/upload-completed is registered in router.go via the new
+		// BlobStore-based pipeline (PR2b/PR4d). The legacy youtubeService+driveService
+		// path is removed — deliveries are now handled by the DeliveryRunner.
 
 		// Ansible - Core API
 		// Registered here so both /api/v1 and legacy /ansible paths share the same implementation.

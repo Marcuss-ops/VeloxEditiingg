@@ -19,9 +19,11 @@ import (
 	voiceoverassets "velox-server/internal/assets"
 	"velox-server/internal/audit"
 	"velox-server/internal/config"
+	"velox-server/internal/deliveries"
+	deliveryProviders "velox-server/internal/deliveries/providers"
 	"velox-server/internal/grpcserver"
 	workerhandlers "velox-server/internal/handlers/remote/workers"
-	"velox-server/internal/handlers/remote/workers/lifecycle" (fix: add missing jobs columns migration (023), fix CompleteJob CAS, patch UpdateJobFields whitelist)
+	"velox-server/internal/handlers/remote/workers/lifecycle"
 	"velox-server/internal/handlers/server/api"
 	"velox-server/internal/handlers/server/pipeline"
 	"velox-server/internal/jobs/enqueue"
@@ -55,6 +57,8 @@ type serverDeps struct {
 	youtubeModule       *youtube.Module
 	driveModule         *drive.Module
 	orchestrator        *queue.Orchestrator
+	deliveryRunner      *deliveries.DeliveryRunner
+	blobStore           store.BlobStore
 }
 
 func configureTrustedProxies(r *gin.Engine) {
@@ -125,12 +129,7 @@ func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
 	workerUpdateHandler := workerhandlers.NewWorkerUpdateHandler(cfg, reg, cmdMgr, updateMgr, tokenMgr, cfg.Runtime.DataDir)
 	workerLifecycle := lifecycle.NewHandler(cfg, reg, sqliteStore, cfg.Runtime.DataDir)
 
-	// Create orchestrator for multi-step job pipelines (PR5b: with worker registry for heartbeat recovery)
-	// Wire narrow JobRepository (spec §5) for TransitionService. PR-2:
-	// ClaimNextJob delegates to this; other methods still use dbStore until
-	// Wire narrow JobRepository (spec §5) into FileQueue — SetJobRepository
-	// forwards into the embedded TransitionService. PR-2 wires ClaimNext;
-	// PR-2b will widen to other methods.
+	// Create orchestrator for multi-step job pipelines
 	jobRepo := store.NewSQLiteJobRepository(sqliteStore)
 	fileQ.SetJobRepository(jobRepo)
 
@@ -138,6 +137,14 @@ func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
 	if err != nil {
 		return nil, fmt.Errorf("orchestrator init: %w", err)
 	}
+
+	// Build BlobStore for artifact staging/promotion (PR2b).
+	blobStore, bsErr := store.NewLocalBlobStore(cfg.Runtime.StagingDir, cfg.Runtime.StorageDir)
+	if bsErr != nil {
+		log.Printf("[BOOTSTRAP] BlobStore init warning: %v — using nop blob store", bsErr)
+		blobStore = store.NewNopBlobStore(cfg.Runtime.DataDir)
+	}
+	log.Printf("[BOOTSTRAP] BlobStore ready: staging=%s storage=%s", blobStore.StagingDir(), blobStore.FinalDir())
 
 	return &serverDeps{
 		paths:               &serverPaths{dataDir: cfg.Runtime.DataDir},
@@ -148,6 +155,7 @@ func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
 		workerUpdateHandler: workerUpdateHandler,
 		workerLifecycle:     workerLifecycle,
 		orchestrator:        orch,
+		blobStore:           blobStore,
 	}, nil
 }
 
@@ -165,7 +173,7 @@ func runServer(cfg *config.Config) error {
 	registry := app.NewRegistry()
 	auth := api.AdminAuthMiddleware(cfg)
 
-	// Init pipeline remote engine (connects to external script generation service)
+	// Init pipeline remote engine
 	pipeline.InitRemoteEngine(cfg)
 
 	// Register all modules
@@ -194,6 +202,28 @@ func runServer(cfg *config.Config) error {
 	registry.Register(livestreamMod)
 	registry.Register(frontend.New(cfg))
 
+	// ── Wire DeliveryRunner (PR4d) ──────────────────────────────────────────
+	deliveryReg := deliveries.NewRegistry()
+	if ytMod != nil && ytMod.Service() != nil {
+		ytProvider := deliveryProviders.NewYouTubeProvider(ytMod.Service(), deps.blobStore)
+		deliveryReg.Register(ytProvider)
+		log.Printf("[BOOTSTRAP] Delivery provider registered: youtube")
+	}
+	if driveMod != nil && driveMod.Service() != nil {
+		driveProvider := deliveryProviders.NewDriveProvider(driveMod.Service(), deps.blobStore)
+		deliveryReg.Register(driveProvider)
+		log.Printf("[BOOTSTRAP] Delivery provider registered: drive")
+	}
+
+	deliveryRunner := deliveries.NewDeliveryRunner(
+		deliveries.DefaultRunnerConfig(),
+		deliveryReg,
+		deps.sqliteStore,
+		fmt.Sprintf("delivery-runner-%d", time.Now().UnixNano()),
+	)
+	deps.deliveryRunner = deliveryRunner
+	// ────────────────────────────────────────────────────────────────────────
+
 	// Create gin engine with middleware
 	r := newRouter(cfg, deps, registry)
 
@@ -206,17 +236,15 @@ func runServer(cfg *config.Config) error {
 
 	log.Printf("[SERVER] Velox master listening on %s", addr)
 
-	// Start gRPC server for worker control stream (Phase 3+)
-	// Phase 4: Shadow mode — notifies workers about available jobs via stream
-	// Phase 5: Push mode — sends JobOffer directly, workers respond JobAccepted
-	var grpcSrv grpcServer // Use interface for graceful shutdown
+	// Start gRPC server for worker control stream
+	var grpcSrv grpcServer
 	if cfg.Server.GRPCPort > 0 {
 		transitionSvc := queue.NewTransitionService(deps.sqliteStore)
 		cmdMgr := workersreg.NewCommandManager(deps.sqliteStore)
 		tokenMgr := workersreg.NewTokenManager(deps.sqliteStore)
 
 		grpcHandlerConfig := &grpcserver.HandlerConfig{
-			ShadowMode: true, // Phase 4: notify workers, still claim via HTTP
+			ShadowMode: true,
 		}
 		grpcHandler := grpcserver.NewHandler(
 			deps.reg, cmdMgr, tokenMgr, transitionSvc, deps.sqliteStore, grpcHandlerConfig,
@@ -248,6 +276,16 @@ func runServer(cfg *config.Config) error {
 		log.Printf("[BOOTSTRAP] Orchestrator started — polling multi-step jobs")
 	}
 
+	// Start DeliveryRunner for artifact delivery (Drive/YouTube/S3)
+	if deps.deliveryRunner != nil {
+		go func() {
+			log.Printf("[BOOTSTRAP] DeliveryRunner started — polling PENDING job_deliveries")
+			if err := deps.deliveryRunner.Run(context.Background()); err != nil {
+				log.Printf("[BOOTSTRAP] DeliveryRunner exited: %v", err)
+			}
+		}()
+	}
+
 	// Zombie job reaper: requeue jobs with expired leases or stuck too long
 	if deps.fileQ != nil {
 		go func() {
@@ -262,6 +300,24 @@ func runServer(cfg *config.Config) error {
 				}
 			}
 		}()
+	}
+
+	// Staging reconciler: clean up orphaned staging files (artifact DB row
+	// missing or stuck in STAGING/QUARANTINED for > 1 hour).
+	if deps.blobStore != nil {
+		go func() {
+			ticker := time.NewTicker(15 * time.Minute)
+			defer ticker.Stop()
+			for range ticker.C {
+				count, err := reconcileStaging(deps.sqliteStore, deps.blobStore)
+				if err != nil {
+					log.Printf("[STAGING] reconciler error: %v", err)
+				} else if count > 0 {
+					log.Printf("[STAGING] reconciler removed %d orphaned files", count)
+				}
+			}
+		}()
+		log.Printf("[BOOTSTRAP] Staging reconciler started — cleanup orphaned files every 15m")
 	}
 
 	// Start server in a goroutine so shutdown can be handled gracefully
@@ -343,6 +399,72 @@ type grpcServer interface {
 type grpcServerWrapper struct {
 	*grpc.Server
 	Listener net.Listener
+}
+
+// reconcileStaging scans the staging directory for files that are orphaned
+// (no matching artifact row) or whose artifact has been in STAGING/QUARANTINED
+// for more than 1 hour. Removes the orphaned files from disk.
+func reconcileStaging(dbStore *store.SQLiteStore, blobStore store.BlobStore) (int, error) {
+	stagingDir := blobStore.StagingDir()
+	entries, err := os.ReadDir(stagingDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("read staging dir: %w", err)
+	}
+
+	ctx := context.Background()
+	cutoff := time.Now().UTC().Add(-1 * time.Hour).Format(time.RFC3339)
+	removed := 0
+
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		path := filepath.Join(stagingDir, entry.Name())
+
+		// Check modification time: skip files newer than 1 hour.
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		if time.Since(info.ModTime()) < 1*time.Hour {
+			continue
+		}
+
+		// Try to find an artifact row whose storage_key or local_path matches.
+		var status string
+		err = dbStore.DB().QueryRowContext(ctx,
+			`SELECT status FROM artifacts WHERE storage_key = ? OR local_path = ? LIMIT 1`,
+			path, path,
+		).Scan(&status)
+		if err != nil {
+			// No matching artifact — orphaned file, remove it.
+			if rmErr := os.Remove(path); rmErr == nil {
+				removed++
+				log.Printf("[STAGING] Removed orphaned file: %s", path)
+			}
+			continue
+		}
+
+		// Artifact exists but is stuck in non-terminal state for > 1h.
+		if status == "STAGING" || status == "QUARANTINED" {
+			// Check if it's been in this state for > 1 hour.
+			var createdAt string
+			_ = dbStore.DB().QueryRowContext(ctx,
+				`SELECT created_at FROM artifacts WHERE (storage_key = ? OR local_path = ?) AND status = ?`,
+				path, path, status,
+			).Scan(&createdAt)
+			if createdAt != "" && createdAt < cutoff {
+				if rmErr := os.Remove(path); rmErr == nil {
+					removed++
+					log.Printf("[STAGING] Removed stuck artifact file (%s): %s", status, path)
+				}
+			}
+		}
+	}
+	return removed, nil
 }
 
 func runDataLayerAudit(cfg *config.Config) error {

@@ -146,19 +146,6 @@ func (s *Service) QuotaManager() *QuotaManager {
 	return s.quotaManager
 }
 
-// ServiceWithStore creates a Service with the given store but no OAuth config
-// or YouTube API client setup. Used for testing Membership/BulkMembership
-// from the store package without needing a full ServiceConfig or OAuth secret.
-func ServiceWithStore(store YouTubeStore) *Service {
-	return &Service{
-		config:   &ServiceConfig{},
-		store:    store,
-		channels: make(map[string]*AuthChannel),
-		groups:   make(map[string]*ChannelGroup),
-		cache:    NewCache("", 0, store),
-	}
-}
-
 // SetStore sets the SQLite store for persistence, type-asserting from interface{}.
 // If a store was already provided via NewService, this is a no-op.
 // If called for the first time, it reloads data from the store.

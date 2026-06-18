@@ -117,7 +117,7 @@ func TestUploadCompletedVideo_AutoUploadsToYouTubeAndDrive(t *testing.T) {
 		Runtime: config.RuntimeConfig{
 			DataDir:   tempDir,
 			VideosDir: filepath.Join(tempDir, "completed_videos"),
-		}, (fix: add missing jobs columns migration (023), fix CompleteJob CAS, patch UpdateJobFields whitelist)
+		},
 	}
 
 	jobID := "upload-e2e-1"
@@ -311,7 +311,7 @@ func TestMaybeAutoUploadDrive_FallsBackToJobLanguage(t *testing.T) {
 		Status:     "pending",
 		Config:     `{"folder_id":"drive-folder-it"}`,
 	}}
-	maybeAutoUploadDrive(q, driveSvc, tempDir, jobID, map[string]interface{}{}, videoPath, targets) (fix: add missing jobs columns migration (023), fix CompleteJob CAS, patch UpdateJobFields whitelist)
+	maybeAutoUploadDrive(q, driveSvc, tempDir, jobID, map[string]interface{}{}, videoPath, targets)
 
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {

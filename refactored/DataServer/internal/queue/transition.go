@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"log"
 	"sort"
-	"sync" (fix: add missing jobs columns migration (023), fix CompleteJob CAS, patch UpdateJobFields whitelist)
+	"sync"
 	"time"
 
 	"github.com/google/uuid"

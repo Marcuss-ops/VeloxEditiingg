@@ -1,4 +1,4 @@
-// Package deliveries/providers: Drive adapter skeleton.
+// Package deliveries/providers: Drive adapter.
 //
 // DriveProvider wraps internal/integrations/drive.Service through the
 // deliveries.Provider interface so the runner can call it without
@@ -7,6 +7,7 @@ package providers
 
 import (
 	"context"
+	"log"
 
 	"velox-server/internal/deliveries"
 	integrationsDrive "velox-server/internal/integrations/drive"
@@ -15,14 +16,15 @@ import (
 
 // DriveProvider is the production Drive adapter.
 type DriveProvider struct {
-	service *integrationsDrive.Service
-	tokens  string // tokens dir, propagated for future config-only wiring
+	service   *integrationsDrive.Service
+	blobStore store.BlobStore
+	tokens    string // tokens dir, propagated for future config-only wiring
 }
 
 // NewDriveProvider constructs a DriveProvider. nil service is allowed for
 // tests; Deliver then returns ErrProviderNotConfigured.
-func NewDriveProvider(svc *integrationsDrive.Service) *DriveProvider {
-	return &DriveProvider{service: svc}
+func NewDriveProvider(svc *integrationsDrive.Service, blobStore store.BlobStore) *DriveProvider {
+	return &DriveProvider{service: svc, blobStore: blobStore}
 }
 
 // Name returns "drive".
@@ -34,6 +36,9 @@ func (d *DriveProvider) Name() string { return "drive" }
 // (artifact_id, destination_id) by the runner. Drive treats duplicate
 // uploads as idempotent when the source SHA-256 matches the previously
 // uploaded blob.
+//
+// Uses blobStore to read the artifact's bytes. Falls back to artifact.LocalPath
+// if the blob store is not configured (legacy path).
 func (d *DriveProvider) Deliver(ctx context.Context, artifact *store.Artifact, destination *deliveries.Destination) (*deliveries.Result, error) {
 	if d == nil || d.service == nil {
 		return nil, deliveries.ErrProviderNotConfigured
@@ -41,11 +46,33 @@ func (d *DriveProvider) Deliver(ctx context.Context, artifact *store.Artifact, d
 	if artifact == nil || destination == nil {
 		return nil, deliveries.ErrProviderPermanent
 	}
-	// Real implementation hooks Drive's UploadVideo here. Once we wire
-	// the runner end-to-end we'll thread the destination.FolderID through
-	// to driveapi.UploadConfig and capture the resulting FileID +
-	// WebViewLink on deliveries.Result.
-	uploadRes, err := d.service.UploadVideo(ctx, artifact.LocalPath, artifact.ID, destination.FolderID)
+
+	// Resolve the file path: prefer storage_key (canonical path) over LocalPath.
+	filePath := artifact.StorageKey
+	if filePath == "" {
+		filePath = artifact.LocalPath
+	}
+	if filePath == "" {
+		return nil, deliveries.ErrProviderPermanent
+	}
+
+	// If blobStore is available, verify the file exists at storage_key.
+	if d.blobStore != nil {
+		f, err := d.blobStore.ReadFinal(filePath)
+		if err != nil {
+			log.Printf("[DRIVE] Cannot read artifact %s at %s, falling back to LocalPath %s: %v",
+				artifact.ID, filePath, artifact.LocalPath, err)
+			if artifact.LocalPath != "" {
+				filePath = artifact.LocalPath
+			} else {
+				return nil, deliveries.ErrProviderPermanent
+			}
+		} else {
+			f.Close()
+		}
+	}
+
+	uploadRes, err := d.service.UploadVideo(ctx, filePath, artifact.ID, destination.FolderID)
 	if err != nil {
 		return nil, err
 	}

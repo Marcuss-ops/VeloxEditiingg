@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -232,6 +233,16 @@ func (s *SQLiteStore) LogJobEvent(jobID, eventType string, extra map[string]inte
 	}
 	raw, _ := json.Marshal(payload)
 	return s.InsertJobEvent(now, jobID, eventType, string(raw))
+}
+
+// UpdateArtifactStorageKey updates the storage_key and storage_url/local_path
+// after an artifact has been promoted from staging to final storage.
+func (s *SQLiteStore) UpdateArtifactStorageKey(ctx context.Context, artifactID, storageKey, localPath string) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE artifacts SET storage_key=?, local_path=? WHERE id=?`,
+		storageKey, localPath, artifactID,
+	)
+	return err
 }
 
 func nullInt(v int) interface{} {
