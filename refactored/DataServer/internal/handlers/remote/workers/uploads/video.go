@@ -181,10 +181,17 @@ func UploadCompletedVideo(cfg *config.Config, fileQ *queue.FileQueue, blobStore 
 		}
 
 		// Step 4: Atomically complete the job (SUCCEEDED + close attempt + outbox).
-		if err := fileQ.CompleteJob(ctx, jobID); err != nil {
+		// Fetch job revision for CAS gate.
+		var jobRevision int
+		if jobMap, jobErr := dbStore.GetJob(ctx, jobID); jobErr == nil && jobMap != nil {
+			if rev, ok := jobMap["revision"].(int64); ok {
+				jobRevision = int(rev)
+			} else if rev, ok := jobMap["revision"].(int); ok {
+				jobRevision = rev
+			}
+		}
+		if err := dbStore.CompleteJobTx(ctx, jobID, attemptID, "", leaseID, jobRevision); err != nil {
 			log.Printf("[UPLOAD] Failed to complete job %s: %v", jobID, err)
-			// Job already marked COMPLETED upstream or CAS failure — not fatal,
-			// the artifact is READY and deliveries will proceed.
 		}
 
 		// Step 5: Create PENDING job_deliveries for legacy delivery_targets.

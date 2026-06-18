@@ -23,31 +23,7 @@ func (s *SQLiteStore) UpsertYouTubeManagerChannel(channelID, groupName, url, tit
 // ============================================================
 // --- Canonical YouTube OAuth Tokens (Migration 011) ---
 // ============================================================
-//
-// All three methods on this block accept / return ALREADY-ENCRYPTED BLOB
-// values. The encryption-decision policy lives in the service layer (which
-// holds the AES-GCM cipher resolved from env vars via internal/secrets/aesgcm).
-// Keeping the store free of crypto concerns means a future cipher rotation
-// only touches the encryptor package + maybe a per-row re-encryption
-// migration — the SQL contract stays unchanged.
 
-// UpsertYouTubeOAuthToken stores or replaces the OAuth credentials for one
-// channel. Arguments are:
-//   - channelID: the YouTube channel ID; PK + FK to youtube_channels
-//   - accessTokenEnc: AES-GCM encrypted access token bytes (NOT NULL)
-//   - refreshTokenEnc: AES-GCM encrypted refresh token bytes (NULL when the
-//     grant flow did not issue one)
-//   - tokenType: usually "Bearer"
-//   - expiry: RFC3339 timestamp; empty when the token never expires
-//   - scopes: space-separated OAuth scope list
-//   - keyVersion: the cipher key rotation stamp; persisted so future
-//     rotation can detect old rows that still need migration
-//
-// Conflict policy: ON CONFLICT(channel_id) DO UPDATE replaces the row
-// atomically. The `revoked_at` column is intentionally NOT updated by
-// this method: revoking is a separate, audit-logged action via
-// MarkYouTubeOAuthTokenRevoked (we don't want a token refresh or
-// re-grant silently wiping a revocation that another operator set).
 func (s *SQLiteStore) UpsertYouTubeOAuthToken(channelID string, accessTokenEnc, refreshTokenEnc []byte, tokenType, expiry, scopes string, keyVersion int) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, err := s.db.Exec(
@@ -67,16 +43,6 @@ func (s *SQLiteStore) UpsertYouTubeOAuthToken(channelID string, accessTokenEnc, 
 	return err
 }
 
-// GetYouTubeOAuthToken returns the row for channelID, or (nil, nil) when
-// the channel has no OAuth entry. BLOB columns surface as []byte. A nil
-// Encryptor at the call site is responsible for translating these bytes
-// back into plaintext; a non-nil key_version lets the caller decide
-// whether the row needs re-encryption on the next write.
-//
-// revoked_at is nullable (the column is only set after MarkYouTubeOAuthTokenRevoked)
-// so it is scanned into sql.NullString and surfaced as "" when unset — the
-// map[string]interface{} shape stays simple so callers don't have to import
-// database/sql just to read the rows.
 func (s *SQLiteStore) GetYouTubeOAuthToken(channelID string) (map[string]interface{}, error) {
 	row := s.db.QueryRow(
 		`SELECT channel_id, access_token_encrypted, refresh_token_encrypted, token_type, expiry, scopes, key_version, revoked_at, created_at, updated_at
@@ -111,15 +77,6 @@ func (s *SQLiteStore) GetYouTubeOAuthToken(channelID string) (map[string]interfa
 	}, nil
 }
 
-// ListActiveYouTubeOAuthTokens enumerates every non-revoked OAuth credential
-// row for startup hydration. The boot path uses this to rehydrate the in-RAM
-// AuthChannel cache without ever touching the JSON token directory. Returns
-// a slice of the same row shape produced by GetYouTubeOAuthToken (BLOBs
-// surface as []byte; the caller decrypts via a matching aesgcm.Encryptor).
-//
-// "Active" semantics: revoked_at IS NULL. Revoked rows are deliberately
-// omitted so a stale revoked credential cannot silently re-enter the runtime
-// cache after a server restart.
 func (s *SQLiteStore) ListActiveYouTubeOAuthTokens() ([]map[string]interface{}, error) {
 	rows, err := s.db.Query(
 		`SELECT channel_id, access_token_encrypted, refresh_token_encrypted, token_type, expiry, scopes, key_version, revoked_at, created_at, updated_at
@@ -160,30 +117,6 @@ func (s *SQLiteStore) ListActiveYouTubeOAuthTokens() ([]map[string]interface{}, 
 	return result, rows.Err()
 }
 
-// ConnectChannelAtomic creates (or upserts) a youtube_channels row and the
-// matching youtube_oauth_tokens row in ONE SQLite transaction. Returns a
-// typed error if either leg of the transaction fails so the operator sees
-// a single failure rather than half-persisted state.
-//
-// This is the canonical entry point for both "first-time connect" and
-// "explicit re-auth" (a user redoing OAuth on a previously-revoked channel).
-// The previous HandleOAuthCallback path performed two separate
-// non-transactional calls (UpsertYouTubeOAuthToken alone) which would fail
-// with a FK violation when the OAuth row tried to insert into
-// youtube_oauth_tokens before any youtube_channels row existed.
-// ConnectChannelAtomic fixes that.
-//
-// On the OAuth leg's UPDATE branch, revoked_at is reset to NULL. This is
-// the explicit new-auth semantic: a user who revoked a channel and then
-// chose to reconnect MUST be reactivated by the new grant, otherwise
-// ListActiveYouTubeOAuthTokens (the boot hydrator and the validate-all
-// route) would silently filter the row out after every restart and the
-// operator would be stuck in "channels look active but tokens don't
-// load" limbo. A normal token refresh does NOT call this method; it goes
-// through UpsertYouTubeOAuthToken which preserves revoked_at verbatim.
-//
-// Both legs run before any RAM update so a partial failure leaves the DB
-// consistent with the operator-visible error.
 func (s *SQLiteStore) ConnectChannelAtomic(channel *youtubetypes.YouTubeChannelSeed, accessTokenEnc, refreshTokenEnc []byte, tokenType, expiry, scopes string, keyVersion int) error {
 	if channel == nil {
 		return fmt.Errorf("connect atomic: nil channel seed")
@@ -199,12 +132,6 @@ func (s *SQLiteStore) ConnectChannelAtomic(channel *youtubetypes.YouTubeChannelS
 		addedAt = time.Now().UTC().Format(time.RFC3339)
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
-	// Channel leg: the UPDATE branch touches ONLY seed-owned columns
-	// (title, thumbnail_url, last_sync_at, updated_at). User-edited
-	// typed columns — notes, language, view_count, subscriber_count,
-	// display_name, channel_url — are preserved verbatim across re-auth.
-	// added_at / created_at are also preserved because they are not in
-	// the SET clause at all.
 	if _, err := tx.Exec(
 		`INSERT INTO youtube_channels
 		 (channel_id, title, display_name, channel_url, thumbnail_url, language, notes,
@@ -220,11 +147,7 @@ func (s *SQLiteStore) ConnectChannelAtomic(channel *youtubetypes.YouTubeChannelS
 		addedAt, channel.LastSyncAt, now, now,
 	); err != nil {
 		return fmt.Errorf("connect atomic: upsert channel: %w", err)
-	}	// Always fire the OAuth leg in the same transaction. A re-auth flow
-	// (user redoing OAuth on an existing channel) also enters through
-	// here: the channel upsert is a no-op when the row already exists,
-	// and the OAuth leg's UPDATE branch below resets revoked_at so the
-	// channel is reactivated on the next boot hydrator pass.
+	}
 	if _, err := tx.Exec(
 		`INSERT INTO youtube_oauth_tokens
 	 (channel_id, access_token_encrypted, refresh_token_encrypted, token_type, expiry, scopes, key_version, created_at, updated_at)
@@ -236,9 +159,6 @@ func (s *SQLiteStore) ConnectChannelAtomic(channel *youtubetypes.YouTubeChannelS
 	   expiry=excluded.expiry,
 	   scopes=excluded.scopes,
 	   key_version=excluded.key_version,
-	   -- Explicit re-auth resets revocation (see doc comment above).
-	   -- Cannot be silently wiped by UpsertYouTubeOAuthToken (the
-	   -- refresh path) because that method never touches revoked_at.
 	   revoked_at=NULL,
 	   updated_at=excluded.updated_at`,
 		channel.ChannelID, accessTokenEnc, refreshTokenEnc, tokenType, expiry, scopes, keyVersion, now, now,
@@ -252,10 +172,6 @@ func (s *SQLiteStore) ConnectChannelAtomic(channel *youtubetypes.YouTubeChannelS
 	return nil
 }
 
-// AuditYouTubeOAuthTokenOrphans returns the channel_ids present in
-// youtube_oauth_tokens but missing from youtube_channels. The caller is
-// expected to log these on boot so post-bootstrap operators know whether the
-// canonical set is fully consistent.
 func (s *SQLiteStore) AuditYouTubeOAuthTokenOrphans() ([]youtubetypes.YouTubeTokenOrphan, error) {
 	rows, err := s.db.Query(
 		`SELECT t.channel_id, t.updated_at
@@ -279,12 +195,6 @@ func (s *SQLiteStore) AuditYouTubeOAuthTokenOrphans() ([]youtubetypes.YouTubeTok
 	return orphans, rows.Err()
 }
 
-// MarkYouTubeOAuthTokenRevoked records a revocation timestamp on the OAuth
-// row. Idempotent: WHERE revoked_at IS NULL means a second call is a no-op
-// and the original timestamp stays intact (audit-friendly). This method
-// does NOT delete the row \u2014 the existing Service.DeleteChannel remains the
-// single deletion entry point so cascades behave consistently. Revoke =
-// disable; Delete = remove.
 func (s *SQLiteStore) MarkYouTubeOAuthTokenRevoked(channelID string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, err := s.db.Exec(
@@ -295,28 +205,12 @@ func (s *SQLiteStore) MarkYouTubeOAuthTokenRevoked(channelID string) error {
 	return err
 }
 
-// DeleteChannelAtomic atomically removes a youtube_channels row + its
-// youtube_group_channels memberships + (FK-cascade) the matching
-// youtube_oauth_tokens row in a single SQLite transaction. Returns the
-// number of group memberships cleared for telemetry.
-//
-// Used by Service.DeleteChannel so the deactivation is consistently
-// atomic: a mid-txn failure leaves NO partial state in the canonical
-// tables — either the channel is fully gone or untouched. Pairs with
-// RevokeToken (which marks revoked_at on the oauth row but keeps the
-// channel entry) to give the operator two distinct semantics.
-//
-// Note: we explicitly DELETE from youtube_group_channels before the
-// parent youtube_channels row even though FK CASCADE would handle it,
-// because doing so lets us return the membership count for the audit
-// endpoint and protects against a misconfigured FK pragma at startup
-// (foreign_keys=OFF on legacy DBs).
 func (s *SQLiteStore) DeleteChannelAtomic(channelID string) (int64, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return 0, fmt.Errorf("delete atomic: begin: %w", err)
 	}
-	defer func() { _ = tx.Rollback() }() // safe even after explicit Commit
+	defer func() { _ = tx.Rollback() }()
 
 	res, err := tx.Exec(`DELETE FROM youtube_group_channels WHERE channel_id = ?`, channelID)
 	if err != nil {
@@ -327,7 +221,6 @@ func (s *SQLiteStore) DeleteChannelAtomic(channelID string) (int64, error) {
 	if _, err := tx.Exec(`DELETE FROM youtube_channels WHERE channel_id = ?`, channelID); err != nil {
 		return 0, fmt.Errorf("delete atomic: channel row: %w", err)
 	}
-	// youtube_oauth_tokens row is wiped by FK CASCADE on the channel row.
 
 	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf("delete atomic: commit: %w", err)
@@ -338,29 +231,8 @@ func (s *SQLiteStore) DeleteChannelAtomic(channelID string) (int64, error) {
 // ============================================================
 // --- Legacy wrappers (tables dropped by migrations 008/014) ---
 // ============================================================
-// These methods satisfy the YouTubeStore interface for backward compatibility.
-// The legacy tables they once queried have been dropped; they route through
-// canonical paths.
 
-// UpsertYouTubeGroup is a legacy wrapper that routes to the canonical UpsertYouTubeGroupV2.
-func (s *SQLiteStore) UpsertYouTubeGroup(name, description, privacy string, channels []string, rawJSON string) error {
-	if name == "" {
-		return nil
-	}
-	groupID, err := s.UpsertYouTubeGroupV2(name, "manager", description, privacy)
-	if err != nil {
-		return err
-	}
-	for _, ch := range channels {
-		_ = s.AddChannelToGroupV2(groupID, ch)
-	}
-	return nil
-}
-
-// UpsertYouTubeChannelMetadata persists a legacy youtube_channel_metadata row
-// into the canonical youtube_channels table (the legacy table was dropped by
-// migration 008). `tokenPath` is now derived from the canonical
-// youtube_oauth_tokens table.
+// UpsertYouTubeChannelMetadata persists into the canonical youtube_channels table.
 func (s *SQLiteStore) UpsertYouTubeChannelMetadata(channelID, title, tokenPath, language, addedDate, lastUsed, rawJSON string) error {
 	if channelID == "" {
 		return nil
@@ -380,10 +252,23 @@ func (s *SQLiteStore) UpsertYouTubeChannelMetadata(channelID, title, tokenPath, 
 	return err
 }
 
+// UpsertYouTubeGroup is a legacy wrapper that routes to the canonical UpsertYouTubeGroupV2.
+func (s *SQLiteStore) UpsertYouTubeGroup(name, description, privacy string, channels []string, rawJSON string) error {
+	if name == "" {
+		return nil
+	}
+	groupID, err := s.UpsertYouTubeGroupV2(name, "manager", description, privacy)
+	if err != nil {
+		return err
+	}
+	for _, ch := range channels {
+		_ = s.AddChannelToGroupV2(groupID, ch)
+	}
+	return nil
+}
 
 // DeleteYouTubeGroup is a thin name-based convenience wrapper for tests
-// and HTTP shims that historically used the legacy signature. Production
-// callers should prefer DeleteYouTubeGroupV2(id).
+// and HTTP shims. Production callers should prefer DeleteYouTubeGroupV2(id).
 func (s *SQLiteStore) DeleteYouTubeGroup(name string) error {
 	_, err := s.db.Exec(`DELETE FROM youtube_groups WHERE name = ?`, name)
 	return err

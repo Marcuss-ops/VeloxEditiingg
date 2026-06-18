@@ -1230,35 +1230,6 @@ func TestConnectChannelAtomic_ResetsRevokedAtOnReauth(t *testing.T) {
 //  youtube_channels and youtube_groups_v2 instead.)
 // ============================================================
 
-func TestYouTubeChannelMetadataLegacy(t *testing.T) {
-	s := openTestDB(t)
-	defer s.Close()
-
-	// Skip if legacy table doesn't exist (dropped by migration 008)
-	var exists int
-	_ = s.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='youtube_channel_metadata'`).Scan(&exists)
-	if exists == 0 {
-		t.Skip("youtube_channel_metadata table dropped by migration 008")
-	}
-
-	// Upsert legacy channel metadata
-	err := s.UpsertYouTubeChannelMetadata("UC_legacy", "Legacy Channel", "/tokens/legacy.json", "en", "2024-01-01", "2024-06-01", `{"legacy": true}`)
-	if err != nil {
-		t.Fatalf("UpsertYouTubeChannelMetadata failed: %v", err)
-	}
-
-	meta, err := s.ListYouTubeChannelMetadata()
-	if err != nil {
-		t.Fatalf("ListYouTubeChannelMetadata failed: %v", err)
-	}
-	if len(meta) != 1 {
-		t.Fatalf("expected 1 legacy metadata entry, got %d", len(meta))
-	}
-	if meta["UC_legacy"]["title"] != "Legacy Channel" {
-		t.Errorf("title: got %v, want %q", meta["UC_legacy"]["title"], "Legacy Channel")
-	}
-}
-
 func TestYouTubeGroupsLegacy(t *testing.T) {
 	s := openTestDB(t)
 	defer s.Close()

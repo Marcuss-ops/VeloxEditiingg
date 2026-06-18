@@ -101,12 +101,12 @@ func (m *Module) init() error {
 	}
 
 	// Initialize Drive service
-	if m.service == nil && m.cfg.DriveClientID != "" && m.cfg.DriveClientSecret != "" {
+	if m.service == nil && m.cfg.Drive.ClientID != "" && m.cfg.Drive.ClientSecret != "" {
 		svc, err := integrationsDrive.NewService(&integrationsDrive.ServiceConfig{
-			ClientID:     m.cfg.DriveClientID,
-			ClientSecret: m.cfg.DriveClientSecret,
-			RedirectURI:  m.cfg.DriveRedirectURI,
-			TokensDir:    m.cfg.DriveTokensDir,
+			ClientID:     m.cfg.Drive.ClientID,
+			ClientSecret: m.cfg.Drive.ClientSecret,
+			RedirectURI:  m.cfg.Drive.RedirectURI,
+			TokensDir:    m.cfg.Drive.TokensDir,
 		})
 		if err != nil {
 			return err
@@ -125,10 +125,10 @@ func (m *Module) init() error {
 		return nil
 	}
 	handlers, err := driveHandlers.NewDriveHandlers(&integrationsDrive.ServiceConfig{
-		ClientID:     m.cfg.DriveClientID,
-		ClientSecret: m.cfg.DriveClientSecret,
-		RedirectURI:  m.cfg.DriveRedirectURI,
-		TokensDir:    m.cfg.DriveTokensDir,
+		ClientID:     m.cfg.Drive.ClientID,
+		ClientSecret: m.cfg.Drive.ClientSecret,
+		RedirectURI:  m.cfg.Drive.RedirectURI,
+		TokensDir:    m.cfg.Drive.TokensDir,
 	}, m.service, m.sqliteStore)
 	if err != nil {
 		return err

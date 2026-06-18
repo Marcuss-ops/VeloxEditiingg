@@ -41,94 +41,22 @@ func FromEnv() *Config {
 	render := loadRenderConfig()
 	nvidia := loadNVIDIAConfig()
 
-	// Note: legacy `masterServerURL := GetMasterServerURL()` removed because
-	// the value flows through the Workers sub-config (Workers.MasterServerURL
-	// → config_workers.go) and via the flat alias below. Declaring it locally
-	// here triggered a Go "declared and not used" error.
-
-	// Build flat Config for backward compatibility. The legacy flat DB
-	// (DBDriver/DBDSN/DBMax*) aliases are intentionally dropped from this
-	// initializer because DatabaseConfig only exposes DBPath after the
-	// SQLite-only S6 cleanup; callers needing legacy DB pool tuning should
-	// migrate to the Database sub-config (c.Database).
-	c := &Config{
-		MasterPort:           server.Port,
-		StudioPort:           server.StudioPort,
-		TLSCertFile:          server.TLSCertFile,
-		TLSKeyFile:           server.TLSKeyFile,
-		AllowLocalhostMaster: server.AllowLocalhost,
-
-		DataDir:      runtime.DataDir,
-		RuntimeDir:   runtime.RuntimeDir,
-		VideosDir:    runtime.VideosDir,
-		StaticDir:    runtime.StaticDir,
-		JobQueueFile: runtime.JobQueueFile,
-		SecretsDir:   runtime.SecretsDir,
-
-		// Legacy flat DB pool fields dropped (see comment above). The Database
-		// sub-config (c.Database) carries DBPath; pool tuning lives in env
-		// loader added by future PR if it becomes necessary again.
-
-		AllowedWorkers:           workers.AllowedWorkers,
-		ForceSingleWorker:        workers.ForceSingleWorker,
-		AllowlistAllowRegistered: workers.AllowlistRegistered,
-		MaxJobAttempts:           workers.MaxJobAttempts,
-		WorkerBundleDir:          workers.BundleDir,
-		WorkerHeartbeatTimeout:   workers.HeartbeatTimeout,
-		CodeVersion:              workers.CodeVersion,
-		VersionNumber:            workers.VersionNumber,
-		ScriptDir:                workers.ScriptDir,
-		MasterURL:                workers.MasterURL,
-		AllowedWorkerIPs:         workers.AllowedIPs,
-
-		AdminToken: auth.AdminToken,
-
-		S3Endpoint:        storage.Endpoint,
-		S3Region:          storage.Region,
-		S3Bucket:          storage.Bucket,
-		S3AccessKeyID:     storage.AccessKeyID,
-		S3SecretAccessKey: storage.SecretKey,
-		S3UseSSL:          storage.UseSSL,
-
-		DriveClientID:       drive.ClientID,
-		DriveClientSecret:   drive.ClientSecret,
-		DriveRedirectURI:    drive.RedirectURI,
-		DriveTokensDir:      drive.TokensDir,
-		DriveCredentialsDir: drive.CredentialsDir,
-
-		YouTubeAPIKey:         youtube.APIKey,
-		YouTubeTokensDir:      youtube.TokensDir,
-		YouTubePostingPath:    youtube.PostingPath,
-		YouTubeCredentialsDir: youtube.CredentialsDir,
-
-		PlaybookDir: ansible.PlaybookDir,
-
-		GradioAppURL:       frontend.GradioAppURL,
-		SPADir:             frontend.SPADir,
-		DarkEditorDir:      frontend.DarkEditorDir,
-		DarkEditorProxyURL: frontend.DarkEditorProxy,
-
-		RemoteEngineURL:          render.RemoteEngineURL,
-		RemoteEngineToken:        render.RemoteEngineToken,
-		RemoteEngineTimeoutMS:    render.RemoteEngineTimeoutMS,
-		RemoteEngineRetries:      render.RemoteEngineRetries,
-		RemoteEnginePollInterval: render.RemoteEnginePollInterval,		NVIDIAAPIKey:  nvidia.APIKey,
-		NVIDIATextURL: nvidia.TextURL,
-	}
 	pipeline := loadPipelineConfig()
-	c.Server = server
-	c.Runtime = runtime
-	c.Database = database
-	c.Workers = workers
-	c.Auth = auth
-	c.Storage = storage
-	c.Drive = drive
-	c.YouTube = youtube
-	c.Ansible = ansible
-	c.Frontend = frontend
-	c.Render = render
-	c.NVIDIA = nvidia
-	c.Pipeline = pipeline
+	c := &Config{
+		Server:   server,
+		Runtime:  runtime,
+		Database: database,
+		Workers:  workers,
+		Auth:     auth,
+		Storage:  storage,
+		Drive:    drive,
+		YouTube:  youtube,
+		Ansible:  ansible,
+		Frontend: frontend,
+		Render:   render,
+		NVIDIA:   nvidia,
+		Pipeline: pipeline,
+	}
 	return c
 }
 

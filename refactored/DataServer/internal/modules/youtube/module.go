@@ -51,8 +51,8 @@ func (m *Module) RegisterRoutes(r *gin.Engine) {
 		YoutubePostingPath: m.cfg.YouTube.PostingPath,
 		CredentialsDir:     m.cfg.YouTube.CredentialsDir,
 		DataDir:            m.dataDir,
-		NVIDIAAPIKey:       m.cfg.NVIDIAAPIKey,
-		NVIDIATextURL:      m.cfg.NVIDIATextURL,
+		NVIDIAAPIKey:       m.cfg.NVIDIA.APIKey,
+		NVIDIATextURL:      m.cfg.NVIDIA.TextURL,
 	}, m.sqliteStore)
 	if err != nil {
 		log.Printf("[YOUTUBE] Service init failed: %v", err)
@@ -90,7 +90,7 @@ func (m *Module) RegisterRoutes(r *gin.Engine) {
 	log.Printf("[YOUTUBE] API routes registered at /api/v1/youtube/*")
 
 	if m.dataDir != "" {
-		apiKey := m.cfg.YouTubeAPIKey
+		apiKey := m.cfg.YouTube.APIKey
 		m.manager = ytHandlers.NewYouTubeManager(m.dataDir, apiKey, m.youtubeStorage, youtubeService)
 		ytHandlers.YouTubeRoutes(r, m.cfg, m.manager)
 		if apiKey != "" {
