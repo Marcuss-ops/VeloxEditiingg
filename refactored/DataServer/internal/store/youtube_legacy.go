@@ -336,11 +336,26 @@ func (s *SQLiteStore) DeleteChannelAtomic(channelID string) (int64, error) {
 }
 
 // ============================================================
-// --- Legacy stubs (tables dropped by migrations 008/014) ---
+// --- Legacy wrappers (tables dropped by migrations 008/014) ---
 // ============================================================
-// These methods satisfy the YouTubeStore and StorageStore interfaces
-// for backward compatibility. The legacy tables they once queried have
-// been dropped, so they return empty/no-op results.
+// These methods satisfy the YouTubeStore interface for backward compatibility.
+// The legacy tables they once queried have been dropped; they route through
+// canonical paths.
+
+// UpsertYouTubeGroup is a legacy wrapper that routes to the canonical UpsertYouTubeGroupV2.
+func (s *SQLiteStore) UpsertYouTubeGroup(name, description, privacy string, channels []string, rawJSON string) error {
+	if name == "" {
+		return nil
+	}
+	groupID, err := s.UpsertYouTubeGroupV2(name, "manager", description, privacy)
+	if err != nil {
+		return err
+	}
+	for _, ch := range channels {
+		_ = s.AddChannelToGroupV2(groupID, ch)
+	}
+	return nil
+}
 
 // UpsertYouTubeChannelMetadata persists a legacy youtube_channel_metadata row
 // into the canonical youtube_channels table (the legacy table was dropped by
@@ -362,60 +377,6 @@ func (s *SQLiteStore) UpsertYouTubeChannelMetadata(channelID, title, tokenPath, 
 		   updated_at=excluded.updated_at`,
 		channelID, title, language, addedDate, now, now, now,
 	)
-	return err
-}
-
-// ListYouTubeChannelMetadata returns an empty map (legacy table dropped by migration 014).
-func (s *SQLiteStore) ListYouTubeChannelMetadata() (map[string]map[string]interface{}, error) {
-	return make(map[string]map[string]interface{}), nil
-}
-
-// UpsertYouTubeGroup is a legacy wrapper that routes to the canonical UpsertYouTubeGroupV2.
-func (s *SQLiteStore) UpsertYouTubeGroup(name, description, privacy string, channels []string, rawJSON string) error {
-	if name == "" {
-		return nil
-	}
-	groupID, err := s.UpsertYouTubeGroupV2(name, "manager", description, privacy)
-	if err != nil {
-		return err
-	}
-	for _, ch := range channels {
-		_ = s.AddChannelToGroupV2(groupID, ch)
-	}
-	return nil
-}
-
-// GetYouTubeManagerChannel is a legacy no-op (legacy table dropped by migration 008).
-func (s *SQLiteStore) GetYouTubeManagerChannel(channelID string) (string, error) {
-	return "", nil
-}
-
-// ListYouTubeManagerChannels returns nil (legacy table dropped by migration 008).
-func (s *SQLiteStore) ListYouTubeManagerChannels() ([]map[string]interface{}, error) {
-	return nil, nil
-}
-
-// UpsertYouTubeManagerGroup is a legacy no-op (legacy table dropped by migration 008).
-func (s *SQLiteStore) UpsertYouTubeManagerGroup(name, createdAt, groupType string, trackedNiches []string) error {
-	return nil
-}
-
-// DeleteYouTubeManagerGroup is a legacy no-op (legacy table dropped by migration 008).
-func (s *SQLiteStore) DeleteYouTubeManagerGroup(name string) error {
-	return nil
-}
-
-// ListYouTubeManagerGroups returns nil (legacy table dropped by migration 008).
-func (s *SQLiteStore) ListYouTubeManagerGroups() ([]map[string]interface{}, error) {
-	return nil, nil
-}
-
-// DeleteYouTubeManagerChannel routes through the atomic DeleteChannelAtomic.
-func (s *SQLiteStore) DeleteYouTubeManagerChannel(channelID string) error {
-	if channelID == "" {
-		return nil
-	}
-	_, err := s.DeleteChannelAtomic(channelID)
 	return err
 }
 

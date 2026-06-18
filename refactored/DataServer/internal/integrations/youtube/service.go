@@ -48,9 +48,7 @@ type YouTubeStore interface {
 	ListYouTubeGroups() ([]map[string]interface{}, error)
 	UpsertYouTubeGroup(name, description, privacy string, channels []string, rawJSON string) error
 
-	// Legacy: YouTube Channel Metadata (kept for backward compat during migration)
-	ListYouTubeChannelMetadata() (map[string]map[string]interface{}, error)
-	UpsertYouTubeChannelMetadata(channelID, title, tokenPath, language, addedDate, lastUsed, rawJSON string) error
+
 
 	// Canonical: OAuth tokens (youtube_oauth_tokens table; S5-S11 boot hydrator)
 	// GetYouTubeOAuthToken returns (nil, nil) when no row exists so callers can
@@ -77,10 +75,7 @@ type YouTubeStore interface {
 		Data      interface{} `json:"data"`
 	}) (int, error)
 
-	// Legacy: youtube_manager_channels (dropped by migration 008). The service
-	// layer still surfaces UpsertYouTubeManagerChannel as a wrapper around
-	// UpsertYouTubeChannel so the migrate-json CLI keeps compiling.
-	UpsertYouTubeManagerChannel(channelID, groupName, url, title, name, thumbnail, notes, language string, keywords []string, addedAt, lastSync string, viewCount, subCount int64, rawJSON string) error
+
 }
 
 // Service provides YouTube API functionality

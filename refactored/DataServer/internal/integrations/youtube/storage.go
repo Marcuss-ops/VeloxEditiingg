@@ -43,14 +43,7 @@ type StorageStore interface {
 	UpsertYouTubeTrackedNiche(niche string) error
 	ListYouTubeTrackedNiches() ([]string, error)
 
-	// Legacy (kept for backward compat during migration)
-	UpsertYouTubeManagerChannel(channelID, groupName, url, title, name, thumbnail, notes, language string, keywords []string, addedAt, lastSync string, viewCount, subCount int64, rawJSON string) error
-	DeleteYouTubeManagerChannel(channelID string) error
-	GetYouTubeManagerChannel(channelID string) (string, error)
-	ListYouTubeManagerChannels() ([]map[string]interface{}, error)
-	UpsertYouTubeManagerGroup(name, createdAt, groupType string, trackedNiches []string) error
-	DeleteYouTubeManagerGroup(name string) error
-	ListYouTubeManagerGroups() ([]map[string]interface{}, error)
+
 }
 
 // Storage handles persistence of YouTube manager data

@@ -15,35 +15,6 @@ import (
 // artifact authenticity. It now ONLY maps the proto fields into a
 // artifacts.FinalizeArtifactCommand and delegates the entire
 // cryptographic + transactional pipeline to artifacts.Service.Finalize.
-//
-// Specifically, this handler does NOT:
-//   - trust a.GetArtifactPath() as a canonical storage_key (path is
-//     ignored; Service.PromoteToCanonical derives it from the master-
-//     computed SHA-256 + mime-derived extension)
-//   - trust a.GetArtifactSize() / upload_status / error as authoritative
-//     state (all ignored; size + sha + status are master-computed from
-//     the streamed byte range covered by the matching upload_id)
-//   - call dbStore.InsertArtifact (it would let the worker plant a
-//     STAGING row that the master never hashed)
-//   - call dbStore.FinalizeAndCompleteJob (the PR 1 hand-rolled
-//     "STAGING->READY + job RUNNING->SUCCEEDED" 2-tx dance is replaced by
-//     Service.FinalizeArtifactAndCompleteJob's single-tx CAS gates)
-//   - run its own worker/lease/revision auth gate (Service.Finalize
-//     already enforces session.WorkerID == cmd.WorkerID AND the
-//     single-tx CAS gates close on `assigned_to = ? / lease_id = ? /
-//     revision = ?`. A second gate here would be redundant and risks
-//     drift).
-//
-// Lease / attempt / revision gap: the current .pb.go (chunk-3-pre-regen)
-// still carries only job_id + artifact_id + the deprecated fields. LeaseID,
-// AttemptNumber, and ExpectedRevision therefore come in as blanks/zero
-// here, which Service skips via its `if X != 0` guard prefixes. The
-// proper wire-up follows the .pb.go regen scheduled for chunk-4+ and
-// will land in handler_artifacts.go once the proto regeneration lands.
-// Until that point, the *CAS gates for lease/revision are no-ops at the
-// gRPC boundary*, but the SHA / size trust boundary is already enforced
-// via Service.PromoteToCanonical and the artifact_uploads status state
-// machine.
 func (h *Handler) handleArtifactUploaded(workerID string, a *pb.ArtifactUploaded) {
 	if h.artifactSvc == nil {
 		log.Printf("[GRPC] ArtifactUploaded from worker %s but artifactSvc (artifacts.Service) is not wired — dropping", workerID)
@@ -51,46 +22,26 @@ func (h *Handler) handleArtifactUploaded(workerID string, a *pb.ArtifactUploaded
 	}
 
 	jobID := a.GetJobId()
-	// PR 2 — upload_id / lease_id / attempt / expected_revision are NOT
-	// yet in the generated .pb.go (fields 8-11 exist in the .proto but
-	// the .pb.go was never regenerated). Use empty/zero values until the
-	// proto is regenerated; the handler will skip with a log warning.
-	uploadID := ""
+	uploadID := a.GetUploadId()
 	artifactID := a.GetArtifactId()
 
-	// Hard-fail on empty job_id. Legacy workers (pre-.pb.go regen) carry
-	// only job_id + artifact_id and never an upload_id, but we do NOT
-	// fall back by coercing artifact_id -> upload_id: BeginUpload has
-	// minted a separate upload_id (newID()), so the lookup against
-	// artifact_id would-miss-surfaces-as ErrUploadNotFound and the
-	// diagnostic on the worker side would point at the wrong cause.
-	// Instead we surface a distinct "regen-pending" log so the fix is
-	// obvious (regen the .pb.go).
 	if jobID == "" {
 		log.Printf("[GRPC] ArtifactUploaded from worker %s missing job_id — skipping", workerID)
 		return
 	}
 	if uploadID == "" {
-		log.Printf("[GRPC] ArtifactUploaded from worker %s job=%s artifactID=%s has empty upload_id — skipping (legacy pre-regen proto, regen-pending)",
+		log.Printf("[GRPC] ArtifactUploaded from worker %s job=%s artifactID=%s has empty upload_id — skipping",
 			workerID, jobID, artifactID)
 		return
 	}
 
-	// Build the finalize command. The artifact_type field is preserved
-	// for log correlation only; it is not used as authoritative state.
-	//
-	// LeaseID / AttemptNumber / ExpectedRevision are intentionally blank
-	// or zero on this legacy .pb.go path. Service.Finalize guards each
-	// field with `if X != 0` so the worker can still drive successful
-	// finalization through this code path even without the regenerated
-	// proto fields.
 	cmd := artifacts.FinalizeArtifactCommand{
 		UploadID:         uploadID,
 		JobID:            jobID,
 		WorkerID:         workerID,
-		LeaseID:          "",   // empty until .pb.go regen
-		AttemptNumber:    0,    // zero until .pb.go regen
-		ExpectedRevision: 0,    // zero until .pb.go regen
+		LeaseID:          a.GetLeaseId(),
+		AttemptNumber:    int(a.GetAttempt()),
+		ExpectedRevision: int(a.GetExpectedRevision()),
 	}
 
 	log.Printf("[GRPC] Worker %s reporting artifact upload for job %s upload=%s artifactID=%s kind=%s",

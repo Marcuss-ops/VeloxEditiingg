@@ -8,8 +8,7 @@
 --   * if workflow_runs is non-empty: proceed;
 --   * if workflow_runs is empty AND orchestrator_* are empty: drop anyway;
 --   * if workflow_runs is empty AND orchestrator_* are non-empty: abort
---     with an explicit Go-level error and instruct the operator to run
---     `velox-server migrate workflows-v2 --apply` first.
+--     with an explicit Go-level error (see pre_check.go).
 --
 -- This file is therefore intentionally unconditional — the previous version
 -- used `SELECT CASE WHEN … RAISE(ABORT, …)`, but RAISE() may only be invoked

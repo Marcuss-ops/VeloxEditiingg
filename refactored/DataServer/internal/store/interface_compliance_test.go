@@ -40,8 +40,6 @@ func TestInterface_YouTubeStore_CompileTime(t *testing.T) {
 	//   - GetYouTubeCache(key) / SetYouTubeCache(key, ts, data)
 	//   - CleanupYouTubeCache(maxAge) / ClearYouTubeCache()
 	//   - MigrateYouTubeCache(entries)
-	//   - ListYouTubeChannelMetadata()
-	//   - UpsertYouTubeChannelMetadata(id, title, tokenPath, language, addedDate, lastUsed, rawJSON)
 
 	s := newTestStore(t)
 	var ytStore youtube.YouTubeStore = s
@@ -141,41 +139,6 @@ func TestInterface_YouTubeStore_LegacyGroups(t *testing.T) {
 	}
 	if groups[0]["name"] != "TestGroup" {
 		t.Errorf("name: got %v, want %q", groups[0]["name"], "TestGroup")
-	}
-}
-
-func TestInterface_YouTubeStore_LegacyChannelMetadata(t *testing.T) {
-	s := newTestStore(t)
-
-	// Skip if migration 008 has been applied (legacy tables dropped)
-	versions, _ := migrations.AppliedVersions(s.DB())
-	hasMigration008 := false
-	for _, v := range versions {
-		if v >= 8 {
-			hasMigration008 = true
-			break
-		}
-	}
-	if hasMigration008 {
-		t.Skip("youtube_channel_metadata table dropped by migration 008")
-	}
-
-	var ytStore youtube.YouTubeStore = s
-
-	// Upsert and List via interface
-	if err := ytStore.UpsertYouTubeChannelMetadata("UC_legacy", "Legacy Channel", "/tokens/test.json", "en", "2024-01-01", "2024-06-01", `{"source":"test"}`); err != nil {
-		t.Fatalf("UpsertYouTubeChannelMetadata via interface: %v", err)
-	}
-
-	meta, err := ytStore.ListYouTubeChannelMetadata()
-	if err != nil {
-		t.Fatalf("ListYouTubeChannelMetadata via interface: %v", err)
-	}
-	if len(meta) != 1 {
-		t.Fatalf("expected 1 entry, got %d", len(meta))
-	}
-	if meta["UC_legacy"]["title"] != "Legacy Channel" {
-		t.Errorf("title: got %v, want %q", meta["UC_legacy"]["title"], "Legacy Channel")
 	}
 }
 

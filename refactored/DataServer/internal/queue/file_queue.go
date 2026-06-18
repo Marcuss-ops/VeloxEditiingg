@@ -4,6 +4,7 @@ package queue
 import (
 	"context"
 	"fmt"
+	"log"
 	"time"
 
 	"velox-server/internal/store"
@@ -225,6 +226,7 @@ func (q *FileQueue) ClaimNextJob(ctx context.Context, workerID string, allowedJo
 }
 
 func (q *FileQueue) CompleteJob(ctx context.Context, jobID string) error {
+	log.Printf("[DEPRECATED] FileQueue.CompleteJob is a legacy bypass path; SUCCEEDED should only be reachable via artifacts.Service.FinalizeArtifactAndCompleteJob (single-tx CAS gates). Remove once HTTP upload path is migrated to the new artifact pipeline.")
 	sj, err := q.lifecycle.Repo().GetJob(ctx, jobID)
 	if err != nil {
 		return fmt.Errorf("job not found: %s", jobID)
