@@ -66,22 +66,7 @@ type Job struct {
 	Logs          []JobLogEntry `json:"logs,omitempty"`
 	LogsUpdatedAt string        `json:"logs_updated_at,omitempty"`
 
-	SlotData      map[string]interface{} `json:"slot_data,omitempty"`
-	// DEPRECATED (PR4): Delivery state moved to delivery_targets + delivery_attempts.
-	OutputVideoID string `json:"output_video_id,omitempty"`
-	DriveURL      string `json:"drive_url,omitempty"`
-
-	// DEPRECATED (PR4): Drive/YouTube delivery state moved to delivery_targets + delivery_attempts tables.
-	VideoUploaded         bool   `json:"video_uploaded,omitempty"`
-	MasterVideoPath       string `json:"master_video_path,omitempty"`
-	LastUploadResult      string `json:"last_upload_result,omitempty"`
-	LastUploadAttemptAt   string `json:"last_upload_attempt_at,omitempty"`
-	LastDriveUploadResult string `json:"last_drive_upload_result,omitempty"`
-	RemoteStatus          string `json:"remote_status,omitempty"`
-	// DEPRECATED (PR4): Artifact tracking moved to artifacts table via store.InsertArtifact.
-	ArtifactID     string `json:"artifact_id,omitempty"`
-	OutputSHA256   string `json:"output_sha256,omitempty"`
-	IdempotencyKey string `json:"upload_idempotency_key,omitempty"`
+	SlotData map[string]interface{} `json:"slot_data,omitempty"`
 
 	JobFingerprint string `json:"job_fingerprint,omitempty"`
 

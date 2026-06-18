@@ -322,7 +322,7 @@ func TestBlockingReasons_FullCoverage(t *testing.T) {
 
 func createJobsTable(t *testing.T, db *sql.DB, extraCols []string) {
 	t.Helper()
-	cols := "job_id TEXT PRIMARY KEY, status TEXT"
+	cols := "job_id TEXT PRIMARY KEY"
 	for _, c := range extraCols {
 		cols += ", " + c + " TEXT"
 	}
@@ -333,17 +333,14 @@ func createJobsTable(t *testing.T, db *sql.DB, extraCols []string) {
 
 func createTasksTable(t *testing.T, db *sql.DB, name string, extraCols []string) {
 	t.Helper()
-	cols := "delivery_id TEXT PRIMARY KEY, status TEXT"
+	cols := "delivery_id TEXT PRIMARY KEY"
 	if name == "workflow_runs" {
-		cols = "run_id TEXT PRIMARY KEY, status TEXT, raw_json TEXT"
+		cols = "run_id TEXT PRIMARY KEY"
 	}
 	if name == "jobs" {
-		cols = "job_id TEXT PRIMARY KEY, status TEXT"
+		cols = "job_id TEXT PRIMARY KEY"
 	}
 	for _, c := range extraCols {
-		if c == "raw_json" && name == "workflow_runs" {
-			continue
-		}
 		cols += ", " + c + " TEXT"
 	}
 	if _, err := db.Exec(fmt.Sprintf(`CREATE TABLE %s (%s)`, name, cols)); err != nil {

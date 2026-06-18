@@ -85,6 +85,9 @@ func TestUploadCompletedVideo_AutoUploadsToYouTubeAndDrive(t *testing.T) {
 	if _, err := q.ClaimNextJob(context.Background(), "worker-1", nil); err != nil {
 		t.Fatalf("claim job: %v", err)
 	}
+	if err := ts.TransitionToRunning(context.Background(), jobID); err != nil {
+		t.Fatalf("transition to running: %v", err)
+	}
 
 	// Pre-create delivery targets for YouTube and Drive (PR4: required for auto-upload)
 	db.InsertDeliveryTarget(&store.DeliveryTarget{
@@ -137,9 +140,9 @@ func TestUploadCompletedVideo_AutoUploadsToYouTubeAndDrive(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	savedVideoPath, _ := resp["video_path"].(string)
-	if savedVideoPath == "" {
-		t.Fatalf("expected video_path in response, got %#v", resp["video_path"])
+	savedArtifactID, _ := resp["artifact_id"].(string)
+	if savedArtifactID == "" {
+		t.Fatalf("expected artifact_id in response, got %#v", resp)
 	}
 
 	// Wait for the job to be marked SUCCEEDED by the artifact pipeline.

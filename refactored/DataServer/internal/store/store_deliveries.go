@@ -272,14 +272,17 @@ func (s *SQLiteStore) GetJobDelivery(ctx context.Context, deliveryID string) (*J
 		        COALESCE(legacy_delivery_target_id, 0), status,
 		        COALESCE(idempotency_key,''), COALESCE(remote_id,''),
 		        COALESCE(remote_url,''),
-		        created_at, updated_at
+		        created_at, updated_at, COALESCE(completed_at, ''),
+		        COALESCE(next_attempt_at, ''), COALESCE(last_error_code, ''),
+		        COALESCE(last_error_message, '')
 		 FROM job_deliveries WHERE delivery_id = ?`, deliveryID)
 	var jd JobDelivery
 	var legacyID interface{}
 	var idempotencyKey, remoteID, remoteURL string
 	err := row.Scan(&jd.DeliveryID, &jd.ArtifactID, &jd.DestinationID,
 		&legacyID, &jd.Status, &idempotencyKey, &remoteID,
-		&remoteURL, &jd.CreatedAt, &jd.UpdatedAt)
+		&remoteURL, &jd.CreatedAt, &jd.UpdatedAt, &jd.CompletedAt,
+		&jd.NextAttemptAt, &jd.LastError, &jd.LastErrorMessage)
 	if err != nil {
 		return nil, err
 	}

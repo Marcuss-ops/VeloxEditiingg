@@ -391,6 +391,6 @@ func (api *CalendarAPI) hydrateQueueState(ctx context.Context, events []*store.C
 		if err != nil || job == nil {
 			continue
 		}
-		applyQueueStateToEvent(event, job)
+		applyQueueStateToEvent(ctx, event, job, api.store)
 	}
 }

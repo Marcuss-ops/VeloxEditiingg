@@ -220,7 +220,7 @@ func TestMigration003_YouTubeCanonicalTables(t *testing.T) {
 
 	tables := []string{
 		"youtube_channels",
-		"youtube_groups_v2",
+		"youtube_groups",
 		"youtube_group_channels",
 		"youtube_tracked_niches",
 	}
@@ -243,7 +243,7 @@ func TestMigration003_YouTubeForeignKeys(t *testing.T) {
 		t.Fatalf("insert channel: %v", err)
 	}
 
-	_, err = db.Exec(`INSERT INTO youtube_groups_v2 (name, group_type, created_at, updated_at) VALUES ('Test Group', 'manager', datetime('now'), datetime('now'))`)
+	_, err = db.Exec(`INSERT INTO youtube_groups (name, group_type, created_at, updated_at) VALUES ('Test Group', 'manager', datetime('now'), datetime('now'))`)
 	if err != nil {
 		t.Fatalf("insert group: %v", err)
 	}
@@ -266,19 +266,19 @@ func TestMigration003_UNIQUENameGroupType(t *testing.T) {
 	applyAllMigrations(t, db)
 
 	// Insert first group
-	_, err := db.Exec(`INSERT INTO youtube_groups_v2 (name, group_type, created_at, updated_at) VALUES ('SameName', 'manager', datetime('now'), datetime('now'))`)
+	_, err := db.Exec(`INSERT INTO youtube_groups (name, group_type, created_at, updated_at) VALUES ('SameName', 'manager', datetime('now'), datetime('now'))`)
 	if err != nil {
 		t.Fatalf("first insert: %v", err)
 	}
 
 	// Same name, different type — should succeed (UNIQUE(name, group_type))
-	_, err = db.Exec(`INSERT INTO youtube_groups_v2 (name, group_type, created_at, updated_at) VALUES ('SameName', 'upload', datetime('now'), datetime('now'))`)
+	_, err = db.Exec(`INSERT INTO youtube_groups (name, group_type, created_at, updated_at) VALUES ('SameName', 'upload', datetime('now'), datetime('now'))`)
 	if err != nil {
 		t.Errorf("same name different type should be allowed: %v", err)
 	}
 
 	// Same name, same type — should fail
-	_, err = db.Exec(`INSERT INTO youtube_groups_v2 (name, group_type, created_at, updated_at) VALUES ('SameName', 'manager', datetime('now'), datetime('now'))`)
+	_, err = db.Exec(`INSERT INTO youtube_groups (name, group_type, created_at, updated_at) VALUES ('SameName', 'manager', datetime('now'), datetime('now'))`)
 	if err == nil {
 		t.Error("expected UNIQUE violation for duplicate (name, group_type), got nil")
 	}
@@ -389,7 +389,6 @@ func TestMigration005_AppliesCleanly(t *testing.T) {
 	// Verify legacy tables are DROPPED by migration 008
 	legacyTables := []string{
 		"youtube_channel_metadata",
-		"youtube_groups",
 		"youtube_manager_channels",
 		"youtube_manager_groups",
 		"ansible_computers",
@@ -633,10 +632,10 @@ func TestIntegration_MigrationRunner_EndToEnd(t *testing.T) {
 	}
 
 	// 4b. Insert groups
-	_, err = db.Exec(`INSERT INTO youtube_groups_v2 (name, group_type, description, created_at, updated_at)
+	_, err = db.Exec(`INSERT INTO youtube_groups (name, group_type, description, created_at, updated_at)
 		VALUES ('Sports', 'manager', 'Sports channels', datetime('now'), datetime('now'))`)
 	if err != nil {
-		t.Fatalf("insert youtube_groups_v2: %v", err)
+		t.Fatalf("insert youtube_groups: %v", err)
 	}
 
 	// 4c. Add channel to group (membership with FK)
@@ -661,7 +660,7 @@ func TestIntegration_MigrationRunner_EndToEnd(t *testing.T) {
 	}
 
 	var groupName string
-	if err := db.QueryRow(`SELECT name FROM youtube_groups_v2 WHERE id=1`).Scan(&groupName); err != nil {
+	if err := db.QueryRow(`SELECT name FROM youtube_groups WHERE id=1`).Scan(&groupName); err != nil {
 		t.Fatalf("query group name: %v", err)
 	}
 	if groupName != "Sports" {
@@ -764,7 +763,7 @@ func TestIntegration_MigrationRunner_EndToEnd(t *testing.T) {
 
 	// ---- Phase 6: Migration 008 — Legacy tables dropped ----
 	legacyTables := []string{
-		"youtube_channel_metadata", "youtube_groups",
+		"youtube_channel_metadata",
 		"youtube_manager_channels", "youtube_manager_groups",
 		"ansible_computers",
 	}

@@ -160,17 +160,7 @@ func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
 		return nil, err
 	}
 
-	if cfg.DataDir != "" {
-		if results, err := sqliteStore.ImportLegacyJSON(cfg.DataDir); err != nil {
-			log.Printf("[BOOTSTRAP] Legacy JSON import error (non-fatal): %v", err)
-		} else {
-			for _, r := range results {
-				if r.Status == "imported" {
-					log.Printf("[BOOTSTRAP] Migrated: %s (%d records)", r.Source.Name, r.Imported)
-				}
-			}
-		}
-	}
+
 
 	reg := workersreg.New(sqliteStore)
 	revokedCount := len(reg.ListRevoked())

@@ -2,27 +2,19 @@ package main
 
 import (
 	"fmt"
-	"log"
-	"net/http"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
-	"time"
 
 	"github.com/gin-gonic/gin"
 	"velox-server/internal/app"
 	"velox-server/internal/config"
-	"velox-server/internal/deprecation"
-	remoteansible "velox-server/internal/handlers/remote/ansible"
 	workersuploads "velox-server/internal/handlers/remote/workers/uploads"
 	"velox-server/internal/handlers/server/analytics"
 	"velox-server/internal/handlers/server/api"
-	"velox-server/internal/handlers/server/groups"
 	"velox-server/internal/handlers/server/darkeditor"
-	pipelinehandler "velox-server/internal/handlers/server/pipeline"
+	"velox-server/internal/handlers/server/groups"
 	scripthandlers "velox-server/internal/handlers/server/script"
-	workersreg "velox-server/internal/workers"
 	"velox-server/internal/workflow"
 )
 
@@ -75,24 +67,10 @@ func newRouter(cfg *config.Config, deps *serverDeps, registry *app.Registry) *gi
 	// ── Module routes (health, workers, youtube, drive, ansible, frontend) ──
 	registry.RegisterRoutes(r)
 
-	// Get ansible handlers from the module
-	var ansibleHandlers *remoteansible.AnsibleHandlers
-	if deps.ansibleModule != nil {
-		ansibleHandlers = deps.ansibleModule.Handlers()
-	}
 
 	// ── Remaining routes not yet in modules ──────────────────────────────────
-	dep := buildDeprecationRegistry()
-	snap := dep.Snapshot()
-	log.Printf("[DEPRECATION] %d legacy endpoints tracked; sunset %s (override via VELOX_LEGACY_SUNSET_DAYS, default 14d, max 30d). Read counters at /api/_internal/deprecation_stats.",
-		len(snap.Stats), snap.SunsetAt)
-	registerDeprecationStatsRoute(r, cfg, dep)
-	registerAPIV1Routes(r, cfg, deps, ansibleHandlers)
-	registerV2JobRoutes(r, cfg, deps)
 	registerOrchestratorAdminRoutes(r, cfg, deps)
-	registerUploadAndBundleCompatRoutes(r, cfg, deps)
 	registerScriptRoutes(r, cfg, deps)
-	registerPipelineRoutes(r, cfg, deps, dep)
 
 	// Initialize groups handlers with SQLite store
 	groups.InitGroupsStore(deps.sqliteStore)
@@ -145,76 +123,6 @@ func registerScriptRoutes(r *gin.Engine, cfg *config.Config, deps *serverDeps) {
 	v1Group := r.Group("/api/v1/script")
 	v1Group.Use(api.AdminAuthMiddleware(cfg))
 	scripthandlers.RegisterRoutes(v1Group, cfg, deps.fileQ, deps.sqliteStore)
-}
-
-// buildDeprecationRegistry returns the in-memory Registry used to track
-// calls to legacy endpoints (post-split), wired with a sunset window.
-// PR 2 of the velox-core verdict: keep legacy endpoints alive for 7-14
-// days while the operator confirms zero callers, then delete them.
-//
-// Sunset is configurable via VELOX_LEGACY_SUNSET_DAYS (default 14, max 30).
-func buildDeprecationRegistry() *deprecation.Registry {
-	now := time.Now().UTC()
-	sunsetDays := 14
-	if v := strings.TrimSpace(os.Getenv("VELOX_LEGACY_SUNSET_DAYS")); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n >= 1 && n <= 30 {
-			sunsetDays = n
-		}
-	}
-	reg := deprecation.New(now, now.Add(time.Duration(sunsetDays)*24*time.Hour))
-
-	// Legacy /api/jobs/* worker polling endpoints (superceded by /api/v1/jobs/* V2 routes
-	// for new workers; these four endpoints carry the historical worker contract).
-	reg.Register("POST", "/api/jobs/get", "")
-	reg.Register("POST", "/api/jobs/result", "POST /api/v1/jobs/:id/result")
-	reg.Register("POST", "/api/jobs/complete", "POST /api/v1/jobs/:id/complete")
-	reg.Register("POST", "/api/jobs/lease", "PUT /api/v1/jobs/:id/lease")
-
-	// Legacy /api/remote/pipeline/* + /api/script-{simple,multiple} endpoints.
-	reg.Register("POST", "/api/remote/pipeline/generate", "POST /api/v1/pipeline/generate")
-	reg.Register("GET", "/api/remote/pipeline/status/:trace_id", "GET /api/v1/pipeline/status/:trace_id")
-	reg.Register("DELETE", "/api/remote/pipeline/cancel/:trace_id", "DELETE /api/v1/pipeline/cancel/:trace_id")
-	reg.Register("POST", "/api/script-simple", "POST /api/v1/script/generate-with-images")
-	reg.Register("POST", "/api/script-multiple", "POST /api/v1/script (batch)")
-
-	return reg
-}
-
-// registerDeprecationStatsRoute exposes /api/_internal/deprecation_stats
-// behind the admin auth middleware. Operators poll this endpoint to
-// confirm caller counts are zero before scheduling the next PR that
-// actually removes the legacy handlers.
-func registerDeprecationStatsRoute(r *gin.Engine, cfg *config.Config, dep *deprecation.Registry) {
-	if dep == nil {
-		return
-	}
-	internal := r.Group("/api/_internal")
-	internal.Use(api.AdminAuthMiddleware(cfg))
-	internal.GET("/deprecation_stats", func(c *gin.Context) {
-		c.JSON(http.StatusOK, dep.Snapshot())
-	})
-}
-
-func normalizeLegacyJobTime(v interface{}) interface{} {
-	switch tv := v.(type) {
-	case string:
-		if strings.TrimSpace(tv) != "" {
-			return tv
-		}
-	case int64:
-		if tv > 0 {
-			return time.Unix(tv, 0).UTC().Format(time.RFC3339)
-		}
-	case int:
-		if tv > 0 {
-			return time.Unix(int64(tv), 0).UTC().Format(time.RFC3339)
-		}
-	case float64:
-		if tv > 0 {
-			return time.Unix(int64(tv), 0).UTC().Format(time.RFC3339)
-		}
-	}
-	return v
 }
 
 // registerOrchestratorAdminRoutes is a thin wrapper that mounts
@@ -347,45 +255,3 @@ func registerOrchestratorRoutes(v1Admin gin.IRoutes, repo workflow.Repository) {
 	})
 }
 
-func registerPipelineRoutes(r *gin.Engine, cfg *config.Config, deps *serverDeps, dep *deprecation.Registry) {
-	// Legacy pipeline endpoints: still alive for the sunset window so existing
-	// callers keep working. Each is wrapped by dep.Track(name) to:
-	//   - bump per-endpoint hit/error counters
-	//   - emit RFC 8594 Deprecation/Sunset + Link: <successor>
-	//   - write a one-line [DEPRECATED] entry to server.log
-	// Once the 7-14 day window elapses with zero hits, a follow-up PR
-	// deletes these routes and the corresponding handlers.
-	var cmdMgr *workersreg.CommandManager
-	if deps.workerUpdateHandler != nil {
-		cmdMgr = deps.workerUpdateHandler.CommandManager()
-	}
-
-	r.POST("/api/remote/pipeline/generate",
-		dep.Track("POST", "/api/remote/pipeline/generate"),
-		pipelinehandler.PipelineGenerate(cfg, deps.fileQ))
-
-	r.GET("/api/remote/pipeline/status/:trace_id",
-		dep.Track("GET", "/api/remote/pipeline/status/:trace_id"),
-		pipelinehandler.PipelineStatus(cfg))
-
-	r.DELETE("/api/remote/pipeline/cancel/:trace_id",
-		dep.Track("DELETE", "/api/remote/pipeline/cancel/:trace_id"),
-		pipelinehandler.PipelineCancel(cfg, deps.fileQ, cmdMgr))
-
-	r.POST("/api/script-simple",
-		dep.Track("POST", "/api/script-simple"),
-		pipelinehandler.ScriptSimple(cfg))
-
-	r.POST("/api/script-multiple",
-		dep.Track("POST", "/api/script-multiple"),
-		pipelinehandler.ScriptMultiple(cfg))
-}
-
-func registerAPIV1Routes(r *gin.Engine, cfg *config.Config, deps *serverDeps, ansibleHandlers *remoteansible.AnsibleHandlers) {
-}
-
-func registerV2JobRoutes(r *gin.Engine, cfg *config.Config, deps *serverDeps) {
-}
-
-func registerUploadAndBundleCompatRoutes(r *gin.Engine, cfg *config.Config, deps *serverDeps) {
-}

@@ -5,7 +5,6 @@ package joblifecycle
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"time"
 
@@ -33,11 +32,8 @@ func NewService(lc *queue.LifecycleService, dbStore *store.SQLiteStore, maxRetri
 
 // CompleteJobResult carries the non-status fields to write after job completion.
 type CompleteJobResult struct {
-	CompletedBy    string
-	ArtifactID     string
-	OutputSHA256   string
-	IdempotencyKey string
-	EndTime        string
+	CompletedBy string
+	EndTime     string
 }
 
 // SubmitResult completes a job and writes result metadata using targeted
@@ -76,26 +72,7 @@ func (s *Service) SubmitResult(ctx context.Context, jobID string, result Complet
 	}
 	_ = s.dbStore.UpdateJobSupplementary(jobID, supplementary)
 
-	// 3. Write clean result_json (no operational fields)
-	cleanResult := map[string]interface{}{
-		"job_id": jobID,
-	}
-	if result.ArtifactID != "" {
-		cleanResult["primary_artifact_id"] = result.ArtifactID
-	}
-	if result.OutputSHA256 != "" {
-		cleanResult["output_sha256"] = result.OutputSHA256
-	}
-	if result.IdempotencyKey != "" {
-		cleanResult["upload_idempotency_key"] = result.IdempotencyKey
-	}
 
-	if len(cleanResult) > 1 { // more than just job_id
-		resultJSON, err := json.Marshal(cleanResult)
-		if err == nil {
-			_ = s.dbStore.UpsertJobResult(jobID, resultJSON)
-		}
-	}
 
 	return nil
 }

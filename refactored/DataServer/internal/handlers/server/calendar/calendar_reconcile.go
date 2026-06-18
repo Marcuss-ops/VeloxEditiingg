@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"velox-server/internal/compat"
 	"velox-server/internal/queue"
 	"velox-server/internal/store"
 )
@@ -54,7 +55,7 @@ func (api *CalendarAPI) reconcileCalendarEvent(ctx context.Context, event *store
 		if err := queue.PersistJob(existing, api.store); err != nil {
 			return err
 		}
-		applyQueueStateToEvent(event, existing)
+		applyQueueStateToEvent(ctx, event, existing, api.store)
 		return nil
 	}
 	if existing != nil && (existing.Status == queue.StatusRunning || existing.Status == queue.StatusLeased) {
@@ -69,7 +70,7 @@ func (api *CalendarAPI) reconcileCalendarEvent(ctx context.Context, event *store
 		if err := queue.PersistJob(existing, api.store); err != nil {
 			return err
 		}
-		applyQueueStateToEvent(event, existing)
+		applyQueueStateToEvent(ctx, event, existing, api.store)
 		return nil
 	}
 	if existing != nil && existing.Status != queue.StatusPending && existing.Status != queue.StatusRunning && existing.Status != queue.StatusLeased {
@@ -116,7 +117,7 @@ func calendarEventDue(event *store.CalendarEvent) bool {
 	return !eventTime.After(time.Now().UTC())
 }
 
-func applyQueueStateToEvent(event *store.CalendarEvent, job *queue.Job) {
+func applyQueueStateToEvent(ctx context.Context, event *store.CalendarEvent, job *queue.Job, dbStore *store.SQLiteStore) {
 	if event == nil || job == nil {
 		return
 	}
@@ -140,8 +141,10 @@ func applyQueueStateToEvent(event *store.CalendarEvent, job *queue.Job) {
 		event.Status = "processing"
 	case queue.StatusSucceeded:
 		event.Status = "completed"
-		event.OutputVideoPath = job.MasterVideoPath
-		event.OutputVideoURL = job.DriveURL
+		if view, err := compat.AssembleLegacyJobView(ctx, dbStore, job); err == nil && view != nil {
+			event.OutputVideoPath = view.MasterVideoPath
+			event.OutputVideoURL = view.DriveURL
+		}
 	case queue.StatusFailed:
 		event.Status = "failed"
 	}

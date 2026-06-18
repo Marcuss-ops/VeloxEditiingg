@@ -374,19 +374,9 @@ func TestCalendarAPI_StatusLifecycleAndOutputs(t *testing.T) {
 	}
 	event := decodeEvent(t, w)
 
-	// Use LeaseJob to set RUNNING, then PersistJob to set output fields
+	// Use LeaseJob to set RUNNING
 	if err := q.LeaseJob(ctx, event.JobID, "worker-1"); err != nil {
 		t.Fatalf("lease job: %v", err)
-	}
-	job, err := q.GetJob(ctx, event.JobID)
-	if err != nil {
-		t.Fatalf("get job: %v", err)
-	}
-	// Persist output fields on the job
-	job.MasterVideoPath = "/tmp/output.mp4"
-	job.DriveURL = "https://drive.example.com/video"
-	if err := queue.PersistJob(job, q.GetDBStore()); err != nil {
-		t.Fatalf("persist job with output: %v", err)
 	}
 
 	w = httptest.NewRecorder()

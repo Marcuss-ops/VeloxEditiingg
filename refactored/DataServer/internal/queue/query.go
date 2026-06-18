@@ -156,12 +156,6 @@ func (q *QueryService) GetJobAsMap(ctx context.Context, jobID string) (map[strin
 	result["max_retries"] = job.MaxRetries
 	result["last_error"] = job.LastError
 	result["error_message"] = job.ErrorMessage
-	result["video_uploaded"] = job.VideoUploaded
-	result["master_video_path"] = job.MasterVideoPath
-	result["artifact_id"] = job.ArtifactID
-	result["output_sha256"] = job.OutputSHA256
-	result["upload_idempotency_key"] = job.IdempotencyKey
-	result["output_video_id"] = job.OutputVideoID
 	result["run_id"] = job.RunID
 	result["job_run_id"] = job.RunID
 	if len(job.Logs) > 0 {

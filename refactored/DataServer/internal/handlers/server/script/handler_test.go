@@ -110,8 +110,12 @@ func TestGenerateWithImages_EnqueuesSceneImageJob(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get job: %v", err)
 	}
-	if got := rawJob["video_mode"]; got != scriptSceneMode {
-		t.Fatalf("want persisted video_mode %q, got %v", scriptSceneMode, got)
+	var videoMode string
+	if req, ok := rawJob["request_json"].(map[string]interface{}); ok {
+		videoMode, _ = req["video_mode"].(string)
+	}
+	if videoMode != scriptSceneMode {
+		t.Fatalf("want persisted video_mode %q, got %v", scriptSceneMode, videoMode)
 	}
 	if got := rawJob["scenes_json"]; got == "" {
 		t.Fatalf("want scenes_json persisted, got empty")

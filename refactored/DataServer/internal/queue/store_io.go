@@ -58,20 +58,10 @@ func MapToJob(m map[string]any) *Job {
 	job.ClaimedAt = asString(m["claimed_at"])
 	job.LeaseID = asString(m["lease_id"])
 	job.LeaseExpiry = m["lease_expiry"]
-	job.OutputVideoID = asString(m["output_video_id"])
-	job.DriveURL = asString(m["drive_url"])
 	job.JobFingerprint = asString(m["job_fingerprint"])
 	job.LastError = asString(m["last_error"])
 	job.ErrorMessage = asString(m["error_message"])
-	job.MasterVideoPath = asString(m["master_video_path"])
-	job.ArtifactID = asString(m["artifact_id"])
-	job.OutputSHA256 = asString(m["output_sha256"])
-	job.IdempotencyKey = asString(m["upload_idempotency_key"])
 	job.LogsUpdatedAt = asString(m["logs_updated_at"])
-	job.LastUploadResult = asString(m["last_upload_result"])
-	job.LastUploadAttemptAt = asString(m["last_upload_attempt_at"])
-	job.LastDriveUploadResult = asString(m["last_drive_upload_result"])
-	job.RemoteStatus = asString(m["remote_status"])
 	job.SubmittedVia = asString(m["submitted_via"])
 	job.LastActivity = asString(m["last_activity"])
 	job.FailedBy = asString(m["failed_by"])
@@ -87,13 +77,6 @@ func MapToJob(m map[string]any) *Job {
 	job.RetryCount = dbutil.IntFromMap(m, "retry_count")
 	job.Attempt = dbutil.IntFromMap(m, "attempt")
 	job.MaxRetries = dbutil.IntFromMap(m, "max_retries")
-
-	// Boolean fields
-	if b, ok := m["video_uploaded"].(bool); ok {
-		job.VideoUploaded = b
-	} else if s, ok := m["video_uploaded"].(string); ok && s == "1" {
-		job.VideoUploaded = true
-	}
 
 	// Timestamp fields (leave as interface{} from m)
 	job.CreatedAt = m["created_at"]
@@ -205,21 +188,10 @@ func PersistJobResult(job *Job, dbStore *store.SQLiteStore) error {
 	m["error_message"] = job.ErrorMessage
 	m["failed_at"] = job.FailedAt
 	m["failed_by"] = job.FailedBy
-	m["video_uploaded"] = job.VideoUploaded
-	m["master_video_path"] = job.MasterVideoPath
-	m["artifact_id"] = job.ArtifactID
-	m["output_sha256"] = job.OutputSHA256
-	m["upload_idempotency_key"] = job.IdempotencyKey
-	m["output_video_id"] = job.OutputVideoID
-	m["drive_url"] = job.DriveURL
 	m["run_id"] = job.RunID
 	m["job_run_id"] = job.RunID
 	m["logs_updated_at"] = job.LogsUpdatedAt
 	m["job_fingerprint"] = job.JobFingerprint
-	m["last_upload_result"] = job.LastUploadResult
-	m["last_upload_attempt_at"] = job.LastUploadAttemptAt
-	m["last_drive_upload_result"] = job.LastDriveUploadResult
-	m["remote_status"] = job.RemoteStatus
 	m["submitted_via"] = job.SubmittedVia
 	m["last_activity"] = job.LastActivity
 	m["slot_data"] = job.SlotData

@@ -72,7 +72,7 @@ func (s *Service) loadOAuthChannelsFromSQLite() (int, error) {
 		// assignment keeps go vet quiet while preserving the
 		// documented surface for future S11+ ops work.
 		_, _ = row["token_type"].(string)
-		_, _ = row["expiry"].(string)
+		expiryStr, _ := row["expiry"].(string)
 		_, _ = row["scopes"].(string)
 		_, _ = row["key_version"].(int64)
 
@@ -96,10 +96,18 @@ func (s *Service) loadOAuthChannelsFromSQLite() (int, error) {
 			refreshPlain = rp
 		}
 
+		var expiryVal time.Time
+		if expiryStr != "" {
+			if t, perr := time.Parse(expiryTimeLayout, expiryStr); perr == nil {
+				expiryVal = t
+			}
+		}
+
 		ch := &AuthChannel{
 			ID:           cid,
 			AccessToken:  string(accessPlain),
 			RefreshToken: string(refreshPlain),
+			Expiry:       expiryVal,
 		}
 		s.mu.Lock()
 		s.channels[cid] = ch

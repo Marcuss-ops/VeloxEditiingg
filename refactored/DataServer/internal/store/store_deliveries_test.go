@@ -106,9 +106,10 @@ func TestClaimDeliveries_ConcurrentRunners(t *testing.T) {
 
 	insertTestDeliveryDestination(t, db, "dest-d", "drive")
 	for i := 0; i < 10; i++ {
-		insertTestArtifact(t, db, "art-conc-"+string(rune('0'+i)), "job-conc", "/tmp/f.mp4")
-		insertTestJobDelivery(t, db, "del_art-conc-"+string(rune('0'+i))+"_dest-d",
-			"art-conc-"+string(rune('0'+i)), "dest-d")
+		suffix := string(rune('0' + i))
+		insertTestArtifact(t, db, "art-conc-"+suffix, "job-conc", "/tmp/f-"+suffix+".mp4")
+		insertTestJobDelivery(t, db, "del_art-conc-"+suffix+"_dest-d",
+			"art-conc-"+suffix, "dest-d")
 	}
 
 	// Two runners claim 5 each
@@ -151,7 +152,7 @@ func TestClaimDeliveries_ZombieReclaim(t *testing.T) {
 	}
 
 	// Wait for lease to expire
-	time.Sleep(1100 * time.Millisecond)
+	time.Sleep(2100 * time.Millisecond)
 
 	// A new runner should reclaim the zombie
 	leases2, err := db.ClaimDeliveries(ctx, "runner-new", 5*time.Minute, 1)

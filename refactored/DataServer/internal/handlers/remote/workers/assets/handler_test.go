@@ -11,6 +11,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"velox-server/internal/config"
+	"velox-server/internal/store"
 	workersreg "velox-server/internal/workers"
 )
 
@@ -20,8 +21,14 @@ func TestServeAssetRequiresWorkerAuthentication(t *testing.T) {
 	assetID := strings.Repeat("a", 64)
 	writeTestAsset(t, tempDir, assetID, []byte("voiceover-bytes"))
 
-	tokenMgr := workersreg.NewTokenManager(nil)
-	handler := NewHandler(&config.Config{DataDir: tempDir}, tokenMgr)
+	db, err := store.NewSQLiteStore(tempDir + "/test_assets.db")
+	if err != nil {
+		t.Fatalf("failed to create sqlite store: %v", err)
+	}
+	defer db.Close()
+
+	tokenMgr := workersreg.NewTokenManager(db)
+	handler := NewHandler(&config.Config{DataDir: tempDir, Runtime: config.RuntimeConfig{DataDir: tempDir}}, tokenMgr)
 	r := gin.New()
 	r.GET("/api/v1/worker-assets/:asset_id", handler.ServeAsset())
 
@@ -40,10 +47,16 @@ func TestServeAssetSupportsContentLengthTypeAndRange(t *testing.T) {
 	assetBytes := []byte("0123456789abcdef")
 	writeTestAsset(t, tempDir, assetID, assetBytes)
 
-	tokenMgr := workersreg.NewTokenManager(nil)
+	db, err := store.NewSQLiteStore(tempDir + "/test_assets.db")
+	if err != nil {
+		t.Fatalf("failed to create sqlite store: %v", err)
+	}
+	defer db.Close()
+
+	tokenMgr := workersreg.NewTokenManager(db)
 	token := tokenMgr.GenerateToken("worker-1")
 
-	handler := NewHandler(&config.Config{DataDir: tempDir}, tokenMgr)
+	handler := NewHandler(&config.Config{DataDir: tempDir, Runtime: config.RuntimeConfig{DataDir: tempDir}}, tokenMgr)
 	r := gin.New()
 	r.GET("/api/v1/worker-assets/:asset_id", handler.ServeAsset())
 
@@ -83,9 +96,16 @@ func TestServeAssetSupportsContentLengthTypeAndRange(t *testing.T) {
 func TestServeAssetRejectsTraversalAndUnknownAssets(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	tempDir := t.TempDir()
-	tokenMgr := workersreg.NewTokenManager(nil)
+
+	db, err := store.NewSQLiteStore(tempDir + "/test_assets.db")
+	if err != nil {
+		t.Fatalf("failed to create sqlite store: %v", err)
+	}
+	defer db.Close()
+
+	tokenMgr := workersreg.NewTokenManager(db)
 	token := tokenMgr.GenerateToken("worker-1")
-	handler := NewHandler(&config.Config{DataDir: tempDir}, tokenMgr)
+	handler := NewHandler(&config.Config{DataDir: tempDir, Runtime: config.RuntimeConfig{DataDir: tempDir}}, tokenMgr)
 
 	w := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(w)
