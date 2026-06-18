@@ -91,10 +91,10 @@ func MustDropLegacyOrchestrator(db *sql.DB, version int) error {
 		ErrLegacyOrchestratorNotMigrated, orchRows, workflowRows)
 }
 
-// ErrStorageKeyDuplicates is returned when migration 029 would attempt to
+// ErrStorageKeyDuplicates is returned when migration 030 would attempt to
 // CREATE UNIQUE INDEX on artifacts(storage_provider, storage_key) but legacy
 // rows already contain duplicates for that pair. Operators must clean up
-// duplicates before migration 029 can proceed.
+// duplicates before migration 030 can proceed.
 var ErrStorageKeyDuplicates = errors.New(
 	"migrations: artifacts(storage_provider, storage_key) has duplicates; " +
 		"run `SELECT storage_provider, storage_key, COUNT(*) FROM artifacts " +
@@ -103,10 +103,10 @@ var ErrStorageKeyDuplicates = errors.New(
 )
 
 // MustEnsureNoStorageKeyDuplicates is invoked by RunMigrations before
-// migration 029 to enforce the precondition that no two rows in
+// migration 030 to enforce the precondition that no two rows in
 // `artifacts` share the same (storage_provider, storage_key) pair.
 //
-// Migration 029_artifact_uploads.sql installs:
+// Migration 030_artifact_uploads.sql installs:
 //
 //	CREATE UNIQUE INDEX idx_artifacts_storage_key
 //	  ON artifacts(storage_provider, storage_key)
@@ -118,12 +118,12 @@ var ErrStorageKeyDuplicates = errors.New(
 // instead of a generic SQLite constraint failure.
 //
 // Returns nil when no duplicates exist; returns ErrStorageKeyDuplicates
-// (wrapped with COUNT and a sample) when they do. Versions other than 29
+// (wrapped with COUNT and a sample) when they do. Versions other than 30
 // are no-ops so this hook can sit in the RunMigrations loop without
 // touching unrelated migrations.
 func MustEnsureNoStorageKeyDuplicates(db *sql.DB, version int) error {
-	if version != 29 {
-		// Defence in depth — only meaningful for 029_artifact_uploads.
+	if version != 30 {
+		// Defence in depth — only meaningful for 030_artifact_uploads.
 		return nil
 	}
 	if db == nil {

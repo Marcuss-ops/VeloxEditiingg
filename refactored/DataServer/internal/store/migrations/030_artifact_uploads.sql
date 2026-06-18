@@ -1,4 +1,4 @@
--- 029_artifact_uploads.sql — PR 2 (Chunk 1/3 foundation)
+-- 030_artifact_uploads.sql — PR 2 (Chunk 1/3 foundation)
 --
 -- Rationale (PR 2 spec, "Nuova struttura applicativa"):
 --   * artifact_uploads is the master-side record of a single upload session
