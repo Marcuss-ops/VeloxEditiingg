@@ -5,12 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
-	"net/http"
-	neturl "net/url"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -219,173 +214,22 @@ func buildSceneImagePayload(rawPayload map[string]interface{}, dataDir, videosDi
 	return normalized, nil
 }
 
-func stageVoiceoverAssets(dataDir, masterURL, jobID string, voiceoverPaths []string) ([]string, error) {
+func stageVoiceoverAssets(_ /* dataDir */, _ /* masterURL */, _ /* jobID */ string, voiceoverPaths []string) ([]string, error) {
 	if len(voiceoverPaths) == 0 {
 		return nil, fmt.Errorf("voiceover_path or source_media is required")
 	}
-	if getVoiceoverAssetService() != nil {
-		return append([]string{}, voiceoverPaths...), nil
-	}
-
-	staged := make([]string, 0, len(voiceoverPaths))
-	if strings.TrimSpace(masterURL) == "" {
-		return append(staged, voiceoverPaths...), nil
-	}
-
-	baseMasterURL := strings.TrimRight(strings.TrimSpace(masterURL), "/")
-	client := &http.Client{Timeout: 90 * time.Second}
-	for idx, source := range voiceoverPaths {
-		if !isLocalAssetSource(source) {
-			staged = append(staged, paths.NormalizeDriveURL(source))
-			continue
-		}
-
-		assetDir := filepath.Join(dataDir, "worker_downloads", "script_assets", jobID)
-		if err := os.MkdirAll(assetDir, 0o755); err != nil {
-			return nil, fmt.Errorf("create script asset dir: %w", err)
-		}
-
-		filename := stagedAssetFilename("voiceover", source, idx)
-		if filename == "" {
-			filename = fmt.Sprintf("voiceover_%d", idx+1)
-		}
-		destPath := filepath.Join(assetDir, filename)
-		if err := copyOrDownloadAsset(client, source, destPath); err != nil {
-			return nil, fmt.Errorf("stage voiceover %d: %w", idx+1, err)
-		}
-		// DEPRECATED: Legacy asset URL format. New code should use /api/v1/worker-assets/:asset_id.
-		staged = append(staged, fmt.Sprintf("%s/api/worker/assets/voiceover/%s/%s", baseMasterURL, jobID, filename))
-	}
-
-	return staged, nil
+	// With AssetService wired, paths are resolved to velox-asset:// references
+	// by resolveVoiceoverPayload. Without AssetService, paths are returned as-is.
+	return append([]string{}, voiceoverPaths...), nil
 }
 
-func stageSceneImageAssets(dataDir, masterURL, jobID string, sceneEntries []map[string]interface{}, sceneImagePaths []string) ([]string, error) {
+func stageSceneImageAssets(_ /* dataDir */, _ /* masterURL */, _ /* jobID */ string, _ /* sceneEntries */ []map[string]interface{}, sceneImagePaths []string) ([]string, error) {
 	if len(sceneImagePaths) == 0 {
 		return nil, nil
 	}
-	if strings.TrimSpace(masterURL) == "" {
-		return append([]string{}, sceneImagePaths...), nil
-	}
-	if getVoiceoverAssetService() != nil {
-		return append([]string{}, sceneImagePaths...), nil
-	}
-
-	baseMasterURL := strings.TrimRight(strings.TrimSpace(masterURL), "/")
-	client := &http.Client{Timeout: 90 * time.Second}
-	staged := make([]string, 0, len(sceneImagePaths))
-
-	for idx, source := range sceneImagePaths {
-		if !isLocalAssetSource(source) {
-			staged = append(staged, paths.NormalizeDriveURL(source))
-			continue
-		}
-
-		assetDir := filepath.Join(dataDir, "worker_downloads", "script_assets", jobID)
-		if err := os.MkdirAll(assetDir, 0o755); err != nil {
-			return nil, fmt.Errorf("create script asset dir: %w", err)
-		}
-
-		filename := stagedAssetFilename("scene_image", source, idx)
-		if filename == "" {
-			filename = fmt.Sprintf("scene_image_%d", idx+1)
-		}
-		destPath := filepath.Join(assetDir, filename)
-		if err := copyOrDownloadAsset(client, source, destPath); err != nil {
-			return nil, fmt.Errorf("stage scene image %d: %w", idx+1, err)
-		}
-		// DEPRECATED: Legacy asset URL format. New code should use /api/v1/worker-assets/:asset_id.
-		staged = append(staged, fmt.Sprintf("%s/api/worker/assets/scene-image/%s/%s", baseMasterURL, jobID, filename))
-	}
-
-	return staged, nil
-}
-
-func isLocalAssetSource(source string) bool {
-	if info, err := os.Stat(strings.TrimSpace(source)); err == nil && !info.IsDir() {
-		return true
-	}
-	return false
-}
-
-func stagedAssetFilename(kind, source string, idx int) string {
-	if trimmed := strings.TrimSpace(source); trimmed != "" {
-		prefix := strings.TrimSpace(kind)
-		if prefix == "" {
-			prefix = "asset"
-		}
-		if _, err := os.Stat(trimmed); err == nil {
-			base := filepath.Base(trimmed)
-			if base != "" && base != "." && base != string(filepath.Separator) {
-				return fmt.Sprintf("%s_%d_%s", prefix, idx+1, base)
-			}
-		}
-		if u, err := neturl.Parse(trimmed); err == nil && u.Scheme != "" {
-			base := filepath.Base(u.Path)
-			if base != "" && base != "." && base != "uc" && base != "download" {
-				return fmt.Sprintf("%s_%d_%s", prefix, idx+1, base)
-			}
-		}
-	}
-	if strings.TrimSpace(kind) == "scene_image" {
-		return fmt.Sprintf("scene_image_%d", idx+1)
-	}
-	return fmt.Sprintf("%s_%d", strings.TrimSpace(kind), idx+1)
-}
-
-func copyOrDownloadAsset(client *http.Client, source, destPath string) error {
-	if source == "" {
-		return fmt.Errorf("empty source")
-	}
-	if info, err := os.Stat(source); err == nil && !info.IsDir() {
-		input, err := os.Open(source)
-		if err != nil {
-			return err
-		}
-		defer input.Close()
-		return writeStreamToFile(input, destPath)
-	}
-
-	resolved := paths.NormalizeDriveURL(source)
-	req, err := http.NewRequest(http.MethodGet, resolved, nil)
-	if err != nil {
-		return err
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("download failed: %s", resp.Status)
-	}
-	return writeStreamToFile(resp.Body, destPath)
-}
-
-func writeStreamToFile(r io.Reader, destPath string) error {
-	if err := os.MkdirAll(filepath.Dir(destPath), 0o755); err != nil {
-		return err
-	}
-	tmpPath := destPath + ".tmp"
-	out, err := os.Create(tmpPath)
-	if err != nil {
-		return err
-	}
-	_, copyErr := io.Copy(out, r)
-	closeErr := out.Close()
-	if copyErr != nil {
-		_ = os.Remove(tmpPath)
-		return copyErr
-	}
-	if closeErr != nil {
-		_ = os.Remove(tmpPath)
-		return closeErr
-	}
-	if err := os.Rename(tmpPath, destPath); err != nil {
-		_ = os.Remove(tmpPath)
-		return err
-	}
-	return nil
+	// With AssetService wired, paths are resolved to velox-asset:// references
+	// by resolveSceneImagePayload. Without AssetService, paths are returned as-is.
+	return append([]string{}, sceneImagePaths...), nil
 }
 
 // NormalizeScenesPayload normalizes a scenes payload from various input shapes.

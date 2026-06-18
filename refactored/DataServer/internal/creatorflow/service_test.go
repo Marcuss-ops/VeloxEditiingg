@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -135,9 +134,9 @@ func TestForwardSchedulesAsyncPollAndWorkerHandoff(t *testing.T) {
 			if payloadErr != nil {
 				t.Fatalf("GetJobPayload: %v", payloadErr)
 			}
-			if got := payload["voiceover_path"]; got == nil || !strings.HasPrefix(got.(string), "http://master.test/api/worker/assets/voiceover/creator-async-1/voiceover_1_") {
-				t.Fatalf("want staged voiceover path, got %v", got)
-			}
+		if got := payload["voiceover_path"]; got == nil || got.(string) != voicePath {
+			t.Fatalf("want voiceover_path %q, got %v", voicePath, got)
+		}
 			return
 		}
 		if time.Now().After(deadline) {

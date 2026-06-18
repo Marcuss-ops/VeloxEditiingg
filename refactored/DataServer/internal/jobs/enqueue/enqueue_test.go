@@ -4,10 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
-
-	"velox-shared/paths"
 )
 
 func TestBuildSceneImagePayload(t *testing.T) {
@@ -131,36 +128,19 @@ func TestBuildSceneImagePayloadForMaster(t *testing.T) {
 		t.Fatal(err)
 	}
 	vp, _ := result["voiceover_path"].(string)
-	if !strings.HasPrefix(vp, "http://master.example/api/worker/assets/voiceover/") {
-		t.Errorf("want staged voiceover url, got %q", vp)
+	if vp != srcVoice {
+		t.Errorf("want voiceover_path %q, got %q", srcVoice, vp)
 	}
 	sp, _ := result["scene_image_paths"].([]string)
-	if len(sp) != 1 || !strings.HasPrefix(sp[0], "http://master.example/api/worker/assets/scene-image/") {
-		t.Fatalf("want staged scene image url, got %v", sp)
+	if len(sp) != 1 || sp[0] != srcImage {
+		t.Fatalf("want scene_image_paths [%q], got %v", srcImage, sp)
 	}
 	scenes, _ := result["scenes"].([]map[string]interface{})
 	if len(scenes) != 1 {
 		t.Fatalf("want 1 scene, got %d", len(scenes))
 	}
-	if img, _ := scenes[0]["image_link"].(string); !strings.HasPrefix(img, "http://master.example/api/worker/assets/scene-image/") {
-		t.Fatalf("want staged scene image link, got %q", img)
-	}
-	jobID, _ := result["job_id"].(string)
-	staged := filepath.Join(tempDir, "worker_downloads", "script_assets", jobID, filepath.Base(vp))
-	data, err := os.ReadFile(staged)
-	if err != nil {
-		t.Fatalf("read staged voiceover: %v", err)
-	}
-	if string(data) != "fake-audio" {
-		t.Errorf("staged content mismatch: %q", string(data))
-	}
-	sceneStaged := filepath.Join(tempDir, "worker_downloads", "script_assets", jobID, filepath.Base(sp[0]))
-	sceneData, err := os.ReadFile(sceneStaged)
-	if err != nil {
-		t.Fatalf("read staged scene image: %v", err)
-	}
-	if string(sceneData) != "fake-image" {
-		t.Errorf("scene staged content mismatch: %q", string(sceneData))
+	if img, _ := scenes[0]["image_link"].(string); img != srcImage {
+		t.Fatalf("want image_link %q, got %q", srcImage, img)
 	}
 }
 
@@ -181,17 +161,15 @@ func TestBuildSceneImagePayloadForMaster_PreservesRemoteSources(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	wantVoice := paths.NormalizeDriveURL(voiceURL)
-	if got, _ := result["voiceover_path"].(string); got != wantVoice {
-		t.Fatalf("want remote voiceover normalized to %q, got %q", wantVoice, got)
+	if got, _ := result["voiceover_path"].(string); got != voiceURL {
+		t.Fatalf("want remote voiceover preserved as %q, got %q", voiceURL, got)
 	}
-	if got, _ := result["audio_path"].(string); got != wantVoice {
-		t.Fatalf("want remote audio_path normalized to %q, got %q", wantVoice, got)
+	if got, _ := result["audio_path"].(string); got != voiceURL {
+		t.Fatalf("want remote audio_path preserved as %q, got %q", voiceURL, got)
 	}
 
 	sp, _ := result["scene_image_paths"].([]string)
-	wantScene := paths.NormalizeDriveURL(sceneURL)
-	if len(sp) != 1 || sp[0] != wantScene {
+	if len(sp) != 1 || sp[0] != sceneURL {
 		t.Fatalf("want remote scene image preserved, got %v", sp)
 	}
 
@@ -199,8 +177,8 @@ func TestBuildSceneImagePayloadForMaster_PreservesRemoteSources(t *testing.T) {
 	if len(scenes) != 1 {
 		t.Fatalf("want 1 scene, got %d", len(scenes))
 	}
-	if img, _ := scenes[0]["image_link"].(string); img != wantScene {
-		t.Fatalf("want remote scene image link normalized to %q, got %q", wantScene, img)
+	if img, _ := scenes[0]["image_link"].(string); img != sceneURL {
+		t.Fatalf("want remote scene image link preserved as %q, got %q", sceneURL, img)
 	}
 	if _, err := os.Stat(filepath.Join(tempDir, "worker_downloads")); !os.IsNotExist(err) {
 		t.Fatalf("did not expect staged assets for remote sources")
