@@ -88,12 +88,11 @@ func (c *APIClient) GetChannelID(ctx context.Context, urlOrHandle string) (strin
 		}
 	}
 
-	channelID, err := c.fallback.GetChannelID(ctx, urlOrHandle)
-	if err == nil && channelID != "" {
-		c.cache.Set(cacheKey, channelID)
-		return channelID, nil
-	}
-
+	// YouTube Data API v3 only. The remote-scraper fallback that used to
+	// fill the gap when the API quota was exhausted has been removed:
+	// an unresolvable handle now returns ("", nil) so the caller can
+	// surface a "channel not found" state to the operator instead of
+	// being silently masked by a third-party scraper.
 	c.cache.Set(cacheKey, "")
 	return "", nil
 }
@@ -122,13 +121,10 @@ func (c *APIClient) GetChannelInfo(ctx context.Context, urlOrHandle string) (*Ch
 		}
 	}
 
-	info, err := c.fallback.GetChannelInfo(ctx, channelID)
-	if err == nil && info != nil {
-		c.cache.Set(cacheKey, info)
-		return info, nil
-	}
-
-	return nil, err
+	// YouTube Data API v3 only. The channel-info remote-scraper fallback
+	// has been removed: when the API cannot resolve the channel we
+	// return nil so the caller can decide how to surface the failure.
+	return nil, nil
 }
 
 func (c *APIClient) searchChannel(ctx context.Context, query string) (string, error) {

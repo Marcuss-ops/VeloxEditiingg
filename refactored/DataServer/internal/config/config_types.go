@@ -93,7 +93,6 @@ type YouTubeConfig struct {
 	TokensDir      string
 	PostingPath    string
 	CredentialsDir string
-	RemoteFallback string
 }
 
 // AnsibleConfig holds Ansible deployment settings.
@@ -126,7 +125,77 @@ type NVIDIAConfig struct {
 
 // Config is the top-level configuration.
 type Config struct {
-	// Sub-configs only — no flat field aliases.
+	MasterPort   int
+	StudioPort   int
+	StaticDir    string
+	VideosDir    string
+	DataDir      string
+	RuntimeDir   string
+	JobQueueFile string
+
+	AllowedWorkers           string
+	ForceSingleWorker        string
+	AllowlistAllowRegistered bool
+	MaxJobAttempts           int
+	MasterServerURL          string
+	JobMasterURL             string
+	GradioAppURL             string
+	SPADir                   string
+	DarkEditorDir            string
+	DarkEditorProxyURL       string
+	WorkerBundleDir          string
+	CodeVersion              string
+	VersionNumber            string
+	WorkerHeartbeatTimeout   int
+
+	DBDriver          string
+	DBDSN             string
+	DBMaxOpenConns    int
+	DBMaxIdleConns    int
+	DBConnMaxLifetime int
+	DBConnMaxIdleTime int
+
+	S3Endpoint        string
+	S3Region          string
+	S3Bucket          string
+	S3AccessKeyID     string
+	S3SecretAccessKey string
+	S3UseSSL          bool
+
+	RemoteEngineURL          string
+	RemoteEngineToken        string
+	RemoteEngineTimeoutMS    int
+	RemoteEngineRetries      int
+	RemoteEnginePollInterval int
+
+	DriveClientID     string
+	DriveClientSecret string
+	DriveRedirectURI  string
+	DriveTokensDir    string
+
+	NVIDIAAPIKey  string
+	NVIDIATextURL string
+
+	YouTubeAPIKey      string
+	YouTubeTokensDir   string
+	YouTubePostingPath string
+
+	SecretsDir            string
+	DriveCredentialsDir   string
+	YouTubeCredentialsDir string
+
+	ScriptDir        string
+	MasterURL        string
+	AllowedWorkerIPs []string
+	AdminToken       string
+
+	PlaybookDir          string
+	AllowLocalhostMaster bool
+
+	TLSCertFile string
+	TLSKeyFile  string
+
+	// Sub-configs (populated alongside flat fields)
 	Server   ServerConfig
 	Runtime  RuntimeConfig
 	Database DatabaseConfig
