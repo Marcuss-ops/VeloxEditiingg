@@ -1,4 +1,4 @@
-# Velox v1.0.6 — Sistema di Generazione Video Distribuito
+# Velox v1.1.0 — Sistema di Generazione Video Distribuito
 
 ![CI](https://github.com/Marcuss-ops/VeloxEditiingg/actions/workflows/ci.yml/badge.svg)
 

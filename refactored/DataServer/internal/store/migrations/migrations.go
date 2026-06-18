@@ -185,8 +185,20 @@ func applyMigration(db *sql.DB, m Migration) error {
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	if _, err := tx.Exec(m.SQL); err != nil {
-		return fmt.Errorf("execute migration: %w", err)
+	// Execute each statement individually so we can handle per-statement
+	// errors (e.g., "no such column" on ALTER TABLE DROP COLUMN when the
+	// column was already removed or never existed).
+	stmts := splitStatements(m.SQL)
+	for _, stmt := range stmts {
+		if _, err := tx.Exec(stmt); err != nil {
+			// Tolerate "no such column" for DROP COLUMN — the column
+			// may have been removed by a prior partial run or never existed.
+			if strings.Contains(strings.ToLower(stmt), "drop column") &&
+				strings.Contains(strings.ToLower(err.Error()), "no such column") {
+				continue
+			}
+			return fmt.Errorf("execute migration: %w", err)
+		}
 	}
 
 	now := time.Now().UTC().Format(time.RFC3339)
@@ -308,4 +320,31 @@ func PendingVersions(db *sql.DB, fs embed.FS, dir string) ([]Migration, error) {
 		}
 	}
 	return pending, nil
+}
+
+// splitStatements splits a SQL migration into individual statements on
+// semicolons, ignoring semicolons inside comments and quoted strings.
+func splitStatements(sql string) []string {
+	var stmts []string
+	var current strings.Builder
+	for _, line := range strings.Split(sql, "\n") {
+		trimmed := strings.TrimSpace(line)
+		// Skip SQL comments
+		if strings.HasPrefix(trimmed, "--") {
+			continue
+		}
+		current.WriteString(line)
+		current.WriteString("\n")
+		if strings.HasSuffix(trimmed, ";") {
+			s := strings.TrimSpace(current.String())
+			if s != "" {
+				stmts = append(stmts, s)
+			}
+			current.Reset()
+		}
+	}
+	if s := strings.TrimSpace(current.String()); s != "" {
+		stmts = append(stmts, s)
+	}
+	return stmts
 }

@@ -103,12 +103,6 @@ func newRouter(cfg *config.Config, deps *serverDeps, registry *app.Registry) *gi
 	r.POST("/api/v1/video/chunked/:job_id/:chunk_index", workersuploads.UploadChunk(cfg))
 	r.POST("/api/v1/video/chunked/:job_id/complete", workersuploads.CompleteChunkedUpload(cfg, deps.fileQ))
 
-	// Bundle compat routes
-	if deps.workerUpdateHandler != nil {
-		r.GET("/api/bundle/info", deps.workerUpdateHandler.GetLatestBundleHandler())
-		r.GET("/api/bundle/files", deps.workerUpdateHandler.GetBundleFilesHandler())
-	}
-
 	return r
 }
 
