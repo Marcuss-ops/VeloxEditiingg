@@ -250,6 +250,7 @@ func stageVoiceoverAssets(dataDir, masterURL, jobID string, voiceoverPaths []str
 		if err := copyOrDownloadAsset(client, source, destPath); err != nil {
 			return nil, fmt.Errorf("stage voiceover %d: %w", idx+1, err)
 		}
+		// DEPRECATED: Legacy asset URL format. New code should use /api/v1/worker-assets/:asset_id.
 		staged = append(staged, fmt.Sprintf("%s/api/worker/assets/voiceover/%s/%s", baseMasterURL, jobID, filename))
 	}
 
@@ -287,6 +288,7 @@ func stageSceneImageAssets(dataDir, masterURL, jobID string, sceneEntries []map[
 		if err := copyOrDownloadAsset(client, source, destPath); err != nil {
 			return nil, fmt.Errorf("stage scene image %d: %w", idx+1, err)
 		}
+		// DEPRECATED: Legacy asset URL format. New code should use /api/v1/worker-assets/:asset_id.
 		staged = append(staged, fmt.Sprintf("%s/api/worker/assets/scene-image/%s/%s", baseMasterURL, jobID, filename))
 	}
 

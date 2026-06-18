@@ -304,7 +304,7 @@ func runServer(cfg *config.Config) error {
 	// Replaces the old voiceover bridge (voiceoverassets.NewService).
 	// The new AssetService uses content-addressed storage via BlobStore + DB
 	// and provides RewriteVoiceoverPayload for the enqueue flow.
-	voiceoverStore := voiceoverassets.NewStore(cfg.DataDir, maxVoiceoverBytes, []string{cfg.DataDir})
+	voiceoverStore := voiceoverassets.NewStore(cfg.Runtime.DataDir, maxVoiceoverBytes, []string{cfg.Runtime.DataDir})
 	typedResolvers := voiceoverassets.NewTypedResolversFromStore(voiceoverStore, driveMod.Service(), nil)
 	assetRegistry := voiceoverassets.NewResolverRegistry(typedResolvers...)
 	assetRepo := store.NewSQLiteAssetRepository(deps.sqliteStore)
@@ -488,7 +488,7 @@ func runServer(cfg *config.Config) error {
 }
 
 func runDataLayerAudit(cfg *config.Config) error {
-	dataDir := cfg.DataDir
+	dataDir := cfg.Runtime.DataDir
 	if dataDir == "" {
 		dataDir = "."
 	}

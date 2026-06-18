@@ -54,16 +54,22 @@ func (m *Module) RegisterRoutes(r *gin.Engine) {
 	}
 
 	if m.workerUpdateHandler != nil {
+		// DEPRECATED: v1 bundle routes. Workers should use /api/worker/v2/* instead.
+		// Remove once all workers are updated to v2.
 		r.GET("/bundle_manifest.json", m.workerUpdateHandler.GetBundleManifestHandler())
 		r.POST("/bundle/manifest/generate", m.workerUpdateHandler.GenerateManifestV2Handler())
 		r.GET("/api/worker/bundle", m.workerUpdateHandler.GetBundleDownloadHandler())
 		r.HEAD("/api/worker/bundle", m.workerUpdateHandler.GetBundleDownloadHandler())
+		// Canonical v2 bundle routes.
 		r.GET("/api/worker/v2/manifest", m.workerUpdateHandler.GetManifestV2Handler())
 		r.GET("/api/worker/v2/chunk/:chunkName", m.workerUpdateHandler.GetChunkV2Handler())
 	}
 
 	if m.workerAssetHandler != nil {
 		r.GET("/api/v1/worker-assets/:asset_id", m.workerAssetHandler.ServeAsset())
+		// DEPRECATED: Legacy routes for backward compat with existing assets.
+		// New assets should use /api/v1/worker-assets/:asset_id instead.
+		// Remove once all existing assets are migrated to the content-addressed store.
 		r.GET("/api/worker/assets/voiceover/:job_id/:filename", m.workerAssetHandler.ServeVoiceoverAsset())
 		r.GET("/api/worker/assets/scene-image/:job_id/:filename", m.workerAssetHandler.ServeSceneImageAsset())
 	}

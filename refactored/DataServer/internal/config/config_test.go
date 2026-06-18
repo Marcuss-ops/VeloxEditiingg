@@ -10,7 +10,9 @@ func TestFromEnv_Defaults(t *testing.T) {
 	os.Unsetenv("VELOX_MASTER_PORT")
 	os.Unsetenv("VELOX_ADMIN_TOKEN")
 	os.Setenv("VELOX_DB_PATH", t.TempDir()+"/velox.db")
+	os.Setenv("VELOX_GRPC_PORT", "50051")
 	defer os.Unsetenv("VELOX_DB_PATH")
+	defer os.Unsetenv("VELOX_GRPC_PORT")
 
 	cfg := FromEnv()
 
