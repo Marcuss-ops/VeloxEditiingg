@@ -33,7 +33,7 @@ func setupCalendarTestEnv(t *testing.T) (*store.SQLiteStore, *queue.FileQueue, *
 	}
 	t.Cleanup(func() { _ = db.Close() })
 
-	ts, err := queue.NewLifecycleService(store.NewSQLiteJobRepository(db), db)
+	ts, err := queue.NewLegacyLifecycleService(store.NewSQLiteJobRepository(db), db)
 	if err != nil {
 		t.Fatalf("new transition service: %v", err)
 	}

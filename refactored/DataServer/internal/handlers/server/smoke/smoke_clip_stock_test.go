@@ -24,7 +24,7 @@ func TestCreateSmokeClipStock_Validation(t *testing.T) {
 	if err != nil {
 		t.Skipf("SQLite unavailable: %v", err)
 	}
-	ts, err := queue.NewLifecycleService(store.NewSQLiteJobRepository(db), db)
+	ts, err := queue.NewLegacyLifecycleService(store.NewSQLiteJobRepository(db), db)
 	if err != nil {
 		t.Skipf("Transition service unavailable: %v", err)
 	}
@@ -56,7 +56,7 @@ func TestCreateSmokeClipStock_Enqueue(t *testing.T) {
 	if err != nil {
 		t.Skipf("SQLite unavailable: %v", err)
 	}
-	ts, err := queue.NewLifecycleService(store.NewSQLiteJobRepository(db), db)
+	ts, err := queue.NewLegacyLifecycleService(store.NewSQLiteJobRepository(db), db)
 	if err != nil {
 		t.Skipf("Transition service unavailable: %v", err)
 	}

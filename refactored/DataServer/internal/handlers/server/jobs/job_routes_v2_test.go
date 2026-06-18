@@ -27,7 +27,7 @@ func setupV2Test(t *testing.T) (*gin.Engine, *queue.FileQueue, *store.SQLiteStor
 	if err != nil {
 		t.Fatalf("failed to create in-memory store: %v", err)
 	}
-	ts, err := queue.NewLifecycleService(store.NewSQLiteJobRepository(db), db)
+	ts, err := queue.NewLegacyLifecycleService(store.NewSQLiteJobRepository(db), db)
 	if err != nil {
 		t.Fatalf("failed to create transition service: %v", err)
 	}

@@ -11,23 +11,42 @@ import (
 )
 
 // LifecycleService validates and executes job status transitions.
-// All status changes flow through this service to ensure consistency.
-// Uses JobRepository for atomic DB operations and EventStore for side effects.
+//
+// PR 3 update: the slim shape `{repo, clock}` lives in lifecycle_pr3.go.
+// The legacy dual-dep shape `{jobRepo, eventStore}` below stays for
+// backward compatibility with the ~50 existing callers; new code MUST
+// use the PR 3 constructor (queue.NewLegacyLifecycleService(repo, clock)).
+//
+// Migration roadmap (track in PR 3 followup):
+//   - grpcserver.Handler: now wired with the PR 3 lifecycle.
+//   - joblifecycle.Service: still on the legacy shape; caller will
+//     migrate once its submit-result / lease-renewal paths are
+//     re-orchestrated through outbox.
+//   - HTTP handlers using fileQ.CompleteJob: caller migrates when the
+//     artifact-success-gate is wired in front of lease-renewal.
 type LifecycleService struct {
-	jobRepo    store.JobRepository
-	eventStore store.EventStore
+	repo    store.JobRepository      // PR 3 path; nil on legacy callers
+	clock   Clock                    // PR 3 path; nil on legacy callers
+	jobRepo store.JobRepository      // legacy alias so older methods still compile
+	eventStore store.EventStore      // legacy: side effects removed in PR 3 followup
 }
 
-// NewLifecycleService creates a new lifecycle service.
-// Both JobRepository and EventStore are mandatory.
-func NewLifecycleService(repo store.JobRepository, eventStore store.EventStore) (*LifecycleService, error) {
+// NewLegacyLifecycleService creates a new legacy lifecycle service with the
+// dual-dep shape: JobRepository + EventStore. Both are mandatory.
+//
+// Used only by callers that have not yet migrated to the PR 3 constructor
+// (queue.NewLifecycleService) which takes JobRepository + Clock. The
+// legacy methods on this service (CompleteJob, FailJob, SubmitJob,
+// UpdateJobFields, RenewLease, TransitionToRunning, etc.) keep using
+// eventStore for side-effect logging. Migration is incremental.
+func NewLegacyLifecycleService(repo store.JobRepository, eventStore store.EventStore) (*LifecycleService, error) {
 	if repo == nil {
 		return nil, errors.New("job repository is required")
 	}
 	if eventStore == nil {
 		return nil, errors.New("event store is required")
 	}
-	return &LifecycleService{jobRepo: repo, eventStore: eventStore}, nil
+	return &LifecycleService{jobRepo: repo, eventStore: eventStore, repo: repo}, nil
 }
 
 // Validate checks whether a transition from one status to another is allowed.

@@ -52,7 +52,7 @@ func (s *storePostgresStub) StartJob(ctx context.Context, params store.StartJobP
 
 func TestNewLifecycleService_RefusesNilRepository(t *testing.T) {
 	t.Parallel()
-	_, err := NewLifecycleService(nil, nil)
+	_, err := NewLegacyLifecycleService(nil, nil)
 	if err == nil {
 		t.Fatal("expected error when repo is nil")
 	}
@@ -64,7 +64,7 @@ func TestNewLifecycleService_RefusesNilRepository(t *testing.T) {
 func TestNewLifecycleService_RefusesNilEventStore(t *testing.T) {
 	t.Parallel()
 	// Non-nil repo, nil eventStore must fail on the second check.
-	_, err := NewLifecycleService(postgresStubRepo, nil)
+	_, err := NewLegacyLifecycleService(postgresStubRepo, nil)
 	if err == nil {
 		t.Fatal("expected error when eventStore is nil")
 	}
@@ -96,7 +96,7 @@ var _ store.EventStore = (*eventStoreStub)(nil)
 
 func TestNewLifecycleService_SucceedsWithBothDeps(t *testing.T) {
 	t.Parallel()
-	svc, err := NewLifecycleService(postgresStubRepo, &eventStoreStub{})
+	svc, err := NewLegacyLifecycleService(postgresStubRepo, &eventStoreStub{})
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
 	}

@@ -236,4 +236,85 @@ type JobRepository interface {
 	// UpdateJobResult writes the result_json blob for a job.
 	// Used by UpdateJobFields for persisting the full operational state.
 	UpdateJobResult(ctx context.Context, jobID string, resultJSON []byte) error
+
+	// ── PR 3 — fully-transactional lifecycle methods ────────────────────────
+	//
+	// Every method below wraps its UPDATE + history INSERT + event INSERT
+	// (+ outbox INSERT, when applicable) in a single BEGIN/COMMIT. The
+	// legacy methods above remain available for backward-compatible
+	// callers — they delegate to or are sandwiched-in with the same
+	// single-method atomicity contract.
+
+	// PR3Start performs the LEASED → RUNNING transition with the full
+	// CAS tuple, plus a job_history INSERT and a JOB_STARTED event INSERT
+	// in one tx. Returns ErrTransitionConflict on any predicate mismatch.
+	PR3Start(ctx context.Context, cmd StartCommand) error
+
+	// PR3RenewLease extends the lease atomically with a single UPDATE
+	// matching (job_id, status IN {LEASED,RUNNING}, assigned_to, lease_id,
+	// revision) and bumps revision. If cmd.EmitEvent is true, the
+	// LEASE_RENEWED event INSERT happens in the same tx so a process
+	// crash between commit and LogJobEvent leaves no orphan event or
+	// stale lease. Returns ErrTransitionConflict if no rows matched.
+	PR3RenewLease(ctx context.Context, cmd RenewLeaseCommand) error
+
+	// PR3RecordRenderFinished moves RUNNING → RENDER_FINISHED with the
+	// full CAS tuple, plus history INSERT + render_finished event in one
+	// tx. Idempotent: if the job is already in RENDER_FINISHED, returns
+	// nil and does not duplicate the event.
+	PR3RecordRenderFinished(ctx context.Context, cmd RecordRenderFinishedCommand) error
+
+	// PR3Fail marks a job FAILED or RETRY_WAIT depending on Retryable +
+	// retry-count/max-retries. In one tx: UPDATE jobs, UPDATE
+	// job_attempts (status=FAILED|FAILED_RETRYABLE), INSERT history,
+	// INSERT event, INSERT outbox (JOB_FAILED or JOB_RETRY_SCHEDULED).
+	// Idempotent on already-terminal states.
+	PR3Fail(ctx context.Context, cmd FailCommand) error
+
+	// PR3ScheduleRetry forces the job to RETRY_WAIT regardless of
+	// retryable flag. Equivalent to PR3Fail with Retryable=true but
+	// emits JOB_RETRY_SCHEDULED specifically. Same single-tx shape.
+	PR3ScheduleRetry(ctx context.Context, cmd RetryCommand) error
+
+	// PR3Cancel transitions a job to CANCELLED. Idempotent on terminal
+	// states. Single-tx: UPDATE + history + event.
+	PR3Cancel(ctx context.Context, cmd CancelCommand) error
+
+	// PR3RequeueExpiredLeases processes up to `limit` LEASED/RUNNING
+	// jobs whose lease_expiry < now. Each job is decided atomically:
+	//   - retry budget left → PENDING (or RETRY_WAIT)
+	//   - retry budget exhausted → FAILED
+	// Returns the per-job RequeueResult slice and the total processed.
+	// No foreign callers should requeue zombies via the old
+	// RequeueZombieJobs path.
+	PR3RequeueExpiredLeases(ctx context.Context, now time.Time, limit int) ([]RequeueResult, error)
+
+	// PR3MarkSucceeded is the artifact-success-gate port. Only the
+	// ArtifactSuccessGate created in bootstrap may call this method;
+	// the public LifecycleService never exposes SUCCEEDED. Whichever
+	// caller invokes it MUST hold the secret JobRepository reference
+	// passed in via the bootstrap composition root.
+	// Single-tx: UPDATE jobs → SUCCEEDED + completed_at, INSERT history,
+	// INSERT event, INSERT outbox (JOB_SUCCEEDED).
+	PR3MarkSucceeded(ctx context.Context, cmd MarkSucceededCommand) error
+}
+
+// Compile-time guard: every JobRepository implementation MUST satisfy the
+// PR 3 surface. If you add a new method to the interface, every backend
+// must implement it or the build will fail at this line.
+var _ PR3Repository = (JobRepository)(nil)
+
+// PR3Repository is the contract every JobRepository implementation must
+// satisfy. It is the interface method set the bootstrap composition root
+// relies on (so a future Postgres driver cannot drop PR3 support). The
+// alias is split out so the `var _` guard line stays readable.
+type PR3Repository interface {
+	PR3Start(ctx context.Context, cmd StartCommand) error
+	PR3RenewLease(ctx context.Context, cmd RenewLeaseCommand) error
+	PR3RecordRenderFinished(ctx context.Context, cmd RecordRenderFinishedCommand) error
+	PR3Fail(ctx context.Context, cmd FailCommand) error
+	PR3ScheduleRetry(ctx context.Context, cmd RetryCommand) error
+	PR3Cancel(ctx context.Context, cmd CancelCommand) error
+	PR3RequeueExpiredLeases(ctx context.Context, now time.Time, limit int) ([]RequeueResult, error)
+	PR3MarkSucceeded(ctx context.Context, cmd MarkSucceededCommand) error
 }

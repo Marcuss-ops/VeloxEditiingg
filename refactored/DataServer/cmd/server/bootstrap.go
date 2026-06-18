@@ -65,6 +65,18 @@ type serverDeps struct {
 	outboxDispatcher    *outbox.Dispatcher
 	deliveryRunner      *deliveries.DeliveryRunner
 	blobStore           store.BlobStore
+
+	// ── PR 3 composition ──────────────────────────────────────────────────
+	//
+	// lifecyclePR3 is the slim transactional LifecycleService.
+	// artifactGate is the ONLY path to SUCCEEDED — held by the bootstrap
+	// as a "private port" that handlers cannot reach directly.
+	// jobRepo is reused because the gate stores a JobRepository reference
+	// (not the lifecycle wrapper), matching the artifact_success_gate
+	// spec in PR 3 section "Il completamento SUCCEEDED non deve essere
+	// pubblico per gli handler".
+	lifecyclePR3 *queue.LifecycleService
+	artifactGate *queue.ArtifactSuccessGate
 }
 
 // grpcServer is an interface satisfied by *grpc.Server for lifecycle management.
@@ -166,10 +178,29 @@ func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
 	workerLifecycle := lifecycle.NewHandler(cfg, reg, sqliteStore)
 
 	jobRepo := store.NewSQLiteJobRepository(sqliteStore)
-	lcService, err := queue.NewLifecycleService(jobRepo, sqliteStore)
+	lcService, err := queue.NewLegacyLifecycleService(jobRepo, sqliteStore)
 	if err != nil {
 		return nil, err
 	}
+
+	// ── PR 3 composition root ──────────────────────────────────────────────
+	//
+	// lcPR3 is the slim transactional LifecycleService. It owns the
+	// JobRepository + a RealClock — and NOTHING ELSE. SUCCEEDED is
+	// unreachable from this struct.
+	//
+	// artifactGate is the ONLY path to SUCCEEDED. It holds the secret
+	// JobRepository reference; bootstrap is the only component with a
+	// pointer to it. Handlers cannot reach it.
+	lcPR3, err := queue.NewLifecycleService(jobRepo, queue.RealClock{})
+	if err != nil {
+		return nil, fmt.Errorf("bootstrap: PR 3 lifecycle service: %w", err)
+	}
+	artifactGate := queue.NewArtifactSuccessGate(jobRepo)
+	artifactGate.SetAuditHook(func(jobID, artifactID string, revision int) {
+		log.Printf("[ARTIFACT-GATE] promoted job %s artifact=%s revision=%d → SUCCEEDED", jobID, artifactID, revision)
+	})
+
 	querySvc := queue.NewQueryService(sqliteStore)
 
 	fileQ, err := queue.NewFileQueue(&queue.FileQueueConfig{
@@ -231,6 +262,8 @@ func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
 		outboxStore:         outboxStore,
 		outboxDispatcher:    outboxDispatcher,
 		blobStore:           blobStore,
+		lifecyclePR3:        lcPR3,
+		artifactGate:        artifactGate,
 	}, nil
 }
 

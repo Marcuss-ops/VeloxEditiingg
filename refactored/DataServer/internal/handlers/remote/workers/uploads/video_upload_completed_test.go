@@ -53,7 +53,7 @@ func TestUploadCompletedVideo_AutoUploadsToYouTubeAndDrive(t *testing.T) {
 		t.Fatalf("new sqlite store: %v", err)
 	}
 	jobRepo := store.NewSQLiteJobRepository(db)
-	ts, tsErr := queue.NewLifecycleService(jobRepo, db)
+	ts, tsErr := queue.NewLegacyLifecycleService(jobRepo, db)
 	if tsErr != nil {
 		t.Fatalf("new transition service: %v", tsErr)
 	}
@@ -177,7 +177,7 @@ func TestMaybeAutoUploadDrive_FallsBackToJobLanguage(t *testing.T) {
 // 		t.Fatalf("upsert master folder: %v", err)
 // 	}
 // 	jobRepo := store.NewSQLiteJobRepository(db)
-// 	ts, tsErr := queue.NewLifecycleService(jobRepo, db)
+// 	ts, tsErr := queue.NewLegacyLifecycleService(jobRepo, db)
 // 	if tsErr != nil {
 // 		t.Fatalf("new transition service: %v", tsErr)
 // 	}

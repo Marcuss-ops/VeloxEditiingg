@@ -156,7 +156,7 @@ func newTestQueue(t *testing.T, tempDir string) *queue.FileQueue {
 		t.Fatalf("new sqlite store: %v", err)
 	}
 	jobRepo := store.NewSQLiteJobRepository(db)
-		lc, _ := queue.NewLifecycleService(jobRepo, db)
+		lc, _ := queue.NewLegacyLifecycleService(jobRepo, db)
 		qs := queue.NewQueryService(db)
 		q, err := queue.NewFileQueue(&queue.FileQueueConfig{MaxRetries: 3, DBStore: db}, lc, qs)
 	if err != nil {

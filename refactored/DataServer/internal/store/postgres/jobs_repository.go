@@ -134,3 +134,55 @@ var _ store.JobRepository = (*JobRepository)(nil)
 // test factories and time injection. They were unreachable from production
 // paths and would have leaked the DSN via the helper. Reintroduce only when
 // the pgx-backed driver lands and the test harness actually needs them.
+
+// ── PR 3 stub implementations ─────────────────────────────────────────────
+//
+// Each returns ErrNotImplemented until the pgx-backed driver lands. They
+// are listed here so the compile-time JobRepository/interface check (`var _
+// store.JobRepository` at the bottom of this file) keeps passing after
+// the PR 3 surface expansion.
+
+func (r *JobRepository) PR3Start(ctx context.Context, cmd store.StartCommand) error {
+	_, _ = ctx, cmd
+	_ = r.dsn
+	return store.ErrNotImplemented
+}
+
+func (r *JobRepository) PR3RenewLease(ctx context.Context, cmd store.RenewLeaseCommand) error {
+	_, _ = ctx, cmd
+	_ = r.dsn
+	return store.ErrNotImplemented
+}
+
+func (r *JobRepository) PR3RecordRenderFinished(ctx context.Context, cmd store.RecordRenderFinishedCommand) error {
+	_, _ = ctx, cmd
+	_ = r.dsn
+	return store.ErrNotImplemented
+}
+
+func (r *JobRepository) PR3Fail(ctx context.Context, cmd store.FailCommand) error {
+	_, _ = ctx, cmd
+	_ = r.dsn
+	return store.ErrNotImplemented
+}
+
+func (r *JobRepository) PR3ScheduleRetry(ctx context.Context, cmd store.RetryCommand) error {
+	_, _, _ = ctx, cmd, r.dsn
+	return store.ErrNotImplemented
+}
+
+func (r *JobRepository) PR3Cancel(ctx context.Context, cmd store.CancelCommand) error {
+	_, _, _ = ctx, cmd, r.dsn
+	return store.ErrNotImplemented
+}
+
+func (r *JobRepository) PR3RequeueExpiredLeases(ctx context.Context, now time.Time, limit int) ([]store.RequeueResult, error) {
+	_, _, _ = ctx, now, limit
+	_ = r.dsn
+	return nil, store.ErrNotImplemented
+}
+
+func (r *JobRepository) PR3MarkSucceeded(ctx context.Context, cmd store.MarkSucceededCommand) error {
+	_, _, _ = ctx, cmd, r.dsn
+	return store.ErrNotImplemented
+}

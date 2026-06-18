@@ -25,7 +25,7 @@ func newTestFileQueue(t *testing.T) *queue.FileQueue {
 		t.Fatalf("failed to create SQLite store: %v", err)
 	}
 	t.Cleanup(func() { sqlStore.Close() })
-	ts, err := queue.NewLifecycleService(store.NewSQLiteJobRepository(sqlStore), sqlStore)
+	ts, err := queue.NewLegacyLifecycleService(store.NewSQLiteJobRepository(sqlStore), sqlStore)
 	if err != nil {
 		t.Fatalf("failed to create LifecycleService: %v", err)
 	}

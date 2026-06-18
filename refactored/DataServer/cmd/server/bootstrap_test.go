@@ -246,7 +246,7 @@ func TestBuildServerDeps_RestartDoesNotLoseJob(t *testing.T) {
 func TestBuildServerDeps_ServerRequiresValidRepository(t *testing.T) {
 	t.Parallel()
 
-	// Verify that NewLifecycleService(nil, ...) returns an error.
+	// Verify that NewLegacyLifecycleService(nil, ...) returns an error.
 	// This is tested more thoroughly in the queue package, but
 	// we add a structural assertion here: if buildServerDeps cannot
 	// construct a valid LifecycleService, it must return an error.
