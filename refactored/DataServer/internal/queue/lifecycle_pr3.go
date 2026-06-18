@@ -29,8 +29,12 @@ func NewLifecycleService(repo store.JobRepository, clock Clock) (*LifecycleServi
 }
 
 // Repo exposes the underlying JobRepository for callers that need direct
-// access (e.g. the bootstrap composition root constructs the
-// ArtifactSuccessGate from the same repo reference).
+// access (e.g. bootstrap composition wires the
+// `artifacts.SQLiteFinalizationRepository` from the same `*sql.DB`).
+// NOTE: PR 3.5-a removed the previous ArtifactSuccessGate that wrapped
+// this repo; the FinalizationRepository contract is now the single
+// legal writer of jobs.status = 'SUCCEEDED' (see
+// internal/artifacts/sqlite_finalization_repository.go).
 func (l *LifecycleService) Repo() store.JobRepository { return l.repo }
 
 // Clock returns the clock the service uses for time stamping.

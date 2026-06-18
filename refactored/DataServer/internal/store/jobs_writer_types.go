@@ -301,14 +301,10 @@ type JobRepository interface {
 	// RequeueZombieJobs path.
 	PR3RequeueExpiredLeases(ctx context.Context, now time.Time, limit int) ([]RequeueResult, error)
 
-	// PR3MarkSucceeded is the artifact-success-gate port. Only the
-	// ArtifactSuccessGate created in bootstrap may call this method;
-	// the public LifecycleService never exposes SUCCEEDED. Whichever
-	// caller invokes it MUST hold the secret JobRepository reference
-	// passed in via the bootstrap composition root.
-	// Single-tx: UPDATE jobs → SUCCEEDED + completed_at, INSERT history,
-	// INSERT event, INSERT outbox (JOB_SUCCEEDED).
-	PR3MarkSucceeded(ctx context.Context, cmd MarkSucceededCommand) error
+	// PR3MarkSucceeded removed in PR 3.5-a. SUCCEEDED transitions are
+	// exclusively via artifacts.FinalizationRepository.FinalizeVerified;
+	// see internal/artifacts/sqlite_finalization_repository.go for the
+	// sole legal writer.
 }
 
 // Compile-time guard: every JobRepository implementation MUST satisfy the
@@ -320,6 +316,9 @@ var _ PR3Repository = (JobRepository)(nil)
 // satisfy. It is the interface method set the bootstrap composition root
 // relies on (so a future Postgres driver cannot drop PR3 support). The
 // alias is split out so the `var _` guard line stays readable.
+//
+// PR3MarkSucceeded is intentionally absent here — the only legal writer
+// of jobs.status='SUCCEEDED' is artifacts.FinalizationRepository.FinalizeVerified.
 type PR3Repository interface {
 	PR3Start(ctx context.Context, cmd StartCommand) error
 	PR3RenewLease(ctx context.Context, cmd RenewLeaseCommand) error
@@ -328,5 +327,4 @@ type PR3Repository interface {
 	PR3ScheduleRetry(ctx context.Context, cmd RetryCommand) error
 	PR3Cancel(ctx context.Context, cmd CancelCommand) error
 	PR3RequeueExpiredLeases(ctx context.Context, now time.Time, limit int) ([]RequeueResult, error)
-	PR3MarkSucceeded(ctx context.Context, cmd MarkSucceededCommand) error
 }

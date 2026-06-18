@@ -47,6 +47,7 @@ type testEnv struct {
 	bs     store.BlobStore
 	svc    *Service
 	repo   Repository
+	fin    FinalizationRepository
 	clock  *manualClock
 	tmpDir string
 }
@@ -98,13 +99,17 @@ func setupTestEnv(t *testing.T) *testEnv {
 
 	clk := newManualClock()
 	repo := NewSQLiteRepository(db)
-	svc := NewService(repo, bs, db, clk)
+	// PR 3.5-a: FinalizationRepository is REQUIRED by NewService. Sharing
+	// the same *sql.DB ensures the finalization tx can join with the
+	// concurrent update on artifact_uploads (FinalizeVerified step 7).
+	fin := NewSQLiteFinalizationRepository(db)
+	svc := NewService(repo, fin, bs, db, clk)
 
 	t.Cleanup(func() {
 		_ = db.Close()
 	})
 	return &testEnv{
-		t: t, db: db, bs: bs, svc: svc, repo: repo, clock: clk, tmpDir: tmp,
+		t: t, db: db, bs: bs, svc: svc, repo: repo, fin: fin, clock: clk, tmpDir: tmp,
 	}
 }
 

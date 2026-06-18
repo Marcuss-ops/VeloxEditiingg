@@ -98,25 +98,18 @@ type RetryCommand struct {
 	Now              time.Time
 }
 
+// MarkSucceededCommand has been REMOVED in PR 3.5-a. SUCCEEDED is no
+// longer writable through JobRepository. The single legal path is
+// artifacts.FinalizationRepository.FinalizeVerified (internal/artifacts/
+// sqlite_finalization_repository.go), requested via artifacts.Service.Finalize.
+// Use artifacts.FinalizeVerifiedCommand + Service.Finalize.
+
 // CancelCommand transitions a job to CANCELLED. Idempotent for terminal
 // jobs (already CANCELLED / SUCCEEDED / FAILED).
 type CancelCommand struct {
 	JobID            string
 	WorkerID         string // best-effort: empty = no worker identity check
 	Reason           string
-	ExpectedRevision int
-	Now              time.Time
-}
-
-// MarkSucceededCommand is the artifact-success-gate port. Only the
-// ArtifactSuccessGate created in bootstrap may invoke JobRepository.MarkSucceeded;
-// the public LifecycleService never exposes SUCCEEDED. This is what enforces
-// the spec's "SUCCEEDED non deve essere pubblico per gli handler" rule.
-type MarkSucceededCommand struct {
-	JobID            string
-	ArtifactID       string
-	AttempterID      int
-	WorkerID         string
 	ExpectedRevision int
 	Now              time.Time
 }

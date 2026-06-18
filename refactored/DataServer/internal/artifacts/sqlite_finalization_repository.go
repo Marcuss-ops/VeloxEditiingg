@@ -1,8 +1,9 @@
 // Package artifacts / sqlite_finalization_repository.go — PR 3.5-a impl.
 //
-// This is the ONLY legal writer of jobs.status = 'SUCCEEDED'. The scan
-// test (scan_test.go) greps every .go under internal/ and rejects any
-// `SET status = 'SUCCEEDED'` literal outside this file.
+// This is the ONLY legal writer of jobs.status=<terminal-state>.
+// The scan test (scan_test.go) greps every .go under internal/ and
+// rejects any single-quoted SQL writer of that terminal state outside
+// the audited allowlist (see scan_test.go for the precise regex).
 package artifacts
 
 import (

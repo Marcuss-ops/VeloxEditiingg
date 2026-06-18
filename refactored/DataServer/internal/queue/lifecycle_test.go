@@ -70,9 +70,6 @@ func (s *storePostgresStub) PR3Cancel(ctx context.Context, cmd store.CancelComma
 func (s *storePostgresStub) PR3RequeueExpiredLeases(ctx context.Context, now time.Time, limit int) ([]store.RequeueResult, error) {
 	return nil, store.ErrNotImplemented
 }
-func (s *storePostgresStub) PR3MarkSucceeded(ctx context.Context, cmd store.MarkSucceededCommand) error {
-	return store.ErrNotImplemented
-}
 
 func TestNewLifecycleService_RefusesNilRepository(t *testing.T) {
 	t.Parallel()

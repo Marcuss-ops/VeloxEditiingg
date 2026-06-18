@@ -180,7 +180,3 @@ func (r *JobRepository) PR3RequeueExpiredLeases(ctx context.Context, now time.Ti
 	return nil, store.ErrNotImplemented
 }
 
-func (r *JobRepository) PR3MarkSucceeded(ctx context.Context, cmd store.MarkSucceededCommand) error {
-	_, _, _ = ctx, cmd, r.dsn
-	return store.ErrNotImplemented
-}

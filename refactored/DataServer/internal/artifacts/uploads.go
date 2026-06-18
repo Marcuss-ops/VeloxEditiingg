@@ -43,41 +43,15 @@ type FinalizeArtifactCommand struct {
 	ExpectedRevision int
 }
 
-// FinalizeArtifactAndCompleteJobCommand is the single transactional
-// input to FinalizeArtifactAndCompleteJob. It carries the master-
-// computed values (storage_key, sha, size, mime) that were derived
-// in Receive() along with the authorization fields for the CAS gates.
+// PR 3.5-a: FinalizeArtifactAndCompleteJobCommand has been REMOVED.
+// The single legal writer of jobs.status = 'SUCCEEDED' is now the
+// artifacts.FinalizationRepository.FinalizeVerified method (see
+// internal/artifacts/sqlite_finalization_repository.go). Use
+// artifacts.FinalizeVerifiedCommand + Service.Finalize.
 //
-// SQL tx order (see PR 2 spec, Fase 4):
-//  1. SELECT artifact_uploads -> ensure RECEIVED or FINALIZING
-//  2. UPDATE jobs WHERE status=RUNNING AND assigned_to=? AND lease_id=?
-//     AND revision=?              (CAS, must affect exactly 1 row)
-//  3. UPDATE artifacts WHERE id=? AND job_id=? AND status='STAGING'
-//                                  (CAS, must affect exactly 1 row)
-//  4. UPDATE job_attempts WHERE job_id=? AND attempt_number=? AND
-//     worker_id=? AND lease_id=? AND status='RENDER_FINISHED'
-//                                  (CAS, must affect exactly 1 row)
-//  5. INSERT outbox_events   (ARTIFACT_READY, JOB_SUCCEEDED)
-//  6. INSERT job_deliveries  ON CONFLICT DO NOTHING  (idempotent)
-//  7. INSERT outbox_events   (DELIVERY_CREATED)
-type FinalizeArtifactAndCompleteJobCommand struct {
-	UploadID         string
-	ArtifactID       string
-	JobID            string
-	WorkerID         string
-	LeaseID          string
-	AttemptNumber    int
-	ExpectedRevision int
-
-	// Master-computed values from Receive().
-	StorageProvider string
-	StorageKey      string
-	SHA256          string
-	SizeBytes       int64
-	MIMEType        string
-
-	VerifiedAt time.Time
-}
+// Historically this struct lived here so service.go's
+// FinalizeArtifactAndCompleteJob method could use it directly; that method
+// itself was deleted as part of the same migration.
 
 // UploadSession is the persistent state of one upload.
 //
@@ -140,8 +114,12 @@ type UploadFields struct {
 // All methods treat upload_id as the canonical key. Application-level
 // invariants (status state machine) live in Service — SQL CHECK constraints
 // only block blatantly malformed rows.
+//
+// PR 3.5-a: CreateUploadSession has been REMOVED. Use
+// FinalizationRepository.CreateArtifactAndUploadSession instead —
+// the atomic-tx replacement that inserts the artifacts + artifact_uploads
+// rows in one transaction.
 type Repository interface {
-	CreateUploadSession(ctx context.Context, session *UploadSession) error
 	GetUploadSession(ctx context.Context, uploadID string) (*UploadSession, error)
 	UpdateUploadStatus(ctx context.Context, uploadID string, fields UploadFields) error
 	DeleteUploadSession(ctx context.Context, uploadID string) error
@@ -175,41 +153,10 @@ func NewSQLiteRepository(db *sql.DB) *SQLiteRepository {
 // Compile-time interface check.
 var _ Repository = (*SQLiteRepository)(nil)
 
-// CreateUploadSession inserts a new session row in CREATED.
-//
-// Caller must pre-fill UploadID/ArtifactID/JobID/CreatedAt/ExpiresAt;
-// Status defaults to CREATED when blank.
-func (r *SQLiteRepository) CreateUploadSession(ctx context.Context, s *UploadSession) error {
-	if s == nil {
-		return fmt.Errorf("artifacts: CreateUploadSession: nil session")
-	}
-	if s.UploadID == "" || s.ArtifactID == "" || s.JobID == "" {
-		return fmt.Errorf("artifacts: CreateUploadSession: upload_id, artifact_id and job_id are required")
-	}
-	if s.Status == "" {
-		s.Status = "CREATED"
-	}
-	_, err := r.db.ExecContext(ctx, `
-		INSERT INTO artifact_uploads (
-			upload_id, artifact_id, job_id, attempt_number, worker_id, lease_id,
-			status, temporary_storage_key,
-			expected_size_bytes, expected_sha256,
-			received_size_bytes, received_sha256,
-			created_at, expires_at, completed_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		s.UploadID, s.ArtifactID, s.JobID, s.AttemptNumber, s.WorkerID, s.LeaseID,
-		s.Status, s.TemporaryStorageKey,
-		s.ExpectedSizeBytes, nilOrString(s.ExpectedSHA256),
-		s.ReceivedSizeBytes, nilOrString(s.ReceivedSHA256),
-		s.CreatedAt.UTC().Format(time.RFC3339),
-		s.ExpiresAt.UTC().Format(time.RFC3339),
-		formatTimeNullable(s.CompletedAt),
-	)
-	if err != nil {
-		return fmt.Errorf("artifacts: CreateUploadSession: %w", err)
-	}
-	return nil
-}
+// PR 3.5-a: CreateUploadSession impl REMOVED. The artifacts + artifact_uploads
+// INSERT now happens atomically inside
+// FinalizationRepository.CreateArtifactAndUploadSession (see
+// sqlite_finalization_repository.go). Service.BeginUpload calls that method.
 
 // GetUploadSession returns a session by ID, or (nil, nil) when missing.
 func (r *SQLiteRepository) GetUploadSession(ctx context.Context, uploadID string) (*UploadSession, error) {
@@ -386,9 +333,16 @@ func (r *SQLiteRepository) FindStuckStaging(ctx context.Context, olderThan time.
 	return out, nil
 }
 
+// ── package-level helpers ────────────────────────────────────────────────
+//
 // nilOrString maps "" -> nil so the column stores NULL rather than "",
 // matching the migration's nullable TEXT columns for expected_sha256 /
 // received_sha256.
+//
+// These helpers are used by both this file and the SQLiteFinalizationRepository
+// implementation. Keep the package-level rather than file-scoped so the
+// finalization repository can reuse them without redeclaration.
+
 func nilOrString(s string) interface{} {
 	if s == "" {
 		return nil

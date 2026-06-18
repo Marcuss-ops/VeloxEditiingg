@@ -70,21 +70,18 @@ type serverDeps struct {
 	// hash gate for ArtifactUploaded. Bootstrap owns it (the only place
 	// outside grpcserver that holds a reference); the handler can READ
 	// artifacts/artifacts.Service via deps.artifactSvc but cannot bypass
-	// it. Closely parallels the lifecyclePR3 / artifactGate pattern below:
+	// it. Closely parallels the lifecyclePR3 composition pattern below:
 	// bootstrap is the composition root, never anything else.
 	artifactSvc *artifacts.Service
 
 	// ── PR 3 composition ──────────────────────────────────────────────────
 	//
 	// lifecyclePR3 is the slim transactional LifecycleService.
-	// artifactGate is the ONLY path to SUCCEEDED — held by the bootstrap
-	// as a "private port" that handlers cannot reach directly.
-	// jobRepo is reused because the gate stores a JobRepository reference
-	// (not the lifecycle wrapper), matching the artifact_success_gate
-	// spec in PR 3 section "Il completamento SUCCEEDED non deve essere
-	// pubblico per gli handler".
+	// It owns JobRepository + a RealClock — and NOTHING ELSE.
+	// SUCCEEDED is unreachable from this struct (JobRepository has no
+	// PR3MarkSucceeded after PR 3.5-a; the only legal path is
+	// artifacts.Service.Finalize → artifacts.SQLiteFinalizationRepository.FinalizeVerified).
 	lifecyclePR3 *queue.LifecycleService
-	artifactGate *queue.ArtifactSuccessGate
 
 	assetService *voiceoverassets.AssetService
 }
@@ -197,19 +194,13 @@ func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
 	//
 	// lcPR3 is the slim transactional LifecycleService. It owns the
 	// JobRepository + a RealClock — and NOTHING ELSE. SUCCEEDED is
-	// unreachable from this struct.
-	//
-	// artifactGate is the ONLY path to SUCCEEDED. It holds the secret
-	// JobRepository reference; bootstrap is the only component with a
-	// pointer to it. Handlers cannot reach it.
+	// unreachable from this struct (JobRepository.PR3MarkSucceeded
+	// was deleted in PR 3.5-a; the sole legal writer of jobs.status =
+	// 'SUCCEEDED' is now artifacts.SERVICE.FINALIZE → artifacts.SQLiteFinalizationRepository.FinalizeVerified).
 	lcPR3, err := queue.NewLifecycleService(jobRepo, queue.RealClock{})
 	if err != nil {
 		return nil, fmt.Errorf("bootstrap: PR 3 lifecycle service: %w", err)
 	}
-	artifactGate := queue.NewArtifactSuccessGate(jobRepo)
-	artifactGate.SetAuditHook(func(jobID, artifactID string, revision int) {
-		log.Printf("[ARTIFACT-GATE] promoted job %s artifact=%s revision=%d → SUCCEEDED", jobID, artifactID, revision)
-	})
 
 	querySvc := queue.NewQueryService(sqliteStore)
 
@@ -236,23 +227,20 @@ func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
 	}
 	log.Printf("[BOOTSTRAP] BlobStore ready: staging=%s storage=%s", blobStore.StagingDir(), blobStore.FinalDir())
 
-	// PR 2 (chunk 4): artifacts.Service. The same *sql.DB that
-	// store.SQLiteStore uses for migrations/journaling is passed in so
-	// FinalizeArtifactAndCompleteJob can join its multi-table tx with the
-	// artifact_uploads UPDATE. Clock is nil → defaults to realClock{}
-	// inside NewService.
-	//
-	// The repository uses SQLiteRepository against the same connection —
-	// SQLite serializes writers so concurrent uploads on the same job_id
-	// are race-free at the SQL layer. The state-machine legality (which
-	// status transitions are allowed) lives in Service not in the repo.
+	// PR 3.5-a: artifacts.Service is the only component that flips
+	// jobs.status='SUCCEEDED'. It owns the FinalizationRepository
+	// (atomic-tx SUCCEEDED write + atomic-tx artifacts+artifact_uploads
+	// insert) and the old Repository (upload-session CRUD). The same
+	// *sql.DB is shared so the finalization tx can join with the
+	// concurrent update on artifact_uploads (step 7 of FinalizeVerified).
 	artifactSvc := artifacts.NewService(
 		artifacts.NewSQLiteRepository(sqliteStore.DB()),
+		artifacts.NewSQLiteFinalizationRepository(sqliteStore.DB()),
 		blobStore,
 		sqliteStore.DB(),
 		nil, // RealClock default
 	)
-	log.Printf("[BOOTSTRAP] artifacts.Service ready (single-tx, master-computed-hash gate for ArtifactUploaded)")
+	log.Printf("[BOOTSTRAP] artifacts.Service ready (single-tx SUCCEEDED gate via FinalizationRepository.FinalizeVerified)")
 
 	outboxRegistry := outbox.NewRegistry()
 	stepReady := handlersoutbox.StepReadyHandler{Wf: workflowRepo, Q: fileQ}
@@ -292,7 +280,6 @@ func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
 		blobStore:           blobStore,
 		artifactSvc:         artifactSvc,
 		lifecyclePR3:        lcPR3,
-		artifactGate:        artifactGate,
 	}, nil
 }
 
@@ -385,12 +372,6 @@ func runServer(cfg *config.Config) error {
 			transitionSvc := queue.NewTransitionService(lcSvc)
 			cmdMgr := workersreg.NewCommandManager(deps.sqliteStore)
 			tokenMgr := workersreg.NewTokenManager(deps.sqliteStore)
-			// PR 2 (chunk 4): the gRPC artifact handler no longer trusts
-			// worker-declared path/size/sha. Wiring flows bootstrap's
-			// already-built artifacts.Service (the *artifacts.Service that
-			// owns artifact_uploads + canonical-key promotion + single-tx
-			// CAS) into grpcserver.NewHandler; the handler rejects nil at
-			// handleArtifactUploaded time as a defense-in-depth check.
 			grpcHandlerConfig := &grpcserver.HandlerConfig{
 				PushMode: cfg.Server.GRPCPushMode,
 			}
@@ -522,7 +503,6 @@ func runServer(cfg *config.Config) error {
 func runDuadDBBootCheck(deps *serverDeps, cfg *config.Config) {
 	log.Printf("[BOOTSTRAP] NOTE: dual-DB boot check is a no-op stub (PR9 cutover)")
 }
-
 
 func runDataLayerAudit(cfg *config.Config) error {
 	dataDir := cfg.DataDir
