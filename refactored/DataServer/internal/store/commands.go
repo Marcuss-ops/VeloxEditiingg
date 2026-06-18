@@ -68,18 +68,7 @@ type RenewLeaseCommand struct {
 	SkipRevisionCAS  bool      // false by default; tests + renewal helpers set true
 }
 
-// RecordRenderFinishedCommand moves RUNNING → RENDER_FINISHED on the worker
-// reporting success. The actual SUCCEEDED transition is gated on the
-// artifact service (MarkSucceededCommand) — RunningRepo never reaches
-// SUCCEEDED on its own.
-type RecordRenderFinishedCommand struct {
-	JobID            string
-	WorkerID         string
-	LeaseID          string
-	Attempt          int
-	ExpectedRevision int
-	Now              time.Time
-}
+// RecordRenderFinishedCommand is defined in jobs_writer_types.go.
 
 // FailCommand terminates a job (FAILED) or schedules a retry (RETRY_WAIT).
 // The repository decides which path based on Retryable + MaxRetries/RetryCount.

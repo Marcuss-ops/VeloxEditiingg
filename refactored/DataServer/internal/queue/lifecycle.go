@@ -111,7 +111,7 @@ func (l *LifecycleService) CompleteJob(ctx context.Context, jobID string) error 
 // Delegates to JobRepository.RecordRenderFinished for atomic verification
 // of (worker_id, lease_id, revision) and attempt status update.
 func (l *LifecycleService) RecordRenderFinished(ctx context.Context, cmd store.RecordRenderFinishedCommand) error {
-	return l.jobRepo.RecordRenderFinished(ctx, cmd)
+	return l.jobRepo.PR3RecordRenderFinished(ctx, cmd)
 }
 
 // FailJob marks a job as FAILED or RETRY_WAIT using CAS.

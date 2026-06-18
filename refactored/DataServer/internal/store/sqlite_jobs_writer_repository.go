@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"velox-server/internal/outbox"
 )
 
 // SQLiteJobRepository implements JobRepository against *SQLiteStore (spec §5).
@@ -851,7 +852,7 @@ func (r *SQLiteJobRepository) PR3RecordRenderFinished(ctx context.Context, cmd R
 		return tx.Commit()
 	}
 
-	now := r.nowStr(cmd.Now)
+	now := r.nowStr(cmd.FinishedAt)
 	res, err := tx.ExecContext(ctx,
 		`UPDATE jobs
 		   SET status = 'RENDER_FINISHED',
@@ -865,7 +866,7 @@ func (r *SQLiteJobRepository) PR3RecordRenderFinished(ctx context.Context, cmd R
 		   AND COALESCE(attempt, 0) = ?
 		   AND revision = ?`,
 		now, now,
-		cmd.JobID, cmd.WorkerID, cmd.LeaseID, cmd.Attempt, cmd.ExpectedRevision,
+		cmd.JobID, cmd.WorkerID, cmd.LeaseID, cmd.AttemptNumber, cmd.ExpectedRevision,
 	)
 	if err != nil {
 		return fmt.Errorf("PR3RecordRenderFinished UPDATE: %w", err)
@@ -879,7 +880,7 @@ func (r *SQLiteJobRepository) PR3RecordRenderFinished(ctx context.Context, cmd R
 	if err := r.insertEventTx(ctx, tx, cmd.JobID, "render_finished", map[string]interface{}{
 		"worker_id": cmd.WorkerID,
 		"lease_id":  cmd.LeaseID,
-		"attempt":   cmd.Attempt,
+		"attempt":   cmd.AttemptNumber,
 	}); err != nil {
 		return fmt.Errorf("PR3RecordRenderFinished event: %w", err)
 	}

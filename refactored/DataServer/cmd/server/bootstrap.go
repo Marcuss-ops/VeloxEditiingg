@@ -76,6 +76,8 @@ type serverDeps struct {
 	// pubblico per gli handler".
 	lifecyclePR3 *queue.LifecycleService
 	artifactGate *queue.ArtifactSuccessGate
+
+	assetService *voiceoverassets.AssetService
 }
 
 // grpcServer is an interface satisfied by *grpc.Server for lifecycle management.
@@ -302,6 +304,12 @@ func runServer(cfg *config.Config) error {
 	}
 	voiceoverBridge := voiceoverassets.NewService(cfg.DataDir, []string{cfg.DataDir}, maxVoiceoverBytes, driveMod.Service())
 	enqueue.SetVoiceoverAssetService(voiceoverBridge)
+
+	// Generic asset registry (PR 6): content-addressed, multi-role asset store.
+	assetRepo := store.NewSQLiteAssetRepository(deps.sqliteStore)
+	typedResolvers := voiceoverassets.NewTypedResolversFromStore(voiceoverBridge.Store(), driveMod.Service(), nil)
+	assetRegistry := voiceoverassets.NewResolverRegistry(typedResolvers...)
+	deps.assetService = voiceoverassets.NewAssetService(assetRepo, deps.blobStore, assetRegistry, nil)
 	ansibleMod := ansible.New(cfg, deps.paths.dataDir, auth, deps.sqliteStore)
 	deps.ansibleModule = ansibleMod
 	registry.Register(ansibleMod)

@@ -28,12 +28,7 @@ func NewService(dataDir string, allowedRoots []string, maxBytes int64, drive Dri
 		},
 	}
 
-	registry := NewRegistry(
-		&veloxAssetResolver{store: store},
-		&driveResolver{store: store, drive: drive},
-		&localFileResolver{store: store},
-		&httpResolver{store: store, http: httpClient},
-	)
+	registry := NewRegistry(NewResolversFromStore(store, drive, httpClient)...)
 
 	return &Service{
 		store:    store,
