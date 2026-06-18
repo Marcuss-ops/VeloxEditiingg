@@ -45,7 +45,13 @@ func (api *CalendarAPI) reconcileCalendarEvent(ctx context.Context, event *store
 	existing, err := api.queue.GetJob(ctx, event.JobID)
 	if err == nil && existing != nil && existing.Status == queue.StatusPending {
 		jobPayload = buildCalendarJobPayload(event, existingJobRunID(existing))
-		if err := api.queue.UpdateJobFields(ctx, event.JobID, jobPayload); err != nil {
+		// Update the job payload for pending jobs via persist
+		if existing.Payload != nil {
+			for k, v := range jobPayload {
+				existing.Payload[k] = v
+			}
+		}
+		if err := queue.PersistJob(existing, api.store); err != nil {
 			return err
 		}
 		applyQueueStateToEvent(event, existing)
@@ -54,7 +60,13 @@ func (api *CalendarAPI) reconcileCalendarEvent(ctx context.Context, event *store
 	if existing != nil && (existing.Status == queue.StatusRunning || existing.Status == queue.StatusLeased) {
 		jobPayload = buildCalendarJobPayload(event, existingJobRunID(existing))
 		jobPayload["status"] = string(existing.Status)
-		if err := api.queue.UpdateJobFields(ctx, event.JobID, jobPayload); err != nil {
+		// Update the job payload for running jobs via persist
+		if existing.Payload != nil {
+			for k, v := range jobPayload {
+				existing.Payload[k] = v
+			}
+		}
+		if err := queue.PersistJob(existing, api.store); err != nil {
 			return err
 		}
 		applyQueueStateToEvent(event, existing)

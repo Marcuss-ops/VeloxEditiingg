@@ -8,6 +8,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"velox-server/internal/config"
+	"velox-server/internal/services/progress"
 	"velox-server/internal/queue"
 	jobservice "velox-server/internal/services/jobs"
 	"velox-server/internal/store"
@@ -21,7 +22,13 @@ func RegisterV2JobRoutes(rg *gin.RouterGroup, cfg *config.Config, fileQ *queue.F
 		return
 	}
 
-	h := &jobV2Handler{cfg: cfg, fileQ: fileQ, dbStore: dbStore, svc: svc}
+	h := &jobV2Handler{
+		cfg:         cfg,
+		fileQ:       fileQ,
+		dbStore:     dbStore,
+		svc:         svc,
+		progressSvc: progress.NewService(dbStore),
+	}
 
 	rg.POST("/jobs/:id/lease", h.RenewLease())
 	rg.POST("/jobs/:id/complete", h.CompleteJob())
@@ -34,10 +41,11 @@ func RegisterV2JobRoutes(rg *gin.RouterGroup, cfg *config.Config, fileQ *queue.F
 }
 
 type jobV2Handler struct {
-	cfg     *config.Config
-	fileQ   *queue.FileQueue
-	dbStore *store.SQLiteStore
-	svc     *jobservice.Service
+	cfg         *config.Config
+	fileQ       *queue.FileQueue
+	dbStore     *store.SQLiteStore
+	svc         *jobservice.Service
+	progressSvc *progress.Service
 }
 
 func (h *jobV2Handler) RenewLease() gin.HandlerFunc {
@@ -299,12 +307,10 @@ func (h *jobV2Handler) Progress() gin.HandlerFunc {
 			_ = h.dbStore.LogJobEvent(jobID, "progress", extra)
 		}
 
-		// Update job fields with progress
-		if h.fileQ != nil && body.Percent > 0 {
-			_ = h.fileQ.UpdateJobFields(c.Request.Context(), jobID, map[string]interface{}{
-				"progress_percent": body.Percent,
-				"progress_stage":   body.Stage,
-			})
+		// Use ProgressService instead of UpdateJobFields
+		if h.progressSvc != nil && body.Percent > 0 {
+			attemptNumber := 1
+			_ = h.progressSvc.Record(c.Request.Context(), jobID, attemptNumber, body.Percent, body.Stage, body.Message)
 		}
 
 		c.JSON(http.StatusOK, gin.H{"ok": true, "job_id": jobID, "percent": body.Percent})

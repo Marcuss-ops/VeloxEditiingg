@@ -200,7 +200,8 @@ func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMasterEnvelo
 		h.mu.Lock()
 		if currentSID, ok := h.workerSessions[workerID]; ok && currentSID == sessionID {
 			delete(h.workerSessions, workerID)
-		}		delete(h.sessions, sessionID)
+		}
+		delete(h.sessions, sessionID)
 		h.mu.Unlock()
 
 		// Issue 7 fix: revoke the session in SQLite on disconnect.

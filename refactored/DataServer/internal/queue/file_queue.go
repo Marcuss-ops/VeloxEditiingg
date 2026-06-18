@@ -286,11 +286,6 @@ func (q *FileQueue) GetJobAsMap(ctx context.Context, jobID string) (map[string]i
 	return q.ts.GetJobAsMap(ctx, jobID)
 }
 
-// UpdateJobFields updates specific fields of a job.
-func (q *FileQueue) UpdateJobFields(ctx context.Context, jobID string, fields map[string]interface{}) error {
-	return q.ts.UpdateJobFields(ctx, jobID, fields)
-}
-
 // UpdateJobLogs appends logs to a job.
 func (q *FileQueue) UpdateJobLogs(ctx context.Context, jobID string, logs []JobLogEntry) error {
 	return q.ts.UpdateJobLogs(ctx, jobID, logs)
