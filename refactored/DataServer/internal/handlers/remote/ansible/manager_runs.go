@@ -11,6 +11,9 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
+
+	"github.com/google/uuid"
 )
 
 // AnsibleRunRecord stores the execution state for a playbook or ad-hoc command.
@@ -39,6 +42,21 @@ type AnsibleRunStore interface {
 	AddAnsibleRunHost(runID, host string) error
 	ListAnsibleRunHosts(runID string) ([]string, error)
 }
+
+// ErrExecutorRemoved is the sentinel error returned by legacy
+// AnsibleRunManager.RunPlaybook after the PR 8 executor migration.
+// Callers can errors.Is against it to surface an operator-action hint
+// through the API response and log line.
+var ErrExecutorRemoved = errors.New(
+	"ansible RunPlaybook executor removed in PR8: use internal/ansible/executor package (operator action required)",
+)
+
+// StatusExecutorMissing is the run-record status persisted alongside a
+// failed RunPlaybook due to ErrExecutorRemoved. The recorded run stays in
+// the API-visible list so operators can detect deploy breaks via
+// GET /ansible/runs/{id} instead of seeing only a stack trace in the boot
+// log.
+const StatusExecutorMissing = "executor_missing"
 
 // AnsibleRunManager manages playbook executions and run history.
 type AnsibleRunManager struct {
@@ -298,8 +316,40 @@ func (m *AnsibleRunManager) RunPlaybook(ctx context.Context, host, playbook stri
 	if m == nil {
 		return "", errors.New("ansible run manager unavailable")
 	}
-	// Pipeline backstop: PR8-removed. Return a deterministic sentinel so
-	// callers can detect the missing-executor condition and migrate. The
-	// HTTP layer logs this as a clear, actionable error rather than a stack.
-	return "", fmt.Errorf("ansible RunPlaybook executor removed in PR8: use internal/ansible/executor package (operator action required)")
+	// PR 8 cutover: the in-process ansible-playbook executor was removed.
+	// Even though no executor runs, we still mint a run ID and persist an
+	// AnsibleRunRecord with StatusExecutorMissing + ErrExecutorRemoved
+	// text, then return the typed sentinel. This keeps the deploy break
+	// visible in two places operators consult:
+	//   (a) the typed error surfaces in the HTTP response (callers can
+	//       map ErrExecutorRemoved -> HTTP 503 + operator-action hint).
+	//   (b) GET /ansible/runs/{id} and the runs listing render the saved
+	//       record with Status="executor_missing", so a missing executor
+	//       shows up where operators already look for run history.
+	runID := strings.ReplaceAll(uuid.NewString(), "-", "")[:8]
+	if runID == "" {
+		runID = fmt.Sprintf("%08x", time.Now().UnixNano())
+	}
+	now := time.Now().Unix()
+	if host == "" {
+		host = "unknown"
+	}
+	record := AnsibleRunRecord{
+		ID:        runID,
+		Action:    playbook,
+		Playbook:  playbook,
+		Hosts:     []string{host},
+		Status:    StatusExecutorMissing,
+		StartedAt: now,
+		EndedAt:   now,
+		Output:    ErrExecutorRemoved.Error(),
+		Preamble:  ErrExecutorRemoved.Error() + "\n",
+	}
+	if v, ok := vars["master_url"].(string); ok && strings.TrimSpace(v) != "" {
+		record.MasterURL = v
+		record.MasterURLSource = "body"
+	}
+	// Best-effort persist: a store error must NOT mask ErrExecutorRemoved.
+	_ = m.saveRun(record)
+	return runID, ErrExecutorRemoved
 }
