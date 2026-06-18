@@ -1258,9 +1258,13 @@ func TestYouTubeGroupsLegacy(t *testing.T) {
 		t.Errorf("name: got %v, want %q", groups[0]["name"], "Legacy Group")
 	}
 
-	// Delete
-	if err := s.DeleteYouTubeGroup("Legacy Group"); err != nil {
-		t.Fatalf("DeleteYouTubeGroup failed: %v", err)
+	// Delete (via V2 — DeleteYouTubeGroup removed in PR 3.5-b)
+	groupID, err := s.GetYouTubeGroupV2ID("Legacy Group", "manager")
+	if err != nil {
+		t.Fatalf("GetYouTubeGroupV2ID failed: %v", err)
+	}
+	if err := s.DeleteYouTubeGroupV2(groupID); err != nil {
+		t.Fatalf("DeleteYouTubeGroupV2 failed: %v", err)
 	}
 	groups, _ = s.ListYouTubeGroups()
 	if len(groups) != 0 {

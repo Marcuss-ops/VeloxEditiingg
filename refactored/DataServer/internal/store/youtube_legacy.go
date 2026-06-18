@@ -236,9 +236,3 @@ func (s *SQLiteStore) UpsertYouTubeGroup(name, description, privacy string, chan
 	return nil
 }
 
-// DeleteYouTubeGroup is a thin name-based convenience wrapper for tests
-// and HTTP shims. Production callers should prefer DeleteYouTubeGroupV2(id).
-func (s *SQLiteStore) DeleteYouTubeGroup(name string) error {
-	_, err := s.db.Exec(`DELETE FROM youtube_groups WHERE name = ?`, name)
-	return err
-}
