@@ -101,13 +101,6 @@ func (r *JobRepository) RequeueZombieJobs(ctx context.Context, timeout time.Dura
 	return 0, store.ErrNotImplemented
 }
 
-// UpdateJobResult — TODO §5b: UPDATE jobs SET result_json=$1 WHERE job_id=$2.
-func (r *JobRepository) UpdateJobResult(ctx context.Context, jobID string, resultJSON []byte) error {
-	_, _, _ = ctx, jobID, resultJSON
-	_ = r.dsn
-	return store.ErrNotImplemented
-}
-
 // StartJob — TODO §5b: CAS via UPDATE jobs SET status='RUNNING', revision=revision+1 WHERE job_id=$1 AND UPPER(status)='LEASED' AND worker_id=$2 AND lease_id=$3 AND attempt=$4 AND revision=$5.
 // Returns ErrTransitionConflict on predicate mismatch. Defined here so the
 // compile-time JobRepository interface check (`var _ store.JobRepository`)

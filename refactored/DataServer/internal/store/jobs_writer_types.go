@@ -249,10 +249,6 @@ type JobRepository interface {
 	// RequeueZombieJobs finds jobs in LEASED/RUNNING state with expired leases
 	// and atomically requeues them to PENDING. Returns count of requeued jobs.
 	RequeueZombieJobs(ctx context.Context, timeout time.Duration) (int, error)
-	// UpdateJobResult writes the result_json blob for a job.
-	// Used by UpdateJobFields for persisting the full operational state.
-	UpdateJobResult(ctx context.Context, jobID string, resultJSON []byte) error
-
 	// ── PR 3 — fully-transactional lifecycle methods ────────────────────────
 	//
 	// Every method below wraps its UPDATE + history INSERT + event INSERT

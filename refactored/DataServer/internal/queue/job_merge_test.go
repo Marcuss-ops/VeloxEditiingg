@@ -8,7 +8,7 @@ import (
 	"velox-server/internal/store"
 )
 
-func TestUpdateJobFieldsClearsFailureStateOnComplete(t *testing.T) {
+func TestTransitionToRunningAndCompleteClearsFailureState(t *testing.T) {
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "jobs.sqlite")
 
@@ -21,7 +21,7 @@ func TestUpdateJobFieldsClearsFailureStateOnComplete(t *testing.T) {
 	jobRepo := store.NewSQLiteJobRepository(dbStore)
 	ts, err := NewLegacyLifecycleService(jobRepo, dbStore)
 	if err != nil {
-		t.Fatalf("new transition service: %v", err)
+		t.Fatalf("new lifecycle service: %v", err)
 	}
 
 	// Submit a job with stale failure state
@@ -46,18 +46,14 @@ func TestUpdateJobFieldsClearsFailureStateOnComplete(t *testing.T) {
 		t.Fatalf("persist initial job: %v", err)
 	}
 
-	// Must go through RUNNING first
-	if err := ts.UpdateJobFields(ctx, job.JobID, map[string]interface{}{
-		"status": "RUNNING",
-	}); err != nil {
-		t.Fatalf("update job fields to running: %v", err)
+	// Transition to RUNNING using typed method
+	if err := ts.TransitionToRunning(ctx, job.JobID); err != nil {
+		t.Fatalf("transition to running: %v", err)
 	}
 
-	// Then complete
-	if err := ts.UpdateJobFields(ctx, job.JobID, map[string]interface{}{
-		"status": "SUCCEEDED",
-	}); err != nil {
-		t.Fatalf("update job fields to succeeded: %v", err)
+	// Complete using typed method
+	if err := ts.CompleteJob(ctx, job.JobID); err != nil {
+		t.Fatalf("complete job: %v", err)
 	}
 
 	saved, err := dbStore.GetJob(ctx, job.JobID)
@@ -92,7 +88,7 @@ func TestCompleteJobClearsFailureState(t *testing.T) {
 	jobRepo := store.NewSQLiteJobRepository(dbStore)
 	ts, err := NewLegacyLifecycleService(jobRepo, dbStore)
 	if err != nil {
-		t.Fatalf("new transition service: %v", err)
+		t.Fatalf("new lifecycle service: %v", err)
 	}
 
 	// Persist a processing job with stale failure state

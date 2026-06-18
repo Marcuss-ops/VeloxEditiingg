@@ -77,9 +77,6 @@ func (r *testArtifactGateRepo) ReleaseClaim(_ context.Context, _ string) error {
 func (r *testArtifactGateRepo) RequeueZombieJobs(_ context.Context, _ time.Duration) (int, error) {
 	return 0, nil
 }
-func (r *testArtifactGateRepo) UpdateJobResult(_ context.Context, _ string, _ []byte) error {
-	return nil
-}
 
 func (r *testArtifactGateRepo) RecordRenderFinished(_ context.Context, cmd store.RecordRenderFinishedCommand) error {
 	j, ok := r.jobs[cmd.JobID]
@@ -100,6 +97,31 @@ func (r *testArtifactGateRepo) RecordRenderFinished(_ context.Context, cmd store
 	}
 	r.events = append(r.events, "render_finished")
 	return nil
+}
+
+func (r *testArtifactGateRepo) PR3Start(_ context.Context, _ store.StartCommand) error {
+	return store.ErrNotImplemented
+}
+func (r *testArtifactGateRepo) PR3RenewLease(_ context.Context, _ store.RenewLeaseCommand) error {
+	return store.ErrNotImplemented
+}
+func (r *testArtifactGateRepo) PR3RecordRenderFinished(_ context.Context, _ store.RecordRenderFinishedCommand) error {
+	return store.ErrNotImplemented
+}
+func (r *testArtifactGateRepo) PR3Fail(_ context.Context, _ store.FailCommand) error {
+	return store.ErrNotImplemented
+}
+func (r *testArtifactGateRepo) PR3ScheduleRetry(_ context.Context, _ store.RetryCommand) error {
+	return store.ErrNotImplemented
+}
+func (r *testArtifactGateRepo) PR3Cancel(_ context.Context, _ store.CancelCommand) error {
+	return store.ErrNotImplemented
+}
+func (r *testArtifactGateRepo) PR3RequeueExpiredLeases(_ context.Context, _ time.Time, _ int) ([]store.RequeueResult, error) {
+	return nil, store.ErrNotImplemented
+}
+func (r *testArtifactGateRepo) PR3MarkSucceeded(_ context.Context, _ store.MarkSucceededCommand) error {
+	return store.ErrNotImplemented
 }
 
 // testArtifactGateEventStore is a minimal EventStore for artifact gate tests.

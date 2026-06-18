@@ -40,9 +40,6 @@ func (s *storePostgresStub) ReleaseClaim(ctx context.Context, jobID string) erro
 func (s *storePostgresStub) RequeueZombieJobs(ctx context.Context, timeout time.Duration) (int, error) {
 	return 0, store.ErrNotImplemented
 }
-func (s *storePostgresStub) UpdateJobResult(ctx context.Context, jobID string, resultJSON []byte) error {
-	return store.ErrNotImplemented
-}
 func (s *storePostgresStub) CompleteJob(ctx context.Context, params store.CompleteJobParams) error {
 	return store.ErrNotImplemented
 }
@@ -50,6 +47,30 @@ func (s *storePostgresStub) StartJob(ctx context.Context, params store.StartJobP
 	return store.ErrNotImplemented
 }
 func (s *storePostgresStub) RecordRenderFinished(ctx context.Context, cmd store.RecordRenderFinishedCommand) error {
+	return store.ErrNotImplemented
+}
+func (s *storePostgresStub) PR3Start(ctx context.Context, cmd store.StartCommand) error {
+	return store.ErrNotImplemented
+}
+func (s *storePostgresStub) PR3RenewLease(ctx context.Context, cmd store.RenewLeaseCommand) error {
+	return store.ErrNotImplemented
+}
+func (s *storePostgresStub) PR3RecordRenderFinished(ctx context.Context, cmd store.RecordRenderFinishedCommand) error {
+	return store.ErrNotImplemented
+}
+func (s *storePostgresStub) PR3Fail(ctx context.Context, cmd store.FailCommand) error {
+	return store.ErrNotImplemented
+}
+func (s *storePostgresStub) PR3ScheduleRetry(ctx context.Context, cmd store.RetryCommand) error {
+	return store.ErrNotImplemented
+}
+func (s *storePostgresStub) PR3Cancel(ctx context.Context, cmd store.CancelCommand) error {
+	return store.ErrNotImplemented
+}
+func (s *storePostgresStub) PR3RequeueExpiredLeases(ctx context.Context, now time.Time, limit int) ([]store.RequeueResult, error) {
+	return nil, store.ErrNotImplemented
+}
+func (s *storePostgresStub) PR3MarkSucceeded(ctx context.Context, cmd store.MarkSucceededCommand) error {
 	return store.ErrNotImplemented
 }
 

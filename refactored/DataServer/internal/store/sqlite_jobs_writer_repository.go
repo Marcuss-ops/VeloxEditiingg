@@ -383,11 +383,6 @@ func (r *SQLiteJobRepository) RequeueZombieJobs(ctx context.Context, timeout tim
 	return int(n), nil
 }
 
-// UpdateJobResult writes the result_json blob for a job.
-func (r *SQLiteJobRepository) UpdateJobResult(ctx context.Context, jobID string, resultJSON []byte) error {
-	return r.store.UpsertJobResult(jobID, resultJSON)
-}
-
 // StartJob performs the LEASED → RUNNING transition atomically.
 //
 // The single UPDATE verifies all five identity columns at once:
