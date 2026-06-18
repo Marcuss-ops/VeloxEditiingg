@@ -117,11 +117,9 @@ func newRouter(cfg *config.Config, deps *serverDeps, registry *app.Registry) *gi
 	deHandler.SetDBStore(deps.sqliteStore)
 	darkeditor.RegisterAPIRoutes(r, deHandler)
 
-	// Orchestrator multi-step pipeline routes (PR 9 cutover: backed by
-	// workflow.Repository rather than the legacy *queue.Orchestrator).
-	orchAdmin := r.Group("/api/v1")
-	orchAdmin.Use(api.AdminAuthMiddleware(cfg))
-	registerOrchestratorRoutes(orchAdmin, deps.workflowRepo)
+	// Note: orchestrator /api/v1/group pipeline routes are registered by
+	// registerOrchestratorAdminRoutes above (avoids gin double-registration
+	// of the same POST /orchestrator/jobs paths from a single gin IRoute).
 
 	// PR2b/PR4d: upload-completed now uses BlobStore + ArtifactFinalizationService
 	// instead of the old direct-save + maybeAutoUpload pattern.

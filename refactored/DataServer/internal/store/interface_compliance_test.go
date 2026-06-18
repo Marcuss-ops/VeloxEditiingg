@@ -54,8 +54,8 @@ func TestInterface_AnsibleComputerStore_CompileTime(t *testing.T) {
 	// interface is satisfied.
 	//
 	// SQLiteStore implements:
-	//   - Legacy: GetAnsibleComputer, ListAnsibleComputers,
-	//     UpsertAnsibleComputer, DeleteAnsibleComputer,
+	//   - Legacy: GetAnsibleHost, ListAnsibleComputers,
+	//     UpsertAnsibleComputer, DeleteAnsibleHost,
 	//     MigrateAnsibleComputersFromJSON
 	//   - Structured: UpsertAnsibleHost, DeleteAnsibleHost,
 	//     GetAnsibleHost, ListAnsibleHosts
@@ -255,17 +255,17 @@ func TestInterface_AnsibleComputerStore_LegacyComputers(t *testing.T) {
 	var acStore ansible.AnsibleComputerStore = s
 
 	// Upsert legacy via interface
-	if err := acStore.UpsertAnsibleComputer("legacy-host", `{"host":"legacy-host","enabled":true,"group":"legacy"}`); err != nil {
+	if err := acStore.UpsertAnsibleHost(store.AnsibleHostFields{Host: "legacy-host", AnsibleUser: "pierone", Enabled: true, Group: "legacy", Availability: "UNKNOWN"}); err != nil {
 		t.Fatalf("UpsertAnsibleComputer via interface: %v", err)
 	}
 
 	// Get legacy via interface
-	raw, err := acStore.GetAnsibleComputer("legacy-host")
+	raw, err := acStore.GetAnsibleHost("legacy-host")
 	if err != nil {
-		t.Fatalf("GetAnsibleComputer via interface: %v", err)
+		t.Fatalf("GetAnsibleHost via interface: %v", err)
 	}
-	if raw == "" {
-		t.Fatal("expected non-empty raw JSON")
+	if raw == nil {
+		t.Fatal("expected non-nil AnsibleHostFields")
 	}
 
 	// List legacy via interface
@@ -278,12 +278,12 @@ func TestInterface_AnsibleComputerStore_LegacyComputers(t *testing.T) {
 	}
 
 	// Delete legacy via interface
-	if err := acStore.DeleteAnsibleComputer("legacy-host"); err != nil {
-		t.Fatalf("DeleteAnsibleComputer via interface: %v", err)
+	if err := acStore.DeleteAnsibleHost("legacy-host"); err != nil {
+		t.Fatalf("DeleteAnsibleHost via interface: %v", err)
 	}
-	raw, _ = acStore.GetAnsibleComputer("legacy-host")
-	if raw != "" {
-		t.Error("expected empty after delete via interface")
+	raw, _ = acStore.GetAnsibleHost("legacy-host")
+	if raw != nil {
+		t.Error("expected nil after delete via interface")
 	}
 }
 
