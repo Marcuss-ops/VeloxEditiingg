@@ -286,26 +286,31 @@ func (r *SQLiteFinalizationRepository) FinalizeVerified(
 		return nil, fmt.Errorf("artifacts: FinalizeVerified outbox JOB_SUCCEEDED: %w", err)
 	}
 
-	// 6. job_deliveries idempotent creation.
-	//
-	// TODO(PR-3.5-b-4.4): replace this single 'primary' INSERT with
-	// iteration over a DeliveryPlanResolver-provided destination set
-	// (GLOBAL destinations + per-job plans from delivery_destinations
-	// + job_delivery_plans). For each destination_id, INSERT...
-	// ON CONFLICT(artifact_id, destination_id) DO NOTHING and emit
-	// DELIVERY_CREATED only when RowsAffected == 1. The current
-	// single-INSERT is safe (UNIQUE protects against double FINALIZE)
-	// but does not match the wider destination set that production
-	// delivery runs require.
-	// Resolve delivery destinations. If no explicit destination is
-	// specified, use the first enabled destination for this job.
-	destID := cmd.DestinationID
-	if destID == "" {
-		_ = tx.QueryRowContext(ctx,
-			`SELECT destination_id FROM delivery_destinations WHERE enabled = 1 LIMIT 1`,
-		).Scan(&destID)
+	// 6. job_deliveries idempotent creation — one row per enabled
+	//    delivery destination. ON CONFLICT(artifact_id, destination_id)
+	//    DO NOTHING protects against double FINALIZE. DELIVERY_CREATED
+	//    emitted only when RowsAffected == 1 (first insert).
+	// Resolve delivery destinations. Query all enabled destinations;
+	// for each, INSERT an idempotent job_deliveries row.
+	// If cmd.DestinationID is set, use only that one (explicit caller
+	// intent). Otherwise, iterate all enabled destinations globally.
+	var destIDs []string
+	if cmd.DestinationID != "" {
+		destIDs = []string{cmd.DestinationID}
+	} else {
+		rows, qerr := tx.QueryContext(ctx,
+			`SELECT destination_id FROM delivery_destinations WHERE enabled = 1`)
+		if qerr == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var did string
+				if err := rows.Scan(&did); err == nil && did != "" {
+					destIDs = append(destIDs, did)
+				}
+			}
+		}
 	}
-	if destID != "" {
+	for _, destID := range destIDs {
 		delRes, err := tx.ExecContext(ctx, `
 			INSERT INTO job_deliveries (delivery_id, artifact_id, destination_id, status, idempotency_key, created_at, updated_at)
 			SELECT ?, ?, ?, 'PENDING', ?, ?, ?
@@ -318,7 +323,7 @@ func (r *SQLiteFinalizationRepository) FinalizeVerified(
 			cmd.ArtifactID, destID,
 		)
 		if err != nil {
-			return nil, fmt.Errorf("artifacts: FinalizeVerified job_deliveries insert: %w", err)
+			return nil, fmt.Errorf("artifacts: FinalizeVerified job_deliveries insert (dest=%s): %w", destID, err)
 		}
 		if delRes != nil {
 			if n, _ := delRes.RowsAffected(); n == 1 {
@@ -327,7 +332,7 @@ func (r *SQLiteFinalizationRepository) FinalizeVerified(
 					fmt.Sprintf(`{"artifact_id":%q,"destination_id":%q}`,
 						cmd.ArtifactID, destID),
 				); err != nil {
-					return nil, fmt.Errorf("artifacts: FinalizeVerified outbox DELIVERY_CREATED: %w", err)
+					return nil, fmt.Errorf("artifacts: FinalizeVerified outbox DELIVERY_CREATED (dest=%s): %w", destID, err)
 				}
 			}
 		}

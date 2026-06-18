@@ -54,6 +54,10 @@ func UploadCompletedVideo(cfg *config.Config, artifactSvc *artifacts.Service) gi
 		}
 
 		revision, _ := strconv.Atoi(c.PostForm("revision"))
+		attempt, _ := strconv.Atoi(c.PostForm("attempt"))
+		if attempt < 1 {
+			attempt = 1
+		}
 
 		ctx := c.Request.Context()
 
@@ -63,7 +67,7 @@ func UploadCompletedVideo(cfg *config.Config, artifactSvc *artifacts.Service) gi
 			JobID:            jobID,
 			WorkerID:         workerID,
 			LeaseID:          leaseID,
-			AttemptNumber:    1,
+			AttemptNumber:    attempt,
 			ExpectedRevision: revision,
 			Kind:             ext,
 		})
