@@ -483,7 +483,6 @@ func (h *Handler) handleHeartbeat(workerID, sessionID string, hb *pb.Heartbeat) 
 	}
 
 	// Update capacity tracking on the session (for max_parallel_jobs check).
-	// max_parallel_jobs comes from extra (not a typed field in the proto).
 	sess := h.getSession(workerID)
 	if sess != nil {
 		sess.activeJobsCount = hb.GetActiveJobsCount()
@@ -555,7 +554,6 @@ func (h *Handler) handleJobAccepted(workerID string, ja *pb.JobAccepted) {
 	}
 
 	// Verify the lease_id the worker is accepting matches what we offered.
-	// If they don't match, the worker may be responding to a stale offer.
 	declaredLeaseID := ja.GetLeaseId()
 	if declaredLeaseID != "" && declaredLeaseID != offerLeaseID {
 		log.Printf("[GRPC] Worker %s accepted job %s with mismatched lease_id: got %s, want %s",
@@ -619,8 +617,6 @@ func (h *Handler) handleJobRejected(workerID string, jr *pb.JobRejected) {
 
 // handleJobProgress tracks per-job progress (typed, forwarded via heartbeat for now).
 func (h *Handler) handleJobProgress(workerID string, jp *pb.JobProgress) {
-	// Progress updates are informational; the registry already tracks them
-	// via the heartbeat's active_jobs payload.
 	log.Printf("[GRPC] Worker %s progress on job %s: stage=%s %d%% (scene %d/%d)",
 		workerID, jp.GetJobId(), jp.GetStage(), jp.GetProgressPercent(), jp.GetScene(), jp.GetTotalScenes())
 }
@@ -818,7 +814,6 @@ func (h *Handler) sessionWriter(sess *workerSession) {
 		if err := sess.stream.Send(env); err != nil {
 			log.Printf("[GRPC] sessionWriter send error for worker %s (session %s): %v",
 				sess.workerID, sess.sessionID, err)
-			// Don't break — the stream may recover; the caller handles errors via context.
 		}
 	}
 	log.Printf("[GRPC] sessionWriter exiting for worker %s (session %s)", sess.workerID, sess.sessionID)

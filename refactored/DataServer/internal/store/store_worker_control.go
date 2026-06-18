@@ -92,7 +92,6 @@ func (s *SQLiteStore) GetPendingCommands(workerID string) ([]*PersistedCommand, 
 }
 
 // AckCommandByID marks a specific command as acknowledged by its command_id AND worker_id.
-// The worker_id check prevents a worker from ACKing another worker's command.
 func (s *SQLiteStore) AckCommandByID(workerID, commandID string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 	result, err := s.db.Exec(
@@ -163,7 +162,6 @@ func (s *SQLiteStore) CleanupOldCommands(olderThan time.Duration) (int64, error)
 // HasPendingCommand checks if a worker already has a pending command of the given type with the given idempotency key.
 func (s *SQLiteStore) HasPendingCommand(workerID, commandType, idempotencyKey string) (bool, error) {
 	if idempotencyKey == "" {
-		// Fallback: check by type only
 		var count int
 		err := s.db.QueryRow(
 			`SELECT COUNT(*) FROM worker_commands
