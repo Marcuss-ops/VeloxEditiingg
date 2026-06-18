@@ -73,7 +73,10 @@ func (r *SQLiteArtifactRepository) Insert(ctx context.Context, artifact *Artifac
 
 // FinalizeAndComplete atomically:
 //  1. updates artifacts.status and storage_url, and
-//  2. (if jobID supplied) bumps the job to SUCCEEDED with completed_at + sha256.
+//  2. (if jobID supplied) bumps the job to SUCCEEDED with completed_at + updated_at.
+//
+// sha256 is kept for ArtifactRepository interface compatibility; the jobs.output_sha256
+// column was dropped by migration 033.
 //
 // Atomicity is enforced by a single SQL transaction — callers do not see Begin/Commit.
 func (r *SQLiteArtifactRepository) FinalizeAndComplete(ctx context.Context, artifactID, status, storageURL, jobID, sha256 string) error {
@@ -98,13 +101,6 @@ func (r *SQLiteArtifactRepository) FinalizeAndComplete(ctx context.Context, arti
 			 WHERE job_id=? AND UPPER(COALESCE(status,'')) NOT IN ('SUCCEEDED','COMPLETED','CANCELLED','FAILED')`,
 			"SUCCEEDED", now, now, jobID); err != nil {
 			return err
-		}
-		if sha256 != "" {
-			if _, err := tx.ExecContext(ctx,
-				`UPDATE jobs SET output_sha256=? WHERE job_id=?`,
-				sha256, jobID); err != nil {
-				return err
-			}
 		}
 	}
 	return tx.Commit()
