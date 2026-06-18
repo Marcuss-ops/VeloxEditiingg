@@ -15,10 +15,8 @@ const jobColumns = `job_id, status, video_name, project_id,
 	retry_count, attempt, max_retries,
 	last_error, last_error_at, error_message, failed_at, failed_by,
 	processing_at,
-	video_uploaded, master_video_path, last_upload_result, last_upload_attempt_at,
+	last_upload_result, last_upload_attempt_at,
 	last_drive_upload_result, remote_status,
-	artifact_id, output_sha256, upload_idempotency_key,
-	output_video_id, drive_url,
 	job_fingerprint, submitted_via, last_activity, run_id, job_run_id,
 	logs_updated_at, slot_data,
 	request_json, result_json, raw_json`
@@ -34,11 +32,8 @@ func scanJobRow(scanner interface{ Scan(dest ...interface{}) error }) (map[strin
 		retryCount, attempt, maxRetries                                                                              sql.NullInt64
 		lastError, errorMessage, failedBy                                                                            sql.NullString
 		lastErrorAt, failedAt, processingAt                                                                          sql.NullString
-		videoUploadedInt                                                                                             sql.NullInt64
-		masterVideoPath, lastUploadResult, lastUploadAttemptAt                                                       sql.NullString
+		lastUploadResult, lastUploadAttemptAt                                                                        sql.NullString
 		lastDriveUploadResult, remoteStatus                                                                          sql.NullString
-		artifactID, outputSHA256, uploadIdempotencyKey                                                               sql.NullString
-		outputVideoID, driveURL                                                                                      sql.NullString
 		jobFingerprint, submittedVia, lastActivity, runID, jobRunID                                                  sql.NullString
 		logsUpdatedAt, slotDataRaw                                                                                   sql.NullString
 		requestJSON, resultJSON, rawJSON                                                                             sql.NullString
@@ -53,10 +48,8 @@ func scanJobRow(scanner interface{ Scan(dest ...interface{}) error }) (map[strin
 		&retryCount, &attempt, &maxRetries,
 		&lastError, &lastErrorAt, &errorMessage, &failedAt, &failedBy,
 		&processingAt,
-		&videoUploadedInt, &masterVideoPath, &lastUploadResult, &lastUploadAttemptAt,
+		&lastUploadResult, &lastUploadAttemptAt,
 		&lastDriveUploadResult, &remoteStatus,
-		&artifactID, &outputSHA256, &uploadIdempotencyKey,
-		&outputVideoID, &driveURL,
 		&jobFingerprint, &submittedVia, &lastActivity, &runID, &jobRunID,
 		&logsUpdatedAt, &slotDataRaw,
 		&requestJSON, &resultJSON, &rawJSON,
@@ -91,19 +84,10 @@ func scanJobRow(scanner interface{ Scan(dest ...interface{}) error }) (map[strin
 	setStr("last_error_at", lastErrorAt)
 	setStr("failed_at", failedAt)
 	setStr("processing_at", processingAt)
-	if videoUploadedInt.Valid {
-		m["video_uploaded"] = videoUploadedInt.Int64 == 1
-	}
-	setStr("master_video_path", masterVideoPath)
 	setStr("last_upload_result", lastUploadResult)
 	setStr("last_upload_attempt_at", lastUploadAttemptAt)
 	setStr("last_drive_upload_result", lastDriveUploadResult)
 	setStr("remote_status", remoteStatus)
-	setStr("artifact_id", artifactID)
-	setStr("output_sha256", outputSHA256)
-	setStr("upload_idempotency_key", uploadIdempotencyKey)
-	setStr("output_video_id", outputVideoID)
-	setStr("drive_url", driveURL)
 	setStr("job_fingerprint", jobFingerprint)
 	setStr("submitted_via", submittedVia)
 	setStr("last_activity", lastActivity)
