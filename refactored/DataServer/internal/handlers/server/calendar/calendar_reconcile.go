@@ -7,7 +7,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"velox-server/internal/compat"
 	"velox-server/internal/queue"
 	"velox-server/internal/store"
 )
@@ -141,9 +140,23 @@ func applyQueueStateToEvent(ctx context.Context, event *store.CalendarEvent, job
 		event.Status = "processing"
 	case queue.StatusSucceeded:
 		event.Status = "completed"
-		if view, err := compat.AssembleLegacyJobView(ctx, dbStore, job); err == nil && view != nil {
-			event.OutputVideoPath = view.MasterVideoPath
-			event.OutputVideoURL = view.DriveURL
+		artifacts, _ := dbStore.GetArtifactsByJob(job.JobID, 5)
+		for _, a := range artifacts {
+			if a.Status == "READY" {
+				if a.LocalPath != "" {
+					event.OutputVideoPath = a.LocalPath
+				} else if a.StorageKey != "" {
+					event.OutputVideoPath = a.StorageKey
+				}
+				deliveries, _ := dbStore.ListJobDeliveriesByJob(job.JobID)
+				for _, d := range deliveries {
+					if d.ArtifactID == a.ID && d.RemoteURL != "" {
+						event.OutputVideoURL = d.RemoteURL
+						break
+					}
+				}
+				break
+			}
 		}
 	case queue.StatusFailed:
 		event.Status = "failed"

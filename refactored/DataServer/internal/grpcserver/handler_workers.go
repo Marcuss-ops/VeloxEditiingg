@@ -93,9 +93,7 @@ func (h *Handler) handleCommandAck(workerID string, ca *pb.CommandAck) {
 	}
 }
 
-// notifyJobsAvailable checks for pending jobs and sends full JobOffers
-// (Phase 5+ push mode). ShadowMode/JobAvailable path was removed in
-// Phase 4.3 — there is no HTTP claim fallback any more.
+// notifyJobsAvailable checks for pending jobs and sends full JobOffers (push mode).
 func (h *Handler) notifyJobsAvailable(ctx context.Context, workerID string, trigger <-chan struct{}, done <-chan struct{}) {
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
@@ -112,41 +110,7 @@ func (h *Handler) notifyJobsAvailable(ctx context.Context, workerID string, trig
 
 		if h.config.PushMode {
 			h.sendPushJobOffer(ctx, workerID)
-		} else if h.config.ShadowMode {
-			h.sendJobAvailable(ctx, workerID)
 		}
-	}
-}
-
-// sendJobAvailable sends a typed JobAvailable notification (Shadow mode).
-// Issue 5 fix: sends via sendCh instead of direct stream.Send().
-func (h *Handler) sendJobAvailable(ctx context.Context, workerID string) {
-	jobID, err := h.lifecycleSvc.GetNextJobID(ctx)
-	if err != nil || jobID == "" {
-		return
-	}
-
-	sess := h.getSession(workerID)
-	if sess == nil {
-		return
-	}
-
-	env := &pb.MasterToWorkerEnvelope{
-		MessageId:       fmt.Sprintf("javail-%s-%d", workerID, time.Now().UnixNano()),
-		WorkerId:        workerID,
-		SentAt:          timestamppb.Now(),
-		ProtocolVersion: controltransport.ProtocolVersionCurrent,
-		Msg: &pb.MasterToWorkerEnvelope_JobAvailable{
-			JobAvailable: &pb.JobAvailable{
-				CompatibleJobExists: true,
-				Message:             "Job available for claim",
-			},
-		},
-	}
-
-	// Issue 5 fix: send via sendCh — non-blocking (drop if channel full, next tick will retry).
-	if !safeSend(sess.sendCh, env) {
-		log.Printf("[GRPC] sendCh full/closed for JobAvailable to worker %s", workerID)
 	}
 }
 

@@ -73,6 +73,10 @@ func (s *Store) Insert(ctx context.Context, txn Executor, p InsertParams) (strin
 	if ex == nil {
 		ex = s.DB
 	}
+	q := `INSERT INTO outbox_events
+		(event_id, aggregate_type, aggregate_id, event_type,
+		 payload_json, status, available_at, created_at)
+		VALUES (?, ?, ?, ?, ?, 'PENDING', ?, ?)`
 	if _, err := exec(ctx, ex, q,
 		id, p.AggregateType, p.AggregateID, p.EventType,
 		string(p.Payload), avail.UTC().Format(time.RFC3339), now,

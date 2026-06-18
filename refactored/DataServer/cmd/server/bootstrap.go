@@ -276,8 +276,6 @@ func runServer(cfg *config.Config) error {
 		return err
 	}
 
-	runDuadDBBootCheck(deps, cfg)
-
 	registry := app.NewRegistry()
 	auth := api.AdminAuthMiddleware(cfg)
 	pipeline.InitRemoteEngine(cfg)
@@ -489,10 +487,6 @@ func runServer(cfg *config.Config) error {
 	return nil
 }
 
-func runDuadDBBootCheck(deps *serverDeps, cfg *config.Config) {
-	log.Printf("[BOOTSTRAP] NOTE: dual-DB boot check is a no-op stub (PR9 cutover)")
-}
-
 func runDataLayerAudit(cfg *config.Config) error {
 	dataDir := cfg.DataDir
 	if dataDir == "" {
@@ -501,12 +495,6 @@ func runDataLayerAudit(cfg *config.Config) error {
 
 	secretsDir := filepath.Join(dataDir, "secrets")
 	auditor := audit.NewDataLayerAuditor(dataDir, secretsDir)
-
-	auditor.AllowLegacy("drive/drive_links.json")
-	auditor.AllowLegacy("drive/drive_master_folders_list.json")
-	auditor.AllowLegacy("jobs/multi_step_jobs.json")
-	auditor.AllowLegacy("jobs/dead_letter_queue.json")
-	auditor.AllowLegacy("analytics/analytics_cache.json")
 
 	result := auditor.Audit()
 

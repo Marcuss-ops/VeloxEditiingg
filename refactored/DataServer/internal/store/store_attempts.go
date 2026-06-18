@@ -164,32 +164,6 @@ func (s *SQLiteStore) FinalizeArtifact(id, status, storageURL string) error {
 	return err
 }
 
-// FinalizeAndCompleteJob — DELETED in PR-2 (full artifact-success-gate closure).
-//
-// The legacy implementation was the closed-form fallback that trusted the
-// worker's reported artifact_path / artifact_size / status and skipped the
-// STAGING → VERIFYING → READY pipeline, the per-attempt closure, the
-// outbox_events emit, the job_deliveries creation, and the artifact
-// ownership / status / CAS guards. A misbehaving worker could ship a
-// SUCCEEDED job with an artifact that did not exist or pointed outside
-// the storage namespace.
-//
-// The new flow lives in grpcserver.handleArtifactUploaded and composes
-// the existing authoritative services:
-//
-//	1. Strict (worker, lease, revision, attempt, status) CAS against the DB.
-//	2. InsertArtifact (STAGING).
-//	3. ArtifactFinalizationService.FinalizeRender:
-//	   STAGING → VERIFYING (Tx1) → file-sha256 / size / mime verify →
-//	   VERIFYING → READY (Tx2 with ARTIFACT_READY outbox event).
-//	4. InsertJobDeliveriesForArtifact (PENDING job_deliveries per
-//	   delivery_destinations).
-//	5. CompleteJobTx (jobs.status → COMPLETED, latest job_attempts
-//	   closed, JOB_SUCCEEDED outbox) — atomic and idempotent.
-//
-// Remove this dead-code block once no callers remain. As of PR-2, the only
-// caller was grpcserver.handleArtifactUploaded which has been rewritten.
-
 func (s *SQLiteStore) GetArtifact(id string) (*Artifact, error) {
 	row := s.db.QueryRow(
 		`SELECT id, job_id, COALESCE(attempt_id,0), type, storage_provider,

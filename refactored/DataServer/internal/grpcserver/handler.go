@@ -58,14 +58,8 @@ type Handler struct {
 }
 
 // HandlerConfig holds configuration for the gRPC handler.
-//
-// Phase 4.3: ShadowMode is removed. The control plane is push-only; the
-// worker never sees a JobAvailable notification and must claim through
-// gRPC JobOffer / JobAccepted. Legacy HTTP claim paths were already
-// retired in earlier waves (see docs/roadmap/14-polling-removal.md).
 type HandlerConfig struct {
 	PushMode      bool // Phase 5+: send JobOffer directly, workers respond JobAccepted
-	ShadowMode    bool // Deprecated: legacy shadow mode (no-op, kept for config compat)
 	AllowInsecure bool // Dev-only: allow insecure gRPC connections (VELOX_GRPC_ALLOW_INSECURE_DEV)
 }
 
@@ -272,7 +266,7 @@ func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMasterEnvelo
 	// Dispatch any pending commands that arrived while worker was disconnected
 	h.dispatchCommands(workerID, sess)
 
-	// Start push-mode job notifier (Phase 4.3: ShadowMode branch removed).
+	// Start push-mode job notifier.
 	// Issue 6 fix: use sessionCtx for cleanup so notifier goroutines stop
 	// when the session is cancelled.
 	var notifyCh chan struct{}
