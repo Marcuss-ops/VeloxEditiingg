@@ -171,13 +171,22 @@ func selectStorageValue(storageKey, storageURL string) string {
 // attemptID = 0 closes "any current attempt" (uses latest by started_at);
 // attemptID > 0 targets the specific attempt row.
 //
+// PR-2 second-line CAS (gRPC strict-path): pass expectedLeaseID non-empty
+// AND expectedRevision > 0 to also assert lease_id and revision tuples.
+// The WHERE clause is augmented with `AND lease_id = ?` and
+// `AND revision = ?` so a retried/stale orchestration cannot promote a
+// job whose lease has been reaped or whose revision has moved. RowsAffected
+// is checked; 0 means the CAS failed and the caller should treat the
+// call as a no-op (idempotent) — same behaviour as the existing
+// SUCCEEDED/COMPLETED guard.
+//
 // Tx boundary: jobs UPDATE + job_attempts UPDATE + outbox INSERT all
 // happen inside the same *sql.Tx and a single Commit. A crash before
 // commit rolls back ALL three changes — no orphan event, no half-promoted
 // job. (PR 9 cutover tightened this from the previous best-effort
 // post-commit emit, which could lose events if the process died
 // between commit and emit.)
-func (s *SQLiteStore) CompleteJobTx(ctx context.Context, jobID string, attemptID int64, outboxPayload string) error {
+func (s *SQLiteStore) CompleteJobTx(ctx context.Context, jobID string, attemptID int64, outboxPayload string, expectedLeaseID string, expectedRevision int) error {
 	if jobID == "" {
 		return fmt.Errorf("store: CompleteJobTx: missing jobID")
 	}
@@ -191,19 +200,31 @@ func (s *SQLiteStore) CompleteJobTx(ctx context.Context, jobID string, attemptID
 
 	// 1. Flip jobs.status COMPLETED + stamp completed_at. The no-op guard
 	//    uses UPPER(status) NOT IN ('SUCCEEDED', 'COMPLETED') so repeated
-	//    calls do not bump revision on already-completed jobs.
+	//    calls do not bump revision on already-completed jobs. Optional
+	//    second-line CAS on lease_id + revision when caller supplies them.
+	casClauses := `UPPER(COALESCE(status, '')) NOT IN ('SUCCEEDED', 'COMPLETED')`
+	args := []interface{}{now, now, jobID}
+	if expectedLeaseID != "" {
+		casClauses += ` AND lease_id = ?`
+		args = append(args, expectedLeaseID)
+	}
+	if expectedRevision > 0 {
+		casClauses += ` AND revision = ?`
+		args = append(args, expectedRevision)
+	}
 	res, err := tx.ExecContext(ctx,
 		`UPDATE jobs
 		 SET status = 'COMPLETED', completed_at = ?, updated_at = ?
-		 WHERE job_id = ? AND UPPER(COALESCE(status, '')) NOT IN ('SUCCEEDED', 'COMPLETED')`,
-		now, now, jobID,
+		 WHERE job_id = ? AND `+casClauses,
+		args...,
 	)
 	if err != nil {
 		return fmt.Errorf("store: CompleteJobTx: jobs UPDATE: %w", err)
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
-		// Already completed — skip both attempt close and outbox emit.
-		// Commit needed to release the tx's locks either way.
+		// Either already completed OR the optional CAS rejected the
+		// update because lease/revision moved. Both are no-ops for the
+		// caller — commit to release the tx's locks either way.
 		if err := tx.Commit(); err != nil {
 			return fmt.Errorf("store: CompleteJobTx: idempotent commit: %w", err)
 		}

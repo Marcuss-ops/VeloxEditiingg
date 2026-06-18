@@ -28,6 +28,10 @@ func logLegacyKeyOnce(jobID, key string) {
 // UpdateJobFieldsStrictWhitelistKey is the set of canonical keys that may be
 // merged into the Job via UpdateJobFields. Anything outside this set is a
 // programmer error and is rejected with ErrJobFieldNotWhitelisted.
+//
+// Deprecated: Use targeted lifecycle methods (RecordRenderFinished, CompleteJob,
+// FailJob) instead of the generic field merger. This whitelist exists only for
+// backward compatibility with tests and will be removed when all callers migrate.
 var UpdateJobFieldsStrictWhitelistKey = map[string]struct{}{
 	// CURRENT canonical fields
 	"status":                {},
@@ -85,6 +89,9 @@ var ErrJobFieldNotWhitelisted = errors.New("queue: job field not in UpdateJobFie
 
 // UpdateJobFields reads the job, applies field updates via a STRICT WHITELIST,
 // validates any status transition, and persists back via the repository.
+//
+// Deprecated: Use targeted lifecycle methods instead. This generic field merger
+// is retained only for backward compatibility with tests.
 func (l *LifecycleService) UpdateJobFields(ctx context.Context, jobID string, fields map[string]interface{}) error {
 	if len(fields) == 0 {
 		return nil

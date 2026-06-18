@@ -82,62 +82,17 @@ func (l *LifecycleService) CompleteJob(ctx context.Context, jobID string) error 
 	return nil
 }
 
-// RecordRenderFinished transitions a RUNNING job to RENDER_FINISHED.
-// This is called by the gRPC handler when a worker reports success.
-// The job will transition to SUCCEEDED only after the artifact service
-// verifies and registers the artifact (artifact success gate).
+// RecordRenderFinished records that a worker has completed rendering.
+// The job stays in RUNNING — no status transition occurs. Render completion
+// is recorded atomically: the attempt is marked RENDER_FINISHED and a
+// RENDER_FINISHED event is inserted inside a single transaction. The job
+// transitions to SUCCEEDED only after the artifact service verifies and
+// registers the artifact via FinalizeAndCompleteJob (artifact success gate).
 //
-// Verified: job_id (ownership), worker_id, lease_id, revision (CAS).
-// Attempt is not stored on the jobs table (lives in job_attempts) and
-// is verified by the lease binding at claim time.
-func (l *LifecycleService) RecordRenderFinished(ctx context.Context, jobID, workerID, leaseID string, attempt, revision int) error {
-	sj, err := l.jobRepo.GetJob(ctx, jobID)
-	if err != nil {
-		return fmt.Errorf("job not found: %s", jobID)
-	}
-
-	if sj.Status == store.JobStatusRenderFinished {
-		return nil // idempotent
-	}
-
-	// Verify the job is in a valid state for this transition
-	if err := l.Validate(JobStatus(sj.Status), StatusRenderFinished); err != nil {
-		return fmt.Errorf("cannot record render finished: %w", err)
-	}
-
-	// Verify ownership
-	if sj.AssignedTo != workerID {
-		return fmt.Errorf("worker %s does not own job %s (assigned to %s)", workerID, jobID, sj.AssignedTo)
-	}
-
-	// Verify lease
-	if leaseID != "" && sj.LeaseID != leaseID {
-		return fmt.Errorf("lease mismatch for job %s: expected %s, got %s", jobID, sj.LeaseID, leaseID)
-	}
-
-	// Verify revision (CAS)
-	if revision > 0 && sj.Revision != revision {
-		return fmt.Errorf("revision mismatch for job %s: expected %d, got %d", jobID, sj.Revision, revision)
-	}
-
-	nowISO := NowISO()
-	if err := l.jobRepo.Transition(ctx, store.TransitionParams{
-		JobID:          jobID,
-		ExpectedStatus: sj.Status,
-		NewStatus:      store.JobStatusRenderFinished,
-		Revision:       sj.Revision,
-	}); err != nil {
-		return fmt.Errorf("CAS transition to RENDER_FINISHED failed: %w", err)
-	}
-
-	l.eventStore.UpdateJobSupplementary(jobID, map[string]interface{}{
-		"started_at": nowISO,
-	})
-	l.eventStore.LogJobEvent(jobID, "render_finished", map[string]interface{}{
-		"worker_id": workerID,
-		"revision":  sj.Revision + 1,
-	})
-	return nil
+// Delegates to JobRepository.RecordRenderFinished for atomic verification
+// of (worker_id, lease_id, revision) and attempt status update.
+func (l *LifecycleService) RecordRenderFinished(ctx context.Context, cmd store.RecordRenderFinishedCommand) error {
+	return l.jobRepo.RecordRenderFinished(ctx, cmd)
 }
 
 // FailJob marks a job as FAILED or RETRY_WAIT using CAS.

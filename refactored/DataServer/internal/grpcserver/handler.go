@@ -45,6 +45,11 @@ import (
 // validation goes through `dbStore` directly via validateCredentialHash.
 // `workers.TokenManager` remains available in the `workers` package for
 // the HTTP control plane (worker_update.go, HTTP lifecycle routes).
+//
+// Artifact-success-gate: `artifactSvc` is the authoritative STAGING →
+// VERIFYING → READY pipeline. Wired via NewHandler; nil-rejected by
+// handleArtifactUploaded at runtime so misconfiguration surfaces as
+// dropped uploads rather than a SUCCEEDED job with no verification.
 type Handler struct {
 	pb.UnimplementedWorkerControlServer
 
@@ -53,6 +58,7 @@ type Handler struct {
 	tokenMgr      *workersreg.TokenManager
 	lifecycleSvc  *queue.LifecycleService
 	transitionSvc *queue.TransitionService
+	artifactSvc   *queue.ArtifactFinalizationService
 	dbStore       *store.SQLiteStore
 	config        *HandlerConfig
 
@@ -113,12 +119,18 @@ type workerSession struct {
 // credentials via dbStore.validateCredentialHash and never needs a
 // workers.TokenManager. Bootstrap no longer constructs a stray TokenManager
 // just to satisfy this signature.
+//
+// Artifact-success-gate: artifactSvc is the STAGING → VERIFYING → READY
+// pipeline. Nil is REJECTED at runtime by handleArtifactUploaded — every
+// ArtifactUploaded is refused with a misconfiguration log when this is
+// unwired. Bootstrap must supply a real *queue.ArtifactFinalizationService.
 func NewHandler(
 	registry *workersreg.Registry,
 	cmdMgr *workersreg.CommandManager,
 	tokenMgr *workersreg.TokenManager,
 	lifecycleSvc *queue.LifecycleService,
 	transitionSvc *queue.TransitionService,
+	artifactSvc *queue.ArtifactFinalizationService,
 	dbStore *store.SQLiteStore,
 	config *HandlerConfig,
 ) *Handler {
@@ -131,6 +143,7 @@ func NewHandler(
 		tokenMgr:       tokenMgr,
 		lifecycleSvc:   lifecycleSvc,
 		transitionSvc:  transitionSvc,
+		artifactSvc:    artifactSvc,
 		dbStore:        dbStore,
 		config:         config,
 		sessions:       make(map[string]*workerSession),

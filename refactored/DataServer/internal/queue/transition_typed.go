@@ -99,8 +99,12 @@ func (l *LifecycleService) FinalizeArtifact(ctx context.Context, artifactID stri
 }
 
 // CompleteJobTx performs atomic SUCCEEDED + close attempt + outbox.
-func (l *LifecycleService) CompleteJobTx(ctx context.Context, jobID string, attemptID int64, outboxPayload string) error {
-	return l.eventStore.CompleteJobTx(ctx, jobID, attemptID, outboxPayload)
+// expectedLeaseID != "" → second-line CAS on jobs.lease_id (PR-2, gRPC
+// strict artifact-success-gate path). expectedRevision > 0 → second-line
+// CAS on jobs.revision. LifecycleService callers (non-strict) pass
+// "" / 0 to opt out.
+func (l *LifecycleService) CompleteJobTx(ctx context.Context, jobID string, attemptID int64, outboxPayload string, expectedLeaseID string, expectedRevision int) error {
+	return l.eventStore.CompleteJobTx(ctx, jobID, attemptID, outboxPayload, expectedLeaseID, expectedRevision)
 }
 
 // TransitionService provides typed transition methods on top of LifecycleService.
@@ -125,10 +129,10 @@ func (ts *TransitionService) CompleteJob(ctx context.Context, jobID string) erro
 	return ts.lc.CompleteJob(ctx, jobID)
 }
 
-// RecordRenderFinished transitions a RUNNING job to RENDER_FINISHED.
+// RecordRenderFinished records render completion without changing job status.
 // Called by the gRPC handler when a worker reports success.
-func (ts *TransitionService) RecordRenderFinished(ctx context.Context, jobID, workerID, leaseID string, attempt, revision int) error {
-	return ts.lc.RecordRenderFinished(ctx, jobID, workerID, leaseID, attempt, revision)
+func (ts *TransitionService) RecordRenderFinished(ctx context.Context, cmd store.RecordRenderFinishedCommand) error {
+	return ts.lc.RecordRenderFinished(ctx, cmd)
 }
 
 // RenewLease extends a lease (delegates to LifecycleService).

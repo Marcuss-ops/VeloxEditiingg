@@ -45,7 +45,11 @@ type EventStore interface {
 	// UpdateArtifactStatus updates an artifact's status (VERIFYING → READY).
 	UpdateArtifactStatus(ctx context.Context, artifactID, status string) error
 	// CompleteJobTx performs atomic SUCCEEDED + close attempt + outbox.
-	CompleteJobTx(ctx context.Context, jobID string, attemptID int64, outboxPayload string) error
+	// expectedLeaseID != "" → second-line CAS on jobs.lease_id.
+	// expectedRevision > 0 → second-line CAS on jobs.revision.
+	// Both guards are AND-ed with the existing "status NOT IN terminal"
+	// guard. Pass "" / 0 to skip the additional CAS checks.
+	CompleteJobTx(ctx context.Context, jobID string, attemptID int64, outboxPayload string, expectedLeaseID string, expectedRevision int) error
 }
 
 // Compile-time check: *SQLiteStore implements EventStore.

@@ -22,7 +22,6 @@ import (
 	"velox-server/internal/handlers/server/darkeditor"
 	pipelinehandler "velox-server/internal/handlers/server/pipeline"
 	scripthandlers "velox-server/internal/handlers/server/script"
-	jobservice "velox-server/internal/services/jobs"
 	workersreg "velox-server/internal/workers"
 	"velox-server/internal/workflow"
 )
@@ -83,21 +82,16 @@ func newRouter(cfg *config.Config, deps *serverDeps, registry *app.Registry) *gi
 	}
 
 	// ── Remaining routes not yet in modules ──────────────────────────────────
-	// V1 routes are delegated entirely to the dedicated `api` package module; the helpers
-	// below isolate V2 jobs, orchestrator admin, chunked upload, and bundle compatibility
-	// into dedicated registration calls so concerns stay distinct.
-	jrs := buildJobRoutes(cfg, deps)
 	dep := buildDeprecationRegistry()
 	snap := dep.Snapshot()
 	log.Printf("[DEPRECATION] %d legacy endpoints tracked; sunset %s (override via VELOX_LEGACY_SUNSET_DAYS, default 14d, max 30d). Read counters at /api/_internal/deprecation_stats.",
 		len(snap.Stats), snap.SunsetAt)
 	registerDeprecationStatsRoute(r, cfg, dep)
-	registerAPIV1Routes(r, cfg, deps, ansibleHandlers, jrs)
-	registerV2JobRoutes(r, cfg, deps, jrs)
+	registerAPIV1Routes(r, cfg, deps, ansibleHandlers)
+	registerV2JobRoutes(r, cfg, deps)
 	registerOrchestratorAdminRoutes(r, cfg, deps)
 	registerUploadAndBundleCompatRoutes(r, cfg, deps)
 	registerScriptRoutes(r, cfg, deps)
-	registerLegacyJobCompatRoutes(r, deps, jrs, dep)
 	registerPipelineRoutes(r, cfg, deps, dep)
 
 	// Initialize groups handlers with SQLite store
@@ -198,171 +192,6 @@ func registerDeprecationStatsRoute(r *gin.Engine, cfg *config.Config, dep *depre
 	internal.Use(api.AdminAuthMiddleware(cfg))
 	internal.GET("/deprecation_stats", func(c *gin.Context) {
 		c.JSON(http.StatusOK, dep.Snapshot())
-	})
-}
-
-func registerLegacyJobCompatRoutes(r *gin.Engine, deps *serverDeps, jrs *jobRouteState, dep *deprecation.Registry) {
-	if deps == nil || jrs == nil || jrs.jobSvc == nil {
-		return
-	}
-
-	// Loadability note: every legacy endpoint is wrapped in dep.Track(...)
-	// so hits are counted and Deprecation/Sunset/Link headers are set.
-	// The handler bodies are unchanged.
-	legacy := r.Group("/api")
-
-	legacy.POST("/jobs/get", dep.Track("POST", "/api/jobs/get"), func(c *gin.Context) {
-		var body struct {
-			WorkerID    string `json:"worker_id"`
-			WorkerName  string `json:"worker_name"`
-			Drain       bool   `json:"drain"`
-			Schedulable bool   `json:"schedulable"`
-		}
-		if err := c.ShouldBindJSON(&body); err != nil {
-			c.JSON(200, gin.H{
-				"success": false,
-				"message": "invalid request",
-				"error":   err.Error(),
-			})
-			return
-		}
-
-		result, err := jrs.jobSvc.ClaimNextJob(c.Request.Context(), jobservice.ClaimRequest{
-			WorkerID:    strings.TrimSpace(body.WorkerID),
-			WorkerName:  strings.TrimSpace(body.WorkerName),
-			ClientIP:    c.ClientIP(),
-			Drain:       body.Drain,
-			Schedulable: body.Schedulable,
-		})
-		if err != nil {
-			c.JSON(200, gin.H{
-				"success": false,
-				"message": err.Error(),
-			})
-			return
-		}
-		if result == nil || strings.TrimSpace(result.JobID) == "" {
-			resp := gin.H{"success": false}
-			if result != nil && strings.TrimSpace(result.Reason) != "" {
-				resp["message"] = result.Reason
-			}
-			c.JSON(200, resp)
-			return
-		}
-
-		payload := map[string]interface{}{}
-		for k, v := range result.Payload {
-			payload[k] = v
-		}
-		if createdAt, ok := payload["created_at"]; ok {
-			payload["created_at"] = normalizeLegacyJobTime(createdAt)
-		}
-		if updatedAt, ok := payload["updated_at"]; ok {
-			payload["updated_at"] = normalizeLegacyJobTime(updatedAt)
-		}
-		if startedAt, ok := payload["started_at"]; ok {
-			payload["started_at"] = normalizeLegacyJobTime(startedAt)
-		}
-		if leaseExp, ok := payload["lease_expiry"]; ok {
-			payload["lease_expiry"] = normalizeLegacyJobTime(leaseExp)
-		}
-
-		c.JSON(200, gin.H{
-			"success": true,
-			"data":    payload,
-		})
-	})
-
-	legacy.POST("/jobs/result", dep.Track("POST", "/api/jobs/result"), func(c *gin.Context) {
-		var body struct {
-			JobID           string                 `json:"job_id"`
-			JobRunID        string                 `json:"job_run_id"`
-			WorkerID        string                 `json:"worker_id"`
-			Status          string                 `json:"status"`
-			Output          map[string]interface{} `json:"output"`
-			Error           string                 `json:"error"`
-			StartTime       string                 `json:"start_time"`
-			EndTime         string                 `json:"end_time"`
-			ContractVersion int                    `json:"contract_version"`
-			LeaseID         string                 `json:"lease_id"`
-			Attempt         int                    `json:"attempt"`
-			ArtifactID      string                 `json:"artifact_id"`
-			OutputSHA256    string                 `json:"output_sha256"`
-			IdempotencyKey  string                 `json:"idempotency_key"`
-		}
-		if err := c.ShouldBindJSON(&body); err != nil {
-			c.JSON(200, gin.H{"success": false, "error": "invalid request"})
-			return
-		}
-		ok, err := jrs.jobSvc.SubmitResult(c.Request.Context(), jobservice.SubmitResultRequest{
-			JobID:           strings.TrimSpace(body.JobID),
-			WorkerID:        strings.TrimSpace(body.WorkerID),
-			Status:          strings.TrimSpace(body.Status),
-			Error:           body.Error,
-			Output:          body.Output,
-			EndTime:         strings.TrimSpace(body.EndTime),
-			LeaseID:         strings.TrimSpace(body.LeaseID),
-			Attempt:         body.Attempt,
-			ContractVersion: body.ContractVersion,
-			ArtifactID:      strings.TrimSpace(body.ArtifactID),
-			OutputSHA256:    strings.TrimSpace(body.OutputSHA256),
-			IdempotencyKey:  strings.TrimSpace(body.IdempotencyKey),
-		})
-		if err != nil {
-			c.JSON(200, gin.H{"success": false, "error": err.Error()})
-			return
-		}
-		c.JSON(200, gin.H{"success": ok})
-	})
-
-	legacy.POST("/jobs/complete", dep.Track("POST", "/api/jobs/complete"), func(c *gin.Context) {
-		var body struct {
-			JobID    string `json:"job_id"`
-			WorkerID string `json:"worker_id"`
-			LeaseID  string `json:"lease_id"`
-			Attempt  int    `json:"attempt"`
-		}
-		if err := c.ShouldBindJSON(&body); err != nil {
-			c.JSON(200, gin.H{"success": false, "error": "invalid request"})
-			return
-		}
-		if err := jrs.jobSvc.ValidateJobLease(c.Request.Context(), strings.TrimSpace(body.JobID), strings.TrimSpace(body.WorkerID), strings.TrimSpace(body.LeaseID)); err != nil {
-			c.JSON(200, gin.H{"success": false, "error": err.Error()})
-			return
-		}
-		if err := jrs.jobSvc.CompleteJob(c.Request.Context(), strings.TrimSpace(body.JobID), strings.TrimSpace(body.WorkerID)); err != nil {
-			c.JSON(200, gin.H{"success": false, "error": err.Error()})
-			return
-		}
-		c.JSON(200, gin.H{"success": true})
-	})
-
-	legacy.POST("/jobs/lease", dep.Track("POST", "/api/jobs/lease"), func(c *gin.Context) {
-		var body struct {
-			JobID           string `json:"job_id"`
-			WorkerID        string `json:"worker_id"`
-			LeaseID         string `json:"lease_id"`
-			LeaseExpiresAt  string `json:"lease_expires_at"`
-			Attempt         int    `json:"attempt"`
-			ContractVersion int    `json:"contract_version"`
-		}
-		if err := c.ShouldBindJSON(&body); err != nil {
-			c.JSON(200, gin.H{"success": false, "error": "invalid request"})
-			return
-		}
-		if err := jrs.jobSvc.ValidateJobLease(c.Request.Context(), strings.TrimSpace(body.JobID), strings.TrimSpace(body.WorkerID), strings.TrimSpace(body.LeaseID)); err != nil {
-			c.JSON(200, gin.H{"success": false, "error": err.Error()})
-			return
-		}
-		if deps.fileQ == nil {
-			c.JSON(200, gin.H{"success": false, "error": "queue unavailable"})
-			return
-		}
-		if err := deps.fileQ.RenewJobLease(c.Request.Context(), strings.TrimSpace(body.JobID), strings.TrimSpace(body.WorkerID), strings.TrimSpace(body.LeaseID), time.Now().UTC().Add(30*time.Minute)); err != nil {
-			c.JSON(200, gin.H{"success": false, "error": err.Error()})
-			return
-		}
-		c.JSON(200, gin.H{"success": true})
 	})
 }
 
@@ -552,10 +381,10 @@ func registerPipelineRoutes(r *gin.Engine, cfg *config.Config, deps *serverDeps,
 		pipelinehandler.ScriptMultiple(cfg))
 }
 
-func registerAPIV1Routes(r *gin.Engine, cfg *config.Config, deps *serverDeps, ansibleHandlers *remoteansible.AnsibleHandlers, jrs *jobRouteState) {
+func registerAPIV1Routes(r *gin.Engine, cfg *config.Config, deps *serverDeps, ansibleHandlers *remoteansible.AnsibleHandlers) {
 }
 
-func registerV2JobRoutes(r *gin.Engine, cfg *config.Config, deps *serverDeps, jrs *jobRouteState) {
+func registerV2JobRoutes(r *gin.Engine, cfg *config.Config, deps *serverDeps) {
 }
 
 func registerUploadAndBundleCompatRoutes(r *gin.Engine, cfg *config.Config, deps *serverDeps) {

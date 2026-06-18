@@ -49,6 +49,9 @@ func (s *storePostgresStub) CompleteJob(ctx context.Context, params store.Comple
 func (s *storePostgresStub) StartJob(ctx context.Context, params store.StartJobParams) error {
 	return store.ErrNotImplemented
 }
+func (s *storePostgresStub) RecordRenderFinished(ctx context.Context, cmd store.RecordRenderFinishedCommand) error {
+	return store.ErrNotImplemented
+}
 
 func TestNewLifecycleService_RefusesNilRepository(t *testing.T) {
 	t.Parallel()
@@ -90,7 +93,7 @@ func (e *eventStoreStub) DeleteJob(jobID string) error { return nil }
 func (e *eventStoreStub) ArchiveOldJobs(olderThan time.Time) (int64, error) { return 0, nil }
 func (e *eventStoreStub) TransitionJobStatus(ctx context.Context, jobID, expected, newStatus string, revision int) (int, error) { return 0, nil }
 func (e *eventStoreStub) UpdateArtifactStatus(ctx context.Context, artifactID, status string) error { return nil }
-func (e *eventStoreStub) CompleteJobTx(ctx context.Context, jobID string, attemptID int64, outboxPayload string) error { return nil }
+func (e *eventStoreStub) CompleteJobTx(_ context.Context, _ string, _ int64, _ string, _ string, _ int) error { return nil }
 
 var _ store.EventStore = (*eventStoreStub)(nil)
 

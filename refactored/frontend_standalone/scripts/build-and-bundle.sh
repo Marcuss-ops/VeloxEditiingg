@@ -20,7 +20,9 @@ echo "[build] running web production build"
 DEST="$OUT_DIR/$VERSION"
 rm -rf "$DEST"
 mkdir -p "$DEST"
-cp -R web/build/. "$DEST/"
+# Vite 7 emits to web/dist/ (not web/build/). Anything still under web/build/
+# is a stale SvelteKit-era artifact.
+cp -R web/dist/. "$DEST/"
 
 TARBALL="$OUT_DIR/$TARBALL_NAME"
 tar -C "$DEST" -czf "$TARBALL" .
