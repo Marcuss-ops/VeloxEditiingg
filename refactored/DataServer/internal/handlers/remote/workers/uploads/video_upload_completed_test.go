@@ -168,16 +168,11 @@ func TestUploadCompletedVideo_AutoUploadsToYouTubeAndDrive(t *testing.T) {
 	}
 }
 
-// func TestMaybeAutoUploadDrive_FallsBackToJobLanguage(t *testing.T) {
-// 	t.Skip("test moved to internal/deliveries — see smoke_job_final.sh (post-PS8 cleanup relocated maybeAutoUploadDrive there)")
-// 	return
-// 	t.Skip("maybeAutoUploadDrive relocated to internal/deliveries; covered there")
-// 	tempDir := t.TempDir()
-// 	dbPath := filepath.Join(tempDir, "velox.db")
-// 	db, err := store.NewSQLiteStore(dbPath)
-// 	if err != nil {
-// 		t.Fatalf("new sqlite store: %v", err)
-// 	}
+func TestMaybeAutoUploadDrive_FallsBackToJobLanguage(t *testing.T) {
+	t.Skip("test moved to internal/deliveries -- see smoke_job_final.sh (post-PS8 cleanup relocated maybeAutoUploadDrive there)")
+	return
+}
+
 // 	if err := db.UpsertMasterFolder("drive-folder-it", "Italian Master", "https://drive.google.com/drive/folders/drive-folder-it", "it", 0, `{"type":"outro"}`); err != nil {
 // 		t.Fatalf("upsert master folder: %v", err)
 // 	}
