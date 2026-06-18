@@ -247,7 +247,7 @@ func PersistJobResult(job *Job, dbStore *store.SQLiteStore) error {
 
 // PersistJobRequest stores the immutable request payload in request_json.
 // Only called once at job creation.
-func PersistJobRequest(jobID string, payload map[string]interface{}, dbStore *store.SQLiteStore) error {
+func PersistJobRequest(jobID string, payload map[string]interface{}, eventStore store.EventStore) error {
 	m := make(map[string]any)
 	for k, v := range payload {
 		m[k] = v
@@ -271,7 +271,7 @@ func PersistJobRequest(jobID string, payload map[string]interface{}, dbStore *st
 		return fmt.Errorf("failed to marshal request_json: %w", err)
 	}
 
-	return dbStore.SetJobRequest(jobID, rawJSON)
+	return eventStore.SetJobRequest(jobID, rawJSON)
 }
 
 // ── Helpers ──

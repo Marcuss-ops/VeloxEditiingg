@@ -292,18 +292,31 @@ func (s *Service) SubmitResult(ctx context.Context, req SubmitResultRequest) (bo
 				}
 			}
 
-		// Use JobLifecycleService.SubmitResult instead of UpdateJobFields
-		lifecycleRes := joblifecycle.CompleteJobResult{
-			CompletedBy:    strings.TrimSpace(req.WorkerID),
-			ArtifactID:     strings.TrimSpace(req.ArtifactID),
-			OutputSHA256:   strings.TrimSpace(req.OutputSHA256),
-			IdempotencyKey: strings.TrimSpace(req.IdempotencyKey),
-			EndTime:        strings.TrimSpace(req.EndTime),
-		}
-		// Don't store worker_output or result_path_worker on the job row -
-		// these belong on the artifact. The upload-completed handler or
-		// DeliveryRunner handles artifact pathing.
-		err = s.lifecycle.SubmitResult(ctx, req.JobID, lifecycleRes)
+			updates := map[string]interface{}{
+				"status": "RUNNING",
+			}
+			if strings.TrimSpace(req.EndTime) != "" {
+				updates["completed_at"] = strings.TrimSpace(req.EndTime)
+			}
+			if strings.TrimSpace(req.WorkerID) != "" {
+				updates["completed_by"] = strings.TrimSpace(req.WorkerID)
+			}
+			if len(req.Output) > 0 {
+				updates["worker_output"] = req.Output
+				if path := ExtractOutputVideoPath(req.Output); path != "" {
+					updates["result_path_worker"] = path
+				}
+			}
+			if strings.TrimSpace(req.ArtifactID) != "" {
+				updates["artifact_id"] = strings.TrimSpace(req.ArtifactID)
+			}
+			if strings.TrimSpace(req.OutputSHA256) != "" {
+				updates["output_sha256"] = strings.TrimSpace(req.OutputSHA256)
+			}
+			if strings.TrimSpace(req.IdempotencyKey) != "" {
+				updates["upload_idempotency_key"] = strings.TrimSpace(req.IdempotencyKey)
+			}
+			err = s.fileQ.UpdateJobFields(ctx, req.JobID, updates)
 		}
 		if err != nil {
 			return false, err

@@ -110,21 +110,6 @@ func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
 		return nil, err
 	}
 
-	// PR 8: outbox.Store wraps the same SQLite handle so CompleteJobTx
-	// (write JOB_SUCCEEDED) and FinalizeArtifactVerified (write
-	// ARTIFACT_READY) emit through the generic outbox pipeline rather
-	// than the legacy orchestrator_outbox.
-	outboxStore := outbox.NewStore(sqliteStore.DB())
-	sqliteStore.SetOutbox(outboxStore)
-
-	fileQ, err := queue.NewFileQueue(&queue.FileQueueConfig{
-		DBStore:    sqliteStore,
-		MaxRetries: cfg.Workers.MaxJobAttempts,
-	})
-	if err != nil {
-		return nil, err
-	}
-
 	reg := workersreg.New(sqliteStore)
 
 	revokedCount := len(reg.ListRevoked())
@@ -144,19 +129,33 @@ func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
 	workerLifecycle := lifecycle.NewHandler(cfg, reg, sqliteStore)
 
 	jobRepo := store.NewSQLiteJobRepository(sqliteStore)
-	fileQ.SetJobRepository(jobRepo)
+	lifecycle, err := queue.NewLifecycleService(jobRepo, sqliteStore)
+	if err != nil {
+		return nil, err
+	}
+	querySvc := queue.NewQueryService(sqliteStore)
+
+	fileQ, err := queue.NewFileQueue(&queue.FileQueueConfig{
+		DBStore:    sqliteStore,
+		MaxRetries: cfg.Workers.MaxJobAttempts,
+	}, lifecycle, querySvc)
+	if err != nil {
+		return nil, err
+	}
 
 	// PR 9: workflow.Repository replaces the legacy *queue.Orchestrator.
 	// WorkflowSpec -> workflow_runs/workflow_steps (PR 8 schema).
 	workflowRepo := workflow.NewSQLiteRepository(sqliteStore.DB())
 	workflowRepo.SetOutbox(outboxStore)
 
+	// Build BlobStore for artifact staging/promotion (PR2b).
 	var blobStore store.BlobStore
-	var bsErr error
-	blobStore, bsErr = store.NewLocalBlobStore(cfg.Runtime.StagingDir, cfg.Runtime.StorageDir)
+	localBS, bsErr := store.NewLocalBlobStore(cfg.Runtime.StagingDir, cfg.Runtime.StorageDir)
 	if bsErr != nil {
 		log.Printf("[BOOTSTRAP] BlobStore init warning: %v — using nop blob store", bsErr)
 		blobStore = store.NewNopBlobStore(cfg.Runtime.DataDir)
+	} else {
+		blobStore = localBS
 	}
 	log.Printf("[BOOTSTRAP] BlobStore ready: staging=%s storage=%s", blobStore.StagingDir(), blobStore.FinalDir())
 
@@ -274,7 +273,7 @@ func runServer(cfg *config.Config) error {
 
 	var grpcSrv grpcServer
 	if cfg.Server.GRPCPort > 0 {
-		transitionSvc := queue.NewTransitionService(deps.sqliteStore)
+		transitionSvc := deps.fileQ.LifecycleService()
 		cmdMgr := workersreg.NewCommandManager(deps.sqliteStore)
 
 		grpcHandlerConfig := &grpcserver.HandlerConfig{

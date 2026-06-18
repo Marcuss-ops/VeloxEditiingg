@@ -19,7 +19,13 @@ func TestClaimNextJob_NormalizesTimestampsForWorkers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new sqlite store: %v", err)
 	}
-	q, err := queue.NewFileQueue(&queue.FileQueueConfig{MaxRetries: 3, DBStore: db})
+	jobRepo := store.NewSQLiteJobRepository(db)
+	ts, tsErr := queue.NewLifecycleService(jobRepo, db)
+	if tsErr != nil {
+		t.Fatalf("new transition service: %v", tsErr)
+	}
+	querySvc := queue.NewQueryService(db)
+	q, err := queue.NewFileQueue(&queue.FileQueueConfig{MaxRetries: 3, DBStore: db}, ts, querySvc)
 	if err != nil {
 		t.Fatalf("new file queue: %v", err)
 	}

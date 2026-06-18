@@ -25,10 +25,15 @@ func newTestFileQueue(t *testing.T) *queue.FileQueue {
 		t.Fatalf("failed to create SQLite store: %v", err)
 	}
 	t.Cleanup(func() { sqlStore.Close() })
+	ts, err := queue.NewLifecycleService(store.NewSQLiteJobRepository(sqlStore), sqlStore)
+	if err != nil {
+		t.Fatalf("failed to create LifecycleService: %v", err)
+	}
+	querySvc := queue.NewQueryService(sqlStore)
 	fq, err := queue.NewFileQueue(&queue.FileQueueConfig{
 		DBStore:    sqlStore,
 		MaxRetries: 3,
-	})
+	}, ts, querySvc)
 	if err != nil {
 		t.Fatalf("failed to create FileQueue: %v", err)
 	}

@@ -49,7 +49,12 @@ func TestCreateJobHandlerAllowsHealthCheckSmokeJob(t *testing.T) {
 	if err != nil {
 		t.Skipf("SQLite unavailable: %v", err)
 	}
-	q, err := queue.NewFileQueue(&queue.FileQueueConfig{MaxRetries: cfg.Workers.MaxJobAttempts, DBStore: db})
+	ts, err := queue.NewLifecycleService(store.NewSQLiteJobRepository(db), db)
+	if err != nil {
+		t.Skipf("Transition service unavailable: %v", err)
+	}
+	querySvc := queue.NewQueryService(db)
+	q, err := queue.NewFileQueue(&queue.FileQueueConfig{MaxRetries: cfg.Workers.MaxJobAttempts, DBStore: db}, ts, querySvc)
 	if err != nil {
 		t.Skipf("File queue unavailable: %v", err)
 	}

@@ -4,7 +4,7 @@
 // The handler manages persistent worker streams, forwarding heartbeats,
 // lease renewals, job claims, and commands between the gRPC stream and
 // the existing HTTP-based control plane components (Registry, CommandManager,
-// TransitionService).
+// LifecycleService).
 //
 // Phase 2 (typed protobuf): uses WorkerToMasterEnvelope / MasterToWorkerEnvelope
 // with typed oneof messages instead of TransportMessage { string type; Struct payload }.
@@ -52,7 +52,8 @@ type Handler struct {
 
 	registry      *workersreg.Registry
 	cmdMgr        *workersreg.CommandManager
-	transitionSvc *queue.TransitionService
+	tokenMgr      *workersreg.TokenManager
+	lifecycleSvc *queue.LifecycleService
 	dbStore       *store.SQLiteStore
 	config        *HandlerConfig
 
@@ -78,7 +79,7 @@ type workerSession struct {
 	sessionID string
 	stream    grpc.BidiStreamingServer[pb.WorkerToMasterEnvelope, pb.MasterToWorkerEnvelope]
 	done      chan struct{}
-	doneOnce  sync.Once         // P0 #6: prevents double-close on session teardown/reconnect
+	doneOnce  sync.Once          // P0 #6: prevents double-close on session teardown/reconnect
 	cancel    context.CancelFunc // cancels the session context to terminate old goroutines
 
 	// Serialized output: all stream.Send() calls go through sendCh → sessionWriter.
@@ -93,8 +94,8 @@ type workerSession struct {
 	writerErr chan error
 
 	// Job offering synchronization (Issue 4 fix).
-	pendingOffer *queue.Job   // JobOffer sent, awaiting JobAccepted/JobRejected
-	claimMu      sync.Mutex   // serializes the claim+send+set flow; also guards pendingOffer r/w
+	pendingOffer *queue.Job // JobOffer sent, awaiting JobAccepted/JobRejected
+	claimMu      sync.Mutex // serializes the claim+send+set flow; also guards pendingOffer r/w
 
 	// Worker capacity tracking (atomic — Phase 4.1 fix). The handleHeartbeat
 	// goroutine writes them, sendPushJobOffer reads them under claimMu. Using
@@ -115,7 +116,8 @@ type workerSession struct {
 func NewHandler(
 	registry *workersreg.Registry,
 	cmdMgr *workersreg.CommandManager,
-	transitionSvc *queue.TransitionService,
+	tokenMgr *workersreg.TokenManager,
+	lifecycleSvc *queue.LifecycleService,
 	dbStore *store.SQLiteStore,
 	config *HandlerConfig,
 ) *Handler {
@@ -125,7 +127,8 @@ func NewHandler(
 	return &Handler{
 		registry:       registry,
 		cmdMgr:         cmdMgr,
-		transitionSvc:  transitionSvc,
+		tokenMgr:       tokenMgr,
+		lifecycleSvc:  lifecycleSvc,
 		dbStore:        dbStore,
 		config:         config,
 		sessions:       make(map[string]*workerSession),
@@ -401,7 +404,43 @@ func (h *Handler) notifyJobsAvailable(ctx context.Context, workerID string, trig
 		case <-ticker.C:
 		}
 
-		h.sendPushJobOffer(ctx, workerID)
+		if h.config.PushMode {
+			h.sendPushJobOffer(ctx, workerID)
+		} else if h.config.ShadowMode {
+			h.sendJobAvailable(ctx, workerID)
+		}
+	}
+}
+
+// sendJobAvailable sends a typed JobAvailable notification (Shadow mode).
+// Issue 5 fix: sends via sendCh instead of direct stream.Send().
+func (h *Handler) sendJobAvailable(ctx context.Context, workerID string) {
+	jobID, err := h.lifecycleSvc.GetNextJobID(ctx)
+	if err != nil || jobID == "" {
+		return
+	}
+
+	sess := h.getSession(workerID)
+	if sess == nil {
+		return
+	}
+
+	env := &pb.MasterToWorkerEnvelope{
+		MessageId:       fmt.Sprintf("javail-%s-%d", workerID, time.Now().UnixNano()),
+		WorkerId:        workerID,
+		SentAt:          timestamppb.Now(),
+		ProtocolVersion: controltransport.ProtocolVersionCurrent,
+		Msg: &pb.MasterToWorkerEnvelope_JobAvailable{
+			JobAvailable: &pb.JobAvailable{
+				CompatibleJobExists: true,
+				Message:             "Job available for claim",
+			},
+		},
+	}
+
+	// Issue 5 fix: send via sendCh — non-blocking (drop if channel full, next tick will retry).
+	if !safeSend(sess.sendCh, env) {
+		log.Printf("[GRPC] sendCh full/closed for JobAvailable to worker %s", workerID)
 	}
 }
 
@@ -434,7 +473,7 @@ func (h *Handler) sendPushJobOffer(ctx context.Context, workerID string) {
 		}
 	}
 
-	job, err := h.transitionSvc.ClaimNextJob(ctx, workerID, nil)
+	job, err := h.lifecycleSvc.ClaimNextJob(ctx, workerID, nil)
 	if err != nil {
 		log.Printf("[GRPC] ClaimNextJob failed for worker %s: %v", workerID, err)
 		return
@@ -484,7 +523,7 @@ func (h *Handler) sendPushJobOffer(ctx context.Context, workerID string) {
 	// Issue 5 fix: send via sendCh instead of direct stream.Send().
 	if !safeSend(sess.sendCh, env) {
 		log.Printf("[GRPC] sendCh full/closed for JobOffer to worker %s — releasing claim", workerID)
-		if releaseErr := h.transitionSvc.ReleaseClaim(ctx, job.JobID); releaseErr != nil {
+		if releaseErr := h.lifecycleSvc.ReleaseClaim(ctx, job.JobID); releaseErr != nil {
 			log.Printf("[GRPC] Failed to release claim for job %s after send failure: %v", job.JobID, releaseErr)
 		}
 		return
@@ -579,8 +618,8 @@ func (h *Handler) handleLeaseRenewal(workerID string, lr *pb.LeaseRenewal) {
 	if lr.GetLeaseExpiresAt() != nil {
 		leaseExpiry = lr.GetLeaseExpiresAt().AsTime()
 	}
-	if err := h.transitionSvc.RenewLease(context.Background(), jobID, workerID, lr.GetLeaseId(), leaseExpiry); err != nil {
-		log.Printf("[GRPC] Lease renewal failed for job %s worker %s: %v", jobID, workerID, err)
+	if err := h.lifecycleSvc.RenewLease(context.Background(), lr.GetJobId(), workerID, lr.GetLeaseId(), leaseExpiry); err != nil {
+		log.Printf("[GRPC] Lease renewal failed for job %s worker %s: %v", lr.GetJobId(), workerID, err)
 	}
 }
 
@@ -735,8 +774,10 @@ func (h *Handler) handleJobRejected(workerID string, jr *pb.JobRejected) {
 	}
 	log.Printf("[GRPC] Worker %s rejected job %s: %s", workerID, jobID, reason)
 
-	if err := h.transitionSvc.FailJob(context.Background(), jobID, reason, workerID, true, 3); err != nil {
-		log.Printf("[GRPC] Failed to release rejected job %s: %v", jobID, err)
+	if jobID != "" {
+		if err := h.lifecycleSvc.FailJob(context.Background(), jobID, reason, workerID, true, 3); err != nil {
+			log.Printf("[GRPC] Failed to release rejected job %s: %v", jobID, err)
+		}
 	}
 
 	// Issue 4 fix: lock claimMu to safely access and clear pendingOffer.
@@ -803,11 +844,11 @@ func (h *Handler) handleJobResult(workerID string, jr *pb.JobResult) {
 	}
 
 	if status == "success" {
-		if err := h.transitionSvc.CompleteJob(context.Background(), jobID); err != nil {
+		if err := h.lifecycleSvc.CompleteJob(context.Background(), jobID); err != nil {
 			log.Printf("[GRPC] Job completion failed for %s: %v", jobID, err)
 		}
 	} else if status == "failed" {
-		if err := h.transitionSvc.FailJob(context.Background(), jobID, errMsg, workerID, true, 3); err != nil {
+		if err := h.lifecycleSvc.FailJob(context.Background(), jobID, errMsg, workerID, true, 3); err != nil {
 			log.Printf("[GRPC] Job failure transition failed for %s: %v", jobID, err)
 		}
 	}
