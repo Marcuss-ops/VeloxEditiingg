@@ -13,13 +13,6 @@ func (s *SQLiteStore) ListYouTubeGroups() ([]map[string]interface{}, error) {
 	return s.ListYouTubeGroupsV2()
 }
 
-// UpsertYouTubeManagerChannel is a legacy wrapper that maps to the canonical
-// UpsertYouTubeChannel. The legacy youtube_channel_metadata table was dropped
-// by migration 014; this method persists through the canonical youtube_channels table.
-func (s *SQLiteStore) UpsertYouTubeManagerChannel(channelID, groupName, url, title, name, thumbnail, notes, language string, keywords []string, addedAt, lastSync string, viewCount, subCount int64, rawJSON string) error {
-	return s.UpsertYouTubeChannel(channelID, title, name, url, thumbnail, language, notes, viewCount, subCount, addedAt, lastSync, rawJSON)
-}
-
 // ============================================================
 // --- Canonical YouTube OAuth Tokens (Migration 011) ---
 // ============================================================
@@ -226,30 +219,6 @@ func (s *SQLiteStore) DeleteChannelAtomic(channelID string) (int64, error) {
 		return 0, fmt.Errorf("delete atomic: commit: %w", err)
 	}
 	return membershipsDeleted, nil
-}
-
-// ============================================================
-// --- Legacy wrappers (tables dropped by migrations 008/014) ---
-// ============================================================
-
-// UpsertYouTubeChannelMetadata persists into the canonical youtube_channels table.
-func (s *SQLiteStore) UpsertYouTubeChannelMetadata(channelID, title, tokenPath, language, addedDate, lastUsed, rawJSON string) error {
-	if channelID == "" {
-		return nil
-	}
-	now := time.Now().UTC().Format(time.RFC3339)
-	_, err := s.db.Exec(
-		`INSERT INTO youtube_channels
-		 (channel_id, title, language, added_at, last_sync_at, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)
-		 ON CONFLICT(channel_id) DO UPDATE SET
-		   title=COALESCE(NULLIF(excluded.title,''), youtube_channels.title),
-		   language=COALESCE(NULLIF(excluded.language,''), youtube_channels.language),
-		   last_sync_at=excluded.last_sync_at,
-		   updated_at=excluded.updated_at`,
-		channelID, title, language, addedDate, now, now, now,
-	)
-	return err
 }
 
 // UpsertYouTubeGroup is a legacy wrapper that routes to the canonical UpsertYouTubeGroupV2.
