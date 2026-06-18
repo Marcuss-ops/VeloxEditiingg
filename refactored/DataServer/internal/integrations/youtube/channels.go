@@ -120,18 +120,6 @@ func (s *Service) loadOAuthChannelsFromSQLite() (int, error) {
 	return hydrated, nil
 }
 
-// loadChannelsJSON is a no-op compatibility shim kept for the package's
-// pre-S6 callers. The legacy JSON token directory was removed under S6
-// of the verdict plan and replaced with the SQLite-first
-// loadOAuthChannelsFromSQLite path (above). On disk there is nothing
-// to scan, so the function returns no error and no channels. Callers
-// that imported this symbol earlier (Handlers / tests written
-// pre-S11) continue to compile; the runtime surface is intentionally
-// narrowed not widened.
-func (s *Service) loadChannelsJSON() {
-	// nothing to do — JSON fallback removed under S6.
-}
-
 // loadCanonicalChannels loads channel metadata from the canonical youtube_channels table.
 func (s *Service) loadCanonicalChannels() bool {
 	if s.store == nil {

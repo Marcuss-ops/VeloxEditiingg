@@ -276,3 +276,12 @@ func (s *SQLiteStore) Path() string {
 	}
 	return s.path
 }
+
+// nullIfEmpty returns nil for empty strings, otherwise the string itself.
+// Used by delivery and asset writers to avoid storing zero-length strings.
+func nullIfEmpty(s string) interface{} {
+	if s == "" {
+		return nil
+	}
+	return s
+}
