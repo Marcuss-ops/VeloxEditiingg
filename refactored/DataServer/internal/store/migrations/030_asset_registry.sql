@@ -1,4 +1,4 @@
--- Migration 029: Generic asset registry
+-- Migration 030: Generic asset registry
 --
 -- assets: central content-addressed asset store (replaces voiceover-only bridge)
 -- asset_sources: provenance tracking (where each asset came from)

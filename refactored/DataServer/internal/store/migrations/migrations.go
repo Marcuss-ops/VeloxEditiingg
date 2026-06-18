@@ -102,6 +102,8 @@ func discoverMigrations(fs embed.FS, dir string) ([]Migration, error) {
 	}
 
 	var migs []Migration
+	seenVersions := make(map[int]string) // version → first filename
+
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".sql") {
 			continue
@@ -112,6 +114,18 @@ func discoverMigrations(fs embed.FS, dir string) ([]Migration, error) {
 		if n, err := fmt.Sscanf(e.Name(), "%d_%s", &version, &name); n < 1 || err != nil {
 			continue
 		}
+
+		// Reject duplicate migration version numbers — PRIMARY KEY in
+		// schema_migrations would fail or the second file would be silently
+		// skipped, either of which is a hard-to-debug startup failure.
+		if prev, exists := seenVersions[version]; exists {
+			return nil, fmt.Errorf(
+				"duplicate migration version %03d: %s and %s",
+				version, prev, e.Name(),
+			)
+		}
+		seenVersions[version] = e.Name()
+
 		name = strings.TrimSuffix(e.Name(), ".sql")
 		if idx := strings.Index(name, "_"); idx >= 0 {
 			name = name[idx+1:]

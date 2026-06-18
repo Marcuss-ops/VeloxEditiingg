@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"embed"
 	"fmt"
+	"strings"
 	"testing"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -11,6 +12,9 @@ import (
 
 //go:embed *.sql
 var testMigrationsFS embed.FS
+
+//go:embed testdata/duplicates/*.sql
+var duplicateMigrationsFS embed.FS
 
 func openTestDB(t *testing.T) *sql.DB {
 	t.Helper()
@@ -34,8 +38,8 @@ func TestDiscoverMigrations_AllVersions(t *testing.T) {
 		t.Fatalf("discoverMigrations failed: %v", err)
 	}
 
-	if len(migs) != 29 {
-		t.Fatalf("expected 29 migrations, got %d", len(migs))
+	if len(migs) != 31 {
+		t.Fatalf("expected 31 migrations, got %d", len(migs))
 	}
 
 	expected := []struct {
@@ -79,6 +83,20 @@ func TestDiscoverMigrations_SortedByVersion(t *testing.T) {
 			t.Errorf("migrations not sorted: %d (%d) after %d (%d)",
 				i, migs[i].Version, i-1, migs[i-1].Version)
 		}
+	}
+}
+
+// TestDiscoverMigrationsRejectsDuplicateVersions verifies that discoverMigrations
+// returns a hard error when two .sql files share the same version number.
+func TestDiscoverMigrationsRejectsDuplicateVersions(t *testing.T) {
+	// duplicateMigrationsFS embeds testdata/duplicates/ which contains
+	// 029_first.sql and 029_second.sql (same version)
+	_, err := discoverMigrations(duplicateMigrationsFS, "testdata/duplicates")
+	if err == nil {
+		t.Fatal("expected error for duplicate migration version, got nil")
+	}
+	if !strings.Contains(err.Error(), "duplicate migration version 029") {
+		t.Errorf("error message should mention 'duplicate migration version 029', got: %v", err)
 	}
 }
 
