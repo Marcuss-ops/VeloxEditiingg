@@ -2,6 +2,9 @@ package queue
 
 import (
 	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -111,6 +114,7 @@ func (l *EventLogger) GetRecentEvents(jobID string, limit int) ([]map[string]int
 	l.file, _ = os.OpenFile(l.filePath, os.O_APPEND|os.O_CREATE|os.O_RDONLY, 0644)
 
 	data, err := os.ReadFile(l.filePath)
+	_ = data
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil

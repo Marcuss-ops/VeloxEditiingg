@@ -3,8 +3,12 @@ package drive
 import (
 	"encoding/json"
 	"log"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
+
+	yaml "gopkg.in/yaml.v3"
 )
 
 // getDriveLinksFromCache returns folders from cache with 30s TTL
@@ -21,7 +25,7 @@ func getDriveLinksFromCache() []DriveFolder {
 	driveLinksCache.mu.Lock()
 	defer driveLinksCache.mu.Unlock()
 
-	loadDriveLinksFromDisk()
+	_ = loadDriveLinksFromDisk()
 	return driveLinksCache.folders
 }
 
@@ -47,7 +51,7 @@ func loadDriveLinksFromDisk() error {
 			}
 			driveLinksCache.folders = folders
 			driveLinksCache.lastLoad = time.Now()
-			return
+			return nil
 		}
 
 		// SQLite empty — try legacy JSON import
@@ -104,6 +108,7 @@ func loadDriveLinksFromDisk() error {
 
 	driveLinksCache.folders = folders
 	driveLinksCache.lastLoad = time.Now()
+	return nil
 }
 
 // importLegacyDriveLinks imports JSON/YAML drive links into SQLite on first run.
@@ -189,7 +194,7 @@ func saveMasterFoldersToDisk(masters map[string]MasterFolderInfo) error {
 	// Primary: SQLite
 	if driveLinksStore != nil {
 		for language, info := range masters {
-			if err := driveLinksStore.UpsertMasterFolder(info.ID, info.Name, info.URL, language, info.SubfoldersCount); err != nil {
+			if err := driveLinksStore.UpsertMasterFolder(info.ID, info.Name, info.URL, language, info.SubfoldersCount, info.MetadataJSON); err != nil {
 				log.Printf("[WARN] Master folder SQLite save failed for %s: %v", language, err)
 			}
 		}

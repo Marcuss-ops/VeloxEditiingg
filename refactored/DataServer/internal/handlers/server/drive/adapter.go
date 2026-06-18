@@ -34,6 +34,23 @@ func NewDriveHandlers(cfg *drive.ServiceConfig, driveSvc *drive.Service, sqliteS
 	}, nil
 }
 
+// SetSQLiteStore wires (or rewires) the SQLite store post-construction. The
+// PR9 refactor splits module ownership so handlers might be built before the
+// bootstrap-time SQLiteStore reference is known; bootstrap calls this from
+// Module.WithSQLiteStore to thread the dependency through. Nil is a no-op so
+// callers can defensively clear the reference without panicking.
+func (h *DriveHandlers) SetSQLiteStore(s *store.SQLiteStore) {
+	if h == nil {
+		return
+	}
+	h.store = s
+	if s != nil {
+		// Reinit the link cache so the cache hit-path uses this store even if
+		// it was previously constructed with nil (PR9 cutover).
+		InitDriveLinksCache(h.dataDir, s)
+	}
+}
+
 func resolveDriveDataDir(tokensDir string) string {
 	if dir := config.GetDataDir(); dir != "" {
 		return filepath.Clean(dir)

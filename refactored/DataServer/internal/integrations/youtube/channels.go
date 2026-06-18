@@ -58,18 +58,70 @@ func (s *Service) loadOAuthChannelsFromSQLite() (int, error) {
 		}
 	}
 
-	return channel
-}
+	hydrated := 0
+	for _, row := range tokenRows {
+		cid, _ := row["channel_id"].(string)
+		if cid == "" {
+			continue
+		}
+		accessBlob, _ := row["access_token_encrypted"].([]byte)
+		refreshBlob, _ := row["refresh_token_encrypted"].([]byte)
+		// The following fields are read for cipher-side audit logs
+		// (token type / scope-version mismatch reporting). They are
+		// NOT surfaced on AuthChannel today; documenting with blank
+		// assignment keeps go vet quiet while preserving the
+		// documented surface for future S11+ ops work.
+		_, _ = row["token_type"].(string)
+		_, _ = row["expiry"].(string)
+		_, _ = row["scopes"].(string)
+		_, _ = row["key_version"].(int64)
 
-// loadChannelsJSON loads channel details from SQLite (legacy path).
-func (s *Service) loadChannelsJSON() {
-	if s.store != nil {
-		s.loadChannelsFromSQLite()
+		// Decrypt the access token (mandatory). A failure here means the
+		// row is unusable so we skip rather than quietly insert a
+		// half-hydrated AuthChannel.
+		accessPlain, decErr := s.oauthBuf.Decrypt(accessBlob)
+		if decErr != nil {
+			log.Printf("[WARN] loadOAuthChannelsFromSQLite: decrypt access token for %s failed: %v", safeChannelID(cid), decErr)
+			continue
+		}
+		// Refresh token is optional (some grants don't issue one); a
+		// nil blob is fine, an undecryptable blob is not.
+		var refreshPlain []byte
+		if len(refreshBlob) > 0 {
+			rp, rErr := s.oauthBuf.Decrypt(refreshBlob)
+			if rErr != nil {
+				log.Printf("[WARN] loadOAuthChannelsFromSQLite: decrypt refresh token for %s failed: %v", safeChannelID(cid), rErr)
+				continue
+			}
+			refreshPlain = rp
+		}
+
+		ch := &AuthChannel{
+			ID:           cid,
+			AccessToken:  string(accessPlain),
+			RefreshToken: string(refreshPlain),
+		}
+		s.mu.Lock()
+		s.channels[cid] = ch
+		s.mu.Unlock()
+		hydrated++
 	}
 	if hydrated > 0 {
 		log.Printf("[OK] Hydrated %d OAuth credentials from youtube_oauth_tokens", hydrated)
 	}
 	return hydrated, nil
+}
+
+// loadChannelsJSON is a no-op compatibility shim kept for the package's
+// pre-S6 callers. The legacy JSON token directory was removed under S6
+// of the verdict plan and replaced with the SQLite-first
+// loadOAuthChannelsFromSQLite path (above). On disk there is nothing
+// to scan, so the function returns no error and no channels. Callers
+// that imported this symbol earlier (Handlers / tests written
+// pre-S11) continue to compile; the runtime surface is intentionally
+// narrowed not widened.
+func (s *Service) loadChannelsJSON() {
+	// nothing to do — JSON fallback removed under S6.
 }
 
 // loadChannelsFromSQLite loads channel metadata from legacy youtube_channel_metadata.
@@ -268,12 +320,18 @@ func (s *Service) UpdateChannelMetadata(channelID string, metadata map[string]in
 		ch.Title = title
 	}
 
-	// Persist to canonical youtube_channels
+	// Persist to canonical youtube_channels.
+	//
+	// The history: a free-form `metadataJSON` blob (historically holding
+	// token_path via the now-deleted saveChannelToken JSON writer) used to
+	// ride along on this upsert. Migration 014 dropped that column. The
+	// concrete *SQLiteStore.UpsertYouTubeChannel still accepts a
+	// metadataJSON string (interface conformance with StorageStore and
+	// YouTubeStore — both 12-arg), but the server-side flows no longer
+	// synthesise one. Token path is held in-RAM only and (when added) in a
+	// typed SetChannelTokenPath repository method.
 	if s.store != nil {
-		rawMetadata, _ := json.Marshal(map[string]string{
-			"token_path": ch.TokenPath,
-		})
-		return s.store.UpsertYouTubeChannel(ch.ID, ch.Title, ch.Name, "", ch.Thumbnail, ch.Language, "", 0, 0, "", "", string(rawMetadata))
+		return s.store.UpsertYouTubeChannel(ch.ID, ch.Title, ch.Name, "", ch.Thumbnail, ch.Language, "", 0, 0, "", "", "")
 	}
 	return nil
 }

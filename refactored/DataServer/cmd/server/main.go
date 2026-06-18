@@ -18,6 +18,7 @@ YouTube service and the master HTTP endpoints.
 
 func main() {
 	cfg := config.FromEnv()
+	args := os.Args[1:]
 
 	switch {
 	case len(args) == 0:

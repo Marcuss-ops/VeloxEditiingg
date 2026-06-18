@@ -39,6 +39,10 @@ type MasterFolderInfo struct {
 	URL             string        `json:"url"`
 	SubfoldersCount int           `json:"subfolders_count"`
 	Subfolders      []interface{} `json:"subfolders"`
+	// MetadataJSON is the free-form JSON blob mirrored into the
+	// drive_master_folders.metadata_json column on upsert. Empty when
+	// the legacy JSON import path has no metadata to record.
+	MetadataJSON string `json:"metadata_json,omitempty"`
 }
 
 // driveLinksCache holds cached data
@@ -50,10 +54,12 @@ type driveLinksCacheType struct {
 
 var driveLinksCache driveLinksCacheType
 var driveTokensDir string
+var driveLinksDataDir string
 var driveLinksStore *store.SQLiteStore
 
 // InitDriveLinksCache initializes the cache with data directory and store
 func InitDriveLinksCache(dataDirectory string, store *store.SQLiteStore) {
+	driveLinksDataDir = dataDirectory
 	driveLinksStore = store
 	// Trigger initial load
 	loadDriveLinksFromDisk()

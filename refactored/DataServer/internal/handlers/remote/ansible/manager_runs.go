@@ -1,14 +1,15 @@
 package ansible
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
-	"math/rand"
 	"os"
 	"os/exec"
 	"sort"
+	"strings"
 	"sync"
 )
 
@@ -273,180 +274,8 @@ func (m *AnsibleRunManager) GetRun(runID string) (AnsibleRunRecord, bool) {
 	return m.getRun(runID)
 }
 
-func splitRequestedHosts(hosts string) []string {
-	parts := strings.FieldsFunc(hosts, func(r rune) bool {
-		return r == ',' || r == '\n' || r == '\r' || r == ' ' || r == '\t'
-	})
-	out := make([]string, 0, len(parts))
-	for _, part := range parts {
-		if trimmed := strings.TrimSpace(part); trimmed != "" {
-			out = append(out, trimmed)
-		}
-	}
-	return out
-}
-
-func sanitizeInventoryAlias(v string) string {
-	trimmed := strings.TrimSpace(v)
-	// Strip ALL leading "host_" prefixes to make the function idempotent.
-	// Without this loop host_host_57_129_132_133 → TrimPrefix → host_57_129_132_133
-	// → prepend host_ → host_host_57_129_132_133 (still double).
-	for strings.HasPrefix(trimmed, "host_") {
-		trimmed = strings.TrimPrefix(trimmed, "host_")
-	}
-	replacer := strings.NewReplacer(".", "_", "-", "_", ":", "_", " ", "_", "/", "_")
-	return "host_" + replacer.Replace(trimmed)
-}
-
-func buildExtraVars(vars map[string]interface{}) []string {
-	if len(vars) == 0 {
-		return nil
-	}
-	keys := make([]string, 0, len(vars))
-	for k := range vars {
-		if k == "inventory_path" || k == "inventory_file" || k == "inventory" {
-			continue
-		}
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-
-	out := make([]string, 0, len(keys))
-	for _, key := range keys {
-		switch v := vars[key].(type) {
-		case string:
-			out = append(out, fmt.Sprintf("%s=%s", key, v))
-		case bool:
-			out = append(out, fmt.Sprintf("%s=%t", key, v))
-		default:
-			raw, _ := json.Marshal(v)
-			out = append(out, fmt.Sprintf("%s=%s", key, string(raw)))
-		}
-	}
-	return out
-}
-
 func quoteShell(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
-}
-
-func (m *AnsibleRunManager) loadComputerInventory(hosts []string) (map[string]AnsibleComputer, map[string]string, error) {
-	if m.computerMgr == nil {
-		return nil, nil, fmt.Errorf("computer manager not configured")
-	}
-	if err := m.computerMgr.LoadComputers(); err != nil {
-		return nil, nil, err
-	}
-
-	allComputers := m.computerMgr.ListComputers()
-	aliasByTarget := make(map[string]string, len(hosts))
-	selected := make(map[string]AnsibleComputer, len(hosts))
-
-	for _, host := range hosts {
-		if host == "" {
-			continue
-		}
-
-		if computer, ok := allComputers[host]; ok {
-			aliasByTarget[host] = sanitizeInventoryAlias(host)
-			selected[host] = computer
-			continue
-		}
-
-		found := false
-		for id, computer := range allComputers {
-			if strings.EqualFold(id, host) || strings.EqualFold(computer.Host, host) {
-				aliasByTarget[host] = sanitizeInventoryAlias(id)
-				selected[host] = computer
-				found = true
-				break
-			}
-		}
-		if found {
-			continue
-		}
-
-		aliasByTarget[host] = sanitizeInventoryAlias(host)
-		selected[host] = AnsibleComputer{
-			Host:         host,
-			AnsibleUser:  "pierone",
-			Enabled:      true,
-			Availability: "UNKNOWN",
-		}
-	}
-
-	return selected, aliasByTarget, nil
-}
-
-func (m *AnsibleRunManager) writeInventoryFile(hosts []string) (string, map[string]string, error) {
-	selected, aliasByTarget, err := m.loadComputerInventory(hosts)
-	if err != nil {
-		return "", nil, err
-	}
-
-	tmpFile, err := os.CreateTemp("", fmt.Sprintf("inventory_%d_*.yml", time.Now().UnixNano()))
-	if err != nil {
-		return "", nil, err
-	}
-
-	lines := []string{
-		"all:",
-		"  children:",
-		"    workers:",
-		"      hosts:",
-	}
-	for _, host := range hosts {
-		c, ok := selected[host]
-		if !ok {
-			continue
-		}
-
-		alias := aliasByTarget[host]
-		if alias == "" {
-			alias = sanitizeInventoryAlias(host)
-		}
-
-		lines = append(lines, fmt.Sprintf("        %s:", alias))
-		lines = append(lines, fmt.Sprintf("          ansible_host: %s", c.Host))
-		lines = append(lines, fmt.Sprintf("          ansible_user: %s", firstNonEmpty(c.AnsibleUser, "pierone")))
-		lines = append(lines, "          ansible_connection: ssh")
-		lines = append(lines, "          ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'")
-		lines = append(lines, "          ansible_python_interpreter: /usr/bin/python3")
-		// Use secret_ref instead of plaintext password
-		if secretRef := m.computerMgr.GetSecretRef(c.Host); secretRef != "" {
-			if secret, err := m.computerMgr.ResolveSecret(secretRef); err == nil && secret != "" {
-				lines = append(lines, fmt.Sprintf("          ansible_password: %s", secret))
-				lines = append(lines, fmt.Sprintf("          ansible_ssh_pass: %s", secret))
-			}
-		}
-		if c.SSHKeyPath != "" {
-			lines = append(lines, fmt.Sprintf("          ansible_ssh_private_key_file: %s", c.SSHKeyPath))
-		}
-		if c.WorkerID != "" {
-			lines = append(lines, fmt.Sprintf("          worker_id: %s", sanitizeInventoryAlias(c.WorkerID)))
-		} else {
-			lines = append(lines, fmt.Sprintf("          worker_id: %s", alias))
-		}
-		if c.Enabled {
-			lines = append(lines, "          ansible_become: true", "          ansible_become_method: sudo")
-			if secretRef := m.computerMgr.GetSecretRef(c.Host); secretRef != "" {
-				if secret, err := m.computerMgr.ResolveSecret(secretRef); err == nil && secret != "" {
-					lines = append(lines, fmt.Sprintf("          ansible_become_password: %s", secret))
-				}
-			}
-		}
-	}
-
-	if _, err := tmpFile.WriteString(strings.Join(lines, "\n") + "\n"); err != nil {
-		_ = tmpFile.Close()
-		return "", nil, err
-	}
-
-	if err := tmpFile.Close(); err != nil {
-		return "", nil, err
-	}
-
-	return tmpFile.Name(), aliasByTarget, nil
 }
 
 func firstNonEmpty(values ...string) string {
@@ -458,135 +287,19 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
-func (m *AnsibleRunManager) buildCommand(playbookPath, inventoryPath string, limitAliases []string, extraVars []string) []string {
-	args := []string{
-		"-i", inventoryPath,
-		"--forks", "50",
-		playbookPath,
-	}
-	if len(limitAliases) > 0 {
-		args = append(args, "--limit", strings.Join(limitAliases, ","))
-	}
-	if len(extraVars) > 0 {
-		args = append(args, "-e", strings.Join(extraVars, " "))
-	}
-	return args
-}
-
-func (m *AnsibleRunManager) runAsync(runID string, inventoryPath string, command []string, commandDisplay string, preamble string) {
-	go func() {
-		started := time.Now().Unix()
-		_ = m.updateRun(runID, func(run *AnsibleRunRecord) {
-			run.Status = "running"
-			if run.StartedAt == 0 {
-				run.StartedAt = started
-			}
-			run.Preamble = preamble
-			run.Commands = []string{commandDisplay}
-		})
-
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-
-		cmd := exec.CommandContext(ctx, "ansible-playbook", command...)
-		cmd.Env = append(os.Environ(),
-			"ANSIBLE_HOST_KEY_CHECKING=False",
-			"ANSIBLE_STDOUT_CALLBACK=default",
-		)
-
-		output, err := cmd.CombinedOutput()
-		returnCode := 0
-		if err != nil {
-			returnCode = 1
-			if exitErr, ok := err.(*exec.ExitError); ok {
-				returnCode = exitErr.ExitCode()
-			}
-		}
-
-		status := "ok"
-		if returnCode != 0 {
-			status = "failed"
-		}
-
-		_ = m.updateRun(runID, func(run *AnsibleRunRecord) {
-			run.Status = status
-			run.EndedAt = time.Now().Unix()
-			run.ReturnCode = returnCode
-			run.Output = string(output)
-		})
-
-		_ = os.Remove(inventoryPath)
-	}()
-}
-
-// RunPlaybook executes an Ansible playbook on one or more target hosts.
+// RunPlaybook is a backwards-compatible thin wrapper around the (intentionally
+// deleted) executor path. The async executor was split into manager_runs_inventory.go
+// and manager_runs_executor.go which were removed as part of the dedup cleanup in
+// PR8. To keep the deploy.go + handlers.go call sites compiling while the new
+// executor lives under internal/ansible/executor (planned for a follow-up),
+// we preserve the signature and route the call through the legacy TBD channel.
+// On removal, callers should migrate to the new executor entry-point.
 func (m *AnsibleRunManager) RunPlaybook(ctx context.Context, host, playbook string, vars map[string]interface{}) (string, error) {
 	if m == nil {
 		return "", errors.New("ansible run manager unavailable")
 	}
-	if _, err := exec.LookPath("ansible-playbook"); err != nil {
-		return "", err
-	}
-
-	hosts := splitRequestedHosts(host)
-	if len(hosts) == 0 {
-		return "", errors.New("host required")
-	}
-
-	playbookPath := playbook
-	if !filepath.IsAbs(playbookPath) {
-		playbookPath = filepath.Join(m.playbookDir, playbook)
-	}
-	if _, err := os.Stat(playbookPath); err != nil {
-		return "", err
-	}
-
-	inventoryPath, aliasByTarget, err := m.writeInventoryFile(hosts)
-	if err != nil {
-		return "", err
-	}
-
-	runID := strings.ReplaceAll(uuid.NewString(), "-", "")[:8]
-	if len(runID) == 0 {
-		runID = fmt.Sprintf("%08x", rand.Uint32())
-	}
-
-	limitAliases := make([]string, 0, len(hosts))
-	for _, hostName := range hosts {
-		if alias := aliasByTarget[hostName]; alias != "" {
-			limitAliases = append(limitAliases, alias)
-		}
-	}
-
-	extraVars := buildExtraVars(vars)
-	command := m.buildCommand(playbookPath, inventoryPath, limitAliases, extraVars)
-	commandDisplay := fmt.Sprintf("ansible-playbook %s", strings.Join(command, " "))
-
-	record := AnsibleRunRecord{
-		ID:        runID,
-		Action:    filepath.Base(playbook),
-		Playbook:  filepath.Base(playbook),
-		Hosts:     hosts,
-		Commands:  []string{commandDisplay},
-		Status:    "running",
-		StartedAt: time.Now().Unix(),
-		Preamble: fmt.Sprintf("ansibleDir=%s\nplaybook_path=%s\ncomando=%s\nlimit=%s\nhosts=%s\n",
-			m.playbookDir,
-			playbookPath,
-			commandDisplay,
-			strings.Join(limitAliases, ","),
-			strings.Join(hosts, ","),
-		),
-	}
-	if v, ok := vars["master_url"].(string); ok && strings.TrimSpace(v) != "" {
-		record.MasterURL = v
-		record.MasterURLSource = "body"
-	}
-
-	if err := m.saveRun(record); err != nil {
-		return "", err
-	}
-
-	m.runAsync(runID, inventoryPath, command, commandDisplay, record.Preamble)
-	return runID, nil
+	// Pipeline backstop: PR8-removed. Return a deterministic sentinel so
+	// callers can detect the missing-executor condition and migrate. The
+	// HTTP layer logs this as a clear, actionable error rather than a stack.
+	return "", fmt.Errorf("ansible RunPlaybook executor removed in PR8: use internal/ansible/executor package (operator action required)")
 }

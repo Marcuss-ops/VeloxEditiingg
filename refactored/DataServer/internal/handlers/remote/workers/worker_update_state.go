@@ -139,10 +139,10 @@ func (h *WorkerUpdateHandler) GetUpdateStatusHandler() gin.HandlerFunc {
 		status := make(map[string]interface{})
 		targetArtifactSHA := h.computeBundleSHA256()
 
-		for _, info := range allWorkers {
-			if info == nil || info.WorkerID == "" {
-				continue
-			}
+	for _, info := range allWorkers {
+		if info.WorkerID == "" {
+			continue
+		}
 			pendingCmds := h.cmdMgr.GetPendingCommands(info.WorkerID)
 			hasUpdate := false
 			var updateVersion string

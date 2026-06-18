@@ -387,5 +387,153 @@ func (r *SQLiteJobRepository) UpdateJobResult(ctx context.Context, jobID string,
 	return r.store.UpsertJobResult(jobID, resultJSON)
 }
 
+// StartJob performs the LEASED → RUNNING transition atomically.
+//
+// The single UPDATE verifies all five identity columns at once:
+//   - job_id     (primary key)
+//   - status     = 'LEASED' (only LEASED jobs can start)
+//   - assigned_to = workerID (worker must own the lease)
+//   - lease_id   = leaseID (lease identity must match)
+//   - attempt    matches the caller's view (COALESCE(attempt, 0))
+//   - revision   = ExpectedRevision (optimistic CAS)
+//
+// On success it bumps revision, sets started_at to Now (or time.Now if
+// zero), and updates updated_at. The ErrTransitionConflict sentinel is
+// returned for any predicate mismatch so callers can distinguish stale
+// acceptances from infrastructure errors via errors.Is.
+//
+// Test coverage in sqlite_jobs_writer_repository_test.go validates the
+// happy path plus all five mismatch variants (lease, worker, attempt,
+// revision, already-running, NULL-attempt legacy row).
+func (r *SQLiteJobRepository) StartJob(ctx context.Context, params StartJobParams) error {
+	if r.store == nil || r.store.db == nil {
+		return fmt.Errorf("job repository: store not initialized")
+	}
+	if params.JobID == "" {
+		return fmt.Errorf("job repository: empty jobID in StartJob")
+	}
+	if params.WorkerID == "" || params.LeaseID == "" {
+		return fmt.Errorf("job repository: missing worker/lease identity in StartJob")
+	}
+
+	now := params.Now
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	nowStr := now.UTC().Format(time.RFC3339)
+
+	// COALESCE(attempt, 0) so legacy rows with NULL attempt match params.Attempt == 0.
+	res, err := r.store.db.ExecContext(ctx,
+		`UPDATE jobs
+		   SET status = 'RUNNING',
+		       started_at = ?,
+		       updated_at = ?,
+		       revision = revision + 1,
+		       attempt = ?
+		 WHERE job_id = ?
+		   AND UPPER(status) = 'LEASED'
+		   AND COALESCE(assigned_to, '') = ?
+		   AND COALESCE(lease_id, '') = ?
+		   AND COALESCE(attempt, 0) = ?
+		   AND revision = ?`,
+		nowStr, nowStr, params.Attempt,
+		params.JobID,
+		params.WorkerID,
+		params.LeaseID,
+		params.Attempt,
+		params.ExpectedRevision,
+	)
+	if err != nil {
+		return fmt.Errorf("start job exec: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("start job rows: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("start job %s: %w", params.JobID, ErrTransitionConflict)
+	}
+	return nil
+}
+
+// CompleteJob performs the RUNNING → terminal transition (SUCCEEDED |
+// FAILED | CANCELLED) atomically, with the same worker-identity CAS tuple
+// as StartJob. Unlike StartJob (which requires LEASED), CompleteJob
+// accepts RUNNING, LEASED, or RETRY_WAIT — covering the case where a
+// worker completes quickly enough that the LEASED → RUNNING transition
+// was never recorded (the very race StartJob was introduced to fix).
+//
+// On success it bumps revision, sets completed_at, writes result_json
+// (storing empty blob if nil/empty), and clears lease fields so the
+// row is reconcilable by reaper/outbox. Matches the existing pattern
+// of returning ErrTransitionConflict on predicate mismatch.
+func (r *SQLiteJobRepository) CompleteJob(ctx context.Context, params CompleteJobParams) error {
+	if r.store == nil || r.store.db == nil {
+		return fmt.Errorf("job repository: store not initialized")
+	}
+	if params.JobID == "" {
+		return fmt.Errorf("job repository: empty jobID in CompleteJob")
+	}
+	if params.WorkerID == "" || params.LeaseID == "" {
+		return fmt.Errorf("job repository: missing worker/lease identity in CompleteJob")
+	}
+	switch params.FinalStatus {
+	case JobStatusSucceeded, JobStatusFailed, JobStatusCancelled:
+		// ok
+	default:
+		return fmt.Errorf("job repository: invalid FinalStatus %q (want SUCCEEDED|FAILED|CANCELLED)", params.FinalStatus)
+	}
+
+	now := params.Now
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	nowStr := now.UTC().Format(time.RFC3339)
+
+	resultJSON := "{}"
+	if len(params.ResultJSON) > 0 {
+		resultJSON = string(params.ResultJSON)
+	}
+
+	res, err := r.store.db.ExecContext(ctx,
+		`UPDATE jobs
+		   SET status = ?,
+		       completed_at = ?,
+		       updated_at = ?,
+		       result_json = ?,
+		       revision = revision + 1,
+		       lease_id = '',
+		       lease_expiry = '',
+		       assigned_to = '',
+		       claimed_by = '',
+		       assigned_at = '',
+		       claimed_at = '',
+		       attempt = ?
+		 WHERE job_id = ?
+		   AND UPPER(status) IN ('RUNNING', 'LEASED', 'RETRY_WAIT')
+		   AND COALESCE(assigned_to, '') = ?
+		   AND COALESCE(lease_id, '') = ?
+		   AND COALESCE(attempt, 0) = ?
+		   AND revision = ?`,
+		string(params.FinalStatus), nowStr, nowStr, resultJSON, params.Attempt,
+		params.JobID,
+		params.WorkerID,
+		params.LeaseID,
+		params.Attempt,
+		params.ExpectedRevision,
+	)
+	if err != nil {
+		return fmt.Errorf("complete job exec: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("complete job rows: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("complete job %s: %w", params.JobID, ErrTransitionConflict)
+	}
+	return nil
+}
+
 // Compile-time interface check.
 var _ JobRepository = (*SQLiteJobRepository)(nil)

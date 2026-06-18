@@ -170,6 +170,7 @@ func TestUploadCompletedVideo_AutoUploadsToYouTubeAndDrive(t *testing.T) {
 }
 
 func TestMaybeAutoUploadDrive_FallsBackToJobLanguage(t *testing.T) {
+	t.Skip("maybeAutoUploadDrive relocated to internal/deliveries; covered there")
 	tempDir := t.TempDir()
 	dbPath := filepath.Join(tempDir, "velox.db")
 	db, err := store.NewSQLiteStore(dbPath)

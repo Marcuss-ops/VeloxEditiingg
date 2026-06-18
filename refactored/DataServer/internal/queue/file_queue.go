@@ -305,3 +305,12 @@ func (q *FileQueue) LifecycleService() *LifecycleService {
 func (q *FileQueue) QueryService() *QueryService {
 	return q.query
 }
+
+// TransitionService returns a thin wrapper exposing the typed transition
+// methods (CompleteJob, RenewLease, FailJob, GetJob, Validate, ReleaseClaim,
+// StartJobWithLease) on top of the canonical *LifecycleService. This is the
+// surface that internal/services/joblifecycle.Service and
+// internal/grpcserver.Handler consume (PR9 contract).
+func (q *FileQueue) TransitionService() *TransitionService {
+	return NewTransitionService(q.lifecycle)
+}

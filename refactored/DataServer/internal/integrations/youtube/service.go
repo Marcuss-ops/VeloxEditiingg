@@ -25,14 +25,24 @@ type YouTubeStore interface {
 	ListYouTubeChannels() ([]map[string]interface{}, error)
 	GetYouTubeChannel(channelID string) (map[string]interface{}, error)
 	UpsertYouTubeChannel(channelID, title, displayName, channelURL, thumbnailURL, language, notes string, viewCount, subCount int64, addedAt, lastSyncAt, metadataJSON string) error
+	DeleteYouTubeChannel(channelID string) error
+	DeleteChannelAtomic(channelID string) (int64, error)
 
 	// Canonical: YouTube Groups V2 (youtube_groups_v2 + youtube_group_channels)
 	ListYouTubeGroupsV2() ([]map[string]interface{}, error)
 	UpsertYouTubeGroupV2(name, groupType, description, privacy string) (int64, error)
+	GetYouTubeGroupV2ID(name, groupType string) (int64, error)
+	DeleteYouTubeGroupV2(id int64) error
+	DeleteYouTubeGroupChannelsByGroupID(groupID int64) error
 	AddChannelToGroupV2(groupID int64, channelID string) error
 	RemoveChannelFromGroupV2(groupID int64, channelID string) error
 	ListGroupChannelsV2(groupID int64) ([]string, error)
 	ListAllGroupMembershipsV2() ([]map[string]interface{}, error)
+
+	// Typed metadata update (refresh path). Distinct from UpsertYouTubeChannel:
+	// only touches title + thumbnail_url + last_sync_at + updated_at so
+	// user-edited typed columns are preserved (S11 contract).
+	UpdateYouTubeChannelMetadata(channelID, title, thumbnailURL string) error
 
 	// Legacy: YouTube Groups (kept for backward compat during migration)
 	ListYouTubeGroups() ([]map[string]interface{}, error)
@@ -41,6 +51,21 @@ type YouTubeStore interface {
 	// Legacy: YouTube Channel Metadata (kept for backward compat during migration)
 	ListYouTubeChannelMetadata() (map[string]map[string]interface{}, error)
 	UpsertYouTubeChannelMetadata(channelID, title, tokenPath, language, addedDate, lastUsed, rawJSON string) error
+
+	// Canonical: OAuth tokens (youtube_oauth_tokens table; S5-S11 boot hydrator)
+	// GetYouTubeOAuthToken returns (nil, nil) when no row exists so callers can
+	// use the row presence to drive merge-with-existing-refresh-token-blob.
+	// ListActiveYouTubeOAuthTokens is the boot-hydrator enumeration; revoked
+	// rows are filtered out so a stale revoke cannot silently re-enter RAM
+	// after a server restart.
+	// AuditYouTubeOAuthTokenOrphans surfaces oauth rows whose parent
+	// youtube_channels row is missing so operators see the canonical set is
+	// fully consistent on boot.
+	GetYouTubeOAuthToken(channelID string) (map[string]interface{}, error)
+	UpsertYouTubeOAuthToken(channelID string, accessTokenEnc, refreshTokenEnc []byte, tokenType, expiry, scopes string, keyVersion int) error
+	MarkYouTubeOAuthTokenRevoked(channelID string) error
+	ListActiveYouTubeOAuthTokens() ([]map[string]interface{}, error)
+	AuditYouTubeOAuthTokenOrphans() ([]youtubetypes.YouTubeTokenOrphan, error)
 
 	// Cache (shared, not legacy)
 	GetYouTubeCache(key string) (int64, string, error)
@@ -51,6 +76,11 @@ type YouTubeStore interface {
 		Timestamp int64       `json:"timestamp"`
 		Data      interface{} `json:"data"`
 	}) (int, error)
+
+	// Legacy: youtube_manager_channels (dropped by migration 008). The service
+	// layer still surfaces UpsertYouTubeManagerChannel as a wrapper around
+	// UpsertYouTubeChannel so the migrate-json CLI keeps compiling.
+	UpsertYouTubeManagerChannel(channelID, groupName, url, title, name, thumbnail, notes, language string, keywords []string, addedAt, lastSync string, viewCount, subCount int64, rawJSON string) error
 }
 
 // Service provides YouTube API functionality
@@ -105,7 +135,6 @@ func NewService(cfg *ServiceConfig, store YouTubeStore) (*Service, error) {
 		log.Printf("[WARN] YouTube OAuth config not loaded: %v", err)
 	}
 
-	s.loadChannels()
 	// Load from canonical tables — store is already set, so this works immediately
 	s.loadCanonicalChannels()
 	s.loadCanonicalGroups()
@@ -162,26 +191,6 @@ func (s *Service) ValidateToken(ctx context.Context, channelID string) (map[stri
 	return s.authManager.ValidateToken(ctx, channelID)
 }
 
-// RevokeToken is the canonical orchestration for taking a channel's OAuth
-// credentials out of service WITHOUT removing the channel row from
-// youtube_channels. Distinct from DeleteChannel (which nukes the channel
-// + oauth row + groups, FK-cascaded) — see verdict/rationale in
-// docs/youtube_sqlite_migration_plan.md step S5d.
-//
-// Sequence (deterministic order, three steps now that the JSON-fallback
-// file-delete path has been removed under S6):
-//  1. HTTP POST to Google oauth2 revoke endpoint (best-effort: the credential
-//     may already be invalid, so a non-200 is logged but does not abort).
-//  2. UPDATE youtube_oauth_tokens SET revoked_at = now WHERE channel_id = ? AND
-//     revoked_at IS NULL (atomic SQL via the repository's
-//     MarkYouTubeOAuthTokenRevoked; idempotent).
-//  3. Delete the channel from the in-memory s.channels under the service's
-//     RWMutex (so concurrent reads cannot see a half-revoked entry).
-//
-// Returns nil on success; returns an error if step 2 fails so the caller
-// can retry without leaving SQL state / RAM state inconsistent. Step 3
-// is gated on step 2 succeeding so the in-RAM cache never diverges from
-// the canonical row.
 func (s *Service) RevokeToken(ctx context.Context, channelID string) error {
 	return s.authManager.RevokeToken(ctx, channelID)
 }

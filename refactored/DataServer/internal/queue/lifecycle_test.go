@@ -43,6 +43,12 @@ func (s *storePostgresStub) RequeueZombieJobs(ctx context.Context, timeout time.
 func (s *storePostgresStub) UpdateJobResult(ctx context.Context, jobID string, resultJSON []byte) error {
 	return store.ErrNotImplemented
 }
+func (s *storePostgresStub) CompleteJob(ctx context.Context, params store.CompleteJobParams) error {
+	return store.ErrNotImplemented
+}
+func (s *storePostgresStub) StartJob(ctx context.Context, params store.StartJobParams) error {
+	return store.ErrNotImplemented
+}
 
 func TestNewLifecycleService_RefusesNilRepository(t *testing.T) {
 	t.Parallel()

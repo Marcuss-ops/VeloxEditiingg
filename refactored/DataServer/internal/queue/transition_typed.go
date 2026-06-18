@@ -21,8 +21,8 @@ package queue
 import (
 	"context"
 	"fmt"
+	"time"
 
-	"velox-server/internal/dbutil"
 	"velox-server/internal/store"
 )
 
@@ -103,6 +103,58 @@ func (l *LifecycleService) CompleteJobTx(ctx context.Context, jobID string, atte
 	return l.eventStore.CompleteJobTx(ctx, jobID, attemptID, outboxPayload)
 }
 
+// TransitionService provides typed transition methods on top of LifecycleService.
+// It wraps LifecycleService to provide a stable API surface for callers like
+// joblifecycle.Service and grpcserver.Handler.
+type TransitionService struct {
+	lc *LifecycleService
+}
+
+// NewTransitionService creates a new TransitionService.
+func NewTransitionService(lc *LifecycleService) *TransitionService {
+	return &TransitionService{lc: lc}
+}
+
+// SetLifecycleService wires the lifecycle service for deferred initialization.
+func (ts *TransitionService) SetLifecycleService(lc *LifecycleService) {
+	ts.lc = lc
+}
+
+// CompleteJob completes a job (delegates to LifecycleService).
+func (ts *TransitionService) CompleteJob(ctx context.Context, jobID string) error {
+	return ts.lc.CompleteJob(ctx, jobID)
+}
+
+// RenewLease extends a lease (delegates to LifecycleService).
+func (ts *TransitionService) RenewLease(ctx context.Context, jobID, workerID, leaseID string, leaseExpiry time.Time) error {
+	return ts.lc.RenewLease(ctx, jobID, workerID, leaseID, leaseExpiry)
+}
+
+// FailJob marks a job as failed (delegates to LifecycleService).
+func (ts *TransitionService) FailJob(ctx context.Context, jobID, errMsg, workerID string, requeue bool, maxRetries int) error {
+	return ts.lc.FailJob(ctx, jobID, errMsg, workerID, requeue, maxRetries)
+}
+
+// GetJob retrieves a job by ID (delegates to eventStore).
+func (ts *TransitionService) GetJob(ctx context.Context, jobID string) (*Job, error) {
+	m, err := ts.lc.eventStore.GetJob(ctx, jobID)
+	if err != nil {
+		return nil, err
+	}
+	job := MapToJob(m)
+	return job, nil
+}
+
+// Validate checks whether a transition is allowed (delegates to LifecycleService).
+func (ts *TransitionService) Validate(from, to JobStatus) error {
+	return ts.lc.Validate(from, to)
+}
+
+// ReleaseClaim releases a claimed job (delegates to LifecycleService).
+func (ts *TransitionService) ReleaseClaim(ctx context.Context, jobID string) error {
+	return ts.lc.ReleaseClaim(ctx, jobID)
+}
+
 // maxRetries default helper.
 func (l *LifecycleService) maxRetries() int {
 	return 3
@@ -122,8 +174,8 @@ func (ts *TransitionService) StartJobWithLease(ctx context.Context, params store
 	if ts == nil {
 		return fmt.Errorf("transition service: nil receiver")
 	}
-	if ts.jobRepo == nil {
-		return fmt.Errorf("transition service: job repository not wired (call SetJobRepository at startup)")
+	if ts.lc == nil {
+		return fmt.Errorf("transition service: lifecycle service not wired")
 	}
-	return ts.jobRepo.StartJob(ctx, params)
+	return ts.lc.jobRepo.StartJob(ctx, params)
 }

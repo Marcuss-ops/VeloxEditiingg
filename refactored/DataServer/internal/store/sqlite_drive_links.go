@@ -122,15 +122,19 @@ func (s *SQLiteStore) GetDriveLink(id string) (map[string]any, error) {
 // MasterFolders: structured master folder CRUD
 
 // UpsertMasterFolder creates or updates a master folder.
-func (s *SQLiteStore) UpsertMasterFolder(id, name, url, language string, subfoldersCount int) error {
+func (s *SQLiteStore) UpsertMasterFolder(id, name, url, language string, subfoldersCount int, metadataJSON ...string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
+	meta := ""
+	if len(metadataJSON) > 0 {
+		meta = metadataJSON[0]
+	}
 	_, err := s.db.Exec(
-		`INSERT INTO drive_master_folders (id, name, url, subfolders_count, language, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)
+		`INSERT INTO drive_master_folders (id, name, url, subfolders_count, language, metadata_json, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(id) DO UPDATE SET
 		   name=excluded.name, url=excluded.url, subfolders_count=excluded.subfolders_count,
-		   language=excluded.language, updated_at=excluded.updated_at`,
-		id, name, url, subfoldersCount, language, now, now,
+		   language=excluded.language, metadata_json=excluded.metadata_json, updated_at=excluded.updated_at`,
+		id, name, url, subfoldersCount, language, meta, now, now,
 	)
 	return err
 }
@@ -163,6 +167,68 @@ func (s *SQLiteStore) ListMasterFolders() ([]map[string]any, error) {
 func (s *SQLiteStore) DeleteMasterFolder(id string) error {
 	_, err := s.db.Exec(`DELETE FROM drive_master_folders WHERE id = ?`, id)
 	return err
+}
+
+// ListMasterFoldersDetailed returns all master folders with full metadata.
+func (s *SQLiteStore) ListMasterFoldersDetailed() ([]map[string]any, error) {
+	rows, err := s.db.Query(`SELECT id, name, url, subfolders_count, language, metadata_json, created_at, updated_at FROM drive_master_folders ORDER BY name`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []map[string]any
+	for rows.Next() {
+		var id, name, url, language, metadataJSON, createdAt, updatedAt string
+		var subfoldersCount int
+		if err := rows.Scan(&id, &name, &url, &subfoldersCount, &language, &metadataJSON, &createdAt, &updatedAt); err != nil {
+			continue
+		}
+		m := map[string]any{
+			"id": id, "name": name, "url": url,
+			"subfolders_count": subfoldersCount, "language": language,
+			"created_at": createdAt, "updated_at": updatedAt,
+		}
+		if metadataJSON != "" {
+			var meta map[string]any
+			if err := json.Unmarshal([]byte(metadataJSON), &meta); err == nil {
+				m["metadata"] = meta
+				if t, ok := meta["type"].(string); ok {
+					m["type"] = t
+				}
+			}
+		}
+		result = append(result, m)
+	}
+	return result, rows.Err()
+}
+
+// FindMasterFolderByLanguage returns the master folder for a given language.
+func (s *SQLiteStore) FindMasterFolderByLanguage(language string) (map[string]any, error) {
+	if language == "" {
+		return nil, nil
+	}
+	row := s.db.QueryRow(`SELECT id, name, url, subfolders_count, language, metadata_json, created_at, updated_at FROM drive_master_folders WHERE LOWER(language) = LOWER(?) LIMIT 1`, language)
+	var id, name, url, lang, metadataJSON, createdAt, updatedAt string
+	var subfoldersCount int
+	if err := row.Scan(&id, &name, &url, &subfoldersCount, &lang, &metadataJSON, &createdAt, &updatedAt); err != nil {
+		return nil, nil
+	}
+	m := map[string]any{
+		"id": id, "name": name, "url": url,
+		"subfolders_count": subfoldersCount, "language": lang,
+		"created_at": createdAt, "updated_at": updatedAt,
+	}
+	if metadataJSON != "" {
+		var meta map[string]any
+		if err := json.Unmarshal([]byte(metadataJSON), &meta); err == nil {
+			m["metadata"] = meta
+			if t, ok := meta["type"].(string); ok {
+				m["type"] = t
+			}
+		}
+	}
+	return m, nil
 }
 
 // MigrateDriveLinksFromJSON imports drive_links.json data into SQLite.

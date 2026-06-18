@@ -446,5 +446,4 @@ func (s *Service) saveGroups() {
 	}
 	// Intentionally empty: per-operation methods own their persistence.
 	// See per-operation methods (CreateGroup / DeleteGroup / etc.).
-	return nil
 }

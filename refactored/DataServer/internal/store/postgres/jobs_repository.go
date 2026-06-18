@@ -15,12 +15,16 @@ import (
 // Implementation roadmap per method (referenced verbatim by method name so
 // reviewers can grep):
 //
-//   CreateJob  → INSERT INTO jobs (...) VALUES (..., ?, ...); commit.
-//   GetJob     → SELECT job_id, status, … FROM jobs WHERE job_id = $1.
-//   ClaimNext  → BEGIN; SELECT … FOR UPDATE SKIP LOCKED LIMIT 1; UPDATE …; INSERT INTO job_attempts; COMMIT.
-//   Transition → UPDATE jobs SET status=$newStatus, revision=revision+1 WHERE job_id=$id AND status=$expected AND revision=$rev;
-//                IF ROW_COUNT = 0: raise store.ErrTransitionConflict, rollback semantic via no-op.
+//   CreateJob    → INSERT INTO jobs (...) VALUES (..., ?, ...); commit.
+//   GetJob       → SELECT job_id, status, … FROM jobs WHERE job_id = $1.
+//   ClaimNext    → BEGIN; SELECT … FOR UPDATE SKIP LOCKED LIMIT 1; UPDATE …; INSERT INTO job_attempts; COMMIT.
+//   Transition   → UPDATE jobs SET status=$newStatus, revision=revision+1 WHERE job_id=$id AND status=$expected AND revision=$rev;
+//                  IF ROW_COUNT = 0: raise store.ErrTransitionConflict, rollback semantic via no-op.
 //   ListByStatus → SELECT … FROM jobs WHERE status = ANY($1) ORDER BY updated_at DESC LIMIT $2.
+//   StartJob     → CAS via UPDATE jobs SET status='RUNNING', revision=revision+1 WHERE job_id=$1 AND UPPER(status)='LEASED' AND worker_id=$2 AND lease_id=$3 AND attempt=$4 AND revision=$5.
+//                  Returns ErrTransitionConflict on predicate mismatch.
+//   CompleteJob  → CAS via UPDATE jobs SET status=$finalStatus, completed_at=NOW() WHERE job_id=$1 AND UPPER(status) IN ('RUNNING','LEASED','RETRY_WAIT') AND worker_id=$2 AND lease_id=$3 AND attempt=$4 AND revision=$5.
+//                  Returns ErrTransitionConflict on predicate mismatch.
 //
 // Atomicity stays inside each method; callers never see Begin/Commit.
 type JobRepository struct {
@@ -101,6 +105,24 @@ func (r *JobRepository) RequeueZombieJobs(ctx context.Context, timeout time.Dura
 func (r *JobRepository) UpdateJobResult(ctx context.Context, jobID string, resultJSON []byte) error {
 	_, _, _ = ctx, jobID, resultJSON
 	_ = r.dsn
+	return store.ErrNotImplemented
+}
+
+// StartJob — TODO §5b: CAS via UPDATE jobs SET status='RUNNING', revision=revision+1 WHERE job_id=$1 AND UPPER(status)='LEASED' AND worker_id=$2 AND lease_id=$3 AND attempt=$4 AND revision=$5.
+// Returns ErrTransitionConflict on predicate mismatch. Defined here so the
+// compile-time JobRepository interface check (`var _ store.JobRepository`)
+// passes; the §5b driver swap is the only diff vs the SQLite-side impl.
+func (r *JobRepository) StartJob(ctx context.Context, params store.StartJobParams) error {
+	_, _, _ = ctx, params, r.dsn
+	return store.ErrNotImplemented
+}
+
+// CompleteJob — TODO §5b: CAS via UPDATE jobs SET status=$finalStatus, completed_at=NOW() WHERE job_id=$1 AND UPPER(status) IN ('RUNNING','LEASED','RETRY_WAIT') AND worker_id=$2 AND lease_id=$3 AND attempt=$4 AND revision=$5.
+// Returns ErrTransitionConflict on predicate mismatch. Defined here so the
+// compile-time JobRepository interface check (`var _ store.JobRepository`)
+// passes; the §5b driver swap is the only diff vs the SQLite-side impl.
+func (r *JobRepository) CompleteJob(ctx context.Context, params store.CompleteJobParams) error {
+	_, _, _ = ctx, params, r.dsn
 	return store.ErrNotImplemented
 }
 

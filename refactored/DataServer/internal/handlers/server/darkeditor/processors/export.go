@@ -1,4 +1,14 @@
-// Package processors provides image processing functionality for Dark Editor
+//go:build !windows
+
+// Package processors provides image processing functionality for Dark Editor.
+//
+// Build-tag: this file is gated to non-Windows platforms because
+// `github.com/chai2010/webp` is a CGo-backed encoder that the Windows
+// gcc toolchain cannot link without extra C dependencies. The Windows
+// export is provided by export_windows.go (which returns
+// ErrUnsupportedOnWindows from every webp touchpoint to keep callers
+// build-clean). Operators who need WebP exports on a Windows box should
+// run export from a Linux worker container or non-Windows master.
 package processors
 
 import (

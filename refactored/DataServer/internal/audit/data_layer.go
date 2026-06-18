@@ -28,11 +28,22 @@ type DataLayerAuditor struct {
 }
 
 // NewDataLayerAuditor creates a new data layer auditor.
-func NewDataLayerAuditor(dataDir, secretsDir, dbPath string) *DataLayerAuditor {
+//
+// dbPath is a variadic argument maintained for backwards compatibility
+// against code paths that pre-date the multi-module audit surface
+// (legacy tests, the bootstrap.go audit hook). When omitted, dbPath is
+// treated as an empty string — checkPrimaryFiles / checkDatabase will
+// skip DB-specific checks gracefully instead of failing on the call
+// site. Production callers should pass cfg.Database.DBPath explicitly.
+func NewDataLayerAuditor(dataDir, secretsDir string, dbPath ...string) *DataLayerAuditor {
+	dbp := ""
+	if len(dbPath) > 0 {
+		dbp = dbPath[0]
+	}
 	return &DataLayerAuditor{
 		dataDir:       dataDir,
 		secretsDir:    secretsDir,
-		dbPath:        dbPath,
+		dbPath:        dbp,
 		allowedLegacy: make(map[string]bool),
 	}
 }

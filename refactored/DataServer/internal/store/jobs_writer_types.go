@@ -139,6 +139,31 @@ type StartJobParams struct {
 	Now              time.Time // optional; defaults to time.Now().UTC()
 }
 
+// CompleteJobParams encodes a RUNNING → terminal transition
+// (SUCCEEDED, FAILED, or CANCELLED). Carries the same worker-identity
+// CAS tuple as StartJobParams (JobID, WorkerID, LeaseID, Attempt,
+// ExpectedRevision) so the master can refuse out-of-order or duplicate
+// completes. The repository runs a single UPDATE matching (job_id,
+// UPPER(status)=RUNNING|LEASED|RETRY_WAIT to cover recovery flows,
+// assigned_to=WorkerID, lease_id=LeaseID, COALESCE(attempt,0)=Attempt,
+// revision=ExpectedRevision) and writes completed_at + result fields.
+// Mismatch on any field raises ErrTransitionConflict so workers can be
+// asked to resubmit or the duplicate is filtered at the dispatcher.
+//
+// Unlike StartJob which only allows LEASED, CompleteJob accepts the
+// job in any post-lease state so lost-but-completed workers can
+// reconcile without a fresh StartJob round-trip.
+type CompleteJobParams struct {
+	JobID            string
+	WorkerID         string
+	LeaseID          string
+	Attempt          int
+	ExpectedRevision int
+	FinalStatus      JobStatus // JobStatusSucceeded | JobStatusFailed | JobStatusCancelled
+	ResultJSON       []byte    // persisted to result_json
+	Now              time.Time // optional; defaults to time.Now().UTC()
+}
+
 // ErrTransitionConflict is returned when the CAS predicate does not match
 // (ExpectedStatus wrong OR Revision stale). The repository layer raises this
 // so callers can distinguish it from infrastructure errors. SQLiteStore.
@@ -181,6 +206,16 @@ type JobRepository interface {
 	// Transition performs a CAS status change, returning ErrTransitionConflict
 	// if the precondition does not hold. Atomic.
 	Transition(ctx context.Context, transition TransitionParams) error
+	// StartJob performs the LEASED → RUNNING transition atomically. Verifies
+	// the full worker-identity tuple (worker_id, lease_id, attempt) plus
+	// revision CAS in a single UPDATE. Returns ErrTransitionConflict on any
+	// mismatch so handleJobAccepted can refuse stale acceptances. Atomic.
+	StartJob(ctx context.Context, params StartJobParams) error
+	// CompleteJob performs the RUNNING → terminal transition (SUCCEEDED /
+	// FAILED / CANCELLED) atomically. Verifies the full worker-identity
+	// tuple plus revision CAS. Writes completed_at + result_json on success.
+	// Returns ErrTransitionConflict on mismatch. Atomic.
+	CompleteJob(ctx context.Context, params CompleteJobParams) error
 	// ListByStatus returns up to limit jobs in any of the supplied statuses,
 	// newest-updated first. limit <= 0 is treated as "all".
 	ListByStatus(ctx context.Context, statuses []JobStatus, limit int) ([]Job, error)

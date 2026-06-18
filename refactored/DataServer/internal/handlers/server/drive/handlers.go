@@ -136,9 +136,13 @@ func GetMasterFoldersHandler(c *gin.Context) {
 		}
 	}
 
-	// Fallback: legacy JSON file
-	if driveLinksDataDir == "" {
-		c.JSON(http.StatusOK, gin.H{"success": true, "data": gin.H{"masters": gin.H{}}})
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": gin.H{"masters": gin.H{}}})
+}
+
+// UpsertMasterFolderHandler creates or updates a master folder entry.
+func UpsertMasterFolderHandler(c *gin.Context) {
+	if driveLinksStore == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": "drive store not initialized"})
 		return
 	}
 
@@ -153,7 +157,7 @@ func GetMasterFoldersHandler(c *gin.Context) {
 		return
 	}
 
-	if err := driveLinksStore.UpsertMasterFolder(req.ID, req.Name, req.URL, req.Language, req.SubfoldersCount, req.MetadataJSON); err != nil {
+	if err := driveLinksStore.UpsertMasterFolder(req.ID, req.Name, req.URL, req.Language, req.SubfoldersCount); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
 		return
 	}

@@ -41,10 +41,16 @@ func FromEnv() *Config {
 	render := loadRenderConfig()
 	nvidia := loadNVIDIAConfig()
 
-	// Proxy draft create-master to remote
-	masterServerURL := GetMasterServerURL()
+	// Note: legacy `masterServerURL := GetMasterServerURL()` removed because
+	// the value flows through the Workers sub-config (Workers.MasterServerURL
+	// → config_workers.go) and via the flat alias below. Declaring it locally
+	// here triggered a Go "declared and not used" error.
 
-	// Build flat Config for backward compatibility
+	// Build flat Config for backward compatibility. The legacy flat DB
+	// (DBDriver/DBDSN/DBMax*) aliases are intentionally dropped from this
+	// initializer because DatabaseConfig only exposes DBPath after the
+	// SQLite-only S6 cleanup; callers needing legacy DB pool tuning should
+	// migrate to the Database sub-config (c.Database).
 	c := &Config{
 		MasterPort:           server.Port,
 		StudioPort:           server.StudioPort,
@@ -59,12 +65,9 @@ func FromEnv() *Config {
 		JobQueueFile: runtime.JobQueueFile,
 		SecretsDir:   runtime.SecretsDir,
 
-		DBDriver:          database.Driver,
-		DBDSN:             database.DSN,
-		DBMaxOpenConns:    database.MaxOpenConns,
-		DBMaxIdleConns:    database.MaxIdleConns,
-		DBConnMaxLifetime: database.ConnMaxLifetime,
-		DBConnMaxIdleTime: database.ConnMaxIdleTime,
+		// Legacy flat DB pool fields dropped (see comment above). The Database
+		// sub-config (c.Database) carries DBPath; pool tuning lives in env
+		// loader added by future PR if it becomes necessary again.
 
 		AllowedWorkers:           workers.AllowedWorkers,
 		ForceSingleWorker:        workers.ForceSingleWorker,
@@ -109,26 +112,24 @@ func FromEnv() *Config {
 		RemoteEngineToken:        render.RemoteEngineToken,
 		RemoteEngineTimeoutMS:    render.RemoteEngineTimeoutMS,
 		RemoteEngineRetries:      render.RemoteEngineRetries,
-		RemoteEnginePollInterval: render.RemoteEnginePollInterval,
-
-		NVIDIAAPIKey:  nvidia.APIKey,
+		RemoteEnginePollInterval: render.RemoteEnginePollInterval,		NVIDIAAPIKey:  nvidia.APIKey,
 		NVIDIATextURL: nvidia.TextURL,
-
-	return &Config{
-		Server:   server,
-		Runtime:  runtime,
-		Database: database,
-		Workers:  workers,
-		Auth:     auth,
-		Storage:  storage,
-		Drive:    drive,
-		YouTube:  youtube,
-		Ansible:  ansible,
-		Frontend: frontend,
-		Render:   render,
-		NVIDIA:   nvidia,
-		Pipeline: pipeline,
 	}
+	pipeline := loadPipelineConfig()
+	c.Server = server
+	c.Runtime = runtime
+	c.Database = database
+	c.Workers = workers
+	c.Auth = auth
+	c.Storage = storage
+	c.Drive = drive
+	c.YouTube = youtube
+	c.Ansible = ansible
+	c.Frontend = frontend
+	c.Render = render
+	c.NVIDIA = nvidia
+	c.Pipeline = pipeline
+	return c
 }
 
 // Validate checks that required fields are set.

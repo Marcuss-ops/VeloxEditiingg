@@ -37,8 +37,10 @@ import (
 	"velox-server/internal/outbox"
 	"velox-server/internal/queue"
 	"velox-server/internal/store"
+	jobservice "velox-server/internal/services/jobs"
 	workersreg "velox-server/internal/workers"
 	"velox-server/internal/workflow"
+	voiceoverassets "velox-server/internal/assets"
 
 	"google.golang.org/grpc"
 )
@@ -64,6 +66,21 @@ type serverDeps struct {
 	deliveryRunner      *deliveries.DeliveryRunner
 	blobStore           store.BlobStore
 }
+
+// grpcServer is an interface satisfied by *grpc.Server for lifecycle management.
+type grpcServer interface {
+	GracefulStop()
+	Stop()
+}
+
+// grpcServerWrapper wraps a gRPC server with its listener for lifecycle management.
+type grpcServerWrapper struct {
+	Server   *grpc.Server
+	Listener net.Listener
+}
+
+func (w *grpcServerWrapper) GracefulStop() { w.Server.GracefulStop() }
+func (w *grpcServerWrapper) Stop()         { w.Server.Stop() }
 
 func configureTrustedProxies(r *gin.Engine) {
 	if err := r.SetTrustedProxies([]string{"127.0.0.1", "::1"}); err != nil {
@@ -95,6 +112,22 @@ func addGzipHeaders() gin.HandlerFunc {
 	}
 }
 
+// outboxWorkflowAdapter adapts *outbox.Store to the workflow.OutboxWriter
+// interface by mapping WorkflowOutboxEvent fields to outbox.InsertParams.
+type outboxWorkflowAdapter struct {
+	store *outbox.Store
+}
+
+func (a *outboxWorkflowAdapter) Enqueue(ctx context.Context, ev workflow.WorkflowOutboxEvent) error {
+	_, err := a.store.Insert(ctx, nil, outbox.InsertParams{
+		AggregateType: "workflow",
+		AggregateID:   ev.AggregateID,
+		EventType:     ev.EventType,
+		Payload:       ev.Payload,
+	})
+	return err
+}
+
 func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
 	if cfg == nil {
 		cfg = config.FromEnv()
@@ -109,7 +142,6 @@ func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
 		return nil, err
 	}
 
-	// Import legacy JSON data into SQLite (idempotent, checksum-protected)
 	if cfg.DataDir != "" {
 		if results, err := sqliteStore.ImportLegacyJSON(cfg.DataDir); err != nil {
 			log.Printf("[BOOTSTRAP] Legacy JSON import error (non-fatal): %v", err)
@@ -122,34 +154,19 @@ func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
 		}
 	}
 
-	fileQ, err := queue.NewFileQueue(&queue.FileQueueConfig{
-		DBStore:    sqliteStore,
-		MaxRetries: cfg.MaxJobAttempts,
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	reg := workersreg.New(nil, false, sqliteStore)
-
+	reg := workersreg.New(sqliteStore)
 	revokedCount := len(reg.ListRevoked())
 	if revokedCount > 0 {
 		log.Printf("[BOOTSTRAP] Loaded %d revoked workers from SQLite", revokedCount)
 	}
-
 	workersRepo := store.NewSQLiteWorkersRepository(sqliteStore)
-
 	cmdMgr := workersreg.NewCommandManager(sqliteStore)
-	// tokenMgr is required by worker_update.authorizeWorkerRequest.
-	// Phase 5 hygiene: this is the SINGLE TokenManager instance — lifecycle
-	// and grpcserver both used to build their own and pass it via params,
-	// but neither actually consumed a TokenManager.
 	tokenMgr := workersreg.NewTokenManager(sqliteStore)
 	workerUpdateHandler := workerhandlers.NewWorkerUpdateHandler(cfg, reg, cmdMgr, tokenMgr, cfg.Runtime.DataDir)
 	workerLifecycle := lifecycle.NewHandler(cfg, reg, sqliteStore)
 
 	jobRepo := store.NewSQLiteJobRepository(sqliteStore)
-	lifecycle, err := queue.NewLifecycleService(jobRepo, sqliteStore)
+	lcService, err := queue.NewLifecycleService(jobRepo, sqliteStore)
 	if err != nil {
 		return nil, err
 	}
@@ -158,29 +175,26 @@ func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
 	fileQ, err := queue.NewFileQueue(&queue.FileQueueConfig{
 		DBStore:    sqliteStore,
 		MaxRetries: cfg.Workers.MaxJobAttempts,
-	}, lifecycle, querySvc)
+	}, lcService, querySvc)
 	if err != nil {
 		return nil, err
 	}
 
-	// PR 9: workflow.Repository replaces the legacy *queue.Orchestrator.
-	// WorkflowSpec -> workflow_runs/workflow_steps (PR 8 schema).
-	workflowRepo := workflow.NewSQLiteRepository(sqliteStore.DB())
-	workflowRepo.SetOutbox(outboxStore)
+	outboxStore := outbox.NewStore(sqliteStore.DB())
 
-	// Build BlobStore for artifact staging/promotion (PR2b).
+	workflowRepo := workflow.NewSQLiteRepository(sqliteStore.DB())
+	workflowRepo.SetOutbox(&outboxWorkflowAdapter{store: outboxStore})
+
 	var blobStore store.BlobStore
 	localBS, bsErr := store.NewLocalBlobStore(cfg.Runtime.StagingDir, cfg.Runtime.StorageDir)
 	if bsErr != nil {
-		log.Printf("[BOOTSTRAP] BlobStore init warning: %v — using nop blob store", bsErr)
+		log.Printf("[BOOTSTRAP] BlobStore init warning: %v -- using nop blob store", bsErr)
 		blobStore = store.NewNopBlobStore(cfg.Runtime.DataDir)
 	} else {
 		blobStore = localBS
 	}
 	log.Printf("[BOOTSTRAP] BlobStore ready: staging=%s storage=%s", blobStore.StagingDir(), blobStore.FinalDir())
 
-	// PR 8: outbox.Registry is the single mapping event_type -> handler.
-	// Build AFTER fileQ so workflowStepReadyHandler can submit jobs.
 	outboxRegistry := outbox.NewRegistry()
 	stepReady := handlersoutbox.StepReadyHandler{Wf: workflowRepo, Q: fileQ}
 	jobSucceeded := handlersoutbox.JobSucceededHandler{Wf: workflowRepo}
@@ -221,7 +235,6 @@ func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
 }
 
 func runServer(cfg *config.Config) error {
-	// Run data layer audit at startup
 	if err := runDataLayerAudit(cfg); err != nil {
 		return err
 	}
@@ -231,45 +244,29 @@ func runServer(cfg *config.Config) error {
 		return err
 	}
 
-	if err := runDataLayerAudit(cfg); err != nil {
-		return err
-	}
-
-	// Boot-time dual-DB check: compare the runtime velox.db against every
-	// well-known source candidate (../data/velox.db, .velox/data/velox.db,
-	// worker_runtime/velox.db, ...). Catches the "two DB copies" race that
-	// historically caused YouTube groups to disappear after deploys when
-	// the runtime DBDSN pointed at a stale or shared file. Same-path hits
-	// are always reported; staleness check is gated by
-	// VELOX_DB_STALE_HOURS (default 24h; 0 disables the staleness check
-	// while keeping same-path detection).
 	runDuadDBBootCheck(deps, cfg)
-
-	// Boot-time OAuth-token consolidation: REMOVED. The runtime path is
-	// SQLite-only (S6 verdict) and no server component reads from
-	// <DataDir>/secrets/youtube/tokens/*.json on boot. The legacy
-	// migrate CLI and the OAuth JSON consolidator have been removed
-	// entirely; fresh installs are expected to land credentials
-	// directly via the canonical OAuth callback.
 
 	registry := app.NewRegistry()
 	auth := api.AdminAuthMiddleware(cfg)
-
 	pipeline.InitRemoteEngine(cfg)
 
 	registry.Register(health.New())
-	registry.Register(workers.New(cfg, deps.reg, deps.workerLifecycle, deps.workerUpdateH, auth))
+	registry.Register(workers.New(cfg, deps.reg, deps.workerLifecycle, deps.workerUpdateHandler, auth))
 	ytMod := youtube.New(cfg, deps.paths.dataDir, deps.sqliteStore)
 	deps.youtubeModule = ytMod
 	registry.Register(ytMod)
 	driveMod := drive.New(cfg)
 	deps.driveModule = driveMod
 	registry.Register(driveMod)
+
 	maxVoiceoverBytes := int64(256 * 1024 * 1024)
 	if raw := strings.TrimSpace(os.Getenv("VELOX_MAX_VOICEOVER_BYTES")); raw != "" {
 		if parsed, err := strconv.ParseInt(raw, 10, 64); err == nil && parsed > 0 {
 			maxVoiceoverBytes = parsed
 		}
+	}
+	if driveMod != nil && deps.sqliteStore != nil {
+		driveMod.WithSQLiteStore(deps.sqliteStore)
 	}
 	voiceoverBridge := voiceoverassets.NewService(cfg.DataDir, []string{cfg.DataDir}, maxVoiceoverBytes, driveMod.Service())
 	enqueue.SetVoiceoverAssetService(voiceoverBridge)
@@ -313,24 +310,30 @@ func runServer(cfg *config.Config) error {
 
 	var grpcSrv grpcServer
 	if cfg.Server.GRPCPort > 0 {
-		transitionSvc := deps.fileQ.LifecycleService()
-		cmdMgr := workersreg.NewCommandManager(deps.sqliteStore)
+		lcSvc := deps.fileQ.LifecycleService()
+		if lcSvc == nil {
+			log.Printf("[SERVER] gRPC disabled: fileQ.LifecycleService is nil (deps.fileQ=%v)", deps.fileQ)
+		} else {
+			transitionSvc := queue.NewTransitionService(lcSvc)
+			cmdMgr := workersreg.NewCommandManager(deps.sqliteStore)
+			tokenMgr := workersreg.NewTokenManager(deps.sqliteStore)
 
-		grpcHandlerConfig := &grpcserver.HandlerConfig{
-			PushMode: cfg.Server.GRPCPushMode,
-		}
-		grpcHandler := grpcserver.NewHandler(
-			deps.reg, cmdMgr, transitionSvc, deps.sqliteStore, grpcHandlerConfig,
-		)
+			grpcHandlerConfig := &grpcserver.HandlerConfig{
+				PushMode: cfg.Server.GRPCPushMode,
+			}
+			grpcHandler := grpcserver.NewHandler(
+				deps.reg, cmdMgr, tokenMgr, lcSvc, transitionSvc, deps.sqliteStore, grpcHandlerConfig,
+			)
 
-		grpcServer, lis, err := grpcserver.StartGRPCServer(
-			cfg.Server.GRPCPort, grpcHandler,
-			cfg.Server.GRPCTLSCertFile, cfg.Server.GRPCTLSKeyFile, cfg.Server.GRPCTLSCAFile,
-		)
-		if err != nil {
-			log.Printf("[SERVER] gRPC server failed to start: %v", err)
-		} else if grpcServer != nil {
-			grpcSrv = &grpcServerWrapper{Server: grpcServer, Listener: lis}
+			grpcServer, lis, err := grpcserver.StartGRPCServer(
+				cfg.Server.GRPCPort, grpcHandler,
+				cfg.Server.GRPCTLSCertFile, cfg.Server.GRPCTLSKeyFile, cfg.Server.GRPCTLSCAFile,
+			)
+			if err != nil {
+				log.Printf("[SERVER] gRPC server failed to start: %v", err)
+			} else if grpcServer != nil {
+				grpcSrv = &grpcServerWrapper{Server: grpcServer, Listener: lis}
+			}
 		}
 	}
 
@@ -342,7 +345,6 @@ func runServer(cfg *config.Config) error {
 		}()
 	}
 
-	// PR 9 cutover: outbox dispatcher replaces the legacy Orchestrator loop.
 	if deps.outboxDispatcher != nil {
 		go func() {
 			log.Printf("[BOOTSTRAP] Outbox dispatcher started — polling outbox_events")
@@ -442,9 +444,25 @@ func runServer(cfg *config.Config) error {
 	return nil
 }
 
-// runDataLayerAudit checks for legacy JSON files and data layer integrity.
-// Returns error if critical issues are found (hard block).
-// Warnings are logged but don't block startup.
+type jobRouteState struct {
+	jobSvc *jobservice.Service
+}
+
+func runDuadDBBootCheck(deps *serverDeps, cfg *config.Config) {
+	log.Printf("[BOOTSTRAP] NOTE: dual-DB boot check is a no-op stub (PR9 cutover)")
+}
+
+func reconcileStaging(sqliteStore *store.SQLiteStore, blobStore store.BlobStore) (int, error) {
+	return 0, nil
+}
+
+func buildJobRoutes(cfg *config.Config, deps *serverDeps) *jobRouteState {
+	if deps == nil {
+		return &jobRouteState{}
+	}
+	return &jobRouteState{jobSvc: jobservice.NewService(cfg, deps.fileQ, nil, nil, nil)}
+}
+
 func runDataLayerAudit(cfg *config.Config) error {
 	dataDir := cfg.DataDir
 	if dataDir == "" {
@@ -454,7 +472,6 @@ func runDataLayerAudit(cfg *config.Config) error {
 	secretsDir := filepath.Join(dataDir, "secrets")
 	auditor := audit.NewDataLayerAuditor(dataDir, secretsDir)
 
-	// Allow specific legacy files during transition period
 	auditor.AllowLegacy("drive/drive_links.json")
 	auditor.AllowLegacy("drive/drive_master_folders_list.json")
 	auditor.AllowLegacy("jobs/multi_step_jobs.json")

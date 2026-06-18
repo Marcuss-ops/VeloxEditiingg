@@ -82,6 +82,14 @@ func (s *Store) Insert(ctx context.Context, txn Executor, p InsertParams) (strin
 	return id, nil
 }
 
+// Enqueue is a thin wrapper around Insert so legacy `OutboxWriter`-style
+// callers (workflow.Repository.SetOutbox wiring) can hand a fully-built
+// InsertParams to the store without duplicating validation. Returns the
+// generated event_id when the row commits cleanly.
+func (s *Store) Enqueue(ctx context.Context, txn Executor, p InsertParams) (string, error) {
+	return s.Insert(ctx, txn, p)
+}
+
 // Executor is the interface satisfied by both *sql.DB and *sql.Tx.
 //
 // We accept this in Insert so producers can pass either a top-level

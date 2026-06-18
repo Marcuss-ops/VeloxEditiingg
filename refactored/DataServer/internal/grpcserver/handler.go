@@ -53,7 +53,8 @@ type Handler struct {
 	registry      *workersreg.Registry
 	cmdMgr        *workersreg.CommandManager
 	tokenMgr      *workersreg.TokenManager
-	lifecycleSvc *queue.LifecycleService
+	lifecycleSvc  *queue.LifecycleService
+	transitionSvc *queue.TransitionService
 	dbStore       *store.SQLiteStore
 	config        *HandlerConfig
 
@@ -70,6 +71,7 @@ type Handler struct {
 // retired in earlier waves (see docs/roadmap/14-polling-removal.md).
 type HandlerConfig struct {
 	PushMode      bool // Phase 5+: send JobOffer directly, workers respond JobAccepted
+	ShadowMode    bool // Deprecated: legacy shadow mode (no-op, kept for config compat)
 	AllowInsecure bool // Dev-only: allow insecure gRPC connections (VELOX_GRPC_ALLOW_INSECURE_DEV)
 }
 
@@ -118,6 +120,7 @@ func NewHandler(
 	cmdMgr *workersreg.CommandManager,
 	tokenMgr *workersreg.TokenManager,
 	lifecycleSvc *queue.LifecycleService,
+	transitionSvc *queue.TransitionService,
 	dbStore *store.SQLiteStore,
 	config *HandlerConfig,
 ) *Handler {
@@ -128,7 +131,8 @@ func NewHandler(
 		registry:       registry,
 		cmdMgr:         cmdMgr,
 		tokenMgr:       tokenMgr,
-		lifecycleSvc:  lifecycleSvc,
+		lifecycleSvc:   lifecycleSvc,
+		transitionSvc:  transitionSvc,
 		dbStore:        dbStore,
 		config:         config,
 		sessions:       make(map[string]*workerSession),

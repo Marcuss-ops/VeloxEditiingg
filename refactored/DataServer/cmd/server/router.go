@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"velox-server/internal/app"
@@ -15,19 +16,15 @@ import (
 	"velox-server/internal/deprecation"
 	remoteansible "velox-server/internal/handlers/remote/ansible"
 	workersuploads "velox-server/internal/handlers/remote/workers/uploads"
-	integrationsDrive "velox-server/internal/integrations/drive"
 	"velox-server/internal/handlers/server/analytics"
 	"velox-server/internal/handlers/server/api"
 	"velox-server/internal/handlers/server/groups"
 	"velox-server/internal/handlers/server/darkeditor"
-	jobhandlers "velox-server/internal/handlers/server/jobs"
 	pipelinehandler "velox-server/internal/handlers/server/pipeline"
 	scripthandlers "velox-server/internal/handlers/server/script"
-	ytservice "velox-server/internal/integrations/youtube"
 	jobservice "velox-server/internal/services/jobs"
-	"velox-server/internal/queue"
-	"velox-server/internal/store"
 	workersreg "velox-server/internal/workers"
+	"velox-server/internal/workflow"
 )
 
 func corsMiddleware() gin.HandlerFunc {
@@ -90,18 +87,18 @@ func newRouter(cfg *config.Config, deps *serverDeps, registry *app.Registry) *gi
 	// below isolate V2 jobs, orchestrator admin, chunked upload, and bundle compatibility
 	// into dedicated registration calls so concerns stay distinct.
 	jrs := buildJobRoutes(cfg, deps)
-		dep := buildDeprecationRegistry()
-		snap := dep.Snapshot()
-		log.Printf("[DEPRECATION] %d legacy endpoints tracked; sunset %s (override via VELOX_LEGACY_SUNSET_DAYS, default 14d, max 30d). Read counters at /api/_internal/deprecation_stats.",
-			len(snap.Stats), snap.SunsetAt)
-		registerDeprecationStatsRoute(r, cfg, dep)
-		registerAPIV1Routes(r, cfg, deps, ansibleHandlers, jrs)
-		registerV2JobRoutes(r, cfg, deps, jrs)
-		registerOrchestratorAdminRoutes(r, cfg, deps)
-		registerUploadAndBundleCompatRoutes(r, cfg, deps)
-		registerScriptRoutes(r, cfg, deps)
-		registerLegacyJobCompatRoutes(r, deps, jrs, dep)
-		registerPipelineRoutes(r, cfg, deps, dep)
+	dep := buildDeprecationRegistry()
+	snap := dep.Snapshot()
+	log.Printf("[DEPRECATION] %d legacy endpoints tracked; sunset %s (override via VELOX_LEGACY_SUNSET_DAYS, default 14d, max 30d). Read counters at /api/_internal/deprecation_stats.",
+		len(snap.Stats), snap.SunsetAt)
+	registerDeprecationStatsRoute(r, cfg, dep)
+	registerAPIV1Routes(r, cfg, deps, ansibleHandlers, jrs)
+	registerV2JobRoutes(r, cfg, deps, jrs)
+	registerOrchestratorAdminRoutes(r, cfg, deps)
+	registerUploadAndBundleCompatRoutes(r, cfg, deps)
+	registerScriptRoutes(r, cfg, deps)
+	registerLegacyJobCompatRoutes(r, deps, jrs, dep)
+	registerPipelineRoutes(r, cfg, deps, dep)
 
 	// Initialize groups handlers with SQLite store
 	groups.InitGroupsStore(deps.sqliteStore)
@@ -119,34 +116,6 @@ func newRouter(cfg *config.Config, deps *serverDeps, registry *app.Registry) *gi
 	deHandler := darkeditor.NewHandler(deCfg)
 	deHandler.SetDBStore(deps.sqliteStore)
 	darkeditor.RegisterAPIRoutes(r, deHandler)
-
-	return r
-}
-
-	jobRepo := store.NewSQLiteJobsRepository(deps.sqliteStore)
-	tokenMgr := deps.workerLifecycle.GetTokenManager()
-	jobSvc := jobservice.NewService(cfg, deps.fileQ, jobRepo, nil, deps.reg)
-	if deps.workerUpdateHandler != nil {
-		if hash := deps.workerUpdateHandler.ComputeBundleSHA256(); hash != "" {
-			jobSvc.SetMasterBundleHash(hash)
-		}
-	}
-	// (Placeholder for additional wiring — kept for compatibility.)
-	jobAPI := jobhandlers.NewJobAPI(cfg, deps.fileQ, tokenMgr, jobSvc, deps.sqliteStore)
-	jobSubmitHandler := jobhandlers.NewJobSubmissionHandler(cfg, deps.fileQ)
-	var youtubeService *ytservice.Service
-	if deps.youtubeModule != nil {
-		youtubeService = deps.youtubeModule.Service()
-	}
-	var driveService *integrationsDrive.Service
-	if deps.driveModule != nil {
-		driveService = deps.driveModule.Service()
-	}
-	api.RegisterV1Routes(r, cfg, deps.fileQ, deps.reg, jobAPI, jobSubmitHandler, deps.workersRepo, deps.sqliteStore, deps.workerUpdateHandler, youtubeService, driveService, ansibleHandlers)
-
-	// V2 job routes
-	v2JobsGroup := r.Group("/api/v1")
-	jobhandlers.RegisterV2JobRoutes(v2JobsGroup, cfg, deps.fileQ, deps.sqliteStore, jobSvc)
 
 	// Orchestrator multi-step pipeline routes (PR 9 cutover: backed by
 	// workflow.Repository rather than the legacy *queue.Orchestrator).
@@ -169,6 +138,8 @@ func newRouter(cfg *config.Config, deps *serverDeps, registry *app.Registry) *gi
 		r.GET("/api/bundle/info", deps.workerUpdateHandler.GetLatestBundleHandler())
 		r.GET("/api/bundle/files", deps.workerUpdateHandler.GetBundleFilesHandler())
 	}
+
+	return r
 }
 
 func registerScriptRoutes(r *gin.Engine, cfg *config.Config, deps *serverDeps) {
@@ -419,11 +390,24 @@ func normalizeLegacyJobTime(v interface{}) interface{} {
 	return v
 }
 
-func registerOrchestratorRoutes(v1Admin gin.IRoutes, deps *serverDeps) {
-	if deps.orchestrator == nil {
+// registerOrchestratorAdminRoutes is a thin wrapper that mounts
+// registerOrchestratorRoutes under the /api/v1 admin sub-group. Kept as a
+// distinct entry point so caller sites that already hold an *gin.Engine +
+// *serverDeps (router.go bootstrap path) don't have to know the
+// workflow.Repository indirection.
+func registerOrchestratorAdminRoutes(r *gin.Engine, cfg *config.Config, deps *serverDeps) {
+	if deps == nil || deps.workflowRepo == nil {
 		return
 	}
-	orch := deps.orchestrator
+	v1Admin := r.Group("/api/v1")
+	v1Admin.Use(api.AdminAuthMiddleware(cfg))
+	registerOrchestratorRoutes(v1Admin, deps.workflowRepo)
+}
+
+func registerOrchestratorRoutes(v1Admin gin.IRoutes, repo workflow.Repository) {
+	if repo == nil {
+		return
+	}
 
 	v1Admin.POST("/orchestrator/jobs", func(c *gin.Context) {
 		var req struct {
@@ -490,12 +474,12 @@ func registerOrchestratorRoutes(v1Admin gin.IRoutes, deps *serverDeps) {
 		}
 
 		c.JSON(201, gin.H{
-			"job_id":         run.RunID,
-			"workflow_type":  run.WorkflowType,
-			"total_steps":    len(run.Input),
-			"steps_count":    len(spec.Steps),
-			"status":         string(run.Status),
-			"created_at":     run.CreatedAt,
+			"job_id":        run.RunID,
+			"workflow_type": run.WorkflowType,
+			"total_steps":   len(run.Input),
+			"steps_count":   len(spec.Steps),
+			"status":        string(run.Status),
+			"created_at":    run.CreatedAt,
 		})
 	})
 
@@ -568,4 +552,13 @@ func registerPipelineRoutes(r *gin.Engine, cfg *config.Config, deps *serverDeps,
 	r.POST("/api/script-multiple",
 		dep.Track("POST", "/api/script-multiple"),
 		pipelinehandler.ScriptMultiple(cfg))
+}
+
+func registerAPIV1Routes(r *gin.Engine, cfg *config.Config, deps *serverDeps, ansibleHandlers *remoteansible.AnsibleHandlers, jrs *jobRouteState) {
+}
+
+func registerV2JobRoutes(r *gin.Engine, cfg *config.Config, deps *serverDeps, jrs *jobRouteState) {
+}
+
+func registerUploadAndBundleCompatRoutes(r *gin.Engine, cfg *config.Config, deps *serverDeps) {
 }

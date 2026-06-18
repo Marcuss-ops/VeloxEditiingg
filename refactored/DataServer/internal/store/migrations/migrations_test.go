@@ -854,6 +854,15 @@ func TestIntegration_NewSQLiteStore_AutoMigration(t *testing.T) {
 // Helpers
 // ============================================================
 
+// ensureSchemaTable is a thin wrapper around migrations.EnsureSchemaTable
+// exposed at package scope for tests that need to query schema_migrations
+// before RunMigrations has populated it. RunMigrations itself calls
+// EnsureSchemaTable internally, so this helper is only needed when a test
+// specifically wants to inspect pending vs applied state on an empty DB.
+func ensureSchemaTable(db *sql.DB) error {
+	return EnsureSchemaTable(db)
+}
+
 func applyAllMigrations(t *testing.T, db *sql.DB) {
 	t.Helper()
 	if err := RunMigrations(db, testMigrationsFS, "."); err != nil {

@@ -1,6 +1,7 @@
 package youtube
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -27,8 +28,10 @@ type StorageStore interface {
 
 	// Canonical groups v2
 	UpsertYouTubeGroupV2(name, groupType, description, privacy string) (int64, error)
+	GetYouTubeGroupV2ID(name, groupType string) (int64, error)
 	ListYouTubeGroupsV2() ([]map[string]interface{}, error)
 	DeleteYouTubeGroupV2(id int64) error
+	DeleteYouTubeGroupChannelsByGroupID(groupID int64) error
 
 	// Canonical group-channel memberships
 	AddChannelToGroupV2(groupID int64, channelID string) error
@@ -80,133 +83,12 @@ func NewStorage(dataDir string, storageStore ...StorageStore) (*Storage, error) 
 	return st, nil
 }
 
-// load reads data from canonical SQLite tables (youtube_groups_v2, youtube_channels).
-// Falls back to legacy tables if canonical tables are empty.
-func (s *Storage) load() error {
-	if s.store == nil {
-		return nil
-	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	// Try canonical groups first
-	groupRows, err := s.store.ListYouTubeGroupsV2()
-	hasCanonical := err == nil && len(groupRows) > 0
-
-	if hasCanonical {
-		// Load from canonical tables
-		for _, row := range groupRows {
-			name, _ := row["name"].(string)
-			if name == "" {
-				continue
-			}
-			groupType, _ := row["group_type"].(string)
-			createdAt, _ := row["created_at"].(string)
-			gid, _ := row["id"].(int64)
-
-			createdAtTime := parseFlexTime(createdAt)
-
-			s.data.Groups[name] = &Group{
-				Name:      name,
-				CreatedAt: createdAtTime,
-				Channels:  []Channel{},
-				GroupType: groupType,
-			}
-
-			// Load channel memberships for this group
-			if gid > 0 {
-				channelIDs, err := s.store.ListGroupChannelsV2(gid)
-				if err == nil {
-					for _, chID := range channelIDs {
-						ch, err := s.store.GetYouTubeChannel(chID)
-						if err == nil && ch != nil {
-							channel := channelFromCanonicalRow(ch)
-							if channel != nil {
-								s.data.Groups[name].Channels = append(s.data.Groups[name].Channels, *channel)
-							}
-						} else {
-							s.data.Groups[name].Channels = append(s.data.Groups[name].Channels, Channel{ID: chID})
-						}
-					}
-				}
-			}
-		}
-
-		// Load tracked niches
-		niches, err := s.store.ListYouTubeTrackedNiches()
-		if err == nil && len(niches) > 0 {
-			s.data.TrackedNiches = niches
-		}
-
-		log.Printf("[OK] Loaded %d groups from canonical tables", len(s.data.Groups))
-		return nil
-	}
-
-	// Fallback: load from legacy manager tables
-	legacyGroupRows, err := s.store.ListYouTubeManagerGroups()
-	if err == nil && len(legacyGroupRows) > 0 {
-		for _, row := range legacyGroupRows {
-			name, _ := row["name"].(string)
-			createdAt, _ := row["created_at"].(string)
-			groupType, _ := row["group_type"].(string)
-
-			var trackedNiches []string
-			if niches, ok := row["tracked_niches"].(string); ok && niches != "" {
-				json.Unmarshal([]byte(niches), &trackedNiches)
-			}
-
-			createdAtTime := parseFlexTime(createdAt)
-
-			s.data.Groups[name] = &Group{
-				Name:      name,
-				CreatedAt: createdAtTime,
-				Channels:  []Channel{},
-				GroupType: groupType,
-			}
-			if len(trackedNiches) > 0 {
-				s.data.TrackedNiches = append(s.data.TrackedNiches, trackedNiches...)
-			}
-		}
-
-		// Load channels from legacy manager channels
-		legacyChannelRows, err := s.store.ListYouTubeManagerChannels()
-		if err == nil && len(legacyChannelRows) > 0 {
-			for _, row := range legacyChannelRows {
-				ch := channelFromRow(row)
-				if ch == nil {
-					continue
-				}
-				groupName, _ := row["group_name"].(string)
-				if group, ok := s.data.Groups[groupName]; ok {
-					group.Channels = append(group.Channels, *ch)
-				}
-			}
-		}
-
-		log.Printf("[OK] Loaded %d groups from legacy tables", len(s.data.Groups))
-	}
-
-	return nil
-}
-
-// channelFromCanonicalRow converts a canonical youtube_channels row to a Channel.
-func channelFromCanonicalRow(row map[string]interface{}) *Channel {
-	id, _ := row["channel_id"].(string)
-	if id == "" {
-		return nil
-	}
-	return &Channel{
-		ID:        id,
-		Title:     asStringField(row, "title"),
-		Name:      asStringField(row, "display_name"),
-		URL:       asStringField(row, "channel_url"),
-		Thumbnail: asStringField(row, "thumbnail_url"),
-		Language:  asStringField(row, "language"),
-		ViewCount: asInt64Field(row, "view_count"),
-		SubCount:  asInt64Field(row, "subscriber_count"),
-	}
-}
+// (s *Storage) load() / save() live in storage_persistence.go. Earlier
+// PR1 cleanup removed the duplicate, non-canonical bodies (which both
+// called or proxied logic that didn't exist on this file) so that Go's
+// per-package method dispatch picks up the single canonical
+// implementation in storage_persistence.go. The struct + storage
+// lifecycle (NewStorage, LoadData, SaveData, ClearCache) stays here.
 
 func channelFromRow(row map[string]interface{}) *Channel {
 	ch := &Channel{
@@ -258,85 +140,6 @@ func asInt64Field(m map[string]interface{}, key string) int64 {
 		}
 	}
 	return 0
-}
-
-func parseFlexTime(s string) time.Time {
-	if s == "" {
-		return time.Time{}
-	}
-	layouts := []string{
-		"2006-01-02T15:04:05.999999999Z07:00",
-		"2006-01-02T15:04:05Z07:00",
-		time.RFC3339Nano,
-		time.RFC3339,
-		"2006-01-02T15:04:05.999999999",
-		"2006-01-02T15:04:05",
-		"2006-01-02",
-	}
-	for _, layout := range layouts {
-		if t, err := time.Parse(layout, s); err == nil {
-			return t
-		}
-	}
-	return time.Time{}
-}
-
-// save persists data to canonical SQLite tables (youtube_groups_v2, youtube_channels, youtube_group_channels).
-// Returns error on first failure — no errors are silently swallowed.
-func (s *Storage) save() error {
-	if s.store == nil {
-		return nil
-	}
-
-	// Persist groups to youtube_groups_v2
-	for name, g := range s.data.Groups {
-		groupType := g.GroupType
-		if groupType == "" {
-			groupType = "manager"
-		}
-
-		groupID, err := s.store.UpsertYouTubeGroupV2(name, groupType, "", "")
-		if err != nil {
-			return fmt.Errorf("save group %q: %w", name, err)
-		}
-
-		// Persist channels to youtube_channels and link via youtube_group_channels
-		for _, ch := range g.Channels {
-			addedAt := ""
-			if !ch.AddedAt.IsZero() {
-				addedAt = ch.AddedAt.Format(time.RFC3339)
-			}
-			lastSync := ""
-			if !ch.LastSync.IsZero() {
-				lastSync = ch.LastSync.Format(time.RFC3339)
-			}
-			rawMetadata, _ := json.Marshal(ch)
-
-			// Upsert into youtube_channels
-			if err := s.store.UpsertYouTubeChannel(
-				ch.ID, ch.Title, ch.Name, ch.URL, ch.Thumbnail,
-				ch.Language, ch.Notes,
-				ch.ViewCount, ch.SubCount,
-				addedAt, lastSync, string(rawMetadata),
-			); err != nil {
-				return fmt.Errorf("save channel %s: %w", safeChannelID(ch.ID), err)
-			}
-
-			// Link channel to group
-			if err := s.store.AddChannelToGroupV2(groupID, ch.ID); err != nil {
-				return fmt.Errorf("link channel %s to group %q: %w", ch.ID[:8], name, err)
-			}
-		}
-	}
-
-	// Persist tracked niches
-	for _, niche := range s.data.TrackedNiches {
-		if err := s.store.UpsertYouTubeTrackedNiche(niche); err != nil {
-			return fmt.Errorf("save tracked niche %q: %w", niche, err)
-		}
-	}
-
-	return nil
 }
 
 // LoadData returns the current storage data

@@ -428,7 +428,7 @@ func (s *Storage) diffGroupMemberships(groupID int64, groupName string, g *Group
 			ch.ID, ch.Title, ch.Name, ch.URL, ch.Thumbnail,
 			ch.Language, ch.Notes,
 			ch.ViewCount, ch.SubCount,
-			addedAt, lastSync,
+			addedAt, lastSync, "",
 		); err != nil {
 			return fmt.Errorf("upsert channel %s: %w", safeChannelID(ch.ID), err)
 		}
@@ -498,7 +498,7 @@ func (s *Storage) replaceGroupMemberships(groupID int64, g *Group) error {
 			ch.ID, ch.Title, ch.Name, ch.URL, ch.Thumbnail,
 			ch.Language, ch.Notes,
 			ch.ViewCount, ch.SubCount,
-			addedAt, lastSync,
+			addedAt, lastSync, "",
 		); err != nil {
 			return fmt.Errorf("upsert channel %s: %w", safeChannelID(ch.ID), err)
 		}

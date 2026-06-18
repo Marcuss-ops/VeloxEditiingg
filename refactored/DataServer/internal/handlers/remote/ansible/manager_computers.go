@@ -1,6 +1,7 @@
 package ansible
 
 import (
+	"encoding/json"
 	"log"
 	"path/filepath"
 	"sync"
@@ -43,6 +44,7 @@ type AnsibleComputerStore interface {
 	DeleteAnsibleHost(host string) error
 	GetAnsibleHost(host string) (*store.AnsibleHostFields, error)
 	ListAnsibleHosts() ([]store.AnsibleHostFields, error)
+	ListAnsibleComputers() (map[string][]byte, error)
 }
 
 // AnsibleComputerManager manages the Ansible computers inventory.
