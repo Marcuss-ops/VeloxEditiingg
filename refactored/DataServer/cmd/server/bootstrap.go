@@ -451,20 +451,22 @@ func runServer(cfg *config.Config) error {
 		}()
 	}
 
-	if deps.blobStore != nil {
-		go func() {
-			ticker := time.NewTicker(15 * time.Minute)
-			defer ticker.Stop()
-			for range ticker.C {
-				count, err := reconcileStaging(deps.sqliteStore, deps.blobStore)
-				if err != nil {
-					log.Printf("[STAGING] reconciler error: %v", err)
-				} else if count > 0 {
-					log.Printf("[STAGING] reconciler removed %d orphaned files", count)
-				}
-			}
-		}()
-		log.Printf("[BOOTSTRAP] Staging reconciler started — cleanup orphaned files every 15m")
+	if deps.blobStore != nil && deps.artifactSvc != nil {
+		rec, recErr := artifacts.NewReconciler(
+			deps.sqliteStore.DB(),
+			deps.blobStore,
+			artifacts.NewSQLiteRepository(deps.sqliteStore.DB()),
+			nil, // RealClock default
+			artifacts.DefaultReconcilerConfig(),
+		)
+		if recErr != nil {
+			log.Printf("[BOOTSTRAP] Reconciler init failed: %v -- continuing without it", recErr)
+		} else {
+			recCtx, recCancel := context.WithCancel(context.Background())
+			go rec.Run(recCtx, 15*time.Minute)
+			defer recCancel()
+			log.Printf("[BOOTSTRAP] artifacts.Reconciler started (4 rules: expired-uploads + staging, orphan-final-blobs, READY-no-blob QUARANTINED, stuck-STAGING; 15m tick)")
+		}
 	}
 
 	errChan := make(chan error, 1)
@@ -521,9 +523,6 @@ func runDuadDBBootCheck(deps *serverDeps, cfg *config.Config) {
 	log.Printf("[BOOTSTRAP] NOTE: dual-DB boot check is a no-op stub (PR9 cutover)")
 }
 
-func reconcileStaging(sqliteStore *store.SQLiteStore, blobStore store.BlobStore) (int, error) {
-	return 0, nil
-}
 
 func runDataLayerAudit(cfg *config.Config) error {
 	dataDir := cfg.DataDir
