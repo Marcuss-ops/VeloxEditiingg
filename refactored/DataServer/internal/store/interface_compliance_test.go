@@ -51,11 +51,8 @@ func TestInterface_AnsibleComputerStore_CompileTime(t *testing.T) {
 	// compile-time assertion above. If the code compiles, the
 	// interface is satisfied.
 	//
-	// SQLiteStore implements:
-	//   - Legacy: GetAnsibleHost, ListAnsibleComputers,
-	//     UpsertAnsibleComputer, DeleteAnsibleHost,
-	//     MigrateAnsibleComputersFromJSON
-	//   - Structured: UpsertAnsibleHost, DeleteAnsibleHost,
+	// AnsibleComputerStore interface (structured ansible_hosts):
+	//   - UpsertAnsibleHost, DeleteAnsibleHost,
 	//     GetAnsibleHost, ListAnsibleHosts
 
 	s := newTestStore(t)
@@ -199,70 +196,7 @@ func TestInterface_AnsibleComputerStore_StructuredHosts(t *testing.T) {
 	}
 }
 
-func TestInterface_AnsibleComputerStore_LegacyComputers(t *testing.T) {
-	s := newTestStore(t)
 
-	// Skip if migration 008 has been applied (legacy tables dropped)
-	versions, _ := migrations.AppliedVersions(s.DB())
-	hasMigration008 := false
-	for _, v := range versions {
-		if v >= 8 {
-			hasMigration008 = true
-			break
-		}
-	}
-	if hasMigration008 {
-		t.Skip("ansible_computers table dropped by migration 008")
-	}
-
-	var acStore ansible.AnsibleComputerStore = s
-
-	// Upsert legacy via interface
-	if err := acStore.UpsertAnsibleHost(store.AnsibleHostFields{Host: "legacy-host", AnsibleUser: "pierone", Enabled: true, Group: "legacy", Availability: "UNKNOWN"}); err != nil {
-		t.Fatalf("UpsertAnsibleComputer via interface: %v", err)
-	}
-
-	// Get legacy via interface
-	raw, err := acStore.GetAnsibleHost("legacy-host")
-	if err != nil {
-		t.Fatalf("GetAnsibleHost via interface: %v", err)
-	}
-	if raw == nil {
-		t.Fatal("expected non-nil AnsibleHostFields")
-	}
-	// Field round-trip: a stubbed GetAnsibleHost returning non-nil would
-	// silently pass the nil check; verify the upserted fields survive.
-	if raw.Host != "legacy-host" {
-		t.Errorf("round-trip Host mismatch: got %q want %q", raw.Host, "legacy-host")
-	}
-	if !raw.Enabled {
-		t.Errorf("round-trip Enabled mismatch: got %v want true", raw.Enabled)
-	}
-	if raw.Group != "legacy" {
-		t.Errorf("round-trip Group mismatch: got %q want %q", raw.Group, "legacy")
-	}
-	if raw.AnsibleUser != "pierone" {
-		t.Errorf("round-trip AnsibleUser mismatch: got %q want %q", raw.AnsibleUser, "pierone")
-	}
-
-	// List legacy via interface
-	computers, err := acStore.ListAnsibleComputers()
-	if err != nil {
-		t.Fatalf("ListAnsibleComputers via interface: %v", err)
-	}
-	if len(computers) != 1 {
-		t.Fatalf("expected 1 legacy computer, got %d", len(computers))
-	}
-
-	// Delete legacy via interface
-	if err := acStore.DeleteAnsibleHost("legacy-host"); err != nil {
-		t.Fatalf("DeleteAnsibleHost via interface: %v", err)
-	}
-	raw, _ = acStore.GetAnsibleHost("legacy-host")
-	if raw != nil {
-		t.Error("expected nil after delete via interface")
-	}
-}
 
 // ============================================================
 // Helpers
