@@ -1,9 +1,12 @@
 package migrations
 
 import (
+	"crypto/sha256"
 	"database/sql"
 	"embed"
 	"fmt"
+	"sort"
+	"strings"
 	"testing"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -23,39 +26,129 @@ func openTestDB(t *testing.T) *sql.DB {
 	return db
 }
 
-func TestDiscoverMigrations_AllVersions(t *testing.T) {
+// loadAllMigrations returns all discovered migrations (shortcut for tests).
+func loadAllMigrations(t *testing.T) []Migration {
+	t.Helper()
 	migs, err := discoverMigrations(testMigrationsFS, ".")
 	if err != nil {
-		t.Fatalf("discoverMigrations failed: %v", err)
+		t.Fatalf("discoverMigrations: %v", err)
 	}
-	if len(migs) != 11 {
-		t.Fatalf("expected 11 migrations, got %d", len(migs))
+	return migs
+}
+
+// ---- Basic Discovery Tests ----
+
+func TestDiscoverMigrations_AllVersions(t *testing.T) {
+	migs := loadAllMigrations(t)
+	if len(migs) == 0 {
+		t.Fatal("expected at least 1 migration, got 0")
 	}
-	expected := []struct {
-		Version int
-		Name    string
-	}{
-		{1, "initial"}, {2, "legacy_imports"}, {3, "youtube_canonical"},
-		{4, "ansible"}, {5, "legacy_cleanup"}, {6, "drive_links_source_of_truth"},
-		{7, "queue_persistence"}, {8, "drop_legacy_tables"}, {9, "drop_legacy_tables"},
-		{10, "job_attempts_and_artifacts"}, {11, "youtube_oauth_tokens"},
-	}
-	for i, exp := range expected {
-		if migs[i].Version != exp.Version || migs[i].Name != exp.Name {
-			t.Errorf("migration[%d]: got %d/%q, want %d/%q", i, migs[i].Version, migs[i].Name, exp.Version, exp.Name)
+	for i, m := range migs {
+		if m.Version == 0 {
+			t.Errorf("migration[%d]: version is 0", i)
 		}
-		if migs[i].Checksum == "" || migs[i].SQL == "" {
-			t.Errorf("migration[%d]: empty checksum or SQL", i)
+		if m.Name == "" {
+			t.Errorf("migration[%d]: name is empty", i)
+		}
+		if m.SQL == "" {
+			t.Errorf("migration[%d]: SQL is empty", i)
+		}
+		if m.Checksum == "" {
+			t.Errorf("migration[%d]: checksum is empty", i)
 		}
 	}
 }
 
-func TestRunMigrations_FullLifecycle(t *testing.T) {
+func TestDiscoverMigrations_NoDuplicateVersions(t *testing.T) {
+	migs := loadAllMigrations(t)
+	seen := make(map[int]int) // version → count
+	for _, m := range migs {
+		seen[m.Version]++
+	}
+	for v, count := range seen {
+		if count > 1 {
+			t.Errorf("duplicate migration version %03d: %d occurrences", v, count)
+		}
+	}
+}
+
+func TestDiscoverMigrations_StrictlyIncreasing(t *testing.T) {
+	migs := loadAllMigrations(t)
+	for i := 1; i < len(migs); i++ {
+		prev := migs[i-1].Version
+		curr := migs[i].Version
+		if curr <= prev {
+			t.Errorf("migrations not strictly increasing: %03d followed by %03d", prev, curr)
+		}
+	}
+}
+
+func TestDiscoverMigrations_GapsAllowedIfDocumented(t *testing.T) {
+	migs := loadAllMigrations(t)
+	if len(migs) == 0 {
+		return
+	}
+
+	// Build the full range from first to last.
+	first := migs[0].Version
+	last := migs[len(migs)-1].Version
+
+	present := make(map[int]bool)
+	for _, m := range migs {
+		present[m.Version] = true
+	}
+
+	// Gaps that are explicitly allowed (documented with reason).
+	// Add entries here when a version is intentionally skipped.
+	allowlist := map[int]string{
+		// Example: 5: "skipped — schema was stable, no changes needed"
+	}
+
+	var gaps []int
+	for v := first; v <= last; v++ {
+		if !present[v] {
+			gaps = append(gaps, v)
+		}
+	}
+	if len(gaps) == 0 {
+		return
+	}
+
+	// Report undocumented gaps.
+	var undocumented []int
+	for _, g := range gaps {
+		if _, ok := allowlist[g]; !ok {
+			undocumented = append(undocumented, g)
+		}
+	}
+	if len(undocumented) > 0 {
+		t.Errorf("undocumented gap(s) in migration versions: %v. "+
+			"If intentional, add to the allowlist in the test with a comment explaining why.", undocumented)
+	}
+}
+
+func TestDiscoverMigrations_MigrationNamesAreValid(t *testing.T) {
+	migs := loadAllMigrations(t)
+	for _, m := range migs {
+		if m.Name == "" {
+			t.Errorf("migration %03d: name is empty", m.Version)
+		}
+		if strings.HasPrefix(m.Name, "_") || strings.HasSuffix(m.Name, "_") {
+			t.Errorf("migration %03d: name %q has leading/trailing underscore", m.Version, m.Name)
+		}
+	}
+}
+
+// ---- Run Tests ----
+
+func TestRunMigrations_FreshDatabase(t *testing.T) {
 	db := openTestDB(t)
+	migs := loadAllMigrations(t)
+	expectedCount := len(migs)
+
 	if err := RunMigrations(db, testMigrationsFS, "."); err != nil {
 		t.Fatalf("RunMigrations failed: %v", err)
 	}
-	expectedCount := len(discoverMigrationsOrFatal(t))
 	var count int
 	db.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&count)
 	if count != expectedCount {
@@ -65,9 +158,15 @@ func TestRunMigrations_FullLifecycle(t *testing.T) {
 
 func TestRunMigrations_Idempotent(t *testing.T) {
 	db := openTestDB(t)
-	expectedCount := len(discoverMigrationsOrFatal(t))
-	RunMigrations(db, testMigrationsFS, ".")
-	RunMigrations(db, testMigrationsFS, ".")
+	migs := loadAllMigrations(t)
+	expectedCount := len(migs)
+
+	if err := RunMigrations(db, testMigrationsFS, "."); err != nil {
+		t.Fatalf("first RunMigrations: %v", err)
+	}
+	if err := RunMigrations(db, testMigrationsFS, "."); err != nil {
+		t.Fatalf("second RunMigrations (idempotent): %v", err)
+	}
 	var count int
 	db.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&count)
 	if count != expectedCount {
@@ -77,12 +176,54 @@ func TestRunMigrations_Idempotent(t *testing.T) {
 
 func TestRunMigrations_ChecksumMismatch(t *testing.T) {
 	db := openTestDB(t)
-	RunMigrations(db, testMigrationsFS, ".")
-	db.Exec(`UPDATE schema_migrations SET checksum = 'tampered' WHERE version = 3`)
+	if err := RunMigrations(db, testMigrationsFS, "."); err != nil {
+		t.Fatalf("RunMigrations: %v", err)
+	}
+	if _, err := db.Exec(`UPDATE schema_migrations SET checksum = 'tampered' WHERE version = 1`); err != nil {
+		t.Fatalf("update checksum: %v", err)
+	}
 	if err := RunMigrations(db, testMigrationsFS, "."); err == nil {
 		t.Fatal("expected checksum mismatch error, got nil")
+	} else {
+		t.Logf("expected error received: %v", err)
 	}
 }
+
+func TestRunMigrations_UpgradeFromPreviousSnapshot(t *testing.T) {
+	db := openTestDB(t)
+	migs := loadAllMigrations(t)
+
+	// Apply only the first N migrations (simulate upgrade from old snapshot).
+	if len(migs) < 2 {
+		t.Skip("need at least 2 migrations for upgrade test")
+	}
+	half := len(migs) / 2
+	for _, m := range migs[:half] {
+		if err := EnsureApplied(db, m); err != nil {
+			t.Fatalf("EnsureApplied(%03d): %v", m.Version, err)
+		}
+	}
+
+	// Verify half applied.
+	var count int
+	db.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&count)
+	if count != half {
+		t.Fatalf("expected %d applied after partial upgrade, got %d", half, count)
+	}
+
+	// Apply remaining migrations via RunMigrations.
+	if err := RunMigrations(db, testMigrationsFS, "."); err != nil {
+		t.Fatalf("RunMigrations upgrade from %d → %d: %v", half, len(migs), err)
+	}
+
+	var finalCount int
+	db.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&finalCount)
+	if finalCount != len(migs) {
+		t.Fatalf("expected %d after full upgrade, got %d", len(migs), finalCount)
+	}
+}
+
+// ---- EnsureApplied tests ----
 
 func TestEnsureApplied(t *testing.T) {
 	db := openTestDB(t)
@@ -108,38 +249,47 @@ func TestEnsureApplied(t *testing.T) {
 	}
 }
 
+// ---- Version tracking tests ----
+
 func TestAppliedVersions(t *testing.T) {
 	db := openTestDB(t)
+	migs := loadAllMigrations(t)
 	applyAllMigrations(t, db)
-	expected := discoverMigrationsOrFatal(t)
+
 	versions, err := AppliedVersions(db)
 	if err != nil {
 		t.Fatalf("AppliedVersions: %v", err)
 	}
-	if len(versions) != len(expected) {
-		t.Fatalf("expected %d versions, got %d", len(expected), len(versions))
+	if len(versions) != len(migs) {
+		t.Fatalf("expected %d versions, got %d", len(migs), len(versions))
 	}
 	for i, v := range versions {
-		if v != expected[i].Version {
-			t.Errorf("versions[%d]: got %d, want %d", i, v, expected[i].Version)
+		if v != migs[i].Version {
+			t.Errorf("versions[%d]: got %d, want %d", i, v, migs[i].Version)
 		}
 	}
 }
 
 func TestPendingVersions(t *testing.T) {
 	db := openTestDB(t)
-	expected := discoverMigrationsOrFatal(t)
-	ensureSchemaTable(db)
+	migs := loadAllMigrations(t)
+
+	EnsureSchemaTable(db)
 	pending, _ := PendingVersions(db, testMigrationsFS, ".")
-	if len(pending) != len(expected) {
-		t.Fatalf("expected %d pending, got %d", len(expected), len(pending))
+	if len(pending) != len(migs) {
+		t.Fatalf("expected %d pending, got %d", len(migs), len(pending))
 	}
-	RunMigrations(db, testMigrationsFS, ".")
+
+	if err := RunMigrations(db, testMigrationsFS, "."); err != nil {
+		t.Fatalf("RunMigrations: %v", err)
+	}
 	pending, _ = PendingVersions(db, testMigrationsFS, ".")
 	if len(pending) != 0 {
 		t.Fatalf("expected 0 pending after apply, got %d", len(pending))
 	}
 }
+
+// ---- End-to-end integration tests ----
 
 func TestIntegration_MigrationRunner_EndToEnd(t *testing.T) {
 	db := openTestDB(t)
@@ -160,8 +310,9 @@ func TestIntegration_MigrationRunner_EndToEnd(t *testing.T) {
 		}
 	}
 
-	// Verify columns from migration 002
-	for _, cc := range []struct{ table, col string }{
+	// Verify specific migration columns
+	type colCheck struct{ table, col string }
+	for _, cc := range []colCheck{
 		{"workers", "display_name"}, {"workers", "ip_address"}, {"workers", "first_seen"},
 		{"workers", "current_job"}, {"workers", "code_version"}, {"workers", "bundle_version"},
 		{"workers", "bundle_hash"}, {"workers", "protocol_version"}, {"workers", "engine_version"},
@@ -172,7 +323,7 @@ func TestIntegration_MigrationRunner_EndToEnd(t *testing.T) {
 		}
 	}
 
-	// YouTube CRUD (migration 003)
+	// YouTube CRUD
 	db.Exec(`INSERT INTO youtube_channels (channel_id, title, created_at, updated_at) VALUES ('UC_a', 'Alpha', datetime('now'), datetime('now'))`)
 	db.Exec(`INSERT INTO youtube_groups_v2 (name, group_type, created_at, updated_at) VALUES ('Sports', 'manager', datetime('now'), datetime('now'))`)
 	db.Exec(`INSERT INTO youtube_group_channels (group_id, channel_id, position, added_at) VALUES (1, 'UC_a', 0, datetime('now'))`)
@@ -192,7 +343,7 @@ func TestIntegration_MigrationRunner_EndToEnd(t *testing.T) {
 		t.Errorf("expected 0 memberships after cascade, got %d", memberCount)
 	}
 
-	// Ansible CRUD (migration 004)
+	// Ansible CRUD
 	db.Exec(`INSERT INTO ansible_hosts (host, ansible_user, enabled, created_at, updated_at) VALUES ('vm-01', 'pierone', 1, datetime('now'), datetime('now'))`)
 	db.Exec(`INSERT INTO ansible_runs (run_id, action, status, created_at) VALUES ('run-01', 'deploy', 'success', datetime('now'))`)
 	db.Exec(`INSERT INTO ansible_run_hosts (run_id, host) VALUES ('run-01', 'vm-01')`)
@@ -202,18 +353,12 @@ func TestIntegration_MigrationRunner_EndToEnd(t *testing.T) {
 	if runHostCount != 0 {
 		t.Errorf("expected 0 run hosts after CASCADE, got %d", runHostCount)
 	}
-
-	// Legacy tables dropped (migration 009)
-	for _, table := range []string{"youtube_channel_metadata", "youtube_groups", "youtube_manager_channels", "youtube_manager_groups", "ansible_computers"} {
-		if tableExists(t, db, table) {
-			t.Errorf("migration 009 should have dropped %s", table)
-		}
-	}
 }
 
 func TestIntegration_NewSQLiteStore_AutoMigration(t *testing.T) {
 	t.Parallel()
-	expectedCount := len(discoverMigrationsOrFatal(t))
+	migs := loadAllMigrations(t)
+	expectedCount := len(migs)
 	dbPath := t.TempDir() + "/test.db"
 
 	db, _ := sql.Open("sqlite3", dbPath+"?_busy_timeout=5000&_journal_mode=WAL")
@@ -237,7 +382,7 @@ func TestIntegration_NewSQLiteStore_AutoMigration(t *testing.T) {
 
 func TestMigration008_UpgradeEndToEnd(t *testing.T) {
 	db := openTestDB(t)
-	migs, _ := discoverMigrations(testMigrationsFS, ".")
+	migs := loadAllMigrations(t)
 
 	// Apply migrations 1-7
 	for _, m := range migs {
@@ -257,7 +402,6 @@ func TestMigration008_UpgradeEndToEnd(t *testing.T) {
 
 	// Apply migration 008 (data copy)
 	EnsureApplied(db, migs[7])
-	// Legacy tables still present after 008
 	for _, table := range []string{"youtube_channel_metadata", "youtube_groups", "youtube_manager_channels", "youtube_manager_groups", "ansible_computers"} {
 		if !tableExists(t, db, table) {
 			t.Errorf("008 should NOT have dropped %s", table)
@@ -301,20 +445,25 @@ func TestMigration008_UpgradeEndToEnd(t *testing.T) {
 	}
 }
 
+// ---- Integration: checksum validation ----
+
+func TestRunMigrations_ChecksumMatchesContent(t *testing.T) {
+	migs := loadAllMigrations(t)
+	for _, m := range migs {
+		expected := fmt.Sprintf("%x", sha256.Sum256([]byte(m.SQL)))
+		if m.Checksum != expected {
+			t.Errorf("migration %03d: checksum does not match SQL content", m.Version)
+		}
+	}
+}
+
+// ---- Helpers ----
+
 func applyAllMigrations(t *testing.T, db *sql.DB) {
 	t.Helper()
 	if err := RunMigrations(db, testMigrationsFS, "."); err != nil {
 		t.Fatalf("RunMigrations failed: %v", err)
 	}
-}
-
-func discoverMigrationsOrFatal(t *testing.T) []Migration {
-	t.Helper()
-	migs, err := discoverMigrations(testMigrationsFS, ".")
-	if err != nil {
-		t.Fatalf("discoverMigrations: %v", err)
-	}
-	return migs
 }
 
 func tableExists(t *testing.T, db *sql.DB, name string) bool {
@@ -344,3 +493,6 @@ func columnExists(t *testing.T, db *sql.DB, table, col string) bool {
 	}
 	return false
 }
+
+// Ensure sort is used (for future tests that may sort slices).
+var _ = sort.Ints

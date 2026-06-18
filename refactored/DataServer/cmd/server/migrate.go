@@ -1,13 +1,17 @@
 package main
 
 import (
+	"database/sql"
 	"fmt"
 	"log"
 	"os"
 	"strings"
 
+	_ "github.com/mattn/go-sqlite3"
+
 	"velox-server/internal/config"
 	integrationsYoutube "velox-server/internal/integrations/youtube"
+	"velox-server/internal/store/migrations"
 )
 
 // migrateUsage prints the usage text for the `migrate` subcommand.
@@ -22,6 +26,8 @@ import (
 func migrateUsage() {
 	fmt.Fprintf(os.Stderr, "Usage: velox-server migrate <subcommand> [<args>]\n\n")
 	fmt.Fprintf(os.Stderr, "Subcommands:\n")
+	fmt.Fprintf(os.Stderr, "  status\n")
+	fmt.Fprintf(os.Stderr, "      Show status of all schema migrations (applied/pending/checksum_mismatch).\n")
 	fmt.Fprintf(os.Stderr, "  youtube-oauth-json [--dry-run] [--data-dir=PATH]\n")
 	fmt.Fprintf(os.Stderr, "      Move legacy OAuth token files under <DataDir>/youtube/\n")
 	fmt.Fprintf(os.Stderr, "      into the canonical path <DataDir>/%s/.\n", integrationsYoutube.CanonicalOAuthTokenSubPath)
@@ -45,6 +51,8 @@ func runMigrate(cfg *config.Config, args []string) error {
 		return fmt.Errorf("migrate: missing subcommand")
 	}
 	switch args[0] {
+	case "status":
+		return runMigrateStatus(cfg)
 	case "youtube-oauth-json":
 		return runMigrateOAuthJSON(cfg, args[1:])
 	case "--help", "-h", "help":
@@ -54,6 +62,75 @@ func runMigrate(cfg *config.Config, args []string) error {
 		migrateUsage()
 		return fmt.Errorf("migrate: unknown subcommand: %s", args[0])
 	}
+}
+
+// runMigrateStatus implements `velox-server migrate status`.
+// Opens the database, discovers all embedded migrations, and prints their status.
+func runMigrateStatus(cfg *config.Config) error {
+	db, err := openMigrateDB(cfg.Database.DBPath)
+	if err != nil {
+		return fmt.Errorf("open database: %w", err)
+	}
+	defer db.Close()
+
+	// Ensure the schema_migrations table exists so we can query it.
+	if err := migrations.EnsureSchemaTable(db); err != nil {
+		return fmt.Errorf("ensure schema table: %w", err)
+	}
+
+	statuses, err := migrations.ListMigrationStatus(db, migrations.MigrationsFS, ".")
+	if err != nil {
+		return fmt.Errorf("list migration status: %w", err)
+	}
+
+	if len(statuses) == 0 {
+		fmt.Println("No migrations found.")
+		return nil
+	}
+
+	// Print header.
+	fmt.Printf("%-8s %-30s %-12s  CHECKSUM\n", "VERSION", "NAME", "STATUS")
+	fmt.Println(strings.Repeat("-", 80))
+
+	applied := 0
+	pending := 0
+	mismatch := 0
+	for _, ms := range statuses {
+		statusStr := ms.Status
+		checksumStr := ms.Checksum
+		if len(checksumStr) > 16 {
+			checksumStr = checksumStr[:16] + "..."
+		}
+		switch ms.Status {
+		case "applied":
+			applied++
+		case "pending":
+			pending++
+		case "checksum_mismatch":
+			mismatch++
+			statusStr = "MISMATCH"
+		}
+		fmt.Printf("%-8d %-30s %-12s  %s\n", ms.Version, ms.Name, statusStr, checksumStr)
+	}
+
+	fmt.Println(strings.Repeat("-", 80))
+	fmt.Printf("Total: %d | Applied: %d | Pending: %d | Checksum mismatch: %d\n",
+		len(statuses), applied, pending, mismatch)
+
+	return nil
+}
+
+// openMigrateDB opens a SQLite database for migration commands.
+func openMigrateDB(dbPath string) (*sql.DB, error) {
+	db, err := sql.Open("sqlite3", dbPath+"?_busy_timeout=5000&_journal_mode=WAL")
+	if err != nil {
+		return nil, err
+	}
+	if err := db.Ping(); err != nil {
+		db.Close()
+		return nil, err
+	}
+	return db, nil
 }
 
 // runMigrateOAuthJSON implements `velox-server migrate youtube-oauth-json`.
@@ -100,8 +177,8 @@ func runMigrateOAuthJSON(cfg *config.Config, args []string) error {
 		return fmt.Errorf("migrate youtube-oauth-json: %w", err)
 	}
 
-		fmt.Printf("[MIGRATE] Found=%d Moved=%d Merged=%d DeletedLegacyFiles=%d RemovedEmptyDirs=%d Errors=%d\n",
-			res.Found, res.Moved, res.Merged, res.DeletedLegacyFiles, res.RemovedEmptyDirs, len(res.Errors))
+	fmt.Printf("[MIGRATE] Found=%d Moved=%d Merged=%d DeletedLegacyFiles=%d RemovedEmptyDirs=%d Errors=%d\n",
+		res.Found, res.Moved, res.Merged, res.DeletedLegacyFiles, res.RemovedEmptyDirs, len(res.Errors))
 	if len(res.Errors) > 0 {
 		fmt.Println("[MIGRATE] Per-file errors (require operator reconciliation):")
 		for _, e := range res.Errors {

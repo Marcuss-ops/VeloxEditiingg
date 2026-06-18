@@ -190,7 +190,7 @@ func TestGenerateWithImages_UsesCreatorStageWhenConfigured(t *testing.T) {
 		},
 		Database: config.DatabaseConfig{
 			DBPath: dbPath,
-		}, (fix: add missing jobs columns migration (023), fix CompleteJob CAS, patch UpdateJobFields whitelist)
+		},
 		Render: config.RenderConfig{
 			RemoteEngineURL:       mockCreator.URL,
 			RemoteEngineTimeoutMS: 5000,
@@ -277,7 +277,7 @@ func TestGenerateWithImages_BypassesCreatorForRenderReadyPayload(t *testing.T) {
 		},
 		Database: config.DatabaseConfig{
 			DBPath: dbPath,
-		}, (fix: add missing jobs columns migration (023), fix CompleteJob CAS, patch UpdateJobFields whitelist)
+		},
 		Render: config.RenderConfig{
 			RemoteEngineURL:       mockCreator.URL,
 			RemoteEngineTimeoutMS: 5000,

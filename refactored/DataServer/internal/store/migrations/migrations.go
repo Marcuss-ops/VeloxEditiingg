@@ -32,7 +32,7 @@ type Migration struct {
 // It creates the schema_migrations table if it doesn't exist, then applies
 // each migration that hasn't been run yet, in version order.
 func RunMigrations(db *sql.DB, migrationsFS embed.FS, dir string) error {
-	if err := ensureSchemaTable(db); err != nil {
+	if err := EnsureSchemaTable(db); err != nil {
 		return fmt.Errorf("migrations: ensure schema table: %w", err)
 	}
 
@@ -70,8 +70,8 @@ func RunMigrations(db *sql.DB, migrationsFS embed.FS, dir string) error {
 	return nil
 }
 
-// ensureSchemaTable creates the schema_migrations tracking table.
-func ensureSchemaTable(db *sql.DB) error {
+// EnsureSchemaTable creates the schema_migrations tracking table.
+func EnsureSchemaTable(db *sql.DB) error {
 	_, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS schema_migrations (
 			version   INTEGER PRIMARY KEY,
@@ -180,7 +180,7 @@ func applyMigration(db *sql.DB, m Migration) error {
 // This is useful for domains that need to check-and-apply at the point of use,
 // though the normal startup path via RunMigrations is preferred.
 func EnsureApplied(db *sql.DB, m Migration) error {
-	if err := ensureSchemaTable(db); err != nil {
+	if err := EnsureSchemaTable(db); err != nil {
 		return err
 	}
 
@@ -219,6 +219,51 @@ func AppliedVersions(db *sql.DB) ([]int, error) {
 		versions = append(versions, v)
 	}
 	return versions, rows.Err()
+}
+
+// MigrationStatus represents the status of a single migration.
+type MigrationStatus struct {
+	Version  int
+	Name     string
+	Status   string // "applied", "pending", "checksum_mismatch"
+	Checksum string
+}
+
+// ListMigrationStatus returns the full status of all embedded migrations.
+func ListMigrationStatus(db *sql.DB, fs embed.FS, dir string) ([]MigrationStatus, error) {
+	all, err := discoverMigrations(fs, dir)
+	if err != nil {
+		return nil, err
+	}
+	applied, err := listApplied(db)
+	if err != nil {
+		// If the table doesn't exist, nothing is applied.
+		if strings.Contains(err.Error(), "no such table") {
+			applied = map[int]appliedMigration{}
+		} else {
+			return nil, err
+		}
+	}
+
+	result := make([]MigrationStatus, 0, len(all))
+	for _, m := range all {
+		ms := MigrationStatus{
+			Version:  m.Version,
+			Name:     m.Name,
+			Checksum: m.Checksum,
+		}
+		if a, ok := applied[m.Version]; ok {
+			if a.Checksum == m.Checksum {
+				ms.Status = "applied"
+			} else {
+				ms.Status = "checksum_mismatch"
+			}
+		} else {
+			ms.Status = "pending"
+		}
+		result = append(result, ms)
+	}
+	return result, nil
 }
 
 // PendingVersions returns migrations that exist in the embedded FS but haven't been applied.
