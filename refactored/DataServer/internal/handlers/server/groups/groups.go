@@ -60,11 +60,8 @@ func GetGroupsHandler(c *gin.Context) {
 		return
 	}
 
-	// Try canonical tables first, fall back to legacy
+	// Try canonical tables first
 	rows, err := groupsStore.ListYouTubeGroupsV2()
-	if err != nil || len(rows) == 0 {
-		rows, err = groupsStore.ListYouTubeGroups()
-	}
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"ok":    false,
@@ -115,11 +112,8 @@ func GetGroupHandler(c *gin.Context) {
 		return
 	}
 
-	// Try canonical tables first, fall back to legacy
+	// Try canonical tables first
 	rows, err := groupsStore.ListYouTubeGroupsV2()
-	if err != nil || len(rows) == 0 {
-		rows, err = groupsStore.ListYouTubeGroups()
-	}
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"ok":    false,

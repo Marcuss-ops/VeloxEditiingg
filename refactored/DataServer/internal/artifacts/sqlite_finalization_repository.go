@@ -106,13 +106,15 @@ func (r *SQLiteFinalizationRepository) CreateArtifactAndUploadSession(
 			upload_id, artifact_id, job_id, attempt_number, worker_id, lease_id,
 			status, temporary_storage_key,
 			expected_size_bytes, expected_sha256,
+			expected_revision,
 			received_size_bytes, received_sha256,
 			created_at, expires_at, completed_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		cmd.UploadID, cmd.ArtifactID, cmd.JobID, cmd.AttemptNumber,
 		cmd.WorkerID, cmd.LeaseID,
 		"CREATED", cmd.TemporaryStorageKey,
 		cmd.ExpectedSizeBytes, nilOrString(cmd.ExpectedSHA256),
+		cmd.ExpectedRevision,
 		0, nil,
 		now.UTC().Format(time.RFC3339),
 		expiresAt.UTC().Format(time.RFC3339),
@@ -295,16 +297,28 @@ func (r *SQLiteFinalizationRepository) FinalizeVerified(
 	// single-INSERT is safe (UNIQUE protects against double FINALIZE)
 	// but does not match the wider destination set that production
 	// delivery runs require.
+	// Resolve delivery destinations. If no explicit destination is
+	// specified, use the first enabled destination for this job.
+	// Falls back to 'primary' when delivery_destinations is empty.
+	destID := cmd.DestinationID
+	if destID == "" {
+		_ = tx.QueryRowContext(ctx,
+			`SELECT destination_id FROM delivery_destinations WHERE enabled = 1 LIMIT 1`,
+		).Scan(&destID)
+	}
+	if destID == "" {
+		destID = "primary"
+	}
 	delRes, err := tx.ExecContext(ctx, `
-		INSERT INTO job_deliveries (artifact_id, destination_id, payload, status, created_at)
-		SELECT ?, 'primary', ?, 'PENDING', ?
+		INSERT INTO job_deliveries (delivery_id, artifact_id, destination_id, status, idempotency_key, created_at, updated_at)
+		SELECT ?, ?, ?, 'PENDING', ?, ?, ?
 		WHERE NOT EXISTS (
 			SELECT 1 FROM job_deliveries
-			WHERE artifact_id = ? AND destination_id = 'primary'
+			WHERE artifact_id = ? AND destination_id = ?
 		)`,
-		cmd.ArtifactID,
-		fmt.Sprintf(`{"artifact_id":%q,"storage_key":%q}`, cmd.ArtifactID, cmd.StorageKey),
-		nowStr, cmd.ArtifactID,
+		newID(), cmd.ArtifactID, destID,
+		cmd.ArtifactID+"_"+destID, nowStr, nowStr,
+		cmd.ArtifactID, destID,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("artifacts: FinalizeVerified job_deliveries insert: %w", err)
@@ -312,9 +326,9 @@ func (r *SQLiteFinalizationRepository) FinalizeVerified(
 	if delRes != nil {
 		if n, _ := delRes.RowsAffected(); n == 1 {
 			if err := r.emitOutboxTx(ctx, tx,
-				"delivery", cmd.ArtifactID+":primary", "DELIVERY_CREATED",
-				fmt.Sprintf(`{"artifact_id":%q,"destination_id":"primary"}`,
-					cmd.ArtifactID),
+				"delivery", cmd.ArtifactID+":"+destID, "DELIVERY_CREATED",
+				fmt.Sprintf(`{"artifact_id":%q,"destination_id":%q}`,
+					cmd.ArtifactID, destID),
 			); err != nil {
 				return nil, fmt.Errorf("artifacts: FinalizeVerified outbox DELIVERY_CREATED: %w", err)
 			}
@@ -367,9 +381,10 @@ func (r *SQLiteFinalizationRepository) FinalizeVerified(
 // delivery events on partial-migration schemas and was a defect.
 func (r *SQLiteFinalizationRepository) emitOutboxTx(ctx context.Context, tx *sql.Tx, aggType, aggID, eventType, payload string) error {
 	_, err := tx.ExecContext(ctx, `
-		INSERT INTO outbox_events (aggregate_type, aggregate_id, event_type, payload, status, created_at)
-		VALUES (?, ?, ?, ?, 'PENDING', ?)`,
+		INSERT INTO outbox_events (aggregate_type, aggregate_id, event_type, payload_json, status, available_at, created_at)
+		VALUES (?, ?, ?, ?, 'PENDING', ?, ?)`,
 		aggType, aggID, eventType, payload,
+		time.Now().UTC().Format(time.RFC3339),
 		time.Now().UTC().Format(time.RFC3339))
 	if err != nil {
 		return fmt.Errorf("artifacts: emitOutboxTx %s/%s: %w", aggID, eventType, err)

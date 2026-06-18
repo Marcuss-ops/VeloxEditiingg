@@ -228,7 +228,7 @@ func (s *SQLiteStore) DeleteJob(jobID string) error {
 func (s *SQLiteStore) ArchiveOldJobs(olderThan time.Time) (int64, error) {
 	cutoff := olderThan.UTC().Format(time.RFC3339)
 	result, err := s.db.Exec(
-		`DELETE FROM jobs WHERE UPPER(status) IN ('COMPLETED', 'ERROR', 'FAILED') AND updated_at < ?`,
+		`DELETE FROM jobs WHERE UPPER(status) IN ('SUCCEEDED', 'FAILED', 'CANCELLED') AND updated_at < ?`,
 		cutoff,
 	)
 	if err != nil {

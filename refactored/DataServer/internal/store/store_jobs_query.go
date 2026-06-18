@@ -176,13 +176,17 @@ func (s *SQLiteStore) JobCounts(ctx context.Context) (map[string]int64, error) {
 		}
 		out["total"] += cnt
 		switch sname {
-		case "PENDING", "QUEUED":
+		case "PENDING":
 			out["pending"] += cnt
-		case "PROCESSING", "ASSIGNED", "LEASED":
+		case "LEASED", "RUNNING":
 			out["processing"] += cnt
-		case "COMPLETED":
+		case "RETRY_WAIT":
+			out["pending"] += cnt
+		case "SUCCEEDED":
 			out["completed"] += cnt
-		case "ERROR", "FAILED", "DEAD":
+		case "FAILED":
+			out["error"] += cnt
+		case "CANCELLED":
 			out["error"] += cnt
 		}
 	}
@@ -228,7 +232,7 @@ func (s *SQLiteStore) ListJobsByStatus(statuses []string, limit int) ([]map[stri
 
 func (s *SQLiteStore) GetActiveJobs() (map[string]map[string]any, error) {
 	rows, err := s.db.Query(
-		`SELECT ` + jobColumns + ` FROM jobs WHERE UPPER(status) IN ('PENDING', 'PROCESSING', 'QUEUED', 'ASSIGNED', 'LEASED')`,
+		`SELECT ` + jobColumns + ` FROM jobs WHERE UPPER(status) IN ('PENDING', 'LEASED', 'RUNNING', 'RETRY_WAIT')`,
 	)
 	if err != nil {
 		return nil, err

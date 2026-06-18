@@ -2,111 +2,105 @@ package uploads
 
 import (
 	"bytes"
-	"context"
+	"crypto/sha256"
+	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
-	"sync"
 	"testing"
 	"time"
 
+	_ "github.com/mattn/go-sqlite3"
 	"github.com/gin-gonic/gin"
 
+	"velox-server/internal/artifacts"
 	"velox-server/internal/config"
-	driveapi "velox-server/internal/integrations/drive"
-	"velox-server/internal/queue"
 	"velox-server/internal/store"
+	"velox-server/internal/store/migrations"
 )
 
-type fakeDriveAutoUploader struct {
-	mu           sync.Mutex
-	uploadCalls  int
-	lastFilePath string
-	lastProject  string
-	lastParentID string
-}
-
-func (f *fakeDriveAutoUploader) UploadVideo(ctx context.Context, filePath string, projectName string, parentFolderID string) (*driveapi.UploadResult, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	f.uploadCalls++
-	f.lastFilePath = filePath
-	f.lastProject = projectName
-	f.lastParentID = parentFolderID
-
-	return &driveapi.UploadResult{
-		Success:     true,
-		FileID:      "drive-file-123",
-		WebViewLink: "https://drive.example/file/drive-file-123",
-		FolderLink:  "https://drive.example/folder/" + parentFolderID,
-	}, nil
-}
-
-func TestUploadCompletedVideo_AutoUploadsToYouTubeAndDrive(t *testing.T) {
-	tempDir := t.TempDir()
-	dbPath := filepath.Join(tempDir, "velox.db")
-	db, err := store.NewSQLiteStore(dbPath)
+func TestUploadCompletedVideo_CanonicalPipeline(t *testing.T) {
+	tmp := t.TempDir()
+	dbPath := filepath.Join(tmp, "test.db")
+	db, err := sql.Open("sqlite3", dbPath+"?_busy_timeout=5000&_journal_mode=WAL")
 	if err != nil {
-		t.Fatalf("new sqlite store: %v", err)
+		t.Fatalf("open sqlite: %v", err)
 	}
-	jobRepo := store.NewSQLiteJobRepository(db)
-	ts, tsErr := queue.NewLegacyLifecycleService(jobRepo, db)
-	if tsErr != nil {
-		t.Fatalf("new transition service: %v", tsErr)
+	t.Cleanup(func() { _ = db.Close() })
+	for _, p := range []string{
+		"PRAGMA synchronous = NORMAL",
+		"PRAGMA foreign_keys = ON",
+	} {
+		if _, err := db.Exec(p); err != nil {
+			t.Fatalf("pragma: %v", err)
+		}
 	}
-	querySvc := queue.NewQueryService(db)
-	q, err := queue.NewFileQueue(&queue.FileQueueConfig{MaxRetries: 3, DBStore: db}, ts, querySvc)
+
+	if err := migrations.RunMigrations(db, migrations.MigrationsFS, "."); err != nil {
+		t.Fatalf("migrations: %v", err)
+	}
+
+	staging := filepath.Join(tmp, "staging")
+	final := filepath.Join(tmp, "final")
+	bs, err := store.NewLocalBlobStore(staging, final)
 	if err != nil {
-		t.Fatalf("new file queue: %v", err)
+		t.Fatalf("blob store: %v", err)
+	}
+
+	repo := artifacts.NewSQLiteRepository(db)
+	finRepo := artifacts.NewSQLiteFinalizationRepository(db)
+	artifactSvc := artifacts.NewService(repo, finRepo, bs, db, nil)
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	leaseExpiry := time.Now().UTC().Add(30 * time.Minute).Format(time.RFC3339)
+
+	jobID := "upload-e2e-1"
+	workerID := "worker-1"
+	leaseID := "lease-abc-123"
+	revision := 3
+
+	// Seed job in RUNNING state
+	_, err = db.Exec(`
+		INSERT INTO jobs (job_id, status, assigned_to, lease_id, lease_expiry, revision, created_at, updated_at, raw_json, migrated_at)
+		VALUES (?, 'RUNNING', ?, ?, ?, ?, ?, ?, '{}', ?)`,
+		jobID, workerID, leaseID, leaseExpiry, revision, now, now, now)
+	if err != nil {
+		t.Fatalf("seed job: %v", err)
+	}
+
+	// Seed attempt in RENDER_FINISHED state (required by BeginUpload)
+	_, err = db.Exec(`
+		INSERT INTO job_attempts (job_id, attempt_number, worker_id, lease_id, status, started_at, created_at)
+		VALUES (?, 1, ?, ?, 'RENDER_FINISHED', ?, ?)`,
+		jobID, workerID, leaseID, now, now)
+	if err != nil {
+		t.Fatalf("seed attempt: %v", err)
+	}
+
+	// Seed delivery destinations
+	_, err = db.Exec(`INSERT INTO delivery_destinations (destination_id, provider, name, enabled, created_at, updated_at) VALUES (1, 'youtube', 'YT', 1, ?, ?)`, now, now)
+	if err != nil {
+		t.Fatalf("seed yt dest: %v", err)
+	}
+	_, err = db.Exec(`INSERT INTO delivery_destinations (destination_id, provider, name, enabled, created_at, updated_at) VALUES (2, 'drive', 'Drive', 1, ?, ?)`, now, now)
+	if err != nil {
+		t.Fatalf("seed drive dest: %v", err)
 	}
 
 	cfg := &config.Config{
 		Runtime: config.RuntimeConfig{
-			DataDir:   tempDir,
-			VideosDir: filepath.Join(tempDir, "completed_videos"),
+			DataDir:   tmp,
+			VideosDir: filepath.Join(tmp, "completed_videos"),
 		},
 	}
-
-	jobID := "upload-e2e-1"
-	jobPayload := map[string]interface{}{
-		"video_name":          "Upload E2E",
-		"script_text":         "Upload E2E script",
-		"youtube_group":       "Amish",
-		"language":            "it",
-		"drive_output_folder": "folder1234567890A",
-		"status":              "PROCESSING",
-	}
-	if err := q.SubmitJob(context.Background(), jobID, jobPayload); err != nil {
-		t.Fatalf("submit job: %v", err)
-	}
-	if _, err := q.ClaimNextJob(context.Background(), "worker-1", nil); err != nil {
-		t.Fatalf("claim job: %v", err)
-	}
-	if err := ts.TransitionToRunning(context.Background(), jobID); err != nil {
-		t.Fatalf("transition to running: %v", err)
-	}
-
-	// Pre-create delivery targets for YouTube and Drive (PR4: required for auto-upload)
-	db.InsertDeliveryTarget(&store.DeliveryTarget{
-		JobID:      jobID,
-		TargetType: "youtube",
-		Status:     "pending",
-		Config:     `{"group_name":"Amish","language":"it","title":"Upload E2E","description":"Upload E2E script"}`,
-	})
-	db.InsertDeliveryTarget(&store.DeliveryTarget{
-		JobID:      jobID,
-		TargetType: "drive",
-		Status:     "pending",
-		Config:     `{"folder_id":"folder1234567890A","video_name":"Upload E2E"}`,
-	})
+	_ = cfg
 
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	blobStore := store.NewNopBlobStore(tempDir)
-	r.POST("/api/v1/video/upload-completed", UploadCompletedVideo(cfg, q, blobStore))
+	r.POST("/api/v1/video/upload-completed", UploadCompletedVideo(cfg, artifactSvc))
 
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
@@ -114,18 +108,15 @@ func TestUploadCompletedVideo_AutoUploadsToYouTubeAndDrive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create form file: %v", err)
 	}
-	if _, err := part.Write([]byte("fake-video-bytes")); err != nil {
-		t.Fatalf("write multipart file: %v", err)
+	videoBytes := []byte("fake-video-bytes-for-canonical-pipeline-test")
+	if _, err := part.Write(videoBytes); err != nil {
+		t.Fatalf("write video: %v", err)
 	}
-	if err := writer.WriteField("job_id", jobID); err != nil {
-		t.Fatalf("write job_id field: %v", err)
-	}
-	if err := writer.WriteField("worker_id", "worker-1"); err != nil {
-		t.Fatalf("write worker_id field: %v", err)
-	}
-	if err := writer.Close(); err != nil {
-		t.Fatalf("close multipart writer: %v", err)
-	}
+	writer.WriteField("job_id", jobID)
+	writer.WriteField("worker_id", workerID)
+	writer.WriteField("lease_id", leaseID)
+	writer.WriteField("revision", "3")
+	writer.Close()
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/video/upload-completed", body)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
@@ -140,96 +131,163 @@ func TestUploadCompletedVideo_AutoUploadsToYouTubeAndDrive(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	savedArtifactID, _ := resp["artifact_id"].(string)
-	if savedArtifactID == "" {
-		t.Fatalf("expected artifact_id in response, got %#v", resp)
+	if !resp["ok"].(bool) {
+		t.Fatalf("expected ok=true, got resp=%#v", resp)
+	}
+	if resp["status"] != "SUCCEEDED" {
+		t.Fatalf("expected status=SUCCEEDED, got %v", resp["status"])
+	}
+	if resp["artifact_id"] == nil || resp["artifact_id"] == "" {
+		t.Fatalf("expected artifact_id, got resp=%#v", resp)
 	}
 
-	// Wait for the job to be marked SUCCEEDED by the artifact pipeline.
-	// DeliveryRunner handles youtube/drive uploads asynchronously (not tested here).
-	jobDone := false
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
-		job, err := q.GetJobAsMap(context.Background(), jobID)
-		if err == nil && job != nil && job["status"] == "SUCCEEDED" {
-			jobDone = true
-			break
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	if !jobDone {
-		job, _ := q.GetJobAsMap(context.Background(), jobID)
-		t.Fatalf("job not SUCCEEDED in time: %#v", job)
-	}
-
-	job, err := q.GetJobAsMap(context.Background(), jobID)
+	// Verify job is SUCCEEDED in DB
+	var jobStatus string
+	err = db.QueryRow(`SELECT status FROM jobs WHERE job_id = ?`, jobID).Scan(&jobStatus)
 	if err != nil {
-		t.Fatalf("get job as map: %v", err)
+		t.Fatalf("query job status: %v", err)
 	}
-	if job["status"] != "SUCCEEDED" {
-		t.Fatalf("want status SUCCEEDED, got %v", job["status"])
+	if jobStatus != "SUCCEEDED" {
+		t.Fatalf("job status = %s, want SUCCEEDED", jobStatus)
+	}
+
+	// Verify artifact is READY in DB
+	var artStatus string
+	err = db.QueryRow(`SELECT status FROM artifacts WHERE job_id = ?`, jobID).Scan(&artStatus)
+	if err != nil {
+		t.Fatalf("query artifact status: %v", err)
+	}
+	if artStatus != "READY" {
+		t.Fatalf("artifact status = %s, want READY", artStatus)
+	}
+
+	// Verify SHA-256 is correct
+	expectedSHA := sha256.Sum256(videoBytes)
+	expectedSHAHex := hex.EncodeToString(expectedSHA[:])
+	var artSHA string
+	err = db.QueryRow(`SELECT sha256 FROM artifacts WHERE job_id = ?`, jobID).Scan(&artSHA)
+	if err != nil {
+		t.Fatalf("query artifact sha: %v", err)
+	}
+	if artSHA != expectedSHAHex {
+		t.Fatalf("artifact sha = %s, want %s", artSHA, expectedSHAHex)
+	}
+
+	// Verify attempt is SUCCEEDED
+	var attemptStatus string
+	err = db.QueryRow(`SELECT status FROM job_attempts WHERE job_id = ?`, jobID).Scan(&attemptStatus)
+	if err != nil {
+		t.Fatalf("query attempt status: %v", err)
+	}
+	if attemptStatus != "SUCCEEDED" {
+		t.Fatalf("attempt status = %s, want SUCCEEDED", attemptStatus)
 	}
 }
 
-func TestMaybeAutoUploadDrive_FallsBackToJobLanguage(t *testing.T) {
-	t.Skip("test moved to internal/deliveries -- see smoke_job_final.sh (post-PS8 cleanup relocated maybeAutoUploadDrive there)")
-	return
+func TestUploadCompletedVideo_BeginUploadRejected_MissingJob(t *testing.T) {
+	tmp := t.TempDir()
+	dbPath := filepath.Join(tmp, "test.db")
+	db, err := sql.Open("sqlite3", dbPath+"?_busy_timeout=5000&_journal_mode=WAL")
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	for _, p := range []string{
+		"PRAGMA synchronous = NORMAL",
+		"PRAGMA foreign_keys = ON",
+	} {
+		if _, err := db.Exec(p); err != nil {
+			t.Fatalf("pragma: %v", err)
+		}
+	}
+	if err := migrations.RunMigrations(db, migrations.MigrationsFS, "."); err != nil {
+		t.Fatalf("migrations: %v", err)
+	}
+
+	staging := filepath.Join(tmp, "staging")
+	final := filepath.Join(tmp, "final")
+	bs, err := store.NewLocalBlobStore(staging, final)
+	if err != nil {
+		t.Fatalf("blob store: %v", err)
+	}
+
+	repo := artifacts.NewSQLiteRepository(db)
+	finRepo := artifacts.NewSQLiteFinalizationRepository(db)
+	artifactSvc := artifacts.NewService(repo, finRepo, bs, db, nil)
+
+	cfg := &config.Config{Runtime: config.RuntimeConfig{DataDir: tmp}}
+
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.POST("/api/v1/video/upload-completed", UploadCompletedVideo(cfg, artifactSvc))
+
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	part, _ := writer.CreateFormFile("video", "rendered.mp4")
+	part.Write([]byte("fake"))
+	writer.WriteField("job_id", "nonexistent-job")
+	writer.WriteField("worker_id", "worker-1")
+	writer.WriteField("lease_id", "lease-abc")
+	writer.Close()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/video/upload-completed", body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d body=%s", w.Code, w.Body.String())
+	}
 }
 
-// 	if err := db.UpsertMasterFolder("drive-folder-it", "Italian Master", "https://drive.google.com/drive/folders/drive-folder-it", "it", 0, `{"type":"outro"}`); err != nil {
-// 		t.Fatalf("upsert master folder: %v", err)
-// 	}
-// 	jobRepo := store.NewSQLiteJobRepository(db)
-// 	ts, tsErr := queue.NewLegacyLifecycleService(jobRepo, db)
-// 	if tsErr != nil {
-// 		t.Fatalf("new transition service: %v", tsErr)
-// 	}
-// 	querySvc := queue.NewQueryService(db)
-// 	q, err := queue.NewFileQueue(&queue.FileQueueConfig{MaxRetries: 3, DBStore: db}, ts, querySvc)
-// 	if err != nil {
-// 		t.Fatalf("new file queue: %v", err)
-// 	}
-// 
-// 	jobID := "upload-drive-fallback-1"
-// 	jobPayload := map[string]interface{}{
-// 		"video_name": "Fallback Drive Upload",
-// 		"language":   "it",
-// 		"status":     "PROCESSING",
-// 	}
-// 	if err := q.SubmitJob(context.Background(), jobID, jobPayload); err != nil {
-// 		t.Fatalf("submit job: %v", err)
-// 	}
-// 
-// 	videoPath := filepath.Join(tempDir, "rendered.mp4")
-// 	if err := os.WriteFile(videoPath, []byte("fake-video-bytes"), 0o644); err != nil {
-// 		t.Fatalf("write video: %v", err)
-// 	}
-// 
-// 	driveSvc := &fakeDriveAutoUploader{}
-// 	targets := []store.DeliveryTarget{{
-// 		TargetType: "drive",
-// 		Status:     "pending",
-// 		Config:     `{"folder_id":"drive-folder-it"}`,
-// 	}}
-// 	maybeAutoUploadDrive(q, driveSvc, tempDir, jobID, map[string]interface{}{}, videoPath, targets)
-// 
-// 	deadline := time.Now().Add(3 * time.Second)
-// 	for time.Now().Before(deadline) {
-// 		driveSvc.mu.Lock()
-// 		calls := driveSvc.uploadCalls
-// 		driveSvc.mu.Unlock()
-// 		if calls > 0 {
-// 			break
-// 		}
-// 		time.Sleep(20 * time.Millisecond)
-// 	}
-// 
-// 	driveSvc.mu.Lock()
-// 	defer driveSvc.mu.Unlock()
-// 	if driveSvc.uploadCalls != 1 {
-// 		t.Fatalf("want 1 drive upload call, got %d", driveSvc.uploadCalls)
-// 	}
-// 	if driveSvc.lastParentID != "drive-folder-it" {
-// 		t.Fatalf("want fallback parent folder drive-folder-it, got %q", driveSvc.lastParentID)
-// 	}
-// }
+func TestUploadCompletedVideo_MissingVideo(t *testing.T) {
+	tmp := t.TempDir()
+	dbPath := filepath.Join(tmp, "test.db")
+	db, err := sql.Open("sqlite3", dbPath+"?_busy_timeout=5000&_journal_mode=WAL")
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	for _, p := range []string{
+		"PRAGMA synchronous = NORMAL",
+		"PRAGMA foreign_keys = ON",
+	} {
+		if _, err := db.Exec(p); err != nil {
+			t.Fatalf("pragma: %v", err)
+		}
+	}
+	if err := migrations.RunMigrations(db, migrations.MigrationsFS, "."); err != nil {
+		t.Fatalf("migrations: %v", err)
+	}
+
+	staging := filepath.Join(tmp, "staging")
+	final := filepath.Join(tmp, "final")
+	bs, err := store.NewLocalBlobStore(staging, final)
+	if err != nil {
+		t.Fatalf("blob store: %v", err)
+	}
+
+	repo := artifacts.NewSQLiteRepository(db)
+	finRepo := artifacts.NewSQLiteFinalizationRepository(db)
+	artifactSvc := artifacts.NewService(repo, finRepo, bs, db, nil)
+
+	cfg := &config.Config{Runtime: config.RuntimeConfig{DataDir: tmp}}
+
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.POST("/api/v1/video/upload-completed", UploadCompletedVideo(cfg, artifactSvc))
+
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	writer.WriteField("job_id", "some-job")
+	writer.Close()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/video/upload-completed", body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d body=%s", w.Code, w.Body.String())
+	}
+}

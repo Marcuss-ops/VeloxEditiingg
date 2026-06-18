@@ -94,6 +94,7 @@ CREATE TABLE artifact_uploads (
 	temporary_storage_key TEXT,
 	expected_size_bytes  INTEGER,
 	expected_sha256      TEXT,
+	expected_revision    INTEGER,
 	received_size_bytes  INTEGER,
 	received_sha256      TEXT,
 	created_at        TEXT,
@@ -118,17 +119,30 @@ CREATE TABLE outbox_events (
 	aggregate_type TEXT,
 	aggregate_id   TEXT,
 	event_type     TEXT,
-	payload        TEXT,
+	payload_json   TEXT,
 	status         TEXT,
+	available_at   TEXT,
 	created_at     TEXT
 );
 CREATE TABLE job_deliveries (
-	artifact_id    TEXT,
-	destination_id TEXT,
-	payload        TEXT,
-	status         TEXT,
-	created_at     TEXT,
+	delivery_id      TEXT PRIMARY KEY,
+	artifact_id      TEXT,
+	destination_id   TEXT,
+	status           TEXT,
+	idempotency_key  TEXT,
+	remote_id        TEXT,
+	remote_url       TEXT,
+	created_at       TEXT,
+	updated_at       TEXT,
 	UNIQUE (artifact_id, destination_id)
+);
+CREATE TABLE delivery_destinations (
+	destination_id INTEGER PRIMARY KEY,
+	provider       TEXT,
+	name           TEXT,
+	enabled        INTEGER DEFAULT 1,
+	created_at     TEXT,
+	updated_at     TEXT
 );
 `
 
@@ -269,7 +283,7 @@ func TestFinalizeVerified_HappyPath(t *testing.T) {
 	// downstream consumers see the verified fingerprint (cross-system
 	// invariant the writer is responsible for).
 	var payload string
-	if err := db.QueryRow(`SELECT payload FROM outbox_events WHERE event_type='JOB_SUCCEEDED'`).Scan(&payload); err != nil {
+	if err := db.QueryRow(`SELECT payload_json FROM outbox_events WHERE event_type='JOB_SUCCEEDED'`).Scan(&payload); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(payload, "deadbeef") {

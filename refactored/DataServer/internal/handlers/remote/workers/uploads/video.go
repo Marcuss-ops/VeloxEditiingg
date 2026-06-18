@@ -1,52 +1,35 @@
 package uploads
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
-	"fmt"
-	"io"
 	"log"
 	"net/http"
-	"os"
-	"path/filepath"
-	"time"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 
+	"velox-server/internal/artifacts"
 	"velox-server/internal/config"
-	"velox-server/internal/queue"
-	"velox-server/internal/store"
 )
 
 // UploadCompletedVideo handles video file upload from workers.
 // POST /api/v1/video/upload-completed
 //
-// Rewritten PR3.5-b: uses staging → ArtifactFinalizationService →
-// job_deliveries PENDING pipeline. Job completion (SUCCEEDED) is
-// deferred to the canonical FinalizationRepository.FinalizeVerified path.
+// PR 3.5-c rewrite: the HTTP upload handler now goes through the canonical
+// artifacts.Service pipeline (BeginUpload → Receive → Finalize) — the same
+// path used by the gRPC ArtifactUploaded handler. This is the SINGLE
+// authoritative path for promoting a job to SUCCEEDED.
 //
 // Flow:
-//  1. Save upload to staging directory (BlobStore staging path)
-//  2. Create artifact in STAGING status
-//  3. Call ArtifactFinalizationService.FinalizeRender for verification
-//     (re-hashes SHA-256, sniffs MIME, measures size)
-//  4. Promote staged file to final storage
-//  5. Insert PENDING job_deliveries for delivery targets
-//  6. DeliveryRunner picks up the PENDING deliveries asynchronously
-func UploadCompletedVideo(cfg *config.Config, fileQ *queue.FileQueue, blobStore store.BlobStore) gin.HandlerFunc {
-	videosDir := cfg.Runtime.VideosDir
-	if videosDir == "" {
-		videosDir = "./completed_videos"
-	}
-
-	// Build staging dir from config (fallback to data/staging)
-	stagingDir := cfg.Runtime.StagingDir
-	if stagingDir == "" {
-		stagingDir = filepath.Join(cfg.Runtime.DataDir, "staging")
-	}
-
+//  1. Parse multipart form fields (job_id, worker_id, lease_id, attempt)
+//  2. artifacts.Service.BeginUpload — validates job auth, creates
+//     artifacts + artifact_uploads atomically
+//  3. artifacts.Service.Receive — streams bytes to staging, master-computes
+//     SHA-256, post-write verification
+//  4. artifacts.Service.Finalize — CAS RECEIVED→FINALIZING, then
+//     FinalizeVerified (jobs SUCCEEDED + artifacts READY + outbox events +
+//     delivery inserts) all in one atomic SQL transaction
+func UploadCompletedVideo(cfg *config.Config, artifactSvc *artifacts.Service) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		// Parse multipart form
 		file, header, err := c.Request.FormFile("video")
 		if err != nil {
 			file, header, err = c.Request.FormFile("video_file")
@@ -60,154 +43,82 @@ func UploadCompletedVideo(cfg *config.Config, fileQ *queue.FileQueue, blobStore 
 		jobID := c.PostForm("job_id")
 		workerID := c.PostForm("worker_id")
 		leaseID := c.PostForm("lease_id")
-
 		if jobID == "" {
 			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "job_id is required"})
 			return
 		}
 
-		// Ensure staging directory exists — also log the videosDir for backward compat
-		_ = videosDir
-		if err := os.MkdirAll(stagingDir, 0755); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": "failed to create staging directory"})
-			return
+		ext := "video"
+		if header != nil && header.Filename != "" {
+			ext = header.Filename
 		}
 
-		// Generate unique staging path via BlobStore
-		ext := filepath.Ext(header.Filename)
-		if ext == "" {
-			ext = ".mp4"
-		}
-		artifactID := fmt.Sprintf("art_%s_%d", jobID, time.Now().UnixNano())
-		stagingPath, err := blobStore.StagingPath(jobID, artifactID, ext)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": "failed to allocate staging path"})
-			return
-		}
-
-		// Write uploaded file to staging
-		out, err := os.Create(stagingPath)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": "Failed to save uploaded file"})
-			return
-		}
-
-		hasher := sha256.New()
-		writer := io.MultiWriter(out, hasher)
-		size, err := io.Copy(writer, file)
-		out.Close()
-
-		if err != nil {
-			os.Remove(stagingPath)
-			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": "Failed to write video file"})
-			return
-		}
-		sha256Hash := hex.EncodeToString(hasher.Sum(nil))
+		revision, _ := strconv.Atoi(c.PostForm("revision"))
 
 		ctx := c.Request.Context()
-		now := time.Now().UTC().Format(time.RFC3339)
 
-		// Get DB store from FileQueue
-		dbStore := fileQ.GetDBStore()
-
-		// Look up the latest attempt for revision/lease validation
-		var attemptID int64
-		latestAttempt, err := dbStore.GetLatestJobAttempt(jobID)
-		if err == nil && latestAttempt != nil {
-			attemptID = int64(latestAttempt.ID)
-			// Validate lease if provided
-			if leaseID != "" && latestAttempt.LeaseID != "" && latestAttempt.LeaseID != leaseID {
-				log.Printf("[UPLOAD] Lease mismatch for %s: got %s, expected %s", jobID, leaseID, latestAttempt.LeaseID)
-			}
-		}
-
-		// Step 1: Create artifact in STAGING status
-		newArtifact := &store.Artifact{
-			ID:              artifactID,
-			JobID:           jobID,
-			AttemptID:       int(attemptID),
-			Type:            "video",
-			StorageProvider: "local",
-			StorageKey:      stagingPath,
-			LocalPath:       stagingPath,
-			SHA256:          sha256Hash,
-			SizeBytes:       size,
-			Status:          "STAGING",
-			CreatedAt:       now,
-		}
-		if err := dbStore.InsertArtifact(newArtifact); err != nil {
-			os.Remove(stagingPath)
-			log.Printf("[UPLOAD] Failed to insert artifact for %s: %v", jobID, err)
-			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": "Failed to create artifact record"})
-			return
-		}
-
-		// Step 2: Finalize via ArtifactFinalizationService
-		finalizationSvc := queue.NewArtifactFinalizationService(dbStore)
-		_, finalizeErr := finalizationSvc.FinalizeRender(ctx, queue.FinalizeRenderInput{
-			ArtifactID:    artifactID,
-			JobID:         jobID,
-			AttemptID:     attemptID,
-			WorkerID:      workerID,
-			LeaseID:       leaseID,
-			TemporaryPath: stagingPath,
-			ExpectedSize:  size,
-			WorkerSHA256:  sha256Hash,
+		// Step 1: BeginUpload — creates artifacts + artifact_uploads atomically.
+		// Validates job RUNNING, worker/lease ownership, attempt RENDER_FINISHED.
+		session, beginErr := artifactSvc.BeginUpload(ctx, artifacts.BeginUploadCommand{
+			JobID:            jobID,
+			WorkerID:         workerID,
+			LeaseID:          leaseID,
+			AttemptNumber:    1,
+			ExpectedRevision: revision,
+			Kind:             ext,
 		})
-
-		if finalizeErr != nil {
-			log.Printf("[UPLOAD] Artifact finalization failed for %s (artifact=%s): %v", jobID, artifactID, finalizeErr)
-			// Artifact is now in QUARANTINED — don't promote job.
-			_ = blobStore.RemoveStaging(stagingPath)
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"ok":          false,
-				"error":       "Artifact verification failed",
-				"artifact_id": artifactID,
-				"status":      "QUARANTINED",
+		if beginErr != nil {
+			log.Printf("[UPLOAD] BeginUpload failed for %s: %v", jobID, beginErr)
+			c.JSON(http.StatusBadRequest, gin.H{
+				"ok":     false,
+				"error":  "BeginUpload rejected: " + beginErr.Error(),
+				"job_id": jobID,
 			})
 			return
 		}
 
-		// Step 3: Promote staged file to final storage (canonical location).
-		finalPath := blobStore.FinalPath(jobID, artifactID, ext)
-		storageKey, promoteErr := blobStore.PromoteToFinal(stagingPath, finalPath)
-		if promoteErr != nil {
-			log.Printf("[UPLOAD] Failed to promote artifact %s to final: %v", artifactID, promoteErr)
-			// Artifact is READY in DB but file is still in staging — reconciler will handle.
-			storageKey = stagingPath
-		} else {
-			// Update artifact with final storage_key.
-			_ = dbStore.UpdateArtifactStorageKey(ctx, artifactID, storageKey, finalPath)
+		// Step 2: Receive — stream bytes to staging, master-computes SHA-256.
+		recv, recvErr := artifactSvc.Receive(ctx, session.UploadID, file)
+		if recvErr != nil {
+			log.Printf("[UPLOAD] Receive failed for %s upload=%s: %v", jobID, session.UploadID, recvErr)
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"ok":        false,
+				"error":     "Receive rejected: " + recvErr.Error(),
+				"upload_id": session.UploadID,
+			})
+			return
 		}
 
-		// Step 4: Job completion is deferred to the canonical
-		// FinalizationRepository.FinalizeVerified path (sole legal
-		// writer of jobs.status='SUCCEEDED'). CompleteJobTx was
-		// removed in PR 3.5-b.
-		log.Printf("[UPLOAD] Artifact verified for job %s — completion deferred to canonical finalization", jobID)
-
-		// Step 5: Create PENDING job_deliveries for legacy delivery_targets.
-		if dbStore != nil {
-			deliveryCount, deliveryErr := dbStore.InsertJobDeliveriesForArtifact(ctx, artifactID, jobID)
-			if deliveryErr != nil {
-				log.Printf("[UPLOAD] Failed to create job_deliveries for %s: %v", jobID, deliveryErr)
-			} else if deliveryCount > 0 {
-				log.Printf("[UPLOAD] Created %d PENDING job_deliveries for artifact %s", deliveryCount, artifactID)
-			}
+		// Step 3: Finalize — CAS RECEIVED→FINALIZING → FinalizeVerified
+		// (jobs SUCCEEDED + artifacts READY + outbox + delivery in one tx).
+		art, finErr := artifactSvc.Finalize(ctx, artifacts.FinalizeArtifactCommand{
+			UploadID:         session.UploadID,
+			JobID:            jobID,
+			WorkerID:         workerID,
+			LeaseID:          leaseID,
+			ExpectedRevision: revision,
+		})
+		if finErr != nil {
+			log.Printf("[UPLOAD] Finalize failed for %s upload=%s: %v", jobID, session.UploadID, finErr)
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"ok":        false,
+				"error":     "Finalize rejected: " + finErr.Error(),
+				"upload_id": session.UploadID,
+			})
+			return
 		}
 
-		log.Printf("[UPLOAD] Artifact pipeline complete: job=%s artifact=%s status=READY sha256=%s size=%d",
-			jobID, artifactID,		sha256Hash[:16]+"...", size)
+		log.Printf("[UPLOAD] Artifact pipeline complete: job=%s artifact=%s upload=%s sha256=%s size=%d",
+			jobID, art.ID, session.UploadID, recv.ReceivedSHA256[:16]+"...", recv.ReceivedSizeBytes)
 
 		c.JSON(http.StatusOK, gin.H{
 			"ok":          true,
 			"job_id":      jobID,
-			"artifact_id": artifactID,
-			"status":      "READY",
-			"size":        size,
-			"sha256":      sha256Hash,
+			"artifact_id": art.ID,
+			"upload_id":   session.UploadID,
+			"status":      "SUCCEEDED",
+			"size":        recv.ReceivedSizeBytes,
+			"sha256":      recv.ReceivedSHA256,
 		})
 	}
 }
-
-

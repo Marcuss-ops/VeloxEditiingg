@@ -189,32 +189,6 @@ func saveDriveLinksToDisk(folders []DriveFolder) error {
 	return os.WriteFile(jsonPath, data, 0644)
 }
 
-// saveMasterFoldersToDisk persists master folders to SQLite (primary) and JSON (backup).
-func saveMasterFoldersToDisk(masters map[string]MasterFolderInfo) error {
-	// Primary: SQLite
-	if driveLinksStore != nil {
-		for language, info := range masters {
-			if err := driveLinksStore.UpsertMasterFolder(info.ID, info.Name, info.URL, language, info.SubfoldersCount, info.MetadataJSON); err != nil {
-				log.Printf("[WARN] Master folder SQLite save failed for %s: %v", language, err)
-			}
-		}
-	}
-
-	// Backup: JSON file
-	if driveLinksDataDir == "" {
-		return nil
-	}
-	masterPath := filepath.Join(driveLinksDataDir, "drive", "drive_master_folders_list.json")
-	if err := os.MkdirAll(filepath.Dir(masterPath), 0755); err != nil {
-		return err
-	}
-	data, err := json.MarshalIndent(MasterFoldersData{Masters: masters}, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(masterPath, data, 0644)
-}
-
 // normalizeName normalizes a folder name for matching
 func normalizeName(s string) string {
 	s = strings.ToLower(s)

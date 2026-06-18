@@ -158,12 +158,11 @@ func (c *countingWriter) Write(p []byte) (int, error) {
 // Loaded with a single SELECT, then checked against the BeginUpload
 // auth fields in one place.
 type jobState struct {
-	status      string
-	assignedTo  string
-	leaseID     string
+	status     string
+	assignedTo string
+	leaseID    string
 	leaseExpiry time.Time
-	revision    int
-	outputSha   string
+	revision   int
 }
 
 // loadJob reads the auth-relevant columns of a `jobs` row.
@@ -174,12 +173,12 @@ func (s *Service) loadJob(ctx context.Context, jobID string) (*jobState, error) 
 	row := s.db.QueryRowContext(ctx,
 		`SELECT status, COALESCE(assigned_to, ''),
 		        COALESCE(lease_id, ''), COALESCE(lease_expiry, ''),
-		        COALESCE(revision, 0), COALESCE(output_sha256, '')
+		        COALESCE(revision, 0)
 		 FROM jobs WHERE job_id = ?`, jobID)
 	var j jobState
 	var leaseExp string
 	if err := row.Scan(&j.status, &j.assignedTo, &j.leaseID, &leaseExp,
-		&j.revision, &j.outputSha); err != nil {
+		&j.revision); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}

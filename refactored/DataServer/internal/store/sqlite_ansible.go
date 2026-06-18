@@ -173,12 +173,6 @@ func (s *SQLiteStore) ListAnsibleHosts() ([]AnsibleHostFields, error) {
 	return result, rows.Err()
 }
 
-// ListAnsibleComputers returns the legacy ansible_computers table data.
-// The legacy table was dropped by migration 008; this always returns empty.
-func (s *SQLiteStore) ListAnsibleComputers() (map[string][]byte, error) {
-	return make(map[string][]byte), nil
-}
-
 // ============================================================
 // Structured ansible_runs methods
 // ============================================================

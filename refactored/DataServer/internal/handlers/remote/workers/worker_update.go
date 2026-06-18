@@ -178,16 +178,6 @@ func (h *WorkerUpdateHandler) Config() *config.Config {
 	return h.cfg
 }
 
-// SavePendingUpdates saves pending updates to a JSON file
-func (h *WorkerUpdateHandler) SavePendingUpdates() error {
-	return nil
-}
-
-// LoadPendingUpdates loads pending updates from a JSON file
-func (h *WorkerUpdateHandler) LoadPendingUpdates() error {
-	return nil
-}
-
 type updateAllRequest struct {
 	ExcludeLocal *bool `json:"exclude_local"`
 	DryRun       *bool `json:"dry_run"`

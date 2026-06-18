@@ -71,6 +71,10 @@ type FinalizeVerifiedCommand struct {
 	MIMEType        string
 
 	VerifiedAt time.Time
+
+	// DestinationID is the delivery destination to create a job_deliveries row for.
+	// If empty, the first enabled destination for this job is used.
+	DestinationID string
 }
 
 // DeliveryPlanResolver returns the destination IDs that should receive

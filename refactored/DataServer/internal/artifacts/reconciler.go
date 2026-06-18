@@ -506,9 +506,9 @@ func (r *Reconciler) quarantineArtifactTx(ctx context.Context, artifactID, reaso
 		artifactID, reason, r.clock.Now().UTC().Format(time.RFC3339))
 	now := r.clock.Now().UTC().Format(time.RFC3339)
 	if _, err := tx2.ExecContext(ctx, `
-		INSERT INTO outbox_events (aggregate_type, aggregate_id, event_type, payload, status, created_at)
-		VALUES ('artifact', ?, 'ARTIFACT_QUARANTINED', ?, 'PENDING', ?)`,
-		artifactID, payload, now); err != nil {
+		INSERT INTO outbox_events (aggregate_type, aggregate_id, event_type, payload_json, status, available_at, created_at)
+		VALUES ('artifact', ?, 'ARTIFACT_QUARANTINED', ?, 'PENDING', ?, ?)`,
+		artifactID, payload, now, now); err != nil {
 		_ = tx2.Rollback()
 		if isNoSuchTable(err) {
 			log.Printf("[RECONCILER] outbox_events missing; QUARANTINED status still committed for artifact=%s (event emission deferred)", artifactID)

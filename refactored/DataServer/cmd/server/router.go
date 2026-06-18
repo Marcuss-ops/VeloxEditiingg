@@ -93,10 +93,9 @@ func newRouter(cfg *config.Config, deps *serverDeps, registry *app.Registry) *gi
 	// registerOrchestratorAdminRoutes above (avoids gin double-registration
 	// of the same POST /orchestrator/jobs paths from a single gin IRoute).
 
-	// PR2b/PR4d: upload-completed now uses BlobStore + ArtifactFinalizationService
-	// instead of the old direct-save + maybeAutoUpload pattern.
-	// The blobStore handles staging → verification → final promotion.
-	r.POST("/api/v1/video/upload-completed", workersuploads.UploadCompletedVideo(cfg, deps.fileQ, deps.blobStore))
+	// PR 3.5-c: upload-completed uses the canonical artifacts.Service pipeline
+	// (BeginUpload → Receive → Finalize) — single-writer SUCCEEDED gate.
+	r.POST("/api/v1/video/upload-completed", workersuploads.UploadCompletedVideo(cfg, deps.artifactSvc))
 
 	// Chunked upload routes (resumable worker→master video upload)
 	r.POST("/api/v1/video/chunked/init", workersuploads.InitChunkedUpload())
