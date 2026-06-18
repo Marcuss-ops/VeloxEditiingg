@@ -7,27 +7,45 @@
 Velox è un sistema distribuito per la generazione e composizione video. **Master server** (Go/Gin) gestisce coda job e worker remoti; **RemoteCodex** contiene il software installato sui worker per il rendering.
 
 ```
-┌──────────────────────────────────────────────┐
-│           MASTER SERVER (DataServer)          │
-│  API REST (Gin) ─── Job Queue (SQLite) ──── │
-│       │              Orchestrator             │
-│       │           ┌──────────────┐           │
-│       └───────────│ Subsystems   │           │
-│                   │ YT, Drive,   │           │
-│                   │ Analytics,   │           │
-│                   │ Calendar,    │           │
-│                   │ DarkEditor   │           │
-│                   └──────────────┘           │
-└──────────────────┬───────────────────────────┘
-                   │ HTTP (register, heartbeat,
-                   │ poll job, complete job)
-                   ▼
-┌──────────────────────────────────────────────┐
-│           WORKER REMOTO (RemoteCodex)         │
-│  Worker Agent (Go) ── Video Engine (C++/FFmpeg)│
-│  job polling 5s ──→ Ken Burns, concat, mux   │
-│  heartbeat 15s/60s ──→ progress streaming    │
-└──────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────┐
+│            MASTER SERVER (DataServer)             │
+│                                                   │
+│  ┌─ Transport Layer ──────────────────────────┐  │
+│  │  HTTP (Gin)  ·  gRPC (worker control)      │  │
+│  └────────────────────────────────────────────┘  │
+│                        │                          │
+│  ┌─ Application Services ─────────────────────┐  │
+│  │  artifacts.Service  ·  AssetService         │  │
+│  │  ChunkedUploadSvc   ·  DeliveryPlanResolver │  │
+│  │  LifecycleService   ·  Outbox Dispatcher    │  │
+│  └────────────────────────────────────────────┘  │
+│                        │                          │
+│  ┌─ Persistence ──────────────────────────────┐  │
+│  │  SQLiteStore  (jobs/artifacts/workers)      │  │
+│  │  BlobStore    (content-addressed storage)   │  │
+│  │  Outbox       (transactional event queue)   │  │
+│  └────────────────────────────────────────────┘  │
+│                        │                          │
+│  ┌─ Background Runners ───────────────────────┐  │
+│  │  DeliveryRunner   ·  Reconciler             │  │
+│  │  OutboxDispatcher ·  Zombie Reaper          │  │
+│  └────────────────────────────────────────────┘  │
+│                        │                          │
+│  ┌─ Integrations ────────────────────────────┐  │
+│  │  YouTube · Drive · Ansible · Analytics     │  │
+│  │  Calendar · DarkEditor · NVIDIA AI         │  │
+│  └────────────────────────────────────────────┘  │
+└────────────────────┬─────────────────────────────┘
+                     │ HTTP/gRPC (register, heartbeat,
+                     │ poll job, upload artifact)
+                     ▼
+┌──────────────────────────────────────────────────┐
+│            WORKER REMOTO (RemoteCodex)            │
+│  Worker Agent (Go) ── Video Engine (C++/FFmpeg)   │
+│  job polling 5s ──→ Ken Burns, concat, mux        │
+│  heartbeat 15s/60s ──→ progress streaming         │
+│  chunked upload (files > 50MB via resumable)      │
+└──────────────────────────────────────────────────┘
 ```
 
 > **Dettagli completi**: deploy, worker communication, video pipeline, progress streaming → vedi [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
@@ -72,6 +90,13 @@ shared/                        # Libreria condivisa Go
 
 | Subsystem | Descrizione |
 |-----------|-------------|
+| **Artifact Pipeline** | `BeginUpload → Receive → Finalize` — master calcola hash, verifica, e promuove job a SUCCEEDED in una singola transazione atomica |
+| **Chunked Upload** | Upload resumabile persistente per file > 50MB — chunk salvati su disco e tracciati in DB; sopravvive a riavvii del master |
+| **Delivery Runner** | Runner background che processa `job_deliveries` PENDING → YouTube/Drive con lease, retry, e classificazione errori |
+| **Delivery Plan Resolver** | Piani di delivery espliciti per-job — ogni job può specificare quali destinazioni ricevono l'artifact |
+| **Asset Service** | Registry content-addressato (SHA-256) per asset audio/video/immagine — `AssetRepository + BlobStore + ResolverRegistry` |
+| **Outbox** | Transactional outbox per eventi di sistema (JOB_SUCCEEDED, ARTIFACT_READY, DELIVERY_CREATED) — garanzia at-least-once |
+| **Reconciler** | 4 regole di cleanup per stati interrotti: upload scaduti, blob orfani, artifact QUARANTINED, STAGING bloccati |
 | **Job Queue** | FileQueue SQLite, Orchestrator multi-step, DLQ, zombie detection |
 | **YouTube Manager** | Upload, channels (OAuth2), groups, AI generation (NVIDIA FLUX/LLaMA), competitor tracking |
 | **Analytics** | Dashboard BI: summary, finance, performance, realtime, per-channel/group |

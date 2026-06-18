@@ -1,10 +1,7 @@
 package assets
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
-	"io"
 	"mime"
 	"net/http"
 	"os"
@@ -136,152 +133,6 @@ func (s *Store) Lookup(assetID string) (*ResolvedAsset, error) {
 	return nil, fmt.Errorf("asset not found")
 }
 
-func (s *Store) ingestReader(reader io.Reader, sourceType, originalSource, mediaType, suggestedName string) (*ResolvedAsset, error) {
-	if s == nil {
-		return nil, fmt.Errorf("asset store unavailable")
-	}
-	if reader == nil {
-		return nil, fmt.Errorf("empty input")
-	}
-	if err := os.MkdirAll(s.tmpDir, 0o755); err != nil {
-		return nil, err
-	}
-	tmp, err := os.CreateTemp(s.tmpDir, "voiceover-*")
-	if err != nil {
-		return nil, err
-	}
-	defer func() {
-		_ = tmp.Close()
-	}()
-
-	hasher := sha256.New()
-	written, err := copyWithLimit(io.MultiWriter(tmp, hasher), reader, s.maxBytes)
-	if err != nil {
-		_ = os.Remove(tmp.Name())
-		return nil, err
-	}
-	if written <= 0 {
-		_ = os.Remove(tmp.Name())
-		return nil, fmt.Errorf("empty input")
-	}
-	if err := tmp.Sync(); err != nil {
-		_ = os.Remove(tmp.Name())
-		return nil, err
-	}
-	if err := tmp.Close(); err != nil {
-		_ = os.Remove(tmp.Name())
-		return nil, err
-	}
-
-	return s.commitTempFile(tmp.Name(), hex.EncodeToString(hasher.Sum(nil)), written, sourceType, originalSource, mediaType, suggestedName)
-}
-
-func (s *Store) ingestFile(path, sourceType, originalSource, mediaType, suggestedName string) (*ResolvedAsset, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	return s.ingestReader(f, sourceType, originalSource, mediaType, suggestedName)
-}
-
-func (s *Store) commitTempFile(tempPath, shaHex string, size int64, sourceType, originalSource, mediaType, suggestedName string) (*ResolvedAsset, error) {
-	if s == nil {
-		return nil, fmt.Errorf("asset store unavailable")
-	}
-	if strings.TrimSpace(shaHex) == "" {
-		return nil, fmt.Errorf("missing sha256")
-	}
-	if size <= 0 {
-		_ = os.Remove(tempPath)
-		return nil, fmt.Errorf("empty input")
-	}
-	if err := os.MkdirAll(s.assetDir, 0o755); err != nil {
-		_ = os.Remove(tempPath)
-		return nil, err
-	}
-
-	ext := safeAudioExtension(suggestedName, mediaType)
-	finalPath := filepath.Join(s.assetDir, shaHex+ext)
-	if info, err := os.Stat(finalPath); err == nil && !info.IsDir() {
-		_ = os.Remove(tempPath)
-		assetMediaType := mediaType
-		if assetMediaType == "" {
-			assetMediaType = detectMediaType(finalPath, ext)
-		}
-		return &ResolvedAsset{
-			AssetID:        shaHex,
-			SHA256:         shaHex,
-			LocalPath:      finalPath,
-			MediaType:      assetMediaType,
-			ByteSize:       info.Size(),
-			SourceType:     sourceType,
-			OriginalSource: originalSource,
-			Reference:      VeloxAssetScheme + "://" + shaHex,
-		}, nil
-	}
-
-	if err := os.Rename(tempPath, finalPath); err != nil {
-		if info, statErr := os.Stat(finalPath); statErr == nil && !info.IsDir() {
-			_ = os.Remove(tempPath)
-			assetMediaType := mediaType
-			if assetMediaType == "" {
-				assetMediaType = detectMediaType(finalPath, ext)
-			}
-			return &ResolvedAsset{
-				AssetID:        shaHex,
-				SHA256:         shaHex,
-				LocalPath:      finalPath,
-				MediaType:      assetMediaType,
-				ByteSize:       info.Size(),
-				SourceType:     sourceType,
-				OriginalSource: originalSource,
-				Reference:      VeloxAssetScheme + "://" + shaHex,
-			}, nil
-		}
-		_ = os.Remove(tempPath)
-		return nil, err
-	}
-
-	info, err := os.Stat(finalPath)
-	if err != nil {
-		_ = os.Remove(tempPath)
-		return nil, err
-	}
-	assetMediaType := mediaType
-	if assetMediaType == "" {
-		assetMediaType = detectMediaType(finalPath, ext)
-	}
-	return &ResolvedAsset{
-		AssetID:        shaHex,
-		SHA256:         shaHex,
-		LocalPath:      finalPath,
-		MediaType:      assetMediaType,
-		ByteSize:       info.Size(),
-		SourceType:     sourceType,
-		OriginalSource: originalSource,
-		Reference:      VeloxAssetScheme + "://" + shaHex,
-	}, nil
-}
-
-func hashFile(path string) (string, int64, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return "", 0, err
-	}
-	defer f.Close()
-
-	hasher := sha256.New()
-	size, err := io.Copy(hasher, f)
-	if err != nil {
-		return "", 0, err
-	}
-	if size <= 0 {
-		return "", 0, fmt.Errorf("empty input")
-	}
-	return hex.EncodeToString(hasher.Sum(nil)), size, nil
-}
-
 func detectMediaType(path, ext string) string {
 	if trimmed := strings.TrimSpace(ext); trimmed != "" {
 		if !strings.HasPrefix(trimmed, ".") {
@@ -305,36 +156,6 @@ func detectMediaType(path, ext string) string {
 	return "application/octet-stream"
 }
 
-func safeAudioExtension(suggestedName, mediaType string) string {
-	name := strings.TrimSpace(suggestedName)
-	if name != "" {
-		ext := strings.ToLower(filepath.Ext(name))
-		if ext != "" && isLikelyAudioExtension(ext) {
-			return ext
-		}
-	}
-	if mt := strings.TrimSpace(mediaType); mt != "" {
-		if exts, err := mime.ExtensionsByType(mt); err == nil && len(exts) > 0 {
-			for _, ext := range exts {
-				if isLikelyAudioExtension(ext) {
-					return ext
-				}
-			}
-			return exts[0]
-		}
-	}
-	return ".audio"
-}
-
-func isLikelyAudioExtension(ext string) bool {
-	switch strings.ToLower(strings.TrimSpace(ext)) {
-	case ".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac", ".opus", ".oga", ".wma", ".webm", ".mp4":
-		return true
-	default:
-		return false
-	}
-}
-
 func normalizeAllowedRoots(roots ...string) []string {
 	out := make([]string, 0, len(roots))
 	seen := map[string]struct{}{}
@@ -356,23 +177,4 @@ func normalizeAllowedRoots(roots ...string) []string {
 	return out
 }
 
-type limitedWriter struct {
-	w        io.Writer
-	maxBytes int64
-	written  int64
-}
 
-func (lw *limitedWriter) Write(p []byte) (int, error) {
-	if lw.maxBytes > 0 && lw.written+int64(len(p)) > lw.maxBytes {
-		return 0, fmt.Errorf("voiceover exceeds maximum size of %d bytes", lw.maxBytes)
-	}
-	n, err := lw.w.Write(p)
-	lw.written += int64(n)
-	return n, err
-}
-
-func copyWithLimit(dst io.Writer, src io.Reader, maxBytes int64) (int64, error) {
-	lw := &limitedWriter{w: dst, maxBytes: maxBytes}
-	buf := make([]byte, 32*1024)
-	return io.CopyBuffer(lw, src, buf)
-}

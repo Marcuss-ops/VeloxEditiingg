@@ -1,6 +1,6 @@
-// Package joblifecycle provides targeted job lifecycle operations that replace
-// the legacy UpdateJobFields catch-all. Each method maps to a single business
-// operation and writes only the columns it owns.
+// Package joblifecycle provides targeted job lifecycle operations.
+// Each method maps to a single business operation and writes only the
+// columns it owns via Compare-And-Swap (CAS).
 package joblifecycle
 
 import (
@@ -13,7 +13,7 @@ import (
 
 // Service provides job lifecycle operations.
 // All methods use Compare-And-Swap (CAS) for status transitions and targeted
-// column updates for non-status fields — never the legacy UpdateJobFields.
+// column updates for non-status fields.
 type Service struct {
 	lc         *queue.LifecycleService
 	dbStore    *store.SQLiteStore

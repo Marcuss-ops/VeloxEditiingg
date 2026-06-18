@@ -34,7 +34,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"math"
 	"sync"
 	"time"
 
@@ -345,19 +344,3 @@ func (r *DeliveryRunner) hydrateArtifact(ctx context.Context, artID string) (*st
 	return a, nil
 }
 
-// backoffForAttempt is a package-level helper that applies exponential
-// backoff with a cap. Used by tests and external callers.
-func backoffForAttempt(attempt int, base, max time.Duration) time.Duration {
-	if base <= 0 {
-		base = 30 * time.Second
-	}
-	if max <= 0 {
-		max = 30 * time.Minute
-	}
-	exp := math.Pow(2, float64(attempt-1))
-	d := time.Duration(float64(base) * exp)
-	if d > max {
-		d = max
-	}
-	return d
-}

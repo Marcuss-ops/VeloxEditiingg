@@ -22,7 +22,8 @@ import (
 // layer; service-layer ENFORCES the state-machine legality (RECEIVED
 // then FINALIZING then COMPLETED) before this code runs.
 type SQLiteFinalizationRepository struct {
-	db *sql.DB
+	db          *sql.DB
+	planResolver DeliveryPlanResolver // optional; nil falls back to all enabled destinations
 }
 
 // NewSQLiteFinalizationRepository wraps an existing *sql.DB. The caller
@@ -33,6 +34,14 @@ func NewSQLiteFinalizationRepository(db *sql.DB) *SQLiteFinalizationRepository {
 		panic("artifacts: NewSQLiteFinalizationRepository requires a non-nil *sql.DB")
 	}
 	return &SQLiteFinalizationRepository{db: db}
+}
+
+// WithPlanResolver attaches a DeliveryPlanResolver to the repository.
+// When set, FinalizeVerified uses it to resolve per-job delivery destinations
+// instead of querying all enabled delivery_destinations globally.
+func (r *SQLiteFinalizationRepository) WithPlanResolver(resolver DeliveryPlanResolver) *SQLiteFinalizationRepository {
+	r.planResolver = resolver
+	return r
 }
 
 // Compile-time interface checks.
@@ -286,17 +295,19 @@ func (r *SQLiteFinalizationRepository) FinalizeVerified(
 		return nil, fmt.Errorf("artifacts: FinalizeVerified outbox JOB_SUCCEEDED: %w", err)
 	}
 
-	// 6. job_deliveries idempotent creation — one row per enabled
-	//    delivery destination. ON CONFLICT(artifact_id, destination_id)
-	//    DO NOTHING protects against double FINALIZE. DELIVERY_CREATED
-	//    emitted only when RowsAffected == 1 (first insert).
-	// Resolve delivery destinations. Query all enabled destinations;
-	// for each, INSERT an idempotent job_deliveries row.
-	// If cmd.DestinationID is set, use only that one (explicit caller
-	// intent). Otherwise, iterate all enabled destinations globally.
+	// 6. Resolve delivery destinations via plan resolver or fallback.
+	//    If cmd.DestinationID is set, use only that one (explicit caller
+	//    intent). Otherwise, delegate to the DeliveryPlanResolver (when
+	//    configured) or fall back to all enabled destinations.
 	var destIDs []string
 	if cmd.DestinationID != "" {
 		destIDs = []string{cmd.DestinationID}
+	} else if r.planResolver != nil {
+		resolved, rerr := r.planResolver.ResolveDestinations(ctx, cmd.JobID, cmd.ArtifactID)
+		if rerr != nil {
+			return nil, fmt.Errorf("artifacts: FinalizeVerified plan resolver: %w", rerr)
+		}
+		destIDs = resolved
 	} else {
 		rows, qerr := tx.QueryContext(ctx,
 			`SELECT destination_id FROM delivery_destinations WHERE enabled = 1`)

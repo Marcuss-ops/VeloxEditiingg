@@ -98,9 +98,13 @@ func newRouter(cfg *config.Config, deps *serverDeps, registry *app.Registry) *gi
 	r.POST("/api/v1/video/upload-completed", workersuploads.UploadCompletedVideo(cfg, deps.artifactSvc))
 
 	// Chunked upload routes (resumable worker→master video upload)
-	r.POST("/api/v1/video/chunked/init", workersuploads.InitChunkedUpload())
-	r.POST("/api/v1/video/chunked/:job_id/:chunk_index", workersuploads.UploadChunk(cfg))
-	r.POST("/api/v1/video/chunked/:job_id/complete", workersuploads.CompleteChunkedUpload(cfg, deps.fileQ))
+	// Uses the persistent ChunkedUploadService (artifact pipeline) instead of
+	// the old global in-memory map — survives master restarts mid-upload.
+	if deps.chunkedHandler != nil {
+		r.POST("/api/v1/video/chunked/init", deps.chunkedHandler.InitChunkedUpload())
+		r.POST("/api/v1/video/chunked/:job_id/:chunk_index", deps.chunkedHandler.UploadChunk())
+		r.POST("/api/v1/video/chunked/:job_id/complete", deps.chunkedHandler.CompleteChunkedUpload())
+	}
 
 	return r
 }

@@ -10,24 +10,14 @@ import (
 )
 
 // MapToJob converts a map[string]any (from SQLite query) to a Job struct.
-// Merge priority (lowest to highest): raw_json → request_json → result_json → DB columns.
+// Merge priority (lowest to highest): request_json → result_json → DB columns.
 // History and logs are NOT read from blob — they are stored in separate tables.
 func MapToJob(m map[string]any) *Job {
 	job := &Job{
 		Payload: make(map[string]interface{}),
 	}
 
-	// ── Step 1: raw_json fallback (backward compat during migration) ──
-	if raw, ok := m["raw_json"].(map[string]any); ok && len(raw) > 0 {
-		mergeMap(job.Payload, raw)
-	} else if raw, ok := m["raw_json"].(string); ok && raw != "" {
-		var parsed map[string]any
-		if err := json.Unmarshal([]byte(raw), &parsed); err == nil {
-			mergeMap(job.Payload, parsed)
-		}
-	}
-
-	// ── Step 2: request_json (immutable request payload) ──
+	// ── Step 1: request_json (immutable request payload) ──
 	if req, ok := m["request_json"].(map[string]any); ok && len(req) > 0 {
 		mergeMap(job.Payload, req)
 	} else if req, ok := m["request_json"].(string); ok && req != "" {
@@ -94,7 +84,6 @@ func MapToJob(m map[string]any) *Job {
 	}
 
 	// History and logs are NOT read from the blob — they live in separate tables.
-	// If present in the map (from raw_json fallback), populate for read-only access.
 	if hist, ok := m["history"].([]any); ok {
 		job.History = make([]JobHistoryEntry, 0, len(hist))
 		for _, h := range hist {

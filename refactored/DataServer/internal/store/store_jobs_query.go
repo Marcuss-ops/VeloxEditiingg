@@ -15,11 +15,11 @@ const jobColumns = `job_id, status, video_name, project_id,
 	retry_count, attempt, max_retries,
 	last_error, last_error_at, error_message, failed_at, failed_by,
 	processing_at,
-	last_upload_result, last_upload_attempt_at,
+	last_upload_attempt_at,
 	last_drive_upload_result, remote_status,
 	job_fingerprint, submitted_via, last_activity, run_id, job_run_id,
 	logs_updated_at, slot_data,
-	request_json, result_json, raw_json`
+	request_json, result_json`
 
 // scanJobRow scans a job row into a map, handling NULL SQL values gracefully.
 func scanJobRow(scanner interface{ Scan(dest ...interface{}) error }) (map[string]any, error) {
@@ -32,11 +32,11 @@ func scanJobRow(scanner interface{ Scan(dest ...interface{}) error }) (map[strin
 		retryCount, attempt, maxRetries                                                                              sql.NullInt64
 		lastError, errorMessage, failedBy                                                                            sql.NullString
 		lastErrorAt, failedAt, processingAt                                                                          sql.NullString
-		lastUploadResult, lastUploadAttemptAt                                                                        sql.NullString
+		lastUploadAttemptAt                                                                                          sql.NullString
 		lastDriveUploadResult, remoteStatus                                                                          sql.NullString
 		jobFingerprint, submittedVia, lastActivity, runID, jobRunID                                                  sql.NullString
 		logsUpdatedAt, slotDataRaw                                                                                   sql.NullString
-		requestJSON, resultJSON, rawJSON                                                                             sql.NullString
+		requestJSON, resultJSON                                                                                      sql.NullString
 	)
 
 	dest := []interface{}{
@@ -48,11 +48,11 @@ func scanJobRow(scanner interface{ Scan(dest ...interface{}) error }) (map[strin
 		&retryCount, &attempt, &maxRetries,
 		&lastError, &lastErrorAt, &errorMessage, &failedAt, &failedBy,
 		&processingAt,
-		&lastUploadResult, &lastUploadAttemptAt,
+		&lastUploadAttemptAt,
 		&lastDriveUploadResult, &remoteStatus,
 		&jobFingerprint, &submittedVia, &lastActivity, &runID, &jobRunID,
 		&logsUpdatedAt, &slotDataRaw,
-		&requestJSON, &resultJSON, &rawJSON,
+		&requestJSON, &resultJSON,
 	}
 
 	if err := scanner.Scan(dest...); err != nil {
@@ -84,7 +84,6 @@ func scanJobRow(scanner interface{ Scan(dest ...interface{}) error }) (map[strin
 	setStr("last_error_at", lastErrorAt)
 	setStr("failed_at", failedAt)
 	setStr("processing_at", processingAt)
-	setStr("last_upload_result", lastUploadResult)
 	setStr("last_upload_attempt_at", lastUploadAttemptAt)
 	setStr("last_drive_upload_result", lastDriveUploadResult)
 	setStr("remote_status", remoteStatus)
@@ -112,7 +111,6 @@ func scanJobRow(scanner interface{ Scan(dest ...interface{}) error }) (map[strin
 	}
 	setJSON("request_json", requestJSON)
 	setJSON("result_json", resultJSON)
-	setJSON("raw_json", rawJSON)
 
 	// Slot data
 	if slotDataRaw.Valid && slotDataRaw.String != "" {

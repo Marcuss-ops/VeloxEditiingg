@@ -118,7 +118,3 @@ func TestArtifactRepositoryContract_SQLite(t *testing.T) {
 	ArtifactRepositoryContract(t, NewSQLiteArtifactRepositoryFactory)
 }
 
-// timeNowUnixNano is a tiny indirection to keep the import surface lean.
-func timeNowUnixNano() int64 {
-	return nowUnixNano()
-}

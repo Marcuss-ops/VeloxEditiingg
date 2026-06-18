@@ -114,7 +114,7 @@ func (h StepReadyHandler) Handle(ctx context.Context, e outbox.Event) error {
 	return nil
 }
 
-// JobSucceededHandler reacts to JOB_SUCCEEDED emitted by CompleteJobTx.
+// JobSucceededHandler reacts to JOB_SUCCEEDED events.
 // The outbox row's aggregate_id is the job_id; the handler asks the
 // Repository to recover the owning workflow step via job_id.
 type JobSucceededHandler struct {

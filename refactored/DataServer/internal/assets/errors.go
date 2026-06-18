@@ -1,7 +1,6 @@
 package assets
 
 import (
-	"fmt"
 	"net/http"
 	"strings"
 )
@@ -94,25 +93,4 @@ func errorAs(err error, target interface{}) bool {
 	return false
 }
 
-func wrapAcquisitionError(field, sourceType string, err error) error {
-	if err == nil {
-		return nil
-	}
-	if ae, ok := AsAcquisitionError(err); ok {
-		if ae.Field == "" {
-			ae.Field = field
-		}
-		if ae.SourceType == "" {
-			ae.SourceType = sourceType
-		}
-		return ae
-	}
-	return newAcquisitionError(field, sourceType, err.Error(), err)
-}
 
-func assetErrorMessage(kind, detail string) string {
-	if strings.TrimSpace(detail) == "" {
-		return kind
-	}
-	return fmt.Sprintf("%s: %s", kind, detail)
-}

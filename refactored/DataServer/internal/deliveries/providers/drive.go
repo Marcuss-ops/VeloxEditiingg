@@ -18,7 +18,6 @@ import (
 type DriveProvider struct {
 	service   *integrationsDrive.Service
 	blobStore store.BlobStore
-	tokens    string // tokens dir, propagated for future config-only wiring
 }
 
 // NewDriveProvider constructs a DriveProvider. nil service is allowed for

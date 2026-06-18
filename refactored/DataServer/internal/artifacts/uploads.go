@@ -130,6 +130,15 @@ type Repository interface {
 	// (row missing OR source status doesn't match). Used by Finalize
 	// to serialize concurrent finalize callers at the SQL layer.
 	TransitionUploadStatus(ctx context.Context, uploadID, from, to string) error
+
+	// GetActiveUploadByJob returns the most recent CREATED/UPLOADING
+	// upload session for a job_id. Returns (nil, nil) if none exists.
+	GetActiveUploadByJob(ctx context.Context, jobID string) (*UploadSession, error)
+
+	// Chunk methods (PR chunked upload persistence).
+	InsertChunk(ctx context.Context, c ChunkRecord) error
+	ListChunks(ctx context.Context, uploadID string) ([]ChunkRecord, error)
+	DeleteChunks(ctx context.Context, uploadID string) error
 }
 
 // SQLITE IMPLEMENTATION
@@ -335,6 +344,136 @@ func (r *SQLiteRepository) FindStuckStaging(ctx context.Context, olderThan time.
 		return nil, fmt.Errorf("artifacts: FindStuckStaging rows: %w", err)
 	}
 	return out, nil
+}// ── GetActiveUploadByJob ─────────────────────────────────────────────────────
+
+// GetActiveUploadByJob returns the most recent CREATED or UPLOADING upload
+// session for the given job_id. This is the bridge between the worker protocol
+// (which identifies uploads by job_id) and the persistent artifact_uploads
+// (which use upload_id as primary key).
+func (r *SQLiteRepository) GetActiveUploadByJob(ctx context.Context, jobID string) (*UploadSession, error) {
+	if jobID == "" {
+		return nil, fmt.Errorf("artifacts: GetActiveUploadByJob: empty jobID")
+	}
+	row := r.db.QueryRowContext(ctx, `
+		SELECT upload_id, artifact_id, job_id, attempt_number, worker_id, lease_id,
+		       status, temporary_storage_key,
+		       COALESCE(expected_size_bytes, 0), COALESCE(expected_sha256, ''),
+		       COALESCE(received_size_bytes, 0), COALESCE(received_sha256, ''),
+		       COALESCE(expected_revision, 0),
+		       created_at, expires_at, completed_at
+		FROM artifact_uploads
+		WHERE job_id = ? AND status IN ('CREATED', 'UPLOADING')
+		ORDER BY created_at DESC LIMIT 1`, jobID)
+
+	var s UploadSession
+	var createdAt, expiresAt string
+	var completedAt sql.NullString
+	if err := row.Scan(
+		&s.UploadID, &s.ArtifactID, &s.JobID, &s.AttemptNumber, &s.WorkerID, &s.LeaseID,
+		&s.Status, &s.TemporaryStorageKey,
+		&s.ExpectedSizeBytes, &s.ExpectedSHA256,
+		&s.ReceivedSizeBytes, &s.ReceivedSHA256,
+		&s.ExpectedRevision,
+		&createdAt, &expiresAt, &completedAt,
+	); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("artifacts: GetActiveUploadByJob: %w", err)
+	}
+	if err := parseTimeRFC3339(&s.CreatedAt, createdAt); err != nil {
+		return nil, fmt.Errorf("artifacts: GetActiveUploadByJob: invalid created_at: %w", err)
+	}
+	if err := parseTimeRFC3339(&s.ExpiresAt, expiresAt); err != nil {
+		return nil, fmt.Errorf("artifacts: GetActiveUploadByJob: invalid expires_at: %w", err)
+	}
+	if completedAt.Valid {
+		if err := parseTimeRFC3339(&s.CompletedAt, completedAt.String); err != nil {
+			return nil, fmt.Errorf("artifacts: GetActiveUploadByJob: invalid completed_at: %w", err)
+		}
+	}
+	return &s, nil
+}
+
+// ── Chunk repository methods (PR chunked upload persistence) ─────────────────
+
+// ChunkRecord represents one chunk in a chunked upload session.
+type ChunkRecord struct {
+	UploadID    string
+	ChunkIndex  int
+	SizeBytes   int64
+	SHA256      string
+	StorageKey  string
+	ReceivedAt  time.Time
+}
+
+// InsertChunk persists a single chunk record.
+func (r *SQLiteRepository) InsertChunk(ctx context.Context, c ChunkRecord) error {
+	if c.UploadID == "" {
+		return fmt.Errorf("artifacts: InsertChunk: empty uploadID")
+	}
+	now := c.ReceivedAt.UTC().Format(time.RFC3339)
+	if c.ReceivedAt.IsZero() {
+		now = time.Now().UTC().Format(time.RFC3339)
+	}
+	_, err := r.db.ExecContext(ctx, `
+		INSERT OR IGNORE INTO artifact_upload_chunks
+		 (upload_id, chunk_index, size_bytes, sha256, storage_key, received_at)
+		VALUES (?, ?, ?, ?, ?, ?)`,
+		c.UploadID, c.ChunkIndex, c.SizeBytes, nilOrString(c.SHA256),
+		c.StorageKey, now,
+	)
+	if err != nil {
+		return fmt.Errorf("artifacts: InsertChunk: %w", err)
+	}
+	return nil
+}
+
+// ListChunks returns all chunks for an upload, ordered by chunk_index.
+func (r *SQLiteRepository) ListChunks(ctx context.Context, uploadID string) ([]ChunkRecord, error) {
+	if uploadID == "" {
+		return nil, fmt.Errorf("artifacts: ListChunks: empty uploadID")
+	}
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT upload_id, chunk_index, size_bytes,
+		       COALESCE(sha256, ''), storage_key, received_at
+		FROM artifact_upload_chunks
+		WHERE upload_id = ?
+		ORDER BY chunk_index ASC`, uploadID)
+	if err != nil {
+		return nil, fmt.Errorf("artifacts: ListChunks: %w", err)
+	}
+	defer rows.Close()
+
+	var out []ChunkRecord
+	for rows.Next() {
+		var c ChunkRecord
+		var receivedAt string
+		if err := rows.Scan(&c.UploadID, &c.ChunkIndex, &c.SizeBytes,
+			&c.SHA256, &c.StorageKey, &receivedAt); err != nil {
+			return nil, fmt.Errorf("artifacts: ListChunks scan: %w", err)
+		}
+		if t, perr := time.Parse(time.RFC3339, receivedAt); perr == nil {
+			c.ReceivedAt = t
+		}
+		out = append(out, c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("artifacts: ListChunks rows: %w", err)
+	}
+	return out, nil
+}
+
+// DeleteChunks removes all chunk records for an upload (cleanup after finalize).
+func (r *SQLiteRepository) DeleteChunks(ctx context.Context, uploadID string) error {
+	if uploadID == "" {
+		return fmt.Errorf("artifacts: DeleteChunks: empty uploadID")
+	}
+	if _, err := r.db.ExecContext(ctx,
+		`DELETE FROM artifact_upload_chunks WHERE upload_id = ?`, uploadID); err != nil {
+		return fmt.Errorf("artifacts: DeleteChunks: %w", err)
+	}
+	return nil
 }
 
 // ── package-level helpers ────────────────────────────────────────────────

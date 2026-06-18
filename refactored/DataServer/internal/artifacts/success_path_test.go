@@ -62,7 +62,6 @@ CREATE TABLE jobs (
 	revision      INTEGER,
 	completed_at  TEXT,
 	updated_at    TEXT,
-	raw_json      TEXT,
 	migrated_at   TEXT
 );
 CREATE TABLE artifacts (
@@ -180,8 +179,8 @@ func setupVerifiedPipelineFixture(t *testing.T, db *sql.DB, f fixture) {
 	t.Helper()
 	now := time.Now().UTC().Format(time.RFC3339)
 	if _, err := db.Exec(`INSERT INTO jobs
-		(job_id, status, assigned_to, lease_id, revision, updated_at, raw_json, migrated_at)
-		VALUES (?, 'RUNNING', ?, ?, ?, ?, '{}', ?)`,
+		(job_id, status, assigned_to, lease_id, revision, updated_at, migrated_at)
+		VALUES (?, 'RUNNING', ?, ?, ?, ?, ?)`,
 		f.JobID, f.WorkerID, f.LeaseID, f.Revision, now, now); err != nil {
 		t.Fatalf("seed job: %v", err)
 	}
@@ -631,8 +630,8 @@ func setupJobAndAttempt(t *testing.T, db *sql.DB, jobID, workerID, leaseID strin
 	t.Helper()
 	now := time.Now().UTC().Format(time.RFC3339)
 	if _, err := db.Exec(`INSERT INTO jobs
-		(job_id, status, assigned_to, lease_id, revision, updated_at, raw_json, migrated_at)
-		VALUES (?, 'RUNNING', ?, ?, ?, ?, '{}', ?)`,
+		(job_id, status, assigned_to, lease_id, revision, updated_at, migrated_at)
+		VALUES (?, 'RUNNING', ?, ?, ?, ?, ?)`,
 		jobID, workerID, leaseID, revision, now, now); err != nil {
 		t.Fatalf("seed job: %v", err)
 	}

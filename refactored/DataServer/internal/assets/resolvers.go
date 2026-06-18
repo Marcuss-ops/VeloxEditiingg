@@ -276,27 +276,6 @@ func isHTMLPayload(buf []byte) bool {
 	return strings.HasPrefix(detected, "text/html") || strings.HasPrefix(detected, "application/xhtml+xml")
 }
 
-func isSupportedVoiceoverMediaType(mediaType string) bool {
-	lower := strings.ToLower(strings.TrimSpace(mediaType))
-	if lower == "" {
-		return false
-	}
-	switch {
-	case strings.HasPrefix(lower, "audio/"):
-		return true
-	case strings.HasPrefix(lower, "video/"):
-		return true
-	case lower == "application/octet-stream", lower == "binary/octet-stream":
-		return true
-	case isHTMLMediaType(lower):
-		return false
-	case strings.HasPrefix(lower, "text/"):
-		return false
-	default:
-		return false
-	}
-}
-
 
 // NewTypedResolversFromStore creates the 4 standard typed resolvers from a Store.
 // Used by the new AssetService.

@@ -11,8 +11,8 @@ package queue//	isValidJobStatusTransition validates the canonical 7-state machi
 // The job stays in RUNNING while the worker renders. Render completion is
 // recorded as a timestamp (render_finished_at) without changing job status.
 // Attempt and artifact tables track intermediate states. The job transitions
-// to SUCCEEDED only after artifact verification (ArtifactFinalizationService +
-// CompleteJobTx — see grpcserver.handleArtifactUploaded).
+// to SUCCEEDED only after artifact verification (ArtifactFinalizationService
+// via grpcserver.handleArtifactUploaded).
 func isValidJobStatusTransition(from, to JobStatus) bool {
 	if to == "" {
 		return true

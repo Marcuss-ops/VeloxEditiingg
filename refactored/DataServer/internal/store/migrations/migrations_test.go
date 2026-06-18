@@ -38,8 +38,8 @@ func TestDiscoverMigrations_AllVersions(t *testing.T) {
 		t.Fatalf("discoverMigrations failed: %v", err)
 	}
 
-	if len(migs) != 34 {
-		t.Fatalf("expected 34 migrations, got %d", len(migs))
+	if len(migs) != 38 {
+		t.Fatalf("expected 38 migrations, got %d", len(migs))
 	}
 
 	expected := []struct {

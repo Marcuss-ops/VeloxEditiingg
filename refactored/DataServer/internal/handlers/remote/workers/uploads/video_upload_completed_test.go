@@ -64,8 +64,8 @@ func TestUploadCompletedVideo_CanonicalPipeline(t *testing.T) {
 
 	// Seed job in RUNNING state
 	_, err = db.Exec(`
-		INSERT INTO jobs (job_id, status, assigned_to, lease_id, lease_expiry, revision, created_at, updated_at, raw_json, migrated_at)
-		VALUES (?, 'RUNNING', ?, ?, ?, ?, ?, ?, '{}', ?)`,
+		INSERT INTO jobs (job_id, status, assigned_to, lease_id, lease_expiry, revision, created_at, updated_at, migrated_at)
+		VALUES (?, 'RUNNING', ?, ?, ?, ?, ?, ?, ?)`,
 		jobID, workerID, leaseID, leaseExpiry, revision, now, now, now)
 	if err != nil {
 		t.Fatalf("seed job: %v", err)

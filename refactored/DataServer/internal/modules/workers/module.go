@@ -5,10 +5,12 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	voiceoverassets "velox-server/internal/assets"
 	"velox-server/internal/config"
 	workersapi "velox-server/internal/handlers/remote/workers"
 	"velox-server/internal/handlers/remote/workers/assets"
 	"velox-server/internal/handlers/remote/workers/lifecycle"
+	"velox-server/internal/store"
 	workersreg "velox-server/internal/workers"
 )
 
@@ -21,7 +23,7 @@ type Module struct {
 	workerAssetHandler  *assets.Handler
 }
 
-func New(cfg *config.Config, reg *workersreg.Registry, lifecycle *lifecycle.Handler, updateHandler *workersapi.WorkerUpdateHandler, adminAuth gin.HandlerFunc) *Module {
+func New(cfg *config.Config, reg *workersreg.Registry, lifecycle *lifecycle.Handler, updateHandler *workersapi.WorkerUpdateHandler, adminAuth gin.HandlerFunc, assetSvc *voiceoverassets.AssetService, blobStore store.BlobStore) *Module {
 	var tokenMgr *workersreg.TokenManager
 	if lifecycle != nil {
 		tokenMgr = lifecycle.GetTokenManager()
@@ -31,7 +33,7 @@ func New(cfg *config.Config, reg *workersreg.Registry, lifecycle *lifecycle.Hand
 		workerLifecycle:     lifecycle,
 		workerUpdateHandler: updateHandler,
 		adminAuth:           adminAuth,
-		workerAssetHandler:  assets.NewHandler(cfg, tokenMgr),
+		workerAssetHandler:  assets.NewHandler(cfg, tokenMgr, assetSvc, blobStore),
 	}
 }
 

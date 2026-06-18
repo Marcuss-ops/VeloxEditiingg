@@ -46,11 +46,11 @@ func (s *SQLiteStore) ReplaceJobs(rawJobs map[string][]byte) error {
 			`INSERT INTO jobs (
 				job_id, status, video_name, project_id, created_at, updated_at,
 				assigned_to, retry_count, last_error, completed_at,
-				raw_json, request_json, result_json, migrated_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				request_json, result_json, migrated_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			jobID, status, videoName, projectID, createdAt, updatedAt,
 			assignedTo, retryCount, lastError, completedAt,
-			rawStr, rawStr, rawStr, now,
+			rawStr, rawStr, now,
 		); err != nil {
 			return err
 		}
@@ -102,7 +102,6 @@ func (s *SQLiteStore) ReplaceJobs(rawJobs map[string][]byte) error {
 }
 
 // UpsertJob inserts or updates a job from its raw_json blob (legacy path).
-// Also populates request_json and result_json from raw_json during migration.
 func (s *SQLiteStore) UpsertJob(jobID string, rawJSON []byte) error {
 	var m map[string]any
 	if err := json.Unmarshal(rawJSON, &m); err != nil {
@@ -128,8 +127,8 @@ func (s *SQLiteStore) UpsertJob(jobID string, rawJSON []byte) error {
 		`INSERT INTO jobs (
 			job_id, status, video_name, project_id, created_at, updated_at,
 			assigned_to, retry_count, last_error, completed_at,
-			raw_json, request_json, result_json, migrated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			request_json, result_json, migrated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(job_id) DO UPDATE SET
 			status=excluded.status,
 			video_name=excluded.video_name,
@@ -139,17 +138,16 @@ func (s *SQLiteStore) UpsertJob(jobID string, rawJSON []byte) error {
 			retry_count=excluded.retry_count,
 			last_error=excluded.last_error,
 			completed_at=excluded.completed_at,
-			raw_json=excluded.raw_json,
 			migrated_at=excluded.migrated_at`,
 		jobID, status, videoName, projectID, createdAt, updatedAt,
 		assignedTo, retryCount, lastError, completedAt,
-		rawStr, rawStr, rawStr, now,
+		rawStr, rawStr, now,
 	)
 	return err
 }
 
 // UpsertJobResult updates the mutable operational columns and result_json blob.
-// Does NOT touch request_json (immutable) or raw_json (legacy).
+// Does NOT touch request_json (immutable).
 func (s *SQLiteStore) UpsertJobResult(jobID string, resultJSON []byte) error {
 	var m map[string]any
 	if err := json.Unmarshal(resultJSON, &m); err != nil {
@@ -174,8 +172,8 @@ func (s *SQLiteStore) UpsertJobResult(jobID string, resultJSON []byte) error {
 		`INSERT INTO jobs (
 			job_id, status, video_name, project_id, created_at, updated_at,
 			assigned_to, retry_count, last_error, completed_at,
-			result_json, raw_json, migrated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			result_json, migrated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(job_id) DO UPDATE SET
 			status=excluded.status,
 			video_name=excluded.video_name,
@@ -186,11 +184,10 @@ func (s *SQLiteStore) UpsertJobResult(jobID string, resultJSON []byte) error {
 			last_error=excluded.last_error,
 			completed_at=excluded.completed_at,
 			result_json=excluded.result_json,
-			raw_json=excluded.raw_json,
 			migrated_at=excluded.migrated_at`,
 		jobID, status, videoName, projectID, createdAt, updatedAt,
 		assignedTo, retryCount, lastError, completedAt,
-		string(resultJSON), string(resultJSON), now,
+		string(resultJSON), now,
 	)
 	return err
 }

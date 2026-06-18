@@ -62,53 +62,6 @@ func (a *SQLJobViewAssembler) Build(ctx context.Context, jobID string) (*JobView
 		return nil, nil
 	}
 
-	const query = `
-SELECT
-    -- jobs canonical fields
-    j.job_id, COALESCE(j.job_type, '') AS job_type, j.status, j.revision,
-    j.video_name, j.project_id, j.created_at, j.updated_at,
-    j.started_at, j.completed_at,
-    j.last_error_code, j.last_error_message,
-
-    -- primary artifact (smallest id wins the deterministic tie break)
-    (SELECT id FROM artifacts
-       WHERE artifact_id_can_match = j.job_id AND status = 'READY'
-       ORDER BY id ASC LIMIT 1) AS primary_artifact_id,
-
-    -- video_uploaded: any READY artifact for the job
-    EXISTS(SELECT 1 FROM artifacts
-            WHERE artifact_id_can_match = j.job_id AND status = 'READY') AS video_uploaded,
-
-    -- most recent successful drive delivery
-    (SELECT jd.remote_url FROM job_deliveries jd
-       JOIN delivery_attempts da ON da.delivery_id = jd.delivery_id
-       WHERE jd.artifact_id IN (SELECT id FROM artifacts WHERE artifact_id_can_match = j.job_id)
-         AND jd.destination_id IN (SELECT destination_id FROM delivery_destinations WHERE provider = 'drive')
-         AND da.status = 'SUCCESS'
-       ORDER BY da.completed_at DESC LIMIT 1) AS drive_url,
-
-    -- most recent successful youtube delivery
-    (SELECT jd.remote_id FROM job_deliveries jd
-       JOIN delivery_attempts da ON da.delivery_id = jd.delivery_id
-       WHERE jd.artifact_id IN (SELECT id FROM artifacts WHERE artifact_id_can_match = j.job_id)
-         AND jd.destination_id IN (SELECT destination_id FROM delivery_destinations WHERE provider = 'youtube')
-         AND da.status = 'SUCCESS'
-       ORDER BY da.completed_at DESC LIMIT 1) AS youtube_video_id
-FROM jobs j
-WHERE j.job_id = ?
-LIMIT 1
-`
-
-	// Placeholder substitution: the schema used by *store.SQLiteStore queries
-	// regresses to a flat table name — caller is responsible for adapting the
-	// join columns. Implementations may rewrite with a different artifact
-	// matcher. We delegate the actual SQL execution to the store via the
-	// public Joins/Rows API depending on what the store package exposes.
-	//
-	// We use a generic Build view that projects the canonical (jobs, artifacts,
-	// job_deliveries, delivery_attempts) tuple. The store helper gets the job
-	// rows + the joined rows in one round-trip via store.AssembleJobView
-	// (defined in store/store_assembly.go — see migration 022 for schema).
 	m, err := a.dbStore.AssembleJobView(ctx, jobID)
 	if err != nil {
 		return nil, err

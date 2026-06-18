@@ -93,9 +93,9 @@ func (r *SQLiteJobRepository) CreateJob(ctx context.Context, params CreateJobPar
 			job_id, status, max_retries, retry_count,
 			video_name, project_id,
 			created_at, updated_at, migrated_at,
-			request_json, result_json, revision, raw_json,
+			request_json, result_json, revision,
 			run_id, job_run_id
-		) VALUES (?, 'PENDING', ?, 0, ?, ?, ?, ?, ?, ?, '{}', 0, '{}', ?, ?)`,
+		) VALUES (?, 'PENDING', ?, 0, ?, ?, ?, ?, ?, ?, '{}', 0, ?, ?)`,
 		params.JobID, params.MaxRetries, params.VideoName, params.ProjectID,
 		now, now, now,
 		requestJSON,

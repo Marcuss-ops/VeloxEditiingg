@@ -79,9 +79,9 @@ type Repository interface {
 	ListRuns(ctx context.Context, limit int) ([]Run, error)
 
 	// GetStepByJobID is the inverse lookup used by the JOB_SUCCEEDED
-	// consumer: CompleteJobTx writes aggregate_id=jobID in the outbox
-	// row, the handler reads it back and asks the Repository "which
-	// workflow step owns this job_id?". Returns (*nil, "", nil) if no
+	// outbox consumer: the handler reads the aggregate_id from the outbox
+	// row and asks the Repository "which workflow step owns this job_id?".
+	// Returns (*nil, "", nil) if no
 	// step claims the job_id (orphan — submitted outside any workflow
 	// run, e.g. direct POST /orchestrator/jobs shaped submission backed
 	// by CreateRun but with a manually-composed job_id).

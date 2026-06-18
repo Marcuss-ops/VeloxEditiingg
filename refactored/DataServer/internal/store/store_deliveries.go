@@ -43,7 +43,6 @@ type JobDelivery struct {
 	DeliveryID              string `json:"delivery_id"`
 	ArtifactID              string `json:"artifact_id"`
 	DestinationID           string `json:"destination_id"`
-	LegacyDeliveryTargetID  int64  `json:"legacy_delivery_target_id,omitempty"`
 	Status                  string `json:"status"`
 	IdempotencyKey          string `json:"idempotency_key,omitempty"`
 	RemoteID                string `json:"remote_id,omitempty"`
@@ -202,18 +201,14 @@ func (s *SQLiteStore) InsertJobDelivery(jobD *JobDelivery) error {
 	if jobD.MaxAttempts == 0 {
 		jobD.MaxAttempts = 5
 	}
-	legacyID := interface{}(nil)
-	if jobD.LegacyDeliveryTargetID != 0 {
-		legacyID = jobD.LegacyDeliveryTargetID
-	}
 	_, err := s.db.Exec(
 		`INSERT OR IGNORE INTO job_deliveries
-		 (delivery_id, artifact_id, destination_id, legacy_delivery_target_id, status,
+		 (delivery_id, artifact_id, destination_id, status,
 		  idempotency_key, remote_id, remote_url, created_at, updated_at,
 		  locked_by, lease_id, lease_expires_at, next_attempt_at,
 		  attempt_count, max_attempts, last_error_code, last_error_message, completed_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		jobD.DeliveryID, jobD.ArtifactID, jobD.DestinationID, legacyID,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		jobD.DeliveryID, jobD.ArtifactID, jobD.DestinationID,
 		jobD.Status, nullIfEmpty(jobD.IdempotencyKey),
 		nullIfEmpty(jobD.RemoteID), nullIfEmpty(jobD.RemoteURL),
 		jobD.CreatedAt, jobD.UpdatedAt,
@@ -230,7 +225,7 @@ func (s *SQLiteStore) InsertJobDelivery(jobD *JobDelivery) error {
 func (s *SQLiteStore) ListJobDeliveriesByJob(jobID string) ([]JobDelivery, error) {
 	rows, err := s.db.Query(
 		`SELECT jd.delivery_id, jd.artifact_id, jd.destination_id,
-		        COALESCE(jd.legacy_delivery_target_id, 0), jd.status,
+		        jd.status,
 		        COALESCE(jd.idempotency_key,''), COALESCE(jd.remote_id,''),
 		        COALESCE(jd.remote_url,''),
 		        jd.created_at, jd.updated_at
@@ -245,14 +240,10 @@ func (s *SQLiteStore) ListJobDeliveriesByJob(jobID string) ([]JobDelivery, error
 	var out []JobDelivery
 	for rows.Next() {
 		var jd JobDelivery
-		var legacyID sql.NullInt64
 		if err := rows.Scan(&jd.DeliveryID, &jd.ArtifactID, &jd.DestinationID,
-			&legacyID, &jd.Status, &jd.IdempotencyKey, &jd.RemoteID,
+			&jd.Status, &jd.IdempotencyKey, &jd.RemoteID,
 			&jd.RemoteURL, &jd.CreatedAt, &jd.UpdatedAt); err != nil {
 			continue
-		}
-		if legacyID.Valid {
-			jd.LegacyDeliveryTargetID = legacyID.Int64
 		}
 		out = append(out, jd)
 	}
@@ -263,7 +254,7 @@ func (s *SQLiteStore) ListJobDeliveriesByJob(jobID string) ([]JobDelivery, error
 func (s *SQLiteStore) GetJobDelivery(ctx context.Context, deliveryID string) (*JobDelivery, error) {
 	row := s.db.QueryRowContext(ctx,
 		`SELECT delivery_id, artifact_id, destination_id,
-		        COALESCE(legacy_delivery_target_id, 0), status,
+		        status,
 		        COALESCE(idempotency_key,''), COALESCE(remote_id,''),
 		        COALESCE(remote_url,''),
 		        created_at, updated_at, COALESCE(completed_at, ''),
@@ -271,10 +262,9 @@ func (s *SQLiteStore) GetJobDelivery(ctx context.Context, deliveryID string) (*J
 		        COALESCE(last_error_message, '')
 		 FROM job_deliveries WHERE delivery_id = ?`, deliveryID)
 	var jd JobDelivery
-	var legacyID interface{}
 	var idempotencyKey, remoteID, remoteURL string
 	err := row.Scan(&jd.DeliveryID, &jd.ArtifactID, &jd.DestinationID,
-		&legacyID, &jd.Status, &idempotencyKey, &remoteID,
+		&jd.Status, &idempotencyKey, &remoteID,
 		&remoteURL, &jd.CreatedAt, &jd.UpdatedAt, &jd.CompletedAt,
 		&jd.NextAttemptAt, &jd.LastError, &jd.LastErrorMessage)
 	if err != nil {
@@ -283,8 +273,5 @@ func (s *SQLiteStore) GetJobDelivery(ctx context.Context, deliveryID string) (*J
 	jd.IdempotencyKey = idempotencyKey
 	jd.RemoteID = remoteID
 	jd.RemoteURL = remoteURL
-	if legacyID, ok := legacyID.(int64); ok {
-		jd.LegacyDeliveryTargetID = legacyID
-	}
 	return &jd, nil
 }

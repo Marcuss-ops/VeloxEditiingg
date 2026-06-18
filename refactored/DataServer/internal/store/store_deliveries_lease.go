@@ -143,13 +143,11 @@ func (s *SQLiteStore) ClaimDeliveries(ctx context.Context, runnerID string, leas
 		}
 
 		// Insert a delivery_attempts row tracking this claim.
-		// delivery_target_id is NULL — the FK has been migrated to delivery_id
-		// (migration 032 makes the column nullable and backfills 0 → NULL).
 		_, err = tx.ExecContext(ctx,
 			`INSERT INTO delivery_attempts
-			 (delivery_target_id, attempt_number, status, result,
+			 (attempt_number, status, result,
 			  started_at, completed_at, error_message, worker_id, delivery_id)
-			 VALUES (NULL, ?, 'in_progress', '{}', ?, NULL, NULL, ?, ?)`,
+			 VALUES (?, 'in_progress', '{}', ?, NULL, NULL, ?, ?)`,
 			c.attemptCount, nowISO, nullIfEmpty(runnerID), c.deliveryID,
 		)
 		if err != nil {

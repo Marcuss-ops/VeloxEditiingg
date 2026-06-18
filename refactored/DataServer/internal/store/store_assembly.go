@@ -1,14 +1,14 @@
 // Package store / store_assembly.go
 //
 // Methods backing internal/queue.JobViewAssembler (PR1b) and the
-// orchestrator completion path (PR1c). The legacy flat fields
-// (master_video_path, drive_url, youtube_video_id, video_uploaded) are
-// still surfaced through HTTP endpoints, so the assembler runs the join
-// between (jobs, artifacts, job_deliveries, delivery_attempts, delivery_destinations)
-// and projects back to the JobView shape expected by handlers.
+// orchestrator completion path (PR1c). Flat fields from the legacy jobs
+// table (master_video_path, drive_url, youtube_video_id, video_uploaded)
+// are still surfaced through HTTP endpoints via the join between
+// (jobs, artifacts, job_deliveries, delivery_attempts, delivery_destinations)
+// so the assembler projects back to the JobView shape expected by handlers.
 //
-// CompleteJobTx was removed in PR 3.5-b — the sole legal writer of
-// jobs.status='SUCCEEDED' is FinalizationRepository.FinalizeVerified.
+// The sole legal writer of jobs.status='SUCCEEDED' is
+// FinalizationRepository.FinalizeVerified.
 package store
 
 import (
@@ -148,6 +148,4 @@ func selectStorageValue(storageKey, storageURL string) string {
 	return storageKey
 }
 
-// CompleteJobTx removed in PR 3.5-b — the sole legal writer of
-// jobs.status='SUCCEEDED' is FinalizationRepository.FinalizeVerified
-// (see internal/artifacts/sqlite_finalization_repository.go).
+

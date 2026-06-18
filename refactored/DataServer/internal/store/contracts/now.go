@@ -4,10 +4,6 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 )
-
-// nowUnixNano is exposed for use by test helpers in this package only.
-func nowUnixNano() int64 { return nanoNow() }
-
 // nanoNow indirection keeps `time` import surface minimal; replaced by tests.
 func nanoNow() int64 {
 	// Use the real time source. test-only dependency, no production impact.

@@ -520,7 +520,168 @@ Job in coda vengono processati quando uno slot si libera.
 
 ---
 
-## 10. Struttura File (Post-Reorganization)
+## 10. Artifact Pipeline (Master-Side)
+
+L'artifact pipeline è il cuore del control plane di Velox. È il **solo percorso** attraverso cui un job può arrivare a `SUCCEEDED`.
+
+### Pipeline Canonica
+
+```
+Worker termina rendering
+        ↓
+  POST /api/v1/video/upload-completed  (o gRPC ArtifactUploaded)
+        ↓
+  artifacts.Service.BeginUpload  ───  valida auth job/worker/lease
+        ↓
+  artifacts.Service.Receive     ───  stream byte → master calcola SHA-256
+        ↓
+  artifacts.Service.Finalize    ───  CAS RECEIVED→FINALIZING
+        ↓
+  FinalizationRepository.FinalizeVerified
+      ├── jobs.status RUNNING → SUCCEEDED
+      ├── artifacts.status STAGING → READY
+      ├── job_attempts → SUCCEEDED
+      ├── outbox: ARTIFACT_READY + JOB_SUCCEEDED
+      ├── delivery: job_deliveries PENDING per destinazione
+      └── artifact_uploads: FINALIZING → COMPLETED
+```
+
+**Regola fondamentale**: un job può diventare `SUCCEEDED` **soltanto** attraverso `FinalizationRepository.FinalizeVerified`. Nessun handler, route amministrativa o repository generico può eseguire `UPDATE jobs SET status = 'SUCCEEDED'`.
+
+### Chunked Upload Persistente
+
+Per file > 50 MB, il worker usa upload chunked resumabile. A differenza della vecchia implementazione (mappa globale in memoria), la nuova architettura è **persistente**:
+
+```
+InitChunkedSession → artifact_uploads.CREATED (via BeginUpload)
+    ↓
+UploadChunk 0..N  → blob staging + artifact_upload_chunks row
+    ↓
+CompleteChunked   → assembla chunks → Receive (master hash) → Finalize (SUCCEEDED)
+```
+
+Il worker invia chunk a:
+- `POST /api/v1/video/chunked/init` — inizia sessione
+- `POST /api/v1/video/chunked/:job_id/:chunk_index` — carica chunk
+- `POST /api/v1/video/chunked/:job_id/complete` — assembla e finalizza
+
+Dopo un riavvio del master, la sessione chunked sopravvive perché tutto lo stato è in SQLite (`artifact_uploads` + `artifact_upload_chunks`).
+
+### Schema Database
+
+```sql
+-- artifact_uploads: sessione di upload
+CREATE TABLE artifact_uploads (
+    upload_id    TEXT PRIMARY KEY,
+    artifact_id  TEXT NOT NULL,
+    job_id       TEXT NOT NULL,
+    status       TEXT NOT NULL CHECK(status IN ('CREATED','UPLOADING','RECEIVED','FINALIZING','COMPLETED','FAILED','EXPIRED')),
+    temporary_storage_key TEXT NOT NULL,
+    received_size_bytes   INTEGER,
+    received_sha256       TEXT,
+    created_at   TEXT NOT NULL,
+    expires_at   TEXT NOT NULL,
+    ...
+);
+
+-- artifact_upload_chunks: tracciamento chunk individuali
+CREATE TABLE artifact_upload_chunks (
+    upload_id    TEXT NOT NULL,
+    chunk_index  INTEGER NOT NULL,
+    size_bytes   INTEGER NOT NULL,
+    sha256       TEXT,
+    storage_key  TEXT NOT NULL,
+    received_at  TEXT NOT NULL,
+    PRIMARY KEY (upload_id, chunk_index),
+    FOREIGN KEY (upload_id) REFERENCES artifact_uploads(upload_id)
+);
+```
+
+---
+
+## 11. Delivery System
+
+Il delivery system gestisce la pubblicazione degli artifact verso destinazioni esterne (YouTube, Google Drive).
+
+### Delivery Plan Resolver
+
+Ogni job può avere un **piano di delivery esplicito** che specifica quali destinazioni devono ricevere l'artifact:
+
+```
+job_delivery_plans
+- job_id          TEXT (FK → jobs)
+- destination_id  TEXT (FK → delivery_destinations)
+- enabled         INTEGER
+- priority        INTEGER
+- metadata_json   TEXT
+```
+
+Il resolver segue questo ordine:
+
+1. **Piano per-job**: se esiste una riga in `job_delivery_plans` per il job, usa SOLO quelle destinazioni (con `enabled = 1`)
+2. **Fallback globale**: se nessun piano per-job esiste, usa tutte le `delivery_destinations` abilitate (comportamento legacy)
+
+### Delivery Runner
+
+Il `DeliveryRunner` è l'unico writer degli stati delle delivery. Ciclo di vita:
+
+```
+PENDING → RUNNING (claim con lease)
+             ↓
+        SUCCEEDED  |  RETRY_WAIT  |  FAILED  |  BLOCKED_AUTH
+```
+
+| Stato | Descrizione |
+|-------|-------------|
+| PENDING | In attesa di essere processata |
+| RUNNING | In upload (lease attivo) |
+| SUCCEEDED | Completata con successo |
+| RETRY_WAIT | Fallita temporaneamente, riprova con backoff |
+| FAILED | Fallita permanentemente (max tentativi raggiunto) |
+| BLOCKED_AUTH | Bloccata per errore di autenticazione (intervento operatore) |
+
+I provider (YouTube, Drive) **non toccano mai il database** — chiamano solo API esterne e restituiscono un risultato al runner.
+
+---
+
+## 12. Asset Service
+
+L'`AssetService` è il registry centralizzato per tutti gli asset del sistema (voiceover, scene images, musiche, ecc.).
+
+### Architettura
+
+```
+AssetService
+  ├── AssetRepository   → DB: asset_id, sha256, storage_key, mime_type
+  ├── BlobStore         → filesystem/S3: byte effettivi
+  └── ResolverRegistry  → resolver specializzati per tipo
+```
+
+### Flusso
+
+```
+Richiesta: velox-asset://<sha256>
+  ↓
+ResolverRegistry.ResolveByInference(ref)  → scarica/seleziona sorgente
+  ↓
+AssetService.ResolveAndRegister()
+  ├── Stream byte → SHA-256 (master calcola)
+  ├── BlobStore.PromoteToFinal()  → storage content-addressato
+  └── AssetRepository.Insert()    → DB come READY
+```
+
+### Worker Asset Serving
+
+I worker scaricano gli asset via:
+```
+GET /api/v1/worker-assets/:asset_id
+```
+
+Il master serve l'asset tramite `AssetRepository.GetByID()` + `BlobStore.ReadFinal()` — il database è la fonte di verità, non il filesystem.
+
+---
+
+## 13. Struttura File (Post-Reorganization)
 
 ### DataServer (Go)
 

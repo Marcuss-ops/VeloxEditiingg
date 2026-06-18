@@ -102,7 +102,7 @@ func (s *SQLiteStore) ClaimNextPendingJob(workerID string, allowedJobTypes []str
 		result, err := tx.Exec(
 			`UPDATE jobs
 			 SET status = ?, assigned_to = ?, worker_name = ?, retry_count = ?, attempt = ?,
-			     result_json = ?, raw_json = ?, updated_at = ?, migrated_at = ?,
+			     result_json = ?, updated_at = ?, migrated_at = ?,
 			     assigned_at = ?,
 			     lease_id = ?, lease_expiry = ?,
 			     claimed_by = ?, claimed_at = ?
@@ -110,7 +110,7 @@ func (s *SQLiteStore) ClaimNextPendingJob(workerID string, allowedJobTypes []str
 			   AND UPPER(status) = 'PENDING'
 			   AND COALESCE(assigned_to, '') = ''`,
 			"LEASED", workerID, workerID, newRetry, newRetry,
-			string(updatedResult), string(updatedResult), nowISO, nowISO,
+			string(updatedResult), nowISO, nowISO,
 			nowISO,
 			leaseID, leaseExpiry,
 			workerID, nowISO,

@@ -126,8 +126,8 @@ func (e *testEnv) seedJob(jobID, status, assignedTo, leaseID string, revision in
 	_, err := e.db.Exec(`
 		INSERT INTO jobs (
 			job_id, status, assigned_to, lease_id, lease_expiry, revision,
-			created_at, updated_at, raw_json, migrated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, '{}', ?)`,
+			created_at, updated_at, migrated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		jobID, status, assignedTo, leaseID,
 		nullableTime(leaseExpiry), revision, now, now, now,
 	)

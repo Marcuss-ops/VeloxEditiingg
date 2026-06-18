@@ -23,6 +23,7 @@ import (
 	deliveryProviders "velox-server/internal/deliveries/providers"
 	"velox-server/internal/grpcserver"
 	workerhandlers "velox-server/internal/handlers/remote/workers"
+	workerhandlersuploads "velox-server/internal/handlers/remote/workers/uploads"
 	"velox-server/internal/handlers/remote/workers/lifecycle"
 	handlersoutbox "velox-server/internal/handlers/outbox"
 	"velox-server/internal/handlers/server/api"
@@ -73,6 +74,10 @@ type serverDeps struct {
 	// it. Closely parallels the lifecyclePR3 composition pattern below:
 	// bootstrap is the composition root, never anything else.
 	artifactSvc *artifacts.Service
+
+	// PR chunked: ChunkedUploadService wraps artifactSvc with persistent
+	// chunk tracking so resumable chunked uploads survive master restarts.
+	chunkedHandler *workerhandlersuploads.ChunkedUploadHandler
 
 	// ── Lifecycle ──────────────────────────────────────────────────────────
 	//
@@ -216,14 +221,33 @@ func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
 	// insert) and the old Repository (upload-session CRUD). The same
 	// *sql.DB is shared so the finalization tx can join with the
 	// concurrent update on artifact_uploads (step 7 of FinalizeVerified).
+	//
+	// PR delivery plans: the FinalizationRepository receives a
+	// DeliveryPlanResolver so FinalizeVerified resolves per-job
+	// delivery destinations instead of querying all globally enabled ones.
+	planResolver := deliveries.NewSQLiteDeliveryPlanResolver(sqliteStore.DB())
+	finRepo := artifacts.NewSQLiteFinalizationRepository(sqliteStore.DB())
+	finRepo.WithPlanResolver(planResolver)
 	artifactSvc := artifacts.NewService(
 		artifacts.NewSQLiteRepository(sqliteStore.DB()),
-		artifacts.NewSQLiteFinalizationRepository(sqliteStore.DB()),
+		finRepo,
 		blobStore,
 		sqliteStore.DB(),
 		nil, // RealClock default
 	)
-	log.Printf("[BOOTSTRAP] artifacts.Service ready (single-tx SUCCEEDED gate via FinalizationRepository.FinalizeVerified)")
+	log.Printf("[BOOTSTRAP] artifacts.Service ready (single-tx SUCCEEDED gate via FinalizationRepository.FinalizeVerified + DeliveryPlanResolver)")
+
+	// PR chunked: ChunkedUploadService wraps artifactSvc with persistent
+	// chunk tracking. Uses the same Repository and BlobStore as the
+	// artifact pipeline.
+	chunkedSvc := artifacts.NewChunkedUploadService(
+		artifactSvc,
+		artifacts.NewSQLiteRepository(sqliteStore.DB()),
+		blobStore,
+		sqliteStore.DB(),
+	)
+	chunkedHandler := workerhandlersuploads.NewChunkedUploadHandler(chunkedSvc)
+	log.Printf("[BOOTSTRAP] ChunkedUploadService ready (persistent chunked upload via artifact pipeline)")
 
 	outboxRegistry := outbox.NewRegistry()
 	stepReady := handlersoutbox.StepReadyHandler{Wf: workflowRepo, Q: fileQ}
@@ -262,6 +286,7 @@ func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
 		outboxDispatcher:    outboxDispatcher,
 		blobStore:           blobStore,
 		artifactSvc:         artifactSvc,
+		chunkedHandler:      chunkedHandler,
 		lifecycleSvc:        lifecycleSvc,
 	}, nil
 }
@@ -281,7 +306,7 @@ func runServer(cfg *config.Config) error {
 	pipeline.InitRemoteEngine(cfg)
 
 	registry.Register(health.New())
-	registry.Register(workers.New(cfg, deps.reg, deps.workerLifecycle, deps.workerUpdateHandler, auth))
+	registry.Register(workers.New(cfg, deps.reg, deps.workerLifecycle, deps.workerUpdateHandler, auth, deps.assetService, deps.blobStore))
 	ytMod := youtube.New(cfg, deps.paths.dataDir, deps.sqliteStore)
 	deps.youtubeModule = ytMod
 	registry.Register(ytMod)

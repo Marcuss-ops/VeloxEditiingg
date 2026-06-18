@@ -3,7 +3,6 @@ package assets
 import (
 	"fmt"
 	"net/http"
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -11,33 +10,35 @@ import (
 
 	voiceoverassets "velox-server/internal/assets"
 	"velox-server/internal/config"
+	"velox-server/internal/store"
 	workersreg "velox-server/internal/workers"
 )
 
 // Handler serves master-staged media assets to remote workers.
+//
+// Uses the canonical AssetService (DB as source of truth) + BlobStore
+// for all asset resolution and serving.
 type Handler struct {
-	dataDir  string
-	tokenMgr *workersreg.TokenManager
+	tokenMgr  *workersreg.TokenManager
+	assetSvc  *voiceoverassets.AssetService
+	blobStore store.BlobStore
 }
 
 // NewHandler creates a new assets Handler.
-func NewHandler(cfg *config.Config, tokenMgr *workersreg.TokenManager) *Handler {
-	dataDir := ""
-	if cfg != nil {
-		dataDir = strings.TrimSpace(cfg.Runtime.DataDir)
+func NewHandler(cfg *config.Config, tokenMgr *workersreg.TokenManager, assetSvc *voiceoverassets.AssetService, blobStore store.BlobStore) *Handler {
+	return &Handler{
+		tokenMgr:  tokenMgr,
+		assetSvc:  assetSvc,
+		blobStore: blobStore,
 	}
-	return &Handler{dataDir: dataDir, tokenMgr: tokenMgr}
 }
 
-// ServeAsset serves canonical assets addressed by asset ID (content-addressed store).
+// ServeAsset serves canonical assets addressed by asset ID.
+//
+// assetSvc.Get(ctx, assetID) → blobStore.ReadFinal(storageKey)
 func (h *Handler) ServeAsset() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if !h.authorizeWorker(c) {
-			return
-		}
-
-		if strings.TrimSpace(h.dataDir) == "" {
-			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "asset storage unavailable"})
 			return
 		}
 
@@ -47,33 +48,41 @@ func (h *Handler) ServeAsset() gin.HandlerFunc {
 			return
 		}
 
-		store := voiceoverassets.NewStore(h.dataDir, 256*1024*1024, []string{h.dataDir})
-		resolved, err := store.Lookup(assetID)
+		if h.assetSvc == nil || h.blobStore == nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "asset service unavailable"})
+			return
+		}
+
+		asset, err := h.assetSvc.Get(c.Request.Context(), assetID)
 		if err != nil {
 			c.JSON(http.StatusNotFound, gin.H{"error": "asset not found"})
 			return
 		}
+		if asset == nil || asset.StorageKey == "" {
+			c.JSON(http.StatusNotFound, gin.H{"error": "asset not found"})
+			return
+		}
 
-		file, err := os.Open(resolved.LocalPath)
-		if err != nil {
+		file, openErr := h.blobStore.ReadFinal(asset.StorageKey)
+		if openErr != nil {
 			c.JSON(http.StatusNotFound, gin.H{"error": "asset not found"})
 			return
 		}
 		defer file.Close()
 
-		info, err := file.Stat()
-		if err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "asset not found"})
+		info, statErr := file.Stat()
+		if statErr != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "asset stat error"})
 			return
 		}
 
-		contentType := strings.TrimSpace(resolved.MediaType)
+		contentType := strings.TrimSpace(asset.MimeType)
 		if contentType == "" {
 			contentType = "application/octet-stream"
 		}
 		c.Header("Content-Type", contentType)
 		c.Header("Content-Length", fmt.Sprintf("%d", info.Size()))
-		http.ServeContent(c.Writer, c.Request, filepath.Base(resolved.LocalPath), info.ModTime(), file)
+		http.ServeContent(c.Writer, c.Request, filepath.Base(asset.StorageKey), info.ModTime(), file)
 	}
 }
 
@@ -97,5 +106,3 @@ func (h *Handler) authorizeWorker(c *gin.Context) bool {
 	}
 	return true
 }
-
-
