@@ -92,6 +92,9 @@ func setupTestEnv(t *testing.T) *testEnv {
 	err = migrations.RunMigrations(db, migrations.MigrationsFS, ".")
 	require.NoError(t, err, "migrations.RunMigrations")
 
+	// Seed a delivery destination for FinalizeVerified tests.
+	_, _ = db.Exec(`INSERT OR IGNORE INTO delivery_destinations (destination_id, provider, name, enabled, created_at, updated_at) VALUES ('primary', 'test', 'Test', 1, '', '')`)
+
 	staging := filepath.Join(tmp, "staging")
 	final := filepath.Join(tmp, "final")
 	bs, err := store.NewLocalBlobStore(staging, final)

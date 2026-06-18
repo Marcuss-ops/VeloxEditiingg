@@ -179,49 +179,6 @@ func (s *SQLiteStore) InsertDeliveryAttempt(attempt *DeliveryAttempt) (int64, er
 	return result.LastInsertId()
 }
 
-// UpdateDeliveryAttemptByLegacyTargetID updates a delivery attempt via the
-// legacy integer delivery_target_id. Renamed from `UpdateDeliveryAttempt` so
-// the canonical `(ctx, string deliveryID, …)` method on store_deliveries.go
-// can coexist — callers (video_drive.go, video_youtube.go) updated accordingly.
-// This path will be retired once the legacy auto-upload code is rewired
-// through internal/deliveries.DeliveryRunner.
-func (s *SQLiteStore) UpdateDeliveryAttemptByLegacyTargetID(id int, status, resultJSON, errorMsg string) error {
-	now := time.Now().UTC().Format(time.RFC3339)
-	_, err := s.db.Exec(
-		`UPDATE delivery_attempts
-		 SET status = ?, result = ?, completed_at = ?, error_message = ?
-		 WHERE delivery_target_id = ?`,
-		status, resultJSON, now, toNullString(errorMsg), id,
-	)
-	return err
-}
-
-// GetDeliveryAttemptsByTarget returns all attempts for a delivery target.
-func (s *SQLiteStore) GetDeliveryAttemptsByTarget(targetID int) ([]DeliveryAttempt, error) {
-	rows, err := s.db.Query(
-		`SELECT id, delivery_target_id, attempt_number, status, result,
-		        COALESCE(started_at, ''), COALESCE(completed_at, ''),
-		        COALESCE(error_message, ''), COALESCE(worker_id, '')
-		 FROM delivery_attempts WHERE delivery_target_id = ? ORDER BY attempt_number DESC`,
-		targetID,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var attempts []DeliveryAttempt
-	for rows.Next() {
-		var a DeliveryAttempt
-		if err := rows.Scan(&a.ID, &a.DeliveryTargetID, &a.AttemptNumber, &a.Status,
-			&a.Result, &a.StartedAt, &a.CompletedAt, &a.ErrorMessage, &a.WorkerID); err != nil {
-			continue
-		}
-		attempts = append(attempts, a)
-	}
-	return attempts, rows.Err()
-}
-
 // ── Helpers ──
 
 func toNullString(s string) interface{} {

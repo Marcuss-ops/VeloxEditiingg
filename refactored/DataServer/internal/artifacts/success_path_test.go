@@ -137,7 +137,7 @@ CREATE TABLE job_deliveries (
 	UNIQUE (artifact_id, destination_id)
 );
 CREATE TABLE delivery_destinations (
-	destination_id INTEGER PRIMARY KEY,
+	destination_id TEXT PRIMARY KEY,
 	provider       TEXT,
 	name           TEXT,
 	enabled        INTEGER DEFAULT 1,
@@ -157,6 +157,9 @@ func openTestDB(t *testing.T) *sql.DB {
 	t.Cleanup(func() { _ = db.Close() })
 	if _, err := db.Exec(minimalSchema); err != nil {
 		t.Fatalf("apply schema: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO delivery_destinations (destination_id, provider, name, enabled, created_at, updated_at) VALUES ('primary', 'test', 'Test', 1, '', '')`); err != nil {
+		t.Fatalf("seed delivery_destinations: %v", err)
 	}
 	return db
 }

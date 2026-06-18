@@ -299,38 +299,36 @@ func (r *SQLiteFinalizationRepository) FinalizeVerified(
 	// delivery runs require.
 	// Resolve delivery destinations. If no explicit destination is
 	// specified, use the first enabled destination for this job.
-	// Falls back to 'primary' when delivery_destinations is empty.
 	destID := cmd.DestinationID
 	if destID == "" {
 		_ = tx.QueryRowContext(ctx,
 			`SELECT destination_id FROM delivery_destinations WHERE enabled = 1 LIMIT 1`,
 		).Scan(&destID)
 	}
-	if destID == "" {
-		destID = "primary"
-	}
-	delRes, err := tx.ExecContext(ctx, `
-		INSERT INTO job_deliveries (delivery_id, artifact_id, destination_id, status, idempotency_key, created_at, updated_at)
-		SELECT ?, ?, ?, 'PENDING', ?, ?, ?
-		WHERE NOT EXISTS (
-			SELECT 1 FROM job_deliveries
-			WHERE artifact_id = ? AND destination_id = ?
-		)`,
-		newID(), cmd.ArtifactID, destID,
-		cmd.ArtifactID+"_"+destID, nowStr, nowStr,
-		cmd.ArtifactID, destID,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("artifacts: FinalizeVerified job_deliveries insert: %w", err)
-	}
-	if delRes != nil {
-		if n, _ := delRes.RowsAffected(); n == 1 {
-			if err := r.emitOutboxTx(ctx, tx,
-				"delivery", cmd.ArtifactID+":"+destID, "DELIVERY_CREATED",
-				fmt.Sprintf(`{"artifact_id":%q,"destination_id":%q}`,
-					cmd.ArtifactID, destID),
-			); err != nil {
-				return nil, fmt.Errorf("artifacts: FinalizeVerified outbox DELIVERY_CREATED: %w", err)
+	if destID != "" {
+		delRes, err := tx.ExecContext(ctx, `
+			INSERT INTO job_deliveries (delivery_id, artifact_id, destination_id, status, idempotency_key, created_at, updated_at)
+			SELECT ?, ?, ?, 'PENDING', ?, ?, ?
+			WHERE NOT EXISTS (
+				SELECT 1 FROM job_deliveries
+				WHERE artifact_id = ? AND destination_id = ?
+			)`,
+			newID(), cmd.ArtifactID, destID,
+			cmd.ArtifactID+"_"+destID, nowStr, nowStr,
+			cmd.ArtifactID, destID,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("artifacts: FinalizeVerified job_deliveries insert: %w", err)
+		}
+		if delRes != nil {
+			if n, _ := delRes.RowsAffected(); n == 1 {
+				if err := r.emitOutboxTx(ctx, tx,
+					"delivery", cmd.ArtifactID+":"+destID, "DELIVERY_CREATED",
+					fmt.Sprintf(`{"artifact_id":%q,"destination_id":%q}`,
+						cmd.ArtifactID, destID),
+				); err != nil {
+					return nil, fmt.Errorf("artifacts: FinalizeVerified outbox DELIVERY_CREATED: %w", err)
+				}
 			}
 		}
 	}
