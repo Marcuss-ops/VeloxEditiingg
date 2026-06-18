@@ -68,6 +68,7 @@ type CreateJobParams struct {
 	Payload    map[string]interface{} `json:"payload"`
 	VideoName  string                 `json:"video_name,omitempty"`
 	ProjectID  string                 `json:"project_id,omitempty"`
+	RunID      string                 `json:"run_id,omitempty"`
 	MaxRetries int                    `json:"max_retries"`
 }
 
@@ -128,6 +129,12 @@ var ErrTransitionConflict = errors.New("store: job transition conflict (status o
 // driver error so callers can fall back without re-trying blindly.
 var ErrNoClaimableJob = errors.New("store: no claimable job available")
 
+// LeaseJobParams carries the information needed to lease a PENDING job to a worker.
+type LeaseJobParams struct {
+	JobID    string
+	WorkerID string
+}
+
 // JobRepository is the narrow write-aware contract for job persistence (spec §5).
 //
 // Atomicity rule (spec): every multi-row operation stays a single method.
@@ -159,4 +166,16 @@ type JobRepository interface {
 	// ErrTransitionConflict if the job is not in a renewable state
 	// (LEASED, RUNNING, PROCESSING).
 	RenewLease(ctx context.Context, params RenewLeaseParams) error
+	// LeaseJob atomically leases a PENDING job to a worker.
+	// Sets status=LEASED, lease_id, assigned_to, retry_count++, updated_at.
+	LeaseJob(ctx context.Context, jobID, workerID string) error
+	// ReleaseClaim atomically resets a LEASED/RUNNING job back to PENDING
+	// without incrementing retry count. Clears lease info.
+	ReleaseClaim(ctx context.Context, jobID string) error
+	// RequeueZombieJobs finds jobs in LEASED/RUNNING state with expired leases
+	// and atomically requeues them to PENDING. Returns count of requeued jobs.
+	RequeueZombieJobs(ctx context.Context, timeout time.Duration) (int, error)
+	// UpdateJobResult writes the result_json blob for a job.
+	// Used by UpdateJobFields for persisting the full operational state.
+	UpdateJobResult(ctx context.Context, jobID string, resultJSON []byte) error
 }

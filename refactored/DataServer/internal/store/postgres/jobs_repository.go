@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"time"
 
 	"velox-server/internal/store"
 )
@@ -73,6 +74,33 @@ func (r *JobRepository) ListByStatus(ctx context.Context, statuses []store.JobSt
 // Must raise ErrTransitionConflict when zero rows affected.
 func (r *JobRepository) RenewLease(ctx context.Context, params store.RenewLeaseParams) error {
 	_, _, _ = ctx, params, r.dsn
+	return store.ErrNotImplemented
+}
+
+// LeaseJob — TODO §5b: UPDATE jobs SET status='LEASED', lease_id=…, assigned_to=… WHERE id=$1 AND status='PENDING'.
+func (r *JobRepository) LeaseJob(ctx context.Context, jobID, workerID string) error {
+	_, _, _ = ctx, jobID, workerID
+	_ = r.dsn
+	return store.ErrNotImplemented
+}
+
+// ReleaseClaim — TODO §5b: UPDATE SET status='PENDING' WHERE id=$1 AND status IN ('LEASED','RUNNING').
+func (r *JobRepository) ReleaseClaim(ctx context.Context, jobID string) error {
+	_, _ = ctx, jobID
+	_ = r.dsn
+	return store.ErrNotImplemented
+}
+
+// RequeueZombieJobs — TODO §5b: UPDATE SET status='PENDING', … WHERE status IN('LEASED','RUNNING') AND lease_expiry < NOW().
+func (r *JobRepository) RequeueZombieJobs(ctx context.Context, timeout time.Duration) (int, error) {
+	_, _, _ = ctx, timeout, r.dsn
+	return 0, store.ErrNotImplemented
+}
+
+// UpdateJobResult — TODO §5b: UPDATE jobs SET result_json=$1 WHERE job_id=$2.
+func (r *JobRepository) UpdateJobResult(ctx context.Context, jobID string, resultJSON []byte) error {
+	_, _, _ = ctx, jobID, resultJSON
+	_ = r.dsn
 	return store.ErrNotImplemented
 }
 

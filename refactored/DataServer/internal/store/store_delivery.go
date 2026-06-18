@@ -313,7 +313,8 @@ func (s *SQLiteStore) UpdateJobSupplementary(jobID string, fields map[string]int
 	for key, value := range fields {
 		switch key {
 		case "completed_at", "last_error", "error_message", "failed_at", "failed_by",
-			"lease_id", "lease_expiry", "assigned_to", "claimed_by":
+			"lease_id", "lease_expiry", "assigned_to", "claimed_by", "started_at",
+			"artifact_id", "output_sha256", "upload_idempotency_key":
 			setClauses = append(setClauses, key+" = ?")
 			args = append(args, value)
 		}

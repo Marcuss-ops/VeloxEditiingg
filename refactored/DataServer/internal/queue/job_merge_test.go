@@ -19,7 +19,7 @@ func TestUpdateJobFieldsClearsFailureStateOnComplete(t *testing.T) {
 	defer dbStore.Close()
 
 	jobRepo := store.NewSQLiteJobRepository(dbStore)
-	ts, err := NewTransitionService(jobRepo, dbStore)
+	ts, err := NewLifecycleService(jobRepo, dbStore)
 	if err != nil {
 		t.Fatalf("new transition service: %v", err)
 	}
@@ -90,7 +90,7 @@ func TestCompleteJobClearsFailureState(t *testing.T) {
 	defer dbStore.Close()
 
 	jobRepo := store.NewSQLiteJobRepository(dbStore)
-	ts, err := NewTransitionService(jobRepo, dbStore)
+	ts, err := NewLifecycleService(jobRepo, dbStore)
 	if err != nil {
 		t.Fatalf("new transition service: %v", err)
 	}

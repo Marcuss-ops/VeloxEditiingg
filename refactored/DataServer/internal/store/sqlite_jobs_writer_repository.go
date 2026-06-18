@@ -92,11 +92,14 @@ func (r *SQLiteJobRepository) CreateJob(ctx context.Context, params CreateJobPar
 		`INSERT INTO jobs (
 			job_id, status, max_retries, retry_count,
 			video_name, project_id,
-			created_at, updated_at,
-			request_json, result_json, revision, raw_json
-		) VALUES (?, 'PENDING', ?, 0, ?, ?, ?, ?, ?, '{}', 0, '{}')`,
+			created_at, updated_at, migrated_at,
+			request_json, result_json, revision, raw_json,
+			run_id, job_run_id
+		) VALUES (?, 'PENDING', ?, 0, ?, ?, ?, ?, ?, ?, '{}', 0, '{}', ?, ?)`,
 		params.JobID, params.MaxRetries, params.VideoName, params.ProjectID,
-		now, now, requestJSON,
+		now, now, now,
+		requestJSON,
+		params.RunID, params.RunID,
 	)
 	if err != nil {
 		return fmt.Errorf("create job exec: %w", err)
@@ -264,6 +267,124 @@ func (r *SQLiteJobRepository) RenewLease(ctx context.Context, params RenewLeaseP
 		return fmt.Errorf("renew lease %s: %w", params.JobID, ErrTransitionConflict)
 	}
 	return nil
+}
+
+// LeaseJob atomically leases a PENDING job to a worker.
+// Updates status to LEASED, sets lease_id (generated UUID), assigned_to,
+// claimed_by, assigned_at, claimed_at, lease_expiry (30 min), increments
+// retry_count, bumps revision.
+func (r *SQLiteJobRepository) LeaseJob(ctx context.Context, jobID, workerID string) error {
+	if jobID == "" {
+		return fmt.Errorf("job repository: empty jobID in LeaseJob")
+	}
+	if workerID == "" {
+		return fmt.Errorf("job repository: empty workerID in LeaseJob")
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	leaseID := uuid.NewString()
+	leaseExpiry := time.Now().UTC().Add(30 * time.Minute).Format(time.RFC3339)
+	result, err := r.store.db.ExecContext(ctx,
+		`UPDATE jobs
+		 SET status = 'LEASED',
+		     lease_id = ?,
+		     lease_expiry = ?,
+		     assigned_to = ?,
+		     claimed_by = ?,
+		     assigned_at = ?,
+		     claimed_at = ?,
+		     updated_at = ?,
+		     revision = revision + 1,
+		     retry_count = retry_count + 1
+		 WHERE job_id = ?
+		   AND UPPER(status) = 'PENDING'`,
+		leaseID, leaseExpiry, workerID, workerID, now, now, now, jobID,
+	)
+	if err != nil {
+		return fmt.Errorf("lease job exec: %w", err)
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("lease job rows: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("lease job %s: job not in PENDING state", jobID)
+	}
+	return nil
+}
+
+// ReleaseClaim atomically resets a LEASED/RUNNING job back to PENDING
+// without incrementing retry count. Clears lease_id, lease_expiry,
+// assigned_to, claimed_by, assigned_at, claimed_at.
+func (r *SQLiteJobRepository) ReleaseClaim(ctx context.Context, jobID string) error {
+	if jobID == "" {
+		return fmt.Errorf("job repository: empty jobID in ReleaseClaim")
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	result, err := r.store.db.ExecContext(ctx,
+		`UPDATE jobs
+		 SET status = 'PENDING',
+		     lease_id = '',
+		     lease_expiry = '',
+		     assigned_to = '',
+		     claimed_by = '',
+		     assigned_at = '',
+		     claimed_at = '',
+		     updated_at = ?,
+		     revision = revision + 1
+		 WHERE job_id = ?
+		   AND UPPER(status) IN ('LEASED', 'RUNNING')`,
+		now, jobID,
+	)
+	if err != nil {
+		return fmt.Errorf("release claim exec: %w", err)
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("release claim rows: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("release claim %s: job not in LEASED/RUNNING state", jobID)
+	}
+	return nil
+}
+
+// RequeueZombieJobs finds jobs in LEASED/RUNNING state whose lease_expiry
+// has passed and atomically requeues them to PENDING. Returns the count of
+// requeued jobs.
+func (r *SQLiteJobRepository) RequeueZombieJobs(ctx context.Context, timeout time.Duration) (int, error) {
+	now := time.Now().UTC().Format(time.RFC3339)
+	// Requeue jobs with expired leases
+	result, err := r.store.db.ExecContext(ctx,
+		`UPDATE jobs
+		 SET status = 'PENDING',
+		     lease_id = '',
+		     lease_expiry = '',
+		     assigned_to = '',
+		     claimed_by = '',
+		     assigned_at = '',
+		     claimed_at = '',
+		     retry_count = retry_count + 1,
+		     updated_at = ?,
+		     revision = revision + 1
+		 WHERE UPPER(status) IN ('LEASED', 'RUNNING')
+		   AND lease_expiry IS NOT NULL
+		   AND lease_expiry != ''
+		   AND lease_expiry < ?`,
+		now, now,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("requeue zombies exec: %w", err)
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("requeue zombies rows: %w", err)
+	}
+	return int(n), nil
+}
+
+// UpdateJobResult writes the result_json blob for a job.
+func (r *SQLiteJobRepository) UpdateJobResult(ctx context.Context, jobID string, resultJSON []byte) error {
+	return r.store.UpsertJobResult(jobID, resultJSON)
 }
 
 // Compile-time interface check.

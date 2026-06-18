@@ -123,15 +123,16 @@ func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
 
 	// Create orchestrator for multi-step job pipelines
 	jobRepo := store.NewSQLiteJobRepository(sqliteStore)
-	ts, err := queue.NewTransitionService(jobRepo, sqliteStore)
+	lifecycle, err := queue.NewLifecycleService(jobRepo, sqliteStore)
 	if err != nil {
 		return nil, err
 	}
+	querySvc := queue.NewQueryService(sqliteStore)
 
 	fileQ, err := queue.NewFileQueue(&queue.FileQueueConfig{
 		DBStore:    sqliteStore,
 		MaxRetries: cfg.Workers.MaxJobAttempts,
-	}, ts)
+	}, lifecycle, querySvc)
 	if err != nil {
 		return nil, err
 	}
@@ -245,7 +246,7 @@ func runServer(cfg *config.Config) error {
 	// Start gRPC server for worker control stream
 	var grpcSrv grpcServer
 	if cfg.Server.GRPCPort > 0 {
-		transitionSvc := deps.fileQ.TransitionService()
+		transitionSvc := deps.fileQ.LifecycleService()
 		cmdMgr := workersreg.NewCommandManager(deps.sqliteStore)
 		tokenMgr := workersreg.NewTokenManager(deps.sqliteStore)
 

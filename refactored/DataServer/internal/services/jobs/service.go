@@ -285,7 +285,7 @@ func (s *Service) SubmitResult(ctx context.Context, req SubmitResultRequest) (bo
 			}
 
 			updates := map[string]interface{}{
-				"status": "COMPLETED",
+				"status": "RUNNING",
 			}
 			if strings.TrimSpace(req.EndTime) != "" {
 				updates["completed_at"] = strings.TrimSpace(req.EndTime)

@@ -4,7 +4,6 @@ package queue
 import (
 	"context"
 	"fmt"
-	"log"
 	"time"
 
 	"velox-server/internal/store"
@@ -73,7 +72,6 @@ type Job struct {
 	DriveURL      string `json:"drive_url,omitempty"`
 
 	// DEPRECATED (PR4): Drive/YouTube delivery state moved to delivery_targets + delivery_attempts tables.
-	// Kept for backward compat — no longer written by delivery code.
 	VideoUploaded         bool   `json:"video_uploaded,omitempty"`
 	MasterVideoPath       string `json:"master_video_path,omitempty"`
 	LastUploadResult      string `json:"last_upload_result,omitempty"`
@@ -112,12 +110,12 @@ type JobLogEntry struct {
 	WorkerID  string `json:"worker_id,omitempty"`
 }
 
-// FileQueue implements a SQLite-backed job queue with a centralized transition service.
-// All reads and writes go through the injected TransitionService.
+// FileQueue implements a SQLite-backed job queue with separated lifecycle and query services.
 type FileQueue struct {
 	maxRetries int
 	dbStore    *store.SQLiteStore
-	ts         *TransitionService
+	lifecycle  *LifecycleService
+	query      *QueryService
 
 	eventLogger func(jobID, eventType string, extra map[string]interface{})
 }
@@ -129,10 +127,13 @@ type FileQueueConfig struct {
 }
 
 // NewFileQueue creates a new SQLite-backed queue.
-// TransitionService is mandatory — injected via dependency injection.
-func NewFileQueue(cfg *FileQueueConfig, ts *TransitionService) (*FileQueue, error) {
-	if ts == nil {
-		return nil, fmt.Errorf("TransitionService is required")
+// LifecycleService and QueryService are mandatory — injected via dependency injection.
+func NewFileQueue(cfg *FileQueueConfig, lifecycle *LifecycleService, query *QueryService) (*FileQueue, error) {
+	if lifecycle == nil {
+		return nil, fmt.Errorf("LifecycleService is required")
+	}
+	if query == nil {
+		return nil, fmt.Errorf("QueryService is required")
 	}
 	if cfg.DBStore == nil {
 		return nil, fmt.Errorf("SQLiteStore is required for FileQueue")
@@ -144,7 +145,8 @@ func NewFileQueue(cfg *FileQueueConfig, ts *TransitionService) (*FileQueue, erro
 	q := &FileQueue{
 		maxRetries: cfg.MaxRetries,
 		dbStore:    cfg.DBStore,
-		ts:         ts,
+		lifecycle:  lifecycle,
+		query:      query,
 	}
 
 	return q, nil
@@ -155,30 +157,16 @@ func (q *FileQueue) SetEventLogger(logger func(jobID, eventType string, extra ma
 	q.eventLogger = logger
 }
 
-// logEvent logs a job event
 func (q *FileQueue) logEvent(jobID, eventType string, extra map[string]interface{}) {
 	if q.eventLogger != nil {
 		q.eventLogger(jobID, eventType, extra)
 	}
 }
 
-// GetNextJobID returns the next pending job ID directly from SQLite.
-func (q *FileQueue) GetNextJobID(ctx context.Context) (string, error) {
-	return q.ts.GetNextJobID(ctx)
-}
+// ── Mutation methods (LifecycleService) ──
 
-// DeleteJob removes a job from the queue.
-func (q *FileQueue) DeleteJob(ctx context.Context, jobID string) error {
-	if err := q.ts.DeleteJob(ctx, jobID); err != nil {
-		return err
-	}
-	q.logEvent(jobID, "deleted", nil)
-	return nil
-}
-
-// SubmitJob adds a new job to the queue.
 func (q *FileQueue) SubmitJob(ctx context.Context, jobID string, payload map[string]interface{}) error {
-	job, err := q.ts.SubmitJob(ctx, jobID, payload, q.maxRetries)
+	job, err := q.lifecycle.SubmitJob(ctx, jobID, payload, q.maxRetries)
 	if err != nil {
 		return err
 	}
@@ -189,9 +177,8 @@ func (q *FileQueue) SubmitJob(ctx context.Context, jobID string, payload map[str
 	return nil
 }
 
-// ClaimNextJob atomically claims the next pending job from SQLite.
 func (q *FileQueue) ClaimNextJob(ctx context.Context, workerID string, allowedJobTypes []string) (*Job, error) {
-	job, err := q.ts.ClaimNextJob(ctx, workerID, allowedJobTypes)
+	job, err := q.lifecycle.ClaimNextJob(ctx, workerID, allowedJobTypes)
 	if err != nil {
 		return nil, err
 	}
@@ -203,18 +190,16 @@ func (q *FileQueue) ClaimNextJob(ctx context.Context, workerID string, allowedJo
 	return job, nil
 }
 
-// CompleteJob marks a job as completed (idempotent).
 func (q *FileQueue) CompleteJob(ctx context.Context, jobID string) error {
-	if err := q.ts.CompleteJob(ctx, jobID); err != nil {
+	if err := q.lifecycle.CompleteJob(ctx, jobID); err != nil {
 		return err
 	}
 	q.logEvent(jobID, "completed", nil)
 	return nil
 }
 
-// FailJob marks a job as failed, optionally requeueing for retry.
 func (q *FileQueue) FailJob(ctx context.Context, jobID, errMsg, workerID string, requeue bool) error {
-	if err := q.ts.FailJob(ctx, jobID, errMsg, workerID, requeue, q.maxRetries); err != nil {
+	if err := q.lifecycle.FailJob(ctx, jobID, errMsg, workerID, requeue, q.maxRetries); err != nil {
 		return err
 	}
 	q.logEvent(jobID, "failed", map[string]interface{}{
@@ -224,9 +209,8 @@ func (q *FileQueue) FailJob(ctx context.Context, jobID, errMsg, workerID string,
 	return nil
 }
 
-// LeaseJob claims a job for a worker from SQLite.
 func (q *FileQueue) LeaseJob(ctx context.Context, jobID, workerID string) error {
-	if err := q.ts.LeaseJob(ctx, jobID, workerID); err != nil {
+	if err := q.lifecycle.LeaseJob(ctx, jobID, workerID); err != nil {
 		return err
 	}
 	q.logEvent(jobID, "claimed", map[string]interface{}{
@@ -235,73 +219,76 @@ func (q *FileQueue) LeaseJob(ctx context.Context, jobID, workerID string) error 
 	return nil
 }
 
-// RenewJobLease extends the current lease for an active job.
 func (q *FileQueue) RenewJobLease(ctx context.Context, jobID, workerID, leaseID string, leaseExpiry time.Time) error {
-	return q.ts.RenewLease(ctx, jobID, workerID, leaseID, leaseExpiry)
+	return q.lifecycle.RenewLease(ctx, jobID, workerID, leaseID, leaseExpiry)
 }
 
-// RequeueZombieJobs finds jobs with expired leases and requeues them.
 func (q *FileQueue) RequeueZombieJobs(ctx context.Context, timeout time.Duration) (int, error) {
-	return q.ts.RequeueZombieJobs(ctx, timeout)
+	return q.lifecycle.RequeueZombieJobs(ctx, timeout)
 }
 
-// Query methods — all go directly to SQLite.
+func (q *FileQueue) UpdateJobFields(ctx context.Context, jobID string, fields map[string]interface{}) error {
+	return q.lifecycle.UpdateJobFields(ctx, jobID, fields)
+}
+
+// ── Query methods (QueryService) ──
 
 func (q *FileQueue) GetJob(ctx context.Context, jobID string) (*Job, error) {
-	return q.ts.GetJob(ctx, jobID)
+	return q.query.GetJob(ctx, jobID)
 }
 
 func (q *FileQueue) GetJobPayload(ctx context.Context, jobID string) (map[string]interface{}, error) {
-	return q.ts.GetJobPayload(ctx, jobID)
+	return q.query.GetJobPayload(ctx, jobID)
 }
 
 func (q *FileQueue) GetJobAttempt(ctx context.Context, jobID string) (int, error) {
-	return q.ts.GetJobAttempt(ctx, jobID)
+	return q.query.GetJobAttempt(ctx, jobID)
 }
 
 func (q *FileQueue) GetJobsByStatus(ctx context.Context, status JobStatus) ([]*Job, error) {
-	return q.ts.GetJobsByStatus(ctx, status)
+	return q.query.GetJobsByStatus(ctx, status)
 }
 
 func (q *FileQueue) GetPendingJobs(ctx context.Context) ([]*Job, error) {
-	return q.ts.GetJobsByStatus(ctx, StatusPending)
+	return q.query.GetPendingJobs(ctx)
 }
 
 func (q *FileQueue) GetRunningJobs(ctx context.Context) ([]*Job, error) {
-	return q.ts.GetJobsByStatus(ctx, StatusRunning)
+	return q.query.GetRunningJobs(ctx)
 }
 
 func (q *FileQueue) GetAllJobs(ctx context.Context) (map[string]*Job, error) {
-	return q.ts.GetAllJobs(ctx)
+	return q.query.GetAllJobs(ctx)
 }
 
 func (q *FileQueue) Stats(ctx context.Context) (map[string]int64, error) {
-	return q.ts.Stats(ctx)
+	return q.query.Stats(ctx)
 }
 
 func (q *FileQueue) GetJobAsMap(ctx context.Context, jobID string) (map[string]interface{}, error) {
-	return q.ts.GetJobAsMap(ctx, jobID)
+	return q.query.GetJobAsMap(ctx, jobID)
 }
 
-// UpdateJobFields updates specific fields of a job.
-func (q *FileQueue) UpdateJobFields(ctx context.Context, jobID string, fields map[string]interface{}) error {
-	return q.ts.UpdateJobFields(ctx, jobID, fields)
+func (q *FileQueue) GetNextJobID(ctx context.Context) (string, error) {
+	return q.query.GetNextJobID(ctx)
 }
 
-// UpdateJobLogs appends logs to a job.
-func (q *FileQueue) UpdateJobLogs(ctx context.Context, jobID string, logs []JobLogEntry) error {
-	return q.ts.UpdateJobLogs(ctx, jobID, logs)
-}
-
-// CleanupOldJobs removes completed/error jobs older than specified age from SQLite.
-func (q *FileQueue) CleanupOldJobs(ctx context.Context, age time.Duration) (int, error) {
-	cutoff := time.Now().Add(-age)
-	count, err := q.dbStore.ArchiveOldJobs(cutoff)
-	if err != nil {
-		return 0, err
+func (q *FileQueue) DeleteJob(ctx context.Context, jobID string) error {
+	if err := q.query.DeleteJob(ctx, jobID); err != nil {
+		return err
 	}
-	log.Printf("[CLEANUP] Cleaned up %d old jobs from SQLite", count)
-	return int(count), nil
+	q.logEvent(jobID, "deleted", nil)
+	return nil
+}
+
+func (q *FileQueue) UpdateJobLogs(ctx context.Context, jobID string, logs []JobLogEntry) error {
+	return q.query.UpdateJobLogs(ctx, jobID, logs)
+}
+
+// ── Maintenance ──
+
+func (q *FileQueue) CleanupOldJobs(ctx context.Context, age time.Duration) (int, error) {
+	return q.query.CleanupOldJobs(ctx, age)
 }
 
 // GetDBStore returns the underlying SQLite store.
@@ -309,9 +296,12 @@ func (q *FileQueue) GetDBStore() *store.SQLiteStore {
 	return q.dbStore
 }
 
-// TransitionService returns the transition service for direct use.
-func (q *FileQueue) TransitionService() *TransitionService {
-	return q.ts
+// LifecycleService returns the lifecycle service for direct use.
+func (q *FileQueue) LifecycleService() *LifecycleService {
+	return q.lifecycle
 }
 
-
+// QueryService returns the query service for direct use.
+func (q *FileQueue) QueryService() *QueryService {
+	return q.query
+}

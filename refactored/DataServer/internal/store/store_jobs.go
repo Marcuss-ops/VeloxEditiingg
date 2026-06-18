@@ -78,8 +78,10 @@ func (s *SQLiteStore) ClaimNextPendingJob(workerID string, allowedJobTypes []str
 		if resultJSON.Valid && resultJSON.String != "" {
 			_ = json.Unmarshal([]byte(resultJSON.String), &resultMap)
 		}
+		resultMap["job_id"] = jobID.String
 		resultMap["status"] = "LEASED"
 		resultMap["assigned_to"] = workerID
+		resultMap["worker_name"] = workerID
 		resultMap["assigned_at"] = nowISO
 		resultMap["claimed_by"] = workerID
 		resultMap["claimed_at"] = nowISO
@@ -99,13 +101,19 @@ func (s *SQLiteStore) ClaimNextPendingJob(workerID string, allowedJobTypes []str
 
 		result, err := tx.Exec(
 			`UPDATE jobs
-			 SET status = ?, assigned_to = ?, retry_count = ?,
-			     result_json = ?, raw_json = ?, updated_at = ?, migrated_at = ?
+			 SET status = ?, assigned_to = ?, worker_name = ?, retry_count = ?, attempt = ?,
+			     result_json = ?, raw_json = ?, updated_at = ?, migrated_at = ?,
+			     assigned_at = ?,
+			     lease_id = ?, lease_expiry = ?,
+			     claimed_by = ?, claimed_at = ?
 			 WHERE job_id = ?
 			   AND UPPER(status) = 'PENDING'
 			   AND COALESCE(assigned_to, '') = ''`,
-			"LEASED", workerID, newRetry,
+			"LEASED", workerID, workerID, newRetry, newRetry,
 			string(updatedResult), string(updatedResult), nowISO, nowISO,
+			nowISO,
+			leaseID, leaseExpiry,
+			workerID, nowISO,
 			jobID.String,
 		)
 		if err != nil {

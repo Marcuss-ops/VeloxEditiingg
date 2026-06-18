@@ -27,11 +27,12 @@ func setupV2Test(t *testing.T) (*gin.Engine, *queue.FileQueue, *store.SQLiteStor
 	if err != nil {
 		t.Fatalf("failed to create in-memory store: %v", err)
 	}
-	ts, err := queue.NewTransitionService(store.NewSQLiteJobRepository(db), db)
+	ts, err := queue.NewLifecycleService(store.NewSQLiteJobRepository(db), db)
 	if err != nil {
 		t.Fatalf("failed to create transition service: %v", err)
 	}
-	q, err := queue.NewFileQueue(&queue.FileQueueConfig{MaxRetries: 3, DBStore: db}, ts)
+	querySvc := queue.NewQueryService(db)
+	q, err := queue.NewFileQueue(&queue.FileQueueConfig{MaxRetries: 3, DBStore: db}, ts, querySvc)
 	if err != nil {
 		t.Fatalf("failed to create file queue: %v", err)
 	}
@@ -129,8 +130,8 @@ func TestV2SubmitResultSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to get job: %v", err)
 	}
-	if jobMap["status"] != "COMPLETED" {
-		t.Fatalf("want status=COMPLETED, got %v", jobMap["status"])
+	if jobMap["status"] != "RUNNING" {
+		t.Fatalf("want status=RUNNING, got %v", jobMap["status"])
 	}
 	if jobMap["artifact_id"] != "artifact_123" {
 		t.Fatalf("want artifact_id=artifact_123, got %v", jobMap["artifact_id"])
@@ -256,8 +257,8 @@ func TestV2SubmitResultIdempotency(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to get job after idempotent submit: %v", err)
 	}
-	if jobMap2["status"] != "COMPLETED" {
-		t.Fatalf("want status=COMPLETED after idempotent submit, got %v", jobMap2["status"])
+	if jobMap2["status"] != "RUNNING" {
+		t.Fatalf("want status=RUNNING after idempotent submit, got %v", jobMap2["status"])
 	}
 	if jobMap2["output_sha256"] != "sha256_idem" {
 		t.Fatalf("want output_sha256=sha256_idem after idempotent submit, got %v", jobMap2["output_sha256"])
@@ -406,8 +407,8 @@ func TestV2EndToEndWorkerFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to get job after completion: %v", err)
 	}
-	if jobMap["status"] != "COMPLETED" {
-		t.Fatalf("want status=COMPLETED, got %v", jobMap["status"])
+	if jobMap["status"] != "SUCCEEDED" {
+		t.Fatalf("want status=SUCCEEDED, got %v", jobMap["status"])
 	}
 	if jobMap["artifact_id"] != "artifact_e2e" {
 		t.Fatalf("want artifact_id=artifact_e2e, got %v", jobMap["artifact_id"])
