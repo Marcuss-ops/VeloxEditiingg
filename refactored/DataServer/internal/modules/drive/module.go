@@ -23,11 +23,11 @@ type Module struct {
 }
 
 // New creates a new Drive module.
-func New(cfg *config.Config, sqliteStore *store.SQLiteStore) *Module {
+func New(cfg *config.Config) *Module {
 	m := &Module{
-		cfg:         cfg,
-		sqliteStore: sqliteStore,
+		cfg: cfg,
 	}
+	_ = m.init()
 	return m
 }
 
@@ -73,18 +73,8 @@ func (m *Module) init() error {
 		return nil
 	}
 
-	// Defensive guard: Drive is an optional integration. If credentials
-	// are absent, don't construct handlers — RegisterRoutes will skip them.
-	// This avoids NewDriveHandlers validating empty config and panicking.
-	if strings.TrimSpace(m.cfg.Drive.ClientID) == "" || strings.TrimSpace(m.cfg.Drive.ClientSecret) == "" {
-		log.Printf("[DRIVE] credentials missing; Drive module will run in disabled mode (no handlers, no routes)")
-		return nil
-	}
-
-	// Initialize Drive service. The cfg.Drive sub-struct is the canonical
-	// source post-PR0a refactor; legacy cfg.DriveClientID/Secret accesses
-	// were retired along with the flat Config field aliases.
-	if m.service == nil {
+	// Initialize Drive service
+	if m.service == nil && m.cfg.DriveClientID != "" && m.cfg.DriveClientSecret != "" {
 		svc, err := integrationsDrive.NewService(&integrationsDrive.ServiceConfig{
 			ClientID:     m.cfg.Drive.ClientID,
 			ClientSecret: m.cfg.Drive.ClientSecret,
@@ -108,11 +98,11 @@ func (m *Module) init() error {
 		return nil
 	}
 	handlers, err := driveHandlers.NewDriveHandlers(&integrationsDrive.ServiceConfig{
-		ClientID:     m.cfg.Drive.ClientID,
-		ClientSecret: m.cfg.Drive.ClientSecret,
-		RedirectURI:  m.cfg.Drive.RedirectURI,
-		TokensDir:    m.cfg.Drive.TokensDir,
-	}, m.service, m.sqliteStore)
+		ClientID:     m.cfg.DriveClientID,
+		ClientSecret: m.cfg.DriveClientSecret,
+		RedirectURI:  m.cfg.DriveRedirectURI,
+		TokensDir:    m.cfg.DriveTokensDir,
+	}, m.service)
 	if err != nil {
 		return err
 	}

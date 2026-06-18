@@ -237,18 +237,16 @@ func runServer(cfg *config.Config) error {
 	ytMod := youtube.New(cfg, deps.paths.dataDir, deps.sqliteStore)
 	deps.youtubeModule = ytMod
 	registry.Register(ytMod)
-	driveMod := drive.New(cfg, deps.sqliteStore)
+	driveMod := drive.New(cfg)
 	deps.driveModule = driveMod
-	if driveMod != nil {
-		registry.Register(driveMod)
-	}
+	registry.Register(driveMod)
 	maxVoiceoverBytes := int64(256 * 1024 * 1024)
 	if raw := strings.TrimSpace(os.Getenv("VELOX_MAX_VOICEOVER_BYTES")); raw != "" {
 		if parsed, err := strconv.ParseInt(raw, 10, 64); err == nil && parsed > 0 {
 			maxVoiceoverBytes = parsed
 		}
 	}
-	voiceoverBridge := voiceoverassets.NewService(cfg.Runtime.DataDir, []string{cfg.Runtime.DataDir}, maxVoiceoverBytes, driveMod.Service())
+	voiceoverBridge := voiceoverassets.NewService(cfg.DataDir, []string{cfg.DataDir}, maxVoiceoverBytes, driveMod.Service())
 	enqueue.SetVoiceoverAssetService(voiceoverBridge)
 	ansibleMod := ansible.New(cfg, deps.paths.dataDir, auth, deps.sqliteStore)
 	deps.ansibleModule = ansibleMod
