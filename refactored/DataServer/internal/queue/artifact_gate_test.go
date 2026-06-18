@@ -10,9 +10,10 @@ import (
 	"velox-server/internal/store"
 )
 
-// testJobRepo is a minimal in-memory JobRepository for artifact gate tests.
+// testArtifactGateRepo is a minimal in-memory JobRepository for artifact gate tests.
 type testArtifactGateRepo struct {
-	jobs map[string]*store.Job
+	jobs   map[string]*store.Job
+	events []string
 }
 
 func newTestArtifactGateRepo() *testArtifactGateRepo {
@@ -36,7 +37,7 @@ func (r *testArtifactGateRepo) GetJob(_ context.Context, jobID string) (*store.J
 func (r *testArtifactGateRepo) Transition(_ context.Context, p store.TransitionParams) error {
 	j, ok := r.jobs[p.JobID]
 	if !ok {
-		return store.ErrJobNotFound
+		return errTestJobNotFound
 	}
 	if j.Status != p.ExpectedStatus {
 		return store.ErrTransitionConflict
@@ -80,7 +81,28 @@ func (r *testArtifactGateRepo) UpdateJobResult(_ context.Context, _ string, _ []
 	return nil
 }
 
-// testEventStore is a minimal EventStore for artifact gate tests.
+func (r *testArtifactGateRepo) RecordRenderFinished(_ context.Context, cmd store.RecordRenderFinishedCommand) error {
+	j, ok := r.jobs[cmd.JobID]
+	if !ok {
+		return errTestJobNotFound
+	}
+	if j.Status != store.JobStatusRunning {
+		return fmt.Errorf("cannot record render finished: job %s is in status %s, expected RUNNING", cmd.JobID, j.Status)
+	}
+	if j.AssignedTo != cmd.WorkerID {
+		return fmt.Errorf("worker %s does not own job %s (assigned to %s)", cmd.WorkerID, cmd.JobID, j.AssignedTo)
+	}
+	if cmd.LeaseID != "" && j.LeaseID != cmd.LeaseID {
+		return fmt.Errorf("lease mismatch for job %s: expected %s, got %s", cmd.JobID, j.LeaseID, cmd.LeaseID)
+	}
+	if cmd.ExpectedRevision != 0 && j.Revision != cmd.ExpectedRevision {
+		return fmt.Errorf("revision mismatch for job %s: expected %d, got %d", cmd.JobID, cmd.ExpectedRevision, j.Revision)
+	}
+	r.events = append(r.events, "render_finished")
+	return nil
+}
+
+// testArtifactGateEventStore is a minimal EventStore for artifact gate tests.
 type testArtifactGateEventStore struct {
 	events []string
 }
@@ -118,7 +140,7 @@ func (s *testArtifactGateEventStore) TransitionJobStatus(_ context.Context, _, _
 func (s *testArtifactGateEventStore) UpdateArtifactStatus(_ context.Context, _, _ string) error {
 	return nil
 }
-func (s *testArtifactGateEventStore) CompleteJobTx(_ context.Context, _ string, _ int64, _ string) error {
+func (s *testArtifactGateEventStore) CompleteJobTx(_ context.Context, _ string, _ int64, _ string, _ string, _ int) error {
 	return nil
 }
 
@@ -141,30 +163,32 @@ func runningJob(jobID, workerID, leaseID string) *store.Job {
 	}
 }
 
-// Test 1: success senza artifact — job deve restare RENDER_FINISHED, non SUCCEEDED
-func TestArtifactGate_SuccessWithoutArtifact_StaysRenderFinished(t *testing.T) {
-	lc, repo, es := newTestLifecycleForArtifactGate()
+// Test 1: RecordRenderFinished does not change job status — job stays RUNNING
+func TestArtifactGate_RenderFinished_StaysRunning(t *testing.T) {
+	lc, repo, _ := newTestLifecycleForArtifactGate()
 	ctx := context.Background()
 
 	repo.insertJob(runningJob("job-1", "worker-A", "lease-1"))
 
-	if err := lc.RecordRenderFinished(ctx, "job-1", "worker-A", "lease-1", 0, 1); err != nil {
+	cmd := store.RecordRenderFinishedCommand{
+		JobID:            "job-1",
+		WorkerID:         "worker-A",
+		LeaseID:          "lease-1",
+		AttemptNumber:    0,
+		ExpectedRevision: 1,
+	}
+	if err := lc.RecordRenderFinished(ctx, cmd); err != nil {
 		t.Fatalf("RecordRenderFinished: %v", err)
 	}
 
 	job, _ := repo.GetJob(ctx, "job-1")
-	if job.Status != store.JobStatusRenderFinished {
-		t.Fatalf("expected RENDER_FINISHED, got %s", job.Status)
-	}
-
-	// Attempting CompleteJob should fail — RUNNING→SUCCEEDED is no longer valid
-	if err := lc.CompleteJob(ctx, "job-1"); err == nil {
-		t.Fatal("CompleteJob should fail from RENDER_FINISHED — artifact gate blocks direct completion")
+	if job.Status != store.JobStatusRunning {
+		t.Fatalf("expected job to stay RUNNING, got %s", job.Status)
 	}
 
 	// Verify render_finished event was logged
 	found := false
-	for _, e := range es.events {
+	for _, e := range repo.events {
 		if e == "render_finished" {
 			found = true
 			break
@@ -173,17 +197,31 @@ func TestArtifactGate_SuccessWithoutArtifact_StaysRenderFinished(t *testing.T) {
 	if !found {
 		t.Fatal("expected render_finished event to be logged")
 	}
+
+	// CompleteJob should still work from RUNNING
+	if err := lc.CompleteJob(ctx, "job-1"); err != nil {
+		t.Fatalf("CompleteJob should succeed from RUNNING: %v", err)
+	}
+	if job.Status != store.JobStatusSucceeded {
+		t.Fatalf("expected SUCCEEDED after CompleteJob, got %s", job.Status)
+	}
 }
 
-// Test 2: artifact con lease errata — deve essere rifiutato
-func TestArtifactGate_ArtifactWithWrongLease_Rejected(t *testing.T) {
+// Test 2: wrong lease — must be rejected
+func TestArtifactGate_RenderFinished_WrongLease_Rejected(t *testing.T) {
 	lc, repo, _ := newTestLifecycleForArtifactGate()
 	ctx := context.Background()
 
 	repo.insertJob(runningJob("job-2", "worker-A", "correct-lease"))
 
-	// Try with wrong lease
-	err := lc.RecordRenderFinished(ctx, "job-2", "worker-A", "wrong-lease", 0, 1)
+	cmd := store.RecordRenderFinishedCommand{
+		JobID:            "job-2",
+		WorkerID:         "worker-A",
+		LeaseID:          "wrong-lease",
+		AttemptNumber:    0,
+		ExpectedRevision: 1,
+	}
+	err := lc.RecordRenderFinished(ctx, cmd)
 	if err == nil {
 		t.Fatal("RecordRenderFinished should fail with wrong lease")
 	}
@@ -191,22 +229,27 @@ func TestArtifactGate_ArtifactWithWrongLease_Rejected(t *testing.T) {
 		t.Fatalf("expected lease mismatch error, got: %v", err)
 	}
 
-	// Job should still be RUNNING
 	job, _ := repo.GetJob(ctx, "job-2")
 	if job.Status != store.JobStatusRunning {
 		t.Fatalf("expected RUNNING after rejected attempt, got %s", job.Status)
 	}
 }
 
-// Test 3: artifact di un altro worker — deve essere rifiutato
-func TestArtifactGate_ArtifactFromWrongWorker_Rejected(t *testing.T) {
+// Test 3: wrong worker — must be rejected
+func TestArtifactGate_RenderFinished_WrongWorker_Rejected(t *testing.T) {
 	lc, repo, _ := newTestLifecycleForArtifactGate()
 	ctx := context.Background()
 
 	repo.insertJob(runningJob("job-3", "worker-A", "lease-3"))
 
-	// Try from different worker
-	err := lc.RecordRenderFinished(ctx, "job-3", "worker-B", "lease-3", 0, 1)
+	cmd := store.RecordRenderFinishedCommand{
+		JobID:            "job-3",
+		WorkerID:         "worker-B",
+		LeaseID:          "lease-3",
+		AttemptNumber:    0,
+		ExpectedRevision: 1,
+	}
+	err := lc.RecordRenderFinished(ctx, cmd)
 	if err == nil {
 		t.Fatal("RecordRenderFinished should fail from wrong worker")
 	}
@@ -220,55 +263,72 @@ func TestArtifactGate_ArtifactFromWrongWorker_Rejected(t *testing.T) {
 	}
 }
 
-// Test 4: doppio JobResult — deve essere idempotente
-func TestArtifactGate_DoubleJobResult_Idempotent(t *testing.T) {
+// Test 4: non-RUNNING job — must be rejected
+func TestArtifactGate_RenderFinished_NonRunning_Rejected(t *testing.T) {
 	lc, repo, _ := newTestLifecycleForArtifactGate()
 	ctx := context.Background()
 
-	repo.insertJob(runningJob("job-4", "worker-A", "lease-4"))
+	job := runningJob("job-4", "worker-A", "lease-4")
+	job.Status = store.JobStatusSucceeded
+	repo.insertJob(job)
 
-	// First success
-	if err := lc.RecordRenderFinished(ctx, "job-4", "worker-A", "lease-4", 0, 1); err != nil {
-		t.Fatalf("first RecordRenderFinished: %v", err)
+	cmd := store.RecordRenderFinishedCommand{
+		JobID:            "job-4",
+		WorkerID:         "worker-A",
+		LeaseID:          "lease-4",
+		AttemptNumber:    0,
+		ExpectedRevision: 1,
 	}
-
-	// Second success — should be idempotent
-	if err := lc.RecordRenderFinished(ctx, "job-4", "worker-A", "lease-4", 0, 0); err != nil {
-		t.Fatalf("second RecordRenderFinished should be idempotent: %v", err)
+	err := lc.RecordRenderFinished(ctx, cmd)
+	if err == nil {
+		t.Fatal("RecordRenderFinished should fail for non-RUNNING job")
 	}
-
-	job, _ := repo.GetJob(ctx, "job-4")
-	if job.Status != store.JobStatusRenderFinished {
-		t.Fatalf("expected RENDER_FINISHED after double call, got %s", job.Status)
+	if !contains(err.Error(), "expected RUNNING") {
+		t.Fatalf("expected RUNNING error, got: %v", err)
 	}
 }
 
-// Test 5: artifact duplicato — double artifact registration
-func TestArtifactGate_DuplicateArtifact_HandledGracefully(t *testing.T) {
-	lc, repo, es := newTestLifecycleForArtifactGate()
+// Test 5: duplicate RecordRenderFinished — idempotent event logging
+func TestArtifactGate_RenderFinished_Duplicate_Idempotent(t *testing.T) {
+	lc, repo, _ := newTestLifecycleForArtifactGate()
 	ctx := context.Background()
 
 	repo.insertJob(runningJob("job-5", "worker-A", "lease-5"))
 
-	// First success
-	if err := lc.RecordRenderFinished(ctx, "job-5", "worker-A", "lease-5", 0, 1); err != nil {
-		t.Fatalf("RecordRenderFinished: %v", err)
+	cmd := store.RecordRenderFinishedCommand{
+		JobID:            "job-5",
+		WorkerID:         "worker-A",
+		LeaseID:          "lease-5",
+		AttemptNumber:    0,
+		ExpectedRevision: 1,
 	}
 
-	// Second success from same worker — idempotent
-	if err := lc.RecordRenderFinished(ctx, "job-5", "worker-A", "lease-5", 0, 0); err != nil {
-		t.Fatalf("second RecordRenderFinished: %v", err)
+	// First call
+	if err := lc.RecordRenderFinished(ctx, cmd); err != nil {
+		t.Fatalf("first RecordRenderFinished: %v", err)
 	}
 
-	// Verify only one render_finished event
+	// Second call — should succeed (idempotent event)
+	cmd.AttemptNumber = 1
+	if err := lc.RecordRenderFinished(ctx, cmd); err != nil {
+		t.Fatalf("second RecordRenderFinished should be idempotent: %v", err)
+	}
+
+	// Job still RUNNING
+	job, _ := repo.GetJob(ctx, "job-5")
+	if job.Status != store.JobStatusRunning {
+		t.Fatalf("expected RUNNING after duplicate call, got %s", job.Status)
+	}
+
+	// Two render_finished events logged
 	count := 0
-	for _, e := range es.events {
+	for _, e := range repo.events {
 		if e == "render_finished" {
 			count++
 		}
 	}
-	if count != 1 {
-		t.Fatalf("expected exactly 1 render_finished event, got %d", count)
+	if count != 2 {
+		t.Fatalf("expected 2 render_finished events, got %d", count)
 	}
 }
 

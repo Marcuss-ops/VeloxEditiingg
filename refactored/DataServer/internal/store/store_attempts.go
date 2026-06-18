@@ -164,43 +164,31 @@ func (s *SQLiteStore) FinalizeArtifact(id, status, storageURL string) error {
 	return err
 }
 
-// FinalizeAndCompleteJob atomically transitions an artifact to READY and
-// its parent job to SUCCEEDED in a single transaction. This is the
-// artifact success gate — the only path to SUCCEEDED for gRPC-submitted jobs.
-func (s *SQLiteStore) FinalizeAndCompleteJob(artifactID, artifactStatus, jobID string) error {
-	tx, err := s.db.Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-
-	now := time.Now().UTC().Format(time.RFC3339)
-
-	// Update artifact status
-	if _, err := tx.Exec(
-		`UPDATE artifacts SET status=?, verified_at=? WHERE id=?`,
-		artifactStatus, now, artifactID); err != nil {
-		return fmt.Errorf("artifact status update: %w", err)
-	}
-
-	// Transition job to SUCCEEDED (only if not already terminal)
-	if _, err := tx.Exec(
-		`UPDATE jobs SET status='SUCCEEDED', completed_at=?, updated_at=?
-		 WHERE job_id=? AND UPPER(COALESCE(status,'')) NOT IN ('SUCCEEDED','COMPLETED','CANCELLED','FAILED')`,
-		now, now, jobID); err != nil {
-		return fmt.Errorf("job status update: %w", err)
-	}
-
-	// Clear lease fields on success
-	if _, err := tx.Exec(
-		`UPDATE jobs SET lease_id='', lease_expiry=NULL, last_error='', error_message=''
-		 WHERE job_id=? AND status='SUCCEEDED'`,
-		jobID); err != nil {
-		return fmt.Errorf("job lease cleanup: %w", err)
-	}
-
-	return tx.Commit()
-}
+// FinalizeAndCompleteJob — DELETED in PR-2 (full artifact-success-gate closure).
+//
+// The legacy implementation was the closed-form fallback that trusted the
+// worker's reported artifact_path / artifact_size / status and skipped the
+// STAGING → VERIFYING → READY pipeline, the per-attempt closure, the
+// outbox_events emit, the job_deliveries creation, and the artifact
+// ownership / status / CAS guards. A misbehaving worker could ship a
+// SUCCEEDED job with an artifact that did not exist or pointed outside
+// the storage namespace.
+//
+// The new flow lives in grpcserver.handleArtifactUploaded and composes
+// the existing authoritative services:
+//
+//	1. Strict (worker, lease, revision, attempt, status) CAS against the DB.
+//	2. InsertArtifact (STAGING).
+//	3. ArtifactFinalizationService.FinalizeRender:
+//	   STAGING → VERIFYING (Tx1) → file-sha256 / size / mime verify →
+//	   VERIFYING → READY (Tx2 with ARTIFACT_READY outbox event).
+//	4. InsertJobDeliveriesForArtifact (PENDING job_deliveries per
+//	   delivery_destinations).
+//	5. CompleteJobTx (jobs.status → COMPLETED, latest job_attempts
+//	   closed, JOB_SUCCEEDED outbox) — atomic and idempotent.
+//
+// Remove this dead-code block once no callers remain. As of PR-2, the only
+// caller was grpcserver.handleArtifactUploaded which has been rewritten.
 
 func (s *SQLiteStore) GetArtifact(id string) (*Artifact, error) {
 	row := s.db.QueryRow(

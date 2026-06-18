@@ -37,7 +37,6 @@ import (
 	"velox-server/internal/outbox"
 	"velox-server/internal/queue"
 	"velox-server/internal/store"
-	jobservice "velox-server/internal/services/jobs"
 	workersreg "velox-server/internal/workers"
 	"velox-server/internal/workflow"
 	voiceoverassets "velox-server/internal/assets"
@@ -350,12 +349,17 @@ func runServer(cfg *config.Config) error {
 			transitionSvc := queue.NewTransitionService(lcSvc)
 			cmdMgr := workersreg.NewCommandManager(deps.sqliteStore)
 			tokenMgr := workersreg.NewTokenManager(deps.sqliteStore)
+			// PR-2 (full artifact gate closure): the gRPC artifact handler
+			// regressed to trusting the worker, so we wire the authoritative
+			// STAGING → VERIFYING → READY pipeline. nil is rejected at
+			// handleArtifactUploaded time as a defense-in-depth check.
+			artifactSvc := queue.NewArtifactFinalizationService(deps.sqliteStore)
 
 			grpcHandlerConfig := &grpcserver.HandlerConfig{
 				PushMode: cfg.Server.GRPCPushMode,
 			}
 			grpcHandler := grpcserver.NewHandler(
-				deps.reg, cmdMgr, tokenMgr, lcSvc, transitionSvc, deps.sqliteStore, grpcHandlerConfig,
+				deps.reg, cmdMgr, tokenMgr, lcSvc, transitionSvc, artifactSvc, deps.sqliteStore, grpcHandlerConfig,
 			)
 
 			grpcServer, lis, err := grpcserver.StartGRPCServer(
@@ -477,23 +481,12 @@ func runServer(cfg *config.Config) error {
 	return nil
 }
 
-type jobRouteState struct {
-	jobSvc *jobservice.Service
-}
-
 func runDuadDBBootCheck(deps *serverDeps, cfg *config.Config) {
 	log.Printf("[BOOTSTRAP] NOTE: dual-DB boot check is a no-op stub (PR9 cutover)")
 }
 
 func reconcileStaging(sqliteStore *store.SQLiteStore, blobStore store.BlobStore) (int, error) {
 	return 0, nil
-}
-
-func buildJobRoutes(cfg *config.Config, deps *serverDeps) *jobRouteState {
-	if deps == nil {
-		return &jobRouteState{}
-	}
-	return &jobRouteState{jobSvc: jobservice.NewService(cfg, deps.fileQ, nil, nil, nil)}
 }
 
 func runDataLayerAudit(cfg *config.Config) error {

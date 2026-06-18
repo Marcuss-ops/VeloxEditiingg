@@ -535,6 +535,103 @@ func (r *SQLiteJobRepository) CompleteJob(ctx context.Context, params CompleteJo
 	return nil
 }
 
+// RecordRenderFinished atomically verifies the worker-identity tuple against
+// the jobs row, marks the attempt as RENDER_FINISHED, and inserts a
+// RENDER_FINISHED event — all inside a single transaction. The job stays
+// RUNNING (no status transition). Idempotent: if the attempt is already
+// RENDER_FINISHED with the same lease_id and worker_id, returns nil.
+func (r *SQLiteJobRepository) RecordRenderFinished(ctx context.Context, cmd RecordRenderFinishedCommand) error {
+	if r.store == nil || r.store.db == nil {
+		return fmt.Errorf("job repository: store not initialized")
+	}
+	if cmd.JobID == "" {
+		return fmt.Errorf("job repository: empty jobID in RecordRenderFinished")
+	}
+	if cmd.WorkerID == "" {
+		return fmt.Errorf("job repository: empty workerID in RecordRenderFinished")
+	}
+
+	now := cmd.FinishedAt
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	nowStr := now.UTC().Format(time.RFC3339)
+
+	tx, err := r.store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("record render finished begin: %w", err)
+	}
+	defer tx.Rollback()
+
+	// 1. Read the current job identity tuple.
+	var status, assignedTo, leaseID string
+	var revision int
+	err = tx.QueryRowContext(ctx,
+		`SELECT COALESCE(status, ''), COALESCE(assigned_to, ''),
+		        COALESCE(lease_id, ''), COALESCE(revision, 0)
+		 FROM jobs WHERE job_id = ?`, cmd.JobID,
+	).Scan(&status, &assignedTo, &leaseID, &revision)
+	if err == sql.ErrNoRows {
+		return fmt.Errorf("record render finished: job %s not found", cmd.JobID)
+	}
+	if err != nil {
+		return fmt.Errorf("record render finished query: %w", err)
+	}
+
+	// 2. Verify the identity tuple.
+	if status != string(JobStatusRunning) {
+		return fmt.Errorf("record render finished: job %s is in status %s, expected RUNNING", cmd.JobID, status)
+	}
+	if assignedTo != cmd.WorkerID {
+		return fmt.Errorf("record render finished: worker %s does not own job %s (assigned to %s)", cmd.WorkerID, cmd.JobID, assignedTo)
+	}
+	if cmd.LeaseID != "" && leaseID != cmd.LeaseID {
+		return fmt.Errorf("record render finished: lease mismatch for job %s: expected %s, got %s", cmd.JobID, leaseID, cmd.LeaseID)
+	}
+	if cmd.ExpectedRevision != 0 && revision != cmd.ExpectedRevision {
+		return fmt.Errorf("record render finished: revision mismatch for job %s: expected %d, got %d", cmd.JobID, cmd.ExpectedRevision, revision)
+	}
+
+	// 3. Update the attempt to RENDER_FINISHED. Accept attempts in
+	//    RUNNING or PROCESSING state; idempotent if already RENDER_FINISHED
+	//    with the same lease and worker.
+	res, err := tx.ExecContext(ctx,
+		`UPDATE job_attempts
+		 SET status = 'RENDER_FINISHED',
+		     finished_at = ?
+		 WHERE job_id = ?
+		   AND attempt_number = ?
+		   AND worker_id = ?
+		   AND lease_id = ?
+		   AND status IN ('RUNNING', 'PROCESSING', 'RENDER_FINISHED')`,
+		nowStr, cmd.JobID, cmd.AttemptNumber, cmd.WorkerID, cmd.LeaseID,
+	)
+	if err != nil {
+		return fmt.Errorf("record render finished update attempt: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("record render finished attempt rows: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("record render finished: %w for job %s attempt %d (wrong worker, lease, or attempt not in RUNNING/PROCESSING)",
+			ErrRecordRenderFinishedNotFound, cmd.JobID, cmd.AttemptNumber)
+	}
+
+	// 4. Insert RENDER_FINISHED event (deduplicated by caller already,
+	//    but we insert unconditionally for audit trail).
+	_, err = tx.ExecContext(ctx,
+		`INSERT INTO job_events (job_id, event_type, created_at)
+		 VALUES (?, 'RENDER_FINISHED', ?)`,
+		cmd.JobID, nowStr,
+	)
+	if err != nil {
+		return fmt.Errorf("record render finished insert event: %w", err)
+	}
+
+	return tx.Commit()
+}
+
 // Compile-time interface check.
 var _ JobRepository = (*SQLiteJobRepository)(nil)
 

@@ -46,7 +46,9 @@ jobs:
           OUT_DIR="dist/$VERSION"
           rm -rf "$OUT_DIR"
           mkdir -p "$OUT_DIR"
-          cp -R web/build/. "$OUT_DIR/"
+          # Vite 7 emits to web/dist/ (not web/build/). Anything still under
+          # web/build/ is a stale SvelteKit-era artifact.
+          cp -R web/dist/. "$OUT_DIR/"
 
           TARBALL_NAME="frontend-${VERSION}.tar.gz"
           TARBALL="dist/${TARBALL_NAME}"

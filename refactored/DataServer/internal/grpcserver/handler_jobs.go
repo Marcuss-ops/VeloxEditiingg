@@ -17,12 +17,12 @@ import (
 
 // handleJobResult processes typed JobResult via gRPC stream.
 //
-// Artifact success gate (PR 1): a worker reporting status=success no longer
-// transitions the job to SUCCEEDED. Instead, it transitions to RENDER_FINISHED,
-// which signals that the worker has completed its part. The actual SUCCEEDED
-// transition is gated on the artifact service verifying and registering the
-// artifact (see handleArtifactUploaded).
+// Artifact success gate (PR 1): a worker reporting status=success does NOT
+// transition the job to SUCCEEDED. RecordRenderFinished logs the event while
+// the job stays RUNNING. The actual SUCCEEDED transition is gated on the
+// artifact service verifying and registering the artifact (see handleArtifactUploaded).
 func (h *Handler) handleJobResult(workerID string, jr *pb.JobResult) {
+	ctx := context.Background()
 	jobID := jr.GetJobId()
 	status := jr.GetStatus()
 	errMsg := jr.GetError()
@@ -37,12 +37,35 @@ func (h *Handler) handleJobResult(workerID string, jr *pb.JobResult) {
 	}
 
 	if status == "success" {
-		// Artifact success gate: transition to RENDER_FINISHED, not SUCCEEDED.
-		// SUCCEEDED is only reachable via the artifact service after verification.
-		if err := h.lifecycleSvc.RecordRenderFinished(
-			context.Background(), jobID, workerID,
-			jr.GetLeaseId(), int(jr.GetAttempt()), 0,
-		); err != nil {
+		// Reject if lease_id or attempt is missing — these are required
+		// for the identity CAS.
+		leaseID := jr.GetLeaseId()
+		attempt := int(jr.GetAttempt())
+		if leaseID == "" {
+			log.Printf("[GRPC] JobResult success from worker %s for job %s refused — missing lease_id", workerID, jobID)
+			return
+		}
+		if attempt == 0 {
+			log.Printf("[GRPC] JobResult success from worker %s for job %s refused — missing attempt", workerID, jobID)
+			return
+		}
+
+		// Look up revision from the DB (protobuf does not carry it).
+		currentRev, _, revErr := h.lookupJobCASFields(jobID)
+		if revErr != nil {
+			log.Printf("[GRPC] JobResult success from worker %s for job %s — cannot read revision: %v", workerID, jobID, revErr)
+			return
+		}
+
+		cmd := store.RecordRenderFinishedCommand{
+			JobID:            jobID,
+			WorkerID:         workerID,
+			LeaseID:          leaseID,
+			AttemptNumber:    attempt,
+			ExpectedRevision: currentRev,
+			FinishedAt:       time.Now().UTC(),
+		}
+		if err := h.lifecycleSvc.RecordRenderFinished(ctx, cmd); err != nil {
 			log.Printf("[GRPC] RecordRenderFinished failed for %s: %v", jobID, err)
 			return
 		}

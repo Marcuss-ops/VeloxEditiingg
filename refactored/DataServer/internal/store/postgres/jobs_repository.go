@@ -126,6 +126,11 @@ func (r *JobRepository) CompleteJob(ctx context.Context, params store.CompleteJo
 	return store.ErrNotImplemented
 }
 
+func (r *JobRepository) RecordRenderFinished(ctx context.Context, cmd store.RecordRenderFinishedCommand) error {
+	_, _ = ctx, cmd
+	return store.ErrNotImplemented
+}
+
 // Compile-time guard — keeps PostgreSQL implementation honest with the
 // SQLite-side contract. PR-1's README promised this; PR-2 delivers it.
 var _ store.JobRepository = (*JobRepository)(nil)

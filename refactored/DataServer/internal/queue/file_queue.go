@@ -21,15 +21,13 @@ import (
 type JobStatus string
 
 const (
-	StatusPending        JobStatus = "PENDING"
-	StatusLeased         JobStatus = "LEASED"
-	StatusRunning        JobStatus = "RUNNING"
-	StatusRenderFinished JobStatus = "RENDER_FINISHED"
-	StatusAwaitingArtifact JobStatus = "AWAITING_ARTIFACT"
-	StatusRetryWait      JobStatus = "RETRY_WAIT"
-	StatusSucceeded      JobStatus = "SUCCEEDED"
-	StatusFailed         JobStatus = "FAILED"
-	StatusCancelled      JobStatus = "CANCELLED"
+	StatusPending   JobStatus = "PENDING"
+	StatusLeased    JobStatus = "LEASED"
+	StatusRunning   JobStatus = "RUNNING"
+	StatusRetryWait JobStatus = "RETRY_WAIT"
+	StatusSucceeded JobStatus = "SUCCEEDED"
+	StatusFailed    JobStatus = "FAILED"
+	StatusCancelled JobStatus = "CANCELLED"
 )
 
 // Job represents a job in the queue (compatible with Python schema)
@@ -229,6 +227,7 @@ func (q *FileQueue) RequeueZombieJobs(ctx context.Context, timeout time.Duration
 	return q.lifecycle.RequeueZombieJobs(ctx, timeout)
 }
 
+// Deprecated: Use targeted lifecycle methods instead.
 func (q *FileQueue) UpdateJobFields(ctx context.Context, jobID string, fields map[string]interface{}) error {
 	return q.lifecycle.UpdateJobFields(ctx, jobID, fields)
 }

@@ -20,15 +20,13 @@ import (
 type JobStatus string
 
 const (
-	JobStatusPending        JobStatus = "PENDING"
-	JobStatusLeased         JobStatus = "LEASED"
-	JobStatusRunning        JobStatus = "RUNNING"
-	JobStatusRenderFinished JobStatus = "RENDER_FINISHED"
-	JobStatusAwaitingArtifact JobStatus = "AWAITING_ARTIFACT"
-	JobStatusRetryWait      JobStatus = "RETRY_WAIT"
-	JobStatusSucceeded      JobStatus = "SUCCEEDED"
-	JobStatusFailed         JobStatus = "FAILED"
-	JobStatusCancelled      JobStatus = "CANCELLED"
+	JobStatusPending    JobStatus = "PENDING"
+	JobStatusLeased     JobStatus = "LEASED"
+	JobStatusRunning    JobStatus = "RUNNING"
+	JobStatusRetryWait  JobStatus = "RETRY_WAIT"
+	JobStatusSucceeded  JobStatus = "SUCCEEDED"
+	JobStatusFailed     JobStatus = "FAILED"
+	JobStatusCancelled  JobStatus = "CANCELLED"
 )
 
 // IsTerminal reports whether a job in this state has finished its lifecycle.
@@ -176,6 +174,24 @@ var ErrTransitionConflict = errors.New("store: job transition conflict (status o
 // PENDING/QUEUED state matches the caller's filter. Distinct from a generic
 // driver error so callers can fall back without re-trying blindly.
 var ErrNoClaimableJob = errors.New("store: no claimable job available")
+
+// RecordRenderFinishedCommand carries the identity tuple for recording render
+// completion. The repository atomically verifies (job_id, worker_id, lease_id,
+// revision) against the jobs row, updates the attempt status to RENDER_FINISHED,
+// and inserts a RENDER_FINISHED event. The job stays in RUNNING — no status
+// transition occurs.
+type RecordRenderFinishedCommand struct {
+	JobID            string
+	WorkerID         string
+	LeaseID          string
+	AttemptNumber    int
+	ExpectedRevision int
+	FinishedAt       time.Time
+}
+
+// ErrRecordRenderFinishedNotFound is returned when the attempt to record
+// render finished cannot find a matching attempt row.
+var ErrRecordRenderFinishedNotFound = errors.New("store: render finished attempt not found")
 
 // LeaseJobParams carries the information needed to lease a PENDING job to a worker.
 type LeaseJobParams struct {
