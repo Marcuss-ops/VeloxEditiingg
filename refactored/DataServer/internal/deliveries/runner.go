@@ -1,14 +1,27 @@
 // Package deliveries runner: DB-driven delivery claim + lease + retry.
 //
 // DeliveryRunner is the durable analog of the legacy in-handler goroutines
-// (maybeAutoUploadDrive / maybeAutoUploadYouTube). It claims a single
-// pending job_delivery per tick (atomic UPDATE ... WHERE status='PENDING'),
-// dispatches to the right provider via the Registry, persists the outcome,
-// and emits outbox events. A restart mid-upload resolves cleanly because:
+// (maybeAutoUploadDrive / maybeAutoUploadYouTube). It claims a batch
+// of pending/retryable/expired deliveries per tick via the typed
+// ClaimDeliveries method (atomic UPDATE+RETURNING with lease columns),
+// dispatches to the right provider via the Registry, persists the outcome
+// through typed MarkDelivery* methods, and emits outbox events.
+//
+// Lease + retry semantics (PR4e):
+//
+//   - claim sets status=RUNNING, lease_id, lease_expires_at, locked_by
+//   - on success: MarkDeliverySucceeded (RUNNING → SUCCEEDED)
+//   - on transient failure: MarkDeliveryRetry (RUNNING → RETRY_WAIT with backoff)
+//   - on permanent failure: MarkDeliveryFailed (RUNNING → FAILED)
+//   - on auth failure: MarkDeliveryBlockedAuth (RUNNING → BLOCKED_AUTH)
+//   - on rate limit: MarkDeliveryRetry with RetryAfter-based backoff
+//   - zombie reclamation: claim picks up RUNNING rows with expired leases
+//
+// A restart mid-upload resolves cleanly because:
 //
 //   * the runner only acts on rows where claim succeeded
-//   * lease_expires_at is reset every tick; zombie deliveries are claimed
-//     again on the next tick after the lease expires
+//   * lease_expires_at is set every tick; zombie deliveries are reclaimed
+//     on the next tick after the lease expires
 //   * the idempotency_key on (artifact_id, destination_id) prevents the
 //     runner from duplicating work on the remote side
 //
@@ -21,6 +34,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"sync"
 	"time"
 
@@ -36,13 +50,14 @@ type RunnerConfig struct {
 	LeaseDuration time.Duration
 	// MaxAttempts per delivery before declaring FAILED.
 	MaxAttempts int
-	// BackoffBase is the initial transient-error backoff (doubles per
-	// failure up to BackoffMax).
-	BackoffBase time.Duration
-	BackoffMax  time.Duration
 	// ClaimBatch limits how many deliveries the runner can claim in a
 	// single tick (concurrency).
 	ClaimBatch int
+
+	// BackoffSchedule maps attempt number (1-based) to the delay before
+	// the next attempt. The last entry is used for all subsequent attempts.
+	// Defaults to the canonical schedule: 30s, 2m, 10m, 30m.
+	BackoffSchedule []time.Duration
 }
 
 // DefaultRunnerConfig returns sensible defaults.
@@ -51,10 +66,31 @@ func DefaultRunnerConfig() *RunnerConfig {
 		PollInterval:  5 * time.Second,
 		LeaseDuration: 5 * time.Minute,
 		MaxAttempts:   5,
-		BackoffBase:   30 * time.Second,
-		BackoffMax:    10 * time.Minute,
 		ClaimBatch:    4,
+		BackoffSchedule: []time.Duration{
+			30 * time.Second,
+			2 * time.Minute,
+			10 * time.Minute,
+			30 * time.Minute,
+		},
 	}
+}
+
+// backoffForAttempt returns the backoff delay for the given 1-based attempt
+// number using the configured schedule. If the attempt exceeds the schedule
+// length, the last entry is used.
+func (cfg *RunnerConfig) backoffForAttempt(attempt int) time.Duration {
+	if len(cfg.BackoffSchedule) == 0 {
+		return 30 * time.Second
+	}
+	idx := attempt - 1
+	if idx < 0 {
+		idx = 0
+	}
+	if idx >= len(cfg.BackoffSchedule) {
+		idx = len(cfg.BackoffSchedule) - 1
+	}
+	return cfg.BackoffSchedule[idx]
 }
 
 // DeliveryRunner drives delivery_attempts persistence + provider dispatch.
@@ -96,7 +132,7 @@ func NewDeliveryRunner(cfg *RunnerConfig, registry *Registry, dbStore *store.SQL
 
 // Run is the durable tick loop. It blocks until ctx is cancelled or Stop is
 // called. The loop polls the database at cfg.PollInterval, claims up to
-// ClaimBatch pending deliveries per cycle, and dispatches each to its
+// ClaimBatch claimable deliveries per cycle, and dispatches each to its
 // provider through the registry.
 func (r *DeliveryRunner) Run(ctx context.Context) error {
 	if r == nil {
@@ -133,81 +169,148 @@ func (r *DeliveryRunner) Stop() {
 	<-r.stoppedCh
 }
 
-// tick performs one poll: claim up to ClaimBatch pending deliveries, run
-// each through the registry, persist the outcome. Errors are logged; they
-// do not stop the loop.
+// tick performs one poll: claim up to ClaimBatch claimable deliveries,
+// run each through the registry, persist the outcome via typed methods.
+// Errors are logged; they do not stop the loop.
 func (r *DeliveryRunner) tick(ctx context.Context) error {
-	rows, err := r.dbStore.ClaimPendingDeliveries(ctx, r.identity, r.cfg.LeaseDuration, r.cfg.ClaimBatch)
+	leases, err := r.dbStore.ClaimDeliveries(ctx, r.identity, r.cfg.LeaseDuration, r.cfg.ClaimBatch)
 	if err != nil {
-		return fmt.Errorf("claim pending deliveries: %w", err)
+		return fmt.Errorf("claim deliveries: %w", err)
 	}
-	for _, row := range rows {
-		if err := r.processOne(ctx, row); err != nil {
-			log.Printf("[DELIVERY] row %v: %v", row, err)
+	for _, lease := range leases {
+		if err := r.processLease(ctx, lease); err != nil {
+			log.Printf("[DELIVERY] delivery %s: %v", lease.DeliveryID, err)
 		}
 	}
 	return nil
 }
 
-// processOne resolves the provider for the claimed delivery and runs
-// Deliver. The outcome is persisted via UpdateDeliveryAttempt, plus the
-// job_deliveries.status is moved to SUCCEEDED, RETRY_WAIT, or FAILED.
-func (r *DeliveryRunner) processOne(ctx context.Context, row map[string]interface{}) error {
-	providerName, _ := row["provider"].(string)
-	dest, err := r.hydrateDestination(ctx, row)
-	if err != nil {
-		return fmt.Errorf("hydrate destination: %w", err)
-	}
-	artifact, err := r.hydrateArtifact(ctx, row)
-	if err != nil {
-		return fmt.Errorf("hydrate artifact: %w", err)
-	}
-
-	provider, err := r.registry.Resolve(providerName)
+// processLease resolves the provider for a claimed delivery and runs
+// Deliver. The outcome is persisted via the typed MarkDelivery* methods.
+func (r *DeliveryRunner) processLease(ctx context.Context, lease store.DeliveryLease) error {
+	provider, err := r.registry.Resolve(lease.Provider)
 	if err != nil {
 		// Provider not configured → permanent failure.
-		_ = r.dbStore.UpdateDeliveryAttempt(ctx, asStringFromMap(row, "delivery_id"), "FAILED", "", err.Error())
-		_ = r.dbStore.UpdateJobDeliveryStatus(ctx, asStringFromMap(row, "delivery_id"), "FAILED")
+		if err := r.dbStore.MarkDeliveryFailed(ctx, lease.DeliveryID, lease.RunnerID, lease.LeaseID, "PROVIDER_NOT_CONFIGURED", err.Error()); err != nil {
+			log.Printf("[DELIVERY] mark failed for %s: %v", lease.DeliveryID, err)
+		}
 		return err
 	}
 
-	attemptNumber, _ := row["attempt_number"].(int64)
+	dest, err := r.hydrateDestination(ctx, lease.DestinationID)
+	if err != nil {
+		if err := r.dbStore.MarkDeliveryFailed(ctx, lease.DeliveryID, lease.RunnerID, lease.LeaseID, "DESTINATION_NOT_FOUND", err.Error()); err != nil {
+			log.Printf("[DELIVERY] mark failed for %s: %v", lease.DeliveryID, err)
+		}
+		return fmt.Errorf("hydrate destination: %w", err)
+	}
+	artifact, err := r.hydrateArtifact(ctx, lease.ArtifactID)
+	if err != nil {
+		if err := r.dbStore.MarkDeliveryFailed(ctx, lease.DeliveryID, lease.RunnerID, lease.LeaseID, "ARTIFACT_NOT_FOUND", err.Error()); err != nil {
+			log.Printf("[DELIVERY] mark failed for %s: %v", lease.DeliveryID, err)
+		}
+		return fmt.Errorf("hydrate artifact: %w", err)
+	}
 
 	res, runErr := provider.Deliver(ctx, artifact, dest)
+
+	// ── Success ──
 	if runErr == nil && res != nil && res.Success {
-		_ = r.dbStore.UpdateDeliveryAttempt(ctx, asStringFromMap(row, "delivery_id"), "SUCCESS", res.RemoteURL, "")
-		_ = r.dbStore.UpdateJobDeliveryStatus(ctx, asStringFromMap(row, "delivery_id"), "SUCCEEDED")
-		_ = r.dbStore.UpdateJobDeliveryRemote(ctx, asStringFromMap(row, "delivery_id"), res.RemoteID, res.RemoteURL)
+		if err := r.dbStore.MarkDeliverySucceeded(ctx, lease.DeliveryID, lease.RunnerID, lease.LeaseID, res.RemoteID, res.RemoteURL); err != nil {
+			return fmt.Errorf("mark succeeded: %w", err)
+		}
 		return nil
 	}
 
-	// Failure path: classify + decide retry.
-	if errors.Is(runErr, ErrProviderNotConfigured) || errors.Is(runErr, ErrProviderPermanent) {
-		_ = r.dbStore.UpdateDeliveryAttempt(ctx, asStringFromMap(row, "delivery_id"), "FAILED", "", runErr.Error())
-		_ = r.dbStore.UpdateJobDeliveryStatus(ctx, asStringFromMap(row, "delivery_id"), "FAILED")
-		return runErr
+	// ── Failure: classify + dispatch ──
+	errClass := ClassifyError(runErr)
+	errCode := classifyErrorCode(runErr)
+	errMsg := ""
+	if runErr != nil {
+		errMsg = runErr.Error()
 	}
 
-	// Transient: retry with backoff up to MaxAttempts.
-	if attemptNumber >= int64(r.cfg.MaxAttempts) {
-		_ = r.dbStore.UpdateDeliveryAttempt(ctx, asStringFromMap(row, "delivery_id"), "FAILED", "", "max attempts reached")
-		_ = r.dbStore.UpdateJobDeliveryStatus(ctx, asStringFromMap(row, "delivery_id"), "FAILED")
-		return errors.New("max attempts reached")
+	switch errClass {
+	case ErrorClassPermanent:
+		if err := r.dbStore.MarkDeliveryFailed(ctx, lease.DeliveryID, lease.RunnerID, lease.LeaseID, errCode, errMsg); err != nil {
+			log.Printf("[DELIVERY] mark failed for %s: %v", lease.DeliveryID, err)
+		}
+		return runErr
+
+	case ErrorClassAuth:
+		if err := r.dbStore.MarkDeliveryBlockedAuth(ctx, lease.DeliveryID, lease.RunnerID, lease.LeaseID, errCode, errMsg); err != nil {
+			log.Printf("[DELIVERY] mark blocked_auth for %s: %v", lease.DeliveryID, err)
+		}
+		return runErr
+
+	case ErrorClassRateLimit:
+		retryAfter := r.resolveRetryAfter(runErr)
+		if lease.AttemptNumber >= r.cfg.MaxAttempts {
+			if err := r.dbStore.MarkDeliveryFailed(ctx, lease.DeliveryID, lease.RunnerID, lease.LeaseID, errCode, "max attempts reached: "+errMsg); err != nil {
+				log.Printf("[DELIVERY] mark failed for %s: %v", lease.DeliveryID, err)
+			}
+			return fmt.Errorf("max attempts reached: %w", runErr)
+		}
+		backoff := retryAfter.Sub(time.Now().UTC())
+		if backoff <= 0 {
+			backoff = r.cfg.backoffForAttempt(lease.AttemptNumber)
+		}
+		nextAttempt := time.Now().UTC().Add(backoff)
+		if err := r.dbStore.MarkDeliveryRetry(ctx, lease.DeliveryID, lease.RunnerID, lease.LeaseID, errCode, errMsg, nextAttempt); err != nil {
+			log.Printf("[DELIVERY] mark retry for %s: %v", lease.DeliveryID, err)
+		}
+		return nil
+
+	default: // ErrorClassTransient
+		if lease.AttemptNumber >= r.cfg.MaxAttempts {
+			if err := r.dbStore.MarkDeliveryFailed(ctx, lease.DeliveryID, lease.RunnerID, lease.LeaseID, errCode, "max attempts reached: "+errMsg); err != nil {
+				log.Printf("[DELIVERY] mark failed for %s: %v", lease.DeliveryID, err)
+			}
+			return fmt.Errorf("max attempts reached: %w", runErr)
+		}
+		backoff := r.cfg.backoffForAttempt(lease.AttemptNumber)
+		nextAttempt := time.Now().UTC().Add(backoff)
+		if err := r.dbStore.MarkDeliveryRetry(ctx, lease.DeliveryID, lease.RunnerID, lease.LeaseID, errCode, errMsg, nextAttempt); err != nil {
+			log.Printf("[DELIVERY] mark retry for %s: %v", lease.DeliveryID, err)
+		}
+		return nil
 	}
-	backoff := r.cfg.BackoffBase * time.Duration(1<<uint(attemptNumber-1))
-	if backoff > r.cfg.BackoffMax {
-		backoff = r.cfg.BackoffMax
+}
+
+// resolveRetryAfter extracts the RetryAfter time from a ProviderError.
+// Returns a zero time if the error does not carry RetryAfter.
+func (r *DeliveryRunner) resolveRetryAfter(err error) time.Time {
+	var pe *ProviderError
+	if errors.As(err, &pe) && !pe.RetryAfter.IsZero() {
+		return pe.RetryAfter
 	}
-	_ = r.dbStore.UpdateDeliveryAttempt(ctx, asStringFromMap(row, "delivery_id"), "RETRY_WAIT", "", runErr.Error())
-	_ = r.dbStore.UpdateJobDeliveryStatusWithBackoff(ctx, asStringFromMap(row, "delivery_id"), "PENDING", time.Now().UTC().Add(backoff))
-	return nil
+	return time.Time{}
+}
+
+// classifyErrorCode produces a short machine-readable code for the error.
+func classifyErrorCode(err error) string {
+	if err == nil {
+		return ""
+	}
+	if errors.Is(err, ErrProviderNotConfigured) {
+		return "PROVIDER_NOT_CONFIGURED"
+	}
+	if errors.Is(err, ErrProviderPermanent) {
+		return "PERMANENT"
+	}
+	if errors.Is(err, ErrProviderAuth) {
+		return "AUTH"
+	}
+	if errors.Is(err, ErrProviderRateLimit) {
+		return "RATE_LIMIT"
+	}
+	return "TRANSIENT"
 }
 
 // hydrateDestination reads delivery_destinations by id and converts the
 // internal store type to the deliveries package's Destination shape that
 // provider adapters consume.
-func (r *DeliveryRunner) hydrateDestination(ctx context.Context, row map[string]interface{}) (*Destination, error) {
-	destID, _ := row["destination_id"].(string)
+func (r *DeliveryRunner) hydrateDestination(ctx context.Context, destID string) (*Destination, error) {
 	d, err := r.dbStore.GetDeliveryDestination(ctx, destID)
 	if err != nil {
 		return nil, err
@@ -234,8 +337,7 @@ func (r *DeliveryRunner) hydrateDestination(ctx context.Context, row map[string]
 }
 
 // hydrateArtifact reads artifacts by id.
-func (r *DeliveryRunner) hydrateArtifact(ctx context.Context, row map[string]interface{}) (*store.Artifact, error) {
-	artID, _ := row["artifact_id"].(string)
+func (r *DeliveryRunner) hydrateArtifact(ctx context.Context, artID string) (*store.Artifact, error) {
 	a, err := r.dbStore.GetArtifact(artID)
 	if err != nil {
 		return nil, err
@@ -243,11 +345,19 @@ func (r *DeliveryRunner) hydrateArtifact(ctx context.Context, row map[string]int
 	return a, nil
 }
 
-func asStringFromMap(m map[string]interface{}, key string) string {
-	if v, ok := m[key]; ok {
-		if s, ok := v.(string); ok {
-			return s
-		}
+// backoffForAttempt is a package-level helper that applies exponential
+// backoff with a cap. Used by tests and external callers.
+func backoffForAttempt(attempt int, base, max time.Duration) time.Duration {
+	if base <= 0 {
+		base = 30 * time.Second
 	}
-	return ""
+	if max <= 0 {
+		max = 30 * time.Minute
+	}
+	exp := math.Pow(2, float64(attempt-1))
+	d := time.Duration(float64(base) * exp)
+	if d > max {
+		d = max
+	}
+	return d
 }

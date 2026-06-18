@@ -100,33 +100,6 @@ func (s *SQLiteStore) InsertJobDeliveriesForArtifact(ctx context.Context, artifa
 	return created, nil
 }
 
-// GetJobDelivery retrieves a single job_delivery by ID.
-func (s *SQLiteStore) GetJobDelivery(ctx context.Context, deliveryID string) (*JobDelivery, error) {
-	row := s.db.QueryRowContext(ctx,
-		`SELECT delivery_id, artifact_id, destination_id,
-		        COALESCE(legacy_delivery_target_id, 0), status,
-		        COALESCE(idempotency_key,''), COALESCE(remote_id,''),
-		        COALESCE(remote_url,''),
-		        created_at, updated_at
-		 FROM job_deliveries WHERE delivery_id = ?`, deliveryID)
-	var jd JobDelivery
-	var legacyID interface{}
-	var idempotencyKey, remoteID, remoteURL string
-	err := row.Scan(&jd.DeliveryID, &jd.ArtifactID, &jd.DestinationID,
-		&legacyID, &jd.Status, &idempotencyKey, &remoteID,
-		&remoteURL, &jd.CreatedAt, &jd.UpdatedAt)
-	if err != nil {
-		return nil, err
-	}
-	jd.IdempotencyKey = idempotencyKey
-	jd.RemoteID = remoteID
-	jd.RemoteURL = remoteURL
-	if legacyID, ok := legacyID.(int64); ok {
-		jd.LegacyDeliveryTargetID = legacyID
-	}
-	return &jd, nil
-}
-
 // matchDestination finds an enabled delivery_destination matching a provider
 // and its config (by folder_id for drive, channel_id for youtube).
 // Returns empty string if no match.
