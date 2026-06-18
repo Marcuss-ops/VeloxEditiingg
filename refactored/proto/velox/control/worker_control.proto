@@ -176,6 +176,7 @@ message JobLeaseGranted {
     string job_id = 1;
     string worker_id = 2;
     string status = 3;
+    string lease_id = 4;  // P0: the lease_id created by ClaimNextJob — worker uses for heartbeat/renewals
 }
 
 message Command {

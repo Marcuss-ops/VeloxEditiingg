@@ -50,8 +50,8 @@ func (h *JobSubmissionHandler) RetryJobHandler() gin.HandlerFunc {
 			return
 		}
 
-		if job.Status != queue.StatusError && job.Status != queue.StatusFailed {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Can only retry ERROR or FAILED jobs"})
+		if job.Status != queue.StatusFailed {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Can only retry FAILED jobs"})
 			return
 		}
 
@@ -98,10 +98,10 @@ func (h *JobSubmissionHandler) GetJobsDashboardHandler() gin.HandlerFunc {
 		jobs, _ := h.fileQ.GetAllJobs(c.Request.Context())
 
 		recent := map[string][]map[string]interface{}{
-			"PENDING":    {},
-			"PROCESSING": {},
-			"COMPLETED":  {},
-			"ERROR":      {},
+			"PENDING":   {},
+			"RUNNING":   {},
+			"SUCCEEDED": {},
+			"FAILED":    {},
 		}
 
 		keepFields := []string{"job_id", "video_name", "status", "created_at", "updated_at",
@@ -111,9 +111,6 @@ func (h *JobSubmissionHandler) GetJobsDashboardHandler() gin.HandlerFunc {
 
 		for _, job := range jobs {
 			status := string(job.Status)
-			if status == "FAILED" {
-				status = "ERROR"
-			}
 
 			if arr, ok := recent[status]; ok && len(arr) < limit {
 				trimmed := map[string]interface{}{

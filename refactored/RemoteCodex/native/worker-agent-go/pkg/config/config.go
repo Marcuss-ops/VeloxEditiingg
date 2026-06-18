@@ -25,31 +25,13 @@ type WorkerConfig struct {
 	EngineVersion   string `json:"engine_version,omitempty"`
 
 	// Worker policy
-	MaxActiveJobs           int `json:"max_active_jobs"`            // Maximum concurrent active jobs (default: 1)
-	CommandPollIntervalSecs int `json:"command_poll_interval_secs"` // Command polling interval in seconds (default: 30)
-	PrometheusPort          int `json:"prometheus_port"`            // Prometheus metrics port (default: 9090, 0=disabled)
-	HealthPort              int `json:"health_port"`                // Health HTTP port (default: 8081, 0=disabled)
+	MaxActiveJobs  int `json:"max_active_jobs"`  // Maximum concurrent active jobs (default: 1)
+	PrometheusPort int `json:"prometheus_port"`  // Prometheus metrics port (default: 9090, 0=disabled)
+	HealthPort     int `json:"health_port"`      // Health HTTP port (default: 8081, 0=disabled)
 
-	// ControlTransport selects the transport mechanism for worker↔master communication.
-	// Values: "polling" (HTTP polling, default), "grpc" (gRPC bidirectional stream).
-	// When "grpc", set ControlGRPCURL to the master's gRPC endpoint.
-	ControlTransport string `json:"control_transport,omitempty"`
-
-	// ControlGRPCURL is the gRPC endpoint when control_transport is "grpc".
+	// ControlGRPCURL is the gRPC endpoint for the worker control stream.
 	// Example: "master.example.com:8443"
 	ControlGRPCURL string `json:"control_grpc_url,omitempty"`
-
-	// FallbackToHTTPPolling enables automatic fallback to HTTP polling when gRPC
-	// connection fails. Only relevant when control_transport = "grpc".
-	// Default: true
-	FallbackToHTTPPolling *bool `json:"fallback_to_http_polling,omitempty"`
-
-	// DisableHTTPPolling removes HTTP polling loops entirely. When true, the
-	// PollingHTTPTransport only uses Send() (heartbeat, lease, results) without
-	// spawning background poll goroutines. This is Phase 6 — gRPC stream delivers
-	// all master→worker messages.
-	// Default: false (polling goroutines run for backward compat)
-	DisableHTTPPolling bool `json:"disable_http_polling,omitempty"`
 
 	// mTLS configuration for gRPC transport (Phase 7).
 	// TLSCertFile is the path to the worker's client certificate (PEM).
@@ -70,11 +52,6 @@ type WorkerConfig struct {
 	// Asset cache: shared directory for caching downloaded scene images, clips, and audio.
 	// Default: "" (disabled — each job downloads its own assets)
 	AssetCacheDir string `json:"asset_cache_dir,omitempty"`
-
-	// UseV2Endpoints switches the worker to canonical v2 master API endpoints.
-	// Legacy endpoints remain as fallback when false.
-	// Defaults to true if not explicitly set in the config file.
-	UseV2Endpoints *bool `json:"use_v2_endpoints,omitempty"`
 
 	// Circuit breaker configuration
 	CircuitBreakerFailureThreshold int `json:"circuit_breaker_failure_threshold,omitempty"` // Failures to open circuit (default: 5)
@@ -153,7 +130,6 @@ func DefaultConfig(workDir string) *WorkerConfig {
 		BundleVersion:           "",
 		ProtocolVersion:         "2026-06-worker-v1",
 		MaxActiveJobs:           1,    // 1 main job per VPS
-		CommandPollIntervalSecs: 30,   // Check for commands every 30 seconds
 		HealthPort:              8081, // Health HTTP endpoint for Docker HEALTHCHECK
 		WorkerSecret:            "",   // Set via VELOX_WORKER_SECRET env var
 	}
@@ -168,20 +144,7 @@ func (c *WorkerConfig) applyDefaults() {
 	if c.HealthPort == 0 {
 		c.HealthPort = 8081
 	}
-	if c.UseV2Endpoints == nil {
-		v := true
-		c.UseV2Endpoints = &v
-	}
-	if c.FallbackToHTTPPolling == nil {
-		v := true
-		c.FallbackToHTTPPolling = &v
-	}
-	if c.ControlTransport == "" {
-		c.ControlTransport = "polling"
-	}
-	if c.CommandPollIntervalSecs <= 0 {
-		c.CommandPollIntervalSecs = 30
-	}
+
 }
 
 // Validate checks that all required configuration fields are set.
@@ -218,12 +181,8 @@ func (c *WorkerConfig) Validate() error {
 	}
 
 	// Validate transport settings
-	validTransports := map[string]bool{"polling": true, "grpc": true, "": true}
-	if !validTransports[c.ControlTransport] {
-		errs = append(errs, fmt.Sprintf("invalid control_transport: %s (valid: polling, grpc)", c.ControlTransport))
-	}
-	if c.ControlTransport == "grpc" && c.ControlGRPCURL == "" {
-		errs = append(errs, "control_grpc_url is required when control_transport is grpc")
+	if c.ControlGRPCURL == "" {
+		errs = append(errs, "control_grpc_url is required")
 	}
 
 	if len(errs) > 0 {

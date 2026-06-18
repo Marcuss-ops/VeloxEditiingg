@@ -264,7 +264,7 @@ func hasEnqueueConfirmation(m map[string]interface{}) bool {
 		return true
 	}
 	status := strings.ToUpper(str(m["status"]))
-	return status == "PENDING" || status == "QUEUED" || status == "PROCESSING" || status == "RUNNING"
+	return status == "PENDING" || status == "RUNNING"
 }
 
 func isOK(m gin.H) bool {

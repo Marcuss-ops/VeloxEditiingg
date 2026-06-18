@@ -31,19 +31,6 @@ const (
 	StatusCancelled JobStatus = "CANCELLED"
 )
 
-// Legacy status aliases for backward compatibility during migration.
-// New code MUST use the canonical statuses above.
-const (
-	StatusProcessing JobStatus = "PROCESSING" // alias → RUNNING
-	StatusCompleted  JobStatus = "COMPLETED"  // alias → SUCCEEDED
-	StatusError      JobStatus = "ERROR"      // alias → FAILED
-	StatusQueued     JobStatus = "QUEUED"     // alias → PENDING
-	StatusAssigned   JobStatus = "ASSIGNED"   // alias → LEASED
-	StatusCancelling JobStatus = "CANCELLING" // alias → CANCELLED
-	StatusLost       JobStatus = "LOST"       // alias → FAILED
-	StatusRetrying   JobStatus = "RETRYING"   // alias → RETRY_WAIT
-)
-
 // Job represents a job in the queue (compatible with Python schema)
 type Job struct {
 	JobID        string      `json:"job_id"`
@@ -283,8 +270,8 @@ func (q *FileQueue) GetPendingJobs(ctx context.Context) ([]*Job, error) {
 	return q.ts.GetJobsByStatus(ctx, StatusPending)
 }
 
-func (q *FileQueue) GetProcessingJobs(ctx context.Context) ([]*Job, error) {
-	return q.ts.GetJobsByStatus(ctx, StatusProcessing)
+func (q *FileQueue) GetRunningJobs(ctx context.Context) ([]*Job, error) {
+	return q.ts.GetJobsByStatus(ctx, StatusRunning)
 }
 
 func (q *FileQueue) GetAllJobs(ctx context.Context) (map[string]*Job, error) {

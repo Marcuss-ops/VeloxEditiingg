@@ -28,16 +28,12 @@ const (
 	JobStatusFailed    JobStatus = "FAILED"
 	JobStatusCancelled JobStatus = "CANCELLED"
 
-	// Legacy strings — preserved for migration compatibility. Do not use in
-	// new code.
-	JobStatusProcessing JobStatus = "PROCESSING"
-	JobStatusCompleted  JobStatus = "COMPLETED"
 )
 
 // IsTerminal reports whether a job in this state has finished its lifecycle.
 func (s JobStatus) IsTerminal() bool {
 	switch s {
-	case JobStatusSucceeded, JobStatusCompleted, JobStatusFailed, JobStatusCancelled:
+	case JobStatusSucceeded, JobStatusFailed, JobStatusCancelled:
 		return true
 	}
 	return false

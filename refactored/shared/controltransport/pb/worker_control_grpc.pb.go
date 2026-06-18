@@ -11,7 +11,7 @@
 // versions:
 // - protoc-gen-go-grpc v1.6.2
 // - protoc             v5.29.3
-// source: velox/control/worker_control.proto
+// source: proto/velox/control/worker_control.proto
 
 package pb
 
@@ -124,5 +124,5 @@ var WorkerControl_ServiceDesc = grpc.ServiceDesc{
 			ClientStreams: true,
 		},
 	},
-	Metadata: "velox/control/worker_control.proto",
+	Metadata: "proto/velox/control/worker_control.proto",
 }

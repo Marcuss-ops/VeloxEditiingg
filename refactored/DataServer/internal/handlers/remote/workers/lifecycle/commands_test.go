@@ -13,14 +13,6 @@ func init() {
 	gin.SetMode(gin.TestMode)
 }
 
-// newTestRouter creates a gin router with the command handlers registered.
-func newTestRouter(h *Handler) *gin.Engine {
-	r := gin.New()
-	r.GET("/api/workers/commands", h.GetCommandsHandler())
-	r.POST("/api/workers/commands/ack", h.AckCommandHandler())
-	return r
-}
-
 func TestAckCommandByID_Success(t *testing.T) {
 	// Simulate the ACK handler logic directly: command_id present → AckCommandByID
 	// Since the real handler requires a worker registry and authorization,

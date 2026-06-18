@@ -24,6 +24,15 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
+// transportState represents the gRPC stream connection state.
+type transportState int
+
+const (
+	stateDisconnected transportState = iota
+	stateConnecting
+	stateReady
+)
+
 // GRPCStreamTransport implements ControlTransport via a gRPC bidirectional stream.
 // The worker opens a single gRPC connection, authenticates with Hello/HelloAck
 // handshake, then exchanges typed messages over the persistent stream.
@@ -404,7 +413,6 @@ func (t *GRPCStreamTransport) messageToEnvelope(msg controltransport.ControlMess
 		env.Msg = &pb.WorkerToMasterEnvelope_CommandAck{
 			CommandAck: &pb.CommandAck{
 				CommandId: getPayloadStr(msg.Payload, "command_id"),
-				Command:   getPayloadStr(msg.Payload, "command"),
 				Error:     getPayloadStr(msg.Payload, "error"),
 			},
 		}

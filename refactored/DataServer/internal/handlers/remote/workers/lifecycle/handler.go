@@ -1,9 +1,6 @@
 package lifecycle
 
 import (
-	"net/http"
-
-	"github.com/gin-gonic/gin"
 	"velox-server/internal/config"
 	"velox-server/internal/store"
 	workersreg "velox-server/internal/workers"
@@ -55,15 +52,4 @@ func (h *Handler) Config() *config.Config {
 	return h.cfg
 }
 
-func (h *Handler) authorizeWorkerRequest(c *gin.Context, workerID string) bool {
-	token := workersreg.ExtractBearerToken(
-		c.GetHeader("Authorization"),
-		c.GetHeader("X-Admin-Token"),
-		c.Query("token"),
-	)
-	if !workersreg.AuthorizeWorkerToken(h.tokenMgr, token, workerID, c.ClientIP()) {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid worker token"})
-		return false
-	}
-	return true
-}
+

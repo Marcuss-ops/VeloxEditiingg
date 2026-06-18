@@ -208,10 +208,11 @@ func TestDefaultConfigEmptyWorkDir(t *testing.T) {
 // TestValidateSuccess tests validation of a valid config.
 func TestValidateSuccess(t *testing.T) {
 	cfg := &WorkerConfig{
-		MasterURL: "http://localhost:8080",
-		WorkerID:  "test-worker-001",
-		WorkDir:   "/opt/velox",
-		LogLevel:  "info",
+		MasterURL:      "http://localhost:8080",
+		WorkerID:       "test-worker-001",
+		WorkDir:        "/opt/velox",
+		LogLevel:       "info",
+		ControlGRPCURL: "localhost:8443",
 	}
 
 	if err := cfg.Validate(); err != nil {
@@ -238,22 +239,33 @@ func TestValidateMissingFields(t *testing.T) {
 		{
 			name: "missing master_url",
 			config: &WorkerConfig{
-				WorkerID: "test-worker-001",
-				WorkDir:  "/opt/velox",
+				WorkerID:       "test-worker-001",
+				WorkDir:        "/opt/velox",
+				ControlGRPCURL: "localhost:8443",
 			},
 		},
 		{
 			name: "missing worker_id",
 			config: &WorkerConfig{
-				MasterURL: "http://localhost:8080",
-				WorkDir:   "/opt/velox",
+				MasterURL:      "http://localhost:8080",
+				WorkDir:        "/opt/velox",
+				ControlGRPCURL: "localhost:8443",
 			},
 		},
 		{
 			name: "missing work_dir",
 			config: &WorkerConfig{
+				MasterURL:      "http://localhost:8080",
+				WorkerID:       "test-worker-001",
+				ControlGRPCURL: "localhost:8443",
+			},
+		},
+		{
+			name: "missing control_grpc_url",
+			config: &WorkerConfig{
 				MasterURL: "http://localhost:8080",
 				WorkerID:  "test-worker-001",
+				WorkDir:   "/opt/velox",
 			},
 		},
 	}
@@ -271,10 +283,11 @@ func TestValidateMissingFields(t *testing.T) {
 // TestValidateInvalidLogLevel tests validation with invalid log level.
 func TestValidateInvalidLogLevel(t *testing.T) {
 	cfg := &WorkerConfig{
-		MasterURL: "http://localhost:8080",
-		WorkerID:  "test-worker-001",
-		WorkDir:   "/opt/velox",
-		LogLevel:  "invalid",
+		MasterURL:      "http://localhost:8080",
+		WorkerID:       "test-worker-001",
+		WorkDir:        "/opt/velox",
+		LogLevel:       "invalid",
+		ControlGRPCURL: "localhost:8443",
 	}
 
 	err := cfg.Validate()
@@ -289,12 +302,13 @@ func TestValidateLogLevels(t *testing.T) {
 
 	for _, level := range validLevels {
 		t.Run("log_level_"+level, func(t *testing.T) {
-			cfg := &WorkerConfig{
-				MasterURL: "http://localhost:8080",
-				WorkerID:  "test-worker-001",
-				WorkDir:   "/opt/velox",
-				LogLevel:  level,
-			}
+		cfg := &WorkerConfig{
+			MasterURL:      "http://localhost:8080",
+			WorkerID:       "test-worker-001",
+			WorkDir:        "/opt/velox",
+			LogLevel:       level,
+			ControlGRPCURL: "localhost:8443",
+		}
 
 			if err := cfg.Validate(); err != nil {
 				t.Errorf("Expected validation to pass for log_level %q, got error: %v", level, err)

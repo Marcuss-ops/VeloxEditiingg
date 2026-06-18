@@ -101,11 +101,7 @@ type Worker struct {
 
 	version string
 
-	// Channels for coordinated shutdown
-	jobDone chan struct{}
-
 	// Command management
-	commandChan  chan api.WorkerCommand
 	drainMode    atomic.Bool
 	commandMu    sync.Mutex
 	seenCommands map[string]time.Time

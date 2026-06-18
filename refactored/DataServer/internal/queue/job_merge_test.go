@@ -42,18 +42,18 @@ func TestUpdateJobFieldsClearsFailureStateOnComplete(t *testing.T) {
 		t.Fatalf("persist initial job: %v", err)
 	}
 
-	// Must go through PROCESSING first
+	// Must go through RUNNING first
 	if err := ts.UpdateJobFields(ctx, job.JobID, map[string]interface{}{
-		"status": "PROCESSING",
+		"status": "RUNNING",
 	}); err != nil {
-		t.Fatalf("update job fields to processing: %v", err)
+		t.Fatalf("update job fields to running: %v", err)
 	}
 
 	// Then complete
 	if err := ts.UpdateJobFields(ctx, job.JobID, map[string]interface{}{
-		"status": "COMPLETED",
+		"status": "SUCCEEDED",
 	}); err != nil {
-		t.Fatalf("update job fields to completed: %v", err)
+		t.Fatalf("update job fields to succeeded: %v", err)
 	}
 
 	saved, err := dbStore.GetJob(ctx, job.JobID)
@@ -90,7 +90,7 @@ func TestCompleteJobClearsFailureState(t *testing.T) {
 	// Persist a processing job with stale failure state
 	job := &Job{
 		JobID:        "job-complete-clears-error-2",
-		Status:       StatusProcessing,
+		Status:       StatusRunning,
 		CreatedAt:    NowUnix(),
 		UpdatedAt:    NowUnix(),
 		LastError:    "stale failure",
@@ -100,7 +100,7 @@ func TestCompleteJobClearsFailureState(t *testing.T) {
 		FailedBy:     "worker-a",
 		AssignedTo:   "worker-b",
 		History: []JobHistoryEntry{{
-			Status:    "PROCESSING",
+			Status:    "RUNNING",
 			Timestamp: NowISO(),
 			WorkerID:  "worker-b",
 			Message:   "Job started",

@@ -139,12 +139,11 @@ func (ts *TransitionService) CompleteJob(ctx context.Context, jobID string) erro
 			return fmt.Errorf("job not found: %s", jobID)
 		}
 
-		normalized := normalizeJobStatus(string(sj.Status))
-		if normalized == StatusSucceeded {
+		if sj.Status == store.JobStatusSucceeded {
 			return nil // idempotent
 		}
 
-		if err := ts.Validate(JobStatus(normalized), StatusSucceeded); err != nil {
+		if err := ts.Validate(JobStatus(sj.Status), StatusSucceeded); err != nil {
 			return err
 		}
 
@@ -183,8 +182,7 @@ func (ts *TransitionService) CompleteJob(ctx context.Context, jobID string) erro
 	}
 	job := MapToJob(m)
 
-	normalized := normalizeJobStatus(string(job.Status))
-	if normalized == StatusSucceeded {
+	if job.Status == StatusSucceeded {
 		return nil // idempotent
 	}
 
@@ -236,7 +234,7 @@ func (ts *TransitionService) FailJob(ctx context.Context, jobID, errMsg, workerI
 		nowISO := NowISO()
 
 		if requeue && sj.RetryCount < maxRetries {
-			if err := ts.Validate(JobStatus(normalizeJobStatus(string(sj.Status))), StatusRetryWait); err != nil {
+			if err := ts.Validate(JobStatus(sj.Status), StatusRetryWait); err != nil {
 				return err
 			}
 			if err := ts.jobRepo.Transition(ctx, store.TransitionParams{
@@ -261,7 +259,7 @@ func (ts *TransitionService) FailJob(ctx context.Context, jobID, errMsg, workerI
 				"revision":  sj.Revision + 1,
 			})
 		} else {
-			if err := ts.Validate(JobStatus(normalizeJobStatus(string(sj.Status))), StatusFailed); err != nil {
+			if err := ts.Validate(JobStatus(sj.Status), StatusFailed); err != nil {
 				return err
 			}
 			if err := ts.jobRepo.Transition(ctx, store.TransitionParams{
@@ -296,7 +294,6 @@ func (ts *TransitionService) FailJob(ctx context.Context, jobID, errMsg, workerI
 		return fmt.Errorf("job not found: %s", jobID)
 	}
 	job := MapToJob(m)
-	normalized := normalizeJobStatus(string(job.Status))
 
 	revision := getIntField(m, "revision")
 	nowISO := NowISO()
@@ -305,7 +302,7 @@ func (ts *TransitionService) FailJob(ctx context.Context, jobID, errMsg, workerI
 		if err := ts.Validate(job.Status, StatusRetryWait); err != nil {
 			return err
 		}
-		newRevision, err := ts.dbStore.TransitionJobStatus(ctx, jobID, string(normalized), string(StatusRetryWait), revision)
+		newRevision, err := ts.dbStore.TransitionJobStatus(ctx, jobID, string(job.Status), string(StatusRetryWait), revision)
 		if err != nil {
 			return fmt.Errorf("CAS transition to RETRY_WAIT failed: %w", err)
 		}
@@ -327,7 +324,7 @@ func (ts *TransitionService) FailJob(ctx context.Context, jobID, errMsg, workerI
 		if err := ts.Validate(job.Status, StatusFailed); err != nil {
 			return err
 		}
-		newRevision, err := ts.dbStore.TransitionJobStatus(ctx, jobID, string(normalized), string(StatusFailed), revision)
+		newRevision, err := ts.dbStore.TransitionJobStatus(ctx, jobID, string(job.Status), string(StatusFailed), revision)
 		if err != nil {
 			return fmt.Errorf("CAS transition to FAILED failed: %w", err)
 		}
@@ -364,7 +361,7 @@ func (ts *TransitionService) RequeueZombieJobs(ctx context.Context, timeout time
 
 	for _, m := range jobs {
 		job := MapToJob(m)
-		if job.Status != StatusProcessing {
+		if job.Status != StatusRunning && job.Status != StatusLeased {
 			continue
 		}
 
@@ -447,12 +444,12 @@ func (ts *TransitionService) RenewLease(ctx context.Context, jobID, workerID, le
 	}
 	job := MapToJob(m)
 
-	if err := ts.Validate(job.Status, StatusProcessing); err != nil {
+	if job.Status != StatusRunning && job.Status != StatusLeased {
 		return fmt.Errorf("job %s is not renewable in state %s", jobID, job.Status)
 	}
 
 	nowISO := NowISO()
-	job.Status = StatusProcessing
+	job.Status = StatusRunning
 	job.LeaseID = leaseID
 	job.LeaseExpiry = leaseExpiry.UTC().Format(time.RFC3339)
 	job.UpdatedAt = NowUnix()
@@ -460,7 +457,7 @@ func (ts *TransitionService) RenewLease(ctx context.Context, jobID, workerID, le
 		job.Attempt = job.RetryCount
 	}
 	job.History = append(job.History, JobHistoryEntry{
-		Status:    "PROCESSING",
+		Status:    "LEASED",
 		Timestamp: nowISO,
 		WorkerID:  workerID,
 		Message:   "Lease renewed",
@@ -653,7 +650,7 @@ func (ts *TransitionService) UpdateJobFields(ctx context.Context, jobID string, 
 		switch key {
 		case "status":
 			if s, ok := value.(string); ok {
-				next := normalizeJobStatus(s)
+				next := JobStatus(s)
 				if err := ts.Validate(job.Status, next); err != nil {
 					return fmt.Errorf("transition rejected: %w", err)
 				}
@@ -818,10 +815,9 @@ func (ts *TransitionService) UpdateJobFields(ctx context.Context, jobID string, 
 		}
 	}
 
-	// Ensure history entry for status change. Match both raw "COMPLETED"
-	// and normalized "SUCCEEDED" since callers pass either.
+	// Ensure history entry for status change.
 	if newStatusRaw, ok := fields["status"].(string); ok {
-		if normalizeJobStatus(newStatusRaw) == StatusSucceeded {
+		if JobStatus(newStatusRaw) == StatusSucceeded {
 			job.LastError = ""
 			job.LastErrorAt = nil
 			job.ErrorMessage = ""
@@ -974,7 +970,7 @@ func (ts *TransitionService) DeleteJob(ctx context.Context, jobID string) error 
 
 // GetNextJobID returns the next pending job ID directly from SQLite.
 func (ts *TransitionService) GetNextJobID(ctx context.Context) (string, error) {
-	jobs, err := ts.dbStore.ListJobsByStatus([]string{"PENDING", "QUEUED"}, 1)
+	jobs, err := ts.dbStore.ListJobsByStatus([]string{"PENDING"}, 1)
 	if err != nil {
 		return "", err
 	}
@@ -1055,13 +1051,13 @@ func (ts *TransitionService) LeaseJob(ctx context.Context, jobID, workerID strin
 	}
 	job := MapToJob(m)
 
-	if err := ts.Validate(job.Status, StatusProcessing); err != nil {
+	if err := ts.Validate(job.Status, StatusLeased); err != nil {
 		return fmt.Errorf("job %s cannot be leased: %w", jobID, err)
 	}
 
 	now := NowUnix()
 	nowISO := NowISO()
-	job.Status = StatusProcessing
+	job.Status = StatusLeased
 	job.AssignedTo = workerID
 	job.AssignedAt = nowISO
 	job.ClaimedBy = workerID
@@ -1072,7 +1068,7 @@ func (ts *TransitionService) LeaseJob(ctx context.Context, jobID, workerID strin
 	job.RetryCount++
 
 	job.History = append(job.History, JobHistoryEntry{
-		Status:    "PROCESSING",
+		Status:    "LEASED",
 		Timestamp: nowISO,
 		WorkerID:  workerID,
 		Message:   fmt.Sprintf("Job assigned to worker %s", workerID),
@@ -1093,9 +1089,8 @@ func (ts *TransitionService) ReleaseClaim(ctx context.Context, jobID string) err
 	}
 	job := MapToJob(m)
 
-	normalized := normalizeJobStatus(string(job.Status))
-	if normalized != StatusRunning {
-		return fmt.Errorf("job %s is in state %s, expected PROCESSING/RUNNING for claim release", jobID, normalized)
+	if job.Status != StatusRunning && job.Status != StatusLeased {
+		return fmt.Errorf("job %s is in state %s, expected LEASED/RUNNING for claim release", jobID, job.Status)
 	}
 
 	// Direct update — bypass CAS transition since PROCESSING→PENDING is not
@@ -1125,14 +1120,7 @@ func (ts *TransitionService) ReleaseClaim(ctx context.Context, jobID string) err
 // ("PROCESSING", not "RUNNING"; "COMPLETED", not "SUCCEEDED"), so canonical
 // queue constants must be translated to match the persisted values.
 func toStoreJobStatus(s JobStatus) store.JobStatus {
-	switch s {
-	case StatusRunning:
-		return store.JobStatusProcessing
-	case StatusCompleted:
-		return store.JobStatusSucceeded
-	default:
-		return store.JobStatus(s)
-	}
+	return store.JobStatus(s)
 }
 
 // getIntField extracts an integer field from a job map, returning 0 if not found.

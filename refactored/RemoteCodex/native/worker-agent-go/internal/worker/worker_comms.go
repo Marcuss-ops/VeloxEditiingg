@@ -10,8 +10,6 @@ import (
 	"time"
 
 	"velox-shared/controltransport"
-	"velox-worker-agent/internal/telemetry"
-	"velox-worker-agent/pkg/api"
 	"velox-worker-agent/pkg/logger"
 )
 

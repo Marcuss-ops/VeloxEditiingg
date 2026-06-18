@@ -13,16 +13,6 @@ import (
 	"velox-worker-agent/pkg/api"
 )
 
-// commandPollInterval returns the configured command polling interval.
-// Used for informational logging only — actual polling is done by the transport.
-func (w *Worker) commandPollInterval() time.Duration {
-	secs := w.config.CommandPollIntervalSecs
-	if secs <= 0 {
-		secs = 30
-	}
-	return time.Duration(secs) * time.Second
-}
-
 // processCommand processes a single command from the master received via
 // the transport receive channel. It handles the command, acknowledges it
 // via transport.Send(), and logs the outcome.

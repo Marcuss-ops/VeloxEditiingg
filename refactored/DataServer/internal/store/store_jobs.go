@@ -27,7 +27,7 @@ func (s *SQLiteStore) ClaimNextPendingJob(workerID string, allowedJobTypes []str
 		`SELECT job_id, status, assigned_to, claimed_by, job_fingerprint, run_id, job_run_id,
 		        video_name, project_id, retry_count, request_json, result_json
 		 FROM jobs
-		 WHERE UPPER(status) IN ('PENDING', 'QUEUED')
+		 WHERE UPPER(status) = 'PENDING'
 		   AND COALESCE(assigned_to, '') = ''
 		 ORDER BY COALESCE(updated_at, created_at) ASC, job_id ASC`,
 	)
@@ -78,7 +78,7 @@ func (s *SQLiteStore) ClaimNextPendingJob(workerID string, allowedJobTypes []str
 		if resultJSON.Valid && resultJSON.String != "" {
 			_ = json.Unmarshal([]byte(resultJSON.String), &resultMap)
 		}
-		resultMap["status"] = "PROCESSING"
+		resultMap["status"] = "LEASED"
 		resultMap["assigned_to"] = workerID
 		resultMap["assigned_at"] = nowISO
 		resultMap["claimed_by"] = workerID
@@ -102,9 +102,9 @@ func (s *SQLiteStore) ClaimNextPendingJob(workerID string, allowedJobTypes []str
 			 SET status = ?, assigned_to = ?, retry_count = ?,
 			     result_json = ?, raw_json = ?, updated_at = ?, migrated_at = ?
 			 WHERE job_id = ?
-			   AND UPPER(status) IN ('PENDING', 'QUEUED')
+			   AND UPPER(status) = 'PENDING'
 			   AND COALESCE(assigned_to, '') = ''`,
-			"PROCESSING", workerID, newRetry,
+			"LEASED", workerID, newRetry,
 			string(updatedResult), string(updatedResult), nowISO, nowISO,
 			jobID.String,
 		)
@@ -123,7 +123,7 @@ func (s *SQLiteStore) ClaimNextPendingJob(workerID string, allowedJobTypes []str
 
 		// Record history (not in blob — separate table)
 		history := []map[string]any{{
-			"status":    "PROCESSING",
+			"status":    "LEASED",
 			"timestamp": nowISO,
 			"worker_id": workerID,
 			"message":   fmt.Sprintf("Job assigned to worker %s", workerID),

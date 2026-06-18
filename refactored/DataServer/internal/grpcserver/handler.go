@@ -67,6 +67,7 @@ type workerSession struct {
 	sessionID string
 	stream    grpc.BidiStreamingServer[pb.WorkerToMasterEnvelope, pb.MasterToWorkerEnvelope]
 	done      chan struct{}
+	doneOnce  sync.Once    // P0 #6: prevents double-close on session teardown/reconnect
 	cancel    context.CancelFunc // cancels the session context to terminate old goroutines
 
 	// Serialized output: all stream.Send() calls go through sendCh → sessionWriter.
@@ -84,6 +85,8 @@ type workerSession struct {
 
 	// Sequence numbers for replay protection (Issue 7 fix).
 	lastRecvSeq int64 // last received sequence number from worker
+
+	sendMu sync.Mutex // serializes stream.Send() across goroutines (notifier + main loop)
 }
 
 // NewHandler creates a new gRPC WorkerControl handler.
@@ -96,7 +99,7 @@ func NewHandler(
 	config *HandlerConfig,
 ) *Handler {
 	if config == nil {
-		config = &HandlerConfig{ShadowMode: true}
+		config = &HandlerConfig{ShadowMode: false}
 	}
 	return &Handler{
 		registry:       registry,
@@ -197,8 +200,7 @@ func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMasterEnvelo
 		h.mu.Lock()
 		if currentSID, ok := h.workerSessions[workerID]; ok && currentSID == sessionID {
 			delete(h.workerSessions, workerID)
-		}
-		delete(h.sessions, sessionID)
+		}		delete(h.sessions, sessionID)
 		h.mu.Unlock()
 
 		// Issue 7 fix: revoke the session in SQLite on disconnect.
@@ -206,7 +208,11 @@ func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMasterEnvelo
 			_ = h.dbStore.RevokeSession(sessionID)
 		}
 
-		close(sess.done)
+		// P0 #6: use doneOnce to avoid double-close when closeOldSessionLocked
+		// already signalled the notifier goroutine to stop.
+		sess.doneOnce.Do(func() {
+			close(sess.done)
+		})
 		log.Printf("[GRPC] Worker %s disconnected (session: %s)", workerID, sessionID)
 	}()
 
@@ -561,7 +567,8 @@ func (h *Handler) handleJobAccepted(workerID string, ja *pb.JobAccepted) {
 		return
 	}
 
-	// Issue 5 fix: send via sendCh instead of direct stream.Send().
+	// Send typed JobLeaseGranted via sendCh — confirms the lease created by ClaimNextJob.
+	// P0 #1: include the lease_id so the worker can use it for heartbeat/renewals.
 	env := &pb.MasterToWorkerEnvelope{
 		MessageId:       fmt.Sprintf("leasegrant-%s-%s", workerID, jobID),
 		WorkerId:        workerID,
@@ -572,6 +579,7 @@ func (h *Handler) handleJobAccepted(workerID string, ja *pb.JobAccepted) {
 				JobId:    jobID,
 				WorkerId: workerID,
 				Status:   "granted",
+				LeaseId:  offer.LeaseID,
 			},
 		},
 	}
@@ -622,13 +630,13 @@ func (h *Handler) handleJobProgress(workerID string, jp *pb.JobProgress) {
 }
 
 // handleCommandAck processes typed CommandAck via gRPC stream.
+// Only accepts ACK by command_id — the legacy type-based fallback is removed.
+// Worker-scoped: the command_id must belong to the authenticated worker.
 func (h *Handler) handleCommandAck(workerID string, ca *pb.CommandAck) {
 	if ca.GetCommandId() != "" {
 		if err := h.cmdMgr.AckCommandByID(workerID, ca.GetCommandId()); err != nil {
 			log.Printf("[GRPC] Command ACK failed for %s (worker %s): %v", ca.GetCommandId(), workerID, err)
 		}
-	} else if ca.GetCommand() != "" {
-		h.cmdMgr.AckCommand(workerID, ca.GetCommand())
 	}
 }
 
@@ -774,8 +782,8 @@ func (h *Handler) dispatchCommands(workerID string, sess *workerSession) {
 	}
 }
 
-// closeOldSessionLocked removes any existing session for the given workerID.
-// Must be called with h.mu held.
+// closeOldSessionLocked removes any existing session for the given workerID
+// and signals its notifier goroutine to stop. Must be called with h.mu held.
 func (h *Handler) closeOldSessionLocked(workerID string) {
 	oldSID, ok := h.workerSessions[workerID]
 	if !ok {
@@ -783,7 +791,12 @@ func (h *Handler) closeOldSessionLocked(workerID string) {
 	}
 	oldSess, exists := h.sessions[oldSID]
 	if exists {
-		log.Printf("[GRPC] Worker %s reconnecting — cancelling old session %s", workerID, oldSID)
+		log.Printf("[GRPC] Worker %s reconnecting — removing old session %s", workerID, oldSID)
+		// P0 #6: close the done channel to stop the old notifier goroutine.
+		// Messages from the old session's main loop are dropped by isCurrentSession().
+		oldSess.doneOnce.Do(func() {
+			close(oldSess.done)
+		})
 		// Issue 6 fix: cancel the old session's context to stop its goroutines.
 		if oldSess.cancel != nil {
 			oldSess.cancel()

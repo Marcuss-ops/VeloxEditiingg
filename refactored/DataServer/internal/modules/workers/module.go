@@ -41,15 +41,6 @@ func (m *Module) Name() string {
 
 func (m *Module) RegisterRoutes(r *gin.Engine) {
 	if m.workerLifecycle != nil {
-		r.POST("/api/workers/heartbeat", m.workerLifecycle.HeartbeatHandler())
-		r.POST("/api/workers/register", m.workerLifecycle.RegisterHandler())
-		r.POST("/api/workers/unregister", m.workerLifecycle.UnregisterHandler())
-		r.GET("/api/workers/commands", m.workerLifecycle.GetCommandsHandler())
-		r.POST("/api/workers/commands/ack", m.workerLifecycle.AckCommandHandler())
-		r.POST("/api/workers/status", m.workerLifecycle.UpdateStatusHandler())
-	}
-
-	if m.workerLifecycle != nil {
 		workerAdmin := r.Group("/worker")
 		if m.adminAuth != nil {
 			workerAdmin.Use(m.adminAuth)

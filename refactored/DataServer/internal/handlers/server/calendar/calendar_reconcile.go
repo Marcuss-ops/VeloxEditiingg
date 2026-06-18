@@ -51,7 +51,7 @@ func (api *CalendarAPI) reconcileCalendarEvent(ctx context.Context, event *store
 		applyQueueStateToEvent(event, existing)
 		return nil
 	}
-	if existing != nil && existing.Status == queue.StatusProcessing {
+	if existing != nil && (existing.Status == queue.StatusRunning || existing.Status == queue.StatusLeased) {
 		jobPayload = buildCalendarJobPayload(event, existingJobRunID(existing))
 		jobPayload["status"] = string(existing.Status)
 		if err := api.queue.UpdateJobFields(ctx, event.JobID, jobPayload); err != nil {
@@ -60,7 +60,7 @@ func (api *CalendarAPI) reconcileCalendarEvent(ctx context.Context, event *store
 		applyQueueStateToEvent(event, existing)
 		return nil
 	}
-	if existing != nil && existing.Status != queue.StatusPending && existing.Status != queue.StatusProcessing {
+	if existing != nil && existing.Status != queue.StatusPending && existing.Status != queue.StatusRunning && existing.Status != queue.StatusLeased {
 		event.JobID = "cal_" + uuid.NewString()
 		jobPayload = buildCalendarJobPayload(event, "")
 	}
@@ -124,13 +124,13 @@ func applyQueueStateToEvent(event *store.CalendarEvent, job *queue.Job) {
 	switch job.Status {
 	case queue.StatusPending:
 		event.Status = "queued"
-	case queue.StatusProcessing:
+	case queue.StatusRunning, queue.StatusLeased:
 		event.Status = "processing"
-	case queue.StatusCompleted:
+	case queue.StatusSucceeded:
 		event.Status = "completed"
 		event.OutputVideoPath = job.MasterVideoPath
 		event.OutputVideoURL = job.DriveURL
-	case queue.StatusError, queue.StatusFailed:
+	case queue.StatusFailed:
 		event.Status = "failed"
 	}
 }

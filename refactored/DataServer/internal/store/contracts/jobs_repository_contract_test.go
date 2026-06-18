@@ -145,7 +145,7 @@ func JobRepositoryContract(t *testing.T, factory func(t *testing.T) (store.JobRe
 		if err := repo.Transition(ctx, store.TransitionParams{
 			JobID:          j.JobID,
 			ExpectedStatus: store.JobStatusPending,
-			NewStatus:      store.JobStatusProcessing,
+			NewStatus:      store.JobStatusLeased,
 			Revision:       j.Revision,
 		}); err != nil {
 			t.Fatalf("Transition: %v", err)
@@ -154,7 +154,7 @@ func JobRepositoryContract(t *testing.T, factory func(t *testing.T) (store.JobRe
 		if err != nil || got == nil {
 			t.Fatalf("GetJob after transition: %v %v", got, err)
 		}
-		if got.Status != store.JobStatusProcessing {
+		if got.Status != store.JobStatusLeased {
 			t.Errorf("expected PROCESSING, got %q", got.Status)
 		}
 		if got.Revision != j.Revision+1 {
@@ -179,7 +179,7 @@ func JobRepositoryContract(t *testing.T, factory func(t *testing.T) (store.JobRe
 		if err := repo.Transition(ctx, store.TransitionParams{
 			JobID:          j.JobID,
 			ExpectedStatus: store.JobStatusPending,
-			NewStatus:      store.JobStatusProcessing,
+			NewStatus:      store.JobStatusLeased,
 			Revision:       j.Revision,
 		}); err != nil {
 			t.Fatalf("first transition: %v", err)

@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"velox-shared/controltransport"
-	"velox-worker-agent/internal/transport"
 	"velox-worker-agent/pkg/api"
 	"velox-worker-agent/pkg/config"
 	"velox-worker-agent/pkg/logger"
@@ -57,7 +56,7 @@ func New(cfg *config.WorkerConfig, version string) *Worker {
 	// After Close(), transports are not reusable (channels + sync.Once),
 	// so each reconnect loop iteration gets a brand-new transport.
 	transportFactory := func() controltransport.ControlTransport {
-		return newControlTransport(apiClient, cfg, log)
+		return newControlTransport(cfg, log)
 	}
 
 	w := &Worker{
@@ -74,8 +73,7 @@ func New(cfg *config.WorkerConfig, version string) *Worker {
 			multiplier:      2.0,
 		},
 		version:            version,
-		jobDone:            make(chan struct{}, 1),
-		commandChan:        make(chan api.WorkerCommand, 10),
+
 		seenCommands:       make(map[string]time.Time),
 		recentLogs:         recentLogs,
 		jobCancelFuncs:     make(map[string]context.CancelFunc),

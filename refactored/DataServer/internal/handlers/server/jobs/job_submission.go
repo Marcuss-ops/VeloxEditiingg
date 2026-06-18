@@ -131,7 +131,7 @@ func (h *JobSubmissionHandler) findDuplicate(fingerprint string, normalized map[
 	}
 
 	for existingID, existing := range jobs {
-		if existing.Status != queue.StatusPending && existing.Status != queue.StatusProcessing {
+		if existing.Status != queue.StatusPending && existing.Status != queue.StatusRunning && existing.Status != queue.StatusLeased {
 			continue
 		}
 

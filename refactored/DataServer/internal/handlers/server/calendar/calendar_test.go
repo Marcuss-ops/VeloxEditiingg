@@ -369,7 +369,7 @@ func TestCalendarAPI_StatusLifecycleAndOutputs(t *testing.T) {
 	event := decodeEvent(t, w)
 
 	if err := q.UpdateJobFields(context.Background(), event.JobID, map[string]interface{}{
-		"status":            string(queue.StatusProcessing),
+		"status":            string(queue.StatusRunning),
 		"master_video_path": "/tmp/output.mp4",
 		"drive_url":         "https://drive.example.com/video",
 	}); err != nil {
@@ -388,7 +388,7 @@ func TestCalendarAPI_StatusLifecycleAndOutputs(t *testing.T) {
 	}
 
 	if err := q.UpdateJobFields(context.Background(), event.JobID, map[string]interface{}{
-		"status":            string(queue.StatusCompleted),
+		"status":            string(queue.StatusSucceeded),
 		"master_video_path": "/tmp/output.mp4",
 		"drive_url":         "https://drive.example.com/video",
 	}); err != nil {

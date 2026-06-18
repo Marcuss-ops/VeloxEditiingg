@@ -1,29 +1,5 @@
 package queue
 
-import "strings"
-
-// normalizeJobStatus maps any status string (including legacy) to a canonical status.
-// Legacy statuses are silently promoted to their canonical equivalent.
-func normalizeJobStatus(status string) JobStatus {
-	s := JobStatus(strings.ToUpper(strings.TrimSpace(status)))
-	switch s {
-	case StatusProcessing, StatusAssigned:
-		return StatusRunning
-	case StatusCompleted:
-		return StatusSucceeded
-	case StatusError, StatusLost:
-		return StatusFailed
-	case StatusQueued:
-		return StatusPending
-	case StatusCancelling:
-		return StatusCancelled
-	case StatusRetrying:
-		return StatusRetryWait
-	default:
-		return s
-	}
-}
-
 // isValidJobStatusTransition validates the canonical 7-state machine:
 //
 //	"" / PENDING → LEASED, RUNNING, RETRY_WAIT, FAILED, CANCELLED
@@ -40,10 +16,6 @@ func isValidJobStatusTransition(from, to JobStatus) bool {
 	if from == to {
 		return true
 	}
-
-	// Normalize legacy statuses
-	from = normalizeJobStatus(string(from))
-	to = normalizeJobStatus(string(to))
 
 	if from == to {
 		return true

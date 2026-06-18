@@ -250,7 +250,7 @@ func (r *SQLiteJobRepository) RenewLease(ctx context.Context, params RenewLeaseP
 		     revision = revision + 1,
 		     attempt = CASE WHEN attempt = 0 THEN retry_count ELSE attempt END
 		 WHERE job_id = ?
-		   AND UPPER(status) IN ('LEASED', 'RUNNING', 'PROCESSING')`,
+		   AND UPPER(status) IN ('LEASED', 'RUNNING')`,
 		params.LeaseID, leaseExpiry, now, params.JobID,
 	)
 	if err != nil {
