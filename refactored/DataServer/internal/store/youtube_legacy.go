@@ -8,11 +8,6 @@ import (
 	"velox-server/internal/store/youtubetypes"
 )
 
-// ListYouTubeGroups returns all groups (legacy wrapper for backward compat).
-func (s *SQLiteStore) ListYouTubeGroups() ([]map[string]interface{}, error) {
-	return s.ListYouTubeGroupsV2()
-}
-
 // ============================================================
 // --- Canonical YouTube OAuth Tokens (Migration 011) ---
 // ============================================================
@@ -219,20 +214,5 @@ func (s *SQLiteStore) DeleteChannelAtomic(channelID string) (int64, error) {
 		return 0, fmt.Errorf("delete atomic: commit: %w", err)
 	}
 	return membershipsDeleted, nil
-}
-
-// UpsertYouTubeGroup is a legacy wrapper that routes to the canonical UpsertYouTubeGroupV2.
-func (s *SQLiteStore) UpsertYouTubeGroup(name, description, privacy string, channels []string, rawJSON string) error {
-	if name == "" {
-		return nil
-	}
-	groupID, err := s.UpsertYouTubeGroupV2(name, "manager", description, privacy)
-	if err != nil {
-		return err
-	}
-	for _, ch := range channels {
-		_ = s.AddChannelToGroupV2(groupID, ch)
-	}
-	return nil
 }
 

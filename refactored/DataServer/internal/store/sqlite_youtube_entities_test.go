@@ -1241,15 +1241,17 @@ func TestYouTubeGroupsLegacy(t *testing.T) {
 		t.Skip("youtube_groups table dropped by migration 008")
 	}
 
-	// Upsert legacy group
-	err := s.UpsertYouTubeGroup("Legacy Group", "Old description", "public", []string{"UC_a", "UC_b"}, "")
+	// Create via V2 (UpsertYouTubeGroup removed in PR 3.5-b)
+	groupID, err := s.UpsertYouTubeGroupV2("Legacy Group", "manager", "Old description", "public")
 	if err != nil {
-		t.Fatalf("UpsertYouTubeGroup failed: %v", err)
+		t.Fatalf("UpsertYouTubeGroupV2 failed: %v", err)
 	}
+	_ = s.AddChannelToGroupV2(groupID, "UC_a")
+	_ = s.AddChannelToGroupV2(groupID, "UC_b")
 
-	groups, err := s.ListYouTubeGroups()
+	groups, err := s.ListYouTubeGroupsV2()
 	if err != nil {
-		t.Fatalf("ListYouTubeGroups failed: %v", err)
+		t.Fatalf("ListYouTubeGroupsV2 failed: %v", err)
 	}
 	if len(groups) != 1 {
 		t.Fatalf("expected 1 legacy group, got %d", len(groups))
@@ -1259,14 +1261,10 @@ func TestYouTubeGroupsLegacy(t *testing.T) {
 	}
 
 	// Delete (via V2 — DeleteYouTubeGroup removed in PR 3.5-b)
-	groupID, err := s.GetYouTubeGroupV2ID("Legacy Group", "manager")
-	if err != nil {
-		t.Fatalf("GetYouTubeGroupV2ID failed: %v", err)
-	}
 	if err := s.DeleteYouTubeGroupV2(groupID); err != nil {
 		t.Fatalf("DeleteYouTubeGroupV2 failed: %v", err)
 	}
-	groups, _ = s.ListYouTubeGroups()
+	groups, _ = s.ListYouTubeGroupsV2()
 	if len(groups) != 0 {
 		t.Errorf("expected 0 groups after delete, got %d", len(groups))
 	}

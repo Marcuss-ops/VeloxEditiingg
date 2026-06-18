@@ -9,7 +9,6 @@ import (
 	"velox-server/internal/handlers/remote/ansible"
 	"velox-server/internal/integrations/youtube"
 	"velox-server/internal/store"
-	"velox-server/internal/store/migrations"
 )
 
 // ============================================================
@@ -35,8 +34,8 @@ func TestInterface_YouTubeStore_CompileTime(t *testing.T) {
 	// interface is satisfied.
 	//
 	// SQLiteStore implements:
-	//   - ListYouTubeGroups()
-	//   - UpsertYouTubeGroup(name, description, privacy, channels, rawJSON)
+	//   - ListYouTubeGroupsV2()
+	//   - UpsertYouTubeGroupV2(name, groupType, description, privacy)
 	//   - GetYouTubeCache(key) / SetYouTubeCache(key, ts, data)
 	//   - CleanupYouTubeCache(maxAge) / ClearYouTubeCache()
 	//   - MigrateYouTubeCache(entries)
@@ -105,38 +104,7 @@ func TestInterface_YouTubeStore_Cache(t *testing.T) {
 }
 
 func TestInterface_YouTubeStore_LegacyGroups(t *testing.T) {
-	s := newTestStore(t)
-
-	// Skip if migration 008 has been applied (legacy tables dropped)
-	versions, _ := migrations.AppliedVersions(s.DB())
-	hasMigration008 := false
-	for _, v := range versions {
-		if v >= 8 {
-			hasMigration008 = true
-			break
-		}
-	}
-	if hasMigration008 {
-		t.Skip("youtube_groups table dropped by migration 008")
-	}
-
-	var ytStore youtube.YouTubeStore = s
-
-	// Upsert and List via interface
-	if err := ytStore.UpsertYouTubeGroup("TestGroup", "A test group", "public", []string{"UC_a", "UC_b"}, ""); err != nil {
-		t.Fatalf("UpsertYouTubeGroup via interface: %v", err)
-	}
-
-	groups, err := ytStore.ListYouTubeGroups()
-	if err != nil {
-		t.Fatalf("ListYouTubeGroups via interface: %v", err)
-	}
-	if len(groups) != 1 {
-		t.Fatalf("expected 1 group, got %d", len(groups))
-	}
-	if groups[0]["name"] != "TestGroup" {
-		t.Errorf("name: got %v, want %q", groups[0]["name"], "TestGroup")
-	}
+	t.Skip("ListYouTubeGroups and UpsertYouTubeGroup removed in PR 3.5-b — use ListYouTubeGroupsV2 and UpsertYouTubeGroupV2")
 }
 
 // ============================================================

@@ -44,11 +44,6 @@ type YouTubeStore interface {
 	// user-edited typed columns are preserved (S11 contract).
 	UpdateYouTubeChannelMetadata(channelID, title, thumbnailURL string) error
 
-	// Legacy: YouTube Groups (kept for backward compat during migration)
-	ListYouTubeGroups() ([]map[string]interface{}, error)
-	UpsertYouTubeGroup(name, description, privacy string, channels []string, rawJSON string) error
-
-
 
 	// Canonical: OAuth tokens (youtube_oauth_tokens table; S5-S11 boot hydrator)
 	// GetYouTubeOAuthToken returns (nil, nil) when no row exists so callers can
