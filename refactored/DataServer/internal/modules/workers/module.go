@@ -67,11 +67,6 @@ func (m *Module) RegisterRoutes(r *gin.Engine) {
 
 	if m.workerAssetHandler != nil {
 		r.GET("/api/v1/worker-assets/:asset_id", m.workerAssetHandler.ServeAsset())
-		// DEPRECATED: Legacy routes for backward compat with existing assets.
-		// New assets should use /api/v1/worker-assets/:asset_id instead.
-		// Remove once all existing assets are migrated to the content-addressed store.
-		r.GET("/api/worker/assets/voiceover/:job_id/:filename", m.workerAssetHandler.ServeVoiceoverAsset())
-		r.GET("/api/worker/assets/scene-image/:job_id/:filename", m.workerAssetHandler.ServeSceneImageAsset())
 	}
 
 	log.Printf("[WORKERS] Routes registered")

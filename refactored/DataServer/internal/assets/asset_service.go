@@ -243,6 +243,48 @@ func (s *AssetService) RewriteVoiceoverPayload(ctx context.Context, payloadMap m
 	return nil
 }
 
+// RewriteSceneImagePayload resolves all scene image references in the payload
+// and rewrites them to canonical velox-asset:// references.
+func (s *AssetService) RewriteSceneImagePayload(ctx context.Context, payloadMap map[string]interface{}) error {
+	if s == nil || payloadMap == nil {
+		return nil
+	}
+	references := collectSceneImageReferences(payloadMap)
+	if len(references) == 0 {
+		return nil
+	}
+
+	refs := make([]string, 0, len(references))
+	for _, ref := range references {
+		trimmed := strings.TrimSpace(ref)
+		if trimmed == "" {
+			continue
+		}
+		// Skip already-canonical velox-asset references.
+		if strings.HasPrefix(trimmed, VeloxAssetScheme+"://") {
+			refs = append(refs, trimmed)
+			continue
+		}
+		asset, err := s.ResolveAndRegister(ctx, ResolveAssetCommand{
+			Kind:      RoleSceneImage,
+			Reference: trimmed,
+		})
+		if err != nil {
+			return err
+		}
+		if asset == nil {
+			continue
+		}
+		refs = append(refs, asset.Reference())
+	}
+	if len(refs) == 0 {
+		return nil
+	}
+
+	applySceneImageReferences(payloadMap, refs)
+	return nil
+}
+
 func (s *AssetService) recordToAsset(rec *AssetRecord) *Asset {
 	if rec == nil {
 		return nil
@@ -334,6 +376,90 @@ func applyVoiceoverReferences(payloadMap map[string]interface{}, refs []string) 
 		params["voiceover_path"] = first
 		params["audio_path"] = first
 		payloadMap["parameters"] = params
+	}
+}
+
+// ── scene image payload helpers ─────────────────────────────────────────
+
+func collectSceneImageReferences(payloadMap map[string]interface{}) []string {
+	if payloadMap == nil {
+		return nil
+	}
+	var candidates []string
+
+	// From scene_image_paths array
+	if v, ok := payloadMap["scene_image_paths"]; ok {
+		candidates = append(candidates, payload.NormalizeToStrings(v)...)
+	}
+
+	// From scenes array — extract image_link from each scene entry.
+	// Handles both []map[string]interface{} (normalized payload) and
+	// []interface{} (raw JSON from json.Unmarshal).
+	switch scenes := payloadMap["scenes"].(type) {
+	case []map[string]interface{}:
+		for _, scene := range scenes {
+			if img, ok := scene["image_link"].(string); ok {
+				candidates = append(candidates, img)
+			}
+			if imgs, ok := scene["image_links"].([]string); ok {
+				candidates = append(candidates, imgs...)
+			}
+		}
+	case []interface{}:
+		for _, item := range scenes {
+			if scene, ok := item.(map[string]interface{}); ok {
+				if img, ok := scene["image_link"].(string); ok {
+					candidates = append(candidates, img)
+				}
+				if imgs, ok := scene["image_links"].([]string); ok {
+					candidates = append(candidates, imgs...)
+				}
+			}
+		}
+	}
+
+	// From parameters sub-map
+	if params, ok := payloadMap["parameters"].(map[string]interface{}); ok {
+		if v, ok := params["scene_image_paths"]; ok {
+			candidates = append(candidates, payload.NormalizeToStrings(v)...)
+		}
+	}
+
+	return payload.DedupeStrings(candidates)
+}
+
+func applySceneImageReferences(payloadMap map[string]interface{}, refs []string) {
+	if len(refs) == 0 || payloadMap == nil {
+		return
+	}
+
+	// Update scene_image_paths
+	payloadMap["scene_image_paths"] = append([]string(nil), refs...)
+
+	// Update image_link / image_links in each scene entry.
+	// Handles both []map[string]interface{} and []interface{}.
+	switch scenes := payloadMap["scenes"].(type) {
+	case []map[string]interface{}:
+		for i, scene := range scenes {
+			if i < len(refs) {
+				scene["image_link"] = refs[i]
+				scene["image_links"] = []string{refs[i]}
+			}
+		}
+	case []interface{}:
+		for i, item := range scenes {
+			if i < len(refs) {
+				if scene, ok := item.(map[string]interface{}); ok {
+					scene["image_link"] = refs[i]
+					scene["image_links"] = []string{refs[i]}
+				}
+			}
+		}
+	}
+
+	// Update parameters sub-map
+	if params, ok := payloadMap["parameters"].(map[string]interface{}); ok {
+		params["scene_image_paths"] = append([]string(nil), refs...)
 	}
 }
 

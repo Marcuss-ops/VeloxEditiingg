@@ -212,6 +212,9 @@ func buildSceneImagePayload(rawPayload map[string]interface{}, dataDir, videosDi
 	if err := resolveVoiceoverPayload(context.Background(), normalized); err != nil {
 		return nil, err
 	}
+	if err := resolveSceneImagePayload(context.Background(), normalized); err != nil {
+		return nil, err
+	}
 
 	return normalized, nil
 }
@@ -262,6 +265,9 @@ func stageSceneImageAssets(dataDir, masterURL, jobID string, sceneEntries []map[
 		return nil, nil
 	}
 	if strings.TrimSpace(masterURL) == "" {
+		return append([]string{}, sceneImagePaths...), nil
+	}
+	if getVoiceoverAssetService() != nil {
 		return append([]string{}, sceneImagePaths...), nil
 	}
 

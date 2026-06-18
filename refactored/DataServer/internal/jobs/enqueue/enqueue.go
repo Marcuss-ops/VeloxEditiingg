@@ -58,6 +58,9 @@ func EnqueueSceneVideoJob(ctx context.Context, q *queue.FileQueue, payloadMap ma
 	if err := resolveVoiceoverPayload(ctx, payloadMap); err != nil {
 		return nil, err
 	}
+	if err := resolveSceneImagePayload(ctx, payloadMap); err != nil {
+		return nil, err
+	}
 
 	normalized, err := normalizeSceneVideoPayload(payloadMap)
 	if err != nil {
@@ -407,6 +410,14 @@ func resolveVoiceoverPayload(ctx context.Context, payloadMap map[string]interfac
 		return nil
 	}
 	return service.RewriteVoiceoverPayload(ctx, payloadMap)
+}
+
+func resolveSceneImagePayload(ctx context.Context, payloadMap map[string]interface{}) error {
+	service := getVoiceoverAssetService()
+	if service == nil || payloadMap == nil {
+		return nil
+	}
+	return service.RewriteSceneImagePayload(ctx, payloadMap)
 }
 
 func sceneVideoFingerprint(parts ...interface{}) string {
