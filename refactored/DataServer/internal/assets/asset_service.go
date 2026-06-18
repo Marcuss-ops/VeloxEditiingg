@@ -10,6 +10,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"velox-shared/payload"
 )
 
 // AssetRepository is the narrow persistence contract for the asset registry.
@@ -197,6 +199,50 @@ func (s *AssetService) LinkToJob(ctx context.Context, jobID, assetID, role strin
 	return s.repo.LinkToJob(ctx, jobID, assetID, role, ordinal, required)
 }
 
+// RewriteVoiceoverPayload resolves all mirrored voiceover fields in the
+// payload and rewrites them to canonical velox-asset:// references. This
+// replaces the old Service.RewriteVoiceoverPayload — uses the full
+// ResolveAndRegister pipeline for content-addressed asset storage.
+func (s *AssetService) RewriteVoiceoverPayload(ctx context.Context, payloadMap map[string]interface{}) error {
+	if s == nil || payloadMap == nil {
+		return nil
+	}
+	references := collectVoiceoverReferences(payloadMap)
+	if len(references) == 0 {
+		return nil
+	}
+
+	refs := make([]string, 0, len(references))
+	for _, ref := range references {
+		trimmed := strings.TrimSpace(ref)
+		if trimmed == "" {
+			continue
+		}
+		// Skip already-canonical velox-asset references.
+		if strings.HasPrefix(trimmed, VeloxAssetScheme+"://") {
+			refs = append(refs, trimmed)
+			continue
+		}
+		asset, err := s.ResolveAndRegister(ctx, ResolveAssetCommand{
+			Kind:      RoleVoiceover,
+			Reference: trimmed,
+		})
+		if err != nil {
+			return err
+		}
+		if asset == nil {
+			continue
+		}
+		refs = append(refs, asset.Reference())
+	}
+	if len(refs) == 0 {
+		return nil
+	}
+
+	applyVoiceoverReferences(payloadMap, refs)
+	return nil
+}
+
 func (s *AssetService) recordToAsset(rec *AssetRecord) *Asset {
 	if rec == nil {
 		return nil
@@ -252,6 +298,43 @@ func generateID() string {
 	b := make([]byte, 16)
 	_, _ = rand.Read(b)
 	return hex.EncodeToString(b)
+}
+
+// ── voiceover payload helpers (shared with legacy bridge) ────────────────────
+
+func collectVoiceoverReferences(payloadMap map[string]interface{}) []string {
+	if payloadMap == nil {
+		return nil
+	}
+	candidates := []string{
+		payload.FirstString(payloadMap, "voiceover_path", "audio_path", "voiceover", "unified_voiceover_link"),
+	}
+	if v, ok := payloadMap["voiceover_paths"]; ok {
+		candidates = append(candidates, payload.NormalizeToStrings(v)...)
+	}
+	if params, ok := payloadMap["parameters"].(map[string]interface{}); ok {
+		candidates = append(candidates, payload.FirstString(params, "voiceover_path", "audio_path", "voiceover"))
+		if v, ok := params["voiceover_paths"]; ok {
+			candidates = append(candidates, payload.NormalizeToStrings(v)...)
+		}
+	}
+	return payload.DedupeStrings(candidates)
+}
+
+func applyVoiceoverReferences(payloadMap map[string]interface{}, refs []string) {
+	if len(refs) == 0 || payloadMap == nil {
+		return
+	}
+	first := refs[0]
+	payloadMap["voiceover_paths"] = append([]string(nil), refs...)
+	payloadMap["voiceover_path"] = first
+	payloadMap["audio_path"] = first
+	if params, ok := payloadMap["parameters"].(map[string]interface{}); ok {
+		params["voiceover_paths"] = append([]string(nil), refs...)
+		params["voiceover_path"] = first
+		params["audio_path"] = first
+		payloadMap["parameters"] = params
+	}
 }
 
 var _ = (*AssetService)(nil)

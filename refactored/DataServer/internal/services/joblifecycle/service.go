@@ -17,15 +17,15 @@ import (
 // All methods use Compare-And-Swap (CAS) for status transitions and targeted
 // column updates for non-status fields — never the legacy UpdateJobFields.
 type Service struct {
-	ts         *queue.TransitionService
+	lc         *queue.LifecycleService
 	dbStore    *store.SQLiteStore
 	maxRetries int
 }
 
 // NewService creates a new JobLifecycleService.
-func NewService(ts *queue.TransitionService, dbStore *store.SQLiteStore, maxRetries int) *Service {
+func NewService(lc *queue.LifecycleService, dbStore *store.SQLiteStore, maxRetries int) *Service {
 	return &Service{
-		ts:         ts,
+		lc:         lc,
 		dbStore:    dbStore,
 		maxRetries: maxRetries,
 	}
@@ -43,9 +43,24 @@ type CompleteJobResult struct {
 // SubmitResult completes a job and writes result metadata using targeted
 // store methods — never UpdateJobFields.
 func (s *Service) SubmitResult(ctx context.Context, jobID string, result CompleteJobResult) error {
-	// 1. CAS transition to SUCCEEDED via TransitionService
-	if err := s.ts.CompleteJob(ctx, jobID); err != nil {
-		return fmt.Errorf("complete job: %w", err)
+	// 1. CAS transition to SUCCEEDED via LifecycleService repo
+	sj, err := s.lc.Repo().GetJob(ctx, jobID)
+	if err != nil {
+		return fmt.Errorf("job not found: %s", jobID)
+	}
+	if sj.Status == store.JobStatusSucceeded {
+		return nil // idempotent
+	}
+	if err := s.lc.Validate(queue.JobStatus(sj.Status), queue.StatusSucceeded); err != nil {
+		return err
+	}
+	if err := s.lc.Repo().Transition(ctx, store.TransitionParams{
+		JobID:          jobID,
+		ExpectedStatus: sj.Status,
+		NewStatus:      store.JobStatusSucceeded,
+		Revision:       sj.Revision,
+	}); err != nil {
+		return fmt.Errorf("complete job CAS: %w", err)
 	}
 
 	// 2. Write supplementary fields directly
@@ -87,36 +102,36 @@ func (s *Service) SubmitResult(ctx context.Context, jobID string, result Complet
 
 // RenewLease extends the lease for an active job.
 func (s *Service) RenewLease(ctx context.Context, jobID, workerID, leaseID string, leaseExpiry time.Time) error {
-	return s.ts.RenewLease(ctx, jobID, workerID, leaseID, leaseExpiry)
+	return s.lc.Repo().PR3RenewLease(ctx, store.RenewLeaseCommand{
+		JobID:       jobID,
+		WorkerID:    workerID,
+		LeaseID:     leaseID,
+		LeaseExpiry: leaseExpiry,
+		Now:         time.Now().UTC(),
+		EmitEvent:   true,
+	})
 }
 
 // FailJob marks a job as FAILED with optional requeue.
 func (s *Service) FailJob(ctx context.Context, jobID, errMsg, workerID string, requeue bool) error {
-	return s.ts.FailJob(ctx, jobID, errMsg, workerID, requeue, s.maxRetries)
+	cmd := store.FailCommand{
+		JobID:        jobID,
+		WorkerID:     workerID,
+		ErrorMessage: errMsg,
+		Retryable:    requeue,
+		Now:          time.Now().UTC(),
+	}
+	return s.lc.Fail(ctx, cmd)
 }
 
 // CancelJob marks a job as CANCELLED.
 func (s *Service) CancelJob(ctx context.Context, jobID string) error {
-	job, err := s.ts.GetJob(ctx, jobID)
-	if err != nil {
-		return fmt.Errorf("job not found: %s", jobID)
+	cmd := store.CancelCommand{
+		JobID:  jobID,
+		Reason: "cancelled by user",
+		Now:    time.Now().UTC(),
 	}
-	if err := s.ts.Validate(job.Status, queue.StatusCancelled); err != nil {
-		return fmt.Errorf("cannot cancel job %s: %w", jobID, err)
-	}
-
-	nowISO := queue.NowISO()
-	now := queue.NowUnix()
-
-	job.Status = queue.StatusCancelled
-	job.UpdatedAt = now
-	job.History = append(job.History, queue.JobHistoryEntry{
-		Status:    string(queue.StatusCancelled),
-		Timestamp: nowISO,
-		Message:   "Job cancelled",
-	})
-
-	return queue.PersistJob(job, s.dbStore)
+	return s.lc.Cancel(ctx, cmd)
 }
 
 // UpdateCompletedAt writes only the completed_at timestamp without a status transition.

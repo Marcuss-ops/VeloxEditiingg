@@ -71,7 +71,14 @@ func (h *Handler) handleJobResult(workerID string, jr *pb.JobResult) {
 		}
 		log.Printf("[GRPC] Worker %s reported render finished for job %s — awaiting artifact", workerID, jobID)
 	} else if status == "failed" {
-		if err := h.lifecycleSvc.FailJob(context.Background(), jobID, errMsg, workerID, true, 3); err != nil {
+		cmd := store.FailCommand{
+			JobID:        jobID,
+			WorkerID:     workerID,
+			ErrorMessage: errMsg,
+			Retryable:    true,
+			Now:          time.Now().UTC(),
+		}
+		if err := h.lifecycleSvc.Fail(context.Background(), cmd); err != nil {
 			log.Printf("[GRPC] Job failure transition failed for %s: %v", jobID, err)
 		}
 	}
@@ -146,7 +153,7 @@ func (h *Handler) handleJobAccepted(workerID string, ja *pb.JobAccepted) {
 		Attempt:          attemptNum,
 		ExpectedRevision: currentRev,
 	}
-	if err := h.transitionSvc.StartJobWithLease(context.Background(), startParams); err != nil {
+	if err :=	h.lifecycleSvc.Repo().StartJob(context.Background(), startParams); err != nil {
 		if errors.Is(err, store.ErrTransitionConflict) {
 			log.Printf("[GRPC] Worker %s accepted job %s but lease is stale (rev=%d attempt=%d) — rejecting",
 				workerID, jobID, currentRev, attemptNum)
@@ -190,7 +197,7 @@ func (h *Handler) handleJobAccepted(workerID string, ja *pb.JobAccepted) {
 		// claim so the job returns to PENDING (or another worker can claim).
 		log.Printf("[GRPC] sendCh full/closed for JobLeaseGranted to worker %s — releasing claim for job %s",
 			workerID, jobID)
-		if releaseErr := h.transitionSvc.ReleaseClaim(context.Background(), jobID); releaseErr != nil {
+		if releaseErr := h.lifecycleSvc.Repo().ReleaseClaim(context.Background(), jobID); releaseErr != nil {
 			log.Printf("[GRPC] Failed to release claim for job %s after JobLeaseGranted send failure: %v",
 				jobID, releaseErr)
 		}
@@ -229,7 +236,14 @@ func (h *Handler) handleJobRejected(workerID string, jr *pb.JobRejected) {
 	log.Printf("[GRPC] Worker %s rejected job %s: %s", workerID, jobID, reason)
 
 	if jobID != "" {
-		if err := h.lifecycleSvc.FailJob(context.Background(), jobID, reason, workerID, true, 3); err != nil {
+		cmd := store.FailCommand{
+			JobID:        jobID,
+			WorkerID:     workerID,
+			ErrorMessage: reason,
+			Retryable:    true,
+			Now:          time.Now().UTC(),
+		}
+		if err := h.lifecycleSvc.Fail(context.Background(), cmd); err != nil {
 			log.Printf("[GRPC] Failed to release rejected job %s: %v", jobID, err)
 		}
 	}
@@ -284,7 +298,15 @@ func (h *Handler) handleLeaseRenewal(workerID string, lr *pb.LeaseRenewal) {
 	if lr.GetLeaseExpiresAt() != nil {
 		leaseExpiry = lr.GetLeaseExpiresAt().AsTime()
 	}
-	if err := h.lifecycleSvc.RenewLease(context.Background(), lr.GetJobId(), workerID, lr.GetLeaseId(), leaseExpiry); err != nil {
+	leaseCmd := store.RenewLeaseCommand{
+		JobID:       lr.GetJobId(),
+		WorkerID:    workerID,
+		LeaseID:     lr.GetLeaseId(),
+		LeaseExpiry: leaseExpiry,
+		Now:         time.Now().UTC(),
+		EmitEvent:   true,
+	}
+	if err := h.lifecycleSvc.Repo().PR3RenewLease(context.Background(), leaseCmd); err != nil {
 		log.Printf("[GRPC] Lease renewal failed for job %s worker %s: %v", lr.GetJobId(), workerID, err)
 	}
 }

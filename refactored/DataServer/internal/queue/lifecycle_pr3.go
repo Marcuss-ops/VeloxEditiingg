@@ -15,7 +15,7 @@ import (
 	"velox-server/internal/store"
 )
 
-// NewLifecycleService constructs the slim LifecycleService for PR 3 callers.
+// NewLifecycleService constructs the transactional LifecycleService.
 // Both args are required. Returns an error (not a panic) so bootstrap can
 // surface configuration mistakes via the standard error path.
 func NewLifecycleService(repo store.JobRepository, clock Clock) (*LifecycleService, error) {
@@ -25,7 +25,7 @@ func NewLifecycleService(repo store.JobRepository, clock Clock) (*LifecycleServi
 	if clock == nil {
 		return nil, fmt.Errorf("clock is required")
 	}
-	return &LifecycleService{repo: repo, clock: clock, jobRepo: repo}, nil
+	return &LifecycleService{repo: repo, clock: clock}, nil
 }
 
 // Repo exposes the underlying JobRepository for callers that need direct

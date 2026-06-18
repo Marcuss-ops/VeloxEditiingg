@@ -5,8 +5,6 @@ import (
 	"net/http"
 	"strings"
 	"time"
-
-	"velox-shared/payload"
 )
 
 // Service exposes the voiceover asset bridge.
@@ -77,71 +75,4 @@ func (s *Service) ResolveAll(ctx context.Context, references []string) ([]*Resol
 	return resolved, nil
 }
 
-// RewriteVoiceoverPayload resolves all mirrored voiceover fields and rewrites
-// them to canonical velox-asset references in place.
-func (s *Service) RewriteVoiceoverPayload(ctx context.Context, payloadMap map[string]interface{}) error {
-	if s == nil || payloadMap == nil {
-		return nil
-	}
-	references := collectVoiceoverReferences(payloadMap)
-	if len(references) == 0 {
-		return nil
-	}
 
-	resolved, err := s.ResolveAll(ctx, references)
-	if err != nil {
-		return err
-	}
-	if len(resolved) == 0 {
-		return nil
-	}
-
-	refs := make([]string, 0, len(resolved))
-	for _, asset := range resolved {
-		if asset == nil {
-			continue
-		}
-		refs = append(refs, asset.VeloxReference())
-	}
-	if len(refs) == 0 {
-		return nil
-	}
-
-	applyVoiceoverReferences(payloadMap, refs)
-	return nil
-}
-
-func collectVoiceoverReferences(payloadMap map[string]interface{}) []string {
-	if payloadMap == nil {
-		return nil
-	}
-	candidates := []string{
-		payload.FirstString(payloadMap, "voiceover_path", "audio_path", "voiceover", "unified_voiceover_link"),
-	}
-	if v, ok := payloadMap["voiceover_paths"]; ok {
-		candidates = append(candidates, payload.NormalizeToStrings(v)...)
-	}
-	if params, ok := payloadMap["parameters"].(map[string]interface{}); ok {
-		candidates = append(candidates, payload.FirstString(params, "voiceover_path", "audio_path", "voiceover"))
-		if v, ok := params["voiceover_paths"]; ok {
-			candidates = append(candidates, payload.NormalizeToStrings(v)...)
-		}
-	}
-	return payload.DedupeStrings(candidates)
-}
-
-func applyVoiceoverReferences(payloadMap map[string]interface{}, refs []string) {
-	if len(refs) == 0 || payloadMap == nil {
-		return
-	}
-	first := refs[0]
-	payloadMap["voiceover_paths"] = append([]string(nil), refs...)
-	payloadMap["voiceover_path"] = first
-	payloadMap["audio_path"] = first
-	if params, ok := payloadMap["parameters"].(map[string]interface{}); ok {
-		params["voiceover_paths"] = append([]string(nil), refs...)
-		params["voiceover_path"] = first
-		params["audio_path"] = first
-		payloadMap["parameters"] = params
-	}
-}

@@ -74,14 +74,13 @@ type serverDeps struct {
 	// bootstrap is the composition root, never anything else.
 	artifactSvc *artifacts.Service
 
-	// ── PR 3 composition ──────────────────────────────────────────────────
+	// ── Lifecycle ──────────────────────────────────────────────────────────
 	//
-	// lifecyclePR3 is the slim transactional LifecycleService.
-	// It owns JobRepository + a RealClock — and NOTHING ELSE.
-	// SUCCEEDED is unreachable from this struct (JobRepository has no
-	// PR3MarkSucceeded after PR 3.5-a; the only legal path is
-	// artifacts.Service.Finalize → artifacts.SQLiteFinalizationRepository.FinalizeVerified).
-	lifecyclePR3 *queue.LifecycleService
+	// lifecycleSvc is the sole transactional LifecycleService used by
+	// FileQueue, gRPC, HTTP handlers, reaper, and workflow. SUCCEEDED is
+	// reachable only through artifacts.Service.FinalizeArtifactAndCompleteJob
+	// which performs jobs CAS + artifacts CAS + outbox in a single tx.
+	lifecycleSvc  *queue.LifecycleService
 
 	assetService *voiceoverassets.AssetService
 }
@@ -185,21 +184,15 @@ func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
 	workerLifecycle := lifecycle.NewHandler(cfg, reg, sqliteStore)
 
 	jobRepo := store.NewSQLiteJobRepository(sqliteStore)
-	lcService, err := queue.NewLegacyLifecycleService(jobRepo, sqliteStore)
-	if err != nil {
-		return nil, err
-	}
 
-	// ── PR 3 composition root ──────────────────────────────────────────────
+	// ── Lifecycle composition root ─────────────────────────────────────────
 	//
-	// lcPR3 is the slim transactional LifecycleService. It owns the
+	// lifecycleSvc is the sole transactional LifecycleService. It owns the
 	// JobRepository + a RealClock — and NOTHING ELSE. SUCCEEDED is
-	// unreachable from this struct (JobRepository.PR3MarkSucceeded
-	// was deleted in PR 3.5-a; the sole legal writer of jobs.status =
-	// 'SUCCEEDED' is now artifacts.SERVICE.FINALIZE → artifacts.SQLiteFinalizationRepository.FinalizeVerified).
-	lcPR3, err := queue.NewLifecycleService(jobRepo, queue.RealClock{})
+	// reachable only through artifacts.Service.FinalizeArtifactAndCompleteJob.
+	lifecycleSvc, err := queue.NewLifecycleService(jobRepo, queue.RealClock{})
 	if err != nil {
-		return nil, fmt.Errorf("bootstrap: PR 3 lifecycle service: %w", err)
+		return nil, fmt.Errorf("bootstrap: lifecycle service: %w", err)
 	}
 
 	querySvc := queue.NewQueryService(sqliteStore)
@@ -207,7 +200,7 @@ func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
 	fileQ, err := queue.NewFileQueue(&queue.FileQueueConfig{
 		DBStore:    sqliteStore,
 		MaxRetries: cfg.Workers.MaxJobAttempts,
-	}, lcService, querySvc)
+	}, lifecycleSvc, querySvc)
 	if err != nil {
 		return nil, err
 	}
@@ -279,7 +272,7 @@ func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
 		outboxDispatcher:    outboxDispatcher,
 		blobStore:           blobStore,
 		artifactSvc:         artifactSvc,
-		lifecyclePR3:        lcPR3,
+		lifecycleSvc:        lifecycleSvc,
 	}, nil
 }
 
@@ -317,14 +310,21 @@ func runServer(cfg *config.Config) error {
 	if driveMod != nil && deps.sqliteStore != nil {
 		driveMod.WithSQLiteStore(deps.sqliteStore)
 	}
-	voiceoverBridge := voiceoverassets.NewService(cfg.DataDir, []string{cfg.DataDir}, maxVoiceoverBytes, driveMod.Service())
-	enqueue.SetVoiceoverAssetService(voiceoverBridge)
 
-	// Generic asset registry (PR 6): content-addressed, multi-role asset store.
-	assetRepo := store.NewSQLiteAssetRepository(deps.sqliteStore)
-	typedResolvers := voiceoverassets.NewTypedResolversFromStore(voiceoverBridge.Store(), driveMod.Service(), nil)
+	// ── Asset Registry (PR 6) ─────────────────────────────────────────────
+	//
+	// Replaces the old voiceover bridge (voiceoverassets.NewService).
+	// The new AssetService uses content-addressed storage via BlobStore + DB
+	// and provides RewriteVoiceoverPayload for the enqueue flow.
+	voiceoverStore := voiceoverassets.NewStore(cfg.DataDir, maxVoiceoverBytes, []string{cfg.DataDir})
+	typedResolvers := voiceoverassets.NewTypedResolversFromStore(voiceoverStore, driveMod.Service(), nil)
 	assetRegistry := voiceoverassets.NewResolverRegistry(typedResolvers...)
+	assetRepo := store.NewSQLiteAssetRepository(deps.sqliteStore)
 	deps.assetService = voiceoverassets.NewAssetService(assetRepo, deps.blobStore, assetRegistry, nil)
+
+	// Wire the new AssetService into the enqueue flow (replaces the old
+	// voiceover bridge's RewriteVoiceoverPayload).
+	enqueue.SetVoiceoverAssetService(deps.assetService)
 	ansibleMod := ansible.New(cfg, deps.paths.dataDir, auth, deps.sqliteStore)
 	deps.ansibleModule = ansibleMod
 	registry.Register(ansibleMod)
@@ -365,18 +365,17 @@ func runServer(cfg *config.Config) error {
 
 	var grpcSrv grpcServer
 	if cfg.Server.GRPCPort > 0 {
-		lcSvc := deps.fileQ.LifecycleService()
+		lcSvc := deps.lifecycleSvc
 		if lcSvc == nil {
-			log.Printf("[SERVER] gRPC disabled: fileQ.LifecycleService is nil (deps.fileQ=%v)", deps.fileQ)
+			log.Printf("[SERVER] gRPC disabled: lifecycleSvc is nil")
 		} else {
-			transitionSvc := queue.NewTransitionService(lcSvc)
 			cmdMgr := workersreg.NewCommandManager(deps.sqliteStore)
 			tokenMgr := workersreg.NewTokenManager(deps.sqliteStore)
 			grpcHandlerConfig := &grpcserver.HandlerConfig{
 				PushMode: cfg.Server.GRPCPushMode,
 			}
 			grpcHandler := grpcserver.NewHandler(
-				deps.reg, cmdMgr, tokenMgr, lcSvc, transitionSvc, artifactSvc, deps.sqliteStore, grpcHandlerConfig,
+				deps.reg, cmdMgr, tokenMgr, lcSvc, deps.artifactSvc, deps.sqliteStore, grpcHandlerConfig,
 			)
 
 			grpcServer, lis, err := grpcserver.StartGRPCServer(
@@ -417,16 +416,16 @@ func runServer(cfg *config.Config) error {
 		}()
 	}
 
-	if deps.fileQ != nil {
+	if deps.lifecycleSvc != nil {
 		go func() {
 			ticker := time.NewTicker(60 * time.Second)
 			defer ticker.Stop()
 			for range ticker.C {
-				n, err := deps.fileQ.RequeueZombieJobs(context.Background(), 30*time.Minute)
+				results, err := deps.lifecycleSvc.RequeueExpiredLeases(context.Background(), 100)
 				if err != nil {
 					log.Printf("[ZOMBIE] requeue error: %v", err)
-				} else if n > 0 {
-					log.Printf("[ZOMBIE] requeued %d stuck jobs", n)
+				} else if len(results) > 0 {
+					log.Printf("[ZOMBIE] requeued %d stuck jobs", len(results))
 				}
 			}
 		}()

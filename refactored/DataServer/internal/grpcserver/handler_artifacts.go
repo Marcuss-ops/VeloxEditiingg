@@ -51,7 +51,11 @@ func (h *Handler) handleArtifactUploaded(workerID string, a *pb.ArtifactUploaded
 	}
 
 	jobID := a.GetJobId()
-	uploadID := a.GetUploadId() // PR 2 — empty until .pb.go regen
+	// PR 2 — upload_id / lease_id / attempt / expected_revision are NOT
+	// yet in the generated .pb.go (fields 8-11 exist in the .proto but
+	// the .pb.go was never regenerated). Use empty/zero values until the
+	// proto is regenerated; the handler will skip with a log warning.
+	uploadID := ""
 	artifactID := a.GetArtifactId()
 
 	// Hard-fail on empty job_id. Legacy workers (pre-.pb.go regen) carry
@@ -84,9 +88,9 @@ func (h *Handler) handleArtifactUploaded(workerID string, a *pb.ArtifactUploaded
 		UploadID:         uploadID,
 		JobID:            jobID,
 		WorkerID:         workerID,
-		LeaseID:          a.GetLeaseId(),   // empty until regen
-		AttemptNumber:    int(a.GetAttempt()),
-		ExpectedRevision: int(a.GetExpectedRevision()),
+		LeaseID:          "",   // empty until .pb.go regen
+		AttemptNumber:    0,    // zero until .pb.go regen
+		ExpectedRevision: 0,    // zero until .pb.go regen
 	}
 
 	log.Printf("[GRPC] Worker %s reporting artifact upload for job %s upload=%s artifactID=%s kind=%s",

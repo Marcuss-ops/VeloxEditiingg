@@ -41,20 +41,6 @@ import (
 
 // Handler implements pb.WorkerControlServer. It manages persistent worker
 // streams and bridges gRPC messages to the existing control plane.
-//
-// Phase 4.2 cleanup: `tokenMgr` removed from NewHandler — credential
-// validation goes through `dbStore` directly via validateCredentialHash.
-// `workers.TokenManager` remains available in the `workers` package for
-// the HTTP control plane (worker_update.go, HTTP lifecycle routes).
-//
-// PR 2 (chunk 4): `artifactSvc` is now *artifacts.Service (the new
-// single-tx, master-computed-hash pipeline). The PR 1 STAGING →
-// VERIFYING → READY 2-tx pipeline (queue.ArtifactFinalizationService)
-// was REMOVED from the gRPC path - it is still importable for any
-// reverse-compat needs but no handler reaches it. Bootstrap wires a
-// real *artifacts.Service; nil is rejected at runtime by
-// handleArtifactUploaded so misconfiguration surfaces as dropped
-// uploads rather than a SUCCEEDED job with no verification.
 type Handler struct {
 	pb.UnimplementedWorkerControlServer
 
@@ -62,7 +48,6 @@ type Handler struct {
 	cmdMgr        *workersreg.CommandManager
 	tokenMgr      *workersreg.TokenManager
 	lifecycleSvc  *queue.LifecycleService
-	transitionSvc *queue.TransitionService
 	artifactSvc   *artifacts.Service
 	dbStore       *store.SQLiteStore
 	config        *HandlerConfig
@@ -136,7 +121,6 @@ func NewHandler(
 	cmdMgr *workersreg.CommandManager,
 	tokenMgr *workersreg.TokenManager,
 	lifecycleSvc *queue.LifecycleService,
-	transitionSvc *queue.TransitionService,
 	artifactSvc *artifacts.Service,
 	dbStore *store.SQLiteStore,
 	config *HandlerConfig,
@@ -149,7 +133,6 @@ func NewHandler(
 		cmdMgr:         cmdMgr,
 		tokenMgr:       tokenMgr,
 		lifecycleSvc:   lifecycleSvc,
-		transitionSvc:  transitionSvc,
 		artifactSvc:    artifactSvc,
 		dbStore:        dbStore,
 		config:         config,

@@ -163,43 +163,118 @@ func (q *FileQueue) logEvent(jobID, eventType string, extra map[string]interface
 	}
 }
 
-// ── Mutation methods (LifecycleService) ──
+// ── Mutation methods ──
+//
+// Each method delegates directly to the JobRepository or LifecycleService PR3
+// methods. No eventStore side effects — the transactional PR3 methods on the
+// repository handle history + event + outbox atomically.
 
 func (q *FileQueue) SubmitJob(ctx context.Context, jobID string, payload map[string]interface{}) error {
-	job, err := q.lifecycle.SubmitJob(ctx, jobID, payload, q.maxRetries)
-	if err != nil {
-		return err
+	var videoName, projectID, runID string
+	if s, ok := payload["video_name"].(string); ok {
+		videoName = s
+	}
+	if s, ok := payload["project_id"].(string); ok {
+		projectID = s
+	}
+	if s, ok := payload["run_id"].(string); ok && s != "" {
+		runID = s
+	}
+
+	params := store.CreateJobParams{
+		JobID:      jobID,
+		Payload:    payload,
+		VideoName:  videoName,
+		ProjectID:  projectID,
+		RunID:      runID,
+		MaxRetries: q.maxRetries,
+	}
+	if err := q.lifecycle.Repo().CreateJob(ctx, params); err != nil {
+		return fmt.Errorf("submit job: %w", err)
 	}
 	q.logEvent(jobID, "created", map[string]interface{}{
-		"project_id": job.ProjectID,
-		"video_name": job.VideoName,
+		"project_id": projectID,
+		"video_name": videoName,
 	})
 	return nil
 }
 
 func (q *FileQueue) ClaimNextJob(ctx context.Context, workerID string, allowedJobTypes []string) (*Job, error) {
-	job, err := q.lifecycle.ClaimNextJob(ctx, workerID, allowedJobTypes)
+	result, err := q.lifecycle.Repo().ClaimNext(ctx, store.ClaimParams{
+		WorkerID:        workerID,
+		AllowedJobTypes: allowedJobTypes,
+		Now:             time.Now().UTC(),
+	})
 	if err != nil {
 		return nil, err
 	}
-	if job != nil {
-		q.logEvent(job.JobID, "claimed", map[string]interface{}{
-			"worker_id": workerID,
-		})
+	if result == nil || result.JobID == "" {
+		return nil, nil
 	}
+	sj, err := q.lifecycle.Repo().GetJob(ctx, result.JobID)
+	if err != nil {
+		return nil, fmt.Errorf("post-claim job fetch: %w", err)
+	}
+	if sj == nil {
+		return nil, nil
+	}
+	job := &Job{
+		JobID:      sj.JobID,
+		Status:     JobStatus(sj.Status),
+		VideoName:  sj.VideoName,
+		ProjectID:  sj.ProjectID,
+		AssignedTo: sj.AssignedTo,
+		LeaseID:    sj.LeaseID,
+		RetryCount: sj.RetryCount,
+		MaxRetries: sj.MaxRetries,
+		CreatedAt:  sj.CreatedAt,
+		UpdatedAt:  sj.UpdatedAt,
+		StartedAt:  sj.StartedAt,
+		CompletedAt: sj.CompletedAt,
+		Attempt:    result.Attempt,
+	}
+	q.logEvent(job.JobID, "claimed", map[string]interface{}{
+		"worker_id": workerID,
+	})
 	return job, nil
 }
 
 func (q *FileQueue) CompleteJob(ctx context.Context, jobID string) error {
-	if err := q.lifecycle.CompleteJob(ctx, jobID); err != nil {
+	sj, err := q.lifecycle.Repo().GetJob(ctx, jobID)
+	if err != nil {
+		return fmt.Errorf("job not found: %s", jobID)
+	}
+	if sj == nil {
+		return fmt.Errorf("job not found: %s", jobID)
+	}
+	if sj.Status == store.JobStatusSucceeded {
+		return nil // idempotent
+	}
+	if err := q.lifecycle.Validate(JobStatus(sj.Status), StatusSucceeded); err != nil {
 		return err
+	}
+	if err := q.lifecycle.Repo().Transition(ctx, store.TransitionParams{
+		JobID:          jobID,
+		ExpectedStatus: sj.Status,
+		NewStatus:      store.JobStatusSucceeded,
+		Revision:       sj.Revision,
+	}); err != nil {
+		return fmt.Errorf("complete job CAS: %w", err)
 	}
 	q.logEvent(jobID, "completed", nil)
 	return nil
 }
 
 func (q *FileQueue) FailJob(ctx context.Context, jobID, errMsg, workerID string, requeue bool) error {
-	if err := q.lifecycle.FailJob(ctx, jobID, errMsg, workerID, requeue, q.maxRetries); err != nil {
+	// Use the PR3 transactional Fail method
+	cmd := store.FailCommand{
+		JobID:        jobID,
+		WorkerID:     workerID,
+		ErrorMessage: errMsg,
+		Retryable:    requeue,
+		Now:          time.Now().UTC(),
+	}
+	if err := q.lifecycle.Fail(ctx, cmd); err != nil {
 		return err
 	}
 	q.logEvent(jobID, "failed", map[string]interface{}{
@@ -210,7 +285,7 @@ func (q *FileQueue) FailJob(ctx context.Context, jobID, errMsg, workerID string,
 }
 
 func (q *FileQueue) LeaseJob(ctx context.Context, jobID, workerID string) error {
-	if err := q.lifecycle.LeaseJob(ctx, jobID, workerID); err != nil {
+	if err := q.lifecycle.Repo().LeaseJob(ctx, jobID, workerID); err != nil {
 		return err
 	}
 	q.logEvent(jobID, "claimed", map[string]interface{}{
@@ -220,11 +295,21 @@ func (q *FileQueue) LeaseJob(ctx context.Context, jobID, workerID string) error 
 }
 
 func (q *FileQueue) RenewJobLease(ctx context.Context, jobID, workerID, leaseID string, leaseExpiry time.Time) error {
-	return q.lifecycle.RenewLease(ctx, jobID, workerID, leaseID, leaseExpiry)
+	return q.lifecycle.Repo().PR3RenewLease(ctx, store.RenewLeaseCommand{
+		JobID:       jobID,
+		WorkerID:    workerID,
+		LeaseID:     leaseID,
+		LeaseExpiry: leaseExpiry.UTC(),
+		EmitEvent:   true,
+	})
 }
 
 func (q *FileQueue) RequeueZombieJobs(ctx context.Context, timeout time.Duration) (int, error) {
-	return q.lifecycle.RequeueZombieJobs(ctx, timeout)
+	results, err := q.lifecycle.RequeueExpiredLeases(ctx, 100)
+	if err != nil {
+		return 0, err
+	}
+	return len(results), nil
 }
 
 // ── Query methods (QueryService) ──
@@ -300,13 +385,4 @@ func (q *FileQueue) LifecycleService() *LifecycleService {
 // QueryService returns the query service for direct use.
 func (q *FileQueue) QueryService() *QueryService {
 	return q.query
-}
-
-// TransitionService returns a thin wrapper exposing the typed transition
-// methods (CompleteJob, RenewLease, FailJob, GetJob, Validate, ReleaseClaim,
-// StartJobWithLease) on top of the canonical *LifecycleService. This is the
-// surface that internal/services/joblifecycle.Service and
-// internal/grpcserver.Handler consume (PR9 contract).
-func (q *FileQueue) TransitionService() *TransitionService {
-	return NewTransitionService(q.lifecycle)
 }

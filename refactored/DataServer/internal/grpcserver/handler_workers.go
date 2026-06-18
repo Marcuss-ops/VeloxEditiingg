@@ -6,6 +6,8 @@ import (
 	"log"
 	"time"
 
+	"velox-server/internal/queue"
+	"velox-server/internal/store"
 	"velox-shared/controltransport"
 	pb "velox-shared/controltransport/pb"
 
@@ -177,15 +179,42 @@ func (h *Handler) sendPushJobOffer(ctx context.Context, workerID string) {
 		}
 	}
 
-	job, err := h.lifecycleSvc.ClaimNextJob(ctx, workerID, nil)
+	// Use repo directly since ClaimNextJob was removed from LifecycleService
+	claimResult, err := h.lifecycleSvc.Repo().ClaimNext(ctx, store.ClaimParams{
+		WorkerID:        workerID,
+		AllowedJobTypes: nil,
+		Now:             time.Now().UTC(),
+	})
 	if err != nil {
-		log.Printf("[GRPC] ClaimNextJob failed for worker %s: %v", workerID, err)
+		log.Printf("[GRPC] ClaimNext failed for worker %s: %v", workerID, err)
 		return
 	}
-	if job == nil {
+	if claimResult == nil || claimResult.JobID == "" {
 		return
 	}
-
+	sj, err := h.lifecycleSvc.Repo().GetJob(ctx, claimResult.JobID)
+	if err != nil {
+		log.Printf("[GRPC] GetJob after claim failed for worker %s: %v", workerID, err)
+		return
+	}
+	if sj == nil {
+		return
+	}
+	job := &queue.Job{
+		JobID:      sj.JobID,
+		Status:     queue.JobStatus(sj.Status),
+		VideoName:  sj.VideoName,
+		ProjectID:  sj.ProjectID,
+		AssignedTo: sj.AssignedTo,
+		LeaseID:    sj.LeaseID,
+		RetryCount: sj.RetryCount,
+		MaxRetries: sj.MaxRetries,
+		CreatedAt:  sj.CreatedAt,
+		UpdatedAt:  sj.UpdatedAt,
+		StartedAt:  sj.StartedAt,
+		CompletedAt: sj.CompletedAt,
+		Attempt:    claimResult.Attempt,
+	}
 	// Build job payload struct from job.Payload map
 	var jobPayload *structpb.Struct
 	if job.Payload != nil {
@@ -227,7 +256,7 @@ func (h *Handler) sendPushJobOffer(ctx context.Context, workerID string) {
 	// Issue 5 fix: send via sendCh instead of direct stream.Send().
 	if !safeSend(sess.sendCh, env) {
 		log.Printf("[GRPC] sendCh full/closed for JobOffer to worker %s — releasing claim", workerID)
-		if releaseErr := h.lifecycleSvc.ReleaseClaim(ctx, job.JobID); releaseErr != nil {
+		if releaseErr := h.lifecycleSvc.Repo().ReleaseClaim(ctx, job.JobID); releaseErr != nil {
 			log.Printf("[GRPC] Failed to release claim for job %s after send failure: %v", job.JobID, releaseErr)
 		}
 		return

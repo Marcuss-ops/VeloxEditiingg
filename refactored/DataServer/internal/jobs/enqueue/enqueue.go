@@ -26,17 +26,18 @@ import (
 
 var (
 	voiceoverAssetServiceMu sync.RWMutex
-	voiceoverAssetService   *assetbridge.Service
+	voiceoverAssetService   *assetbridge.AssetService
 )
 
-// SetVoiceoverAssetService configures the canonical asset bridge used before job submission.
-func SetVoiceoverAssetService(service *assetbridge.Service) {
+// SetVoiceoverAssetService configures the canonical asset service used before
+// job submission. Accepts the new generic AssetService (PR6+).
+func SetVoiceoverAssetService(service *assetbridge.AssetService) {
 	voiceoverAssetServiceMu.Lock()
 	defer voiceoverAssetServiceMu.Unlock()
 	voiceoverAssetService = service
 }
 
-func getVoiceoverAssetService() *assetbridge.Service {
+func getVoiceoverAssetService() *assetbridge.AssetService {
 	voiceoverAssetServiceMu.RLock()
 	defer voiceoverAssetServiceMu.RUnlock()
 	return voiceoverAssetService

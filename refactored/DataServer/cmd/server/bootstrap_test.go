@@ -7,6 +7,7 @@ import (
 
 	"velox-server/internal/config"
 	"velox-server/internal/queue"
+	"velox-server/internal/store"
 )
 
 // newTestConfig returns a minimal config pointing at an in-memory SQLite DB
@@ -102,14 +103,38 @@ func TestBuildServerDeps_HTTPAndGRPCShareSameLifecycleService(t *testing.T) {
 		t.Fatalf("expected jobID=%s, got %s", jobID, job.JobID)
 	}
 
-	// Transition LEASED → RUNNING via CAS, then complete.
-	if err := grpcLifecycle.TransitionToRunning(ctx, jobID); err != nil {
-		t.Fatalf("TransitionToRunning via gRPC lifecycle: %v", err)
+	// Transition LEASED → RUNNING via repo (PR3: TransitionToRunning removed from LifecycleService).
+	repo := grpcLifecycle.Repo()
+	sj, err := repo.GetJob(ctx, jobID)
+	if err != nil || sj == nil {
+		t.Fatalf("GetJob after claim: %v", err)
+	}
+	if err := repo.StartJob(ctx, store.StartJobParams{
+		JobID:            jobID,
+		WorkerID:         job.AssignedTo,
+		LeaseID:          job.LeaseID,
+		Attempt:          job.Attempt,
+		ExpectedRevision: sj.Revision,
+	}); err != nil {
+		t.Fatalf("StartJob via gRPC repo: %v", err)
 	}
 
-	// Complete via LifecycleService directly (gRPC path: RUNNING → SUCCEEDED).
-	if err := grpcLifecycle.CompleteJob(ctx, jobID); err != nil {
-		t.Fatalf("CompleteJob via gRPC lifecycle: %v", err)
+	// Complete via repo (PR3: CompleteJob on LifecycleService removed;
+	// SUCCEEDED must go through artifact gate in production, but tests
+	// can use repo.CompleteJob directly).
+	sj, err = repo.GetJob(ctx, jobID)
+	if err != nil || sj == nil {
+		t.Fatalf("GetJob after StartJob: %v", err)
+	}
+	if err := repo.CompleteJob(ctx, store.CompleteJobParams{
+		JobID:            jobID,
+		WorkerID:         sj.AssignedTo,
+		LeaseID:          sj.LeaseID,
+		Attempt:          job.Attempt,
+		ExpectedRevision: sj.Revision,
+		FinalStatus:      store.JobStatusSucceeded,
+	}); err != nil {
+		t.Fatalf("CompleteJob via gRPC repo: %v", err)
 	}
 
 	// Verify the job is SUCCEEDED via the FileQueue (HTTP path reading).
@@ -164,10 +189,32 @@ func TestClaimHTTPCompleteGRPCSeesConsistentState(t *testing.T) {
 
 	// Step 4: Transition LEASED → RUNNING → SUCCEEDED via gRPC path.
 	grpcLifecycle := deps.fileQ.LifecycleService()
-	if err := grpcLifecycle.TransitionToRunning(ctx, jobID); err != nil {
-		t.Fatalf("TransitionToRunning via gRPC: %v", err)
+	repo := grpcLifecycle.Repo()
+	sj, err := repo.GetJob(ctx, jobID)
+	if err != nil || sj == nil {
+		t.Fatalf("GetJob after claim: %v", err)
 	}
-	if err := grpcLifecycle.CompleteJob(ctx, jobID); err != nil {
+	if err := repo.StartJob(ctx, store.StartJobParams{
+		JobID:            jobID,
+		WorkerID:         claimed.AssignedTo,
+		LeaseID:          claimed.LeaseID,
+		Attempt:          claimed.Attempt,
+		ExpectedRevision: sj.Revision,
+	}); err != nil {
+		t.Fatalf("StartJob via gRPC: %v", err)
+	}
+	sj, err = repo.GetJob(ctx, jobID)
+	if err != nil || sj == nil {
+		t.Fatalf("GetJob after StartJob: %v", err)
+	}
+	if err := repo.CompleteJob(ctx, store.CompleteJobParams{
+		JobID:            jobID,
+		WorkerID:         sj.AssignedTo,
+		LeaseID:          sj.LeaseID,
+		Attempt:          claimed.Attempt,
+		ExpectedRevision: sj.Revision,
+		FinalStatus:      store.JobStatusSucceeded,
+	}); err != nil {
 		t.Fatalf("CompleteJob via gRPC: %v", err)
 	}
 
