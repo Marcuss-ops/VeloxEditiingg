@@ -11,8 +11,20 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"velox-server/internal/config"
+	"velox-server/internal/store"
 	workersreg "velox-server/internal/workers"
 )
+
+func newTestStoreAndTokenManager(t *testing.T) (*store.SQLiteStore, *workersreg.TokenManager) {
+	t.Helper()
+	dbPath := filepath.Join(t.TempDir(), "test_workers.db")
+	dbStore, err := store.NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore: %v", err)
+	}
+	t.Cleanup(func() { dbStore.Close() })
+	return dbStore, workersreg.NewTokenManager(dbStore)
+}
 
 func TestServeAssetRequiresWorkerAuthentication(t *testing.T) {
 	gin.SetMode(gin.TestMode)
@@ -20,7 +32,7 @@ func TestServeAssetRequiresWorkerAuthentication(t *testing.T) {
 	assetID := strings.Repeat("a", 64)
 	writeTestAsset(t, tempDir, assetID, []byte("voiceover-bytes"))
 
-	tokenMgr := workersreg.NewTokenManager(nil)
+	_, tokenMgr := newTestStoreAndTokenManager(t)
 	handler := NewHandler(&config.Config{Runtime: config.RuntimeConfig{DataDir: tempDir}}, tokenMgr)
 	r := gin.New()
 	r.GET("/api/v1/worker-assets/:asset_id", handler.ServeAsset())
@@ -40,7 +52,7 @@ func TestServeAssetSupportsContentLengthTypeAndRange(t *testing.T) {
 	assetBytes := []byte("0123456789abcdef")
 	writeTestAsset(t, tempDir, assetID, assetBytes)
 
-	tokenMgr := workersreg.NewTokenManager(nil)
+	_, tokenMgr := newTestStoreAndTokenManager(t)
 	token := tokenMgr.GenerateToken("worker-1")
 
 	handler := NewHandler(&config.Config{Runtime: config.RuntimeConfig{DataDir: tempDir}}, tokenMgr)
@@ -83,7 +95,7 @@ func TestServeAssetSupportsContentLengthTypeAndRange(t *testing.T) {
 func TestServeAssetRejectsTraversalAndUnknownAssets(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	tempDir := t.TempDir()
-	tokenMgr := workersreg.NewTokenManager(nil)
+	_, tokenMgr := newTestStoreAndTokenManager(t)
 	token := tokenMgr.GenerateToken("worker-1")
 	handler := NewHandler(&config.Config{Runtime: config.RuntimeConfig{DataDir: tempDir}}, tokenMgr)
 

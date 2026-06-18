@@ -13,7 +13,7 @@
 
 - name: Normalize worker systemd
   hosts: workers
-  gather_facts: yes
+  gather_facts: true
   vars:
     velox_dir: "/opt/velox"
     master_url: "{{ master_url | default('http://127.0.0.1:8000') }}"

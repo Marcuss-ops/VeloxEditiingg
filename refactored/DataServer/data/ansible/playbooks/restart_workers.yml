@@ -10,7 +10,7 @@
 
 - name: Restart workers
   hosts: workers
-  gather_facts: no
+  gather_facts: false
 
   tasks:
     # ── PRECHECK ─────────────────────────────────────────────
@@ -22,8 +22,8 @@
       ansible.builtin.systemd:
         name: "velox-worker-{{ inventory_hostname }}"
         state: restarted
-        daemon_reload: yes
-        enabled: yes
+        daemon_reload: true
+        enabled: true
       register: restart_result
 
     - name: Restart | Attendi stabilizzazione servizio

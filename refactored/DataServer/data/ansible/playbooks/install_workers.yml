@@ -14,7 +14,7 @@
 
 - name: Install workers
   hosts: workers
-  gather_facts: yes
+  gather_facts: true
   become: true
   vars:
     velox_dir: "/opt/velox"

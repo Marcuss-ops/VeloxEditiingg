@@ -139,7 +139,9 @@ func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
 	}
 
 	// Build BlobStore for artifact staging/promotion (PR2b).
-	blobStore, bsErr := store.NewLocalBlobStore(cfg.Runtime.StagingDir, cfg.Runtime.StorageDir)
+	var blobStore store.BlobStore
+	var bsErr error
+	blobStore, bsErr = store.NewLocalBlobStore(cfg.Runtime.StagingDir, cfg.Runtime.StorageDir)
 	if bsErr != nil {
 		log.Printf("[BOOTSTRAP] BlobStore init warning: %v — using nop blob store", bsErr)
 		blobStore = store.NewNopBlobStore(cfg.Runtime.DataDir)

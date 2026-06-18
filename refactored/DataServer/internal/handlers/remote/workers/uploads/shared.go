@@ -3,18 +3,7 @@ package uploads
 import (
 	"regexp"
 	"strings"
-
-	"velox-server/internal/queue"
-	"velox-server/internal/store"
 )
-
-// getDBStore extracts the SQLiteStore from a FileQueue or interface{} parameter.
-func getDBStore(fileQ interface{}) *store.SQLiteStore {
-	if fq, ok := fileQ.(*queue.FileQueue); ok && fq != nil {
-		return fq.GetDBStore()
-	}
-	return nil
-}
 
 // slugify sanitizes a string for use as a filename.
 func slugify(s string) string {

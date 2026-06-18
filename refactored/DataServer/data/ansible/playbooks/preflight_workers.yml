@@ -12,7 +12,7 @@
 
 - name: Preflight workers
   hosts: workers
-  gather_facts: yes
+  gather_facts: true
   vars:
     velox_dir: "{{ velox_dir | default('/opt/velox') }}"
     min_disk_gb: 10
@@ -54,7 +54,7 @@
         msg: "Spazio disco insufficiente su {{ item.mount }}: {{ (item.size_available / 1073741824) | round(1) }}G libero (min: {{ min_disk_gb }}G)"
       when: item.mount == '/' and (item.size_available / 1073741824) < min_disk_gb
       loop: "{{ ansible_mounts }}"
-      ignore_errors: yes
+      ignore_errors: true
 
     # ── SISTEMA OPERATIVO ────────────────────────────────────
     - name: Preflight | Verifica OS e kernel

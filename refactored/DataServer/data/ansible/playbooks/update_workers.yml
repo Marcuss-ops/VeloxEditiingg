@@ -10,7 +10,7 @@
 
 - name: Update workers
   hosts: workers
-  gather_facts: no
+  gather_facts: false
   become: true
   vars:
     velox_dir: "/opt/velox"
@@ -79,7 +79,7 @@
         url: "{{ master_url }}/api/worker/bundle?platform=linux&arch=x86_64"
         dest: "/tmp/velox_worker_update.zip"
         timeout: 120
-        force: yes
+        force: true
       when: not (local_bundle_zip.stat.exists | default(false))
       register: bundle_download
       failed_when: false

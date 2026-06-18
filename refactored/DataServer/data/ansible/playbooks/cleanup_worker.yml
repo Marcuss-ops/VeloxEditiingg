@@ -10,7 +10,7 @@
 
 - name: Cleanup Velox worker traces
   hosts: workers
-  gather_facts: yes
+  gather_facts: true
   vars:
     velox_dir: "/opt/velox"
 
