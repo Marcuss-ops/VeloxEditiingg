@@ -7,7 +7,7 @@
 //   (a) the single legal writer of jobs.status='SUCCEEDED' for the
 //       verified-finalization lifecycle, OR
 //   (b) a SEPARATE lifecycle writer (job_deliveries, workflow_steps,
-//       workflow_runs, the legacy CompleteJobTx path), OR
+//       workflow_runs), OR
 //   (c) this test file (regex literal as documentation).
 //
 // A future PR that adds a NEW file containing the fragment will fail
