@@ -2,24 +2,21 @@
 # ────────────────────────────────────────────────────────────────────────────
 # THIS FILE IS A TEMPLATE. Copy to a local `production.ini` and fill in real
 # IPs/hostnames. The active inventory is generated and managed by the operator;
-# it is NOT committed (recommend adding `deploy/inventory/production.ini`
-# to .gitignore in your checkout).
+# it is NOT committed (`**/production.ini` is excluded by the root .gitignore).
+#
+# Canonical production topology
+# ──────────────────────────────
+# The master hosts the gRPC :9000 + REST :8000 listeners and admits EXACTLY
+# TWO external workers (worker_1, worker_2). This is enforced by:
+#   * ValidateProductionWorkers in DataServer/internal/config/workers_validator.go
+#     (fail-fast at server start, mirrored from this file by deploy/group_vars/all.yml
+#      → deploy/templates/velox-server.env.j2 → /etc/velox-server.env).
+#   * DataServer/data/ansible/playbooks/tasks/prechecks.yml
+#     (asserts `groups['velox_workers'] | length == 2` controller-side).
 #
 # Bootstrapping a new node:
 #   cp deploy/inventory/production.ini.example deploy/inventory/production.ini
 #   $EDITOR deploy/inventory/production.ini   # fill in CHANGE_ME values
-#
-# Topologia (single-host for now):
-#   * velox-master  — runs the master server (gRPC :9000 + REST :8000).
-#   * velox-worker-1 — runs the worker agent. In a multi-host deployment the
-#                       worker lives on a separate physical machine and
-#                       reaches the master over a public IP or DNS name.
-#
-# Canonical worker host (operator fleet, as of 2026-06-19):
-#   Replace with the public IP or DNS name of the live worker. Keep the
-#   `worker_id` in sync with the allowlist. Mirror in:
-#     - deploy/group_vars/all.yml `velox_allowed_workers`
-#     - deploy/velox-server.env.example `VELOX_ALLOWED_WORKERS`
 #
 # Not a Velox machine — intentionally excluded:
 #   youtube_king is the operator's personal computer (Windows host) and is
@@ -28,10 +25,10 @@
 #   ansible_user, no worker_id, and no gRPC handshake. A reference is
 #   kept here ONLY as a guardrail against accidental re-onboarding.
 #
-# Previous multi-host template was REMOVED. To scale up later, append new
-# velox-worker-X entries under [velox_workers] and mirror them in
-# deploy/group_vars/all.yml (velox_allowed_workers) + deploy/velox-server.env.example
-# (VELOX_ALLOWED_WORKERS).
+# Scale-out guardrail:
+#   Adding a 3rd worker is FORBIDDEN in production: ValidateProductionWorkers
+#   fails closed at server start, and DataServer/data/ansible/playbooks/tasks/
+#   prechecks.yml rejects the inventory before any play starts.
 #
 # Connection requirements:
 #   * SSH key-based auth as user `velox-deploy` (created by bootstrap-ssh).
@@ -40,18 +37,20 @@
 #
 # Hostgroups:
 #   [velox_master]   — runs the master server. Single host.
-#   [velox_workers]  — runs worker agents. One host per physical machine.
+#   [velox_workers]  — runs worker agents. EXACTLY TWO hosts (see canonical rule).
 #
 # Per-host vars:
 #   worker_id        — stable identifier the master uses for gate/ACL.
 #                      MUST match a value listed in `velox_allowed_workers`
-#                      in deploy/group_vars/all.yml.
+#                      in deploy/group_vars/all.yml AND mirror
+#                      /etc/velox-server.env `VELOX_ALLOWED_WORKERS`.
 
 [velox_master]
 velox-master ansible_host=CHANGE_ME ansible_user=velox-deploy
 
 [velox_workers]
 velox-worker-1 ansible_host=CHANGE_ME ansible_user=velox-deploy worker_id=velox-worker-1
+velox-worker-2 ansible_host=CHANGE_ME ansible_user=velox-deploy worker_id=velox-worker-2
 
 [velox_master:vars]
 ansible_python_interpreter=/usr/bin/python3

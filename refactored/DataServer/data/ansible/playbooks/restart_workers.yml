@@ -9,7 +9,7 @@
 # ============================================================
 
 - name: Restart workers
-  hosts: workers
+  hosts: velox_workers
   gather_facts: false
 
   tasks:
