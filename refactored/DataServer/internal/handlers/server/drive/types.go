@@ -1,12 +1,5 @@
 package drive
 
-import (
-	"sync"
-	"time"
-
-	"velox-server/internal/store"
-)
-
 // DriveFolder represents a Drive folder entry
 type DriveFolder struct {
 	ID              string `json:"id" yaml:"id"`
@@ -43,21 +36,4 @@ type MasterFolderInfo struct {
 	// drive_master_folders.metadata_json column on upsert. Empty when
 	// the legacy JSON import path has no metadata to record.
 	MetadataJSON string `json:"metadata_json,omitempty"`
-}
-
-// driveLinksCache holds cached data
-type driveLinksCacheType struct {
-	folders  []DriveFolder
-	lastLoad time.Time
-	mu       sync.RWMutex
-}
-
-var driveLinksCache driveLinksCacheType
-var driveTokensDir string
-var driveLinksStore *store.SQLiteStore
-
-// InitDriveLinksCache initializes the cache with store and triggers initial load.
-func InitDriveLinksCache(dataDirectory string, store *store.SQLiteStore) {
-	driveLinksStore = store
-	loadDriveLinksFromDisk()
 }

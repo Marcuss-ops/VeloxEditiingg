@@ -4,32 +4,39 @@ import (
 	"encoding/json"
 	"log"
 	"strings"
+	"sync"
 	"time"
 )
 
-// getDriveLinksFromCache returns folders from cache with 30s TTL
-func getDriveLinksFromCache() []DriveFolder {
-	driveLinksCache.mu.RLock()
-	if time.Since(driveLinksCache.lastLoad) < 30*time.Second && len(driveLinksCache.folders) > 0 {
-		folders := make([]DriveFolder, len(driveLinksCache.folders))
-		copy(folders, driveLinksCache.folders)
-		driveLinksCache.mu.RUnlock()
-		return folders
-	}
-	driveLinksCache.mu.RUnlock()
-
-	driveLinksCache.mu.Lock()
-	defer driveLinksCache.mu.Unlock()
-
-	_ = loadDriveLinksFromDisk()
-	return driveLinksCache.folders
+// driveLinksCache holds cached data — embedded in DriveHandlers.
+type driveLinksCache struct {
+	folders  []DriveFolder
+	lastLoad time.Time
+	mu       sync.RWMutex
 }
 
-// loadDriveLinksFromDisk loads folders from SQLite (source of truth).
-func loadDriveLinksFromDisk() error {
-	// SQLite is the source of truth
-	if driveLinksStore != nil {
-		dbFolders, err := driveLinksStore.ListDriveLinks()
+// getLinks returns folders from cache with 30s TTL.
+func (h *DriveHandlers) getLinks() []DriveFolder {
+	h.cache.mu.RLock()
+	if time.Since(h.cache.lastLoad) < 30*time.Second && len(h.cache.folders) > 0 {
+		folders := make([]DriveFolder, len(h.cache.folders))
+		copy(folders, h.cache.folders)
+		h.cache.mu.RUnlock()
+		return folders
+	}
+	h.cache.mu.RUnlock()
+
+	h.cache.mu.Lock()
+	defer h.cache.mu.Unlock()
+
+	_ = h.loadFromDisk()
+	return h.cache.folders
+}
+
+// loadFromDisk loads folders from SQLite (source of truth).
+func (h *DriveHandlers) loadFromDisk() error {
+	if h.store != nil {
+		dbFolders, err := h.store.ListDriveLinks()
 		if err == nil && len(dbFolders) > 0 {
 			folders := make([]DriveFolder, len(dbFolders))
 			for i, f := range dbFolders {
@@ -45,30 +52,37 @@ func loadDriveLinksFromDisk() error {
 					SubfoldersCount: getIntIntField(f, "subfolders_count"),
 				}
 			}
-			driveLinksCache.folders = folders
-			driveLinksCache.lastLoad = time.Now()
+			h.cache.folders = folders
+			h.cache.lastLoad = time.Now()
 			return nil
 		}
 
-		// SQLite empty — nothing to load
-		driveLinksCache.folders = nil
-		driveLinksCache.lastLoad = time.Now()
+		h.cache.folders = nil
+		h.cache.lastLoad = time.Now()
 		return nil
 	}
 
 	return nil
 }
 
-// saveDriveLinksToDisk persists folders to SQLite.
-func saveDriveLinksToDisk(folders []DriveFolder) error {
-	if driveLinksStore != nil {
+// saveToDisk persists folders to SQLite.
+func (h *DriveHandlers) saveToDisk(folders []DriveFolder) error {
+	if h.store != nil {
 		rawList, _ := json.Marshal(folders)
-		if err := driveLinksStore.ReplaceDriveLinks(rawList); err != nil {
+		if err := h.store.ReplaceDriveLinks(rawList); err != nil {
 			log.Printf("[WARN] Drive links SQLite save failed: %v", err)
 			return err
 		}
 	}
 	return nil
+}
+
+// updateCache sets the cache folders and timestamp.
+func (h *DriveHandlers) updateCache(folders []DriveFolder) {
+	h.cache.mu.Lock()
+	h.cache.folders = folders
+	h.cache.lastLoad = time.Now()
+	h.cache.mu.Unlock()
 }
 
 // normalizeName normalizes a folder name for matching

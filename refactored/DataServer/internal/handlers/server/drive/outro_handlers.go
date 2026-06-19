@@ -9,8 +9,6 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-
-	driveapi "velox-server/internal/integrations/drive"
 )
 
 type outroFileItem struct {
@@ -185,4 +183,4 @@ func (h *DriveHandlers) GetOutroFolderContentsByIDHandler(c *gin.Context) {
 	})
 }
 
-var _ = driveapi.Service{}
+

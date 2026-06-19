@@ -44,7 +44,6 @@ func findMasterIDByName(folders []DriveFolder, names []string) string {
 
 // resolveDriveFolderID finds matching cache folder and returns its ID
 func resolveDriveFolderID(folders []DriveFolder, folderID string) string {
-	// If it looks like a real Drive ID (long alphanumeric), try to match
 	if len(folderID) > 15 {
 		for _, f := range folders {
 			if f.Link == folderID || f.ID == folderID {
@@ -56,12 +55,11 @@ func resolveDriveFolderID(folders []DriveFolder, folderID string) string {
 }
 
 // GetDriveGroupsHandler builds group structure (clip/stock/voiceover) grouped by language
-func GetDriveGroupsHandler(c *gin.Context) {
-	folders := getDriveLinksFromCache()
+func (h *DriveHandlers) GetDriveGroupsHandler(c *gin.Context) {
+	folders := h.getLinks()
 
 	groups := make(map[string]interface{})
 
-	// Build groups from clip folder mapping
 	for group, clipName := range groupToClipFolder {
 		clipID := findMasterIDByName(folders, []string{clipName, group})
 		voiceoverID := findMasterIDByName(folders, []string{groupToVoiceoverFolder[group], group + " Voice"})
@@ -84,12 +82,11 @@ func GetDriveGroupsHandler(c *gin.Context) {
 }
 
 // GetDriveFoldersHandler returns master folders OR children of a specific parent
-func GetDriveFoldersHandler(c *gin.Context) {
+func (h *DriveHandlers) GetDriveFoldersHandler(c *gin.Context) {
 	parentID := c.Query("parent_id")
-	folders := getDriveLinksFromCache()
+	folders := h.getLinks()
 
 	if parentID == "" || parentID == "root" {
-		// Return master folders (ParentID == "")
 		var masters []DriveFolder
 		for _, f := range folders {
 			if f.ParentID == "" || f.IsMaster {
@@ -104,10 +101,8 @@ func GetDriveFoldersHandler(c *gin.Context) {
 		return
 	}
 
-	// Resolve folder ID
 	resolvedID := resolveDriveFolderID(folders, parentID)
 
-	// Return children
 	var children []DriveFolder
 	for _, f := range folders {
 		if f.ParentID == resolvedID {
@@ -123,28 +118,25 @@ func GetDriveFoldersHandler(c *gin.Context) {
 }
 
 // GroupFoldersHandler returns clip/stock/voiceover folder IDs for a given group name
-func GroupFoldersHandler(c *gin.Context) {
+func (h *DriveHandlers) GroupFoldersHandler(c *gin.Context) {
 	groupName := c.Param("group_name")
-	folders := getDriveLinksFromCache()
+	folders := h.getLinks()
 
 	result := gin.H{
 		"success": true,
 		"group":   groupName,
 	}
 
-	// Find clip folder
 	if clipName, ok := groupToClipFolder[groupName]; ok {
 		clipID := findMasterIDByName(folders, []string{clipName, groupName})
 		result["clip"] = clipID
 	}
 
-	// Find stock folder
 	if stockName, ok := stockFolderAliases[groupName]; ok {
 		stockID := findMasterIDByName(folders, []string{stockName, groupName + " Stock"})
 		result["stock"] = stockID
 	}
 
-	// Find voiceover folder
 	if voiceoverName, ok := groupToVoiceoverFolder[groupName]; ok {
 		voiceoverID := findMasterIDByName(folders, []string{voiceoverName, groupName + " Voice"})
 		result["voiceover"] = voiceoverID
@@ -154,13 +146,12 @@ func GroupFoldersHandler(c *gin.Context) {
 }
 
 // ClipFolderIDHandler returns the clip folder ID for a given folder_name or group
-func ClipFolderIDHandler(c *gin.Context) {
+func (h *DriveHandlers) ClipFolderIDHandler(c *gin.Context) {
 	folderName := c.Query("folder_name")
 	group := c.Query("group")
 
-	folders := getDriveLinksFromCache()
+	folders := h.getLinks()
 
-	// Try exact match first
 	if folderName != "" {
 		for _, f := range folders {
 			if normalizeName(f.Name) == normalizeName(folderName) {
@@ -174,7 +165,6 @@ func ClipFolderIDHandler(c *gin.Context) {
 		}
 	}
 
-	// Try group match
 	if group != "" {
 		if clipName, ok := groupToClipFolder[group]; ok {
 			clipID := findMasterIDByName(folders, []string{clipName, group})
@@ -196,17 +186,16 @@ func ClipFolderIDHandler(c *gin.Context) {
 }
 
 // DriveFilesHandler lists subfolder items under a parent_id (folders only)
-func DriveFilesHandler(c *gin.Context) {
+func (h *DriveHandlers) DriveFilesHandler(c *gin.Context) {
 	parentID := c.Query("parent_id")
 	if parentID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "parent_id required"})
 		return
 	}
 
-	folders := getDriveLinksFromCache()
+	folders := h.getLinks()
 	resolvedID := resolveDriveFolderID(folders, parentID)
 
-	// Find children
 	var children []DriveFolder
 	for _, f := range folders {
 		if f.ParentID == resolvedID {
@@ -214,7 +203,6 @@ func DriveFilesHandler(c *gin.Context) {
 		}
 	}
 
-	// If no children found with ParentID match, try fuzzy match on name
 	if len(children) == 0 {
 		for _, f := range folders {
 			if strings.Contains(normalizeName(f.Name), normalizeName(parentID)) {

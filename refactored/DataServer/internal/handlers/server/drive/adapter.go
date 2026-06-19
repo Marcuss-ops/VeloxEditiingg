@@ -11,43 +11,42 @@ import (
 	"velox-server/internal/store"
 )
 
-// DriveHandlers holds Drive links dependencies (legacy compatibility layer)
+// DriveHandlers holds Drive links dependencies
 type DriveHandlers struct {
 	dataDir      string
 	store        *store.SQLiteStore
 	driveService *drive.Service
+	tokensDir    string
+	cache        driveLinksCache
 }
 
-// NewDriveHandlers creates Drive handlers (legacy compatibility).
+// NewDriveHandlers creates Drive handlers.
 // driveSvc may be nil if Drive integration is not configured.
 // sqliteStore must be the primary store (opened once at bootstrap).
 func NewDriveHandlers(cfg *drive.ServiceConfig, driveSvc *drive.Service, sqliteStore *store.SQLiteStore) (*DriveHandlers, error) {
 	dataDir := resolveDriveDataDir(cfg.TokensDir)
 
-	InitDriveLinksCache(dataDir, sqliteStore)
-	driveTokensDir = cfg.TokensDir
-
-	return &DriveHandlers{
+	h := &DriveHandlers{
 		dataDir:      dataDir,
 		store:        sqliteStore,
 		driveService: driveSvc,
-	}, nil
+		tokensDir:    cfg.TokensDir,
+	}
+
+	// Initialize cache from SQLite
+	_ = h.loadFromDisk()
+
+	return h, nil
 }
 
-// SetSQLiteStore wires (or rewires) the SQLite store post-construction. The
-// PR9 refactor splits module ownership so handlers might be built before the
-// bootstrap-time SQLiteStore reference is known; bootstrap calls this from
-// Module.WithSQLiteStore to thread the dependency through. Nil is a no-op so
-// callers can defensively clear the reference without panicking.
+// SetSQLiteStore wires (or rewires) the SQLite store post-construction.
 func (h *DriveHandlers) SetSQLiteStore(s *store.SQLiteStore) {
 	if h == nil {
 		return
 	}
 	h.store = s
 	if s != nil {
-		// Reinit the link cache so the cache hit-path uses this store even if
-		// it was previously constructed with nil (PR9 cutover).
-		InitDriveLinksCache(h.dataDir, s)
+		_ = h.loadFromDisk()
 	}
 }
 
@@ -79,31 +78,31 @@ func resolveDriveDataDir(tokensDir string) string {
 // RegisterDriveRoutes registers Drive Links routes
 func RegisterDriveRoutes(r *gin.Engine, h *DriveHandlers) {
 	// Drive Links CRUD routes
-	r.GET("/api/drive/links", GetDriveLinksHandler)
-	r.GET("/api/drive/links/:group_name", GetDriveLinksByGroupHandler)
-	r.POST("/api/drive/links/save", SaveDriveLinksHandler)
-	r.POST("/api/drive/links/add", AddDriveFolderHandler)
-	r.PUT("/api/drive/links/:folder_id", UpdateDriveFolderHandler)
-	r.DELETE("/api/drive/links/:folder_id", DeleteDriveFolderHandler)
-	r.GET("/api/drive/links/master", GetMasterFoldersHandler)
-	r.POST("/api/drive/links/master/upsert", UpsertMasterFolderHandler)
+	r.GET("/api/drive/links", h.GetDriveLinksHandler)
+	r.GET("/api/drive/links/:group_name", h.GetDriveLinksByGroupHandler)
+	r.POST("/api/drive/links/save", h.SaveDriveLinksHandler)
+	r.POST("/api/drive/links/add", h.AddDriveFolderHandler)
+	r.PUT("/api/drive/links/:folder_id", h.UpdateDriveFolderHandler)
+	r.DELETE("/api/drive/links/:folder_id", h.DeleteDriveFolderHandler)
+	r.GET("/api/drive/links/master", h.GetMasterFoldersHandler)
+	r.POST("/api/drive/links/master/upsert", h.UpsertMasterFolderHandler)
 	r.GET("/api/drive/oauth/start", h.DriveOAuthStartHandler)
 	r.GET("/api/drive/oauth/callback", h.DriveOAuthCallbackHandler)
 
 	// Drive Groups & Folders routes
-	r.GET("/api/drive/groups", GetDriveGroupsHandler)
-	r.GET("/api/drive/folders/list", GetDriveFoldersHandler)
-	r.POST("/api/drive/folders/create", CreateDriveFolderHandler)
-	r.GET("/api/drive/folders/group/:group_name", GroupFoldersHandler)
-	r.GET("/api/drive/folders/clip", ClipFolderIDHandler)
-	r.GET("/api/drive/files/list", DriveFilesHandler)
-	r.POST("/api/drive/upload/text", UploadTextHandler)
+	r.GET("/api/drive/groups", h.GetDriveGroupsHandler)
+	r.GET("/api/drive/folders/list", h.GetDriveFoldersHandler)
+	r.POST("/api/drive/folders/create", h.CreateDriveFolderHandler)
+	r.GET("/api/drive/folders/group/:group_name", h.GroupFoldersHandler)
+	r.GET("/api/drive/folders/clip", h.ClipFolderIDHandler)
+	r.GET("/api/drive/files/list", h.DriveFilesHandler)
+	r.POST("/api/drive/upload/text", h.UploadTextHandler)
 	r.GET("/api/drive/outros", h.ListOutroFoldersHandler)
 	r.GET("/api/drive/outros/:language", h.GetOutroFolderContentsHandler)
 	r.GET("/api/drive/outros-by-id/:folder_id", h.GetOutroFolderContentsByIDHandler)
 
 	// Drive Tokens
-	r.GET("/api/drive/tokens/list", ListDriveTokensHandler)
+	r.GET("/api/drive/tokens/list", h.ListDriveTokensHandler)
 
 	// Drive Health Check
 	r.GET("/api/drive/health", h.DriveHealthCheckHandler)

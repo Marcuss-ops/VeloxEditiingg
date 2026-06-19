@@ -61,9 +61,6 @@ func (m *Module) WithSQLiteStore(s *store.SQLiteStore) {
 	}
 	m.sqliteStore = s
 	if m.handlers != nil {
-		// Re-init the link cache now that we have a real store. The wrapper
-		// inside handlers uses driveLinksStore global internally, but if the
-		// adapter splits up after PR9 this hook is the right place to relay.
 		log.Printf("[DRIVE] SQLite store wired (driveModules will persist writes)")
 	}
 }
@@ -79,12 +76,9 @@ func (m *Module) RegisterRoutes(r *gin.Engine) {
 		return
 	}
 	// Relay the SQLite store through to the handler so drive-link +
-	// master-folder CRUD persists. DriveModules were previously constructed
-	// without a SQLiteStore reference (m.sqliteStore was zero-value), which
-	// meant all write paths ran through the legacy JSON backup only.
-	// Bootstrap calls WithSQLiteStore() right before RegisterRoutes so that
-	// is the canonical path; we double-up here for any caller that goes
-	// through this method directly.
+	// master-folder CRUD persists. Bootstrap calls WithSQLiteStore()
+	// right before RegisterRoutes; we double-up here for any caller
+	// that goes through this method directly.
 	if m.sqliteStore != nil {
 		m.handlers.SetSQLiteStore(m.sqliteStore)
 	}
