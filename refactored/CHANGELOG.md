@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+> **Operator follow-up (NOT in this PR):** after the three two-worker
+> lockdown PRs land on `main`, four destructive environment-specific
+> actions remain with the operator. They are deliberately NOT in code:
+> they require coordination outside this repo. See
+> `refactored/docs/post-pr-two-worker-hardening.md` for filter-repo +
+> force-push + credential rotation + worker recreation. The PR ships
+> the revocation of the historical identifiers from versioned files,
+> the operator runbook ships the runtime scrub.
+
 ### 🔐 YouTube SQLite-only contract (S3 / S4 / S5a+ / S5c / S5d / S6 closed)
 
 The YouTube integration is now SQLite-only for OAuth credentials and
@@ -47,8 +56,8 @@ path must honour:
 ### 🧹 Legacy Cleanup (2026-06 final)
 
 - **HTTP worker control plane fully removed**: the worker agent no longer ships `RegisterWorker`, `UnregisterWorker`, `SendHeartbeat`, `GetCommands`, `AckCommand`, `AckCommandByID`, `UpdateStatus`, or the non-v2 job methods (`GetJob`, `SubmitJobResult`, `CompleteJob`, `RenewJobLease`). All control-plane traffic is now exclusively the gRPC `WorkerControl` bidi stream (`DataServer/internal/grpcserver/`). The V2 HTTP endpoints (`GetJobV2`, `SubmitJobResultV2`, `CompleteJobV2`, `RenewJobLeaseV2`) are still used by the data-plane bridge but no longer fall back to the legacy `/api/jobs/*` paths. Result: the recurring `404 /api/workers/register` entries stop appearing in master logs.
-- **Legacy Docker `velox-worker-host_*` script deprecated**: `scripts/local-workers.sh` → `scripts/local-workers.sh.deprecated` (now a loud-exit stub). Production and staging deploys use the systemd Go worker agent (`RemoteCodex/native/worker-agent-go`) on public IPs.
-- **Tailscale references purged**: `DataServer/data/ansible/playbooks/inventory.example.ini` now uses `WORKER_PUBLIC_IP` as the placeholder (was `TAILSCALE_IP`); `RemoteCodex/scripts/cleanup-worker.sh` defaults to `http://127.0.0.1:8000` instead of the historical Tailscale peer IP; `DataServer/data/ansible/playbooks/tasks/installer_heartbeat.yml` no longer POSTs to the legacy `/api/workers/register` endpoint (preflight is now `/health` only).
+- **Legacy Docker `velox-worker-host_*` script fully removed** (was previously retained as `scripts/local-workers.sh.deprecated` loud-exit stub). Production and staging deploys use the systemd Go worker agent (`RemoteCodex/native/worker-agent-go`) on public IPs. No stub remains in-tree; an operator running the legacy command sees `git: command not found` rather than a misleading stub.
+- **Tailscale references purged**: `DataServer/data/ansible/playbooks/inventory.example.ini` now uses `CHANGE_ME_PUBLIC_IP` placeholders for both workers (canonical 2-worker topology); `RemoteCodex/scripts/cleanup-worker.sh` defaults to `http://127.0.0.1:8000` instead of the historical Tailscale peer IP; `DataServer/data/ansible/playbooks/tasks/installer_heartbeat.yml` no longer POSTs to the legacy `/api/workers/register` endpoint (preflight is now `/health` only).
 - **2026-06-13 historical entry neutralized**: removed explicit Tailscale IP and per-host references from the historical CHANGELOG block — the operators' notes are kept without leaking real network topology.
 
 ### 🧹 Legacy Cleanup (2026-06 cleanup pass)
@@ -104,7 +113,7 @@ path must honour:
 
 ### 🔧 Worker Management
 - **Worker connectivity**: Connected remote workers to the master over public IP/DNS (no VPN mesh). Worker access now goes via the gRPC `WorkerControl` stream on the master (see `DataServer/internal/grpcserver/`).
-- **Worker configs fixed**: Updated `master_url` on the three remote workers from prior environment-specific endpoints to `51.91.11.36:8000` (historical entry — keep for context).
+- **Worker configs fixed**: Updated `master_url` on the three remote workers from prior environment-specific endpoints to `[REDACTED — historical public master endpoint]` (the literal address was retired from this changelog as part of the post-PR history scrub; see `docs/post-pr-two-worker-hardening.md`).
 - **Docker hosts decommissioned**: The earlier Docker-based per-host worker containers were replaced by a single Go worker-agent binary running under systemd; the legacy per-host containers have been disabled across the fleet.
 
 ### ✅ Testing
