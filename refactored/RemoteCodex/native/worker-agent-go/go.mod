@@ -10,7 +10,9 @@ require (
 	velox-shared v0.0.0
 )
 
-replace velox-shared v0.0.0 => ../../../../shared
+// velox-shared is vendored in-tree at <repo-root>/shared/. Path is
+// resolved relative to this go.mod's directory: <repo-root>/shared/.
+replace velox-shared v0.0.0 => ../../../shared
 
 require (
 	github.com/davecgh/go-spew v1.1.1 // indirect

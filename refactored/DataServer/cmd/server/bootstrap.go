@@ -136,6 +136,49 @@ func addGzipHeaders() gin.HandlerFunc {
 	}
 }
 
+// parseInsecureDevFlag parses the raw value of the
+// VELOX_GRPC_ALLOW_INSECURE_DEV environment variable and returns true
+// only if the operator explicitly opted in to plaintext gRPC transport
+// for local development.
+//
+// Strict parsing: only the literal string "true" (case-sensitive, with
+// no surrounding whitespace) returns true. Empty, "1", "True", "TRUE",
+// "yes", and any typo alias returns false. This is intentional — the
+// insecure-transport bypass is a security-relevant footgun and we do
+// not want a permissive parser silently weakening the production
+// security model because someone typed "True" instead of "true".
+//
+// Extracted from the runServer composition root so this step is
+// independently unit-testable; the wiring test in
+// bootstrap_grpconfig_test.go (TestBuildGRPCHandlerConfig_AllowInsecureFromEnv)
+// asserts that the env value flows through this function into
+// HandlerConfig.AllowInsecure, not just that the bool propagates.
+func parseInsecureDevFlag(envVal string) bool {
+	return envVal == "true"
+}
+
+// buildGRPCHandlerConfig constructs the gRPC HandlerConfig used by
+// grpcserver.NewHandler. It is extracted from the runServer composition
+// root so that the propagation of VELOX_GRPC_ALLOW_INSECURE_DEV →
+// HandlerConfig.AllowInsecure (plus PushMode / AllowedWorkers) is
+// directly unit-testable without standing up DBs, blob stores and the
+// asset registry.
+//
+// Regression: prior versions of bootstrap.go constructed HandlerConfig
+// inline and silently dropped AllowInsecure. The handler therefore kept
+// refusing insecure gRPC streams even when VELOX_GRPC_ALLOW_INSECURE_DEV
+// was set, because h.config.AllowInsecure stayed false. The companion
+// regression test in bootstrap_grpconfig_test.go asserts AllowInsecure
+// tracks insecureDev so future wiring drift is caught at unit-test
+// speed instead of during local dev bring-up.
+func buildGRPCHandlerConfig(cfg *config.Config, insecureDev bool) *grpcserver.HandlerConfig {
+	return &grpcserver.HandlerConfig{
+		PushMode:       cfg.Server.GRPCPushMode,
+		AllowInsecure:  insecureDev,
+		AllowedWorkers: cfg.Workers.AllowedWorkers,
+	}
+}
+
 // outboxWorkflowAdapter adapts *outbox.Store to the workflow.OutboxWriter
 // interface by mapping WorkflowOutboxEvent fields to outbox.InsertParams.
 type outboxWorkflowAdapter struct {
@@ -381,15 +424,14 @@ func runServer(cfg *config.Config) error {
 		lcSvc := deps.lifecycleSvc
 		if lcSvc == nil {
 			log.Printf("[SERVER] gRPC disabled: lifecycleSvc is nil")
-		} else {
-			cmdMgr := workersreg.NewCommandManager(deps.sqliteStore)
+		} else {			cmdMgr := workersreg.NewCommandManager(deps.sqliteStore)
 
-			insecureDev := os.Getenv("VELOX_GRPC_ALLOW_INSECURE_DEV") == "true"
+			insecureDev := parseInsecureDevFlag(os.Getenv("VELOX_GRPC_ALLOW_INSECURE_DEV"))
 
-			// P0: fail-fast if VELOX_ALLOWED_WORKERS is empty in production.
-			// An empty allowlist silently admits any worker, which is
-			// acceptable in dev but a security gap in production.
-			if err := grpcserver.ValidateWorkerAllowlist(cfg.Workers.AllowedWorkers, insecureDev); err != nil {
+				// P0: fail-fast if VELOX_ALLOWED_WORKERS is empty in production.
+				// An empty allowlist silently admits any worker, which is
+				// acceptable in dev but a security gap in production.
+				if err := grpcserver.ValidateWorkerAllowlist(cfg.Workers.AllowedWorkers, insecureDev); err != nil {
 				log.Printf("[BOOTSTRAP] gRPC worker allowlist validation FAILED: %v", err)
 				// The HTTP server hasn't started yet at this point — srv is
 				// just an allocated struct. Returning the error causes
@@ -397,10 +439,7 @@ func runServer(cfg *config.Config) error {
 				return err
 			}
 
-			grpcHandlerConfig := &grpcserver.HandlerConfig{
-				PushMode:       cfg.Server.GRPCPushMode,
-				AllowedWorkers: cfg.Workers.AllowedWorkers,
-			}
+			grpcHandlerConfig := buildGRPCHandlerConfig(cfg, insecureDev)
 			grpcHandler := grpcserver.NewHandler(
 				deps.reg, cmdMgr, lcSvc, deps.artifactSvc, deps.sqliteStore, grpcHandlerConfig,
 			)

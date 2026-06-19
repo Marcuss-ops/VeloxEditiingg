@@ -8,6 +8,16 @@ import (
 	"velox-server/internal/config"
 )
 
+// Build-time metadata, injected via `go build -ldflags "-X main.Version=...
+// -X main.BuildTime=..."`. Declared as `var` (not `const`) because
+// ldflags -X only mutates writable symbols. Defaults are safe values
+// for local dev; release pipelines (DataServer/Dockerfile and
+// .github/workflows/master-image.yml) override them at build time.
+var (
+	Version   = "dev"
+	BuildTime = "unknown"
+)
+
 const usageText = `Usage: velox-server [serve]
 
 When invoked without arguments the binary behaves identically to 'velox-server serve'.
@@ -20,6 +30,11 @@ Examples:
 `
 
 func main() {
+	// Emit the build identity early so operators see it in
+	// `docker logs` / `journalctl` regardless of where the binary
+	// actually listens. Cheap; no side effects.
+	log.Printf("velox-server %s (built %s)", Version, BuildTime)
+
 	cfg := config.FromEnv()
 	args := os.Args[1:]
 
@@ -41,4 +56,3 @@ func main() {
 		os.Exit(2)
 	}
 }
-

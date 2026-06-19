@@ -1,7 +1,28 @@
 # Velox Worker Agent - Build System
 
-VERSION_FILE ?= ../../../VERSION.txt
-VERSION ?= $(shell if [ -f "$(VERSION_FILE)" ]; then cat "$(VERSION_FILE)"; else git describe --tags --always --dirty 2>/dev/null || echo "dev"; fi)
+# Pick the first existing VERSION.txt from a fallback chain. The Monorepo
+# layout assumes VERSION.txt at the project root, but the chain also
+# tolerates:
+#   - a VERSION.txt alongside this Makefile (standalone build of the
+#     worker without the rest of the repo); or
+#   - one inside RemoteCodex/ (if the team ever promotes RemoteCodex/
+#     to its own checkout).
+# If none of the candidates exist, the `?=` later falls back to a
+# `git describe` of the current tree, and finally to literal "dev".
+#
+# To pin a specific file, callers can still override the variable on the
+# command line, e.g. `make VERSION_FILE=./local.version agent`.
+VERSION_FILE ?= $(firstword \
+    $(wildcard VERSION.txt \
+             ../VERSION.txt \
+             ../../VERSION.txt \
+             ../../../VERSION.txt))
+VERSION ?= $(shell \
+    if [ -n "$(VERSION_FILE)" ] && [ -f "$(VERSION_FILE)" ]; then \
+        tr -d '[:space:]' < "$(VERSION_FILE)"; \
+    else \
+        git describe --tags --always --dirty 2>/dev/null || echo "dev"; \
+    fi)
 BUILD_TIME ?= $(shell date -u '+%Y-%m-%d_%H:%M:%S')
 LDFLAGS := -ldflags "-X main.Version=$(VERSION) -X main.BuildTime=$(BUILD_TIME)"
 
