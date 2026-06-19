@@ -15,6 +15,7 @@ velox-master.pid
 **/inventory.yaml
 **/production.env
 **/.env.production
+**/vault.yml
 
 # ── Cryptographic material (key/cert bundles, NEVER commit) ────────────────
 # Covered globally so a stray key under any subdir is excluded.

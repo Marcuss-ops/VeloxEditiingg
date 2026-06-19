@@ -84,10 +84,10 @@ def main() -> int:
          rendered.startswith("") and "VELOX_ADMIN_TOKEN=TEST_TOKEN_64_chars_" in rendered),
         # Two-worker canonical topology: render MUST carry the
         # placeholder pair, NOT any real worker IDs.
-        ("VELOX_ALLOWED_WORKERS resolves from group_vars (canonical placeholders)",
-         "VELOX_ALLOWED_WORKERS=CHANGE_ME_WORKER_1,CHANGE_ME_WORKER_2" in rendered),
+        ("VELOX_ALLOWED_WORKERS resolves from group_vars (canonical placeholder)",
+         "VELOX_ALLOWED_WORKERS=CHANGE_ME_ALLOWED_WORKERS" in rendered),
         ("VELOX_ALLOWED_WORKERS contains no real worker IDs in committed render",
-         "velox-worker-523925eb" not in rendered and "velox-worker-13197" not in rendered),
+         "velox-worker-" not in rendered),
         ("VELOX_ALLOWED_WORKERS does not contain '*' wildcard",
          "*" not in rendered.split("VELOX_ALLOWED_WORKERS=", 1)[1].split("\n", 1)[0]),
         ("VELOX_DB_PATH populated",

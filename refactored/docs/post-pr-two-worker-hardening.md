@@ -41,8 +41,8 @@ Doing any of them in a partial way leaks more than it scrubs.
 
 ## Step 1 — History rewrite
 
-Goal: remove previously published identifiers (`velox-worker-523925eb`,
-`velox-worker-13197`, the historical master public IP referenced in
+Goal: remove previously published identifiers (`REDACTED_PROD_WORKER_1_ID`,
+`REDACTED_PROD_WORKER_2_ID`, the historical master public IP referenced in
 the 2026-06-13 changelog block, any Tailscale peer IP that landed in
 committed files) from the git history before the rewritten repo is
 pushed back to the canonical remote.
@@ -62,9 +62,9 @@ cd /tmp/velox-history-scrub.git
 # remove. NEVER replace with the literal new value — use a clear
 # placeholder so a future grep can prove they are gone.
 cat > /tmp/scrub-replacements.txt <<'REPL'
-velox-worker-523925eb==>REDACTED_PROD_WORKER_1_ID
-velox-worker-13197==>REDACTED_PROD_WORKER_2_ID
-51.91.11.36==>REDACTED_PUBLIC_MASTER_IP
+REDACTED_PROD_WORKER_1_ID==>REDACTED_PROD_WORKER_1_ID
+REDACTED_PROD_WORKER_2_ID==>REDACTED_PROD_WORKER_2_ID
+REDACTED_PUBLIC_MASTER_IP==>REDACTED_PUBLIC_MASTER_IP
 REPL
 
 git filter-repo --replace-text /tmp/scrub-replacements.txt \
@@ -75,7 +75,7 @@ Verify the scrub worked:
 
 ```bash
 # Every grep must return ZERO matches across ALL commits.
-git log --all -p | grep -E 'velox-worker-523925eb|velox-worker-13197|<historical master IP>' \
+git log --all -p | grep -E 'REDACTED_PROD_WORKER_1_ID|REDACTED_PROD_WORKER_2_ID|<historical master IP>' \
     || echo "OK: identifiers fully scrubbed."
 ```
 
@@ -206,7 +206,7 @@ The two-worker production lockdown is complete when, on the
 
 ```bash
 # No historical worker IDs anywhere.
-git grep -nE 'velox-worker-523925eb|velox-worker-13197' || echo OK
+git grep -nE 'REDACTED_PROD_WORKER_1_ID|REDACTED_PROD_WORKER_2_ID' || echo OK
 
 # No historical public IP anywhere.
 git grep -nE '<historical master public IP>' || echo OK
@@ -218,9 +218,15 @@ git grep -nE 'VELOX_DB_DSN=' || echo OK
 git grep -nE 'local-workers\.sh\.deprecated' || echo OK
 
 # Canonical allowlist rule confirmed.
+# NOTE: After Agent B (codex/promote-ops-root) the allowlist
+# placeholder was collapsed from the explicit pair
+# CHANGE_ME_WORKER_1,CHANGE_ME_WORKER_2 to a single slot
+# CHANGE_ME_ALLOWED_WORKERS, AND deploy/ was promoted to root
+# (paths no longer carry refactored/deploy/). The acceptance
+# greps below reflect the post-Agent-B layout.
 grep -n 'ValidateProductionWorkers' refactored/DataServer/internal/config/workers_validator.go
-grep -n 'CHANGE_ME_WORKER_1,CHANGE_ME_WORKER_2' refactored/deploy/velox-server.env.example
-grep -n '\[velox_workers\]' refactored/deploy/inventory/production.ini.example
+grep -n 'CHANGE_ME_ALLOWED_WORKERS' deploy/velox-server.env.example
+grep -n '\[velox_workers\]' deploy/inventory/production.ini.example
 ```
 
 All five checks return `OK` (and the two lines printed by the
