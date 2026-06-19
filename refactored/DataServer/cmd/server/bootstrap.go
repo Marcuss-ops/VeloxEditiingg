@@ -409,10 +409,18 @@ func runServer(cfg *config.Config) error {
 		}()
 	}
 
+	// ── Background goroutine context ─────────────────────────────────────
+	//
+	// All background goroutines (outbox, delivery, zombie reaper) share a
+	// single context that is cancelled before the HTTP/gRPC servers are
+	// stopped, ensuring clean teardown without blocking.
+	bgCtx, bgCancel := context.WithCancel(context.Background())
+	defer bgCancel()
+
 	if deps.outboxDispatcher != nil {
 		go func() {
 			log.Printf("[BOOTSTRAP] Outbox dispatcher started — polling outbox_events")
-			if err := deps.outboxDispatcher.Run(context.Background()); err != nil {
+			if err := deps.outboxDispatcher.Run(bgCtx); err != nil {
 				log.Printf("[BOOTSTRAP] Outbox dispatcher exited: %v", err)
 			}
 		}()
@@ -421,7 +429,7 @@ func runServer(cfg *config.Config) error {
 	if deps.deliveryRunner != nil {
 		go func() {
 			log.Printf("[BOOTSTRAP] DeliveryRunner started — polling PENDING job_deliveries")
-			if err := deps.deliveryRunner.Run(context.Background()); err != nil {
+			if err := deps.deliveryRunner.Run(bgCtx); err != nil {
 				log.Printf("[BOOTSTRAP] DeliveryRunner exited: %v", err)
 			}
 		}()
@@ -431,12 +439,17 @@ func runServer(cfg *config.Config) error {
 		go func() {
 			ticker := time.NewTicker(60 * time.Second)
 			defer ticker.Stop()
-			for range ticker.C {
-				results, err := deps.lifecycleSvc.RequeueExpiredLeases(context.Background(), 100)
-				if err != nil {
-					log.Printf("[ZOMBIE] requeue error: %v", err)
-				} else if len(results) > 0 {
-					log.Printf("[ZOMBIE] requeued %d stuck jobs", len(results))
+			for {
+				select {
+				case <-bgCtx.Done():
+					return
+				case <-ticker.C:
+					results, err := deps.lifecycleSvc.RequeueExpiredLeases(context.Background(), 100)
+					if err != nil {
+						log.Printf("[ZOMBIE] requeue error: %v", err)
+					} else if len(results) > 0 {
+						log.Printf("[ZOMBIE] requeued %d stuck jobs", len(results))
+					}
 				}
 			}
 		}()
@@ -490,8 +503,17 @@ func runServer(cfg *config.Config) error {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
+	// Cancel the background context first so goroutines stop before
+	// we tear down the servers (prevents them from touching closed DBs).
+	bgCancel()
+	log.Println("[SERVER] Background goroutines stopping...")
+
 	if grpcSrv != nil {
-		grpcSrv.GracefulStop()
+		// Use Stop() instead of GracefulStop() — workers hold open
+		// bidirectional streams (heartbeats) that prevent GracefulStop
+		// from ever returning, causing systemd to SIGKILL after 30s.
+		// Stop() immediately closes all connections and returns.
+		grpcSrv.Stop()
 		log.Println("[SERVER] gRPC server stopped")
 	}
 

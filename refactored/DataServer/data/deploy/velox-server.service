@@ -40,8 +40,10 @@ RestartSec=10
 StartLimitIntervalSec=60
 StartLimitBurst=3
 
-# Graceful shutdown
-TimeoutStopSec=30
+# Graceful shutdown — Stop() tears down gRPC immediately (workers hold
+# open bidirectional streams that would block GracefulStop forever).
+# 60s is a generous safety net; the actual shutdown completes in <5s.
+TimeoutStopSec=60
 KillMode=process
 KillSignal=SIGTERM
 
