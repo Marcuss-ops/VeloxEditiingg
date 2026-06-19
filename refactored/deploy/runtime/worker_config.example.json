@@ -1,0 +1,35 @@
+{
+  "_comment": "Canonical Velox worker config template. Rendered by deploy/scripts/apply-local-worker-config.sh into /var/lib/velox-worker/worker_config.json (uid 1000:1000). Bind-mounted by deploy/runtime/compose.yml as /opt/velox/worker_config.json:ro. The apply script strips all keys prefixed with `_` at render time so this template can carry operator-facing documentation without leaking into the runtime JSON.",
+
+  "_schema_version": "2026-06-worker-v1",
+
+  "_bundle_meta_precedence": "Per cmd/velox-worker-agent/main.go (lines 162-176) and pkg/config/config.go: bundle_version is filled at runtime in this order — VELOX_BUNDLE_VERSION env > JSON > ldflags-injected Version > VERSION.txt. bundle_hash follows the same pattern via VELOX_BUNDLE_HASH env > BUNDLE_HASH.txt in work_dir or /opt/velox > empty. The apply script deliberately LEAVES bundle_version and bundle_hash empty in the rendered JSON unless --bundle-hash-source=manual is explicitly requested AND VELOX_FORCE_MANUAL_HASH=1 is in the env.",
+
+  "_image_digest_note": "image_digest is a TELEMETRY-ONLY stamp populated by the apply script via `docker image inspect <image> --format '{{index .RepoDigests 0}}'`. It is surfaced in master logs for traceability but is NOT used by the worker binary for registration, validation, or compatibility checks. This field separates operational image identity (image_digest) from application bundle identity (bundle_hash) so they cannot be confused.",
+
+  "_tls_double_consent": "Worker allows plaintext gRPC transport IF AND ONLY IF (allow_insecure_grpc_dev: true in this JSON) AND (VELOX_ALLOW_INSECURE_GRPC_DEV=true in worker's env). The master uses a DIFFERENT env-var name: VELOX_GRPC_ALLOW_INSECURE_DEV — both sides must opt in independently. Production deployments require cert + key + CA on BOTH ends (TransportFactory.validateTLSConfigTriple rejects partial triples).",
+
+  "_change_me_contract": "Strings beginning with `CHANGE_ME_` are operator-supplied placeholders that MUST be replaced before the worker can register. The apply script refuses any value still starting with CHANGE_ME_ at validation time.",
+
+  "master_url": "CHANGE_ME_http(s)://<master-host>:<grpc-port>",
+  "control_grpc_url": "CHANGE_ME_http(s)://<master-host>:<grpc-port>",
+  "worker_id": "CHANGE_ME_velox_worker_id",
+  "worker_name": "CHANGE_ME_velox_worker_name",
+  "work_dir": "/var/lib/velox-worker/work",
+  "log_level": "info",
+
+  "max_active_jobs": 1,
+  "command_poll_interval_secs": 30,
+  "prometheus_port": 0,
+  "health_port": 8081,
+  "use_v2_endpoints": true,
+
+  "protocol_version": "2026-06-worker-v1",
+
+  "bundle_version": "",
+  "bundle_hash": "",
+
+  "image_digest": "",
+
+  "allow_insecure_grpc_dev": false
+}

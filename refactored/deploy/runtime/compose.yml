@@ -40,6 +40,11 @@ services:
     volumes:
       # Persistent state — survives container recreation.
       - /var/lib/velox-worker:/var/lib/velox-worker
+      # Worker config — bind-mounted read-only at the path the Go binary
+      # expects by default (/opt/velox/worker_config.json, hard-coded in
+      # main.go). The host-side file lives at
+      # /var/lib/velox-worker/worker_config.json so it stays out of /etc.
+      - /var/lib/velox-worker/worker_config.json:/opt/velox/worker_config.json:ro
       # TLS certs and per-worker credentials — read-only mounts into /run.
       - /etc/velox-worker/certs:/run/velox/certs:ro
       - /etc/velox-worker/secrets:/run/velox/secrets:ro
