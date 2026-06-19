@@ -94,8 +94,15 @@ REQUIRED (no defaults):
   --worker-id              ID               Worker identity; must appear in
                                             deploy/group_vars/all.yml
                                             velox_allowed_workers.
-  --control-grpc-url       URL              e.g. http://100.74.74.124:9000
-                                            (transport_factory rejects empty)
+  --control-grpc-url       URL              REQUIRED. gRPC dial target. Accepts
+                                            host:port (preferred, no scheme)
+                                            OR http(s)://host:port (scheme is
+                                            stripped + logged, since
+                                            transport_factory & grpc.Dial expect
+                                            host:port without scheme — otherwise
+                                            grpc.Dial fails with "too many
+                                            colons in address").
+                                            transport_factory rejects empty.
 
 OPTIONAL flags:
   --worker-name            NAME             Defaults from --worker-id.
@@ -219,6 +226,24 @@ fi
 
 # Resolve defaults
 [[ -n "$WORKER_NAME" ]]  || WORKER_NAME="$WORKER_ID"
+
+# Normalize --control-grpc-url: transport_factory / grpc.Dial expect host:port
+# (no scheme). If operator supplied http(s)://, strip and log loudly so the
+# rewrite is visible (otherwise the worker silently fails gRPC dial with
+# "too many colons in address" because grpc.Dial sees http://host:port as
+# having two colons).
+if [[ "$CONTROL_GRPC_URL" =~ ^https?:// ]]; then
+  _stripped="${CONTROL_GRPC_URL#http://}"
+  _stripped="${_stripped#https://}"
+  _stripped="${_stripped%/}"
+  log "stripped http(s):// from --control-grpc-url: $CONTROL_GRPC_URL → $_stripped"
+  CONTROL_GRPC_URL="$_stripped"
+  unset _stripped
+fi
+# Sanity post-normalization: must be host:port (no scheme, no path).
+[[ "$CONTROL_GRPC_URL" =~ ^[A-Za-z0-9._-]+:[0-9]+$ ]] \
+  || die "--control-grpc-url after normalization must be host:port (got: $CONTROL_GRPC_URL)" 64
+
 [[ -n "$MASTER_URL" ]]   || MASTER_URL="$CONTROL_GRPC_URL"
 
 # ─── Image inspection (telemetry + sanity check) ─────────────────────────────
