@@ -1,0 +1,140 @@
+name: deploy
+
+# Runs on pushes to main that touch deployable code, and on-demand dispatch.
+# The path filter keeps us from rebuilding on docs-only commits.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "refactored/DataServer/**"
+      - "refactored/RemoteCodex/native/worker-agent-go/**"
+      - ".github/workflows/deploy.yml"
+      - "deploy/**"
+  workflow_dispatch:
+
+# Deploys must NOT cancel one another mid-flight: cancel-in-progress=false.
+concurrency:
+  group: deploy-main-${{ github.ref }}
+  cancel-in-progress: false
+
+# contents:read for checkout; packages:write to push to GHCR. token auth is
+# provided automatically via secrets.GITHUB_TOKEN (no extra secret required).
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_OWNER: ${{ github.repository_owner }}
+
+jobs:
+  # ── velox-worker image (worker-agent-go Dockerfile is present) ───────────
+  worker-image:
+    name: velox-worker image
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@b5ca514318bd6ebac0fb2aedd5d36ec1b5c232a2 # v3.10.0
+
+      - name: Log in to GHCR
+        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 # v3.3.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract image metadata
+        id: meta
+        uses: docker/metadata-action@902fa8ec7d6ecbf8d84d538b9b233a880e428804 # v5.7.0
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/velox-worker
+          tags: |
+            type=sha,prefix=
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push worker image
+        uses: docker/build-push-action@48aba3b46d1b1fec4febb7c5d0c644b249a11355 # v6.10.0
+        with:
+          # Build context is refactored/RemoteCodex (NOT repo root) because the
+          # worker Dockerfile COPYs scripts/{build-video-engine,worker-entrypoint}.sh,
+          # native/video-engine-cpp, and native/worker-agent-go/bin/... — all are
+          # anchored one level under RemoteCodex/. See worker Dockerfile header.
+          context: refactored/RemoteCodex
+          file: refactored/RemoteCodex/native/worker-agent-go/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Print image sha256 digest
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          # Resolve each pushed tag → its manifest digest via buildx
+          # imagetools (avoids a docker pull). Each digest is also emitted
+          # as a step output so downstream jobs can pick it up.
+          for tag in $TAGS; do
+            ref="${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/velox-worker:$tag"
+            digest=$(docker buildx imagetools inspect "$ref" \
+                      | awk '/Digest:/ {print $2; exit}')
+            echo "::notice::$ref  $digest"
+            echo "digest_$tag=$digest" >> "$GITHUB_OUTPUT"
+          done
+
+  # ── velox-server image (Dockerfile NOT present yet) ─────────────────────
+  # This job is gated on the Dockerfile's existence so it auto-activates
+  # the moment refactored/DataServer/Dockerfile lands — no workflow edit
+  # required when downstream wants to publish a server image.
+  dataserver-image:
+    name: velox-server image
+    runs-on: ubuntu-latest
+    if: hashFiles('refactored/DataServer/Dockerfile') != ''
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@b5ca514318bd6ebac0fb2aedd5d36ec1b5c232a2 # v3.10.0
+
+      - name: Log in to GHCR
+        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 # v3.3.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract image metadata
+        id: meta
+        uses: docker/metadata-action@902fa8ec7d6ecbf8d84d538b9b233a880e428804 # v5.7.0
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/velox-server
+          tags: |
+            type=sha,prefix=
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push server image
+        uses: docker/build-push-action@48aba3b46d1b1fec4febb7c5d0c644b249a11355 # v6.10.0
+        with:
+          context: refactored/DataServer
+          file: refactored/DataServer/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Print image sha256 digest
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          for tag in $TAGS; do
+            ref="${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/velox-server:$tag"
+            digest=$(docker buildx imagetools inspect "$ref" \
+                      | awk '/Digest:/ {print $2; exit}')
+            echo "::notice::$ref  $digest"
+            echo "digest_$tag=$digest" >> "$GITHUB_OUTPUT"
+          done
