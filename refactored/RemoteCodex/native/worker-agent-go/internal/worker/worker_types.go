@@ -42,6 +42,13 @@ const (
 	registrationInitialBackoff = 5 * time.Second
 	registrationMaxBackoff     = 5 * time.Minute
 	registrationBackoffMult    = 2.0
+
+	// connectionRetryBackoff is a short fixed delay used for connection-level
+	// errors (reset, refused, transport unavailable). These typically happen
+	// when the server is restarting and will recover in seconds. Exponential
+	// backoff is reserved for application-level errors (credential mismatch,
+	// protocol version, TLS).
+	connectionRetryBackoff = 2 * time.Second
 )
 
 // ActiveJob represents a job currently being executed by the worker.

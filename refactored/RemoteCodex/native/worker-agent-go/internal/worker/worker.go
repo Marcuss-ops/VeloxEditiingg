@@ -9,6 +9,7 @@ import (
 	"math/rand"
 	"os"
 	"runtime"
+	"strings"
 	"time"
 
 	"velox-shared/controltransport"
@@ -45,16 +46,29 @@ func (w *Worker) Start(ctx context.Context) error {
 			w.setConnState(ConnDisconnected)
 			_ = w.transport.Close()
 
-			// Exponential backoff with jitter
-			jitter := time.Duration(rand.Float64() * float64(backoff) * 0.25)
-			sleepDuration := backoff + jitter
-			w.logger.Info("[CONNECT] Backing off for %v before retry", sleepDuration.Round(time.Millisecond))
+			// Use short fixed retry for connection-level errors (reset, refused,
+			// transport unavailable) — the server may just be restarting.
+			// Exponential backoff is reserved for application-level errors
+			// (credential mismatch, protocol version, TLS).
+			var sleepDuration time.Duration
+		if isConnectionLevelError(err) {
+			jitter := time.Duration(rand.Float64() * float64(connectionRetryBackoff) * 0.3)
+			sleepDuration = connectionRetryBackoff + jitter
+			w.logger.Info("[CONNECT] Connection-level error, retrying in %v", sleepDuration.Round(time.Millisecond))
+			} else {
+				jitter := time.Duration(rand.Float64() * float64(backoff) * 0.25)
+				sleepDuration = backoff + jitter
+				w.logger.Info("[CONNECT] Backing off for %v before retry", sleepDuration.Round(time.Millisecond))
+			}
 
 			select {
 			case <-time.After(sleepDuration):
-				backoff = time.Duration(float64(backoff) * registrationBackoffMult)
-				if backoff > registrationMaxBackoff {
-					backoff = registrationMaxBackoff
+				// Only grow backoff for non-connection errors
+				if !isConnectionLevelError(err) {
+					backoff = time.Duration(float64(backoff) * registrationBackoffMult)
+					if backoff > registrationMaxBackoff {
+						backoff = registrationMaxBackoff
+					}
 				}
 				continue
 			case <-w.stopChan:
@@ -574,4 +588,42 @@ func (w *Worker) Stop() {
 		close(w.stopChan)
 		w.stopped.Store(true)
 	})
+}
+
+// isConnectionLevelError returns true when the error is a transient
+// connection-level failure (reset, refused, transport unavailable).
+// These typically occur when the server is restarting and will recover
+// in seconds. Application-level errors (credential mismatch, protocol
+// version, TLS) return false and should use exponential backoff.
+func isConnectionLevelError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	lower := strings.ToLower(msg)
+
+	// Connection-level indicators
+	connectionPatterns := []string{
+		"connection refused",
+		"connection reset by peer",
+		"no route to host",
+		"network is unreachable",
+		"transport is closing",
+		"broken pipe",
+		"use of closed network connection",
+		"i/o timeout", // dial timeout, not application timeout
+	}
+	for _, p := range connectionPatterns {
+		if strings.Contains(lower, p) {
+			return true
+		}
+	}
+
+	// gRPC Unavailable status code (transient): the server may be restarting
+	// and the TCP listener is open but gRPC isn't serving yet.
+	if strings.Contains(lower, "unavailable") {
+		return true
+	}
+
+	return false
 }

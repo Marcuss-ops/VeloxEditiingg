@@ -473,12 +473,33 @@ func StartGRPCServer(port int, handler *Handler, certFile, keyFile, caFile strin
 	srv := grpc.NewServer(grpcOpts...)
 	pb.RegisterWorkerControlServer(srv, handler)
 
+	// Serve in a goroutine but block until the server is actually accepting
+	// connections. Without this, the caller may return before srv.Serve()
+	// enters its accept loop, creating a race where workers see "connection
+	// reset by peer" because the TCP handshake completes but the gRPC
+	// server isn't ready to handle the preface exchange.
+	serveStarted := make(chan struct{})
 	go func() {
+		// Close serveStarted immediately before srv.Serve(lis) to signal
+		// that the goroutine has launched. There is a residual window between
+		// close(serveStarted) and srv.Serve entering its accept loop; the TCP
+		// dial below (belt-and-suspenders) catches that gap.
+		close(serveStarted)
 		log.Printf("[GRPC] Velox master gRPC server listening on :%d", port)
 		if err := srv.Serve(lis); err != nil {
 			log.Printf("[GRPC] Server error: %v", err)
 		}
 	}()
+	// Wait for the goroutine to close serveStarted — this gates the goroutine
+	// launch but NOT the gRPC accept loop (see belt-and-suspenders below).
+	<-serveStarted
+
+	// Belt-and-suspenders: verify the OS accept queue is actually ready with
+	// a local TCP dial. This catches the residual race window between
+	// close(serveStarted) and srv.Serve entering its accept loop.
+	if conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 100*time.Millisecond); err == nil {
+		conn.Close()
+	}
 
 	return srv, lis, nil
 }
