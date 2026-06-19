@@ -12,7 +12,7 @@
 # ============================================================
 
 - name: Normalize worker systemd
-  hosts: workers
+  hosts: velox_workers
   gather_facts: true
   vars:
     velox_dir: "/opt/velox"

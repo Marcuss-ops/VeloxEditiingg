@@ -82,5 +82,16 @@ func (c *Config) Validate() error {
 				"Either set VELOX_GRPC_PORT or disable VELOX_GRPC_PUSH_MODE.",
 			c.Server.GRPCPort)
 	}
+
+	// Worker policy: canonical, non-duplicated validator.
+	// ValidateProductionWorkers is the single source of truth — it
+	// rejects wildcards, enforces the production worker count, and
+	// rejects duplicate IDs in that order. Empty entries are already
+	// dropped by parseCommaList at load time, so the validator sees a
+	// trimmed slice. Replicated copies in the gRPC handler, Ansible,
+	// and HTTP layer are FORBIDDEN.
+	if err := ValidateProductionWorkers(c.Workers.AllowedWorkerIDs); err != nil {
+		return fmt.Errorf("config: VELOX_ALLOWED_WORKERS: %w", err)
+	}
 	return nil
 }

@@ -447,7 +447,7 @@ Dopo le fix di codice, il sistema è stato deployato e testato live con un worke
 
 | Risorsa | Dettaglio |
 |---------|-----------|
-| **Master** | `vps-334f342f` (51.91.11.36) — OVH |
+| **Master** | `vps-334f342f` (CHANGE_ME_MASTER_HOST) — OVH |
 | **Worker OVH** | `vps-523925eb` (51.222.204.158) — OVH, 8 CPU, 22 GB RAM |
 | **Worker locale** | Docker su master — `host_local_test` |
 | **DB** | SQLite `/opt/velox/current/.velox/data/velox.db` |
@@ -500,7 +500,7 @@ Il migration runner rifiutava l'avvio perché i checksum non corrispondevano.
 
 #### 5. Connettività Worker → Master Bloccata (Firewall OVH)
 
-**Problema**: Il worker OVH (51.222.204.158) non può raggiungere il master (51.91.11.36) su nessuna porta. Il firewall OVH blocca il traffico inbound sul master.
+**Problema**: Il worker OVH (51.222.204.158) non può raggiungere il master (CHANGE_ME_MASTER_HOST) su nessuna porta. Il firewall OVH blocca il traffico inbound sul master.
 
 **Fix temporaneo**: Due tunnel SSH reverse dal master al worker:
 ```bash

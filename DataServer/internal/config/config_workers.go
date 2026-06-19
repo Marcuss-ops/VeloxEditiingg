@@ -12,6 +12,10 @@ func loadWorkersConfig() WorkersConfig {
 		VersionNumber:    "v1.0.6",
 	}
 	c.AllowedWorkers = os.Getenv("VELOX_ALLOWED_WORKERS")
+	// parseCommaList drops empty tokens and trims whitespace; the
+	// canonical two-worker validator (ValidateProductionWorkers) is
+	// invoked by Config.Validate() — see internal/config/config.go.
+	c.AllowedWorkerIDs = parseCommaList(c.AllowedWorkers)
 	c.ForceSingleWorker = os.Getenv("VELOX_FORCE_SINGLE_WORKER")
 	c.MaxJobAttempts = intFromEnv("VELOX_MAX_JOB_ATTEMPTS", 3, 1)
 	c.AllowlistRegistered = boolFromEnv("VELOX_ALLOWLIST_ALLOW_REGISTERED", false)

@@ -428,10 +428,14 @@ func runServer(cfg *config.Config) error {
 
 			insecureDev := parseInsecureDevFlag(os.Getenv("VELOX_GRPC_ALLOW_INSECURE_DEV"))
 
-				// P0: fail-fast if VELOX_ALLOWED_WORKERS is empty in production.
-				// An empty allowlist silently admits any worker, which is
-				// acceptable in dev but a security gap in production.
-				if err := grpcserver.ValidateWorkerAllowlist(cfg.Workers.AllowedWorkers, insecureDev); err != nil {
+			// P0: fail-fast if VELOX_ALLOWED_WORKERS is empty in production.
+			// An empty allowlist silently admits any worker, which is
+			// acceptable in dev but a security gap in production.
+			//
+			// The STRICT two-worker / no-wildcard rule is enforced upstream
+			// by Config.Validate() which calls ValidateProductionWorkers.
+			// This block is defense-in-depth for the gRPC layer only.
+			if err := grpcserver.ValidateWorkerAllowlist(cfg.Workers.AllowedWorkers, insecureDev); err != nil {
 				log.Printf("[BOOTSTRAP] gRPC worker allowlist validation FAILED: %v", err)
 				// The HTTP server hasn't started yet at this point — srv is
 				// just an allocated struct. Returning the error causes

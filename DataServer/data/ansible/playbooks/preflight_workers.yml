@@ -11,7 +11,7 @@
 # ============================================================
 
 - name: Preflight workers
-  hosts: workers
+  hosts: velox_workers
   gather_facts: true
   vars:
     velox_dir: "{{ velox_dir | default('/opt/velox') }}"

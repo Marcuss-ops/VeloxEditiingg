@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -11,8 +12,12 @@ func TestFromEnv_Defaults(t *testing.T) {
 	os.Unsetenv("VELOX_ADMIN_TOKEN")
 	os.Setenv("VELOX_DB_PATH", t.TempDir()+"/velox.db")
 	os.Setenv("VELOX_GRPC_PORT", "50051")
+	// Production allowlist: 2 distinct worker IDs. Without this the
+	// canonical ValidateProductionWorkers check fails the test.
+	os.Setenv("VELOX_ALLOWED_WORKERS", "velox-worker-1,velox-worker-2")
 	defer os.Unsetenv("VELOX_DB_PATH")
 	defer os.Unsetenv("VELOX_GRPC_PORT")
+	defer os.Unsetenv("VELOX_ALLOWED_WORKERS")
 
 	cfg := FromEnv()
 
@@ -28,6 +33,9 @@ func TestFromEnv_Defaults(t *testing.T) {
 	}
 	if cfg.Workers.HeartbeatTimeout != 900 {
 		t.Errorf("expected Workers.HeartbeatTimeout=900, got %d", cfg.Workers.HeartbeatTimeout)
+	}
+	if len(cfg.Workers.AllowedWorkerIDs) != 2 {
+		t.Errorf("expected Workers.AllowedWorkerIDs=2 entries, got %d", len(cfg.Workers.AllowedWorkerIDs))
 	}
 
 	// Check Validate
@@ -78,6 +86,7 @@ func TestValidate_AbsoluteDBPath(t *testing.T) {
 	absPath := t.TempDir() + "/velox.db"
 	cfg := &Config{
 		Database: DatabaseConfig{DBPath: absPath},
+		Workers:  WorkersConfig{AllowedWorkerIDs: []string{"velox-worker-1", "velox-worker-2"}},
 	}
 	if err := cfg.Validate(); err != nil {
 		t.Errorf("expected valid config for absolute path, got: %v", err)
@@ -89,5 +98,28 @@ func TestValidate_EmptyDBPath(t *testing.T) {
 	err := cfg.Validate()
 	if err == nil {
 		t.Error("expected error for empty DB path, got nil")
+	}
+}
+
+// TestValidate_RejectsWildcardAllowlist pins the wildcard guard at the
+// Config.Validate layer. The check is in Config.Validate (not in
+// ValidateProductionWorkers — which only does count + uniqueness) so a
+// future refactor that bypasses ValidateProductionWorkers still fails
+// closed on "*" in production.
+//
+// Without this test, a regression that removes the wildcard iteration
+// loop in Config.Validate would silently let `"*"` slip past the
+// bootstrap fail-fast and generate a master that admits any worker.
+func TestValidate_RejectsWildcardAllowlist(t *testing.T) {
+	cfg := &Config{
+		Database: DatabaseConfig{DBPath: t.TempDir() + "/velox.db"},
+		Workers:  WorkersConfig{AllowedWorkerIDs: []string{"*", "velox-worker-1"}},
+	}
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected error for wildcard '*' allowlist, got nil")
+	}
+	if !strings.Contains(err.Error(), "must not contain '*'") {
+		t.Fatalf("expected wildcard-specific error, got: %v", err)
 	}
 }
