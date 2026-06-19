@@ -114,7 +114,7 @@ shared/                        # Libreria condivisa Go
 | Categoria | Variabili chiave |
 |-----------|-----------------|
 | **Core** | `VELOX_MASTER_PORT` (8000), `GIN_MODE`, `VELOX_ADMIN_TOKEN` |
-| **Storage** | `VELOX_DATA_DIR`, `VELOX_DB_DRIVER` (sqlite3), `VELOX_DB_DSN` |
+| **Storage** | `VELOX_DATA_DIR`, `VELOX_RUNTIME_DIR`, `VELOX_DB_PATH` (sqlite, default at `/var/lib/velox/data/velox.db`) |
 | **YouTube** | `VELOX_YOUTUBE_API_KEY`, `VELOX_YOUTUBE_TOKENS_DIR` |
 | **Drive** | `VELOX_DRIVE_CLIENT_ID`, `VELOX_DRIVE_CLIENT_SECRET` |
 | **NVIDIA** | `VELOX_NVIDIA_API_KEY`, `VELOX_NVIDIA_TEXT_URL` |

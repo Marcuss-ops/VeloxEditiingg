@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -411,14 +412,20 @@ func runServer(cfg *config.Config) error {
 
 	// ── Background goroutine context ─────────────────────────────────────
 	//
-	// All background goroutines (outbox, delivery, zombie reaper) share a
-	// single context that is cancelled before the HTTP/gRPC servers are
-	// stopped, ensuring clean teardown without blocking.
+	// All background goroutines (outbox dispatcher, delivery runner, zombie
+	// reaper, artifacts reconciler) share a single context that is cancelled
+	// BEFORE the HTTP/gRPC servers are stopped. bgWG tracks each goroutine
+	// so the teardown sequence can Wait() with a bounded timeout — without
+	// this, a slow runner could hold the process past systemd TimeoutStopSec
+	// and force a SIGKILL while the SQLite store is being closed.
+	var bgWG sync.WaitGroup
 	bgCtx, bgCancel := context.WithCancel(context.Background())
 	defer bgCancel()
 
 	if deps.outboxDispatcher != nil {
+		bgWG.Add(1)
 		go func() {
+			defer bgWG.Done()
 			log.Printf("[BOOTSTRAP] Outbox dispatcher started — polling outbox_events")
 			if err := deps.outboxDispatcher.Run(bgCtx); err != nil {
 				log.Printf("[BOOTSTRAP] Outbox dispatcher exited: %v", err)
@@ -427,7 +434,9 @@ func runServer(cfg *config.Config) error {
 	}
 
 	if deps.deliveryRunner != nil {
+		bgWG.Add(1)
 		go func() {
+			defer bgWG.Done()
 			log.Printf("[BOOTSTRAP] DeliveryRunner started — polling PENDING job_deliveries")
 			if err := deps.deliveryRunner.Run(bgCtx); err != nil {
 				log.Printf("[BOOTSTRAP] DeliveryRunner exited: %v", err)
@@ -436,7 +445,9 @@ func runServer(cfg *config.Config) error {
 	}
 
 	if deps.lifecycleSvc != nil {
+		bgWG.Add(1)
 		go func() {
+			defer bgWG.Done()
 			ticker := time.NewTicker(60 * time.Second)
 			defer ticker.Stop()
 			for {
@@ -444,7 +455,12 @@ func runServer(cfg *config.Config) error {
 				case <-bgCtx.Done():
 					return
 				case <-ticker.C:
-					results, err := deps.lifecycleSvc.RequeueExpiredLeases(context.Background(), 100)
+					// Pass bgCtx (NOT context.Background) so an in-flight
+					// RequeueExpiredLeases is interrupted by the same
+					// cancellation that broke us out of the loop above —
+					// otherwise it can run to completion even after
+					// bgCancel() and squeeze the teardown window.
+					results, err := deps.lifecycleSvc.RequeueExpiredLeases(bgCtx, 100)
 					if err != nil {
 						log.Printf("[ZOMBIE] requeue error: %v", err)
 					} else if len(results) > 0 {
@@ -466,10 +482,15 @@ func runServer(cfg *config.Config) error {
 		if recErr != nil {
 			log.Printf("[BOOTSTRAP] Reconciler init failed: %v -- continuing without it", recErr)
 		} else {
-			recCtx, recCancel := context.WithCancel(context.Background())
-			go rec.Run(recCtx, 15*time.Minute)
-			defer recCancel()
-			log.Printf("[BOOTSTRAP] artifacts.Reconciler started (4 rules: expired-uploads + staging, orphan-final-blobs, READY-no-blob QUARANTINED, stuck-STAGING; 15m tick)")
+			// Reconciler shares the same bgCtx as the rest of the bg
+			// runners — a separate recCtx/recCancel leaked past bgCancel()
+			// and could keep writing to the DB after sqliteStore.Close().
+			bgWG.Add(1)
+			go func() {
+				defer bgWG.Done()
+				log.Printf("[BOOTSTRAP] artifacts.Reconciler started (4 rules: expired-uploads + staging, orphan-final-blobs, READY-no-blob QUARANTINED, stuck-STAGING; 15m tick)")
+				rec.Run(bgCtx, 15*time.Minute)
+			}()
 		}
 	}
 
@@ -506,7 +527,22 @@ func runServer(cfg *config.Config) error {
 	// Cancel the background context first so goroutines stop before
 	// we tear down the servers (prevents them from touching closed DBs).
 	bgCancel()
-	log.Println("[SERVER] Background goroutines stopping...")
+	log.Println("[SERVER] Background goroutines cancelling — waiting for them to exit...")
+
+	// Bound the wait so a misbehaving runner cannot block the teardown
+	// indefinitely (systemd TimeoutStopSec is 60s; budget 15s here so we
+	// still have ~45s for grpcSrv.Stop() and srv.Shutdown()).
+	done := make(chan struct{})
+	go func() {
+		bgWG.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		log.Println("[SERVER] Background goroutines stopped cleanly")
+	case <-time.After(15 * time.Second):
+		log.Printf("[SERVER] background shutdown timed out after 15s — proceeding with teardown anyway")
+	}
 
 	if grpcSrv != nil {
 		// Use Stop() instead of GracefulStop() — workers hold open

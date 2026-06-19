@@ -1,7 +1,7 @@
 # Velox Master Server - Systemd Service
 # =============================================
-# Install: sudo ./data/deploy/install-server.sh
-# Manual:  sudo cp data/deploy/velox-server.service /etc/systemd/system/
+# Install: sudo ./deploy/install-server.sh
+# Manual:  sudo cp deploy/velox-server.service /etc/systemd/system/
 #          sudo systemctl daemon-reload
 #          sudo systemctl enable --now velox-server
 #
@@ -9,7 +9,7 @@
 # Status:  systemctl status velox-server
 #
 # Environment file: /etc/velox-server.env
-#   Configure all VELOX_* vars there (see data/deploy/velox-server.env for template).
+#   Configure all VELOX_* vars there (see deploy/velox-server.env.example for template).
 # =============================================
 
 [Unit]

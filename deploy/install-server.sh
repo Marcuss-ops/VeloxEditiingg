@@ -1,9 +1,7 @@
 #!/bin/bash
 # Velox Master Server - Systemd Install Script
-# =============================================
-# Usage:
-#   sudo ./data/deploy/install-server.sh [--user velox] [--group velox]
-#
+# =============================================# Usage:
+#   sudo ./deploy/install-server.sh [--user velox] [--group velox] #
 # Steps:
 #   1. Build the Go binary (if not already built)
 #   2. Create system user (velox)
@@ -14,15 +12,21 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
-DATASERVER_DIR="$SCRIPT_DIR/DataServer"
-DEPLOY_DIR="$DATASERVER_DIR/data/deploy"
+# The install script lives at deploy/install-server.sh and computes its own
+# location so it can be invoked from anywhere (sudo ./deploy/...).
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+DATASERVER_DIR="$REPO_ROOT/refactored/DataServer"
+DEPLOY_DIR="$SCRIPT_DIR"
 BINARY_SRC="$DATASERVER_DIR/bin/velox-server"
 BINARY_DST="/opt/velox/current/DataServer/bin/velox-server"
 SERVICE_NAME="velox-server"
 SERVICE_SRC="$DEPLOY_DIR/velox-server.service"
 SERVICE_DST="/etc/systemd/system/$SERVICE_NAME.service"
-ENV_TEMPLATE="$DEPLOY_DIR/velox-server.env"
+# Path FIX: was "$DEPLOY_DIR/velox-server.env" (file did not exist on a fresh
+# clone — only $DEPLOY_DIR/velox-server.env.example is shipped). The .example
+# suffix is required so it is never read as a real config.
+ENV_TEMPLATE="$DEPLOY_DIR/velox-server.env.example"
 ENV_DST="/etc/velox-server.env"
 YOUTUBE_RUNTIME_CREDS_DIR="/opt/velox/current/.velox/secrets/youtube/credentials"
 YOUTUBE_RUNTIME_CREDS_FILE="$YOUTUBE_RUNTIME_CREDS_DIR/credentials.json"
@@ -44,7 +48,7 @@ if [[ $EUID -ne 0 ]]; then
 fi
 
 if [[ ! -f "$SERVICE_SRC" ]]; then
-    fail "Service file not found: $SERVICE_SRC. Run this script from the project root."
+    fail "Service file not found: $SERVICE_SRC. Run this script from the project root (or sudo ./deploy/install-server.sh from the repo)."
 fi
 
 # ─── Step 1: Build binary if missing ────────────────────────────────────────
@@ -53,7 +57,7 @@ if [[ ! -f "$BINARY_SRC" ]]; then
     log "Binary not found — building..."
     if ! command -v go &>/dev/null; then
         fail "Go is not installed. Install Go first, or build the binary manually:
-    cd DataServer && go build -o bin/velox-server ./cmd/server"
+    cd refactored/DataServer && go build -o bin/velox-server ./cmd/server"
     fi
     cd "$DATASERVER_DIR"
     go build -o bin/velox-server ./cmd/server
