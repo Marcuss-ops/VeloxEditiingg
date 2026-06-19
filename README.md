@@ -38,19 +38,20 @@ a `CHANGE_ME_*` placeholder. Production secrets live ONLY in:
 
 If anything in this README, the canonical templates, or the
 operator runbook references a `CHANGE_ME_*` token, it is meant to
-be replaced before deploy — NOT copied verbatim. The Agent A
-PR (`codex/two-worker-production`) pinned the canonical
-two-worker rule; the Agent B PR (`codex/promote-ops-root`,
-**this branch**) collapsed the versioned templates onto a single
-`CHANGE_ME_ALLOWED_WORKERS` slot without weakening the runtime
-guarantees (those still live in
+be replaced before deploy — NOT copied verbatim. The runtime
+guarantees on the worker allowlist (non-empty, no wildcard,
+unique, no fixed fleet size) live in
 `DataServer/internal/config/workers_validator.go`:
-`ValidateProductionWorkers`).
+`ValidateProductionWorkers`. Operators may scale the fleet up or
+down freely; only the shape of the allowlist is enforced.
 
 The runtime grep at
-`docs/post-pr-two-worker-hardening.md` is the operator-side
-acceptance criteria; an operator landing on a fresh post-merge
-clone should still pass all five greps there.
+`docs/post-pr-two-worker-hardening.md` describes the historic
+two-worker operator runbook — that file is archived and remains in
+the repo only so operators who landed on a post-merge clone with
+the two-worker topology can still pass the existing greps. The
+**current canonical rule** is fleet-size-unbounded, validated by
+`ValidateProductionWorkers`.
 
 ## Documentation
 

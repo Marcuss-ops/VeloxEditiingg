@@ -1,28 +1,20 @@
 # Velox Worker Agent - Build System
 
-# Pick the first existing VERSION.txt from a fallback chain. The Monorepo
-# layout assumes VERSION.txt at the project root, but the chain also
-# tolerates:
-#   - a VERSION.txt alongside this Makefile (standalone build of the
-#     worker without the rest of the repo); or
-#   - one inside RemoteCodex/ (if the team ever promotes RemoteCodex/
-#     to its own checkout).
-# If none of the candidates exist, the `?=` later falls back to a
-# `git describe` of the current tree, and finally to literal "dev".
+# Version is read VERBATIM from ../../../VERSION.txt (canonical project
+# root). The build FAILS HARD if that file is missing — there is no
+# git-describe / "dev" fallback by design: every release artifact must be
+# produced from an explicitly-bumped VERSION.txt so the worker bundle hash
+# the master emits is reproducible.
 #
 # To pin a specific file, callers can still override the variable on the
 # command line, e.g. `make VERSION_FILE=./local.version agent`.
-VERSION_FILE ?= $(firstword \
-    $(wildcard VERSION.txt \
-             ../VERSION.txt \
-             ../../VERSION.txt \
-             ../../../VERSION.txt))
-VERSION ?= $(shell \
-    if [ -n "$(VERSION_FILE)" ] && [ -f "$(VERSION_FILE)" ]; then \
-        tr -d '[:space:]' < "$(VERSION_FILE)"; \
-    else \
-        git describe --tags --always --dirty 2>/dev/null || echo "dev"; \
-    fi)
+VERSION_FILE := ../../../VERSION.txt
+VERSION := $(strip $(shell if [ -f "$(VERSION_FILE)" ]; then \
+    tr -d '[:space:]' < "$(VERSION_FILE)"; \
+else \
+    echo "FATAL: $(VERSION_FILE) not found. Bump the project root VERSION.txt before building." >&2; \
+    exit 1; \
+fi))
 BUILD_TIME ?= $(shell date -u '+%Y-%m-%d_%H:%M:%S')
 LDFLAGS := -ldflags "-X main.Version=$(VERSION) -X main.BuildTime=$(BUILD_TIME)"
 

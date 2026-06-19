@@ -67,19 +67,28 @@ func (s *Store) Insert(ctx context.Context, txn Executor, p InsertParams) (strin
 		avail = s.now()
 	}
 	id := s.newID()
-	now := s.now().Format(time.RFC3339)
+	// RFC3339Nano (not RFC3339) — we need sub-second precision so that
+	// lock_until / available_at in Claim's comparison (`locked_until <
+	// now`) works correctly when a dispatcher sleeps for tens of
+	// milliseconds during a crash-recovery test. RFC3339 truncates
+	// fractional seconds, so two events snapped to the same wall-clock
+	// second compare string-equal even though they're 50ms apart.
+	now := s.now().UTC().Format(time.RFC3339Nano)
 
 	ex := txn
 	if ex == nil {
 		ex = s.DB
 	}
+	// available_at must use the SAME fmt as the comparable nowStr in Claim
+	// (`available_at <= ?`); mixing RFC3339 (no fractional) with RFC3339Nano
+	// in a lexicographic comparison breaks sub-second ordering.
 	q := `INSERT INTO outbox_events
 		(event_id, aggregate_type, aggregate_id, event_type,
 		 payload_json, status, available_at, created_at)
 		VALUES (?, ?, ?, ?, ?, 'PENDING', ?, ?)`
 	if _, err := exec(ctx, ex, q,
 		id, p.AggregateType, p.AggregateID, p.EventType,
-		string(p.Payload), avail.UTC().Format(time.RFC3339), now,
+		string(p.Payload), avail.UTC().Format(time.RFC3339Nano), now,
 	); err != nil {
 		return "", fmt.Errorf("outbox insert: %w", err)
 	}
@@ -150,9 +159,9 @@ WHERE event_id IN (
 RETURNING event_id, event_type, aggregate_type, aggregate_id,
           payload_json, attempt_count, created_at`
 
-	nowStr := s.now().UTC().Format(time.RFC3339)
+	nowStr := s.now().UTC().Format(time.RFC3339Nano)
 	rows, err := s.DB.QueryContext(ctx, query,
-		lockedBy, lockUntil.UTC().Format(time.RFC3339),
+		lockedBy, lockUntil.UTC().Format(time.RFC3339Nano),
 		nowStr, nowStr,
 		batchSize,
 	)
@@ -198,7 +207,7 @@ func (s *Store) MarkProcessed(ctx context.Context, eventID string) error {
 	if eventID == "" {
 		return ErrInvalidEvent
 	}
-	now := s.now().UTC().Format(time.RFC3339)
+	now := s.now().UTC().Format(time.RFC3339Nano)
 	_, err := s.DB.ExecContext(ctx,
 		`UPDATE outbox_events
 		 SET status = 'PROCESSED', processed_at = ?, locked_by = NULL,
@@ -220,7 +229,7 @@ func (s *Store) MarkFailed(ctx context.Context, eventID string, lastErr string) 
 	if eventID == "" {
 		return ErrInvalidEvent
 	}
-	now := s.now().UTC().Format(time.RFC3339)
+	now := s.now().UTC().Format(time.RFC3339Nano)
 	_, err := s.DB.ExecContext(ctx,
 		`UPDATE outbox_events
 		 SET status = 'FAILED', processed_at = ?, last_error = ?,
@@ -248,7 +257,7 @@ func (s *Store) ExtendLock(ctx context.Context, eventID string, lockUntil time.T
 		`UPDATE outbox_events
 		 SET locked_until = ?, last_error = ?, locked_by = NULL
 		 WHERE event_id = ? AND status = 'PROCESSING'`,
-		lockUntil.UTC().Format(time.RFC3339), lastErr, eventID,
+		lockUntil.UTC().Format(time.RFC3339Nano), lastErr, eventID,
 	)
 	if err != nil {
 		return fmt.Errorf("outbox extend lock: %w", err)
@@ -276,8 +285,9 @@ func (s *Store) GetByID(ctx context.Context, eventID string) (*Event, string, er
 		        payload_json, status, attempt_count, last_error, created_at
 		 FROM outbox_events WHERE event_id = ?`, eventID)
 	var (
-		eid, et, at, ai, pl, status, lastErr, createdAt string
-		attempt                                         int
+		eid, et, at, ai, pl, status, createdAt string
+		attempt                                int
+		lastErr                                sql.NullString
 	)
 	if err := row.Scan(&eid, &et, &at, &ai, &pl, &status, &attempt, &lastErr, &createdAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {

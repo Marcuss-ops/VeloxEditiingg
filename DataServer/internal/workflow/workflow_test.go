@@ -621,17 +621,42 @@ func TestWorkflow_JobFailedStepRetry_FinalRunSucceeded(t *testing.T) {
 		t.Fatalf("after requeue, A status = %q, want READY", stepOf(t, run, steps, "A").Status)
 	}
 
-	// Second attempt completes.
+	// Second attempt of A completes. B is now READY (not terminal yet)
+	// so the run itself does NOT flip to SUCCEEDED here — see
+	// TestWorkflow_Invariant_NonTerminalStepPreventsRunSucceeded for
+	// that invariant. We drive B through SUCCEEDED below to terminate
+	// the run.
 	markRunning(t, repo, run.RunID, stepOf(t, run, steps, "A"), "job-a-att-2", 2)
-	rp, err := repo.CompleteStepAndReleaseDependents(ctx, workflow.CompleteStep{
+	rpA2, err := repo.CompleteStepAndReleaseDependents(ctx, workflow.CompleteStep{
 		RunID: run.RunID, StepID: stepOf(t, run, steps, "A").StepID,
 		Attempt: 2, Output: map[string]any{"ok": true},
 	})
 	if err != nil {
 		t.Fatalf("CompleteStep 2nd attempt: %v", err)
 	}
-	if !rp.Completed {
-		t.Fatalf("run should be SUCCEEDED after retry")
+	if !containsKey(rpA2.Activated, "B") {
+		t.Fatalf("expected B activated after A retry succeeded, got %v", rpA2.Activated)
+	}
+	if rpA2.Completed {
+		t.Fatalf("run should NOT be SUCCEEDED while B is non-terminal (only A has succeeded)")
+	}
+
+	// Now drive B through to SUCCEEDED so the run terminates.
+	steps, _ = repo.ListSteps(ctx, run.RunID)
+	b := stepOf(t, run, steps, "B")
+	markRunning(t, repo, run.RunID, b, "job-b", 1)
+	rpB, err := repo.CompleteStepAndReleaseDependents(ctx, workflow.CompleteStep{
+		RunID: run.RunID, StepID: b.StepID,
+		Attempt: 1, Output: map[string]any{"ok": true},
+	})
+	if err != nil {
+		t.Fatalf("CompleteStep B: %v", err)
+	}
+	if !rpB.Completed {
+		t.Fatalf("run should be SUCCEEDED after A retry succeeded AND B completed")
+	}
+	if rpB.Run.Status != workflow.RunStatusSucceeded {
+		t.Fatalf("run status = %q, want SUCCEEDED", rpB.Run.Status)
 	}
 }
 

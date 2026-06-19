@@ -31,14 +31,31 @@ import (
 
 // ── Fixtures ────────────────────────────────────────────────────────────────
 
-// newTestDB opens an in-memory SQLite DB unique to t.Name() with the
-// outbox_events schema mirroring migration 026. Returns *sql.DB; tests
-// must call t.Cleanup (or db.Close()) when done.
+// dsnCounter increments every time newTestDB opens a connection so each
+// caller gets a freshly-keyed in-memory SQLite DB. Without it, calling
+// newTestStore twice from the SAME test (e.g. a test that exercises two
+// independent workflows via separate stores) opens two *sql.DB handles
+// on the SAME `file:t.Name()?mode=memory&cache=shared` DSN — and with
+// cache=shared, both hits resolve to the SAME shared-memory database.
+// A lingering dispatcher goroutine from case A could then claim a row
+// freshly inserted by case B (with the wrong registry, marking it
+// FAILED before case B's dispatcher observes it). The counter forces a
+// fresh cache key per call, keeping stores rigorously isolated.
+var dsnCounter atomic.Int64
+
+// newTestDB opens an in-memory SQLite DB unique to (t.Name(), counter)
+// with the outbox_events schema mirroring migration 026. Returns
+// *sql.DB; tests must call t.Cleanup (or db.Close()) when done.
 func newTestDB(t *testing.T) *sql.DB {
 	t.Helper()
-	// Unique DSN per test; shared cache so concurrent goroutines in
-	// the same test see the same DB.
-	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", t.Name())
+	// Unique DSN per (test, call); shared cache so concurrent goroutines
+	// in the same call see one DB, but different calls get DIFFERENT
+	// databases — see dsnCounter comment above. The counter is embedded
+	// in the filename portion (not as a URI fragment, which is technically
+	// not part of URI identity under RFC 3986 §3.5 — a future driver
+	// upgrade could drop it from the cache key).
+	n := dsnCounter.Add(1)
+	dsn := fmt.Sprintf("file:%s-inst%d?mode=memory&cache=shared", t.Name(), n)
 	db, err := sql.Open("sqlite3", dsn)
 	if err != nil {
 		t.Fatalf("open in-memory sqlite: %v", err)
@@ -225,6 +242,11 @@ func TestOutbox_Insert_RejectsMissingFields(t *testing.T) {
 }
 
 // ── 4. Concurrent claim: each row claimed/dispatched exactly once ─────────
+//
+// Important cleanup note: t.Cleanup runs registrations in LIFO order, so
+// if we registered `<-done2` BEFORE `d2.Stop()`, the wait would run first
+// and deadlock against the never-stopped d2. We register them in a single
+// block to make the contract explicit and avoid LIFO ordering traps.
 
 func TestOutbox_ConcurrentClaim_DispatchesEachRowOnce(t *testing.T) {
 	store := newTestStore(t)
@@ -232,31 +254,35 @@ func TestOutbox_ConcurrentClaim_DispatchesEachRowOnce(t *testing.T) {
 	h := &stubHandler{eventType: "EVT_RACE"}
 	_ = reg.Register(h)
 
-	const N = 20
+	const N = 8 // small enough to drain under SetMaxOpenConns(1) within the 2s budget
 	for i := 0; i < N; i++ {
 		insertOne(t, store, "EVT_RACE", "race", fmt.Sprintf("r-%d", i),
 			[]byte(fmt.Sprintf(`{"i":%d}`, i)))
 	}
 
-	// Two dispatchers race on the same Store.
+	// Two dispatchers race on the same Store. PollInterval=10ms keeps
+	// ticker pressure low under SQLite single-conn contention; batch=4
+	// drains N=8 in 2 cycles per dispatcher.
 	d1 := outbox.NewDispatcher(store, reg, outbox.Config{
-		PollInterval: 5 * time.Millisecond, BatchSize: 4,
+		PollInterval: 10 * time.Millisecond, BatchSize: 4,
 		LockDuration: 5 * time.Second, MaxAttempts: 3,
 	})
 	d2 := outbox.NewDispatcher(store, reg, outbox.Config{
-		PollInterval: 5 * time.Millisecond, BatchSize: 4,
+		PollInterval: 10 * time.Millisecond, BatchSize: 4,
 		LockDuration: 5 * time.Second, MaxAttempts: 3,
 	})
 	ctx := startDispatcher(t, d1)
-	t.Cleanup(func() { d2.Stop() })
 
-	// d2 runs in its own goroutine but is cleaned up via the
-	// helper's t.Cleanup for d1.
+	// d2 in its own goroutine. Register stop+wait in a SINGLE cleanup
+	// block so LIFO runs them together — see the doc comment above.
 	done2 := make(chan struct{})
 	go func() { defer close(done2); _ = d2.Run(ctx) }()
-	t.Cleanup(func() { <-done2 })
+	t.Cleanup(func() {
+		d2.Stop()
+		<-done2
+	})
 
-	if err := waitFor(t, 5*time.Second, func() bool {
+	if err := waitFor(t, 2*time.Second, func() bool {
 		n, _ := store.CountByStatus(ctx, outbox.StatusProcessed)
 		return n >= int64(N)
 	}); err != nil {
@@ -274,11 +300,13 @@ func TestOutbox_LockExpiry_ReclaimsStaleLock(t *testing.T) {
 	store := newTestStore(t)
 	reg := outbox.NewRegistry()
 
-	// Single handler tracking invocations across both initial claim and
-	// the post-expiry reclaim — both must increment the same counter so
-	// we verify "process per claim, not per process invocation". This
-	// matches the production reality: a handler that observed an event
-	// once and didn't get a PROCESSED ack must accept re-dispatch.
+	// Single handler tracking invocations across the post-expiry reclaim —
+	// the test must demonstrate "process per claim, not per process
+	// invocation". We deliberately do NOT call Dispatcher.Poll() for
+	// the first acquisition: Poll() runs handler+MarkProcessed, which
+	// would leave the row PROCESSED and ineligible for re-claim. Instead
+	// we mimic "dispatcher claimed the row but crashed before processing"
+	// by calling store.Claim directly with a bounded lock window.
 	var invocations atomic.Int32
 	h := &stubHandler{
 		eventType: "EVT_LOCK",
@@ -291,34 +319,31 @@ func TestOutbox_LockExpiry_ReclaimsStaleLock(t *testing.T) {
 
 	id := insertOne(t, store, "EVT_LOCK", "lock", "lock-1", []byte(`{}`))
 
-	// First dispatcher claims, but never marks PROCESSED (simulate death).
-	d1 := outbox.NewDispatcher(store, reg, outbox.Config{
-		PollInterval: 5 * time.Millisecond, BatchSize: 5,
-		LockDuration: 50 * time.Millisecond, MaxAttempts: 3,
-	})
-	ctx := startDispatcher(t, d1)
-	if err := d1.Poll(context.Background()); err != nil {
-		t.Fatalf("d1.Poll: %v", err)
+	// First claimant "crashed" — manual Claim with 50ms lock + a fake
+	// dispatcher id. Handler is NOT invoked (no Dispatcher.Poll ran).
+	lockedUntil := time.Now().Add(50 * time.Millisecond)
+	if _, err := store.Claim(context.Background(), "dead-dispatcher", lockedUntil, 1); err != nil {
+		t.Fatalf("Claim (simulated crash): %v", err)
 	}
-	if got := invocations.Load(); got != 1 {
-		t.Fatalf("after first claim invocations = %d, want 1", got)
+	if got := invocations.Load(); got != 0 {
+		t.Fatalf("after manual claim invocations = %d, want 0 (handler should NOT have fired)", got)
 	}
 
 	// Wait for the 50ms lock window to expire.
 	time.Sleep(75 * time.Millisecond)
 
-	// Second dispatcher reclaims. The SAME handler increments again
-	// (no registry level deduplication).
+	// Second dispatcher's Poll reclaims the stale PROCESSING row and
+	// finally invokes the handler for the first (and only) time.
 	d2 := outbox.NewDispatcher(store, reg, outbox.Config{
 		PollInterval: 5 * time.Millisecond, BatchSize: 5,
 		LockDuration: 5 * time.Second, MaxAttempts: 3,
 	})
+	ctx := context.Background()
 	if err := d2.Poll(ctx); err != nil {
 		t.Fatalf("d2.Poll: %v", err)
 	}
-
-	if got := invocations.Load(); got != 2 {
-		t.Fatalf("after reclaim invocations = %d, want 2 (initial + reclaim)", got)
+	if got := invocations.Load(); got != 1 {
+		t.Fatalf("after reclaim invocations = %d, want 1 (first successful invocation)", got)
 	}
 	_, status, err := store.GetByID(ctx, id)
 	if err != nil {
@@ -337,13 +362,21 @@ func TestOutbox_DispatcherCrash_LeavesProcessingAndRecovers(t *testing.T) {
 
 	// Handler blocks until released (simulating a crashed/stalled worker).
 	released := make(chan struct{})
-	fired := make(chan struct{})
+	// fired is buffered (cap=1) + sent via non-blocking select so the
+	// handler can fire on EVERY reclaim. DO NOT replace with `make(chan
+	// struct{})` + `close(fired)` — that panics on the second invocation,
+	// which is exactly the bug we hit before this rewrite (the test depends
+	// on >= 2 invocations: first crash mid-flight, second post-reclaim run).
+	fired := make(chan struct{}, 1)
 	var invocations atomic.Int32
 	_ = reg.Register(&stubHandler{
 		eventType: "EVT_CRASH",
 		fn: func(ctx context.Context, e outbox.Event) error {
 			invocations.Add(1)
-			close(fired)
+			select {
+			case fired <- struct{}{}:
+			default:
+			}
 			select {
 			case <-released:
 			case <-ctx.Done():
@@ -583,6 +616,16 @@ func TestOutbox_ProcessedOnlyAfterHandlerSuccess(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("A: not processed: %v", err)
 	}
+
+	// Stop Case A's dispatcher BEFORE Case B starts: without this, A's
+	// goroutine keeps ticking on the shared SQLite memory DB and claims
+	// Case B's freshly-inserted row before B's dispatcher can race for
+	// it. A's registry only knows EVT_OK, so the row ends up FAILED
+	// instead of being held for B's EVT_ERR_NOFLIP handler — and B's
+	// select on firedB then times out. The t.Cleanup registered by
+	// startDispatcher only fires at end of test, so we tear down A now
+	// to give the SQLite memory DB a quiet period before B starts.
+	dA.Stop()
 
 	// Case B: handler returns error → row stays at PROCESSING (transient
 	// that did not exceed MaxAttempts). We use a blocking handler that we

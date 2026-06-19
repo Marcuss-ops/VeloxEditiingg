@@ -9,8 +9,14 @@ if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
 endif()
 
+# Deterministic, portable release flags. We deliberately avoid
+# -march=native / -mtune=native: those pin the binary to the build host's
+# CPU, which breaks the worker bundle's reproducibility contract (the
+# Linux build host may differ from the worker host's CPU). -O3 + LTO is
+# the highest-impact portable optimisation mix for the FFmpeg-heavy
+# pipeline we link against.
 if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    add_compile_options(-O3 -march=native -mtune=native)
+    add_compile_options(-O3)
     add_link_options(-flto)
     set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE ON)
 endif()

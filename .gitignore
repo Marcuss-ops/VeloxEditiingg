@@ -17,7 +17,7 @@ velox-master.pid
 **/.env.production
 **/vault.yml
 
-# ── Cryptographic material (key/cert bundles, NEVER commit) ────────────────
+# ── Cryptographic material (NEVER commit) ───────────────────────────────────
 # Covered globally so a stray key under any subdir is excluded.
 *.key
 *.pem
@@ -29,33 +29,35 @@ velox-master.pid
 !**/testdata/**/*.pem
 !**/testdata/**/*.key
 
-# ── Operator credential store (master + ansible-vault tooling) ────────────
+# ── Operator credential store (master + ansible-vault tooling) ───────────────
 .velox-passwords.txt
 
-# ── Secrets & credentials ──────────────────────────────────────────────────────────
-refactored/DataServer/data/secrets/
-refactored/DataServer/data/drive/credentials/
-refactored/DataServer/data/drive/tokens/
+# ── Secrets & credentials (DataServer runtime store) ─────────────────────────
+DataServer/data/secrets/
+DataServer/data/drive/credentials/
+DataServer/data/drive/tokens/
 
-# ── Runtime directories ──────────────────────────────────────────────────────
-refactored/DataServer/data/analytics/
-refactored/DataServer/data/backups/
-refactored/DataServer/data/dark_editor/
-refactored/DataServer/data/drive/
-refactored/DataServer/data/jobs/
-refactored/DataServer/data/youtube/
-refactored/DataServer/data/worker_downloads/
-refactored/DataServer/data/ansible/playbooks/inventory.ini
-refactored/DataServer/completed_videos/
+# ── Runtime directories (DataServer) ─────────────────────────────────────────
+DataServer/data/analytics/
+DataServer/data/backups/
+DataServer/data/dark_editor/
+DataServer/data/drive/
+DataServer/data/jobs/
+DataServer/data/youtube/
+DataServer/data/worker_downloads/
+DataServer/data/ansible/playbooks/inventory.ini
+DataServer/completed_videos/
 
 # ── Build artifacts ──────────────────────────────────────────────────────────
 *.tsbuildinfo
 *.tsbuildinfo.*
-refactored/DataServer/bin/
-refactored/DataServer/server
-refactored/DataServer/velox-server
-refactored/RemoteCodex/native/worker-agent-go/bin/
-refactored/RemoteCodex/native/video-engine-cpp/build/
+DataServer/bin/
+DataServer/server
+DataServer/velox-server
+RemoteCodex/native/worker-agent-go/bin/
+RemoteCodex/native/video-engine-cpp/build*/
+frontend_standalone/web/dist/
+frontend_standalone/web/node_modules/
 
 # ── Environment & IDE ────────────────────────────────────────────────────────
 .env
@@ -77,9 +79,8 @@ venv/
 
 # ── Node ─────────────────────────────────────────────────────────────────────
 node_modules/
-refactored/frontend_standalone/web/node_modules/
-refactored/frontend_standalone/web/test-results/
-refactored/frontend_standalone/web/.svelte-kit/
+frontend_standalone/web/test-results/
+frontend_standalone/web/.svelte-kit/
 
 # ── Go build cache ───────────────────────────────────────────────────────────
 *.test

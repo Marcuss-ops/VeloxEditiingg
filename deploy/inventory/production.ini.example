@@ -5,14 +5,18 @@
 # it is NOT committed (`**/production.ini` is excluded by the root .gitignore).
 #
 # Canonical production topology
-# ──────────────────────────────
-# The master hosts the gRPC :9000 + REST :8000 listeners and admits EXACTLY
-# TWO external workers (worker_1, worker_2). This is enforced by:
+# ──────────────────────────────────────────────────────────────────────────
+# The master hosts the gRPC :9000 + REST :8000 listeners and admits any
+# N >= 1 external workers under [velox_workers] (the fleet size is NOT
+# bounded — operators may scale up or down as needed). The canonical
+# allowlist invariants (non-empty, non-wildcard, unique worker_id) are
+# enforced by:
 #   * ValidateProductionWorkers in DataServer/internal/config/workers_validator.go
 #     (fail-fast at server start, mirrored from this file by deploy/group_vars/all.yml
 #      → deploy/templates/velox-server.env.j2 → /etc/velox-server.env).
 #   * DataServer/data/ansible/playbooks/tasks/prechecks.yml
-#     (asserts `groups['velox_workers'] | length == 2` controller-side).
+#     (asserts `[velox_workers]` is non-empty and each host declares a
+#     non-empty worker_id).
 #
 # Bootstrapping a new node:
 #   cp deploy/inventory/production.ini.example deploy/inventory/production.ini
@@ -26,9 +30,12 @@
 #   kept here ONLY as a guardrail against accidental re-onboarding.
 #
 # Scale-out guardrail:
-#   Adding a 3rd worker is FORBIDDEN in production: ValidateProductionWorkers
-#   fails closed at server start, and DataServer/data/ansible/playbooks/tasks/
-#   prechecks.yml rejects the inventory before any play starts.
+#   Operators may add or remove workers at will. The canonical invariant is
+#   the allowlist shape (non-empty, non-wildcard, unique worker_id) — the
+#   fleet size is unbounded. ValidateProductionWorkers fails closed at server
+#   start on a malformed allowlist, and DataServer/data/ansible/playbooks/
+#   tasks/prechecks.yml rejects the inventory before any play starts when
+#   [velox_workers] is empty or any worker_id is blank / '*'.
 #
 # Connection requirements:
 #   * SSH key-based auth as user `velox-deploy` (created by bootstrap-ssh).
@@ -37,7 +44,7 @@
 #
 # Hostgroups:
 #   [velox_master]   — runs the master server. Single host.
-#   [velox_workers]  — runs worker agents. EXACTLY TWO hosts (see canonical rule).
+#   [velox_workers]  — runs worker agents. Any N >= 1 hosts (see canonical rule).
 #
 # Per-host vars:
 #   worker_id        — stable identifier the master uses for gate/ACL.

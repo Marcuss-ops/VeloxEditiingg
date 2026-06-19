@@ -12,6 +12,9 @@ import (
 
 // newTestConfig returns a minimal config pointing at an in-memory SQLite DB
 // in a temporary directory, suitable for unit-testing buildServerDeps.
+// AllowedWorkerIDs is seeded with a single test ID so the production
+// allowlist invariant (non-empty, no wildcard, unique) is satisfied
+// without producing a real-world worker ID in fixtures.
 func newTestConfig(t *testing.T) *config.Config {
 	t.Helper()
 	tmpDir := t.TempDir()
@@ -19,7 +22,10 @@ func newTestConfig(t *testing.T) *config.Config {
 	return &config.Config{
 		Database: config.DatabaseConfig{DBPath: dbPath},
 		Runtime:  config.RuntimeConfig{DataDir: tmpDir},
-		Workers:  config.WorkersConfig{MaxJobAttempts: 3},
+		Workers: config.WorkersConfig{
+			MaxJobAttempts:    3,
+			AllowedWorkerIDs:  []string{"test-worker-1"},
+		},
 	}
 }
 

@@ -432,9 +432,10 @@ func runServer(cfg *config.Config) error {
 			// An empty allowlist silently admits any worker, which is
 			// acceptable in dev but a security gap in production.
 			//
-			// The STRICT two-worker / no-wildcard rule is enforced upstream
-			// by Config.Validate() which calls ValidateProductionWorkers.
-			// This block is defense-in-depth for the gRPC layer only.
+			// The non-empty / non-wildcard / unique allowlist rules are
+			// enforced upstream by Config.Validate() which calls
+			// ValidateProductionWorkers. This block is defense-in-depth
+			// for the gRPC layer only.
 			if err := grpcserver.ValidateWorkerAllowlist(cfg.Workers.AllowedWorkers, insecureDev); err != nil {
 				log.Printf("[BOOTSTRAP] gRPC worker allowlist validation FAILED: %v", err)
 				// The HTTP server hasn't started yet at this point — srv is

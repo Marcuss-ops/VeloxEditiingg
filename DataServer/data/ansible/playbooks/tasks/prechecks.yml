@@ -173,41 +173,43 @@
   delegate_to: localhost
   become: no
 
-# ── Production topology guardrail ──────────────────────────────────────────
-# Canonical production rule: EXACTLY TWO workers under [velox_workers].
-# Mirrored server-side by ValidateProductionWorkers
-# (DataServer/internal/config/workers_validator.go) so a misconfigured
-# inventory either fails here (before any remote task) or fail-fasts
-# the master at boot.
-- name: Pre-check | [velox_workers] must contain exactly 2 hosts (canonical production topology)
+# ── Production allowlist guardrail ─────────────────────────────────────────
+# Canonical production rule: [velox_workers] must contain at least one host
+# and each host must declare a non-empty worker_id. The fleet size is NOT
+# bounded — an operator may run any N >= 1 workers. The single source of
+# truth for the allowlist shape is ValidateProductionWorkers in
+# DataServer/internal/config/workers_validator.go (called via
+# Config.Validate), which enforces non-empty / non-wildcard / unique IDs.
+# This precheck is the Ansible side of the same invariant.
+- name: Pre-check | [velox_workers] hostgroup must be non-empty
   ansible.builtin.assert:
     that:
       - groups['velox_workers'] is defined
-      - (groups['velox_workers'] | length) == 2
+      - (groups['velox_workers'] | length) >= 1
     fail_msg: >-
-      Production requires exactly 2 workers under [velox_workers] (got
-      {{ groups['velox_workers'] | default([]) | length }}:
-      {{ groups['velox_workers'] | default([]) | join(', ') }}).
-      Update deploy/inventory/production.ini AND
-      deploy/group_vars/all.yml `velox_allowed_workers` so the two
-      lists stay in sync. A 1-worker or 3+ worker inventory will also
-      fail ValidateProductionWorkers at master boot.
+      Production requires at least one worker under [velox_workers] (got
+      {{ groups['velox_workers'] | default([]) | length }}).
+      Update deploy/inventory/production.ini.
   run_once: true
   delegate_to: localhost
   become: no
 
-# Workers have a stable worker_id mirroring the VELOX_ALLOWED_WORKERS
-# list — drift here silently gates workers out of the fleet.
-- name: Pre-check | Worker worker_id values follow canonical naming
+# Workers have a stable worker_id mirroring VELOX_ALLOWED_WORKERS — drift
+# here silently gates workers out of the fleet. We only check that the
+# id is set: ValidateProductionWorkers enforces uniqueness / non-wildcard
+# at master boot, and the canonical ID list (velox_allowed_workers) is
+# free-form by operator policy.
+- name: Pre-check | Each worker declares a non-empty worker_id
   ansible.builtin.assert:
     that:
       - hostvars[item].worker_id is defined
-      - hostvars[item].worker_id in ['velox-worker-1', 'velox-worker-2']
+      - hostvars[item].worker_id | length > 0
+      - hostvars[item].worker_id != '*'
     fail_msg: >-
       {{ item }} has worker_id={{ hostvars[item].worker_id | default('<unset>') }}.
-      Canonical production worker IDs are velox-worker-1 / velox-worker-2.
-      Update deploy/inventory/production.ini AND
-      deploy/group_vars/all.yml so worker_id matches velox_allowed_workers.
+      worker_id must be a non-empty string and must not be '*'.
+      It must match one of the VELOX_ALLOWED_WORKERS entries configured on
+      the master (deploy/group_vars/all.yml `velox_allowed_workers`).
   loop: "{{ groups['velox_workers'] | default([]) }}"
   delegate_to: localhost
   become: no
