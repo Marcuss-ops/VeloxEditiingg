@@ -4,9 +4,9 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"velox-server/internal/config"
-	"velox-server/internal/queue"
 	"velox-server/internal/store"
 )
 
@@ -91,29 +91,32 @@ func TestBuildServerDeps_HTTPAndGRPCShareSameLifecycleService(t *testing.T) {
 	}
 
 	// Complete the job via the LifecycleService directly (simulating gRPC).
-	// First claim it (HTTP path).
-	job, err := deps.fileQ.ClaimNextJob(ctx, "worker-grpc", nil)
+	// First claim it via repo (simulates worker polling).
+	repo := grpcLifecycle.Repo()
+	claimResult, err := repo.ClaimNext(ctx, store.ClaimParams{
+		WorkerID: "worker-grpc",
+		Now:      time.Now().UTC(),
+	})
 	if err != nil {
-		t.Fatalf("ClaimNextJob: %v", err)
+		t.Fatalf("ClaimNext: %v", err)
 	}
-	if job == nil {
-		t.Fatal("expected non-nil job after claim")
+	if claimResult == nil || claimResult.JobID == "" {
+		t.Fatal("expected non-nil claim result")
 	}
-	if job.JobID != jobID {
-		t.Fatalf("expected jobID=%s, got %s", jobID, job.JobID)
+	if claimResult.JobID != jobID {
+		t.Fatalf("expected jobID=%s, got %s", jobID, claimResult.JobID)
 	}
 
 	// Transition LEASED → RUNNING via repo (PR3: TransitionToRunning removed from LifecycleService).
-	repo := grpcLifecycle.Repo()
 	sj, err := repo.GetJob(ctx, jobID)
 	if err != nil || sj == nil {
 		t.Fatalf("GetJob after claim: %v", err)
 	}
 	if err := repo.StartJob(ctx, store.StartJobParams{
 		JobID:            jobID,
-		WorkerID:         job.AssignedTo,
-		LeaseID:          job.LeaseID,
-		Attempt:          job.Attempt,
+		WorkerID:         sj.AssignedTo,
+		LeaseID:          sj.LeaseID,
+		Attempt:          claimResult.Attempt,
 		ExpectedRevision: sj.Revision,
 	}); err != nil {
 		t.Fatalf("StartJob via gRPC repo: %v", err)
@@ -130,7 +133,7 @@ func TestBuildServerDeps_HTTPAndGRPCShareSameLifecycleService(t *testing.T) {
 		JobID:            jobID,
 		WorkerID:         sj.AssignedTo,
 		LeaseID:          sj.LeaseID,
-		Attempt:          job.Attempt,
+		Attempt:          claimResult.Attempt,
 		ExpectedRevision: sj.Revision,
 		FinalStatus:      store.JobStatusSucceeded,
 	}); err != nil {
@@ -138,7 +141,7 @@ func TestBuildServerDeps_HTTPAndGRPCShareSameLifecycleService(t *testing.T) {
 	}
 
 	// Verify the job is SUCCEEDED via the FileQueue (HTTP path reading).
-	got, err := deps.fileQ.GetJobAsMap(ctx, jobID)
+	got, err := deps.fileQ.QueryService().GetJobAsMap(ctx, jobID)
 	if err != nil {
 		t.Fatalf("GetJobAsMap: %v", err)
 	}
@@ -170,35 +173,34 @@ func TestClaimHTTPCompleteGRPCSeesConsistentState(t *testing.T) {
 		t.Fatalf("SubmitJob: %v", err)
 	}
 
-	// Step 2: Claim via HTTP path (simulates worker polling).
-	claimed, err := deps.fileQ.ClaimNextJob(ctx, "worker-http", nil)
+	// Step 2: Claim via repo (simulates worker polling).
+	repo := deps.fileQ.LifecycleService().Repo()
+	claimResult, err := repo.ClaimNext(ctx, store.ClaimParams{
+		WorkerID: "worker-http",
+		Now:      time.Now().UTC(),
+	})
 	if err != nil {
-		t.Fatalf("ClaimNextJob: %v", err)
+		t.Fatalf("ClaimNext: %v", err)
 	}
-	if claimed == nil {
-		t.Fatal("expected claimed job, got nil")
+	if claimResult == nil {
+		t.Fatal("expected claim result, got nil")
 	}
 
 	// Step 3: Verify the claimed job looks correct.
-	if claimed.Status != queue.StatusLeased {
-		t.Fatalf("expected status=LEASED after claim, got %s", claimed.Status)
-	}
-	if claimed.LeaseID == "" {
+	if claimResult.LeaseID == "" {
 		t.Fatal("expected non-empty lease_id after claim")
 	}
 
 	// Step 4: Transition LEASED → RUNNING → SUCCEEDED via gRPC path.
-	grpcLifecycle := deps.fileQ.LifecycleService()
-	repo := grpcLifecycle.Repo()
 	sj, err := repo.GetJob(ctx, jobID)
 	if err != nil || sj == nil {
 		t.Fatalf("GetJob after claim: %v", err)
 	}
 	if err := repo.StartJob(ctx, store.StartJobParams{
 		JobID:            jobID,
-		WorkerID:         claimed.AssignedTo,
-		LeaseID:          claimed.LeaseID,
-		Attempt:          claimed.Attempt,
+		WorkerID:         sj.AssignedTo,
+		LeaseID:          sj.LeaseID,
+		Attempt:          claimResult.Attempt,
 		ExpectedRevision: sj.Revision,
 	}); err != nil {
 		t.Fatalf("StartJob via gRPC: %v", err)
@@ -211,7 +213,7 @@ func TestClaimHTTPCompleteGRPCSeesConsistentState(t *testing.T) {
 		JobID:            jobID,
 		WorkerID:         sj.AssignedTo,
 		LeaseID:          sj.LeaseID,
-		Attempt:          claimed.Attempt,
+		Attempt:          claimResult.Attempt,
 		ExpectedRevision: sj.Revision,
 		FinalStatus:      store.JobStatusSucceeded,
 	}); err != nil {
@@ -219,7 +221,7 @@ func TestClaimHTTPCompleteGRPCSeesConsistentState(t *testing.T) {
 	}
 
 	// Step 5: Verify state via HTTP query.
-	got, err := deps.fileQ.GetJobAsMap(ctx, jobID)
+	got, err := deps.fileQ.QueryService().GetJobAsMap(ctx, jobID)
 	if err != nil {
 		t.Fatalf("GetJobAsMap: %v", err)
 	}
@@ -253,8 +255,12 @@ func TestBuildServerDeps_RestartDoesNotLoseJob(t *testing.T) {
 	}
 
 	// Claim it to change the state.
-	if _, err := deps1.fileQ.ClaimNextJob(ctx, "worker-1", nil); err != nil {
-		t.Fatalf("ClaimNextJob: %v", err)
+	repo1 := deps1.fileQ.LifecycleService().Repo()
+	if _, err := repo1.ClaimNext(ctx, store.ClaimParams{
+		WorkerID: "worker-1",
+		Now:      time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("ClaimNext: %v", err)
 	}
 
 	// Close the first database so the second bootstrap can open it.
@@ -270,7 +276,7 @@ func TestBuildServerDeps_RestartDoesNotLoseJob(t *testing.T) {
 		t.Fatalf("buildServerDeps 2: %v", err)
 	}
 
-	got, err := deps2.fileQ.GetJobAsMap(ctx, jobID)
+	got, err := deps2.fileQ.QueryService().GetJobAsMap(ctx, jobID)
 	if err != nil {
 		t.Fatalf("GetJobAsMap after restart: %v", err)
 	}

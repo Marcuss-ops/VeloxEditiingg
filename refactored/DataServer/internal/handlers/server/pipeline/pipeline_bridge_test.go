@@ -155,7 +155,7 @@ func TestPipelineGenerateForwardsCompletedResultToQueue(t *testing.T) {
 		t.Fatalf("transition service: %v", err)
 	}
 	querySvc := queue.NewQueryService(db)
-	q, err := queue.NewFileQueue(&queue.FileQueueConfig{MaxRetries: 3, DBStore: db}, ts, querySvc)
+	q, err := queue.NewFileQueue(&queue.FileQueueConfig{MaxRetries: 3}, ts, querySvc)
 	if err != nil {
 		t.Fatalf("file queue: %v", err)
 	}

@@ -38,7 +38,7 @@ func setupCalendarTestEnv(t *testing.T) (*store.SQLiteStore, *queue.FileQueue, *
 		t.Fatalf("new transition service: %v", err)
 	}
 	querySvc := queue.NewQueryService(db)
-	q, err := queue.NewFileQueue(&queue.FileQueueConfig{DBStore: db, MaxRetries: 3}, ts, querySvc)
+	q, err := queue.NewFileQueue(&queue.FileQueueConfig{MaxRetries: 3}, ts, querySvc)
 	if err != nil {
 		t.Fatalf("new queue: %v", err)
 	}
@@ -365,7 +365,7 @@ func TestCalendarAPI_FutureEventStaysScheduled(t *testing.T) {
 }
 
 func TestCalendarAPI_StatusLifecycleAndOutputs(t *testing.T) {
-	_, q, r := setupCalendarTestEnv(t)
+	db, q, r := setupCalendarTestEnv(t)
 	ctx := context.Background()
 
 	w := postJSON(t, r, "/api/v1/calendar/events", fullAgentEvent())
@@ -374,8 +374,8 @@ func TestCalendarAPI_StatusLifecycleAndOutputs(t *testing.T) {
 	}
 	event := decodeEvent(t, w)
 
-	// Use LeaseJob to set RUNNING
-	if err := q.LeaseJob(ctx, event.JobID, "worker-1"); err != nil {
+	// Use LeaseJob via repo to set RUNNING
+	if err := q.LifecycleService().Repo().LeaseJob(ctx, event.JobID, "worker-1"); err != nil {
 		t.Fatalf("lease job: %v", err)
 	}
 
@@ -395,7 +395,7 @@ func TestCalendarAPI_StatusLifecycleAndOutputs(t *testing.T) {
 	// requires a complex multi-table fixture (upload session, artifact, job
 	// attempt in RENDER_FINISHED state) which is out of scope here.
 	// NOTE: calendar_test.go is allowlisted in scan_test.go for this pattern.
-	_, err := q.GetDBStore().DB().ExecContext(ctx, "UPDATE jobs SET status = 'SUCCEEDED', completed_at = datetime('now') WHERE job_id = ?", event.JobID)
+	_, err := db.DB().ExecContext(ctx, "UPDATE jobs SET status = 'SUCCEEDED', completed_at = datetime('now') WHERE job_id = ?", event.JobID)
 	if err != nil {
 		t.Fatalf("complete job: %v", err)
 	}

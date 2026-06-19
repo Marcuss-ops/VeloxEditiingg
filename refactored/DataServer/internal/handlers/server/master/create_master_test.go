@@ -31,7 +31,6 @@ func newTestFileQueue(t *testing.T) *queue.FileQueue {
 	}
 	querySvc := queue.NewQueryService(sqlStore)
 	fq, err := queue.NewFileQueue(&queue.FileQueueConfig{
-		DBStore:    sqlStore,
 		MaxRetries: 3,
 	}, ts, querySvc)
 	if err != nil {

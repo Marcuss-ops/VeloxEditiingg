@@ -193,7 +193,6 @@ func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
 	querySvc := queue.NewQueryService(sqliteStore)
 
 	fileQ, err := queue.NewFileQueue(&queue.FileQueueConfig{
-		DBStore:    sqliteStore,
 		MaxRetries: cfg.Workers.MaxJobAttempts,
 	}, lifecycleSvc, querySvc)
 	if err != nil {

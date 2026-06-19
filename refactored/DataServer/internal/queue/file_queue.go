@@ -3,9 +3,7 @@ package queue
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"time"
 
 	"velox-server/internal/store"
 )
@@ -97,9 +95,12 @@ type JobLogEntry struct {
 }
 
 // FileQueue implements a SQLite-backed job queue with separated lifecycle and query services.
+//
+// Only methods with production callers are exposed. All pass-through query
+// wrappers and dead mutation methods have been removed — callers should use
+// LifecycleService() or QueryService() directly.
 type FileQueue struct {
 	maxRetries int
-	dbStore    *store.SQLiteStore
 	lifecycle  *LifecycleService
 	query      *QueryService
 
@@ -109,7 +110,6 @@ type FileQueue struct {
 // FileQueueConfig holds configuration for the file queue
 type FileQueueConfig struct {
 	MaxRetries int
-	DBStore    *store.SQLiteStore
 }
 
 // NewFileQueue creates a new SQLite-backed queue.
@@ -121,16 +121,12 @@ func NewFileQueue(cfg *FileQueueConfig, lifecycle *LifecycleService, query *Quer
 	if query == nil {
 		return nil, fmt.Errorf("QueryService is required")
 	}
-	if cfg.DBStore == nil {
-		return nil, fmt.Errorf("SQLiteStore is required for FileQueue")
-	}
 	if cfg.MaxRetries == 0 {
 		cfg.MaxRetries = 3
 	}
 
 	q := &FileQueue{
 		maxRetries: cfg.MaxRetries,
-		dbStore:    cfg.DBStore,
 		lifecycle:  lifecycle,
 		query:      query,
 	}
@@ -149,11 +145,7 @@ func (q *FileQueue) logEvent(jobID, eventType string, extra map[string]interface
 	}
 }
 
-// ── Mutation methods ──
-//
-// Each method delegates directly to the JobRepository or LifecycleService PR3
-// methods. No eventStore side effects — the transactional PR3 methods on the
-// repository handle history + event + outbox atomically.
+// ── Mutation methods (production callers) ──
 
 func (q *FileQueue) SubmitJob(ctx context.Context, jobID string, payload map[string]interface{}) error {
 	var videoName, projectID, runID string
@@ -185,139 +177,10 @@ func (q *FileQueue) SubmitJob(ctx context.Context, jobID string, payload map[str
 	return nil
 }
 
-func (q *FileQueue) ClaimNextJob(ctx context.Context, workerID string, allowedJobTypes []string) (*Job, error) {
-	result, err := q.lifecycle.Repo().ClaimNext(ctx, store.ClaimParams{
-		WorkerID:        workerID,
-		AllowedJobTypes: allowedJobTypes,
-		Now:             time.Now().UTC(),
-	})
-	if err != nil {
-		return nil, err
-	}
-	if result == nil || result.JobID == "" {
-		return nil, nil
-	}
-	sj, err := q.lifecycle.Repo().GetJob(ctx, result.JobID)
-	if err != nil {
-		// Release the claim so the job is not left orphaned.
-		if releaseErr := q.lifecycle.Repo().ReleaseClaim(ctx, result.JobID); releaseErr != nil {
-			q.logEvent(result.JobID, "release_claim_failed", map[string]interface{}{
-				"error": releaseErr.Error(),
-			})
-		}
-		return nil, fmt.Errorf("post-claim job fetch: %w", err)
-	}
-	if sj == nil {
-		// Release the claim — job no longer exists.
-		if releaseErr := q.lifecycle.Repo().ReleaseClaim(ctx, result.JobID); releaseErr != nil {
-			q.logEvent(result.JobID, "release_claim_failed", map[string]interface{}{
-				"error": releaseErr.Error(),
-			})
-		}
-		return nil, nil
-	}
-
-	// Parse payload from the request_json column.
-	var payload map[string]interface{}
-	if sj.PayloadJSON != "" && sj.PayloadJSON != "{}" {
-		_ = json.Unmarshal([]byte(sj.PayloadJSON), &payload)
-	}
-
-	job := &Job{
-		JobID:       sj.JobID,
-		Status:      JobStatus(sj.Status),
-		VideoName:   sj.VideoName,
-		ProjectID:   sj.ProjectID,
-		AssignedTo:  sj.AssignedTo,
-		LeaseID:     sj.LeaseID,
-		RetryCount:  sj.RetryCount,
-		MaxRetries:  sj.MaxRetries,
-		CreatedAt:   sj.CreatedAt,
-		UpdatedAt:   sj.UpdatedAt,
-		StartedAt:   sj.StartedAt,
-		CompletedAt: sj.CompletedAt,
-		Attempt:     result.Attempt,
-		RunID:       sj.RunID,
-		Payload:     payload,
-		LeaseExpiry: result.LeaseExpires,
-	}
-	q.logEvent(job.JobID, "claimed", map[string]interface{}{
-		"worker_id": workerID,
-	})
-	return job, nil
-}
-
-func (q *FileQueue) FailJob(ctx context.Context, jobID, errMsg, workerID string, requeue bool) error {
-	// Use the PR3 transactional Fail method
-	cmd := store.FailCommand{
-		JobID:        jobID,
-		WorkerID:     workerID,
-		ErrorMessage: errMsg,
-		Retryable:    requeue,
-		Now:          time.Now().UTC(),
-	}
-	if err := q.lifecycle.Fail(ctx, cmd); err != nil {
-		return err
-	}
-	q.logEvent(jobID, "failed", map[string]interface{}{
-		"error":    errMsg,
-		"requeued": requeue,
-	})
-	return nil
-}
-
-func (q *FileQueue) LeaseJob(ctx context.Context, jobID, workerID string) error {
-	if err := q.lifecycle.Repo().LeaseJob(ctx, jobID, workerID); err != nil {
-		return err
-	}
-	q.logEvent(jobID, "claimed", map[string]interface{}{
-		"worker_id": workerID,
-	})
-	return nil
-}
-
-func (q *FileQueue) RenewJobLease(ctx context.Context, jobID, workerID, leaseID string, leaseExpiry time.Time) error {
-	return q.lifecycle.Repo().PR3RenewLease(ctx, store.RenewLeaseCommand{
-		JobID:       jobID,
-		WorkerID:    workerID,
-		LeaseID:     leaseID,
-		LeaseExpiry: leaseExpiry.UTC(),
-		EmitEvent:   true,
-	})
-}
-
-func (q *FileQueue) RequeueZombieJobs(ctx context.Context, timeout time.Duration) (int, error) {
-	results, err := q.lifecycle.RequeueExpiredLeases(ctx, 100)
-	if err != nil {
-		return 0, err
-	}
-	return len(results), nil
-}
-
-// ── Query methods (QueryService) ──
+// ── Query methods (production callers) ──
 
 func (q *FileQueue) GetJob(ctx context.Context, jobID string) (*Job, error) {
 	return q.query.GetJob(ctx, jobID)
-}
-
-func (q *FileQueue) GetJobPayload(ctx context.Context, jobID string) (map[string]interface{}, error) {
-	return q.query.GetJobPayload(ctx, jobID)
-}
-
-func (q *FileQueue) GetJobAttempt(ctx context.Context, jobID string) (int, error) {
-	return q.query.GetJobAttempt(ctx, jobID)
-}
-
-func (q *FileQueue) GetJobsByStatus(ctx context.Context, status JobStatus) ([]*Job, error) {
-	return q.query.GetJobsByStatus(ctx, status)
-}
-
-func (q *FileQueue) GetPendingJobs(ctx context.Context) ([]*Job, error) {
-	return q.query.GetPendingJobs(ctx)
-}
-
-func (q *FileQueue) GetRunningJobs(ctx context.Context) ([]*Job, error) {
-	return q.query.GetRunningJobs(ctx)
 }
 
 func (q *FileQueue) GetAllJobs(ctx context.Context) (map[string]*Job, error) {
@@ -328,14 +191,6 @@ func (q *FileQueue) Stats(ctx context.Context) (map[string]int64, error) {
 	return q.query.Stats(ctx)
 }
 
-func (q *FileQueue) GetJobAsMap(ctx context.Context, jobID string) (map[string]interface{}, error) {
-	return q.query.GetJobAsMap(ctx, jobID)
-}
-
-func (q *FileQueue) GetNextJobID(ctx context.Context) (string, error) {
-	return q.query.GetNextJobID(ctx)
-}
-
 func (q *FileQueue) DeleteJob(ctx context.Context, jobID string) error {
 	if err := q.query.DeleteJob(ctx, jobID); err != nil {
 		return err
@@ -344,20 +199,7 @@ func (q *FileQueue) DeleteJob(ctx context.Context, jobID string) error {
 	return nil
 }
 
-func (q *FileQueue) UpdateJobLogs(ctx context.Context, jobID string, logs []JobLogEntry) error {
-	return q.query.UpdateJobLogs(ctx, jobID, logs)
-}
-
-// ── Maintenance ──
-
-func (q *FileQueue) CleanupOldJobs(ctx context.Context, age time.Duration) (int, error) {
-	return q.query.CleanupOldJobs(ctx, age)
-}
-
-// GetDBStore returns the underlying SQLite store.
-func (q *FileQueue) GetDBStore() *store.SQLiteStore {
-	return q.dbStore
-}
+// ── Accessors ──
 
 // LifecycleService returns the lifecycle service for direct use.
 func (q *FileQueue) LifecycleService() *LifecycleService {

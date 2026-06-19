@@ -37,7 +37,7 @@ func TestForwardSchedulesAsyncPollAndWorkerHandoff(t *testing.T) {
 		t.Fatalf("new transition service: %v", tsErr)
 	}
 	querySvc := queue.NewQueryService(db)
-	q, err := queue.NewFileQueue(&queue.FileQueueConfig{MaxRetries: 3, DBStore: db}, ts, querySvc)
+	q, err := queue.NewFileQueue(&queue.FileQueueConfig{MaxRetries: 3}, ts, querySvc)
 	if err != nil {
 		t.Fatalf("file queue: %v", err)
 	}
@@ -130,7 +130,7 @@ func TestForwardSchedulesAsyncPollAndWorkerHandoff(t *testing.T) {
 			if job.VideoName != "Async Creator Video" {
 				t.Fatalf("want Async Creator Video, got %s", job.VideoName)
 			}
-			payload, payloadErr := q.GetJobPayload(context.Background(), "creator-async-1")
+			payload, payloadErr := q.QueryService().GetJobPayload(context.Background(), "creator-async-1")
 			if payloadErr != nil {
 				t.Fatalf("GetJobPayload: %v", payloadErr)
 			}
@@ -159,7 +159,7 @@ func TestForwardCompletedResultEnqueuesWorkerJob(t *testing.T) {
 		t.Fatalf("new transition service: %v", tsErr)
 	}
 	querySvc := queue.NewQueryService(db)
-	q, err := queue.NewFileQueue(&queue.FileQueueConfig{MaxRetries: 3, DBStore: db}, ts, querySvc)
+	q, err := queue.NewFileQueue(&queue.FileQueueConfig{MaxRetries: 3}, ts, querySvc)
 	if err != nil {
 		t.Fatalf("file queue: %v", err)
 	}
@@ -206,7 +206,7 @@ func TestForwardCompletedResultEnqueuesWorkerJob(t *testing.T) {
 	if job.RunID != "creator-complete-1" {
 		t.Fatalf("want run_id creator-complete-1, got %s", job.RunID)
 	}
-	payload, payloadErr := q.GetJobPayload(context.Background(), "creator-complete-1")
+			payload, payloadErr := q.QueryService().GetJobPayload(context.Background(), "creator-complete-1")
 	if payloadErr != nil {
 		t.Fatalf("GetJobPayload: %v", payloadErr)
 	}
