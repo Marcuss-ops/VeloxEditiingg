@@ -91,7 +91,7 @@ func (r *SQLiteJobRepository) PR3Start(ctx context.Context, cmd StartCommand) er
 		   SET status = 'RUNNING',
 		       started_at = ?,
 		       updated_at = ?,
-		       revision = revision + 1
+		       revision = COALESCE(revision, 0) + 1
 		 WHERE job_id = ?
 		   AND UPPER(COALESCE(status, '')) = 'LEASED'
 		   AND COALESCE(assigned_to, '') = ?
@@ -157,7 +157,7 @@ func (r *SQLiteJobRepository) PR3RenewLease(ctx context.Context, cmd RenewLeaseC
 	query := `UPDATE jobs
 		   SET lease_expiry = ?,
 		       updated_at = ?,
-		       revision = revision + 1
+		       revision = COALESCE(revision, 0) + 1
 		 WHERE job_id = ?
 		   AND UPPER(COALESCE(status, '')) IN ('LEASED', 'RUNNING')
 		   AND COALESCE(assigned_to, '') = ?
@@ -242,7 +242,7 @@ func (r *SQLiteJobRepository) PR3RecordRenderFinished(ctx context.Context, cmd R
 		`UPDATE jobs
 		   SET status = 'RENDER_FINISHED',
 		       updated_at = ?,
-		       revision = revision + 1,
+		       revision = COALESCE(revision, 0) + 1,
 		       started_at = COALESCE(started_at, ?)
 		 WHERE job_id = ?
 		   AND UPPER(COALESCE(status, '')) = 'RUNNING'
@@ -319,7 +319,7 @@ func (r *SQLiteJobRepository) PR3Fail(ctx context.Context, cmd FailCommand) erro
 		`UPDATE jobs
 		   SET status = ?,
 		       updated_at = ?,
-		       revision = revision + 1,
+		       revision = COALESCE(revision, 0) + 1,
 		       retry_count = retry_count + (CASE WHEN ? = 'RETRY_WAIT' THEN 1 ELSE 0 END),
 		       last_error = ?,
 		       error_message = ?,
@@ -445,10 +445,10 @@ func (r *SQLiteJobRepository) PR3Cancel(ctx context.Context, cmd CancelCommand) 
 	if cmd.WorkerID != "" {
 		res, err = tx.ExecContext(ctx,
 			`UPDATE jobs
-			   SET status = 'CANCELLED',
-			       updated_at = ?,
-			       revision = revision + 1,
-			       lease_id = '',
+		   SET status = 'CANCELLED',
+		       updated_at = ?,
+		       revision = COALESCE(revision, 0) + 1,
+		       lease_id = '',
 			       lease_expiry = '',
 			       assigned_to = '',
 			       claimed_by = '',
@@ -462,10 +462,10 @@ func (r *SQLiteJobRepository) PR3Cancel(ctx context.Context, cmd CancelCommand) 
 	} else {
 		res, err = tx.ExecContext(ctx,
 			`UPDATE jobs
-			   SET status = 'CANCELLED',
-			       updated_at = ?,
-			       revision = revision + 1,
-			       lease_id = '',
+		   SET status = 'CANCELLED',
+		       updated_at = ?,
+		       revision = COALESCE(revision, 0) + 1,
+		       lease_id = '',
 			       lease_expiry = '',
 			       assigned_to = '',
 			       claimed_by = '',
@@ -577,10 +577,10 @@ func (r *SQLiteJobRepository) PR3RequeueExpiredLeases(ctx context.Context, now t
 			       claimed_by = '',
 			       claimed_at = '',
 			       assigned_at = '',
-			       retry_count = retry_count + (CASE WHEN ? = 'PENDING' THEN 1 ELSE 0 END),
-			       updated_at = ?,
-			       revision = revision + 1
-			 WHERE job_id = ?
+		       retry_count = retry_count + (CASE WHEN ? = 'PENDING' THEN 1 ELSE 0 END),
+		       updated_at = ?,
+		       revision = COALESCE(revision, 0) + 1
+		 WHERE job_id = ?
 			   AND UPPER(COALESCE(status, '')) = ?
 			   AND COALESCE(revision, 0) = ?`,
 			string(next), string(next), nowStr, c.jobID, c.current, c.revision,
