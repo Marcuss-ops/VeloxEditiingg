@@ -150,7 +150,7 @@ func TestPipelineGenerateForwardsCompletedResultToQueue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sqlite store: %v", err)
 	}
-	ts, err := queue.NewLegacyLifecycleService(store.NewSQLiteJobRepository(db), db)
+	ts, err := queue.NewLifecycleService(store.NewSQLiteJobRepository(db), queue.RealClock{})
 	if err != nil {
 		t.Fatalf("transition service: %v", err)
 	}

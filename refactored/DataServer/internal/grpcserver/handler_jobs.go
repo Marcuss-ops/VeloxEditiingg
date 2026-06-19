@@ -65,7 +65,7 @@ func (h *Handler) handleJobResult(workerID string, jr *pb.JobResult) {
 			ExpectedRevision: currentRev,
 			FinishedAt:       time.Now().UTC(),
 		}
-		if err := h.lifecycleSvc.RecordRenderFinished(ctx, cmd); err != nil {
+		if err := h.lifecycleSvc.Repo().PR3RecordRenderFinished(ctx, cmd); err != nil {
 			log.Printf("[GRPC] RecordRenderFinished failed for %s: %v", jobID, err)
 			return
 		}

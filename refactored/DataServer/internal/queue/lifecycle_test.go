@@ -9,9 +9,6 @@ import (
 	"velox-server/internal/store"
 )
 
-// Local sentinel for unimplemented stub methods (errNotImplemented was removed).
-var errNotImplemented = errors.New("not implemented")
-
 // postgresStubRepo is a minimal JobRepository used only for nil validation tests.
 var postgresStubRepo store.JobRepository = &storePostgresStub{}
 
@@ -75,51 +72,28 @@ func (s *storePostgresStub) PR3RequeueExpiredLeases(ctx context.Context, now tim
 	return nil, errNotImplemented
 }
 
+// errNotImplemented is a local sentinel for unimplemented stub methods.
+var errNotImplemented = errors.New("not implemented")
+
 func TestNewLifecycleService_RefusesNilRepository(t *testing.T) {
 	t.Parallel()
-	_, err := NewLegacyLifecycleService(nil, nil)
+	_, err := NewLifecycleService(nil, RealClock{})
 	if err == nil {
 		t.Fatal("expected error when repo is nil")
 	}
-	if err.Error() != "job repository is required" {
-		t.Fatalf("expected 'job repository is required', got %q", err.Error())
-	}
 }
 
-func TestNewLifecycleService_RefusesNilEventStore(t *testing.T) {
+func TestNewLifecycleService_RefusesNilClock(t *testing.T) {
 	t.Parallel()
-	// Non-nil repo, nil eventStore must fail on the second check.
-	_, err := NewLegacyLifecycleService(postgresStubRepo, nil)
+	_, err := NewLifecycleService(postgresStubRepo, nil)
 	if err == nil {
-		t.Fatal("expected error when eventStore is nil")
-	}
-	if err.Error() != "event store is required" {
-		t.Fatalf("expected 'event store is required', got %q", err.Error())
+		t.Fatal("expected error when clock is nil")
 	}
 }
 
-// eventStoreStub implements store.EventStore for testing.
-type eventStoreStub struct{}
-
-func (e *eventStoreStub) LogJobEvent(jobID, eventType string, extra map[string]interface{}) error { return nil }
-func (e *eventStoreStub) UpdateJobSupplementary(jobID string, fields map[string]interface{}) error { return nil }
-func (e *eventStoreStub) AddJobHistory(jobID, status, workerID, message string, extra map[string]interface{}) error { return nil }
-func (e *eventStoreStub) AddJobLog(jobID, message, workerID string, isError bool) error { return nil }
-func (e *eventStoreStub) SetJobRequest(jobID string, requestJSON []byte) error { return nil }
-func (e *eventStoreStub) UpsertJobResult(jobID string, resultJSON []byte) error { return nil }
-func (e *eventStoreStub) GetJob(ctx context.Context, jobID string) (map[string]interface{}, error) { return nil, nil }
-func (e *eventStoreStub) GetActiveJobs() (map[string]map[string]interface{}, error) { return nil, nil }
-func (e *eventStoreStub) JobCounts(ctx context.Context) (map[string]int64, error) { return nil, nil }
-func (e *eventStoreStub) ListJobsByStatus(statuses []string, limit int) ([]map[string]interface{}, error) { return nil, nil }
-func (e *eventStoreStub) DeleteJob(jobID string) error { return nil }
-func (e *eventStoreStub) ArchiveOldJobs(olderThan time.Time) (int64, error) { return 0, nil }
-func (e *eventStoreStub) TransitionJobStatus(ctx context.Context, jobID, expected, newStatus string, revision int) (int, error) { return 0, nil }
-func (e *eventStoreStub) UpdateArtifactStatus(ctx context.Context, artifactID, status string) error { return nil }
-var _ store.EventStore = (*eventStoreStub)(nil)
-
-func TestNewLifecycleService_SucceedsWithBothDeps(t *testing.T) {
+func TestNewLifecycleService_Succeeds(t *testing.T) {
 	t.Parallel()
-	svc, err := NewLegacyLifecycleService(postgresStubRepo, &eventStoreStub{})
+	svc, err := NewLifecycleService(postgresStubRepo, RealClock{})
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
 	}

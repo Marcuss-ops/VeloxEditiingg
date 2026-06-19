@@ -32,7 +32,7 @@ func TestForwardSchedulesAsyncPollAndWorkerHandoff(t *testing.T) {
 		t.Fatalf("sqlite store: %v", err)
 	}
 	jobRepo := store.NewSQLiteJobRepository(db)
-	ts, tsErr := queue.NewLegacyLifecycleService(jobRepo, db)
+	ts, tsErr := queue.NewLifecycleService(jobRepo, queue.RealClock{})
 	if tsErr != nil {
 		t.Fatalf("new transition service: %v", tsErr)
 	}
@@ -154,7 +154,7 @@ func TestForwardCompletedResultEnqueuesWorkerJob(t *testing.T) {
 		t.Fatalf("sqlite store: %v", err)
 	}
 	jobRepo := store.NewSQLiteJobRepository(db)
-	ts, tsErr := queue.NewLegacyLifecycleService(jobRepo, db)
+	ts, tsErr := queue.NewLifecycleService(jobRepo, queue.RealClock{})
 	if tsErr != nil {
 		t.Fatalf("new transition service: %v", tsErr)
 	}

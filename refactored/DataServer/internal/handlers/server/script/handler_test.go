@@ -26,7 +26,7 @@ func TestGenerateWithImages_EnqueuesSceneImageJob(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new sqlite store: %v", err)
 	}
-	ts, err := queue.NewLegacyLifecycleService(store.NewSQLiteJobRepository(db), db)
+	ts, err := queue.NewLifecycleService(store.NewSQLiteJobRepository(db), queue.RealClock{})
 	if err != nil {
 		t.Fatalf("new transition service: %v", err)
 	}
@@ -162,7 +162,7 @@ func TestGenerateWithImages_UsesCreatorStageWhenConfigured(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new sqlite store: %v", err)
 	}
-	ts, err := queue.NewLegacyLifecycleService(store.NewSQLiteJobRepository(db), db)
+	ts, err := queue.NewLifecycleService(store.NewSQLiteJobRepository(db), queue.RealClock{})
 	if err != nil {
 		t.Fatalf("new transition service: %v", err)
 	}
@@ -272,7 +272,7 @@ func TestGenerateWithImages_BypassesCreatorForRenderReadyPayload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new sqlite store: %v", err)
 	}
-	ts, err := queue.NewLegacyLifecycleService(store.NewSQLiteJobRepository(db), db)
+	ts, err := queue.NewLifecycleService(store.NewSQLiteJobRepository(db), queue.RealClock{})
 	if err != nil {
 		t.Fatalf("new transition service: %v", err)
 	}

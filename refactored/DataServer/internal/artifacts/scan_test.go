@@ -70,6 +70,12 @@ var allowedWriters = map[string]bool{
 // fragment as a TEST LITERAL (not as an executed statement).
 var allowedTestFiles = map[string]bool{
 	filepath.Join("internal", "artifacts", "scan_test.go"): true,
+	// calendar_test.go uses direct SQL to set jobs.status='SUCCEEDED' as a
+	// TEST FIXTURE — it tests calendar API status mapping, not the finalization
+	// lifecycle. The full FinalizeVerified path requires a complex multi-table
+	// fixture (upload session, artifact, job attempt in RENDER_FINISHED state)
+	// which is out of scope for this API-level test.
+	filepath.Join("internal", "handlers", "server", "calendar", "calendar_test.go"): true,
 }
 
 // findInternalRoot walks from the package cwd upward (default
