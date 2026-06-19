@@ -97,7 +97,7 @@ func (r *SQLiteJobRepository) PR3Start(ctx context.Context, cmd StartCommand) er
 		   AND COALESCE(assigned_to, '') = ?
 		   AND COALESCE(lease_id, '') = ?
 		   AND COALESCE(attempt, 0) = ?
-		   AND revision = ?`,
+		   AND COALESCE(revision, 0) = ?`,
 		now, now,
 		cmd.JobID, cmd.WorkerID, cmd.LeaseID, cmd.Attempt, cmd.ExpectedRevision,
 	)
@@ -167,7 +167,7 @@ func (r *SQLiteJobRepository) PR3RenewLease(ctx context.Context, cmd RenewLeaseC
 		cmd.JobID, cmd.WorkerID, cmd.LeaseID,
 	}
 	if !cmd.SkipRevisionCAS {
-		query += ` AND revision = ?`
+		query += ` AND COALESCE(revision, 0) = ?`
 		args = append(args, cmd.ExpectedRevision)
 	}
 
@@ -201,6 +201,12 @@ func (r *SQLiteJobRepository) PR3RenewLease(ctx context.Context, cmd RenewLeaseC
 // PR3RecordRenderFinished moves RUNNING → RENDER_FINISHED with the full
 // CAS tuple and writes render_finished history + event in one tx.
 // Idempotent: already-RENDER_FINISHED is a no-op.
+//
+// Revision is read inside the transaction (not from the caller) to avoid
+// TOCTOU races: a concurrent LeaseRenewal may bump the revision between
+// the caller's lookupJobCASFields read and this CAS UPDATE. By reading
+// revision under the same snapshot that gates the UPDATE, we close the
+// window entirely.
 func (r *SQLiteJobRepository) PR3RecordRenderFinished(ctx context.Context, cmd RecordRenderFinishedCommand) error {
 	if cmd.JobID == "" {
 		return fmt.Errorf("PR3RecordRenderFinished: empty jobID")
@@ -212,9 +218,14 @@ func (r *SQLiteJobRepository) PR3RecordRenderFinished(ctx context.Context, cmd R
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	// Idempotency guard: if already RENDER_FINISHED, commit and return nil.
+	// Idempotency guard + read current revision inside the tx so the
+	// CAS UPDATE uses the latest committed value — no TOCTOU window.
 	var current string
-	if err := tx.QueryRowContext(ctx, `SELECT UPPER(COALESCE(status,'')) FROM jobs WHERE job_id = ?`, cmd.JobID).Scan(&current); err != nil {
+	var currentRev int
+	if err := tx.QueryRowContext(ctx,
+		`SELECT UPPER(COALESCE(status,'')), COALESCE(revision, 0) FROM jobs WHERE job_id = ?`,
+		cmd.JobID,
+	).Scan(&current, &currentRev); err != nil {
 		if err == sql.ErrNoRows {
 			if cErr := tx.Commit(); cErr == nil {
 				return nil
@@ -238,9 +249,9 @@ func (r *SQLiteJobRepository) PR3RecordRenderFinished(ctx context.Context, cmd R
 		   AND COALESCE(assigned_to, '') = ?
 		   AND COALESCE(lease_id, '') = ?
 		   AND COALESCE(attempt, 0) = ?
-		   AND revision = ?`,
+		   AND COALESCE(revision, 0) = ?`,
 		now, now,
-		cmd.JobID, cmd.WorkerID, cmd.LeaseID, cmd.AttemptNumber, cmd.ExpectedRevision,
+		cmd.JobID, cmd.WorkerID, cmd.LeaseID, cmd.AttemptNumber, currentRev,
 	)
 	if err != nil {
 		return fmt.Errorf("PR3RecordRenderFinished UPDATE: %w", err)
@@ -322,7 +333,7 @@ func (r *SQLiteJobRepository) PR3Fail(ctx context.Context, cmd FailCommand) erro
 		       assigned_at = ''
 		 WHERE job_id = ?
 		   AND UPPER(COALESCE(status, '')) IN ('LEASED', 'RUNNING', 'RENDER_FINISHED', 'AWAITING_ARTIFACT')
-		   AND revision = ?`,
+		   AND COALESCE(revision, 0) = ?`,
 		string(nextStatus), now, string(nextStatus), cmd.ErrorMessage, cmd.ErrorMessage, now, cmd.WorkerID,
 		cmd.JobID, cmd.ExpectedRevision,
 	)
@@ -445,7 +456,7 @@ func (r *SQLiteJobRepository) PR3Cancel(ctx context.Context, cmd CancelCommand) 
 			       assigned_at = ''
 			 WHERE job_id = ?
 			   AND UPPER(COALESCE(status, '')) NOT IN ('SUCCEEDED', 'FAILED', 'CANCELLED')
-			   AND revision = ?`,
+			   AND COALESCE(revision, 0) = ?`,
 			now, cmd.JobID, cmd.ExpectedRevision,
 		)
 	} else {
@@ -571,7 +582,7 @@ func (r *SQLiteJobRepository) PR3RequeueExpiredLeases(ctx context.Context, now t
 			       revision = revision + 1
 			 WHERE job_id = ?
 			   AND UPPER(COALESCE(status, '')) = ?
-			   AND revision = ?`,
+			   AND COALESCE(revision, 0) = ?`,
 			string(next), string(next), nowStr, c.jobID, c.current, c.revision,
 		)
 		if err != nil {

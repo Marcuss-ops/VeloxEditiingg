@@ -9,7 +9,7 @@ require (
 	velox-shared v0.0.0
 )
 
-replace velox-shared v0.0.0 => ../../../shared
+replace velox-shared v0.0.0 => ../../../../shared
 
 require (
 	github.com/deckarep/golang-set v1.7.1 // indirect

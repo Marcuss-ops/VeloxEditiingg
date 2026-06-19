@@ -13,6 +13,7 @@ const jobColumns = `job_id, status, video_name, project_id,
 	assigned_to, worker_name, claimed_by, claimed_at,
 	lease_id, lease_expiry,
 	retry_count, attempt, max_retries,
+	revision,
 	last_error, last_error_at, error_message, failed_at, failed_by,
 	processing_at,
 	last_upload_attempt_at,
@@ -29,7 +30,7 @@ func scanJobRow(scanner interface{ Scan(dest ...interface{}) error }) (map[strin
 		completedAt, assignedAt                                                                                      sql.NullString
 		assignedTo, workerName, claimedBy, claimedAt                                                                 sql.NullString
 		leaseID, leaseExpiry                                                                                         sql.NullString
-		retryCount, attempt, maxRetries                                                                              sql.NullInt64
+		retryCount, attempt, maxRetries, revision                                                                    sql.NullInt64
 		lastError, errorMessage, failedBy                                                                            sql.NullString
 		lastErrorAt, failedAt, processingAt                                                                          sql.NullString
 		lastUploadAttemptAt                                                                                          sql.NullString
@@ -45,7 +46,7 @@ func scanJobRow(scanner interface{ Scan(dest ...interface{}) error }) (map[strin
 		&completedAt, &assignedAt,
 		&assignedTo, &workerName, &claimedBy, &claimedAt,
 		&leaseID, &leaseExpiry,
-		&retryCount, &attempt, &maxRetries,
+		&retryCount, &attempt, &maxRetries, &revision,
 		&lastError, &lastErrorAt, &errorMessage, &failedAt, &failedBy,
 		&processingAt,
 		&lastUploadAttemptAt,
@@ -99,6 +100,7 @@ func scanJobRow(scanner interface{ Scan(dest ...interface{}) error }) (map[strin
 	setInt("retry_count", retryCount)
 	setInt("attempt", attempt)
 	setInt("max_retries", maxRetries)
+	setInt("revision", revision)
 
 	// JSON blob columns
 	setJSON := func(key string, ns sql.NullString) {

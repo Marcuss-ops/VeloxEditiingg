@@ -29,7 +29,7 @@ jobs:
           go-version-file: refactored/DataServer/go.mod
           cache-dependency-path: |
             refactored/DataServer/go.sum
-            refactored/shared/go.sum
+            shared/go.sum
 
       - name: Run tests
         working-directory: refactored/DataServer
@@ -51,7 +51,7 @@ jobs:
           go-version-file: refactored/RemoteCodex/native/worker-agent-go/go.mod
           cache-dependency-path: |
             refactored/RemoteCodex/native/worker-agent-go/go.sum
-            refactored/shared/go.sum
+            shared/go.sum
 
       - name: Run tests
         working-directory: refactored/RemoteCodex/native/worker-agent-go
@@ -74,7 +74,7 @@ jobs:
           go-version-file: refactored/RemoteCodex/native/worker-agent-go/go.mod
           cache-dependency-path: |
             refactored/RemoteCodex/native/worker-agent-go/go.sum
-            refactored/shared/go.sum
+            shared/go.sum
 
       - name: Build Go agent binary
         working-directory: refactored/RemoteCodex/native/worker-agent-go
