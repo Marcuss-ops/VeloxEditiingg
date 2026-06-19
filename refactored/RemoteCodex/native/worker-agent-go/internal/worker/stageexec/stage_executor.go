@@ -1,11 +1,5 @@
-// Package worker provides stage-aware chunk execution for the GOD workflow.
-//
-// This implements Step 2 of the GOD Workflow Implementation Playbook:
-// - Stage-aware queue with backpressure
-// - Chunk-level retry with isolation
-// - CPU worker pool limits
-// - Uniform timeout and cancellation propagation
-package worker
+// Package stageexec provides stage-aware chunk execution for the GOD workflow.
+package stageexec
 
 import (
 	"context"

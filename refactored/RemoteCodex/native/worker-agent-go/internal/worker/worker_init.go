@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"velox-shared/controltransport"
+	"velox-worker-agent/internal/worker/concurrency"
+	"velox-worker-agent/internal/worker/stageexec"
 	"velox-worker-agent/pkg/api"
 	"velox-worker-agent/pkg/config"
 	"velox-worker-agent/pkg/logger"
@@ -43,14 +45,14 @@ func New(cfg *config.WorkerConfig, version string) *Worker {
 	)
 
 	// Initialize stage executor for GOD workflow
-	stageExecCfg := &StageExecutorConfig{
+	stageExecCfg := &stageexec.StageExecutorConfig{
 		MaxConcurrentChunks: cfg.MaxActiveJobs,
 		ChunkTimeout:        5 * time.Minute,
 		MaxChunkRetries:     2,
 		ChunkRetryDelay:     2 * time.Second,
 		StageTimeout:        15 * time.Minute,
 	}
-	stageExecutor := NewStageExecutor(stageExecCfg)
+	stageExecutor := stageexec.NewStageExecutor(stageExecCfg)
 
 	// Store a transport factory that creates fresh instances per session.
 	// After Close(), transports are not reusable (channels + sync.Once),
@@ -96,7 +98,7 @@ func New(cfg *config.WorkerConfig, version string) *Worker {
 		activeJobs:         make(map[string]*ActiveJob),
 		pendingLeaseJobs:   make(map[string]*api.Job),
 		connState:          ConnDisconnected,
-		concurrencyLimiter: NewConcurrencyLimiter(detectedConcurrency),
+		concurrencyLimiter: concurrency.NewConcurrencyLimiter(detectedConcurrency),
 		stageExecutor:      stageExecutor,
 		exitFunc:           os.Exit,
 	}

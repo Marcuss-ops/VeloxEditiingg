@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"velox-shared/controltransport"
+	"velox-worker-agent/internal/worker/concurrency"
+	"velox-worker-agent/internal/worker/stageexec"
 	"velox-worker-agent/pkg/api"
 	"velox-worker-agent/pkg/config"
 	"velox-worker-agent/pkg/logger"
@@ -121,10 +123,10 @@ type Worker struct {
 	recentLogs *recentLogBuffer
 
 	// Concurrency limiter (Phase 1: worker policy)
-	concurrencyLimiter *ConcurrencyLimiter
+	concurrencyLimiter *concurrency.ConcurrencyLimiter
 
 	// Stage executor (Step 2: stage/chunk execution with retry)
-	stageExecutor *StageExecutor
+	stageExecutor *stageexec.StageExecutor
 
 	// Exit function (for testing, defaults to os.Exit)
 	exitFunc ExitFunc

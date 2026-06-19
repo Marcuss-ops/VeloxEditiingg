@@ -1,7 +1,7 @@
-// Package worker provides concurrency limiting for job execution.
+// Package concurrency provides semaphore-based concurrency limiting for job execution.
 //
 // This implements Phase 1 deliverable: worker policy (1 VPS = 1 main job + 8-core concurrency).
-package worker
+package concurrency
 
 import (
 	"context"
@@ -68,7 +68,7 @@ func (cl *ConcurrencyLimiter) Acquire(ctx context.Context, jobID string, priorit
 		// No slot available, check if we should queue or reject
 		if cl.shouldReject(priority) {
 			atomic.AddInt64(&cl.rejectedJobs, 1)
-			return fmt.Errorf("concurrency limit reached: max_active_jobs=%d, active=%d", 
+			return fmt.Errorf("concurrency limit reached: max_active_jobs=%d, active=%d",
 				cl.maxActiveJobs, atomic.LoadInt32(&cl.activeJobs))
 		}
 

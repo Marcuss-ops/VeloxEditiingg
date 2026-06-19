@@ -1,5 +1,11 @@
-// Package worker provides stage-aware chunk execution for the GOD workflow.
-package worker
+// Package stageexec provides stage-aware chunk execution for the GOD workflow.
+//
+// This implements Step 2 of the GOD Workflow Implementation Playbook:
+// - Stage-aware queue with backpressure
+// - Chunk-level retry with isolation
+// - CPU worker pool limits
+// - Uniform timeout and cancellation propagation
+package stageexec
 
 import (
 	"context"
@@ -22,13 +28,13 @@ var StageOrder = []StageType{StageProbe, StageAudio, StageVideo, StageConcat, St
 
 // ChunkResult represents the result of a single chunk execution.
 type ChunkResult struct {
-	Stage     StageType              `json:"stage"`
-	ChunkID   string                 `json:"chunk_id"`
-	Success   bool                   `json:"success"`
-	Output    map[string]interface{} `json:"output,omitempty"`
-	Error     string                 `json:"error,omitempty"`
-	Duration  time.Duration          `json:"duration"`
-	Attempt   int                    `json:"attempt"`
+	Stage    StageType              `json:"stage"`
+	ChunkID  string                 `json:"chunk_id"`
+	Success  bool                   `json:"success"`
+	Output   map[string]interface{} `json:"output,omitempty"`
+	Error    string                 `json:"error,omitempty"`
+	Duration time.Duration          `json:"duration"`
+	Attempt  int                    `json:"attempt"`
 }
 
 // StageResult represents the result of a complete stage execution.
