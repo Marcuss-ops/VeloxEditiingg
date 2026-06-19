@@ -32,9 +32,11 @@ import (
 	pb "velox-shared/controltransport/pb"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/peer"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -50,6 +52,7 @@ type Handler struct {
 	artifactSvc   *artifacts.Service
 	dbStore       *store.SQLiteStore
 	config        *HandlerConfig
+	authorizer    WorkerAuthorizer // P0: gates workers against VELOX_ALLOWED_WORKERS
 
 	mu             sync.Mutex
 	sessions       map[string]*workerSession // sessionID → active stream session
@@ -58,8 +61,9 @@ type Handler struct {
 
 // HandlerConfig holds configuration for the gRPC handler.
 type HandlerConfig struct {
-	PushMode      bool // Phase 5+: send JobOffer directly, workers respond JobAccepted
-	AllowInsecure bool // Dev-only: allow insecure gRPC connections (VELOX_GRPC_ALLOW_INSECURE_DEV)
+	PushMode       bool   // Phase 5+: send JobOffer directly, workers respond JobAccepted
+	AllowInsecure  bool   // Dev-only: allow insecure gRPC connections (VELOX_GRPC_ALLOW_INSECURE_DEV)
+	AllowedWorkers string // P0: comma-separated worker ID allowlist (VELOX_ALLOWED_WORKERS)
 }
 
 // outboundMessage wraps a protobuf envelope with optional callbacks
@@ -119,6 +123,10 @@ type workerSession struct {
 // messages when artifactSvc is nil so misconfiguration surfaces as
 // dropped uploads rather than a SUCCEEDED job with no verification.
 // Bootstrap must supply a real *artifacts.Service.
+//
+// P0 (2026-06): the handler now gates all inbound worker streams through a
+// WorkerAuthorizer backed by VELOX_ALLOWED_WORKERS. Workers NOT in the
+// allowlist receive gRPC PermissionDenied before credential validation.
 func NewHandler(
 	registry *workersreg.Registry,
 	cmdMgr *workersreg.CommandManager,
@@ -137,6 +145,7 @@ func NewHandler(
 		artifactSvc:    artifactSvc,
 		dbStore:        dbStore,
 		config:         config,
+		authorizer:     NewAllowlistAuthorizer(config.AllowedWorkers, config.AllowInsecure),
 		sessions:       make(map[string]*workerSession),
 		workerSessions: make(map[string]string),
 	}
@@ -168,6 +177,22 @@ func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMasterEnvelo
 		log.Printf("[GRPC] Worker authenticated via mTLS: %s", certWorkerID)
 	} else if !h.config.AllowInsecure {
 		return fmt.Errorf("stream: insecure connections not allowed (set VELOX_GRPC_ALLOW_INSECURE_DEV=true for dev)")
+	}
+
+	// P0 security: gate the worker against VELOX_ALLOWED_WORKERS before
+	// credential validation. Workers not in the allowlist receive
+	// PermissionDenied — the transport-level error is surfaced to the
+	// worker agent as a gRPC status code, and the connection is refused.
+	//
+	// This check runs AFTER cert identity verification but BEFORE
+	// credential_hash validation and session creation, because an
+	// unlisted worker should never reach the credential store.
+	//
+	// Using gRPC status.Errorf(codes.PermissionDenied) so the worker
+	// and operator can distinguish "not allowed" from internal errors.
+	if !h.authorizer.IsAllowed(declaredWorkerID) {
+		return status.Errorf(codes.PermissionDenied,
+			"worker %q is not in VELOX_ALLOWED_WORKERS", declaredWorkerID)
 	}
 
 	// P0 security: validate credential_hash against stored worker credentials

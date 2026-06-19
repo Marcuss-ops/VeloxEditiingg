@@ -383,8 +383,23 @@ func runServer(cfg *config.Config) error {
 			log.Printf("[SERVER] gRPC disabled: lifecycleSvc is nil")
 		} else {
 			cmdMgr := workersreg.NewCommandManager(deps.sqliteStore)
+
+			insecureDev := os.Getenv("VELOX_GRPC_ALLOW_INSECURE_DEV") == "true"
+
+			// P0: fail-fast if VELOX_ALLOWED_WORKERS is empty in production.
+			// An empty allowlist silently admits any worker, which is
+			// acceptable in dev but a security gap in production.
+			if err := grpcserver.ValidateWorkerAllowlist(cfg.Workers.AllowedWorkers, insecureDev); err != nil {
+				log.Printf("[BOOTSTRAP] gRPC worker allowlist validation FAILED: %v", err)
+				// The HTTP server hasn't started yet at this point — srv is
+				// just an allocated struct. Returning the error causes
+				// runServer() to bail out before starting any listener.
+				return err
+			}
+
 			grpcHandlerConfig := &grpcserver.HandlerConfig{
-				PushMode: cfg.Server.GRPCPushMode,
+				PushMode:       cfg.Server.GRPCPushMode,
+				AllowedWorkers: cfg.Workers.AllowedWorkers,
 			}
 			grpcHandler := grpcserver.NewHandler(
 				deps.reg, cmdMgr, lcSvc, deps.artifactSvc, deps.sqliteStore, grpcHandlerConfig,
