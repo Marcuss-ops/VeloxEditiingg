@@ -1,0 +1,225 @@
+---
+# PR D — Worker Docker image release pipeline.
+# ─────────────────────────────────────────────────────────────────────────────
+# Triggers:
+#   * push tag matching worker-v*  (e.g. refs/tags/worker-v1.2.3)
+#   * workflow_dispatch with `version` + `no_push` inputs
+#
+# What this workflow does:
+#   1. Resolves effective version from tag or input.
+#   2. Runs `go test -race` on the worker agent (fail-fast on regression).
+#   3. Builds the Go binary via the project's Makefile (bin/velox-worker-agent).
+#   4. Builds the Debian-slim Docker image from native/worker-agent-go/Dockerfile.
+#   5. Tags the image as `<owner>/velox-worker:<semver>` + `sha-<short>` — explicitly
+#      NO `:latest` tag.
+#   6. Generates SBOM + provenance attestations via BuildKit (baked into the
+#      OCI manifest, surfaced by GHCR).
+#   7. Extracts the digest, exports it to `$GITHUB_STEP_SUMMARY`, and uploads
+#      it as a `worker-image-digest` workflow artifact consumable by the
+#      deploy scripts.
+#   8. Signs the image with `cosign` using keyless OIDC against GitHub's
+#      Sigstore-compliant oidc issuer (requires `id-token: write`).
+#   9. Smoke-tests the image: `docker run` + assert container is still
+#      Running after 5 s. We intentionally do not await HEALTHCHECK here
+#      because the worker agent's HEALTHCHECK depends on a live gRPC
+#      handshake to the master, which is not mockable in a CI runner.
+#
+# Operators wanting a fully-pinned deploy should consume the digest artifact
+# via `velox-deploy-worker.sh --image ghcr.io/<owner>/velox-worker@<digest>`.
+
+name: Worker image release
+
+on:
+  push:
+    tags:
+      - 'worker-v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version label (e.g. 1.2.3 or v1.2.3-rc1). The leading v is optional.'
+        required: true
+        default: '1.1.2'
+      no_push:
+        description: 'Build + sign skipped locally — do NOT push, do NOT sign.'
+        required: false
+        default: 'false'
+        type: boolean
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: velox-worker
+  BUILD_DIR: RemoteCodex/native/worker-agent-go
+  DOCKERFILE: RemoteCodex/native/worker-agent-go/Dockerfile
+  BUILD_CONTEXT: RemoteCodex
+
+jobs:
+  build-publish:
+    name: Build, test, push, sign
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve effective version + determine push
+        id: version
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "push" ]; then
+            # e.g. refs/tags/worker-v1.2.3-rc1 → "1.2.3-rc1"
+            TAG="${GITHUB_REF_NAME#worker-}"
+          else
+            # workflow_dispatch: input may or may not have a leading 'v'
+            INPUT="${{ inputs.version }}"
+            TAG="${INPUT#v}"
+          fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          # Compute commit-count-based pre-release marker so PR previews don't
+          # collide with release tags without ambiguity.
+          SHORT_SHA="${GITHUB_SHA::7}"
+          echo "short_sha=${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+          # Skip push when explicitly dry-run on a tag push is impossible
+          # (tag pushes always perform full publish). For dispatch, honor `no_push`.
+          if [ "${{ github.event_name }}" = "push" ]; then
+            SHOULD_PUSH="true"
+          else
+            if [ "${{ inputs.no_push }}" = "true" ]; then
+              SHOULD_PUSH="false"
+            else
+              SHOULD_PUSH="true"
+            fi
+          fi
+          echo "push=${SHOULD_PUSH}" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.8'
+          cache-dependency-path: ${{ env.BUILD_DIR }}/go.sum
+
+      - name: Run tests with race detector (fail-fast gate)
+        working-directory: ${{ env.BUILD_DIR }}
+        run: go test -race -timeout 5m ./internal/... ./pkg/...
+
+      - name: Build worker-agent binary (pre-Docker step)
+        working-directory: ${{ env.BUILD_DIR }}
+        env:
+          VERSION: ${{ steps.version.outputs.tag }}
+        run: make agent
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: steps.version.outputs.push == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: "Compute image tags (NO :latest)"
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=match,pattern=worker-v(.*),group=1
+            type=sha,prefix=sha-,format=short
+          # Disable all default tag types (including :latest). Order matters:
+          # metadata-action prefers earliest tags, so the two explicit tags
+          # above take precedence over any default.
+          flavor: |
+            latest=false
+
+      - name: Build + push image
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ env.BUILD_CONTEXT }}
+          file: ${{ env.DOCKERFILE }}
+          push: ${{ steps.version.outputs.push == 'true' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # NOTE: the worker-agent Version is already baked into the binary
+          # by the project's Makefile (LDFLAGS=-X main.Version=$(VERSION)).
+          # BuildKit-native provenance + SBOM carry the image digest
+          # through the OCI manifest; no separate build-arg is needed.
+          provenance: true
+          sbom: true
+          # Per-ref cache scope prevents layer-cache poisoning across
+          # unrelated feature branches and keeps build-warming local
+          # to the branch that produced the layers.
+          cache-from: type=gha,scope=${{ github.workflow }}-${{ github.ref_name }}
+          cache-to:   type=gha,mode=max,scope=${{ github.workflow }}-${{ github.ref_name }}
+
+      - name: Extract image digest
+        id: digest
+        if: steps.build.outputs.digest != ''
+        run: |
+          set -euo pipefail
+          echo "digest=${{ steps.build.outputs.digest }}" >> "$GITHUB_OUTPUT"
+          echo "${{ steps.build.outputs.digest }}" > image-digest.txt
+          echo "## Image digest" >> "$GITHUB_STEP_SUMMARY"
+          echo ":package: \`${{ steps.build.outputs.digest }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "Tags:" >> "$GITHUB_STEP_SUMMARY"
+          for t in ${{ steps.meta.outputs.tags }}; do
+            echo "- \`$t\`" >> "$GITHUB_STEP_SUMMARY"
+          done
+
+      - name: Upload digest artifact
+        if: steps.build.outputs.digest != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: worker-image-digest
+          path: image-digest.txt
+          if-no-files-found: error
+
+      - name: Install cosign
+        if: steps.digest.outputs.digest != '' && steps.version.outputs.push == 'true'
+        uses: sigstore/cosign-installer@v3
+        with:
+          cosign-release: 'v2.4.1'
+
+      - name: Cosign keyless sign (OIDC)
+        if: steps.digest.outputs.digest != '' && steps.version.outputs.push == 'true'
+        env:
+          COSIGN_EXPERIMENTAL: '1'
+        run: |
+          set -euo pipefail
+          IMAGE="${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}@${{ steps.digest.outputs.digest }}"
+          echo "Signing image: $IMAGE"
+          cosign sign --yes "$IMAGE"
+
+      - name: "Smoke test: entrypoint stays up (no immediate crash)"
+        if: steps.digest.outputs.digest != '' && steps.version.outputs.push == 'true'
+        run: |
+          set -euo pipefail
+          IMAGE="${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}@${{ steps.digest.outputs.digest }}"
+          echo "Smoke testing entrypoint of: $IMAGE"
+          # Run container with bogus master URL — the worker will retry
+          # connection but should NOT crash.
+          docker run --rm -d \
+            --name worker-smoke \
+            -e VELOX_WORKER_ID=ci-smoke \
+            -e VELOX_GRPC_MASTER_URL=127.0.0.1:9999 \
+            -p 8081:8081 \
+            "$IMAGE"
+          sleep 5
+          STATUS="$(docker inspect --format='{{.State.Running}}' worker-smoke || true)"
+          if [ "$STATUS" != "true" ]; then
+            echo "::error::Worker container did not stay running after 5s"
+            docker logs worker-smoke || true
+            docker rm -f worker-smoke || true
+            exit 1
+          fi
+          echo "Smoke OK — container stayed up."
+          docker rm -f worker-smoke

@@ -1,0 +1,100 @@
+---
+# Roll back /etc/velox-server.env on the master to the most recent backup.
+# ────────────────────────────────────────────────────────────────────────────
+# What this playbook does:
+#   1. Lists every existing backup file matching
+#      {{ velox_env_backup_root }}/*/velox-server.env.
+#   2. Fails fast if no backups are available.
+#   3. Picks the latest by mtime.
+#   4. Restores it to /etc/velox-server.env with mode 0640 root:velox.
+#   5. Runs the validator after restore; on change, restarts the service.
+#
+# This playbook does NOT generate backups. Backups live under
+# /var/backups/velox/<ISO-8601 timestamp>/velox-server.env and are produced
+# by the operator's CI workflow before invoking deploy-master-config.yml.
+#
+# Usage:
+#
+#   ansible-playbook -i deploy/inventory/production.ini \
+#     deploy/playbooks/rollback.yml
+#
+#   # Dry run preview:
+#   ansible-playbook -i deploy/inventory/production.ini --check \
+#     deploy/playbooks/rollback.yml
+- name: Roll back velox-server.env on the master
+  hosts: velox_master
+  become: true
+  gather_facts: false
+
+  vars:
+    velox_env_dst: /etc/velox-server.env
+    velox_env_owner: root
+    velox_env_group: velox
+    velox_env_mode: "0640"
+    velox_validator_path: /opt/velox/current/deploy/validate-master-env.sh
+
+  vars_files:
+    - ../group_vars/all.yml
+
+  pre_tasks:
+    - name: Ensure /opt/velox/current/deploy exists
+      ansible.builtin.file:
+        path: /opt/velox/current/deploy
+        state: directory
+        owner: root
+        group: velox
+        mode: "0750"
+
+  tasks:
+    - name: Discover env backups under velox_env_backup_root
+      ansible.builtin.find:
+        paths: "{{ velox_env_backup_root }}"
+        patterns: velox-server.env
+        recurse: true
+        file_type: file
+      register: backups
+
+    - name: Fail if no backups are available
+      ansible.builtin.fail:
+        msg: >-
+          No backups found under {{ velox_env_backup_root }}.
+          Rollback aborted; manual recovery required.
+      when: backups.files | length == 0
+
+    - name: Pick the most recent backup (by mtime)
+      ansible.builtin.set_fact:
+        latest_backup: "{{ backups.files | sort(attribute='mtime', reverse=true) | first }}"
+
+    - name: Restore latest backup to /etc/velox-server.env
+      ansible.builtin.copy:
+        src: "{{ latest_backup.path }}"
+        dest: "{{ velox_env_dst }}"
+        owner: "{{ velox_env_owner }}"
+        group: "{{ velox_env_group }}"
+        mode: "{{ velox_env_mode }}"
+        remote_src: true
+      notify: validate env and restart velox-server
+
+    - name: Run env validator after restore
+      ansible.builtin.command: "{{ velox_validator_path }} {{ velox_env_dst }}"
+      register: validator_post
+      changed_when: false
+      failed_when: validator_post.rc != 0
+
+  handlers:
+    - name: Validate env before restarting service
+      ansible.builtin.command: "{{ velox_validator_path }} {{ velox_env_dst }}"
+      listen: validate env and restart velox-server
+      register: validator_restart
+      changed_when: false
+      failed_when: validator_restart.rc != 0
+
+    # NOTE: env file changes do not require a systemd unit-file refresh
+    # (see deploy-master-config.yml for the full rationale).
+
+    - name: Restart velox-server
+      ansible.builtin.service:
+        name: velox-server
+        state: restarted
+        enabled: true
+      listen: validate env and restart velox-server

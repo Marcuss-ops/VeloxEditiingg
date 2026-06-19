@@ -1,0 +1,125 @@
+---
+# Bootstrap SSH access on a Velox master or worker node.
+# ────────────────────────────────────────────────────────────────────────────
+# One-shot setup for newly-provisioned hosts. Idempotent: safe to re-run on
+# already-bootstrapped hosts (noop except for sshd_config re-validation).
+#
+# What this playbook does:
+#   1. Creates the `velox-deploy` user with primary groups sudo + docker
+#      (no password; SSH-only). Idempotent.
+#   2. Installs the operator's SSH public key into
+#      /home/velox-deploy/.ssh/authorized_keys. Idempotent.
+#   3. Drops a hardening file into /etc/ssh/sshd_config.d/ that disables
+#      password authentication and root login. Idempotent.
+#   4. Validates the resulting sshd config with `sshd -t` and reloads.
+#      Reload only fires if the drop-in content actually changed.
+#
+# Required privilege: the host must currently be reachable via SSH as root
+# (or via sudo). After this playbook completes, only key-based SSH as
+# `velox-deploy` is accepted.
+#
+# Usage:
+#
+#   # From the operator laptop, with the SSH pubkey passed inline:
+#   ansible-playbook -i deploy/inventory/production.ini \
+#     --extra-vars "velox_operator_pubkey=$(cat ~/.ssh/velox_ovh_admin.pub)" \
+#     deploy/playbooks/bootstrap-ssh.yml
+#
+#   # Same with the pubkey kept inside the vault (preferred in CI):
+#   ansible-playbook -i deploy/inventory/production.ini \
+#     --ask-vault-pass \
+#     deploy/playbooks/bootstrap-ssh.yml
+#
+# Dry run -- no SSH commands will run, but the playbook will still attempt
+# to gather facts on the target hosts (may fail under --check if Python is
+# missing). Use this for previewing the rendered task graph:
+#   ansible-playbook -i deploy/inventory/production.ini \
+#     --ask-vault-pass --check
+#     deploy/playbooks/bootstrap-ssh.yml
+- name: Bootstrap SSH access on Velox nodes
+  hosts: velox_master:velox_workers
+  become: true
+  gather_facts: false
+
+  vars:
+    velox_operator_user: velox-deploy
+    velox_operator_shell: /bin/bash
+    velox_operator_groups:
+      - sudo
+      - docker
+    sshd_hardening_dropin: /etc/ssh/sshd_config.d/99-velox-hardening.conf
+
+  vars_files:
+    - ../group_vars/all.yml
+    - ../group_vars/vault.yml
+
+  # The ansible.posix collection used by `ansible.posix.authorized_keys`
+  # below is declared as a single source-of-truth in
+  # `deploy/requirements.yml`. Operators run:
+  #   ansible-galaxy collection install -r deploy/requirements.yml
+  # before invoking any playbook in this directory.
+
+  pre_tasks:
+    - name: Ensure /etc/ssh/sshd_config.d exists
+      ansible.builtin.file:
+        path: /etc/ssh/sshd_config.d
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+  tasks:
+    - name: Create velox-deploy user (no password; PAM locked)
+      ansible.builtin.user:
+        name: "{{ velox_operator_user }}"
+        comment: "Velox deploy operator"
+        shell: "{{ velox_operator_shell }}"
+        groups: "{{ velox_operator_groups }}"
+        append: true
+        create_home: true
+        password_lock: true
+
+    - name: Ensure .ssh directory exists
+      ansible.builtin.file:
+        path: "/home/{{ velox_operator_user }}/.ssh"
+        state: directory
+        owner: "{{ velox_operator_user }}"
+        group: "{{ velox_operator_user }}"
+        mode: "0700"
+
+    - name: Install operator SSH public key
+      when: (velox_operator_pubkey | default('')) | length > 0 \
+            or (vault_velox_operator_pubkey | default('')) | length > 0
+      ansible.posix.authorized_keys:
+        user: "{{ velox_operator_user }}"
+        state: present
+        key: "{{ velox_operator_pubkey | default(vault_velox_operator_pubkey) }}"
+
+    - name: Install SSH hardening drop-in
+      ansible.builtin.copy:
+        dest: "{{ sshd_hardening_dropin }}"
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          # Drop-in managed by deploy/playbooks/bootstrap-ssh.yml — do not edit manually.
+          PubkeyAuthentication yes
+          PasswordAuthentication no
+          KbdInteractiveAuthentication no
+          PermitRootLogin no
+          {{ sshd_hardening_extra }}
+      notify: validate and reload sshd
+
+  handlers:
+    - name: Validate sshd config with sshd -t
+      ansible.builtin.command: sshd -t
+      listen: validate and reload sshd
+      register: sshd_validate
+      changed_when: false
+      failed_when: sshd_validate.rc != 0
+
+    - name: Reload sshd
+      ansible.builtin.service:
+        name: sshd
+        state: reloaded
+      listen: validate and reload sshd

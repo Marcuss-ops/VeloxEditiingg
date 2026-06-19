@@ -1,0 +1,96 @@
+---
+# Render and roll out /etc/velox-server.env on the Velox master.
+# ────────────────────────────────────────────────────────────────────────────
+# What this playbook does:
+#   1. Renders deploy/templates/velox-server.env.j2 to /etc/velox-server.env
+#      with mode 0640 and ownership root:velox (matches what
+#      DataServer/data/deploy/install-server.sh expects).
+#   2. Ensures the companion validator script exists on the host.
+#   3. Runs the validator (mandatory, blocking) — refuses to continue if
+#      /etc/velox-server.env is invalid.
+#   4. On change, re-validates, reloads systemd, and restarts velox-server.
+#
+# Usage:
+#
+#   # Standard rollout (prompts for vault password):
+#   ansible-playbook -i deploy/inventory/production.ini \
+#     --ask-vault-pass \
+#     deploy/playbooks/deploy-master-config.yml
+#
+#   # Dry run — no changes written, no service restart. Validator still runs.
+#   ansible-playbook -i deploy/inventory/production.ini \
+#     --ask-vault-pass --check \
+#     deploy/playbooks/deploy-master-config.yml
+#
+#   # CI usage (vault password from file):
+#   ansible-playbook -i deploy/inventory/production.ini \
+#     --vault-password-file ~/.vault-velox \
+#     deploy/playbooks/deploy-master-config.yml
+- name: Deploy Velox master configuration
+  hosts: velox_master
+  become: true
+  gather_facts: false
+
+  vars:
+    velox_env_dst: /etc/velox-server.env
+    velox_env_owner: root
+    velox_env_group: velox
+    velox_env_mode: "0640"
+    velox_validator_path: /opt/velox/current/deploy/validate-master-env.sh
+
+  vars_files:
+    - ../group_vars/all.yml
+    - ../group_vars/vault.yml
+
+  pre_tasks:
+    - name: Ensure /opt/velox/current/deploy exists
+      ansible.builtin.file:
+        path: /opt/velox/current/deploy
+        state: directory
+        owner: root
+        group: velox
+        mode: "0750"
+
+  tasks:
+    - name: Render master env from Jinja2 template  # noqa: no-relative-paths
+      ansible.builtin.template:
+        src: "../templates/velox-server.env.j2"
+        dest: "{{ velox_env_dst }}"
+        owner: "{{ velox_env_owner }}"
+        group: "{{ velox_env_group }}"
+        mode: "{{ velox_env_mode }}"
+      notify: validate env and restart velox-server
+
+    - name: Ensure validator script is in place  # noqa: no-relative-paths
+      ansible.builtin.copy:
+        src: "../validate-master-env.sh"
+        dest: "{{ velox_validator_path }}"
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Run env validator (mandatory pre-check)
+      ansible.builtin.command: "{{ velox_validator_path }} {{ velox_env_dst }}"
+      register: validator_pre
+      changed_when: false
+      failed_when: validator_pre.rc != 0
+
+  handlers:
+    - name: Re-validate env just before restarting service
+      ansible.builtin.command: "{{ velox_validator_path }} {{ velox_env_dst }}"
+      listen: validate env and restart velox-server
+      register: validator_post
+      changed_when: false
+      failed_when: validator_post.rc != 0
+
+    # NOTE: env file changes do not require a systemd unit-file refresh —
+    # systemd reads EnvironmentFile= on every consumer invocation, so
+    # restarting the service is sufficient. Re-introduce a unit-manager
+    # reload only if a future task ships a Unit file change.
+
+    - name: Restart velox-server
+      ansible.builtin.service:
+        name: velox-server
+        state: restarted
+        enabled: true
+      listen: validate env and restart velox-server

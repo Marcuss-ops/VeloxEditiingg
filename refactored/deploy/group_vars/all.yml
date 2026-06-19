@@ -1,0 +1,45 @@
+---
+# Velox — non-secret group variables.
+# ────────────────────────────────────────────────────────────────────────────
+# This file is committed to the repo. NEVER put secrets here.
+# For secrets: define them as `vault_velox_*` in `deploy/group_vars/vault.yml`
+# (encrypted with `ansible-vault`).
+
+# ── Versions ─────────────────────────────────────────────────────────────────
+velox_version: "1.1.1"
+
+# ── Master networking ───────────────────────────────────────────────────────
+velox_master_port: 8000
+velox_grpc_port: 9000
+velox_master_public_url: "https://velox.example.com"
+
+# ── Master filesystem layout ────────────────────────────────────────────────
+velox_runtime_dir: /var/lib/velox
+velox_data_dir: /var/lib/velox/data
+velox_db_path: /var/lib/velox/data/velox.db
+velox_videos_dir: /var/lib/velox/videos
+velox_secrets_dir: /etc/velox/secrets
+velox_youtube_tokens_dir: /etc/velox/secrets/youtube/tokens
+velox_youtube_credentials_dir: /etc/velox/secrets/youtube/credentials
+
+# ── Worker policy ───────────────────────────────────────────────────────────
+# Each value must match a `worker_id` declared on the [velox_workers]
+# hostgroup in deploy/inventory/production.ini (1:1 mapping). Changing this
+# list without a matching inventory update will gate workers out of the fleet.
+velox_allowed_workers:
+  - worker-ovh-1
+  - worker-ovh-2
+  - worker-ovh-3
+velox_max_job_attempts: 3
+velox_worker_heartbeat_timeout: 120
+
+# ── Worker image (consumed by future PR D/E playbooks) ──────────────────────
+velox_worker_image_repository: ghcr.io/marcuss-ops/velox-worker
+
+# ── SSH hardening drop-in tail (consumed by bootstrap-ssh.yml) ──────────────
+# Free-form snippet appended to /etc/ssh/sshd_config.d/99-velox-hardening.conf.
+# Leave empty unless the operator needs an additional AllowUsers / Match block.
+sshd_hardening_extra: ""
+
+# ── Backup root (consumed by rollback.yml) ──────────────────────────────────
+velox_env_backup_root: /var/backups/velox

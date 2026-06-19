@@ -1,0 +1,38 @@
+# Velox — production Ansible inventory (TEMPLATE).
+# ────────────────────────────────────────────────────────────────────────────
+# THIS FILE IS A TEMPLATE. Copy to a local `production.ini` and fill in real
+# IPs/hostnames. The active inventory is generated and managed by the operator;
+# it is NOT committed (recommend adding `deploy/inventory/production.ini`
+# to .gitignore in your checkout).
+#
+# Bootstrapping a new node:
+#   cp deploy/inventory/production.ini.example deploy/inventory/production.ini
+#   $EDITOR deploy/inventory/production.ini   # fill in MASTER_IP, IP_1, IP_2, IP_3
+#
+# Connection requirements:
+#   * SSH key-based auth as user `velox-deploy` (created by bootstrap-ssh).
+#   * sudo from `velox-deploy` to root (passwordless).
+#   * Python 3 on the remote host.
+#
+# Hostgroups:
+#   [velox_master]   — runs the master server. Single host.
+#   [velox_workers]  — runs worker agents. One host per physical machine.
+#
+# Per-host vars:
+#   worker_id        — stable identifier the master uses for gate/ACL.
+#                      MUST match a value listed in `velox_allowed_workers`
+#                      in deploy/group_vars/all.yml.
+
+[velox_master]
+velox-master ansible_host=CHANGE_ME ansible_user=velox-deploy
+
+[velox_workers]
+velox-ovh-1 ansible_host=CHANGE_ME ansible_user=velox-deploy worker_id=worker-ovh-1
+velox-ovh-2 ansible_host=CHANGE_ME ansible_user=velox-deploy worker_id=worker-ovh-2
+velox-ovh-3 ansible_host=CHANGE_ME ansible_user=velox-deploy worker_id=worker-ovh-3
+
+[velox_master:vars]
+ansible_python_interpreter=/usr/bin/python3
+
+[velox_workers:vars]
+ansible_python_interpreter=/usr/bin/python3

@@ -1,0 +1,12 @@
+---
+# Galaxy collections required for Velox deploy playbooks.
+# ────────────────────────────────────────────────────────────────────────────
+# Run before invoking any playbook in deploy/playbooks/:
+#   ansible-galaxy collection install -r deploy/requirements.yml
+#
+# In CI: bake this into an image layer or run as a setup step before
+# `ansible-playbook`. The bootstrap-ssh.yml playbook additionally declares
+# `ansible.posix` at play level so missing-collection errors surface at
+# parse time, not run time.
+collections:
+  - ansible.posix
