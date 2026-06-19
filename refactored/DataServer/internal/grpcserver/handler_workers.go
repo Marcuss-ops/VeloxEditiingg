@@ -68,6 +68,9 @@ func (h *Handler) handleHeartbeat(workerID, sessionID string, hb *pb.Heartbeat) 
 	if err := h.registry.Heartbeat(context.Background(), workerID, hb.GetWorkerName(), hb.GetStatus(), hb.GetCurrentJob(), extra); err != nil {
 		log.Printf("[GRPC] Heartbeat failed for worker %s: %v", workerID, err)
 	}
+	// RecoveryReport protocol: inspect hb.extra for recovery_report_v1 and
+	// queue a ConfigurationUpdate carrying the master's directive via safeSend.
+	h.handleRecoveryReport(workerID, sess, hb)
 
 	// Issue 7 fix / Phase 4.2 hardening: if the persisted session is gone
 	// or revoked or expired, we MUST tear the active session down — not just

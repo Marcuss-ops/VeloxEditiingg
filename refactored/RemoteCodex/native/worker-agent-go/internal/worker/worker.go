@@ -353,6 +353,10 @@ func (w *Worker) receiveLoop(ctx context.Context, recvCh <-chan controltransport
 				configUpdate, ok := msg.TypedPayload.(*pb.ConfigurationUpdate)
 				if ok && configUpdate != nil && configUpdate.GetConfiguration() != nil {
 					cfgMap := configUpdate.GetConfiguration().AsMap()
+					// RecoveryReport protocol: same envelope carries recovery_action_v1.
+					// handleRecoveryDirective is internally guarded against the absence of
+					// that key, so the call is unconditional.
+					w.handleRecoveryDirective(configUpdate.GetConfiguration())
 					if newMaxJobs, ok := cfgMap["max_parallel_jobs"]; ok {
 						switch v := newMaxJobs.(type) {
 						case float64:
@@ -416,6 +420,10 @@ func (w *Worker) receiveLoop(ctx context.Context, recvCh <-chan controltransport
 
 			case controltransport.MsgHelloAck:
 				w.logger.Debug("[RECEIVE] HelloAck received — session confirmed")
+				// RecoveryReport protocol: emit one enriched heartbeat carrying the
+				// persisted state from the previous run, so the master can issue a
+				// targeted CONTINUE / CANCEL / RESUME_UPLOAD / CLEANUP directive.
+				w.maybeSendRecoveryReport(ctx)
 
 			default:
 				w.logger.Debug("[RECEIVE] Unhandled message type: %s", msg.Type)
