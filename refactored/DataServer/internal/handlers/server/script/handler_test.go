@@ -12,14 +12,14 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	voiceoverassets "velox-server/internal/assets"
 	"velox-server/internal/config"
+	jobenqueue "velox-server/internal/jobs/enqueue"
 	"velox-server/internal/queue"
 	"velox-server/internal/store"
 )
 
 func TestGenerateWithImages_EnqueuesSceneImageJob(t *testing.T) {
-	t.Parallel()
-
 	tempDir := t.TempDir()
 	dbPath := filepath.Join(tempDir, "velox.db")
 	db, err := store.NewSQLiteStore(dbPath)
@@ -146,9 +146,22 @@ func TestGenerateWithImages_EnqueuesSceneImageJob(t *testing.T) {
 }
 
 func TestGenerateWithImages_UsesCreatorStageWhenConfigured(t *testing.T) {
-	t.Parallel()
-
 	tempDir := t.TempDir()
+	assetDBPath := filepath.Join(tempDir, "assets.db")
+	assetDB, err := store.NewSQLiteStore(assetDBPath)
+	if err != nil {
+		t.Fatalf("new asset sqlite store: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = assetDB.Close()
+		jobenqueue.SetVoiceoverAssetService(nil)
+	})
+	assetRepo := store.NewSQLiteAssetRepository(assetDB)
+	assetBlobStore := store.NewNopBlobStore(tempDir)
+	assetStore := voiceoverassets.NewStore(tempDir, 0, []string{tempDir})
+	assetRegistry := voiceoverassets.NewResolverRegistry(voiceoverassets.NewTypedResolversFromStore(assetStore, nil, nil)...)
+	jobenqueue.SetVoiceoverAssetService(voiceoverassets.NewAssetService(assetRepo, assetBlobStore, assetRegistry, nil))
+
 	dbPath := filepath.Join(tempDir, "velox.db")
 	voicePath := filepath.Join(tempDir, "voice.mp3")
 	imagePath := filepath.Join(tempDir, "scene1.png")
@@ -260,8 +273,6 @@ func TestGenerateWithImages_UsesCreatorStageWhenConfigured(t *testing.T) {
 }
 
 func TestGenerateWithImages_BypassesCreatorForRenderReadyPayload(t *testing.T) {
-	t.Parallel()
-
 	tempDir := t.TempDir()
 	dbPath := filepath.Join(tempDir, "velox.db")
 	voicePath := filepath.Join(tempDir, "roman_voiceover.mp3")
