@@ -1,6 +1,6 @@
 # Velox Worker Agent - Build System
 
-VERSION_FILE ?= ../../../VERSION.txt
+VERSION_FILE ?= ../../../../VERSION.txt
 VERSION ?= $(shell if [ -f "$(VERSION_FILE)" ]; then cat "$(VERSION_FILE)"; else git describe --tags --always --dirty 2>/dev/null || echo "dev"; fi)
 BUILD_TIME ?= $(shell date -u '+%Y-%m-%d_%H:%M:%S')
 LDFLAGS := -ldflags "-X main.Version=$(VERSION) -X main.BuildTime=$(BUILD_TIME)"
@@ -136,8 +136,8 @@ help:
 	@echo "  release        Build for all platforms (Linux, macOS, Windows)"
 	@echo "  test           Run all tests"
 	@echo "  test-coverage  Run tests with coverage report"
-	@echo "  install        Install binaries to $(BINDIR)"
-	@echo "  uninstall      Remove binaries from $(BINDIR)"
+	@echo "  install        Install to /usr/local/bin"
+	@echo "  uninstall      Remove from /usr/local/bin"
 	@echo "  clean          Remove build artifacts"
 	@echo "  fmt            Format source code"
 	@echo "  lint           Run linter"
