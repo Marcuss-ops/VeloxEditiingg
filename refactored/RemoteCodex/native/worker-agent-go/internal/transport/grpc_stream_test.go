@@ -42,17 +42,26 @@ type testStreamServer struct {
 	gotGoodbye   bool
 	heartbeatCh  chan struct{} // closed after first heartbeat
 	goodbyeCh    chan struct{} // closed on Goodbye
+
+	// disconnect-reconnect testing: track how many connections were made
+	hbCount   int
+	connCount int
 }
 
 func newTestStreamServer() *testStreamServer {
-	return &testStreamServer{
-		jobOfferCh:  make(chan struct{}, 1),
-		heartbeatCh: make(chan struct{}),
-		goodbyeCh:   make(chan struct{}),
-	}
+	return &testStreamServer{}
 }
 
 func (s *testStreamServer) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMasterEnvelope, pb.MasterToWorkerEnvelope]) error {
+	// Reset per-connection state so reconnections don't panic on double-close
+	// and heartbeat counting starts fresh for each connection.
+	s.mu.Lock()
+	s.heartbeatCh = make(chan struct{})
+	s.goodbyeCh = make(chan struct{})
+	s.jobOfferCh = make(chan struct{}, 1)
+	s.hbCount = 0
+	s.mu.Unlock()
+
 	// Wait for Hello
 	env, err := stream.Recv()
 	if err != nil {
@@ -67,13 +76,15 @@ func (s *testStreamServer) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMas
 	s.mu.Lock()
 	s.lastHello = hello
 	s.lastWorkerID = env.WorkerId
+	s.connCount++
+	connNum := s.connCount
 	s.mu.Unlock()
 
 	// Send typed HelloAck
 	ack := &pb.MasterToWorkerEnvelope{
-		MessageId:       "ack-test-001",
+		MessageId:       fmt.Sprintf("ack-conn-%d", connNum),
 		WorkerId:        env.WorkerId,
-		SessionId:       "test-session-001",
+		SessionId:       fmt.Sprintf("test-session-%d", connNum),
 		SequenceNumber:  1,
 		SentAt:          timestamppb.Now(),
 		ProtocolVersion: env.ProtocolVersion,
@@ -86,22 +97,25 @@ func (s *testStreamServer) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMas
 	// If configured to send a JobOffer, do it after a short delay
 	if s.sendJobOffer {
 		workerID := env.WorkerId
+		jobOfferID := fmt.Sprintf("test-job-%03d", connNum)
+		sessID := fmt.Sprintf("test-session-%d", connNum)
+		jobCh := s.jobOfferCh // capture per-connection channel to avoid racing with new connections
 		go func() {
 			select {
-			case <-s.jobOfferCh:
+			case <-jobCh:
 				jobPayload, _ := structpb.NewStruct(map[string]interface{}{
 					"video_name": "test-video",
 					"priority":   1.0,
 				})
 				jobOfferEnv := &pb.MasterToWorkerEnvelope{
-					MessageId:       "job-offer-001",
+					MessageId:       fmt.Sprintf("job-offer-%03d", connNum),
 					WorkerId:        workerID,
-					SessionId:       "test-session-001",
+					SessionId:       sessID,
 					SentAt:          timestamppb.Now(),
 					ProtocolVersion: env.ProtocolVersion,
 					Msg: &pb.MasterToWorkerEnvelope_JobOffer{
 						JobOffer: &pb.JobOffer{
-							JobId:      "test-job-001",
+							JobId:      jobOfferID,
 							RunId:      "test-run-001",
 							VideoName:  "test-video",
 							LeaseId:    "lease-001",
@@ -131,7 +145,8 @@ func (s *testStreamServer) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMas
 		case *pb.WorkerToMasterEnvelope_Heartbeat:
 			s.mu.Lock()
 			s.heartbeats = append(s.heartbeats, m.Heartbeat)
-			n := len(s.heartbeats)
+			s.hbCount++
+			n := s.hbCount
 			s.mu.Unlock()
 
 			if n == 1 {
@@ -466,6 +481,151 @@ func TestGRPCStreamTransport_ReceiveBeforeConnect(t *testing.T) {
 	_, _, err := transport.Receive(ctx)
 	if err != controltransport.ErrNotConnected {
 		t.Errorf("Receive before connect error = %v, want ErrNotConnected", err)
+	}
+}
+
+// ---- End-to-End: Disconnect + Reconnect ---- //
+
+// TestGRPCStreamTransport_DisconnectReconnect verifies that a worker can
+// disconnect from the master and reconnect cleanly with no data loss.
+//
+// Flow:
+//  1. Connect transport A, complete Hello handshake, start Receive
+//  2. Send heartbeat → receive JobOffer → verify it
+//  3. Close transport A (simulates network failure)
+//  4. Connect transport B with a fresh instance
+//  5. Send heartbeat → receive a new JobOffer → verify it
+//  6. Verify both connections were tracked by the server
+func TestGRPCStreamTransport_DisconnectReconnect(t *testing.T) {
+	ts := newTestStreamServer()
+	ts.sendJobOffer = true
+	srv, addr := startTestGRPCServer(t, ts)
+	defer srv.Stop()
+
+	// ---- Connection A ----
+	transportA := NewGRPCStreamTransport(addr, "test-worker-e2e")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	hello := controltransport.WorkerHello{
+		WorkerID:        "test-worker-e2e",
+		WorkerName:      "e2e-worker",
+		Hostname:        "e2e-host",
+		Version:         "1.0.0",
+		ProtocolVersion: controltransport.ProtocolVersionCurrent,
+	}
+	if err := transportA.Connect(ctx, hello); err != nil {
+		t.Fatalf("Connect A failed: %v", err)
+	}
+
+	// Start receiving on transport A
+	recvChA, errChA, err := transportA.Receive(ctx)
+	if err != nil {
+		t.Fatalf("Receive A failed: %v", err)
+	}
+
+	// Send heartbeat A to trigger JobOffer A
+	hbA := controltransport.ControlMessage{
+		MessageID:       "hb-a-001",
+		Type:            controltransport.MsgHeartbeat,
+		WorkerID:        "test-worker-e2e",
+		SentAt:          time.Now().UTC(),
+		ProtocolVersion: controltransport.ProtocolVersionCurrent,
+		Payload:         map[string]interface{}{"status": "idle"},
+	}
+	if err := transportA.Send(ctx, hbA); err != nil {
+		t.Fatalf("Send heartbeat A failed: %v", err)
+	}
+
+	// Receive JobOffer A
+	var offerA *controltransport.ControlMessage
+	select {
+	case msg, ok := <-recvChA:
+		if !ok {
+			t.Fatal("recvCh A closed unexpectedly")
+		}
+		offerA = &msg
+	case <-time.After(3 * time.Second):
+		t.Fatal("Timed out waiting for JobOffer A")
+	}
+	if offerA.Type != controltransport.MsgJobOffer {
+		t.Fatalf("Offer A: want MsgJobOffer, got %s", offerA.Type)
+	}
+	offerAPB, _ := offerA.TypedPayload.(*pb.JobOffer)
+	if offerAPB == nil || offerAPB.GetJobId() != "test-job-001" {
+		t.Fatalf("Offer A: want test-job-001, got %v", offerAPB)
+	}
+
+	// ---- Disconnect A ----
+	if err := transportA.Close(); err != nil {
+		t.Fatalf("Close A failed: %v", err)
+	}
+
+	// Verify the error channel gets a signal (stream terminated)
+	select {
+	case <-errChA:
+		// Expected: errCh closed after disconnect
+	case <-time.After(2 * time.Second):
+		t.Fatal("errCh A did not close after transport close")
+	}
+
+	// Short pause to ensure server-side cleanup
+	time.Sleep(100 * time.Millisecond)
+
+	// ---- Reconnect: transport B ----
+	transportB := NewGRPCStreamTransport(addr, "test-worker-e2e")
+
+	if err := transportB.Connect(ctx, hello); err != nil {
+		t.Fatalf("Connect B failed: %v", err)
+	}
+	defer transportB.Close()
+
+	// Start receiving on transport B
+	recvChB, _, err := transportB.Receive(ctx)
+	if err != nil {
+		t.Fatalf("Receive B failed: %v", err)
+	}
+
+	// Send heartbeat B to trigger JobOffer B
+	hbB := controltransport.ControlMessage{
+		MessageID:       "hb-b-001",
+		Type:            controltransport.MsgHeartbeat,
+		WorkerID:        "test-worker-e2e",
+		SentAt:          time.Now().UTC(),
+		ProtocolVersion: controltransport.ProtocolVersionCurrent,
+		Payload:         map[string]interface{}{"status": "idle"},
+	}
+	if err := transportB.Send(ctx, hbB); err != nil {
+		t.Fatalf("Send heartbeat B failed: %v", err)
+	}
+
+	// Receive JobOffer B
+	var offerB *controltransport.ControlMessage
+	select {
+	case msg, ok := <-recvChB:
+		if !ok {
+			t.Fatal("recvCh B closed unexpectedly")
+		}
+		offerB = &msg
+	case <-time.After(3 * time.Second):
+		t.Fatal("Timed out waiting for JobOffer B")
+	}
+	if offerB.Type != controltransport.MsgJobOffer {
+		t.Fatalf("Offer B: want MsgJobOffer, got %s", offerB.Type)
+	}
+	offerBPB, _ := offerB.TypedPayload.(*pb.JobOffer)
+	if offerBPB == nil || offerBPB.GetJobId() != "test-job-002" {
+		t.Fatalf("Offer B: want test-job-002 (2nd connection), got %v", offerBPB)
+	}
+
+	// ---- Verify server saw both connections ----
+	ts.mu.Lock()
+	connCount := ts.connCount
+	ts.mu.Unlock()
+
+	if connCount != 2 {
+		t.Errorf("Server connCount = %d, want 2 (both connections A and B)", connCount)
 	}
 }
 
