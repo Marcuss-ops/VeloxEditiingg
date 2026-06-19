@@ -1,0 +1,68 @@
+# CODEOWNERS \u2014 review ownership map for the Velox repo.
+#
+# Keep this file in sync with docs/architecture/OWNERSHIP.md. The teams
+# listed here are the canonical reviewers for changes in the matching
+# path; any merge to main without their approval is a violation of the
+# single-writer principle (see docs/architecture/OWNERSHIP.md).
+#
+# Format reference: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# Default owners for everything (last-match wins).
+*                                       @velox/core
+
+# ── Architectural gate (CI / docs) ───────────────────────────────────────────
+Makefile                                @velox/ci
+scripts/ci/                             @velox/ci
+.github/workflows/                      @velox/ci
+.github/CODEOWNERS                      @velox/ci
+.github/pull_request_template.md        @velox/ci
+docs/architecture/                      @velox/architecture
+
+# ── Server (Go) ──────────────────────────────────────────────────────────────
+DataServer/go.mod                       @velox/server
+DataServer/go.sum                       @velox/server
+DataServer/cmd/server/                  @velox/server
+DataServer/ci/                          @velox/server
+
+# Application services / repositories
+DataServer/internal/jobs/               @velox/jobs
+DataServer/internal/workflow/           @velox/jobs
+DataServer/internal/artifacts/          @velox/jobs
+DataServer/internal/assets/             @velox/assets
+DataServer/internal/deliveries/         @velox/delivery
+DataServer/internal/audit/              @velox/observability
+
+# Plumbing
+DataServer/internal/store/              @velox/storage
+DataServer/internal/outbox/             @velox/storage
+DataServer/internal/config/             @velox/server
+DataServer/internal/grpcserver/         @velox/server
+DataServer/internal/workers/            @velox/server
+DataServer/internal/controltransport/   @velox/server
+DataServer/internal/identity/           @velox/server
+DataServer/internal/validation/         @velox/server
+DataServer/internal/payload/            @velox/server
+DataServer/internal/obs/                @velox/observability
+DataServer/internal/logging/            @velox/observability
+DataServer/internal/paths/             @velox/server
+DataServer/internal/media/              @velox/server
+DataServer/internal/dbutil/             @velox/server
+
+# ── Worker agent (Go) ───────────────────────────────────────────────────────
+RemoteCodex/native/worker-agent-go/     @velox/agent
+RemoteCodex/native/video-engine-cpp/    @velox/agent
+RemoteCodex/scripts/                    @velox/agent
+RemoteCodex/BUILD_INFO.json             @velox/agent
+RemoteCodex/BUNDLE_HASH.txt             @velox/agent
+
+# ── Frontend (standalone) ───────────────────────────────────────────────────
+frontend_standalone/                    @velox/web
+
+# ── Shared Go contract ──────────────────────────────────────────────────────
+shared/                                 @velox/server @velox/agent
+
+# ── Operations / infra ──────────────────────────────────────────────────────
+deploy/                                 @velox/ops
+ops/                                    @velox/ops
+runtime/                                @velox/ops
+VERSION.txt                             @velox/ops
