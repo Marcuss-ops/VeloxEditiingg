@@ -1,5 +1,5 @@
 ---
-# PR E — Standardised worker runtime across the 3 OVH hosts.
+# PR E — Standardised worker runtime for the single co-located worker pair.
 # ─────────────────────────────────────────────────────────────────────────────
 # One worker per host. `container_name` is parameterised by VELOX_WORKER_ID
 # so the schema accommodates future staging workers on the same host without
@@ -9,8 +9,8 @@
 #
 # read-only root + tmpfs /tmp + cap_drop ALL + no-new-privileges are
 # deliberate hardening. NET_BIND_SERVICE is NOT granted — bind ports >=1024.
-# Adjust per-host resource ceilings below if a specific OVH has tighter
-# envelopes (then pull this file into a host-specific override).
+# Adjust per-host resource ceilings below if a specific worker host has
+# tighter envelopes (then pull this file into a host-specific override).
 
 name: velox-worker
 
@@ -58,7 +58,7 @@ services:
     cap_drop:
       - ALL
     # NET_BIND_SERVICE is intentionally NOT added: the worker only binds
-      # to high (>1024) ports. Should a future OVH require binding to 80/443,
+      # to high (>1024) ports. Should a future worker host require binding to 80/443,
       # add `cap_add: [NET_BIND_SERVICE]` to a per-host override.
 
     # Healthcheck mirrors the Dockerfile HEALTHCHECK directive so that

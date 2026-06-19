@@ -7,7 +7,21 @@
 #
 # Bootstrapping a new node:
 #   cp deploy/inventory/production.ini.example deploy/inventory/production.ini
-#   $EDITOR deploy/inventory/production.ini   # fill in MASTER_IP, IP_1, IP_2, IP_3
+#   $EDITOR deploy/inventory/production.ini   # fill in CHANGE_ME values
+#
+# Topologia (single-host for now):
+#   * velox-master  — runs the master server (gRPC :9000 + REST :8000).
+#   * velox-worker-1 — runs the worker agent. Co-located with the master for
+#                       testing; in a true multi-host deployment, the worker
+#                       lives on a separate physical machine and joins the
+#                       worker's Tailscale mesh with the master.
+#
+# Previous multi-host template was REMOVED. The two unreachable nodes
+# (local dev box and an offline Tailscale peer) are out of scope and would
+# only add confusion. To scale up later, append new velox-worker-X entries
+# under [velox_workers] and mirror them in deploy/group_vars/all.yml
+# (velox_allowed_workers) + deploy/velox-server.env.example
+# (VELOX_ALLOWED_WORKERS).
 #
 # Connection requirements:
 #   * SSH key-based auth as user `velox-deploy` (created by bootstrap-ssh).
@@ -27,9 +41,7 @@
 velox-master ansible_host=CHANGE_ME ansible_user=velox-deploy
 
 [velox_workers]
-velox-ovh-1 ansible_host=CHANGE_ME ansible_user=velox-deploy worker_id=worker-ovh-1
-velox-ovh-2 ansible_host=CHANGE_ME ansible_user=velox-deploy worker_id=worker-ovh-2
-velox-ovh-3 ansible_host=CHANGE_ME ansible_user=velox-deploy worker_id=worker-ovh-3
+velox-worker-1 ansible_host=CHANGE_ME ansible_user=velox-deploy worker_id=velox-worker-1
 
 [velox_master:vars]
 ansible_python_interpreter=/usr/bin/python3

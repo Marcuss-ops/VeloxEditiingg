@@ -8,10 +8,13 @@
 # ── Versions ─────────────────────────────────────────────────────────────────
 velox_version: "1.1.1"
 
-# ── Master networking ───────────────────────────────────────────────────────
+# ── Master networking ────────────────────────────────────────────────────────
 velox_master_port: 8000
 velox_grpc_port: 9000
-velox_master_public_url: "https://velox.example.com"
+# Public URL the master advertises to clients and worker agents.
+# For the single-host test topology, this is the master's own
+# Tailscale hostname or IP. Operators can override per-env.
+velox_master_public_url: "https://velox-master.example.com" # operator MUST replace with a real hostname before production use
 
 # ── Master filesystem layout ────────────────────────────────────────────────
 velox_runtime_dir: /var/lib/velox
@@ -23,13 +26,14 @@ velox_youtube_tokens_dir: /etc/velox/secrets/youtube/tokens
 velox_youtube_credentials_dir: /etc/velox/secrets/youtube/credentials
 
 # ── Worker policy ───────────────────────────────────────────────────────────
-# Each value must match a `worker_id` declared on the [velox_workers]
+# Each value MUST match a `worker_id` declared on the [velox_workers]
 # hostgroup in deploy/inventory/production.ini (1:1 mapping). Changing this
 # list without a matching inventory update will gate workers out of the fleet.
+#
+# Single-host topology: one worker co-located with the master.
+# To scale out: append new worker_ids here AND in the inventory.
 velox_allowed_workers:
-  - worker-ovh-1
-  - worker-ovh-2
-  - worker-ovh-3
+  - velox-worker-1
 velox_max_job_attempts: 3
 velox_worker_heartbeat_timeout: 120
 

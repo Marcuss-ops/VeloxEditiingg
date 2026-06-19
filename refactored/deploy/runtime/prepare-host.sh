@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Velox Worker — host preparation script.
 # ─────────────────────────────────────────────────────────────────────────────
-# Idempotent setup for an OVH host running the Velox worker container.
+# Idempotent setup for a worker host running the Velox worker container.
 # Run as root on the target host:
 #   sudo deploy/runtime/prepare-host.sh
 #

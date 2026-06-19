@@ -1,7 +1,7 @@
 # deploy/runtime/ — worker container runtime
 
-This directory declares the standard worker container runtime for the 3 OVH
-hosts in `deploy/inventory/production.ini`. It pairs with `deploy/group_vars/`
+This directory declares the standard worker container runtime for the single co-located worker pair
+(master + velox-worker-1) in `deploy/inventory/production.ini`. It pairs with `deploy/group_vars/`
 (which the master-side playbooks consume) and with `.github/workflows/
 worker-image.yml` (which builds and publishes the worker image).
 
@@ -10,10 +10,10 @@ worker-image.yml` (which builds and publishes the worker image).
 | File | Role |
 |---|---|
 | `compose.yml` | Referenceable Compose v2 service definition. Read-only root fs, `cap_drop: ALL`, `no-new-privileges`, isolated per-worker container name. |
-| `worker.env.example` | Template for the per-host env file the worker reads. Copy to `/etc/velox-worker/worker.env` on each OVH and fill in. |
+| `worker.env.example` | Template for the per-host env file the worker reads. Copy to `/etc/velox-worker/worker.env` on the host and fill in. |
 | `prepare-host.sh` | Idempotent setup: creates dirs, sets ownership to uid 1000 (matching the image's `velox` user), pulls the pinned image, brings the container up. |
 
-## First-time setup on a fresh OVH
+## First-time setup on a fresh worker host
 
 ```bash
 # 1. Install docker + compose plugin (see your distro's package repo).
@@ -53,15 +53,15 @@ cosign-signed (keyless OIDC).
 1. Build & publish a new image by pushing tag `worker-vX.Y.Z` (or via
    `workflow_dispatch`).
 2. Read the `worker-image-digest` artifact to extract the immutable digest.
-3. Update `/etc/velox-worker/worker.env` on **OVH 1** (canary) and run:
+3. Update `/etc/velox-worker/worker.env` on the worker host (canary) and run:
    ```bash
    sudo deploy/runtime/prepare-host.sh
    ```
 4. Verify health: `docker compose -p velox-worker-<id> -f /opt/velox-worker/compose.yml ps`.
 5. Probe the worker over gRPC from the master (`jobs/summary`) to confirm it
    accepted and processed at least one job.
-6. Repeat on **OVH 2**, then **OVH 3**. Do NOT proceed until the previous
-   host's health + at-least-one-job success is confirmed.
+6. Repeat on subsequent worker hosts as you scale out. Do NOT proceed until
+   the previous host's health + at-least-one-job success is confirmed.
 
 ## Rollback
 
