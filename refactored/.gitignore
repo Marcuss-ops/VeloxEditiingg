@@ -69,3 +69,4 @@ frontend_standalone/web/.svelte-kit/
 # ── OS files ─────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
+.velox-passwords.txt

@@ -44,7 +44,14 @@ path must honour:
   applying the 014 migration on a deployment pinned to an older
   system SQLite.
 
-### 🧹 Legacy Cleanup
+### 🧹 Legacy Cleanup (2026-06 final)
+
+- **HTTP worker control plane fully removed**: the worker agent no longer ships `RegisterWorker`, `UnregisterWorker`, `SendHeartbeat`, `GetCommands`, `AckCommand`, `AckCommandByID`, `UpdateStatus`, or the non-v2 job methods (`GetJob`, `SubmitJobResult`, `CompleteJob`, `RenewJobLease`). All control-plane traffic is now exclusively the gRPC `WorkerControl` bidi stream (`DataServer/internal/grpcserver/`). The V2 HTTP endpoints (`GetJobV2`, `SubmitJobResultV2`, `CompleteJobV2`, `RenewJobLeaseV2`) are still used by the data-plane bridge but no longer fall back to the legacy `/api/jobs/*` paths. Result: the recurring `404 /api/workers/register` entries stop appearing in master logs.
+- **Legacy Docker `velox-worker-host_*` script deprecated**: `scripts/local-workers.sh` → `scripts/local-workers.sh.deprecated` (now a loud-exit stub). Production and staging deploys use the systemd Go worker agent (`RemoteCodex/native/worker-agent-go`) on public IPs.
+- **Tailscale references purged**: `DataServer/data/ansible/playbooks/inventory.example.ini` now uses `WORKER_PUBLIC_IP` as the placeholder (was `TAILSCALE_IP`); `RemoteCodex/scripts/cleanup-worker.sh` defaults to `http://127.0.0.1:8000` instead of the historical Tailscale peer IP; `DataServer/data/ansible/playbooks/tasks/installer_heartbeat.yml` no longer POSTs to the legacy `/api/workers/register` endpoint (preflight is now `/health` only).
+- **2026-06-13 historical entry neutralized**: removed explicit Tailscale IP and per-host references from the historical CHANGELOG block — the operators' notes are kept without leaking real network topology.
+
+### 🧹 Legacy Cleanup (2026-06 cleanup pass)
 - **Orphan diagnostics endpoint removed**: `internal/handlers/server/diagnostics/diagnostics.go` deleted after a 4-step orphan verification (0 imports of `"velox-server/internal/handlers/server/diagnostics"` anywhere in the codebase, 0 module-registry references in `internal/app/registry.go`, 0 wiring in `cmd/server/router.go`, 0 path-string occurrences in any `*.go` file). The exposed `Legacy`/`LegacyExists` JSON telemetry had no downstream consumers outside the audit subsystem (which uses its own internal fields, not from this package). See commit `1ec7c411` for the full commit message and kept-with-reason notes.
 - **Stale build artifacts reclaimed (~107MB)**: physically deleted `bin/velox-server` (56.5MB build from June 14) and `velox-server` (50.3MB build from June 10, project root). Both already covered by `DataServer/bin/` + `DataServer/velox-server` patterns in `.gitignore` (repo root) so fresh clones do not surface them as untracked noise.
 - **Stale backups reclaimed**: `data/backups/` (~7 `*.tar.gz` from June 7-10) physically deleted. Already covered by the `DataServer/data/backups/` pattern in `.gitignore`.
@@ -96,13 +103,9 @@ path must honour:
 - **Git**: Code fixes committed and pushed to `origin/main`
 
 ### 🔧 Worker Management
-- **Tailscale**: Connected this server to Tailscale network for worker access
-- **Worker configs fixed**: Updated `master_url` on pi1/pi2/pi3 workers from wrong endpoints to `51.91.11.36:8000`
-- **Docker revived**: Successfully restarted Docker daemon and recovered 3 container workers on local machine
-  - `velox-worker-host_57_129_132_133` ✅
-  - `velox-worker-host_149_56_131_97` ✅
-  - `velox-worker-host_51_222_204_158` ✅
-- **Remote workers**: pi1 worker `host_57_129_132_133` (100.120.146.5) connected via Tailscale
+- **Worker connectivity**: Connected remote workers to the master over public IP/DNS (no VPN mesh). Worker access now goes via the gRPC `WorkerControl` stream on the master (see `DataServer/internal/grpcserver/`).
+- **Worker configs fixed**: Updated `master_url` on the three remote workers from prior environment-specific endpoints to `51.91.11.36:8000` (historical entry — keep for context).
+- **Docker hosts decommissioned**: The earlier Docker-based per-host worker containers were replaced by a single Go worker-agent binary running under systemd; the legacy per-host containers have been disabled across the fleet.
 
 ### ✅ Testing
 - **Job template**: Created `docs/api/job-template-endpoint.md` with reusable job payload template

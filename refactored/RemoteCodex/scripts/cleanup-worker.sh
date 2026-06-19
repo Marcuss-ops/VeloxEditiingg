@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-MASTER_URL="${MASTER_URL:-http://100.74.74.124:8000}"
+MASTER_URL="${MASTER_URL:-http://127.0.0.1:8000}"
 VELOX_DIR="${VELOX_DIR:-/opt/velox}"
 
 log() { echo "[$(date '+%H:%M:%S')] $*"; }
 
 log "=== VELOX WORKER FULL CLEANUP ==="
+log "MASTER_URL: ${MASTER_URL} (override with MASTER_URL=… if not on the master host)"
 
 # 1) Stop and remove all velox systemd units
 log "Removing systemd units..."

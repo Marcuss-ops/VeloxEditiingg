@@ -22,8 +22,9 @@ worker-image.yml` (which builds and publishes the worker image).
 sudo install -d /etc/velox-worker
 sudo cp deploy/runtime/worker.env.example /etc/velox-worker/worker.env
 $EDITOR /etc/velox-worker/worker.env
-# Set VELOX_WORKER_ID (must match the inventory), VELOX_GRPC_MASTER_URL,
-# VELOX_WORKER_IMAGE (= ghcr.io/<owner>/velox-worker@sha256:<digest>).
+# Set VELOX_WORKER_ID (must match the inventory), VELOX_GRPC_MASTER_URL
+# (public IP or DNS of the master), VELOX_WORKER_IMAGE
+# (= ghcr.io/<owner>/velox-worker@sha256:<digest>).
 
 # 3. Drop TLS cert and credential files (read-only):
 sudo install -d /etc/velox-worker/certs /etc/velox-worker/secrets

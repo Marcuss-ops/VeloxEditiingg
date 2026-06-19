@@ -12,8 +12,8 @@ velox_version: "1.1.1"
 velox_master_port: 8000
 velox_grpc_port: 9000
 # Public URL the master advertises to clients and worker agents.
-# For the single-host test topology, this is the master's own
-# Tailscale hostname or IP. Operators can override per-env.
+# In the current public deployment this should be the master's public IP
+# or a real DNS name that resolves from the worker hosts.
 velox_master_public_url: "https://velox-master.example.com" # operator MUST replace with a real hostname before production use
 
 # ── Master filesystem layout ────────────────────────────────────────────────
@@ -30,11 +30,11 @@ velox_youtube_credentials_dir: /etc/velox/secrets/youtube/credentials
 # hostgroup in deploy/inventory/production.ini (1:1 mapping). Changing this
 # list without a matching inventory update will gate workers out of the fleet.
 #
-# Single-host topology: one worker co-located with the master.
-# To scale out: append new worker_ids here AND in the inventory.
+# Public-host topology: two remote workers plus the master host.
+# Keep this list in sync with deploy/inventory/production.ini.
 velox_allowed_workers:
-  - velox-worker-1
-  - velox-worker-local
+  - velox-worker-523925eb
+  - velox-worker-13197
 velox_max_job_attempts: 3
 velox_worker_heartbeat_timeout: 120
 

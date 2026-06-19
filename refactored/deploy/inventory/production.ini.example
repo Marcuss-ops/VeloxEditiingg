@@ -11,17 +11,13 @@
 #
 # Topologia (single-host for now):
 #   * velox-master  — runs the master server (gRPC :9000 + REST :8000).
-#   * velox-worker-1 — runs the worker agent. Co-located with the master for
-#                       testing; in a true multi-host deployment, the worker
-#                       lives on a separate physical machine and joins the
-#                       worker's Tailscale mesh with the master.
+#   * velox-worker-1 — runs the worker agent. In a multi-host deployment the
+#                       worker lives on a separate physical machine and
+#                       reaches the master over a public IP or DNS name.
 #
 # Canonical worker host (operator fleet, as of 2026-06-19):
-#   vps-21accdce is the only currently-active Velox worker. Its Tailscale
-#   mesh IP (typically 100.x) and SSH-22 reachable is the documented
-#   target. `worker_id=velox-worker-1` for that peer, or
-#   `worker_id=velox-worker-local` for a second worker co-located with
-#   the master on the same host. Mirror in:
+#   Replace with the public IP or DNS name of the live worker. Keep the
+#   `worker_id` in sync with the allowlist. Mirror in:
 #     - deploy/group_vars/all.yml `velox_allowed_workers`
 #     - deploy/velox-server.env.example `VELOX_ALLOWED_WORKERS`
 #
@@ -32,11 +28,9 @@
 #   ansible_user, no worker_id, and no gRPC handshake. A reference is
 #   kept here ONLY as a guardrail against accidental re-onboarding.
 #
-# Previous multi-host template was REMOVED. The two unreachable nodes
-# (local dev box and an offline Tailscale peer) are out of scope and would
-# only add confusion. To scale up later, append new velox-worker-X entries
-# under [velox_workers] and mirror them in deploy/group_vars/all.yml
-# (velox_allowed_workers) + deploy/velox-server.env.example
+# Previous multi-host template was REMOVED. To scale up later, append new
+# velox-worker-X entries under [velox_workers] and mirror them in
+# deploy/group_vars/all.yml (velox_allowed_workers) + deploy/velox-server.env.example
 # (VELOX_ALLOWED_WORKERS).
 #
 # Connection requirements:

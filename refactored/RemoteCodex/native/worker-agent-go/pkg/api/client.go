@@ -22,25 +22,21 @@ import (
 )
 
 // Canonical API endpoint paths.
+//
+// The worker agent operates over a gRPC control plane (see internal/transport).
+// The legacy HTTP control endpoints (`/api/workers/{register,unregister,heartbeat,
+// commands,ack,status}`, `/api/jobs/{get,result,complete,lease}`) have been
+// removed from the master, so the worker no longer hits them. We keep the small
+// set of v2 endpoints used by upload helpers, and `/health` for readiness probes.
 const (
-	endpointRegisterWorker   = "/api/workers/register"
-	endpointUnregisterWorker = "/api/workers/unregister"
-	endpointHeartbeat        = "/api/workers/heartbeat"
-	endpointGetJob           = "/api/jobs/get"
-	endpointSubmitResult     = "/api/jobs/result"
-	endpointCompleteJob      = "/api/jobs/complete"
-	endpointRenewLease       = "/api/jobs/lease"
-	endpointHealthCheck      = "/health"
-	endpointGetCommands      = "/api/workers/commands"
-	endpointAckCommand       = "/api/workers/commands/ack"
-	endpointAckCommandByID   = "/api/workers/commands/ack"
-	endpointUpdateStatus     = "/api/workers/status"
+	endpointHealthCheck = "/health"
 
-	// V2 canonical endpoints
-	endpointV2GetJob      = "/api/v1/queue/job"
+	// V2 canonical endpoints (HTTP-only data-plane paths used by uploads/asset
+	// bridge; gRPC handles all control-plane traffic).
+	endpointV2GetJob       = "/api/v1/queue/job"
 	endpointV2SubmitResult = "/api/v1/jobs/%s/result"
-	endpointV2CompleteJob = "/api/v1/jobs/%s/complete"
-	endpointV2RenewLease  = "/api/v1/jobs/%s/lease"
+	endpointV2CompleteJob  = "/api/v1/jobs/%s/complete"
+	endpointV2RenewLease   = "/api/v1/jobs/%s/lease"
 )
 
 // Client is an HTTP client for the Velox Master API.
@@ -128,6 +124,10 @@ func retryBackoff(attempt int, baseInterval time.Duration) time.Duration {
 	return time.Duration(jitter)
 }
 
+// isRetryableError classifies whether an HTTP error qualifies for the
+// retry policy. Network errors, syscall-level connection drops, and 5xx/429
+// responses are retryable; 4xx is not (besides 429 already covered) and
+// context cancellations are not retryable.
 func isRetryableError(err error) bool {
 	if err == nil {
 		return false

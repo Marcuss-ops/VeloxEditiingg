@@ -49,7 +49,7 @@ Velox è un sistema distribuito per la generazione e composizione video. **Maste
 └──────────────────────────────────────────────────┘
 ```
 
-> **Dettagli completi**: deploy, worker communication, video pipeline, progress streaming → vedi [`docs/archive/architecture-pre-grpc.md`](docs/archive/architecture-pre-grpc.md) (legacy, pre-gRPC reference)
+> **Dettagli completi**: deploy, worker communication, video pipeline, progress streaming → vedi la sezione [Struttura Repository](#struttura-repository) sotto. L'architettura corrente è interamente gRPC (`DataServer/internal/grpcserver/` + `RemoteCodex/.../internal/transport`) e non usa più il path HTTP pre-gRPC.
 
 ---
 
@@ -188,4 +188,4 @@ make build
 - **TLS** via `VELOX_TLS_CERT_FILE` / `VELOX_TLS_KEY_FILE`.
 - **S3/MinIO/R2** per storage oggetti.
 - **Linting**: `golangci-lint` config in `.golangci.yml` (richiede Go 1.25+).
-- **Architecture**: `docs/archive/architecture-pre-grpc.md` — legacy pre-gRPC reference.
+- **Worker registration & auth**: gRPC `WorkerControl` bidi stream with `VELOX_ALLOWED_WORKERS` enforcement (`DataServer/internal/grpcserver/authorizer.go`). HTTP `/api/workers/register` is gone.

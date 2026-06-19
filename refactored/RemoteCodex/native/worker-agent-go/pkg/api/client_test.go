@@ -1,4 +1,7 @@
-// Package api provides HTTP client for communicating with the Velox Master server.
+// Package api provides a small HTTP client used by the data-plane bridges
+// (uploads, asset downloads, health probes). All control-plane traffic
+// between the worker and the master flows over the gRPC `WorkerControl`
+// bidi stream — there are no HTTP control endpoints to exercise here.
 package api
 
 import (
@@ -35,309 +38,7 @@ func TestNewClient(t *testing.T) {
 	}
 }
 
-// TestRegisterWorker tests worker registration.
-func TestRegisterWorker(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/workers/register" {
-			t.Errorf("Expected path /api/workers/register, got %s", r.URL.Path)
-		}
-
-		if r.Method != "POST" {
-			t.Errorf("Expected POST method, got %s", r.Method)
-		}
-
-		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(APIResponse{Success: true})
-	}))
-	defer server.Close()
-
-	client := NewClient(server.URL)
-	ctx := context.Background()
-
-	info := &WorkerInfo{
-		WorkerID:   "test-worker-001",
-		WorkerName: "Test Worker",
-		Capabilities: map[string]interface{}{
-			"video_render": true,
-		},
-		Hostname: "test-host",
-		Version:  "1.0.0",
-	}
-
-	err := client.RegisterWorker(ctx, info)
-	if err != nil {
-		t.Errorf("Expected no error, got %v", err)
-	}
-}
-
-// TestSendHeartbeat tests heartbeat sending.
-func TestSendHeartbeat(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/workers/heartbeat" {
-			t.Errorf("Expected path /api/workers/heartbeat, got %s", r.URL.Path)
-		}
-
-		var payload HeartbeatPayload
-		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-			t.Errorf("Failed to decode heartbeat payload: %v", err)
-		}
-
-		if payload.WorkerID != "test-worker-001" {
-			t.Errorf("Expected worker_id test-worker-001, got %s", payload.WorkerID)
-		}
-
-		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(APIResponse{Success: true})
-	}))
-	defer server.Close()
-
-	client := NewClient(server.URL)
-	ctx := context.Background()
-
-	payload := &HeartbeatPayload{
-		WorkerID: "test-worker-001",
-		Status:   "idle",
-	}
-
-	err := client.SendHeartbeat(ctx, payload)
-	if err != nil {
-		t.Errorf("Expected no error, got %v", err)
-	}
-}
-
-// TestGetJob tests job retrieval.
-func TestGetJob(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/jobs/get" {
-			t.Errorf("Expected path /api/jobs/get, got %s", r.URL.Path)
-		}
-
-		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(APIResponse{
-			Success: true,
-			Data: Job{
-				JobID:    "job-001",
-				JobRunID: "run-001",
-				JobType:  "render",
-			},
-		})
-	}))
-	defer server.Close()
-
-	client := NewClient(server.URL)
-	ctx := context.Background()
-
-	job, err := client.GetJob(ctx, "test-worker-001")
-	if err != nil {
-		t.Errorf("Expected no error, got %v", err)
-	}
-
-	if job == nil {
-		t.Fatal("Expected non-nil job")
-	}
-
-	if job.JobID != "job-001" {
-		t.Errorf("Expected job_id job-001, got %s", job.JobID)
-	}
-
-	if job.JobType != "render" {
-		t.Errorf("Expected job_type render, got %s", job.JobType)
-	}
-	if job.JobRunID != "run-001" {
-		t.Errorf("Expected job_run_id run-001, got %s", job.JobRunID)
-	}
-}
-
-// TestGetJobNoJob tests job retrieval when no job is available.
-func TestGetJobNoJob(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(APIResponse{
-			Success: false,
-			Message: "no jobs available",
-		})
-	}))
-	defer server.Close()
-
-	client := NewClient(server.URL)
-	ctx := context.Background()
-
-	job, err := client.GetJob(ctx, "test-worker-001")
-	if err != nil {
-		t.Errorf("Expected no error, got %v", err)
-	}
-
-	if job != nil {
-		t.Errorf("Expected nil job when no jobs available, got %v", job)
-	}
-}
-
-func TestGetJobV2FallsBackToLegacy(t *testing.T) {
-	var v2Hits, legacyHits int
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/v1/queue/job":
-			v2Hits++
-			w.WriteHeader(http.StatusNotFound)
-			w.Write([]byte("API route not found"))
-		case "/api/jobs/get":
-			legacyHits++
-			w.WriteHeader(http.StatusOK)
-			json.NewEncoder(w).Encode(APIResponse{
-				Success: true,
-				Data: Job{
-					JobID:    "job-legacy",
-					JobRunID: "run-legacy",
-					JobType:  "render",
-				},
-			})
-		default:
-			t.Errorf("unexpected path %s", r.URL.Path)
-			w.WriteHeader(http.StatusNotFound)
-		}
-	}))
-	defer server.Close()
-
-	client := NewClient(server.URL)
-	ctx := context.Background()
-
-	job, err := client.GetJobV2(ctx, "test-worker-001")
-	if err != nil {
-		t.Fatalf("Expected no error, got %v", err)
-	}
-	if job == nil || job.JobID != "job-legacy" {
-		t.Fatalf("Expected legacy job, got %#v", job)
-	}
-	if v2Hits != 1 || legacyHits != 1 {
-		t.Fatalf("Expected 1 v2 hit and 1 legacy hit, got v2=%d legacy=%d", v2Hits, legacyHits)
-	}
-}
-
-func TestSubmitJobResultV2FallsBackToLegacy(t *testing.T) {
-	var v2Hits, legacyHits int
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/v1/jobs/job-001/result":
-			v2Hits++
-			w.WriteHeader(http.StatusNotFound)
-			w.Write([]byte("API route not found"))
-		case "/api/jobs/result":
-			legacyHits++
-			var result JobResult
-			if err := json.NewDecoder(r.Body).Decode(&result); err != nil {
-				t.Fatalf("Failed to decode job result: %v", err)
-			}
-			if result.LeaseID != "lease-123" {
-				t.Fatalf("Expected lease_id lease-123, got %s", result.LeaseID)
-			}
-			w.WriteHeader(http.StatusOK)
-			json.NewEncoder(w).Encode(APIResponse{Success: true})
-		default:
-			t.Errorf("unexpected path %s", r.URL.Path)
-			w.WriteHeader(http.StatusNotFound)
-		}
-	}))
-	defer server.Close()
-
-	client := NewClient(server.URL)
-	ctx := context.Background()
-
-	result := &JobResult{
-		JobID:    "job-001",
-		JobRunID: "run-001",
-		WorkerID: "test-worker-001",
-		Status:   "success",
-		LeaseID:  "lease-123",
-	}
-
-	err := client.SubmitJobResultV2(ctx, result.JobID, result)
-	if err != nil {
-		t.Fatalf("Expected no error, got %v", err)
-	}
-	if v2Hits != 1 || legacyHits != 1 {
-		t.Fatalf("Expected 1 v2 hit and 1 legacy hit, got v2=%d legacy=%d", v2Hits, legacyHits)
-	}
-}
-
-func TestCompleteJobV2FallsBackToLegacy(t *testing.T) {
-	var v2Hits, legacyHits int
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/v1/jobs/job-001/complete":
-			v2Hits++
-			w.WriteHeader(http.StatusNotFound)
-			w.Write([]byte("API route not found"))
-		case "/api/jobs/complete":
-			legacyHits++
-			var body map[string]interface{}
-			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-				t.Fatalf("Failed to decode complete payload: %v", err)
-			}
-			if body["lease_id"] != "lease-123" {
-				t.Fatalf("Expected lease_id lease-123, got %#v", body["lease_id"])
-			}
-			w.WriteHeader(http.StatusOK)
-			json.NewEncoder(w).Encode(APIResponse{Success: true})
-		default:
-			t.Errorf("unexpected path %s", r.URL.Path)
-			w.WriteHeader(http.StatusNotFound)
-		}
-	}))
-	defer server.Close()
-
-	client := NewClient(server.URL)
-	ctx := context.Background()
-
-	err := client.CompleteJobV2(ctx, "job-001", "worker-001", "lease-123", 3)
-	if err != nil {
-		t.Fatalf("Expected no error, got %v", err)
-	}
-	if v2Hits != 1 || legacyHits != 1 {
-		t.Fatalf("Expected 1 v2 hit and 1 legacy hit, got v2=%d legacy=%d", v2Hits, legacyHits)
-	}
-}
-
-// TestSubmitJobResult tests job result submission.
-func TestSubmitJobResult(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/jobs/result" {
-			t.Errorf("Expected path /api/jobs/result, got %s", r.URL.Path)
-		}
-
-		var result JobResult
-		if err := json.NewDecoder(r.Body).Decode(&result); err != nil {
-			t.Errorf("Failed to decode job result: %v", err)
-		}
-
-		if result.JobID != "job-001" {
-			t.Errorf("Expected job_id job-001, got %s", result.JobID)
-		}
-		if result.JobRunID != "run-001" {
-			t.Errorf("Expected job_run_id run-001, got %s", result.JobRunID)
-		}
-
-		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(APIResponse{Success: true})
-	}))
-	defer server.Close()
-
-	client := NewClient(server.URL)
-	ctx := context.Background()
-
-	result := &JobResult{
-		JobID:    "job-001",
-		JobRunID: "run-001",
-		WorkerID: "test-worker-001",
-		Status:   "success",
-	}
-
-	err := client.SubmitJobResult(ctx, result)
-	if err != nil {
-		t.Errorf("Expected no error, got %v", err)
-	}
-}
-
-// TestHealthCheck tests health check endpoint.
+// TestHealthCheck tests the readiness probe endpoint used at bootstrap.
 func TestHealthCheck(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/health" {
@@ -426,27 +127,6 @@ func TestContextCancellation(t *testing.T) {
 	}
 }
 
-// TestUnregisterWorker tests worker unregistration.
-func TestUnregisterWorker(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/workers/unregister" {
-			t.Errorf("Expected path /api/workers/unregister, got %s", r.URL.Path)
-		}
-
-		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(APIResponse{Success: true})
-	}))
-	defer server.Close()
-
-	client := NewClient(server.URL)
-	ctx := context.Background()
-
-	err := client.UnregisterWorker(ctx, "test-worker-001")
-	if err != nil {
-		t.Errorf("Expected no error, got %v", err)
-	}
-}
-
 // TestWithHeader tests custom header option.
 func TestWithHeader(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -473,5 +153,19 @@ func TestIsRetryableError(t *testing.T) {
 
 	if isRetryableError(nil) {
 		t.Error("Expected nil error to not be retryable")
+	}
+}
+
+// TestAuthTokenSetGet verifies the worker can attach a bearer token used by
+// data-plane uploads. The token is no longer sourced from a HTTP register
+// roundtrip (gRPC replaces it); this test pins the Set/AuthToken round-trip.
+func TestAuthTokenSetGet(t *testing.T) {
+	c := NewClient("http://localhost:8000")
+	if c.AuthToken() != "" {
+		t.Fatalf("Expected empty auth token initially, got %q", c.AuthToken())
+	}
+	c.SetAuthToken("test-token-abc")
+	if c.AuthToken() != "test-token-abc" {
+		t.Fatalf("Expected auth token to be 'test-token-abc', got %q", c.AuthToken())
 	}
 }
