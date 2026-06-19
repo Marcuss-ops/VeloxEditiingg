@@ -21,9 +21,10 @@ type DataLayerAuditResult struct {
 
 // DataLayerAuditor validates data layer structure.
 type DataLayerAuditor struct {
-	dataDir    string
-	secretsDir string
-	dbPath     string
+	dataDir       string
+	secretsDir    string
+	dbPath        string
+	allowedLegacy map[string]bool
 }
 
 // NewDataLayerAuditor creates a new data layer auditor.
@@ -40,9 +41,10 @@ func NewDataLayerAuditor(dataDir, secretsDir string, dbPath ...string) *DataLaye
 		dbp = dbPath[0]
 	}
 	return &DataLayerAuditor{
-		dataDir:    dataDir,
-		secretsDir: secretsDir,
-		dbPath:     dbp,
+		dataDir:       dataDir,
+		secretsDir:    secretsDir,
+		dbPath:        dbp,
+		allowedLegacy: make(map[string]bool),
 	}
 }
 
@@ -80,6 +82,12 @@ func (a *DataLayerAuditor) checkDuplicateSources(result *DataLayerAuditResult) {
 
 	if a.dirExists(credsLower) && a.dirExists(credsUpper) {
 		result.Errors = append(result.Errors, "Drive has duplicate credentials: credentials/ AND Credentials/")
+	}
+
+	// Workers configuration: should live only in the database
+	workersPath := filepath.Join(a.dataDir, "workers.json")
+	if a.fileExists(workersPath) {
+		result.Warnings = append(result.Warnings, "workers.json exists as file: prefer database-backed worker registry")
 	}
 }
 
@@ -191,6 +199,17 @@ func (a *DataLayerAuditor) dirExists(path string) bool {
 		return false
 	}
 	return info.IsDir()
+}
+
+// AllowLegacy marks a path as an allowed legacy artifact, suppressing
+// related errors/warnings in the audit.
+func (a *DataLayerAuditor) AllowLegacy(path string) {
+	a.allowedLegacy[path] = true
+}
+
+// IsLegacyAllowed returns true if the path has been explicitly allowed.
+func (a *DataLayerAuditor) IsLegacyAllowed(path string) bool {
+	return a.allowedLegacy[path]
 }
 
 // FailOnError returns an error if audit fails, nil otherwise.

@@ -353,7 +353,7 @@ func TestCheckDatabase_MissingDB(t *testing.T) {
 	}
 	found := false
 	for _, w := range result.Warnings {
-		if stringsContains(w, "velox.db") {
+		if stringsContains(w, "VELOX_DB_PATH") {
 			found = true
 			break
 		}
