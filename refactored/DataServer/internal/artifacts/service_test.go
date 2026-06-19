@@ -530,8 +530,11 @@ func TestFinalize_BlobPromotedButDBCASMissed(t *testing.T) {
 	require.Equal(t, "STAGING", artStatus)
 
 	// Orphan blob must exist on disk (reconciler will reclaim).
-	// Extension matches mimeToExt("video/mp4") from beginUploadDefaultCmd.
-	_, absFinal, err := FinalStorageKey(env.bs, sha256Hex(payload), ".mp4")
+	// The finalized extension comes from the detected MIME type, not
+	// the requested upload MIME, so compute it the same way the service
+	// does before asserting the promoted blob path.
+	detectedExt := mimeToExt(detectMIME(sess.TemporaryStorageKey))
+	_, absFinal, err := FinalStorageKey(env.bs, sha256Hex(payload), detectedExt)
 	require.NoError(t, err)
 	_, err = os.Stat(absFinal)
 	require.NoError(t, err, "orphan blob at %s must exist", absFinal)
