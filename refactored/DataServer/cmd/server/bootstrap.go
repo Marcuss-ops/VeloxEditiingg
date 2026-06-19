@@ -305,14 +305,10 @@ func runServer(cfg *config.Config) error {
 	auth := api.AdminAuthMiddleware(cfg)
 	pipeline.InitRemoteEngine(cfg)
 
-	registry.Register(health.New())
-	registry.Register(workers.New(cfg, deps.reg, deps.workerLifecycle, deps.workerUpdateHandler, auth, deps.assetService, deps.blobStore))
 	ytMod := youtube.New(cfg, deps.paths.dataDir, deps.sqliteStore)
 	deps.youtubeModule = ytMod
-	registry.Register(ytMod)
 	driveMod := drive.New(cfg)
 	deps.driveModule = driveMod
-	registry.Register(driveMod)
 
 	maxVoiceoverBytes := int64(256 * 1024 * 1024)
 	if raw := strings.TrimSpace(os.Getenv("VELOX_MAX_VOICEOVER_BYTES")); raw != "" {
@@ -338,6 +334,10 @@ func runServer(cfg *config.Config) error {
 	// Wire the new AssetService into the enqueue flow (replaces the old
 	// voiceover bridge's RewriteVoiceoverPayload).
 	enqueue.SetVoiceoverAssetService(deps.assetService)
+	registry.Register(health.New())
+	registry.Register(workers.New(cfg, deps.reg, deps.workerLifecycle, deps.workerUpdateHandler, auth, deps.assetService, deps.blobStore))
+	registry.Register(ytMod)
+	registry.Register(driveMod)
 	ansibleMod := ansible.New(cfg, deps.paths.dataDir, auth, deps.sqliteStore)
 	deps.ansibleModule = ansibleMod
 	registry.Register(ansibleMod)

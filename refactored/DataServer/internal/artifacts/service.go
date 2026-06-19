@@ -331,7 +331,8 @@ func (s *Service) BeginUpload(ctx context.Context, cmd BeginUploadCommand) (*Upl
 		return nil, fmt.Errorf("%w: attempt_lease job=%s n=%d",
 			ErrLeaseInvalid, cmd.JobID, cmd.AttemptNumber)
 	}
-	if attStatus != "RENDER_FINISHED" {
+	attStatus = strings.ToUpper(strings.TrimSpace(attStatus))
+	if attStatus != "RENDER_FINISHED" && attStatus != "PROCESSING" {
 		return nil, fmt.Errorf("%w: job=%s n=%d current=%s",
 			ErrAttemptNotRenderFinished, cmd.JobID, cmd.AttemptNumber, attStatus)
 	}

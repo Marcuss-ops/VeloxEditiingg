@@ -207,11 +207,11 @@ func (r *SQLiteFinalizationRepository) FinalizeVerified(
 	}
 	nowStr := verifiedAt.UTC().Format(time.RFC3339)
 
-	// 2. jobs CAS: RUNNING + owner + lease + revision → SUCCEEDED.
+	// 2. jobs CAS: RUNNING + owner + lease [+ revision if provided] → SUCCEEDED.
 	//    Note: we no longer write jobs.output_sha256 here — that
 	//    column is being retired (PR 3.5-b 4.3). The canonical SHA
 	//    lives on the artifacts row.
-	jobRes, err := tx.ExecContext(ctx, `
+	jobQuery := `
 		UPDATE jobs
 		SET status = 'SUCCEEDED',
 		    completed_at = ?,
@@ -222,12 +222,13 @@ func (r *SQLiteFinalizationRepository) FinalizeVerified(
 		WHERE job_id = ?
 		  AND status = 'RUNNING'
 		  AND assigned_to = ?
-		  AND lease_id = ?
-		  AND revision = ?`,
-		nowStr, nowStr,
-		cmd.JobID,
-		cmd.WorkerID, cmd.LeaseID, cmd.ExpectedRevision,
-	)
+		  AND lease_id = ?`
+	jobArgs := []interface{}{nowStr, nowStr, cmd.JobID, cmd.WorkerID, cmd.LeaseID}
+	if cmd.ExpectedRevision != 0 {
+		jobQuery += ` AND revision = ?`
+		jobArgs = append(jobArgs, cmd.ExpectedRevision)
+	}
+	jobRes, err := tx.ExecContext(ctx, jobQuery, jobArgs...)
 	if err != nil {
 		return nil, fmt.Errorf("artifacts: FinalizeVerified jobs CAS: %w", err)
 	}
@@ -258,7 +259,7 @@ func (r *SQLiteFinalizationRepository) FinalizeVerified(
 			ErrTransitionConflict, n, cmd.UploadID, cmd.ArtifactID)
 	}
 
-	// 4. job_attempts CAS: RENDER_FINISHED + auth → SUCCEEDED.
+	// 4. job_attempts CAS: PROCESSING/RENDER_FINISHED + auth → SUCCEEDED.
 	attRes, err := tx.ExecContext(ctx, `
 		UPDATE job_attempts
 		SET status = 'SUCCEEDED',
@@ -267,7 +268,7 @@ func (r *SQLiteFinalizationRepository) FinalizeVerified(
 		  AND attempt_number = ?
 		  AND worker_id = ?
 		  AND lease_id = ?
-		  AND status = 'RENDER_FINISHED'`,
+		  AND UPPER(status) IN ('RENDER_FINISHED', 'PROCESSING')`,
 		nowStr, cmd.JobID, cmd.AttemptNumber,
 		cmd.WorkerID, cmd.LeaseID,
 	)
