@@ -1,16 +1,42 @@
-# ── Runtime data ──────────────────────────────────────────────
+# ── Runtime data ──────────────────────────────────────────────────────────────
 *.db
 *.db-shm
 *.db-wal
 velox-master.pid
 *.pid
 
-# ── Secrets & credentials ────────────────────────────────────
+# ── Production deployment artefacts (NEVER commit — see CHANGELOG) ──────────
+# These wrap any depth to catch live operator inventories / env files that
+# are generated next to test data or in sub-checkouts. Templates live under
+# `*.example` (e.g. `deploy/inventory/production.ini.example`) and stay versioned.
+**/production.ini
+**/inventory.ini
+**/inventory.yml
+**/inventory.yaml
+**/production.env
+**/.env.production
+
+# ── Cryptographic material (key/cert bundles, NEVER commit) ────────────────
+# Covered globally so a stray key under any subdir is excluded.
+*.key
+*.pem
+*.p12
+*.pfx
+*.csr
+*.srl
+# Test-data fixtures are an explicit re-include.
+!**/testdata/**/*.pem
+!**/testdata/**/*.key
+
+# ── Operator credential store (master + ansible-vault tooling) ────────────
+.velox-passwords.txt
+
+# ── Secrets & credentials ──────────────────────────────────────────────────────────
 refactored/DataServer/data/secrets/
 refactored/DataServer/data/drive/credentials/
 refactored/DataServer/data/drive/tokens/
 
-# ── Runtime directories ──────────────────────────────────────
+# ── Runtime directories ──────────────────────────────────────────────────────
 refactored/DataServer/data/analytics/
 refactored/DataServer/data/backups/
 refactored/DataServer/data/dark_editor/
@@ -21,7 +47,7 @@ refactored/DataServer/data/worker_downloads/
 refactored/DataServer/data/ansible/playbooks/inventory.ini
 refactored/DataServer/completed_videos/
 
-# ── Build artifacts ──────────────────────────────────────────
+# ── Build artifacts ──────────────────────────────────────────────────────────
 *.tsbuildinfo
 *.tsbuildinfo.*
 refactored/DataServer/bin/
@@ -30,35 +56,35 @@ refactored/DataServer/velox-server
 refactored/RemoteCodex/native/worker-agent-go/bin/
 refactored/RemoteCodex/native/video-engine-cpp/build/
 
-# ── Environment & IDE ────────────────────────────────────────
+# ── Environment & IDE ────────────────────────────────────────────────────────
 .env
 .env.*
 *.env
 .velox/
 .cline/
 
-# ── Logs ─────────────────────────────────────────────────────
+# ── Logs ─────────────────────────────────────────────────────────────────────
 logs/
 *.log
 
-# ── Python ───────────────────────────────────────────────────
+# ── Python ───────────────────────────────────────────────────────────────────
 __pycache__/
 *.pyc
 *.pyo
 venv/
 .venv/
 
-# ── Node ─────────────────────────────────────────────────────
+# ── Node ─────────────────────────────────────────────────────────────────────
 node_modules/
 refactored/frontend_standalone/web/node_modules/
 refactored/frontend_standalone/web/test-results/
 refactored/frontend_standalone/web/.svelte-kit/
 
-# ── Go build cache ───────────────────────────────────────────
+# ── Go build cache ───────────────────────────────────────────────────────────
 *.test
 *.out
 *.prof
 
-# ── OS files ─────────────────────────────────────────────────
+# ── OS files ─────────────────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db

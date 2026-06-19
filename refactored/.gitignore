@@ -1,14 +1,29 @@
-# ── Ansible inventory (real IPs/hosts — NEVER commit the live file) ──
+# ── Production deployment artefacts (NEVER commit — see CHANGELOG) ──────────
+# These catch live operator inventories / env files at any depth. Templates
+# live alongside as `*.example` (e.g. `deploy/inventory/production.ini.example`)
+# and stay versioned.
+# (The older `deploy/inventory/production.ini` literal line below is kept as a
+# re-anchor so the path is still matched even without `**/`. The `**/`
+# patterns above are the canonical coverage.)
 deploy/inventory/production.ini
+**/production.ini
+**/inventory.ini
+**/inventory.yml
+**/inventory.yaml
+**/production.env
+**/.env.production
 
-# ── Runtime data ──────────────────────────────────────────────
+# ── Ansible inventory (real IPs/hosts — NEVER commit the live file) ──
+# Legacy anchor kept for clarity (now double-covered by the rules above).
+
+# ── Runtime data ──────────────────────────────────────────────────────────────
 *.db
 *.db-shm
 *.db-wal
 velox-master.pid
 *.pid
 
-# ── Secrets & credentials ────────────────────────────────────
+# ── Secrets & credentials ──────────────────────────────────────────────────────────
 DataServer/data/secrets/
 DataServer/secrets/
 DataServer/data/drive/credentials/
@@ -23,7 +38,7 @@ certs/
 !**/testdata/**/*.pem
 !**/testdata/**/*.key
 
-# ── Runtime directories ──────────────────────────────────────
+# ── Runtime directories ──────────────────────────────────────────────────────
 DataServer/data/analytics/
 DataServer/data/backups/
 DataServer/data/dark_editor/
@@ -34,7 +49,7 @@ DataServer/data/worker_downloads/
 DataServer/data/ansible/playbooks/inventory.ini
 DataServer/completed_videos/
 
-# ── Build artifacts ──────────────────────────────────────────
+# ── Build artifacts ──────────────────────────────────────────────────────────
 *.tsbuildinfo
 *.tsbuildinfo.*
 DataServer/bin/
@@ -43,30 +58,30 @@ DataServer/velox-server
 RemoteCodex/native/worker-agent-go/bin/
 RemoteCodex/native/video-engine-cpp/build/
 
-# ── Environment & IDE ────────────────────────────────────────
+# ── Environment & IDE ────────────────────────────────────────────────────────
 .env
 .env.*
 *.env
 .velox/
 .cline/
 
-# ── Logs ─────────────────────────────────────────────────────
+# ── Logs ─────────────────────────────────────────────────────────────────────
 logs/
 *.log
 
-# ── Node ─────────────────────────────────────────────────────
+# ── Node ─────────────────────────────────────────────────────────────────────
 node_modules/
 frontend_standalone/web/dist/
 frontend_standalone/web/node_modules/
 frontend_standalone/web/test-results/
 frontend_standalone/web/.svelte-kit/
 
-# ── Go build cache ───────────────────────────────────────────
+# ── Go build cache ───────────────────────────────────────────────────────────
 *.test
 *.out
 *.prof
 
-# ── OS files ─────────────────────────────────────────────────
+# ── OS files ─────────────────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
 .velox-passwords.txt
