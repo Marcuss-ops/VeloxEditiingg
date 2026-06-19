@@ -101,18 +101,18 @@ log "Next version:    ${next_version}"
 printf '%s\n' "$next_version" > "$VERSION_FILE"
 
 log "Building worker agent..."
-make -C "$ROOT_DIR/refactored/RemoteCodex/native/worker-agent-go" agent
+make -C "$ROOT_DIR/RemoteCodex/native/worker-agent-go" agent
 
 log "Building master/server..."
-(cd "$ROOT_DIR/refactored/DataServer" && go build -o bin/velox-server ./cmd/server)
+(cd "$ROOT_DIR/DataServer" && go build -o bin/velox-server ./cmd/server)
 
 log "Rebuilding worker bundle..."
-"$ROOT_DIR/refactored/DataServer/bin/velox-bundler" --source "$ROOT_DIR/refactored" --output "$ROOT_DIR/refactored/DataServer/data/worker_downloads"
+"$ROOT_DIR/DataServer/bin/velox-bundler" --source "$ROOT_DIR" --output "$ROOT_DIR/DataServer/data/worker_downloads"
 
 if [[ "$APPLY_ANSIBLE" != "0" ]]; then
   if [[ -z "$TARGETS" ]]; then
-    if command -v jq >/dev/null 2>&1 && [[ -f "$ROOT_DIR/refactored/DataServer/data/ansible/ansible_computers.json" ]]; then
-      TARGETS="$(jq -r 'keys[]' "$ROOT_DIR/refactored/DataServer/data/ansible/ansible_computers.json" | paste -sd, -)"
+    if command -v jq >/dev/null 2>&1 && [[ -f "$ROOT_DIR/DataServer/data/ansible/ansible_computers.json" ]]; then
+      TARGETS="$(jq -r 'keys[]' "$ROOT_DIR/DataServer/data/ansible/ansible_computers.json" | paste -sd, -)"
     fi
   fi
 
