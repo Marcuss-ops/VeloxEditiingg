@@ -10,7 +10,6 @@ import (
 	"velox-server/internal/app"
 	"velox-server/internal/config"
 	workersuploads "velox-server/internal/handlers/remote/workers/uploads"
-	"velox-server/internal/handlers/server/analytics"
 	"velox-server/internal/handlers/server/api"
 	"velox-server/internal/handlers/server/darkeditor"
 	"velox-server/internal/handlers/server/groups"
@@ -74,9 +73,6 @@ func newRouter(cfg *config.Config, deps *serverDeps, registry *app.Registry) *gi
 
 	// Initialize groups handlers with SQLite store
 	groups.InitGroupsStore(deps.sqliteStore)
-
-	// Analytics cache
-	analytics.InitAnalyticsCache(deps.paths.dataDir, deps.sqliteStore)
 
 	// Dark Editor API routes
 	deCfg := &darkeditor.Config{
