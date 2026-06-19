@@ -46,7 +46,6 @@ type Handler struct {
 
 	registry      *workersreg.Registry
 	cmdMgr        *workersreg.CommandManager
-	tokenMgr      *workersreg.TokenManager
 	lifecycleSvc  *queue.LifecycleService
 	artifactSvc   *artifacts.Service
 	dbStore       *store.SQLiteStore
@@ -114,11 +113,6 @@ type workerSession struct {
 
 // NewHandler creates a new gRPC WorkerControl handler.
 //
-// Phase 5 hygiene: tokenMgr parameter removed — the gRPC path validates
-// credentials via dbStore.validateCredentialHash and never needs a
-// workers.TokenManager. Bootstrap no longer constructs a stray TokenManager
-// just to satisfy this signature.
-//
 // PR 2 (chunk 4): artifactSvc type changed from *queue.ArtifactFinalizationService
 // (the old 2-tx STAGING→VERIFYING→READY gate) to *artifacts.Service (the
 // new single-tx session-based gate). The handler rejects ArtifactUploaded
@@ -128,7 +122,6 @@ type workerSession struct {
 func NewHandler(
 	registry *workersreg.Registry,
 	cmdMgr *workersreg.CommandManager,
-	tokenMgr *workersreg.TokenManager,
 	lifecycleSvc *queue.LifecycleService,
 	artifactSvc *artifacts.Service,
 	dbStore *store.SQLiteStore,
@@ -140,7 +133,6 @@ func NewHandler(
 	return &Handler{
 		registry:       registry,
 		cmdMgr:         cmdMgr,
-		tokenMgr:       tokenMgr,
 		lifecycleSvc:   lifecycleSvc,
 		artifactSvc:    artifactSvc,
 		dbStore:        dbStore,

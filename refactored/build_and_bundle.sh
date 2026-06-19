@@ -13,7 +13,7 @@ ENGINE_DIR="$SCRIPT_DIR/RemoteCodex/native/video-engine-cpp"
 BUNDLE_DIR="$DATASERVER_DIR/data/worker_downloads"
 BUNDLE_NAME="worker_code_linux_x86_64.zip"
 
-VERSION="$(cat "$SCRIPT_DIR/VERSION.txt" 2>/dev/null | tr -d '[:space:]')"
+VERSION="$(cat "$(dirname "$SCRIPT_DIR")/VERSION.txt" 2>/dev/null | tr -d '[:space:]')"
 SKIP_ENGINE=false
 SKIP_TESTS=false
 DRY_RUN=false
@@ -121,7 +121,6 @@ else
     cd "$SCRIPT_DIR"
     zip -r "$TMP_BUNDLE" \
         RemoteCodex/ \
-        VERSION.txt \
         -x "RemoteCodex/native/worker-agent-go/bin/*" \
         -x "RemoteCodex/native/video-engine-cpp/build/*" \
         -x "RemoteCodex/native/video-engine-cpp/CMakeCache.txt" \
@@ -129,6 +128,8 @@ else
         -x "RemoteCodex/native/worker-agent-go/vendor/*" \
         -x "RemoteCodex/**/*.md" \
         2>&1 | tail -3
+    # Include root VERSION.txt as VERSION.txt inside the bundle
+    zip -j "$TMP_BUNDLE" "$(dirname "$SCRIPT_DIR")/VERSION.txt" 2>&1 | tail -1
     ok "Bundle created (tmp): $TMP_BUNDLE"
 fi
 
@@ -148,7 +149,7 @@ ok "SHA256: ${BUNDLE_HASH:0:16}... (sidecar: ${BUNDLE_NAME}.sha256)"
 # Step 7: Write VERSION.txt
 log "Writing VERSION.txt..."
 if ! $DRY_RUN; then
-    echo -n "$VERSION" > "$SCRIPT_DIR/VERSION.txt"
+    echo -n "$VERSION" > "$(dirname "$SCRIPT_DIR")/VERSION.txt"
 fi
 ok "VERSION.txt: $VERSION"
 

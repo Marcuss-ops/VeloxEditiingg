@@ -383,12 +383,11 @@ func runServer(cfg *config.Config) error {
 			log.Printf("[SERVER] gRPC disabled: lifecycleSvc is nil")
 		} else {
 			cmdMgr := workersreg.NewCommandManager(deps.sqliteStore)
-			tokenMgr := workersreg.NewTokenManager(deps.sqliteStore)
 			grpcHandlerConfig := &grpcserver.HandlerConfig{
 				PushMode: cfg.Server.GRPCPushMode,
 			}
 			grpcHandler := grpcserver.NewHandler(
-				deps.reg, cmdMgr, tokenMgr, lcSvc, deps.artifactSvc, deps.sqliteStore, grpcHandlerConfig,
+				deps.reg, cmdMgr, lcSvc, deps.artifactSvc, deps.sqliteStore, grpcHandlerConfig,
 			)
 
 			grpcServer, lis, err := grpcserver.StartGRPCServer(

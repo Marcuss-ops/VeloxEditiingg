@@ -36,19 +36,20 @@ Velox è un sistema distribuito per la generazione e composizione video. **Maste
 │  │  Calendar · DarkEditor · NVIDIA AI         │  │
 │  └────────────────────────────────────────────┘  │
 └────────────────────┬─────────────────────────────┘
-                     │ HTTP/gRPC (register, heartbeat,
-                     │ poll job, upload artifact)
+                     │ gRPC control stream (bidi)
+                     │ register, heartbeat, job offers,
+                     │ command dispatch, artifact upload
                      ▼
 ┌──────────────────────────────────────────────────┐
 │            WORKER REMOTO (RemoteCodex)            │
 │  Worker Agent (Go) ── Video Engine (C++/FFmpeg)   │
-│  job polling 5s ──→ Ken Burns, concat, mux        │
+│  gRPC stream ──→ push-based job acceptance        │
 │  heartbeat 15s/60s ──→ progress streaming         │
 │  chunked upload (files > 50MB via resumable)      │
 └──────────────────────────────────────────────────┘
 ```
 
-> **Dettagli completi**: deploy, worker communication, video pipeline, progress streaming → vedi [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
+> **Dettagli completi**: deploy, worker communication, video pipeline, progress streaming → vedi [`docs/archive/architecture-pre-grpc.md`](docs/archive/architecture-pre-grpc.md) (legacy, pre-gRPC reference)
 
 ---
 
@@ -65,7 +66,7 @@ DataServer/                    # MASTER SERVER (Go)
 │   ├── queue/                 # FileQueue, Orchestrator, DLQ, events
 │   ├── store/                 # SQLite: store_darkeditor, store_jobs, store_workers, youtube, ansible, ...
 │   ├── services/              # Business logic: jobs/, analytics/
-│   ├── workers/               # Registry, CommandManager, TokenManager
+│   ├── workers/               # Registry, CommandManager
 │   └── config/                # Env vars config
 ├── data/deploy/               # install-server.sh, systemd, env template
 └── bin/                       # velox-server, velox-bundler
@@ -187,4 +188,4 @@ make build
 - **TLS** via `VELOX_TLS_CERT_FILE` / `VELOX_TLS_KEY_FILE`.
 - **S3/MinIO/R2** per storage oggetti.
 - **Linting**: `golangci-lint` config in `.golangci.yml` (richiede Go 1.25+).
-- **Architecture**: `docs/ARCHITECTURE.md` — deploy, workers, video pipeline, progress streaming, dynamic concurrency.
+- **Architecture**: `docs/archive/architecture-pre-grpc.md` — legacy pre-gRPC reference.

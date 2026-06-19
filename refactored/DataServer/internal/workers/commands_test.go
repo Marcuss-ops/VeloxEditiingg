@@ -95,14 +95,6 @@ func TestWorkerCommandToJSON(t *testing.T) {
 	}
 }
 
-func TestCommandManager_GetPendingCommandsAndMarkDelivered_NilStore(t *testing.T) {
-	cm := NewCommandManager(nil)
-	cmds := cm.GetPendingCommandsAndMarkDelivered("w1")
-	if len(cmds) != 0 {
-		t.Fatalf("expected 0 commands with nil store, got %d", len(cmds))
-	}
-}
-
 func TestCommandManager_AckCommandByID_NilStore(t *testing.T) {
 	cm := NewCommandManager(nil)
 	err := cm.AckCommandByID("w1", "cmd-nonexistent")

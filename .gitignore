@@ -18,10 +18,7 @@ refactored/DataServer/data/drive/
 refactored/DataServer/data/jobs/
 refactored/DataServer/data/youtube/
 refactored/DataServer/data/worker_downloads/
-refactored/DataServer/data/workers.json
-refactored/DataServer/data/ansible/ansible_computers.json
 refactored/DataServer/data/ansible/playbooks/inventory.ini
-refactored/DataServer/data/ansible_runs.json
 refactored/DataServer/completed_videos/
 
 # ── Build artifacts ──────────────────────────────────────────

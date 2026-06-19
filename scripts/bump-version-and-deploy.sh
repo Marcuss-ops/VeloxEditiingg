@@ -99,7 +99,6 @@ log "Current version: ${current_version}"
 log "Next version:    ${next_version}"
 
 printf '%s\n' "$next_version" > "$VERSION_FILE"
-printf '%s\n' "$next_version" > "${ROOT_DIR}/refactored/VERSION.txt"
 
 log "Building worker agent..."
 make -C "$ROOT_DIR/refactored/RemoteCodex/native/worker-agent-go" agent

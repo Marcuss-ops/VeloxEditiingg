@@ -101,25 +101,6 @@ func (cm *CommandManager) GetPendingCommands(workerID string) []WorkerCommand {
 	return result
 }
 
-// GetPendingCommandsAndMarkDelivered returns pending commands and marks them as delivered.
-// This transitions: pending → delivered (sets delivered_at, increments attempt_count).
-func (cm *CommandManager) GetPendingCommandsAndMarkDelivered(workerID string) []WorkerCommand {
-	result := cm.GetPendingCommands(workerID)
-	if cm.store == nil {
-		return result
-	}
-
-	for _, cmd := range result {
-		if cmd.CommandID != "" {
-			if err := cm.store.MarkCommandDelivered(cmd.CommandID); err != nil {
-				registryLog.ErrorWithMsg("cmd.deliver.fail", "Failed to mark command delivered",
-					map[string]interface{}{"command_id": cmd.CommandID, "worker_id": workerID, "err": err.Error()})
-			}
-		}
-	}
-	return result
-}
-
 // AckCommandByID marks a specific command as acknowledged, scoped to its owning worker.
 // The workerID prevents workers from ACKing commands owned by other workers.
 //
@@ -134,9 +115,8 @@ func (cm *CommandManager) AckCommandByID(workerID, commandID string) error {
 }
 
 // MarkCommandDelivered marks a single command as delivered (pending → delivered)
-// by its command_id. Unlike GetPendingCommandsAndMarkDelivered, this marks
-// only one command at a time — the caller is responsible for only marking
-// commands that were successfully sent on the stream.
+// by its command_id. The caller is responsible for only marking commands that
+// were successfully sent on the stream.
 func (cm *CommandManager) MarkCommandDelivered(commandID string) error {
 	if cm.store == nil {
 		return fmt.Errorf("no store")

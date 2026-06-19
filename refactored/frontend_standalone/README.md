@@ -47,8 +47,7 @@ refactored/frontend_standalone/
 │   ├── tsconfig.json                   ← ES2022 + bundler resolution + react-jsx
 │   └── package-lock.json               ← byte-identical to upstream VeloxFrontend@HEAD
 ├── scripts/
-│   ├── build-and-bundle.sh             ← local build that mirrors .github/workflows/release.yml
-│   └── run-if-web-manifest.js          ← cross-platform npm-script shim (legacy; safe to delete on refactor)
+│   └── build-and-bundle.sh             ← local build that mirrors .github/workflows/release.yml
 ├── .github/workflows/release.yml       ← builds + sha256 + GitHub Release on tag v*
 ├── package.json                        ← root npm scripts (delegate via --prefix web)
 ├── .gitignore                          ← recursive iglob for dist/, build/, test-results/, node_modules/, …
@@ -71,7 +70,7 @@ npm install                                       # no-op for scripts (no worksp
 ( cd web && npm ci && npm run build )             # the real path — installs + builds the SPA
 
 # OR
-npm run build                                     # delegates via run-if-web-manifest.js (-prefix web -)
+npm run build                                     # prints a no-op message until web/package.json is authored
 
 # OR the unified build+sign tarball
 VERSION=v0.1.0 ./scripts/build-and-bundle.sh
@@ -83,46 +82,27 @@ that directory into `dist/<VERSION>/` and tarballs + sha256-signs it as
 SvelteKit-era scaffold is **not** produced by Vite; if anything ever shows
 up there, it's a stale artifact and can be deleted.
 
-`scripts/run-if-web-manifest.js` (the cross-platform shim in `package.json`
-scripts) is a leftover safety net for the period where this directory had
-no `web/package.json`. With the source tree now authored you can safely
-delete both `scripts/run-if-web-manifest.js` and the shim invocations in
-`refactored/frontend_standalone/package.json`, then re-enable the npm
-workspaces field (`"workspaces": ["web"]`) for the unified workflow.
-
 ### `--prefix web` does **not** auto-install — the node_modules pitfall
 
-The shim invokes `npm --prefix web run <script> --if-present`, and any
-direct `--prefix` invocation in our docs follows the same pattern. Two
-facts that are easy to get wrong unless you've read npm's docs closely:
+`npm --prefix web run <script>` does NOT trigger an install. Two facts
+that are easy to get wrong unless you've read npm's docs closely:
 
 1. **`npm run X --prefix <dir>` does NOT trigger an install.** When you
    call `npm --prefix web run build`, npm changes its working directory
    to `web/` and runs the `build` script. It does **not** first reconcile
-   `web/node_modules/` against `web/package-lock.json`. The shim (and
-   anything that copies it) silently assumes node_modules is already in
-   sync.
+   `web/node_modules/` against `web/package-lock.json`. Any `--prefix`
+   invocation silently assumes node_modules is already in sync.
 2. **The auto-install behaviour is reserved for `npm install` /
    `npm ci` — not for `npm run`.** Forgetting this is the most common
    cause of `'vite' is not recognized as an internal or external command`
    on fresh checkouts: `npm run build` from a clean clone finds no
    `vite` because nothing ran `npm ci` first.
 
-Practical rules of thumb for anyone wiring the shim into a new script:
+Practical rules of thumb:
 
 * **Always precede `npm run` with `( cd web && npm ci )`** (or
   `npm install`). The release workflow and `scripts/build-and-bundle.sh`
   already do this; don't drop it when copy-pasting.
-* **If you want the shim to self-recover** when `web/node_modules/` is
-  stale or missing, extend `scripts/run-if-web-manifest.js` to gate on
-  `web/node_modules/.package-lock.json`'s mtime against
-  `web/package-lock.json`'s, and run `npm ci --prefix web` first when
-  they diverge. The shipped shim does **not** do this — by design, so
-  CI failures stay loud.
-* **The "auto-install" the previous code reviewer flagged was a
-  misread of npm's docs.** Auto-install is a property of
-  `npm <verb> --prefix`, where `<verb>` is `install` / `ci`; for `run`,
-  npm never installs by itself.
 
 ## Pointing the Velox master at the build
 

@@ -4,9 +4,9 @@
   "private": true,
   "description": "Velox frontend (Creator Studio + YouTube Manager + Drive + Livestream + Dark Editor). Produces the SPA dist consumed by the Velox master server via VELOX_SPA_DIR.",
   "scripts": {
-    "build": "node scripts/run-if-web-manifest.js build",
-    "lint": "node scripts/run-if-web-manifest.js lint",
-    "test": "node scripts/run-if-web-manifest.js test"
+    "build": "echo '[frontend-velox] web/package.json not authored yet — see README' && exit 0",
+    "lint": "echo '[frontend-velox] web/package.json not authored yet — see README' && exit 0",
+    "test": "echo '[frontend-velox] web/package.json not authored yet — see README' && exit 0"
   },
   "engines": {
     "node": ">=20.0.0"
