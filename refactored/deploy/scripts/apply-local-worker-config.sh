@@ -29,7 +29,7 @@
 #   Both sides MUST opt in independently; partial opt-in is rejected.
 #
 # Environment safety contract:
-#   --environment=dev  →  --allow-insecure-grpc permitted freely (Tailscale / local).
+#   --environment=dev  →  --allow-insecure-grpc permitted freely (local dev only).
 #   --environment=prod →  --allow-insecure-grpc requires --force-insecure-production
 #                         AND `I_UNDERSTAND_INSECURE=1` in the env. Loud banner.
 #
