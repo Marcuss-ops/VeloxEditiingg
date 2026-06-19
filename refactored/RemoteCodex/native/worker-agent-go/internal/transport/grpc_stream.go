@@ -51,6 +51,7 @@ type GRPCStreamTransport struct {
 	closed      bool
 	closeCh     chan struct{}
 	closeOnce   sync.Once
+	recvDone    chan struct{} // closed by recvLoop on exit; Close() waits before closing recvCh
 	recvCh      chan controltransport.ControlMessage
 	errCh       chan error
 	errCloseOnce sync.Once
@@ -66,6 +67,7 @@ func NewGRPCStreamTransport(grpcURL, workerID string) *GRPCStreamTransport {
 		workerID: workerID,
 		state:    stateDisconnected,
 		closeCh:  make(chan struct{}),
+		recvDone: make(chan struct{}),
 		recvCh:   make(chan controltransport.ControlMessage, 64),
 		errCh:    make(chan error, 1),
 	}
@@ -203,13 +205,24 @@ func (t *GRPCStreamTransport) Receive(ctx context.Context) (<-chan controltransp
 // recvLoop reads typed MasterToWorkerEnvelope messages from the gRPC stream
 // and converts them to ControlMessage for the worker's receiveLoop.
 func (t *GRPCStreamTransport) recvLoop() {
-	defer t.errCloseOnce.Do(func() {
-		close(t.errCh)
-	})
+	defer func() {
+		// Publish the terminal error to errCh so the caller can diagnose the
+		// reason for the disconnect (previously the error was silently dropped).
+		t.errCloseOnce.Do(func() {
+			close(t.errCh)
+		})
+		// Signal that recvLoop has exited so Close() can safely close recvCh.
+		close(t.recvDone)
+	}()
 
 	for {
 		env, err := t.stream.Recv()
 		if err != nil {
+			// Non-blocking send of the error for diagnostics.
+			select {
+			case t.errCh <- err:
+			default:
+			}
 			return
 		}
 
@@ -257,13 +270,17 @@ func (t *GRPCStreamTransport) Close() error {
 	conn := t.conn
 	t.mu.Unlock()
 
-	// Signal recvLoop to stop
+	// Signal recvLoop to stop via closeCh BEFORE closing the receive channel.
+	// The recvLoop checks closeCh on every write to recvCh, so closing it
+	// first ensures the goroutine exits before we close recvCh.
 	t.closeOnce.Do(func() {
 		close(t.closeCh)
 	})
 
 	if stream != nil {
-		// Send typed Goodbye before closing
+		// Send typed Goodbye before closing — use sendMu to serialize with
+		// concurrent Send() calls and prevent a race on stream.Send().
+		t.sendMu.Lock()
 		goodbye := &pb.WorkerToMasterEnvelope{
 			MessageId:       fmt.Sprintf("goodbye-%s-%d", t.workerID, time.Now().UnixNano()),
 			WorkerId:        t.workerID,
@@ -275,10 +292,19 @@ func (t *GRPCStreamTransport) Close() error {
 		_, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = stream.Send(goodbye) // Best effort
+		t.sendMu.Unlock()
 		_ = stream.CloseSend()
 	}
 
-	// Close receive channel and error channel safely
+	// Wait for recvLoop to exit before closing recvCh, with a timeout in case
+	// the stream Recv() does not unblock promptly (e.g. in tests).
+	// closeCh signals recvLoop to stop sending, CloseSend makes Recv() return,
+	// and recvDone confirms the goroutine has fully exited.
+	select {
+	case <-t.recvDone:
+	case <-time.After(5 * time.Second):
+	}
+
 	if t.recvCh != nil {
 		close(t.recvCh)
 	}

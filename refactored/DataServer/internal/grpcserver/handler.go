@@ -93,6 +93,11 @@ type workerSession struct {
 	maxParallelJobs atomic.Int32
 	activeJobsCount atomic.Int32
 
+	// supportedJobTypes is updated by handleHeartbeat from the worker's
+	// capabilities and read by collectAllowedJobTypes under claimMu.
+	// atomic.Value avoids RWMutex overhead while remaining race-clean.
+	supportedJobTypes atomic.Value // []string
+
 	// Sequence numbers for replay protection (Issue 7 fix).
 	lastRecvSeq int64 // last received sequence number from worker
 }
@@ -195,6 +200,13 @@ func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMasterEnvelo
 	h.mu.Unlock()
 
 	log.Printf("[GRPC] Worker %s connected (session: %s, name: %s)", workerID, sessionID, hello.GetWorkerName())
+
+	// Extract supported_job_types from Hello capabilities for ClaimNext filtering.
+	if hello.GetCapabilities() != nil {
+		if types := extractSupportedJobTypes(hello.GetCapabilities().AsMap()); len(types) > 0 {
+			sess.supportedJobTypes.Store(types)
+		}
+	}
 
 	// Issue 7 fix: persist the session to SQLite worker_sessions table.
 	if h.dbStore != nil {
@@ -450,10 +462,11 @@ func StartGRPCServer(port int, handler *Handler, certFile, keyFile, caFile strin
 }
 
 // dispatchCommands reads pending commands from SQLite for the worker,
-// sends each as a typed Command via sendCh, and marks them as delivered.
-// Issue 5 fix: sends via sendCh instead of direct stream.Send().
+// sends each as a typed Command via sendCh, and marks only successfully
+// sent commands as delivered. Commands that fail to send remain in pending
+// state for retry on the next dispatch cycle.
 func (h *Handler) dispatchCommands(workerID string, sess *workerSession) {
-	cmds := h.cmdMgr.GetPendingCommandsAndMarkDelivered(workerID)
+	cmds := h.cmdMgr.GetPendingCommands(workerID)
 	if len(cmds) == 0 {
 		return
 	}
@@ -488,8 +501,17 @@ func (h *Handler) dispatchCommands(workerID string, sess *workerSession) {
 		}
 
 		// Issue 5 fix: send via sendCh — non-blocking (sessionWriter drains).
+		// Issue 3 fix: only mark as delivered AFTER a successful send.
 		if !safeSend(sess.sendCh, env) {
-			log.Printf("[GRPC] sendCh full/closed — dropping command %s for worker %s", cmd.CommandID, workerID)
+			log.Printf("[GRPC] sendCh full/closed — dropping command %s for worker %s (will retry)", cmd.CommandID, workerID)
+			continue
+		}
+
+		// Mark the command as delivered only after it has been successfully placed on the send channel.
+		if cmd.CommandID != "" {
+			if err := h.cmdMgr.MarkCommandDelivered(cmd.CommandID); err != nil {
+				log.Printf("[GRPC] Failed to mark command %s delivered: %v", cmd.CommandID, err)
+			}
 		}
 	}
 }

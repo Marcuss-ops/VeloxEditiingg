@@ -100,6 +100,10 @@ func New(cfg *config.WorkerConfig, version string) *Worker {
 		stageExecutor:      stageExecutor,
 		exitFunc:           os.Exit,
 	}
+
+	// Load persisted state from previous run (command dedup, job recovery info).
+	w.loadLocalState()
+
 	return w
 }
 

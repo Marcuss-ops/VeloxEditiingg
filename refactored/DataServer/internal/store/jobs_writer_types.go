@@ -56,6 +56,8 @@ type Job struct {
 	UpdatedAt   string    `json:"updated_at,omitempty"`
 	StartedAt   string    `json:"started_at,omitempty"`
 	CompletedAt string    `json:"completed_at,omitempty"`
+	RunID       string    `json:"run_id,omitempty"`
+	PayloadJSON string    `json:"-"`
 }
 
 // CreateJobParams is the input for JobRepository.CreateJob.

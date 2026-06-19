@@ -133,6 +133,17 @@ func (cm *CommandManager) AckCommandByID(workerID, commandID string) error {
 	return cm.store.AckCommandByID(workerID, commandID)
 }
 
+// MarkCommandDelivered marks a single command as delivered (pending → delivered)
+// by its command_id. Unlike GetPendingCommandsAndMarkDelivered, this marks
+// only one command at a time — the caller is responsible for only marking
+// commands that were successfully sent on the stream.
+func (cm *CommandManager) MarkCommandDelivered(commandID string) error {
+	if cm.store == nil {
+		return fmt.Errorf("no store")
+	}
+	return cm.store.MarkCommandDelivered(commandID)
+}
+
 // WorkerToken represents a temporary authentication token (kept for response shape).
 type WorkerToken struct {
 	WorkerID  string    `json:"worker_id"`

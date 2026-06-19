@@ -42,6 +42,8 @@ var jobProjectionColumns = []string{
 	"COALESCE(updated_at, '')",
 	"COALESCE(started_at, '')",
 	"COALESCE(completed_at, '')",
+	"COALESCE(run_id, '')",
+	"COALESCE(request_json, '{}')",
 }
 
 // scanJob reads one row in jobProjectionColumns order into a *Job.
@@ -54,6 +56,7 @@ func scanJob(row interface {
 		&j.AssignedTo, &j.LeaseID,
 		&j.Revision, &j.RetryCount, &j.MaxRetries,
 		&j.CreatedAt, &j.UpdatedAt, &j.StartedAt, &j.CompletedAt,
+		&j.RunID, &j.PayloadJSON,
 	)
 	if err != nil {
 		return nil, err

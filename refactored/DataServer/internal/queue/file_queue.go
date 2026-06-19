@@ -3,6 +3,7 @@ package queue
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -198,25 +199,47 @@ func (q *FileQueue) ClaimNextJob(ctx context.Context, workerID string, allowedJo
 	}
 	sj, err := q.lifecycle.Repo().GetJob(ctx, result.JobID)
 	if err != nil {
+		// Release the claim so the job is not left orphaned.
+		if releaseErr := q.lifecycle.Repo().ReleaseClaim(ctx, result.JobID); releaseErr != nil {
+			q.logEvent(result.JobID, "release_claim_failed", map[string]interface{}{
+				"error": releaseErr.Error(),
+			})
+		}
 		return nil, fmt.Errorf("post-claim job fetch: %w", err)
 	}
 	if sj == nil {
+		// Release the claim — job no longer exists.
+		if releaseErr := q.lifecycle.Repo().ReleaseClaim(ctx, result.JobID); releaseErr != nil {
+			q.logEvent(result.JobID, "release_claim_failed", map[string]interface{}{
+				"error": releaseErr.Error(),
+			})
+		}
 		return nil, nil
 	}
+
+	// Parse payload from the request_json column.
+	var payload map[string]interface{}
+	if sj.PayloadJSON != "" && sj.PayloadJSON != "{}" {
+		_ = json.Unmarshal([]byte(sj.PayloadJSON), &payload)
+	}
+
 	job := &Job{
-		JobID:      sj.JobID,
-		Status:     JobStatus(sj.Status),
-		VideoName:  sj.VideoName,
-		ProjectID:  sj.ProjectID,
-		AssignedTo: sj.AssignedTo,
-		LeaseID:    sj.LeaseID,
-		RetryCount: sj.RetryCount,
-		MaxRetries: sj.MaxRetries,
-		CreatedAt:  sj.CreatedAt,
-		UpdatedAt:  sj.UpdatedAt,
-		StartedAt:  sj.StartedAt,
+		JobID:       sj.JobID,
+		Status:      JobStatus(sj.Status),
+		VideoName:   sj.VideoName,
+		ProjectID:   sj.ProjectID,
+		AssignedTo:  sj.AssignedTo,
+		LeaseID:     sj.LeaseID,
+		RetryCount:  sj.RetryCount,
+		MaxRetries:  sj.MaxRetries,
+		CreatedAt:   sj.CreatedAt,
+		UpdatedAt:   sj.UpdatedAt,
+		StartedAt:   sj.StartedAt,
 		CompletedAt: sj.CompletedAt,
-		Attempt:    result.Attempt,
+		Attempt:     result.Attempt,
+		RunID:       sj.RunID,
+		Payload:     payload,
+		LeaseExpiry: result.LeaseExpires,
 	}
 	q.logEvent(job.JobID, "claimed", map[string]interface{}{
 		"worker_id": workerID,

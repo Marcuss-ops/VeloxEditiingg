@@ -165,6 +165,9 @@ func (w *Worker) runSession(ctx context.Context) bool {
 	w.wg.Add(1)
 	go w.receiveLoop(sessionCtx, recvCh)
 
+	// Start local persistence loop (saves seen commands + job metadata)
+	w.startPersistenceLoop(sessionCtx)
+
 	// P0 reconnect fix: also watch the error channel for stream failures
 	sessionEnded := false
 	select {
@@ -333,12 +336,58 @@ func (w *Worker) receiveLoop(ctx context.Context, recvCh <-chan controltransport
 
 			case controltransport.MsgConfigurationUpdate:
 				w.logger.Info("[RECEIVE] ConfigurationUpdate received")
+				configUpdate, ok := msg.TypedPayload.(*pb.ConfigurationUpdate)
+				if ok && configUpdate != nil && configUpdate.GetConfiguration() != nil {
+					cfgMap := configUpdate.GetConfiguration().AsMap()
+					if newMaxJobs, ok := cfgMap["max_parallel_jobs"]; ok {
+						switch v := newMaxJobs.(type) {
+						case float64:
+							w.config.MaxActiveJobs = int(v)
+							w.logger.Info("[CONFIG] MaxActiveJobs updated to %d", int(v))
+						case int:
+							w.config.MaxActiveJobs = v
+							w.logger.Info("[CONFIG] MaxActiveJobs updated to %d", v)
+						}
+					}
+					if newLogLevel, ok := cfgMap["log_level"].(string); ok && newLogLevel != "" {
+						w.config.LogLevel = newLogLevel
+						w.logger.Info("[CONFIG] LogLevel updated to %s", newLogLevel)
+					}
+					// Send a ConfigAck via transport so the master knows the config was applied
+					ackPayload := map[string]interface{}{
+						"worker_id":         w.config.WorkerID,
+						"max_parallel_jobs": w.config.MaxActiveJobs,
+						"log_level":         w.config.LogLevel,
+					}
+					ackMsg := controltransport.NewMessageWithPayload(
+						controltransport.MsgCommandAck,
+						w.config.WorkerID,
+						w.config.ProtocolVersion,
+						ackPayload,
+					)
+					ackCtx, ackCancel := context.WithTimeout(context.Background(), 30*time.Second)
+					defer ackCancel()
+					if ackErr := w.transport.Send(ackCtx, ackMsg); ackErr != nil {
+						w.logger.Warn("[CONFIG] Failed to ack ConfigurationUpdate: %v", ackErr)
+					}
+				}
 
 			case controltransport.MsgLeaseRevoked:
 				leaseRevoked, ok := msg.TypedPayload.(*pb.LeaseRevoked)
 				if ok && leaseRevoked != nil {
+					jobID := leaseRevoked.GetJobId()
 					w.logger.Warn("[RECEIVE] Lease revoked for job %s: %s",
-						leaseRevoked.GetJobId(), leaseRevoked.GetReason())
+						jobID, leaseRevoked.GetReason())
+					// Cancel the running job and remove from active list.
+					if jobID != "" {
+						w.cancelJob(jobID)
+						w.activeJobsMu.Lock()
+						delete(w.activeJobs, jobID)
+						w.activeJobsMu.Unlock()
+						w.pendingLeaseMu.Lock()
+						delete(w.pendingLeaseJobs, jobID)
+						w.pendingLeaseMu.Unlock()
+					}
 				}
 
 			case controltransport.MsgPing:

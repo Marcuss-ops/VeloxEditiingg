@@ -2,6 +2,7 @@ package grpcserver
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"time"
@@ -46,12 +47,19 @@ func (h *Handler) handleHeartbeat(workerID, sessionID string, hb *pb.Heartbeat) 
 	if sess != nil {
 		sess.activeJobsCount.Store(int32(hb.GetActiveJobsCount()))
 		if hb.GetExtra() != nil {
-			if mpj, ok := hb.GetExtra().AsMap()["max_parallel_jobs"]; ok {
+			extraMap := hb.GetExtra().AsMap()
+			if mpj, ok := extraMap["max_parallel_jobs"]; ok {
 				switch v := mpj.(type) {
 				case float64:
 					sess.maxParallelJobs.Store(int32(v))
 				case int64:
 					sess.maxParallelJobs.Store(int32(v))
+				}
+			}
+			// Extract supported_job_types from capabilities for ClaimNext filtering.
+			if caps, ok := extraMap["capabilities"].(map[string]interface{}); ok {
+				if types := extractSupportedJobTypes(caps); len(types) > 0 {
+					sess.supportedJobTypes.Store(types)
 				}
 			}
 		}
@@ -143,10 +151,13 @@ func (h *Handler) sendPushJobOffer(ctx context.Context, workerID string) {
 		}
 	}
 
+	// Collect supported job types from worker capabilities for filtering.
+	allowedJobTypes := h.collectAllowedJobTypes(sess)
+
 	// Use repo directly since ClaimNextJob was removed from LifecycleService
 	claimResult, err := h.lifecycleSvc.Repo().ClaimNext(ctx, store.ClaimParams{
 		WorkerID:        workerID,
-		AllowedJobTypes: nil,
+		AllowedJobTypes: allowedJobTypes,
 		Now:             time.Now().UTC(),
 	})
 	if err != nil {
@@ -159,30 +170,54 @@ func (h *Handler) sendPushJobOffer(ctx context.Context, workerID string) {
 	sj, err := h.lifecycleSvc.Repo().GetJob(ctx, claimResult.JobID)
 	if err != nil {
 		log.Printf("[GRPC] GetJob after claim failed for worker %s: %v", workerID, err)
+		// Release the claim so the job is not left orphaned.
+		if releaseErr := h.lifecycleSvc.Repo().ReleaseClaim(ctx, claimResult.JobID); releaseErr != nil {
+			log.Printf("[GRPC] Failed to release claim after GetJob error for %s: %v", claimResult.JobID, releaseErr)
+		}
 		return
 	}
 	if sj == nil {
+		// Release the claim — job no longer exists.
+		if releaseErr := h.lifecycleSvc.Repo().ReleaseClaim(ctx, claimResult.JobID); releaseErr != nil {
+			log.Printf("[GRPC] Failed to release claim after nil GetJob for %s: %v", claimResult.JobID, releaseErr)
+		}
 		return
 	}
+
+	// Parse payload from the request_json column.
+	var payload map[string]interface{}
+	if sj.PayloadJSON != "" && sj.PayloadJSON != "{}" {
+		_ = json.Unmarshal([]byte(sj.PayloadJSON), &payload)
+	}
+
 	job := &queue.Job{
-		JobID:      sj.JobID,
-		Status:     queue.JobStatus(sj.Status),
-		VideoName:  sj.VideoName,
-		ProjectID:  sj.ProjectID,
-		AssignedTo: sj.AssignedTo,
-		LeaseID:    sj.LeaseID,
-		RetryCount: sj.RetryCount,
-		MaxRetries: sj.MaxRetries,
-		CreatedAt:  sj.CreatedAt,
-		UpdatedAt:  sj.UpdatedAt,
-		StartedAt:  sj.StartedAt,
+		JobID:       sj.JobID,
+		Status:      queue.JobStatus(sj.Status),
+		VideoName:   sj.VideoName,
+		ProjectID:   sj.ProjectID,
+		AssignedTo:  sj.AssignedTo,
+		LeaseID:     sj.LeaseID,
+		RetryCount:  sj.RetryCount,
+		MaxRetries:  sj.MaxRetries,
+		CreatedAt:   sj.CreatedAt,
+		UpdatedAt:   sj.UpdatedAt,
+		StartedAt:   sj.StartedAt,
 		CompletedAt: sj.CompletedAt,
-		Attempt:    claimResult.Attempt,
+		Attempt:     claimResult.Attempt,
+		RunID:       sj.RunID,
+		Payload:     payload,
+		LeaseExpiry: claimResult.LeaseExpires,
 	}
 	// Build job payload struct from job.Payload map
 	var jobPayload *structpb.Struct
 	if job.Payload != nil {
 		jobPayload, _ = structpb.NewStruct(job.Payload)
+	}
+
+	// Parse LeaseExpiry for the proto message.
+	var leaseExpiryPB *timestamppb.Timestamp
+	if !claimResult.LeaseExpires.IsZero() {
+		leaseExpiryPB = timestamppb.New(claimResult.LeaseExpires)
 	}
 
 	// Parse CreatedAt timestamp if present
@@ -205,14 +240,15 @@ func (h *Handler) sendPushJobOffer(ctx context.Context, workerID string) {
 		ProtocolVersion: controltransport.ProtocolVersionCurrent,
 		Msg: &pb.MasterToWorkerEnvelope_JobOffer{
 			JobOffer: &pb.JobOffer{
-				JobId:      job.JobID,
-				RunId:      job.RunID,
-				VideoName:  job.VideoName,
-				CreatedAt:  createdAt,
-				LeaseId:    job.LeaseID,
-				Attempt:    int32(job.Attempt),
-				MaxRetries: int32(job.MaxRetries),
-				JobPayload: jobPayload,
+				JobId:        job.JobID,
+				RunId:        job.RunID,
+				VideoName:    job.VideoName,
+				CreatedAt:    createdAt,
+				LeaseId:      job.LeaseID,
+				LeaseExpiry:  leaseExpiryPB,
+				Attempt:      int32(job.Attempt),
+				MaxRetries:   int32(job.MaxRetries),
+				JobPayload:   jobPayload,
 			},
 		},
 	}
@@ -228,4 +264,50 @@ func (h *Handler) sendPushJobOffer(ctx context.Context, workerID string) {
 
 	// Issue 4 fix: store the offer under claimMu so we can match JobAccepted.
 	sess.pendingOffer = job
+}
+
+// collectAllowedJobTypes extracts supported_job_types from the worker's
+// capabilities stored in the session. Capabilities are received via the
+// Hello message during connection and refreshed via heartbeat Extra.
+// Returns nil (no filter) if no capabilities have been received yet — the
+// ClaimNext query handles nil as "no filter" which ensures backward compat
+// with workers that predate the supported_job_types capability.
+func (h *Handler) collectAllowedJobTypes(sess *workerSession) []string {
+	if sess == nil {
+		return nil
+	}
+	v := sess.supportedJobTypes.Load()
+	if v == nil {
+		return nil
+	}
+	types, ok := v.([]string)
+	if !ok || len(types) == 0 {
+		return nil
+	}
+	return types
+}
+
+// extractSupportedJobTypes parses a supported_job_types value from a
+// capabilities map extracted from protobuf Struct. structpb normalises
+// Go slices to []interface{}, so both Worker→Master paths (Hello
+// capabilities and heartbeat Extra) share this helper.
+func extractSupportedJobTypes(capsMap map[string]interface{}) []string {
+	sjt, ok := capsMap["supported_job_types"]
+	if !ok {
+		return nil
+	}
+	switch list := sjt.(type) {
+	case []interface{}:
+		types := make([]string, 0, len(list))
+		for _, item := range list {
+			if s, ok := item.(string); ok {
+				types = append(types, s)
+			}
+		}
+		return types
+	case []string:
+		// Safety net: proto-generated code may preserve []string in edge cases.
+		return list
+	}
+	return nil
 }

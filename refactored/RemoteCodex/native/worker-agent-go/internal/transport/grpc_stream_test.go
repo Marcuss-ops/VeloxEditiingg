@@ -551,7 +551,9 @@ func generateTestCertsDir(t *testing.T) string {
 
 // startTestMTLSServer creates a gRPC server with mTLS requiring client
 // certificates signed by the test CA. Certificates are generated dynamically.
-func startTestMTLSServer(t *testing.T, srv pb.WorkerControlServer) (*grpc.Server, string) {
+// Returns the certs directory so callers can configure client transport with
+// the same CA.
+func startTestMTLSServer(t *testing.T, srv pb.WorkerControlServer) (*grpc.Server, string, string) {
 	t.Helper()
 
 	certsDir := generateTestCertsDir(t)
@@ -592,16 +594,14 @@ func startTestMTLSServer(t *testing.T, srv pb.WorkerControlServer) (*grpc.Server
 		_ = gsrv.Serve(lis)
 	}()
 
-	return gsrv, lis.Addr().String()
+	return gsrv, lis.Addr().String(), certsDir
 }
 
 // TestGRPCStreamTransport_mTLS_Handshake verifies the full mTLS handshake.
 func TestGRPCStreamTransport_mTLS_Handshake(t *testing.T) {
 	ts := newTestStreamServer()
-	srv, addr := startTestMTLSServer(t, ts)
+	srv, addr, certsDir := startTestMTLSServer(t, ts)
 	defer srv.Stop()
-
-	certsDir := generateTestCertsDir(t)
 
 	transport := NewGRPCStreamTransport(addr, "test-worker-mtls-001")
 	if err := transport.WithTLS(
@@ -650,7 +650,7 @@ func TestGRPCStreamTransport_mTLS_Handshake(t *testing.T) {
 // certificate is rejected by the mTLS server.
 func TestGRPCStreamTransport_mTLS_NoClientCert(t *testing.T) {
 	ts := newTestStreamServer()
-	srv, addr := startTestMTLSServer(t, ts)
+	srv, addr, _ := startTestMTLSServer(t, ts)
 	defer srv.Stop()
 
 	// Transport WITHOUT TLS — uses insecure credentials
@@ -675,7 +675,7 @@ func TestGRPCStreamTransport_mTLS_NoClientCert(t *testing.T) {
 // certificate signed by a different CA is rejected.
 func TestGRPCStreamTransport_mTLS_WrongCA(t *testing.T) {
 	ts := newTestStreamServer()
-	srv, addr := startTestMTLSServer(t, ts)
+	srv, addr, certsDir := startTestMTLSServer(t, ts)
 	defer srv.Stop()
 
 	// Generate a self-signed cert NOT signed by the test CA
@@ -684,7 +684,6 @@ func TestGRPCStreamTransport_mTLS_WrongCA(t *testing.T) {
 	transport := NewGRPCStreamTransport(addr, "test-worker-wrongca")
 
 	// Trust the server's CA (needed to verify the server during handshake)
-	certsDir := generateTestCertsDir(t)
 	caPEM, err := os.ReadFile(filepath.Join(certsDir, "ca.crt"))
 	if err != nil {
 		t.Fatalf("Read CA cert: %v", err)
@@ -746,10 +745,8 @@ func generateSelfSignedCert(t *testing.T) tls.Certificate {
 // TestGRPCStreamTransport_mTLS_HeartbeatSend verifies heartbeat over mTLS.
 func TestGRPCStreamTransport_mTLS_HeartbeatSend(t *testing.T) {
 	ts := newTestStreamServer()
-	srv, addr := startTestMTLSServer(t, ts)
+	srv, addr, certsDir := startTestMTLSServer(t, ts)
 	defer srv.Stop()
-
-	certsDir := generateTestCertsDir(t)
 
 	transport := NewGRPCStreamTransport(addr, "test-worker-mtls-hb")
 	if err := transport.WithTLS(
