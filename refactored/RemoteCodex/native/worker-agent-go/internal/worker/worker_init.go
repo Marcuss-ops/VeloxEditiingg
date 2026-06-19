@@ -46,6 +46,13 @@ func New(cfg *config.WorkerConfig, version string) (*Worker, error) {
 			time.Duration(cfg.CircuitBreakerTimeoutSecs)*time.Second,
 		),
 	)
+	if token := strings.TrimSpace(os.Getenv("WORKER_TOKEN")); token != "" {
+		apiClient.SetAuthToken(token)
+		log.Info("[AUTH] Loaded worker token from WORKER_TOKEN")
+	} else if token := strings.TrimSpace(os.Getenv("VELOX_WORKER_TOKEN")); token != "" {
+		apiClient.SetAuthToken(token)
+		log.Info("[AUTH] Loaded worker token from VELOX_WORKER_TOKEN")
+	}
 
 	// Initialize stage executor for GOD workflow
 	stageExecCfg := &stageexec.StageExecutorConfig{
