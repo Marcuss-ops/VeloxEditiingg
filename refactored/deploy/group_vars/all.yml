@@ -30,11 +30,16 @@ velox_youtube_credentials_dir: /etc/velox/secrets/youtube/credentials
 # hostgroup in deploy/inventory/production.ini (1:1 mapping). Changing this
 # list without a matching inventory update will gate workers out of the fleet.
 #
-# Public-host topology: two remote workers plus the master host.
-# Keep this list in sync with deploy/inventory/production.ini.
+# Public-host topology: exactly TWO remote workers (canonical
+# production rule enforced by ValidateProductionWorkers). Real IDs
+# are injected at deploy time via the ansible vault
+# (deploy/group_vars/vault.yml → velox_allowed_workers override) or
+# the master env file. The versioned list below carries placeholders
+# ONLY; commits that ship real worker IDs/IPs/hostnames MUST be
+# reverted before merge.
 velox_allowed_workers:
-  - velox-worker-523925eb
-  - velox-worker-13197
+  - CHANGE_ME_WORKER_1
+  - CHANGE_ME_WORKER_2
 velox_max_job_attempts: 3
 velox_worker_heartbeat_timeout: 120
 
