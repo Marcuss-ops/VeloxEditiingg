@@ -619,7 +619,7 @@ func (r *SQLiteJobRepository) RecordRenderFinished(ctx context.Context, cmd Reco
 	// 4. Insert RENDER_FINISHED event (deduplicated by caller already,
 	//    but we insert unconditionally for audit trail).
 	_, err = tx.ExecContext(ctx,
-		`INSERT INTO job_events (job_id, event_type, created_at)
+		`INSERT INTO job_events (job_id, event, timestamp)
 		 VALUES (?, 'RENDER_FINISHED', ?)`,
 		cmd.JobID, nowStr,
 	)

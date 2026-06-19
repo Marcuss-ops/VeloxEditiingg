@@ -40,7 +40,7 @@ func (r *SQLiteJobRepository) insertEventTx(ctx context.Context, tx *sql.Tx, job
 		return fmt.Errorf("marshal event: %w", err)
 	}
 	_, err = tx.ExecContext(ctx,
-		`INSERT INTO job_events (timestamp, job_id, event_type, raw_json) VALUES (?, ?, ?, ?)`,
+		`INSERT INTO job_events (timestamp, job_id, event, raw_json) VALUES (?, ?, ?, ?)`,
 		time.Now().UTC().Format(time.RFC3339), jobID, eventType, string(raw),
 	)
 	return err
@@ -55,14 +55,14 @@ func (r *SQLiteJobRepository) insertHistoryTx(ctx context.Context, tx *sql.Tx, j
 		"message":   message,
 	})
 	_, err := tx.ExecContext(ctx,
-		`INSERT INTO job_history (job_id, status, worker_id, message, raw_json, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO job_history (job_id, status, worker_id, message, raw_json, event_ts) VALUES (?, ?, ?, ?, ?, ?)`,
 		jobID, status, workerID, message, string(raw), now,
 	)
 	if err != nil {
 		// Some migrations used different job_history column sets; fall back
 		// to a minimal row that uses the columns we know exist.
 		_, err = tx.ExecContext(ctx,
-			`INSERT INTO job_history (job_id, status, raw_json, created_at) VALUES (?, ?, ?, ?)`,
+			`INSERT INTO job_history (job_id, status, raw_json, event_ts) VALUES (?, ?, ?, ?)`,
 			jobID, status, string(raw), now,
 		)
 	}
