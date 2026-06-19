@@ -9,8 +9,11 @@ if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
 endif()
 
+# Release artifacts must run on every compatible host of the target
+# architecture. -march=native and -mtune=native bake the builder CPU feature
+# set into the binary and can cause illegal-instruction failures elsewhere.
 if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    add_compile_options(-O3 -march=native -mtune=native)
+    add_compile_options(-O3)
     add_link_options(-flto)
     set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE ON)
 endif()
