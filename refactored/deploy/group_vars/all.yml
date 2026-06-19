@@ -34,6 +34,7 @@ velox_youtube_credentials_dir: /etc/velox/secrets/youtube/credentials
 # To scale out: append new worker_ids here AND in the inventory.
 velox_allowed_workers:
   - velox-worker-1
+  - velox-worker-local
 velox_max_job_attempts: 3
 velox_worker_heartbeat_timeout: 120
 

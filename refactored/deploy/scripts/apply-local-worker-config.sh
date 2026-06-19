@@ -241,8 +241,8 @@ if [[ "$CONTROL_GRPC_URL" =~ ^https?:// ]]; then
   unset _stripped
 fi
 # Sanity post-normalization: must be host:port (no scheme, no path).
-[[ "$CONTROL_GRPC_URL" =~ ^[A-Za-z0-9._-]+:[0-9]+$ ]] \
-  || die "--control-grpc-url after normalization must be host:port (got: $CONTROL_GRPC_URL)" 64
+[[ "$CONTROL_GRPC_URL" =~ ^([A-Za-z0-9._-]+|\[[0-9a-fA-F:%.]+\]):[0-9]+$ ]] \
+  || die "--control-grpc-url after normalization must be host:port or [IPv6]:port (got: $CONTROL_GRPC_URL)" 64
 
 [[ -n "$MASTER_URL" ]]   || MASTER_URL="$CONTROL_GRPC_URL"
 

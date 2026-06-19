@@ -19,7 +19,10 @@ import (
 )
 
 // New creates a new Worker instance.
-func New(cfg *config.WorkerConfig, version string) *Worker {
+// Returns an error if the initial transport setup fails (bad TLS config,
+// missing control_grpc_url, insecure flag mismatch). Callers MUST check
+// the error before calling Start().
+func New(cfg *config.WorkerConfig, version string) (*Worker, error) {
 	logLevel := logger.ParseLevel(cfg.LogLevel)
 	recentLogs := newRecentLogBuffer(600)
 	logOut := io.MultiWriter(os.Stdout, recentLogs)
@@ -62,7 +65,7 @@ func New(cfg *config.WorkerConfig, version string) *Worker {
 	transportFactory := func() controltransport.ControlTransport {
 		t, err := newControlTransport(cfg, log)
 		if err != nil {
-			log.Error("[INIT] transport factory returned error: %v", err)
+			log.Error("[INIT] transport factory rejected config: %v", err)
 			return nil
 		}
 		return t
@@ -74,7 +77,7 @@ func New(cfg *config.WorkerConfig, version string) *Worker {
 		// immediately so operators do not enter the reconnect loop with a
 		// broken transport (previously this nil-panicked on first Connect).
 		log.Error("[INIT] initial transport setup failed: %v", err)
-		return nil
+		return nil, fmt.Errorf("transport factory: %w", err)
 	}
 
 	w := &Worker{
@@ -106,7 +109,7 @@ func New(cfg *config.WorkerConfig, version string) *Worker {
 	// Load persisted state from previous run (command dedup, job recovery info).
 	w.loadLocalState()
 
-	return w
+	return w, nil
 }
 
 const (

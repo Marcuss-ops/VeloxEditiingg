@@ -98,6 +98,7 @@ func main() {
 	logLevel := flag.String("log-level", "", "log level: debug, info, warn, error (overrides config)")
 	showVersion := flag.Bool("version", false, "show version and exit")
 	generateConfig := flag.Bool("generate-config", false, "generate a default config file and exit")
+	validateConfig := flag.Bool("validate-config", false, "validate config JSON (transport check) and exit")
 	flag.Parse()
 
 	// Show version and exit
@@ -226,7 +227,29 @@ func main() {
 	}
 
 	// Create worker
-	w := worker.New(cfg, resolvedVersion)
+	// Option A (2026-06 fix): New() returns (*Worker, error) — a bad TLS or
+	// insecure-flag misconfiguration is surfaced here instead of panicking
+	// during Start().
+
+	// --validate-config: validate and exit before starting the worker loop.
+	if *validateConfig {
+			// Branding line for human operators running docker run --rm ... --validate-config
+		fmt.Printf("velox-worker-agent version %s\n", Version)
+		w, vErr := worker.New(cfg, resolvedVersion)
+		if vErr != nil {
+			fmt.Fprintf(os.Stderr, "Validation FAILED: %v\n", vErr)
+			os.Exit(1)
+		}
+		_ = w
+		fmt.Printf("Configuration valid for worker %s\n", cfg.WorkerID)
+		os.Exit(0)
+	}
+
+	w, workerErr := worker.New(cfg, resolvedVersion)
+	if workerErr != nil {
+		logger.LogRegisterFailed("(initial)", cfg.MasterURL, workerErr)
+		os.Exit(1)
+	}
 
 	// Set up context with cancellation
 	ctx, cancel := context.WithCancel(context.Background())

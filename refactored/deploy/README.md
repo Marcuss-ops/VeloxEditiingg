@@ -26,6 +26,20 @@ deploy/
     └── rollback.yml                           ← restore last backup (PR C)
 ```
 
+## Mandatory env vars before first deploy
+
+Before running any playbook, ensure `/etc/velox-server.env` contains these
+critical variables (not just the defaults from the template):
+
+- **`MASTER_PUBLIC_URL`** — the URL clients and workers use to reach the
+  master. Must be a real, reachable hostname (Tailscale FQDN or public IP),
+  NOT the placeholder `velox-master.example.com`. Workers use this to call
+  back; the admin UI uses this for external access. If unset, workers and
+  clients cannot discover the master.
+
+- **`VELOX_ADMIN_TOKEN`** — the admin API token. Must NOT be the placeholder
+  `CHANGE_ME_set_admin_token_here`. Generated via `openssl rand -hex 32`.
+
 ## First-time setup
 
 1. **Inventory**: copy and edit.
