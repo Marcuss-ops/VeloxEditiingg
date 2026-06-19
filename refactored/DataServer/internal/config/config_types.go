@@ -33,7 +33,14 @@ type DatabaseConfig struct {
 
 // WorkersConfig holds worker management settings.
 type WorkersConfig struct {
-	AllowedWorkers      string
+	// AllowedWorkers is the raw VELOX_ALLOWED_WORKERS CSV string,
+	// kept for compatibility with the legacy AllowlistAuthorizer.
+	AllowedWorkers string
+	// AllowedWorkerIDs is the parsed, deduped-against-empty slice
+	// of worker IDs the master admits. This is the canonical input
+	// to ValidateProductionWorkers — the raw CSV is only kept so we
+	// can echo it back in the gRPC HandlerConfig unchanged.
+	AllowedWorkerIDs    []string
 	ForceSingleWorker   string
 	AllowlistRegistered bool
 	MaxJobAttempts      int
