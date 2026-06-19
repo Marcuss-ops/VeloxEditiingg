@@ -211,7 +211,13 @@ func (t *GRPCStreamTransport) recvLoop() {
 		t.errCloseOnce.Do(func() {
 			close(t.errCh)
 		})
-		// Signal that recvLoop has exited so Close() can safely close recvCh.
+		// Gap #6 fix: only recvLoop closes recvCh — Close() must not touch it.
+		// This prevents "send on closed channel" panics when Close() races
+		// with recvLoop writing to recvCh.
+		if t.recvCh != nil {
+			close(t.recvCh)
+		}
+		// Signal that recvLoop has exited so Close() can proceed.
 		close(t.recvDone)
 	}()
 
@@ -296,18 +302,16 @@ func (t *GRPCStreamTransport) Close() error {
 		_ = stream.CloseSend()
 	}
 
-	// Wait for recvLoop to exit before closing recvCh, with a timeout in case
+	// Wait for recvLoop to exit before returning, with a timeout in case
 	// the stream Recv() does not unblock promptly (e.g. in tests).
 	// closeCh signals recvLoop to stop sending, CloseSend makes Recv() return,
 	// and recvDone confirms the goroutine has fully exited.
+	// Gap #6 fix: do NOT close recvCh here — only recvLoop's defer does that.
 	select {
 	case <-t.recvDone:
 	case <-time.After(5 * time.Second):
 	}
 
-	if t.recvCh != nil {
-		close(t.recvCh)
-	}
 	t.errCloseOnce.Do(func() {
 		close(t.errCh)
 	})

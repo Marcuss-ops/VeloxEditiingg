@@ -63,6 +63,16 @@ type HandlerConfig struct {
 	AllowInsecure bool // Dev-only: allow insecure gRPC connections (VELOX_GRPC_ALLOW_INSECURE_DEV)
 }
 
+// outboundMessage wraps a protobuf envelope with optional callbacks
+// for the sessionWriter. OnSent is called after a successful stream.Send;
+// nil means no callback. This enables #1 fix: commands are marked delivered
+// only after the real network write, not after safeSend puts them in the
+// in-memory channel.
+type outboundMessage struct {
+	Envelope *pb.MasterToWorkerEnvelope
+	OnSent   func() // Called after successful stream.Send; nil if not needed
+}
+
 // workerSession tracks a single worker's gRPC stream connection.
 type workerSession struct {
 	workerID  string
@@ -74,7 +84,7 @@ type workerSession struct {
 
 	// Serialized output: all stream.Send() calls go through sendCh → sessionWriter.
 	// No other goroutine may call stream.Send() directly.
-	sendCh chan *pb.MasterToWorkerEnvelope
+	sendCh chan *outboundMessage
 
 	// writerErr is a small (cap 1) channel used by sessionWriter to signal
 	// a stream.Send() failure back to the Stream() main loop. Phase 4.2
@@ -180,7 +190,7 @@ func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMasterEnvelo
 	sessionCtx, sessionCancel := context.WithCancel(context.Background())
 
 	// Issue 5 fix: create the send channel (buffered to avoid blocking producers).
-	sendCh := make(chan *pb.MasterToWorkerEnvelope, 64)
+	sendCh := make(chan *outboundMessage, 64)
 
 	// Register session — keyed by sessionID to prevent defer from deleting a newer session.
 	h.mu.Lock()
@@ -232,6 +242,17 @@ func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMasterEnvelo
 		// At this point no goroutine should be sending on sendCh.
 		close(sendCh)
 
+		// Gap #2 fix: release any pending offer that was not accepted/rejected
+		// so the job doesn't stay leased until lease expiry.
+		sess.claimMu.Lock()
+		if sess.pendingOffer != nil {
+			if releaseErr := h.lifecycleSvc.Repo().ReleaseClaim(context.Background(), sess.pendingOffer.JobID); releaseErr != nil {
+				log.Printf("[GRPC] Failed to release pendingOffer for job %s on session teardown: %v", sess.pendingOffer.JobID, releaseErr)
+			}
+			sess.pendingOffer = nil
+		}
+		sess.claimMu.Unlock()
+
 		h.mu.Lock()
 		if currentSID, ok := h.workerSessions[workerID]; ok && currentSID == sessionID {
 			delete(h.workerSessions, workerID)
@@ -271,7 +292,7 @@ func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMasterEnvelo
 		ProtocolVersion: controltransport.ProtocolVersionCurrent,
 		Msg:             &pb.MasterToWorkerEnvelope_HelloAck{HelloAck: &pb.HelloAck{}},
 	}
-	if !safeSend(sendCh, ack) {
+	if !safeSend(sendCh, &outboundMessage{Envelope: ack}) {
 		return fmt.Errorf("stream: sendCh full for hello_ack")
 	}
 
@@ -332,6 +353,15 @@ func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMasterEnvelo
 			if h.dbStore != nil {
 				_ = h.dbStore.RevokeSession(sessionID)
 			}
+			// Gap #2 fix: release pendingOffer so the job doesn't stay leased.
+			sess.claimMu.Lock()
+			if sess.pendingOffer != nil {
+				if releaseErr := h.lifecycleSvc.Repo().ReleaseClaim(context.Background(), sess.pendingOffer.JobID); releaseErr != nil {
+					log.Printf("[GRPC] Failed to release pendingOffer for job %s on writer failure: %v", sess.pendingOffer.JobID, releaseErr)
+				}
+				sess.pendingOffer = nil
+			}
+			sess.claimMu.Unlock()
 			return fmt.Errorf("stream: writer failure: %w", err)
 
 		case err := <-recvErrCh:
@@ -501,17 +531,23 @@ func (h *Handler) dispatchCommands(workerID string, sess *workerSession) {
 		}
 
 		// Issue 5 fix: send via sendCh — non-blocking (sessionWriter drains).
-		// Issue 3 fix: only mark as delivered AFTER a successful send.
-		if !safeSend(sess.sendCh, env) {
+		// Issue 3 fix: only mark as delivered AFTER a successful stream.Send
+		// via the OnSent callback (gap #1 fix — the real write happens in
+		// sessionWriter, not here).
+		cmdID := cmd.CommandID // capture for closure
+		out := &outboundMessage{
+			Envelope: env,
+			OnSent: func() {
+				if cmdID != "" {
+					if err := h.cmdMgr.MarkCommandDelivered(cmdID); err != nil {
+						log.Printf("[GRPC] Failed to mark command %s delivered: %v", cmdID, err)
+					}
+				}
+			},
+		}
+		if !safeSend(sess.sendCh, out) {
 			log.Printf("[GRPC] sendCh full/closed — dropping command %s for worker %s (will retry)", cmd.CommandID, workerID)
 			continue
-		}
-
-		// Mark the command as delivered only after it has been successfully placed on the send channel.
-		if cmd.CommandID != "" {
-			if err := h.cmdMgr.MarkCommandDelivered(cmd.CommandID); err != nil {
-				log.Printf("[GRPC] Failed to mark command %s delivered: %v", cmd.CommandID, err)
-			}
 		}
 	}
 }
@@ -535,6 +571,17 @@ func (h *Handler) closeOldSessionLocked(workerID string) {
 		if oldSess.cancel != nil {
 			oldSess.cancel()
 		}
+		// Gap #2: release any pendingOffer held by the old session
+		// so the claim is returned promptly on reconnect, not just
+		// when the old defer eventually runs.
+		oldSess.claimMu.Lock()
+		if oldSess.pendingOffer != nil {
+			if releaseErr := h.lifecycleSvc.Repo().ReleaseClaim(context.Background(), oldSess.pendingOffer.JobID); releaseErr != nil {
+				log.Printf("[GRPC] Failed to release old pendingOffer for job %s during reconnect: %v", oldSess.pendingOffer.JobID, releaseErr)
+			}
+			oldSess.pendingOffer = nil
+		}
+		oldSess.claimMu.Unlock()
 		// Issue 7 fix: revoke the old session in SQLite.
 		if h.dbStore != nil {
 			_ = h.dbStore.RevokeSession(oldSID)
@@ -554,7 +601,11 @@ func (h *Handler) isCurrentSession(workerID, sessionID string) bool {
 }
 
 // sessionWriter is the sole goroutine allowed to call stream.Send().
-// All message producers write to sendCh; this goroutine drains and sends.
+// All message producers write outboundMessage values to sendCh; this
+// goroutine drains and sends. OnSent callbacks are invoked after a
+// successful stream.Send so that producers can confirm delivery only
+// after the real network write.
+//
 // Exits when sendCh is closed (signaling session teardown) OR when a
 // stream.Send() failure surfaces the error to the main loop via writerErr.
 //
@@ -563,8 +614,8 @@ func (h *Handler) isCurrentSession(workerID, sessionID string) bool {
 // drain the channel before exiting so producers do not block on a full
 // sendCh during the close sequence.
 func (h *Handler) sessionWriter(sess *workerSession) {
-	for env := range sess.sendCh {
-		if err := sess.stream.Send(env); err != nil {
+	for out := range sess.sendCh {
+		if err := sess.stream.Send(out.Envelope); err != nil {
 			log.Printf("[GRPC] sessionWriter send error for worker %s (session %s): %v",
 				sess.workerID, sess.sessionID, err)
 			// Best-effort publish (cap 1, non-blocking).
@@ -575,20 +626,26 @@ func (h *Handler) sessionWriter(sess *workerSession) {
 			// Fast-drain remaining messages so producers attached to sendCh
 			// are not blocked as the main loop winds down. We do NOT attempt
 			// to resend them — they belong to a session that is about to die.
+			// OnSent callbacks are NOT invoked for drained messages so
+			// commands remain pending for retry on next dispatch cycle.
 			for range sess.sendCh {
 			}
 			break
+		}
+		// Call OnSent callback after successful send (gap #1 fix).
+		if out.OnSent != nil {
+			out.OnSent()
 		}
 	}
 	log.Printf("[GRPC] sessionWriter exiting for worker %s (session %s)", sess.workerID, sess.sessionID)
 }
 
-// safeSend attempts to send an envelope on the channel, returning true on success.
+// safeSend attempts to send an outboundMessage on the channel, returning true on success.
 // Returns false if the channel is full or closed (uses recover to handle closed channel panic).
-func safeSend(ch chan *pb.MasterToWorkerEnvelope, env *pb.MasterToWorkerEnvelope) bool {
+func safeSend(ch chan *outboundMessage, out *outboundMessage) bool {
 	defer func() { recover() }()
 	select {
-	case ch <- env:
+	case ch <- out:
 		return true
 	default:
 		return false

@@ -343,9 +343,11 @@ func (w *Worker) receiveLoop(ctx context.Context, recvCh <-chan controltransport
 						switch v := newMaxJobs.(type) {
 						case float64:
 							w.config.MaxActiveJobs = int(v)
+							w.concurrencyLimiter.SetMaxActiveJobs(int(v))
 							w.logger.Info("[CONFIG] MaxActiveJobs updated to %d", int(v))
 						case int:
 							w.config.MaxActiveJobs = v
+							w.concurrencyLimiter.SetMaxActiveJobs(v)
 							w.logger.Info("[CONFIG] MaxActiveJobs updated to %d", v)
 						}
 					}
@@ -353,8 +355,12 @@ func (w *Worker) receiveLoop(ctx context.Context, recvCh <-chan controltransport
 						w.config.LogLevel = newLogLevel
 						w.logger.Info("[CONFIG] LogLevel updated to %s", newLogLevel)
 					}
-					// Send a ConfigAck via transport so the master knows the config was applied
+					// Gap #5 fix: send ack with the command_id from the
+					// envelope MessageId (ConfigurationUpdate proto has no
+					// dedicated command_id field). The master can match this
+					// via the CommandAck.CommandId field.
 					ackPayload := map[string]interface{}{
+						"command_id":        msg.MessageID,
 						"worker_id":         w.config.WorkerID,
 						"max_parallel_jobs": w.config.MaxActiveJobs,
 						"log_level":         w.config.LogLevel,

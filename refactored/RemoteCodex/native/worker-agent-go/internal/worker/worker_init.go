@@ -113,6 +113,12 @@ const (
 )
 
 func commandKey(cmd api.WorkerCommand) string {
+	// Gap #4 fix: use CommandID as primary dedup key when available;
+	// fall back to command+timestamp for backward compatibility.
+	cid := strings.TrimSpace(cmd.CommandID)
+	if cid != "" {
+		return "id:" + cid
+	}
 	ts := strings.TrimSpace(cmd.Timestamp)
 	if ts == "" {
 		ts = "no-timestamp"

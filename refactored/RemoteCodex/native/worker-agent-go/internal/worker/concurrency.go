@@ -92,6 +92,18 @@ func (cl *ConcurrencyLimiter) MaxActiveJobs() int {
 	return cl.maxActiveJobs
 }
 
+// SetMaxActiveJobs updates the maximum concurrent jobs limit at runtime.
+// The semaphore size is fixed at construction; this method updates the
+// logical limit used by Acquire/CanAcceptJob for rejection decisions.
+func (cl *ConcurrencyLimiter) SetMaxActiveJobs(max int) {
+	if max <= 0 {
+		max = 1
+	}
+	cl.mu.Lock()
+	cl.maxActiveJobs = max
+	cl.mu.Unlock()
+}
+
 // shouldReject determines if a job should be rejected based on priority.
 func (cl *ConcurrencyLimiter) shouldReject(priority int) bool {
 	// Critical jobs (priority 3) are never rejected

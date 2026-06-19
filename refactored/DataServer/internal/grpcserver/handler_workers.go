@@ -254,7 +254,7 @@ func (h *Handler) sendPushJobOffer(ctx context.Context, workerID string) {
 	}
 
 	// Issue 5 fix: send via sendCh instead of direct stream.Send().
-	if !safeSend(sess.sendCh, env) {
+	if !safeSend(sess.sendCh, &outboundMessage{Envelope: env}) {
 		log.Printf("[GRPC] sendCh full/closed for JobOffer to worker %s — releasing claim", workerID)
 		if releaseErr := h.lifecycleSvc.Repo().ReleaseClaim(ctx, job.JobID); releaseErr != nil {
 			log.Printf("[GRPC] Failed to release claim for job %s after send failure: %v", job.JobID, releaseErr)

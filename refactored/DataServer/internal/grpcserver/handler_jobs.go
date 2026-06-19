@@ -191,7 +191,7 @@ func (h *Handler) handleJobAccepted(workerID string, ja *pb.JobAccepted) {
 		},
 	}
 
-	if !safeSend(sess.sendCh, env) {
+	if !safeSend(sess.sendCh, &outboundMessage{Envelope: env}) {
 		// Phase 4.2 hardening: when we cannot deliver JobLeaseGranted the
 		// job must NOT stay LEASED with a stale pendingOffer. Release the
 		// claim so the job returns to PENDING (or another worker can claim).

@@ -97,15 +97,28 @@ func (w *Worker) saveLocalState() error {
 	}
 	w.pendingLeaseMu.Unlock()
 
+	path := stateFilePath(workDir)
+	tmpPath := path + ".tmp"
+
 	data, err := json.Marshal(state)
 	if err != nil {
 		w.logger.Warn("[PERSIST] Failed to marshal state: %v", err)
 		return err
 	}
 
-	path := stateFilePath(workDir)
-	if err := os.WriteFile(path, data, 0600); err != nil {
-		w.logger.Warn("[PERSIST] Failed to write state file %s: %v", path, err)
+	// Atomic write: tmp → fsync → rename prevents JSON corruption on crash.
+	if err := os.WriteFile(tmpPath, data, 0600); err != nil {
+		w.logger.Warn("[PERSIST] Failed to write tmp file %s: %v", tmpPath, err)
+		return err
+	}
+	if f, err := os.OpenFile(tmpPath, os.O_RDWR, 0600); err == nil {
+		if syncErr := f.Sync(); syncErr != nil {
+			w.logger.Warn("[PERSIST] Sync failed for tmp file %s: %v", tmpPath, syncErr)
+		}
+		f.Close()
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		w.logger.Warn("[PERSIST] Failed to rename tmp → state file %s: %v", path, err)
 		return err
 	}
 	w.logger.Debug("[PERSIST] State saved to %s (%d seen commands, %d active jobs, %d pending leases)",
