@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"velox-server/internal/store"
 )
@@ -185,7 +186,35 @@ func (s *Service) Finalize(ctx context.Context, cmd FinalizeArtifactCommand) (*s
 		VerifiedAt: s.clock.Now(),
 	})
 	if err != nil {
-		return nil, err
+		if isArtifactStorageKeyConflict(err) {
+			altStorageKey, keyErr := makeDuplicateStorageKey(storageKey, session.ArtifactID)
+			if keyErr != nil {
+				return nil, err
+			}
+			if dupErr := s.materializeDuplicateFinalBlob(storageKey, altStorageKey); dupErr != nil {
+				return nil, fmt.Errorf("artifacts: duplicate final blob fallback: %w", dupErr)
+			}
+			out, err = s.finRepo.FinalizeVerified(ctx, FinalizeVerifiedCommand{
+				UploadID:         cmd.UploadID,
+				ArtifactID:       session.ArtifactID,
+				JobID:            cmd.JobID,
+				WorkerID:         cmd.WorkerID,
+				LeaseID:          cmd.LeaseID,
+				AttemptNumber:    session.AttemptNumber,
+				ExpectedRevision: session.ExpectedRevision,
+
+				StorageProvider: "local",
+				StorageKey:      altStorageKey,
+				SHA256:          receivedSHA,
+				SizeBytes:       receivedSize,
+				MIMEType:        mimeType,
+
+				VerifiedAt: s.clock.Now(),
+			})
+		}
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	// NOTE: the FINALIZING → COMPLETED flip happens INSIDE
@@ -195,6 +224,63 @@ func (s *Service) Finalize(ctx context.Context, cmd FinalizeArtifactCommand) (*s
 	// FINALIZING forever, blocking retries even though the underlying
 	// jobs/artifacts/attempts are already SUCCEEDED.
 	return out, nil
+}
+
+func isArtifactStorageKeyConflict(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(err.Error(), "UNIQUE constraint failed: artifacts.storage_provider, artifacts.storage_key")
+}
+
+func makeDuplicateStorageKey(storageKey, artifactID string) (string, error) {
+	storageKey = strings.TrimSpace(storageKey)
+	artifactID = strings.TrimSpace(artifactID)
+	if storageKey == "" {
+		return "", fmt.Errorf("artifacts: duplicate storage key fallback requires storage key")
+	}
+	if artifactID == "" {
+		return "", fmt.Errorf("artifacts: duplicate storage key fallback requires artifact id")
+	}
+	ext := filepath.Ext(storageKey)
+	base := strings.TrimSuffix(storageKey, ext)
+	return base + ".dup-" + artifactID + ext, nil
+}
+
+func (s *Service) materializeDuplicateFinalBlob(sourceStorageKey, targetStorageKey string) error {
+	if s == nil || s.blobStore == nil {
+		return fmt.Errorf("blob store unavailable")
+	}
+	sourcePath := filepath.Join(s.blobStore.FinalDir(), filepath.FromSlash(sourceStorageKey))
+	targetPath := filepath.Join(s.blobStore.FinalDir(), filepath.FromSlash(targetStorageKey))
+	if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
+		return err
+	}
+	if _, err := os.Stat(targetPath); err == nil {
+		return nil
+	}
+	if err := os.Link(sourcePath, targetPath); err == nil {
+		return nil
+	}
+	src, err := os.Open(sourcePath)
+	if err != nil {
+		return err
+	}
+	defer src.Close()
+	dst, err := os.Create(targetPath)
+	if err != nil {
+		return err
+	}
+	defer dst.Close()
+	if _, err := io.Copy(dst, src); err != nil {
+		_ = os.Remove(targetPath)
+		return err
+	}
+	if err := dst.Sync(); err != nil {
+		_ = os.Remove(targetPath)
+		return err
+	}
+	return nil
 }
 
 // detectMIME sniffs the first 512 bytes and returns the canonical mime
