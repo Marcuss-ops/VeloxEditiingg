@@ -17,6 +17,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 
 	"velox-server/internal/outbox"
+	"velox-server/internal/platform/database"
 	"velox-server/internal/store/migrations"
 )
 
@@ -77,7 +78,166 @@ func (s *SQLiteStore) emitOutbox(ctx context.Context, txn outbox.Executor, p out
 	return nil
 }
 
+// sqliteTunePragmas lists the runtime PRAGMAs applied post-init to
+// each pooled connection. Connection-init-level PRAGMAs (_busy_timeout
+// and _journal_mode) are appended to the SQLite DSN inside
+// platform/database.openSQLite so they fire on every spawned
+// connection — runtime db.Exec PRAGMAs only affect the single
+// connection that ran them, never the others in the pool. The
+// distinction is non-trivial for MaxOpenConns>=2 deployments where
+// concurrent writers from different connections would otherwise get
+// busy_timeout=0 and immediately throw SQLITE_BUSY.
+//
+// page_size is included for historical parity with the legacy
+// NewSQLiteStore call sequence; it is a no-op at runtime once the
+// database is created and stays here only for diff minimisation.
+var sqliteTunePragmas = []string{
+	"PRAGMA synchronous = NORMAL",      // Faster writes, safe with WAL
+	"PRAGMA cache_size = -16000",       // 16MB cache (negative = KB)
+	"PRAGMA temp_store = MEMORY",       // In-memory temp tables
+	"PRAGMA mmap_size = 268435456",     // 256MB memory-mapped I/O
+	"PRAGMA page_size = 4096",          // Larger pages for better I/O (no-op at runtime)
+	"PRAGMA foreign_keys = ON",         // Enforce referential integrity
+	"PRAGMA wal_autocheckpoint = 1000", // Checkpoint every 1000 pages
+}
+
+// sqliteStorePoolSize returns the (max-open, max-idle, conn-max-
+// lifetime) defaults the legacy NewSQLiteStore applied after
+// `sql.Open`. Used when constructing an internal Config for the
+// SQLiteStore path so production retains the historically-tested
+// tuning without leaking Velox-specific opinions into
+// platform/database (which uses conservative 1/1/1h defaults).
+func sqliteStorePoolSize() (int, int, time.Duration) {
+	return 4, 2, 5 * time.Minute
+}
+
+// NewSQLiteStoreFromHandle builds a *SQLiteStore from an already-open
+// *database.Handle. The Handle is the canonical entry point for the
+// platform/database abstraction; production bootstrap (cmd/server/
+// bootstrap.go) calls platform/database.Open for both SQLite and
+// Postgres backends and routes to this constructor when Handle.Driver
+// is DriverSQLite. The 30-or-so test callers of NewSQLiteStore(path)
+// still go through NewSQLiteStore (which now delegates to
+// platform/database.Open then this function), so the SQLite god-object
+// is wired exactly once across the entire codebase.
+//
+// The handle is taken by reference so the caller retains Close()
+// ownership — bootstrap owns the connection lifetime so teardown can
+// sequence against the background goroutines that share ctx.
+//
+// MigrateOnStart gates the schema bootstrap at boot. The flag's intent
+// is orthogonal to the driver dispatch in bootstrap.go (driver = sqlite
+// vs postgres is decided by VELOX_DB_DRIVER; migration opt-in/out is
+// decided by VELOX_DB_MIGRATE_ON_START). Two paths fall out:
+//
+//   - migrateOnStart == true (legacy default, tests, default for ops
+//     who do NOT run an external migration tool): run
+//     migrations.RunMigrations + postMigrationAdjustments. The runner
+//     is idempotent (checksums + schema_migrations tracking prevent
+//     double-apply) so a caller that previously held the DB open sees
+//     no change on subsequent opens.
+//
+//   - migrateOnStart == false (forward-only tool mode, when an external
+//     tool like Atlas / goose / sql-migrate / a hand-rolled Ansible
+//     playbook owns the schema): skip both. The store still boots;
+//     schema_migrations is queried via AppliedVersions and the result
+//     is logged so operators running an external tool can see what
+//     version is in the DB at boot. Errors at first SQL execution
+//     from a stale or partial schema are surfaced naturally via the
+//     underlying SQLite calls.
+func NewSQLiteStoreFromHandle(handle *database.Handle, path string, migrateOnStart bool) (*SQLiteStore, error) {
+	if handle == nil || handle.DB == nil {
+		return nil, fmt.Errorf("store: nil sqlite handle")
+	}
+	if handle.Driver != database.DriverSQLite {
+		return nil, fmt.Errorf("store: NewSQLiteStoreFromHandle requires driver=sqlite, got %q", handle.Driver)
+	}
+	db := handle.DB
+
+	// Apply runtime tuning PRAGMAs. Connection-init PRAGMAs
+	// (_busy_timeout, _journal_mode) are already on the DSN. We DO
+	// NOT apply any BEGIN IMMEDIATE-style lock here because the
+	// Mattn driver + MaxOpenConns=4 retains pooled connections; a
+	// silent exclusivity upgrade would break concurrent reads.
+	for _, pragma := range sqliteTunePragmas {
+		if _, err := db.Exec(pragma); err != nil {
+			// Non-fatal, preserve legacy NewSQLiteStore's tolerance.
+			log.Printf("SQLite PRAGMA failed: %s - %v", pragma, err)
+		}
+	}
+
+	s := &SQLiteStore{db: db, path: path}
+
+	if !migrateOnStart {
+		// Forward-only tool mode: an external tool owns the schema.
+		// Log current applied version (or "untouched DB") so operators
+		// running with a real migration tool can see what version is
+		// in the DB at boot. The runner is intentionally NOT invoked
+		// and postMigrationAdjustments is intentionally NOT invoked.
+		logSQLiteForwardOnlySummary(db, path)
+		return s, nil
+	}
+
+	// Run schema migrations. The runner is idempotent (checksums +
+	// schema_migrations tracking prevent double-apply) so a caller
+	// that previously held the DB open sees no change on subsequent
+	// opens.
+	if err := migrations.RunMigrations(db, migrationsFS, "sqlite", migrations.DialectSQLite); err != nil {
+		return nil, fmt.Errorf("store: run migrations: %w", err)
+	}
+
+	// Post-migration schema adjustments (ensureColumn for existing columns).
+	if err := s.postMigrationAdjustments(); err != nil {
+		return nil, fmt.Errorf("store: post-migration: %w", err)
+	}
+
+	return s, nil
+}
+
+// logSQLiteForwardOnlySummary logs the current applied migration
+// versions when boot is in forward-only tool mode. Forward-only mode
+// means an external tool owns schema state; this summary lets operators
+// running that tool see what version the master booted against. If the
+// schema_migrations table does not exist (the DB has never been touched
+// by Velox), a one-line notice is logged instead so the operator knows
+// they need to run their external migration tool against a fresh DB.
+//
+// Errors querying schema_migrations are logged as "unable to read" but
+// are NOT returned — forward-only mode is a trust-the-operator posture,
+// and bailing out of boot on a metadata read failure would block
+// operators whose external tool doesn't track versions in exactly the
+// way Velox does.
+func logSQLiteForwardOnlySummary(db *sql.DB, path string) {
+	versions, err := migrations.AppliedVersions(db)
+	if err != nil {
+		// Includes the no-such-table case for a brand-new DB.
+		log.Printf("[STORE] forward-only schema mode (path=%s): schema_migrations unreadable — %v — "+
+			"verify your external migration tool has applied the expected schema",
+			path, err)
+		return
+	}
+	if len(versions) == 0 {
+		log.Printf("[STORE] forward-only schema mode (path=%s): schema_migrations empty — "+
+			"verify your external migration tool has applied the expected schema",
+			path)
+		return
+	}
+	log.Printf("[STORE] forward-only schema mode (path=%s): applied migration versions = %v "+
+		"(skip of NewSQLiteStoreFromHandle's own migrations; post-migration adjustments also skipped)",
+		path, versions)
+}
+
 func NewSQLiteStore(path string) (*SQLiteStore, error) {
+	return NewSQLiteStoreFromPath(path, true)
+}
+
+// NewSQLiteStoreFromPath is the migration-aware variant of NewSQLiteStore.
+// It exists so tests that need to opt out of the embedded migration runner
+// (forward-only tool mode for the same DB) can do so without bypassing
+// the platform/database.Open / NewSQLiteStoreFromHandle composition.
+// Default callers (production boot, ~30 test suites) should continue to
+// use NewSQLiteStore(path) which preserves migrateOnStart=true semantics.
+func NewSQLiteStoreFromPath(path string, migrateOnStart bool) (*SQLiteStore, error) {
 	if path == "" {
 		return nil, fmt.Errorf("store: empty sqlite path")
 	}
@@ -85,59 +245,19 @@ func NewSQLiteStore(path string) (*SQLiteStore, error) {
 		return nil, fmt.Errorf("store: create directory: %w", err)
 	}
 
-	db, err := sql.Open("sqlite3", path+"?_busy_timeout=5000&_journal_mode=WAL")
+	legacyOpen, legacyIdle, legacyLifetime := sqliteStorePoolSize()
+	ctx := context.Background()
+	handle, err := database.Open(ctx, database.Config{
+		Driver:          database.DriverSQLite,
+		SQLitePath:      path,
+		MaxOpenConns:    legacyOpen,
+		MaxIdleConns:    legacyIdle,
+		ConnMaxLifetime: legacyLifetime,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("store: open database: %w", err)
 	}
-	if err := db.Ping(); err != nil {
-		if closeErr := db.Close(); closeErr != nil {
-			log.Printf("sqlite: close after ping failure: %v", closeErr)
-		}
-		return nil, fmt.Errorf("store: ping database: %w", err)
-	}
-
-	// Performance PRAGMAs for optimal query speed
-	pragmas := []string{
-		"PRAGMA synchronous = NORMAL",      // Faster writes, safe with WAL
-		"PRAGMA cache_size = -16000",       // 16MB cache (negative = KB)
-		"PRAGMA temp_store = MEMORY",       // In-memory temp tables
-		"PRAGMA mmap_size = 268435456",     // 256MB memory-mapped I/O
-		"PRAGMA page_size = 4096",          // Larger pages for better I/O
-		"PRAGMA foreign_keys = ON",         // Enforce referential integrity
-		"PRAGMA wal_autocheckpoint = 1000", // Checkpoint every 1000 pages
-	}
-
-	for _, pragma := range pragmas {
-		if _, err := db.Exec(pragma); err != nil {
-			// Non-fatal, log and continue
-			log.Printf("SQLite PRAGMA failed: %s - %v", pragma, err)
-		}
-	}
-
-	// Connection pool tuning for optimal throughput
-	db.SetMaxOpenConns(4)                  // SQLite handles concurrent reads well, limit writes
-	db.SetMaxIdleConns(2)                  // Keep 2 idle connections ready
-	db.SetConnMaxLifetime(5 * time.Minute) // Recycle connections periodically
-
-	s := &SQLiteStore{db: db, path: path}
-
-	// Run schema migrations
-	if err := migrations.RunMigrations(db, migrationsFS, "migrations"); err != nil {
-		if closeErr := db.Close(); closeErr != nil {
-			log.Printf("sqlite: close after migration failure: %v", closeErr)
-		}
-		return nil, fmt.Errorf("store: run migrations: %w", err)
-	}
-
-	// Post-migration schema adjustments (ensureColumn for existing columns)
-	if err := s.postMigrationAdjustments(); err != nil {
-		if closeErr := db.Close(); closeErr != nil {
-			log.Printf("sqlite: close after post-migration: %v", closeErr)
-		}
-		return nil, err
-	}
-
-	return s, nil
+	return NewSQLiteStoreFromHandle(handle, path, migrateOnStart)
 }
 
 func (s *SQLiteStore) Close() error {

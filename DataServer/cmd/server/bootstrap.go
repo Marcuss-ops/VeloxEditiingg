@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -32,6 +33,7 @@ import (
 	"velox-server/internal/jobs/enqueue"
 	"velox-server/internal/outbox"
 	"velox-server/internal/platform/clock"
+	"velox-server/internal/platform/database"
 	"velox-server/internal/queue"
 	workflowevents "velox-server/internal/services/workflow_events"
 	"velox-server/internal/store"
@@ -95,6 +97,28 @@ type serverDeps struct {
 	// once at composition root and threaded through DI.
 	enqueuer *enqueue.Enqueuer
 }
+
+// ErrPostgresNotYetWired is the sentinel error returned by buildServerDeps
+// when VELOX_DB_DRIVER=postgres is selected but the per-module *SQLiteStore
+// god-object cutover is still in flight. It is the documented invariant
+// of the Postgres dispatch path: the dispatch switch lands on the
+// DriverPostgres case (proves platform/database.Open worked end-to-end),
+// then errors out cleanly without leaking the open *sql.DB or
+// silently falling back to SQLite. Test code asserts this with
+// errors.Is(err, ErrPostgresNotYetWired); operators see the full
+// message at startup and a developer should prepend context via fmt.Errorf
+// if a higher-up handler wraps the error.
+//
+// The message references the cutover roadmap so operators searching
+// for "VELOX_DB_DRIVER=postgres" hit the docs that explain the
+// per-module narrow-Repository migration.
+var ErrPostgresNotYetWired = errors.New(
+	"bootstrap: VELOX_DB_DRIVER=postgres is not yet wired end-to-end. " +
+		"Narrow-repository adapters (jobs, artifacts) accept *database.Handle. " +
+		"The remaining master modules (workers, lifecycle, ansible, youtube, drive, " +
+		"livestream, registration) still depend on *SQLiteStore. See docs/architecture/ " +
+		"and docs/pr/ for the per-module cutover roadmap",
+)
 
 // grpcServer is an interface satisfied by *grpc.Server for lifecycle management.
 type grpcServer interface {
@@ -200,6 +224,37 @@ func (a *outboxWorkflowAdapter) Enqueue(ctx context.Context, ev workflow.Workflo
 	return err
 }
 
+// databaseConfigFromConfig translates config.DatabaseConfig (the env-
+// loaded struct consumed by services) into platform/database.Config
+// (the runtime struct consumed by Open). The translation is mostly
+// structural but the Driver string-vs-typed-value distinction needs
+// the explicit conversion; platform/database.Driver("") is treated as
+// DriverSQLite at Open-time so empty-string-from-env still routes to
+// the historical SQLite path.
+func databaseConfigFromConfig(dcfg config.DatabaseConfig) database.Config {
+	return database.Config{
+		Driver:          database.Driver(strings.ToLower(strings.TrimSpace(dcfg.Driver))),
+		SQLitePath:      dcfg.DBPath,
+		URL:             dcfg.URL,
+		MaxOpenConns:    dcfg.MaxOpenConns,
+		MaxIdleConns:    dcfg.MaxIdleConns,
+		ConnMaxLifetime: dcfg.ConnMaxLifetime,
+	}
+}
+
+// schemaModeLabel is the human-readable counterpart to
+// cfg.Database.MigrateOnStart, surfaced in the [BOOTSTRAP] log line
+// that advertises whether the master owns the schema at boot. The
+// label is intentionally short so log lines stay scannable; the
+// migrate_on_start= component of the same log line carries the raw
+// bool for tooling pipelines.
+func schemaModeLabel(migrateOnStart bool) string {
+	if migrateOnStart {
+		return "master-owned (forward, migrations+post-adjustments run on boot)"
+	}
+	return "forward-only (external tool owns schema; master skips migrations+post-adjustments)"
+}
+
 func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
 	if cfg == nil {
 		cfg = config.FromEnv()
@@ -209,21 +264,66 @@ func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
 		return nil, err
 	}
 
-	sqliteStore, err := store.NewSQLiteStore(cfg.Database.DBPath)
+	// platform/database.Open is the canonical entry point for both
+	// SQLite and Postgres backends. Production no longer constructs
+	// a *sql.DB directly via NewSQLiteStore; we resolve VELOX_DB_DRIVER
+	// into a Handle and dispatch on Handle.Driver.
+	openCtx, openCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer openCancel()
+	handle, err := database.Open(openCtx, databaseConfigFromConfig(cfg.Database))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("bootstrap: open database: %w", err)
 	}
 
-	reg := workersreg.New(sqliteStore)
+	var sqliteStore *store.SQLiteStore
+	switch handle.Driver {
+	case database.DriverSQLite:
+		// MigrateOnStart is ORTHOGONAL to driver dispatch:
+		//   VELOX_DB_DRIVER picks the SQL backend (sqlite here)
+		//   VELOX_DB_MIGRATE_ON_START picks whether the master owns
+		//     schema state at boot (true) or an external tool does (false).
+		// When false, an external migration tool (Atlas / goose /
+		// sql-migrate / Ansible-deployed schema) is authoritative and
+		// NewSQLiteStoreFromHandle skips both migrations.RunMigrations
+		// AND postMigrationAdjustments, surfacing the currently-applied
+		// version via a one-line INFO log so operators running an
+		// external tool can confirm what the master booted against.
+		sqliteStore, err = store.NewSQLiteStoreFromHandle(handle, cfg.Database.DBPath, cfg.Database.MigrateOnStart)
+		if err != nil {
+			_ = handle.DB.Close()
+			return nil, fmt.Errorf("bootstrap: build SQLite store: %w", err)
+		}
+		log.Printf("[BOOTSTRAP] sqlite path=%s schema_mode=%s (driver=%s, migrate_on_start=%t)",
+			cfg.Database.DBPath, schemaModeLabel(cfg.Database.MigrateOnStart),
+			database.Driver(strings.ToLower(strings.TrimSpace(cfg.Database.Driver))),
+			cfg.Database.MigrateOnStart)
+	case database.DriverPostgres:
+		// Postgres wiring lands incrementally via narrow-Repository
+		// adapters (jobs, artifacts already done). The remaining
+		// master god-object modules (workers, lifecycle, ansible,
+		// youtube, drive, livestream, registration) depend on
+		// *SQLiteStore and have NOT yet completed the narrow-repo
+		// cutover. Boot fails-fast here rather than silently falling
+		// back to SQLite which would corrupt operator expectations.
+		// See docs/architecture/ and docs/pr/ for the per-module
+		// narrow-repo cutover roadmap.
+		_ = handle.DB.Close()
+		return nil, ErrPostgresNotYetWired
+	default:
+		_ = handle.DB.Close()
+		return nil, fmt.Errorf("bootstrap: unsupported driver %q returned by platform/database.Open", handle.Driver)
+	}
+
+	reg := workersreg.New(handle)
 	revokedCount := len(reg.ListRevoked())
 	if revokedCount > 0 {
-		log.Printf("[BOOTSTRAP] Loaded %d revoked workers from SQLite", revokedCount)
+		log.Printf("[BOOTSTRAP] Loaded %d revoked workers from DB", revokedCount)
 	}
 	workersRepo := store.NewSQLiteWorkersRepository(sqliteStore)
-	cmdMgr := workersreg.NewCommandManager(sqliteStore)
-	tokenMgr := workersreg.NewTokenManager(sqliteStore)
+	cmdMgr := workersreg.NewCommandManager(handle)
+	tokenMgr := workersreg.NewTokenManager(handle)
 	workerUpdateHandler := workerhandlers.NewWorkerUpdateHandler(cfg, reg, cmdMgr, tokenMgr, cfg.Runtime.DataDir)
-	workerLifecycle := lifecycle.NewHandler(cfg, reg, sqliteStore)
+	workerLifecycle := lifecycle.NewHandler(cfg, reg, cmdMgr, tokenMgr)
 
 	jobRepo := store.NewSQLiteJobRepository(sqliteStore)
 
@@ -676,7 +776,12 @@ func runDataLayerAudit(cfg *config.Config) error {
 	}
 
 	secretsDir := filepath.Join(dataDir, "secrets")
-	auditor := audit.NewDataLayerAuditor(dataDir, secretsDir)
+	auditor := audit.NewDataLayerAuditorWithDriver(
+		dataDir,
+		secretsDir,
+		strings.ToLower(strings.TrimSpace(cfg.Database.Driver)),
+		cfg.Database.DBPath,
+	)
 
 	result := auditor.Audit()
 

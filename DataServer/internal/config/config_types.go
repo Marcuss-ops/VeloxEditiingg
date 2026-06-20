@@ -1,5 +1,7 @@
 package config
 
+import "time"
+
 // ServerConfig holds HTTP and gRPC server settings.
 type ServerConfig struct {
 	Port            int
@@ -26,9 +28,35 @@ type RuntimeConfig struct {
 	StorageDir   string // Final storage directory for verified artifacts
 }
 
-// DatabaseConfig holds database connection settings.
+// DatabaseConfig holds database connection settings for the
+// platform/database abstraction:
+//   - DBPath is the absolute path to the SQLite database file.
+//     Required when Driver == "sqlite" (or empty, which defaults to sqlite).
+//   - Driver selects the SQL backend. "sqlite" or "postgres" are the
+//     only valid values; empty falls back to "sqlite" for backward compat.
+//   - URL is the Postgres DSN. Required when Driver == "postgres".
+//   - MaxOpenConns / MaxIdleConns / ConnMaxLifetime are pool knobs.
+//     Zero means "use platform/database.Open() default" — see
+//     internal/platform/database/database.go for the per-driver values.
+//   - MigrateOnStart controls whether the bootstrap path runs the
+//     embedded schema migrations at boot. Defaults to true (legacy
+//     behaviour) so existing deployments boot with the master-owned
+//     schema bootstrap they always had; operators running an external
+//     migration tool (Atlas / goose / sql-migrate / Ansible-deployed
+//     schema) opt out by setting VELOX_DB_MIGRATE_ON_START=false (or
+//     "0" / "off" / "no") so the master skips both the migrations
+//     runner AND the post-migration ensure-column adjustments. The
+//     opt-out path is orthogonal to the driver dispatch in
+//     cmd/server/bootstrap.go so a single forward-only deployment
+//     works the same way regardless of which SQL backend is selected.
 type DatabaseConfig struct {
-	DBPath string // Absolute path to SQLite database file (required)
+	DBPath          string        // SQLite file path (required when Driver=sqlite)
+	Driver          string        // "sqlite" | "postgres" | "" (defaults to sqlite)
+	URL             string        // Postgres DSN (required when Driver=postgres)
+	MaxOpenConns    int           // 0 → driver default
+	MaxIdleConns    int           // 0 → driver default
+	ConnMaxLifetime time.Duration // 0 → driver default
+	MigrateOnStart  bool          // defaults true; false = forward-only tool mode
 }
 
 // WorkersConfig holds worker management settings.
