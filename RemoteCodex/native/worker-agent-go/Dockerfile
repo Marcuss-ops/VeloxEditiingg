@@ -38,11 +38,18 @@
 #     so they are not invalidated by Go binary changes.
 #
 # Runtime identity: container runs as the unprivileged `velox` user
-# (UID/GID chosen by `useradd -r`). Operators mounting a host
-# /opt/velox directory for `worker_config.json` MUST
-# `chown -R velox:velox /opt/velox` (or use `docker run --user 0` as a
-# transitional workaround) — the Dockerfile alone cannot set
-# permissions inside a host bind mount.
+# with a deterministic UID/GID of 10001 (configurable via the
+# VELOX_UID / VELOX_GID ARGs at build time). Operators do NOT need a
+# blanket `chown -R velox /opt/velox` — only the writable subtrees
+# must be owned by this UID:
+#   * {{ velox_dir }}/cache                       (XDG_CACHE_HOME)
+#   * {{ velox_dir }}/current/RemoteCodex/assets_cache (writable overlay)
+#   * {{ velox_worker_runtime_dir }}              (worker_config.json)
+# These are configured by
+#   DataServer/data/ansible/playbooks/tasks/systemd_setup.yml.
+# /app itself is mounted rw at runtime because the worker writes
+# worker_state.json + cache + GC temp under workDir; the in-image
+# /app at build time is empty and intentionally left root-owned.
 #
 # Build:
 #   make -C RemoteCodex/native/worker-agent-go agent
@@ -77,6 +84,15 @@ RUN /usr/local/bin/build-video-engine.sh && \
 
 # ─── Stage 2: runtime — NO compilers, NO cmake, NO binutils ─────────────────
 FROM debian:bookworm-slim
+
+# Pinned non-root identity. Operators chown 10001:10001 on the
+# writable host bind-mounts (cache, assets_cache, runtime_dir) so
+# files written by the container remain owned by this UID. Operators
+# MUST NOT use uid 10001 on the host itself — that user would acquire
+# write access to those dirs (acceptable tradeoff for a fixed UID
+# compared to scraping `docker inspect` per host).
+ARG VELOX_UID=10001
+ARG VELOX_GID=10001
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV VELOX_VIDEO_ENGINE_CPP_BIN=/usr/local/bin/velox_video_engine
@@ -116,17 +132,37 @@ COPY native/worker-agent-go/bin/velox-worker-agent /usr/local/bin/velox-worker-a
 # Entrypoint script (validates + execs; it does NOT rebuild the engine).
 COPY scripts/worker-entrypoint.sh /usr/local/bin/worker-entrypoint.sh
 
-# Create non-root runtime user. Velox owns the WORKDIR + all three
-# runtime binaries so the slim container has minimal blast radius:
-# no compilers on disk and no privileged execution at start.
-RUN useradd -r -m -s /usr/sbin/nologin velox && \
-    chown -R velox:velox /app \
+# Create non-root runtime user with UID pinned at ${VELOX_UID} so
+# operators can chown host bind-mounts to a known UID without
+# scraping `docker inspect`. /app is intentionally NOT chowned here
+# because it is overlaid at runtime by systemd `ExecStart` `-v` mounts
+# (see systemd_setup.yml) — at build time /app is empty. The three
+# binaries are chowned individually (no `chown -R`) because they live
+# in /usr/local/bin/ and must only be readable+executable by velox
+# (mode 0755).
+RUN groupadd --system --gid "${VELOX_GID}" velox && \
+    useradd --system \
+        --uid "${VELOX_UID}" \
+        --gid "${VELOX_GID}" \
+        --create-home \
+        --home-dir /home/velox \
+        --shell /usr/sbin/nologin \
+        velox && \
+    chown "${VELOX_UID}:${VELOX_GID}" \
         /usr/local/bin/velox_video_engine \
         /usr/local/bin/velox-worker-agent \
         /usr/local/bin/worker-entrypoint.sh && \
-    chmod 0755 /usr/local/bin/velox_video_engine \
-               /usr/local/bin/velox-worker-agent \
-               /usr/local/bin/worker-entrypoint.sh
+    chmod 0755 \
+        /usr/local/bin/velox_video_engine \
+        /usr/local/bin/velox-worker-agent \
+        /usr/local/bin/worker-entrypoint.sh
+
+# HOME + XDG_CACHE_HOME point into /home/velox so third-party libs
+# (curl/ffmpeg TLS cache, etc.) that look for $HOME/.cache or
+# $XDG_CACHE_HOME drop files into a path the container user owns.
+# (velox-worker-agent itself does not strictly depend on HOME.)
+ENV HOME=/home/velox
+ENV XDG_CACHE_HOME=/home/velox/.cache
 
 # Drop privileges. From here on, no setuid-root child can be spawned.
 USER velox
