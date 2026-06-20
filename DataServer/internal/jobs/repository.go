@@ -32,9 +32,11 @@ type Writer interface {
 	// repository assigns one.
 	Create(ctx context.Context, job *Job) error
 
-	// Transition performs a CAS status change from → to.
+	// SetStatus performs a CAS status change from → to.
 	// Returns ErrTransitionConflict if the precondition does not hold.
-	Transition(ctx context.Context, id string, from, to Status) error
+	// Named SetStatus (not Transition) to avoid name collision with
+	// store.JobRepository.Transition(TransitionParams) on the same concrete type.
+	SetStatus(ctx context.Context, id string, from, to Status) error
 
 	// Lease atomically assigns a PENDING job to a worker.
 	// Returns ErrTransitionConflict if the job is not in PENDING.
@@ -49,10 +51,8 @@ type Writer interface {
 // This interface is the target surface that all new code should code against;
 // legacy callers using store.JobRepository will be migrated in PR 2–4.
 //
-// TODO(PR 2): add compile-time assertion:
+// Compile-time assertion is in store/job_repository_adapter.go:
 //   var _ Repository = (*store.SQLiteJobRepository)(nil)
-// Currently the method signatures don't match (CreateJob vs Create, ClaimNext vs Lease)
-// so the assertion would fail. PR 2 will align the store implementation.
 type Repository interface {
 	Reader
 	Writer
