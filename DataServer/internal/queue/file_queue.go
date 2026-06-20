@@ -26,22 +26,23 @@ const (
 	StatusCancelled = jobs.StatusCancelled
 )
 
-// QueueItem is a backward-compatible alias to the canonical transport type
-// defined in the jobs package (Phase 1 of Ondata 4 Strategy B). The full
-// struct (with all 30 JSON-tagged fields + history/logs/slot_data) lives at
-// jobs.QueueItem — this file keeps only the alias for backward-compat with
-// every existing caller that imports queue.QueueItem / queue.Job.
+// QueueItem is a backward-compatible alias to the canonical transport
+// projection type in the jobs package. The full struct (with all 30
+// JSON-tagged fields + history/logs/slot_data) lives at jobs.QueueItem.
 //
-// Job is also a backward-compatible alias for QueueItem (== jobs.QueueItem).
-// New code should reference jobs.QueueItem / jobs.Job directly.
+// Synonym chain (all three refer to the SAME type at compile time):
+//
+//	queue.QueueItem  ==  queue.Job  ==  jobs.QueueItem
+//
+// This file keeps only the aliases for backward compatibility with every
+// existing caller that imports queue.QueueItem / queue.Job. New code
+// should use jobs.QueueItem directly. Phase 2 of Ondata 4 Strategy B
+// will sweep remaining queue.QueueItem / queue.Job references; once
+// zero remain, both aliases will be dropped.
 type QueueItem = jobs.QueueItem
 
-// Job is a backward-compatible alias for QueueItem. Job == QueueItem ==
-// jobs.QueueItem — all three are the SAME type at compile time. We keep
-// Job only because existing callers still reference queue.Job; new code
-// should use jobs.QueueItem directly. (Phase 2 of Ondata 4 Strategy B
-// will sweep remaining queue.Job references; once zero remain, drop
-// this alias.)
+// Job is a backward-compatible alias for QueueItem — see the QueueItem
+// alias above for the synonym chain and migration guidance.
 type Job = jobs.QueueItem
 
 // JobHistoryEntry is a backward-compatible alias to jobs.JobHistoryEntry
