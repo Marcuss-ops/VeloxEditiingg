@@ -1,4 +1,4 @@
-package frontend
+package app
 
 import (
 	"log"
@@ -10,28 +10,28 @@ import (
 	"velox-server/internal/handlers/web/spa"
 )
 
-// Module provides SPA and static file serving.
-type Module struct {
+// FrontendModule provides SPA and static file serving.
+type FrontendModule struct {
 	cfg             *config.Config
 	spaDistDir      string
 	spaAssetsDir    string
 	serveSPAHandler gin.HandlerFunc
 }
 
-// New creates a new frontend module.
-func New(cfg *config.Config) *Module {
-	return &Module{
+// NewFrontendModule creates a new frontend module.
+func NewFrontendModule(cfg *config.Config) *FrontendModule {
+	return &FrontendModule{
 		cfg: cfg,
 	}
 }
 
 // Name returns the module identifier.
-func (m *Module) Name() string {
+func (m *FrontendModule) Name() string {
 	return "frontend"
 }
 
 // RegisterRoutes registers frontend endpoints.
-func (m *Module) RegisterRoutes(r *gin.Engine) {
+func (m *FrontendModule) RegisterRoutes(r *gin.Engine) {
 	// Determine SPA directories
 	m.spaAssetsDir = "frontend_standalone/web/dist/assets"
 	if m.cfg.Frontend.SPADir != "" {

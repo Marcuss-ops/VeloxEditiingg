@@ -1,4 +1,4 @@
-package youtube
+package app
 
 import (
 	"testing"
@@ -6,15 +6,15 @@ import (
 	"velox-server/internal/config"
 )
 
-func TestModule_Name(t *testing.T) {
-	m := New(&config.Config{}, "", nil)
+func TestYouTubeModule_Name(t *testing.T) {
+	m := NewYouTubeModule(&config.Config{}, "", nil)
 	if m.Name() != "youtube" {
 		t.Errorf("expected 'youtube', got %q", m.Name())
 	}
 }
 
-func TestModule_NilAccessors(t *testing.T) {
-	m := New(&config.Config{}, "", nil)
+func TestYouTubeModule_NilAccessors(t *testing.T) {
+	m := NewYouTubeModule(&config.Config{}, "", nil)
 
 	if m.Handlers() != nil {
 		t.Error("Handlers() should be nil before RegisterRoutes")
@@ -27,8 +27,8 @@ func TestModule_NilAccessors(t *testing.T) {
 	}
 }
 
-func TestNew_Nilsafe(t *testing.T) {
-	m := New(nil, "", nil)
+func TestNewYouTubeModule_Nilsafe(t *testing.T) {
+	m := NewYouTubeModule(nil, "", nil)
 	if m == nil {
 		t.Fatal("New should return non-nil module")
 	}

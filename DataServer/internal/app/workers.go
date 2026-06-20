@@ -1,4 +1,4 @@
-package workers
+package app
 
 import (
 	"log"
@@ -14,8 +14,8 @@ import (
 	workersreg "velox-server/internal/workers"
 )
 
-// Module provides worker management endpoints.
-type Module struct {
+// WorkersModule provides worker management endpoints.
+type WorkersModule struct {
 	reg                 *workersreg.Registry
 	adminAuth           gin.HandlerFunc
 	workerLifecycle     *lifecycle.Handler
@@ -23,12 +23,13 @@ type Module struct {
 	workerAssetHandler  *assets.Handler
 }
 
-func New(cfg *config.Config, reg *workersreg.Registry, lifecycle *lifecycle.Handler, updateHandler *workersapi.WorkerUpdateHandler, adminAuth gin.HandlerFunc, assetSvc *voiceoverassets.AssetService, blobStore store.BlobStore) *Module {
+// NewWorkersModule creates a new workers module.
+func NewWorkersModule(cfg *config.Config, reg *workersreg.Registry, lifecycle *lifecycle.Handler, updateHandler *workersapi.WorkerUpdateHandler, adminAuth gin.HandlerFunc, assetSvc *voiceoverassets.AssetService, blobStore store.BlobStore) *WorkersModule {
 	var tokenMgr *workersreg.TokenManager
 	if lifecycle != nil {
 		tokenMgr = lifecycle.GetTokenManager()
 	}
-	return &Module{
+	return &WorkersModule{
 		reg:                 reg,
 		workerLifecycle:     lifecycle,
 		workerUpdateHandler: updateHandler,
@@ -37,11 +38,11 @@ func New(cfg *config.Config, reg *workersreg.Registry, lifecycle *lifecycle.Hand
 	}
 }
 
-func (m *Module) Name() string {
+func (m *WorkersModule) Name() string {
 	return "workers"
 }
 
-func (m *Module) RegisterRoutes(r *gin.Engine) {
+func (m *WorkersModule) RegisterRoutes(r *gin.Engine) {
 	if m.workerLifecycle != nil {
 		workerAdmin := r.Group("/worker")
 		if m.adminAuth != nil {

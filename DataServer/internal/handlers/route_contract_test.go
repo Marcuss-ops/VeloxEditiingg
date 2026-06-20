@@ -22,7 +22,7 @@ import (
 
 	"velox-server/internal/app"
 	"velox-server/internal/handlers/server/api"
-	"velox-server/internal/modules/health"
+
 
 	"github.com/gin-gonic/gin"
 )
@@ -47,7 +47,7 @@ func TestRouteContract_AllModules(t *testing.T) {
 	r := gin.New()
 
 	registry := app.NewRegistry()
-	registry.Register(health.New())
+	registry.Register(app.NewHealthModule())
 	// Workers, YouTube, Drive, Ansible, Livestream, Frontend constructors
 	// accept dependencies that vary across configurations; we feed nil
 	// where the test does not exercise the handler body (this test

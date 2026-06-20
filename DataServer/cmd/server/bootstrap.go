@@ -31,13 +31,6 @@ import (
 	"velox-server/internal/handlers/server/api"
 	"velox-server/internal/handlers/server/pipeline"
 	"velox-server/internal/jobs/enqueue"
-	"velox-server/internal/modules/ansible"
-	"velox-server/internal/modules/drive"
-	"velox-server/internal/modules/frontend"
-	"velox-server/internal/modules/health"
-	"velox-server/internal/modules/livestream"
-	"velox-server/internal/modules/workers"
-	"velox-server/internal/modules/youtube"
 	"velox-server/internal/outbox"
 	"velox-server/internal/queue"
 	"velox-server/internal/store"
@@ -59,9 +52,9 @@ type serverDeps struct {
 	sqliteStore         *store.SQLiteStore
 	workerUpdateHandler *workerhandlers.WorkerUpdateHandler
 	workerLifecycle     *lifecycle.Handler
-	ansibleModule       *ansible.Module
-	youtubeModule       *youtube.Module
-	driveModule         *drive.Module
+	ansibleModule       *app.AnsibleModule
+	youtubeModule       *app.YouTubeModule
+	driveModule         *app.DriveModule
 	workflowRepo        workflow.Repository
 	outboxStore         *outbox.Store
 	outboxDispatcher    *outbox.Dispatcher
@@ -348,9 +341,9 @@ func runServer(cfg *config.Config) error {
 	auth := api.AdminAuthMiddleware(cfg)
 	pipeline.InitRemoteEngine(cfg)
 
-	ytMod := youtube.New(cfg, deps.paths.dataDir, deps.sqliteStore)
+	ytMod := app.NewYouTubeModule(cfg, deps.paths.dataDir, deps.sqliteStore)
 	deps.youtubeModule = ytMod
-	driveMod := drive.New(cfg)
+	driveMod := app.NewDriveModule(cfg)
 	deps.driveModule = driveMod
 
 	maxVoiceoverBytes := int64(256 * 1024 * 1024)
@@ -377,16 +370,16 @@ func runServer(cfg *config.Config) error {
 	// Wire the new AssetService into the enqueue flow (replaces the old
 	// voiceover bridge's RewriteVoiceoverPayload).
 	enqueue.SetVoiceoverAssetService(deps.assetService)
-	registry.Register(health.New())
-	registry.Register(workers.New(cfg, deps.reg, deps.workerLifecycle, deps.workerUpdateHandler, auth, deps.assetService, deps.blobStore))
+	registry.Register(app.NewHealthModule())
+	registry.Register(app.NewWorkersModule(cfg, deps.reg, deps.workerLifecycle, deps.workerUpdateHandler, auth, deps.assetService, deps.blobStore))
 	registry.Register(ytMod)
 	registry.Register(driveMod)
-	ansibleMod := ansible.New(cfg, deps.paths.dataDir, auth, deps.sqliteStore)
+	ansibleMod := app.NewAnsibleModule(cfg, deps.paths.dataDir, auth, deps.sqliteStore)
 	deps.ansibleModule = ansibleMod
 	registry.Register(ansibleMod)
-	livestreamMod := livestream.New(ytMod.Service, deps.sqliteStore)
+	livestreamMod := app.NewLivestreamModule(ytMod.Service, deps.sqliteStore)
 	registry.Register(livestreamMod)
-	registry.Register(frontend.New(cfg))
+	registry.Register(app.NewFrontendModule(cfg))
 
 	deliveryReg := deliveries.NewRegistry()
 	if ytMod != nil && ytMod.Service() != nil {

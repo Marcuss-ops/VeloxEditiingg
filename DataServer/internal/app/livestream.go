@@ -1,5 +1,4 @@
-// Package livestream provides livestream management routes as a self-contained module.
-package livestream
+package app
 
 import (
 	"log"
@@ -11,29 +10,29 @@ import (
 	"velox-server/internal/store"
 )
 
-// Module provides livestream management endpoints.
-type Module struct {
+// LivestreamModule provides livestream management endpoints.
+type LivestreamModule struct {
 	ytService func() *youtube.Service
 	dbStore   *store.SQLiteStore
 }
 
-// New creates a new livestream module.
+// NewLivestreamModule creates a new livestream module.
 // ytService is a provider function invoked during RegisterRoutes,
 // after the YouTube module has initialised its service.
-func New(ytService func() *youtube.Service, dbStore *store.SQLiteStore) *Module {
-	return &Module{
+func NewLivestreamModule(ytService func() *youtube.Service, dbStore *store.SQLiteStore) *LivestreamModule {
+	return &LivestreamModule{
 		ytService: ytService,
 		dbStore:   dbStore,
 	}
 }
 
 // Name returns the module identifier.
-func (m *Module) Name() string {
+func (m *LivestreamModule) Name() string {
 	return "livestream"
 }
 
 // RegisterRoutes registers livestream API endpoints.
-func (m *Module) RegisterRoutes(r *gin.Engine) {
+func (m *LivestreamModule) RegisterRoutes(r *gin.Engine) {
 	handlers := livestream.NewLivestreamHandlers(m.ytService(), m.dbStore)
 
 	v1 := r.Group("/api/v1")

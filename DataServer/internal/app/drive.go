@@ -1,4 +1,4 @@
-package drive
+package app
 
 import (
 	"log"
@@ -10,8 +10,8 @@ import (
 	"velox-server/internal/store"
 )
 
-// Module provides Google Drive integration endpoints.
-type Module struct {
+// DriveModule provides Google Drive integration endpoints.
+type DriveModule struct {
 	cfg         *config.Config
 	sqliteStore *store.SQLiteStore
 
@@ -21,9 +21,9 @@ type Module struct {
 	handlers *driveHandlers.DriveHandlers
 }
 
-// New creates a new Drive module.
-func New(cfg *config.Config) *Module {
-	m := &Module{
+// NewDriveModule creates a new Drive module.
+func NewDriveModule(cfg *config.Config) *DriveModule {
+	m := &DriveModule{
 		cfg: cfg,
 	}
 	_ = m.init()
@@ -31,14 +31,14 @@ func New(cfg *config.Config) *Module {
 }
 
 // Name returns the module identifier.
-func (m *Module) Name() string {
+func (m *DriveModule) Name() string {
 	return "drive"
 }
 
 // Service exposes the lazy-initialized Drive service for downstream
 // consumers (bootstrap threads it through RegisterV1Routes). Returns nil
 // when credentials are absent or init hasn't run.
-func (m *Module) Service() *integrationsDrive.Service {
+func (m *DriveModule) Service() *integrationsDrive.Service {
 	if m == nil {
 		return nil
 	}
@@ -46,7 +46,7 @@ func (m *Module) Service() *integrationsDrive.Service {
 }
 
 // Handlers returns the Drive handlers (for use by other modules).
-func (m *Module) Handlers() *driveHandlers.DriveHandlers {
+func (m *DriveModule) Handlers() *driveHandlers.DriveHandlers {
 	return m.handlers
 }
 
@@ -54,8 +54,8 @@ func (m *Module) Handlers() *driveHandlers.DriveHandlers {
 // drive-link writes (cache / master folder upserts / list reads) actually
 // persist. Without this call the handler receives a nil store and all writes
 // silently no-op, leaving operators under the assumption that "the folder
-// exists in SQLite" when it doesn't. Safe to call once after `drive.New(cfg)`.
-func (m *Module) WithSQLiteStore(s *store.SQLiteStore) {
+// exists in SQLite" when it doesn't. Safe to call once after NewDriveModule.
+func (m *DriveModule) WithSQLiteStore(s *store.SQLiteStore) {
 	if m == nil || s == nil {
 		return
 	}
@@ -66,7 +66,7 @@ func (m *Module) WithSQLiteStore(s *store.SQLiteStore) {
 }
 
 // RegisterRoutes registers Drive endpoints.
-func (m *Module) RegisterRoutes(r *gin.Engine) {
+func (m *DriveModule) RegisterRoutes(r *gin.Engine) {
 	if err := m.init(); err != nil {
 		log.Printf("[DRIVE] Init failed: %v", err)
 		return
@@ -86,7 +86,7 @@ func (m *Module) RegisterRoutes(r *gin.Engine) {
 	log.Printf("[DRIVE] API routes registered at /api/drive/*")
 }
 
-func (m *Module) init() error {
+func (m *DriveModule) init() error {
 	if m == nil || m.cfg == nil {
 		return nil
 	}
