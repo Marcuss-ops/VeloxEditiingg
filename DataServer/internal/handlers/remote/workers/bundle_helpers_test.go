@@ -8,9 +8,15 @@ import (
 
 func TestBundleDirCandidatesIncludeInstallLayouts(t *testing.T) {
 	dataDir := filepath.Join(string(filepath.Separator), "opt", "velox", "current", "data")
+	if abs, err := filepath.Abs(dataDir); err == nil {
+		dataDir = abs
+	}
 	candidates := bundleDirCandidates(dataDir)
 
 	want := filepath.Join(string(filepath.Separator), "opt", "velox", "current", "refactored", "DataServer", "data", "worker_downloads")
+	if abs, err := filepath.Abs(want); err == nil {
+		want = abs
+	}
 	found := false
 	for _, candidate := range candidates {
 		if candidate == want {

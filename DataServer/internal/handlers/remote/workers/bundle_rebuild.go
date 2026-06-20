@@ -22,7 +22,7 @@ func (h *WorkerUpdateHandler) ForceRegenerateZipHandler() gin.HandlerFunc {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "repo root not found for rebuild tool", "bundleDir": h.bundleDir})
 			return
 		}
-		bundleBinaryPath := filepath.Join(repoRoot, "DataServer", "bin", "velox-bundler")
+		bundleBinaryPath := getBundlerPath(repoRoot)
 		if _, err := os.Stat(bundleBinaryPath); err != nil {
 			c.JSON(http.StatusNotFound, gin.H{"error": "velox-bundler binary not found", "path": bundleBinaryPath})
 			return
