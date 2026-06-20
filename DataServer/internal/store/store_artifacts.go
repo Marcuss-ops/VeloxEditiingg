@@ -181,16 +181,3 @@ func (s *SQLiteStore) FinalizeArtifactVerified(ctx context.Context, artifactID, 
 
 	return &a, nil
 }
-
-// UpdateArtifactStatus is a non-strict setter used by integrations that
-// need to push an artifact back to e.g. QUARANTINED outside the verifier
-// flow. Application-layer guard ensures status is one of the canonical
-// values after migration 021.
-func (s *SQLiteStore) UpdateArtifactStatus(ctx context.Context, artifactID, status string) error {
-	if artifactID == "" || status == "" {
-		return fmt.Errorf("artifact: UpdateArtifactStatus: missing required arg")
-	}
-	_, err := s.db.ExecContext(ctx,
-		`UPDATE artifacts SET status = ? WHERE id = ?`, status, artifactID)
-	return err
-}

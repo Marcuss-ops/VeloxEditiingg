@@ -37,43 +37,6 @@ func (s *SQLiteStore) TransitionJobStatus(ctx context.Context, jobID string, exp
 	return newRevision, nil
 }
 
-// UpdateJobSupplementary updates non-CAS fields on a job after a successful transition.
-func (s *SQLiteStore) UpdateJobSupplementary(jobID string, fields map[string]interface{}) error {
-	if len(fields) == 0 {
-		return nil
-	}
-
-	setClauses := []string{}
-	args := []interface{}{}
-
-	for key, value := range fields {
-		switch key {
-		case "completed_at", "last_error", "error_message", "failed_at", "failed_by",
-			"lease_id", "lease_expiry", "assigned_to", "claimed_by", "started_at",
-			"artifact_id", "output_sha256", "upload_idempotency_key":
-			setClauses = append(setClauses, key+" = ?")
-			args = append(args, value)
-		}
-	}
-
-	if len(setClauses) == 0 {
-		return nil
-	}
-
-	query := "UPDATE jobs SET "
-	for i, clause := range setClauses {
-		if i > 0 {
-			query += ", "
-		}
-		query += clause
-	}
-	query += " WHERE job_id = ?"
-	args = append(args, jobID)
-
-	_, err := s.db.Exec(query, args...)
-	return err
-}
-
 // GetJobRevision returns the current revision of a job.
 func (s *SQLiteStore) GetJobRevision(jobID string) (int, error) {
 	var revision int

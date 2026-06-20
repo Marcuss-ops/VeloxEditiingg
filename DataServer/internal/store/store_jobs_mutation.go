@@ -192,16 +192,6 @@ func (s *SQLiteStore) UpsertJobResult(jobID string, resultJSON []byte) error {
 	return err
 }
 
-// SetJobRequest stores the immutable request payload in request_json.
-// Only used at job creation — never updates after initial write.
-func (s *SQLiteStore) SetJobRequest(jobID string, requestJSON []byte) error {
-	_, err := s.db.Exec(
-		`UPDATE jobs SET request_json = ? WHERE job_id = ?`,
-		string(requestJSON), jobID,
-	)
-	return err
-}
-
 func (s *SQLiteStore) DeleteJob(jobID string) error {
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -222,14 +212,3 @@ func (s *SQLiteStore) DeleteJob(jobID string) error {
 	return tx.Commit()
 }
 
-func (s *SQLiteStore) ArchiveOldJobs(olderThan time.Time) (int64, error) {
-	cutoff := olderThan.UTC().Format(time.RFC3339)
-	result, err := s.db.Exec(
-		`DELETE FROM jobs WHERE UPPER(status) IN ('SUCCEEDED', 'FAILED', 'CANCELLED') AND updated_at < ?`,
-		cutoff,
-	)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
