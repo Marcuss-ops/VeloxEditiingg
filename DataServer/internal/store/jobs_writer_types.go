@@ -204,20 +204,20 @@ type LeaseJobParams struct {
 	WorkerID string
 }
 
-// JobRepository is the narrow write-aware contract for job persistence (spec §5).
+// JobRepository is the legacy write-aware contract for job persistence.
 //
-// TODO(PR 2): this interface will be deprecated in favor of jobs.Repository
-// (see internal/jobs/repository.go). The concrete SQLiteJobRepository will
-// implement both interfaces during the migration window, then this one
-// will be removed once all callers have been migrated.
+// DEPRECATED (Ondata 3 complete): new code MUST use jobs.Repository
+// (see internal/jobs/repository.go) which *SQLiteJobRepository already
+// implements (compile-time assertion in job_repository_adapter.go).
+// This interface remains for backward compatibility with LifecycleService
+// PR3 methods (Start/Fail/Cancel/RequeueExpiredLeases/RenewLease/
+// RecordRenderFinished) that have not yet been migrated to the canonical
+// domain surface. All gRPC handler reads have been migrated to
+// lifecycleSvc.Jobs().Get(); only PR3 write paths remain on this interface.
 //
 // Atomicity rule (spec): every multi-row operation stays a single method.
 // Callers never see BeginTx/Commit. Backends (SQLite, future Postgres) MUST
 // guarantee per-method atomicity even on driver errors.
-//
-// Each backend also exposes a broader permissively-readable surface on the
-// underlying concrete store (*SQLiteStore) for read paths that haven't migrated
-// yet.
 type JobRepository interface {
 	// CreateJob inserts a new job in PENDING state. Atomic. If JobID is empty,
 	// the repository assigns one and returns nil; otherwise the caller-supplied

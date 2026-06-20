@@ -48,8 +48,11 @@ type Writer interface {
 
 // Repository combines Reader and Writer into a single job persistence contract.
 // There must be exactly ONE concrete implementation — store.SQLiteJobRepository.
-// This interface is the target surface that all new code should code against;
-// legacy callers using store.JobRepository will be migrated in PR 2–4.
+//
+// This is the canonical interface for job persistence (Ondata 3 complete).
+// All gRPC handler reads use this surface via lifecycleSvc.Jobs().Get().
+// The legacy store.JobRepository is deprecated and will be removed once
+// PR3 write paths (Start/Fail/Cancel/RequeueExpiredLeases) are migrated.
 //
 // Compile-time assertion is in store/job_repository_adapter.go:
 //   var _ Repository = (*store.SQLiteJobRepository)(nil)
