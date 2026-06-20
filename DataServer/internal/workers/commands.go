@@ -24,13 +24,13 @@ type WorkerCommand struct {
 // CommandManager handles pending commands for workers, backed by SQLite.
 //
 // Single-source-of-truth invariant (Phase 4.4+):
-//   * Commands are persisted in `worker_commands` (SQLite) — the only path.
-//   * Acknowledgements are by command_id (AckCommandByID) — the legacy
+//   - Commands are persisted in `worker_commands` (SQLite) — the only path.
+//   - Acknowledgements are by command_id (AckCommandByID) — the legacy
 //     "by type" path is removed: AckCommand(workerID, cmdType) was a footgun
 //     because two pending commands of the same type on the same worker could
 //     be ACK'd by the wrong worker. AckCommandByID is tied to the exact
 //     command_id and is only callable by the owning worker.
-//   * GetAckTime is removed — callers should query worker_commands directly
+//   - GetAckTime is removed — callers should query worker_commands directly
 //     if they need ack timestamps.
 type CommandManager struct {
 	mu    sync.RWMutex

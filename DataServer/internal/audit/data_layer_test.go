@@ -119,8 +119,6 @@ func TestDataLayerAuditorAllowsArchivedLegacyFiles(t *testing.T) {
 	}
 }
 
-
-
 // TestCheckPrimaryFiles_ReportsMissing tests that checkPrimaryFiles detects
 // missing primary files.
 func TestCheckPrimaryFiles_ReportsMissing(t *testing.T) {
@@ -158,7 +156,7 @@ func TestCheckPrimaryFiles_PassesWhenPresent(t *testing.T) {
 	os.WriteFile(filepath.Join(tmpDir, "workers.json"), []byte(`{}`), 0644)
 	os.WriteFile(filepath.Join(tmpDir, "velox.db"), []byte(``), 0644)
 	os.WriteFile(filepath.Join(tmpDir, "ansible_runs.json"), []byte(`{}`), 0644)
-	
+
 	bundleDir := filepath.Join(tmpDir, "bundle")
 	os.MkdirAll(bundleDir, 0755)
 	os.WriteFile(filepath.Join(bundleDir, "manifest_v2.json"), []byte(`{}`), 0644)
@@ -457,8 +455,8 @@ func TestFailOnError_ReturnsNil(t *testing.T) {
 // contains the correct status.
 func TestAuditResult_StringContainsStatus(t *testing.T) {
 	result := &DataLayerAuditResult{
-		Passed: true,
-		Errors: []string{},
+		Passed:  true,
+		Errors:  []string{},
 		DataDir: "/tmp/test",
 	}
 
@@ -472,8 +470,8 @@ func TestAuditResult_StringContainsStatus(t *testing.T) {
 // TestAuditResult_StringFailed tests that String() output for failed audits.
 func TestAuditResult_StringFailed(t *testing.T) {
 	result := &DataLayerAuditResult{
-		Passed: false,
-		Errors: []string{"test error"},
+		Passed:  false,
+		Errors:  []string{"test error"},
 		DataDir: "/tmp/test",
 	}
 

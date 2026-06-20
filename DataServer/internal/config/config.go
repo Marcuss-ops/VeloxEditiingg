@@ -78,7 +78,7 @@ func (c *Config) Validate() error {
 	// and silently degrade to "no jobs ever picked up".
 	if c.Server.GRPCPushMode && c.Server.GRPCPort <= 0 {
 		return fmt.Errorf(
-			"config: GRPCPushMode=true requires VELOX_GRPC_PORT>0 (got %d). " +
+			"config: GRPCPushMode=true requires VELOX_GRPC_PORT>0 (got %d). "+
 				"Either set VELOX_GRPC_PORT or disable VELOX_GRPC_PUSH_MODE.",
 			c.Server.GRPCPort)
 	}

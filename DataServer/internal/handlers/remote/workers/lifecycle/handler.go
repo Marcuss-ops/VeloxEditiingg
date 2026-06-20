@@ -16,13 +16,13 @@ import (
 //
 // Phase 5 hygiene pass (dead references after Phase 4.4 UpdateManager removal):
 //   - field `store`        — never read (was set from dbStore only to be passed
-//                            into workersreg.NewCommandManager / NewTokenManager
-//                            which already takes dbStore).
+//     into workersreg.NewCommandManager / NewTokenManager
+//     which already takes dbStore).
 //   - field `versionNumber` — assigned, never read.
 //   - param  `dataDir`     — never referenced in the body.
 //   - method `GetCommandManager` — no external callers anywhere in DataServer;
-//                              sister files in the package access h.cmdMgr
-//                              directly.
+//     sister files in the package access h.cmdMgr
+//     directly.
 type Handler struct {
 	cfg         *config.Config
 	reg         *workersreg.Registry
@@ -53,5 +53,3 @@ func (h *Handler) GetTokenManager() *workersreg.TokenManager {
 func (h *Handler) Config() *config.Config {
 	return h.cfg
 }
-
-

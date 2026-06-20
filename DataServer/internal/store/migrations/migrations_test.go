@@ -597,8 +597,8 @@ func TestIntegration_MigrationRunner_EndToEnd(t *testing.T) {
 
 	// ---- Phase 3: Verify columns added by Migration 002 ----
 	colChecks := []struct {
-		table  string
-		col    string
+		table string
+		col   string
 	}{
 		{"workers", "display_name"},
 		{"workers", "ip_address"},

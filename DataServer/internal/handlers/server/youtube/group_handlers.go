@@ -58,22 +58,22 @@ func (h *YouTubeHandlers) ResolveChannelByLanguage(c *gin.Context) {
 // S11 POC migration (group_handlers.go is the first handler file to
 // drop h.storage on the READ path):
 //
-//   Previously: groups, _ := h.storage.ListGroups() returned a
-//   map[name]*Group where each Group carried a full []Channel slice
-//   the legacy Storage struct mirrored into in-RAM. The handler loop
-//   read ch.Title / ch.Name / ch.Thumbnail / ch.Language directly off
-//   that slice, enriching with h.service.GetAuthChannel metadata.
+//	Previously: groups, _ := h.storage.ListGroups() returned a
+//	map[name]*Group where each Group carried a full []Channel slice
+//	the legacy Storage struct mirrored into in-RAM. The handler loop
+//	read ch.Title / ch.Name / ch.Thumbnail / ch.Language directly off
+//	that slice, enriching with h.service.GetAuthChannel metadata.
 //
-//   Now: h.service.GetGroups() returns map[name]*ChannelGroup where
-//   Channels is []string (channel IDs only — the canonical S11
-//   membership shape). For each ID, the handler fetches the typed
-//   canonical row via h.service.BulkMembership (added in commit
-//   8e74bd99) so the channel metadata stays sourced from the SQLite
-//   youtube_channels table rather than from a stale in-RAM copy.
-//   BulkMembership preserves input order and surfaces SQL errors via
-//   fail-closed propagation; we log + degrade to an empty channels
-//   slice rather than returning 500 because partial data is still
-//   operator-actionable, and the next handler call retries the read.
+//	Now: h.service.GetGroups() returns map[name]*ChannelGroup where
+//	Channels is []string (channel IDs only — the canonical S11
+//	membership shape). For each ID, the handler fetches the typed
+//	canonical row via h.service.BulkMembership (added in commit
+//	8e74bd99) so the channel metadata stays sourced from the SQLite
+//	youtube_channels table rather than from a stale in-RAM copy.
+//	BulkMembership preserves input order and surfaces SQL errors via
+//	fail-closed propagation; we log + degrade to an empty channels
+//	slice rather than returning 500 because partial data is still
+//	operator-actionable, and the next handler call retries the read.
 //
 // Mutations on this file (CreateGroup / DeleteGroup / AddChannelToGroup
 // / RemoveChannelFromGroup) still call h.storage; their per-handler

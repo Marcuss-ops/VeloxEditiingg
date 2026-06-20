@@ -51,22 +51,22 @@ func NewDataLayerAuditor(dataDir, secretsDir string, dbPath ...string) *DataLaye
 // Audit performs a complete data layer audit.
 func (a *DataLayerAuditor) Audit() *DataLayerAuditResult {
 	result := &DataLayerAuditResult{
-		Passed: true,
-		Info:   make([]string, 0),
-		Errors: make([]string, 0),
+		Passed:   true,
+		Info:     make([]string, 0),
+		Errors:   make([]string, 0),
 		Warnings: make([]string, 0),
-		DataDir: a.dataDir,
+		DataDir:  a.dataDir,
 	}
 
 	// Check for duplicate source of truth (directory naming inconsistencies)
 	a.checkDuplicateSources(result)
-	
+
 	// Check for inconsistent naming
 	a.checkNamingConsistency(result)
-	
+
 	// Check primary files exist
 	a.checkPrimaryFiles(result)
-	
+
 	// Check database integrity
 	a.checkDatabase(result)
 
@@ -236,26 +236,26 @@ func (r *DataLayerAuditResult) String() string {
 	} else {
 		sb.WriteString("[ERROR] Data Layer Audit FAILED\n")
 	}
-	
+
 	sb.WriteString(fmt.Sprintf("DataDir: %s\n", r.DataDir))
-	
+
 	if len(r.Errors) > 0 {
 		sb.WriteString(fmt.Sprintf("Errors: %d\n", len(r.Errors)))
 		for _, e := range r.Errors {
 			sb.WriteString(fmt.Sprintf("  - %s\n", e))
 		}
 	}
-	
+
 	if len(r.Warnings) > 0 {
 		sb.WriteString(fmt.Sprintf("Warnings: %d\n", len(r.Warnings)))
 		for _, w := range r.Warnings {
 			sb.WriteString(fmt.Sprintf("  - %s\n", w))
 		}
 	}
-	
+
 	if len(r.Info) > 0 {
 		sb.WriteString(fmt.Sprintf("Info: %d items\n", len(r.Info)))
 	}
-	
+
 	return sb.String()
 }

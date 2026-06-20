@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 )
+
 // nanoNow indirection keeps `time` import surface minimal; replaced by tests.
 func nanoNow() int64 {
 	// Use the real time source. test-only dependency, no production impact.

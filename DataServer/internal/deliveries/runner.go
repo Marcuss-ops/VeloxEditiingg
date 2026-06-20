@@ -19,10 +19,10 @@
 //
 // A restart mid-upload resolves cleanly because:
 //
-//   * the runner only acts on rows where claim succeeded
-//   * lease_expires_at is set every tick; zombie deliveries are reclaimed
+//   - the runner only acts on rows where claim succeeded
+//   - lease_expires_at is set every tick; zombie deliveries are reclaimed
 //     on the next tick after the lease expires
-//   * the idempotency_key on (artifact_id, destination_id) prevents the
+//   - the idempotency_key on (artifact_id, destination_id) prevents the
 //     runner from duplicating work on the remote side
 //
 // File intentionally does NOT spawn goroutines: the caller (cmd/server
@@ -343,4 +343,3 @@ func (r *DeliveryRunner) hydrateArtifact(ctx context.Context, artID string) (*st
 	}
 	return a, nil
 }
-

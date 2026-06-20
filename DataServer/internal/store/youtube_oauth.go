@@ -215,4 +215,3 @@ func (s *SQLiteStore) DeleteChannelAtomic(channelID string) (int64, error) {
 	}
 	return membershipsDeleted, nil
 }
-

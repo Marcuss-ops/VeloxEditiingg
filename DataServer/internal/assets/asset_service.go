@@ -2,7 +2,6 @@ package assets
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -11,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"velox-server/internal/util"
 	"velox-shared/payload"
 )
 
@@ -26,7 +26,8 @@ type AssetRepository interface {
 }
 
 // BlobStore is the storage abstraction for asset blobs.
-// Matches the shape of store.LocalBlobStore.
+// This is a subset of store.BlobStore; any store.BlobStore implementation
+// satisfies this interface automatically (verified at compile time in store/store_assets.go).
 type BlobStore interface {
 	StagingPath(jobID, artifactID, extension string) (string, error)
 	PromoteToFinal(stagingPath, finalPath string) (string, error)
@@ -149,7 +150,7 @@ func (s *AssetService) ResolveAndRegister(ctx context.Context, cmd ResolveAssetC
 	}
 
 	// 6. Insert source record
-	sourceID := generateID()
+	sourceID := util.GenerateID()
 	sourceRecord := AssetSourceRecord{
 		SourceID:        sourceID,
 		AssetID:         assetID,
@@ -336,11 +337,8 @@ func extensionFromName(name, mimeType string) string {
 	return ".bin"
 }
 
-func generateID() string {
-	b := make([]byte, 16)
-	_, _ = rand.Read(b)
-	return hex.EncodeToString(b)
-}
+// generateID delegates to util.GenerateID for canonical ID generation.
+func generateID() string { return util.GenerateID() }
 
 // ── voiceover payload helpers (shared with legacy bridge) ────────────────────
 

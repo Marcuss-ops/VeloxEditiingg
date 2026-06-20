@@ -35,16 +35,16 @@ func insertTestDeliveryDestination(t *testing.T, db *SQLiteStore, destID, provid
 func insertTestArtifact(t *testing.T, db *SQLiteStore, artifactID, jobID, storageKey string) {
 	t.Helper()
 	err := db.InsertArtifact(&Artifact{
-		ID:             artifactID,
-		JobID:          jobID,
-		Type:           "video",
+		ID:              artifactID,
+		JobID:           jobID,
+		Type:            "video",
 		StorageProvider: "local",
-		StorageKey:     storageKey,
-		SHA256:         "abc123",
-		SizeBytes:      1024,
-		Status:         "READY",
-		VerifiedAt:     time.Now().UTC().Format(time.RFC3339),
-		CreatedAt:      time.Now().UTC().Format(time.RFC3339),
+		StorageKey:      storageKey,
+		SHA256:          "abc123",
+		SizeBytes:       1024,
+		Status:          "READY",
+		VerifiedAt:      time.Now().UTC().Format(time.RFC3339),
+		CreatedAt:       time.Now().UTC().Format(time.RFC3339),
 	})
 	if err != nil {
 		t.Fatalf("insert artifact: %v", err)

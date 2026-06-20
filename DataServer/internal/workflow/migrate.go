@@ -7,12 +7,12 @@
 // them as workflow_runs + workflow_steps + workflow_dependencies rows.
 // Per PR 9 §Migrazione dei workflow esistenti:
 //
-//   runs_found: 32
-//   runs_migrated: 31
-//   steps_found: 184
-//   steps_migrated: 181
-//   invalid_runs: 1
-//   invalid_steps: 3
+//	runs_found: 32
+//	runs_migrated: 31
+//	steps_found: 184
+//	steps_migrated: 181
+//	invalid_runs: 1
+//	invalid_steps: 3
 //
 // Each error includes: job_id, cause, JSON key, suggested action.
 package workflow
@@ -33,15 +33,15 @@ import (
 // We unmarshal into a tolerant representation so the migrator can either
 // accept the bulk of rows or report precise JSON-keyed causes.
 type LegacyMultiStepJob struct {
-	JobID        string             `json:"job_id"`
-	PipelineType string             `json:"pipeline_type"`
-	Status       string             `json:"status"`
-	Steps        []LegacyStep       `json:"steps"`
-	Metadata     map[string]any     `json:"metadata,omitempty"`
-	CreatedAt    string             `json:"created_at"`
-	UpdatedAt    string             `json:"updated_at"`
-	StartedAt    *string            `json:"started_at,omitempty"`
-	CompletedAt  *string            `json:"completed_at,omitempty"`
+	JobID        string         `json:"job_id"`
+	PipelineType string         `json:"pipeline_type"`
+	Status       string         `json:"status"`
+	Steps        []LegacyStep   `json:"steps"`
+	Metadata     map[string]any `json:"metadata,omitempty"`
+	CreatedAt    string         `json:"created_at"`
+	UpdatedAt    string         `json:"updated_at"`
+	StartedAt    *string        `json:"started_at,omitempty"`
+	CompletedAt  *string        `json:"completed_at,omitempty"`
 }
 
 // LegacyStep is the inner shape of MultiStepJob.Steps[i].
@@ -270,7 +270,7 @@ func ls_legacy_step_id(legacy LegacyMultiStepJob, i int) string {
 		return legacy.Steps[i].StepID
 	}
 	return ""
-}// Command is the entrypoint for `velox-server migrate workflows-v2`.
+} // Command is the entrypoint for `velox-server migrate workflows-v2`.
 // It is wired in cmd/server/bootstrap.go main(). It only writes to
 // stdout — no database side effects until --apply is given.
 func Command(args []string, repo Repository, rawJSONProvider func(ctx context.Context) ([][]byte, error), out io.Writer) error {

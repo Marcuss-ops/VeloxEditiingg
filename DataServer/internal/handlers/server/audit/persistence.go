@@ -173,13 +173,13 @@ func (h *PersistenceHandler) deriveUndefined(assignedIDs map[string]bool) int {
 // the runtime is reading from a stale source copy.
 func (h *PersistenceHandler) dualDBStatus() gin.H {
 	result := gin.H{
-		"live_path_used":       "",
+		"live_path_used":      "",
 		"live_path_canonical": "",
-		"live_db_exists":       false,
-		"live_db_missing":      true,
-		"live_db_size_bytes":   int64(0),
-		"live_db_mtime_utc":    "",
-		"duplicate_paths":      []string{},
+		"live_db_exists":      false,
+		"live_db_missing":     true,
+		"live_db_size_bytes":  int64(0),
+		"live_db_mtime_utc":   "",
+		"duplicate_paths":     []string{},
 	}
 
 	if h.sqliteStore != nil {

@@ -2,16 +2,16 @@ package config
 
 // ServerConfig holds HTTP and gRPC server settings.
 type ServerConfig struct {
-	Port             int
-	StudioPort       int
-	GRPCPort         int    // gRPC port for worker control stream (0 = disabled)
-	GRPCPushMode     bool   // Phase 5+: send JobOffer directly, workers respond JobAccepted (requires GRPCPort > 0)
-	TLSCertFile      string
-	TLSKeyFile       string
-	GRPCTLSCertFile  string // gRPC server certificate (PEM). Required when GRPCPort > 0 with mTLS.
-	GRPCTLSKeyFile   string // gRPC server private key (PEM)
-	GRPCTLSCAFile    string // CA cert for verifying client certificates (mTLS). Empty = no client auth.
-	AllowLocalhost   bool
+	Port            int
+	StudioPort      int
+	GRPCPort        int  // gRPC port for worker control stream (0 = disabled)
+	GRPCPushMode    bool // Phase 5+: send JobOffer directly, workers respond JobAccepted (requires GRPCPort > 0)
+	TLSCertFile     string
+	TLSKeyFile      string
+	GRPCTLSCertFile string // gRPC server certificate (PEM). Required when GRPCPort > 0 with mTLS.
+	GRPCTLSKeyFile  string // gRPC server private key (PEM)
+	GRPCTLSCAFile   string // CA cert for verifying client certificates (mTLS). Empty = no client auth.
+	AllowLocalhost  bool
 }
 
 // RuntimeConfig holds filesystem and data directory settings.

@@ -12,9 +12,9 @@ import (
 
 // Module provides SPA and static file serving.
 type Module struct {
-	cfg            *config.Config
-	spaDistDir     string
-	spaAssetsDir   string
+	cfg             *config.Config
+	spaDistDir      string
+	spaAssetsDir    string
 	serveSPAHandler gin.HandlerFunc
 }
 
@@ -82,5 +82,3 @@ func (m *Module) RegisterRoutes(r *gin.Engine) {
 
 	log.Printf("[FRONTEND] Static files registered (SPA: %s)", m.spaDistDir)
 }
-
-

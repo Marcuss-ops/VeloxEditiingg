@@ -4,11 +4,11 @@
 // CAS that flips a status to SUCCEEDED. The contract enforced here is
 // AUDITABILITY: every file that contains this fragment is either:
 //
-//   (a) the single legal writer of jobs.status='SUCCEEDED' for the
-//       verified-finalization lifecycle, OR
-//   (b) a SEPARATE lifecycle writer (job_deliveries, workflow_steps,
-//       workflow_runs), OR
-//   (c) this test file (regex literal as documentation).
+//	(a) the single legal writer of jobs.status='SUCCEEDED' for the
+//	    verified-finalization lifecycle, OR
+//	(b) a SEPARATE lifecycle writer (job_deliveries, workflow_steps,
+//	    workflow_runs), OR
+//	(c) this test file (regex literal as documentation).
 //
 // A future PR that adds a NEW file containing the fragment will fail
 // this test unless it is also added to the allowlist — forcing an
@@ -56,12 +56,12 @@ var allowedWriters = map[string]bool{
 	// SEPARATE lifecycle: UPDATE job_deliveries SET status='SUCCEEDED'
 	// is delivery-completion (NOT jobs). PR 3.5-a does NOT touch
 	// delivery completion.
-	filepath.Join("internal", "store", "store_deliveries.go"):      true,
+	filepath.Join("internal", "store", "store_deliveries.go"):       true,
 	filepath.Join("internal", "store", "store_deliveries_lease.go"): true,
 	// SEPARATE lifecycles: UPDATE workflow_steps / workflow_runs SET
 	// status='SUCCEEDED' is workflow-completion (NOT jobs).
 	// PR 3.5-a does NOT touch workflow completion.
-	filepath.Join("internal", "workflow", "sqlite_repository.go"):        true,
+	filepath.Join("internal", "workflow", "sqlite_repository.go"):         true,
 	filepath.Join("internal", "workflow", "sqlite_repository_queries.go"): true,
 	filepath.Join("internal", "workflow", "sqlite_repository_steps.go"):   true,
 }

@@ -41,9 +41,9 @@ func (s *SQLiteStore) ClaimNextPendingJob(workerID string, allowedJobTypes []str
 	for rows.Next() {
 		var (
 			jobID, status, assignedTo, claimedBy, jobFingerprint, runID, jobRunID sql.NullString
-			videoName, projectID                                                   sql.NullString
-			retryCount                                                             sql.NullInt64
-			requestJSON, resultJSON                                                sql.NullString
+			videoName, projectID                                                  sql.NullString
+			retryCount                                                            sql.NullInt64
+			requestJSON, resultJSON                                               sql.NullString
 		)
 		if err := rows.Scan(&jobID, &status, &assignedTo, &claimedBy, &jobFingerprint, &runID, &jobRunID,
 			&videoName, &projectID, &retryCount, &requestJSON, &resultJSON); err != nil {
@@ -195,6 +195,11 @@ func jobTypeAllowed(payload map[string]any, allowedJobTypes []string) bool {
 }
 
 // JobsRepository exposes the minimal job read operations needed by HTTP handlers.
+// This is the READ-ONLY interface — for any write operation (create, claim,
+// transition, PR3 lifecycle), see JobRepository in jobs_writer_types.go.
+// SQLiteJobsRepository is the adapter; SQLiteJobRepository is the full write-capable
+// implementation. The naming difference (Jobs vs Job, plural vs singular) is
+// intentional: JobsRepository = read-only projection, JobRepository = full CRUD.
 type JobsRepository interface {
 	ListJobs(ctx context.Context, limit int) ([]map[string]any, error)
 	GetJob(ctx context.Context, jobID string) (map[string]any, error)

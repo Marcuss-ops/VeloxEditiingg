@@ -182,5 +182,3 @@ func (h *DriveHandlers) GetOutroFolderContentsByIDHandler(c *gin.Context) {
 		"files": items,
 	})
 }
-
-

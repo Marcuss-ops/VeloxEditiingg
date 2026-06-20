@@ -88,10 +88,10 @@ type Step struct {
 // RunProgress is what CompleteStepAndReleaseDependents returns so callers
 // (CLI/UI) can introspect DAG state without re-querying per-step.
 type RunProgress struct {
-	Run        Run
-	Steps      []Step
-	Activated  []string // step_keys that just flipped BLOCKED → READY in this transaction
-	Completed  bool     // true if Run now reaches SUCCEEDED
+	Run       Run
+	Steps     []Step
+	Activated []string // step_keys that just flipped BLOCKED → READY in this transaction
+	Completed bool     // true if Run now reaches SUCCEEDED
 }
 
 // WorkflowSpec is what a producer hands to Repository.CreateRun.
@@ -116,19 +116,19 @@ type WorkflowStepSpec struct {
 
 // StartStep is the input for Repository.MarkStepRunning.
 type StartStep struct {
-	RunID    string
-	StepID   string
-	JobID    string // the job created by the workflowStepReadyHandler
-	Attempt  int    // 1-based attempt number
+	RunID   string
+	StepID  string
+	JobID   string // the job created by the workflowStepReadyHandler
+	Attempt int    // 1-based attempt number
 }
 
 // CompleteStep is the input for Repository.CompleteStepAndReleaseDependents.
 type CompleteStep struct {
-	RunID        string
-	StepID       string
-	Output       map[string]any
-	Attempt      int
-	CompletedAt  time.Time
+	RunID       string
+	StepID      string
+	Output      map[string]any
+	Attempt     int
+	CompletedAt time.Time
 }
 
 // FailStep is the input for Repository.FailStep.

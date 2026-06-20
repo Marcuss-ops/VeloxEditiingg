@@ -8,6 +8,9 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"velox-server/internal/status"
+	"velox-server/internal/util"
 )
 
 // =====================================================================
@@ -42,7 +45,7 @@ func (s *Service) Receive(ctx context.Context, uploadID string, reader io.Reader
 	if session == nil {
 		return nil, fmt.Errorf("%w: upload_id=%s", ErrUploadNotFound, uploadID)
 	}
-	if session.Status != "CREATED" && session.Status != "UPLOADING" {
+	if session.Status != string(status.UploadCreated) && session.Status != string(status.UploadUploading) {
 		return nil, fmt.Errorf("%w: upload_id=%s status=%s",
 			ErrUploadStateInvalid, uploadID, session.Status)
 	}
@@ -53,9 +56,9 @@ func (s *Service) Receive(ctx context.Context, uploadID string, reader io.Reader
 
 	// Move CREATED -> UPLOADING so the reconciler (chunk 5) treats it
 	// differently from a row that hasn't started streaming yet.
-	if session.Status == "CREATED" {
+	if session.Status == string(status.UploadCreated) {
 		if err := s.repo.UpdateUploadStatus(ctx, uploadID, UploadFields{
-			Status: ptrString("UPLOADING"),
+			Status: util.PtrString(string(status.UploadUploading)),
 		}); err != nil {
 			return nil, err
 		}
@@ -124,7 +127,7 @@ func (s *Service) Receive(ctx context.Context, uploadID string, reader io.Reader
 	// ----- mark RECEIVED -----
 	now := s.clock.Now()
 	if err := s.repo.UpdateUploadStatus(ctx, uploadID, UploadFields{
-		Status:            ptrString("RECEIVED"),
+		Status:            util.PtrString(string(status.UploadReceived)),
 		ReceivedSizeBytes: &receivedSize,
 		ReceivedSHA256:    &receivedSHA,
 		CompletedAt:       &now,
@@ -136,7 +139,7 @@ func (s *Service) Receive(ctx context.Context, uploadID string, reader io.Reader
 		UploadID:          uploadID,
 		ReceivedSizeBytes: receivedSize,
 		ReceivedSHA256:    receivedSHA,
-		Status:            "RECEIVED",
+		Status:            string(status.UploadReceived),
 	}, nil
 }
 
@@ -145,7 +148,7 @@ func (s *Service) Receive(ctx context.Context, uploadID string, reader io.Reader
 func (s *Service) markFailed(ctx context.Context, uploadID, reason string) error {
 	now := s.clock.Now()
 	err := s.repo.UpdateUploadStatus(ctx, uploadID, UploadFields{
-		Status:      ptrString("FAILED"),
+		Status:      util.PtrString(string(status.UploadFailed)),
 		CompletedAt: &now,
 	})
 	if err != nil {

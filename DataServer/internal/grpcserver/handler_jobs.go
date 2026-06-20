@@ -153,7 +153,7 @@ func (h *Handler) handleJobAccepted(workerID string, ja *pb.JobAccepted) {
 		Attempt:          attemptNum,
 		ExpectedRevision: currentRev,
 	}
-	if err :=	h.lifecycleSvc.Repo().StartJob(context.Background(), startParams); err != nil {
+	if err := h.lifecycleSvc.Repo().StartJob(context.Background(), startParams); err != nil {
 		if errors.Is(err, store.ErrTransitionConflict) {
 			log.Printf("[GRPC] Worker %s accepted job %s but lease is stale (rev=%d attempt=%d) — rejecting",
 				workerID, jobID, currentRev, attemptNum)

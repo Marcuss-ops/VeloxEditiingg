@@ -46,13 +46,13 @@ import (
 type Handler struct {
 	pb.UnimplementedWorkerControlServer
 
-	registry      *workersreg.Registry
-	cmdMgr        *workersreg.CommandManager
-	lifecycleSvc  *queue.LifecycleService
-	artifactSvc   *artifacts.Service
-	dbStore       *store.SQLiteStore
-	config        *HandlerConfig
-	authorizer    WorkerAuthorizer // P0: gates workers against VELOX_ALLOWED_WORKERS
+	registry     *workersreg.Registry
+	cmdMgr       *workersreg.CommandManager
+	lifecycleSvc *queue.LifecycleService
+	artifactSvc  *artifacts.Service
+	dbStore      *store.SQLiteStore
+	config       *HandlerConfig
+	authorizer   WorkerAuthorizer // P0: gates workers against VELOX_ALLOWED_WORKERS
 
 	mu             sync.Mutex
 	sessions       map[string]*workerSession // sessionID → active stream session

@@ -19,9 +19,9 @@ import (
 
 // Store is the database adapter for outbox events.
 type Store struct {
-	DB        *sql.DB
-	IDGen     func() string // optional; defaults to 16-byte random hex
-	NowFn     func() time.Time
+	DB    *sql.DB
+	IDGen func() string // optional; defaults to 16-byte random hex
+	NowFn func() time.Time
 }
 
 // NewStore builds a Store backed by an *sql.DB.
@@ -122,15 +122,16 @@ func exec(ctx context.Context, ex Executor, q string, args ...any) (sql.Result, 
 // rows to PROCESSING, stamping locked_by/locked_until/attempt_count.
 //
 // Per the PR 8 spec:
-//   UPDATE outbox_events
-//   SET status='PROCESSING', locked_by=?, locked_until=?, attempt_count=attempt_count+1
-//   WHERE event_id IN (
-//       SELECT event_id FROM outbox_events
-//       WHERE status IN ('PENDING','PROCESSING')
-//         AND available_at <= ?
-//         AND (status='PENDING' OR locked_until < ?)
-//       ORDER BY created_at LIMIT ?)
-//   RETURNING event_id, event_type, aggregate_type, aggregate_id, payload_json, attempt_count, created_at
+//
+//	UPDATE outbox_events
+//	SET status='PROCESSING', locked_by=?, locked_until=?, attempt_count=attempt_count+1
+//	WHERE event_id IN (
+//	    SELECT event_id FROM outbox_events
+//	    WHERE status IN ('PENDING','PROCESSING')
+//	      AND available_at <= ?
+//	      AND (status='PENDING' OR locked_until < ?)
+//	    ORDER BY created_at LIMIT ?)
+//	RETURNING event_id, event_type, aggregate_type, aggregate_id, payload_json, attempt_count, created_at
 //
 // SQLite supports RETURNING from 3.35; earlier versions return an error
 // here (fail-fast at startup rather than silently dropping events).

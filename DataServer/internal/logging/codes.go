@@ -146,24 +146,24 @@ const (
 
 // YouTube domain (handlers + integration)
 const (
-	CodeYouTubeUploadFailed         = "YOUTUBE_UPLOAD_FAILED"
-	CodeYouTubeDirectUploadFailed   = "YOUTUBE_DIRECT_UPLOAD_FAILED"
-	CodeYouTubeBatchStarted         = "YOUTUBE_BATCH_STARTED"
-	CodeYouTubeBatchItemStarted     = "YOUTUBE_BATCH_ITEM_STARTED"
-	CodeYouTubeBatchItemSkipped     = "YOUTUBE_BATCH_ITEM_SKIPPED"
-	CodeYouTubeBatchItemFailed      = "YOUTUBE_BATCH_ITEM_FAILED"
-	CodeYouTubeBatchItemCompleted   = "YOUTUBE_BATCH_ITEM_COMPLETED"
-	CodeYouTubeBatchItemWaiting     = "YOUTUBE_BATCH_ITEM_WAITING"
-	CodeYouTubeBatchCleanup         = "YOUTUBE_BATCH_CLEANUP"
+	CodeYouTubeUploadFailed       = "YOUTUBE_UPLOAD_FAILED"
+	CodeYouTubeDirectUploadFailed = "YOUTUBE_DIRECT_UPLOAD_FAILED"
+	CodeYouTubeBatchStarted       = "YOUTUBE_BATCH_STARTED"
+	CodeYouTubeBatchItemStarted   = "YOUTUBE_BATCH_ITEM_STARTED"
+	CodeYouTubeBatchItemSkipped   = "YOUTUBE_BATCH_ITEM_SKIPPED"
+	CodeYouTubeBatchItemFailed    = "YOUTUBE_BATCH_ITEM_FAILED"
+	CodeYouTubeBatchItemCompleted = "YOUTUBE_BATCH_ITEM_COMPLETED"
+	CodeYouTubeBatchItemWaiting   = "YOUTUBE_BATCH_ITEM_WAITING"
+	CodeYouTubeBatchCleanup       = "YOUTUBE_BATCH_CLEANUP"
 
-	CodeYouTubeReviewStarted         = "YOUTUBE_REVIEW_STARTED"
-	CodeYouTubeReviewNoGroups        = "YOUTUBE_REVIEW_NO_GROUPS"
-	CodeYouTubeReviewRefreshingMeta  = "YOUTUBE_REVIEW_REFRESHING_METADATA"
-	CodeYouTubeReviewOAuthFound      = "YOUTUBE_REVIEW_OAUTH_METADATA_FOUND"
-	CodeYouTubeReviewChannelFail     = "YOUTUBE_REVIEW_CHANNEL_INFO_FETCH_FAIL"
-	CodeYouTubeReviewResolved        = "YOUTUBE_REVIEW_CHANNEL_RESOLVED"
-	CodeYouTubePolicyDataDirMissing  = "YOUTUBE_POLICY_DATA_DIR_MISSING"
-	CodeYouTubeRetentionCleanupDone  = "YOUTUBE_RETENTION_CLEANUP_DONE"
+	CodeYouTubeReviewStarted        = "YOUTUBE_REVIEW_STARTED"
+	CodeYouTubeReviewNoGroups       = "YOUTUBE_REVIEW_NO_GROUPS"
+	CodeYouTubeReviewRefreshingMeta = "YOUTUBE_REVIEW_REFRESHING_METADATA"
+	CodeYouTubeReviewOAuthFound     = "YOUTUBE_REVIEW_OAUTH_METADATA_FOUND"
+	CodeYouTubeReviewChannelFail    = "YOUTUBE_REVIEW_CHANNEL_INFO_FETCH_FAIL"
+	CodeYouTubeReviewResolved       = "YOUTUBE_REVIEW_CHANNEL_RESOLVED"
+	CodeYouTubePolicyDataDirMissing = "YOUTUBE_POLICY_DATA_DIR_MISSING"
+	CodeYouTubeRetentionCleanupDone = "YOUTUBE_RETENTION_CLEANUP_DONE"
 
 	CodeYouTubeListVideosSkip           = "YOUTUBE_LIST_VIDEOS_SKIP"
 	CodeYouTubeGroupPrivateChannelSkip  = "YOUTUBE_GROUP_PRIVATE_CHANNEL_SKIP"
@@ -197,11 +197,11 @@ const (
 
 // Store (sqlite) lifecycle
 const (
-	CodeSQLitePingCloseAfterFail   = "SQLITE_PING_CLOSE_AFTER_FAIL"
-	CodeSQLitePragmaFail           = "SQLITE_PRAGMA_FAIL"
-	CodeSQLiteMigrationCloseFail   = "SQLITE_MIGRATION_CLOSE_AFTER_FAIL"
-	CodeSQLiteClosePostMigration   = "SQLITE_CLOSE_POST_MIGRATION"
-	CodeSQLiteMigrationApplied     = "SQLITE_MIGRATION_APPLIED"
+	CodeSQLitePingCloseAfterFail = "SQLITE_PING_CLOSE_AFTER_FAIL"
+	CodeSQLitePragmaFail         = "SQLITE_PRAGMA_FAIL"
+	CodeSQLiteMigrationCloseFail = "SQLITE_MIGRATION_CLOSE_AFTER_FAIL"
+	CodeSQLiteClosePostMigration = "SQLITE_CLOSE_POST_MIGRATION"
+	CodeSQLiteMigrationApplied   = "SQLITE_MIGRATION_APPLIED"
 )
 
 // Component identifiers for structured logging
@@ -369,15 +369,15 @@ var CodeDescriptions = map[string]string{
 	CodeYouTubeAutoUploadPersistFail:    "YouTube auto-upload status persist failed",
 
 	// YouTube domain.
-	CodeYouTubeUploadFailed:         "YouTube upload failed",
-	CodeYouTubeDirectUploadFailed:   "YouTube direct upload failed",
-	CodeYouTubeBatchStarted:         "YouTube batch upload started",
-	CodeYouTubeBatchItemStarted:     "YouTube batch upload item started",
-	CodeYouTubeBatchItemSkipped:     "YouTube batch upload item skipped",
-	CodeYouTubeBatchItemFailed:      "YouTube batch upload item failed",
-	CodeYouTubeBatchItemCompleted:   "YouTube batch upload item completed",
-	CodeYouTubeBatchItemWaiting:     "YouTube batch upload rate-limit delay",
-	CodeYouTubeBatchCleanup:         "YouTube batch upload cache cleanup",
+	CodeYouTubeUploadFailed:       "YouTube upload failed",
+	CodeYouTubeDirectUploadFailed: "YouTube direct upload failed",
+	CodeYouTubeBatchStarted:       "YouTube batch upload started",
+	CodeYouTubeBatchItemStarted:   "YouTube batch upload item started",
+	CodeYouTubeBatchItemSkipped:   "YouTube batch upload item skipped",
+	CodeYouTubeBatchItemFailed:    "YouTube batch upload item failed",
+	CodeYouTubeBatchItemCompleted: "YouTube batch upload item completed",
+	CodeYouTubeBatchItemWaiting:   "YouTube batch upload rate-limit delay",
+	CodeYouTubeBatchCleanup:       "YouTube batch upload cache cleanup",
 
 	CodeYouTubeReviewStarted:        "YouTube review started",
 	CodeYouTubeReviewNoGroups:       "YouTube review no groups found",

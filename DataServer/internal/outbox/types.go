@@ -20,19 +20,20 @@ const (
 // Event is the canonical in-memory representation of an outbox row.
 //
 // Wire format (table: outbox_events):
-//   event_id       TEXT PRIMARY KEY
-//   aggregate_type TEXT NOT NULL
-//   aggregate_id   TEXT NOT NULL
-//   event_type     TEXT NOT NULL
-//   payload_json   TEXT NOT NULL  (default '{}')
-//   status         TEXT NOT NULL  (PENDING|PROCESSING|PROCESSED|FAILED)
-//   available_at   TEXT NOT NULL  (RFC3339, deferred-dispatch support)
-//   attempt_count  INTEGER NOT NULL
-//   locked_by      TEXT
-//   locked_until   TEXT
-//   processed_at   TEXT
-//   last_error     TEXT
-//   created_at     TEXT NOT NULL
+//
+//	event_id       TEXT PRIMARY KEY
+//	aggregate_type TEXT NOT NULL
+//	aggregate_id   TEXT NOT NULL
+//	event_type     TEXT NOT NULL
+//	payload_json   TEXT NOT NULL  (default '{}')
+//	status         TEXT NOT NULL  (PENDING|PROCESSING|PROCESSED|FAILED)
+//	available_at   TEXT NOT NULL  (RFC3339, deferred-dispatch support)
+//	attempt_count  INTEGER NOT NULL
+//	locked_by      TEXT
+//	locked_until   TEXT
+//	processed_at   TEXT
+//	last_error     TEXT
+//	created_at     TEXT NOT NULL
 type Event struct {
 	EventID       string
 	EventType     string

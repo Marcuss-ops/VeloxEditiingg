@@ -3,30 +3,34 @@
 // Black-box verification of the SPEC invariants that the verified
 // finalization contract enforces:
 //
-//   1. JobResult success alone does NOT promote jobs.status to
-//      SUCCEEDED — the FinalizationRepository interface is the ONLY
-//      surface producing that transition (no JobResult handler
-//      short-circuit on this side of the worker/master trust line).
-//   2. LifecycleService PR3.Start / PR3Fail / PR3Cancel / PR3Renew
-//      cannot produce jobs.status='SUCCEEDED'. Verified by absence of
-//      any such method in the JobRepository interface and by the
-//      finalization scan in scan_test.go (cross-file invariant).
+//  1. JobResult success alone does NOT promote jobs.status to
+//     SUCCEEDED — the FinalizationRepository interface is the ONLY
+//     surface producing that transition (no JobResult handler
+//     short-circuit on this side of the worker/master trust line).
 //
-//   3. Only the verified-artifact path (status='FINALIZING' upload
-//      + receiving sha256 matching master-computed via Receive which
-//      already executed before FinalizeVerified is called) promotes
-//      jobs.status='SUCCEEDED'.
-//   4. Without an artifact_uploads row pointing at the job, Finalize
-//      refuses with ErrUploadNotFound and the tx rolls back — no
-//      SUCCEEDED leak.
-//   5. An artifact whose status is still 'STAGING' (or any value
-//      other than the FINALIZING artifact_uploads status) cannot
-//      promote — Step 1's 'FINALIZING only' precondition rejects
-//      with ErrUploadStateInvalid.
-//   6. If job_attempts.status is NOT 'RENDER_FINISHED' when Finalize
-//      is called, the Step 4 CAS returns 0 rows and the entire tx
-//      rolls back (no partial mutations of jobs / artifacts /
-//      outbox_events / job_deliveries).
+//  2. LifecycleService PR3.Start / PR3Fail / PR3Cancel / PR3Renew
+//     cannot produce jobs.status='SUCCEEDED'. Verified by absence of
+//     any such method in the JobRepository interface and by the
+//     finalization scan in scan_test.go (cross-file invariant).
+//
+//  3. Only the verified-artifact path (status='FINALIZING' upload
+//     + receiving sha256 matching master-computed via Receive which
+//     already executed before FinalizeVerified is called) promotes
+//     jobs.status='SUCCEEDED'.
+//
+//  4. Without an artifact_uploads row pointing at the job, Finalize
+//     refuses with ErrUploadNotFound and the tx rolls back — no
+//     SUCCEEDED leak.
+//
+//  5. An artifact whose status is still 'STAGING' (or any value
+//     other than the FINALIZING artifact_uploads status) cannot
+//     promote — Step 1's 'FINALIZING only' precondition rejects
+//     with ErrUploadStateInvalid.
+//
+//  6. If job_attempts.status is NOT 'RENDER_FINISHED' when Finalize
+//     is called, the Step 4 CAS returns 0 rows and the entire tx
+//     rolls back (no partial mutations of jobs / artifacts /
+//     outbox_events / job_deliveries).
 //
 // The "happy path" test (TestFinalizeVerified_HappyPath) covers the
 // inverse: with all preconditions met, Finalize produces precisely
@@ -496,11 +500,11 @@ func TestFinalizeVerified_AttemptNotRenderFinishedRollsBack(t *testing.T) {
 
 	// Whole-tx rollback — verify NOTHING was mutated downstream.
 	checks := []struct {
-		table   string
-		column  string
-		key     string
-		keyCol  string
-		want    string
+		table  string
+		column string
+		key    string
+		keyCol string
+		want   string
 	}{
 		{"jobs", "status", f.JobID, "job_id", "RUNNING"},
 		{"artifacts", "status", f.ArtifactID, "id", "STAGING"},
@@ -572,12 +576,12 @@ func TestCreateArtifactAndUploadSession_Atomic(t *testing.T) {
 
 	err := fin.CreateArtifactAndUploadSession(context.Background(),
 		artifacts.CreateArtifactAndUploadSessionCommand{
-			ArtifactID:   "art-c1",
-			UploadID:     "up-c1",
-			JobID:        "J-c1",
-			Kind:         "render",
-			WorkerID:     "worker-1",
-			LeaseID:      "lease-1",
+			ArtifactID:    "art-c1",
+			UploadID:      "up-c1",
+			JobID:         "J-c1",
+			Kind:          "render",
+			WorkerID:      "worker-1",
+			LeaseID:       "lease-1",
 			AttemptNumber: 1,
 		})
 	if err != nil {

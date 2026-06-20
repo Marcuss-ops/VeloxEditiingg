@@ -153,5 +153,3 @@ func inferScheme(reference string) string {
 		return "file"
 	}
 }
-
-

@@ -176,5 +176,3 @@ func normalizeAllowedRoots(roots ...string) []string {
 	}
 	return out
 }
-
-

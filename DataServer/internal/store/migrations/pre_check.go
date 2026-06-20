@@ -4,16 +4,16 @@
 // here, not in the .sql file).
 //
 // Today there is exactly one such check:
-//   * 028_legacy_drop.sql refuses to drop orchestrator_jobs /
+//   - 028_legacy_drop.sql refuses to drop orchestrator_jobs /
 //     orchestrator_outbox unconditionally until we confirm workflow_runs has
 //     absorbed the legacy data. The check distinguishes three cases:
 //     1. workflow_runs already has rows                    → DROP safely.
 //     2. workflow_runs empty AND orchestrator_* empty      → DROP safely
-//        (typical fresh install after running 001..027 alone).
+//     (typical fresh install after running 001..027 alone).
 //     3. workflow_runs empty AND orchestrator_* non-empty  → REFUSE with a
-//        hard error that tells the operator exactly what to run next.
+//     hard error that tells the operator exactly what to run next.
 //     4. workflow_runs does not exist yet (older install)   → TREAT like
-//        case 3 (data would be orphaned).
+//     case 3 (data would be orphaned).
 package migrations
 
 import (
@@ -174,10 +174,10 @@ func MustEnsureNoStorageKeyDuplicates(db *sql.DB, version int) error {
 	defer rows.Close()
 
 	type dupSample struct {
-		provider   string
-		key        string
-		count      int64
-		sampleID   string
+		provider string
+		key      string
+		count    int64
+		sampleID string
 	}
 	var samples []dupSample
 	for rows.Next() {

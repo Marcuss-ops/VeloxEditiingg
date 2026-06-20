@@ -276,7 +276,6 @@ func isHTMLPayload(buf []byte) bool {
 	return strings.HasPrefix(detected, "text/html") || strings.HasPrefix(detected, "application/xhtml+xml")
 }
 
-
 // NewTypedResolversFromStore creates the 4 standard typed resolvers from a Store.
 // Used by the new AssetService.
 func NewTypedResolversFromStore(store *Store, drive DriveDownloader, httpClient *http.Client) []Resolver {

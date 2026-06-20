@@ -23,8 +23,8 @@ func newTestConfig(t *testing.T) *config.Config {
 		Database: config.DatabaseConfig{DBPath: dbPath},
 		Runtime:  config.RuntimeConfig{DataDir: tmpDir},
 		Workers: config.WorkersConfig{
-			MaxJobAttempts:    3,
-			AllowedWorkerIDs:  []string{"test-worker-1"},
+			MaxJobAttempts:   3,
+			AllowedWorkerIDs: []string{"test-worker-1"},
 		},
 	}
 }

@@ -8,10 +8,11 @@
 // the artifact to READY or the job to SUCCEEDED.
 //
 // State machine:
-//   STAGING (worker upload in progress) ── upload-complete ─► VERIFYING
-//   VERIFYING (master computes SHA + size + mime) ── match ─► READY
-//   VERIFYING                                       ── mismatch ─► QUARANTINED
-//   READY (master-verified) ── retention window ──► DELETED
+//
+//	STAGING (worker upload in progress) ── upload-complete ─► VERIFYING
+//	VERIFYING (master computes SHA + size + mime) ── match ─► READY
+//	VERIFYING                                       ── mismatch ─► QUARANTINED
+//	READY (master-verified) ── retention window ──► DELETED
 //
 // The SHA-256 + size work happens BETWEEN two transactions to keep the
 // writer lock short. SQLite is the source of truth for status; the on-disk
@@ -46,13 +47,13 @@ type FinalizeRenderInput struct {
 
 // FinalizeRenderResult is what the service returns on success.
 type FinalizeRenderResult struct {
-	ArtifactID  string
-	Status      string
-	VerifiedAt  time.Time
-	SizeBytes   int64
-	SHA256      string
-	MIMEType    string
-	DurationMs  int64
+	ArtifactID string
+	Status     string
+	VerifiedAt time.Time
+	SizeBytes  int64
+	SHA256     string
+	MIMEType   string
+	DurationMs int64
 }
 
 // ErrArtifactVerificationFailed is returned when the master's re-hash does
@@ -78,12 +79,12 @@ func NewArtifactFinalizationService(dbStore *store.SQLiteStore) *ArtifactFinaliz
 // caller (typically the upload-completed HTTP handler) supplies what the
 // worker reported plus the local tempfile to verify. The service:
 //
-//   1. (Tx1) lock the artifact row in VERIFYING — fails fast if it is not
-//      in STAGING (already verified, deleted, or scope mismatch).
-//   2. (off-line) compute SHA-256, sniff mime, measure size; on mismatch
-//      with WorkerSHA256, transition to QUARANTINED and return the error.
-//   3. (Tx2) mark READY with verified_at + sha256 + mime_type + duration_ms,
-//      emit artifact_ready outbox event.
+//  1. (Tx1) lock the artifact row in VERIFYING — fails fast if it is not
+//     in STAGING (already verified, deleted, or scope mismatch).
+//  2. (off-line) compute SHA-256, sniff mime, measure size; on mismatch
+//     with WorkerSHA256, transition to QUARANTINED and return the error.
+//  3. (Tx2) mark READY with verified_at + sha256 + mime_type + duration_ms,
+//     emit artifact_ready outbox event.
 //
 // File copy → final storage path is out of scope here; the upload
 // endpoint writes the final blob into a tempfile controlled by the

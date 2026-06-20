@@ -588,13 +588,13 @@ func TestPR3RenewLease_SkipRevisionCAS(t *testing.T) {
 	}
 
 	cmd := RenewLeaseCommand{
-		JobID:             "job-renew-skip",
-		WorkerID:          "w1",
-		LeaseID:           "lease-A",
-		LeaseExpiry:       now.Add(60 * time.Minute),
-		SkipRevisionCAS:   true,
-		ExpectedRevision:  999, // Would fail, but SkipRevisionCAS=true bypasses it.
-		EmitEvent:         false,
+		JobID:            "job-renew-skip",
+		WorkerID:         "w1",
+		LeaseID:          "lease-A",
+		LeaseExpiry:      now.Add(60 * time.Minute),
+		SkipRevisionCAS:  true,
+		ExpectedRevision: 999, // Would fail, but SkipRevisionCAS=true bypasses it.
+		EmitEvent:        false,
 	}
 	if err := repo.PR3RenewLease(ctx, cmd); err != nil {
 		t.Fatalf("PR3RenewLease with SkipRevisionCAS: %v", err)
@@ -634,12 +634,12 @@ func TestPR3RenewLease_StaleRevisionConflict(t *testing.T) {
 
 	// Stale revision without skip.
 	cmd := RenewLeaseCommand{
-		JobID:             "job-renew-conflict",
-		WorkerID:          "w1",
-		LeaseID:           "lease-A",
-		LeaseExpiry:       now.Add(60 * time.Minute),
-		SkipRevisionCAS:   false,
-		ExpectedRevision:  3, // real = 5
+		JobID:            "job-renew-conflict",
+		WorkerID:         "w1",
+		LeaseID:          "lease-A",
+		LeaseExpiry:      now.Add(60 * time.Minute),
+		SkipRevisionCAS:  false,
+		ExpectedRevision: 3, // real = 5
 	}
 	err = repo.PR3RenewLease(ctx, cmd)
 	if !errors.Is(err, ErrTransitionConflict) {
@@ -663,12 +663,12 @@ func TestPR3RenewLease_NullRevision(t *testing.T) {
 	}
 
 	cmd := RenewLeaseCommand{
-		JobID:             "job-renew-null",
-		WorkerID:          "w1",
-		LeaseID:           "lease-A",
-		LeaseExpiry:       now.Add(60 * time.Minute),
-		SkipRevisionCAS:   false,
-		ExpectedRevision:  0, // COALESCE(NULL,0)=0
+		JobID:            "job-renew-null",
+		WorkerID:         "w1",
+		LeaseID:          "lease-A",
+		LeaseExpiry:      now.Add(60 * time.Minute),
+		SkipRevisionCAS:  false,
+		ExpectedRevision: 0, // COALESCE(NULL,0)=0
 	}
 	if err := repo.PR3RenewLease(ctx, cmd); err != nil {
 		t.Fatalf("PR3RenewLease with NULL revision: %v", err)
@@ -691,13 +691,13 @@ func TestPR3RenewLease_EmitEvent(t *testing.T) {
 	}
 
 	cmd := RenewLeaseCommand{
-		JobID:             "job-renew-event",
-		WorkerID:          "w1",
-		LeaseID:           "lease-A",
-		LeaseExpiry:       now.Add(60 * time.Minute),
-		SkipRevisionCAS:   true,
-		ExpectedRevision:  0,
-		EmitEvent:         true,
+		JobID:            "job-renew-event",
+		WorkerID:         "w1",
+		LeaseID:          "lease-A",
+		LeaseExpiry:      now.Add(60 * time.Minute),
+		SkipRevisionCAS:  true,
+		ExpectedRevision: 0,
+		EmitEvent:        true,
 	}
 	if err := repo.PR3RenewLease(ctx, cmd); err != nil {
 		t.Fatalf("PR3RenewLease with EmitEvent: %v", err)

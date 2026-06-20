@@ -211,11 +211,11 @@ func SmartUpscale(img image.Image, targetWidth, targetHeight int, outputPath str
 		finalImg := imaging.Resize(result.Image, targetWidth, targetHeight, imaging.Lanczos)
 		bounds = finalImg.Bounds()
 
-	if outputPath != "" {
-		if saveErr := imaging.Save(finalImg, outputPath); saveErr != nil {
-			return nil, fmt.Errorf("failed to save final image: %w", saveErr)
+		if outputPath != "" {
+			if saveErr := imaging.Save(finalImg, outputPath); saveErr != nil {
+				return nil, fmt.Errorf("failed to save final image: %w", saveErr)
+			}
 		}
-	}
 
 		return &UpscaleResult{
 			Image:      finalImg,

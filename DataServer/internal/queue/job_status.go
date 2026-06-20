@@ -1,5 +1,4 @@
-package queue//	isValidJobStatusTransition validates the canonical 7-state machine:
-//
+package queue //	isValidJobStatusTransition validates the canonical 7-state machine:
 //	"" / PENDING → LEASED, RUNNING, RETRY_WAIT, FAILED, CANCELLED
 //	LEASED       → RUNNING, FAILED, CANCELLED
 //	RUNNING      → SUCCEEDED, FAILED, RETRY_WAIT, CANCELLED

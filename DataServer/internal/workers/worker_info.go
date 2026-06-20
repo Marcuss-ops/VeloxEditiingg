@@ -103,7 +103,6 @@ func normalizeStringSlice(v interface{}) []string {
 	}
 }
 
-
 // GetSupportedJobTypes returns the list of job types a worker supports.
 func (w *WorkerInfo) GetSupportedJobTypes() []string {
 	if w.Capabilities == nil {
@@ -115,8 +114,6 @@ func (w *WorkerInfo) GetSupportedJobTypes() []string {
 	}
 	return ExtractStringSlice(v)
 }
-
-
 
 // ExtractStringSlice converts various slice-like types to []string.
 func ExtractStringSlice(v interface{}) []string {

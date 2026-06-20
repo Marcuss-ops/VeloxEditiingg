@@ -99,5 +99,3 @@ func (m *Module) RegisterRoutes(r *gin.Engine) {
 		}
 	}
 }
-
-

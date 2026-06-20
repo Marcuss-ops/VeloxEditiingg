@@ -49,7 +49,6 @@ func TestHandleRecoveryReport_NoRecoveryKey(t *testing.T) {
 	}
 }
 
-
 // TestHandleRecoveryReport_ValidPayload enqueues a ConfigurationUpdate.
 func TestHandleRecoveryReport_ValidPayload(t *testing.T) {
 	h := &Handler{}

@@ -94,7 +94,7 @@ func TestYouTubeRefreshPersistsNewAccessTokenToSQLite(t *testing.T) {
 				"refresh_token_encrypted": oldRefreshEnc,
 				"token_type":              "Bearer",
 				"expiry":                  oldExpiry.Format(time.RFC3339),
-				"key_version": int64(1),
+				"key_version":             int64(1),
 			},
 		},
 	}
@@ -365,6 +365,7 @@ func (f *fakeYTStore) ListYouTubeChannels() ([]map[string]interface{}, error) {
 //   - the in-RAM AccessToken and RefreshToken are the decrypted
 //     plaintexts (round-trip through AES-GCM is correct)
 //   - the parsed Expiry matches the RFC3339 seed
+//
 // Defence-in-depth case: a Service with no cipher must NOT silently
 // boot with empty credentials — it returns (0, nil) and the operator
 // sees a log line, not a populated cache. This matches the
@@ -488,4 +489,3 @@ func TestLoadOAuthChannelsFromSQLiteHydratesCache(t *testing.T) {
 		t.Errorf("orphan audit: expected 0 hydrated (no active rows), got %d", n3)
 	}
 }
-

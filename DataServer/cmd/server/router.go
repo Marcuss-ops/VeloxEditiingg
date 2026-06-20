@@ -66,7 +66,6 @@ func newRouter(cfg *config.Config, deps *serverDeps, registry *app.Registry) *gi
 	// ── Module routes (health, workers, youtube, drive, ansible, frontend) ──
 	registry.RegisterRoutes(r)
 
-
 	// ── Remaining routes not yet in modules ──────────────────────────────────
 	registerOrchestratorAdminRoutes(r, cfg, deps)
 	registerScriptRoutes(r, cfg, deps)
@@ -244,4 +243,3 @@ func registerOrchestratorRoutes(v1Admin gin.IRoutes, repo workflow.Repository) {
 		c.JSON(200, stats)
 	})
 }
-

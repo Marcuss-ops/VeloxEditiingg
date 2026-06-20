@@ -3,9 +3,9 @@ package creatorflow
 import (
 	"context"
 	"encoding/json"
-	"os"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -134,9 +134,9 @@ func TestForwardSchedulesAsyncPollAndWorkerHandoff(t *testing.T) {
 			if payloadErr != nil {
 				t.Fatalf("GetJobPayload: %v", payloadErr)
 			}
-		if got := payload["voiceover_path"]; got == nil || got.(string) != voicePath {
-			t.Fatalf("want voiceover_path %q, got %v", voicePath, got)
-		}
+			if got := payload["voiceover_path"]; got == nil || got.(string) != voicePath {
+				t.Fatalf("want voiceover_path %q, got %v", voicePath, got)
+			}
 			return
 		}
 		if time.Now().After(deadline) {
@@ -206,7 +206,7 @@ func TestForwardCompletedResultEnqueuesWorkerJob(t *testing.T) {
 	if job.RunID != "creator-complete-1" {
 		t.Fatalf("want run_id creator-complete-1, got %s", job.RunID)
 	}
-			payload, payloadErr := q.QueryService().GetJobPayload(context.Background(), "creator-complete-1")
+	payload, payloadErr := q.QueryService().GetJobPayload(context.Background(), "creator-complete-1")
 	if payloadErr != nil {
 		t.Fatalf("GetJobPayload: %v", payloadErr)
 	}

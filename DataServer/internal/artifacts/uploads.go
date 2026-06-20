@@ -60,11 +60,11 @@ type FinalizeArtifactCommand struct {
 // (default 24h, matching the spec's "blob finale senza riga DB dopo 24h"
 // reconciler rule).
 type UploadSession struct {
-	UploadID     string
-	ArtifactID   string
-	JobID        string
-	WorkerID     string
-	LeaseID      string
+	UploadID         string
+	ArtifactID       string
+	JobID            string
+	WorkerID         string
+	LeaseID          string
 	AttemptNumber    int
 	ExpectedRevision int
 
@@ -344,7 +344,7 @@ func (r *SQLiteRepository) FindStuckStaging(ctx context.Context, olderThan time.
 		return nil, fmt.Errorf("artifacts: FindStuckStaging rows: %w", err)
 	}
 	return out, nil
-}// ── GetActiveUploadByJob ─────────────────────────────────────────────────────
+} // ── GetActiveUploadByJob ─────────────────────────────────────────────────────
 
 // GetActiveUploadByJob returns the most recent CREATED or UPLOADING upload
 // session for the given job_id. This is the bridge between the worker protocol
@@ -399,12 +399,12 @@ func (r *SQLiteRepository) GetActiveUploadByJob(ctx context.Context, jobID strin
 
 // ChunkRecord represents one chunk in a chunked upload session.
 type ChunkRecord struct {
-	UploadID    string
-	ChunkIndex  int
-	SizeBytes   int64
-	SHA256      string
-	StorageKey  string
-	ReceivedAt  time.Time
+	UploadID   string
+	ChunkIndex int
+	SizeBytes  int64
+	SHA256     string
+	StorageKey string
+	ReceivedAt time.Time
 }
 
 // InsertChunk persists a single chunk record.

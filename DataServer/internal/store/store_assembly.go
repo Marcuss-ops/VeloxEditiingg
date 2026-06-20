@@ -62,10 +62,10 @@ LIMIT 1
 	var (
 		jobIDOut, status, jobType, videoName, projectID sql.NullString
 		createdAt, updatedAt, startedAt, completedAt    sql.NullString
-		lastError, errorMessage                        sql.NullString
-		revision                                      sql.NullInt64
-		primaryArtifactID, driveURL, youtubeVideoID    sql.NullString
-		videoUploaded                                  sql.NullInt64
+		lastError, errorMessage                         sql.NullString
+		revision                                        sql.NullInt64
+		primaryArtifactID, driveURL, youtubeVideoID     sql.NullString
+		videoUploaded                                   sql.NullInt64
 	)
 	if err := row.Scan(
 		&jobIDOut, &jobType, &status, &revision,
@@ -147,5 +147,3 @@ func selectStorageValue(storageKey, storageURL string) string {
 	}
 	return storageKey
 }
-
-

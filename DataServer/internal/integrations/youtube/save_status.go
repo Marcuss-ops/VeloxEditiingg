@@ -38,9 +38,9 @@ const (
 // reading the same JSON shape.
 type SaveStatus struct {
 	Timestamp    time.Time `json:"timestamp"`
-	Operation    string    `json:"operation"`          // "save", "save_all_reconcile", "sync_group", "save_data", "cleanup"
-	GroupTarget  string    `json:"group,omitempty"`    // name when Operation = "sync_group"
-	Result       string    `json:"result"`             // "ok" | "refused_safety_guard" | "error: ..."
+	Operation    string    `json:"operation"`       // "save", "save_all_reconcile", "sync_group", "save_data", "cleanup"
+	GroupTarget  string    `json:"group,omitempty"` // name when Operation = "sync_group"
+	Result       string    `json:"result"`          // "ok" | "refused_safety_guard" | "error: ..."
 	Error        string    `json:"error,omitempty"`
 	MemoryGroups int       `json:"memory_groups"`
 	DBGroupCount int       `json:"db_group_count"`

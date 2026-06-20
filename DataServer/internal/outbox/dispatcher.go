@@ -4,15 +4,15 @@
 //
 // Guarantees
 // ----------
-//   * Survives dispatcher crashes: each event is claimed atomically with
+//   - Survives dispatcher crashes: each event is claimed atomically with
 //     status=PROCESSING + locked_by/locked_until. If a dispatcher dies
 //     with the row locked, the next dispatcher's Claim sees
 //     (locked_until < now) and re-claims it.
-//   * Event marked PROCESSED only after Handler.Handle returns a nil
+//   - Event marked PROCESSED only after Handler.Handle returns a nil
 //     error. Transient retryable errors leave the row at status=PROCESSING
 //     with extended lock_until. Permanent errors OR attempt_count
 //     exceeding MaxAttempts move the event to status=FAILED.
-//   * No double-effect: handlers must be idempotent. The dispatcher does
+//   - No double-effect: handlers must be idempotent. The dispatcher does
 //     not deduplicate beyond what the database provides — by primary
 //     key. If a producer accidentally writes two rows with the same
 //     event_id, the second is an immediate INSERT-constraint failure.
@@ -169,11 +169,11 @@ func (d *Dispatcher) Poll(ctx context.Context) error {
 // dispatchEvent runs one handler invocation and applies the rules from
 // the PR 8 spec paragraph:
 //
-//   "evento marcato PROCESSED solo dopo successo"
-//   "dispatcher crash"          → row stays PROCESSING; lock expiry re-claims it
-//   "handler fallisce"          → permanent → FAILED, transient → retry
-//   "handler retry"             → extend lock, re-attempt up to MaxAttempts
-//   "handler idempotente"       → up to caller; dispatcher counts attempts
+//	"evento marcato PROCESSED solo dopo successo"
+//	"dispatcher crash"          → row stays PROCESSING; lock expiry re-claims it
+//	"handler fallisce"          → permanent → FAILED, transient → retry
+//	"handler retry"             → extend lock, re-attempt up to MaxAttempts
+//	"handler idempotente"       → up to caller; dispatcher counts attempts
 //
 // Panic handling: a panic inside Handle MUST NOT leave the row in PROCESSING
 // with stale locked_by/locked_until forever. We mark FAILED inside the defer

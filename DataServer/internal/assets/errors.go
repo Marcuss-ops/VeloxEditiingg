@@ -92,5 +92,3 @@ func errorAs(err error, target interface{}) bool {
 	}
 	return false
 }
-
-

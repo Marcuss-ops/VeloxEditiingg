@@ -4,10 +4,10 @@
 // All four handlers are registered with the outbox.Registry at startup
 // (one central registry, no per-package switches). Per PR 8 spec:
 //
-//   registry.Register(jobSucceededHandler)
-//   registry.Register(artifactReadyHandler)
-//   registry.Register(workflowStepReadyHandler)
-//   registry.Register(deliveryCreatedHandler)
+//	registry.Register(jobSucceededHandler)
+//	registry.Register(artifactReadyHandler)
+//	registry.Register(workflowStepReadyHandler)
+//	registry.Register(deliveryCreatedHandler)
 //
 // Handlers MUST be idempotent because the dispatcher may retry on
 // transient errors. They run inside the dispatcher's tick so blocking I/O

@@ -117,4 +117,3 @@ func ArtifactRepositoryContract(t *testing.T, factory ArtifactRepositoryFactory)
 func TestArtifactRepositoryContract_SQLite(t *testing.T) {
 	ArtifactRepositoryContract(t, NewSQLiteArtifactRepositoryFactory)
 }
-

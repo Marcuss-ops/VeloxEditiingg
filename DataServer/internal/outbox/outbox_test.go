@@ -1,13 +1,13 @@
 // Package outbox — tests covering the 8 PR 8 DoD scenarios.
 //
-//	1. Concurrent claim (multiple dispatchers race on the same Store).
-//	2. Lock expiry (stale PROCESSING rows are re-claimable).
-//	3. Dispatcher crash (row stays PROCESSING; restart reclaims).
-//	4. Handler fail/retry (transient → retry, permanent → FAILED, MaxAttempts → FAILED).
-//	5. Duplicate event (Insert twice — two distinct event_ids, dispatched twice).
-//	6. Idempotent handler (invariant: dispatcher does NOT de-dupe beyond the SQL layer).
-//	7. New event type without SQL migration (Registry.Register inserts no CHECK).
-//	8. PROCESSED-only-after-success (status flips to PROCESSED iff Handle returned nil).
+//  1. Concurrent claim (multiple dispatchers race on the same Store).
+//  2. Lock expiry (stale PROCESSING rows are re-claimable).
+//  3. Dispatcher crash (row stays PROCESSING; restart reclaims).
+//  4. Handler fail/retry (transient → retry, permanent → FAILED, MaxAttempts → FAILED).
+//  5. Duplicate event (Insert twice — two distinct event_ids, dispatched twice).
+//  6. Idempotent handler (invariant: dispatcher does NOT de-dupe beyond the SQL layer).
+//  7. New event type without SQL migration (Registry.Register inserts no CHECK).
+//  8. PROCESSED-only-after-success (status flips to PROCESSED iff Handle returned nil).
 //
 // All tests use a unique file::memory:?cache=shared DB so concurrent goroutines
 // inside one test share data while keeping tests isolated from each other.
@@ -391,10 +391,13 @@ func TestOutbox_DispatcherCrash_LeavesProcessingAndRecovers(t *testing.T) {
 	// Launch dispatcher; cancel ctx mid-flight (no graceful Stop).
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
-	go func() { defer close(done); _ = outbox.NewDispatcher(store, reg, outbox.Config{
-		PollInterval: 5 * time.Millisecond, BatchSize: 5,
-		LockDuration: 50 * time.Millisecond, MaxAttempts: 3,
-	}).Run(ctx) }()
+	go func() {
+		defer close(done)
+		_ = outbox.NewDispatcher(store, reg, outbox.Config{
+			PollInterval: 5 * time.Millisecond, BatchSize: 5,
+			LockDuration: 50 * time.Millisecond, MaxAttempts: 3,
+		}).Run(ctx)
+	}()
 
 	// Wait for the handler to fire, then cancel (simulating crash mid-handle).
 	select {
@@ -646,10 +649,13 @@ func TestOutbox_ProcessedOnlyAfterHandlerSuccess(t *testing.T) {
 
 	ctxB, cancelB := context.WithCancel(context.Background())
 	doneB := make(chan struct{})
-	go func() { defer close(doneB); _ = outbox.NewDispatcher(storeB, regB, outbox.Config{
-		PollInterval: 5 * time.Millisecond, BatchSize: 5,
-		LockDuration: 5 * time.Second, MaxAttempts: 3,
-	}).Run(ctxB) }()
+	go func() {
+		defer close(doneB)
+		_ = outbox.NewDispatcher(storeB, regB, outbox.Config{
+			PollInterval: 5 * time.Millisecond, BatchSize: 5,
+			LockDuration: 5 * time.Second, MaxAttempts: 3,
+		}).Run(ctxB)
+	}()
 	select {
 	case <-firedB:
 	case <-time.After(2 * time.Second):

@@ -121,7 +121,7 @@ func (s *SQLiteStore) GetYouTubeChannel(channelID string) (map[string]interface{
 func (s *SQLiteStore) DeleteYouTubeChannel(channelID string) error {
 	_, err := s.db.Exec(`DELETE FROM youtube_channels WHERE channel_id=?`, channelID)
 	return err
-}// UpdateYouTubeChannelMetadata persists a YouTube-API metadata refresh into
+} // UpdateYouTubeChannelMetadata persists a YouTube-API metadata refresh into
 // the canonical youtube_channels row. Only the columns the refresh can
 // actually change from a YouTube channels.list response are written:
 // title, thumbnail_url, last_sync_at, updated_at.

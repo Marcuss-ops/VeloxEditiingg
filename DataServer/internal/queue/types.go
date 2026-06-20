@@ -50,27 +50,27 @@ type JobResultSummary struct {
 // Anything not in this struct must NOT be readable through the legacy API.
 // New code should use the *Job struct and load what it needs explicitly.
 type JobView struct {
-	JobID           string           `json:"job_id"`
-	Type            string           `json:"job_type,omitempty"`
-	Status          JobStatus        `json:"status"`
-	Revision        int64            `json:"revision,omitempty"`
-	CurrentAttemptID *int64           `json:"current_attempt_id,omitempty"`
+	JobID            string    `json:"job_id"`
+	Type             string    `json:"job_type,omitempty"`
+	Status           JobStatus `json:"status"`
+	Revision         int64     `json:"revision,omitempty"`
+	CurrentAttemptID *int64    `json:"current_attempt_id,omitempty"`
 
-	VideoName       string           `json:"video_name,omitempty"`
-	ProjectID       string           `json:"project_id,omitempty"`
-	CreatedAt       time.Time        `json:"created_at"`
-	UpdatedAt       time.Time        `json:"updated_at"`
-	StartedAt       *time.Time       `json:"started_at,omitempty"`
-	CompletedAt     *time.Time       `json:"completed_at,omitempty"`
+	VideoName   string     `json:"video_name,omitempty"`
+	ProjectID   string     `json:"project_id,omitempty"`
+	CreatedAt   time.Time  `json:"created_at"`
+	UpdatedAt   time.Time  `json:"updated_at"`
+	StartedAt   *time.Time `json:"started_at,omitempty"`
+	CompletedAt *time.Time `json:"completed_at,omitempty"`
 
 	// Legacy-derived fields (computed by JobViewAssembler).
-	VideoUploaded   bool             `json:"video_uploaded,omitempty"`
-	MasterVideoPath string           `json:"master_video_path,omitempty"`
-	DriveURL        string           `json:"drive_url,omitempty"`
-	DriveFolderID   string           `json:"drive_folder_id,omitempty"`
-	YouTubeVideoID  string           `json:"youtube_video_id,omitempty"`
-	YouTubeURL      string           `json:"youtube_url,omitempty"`
+	VideoUploaded   bool   `json:"video_uploaded,omitempty"`
+	MasterVideoPath string `json:"master_video_path,omitempty"`
+	DriveURL        string `json:"drive_url,omitempty"`
+	DriveFolderID   string `json:"drive_folder_id,omitempty"`
+	YouTubeVideoID  string `json:"youtube_video_id,omitempty"`
+	YouTubeURL      string `json:"youtube_url,omitempty"`
 
-	LastErrorCode    string          `json:"last_error_code,omitempty"`
-	LastErrorMessage string          `json:"last_error_message,omitempty"`
+	LastErrorCode    string `json:"last_error_code,omitempty"`
+	LastErrorMessage string `json:"last_error_message,omitempty"`
 }

@@ -90,6 +90,7 @@ func (qm *QuotaManager) GetQuotaUsage(ctx context.Context) map[string]interface{
 		"reset_time":          "midnight Pacific Time",
 	}
 }
+
 // GetAnalyticsService creates a YouTube Analytics API service for a channel
 func (qm *QuotaManager) GetAnalyticsService(ctx context.Context, channelID string) (*ytanalytics.Service, error) {
 	channel := qm.service.GetChannel(channelID)

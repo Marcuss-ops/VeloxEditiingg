@@ -246,15 +246,15 @@ func (h *ChunkedUploadHandler) CompleteChunkedUpload() gin.HandlerFunc {
 			jobID, art.ID, session.UploadID, art.SHA256[:16]+"...", art.SizeBytes)
 
 		c.JSON(http.StatusOK, gin.H{
-			"ok":             true,
-			"job_id":         jobID,
-			"artifact_id":    art.ID,
-			"upload_id":      session.UploadID,
-			"status":         "SUCCEEDED",
-			"size":           art.SizeBytes,
-			"sha256":         art.SHA256,
-			"output_sha256":  art.SHA256, // worker compatibility field
-			"video_path":     art.StorageKey,
+			"ok":            true,
+			"job_id":        jobID,
+			"artifact_id":   art.ID,
+			"upload_id":     session.UploadID,
+			"status":        "SUCCEEDED",
+			"size":          art.SizeBytes,
+			"sha256":        art.SHA256,
+			"output_sha256": art.SHA256, // worker compatibility field
+			"video_path":    art.StorageKey,
 		})
 	}
 }

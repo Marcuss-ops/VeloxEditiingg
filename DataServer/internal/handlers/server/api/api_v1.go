@@ -91,4 +91,3 @@ func IsPublicReadOnlyRoute(path string) bool {
 
 	return false
 }
-

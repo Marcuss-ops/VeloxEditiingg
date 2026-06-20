@@ -23,21 +23,23 @@ const jobColumns = `job_id, status, video_name, project_id,
 	request_json, result_json`
 
 // scanJobRow scans a job row into a map, handling NULL SQL values gracefully.
-func scanJobRow(scanner interface{ Scan(dest ...interface{}) error }) (map[string]any, error) {
+func scanJobRow(scanner interface {
+	Scan(dest ...interface{}) error
+}) (map[string]any, error) {
 	var (
-		jobID, status, videoName, projectID                                                                          sql.NullString
-		createdAt, updatedAt, startedAt                                                                              sql.NullString
-		completedAt, assignedAt                                                                                      sql.NullString
-		assignedTo, workerName, claimedBy, claimedAt                                                                 sql.NullString
-		leaseID, leaseExpiry                                                                                         sql.NullString
-		retryCount, attempt, maxRetries, revision                                                                    sql.NullInt64
-		lastError, errorMessage, failedBy                                                                            sql.NullString
-		lastErrorAt, failedAt, processingAt                                                                          sql.NullString
-		lastUploadAttemptAt                                                                                          sql.NullString
-		lastDriveUploadResult, remoteStatus                                                                          sql.NullString
-		jobFingerprint, submittedVia, lastActivity, runID, jobRunID                                                  sql.NullString
-		logsUpdatedAt, slotDataRaw                                                                                   sql.NullString
-		requestJSON, resultJSON                                                                                      sql.NullString
+		jobID, status, videoName, projectID                         sql.NullString
+		createdAt, updatedAt, startedAt                             sql.NullString
+		completedAt, assignedAt                                     sql.NullString
+		assignedTo, workerName, claimedBy, claimedAt                sql.NullString
+		leaseID, leaseExpiry                                        sql.NullString
+		retryCount, attempt, maxRetries, revision                   sql.NullInt64
+		lastError, errorMessage, failedBy                           sql.NullString
+		lastErrorAt, failedAt, processingAt                         sql.NullString
+		lastUploadAttemptAt                                         sql.NullString
+		lastDriveUploadResult, remoteStatus                         sql.NullString
+		jobFingerprint, submittedVia, lastActivity, runID, jobRunID sql.NullString
+		logsUpdatedAt, slotDataRaw                                  sql.NullString
+		requestJSON, resultJSON                                     sql.NullString
 	)
 
 	dest := []interface{}{
@@ -63,7 +65,11 @@ func scanJobRow(scanner interface{ Scan(dest ...interface{}) error }) (map[strin
 	m := make(map[string]any)
 
 	// String columns
-	setStr := func(key string, ns sql.NullString) { if ns.Valid { m[key] = ns.String } }
+	setStr := func(key string, ns sql.NullString) {
+		if ns.Valid {
+			m[key] = ns.String
+		}
+	}
 	setStr("job_id", jobID)
 	setStr("status", status)
 	setStr("video_name", videoName)
@@ -96,7 +102,11 @@ func scanJobRow(scanner interface{ Scan(dest ...interface{}) error }) (map[strin
 	setStr("logs_updated_at", logsUpdatedAt)
 
 	// Integer columns
-	setInt := func(key string, ni sql.NullInt64) { if ni.Valid { m[key] = int(ni.Int64) } }
+	setInt := func(key string, ni sql.NullInt64) {
+		if ni.Valid {
+			m[key] = int(ni.Int64)
+		}
+	}
 	setInt("retry_count", retryCount)
 	setInt("attempt", attempt)
 	setInt("max_retries", maxRetries)

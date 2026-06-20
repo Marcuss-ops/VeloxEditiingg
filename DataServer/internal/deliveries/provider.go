@@ -1,12 +1,12 @@
 // Package deliveries is the delivery provider abstraction layer.
 //
 // Goal:
-//   * Decouple Velox's main flow from Drive / YouTube specifics.
-//   * Allow providers to live as long-lived adapters (DriveProvider,
+//   - Decouple Velox's main flow from Drive / YouTube specifics.
+//   - Allow providers to live as long-lived adapters (DriveProvider,
 //     YouTubeProvider) or skeleton stubs (S3Provider, LocalExportProvider)
 //     that return ErrProviderNotConfigured until a future deployment adds
 //     the wiring.
-//   * Make DeliveryRunner the single durable entry point for "push this
+//   - Make DeliveryRunner the single durable entry point for "push this
 //     artifact to this destination", so a process restart mid-upload does
 //     not lose work.
 //

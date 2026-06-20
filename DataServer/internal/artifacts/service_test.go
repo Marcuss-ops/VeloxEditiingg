@@ -29,6 +29,7 @@ import (
 
 	"velox-server/internal/store"
 	"velox-server/internal/store/migrations"
+	"velox-server/internal/util"
 )
 
 // =====================================================================
@@ -37,8 +38,8 @@ import (
 
 const (
 	testWorkerID = "worker-test-1"
-	testLeaseID   = "lease-test-1"
-	testRevision  = 5
+	testLeaseID  = "lease-test-1"
+	testRevision = 5
 )
 
 type testEnv struct {
@@ -695,7 +696,7 @@ func TestReceive_StateMachineGuards(t *testing.T) {
 	require.NoError(t, err)
 
 	// Force upload to FAILED.
-	require.NoError(t, env.repo.UpdateUploadStatus(context.Background(), sess.UploadID, UploadFields{Status: ptrString("FAILED")}))
+	require.NoError(t, env.repo.UpdateUploadStatus(context.Background(), sess.UploadID, UploadFields{Status: util.PtrString("FAILED")}))
 
 	_, err = env.svc.Receive(context.Background(), sess.UploadID, uploadBytes([]byte("resurrect")))
 	require.Error(t, err)

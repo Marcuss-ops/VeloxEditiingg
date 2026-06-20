@@ -4,8 +4,9 @@
 // storage_key generation, and atomic move-to-final on verification.
 //
 // The implementation uses local filesystem paths:
-//   staging/  ← worker upload lands here (STAGING status)
-//   final/    ← atomic move after VERIFYING → READY (storage_key points here)
+//
+//	staging/  ← worker upload lands here (STAGING status)
+//	final/    ← atomic move after VERIFYING → READY (storage_key points here)
 //
 // Future: swap the implementation for S3/MinIO/R2 without changing callers.
 package store

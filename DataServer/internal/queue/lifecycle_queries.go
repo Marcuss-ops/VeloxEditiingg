@@ -17,16 +17,16 @@ func (l *LifecycleService) GetJobsByStatus(ctx context.Context, status JobStatus
 	for _, sj := range storeJobs {
 		// Build a minimal queue.Job from the store.Job projection.
 		job := &Job{
-			JobID:      sj.JobID,
-			Status:     JobStatus(sj.Status),
-			VideoName:  sj.VideoName,
-			ProjectID:  sj.ProjectID,
-			CreatedAt:  sj.CreatedAt,
-			UpdatedAt:  sj.UpdatedAt,
-			StartedAt:  sj.StartedAt,
+			JobID:       sj.JobID,
+			Status:      JobStatus(sj.Status),
+			VideoName:   sj.VideoName,
+			ProjectID:   sj.ProjectID,
+			CreatedAt:   sj.CreatedAt,
+			UpdatedAt:   sj.UpdatedAt,
+			StartedAt:   sj.StartedAt,
 			CompletedAt: sj.CompletedAt,
-			RetryCount: sj.RetryCount,
-			MaxRetries: sj.MaxRetries,
+			RetryCount:  sj.RetryCount,
+			MaxRetries:  sj.MaxRetries,
 		}
 		result = append(result, job)
 	}

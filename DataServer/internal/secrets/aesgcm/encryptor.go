@@ -6,8 +6,8 @@
 // Key resolution policy (see LoadFromEnv):
 //   - VELOX_YT_OAUTH_TOKEN_KEY       — base64-encoded 32-byte key (preferred)
 //   - VELOX_YT_OAUTH_TOKEN_KEY_FILE  — path to a file holding the same
-//                                      base64-encoded key (avoids leaving
-//                                      the secret in the process env table)
+//     base64-encoded key (avoids leaving
+//     the secret in the process env table)
 //
 // If neither is set AND the caller passes requireIfMissing=false, the
 // loader returns a nil *Encryptor with a nil error — operators can boot

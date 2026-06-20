@@ -41,8 +41,6 @@ type StorageStore interface {
 	// Tracked niches
 	UpsertYouTubeTrackedNiche(niche string) error
 	ListYouTubeTrackedNiches() ([]string, error)
-
-
 }
 
 // Storage handles persistence of YouTube manager data

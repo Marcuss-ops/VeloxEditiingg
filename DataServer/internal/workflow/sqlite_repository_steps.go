@@ -314,9 +314,9 @@ func (r *SQLiteRepository) FailStep(ctx context.Context, cmd FailStep) (*RunProg
 					AggregateID: cmd.RunID,
 					EventType:   "WORKFLOW_RUN_FAILED",
 					Payload: marshalJSON(map[string]any{
-						"run_id":         cmd.RunID,
-						"error_code":     cmd.ErrorCode,
-						"error_message":  cmd.ErrorMessage,
+						"run_id":        cmd.RunID,
+						"error_code":    cmd.ErrorCode,
+						"error_message": cmd.ErrorMessage,
 					}),
 				})
 			}

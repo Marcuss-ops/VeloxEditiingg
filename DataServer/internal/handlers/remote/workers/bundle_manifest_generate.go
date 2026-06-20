@@ -92,7 +92,7 @@ func (h *WorkerUpdateHandler) GenerateManifestV2Handler() gin.HandlerFunc {
 		now := time.Now().UTC().Format(time.RFC3339)
 
 		// Determine version from config
-	version := h.cfg.Workers.VersionNumber
+		version := h.cfg.Workers.VersionNumber
 		if version == "" {
 			version = h.codeVersion
 		}

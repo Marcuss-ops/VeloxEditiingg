@@ -20,13 +20,13 @@ import (
 type JobStatus string
 
 const (
-	JobStatusPending    JobStatus = "PENDING"
-	JobStatusLeased     JobStatus = "LEASED"
-	JobStatusRunning    JobStatus = "RUNNING"
-	JobStatusRetryWait  JobStatus = "RETRY_WAIT"
-	JobStatusSucceeded  JobStatus = "SUCCEEDED"
-	JobStatusFailed     JobStatus = "FAILED"
-	JobStatusCancelled  JobStatus = "CANCELLED"
+	JobStatusPending   JobStatus = "PENDING"
+	JobStatusLeased    JobStatus = "LEASED"
+	JobStatusRunning   JobStatus = "RUNNING"
+	JobStatusRetryWait JobStatus = "RETRY_WAIT"
+	JobStatusSucceeded JobStatus = "SUCCEEDED"
+	JobStatusFailed    JobStatus = "FAILED"
+	JobStatusCancelled JobStatus = "CANCELLED"
 )
 
 // IsTerminal reports whether a job in this state has finished its lifecycle.

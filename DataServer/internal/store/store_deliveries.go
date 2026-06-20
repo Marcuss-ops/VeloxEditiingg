@@ -3,10 +3,10 @@
 // Types + insert/list for the delivery split introduced by
 // migration 022_split_deliveries.sql:
 //
-//   * delivery_destinations (reusable, per-provider configuration)
-//   * job_deliveries        (per-artifact × per-destination, the new home
-//                            of what used to be delivery_targets)
-//   * delivery_attempts     (one row per attempt; keyed by string delivery_id)
+//   - delivery_destinations (reusable, per-provider configuration)
+//   - job_deliveries        (per-artifact × per-destination, the new home
+//     of what used to be delivery_targets)
+//   - delivery_attempts     (one row per attempt; keyed by string delivery_id)
 //
 // Migration 031_delivery_leases.sql adds durable lease + retry columns to
 // job_deliveries (locked_by, lease_id, lease_expires_at, next_attempt_at,
@@ -40,24 +40,24 @@ type DeliveryDestination struct {
 
 // JobDelivery is the per-(artifact, destination) join row.
 type JobDelivery struct {
-	DeliveryID              string `json:"delivery_id"`
-	ArtifactID              string `json:"artifact_id"`
-	DestinationID           string `json:"destination_id"`
-	Status                  string `json:"status"`
-	IdempotencyKey          string `json:"idempotency_key,omitempty"`
-	RemoteID                string `json:"remote_id,omitempty"`
-	RemoteURL               string `json:"remote_url,omitempty"`
-	CreatedAt               string `json:"created_at"`
-	UpdatedAt               string `json:"updated_at"`
-	LockedBy                string `json:"locked_by,omitempty"`
-	LeaseID                 string `json:"lease_id,omitempty"`
-	LeaseExpiresAt          string `json:"lease_expires_at,omitempty"`
-	NextAttemptAt           string `json:"next_attempt_at,omitempty"`
-	AttemptCount            int    `json:"attempt_count"`
-	MaxAttempts             int    `json:"max_attempts"`
-	LastError               string `json:"last_error_code,omitempty"`
-	LastErrorMessage        string `json:"last_error_message,omitempty"`
-	CompletedAt             string `json:"completed_at,omitempty"`
+	DeliveryID       string `json:"delivery_id"`
+	ArtifactID       string `json:"artifact_id"`
+	DestinationID    string `json:"destination_id"`
+	Status           string `json:"status"`
+	IdempotencyKey   string `json:"idempotency_key,omitempty"`
+	RemoteID         string `json:"remote_id,omitempty"`
+	RemoteURL        string `json:"remote_url,omitempty"`
+	CreatedAt        string `json:"created_at"`
+	UpdatedAt        string `json:"updated_at"`
+	LockedBy         string `json:"locked_by,omitempty"`
+	LeaseID          string `json:"lease_id,omitempty"`
+	LeaseExpiresAt   string `json:"lease_expires_at,omitempty"`
+	NextAttemptAt    string `json:"next_attempt_at,omitempty"`
+	AttemptCount     int    `json:"attempt_count"`
+	MaxAttempts      int    `json:"max_attempts"`
+	LastError        string `json:"last_error_code,omitempty"`
+	LastErrorMessage string `json:"last_error_message,omitempty"`
+	CompletedAt      string `json:"completed_at,omitempty"`
 }
 
 // DeliveryLease is the typed return from ClaimDeliveries. Every field is

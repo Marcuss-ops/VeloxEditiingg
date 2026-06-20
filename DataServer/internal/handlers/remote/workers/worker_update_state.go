@@ -68,14 +68,14 @@ func (h *WorkerUpdateHandler) UpdateStateHandler() gin.HandlerFunc {
 				workerUpdateLog.InfoWithMsg(logging.CodeWorkerUpdateFinalized, "Dirs/files updated", map[string]interface{}{"dirs": body.UpdateInfo["dirs_updated"], "files": body.UpdateInfo["files_updated"]})
 			}
 		case "WORKER_ONLINE":
-		isAligned := body.ArtifactSHA256 != "" && body.ArtifactSHA256 == targetArtifactSHA
-		if isAligned {
-			workerUpdateLog.InfoWithMsg(logging.CodeWorkerOnlineAligned, "UPDATED AND ONLINE", map[string]interface{}{"worker": workerName, "artifact_sha": body.ArtifactSHA256[:min(16, len(body.ArtifactSHA256))], "aligned": true})
-			// Phase 4.4: ClearUpdate removed — alignment is reflected by
-			// the worker_commands row for `update_code` being acked.
-		} else {
-			workerUpdateLog.InfoWithMsg(logging.CodeWorkerOnlineMisaligned, "online with different artifact (not yet updated)", map[string]interface{}{"worker": workerName, "aligned": false})
-		}
+			isAligned := body.ArtifactSHA256 != "" && body.ArtifactSHA256 == targetArtifactSHA
+			if isAligned {
+				workerUpdateLog.InfoWithMsg(logging.CodeWorkerOnlineAligned, "UPDATED AND ONLINE", map[string]interface{}{"worker": workerName, "artifact_sha": body.ArtifactSHA256[:min(16, len(body.ArtifactSHA256))], "aligned": true})
+				// Phase 4.4: ClearUpdate removed — alignment is reflected by
+				// the worker_commands row for `update_code` being acked.
+			} else {
+				workerUpdateLog.InfoWithMsg(logging.CodeWorkerOnlineMisaligned, "online with different artifact (not yet updated)", map[string]interface{}{"worker": workerName, "aligned": false})
+			}
 
 		case "UPDATE_FAILED":
 			workerUpdateLog.ErrorWithMsg(logging.CodeWorkerUpdateFailed, "UPDATE_FAILED", map[string]interface{}{"worker": workerName, "err": body.Error})
@@ -139,10 +139,10 @@ func (h *WorkerUpdateHandler) GetUpdateStatusHandler() gin.HandlerFunc {
 		status := make(map[string]interface{})
 		targetArtifactSHA := h.computeBundleSHA256()
 
-	for _, info := range allWorkers {
-		if info.WorkerID == "" {
-			continue
-		}
+		for _, info := range allWorkers {
+			if info.WorkerID == "" {
+				continue
+			}
 			pendingCmds := h.cmdMgr.GetPendingCommands(info.WorkerID)
 			hasUpdate := false
 			var updateVersion string

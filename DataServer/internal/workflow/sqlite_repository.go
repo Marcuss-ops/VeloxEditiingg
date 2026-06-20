@@ -5,11 +5,11 @@
 //
 // Per PR 9 §Implementation §2: CompleteStepAndReleaseDependents is the
 // critical atomic operation:
-//   * step  RUNNING → SUCCEEDED, output written
-//   * for each dependent step:
-//       if every predecessor is SUCCEEDED,
-//         dependent status BLOCKED → READY
-//   * if every step is now terminal, run SUCCEEDED
+//   - step  RUNNING → SUCCEEDED, output written
+//   - for each dependent step:
+//     if every predecessor is SUCCEEDED,
+//     dependent status BLOCKED → READY
+//   - if every step is now terminal, run SUCCEEDED
 //
 // Per PR 9 §Implementation §3: workflow_steps.job_id is the link to the
 // jobs table; no duplicates on jobs.
@@ -187,10 +187,10 @@ func (r *SQLiteRepository) GetRun(ctx context.Context, runID string) (*Run, erro
 
 	var (
 		runIDOut, wType, status, inputJSON, outputJSON string
-		createdAt, updatedAt                            string
-		startedAt, completedAt                          sql.NullString
-		errorCode, errorMessage                         string
-		revision                                        int64
+		createdAt, updatedAt                           string
+		startedAt, completedAt                         sql.NullString
+		errorCode, errorMessage                        string
+		revision                                       int64
 	)
 	if err := row.Scan(&runIDOut, &wType, &status, &inputJSON, &outputJSON,
 		&revision, &createdAt, &updatedAt, &startedAt, &completedAt,
@@ -203,13 +203,13 @@ func (r *SQLiteRepository) GetRun(ctx context.Context, runID string) (*Run, erro
 	}
 
 	run := &Run{
-		RunID:           runIDOut,
-		WorkflowType:    wType,
-		Status:          RunStatus(status),
-		Revision:        revision,
-		Input:           decodeJSON(inputJSON),
-		Output:          decodeJSON(outputJSON),
-		LastErrorCode:   errorCode,
+		RunID:            runIDOut,
+		WorkflowType:     wType,
+		Status:           RunStatus(status),
+		Revision:         revision,
+		Input:            decodeJSON(inputJSON),
+		Output:           decodeJSON(outputJSON),
+		LastErrorCode:    errorCode,
 		LastErrorMessage: errorMessage,
 	}
 	if t, err := time.Parse(time.RFC3339, createdAt); err == nil {

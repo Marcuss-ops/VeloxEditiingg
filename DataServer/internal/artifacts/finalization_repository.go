@@ -13,13 +13,13 @@ import (
 // previous two-step BeginUpload pattern (artifacts INSERT + artifact_uploads
 // INSERT) with a single atomic transaction.
 type CreateArtifactAndUploadSessionCommand struct {
-	ArtifactID   string
-	UploadID     string
-	JobID        string
-	AttemptID    int64
-	Kind         string
-	WorkerID     string
-	LeaseID      string
+	ArtifactID       string
+	UploadID         string
+	JobID            string
+	AttemptID        int64
+	Kind             string
+	WorkerID         string
+	LeaseID          string
 	AttemptNumber    int
 	ExpectedRevision int
 

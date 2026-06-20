@@ -117,11 +117,11 @@ func TestInterface_AnsibleComputerStore_StructuredHosts(t *testing.T) {
 
 	// Upsert via interface
 	host := store.AnsibleHostFields{
-		Host:       "test-via-interface",
+		Host:        "test-via-interface",
 		AnsibleUser: "pierone",
-		Enabled:    true,
-		Group:      "production",
-		Tags:       []string{"web", "nginx"},
+		Enabled:     true,
+		Group:       "production",
+		Tags:        []string{"web", "nginx"},
 	}
 	if err := acStore.UpsertAnsibleHost(host); err != nil {
 		t.Fatalf("UpsertAnsibleHost via interface: %v", err)
@@ -163,8 +163,6 @@ func TestInterface_AnsibleComputerStore_StructuredHosts(t *testing.T) {
 		t.Error("expected error after delete via interface")
 	}
 }
-
-
 
 // ============================================================
 // Helpers

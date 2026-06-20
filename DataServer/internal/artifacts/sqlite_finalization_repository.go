@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"velox-server/internal/store"
+	"velox-server/internal/util"
 )
 
 // SQLiteFinalizationRepository is the SQLite-backed implementation of
@@ -22,7 +23,7 @@ import (
 // layer; service-layer ENFORCES the state-machine legality (RECEIVED
 // then FINALIZING then COMPLETED) before this code runs.
 type SQLiteFinalizationRepository struct {
-	db          *sql.DB
+	db           *sql.DB
 	planResolver DeliveryPlanResolver // optional; nil falls back to all enabled destinations
 }
 
@@ -330,7 +331,7 @@ func (r *SQLiteFinalizationRepository) FinalizeVerified(
 				SELECT 1 FROM job_deliveries
 				WHERE artifact_id = ? AND destination_id = ?
 			)`,
-			newID(), cmd.ArtifactID, destID,
+			util.GenerateID(), cmd.ArtifactID, destID,
 			cmd.ArtifactID+"_"+destID, nowStr, nowStr,
 			cmd.ArtifactID, destID,
 		)

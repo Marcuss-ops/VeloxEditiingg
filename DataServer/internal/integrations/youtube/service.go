@@ -44,7 +44,6 @@ type YouTubeStore interface {
 	// user-edited typed columns are preserved (S11 contract).
 	UpdateYouTubeChannelMetadata(channelID, title, thumbnailURL string) error
 
-
 	// Canonical: OAuth tokens (youtube_oauth_tokens table; S5-S11 boot hydrator)
 	// GetYouTubeOAuthToken returns (nil, nil) when no row exists so callers can
 	// use the row presence to drive merge-with-existing-refresh-token-blob.
@@ -69,8 +68,6 @@ type YouTubeStore interface {
 		Timestamp int64       `json:"timestamp"`
 		Data      interface{} `json:"data"`
 	}) (int, error)
-
-
 }
 
 // Service provides YouTube API functionality

@@ -197,9 +197,9 @@ func TestGetCommandsHandler_WithWorkerID(t *testing.T) {
 	var resp struct {
 		Success bool `json:"success"`
 		Data    []struct {
-			CommandID    string `json:"command_id"`
-			Command      string `json:"command"`
-			SequenceNum  int64  `json:"sequence_num"`
+			CommandID   string `json:"command_id"`
+			Command     string `json:"command"`
+			SequenceNum int64  `json:"sequence_num"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {

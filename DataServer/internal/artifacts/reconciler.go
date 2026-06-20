@@ -12,16 +12,17 @@ import (
 	"strings"
 	"time"
 
+	"velox-server/internal/queue"
 	"velox-server/internal/store"
 )
 
 // Reconciler sweeps the artifacts state once and applies four cleanup
 // rules from the PR 2 spec:
 //
-//	1. upload scaduto + staging presente  --> elimina staging, status EXPIRED
-//	2. blob finale senza riga DB dopo 24h --> elimina
-//	3. artifact READY con blob assente   --> QUARANTINED + ARTIFACT_QUARANTINED event
-//	4. artifact STAGING troppo vecchio   --> FAILED
+//  1. upload scaduto + staging presente  --> elimina staging, status EXPIRED
+//  2. blob finale senza riga DB dopo 24h --> elimina
+//  3. artifact READY con blob assente   --> QUARANTINED + ARTIFACT_QUARANTINED event
+//  4. artifact STAGING troppo vecchio   --> FAILED
 //
 // Design (validated by thinking pass before implementation):
 //
@@ -62,7 +63,7 @@ type Reconciler struct {
 	db        *sql.DB
 	blobStore store.BlobStore
 	repo      Repository
-	clock     Clock
+	clock     queue.Clock
 	config    ReconcilerConfig
 }
 
@@ -112,7 +113,7 @@ type ReconcileStats struct {
 // NewReconciler composes a Reconciler. db and blobStore must outlive
 // the Reconciler (Run holds references). repo can be the same
 // SQLiteRepository as Service uses (transitively via the same *sql.DB).
-func NewReconciler(db *sql.DB, blobStore store.BlobStore, repo Repository, clock Clock, config ReconcilerConfig) (*Reconciler, error) {
+func NewReconciler(db *sql.DB, blobStore store.BlobStore, repo Repository, clock queue.Clock, config ReconcilerConfig) (*Reconciler, error) {
 	if db == nil {
 		return nil, fmt.Errorf("artifacts: Reconciler: nil db")
 	}
@@ -123,7 +124,7 @@ func NewReconciler(db *sql.DB, blobStore store.BlobStore, repo Repository, clock
 		return nil, fmt.Errorf("artifacts: Reconciler: nil repo")
 	}
 	if clock == nil {
-		clock = realClock{}
+		clock = queue.RealClock{}
 	}
 	if config.OrphanBlobAge <= 0 {
 		config.OrphanBlobAge = 24 * time.Hour

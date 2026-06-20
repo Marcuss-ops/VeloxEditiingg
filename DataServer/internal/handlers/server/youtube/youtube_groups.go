@@ -151,12 +151,12 @@ func (ym *YouTubeManager) reviewAndRefreshChannels() {
 					}
 				}
 
-			if realTitle == "" {
-				channelURL := ch.URL
-				if channelURL == "" || !strings.HasPrefix(channelURL, "http") {
-					channelURL = "https://www.youtube.com/channel/" + ch.ID
-				}
-				info, err := ym.apiClient.GetChannelInfo(context.Background(), channelURL)
+				if realTitle == "" {
+					channelURL := ch.URL
+					if channelURL == "" || !strings.HasPrefix(channelURL, "http") {
+						channelURL = "https://www.youtube.com/channel/" + ch.ID
+					}
+					info, err := ym.apiClient.GetChannelInfo(context.Background(), channelURL)
 					if err == nil && info != nil {
 						realTitle = info.Title
 						thumbnail = info.Thumbnail

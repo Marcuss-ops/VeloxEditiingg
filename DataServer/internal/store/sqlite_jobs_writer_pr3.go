@@ -348,12 +348,12 @@ func (r *SQLiteJobRepository) PR3Fail(ctx context.Context, cmd FailCommand) erro
 		return fmt.Errorf("PR3Fail history: %w", err)
 	}
 	if err := r.insertEventTx(ctx, tx, cmd.JobID, eventType, map[string]interface{}{
-		"worker_id":    cmd.WorkerID,
-		"lease_id":     cmd.LeaseID,
-		"attempt":      cmd.AttemptNumber,
-		"error_code":   cmd.ErrorCode,
-		"error":        cmd.ErrorMessage,
-		"retryable":    cmd.Retryable,
+		"worker_id":  cmd.WorkerID,
+		"lease_id":   cmd.LeaseID,
+		"attempt":    cmd.AttemptNumber,
+		"error_code": cmd.ErrorCode,
+		"error":      cmd.ErrorMessage,
+		"retryable":  cmd.Retryable,
 	}); err != nil {
 		return fmt.Errorf("PR3Fail event: %w", err)
 	}
@@ -605,11 +605,11 @@ func (r *SQLiteJobRepository) PR3RequeueExpiredLeases(ctx context.Context, now t
 			return nil, fmt.Errorf("PR3RequeueExpiredLeases history: %w", err)
 		}
 		if err := r.insertEventTx(ctx, tx, c.jobID, eventType, map[string]interface{}{
-			"lease_id":     c.leaseID,
-			"retry_count":  c.retryCount,
-			"max_retries":  c.maxRetries,
-			"new_status":   string(next),
-			"reason":       reason,
+			"lease_id":    c.leaseID,
+			"retry_count": c.retryCount,
+			"max_retries": c.maxRetries,
+			"new_status":  string(next),
+			"reason":      reason,
 		}); err != nil {
 			return nil, fmt.Errorf("PR3RequeueExpiredLeases event: %w", err)
 		}

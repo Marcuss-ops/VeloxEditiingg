@@ -244,10 +244,10 @@ func (s *Service) GetYouTubeService(ctx context.Context, channelID string) (*you
 
 	baseSource := s.oauthConfig.TokenSource(ctx, token)
 	pts := &PersistedTokenSource{
-			source: baseSource,
-			save: func(newToken *oauth2.Token) error {
-				if newToken.AccessToken == channel.AccessToken {
-					return nil
+		source: baseSource,
+		save: func(newToken *oauth2.Token) error {
+			if newToken.AccessToken == channel.AccessToken {
+				return nil
 			}
 			// DB-first (S11). Persist the refreshed token to SQLite BEFORE
 			// mirroring it into s.channels. Refresh providers MAY rotate
@@ -277,7 +277,6 @@ func (s *Service) GetYouTubeService(ctx context.Context, channelID string) (*you
 			return nil
 		},
 	}
-
 
 	client := oauth2.NewClient(ctx, pts)
 

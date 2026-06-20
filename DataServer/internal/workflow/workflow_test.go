@@ -9,9 +9,9 @@
 //  7. Retry: Requeue=true and attempt < max_attempts flips back to READY.
 //  8. Cancellazione: CancelRun flips run + remaining steps CANCELLED.
 //  9. Due dispatcher concorrenti: parallel CompleteStepAndReleaseDependents.
-// 10. Restart: same DB → GetRun/ListSteps restore prior state.
-// 11. Job-failed → step retry path.
-// 12. Invariant: CompleteStep when a non-terminal dep exists does NOT activate
+//  10. Restart: same DB → GetRun/ListSteps restore prior state.
+//  11. Job-failed → step retry path.
+//  12. Invariant: CompleteStep when a non-terminal dep exists does NOT activate
 //     dependents and does NOT flip run SUCCEEDED.
 package workflow_test
 
@@ -534,8 +534,14 @@ func TestWorkflow_TwoDispatchers_FinalStateConsistent(t *testing.T) {
 	var wg sync.WaitGroup
 	var errB, errC error
 	wg.Add(2)
-	go func() { defer wg.Done(); _, errB = repo.CompleteStepAndReleaseDependents(ctx, workflow.CompleteStep{RunID: run.RunID, StepID: b.StepID}) }()
-	go func() { defer wg.Done(); _, errC = repo.CompleteStepAndReleaseDependents(ctx, workflow.CompleteStep{RunID: run.RunID, StepID: c.StepID}) }()
+	go func() {
+		defer wg.Done()
+		_, errB = repo.CompleteStepAndReleaseDependents(ctx, workflow.CompleteStep{RunID: run.RunID, StepID: b.StepID})
+	}()
+	go func() {
+		defer wg.Done()
+		_, errC = repo.CompleteStepAndReleaseDependents(ctx, workflow.CompleteStep{RunID: run.RunID, StepID: c.StepID})
+	}()
 	wg.Wait()
 	if errB != nil {
 		t.Fatalf("Complete B: %v", errB)

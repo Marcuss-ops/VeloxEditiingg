@@ -20,9 +20,9 @@ import (
 // JobViewAssembler assembles a JobView from canonical tables.
 //
 // Implementations MUST:
-//   * consult the database as the source of truth
-//   * use only one round-trip per Build (joining is fine)
-//   * never look at the legacy flat fields on the Job struct
+//   - consult the database as the source of truth
+//   - use only one round-trip per Build (joining is fine)
+//   - never look at the legacy flat fields on the Job struct
 type JobViewAssembler interface {
 	// Build returns all fields needed by the legacy HTTP API for one job.
 	// Returns (nil, error) on transient DB failure, (nil, nil) when the
@@ -48,11 +48,11 @@ func NewSQLJobViewAssembler(dbStore *store.SQLiteStore) *SQLJobViewAssembler {
 // Build runs the assembled JOIN and projects the result into a JobView.
 //
 // SQL strategy:
-//   * LEFT JOIN artifacts WHERE status='READY' for video_uploaded + primary
+//   - LEFT JOIN artifacts WHERE status='READY' for video_uploaded + primary
 //     artifact (lowest id wins for determinism).
-//   * LEFT JOIN job_deliveries → delivery_attempts for drive_url + youtube_video_id.
-//   * DriveURL: the most recent SUCCESSFUL delivery_attempt where provider='drive'.
-//   * YouTubeVideoID: the most recent SUCCESSFUL delivery_attempt where provider='youtube'.
+//   - LEFT JOIN job_deliveries → delivery_attempts for drive_url + youtube_video_id.
+//   - DriveURL: the most recent SUCCESSFUL delivery_attempt where provider='drive'.
+//   - YouTubeVideoID: the most recent SUCCESSFUL delivery_attempt where provider='youtube'.
 //
 // The implementation here is intentionally a single SELECT. The schema must
 // provide the joinee columns; if 022_split_deliveries.sql has been applied,
@@ -71,10 +71,10 @@ func (a *SQLJobViewAssembler) Build(ctx context.Context, jobID string) (*JobView
 	}
 
 	view := &JobView{
-		JobID:    asStringFromMap(m, "job_id"),
-		Type:     asStringFromMap(m, "job_type"),
-		Status:   JobStatus(asStringFromMap(m, "status")),
-		Revision: asInt64FromMap(m, "revision"),
+		JobID:     asStringFromMap(m, "job_id"),
+		Type:      asStringFromMap(m, "job_type"),
+		Status:    JobStatus(asStringFromMap(m, "status")),
+		Revision:  asInt64FromMap(m, "revision"),
 		VideoName: asStringFromMap(m, "video_name"),
 		ProjectID: asStringFromMap(m, "project_id"),
 	}

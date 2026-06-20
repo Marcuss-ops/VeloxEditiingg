@@ -18,15 +18,16 @@ import (
 	"github.com/gin-gonic/gin"
 	"velox-server/internal/app"
 	"velox-server/internal/artifacts"
+	voiceoverassets "velox-server/internal/assets"
 	"velox-server/internal/audit"
 	"velox-server/internal/config"
 	"velox-server/internal/deliveries"
 	deliveryProviders "velox-server/internal/deliveries/providers"
 	"velox-server/internal/grpcserver"
-	workerhandlers "velox-server/internal/handlers/remote/workers"
-	workerhandlersuploads "velox-server/internal/handlers/remote/workers/uploads"
-	"velox-server/internal/handlers/remote/workers/lifecycle"
 	handlersoutbox "velox-server/internal/handlers/outbox"
+	workerhandlers "velox-server/internal/handlers/remote/workers"
+	"velox-server/internal/handlers/remote/workers/lifecycle"
+	workerhandlersuploads "velox-server/internal/handlers/remote/workers/uploads"
 	"velox-server/internal/handlers/server/api"
 	"velox-server/internal/handlers/server/pipeline"
 	"velox-server/internal/jobs/enqueue"
@@ -42,7 +43,6 @@ import (
 	"velox-server/internal/store"
 	workersreg "velox-server/internal/workers"
 	"velox-server/internal/workflow"
-	voiceoverassets "velox-server/internal/assets"
 
 	"google.golang.org/grpc"
 )
@@ -86,7 +86,7 @@ type serverDeps struct {
 	// FileQueue, gRPC, HTTP handlers, reaper, and workflow. SUCCEEDED is
 	// reachable only through artifacts.Service.FinalizeArtifactAndCompleteJob
 	// which performs jobs CAS + artifacts CAS + outbox in a single tx.
-	lifecycleSvc  *queue.LifecycleService
+	lifecycleSvc *queue.LifecycleService
 
 	assetService *voiceoverassets.AssetService
 }
@@ -208,8 +208,6 @@ func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
 	if err != nil {
 		return nil, err
 	}
-
-
 
 	reg := workersreg.New(sqliteStore)
 	revokedCount := len(reg.ListRevoked())
@@ -424,7 +422,8 @@ func runServer(cfg *config.Config) error {
 		lcSvc := deps.lifecycleSvc
 		if lcSvc == nil {
 			log.Printf("[SERVER] gRPC disabled: lifecycleSvc is nil")
-		} else {			cmdMgr := workersreg.NewCommandManager(deps.sqliteStore)
+		} else {
+			cmdMgr := workersreg.NewCommandManager(deps.sqliteStore)
 
 			insecureDev := parseInsecureDevFlag(os.Getenv("VELOX_GRPC_ALLOW_INSECURE_DEV"))
 

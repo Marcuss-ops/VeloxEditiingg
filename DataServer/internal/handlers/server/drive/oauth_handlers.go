@@ -123,5 +123,3 @@ func (h *DriveHandlers) DriveOAuthCallbackHandler(c *gin.Context) {
 </html>
 	`, state)
 }
-
-

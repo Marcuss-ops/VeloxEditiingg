@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
 	"github.com/gin-gonic/gin"
+	_ "github.com/mattn/go-sqlite3"
 
 	"velox-server/internal/artifacts"
 	"velox-server/internal/config"

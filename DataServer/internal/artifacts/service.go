@@ -2,10 +2,8 @@ package artifacts
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -15,17 +13,11 @@ import (
 	"strings"
 	"time"
 
+	"velox-server/internal/queue"
+	"velox-server/internal/status"
 	"velox-server/internal/store"
+	"velox-server/internal/util"
 )
-
-// Clock abstracts time.Now for testability.
-type Clock interface {
-	Now() time.Time
-}
-
-type realClock struct{}
-
-func (realClock) Now() time.Time { return time.Now().UTC() }
 
 // defaultUploadTTL matches the spec's reconciler rule
 // ("blob finale senza riga DB dopo 24h → elimina") so the same window
@@ -54,7 +46,7 @@ type Service struct {
 	finRepo   FinalizationRepository // NEW in PR 3.5-a: sole writer of jobs.status='SUCCEEDED'
 	blobStore store.BlobStore
 	db        *sql.DB
-	clock     Clock
+	clock     queue.Clock
 
 	uploadTTL time.Duration
 }
@@ -70,9 +62,9 @@ type Service struct {
 //
 // PR 3.5-a: finRepo is REQUIRED. Panic if nil so a misconfigured compose
 // always flakes on startup instead of silently producing no SUCCEEDED.
-func NewService(repo Repository, finRepo FinalizationRepository, blobStore store.BlobStore, db *sql.DB, clock Clock) *Service {
+func NewService(repo Repository, finRepo FinalizationRepository, blobStore store.BlobStore, db *sql.DB, clock queue.Clock) *Service {
 	if clock == nil {
-		clock = realClock{}
+		clock = queue.RealClock{}
 	}
 	if repo == nil {
 		panic("artifacts: NewService requires a non-nil Repository")
@@ -99,17 +91,6 @@ func (s *Service) WithUploadTTL(d time.Duration) *Service {
 // =====================================================================
 // helpers
 // =====================================================================
-
-// newID returns a 128-bit random hex string. crypto/rand.Read on
-// Linux's /dev/urandom cannot fail in practice; the time-based fallback
-// exists purely so the function never returns the empty string.
-func newID() string {
-	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
-		return "id_fb_" + time.Now().UTC().Format("20060102T150405.000000000")
-	}
-	return hex.EncodeToString(b)
-}
 
 // stagingTempKey returns the staging blob path used during Receive().
 // Lives under blobStore.StagingDir() so removal is trivial on hash /
@@ -158,11 +139,11 @@ func (c *countingWriter) Write(p []byte) (int, error) {
 // Loaded with a single SELECT, then checked against the BeginUpload
 // auth fields in one place.
 type jobState struct {
-	status     string
-	assignedTo string
-	leaseID    string
+	status      string
+	assignedTo  string
+	leaseID     string
 	leaseExpiry time.Time
-	revision   int
+	revision    int
 }
 
 // loadJob reads the auth-relevant columns of a `jobs` row.
@@ -275,12 +256,12 @@ func isNoSuchTable(err error) bool {
 // BeginUpload authorizes a worker-side upload session.
 //
 // Validation gates (PR 2 spec, Fase 1):
-//   * job.status = RUNNING
-//   * job.assigned_to = worker_id
-//   * job.lease_id    = lease_id, lease not expired
-//   * job.revision    = expected_revision
-//   * attempt.status  = RENDER_FINISHED, owner + lease match the job's
-//   * no other artifact of the requested kind for this job is READY
+//   - job.status = RUNNING
+//   - job.assigned_to = worker_id
+//   - job.lease_id    = lease_id, lease not expired
+//   - job.revision    = expected_revision
+//   - attempt.status  = RENDER_FINISHED, owner + lease match the job's
+//   - no other artifact of the requested kind for this job is READY
 //
 // On success the artifacts + artifact_uploads rows are inserted
 // ATOMICALLY in a single transaction via finRepo.CreateArtifactAndUploadSession.
@@ -299,7 +280,7 @@ func (s *Service) BeginUpload(ctx context.Context, cmd BeginUploadCommand) (*Upl
 	if job == nil {
 		return nil, fmt.Errorf("%w: job=%s missing", ErrJobNotRunning, cmd.JobID)
 	}
-	if job.status != "RUNNING" {
+	if job.status != string(store.JobStatusRunning) {
 		return nil, fmt.Errorf("%w: job=%s status=%s", ErrJobNotRunning, cmd.JobID, job.status)
 	}
 	if job.assignedTo != cmd.WorkerID {
@@ -332,7 +313,7 @@ func (s *Service) BeginUpload(ctx context.Context, cmd BeginUploadCommand) (*Upl
 			ErrLeaseInvalid, cmd.JobID, cmd.AttemptNumber)
 	}
 	attStatus = strings.ToUpper(strings.TrimSpace(attStatus))
-	if attStatus != "RENDER_FINISHED" && attStatus != "PROCESSING" {
+	if attStatus != string(status.AttemptRenderFinished) && attStatus != string(status.AttemptProcessing) {
 		return nil, fmt.Errorf("%w: job=%s n=%d current=%s",
 			ErrAttemptNotRenderFinished, cmd.JobID, cmd.AttemptNumber, attStatus)
 	}
@@ -353,8 +334,8 @@ func (s *Service) BeginUpload(ctx context.Context, cmd BeginUploadCommand) (*Upl
 
 	// ----- 4. allocate ids + temp key + atomic insert via finRepo -----
 	now := s.clock.Now()
-	uploadID := newID()
-	artifactID := newID()
+	uploadID := util.GenerateID()
+	artifactID := util.GenerateID()
 	tempKey := stagingTempKey(s.blobStore, uploadID)
 
 	// PR 3.5-a: atomic insert of artifacts + artifact_uploads via finRepo.
@@ -394,12 +375,10 @@ func (s *Service) BeginUpload(ctx context.Context, cmd BeginUploadCommand) (*Upl
 		TemporaryStorageKey: tempKey,
 		ExpectedSizeBytes:   cmd.ExpectedSizeBytes,
 		ExpectedSHA256:      cmd.ExpectedSHA256,
-		Status:              "CREATED",
+		Status:              string(status.UploadCreated),
 		CreatedAt:           now,
 		ExpiresAt:           now.Add(s.uploadTTL),
 	}
 
 	return session, nil
 }
-
-func ptrString(s string) *string { return &s }
