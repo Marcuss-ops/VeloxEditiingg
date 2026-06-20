@@ -70,6 +70,12 @@ type serverDeps struct {
 	// bootstrap is the composition root, never anything else.
 	artifactSvc *artifacts.Service
 
+	// PR15.3: cmdMgr is the SINGLE CommandManager instance shared by both
+	// the HTTP WorkerUpdateHandler (line ~212) and the gRPC handler
+	// (used in runServer). Pre-fix, two instances were created on the same
+	// SQLiteStore, racing on the worker_commands table.
+	cmdMgr *workersreg.CommandManager
+
 	// PR chunked: ChunkedUploadService wraps artifactSvc with persistent
 	// chunk tracking so resumable chunked uploads survive master restarts.
 	chunkedHandler *workerhandlersuploads.ChunkedUploadHandler
@@ -83,6 +89,11 @@ type serverDeps struct {
 	lifecycleSvc *queue.LifecycleService
 
 	assetService *voiceoverassets.AssetService
+
+	// PR15.7a: enqueuer owns the queue + voiceover rewrite so the script
+	// and creator paths no longer touch any package-level global. Built
+	// once at composition root and threaded through DI.
+	enqueuer *enqueue.Enqueuer
 }
 
 // grpcServer is an interface satisfied by *grpc.Server for lifecycle management.
@@ -323,6 +334,10 @@ func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
 		outboxDispatcher:    outboxDispatcher,
 		blobStore:           blobStore,
 		artifactSvc:         artifactSvc,
+		// PR15.3: surface the singleton CommandManager so runServer's
+		// gRPC section can reuse it instead of constructing a second
+		// instance on the same SQLiteStore (the original race bug).
+		cmdMgr:              cmdMgr,
 		chunkedHandler:      chunkedHandler,
 		lifecycleSvc:        lifecycleSvc,
 	}, nil
@@ -342,19 +357,31 @@ func runServer(cfg *config.Config) error {
 	auth := api.AdminAuthMiddleware(cfg)
 	pipeline.InitRemoteEngine(cfg)
 
-	ytMod := app.NewYouTubeModule(cfg, deps.paths.dataDir, deps.sqliteStore)
+	// PR15.7a: hand the singleton Enqueuer to the pipeline package so
+	// the forwarding path can use it instead of touching any global.
+	pipeline.InitPipelineEnqueuer(deps.enqueuer)
+
+	// PR15.1: NewYouTubeModule now returns error and eagerly builds the
+	// integration service so deps (delivery providers) can read Service()
+	// BEFORE any routes are registered.
+	ytMod, err := app.NewYouTubeModule(cfg, deps.paths.dataDir, deps.sqliteStore)
+	if err != nil {
+		return fmt.Errorf("bootstrap: youtube module: %w", err)
+	}
 	deps.youtubeModule = ytMod
-	driveMod := app.NewDriveModule(cfg)
+	// PR15.1: Drive module takes sqliteStore directly via constructor;
+	// the WithSQLiteStore setter was removed.
+	driveMod, err := app.NewDriveModule(cfg, deps.sqliteStore)
+	if err != nil {
+		return fmt.Errorf("bootstrap: drive module: %w", err)
+	}
 	deps.driveModule = driveMod
 
 	maxVoiceoverBytes := int64(256 * 1024 * 1024)
 	if raw := strings.TrimSpace(os.Getenv("VELOX_MAX_VOICEOVER_BYTES")); raw != "" {
-		if parsed, err := strconv.ParseInt(raw, 10, 64); err == nil && parsed > 0 {
+		if parsed, perr := strconv.ParseInt(raw, 10, 64); perr == nil && parsed > 0 {
 			maxVoiceoverBytes = parsed
 		}
-	}
-	if driveMod != nil && deps.sqliteStore != nil {
-		driveMod.WithSQLiteStore(deps.sqliteStore)
 	}
 
 	// ── Asset Registry (PR 6) ─────────────────────────────────────────────
@@ -368,9 +395,11 @@ func runServer(cfg *config.Config) error {
 	assetRepo := store.NewSQLiteAssetRepository(deps.sqliteStore)
 	deps.assetService = voiceoverassets.NewAssetService(assetRepo, deps.blobStore, assetRegistry, clock.System{})
 
-	// Wire the new AssetService into the enqueue flow (replaces the old
-	// voiceover bridge's RewriteVoiceoverPayload).
-	enqueue.SetVoiceoverAssetService(deps.assetService)
+	// PR15.7a: build the *enqueue.Enqueuer singleton that owns the queue
+	// + voiceover rewrite. Replaces both the package-level voiceover global
+	// AND the legacy SetVoiceoverAssetService hook. Threaded through DI
+	// to script/{handler,RegisterRoutes} and creatorflow.Service.
+	deps.enqueuer = enqueue.NewEnqueuer(deps.fileQ, deps.assetService)
 	registry.Register(app.NewHealthModule())
 	registry.Register(app.NewWorkersModule(cfg, deps.reg, deps.workerLifecycle, deps.workerUpdateHandler, auth, deps.assetService, deps.blobStore))
 	registry.Register(ytMod)
@@ -378,17 +407,24 @@ func runServer(cfg *config.Config) error {
 	ansibleMod := app.NewAnsibleModule(cfg, deps.paths.dataDir, auth, deps.sqliteStore)
 	deps.ansibleModule = ansibleMod
 	registry.Register(ansibleMod)
-	livestreamMod := app.NewLivestreamModule(ytMod.Service, deps.sqliteStore)
+	// PR15.1: NewLivestreamModule now takes a concrete *integrationsYoutube.Service
+	// instead of a lazy func() indirection. ytMod.Service() is now non-nil
+	// after NewYouTubeModule returns (eager build).
+	livestreamMod := app.NewLivestreamModule(ytMod.Service(), deps.sqliteStore)
 	registry.Register(livestreamMod)
 	registry.Register(app.NewFrontendModule(cfg))
 
+	// PR15.1: ytMod.Service() and driveMod.Service() are now ALWAYS non-nil
+	// after construction (constructor returns error if init fails). The
+	// inner `... != nil` checks are removed; if ytMod/driveMod is nil,
+	// that's a logic error from buildServerDeps.
 	deliveryReg := deliveries.NewRegistry()
-	if ytMod != nil && ytMod.Service() != nil {
+	if ytMod != nil {
 		ytProvider := deliveryProviders.NewYouTubeProvider(ytMod.Service(), deps.blobStore)
 		deliveryReg.Register(ytProvider)
 		log.Printf("[BOOTSTRAP] Delivery provider registered: youtube")
 	}
-	if driveMod != nil && driveMod.Service() != nil {
+	if driveMod != nil {
 		driveProvider := deliveryProviders.NewDriveProvider(driveMod.Service(), deps.blobStore)
 		deliveryReg.Register(driveProvider)
 		log.Printf("[BOOTSTRAP] Delivery provider registered: drive")
@@ -419,7 +455,16 @@ func runServer(cfg *config.Config) error {
 		if lcSvc == nil {
 			log.Printf("[SERVER] gRPC disabled: lifecycleSvc is nil")
 		} else {
-			cmdMgr := workersreg.NewCommandManager(deps.sqliteStore)
+			// PR15.3: reuse the singleton CommandManager built in
+			// buildServerDeps. If it's nil here, buildServerDeps lost
+			// the wiring — a fatal logic error, not a recoverable
+			// condition. We refuse to silently construct a second one
+			// (that would re-introduce the race condition this PR
+			// set out to eliminate).
+			cmdMgr := deps.cmdMgr
+			if cmdMgr == nil {
+				log.Fatalf("[FATAL] bootstrap invariant broken: buildServerDeps did not wire cmdMgr")
+			}
 
 			insecureDev := parseInsecureDevFlag(os.Getenv("VELOX_GRPC_ALLOW_INSECURE_DEV"))
 

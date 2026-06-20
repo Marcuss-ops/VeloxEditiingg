@@ -31,12 +31,25 @@ func TestBuildSceneImagePayload(t *testing.T) {
 	for k, want := range map[string]interface{}{
 		"video_name": "Test Video", "job_type": "process_video", "video_mode": "scene_image",
 		"submitted_via": "api_script_generate_with_images", "source": "script_generate_with_images",
-		"voiceover_path": "/tmp/test-voiceover.mp3", "scene_count": 2, "voiceover_count": 1,
+		"scene_count": 2, "voiceover_count": 1,
 		"script_text": "This is a test script.",
 	} {
 		if result[k] != want {
 			t.Errorf("%s: got %v, want %v", k, result[k], want)
 		}
+	}
+
+	// PR15.6: voiceover_paths is canonical. Legacy voiceover_path alias is
+	// dropped from writers; the HTTP-edge adapter still reads it for old rows.
+	vp, _ := result["voiceover_paths"].([]string)
+	if len(vp) != 1 || vp[0] != "/tmp/test-voiceover.mp3" {
+		t.Errorf("voiceover_paths: got %v, want [/tmp/test-voiceover.mp3]", result["voiceover_paths"])
+	}
+	if _, present := result["voiceover_path"]; present {
+		t.Errorf("voiceover_path alias must NOT be present in canonical writes, got %v", result["voiceover_path"])
+	}
+	if _, present := result["audio_path"]; present {
+		t.Errorf("audio_path alias must NOT be present in canonical writes, got %v", result["audio_path"])
 	}
 
 	for _, id := range []string{"job_id", "job_run_id", "correlation_id"} {
@@ -56,6 +69,12 @@ func TestBuildSceneImagePayload(t *testing.T) {
 	params, _ := result["parameters"].(map[string]interface{})
 	if params["job_type"] != "process_video" {
 		t.Errorf("parameters.job_type: got %v", params["job_type"])
+	}
+	// PR15.6: parameters mirror is canonical-only — id/run_id/title/voiceover_path/audio_path aliases must NOT be present.
+	for _, alias := range []string{"id", "run_id", "title", "voiceover_path", "audio_path"} {
+		if _, present := params[alias]; present {
+			t.Errorf("parameters[%q] alias must NOT be present in canonical writer, got %v", alias, params[alias])
+		}
 	}
 }
 
@@ -127,9 +146,16 @@ func TestBuildSceneImagePayloadForMaster(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	vp, _ := result["voiceover_path"].(string)
-	if vp != srcVoice {
-		t.Errorf("want voiceover_path %q, got %q", srcVoice, vp)
+	// PR15.6: voiceover_paths is the canonical key.
+	vp, _ := result["voiceover_paths"].([]string)
+	if len(vp) != 1 || vp[0] != srcVoice {
+		t.Fatalf("want voiceover_paths [%q], got %v", srcVoice, vp)
+	}
+	if _, present := result["voiceover_path"]; present {
+		t.Errorf("voiceover_path alias must NOT be present in canonical writes, got %v", result["voiceover_path"])
+	}
+	if _, present := result["audio_path"]; present {
+		t.Errorf("audio_path alias must NOT be present in canonical writes, got %v", result["audio_path"])
 	}
 	sp, _ := result["scene_image_paths"].([]string)
 	if len(sp) != 1 || sp[0] != srcImage {
@@ -161,11 +187,16 @@ func TestBuildSceneImagePayloadForMaster_PreservesRemoteSources(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if got, _ := result["voiceover_path"].(string); got != voiceURL {
-		t.Fatalf("want remote voiceover preserved as %q, got %q", voiceURL, got)
+	// PR15.6: voiceover_paths (canonical) replaced voiceover_path/audio_path aliases.
+	vp, _ := result["voiceover_paths"].([]string)
+	if len(vp) != 1 || vp[0] != voiceURL {
+		t.Fatalf("want remote voiceover preserved in voiceover_paths [%q], got %v", voiceURL, vp)
 	}
-	if got, _ := result["audio_path"].(string); got != voiceURL {
-		t.Fatalf("want remote audio_path preserved as %q, got %q", voiceURL, got)
+	if _, present := result["voiceover_path"]; present {
+		t.Errorf("voiceover_path alias must NOT be present in canonical writes, got %v", result["voiceover_path"])
+	}
+	if _, present := result["audio_path"]; present {
+		t.Errorf("audio_path alias must NOT be present in canonical writes, got %v", result["audio_path"])
 	}
 
 	sp, _ := result["scene_image_paths"].([]string)
@@ -197,6 +228,12 @@ func TestBuildSceneImagePayload_PreservesIDs(t *testing.T) {
 	}
 	if result["job_id"] != "custom-id" || result["job_run_id"] != "custom-run" || result["correlation_id"] != "custom-corr" {
 		t.Errorf("IDs not preserved: %v %v %v", result["job_id"], result["job_run_id"], result["correlation_id"])
+	}
+	// PR15.6: id / run_id / title aliases must NOT be written.
+	for _, alias := range []string{"id", "run_id", "title"} {
+		if _, present := result[alias]; present {
+			t.Errorf("%s alias must NOT be present in canonical writer, got %v", alias, result[alias])
+		}
 	}
 }
 
@@ -291,6 +328,12 @@ func TestBuildPipelinePayload(t *testing.T) {
 		}
 		if payload["video_name"] != "Pipeline Video" || payload["job_type"] != "process_video" {
 			t.Errorf("unexpected: %v %v", payload["video_name"], payload["job_type"])
+		}
+		// PR15.6: title / voiceover_path / audio_path / run_id aliases must NOT be present.
+		for _, alias := range []string{"title", "voiceover_path", "audio_path", "run_id", "id"} {
+			if _, present := payload[alias]; present {
+				t.Errorf("%q alias must NOT be present in canonical pipeline payload, got %v", alias, payload[alias])
+			}
 		}
 	})
 
@@ -402,7 +445,7 @@ func TestShouldForwardPipelineResult(t *testing.T) {
 	}
 }
 
-func TestRenderJobResponse(t *testing.T) {
+func TestRenderHTTPBoundaryJobResponse(t *testing.T) {
 	t.Parallel()
 
 	t.Run("basic", func(t *testing.T) {
@@ -411,7 +454,7 @@ func TestRenderJobResponse(t *testing.T) {
 			"job_id": "j1", "status": "COMPLETED", "video_name": "V", "scene_count": 5,
 			"voiceover_count": 3, "video_mode": "scene_image",
 		}
-		r := RenderJobResponse(job, false)
+		r := RenderHTTPBoundaryJobResponse(job, false)
 		if r["ok"] != true || r["job_id"] != "j1" || r["status"] != "COMPLETED" {
 			t.Errorf("unexpected: %v", r)
 		}
@@ -420,10 +463,30 @@ func TestRenderJobResponse(t *testing.T) {
 		}
 	})
 
+	t.Run("basic_legacy_alias_fallback", func(t *testing.T) {
+		t.Parallel()
+		// PR15.6: HTTP-edge adapter tolerates legacy aliases on read for
+		// backwards compat with old SQLite rows.
+		job := map[string]interface{}{
+			"id": "j1", "status": "COMPLETED", "title": "V",
+		}
+		r := RenderHTTPBoundaryJobResponse(job, false)
+		if r["ok"] != true {
+			t.Error("want ok=true")
+		}
+		// script_id leg falls back to id via job_id lookup
+		if r["script_id"] != "j1" {
+			t.Errorf("script_id alias fallback failed, got %v", r["script_id"])
+		}
+		if r["video_name"] != "V" {
+			t.Errorf("video_name title fallback failed, got %v", r["video_name"])
+		}
+	})
+
 	t.Run("full", func(t *testing.T) {
 		t.Parallel()
 		job := map[string]interface{}{"job_id": "j2", "request": map[string]interface{}{"raw": "x"}}
-		r := RenderJobResponse(job, true)
+		r := RenderHTTPBoundaryJobResponse(job, true)
 		if r["job"] == nil || r["request"] == nil {
 			t.Error("want job/request keys when full=true")
 		}
@@ -431,7 +494,7 @@ func TestRenderJobResponse(t *testing.T) {
 
 	t.Run("nil", func(t *testing.T) {
 		t.Parallel()
-		r := RenderJobResponse(nil, false)
+		r := RenderHTTPBoundaryJobResponse(nil, false)
 		if r["ok"] != false {
 			t.Errorf("want ok=false, got %v", r["ok"])
 		}
@@ -440,7 +503,7 @@ func TestRenderJobResponse(t *testing.T) {
 	t.Run("error", func(t *testing.T) {
 		t.Parallel()
 		job := map[string]interface{}{"job_id": "j3", "status": "FAILED", "error": "boom"}
-		r := RenderJobResponse(job, false)
+		r := RenderHTTPBoundaryJobResponse(job, false)
 		if r["error"] != "boom" {
 			t.Errorf("want error 'boom', got %v", r["error"])
 		}

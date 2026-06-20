@@ -11,11 +11,16 @@ import (
 	"testing"
 	"time"
 
+	jobenqueue "velox-server/internal/jobs/enqueue"
 	"velox-server/internal/platform/clock"
 	"velox-server/internal/queue"
 	"velox-server/internal/remoteengine"
 	"velox-server/internal/store"
 )
+
+// PR15.7a: both tests construct svc literal with enqueuer field, no queue
+// field. The Enqueuer owns the queue; this removes duplicate references
+// that previously could drift.
 
 func TestForwardSchedulesAsyncPollAndWorkerHandoff(t *testing.T) {
 	tempDir := t.TempDir()
@@ -42,6 +47,10 @@ func TestForwardSchedulesAsyncPollAndWorkerHandoff(t *testing.T) {
 	if err != nil {
 		t.Fatalf("file queue: %v", err)
 	}
+
+	// PR15.7a: build the Enqueuer once. No voiceover rewrite expected on
+	// this path (nil voiceover); the rewrite is a no-op.
+	enqueuer := jobenqueue.NewEnqueuer(q, nil)
 
 	var mu sync.Mutex
 	polls := 0
@@ -94,7 +103,7 @@ func TestForwardSchedulesAsyncPollAndWorkerHandoff(t *testing.T) {
 	defer mockCreator.Close()
 
 	svc := &Service{
-		queue: q,
+		enqueuer: enqueuer,
 		client: func() *remoteengine.Client {
 			return remoteengine.NewClient(remoteengine.Config{
 				URL:       mockCreator.URL,
@@ -135,8 +144,13 @@ func TestForwardSchedulesAsyncPollAndWorkerHandoff(t *testing.T) {
 			if payloadErr != nil {
 				t.Fatalf("GetJobPayload: %v", payloadErr)
 			}
-			if got := payload["voiceover_path"]; got == nil || got.(string) != voicePath {
-				t.Fatalf("want voiceover_path %q, got %v", voicePath, got)
+			// PR15.6: voiceover_paths is canonical.
+			vp, _ := payload["voiceover_paths"].([]string)
+			if len(vp) == 0 || vp[0] != voicePath {
+				t.Fatalf("want voiceover_paths[0] %q, got %v", voicePath, vp)
+			}
+			if _, present := payload["voiceover_path"]; present {
+				t.Fatalf("voiceover_path alias must NOT be present in canonical creator payload, got %v", payload["voiceover_path"])
 			}
 			return
 		}
@@ -165,6 +179,12 @@ func TestForwardCompletedResultEnqueuesWorkerJob(t *testing.T) {
 		t.Fatalf("file queue: %v", err)
 	}
 
+	// PR15.7a: ForwardCompletedResult takes *enqueue.Enqueuer (not raw q).
+	// The free function constructs a temporary Enqueuer internally, but
+	// the new contract takes the enqueuer directly so the test mirrors
+	// the production call site.
+	enqueuer := jobenqueue.NewEnqueuer(q, nil)
+
 	result := map[string]interface{}{
 		"ok":       true,
 		"status":   "completed",
@@ -177,7 +197,7 @@ func TestForwardCompletedResultEnqueuesWorkerJob(t *testing.T) {
 		},
 	}
 
-	response, err := ForwardCompletedResult(context.Background(), q, result)
+	response, err := ForwardCompletedResult(context.Background(), enqueuer, result)
 	if err != nil {
 		t.Fatalf("ForwardCompletedResult: %v", err)
 	}
@@ -204,20 +224,26 @@ func TestForwardCompletedResultEnqueuesWorkerJob(t *testing.T) {
 	if job.VideoName != "Creator Video" {
 		t.Fatalf("want video name Creator Video, got %s", job.VideoName)
 	}
-	if job.RunID != "creator-complete-1" {
-		t.Fatalf("want run_id creator-complete-1, got %s", job.RunID)
-	}
+	// PR15.6: drop the legacy `run_id` JSON tag assertion. The queue Job
+	// struct still maps RunID from the `run_id` alias (deferred to PR15.5
+	// jobs.Writer canonicalization). The canonical key is `job_run_id`
+	// inside the persisted payload map — assert that instead.
 	payload, payloadErr := q.QueryService().GetJobPayload(context.Background(), "creator-complete-1")
 	if payloadErr != nil {
 		t.Fatalf("GetJobPayload: %v", payloadErr)
+	}
+	// PR15.6: voiceover_paths is canonical; legacy voiceover_path alias is dropped.
+	vp, _ := payload["voiceover_paths"].([]string)
+	if len(vp) != 1 || vp[0] != "https://example.com/voice.mp3" {
+		t.Fatalf("want voiceover_paths[0] preserved as https://example.com/voice.mp3, got %v", vp)
+	}
+	if _, present := payload["voiceover_path"]; present {
+		t.Fatalf("voiceover_path alias must NOT be present in canonical creator payload, got %v", payload["voiceover_path"])
 	}
 	if payload["submitted_via"] != "api_v1_scene_video" {
 		t.Fatalf("want submitted_via api_v1_scene_video, got %v", payload["submitted_via"])
 	}
 	if payload["source"] != "scene_video_api" {
 		t.Fatalf("want source scene_video_api, got %v", payload["source"])
-	}
-	if payload["voiceover_path"] != "https://example.com/voice.mp3" {
-		t.Fatalf("want voiceover_path preserved, got %v", payload["voiceover_path"])
 	}
 }

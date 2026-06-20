@@ -11,15 +11,20 @@ import (
 )
 
 // LivestreamModule provides livestream management endpoints.
+///
+/// PR15.1: ytService is now a concrete *youtube.Service pointer instead
+/// of a lazy func() indirection. The YouTube module's Service is built
+/// eagerly by NewYouTubeModule, so bootstrap can inject the pointer
+/// directly. Storing a function made the lazy-init pattern mandatory
+/// (and hid the same lifecycle bug as NewYouTubeModule).
 type LivestreamModule struct {
-	ytService func() *youtube.Service
+	ytService *youtube.Service
 	dbStore   *store.SQLiteStore
 }
 
-// NewLivestreamModule creates a new livestream module.
-// ytService is a provider function invoked during RegisterRoutes,
-// after the YouTube module has initialised its service.
-func NewLivestreamModule(ytService func() *youtube.Service, dbStore *store.SQLiteStore) *LivestreamModule {
+// NewLivestreamModule creates a new livestream module bound to the
+// already-constructed YouTube integration service.
+func NewLivestreamModule(ytService *youtube.Service, dbStore *store.SQLiteStore) *LivestreamModule {
 	return &LivestreamModule{
 		ytService: ytService,
 		dbStore:   dbStore,
@@ -32,8 +37,17 @@ func (m *LivestreamModule) Name() string {
 }
 
 // RegisterRoutes registers livestream API endpoints.
+
+// PR15.1: short-circuit when ytService is nil. Bootstrap now injects a
+// concrete *youtube.Service; if it's nil, the livestream module cannot
+// operate (it would panic inside the handler constructor). Mirror the
+// YouTube module's nil-mode contract: log + skip rather than panic.
 func (m *LivestreamModule) RegisterRoutes(r *gin.Engine) {
-	handlers := livestream.NewLivestreamHandlers(m.ytService(), m.dbStore)
+	if m.ytService == nil {
+		log.Printf("[LIVESTREAM] Skipping route registration - YouTube service not initialized")
+		return
+	}
+	handlers := livestream.NewLivestreamHandlers(m.ytService, m.dbStore)
 
 	v1 := r.Group("/api/v1")
 	{

@@ -15,11 +15,24 @@ import (
 	"velox-server/internal/config"
 	"velox-server/internal/creatorflow"
 	"velox-server/internal/jobs/enqueue"
-	"velox-server/internal/queue"
 	"velox-server/internal/remoteengine"
 )
 
 var remoteEngineClient *remoteengine.Client
+
+// pipelineEnqueuer holds the *enqueue.Enqueuer used for forwarding
+// pipeline results to the Velox worker queue. PR15.7a: replaces the
+// package-level voiceover global + raw queue reference with the
+// canonical Enqueuer type, mirroring InitRemoteEngine's pattern.
+var pipelineEnqueuer *enqueue.Enqueuer
+
+// InitPipelineEnqueuer wires the singleton enqueuer shared with the
+// rest of the server (script handler, creatorflow). Call once at
+// composition root, BEFORE serving any HTTP traffic.
+func InitPipelineEnqueuer(e *enqueue.Enqueuer) {
+	pipelineEnqueuer = e
+	pipelineLog("INIT: pipeline enqueuer wired queue=%T voiceover=%v", e.Queue, e != nil && e.Voiceover != nil)
+}
 
 // structured log helper
 func pipelineLog(format string, args ...interface{}) {
@@ -43,8 +56,21 @@ func InitRemoteEngine(cfg *config.Config) {
 }
 
 // PipelineGenerate handles POST /api/remote/pipeline/generate
-func PipelineGenerate(cfg *config.Config, q *queue.FileQueue) gin.HandlerFunc {
+//
+// PR15.7a: drops the *queue.FileQueue parameter. The Enqueuer (wired
+// via InitPipelineEnqueuer) owns both the queue and the voiceover
+// rewrite service so forwarding can complete without package-level state.
+func PipelineGenerate(cfg *config.Config) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		if pipelineEnqueuer == nil {
+			pipelineLog("REQUEST: enqueuer not wired — returning 503")
+			c.JSON(http.StatusServiceUnavailable, gin.H{
+				"ok":    false,
+				"error": "pipeline enqueuer not wired (call InitPipelineEnqueuer at boot)",
+			})
+			return
+		}
+
 		var reqPayload map[string]interface{}
 		if err := c.ShouldBindJSON(&reqPayload); err != nil {
 			pipelineLog("REQUEST: invalid JSON from %s: %v", c.ClientIP(), err)
@@ -92,7 +118,7 @@ func PipelineGenerate(cfg *config.Config, q *queue.FileQueue) gin.HandlerFunc {
 		// Try synchronous forward if result is already complete
 		if enqueue.ShouldForwardPipelineResult(result) {
 			pipelineLog("FORWARD: result complete — forwarding to Velox workers (sync)")
-			if forwarded, forwardErr := forwardPipelineResultToWorker(c.Request.Context(), q, result); forwardErr != nil {
+			if forwarded, forwardErr := forwardPipelineResultToWorker(c.Request.Context(), pipelineEnqueuer, result); forwardErr != nil {
 				if assetErr, ok := voiceoverassets.AsAcquisitionError(forwardErr); ok {
 					c.JSON(http.StatusUnprocessableEntity, gin.H{
 						"ok":          false,
@@ -124,7 +150,7 @@ func PipelineGenerate(cfg *config.Config, q *queue.FileQueue) gin.HandlerFunc {
 			}
 			pipelineLog("POLL: starting background polling job_id=%s status=%s interval=%ds max_polls=%d (~%d min timeout)",
 				jobID, status, pollInterval, maxPolls, pollInterval*maxPolls/60)
-			startPipelinePolling(remoteEngineClient, q, jobID, pollInterval)
+			startPipelinePolling(remoteEngineClient, jobID, pollInterval)
 			response["polling_enabled"] = true
 			response["poll_interval_sec"] = pollInterval
 			response["worker_forwarded"] = false
@@ -139,9 +165,9 @@ func PipelineGenerate(cfg *config.Config, q *queue.FileQueue) gin.HandlerFunc {
 	}
 }
 
-func forwardPipelineResultToWorker(ctx context.Context, q *queue.FileQueue, result map[string]interface{}) (map[string]interface{}, error) {
+func forwardPipelineResultToWorker(ctx context.Context, enqueuer *enqueue.Enqueuer, result map[string]interface{}) (map[string]interface{}, error) {
 	pipelineLog("FORWARD: building worker payload...")
-	enqueued, err := creatorflow.ForwardCompletedResult(ctx, q, result)
+	enqueued, err := creatorflow.ForwardCompletedResult(ctx, enqueuer, result)
 	if err != nil {
 		pipelineLog("FORWARD: ForwardCompletedResult FAILED: %v", err)
 		return nil, err

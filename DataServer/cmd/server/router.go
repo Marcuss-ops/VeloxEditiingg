@@ -105,13 +105,15 @@ func newRouter(cfg *config.Config, deps *serverDeps, registry *app.Registry) *gi
 }
 
 func registerScriptRoutes(r *gin.Engine, cfg *config.Config, deps *serverDeps) {
-	if deps == nil || deps.fileQ == nil {
+	if deps == nil || deps.fileQ == nil || deps.enqueuer == nil {
 		return
 	}
 
 	v1Group := r.Group("/api/v1/script")
 	v1Group.Use(api.AdminAuthMiddleware(cfg))
-	scripthandlers.RegisterRoutes(v1Group, cfg, deps.fileQ, deps.sqliteStore)
+	// PR15.7a: thread the *enqueue.Enqueuer through RegisterRoutes so the
+	// script endpoint can submit jobs without any package-level state.
+	scripthandlers.RegisterRoutes(v1Group, cfg, deps.fileQ, deps.sqliteStore, deps.enqueuer)
 }
 
 // registerOrchestratorAdminRoutes is a thin wrapper that mounts

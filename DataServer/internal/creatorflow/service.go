@@ -11,15 +11,19 @@ import (
 	"velox-server/internal/config"
 	remoteansible "velox-server/internal/handlers/remote/ansible"
 	"velox-server/internal/jobs/enqueue"
-	"velox-server/internal/queue"
 	"velox-server/internal/remoteengine"
 )
 
 // Service encapsulates the optional "creator" stage so multiple endpoints can
 // reuse the same remote-engine -> worker handoff path without duplicating it.
+//
+// PR15.7a: `queue *queue.FileQueue` was removed. The *enqueue.Enqueuer
+// holds the JobQueue reference; callers may type-assert to *queue.FileQueue
+// at the composition root if they need the concrete type. This collapses
+// two parallel fields that always pointed to the same underlying queue.
 type Service struct {
-	queue        *queue.FileQueue
-	client       *remoteengine.Client
+	enqueuer *enqueue.Enqueuer // PR15.7a: drops package-level voiceover global AND the q field; both rewrite + queue live here.
+	client   *remoteengine.Client
 	pollInterval time.Duration
 	dataDir      string
 	videosDir    string
@@ -27,8 +31,12 @@ type Service struct {
 }
 
 // New creates a creator-flow service from runtime config.
-func New(cfg *config.Config, q *queue.FileQueue) *Service {
-	if cfg == nil || q == nil {
+// enqueuer is mandatory (PR15.7a): it owns the voiceover rewrite and the
+// queue. The concrete *queue.FileQueue type is no longer needed here —
+// callers can construct the Enqueuer (which embeds the JobQueue) once
+// at composition-root time and pass it down.
+func New(cfg *config.Config, enqueuer *enqueue.Enqueuer) *Service {
+	if cfg == nil || enqueuer == nil {
 		return nil
 	}
 	if strings.TrimSpace(cfg.Render.RemoteEngineURL) == "" {
@@ -36,7 +44,7 @@ func New(cfg *config.Config, q *queue.FileQueue) *Service {
 	}
 
 	return &Service{
-		queue: q,
+		enqueuer: enqueuer,
 		client: remoteengine.NewClient(remoteengine.Config{
 			URL:       cfg.Render.RemoteEngineURL,
 			Token:     cfg.Render.RemoteEngineToken,
@@ -115,8 +123,12 @@ func firstString(m map[string]interface{}, keys ...string) string {
 
 // ForwardCompletedResult converts a completed creator payload into a worker job
 // and enqueues it for the remote worker pool.
-func ForwardCompletedResult(ctx context.Context, q *queue.FileQueue, result map[string]interface{}) (map[string]interface{}, error) {
-	if q == nil {
+//
+// PR15.7a: takes *enqueue.Enqueuer (which owns voiceover rewrite + queue),
+// not a raw *queue.FileQueue + voiceover global. The caller must construct
+// the enqueuer once at composition-root time and pass it through.
+func ForwardCompletedResult(ctx context.Context, enqueuer *enqueue.Enqueuer, result map[string]interface{}) (map[string]interface{}, error) {
+	if enqueuer == nil || enqueuer.Queue == nil {
 		return nil, fmt.Errorf("queue unavailable")
 	}
 	if !enqueue.ShouldForwardPipelineResult(result) {
@@ -128,14 +140,14 @@ func ForwardCompletedResult(ctx context.Context, q *queue.FileQueue, result map[
 		return nil, err
 	}
 
-	return enqueue.EnqueueSceneVideoJob(ctx, q, workerPayload)
+	return enqueuer.Enqueue(ctx, workerPayload)
 }
 
 func (s *Service) forwardCompletedResult(ctx context.Context, result map[string]interface{}) (map[string]interface{}, error) {
 	if s == nil {
 		return nil, fmt.Errorf("service unavailable")
 	}
-	if s.queue == nil {
+	if s.enqueuer == nil || s.enqueuer.Queue == nil {
 		return nil, fmt.Errorf("queue unavailable")
 	}
 	if !enqueue.ShouldForwardPipelineResult(result) {
@@ -158,11 +170,11 @@ func (s *Service) forwardCompletedResult(ctx context.Context, result map[string]
 		}
 	}
 
-	return enqueue.EnqueueSceneVideoJob(ctx, s.queue, workerPayload)
+	return s.enqueuer.Enqueue(ctx, workerPayload)
 }
 
 func (s *Service) scheduleCreatorPolling(creatorJobID string) {
-	if s == nil || s.client == nil || s.queue == nil {
+	if s == nil || s.client == nil || s.enqueuer == nil {
 		return
 	}
 	interval := s.pollInterval

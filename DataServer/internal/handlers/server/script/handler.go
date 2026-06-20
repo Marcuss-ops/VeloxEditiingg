@@ -28,29 +28,42 @@ const scriptSceneMode = "scene_image"
 var errScriptHandlerNotConfigured = errors.New("script handler sqliteDB not configured")
 
 // ScriptHandlers exposes the script-with-images workflow.
+//
+// PR15.7a: the *enqueue.Enqueuer replaces both the package-level voiceover
+// global and the legacy free-function EnqueueSceneVideoJob. Constructed
+// once at composition-root (cmd/server/bootstrap) and threaded through.
 type ScriptHandlers struct {
-	queue    *queue.FileQueue
+	enqueuer *enqueue.Enqueuer
 	sqliteDB *store.SQLiteStore
 	dataDir  string
 	creator  *creatorflow.Service
 }
 
-func NewScriptHandlers(cfg *config.Config, q *queue.FileQueue, sqliteDB *store.SQLiteStore) *ScriptHandlers {
+func NewScriptHandlers(cfg *config.Config, q *queue.FileQueue, sqliteDB *store.SQLiteStore, enqueuer *enqueue.Enqueuer) *ScriptHandlers {
 	dataDir := ""
 	if cfg != nil {
 		dataDir = strings.TrimSpace(cfg.Runtime.DataDir)
 	}
 	return &ScriptHandlers{
-		queue:    q,
+		enqueuer: enqueuer,
 		sqliteDB: sqliteDB,
 		dataDir:  dataDir,
-		creator:  creatorflow.New(cfg, q),
+		// creatorflow.New takes both q and enqueuer. q is the concrete
+		// *queue.FileQueue needed by scheduleCreatorPolling to issue
+		// background poll goroutines per creator job; enqueuer owns the
+		// voiceover-rewrite + queue-submit step.
+		// creatorflow.New takes only (cfg, enqueuer) post-PR15.7a:
+		// the Enqueuer owns the queue so passing q again would be redundant
+		// and risks drift between two parallel references.
+		creator: creatorflow.New(cfg, enqueuer),
 	}
 }
 
 // RegisterRoutes wires the public script routes on the given group.
-func RegisterRoutes(group gin.IRoutes, cfg *config.Config, q *queue.FileQueue, sqliteDB *store.SQLiteStore) *ScriptHandlers {
-	handlers := NewScriptHandlers(cfg, q, sqliteDB)
+//
+// PR15.7a: a *enqueue.Enqueuer is now mandatory alongside q + sqliteDB.
+func RegisterRoutes(group gin.IRoutes, cfg *config.Config, q *queue.FileQueue, sqliteDB *store.SQLiteStore, enqueuer *enqueue.Enqueuer) *ScriptHandlers {
+	handlers := NewScriptHandlers(cfg, q, sqliteDB, enqueuer)
 	group.POST("/generate-with-images", handlers.GenerateWithImagesHandler(cfg))
 	group.GET("/jobs/:job_id", handlers.ScriptJobHandler(false))
 	group.GET("/jobs/:job_id/full", handlers.ScriptJobHandler(true))
@@ -62,7 +75,7 @@ func RegisterRoutes(group gin.IRoutes, cfg *config.Config, q *queue.FileQueue, s
 // then enqueues a process_video job for the remote worker.
 func (h *ScriptHandlers) GenerateWithImagesHandler(cfg *config.Config) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if h.queue == nil {
+		if h.enqueuer == nil {
 			c.JSON(http.StatusServiceUnavailable, gin.H{"ok": false, "error": "queue unavailable"})
 			return
 		}
@@ -115,7 +128,7 @@ func (h *ScriptHandlers) GenerateWithImagesHandler(cfg *config.Config) gin.Handl
 			return
 		}
 
-		response, err := enqueue.EnqueueSceneVideoJob(c.Request.Context(), h.queue, normalized)
+		response, err := h.enqueuer.Enqueue(c.Request.Context(), normalized)
 		if err != nil {
 			if assetErr, ok := voiceoverassets.AsAcquisitionError(err); ok {
 				c.JSON(http.StatusUnprocessableEntity, gin.H{
@@ -249,7 +262,7 @@ func (h *ScriptHandlers) ScriptJobHandler(full bool) gin.HandlerFunc {
 			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": "failed to load job"})
 			return
 		}
-		c.JSON(http.StatusOK, enqueue.RenderJobResponse(job, full))
+		c.JSON(http.StatusOK, enqueue.RenderHTTPBoundaryJobResponse(job, full))
 	}
 }
 
@@ -270,7 +283,7 @@ func (h *ScriptHandlers) ScriptByIDHandler() gin.HandlerFunc {
 			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": "failed to load script"})
 			return
 		}
-		c.JSON(http.StatusOK, enqueue.RenderJobResponse(job, true))
+		c.JSON(http.StatusOK, enqueue.RenderHTTPBoundaryJobResponse(job, true))
 	}
 }
 

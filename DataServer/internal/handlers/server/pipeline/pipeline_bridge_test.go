@@ -137,7 +137,11 @@ func TestPipelineGenerateForwardsCompletedResultToQueue(t *testing.T) {
 	defer mockEngine.Close()
 
 	originalClient := remoteEngineClient
-	defer func() { remoteEngineClient = originalClient }()
+	originalEnqueuer := pipelineEnqueuer
+	defer func() {
+		remoteEngineClient = originalClient
+		pipelineEnqueuer = originalEnqueuer
+	}()
 	InitRemoteEngine(&config.Config{
 		Render: config.RenderConfig{
 			RemoteEngineURL:       mockEngine.URL,
@@ -161,9 +165,13 @@ func TestPipelineGenerateForwardsCompletedResultToQueue(t *testing.T) {
 		t.Fatalf("file queue: %v", err)
 	}
 
+	// PR15.7a: wire the enqueuer singleton AFTER constructing q so
+	// NewEnqueuer(q, nil) sees the live queue reference.
+	InitPipelineEnqueuer(enqueue.NewEnqueuer(q, nil))
+
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	r.POST("/api/remote/pipeline/generate", PipelineGenerate(&config.Config{}, q))
+	r.POST("/api/remote/pipeline/generate", PipelineGenerate(&config.Config{}))
 
 	reqBody, _ := json.Marshal(map[string]interface{}{
 		"source_text": "Test source",

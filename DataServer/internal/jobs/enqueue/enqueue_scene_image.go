@@ -2,7 +2,6 @@
 package enqueue
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -138,23 +137,20 @@ func buildSceneImagePayload(rawPayload map[string]interface{}, dataDir, videosDi
 	for k, v := range rawPayload {
 		normalized[k] = v
 	}
+	// PR15.6: canonical-only writes. Legacy aliases `id`/`run_id`/
+	// `title`/`voiceover_path`/`audio_path` are NOT written here.
 	normalized["job_id"] = jobID
-	normalized["id"] = jobID
 	normalized["job_run_id"] = jobRunID
-	normalized["run_id"] = jobRunID
 	normalized["correlation_id"] = correlationID
 	normalized["job_type"] = "process_video"
 	normalized["version"] = "v1"
 	normalized["created_at"] = payload.EnsureRFC3339(payload.FirstString(rawPayload, "created_at"), now)
 	normalized["updated_at"] = payload.EnsureRFC3339(payload.FirstString(rawPayload, "updated_at"), now)
 	normalized["video_name"] = videoName
-	normalized["title"] = videoName
 	normalized["script_text"] = scriptText
 	normalized["scenes"] = sceneEntries
 	normalized["scenes_json"] = payload.MustJSON(sceneEntries)
 	normalized["voiceover_paths"] = stagedVoiceoverPaths
-	normalized["voiceover_path"] = stagedVoiceoverPaths[0]
-	normalized["audio_path"] = stagedVoiceoverPaths[0]
 	normalized["audio_language_for_srt"] = audioLanguage
 	normalized["video_mode"] = "scene_image"
 	normalized["output_path"] = outputPath
@@ -173,11 +169,11 @@ func buildSceneImagePayload(rawPayload map[string]interface{}, dataDir, videosDi
 	normalized["submitted_via"] = "api_script_generate_with_images"
 	normalized["source"] = "script_generate_with_images"
 
+	// PR15.6: canonical-only parameters mirror.
 	normalized["parameters"] = map[string]interface{}{
 		"version":                "v1",
 		"job_id":                 jobID,
 		"job_run_id":             jobRunID,
-		"run_id":                 jobRunID,
 		"correlation_id":         correlationID,
 		"job_type":               "process_video",
 		"video_name":             videoName,
@@ -185,8 +181,6 @@ func buildSceneImagePayload(rawPayload map[string]interface{}, dataDir, videosDi
 		"scenes_json":            normalized["scenes_json"],
 		"scenes":                 sceneEntries,
 		"voiceover_paths":        stagedVoiceoverPaths,
-		"voiceover_path":         stagedVoiceoverPaths[0],
-		"audio_path":             stagedVoiceoverPaths[0],
 		"audio_language_for_srt": audioLanguage,
 		"video_mode":             "scene_image",
 		"output_path":            outputPath,
@@ -204,13 +198,12 @@ func buildSceneImagePayload(rawPayload map[string]interface{}, dataDir, videosDi
 		"source":                 "script_generate_with_images",
 	}
 
-	if err := resolveVoiceoverPayload(context.Background(), normalized); err != nil {
-		return nil, err
-	}
-	if err := resolveSceneImagePayload(context.Background(), normalized); err != nil {
-		return nil, err
-	}
-
+	// NOTE: voiceover/scene-image rewrite is intentionally NOT invoked here.
+	// The Enqueuer (constructed by the caller via NewEnqueuer) owns the
+	// rewrite step and applies it in Enqueue/Submit. Doing it here too
+	// would double-rewrite already-resolved paths. The pure builder stays
+	// free of side effects on injected services; service dependency travels
+	// downstream through the Enqueuer.
 	return normalized, nil
 }
 
@@ -218,8 +211,9 @@ func stageVoiceoverAssets(_ /* dataDir */, _ /* masterURL */, _ /* jobID */ stri
 	if len(voiceoverPaths) == 0 {
 		return nil, fmt.Errorf("voiceover_path or source_media is required")
 	}
-	// With AssetService wired, paths are resolved to velox-asset:// references
-	// by resolveVoiceoverPayload. Without AssetService, paths are returned as-is.
+	// Voiceover-asset rewriting (path → velox-asset:// reference) is owned by
+	// the Enqueuer now. This helper returns paths verbatim; the Enqueuer's
+	// Enqueue/Submit does the rewrite as a single, idempotent step.
 	return append([]string{}, voiceoverPaths...), nil
 }
 
@@ -227,8 +221,7 @@ func stageSceneImageAssets(_ /* dataDir */, _ /* masterURL */, _ /* jobID */ str
 	if len(sceneImagePaths) == 0 {
 		return nil, nil
 	}
-	// With AssetService wired, paths are resolved to velox-asset:// references
-	// by resolveSceneImagePayload. Without AssetService, paths are returned as-is.
+	// Scene-image rewriting is owned by the Enqueuer (see stageVoiceoverAssets).
 	return append([]string{}, sceneImagePaths...), nil
 }
 

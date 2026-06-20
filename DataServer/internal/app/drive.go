@@ -1,6 +1,7 @@
 package app
 
 import (
+	"fmt"
 	"log"
 
 	"github.com/gin-gonic/gin"
@@ -11,23 +12,33 @@ import (
 )
 
 // DriveModule provides Google Drive integration endpoints.
+//
+// PR15.1: Drive is constructed fully in NewDriveModule(cfg, sqliteStore).
+// No more WithSQLiteStore setter, no more double-init() in RegisterRoutes.
+// RegisterRoutes only mounts HTTP routes.
 type DriveModule struct {
 	cfg         *config.Config
 	sqliteStore *store.SQLiteStore
 
-	// Lazy-initialized on RegisterRoutes so the constructor doesn't pay the
-	// cost when Drive isn't wired up.
 	service  *integrationsDrive.Service
 	handlers *driveHandlers.DriveHandlers
 }
 
-// NewDriveModule creates a new Drive module.
-func NewDriveModule(cfg *config.Config) *DriveModule {
+// NewDriveModule creates a fully-initialized Drive module.
+//
+// The SQLite store is passed directly (no setter). All initialization
+// runs synchronously here so a service instance is available before any
+// route is registered. Returns an error rather than swallowing failures
+// silently — the original constructor dropped init errors on the floor.
+func NewDriveModule(cfg *config.Config, sqliteStore *store.SQLiteStore) (*DriveModule, error) {
 	m := &DriveModule{
-		cfg: cfg,
+		cfg:         cfg,
+		sqliteStore: sqliteStore,
 	}
-	_ = m.init()
-	return m
+	if err := m.init(); err != nil {
+		return nil, fmt.Errorf("drive module init: %w", err)
+	}
+	return m, nil
 }
 
 // Name returns the module identifier.
@@ -35,9 +46,9 @@ func (m *DriveModule) Name() string {
 	return "drive"
 }
 
-// Service exposes the lazy-initialized Drive service for downstream
-// consumers (bootstrap threads it through RegisterV1Routes). Returns nil
-// when credentials are absent or init hasn't run.
+// Service exposes the Drive service for downstream consumers (bootstrap
+// threads it through RegisterV1Routes / delivery providers). Returns nil
+// when credentials are absent or init did not run.
 func (m *DriveModule) Service() *integrationsDrive.Service {
 	if m == nil {
 		return nil
@@ -50,35 +61,17 @@ func (m *DriveModule) Handlers() *driveHandlers.DriveHandlers {
 	return m.handlers
 }
 
-// WithSQLiteStore wires the SQLite backend into the Drive module so that
-// drive-link writes (cache / master folder upserts / list reads) actually
-// persist. Without this call the handler receives a nil store and all writes
-// silently no-op, leaving operators under the assumption that "the folder
-// exists in SQLite" when it doesn't. Safe to call once after NewDriveModule.
-func (m *DriveModule) WithSQLiteStore(s *store.SQLiteStore) {
-	if m == nil || s == nil {
-		return
-	}
-	m.sqliteStore = s
-	if m.handlers != nil {
-		log.Printf("[DRIVE] SQLite store wired (driveModules will persist writes)")
-	}
-}
-
 // RegisterRoutes registers Drive endpoints.
+//
+// PR15.1: RegisterRoutes no longer calls init() — the module is fully
+// initialized. It only mounts HTTP routes. The SetSQLiteStore call is
+// still safe (idempotent) because handlers.SetSQLiteStore was already
+// called once during init().
 func (m *DriveModule) RegisterRoutes(r *gin.Engine) {
-	if err := m.init(); err != nil {
-		log.Printf("[DRIVE] Init failed: %v", err)
+	if m == nil || m.handlers == nil {
+		log.Printf("[DRIVE] Handlers unavailable")
 		return
 	}
-	if m.handlers == nil {
-		log.Printf("[DRIVE] Handlers unavailable after init")
-		return
-	}
-	// Relay the SQLite store through to the handler so drive-link +
-	// master-folder CRUD persists. Bootstrap calls WithSQLiteStore()
-	// right before RegisterRoutes; we double-up here for any caller
-	// that goes through this method directly.
 	if m.sqliteStore != nil {
 		m.handlers.SetSQLiteStore(m.sqliteStore)
 	}
@@ -128,6 +121,11 @@ func (m *DriveModule) init() error {
 		return err
 	}
 	m.handlers = handlers
+	// Single source of truth for SQLite wiring on Drive handlers:
+	//   - init() sets it once so Handlers() returns a fully-wired handler.
+	//   - RegisterRoutes calls SetSQLiteStore again as a no-op/idempotent
+	//     guard for callers that go through RegisterRoutes directly.
+	// Nil-safe (SetSQLiteStore must accept nil and no-op).
 	if m.sqliteStore != nil {
 		m.handlers.SetSQLiteStore(m.sqliteStore)
 	}

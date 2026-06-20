@@ -15,6 +15,13 @@ import (
 	"velox-server/internal/workers"
 )
 
+// PR15.7a: pipelineEnqueuer (wired by InitPipelineEnqueuer) lives in
+// pipeline.go and is the shared Enqueuer used by both the sync forward
+// path and this async poll path. Cancellation still uses the concrete
+// *queue.FileQueue because it iterates all queued jobs to find ones
+// matching the trace_id — a JobQueue interface does not expose
+// GetAllJobs / DeleteJob.
+
 func isTerminalStatus(status string) bool {
 	s := strings.ToLower(strings.TrimSpace(status))
 	return s == "completed" || s == "succeeded" || s == "done" || s == "failed" || s == "error"
@@ -22,9 +29,16 @@ func isTerminalStatus(status string) bool {
 
 // startPipelinePolling polls a pipeline job status every intervalSec seconds
 // in a background goroutine until completion, then forwards to workers.
-func startPipelinePolling(client *remoteengine.Client, q *queue.FileQueue, jobID string, intervalSec int) {
+//
+// PR15.7a: drops the *queue.FileQueue parameter — the forwarding path now
+// reads pipelineEnqueuer (wired via InitPipelineEnqueuer at boot) instead.
+func startPipelinePolling(client *remoteengine.Client, jobID string, intervalSec int) {
 	if client == nil || !client.IsConfigured() {
 		pipelineLog("POLL: client not configured — cannot poll job %s", jobID)
+		return
+	}
+	if pipelineEnqueuer == nil {
+		pipelineLog("POLL: enqueuer not wired — cannot forward job %s", jobID)
 		return
 	}
 
@@ -95,8 +109,8 @@ func startPipelinePolling(client *remoteengine.Client, q *queue.FileQueue, jobID
 					}
 				}
 
-				if enqueue.ShouldForwardPipelineResult(forwardResult) {
-					if forwarded, fwdErr := forwardPipelineResultToWorker(context.Background(), q, forwardResult); fwdErr != nil {
+			if enqueue.ShouldForwardPipelineResult(forwardResult) {
+				if forwarded, fwdErr := forwardPipelineResultToWorker(context.Background(), pipelineEnqueuer, forwardResult); fwdErr != nil {
 						pipelineLog("FORWARD: FAILED job_id=%s: %v", jobID, fwdErr)
 					} else {
 						workerJobID, _ := forwarded["job_id"].(string)

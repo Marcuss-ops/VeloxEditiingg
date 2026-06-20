@@ -1,6 +1,13 @@
 // Package enqueue fornisce funzioni condivise per la normalizzazione, il building e
 // l'inoltro di job video (process_video) nella coda. Usato da endpoint canonici come
 // script/generate-with-images e pipeline.
+//
+// PR15.7a (enqueuer-struct): the package-level voiceoverAssetService mutex-guarded
+// global was removed. The single entry point is now `*Enqueuer`: callers construct
+// one with NewEnqueuer(queue, voiceoverService) and call .Enqueue(ctx, payload).
+// All rewrite invariants (voiceover + scene-image) live behind the Enqueuer
+// methods so the queue+service travel together as injected dependencies and
+// there is no longer any package-level mutable state to coordinate.
 package enqueue
 
 import (
@@ -10,7 +17,6 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"sync"
 	"time"
 
 	assetbridge "velox-server/internal/assets"
@@ -20,45 +26,52 @@ import (
 	"context"
 
 	"github.com/google/uuid"
-
-	"velox-server/internal/queue"
 )
 
-var (
-	voiceoverAssetServiceMu sync.RWMutex
-	voiceoverAssetService   *assetbridge.AssetService
-)
-
-// SetVoiceoverAssetService configures the canonical asset service used before
-// job submission. Accepts the new generic AssetService (PR6+).
-func SetVoiceoverAssetService(service *assetbridge.AssetService) {
-	voiceoverAssetServiceMu.Lock()
-	defer voiceoverAssetServiceMu.Unlock()
-	voiceoverAssetService = service
+// JobQueue is the minimal surface Enqueuer depends on. *queue.FileQueue
+// (and any future in-memory or Redis-backed queue) satisfies this.
+type JobQueue interface {
+	SubmitJob(ctx context.Context, jobID string, payload map[string]interface{}) error
 }
 
-func getVoiceoverAssetService() *assetbridge.AssetService {
-	voiceoverAssetServiceMu.RLock()
-	defer voiceoverAssetServiceMu.RUnlock()
-	return voiceoverAssetService
+// Enqueuer bundles the queue + the asset service that rewrites voiceover
+// and scene-image payload references. Construct via NewEnqueuer.
+//
+// Replaces the package-level voiceoverAssetService global (PR15.7a).
+// Tests can construct an Enqueuer directly without mutating shared state,
+// so each test owns its own dependencies.
+type Enqueuer struct {
+	Queue     JobQueue
+	Voiceover *assetbridge.AssetService
+}
+
+// NewEnqueuer constructs an Enqueuer with mandatory Queue. The voiceover
+// service is optional (nil-safe: voiceover resolution is skipped).
+func NewEnqueuer(q JobQueue, voiceover *assetbridge.AssetService) *Enqueuer {
+	return &Enqueuer{Queue: q, Voiceover: voiceover}
 }
 
 // =============================================================================
 // Core enqueue entry point
 // =============================================================================
 
-// EnqueueSceneVideoJob normalizza un payload scene-video e lo persiste nella coda.
-// È il punto d'ingresso condiviso per script/generate-with-images, pipeline e altri
-// flussi canonici.
-func EnqueueSceneVideoJob(ctx context.Context, q *queue.FileQueue, payloadMap map[string]interface{}) (map[string]interface{}, error) {
-	if q == nil {
+// Enqueue is the canonical scene-video enqueue. The Enqueuer owns both
+// the queue and the voiceover/scene-image asset service so rewrite
+// invariants are applied exactly once before submission, with no
+// package-level mutable state involved.
+//
+// Callers MUST use *Enqueuer.Enqueue(ctx, payload) — there is no
+// package-level fallback. Callers must construct an Enqueuer (typically
+// once at composition-root time) and pass it down via DI.
+func (e *Enqueuer) Enqueue(ctx context.Context, payloadMap map[string]interface{}) (map[string]interface{}, error) {
+	if e == nil || e.Queue == nil {
 		return nil, fmt.Errorf("queue unavailable")
 	}
 
-	if err := resolveVoiceoverPayload(ctx, payloadMap); err != nil {
+	if err := e.resolveVoiceoverPayload(ctx, payloadMap); err != nil {
 		return nil, err
 	}
-	if err := resolveSceneImagePayload(ctx, payloadMap); err != nil {
+	if err := e.resolveSceneImagePayload(ctx, payloadMap); err != nil {
 		return nil, err
 	}
 
@@ -73,7 +86,7 @@ func EnqueueSceneVideoJob(ctx context.Context, q *queue.FileQueue, payloadMap ma
 		normalized["job_id"] = jobID
 	}
 
-	if err := q.SubmitJob(ctx, jobID, normalized); err != nil {
+	if err := e.Queue.SubmitJob(ctx, jobID, normalized); err != nil {
 		return nil, err
 	}
 
@@ -84,14 +97,23 @@ func EnqueueSceneVideoJob(ctx context.Context, q *queue.FileQueue, payloadMap ma
 // Job response formatter (shared across endpoints)
 // =============================================================================
 
-// RenderJobResponse builds a standard job response map from a raw job record.
-func RenderJobResponse(job map[string]interface{}, full bool) map[string]interface{} {
+// RenderHTTPBoundaryJobResponse builds the HTTP-edge JSON response map for
+// a job record, READing via legacy-alias-tolerant fallbacks so old SQLite
+// rows that still carry `id`/`run_id`/`title`/`voiceover_path`/`audio_path`
+// (written before PR15.6) continue to render correctly.
+//
+// PR15.6: renamed from RenderJobResponse. The function is the sole canonical-
+// to-alias adapter at the HTTP boundary; internal callers (script handler,
+// creatorflow, pipeline) all consume canonical keys already. ONLY this
+// helper tolerates dual-write reads.
+func RenderHTTPBoundaryJobResponse(job map[string]interface{}, full bool) map[string]interface{} {
 	if job == nil {
 		return map[string]interface{}{"ok": false}
 	}
 	response := map[string]interface{}{
 		"ok":                  true,
 		"job_id":              payload.FirstString(job, "job_id"),
+		// legacy aliases kept only on HTTP-edge reads (PR15.6)
 		"script_id":           payload.FirstString(job, "job_id", "script_id"),
 		"status":              payload.FirstString(job, "status"),
 		"video_name":          payload.FirstString(job, "video_name", "title"),
@@ -121,7 +143,7 @@ func RenderJobResponse(job map[string]interface{}, full bool) map[string]interfa
 }
 
 // =============================================================================
-// Internal: scene video payload normalization (used by EnqueueSceneVideoJob)
+// Internal: scene video payload normalization (used by *Enqueuer.Enqueue)
 // =============================================================================
 
 func normalizeSceneVideoPayload(payloadMap map[string]interface{}) (map[string]interface{}, error) {
@@ -179,21 +201,16 @@ func normalizeSceneVideoPayload(payloadMap map[string]interface{}) (map[string]i
 		normalized[k] = v
 	}
 	normalized["job_id"] = jobID
-	normalized["id"] = jobID
 	normalized["job_run_id"] = jobRunID
-	normalized["run_id"] = jobRunID
 	normalized["correlation_id"] = correlationID
 	normalized["job_type"] = "process_video"
 	normalized["created_at"] = payload.EnsureRFC3339(payload.FirstString(payloadMap, "created_at"), now)
 	normalized["updated_at"] = payload.EnsureRFC3339(payload.FirstString(payloadMap, "updated_at"), now)
 	normalized["video_name"] = title
-	normalized["title"] = title
 	normalized["script_text"] = scriptText
 	normalized["scenes"] = scenesValue
 	normalized["scenes_json"] = scenesJSON
 	normalized["voiceover_paths"] = voiceovers
-	normalized["voiceover_path"] = voiceovers[0]
-	normalized["audio_path"] = voiceovers[0]
 	normalized["priority"] = payload.EnsureInt(payloadMap["priority"], 1)
 	normalized["timeout_secs"] = payload.EnsureInt(payloadMap["timeout_secs"], 3600)
 	normalized["scene_count"] = len(scenesValue)
@@ -202,11 +219,14 @@ func normalizeSceneVideoPayload(payloadMap map[string]interface{}) (map[string]i
 	normalized["source"] = "scene_video_api"
 	normalized["job_fingerprint"] = jobFingerprint
 	normalized["version"] = "v1"
+	// PR15.6: canonical-only parameters mirror. Legacy aliases
+	// (id, run_id, title, voiceover_path, audio_path) are NOT written here
+	// — they live in older rows and are read on the HTTP edge by the
+	// boundary adapter (RenderHTTPBoundaryJobResponse).
 	normalized["parameters"] = map[string]interface{}{
 		"version":         "v1",
 		"job_id":          jobID,
 		"job_run_id":      jobRunID,
-		"run_id":          jobRunID,
 		"correlation_id":  correlationID,
 		"job_type":        "process_video",
 		"video_name":      title,
@@ -214,8 +234,6 @@ func normalizeSceneVideoPayload(payloadMap map[string]interface{}) (map[string]i
 		"scenes_json":     scenesJSON,
 		"scenes":          scenesValue,
 		"voiceover_paths": voiceovers,
-		"voiceover_path":  voiceovers[0],
-		"audio_path":      voiceovers[0],
 		"youtube_group":   payload.FirstString(payloadMap, "youtube_group"),
 		"output_path":     payload.FirstString(payloadMap, "output_path"),
 		"job_fingerprint": jobFingerprint,
@@ -399,20 +417,38 @@ func voiceoverCountFromPayload(payloadMap map[string]interface{}) int {
 	return len(normalizeVoiceoverList(payloadMap))
 }
 
-func resolveVoiceoverPayload(ctx context.Context, payloadMap map[string]interface{}) error {
-	service := getVoiceoverAssetService()
+// rewriteVoiceoverPayloadFor is the single canonical implementation of
+// voiceover rewrite. Both the (e *Enqueuer) method and the package-level
+// fallback `resolveVoiceoverPayload` delegate here so the rewrite
+// invariants live in ONE place; only the service source differs.
+func rewriteVoiceoverPayloadFor(ctx context.Context, service *assetbridge.AssetService, payloadMap map[string]interface{}) error {
 	if service == nil || payloadMap == nil {
 		return nil
 	}
 	return service.RewriteVoiceoverPayload(ctx, payloadMap)
 }
 
-func resolveSceneImagePayload(ctx context.Context, payloadMap map[string]interface{}) error {
-	service := getVoiceoverAssetService()
+// rewriteSceneImagePayloadFor mirrors rewriteVoiceoverPayloadFor for
+// scene-image resolution. Shared invariant: nil service is a no-op.
+func rewriteSceneImagePayloadFor(ctx context.Context, service *assetbridge.AssetService, payloadMap map[string]interface{}) error {
 	if service == nil || payloadMap == nil {
 		return nil
 	}
 	return service.RewriteSceneImagePayload(ctx, payloadMap)
+}
+
+func (e *Enqueuer) resolveVoiceoverPayload(ctx context.Context, payloadMap map[string]interface{}) error {
+	if e == nil {
+		return nil
+	}
+	return rewriteVoiceoverPayloadFor(ctx, e.Voiceover, payloadMap)
+}
+
+func (e *Enqueuer) resolveSceneImagePayload(ctx context.Context, payloadMap map[string]interface{}) error {
+	if e == nil {
+		return nil
+	}
+	return rewriteSceneImagePayloadFor(ctx, e.Voiceover, payloadMap)
 }
 
 func sceneVideoFingerprint(parts ...interface{}) string {

@@ -68,18 +68,16 @@ func BuildPipelinePayload(result map[string]interface{}) (map[string]interface{}
 		return nil, fmt.Errorf("scenes payload missing from pipeline result")
 	}
 
+	// PR15.6: canonical-only payload. Legacy alias keys (id/run_id/title/
+	// voiceover_path/audio_path) are emitted ONLY on the HTTP edge.
 	jobPayload := map[string]interface{}{
 		"job_id":                 payload.FirstString(flat, "job_id", "script_id", "trace_id"),
 		"job_run_id":             payload.FirstString(flat, "job_run_id", "run_id", "trace_id"),
-		"run_id":                 payload.FirstString(flat, "run_id", "job_run_id", "trace_id"),
 		"correlation_id":         payload.FirstString(flat, "correlation_id", "trace_id"),
 		"video_name":             title,
-		"title":                  title,
 		"script_text":            scriptText,
 		"scenes_json":            scenesJSON,
 		"voiceover_paths":        voiceovers,
-		"voiceover_path":         voiceovers[0],
-		"audio_path":             voiceovers[0],
 		"output_path":            payload.FirstString(flat, "output_path", "output_dir"),
 		"drive_output_folder":    payload.FirstString(flat, "drive_output_folder", "output_directory"),
 		"youtube_group":          payload.FirstString(flat, "youtube_group"),
@@ -93,18 +91,12 @@ func BuildPipelinePayload(result map[string]interface{}) (map[string]interface{}
 
 	if jobID := strings.TrimSpace(payload.FirstString(flat, "job_id", "script_id", "trace_id")); jobID != "" {
 		jobPayload["job_id"] = jobID
-		jobPayload["id"] = jobID
 	}
 	if runID := strings.TrimSpace(payload.FirstString(flat, "job_run_id", "run_id", "trace_id")); runID != "" {
 		jobPayload["job_run_id"] = runID
-		jobPayload["run_id"] = runID
 	}
 	if corrID := strings.TrimSpace(payload.FirstString(flat, "correlation_id", "trace_id")); corrID != "" {
 		jobPayload["correlation_id"] = corrID
-	}
-	if len(voiceovers) > 0 {
-		jobPayload["voiceover_path"] = voiceovers[0]
-		jobPayload["audio_path"] = voiceovers[0]
 	}
 
 	return jobPayload, nil

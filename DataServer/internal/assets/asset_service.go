@@ -173,6 +173,7 @@ func (s *AssetService) ResolveAndRegister(ctx context.Context, cmd ResolveAssetC
 		SizeBytes:       sizeBytes,
 		StorageProvider: "local",
 		StorageKey:      storageKey,
+		MetadataJSON:    "",
 		CreatedAt:       now,
 		VerifiedAt:      now,
 	}, nil
@@ -201,57 +202,54 @@ func (s *AssetService) LinkToJob(ctx context.Context, jobID, assetID, role strin
 	return s.repo.LinkToJob(ctx, jobID, assetID, role, ordinal, required)
 }
 
-// RewriteVoiceoverPayload resolves all mirrored voiceover fields in the
-// payload and rewrites them to canonical velox-asset:// references. This
-// replaces the old Service.RewriteVoiceoverPayload — uses the full
-// ResolveAndRegister pipeline for content-addressed asset storage.
+// RewriteVoiceoverPayload resolves all voiceover references in the
+// payload and rewrites them to canonical velox-asset:// references.
+//
+// PR15.6: delegates to applyRewrite with role=RoleVoiceover; the
+// collector+applicator pair are the only role-specific knowledge.
 func (s *AssetService) RewriteVoiceoverPayload(ctx context.Context, payloadMap map[string]interface{}) error {
-	if s == nil || payloadMap == nil {
-		return nil
-	}
-	references := collectVoiceoverReferences(payloadMap)
-	if len(references) == 0 {
-		return nil
-	}
-
-	refs := make([]string, 0, len(references))
-	for _, ref := range references {
-		trimmed := strings.TrimSpace(ref)
-		if trimmed == "" {
-			continue
-		}
-		// Skip already-canonical velox-asset references.
-		if strings.HasPrefix(trimmed, VeloxAssetScheme+"://") {
-			refs = append(refs, trimmed)
-			continue
-		}
-		asset, err := s.ResolveAndRegister(ctx, ResolveAssetCommand{
-			Kind:      RoleVoiceover,
-			Reference: trimmed,
-		})
-		if err != nil {
-			return err
-		}
-		if asset == nil {
-			continue
-		}
-		refs = append(refs, asset.Reference())
-	}
-	if len(refs) == 0 {
-		return nil
-	}
-
-	applyVoiceoverReferences(payloadMap, refs)
-	return nil
+	return s.applyRewrite(ctx, payloadMap, RoleVoiceover, collectVoiceoverReferences, applyVoiceoverReferences)
 }
 
-// RewriteSceneImagePayload resolves all scene image references in the payload
-// and rewrites them to canonical velox-asset:// references.
+// RewriteSceneImagePayload resolves all scene image references in the
+// payload and rewrites them to canonical velox-asset:// references.
 func (s *AssetService) RewriteSceneImagePayload(ctx context.Context, payloadMap map[string]interface{}) error {
-	if s == nil || payloadMap == nil {
+	return s.applyRewrite(ctx, payloadMap, RoleSceneImage, collectSceneImageReferences, applySceneImageReferences)
+}
+
+// applyRewrite is the shared collect→resolve→apply worker used by every
+// payload rewrite flavor. It iterates the references collected from the
+// payload, looks each one up via the asset service, then writes the
+// canonical references back through the role-specific applicator.
+//
+// Parameters
+//   - ctx:               request context for resolver + DB calls.
+//   - payloadMap:        mutable payload to rewrite (top-level and parameters
+//                        sub-map, depending on the applicator).
+//   - kind:              asset role label (RoleVoiceover / RoleSceneImage etc.)
+//                        used when registering a freshly-resolved asset.
+//   - collector:         extracts references from the payload. Must dedup
+//                        internally; returns nil/empty when nothing to do.
+//   - applicator:        writes the rewritten references back. Receives the
+//                        already-resolved canonical reference list (each item
+//                        is either a velox-asset:// scheme URL returned by
+//                        ResolveAndRegister, or an already-canonical URL
+//                        that was passed-through).
+//
+// Errors from the asset service surface to the caller verbatim. nil-nil
+// short-circuits when the service is gone or the payload is nil; missing
+// or empty collector result is a no-op.
+func (s *AssetService) applyRewrite(
+	ctx context.Context,
+	payloadMap map[string]interface{},
+	kind string,
+	collector func(map[string]interface{}) []string,
+	applicator func(map[string]interface{}, []string),
+) error {
+	if s == nil || payloadMap == nil || collector == nil || applicator == nil {
 		return nil
 	}
-	references := collectSceneImageReferences(payloadMap)
+	references := collector(payloadMap)
 	if len(references) == 0 {
 		return nil
 	}
@@ -262,13 +260,13 @@ func (s *AssetService) RewriteSceneImagePayload(ctx context.Context, payloadMap 
 		if trimmed == "" {
 			continue
 		}
-		// Skip already-canonical velox-asset references.
+		// Skip already-canonical velox-asset references — nothing to do.
 		if strings.HasPrefix(trimmed, VeloxAssetScheme+"://") {
 			refs = append(refs, trimmed)
 			continue
 		}
 		asset, err := s.ResolveAndRegister(ctx, ResolveAssetCommand{
-			Kind:      RoleSceneImage,
+			Kind:      kind,
 			Reference: trimmed,
 		})
 		if err != nil {
@@ -283,7 +281,7 @@ func (s *AssetService) RewriteSceneImagePayload(ctx context.Context, payloadMap 
 		return nil
 	}
 
-	applySceneImageReferences(payloadMap, refs)
+	applicator(payloadMap, refs)
 	return nil
 }
 
@@ -344,34 +342,50 @@ func collectVoiceoverReferences(payloadMap map[string]interface{}) []string {
 	if payloadMap == nil {
 		return nil
 	}
-	candidates := []string{
-		payload.FirstString(payloadMap, "voiceover_path", "audio_path", "voiceover", "unified_voiceover_link"),
-	}
+	var candidates []string
+
+	// PR15.6 canonical input: voiceover_paths is now the only top-level alias.
 	if v, ok := payloadMap["voiceover_paths"]; ok {
 		candidates = append(candidates, payload.NormalizeToStrings(v)...)
 	}
+
+	// Legacy aliases (id/run_id/title/voiceover_path/audio_path) are dropped
+	// from canonical WRITES but collectors must still tolerate legacy payloads
+	// flowing through — e.g. older jobs still in SQLite, or external
+	// request bodies that the HTTP boundary adapter translates separately.
+	candidates = append(candidates,
+		payload.FirstString(payloadMap, "voiceover", "unified_voiceover_link"),
+	)
+	// Below keys still tolerated on input only (read-fallback). They will
+	// never be set by canonical writers in PR15.6+.
+	candidates = append(candidates,
+		payload.FirstString(payloadMap, "voiceover_path", "audio_path"),
+	)
+
 	if params, ok := payloadMap["parameters"].(map[string]interface{}); ok {
-		candidates = append(candidates, payload.FirstString(params, "voiceover_path", "audio_path", "voiceover"))
 		if v, ok := params["voiceover_paths"]; ok {
 			candidates = append(candidates, payload.NormalizeToStrings(v)...)
 		}
+		candidates = append(candidates, payload.FirstString(params, "voiceover_path", "audio_path", "voiceover"))
 	}
+
 	return payload.DedupeStrings(candidates)
 }
 
+// applyVoiceoverReferences writes the canonical voiceover_paths array back
+// to the payload AND mirrors it into the parameters sub-map.
+//
+// PR15.6: writes ONLY the canonical `voiceover_paths` key (array). The
+// singular `voiceover_path` and `audio_path` aliases are intentionally
+// NOT written here — downstream HTTP-edge reads via RenderHTTPBoundaryJobResponse
+// still tolerate them when reading legacy SQLite rows.
 func applyVoiceoverReferences(payloadMap map[string]interface{}, refs []string) {
 	if len(refs) == 0 || payloadMap == nil {
 		return
 	}
-	first := refs[0]
 	payloadMap["voiceover_paths"] = append([]string(nil), refs...)
-	payloadMap["voiceover_path"] = first
-	payloadMap["audio_path"] = first
 	if params, ok := payloadMap["parameters"].(map[string]interface{}); ok {
 		params["voiceover_paths"] = append([]string(nil), refs...)
-		params["voiceover_path"] = first
-		params["audio_path"] = first
-		payloadMap["parameters"] = params
 	}
 }
 
@@ -383,7 +397,7 @@ func collectSceneImageReferences(payloadMap map[string]interface{}) []string {
 	}
 	var candidates []string
 
-	// From scene_image_paths array
+	// PR15.6: scene_image_paths is the canonical input.
 	if v, ok := payloadMap["scene_image_paths"]; ok {
 		candidates = append(candidates, payload.NormalizeToStrings(v)...)
 	}
@@ -414,7 +428,6 @@ func collectSceneImageReferences(payloadMap map[string]interface{}) []string {
 		}
 	}
 
-	// From parameters sub-map
 	if params, ok := payloadMap["parameters"].(map[string]interface{}); ok {
 		if v, ok := params["scene_image_paths"]; ok {
 			candidates = append(candidates, payload.NormalizeToStrings(v)...)
@@ -424,16 +437,18 @@ func collectSceneImageReferences(payloadMap map[string]interface{}) []string {
 	return payload.DedupeStrings(candidates)
 }
 
+// applySceneImageReferences writes the canonical scene_image_paths array
+// back to the payload, AND mirrors per-scene rewrites (image_link +
+// image_links) AND the parameters sub-map.
+//
+// PR15.6: writes ONLY canonical keys; no legacy alias keys are written.
 func applySceneImageReferences(payloadMap map[string]interface{}, refs []string) {
 	if len(refs) == 0 || payloadMap == nil {
 		return
 	}
 
-	// Update scene_image_paths
 	payloadMap["scene_image_paths"] = append([]string(nil), refs...)
 
-	// Update image_link / image_links in each scene entry.
-	// Handles both []map[string]interface{} and []interface{}.
 	switch scenes := payloadMap["scenes"].(type) {
 	case []map[string]interface{}:
 		for i, scene := range scenes {
@@ -453,7 +468,6 @@ func applySceneImageReferences(payloadMap map[string]interface{}, refs []string)
 		}
 	}
 
-	// Update parameters sub-map
 	if params, ok := payloadMap["parameters"].(map[string]interface{}); ok {
 		params["scene_image_paths"] = append([]string(nil), refs...)
 	}

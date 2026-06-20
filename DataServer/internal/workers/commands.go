@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/big"
-	"sync"
 	"time"
 
 	"velox-server/internal/store"
@@ -32,8 +31,12 @@ type WorkerCommand struct {
 //     command_id and is only callable by the owning worker.
 //   - GetAckTime is removed — callers should query worker_commands directly
 //     if they need ack timestamps.
+//
+// PR15.3: removed the unused `mu sync.RWMutex` field. SQLite operations
+// are already serialized by SQLiteStore's own connection pool; an
+// additional Go-side mutex was dead weight and a magnet for false
+// "deadlock-free" assumptions.
 type CommandManager struct {
-	mu    sync.RWMutex
 	store *store.SQLiteStore
 }
 
@@ -133,8 +136,10 @@ type WorkerToken struct {
 }
 
 // TokenManager handles worker authentication tokens, backed by SQLite sessions.
+//
+// PR15.3: removed the unused `mu sync.RWMutex` field for the same reason
+// as CommandManager (SQLite serializes access).
 type TokenManager struct {
-	mu    sync.RWMutex
 	store *store.SQLiteStore
 }
 

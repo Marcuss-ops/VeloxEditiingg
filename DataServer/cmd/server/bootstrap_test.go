@@ -29,6 +29,39 @@ func newTestConfig(t *testing.T) *config.Config {
 	}
 }
 
+// TestBuildServerDeps_SingletonCommandManager verifies PR15.3: the
+// CommandManager instance passed to WorkerUpdateHandler (HTTP path) is
+// the SAME pointer stored on deps.cmdMgr (used by the gRPC path).
+// Pre-fix, two separate NewCommandManager calls were made on the same
+// SQLiteStore, racing on the worker_commands table.
+//
+// WorkerUpdateHandler exposes a CommandManager() accessor that returns
+// its embedded instance. Pointer equality between that and deps.cmdMgr
+// proves the singleton invariant.
+func TestBuildServerDeps_SingletonCommandManager(t *testing.T) {
+	t.Parallel()
+	cfg := newTestConfig(t)
+
+	deps, err := buildServerDeps(cfg)
+	if err != nil {
+		t.Fatalf("buildServerDeps: %v", err)
+	}
+	if deps.cmdMgr == nil {
+		t.Fatal("deps.cmdMgr must be non-nil after buildServerDeps (PR15.3 invariant)")
+	}
+	if deps.workerUpdateHandler == nil {
+		t.Fatal("workerUpdateHandler must be non-nil to verify singleton")
+	}
+	handlerCmdMgr := deps.workerUpdateHandler.CommandManager()
+	if handlerCmdMgr == nil {
+		t.Fatal("workerUpdateHandler.CommandManager() returned nil — handler must hold the singleton")
+	}
+	if deps.cmdMgr != handlerCmdMgr {
+		t.Errorf("PR15.3 singleton invariant violated: deps.cmdMgr (%p) != workerUpdateHandler.CommandManager() (%p)",
+			deps.cmdMgr, handlerCmdMgr)
+	}
+}
+
 // TestBuildServerDeps_CreatesExactlyOneLifecycleService verifies that
 // buildServerDeps creates exactly one LifecycleService instance and that
 // FileQueue.LifecycleService() returns it.

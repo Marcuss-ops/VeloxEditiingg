@@ -20,6 +20,11 @@ import (
 	"velox-server/internal/store"
 )
 
+// PR15.7a: every test that wires the script routes now constructs an
+// *enqueue.Enqueuer and threads it through RegisterRoutes. There is no
+// SetVoiceoverAssetService global anymore — the asset service lives on
+// the Enqueuer and travels with the queue as an injected dependency.
+
 func TestGenerateWithImages_EnqueuesSceneImageJob(t *testing.T) {
 	tempDir := t.TempDir()
 	dbPath := filepath.Join(tempDir, "velox.db")
@@ -47,8 +52,11 @@ func TestGenerateWithImages_EnqueuesSceneImageJob(t *testing.T) {
 		},
 	}
 
+	// Voiceover nil: this test exercises the basic enqueue path, no asset rewrite.
+	enqueuer := jobenqueue.NewEnqueuer(q, nil)
+
 	r := gin.New()
-	RegisterRoutes(r.Group("/api/script"), cfg, q, db)
+	RegisterRoutes(r.Group("/api/script"), cfg, q, db, enqueuer)
 
 	payload := map[string]interface{}{
 		"video_name":          "Amish",
@@ -155,13 +163,12 @@ func TestGenerateWithImages_UsesCreatorStageWhenConfigured(t *testing.T) {
 	}
 	t.Cleanup(func() {
 		_ = assetDB.Close()
-		jobenqueue.SetVoiceoverAssetService(nil)
 	})
 	assetRepo := store.NewSQLiteAssetRepository(assetDB)
 	assetBlobStore := store.NewNopBlobStore(tempDir)
 	assetStore := voiceoverassets.NewStore(tempDir, 0, []string{tempDir})
 	assetRegistry := voiceoverassets.NewResolverRegistry(voiceoverassets.NewTypedResolversFromStore(assetStore, nil, nil)...)
-	jobenqueue.SetVoiceoverAssetService(voiceoverassets.NewAssetService(assetRepo, assetBlobStore, assetRegistry, clock.System{}))
+	voiceoverSvc := voiceoverassets.NewAssetService(assetRepo, assetBlobStore, assetRegistry, clock.System{})
 
 	dbPath := filepath.Join(tempDir, "velox.db")
 	voicePath := filepath.Join(tempDir, "voice.mp3")
@@ -226,8 +233,12 @@ func TestGenerateWithImages_UsesCreatorStageWhenConfigured(t *testing.T) {
 		},
 	}
 
+	// PR15.7a: creator-via-assetService path. The Enqueuer must carry the
+	// voiceover service so the rewrite step runs inside Enqueue.
+	enqueuer := jobenqueue.NewEnqueuer(q, voiceoverSvc)
+
 	r := gin.New()
-	RegisterRoutes(r.Group("/api/script"), cfg, q, db)
+	RegisterRoutes(r.Group("/api/script"), cfg, q, db, enqueuer)
 
 	reqBody, _ := json.Marshal(map[string]interface{}{
 		"video_name":     "Creator Video",
@@ -316,8 +327,12 @@ func TestGenerateWithImages_BypassesCreatorForRenderReadyPayload(t *testing.T) {
 		},
 	}
 
+	// PR15.7a: bypass path. Creator stage is short-circuited, no asset rewrite
+	// expected; voiceover nil is fine.
+	enqueuer := jobenqueue.NewEnqueuer(q, nil)
+
 	r := gin.New()
-	RegisterRoutes(r.Group("/api/script"), cfg, q, db)
+	RegisterRoutes(r.Group("/api/script"), cfg, q, db, enqueuer)
 
 	reqBody, _ := json.Marshal(map[string]interface{}{
 		"skip_creator":   true,
