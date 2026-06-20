@@ -57,7 +57,7 @@ while IFS= read -r workflow; do
 done < <(find . \
     -path './.git' -prune -o \
     -type f \( -name '*.yml' -o -name '*.yaml' \) \
-    -path './.github/workflows/*' -print)
+    -path '*/workflows/*' -print)
 [[ "$found_off_root" -eq 0 ]] \
   || fail "workflow YAML files outside ./.github/workflows/ -- see above"
 

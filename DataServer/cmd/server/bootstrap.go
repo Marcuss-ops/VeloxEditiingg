@@ -229,7 +229,7 @@ func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
 	// (canonical domain surface) — both satisfied by the same concrete
 	// *SQLiteJobRepository. SUCCEEDED is reachable only through
 	// artifacts.Service.FinalizeArtifactAndCompleteJob.
-	lifecycleSvc, err := queue.NewLifecycleService(jobRepo, jobRepo, queue.RealClock{})
+	lifecycleSvc, err := queue.NewLifecycleService(jobRepo, jobRepo, clock.System{})
 	if err != nil {
 		return nil, fmt.Errorf("bootstrap: lifecycle service: %w", err)
 	}
@@ -372,7 +372,7 @@ func runServer(cfg *config.Config) error {
 	typedResolvers := voiceoverassets.NewTypedResolversFromStore(voiceoverStore, driveMod.Service(), nil)
 	assetRegistry := voiceoverassets.NewResolverRegistry(typedResolvers...)
 	assetRepo := store.NewSQLiteAssetRepository(deps.sqliteStore)
-	deps.assetService = voiceoverassets.NewAssetService(assetRepo, deps.blobStore, assetRegistry, nil)
+	deps.assetService = voiceoverassets.NewAssetService(assetRepo, deps.blobStore, assetRegistry, clock.System{})
 
 	// Wire the new AssetService into the enqueue flow (replaces the old
 	// voiceover bridge's RewriteVoiceoverPayload).

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"velox-server/internal/identity"
+	"velox-server/internal/platform/clock"
 	"velox-shared/payload"
 )
 
@@ -35,27 +36,24 @@ type BlobStore interface {
 	FinalPath(jobID, artifactID, extension string) string
 }
 
-// Clock returns the current time (allows testing).
-type Clock func() time.Time
-
 // AssetService is the generic asset registry service.
 type AssetService struct {
 	repo      AssetRepository
 	blobStore BlobStore
 	registry  *ResolverRegistry
-	clock     Clock
+	clock     clock.Clock
 }
 
 // NewAssetService creates a new generic asset service.
-func NewAssetService(repo AssetRepository, blobStore BlobStore, registry *ResolverRegistry, clock Clock) *AssetService {
-	if clock == nil {
-		clock = time.Now
+func NewAssetService(repo AssetRepository, blobStore BlobStore, registry *ResolverRegistry, c clock.Clock) *AssetService {
+	if c == nil {
+		c = clock.System{}
 	}
 	return &AssetService{
 		repo:      repo,
 		blobStore: blobStore,
 		registry:  registry,
-		clock:     clock,
+		clock:     c,
 	}
 }
 
@@ -132,7 +130,7 @@ func (s *AssetService) ResolveAndRegister(ctx context.Context, cmd ResolveAssetC
 	}
 
 	// 5. Insert asset record
-	now := s.clock().UTC().Format(time.RFC3339)
+	now := s.clock.Now().UTC().Format(time.RFC3339)
 	assetRecord := AssetRecord{
 		AssetID:         assetID,
 		Kind:            kind,
@@ -150,7 +148,10 @@ func (s *AssetService) ResolveAndRegister(ctx context.Context, cmd ResolveAssetC
 	}
 
 	// 6. Insert source record
-	sourceID := identity.NewHex128()
+	sourceID, err := identity.NewHex128()
+	if err != nil {
+		return nil, fmt.Errorf("generate source ID: %w", err)
+	}
 	sourceRecord := AssetSourceRecord{
 		SourceID:        sourceID,
 		AssetID:         assetID,

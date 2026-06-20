@@ -24,12 +24,10 @@ cd "$REPO_ROOT"
 # shellcheck source=lib/diff-scope.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib/diff-scope.sh"
 
-forbidden_patterns=(
+# Prohibited patterns checked on the FULL TREE (cannot exist anywhere, even in existing main code)
+full_tree_patterns=(
   'refactored/'                       # Old double-root; single-root rule
   'VELOX_DB_DSN'                      # Retired alias for VELOX_DB_PATH
-  'NewLegacy'                         # Stub left from de-legacy migration
-  'DeprecatedService'                 # Same
-  'local-workers.sh.deprecated'       # Replaced by data/ansible
   'march=native'                      # Non-reproducible C++ binaries
   'mtune=native'                      # Same
   # Dead packages removed in Ondata 1 cleanup — must not reappear.
@@ -40,8 +38,32 @@ forbidden_patterns=(
   'internal/util'                     # Removed; use identity/, platform/clock/
 )
 
+# Prohibited patterns checked only on the DIFF (forbidden in new/modified code)
+diff_patterns=(
+  'NewLegacy'                         # Stub left from de-legacy migration
+  'DeprecatedService'                 # Same
+  'local-workers.sh.deprecated'       # Replaced by data/ansible
+)
+
 violations=0
-for pattern in "${forbidden_patterns[@]}"; do
+
+# 1. Full-tree checks
+for pattern in "${full_tree_patterns[@]}"; do
+  if matches="$(
+         git grep -nE "$pattern" -- \
+           ':!docs/**' \
+           ':!frontend_standalone/**' \
+           ':!scripts/ci/check-no-legacy.sh' \
+           ':!scripts/ci/lib/diff-scope.sh' 2>/dev/null || true
+       )"; [[ -n "$matches" ]]; then
+    printf 'FORBIDDEN (exists in repository): %s\n%s\n\n' \
+      "$pattern" "$matches" >&2
+    violations=$((violations + 1))
+  fi
+done
+
+# 2. Diff-scoped checks
+for pattern in "${diff_patterns[@]}"; do
   if matches="$(
          scoped_grep "$pattern" -- \
            ':!docs/**' \

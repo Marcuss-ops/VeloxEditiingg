@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"velox-server/internal/jobs"
+	"velox-server/internal/platform/clock"
 	"velox-server/internal/store"
 )
 
@@ -21,17 +22,17 @@ import (
 // *store.SQLiteJobRepository (which implements both interfaces).
 // Returns an error (not a panic) so bootstrap can surface configuration
 // mistakes via the standard error path.
-func NewLifecycleService(repo store.JobRepository, jobsRepo jobs.Repository, clock Clock) (*LifecycleService, error) {
+func NewLifecycleService(repo store.JobRepository, jobsRepo jobs.Repository, c clock.Clock) (*LifecycleService, error) {
 	if repo == nil {
 		return nil, fmt.Errorf("job repository is required")
 	}
 	if jobsRepo == nil {
 		return nil, fmt.Errorf("jobs.Repository is required")
 	}
-	if clock == nil {
+	if c == nil {
 		return nil, fmt.Errorf("clock is required")
 	}
-	return &LifecycleService{repo: repo, jobsRepo: jobsRepo, clock: clock}, nil
+	return &LifecycleService{repo: repo, jobsRepo: jobsRepo, clock: c}, nil
 }
 
 // Repo exposes the underlying store.JobRepository for callers that need
@@ -54,7 +55,7 @@ func (l *LifecycleService) Repo() store.JobRepository { return l.repo }
 func (l *LifecycleService) Jobs() jobs.Repository { return l.jobsRepo }
 
 // Clock returns the clock the service uses for time stamping.
-func (l *LifecycleService) Clock() Clock { return l.clock }
+func (l *LifecycleService) Clock() clock.Clock { return l.clock }
 
 // now is an internal helper that resolves cmd.Now || clock.Now.
 func (l *LifecycleService) now(t time.Time) time.Time {

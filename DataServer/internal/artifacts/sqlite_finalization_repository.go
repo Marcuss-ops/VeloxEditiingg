@@ -318,7 +318,10 @@ func (r *SQLiteFinalizationRepository) FinalizeVerified(
 		}
 	}
 	for _, destID := range destIDs {
-		deliveryID := identity.NewHex128()
+		deliveryID, err := identity.NewHex128()
+		if err != nil {
+			return nil, fmt.Errorf("generate delivery ID: %w", err)
+		}
 		delRes, err := tx.ExecContext(ctx, `
 			INSERT INTO job_deliveries (delivery_id, artifact_id, destination_id, status, idempotency_key, created_at, updated_at)
 			SELECT ?, ?, ?, 'PENDING', ?, ?, ?

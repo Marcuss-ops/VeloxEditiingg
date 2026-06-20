@@ -1,4 +1,4 @@
-# CODEOWNERS \u2014 review ownership map for the Velox repo.
+# CODEOWNERS — review ownership map for the Velox repo.
 #
 # Keep this file in sync with docs/architecture/OWNERSHIP.md. The teams
 # listed here are the canonical reviewers for changes in the matching
@@ -8,61 +8,61 @@
 # Format reference: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
 
 # Default owners for everything (last-match wins).
-*                                       @velox/core
+*                                       @Marcuss-ops
 
 # ── Architectural gate (CI / docs) ───────────────────────────────────────────
-Makefile                                @velox/ci
-scripts/ci/                             @velox/ci
-.github/workflows/                      @velox/ci
-.github/CODEOWNERS                      @velox/ci
-.github/pull_request_template.md        @velox/ci
-docs/architecture/                      @velox/architecture
+Makefile                                @Marcuss-ops
+scripts/ci/                             @Marcuss-ops
+.github/workflows/                      @Marcuss-ops
+.github/CODEOWNERS                      @Marcuss-ops
+.github/pull_request_template.md        @Marcuss-ops
+docs/architecture/                      @Marcuss-ops
 
 # ── Server (Go) ──────────────────────────────────────────────────────────────
-DataServer/go.mod                       @velox/server
-DataServer/go.sum                       @velox/server
-DataServer/cmd/server/                  @velox/server
-DataServer/ci/                          @velox/server
+DataServer/go.mod                       @Marcuss-ops
+DataServer/go.sum                       @Marcuss-ops
+DataServer/cmd/server/                  @Marcuss-ops
+DataServer/ci/                          @Marcuss-ops
 
 # Application services / repositories
-DataServer/internal/jobs/               @velox/jobs
-DataServer/internal/workflow/           @velox/jobs
-DataServer/internal/artifacts/          @velox/jobs
-DataServer/internal/assets/             @velox/assets
-DataServer/internal/deliveries/         @velox/delivery
-DataServer/internal/audit/              @velox/observability
+DataServer/internal/jobs/               @Marcuss-ops
+DataServer/internal/workflow/           @Marcuss-ops
+DataServer/internal/artifacts/          @Marcuss-ops
+DataServer/internal/assets/             @Marcuss-ops
+DataServer/internal/deliveries/         @Marcuss-ops
+DataServer/internal/audit/              @Marcuss-ops
 
 # Plumbing
-DataServer/internal/store/              @velox/storage
-DataServer/internal/outbox/             @velox/storage
-DataServer/internal/config/             @velox/server
-DataServer/internal/grpcserver/         @velox/server
-DataServer/internal/workers/            @velox/server
-DataServer/internal/controltransport/   @velox/server
-DataServer/internal/identity/           @velox/server
-DataServer/internal/validation/         @velox/server
-DataServer/internal/payload/            @velox/server
-DataServer/internal/obs/                @velox/observability
-DataServer/internal/logging/            @velox/observability
-DataServer/internal/paths/             @velox/server
-DataServer/internal/media/              @velox/server
-DataServer/internal/dbutil/             @velox/server
+DataServer/internal/store/              @Marcuss-ops
+DataServer/internal/outbox/             @Marcuss-ops
+DataServer/internal/config/             @Marcuss-ops
+DataServer/internal/grpcserver/         @Marcuss-ops
+DataServer/internal/workers/            @Marcuss-ops
+DataServer/internal/controltransport/   @Marcuss-ops
+DataServer/internal/identity/           @Marcuss-ops
+DataServer/internal/validation/         @Marcuss-ops
+DataServer/internal/payload/            @Marcuss-ops
+DataServer/internal/obs/                @Marcuss-ops
+DataServer/internal/logging/            @Marcuss-ops
+DataServer/internal/paths/              @Marcuss-ops
+DataServer/internal/media/              @Marcuss-ops
+DataServer/internal/dbutil/             @Marcuss-ops
 
 # ── Worker agent (Go) ───────────────────────────────────────────────────────
-RemoteCodex/native/worker-agent-go/     @velox/agent
-RemoteCodex/native/video-engine-cpp/    @velox/agent
-RemoteCodex/scripts/                    @velox/agent
-RemoteCodex/BUILD_INFO.json             @velox/agent
-RemoteCodex/BUNDLE_HASH.txt             @velox/agent
+RemoteCodex/native/worker-agent-go/     @Marcuss-ops
+RemoteCodex/native/video-engine-cpp/    @Marcuss-ops
+RemoteCodex/scripts/                    @Marcuss-ops
+RemoteCodex/BUILD_INFO.json             @Marcuss-ops
+RemoteCodex/BUNDLE_HASH.txt             @Marcuss-ops
 
 # ── Frontend (standalone) ───────────────────────────────────────────────────
-frontend_standalone/                    @velox/web
+frontend_standalone/                    @Marcuss-ops
 
 # ── Shared Go contract ──────────────────────────────────────────────────────
-shared/                                 @velox/server @velox/agent
+shared/                                 @Marcuss-ops
 
 # ── Operations / infra ──────────────────────────────────────────────────────
-deploy/                                 @velox/ops
-ops/                                    @velox/ops
-runtime/                                @velox/ops
-VERSION.txt                             @velox/ops
+deploy/                                 @Marcuss-ops
+ops/                                    @Marcuss-ops
+runtime/                                @Marcuss-ops
+VERSION.txt                             @Marcuss-ops

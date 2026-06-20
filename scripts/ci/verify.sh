@@ -121,8 +121,12 @@ if [[ "$SKIP_HEAVY" -ne 1 ]]; then
       -f "$REPO_ROOT/RemoteCodex/native/worker-agent-go/Dockerfile" \
       -t velox-worker:verify .
   else
-    log "WARN: docker daemon unreachable \u2014 skipping image builds"
-    log "(this is fine for local dev; CI must run with a working daemon)"
+    if [[ "${CI:-}" == "true" ]]; then
+      fail "Docker daemon unreachable or Docker not installed (required in CI)"
+    else
+      log "WARN: docker daemon unreachable — skipping image builds"
+      log "(this is fine for local dev; CI must run with a working daemon)"
+    fi
   fi
 fi
 

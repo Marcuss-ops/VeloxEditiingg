@@ -333,8 +333,14 @@ func (s *Service) BeginUpload(ctx context.Context, cmd BeginUploadCommand) (*Upl
 
 	// ----- 4. allocate ids + temp key + atomic insert via finRepo -----
 	now := s.clock.Now()
-	uploadID := identity.NewHex128()
-	artifactID := identity.NewHex128()
+	uploadID, err := identity.NewHex128()
+	if err != nil {
+		return nil, fmt.Errorf("generate upload ID: %w", err)
+	}
+	artifactID, err := identity.NewHex128()
+	if err != nil {
+		return nil, fmt.Errorf("generate artifact ID: %w", err)
+	}
 	tempKey := stagingTempKey(s.blobStore, uploadID)
 
 	// PR 3.5-a: atomic insert of artifacts + artifact_uploads via finRepo.

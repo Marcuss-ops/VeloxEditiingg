@@ -3,6 +3,7 @@ package queue
 
 import (
 	"velox-server/internal/jobs"
+	"velox-server/internal/platform/clock"
 	"velox-server/internal/store"
 )
 
@@ -26,5 +27,5 @@ import (
 type LifecycleService struct {
 	repo     store.JobRepository // legacy PR3 surface
 	jobsRepo jobs.Repository     // canonical domain surface (Ondata 3 PR3)
-	clock    Clock
+	clock    clock.Clock
 }

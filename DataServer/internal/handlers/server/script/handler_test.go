@@ -15,6 +15,7 @@ import (
 	voiceoverassets "velox-server/internal/assets"
 	"velox-server/internal/config"
 	jobenqueue "velox-server/internal/jobs/enqueue"
+	"velox-server/internal/platform/clock"
 	"velox-server/internal/queue"
 	"velox-server/internal/store"
 )
@@ -26,7 +27,7 @@ func TestGenerateWithImages_EnqueuesSceneImageJob(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new sqlite store: %v", err)
 	}
-	ts, err := queue.NewLifecycleService(store.NewSQLiteJobRepository(db), store.NewSQLiteJobRepository(db), queue.RealClock{})
+	ts, err := queue.NewLifecycleService(store.NewSQLiteJobRepository(db), store.NewSQLiteJobRepository(db), clock.System{})
 	if err != nil {
 		t.Fatalf("new transition service: %v", err)
 	}
@@ -160,7 +161,7 @@ func TestGenerateWithImages_UsesCreatorStageWhenConfigured(t *testing.T) {
 	assetBlobStore := store.NewNopBlobStore(tempDir)
 	assetStore := voiceoverassets.NewStore(tempDir, 0, []string{tempDir})
 	assetRegistry := voiceoverassets.NewResolverRegistry(voiceoverassets.NewTypedResolversFromStore(assetStore, nil, nil)...)
-	jobenqueue.SetVoiceoverAssetService(voiceoverassets.NewAssetService(assetRepo, assetBlobStore, assetRegistry, nil))
+	jobenqueue.SetVoiceoverAssetService(voiceoverassets.NewAssetService(assetRepo, assetBlobStore, assetRegistry, clock.System{}))
 
 	dbPath := filepath.Join(tempDir, "velox.db")
 	voicePath := filepath.Join(tempDir, "voice.mp3")
@@ -175,7 +176,7 @@ func TestGenerateWithImages_UsesCreatorStageWhenConfigured(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new sqlite store: %v", err)
 	}
-	ts, err := queue.NewLifecycleService(store.NewSQLiteJobRepository(db), store.NewSQLiteJobRepository(db), queue.RealClock{})
+	ts, err := queue.NewLifecycleService(store.NewSQLiteJobRepository(db), store.NewSQLiteJobRepository(db), clock.System{})
 	if err != nil {
 		t.Fatalf("new transition service: %v", err)
 	}
@@ -283,7 +284,7 @@ func TestGenerateWithImages_BypassesCreatorForRenderReadyPayload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new sqlite store: %v", err)
 	}
-	ts, err := queue.NewLifecycleService(store.NewSQLiteJobRepository(db), store.NewSQLiteJobRepository(db), queue.RealClock{})
+	ts, err := queue.NewLifecycleService(store.NewSQLiteJobRepository(db), store.NewSQLiteJobRepository(db), clock.System{})
 	if err != nil {
 		t.Fatalf("new transition service: %v", err)
 	}

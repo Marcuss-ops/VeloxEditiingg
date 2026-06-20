@@ -14,7 +14,7 @@ package jobs
 // Idempotent transitions (from == to) are always legal.
 func CanTransition(from, to Status) bool {
 	if to == "" {
-		return true
+		return false
 	}
 	if from == to {
 		return true

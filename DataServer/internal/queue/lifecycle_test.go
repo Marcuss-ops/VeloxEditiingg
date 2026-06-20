@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"velox-server/internal/jobs"
+	"velox-server/internal/platform/clock"
 	"velox-server/internal/store"
 )
 
@@ -108,7 +109,7 @@ var errNotImplemented = errors.New("not implemented")
 
 func TestNewLifecycleService_RefusesNilRepository(t *testing.T) {
 	t.Parallel()
-	_, err := NewLifecycleService(nil, nil, RealClock{})
+	_, err := NewLifecycleService(nil, nil, clock.System{})
 	if err == nil {
 		t.Fatal("expected error when repo is nil")
 	}
@@ -124,7 +125,7 @@ func TestNewLifecycleService_RefusesNilClock(t *testing.T) {
 
 func TestNewLifecycleService_Succeeds(t *testing.T) {
 	t.Parallel()
-	svc, err := NewLifecycleService(postgresStubRepo, postgresJobsRepo, RealClock{})
+	svc, err := NewLifecycleService(postgresStubRepo, postgresJobsRepo, clock.System{})
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
 	}

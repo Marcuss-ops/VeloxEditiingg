@@ -49,10 +49,5 @@ jobs:
       - name: Install cmake (native engine build)
         run: sudo apt-get update && sudo apt-get install -y cmake
 
-      - name: Verify \u2014 architectural, Go, native, docker-image
+      - name: Verify — architectural, Go, native, docker-image
         run: make verify
-
-      - name: Verify \u2014 Go retry with -short -timeout 60s as belt-and-braces
-        if: success()
-        working-directory: DataServer
-        run: go test ./... -count=1 -short -timeout 60s
