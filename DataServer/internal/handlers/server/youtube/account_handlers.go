@@ -95,7 +95,7 @@ func (ym *YouTubeManager) RefreshAccountHandler() gin.HandlerFunc {
 		}
 
 		ctx := c.Request.Context()
-		result, err := ym.service.ValidateToken(ctx, channelID)
+		result, err := ym.service.ValidateOAuthAccessToken(ctx, channelID)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"ok":    false,
@@ -144,7 +144,7 @@ func (h *YouTubeHandlers) ValidateToken(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
 	defer cancel()
 
-	result, err := h.service.ValidateToken(ctx, channelID)
+	result, err := h.service.ValidateOAuthAccessToken(ctx, channelID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": err.Error()})
 		return
@@ -186,7 +186,7 @@ func (h *YouTubeHandlers) RefreshToken(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
 	defer cancel()
 
-	result, err := h.service.ValidateToken(ctx, channelID)
+	result, err := h.service.ValidateOAuthAccessToken(ctx, channelID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": err.Error()})
 		return

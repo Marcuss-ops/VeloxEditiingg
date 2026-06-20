@@ -261,7 +261,7 @@ func (ym *YouTubeManager) RefreshChannelStatsHandler() gin.HandlerFunc {
 
 		ctx := c.Request.Context()
 
-		validation, err := ym.service.ValidateToken(ctx, channelID)
+		validation, err := ym.service.ValidateOAuthAccessToken(ctx, channelID)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, youtube.APIResponse{
 				OK:    false,

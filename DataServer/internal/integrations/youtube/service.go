@@ -174,8 +174,11 @@ func (s *Service) HandleOAuthCallback(ctx context.Context, code string, channelN
 	return s.authManager.HandleOAuthCallback(ctx, code, channelName)
 }
 
-func (s *Service) ValidateToken(ctx context.Context, channelID string) (map[string]interface{}, error) {
-	return s.authManager.ValidateToken(ctx, channelID)
+// ValidateOAuthAccessToken validates a channel's OAuth access token by
+// calling the remote YouTube API. Renamed from ValidateToken to eliminate
+// ambiguity with the stored-credentials validator and the worker token validator.
+func (s *Service) ValidateOAuthAccessToken(ctx context.Context, channelID string) (map[string]interface{}, error) {
+	return s.authManager.ValidateStoredYouTubeCredentials(ctx, channelID)
 }
 
 func (s *Service) RevokeToken(ctx context.Context, channelID string) error {

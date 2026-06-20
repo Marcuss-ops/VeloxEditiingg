@@ -3,6 +3,7 @@ package audit
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -214,20 +215,6 @@ func TestAuditResult_Failed(t *testing.T) {
 	}
 }
 
-// Helper function
-func contains(s string, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > len(substr) && findSubstring(s, substr))
-}
-
-func findSubstring(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
-}
-
 // ============================================================
 // Additional audit tests
 // ============================================================
@@ -285,7 +272,7 @@ func TestCheckDuplicateSources_DriveCredentialsError(t *testing.T) {
 
 	found := false
 	for _, err := range result.Errors {
-		if stringsContains(err, "Drive has duplicate credentials") {
+		if strings.Contains(err, "Drive has duplicate credentials") {
 			found = true
 			break
 		}
@@ -321,7 +308,7 @@ func TestCheckNamingConsistency_MixedCase(t *testing.T) {
 
 	found := false
 	for _, err := range result.Errors {
-		if stringsContains(err, "Inconsistent directory naming") {
+		if strings.Contains(err, "Inconsistent directory naming") {
 			found = true
 			break
 		}
@@ -351,7 +338,7 @@ func TestCheckDatabase_MissingDB(t *testing.T) {
 	}
 	found := false
 	for _, w := range result.Warnings {
-		if stringsContains(w, "VELOX_DB_PATH") {
+		if strings.Contains(w, "VELOX_DB_PATH") {
 			found = true
 			break
 		}
@@ -387,7 +374,7 @@ func TestCheckDatabase_NoDuplicate(t *testing.T) {
 
 	// Should have no warnings about missing DB (it exists)
 	for _, w := range result.Warnings {
-		if stringsContains(w, "not found") {
+		if strings.Contains(w, "not found") {
 			t.Errorf("Expected no 'not found' warning when velox.db exists, got: %s", w)
 		}
 	}
@@ -413,7 +400,7 @@ func TestAllowLegacy_SkippedAllowed(t *testing.T) {
 	// but checkPrimaryFiles might require velox.db
 	// So we check specifically that ChannelsSaved.json is not in errors
 	for _, err := range result.Errors {
-		if stringsContains(err, "ChannelsSaved.json") {
+		if strings.Contains(err, "ChannelsSaved.json") {
 			t.Errorf("Allowed legacy file should not produce error: %s", err)
 		}
 	}
@@ -432,7 +419,7 @@ func TestFailOnError_ReturnsError(t *testing.T) {
 		t.Error("FailOnError should return error when Passed is false")
 	}
 
-	if !stringsContains(err.Error(), "DATA LAYER AUDIT FAILED") {
+	if !strings.Contains(err.Error(), "DATA LAYER AUDIT FAILED") {
 		t.Errorf("Expected 'DATA LAYER AUDIT FAILED' in error, got: %v", err)
 	}
 }
@@ -462,7 +449,7 @@ func TestAuditResult_StringContainsStatus(t *testing.T) {
 
 	s := result.String()
 
-	if !stringsContains(s, "PASSED") {
+	if !strings.Contains(s, "PASSED") {
 		t.Error("String() should contain 'PASSED' for passed audits")
 	}
 }
@@ -477,10 +464,10 @@ func TestAuditResult_StringFailed(t *testing.T) {
 
 	s := result.String()
 
-	if !stringsContains(s, "FAILED") {
+	if !strings.Contains(s, "FAILED") {
 		t.Error("String() should contain 'FAILED' for failed audits")
 	}
-	if !stringsContains(s, "test error") {
+	if !strings.Contains(s, "test error") {
 		t.Error("String() should contain the error message")
 	}
 }
@@ -524,7 +511,7 @@ func TestAudit_WarningCount(t *testing.T) {
 	// Check that Info contains token info
 	found := false
 	for _, info := range result.Info {
-		if stringsContains(info, "YouTube tokens") {
+		if strings.Contains(info, "YouTube tokens") {
 			found = true
 			break
 		}
@@ -532,11 +519,6 @@ func TestAudit_WarningCount(t *testing.T) {
 	if !found {
 		t.Errorf("Expected info about YouTube tokens, got: %v", result.Info)
 	}
-}
-
-// Helper: stringsContains reports whether substr is within s.
-func stringsContains(s, substr string) bool {
-	return len(s) >= len(substr) && contains(s, substr)
 }
 
 // TestMain runs setup/teardown for all tests

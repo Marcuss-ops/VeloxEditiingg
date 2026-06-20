@@ -4,6 +4,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -333,11 +334,11 @@ func TestString(t *testing.T) {
 	}
 
 	// Check that key fields are in the string
-	if !contains(str, "test-worker-001") {
+	if !strings.Contains(str, "test-worker-001") {
 		t.Error("Expected worker_id in string representation")
 	}
 
-	if !contains(str, "Test Worker") {
+	if !strings.Contains(str, "Test Worker") {
 		t.Error("Expected worker_name in string representation")
 	}
 }
@@ -351,18 +352,4 @@ func TestStringNil(t *testing.T) {
 	if str != "WorkerConfig{nil}" {
 		t.Errorf("Expected 'WorkerConfig{nil}', got %q", str)
 	}
-}
-
-// Helper function to check if a string contains a substring.
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsHelper(s, substr))
-}
-
-func containsHelper(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
 }

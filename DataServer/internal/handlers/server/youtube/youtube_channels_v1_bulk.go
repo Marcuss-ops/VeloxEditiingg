@@ -144,7 +144,7 @@ func (h *YouTubeHandlers) ValidateAllTokens(c *gin.Context) {
 				HasToken:  true,
 			}
 
-			validation, err := h.service.ValidateToken(ctx, channelID)
+			validation, err := h.service.ValidateOAuthAccessToken(ctx, channelID)
 			if err != nil {
 				r.Error = err.Error()
 				r.Valid = false

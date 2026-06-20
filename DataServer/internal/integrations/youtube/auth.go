@@ -223,8 +223,10 @@ func (am *AuthManager) HandleOAuthCallback(ctx context.Context, code string, cha
 	return AuthChannelToChannel(channel), nil
 }
 
-// ValidateToken validates a channel's OAuth token and returns detailed status
-func (am *AuthManager) ValidateToken(ctx context.Context, channelID string) (map[string]interface{}, error) {
+// ValidateStoredYouTubeCredentials validates a channel's stored OAuth token
+// and returns detailed status. Renamed from ValidateToken to eliminate ambiguity
+// with the worker token validator and the OAuth access token validator.
+func (am *AuthManager) ValidateStoredYouTubeCredentials(ctx context.Context, channelID string) (map[string]interface{}, error) {
 	channel := am.service.GetChannel(channelID)
 	if channel == nil {
 		return map[string]interface{}{

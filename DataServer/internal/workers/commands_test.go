@@ -36,7 +36,7 @@ func TestTokenManagerNilStore(t *testing.T) {
 		t.Fatal("expected non-empty token")
 	}
 
-	_, ok := tm.ValidateToken(token)
+	_, ok := tm.ValidateWorkerCommandToken(token)
 	if ok {
 		t.Error("expected nil store to reject all tokens")
 	}
@@ -48,7 +48,7 @@ func TestTokenManagerExpired(t *testing.T) {
 	token := tm.GenerateToken("w1")
 
 	// With nil store, validate always fails
-	_, ok := tm.ValidateToken(token)
+	_, ok := tm.ValidateWorkerCommandToken(token)
 	if ok {
 		t.Error("expected nil store to reject tokens")
 	}
@@ -60,7 +60,7 @@ func TestTokenManagerRevoke(t *testing.T) {
 	token := tm.GenerateToken("w1")
 	tm.RevokeToken(token)
 
-	_, ok := tm.ValidateToken(token)
+	_, ok := tm.ValidateWorkerCommandToken(token)
 	if ok {
 		t.Error("expected revoked token to be invalid")
 	}
@@ -69,7 +69,7 @@ func TestTokenManagerRevoke(t *testing.T) {
 func TestTokenManagerInvalidToken(t *testing.T) {
 	tm := NewTokenManager(nil)
 
-	_, ok := tm.ValidateToken("nonexistent")
+	_, ok := tm.ValidateWorkerCommandToken("nonexistent")
 	if ok {
 		t.Error("expected nonexistent token to be invalid")
 	}

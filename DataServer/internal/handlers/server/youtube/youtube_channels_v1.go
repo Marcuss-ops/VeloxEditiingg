@@ -41,7 +41,7 @@ func (h *YouTubeHandlers) ListChannels(c *gin.Context) {
 			ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
 			defer cancel()
 
-			validation, err := h.service.ValidateToken(ctx, ch.ID)
+			validation, err := h.service.ValidateOAuthAccessToken(ctx, ch.ID)
 			if err != nil {
 				channelData["token_valid"] = false
 			} else if ok, exists := validation["valid"].(bool); exists {

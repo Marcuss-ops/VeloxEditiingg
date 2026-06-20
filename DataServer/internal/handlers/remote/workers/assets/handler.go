@@ -100,7 +100,7 @@ func (h *Handler) authorizeWorker(c *gin.Context) bool {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "worker authentication required"})
 		return false
 	}
-	if _, ok := h.tokenMgr.ValidateToken(token); !ok {
+	if _, ok := h.tokenMgr.ValidateWorkerCommandToken(token); !ok {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid worker token"})
 		return false
 	}

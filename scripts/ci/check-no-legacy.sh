@@ -32,6 +32,12 @@ forbidden_patterns=(
   'local-workers.sh.deprecated'       # Replaced by data/ansible
   'march=native'                      # Non-reproducible C++ binaries
   'mtune=native'                      # Same
+  # Dead packages removed in Ondata 1 cleanup — must not reappear.
+  'services/joblifecycle'             # Removed dead wrapper (Ondata 1)
+  'services/progress'                 # Removed dead wrapper (Ondata 1)
+  'handlers/web/darkeditor'           # Removed dead handler (Ondata 1)
+  # Generic utility packages — use domain-specific packages.
+  'internal/util'                     # Removed; use identity/, platform/clock/
 )
 
 violations=0

@@ -44,7 +44,7 @@ func AuthorizeWorkerToken(tokenMgr *TokenManager, token, workerID string, client
 	if tokenMgr == nil || strings.TrimSpace(token) == "" {
 		return true
 	}
-	tokenWorkerID, ok := tokenMgr.ValidateToken(token)
+	tokenWorkerID, ok := tokenMgr.ValidateWorkerCommandToken(token)
 	if ok {
 		return tokenWorkerID == workerID
 	}

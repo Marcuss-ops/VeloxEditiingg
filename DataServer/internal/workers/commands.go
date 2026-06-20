@@ -165,8 +165,10 @@ func (tm *TokenManager) GenerateToken(workerID string) string {
 	return token
 }
 
-// ValidateToken checks if a token is valid and returns the worker ID.
-func (tm *TokenManager) ValidateToken(token string) (string, bool) {
+// ValidateWorkerCommandToken checks if a worker command token is valid and
+// returns the associated worker ID. Renamed from ValidateToken to eliminate
+// ambiguity with YouTube OAuth token validators.
+func (tm *TokenManager) ValidateWorkerCommandToken(token string) (string, bool) {
 	if tm.store == nil || token == "" {
 		return "", false
 	}

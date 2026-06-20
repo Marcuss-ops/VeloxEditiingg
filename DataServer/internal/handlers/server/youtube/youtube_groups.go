@@ -461,7 +461,7 @@ func (ym *YouTubeManager) aggregateManagerStats(ctx context.Context) (ManagerSta
 			}
 
 			if ym.service != nil {
-				result, _ := ym.service.ValidateToken(ctx, ch.ID)
+				result, _ := ym.service.ValidateOAuthAccessToken(ctx, ch.ID)
 				stat.Valid = asBool(result, "valid")
 				stat.IsExpired = asBool(result, "is_expired")
 				stat.HasRefreshToken = asBool(result, "has_refresh_token")
