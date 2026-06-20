@@ -8,20 +8,21 @@ import (
 	"strings"
 	"time"
 
-	"velox-server/internal/queue"
+	"velox-server/internal/jobs"
 	"velox-server/internal/store"
 )
 
 // CalendarScheduler reconciles calendar events into queue/state transitions.
 type CalendarScheduler struct {
 	store    *store.SQLiteStore
-	queue    *queue.FileQueue
+	reader   jobs.Reader
+	writer   jobs.Writer
 	interval time.Duration
 	api      *CalendarAPI
 }
 
 // NewCalendarScheduler creates a scheduler with a sane default interval.
-func NewCalendarScheduler(s *store.SQLiteStore, q *queue.FileQueue) *CalendarScheduler {
+func NewCalendarScheduler(s *store.SQLiteStore, reader jobs.Reader, writer jobs.Writer) *CalendarScheduler {
 	interval := 30 * time.Second
 	if raw := strings.TrimSpace(os.Getenv("VELOX_CALENDAR_SCHEDULER_INTERVAL_SECONDS")); raw != "" {
 		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
@@ -30,9 +31,10 @@ func NewCalendarScheduler(s *store.SQLiteStore, q *queue.FileQueue) *CalendarSch
 	}
 	return &CalendarScheduler{
 		store:    s,
-		queue:    q,
+		reader:   reader,
+		writer:   writer,
 		interval: interval,
-		api:      &CalendarAPI{store: s, queue: q},
+		api:      &CalendarAPI{store: s, reader: reader, writer: writer},
 	}
 }
 

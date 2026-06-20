@@ -4,14 +4,15 @@ package workflowevents
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
+	"velox-server/internal/jobs"
 	"velox-server/internal/outbox"
-	"velox-server/internal/queue"
 	"velox-server/internal/workflow"
 )
 
-// StepReadyHandler reacts to WORKFLOW_STEP_READY. It creates a FileQueue
+// StepReadyHandler reacts to WORKFLOW_STEP_READY. It creates a jobs
 // job with workflow_steps.input_json as the payload and writes the new
 // job_id back into workflow_steps.job_id, then transitions the step from
 // READY → RUNNING.
@@ -21,7 +22,7 @@ import (
 // no-op — re-dispatches are safe.
 type StepReadyHandler struct {
 	Wf workflow.Repository
-	Q  *queue.FileQueue
+	Q  jobs.Writer
 }
 
 func (StepReadyHandler) EventType() string { return "WORKFLOW_STEP_READY" }
@@ -75,8 +76,15 @@ func (h StepReadyHandler) Handle(ctx context.Context, e outbox.Event) error {
 	// job_id = "{run_id}-{step_key}" so the JOB_SUCCEEDED handler can
 	// recover the run via the workflow_steps.job_id UNIQUE column.
 	jobID := fmt.Sprintf("%s-%s", p.RunID, st.StepKey)
-	if err := h.Q.SubmitJob(ctx, jobID, payload); err != nil {
-		return outbox.Transient(fmt.Errorf("workflowStepReady: submit job: %w", err))
+	raw, _ := json.Marshal(payload)
+	job := &jobs.Job{
+		ID:         jobID,
+		Status:     jobs.StatusPending,
+		MaxRetries: 3,
+		Payload:    string(raw),
+	}
+	if err := h.Q.Create(ctx, job); err != nil {
+		return outbox.Transient(fmt.Errorf("workflowStepReady: create job: %w", err))
 	}
 
 	attempt := st.Attempt + 1

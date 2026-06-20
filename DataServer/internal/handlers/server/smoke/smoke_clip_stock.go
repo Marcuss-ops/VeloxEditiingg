@@ -1,6 +1,7 @@
 package smoke
 
 import (
+	"encoding/json"
 	"net/http"
 	"time"
 
@@ -10,14 +11,14 @@ import (
 	"github.com/google/uuid"
 
 	"velox-server/internal/config"
-	"velox-server/internal/queue"
+	"velox-server/internal/jobs"
 )
 
 // CreateSmokeClipStock accepts POST /api/v1/video/smoke-clip-stock and enqueues
 // a minimal process_video job for the clip+stock pipeline.
-func CreateSmokeClipStock(cfg *config.Config, q *queue.FileQueue) gin.HandlerFunc {
+func CreateSmokeClipStock(cfg *config.Config, writer jobs.Writer) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if q == nil {
+		if writer == nil {
 			c.JSON(http.StatusServiceUnavailable, gin.H{"ok": false, "error": "queue unavailable"})
 			return
 		}
@@ -142,7 +143,15 @@ func CreateSmokeClipStock(cfg *config.Config, q *queue.FileQueue) gin.HandlerFun
 			"source":                 "smoke_clip_stock_api",
 		}
 
-		if err := q.SubmitJob(c.Request.Context(), jobID, normalized); err != nil {
+		raw, _ := json.Marshal(normalized)
+		job := &jobs.Job{
+			ID:         jobID,
+			Status:     jobs.StatusPending,
+			VideoName:  videoName,
+			MaxRetries: 3,
+			Payload:    string(raw),
+		}
+		if err := writer.Create(c.Request.Context(), job); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": err.Error()})
 			return
 		}

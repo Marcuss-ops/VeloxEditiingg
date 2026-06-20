@@ -13,6 +13,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"velox-server/internal/jobs"
 	"velox-server/internal/platform/clock"
 	"velox-server/internal/queue"
 	"velox-server/internal/store"
@@ -23,7 +24,7 @@ type listResponse struct {
 	Count  int                   `json:"count"`
 }
 
-func setupCalendarTestEnv(t *testing.T) (*store.SQLiteStore, *queue.FileQueue, *gin.Engine) {
+func setupCalendarTestEnv(t *testing.T) (*store.SQLiteStore, jobs.Repository, *gin.Engine) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 
@@ -34,22 +35,19 @@ func setupCalendarTestEnv(t *testing.T) (*store.SQLiteStore, *queue.FileQueue, *
 	}
 	t.Cleanup(func() { _ = db.Close() })
 
-	ts, err := queue.NewLifecycleService(store.NewSQLiteJobRepository(db), store.NewSQLiteJobRepository(db), clock.System{})
+	jobRepo := store.NewSQLiteJobRepository(db)
+	ts, err := queue.NewLifecycleService(jobRepo, clock.System{})
 	if err != nil {
 		t.Fatalf("new transition service: %v", err)
 	}
-	querySvc := queue.NewQueryService(store.NewSQLiteJobRepository(db))
-	q, err := queue.NewFileQueue(&queue.FileQueueConfig{MaxRetries: 3}, ts, querySvc)
-	if err != nil {
-		t.Fatalf("new queue: %v", err)
-	}
+	_ = ts
 
 	r := gin.New()
 	v1 := r.Group("/api/v1")
-	sched := NewCalendarScheduler(db, q)
-	RegisterRoutes(v1, db, q, sched)
+	sched := NewCalendarScheduler(db, jobRepo, jobRepo)
+	RegisterRoutes(v1, db, jobRepo, jobRepo, sched)
 
-	return db, q, r
+	return db, jobRepo, r
 }
 
 func postJSON(t *testing.T, r http.Handler, path string, payload any) *httptest.ResponseRecorder {
@@ -192,7 +190,7 @@ func TestCalendarAPI_CreateQueuesAndReturnsAgentFields(t *testing.T) {
 	if event.Status != "queued" {
 		t.Fatalf("expected queued status, got %q", event.Status)
 	}
-	if event.JobStatus != string(queue.StatusPending) {
+	if event.JobStatus != string(jobs.StatusPending) {
 		t.Fatalf("expected pending jobStatus, got %q", event.JobStatus)
 	}
 	if event.QueueError != "" {
@@ -223,7 +221,7 @@ func TestCalendarAPI_CreateQueuesAndReturnsAgentFields(t *testing.T) {
 }
 
 func TestCalendarAPI_IncompleteEventDoesNotEnqueue(t *testing.T) {
-	db, q, r := setupCalendarTestEnv(t)
+	db, jobRepo, r := setupCalendarTestEnv(t)
 
 	w := postJSON(t, r, "/api/v1/calendar/events", incompleteAgentEvent())
 	if w.Code != http.StatusCreated {
@@ -238,10 +236,11 @@ func TestCalendarAPI_IncompleteEventDoesNotEnqueue(t *testing.T) {
 		t.Fatalf("expected no job id, got %q", event.JobID)
 	}
 
-	stats, err := q.Stats(context.Background())
+	counts, err := jobRepo.Counts(context.Background())
 	if err != nil {
 		t.Fatalf("queue stats: %v", err)
 	}
+	stats := jobs.FormatStats(counts)
 	if stats["total"] != 0 {
 		t.Fatalf("expected no queued jobs, got %v", stats)
 	}
@@ -256,7 +255,7 @@ func TestCalendarAPI_IncompleteEventDoesNotEnqueue(t *testing.T) {
 }
 
 func TestCalendarAPI_UpdateCompletesQueuedJobWithoutDuplicate(t *testing.T) {
-	_, q, r := setupCalendarTestEnv(t)
+	_, jobRepo, r := setupCalendarTestEnv(t)
 
 	create := incompleteAgentEvent()
 	create.ScriptText = "Test script without clips."
@@ -284,28 +283,30 @@ func TestCalendarAPI_UpdateCompletesQueuedJobWithoutDuplicate(t *testing.T) {
 		t.Fatal("expected job id after update")
 	}
 
-	stats, err := q.Stats(context.Background())
+	counts, err := jobRepo.Counts(context.Background())
 	if err != nil {
 		t.Fatalf("queue stats: %v", err)
 	}
+	stats := jobs.FormatStats(counts)
 	if stats["total"] != 1 {
 		t.Fatalf("expected one queued job, got %v", stats)
 	}
 
-	job, err := q.GetJob(context.Background(), updated.JobID)
+	j, err := jobRepo.Get(context.Background(), updated.JobID)
 	if err != nil {
 		t.Fatalf("get job: %v", err)
 	}
-	if job == nil {
+	if j == nil {
 		t.Fatal("expected job in queue")
 	}
-	if job.Payload["calendar_event_id"] != updated.ID {
-		t.Fatalf("job not linked to event: %+v", job.Payload)
+	payload := jobs.ToPayloadMap(j)
+	if payload["calendar_event_id"] != updated.ID {
+		t.Fatalf("job not linked to event: %+v", payload)
 	}
 }
 
 func TestCalendarAPI_ExternalIDIsIdempotent(t *testing.T) {
-	db, q, r := setupCalendarTestEnv(t)
+	db, jobRepo, r := setupCalendarTestEnv(t)
 
 	payload := fullAgentEvent()
 	w := postJSON(t, r, "/api/v1/calendar/events", payload)
@@ -329,20 +330,21 @@ func TestCalendarAPI_ExternalIDIsIdempotent(t *testing.T) {
 		t.Fatalf("list calendar events: %v", err)
 	}
 	if len(events) != 1 {
-		t.Fatalf("expected one calendar event after idempotent create, got %d", len(events))
+		t.Fatalf("expected one event after idempotent create, got %d", len(events))
 	}
 
-	stats, err := q.Stats(context.Background())
+	counts, err := jobRepo.Counts(context.Background())
 	if err != nil {
 		t.Fatalf("queue stats: %v", err)
 	}
+	stats := jobs.FormatStats(counts)
 	if stats["total"] != 1 {
 		t.Fatalf("expected one job after idempotent create, got %v", stats)
 	}
 }
 
 func TestCalendarAPI_FutureEventStaysScheduled(t *testing.T) {
-	_, q, r := setupCalendarTestEnv(t)
+	_, jobRepo, r := setupCalendarTestEnv(t)
 
 	w := postJSON(t, r, "/api/v1/calendar/events", futureAgentEvent())
 	if w.Code != http.StatusCreated {
@@ -356,17 +358,18 @@ func TestCalendarAPI_FutureEventStaysScheduled(t *testing.T) {
 		t.Fatalf("expected no job for future event, got %q", event.JobID)
 	}
 
-	stats, err := q.Stats(context.Background())
+	counts, err := jobRepo.Counts(context.Background())
 	if err != nil {
 		t.Fatalf("queue stats: %v", err)
 	}
+	stats := jobs.FormatStats(counts)
 	if stats["total"] != 0 {
 		t.Fatalf("expected zero jobs for future scheduled event, got %v", stats)
 	}
 }
 
 func TestCalendarAPI_StatusLifecycleAndOutputs(t *testing.T) {
-	db, q, r := setupCalendarTestEnv(t)
+	db, jobRepo, r := setupCalendarTestEnv(t)
 	ctx := context.Background()
 
 	w := postJSON(t, r, "/api/v1/calendar/events", fullAgentEvent())
@@ -375,8 +378,8 @@ func TestCalendarAPI_StatusLifecycleAndOutputs(t *testing.T) {
 	}
 	event := decodeEvent(t, w)
 
-	// Use LeaseJob via repo to set RUNNING
-	if err := q.LifecycleService().Repo().LeaseJob(ctx, event.JobID, "worker-1"); err != nil {
+	// Use Lease via jobs.Writer to set RUNNING
+	if err := jobRepo.Lease(ctx, event.JobID, "worker-1"); err != nil {
 		t.Fatalf("lease job: %v", err)
 	}
 

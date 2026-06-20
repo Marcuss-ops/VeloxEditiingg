@@ -9,7 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"velox-server/internal/queue"
+	"velox-server/internal/jobs"
 	"velox-server/internal/store"
 )
 
@@ -81,7 +81,7 @@ func buildCalendarJobPayload(event *store.CalendarEvent, jobRunID string) map[st
 	return payload
 }
 
-func existingJobRunID(job *queue.Job) string {
+func existingJobRunID(job *jobs.QueueItem) string {
 	if job == nil || job.Payload == nil {
 		return ""
 	}

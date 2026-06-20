@@ -25,7 +25,7 @@ import (
 	"time"
 
 	"velox-server/internal/artifacts"
-	"velox-server/internal/queue"
+	"velox-server/internal/jobs"
 	"velox-server/internal/store"
 	workersreg "velox-server/internal/workers"
 	"velox-shared/controltransport"
@@ -46,13 +46,13 @@ import (
 type Handler struct {
 	pb.UnimplementedWorkerControlServer
 
-	registry     *workersreg.Registry
-	cmdMgr       *workersreg.CommandManager
-	lifecycleSvc *queue.LifecycleService
-	artifactSvc  *artifacts.Service
-	dbStore      *store.SQLiteStore
-	config       *HandlerConfig
-	authorizer   WorkerAuthorizer // P0: gates workers against VELOX_ALLOWED_WORKERS
+	registry    *workersreg.Registry
+	cmdMgr      *workersreg.CommandManager
+	jobsRepo    jobs.Repository
+	artifactSvc *artifacts.Service
+	dbStore     *store.SQLiteStore
+	config      *HandlerConfig
+	authorizer  WorkerAuthorizer // P0: gates workers against VELOX_ALLOWED_WORKERS
 
 	mu             sync.Mutex
 	sessions       map[string]*workerSession // sessionID → active stream session
@@ -97,7 +97,7 @@ type workerSession struct {
 	writerErr chan error
 
 	// Job offering synchronization (Issue 4 fix).
-	pendingOffer *queue.Job // JobOffer sent, awaiting JobAccepted/JobRejected
+	pendingOffer *jobs.QueueItem // JobOffer sent, awaiting JobAccepted/JobRejected
 	claimMu      sync.Mutex // serializes the claim+send+set flow; also guards pendingOffer r/w
 
 	// Worker capacity tracking (atomic — Phase 4.1 fix). The handleHeartbeat
@@ -130,7 +130,7 @@ type workerSession struct {
 func NewHandler(
 	registry *workersreg.Registry,
 	cmdMgr *workersreg.CommandManager,
-	lifecycleSvc *queue.LifecycleService,
+	jobsRepo jobs.Repository,
 	artifactSvc *artifacts.Service,
 	dbStore *store.SQLiteStore,
 	config *HandlerConfig,
@@ -141,7 +141,7 @@ func NewHandler(
 	return &Handler{
 		registry:       registry,
 		cmdMgr:         cmdMgr,
-		lifecycleSvc:   lifecycleSvc,
+		jobsRepo:       jobsRepo,
 		artifactSvc:    artifactSvc,
 		dbStore:        dbStore,
 		config:         config,
@@ -263,7 +263,7 @@ func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMasterEnvelo
 		// so the job doesn't stay leased until lease expiry.
 		sess.claimMu.Lock()
 		if sess.pendingOffer != nil {
-			if releaseErr := h.lifecycleSvc.Jobs().ReleaseLease(context.Background(), sess.pendingOffer.JobID); releaseErr != nil {
+			if releaseErr := h.jobsRepo.ReleaseLease(context.Background(), sess.pendingOffer.JobID); releaseErr != nil {
 				log.Printf("[GRPC] Failed to release pendingOffer for job %s on session teardown: %v", sess.pendingOffer.JobID, releaseErr)
 			}
 			sess.pendingOffer = nil
@@ -373,7 +373,7 @@ func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMasterEnvelo
 			// Gap #2 fix: release pendingOffer so the job doesn't stay leased.
 			sess.claimMu.Lock()
 			if sess.pendingOffer != nil {
-				if releaseErr := h.lifecycleSvc.Jobs().ReleaseLease(context.Background(), sess.pendingOffer.JobID); releaseErr != nil {
+				if releaseErr := h.jobsRepo.ReleaseLease(context.Background(), sess.pendingOffer.JobID); releaseErr != nil {
 					log.Printf("[GRPC] Failed to release pendingOffer for job %s on writer failure: %v", sess.pendingOffer.JobID, releaseErr)
 				}
 				sess.pendingOffer = nil
@@ -614,7 +614,7 @@ func (h *Handler) closeOldSessionLocked(workerID string) {
 		// when the old defer eventually runs.
 		oldSess.claimMu.Lock()
 		if oldSess.pendingOffer != nil {
-			if releaseErr := h.lifecycleSvc.Jobs().ReleaseLease(context.Background(), oldSess.pendingOffer.JobID); releaseErr != nil {
+			if releaseErr := h.jobsRepo.ReleaseLease(context.Background(), oldSess.pendingOffer.JobID); releaseErr != nil {
 				log.Printf("[GRPC] Failed to release old pendingOffer for job %s during reconnect: %v", oldSess.pendingOffer.JobID, releaseErr)
 			}
 			oldSess.pendingOffer = nil

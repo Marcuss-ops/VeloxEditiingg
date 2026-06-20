@@ -7,7 +7,7 @@ import (
 	"log"
 	"time"
 
-	"velox-server/internal/queue"
+	"velox-server/internal/jobs"
 	"velox-shared/controltransport"
 	pb "velox-shared/controltransport/pb"
 
@@ -157,7 +157,7 @@ func (h *Handler) sendPushJobOffer(ctx context.Context, workerID string) {
 	allowedJobTypes := h.collectAllowedJobTypes(sess)
 
 	// PR15.5: ClaimNext via canonical jobs.Writer
-	claimResult, err := h.lifecycleSvc.Jobs().ClaimNext(ctx, workerID, allowedJobTypes)
+	claimResult, err := h.jobsRepo.ClaimNext(ctx, workerID, allowedJobTypes)
 	if err != nil {
 		log.Printf("[GRPC] ClaimNext failed for worker %s: %v", workerID, err)
 		return
@@ -166,18 +166,18 @@ func (h *Handler) sendPushJobOffer(ctx context.Context, workerID string) {
 		return
 	}
 	// PR15.5: Get via canonical jobs.Reader — fields map to domain names
-	j, err := h.lifecycleSvc.Jobs().Get(ctx, claimResult.JobID)
+	j, err := h.jobsRepo.Get(ctx, claimResult.JobID)
 	if err != nil {
 		log.Printf("[GRPC] GetJob after claim failed for worker %s: %v", workerID, err)
 		// Release the claim so the job is not left orphaned.
-		if releaseErr := h.lifecycleSvc.Jobs().ReleaseLease(ctx, claimResult.JobID); releaseErr != nil {
+		if releaseErr := h.jobsRepo.ReleaseLease(ctx, claimResult.JobID); releaseErr != nil {
 			log.Printf("[GRPC] Failed to release claim after GetJob error for %s: %v", claimResult.JobID, releaseErr)
 		}
 		return
 	}
 	if j == nil {
 		// Release the claim — job no longer exists.
-		if releaseErr := h.lifecycleSvc.Jobs().ReleaseLease(ctx, claimResult.JobID); releaseErr != nil {
+		if releaseErr := h.jobsRepo.ReleaseLease(ctx, claimResult.JobID); releaseErr != nil {
 			log.Printf("[GRPC] Failed to release claim after nil GetJob for %s: %v", claimResult.JobID, releaseErr)
 		}
 		return
@@ -189,9 +189,9 @@ func (h *Handler) sendPushJobOffer(ctx context.Context, workerID string) {
 		_ = json.Unmarshal([]byte(j.Payload), &payload)
 	}
 
-	job := &queue.Job{
+	job := &jobs.QueueItem{
 		JobID:       j.ID,
-		Status:      queue.JobStatus(j.Status),
+		Status:      jobs.Status(j.Status),
 		VideoName:   j.VideoName,
 		ProjectID:   j.ProjectID,
 		AssignedTo:  j.WorkerID,
@@ -255,7 +255,7 @@ func (h *Handler) sendPushJobOffer(ctx context.Context, workerID string) {
 	// Issue 5 fix: send via sendCh instead of direct stream.Send().
 	if !safeSend(sess.sendCh, &outboundMessage{Envelope: env}) {
 		log.Printf("[GRPC] sendCh full/closed for JobOffer to worker %s — releasing claim", workerID)
-		if releaseErr := h.lifecycleSvc.Jobs().ReleaseLease(ctx, job.JobID); releaseErr != nil {
+		if releaseErr := h.jobsRepo.ReleaseLease(ctx, job.JobID); releaseErr != nil {
 			log.Printf("[GRPC] Failed to release claim for job %s after send failure: %v", job.JobID, releaseErr)
 		}
 		return

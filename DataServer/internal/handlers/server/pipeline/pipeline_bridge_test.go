@@ -14,11 +14,29 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"velox-server/internal/config"
+	"velox-server/internal/jobs"
 	"velox-server/internal/jobs/enqueue"
 	"velox-server/internal/platform/clock"
 	"velox-server/internal/queue"
 	"velox-server/internal/store"
 )
+
+// testSubmitQueue implements enqueue.JobQueue by delegating to jobs.Writer.
+type testSubmitQueue struct {
+	writer     jobs.Writer
+	maxRetries int
+}
+
+func (q *testSubmitQueue) SubmitJob(ctx context.Context, jobID string, payload map[string]interface{}) error {
+	raw, _ := json.Marshal(payload)
+	job := &jobs.Job{
+		ID:         jobID,
+		Status:     jobs.StatusPending,
+		MaxRetries: q.maxRetries,
+		Payload:    string(raw),
+	}
+	return q.writer.Create(ctx, job)
+}
 
 func TestBuildSceneVideoPayloadFromPipelineResult(t *testing.T) {
 	tempDir := t.TempDir()
@@ -177,19 +195,16 @@ func TestPipelineGenerateForwardsCompletedResultToQueue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sqlite store: %v", err)
 	}
-	ts, err := queue.NewLifecycleService(store.NewJobsRepository(store.NewSQLiteJobRepository(db)), clock.System{})
+	jobRepo := store.NewSQLiteJobRepository(db)
+	ts, err := queue.NewLifecycleService(jobRepo, clock.System{})
 	if err != nil {
 		t.Fatalf("transition service: %v", err)
 	}
-	querySvc := queue.NewQueryService(store.NewSQLiteJobRepository(db))
-	q, err := queue.NewFileQueue(&queue.FileQueueConfig{MaxRetries: 3}, ts, querySvc)
-	if err != nil {
-		t.Fatalf("file queue: %v", err)
-	}
+	_ = ts
 
-	// PR15.7a: wire the enqueuer singleton AFTER constructing q so
-	// NewEnqueuer(q, nil) sees the live queue reference.
-	InitPipelineEnqueuer(enqueue.NewEnqueuer(q, nil))
+	// PR15.7a: wire the enqueuer singleton AFTER constructing the writer so
+	// NewEnqueuer(submitAdapter, nil) sees the live writer reference.
+	InitPipelineEnqueuer(enqueue.NewEnqueuer(&testSubmitQueue{writer: jobRepo, maxRetries: 3}, nil))
 
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
@@ -218,15 +233,15 @@ func TestPipelineGenerateForwardsCompletedResultToQueue(t *testing.T) {
 
 	deadline := time.Now().Add(2 * time.Second)
 	for {
-		job, jobErr := q.GetJob(context.Background(), "trace_123")
-		if jobErr == nil && job != nil {
-			if job.JobID != "trace_123" {
-				t.Fatalf("want job_id trace_123, got %s", job.JobID)
+		j, jobErr := jobRepo.Get(context.Background(), "trace_123")
+		if jobErr == nil && j != nil {
+			if j.ID != "trace_123" {
+				t.Fatalf("want job_id trace_123, got %s", j.ID)
 			}
-			if job.VideoName != "Test Video" {
-				t.Fatalf("want video name Test Video, got %s", job.VideoName)
+			if j.VideoName != "Test Video" {
+				t.Fatalf("want video name Test Video, got %s", j.VideoName)
 			}
-			if job.RunID == "" {
+			if j.RunID == "" {
 				t.Fatalf("want run id to be populated")
 			}
 			return

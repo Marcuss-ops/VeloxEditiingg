@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -49,7 +50,6 @@ type serverPaths struct {
 
 type serverDeps struct {
 	paths               *serverPaths
-	fileQ               *queue.FileQueue
 	reg                 *workersreg.Registry
 	workersRepo         store.WorkersRepository
 	sqliteStore         *store.SQLiteStore
@@ -208,6 +208,37 @@ func buildGRPCHandlerConfig(cfg *config.Config, insecureDev bool) *grpcserver.Ha
 	}
 }
 
+// writerAdapter wraps a jobs.Writer to satisfy enqueue.JobQueue.
+type writerAdapter struct {
+	w jobs.Writer
+}
+
+func (a *writerAdapter) SubmitJob(ctx context.Context, jobID string, payload map[string]interface{}) error {
+	var videoName, projectID, runID string
+	if s, ok := payload["video_name"].(string); ok {
+		videoName = s
+	}
+	if s, ok := payload["project_id"].(string); ok {
+		projectID = s
+	}
+	if s, ok := payload["job_run_id"].(string); ok && s != "" {
+		runID = s
+	} else if s, ok := payload["run_id"].(string); ok && s != "" {
+		runID = s
+	}
+	raw, _ := json.Marshal(payload)
+	job := &jobs.Job{
+		ID:         jobID,
+		Status:     jobs.StatusPending,
+		VideoName:  videoName,
+		ProjectID:  projectID,
+		RunID:      runID,
+		MaxRetries: 3,
+		Payload:    string(raw),
+	}
+	return a.w.Create(ctx, job)
+}
+
 // outboxWorkflowAdapter adapts *outbox.Store to the workflow.OutboxWriter
 // interface by mapping WorkflowOutboxEvent fields to outbox.InsertParams.
 type outboxWorkflowAdapter struct {
@@ -341,27 +372,14 @@ func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
 		return nil, fmt.Errorf("bootstrap: lifecycle service: %w", err)
 	}
 
-	querySvc := queue.NewQueryService(jobsRepository)
-
-	fileQ, err := queue.NewFileQueue(&queue.FileQueueConfig{
-		MaxRetries: cfg.Workers.MaxJobAttempts,
-	}, lifecycleSvc, querySvc)
-	if err != nil {
-		return nil, err
-	}
-
 	outboxStore := outbox.NewStore(sqliteStore.DB())
 
 	workflowRepo := workflow.NewSQLiteRepository(sqliteStore.DB())
 	workflowRepo.SetOutbox(&outboxWorkflowAdapter{store: outboxStore})
 
-	var blobStore store.BlobStore
-	fsBS, bsErr := store.NewFilesystemBlobStore(cfg.Runtime.StagingDir, cfg.Runtime.StorageDir)
+	blobStore, bsErr := store.NewFilesystemBlobStore(cfg.Runtime.StagingDir, cfg.Runtime.StorageDir)
 	if bsErr != nil {
-		log.Printf("[BOOTSTRAP] BlobStore init warning: %v -- using nop blob store", bsErr)
-		blobStore = store.NewNopBlobStore(cfg.Runtime.DataDir)
-	} else {
-		blobStore = fsBS
+		return nil, fmt.Errorf("bootstrap: BlobStore init failed: %w (staging=%s storage=%s) — BlobStore is mandatory in production", bsErr, cfg.Runtime.StagingDir, cfg.Runtime.StorageDir)
 	}
 	log.Printf("[BOOTSTRAP] BlobStore ready: staging=%s storage=%s", blobStore.StagingDir(), blobStore.FinalDir())
 
@@ -400,7 +418,7 @@ func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
 	log.Printf("[BOOTSTRAP] ChunkedUploadService ready (persistent chunked upload via artifact pipeline)")
 
 	outboxRegistry := outbox.NewRegistry()
-	stepReady := workflowevents.StepReadyHandler{Wf: workflowRepo, Q: fileQ}
+	stepReady := workflowevents.StepReadyHandler{Wf: workflowRepo, Q: jobsRepository}
 	jobSucceeded := workflowevents.JobSucceededHandler{Wf: workflowRepo}
 	artifactReady := workflowevents.ArtifactReadyHandler{Wf: workflowRepo}
 	deliveryCreated := workflowevents.DeliveryCreatedHandler{Wf: workflowRepo}
@@ -425,7 +443,6 @@ func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
 
 	return &serverDeps{
 		paths:               &serverPaths{dataDir: cfg.Runtime.DataDir},
-		fileQ:               fileQ,
 		reg:                 reg,
 		workersRepo:         workersRepo,
 		sqliteStore:         sqliteStore,
@@ -498,7 +515,7 @@ func runServer(cfg *config.Config) error {
 	// AND the legacy SetVoiceoverAssetService hook. Threaded through DI
 	// to script/{handler,RegisterRoutes}, creatorflow.Service, and the
 	// pipeline package (via the InitPipelineEnqueuer wiring below).
-	deps.enqueuer = enqueue.NewEnqueuer(deps.fileQ, deps.assetService)
+	deps.enqueuer = enqueue.NewEnqueuer(&writerAdapter{w: jobsRepository}, deps.assetService)
 	// Must run after NewEnqueuer above — InitPipelineEnqueuer dereferences
 	// e.Queue for logging, and deps.enqueuer would still be nil otherwise.
 	pipeline.InitPipelineEnqueuer(deps.enqueuer)
@@ -553,9 +570,9 @@ func runServer(cfg *config.Config) error {
 
 	var grpcSrv grpcServer
 	if cfg.Server.GRPCPort > 0 {
-		lcSvc := deps.lifecycleSvc
-		if lcSvc == nil {
-			log.Printf("[SERVER] gRPC disabled: lifecycleSvc is nil")
+		jobsRepo := deps.lifecycleSvc.Jobs()
+		if jobsRepo == nil {
+			log.Printf("[SERVER] gRPC disabled: jobs repository is nil")
 		} else {
 			// PR15.3: reuse the singleton CommandManager built in
 			// buildServerDeps. If it's nil here, buildServerDeps lost
@@ -588,7 +605,7 @@ func runServer(cfg *config.Config) error {
 
 			grpcHandlerConfig := buildGRPCHandlerConfig(cfg, insecureDev)
 			grpcHandler := grpcserver.NewHandler(
-				deps.reg, cmdMgr, lcSvc, deps.artifactSvc, deps.sqliteStore, grpcHandlerConfig,
+				deps.reg, cmdMgr, jobsRepo, deps.artifactSvc, deps.sqliteStore, grpcHandlerConfig,
 			)
 
 			grpcServer, lis, err := grpcserver.StartGRPCServer(
@@ -672,7 +689,7 @@ func runServer(cfg *config.Config) error {
 		}()
 	}
 
-	if deps.blobStore != nil && deps.artifactSvc != nil {
+	if deps.artifactSvc != nil {
 		rec, recErr := artifacts.NewReconciler(
 			deps.sqliteStore.DB(),
 			deps.blobStore,
@@ -681,18 +698,17 @@ func runServer(cfg *config.Config) error {
 			artifacts.DefaultReconcilerConfig(),
 		)
 		if recErr != nil {
-			log.Printf("[BOOTSTRAP] Reconciler init failed: %v -- continuing without it", recErr)
-		} else {
-			// Reconciler shares the same bgCtx as the rest of the bg
-			// runners — a separate recCtx/recCancel leaked past bgCancel()
-			// and could keep writing to the DB after sqliteStore.Close().
-			bgWG.Add(1)
-			go func() {
-				defer bgWG.Done()
-				log.Printf("[BOOTSTRAP] artifacts.Reconciler started (4 rules: expired-uploads + staging, orphan-final-blobs, READY-no-blob QUARANTINED, stuck-STAGING; 15m tick)")
-				rec.Run(bgCtx, 15*time.Minute)
-			}()
+			return nil, fmt.Errorf("bootstrap: Reconciler init failed: %w — Reconciler is mandatory when artifacts are enabled", recErr)
 		}
+		// Reconciler shares the same bgCtx as the rest of the bg
+		// runners — a separate recCtx/recCancel leaked past bgCancel()
+		// and could keep writing to the DB after sqliteStore.Close().
+		bgWG.Add(1)
+		go func() {
+			defer bgWG.Done()
+			log.Printf("[BOOTSTRAP] artifacts.Reconciler started (4 rules: expired-uploads + staging, orphan-final-blobs, READY-no-blob QUARANTINED, stuck-STAGING; 15m tick)")
+			rec.Run(bgCtx, 15*time.Minute)
+		}()
 	}
 
 	errChan := make(chan error, 1)

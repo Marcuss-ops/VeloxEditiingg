@@ -25,18 +25,15 @@ func TestCreateSmokeClipStock_Validation(t *testing.T) {
 	if err != nil {
 		t.Skipf("SQLite unavailable: %v", err)
 	}
-	ts, err := queue.NewLifecycleService(store.NewSQLiteJobRepository(db), store.NewSQLiteJobRepository(db), clock.System{})
+	jobRepo := store.NewSQLiteJobRepository(db)
+	ts, err := queue.NewLifecycleService(jobRepo, clock.System{})
 	if err != nil {
 		t.Skipf("Transition service unavailable: %v", err)
 	}
-	querySvc := queue.NewQueryService(store.NewSQLiteJobRepository(db))
-	q, err := queue.NewFileQueue(&queue.FileQueueConfig{MaxRetries: cfg.Workers.MaxJobAttempts}, ts, querySvc)
-	if err != nil {
-		t.Skipf("File queue unavailable: %v", err)
-	}
+	_ = ts
 
 	r := gin.New()
-	r.POST("/api/v1/video/smoke-clip-stock", CreateSmokeClipStock(config.FromEnv(), q))
+	r.POST("/api/v1/video/smoke-clip-stock", CreateSmokeClipStock(config.FromEnv(), jobRepo))
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/video/smoke-clip-stock", bytes.NewReader([]byte(`{"video_name":"test"}`)))
@@ -57,18 +54,15 @@ func TestCreateSmokeClipStock_Enqueue(t *testing.T) {
 	if err != nil {
 		t.Skipf("SQLite unavailable: %v", err)
 	}
-	ts, err := queue.NewLifecycleService(store.NewSQLiteJobRepository(db), store.NewSQLiteJobRepository(db), clock.System{})
+	jobRepo := store.NewSQLiteJobRepository(db)
+	ts, err := queue.NewLifecycleService(jobRepo, clock.System{})
 	if err != nil {
 		t.Skipf("Transition service unavailable: %v", err)
 	}
-	querySvc := queue.NewQueryService(store.NewSQLiteJobRepository(db))
-	q, err := queue.NewFileQueue(&queue.FileQueueConfig{MaxRetries: cfg.Workers.MaxJobAttempts}, ts, querySvc)
-	if err != nil {
-		t.Skipf("File queue unavailable: %v", err)
-	}
+	_ = ts
 
 	r := gin.New()
-	r.POST("/api/v1/video/smoke-clip-stock", CreateSmokeClipStock(config.FromEnv(), q))
+	r.POST("/api/v1/video/smoke-clip-stock", CreateSmokeClipStock(config.FromEnv(), jobRepo))
 
 	payload := map[string]interface{}{
 		"video_name":          "Smoke clip stock",

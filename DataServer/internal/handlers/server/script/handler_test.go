@@ -14,11 +14,29 @@ import (
 
 	voiceoverassets "velox-server/internal/assets"
 	"velox-server/internal/config"
+	"velox-server/internal/jobs"
 	jobenqueue "velox-server/internal/jobs/enqueue"
 	"velox-server/internal/platform/clock"
 	"velox-server/internal/queue"
 	"velox-server/internal/store"
 )
+
+// testSubmitQueue implements enqueue.JobQueue by delegating to jobs.Writer.
+type testSubmitQueue struct {
+	writer     jobs.Writer
+	maxRetries int
+}
+
+func (q *testSubmitQueue) SubmitJob(ctx context.Context, jobID string, payload map[string]interface{}) error {
+	raw, _ := json.Marshal(payload)
+	job := &jobs.Job{
+		ID:         jobID,
+		Status:     jobs.StatusPending,
+		MaxRetries: q.maxRetries,
+		Payload:    string(raw),
+	}
+	return q.writer.Create(ctx, job)
+}
 
 // PR15.7a: every test that wires the script routes now constructs an
 // *enqueue.Enqueuer and threads it through RegisterRoutes. There is no
@@ -32,15 +50,12 @@ func TestGenerateWithImages_EnqueuesSceneImageJob(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new sqlite store: %v", err)
 	}
-	ts, err := queue.NewLifecycleService(store.NewSQLiteJobRepository(db), store.NewSQLiteJobRepository(db), clock.System{})
+	jobRepo := store.NewSQLiteJobRepository(db)
+	ts, err := queue.NewLifecycleService(jobRepo, clock.System{})
 	if err != nil {
 		t.Fatalf("new transition service: %v", err)
 	}
-	querySvc := queue.NewQueryService(store.NewSQLiteJobRepository(db))
-	q, err := queue.NewFileQueue(&queue.FileQueueConfig{MaxRetries: 3}, ts, querySvc)
-	if err != nil {
-		t.Fatalf("new file queue: %v", err)
-	}
+	_ = ts
 
 	cfg := &config.Config{
 		Runtime: config.RuntimeConfig{
@@ -53,10 +68,10 @@ func TestGenerateWithImages_EnqueuesSceneImageJob(t *testing.T) {
 	}
 
 	// Voiceover nil: this test exercises the basic enqueue path, no asset rewrite.
-	enqueuer := jobenqueue.NewEnqueuer(q, nil)
+	enqueuer := jobenqueue.NewEnqueuer(&testSubmitQueue{writer: jobRepo, maxRetries: 3}, nil)
 
 	r := gin.New()
-	RegisterRoutes(r.Group("/api/script"), cfg, q, db, enqueuer)
+	RegisterRoutes(r.Group("/api/script"), cfg, db, enqueuer)
 
 	payload := map[string]interface{}{
 		"video_name":          "Amish",
@@ -183,15 +198,12 @@ func TestGenerateWithImages_UsesCreatorStageWhenConfigured(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new sqlite store: %v", err)
 	}
-	ts, err := queue.NewLifecycleService(store.NewSQLiteJobRepository(db), store.NewSQLiteJobRepository(db), clock.System{})
+	jobRepo := store.NewSQLiteJobRepository(db)
+	ts, err := queue.NewLifecycleService(jobRepo, clock.System{})
 	if err != nil {
 		t.Fatalf("new transition service: %v", err)
 	}
-	querySvc := queue.NewQueryService(store.NewSQLiteJobRepository(db))
-	q, err := queue.NewFileQueue(&queue.FileQueueConfig{MaxRetries: 3}, ts, querySvc)
-	if err != nil {
-		t.Fatalf("new file queue: %v", err)
-	}
+	_ = ts
 
 	mockCreator := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/script/generate-with-images" {
@@ -235,10 +247,10 @@ func TestGenerateWithImages_UsesCreatorStageWhenConfigured(t *testing.T) {
 
 	// PR15.7a: creator-via-assetService path. The Enqueuer must carry the
 	// voiceover service so the rewrite step runs inside Enqueue.
-	enqueuer := jobenqueue.NewEnqueuer(q, voiceoverSvc)
+	enqueuer := jobenqueue.NewEnqueuer(&testSubmitQueue{writer: jobRepo, maxRetries: 3}, voiceoverSvc)
 
 	r := gin.New()
-	RegisterRoutes(r.Group("/api/script"), cfg, q, db, enqueuer)
+	RegisterRoutes(r.Group("/api/script"), cfg, db, enqueuer)
 
 	reqBody, _ := json.Marshal(map[string]interface{}{
 		"video_name":     "Creator Video",
@@ -275,10 +287,14 @@ func TestGenerateWithImages_UsesCreatorStageWhenConfigured(t *testing.T) {
 		t.Fatalf("want worker status PENDING, got %v", res["status"])
 	}
 
-	payload, payloadErr := q.QueryService().GetJobPayload(context.Background(), res["job_id"].(string))
-	if payloadErr != nil {
-		t.Fatalf("GetJobPayload: %v", payloadErr)
+	j, jobGetErr := jobRepo.Get(context.Background(), res["job_id"].(string))
+	if jobGetErr != nil {
+		t.Fatalf("Get: %v", jobGetErr)
 	}
+	if j == nil {
+		t.Fatalf("want job")
+	}
+	payload := jobs.ToPayloadMap(j)
 	if got := payload["voiceover_path"]; got == voicePath {
 		t.Fatalf("want staged voiceover path, got raw local creator path %v", got)
 	}
@@ -295,15 +311,12 @@ func TestGenerateWithImages_BypassesCreatorForRenderReadyPayload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new sqlite store: %v", err)
 	}
-	ts, err := queue.NewLifecycleService(store.NewSQLiteJobRepository(db), store.NewSQLiteJobRepository(db), clock.System{})
+	jobRepo := store.NewSQLiteJobRepository(db)
+	ts, err := queue.NewLifecycleService(jobRepo, clock.System{})
 	if err != nil {
 		t.Fatalf("new transition service: %v", err)
 	}
-	querySvc := queue.NewQueryService(store.NewSQLiteJobRepository(db))
-	q, err := queue.NewFileQueue(&queue.FileQueueConfig{MaxRetries: 3}, ts, querySvc)
-	if err != nil {
-		t.Fatalf("new file queue: %v", err)
-	}
+	_ = ts
 
 	creatorCalled := false
 	mockCreator := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -329,10 +342,10 @@ func TestGenerateWithImages_BypassesCreatorForRenderReadyPayload(t *testing.T) {
 
 	// PR15.7a: bypass path. Creator stage is short-circuited, no asset rewrite
 	// expected; voiceover nil is fine.
-	enqueuer := jobenqueue.NewEnqueuer(q, nil)
+	enqueuer := jobenqueue.NewEnqueuer(&testSubmitQueue{writer: jobRepo, maxRetries: 3}, nil)
 
 	r := gin.New()
-	RegisterRoutes(r.Group("/api/script"), cfg, q, db, enqueuer)
+	RegisterRoutes(r.Group("/api/script"), cfg, db, enqueuer)
 
 	reqBody, _ := json.Marshal(map[string]interface{}{
 		"skip_creator":   true,

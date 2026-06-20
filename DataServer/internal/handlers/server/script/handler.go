@@ -16,7 +16,6 @@ import (
 	"velox-server/internal/creatorflow"
 	remoteansible "velox-server/internal/handlers/remote/ansible"
 	"velox-server/internal/jobs/enqueue"
-	"velox-server/internal/queue"
 	"velox-server/internal/store"
 )
 
@@ -39,7 +38,7 @@ type ScriptHandlers struct {
 	creator  *creatorflow.Service
 }
 
-func NewScriptHandlers(cfg *config.Config, q *queue.FileQueue, sqliteDB *store.SQLiteStore, enqueuer *enqueue.Enqueuer) *ScriptHandlers {
+func NewScriptHandlers(cfg *config.Config, sqliteDB *store.SQLiteStore, enqueuer *enqueue.Enqueuer) *ScriptHandlers {
 	dataDir := ""
 	if cfg != nil {
 		dataDir = strings.TrimSpace(cfg.Runtime.DataDir)
@@ -48,10 +47,6 @@ func NewScriptHandlers(cfg *config.Config, q *queue.FileQueue, sqliteDB *store.S
 		enqueuer: enqueuer,
 		sqliteDB: sqliteDB,
 		dataDir:  dataDir,
-		// creatorflow.New takes both q and enqueuer. q is the concrete
-		// *queue.FileQueue needed by scheduleCreatorPolling to issue
-		// background poll goroutines per creator job; enqueuer owns the
-		// voiceover-rewrite + queue-submit step.
 		// creatorflow.New takes only (cfg, enqueuer) post-PR15.7a:
 		// the Enqueuer owns the queue so passing q again would be redundant
 		// and risks drift between two parallel references.
@@ -61,9 +56,9 @@ func NewScriptHandlers(cfg *config.Config, q *queue.FileQueue, sqliteDB *store.S
 
 // RegisterRoutes wires the public script routes on the given group.
 //
-// PR15.7a: a *enqueue.Enqueuer is now mandatory alongside q + sqliteDB.
-func RegisterRoutes(group gin.IRoutes, cfg *config.Config, q *queue.FileQueue, sqliteDB *store.SQLiteStore, enqueuer *enqueue.Enqueuer) *ScriptHandlers {
-	handlers := NewScriptHandlers(cfg, q, sqliteDB, enqueuer)
+// PR15.7a: a *enqueue.Enqueuer is now mandatory alongside sqliteDB.
+func RegisterRoutes(group gin.IRoutes, cfg *config.Config, sqliteDB *store.SQLiteStore, enqueuer *enqueue.Enqueuer) *ScriptHandlers {
+	handlers := NewScriptHandlers(cfg, sqliteDB, enqueuer)
 	group.POST("/generate-with-images", handlers.GenerateWithImagesHandler(cfg))
 	group.GET("/jobs/:job_id", handlers.ScriptJobHandler(false))
 	group.GET("/jobs/:job_id/full", handlers.ScriptJobHandler(true))

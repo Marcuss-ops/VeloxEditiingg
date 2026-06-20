@@ -8,20 +8,21 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"velox-server/internal/queue"
+	"velox-server/internal/jobs"
 	"velox-server/internal/store"
 )
 
 // CalendarAPI provides handlers for calendar event operations
 type CalendarAPI struct {
-	store     *store.SQLiteStore
-	queue     *queue.FileQueue
+	store    *store.SQLiteStore
+	reader   jobs.Reader
+	writer   jobs.Writer
 	scheduler *CalendarScheduler
 }
 
 // NewCalendarAPI creates a new CalendarAPI instance
-func NewCalendarAPI(s *store.SQLiteStore, q *queue.FileQueue, sched *CalendarScheduler) *CalendarAPI {
-	return &CalendarAPI{store: s, queue: q, scheduler: sched}
+func NewCalendarAPI(s *store.SQLiteStore, reader jobs.Reader, writer jobs.Writer, sched *CalendarScheduler) *CalendarAPI {
+	return &CalendarAPI{store: s, reader: reader, writer: writer, scheduler: sched}
 }
 
 // MinimalEvent is a lightweight event representation for fast list queries
@@ -366,8 +367,8 @@ func (api *CalendarAPI) EnqueueEvent() gin.HandlerFunc {
 }
 
 // RegisterRoutes registers all calendar routes
-func RegisterRoutes(r *gin.RouterGroup, s *store.SQLiteStore, q *queue.FileQueue, sched *CalendarScheduler) {
-	api := NewCalendarAPI(s, q, sched)
+func RegisterRoutes(r *gin.RouterGroup, s *store.SQLiteStore, reader jobs.Reader, writer jobs.Writer, sched *CalendarScheduler) {
+	api := NewCalendarAPI(s, reader, writer, sched)
 
 	r.GET("/calendar/events", api.ListEvents())
 	r.GET("/calendar/events/range", api.GetEventsByDateRange())
@@ -380,17 +381,18 @@ func RegisterRoutes(r *gin.RouterGroup, s *store.SQLiteStore, q *queue.FileQueue
 }
 
 func (api *CalendarAPI) hydrateQueueState(ctx context.Context, events []*store.CalendarEvent) {
-	if api == nil || api.queue == nil {
+	if api == nil || api.reader == nil {
 		return
 	}
 	for _, event := range events {
 		if event == nil || strings.TrimSpace(event.JobID) == "" {
 			continue
 		}
-		job, err := api.queue.GetJob(ctx, event.JobID)
-		if err != nil || job == nil {
+		j, err := api.reader.Get(ctx, event.JobID)
+		if err != nil || j == nil {
 			continue
 		}
+		job := jobs.ToQueueItem(j)
 		applyQueueStateToEvent(ctx, event, job, api.store)
 	}
 }

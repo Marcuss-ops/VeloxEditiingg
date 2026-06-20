@@ -11,12 +11,30 @@ import (
 	"testing"
 	"time"
 
+	"velox-server/internal/jobs"
 	jobenqueue "velox-server/internal/jobs/enqueue"
 	"velox-server/internal/platform/clock"
 	"velox-server/internal/queue"
 	"velox-server/internal/remoteengine"
 	"velox-server/internal/store"
 )
+
+// testSubmitQueue implements enqueue.JobQueue by delegating to jobs.Writer.
+type testSubmitQueue struct {
+	writer     jobs.Writer
+	maxRetries int
+}
+
+func (q *testSubmitQueue) SubmitJob(ctx context.Context, jobID string, payload map[string]interface{}) error {
+	raw, _ := json.Marshal(payload)
+	job := &jobs.Job{
+		ID:         jobID,
+		Status:     jobs.StatusPending,
+		MaxRetries: q.maxRetries,
+		Payload:    string(raw),
+	}
+	return q.writer.Create(ctx, job)
+}
 
 // PR15.7a: both tests construct svc literal with enqueuer field, no queue
 // field. The Enqueuer owns the queue; this removes duplicate references
@@ -38,19 +56,15 @@ func TestForwardSchedulesAsyncPollAndWorkerHandoff(t *testing.T) {
 		t.Fatalf("sqlite store: %v", err)
 	}
 	jobRepo := store.NewSQLiteJobRepository(db)
-	ts, tsErr := queue.NewLifecycleService(jobRepo, jobRepo, clock.System{})
+	ts, tsErr := queue.NewLifecycleService(jobRepo, clock.System{})
 	if tsErr != nil {
 		t.Fatalf("new transition service: %v", tsErr)
 	}
-	querySvc := queue.NewQueryService(store.NewSQLiteJobRepository(db))
-	q, err := queue.NewFileQueue(&queue.FileQueueConfig{MaxRetries: 3}, ts, querySvc)
-	if err != nil {
-		t.Fatalf("file queue: %v", err)
-	}
+	_ = ts
 
 	// PR15.7a: build the Enqueuer once. No voiceover rewrite expected on
 	// this path (nil voiceover); the rewrite is a no-op.
-	enqueuer := jobenqueue.NewEnqueuer(q, nil)
+	enqueuer := jobenqueue.NewEnqueuer(&testSubmitQueue{writer: jobRepo, maxRetries: 3}, nil)
 
 	var mu sync.Mutex
 	polls := 0
@@ -132,18 +146,15 @@ func TestForwardSchedulesAsyncPollAndWorkerHandoff(t *testing.T) {
 
 	deadline := time.Now().Add(2 * time.Second)
 	for {
-		job, jobErr := q.GetJob(context.Background(), "creator-async-1")
-		if jobErr == nil && job != nil {
-			if job.JobID != "creator-async-1" {
-				t.Fatalf("want worker job_id creator-async-1, got %s", job.JobID)
+		j, jobErr := jobRepo.Get(context.Background(), "creator-async-1")
+		if jobErr == nil && j != nil {
+			if j.ID != "creator-async-1" {
+				t.Fatalf("want worker job_id creator-async-1, got %s", j.ID)
 			}
-			if job.VideoName != "Async Creator Video" {
-				t.Fatalf("want Async Creator Video, got %s", job.VideoName)
+			if j.VideoName != "Async Creator Video" {
+				t.Fatalf("want Async Creator Video, got %s", j.VideoName)
 			}
-			payload, payloadErr := q.QueryService().GetJobPayload(context.Background(), "creator-async-1")
-			if payloadErr != nil {
-				t.Fatalf("GetJobPayload: %v", payloadErr)
-			}
+			payload := jobs.ToPayloadMap(j)
 			// PR15.6: voiceover_paths is canonical.
 			vp, _ := payload["voiceover_paths"].([]string)
 			if len(vp) == 0 || vp[0] != voicePath {
@@ -169,21 +180,17 @@ func TestForwardCompletedResultEnqueuesWorkerJob(t *testing.T) {
 		t.Fatalf("sqlite store: %v", err)
 	}
 	jobRepo := store.NewSQLiteJobRepository(db)
-	ts, tsErr := queue.NewLifecycleService(jobRepo, jobRepo, clock.System{})
+	ts, tsErr := queue.NewLifecycleService(jobRepo, clock.System{})
 	if tsErr != nil {
 		t.Fatalf("new transition service: %v", tsErr)
 	}
-	querySvc := queue.NewQueryService(store.NewSQLiteJobRepository(db))
-	q, err := queue.NewFileQueue(&queue.FileQueueConfig{MaxRetries: 3}, ts, querySvc)
-	if err != nil {
-		t.Fatalf("file queue: %v", err)
-	}
+	_ = ts
 
 	// PR15.7a: ForwardCompletedResult takes *enqueue.Enqueuer (not raw q).
 	// The free function constructs a temporary Enqueuer internally, but
 	// the new contract takes the enqueuer directly so the test mirrors
 	// the production call site.
-	enqueuer := jobenqueue.NewEnqueuer(q, nil)
+	enqueuer := jobenqueue.NewEnqueuer(&testSubmitQueue{writer: jobRepo, maxRetries: 3}, nil)
 
 	result := map[string]interface{}{
 		"ok":       true,
@@ -211,27 +218,24 @@ func TestForwardCompletedResultEnqueuesWorkerJob(t *testing.T) {
 		t.Fatalf("want pending response, got %v", response["status"])
 	}
 
-	job, jobErr := q.GetJob(context.Background(), "creator-complete-1")
+	j, jobErr := jobRepo.Get(context.Background(), "creator-complete-1")
 	if jobErr != nil {
-		t.Fatalf("GetJob: %v", jobErr)
+		t.Fatalf("Get: %v", jobErr)
 	}
-	if job == nil {
+	if j == nil {
 		t.Fatalf("want job")
 	}
-	if job.JobID != "creator-complete-1" {
-		t.Fatalf("want job_id creator-complete-1, got %s", job.JobID)
+	if j.ID != "creator-complete-1" {
+		t.Fatalf("want job_id creator-complete-1, got %s", j.ID)
 	}
-	if job.VideoName != "Creator Video" {
-		t.Fatalf("want video name Creator Video, got %s", job.VideoName)
+	if j.VideoName != "Creator Video" {
+		t.Fatalf("want video name Creator Video, got %s", j.VideoName)
 	}
 	// PR15.6: drop the legacy `run_id` JSON tag assertion. The queue Job
 	// struct still maps RunID from the `run_id` alias (deferred to PR15.5
 	// jobs.Writer canonicalization). The canonical key is `job_run_id`
 	// inside the persisted payload map — assert that instead.
-	payload, payloadErr := q.QueryService().GetJobPayload(context.Background(), "creator-complete-1")
-	if payloadErr != nil {
-		t.Fatalf("GetJobPayload: %v", payloadErr)
-	}
+	payload := jobs.ToPayloadMap(j)
 	// PR15.6: voiceover_paths is canonical; legacy voiceover_path alias is dropped.
 	vp, _ := payload["voiceover_paths"].([]string)
 	if len(vp) != 1 || vp[0] != "https://example.com/voice.mp3" {

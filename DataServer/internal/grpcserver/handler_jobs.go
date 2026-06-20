@@ -64,13 +64,13 @@ func (h *Handler) handleJobResult(workerID string, jr *pb.JobResult) {
 			ExpectedRevision: currentRev,
 			FinishedAt:       time.Now().UTC(),
 		}
-		if err := h.lifecycleSvc.Jobs().RecordRenderFinished(ctx, cmd.JobID, cmd.WorkerID, cmd.LeaseID, cmd.AttemptNumber, cmd.ExpectedRevision); err != nil {
+		if err := h.jobsRepo.RecordRenderFinished(ctx, cmd.JobID, cmd.WorkerID, cmd.LeaseID, cmd.AttemptNumber, cmd.ExpectedRevision); err != nil {
 			log.Printf("[GRPC] RecordRenderFinished failed for %s: %v", jobID, err)
 			return
 		}
 		log.Printf("[GRPC] Worker %s reported render finished for job %s — awaiting artifact", workerID, jobID)
 	} else if status == "failed" {
-		if err := h.lifecycleSvc.Fail(context.Background(), jobID, "", errMsg, true, 0); err != nil {
+		if err := h.jobsRepo.FailWithRetry(context.Background(), jobID, "", errMsg, true, 0); err != nil {
 			log.Printf("[GRPC] Job failure transition failed for %s: %v", jobID, err)
 		}
 	}
@@ -120,7 +120,7 @@ func (h *Handler) handleJobAccepted(workerID string, ja *pb.JobAccepted) {
 	// The single CAS UPDATE inside StartJobWithLease verifies
 	// (job_id, worker_id, lease_id, attempt, revision) atomically.
 	//
-	// Revision comes from a fresh GetJob (queue.Job is the rich projection
+	// Revision comes from a fresh GetJob (jobs.QueueItem is the rich projection
 	// without revision; store.JobRecord carries it). The extra read is bounded by
 	// SQLite single-writer semantics: ClaimNextJob already committed, so
 	// the row is visible at our snapshot.
@@ -138,7 +138,7 @@ func (h *Handler) handleJobAccepted(workerID string, ja *pb.JobAccepted) {
 		return
 	}
 
-	if err := h.lifecycleSvc.Jobs().Start(context.Background(), jobID, workerID, declaredLeaseID, attemptNum, currentRev); err != nil {
+	if err := h.jobsRepo.Start(context.Background(), jobID, workerID, declaredLeaseID, attemptNum, currentRev); err != nil {
 		if errors.Is(err, store.ErrTransitionConflict) {
 			log.Printf("[GRPC] Worker %s accepted job %s but lease is stale (rev=%d attempt=%d) — rejecting",
 				workerID, jobID, currentRev, attemptNum)
@@ -182,7 +182,7 @@ func (h *Handler) handleJobAccepted(workerID string, ja *pb.JobAccepted) {
 		// claim so the job returns to PENDING (or another worker can claim).
 		log.Printf("[GRPC] sendCh full/closed for JobLeaseGranted to worker %s — releasing claim for job %s",
 			workerID, jobID)
-		if releaseErr := h.lifecycleSvc.Jobs().ReleaseLease(context.Background(), jobID); releaseErr != nil {
+		if releaseErr := h.jobsRepo.ReleaseLease(context.Background(), jobID); releaseErr != nil {
 			log.Printf("[GRPC] Failed to release claim for job %s after JobLeaseGranted send failure: %v",
 				jobID, releaseErr)
 		}
@@ -221,7 +221,7 @@ func (h *Handler) handleJobRejected(workerID string, jr *pb.JobRejected) {
 	log.Printf("[GRPC] Worker %s rejected job %s: %s", workerID, jobID, reason)
 
 	if jobID != "" {
-		if err := h.lifecycleSvc.Fail(context.Background(), jobID, "", reason, true, 0); err != nil {
+		if err := h.jobsRepo.FailWithRetry(context.Background(), jobID, "", reason, true, 0); err != nil {
 			log.Printf("[GRPC] Failed to release rejected job %s: %v", jobID, err)
 		}
 	}
@@ -276,7 +276,7 @@ func (h *Handler) handleLeaseRenewal(workerID string, lr *pb.LeaseRenewal) {
 	if lr.GetLeaseExpiresAt() != nil {
 		leaseExpiry = lr.GetLeaseExpiresAt().AsTime()
 	}
-	if err := h.lifecycleSvc.Jobs().RenewLease(context.Background(), lr.GetJobId(), workerID, lr.GetLeaseId(), leaseExpiry, true, 0); err != nil {
+	if err := h.jobsRepo.RenewLease(context.Background(), lr.GetJobId(), workerID, lr.GetLeaseId(), leaseExpiry, true, 0); err != nil {
 		log.Printf("[GRPC] Lease renewal failed for job %s worker %s: %v", lr.GetJobId(), workerID, err)
 	}
 }
@@ -293,12 +293,12 @@ func (h *Handler) handleLeaseRenewal(workerID string, lr *pb.LeaseRenewal) {
 // the protobuf contract alone does not protect against.
 //
 // Ondata 3 PR3: migrated from dbStore.GetJob (map-based) to
-// lifecycleSvc.Jobs().Get (canonical jobs.Job domain model).
+// jobsRepo.Get (canonical jobs.Job domain model).
 func (h *Handler) verifyJobOwnership(workerID, jobID string) bool {
 	if workerID == "" || jobID == "" {
 		return false
 	}
-	j, err := h.lifecycleSvc.Jobs().Get(context.Background(), jobID)
+	j, err := h.jobsRepo.Get(context.Background(), jobID)
 	if err != nil || j == nil {
 		return false
 	}
@@ -310,7 +310,7 @@ func (h *Handler) verifyJobOwnership(workerID, jobID string) bool {
 // on the domain model (Ondata 3 PR3 final), attempt maps to Attempts/RetryCount.
 // No more map-based reads from dbStore.GetJob.
 func (h *Handler) lookupJobCASFields(jobID string) (revision, attempt int, err error) {
-	j, err := h.lifecycleSvc.Jobs().Get(context.Background(), jobID)
+	j, err := h.jobsRepo.Get(context.Background(), jobID)
 	if err != nil {
 		return 0, 0, err
 	}

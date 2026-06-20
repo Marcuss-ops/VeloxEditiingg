@@ -8,7 +8,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"velox-server/internal/queue"
+	"velox-server/internal/jobs"
 )
 
 // SSEEvent represents a server-sent event
@@ -21,14 +21,14 @@ type SSEEvent struct {
 type SSEBroker struct {
 	mu      sync.RWMutex
 	clients map[chan SSEEvent]struct{}
-	workers *queue.FileQueue
+	reader  jobs.Reader
 }
 
 // NewSSEBroker creates a new SSE broker
-func NewSSEBroker(fq *queue.FileQueue) *SSEBroker {
+func NewSSEBroker(reader jobs.Reader) *SSEBroker {
 	return &SSEBroker{
 		clients: make(map[chan SSEEvent]struct{}),
-		workers: fq,
+		reader:  reader,
 	}
 }
 
@@ -103,9 +103,10 @@ func (b *SSEBroker) SSEHandler() gin.HandlerFunc {
 		ch := b.Subscribe()
 		defer b.Unsubscribe(ch)
 
-		if b.workers != nil {
+		if b.reader != nil {
 			ctx := c.Request.Context()
-			stats, _ := b.workers.Stats(ctx)
+			counts, _ := b.reader.Counts(ctx)
+			stats := jobs.FormatStats(counts)
 			pending := int64(0)
 			processing := int64(0)
 			if stats != nil {

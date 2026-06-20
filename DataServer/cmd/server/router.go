@@ -50,14 +50,6 @@ func newRouter(cfg *config.Config, deps *serverDeps, registry *app.Registry) *gi
 
 	configureTrustedProxies(r)
 
-	// Dark editor API rewrite middleware
-	r.Use(func(c *gin.Context) {
-		if strings.HasPrefix(c.Request.URL.Path, "/dark_editor_v2/api/v1/") && !strings.HasPrefix(c.Request.URL.Path, "/dark_editor_v2/api/v1/youtube") {
-			c.Request.URL.Path = strings.Replace(c.Request.URL.Path, "/dark_editor_v2/api/v1/", "/api/v1/", 1)
-		}
-		c.Next()
-	})
-
 	r.Use(corsMiddleware())
 	r.Use(requestIDMiddleware())
 	r.Use(accessLogMiddleware())
@@ -105,7 +97,7 @@ func newRouter(cfg *config.Config, deps *serverDeps, registry *app.Registry) *gi
 }
 
 func registerScriptRoutes(r *gin.Engine, cfg *config.Config, deps *serverDeps) {
-	if deps == nil || deps.fileQ == nil || deps.enqueuer == nil {
+	if deps == nil || deps.enqueuer == nil {
 		return
 	}
 
@@ -113,7 +105,7 @@ func registerScriptRoutes(r *gin.Engine, cfg *config.Config, deps *serverDeps) {
 	v1Group.Use(api.AdminAuthMiddleware(cfg))
 	// PR15.7a: thread the *enqueue.Enqueuer through RegisterRoutes so the
 	// script endpoint can submit jobs without any package-level state.
-	scripthandlers.RegisterRoutes(v1Group, cfg, deps.fileQ, deps.sqliteStore, deps.enqueuer)
+	scripthandlers.RegisterRoutes(v1Group, cfg, deps.sqliteStore, deps.enqueuer)
 }
 
 // registerOrchestratorAdminRoutes is a thin wrapper that mounts

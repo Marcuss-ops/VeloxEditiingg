@@ -2,17 +2,19 @@ package calendar
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 
-	"velox-server/internal/queue"
+	"velox-server/internal/jobs"
 	"velox-server/internal/store"
 )
 
 func (api *CalendarAPI) reconcileCalendarEvent(ctx context.Context, event *store.CalendarEvent, force bool) error {
-	if api == nil || api.queue == nil || event == nil {
+	if api == nil || api.reader == nil || event == nil {
 		return nil
 	}
 
@@ -42,45 +44,44 @@ func (api *CalendarAPI) reconcileCalendarEvent(ctx context.Context, event *store
 	}
 
 	jobPayload := buildCalendarJobPayload(event, "")
-	existing, err := api.queue.GetJob(ctx, event.JobID)
-	if err == nil && existing != nil && existing.Status == queue.StatusPending {
+	j, err := api.reader.Get(ctx, event.JobID)
+	existing := jobs.ToQueueItem(j)
+	if err == nil && existing != nil && existing.Status == jobs.StatusPending {
 		jobPayload = buildCalendarJobPayload(event, existingJobRunID(existing))
-		// Update the job payload for pending jobs via persist
 		if existing.Payload != nil {
 			for k, v := range jobPayload {
 				existing.Payload[k] = v
 			}
 		}
-		if err := queue.PersistJob(existing, api.store); err != nil {
+		if err := persistJobResult(existing, api.store); err != nil {
 			return err
 		}
 		applyQueueStateToEvent(ctx, event, existing, api.store)
 		return nil
 	}
-	if existing != nil && (existing.Status == queue.StatusRunning || existing.Status == queue.StatusLeased) {
+	if existing != nil && (existing.Status == jobs.StatusRunning || existing.Status == jobs.StatusLeased) {
 		jobPayload = buildCalendarJobPayload(event, existingJobRunID(existing))
 		jobPayload["status"] = string(existing.Status)
-		// Update the job payload for running jobs via persist
 		if existing.Payload != nil {
 			for k, v := range jobPayload {
 				existing.Payload[k] = v
 			}
 		}
-		if err := queue.PersistJob(existing, api.store); err != nil {
+		if err := persistJobResult(existing, api.store); err != nil {
 			return err
 		}
 		applyQueueStateToEvent(ctx, event, existing, api.store)
 		return nil
 	}
-	if existing != nil && existing.Status != queue.StatusPending && existing.Status != queue.StatusRunning && existing.Status != queue.StatusLeased {
+	if existing != nil && existing.Status != jobs.StatusPending && existing.Status != jobs.StatusRunning && existing.Status != jobs.StatusLeased {
 		event.JobID = "cal_" + uuid.NewString()
 		jobPayload = buildCalendarJobPayload(event, "")
 	}
-	if err := api.queue.SubmitJob(ctx, event.JobID, jobPayload); err != nil {
+	if err := submitCalendarJob(ctx, api.writer, event.JobID, jobPayload); err != nil {
 		return err
 	}
 	event.Status = "queued"
-	event.JobStatus = string(queue.StatusPending)
+	event.JobStatus = string(jobs.StatusPending)
 	event.QueueError = ""
 	event.PublishStatus = "manual"
 	if strings.TrimSpace(event.QueuedAt) == "" {
@@ -116,7 +117,7 @@ func calendarEventDue(event *store.CalendarEvent) bool {
 	return !eventTime.After(time.Now().UTC())
 }
 
-func applyQueueStateToEvent(ctx context.Context, event *store.CalendarEvent, job *queue.Job, dbStore *store.SQLiteStore) {
+func applyQueueStateToEvent(ctx context.Context, event *store.CalendarEvent, job *jobs.QueueItem, dbStore *store.SQLiteStore) {
 	if event == nil || job == nil {
 		return
 	}
@@ -134,11 +135,11 @@ func applyQueueStateToEvent(ctx context.Context, event *store.CalendarEvent, job
 		event.QueuedAt = time.Unix(int64(v), 0).UTC().Format(time.RFC3339)
 	}
 	switch job.Status {
-	case queue.StatusPending:
+	case jobs.StatusPending:
 		event.Status = "queued"
-	case queue.StatusRunning, queue.StatusLeased:
+	case jobs.StatusRunning, jobs.StatusLeased:
 		event.Status = "processing"
-	case queue.StatusSucceeded:
+	case jobs.StatusSucceeded:
 		event.Status = "completed"
 		artifacts, _ := dbStore.GetArtifactsByJob(job.JobID, 5)
 		for _, a := range artifacts {
@@ -158,7 +159,74 @@ func applyQueueStateToEvent(ctx context.Context, event *store.CalendarEvent, job
 				break
 			}
 		}
-	case queue.StatusFailed:
+	case jobs.StatusFailed:
 		event.Status = "failed"
 	}
+}
+
+// submitCalendarJob creates a new job via jobs.Writer.Create (replaces queue.FileQueue.SubmitJob).
+func submitCalendarJob(ctx context.Context, writer jobs.Writer, jobID string, payload map[string]interface{}) error {
+	if writer == nil {
+		return fmt.Errorf("submit calendar job: writer is nil")
+	}
+	var videoName, projectID, runID string
+	if s, ok := payload["video_name"].(string); ok {
+		videoName = s
+	}
+	if s, ok := payload["project_id"].(string); ok {
+		projectID = s
+	}
+	if s, ok := payload["job_run_id"].(string); ok && s != "" {
+		runID = s
+	} else if s, ok := payload["run_id"].(string); ok && s != "" {
+		runID = s
+	}
+	raw, _ := json.Marshal(payload)
+	job := &jobs.Job{
+		ID:         jobID,
+		Status:     jobs.StatusPending,
+		VideoName:  videoName,
+		ProjectID:  projectID,
+		RunID:      runID,
+		MaxRetries: 3,
+		Payload:    string(raw),
+	}
+	return writer.Create(ctx, job)
+}
+
+// persistJobResult saves mutable job state to result_json via SQLiteStore
+// (replaces queue.PersistJob).
+func persistJobResult(job *jobs.QueueItem, dbStore *store.SQLiteStore) error {
+	if job == nil || dbStore == nil {
+		return nil
+	}
+	m := make(map[string]interface{})
+	m["job_id"] = job.JobID
+	m["status"] = string(job.Status)
+	m["video_name"] = job.VideoName
+	m["project_id"] = job.ProjectID
+	m["assigned_to"] = job.AssignedTo
+	m["lease_id"] = job.LeaseID
+	m["retry_count"] = job.RetryCount
+	m["attempt"] = job.Attempt
+	m["max_retries"] = job.MaxRetries
+	m["last_error"] = job.LastError
+	m["error_message"] = job.ErrorMessage
+	m["run_id"] = job.RunID
+	m["created_at"] = job.CreatedAt
+	m["updated_at"] = job.UpdatedAt
+	m["started_at"] = job.StartedAt
+	m["completed_at"] = job.CompletedAt
+	if job.Payload != nil {
+		for k, v := range job.Payload {
+			if _, exists := m[k]; !exists {
+				m[k] = v
+			}
+		}
+	}
+	rawJSON, err := json.Marshal(m)
+	if err != nil {
+		return fmt.Errorf("failed to marshal result_json: %w", err)
+	}
+	return dbStore.UpsertJobResult(job.JobID, rawJSON)
 }

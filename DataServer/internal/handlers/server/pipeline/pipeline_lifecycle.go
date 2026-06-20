@@ -9,18 +9,16 @@ import (
 	"net/http"
 
 	"velox-server/internal/config"
+	"velox-server/internal/jobs"
 	"velox-server/internal/jobs/enqueue"
-	"velox-server/internal/queue"
 	"velox-server/internal/remoteengine"
 	"velox-server/internal/workers"
 )
 
 // PR15.7a: pipelineEnqueuer (wired by InitPipelineEnqueuer) lives in
 // pipeline.go and is the shared Enqueuer used by both the sync forward
-// path and this async poll path. Cancellation still uses the concrete
-// *queue.FileQueue because it iterates all queued jobs to find ones
-// matching the trace_id — a JobQueue interface does not expose
-// GetAllJobs / DeleteJob.
+// path and this async poll path. Cancellation uses jobs.Reader + jobs.Writer
+// directly to iterate queued jobs and delete by ID.
 
 func isTerminalStatus(status string) bool {
 	s := strings.ToLower(strings.TrimSpace(status))
@@ -184,7 +182,7 @@ func PipelineStatus(cfg *config.Config) gin.HandlerFunc {
 }
 
 // PipelineCancel handles DELETE /api/remote/pipeline/cancel/<trace_id>
-func PipelineCancel(cfg *config.Config, q *queue.FileQueue, cmdMgr *workers.CommandManager) gin.HandlerFunc {
+func PipelineCancel(cfg *config.Config, reader jobs.Reader, writer jobs.Writer, cmdMgr *workers.CommandManager) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		traceID := c.Param("trace_id")
 		pipelineLog("CANCEL: requested job_id=%s", traceID)
@@ -206,19 +204,20 @@ func PipelineCancel(cfg *config.Config, q *queue.FileQueue, cmdMgr *workers.Comm
 			pipelineLog("CANCEL: remote engine not configured — skipping remote cancel for job_id=%s", traceID)
 		}
 
-		if q != nil {
+		if reader != nil {
 			toDelete := []string{traceID}
 			workerIDs := map[string]bool{}
 
-			allJobs, _ := q.GetAllJobs(c.Request.Context())
-			for _, job := range allJobs {
-				if job == nil || job.Payload == nil {
+			allDomainJobs, _ := reader.List(c.Request.Context(), jobs.Filter{Limit: 10000})
+			for i := range allDomainJobs {
+				j := jobs.ToQueueItem(&allDomainJobs[i])
+				if j == nil || j.Payload == nil {
 					continue
 				}
-				if t, ok := job.Payload["trace_id"].(string); ok && t == traceID {
-					toDelete = append(toDelete, job.JobID)
-					if job.AssignedTo != "" {
-						workerIDs[job.AssignedTo] = true
+				if t, ok := j.Payload["trace_id"].(string); ok && t == traceID {
+					toDelete = append(toDelete, j.JobID)
+					if j.AssignedTo != "" {
+						workerIDs[j.AssignedTo] = true
 					}
 				}
 			}
@@ -233,9 +232,11 @@ func PipelineCancel(cfg *config.Config, q *queue.FileQueue, cmdMgr *workers.Comm
 				}
 			}
 
-			for _, id := range toDelete {
-				if err := q.DeleteJob(c.Request.Context(), id); err == nil {
-					localCancelled = append(localCancelled, id)
+			if writer != nil {
+				for _, id := range toDelete {
+					if err := writer.Delete(c.Request.Context(), id); err == nil {
+						localCancelled = append(localCancelled, id)
+					}
 				}
 			}
 		}
