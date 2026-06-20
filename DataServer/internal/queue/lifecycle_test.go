@@ -356,7 +356,7 @@ func TestLifecycleService_Queries_Stubbed(t *testing.T) {
 // ── Internal helper (L2a) ───────────────────────────────────────────────────
 
 // TestLifecycleService_Now_Helper pins the contract: zero input falls back
-// to the injected clock (RealClock → time.Now()), non-zero input is
+// to the injected clock (clock.System → time.Now()), non-zero input is
 // returned verbatim and normalized to UTC. Also verifies timezone
 // normalization (PST input → UTC output).
 func TestLifecycleService_Now_Helper(t *testing.T) {

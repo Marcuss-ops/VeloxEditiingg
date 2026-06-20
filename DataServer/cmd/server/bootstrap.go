@@ -270,7 +270,7 @@ func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
 		finRepo,
 		blobStore,
 		sqliteStore.DB(),
-		nil, // RealClock default
+		nil, // clock.System default (production)
 	)
 	log.Printf("[BOOTSTRAP] artifacts.Service ready (single-tx SUCCEEDED gate via FinalizationRepository.FinalizeVerified + DeliveryPlanResolver)")
 
@@ -530,7 +530,7 @@ func runServer(cfg *config.Config) error {
 			deps.sqliteStore.DB(),
 			deps.blobStore,
 			artifacts.NewSQLiteRepository(deps.sqliteStore.DB()),
-			nil, // RealClock default
+			nil, // clock.System default (production)
 			artifacts.DefaultReconcilerConfig(),
 		)
 		if recErr != nil {
