@@ -1,4 +1,4 @@
-package ansible
+package app
 
 import (
 	"log"
@@ -12,8 +12,8 @@ import (
 	"velox-server/internal/store"
 )
 
-// Module provides Ansible deployment endpoints.
-type Module struct {
+// AnsibleModule provides Ansible deployment endpoints.
+type AnsibleModule struct {
 	cfg       *config.Config
 	dataDir   string
 	adminAuth gin.HandlerFunc
@@ -22,7 +22,7 @@ type Module struct {
 	store     *store.SQLiteStore
 }
 
-func New(cfg *config.Config, dataDir string, adminAuth gin.HandlerFunc, sqliteStore *store.SQLiteStore) *Module {
+func NewAnsibleModule(cfg *config.Config, dataDir string, adminAuth gin.HandlerFunc, sqliteStore *store.SQLiteStore) *AnsibleModule {
 	masterURL := cfg.Workers.MasterURL
 	if strings.TrimSpace(masterURL) == "" {
 		masterURL = config.GetAnsibleMasterURL()
@@ -30,7 +30,7 @@ func New(cfg *config.Config, dataDir string, adminAuth gin.HandlerFunc, sqliteSt
 	if strings.TrimSpace(masterURL) == "" {
 		masterURL = remoteansible.DetectLocalMasterURL()
 	}
-	return &Module{
+	return &AnsibleModule{
 		cfg:       cfg,
 		dataDir:   dataDir,
 		adminAuth: adminAuth,
@@ -39,15 +39,15 @@ func New(cfg *config.Config, dataDir string, adminAuth gin.HandlerFunc, sqliteSt
 	}
 }
 
-func (m *Module) Name() string {
+func (m *AnsibleModule) Name() string {
 	return "ansible"
 }
 
-func (m *Module) Handlers() *remoteansible.AnsibleHandlers {
+func (m *AnsibleModule) Handlers() *remoteansible.AnsibleHandlers {
 	return m.handlers
 }
 
-func (m *Module) RegisterRoutes(r *gin.Engine) {
+func (m *AnsibleModule) RegisterRoutes(r *gin.Engine) {
 	if err := os.MkdirAll(m.cfg.Ansible.PlaybookDir, 0755); err != nil {
 		log.Printf("[ANSIBLE] Cannot create playbook dir %s: %v", m.cfg.Ansible.PlaybookDir, err)
 		return

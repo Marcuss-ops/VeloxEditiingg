@@ -12,7 +12,7 @@ import (
 // h.codeVersion; control.go: RestartWorkerHandler/RevokeWorkerHandler/
 // DrainWorkerHandler/GetWorkerDetailsHandler/CleanupStaleWorkersHandler/
 // ListRevokedWorkersHandler — h.cmdMgr, h.reg, h.tokenMgr) and by router.go
-// + internal/modules/workers via the GetTokenManager getter.
+// + internal/app.WorkersModule via the GetTokenManager getter.
 //
 // Phase 5 hygiene pass (dead references after Phase 4.4 UpdateManager removal):
 //   - field `store`        — never read (was set from dbStore only to be passed
@@ -44,7 +44,7 @@ func NewHandler(cfg *config.Config, reg *workersreg.Registry, dbStore *store.SQL
 
 // GetTokenManager returns the token manager used by the HTTP-based worker
 // auth middleware. Do NOT remove without also fixing router.go and
-// internal/modules/workers — both access it directly.
+// internal/app.WorkersModule — both access it directly.
 func (h *Handler) GetTokenManager() *workersreg.TokenManager {
 	return h.tokenMgr
 }

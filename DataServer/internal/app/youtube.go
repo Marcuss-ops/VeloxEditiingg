@@ -1,4 +1,4 @@
-package youtube
+package app
 
 import (
 	"log"
@@ -10,8 +10,8 @@ import (
 	"velox-server/internal/store"
 )
 
-// Module provides YouTube integration endpoints.
-type Module struct {
+// YouTubeModule provides YouTube integration endpoints.
+type YouTubeModule struct {
 	cfg            *config.Config
 	dataDir        string
 	sqliteStore    *store.SQLiteStore
@@ -21,31 +21,32 @@ type Module struct {
 	manager        *ytHandlers.YouTubeManager
 }
 
-func New(cfg *config.Config, dataDir string, sqliteStore *store.SQLiteStore) *Module {
-	return &Module{
+// NewYouTubeModule creates a new YouTube module.
+func NewYouTubeModule(cfg *config.Config, dataDir string, sqliteStore *store.SQLiteStore) *YouTubeModule {
+	return &YouTubeModule{
 		cfg:         cfg,
 		dataDir:     dataDir,
 		sqliteStore: sqliteStore,
 	}
 }
 
-func (m *Module) Name() string {
+func (m *YouTubeModule) Name() string {
 	return "youtube"
 }
 
-func (m *Module) Handlers() *ytHandlers.YouTubeHandlers {
+func (m *YouTubeModule) Handlers() *ytHandlers.YouTubeHandlers {
 	return m.handlers
 }
 
-func (m *Module) Manager() *ytHandlers.YouTubeManager {
+func (m *YouTubeModule) Manager() *ytHandlers.YouTubeManager {
 	return m.manager
 }
 
-func (m *Module) Service() *integrationsYoutube.Service {
+func (m *YouTubeModule) Service() *integrationsYoutube.Service {
 	return m.youtubeService
 }
 
-func (m *Module) RegisterRoutes(r *gin.Engine) {
+func (m *YouTubeModule) RegisterRoutes(r *gin.Engine) {
 	youtubeService, err := integrationsYoutube.NewService(&integrationsYoutube.ServiceConfig{
 		TokensDir:          m.cfg.YouTube.TokensDir,
 		YoutubePostingPath: m.cfg.YouTube.PostingPath,
