@@ -4,15 +4,14 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
-	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 
 	"velox-server/internal/store"
 )
 
-// NewSQLiteJobRepositoryFactory returns a fresh SQLite-backed JobRepository.
-func NewSQLiteJobRepositoryFactory(t *testing.T) (store.JobRepository, func()) {
+// NewSQLiteJobRepositoryFactory returns a fresh SQLite-backed *SQLiteJobRepository.
+func NewSQLiteJobRepositoryFactory(t *testing.T) (*store.SQLiteJobRepository, func()) {
 	t.Helper()
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "contract_jobs.db")
@@ -27,7 +26,7 @@ func NewSQLiteJobRepositoryFactory(t *testing.T) (store.JobRepository, func()) {
 // pendingJobID returns the JobID of the most recently-created PENDING job, or
 // t.Fatal if there isn't one. Centralised so each test doesn't reinvent the
 // ListByStatus-then-pick logic.
-func pendingJobID(t *testing.T, repo store.JobRepository, ctx context.Context) string {
+func pendingJobID(t *testing.T, repo *store.SQLiteJobRepository, ctx context.Context) string {
 	t.Helper()
 	pending, err := repo.ListByStatus(ctx, []store.JobStatus{store.JobStatusPending}, 1)
 	if err != nil {
@@ -41,7 +40,7 @@ func pendingJobID(t *testing.T, repo store.JobRepository, ctx context.Context) s
 
 // JobRepositoryContract runs the cross-backend test suite for jobs.
 // Spec §5: identical behaviour across SQLite (today) and Postgres (PR-2b).
-func JobRepositoryContract(t *testing.T, factory func(t *testing.T) (store.JobRepository, func())) {
+func JobRepositoryContract(t *testing.T, factory func(t *testing.T) (*store.SQLiteJobRepository, func())) {
 	t.Run("CreateJob then GetJob round-trip", func(t *testing.T) {
 		repo, cleanup := factory(t)
 		defer cleanup()
@@ -87,10 +86,7 @@ func JobRepositoryContract(t *testing.T, factory func(t *testing.T) (store.JobRe
 	t.Run("ClaimNext returns ErrNoClaimableJob on empty queue", func(t *testing.T) {
 		repo, cleanup := factory(t)
 		defer cleanup()
-		got, err := repo.ClaimNext(context.Background(), store.ClaimParams{
-			WorkerID: "worker-1",
-			Now:      time.Now().UTC(),
-		})
+		got, err := repo.ClaimNext(context.Background(), "worker-1", nil)
 		if err == nil {
 			t.Fatalf("expected ErrNoClaimableJob on empty queue, got %+v", got)
 		}
@@ -109,10 +105,7 @@ func JobRepositoryContract(t *testing.T, factory func(t *testing.T) (store.JobRe
 		}); err != nil {
 			t.Fatalf("CreateJob: %v", err)
 		}
-		got, err := repo.ClaimNext(ctx, store.ClaimParams{
-			WorkerID: "worker-1",
-			Now:      time.Now().UTC(),
-		})
+		got, err := repo.ClaimNext(ctx, "worker-1", nil)
 		if err != nil || got == nil {
 			t.Fatalf("ClaimNext: %v %v", got, err)
 		}

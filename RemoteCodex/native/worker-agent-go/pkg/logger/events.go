@@ -1,12 +1,20 @@
-// Package logger: structured event emission for the Velox worker agent.
+// Package logger: structured event emission + rate limiting for the
+// Velox worker agent.
 //
 // The generic event and rate-limiter primitives live in pkg/obs (a
-// reusable, domain-agnostic package). This file only declares the
-// Worker-domain EventCode constants. Code that wants to emit events calls
-// obs.NewEvent(...).WithField(...) directly.
+// reusable, domain-agnostic package). This file only re-exports them so
+// older callers can keep using `logger.NewEvent`, `logger.RateLimiter`,
+// etc., without importing pkg/obs directly. It also declares the
+// worker-domain EventCode constants used across the worker agent.
+//
+// Worker-domain emission helpers (LogStartup, LogJobCompleted, …) live in
+// events_helpers.go. Generic transport-layer EventCode constants belong in
+// pkg/obs/event.go.
 package logger
 
 import "velox-worker-agent/pkg/obs"
+
+// ── Event re-exports ───────────────────────────────────────────────────────
 
 // EventCode is the worker-domain typed event identifier. The alias keeps a
 // stable reference for callers that previously used logger.EventCode.
@@ -23,6 +31,26 @@ type Event = obs.Event
 func NewEvent(code EventCode) *Event {
 	return obs.NewEvent(code)
 }
+
+// ── RateLimiter re-exports ─────────────────────────────────────────────────
+
+// RateLimiter is an alias for obs.RateLimiter. The struct, milestones, and
+// Reset logic live in pkg/obs so other Velox components can share the same
+// primitives.
+type RateLimiter = obs.RateLimiter
+
+// globalRateLimiter is the package-wide rate limiter shared by all worker
+// log helpers. It is intentionally a single instance to prevent the
+// milestone counters from fragmenting across handlers.
+var globalRateLimiter = obs.GlobalRateLimiter()
+
+// GlobalRateLimiter exposes the shared rate limiter. New callers wanting
+// isolated counters should construct a dedicated limiter via obs.NewRateLimiter.
+func GlobalRateLimiter() *RateLimiter {
+	return obs.GlobalRateLimiter()
+}
+
+// ── Worker-domain EventCode constants ──────────────────────────────────────
 
 // EventCode constants. These describe Velox worker-agent specific events.
 // Generic cross-component codes (e.g. master/worker agnostic transports)

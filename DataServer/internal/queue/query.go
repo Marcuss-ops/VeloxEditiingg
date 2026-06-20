@@ -1,13 +1,8 @@
 // Package queue provides job queue management with SQLite persistence.
-//
-// PR15.2 (Ondata 4 Strategy B completion): QueryService is now a THIN
-// shim over the canonical jobs.Reader + jobs/view.go free functions.
-// All previously-duplicated helpers (parsePayloadJSON, domainJobToQueueJob,
-// the inner listJobs conversion loop) have been deleted. The wire shape
-// produced for HTTP/JSON consumers is preserved verbatim by jobs.ToQueueItem,
-// jobs.ToPayloadMap, jobs.ToFlatMap, jobs.FormatStats.
-//
-// Write / mutation operations continue to live on LifecycleService.
+// QueryService (Batch 3) is reduced to a thin wrapper over the canonical
+// jobs.Reader: the legacy map-based eventStore surface has been dropped, and
+// the four methods that depended on it (GetNextJobID, DeleteJob,
+// UpdateJobLogs, CleanupOldJobs) have been deleted outright.
 package queue
 
 import (
@@ -18,10 +13,8 @@ import (
 )
 
 // QueryService provides read-only access to job data via the canonical
-// jobs.Reader surface. PR15.2: it is a thin shim that delegates every
-// method to jobs.Reader + jobs/view.go free functions. Earlier duplicate
-// implementations of parsePayloadJSON / domainJobToQueueJob have been
-// removed — the canonical helpers in jobs/view.go are the single source.
+// jobs.Reader interface. All eventStore-coupled reads have been dropped
+// (Batch 3). Write/mutation operations live on LifecycleService.
 type QueryService struct {
 	reader jobs.Reader
 }
@@ -46,44 +39,87 @@ func (q *QueryService) GetJob(ctx context.Context, jobID string) (*Job, error) {
 
 // GetJobPayload returns the job payload with enriched fields.
 func (q *QueryService) GetJobPayload(ctx context.Context, jobID string) (map[string]interface{}, error) {
-	j, err := q.reader.Get(ctx, jobID)
+	job, err := q.GetJob(ctx, jobID)
 	if err != nil {
 		return nil, err
 	}
-	if j == nil {
-		return nil, fmt.Errorf("job not found: %s", jobID)
+	payload := make(map[string]interface{})
+	if job.Payload != nil {
+		for k, v := range job.Payload {
+			payload[k] = v
+		}
 	}
-	return jobs.ToPayloadMap(j), nil
+	payload["job_id"] = job.JobID
+	payload["job_run_id"] = job.RunID
+	payload["run_id"] = job.RunID
+	payload["status"] = string(job.Status)
+	payload["video_name"] = job.VideoName
+	payload["project_id"] = job.ProjectID
+	if job.LeaseID != "" {
+		payload["lease_id"] = job.LeaseID
+	}
+	if job.LeaseExpiry != nil {
+		payload["lease_expiry"] = job.LeaseExpiry
+	}
+	return payload, nil
 }
 
 // GetJobAttempt returns the current retry count.
 func (q *QueryService) GetJobAttempt(ctx context.Context, jobID string) (int, error) {
-	j, err := q.reader.Get(ctx, jobID)
+	job, err := q.GetJob(ctx, jobID)
 	if err != nil {
 		return 0, err
 	}
-	if j == nil {
-		return 0, fmt.Errorf("job not found: %s", jobID)
-	}
-	return j.Attempts, nil
+	return job.RetryCount, nil
 }
 
-// GetJobAsMap returns a job as a flattened map for flexible field access.
+// GetJobAsMap returns a job as a map for flexible field access.
 func (q *QueryService) GetJobAsMap(ctx context.Context, jobID string) (map[string]interface{}, error) {
-	j, err := q.reader.Get(ctx, jobID)
+	job, err := q.GetJob(ctx, jobID)
 	if err != nil {
 		return nil, err
 	}
-	if j == nil {
-		return nil, fmt.Errorf("job not found: %s", jobID)
+	result := make(map[string]interface{})
+	result["job_id"] = job.JobID
+	result["status"] = string(job.Status)
+	result["video_name"] = job.VideoName
+	result["project_id"] = job.ProjectID
+	result["created_at"] = job.CreatedAt
+	result["updated_at"] = job.UpdatedAt
+	result["started_at"] = job.StartedAt
+	result["completed_at"] = job.CompletedAt
+	result["assigned_to"] = job.AssignedTo
+	result["claimed_by"] = job.ClaimedBy
+	result["claimed_at"] = job.ClaimedAt
+	result["lease_id"] = job.LeaseID
+	result["lease_expiry"] = job.LeaseExpiry
+	result["worker_name"] = job.WorkerName
+	result["retry_count"] = job.RetryCount
+	result["attempt"] = job.Attempt
+	result["max_retries"] = job.MaxRetries
+	result["last_error"] = job.LastError
+	result["error_message"] = job.ErrorMessage
+	result["run_id"] = job.RunID
+	result["job_run_id"] = job.RunID
+	if len(job.Logs) > 0 {
+		result["logs"] = job.Logs
 	}
-	return jobs.ToFlatMap(j), nil
+	if len(job.History) > 0 {
+		result["history"] = job.History
+	}
+	if job.Payload != nil {
+		for k, v := range job.Payload {
+			if _, exists := result[k]; !exists {
+				result[k] = v
+			}
+		}
+	}
+	return result, nil
 }
 
-// listJobs is a small helper that projects a slice of domain Job into
-// transport QueueItem. Kept inlined here because the four status-specific
-// list methods (GetPendingJobs / GetRunningJobs / GetAllJobs /
-// GetJobsByStatus) all need it; the canonical filter lives on jobs.Reader.
+// listJobs calls the canonical jobs.Reader.List with the converted filter.
+// statuses is a slice of canonical jobs.Status names. Empty slice means
+// "no filter" (return all jobs).
 func (q *QueryService) listJobs(ctx context.Context, statuses []jobs.Status) ([]*Job, error) {
 	domainJobs, err := q.reader.List(ctx, jobs.Filter{Statuses: statuses, Limit: 1000})
 	if err != nil {
@@ -96,33 +132,38 @@ func (q *QueryService) listJobs(ctx context.Context, statuses []jobs.Status) ([]
 	return result, nil
 }
 
-// GetJobsByStatus returns all jobs with a given status.
+// GetJobsByStatus returns all jobs with a given status via the canonical reader.
 func (q *QueryService) GetJobsByStatus(ctx context.Context, status JobStatus) ([]*Job, error) {
 	return q.listJobs(ctx, []jobs.Status{jobs.Status(status)})
 }
 
-// GetPendingJobs returns all pending jobs.
+// GetPendingJobs returns all pending jobs via the canonical reader.
 func (q *QueryService) GetPendingJobs(ctx context.Context) ([]*Job, error) {
 	return q.listJobs(ctx, []jobs.Status{StatusPending})
 }
 
-// GetRunningJobs returns all running jobs.
+// GetRunningJobs returns all running jobs via the canonical reader.
 func (q *QueryService) GetRunningJobs(ctx context.Context) ([]*Job, error) {
 	return q.listJobs(ctx, []jobs.Status{StatusRunning})
 }
 
-// GetAllJobs returns all jobs (no status filter).
+// GetAllJobs returns all jobs (no status filter) via the canonical reader.
 func (q *QueryService) GetAllJobs(ctx context.Context) ([]*Job, error) {
 	return q.listJobs(ctx, nil)
 }
 
-// Stats returns aggregate job counts grouped by status.
-// The returned map's keys are canonical jobs.Status string
-// representations (matches pre-Batch-3 wire format produced earlier).
+// Stats returns aggregate job counts grouped by status. The returned map's
+// keys are canonical jobs.Status string representations, matching the
+// pre-Batch-3 (string-keyed) shape so HTTP/JSON consumers continue to work
+// without breaking changes.
 func (q *QueryService) Stats(ctx context.Context) (map[string]int64, error) {
 	counts, err := q.reader.Counts(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return jobs.FormatStats(counts), nil
+	res := make(map[string]int64, len(counts))
+	for k, v := range counts {
+		res[string(k)] = v
+	}
+	return res, nil
 }

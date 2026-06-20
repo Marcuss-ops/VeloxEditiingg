@@ -6,32 +6,13 @@
 // narrow and forces every call site to declare its CAS assumptions up-front,
 // rather than re-reading the job row in the service layer.
 //
-// Naming mirrors the spec: CreateJobCommand, ClaimCommand, StartCommand,
-// RenewLeaseCommand, RecordRenderFinishedCommand, FailCommand, RetryCommand,
-// CancelCommand, MarkSucceededCommand (the artifact-private port).
+// Naming mirrors the spec: StartCommand, RenewLeaseCommand,
+// RecordRenderFinishedCommand, FailCommand, CancelCommand.
 package store
 
 import "time"
 
-// CreateJobCommand seeds a new job in PENDING state. JobID may be empty;
-// the repository assigns one in that case (UUID for SQLite).
-type CreateJobCommand struct {
-	JobID      string                 `json:"job_id,omitempty"`
-	Payload    map[string]interface{} `json:"payload"`
-	VideoName  string                 `json:"video_name,omitempty"`
-	ProjectID  string                 `json:"project_id,omitempty"`
-	RunID      string                 `json:"run_id,omitempty"`
-	MaxRetries int                    `json:"max_retries"`
-}
-
-// ClaimCommand captures the worker identity used to claim the next
-// PENDING job. Now is mandatory so the repository can stamp the lease
-// deterministically (callers in tests pass a MockClock value).
-type ClaimCommand struct {
-	WorkerID        string
-	AllowedJobTypes []string
-	Now             time.Time
-}
+// ── Command types used by PR3 transactional repository methods ─────────
 
 // StartCommand captures the LEASED → RUNNING transition's full CAS tuple.
 // Failure on any field raises ErrTransitionConflict so handlers can refuse
@@ -81,20 +62,6 @@ type FailCommand struct {
 	ErrorCode        string
 	ErrorMessage     string
 	Retryable        bool
-	Now              time.Time
-}
-
-// RetryCommand is the explicit ScheduleRetry path — equivalent to FailCommand
-// with Retryable=true forced. Kept as a separate method so the repository
-// can emit a JOB_RETRY_SCHEDULED outbox event instead of JOB_FAILED.
-type RetryCommand struct {
-	JobID            string
-	WorkerID         string
-	LeaseID          string
-	AttemptNumber    int
-	ExpectedRevision int
-	ErrorCode        string
-	ErrorMessage     string
 	Now              time.Time
 }
 

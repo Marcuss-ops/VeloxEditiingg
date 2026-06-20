@@ -263,7 +263,7 @@ func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMasterEnvelo
 		// so the job doesn't stay leased until lease expiry.
 		sess.claimMu.Lock()
 		if sess.pendingOffer != nil {
-			if releaseErr := h.lifecycleSvc.Repo().ReleaseClaim(context.Background(), sess.pendingOffer.JobID); releaseErr != nil {
+			if releaseErr := h.lifecycleSvc.Jobs().ReleaseLease(context.Background(), sess.pendingOffer.JobID); releaseErr != nil {
 				log.Printf("[GRPC] Failed to release pendingOffer for job %s on session teardown: %v", sess.pendingOffer.JobID, releaseErr)
 			}
 			sess.pendingOffer = nil
@@ -373,7 +373,7 @@ func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMasterEnvelo
 			// Gap #2 fix: release pendingOffer so the job doesn't stay leased.
 			sess.claimMu.Lock()
 			if sess.pendingOffer != nil {
-				if releaseErr := h.lifecycleSvc.Repo().ReleaseClaim(context.Background(), sess.pendingOffer.JobID); releaseErr != nil {
+				if releaseErr := h.lifecycleSvc.Jobs().ReleaseLease(context.Background(), sess.pendingOffer.JobID); releaseErr != nil {
 					log.Printf("[GRPC] Failed to release pendingOffer for job %s on writer failure: %v", sess.pendingOffer.JobID, releaseErr)
 				}
 				sess.pendingOffer = nil
@@ -614,7 +614,7 @@ func (h *Handler) closeOldSessionLocked(workerID string) {
 		// when the old defer eventually runs.
 		oldSess.claimMu.Lock()
 		if oldSess.pendingOffer != nil {
-			if releaseErr := h.lifecycleSvc.Repo().ReleaseClaim(context.Background(), oldSess.pendingOffer.JobID); releaseErr != nil {
+			if releaseErr := h.lifecycleSvc.Jobs().ReleaseLease(context.Background(), oldSess.pendingOffer.JobID); releaseErr != nil {
 				log.Printf("[GRPC] Failed to release old pendingOffer for job %s during reconnect: %v", oldSess.pendingOffer.JobID, releaseErr)
 			}
 			oldSess.pendingOffer = nil
