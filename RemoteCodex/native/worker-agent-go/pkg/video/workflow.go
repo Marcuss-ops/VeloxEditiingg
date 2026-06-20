@@ -14,9 +14,9 @@ import (
 
 // VideoGenerationWorkflow orchestrates the complete video generation process.
 type VideoGenerationWorkflow struct {
-	config          *config.WorkerConfig
-	logger          *logger.Logger
-	tempFiles       []string
+	config           *config.WorkerConfig
+	logger           *logger.Logger
+	tempFiles        []string
 	progressCallback func(percent, scene, total int, stage string)
 }
 

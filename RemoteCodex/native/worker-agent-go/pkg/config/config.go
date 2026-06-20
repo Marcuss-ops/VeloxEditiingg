@@ -25,9 +25,9 @@ type WorkerConfig struct {
 	EngineVersion   string `json:"engine_version,omitempty"`
 
 	// Worker policy
-	MaxActiveJobs  int `json:"max_active_jobs"`  // Maximum concurrent active jobs (default: 1)
-	PrometheusPort int `json:"prometheus_port"`  // Prometheus metrics port (default: 9090, 0=disabled)
-	HealthPort     int `json:"health_port"`      // Health HTTP port (default: 8081, 0=disabled)
+	MaxActiveJobs  int `json:"max_active_jobs"` // Maximum concurrent active jobs (default: 1)
+	PrometheusPort int `json:"prometheus_port"` // Prometheus metrics port (default: 9090, 0=disabled)
+	HealthPort     int `json:"health_port"`     // Health HTTP port (default: 8081, 0=disabled)
 
 	// ControlGRPCURL is the gRPC endpoint for the worker control stream.
 	// Example: "master.example.com:8443"
@@ -130,16 +130,16 @@ func DefaultConfig(workDir string) *WorkerConfig {
 	}
 
 	return &WorkerConfig{
-		MasterURL:               "http://localhost:8000",
-		WorkerID:                GenerateWorkerID(),
-		WorkerName:              "velox-worker",
-		WorkDir:                 workDir,
-		LogLevel:                "info",
-		BundleVersion:           "",
-		ProtocolVersion:         "2026-06-worker-v1",
-		MaxActiveJobs:           1,    // 1 main job per VPS
-		HealthPort:              8081, // Health HTTP endpoint for Docker HEALTHCHECK
-		WorkerSecret:            "",   // Set via VELOX_WORKER_SECRET env var
+		MasterURL:       "http://localhost:8000",
+		WorkerID:        GenerateWorkerID(),
+		WorkerName:      "velox-worker",
+		WorkDir:         workDir,
+		LogLevel:        "info",
+		BundleVersion:   "",
+		ProtocolVersion: "2026-06-worker-v1",
+		MaxActiveJobs:   1,    // 1 main job per VPS
+		HealthPort:      8081, // Health HTTP endpoint for Docker HEALTHCHECK
+		WorkerSecret:    "",   // Set via VELOX_WORKER_SECRET env var
 	}
 }
 

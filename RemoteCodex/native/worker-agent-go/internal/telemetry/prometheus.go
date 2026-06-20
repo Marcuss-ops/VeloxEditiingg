@@ -96,18 +96,36 @@ func NewPrometheusMetrics() *PrometheusMetrics {
 }
 
 // Recording methods
-func (m *PrometheusMetrics) RecordJobQueueWait(jobType string, durationMs float64)          { m.jobQueueWaitMs.observe(jobType, durationMs) }
-func (m *PrometheusMetrics) RecordJobDispatch(jobType string, durationMs float64)            { m.jobDispatchMs.observe(jobType, durationMs) }
-func (m *PrometheusMetrics) RecordJobRuntime(jobType string, durationMs float64)             { m.jobRuntimeMs.observe(jobType, durationMs) }
-func (m *PrometheusMetrics) RecordJobCompleteAck(jobType string, durationMs float64)         { m.jobCompleteAckMs.observe(jobType, durationMs) }
-func (m *PrometheusMetrics) RecordIdempotencyConflict(reason string)                         { m.jobIdempotencyConflicts.inc(reason) }
-func (m *PrometheusMetrics) RecordJobRetry(jobType string, count float64)                    { m.jobRetryCount.observe(jobType, count) }
-func (m *PrometheusMetrics) RecordAssetCacheHit(assetType string)                            { m.assetCacheHit.inc(assetType) }
-func (m *PrometheusMetrics) RecordAssetCacheMiss(assetType string)                           { m.assetCacheMiss.inc(assetType) }
-func (m *PrometheusMetrics) SetWorkerActiveJobs(workerID string, count float64)              { m.workerActiveJobs.set(workerID, count) }
-func (m *PrometheusMetrics) SetWorkerStatus(workerID string, status float64)                 { m.workerStatus.set(workerID, status) }
-func (m *PrometheusMetrics) RecordFallback(reason string)                                    { m.fallbackCount.inc(reason) }
-func (m *PrometheusMetrics) RecordPythonEmergencyPath(reason string)                         { m.pythonEmergencyPath.inc(reason) }
+func (m *PrometheusMetrics) RecordJobQueueWait(jobType string, durationMs float64) {
+	m.jobQueueWaitMs.observe(jobType, durationMs)
+}
+func (m *PrometheusMetrics) RecordJobDispatch(jobType string, durationMs float64) {
+	m.jobDispatchMs.observe(jobType, durationMs)
+}
+func (m *PrometheusMetrics) RecordJobRuntime(jobType string, durationMs float64) {
+	m.jobRuntimeMs.observe(jobType, durationMs)
+}
+func (m *PrometheusMetrics) RecordJobCompleteAck(jobType string, durationMs float64) {
+	m.jobCompleteAckMs.observe(jobType, durationMs)
+}
+func (m *PrometheusMetrics) RecordIdempotencyConflict(reason string) {
+	m.jobIdempotencyConflicts.inc(reason)
+}
+func (m *PrometheusMetrics) RecordJobRetry(jobType string, count float64) {
+	m.jobRetryCount.observe(jobType, count)
+}
+func (m *PrometheusMetrics) RecordAssetCacheHit(assetType string)  { m.assetCacheHit.inc(assetType) }
+func (m *PrometheusMetrics) RecordAssetCacheMiss(assetType string) { m.assetCacheMiss.inc(assetType) }
+func (m *PrometheusMetrics) SetWorkerActiveJobs(workerID string, count float64) {
+	m.workerActiveJobs.set(workerID, count)
+}
+func (m *PrometheusMetrics) SetWorkerStatus(workerID string, status float64) {
+	m.workerStatus.set(workerID, status)
+}
+func (m *PrometheusMetrics) RecordFallback(reason string) { m.fallbackCount.inc(reason) }
+func (m *PrometheusMetrics) RecordPythonEmergencyPath(reason string) {
+	m.pythonEmergencyPath.inc(reason)
+}
 
 func (m *PrometheusMetrics) RecordJobResume(success bool) {
 	m.jobResumeTotal.inc("total")
@@ -117,17 +135,21 @@ func (m *PrometheusMetrics) RecordJobResume(success bool) {
 }
 
 // Query methods
-func (m *PrometheusMetrics) GetFallbackCount() float64                { return m.fallbackCount.total() }
-func (m *PrometheusMetrics) GetPythonEmergencyPathCount() float64     { return m.pythonEmergencyPath.total() }
-func (m *PrometheusMetrics) GetJobQueueWaitP50() float64              { return m.jobQueueWaitMs.percentile(0.5) }
-func (m *PrometheusMetrics) GetJobQueueWaitP95() float64              { return m.jobQueueWaitMs.percentile(0.95) }
-func (m *PrometheusMetrics) GetJobDispatchP50() float64               { return m.jobDispatchMs.percentile(0.5) }
-func (m *PrometheusMetrics) GetJobDispatchP95() float64               { return m.jobDispatchMs.percentile(0.95) }
-func (m *PrometheusMetrics) GetJobRuntimeP50() float64                { return m.jobRuntimeMs.percentile(0.5) }
-func (m *PrometheusMetrics) GetJobRuntimeP95() float64                { return m.jobRuntimeMs.percentile(0.95) }
-func (m *PrometheusMetrics) GetJobCompleteAckP50() float64            { return m.jobCompleteAckMs.percentile(0.5) }
-func (m *PrometheusMetrics) GetJobCompleteAckP95() float64            { return m.jobCompleteAckMs.percentile(0.95) }
-func (m *PrometheusMetrics) GetJobRetryAvg() float64                  { return m.jobRetryCount.average() }
+func (m *PrometheusMetrics) GetFallbackCount() float64 { return m.fallbackCount.total() }
+func (m *PrometheusMetrics) GetPythonEmergencyPathCount() float64 {
+	return m.pythonEmergencyPath.total()
+}
+func (m *PrometheusMetrics) GetJobQueueWaitP50() float64   { return m.jobQueueWaitMs.percentile(0.5) }
+func (m *PrometheusMetrics) GetJobQueueWaitP95() float64   { return m.jobQueueWaitMs.percentile(0.95) }
+func (m *PrometheusMetrics) GetJobDispatchP50() float64    { return m.jobDispatchMs.percentile(0.5) }
+func (m *PrometheusMetrics) GetJobDispatchP95() float64    { return m.jobDispatchMs.percentile(0.95) }
+func (m *PrometheusMetrics) GetJobRuntimeP50() float64     { return m.jobRuntimeMs.percentile(0.5) }
+func (m *PrometheusMetrics) GetJobRuntimeP95() float64     { return m.jobRuntimeMs.percentile(0.95) }
+func (m *PrometheusMetrics) GetJobCompleteAckP50() float64 { return m.jobCompleteAckMs.percentile(0.5) }
+func (m *PrometheusMetrics) GetJobCompleteAckP95() float64 {
+	return m.jobCompleteAckMs.percentile(0.95)
+}
+func (m *PrometheusMetrics) GetJobRetryAvg() float64 { return m.jobRetryCount.average() }
 
 func (m *PrometheusMetrics) GetJobResumeSuccessRate() float64 {
 	total := m.jobResumeTotal.get("total")
@@ -196,38 +218,38 @@ func StartPrometheusServer(port int) error {
 
 // KPIReport contains the KPI metrics for reporting.
 type KPIReport struct {
-	JobQueueWaitP50             float64 `json:"job_queue_wait_ms_p50"`
-	JobQueueWaitP95             float64 `json:"job_queue_wait_ms_p95"`
-	JobDispatchP50              float64 `json:"job_dispatch_ms_p50"`
-	JobDispatchP95              float64 `json:"job_dispatch_ms_p95"`
-	JobRuntimeP50               float64 `json:"job_runtime_ms_p50"`
-	JobRuntimeP95               float64 `json:"job_runtime_ms_p95"`
-	JobCompleteAckP50           float64 `json:"job_complete_ack_ms_p50"`
-	JobCompleteAckP95           float64 `json:"job_complete_ack_ms_p95"`
-	JobIdempotencyConflicts     int64   `json:"job_idempotency_conflicts_total"`
-	JobRetryAvg                 float64 `json:"job_retry_count_avg"`
-	JobResumeSuccessRate        float64 `json:"job_resume_success_rate"`
-	AssetCacheHitRate           float64 `json:"asset_cache_hit_rate"`
-	FallbackCount               float64 `json:"fallback_count_total"`
-	Timestamp                   string  `json:"timestamp"`
+	JobQueueWaitP50         float64 `json:"job_queue_wait_ms_p50"`
+	JobQueueWaitP95         float64 `json:"job_queue_wait_ms_p95"`
+	JobDispatchP50          float64 `json:"job_dispatch_ms_p50"`
+	JobDispatchP95          float64 `json:"job_dispatch_ms_p95"`
+	JobRuntimeP50           float64 `json:"job_runtime_ms_p50"`
+	JobRuntimeP95           float64 `json:"job_runtime_ms_p95"`
+	JobCompleteAckP50       float64 `json:"job_complete_ack_ms_p50"`
+	JobCompleteAckP95       float64 `json:"job_complete_ack_ms_p95"`
+	JobIdempotencyConflicts int64   `json:"job_idempotency_conflicts_total"`
+	JobRetryAvg             float64 `json:"job_retry_count_avg"`
+	JobResumeSuccessRate    float64 `json:"job_resume_success_rate"`
+	AssetCacheHitRate       float64 `json:"asset_cache_hit_rate"`
+	FallbackCount           float64 `json:"fallback_count_total"`
+	Timestamp               string  `json:"timestamp"`
 }
 
 // GetKPIReport returns a KPI report.
 func (m *PrometheusMetrics) GetKPIReport() *KPIReport {
 	return &KPIReport{
-		JobQueueWaitP50:             m.GetJobQueueWaitP50(),
-		JobQueueWaitP95:             m.GetJobQueueWaitP95(),
-		JobDispatchP50:              m.GetJobDispatchP50(),
-		JobDispatchP95:              m.GetJobDispatchP95(),
-		JobRuntimeP50:               m.GetJobRuntimeP50(),
-		JobRuntimeP95:               m.GetJobRuntimeP95(),
-		JobCompleteAckP50:           m.GetJobCompleteAckP50(),
-		JobCompleteAckP95:           m.GetJobCompleteAckP95(),
-		JobIdempotencyConflicts:     int64(m.jobIdempotencyConflicts.total()),
-		JobRetryAvg:                 m.GetJobRetryAvg(),
-		JobResumeSuccessRate:        m.GetJobResumeSuccessRate(),
-		AssetCacheHitRate:           m.GetAssetCacheHitRate(),
-		FallbackCount:               m.GetFallbackCount(),
-		Timestamp:                   time.Now().UTC().Format(time.RFC3339),
+		JobQueueWaitP50:         m.GetJobQueueWaitP50(),
+		JobQueueWaitP95:         m.GetJobQueueWaitP95(),
+		JobDispatchP50:          m.GetJobDispatchP50(),
+		JobDispatchP95:          m.GetJobDispatchP95(),
+		JobRuntimeP50:           m.GetJobRuntimeP50(),
+		JobRuntimeP95:           m.GetJobRuntimeP95(),
+		JobCompleteAckP50:       m.GetJobCompleteAckP50(),
+		JobCompleteAckP95:       m.GetJobCompleteAckP95(),
+		JobIdempotencyConflicts: int64(m.jobIdempotencyConflicts.total()),
+		JobRetryAvg:             m.GetJobRetryAvg(),
+		JobResumeSuccessRate:    m.GetJobResumeSuccessRate(),
+		AssetCacheHitRate:       m.GetAssetCacheHitRate(),
+		FallbackCount:           m.GetFallbackCount(),
+		Timestamp:               time.Now().UTC().Format(time.RFC3339),
 	}
 }

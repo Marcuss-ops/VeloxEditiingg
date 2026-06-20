@@ -152,10 +152,10 @@ func TestValidateRenderPlan_Valid_StockClips(t *testing.T) {
 // TestValidateRenderPlan_HealthCheck tests that health_check jobs don't require clips/voiceover
 func TestValidateRenderPlan_HealthCheck(t *testing.T) {
 	plan := &RenderPlan{
-		Version:   "v1",
-		JobID:     "job-123",
-		JobType:   "health_check",
-		CreatedAt: time.Now().UTC().Format(time.RFC3339),
+		Version:    "v1",
+		JobID:      "job-123",
+		JobType:    "health_check",
+		CreatedAt:  time.Now().UTC().Format(time.RFC3339),
 		Parameters: map[string]interface{}{},
 	}
 

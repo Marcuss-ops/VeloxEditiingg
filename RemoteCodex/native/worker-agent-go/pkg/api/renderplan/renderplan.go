@@ -31,18 +31,42 @@ func (rp *RenderPlan) ToMap() map[string]interface{} {
 	m := map[string]interface{}{
 		"version": rp.Version, "job_id": rp.JobID, "job_type": rp.JobType, "created_at": rp.CreatedAt,
 	}
-	if rp.JobRunID != "" { m["job_run_id"] = rp.JobRunID }
-	if rp.JobName != "" { m["job_name"] = rp.JobName }
-	if rp.Priority != 0 { m["priority"] = rp.Priority }
-	if rp.MaxRetries != 0 { m["max_retries"] = rp.MaxRetries }
-	if rp.TimeoutSecs != 0 { m["timeout_secs"] = rp.TimeoutSecs }
-	if rp.AssignedWorker != "" { m["assigned_worker"] = rp.AssignedWorker }
-	if rp.WorkerGroup != "" { m["worker_group"] = rp.WorkerGroup }
-	if rp.ParentJob != "" { m["parent_job"] = rp.ParentJob }
-	if len(rp.Parameters) > 0 { m["parameters"] = rp.Parameters }
-	if len(rp.Metadata) > 0 { m["metadata"] = rp.Metadata }
-	if len(rp.Tags) > 0 { m["tags"] = rp.Tags }
-	if rp.ValidatedAt != "" { m["validated_at"] = rp.ValidatedAt }
+	if rp.JobRunID != "" {
+		m["job_run_id"] = rp.JobRunID
+	}
+	if rp.JobName != "" {
+		m["job_name"] = rp.JobName
+	}
+	if rp.Priority != 0 {
+		m["priority"] = rp.Priority
+	}
+	if rp.MaxRetries != 0 {
+		m["max_retries"] = rp.MaxRetries
+	}
+	if rp.TimeoutSecs != 0 {
+		m["timeout_secs"] = rp.TimeoutSecs
+	}
+	if rp.AssignedWorker != "" {
+		m["assigned_worker"] = rp.AssignedWorker
+	}
+	if rp.WorkerGroup != "" {
+		m["worker_group"] = rp.WorkerGroup
+	}
+	if rp.ParentJob != "" {
+		m["parent_job"] = rp.ParentJob
+	}
+	if len(rp.Parameters) > 0 {
+		m["parameters"] = rp.Parameters
+	}
+	if len(rp.Metadata) > 0 {
+		m["metadata"] = rp.Metadata
+	}
+	if len(rp.Tags) > 0 {
+		m["tags"] = rp.Tags
+	}
+	if rp.ValidatedAt != "" {
+		m["validated_at"] = rp.ValidatedAt
+	}
 	return m
 }
 
@@ -53,23 +77,53 @@ func FromMap(m map[string]interface{}) *RenderPlan {
 		Metadata:   make(map[string]interface{}),
 		Tags:       make([]string, 0),
 	}
-	if v, ok := m["version"].(string); ok { rp.Version = v }
-	if v, ok := m["job_id"].(string); ok { rp.JobID = v }
-	if v, ok := m["job_type"].(string); ok { rp.JobType = v }
-	if v, ok := m["created_at"].(string); ok { rp.CreatedAt = v }
-	if v, ok := m["job_run_id"].(string); ok { rp.JobRunID = v }
-	if v, ok := m["job_name"].(string); ok { rp.JobName = v }
-	if v, ok := m["priority"].(float64); ok { rp.Priority = int(v) }
-	if v, ok := m["max_retries"].(float64); ok { rp.MaxRetries = int(v) }
-	if v, ok := m["timeout_secs"].(float64); ok { rp.TimeoutSecs = int(v) }
-	if v, ok := m["assigned_worker"].(string); ok { rp.AssignedWorker = v }
-	if v, ok := m["worker_group"].(string); ok { rp.WorkerGroup = v }
-	if v, ok := m["parent_job"].(string); ok { rp.ParentJob = v }
-	if v, ok := m["parameters"].(map[string]interface{}); ok { rp.Parameters = v }
-	if v, ok := m["metadata"].(map[string]interface{}); ok { rp.Metadata = v }
+	if v, ok := m["version"].(string); ok {
+		rp.Version = v
+	}
+	if v, ok := m["job_id"].(string); ok {
+		rp.JobID = v
+	}
+	if v, ok := m["job_type"].(string); ok {
+		rp.JobType = v
+	}
+	if v, ok := m["created_at"].(string); ok {
+		rp.CreatedAt = v
+	}
+	if v, ok := m["job_run_id"].(string); ok {
+		rp.JobRunID = v
+	}
+	if v, ok := m["job_name"].(string); ok {
+		rp.JobName = v
+	}
+	if v, ok := m["priority"].(float64); ok {
+		rp.Priority = int(v)
+	}
+	if v, ok := m["max_retries"].(float64); ok {
+		rp.MaxRetries = int(v)
+	}
+	if v, ok := m["timeout_secs"].(float64); ok {
+		rp.TimeoutSecs = int(v)
+	}
+	if v, ok := m["assigned_worker"].(string); ok {
+		rp.AssignedWorker = v
+	}
+	if v, ok := m["worker_group"].(string); ok {
+		rp.WorkerGroup = v
+	}
+	if v, ok := m["parent_job"].(string); ok {
+		rp.ParentJob = v
+	}
+	if v, ok := m["parameters"].(map[string]interface{}); ok {
+		rp.Parameters = v
+	}
+	if v, ok := m["metadata"].(map[string]interface{}); ok {
+		rp.Metadata = v
+	}
 	if v, ok := m["tags"].([]interface{}); ok {
 		for _, item := range v {
-			if s, ok := item.(string); ok { rp.Tags = append(rp.Tags, s) }
+			if s, ok := item.(string); ok {
+				rp.Tags = append(rp.Tags, s)
+			}
 		}
 	}
 	return rp

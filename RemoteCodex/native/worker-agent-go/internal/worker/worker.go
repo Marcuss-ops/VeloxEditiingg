@@ -51,10 +51,10 @@ func (w *Worker) Start(ctx context.Context) error {
 			// Exponential backoff is reserved for application-level errors
 			// (credential mismatch, protocol version, TLS).
 			var sleepDuration time.Duration
-		if isConnectionLevelError(err) {
-			jitter := time.Duration(rand.Float64() * float64(connectionRetryBackoff) * 0.3)
-			sleepDuration = connectionRetryBackoff + jitter
-			w.logger.Info("[CONNECT] Connection-level error, retrying in %v", sleepDuration.Round(time.Millisecond))
+			if isConnectionLevelError(err) {
+				jitter := time.Duration(rand.Float64() * float64(connectionRetryBackoff) * 0.3)
+				sleepDuration = connectionRetryBackoff + jitter
+				w.logger.Info("[CONNECT] Connection-level error, retrying in %v", sleepDuration.Round(time.Millisecond))
 			} else {
 				jitter := time.Duration(rand.Float64() * float64(backoff) * 0.25)
 				sleepDuration = backoff + jitter

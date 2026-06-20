@@ -64,9 +64,11 @@ type VideoEngineRequest struct {
 // RenderJobParams raggruppa tutti i parametri necessari per l'elaborazione di un job video.
 // Viene popolato da ExtractRenderJobParams a partire da una mappa di parametri
 // (tipicamente da JSON job).
+//
 //	// Nota: è l'unione di parametri per pipeline render + video + SRT.
-	// I campi sovrapposti con VideoEngineRequest vengono riconciliati in
-	// native_engine.go prima di inviare la richiesta al C++ engine.
+//
+// I campi sovrapposti con VideoEngineRequest vengono riconciliati in
+// native_engine.go prima di inviare la richiesta al C++ engine.
 type RenderJobParams struct {
 	AudioPath                         string
 	OutputPath                        string
@@ -128,9 +130,9 @@ func ExtractRenderJobParams(params map[string]interface{}) RenderJobParams {
 		VideoMode:                         payload.StringParam(params, "video_mode", ""),
 		IntroClipPaths:                    introClipPaths,
 		StockClipPaths:                    stockClipPaths,
-		ClipSegments:                      payload.SliceParam(params, "clip_segments"),		SceneImagePaths:     payload.ToSliceString(params["scene_image_paths"]),
-		DriveOutputFolder:   payload.StringParam(params, "drive_output_folder", payload.StringParam(params, "output_directory", "")),
-		AssetCacheDir:       payload.StringParam(params, "asset_cache_dir", ""),
+		ClipSegments:                      payload.SliceParam(params, "clip_segments"), SceneImagePaths: payload.ToSliceString(params["scene_image_paths"]),
+		DriveOutputFolder: payload.StringParam(params, "drive_output_folder", payload.StringParam(params, "output_directory", "")),
+		AssetCacheDir:     payload.StringParam(params, "asset_cache_dir", ""),
 	}
 }
 

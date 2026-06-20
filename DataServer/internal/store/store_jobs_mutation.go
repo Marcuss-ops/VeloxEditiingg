@@ -70,4 +70,3 @@ func (s *SQLiteStore) DeleteJob(jobID string) error {
 
 	return tx.Commit()
 }
-
