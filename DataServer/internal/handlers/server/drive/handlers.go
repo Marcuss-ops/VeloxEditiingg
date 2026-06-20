@@ -153,39 +153,20 @@ func (h *DriveHandlers) DeleteDriveFolderHandler(c *gin.Context) {
 	})
 }
 
-// CreateDriveFolderHandler creates a new folder entry (metadata only)
+// CreateDriveFolderHandler is not implemented in production.
+// Use the Google Drive web interface or API directly.
 func (h *DriveHandlers) CreateDriveFolderHandler(c *gin.Context) {
-	var req driveSvc.CreateDriveFolderRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
-		return
-	}
-
-	newID, err := h.svc.CreateDriveFolder(req)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
-		return
-	}
-
-	c.JSON(http.StatusCreated, gin.H{
-		"success": true,
-		"id":      newID,
+	c.JSON(http.StatusNotImplemented, gin.H{
+		"success": false,
+		"error":   "CreateDriveFolder is not implemented in production. Use the Google Drive web interface or API directly.",
 	})
 }
 
-// UploadTextHandler simulates text upload to Drive (returns mock URL)
+// UploadTextHandler is not implemented in production.
+// Use the Google Drive web interface or API directly.
 func (h *DriveHandlers) UploadTextHandler(c *gin.Context) {
-	var req driveSvc.UploadTextRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
-		return
-	}
-
-	mockURL, _ := h.svc.UploadText(req)
-
-	c.JSON(http.StatusOK, gin.H{
-		"success":  true,
-		"url":      mockURL,
-		"filename": req.Filename,
+	c.JSON(http.StatusNotImplemented, gin.H{
+		"success": false,
+		"error":   "UploadText is not implemented in production. Use the Google Drive web interface or API directly.",
 	})
 }

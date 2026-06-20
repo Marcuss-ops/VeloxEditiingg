@@ -4,7 +4,6 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"velox-server/internal/config"
 	"velox-server/internal/store"
@@ -98,11 +97,8 @@ func TestBuildServerDeps_HTTPAndGRPCShareSameLifecycleService(t *testing.T) {
 
 	// Complete the job via the LifecycleService directly (simulating gRPC).
 	// First claim it via repo (simulates worker polling).
-	repo := grpcLifecycle.Repo()
-	claimResult, err := repo.ClaimNext(ctx, store.ClaimParams{
-		WorkerID: "worker-grpc",
-		Now:      time.Now().UTC(),
-	})
+	repo := grpcLifecycle.Jobs().(*store.SQLiteJobRepository)
+	claimResult, err := repo.ClaimNext(ctx, "worker-grpc", nil)
 	if err != nil {
 		t.Fatalf("ClaimNext: %v", err)
 	}
@@ -180,11 +176,8 @@ func TestClaimHTTPCompleteGRPCSeesConsistentState(t *testing.T) {
 	}
 
 	// Step 2: Claim via repo (simulates worker polling).
-	repo := deps.fileQ.LifecycleService().Repo()
-	claimResult, err := repo.ClaimNext(ctx, store.ClaimParams{
-		WorkerID: "worker-http",
-		Now:      time.Now().UTC(),
-	})
+	repo := deps.fileQ.LifecycleService().Jobs().(*store.SQLiteJobRepository)
+	claimResult, err := repo.ClaimNext(ctx, "worker-http", nil)
 	if err != nil {
 		t.Fatalf("ClaimNext: %v", err)
 	}
@@ -261,11 +254,8 @@ func TestBuildServerDeps_RestartDoesNotLoseJob(t *testing.T) {
 	}
 
 	// Claim it to change the state.
-	repo1 := deps1.fileQ.LifecycleService().Repo()
-	if _, err := repo1.ClaimNext(ctx, store.ClaimParams{
-		WorkerID: "worker-1",
-		Now:      time.Now().UTC(),
-	}); err != nil {
+	repo1 := deps1.fileQ.LifecycleService().Jobs().(*store.SQLiteJobRepository)
+	if _, err := repo1.ClaimNext(ctx, "worker-1", nil); err != nil {
 		t.Fatalf("ClaimNext: %v", err)
 	}
 

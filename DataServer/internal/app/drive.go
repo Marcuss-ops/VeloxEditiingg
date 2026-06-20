@@ -75,13 +75,6 @@ func (m *DriveModule) RegisterRoutes(r *gin.Engine) {
 		log.Printf("[DRIVE] Handlers unavailable after init")
 		return
 	}
-	// Relay the SQLite store through to the handler so drive-link +
-	// master-folder CRUD persists. Bootstrap calls WithSQLiteStore()
-	// right before RegisterRoutes; we double-up here for any caller
-	// that goes through this method directly.
-	if m.sqliteStore != nil {
-		m.handlers.SetSQLiteStore(m.sqliteStore)
-	}
 	driveHandlers.RegisterDriveRoutes(r, m.handlers)
 	log.Printf("[DRIVE] API routes registered at /api/drive/*")
 }
@@ -128,8 +121,5 @@ func (m *DriveModule) init() error {
 		return err
 	}
 	m.handlers = handlers
-	if m.sqliteStore != nil {
-		m.handlers.SetSQLiteStore(m.sqliteStore)
-	}
 	return nil
 }
