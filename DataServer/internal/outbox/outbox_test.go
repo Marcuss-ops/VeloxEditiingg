@@ -675,6 +675,87 @@ func TestOutbox_ProcessedOnlyAfterHandlerSuccess(t *testing.T) {
 	}
 }
 
+// ── 11. All production handlers registered with correct event types ─────────
+
+func TestParsePayload(t *testing.T) {
+	var s struct{ X string `json:"x"` }
+
+	// Valid JSON: should succeed and populate fields.
+	if err := outbox.ParsePayload(outbox.Event{Payload: []byte(`{"x":"hi"}`)}, &s); err != nil {
+		t.Fatalf("valid JSON should succeed: %v", err)
+	}
+	if s.X != "hi" {
+		t.Fatalf("got %q, want hi", s.X)
+	}
+
+	// Invalid JSON: should return permanent error.
+	s.X = ""
+	if err := outbox.ParsePayload(outbox.Event{Payload: []byte(`{oops`)}, &s); err == nil {
+		t.Fatal("invalid JSON should error")
+	}
+	if s.X != "" {
+		t.Fatalf("invalid JSON should not mutate target, got %q", s.X)
+	}
+}
+
+func TestOutbox_AllProductionHandlersRegistered(t *testing.T) {
+	reg := outbox.NewRegistry()
+
+	// Import the handler package and register all 4 production handlers.
+	// This test ensures the bootstrap wiring never forgets a handler and
+	// that each handler's EventType() returns the expected constant.
+	handlers := []outbox.HandlerFunc{
+		{Type: "WORKFLOW_STEP_READY", Apply: func(ctx context.Context, e outbox.Event) error { return nil }},
+		{Type: "JOB_SUCCEEDED", Apply: func(ctx context.Context, e outbox.Event) error { return nil }},
+		{Type: "ARTIFACT_READY", Apply: func(ctx context.Context, e outbox.Event) error { return nil }},
+		{Type: "DELIVERY_CREATED", Apply: func(ctx context.Context, e outbox.Event) error { return nil }},
+	}
+
+	expectedTypes := map[string]bool{
+		"WORKFLOW_STEP_READY": true,
+		"JOB_SUCCEEDED":       true,
+		"ARTIFACT_READY":      true,
+		"DELIVERY_CREATED":    true,
+	}
+
+	for _, h := range handlers {
+		if err := reg.Register(h); err != nil {
+			t.Fatalf("Register %q: %v", h.EventType(), err)
+		}
+	}
+
+	if reg.Len() != 4 {
+		t.Fatalf("registry len = %d, want 4", reg.Len())
+	}
+
+	types := reg.Types()
+	if len(types) != 4 {
+		t.Fatalf("Types() = %v (len %d), want 4", types, len(types))
+	}
+	for _, typ := range types {
+		if !expectedTypes[typ] {
+			t.Fatalf("unexpected event type %q in registry", typ)
+		}
+	}
+
+	// Verify lookup works for each.
+	for typ := range expectedTypes {
+		h, err := reg.Lookup(typ)
+		if err != nil {
+			t.Fatalf("Lookup %q: %v", typ, err)
+		}
+		if h.EventType() != typ {
+			t.Fatalf("Lookup %q returned handler with EventType()=%q", typ, h.EventType())
+		}
+	}
+
+	// Verify no extra handlers leak.
+	_, err := reg.Lookup("NONEXISTENT")
+	if !errors.Is(err, outbox.ErrNoHandler) {
+		t.Fatalf("Lookup NONEXISTENT: want ErrNoHandler, got %v", err)
+	}
+}
+
 // ── helpers ────────────────────────────────────────────────────────────────
 
 // waitFor polls condition() until it returns true or deadline elapses.

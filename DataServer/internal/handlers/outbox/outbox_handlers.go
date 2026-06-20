@@ -23,7 +23,6 @@ package outbox
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"velox-server/internal/outbox"
@@ -52,8 +51,8 @@ func (h StepReadyHandler) Handle(ctx context.Context, e outbox.Event) error {
 		StepID  string `json:"step_id"`
 		StepKey string `json:"step_key"`
 	}
-	if err := json.Unmarshal(e.Payload, &p); err != nil {
-		return outbox.Permanent(fmt.Errorf("workflowStepReady: payload: %w", err))
+	if err := outbox.ParsePayload(e, &p); err != nil {
+		return err
 	}
 	if p.RunID == "" || p.StepID == "" {
 		return outbox.Permanent(fmt.Errorf("workflowStepReady: run_id/step_id missing"))
@@ -129,8 +128,8 @@ func (h JobSucceededHandler) Handle(ctx context.Context, e outbox.Event) error {
 		Output  map[string]any `json:"output,omitempty"`
 		Attempt int            `json:"attempt,omitempty"`
 	}
-	if err := json.Unmarshal(e.Payload, &p); err != nil {
-		return outbox.Permanent(fmt.Errorf("jobSucceeded: payload: %w", err))
+	if err := outbox.ParsePayload(e, &p); err != nil {
+		return err
 	}
 	// aggregate_id is the canonical source; payload.JobID is a fallback.
 	jobID := e.AggregateID
@@ -183,8 +182,8 @@ func (ArtifactReadyHandler) Handle(ctx context.Context, e outbox.Event) error {
 		JobID      string `json:"job_id"`
 		ArtifactID string `json:"artifact_id"`
 	}
-	if err := json.Unmarshal(e.Payload, &p); err != nil {
-		return outbox.Permanent(fmt.Errorf("artifactReady: payload: %w", err))
+	if err := outbox.ParsePayload(e, &p); err != nil {
+		return err
 	}
 	return nil
 }

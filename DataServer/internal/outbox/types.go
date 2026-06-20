@@ -1,6 +1,10 @@
 package outbox
 
-import "time"
+import (
+	"encoding/json"
+	"fmt"
+	"time"
+)
 
 // Status is the application-level state of an outbox event.
 //
@@ -86,4 +90,22 @@ func Transient(err error) error {
 // Permanent constructs a HandlerError marked permanent.
 func Permanent(err error) error {
 	return &HandlerError{Transient: false, Err: err}
+}
+
+// ParsePayload decodes e.Payload into target and returns a permanent
+// HandlerError on failure. This is the canonical helper for outbox
+// handlers so every handler uses the same JSON unmarshal + error
+// wrapping pattern — no per-handler duplication.
+//
+// Usage:
+//
+//	var p struct { JobID string `json:"job_id"` }
+//	if err := outbox.ParsePayload(e, &p); err != nil {
+//	    return err
+//	}
+func ParsePayload(e Event, target interface{}) error {
+	if err := json.Unmarshal(e.Payload, target); err != nil {
+		return Permanent(fmt.Errorf("payload: %w", err))
+	}
+	return nil
 }
