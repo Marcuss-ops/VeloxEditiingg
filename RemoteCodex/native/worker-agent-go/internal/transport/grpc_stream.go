@@ -43,21 +43,21 @@ type GRPCStreamTransport struct {
 	// mTLS configuration (Phase 7). If nil, insecure transport is used.
 	tlsConfig *tls.Config
 
-	mu          sync.Mutex
-	conn        *grpc.ClientConn
-	stream      grpc.BidiStreamingClient[pb.WorkerToMasterEnvelope, pb.MasterToWorkerEnvelope]
-	sessionID   string
-	state       transportState
-	closed      bool
-	closeCh     chan struct{}
-	closeOnce   sync.Once
-	recvDone    chan struct{} // closed by recvLoop on exit; Close() waits before closing recvCh
-	recvCh      chan controltransport.ControlMessage
-	errCh       chan error
+	mu           sync.Mutex
+	conn         *grpc.ClientConn
+	stream       grpc.BidiStreamingClient[pb.WorkerToMasterEnvelope, pb.MasterToWorkerEnvelope]
+	sessionID    string
+	state        transportState
+	closed       bool
+	closeCh      chan struct{}
+	closeOnce    sync.Once
+	recvDone     chan struct{} // closed by recvLoop on exit; Close() waits before closing recvCh
+	recvCh       chan controltransport.ControlMessage
+	errCh        chan error
 	errCloseOnce sync.Once
-	recvOnce    sync.Once
-	msgSeq      int64
-	sendMu      sync.Mutex
+	recvOnce     sync.Once
+	msgSeq       int64
+	sendMu       sync.Mutex
 }
 
 // NewGRPCStreamTransport creates a new gRPC stream transport.

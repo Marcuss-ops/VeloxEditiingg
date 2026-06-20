@@ -196,9 +196,9 @@ func (w *Worker) maybeSendRecoveryReport(ctx context.Context) {
 	// propagates through the transport — the untyped payload path
 	// does not always bind nested *structpb.Struct into Heartbeat.Extra.
 	hbTyped := &pb.Heartbeat{
-		WorkerName:       w.config.WorkerID,
-		ActiveJobsCount:  int32(activeCount),
-		Extra:            extra,
+		WorkerName:      w.config.WorkerID,
+		ActiveJobsCount: int32(activeCount),
+		Extra:           extra,
 	}
 	msg := controltransport.ControlMessage{
 		Type:            controltransport.MsgHeartbeat,

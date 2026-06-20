@@ -13,13 +13,13 @@ import (
 
 // GC event names for structured logging.
 const (
-	EventDiskCheck       = "DISK_CHECK"
-	EventDiskWarning     = "DISK_WARNING"
-	EventDiskCritical    = "DISK_CRITICAL"
-	EventGCleanupLRU     = "GC_LRU_CLEANUP"
+	EventDiskCheck          = "DISK_CHECK"
+	EventDiskWarning        = "DISK_WARNING"
+	EventDiskCritical       = "DISK_CRITICAL"
+	EventGCleanupLRU        = "GC_LRU_CLEANUP"
 	EventGCleanupAggressive = "GC_AGGRESSIVE_CLEANUP"
-	EventGCleanupPurge   = "GC_PURGE_VERSION"
-	EventGCleanupCache   = "GC_CLEAR_CACHE"
+	EventGCleanupPurge      = "GC_PURGE_VERSION"
+	EventGCleanupCache      = "GC_CLEAR_CACHE"
 )
 
 type DiskGC struct {

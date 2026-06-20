@@ -208,12 +208,13 @@ func (w *VideoGenerationWorkflow) runNativeCxxEngine(
 //  1. VELOX_VIDEO_ENGINE_CPP_BIN env override
 //  2. /usr/local/bin/velox_video_engine (production Docker install)
 //  3. Source-tree build paths (dev workflow)
+//
 // The same Resolver is used elsewhere (e.g. ffmpeg, ansible-playbook) so the
 // discovery behaviour stays consistent across the worker agent.
 func resolveNativeVideoEngineBinary() (string, error) {
 	r := binaryresolver.Resolver{
-		Name:      "velox_video_engine",
-		EnvVar:    "VELOX_VIDEO_ENGINE_CPP_BIN",
+		Name:   "velox_video_engine",
+		EnvVar: "VELOX_VIDEO_ENGINE_CPP_BIN",
 		AbsCandidates: []string{
 			"/usr/local/bin/velox_video_engine",
 		},

@@ -15,8 +15,8 @@ import sharedobs "velox-shared/obs"
 // *sharedobs.Event / *sharedobs.RateLimiter remain callable through these
 // aliases.
 type (
-	EventCode = sharedobs.EventCode
-	Event     = sharedobs.Event
+	EventCode   = sharedobs.EventCode
+	Event       = sharedobs.Event
 	RateLimiter = sharedobs.RateLimiter
 )
 

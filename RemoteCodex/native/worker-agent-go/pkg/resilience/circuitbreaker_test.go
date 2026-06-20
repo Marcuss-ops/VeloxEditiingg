@@ -71,8 +71,8 @@ func TestCircuitBreakerHalfOpenAnyFailureReopens(t *testing.T) {
 
 func TestCircuitBreakerOnStateChange(t *testing.T) {
 	var (
-		mu     sync.Mutex
-		calls  []string
+		mu    sync.Mutex
+		calls []string
 	)
 	hook := func(prev, next State, _ int) {
 		mu.Lock()

@@ -28,12 +28,12 @@ func NewEvent(code EventCode) *Event {
 // Generic cross-component codes (e.g. master/worker agnostic transports)
 // belong in pkg/obs or in the calling component.
 const (
-	EventStartup        EventCode = "STARTUP"
-	EventConfigLoaded   EventCode = "CONFIG_LOADED"
-	EventConfigInvalid  EventCode = "CONFIG_INVALID"
+	EventStartup         EventCode = "STARTUP"
+	EventConfigLoaded    EventCode = "CONFIG_LOADED"
+	EventConfigInvalid   EventCode = "CONFIG_INVALID"
 	EventRegisterSuccess EventCode = "REGISTER_SUCCESS"
-	EventRegisterFailed EventCode = "REGISTER_FAILED"
-	EventUnregister     EventCode = "UNREGISTER"
+	EventRegisterFailed  EventCode = "REGISTER_FAILED"
+	EventUnregister      EventCode = "UNREGISTER"
 
 	EventHeartbeatSuccess EventCode = "HEARTBEAT_SUCCESS"
 	EventHeartbeatFailed  EventCode = "HEARTBEAT_FAILED"

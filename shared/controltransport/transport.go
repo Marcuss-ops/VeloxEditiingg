@@ -47,8 +47,8 @@ type ControlMessage struct {
 	SequenceNumber  int64                  `json:"sequence_number,omitempty"`
 	SentAt          time.Time              `json:"sent_at"`
 	ProtocolVersion string                 `json:"protocol_version"`
-	Payload         map[string]interface{} `json:"payload,omitempty"`   // deprecated: use TypedPayload
-	TypedPayload    interface{}            `json:"-"`                    // typed proto message (e.g. *pb.JobOffer, *pb.Command)
+	Payload         map[string]interface{} `json:"payload,omitempty"` // deprecated: use TypedPayload
+	TypedPayload    interface{}            `json:"-"`                 // typed proto message (e.g. *pb.JobOffer, *pb.Command)
 }
 
 // WorkerHello contains the data sent during initial connection/registration.

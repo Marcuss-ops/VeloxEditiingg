@@ -59,7 +59,8 @@ type Writer interface {
 // PR3 write paths (Start/Fail/Cancel/RequeueExpiredLeases) are migrated.
 //
 // Compile-time assertion is in store/job_repository_adapter.go:
-//   var _ Repository = (*store.SQLiteJobRepository)(nil)
+//
+//	var _ Repository = (*store.SQLiteJobRepository)(nil)
 type Repository interface {
 	Reader
 	Writer

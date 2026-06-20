@@ -42,12 +42,12 @@ func TestNormalizeWorkerIDEmptyOrUnchanged(t *testing.T) {
 
 func TestNormalizeWorkerIDDedupesPrefixAndDots(t *testing.T) {
 	cases := map[string]string{
-		"host_57.129.132.133":            "host_57_129_132_133",
-		"host_host_57_129_132_133":       "host_57_129_132_133",
-		"host_host_host_57_129_132_133":  "host_57_129_132_133",
-		"host_57_129_132_133 ":           "host_57_129_132_133",
-		"  host_host_57_129_132_133":     "host_57_129_132_133",
-		"host_57.129.132.133.host_foo":   "host_57_129_132_133_host_foo",
+		"host_57.129.132.133":           "host_57_129_132_133",
+		"host_host_57_129_132_133":      "host_57_129_132_133",
+		"host_host_host_57_129_132_133": "host_57_129_132_133",
+		"host_57_129_132_133 ":          "host_57_129_132_133",
+		"  host_host_57_129_132_133":    "host_57_129_132_133",
+		"host_57.129.132.133.host_foo":  "host_57_129_132_133_host_foo",
 	}
 	for in, want := range cases {
 		if got := NormalizeWorkerID(in); got != want {

@@ -338,7 +338,6 @@ func extensionFromName(name, mimeType string) string {
 	return ".bin"
 }
 
-
 // ── voiceover payload helpers (shared with legacy bridge) ────────────────────
 
 func collectVoiceoverReferences(payloadMap map[string]interface{}) []string {

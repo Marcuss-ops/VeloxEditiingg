@@ -2,9 +2,9 @@
 // alle controparti C++ in RemoteCodex/native/video-engine-cpp/include/video_contract.hpp.
 //
 // I test marshallano ogni struct Go in JSON e verificano che:
-//   1. Tutti i field name JSON corrispondano ai field name C++ (snake_case)
-//   2. Il round-trip JSON (marshal → unmarshal) sia fedele
-//   3. Non ci siano field in eccesso o in difetto
+//  1. Tutti i field name JSON corrispondano ai field name C++ (snake_case)
+//  2. Il round-trip JSON (marshal → unmarshal) sia fedele
+//  3. Non ci siano field in eccesso o in difetto
 package contract
 
 import (
@@ -189,10 +189,10 @@ func TestVideoEngineRequest_MatchesSceneVideoRequest(t *testing.T) {
 	// non hanno corrispettivo diretto in C++ SceneVideoRequest.
 	// Vedi TestVideoEngineRequest_KnownDifferences per i dettagli.
 	v := VideoEngineRequest{
-		JobID:               "job_123",
-		VideoName:           "My Video",
-		ScriptText:          "This is the script",
-		VoiceoverPaths:      []string{"https://drive.google.com/vo.mp3"},
+		JobID:          "job_123",
+		VideoName:      "My Video",
+		ScriptText:     "This is the script",
+		VoiceoverPaths: []string{"https://drive.google.com/vo.mp3"},
 		Scenes: []SceneRequest{
 			{Text: "Scene 1", ImageLink: "https://example.com/1.jpg", DurationSeconds: 5.0},
 		},
@@ -569,4 +569,3 @@ func TestParseClipsJSON_RoundTrip(t *testing.T) {
 		}
 	}
 }
-

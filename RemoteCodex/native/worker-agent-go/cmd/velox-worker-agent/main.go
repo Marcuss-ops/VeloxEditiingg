@@ -233,7 +233,7 @@ func main() {
 
 	// --validate-config: validate and exit before starting the worker loop.
 	if *validateConfig {
-			// Branding line for human operators running docker run --rm ... --validate-config
+		// Branding line for human operators running docker run --rm ... --validate-config
 		fmt.Printf("velox-worker-agent version %s\n", Version)
 		w, vErr := worker.New(cfg, resolvedVersion)
 		if vErr != nil {

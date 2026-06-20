@@ -21,23 +21,23 @@ type WorkerMetrics struct {
 	TotalJobTimeMs int64
 
 	// API metrics
-	HeartbeatsSent    int64
-	HeartbeatsFailed  int64
-	APIRequests       int64
-	APIRetries        int64
-	APIErrors         int64
+	HeartbeatsSent   int64
+	HeartbeatsFailed int64
+	APIRequests      int64
+	APIRetries       int64
+	APIErrors        int64
 
 	// Disk metrics
-	DiskChecks        int64
-	DiskWarnings      int64
-	DiskCriticals     int64
-	GCCleanupRuns     int64
-	GCFilesPurged     int64
+	DiskChecks    int64
+	DiskWarnings  int64
+	DiskCriticals int64
+	GCCleanupRuns int64
+	GCFilesPurged int64
 
 	// Timing
-	StartTime         time.Time
-	LastHeartbeat     time.Time
-	LastJobTime       time.Time
+	StartTime     time.Time
+	LastHeartbeat time.Time
+	LastJobTime   time.Time
 
 	// Output
 	output io.Writer

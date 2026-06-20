@@ -678,7 +678,9 @@ func TestOutbox_ProcessedOnlyAfterHandlerSuccess(t *testing.T) {
 // ── 11. All production handlers registered with correct event types ─────────
 
 func TestParsePayload(t *testing.T) {
-	var s struct{ X string `json:"x"` }
+	var s struct {
+		X string `json:"x"`
+	}
 
 	// Valid JSON: should succeed and populate fields.
 	if err := outbox.ParsePayload(outbox.Event{Payload: []byte(`{"x":"hi"}`)}, &s); err != nil {

@@ -9,18 +9,18 @@
 // The view methods (ToQueueItem, ToPayloadMap, ToFlatMap, FormatStats)
 // mirror the queue.QueryService methods that depend on them:
 //
-//   QueryService.GetJob        ↔  jobs.ToQueueItem(j)            + jobs.parsePayloadJSON
-//   QueryService.GetJobPayload ↔  jobs.ToPayloadMap(j)
-//   QueryService.GetJobAsMap   ↔  jobs.ToFlatMap(j)
-//   QueryService.Stats         ↔  jobs.FormatStats(reader.Counts(ctx))
+//	QueryService.GetJob        ↔  jobs.ToQueueItem(j)            + jobs.parsePayloadJSON
+//	QueryService.GetJobPayload ↔  jobs.ToPayloadMap(j)
+//	QueryService.GetJobAsMap   ↔  jobs.ToFlatMap(j)
+//	QueryService.Stats         ↔  jobs.FormatStats(reader.Counts(ctx))
 //
 // Pre-existing wire shapes (HTTP/JSON output) are preserved verbatim:
-// - ToQueueItem: WorkerName=WorkerID AND AssignedTo=WorkerID (dual-aliasing)
-// - ToPayloadMap: lease_id injected only when non-empty; LeaseExpiry NOT bound
-//   (it has no domain source today)
-// - ToFlatMap: includes blank keys (claimed_by/claimed_at/last_error/error_message/lease_expiry)
-//   even when zero-valued — HTTP consumers expect the keys to exist
-// - FormatStats: string-cast of jobs.Status yields uppercase passthrough
+//   - ToQueueItem: WorkerName=WorkerID AND AssignedTo=WorkerID (dual-aliasing)
+//   - ToPayloadMap: lease_id injected only when non-empty; LeaseExpiry NOT bound
+//     (it has no domain source today)
+//   - ToFlatMap: includes blank keys (claimed_by/claimed_at/last_error/error_message/lease_expiry)
+//     even when zero-valued — HTTP consumers expect the keys to exist
+//   - FormatStats: string-cast of jobs.Status yields uppercase passthrough
 package jobs
 
 import "encoding/json"
@@ -107,9 +107,9 @@ func parsePayloadJSON(raw string) map[string]interface{} {
 // ToQueueItem converts a canonical jobs.Job into its transport projection.
 // Mirrors queue.domainJobToQueueJob exactly:
 //
-//   WorkerName = WorkerID  AND  AssignedTo = WorkerID  (legacy dual-aliasing)
-//   RetryCount = Attempts   AND  Attempt = Attempts    (legacy split-field aliasing)
-//   History/Logs/SlotData/LastError/etc. are zero-valued (no domain source today).
+//	WorkerName = WorkerID  AND  AssignedTo = WorkerID  (legacy dual-aliasing)
+//	RetryCount = Attempts   AND  Attempt = Attempts    (legacy split-field aliasing)
+//	History/Logs/SlotData/LastError/etc. are zero-valued (no domain source today).
 func ToQueueItem(j *Job) *QueueItem {
 	if j == nil {
 		return nil

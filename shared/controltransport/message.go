@@ -13,30 +13,30 @@ type ControlMessageType string
 
 // --- Worker → Master ---
 const (
-	MsgHello        ControlMessageType = "hello"
-	MsgHeartbeat    ControlMessageType = "heartbeat"
-	MsgLeaseRenewal ControlMessageType = "lease_renewal"
-	MsgJobAccepted  ControlMessageType = "job_accepted"
-	MsgJobRejected  ControlMessageType = "job_rejected"
-	MsgJobProgress  ControlMessageType = "job_progress"
-	MsgCommandAck   ControlMessageType = "command_ack"
+	MsgHello            ControlMessageType = "hello"
+	MsgHeartbeat        ControlMessageType = "heartbeat"
+	MsgLeaseRenewal     ControlMessageType = "lease_renewal"
+	MsgJobAccepted      ControlMessageType = "job_accepted"
+	MsgJobRejected      ControlMessageType = "job_rejected"
+	MsgJobProgress      ControlMessageType = "job_progress"
+	MsgCommandAck       ControlMessageType = "command_ack"
 	MsgArtifactUploaded ControlMessageType = "artifact_uploaded"
-	MsgJobResult    ControlMessageType = "job_result"
-	MsgGoodbye      ControlMessageType = "goodbye"
+	MsgJobResult        ControlMessageType = "job_result"
+	MsgGoodbye          ControlMessageType = "goodbye"
 )
 
 // --- Master → Worker ---
 const (
-	MsgHelloAck          ControlMessageType = "hello_ack"
-	MsgJobAvailable      ControlMessageType = "job_available"  // Phase 5: notify worker jobs exist, worker then claims via HTTP (shadow mode)
-	MsgJobOffer          ControlMessageType = "job_offer"      // Phase 5+: full job with lease_id from SQLite CAS (push mode)
-	MsgJobLeaseGranted   ControlMessageType = "job_lease_granted" // Phase 5+: master confirms lease, worker may now execute
-	MsgCommand           ControlMessageType = "command"
-	MsgCancelJob         ControlMessageType = "cancel_job"
-	MsgDrain             ControlMessageType = "drain"
+	MsgHelloAck            ControlMessageType = "hello_ack"
+	MsgJobAvailable        ControlMessageType = "job_available"     // Phase 5: notify worker jobs exist, worker then claims via HTTP (shadow mode)
+	MsgJobOffer            ControlMessageType = "job_offer"         // Phase 5+: full job with lease_id from SQLite CAS (push mode)
+	MsgJobLeaseGranted     ControlMessageType = "job_lease_granted" // Phase 5+: master confirms lease, worker may now execute
+	MsgCommand             ControlMessageType = "command"
+	MsgCancelJob           ControlMessageType = "cancel_job"
+	MsgDrain               ControlMessageType = "drain"
 	MsgConfigurationUpdate ControlMessageType = "configuration_update"
-	MsgLeaseRevoked      ControlMessageType = "lease_revoked"
-	MsgPing              ControlMessageType = "ping"
+	MsgLeaseRevoked        ControlMessageType = "lease_revoked"
+	MsgPing                ControlMessageType = "ping"
 )
 
 // IsWorkerToMaster returns true for messages sent from worker to master.

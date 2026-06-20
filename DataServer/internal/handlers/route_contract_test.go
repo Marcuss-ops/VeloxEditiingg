@@ -23,7 +23,6 @@ import (
 	"velox-server/internal/app"
 	"velox-server/internal/handlers/server/api"
 
-
 	"github.com/gin-gonic/gin"
 )
 

@@ -247,15 +247,15 @@ func TestParsePayloadJSONEdgeCases(t *testing.T) {
 // struct comparison (MockFieldMarshal) or rely on integration tests.
 func TestToQueueItemWireShapeSnapshot(t *testing.T) {
 	j := &Job{
-		ID:        "snap-1",
-		Status:    StatusRunning,
-		WorkerID:  "worker-X",
-		Attempts:  2,
+		ID:         "snap-1",
+		Status:     StatusRunning,
+		WorkerID:   "worker-X",
+		Attempts:   2,
 		MaxRetries: 5,
-		RunID:     "run-X",
-		VideoName: "video.mp4",
-		ProjectID: "proj-1",
-		LeaseID:   "lease-X",
+		RunID:      "run-X",
+		VideoName:  "video.mp4",
+		ProjectID:  "proj-1",
+		LeaseID:    "lease-X",
 	}
 	q := ToQueueItem(j)
 	raw, err := json.Marshal(q)
@@ -289,13 +289,13 @@ func TestToQueueItemWireShapeSnapshot(t *testing.T) {
 func TestToPayloadMapWireShapeSnapshot(t *testing.T) {
 	// Case 1: LeaseID non-empty → injected. Payload merges.
 	j := &Job{
-		ID:       "snap-payload-1",
-		RunID:    "run-payload-1",
-		LeaseID:  "lease-payload-1",
-		Status:   StatusRunning,
+		ID:        "snap-payload-1",
+		RunID:     "run-payload-1",
+		LeaseID:   "lease-payload-1",
+		Status:    StatusRunning,
 		VideoName: "video.mp4",
 		ProjectID: "proj-1",
-		Payload:  `{"custom_field":"custom_value","nested":{"k":"v"}}`,
+		Payload:   `{"custom_field":"custom_value","nested":{"k":"v"}}`,
 	}
 	m := ToPayloadMap(j)
 	raw, err := json.Marshal(m)

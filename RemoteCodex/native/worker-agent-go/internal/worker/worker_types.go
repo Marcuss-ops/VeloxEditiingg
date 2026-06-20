@@ -80,11 +80,11 @@ type ExitFunc func(int)
 
 // Worker represents a Velox worker agent.
 type Worker struct {
-	config    *config.WorkerConfig
-	apiClient *api.Client          // Retained for data-plane operations (upload, asset download)
-	transport controltransport.ControlTransport // Current session's transport (recreated per connect)
+	config           *config.WorkerConfig
+	apiClient        *api.Client                              // Retained for data-plane operations (upload, asset download)
+	transport        controltransport.ControlTransport        // Current session's transport (recreated per connect)
 	transportFactory func() controltransport.ControlTransport // Factory for new transport instances
-	logger    *logger.Logger
+	logger           *logger.Logger
 
 	// Status management — error state only; busy/idle derived from activeJobs
 	status Status
@@ -95,8 +95,8 @@ type Worker struct {
 	activeJobsMu sync.RWMutex
 
 	// Connection state machine
-	connState     ConnectionState
-	connStateMu   sync.RWMutex
+	connState        ConnectionState
+	connStateMu      sync.RWMutex
 	connFailureCount int
 
 	// Lifecycle management

@@ -303,13 +303,13 @@ func TestValidateLogLevels(t *testing.T) {
 
 	for _, level := range validLevels {
 		t.Run("log_level_"+level, func(t *testing.T) {
-		cfg := &WorkerConfig{
-			MasterURL:      "http://localhost:8080",
-			WorkerID:       "test-worker-001",
-			WorkDir:        "/opt/velox",
-			LogLevel:       level,
-			ControlGRPCURL: "localhost:8443",
-		}
+			cfg := &WorkerConfig{
+				MasterURL:      "http://localhost:8080",
+				WorkerID:       "test-worker-001",
+				WorkDir:        "/opt/velox",
+				LogLevel:       level,
+				ControlGRPCURL: "localhost:8443",
+			}
 
 			if err := cfg.Validate(); err != nil {
 				t.Errorf("Expected validation to pass for log_level %q, got error: %v", level, err)
