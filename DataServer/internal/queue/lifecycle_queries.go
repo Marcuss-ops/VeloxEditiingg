@@ -15,7 +15,7 @@ func (l *LifecycleService) GetJobsByStatus(ctx context.Context, status JobStatus
 	}
 	result := make([]*Job, 0, len(storeJobs))
 	for _, sj := range storeJobs {
-		// Build a minimal queue.Job from the store.Job projection.
+		// Build a minimal queue.Job from the store.JobRecord projection.
 		job := &Job{
 			JobID:       sj.JobID,
 			Status:      JobStatus(sj.Status),

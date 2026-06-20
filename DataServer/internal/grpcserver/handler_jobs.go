@@ -129,7 +129,7 @@ func (h *Handler) handleJobAccepted(workerID string, ja *pb.JobAccepted) {
 	// (job_id, worker_id, lease_id, attempt, revision) atomically.
 	//
 	// Revision comes from a fresh GetJob (queue.Job is the rich projection
-	// without revision; store.Job carries it). The extra read is bounded by
+	// without revision; store.JobRecord carries it). The extra read is bounded by
 	// SQLite single-writer semantics: ClaimNextJob already committed, so
 	// the row is visible at our snapshot.
 	currentRev, attemptNum, revErr := h.lookupJobCASFields(jobID)

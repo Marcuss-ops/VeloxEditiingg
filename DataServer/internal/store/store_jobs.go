@@ -193,37 +193,3 @@ func jobTypeAllowed(payload map[string]any, allowedJobTypes []string) bool {
 	}
 	return false
 }
-
-// JobsRepository exposes the minimal job read operations needed by HTTP handlers.
-// This is the READ-ONLY interface — for any write operation (create, claim,
-// transition, PR3 lifecycle), see JobRepository in jobs_writer_types.go.
-// SQLiteJobsRepository is the adapter; SQLiteJobRepository is the full write-capable
-// implementation. The naming difference (Jobs vs Job, plural vs singular) is
-// intentional: JobsRepository = read-only projection, JobRepository = full CRUD.
-type JobsRepository interface {
-	ListJobs(ctx context.Context, limit int) ([]map[string]any, error)
-	GetJob(ctx context.Context, jobID string) (map[string]any, error)
-	JobCounts(ctx context.Context) (map[string]int64, error)
-}
-
-// SQLiteJobsRepository adapts SQLiteStore to the JobsRepository interface.
-type SQLiteJobsRepository struct {
-	store *SQLiteStore
-}
-
-// NewSQLiteJobsRepository creates a read-only jobs repository backed by SQLiteStore.
-func NewSQLiteJobsRepository(store *SQLiteStore) *SQLiteJobsRepository {
-	return &SQLiteJobsRepository{store: store}
-}
-
-func (r *SQLiteJobsRepository) ListJobs(ctx context.Context, limit int) ([]map[string]any, error) {
-	return r.store.ListJobs(ctx, limit)
-}
-
-func (r *SQLiteJobsRepository) GetJob(ctx context.Context, jobID string) (map[string]any, error) {
-	return r.store.GetJob(ctx, jobID)
-}
-
-func (r *SQLiteJobsRepository) JobCounts(ctx context.Context) (map[string]int64, error) {
-	return r.store.JobCounts(ctx)
-}

@@ -69,7 +69,7 @@ func seedLeasedJob(t *testing.T, db *sql.DB,
 	return revision
 }
 
-func TestSQLiteJobsRepository_StartJob_HappyPath(t *testing.T) {
+func TestSQLiteJobRepository_StartJob_HappyPath(t *testing.T) {
 	_, r := openStartJobTestDB(t)
 	ctx := context.Background()
 
@@ -107,7 +107,7 @@ func TestSQLiteJobsRepository_StartJob_HappyPath(t *testing.T) {
 	}
 }
 
-func TestSQLiteJobsRepository_StartJob_WrongLeaseID(t *testing.T) {
+func TestSQLiteJobRepository_StartJob_WrongLeaseID(t *testing.T) {
 	_, r := openStartJobTestDB(t)
 	ctx := context.Background()
 	sess := r.store.db
@@ -131,7 +131,7 @@ func TestSQLiteJobsRepository_StartJob_WrongLeaseID(t *testing.T) {
 	}
 }
 
-func TestSQLiteJobsRepository_StartJob_WrongWorkerID(t *testing.T) {
+func TestSQLiteJobRepository_StartJob_WrongWorkerID(t *testing.T) {
 	_, r := openStartJobTestDB(t)
 	ctx := context.Background()
 	sess := r.store.db
@@ -149,7 +149,7 @@ func TestSQLiteJobsRepository_StartJob_WrongWorkerID(t *testing.T) {
 	}
 }
 
-func TestSQLiteJobsRepository_StartJob_WrongAttempt(t *testing.T) {
+func TestSQLiteJobRepository_StartJob_WrongAttempt(t *testing.T) {
 	_, r := openStartJobTestDB(t)
 	ctx := context.Background()
 	sess := r.store.db
@@ -167,7 +167,7 @@ func TestSQLiteJobsRepository_StartJob_WrongAttempt(t *testing.T) {
 	}
 }
 
-func TestSQLiteJobsRepository_StartJob_WrongRevision(t *testing.T) {
+func TestSQLiteJobRepository_StartJob_WrongRevision(t *testing.T) {
 	_, r := openStartJobTestDB(t)
 	ctx := context.Background()
 	sess := r.store.db
@@ -185,7 +185,7 @@ func TestSQLiteJobsRepository_StartJob_WrongRevision(t *testing.T) {
 	}
 }
 
-func TestSQLiteJobsRepository_StartJob_AlreadyRunning(t *testing.T) {
+func TestSQLiteJobRepository_StartJob_AlreadyRunning(t *testing.T) {
 	_, r := openStartJobTestDB(t)
 	ctx := context.Background()
 	sess := r.store.db
@@ -213,7 +213,7 @@ func TestSQLiteJobsRepository_StartJob_AlreadyRunning(t *testing.T) {
 	}
 }
 
-func TestSQLiteJobsRepository_StartJob_NullAttemptLegacy(t *testing.T) {
+func TestSQLiteJobRepository_StartJob_NullAttemptLegacy(t *testing.T) {
 	_, r := openStartJobTestDB(t)
 	ctx := context.Background()
 	sess := r.store.db

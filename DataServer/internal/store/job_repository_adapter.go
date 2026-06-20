@@ -11,7 +11,7 @@ import (
 
 // ── Mappers ────────────────────────────────────────────────────────────────
 
-// toJobsJob converts a store.Job (DB projection) into a canonical jobs.Job.
+// toJobsJob converts a store.JobRecord (DB projection) into a canonical jobs.Job.
 func toJobsJob(sj *Job) *jobs.Job {
 	if sj == nil {
 		return nil

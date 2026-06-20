@@ -33,11 +33,14 @@ const (
 // This comment documents the delegation; the method itself lives on
 // jobs.Status and is inherited via the type alias.
 
-// Job is a structural projection sufficient for read paths of the JobRepository.
-// It deliberately omits the per-job payload blob, history, and tail of legacy
-// mutable state — keep richer types in package queue for now, so consumer reads
-// can stay narrow while migrators catch up.
-type Job struct {
+// JobRecord is the DB-row representation of a job. It carries all SQL
+// columns including raw JSON blobs (PayloadJSON). This is NOT the domain
+// model — see internal/jobs.Job for the canonical business aggregate.
+//
+// Renamed from Job (Ondata 3 PR4) to clarify the persistence/domain boundary.
+// Job is kept as a type alias for backward compatibility with callers that
+// haven't migrated yet.
+type JobRecord struct {
 	JobID       string    `json:"job_id"`
 	Status      JobStatus `json:"status"`
 	VideoName   string    `json:"video_name,omitempty"`
@@ -54,6 +57,11 @@ type Job struct {
 	RunID       string    `json:"run_id,omitempty"`
 	PayloadJSON string    `json:"-"`
 }
+
+// Job is a backward-compatible type alias for JobRecord.
+// Existing callers that reference store.Job continue to compile.
+// New code should use JobRecord or the canonical jobs.Job domain model.
+type Job = JobRecord
 
 // CreateJobParams is the input for JobRepository.CreateJob.
 //
@@ -209,7 +217,7 @@ type LeaseJobParams struct {
 //
 // Each backend also exposes a broader permissively-readable surface on the
 // underlying concrete store (*SQLiteStore) for read paths that haven't migrated
-// yet — see store_jobs.go (JobsRepository), used by HTTP handlers.
+// yet.
 type JobRepository interface {
 	// CreateJob inserts a new job in PENDING state. Atomic. If JobID is empty,
 	// the repository assigns one and returns nil; otherwise the caller-supplied
