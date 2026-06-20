@@ -396,7 +396,7 @@ I test verificano che i field name JSON corrispondano esattamente alle struct C+
 |-----------|------|-------------|
 | Master bootstrap | `cmd/server/bootstrap.go` | Avvio server, wiring |
 | Routes | `cmd/server/router.go` | Registrazione routes admin |
-| Workers module | `modules/workers/module.go` | Routes worker-facing |
+| Workers module | `internal/app/workers.go` | Routes worker-facing |
 | Worker registration | `handlers/remote/workers/worker_registration.go` | RegisterV2, Unregister |
 | Heartbeat | `handlers/remote/workers/worker_heartbeat.go` | Heartbeat + status |
 | Commands | `handlers/remote/workers/worker_commands.go` | SendCommand, SendCommandBulk |

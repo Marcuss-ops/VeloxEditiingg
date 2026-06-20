@@ -239,7 +239,7 @@ maps as authoritative state, kill `Storage` struct.
 - [ ] Drop `Storage` struct entirely (or fold into `Service.init`)
 - [ ] Drop `Service.UpdateChannelMetadata`'s `metadata_json` leak (Step S8 also)
 - [ ] `YouTubeManager` no longer needs `m.youtubeStorage` — only `Service`
-- [ ] `internal/modules/youtube/module.go.NewYouTubeHandlers` takes one Service
+- [ ] `internal/app/youtube.go.NewYouTubeHandlers` takes one Service
       argument
 - [ ] Test: rebuild existing integration tests against the unified surface
 
@@ -277,7 +277,7 @@ maps as authoritative state, kill `Storage` struct.
   Closes S1, S2, S5a, S5b, S9 (partial).
 - **2026-06-16** — Commit `e9e09e70` validation: `go vet` ✓, `go build` ✓,
   `internal/secrets/...` tests ✓, `internal/store/...` tests ✓,
-  `internal/integrations/youtube/...` tests ✓, `internal/modules/youtube/...` tests ✓.
+  `internal/integrations/youtube/...` tests ✓, `internal/app/youtube.go` tests ✓.
 - **2026-06-16** — Commit `6693cd87` on `feat/youtube-oauth-backfill`:
   S3 closed. `Service.SyncYouTubeOAuthTokensFromJSON` walks
   `<dataDir>/secrets/youtube/tokens/account_*.json`, encrypts each via
@@ -321,7 +321,7 @@ maps as authoritative state, kill `Storage` struct.
 - `internal/integrations/youtube/oauth.go:38-100` — refresh encrypted-write path
 - `internal/integrations/youtube/service.go` — `YouTubeStore` interface,
   `Service.oauthBuf`, `SetOAuthSecretCipher`
-- `internal/modules/youtube/module.go:62-74` — cipher resolution at startup
+- `internal/app/youtube.go:62-74` — cipher resolution at startup
 
 ## Status update cadence
 
