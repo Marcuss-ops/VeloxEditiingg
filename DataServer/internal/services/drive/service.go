@@ -341,33 +341,7 @@ func (s *Service) DeleteDriveFolder(folderID string) (int, error) {
 	return deletedCount, nil
 }
 
-// CreateDriveFolder creates a synthetic folder entry
-func (s *Service) CreateDriveFolder(req CreateDriveFolderRequest) (string, error) {
-	folders := s.getLinks()
-	newID := fmt.Sprintf("folder_%d", time.Now().UnixNano())
-	newFolder := DriveFolder{
-		ID:        newID,
-		Name:      req.Name,
-		Link:      fmt.Sprintf("https://drive.google.com/drive/folders/%s", newID),
-		ParentID:  req.ParentID,
-		Language:  req.Language,
-		CreatedAt: time.Now().UnixMilli(),
-		UpdatedAt: time.Now().UnixMilli(),
-		IsMaster:  false,
-	}
-	folders = append(folders, newFolder)
 
-	if err := s.saveToDisk(folders); err != nil {
-		return "", err
-	}
-	s.updateCache(folders)
-	return newID, nil
-}
-
-// UploadText simulates a file upload
-func (s *Service) UploadText(req UploadTextRequest) (string, error) {
-	return fmt.Sprintf("https://drive.google.com/file/d/text_%d/view", time.Now().UnixNano()), nil
-}
 
 // GetMasterFolders returns master folders
 func (s *Service) GetMasterFolders() (map[string]interface{}, error) {

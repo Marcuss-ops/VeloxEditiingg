@@ -72,9 +72,6 @@ func (m *DriveModule) RegisterRoutes(r *gin.Engine) {
 		log.Printf("[DRIVE] Handlers unavailable")
 		return
 	}
-	if m.sqliteStore != nil {
-		m.handlers.SetSQLiteStore(m.sqliteStore)
-	}
 	driveHandlers.RegisterDriveRoutes(r, m.handlers)
 	log.Printf("[DRIVE] API routes registered at /api/drive/*")
 }
@@ -121,13 +118,5 @@ func (m *DriveModule) init() error {
 		return err
 	}
 	m.handlers = handlers
-	// Single source of truth for SQLite wiring on Drive handlers:
-	//   - init() sets it once so Handlers() returns a fully-wired handler.
-	//   - RegisterRoutes calls SetSQLiteStore again as a no-op/idempotent
-	//     guard for callers that go through RegisterRoutes directly.
-	// Nil-safe (SetSQLiteStore must accept nil and no-op).
-	if m.sqliteStore != nil {
-		m.handlers.SetSQLiteStore(m.sqliteStore)
-	}
 	return nil
 }
