@@ -26,5 +26,6 @@ type Job struct {
 	StartedAt   time.Time `json:"started_at,omitempty"`  // when work began
 	CompletedAt time.Time `json:"completed_at,omitempty"` // when work finished
 	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	UpdatedAt   time.Time         `json:"updated_at"`
+	Payload     string           `json:"-"` // opaque JSON blob (Ondata 3 PR3 final)
 }

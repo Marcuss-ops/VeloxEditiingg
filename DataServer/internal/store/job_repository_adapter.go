@@ -35,6 +35,7 @@ func toJobsJob(sj *Job) *jobs.Job {
 		CompletedAt: completedAt,
 		CreatedAt:   createdAt,
 		UpdatedAt:   updatedAt,
+		Payload:     sj.PayloadJSON, // opaque persistence blob; typed fields above are authoritative
 	}
 }
 

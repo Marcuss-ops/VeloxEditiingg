@@ -3,6 +3,7 @@ package queue
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -48,6 +49,18 @@ func (q *QueryService) GetJob(ctx context.Context, jobID string) (*Job, error) {
 	return MapToJob(m), nil
 }
 
+// parsePayloadJSON converts a raw JSON payload string into a map.
+func parsePayloadJSON(raw string) map[string]interface{} {
+	if raw == "" || raw == "{}" {
+		return make(map[string]interface{})
+	}
+	var m map[string]interface{}
+	if err := json.Unmarshal([]byte(raw), &m); err != nil {
+		return make(map[string]interface{})
+	}
+	return m
+}
+
 // domainJobToQueueJob converts a canonical jobs.Job into a queue.Job
 // (scheduling/transport projection). Fields not present in the domain
 // model (history, logs, slot_data, PayloadJSON) are left zero-valued;
@@ -73,7 +86,7 @@ func domainJobToQueueJob(j *jobs.Job) *Job {
 		UpdatedAt:   j.UpdatedAt,
 		StartedAt:   j.StartedAt,
 		CompletedAt: j.CompletedAt,
-		Payload:     make(map[string]interface{}),
+		Payload:     parsePayloadJSON(j.Payload),
 	}
 }
 
