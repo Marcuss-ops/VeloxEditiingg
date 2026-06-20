@@ -25,6 +25,13 @@ add_executable(velox_video_engine
     src/main.cpp
     src/cmd_full_video.cpp
     src/video_builder.cpp
+    src/plan/render_plan_parser.cpp
+    src/app/commands.cpp
+    src/services/file_utils.cpp
+    src/services/media_utils.cpp
+    src/core/render_engine.cpp
 )
 
-target_include_directories(velox_video_engine PRIVATE include src)
+target_include_directories(velox_video_engine PRIVATE include src include/velox)
+
+

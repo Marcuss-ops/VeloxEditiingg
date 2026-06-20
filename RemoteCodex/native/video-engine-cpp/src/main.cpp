@@ -48,11 +48,13 @@ namespace media = velox::media;
 
 // Forward declaration (implemented in cmd_full_video.cpp)
 int cmdFullVideo(int argc, char** argv);
+int cmdRenderPlan(int argc, char** argv);
 
 static void printUsage(const char* prog) {
     std::cerr << "Velox Video Engine — CLI tool per elaborazione video\n"
               << "\nUtilizzo: " << prog << " <sotto-comando> [opzioni]\n"
               << "\nSotto-comandi:\n"
+              << "\n  --render --plan <path>"
               << "\n  --full-video --request <path>"
               << "\n  --download-asset --url <url> --dest <path>"
               << "\n  --probe-media <path>"
@@ -62,6 +64,7 @@ static void printUsage(const char* prog) {
               << "\n  --mux-audio --video <path> --audio <path> --out <path>"
               << "\n  --help\n" << std::endl;
 }
+
 
 // ──────────────────────────────────────────────
 // Sotto-comando: --help
@@ -272,6 +275,9 @@ int main(int argc, char** argv) {
 
     if (cmd == "--help" || cmd == "-h") {
         return cmdHelp(argv[0]);
+    }
+    if (cmd == "--render") {
+        return cmdRenderPlan(argc, argv);
     }
     if (cmd == "--full-video") {
         return cmdFullVideo(argc, argv);
