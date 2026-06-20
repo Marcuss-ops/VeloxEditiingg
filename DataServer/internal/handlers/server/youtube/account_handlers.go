@@ -21,12 +21,12 @@ type AccountInfo struct {
 
 func (ym *YouTubeManager) ListAccountsHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if ym.service == nil {
+		if ym.svc == nil {
 			c.JSON(http.StatusOK, gin.H{"ok": true, "accounts": []AccountInfo{}, "count": 0})
 			return
 		}
 
-		channels := ym.service.GetAuthChannels()
+		channels := ym.svc.GetAuthChannels()
 		accounts := make([]AccountInfo, 0, len(channels))
 
 		for _, ch := range channels {
@@ -53,12 +53,12 @@ func (ym *YouTubeManager) GetAccountHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		channelID := c.Param("id")
 
-		if ym.service == nil {
+		if ym.svc == nil {
 			c.JSON(http.StatusNotFound, gin.H{"ok": false, "error": "Service not initialized"})
 			return
 		}
 
-		ch := ym.service.GetAuthChannel(channelID)
+		ch := ym.svc.GetAuthChannel(channelID)
 		if ch == nil {
 			c.JSON(http.StatusNotFound, gin.H{"ok": false, "error": "Account not found"})
 			return
@@ -83,19 +83,19 @@ func (ym *YouTubeManager) RefreshAccountHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		channelID := c.Param("id")
 
-		if ym.service == nil {
+		if ym.svc == nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": "Service not initialized"})
 			return
 		}
 
-		ch := ym.service.GetAuthChannel(channelID)
+		ch := ym.svc.GetAuthChannel(channelID)
 		if ch == nil {
 			c.JSON(http.StatusNotFound, gin.H{"ok": false, "error": "Account not found"})
 			return
 		}
 
 		ctx := c.Request.Context()
-		result, err := ym.service.ValidateOAuthAccessToken(ctx, channelID)
+		result, err := ym.svc.ValidateOAuthAccessToken(ctx, channelID)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"ok":    false,

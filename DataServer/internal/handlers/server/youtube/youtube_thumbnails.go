@@ -18,47 +18,19 @@ func (ym *YouTubeManager) DownloadThumbnailHandler() gin.HandlerFunc {
 		filename := c.Query("filename")
 
 		if thumbURL == "" {
-			c.JSON(http.StatusBadRequest, youtube.APIResponse{
-				OK:    false,
-				Error: "URL required",
-			})
+			c.JSON(http.StatusBadRequest, youtube.APIResponse{OK: false, Error: "URL required"})
 			return
 		}
 
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
 		defer cancel()
 
-		req, err := http.NewRequestWithContext(ctx, "GET", thumbURL, nil)
+		body, contentLength, contentType, err := ym.svc.DownloadThumbnail(ctx, thumbURL)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, youtube.APIResponse{
-				OK:    false,
-				Error: err.Error(),
-			})
+			c.JSON(http.StatusBadRequest, youtube.APIResponse{OK: false, Error: err.Error()})
 			return
 		}
-
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, youtube.APIResponse{
-				OK:    false,
-				Error: "Failed to fetch image",
-			})
-			return
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != http.StatusOK {
-			c.JSON(http.StatusBadRequest, youtube.APIResponse{
-				OK:    false,
-				Error: "Failed to fetch image",
-			})
-			return
-		}
-
-		contentType := resp.Header.Get("Content-Type")
-		if contentType == "" {
-			contentType = "image/jpeg"
-		}
+		defer body.Close()
 
 		if filename == "" {
 			filename = "thumbnail"
@@ -70,7 +42,7 @@ func (ym *YouTubeManager) DownloadThumbnailHandler() gin.HandlerFunc {
 
 		c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
 		c.Header("Access-Control-Expose-Headers", "Content-Disposition")
-		c.DataFromReader(resp.StatusCode, resp.ContentLength, contentType, resp.Body, nil)
+		c.DataFromReader(http.StatusOK, contentLength, contentType, body, nil)
 	}
 }
 
@@ -78,10 +50,7 @@ func (ym *YouTubeManager) ThumbnailAPIHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		videoID := c.Query("video_id")
 		if videoID == "" {
-			c.JSON(http.StatusBadRequest, youtube.APIResponse{
-				OK:    false,
-				Error: "video_id required",
-			})
+			c.JSON(http.StatusBadRequest, youtube.APIResponse{OK: false, Error: "video_id required"})
 			return
 		}
 
