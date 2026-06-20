@@ -232,7 +232,7 @@ func TestYouTubeGroupCRUD(t *testing.T) {
 	}
 }
 
-func TestYouTubeGroupV2DifferentTypesSameName(t *testing.T) {
+func TestYouTubeGroupDifferentTypesSameName(t *testing.T) {
 	s := openTestDB(t)
 	defer s.Close()
 
@@ -277,7 +277,7 @@ func TestYouTubeGroupV2DifferentTypesSameName(t *testing.T) {
 	}
 }
 
-func TestYouTubeGroupV2Delete(t *testing.T) {
+func TestYouTubeGroupDelete(t *testing.T) {
 	s := openTestDB(t)
 	defer s.Close()
 
@@ -1241,7 +1241,7 @@ func TestYouTubeGroupsLegacy(t *testing.T) {
 		t.Skip("youtube_groups table dropped by migration 008")
 	}
 
-	// Create via V2 (UpsertYouTubeGroup removed in PR 3.5-b)
+	// Create via canonical UpsertYouTubeGroup
 	groupID, err := s.UpsertYouTubeGroup("Legacy Group", "manager", "Old description", "public")
 	if err != nil {
 		t.Fatalf("UpsertYouTubeGroup failed: %v", err)
@@ -1260,7 +1260,7 @@ func TestYouTubeGroupsLegacy(t *testing.T) {
 		t.Errorf("name: got %v, want %q", groups[0]["name"], "Legacy Group")
 	}
 
-	// Delete (via V2 — DeleteYouTubeGroup removed in PR 3.5-b)
+	// Delete via canonical DeleteYouTubeGroup
 	if err := s.DeleteYouTubeGroup(groupID); err != nil {
 		t.Fatalf("DeleteYouTubeGroup failed: %v", err)
 	}

@@ -10,7 +10,7 @@ import (
 // loadGroupsFromSQLite loads groups from the canonical youtube_groups table.
 //
 // PR15.4 null-deref fix: this function used to crash when s.store was nil
-// because the first thing it did was `s.store.ListYouTubeGroupsV2()` with
+// because the first thing it did was `s.store.ListYouTubeGroups()` with
 // no nil guard. The upstream caller
 // (Service.loadCanonicalGroups) had a `if s.store == nil { return
 // s.loadGroupsFromSQLite() }` branch that delegated to this fallback
@@ -73,7 +73,7 @@ func (s *Service) loadGroupsFromSQLite() bool {
 // PR15.4: both branches (canonical direct load + legacy fallback) now
 // short-circuit when s.store is nil. Pre-PR15.4 the fallback branch
 // (`s.loadGroupsFromSQLite`) would unconditionally dereference
-// `s.store.ListYouTubeGroupsV2()` even when s.store was nil, crashing
+// `s.store.ListYouTubeGroups()` even when s.store was nil, crashing
 // in degraded mode (no SQLite configured). The fix lives in BOTH
 // functions so a missing-store condition cannot propagate downstream.
 func (s *Service) loadCanonicalGroups() bool {

@@ -9,19 +9,13 @@ import (
 // --- Canonical Groups ---
 // ============================================================
 //
-// NOTE: the V2 suffix on the method names is intentional and STAYS even
-// after migration 012 renamed the table from `youtube_groups_v2` to
-// `youtube_groups` (S10 of the verdict plan). Reasons:
-//   1. The old `youtube_groups` table (with its `channels_json` BLOB) is
-//      what the suffix used to disambiguate against. The legacy table
-//      is gone (migration 009). The suffix is now decorative only.
-//   2. Keeping the V2 suffix on the *method* names keeps the rename
-//      a pure SQL-only change, avoiding a propagation storm across the
-//      ~20 callsites in service.go / storage.go / storage_*.go.
-//   3. A future cleanup pass (post-S11) can drop the suffix cleanly.
+// PR15.4: V2 suffix removed from all method names. The table was already
+// renamed from youtube_groups_v2 to youtube_groups in migration 012 (S10).
+// These methods use bare canonical names matching the YouTubeStore and
+// StorageStore interfaces.
 
-// UpsertYouTubeGroupV2 creates or updates a group in youtube_groups.
-func (s *SQLiteStore) UpsertYouTubeGroupV2(name, groupType, description, privacy string) (int64, error) {
+// UpsertYouTubeGroup creates or updates a group in youtube_groups.
+func (s *SQLiteStore) UpsertYouTubeGroup(name, groupType, description, privacy string) (int64, error) {
 	now := time.Now().UTC().Format(time.RFC3339)
 	if groupType == "" {
 		groupType = "manager"
@@ -43,15 +37,15 @@ func (s *SQLiteStore) UpsertYouTubeGroupV2(name, groupType, description, privacy
 	return id, err
 }
 
-// GetYouTubeGroupV2ID returns the group ID for a given name and type.
-func (s *SQLiteStore) GetYouTubeGroupV2ID(name, groupType string) (int64, error) {
+// GetYouTubeGroupID returns the group ID for a given name and type.
+func (s *SQLiteStore) GetYouTubeGroupID(name, groupType string) (int64, error) {
 	var id int64
 	err := s.db.QueryRow(`SELECT id FROM youtube_groups WHERE name=? AND group_type=?`, name, groupType).Scan(&id)
 	return id, err
 }
 
-// ListYouTubeGroupsV2 returns all groups.
-func (s *SQLiteStore) ListYouTubeGroupsV2() ([]map[string]interface{}, error) {
+// ListYouTubeGroups returns all groups.
+func (s *SQLiteStore) ListYouTubeGroups() ([]map[string]interface{}, error) {
 	rows, err := s.db.Query(`SELECT id, name, group_type, description, privacy, created_at, updated_at FROM youtube_groups ORDER BY name`)
 	if err != nil {
 		return nil, err
@@ -105,8 +99,8 @@ func (s *SQLiteStore) DeleteYouTubeGroupByName(name, groupType string) error {
 	return tx.Commit()
 }
 
-// DeleteYouTubeGroupV2 deletes a group by ID.
-func (s *SQLiteStore) DeleteYouTubeGroupV2(id int64) error {
+// DeleteYouTubeGroup deletes a group by ID.
+func (s *SQLiteStore) DeleteYouTubeGroup(id int64) error {
 	_, err := s.db.Exec(`DELETE FROM youtube_groups WHERE id=?`, id)
 	return err
 }
@@ -127,11 +121,10 @@ func (s *SQLiteStore) DeleteYouTubeGroupChannelsByChannelID(channelID string) er
 //
 // Membership table is `youtube_group_channels`. Its FK to groups points at
 // the renamed `youtube_groups` (S10). ON DELETE CASCADE keeps
-// removal atomic. The V2 suffix on the methods is decorative (see note
-// on the Groups section above); renaming these methods is post-S11.
+// removal atomic.
 
-// AddChannelToGroupV2 adds a channel membership with position.
-func (s *SQLiteStore) AddChannelToGroupV2(groupID int64, channelID string) error {
+// AddChannelToGroup adds a channel membership with position.
+func (s *SQLiteStore) AddChannelToGroup(groupID int64, channelID string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, err := s.db.Exec(
 		`INSERT INTO youtube_group_channels (group_id, channel_id, position, added_at)
@@ -142,14 +135,14 @@ func (s *SQLiteStore) AddChannelToGroupV2(groupID int64, channelID string) error
 	return err
 }
 
-// RemoveChannelFromGroupV2 removes a channel membership.
-func (s *SQLiteStore) RemoveChannelFromGroupV2(groupID int64, channelID string) error {
+// RemoveChannelFromGroup removes a channel membership.
+func (s *SQLiteStore) RemoveChannelFromGroup(groupID int64, channelID string) error {
 	_, err := s.db.Exec(`DELETE FROM youtube_group_channels WHERE group_id=? AND channel_id=?`, groupID, channelID)
 	return err
 }
 
-// ListGroupChannelsV2 returns channel IDs for a group.
-func (s *SQLiteStore) ListGroupChannelsV2(groupID int64) ([]string, error) {
+// ListGroupChannels returns channel IDs for a group.
+func (s *SQLiteStore) ListGroupChannels(groupID int64) ([]string, error) {
 	rows, err := s.db.Query(`SELECT channel_id FROM youtube_group_channels WHERE group_id=? ORDER BY position`, groupID)
 	if err != nil {
 		return nil, err
@@ -167,8 +160,8 @@ func (s *SQLiteStore) ListGroupChannelsV2(groupID int64) ([]string, error) {
 	return ids, rows.Err()
 }
 
-// ListAllGroupMembershipsV2 returns all group-channel memberships (for loading full state).
-func (s *SQLiteStore) ListAllGroupMembershipsV2() ([]map[string]interface{}, error) {
+// ListAllGroupMemberships returns all group-channel memberships (for loading full state).
+func (s *SQLiteStore) ListAllGroupMemberships() ([]map[string]interface{}, error) {
 	rows, err := s.db.Query(`SELECT gc.group_id, gc.channel_id, gc.position, g.name as group_name, g.group_type
 		FROM youtube_group_channels gc
 		JOIN youtube_groups g ON g.id = gc.group_id
@@ -197,47 +190,3 @@ func (s *SQLiteStore) ListAllGroupMembershipsV2() ([]map[string]interface{}, err
 	return result, rows.Err()
 }
 
-// ── PR15.4 canonical aliases (no V2 suffix) ────────────────────────────────
-// Marcuss-ops dropped the V2 suffix in the YouTubeStore/StorageStore interfaces.
-// These methods delegate to the existing V2 implementations to satisfy both
-// old callers (V2) and new callers (canonical names) without breaking either.
-
-// ListYouTubeGroups returns all groups (canonical — delegates to ListYouTubeGroupsV2).
-func (s *SQLiteStore) ListYouTubeGroups() ([]map[string]interface{}, error) {
-	return s.ListYouTubeGroupsV2()
-}
-
-// AddChannelToGroup adds a channel membership with position (canonical — delegates to AddChannelToGroupV2).
-func (s *SQLiteStore) AddChannelToGroup(groupID int64, channelID string) error {
-	return s.AddChannelToGroupV2(groupID, channelID)
-}
-
-// ListGroupChannels returns channel IDs for a group (canonical — delegates to ListGroupChannelsV2).
-func (s *SQLiteStore) ListGroupChannels(groupID int64) ([]string, error) {
-	return s.ListGroupChannelsV2(groupID)
-}
-
-// UpsertYouTubeGroup creates or updates a group in youtube_groups (canonical — delegates to UpsertYouTubeGroupV2).
-func (s *SQLiteStore) UpsertYouTubeGroup(name, groupType, description, privacy string) (int64, error) {
-	return s.UpsertYouTubeGroupV2(name, groupType, description, privacy)
-}
-
-// GetYouTubeGroupID returns the group ID for a given name and type (canonical — delegates to GetYouTubeGroupV2ID).
-func (s *SQLiteStore) GetYouTubeGroupID(name, groupType string) (int64, error) {
-	return s.GetYouTubeGroupV2ID(name, groupType)
-}
-
-// DeleteYouTubeGroup deletes a group by ID (canonical — delegates to DeleteYouTubeGroupV2).
-func (s *SQLiteStore) DeleteYouTubeGroup(id int64) error {
-	return s.DeleteYouTubeGroupV2(id)
-}
-
-// RemoveChannelFromGroup removes a channel membership (canonical — delegates to RemoveChannelFromGroupV2).
-func (s *SQLiteStore) RemoveChannelFromGroup(groupID int64, channelID string) error {
-	return s.RemoveChannelFromGroupV2(groupID, channelID)
-}
-
-// ListAllGroupMemberships returns all group-channel memberships (canonical — delegates to ListAllGroupMembershipsV2).
-func (s *SQLiteStore) ListAllGroupMemberships() ([]map[string]interface{}, error) {
-	return s.ListAllGroupMembershipsV2()
-}
