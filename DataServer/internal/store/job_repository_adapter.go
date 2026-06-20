@@ -183,6 +183,16 @@ func (r *SQLiteJobRepository) Fail(ctx context.Context, id, reason string) error
 	})
 }
 
+// Delete removes a job and its supplementary data from persistence.
+// Implements jobs.Writer.
+// Idempotent: returns nil if the job is already gone.
+func (r *SQLiteJobRepository) Delete(ctx context.Context, id string) error {
+	if r.store == nil {
+		return fmt.Errorf("job repository: store not initialized")
+	}
+	return r.store.DeleteJob(id)
+}
+
 // ── Compile-time assertion ─────────────────────────────────────────────────
 
 // SQLiteJobRepository now satisfies the canonical jobs.Repository interface.

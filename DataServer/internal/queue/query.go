@@ -1,34 +1,32 @@
-// Package queue provides job queue management with SQLite persistence
+// Package queue provides job queue management with SQLite persistence.
+// QueryService (Batch 3) is reduced to a thin wrapper over the canonical
+// jobs.Reader: the legacy map-based eventStore surface has been dropped, and
+// the four methods that depended on it (GetNextJobID, DeleteJob,
+// UpdateJobLogs, CleanupOldJobs) have been deleted outright.
 package queue
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"time"
 
 	"velox-server/internal/jobs"
-	"velox-server/internal/store"
 )
 
-// QueryService provides read-only access to job data.
-// Uses EventStore (which embeds dbStore) for map-based reads + jobs.Reader
-// for canonical domain reads (Ondata 3 PR3).
+// QueryService provides read-only access to job data via the canonical
+// jobs.Reader interface. All eventStore-coupled reads have been dropped
+// (Batch 3). Write/mutation operations live on LifecycleService.
 type QueryService struct {
-	eventStore store.EventStore // legacy map-based surface (for UpdateJobLogs, DeleteJob, etc.)
-	reader     jobs.Reader      // canonical domain reader (Ondata 3 PR3)
+	reader jobs.Reader
 }
 
-// NewQueryService creates a new query service.
-// eventStore is required for legacy operations (UpdateJobLogs, DeleteJob, GetActiveJobs).
-// reader is the canonical domain reader; pass nil if not yet available.
-func NewQueryService(eventStore store.EventStore, reader jobs.Reader) *QueryService {
-	return &QueryService{eventStore: eventStore, reader: reader}
+// NewQueryService constructs a QueryService backed by the canonical
+// jobs.Reader. The reader is mandatory.
+func NewQueryService(reader jobs.Reader) *QueryService {
+	return &QueryService{reader: reader}
 }
 
 // GetJob retrieves a job by ID via the canonical domain reader.
-// The reader is mandatory (non-nil) per NewQueryService; the legacy
-// map-based eventStore fallback has been removed (Batch 2c).
 func (q *QueryService) GetJob(ctx context.Context, jobID string) (*Job, error) {
 	j, err := q.reader.Get(ctx, jobID)
 	if err != nil {
@@ -55,8 +53,8 @@ func parsePayloadJSON(raw string) map[string]interface{} {
 // domainJobToQueueJob converts a canonical jobs.Job into a queue.Job
 // (scheduling/transport projection). Fields not present in the domain
 // model (history, logs, slot_data, PayloadJSON) are left zero-valued;
-// callers that need the full projection should use MapToJob via the
-// legacy eventStore path.
+// callers that need the full MapToJob hydration should go through the
+// eventStore legacy path (which has been dropped; use SQLiteStore direct).
 func domainJobToQueueJob(j *jobs.Job) *Job {
 	if j == nil {
 		return nil
@@ -117,76 +115,6 @@ func (q *QueryService) GetJobAttempt(ctx context.Context, jobID string) (int, er
 	return job.RetryCount, nil
 }
 
-// GetJobsByStatus returns all jobs with a given status.
-func (q *QueryService) GetJobsByStatus(ctx context.Context, status JobStatus) ([]*Job, error) {
-	return q.listJobs(ctx, []string{string(status)})
-}
-
-// GetPendingJobs returns all pending jobs.
-func (q *QueryService) GetPendingJobs(ctx context.Context) ([]*Job, error) {
-	return q.listJobs(ctx, []string{string(StatusPending)})
-}
-
-// GetRunningJobs returns all running jobs.
-func (q *QueryService) GetRunningJobs(ctx context.Context) ([]*Job, error) {
-	return q.listJobs(ctx, []string{string(StatusRunning)})
-}
-
-func (q *QueryService) listJobs(ctx context.Context, statuses []string) ([]*Job, error) {
-	js := make([]jobs.Status, len(statuses))
-	for i, s := range statuses {
-		js[i] = jobs.Status(s)
-	}
-	domainJobs, err := q.reader.List(ctx, jobs.Filter{Statuses: js, Limit: 1000})
-	if err != nil {
-		return nil, err
-	}
-	result := make([]*Job, 0, len(domainJobs))
-	for _, j := range domainJobs {
-		j := j // capture
-		result = append(result, domainJobToQueueJob(&j))
-	}
-	return result, nil
-}
-
-// GetAllJobs returns all active jobs.
-func (q *QueryService) GetAllJobs(ctx context.Context) (map[string]*Job, error) {
-	activeJobs, err := q.eventStore.GetActiveJobs()
-	if err != nil {
-		return nil, err
-	}
-	result := make(map[string]*Job)
-	for id, m := range activeJobs {
-		result[id] = MapToJob(m)
-	}
-	return result, nil
-}
-
-// Stats returns queue statistics.
-func (q *QueryService) Stats(ctx context.Context) (map[string]int64, error) {
-	return q.eventStore.JobCounts(ctx)
-}
-
-// DeleteJob removes a job.
-func (q *QueryService) DeleteJob(ctx context.Context, jobID string) error {
-	return q.eventStore.DeleteJob(jobID)
-}
-
-// GetNextJobID returns the next pending job ID.
-func (q *QueryService) GetNextJobID(ctx context.Context) (string, error) {
-	jobs, err := q.eventStore.ListJobsByStatus([]string{"PENDING"}, 1)
-	if err != nil {
-		return "", err
-	}
-	if len(jobs) == 0 {
-		return "", nil
-	}
-	if id, ok := jobs[0]["job_id"].(string); ok {
-		return id, nil
-	}
-	return "", nil
-}
-
 // GetJobAsMap returns a job as a map for flexible field access.
 func (q *QueryService) GetJobAsMap(ctx context.Context, jobID string) (map[string]interface{}, error) {
 	job, err := q.GetJob(ctx, jobID)
@@ -231,22 +159,53 @@ func (q *QueryService) GetJobAsMap(ctx context.Context, jobID string) (map[strin
 	return result, nil
 }
 
-// UpdateJobLogs persists worker log entries.
-func (q *QueryService) UpdateJobLogs(ctx context.Context, jobID string, logs []JobLogEntry) error {
-	for _, entry := range logs {
-		if err := q.eventStore.AddJobLog(jobID, entry.Message, entry.WorkerID, entry.IsError); err != nil {
-			return fmt.Errorf("failed to add job log: %w", err)
-		}
+// list Jobs calls the canonical jobs.Reader.List with the converted filter.
+// statuses is a slice of canonical jobs.Status names. Empty slice means
+// "no filter" (return all jobs).
+func (q *QueryService) listJobs(ctx context.Context, statuses []jobs.Status) ([]*Job, error) {
+	domainJobs, err := q.reader.List(ctx, jobs.Filter{Statuses: statuses, Limit: 1000})
+	if err != nil {
+		return nil, err
 	}
-	return nil
+	result := make([]*Job, 0, len(domainJobs))
+	for i := range domainJobs {
+		result = append(result, domainJobToQueueJob(&domainJobs[i]))
+	}
+	return result, nil
 }
 
-// CleanupOldJobs removes completed/error jobs older than specified age.
-func (q *QueryService) CleanupOldJobs(ctx context.Context, age time.Duration) (int, error) {
-	cutoff := time.Now().Add(-age)
-	count, err := q.eventStore.ArchiveOldJobs(cutoff)
+// GetJobsByStatus returns all jobs with a given status via the canonical reader.
+func (q *QueryService) GetJobsByStatus(ctx context.Context, status JobStatus) ([]*Job, error) {
+	return q.listJobs(ctx, []jobs.Status{jobs.Status(status)})
+}
+
+// GetPendingJobs returns all pending jobs via the canonical reader.
+func (q *QueryService) GetPendingJobs(ctx context.Context) ([]*Job, error) {
+	return q.listJobs(ctx, []jobs.Status{StatusPending})
+}
+
+// GetRunningJobs returns all running jobs via the canonical reader.
+func (q *QueryService) GetRunningJobs(ctx context.Context) ([]*Job, error) {
+	return q.listJobs(ctx, []jobs.Status{StatusRunning})
+}
+
+// GetAllJobs returns all jobs (no status filter) via the canonical reader.
+func (q *QueryService) GetAllJobs(ctx context.Context) ([]*Job, error) {
+	return q.listJobs(ctx, nil)
+}
+
+// Stats returns aggregate job counts grouped by status. The returned map's
+// keys are canonical jobs.Status string representations, matching the
+// pre-Batch-3 (string-keyed) shape so HTTP/JSON consumers continue to work
+// without breaking changes.
+func (q *QueryService) Stats(ctx context.Context) (map[string]int64, error) {
+	counts, err := q.reader.Counts(ctx)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
-	return int(count), nil
+	res := make(map[string]int64, len(counts))
+	for k, v := range counts {
+		res[string(k)] = v
+	}
+	return res, nil
 }

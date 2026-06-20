@@ -228,7 +228,7 @@ func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
 		return nil, fmt.Errorf("bootstrap: lifecycle service: %w", err)
 	}
 
-	querySvc := queue.NewQueryService(sqliteStore, jobRepo)
+	querySvc := queue.NewQueryService(jobRepo)
 
 	fileQ, err := queue.NewFileQueue(&queue.FileQueueConfig{
 		MaxRetries: cfg.Workers.MaxJobAttempts,

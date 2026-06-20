@@ -108,6 +108,10 @@ func (s *storePostgresStub) Fail(ctx context.Context, id, reason string) error {
 	return errNotImplemented
 }
 
+func (s *storePostgresStub) Delete(ctx context.Context, id string) error {
+	return errNotImplemented
+}
+
 // errNotImplemented is a local sentinel for unimplemented stub methods.
 var errNotImplemented = errors.New("not implemented")
 
@@ -347,10 +351,6 @@ func TestLifecycleService_Queries_Stubbed(t *testing.T) {
 		t.Fatalf("GetJobsByStatus: expected errNotImplemented; got %v", err)
 	}
 
-	_, err = svc.GetNextJobID(context.Background())
-	if !errors.Is(err, errNotImplemented) {
-		t.Fatalf("GetNextJobID: expected errNotImplemented; got %v", err)
-	}
 }
 
 // ── Internal helper (L2a) ───────────────────────────────────────────────────

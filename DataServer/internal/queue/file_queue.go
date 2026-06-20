@@ -175,7 +175,7 @@ func (q *FileQueue) GetJob(ctx context.Context, jobID string) (*Job, error) {
 	return q.query.GetJob(ctx, jobID)
 }
 
-func (q *FileQueue) GetAllJobs(ctx context.Context) (map[string]*Job, error) {
+func (q *FileQueue) GetAllJobs(ctx context.Context) ([]*Job, error) {
 	return q.query.GetAllJobs(ctx)
 }
 
@@ -183,8 +183,11 @@ func (q *FileQueue) Stats(ctx context.Context) (map[string]int64, error) {
 	return q.query.Stats(ctx)
 }
 
+// DeleteJob hard-deletes a job via the canonical jobs.Writer surface
+// (LifecycleService.Jobs()). The legacy eventStore.DeleteJob path has
+// been dropped (Batch 3).
 func (q *FileQueue) DeleteJob(ctx context.Context, jobID string) error {
-	return q.query.DeleteJob(ctx, jobID)
+	return q.lifecycle.Jobs().Delete(ctx, jobID)
 }
 
 // ── Accessors ──

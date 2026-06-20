@@ -44,6 +44,10 @@ type Writer interface {
 
 	// Fail marks a job FAILED and records the reason.
 	Fail(ctx context.Context, id string, reason string) error
+
+	// Delete hard-deletes a job and its supplementary rows from persistence.
+	// Returns no error if the job is already gone (idempotent).
+	Delete(ctx context.Context, id string) error
 }
 
 // Repository combines Reader and Writer into a single job persistence contract.

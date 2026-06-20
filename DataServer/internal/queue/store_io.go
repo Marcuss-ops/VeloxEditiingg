@@ -206,35 +206,6 @@ func PersistJobResult(job *Job, dbStore *store.SQLiteStore) error {
 	return dbStore.UpsertJobResult(job.JobID, rawJSON)
 }
 
-// PersistJobRequest stores the immutable request payload in request_json.
-// Only called once at job creation.
-func PersistJobRequest(jobID string, payload map[string]interface{}, eventStore store.EventStore) error {
-	m := make(map[string]any)
-	for k, v := range payload {
-		m[k] = v
-	}
-	// Remove mutable fields that don't belong in request
-	delete(m, "status")
-	delete(m, "assigned_to")
-	delete(m, "claimed_by")
-	delete(m, "claimed_at")
-	delete(m, "lease_id")
-	delete(m, "lease_expiry")
-	delete(m, "retry_count")
-	delete(m, "attempt")
-	delete(m, "last_error")
-	delete(m, "error_message")
-	delete(m, "history")
-	delete(m, "logs")
-
-	rawJSON, err := json.Marshal(m)
-	if err != nil {
-		return fmt.Errorf("failed to marshal request_json: %w", err)
-	}
-
-	return eventStore.SetJobRequest(jobID, rawJSON)
-}
-
 // ── Helpers ──
 
 func asString(v interface{}) string {

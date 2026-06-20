@@ -37,7 +37,7 @@ func TestForwardSchedulesAsyncPollAndWorkerHandoff(t *testing.T) {
 	if tsErr != nil {
 		t.Fatalf("new transition service: %v", tsErr)
 	}
-	querySvc := queue.NewQueryService(db, nil)
+	querySvc := queue.NewQueryService(store.NewSQLiteJobRepository(db))
 	q, err := queue.NewFileQueue(&queue.FileQueueConfig{MaxRetries: 3}, ts, querySvc)
 	if err != nil {
 		t.Fatalf("file queue: %v", err)
@@ -159,7 +159,7 @@ func TestForwardCompletedResultEnqueuesWorkerJob(t *testing.T) {
 	if tsErr != nil {
 		t.Fatalf("new transition service: %v", tsErr)
 	}
-	querySvc := queue.NewQueryService(db, nil)
+	querySvc := queue.NewQueryService(store.NewSQLiteJobRepository(db))
 	q, err := queue.NewFileQueue(&queue.FileQueueConfig{MaxRetries: 3}, ts, querySvc)
 	if err != nil {
 		t.Fatalf("file queue: %v", err)

@@ -29,7 +29,7 @@ func TestCreateSmokeClipStock_Validation(t *testing.T) {
 	if err != nil {
 		t.Skipf("Transition service unavailable: %v", err)
 	}
-	querySvc := queue.NewQueryService(db, nil)
+	querySvc := queue.NewQueryService(store.NewSQLiteJobRepository(db))
 	q, err := queue.NewFileQueue(&queue.FileQueueConfig{MaxRetries: cfg.Workers.MaxJobAttempts}, ts, querySvc)
 	if err != nil {
 		t.Skipf("File queue unavailable: %v", err)
@@ -61,7 +61,7 @@ func TestCreateSmokeClipStock_Enqueue(t *testing.T) {
 	if err != nil {
 		t.Skipf("Transition service unavailable: %v", err)
 	}
-	querySvc := queue.NewQueryService(db, nil)
+	querySvc := queue.NewQueryService(store.NewSQLiteJobRepository(db))
 	q, err := queue.NewFileQueue(&queue.FileQueueConfig{MaxRetries: cfg.Workers.MaxJobAttempts}, ts, querySvc)
 	if err != nil {
 		t.Skipf("File queue unavailable: %v", err)
