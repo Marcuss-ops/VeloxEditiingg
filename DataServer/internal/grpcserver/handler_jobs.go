@@ -312,25 +312,27 @@ func (h *Handler) handleLeaseRenewal(workerID string, lr *pb.LeaseRenewal) {
 }
 
 // verifyJobOwnership checks that `jobID` currently belongs to `workerID`.
-// Returns true when the job's `assigned_to` column equals `workerID`. The
-// function does NOT check the lease_id or the lease expiry here — callers
-// that carry an explicit lease_id should pass it (see verifyJobOwnershipFull).
+// Returns true when the job's WorkerID equals `workerID`. The function
+// does NOT check the lease_id or the lease expiry here — callers that
+// carry an explicit lease_id should pass it (see verifyJobOwnershipFull).
 //
 // Phase 3.3: this is the lightweight gate behind every mutating message
 // (JobResult, LeaseRenewal, JobRejected, ArtifactUploaded, JobProgress).
 // Without it, an authenticated worker A could complete or steal a job
 // leased to worker B by sending JobResult{ job_id=<B's job> } — which
 // the protobuf contract alone does not protect against.
+//
+// Ondata 3 PR3: migrated from dbStore.GetJob (map-based) to
+// lifecycleSvc.Jobs().Get (canonical jobs.Job domain model).
 func (h *Handler) verifyJobOwnership(workerID, jobID string) bool {
 	if workerID == "" || jobID == "" {
 		return false
 	}
-	m, err := h.dbStore.GetJob(context.Background(), jobID)
-	if err != nil || m == nil {
+	j, err := h.lifecycleSvc.Jobs().Get(context.Background(), jobID)
+	if err != nil || j == nil {
 		return false
 	}
-	assigned, _ := m["assigned_to"].(string)
-	return assigned == workerID
+	return j.WorkerID == workerID
 }
 
 // lookupJobCASFields fetches the (revision, attempt) tuple required for the
