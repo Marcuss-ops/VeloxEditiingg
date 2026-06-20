@@ -26,82 +26,28 @@ const (
 	StatusCancelled = jobs.StatusCancelled
 )
 
-// QueueItem is the scheduling representation of a job in the queue.
-// It carries the full operational state needed by HTTP handlers and
-// legacy consumers. New code should use jobs.Job for domain logic
-// and queue.QueueItem for scheduling/transport concerns.
+// QueueItem is a backward-compatible alias to the canonical transport type
+// defined in the jobs package (Phase 1 of Ondata 4 Strategy B). The full
+// struct (with all 30 JSON-tagged fields + history/logs/slot_data) lives at
+// jobs.QueueItem — this file keeps only the alias for backward-compat with
+// every existing caller that imports queue.QueueItem / queue.Job.
 //
-// Job is retained as a type alias for backward compatibility with all
-// existing callers that reference queue.Job. New code should use
-// QueueItem directly.
-type QueueItem struct {
-	JobID        string      `json:"job_id"`
-	Status       JobStatus   `json:"status"`
-	VideoName    string      `json:"video_name,omitempty"`
-	ProjectID    string      `json:"project_id,omitempty"`
-	CreatedAt    interface{} `json:"created_at,omitempty"`
-	UpdatedAt    interface{} `json:"updated_at,omitempty"`
-	StartedAt    interface{} `json:"started_at,omitempty"`
-	CompletedAt  interface{} `json:"completed_at,omitempty"`
-	AssignedAt   interface{} `json:"assigned_at,omitempty"`
-	LeaseExpiry  interface{} `json:"lease_expiry,omitempty"`
-	ProcessingAt interface{} `json:"processing_at,omitempty"`
+// Job is also a backward-compatible alias for QueueItem (== jobs.QueueItem).
+// New code should reference jobs.QueueItem / jobs.Job directly.
+type QueueItem = jobs.QueueItem
 
-	AssignedTo       string `json:"assigned_to,omitempty"`
-	AssignedWorkerIP string `json:"assigned_worker_ip,omitempty"`
-	WorkerName       string `json:"worker_name,omitempty"`
-	ClaimedBy        string `json:"claimed_by,omitempty"`
-	ClaimedAt        string `json:"claimed_at,omitempty"`
-	LeaseID          string `json:"lease_id,omitempty"`
-
-	RetryCount int `json:"retry_count,omitempty"`
-	Attempt    int `json:"attempt,omitempty"`
-	MaxRetries int `json:"max_retries,omitempty"`
-
-	LastError    string      `json:"last_error,omitempty"`
-	LastErrorAt  interface{} `json:"last_error_at,omitempty"`
-	ErrorMessage string      `json:"error_message,omitempty"`
-	FailedAt     interface{} `json:"failed_at,omitempty"`
-	FailedBy     string      `json:"failed_by,omitempty"`
-
-	History []JobHistoryEntry `json:"history,omitempty"`
-
-	Logs          []JobLogEntry `json:"logs,omitempty"`
-	LogsUpdatedAt string        `json:"logs_updated_at,omitempty"`
-
-	SlotData map[string]interface{} `json:"slot_data,omitempty"`
-
-	JobFingerprint string `json:"job_fingerprint,omitempty"`
-
-	SubmittedVia string `json:"submitted_via,omitempty"`
-	LastActivity string `json:"last_activity,omitempty"`
-	RunID        string `json:"run_id,omitempty"`
-
-	Payload map[string]interface{} `json:"-"`
-}
-
-// Job is a backward-compatible type alias for QueueItem.
+// Job is a backward-compatible alias for QueueItem (== jobs.QueueItem).
 // All existing callers that reference queue.Job continue to compile.
-// New code should use QueueItem directly or the canonical jobs.Job domain model.
-type Job = QueueItem
+// New code should use jobs.Job or jobs.QueueItem directly.
+type Job = jobs.QueueItem
 
-// JobHistoryEntry represents a status change in job history
-type JobHistoryEntry struct {
-	Status    string      `json:"status"`
-	Timestamp interface{} `json:"timestamp"`
-	WorkerID  string      `json:"worker_id,omitempty"`
-	Message   string      `json:"message,omitempty"`
-}
+// JobHistoryEntry is a backward-compatible alias to jobs.JobHistoryEntry
+// (the canonical history-event type).
+type JobHistoryEntry = jobs.JobHistoryEntry
 
-// JobLogEntry represents a log entry from the worker
-type JobLogEntry struct {
-	Timestamp string `json:"timestamp,omitempty"`
-	Time      string `json:"time,omitempty"`
-	Message   string `json:"message,omitempty"`
-	Level     string `json:"level,omitempty"`
-	IsError   bool   `json:"is_error,omitempty"`
-	WorkerID  string `json:"worker_id,omitempty"`
-}
+// JobLogEntry is a backward-compatible alias to jobs.JobLogEntry
+// (the canonical log-event type).
+type JobLogEntry = jobs.JobLogEntry
 
 // FileQueue implements a SQLite-backed job queue with separated lifecycle and query services.
 //
