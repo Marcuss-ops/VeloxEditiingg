@@ -1,0 +1,21 @@
+chore(store): Batch 3.2 \u2014 drop 4 confirmed orphan *SQLiteStore methods
+
+Per user-supplied `grep \.Mname(` verification (the same audit method
+used in Batch 3.1), exactly 4 of the 5 Batch 3.2 candidates had 0 callers:
+
+  UpsertJob       (store_jobs_mutation.go) \u2014 0 callers (orphan)
+  ReplaceJobs     (store_jobs_mutation.go) \u2014 0 callers (orphan)
+  GetJobHistory   (store_jobs_history.go) \u2014 0 callers (orphan)
+  GetJobLogs      (store_jobs_history.go) \u2014 0 callers (orphan)
+
+One candidate was KEPT (verification under-count):
+
+  replaceJobHistoryTx (store_jobs_history.go) \u2014 1 caller (live):
+    called from ClaimNextPendingJob in store_jobs.go:139, which
+    atomically claims a pending job and writes its history. Dropping
+    it would break the worker-claim path.
+
+Net: 4 *SQLiteStore methods deleted from 2 files in the store package.
+Cross-repo grep (RemoteCodex/, frontend_standalone/, shared/) confirms
+no external consumers of any of the 4 deleted methods. Verified with
+go build, go vet, race-test on jobs/queue/store, and full short test.
