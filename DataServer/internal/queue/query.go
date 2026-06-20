@@ -38,6 +38,8 @@ func (q *QueryService) GetJob(ctx context.Context, jobID string) (*Job, error) {
 	return domainJobToQueueJob(j), nil
 }
 
+// TODO Ondata 4 Phase 2-4: delete (duplicated by jobs.view.go's parsePayloadJSON).
+// Kept here for incremental Phase 1 → Phase 4 sweep of queue.QueryService.
 // parsePayloadJSON converts a raw JSON payload string into a map.
 func parsePayloadJSON(raw string) map[string]interface{} {
 	if raw == "" || raw == "{}" {
@@ -50,6 +52,9 @@ func parsePayloadJSON(raw string) map[string]interface{} {
 	return m
 }
 
+// TODO Ondata 4 Phase 2-4: delete (replaced by jobs.view.go's ToQueueItem).
+// Kept here for incremental Phase 1 → Phase 4 sweep of queue.QueryService.
+//
 // domainJobToQueueJob converts a canonical jobs.Job into a queue.Job
 // (scheduling/transport projection). Fields not present in the domain
 // model (history, logs, slot_data, PayloadJSON) are left zero-valued;

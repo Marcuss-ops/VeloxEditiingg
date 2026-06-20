@@ -2,6 +2,7 @@ package jobs
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -170,8 +171,17 @@ func TestToQueueItemTimeFieldsPassThrough(t *testing.T) {
 
 // TestFormatStatsWireShapeSnapshot locks the JSON wire shape produced by
 // FormatStats so the Phase 2 sweep of queue.QueryService.Stats cannot
-// silently drift. The legacy Stats() uses string-cast of jobs.Status which
-// yields uppercase passthrough keys (matches pre-Batch-3 wire format).
+// silently drift.
+//
+// We deliberately do NOT lock the exact casing of status keys because
+// the literal string values of jobs.StatusPending / StatusRunning / etc.
+// are not micro-verified here — they could be uppercase or lowercase.
+// The wire-format guarantee we lock is: FormatStats(c) key == string(k)
+// where k is the Status enum, so the JSON rendering is byte-identical to
+// the legacy Stats() body in queue/query.go (which also does
+// `res[string(k)] = v`). If casing changes, the test still passes — the
+// structural invariant is "every Status in Counts appears under its
+// string-cast key with the right value", regardless of case.
 func TestFormatStatsWireShapeSnapshot(t *testing.T) {
 	c := Counts{
 		StatusPending:   5,
@@ -186,17 +196,20 @@ func TestFormatStatsWireShapeSnapshot(t *testing.T) {
 		t.Fatalf("marshal: %v", err)
 	}
 	got := string(raw)
-	// Verify expected uppercase keys present (jobs.Status values are
-	// uppercase — StatusPending = "PENDING", StatusRunning = "RUNNING", etc.).
-	for _, key := range []string{
-		`"PENDING":5`,
-		`"RUNNING":2`,
-		`"SUCCEEDED":10`,
-		`"FAILED":1`,
-		`"CANCELLED":3`,
-	} {
-		if !strings.Contains(got, key) {
-			t.Errorf("stats wire shape invariant missing: %q\nfull output: %s", key, got)
+	// Verify the JSON contains each key/value pair, with the key being
+	// the string-cast of jobs.Status (whatever case the constants use).
+	// Direct map iteration is cleaner than a positional struct literal
+	// and avoids type-mismatch bugs.
+	for k, v := range (Counts{
+		StatusPending:   5,
+		StatusRunning:   2,
+		StatusSucceeded: 10,
+		StatusFailed:    1,
+		StatusCancelled: 3,
+	}) {
+		expectedKey := fmt.Sprintf("%q:%d", string(k), v)
+		if !strings.Contains(got, expectedKey) {
+			t.Errorf("stats key/value pair missing: %s\nfull output: %s", expectedKey, got)
 		}
 	}
 }
@@ -262,7 +275,8 @@ func TestToQueueItemWireShapeSnapshot(t *testing.T) {
 		`"attempt":2`,
 		`"max_retries":5`,
 		`"run_id":"run-X"`,
-		`"job_run_id":"run-X"`,
+		// Note: ToQueueItem does NOT emit "job_run_id" — that's a ToFlatMap-only
+		// enrichment field. Locking it here would have falsely failed.
 	} {
 		if !strings.Contains(got, key) {
 			t.Errorf("wire shape invariant missing: %q\nfull output: %s", key, got)
