@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"velox-server/internal/util"
+	"velox-server/internal/identity"
 	"velox-shared/payload"
 )
 
@@ -150,7 +150,7 @@ func (s *AssetService) ResolveAndRegister(ctx context.Context, cmd ResolveAssetC
 	}
 
 	// 6. Insert source record
-	sourceID := util.GenerateID()
+	sourceID := identity.NewHex128()
 	sourceRecord := AssetSourceRecord{
 		SourceID:        sourceID,
 		AssetID:         assetID,
@@ -337,8 +337,6 @@ func extensionFromName(name, mimeType string) string {
 	return ".bin"
 }
 
-// generateID delegates to util.GenerateID for canonical ID generation.
-func generateID() string { return util.GenerateID() }
 
 // ── voiceover payload helpers (shared with legacy bridge) ────────────────────
 

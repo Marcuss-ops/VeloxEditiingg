@@ -13,8 +13,8 @@ import (
 	"fmt"
 	"time"
 
+	"velox-server/internal/identity"
 	"velox-server/internal/store"
-	"velox-server/internal/util"
 )
 
 // SQLiteFinalizationRepository is the SQLite-backed implementation of
@@ -209,9 +209,6 @@ func (r *SQLiteFinalizationRepository) FinalizeVerified(
 	nowStr := verifiedAt.UTC().Format(time.RFC3339)
 
 	// 2. jobs CAS: RUNNING + owner + lease [+ revision if provided] → SUCCEEDED.
-	//    Note: we no longer write jobs.output_sha256 here — that
-	//    column is being retired (PR 3.5-b 4.3). The canonical SHA
-	//    lives on the artifacts row.
 	jobQuery := `
 		UPDATE jobs
 		SET status = 'SUCCEEDED',
@@ -298,9 +295,6 @@ func (r *SQLiteFinalizationRepository) FinalizeVerified(
 	}
 
 	// 6. Resolve delivery destinations via plan resolver or fallback.
-	//    If cmd.DestinationID is set, use only that one (explicit caller
-	//    intent). Otherwise, delegate to the DeliveryPlanResolver (when
-	//    configured) or fall back to all enabled destinations.
 	var destIDs []string
 	if cmd.DestinationID != "" {
 		destIDs = []string{cmd.DestinationID}
@@ -324,6 +318,7 @@ func (r *SQLiteFinalizationRepository) FinalizeVerified(
 		}
 	}
 	for _, destID := range destIDs {
+		deliveryID := identity.NewHex128()
 		delRes, err := tx.ExecContext(ctx, `
 			INSERT INTO job_deliveries (delivery_id, artifact_id, destination_id, status, idempotency_key, created_at, updated_at)
 			SELECT ?, ?, ?, 'PENDING', ?, ?, ?
@@ -331,7 +326,7 @@ func (r *SQLiteFinalizationRepository) FinalizeVerified(
 				SELECT 1 FROM job_deliveries
 				WHERE artifact_id = ? AND destination_id = ?
 			)`,
-			util.GenerateID(), cmd.ArtifactID, destID,
+			deliveryID, cmd.ArtifactID, destID,
 			cmd.ArtifactID+"_"+destID, nowStr, nowStr,
 			cmd.ArtifactID, destID,
 		)

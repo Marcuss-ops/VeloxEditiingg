@@ -2,61 +2,29 @@
 //
 // LifecycleService consumes a Clock instead of calling time.Now() directly so
 // that lease-renewal tests, reaper deadlines, and SUCCEEDED gating can be
-// driven with a deterministic time source. The interface is deliberately tiny
-// so the production wiring (RealClock) is a zero-cost shim.
+// driven with a deterministic time source.
+//
+// Types are aliased from platform/clock (canonical server clock package).
 package queue
 
-import "time"
+import (
+	"time"
 
-// Clock is the time source for lifecycle operations.
-//
-// Implementations must return UTC times so event/history timestamps stay
-// comparable across the DB (which is mapped to RFC3339 UTC strings). Tests
-// use MockClock to advance time without sleeping.
-type Clock interface {
-	Now() time.Time
-}
+	"velox-server/internal/platform/clock"
+)
 
-// RealClock returns the wall-clock UTC time. Used in production.
-type RealClock struct{}
+// Clock is an alias for the canonical server clock interface.
+type Clock = clock.Clock
 
-// Now returns the current wall clock time in UTC.
-func (RealClock) Now() time.Time { return time.Now().UTC() }
+// RealClock is an alias for the production system clock.
+type RealClock = clock.System
 
-// MockClock is a manual time source for tests. Advance(d) lets tests simulate
-// lease expiry without sleeping.
-type MockClock struct {
-	T time.Time
-}
+// MockClock is an alias for the canonical fake clock from platform/clock.
+// Kept for backward-compatible naming in queue tests.
+type MockClock = clock.Fake
 
 // NewMockClock returns a MockClock seeded at `start`.
 func NewMockClock(start time.Time) *MockClock {
-	if start.IsZero() {
-		start = time.Now().UTC()
-	}
-	return &MockClock{T: start.UTC()}
+	return clock.NewFake(start)
 }
 
-// Now returns the mock clock's current time, never zero.
-func (m *MockClock) Now() time.Time {
-	if m.T.IsZero() {
-		m.T = time.Now().UTC()
-	}
-	return m.T
-}
-
-// Advance moves the mock clock forward by d.
-func (m *MockClock) Advance(d time.Duration) {
-	m.T = m.T.Add(d)
-}
-
-// Set replaces the mock clock's time.
-func (m *MockClock) Set(t time.Time) {
-	m.T = t.UTC()
-}
-
-// Compile-time guards.
-var (
-	_ Clock = RealClock{}
-	_ Clock = (*MockClock)(nil)
-)

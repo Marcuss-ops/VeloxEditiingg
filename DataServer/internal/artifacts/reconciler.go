@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"velox-server/internal/queue"
+	"velox-server/internal/platform/clock"
 	"velox-server/internal/store"
 )
 
@@ -63,7 +63,7 @@ type Reconciler struct {
 	db        *sql.DB
 	blobStore store.BlobStore
 	repo      Repository
-	clock     queue.Clock
+	clock     clock.Clock
 	config    ReconcilerConfig
 }
 
@@ -113,7 +113,7 @@ type ReconcileStats struct {
 // NewReconciler composes a Reconciler. db and blobStore must outlive
 // the Reconciler (Run holds references). repo can be the same
 // SQLiteRepository as Service uses (transitively via the same *sql.DB).
-func NewReconciler(db *sql.DB, blobStore store.BlobStore, repo Repository, clock queue.Clock, config ReconcilerConfig) (*Reconciler, error) {
+func NewReconciler(db *sql.DB, blobStore store.BlobStore, repo Repository, c clock.Clock, config ReconcilerConfig) (*Reconciler, error) {
 	if db == nil {
 		return nil, fmt.Errorf("artifacts: Reconciler: nil db")
 	}
@@ -123,8 +123,8 @@ func NewReconciler(db *sql.DB, blobStore store.BlobStore, repo Repository, clock
 	if repo == nil {
 		return nil, fmt.Errorf("artifacts: Reconciler: nil repo")
 	}
-	if clock == nil {
-		clock = queue.RealClock{}
+	if c == nil {
+		c = clock.System{}
 	}
 	if config.OrphanBlobAge <= 0 {
 		config.OrphanBlobAge = 24 * time.Hour
@@ -142,7 +142,7 @@ func NewReconciler(db *sql.DB, blobStore store.BlobStore, repo Repository, clock
 		db:        db,
 		blobStore: blobStore,
 		repo:      repo,
-		clock:     clock,
+		clock:     c,
 		config:    config,
 	}, nil
 }

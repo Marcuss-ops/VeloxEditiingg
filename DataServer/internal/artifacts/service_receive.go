@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"velox-server/internal/status"
-	"velox-server/internal/util"
 )
 
 // =====================================================================
@@ -57,8 +56,9 @@ func (s *Service) Receive(ctx context.Context, uploadID string, reader io.Reader
 	// Move CREATED -> UPLOADING so the reconciler (chunk 5) treats it
 	// differently from a row that hasn't started streaming yet.
 	if session.Status == string(status.UploadCreated) {
+		uploading := string(status.UploadUploading)
 		if err := s.repo.UpdateUploadStatus(ctx, uploadID, UploadFields{
-			Status: util.PtrString(string(status.UploadUploading)),
+			Status: &uploading,
 		}); err != nil {
 			return nil, err
 		}
@@ -126,8 +126,9 @@ func (s *Service) Receive(ctx context.Context, uploadID string, reader io.Reader
 
 	// ----- mark RECEIVED -----
 	now := s.clock.Now()
+	received := string(status.UploadReceived)
 	if err := s.repo.UpdateUploadStatus(ctx, uploadID, UploadFields{
-		Status:            util.PtrString(string(status.UploadReceived)),
+		Status:            &received,
 		ReceivedSizeBytes: &receivedSize,
 		ReceivedSHA256:    &receivedSHA,
 		CompletedAt:       &now,
@@ -147,8 +148,9 @@ func (s *Service) Receive(ctx context.Context, uploadID string, reader io.Reader
 // reconciler can clean up the staging blob later.
 func (s *Service) markFailed(ctx context.Context, uploadID, reason string) error {
 	now := s.clock.Now()
+	failed := string(status.UploadFailed)
 	err := s.repo.UpdateUploadStatus(ctx, uploadID, UploadFields{
-		Status:      util.PtrString(string(status.UploadFailed)),
+		Status:      &failed,
 		CompletedAt: &now,
 	})
 	if err != nil {

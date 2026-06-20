@@ -13,10 +13,10 @@ import (
 	"strings"
 	"time"
 
-	"velox-server/internal/queue"
+	"velox-server/internal/identity"
+	"velox-server/internal/platform/clock"
 	"velox-server/internal/status"
 	"velox-server/internal/store"
-	"velox-server/internal/util"
 )
 
 // defaultUploadTTL matches the spec's reconciler rule
@@ -46,7 +46,7 @@ type Service struct {
 	finRepo   FinalizationRepository // NEW in PR 3.5-a: sole writer of jobs.status='SUCCEEDED'
 	blobStore store.BlobStore
 	db        *sql.DB
-	clock     queue.Clock
+	clock     clock.Clock
 
 	uploadTTL time.Duration
 }
@@ -62,9 +62,9 @@ type Service struct {
 //
 // PR 3.5-a: finRepo is REQUIRED. Panic if nil so a misconfigured compose
 // always flakes on startup instead of silently producing no SUCCEEDED.
-func NewService(repo Repository, finRepo FinalizationRepository, blobStore store.BlobStore, db *sql.DB, clock queue.Clock) *Service {
-	if clock == nil {
-		clock = queue.RealClock{}
+func NewService(repo Repository, finRepo FinalizationRepository, blobStore store.BlobStore, db *sql.DB, c clock.Clock) *Service {
+	if c == nil {
+		c = clock.System{}
 	}
 	if repo == nil {
 		panic("artifacts: NewService requires a non-nil Repository")
@@ -77,7 +77,7 @@ func NewService(repo Repository, finRepo FinalizationRepository, blobStore store
 		finRepo:   finRepo,
 		blobStore: blobStore,
 		db:        db,
-		clock:     clock,
+		clock:     c,
 		uploadTTL: defaultUploadTTL,
 	}
 }
@@ -334,8 +334,8 @@ func (s *Service) BeginUpload(ctx context.Context, cmd BeginUploadCommand) (*Upl
 
 	// ----- 4. allocate ids + temp key + atomic insert via finRepo -----
 	now := s.clock.Now()
-	uploadID := util.GenerateID()
-	artifactID := util.GenerateID()
+	uploadID := identity.NewHex128()
+	artifactID := identity.NewHex128()
 	tempKey := stagingTempKey(s.blobStore, uploadID)
 
 	// PR 3.5-a: atomic insert of artifacts + artifact_uploads via finRepo.
