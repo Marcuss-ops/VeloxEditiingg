@@ -80,11 +80,11 @@ type ExitFunc func(int)
 
 // Worker represents a Velox worker agent.
 type Worker struct {
-	config           *config.WorkerConfig
-	apiClient        *api.Client                              // Retained for data-plane operations (upload, asset download)
-	transport        controltransport.ControlTransport        // Current session's transport (recreated per connect)
+	config    *config.WorkerConfig
+	apiClient *api.Client          // Retained for data-plane operations (upload, asset download)
+	transport controltransport.ControlTransport // Current session's transport (recreated per connect)
 	transportFactory func() controltransport.ControlTransport // Factory for new transport instances
-	logger           *logger.Logger
+	logger    *logger.Logger
 
 	// Status management — error state only; busy/idle derived from activeJobs
 	status Status
@@ -95,8 +95,8 @@ type Worker struct {
 	activeJobsMu sync.RWMutex
 
 	// Connection state machine
-	connState        ConnectionState
-	connStateMu      sync.RWMutex
+	connState     ConnectionState
+	connStateMu   sync.RWMutex
 	connFailureCount int
 
 	// Lifecycle management
@@ -137,6 +137,28 @@ type Worker struct {
 
 	// Exit function (for testing, defaults to os.Exit)
 	exitFunc ExitFunc
+
+	// ── Shadow mode (PR11) ─────────────────────────────────────────────────
+	//
+	// shadowTransportFactory creates the gRPC observation-only transport.
+	// The returned transport receives JobOffer/Command messages but NEVER
+	// sends JobAccepted — purely compares timing with the primary transport.
+	shadowTransportFactory func() controltransport.ControlTransport
+
+	// shadowSeen tracks jobIDs received on the shadow transport with timestamps.
+	// When the primary transport gets a job, we compare against this map.
+	shadowSeen   map[string]time.Time
+	shadowSeenMu sync.Mutex
+
+	// shadowActive is set atomically by shadowSessionLifecycle when the
+	// shadow gRPC transport successfully connects. Read by
+	// isShadowModeActive() to gate recordPrimaryJobSeen without a data race.
+	shadowActive atomic.Bool
+
+	// Shadow metrics (atomic counters).
+	shadowOffers    atomic.Int64
+	shadowMatches   atomic.Int64
+	shadowMismatches atomic.Int64
 }
 
 // recentLogBuffer is a thread-safe ring buffer for recent log lines.
