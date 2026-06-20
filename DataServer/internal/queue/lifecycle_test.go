@@ -149,7 +149,7 @@ func TestNewLifecycleService_Succeeds(t *testing.T) {
 // service was built with non-nil repos.
 func TestLifecycleService_Accessors(t *testing.T) {
 	t.Parallel()
-	clk := RealClock{}
+	clk := clock.System{}
 	svc, err := NewLifecycleService(postgresStubRepo, postgresJobsRepo, clk)
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
@@ -174,7 +174,7 @@ func TestLifecycleService_Accessors(t *testing.T) {
 // at unit-test speed.
 func TestLifecycleService_Start_EmptyID(t *testing.T) {
 	t.Parallel()
-	svc, _ := NewLifecycleService(postgresStubRepo, postgresJobsRepo, RealClock{})
+	svc, _ := NewLifecycleService(postgresStubRepo, postgresJobsRepo, clock.System{})
 
 	err := svc.Start(context.Background(), store.StartCommand{
 		JobID:    "",
@@ -193,7 +193,7 @@ func TestLifecycleService_Start_EmptyID(t *testing.T) {
 // underlying JobRepository.PR3Start (the stub returns errNotImplemented).
 func TestLifecycleService_Start_Stubbed(t *testing.T) {
 	t.Parallel()
-	svc, _ := NewLifecycleService(postgresStubRepo, postgresJobsRepo, RealClock{})
+	svc, _ := NewLifecycleService(postgresStubRepo, postgresJobsRepo, clock.System{})
 
 	err := svc.Start(context.Background(), store.StartCommand{
 		JobID:    "job-1",
@@ -212,7 +212,7 @@ func TestLifecycleService_Start_Stubbed(t *testing.T) {
 // rather than a generic non-nil error.
 func TestLifecycleService_Fail_EmptyID(t *testing.T) {
 	t.Parallel()
-	svc, _ := NewLifecycleService(postgresStubRepo, postgresJobsRepo, RealClock{})
+	svc, _ := NewLifecycleService(postgresStubRepo, postgresJobsRepo, clock.System{})
 
 	err := svc.Fail(context.Background(), store.FailCommand{JobID: ""})
 	if err == nil {
@@ -228,7 +228,7 @@ func TestLifecycleService_Fail_EmptyID(t *testing.T) {
 // CancelCommand). This test pins the contract for the merged file.
 func TestLifecycleService_Fail_Stubbed(t *testing.T) {
 	t.Parallel()
-	svc, _ := NewLifecycleService(postgresStubRepo, postgresJobsRepo, RealClock{})
+	svc, _ := NewLifecycleService(postgresStubRepo, postgresJobsRepo, clock.System{})
 
 	err := svc.Fail(context.Background(), store.FailCommand{
 		JobID:     "job-1",
@@ -245,7 +245,7 @@ func TestLifecycleService_Fail_Stubbed(t *testing.T) {
 // TestLifecycleService_Cancel_EmptyID asserts Cancel() short-circuits on empty JobID.
 func TestLifecycleService_Cancel_EmptyID(t *testing.T) {
 	t.Parallel()
-	svc, _ := NewLifecycleService(postgresStubRepo, postgresJobsRepo, RealClock{})
+	svc, _ := NewLifecycleService(postgresStubRepo, postgresJobsRepo, clock.System{})
 
 	err := svc.Cancel(context.Background(), store.CancelCommand{JobID: ""})
 	if err == nil {
@@ -259,7 +259,7 @@ func TestLifecycleService_Cancel_EmptyID(t *testing.T) {
 // TestLifecycleService_Cancel_Stubbed asserts that valid input reaches PR3Cancel.
 func TestLifecycleService_Cancel_Stubbed(t *testing.T) {
 	t.Parallel()
-	svc, _ := NewLifecycleService(postgresStubRepo, postgresJobsRepo, RealClock{})
+	svc, _ := NewLifecycleService(postgresStubRepo, postgresJobsRepo, clock.System{})
 
 	err := svc.Cancel(context.Background(), store.CancelCommand{
 		JobID:    "job-1",
@@ -298,7 +298,7 @@ func (l *limitRecordingStub) PR3RequeueExpiredLeases(ctx context.Context, now ti
 func TestLifecycleService_RequeueExpiredLeases_DefaultsLimitWhenZeroOrNegative(t *testing.T) {
 	t.Parallel()
 	rec := &limitRecordingStub{}
-	svc, _ := NewLifecycleService(rec, rec, RealClock{})
+	svc, _ := NewLifecycleService(rec, rec, clock.System{})
 
 	for _, in := range []int{0, -1, -100} {
 		_, err := svc.RequeueExpiredLeases(context.Background(), in)
@@ -321,7 +321,7 @@ func TestLifecycleService_RequeueExpiredLeases_DefaultsLimitWhenZeroOrNegative(t
 func TestLifecycleService_RequeueExpiredLeases_KeepsPositiveLimit(t *testing.T) {
 	t.Parallel()
 	rec := &limitRecordingStub{}
-	svc, _ := NewLifecycleService(rec, rec, RealClock{})
+	svc, _ := NewLifecycleService(rec, rec, clock.System{})
 
 	_, err := svc.RequeueExpiredLeases(context.Background(), 42)
 	if !errors.Is(err, errNotImplemented) {
@@ -340,7 +340,7 @@ func TestLifecycleService_RequeueExpiredLeases_KeepsPositiveLimit(t *testing.T) 
 // errNotImplemented).
 func TestLifecycleService_Queries_Stubbed(t *testing.T) {
 	t.Parallel()
-	svc, _ := NewLifecycleService(postgresStubRepo, postgresJobsRepo, RealClock{})
+	svc, _ := NewLifecycleService(postgresStubRepo, postgresJobsRepo, clock.System{})
 
 	_, err := svc.GetJobsByStatus(context.Background(), store.JobStatusPending)
 	if !errors.Is(err, errNotImplemented) {
@@ -361,7 +361,7 @@ func TestLifecycleService_Queries_Stubbed(t *testing.T) {
 // normalization (PST input → UTC output).
 func TestLifecycleService_Now_Helper(t *testing.T) {
 	t.Parallel()
-	svc, _ := NewLifecycleService(postgresStubRepo, postgresJobsRepo, RealClock{})
+	svc, _ := NewLifecycleService(postgresStubRepo, postgresJobsRepo, clock.System{})
 
 	// non-zero: returned verbatim and UTC-normalized
 	pst := time.FixedZone("PST", -8*3600)
