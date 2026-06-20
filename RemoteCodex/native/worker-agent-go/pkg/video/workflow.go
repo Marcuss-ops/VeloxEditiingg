@@ -10,6 +10,9 @@ import (
 	"velox-shared/contract"
 	"velox-worker-agent/pkg/config"
 	"velox-worker-agent/pkg/logger"
+	"velox-worker-agent/pkg/video/pipeline"
+	"velox-worker-agent/pkg/video/services/audio"
+	"velox-worker-agent/pkg/video/services/native"
 )
 
 // VideoGenerationWorkflow orchestrates the complete video generation process.
@@ -18,20 +21,33 @@ type VideoGenerationWorkflow struct {
 	logger           *logger.Logger
 	tempFiles        []string
 	progressCallback func(percent, scene, total int, stage string)
+	runner           *pipeline.Runner
 }
 
 // VideoGenerationInput è un alias per contract.RenderJobParams.
-// Manteniamo l'alias per compatibilità verso l'esterno, ma i campi sono
-// definiti in shared/contract/contract.go per evitare duplicazione.
 type VideoGenerationInput = contract.RenderJobParams
 
 // NewVideoGenerationWorkflow creates a new workflow instance.
 func NewVideoGenerationWorkflow(cfg *config.WorkerConfig, log *logger.Logger) *VideoGenerationWorkflow {
-	return &VideoGenerationWorkflow{
+	w := &VideoGenerationWorkflow{
 		config:    cfg,
 		logger:    log,
 		tempFiles: make([]string, 0),
 	}
+
+	// Set up pipeline system
+	registry := pipeline.NewRegistry()
+	probe := &audio.FFprobe{}
+	registerPipelines(registry, probe)
+
+	client, err := native.NewRenderClient(log)
+	if err != nil {
+		log.Warn("Native render client unavailable: %v (legacy fallback only)", err)
+	} else {
+		w.runner = pipeline.NewRunner(registry, client, log)
+	}
+
+	return w
 }
 
 // SetProgressCallback sets a callback for progress updates during video generation.
@@ -87,26 +103,35 @@ func (w *VideoGenerationWorkflow) ProcessSingleVideo(ctx context.Context,
 
 	statusCallback("Starting video processing", false)
 
-	// Try the new --render path first
-	plan := CompileLegacyRenderJobParams("", input, input.OutputPath)
-	if plan != nil && len(plan.Timeline) > 0 {
-		w.logger.Info("Using new --render path with %d timeline items", len(plan.Timeline))
-		if err := w.runRenderPlan(ctx, tempDir, plan); err != nil {
-			w.logger.Warn("New --render path failed (%v), falling back to legacy --full-video", err)
-			if err2 := w.runNativeCxxEngine(ctx, tempDir, input); err2 != nil {
-				return "", err2
+	// Try new --render path first
+	p := CompileLegacyRenderJobParams("", input, input.OutputPath)
+	if p != nil && len(p.Timeline) > 0 {
+		w.logger.Info("Using new --render path with %d timeline items", len(p.Timeline))
+		if renderErr := w.runRenderPlan(ctx, tempDir, p); renderErr != nil {
+			w.logger.Warn("New --render path failed (%v), falling back to legacy --full-video", renderErr)
+			if legacyErr := w.runNativeCxxEngine(ctx, tempDir, input); legacyErr != nil {
+				return "", legacyErr
 			}
 		}
 	} else {
 		w.logger.Info("No renderable timeline, using legacy --full-video path")
-		if err := w.runNativeCxxEngine(ctx, tempDir, input); err != nil {
-			return "", err
+		if legacyErr := w.runNativeCxxEngine(ctx, tempDir, input); legacyErr != nil {
+			return "", legacyErr
 		}
 	}
 
 	w.logger.Info("Native C++ video engine completed output at %s", input.OutputPath)
 
 	return input.OutputPath, nil
+}
+
+// RunPipeline executes a specific pipeline by ID with the given parameters.
+// This is the entry point for new endpoints that know their pipeline ID.
+func (w *VideoGenerationWorkflow) RunPipeline(ctx context.Context, pipelineID string, jobID string, input map[string]interface{}, outputPath string) error {
+	if w.runner == nil {
+		return fmt.Errorf("pipeline runner not available")
+	}
+	return w.runner.Run(ctx, pipelineID, jobID, input, outputPath)
 }
 
 // TranscriptionSegment represents a single segment from audio transcription.
@@ -126,7 +151,6 @@ type MatchResult struct {
 }
 
 // EntitaResult represents an entity without text (image-only association result).
-// Usato nel processo di entity association per risultati puramente visivi.
 type EntitaResult struct {
 	LinkImmagine []string      `json:"Link immagine"`
 	Timestamps   []MatchResult `json:"Timestamps"`

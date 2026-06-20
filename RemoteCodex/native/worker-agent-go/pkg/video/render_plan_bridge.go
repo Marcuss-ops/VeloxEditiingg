@@ -15,58 +15,14 @@ import (
 	"time"
 
 	"velox-shared/contract"
+	"velox-worker-agent/pkg/video/plan"
 )
 
-// CppRenderPlan matches the C++ RenderPlan V1 model (render_plan.hpp).
-type CppRenderPlan struct {
-	Version     int            `json:"version"`
-	JobID       string         `json:"job_id"`
-	Canvas      CanvasSpec     `json:"canvas"`
-	Timeline    []TimelineItem `json:"timeline"`
-	AudioTracks []AudioTrack   `json:"audio_tracks"`
-	OutputPath  string         `json:"output_path"`
-}
-
-// CanvasSpec matches C++ CanvasSpec.
-type CanvasSpec struct {
-	Width  int `json:"width"`
-	Height int `json:"height"`
-	Fps    int `json:"fps"`
-}
-
-// MediaSource is the C++ MediaSource variant.
-type MediaSource struct {
-	Type     string `json:"type"`
-	URL      string `json:"url,omitempty"`
-	CacheKey string `json:"cache_key,omitempty"`
-	ColorHex string `json:"color_hex,omitempty"`
-}
-
-// TransformSpec matches C++ TransformSpec.
-type TransformSpec struct {
-	ScaleMode string `json:"scale_mode,omitempty"`
-	SlowZoom  *bool  `json:"slow_zoom,omitempty"`
-}
-
-// TimelineItem matches C++ TimelineItem.
-type TimelineItem struct {
-	Source          MediaSource    `json:"source"`
-	DurationSeconds float64        `json:"duration_seconds"`
-	Transform       *TransformSpec `json:"transform,omitempty"`
-}
-
-// AudioTrack matches C++ AudioTrack.
-type AudioTrack struct {
-	SourceURL       string  `json:"source_url"`
-	Volume          float64 `json:"volume,omitempty"`
-	StartTimeOffset float64 `json:"start_time_offset,omitempty"`
-}
-
-// CompileLegacyRenderJobParams converts a legacy VideoEngineRequest into a CppRenderPlan.
+// CompileLegacyRenderJobParams converts a legacy VideoEngineRequest into a RenderPlan.
 // This adapter exists only to migrate existing endpoints to the RenderPlan path.
-// New endpoints should implement PipelineCompiler instead.
+// New endpoints should implement pipeline.Compiler instead.
 // Returns nil if the input cannot be meaningfully compiled (e.g. no scenes/clips).
-func CompileLegacyRenderJobParams(jobID string, input contract.RenderJobParams, outputPath string) *CppRenderPlan {
+func CompileLegacyRenderJobParams(jobID string, input contract.RenderJobParams, outputPath string) *plan.RenderPlan {
 	if jobID == "" {
 		b := make([]byte, 8)
 		rand.Read(b)
@@ -81,25 +37,21 @@ func CompileLegacyRenderJobParams(jobID string, input contract.RenderJobParams, 
 	scenes := contract.ParseScenes(input.ScenesJSON)
 	clips := contract.ParseClips(input.ClipSegments)
 
-	plan := &CppRenderPlan{
+	p := &plan.RenderPlan{
 		Version:    1,
 		JobID:      jobID,
 		OutputPath: outputPath,
-		Canvas: CanvasSpec{
-			Width:  1920,
-			Height: 1080,
-			Fps:    30,
-		},
+		Canvas:     plan.DefaultCanvas(),
 	}
 
 	// Build timeline from scenes or clips
 	if videoMode == "clip_stock" || len(clips) > 0 || len(input.IntroClipPaths) > 0 || len(input.StockClipPaths) > 0 {
 		// Clip mode
 		for _, path := range input.IntroClipPaths {
-			plan.Timeline = append(plan.Timeline, TimelineItem{
-				Source:          MediaSource{Type: "video", URL: path},
+			p.Timeline = append(p.Timeline, plan.TimelineItem{
+				Source:          plan.MediaSource{Type: "video", URL: path},
 				DurationSeconds: 4.0,
-				Transform:       &TransformSpec{ScaleMode: "contain"},
+				Transform:       &plan.TransformSpec{ScaleMode: "contain"},
 			})
 		}
 		for _, clip := range clips {
@@ -112,18 +64,18 @@ func CompileLegacyRenderJobParams(jobID string, input contract.RenderJobParams, 
 				dur = 4.0
 			}
 			if url != "" {
-				plan.Timeline = append(plan.Timeline, TimelineItem{
-					Source:          MediaSource{Type: "video", URL: url},
+				p.Timeline = append(p.Timeline, plan.TimelineItem{
+					Source:          plan.MediaSource{Type: "video", URL: url},
 					DurationSeconds: dur,
-					Transform:       &TransformSpec{ScaleMode: "contain"},
+					Transform:       &plan.TransformSpec{ScaleMode: "contain"},
 				})
 			}
 		}
 		for _, path := range input.StockClipPaths {
-			plan.Timeline = append(plan.Timeline, TimelineItem{
-				Source:          MediaSource{Type: "video", URL: path},
+			p.Timeline = append(p.Timeline, plan.TimelineItem{
+				Source:          plan.MediaSource{Type: "video", URL: path},
 				DurationSeconds: 5.0,
-				Transform:       &TransformSpec{ScaleMode: "contain"},
+				Transform:       &plan.TransformSpec{ScaleMode: "contain"},
 			})
 		}
 	} else {
@@ -145,18 +97,21 @@ func CompileLegacyRenderJobParams(jobID string, input contract.RenderJobParams, 
 			voiceoverDuration = detectAudioDuration(strings.TrimSpace(input.AudioPath))
 		}
 
-		// Sum explicit scene durations for scenes that don't have one
-		explicitScenes := 0
+		// Sum explicit scene durations
 		explicitTotal := 0.0
 		for _, s := range scenes {
 			if s.DurationSeconds > 0 {
-				explicitScenes++
 				explicitTotal += s.DurationSeconds
 			}
 		}
 
-		// Per-scene duration: distribute voiceoverDuration only among scenes without explicit duration
-		unsetScenes := len(imagePaths) - explicitScenes
+		// Distribute remaining duration among scenes without explicit duration
+		unsetScenes := len(imagePaths)
+		for _, s := range scenes {
+			if s.DurationSeconds > 0 {
+				unsetScenes--
+			}
+		}
 		if unsetScenes < 0 {
 			unsetScenes = 0
 		}
@@ -171,42 +126,38 @@ func CompileLegacyRenderJobParams(jobID string, input contract.RenderJobParams, 
 
 		for i, imgPath := range imagePaths {
 			dur := 0.0
-			// Priority 1: explicit scene duration
 			if i < len(scenes) && scenes[i].DurationSeconds > 0 {
 				dur = scenes[i].DurationSeconds
 			}
-			// Priority 2: distributed voiceover duration
 			if dur <= 0 && perSceneDuration > 0 {
 				dur = perSceneDuration
 			}
-			// Priority 3: fallback
 			if dur <= 0 {
 				dur = 5.0
 			}
-			plan.Timeline = append(plan.Timeline, TimelineItem{
-				Source:          MediaSource{Type: "image", URL: imgPath},
+			slowZoom := true
+			p.Timeline = append(p.Timeline, plan.TimelineItem{
+				Source:          plan.MediaSource{Type: "image", URL: imgPath},
 				DurationSeconds: dur,
-				Transform:       &TransformSpec{ScaleMode: "cover", SlowZoom: boolPtr(true)},
+				Transform:       &plan.TransformSpec{ScaleMode: "cover", SlowZoom: &slowZoom},
 			})
 		}
 	}
 
-	if len(plan.Timeline) == 0 {
+	if len(p.Timeline) == 0 {
 		return nil
 	}
 
 	// Add audio tracks
 	if strings.TrimSpace(input.AudioPath) != "" {
-		plan.AudioTracks = append(plan.AudioTracks, AudioTrack{
+		p.AudioTracks = append(p.AudioTracks, plan.AudioTrack{
 			SourceURL: strings.TrimSpace(input.AudioPath),
 			Volume:    1.0,
 		})
 	}
 
-	return plan
+	return p
 }
-
-func boolPtr(b bool) *bool { return &b }
 
 func detectAudioDuration(path string) float64 {
 	out, err := exec.Command("ffprobe", "-v", "error", "-show_entries", "format=duration",
@@ -219,15 +170,15 @@ func detectAudioDuration(path string) float64 {
 	return dur
 }
 
-// runRenderPlan writes a CppRenderPlan to disk and launches the C++ engine
-// with --render --plan. The progress callback receives percent updates.
+// runRenderPlan writes a RenderPlan to disk and launches the C++ engine
+// with --render --plan. Used by the legacy workflow path.
 func (w *VideoGenerationWorkflow) runRenderPlan(
 	ctx context.Context,
 	tempDir string,
-	plan *CppRenderPlan,
+	p *plan.RenderPlan,
 ) error {
 	planPath := filepath.Join(tempDir, "render_plan.json")
-	data, err := json.MarshalIndent(plan, "", "  ")
+	data, err := json.MarshalIndent(p, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal render plan: %w", err)
 	}
@@ -334,8 +285,8 @@ func (w *VideoGenerationWorkflow) runRenderPlan(
 		w.logger.Info("Native engine stderr: %s", trimmed)
 	}
 
-	if _, err := os.Stat(plan.OutputPath); err != nil {
-		return fmt.Errorf("native engine did not create output file %s: %w", plan.OutputPath, err)
+	if _, err := os.Stat(p.OutputPath); err != nil {
+		return fmt.Errorf("native engine did not create output file %s: %w", p.OutputPath, err)
 	}
 
 	return nil
