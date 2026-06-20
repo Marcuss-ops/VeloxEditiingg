@@ -32,11 +32,11 @@ func TestForwardSchedulesAsyncPollAndWorkerHandoff(t *testing.T) {
 		t.Fatalf("sqlite store: %v", err)
 	}
 	jobRepo := store.NewSQLiteJobRepository(db)
-	ts, tsErr := queue.NewLifecycleService(jobRepo, queue.RealClock{})
+	ts, tsErr := queue.NewLifecycleService(jobRepo, jobRepo, queue.RealClock{})
 	if tsErr != nil {
 		t.Fatalf("new transition service: %v", tsErr)
 	}
-	querySvc := queue.NewQueryService(db)
+	querySvc := queue.NewQueryService(db, nil)
 	q, err := queue.NewFileQueue(&queue.FileQueueConfig{MaxRetries: 3}, ts, querySvc)
 	if err != nil {
 		t.Fatalf("file queue: %v", err)
@@ -154,11 +154,11 @@ func TestForwardCompletedResultEnqueuesWorkerJob(t *testing.T) {
 		t.Fatalf("sqlite store: %v", err)
 	}
 	jobRepo := store.NewSQLiteJobRepository(db)
-	ts, tsErr := queue.NewLifecycleService(jobRepo, queue.RealClock{})
+	ts, tsErr := queue.NewLifecycleService(jobRepo, jobRepo, queue.RealClock{})
 	if tsErr != nil {
 		t.Fatalf("new transition service: %v", tsErr)
 	}
-	querySvc := queue.NewQueryService(db)
+	querySvc := queue.NewQueryService(db, nil)
 	q, err := queue.NewFileQueue(&queue.FileQueueConfig{MaxRetries: 3}, ts, querySvc)
 	if err != nil {
 		t.Fatalf("file queue: %v", err)

@@ -26,11 +26,11 @@ func TestGenerateWithImages_EnqueuesSceneImageJob(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new sqlite store: %v", err)
 	}
-	ts, err := queue.NewLifecycleService(store.NewSQLiteJobRepository(db), queue.RealClock{})
+	ts, err := queue.NewLifecycleService(store.NewSQLiteJobRepository(db), store.NewSQLiteJobRepository(db), queue.RealClock{})
 	if err != nil {
 		t.Fatalf("new transition service: %v", err)
 	}
-	querySvc := queue.NewQueryService(db)
+	querySvc := queue.NewQueryService(db, nil)
 	q, err := queue.NewFileQueue(&queue.FileQueueConfig{MaxRetries: 3}, ts, querySvc)
 	if err != nil {
 		t.Fatalf("new file queue: %v", err)
@@ -175,11 +175,11 @@ func TestGenerateWithImages_UsesCreatorStageWhenConfigured(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new sqlite store: %v", err)
 	}
-	ts, err := queue.NewLifecycleService(store.NewSQLiteJobRepository(db), queue.RealClock{})
+	ts, err := queue.NewLifecycleService(store.NewSQLiteJobRepository(db), store.NewSQLiteJobRepository(db), queue.RealClock{})
 	if err != nil {
 		t.Fatalf("new transition service: %v", err)
 	}
-	querySvc := queue.NewQueryService(db)
+	querySvc := queue.NewQueryService(db, nil)
 	q, err := queue.NewFileQueue(&queue.FileQueueConfig{MaxRetries: 3}, ts, querySvc)
 	if err != nil {
 		t.Fatalf("new file queue: %v", err)
@@ -283,11 +283,11 @@ func TestGenerateWithImages_BypassesCreatorForRenderReadyPayload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new sqlite store: %v", err)
 	}
-	ts, err := queue.NewLifecycleService(store.NewSQLiteJobRepository(db), queue.RealClock{})
+	ts, err := queue.NewLifecycleService(store.NewSQLiteJobRepository(db), store.NewSQLiteJobRepository(db), queue.RealClock{})
 	if err != nil {
 		t.Fatalf("new transition service: %v", err)
 	}
-	querySvc := queue.NewQueryService(db)
+	querySvc := queue.NewQueryService(db, nil)
 	q, err := queue.NewFileQueue(&queue.FileQueueConfig{MaxRetries: 3}, ts, querySvc)
 	if err != nil {
 		t.Fatalf("new file queue: %v", err)

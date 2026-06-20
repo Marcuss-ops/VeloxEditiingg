@@ -18,17 +18,22 @@ func toJobsJob(sj *Job) *jobs.Job {
 	}
 	createdAt, _ := time.Parse(time.RFC3339, sj.CreatedAt)
 	updatedAt, _ := time.Parse(time.RFC3339, sj.UpdatedAt)
+	startedAt, _ := time.Parse(time.RFC3339, sj.StartedAt)
+	completedAt, _ := time.Parse(time.RFC3339, sj.CompletedAt)
 	return &jobs.Job{
-		ID:         sj.JobID,
-		Status:     jobs.Status(sj.Status), // type alias, zero-cost
-		VideoName:  sj.VideoName,
-		ProjectID:  sj.ProjectID,
-		RunID:      sj.RunID,
-		Attempts:   sj.RetryCount,
-		WorkerID:   sj.AssignedTo,
-		MaxRetries: sj.MaxRetries,
-		CreatedAt:  createdAt,
-		UpdatedAt:  updatedAt,
+		ID:          sj.JobID,
+		Status:      jobs.Status(sj.Status), // type alias, zero-cost
+		VideoName:   sj.VideoName,
+		ProjectID:   sj.ProjectID,
+		RunID:       sj.RunID,
+		Attempts:    sj.RetryCount,
+		WorkerID:    sj.AssignedTo,
+		MaxRetries:  sj.MaxRetries,
+		LeaseID:     sj.LeaseID,
+		StartedAt:   startedAt,
+		CompletedAt: completedAt,
+		CreatedAt:   createdAt,
+		UpdatedAt:   updatedAt,
 	}
 }
 

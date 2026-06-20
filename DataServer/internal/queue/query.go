@@ -6,27 +6,75 @@ import (
 	"fmt"
 	"time"
 
+	"velox-server/internal/jobs"
 	"velox-server/internal/store"
 )
 
 // QueryService provides read-only access to job data.
-// Uses EventStore (which embeds dbStore) for map-based reads.
+// Uses EventStore (which embeds dbStore) for map-based reads + jobs.Reader
+// for canonical domain reads (Ondata 3 PR3).
 type QueryService struct {
-	eventStore store.EventStore
+	eventStore store.EventStore // legacy map-based surface (for UpdateJobLogs, DeleteJob, etc.)
+	reader     jobs.Reader      // canonical domain reader (Ondata 3 PR3)
 }
 
 // NewQueryService creates a new query service.
-func NewQueryService(eventStore store.EventStore) *QueryService {
-	return &QueryService{eventStore: eventStore}
+// eventStore is required for legacy operations (UpdateJobLogs, DeleteJob, GetActiveJobs).
+// reader is the canonical domain reader; pass nil if not yet available.
+func NewQueryService(eventStore store.EventStore, reader jobs.Reader) *QueryService {
+	return &QueryService{eventStore: eventStore, reader: reader}
 }
 
 // GetJob retrieves a job by ID.
+// Uses jobs.Reader (canonical domain path) when available; falls back to
+// the legacy map-based eventStore path for backward compatibility.
 func (q *QueryService) GetJob(ctx context.Context, jobID string) (*Job, error) {
+	// Prefer the canonical domain reader when wired (Ondata 3 PR3).
+	if q.reader != nil {
+		j, err := q.reader.Get(ctx, jobID)
+		if err != nil {
+			return nil, fmt.Errorf("job not found: %s: %w", jobID, err)
+		}
+		if j == nil {
+			return nil, fmt.Errorf("job not found: %s", jobID)
+		}
+		return domainJobToQueueJob(j), nil
+	}
+	// Legacy path: map-based read via eventStore.
 	m, err := q.eventStore.GetJob(ctx, jobID)
 	if err != nil {
 		return nil, fmt.Errorf("job not found: %s", jobID)
 	}
 	return MapToJob(m), nil
+}
+
+// domainJobToQueueJob converts a canonical jobs.Job into a queue.Job
+// (scheduling/transport projection). Fields not present in the domain
+// model (history, logs, slot_data, PayloadJSON) are left zero-valued;
+// callers that need the full projection should use MapToJob via the
+// legacy eventStore path.
+func domainJobToQueueJob(j *jobs.Job) *Job {
+	if j == nil {
+		return nil
+	}
+	return &Job{
+		JobID:       j.ID,
+		Status:      JobStatus(j.Status),
+		VideoName:   j.VideoName,
+		ProjectID:   j.ProjectID,
+		WorkerName:  j.WorkerID,
+		AssignedTo:  j.WorkerID,
+		LeaseID:     j.LeaseID,
+		RetryCount:  j.Attempts,
+		Attempt:     j.Attempts,
+		MaxRetries:  j.MaxRetries,
+		RunID:       j.RunID,
+		CreatedAt:   j.CreatedAt,
+		UpdatedAt:   j.UpdatedAt,
+		StartedAt:   j.StartedAt,
+		CompletedAt: j.CompletedAt,
+		Payload:     make(map[string]interface{}),
+	}
 }
 
 // GetJobPayload returns the job payload with enriched fields.

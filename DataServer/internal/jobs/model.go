@@ -12,15 +12,18 @@ import "time"
 // Workers receive a proto.JobAssignment (future); HTTP handlers
 // project into queue.JobView. Neither is a jobs.Job.
 type Job struct {
-	ID         string    `json:"id"`
-	Type       string    `json:"type,omitempty"`       // job_type from request payload
-	Status     Status    `json:"status"`
-	Attempts   int       `json:"attempts"`
-	WorkerID   string    `json:"worker_id,omitempty"`
-	VideoName  string    `json:"video_name,omitempty"` // the asset being rendered
-	ProjectID  string    `json:"project_id,omitempty"` // owning project
-	RunID      string    `json:"run_id,omitempty"`     // workflow run identifier
-	MaxRetries int       `json:"max_retries"`         // configured retry budget
-	CreatedAt  time.Time `json:"created_at"`
-	UpdatedAt  time.Time `json:"updated_at"`
+	ID          string    `json:"id"`
+	Type        string    `json:"type,omitempty"`        // job_type from request payload
+	Status      Status    `json:"status"`
+	Attempts    int       `json:"attempts"`
+	WorkerID    string    `json:"worker_id,omitempty"`
+	VideoName   string    `json:"video_name,omitempty"`  // the asset being rendered
+	ProjectID   string    `json:"project_id,omitempty"`  // owning project
+	RunID       string    `json:"run_id,omitempty"`      // workflow run identifier
+	MaxRetries  int       `json:"max_retries"`           // configured retry budget
+	LeaseID     string    `json:"lease_id,omitempty"`    // active lease (Ondata 3 PR3)
+	StartedAt   time.Time `json:"started_at,omitempty"`  // when work began
+	CompletedAt time.Time `json:"completed_at,omitempty"` // when work finished
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }

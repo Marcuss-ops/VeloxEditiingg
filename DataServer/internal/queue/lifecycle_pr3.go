@@ -12,30 +12,46 @@ import (
 	"fmt"
 	"time"
 
+	"velox-server/internal/jobs"
 	"velox-server/internal/store"
 )
 
 // NewLifecycleService constructs the transactional LifecycleService.
-// Both args are required. Returns an error (not a panic) so bootstrap can
-// surface configuration mistakes via the standard error path.
-func NewLifecycleService(repo store.JobRepository, clock Clock) (*LifecycleService, error) {
+// Both repo and jobsRepo are required; they are typically the same concrete
+// *store.SQLiteJobRepository (which implements both interfaces).
+// Returns an error (not a panic) so bootstrap can surface configuration
+// mistakes via the standard error path.
+func NewLifecycleService(repo store.JobRepository, jobsRepo jobs.Repository, clock Clock) (*LifecycleService, error) {
 	if repo == nil {
 		return nil, fmt.Errorf("job repository is required")
+	}
+	if jobsRepo == nil {
+		return nil, fmt.Errorf("jobs.Repository is required")
 	}
 	if clock == nil {
 		return nil, fmt.Errorf("clock is required")
 	}
-	return &LifecycleService{repo: repo, clock: clock}, nil
+	return &LifecycleService{repo: repo, jobsRepo: jobsRepo, clock: clock}, nil
 }
 
-// Repo exposes the underlying JobRepository for callers that need direct
-// access (e.g. bootstrap composition wires the
-// `artifacts.SQLiteFinalizationRepository` from the same `*sql.DB`).
+// Repo exposes the underlying store.JobRepository for callers that need
+// legacy PR3 operations (ClaimNext, StartJob, PR3RecordRenderFinished,
+// PR3RenewLease, ReleaseClaim, etc.). These methods will be migrated to
+// the canonical jobs.Repository in a future PR.
+//
 // NOTE: PR 3.5-a removed the previous ArtifactSuccessGate that wrapped
 // this repo; the FinalizationRepository contract is now the single
 // legal writer of jobs.status = 'SUCCEEDED' (see
 // internal/artifacts/sqlite_finalization_repository.go).
 func (l *LifecycleService) Repo() store.JobRepository { return l.repo }
+
+// Jobs exposes the canonical jobs.Repository (Reader + Writer) for
+// callers that need domain-level read/write operations. This is the
+// recommended surface for new code and for simple Get/Create/Lease/Fail
+// calls that don't require the PR3 transaction envelope.
+//
+// Concrete type: *store.SQLiteJobRepository (same instance as repo).
+func (l *LifecycleService) Jobs() jobs.Repository { return l.jobsRepo }
 
 // Clock returns the clock the service uses for time stamping.
 func (l *LifecycleService) Clock() Clock { return l.clock }

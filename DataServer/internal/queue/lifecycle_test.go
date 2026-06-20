@@ -6,11 +6,15 @@ import (
 	"testing"
 	"time"
 
+	"velox-server/internal/jobs"
 	"velox-server/internal/store"
 )
 
-// postgresStubRepo is a minimal JobRepository used only for nil validation tests.
+// postgresStubRepo is a minimal store.JobRepository used for nil validation tests.
 var postgresStubRepo store.JobRepository = &storePostgresStub{}
+
+// postgresJobsRepo is the same stub satisfying jobs.Repository for dual-stack tests.
+var postgresJobsRepo jobs.Repository = &storePostgresStub{}
 
 type storePostgresStub struct{}
 
@@ -72,12 +76,39 @@ func (s *storePostgresStub) PR3RequeueExpiredLeases(ctx context.Context, now tim
 	return nil, errNotImplemented
 }
 
+// ── jobs.Reader ─────────────────────────────────────────────────────────────
+
+func (s *storePostgresStub) Get(ctx context.Context, id string) (*jobs.Job, error) {
+	return nil, errNotImplemented
+}
+func (s *storePostgresStub) List(ctx context.Context, filter jobs.Filter) ([]jobs.Job, error) {
+	return nil, errNotImplemented
+}
+func (s *storePostgresStub) Counts(ctx context.Context) (jobs.Counts, error) {
+	return nil, errNotImplemented
+}
+
+// ── jobs.Writer ─────────────────────────────────────────────────────────────
+
+func (s *storePostgresStub) Create(ctx context.Context, job *jobs.Job) error {
+	return errNotImplemented
+}
+func (s *storePostgresStub) SetStatus(ctx context.Context, id string, from, to jobs.Status) error {
+	return errNotImplemented
+}
+func (s *storePostgresStub) Lease(ctx context.Context, id, workerID string) error {
+	return errNotImplemented
+}
+func (s *storePostgresStub) Fail(ctx context.Context, id, reason string) error {
+	return errNotImplemented
+}
+
 // errNotImplemented is a local sentinel for unimplemented stub methods.
 var errNotImplemented = errors.New("not implemented")
 
 func TestNewLifecycleService_RefusesNilRepository(t *testing.T) {
 	t.Parallel()
-	_, err := NewLifecycleService(nil, RealClock{})
+	_, err := NewLifecycleService(nil, nil, RealClock{})
 	if err == nil {
 		t.Fatal("expected error when repo is nil")
 	}
@@ -85,7 +116,7 @@ func TestNewLifecycleService_RefusesNilRepository(t *testing.T) {
 
 func TestNewLifecycleService_RefusesNilClock(t *testing.T) {
 	t.Parallel()
-	_, err := NewLifecycleService(postgresStubRepo, nil)
+	_, err := NewLifecycleService(postgresStubRepo, postgresJobsRepo, nil)
 	if err == nil {
 		t.Fatal("expected error when clock is nil")
 	}
@@ -93,7 +124,7 @@ func TestNewLifecycleService_RefusesNilClock(t *testing.T) {
 
 func TestNewLifecycleService_Succeeds(t *testing.T) {
 	t.Parallel()
-	svc, err := NewLifecycleService(postgresStubRepo, RealClock{})
+	svc, err := NewLifecycleService(postgresStubRepo, postgresJobsRepo, RealClock{})
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
 	}

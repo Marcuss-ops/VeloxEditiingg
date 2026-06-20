@@ -24,11 +24,11 @@ func TestCreateSmokeClipStock_Validation(t *testing.T) {
 	if err != nil {
 		t.Skipf("SQLite unavailable: %v", err)
 	}
-	ts, err := queue.NewLifecycleService(store.NewSQLiteJobRepository(db), queue.RealClock{})
+	ts, err := queue.NewLifecycleService(store.NewSQLiteJobRepository(db), store.NewSQLiteJobRepository(db), queue.RealClock{})
 	if err != nil {
 		t.Skipf("Transition service unavailable: %v", err)
 	}
-	querySvc := queue.NewQueryService(db)
+	querySvc := queue.NewQueryService(db, nil)
 	q, err := queue.NewFileQueue(&queue.FileQueueConfig{MaxRetries: cfg.Workers.MaxJobAttempts}, ts, querySvc)
 	if err != nil {
 		t.Skipf("File queue unavailable: %v", err)
@@ -56,11 +56,11 @@ func TestCreateSmokeClipStock_Enqueue(t *testing.T) {
 	if err != nil {
 		t.Skipf("SQLite unavailable: %v", err)
 	}
-	ts, err := queue.NewLifecycleService(store.NewSQLiteJobRepository(db), queue.RealClock{})
+	ts, err := queue.NewLifecycleService(store.NewSQLiteJobRepository(db), store.NewSQLiteJobRepository(db), queue.RealClock{})
 	if err != nil {
 		t.Skipf("Transition service unavailable: %v", err)
 	}
-	querySvc := queue.NewQueryService(db)
+	querySvc := queue.NewQueryService(db, nil)
 	q, err := queue.NewFileQueue(&queue.FileQueueConfig{MaxRetries: cfg.Workers.MaxJobAttempts}, ts, querySvc)
 	if err != nil {
 		t.Skipf("File queue unavailable: %v", err)

@@ -224,15 +224,17 @@ func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
 
 	// ── Lifecycle composition root ─────────────────────────────────────────
 	//
-	// lifecycleSvc is the sole transactional LifecycleService. It owns the
-	// JobRepository + a RealClock — and NOTHING ELSE. SUCCEEDED is
-	// reachable only through artifacts.Service.FinalizeArtifactAndCompleteJob.
-	lifecycleSvc, err := queue.NewLifecycleService(jobRepo, queue.RealClock{})
+	// lifecycleSvc is the sole transactional LifecycleService. It holds
+	// both store.JobRepository (legacy PR3 surface) and jobs.Repository
+	// (canonical domain surface) — both satisfied by the same concrete
+	// *SQLiteJobRepository. SUCCEEDED is reachable only through
+	// artifacts.Service.FinalizeArtifactAndCompleteJob.
+	lifecycleSvc, err := queue.NewLifecycleService(jobRepo, jobRepo, queue.RealClock{})
 	if err != nil {
 		return nil, fmt.Errorf("bootstrap: lifecycle service: %w", err)
 	}
 
-	querySvc := queue.NewQueryService(sqliteStore)
+	querySvc := queue.NewQueryService(sqliteStore, jobRepo)
 
 	fileQ, err := queue.NewFileQueue(&queue.FileQueueConfig{
 		MaxRetries: cfg.Workers.MaxJobAttempts,
