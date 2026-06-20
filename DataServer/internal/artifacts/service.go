@@ -55,7 +55,7 @@ type Service struct {
 //
 // repo: artifact uploads CRUD (State machine + ReadOnly loads).
 // finRepo: atomic single-tx SUCCEEDED write + atomic artifacts+artifact_uploads insert.
-// blobStore: LocalBlobStore in production, NopBlobStore in tests.
+// blobStore: FilesystemBlobStore in production, NopBlobStore in tests.
 //
 // The same *sql.DB is shared so the finalization tx can join with the
 // concurrent update on artifact_uploads (step 7 of FinalizeVerified).

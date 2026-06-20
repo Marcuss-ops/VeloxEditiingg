@@ -61,7 +61,7 @@ func FinalStorageKey(blobStore store.BlobStore, sha256Hex, extension string) (re
 
 // PromoteToCanonical streams the staged blob to its final content-
 // addressable location with the durability guarantees the spec requires
-// (Fase 3, "Per LocalBlobStore: flush; fsync; close; rename atomico
+// (Fase 3, "Per FilesystemBlobStore: flush; fsync; close; rename atomico
 // dalla staging alla destinazione; fsync directory, quando supportato.").
 //
 // Steps:

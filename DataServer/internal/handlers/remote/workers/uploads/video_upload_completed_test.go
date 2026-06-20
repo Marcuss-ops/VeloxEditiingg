@@ -45,7 +45,7 @@ func TestUploadCompletedVideo_CanonicalPipeline(t *testing.T) {
 
 	staging := filepath.Join(tmp, "staging")
 	final := filepath.Join(tmp, "final")
-	bs, err := store.NewLocalBlobStore(staging, final)
+	bs, err := store.NewFilesystemBlobStore(staging, final)
 	if err != nil {
 		t.Fatalf("blob store: %v", err)
 	}
@@ -206,7 +206,7 @@ func TestUploadCompletedVideo_BeginUploadRejected_MissingJob(t *testing.T) {
 
 	staging := filepath.Join(tmp, "staging")
 	final := filepath.Join(tmp, "final")
-	bs, err := store.NewLocalBlobStore(staging, final)
+	bs, err := store.NewFilesystemBlobStore(staging, final)
 	if err != nil {
 		t.Fatalf("blob store: %v", err)
 	}
@@ -262,7 +262,7 @@ func TestUploadCompletedVideo_MissingVideo(t *testing.T) {
 
 	staging := filepath.Join(tmp, "staging")
 	final := filepath.Join(tmp, "final")
-	bs, err := store.NewLocalBlobStore(staging, final)
+	bs, err := store.NewFilesystemBlobStore(staging, final)
 	if err != nil {
 		t.Fatalf("blob store: %v", err)
 	}

@@ -49,20 +49,20 @@ type BlobStore interface {
 	FinalDir() string
 }
 
-// LocalBlobStore implements BlobStore on the local filesystem.
-type LocalBlobStore struct {
+// FilesystemBlobStore implements BlobStore on the local filesystem.
+type FilesystemBlobStore struct {
 	stagingDir string // e.g. /data/staging/
 	finalDir   string // e.g. /data/final/
 }
 
-// NewLocalBlobStore creates a LocalBlobStore, ensuring both directories exist.
-func NewLocalBlobStore(stagingDir, finalDir string) (*LocalBlobStore, error) {
+// NewFilesystemBlobStore creates a FilesystemBlobStore, ensuring both directories exist.
+func NewFilesystemBlobStore(stagingDir, finalDir string) (*FilesystemBlobStore, error) {
 	for _, d := range []string{stagingDir, finalDir} {
 		if err := os.MkdirAll(d, 0755); err != nil {
 			return nil, fmt.Errorf("blobstore: create %s: %w", d, err)
 		}
 	}
-	return &LocalBlobStore{
+	return &FilesystemBlobStore{
 		stagingDir: stagingDir,
 		finalDir:   finalDir,
 	}, nil
@@ -70,7 +70,7 @@ func NewLocalBlobStore(stagingDir, finalDir string) (*LocalBlobStore, error) {
 
 // StagingPath generates a unique staging path. The path includes a random
 // suffix to avoid collisions when the same job produces multiple artifacts.
-func (b *LocalBlobStore) StagingPath(jobID, artifactID, extension string) (string, error) {
+func (b *FilesystemBlobStore) StagingPath(jobID, artifactID, extension string) (string, error) {
 	randBytes := make([]byte, 8)
 	if _, err := rand.Read(randBytes); err != nil {
 		return "", fmt.Errorf("blobstore: rand: %w", err)
@@ -83,7 +83,7 @@ func (b *LocalBlobStore) StagingPath(jobID, artifactID, extension string) (strin
 
 // FinalPath returns the canonical final path for a verified artifact.
 // Format: final/<jobID>/<artifactID>/<timestamp>_<sha256_prefix>.ext
-func (b *LocalBlobStore) FinalPath(jobID, artifactID, extension string) string {
+func (b *FilesystemBlobStore) FinalPath(jobID, artifactID, extension string) string {
 	ts := time.Now().UnixMilli()
 	rel := filepath.Join(jobID, fmt.Sprintf("%s_%d%s", artifactID, ts, extension))
 	return filepath.Join(b.finalDir, rel)
@@ -92,7 +92,7 @@ func (b *LocalBlobStore) FinalPath(jobID, artifactID, extension string) string {
 // PromoteToFinal atomically moves a staged file to its final location.
 // The parent directory is created if necessary. Returns the storage_key
 // (absolute path to final location).
-func (b *LocalBlobStore) PromoteToFinal(stagingPath, finalPath string) (string, error) {
+func (b *FilesystemBlobStore) PromoteToFinal(stagingPath, finalPath string) (string, error) {
 	if err := os.MkdirAll(filepath.Dir(finalPath), 0755); err != nil {
 		return "", fmt.Errorf("blobstore: mkdir final: %w", err)
 	}
@@ -103,7 +103,7 @@ func (b *LocalBlobStore) PromoteToFinal(stagingPath, finalPath string) (string, 
 }
 
 // RemoveStaging removes the staged file (called on verification failure).
-func (b *LocalBlobStore) RemoveStaging(path string) error {
+func (b *FilesystemBlobStore) RemoveStaging(path string) error {
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("blobstore: remove staging %s: %w", path, err)
 	}
@@ -111,7 +111,7 @@ func (b *LocalBlobStore) RemoveStaging(path string) error {
 }
 
 // ReadFinal opens the final file for reading.
-func (b *LocalBlobStore) ReadFinal(storageKey string) (*os.File, error) {
+func (b *FilesystemBlobStore) ReadFinal(storageKey string) (*os.File, error) {
 	f, err := os.Open(filepath.Clean(storageKey))
 	if err != nil {
 		return nil, fmt.Errorf("blobstore: open %s: %w", storageKey, err)
@@ -120,10 +120,10 @@ func (b *LocalBlobStore) ReadFinal(storageKey string) (*os.File, error) {
 }
 
 // StagingDir returns the staging root.
-func (b *LocalBlobStore) StagingDir() string { return b.stagingDir }
+func (b *FilesystemBlobStore) StagingDir() string { return b.stagingDir }
 
 // FinalDir returns the final root.
-func (b *LocalBlobStore) FinalDir() string { return b.finalDir }
+func (b *FilesystemBlobStore) FinalDir() string { return b.finalDir }
 
 // NopBlobStore is a pass-through blob store for tests that write directly
 // to the final directory (preserves legacy behavior).
@@ -167,7 +167,7 @@ func (n *NopBlobStore) StagingDir() string { return n.baseDir }
 func (n *NopBlobStore) FinalDir() string   { return n.baseDir }
 
 // Ensure BlobStore interface is satisfied at compile time.
-var _ BlobStore = (*LocalBlobStore)(nil)
+var _ BlobStore = (*FilesystemBlobStore)(nil)
 var _ BlobStore = (*NopBlobStore)(nil)
 
 // Extension returns the file extension from a filename string.

@@ -247,12 +247,12 @@ func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
 	workflowRepo.SetOutbox(&outboxWorkflowAdapter{store: outboxStore})
 
 	var blobStore store.BlobStore
-	localBS, bsErr := store.NewLocalBlobStore(cfg.Runtime.StagingDir, cfg.Runtime.StorageDir)
+	fsBS, bsErr := store.NewFilesystemBlobStore(cfg.Runtime.StagingDir, cfg.Runtime.StorageDir)
 	if bsErr != nil {
 		log.Printf("[BOOTSTRAP] BlobStore init warning: %v -- using nop blob store", bsErr)
 		blobStore = store.NewNopBlobStore(cfg.Runtime.DataDir)
 	} else {
-		blobStore = localBS
+		blobStore = fsBS
 	}
 	log.Printf("[BOOTSTRAP] BlobStore ready: staging=%s storage=%s", blobStore.StagingDir(), blobStore.FinalDir())
 

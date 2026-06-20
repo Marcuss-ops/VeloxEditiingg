@@ -4,7 +4,7 @@
 //
 // Each test owns a file-backed SQLite DB in t.TempDir() with all 029
 // migrations applied (via migrations.RunMigrations against the embedded
-// store/migrations/*.sql), plus a LocalBlobStore rooted in temp
+// store/migrations/*.sql), plus a FilesystemBlobStore rooted in temp
 // subdirs. Per-test isolation; no shared state.
 
 package artifacts
@@ -97,8 +97,8 @@ func setupTestEnv(t *testing.T) *testEnv {
 
 	staging := filepath.Join(tmp, "staging")
 	final := filepath.Join(tmp, "final")
-	bs, err := store.NewLocalBlobStore(staging, final)
-	require.NoError(t, err, "NewLocalBlobStore")
+	bs, err := store.NewFilesystemBlobStore(staging, final)
+	require.NoError(t, err, "NewFilesystemBlobStore")
 
 	clk := newManualClock()
 	repo := NewSQLiteRepository(db)

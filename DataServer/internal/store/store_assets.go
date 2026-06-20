@@ -248,7 +248,7 @@ var _ AssetRepository = (*SQLiteAssetRepository)(nil)
 
 // Compile-time guard: every store.BlobStore implementation satisfies assets.BlobStore.
 // This ensures the subset interface in assets doesn't drift from the canonical definition in store.
-var _ assets.BlobStore = (*LocalBlobStore)(nil)
+var _ assets.BlobStore = (*FilesystemBlobStore)(nil)
 var _ assets.BlobStore = (*NopBlobStore)(nil)
 
 func isUniqueConstraintError(err error) bool {
