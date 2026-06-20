@@ -7,32 +7,50 @@ import (
 	"time"
 )
 
-// loadGroupsFromSQLite loads groups from the canonical youtube_groups table.
-//
-// PR15.4 null-deref fix: this function used to crash when s.store was nil
-// because the first thing it did was `s.store.ListYouTubeGroups()` with
-// no nil guard. The upstream caller
-// (Service.loadCanonicalGroups) had a `if s.store == nil { return
-// s.loadGroupsFromSQLite() }` branch that delegated to this fallback
-// without checking the receiver — both code paths null-deref'd
-// identically on a degraded server with no SQLite store. Now this
-// function returns false immediately if s.store is nil so that both
-// paths degrade safely.
-func (s *Service) loadGroupsFromSQLite() bool {
+// loadChannelGroup hydrates a single ChannelGroup from the canonical
+// tables. Returns nil when the group is absent or the store is unavailable.
+func (s *Service) loadChannelGroup(name string) (*ChannelGroup, error) {
 	if s.store == nil {
-		return false
+		return nil, nil
 	}
+	rows, err := s.store.ListYouTubeGroups()
+	if err != nil {
+		return nil, err
+	}
+	for _, row := range rows {
+		n, _ := row["name"].(string)
+		if n != name {
+			continue
+		}
+		gid, _ := row["id"].(int64)
+		groupType, _ := row["group_type"].(string)
+		desc, _ := row["description"].(string)
+		privacy, _ := row["privacy"].(string)
+		channelIDs, _ := s.store.ListGroupChannels(gid)
+		return &ChannelGroup{
+			Name:        n,
+			Description: desc,
+			Privacy:     privacy,
+			GroupType:   groupType,
+			Channels:    channelIDs,
+		}, nil
+	}
+	return nil, nil
+}
 
+// loadChannelGroups hydrates every group from the canonical tables.
+func (s *Service) loadChannelGroups() (map[string]*ChannelGroup, error) {
+	if s.store == nil {
+		return map[string]*ChannelGroup{}, nil
+	}
 	groupRows, err := s.store.ListYouTubeGroups()
-	if err != nil || len(groupRows) == 0 {
-		return false
+	if err != nil {
+		return map[string]*ChannelGroup{}, err
 	}
-
 	memberships, err := s.store.ListAllGroupMemberships()
 	if err != nil {
 		memberships = nil
 	}
-
 	groupChannels := make(map[int64][]string)
 	for _, m := range memberships {
 		gid, _ := m["group_id"].(int64)
@@ -41,102 +59,32 @@ func (s *Service) loadGroupsFromSQLite() bool {
 			groupChannels[gid] = append(groupChannels[gid], chID)
 		}
 	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
+	out := make(map[string]*ChannelGroup, len(groupRows))
 	for _, row := range groupRows {
 		name, _ := row["name"].(string)
 		if name == "" {
 			continue
 		}
+		gid, _ := row["id"].(int64)
 		groupType, _ := row["group_type"].(string)
 		desc, _ := row["description"].(string)
 		privacy, _ := row["privacy"].(string)
-		gid, _ := row["id"].(int64)
-
-		s.groups[name] = &ChannelGroup{
+		out[name] = &ChannelGroup{
 			Name:        name,
 			Description: desc,
 			Privacy:     privacy,
 			GroupType:   groupType,
-			Channels:    groupChannels[gid],
+			Channels:    append([]string{}, groupChannels[gid]...),
 		}
 	}
-	log.Printf("[OK] Loaded %d YouTube groups from canonical tables", len(s.groups))
-	return true
-}
-
-// loadCanonicalGroups populates s.groups from youtube_groups +
-// youtube_group_channels.
-//
-// PR15.4: both branches (canonical direct load + legacy fallback) now
-// short-circuit when s.store is nil. Pre-PR15.4 the fallback branch
-// (`s.loadGroupsFromSQLite`) would unconditionally dereference
-// `s.store.ListYouTubeGroups()` even when s.store was nil, crashing
-// in degraded mode (no SQLite configured). The fix lives in BOTH
-// functions so a missing-store condition cannot propagate downstream.
-func (s *Service) loadCanonicalGroups() bool {
-	if s.store == nil {
-		return s.loadGroupsFromSQLite()
-	}
-
-	groupRows, err := s.store.ListYouTubeGroups()
-	if err != nil || len(groupRows) == 0 {
-		return s.loadGroupsFromSQLite()
-	}
-
-	memberships, err := s.store.ListAllGroupMemberships()
-	if err != nil {
-		memberships = nil
-	}
-
-	groupChannels := make(map[int64][]string)
-	for _, m := range memberships {
-		gid, _ := m["group_id"].(int64)
-		chID, _ := m["channel_id"].(string)
-		if gid > 0 && chID != "" {
-			groupChannels[gid] = append(groupChannels[gid], chID)
-		}
-	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	for _, row := range groupRows {
-		name, _ := row["name"].(string)
-		if name == "" {
-			continue
-		}
-		desc, _ := row["description"].(string)
-		privacy, _ := row["privacy"].(string)
-		gid, _ := row["id"].(int64)
-
-		s.groups[name] = &ChannelGroup{
-			Name:        name,
-			Description: desc,
-			Privacy:     privacy,
-			Channels:    groupChannels[gid],
-		}
-	}
-	log.Printf("[OK] Loaded %d YouTube groups from canonical tables", len(s.groups))
-	return true
+	return out, nil
 }
 
 // CreateGroup creates a new channel group and persists only that group via a
 // direct SQL upsert.
 func (s *Service) CreateGroup(name, description string, channelIDs []string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if _, exists := s.groups[name]; exists {
+	if s.GetGroup(name) != nil {
 		return fmt.Errorf("group '%s' already exists", name)
-	}
-
-	s.groups[name] = &ChannelGroup{
-		Name:        name,
-		Description: description,
-		Channels:    append([]string{}, channelIDs...),
 	}
 
 	if s.store == nil {
@@ -156,14 +104,9 @@ func (s *Service) CreateGroup(name, description string, channelIDs []string) err
 
 // DeleteGroup deletes a channel group and persists the change via direct SQL.
 func (s *Service) DeleteGroup(name string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if _, exists := s.groups[name]; !exists {
+	if s.GetGroup(name) == nil {
 		return fmt.Errorf("group '%s' not found", name)
 	}
-
-	delete(s.groups, name)
 
 	if s.store == nil {
 		return nil
@@ -183,11 +126,8 @@ func (s *Service) DeleteGroup(name string) error {
 
 // AddChannelToGroup adds a channel to a group and persists via direct SQL.
 func (s *Service) AddChannelToGroup(groupName, channelID string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	group, exists := s.groups[groupName]
-	if !exists {
+	group := s.GetGroup(groupName)
+	if group == nil {
 		return fmt.Errorf("group '%s' not found", groupName)
 	}
 
@@ -196,7 +136,6 @@ func (s *Service) AddChannelToGroup(groupName, channelID string) error {
 			return fmt.Errorf("channel '%s' already in group '%s'", channelID, groupName)
 		}
 	}
-	group.Channels = append(group.Channels, channelID)
 
 	if s.store == nil {
 		return nil
@@ -216,52 +155,49 @@ func (s *Service) AddChannelToGroup(groupName, channelID string) error {
 
 // RemoveChannelFromGroup removes a channel from a group.
 func (s *Service) RemoveChannelFromGroup(groupName, channelID string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	group, exists := s.groups[groupName]
-	if !exists {
+	if s.GetGroup(groupName) == nil {
 		return fmt.Errorf("group '%s' not found", groupName)
 	}
 
-	for i, chID := range group.Channels {
-		if chID == channelID {
-			group.Channels = append(group.Channels[:i], group.Channels[i+1:]...)
-			if s.store == nil {
-				return nil
-			}
-			groupID, err := s.store.GetYouTubeGroupID(groupName, "upload")
-			if err != nil {
-				return err
-			}
-			if groupID == 0 {
-				return nil
-			}
-			return s.store.RemoveChannelFromGroup(groupID, channelID)
+	if s.store == nil {
+		return nil
+	}
+	groupID, err := s.store.GetYouTubeGroupID(groupName, "upload")
+	if err != nil {
+		return err
+	}
+	if groupID == 0 {
+		return nil
+	}
+
+	// Verify membership so we keep the same error semantics.
+	currentIDs, err := s.store.ListGroupChannels(groupID)
+	if err != nil {
+		return err
+	}
+	found := false
+	for _, id := range currentIDs {
+		if id == channelID {
+			found = true
+			break
 		}
 	}
-	return fmt.Errorf("channel '%s' not found in group '%s'", channelID, groupName)
+	if !found {
+		return fmt.Errorf("channel '%s' not found in group '%s'", channelID, groupName)
+	}
+	return s.store.RemoveChannelFromGroup(groupID, channelID)
 }
 
-// GetGroups returns all channel groups.
+// GetGroups returns all channel groups hydrated from SQLite.
 func (s *Service) GetGroups() map[string]*ChannelGroup {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	groups := make(map[string]*ChannelGroup, len(s.groups))
-	for name, group := range s.groups {
-		groupCopy := *group
-		groupCopy.Channels = append([]string{}, group.Channels...)
-		groups[name] = &groupCopy
-	}
+	groups, _ := s.loadChannelGroups()
 	return groups
 }
 
-// GetGroup returns a specific group by name.
+// GetGroup returns a specific group by name, hydrating from SQLite on demand.
 func (s *Service) GetGroup(name string) *ChannelGroup {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.groups[name]
+	cg, _ := s.loadChannelGroup(name)
+	return cg
 }
 
 // ResolveChannelByLanguage finds a channel in a group whose Language field matches.
@@ -284,11 +220,8 @@ func (s *Service) ResolveChannelByLanguage(groupName, language string) (*AuthCha
 
 	lang := strings.TrimSpace(strings.ToLower(language))
 
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	for _, chID := range group.Channels {
-		if ch, exists := s.channels[chID]; exists {
+		if ch := s.GetAuthChannel(chID); ch != nil {
 			if strings.EqualFold(strings.TrimSpace(ch.Language), lang) {
 				chCopy := *ch
 				return &chCopy, nil
@@ -296,7 +229,7 @@ func (s *Service) ResolveChannelByLanguage(groupName, language string) (*AuthCha
 		}
 	}
 	for _, chID := range group.Channels {
-		if ch, exists := s.channels[chID]; exists {
+		if ch := s.GetAuthChannel(chID); ch != nil {
 			if strings.TrimSpace(ch.Language) == "" {
 				chCopy := *ch
 				return &chCopy, nil
@@ -304,7 +237,7 @@ func (s *Service) ResolveChannelByLanguage(groupName, language string) (*AuthCha
 		}
 	}
 	for _, chID := range group.Channels {
-		if ch, exists := s.channels[chID]; exists {
+		if ch := s.GetAuthChannel(chID); ch != nil {
 			chCopy := *ch
 			return &chCopy, nil
 		}
@@ -339,26 +272,22 @@ func (s *Service) ChannelGroupToGroup(cg *ChannelGroup) *Group {
 		CreatedAt: time.Now(),
 		Channels:  make([]Channel, 0, len(cg.Channels)),
 	}
-	s.mu.RLock()
 	for _, chID := range cg.Channels {
-		if ac, exists := s.channels[chID]; exists {
+		if ac := s.GetAuthChannel(chID); ac != nil {
 			group.Channels = append(group.Channels, *AuthChannelToChannel(ac))
 		} else {
 			group.Channels = append(group.Channels, Channel{ID: chID})
 		}
 	}
-	s.mu.RUnlock()
 	return group
 }
 
 // GetGroupsWithChannels returns groups with full channel details.
 func (s *Service) GetGroupsWithChannels() []map[string]interface{} {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	groups := s.GetGroups()
+	result := make([]map[string]interface{}, 0, len(groups))
 
-	result := make([]map[string]interface{}, 0, len(s.groups))
-
-	for _, g := range s.groups {
+	for _, g := range groups {
 		groupData := map[string]interface{}{
 			"name":        g.Name,
 			"description": g.Description,
@@ -368,7 +297,7 @@ func (s *Service) GetGroupsWithChannels() []map[string]interface{} {
 		}
 
 		for _, chID := range g.Channels {
-			if ch, exists := s.channels[chID]; exists {
+			if ch := s.GetAuthChannel(chID); ch != nil {
 				groupData["channels"] = append(groupData["channels"].([]map[string]interface{}), map[string]interface{}{
 					"id":        ch.ID,
 					"url":       ch.URL,
@@ -395,19 +324,17 @@ func (s *Service) GetGroupsWithChannels() []map[string]interface{} {
 
 // GetUndefinedChannels returns channels not assigned to any group.
 func (s *Service) GetUndefinedChannels() []*Channel {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
+	groups := s.GetGroups()
 	assigned := make(map[string]bool)
-	for _, cg := range s.groups {
+	for _, cg := range groups {
 		for _, chID := range cg.Channels {
 			assigned[chID] = true
 		}
 	}
 
 	var undefined []*Channel
-	for id, ac := range s.channels {
-		if !assigned[id] {
+	for _, ac := range s.GetAuthChannels() {
+		if !assigned[ac.ID] {
 			undefined = append(undefined, AuthChannelToChannel(ac))
 		}
 	}

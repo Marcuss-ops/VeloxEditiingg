@@ -92,14 +92,12 @@ func findOAuthSecretFile(cfg *ServiceConfig) (string, []byte, error) {
 type AuthManager struct {
 	service     *Service
 	oauthConfig *oauth2.Config
-	tokenCache  map[string]*oauth2.Token
 }
 
 // NewAuthManager creates a new AuthManager
 func NewAuthManager(s *Service) *AuthManager {
 	return &AuthManager{
-		service:    s,
-		tokenCache: make(map[string]*oauth2.Token),
+		service: s,
 	}
 }
 
@@ -213,10 +211,24 @@ func (am *AuthManager) HandleOAuthCallback(ctx context.Context, code string, cha
 		log.Printf("[WARN] Failed to save token: %v", err)
 	}
 
-	// Add to channels map
-	am.service.mu.Lock()
-	am.service.channels[channel.ID] = channel
-	am.service.mu.Unlock()
+	// Persist to SQLite (single source of truth).
+	if am.service.store != nil && am.service.oauthBuf != nil {
+		if err := am.service.store.UpsertYouTubeChannel(channel.ID, channel.Title, channel.Name, "", channel.Thumbnail, "", "", 0, 0, "", "", ""); err != nil {
+			log.Printf("[WARN] Failed to upsert channel metadata: %v", err)
+		}
+		accessEnc, _ := am.service.oauthBuf.Encrypt([]byte(channel.AccessToken))
+		var refreshEnc []byte
+		if channel.RefreshToken != "" {
+			refreshEnc, _ = am.service.oauthBuf.Encrypt([]byte(channel.RefreshToken))
+		}
+		expiry := ""
+		if !channel.Expiry.IsZero() {
+			expiry = channel.Expiry.Format(time.RFC3339)
+		}
+		if err := am.service.store.UpsertYouTubeOAuthToken(channel.ID, accessEnc, refreshEnc, "Bearer", expiry, "", am.service.oauthBuf.KeyVersion()); err != nil {
+			log.Printf("[WARN] Failed to upsert OAuth token: %v", err)
+		}
+	}
 
 	log.Printf("[OK] New YouTube channel added: %s", channel.Title)
 	// Return public Channel (without sensitive tokens)
@@ -288,13 +300,16 @@ func (am *AuthManager) ValidateStoredYouTubeCredentials(ctx context.Context, cha
 				return result, nil
 			}
 
-			// Update channel with new token
-			am.service.mu.Lock()
+			// Persist refreshed token to SQLite (single source of truth)
+			if am.service.store != nil && am.service.oauthBuf != nil {
+				if err := am.service.persistRefreshedToken(channelID, newToken); err != nil {
+					log.Printf("[WARN] Failed to persist refreshed token: %v", err)
+				}
+			}
+
+			// Save updated token to file
 			channel.AccessToken = newToken.AccessToken
 			channel.Expiry = newToken.Expiry
-			am.service.mu.Unlock()
-
-			// Save updated token
 			am.saveChannelToken(channel)
 
 			result["ok"] = true
@@ -363,10 +378,12 @@ func (am *AuthManager) RevokeToken(ctx context.Context, channelID string) error 
 		}
 	}
 
-	// Remove from channels map
-	am.service.mu.Lock()
-	delete(am.service.channels, channelID)
-	am.service.mu.Unlock()
+	// Revoke in SQLite (single source of truth).
+	if am.service.store != nil {
+		if err := am.service.store.MarkYouTubeOAuthTokenRevoked(channelID); err != nil {
+			log.Printf("[WARN] Failed to revoke OAuth token in DB: %v", err)
+		}
+	}
 
 	log.Printf("[OK] Channel removed: %s", channelID)
 	return nil

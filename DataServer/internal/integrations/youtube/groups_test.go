@@ -4,37 +4,74 @@ import (
 	"testing"
 )
 
-// helper: create a minimal Service with in-memory channels and groups.
+// fakeStoreForGroups is a minimal fake YouTubeStore used by group tests.
+// It stores channels, groups, and memberships in memory so that
+// Service.loadAuthChannel / loadChannelGroup can hydrate from it.
+type fakeStoreForGroups struct {
+	YouTubeStore
+
+	channels    map[string]map[string]interface{}
+	oauthTokens map[string]map[string]interface{}
+	groups      []map[string]interface{}
+	memberships map[int64][]string
+}
+
+func (f *fakeStoreForGroups) GetYouTubeChannel(channelID string) (map[string]interface{}, error) {
+	return f.channels[channelID], nil
+}
+
+func (f *fakeStoreForGroups) GetYouTubeOAuthToken(channelID string) (map[string]interface{}, error) {
+	return f.oauthTokens[channelID], nil
+}
+
+func (f *fakeStoreForGroups) ListYouTubeGroups() ([]map[string]interface{}, error) {
+	return f.groups, nil
+}
+
+func (f *fakeStoreForGroups) ListGroupChannels(groupID int64) ([]string, error) {
+	return f.memberships[groupID], nil
+}
+
+// helper: create a minimal Service backed by the fake store.
 func mockService(t *testing.T) *Service {
 	t.Helper()
 	return &Service{
-		channels: make(map[string]*AuthChannel),
-		groups:   make(map[string]*ChannelGroup),
+		store: &fakeStoreForGroups{
+			channels:    make(map[string]map[string]interface{}),
+			oauthTokens: make(map[string]map[string]interface{}),
+			memberships: make(map[int64][]string),
+		},
 	}
 }
 
-// helper: add a channel to the service.
+// helper: add a channel to the fake store.
 func addMockChannel(t *testing.T, s *Service, id, name, language string) {
 	t.Helper()
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.channels[id] = &AuthChannel{
-		ID:       id,
-		Name:     name,
-		Title:    name + " Title",
-		Language: language,
+	fs := s.store.(*fakeStoreForGroups)
+	fs.channels[id] = map[string]interface{}{
+		"channel_id":   id,
+		"display_name": name,
+		"title":        name + " Title",
+		"language":     language,
+	}
+	fs.oauthTokens[id] = map[string]interface{}{
+		"channel_id": id,
 	}
 }
 
-// helper: add a group with channel IDs to the service.
+// helper: add a group with channel IDs to the fake store.
 func addMockGroup(t *testing.T, s *Service, name string, channelIDs []string) {
 	t.Helper()
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.groups[name] = &ChannelGroup{
-		Name:     name,
-		Channels: channelIDs,
-	}
+	fs := s.store.(*fakeStoreForGroups)
+	gid := int64(len(fs.groups) + 1)
+	fs.groups = append(fs.groups, map[string]interface{}{
+		"id":          gid,
+		"name":        name,
+		"group_type":  "upload",
+		"description": "",
+		"privacy":     "",
+	})
+	fs.memberships[gid] = append([]string{}, channelIDs...)
 }
 
 // =============================================================================
@@ -84,7 +121,6 @@ func TestResolveChannelByLanguage_CaseInsensitive(t *testing.T) {
 	addMockChannel(t, s, "ch_en_1", "English Channel", "EN")
 	addMockGroup(t, s, "Amish", []string{"ch_it_1", "ch_en_1"})
 
-	// Request with lowercase
 	ch, err := s.ResolveChannelByLanguage("Amish", "it")
 	if err != nil {
 		t.Fatalf("ResolveChannelByLanguage (lower request): %v", err)
@@ -93,7 +129,6 @@ func TestResolveChannelByLanguage_CaseInsensitive(t *testing.T) {
 		t.Fatalf("want channel ch_it_1, got %s", ch.ID)
 	}
 
-	// Request with uppercase
 	ch, err = s.ResolveChannelByLanguage("Amish", "IT")
 	if err != nil {
 		t.Fatalf("ResolveChannelByLanguage (upper request): %v", err)
@@ -109,12 +144,10 @@ func TestResolveChannelByLanguage_NoMatchThenFallbackToUnconfigured(t *testing.T
 	addMockChannel(t, s, "ch_unconf", "Unconfigured Channel", "") // no language
 	addMockGroup(t, s, "Amish", []string{"ch_it_1", "ch_unconf"})
 
-	// Request a language that doesn't exist in the group (e.g. "fr")
 	ch, err := s.ResolveChannelByLanguage("Amish", "fr")
 	if err != nil {
 		t.Fatalf("ResolveChannelByLanguage: %v", err)
 	}
-	// Should fallback to the unconfigured channel
 	if ch.ID != "ch_unconf" {
 		t.Fatalf("want fallback to unconfigured channel ch_unconf, got %s", ch.ID)
 	}
@@ -129,7 +162,6 @@ func TestResolveChannelByLanguage_NoMatchThenFallbackToAny(t *testing.T) {
 	addMockChannel(t, s, "ch_en_1", "English Channel", "en")
 	addMockGroup(t, s, "Amish", []string{"ch_it_1", "ch_en_1"})
 
-	// Request a language that doesn't exist — fallback to first channel
 	ch, err := s.ResolveChannelByLanguage("Amish", "de")
 	if err != nil {
 		t.Fatalf("ResolveChannelByLanguage: %v", err)
@@ -177,7 +209,6 @@ func TestResolveChannelByLanguage_GroupHasNoChannels(t *testing.T) {
 
 func TestResolveChannelByLanguage_ChannelIDsNotInChannelsMap(t *testing.T) {
 	s := mockService(t)
-	// Group references channel IDs that don't exist in the channels map
 	addMockGroup(t, s, "OrphanGroup", []string{"ghost_ch_1", "ghost_ch_2"})
 
 	_, err := s.ResolveChannelByLanguage("OrphanGroup", "it")
@@ -196,15 +227,15 @@ func TestResolveChannelByLanguage_ReturnsDeepCopy(t *testing.T) {
 		t.Fatalf("ResolveChannelByLanguage: %v", err)
 	}
 
-	// Modify the returned copy — should NOT affect the original
+	// Modify the returned copy — should NOT affect the store data
 	ch.Name = "Modified"
 
-	// Check the original is unchanged
-	s.mu.RLock()
-	original := s.channels["ch_it_1"]
-	s.mu.RUnlock()
-	if original.Name != "Canale Italiano" {
-		t.Fatalf("expected original channel name unchanged, got %q", original.Name)
+	reloaded := s.GetAuthChannel("ch_it_1")
+	if reloaded == nil {
+		t.Fatal("expected channel to be reloadable")
+	}
+	if reloaded.Name != "Canale Italiano" {
+		t.Fatalf("expected original channel name unchanged, got %q", reloaded.Name)
 	}
 }
 
@@ -214,7 +245,6 @@ func TestResolveChannelByLanguage_PrefersExactMatchOverFallback(t *testing.T) {
 	addMockChannel(t, s, "ch_it_1", "Canale Italiano", "it")
 	addMockGroup(t, s, "Amish", []string{"ch_fallback", "ch_it_1"})
 
-	// Should prefer the Italian channel over the fallback
 	ch, err := s.ResolveChannelByLanguage("Amish", "it")
 	if err != nil {
 		t.Fatalf("ResolveChannelByLanguage: %v", err)
@@ -229,8 +259,6 @@ func TestResolveChannelByLanguage_WithWhitespaceInGroupName(t *testing.T) {
 	addMockChannel(t, s, "ch_it_1", "Canale Italiano", "it")
 	addMockGroup(t, s, "  Amish Group  ", []string{"ch_it_1"})
 
-	// The group name lookup is exact, so whitespace in the group name is preserved.
-	// This test verifies the function doesn't crash with whitespace.
 	ch, err := s.ResolveChannelByLanguage("  Amish Group  ", "it")
 	if err != nil {
 		t.Fatalf("ResolveChannelByLanguage with whitespace: %v", err)
@@ -247,7 +275,6 @@ func TestResolveChannelByLanguage_MultipleLanguageChannels(t *testing.T) {
 	addMockChannel(t, s, "ch_it_1", "Italiano", "it")
 	addMockGroup(t, s, "Amish", []string{"ch_en_1", "ch_en_2", "ch_it_1"})
 
-	// Request English — should return first matching English channel
 	ch, err := s.ResolveChannelByLanguage("Amish", "en")
 	if err != nil {
 		t.Fatalf("ResolveChannelByLanguage: %v", err)

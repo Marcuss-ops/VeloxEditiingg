@@ -119,16 +119,14 @@ func (s *Service) loadOAuthConfig() error {
 // callback is invoked by Token() whenever the underlying oauth2 lib hands
 // us a fresh token (i.e. a refresh round-trip).
 //
-// DB-first ordering (S11): the supplied `save` callback MUST persist the
-// refreshed token to SQLite BEFORE mirroring it into s.channels. A
-// transient SQLite failure is therefore surfaced to the OAuth lib as a
-// returned error: the lib will retry on the next outgoing HTTP call and
-// the in-RAM token copy stays untouched. The previous WARN-swallows-error
+// DB-first ordering (S11): the supplied `save` callback persists the
+// refreshed token directly to SQLite. A transient SQLite failure is
+// surfaced to the OAuth lib as a returned error: the lib will retry on
+// the next outgoing HTTP call. The previous WARN-swallows-error
 // behaviour was the bug: a successful RAM update with a failed SQL
 // persist meant the in-RAM cache and the canonical row diverged until
-// the next restart. We close that gap here by requiring the callback to
-// adopt DB-first ordering and by reporting its error back through the
-// TokenSource contract.
+// the next restart. We close that gap here by persisting straight to
+// SQLite and reporting any error back through the TokenSource contract.
 type PersistedTokenSource struct {
 	source oauth2.TokenSource
 	save   func(*oauth2.Token) error
@@ -167,23 +165,17 @@ func (pts *PersistedTokenSource) Token() (*oauth2.Token, error) {
 //
 // DB-first ordering (the SQLite-only auto-refresh path): this is the
 // single canonical write primitive for refreshed OAuth credentials.
-// Callers MUST persist through this method BEFORE mirroring the new
-// access/refresh/expiry into the in-RAM channel entry under s.mu.
+// There is no in-RAM mirror; every refresh writes straight to SQLite.
 // The PersistedTokenSource.save closure supplied by GetYouTubeService
-// already follows this rule — it returns a non-nil error on SQL or
-// encrypt failure so the in-RAM `channel.AccessToken` stays untouched
-// on a failed persist. (PersistedTokenSource.Token always returns the
-// freshly-refreshed `source.Token` to its caller regardless: the
-// OAuth lib's own cache is unaffected, and the next DB-first
-// refresh closure repopulates channel.AccessToken from SQL on the
-// next round-trip. Boot hydration via loadOAuthChannelsFromSQLite
-// only fires on a cold start; runtime recovery is the closure
-// path itself.)
+// returns a non-nil error on SQL or encrypt failure so the caller
+// knows the canonical row is out of sync. (PersistedTokenSource.Token
+// always returns the freshly-refreshed `source.Token` to its caller
+// regardless: the OAuth lib's own cache is unaffected, and the next
+// DB-first read via GetAuthChannel reloads from SQL.)
 // The previous "auto-refresh path logs the SQL error and proceeds"
-// behaviour ("in-RAM access_token is already advanced on
-// channel.AccessToken") has been removed: a divergence between the
-// runtime cache and the canonical youtube_oauth_tokens row no longer
-// goes unnoticed — the [ERR] log inside PersistedTokenSource.Token
+// behaviour has been removed: a divergence between any runtime cache
+// and the canonical youtube_oauth_tokens row no longer goes
+// unnoticed — the [ERR] log inside PersistedTokenSource.Token
 // surfaces it.
 func (s *Service) persistRefreshedToken(channelID string, newToken *oauth2.Token) error {
 	if s.store == nil || s.oauthBuf == nil {
@@ -249,14 +241,8 @@ func (s *Service) GetYouTubeService(ctx context.Context, channelID string) (*you
 			if newToken.AccessToken == channel.AccessToken {
 				return nil
 			}
-			// DB-first (S11). Persist the refreshed token to SQLite BEFORE
-			// mirroring it into s.channels. Refresh providers MAY rotate
-			// the refresh_token too — when the new grant carries one, we
-			// prefer it; otherwise the previously-stored encrypted blob
-			// is preserved so a normal access-token rotation does not
-			// silently wipe the long-lived credential. A SQLite failure
-			// returns the error WITHOUT RAM mutation so the runtime cache
-			// stays coherent with the canonical row.
+			// DB-first: persist the refreshed token to SQLite. There is
+			// no in-memory mirror to keep coherent.
 			if s.store != nil && s.oauthBuf != nil {
 				if err := s.persistRefreshedToken(channel.ID, newToken); err != nil {
 					return fmt.Errorf("refresh: persist to sqlite: %w", err)
@@ -265,15 +251,6 @@ func (s *Service) GetYouTubeService(ctx context.Context, channelID string) (*you
 			} else {
 				log.Printf("[WARN] youtube refresh: oauthBuf nil or store nil — skipping persistence for %s", channel.ID)
 			}
-
-			// RAM mirror written only AFTER the canonical write succeeded.
-			s.mu.Lock()
-			channel.AccessToken = newToken.AccessToken
-			channel.Expiry = newToken.Expiry
-			if newToken.RefreshToken != "" {
-				channel.RefreshToken = newToken.RefreshToken
-			}
-			s.mu.Unlock()
 			return nil
 		},
 	}

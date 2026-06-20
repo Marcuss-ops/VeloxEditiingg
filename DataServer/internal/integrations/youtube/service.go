@@ -6,7 +6,6 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"sync"
 	"time"
 
 	"velox-server/internal/store/youtubetypes"
@@ -70,13 +69,13 @@ type YouTubeStore interface {
 	}) (int, error)
 }
 
-// Service provides YouTube API functionality
+// Service provides YouTube API functionality.
+// SQLite is the single source of truth for channels and groups; there is
+// no in-memory mirror. Every read goes through a fresh DB query and every
+// write is persisted immediately.
 type Service struct {
 	config      *ServiceConfig
 	oauthConfig *oauth2.Config
-	channels    map[string]*AuthChannel
-	groups      map[string]*ChannelGroup
-	mu          sync.RWMutex
 	cache       *Cache
 	store       YouTubeStore
 	oauthBuf    OAuthCipher // Encryption cipher for OAuth token persistence
@@ -106,11 +105,9 @@ func NewService(cfg *ServiceConfig, store YouTubeStore) (*Service, error) {
 	}
 
 	s := &Service{
-		config:   cfg,
-		store:    store,
-		channels: make(map[string]*AuthChannel),
-		groups:   make(map[string]*ChannelGroup),
-		cache:    NewCache(cfg.DataDir, 12*time.Hour, store),
+		config: cfg,
+		store:  store,
+		cache:  NewCache(cfg.DataDir, 12*time.Hour, store),
 	}
 
 	s.authManager = NewAuthManager(s)
@@ -121,10 +118,6 @@ func NewService(cfg *ServiceConfig, store YouTubeStore) (*Service, error) {
 	if err := s.loadOAuthConfig(); err != nil {
 		log.Printf("[WARN] YouTube OAuth config not loaded: %v", err)
 	}
-
-	// Load from canonical tables — store is already set, so this works immediately
-	s.loadCanonicalChannels()
-	s.loadCanonicalGroups()
 
 	return s, nil
 }
@@ -151,7 +144,6 @@ func (s *Service) QuotaManager() *QuotaManager {
 
 // SetStore sets the SQLite store for persistence, type-asserting from interface{}.
 // If a store was already provided via NewService, this is a no-op.
-// If called for the first time, it reloads data from the store.
 func (s *Service) SetStore(st interface{}) {
 	if s.store != nil {
 		return // Already set via NewService
@@ -159,8 +151,6 @@ func (s *Service) SetStore(st interface{}) {
 	if store, ok := st.(YouTubeStore); ok {
 		s.store = store
 		s.cache.SetStore(store)
-		s.loadCanonicalChannels()
-		s.loadCanonicalGroups()
 	}
 }
 
