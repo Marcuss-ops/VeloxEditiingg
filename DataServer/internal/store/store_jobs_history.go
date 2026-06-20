@@ -21,5 +21,3 @@ func (s *SQLiteStore) replaceJobHistoryTx(tx *sql.Tx, jobID string, history []ma
 	}
 	return nil
 }
-
-}

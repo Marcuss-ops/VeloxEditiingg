@@ -1,21 +1,20 @@
-chore(store): Batch 3.2 \u2014 drop 4 confirmed orphan *SQLiteStore methods
+fix(store): Batch 3.2 amendment \u2014 remove stray closing brace in store_jobs_history.go
 
-Per user-supplied `grep \.Mname(` verification (the same audit method
-used in Batch 3.1), exactly 4 of the 5 Batch 3.2 candidates had 0 callers:
+The Batch 3.2 deletion commit (e32ca965) on main shipped with a stray
+closing brace in store_jobs_history.go \u2014 the second str_replace for
+deleting GetJobLogs set new = "\}\n" instead of new = "", which added
+an extra closing brace after replaceJobHistoryTx. Result: go build/vet
+failed with "syntax error: non-declaration statement outside function
+body" at line 25.
 
-  UpsertJob       (store_jobs_mutation.go) \u2014 0 callers (orphan)
-  ReplaceJobs     (store_jobs_mutation.go) \u2014 0 callers (orphan)
-  GetJobHistory   (store_jobs_history.go) \u2014 0 callers (orphan)
-  GetJobLogs      (store_jobs_history.go) \u2014 0 callers (orphan)
+This amendment:
+- Removes the stray `}` after replaceJobHistoryTx's closing brace
+  (the file now ends correctly with the replaceJobHistoryTx close)
 
-One candidate was KEPT (verification under-count):
+NOTE: The `time` import Batch 3.2 reviewer flagged as unused was
+ALREADY removed in Batch 3.1 (commit 0c6da327) when AddJobHistory and
+AddJobLog (the last `time.Now()` consumers in this file) were deleted.
+No import fix needed.
 
-  replaceJobHistoryTx (store_jobs_history.go) \u2014 1 caller (live):
-    called from ClaimNextPendingJob in store_jobs.go:139, which
-    atomically claims a pending job and writes its history. Dropping
-    it would break the worker-claim path.
-
-Net: 4 *SQLiteStore methods deleted from 2 files in the store package.
-Cross-repo grep (RemoteCodex/, frontend_standalone/, shared/) confirms
-no external consumers of any of the 4 deleted methods. Verified with
-go build, go vet, race-test on jobs/queue/store, and full short test.
+Verified: go build, go vet, race-test on jobs/queue/store, full
+short test. replaceJobHistoryTx still functional in ClaimNextPendingJob.
