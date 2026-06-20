@@ -34,8 +34,8 @@ func TestInterface_YouTubeStore_CompileTime(t *testing.T) {
 	// interface is satisfied.
 	//
 	// SQLiteStore implements:
-	//   - ListYouTubeGroupsV2()
-	//   - UpsertYouTubeGroupV2(name, groupType, description, privacy)
+	//   - ListYouTubeGroups()
+	//   - UpsertYouTubeGroup(name, groupType, description, privacy)
 	//   - GetYouTubeCache(key) / SetYouTubeCache(key, ts, data)
 	//   - CleanupYouTubeCache(maxAge) / ClearYouTubeCache()
 	//   - MigrateYouTubeCache(entries)
@@ -104,7 +104,7 @@ func TestInterface_YouTubeStore_Cache(t *testing.T) {
 }
 
 func TestInterface_YouTubeStore_LegacyGroups(t *testing.T) {
-	t.Skip("ListYouTubeGroups and UpsertYouTubeGroup removed in PR 3.5-b — use ListYouTubeGroupsV2 and UpsertYouTubeGroupV2")
+	t.Skip("ListYouTubeGroups and UpsertYouTubeGroup canonical (PR15.4 dropped the historical V2 suffix)")
 }
 
 // ============================================================

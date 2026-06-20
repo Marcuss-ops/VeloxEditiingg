@@ -53,30 +53,36 @@ func (h *PersistenceHandler) Handle(c *gin.Context) {
 // sourceOfTruth returns the canonical persistence mapping for the YouTube
 // catalog. JSON files are listed only where they are either OAuth-required
 // or legacy-tolerant (catalog data is NEVER on JSON).
+//
+// PR15.4: every YouTube canonical owner now points to the SQL-only
+// YouTubeStore contract (no `Storage.data.Groups` in-RAM mirror,
+// no reconciler / safety-guard / per-group diff — those structs and
+// methods were removed from integrations/youtube/storage.go + the
+// storage_persistence.go / save_status.go files are deleted).
 func (h *PersistenceHandler) sourceOfTruth() gin.H {
 	return gin.H{
 		"youtube_channels": gin.H{
 			"backend": "sqlite",
 			"table":   "youtube_channels",
-			"owner":   "DataServer/internal/integrations/youtube/storage.go (Storage.data.Groups)",
+			"owner":   "DataServer/internal/integrations/youtube/storage_channels.go (SQL pass-through via YouTubeStore)",
 			"primary": true,
 		},
 		"youtube_groups": gin.H{
 			"backend": "sqlite",
-			"table":   "youtube_groups_v2",
-			"owner":   "DataServer/internal/integrations/youtube/storage.go (Storage.data.Groups)",
+			"table":   "youtube_groups",
+			"owner":   "DataServer/internal/integrations/youtube/storage_groups.go (SQL pass-through via YouTubeStore)",
 			"primary": true,
 		},
 		"youtube_group_channels": gin.H{
 			"backend": "sqlite",
 			"table":   "youtube_group_channels",
-			"owner":   "DataServer/internal/integrations/youtube/storage_persistence.go (diffGroupMemberships)",
+			"owner":   "DataServer/internal/integrations/youtube/storage_channels.go / storage_groups.go (per-row SQL via YouTubeStore)",
 			"primary": true,
 		},
 		"youtube_tracked_niches": gin.H{
 			"backend": "sqlite",
 			"table":   "youtube_tracked_niches",
-			"owner":   "DataServer/internal/integrations/youtube/storage_persistence.go",
+			"owner":   "DataServer/internal/integrations/youtube/storage_groups.go (CleanupOldData tracked-niche sweep)",
 			"primary": true,
 		},
 		"youtube_api_cache": gin.H{
@@ -244,9 +250,15 @@ func canonicalAbs(p string) string {
 	return filepath.Clean(p)
 }
 
-// safetyGuardStatus hydrates the /audit response from the Storage's
-// SaveStatus record. If no save has been attempted yet we return "no_op" so
-// operators can tell that the safety guard is enabled but unstested.
+// safetyGuardStatus returns the PR15.4 status for the deleted safety-guard.
+//
+// PR15.4 dropped the in-RAM `Storage.data.Groups` mirror and the
+// associated memory-vs-DB safety guard (safetyGuardMinRatio /
+// safetyGuardMinDBGroups / ErrSaveRefusedBySafetyGuard). The Storage
+// struct is now a thin SQL pass-through so there is no in-memory vs DB
+// ratio to track and no full-state rewrite to refuse. The audit
+// endpoint now surfaces this as `safety_guard_disabled` with the
+// rationale so operators can confirm the cutover happened.
 func (h *PersistenceHandler) safetyGuardStatus() gin.H {
 	if h.ytStorage == nil {
 		return gin.H{
@@ -254,26 +266,19 @@ func (h *PersistenceHandler) safetyGuardStatus() gin.H {
 			"reason":    "youtube_storage_unavailable",
 		}
 	}
-	status := h.ytStorage.LastSaveStatus()
-	if status == nil {
-		return gin.H{
-			"available":   true,
-			"status":      "no_op",
-			"description": "no save has been attempted since startup; safety guard is configured but not yet exercised. Trigger a /api/v1/youtube/groups/* mutation to record a status.",
-		}
-	}
-	flagged := status.Result == "refused_safety_guard"
 	return gin.H{
-		"available":           true,
-		"timestamp_utc":       status.Timestamp.Format(time.RFC3339Nano),
-		"operation":           status.Operation,
-		"group":               status.GroupTarget,
-		"result":              status.Result,
-		"error":               status.Error,
-		"memory_groups":       status.MemoryGroups,
-		"db_group_count":      status.DBGroupCount,
-		"memory_db_ratio":     status.Ratio,
-		"bypass_safety_guard": status.BypassGuard,
-		"safety_guard_fired":  flagged,
+		"available":   true,
+		"status":      "safety_guard_disabled",
+		"description": "PR15.4 dropped Storage.data.Groups + memory-vs-DB reconciler guards. Storage is now a thin SQL pass-through; every write is a non-destructive per-row mutation via YouTubeStore. No destructive rewrite path to guard against.",
+		"cutover":     "PR15.4 (youtube one-source-of-truth)",
+		"prior_state": gin.H{
+			"in_memory_groups": "removed (Storage.data.Groups dropped)",
+			"safety_guard":     "removed (safetyGuardMinRatio / safetyGuardMinDBGroups / ErrSaveRefusedBySafetyGuard / saveAllReconcile / syncGroupLocked obsolete)",
+			"reconciler":       "removed (no memory-vs-DB divergence possible)",
+		},
+		"notes": []string{
+			"Live counts (groups_total / channels_total / channels_undefined) remain the operator-correct view; they are populated by SQL queries on every call.",
+			"A destructive full-state rewrite is no longer expressible through Storage — if a rebuild is ever needed it must be done by an explicit per-row script (e.g. a sqlite_jobs_writer migration).",
+		},
 	}
 }

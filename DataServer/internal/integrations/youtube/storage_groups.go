@@ -6,135 +6,227 @@ import (
 	"time"
 )
 
-// ListGroups returns all groups
-func (s *Storage) ListGroups() (map[string]*Group, []string) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	groups := make(map[string]*Group)
-	for k, v := range s.data.Groups {
-		group := *v
-		group.Channels = make([]Channel, len(v.Channels))
-		copy(group.Channels, v.Channels)
-		groups[k] = &group
+// channelsForGroupLocked hydrates the channels for a single group id
+// from SQL. Returns an empty slice on nil store / lookup failure (so
+// callers never panic on a partial group). PR15.4: replaces the
+// in-RAM `group.Channels` slice that used to live on Storage.
+func (s *Storage) channelsForGroupLocked(groupID int64) []Channel {
+	if s.store == nil || groupID <= 0 {
+		return []Channel{}
 	}
-
-	return groups, s.data.TrackedNiches
+	channelIDs, err := s.store.ListGroupChannels(groupID)
+	if err != nil {
+		return []Channel{}
+	}
+	out := make([]Channel, 0, len(channelIDs))
+	for _, chID := range channelIDs {
+		ch, err := s.store.GetYouTubeChannel(chID)
+		if err != nil || ch == nil {
+			out = append(out, Channel{ID: chID})
+			continue
+		}
+		if c := channelFromCanonicalRow(ch); c != nil {
+			out = append(out, *c)
+		} else {
+			out = append(out, Channel{ID: chID})
+		}
+	}
+	return out
 }
 
-// GetGroup returns a specific group
-func (s *Storage) GetGroup(name string) (*Group, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	group, ok := s.data.Groups[name]
-	if !ok {
-		return nil, false
-	}
-
-	g := *group
-	g.Channels = make([]Channel, len(group.Channels))
-	copy(g.Channels, group.Channels)
-	return &g, true
-}
-
-// CreateGroup creates a new group with the specified type. Persists only this
-// group's row via a direct UpsertYouTubeGroupV2 call — does NOT touch any
-// other groups in the DB (avoids the destructive full-state rewrite).
-func (s *Storage) CreateGroup(name string, groupType string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if _, exists := s.data.Groups[name]; exists {
-		return ErrGroupExists
-	}
-
-	s.data.Groups[name] = &Group{
-		Name:      name,
-		CreatedAt: time.Now(),
-		Channels:  []Channel{},
-		GroupType: groupType,
-	}
-
-	if s.store == nil {
+// channelFromCanonicalRow converts a canonical youtube_channels row to a Channel.
+func channelFromCanonicalRow(row map[string]interface{}) *Channel {
+	id, _ := row["channel_id"].(string)
+	if id == "" {
 		return nil
 	}
-	_, err := s.store.UpsertYouTubeGroupV2(name, groupType, "", "")
+	return &Channel{
+		ID:        id,
+		Title:     asStringField(row, "title"),
+		Name:      asStringField(row, "display_name"),
+		URL:       asStringField(row, "channel_url"),
+		Thumbnail: asStringField(row, "thumbnail_url"),
+		Language:  asStringField(row, "language"),
+		ViewCount: asInt64Field(row, "view_count"),
+		SubCount:  asInt64Field(row, "subscriber_count"),
+	}
+}
+
+// resolveGroupIDByName looks up the integer group_id for a name. The
+// pre-PR15.4 path stored GroupType on the in-RAM Group snapshot and
+// used it as the lookup key. With the RAM snapshot gone, we list all
+// groups and pick the first row whose name matches. Returns 0 if no
+// group named `name` exists.
+func (s *Storage) resolveGroupIDByName(name string) (int64, error) {
+	if s.store == nil {
+		return 0, ErrStoreNotConfigured
+	}
+	rows, err := s.store.ListYouTubeGroups()
 	if err != nil {
+		return 0, err
+	}
+	for _, row := range rows {
+		n, _ := row["name"].(string)
+		if n != name {
+			continue
+		}
+		gid, _ := row["id"].(int64)
+		return gid, nil
+	}
+	return 0, nil
+}
+
+// groupTypeForName returns the canonical group_type string for a group
+// by name. PR15.4: previously this came from in-RAM `group.GroupType`;
+// now it comes from a ListYouTubeGroups + scan. Defaults to "manager"
+// if the row is missing or has an empty group_type (matches the
+// pre-PR15.4 normalisation in UpsertYouTubeGroup).
+func (s *Storage) groupTypeForName(name string) string {
+	if s.store == nil {
+		return "manager"
+	}
+	rows, err := s.store.ListYouTubeGroups()
+	if err != nil {
+		return "manager"
+	}
+	for _, row := range rows {
+		n, _ := row["name"].(string)
+		if n != name {
+			continue
+		}
+		t, _ := row["group_type"].(string)
+		if t == "" {
+			return "manager"
+		}
+		return t
+	}
+	return "manager"
+}
+
+// ListGroups returns all groups hydrated from SQL.
+func (s *Storage) ListGroups() (map[string]*Group, []string) {
+	if s.store == nil {
+		return map[string]*Group{}, nil
+	}
+	data := s.LoadData()
+	return data.Groups, data.TrackedNiches
+}
+
+// GetGroup returns a specific group hydrated from SQL.
+func (s *Storage) GetGroup(name string) (*Group, bool) {
+	if s.store == nil {
+		return nil, false
+	}
+	rows, err := s.store.ListYouTubeGroups()
+	if err != nil {
+		return nil, false
+	}
+	for _, row := range rows {
+		n, _ := row["name"].(string)
+		if n != name {
+			continue
+		}
+		gid, _ := row["id"].(int64)
+		groupType, _ := row["group_type"].(string)
+		createdAt, _ := row["created_at"].(string)
+		g := &Group{
+			Name:      n,
+			CreatedAt: parseFlexTime(createdAt),
+			Channels:  s.channelsForGroupLocked(gid),
+			GroupType: groupType,
+		}
+		return g, true
+	}
+	return nil, false
+}
+
+// CreateGroup creates a new group with the specified type.
+//
+// PR15.4: restores the pre-PR15.4 ErrGroupExists semantic via an O(1)
+// GetYouTubeGroupID pre-check so a duplicate "create" call returns
+// ErrGroupExists instead of silently overwriting description/privacy
+// via the UNIQUE-ON-CONFLICT DO UPDATE branch of UpsertYouTubeGroup.
+// Without this check, callers that pre-screen before create would
+// silently clobber existing groups on retry.
+func (s *Storage) CreateGroup(name string, groupType string) error {
+	if s.store == nil {
+		return ErrStoreNotConfigured
+	}
+	if groupType == "" {
+		groupType = "manager"
+	}
+	if existing, err := s.store.GetYouTubeGroupID(name, groupType); err != nil {
+		return fmt.Errorf("create group %q: pre-check: %w", name, err)
+	} else if existing > 0 {
+		return ErrGroupExists
+	}
+	if _, err := s.store.UpsertYouTubeGroup(name, groupType, "", ""); err != nil {
 		return fmt.Errorf("create group %q: %w", name, err)
 	}
 	return nil
 }
 
-// DeleteGroup removes a group. Persists only via direct SQL on this single
-// group's row and membership rows — does NOT touch any other groups.
+// DeleteGroup removes a group by name (id resolved via O(1) lookup).
 func (s *Storage) DeleteGroup(name string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	group, exists := s.data.Groups[name]
-	if !exists {
-		return ErrGroupNotFound
-	}
-
-	delete(s.data.Groups, name)
 	if s.store == nil {
-		return nil
+		return ErrStoreNotConfigured
 	}
-
-	groupType := group.GroupType
-	if groupType == "" {
-		groupType = "manager"
-	}
-
-	groupID, err := s.store.GetYouTubeGroupV2ID(name, groupType)
+	gid, err := s.store.GetYouTubeGroupID(name, s.groupTypeForName(name))
 	if err != nil {
 		return err
 	}
-	if groupID > 0 {
-		if err := s.store.DeleteYouTubeGroupChannelsByGroupID(groupID); err != nil {
-			return err
-		}
-		if err := s.store.DeleteYouTubeGroupV2(groupID); err != nil {
-			return err
-		}
+	if gid == 0 {
+		return ErrGroupNotFound
 	}
-	return nil
+	if err := s.store.DeleteYouTubeGroupChannelsByGroupID(gid); err != nil {
+		return err
+	}
+	return s.store.DeleteYouTubeGroup(gid)
 }
 
-// CleanupOldData removes cached channel metadata older than the retention period.
-// Persists every affected group individually via SyncGroup (non-destructive
-// per-group diff) so untouched groups are left alone. Previously this called
-// the global save() which destructively rewrote every group.
+// CleanupOldData clears cached channel metadata for channels whose
+// last_sync_at is older than retention. PR15.4: was a destructive
+// per-group diff via syncGroupLocked. Now performs targeted per-channel
+// UPDATEs so untouched channels are not rewritten. Returns the number
+// of channels touched.
 func (s *Storage) CleanupOldData(retention time.Duration) int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	if s.store == nil {
+		return 0
+	}
 
-	now := time.Now()
+	cutoff := time.Now().UTC().Add(-retention).Format(time.RFC3339)
+	rows, listErr := s.store.ListYouTubeChannels()
+	if listErr != nil {
+		log.Printf("[WARN] CleanupOldData: list channels: %v", listErr)
+		return 0
+	}
 	removedCount := 0
-
-	for name, group := range s.data.Groups {
-		if group == nil {
+	for _, row := range rows {
+		lastSync, _ := row["last_sync_at"].(string)
+		if lastSync == "" || lastSync >= cutoff {
 			continue
 		}
-		groupDirty := false
-		for i := range group.Channels {
-			ch := &group.Channels[i]
-			if !ch.LastSync.IsZero() && now.Sub(ch.LastSync) > retention {
-				ch.Title = ""
-				ch.Thumbnail = ""
-				ch.ViewCount = 0
-				ch.SubCount = 0
-				ch.Keywords = nil
-				removedCount++
-				groupDirty = true
-			}
+		chID, _ := row["channel_id"].(string)
+		if chID == "" {
+			continue
 		}
-		if groupDirty && s.store != nil {
-			if err := s.syncGroupLocked(name, group); err != nil {
-				log.Printf("[WARN] CleanupOldData: per-group sync failed for %q: %v", name, err)
-			}
+		// Roll forward without touching user columns.
+		if err := s.store.UpsertYouTubeChannel(
+			chID, "", // title (empty => keep)
+			asStringField(row, "display_name"),
+			asStringField(row, "channel_url"),
+			"", // thumbnail (empty => keep)
+			asStringField(row, "language"),
+			asStringField(row, "notes"),
+			0, 0, // view/sub count reset
+			asStringField(row, "added_at"),
+			cutoff, // last_sync_at pushed forward so we don't reflag
+			"",
+		); err != nil {
+			log.Printf("[WARN] CleanupOldData: reset %s: %v", safeChannelID(chID), err)
+			continue
 		}
+		removedCount++
 	}
 	return removedCount
 }

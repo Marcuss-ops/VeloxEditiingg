@@ -7,21 +7,32 @@ import (
 	"time"
 )
 
-// loadGroupsFromSQLite loads groups from the canonical youtube_groups_v2 table.
+// loadGroupsFromSQLite loads groups from the canonical youtube_groups table.
+//
+// PR15.4 null-deref fix: this function used to crash when s.store was nil
+// because the first thing it did was `s.store.ListYouTubeGroupsV2()` with
+// no nil guard. The upstream caller
+// (Service.loadCanonicalGroups) had a `if s.store == nil { return
+// s.loadGroupsFromSQLite() }` branch that delegated to this fallback
+// without checking the receiver — both code paths null-deref'd
+// identically on a degraded server with no SQLite store. Now this
+// function returns false immediately if s.store is nil so that both
+// paths degrade safely.
 func (s *Service) loadGroupsFromSQLite() bool {
-	// Load groups from youtube_groups_v2
-	groupRows, err := s.store.ListYouTubeGroupsV2()
+	if s.store == nil {
+		return false
+	}
+
+	groupRows, err := s.store.ListYouTubeGroups()
 	if err != nil || len(groupRows) == 0 {
 		return false
 	}
 
-	// Load all memberships at once
-	memberships, err := s.store.ListAllGroupMembershipsV2()
+	memberships, err := s.store.ListAllGroupMemberships()
 	if err != nil {
 		memberships = nil
 	}
 
-	// Build a map of group_id → channel IDs
 	groupChannels := make(map[int64][]string)
 	for _, m := range memberships {
 		gid, _ := m["group_id"].(int64)
@@ -52,32 +63,34 @@ func (s *Service) loadGroupsFromSQLite() bool {
 			Channels:    groupChannels[gid],
 		}
 	}
-	log.Printf("[OK] Loaded %d YouTube groups from legacy SQLite", len(s.groups))
+	log.Printf("[OK] Loaded %d YouTube groups from canonical tables", len(s.groups))
 	return true
 }
 
-// loadCanonicalGroups loads groups from the canonical youtube_groups_v2 table
-// with channel memberships from youtube_group_channels.
+// loadCanonicalGroups populates s.groups from youtube_groups +
+// youtube_group_channels.
+//
+// PR15.4: both branches (canonical direct load + legacy fallback) now
+// short-circuit when s.store is nil. Pre-PR15.4 the fallback branch
+// (`s.loadGroupsFromSQLite`) would unconditionally dereference
+// `s.store.ListYouTubeGroupsV2()` even when s.store was nil, crashing
+// in degraded mode (no SQLite configured). The fix lives in BOTH
+// functions so a missing-store condition cannot propagate downstream.
 func (s *Service) loadCanonicalGroups() bool {
 	if s.store == nil {
-		// Fall back to legacy path
 		return s.loadGroupsFromSQLite()
 	}
 
-	// Load groups from youtube_groups_v2
-	groupRows, err := s.store.ListYouTubeGroupsV2()
+	groupRows, err := s.store.ListYouTubeGroups()
 	if err != nil || len(groupRows) == 0 {
-		// Fall back to legacy if canonical is empty
 		return s.loadGroupsFromSQLite()
 	}
 
-	// Load all memberships at once
-	memberships, err := s.store.ListAllGroupMembershipsV2()
+	memberships, err := s.store.ListAllGroupMemberships()
 	if err != nil {
 		memberships = nil
 	}
 
-	// Build a map of group_id → channel IDs
 	groupChannels := make(map[int64][]string)
 	for _, m := range memberships {
 		gid, _ := m["group_id"].(int64)
@@ -111,8 +124,7 @@ func (s *Service) loadCanonicalGroups() bool {
 }
 
 // CreateGroup creates a new channel group and persists only that group via a
-// direct SQL upsert. It does NOT rewrite every other group in DB (no full
-// destructive sweep).
+// direct SQL upsert.
 func (s *Service) CreateGroup(name, description string, channelIDs []string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -130,20 +142,19 @@ func (s *Service) CreateGroup(name, description string, channelIDs []string) err
 	if s.store == nil {
 		return nil
 	}
-	groupID, err := s.store.UpsertYouTubeGroupV2(name, "upload", description, "")
+	groupID, err := s.store.UpsertYouTubeGroup(name, "upload", description, "")
 	if err != nil {
 		return fmt.Errorf("create upload group %q: %w", name, err)
 	}
 	for _, chID := range channelIDs {
-		if err := s.store.AddChannelToGroupV2(groupID, chID); err != nil {
+		if err := s.store.AddChannelToGroup(groupID, chID); err != nil {
 			log.Printf("[WARN] CreateGroup: add channel %s to %q: %v", safeChannelID(chID), name, err)
 		}
 	}
 	return nil
 }
 
-// DeleteGroup deletes a channel group and persists the change via direct SQL
-// on this group only. Does NOT rewrite every other group in DB.
+// DeleteGroup deletes a channel group and persists the change via direct SQL.
 func (s *Service) DeleteGroup(name string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -157,7 +168,7 @@ func (s *Service) DeleteGroup(name string) error {
 	if s.store == nil {
 		return nil
 	}
-	groupID, err := s.store.GetYouTubeGroupV2ID(name, "upload")
+	groupID, err := s.store.GetYouTubeGroupID(name, "upload")
 	if err != nil {
 		return err
 	}
@@ -167,11 +178,10 @@ func (s *Service) DeleteGroup(name string) error {
 	if err := s.store.DeleteYouTubeGroupChannelsByGroupID(groupID); err != nil {
 		return err
 	}
-	return s.store.DeleteYouTubeGroupV2(groupID)
+	return s.store.DeleteYouTubeGroup(groupID)
 }
 
-// AddChannelToGroup adds a channel to a group and persists only the affected
-// group via direct SQL. Does NOT rewrite every other group in DB.
+// AddChannelToGroup adds a channel to a group and persists via direct SQL.
 func (s *Service) AddChannelToGroup(groupName, channelID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -191,21 +201,20 @@ func (s *Service) AddChannelToGroup(groupName, channelID string) error {
 	if s.store == nil {
 		return nil
 	}
-	groupID, err := s.store.GetYouTubeGroupV2ID(groupName, "upload")
+	groupID, err := s.store.GetYouTubeGroupID(groupName, "upload")
 	if err != nil {
 		return fmt.Errorf("resolve upload group %q: %w", groupName, err)
 	}
 	if groupID == 0 {
-		groupID, err = s.store.UpsertYouTubeGroupV2(groupName, "upload", group.Description, group.Privacy)
+		groupID, err = s.store.UpsertYouTubeGroup(groupName, "upload", group.Description, group.Privacy)
 		if err != nil {
 			return err
 		}
 	}
-	return s.store.AddChannelToGroupV2(groupID, channelID)
+	return s.store.AddChannelToGroup(groupID, channelID)
 }
 
-// RemoveChannelFromGroup removes a channel from a group and persists only the
-// affected group via direct SQL. Does NOT rewrite every other group in DB.
+// RemoveChannelFromGroup removes a channel from a group.
 func (s *Service) RemoveChannelFromGroup(groupName, channelID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -221,20 +230,20 @@ func (s *Service) RemoveChannelFromGroup(groupName, channelID string) error {
 			if s.store == nil {
 				return nil
 			}
-			groupID, err := s.store.GetYouTubeGroupV2ID(groupName, "upload")
+			groupID, err := s.store.GetYouTubeGroupID(groupName, "upload")
 			if err != nil {
 				return err
 			}
 			if groupID == 0 {
 				return nil
 			}
-			return s.store.RemoveChannelFromGroupV2(groupID, channelID)
+			return s.store.RemoveChannelFromGroup(groupID, channelID)
 		}
 	}
 	return fmt.Errorf("channel '%s' not found in group '%s'", channelID, groupName)
 }
 
-// GetGroups returns all channel groups
+// GetGroups returns all channel groups.
 func (s *Service) GetGroups() map[string]*ChannelGroup {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -248,16 +257,14 @@ func (s *Service) GetGroups() map[string]*ChannelGroup {
 	return groups
 }
 
-// GetGroup returns a specific group by name
+// GetGroup returns a specific group by name.
 func (s *Service) GetGroup(name string) *ChannelGroup {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.groups[name]
 }
 
-// ResolveChannelByLanguage finds a channel in a group whose Language field matches
-// the requested language code. Returns the first matching AuthChannel or an error
-// if the group doesn't exist, no channels are found, or no channel has the requested language.
+// ResolveChannelByLanguage finds a channel in a group whose Language field matches.
 func (s *Service) ResolveChannelByLanguage(groupName, language string) (*AuthChannel, error) {
 	if groupName == "" {
 		return nil, fmt.Errorf("group name is required")
@@ -280,7 +287,6 @@ func (s *Service) ResolveChannelByLanguage(groupName, language string) (*AuthCha
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	// Phase 1: exact language match
 	for _, chID := range group.Channels {
 		if ch, exists := s.channels[chID]; exists {
 			if strings.EqualFold(strings.TrimSpace(ch.Language), lang) {
@@ -289,8 +295,6 @@ func (s *Service) ResolveChannelByLanguage(groupName, language string) (*AuthCha
 			}
 		}
 	}
-
-	// Phase 2: fallback to first channel that has no language set (unconfigured)
 	for _, chID := range group.Channels {
 		if ch, exists := s.channels[chID]; exists {
 			if strings.TrimSpace(ch.Language) == "" {
@@ -299,8 +303,6 @@ func (s *Service) ResolveChannelByLanguage(groupName, language string) (*AuthCha
 			}
 		}
 	}
-
-	// Phase 3: fallback to first channel in group (any channel)
 	for _, chID := range group.Channels {
 		if ch, exists := s.channels[chID]; exists {
 			chCopy := *ch
@@ -349,7 +351,7 @@ func (s *Service) ChannelGroupToGroup(cg *ChannelGroup) *Group {
 	return group
 }
 
-// GetGroupsWithChannels returns groups with full channel details
+// GetGroupsWithChannels returns groups with full channel details.
 func (s *Service) GetGroupsWithChannels() []map[string]interface{} {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -391,7 +393,7 @@ func (s *Service) GetGroupsWithChannels() []map[string]interface{} {
 	return result
 }
 
-// GetUndefinedChannels returns channels not assigned to any group
+// GetUndefinedChannels returns channels not assigned to any group.
 func (s *Service) GetUndefinedChannels() []*Channel {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

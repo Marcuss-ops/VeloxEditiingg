@@ -176,6 +176,20 @@ func (s *SQLiteStore) UpdateChannelLanguage(channelID, language string) error {
 	return err
 }
 
+// UpdateChannelDisplayName sets ONLY the display_name column of a single
+// channel row. PR15.4 added this method so Storage can call a targeted
+// per-column UPDATE for display-name updates without falling back to the
+// read-modify-write UpsertYouTubeChannel path (which would risk clobbering
+// user-edited language/notes on the way through).
+func (s *SQLiteStore) UpdateChannelDisplayName(channelID, displayName string) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err := s.db.Exec(
+		`UPDATE youtube_channels SET display_name = ?, updated_at = ? WHERE channel_id = ?`,
+		displayName, now, channelID,
+	)
+	return err
+}
+
 // UpdateChannelNotes sets ONLY the notes column of a single channel row.
 // Notes are operator-curated free text; no API path ever touches them.
 // Refreshing the channel from YouTube MUST NOT clobber notes (the

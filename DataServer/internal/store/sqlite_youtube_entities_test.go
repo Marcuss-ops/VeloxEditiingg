@@ -191,35 +191,35 @@ func TestYouTubeChannelEmptyDefaultValues(t *testing.T) {
 }
 
 // ============================================================
-// youtube_groups_v2 tests
+// youtube_groups (canonical) tests
 // ============================================================
 
-func TestYouTubeGroupV2CRUD(t *testing.T) {
+func TestYouTubeGroupCRUD(t *testing.T) {
 	s := openTestDB(t)
 	defer s.Close()
 
 	// Create a group
-	id, err := s.UpsertYouTubeGroupV2("WNBA Zone", "manager", "WNBA basketball content", "unlisted")
+	id, err := s.UpsertYouTubeGroup("WNBA Zone", "manager", "WNBA basketball content", "unlisted")
 	if err != nil {
-		t.Fatalf("UpsertYouTubeGroupV2 failed: %v", err)
+		t.Fatalf("UpsertYouTubeGroup failed: %v", err)
 	}
 	if id <= 0 {
 		t.Errorf("expected positive group ID, got %d", id)
 	}
 
 	// Get by ID
-	gotID, err := s.GetYouTubeGroupV2ID("WNBA Zone", "manager")
+	gotID, err := s.GetYouTubeGroupID("WNBA Zone", "manager")
 	if err != nil {
-		t.Fatalf("GetYouTubeGroupV2ID failed: %v", err)
+		t.Fatalf("GetYouTubeGroupID failed: %v", err)
 	}
 	if gotID != id {
 		t.Errorf("ID mismatch: got %d, want %d", gotID, id)
 	}
 
 	// List
-	groups, err := s.ListYouTubeGroupsV2()
+	groups, err := s.ListYouTubeGroups()
 	if err != nil {
-		t.Fatalf("ListYouTubeGroupsV2 failed: %v", err)
+		t.Fatalf("ListYouTubeGroups failed: %v", err)
 	}
 	if len(groups) != 1 {
 		t.Fatalf("expected 1 group, got %d", len(groups))
@@ -237,21 +237,21 @@ func TestYouTubeGroupV2DifferentTypesSameName(t *testing.T) {
 	defer s.Close()
 
 	// Same name, different types — allowed by UNIQUE(name, group_type)
-	id1, err := s.UpsertYouTubeGroupV2("MyGroup", "manager", "Manager group", "")
+	id1, err := s.UpsertYouTubeGroup("MyGroup", "manager", "Manager group", "")
 	if err != nil {
-		t.Fatalf("first UpsertYouTubeGroupV2 failed: %v", err)
+		t.Fatalf("first UpsertYouTubeGroup failed: %v", err)
 	}
-	id2, err := s.UpsertYouTubeGroupV2("MyGroup", "upload", "Upload group", "public")
+	id2, err := s.UpsertYouTubeGroup("MyGroup", "upload", "Upload group", "public")
 	if err != nil {
-		t.Fatalf("second UpsertYouTubeGroupV2 failed: %v", err)
+		t.Fatalf("second UpsertYouTubeGroup failed: %v", err)
 	}
 	if id1 == id2 {
 		t.Error("expected different IDs for different group types")
 	}
 
-	groups, err := s.ListYouTubeGroupsV2()
+	groups, err := s.ListYouTubeGroups()
 	if err != nil {
-		t.Fatalf("ListYouTubeGroupsV2 failed: %v", err)
+		t.Fatalf("ListYouTubeGroups failed: %v", err)
 	}
 	if len(groups) != 2 {
 		t.Fatalf("expected 2 groups, got %d", len(groups))
@@ -281,13 +281,13 @@ func TestYouTubeGroupV2Delete(t *testing.T) {
 	s := openTestDB(t)
 	defer s.Close()
 
-	id, _ := s.UpsertYouTubeGroupV2("DeleteMe", "manager", "", "")
-	if err := s.DeleteYouTubeGroupV2(id); err != nil {
-		t.Fatalf("DeleteYouTubeGroupV2 failed: %v", err)
+	id, _ := s.UpsertYouTubeGroup("DeleteMe", "manager", "", "")
+	if err := s.DeleteYouTubeGroup(id); err != nil {
+		t.Fatalf("DeleteYouTubeGroup failed: %v", err)
 	}
 
 	// Should not be listed
-	groups, _ := s.ListYouTubeGroupsV2()
+	groups, _ := s.ListYouTubeGroups()
 	if len(groups) != 0 {
 		t.Errorf("expected 0 groups after delete, got %d", len(groups))
 	}
@@ -303,17 +303,17 @@ func TestGroupChannelsAddAndList(t *testing.T) {
 
 	// Create channel and group
 	s.UpsertYouTubeChannel("UC_group_a", "Channel A", "", "", "", "", "", 0, 0, "", "", "")
-	groupID, _ := s.UpsertYouTubeGroupV2("Test Group", "manager", "", "")
+	groupID, _ := s.UpsertYouTubeGroup("Test Group", "manager", "", "")
 
 	// Add channel to group
-	if err := s.AddChannelToGroupV2(groupID, "UC_group_a"); err != nil {
-		t.Fatalf("AddChannelToGroupV2 failed: %v", err)
+	if err := s.AddChannelToGroup(groupID, "UC_group_a"); err != nil {
+		t.Fatalf("AddChannelToGroup failed: %v", err)
 	}
 
 	// List group channels
-	channels, err := s.ListGroupChannelsV2(groupID)
+	channels, err := s.ListGroupChannels(groupID)
 	if err != nil {
-		t.Fatalf("ListGroupChannelsV2 failed: %v", err)
+		t.Fatalf("ListGroupChannels failed: %v", err)
 	}
 	if len(channels) != 1 || channels[0] != "UC_group_a" {
 		t.Errorf("expected [UC_group_a], got %v", channels)
@@ -325,15 +325,15 @@ func TestGroupChannelsRemove(t *testing.T) {
 	defer s.Close()
 
 	s.UpsertYouTubeChannel("UC_remove", "Remove Me", "", "", "", "", "", 0, 0, "", "", "")
-	groupID, _ := s.UpsertYouTubeGroupV2("Remove Group", "manager", "", "")
-	s.AddChannelToGroupV2(groupID, "UC_remove")
+	groupID, _ := s.UpsertYouTubeGroup("Remove Group", "manager", "", "")
+	s.AddChannelToGroup(groupID, "UC_remove")
 
 	// Remove
-	if err := s.RemoveChannelFromGroupV2(groupID, "UC_remove"); err != nil {
-		t.Fatalf("RemoveChannelFromGroupV2 failed: %v", err)
+	if err := s.RemoveChannelFromGroup(groupID, "UC_remove"); err != nil {
+		t.Fatalf("RemoveChannelFromGroup failed: %v", err)
 	}
 
-	channels, _ := s.ListGroupChannelsV2(groupID)
+	channels, _ := s.ListGroupChannels(groupID)
 	if len(channels) != 0 {
 		t.Errorf("expected 0 channels after remove, got %d", len(channels))
 	}
@@ -344,13 +344,13 @@ func TestGroupChannelsIdempotentAdd(t *testing.T) {
 	defer s.Close()
 
 	s.UpsertYouTubeChannel("UC_idem", "Idempotent", "", "", "", "", "", 0, 0, "", "", "")
-	groupID, _ := s.UpsertYouTubeGroupV2("Idem Group", "manager", "", "")
+	groupID, _ := s.UpsertYouTubeGroup("Idem Group", "manager", "", "")
 
 	// Add twice — ON CONFLICT DO NOTHING
-	s.AddChannelToGroupV2(groupID, "UC_idem")
-	s.AddChannelToGroupV2(groupID, "UC_idem")
+	s.AddChannelToGroup(groupID, "UC_idem")
+	s.AddChannelToGroup(groupID, "UC_idem")
 
-	channels, _ := s.ListGroupChannelsV2(groupID)
+	channels, _ := s.ListGroupChannels(groupID)
 	if len(channels) != 1 {
 		t.Errorf("expected 1 channel (idempotent), got %d", len(channels))
 	}
@@ -362,15 +362,15 @@ func TestGroupChannelsPositionAutoIncrement(t *testing.T) {
 
 	s.UpsertYouTubeChannel("UC_pos1", "Pos1", "", "", "", "", "", 0, 0, "", "", "")
 	s.UpsertYouTubeChannel("UC_pos2", "Pos2", "", "", "", "", "", 0, 0, "", "", "")
-	groupID, _ := s.UpsertYouTubeGroupV2("Pos Group", "manager", "", "")
+	groupID, _ := s.UpsertYouTubeGroup("Pos Group", "manager", "", "")
 
-	s.AddChannelToGroupV2(groupID, "UC_pos1")
-	s.AddChannelToGroupV2(groupID, "UC_pos2")
+	s.AddChannelToGroup(groupID, "UC_pos1")
+	s.AddChannelToGroup(groupID, "UC_pos2")
 
 	// List all memberships to verify position
-	memberships, err := s.ListAllGroupMembershipsV2()
+	memberships, err := s.ListAllGroupMemberships()
 	if err != nil {
-		t.Fatalf("ListAllGroupMembershipsV2 failed: %v", err)
+		t.Fatalf("ListAllGroupMemberships failed: %v", err)
 	}
 	if len(memberships) != 2 {
 		t.Fatalf("expected 2 memberships, got %d", len(memberships))
@@ -393,16 +393,16 @@ func TestGroupChannelsAllMembershipsJoin(t *testing.T) {
 	s.UpsertYouTubeChannel("UC_g1b", "G1B", "", "", "", "", "", 0, 0, "", "", "")
 	s.UpsertYouTubeChannel("UC_g2a", "G2A", "", "", "", "", "", 0, 0, "", "", "")
 
-	g1, _ := s.UpsertYouTubeGroupV2("Group One", "manager", "", "")
-	g2, _ := s.UpsertYouTubeGroupV2("Group Two", "upload", "", "")
+	g1, _ := s.UpsertYouTubeGroup("Group One", "manager", "", "")
+	g2, _ := s.UpsertYouTubeGroup("Group Two", "upload", "", "")
 
-	s.AddChannelToGroupV2(g1, "UC_g1a")
-	s.AddChannelToGroupV2(g1, "UC_g1b")
-	s.AddChannelToGroupV2(g2, "UC_g2a")
+	s.AddChannelToGroup(g1, "UC_g1a")
+	s.AddChannelToGroup(g1, "UC_g1b")
+	s.AddChannelToGroup(g2, "UC_g2a")
 
-	memberships, err := s.ListAllGroupMembershipsV2()
+	memberships, err := s.ListAllGroupMemberships()
 	if err != nil {
-		t.Fatalf("ListAllGroupMembershipsV2 failed: %v", err)
+		t.Fatalf("ListAllGroupMemberships failed: %v", err)
 	}
 	if len(memberships) != 3 {
 		t.Fatalf("expected 3 memberships, got %d", len(memberships))
@@ -691,11 +691,11 @@ func TestYouTubeChannelDeleteAtomic(t *testing.T) {
 		t.Fatalf("seed oauth token: %v", err)
 	}
 
-	groupID, err := s.UpsertYouTubeGroupV2("Atomic Group", "manager", "", "")
+	groupID, err := s.UpsertYouTubeGroup("Atomic Group", "manager", "", "")
 	if err != nil {
 		t.Fatalf("seed group: %v", err)
 	}
-	if err := s.AddChannelToGroupV2(groupID, "UC_atomic"); err != nil {
+	if err := s.AddChannelToGroup(groupID, "UC_atomic"); err != nil {
 		t.Fatalf("seed membership: %v", err)
 	}
 
@@ -706,7 +706,7 @@ func TestYouTubeChannelDeleteAtomic(t *testing.T) {
 	if row, _ := s.GetYouTubeOAuthToken("UC_atomic"); row == nil {
 		t.Fatal("setup: youtube_oauth_tokens UC_atomic missing")
 	}
-	memberships, _ := s.ListGroupChannelsV2(groupID)
+	memberships, _ := s.ListGroupChannels(groupID)
 	if len(memberships) != 1 || memberships[0] != "UC_atomic" {
 		t.Fatalf("setup: expected 1 membership for group, got %v", memberships)
 	}
@@ -728,14 +728,14 @@ func TestYouTubeChannelDeleteAtomic(t *testing.T) {
 		t.Errorf("expected youtube_oauth_tokens UC_atomic cascade-deleted, got %v", row)
 	}
 	// Assert: membership row gone
-	memberships, _ = s.ListGroupChannelsV2(groupID)
+	memberships, _ = s.ListGroupChannels(groupID)
 	for _, m := range memberships {
 		if m == "UC_atomic" {
 			t.Errorf("expected membership UC_atomic to be gone in group %d, still present", groupID)
 		}
 	}
 	// Group row itself remains (we only removed the membership, not the group).
-	groups, _ := s.ListYouTubeGroupsV2()
+	groups, _ := s.ListYouTubeGroups()
 	if len(groups) != 1 {
 		t.Errorf("expected group row to remain, total groups = %d", len(groups))
 	}
@@ -1227,7 +1227,7 @@ func TestConnectChannelAtomic_ResetsRevokedAtOnReauth(t *testing.T) {
 // ============================================================
 // (Legacy tables youtube_channel_metadata and youtube_groups
 //  were dropped by migration 008. Use canonical tables
-//  youtube_channels and youtube_groups_v2 instead.)
+//  youtube_channels and youtube_groups instead.)
 // ============================================================
 
 func TestYouTubeGroupsLegacy(t *testing.T) {
@@ -1242,16 +1242,16 @@ func TestYouTubeGroupsLegacy(t *testing.T) {
 	}
 
 	// Create via V2 (UpsertYouTubeGroup removed in PR 3.5-b)
-	groupID, err := s.UpsertYouTubeGroupV2("Legacy Group", "manager", "Old description", "public")
+	groupID, err := s.UpsertYouTubeGroup("Legacy Group", "manager", "Old description", "public")
 	if err != nil {
-		t.Fatalf("UpsertYouTubeGroupV2 failed: %v", err)
+		t.Fatalf("UpsertYouTubeGroup failed: %v", err)
 	}
-	_ = s.AddChannelToGroupV2(groupID, "UC_a")
-	_ = s.AddChannelToGroupV2(groupID, "UC_b")
+	_ = s.AddChannelToGroup(groupID, "UC_a")
+	_ = s.AddChannelToGroup(groupID, "UC_b")
 
-	groups, err := s.ListYouTubeGroupsV2()
+	groups, err := s.ListYouTubeGroups()
 	if err != nil {
-		t.Fatalf("ListYouTubeGroupsV2 failed: %v", err)
+		t.Fatalf("ListYouTubeGroups failed: %v", err)
 	}
 	if len(groups) != 1 {
 		t.Fatalf("expected 1 legacy group, got %d", len(groups))
@@ -1261,10 +1261,10 @@ func TestYouTubeGroupsLegacy(t *testing.T) {
 	}
 
 	// Delete (via V2 — DeleteYouTubeGroup removed in PR 3.5-b)
-	if err := s.DeleteYouTubeGroupV2(groupID); err != nil {
-		t.Fatalf("DeleteYouTubeGroupV2 failed: %v", err)
+	if err := s.DeleteYouTubeGroup(groupID); err != nil {
+		t.Fatalf("DeleteYouTubeGroup failed: %v", err)
 	}
-	groups, _ = s.ListYouTubeGroupsV2()
+	groups, _ = s.ListYouTubeGroups()
 	if len(groups) != 0 {
 		t.Errorf("expected 0 groups after delete, got %d", len(groups))
 	}

@@ -50,7 +50,7 @@ func InitGroupsStore(db *store.SQLiteStore) {
 	groupsStore = db
 }
 
-// GetGroupsHandler returns all groups from SQLite (canonical youtube_groups_v2).
+// GetGroupsHandler returns all groups from SQLite (canonical youtube_groups).
 func GetGroupsHandler(c *gin.Context) {
 	if groupsStore == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{
@@ -61,7 +61,7 @@ func GetGroupsHandler(c *gin.Context) {
 	}
 
 	// Try canonical tables first
-	rows, err := groupsStore.ListYouTubeGroupsV2()
+	rows, err := groupsStore.ListYouTubeGroups()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"ok":    false,
@@ -80,7 +80,7 @@ func GetGroupsHandler(c *gin.Context) {
 
 		// Load channel memberships from canonical group_channels if group ID is available
 		if gid, ok := row["id"].(int64); ok && gid > 0 {
-			channelIDs, err := groupsStore.ListGroupChannelsV2(gid)
+			channelIDs, err := groupsStore.ListGroupChannels(gid)
 			if err == nil && len(channelIDs) > 0 {
 				g.Channels = make([]Channel, len(channelIDs))
 				for i, id := range channelIDs {
@@ -113,7 +113,7 @@ func GetGroupHandler(c *gin.Context) {
 	}
 
 	// Try canonical tables first
-	rows, err := groupsStore.ListYouTubeGroupsV2()
+	rows, err := groupsStore.ListYouTubeGroups()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"ok":    false,
@@ -131,15 +131,15 @@ func GetGroupHandler(c *gin.Context) {
 			g.DefaultLang = safeString(row, "description")
 
 			// Load channel memberships
-			if gid, ok := row["id"].(int64); ok && gid > 0 {
-				channelIDs, err := groupsStore.ListGroupChannelsV2(gid)
-				if err == nil && len(channelIDs) > 0 {
-					g.Channels = make([]Channel, len(channelIDs))
-					for i, id := range channelIDs {
-						g.Channels[i] = Channel{ID: id}
-					}
+		if gid, ok := row["id"].(int64); ok && gid > 0 {
+			channelIDs, err := groupsStore.ListGroupChannels(gid)
+			if err == nil && len(channelIDs) > 0 {
+				g.Channels = make([]Channel, len(channelIDs))
+				for i, id := range channelIDs {
+					g.Channels[i] = Channel{ID: id}
 				}
-			} else if chIDs, ok := row["channels"].([]string); ok {
+			}
+		} else if chIDs, ok := row["channels"].([]string); ok {
 				g.Channels = make([]Channel, len(chIDs))
 				for i, id := range chIDs {
 					g.Channels[i] = Channel{ID: id}

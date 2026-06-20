@@ -28,16 +28,16 @@ type YouTubeStore interface {
 	DeleteYouTubeChannel(channelID string) error
 	DeleteChannelAtomic(channelID string) (int64, error)
 
-	// Canonical: YouTube Groups V2 (youtube_groups_v2 + youtube_group_channels)
-	ListYouTubeGroupsV2() ([]map[string]interface{}, error)
-	UpsertYouTubeGroupV2(name, groupType, description, privacy string) (int64, error)
-	GetYouTubeGroupV2ID(name, groupType string) (int64, error)
-	DeleteYouTubeGroupV2(id int64) error
+	// Canonical: YouTube Groups (youtube_groups + youtube_group_channels)
+	ListYouTubeGroups() ([]map[string]interface{}, error)
+	UpsertYouTubeGroup(name, groupType, description, privacy string) (int64, error)
+	GetYouTubeGroupID(name, groupType string) (int64, error)
+	DeleteYouTubeGroup(id int64) error
 	DeleteYouTubeGroupChannelsByGroupID(groupID int64) error
-	AddChannelToGroupV2(groupID int64, channelID string) error
-	RemoveChannelFromGroupV2(groupID int64, channelID string) error
-	ListGroupChannelsV2(groupID int64) ([]string, error)
-	ListAllGroupMembershipsV2() ([]map[string]interface{}, error)
+	AddChannelToGroup(groupID int64, channelID string) error
+	RemoveChannelFromGroup(groupID int64, channelID string) error
+	ListGroupChannels(groupID int64) ([]string, error)
+	ListAllGroupMemberships() ([]map[string]interface{}, error)
 
 	// Typed metadata update (refresh path). Distinct from UpsertYouTubeChannel:
 	// only touches title + thumbnail_url + last_sync_at + updated_at so

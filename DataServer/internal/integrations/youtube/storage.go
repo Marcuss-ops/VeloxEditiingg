@@ -3,21 +3,27 @@ package youtube
 import (
 	"errors"
 	"fmt"
-	"log"
-	"sync"
 )
 
 // Custom errors
 var (
-	ErrGroupExists         = errors.New("group already exists")
-	ErrGroupNotFound       = errors.New("group not found")
-	ErrTargetGroupNotFound = errors.New("target group not found")
-	ErrChannelExists       = errors.New("channel already in group")
-	ErrChannelNotFound     = errors.New("channel not found")
+	ErrGroupExists           = errors.New("group already exists")
+	ErrGroupNotFound         = errors.New("group not found")
+	ErrTargetGroupNotFound   = errors.New("target group not found")
+	ErrChannelExists         = errors.New("channel already in group")
+	ErrChannelNotFound       = errors.New("channel not found")
+	ErrStoreNotConfigured    = errors.New("storage store not configured")
 )
 
 // StorageStore defines the SQLite operations for YouTube manager persistence.
-// Uses canonical tables (youtube_channels, youtube_groups_v2, youtube_group_channels).
+// PR15.4: V2 suffix dropped on every method — YouTubeStore and StorageStore
+// now use the bare canonical names. *SQLiteStore satisfies this interface
+// 1-for-1 thanks to the matching rename in store/youtube_groups.go.
+//
+// All writes are NON-DESTRUCTIVE and per-row: there is no in-memory mirror
+// of the groups/channels in this layer anymore, so no reconciler / safety
+// guard / saveAll is needed. The Storage methods are direct pass-throughs
+// to the SQL store.
 type StorageStore interface {
 	// Canonical channels
 	UpsertYouTubeChannel(channelID, title, displayName, channelURL, thumbnailURL, language, notes string, viewCount, subCount int64, addedAt, lastSyncAt, metadataJSON string) error
@@ -25,60 +31,64 @@ type StorageStore interface {
 	GetYouTubeChannel(channelID string) (map[string]interface{}, error)
 	DeleteYouTubeChannel(channelID string) error
 
-	// Canonical groups v2
-	UpsertYouTubeGroupV2(name, groupType, description, privacy string) (int64, error)
-	GetYouTubeGroupV2ID(name, groupType string) (int64, error)
-	ListYouTubeGroupsV2() ([]map[string]interface{}, error)
-	DeleteYouTubeGroupV2(id int64) error
+	// Targeted per-column channel updates (PR15.4: prevent the destructive
+	// wide-upsert path from clobbering user-edited typed columns when only a
+	// single column changes — language refresh, stats refresh, etc.).
+	UpdateChannelLanguage(channelID, language string) error
+	UpdateChannelStats(channelID string, viewCount, subCount int64, lastSyncAt string) error
+	UpdateChannelTitle(channelID, title string) error
+	UpdateChannelDisplayName(channelID, name string) error
+
+	// Canonical groups
+	UpsertYouTubeGroup(name, groupType, description, privacy string) (int64, error)
+	GetYouTubeGroupID(name, groupType string) (int64, error)
+	ListYouTubeGroups() ([]map[string]interface{}, error)
+	DeleteYouTubeGroup(id int64) error
 	DeleteYouTubeGroupChannelsByGroupID(groupID int64) error
+	DeleteYouTubeGroupChannelsByChannelID(channelID string) error
 
 	// Canonical group-channel memberships
-	AddChannelToGroupV2(groupID int64, channelID string) error
-	RemoveChannelFromGroupV2(groupID int64, channelID string) error
-	ListGroupChannelsV2(groupID int64) ([]string, error)
-	ListAllGroupMembershipsV2() ([]map[string]interface{}, error)
+	AddChannelToGroup(groupID int64, channelID string) error
+	RemoveChannelFromGroup(groupID int64, channelID string) error
+	ListGroupChannels(groupID int64) ([]string, error)
+	ListAllGroupMemberships() ([]map[string]interface{}, error)
 
 	// Tracked niches
 	UpsertYouTubeTrackedNiche(niche string) error
+	DeleteYouTubeTrackedNiche(niche string) error
 	ListYouTubeTrackedNiches() ([]string, error)
 }
 
-// Storage handles persistence of YouTube manager data
+// Storage is a thin SQL-only facade over StorageStore.
+//
+// PR15.4: this struct no longer holds a `data *StorageData` mirror. Every
+// read goes through a fresh SQL query, every write goes through a
+// targeted SQL mutation. There is no reconciler / safety guard because
+// there is no in-memory state for memory-vs-DB to diverge.
+//
+// The set of methods on Storage is preserved from the pre-PR15.4 surface
+// so existing callers (services/youtube/*, handlers/server/youtube/*)
+// keep compiling. Their bodies now route directly to the underlying
+// YouTubeStore rather than mutating a RAM snapshot.
 type Storage struct {
-	mu           sync.RWMutex
-	data         *StorageData
-	store        StorageStore
-	lastStatusMu sync.RWMutex
-	lastStatus   *SaveStatus
+	store StorageStore
 }
 
 // NewStorage creates a new Storage instance backed by SQLite.
+//
+// PR15.4: NewStorage no longer performs an eager load() to populate an
+// in-RAM `data.Groups` mirror. The struct is initialised empty and every
+// read is hydrated from SQL on demand. If dataDir is empty (legacy
+// degraded mode) the storage still works but with store == nil —
+// methods that need SQL return nil/zero/ErrStoreNotConfigured in that
+// mode.
 func NewStorage(dataDir string, storageStore ...StorageStore) (*Storage, error) {
 	var stStore StorageStore
 	if len(storageStore) > 0 {
 		stStore = storageStore[0]
 	}
-
-	st := &Storage{
-		store: stStore,
-		data: &StorageData{
-			Groups: make(map[string]*Group),
-		},
-	}
-
-	if err := st.load(); err != nil {
-		log.Printf("[WARN] YouTube storage: starting with empty data (%v)", err)
-	}
-
-	return st, nil
+	return &Storage{store: stStore}, nil
 }
-
-// (s *Storage) load() / save() live in storage_persistence.go. Earlier
-// PR1 cleanup removed the duplicate, non-canonical bodies (which both
-// called or proxied logic that didn't exist on this file) so that Go's
-// per-package method dispatch picks up the single canonical
-// implementation in storage_persistence.go. The struct + storage
-// lifecycle (NewStorage, LoadData, SaveData, ClearCache) stays here.
 
 func safeChannelID(id string) string {
 	if len(id) > 8 {
@@ -109,40 +119,56 @@ func asInt64Field(m map[string]interface{}, key string) int64 {
 	return 0
 }
 
-// LoadData returns the current storage data
+// LoadData returns a fresh *StorageData hydrated from the canonical
+// SQLite tables. PR15.4: was an in-RAM mirror snapshot; is now a
+// one-shot SQL read populated on every call. Used by
+// services/youtube.Service.LoadStorageData (SPA accessor) and a few
+// read-paths in service_feed.go / service_search.go whose signature
+// requires a *StorageData.
+//
+// Always returns a non-nil *StorageData so callers can iterate
+// data.Groups without a nil-check.
 func (s *Storage) LoadData() *StorageData {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	data := &StorageData{
-		Groups:        make(map[string]*Group),
-		TrackedNiches: s.data.TrackedNiches,
+	data := &StorageData{Groups: make(map[string]*Group)}
+	if s.store == nil {
+		return data
 	}
-	for k, v := range s.data.Groups {
-		group := *v
-		group.Channels = make([]Channel, len(v.Channels))
-		copy(group.Channels, v.Channels)
-		data.Groups[k] = &group
+
+	groupRows, gErr := s.store.ListYouTubeGroups()
+	if gErr != nil {
+		return data
+	}
+
+	for _, row := range groupRows {
+		name, _ := row["name"].(string)
+		if name == "" {
+			continue
+		}
+		groupType, _ := row["group_type"].(string)
+		createdAt, _ := row["created_at"].(string)
+		gid, _ := row["id"].(int64)
+
+		data.Groups[name] = &Group{
+			Name:      name,
+			CreatedAt: parseFlexTime(createdAt),
+			Channels:  s.channelsForGroupLocked(gid),
+			GroupType: groupType,
+		}
+	}
+
+	niches, nErr := s.store.ListYouTubeTrackedNiches()
+	if nErr == nil {
+		data.TrackedNiches = niches
 	}
 	return data
 }
 
-// SaveData replaces the storage data with a caller-supplied snapshot.
+// LastSaveStatus returned a snapshot of the most recent save outcome.
+// Removed entirely in PR15.4 — there is no save path on Storage anymore
+// (writes are per-row). The structurally similar tracking that
+// save_status.go used to consume (ErrSaveRefusedBySafetyGuard,
+// ErrGroupMembershipRefusedEmptyMemory, recordStatus) is dropped as
+// well; see save_status.go's deprecation header for context.
 //
-// NOTE: SaveData is NOT destructive-bypass. It runs through save() with
-// bypassGuard=false so an accidentally tiny in-memory set cannot silently
-// wipe the DB. Callers that genuinely want a destructive full-state
-// reconciliation (import, repair, manual rebuild) must call
-// saveAllReconcile() instead.
-func (s *Storage) SaveData(data *StorageData) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	s.data = data
-	return s.saveWithStatus("save_data", "", false)
-}
-
-// ClearCache invalidates any cached data.
-func (s *Storage) ClearCache() {
-	// No-op for now since we don't cache reads
-}
+// This function is no longer present in the source; callers that
+// previously invoked it have been migrated.
