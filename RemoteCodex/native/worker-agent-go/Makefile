@@ -15,7 +15,28 @@ else \
     echo "FATAL: $(VERSION_FILE) not found. Bump the project root VERSION.txt before building." >&2; \
     exit 1; \
 fi))
-BUILD_TIME ?= $(shell date -u '+%Y-%m-%d_%H:%M:%S')
+
+# Reproducible-builds BuildTime.
+#
+# Priority order (highest first):
+#   1. SOURCE_DATE_EPOCH (Reproducible Builds env contract)
+#      -> date -u -d @<epoch> '+%Y-%m-%dT%H:%M:%SZ'
+#   2. HEAD commit timestamp from `git log -1 --format=%cI`
+#      -> normalized to '%Y-%m-%dT%H:%M:%SZ'
+#   3. "unknown" -- the literal fallback, NOT a wall-clock timestamp.
+#      A wall-clock timestamp in a release binary would invalidate the
+#      Reproducible Builds contract (two builds of the same commit MUST
+#      produce byte-identical Layer 0+ of the container image's
+#      binary when the input tree is identical). Operators building for
+#      release MUST export one of (1) or (2).
+BUILD_TIME ?= $(shell \
+  if [ -n "$${SOURCE_DATE_EPOCH:-}" ]; then \
+    date -u -d "@$${SOURCE_DATE_EPOCH}" '+%Y-%m-%dT%H:%M:%SZ'; \
+  elif git log -1 --format=%cI >/dev/null 2>&1; then \
+    git log -1 --format=%cI | sed -E 's/([0-9-]+)T([0-9:]+)[.+].*/\1T\2Z/'; \
+  else \
+    echo unknown; \
+  fi)
 LDFLAGS := -ldflags "-X main.Version=$(VERSION) -X main.BuildTime=$(BUILD_TIME)"
 
 GOCMD := go
@@ -134,7 +155,24 @@ run-agent: agent
 
 docker:
 	@echo "Building Docker image..."
-	docker build -t velox-worker-agent:$(VERSION) -t velox-worker-agent:latest .
+	# Build contract: the worker Dockerfile requires the Go binary to
+	# already exist at <context>/native/worker-agent-go/bin/... before
+	# docker build runs. `make agent` writes that path; the Docker image
+	# CANNOT recompile the Go worker because velox-shared is referenced
+	# via `replace velox-shared => ../../../shared` which only resolves
+	# from the agent module root.
+	$(MAKE) agent
+	# Build context MUST be RemoteCodex (NOT repo root, NOT worker-agent-go):
+	#   * scripts/{build-video-engine,worker-entrypoint}.sh are at RemoteCodex/scripts/
+	#   * native/video-engine-cpp is at RemoteCodex/native/video-engine-cpp
+	#   * native/worker-agent-go/bin/velox-worker-agent is at
+	#     RemoteCodex/native/worker-agent-go/bin/velox-worker-agent
+	# `cd ../..` from worker-agent-go lands at RemoteCodex/.
+	cd ../.. && docker build \
+		-f native/worker-agent-go/Dockerfile \
+		-t velox-worker-agent:$(VERSION) \
+		-t velox-worker-agent:latest \
+		.
 
 help:
 	@echo "Velox Worker Agent - Build System"

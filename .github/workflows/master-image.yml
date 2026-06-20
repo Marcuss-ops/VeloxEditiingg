@@ -180,7 +180,15 @@ jobs:
         working-directory: ${{ env.BUILD_DIR }}
         env:
           VERSION: ${{ steps.version.outputs.tag }}
-          BUILD_TIME: ${{ steps.version.outputs.tag }}-$(date -u '+%Y%m%d')
+          # BuildTime anchored to the HEAD commit so two rebuilds of the
+          # SAME commit produce byte-identical `-X main.BuildTime=...`
+          # strings, honouring the Reproducible Builds contract. The
+          # literal ISO 8601 timestamp from `git log -1 --format=%cI` is
+          # stable per-commit; the previous `$(date -u '+%Y%m%d')` made
+          # the binary non-reproducible. The corresponding `make`-driven
+          # builds in the worker-agent pipeline prefer SOURCE_DATE_EPOCH
+          # when present and fall back to the same git commit timestamp.
+          BUILD_TIME: ${{ steps.version.outputs.tag }}-$(git log -1 --format=%cI)
         run: |
           set -euo pipefail
           go build \

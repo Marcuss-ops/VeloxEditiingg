@@ -107,8 +107,8 @@ RUN useradd -r -m -s /usr/sbin/nologin velox
 USER velox
 
 # Health probe — curl the local HTTP /health (registered by
-# DataServer/internal/modules/health/module.go on the gin router, both
-# at `/health` and `/api/health`). Port comes from VELOX_HTTP_PORT
+# DataServer/internal/app/health.go on the gin router, both at
+# `/health` and `/api/health`). Port comes from VELOX_HTTP_PORT
 # (default 8000); operators overriding the port should also override
 # the healthcheck port in their compose/k8s manifest rather than
 # rebuilding the image.

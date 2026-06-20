@@ -11,6 +11,13 @@
 # rejected: the goal is "one canonical button", not a make-graph for humans.
 # =============================================================================
 
+# Force /bin/sh-unsafe constructs (e.g. `[[ -n "$x" ]]` in fmt-check) to
+# resolve to bash on every host, including minimal containers whose
+# /bin/sh is dash. Without this, `make fmt-check` breaks on Alpine-style
+# systems where /bin/sh is not bash. Mirrors the same convention used by
+# RemoteCodex/native/worker-agent-go/Makefile.
+SHELL := /usr/bin/env bash
+
 .PHONY: verify verify-fast verify-heavy fmt fmt-check vet help
 
 help:

@@ -30,7 +30,13 @@ jobs:
     timeout-minutes: 30
 
     steps:
+      # ── fetch-depth: 0 is required so BASE_REF=origin/main (used by
+      # scripts/ci/lib/diff-scope.sh) is resolvable. Default shallow
+      # checkout only exposes refs/heads/<branch>; BASE_REF resolution
+      # silently fails and every scoped check goes red.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-go@v5
         with:

@@ -69,7 +69,12 @@ log "check-registry"
 # build fail loudly if anything was reformatted but not committed \u2014 the
 # canonical signal that someone bypassed `make verify` before pushing.
 if [[ "$SKIP_LIGHT" -ne 1 ]]; then
-  for mod in DataServer RemoteCodex/native/worker-agent-go; do
+  # shared is now part of the loop, so its gofmt failures are surfaced
+  # exactly like DataServer's or worker-agent-go's. The redundant
+  # post-loop `go-build+vet: shared` block was removed in the round-2
+  # cleanup; `go test` against ./... compiles every package even when
+  # no internal *_test.go exists, so the same loop covers shared.
+  for mod in DataServer RemoteCodex/native/worker-agent-go shared; do
     log "go-fmt: ${mod}"
     (
       set -euo pipefail
@@ -86,16 +91,6 @@ if [[ "$SKIP_LIGHT" -ne 1 ]]; then
       GOFLAGS="-mod=mod" go test -race -count=1 -timeout 180s ./...
     )
   done
-
-  # shared has no internal tests; build + vet is enough to fail-fast on
-  # contract drift between DataServer and RemoteCodex consumers.
-  log "go-build+vet: shared"
-  (
-    set -euo pipefail
-    cd "$REPO_ROOT/shared"
-    GOFLAGS="-mod=mod" go build ./...
-    GOFLAGS="-mod=mod" go vet ./...
-  )
 fi
 
 # ── 3. Pre-existing mutation guard (DataServer-specific legacy removal) ────
@@ -115,11 +110,29 @@ if [[ "$SKIP_HEAVY" -ne 1 ]]; then
 
   if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
     log "docker build: velox-server"
+    # context = repo root because DataServer/go.mod's
+    #     replace velox-shared => ../shared
+    # resolves to ./shared at the repo root.
     docker build -f "$REPO_ROOT/DataServer/Dockerfile" -t velox-server:verify .
-    log "docker build: velox-worker"
+
+    log "docker build: velox-worker (pre-build Go binary via make agent)"
+    # Worker Dockerfile's build contract (see header) requires the Go
+    # binary to already exist at <build-context>/native/worker-agent-go/
+    # bin/velox-worker-agent. Mirror .github/workflows/worker-image.yml's
+    # `Build worker-agent binary (pre-Docker step)` step here so that
+    # `make verify` exercises the SAME production path as a release
+    # build -- not a parallel "looks-like" approximation that drifts.
+    make -C "$REPO_ROOT/RemoteCodex/native/worker-agent-go" agent
+
+    # Build context = RemoteCodex (NOT repo root): the worker Dockerfile
+    # COPYs scripts/{build-video-engine,worker-entrypoint}.sh,
+    # native/video-engine-cpp, and native/worker-agent-go/bin/, all of
+    # which are anchored one level under RemoteCodex/. Using `.` would
+    # silently leave /app/native/video-engine-cpp missing.
     docker build \
       -f "$REPO_ROOT/RemoteCodex/native/worker-agent-go/Dockerfile" \
-      -t velox-worker:verify .
+      -t velox-worker:verify \
+      "$REPO_ROOT/RemoteCodex"
   else
     if [[ "${CI:-}" == "true" ]]; then
       fail "Docker daemon unreachable or Docker not installed (required in CI)"
