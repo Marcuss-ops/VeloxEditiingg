@@ -11,6 +11,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	integrationsDrive "velox-server/internal/integrations/drive"
+	driveSvc "velox-server/internal/services/drive"
 )
 
 func init() {
@@ -21,8 +22,7 @@ func init() {
 func newNilServiceHandlers(t *testing.T) *DriveHandlers {
 	t.Helper()
 	return &DriveHandlers{
-		dataDir:      t.TempDir(),
-		driveService: nil,
+		svc: driveSvc.New("", t.TempDir(), nil, nil),
 	}
 }
 
@@ -39,8 +39,7 @@ func newEmptyCredsHandlers(t *testing.T) *DriveHandlers {
 		t.Fatalf("NewService: %v", err)
 	}
 	return &DriveHandlers{
-		dataDir:      tempDir,
-		driveService: svc,
+		svc: driveSvc.New(filepath.Join(tempDir, "tokens"), tempDir, svc, nil),
 	}
 }
 
@@ -58,8 +57,7 @@ func newCredsNoTokensHandlers(t *testing.T) *DriveHandlers {
 		t.Fatalf("NewService: %v", err)
 	}
 	return &DriveHandlers{
-		dataDir:      tempDir,
-		driveService: svc,
+		svc: driveSvc.New(tokensDir, tempDir, svc, nil),
 	}
 }
 
@@ -94,8 +92,7 @@ func newCredsWithTokenHandlers(t *testing.T) *DriveHandlers {
 	}
 
 	return &DriveHandlers{
-		dataDir:      tempDir,
-		driveService: svc,
+		svc: driveSvc.New(tokensDir, tempDir, svc, nil),
 	}
 }
 
@@ -303,8 +300,7 @@ func TestDriveHealthCheck_RouteRegistration(t *testing.T) {
 
 	// Create a minimal handler (nil service)
 	h := &DriveHandlers{
-		dataDir:      t.TempDir(),
-		driveService: nil,
+		svc: driveSvc.New("", t.TempDir(), nil, nil),
 	}
 
 	r := gin.New()
@@ -398,8 +394,7 @@ func TestDriveHealthCheck_TokenScopeReporting(t *testing.T) {
 	}
 
 	h := &DriveHandlers{
-		dataDir:      tempDir,
-		driveService: svc,
+		svc: driveSvc.New(tokensDir, tempDir, svc, nil),
 	}
 
 	w := healthRequest(t, h)
@@ -452,8 +447,7 @@ func TestDriveHealthCheck_MultipleTokens(t *testing.T) {
 	}
 
 	h := &DriveHandlers{
-		dataDir:      tempDir,
-		driveService: svc,
+		svc: driveSvc.New(tokensDir, tempDir, svc, nil),
 	}
 
 	w := healthRequest(t, h)
@@ -488,8 +482,7 @@ func TestDriveHealthCheck_TokensDirCreated(t *testing.T) {
 	}
 
 	h := &DriveHandlers{
-		dataDir:      tempDir,
-		driveService: svc,
+		svc: driveSvc.New(tokensDir, tempDir, svc, nil),
 	}
 
 	w := healthRequest(t, h)
@@ -517,8 +510,7 @@ func TestDriveHealthCheck_NoTokensDir(t *testing.T) {
 	}
 
 	h := &DriveHandlers{
-		dataDir:      tempDir,
-		driveService: svc,
+		svc: driveSvc.New(nonExistentDir, tempDir, svc, nil),
 	}
 
 	w := healthRequest(t, h)
@@ -542,7 +534,7 @@ func TestDriveHealthCheck_StatusCodes(t *testing.T) {
 	}{
 		{
 			name:       "nil service",
-			handler:    &DriveHandlers{dataDir: t.TempDir(), driveService: nil},
+			handler:    &DriveHandlers{svc: driveSvc.New("", t.TempDir(), nil, nil)},
 			wantStatus: http.StatusServiceUnavailable,
 		},
 		{

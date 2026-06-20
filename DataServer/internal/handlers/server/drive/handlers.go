@@ -1,92 +1,26 @@
 package drive
 
 import (
-	"fmt"
 	"net/http"
-	"os"
-	"path/filepath"
-	"strings"
-	"time"
 
 	"github.com/gin-gonic/gin"
-)
 
-// TokenFile represents a Drive token file entry
-type TokenFile struct {
-	Name string `json:"name"`
-	Path string `json:"path,omitempty"`
-}
+	driveSvc "velox-server/internal/services/drive"
+)
 
 // ListDriveTokensHandler lists all Drive token files
 func (h *DriveHandlers) ListDriveTokensHandler(c *gin.Context) {
-	if h.tokensDir == "" {
-		c.JSON(http.StatusOK, gin.H{"files": []TokenFile{}})
-		return
-	}
-
-	entries, err := os.ReadDir(h.tokensDir)
+	files, err := h.svc.ListDriveTokens()
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{"files": []TokenFile{}})
+		c.JSON(http.StatusOK, gin.H{"files": []driveSvc.TokenFile{}})
 		return
 	}
-
-	var files []TokenFile
-	for _, entry := range entries {
-		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".json") {
-			files = append(files, TokenFile{
-				Name: entry.Name(),
-				Path: filepath.Join(h.tokensDir, entry.Name()),
-			})
-		}
-	}
-
 	c.JSON(http.StatusOK, gin.H{"files": files})
-}
-
-// Request types
-type SaveDriveLinksRequest struct {
-	Folders []DriveFolder `json:"folders"`
-}
-
-type AddDriveFolderRequest struct {
-	ID       string `json:"id"`
-	Name     string `json:"name"`
-	Link     string `json:"link"`
-	ParentID string `json:"parentId,omitempty"`
-	Language string `json:"language,omitempty"`
-}
-
-type UpdateDriveFolderRequest struct {
-	Name     string `json:"name,omitempty"`
-	Link     string `json:"link,omitempty"`
-	ParentID string `json:"parentId,omitempty"`
-	Language string `json:"language,omitempty"`
-}
-
-type CreateDriveFolderRequest struct {
-	Name     string `json:"name"`
-	ParentID string `json:"parentId,omitempty"`
-	Language string `json:"language,omitempty"`
-}
-
-type UploadTextRequest struct {
-	Filename string `json:"filename"`
-	Content  string `json:"content"`
-	ParentID string `json:"parentId,omitempty"`
-}
-
-type UpsertMasterFolderRequest struct {
-	ID              string `json:"id"`
-	Name            string `json:"name"`
-	URL             string `json:"url"`
-	Language        string `json:"language,omitempty"`
-	SubfoldersCount int    `json:"subfolders_count,omitempty"`
-	MetadataJSON    string `json:"metadata_json,omitempty"`
 }
 
 // GetDriveLinksHandler returns all drive links
 func (h *DriveHandlers) GetDriveLinksHandler(c *gin.Context) {
-	folders := h.getLinks()
+	folders := h.svc.GetDriveLinks()
 	c.JSON(http.StatusOK, DriveFoldersResponse{
 		Success: true,
 		Folders: folders,
@@ -97,55 +31,27 @@ func (h *DriveHandlers) GetDriveLinksHandler(c *gin.Context) {
 // GetDriveLinksByGroupHandler returns drive links for a specific group
 func (h *DriveHandlers) GetDriveLinksByGroupHandler(c *gin.Context) {
 	groupName := c.Param("group_name")
-	folders := h.getLinks()
-
-	var filtered []DriveFolder
-	groupLower := strings.ToLower(groupName)
-	for _, f := range folders {
-		nameLower := strings.ToLower(f.Name)
-		langLower := strings.ToLower(f.Language)
-		if strings.HasPrefix(nameLower, groupLower) || langLower == groupLower {
-			filtered = append(filtered, f)
-		}
-	}
-
+	folders := h.svc.GetDriveLinksByGroup(groupName)
 	c.JSON(http.StatusOK, DriveFoldersResponse{
 		Success: true,
-		Folders: filtered,
-		Count:   len(filtered),
+		Folders: folders,
+		Count:   len(folders),
 	})
 }
 
-// GetMasterFoldersHandler returns master folders from SQLite (source of truth)
+// GetMasterFoldersHandler returns master folders
 func (h *DriveHandlers) GetMasterFoldersHandler(c *gin.Context) {
-	masters := make(gin.H)
-
-	if h.store != nil {
-		dbMasters, err := h.store.ListMasterFolders()
-		if err == nil && len(dbMasters) > 0 {
-			for _, m := range dbMasters {
-				language, _ := m["language"].(string)
-				if language == "" {
-					continue
-				}
-				masters[language] = m
-			}
-			c.JSON(http.StatusOK, gin.H{"success": true, "data": gin.H{"masters": masters}})
-			return
-		}
+	masters, err := h.svc.GetMasterFolders()
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"success": true, "data": gin.H{"masters": gin.H{}}})
+		return
 	}
-
-	c.JSON(http.StatusOK, gin.H{"success": true, "data": gin.H{"masters": gin.H{}}})
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": gin.H{"masters": masters}})
 }
 
 // UpsertMasterFolderHandler creates or updates a master folder entry.
 func (h *DriveHandlers) UpsertMasterFolderHandler(c *gin.Context) {
-	if h.store == nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": "drive store not initialized"})
-		return
-	}
-
-	var req UpsertMasterFolderRequest
+	var req driveSvc.UpsertMasterFolderRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
 		return
@@ -156,7 +62,7 @@ func (h *DriveHandlers) UpsertMasterFolderHandler(c *gin.Context) {
 		return
 	}
 
-	if err := h.store.UpsertMasterFolder(req.ID, req.Name, req.URL, req.Language, req.SubfoldersCount); err != nil {
+	if err := h.svc.UpsertMasterFolder(req); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
 		return
 	}
@@ -171,18 +77,16 @@ func (h *DriveHandlers) UpsertMasterFolderHandler(c *gin.Context) {
 
 // SaveDriveLinksHandler replaces all drive links (bulk save)
 func (h *DriveHandlers) SaveDriveLinksHandler(c *gin.Context) {
-	var req SaveDriveLinksRequest
+	var req driveSvc.SaveDriveLinksRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
 		return
 	}
 
-	if err := h.saveToDisk(req.Folders); err != nil {
+	if err := h.svc.SaveDriveLinks(req.Folders); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
 		return
 	}
-
-	h.updateCache(req.Folders)
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
@@ -192,128 +96,56 @@ func (h *DriveHandlers) SaveDriveLinksHandler(c *gin.Context) {
 
 // AddDriveFolderHandler adds or updates a single folder
 func (h *DriveHandlers) AddDriveFolderHandler(c *gin.Context) {
-	var req AddDriveFolderRequest
+	var req driveSvc.AddDriveFolderRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
 		return
 	}
 
-	folders := h.getLinks()
-
-	// Auto-generate ID from URL if missing
-	if req.ID == "" && req.Link != "" {
-		parts := strings.Split(req.Link, "/")
-		if len(parts) > 0 {
-			req.ID = parts[len(parts)-1]
-		}
-	}
-
-	// Check if folder exists (by ID or Link)
-	found := false
-	for i, f := range folders {
-		if f.ID == req.ID || f.Link == req.Link {
-			folders[i].Name = req.Name
-			folders[i].Link = req.Link
-			folders[i].ParentID = req.ParentID
-			folders[i].Language = req.Language
-			folders[i].UpdatedAt = time.Now().UnixMilli()
-			found = true
-			break
-		}
-	}
-
-	if !found {
-		newFolder := DriveFolder{
-			ID:        req.ID,
-			Name:      req.Name,
-			Link:      req.Link,
-			ParentID:  req.ParentID,
-			Language:  req.Language,
-			CreatedAt: time.Now().UnixMilli(),
-			UpdatedAt: time.Now().UnixMilli(),
-		}
-		folders = append(folders, newFolder)
-	}
-
-	if err := h.saveToDisk(folders); err != nil {
+	id, err := h.svc.AddDriveFolder(req)
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
 		return
 	}
 
-	h.updateCache(folders)
-
-	c.JSON(http.StatusOK, gin.H{"success": true, "folder_id": req.ID})
+	c.JSON(http.StatusOK, gin.H{"success": true, "folder_id": id})
 }
 
 // UpdateDriveFolderHandler updates a folder by ID
 func (h *DriveHandlers) UpdateDriveFolderHandler(c *gin.Context) {
 	folderID := c.Param("folder_id")
 
-	var req UpdateDriveFolderRequest
+	var req driveSvc.UpdateDriveFolderRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
 		return
 	}
 
-	folders := h.getLinks()
-	for i, f := range folders {
-		if f.ID == folderID {
-			if req.Name != "" {
-				folders[i].Name = req.Name
-			}
-			if req.Link != "" {
-				folders[i].Link = req.Link
-			}
-			if req.ParentID != "" {
-				folders[i].ParentID = req.ParentID
-			}
-			if req.Language != "" {
-				folders[i].Language = req.Language
-			}
-			folders[i].UpdatedAt = time.Now().UnixMilli()
-
-			if err := h.saveToDisk(folders); err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
-				return
-			}
-
-			h.updateCache(folders)
-
-			c.JSON(http.StatusOK, gin.H{"success": true, "folder_id": folderID})
-			return
+	if err := h.svc.UpdateDriveFolder(folderID, req); err != nil {
+		status := http.StatusInternalServerError
+		if err.Error() == "folder not found" {
+			status = http.StatusNotFound
 		}
+		c.JSON(status, gin.H{"success": false, "error": err.Error()})
+		return
 	}
 
-	c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "folder not found"})
+	c.JSON(http.StatusOK, gin.H{"success": true, "folder_id": folderID})
 }
 
 // DeleteDriveFolderHandler deletes a folder and all its children
 func (h *DriveHandlers) DeleteDriveFolderHandler(c *gin.Context) {
 	folderID := c.Param("folder_id")
 
-	folders := h.getLinks()
-
-	// Find folder and delete it
-	var remaining []DriveFolder
-	for _, f := range folders {
-		if f.ID != folderID && f.ParentID != folderID {
-			remaining = append(remaining, f)
+	deletedCount, err := h.svc.DeleteDriveFolder(folderID)
+	if err != nil {
+		status := http.StatusInternalServerError
+		if err.Error() == "folder not found" {
+			status = http.StatusNotFound
 		}
-	}
-
-	if len(remaining) == len(folders) {
-		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "folder not found"})
+		c.JSON(status, gin.H{"success": false, "error": err.Error()})
 		return
 	}
-
-	deletedCount := len(folders) - len(remaining)
-
-	if err := h.saveToDisk(remaining); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
-		return
-	}
-
-	h.updateCache(remaining)
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
@@ -323,35 +155,17 @@ func (h *DriveHandlers) DeleteDriveFolderHandler(c *gin.Context) {
 
 // CreateDriveFolderHandler creates a new folder entry (metadata only)
 func (h *DriveHandlers) CreateDriveFolderHandler(c *gin.Context) {
-	var req CreateDriveFolderRequest
+	var req driveSvc.CreateDriveFolderRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
 		return
 	}
 
-	folders := h.getLinks()
-
-	// Generate synthetic ID
-	newID := fmt.Sprintf("folder_%d", time.Now().UnixNano())
-	newFolder := DriveFolder{
-		ID:        newID,
-		Name:      req.Name,
-		Link:      fmt.Sprintf("https://drive.google.com/drive/folders/%s", newID),
-		ParentID:  req.ParentID,
-		Language:  req.Language,
-		CreatedAt: time.Now().UnixMilli(),
-		UpdatedAt: time.Now().UnixMilli(),
-		IsMaster:  false,
-	}
-
-	folders = append(folders, newFolder)
-
-	if err := h.saveToDisk(folders); err != nil {
+	newID, err := h.svc.CreateDriveFolder(req)
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
 		return
 	}
-
-	h.updateCache(folders)
 
 	c.JSON(http.StatusCreated, gin.H{
 		"success": true,
@@ -361,14 +175,13 @@ func (h *DriveHandlers) CreateDriveFolderHandler(c *gin.Context) {
 
 // UploadTextHandler simulates text upload to Drive (returns mock URL)
 func (h *DriveHandlers) UploadTextHandler(c *gin.Context) {
-	var req UploadTextRequest
+	var req driveSvc.UploadTextRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
 		return
 	}
 
-	// Generate mock upload URL
-	mockURL := fmt.Sprintf("https://drive.google.com/file/d/text_%d/view", time.Now().UnixNano())
+	mockURL, _ := h.svc.UploadText(req)
 
 	c.JSON(http.StatusOK, gin.H{
 		"success":  true,

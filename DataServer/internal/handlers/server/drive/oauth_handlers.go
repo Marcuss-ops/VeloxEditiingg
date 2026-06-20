@@ -42,7 +42,7 @@ func sanitizeDriveTokenName(name string) string {
 // DriveOAuthStartHandler starts the Google Drive OAuth flow.
 // GET /api/drive/oauth/start
 func (h *DriveHandlers) DriveOAuthStartHandler(c *gin.Context) {
-	svc := h.driveService
+	svc := h.svc.DriveService()
 	if svc == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"ok": false, "error": "drive service not configured"})
 		return
@@ -66,7 +66,7 @@ func (h *DriveHandlers) DriveOAuthStartHandler(c *gin.Context) {
 // DriveOAuthCallback stores the Drive token returned by Google.
 // GET /api/drive/oauth/callback
 func (h *DriveHandlers) DriveOAuthCallbackHandler(c *gin.Context) {
-	svc := h.driveService
+	svc := h.svc.DriveService()
 	if svc == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"ok": false, "error": "drive service not configured"})
 		return

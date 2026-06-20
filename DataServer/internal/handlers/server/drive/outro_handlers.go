@@ -33,12 +33,7 @@ func isOutroMasterFolder(row map[string]any) bool {
 // ListOutroFoldersHandler returns all configured outro folders.
 // GET /api/drive/outros
 func (h *DriveHandlers) ListOutroFoldersHandler(c *gin.Context) {
-	if h == nil || h.store == nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"success": false, "error": "drive store not configured"})
-		return
-	}
-
-	rows, err := h.store.ListMasterFoldersDetailed()
+	rows, err := h.svc.ListOutroFolders()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
 		return
@@ -66,15 +61,6 @@ func (h *DriveHandlers) ListOutroFoldersHandler(c *gin.Context) {
 // GetOutroFolderContentsHandler resolves an outro folder by language and lists its files.
 // GET /api/drive/outros/:language
 func (h *DriveHandlers) GetOutroFolderContentsHandler(c *gin.Context) {
-	if h == nil || h.store == nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"success": false, "error": "drive store not configured"})
-		return
-	}
-	if h.driveService == nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"success": false, "error": "drive service not configured"})
-		return
-	}
-
 	language := strings.TrimSpace(c.Param("language"))
 	if language == "" {
 		language = strings.TrimSpace(c.Query("language"))
@@ -84,7 +70,7 @@ func (h *DriveHandlers) GetOutroFolderContentsHandler(c *gin.Context) {
 		return
 	}
 
-	folder, err := h.store.FindMasterFolderByLanguage(language)
+	folder, err := h.svc.FindMasterFolderByLanguage(language)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
 		return
@@ -103,7 +89,7 @@ func (h *DriveHandlers) GetOutroFolderContentsHandler(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
 	defer cancel()
 
-	files, err := h.driveService.ListFiles(ctx, folderID, 100)
+	files, err := h.svc.ListFiles(ctx, folderID, 100)
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"success": false, "error": err.Error(), "folder": folder})
 		return
@@ -134,11 +120,6 @@ func (h *DriveHandlers) GetOutroFolderContentsHandler(c *gin.Context) {
 // GetOutroFolderContentsByIDHandler resolves an outro folder by folder ID or URL and lists its files.
 // GET /api/drive/outros-by-id/:folder_id
 func (h *DriveHandlers) GetOutroFolderContentsByIDHandler(c *gin.Context) {
-	if h == nil || h.driveService == nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"success": false, "error": "drive service not configured"})
-		return
-	}
-
 	folderID := strings.TrimSpace(c.Param("folder_id"))
 	if folderID == "" {
 		folderID = strings.TrimSpace(c.Query("folder_id"))
@@ -151,7 +132,7 @@ func (h *DriveHandlers) GetOutroFolderContentsByIDHandler(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
 	defer cancel()
 
-	files, err := h.driveService.ListFiles(ctx, folderID, 100)
+	files, err := h.svc.ListFiles(ctx, folderID, 100)
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"success": false, "error": err.Error()})
 		return

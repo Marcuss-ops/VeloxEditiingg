@@ -23,7 +23,7 @@ func (h *DriveHandlers) DriveHealthCheckHandler(c *gin.Context) {
 		"checked_at":       time.Now().UTC().Format(time.RFC3339),
 	}
 
-	svc := h.driveService
+	svc := h.svc.DriveService()
 	if svc == nil {
 		result["status"] = "unavailable"
 		result["error"] = "drive service not initialized"

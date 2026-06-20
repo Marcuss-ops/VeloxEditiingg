@@ -8,35 +8,21 @@ import (
 
 	"velox-server/internal/config"
 	"velox-server/internal/integrations/drive"
+	driveSvc "velox-server/internal/services/drive"
 	"velox-server/internal/store"
 )
 
 // DriveHandlers holds Drive links dependencies
 type DriveHandlers struct {
-	dataDir      string
-	store        *store.SQLiteStore
-	driveService *drive.Service
-	tokensDir    string
-	cache        driveLinksCache
+	svc *driveSvc.Service
 }
 
 // NewDriveHandlers creates Drive handlers.
-// driveSvc may be nil if Drive integration is not configured.
-// sqliteStore must be the primary store (opened once at bootstrap).
-func NewDriveHandlers(cfg *drive.ServiceConfig, driveSvc *drive.Service, sqliteStore *store.SQLiteStore) (*DriveHandlers, error) {
+func NewDriveHandlers(cfg *drive.ServiceConfig, driveService *drive.Service, sqliteStore *store.SQLiteStore) (*DriveHandlers, error) {
 	dataDir := resolveDriveDataDir(cfg.TokensDir)
-
-	h := &DriveHandlers{
-		dataDir:      dataDir,
-		store:        sqliteStore,
-		driveService: driveSvc,
-		tokensDir:    cfg.TokensDir,
-	}
-
-	// Initialize cache from SQLite
-	_ = h.loadFromDisk()
-
-	return h, nil
+	return &DriveHandlers{
+		svc: driveSvc.New(cfg.TokensDir, dataDir, driveService, sqliteStore),
+	}, nil
 }
 
 // SetSQLiteStore wires (or rewires) the SQLite store post-construction.
@@ -44,10 +30,7 @@ func (h *DriveHandlers) SetSQLiteStore(s *store.SQLiteStore) {
 	if h == nil {
 		return
 	}
-	h.store = s
-	if s != nil {
-		_ = h.loadFromDisk()
-	}
+	h.svc.SetStore(s)
 }
 
 func resolveDriveDataDir(tokensDir string) string {
