@@ -36,9 +36,12 @@ const (
 // New code should reference jobs.QueueItem / jobs.Job directly.
 type QueueItem = jobs.QueueItem
 
-// Job is a backward-compatible alias for QueueItem (== jobs.QueueItem).
-// All existing callers that reference queue.Job continue to compile.
-// New code should use jobs.Job or jobs.QueueItem directly.
+// Job is a backward-compatible alias for QueueItem. Job == QueueItem ==
+// jobs.QueueItem — all three are the SAME type at compile time. We keep
+// Job only because existing callers still reference queue.Job; new code
+// should use jobs.QueueItem directly. (Phase 2 of Ondata 4 Strategy B
+// will sweep remaining queue.Job references; once zero remain, drop
+// this alias.)
 type Job = jobs.QueueItem
 
 // JobHistoryEntry is a backward-compatible alias to jobs.JobHistoryEntry

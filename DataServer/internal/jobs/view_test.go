@@ -1,6 +1,11 @@
 package jobs
 
-import "testing"
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+	"time"
+)
 
 func TestToQueueItemNilInput(t *testing.T) {
 	if got := ToQueueItem(nil); got != nil {
@@ -147,5 +152,58 @@ func TestParsePayloadJSONEdgeCases(t *testing.T) {
 	}
 	if _, ok := got["nested"]; !ok {
 		t.Errorf("missing nested key")
+	}
+}
+
+// TestToQueueItemWireShapeSnapshot locks the JSON wire shape produced by
+// ToQueueItem so the Phase 2 sweep (which removes queue.domainJobToQueueJob)
+// cannot silently drift. If this test ever fails, either ToQueueItem drifted
+// OR the expectations here must be updated to match an EXPLICIT, reviewed
+// wire-format change.
+func TestToQueueItemWireShapeSnapshot(t *testing.T) {
+	j := &Job{
+		ID:          "snap-1",
+		Status:      StatusRunning,
+		WorkerID:    "worker-X",
+		Attempts:    2,
+		MaxRetries:  5,
+		RunID:       "run-X",
+		VideoName:   "video.mp4",
+		ProjectID:   "proj-1",
+		LeaseID:     "lease-X",
+		CreatedAt:   time.Date(2024, 1, 2, 3, 4, 5, 0, time.UTC),
+		UpdatedAt:   time.Date(2024, 1, 2, 3, 5, 0, 0, time.UTC),
+		StartedAt:   time.Date(2024, 1, 2, 3, 4, 30, 0, time.UTC),
+		CompletedAt: time.Time{}, // zero → omitted via omitempty interface{}
+	}
+	q := ToQueueItem(j)
+	raw, err := json.Marshal(q)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	// Verify critical structural invariants without locking the entire blob
+	// (time formatting / map iteration order would make byte-equality fragile).
+	got := string(raw)
+	for _, key := range []string{
+		`"job_id":"snap-1"`,
+		`"status":"RUNNING"`,
+		`"video_name":"video.mp4"`,
+		`"project_id":"proj-1"`,
+		`"worker_name":"worker-X"`, // dual-aliasing critical invariant
+		`"assigned_to":"worker-X"`, // dual-aliasing critical invariant
+		`"lease_id":"lease-X"`,
+		`"retry_count":2`,
+		`"attempt":2`,
+		`"max_retries":5`,
+		`"run_id":"run-X"`,
+		`"job_run_id":"run-X"`,
+	} {
+		if !strings.Contains(got, key) {
+			t.Errorf("wire shape invariant missing: %q\nfull output: %s", key, got)
+		}
+	}
+	// Zero-value fields MUST be omitted by omitempty tags.
+	if strings.Contains(got, `"completed_at":`) {
+		t.Errorf("completed_at should be omitted when zero, got: %s", got)
 	}
 }
