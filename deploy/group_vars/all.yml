@@ -6,7 +6,7 @@
 # (encrypted with `ansible-vault`).
 
 # ── Versions ─────────────────────────────────────────────────────────────────
-velox_version: "1.1.1"
+velox_version: "1.2.0"
 
 # ── Master networking ────────────────────────────────────────────────────────
 velox_master_port: 8000

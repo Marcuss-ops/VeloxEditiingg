@@ -98,8 +98,8 @@ def main() -> int:
          "VELOX_DB_DSN=" not in rendered),
         ("GIN_MODE=release literal",
          "GIN_MODE=release" in rendered),
-        ("VELOX_CODE_VERSION=1.1.1",
-         "VELOX_CODE_VERSION=1.1.1" in rendered),
+        ("VELOX_CODE_VERSION=1.2.0",
+         "VELOX_CODE_VERSION=1.2.0" in rendered),
         ("no /{[/] left from non-stringified dict keys",
          "<class" not in rendered),
     ]

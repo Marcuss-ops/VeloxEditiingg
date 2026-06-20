@@ -459,10 +459,6 @@ func runServer(cfg *config.Config) error {
 	auth := api.AdminAuthMiddleware(cfg)
 	pipeline.InitRemoteEngine(cfg)
 
-	// PR15.7a: hand the singleton Enqueuer to the pipeline package so
-	// the forwarding path can use it instead of touching any global.
-	pipeline.InitPipelineEnqueuer(deps.enqueuer)
-
 	// PR15.1: NewYouTubeModule now returns error and eagerly builds the
 	// integration service so deps (delivery providers) can read Service()
 	// BEFORE any routes are registered.
@@ -500,8 +496,12 @@ func runServer(cfg *config.Config) error {
 	// PR15.7a: build the *enqueue.Enqueuer singleton that owns the queue
 	// + voiceover rewrite. Replaces both the package-level voiceover global
 	// AND the legacy SetVoiceoverAssetService hook. Threaded through DI
-	// to script/{handler,RegisterRoutes} and creatorflow.Service.
+	// to script/{handler,RegisterRoutes}, creatorflow.Service, and the
+	// pipeline package (via the InitPipelineEnqueuer wiring below).
 	deps.enqueuer = enqueue.NewEnqueuer(deps.fileQ, deps.assetService)
+	// Must run after NewEnqueuer above — InitPipelineEnqueuer dereferences
+	// e.Queue for logging, and deps.enqueuer would still be nil otherwise.
+	pipeline.InitPipelineEnqueuer(deps.enqueuer)
 	registry.Register(app.NewHealthModule())
 	registry.Register(app.NewWorkersModule(cfg, deps.reg, deps.workerLifecycle, deps.workerUpdateHandler, auth, deps.assetService, deps.blobStore))
 	registry.Register(ytMod)

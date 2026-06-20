@@ -18,7 +18,7 @@
 # RemoteCodex/native/worker-agent-go/Makefile.
 SHELL := /usr/bin/env bash
 
-.PHONY: verify verify-fast verify-heavy fmt fmt-check vet help
+.PHONY: verify verify-fast verify-heavy fmt fmt-check vet pilot help
 
 help:
 	@echo "Velox repo orchestrator"
@@ -28,6 +28,7 @@ help:
 	@echo "  make fmt            -- gofmt -w on every Go module (auto-format tree)"
 	@echo "  make fmt-check      -- gofmt -d (dry run); fails if any file is dirty"
 	@echo "  make vet            -- go vet ./... on every Go module"
+	@echo "  make pilot          -- full pilot pipeline (build + start + submit + work + poll)"
 	@echo ""
 	@echo "All heavy targets defer to scripts/ci/verify.sh. Do not replicate steps."
 
@@ -54,6 +55,9 @@ vet:           ## go vet ./... on every Go module
 	  echo "-> go vet $$mod"; \
 	  (cd $$mod && GOFLAGS=-mod=mod go vet ./...) || exit 1; \
 	done
+
+pilot:         ## Full pilot pipeline (build + start + submit + work + poll)
+	./scripts/pilot.sh
 
 verify:        ## Architecture + Go (-race) + cmake + docker (full suite)
 	./scripts/ci/verify.sh

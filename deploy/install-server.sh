@@ -16,7 +16,7 @@ set -euo pipefail
 # location so it can be invoked from anywhere (sudo ./deploy/...).
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-DATASERVER_DIR="$REPO_ROOT/refactored/DataServer"
+DATASERVER_DIR="$REPO_ROOT/DataServer"
 DEPLOY_DIR="$SCRIPT_DIR"
 BINARY_SRC="$DATASERVER_DIR/bin/velox-server"
 BINARY_DST="/opt/velox/current/DataServer/bin/velox-server"
@@ -57,7 +57,7 @@ if [[ ! -f "$BINARY_SRC" ]]; then
     log "Binary not found — building..."
     if ! command -v go &>/dev/null; then
         fail "Go is not installed. Install Go first, or build the binary manually:
-    cd refactored/DataServer && go build -o bin/velox-server ./cmd/server"
+    cd DataServer && go build -o bin/velox-server ./cmd/server"
     fi
     cd "$DATASERVER_DIR"
     go build -o bin/velox-server ./cmd/server

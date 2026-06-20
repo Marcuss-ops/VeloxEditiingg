@@ -70,6 +70,16 @@ func (s *Store) allowedLocalPath(source string) bool {
 	if s == nil {
 		return false
 	}
+	// PR-PILOT dev-bypass: gated escape hatch mirroring VELOX_GRPC_ALLOW_INSECURE_DEV.
+	// Production deployments must leave this unset; opt-in flips the local-path
+	// allowlist to "any" so the SQLite-only smoke test can pass staged fixtures
+	// from /tmp/velox-pilot/staging without expanding allowedRoots by structural
+	// surgery on the bootstrap wiring. A loud audit log keeps an engaged bypass
+	// visible in master.log.
+	if os.Getenv("VELOX_ASSET_REWRITE_DEV_BYPASS") == "true" {
+		fmt.Fprintf(os.Stderr, "[ASSETS] WARNING: dev-bypass engaged (VELOX_ASSET_REWRITE_DEV_BYPASS=true) source=%q\n", source)
+		return true
+	}
 	trimmed := strings.TrimSpace(source)
 	if trimmed == "" {
 		return false

@@ -101,7 +101,11 @@ func (q *FileQueue) SubmitJob(ctx context.Context, jobID string, payload map[str
 	if s, ok := payload["project_id"].(string); ok {
 		projectID = s
 	}
-	if s, ok := payload["run_id"].(string); ok && s != "" {
+	// PR15.6 canonical-key ingress: prefer job_run_id; legacy run_id
+	// remains a fallback for rows persisted before the rename.
+	if s, ok := payload["job_run_id"].(string); ok && s != "" {
+		runID = s
+	} else if s, ok := payload["run_id"].(string); ok && s != "" {
 		runID = s
 	}
 

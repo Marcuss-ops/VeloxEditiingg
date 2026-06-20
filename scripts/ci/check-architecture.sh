@@ -79,4 +79,40 @@ if find . \
   fail "legacy/deprecated files are forbidden -- see above"
 fi
 
+# 6. BUILD_INFO.json ↔ VERSION.txt SSOT drift guard.
+#
+# Single-source-of-truth rule (scope: VERSION-LEVEL integrity only).
+# This rule catches the headline SSOT invariant: the `version` field in
+# RemoteCodex/BUILD_INFO.json must mirror VERSION.txt (prefixed with `v`).
+#
+# NOT covered by this guard (out of scope, intentionally):
+#   * engine_version drift    — `engine_version` is informational for the
+#     remote worker; bump it independently when the C++ engine protocol
+#     changes. Enforced separately by the worker-image cosign step which
+#     tags with the resolved semver.
+#   * source_hash drift       — versioned by sha256sum on VERSION.txt;
+#     emerges naturally from VERSION.txt edits + ./scripts/generate-build-info.sh.
+#   * git_commit drift        — informational only; HEAD at build time.
+#   * built_at drift          — derived from SOURCE_DATE_EPOCH or wall clock.
+#
+# Deepening this guard into a full canonical-shape comparison is
+# deliberately deferred: the BUILD_INFO.json file is owned by the worker
+# release pipeline (worker-image.yml) and the master image never reads it
+# directly, so the only drift class with end-to-end impact is the version
+# field. Promote to full-shape check once a producer-side bug surfaces.
+if [[ -f RemoteCodex/BUILD_INFO.json ]]; then
+  build_info_version="$(python3 -c "import json,sys; print(json.load(open('RemoteCodex/BUILD_INFO.json')).get('version',''))" 2>/dev/null || echo "")"
+  version_txt="$(tr -d '[:space:]' < VERSION.txt)"
+  expected="v${version_txt}"
+  if [[ "$build_info_version" != "$expected" ]]; then
+    cat >&2 <<VIOLATION
+BUILD_INFO.json version drift:
+  RemoteCodex/BUILD_INFO.json   version=${build_info_version}
+  VERSION.txt                   VERSION=${version_txt} (expected version=${expected})
+Run ./scripts/generate-build-info.sh to regenerate BUILD_INFO.json from VERSION.txt.
+VIOLATION
+    exit 1
+  fi
+fi
+
 echo "check-architecture: OK"

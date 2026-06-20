@@ -52,7 +52,7 @@ on:
       version:
         description: 'Version label (e.g. 1.2.3). The leading v is optional.'
         required: true
-        default: '1.1.2'
+        default: ''
       no_push:
         description: 'Build + test locally — do NOT push, do NOT sign.'
         required: false
@@ -144,15 +144,38 @@ jobs:
           fi
           echo "velox-shared vendoring invariants OK (${DS_REQ})."
 
+      # Read VERSION.txt (canonical source of truth per docs/architecture/OWNERSHIP.md,
+      # enforced as exactly-one at the repo root by scripts/ci/check-architecture.sh).
+      # Routed through a step because GitHub Actions cannot read a repo file directly
+      # into a workflow_dispatch input default.
+      - name: Read VERSION.txt (canonical source)
+        id: read-version
+        run: |
+          set -euo pipefail
+          VERSION="$(tr -d '[:space:]' < VERSION.txt)"
+          if [ -z "$VERSION" ]; then
+            echo "::error::VERSION.txt is empty — refusing to publish." >&2
+            exit 1
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Resolved version from VERSION.txt: ${VERSION}"
+
       - name: Resolve effective version + determine push
         id: version
         run: |
           set -euo pipefail
           if [ "${{ github.event_name }}" = "push" ]; then
             TAG="${GITHUB_REF_NAME#v}"
-          else
+          elif [ -n "${{ inputs.version }}" ]; then
             INPUT="${{ inputs.version }}"
             TAG="${INPUT#v}"
+          else
+            # workflow_dispatch with empty input: fall back to canonical VERSION.txt
+            TAG="${{ steps.read-version.outputs.version }}"
+          fi
+          if [ -z "$TAG" ]; then
+            echo "::error::Could not resolve version (push ref empty, dispatch input missing, VERSION.txt empty)." >&2
+            exit 1
           fi
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           if [ "${{ github.event_name }}" = "push" ]; then

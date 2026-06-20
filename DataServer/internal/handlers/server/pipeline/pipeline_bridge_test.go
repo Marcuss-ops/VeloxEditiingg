@@ -50,7 +50,8 @@ func TestBuildSceneVideoPayloadFromPipelineResult(t *testing.T) {
 		"status":   "completed",
 		"trace_id": "trace_123",
 		"result": map[string]interface{}{
-			"title":         "Test Video",
+			// PR15.6 canonical-key rename: builder emits video_name (was title).
+			"video_name":    "Test Video",
 			"script_text":   "This is the generated script.",
 			"json_path":     jsonPath,
 			"markdown_path": markdownPath,
@@ -65,8 +66,10 @@ func TestBuildSceneVideoPayloadFromPipelineResult(t *testing.T) {
 		t.Fatalf("build payload: %v", err)
 	}
 
-	if payload["title"] != "Test Video" {
-		t.Fatalf("want title, got %v", payload["title"])
+	// PR15.6 canonical-only payload: read the canonical `video_name` key.
+	// (Legacy `title` is no longer emitted by BuildPipelinePayload.)
+	if payload["video_name"] != "Test Video" {
+		t.Fatalf("want video_name, got %v", payload["video_name"])
 	}
 	if payload["script_text"] != "This is the generated script." {
 		t.Fatalf("want script_text, got %v", payload["script_text"])
@@ -74,8 +77,27 @@ func TestBuildSceneVideoPayloadFromPipelineResult(t *testing.T) {
 	if payload["scenes_json"] == "" {
 		t.Fatalf("want scenes_json, got empty")
 	}
-	if payload["voiceover_path"] != voicePath {
-		t.Fatalf("want voiceover path %q, got %v", voicePath, payload["voiceover_path"])
+	// PR15.6 canonical-only payload: on disk + on the wire voiceover is
+	// `voiceover_paths` (a slice); singular `voiceover_path` is the legacy
+	// alias that the HTTP-edge adapter reads from old rows only.
+	// BuildPipelinePayload returns the native []string it constructed; an
+	// HTTP-edge JSON round-trip would surface []interface{} instead, so
+	// accept both shapes.
+	var vpFirst interface{}
+	switch v := payload["voiceover_paths"].(type) {
+	case []string:
+		if len(v) > 0 {
+			vpFirst = v[0]
+		}
+	case []interface{}:
+		if len(v) > 0 {
+			vpFirst = v[0]
+		}
+	default:
+		t.Fatalf("want voiceover_paths to be []string or []interface{}, got %T (%v)", payload["voiceover_paths"], payload["voiceover_paths"])
+	}
+	if vpFirst != voicePath {
+		t.Fatalf("want voiceover path %q at voiceover_paths[0], got %v", voicePath, payload["voiceover_paths"])
 	}
 	if payload["job_run_id"] != "trace_123" {
 		t.Fatalf("want job_run_id trace_123, got %v", payload["job_run_id"])
@@ -155,7 +177,7 @@ func TestPipelineGenerateForwardsCompletedResultToQueue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sqlite store: %v", err)
 	}
-	ts, err := queue.NewLifecycleService(store.NewSQLiteJobRepository(db), store.NewSQLiteJobRepository(db), clock.System{})
+	ts, err := queue.NewLifecycleService(store.NewJobsRepository(store.NewSQLiteJobRepository(db)), clock.System{})
 	if err != nil {
 		t.Fatalf("transition service: %v", err)
 	}
