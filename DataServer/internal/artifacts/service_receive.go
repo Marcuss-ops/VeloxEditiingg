@@ -8,8 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"time"
-
-	"velox-server/internal/status"
 )
 
 // =====================================================================
@@ -44,7 +42,7 @@ func (s *Service) Receive(ctx context.Context, uploadID string, reader io.Reader
 	if session == nil {
 		return nil, fmt.Errorf("%w: upload_id=%s", ErrUploadNotFound, uploadID)
 	}
-	if session.Status != string(status.UploadCreated) && session.Status != string(status.UploadUploading) {
+	if session.Status != string(UploadCreated) && session.Status != string(UploadUploading) {
 		return nil, fmt.Errorf("%w: upload_id=%s status=%s",
 			ErrUploadStateInvalid, uploadID, session.Status)
 	}
@@ -55,8 +53,8 @@ func (s *Service) Receive(ctx context.Context, uploadID string, reader io.Reader
 
 	// Move CREATED -> UPLOADING so the reconciler (chunk 5) treats it
 	// differently from a row that hasn't started streaming yet.
-	if session.Status == string(status.UploadCreated) {
-		uploading := string(status.UploadUploading)
+	if session.Status == string(UploadCreated) {
+		uploading := string(UploadUploading)
 		if err := s.repo.UpdateUploadStatus(ctx, uploadID, UploadFields{
 			Status: &uploading,
 		}); err != nil {
@@ -126,7 +124,7 @@ func (s *Service) Receive(ctx context.Context, uploadID string, reader io.Reader
 
 	// ----- mark RECEIVED -----
 	now := s.clock.Now()
-	received := string(status.UploadReceived)
+	received := string(UploadReceived)
 	if err := s.repo.UpdateUploadStatus(ctx, uploadID, UploadFields{
 		Status:            &received,
 		ReceivedSizeBytes: &receivedSize,
@@ -140,7 +138,7 @@ func (s *Service) Receive(ctx context.Context, uploadID string, reader io.Reader
 		UploadID:          uploadID,
 		ReceivedSizeBytes: receivedSize,
 		ReceivedSHA256:    receivedSHA,
-		Status:            string(status.UploadReceived),
+		Status:            string(UploadReceived),
 	}, nil
 }
 
@@ -148,7 +146,7 @@ func (s *Service) Receive(ctx context.Context, uploadID string, reader io.Reader
 // reconciler can clean up the staging blob later.
 func (s *Service) markFailed(ctx context.Context, uploadID, reason string) error {
 	now := s.clock.Now()
-	failed := string(status.UploadFailed)
+	failed := string(UploadFailed)
 	err := s.repo.UpdateUploadStatus(ctx, uploadID, UploadFields{
 		Status:      &failed,
 		CompletedAt: &now,

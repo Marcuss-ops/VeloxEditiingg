@@ -15,7 +15,6 @@ import (
 
 	"velox-server/internal/identity"
 	"velox-server/internal/platform/clock"
-	"velox-server/internal/status"
 	"velox-server/internal/store"
 )
 
@@ -313,7 +312,7 @@ func (s *Service) BeginUpload(ctx context.Context, cmd BeginUploadCommand) (*Upl
 			ErrLeaseInvalid, cmd.JobID, cmd.AttemptNumber)
 	}
 	attStatus = strings.ToUpper(strings.TrimSpace(attStatus))
-	if attStatus != string(status.AttemptRenderFinished) && attStatus != string(status.AttemptProcessing) {
+	if attStatus != string(AttemptRenderFinished) && attStatus != string(AttemptProcessing) {
 		return nil, fmt.Errorf("%w: job=%s n=%d current=%s",
 			ErrAttemptNotRenderFinished, cmd.JobID, cmd.AttemptNumber, attStatus)
 	}
@@ -375,7 +374,7 @@ func (s *Service) BeginUpload(ctx context.Context, cmd BeginUploadCommand) (*Upl
 		TemporaryStorageKey: tempKey,
 		ExpectedSizeBytes:   cmd.ExpectedSizeBytes,
 		ExpectedSHA256:      cmd.ExpectedSHA256,
-		Status:              string(status.UploadCreated),
+		Status:              string(UploadCreated),
 		CreatedAt:           now,
 		ExpiresAt:           now.Add(s.uploadTTL),
 	}
