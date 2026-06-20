@@ -24,7 +24,6 @@ import (
 	"velox-server/internal/deliveries"
 	deliveryProviders "velox-server/internal/deliveries/providers"
 	"velox-server/internal/grpcserver"
-	handlersoutbox "velox-server/internal/handlers/outbox"
 	workerhandlers "velox-server/internal/handlers/remote/workers"
 	"velox-server/internal/handlers/remote/workers/lifecycle"
 	workerhandlersuploads "velox-server/internal/handlers/remote/workers/uploads"
@@ -32,7 +31,9 @@ import (
 	"velox-server/internal/handlers/server/pipeline"
 	"velox-server/internal/jobs/enqueue"
 	"velox-server/internal/outbox"
+	"velox-server/internal/platform/clock"
 	"velox-server/internal/queue"
+	workflowevents "velox-server/internal/services/workflow_events"
 	"velox-server/internal/store"
 	workersreg "velox-server/internal/workers"
 	"velox-server/internal/workflow"
@@ -286,10 +287,10 @@ func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
 	log.Printf("[BOOTSTRAP] ChunkedUploadService ready (persistent chunked upload via artifact pipeline)")
 
 	outboxRegistry := outbox.NewRegistry()
-	stepReady := handlersoutbox.StepReadyHandler{Wf: workflowRepo, Q: fileQ}
-	jobSucceeded := handlersoutbox.JobSucceededHandler{Wf: workflowRepo}
-	artifactReady := handlersoutbox.ArtifactReadyHandler{Wf: workflowRepo}
-	deliveryCreated := handlersoutbox.DeliveryCreatedHandler{Wf: workflowRepo}
+	stepReady := workflowevents.StepReadyHandler{Wf: workflowRepo, Q: fileQ}
+	jobSucceeded := workflowevents.JobSucceededHandler{Wf: workflowRepo}
+	artifactReady := workflowevents.ArtifactReadyHandler{Wf: workflowRepo}
+	deliveryCreated := workflowevents.DeliveryCreatedHandler{Wf: workflowRepo}
 	if err := outboxRegistry.Register(stepReady); err != nil {
 		return nil, fmt.Errorf("outbox register stepReady: %w", err)
 	}

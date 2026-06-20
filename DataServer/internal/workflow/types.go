@@ -3,7 +3,7 @@
 // The package owns the structured representation of a multi-step pipeline.
 // Persistence lives in sqlite_repository.go; transitions live in repository.go.
 // Handlers that bridge outbox events into workflow.Run transitions live in
-// internal/handlers/outbox (registered with the outbox.Registry at startup).
+// internal/services/workflow_events (registered with the outbox.Registry at startup).
 package workflow
 
 import "time"

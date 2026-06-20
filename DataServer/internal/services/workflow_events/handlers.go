@@ -1,25 +1,6 @@
-// Package handlers/outbox — concrete outbox handlers that translate
+// Package workflowevents — concrete outbox handlers that translate
 // domain events emitted inside the master into workflow.state mutations.
-//
-// All four handlers are registered with the outbox.Registry at startup
-// (one central registry, no per-package switches). Per PR 8 spec:
-//
-//	registry.Register(jobSucceededHandler)
-//	registry.Register(artifactReadyHandler)
-//	registry.Register(workflowStepReadyHandler)
-//	registry.Register(deliveryCreatedHandler)
-//
-// Handlers MUST be idempotent because the dispatcher may retry on
-// transient errors. They run inside the dispatcher's tick so blocking I/O
-// should be limited; the heavy lifting (artifact verification, delivery)
-// happens elsewhere — these handlers only mutate workflow state.
-//
-// All other production handlers in the codebase follow the same shape:
-//   - structured Payload field,
-//   - aggregate_id understood via WorkflowOutboxEvent.AggregateID,
-//   - best-effort: a non-fatal error becomes Transient so the dispatcher
-//     retries with backoff up to MaxAttempts.
-package outbox
+package workflowevents
 
 import (
 	"context"
@@ -165,12 +146,7 @@ func (h JobSucceededHandler) Handle(ctx context.Context, e outbox.Event) error {
 }
 
 // ArtifactReadyHandler reacts to ARTIFACT_READY. ARTIFACT_READY events
-// are emitted by FinalizeArtifactVerified inside the store layer. They
-// do not directly unblock workflow steps — JOB_SUCCEEDED does that —
-// but downstream observability subsystems can subscribe to this signal.
-// We keep the handler as a registry anchor so PR 9 §"handler registry
-// unico" is satisfied; production extensions (e.g. webhook fan-out) can
-// RegisterNoReplace it later.
+// are emitted by FinalizeArtifactVerified inside the store layer.
 type ArtifactReadyHandler struct {
 	Wf workflow.Repository
 }
@@ -188,8 +164,7 @@ func (ArtifactReadyHandler) Handle(ctx context.Context, e outbox.Event) error {
 	return nil
 }
 
-// DeliveryCreatedHandler reacts to DELIVERY_CREATED. Currently a no-op
-// (kept as a registry anchor for future delivery-side fan-out).
+// DeliveryCreatedHandler reacts to DELIVERY_CREATED. Currently a no-op.
 type DeliveryCreatedHandler struct {
 	Wf workflow.Repository
 }
