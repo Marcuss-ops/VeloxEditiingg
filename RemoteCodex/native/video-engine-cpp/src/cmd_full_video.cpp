@@ -12,9 +12,9 @@
 #include <vector>
 
 #include "video_builder.hpp"
-#include "file_utils.hpp"
+#include "velox/services/file_utils.hpp"
 #include "json_utils.hpp"
-#include "media_utils.hpp"
+#include "velox/services/media_utils.hpp"
 #include "video_contract.hpp"
 
 namespace fs = std::filesystem;

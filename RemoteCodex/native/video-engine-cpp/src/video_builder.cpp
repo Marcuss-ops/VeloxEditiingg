@@ -1,5 +1,5 @@
 #include "video_builder.hpp"
-#include "file_utils.hpp"
+#include "velox/services/file_utils.hpp"
 #include "json_utils.hpp"
 
 namespace fs = std::filesystem;
