@@ -15,7 +15,8 @@ type Job struct {
 	ID          string    `json:"id"`
 	Type        string    `json:"type,omitempty"`        // job_type from request payload
 	Status      Status    `json:"status"`
-	Attempts    int       `json:"attempts"`
+	Attempts    int       `json:"attempts"`              // retry_count / current attempt number
+	Revision    int       `json:"revision"`              // optimistic-lock counter (Ondata 3 PR3 final)
 	WorkerID    string    `json:"worker_id,omitempty"`
 	VideoName   string    `json:"video_name,omitempty"`  // the asset being rendered
 	ProjectID   string    `json:"project_id,omitempty"`  // owning project

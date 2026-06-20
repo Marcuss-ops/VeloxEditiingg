@@ -27,6 +27,7 @@ func toJobsJob(sj *Job) *jobs.Job {
 		ProjectID:   sj.ProjectID,
 		RunID:       sj.RunID,
 		Attempts:    sj.RetryCount,
+		Revision:    sj.Revision,
 		WorkerID:    sj.AssignedTo,
 		MaxRetries:  sj.MaxRetries,
 		LeaseID:     sj.LeaseID,

@@ -7,7 +7,6 @@ import (
 	"log"
 	"time"
 
-	"velox-server/internal/dbutil"
 	"velox-server/internal/store"
 	"velox-shared/controltransport"
 	pb "velox-shared/controltransport/pb"
@@ -336,22 +335,16 @@ func (h *Handler) verifyJobOwnership(workerID, jobID string) bool {
 }
 
 // lookupJobCASFields fetches the (revision, attempt) tuple required for the
-// StartJob CAS. We do this with an extra GetJob (rather than stuffing
-// revision onto the JobOffer) to keep the protobuf contract narrow and
-// avoid leaking internal CAS counters on the wire.
-//
-// Implementation note: queue.GetJob returns the rich *queue.Job wrapper
-// (no revision/attempt decimal fields), so we go straight to dbStore.GetJob
-// and parse the map locally — one DB round-trip, no chained calls.
+// StartJob CAS. Uses the canonical jobs.Job via Jobs().Get() — revision is
+// on the domain model (Ondata 3 PR3 final), attempt maps to Attempts/RetryCount.
+// No more map-based reads from dbStore.GetJob.
 func (h *Handler) lookupJobCASFields(jobID string) (revision, attempt int, err error) {
-	m, err := h.dbStore.GetJob(context.Background(), jobID)
+	j, err := h.lifecycleSvc.Jobs().Get(context.Background(), jobID)
 	if err != nil {
 		return 0, 0, err
 	}
-	if m == nil {
+	if j == nil {
 		return 0, 0, fmt.Errorf("job %s not found", jobID)
 	}
-	rev := dbutil.IntFromMap(m, "revision")
-	att := dbutil.IntFromMap(m, "attempt")
-	return rev, att, nil
+	return j.Revision, j.Attempts, nil
 }
