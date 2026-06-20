@@ -4,39 +4,34 @@ import (
 	"context"
 	"errors"
 	"time"
+
+	"velox-server/internal/jobs"
 )
 
-// JobStatus is the storage-string state of a job in the queue. Spec §5 lists
-// the canonical set in conceptual form; here we map them to typed constants.
+// JobStatus is a type alias for the canonical jobs.Status. It exists so
+// existing callers importing store.JobStatus continue to compile without
+// changes while the type itself is unified at compile time with jobs.Status.
 //
-// The canonical set is Pending / Leased / Running / RetryWait / Succeeded /
-// Failed / Cancelled. Two legacy strings — Processing ("PROCESSING") and
-// Completed ("COMPLETED") — coexist on disk because older migrations and
-// HTTP-handler paths still write them. They are NOT aliases of Running /
-// Succeeded: they are distinct values. New code MUST use the canonical
-// constants; filters that must catch both old and new have to list both
-// values explicitly. ListByStatus does not collapse them — what is on disk
-// is the truth.
-type JobStatus string
+// All status constants are re-exported aliases from the jobs package.
+// New code should import and use jobs.Status / jobs.StatusPending directly.
+type JobStatus = jobs.Status
 
 const (
-	JobStatusPending   JobStatus = "PENDING"
-	JobStatusLeased    JobStatus = "LEASED"
-	JobStatusRunning   JobStatus = "RUNNING"
-	JobStatusRetryWait JobStatus = "RETRY_WAIT"
-	JobStatusSucceeded JobStatus = "SUCCEEDED"
-	JobStatusFailed    JobStatus = "FAILED"
-	JobStatusCancelled JobStatus = "CANCELLED"
+	JobStatusPending   = jobs.StatusPending
+	JobStatusLeased    = jobs.StatusLeased
+	JobStatusRunning   = jobs.StatusRunning
+	JobStatusRetryWait = jobs.StatusRetryWait
+	JobStatusSucceeded = jobs.StatusSucceeded
+	JobStatusFailed    = jobs.StatusFailed
+	JobStatusCancelled = jobs.StatusCancelled
 )
 
-// IsTerminal reports whether a job in this state has finished its lifecycle.
-func (s JobStatus) IsTerminal() bool {
-	switch s {
-	case JobStatusSucceeded, JobStatusFailed, JobStatusCancelled:
-		return true
-	}
-	return false
-}
+// IsTerminal delegates to the canonical jobs.Status.IsTerminal().
+// Kept as a package-level function for backward compatibility with
+// callers that use store.JobStatus.IsTerminal() — since JobStatus is
+// a type alias, jobs.Status.IsTerminal() is automatically available.
+// This comment documents the delegation; the method itself lives on
+// jobs.Status and is inherited via the type alias.
 
 // Job is a structural projection sufficient for read paths of the JobRepository.
 // It deliberately omits the per-job payload blob, history, and tail of legacy
@@ -202,6 +197,11 @@ type LeaseJobParams struct {
 }
 
 // JobRepository is the narrow write-aware contract for job persistence (spec §5).
+//
+// TODO(PR 2): this interface will be deprecated in favor of jobs.Repository
+// (see internal/jobs/repository.go). The concrete SQLiteJobRepository will
+// implement both interfaces during the migration window, then this one
+// will be removed once all callers have been migrated.
 //
 // Atomicity rule (spec): every multi-row operation stays a single method.
 // Callers never see BeginTx/Commit. Backends (SQLite, future Postgres) MUST

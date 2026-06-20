@@ -5,32 +5,36 @@ import (
 	"context"
 	"fmt"
 
+	"velox-server/internal/jobs"
 	"velox-server/internal/store"
 )
 
-// JobStatus represents the current state of a job.
-// Canonical statuses (7 total):
-//
-//	PENDING → LEASED → RUNNING → SUCCEEDED
-//	                   ↓
-//	              RETRY_WAIT → PENDING (retry)
-//	                   ↓
-//	              FAILED
-//	PENDING → CANCELLED
-type JobStatus string
+// JobStatus is a type alias for the canonical jobs.Status. It exists so
+// existing callers importing queue.JobStatus continue to compile without
+// changes while the type itself is unified at compile time with jobs.Status.
+// All status constants are re-exported aliases from the jobs package.
+// New code should import and use jobs.Status / jobs.StatusPending directly.
+type JobStatus = jobs.Status
 
 const (
-	StatusPending   JobStatus = "PENDING"
-	StatusLeased    JobStatus = "LEASED"
-	StatusRunning   JobStatus = "RUNNING"
-	StatusRetryWait JobStatus = "RETRY_WAIT"
-	StatusSucceeded JobStatus = "SUCCEEDED"
-	StatusFailed    JobStatus = "FAILED"
-	StatusCancelled JobStatus = "CANCELLED"
+	StatusPending   = jobs.StatusPending
+	StatusLeased    = jobs.StatusLeased
+	StatusRunning   = jobs.StatusRunning
+	StatusRetryWait = jobs.StatusRetryWait
+	StatusSucceeded = jobs.StatusSucceeded
+	StatusFailed    = jobs.StatusFailed
+	StatusCancelled = jobs.StatusCancelled
 )
 
-// Job represents a job in the queue (compatible with Python schema)
-type Job struct {
+// QueueItem is the scheduling representation of a job in the queue.
+// It carries the full operational state needed by HTTP handlers and
+// legacy consumers. New code should use jobs.Job for domain logic
+// and queue.QueueItem for scheduling/transport concerns.
+//
+// Job is retained as a type alias for backward compatibility with all
+// existing callers that reference queue.Job. New code should use
+// QueueItem directly.
+type QueueItem struct {
 	JobID        string      `json:"job_id"`
 	Status       JobStatus   `json:"status"`
 	VideoName    string      `json:"video_name,omitempty"`
@@ -75,6 +79,11 @@ type Job struct {
 
 	Payload map[string]interface{} `json:"-"`
 }
+
+// Job is a backward-compatible type alias for QueueItem.
+// All existing callers that reference queue.Job continue to compile.
+// New code should use QueueItem directly or the canonical jobs.Job domain model.
+type Job = QueueItem
 
 // JobHistoryEntry represents a status change in job history
 type JobHistoryEntry struct {
