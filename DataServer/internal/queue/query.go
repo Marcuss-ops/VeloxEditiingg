@@ -7,7 +7,6 @@ package queue
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"velox-server/internal/jobs"
@@ -35,53 +34,7 @@ func (q *QueryService) GetJob(ctx context.Context, jobID string) (*Job, error) {
 	if j == nil {
 		return nil, fmt.Errorf("job not found: %s", jobID)
 	}
-	return domainJobToQueueJob(j), nil
-}
-
-// TODO Ondata 4 Phase 2-4: delete (duplicated by jobs.view.go's parsePayloadJSON).
-// Kept here for incremental Phase 1 → Phase 4 sweep of queue.QueryService.
-// parsePayloadJSON converts a raw JSON payload string into a map.
-func parsePayloadJSON(raw string) map[string]interface{} {
-	if raw == "" || raw == "{}" {
-		return make(map[string]interface{})
-	}
-	var m map[string]interface{}
-	if err := json.Unmarshal([]byte(raw), &m); err != nil {
-		return make(map[string]interface{})
-	}
-	return m
-}
-
-// TODO Ondata 4 Phase 2-4: delete (replaced by jobs.view.go's ToQueueItem).
-// Kept here for incremental Phase 1 → Phase 4 sweep of queue.QueryService.
-//
-// domainJobToQueueJob converts a canonical jobs.Job into a queue.Job
-// (scheduling/transport projection). Fields not present in the domain
-// model (history, logs, slot_data, PayloadJSON) are left zero-valued;
-// callers that need the full MapToJob hydration should go through the
-// eventStore legacy path (which has been dropped; use SQLiteStore direct).
-func domainJobToQueueJob(j *jobs.Job) *Job {
-	if j == nil {
-		return nil
-	}
-	return &Job{
-		JobID:       j.ID,
-		Status:      JobStatus(j.Status),
-		VideoName:   j.VideoName,
-		ProjectID:   j.ProjectID,
-		WorkerName:  j.WorkerID,
-		AssignedTo:  j.WorkerID,
-		LeaseID:     j.LeaseID,
-		RetryCount:  j.Attempts,
-		Attempt:     j.Attempts,
-		MaxRetries:  j.MaxRetries,
-		RunID:       j.RunID,
-		CreatedAt:   j.CreatedAt,
-		UpdatedAt:   j.UpdatedAt,
-		StartedAt:   j.StartedAt,
-		CompletedAt: j.CompletedAt,
-		Payload:     parsePayloadJSON(j.Payload),
-	}
+	return jobs.ToQueueItem(j), nil
 }
 
 // GetJobPayload returns the job payload with enriched fields.
@@ -164,7 +117,7 @@ func (q *QueryService) GetJobAsMap(ctx context.Context, jobID string) (map[strin
 	return result, nil
 }
 
-// list Jobs calls the canonical jobs.Reader.List with the converted filter.
+// listJobs calls the canonical jobs.Reader.List with the converted filter.
 // statuses is a slice of canonical jobs.Status names. Empty slice means
 // "no filter" (return all jobs).
 func (q *QueryService) listJobs(ctx context.Context, statuses []jobs.Status) ([]*Job, error) {
@@ -174,7 +127,7 @@ func (q *QueryService) listJobs(ctx context.Context, statuses []jobs.Status) ([]
 	}
 	result := make([]*Job, 0, len(domainJobs))
 	for i := range domainJobs {
-		result = append(result, domainJobToQueueJob(&domainJobs[i]))
+		result = append(result, jobs.ToQueueItem(&domainJobs[i]))
 	}
 	return result, nil
 }

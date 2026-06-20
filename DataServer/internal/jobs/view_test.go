@@ -216,15 +216,15 @@ func TestFormatStatsWireShapeSnapshot(t *testing.T) {
 
 func TestParsePayloadJSONEdgeCases(t *testing.T) {
 	for _, raw := range []string{"", "{}", "not-json", "{\"x\":null}"} {
-		got := parsePayloadJSON(raw)
+		got := ParsePayloadJSON(raw)
 		// Acceptable: empty map OR map with x→null (both behave the same)
 		if raw == "" || raw == "{}" || raw == "not-json" {
 			if len(got) != 0 {
-				t.Errorf("parsePayloadJSON(%q): expected empty map, got %v", raw, got)
+				t.Errorf("ParsePayloadJSON(%q): expected empty map, got %v", raw, got)
 			}
 		}
 	}
-	got := parsePayloadJSON(`{"foo":"bar","n":42,"nested":{"k":"v"}}`)
+	got := ParsePayloadJSON(`{"foo":"bar","n":42,"nested":{"k":"v"}}`)
 	if got["foo"] != "bar" {
 		t.Errorf("foo=%v, want bar", got["foo"])
 	}
@@ -234,9 +234,8 @@ func TestParsePayloadJSONEdgeCases(t *testing.T) {
 }
 
 // TestToQueueItemWireShapeSnapshot locks the JSON wire shape produced by
-// ToQueueItem so the Phase 2 sweep (which removes queue.domainJobToQueueJob)
-// cannot silently drift. If this test ever fails, either ToQueueItem drifted
-// OR the expectations here must be updated to match an EXPLICIT, reviewed
+// ToQueueItem. If this test ever fails, either ToQueueItem drifted OR the
+// expectations here must be updated to match an EXPLICIT, reviewed
 // wire-format change.
 //
 // NOTE: We deliberately test only NON-TIME fields here. QueueItem's time
