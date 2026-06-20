@@ -112,8 +112,6 @@ type FileQueue struct {
 	maxRetries int
 	lifecycle  *LifecycleService
 	query      *QueryService
-
-	eventLogger func(jobID, eventType string, extra map[string]interface{})
 }
 
 // FileQueueConfig holds configuration for the file queue
@@ -143,17 +141,6 @@ func NewFileQueue(cfg *FileQueueConfig, lifecycle *LifecycleService, query *Quer
 	return q, nil
 }
 
-// SetEventLogger sets a callback for job events
-func (q *FileQueue) SetEventLogger(logger func(jobID, eventType string, extra map[string]interface{})) {
-	q.eventLogger = logger
-}
-
-func (q *FileQueue) logEvent(jobID, eventType string, extra map[string]interface{}) {
-	if q.eventLogger != nil {
-		q.eventLogger(jobID, eventType, extra)
-	}
-}
-
 // ── Mutation methods (production callers) ──
 
 func (q *FileQueue) SubmitJob(ctx context.Context, jobID string, payload map[string]interface{}) error {
@@ -179,10 +166,6 @@ func (q *FileQueue) SubmitJob(ctx context.Context, jobID string, payload map[str
 	if err := q.lifecycle.Repo().CreateJob(ctx, params); err != nil {
 		return fmt.Errorf("submit job: %w", err)
 	}
-	q.logEvent(jobID, "created", map[string]interface{}{
-		"project_id": projectID,
-		"video_name": videoName,
-	})
 	return nil
 }
 
@@ -201,11 +184,7 @@ func (q *FileQueue) Stats(ctx context.Context) (map[string]int64, error) {
 }
 
 func (q *FileQueue) DeleteJob(ctx context.Context, jobID string) error {
-	if err := q.query.DeleteJob(ctx, jobID); err != nil {
-		return err
-	}
-	q.logEvent(jobID, "deleted", nil)
-	return nil
+	return q.query.DeleteJob(ctx, jobID)
 }
 
 // ── Accessors ──

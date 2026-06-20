@@ -26,27 +26,18 @@ func NewQueryService(eventStore store.EventStore, reader jobs.Reader) *QueryServ
 	return &QueryService{eventStore: eventStore, reader: reader}
 }
 
-// GetJob retrieves a job by ID.
-// Uses jobs.Reader (canonical domain path) when available; falls back to
-// the legacy map-based eventStore path for backward compatibility.
+// GetJob retrieves a job by ID via the canonical domain reader.
+// The reader is mandatory (non-nil) per NewQueryService; the legacy
+// map-based eventStore fallback has been removed (Batch 2c).
 func (q *QueryService) GetJob(ctx context.Context, jobID string) (*Job, error) {
-	// Prefer the canonical domain reader when wired (Ondata 3 PR3).
-	if q.reader != nil {
-		j, err := q.reader.Get(ctx, jobID)
-		if err != nil {
-			return nil, fmt.Errorf("job not found: %s: %w", jobID, err)
-		}
-		if j == nil {
-			return nil, fmt.Errorf("job not found: %s", jobID)
-		}
-		return domainJobToQueueJob(j), nil
-	}
-	// Legacy path: map-based read via eventStore.
-	m, err := q.eventStore.GetJob(ctx, jobID)
+	j, err := q.reader.Get(ctx, jobID)
 	if err != nil {
+		return nil, fmt.Errorf("job not found: %s: %w", jobID, err)
+	}
+	if j == nil {
 		return nil, fmt.Errorf("job not found: %s", jobID)
 	}
-	return MapToJob(m), nil
+	return domainJobToQueueJob(j), nil
 }
 
 // parsePayloadJSON converts a raw JSON payload string into a map.
@@ -142,31 +133,18 @@ func (q *QueryService) GetRunningJobs(ctx context.Context) ([]*Job, error) {
 }
 
 func (q *QueryService) listJobs(ctx context.Context, statuses []string) ([]*Job, error) {
-	// Use canonical domain reader when available (Ondata 3 PR3 final).
-	if q.reader != nil {
-		js := make([]jobs.Status, len(statuses))
-		for i, s := range statuses {
-			js[i] = jobs.Status(s)
-		}
-		domainJobs, err := q.reader.List(ctx, jobs.Filter{Statuses: js, Limit: 1000})
-		if err != nil {
-			return nil, err
-		}
-		result := make([]*Job, 0, len(domainJobs))
-		for _, j := range domainJobs {
-			j := j // capture
-			result = append(result, domainJobToQueueJob(&j))
-		}
-		return result, nil
+	js := make([]jobs.Status, len(statuses))
+	for i, s := range statuses {
+		js[i] = jobs.Status(s)
 	}
-	// Legacy path: map-based read via eventStore.
-	jobs, err := q.eventStore.ListJobsByStatus(statuses, 1000)
+	domainJobs, err := q.reader.List(ctx, jobs.Filter{Statuses: js, Limit: 1000})
 	if err != nil {
 		return nil, err
 	}
-	result := make([]*Job, 0, len(jobs))
-	for _, m := range jobs {
-		result = append(result, MapToJob(m))
+	result := make([]*Job, 0, len(domainJobs))
+	for _, j := range domainJobs {
+		j := j // capture
+		result = append(result, domainJobToQueueJob(&j))
 	}
 	return result, nil
 }
