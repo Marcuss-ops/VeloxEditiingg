@@ -29,6 +29,7 @@ using velox::firstAvailableImage;
 
 static void emitProgress(int percent, int scene, int totalScenes, const char* stage) {
     std::cerr << "{\"progress\":" << percent
+              << ",\"percent\":" << percent
               << ",\"scene\":" << scene
               << ",\"total_scenes\":" << totalScenes
               << ",\"stage\":\"" << stage << "\"}" << std::endl;

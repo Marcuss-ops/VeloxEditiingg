@@ -1,23 +1,43 @@
 # Velox Video Engine C++
 
-Motore C++ nativo per la composizione video Velox. Scomposto in **building block CLI indipendenti**,
-ognuno eseguibile singolarmente per massima riutilizzabilità tra endpoint.
+Motore C++ nativo per la composizione video Velox. Supporta due percorsi:
+
+1. **`--render --plan <path>`** — Percorso nuovo: consuma un `RenderPlan` JSON (contratto canonico).
+2. **`--full-video --request <path>`** — Percorso legacy: consuma un `VideoEngineRequest` JSON.
 
 ## Struttura
 
 ```
 video-engine-cpp/
 ├── src/
-│   ├── main.cpp              # Dispatcher CLI + implementazione sotto-comandi
-│   └── video_builder.cpp/.hpp# Parsing scene/clip da JSON (namespace velox)
+│   ├── main.cpp                  # Dispatcher CLI
+│   ├── cmd_full_video.cpp        # Pipeline legacy (--full-video)
+│   ├── video_builder.cpp/.hpp    # Parsing scene/clip da JSON legacy
+│   ├── app/
+│   │   └── commands.cpp          # Comando --render
+│   ├── core/
+│   │   └── render_engine.cpp     # Motore di rendering generico
+│   ├── plan/
+│   │   └── render_plan_parser.cpp# Parser RenderPlan da JSON
+│   └── services/
+│       ├── file_utils.cpp        # I/O, download, Drive
+│       └── media_utils.cpp       # FFmpeg wrappers
 ├── include/
-│   ├── video_contract.hpp     # Contratto video (struct Go↔C++)
-│   ├── json_utils.hpp         # Parsing JSON helper (namespace velox::json)
-│   ├── file_utils.hpp         # I/O file, download, Drive (namespace velox::file)
-│   └── media_utils.hpp        # Helpers FFmpeg/media (namespace velox::media)
-├── schemas/                   # JSON schema dei contratti
-│   ├── colosseo_scene_video.json
-│   └── smoke_video_to_video.json
+│   ├── json_utils.hpp            # Parsing JSON helper (regex-based)
+│   ├── video_contract.hpp        # Contratto legacy (struct Go<->C++)
+│   └── velox/
+│       ├── core/
+│       │   └── render_engine.hpp # RenderEngine + RenderResult
+│       ├── plan/
+│       │   ├── render_plan.hpp   # Modello RenderPlan V1
+│       │   └── render_plan_parser.hpp
+│       └── services/
+│           ├── file_utils.hpp
+│           └── media_utils.hpp   # SceneSegmentParams + FFmpeg API
+├── schemas/
+│   ├── render_plan_v1.json       # JSON Schema per RenderPlan V1
+│   ├── colosseo_scene_video.json # Esempio legacy scene
+│   └── smoke_video_to_video.json # Esempio legacy clip
 ├── CMakeLists.txt
 └── README.md
 ```
@@ -30,111 +50,97 @@ cmake .. -DCMAKE_BUILD_TYPE=Release
 cmake --build . -j$(nproc)
 ```
 
-## Sotto-comandi CLI
+## RenderPlan V1 (`--render`)
 
-Ogni sotto-comando stampa JSON su **stdout** e log/errori su **stderr**.
-Exit code: `0` = successo, `1` = errore.
+Percorso canonico per tutti gli endpoint. Il piano JSON descrive cosa renderizzare:
+
+```json
+{
+  "version": 1,
+  "job_id": "abc123",
+  "canvas": { "width": 1080, "height": 1920, "fps": 30 },
+  "timeline": [
+    {
+      "source": { "type": "image", "url": "https://..." },
+      "duration_seconds": 5.0,
+      "transform": { "scale_mode": "cover", "ken_burns_effect": true }
+    },
+    {
+      "source": { "type": "color", "color_hex": "#FF0000" },
+      "duration_seconds": 2.0
+    }
+  ],
+  "audio_tracks": [
+    { "source_url": "https://...", "volume": 0.8, "start_time_offset": 1.0 }
+  ],
+  "output_path": "/tmp/output.mp4"
+}
+```
+
+### Campi supportati
+
+| Campo | Descrizione |
+|---|---|
+| `canvas.width/height/fps` | Dimensioni e frame-rate del video finale |
+| `timeline[].source.type` | `image`, `video`, o `color` |
+| `timeline[].source.url` | URL dell'asset (richiesto per image/video) |
+| `timeline[].source.color_hex` | Colore esadecimale (richiesto per color) |
+| `timeline[].duration_seconds` | Durata del segmento |
+| `timeline[].transform.scale_mode` | `cover` (default), `contain`, `stretch` |
+| `timeline[].transform.ken_burns_effect` | `true` per zoompan, `false` per fermo |
+| `audio_tracks[].volume` | Volume (0-2, default 1.0) |
+| `audio_tracks[].start_time_offset` | Ritardo in secondi prima che la traccia inizi |
+
+### Progress protocol
+
+Entrambi i percorsi (`--render` e `--full-video`) emettono progress JSON su stderr:
+
+```json
+{"progress": 75, "percent": 75, "stage": "concatenating"}
+```
+
+Il campo `percent` è quello che il worker Go legge per il callback.
+
+## Sotto-comandi CLI legacy
 
 ### `--full-video` — Pipeline completa
-
-Combina tutti i blocchi: scarica asset, costruisce segmenti (scene o clip), concatena, muxa audio.
 
 ```bash
 ./velox_video_engine --full-video --request /path/to/payload.json
 ```
 
-Il payload JSON (`video_contract.hpp` → `SceneVideoRequest`) deve contenere almeno `output_path`.
-
 ### `--download-asset` — Scarica asset
-
-Scarica un file da URL (supporta Google Drive).
 
 ```bash
 ./velox_video_engine --download-asset --url "https://..." --dest /tmp/asset.mp4
-# Output: {"success":true,"url":"https://...","dest":"/tmp/asset.mp4"}
 ```
 
 ### `--probe-media` — Rileva durata
 
-Rileva la durata di un file multimediale tramite ffprobe.
-
 ```bash
 ./velox_video_engine --probe-media /tmp/voiceover.mp3
-# Output: {"success":true,"path":"/tmp/voiceover.mp3","duration_seconds":127.5}
-# Exit 1 se il file non esiste o ffprobe fallisce
 ```
 
 ### `--build-scene-segment` — Segmento da immagine
 
-Genera un segmento video da un'immagine con effetto zoompan Ken Burns.
-
 ```bash
 ./velox_video_engine --build-scene-segment --image /tmp/scene.jpg --duration 5.0 --out /tmp/segment.mp4
-# Output: {"success":true,"out":"/tmp/segment.mp4"}
 ```
 
-### `--build-clip-segment` — Segmento da clip video
-
-Genera un segmento video da un clip (scalato/croppato a 1920×1080).
+### `--build-clip-segment` — Segmento da clip
 
 ```bash
 ./velox_video_engine --build-clip-segment --clip /tmp/intro.mp4 --duration 4.0 --out /tmp/segment.mp4
-# Output: {"success":true,"out":"/tmp/segment.mp4"}
 ```
 
 ### `--concat-segments` — Concatena segmenti
 
-Concatena segmenti video usando un file lista (una path per riga).
-
 ```bash
-echo "/tmp/seg1.mp4" > /tmp/list.txt
-echo "/tmp/seg2.mp4" >> /tmp/list.txt
 ./velox_video_engine --concat-segments --list /tmp/list.txt --out /tmp/merged.mp4
-# Output: {"success":true,"out":"/tmp/merged.mp4","segments":2}
 ```
 
 ### `--mux-audio` — Muxa audio su video
 
-Aggiunge una traccia audio a un video (codifica AAC, output mp4).
-
 ```bash
 ./velox_video_engine --mux-audio --video /tmp/video_only.mp4 --audio /tmp/voiceover.mp3 --out /tmp/final.mp4
-# Output: {"success":true,"out":"/tmp/final.mp4"}
-```
-
-### `--help` — Guida
-
-Mostra la lista completa dei sotto-comandi e opzioni.
-
-```bash
-./velox_video_engine --help
-```
-
-## Esempi di composizione
-
-Nuovo endpoint "solo scene senza audio":
-
-```bash
-# 1. Scarica immagini
-for img in https://...; do
-    ./velox_video_engine --download-asset --url "$img" --dest "/tmp/scene_$i.jpg"
-done
-# 2. Genera segmenti
-for i in 0 1 2; do
-    ./velox_video_engine --build-scene-segment --image "/tmp/scene_$i.jpg" --duration 5 --out "/tmp/seg_$i.mp4"
-done
-# 3. Concatena
-echo "/tmp/seg_0.mp4" > /tmp/list.txt
-echo "/tmp/seg_1.mp4" >> /tmp/list.txt
-echo "/tmp/seg_2.mp4" >> /tmp/list.txt
-./velox_video_engine --concat-segments --list /tmp/list.txt --out /tmp/output.mp4
-```
-
-Nuovo endpoint "solo clip":
-
-```bash
-# Salta download scene, salta mux audio
-./velox_video_engine --build-clip-segment --clip intro.mp4 --duration 4 --out seg0.mp4
-./velox_video_engine --build-clip-segment --clip main.mp4  --duration 10 --out seg1.mp4
-echo "... list ..." | ./velox_video_engine --concat-segments --list /dev/stdin --out output.mp4
 ```

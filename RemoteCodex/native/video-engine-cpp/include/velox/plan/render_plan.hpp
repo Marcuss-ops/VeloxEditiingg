@@ -29,7 +29,6 @@ struct TransformSpec {
 
 struct TimelineItem {
     MediaSource source;
-    double start_seconds{0.0};
     double duration_seconds{0.0};
     TransformSpec transform;
 };

@@ -87,9 +87,23 @@ func (w *VideoGenerationWorkflow) ProcessSingleVideo(ctx context.Context,
 
 	statusCallback("Starting video processing", false)
 
-	if err := w.runNativeCxxEngine(ctx, tempDir, input); err != nil {
-		return "", err
+	// Try the new --render path first
+	plan := CompileRenderPlan("", input, input.OutputPath)
+	if plan != nil && len(plan.Timeline) > 0 {
+		w.logger.Info("Using new --render path with %d timeline items", len(plan.Timeline))
+		if err := w.runRenderPlan(ctx, tempDir, plan); err != nil {
+			w.logger.Warn("New --render path failed (%v), falling back to legacy --full-video", err)
+			if err2 := w.runNativeCxxEngine(ctx, tempDir, input); err2 != nil {
+				return "", err2
+			}
+		}
+	} else {
+		w.logger.Info("No renderable timeline, using legacy --full-video path")
+		if err := w.runNativeCxxEngine(ctx, tempDir, input); err != nil {
+			return "", err
+		}
 	}
+
 	w.logger.Info("Native C++ video engine completed output at %s", input.OutputPath)
 
 	return input.OutputPath, nil

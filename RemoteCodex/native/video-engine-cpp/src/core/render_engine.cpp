@@ -14,7 +14,27 @@ namespace velox::core {
 
 namespace {
     void reportProgress(int percent, const std::string& stage) {
-        std::cerr << "{\"progress\":" << percent << ",\"stage\":\"" << stage << "\"}" << std::endl;
+        std::cerr << "{\"progress\":" << percent
+                  << ",\"percent\":" << percent
+                  << ",\"stage\":\"" << stage << "\"}" << std::endl;
+    }
+
+    media::SceneSegmentParams makeParams(const plan::CanvasSpec& canvas, const plan::TransformSpec& transform, const std::string& color_hex = "") {
+        media::SceneSegmentParams p;
+        p.width = canvas.width;
+        p.height = canvas.height;
+        p.fps = canvas.fps;
+        p.ken_burns = transform.ken_burns_effect;
+        p.scale_mode = transform.scale_mode;
+        p.color_hex = color_hex;
+        return p;
+    }
+
+    std::string extractColorHex(const plan::MediaSource& source) {
+        if (std::holds_alternative<plan::ColorSource>(source)) {
+            return std::get<plan::ColorSource>(source).color_hex;
+        }
+        return "";
     }
 }
 
@@ -24,7 +44,6 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
 
     reportProgress(0, "starting");
 
-    // Creazione workspace directory temporanea
     fs::path workBase = fs::temp_directory_path() / "velox_video_engine_plan";
     fs::path workDir = file::makeTempDir(workBase, "plan_job_");
     if (workDir.empty()) {
@@ -42,41 +61,37 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
         }
     } cleanup{workDir};
 
-    // Assicurarsi che la directory finale esista
     fs::path outPath(plan.output_path);
     fs::create_directories(outPath.parent_path());
 
-    // 1. Download degli asset (Sia timeline che audio)
+    // 1. Build timeline segments
     reportProgress(10, "resolving_assets");
-    
-    // Per velocizzare, scarichiamo sequenzialmente gli asset per questa implementazione.
-    // In produzione o refactoring successivi si può parallelizzare il download.
+
     std::vector<fs::path> segmentPaths;
     segmentPaths.reserve(plan.timeline.size());
 
     for (size_t i = 0; i < plan.timeline.size(); ++i) {
         const auto& item = plan.timeline[i];
         fs::path segmentOut = workDir / ("segment_" + std::to_string(i) + ".mp4");
-        
+        auto params = makeParams(plan.canvas, item.transform, extractColorHex(item.source));
+
         bool built = false;
         if (std::holds_alternative<plan::ImageSource>(item.source)) {
             auto src = std::get<plan::ImageSource>(item.source);
             fs::path localImg = workDir / ("image_" + std::to_string(i) + ".jpg");
             if (file::downloadAsset(src.url, localImg, src.cache_key)) {
-                built = media::buildSceneSegment(localImg, segmentOut, item.duration_seconds);
+                built = media::buildSceneSegment(localImg, segmentOut, item.duration_seconds, params);
             } else {
-                // Fallback sul colore nero se l'immagine non si scarica
-                built = media::buildSceneSegment("", segmentOut, item.duration_seconds);
+                built = media::buildSceneSegment("", segmentOut, item.duration_seconds, params);
             }
         } else if (std::holds_alternative<plan::VideoSource>(item.source)) {
             auto src = std::get<plan::VideoSource>(item.source);
             fs::path localVid = workDir / ("video_" + std::to_string(i) + ".mp4");
             if (file::downloadAsset(src.url, localVid, src.cache_key)) {
-                built = media::buildVideoSegment(localVid, segmentOut, item.duration_seconds);
+                built = media::buildVideoSegment(localVid, segmentOut, item.duration_seconds, params);
             }
         } else if (std::holds_alternative<plan::ColorSource>(item.source)) {
-            // Genera segmento nero o da colore fisso (fallback nero in buildSceneSegment senza img)
-            built = media::buildSceneSegment("", segmentOut, item.duration_seconds);
+            built = media::buildSceneSegment("", segmentOut, item.duration_seconds, params);
         }
 
         if (!built) {
@@ -84,12 +99,12 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
             return result;
         }
         segmentPaths.push_back(segmentOut);
-        
+
         int pct = 10 + static_cast<int>((static_cast<double>(i + 1) / plan.timeline.size()) * 60);
         reportProgress(pct, "building_segments");
     }
 
-    // 2. Concatena i segmenti video
+    // 2. Concatenate video segments
     reportProgress(75, "concatenating");
     fs::path videoOnly = workDir / "video_only.mp4";
     if (!media::concatSegments(segmentPaths, videoOnly, workDir)) {
@@ -97,14 +112,30 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
         return result;
     }
 
-    // 3. Scarica e muxa le tracce audio (Supporta al momento solo 1 traccia audio come da engine attuale)
+    // 3. Mix audio tracks (supports multi-track with volume/offset)
     reportProgress(85, "muxing_audio");
     if (!plan.audio_tracks.empty()) {
-        fs::path localAudio = workDir / "audio_track_0.mp3";
-        const auto& track = plan.audio_tracks.front();
-        if (file::downloadAsset(track.source_url, localAudio)) {
+        // Download all audio tracks first
+        std::vector<std::pair<fs::path, const plan::AudioTrack*>> downloadedTracks;
+        for (size_t t = 0; t < plan.audio_tracks.size(); ++t) {
+            const auto& track = plan.audio_tracks[t];
+            fs::path localAudio = workDir / ("audio_track_" + std::to_string(t) + ".mp3");
+            if (file::downloadAsset(track.source_url, localAudio)) {
+                downloadedTracks.emplace_back(localAudio, &track);
+            } else {
+                std::cerr << "warning: failed to download audio track " << t << "\n";
+            }
+        }
+
+        if (downloadedTracks.empty()) {
+            std::cerr << "warning: no audio tracks downloaded, exporting video without audio\n";
+            file::copyFile(videoOnly, outPath);
+            result.success = true;
+        } else if (downloadedTracks.size() == 1) {
+            // Single track: apply volume if needed, mux directly
             fs::path finalMuxed = workDir / "final_muxed.mp4";
-            if (media::muxAudio(videoOnly, localAudio, finalMuxed)) {
+            double vol = downloadedTracks[0].second->volume;
+            if (media::muxAudio(videoOnly, downloadedTracks[0].first, finalMuxed, vol)) {
                 file::copyFile(finalMuxed, outPath);
                 result.success = true;
             } else {
@@ -112,9 +143,50 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
                 return result;
             }
         } else {
-            std::cerr << "warning: failed to download audio track, exporting video without audio\n";
-            file::copyFile(videoOnly, outPath);
-            result.success = true;
+            // Multiple tracks: use ffmpeg amix to merge them
+            // First, mix all audio into a single track
+            std::ostringstream audioFilter;
+            std::ostringstream audioInputs;
+            for (size_t t = 0; t < downloadedTracks.size(); ++t) {
+                audioInputs << " -i " << file::shellQuote(downloadedTracks[t].first.string());
+                if (t > 0) audioFilter << ";";
+                double vol = downloadedTracks[t].second->volume;
+                double offset = downloadedTracks[t].second->start_time_offset;
+                audioFilter << "[" << t << ":a]volume=" << vol;
+                if (offset > 0.0) {
+                    audioFilter << ",adelay=" << static_cast<int>(offset * 1000) << "|" << static_cast<int>(offset * 1000);
+                }
+                audioFilter << "[a" << t << "]";
+            }
+            int n = static_cast<int>(downloadedTracks.size());
+            audioFilter << ";";
+            for (int t = 0; t < n; ++t) {
+                audioFilter << "[a" << t << "]";
+            }
+            audioFilter << "amix=inputs=" << n << ":duration=longest[aout]";
+
+            fs::path mixedAudio = workDir / "mixed_audio.mp3";
+            std::ostringstream mixCmd;
+            mixCmd << "ffmpeg -y -hide_banner -loglevel error"
+                   << audioInputs.str()
+                   << " -filter_complex " << file::shellQuote(audioFilter.str())
+                   << " -map \"[aout]\" -c:a aac "
+                   << file::shellQuote(mixedAudio.string());
+
+            if (file::runCommand(mixCmd.str())) {
+                fs::path finalMuxed = workDir / "final_muxed.mp4";
+                if (media::muxAudio(videoOnly, mixedAudio, finalMuxed)) {
+                    file::copyFile(finalMuxed, outPath);
+                    result.success = true;
+                } else {
+                    result.error = "failed to mux mixed audio";
+                    return result;
+                }
+            } else {
+                std::cerr << "warning: audio mix failed, exporting video without audio\n";
+                file::copyFile(videoOnly, outPath);
+                result.success = true;
+            }
         }
     } else {
         file::copyFile(videoOnly, outPath);

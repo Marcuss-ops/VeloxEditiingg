@@ -38,7 +38,6 @@ std::optional<RenderPlan> parseRenderPlan(const std::string& jsonStr) {
     if (!timelineBlock.empty()) {
         for (const auto& itemStr : ju::splitTopLevelObjects(timelineBlock)) {
             TimelineItem item;
-            item.start_seconds = ju::extractJsonNumberValue(itemStr, "start_seconds", 0.0);
             item.duration_seconds = ju::extractJsonNumberValue(itemStr, "duration_seconds", 0.0);
             
             // Transform
