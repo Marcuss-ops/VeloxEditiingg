@@ -45,11 +45,7 @@ std::optional<RenderPlan> parseRenderPlan(const std::string& jsonStr) {
             if (item.transform.scale_mode.empty()) {
                 item.transform.scale_mode = "cover";
             }
-            // Per i booleani, controlliamo se la stringa contiene "true"
-            std::string kbStr = ju::extractJsonString(itemStr, "ken_burns_effect"); // usiamo extractJsonString per prenderlo grezzo
-            // Se non trova con string, proviamo ad estrarre grezzo o facciamo fallback
-            item.transform.ken_burns_effect = (itemStr.find("\"ken_burns_effect\"\\s*:\\s*true") != std::string::npos || 
-                                                itemStr.find("\"ken_burns_effect\":true") != std::string::npos);
+            item.transform.slow_zoom = ju::extractJsonBoolValue(itemStr, "slow_zoom", true);
 
             // Source
             std::string sourceBlock = ju::extractArrayBlock(itemStr, "source");

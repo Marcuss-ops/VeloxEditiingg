@@ -24,7 +24,7 @@ using MediaSource = std::variant<ImageSource, VideoSource, ColorSource>;
 
 struct TransformSpec {
     std::string scale_mode{"cover"}; // cover, contain, stretch
-    bool ken_burns_effect{false};
+    bool slow_zoom{true};
 };
 
 struct TimelineItem {

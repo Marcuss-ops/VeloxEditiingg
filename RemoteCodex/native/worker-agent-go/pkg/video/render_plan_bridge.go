@@ -19,12 +19,12 @@ import (
 
 // CppRenderPlan matches the C++ RenderPlan V1 model (render_plan.hpp).
 type CppRenderPlan struct {
-	Version     int              `json:"version"`
-	JobID       string           `json:"job_id"`
-	Canvas      CanvasSpec       `json:"canvas"`
-	Timeline    []TimelineItem   `json:"timeline"`
-	AudioTracks []AudioTrack     `json:"audio_tracks"`
-	OutputPath  string           `json:"output_path"`
+	Version     int            `json:"version"`
+	JobID       string         `json:"job_id"`
+	Canvas      CanvasSpec     `json:"canvas"`
+	Timeline    []TimelineItem `json:"timeline"`
+	AudioTracks []AudioTrack   `json:"audio_tracks"`
+	OutputPath  string         `json:"output_path"`
 }
 
 // CanvasSpec matches C++ CanvasSpec.
@@ -44,8 +44,8 @@ type MediaSource struct {
 
 // TransformSpec matches C++ TransformSpec.
 type TransformSpec struct {
-	ScaleMode      string `json:"scale_mode,omitempty"`
-	KenBurnsEffect *bool  `json:"ken_burns_effect,omitempty"`
+	ScaleMode string `json:"scale_mode,omitempty"`
+	SlowZoom  *bool  `json:"slow_zoom,omitempty"`
 }
 
 // TimelineItem matches C++ TimelineItem.
@@ -62,9 +62,11 @@ type AudioTrack struct {
 	StartTimeOffset float64 `json:"start_time_offset,omitempty"`
 }
 
-// CompileRenderPlan converts a legacy VideoEngineRequest into a CppRenderPlan.
+// CompileLegacyRenderJobParams converts a legacy VideoEngineRequest into a CppRenderPlan.
+// This adapter exists only to migrate existing endpoints to the RenderPlan path.
+// New endpoints should implement PipelineCompiler instead.
 // Returns nil if the input cannot be meaningfully compiled (e.g. no scenes/clips).
-func CompileRenderPlan(jobID string, input contract.RenderJobParams, outputPath string) *CppRenderPlan {
+func CompileLegacyRenderJobParams(jobID string, input contract.RenderJobParams, outputPath string) *CppRenderPlan {
 	if jobID == "" {
 		b := make([]byte, 8)
 		rand.Read(b)
@@ -142,32 +144,49 @@ func CompileRenderPlan(jobID string, input contract.RenderJobParams, outputPath 
 		if strings.TrimSpace(input.AudioPath) != "" {
 			voiceoverDuration = detectAudioDuration(strings.TrimSpace(input.AudioPath))
 		}
-		if voiceoverDuration <= 0 {
-			// Check if scenes have explicit durations
-			for _, s := range scenes {
-				if s.DurationSeconds > 0 {
-					voiceoverDuration += s.DurationSeconds
-				}
+
+		// Sum explicit scene durations for scenes that don't have one
+		explicitScenes := 0
+		explicitTotal := 0.0
+		for _, s := range scenes {
+			if s.DurationSeconds > 0 {
+				explicitScenes++
+				explicitTotal += s.DurationSeconds
 			}
 		}
 
+		// Per-scene duration: distribute voiceoverDuration only among scenes without explicit duration
+		unsetScenes := len(imagePaths) - explicitScenes
+		if unsetScenes < 0 {
+			unsetScenes = 0
+		}
+		unsetDuration := voiceoverDuration - explicitTotal
+		if unsetDuration < 0 {
+			unsetDuration = 0
+		}
 		perSceneDuration := 0.0
-		if len(imagePaths) > 0 && voiceoverDuration > 0 {
-			perSceneDuration = voiceoverDuration / float64(len(imagePaths))
+		if unsetScenes > 0 && unsetDuration > 0 {
+			perSceneDuration = unsetDuration / float64(unsetScenes)
 		}
 
 		for i, imgPath := range imagePaths {
-			dur := perSceneDuration
-			if dur <= 0 && i < len(scenes) && scenes[i].DurationSeconds > 0 {
+			dur := 0.0
+			// Priority 1: explicit scene duration
+			if i < len(scenes) && scenes[i].DurationSeconds > 0 {
 				dur = scenes[i].DurationSeconds
 			}
+			// Priority 2: distributed voiceover duration
+			if dur <= 0 && perSceneDuration > 0 {
+				dur = perSceneDuration
+			}
+			// Priority 3: fallback
 			if dur <= 0 {
-				dur = 5.0 // fallback
+				dur = 5.0
 			}
 			plan.Timeline = append(plan.Timeline, TimelineItem{
 				Source:          MediaSource{Type: "image", URL: imgPath},
 				DurationSeconds: dur,
-				Transform:       &TransformSpec{ScaleMode: "cover", KenBurnsEffect: boolPtr(true)},
+				Transform:       &TransformSpec{ScaleMode: "cover", SlowZoom: boolPtr(true)},
 			})
 		}
 	}
@@ -190,7 +209,6 @@ func CompileRenderPlan(jobID string, input contract.RenderJobParams, outputPath 
 func boolPtr(b bool) *bool { return &b }
 
 func detectAudioDuration(path string) float64 {
-	// Use ffprobe to detect duration; on failure return 0
 	out, err := exec.Command("ffprobe", "-v", "error", "-show_entries", "format=duration",
 		"-of", "default=noprint_wrappers=1:nokey=1", path).Output()
 	if err != nil {

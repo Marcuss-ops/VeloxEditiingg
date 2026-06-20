@@ -89,9 +89,9 @@
                 "enum": ["cover", "contain", "stretch"],
                 "default": "cover"
               },
-              "ken_burns_effect": {
+              "slow_zoom": {
                 "type": "boolean",
-                "default": false
+                "default": true
               }
             }
           }

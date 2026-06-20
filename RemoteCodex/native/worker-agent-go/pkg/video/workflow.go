@@ -88,7 +88,7 @@ func (w *VideoGenerationWorkflow) ProcessSingleVideo(ctx context.Context,
 	statusCallback("Starting video processing", false)
 
 	// Try the new --render path first
-	plan := CompileRenderPlan("", input, input.OutputPath)
+	plan := CompileLegacyRenderJobParams("", input, input.OutputPath)
 	if plan != nil && len(plan.Timeline) > 0 {
 		w.logger.Info("Using new --render path with %d timeline items", len(plan.Timeline))
 		if err := w.runRenderPlan(ctx, tempDir, plan); err != nil {

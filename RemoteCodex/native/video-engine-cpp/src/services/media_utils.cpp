@@ -150,8 +150,15 @@ bool buildSceneSegment(const fs::path& imagePath, const fs::path& segmentPath, d
         }
 
         std::string filter;
-        if (params.ken_burns) {
-            filter = scaleFilter + ",zoompan=z='min(zoom+0.0008,1.10)':d=" + std::to_string(frames) + ":s=" + res + ":fps=" + std::to_string(fps) + ",format=yuv420p";
+        if (params.slow_zoom) {
+            // Slow gradual zoom-in: starts at 1.0x, ends at ~1.08x over the duration.
+            // Uses zoompan with a gentle linear ramp — no panning, pure center zoom.
+            filter = scaleFilter
+                + ",zoompan=z='1+0.08*on/(" + std::to_string(frames) + ")'"
+                  ":x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'"
+                  ":d=" + std::to_string(frames)
+                  + ":s=" + res + ":fps=" + std::to_string(fps)
+                + ",format=yuv420p";
         } else {
             filter = scaleFilter;
         }
@@ -202,7 +209,9 @@ bool buildVideoSegment(const fs::path& clipPath, const fs::path& segmentPath, do
 
     if (!clipPath.empty() && fs::exists(clipPath)) {
         std::string scaleFilter;
-        if (params.scale_mode == "stretch") {
+        if (params.scale_mode == "cover") {
+            scaleFilter = "scale=" + size + ":force_original_aspect_ratio=increase,crop=" + size + ",format=yuv420p";
+        } else if (params.scale_mode == "stretch") {
             scaleFilter = "scale=" + size + ",format=yuv420p";
         } else {
             // contain (default for video clips) — fit within canvas, pad edges
@@ -243,14 +252,29 @@ bool concatSegments(const std::vector<fs::path>& segments, const fs::path& outpu
     return file::runCommand(cmd.str());
 }
 
-bool muxAudio(const fs::path& videoPath, const fs::path& audioPath, const fs::path& outputPath, double volume) {
+bool muxAudio(const fs::path& videoPath, const fs::path& audioPath, const fs::path& outputPath, double volume, double startOffset) {
     std::ostringstream cmd;
     cmd << "ffmpeg -y -hide_banner -loglevel error -i " << file::shellQuote(videoPath.string())
         << " -i " << file::shellQuote(audioPath.string())
         << " -map 0:v:0 -map 1:a:0 -c:v copy -c:a aac";
+
+    // Build audio filter chain: volume + optional delay
+    std::ostringstream af;
+    bool hasFilter = false;
     if (volume > 0.0 && volume != 1.0) {
-        cmd << " -af " << file::shellQuote("volume=" + std::to_string(volume));
+        af << "volume=" << volume;
+        hasFilter = true;
     }
+    if (startOffset > 0.0) {
+        int delayMs = static_cast<int>(startOffset * 1000);
+        if (hasFilter) af << ",";
+        af << "adelay=" << delayMs << "|" << delayMs;
+        hasFilter = true;
+    }
+    if (hasFilter) {
+        cmd << " -af " << file::shellQuote(af.str());
+    }
+
     cmd << " -shortest -movflags +faststart "
         << file::shellQuote(outputPath.string());
     return file::runCommand(cmd.str());

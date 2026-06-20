@@ -79,6 +79,15 @@ inline double extractJsonNumberValue(const std::string& json, const std::string&
     return fallback;
 }
 
+inline bool extractJsonBoolValue(const std::string& json, const std::string& key, bool fallback = false) {
+    const std::regex re("\"" + key + "\"\\s*:\\s*(true|false)");
+    std::smatch match;
+    if (std::regex_search(json, match, re) && match.size() > 1) {
+        return match[1].str() == "true";
+    }
+    return fallback;
+}
+
 inline std::string extractArrayBlock(const std::string& json, const std::string& key) {
     const std::string needle = "\"" + key + "\"";
     auto pos = json.find(needle);

@@ -24,7 +24,7 @@ namespace {
         p.width = canvas.width;
         p.height = canvas.height;
         p.fps = canvas.fps;
-        p.ken_burns = transform.ken_burns_effect;
+        p.slow_zoom = transform.slow_zoom;
         p.scale_mode = transform.scale_mode;
         p.color_hex = color_hex;
         return p;
@@ -119,7 +119,7 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
         std::vector<std::pair<fs::path, const plan::AudioTrack*>> downloadedTracks;
         for (size_t t = 0; t < plan.audio_tracks.size(); ++t) {
             const auto& track = plan.audio_tracks[t];
-            fs::path localAudio = workDir / ("audio_track_" + std::to_string(t) + ".mp3");
+            fs::path localAudio = workDir / ("audio_track_" + std::to_string(t) + ".m4a");
             if (file::downloadAsset(track.source_url, localAudio)) {
                 downloadedTracks.emplace_back(localAudio, &track);
             } else {
@@ -129,22 +129,28 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
 
         if (downloadedTracks.empty()) {
             std::cerr << "warning: no audio tracks downloaded, exporting video without audio\n";
-            file::copyFile(videoOnly, outPath);
+            if (!file::copyFile(videoOnly, outPath)) {
+                result.error = "failed to copy final output (no audio)";
+                return result;
+            }
             result.success = true;
         } else if (downloadedTracks.size() == 1) {
-            // Single track: apply volume if needed, mux directly
+            // Single track: apply volume + offset, mux directly
             fs::path finalMuxed = workDir / "final_muxed.mp4";
             double vol = downloadedTracks[0].second->volume;
-            if (media::muxAudio(videoOnly, downloadedTracks[0].first, finalMuxed, vol)) {
-                file::copyFile(finalMuxed, outPath);
+            double offset = downloadedTracks[0].second->start_time_offset;
+            if (media::muxAudio(videoOnly, downloadedTracks[0].first, finalMuxed, vol, offset)) {
+                if (!file::copyFile(finalMuxed, outPath)) {
+                    result.error = "failed to copy final output";
+                    return result;
+                }
                 result.success = true;
             } else {
                 result.error = "failed to mux audio track";
                 return result;
             }
         } else {
-            // Multiple tracks: use ffmpeg amix to merge them
-            // First, mix all audio into a single track
+            // Multiple tracks: use ffmpeg amix to merge them into a single .m4a
             std::ostringstream audioFilter;
             std::ostringstream audioInputs;
             for (size_t t = 0; t < downloadedTracks.size(); ++t) {
@@ -154,7 +160,8 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
                 double offset = downloadedTracks[t].second->start_time_offset;
                 audioFilter << "[" << t << ":a]volume=" << vol;
                 if (offset > 0.0) {
-                    audioFilter << ",adelay=" << static_cast<int>(offset * 1000) << "|" << static_cast<int>(offset * 1000);
+                    int delayMs = static_cast<int>(offset * 1000);
+                    audioFilter << ",adelay=" << delayMs << "|" << delayMs;
                 }
                 audioFilter << "[a" << t << "]";
             }
@@ -165,7 +172,7 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
             }
             audioFilter << "amix=inputs=" << n << ":duration=longest[aout]";
 
-            fs::path mixedAudio = workDir / "mixed_audio.mp3";
+            fs::path mixedAudio = workDir / "mixed_audio.m4a";
             std::ostringstream mixCmd;
             mixCmd << "ffmpeg -y -hide_banner -loglevel error"
                    << audioInputs.str()
@@ -176,7 +183,10 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
             if (file::runCommand(mixCmd.str())) {
                 fs::path finalMuxed = workDir / "final_muxed.mp4";
                 if (media::muxAudio(videoOnly, mixedAudio, finalMuxed)) {
-                    file::copyFile(finalMuxed, outPath);
+                    if (!file::copyFile(finalMuxed, outPath)) {
+                        result.error = "failed to copy final output";
+                        return result;
+                    }
                     result.success = true;
                 } else {
                     result.error = "failed to mux mixed audio";
@@ -184,12 +194,18 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
                 }
             } else {
                 std::cerr << "warning: audio mix failed, exporting video without audio\n";
-                file::copyFile(videoOnly, outPath);
+                if (!file::copyFile(videoOnly, outPath)) {
+                    result.error = "failed to copy final output (mix failed)";
+                    return result;
+                }
                 result.success = true;
             }
         }
     } else {
-        file::copyFile(videoOnly, outPath);
+        if (!file::copyFile(videoOnly, outPath)) {
+            result.error = "failed to copy final output (no audio tracks)";
+            return result;
+        }
         result.success = true;
     }
 
