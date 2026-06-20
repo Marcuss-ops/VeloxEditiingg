@@ -53,8 +53,10 @@ DataServer/completed_videos/
 *.tsbuildinfo.*
 DataServer/bin/
 DataServer/server
+DataServer/server.exe
 DataServer/velox-server
 RemoteCodex/native/worker-agent-go/bin/
+RemoteCodex/native/worker-agent-go/velox-worker-agent
 RemoteCodex/native/video-engine-cpp/build*/
 frontend_standalone/web/dist/
 frontend_standalone/web/node_modules/
