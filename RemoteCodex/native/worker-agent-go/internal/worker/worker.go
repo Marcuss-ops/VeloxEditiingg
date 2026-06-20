@@ -30,10 +30,21 @@ func (w *Worker) Start(ctx context.Context) error {
 
 	// Connection state machine with automatic backoff
 	backoff := registrationInitialBackoff
+	gRPCConnectFailures := 0 // PR12: track gRPC failures for fallback to HTTP polling
+	fellBack := false        // PR12: true once we've fallen back to HTTP polling
 
 	for !w.IsStopped() {
 		// P0 reconnect fix: create a fresh transport each session attempt.
 		// After Close(), transports are not reusable (channels + sync.Once).
+		//
+		// PR12 fallback: if gRPC push fails N times in a row and
+		// fallback_to_polling is enabled, switch to HTTP polling transport
+		// for the remainder of this session.
+		if !fellBack && gRPCConnectFailures >= maxGRPCConnectFailuresBeforeFallback && w.config.FallbackToPolling {
+			fellBack = true
+			w.logger.Warn("[FALLBACK] gRPC push failed %d times — switching to HTTP polling", gRPCConnectFailures)
+			w.fallbackToHTTP()
+		}
 		w.transport = w.newTransport()
 
 		w.setConnState(ConnConnecting)
@@ -42,6 +53,13 @@ func (w *Worker) Start(ctx context.Context) error {
 		hello := w.buildHello()
 		if err := w.transport.Connect(ctx, hello); err != nil {
 			w.connFailureCount++
+
+			// PR12: only count gRPC failures for fallback; HTTP failures are
+			// always connection-level (reset, refused) and should retry.
+			if !fellBack && w.isPrimaryGRPC() {
+				gRPCConnectFailures++
+			}
+
 			w.logger.Warn("[CONNECT] Registration failed (attempt %d): %v", w.connFailureCount, err)
 			w.setConnState(ConnDisconnected)
 			_ = w.transport.Close()
@@ -79,14 +97,25 @@ func (w *Worker) Start(ctx context.Context) error {
 			}
 		}
 
-		// Registration succeeded — reset backoff
-		backoff = registrationInitialBackoff
-		w.setConnState(ConnReady)
-		telemetry.SetHealthRegistered(true)
-		w.logger.Info("[CONNECT] Registration successful — running session")
+	// Registration succeeded — reset backoff
+	backoff = registrationInitialBackoff
+	w.setConnState(ConnReady)
+	telemetry.SetHealthRegistered(true)
+	w.logger.Info("[CONNECT] Registration successful — running session")
 
-		// Run session: start all loops, manage lifecycle
-		sessionEnded := w.runSession(ctx)
+	// ── Shadow mode (PR11): open gRPC observation transport ────────────
+	// Shadow runs alongside the primary transport. It receives JobOffer
+	// messages but NEVER sends JobAccepted — purely compares timing.
+	// The shadow goroutine is managed within runSession so it shares
+	// the session context and stops when the session ends.
+	var shadowActive bool
+	if w.config.ShadowMode && w.shadowTransportFactory != nil {
+		shadowActive = true
+		w.logger.Info("[SHADOW] Will start shadow gRPC stream in session")
+	}
+
+	// Run session: start all loops, manage lifecycle
+	sessionEnded := w.runSession(ctx, shadowActive)
 
 		_ = w.transport.Close()
 
@@ -156,7 +185,9 @@ func (w *Worker) buildHello() controltransport.WorkerHello {
 
 // runSession starts all communication loops and returns true if the session
 // ended due to disconnect (should reconnect), false if stopped gracefully.
-func (w *Worker) runSession(ctx context.Context) bool {
+// When shadowMode is true, an additional gRPC shadow transport is opened
+// for observation-only comparison with the primary transport.
+func (w *Worker) runSession(ctx context.Context, shadowMode bool) bool {
 	sessionCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -178,6 +209,12 @@ func (w *Worker) runSession(ctx context.Context) bool {
 	// Start unified receive loop (replaces jobLoop + commandLoop)
 	w.wg.Add(1)
 	go w.receiveLoop(sessionCtx, recvCh)
+
+	// ── Shadow mode (PR11): launch shadow gRPC transport for observation ────
+	if shadowMode {
+		w.wg.Add(1)
+		go w.shadowSessionLifecycle(sessionCtx)
+	}
 
 	// Start local persistence loop (saves seen commands + job metadata)
 	w.startPersistenceLoop(sessionCtx)
@@ -243,14 +280,20 @@ func (w *Worker) receiveLoop(ctx context.Context, recvCh <-chan controltransport
 				return
 			}
 
-			switch msg.Type {
-			case controltransport.MsgJobOffer:
+			switch msg.Type {			case controltransport.MsgJobOffer:
 				// Parse the offer exactly once — every reject path needs the
 				// job_id, and the accepted path also needs the typed payload.
 				offer := msgToJob(msg)
 				jobID := ""
 				if offer != nil {
 					jobID = offer.JobID
+				}
+
+				// ── Shadow mode (PR11): record primary job claim for comparison ────
+				// Compare this job arrival against the shadow gRPC stream to
+				// measure push-vs-poll latency and detect mismatches.
+				if w.isShadowModeActive() && jobID != "" {
+					w.recordPrimaryJobSeen(jobID)
 				}
 
 				// P5 cleanup: never silently drop an offer. Send JobRejected so
@@ -300,11 +343,15 @@ func (w *Worker) receiveLoop(ctx context.Context, recvCh <-chan controltransport
 				if err := w.sendAccept(ctx, job); err != nil {
 					w.logger.Warn("[RECEIVE] Failed to send JobAccepted: %v", err)
 					continue
-				}
+				}					// P0 protocol fix: store pending job, wait for JobLeaseGranted before executing.
+					// The master confirms the lease atomically in SQLite before sending JobLeaseGranted.
+					w.storePendingJob(job)
 
-				// P0 protocol fix: store pending job, wait for JobLeaseGranted before executing.
-				// The master confirms the lease atomically in SQLite before sending JobLeaseGranted.
-				w.storePendingJob(job)
+			case controltransport.MsgJobAvailable:
+				// PR12: lightweight notification from master — "there are jobs for you".
+				// The worker calls ClaimNext via HTTP to atomically claim a job.
+				// This model keeps SQLite as the single source of truth.
+				w.handleJobAvailable(ctx, msg)
 
 			case controltransport.MsgJobLeaseGranted:
 				// P0 protocol fix: master confirms the lease.
@@ -432,13 +479,25 @@ func (w *Worker) receiveLoop(ctx context.Context, recvCh <-chan controltransport
 	}
 }
 
-// msgToJob converts a ControlMessage (MsgJobOffer) to an api.Job using typed proto fields.
+// msgToJob converts a ControlMessage (MsgJobOffer) to an api.Job.
+// Handles both typed proto payload (gRPC transport: TypedPayload=*pb.JobOffer)
+// and generic map payload (HTTP polling transport: Payload=map[string]interface{}).
 func msgToJob(msg controltransport.ControlMessage) *api.Job {
-	offer, ok := msg.TypedPayload.(*pb.JobOffer)
-	if !ok || offer == nil {
-		return nil
+	// Try typed proto payload first (gRPC transport).
+	if offer, ok := msg.TypedPayload.(*pb.JobOffer); ok && offer != nil {
+		return msgToJobFromProto(offer)
 	}
 
+	// Fall back to generic Payload map (HTTP polling transport).
+	if msg.Payload != nil {
+		return msgToJobFromPayload(msg.Payload)
+	}
+
+	return nil
+}
+
+// msgToJobFromProto extracts an api.Job from a typed *pb.JobOffer.
+func msgToJobFromProto(offer *pb.JobOffer) *api.Job {
 	jobID := offer.GetJobId()
 	if jobID == "" {
 		return nil
@@ -473,6 +532,58 @@ func msgToJob(msg controltransport.ControlMessage) *api.Job {
 		LeaseExpiry:     leaseExpiry,
 		Attempt:         int(offer.GetAttempt()),
 	}
+}
+
+// msgToJobFromPayload extracts an api.Job from a generic Payload map (HTTP transport).
+func msgToJobFromPayload(payload map[string]interface{}) *api.Job {
+	jobID := getPayloadStrRaw(payload, "job_id")
+	if jobID == "" {
+		return nil
+	}
+
+	// Collect known fields into parameters, bubbling remaining to the top.
+	parameters := make(map[string]interface{})
+	for k, v := range payload {
+		switch k {
+		case "job_id", "run_id", "lease_id", "attempt", "lease_expiry", "created_at":
+			// Known top-level fields, not parameters.
+		default:
+			parameters[k] = v
+		}
+	}
+
+	return &api.Job{
+		JobID:           jobID,
+		JobRunID:        getPayloadStrRaw(payload, "run_id"),
+		JobType:         getPayloadStrRaw(payload, "job_type"),
+		Priority:        getPayloadIntRaw(payload, "priority"),
+		Parameters:      parameters,
+		CreatedAt:       payload["created_at"],
+		TimeoutSecs:     getPayloadIntRaw(payload, "timeout_secs"),
+		ContractVersion: getPayloadIntRaw(payload, "contract_version"),
+		LeaseID:         getPayloadStrRaw(payload, "lease_id"),
+		LeaseExpiry:     getPayloadStrRaw(payload, "lease_expiry"),
+		Attempt:         getPayloadIntRaw(payload, "attempt"),
+	}
+}
+
+func getPayloadStrRaw(m map[string]interface{}, key string) string {
+	if v, ok := m[key].(string); ok {
+		return v
+	}
+	return ""
+}
+
+func getPayloadIntRaw(m map[string]interface{}, key string) int {
+	switch v := m[key].(type) {
+	case float64:
+		return int(v)
+	case int:
+		return v
+	case int64:
+		return int(v)
+	}
+	return 0
 }
 
 // msgToCommand converts a ControlMessage (MsgCommand) to an api.WorkerCommand using typed proto fields.
@@ -532,6 +643,67 @@ func (w *Worker) ConnState() ConnectionState {
 	w.connStateMu.RLock()
 	defer w.connStateMu.RUnlock()
 	return w.connState
+}
+
+// isPrimaryGRPC returns true when the current primary transport is gRPC
+// (i.e., we haven't fallen back to HTTP polling yet).
+func (w *Worker) isPrimaryGRPC() bool {
+	return w.config.JobDelivery != "polling"
+}
+
+// fallbackToHTTP overrides the transport factory to return an HTTP polling
+// transport for the remainder of the session (PR12).
+func (w *Worker) fallbackToHTTP() {
+	w.transportFactory = func() controltransport.ControlTransport {
+		return newHTTPPollingTransportUnvalidated(w.config, w.logger)
+	}
+}
+
+// handleJobAvailable processes a MsgJobAvailable notification (PR12).
+// The master sends this lightweight notification when jobs are queued for
+// the worker. The worker then claims atomically via HTTP ClaimNext.
+// This model keeps SQLite as the single source of truth.
+func (w *Worker) handleJobAvailable(ctx context.Context, msg controltransport.ControlMessage) {
+	w.logger.Debug("[RECEIVE] JobAvailable received — claiming via HTTP ClaimNext")
+
+	// Check preconditions before spawning a claim goroutine.
+	if w.IsStopped() || w.drainMode.Load() {
+		w.logger.Debug("[RECEIVE] JobAvailable ignored — worker is stopped or draining")
+		return
+	}
+	w.activeJobsMu.RLock()
+	activeCount := len(w.activeJobs)
+	w.activeJobsMu.RUnlock()
+	if activeCount >= w.config.MaxActiveJobs {
+		w.logger.Debug("[RECEIVE] JobAvailable ignored — at capacity (%d/%d)", activeCount, w.config.MaxActiveJobs)
+		return
+	}
+
+	// Spawn a lightweight goroutine so the receiveLoop is not blocked.
+	go func() {
+		claimCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		job, err := w.apiClient.GetJobV2(claimCtx, w.config.WorkerID)
+		if err != nil {
+			w.logger.Warn("[RECEIVE] JobAvailable claim failed: %v", err)
+			return
+		}
+		if job == nil || job.JobID == "" {
+			w.logger.Debug("[RECEIVE] JobAvailable claim returned no job (already taken)")
+			return
+		}
+
+		w.logger.Info("[RECEIVE] JobAvailable claim succeeded: %s (type: %s)", job.JobID, job.JobType)
+
+		// Inject the claimed job into the normal execution flow.
+		// Use sendAccept + storePendingJob to keep protocol consistent.
+		if err := w.sendAccept(ctx, job); err != nil {
+			w.logger.Warn("[RECEIVE] Failed to send JobAccepted after claim: %v", err)
+			return
+		}
+		w.storePendingJob(job)
+	}()
 }
 
 // newTransport creates a fresh transport instance for a new session attempt.

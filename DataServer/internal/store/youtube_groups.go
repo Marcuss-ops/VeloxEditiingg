@@ -1,6 +1,9 @@
 package store
 
-import "time"
+import (
+	"database/sql"
+	"time"
+)
 
 // ============================================================
 // --- Canonical Groups ---
@@ -69,6 +72,37 @@ func (s *SQLiteStore) ListYouTubeGroupsV2() ([]map[string]interface{}, error) {
 		})
 	}
 	return result, rows.Err()
+}
+
+// DeleteYouTubeGroupByName looks up the group by name+type, removes all
+// memberships, then deletes the group row — all in a single round-trip
+// to the DB (replaces the previous three-call pattern of GetID + DeleteMembers + DeleteGroup).
+// Returns nil if no matching group exists (idempotent).
+func (s *SQLiteStore) DeleteYouTubeGroupByName(name, groupType string) error {
+	if groupType == "" {
+		groupType = "manager"
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	var id int64
+	err = tx.QueryRow(`SELECT id FROM youtube_groups WHERE name=? AND group_type=?`, name, groupType).Scan(&id)
+	if err == sql.ErrNoRows {
+		return tx.Commit() // no matching group → idempotent success
+	}
+	if err != nil {
+		return err // genuine DB error — surface it
+	}
+	if _, err := tx.Exec(`DELETE FROM youtube_group_channels WHERE group_id=?`, id); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM youtube_groups WHERE id=?`, id); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // DeleteYouTubeGroupV2 deletes a group by ID.

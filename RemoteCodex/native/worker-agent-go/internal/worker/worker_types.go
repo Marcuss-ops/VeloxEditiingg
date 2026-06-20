@@ -137,6 +137,28 @@ type Worker struct {
 
 	// Exit function (for testing, defaults to os.Exit)
 	exitFunc ExitFunc
+
+	// ── Shadow mode (PR11) ─────────────────────────────────────────────────
+	//
+	// shadowTransportFactory creates the gRPC observation-only transport.
+	// The returned transport receives JobOffer/Command messages but NEVER
+	// sends JobAccepted — purely compares timing with the primary transport.
+	shadowTransportFactory func() controltransport.ControlTransport
+
+	// shadowSeen tracks jobIDs received on the shadow transport with timestamps.
+	// When the primary transport gets a job, we compare against this map.
+	shadowSeen   map[string]time.Time
+	shadowSeenMu sync.Mutex
+
+	// shadowActive is set atomically by shadowSessionLifecycle when the
+	// shadow gRPC transport successfully connects. Read by
+	// isShadowModeActive() to gate recordPrimaryJobSeen without a data race.
+	shadowActive atomic.Bool
+
+	// Shadow metrics (atomic counters).
+	shadowOffers    atomic.Int64
+	shadowMatches   atomic.Int64
+	shadowMismatches atomic.Int64
 }
 
 // recentLogBuffer is a thread-safe ring buffer for recent log lines.

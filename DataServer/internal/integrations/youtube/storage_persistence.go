@@ -16,6 +16,10 @@ import (
 // moved declarations are pure refactors without behaviour change.
 
 // load reads data from canonical SQLite tables (youtube_groups_v2, youtube_channels).
+// Uses a two-query bulk load: ListYouTubeGroupsV2 + ListYouTubeChannels (once)
+// instead of per-channel GetYouTubeChannel calls (N+1). Membership lookups per
+// group remain via ListGroupChannelsV2 but channel row resolution is O(1) from
+// the pre-built map.
 func (s *Storage) load() error {
 	if s.store == nil {
 		return nil
@@ -23,6 +27,18 @@ func (s *Storage) load() error {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	// Bulk-load all channel rows once so per-group resolution is O(1).
+	allChannelRows, err := s.store.ListYouTubeChannels()
+	if err != nil {
+		return fmt.Errorf("load channels: %w", err)
+	}
+	channelMap := make(map[string]map[string]interface{}, len(allChannelRows))
+	for _, ch := range allChannelRows {
+		if id, _ := ch["channel_id"].(string); id != "" {
+			channelMap[id] = ch
+		}
+	}
 
 	groupRows, err := s.store.ListYouTubeGroupsV2()
 	if err != nil {
@@ -73,8 +89,7 @@ func (s *Storage) load() error {
 						continue
 					}
 
-					ch, err := s.store.GetYouTubeChannel(chID)
-					if err == nil && ch != nil {
+					if ch, ok := channelMap[chID]; ok {
 						channel := channelFromCanonicalRow(ch)
 						if channel != nil {
 							group.Channels = append(group.Channels, *channel)

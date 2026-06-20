@@ -66,8 +66,8 @@ func (s *Storage) CreateGroup(name string, groupType string) error {
 	return nil
 }
 
-// DeleteGroup removes a group. Persists only via direct SQL on this single
-// group's row and membership rows — does NOT touch any other groups.
+// DeleteGroup removes a group. Persists via a single DeleteYouTubeGroupByName
+// call that looks up, clears memberships, and deletes the group row in one tx.
 func (s *Storage) DeleteGroup(name string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -87,19 +87,7 @@ func (s *Storage) DeleteGroup(name string) error {
 		groupType = "manager"
 	}
 
-	groupID, err := s.store.GetYouTubeGroupV2ID(name, groupType)
-	if err != nil {
-		return err
-	}
-	if groupID > 0 {
-		if err := s.store.DeleteYouTubeGroupChannelsByGroupID(groupID); err != nil {
-			return err
-		}
-		if err := s.store.DeleteYouTubeGroupV2(groupID); err != nil {
-			return err
-		}
-	}
-	return nil
+	return s.store.DeleteYouTubeGroupByName(name, groupType)
 }
 
 // CleanupOldData removes cached channel metadata older than the retention period.

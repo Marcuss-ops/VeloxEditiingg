@@ -29,6 +29,7 @@ type StorageStore interface {
 	UpsertYouTubeGroupV2(name, groupType, description, privacy string) (int64, error)
 	GetYouTubeGroupV2ID(name, groupType string) (int64, error)
 	ListYouTubeGroupsV2() ([]map[string]interface{}, error)
+	DeleteYouTubeGroupByName(name, groupType string) error
 	DeleteYouTubeGroupV2(id int64) error
 	DeleteYouTubeGroupChannelsByGroupID(groupID int64) error
 

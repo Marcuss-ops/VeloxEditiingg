@@ -87,6 +87,30 @@ func New(cfg *config.WorkerConfig, version string) (*Worker, error) {
 		return nil, fmt.Errorf("transport factory: %w", err)
 	}
 
+	// ── Shadow mode (PR11): build gRPC transport factory for observation ───
+	// When ShadowMode is true, the worker opens a second gRPC transport that
+	// observes JobOffer messages but never sends JobAccepted.
+	var shadowTransportFactory func() controltransport.ControlTransport
+	if cfg.ShadowMode {
+		shadowGRPCURL := cfg.ShadowGRPCURL
+		if shadowGRPCURL == "" {
+			shadowGRPCURL = cfg.ControlGRPCURL
+			log.Debug("[SHADOW] ShadowGRPCURL not set — using control_grpc_url: %s", shadowGRPCURL)
+		}
+		shadowFactoryCfg := *cfg
+		shadowFactoryCfg.ControlGRPCURL = shadowGRPCURL
+		shadowFactoryCfg.JobDelivery = "push"
+		shadowTransportFactory = func() controltransport.ControlTransport {
+			t, err := newGRPCStreamTransport(&shadowFactoryCfg, log)
+			if err != nil {
+				log.Warn("[SHADOW] Shadow transport factory failed: %v", err)
+				return nil
+			}
+			return t
+		}
+		log.Info("[SHADOW] Shadow mode enabled — gRPC shadow will observe at %s", shadowGRPCURL)
+	}
+
 	w := &Worker{
 		config:           cfg,
 		apiClient:        apiClient,
@@ -111,6 +135,10 @@ func New(cfg *config.WorkerConfig, version string) (*Worker, error) {
 		concurrencyLimiter: concurrency.NewConcurrencyLimiter(detectedConcurrency),
 		stageExecutor:      stageExecutor,
 		exitFunc:           os.Exit,
+
+		// Shadow mode fields
+		shadowTransportFactory: shadowTransportFactory,
+		shadowSeen:             make(map[string]time.Time),
 	}
 
 	// Load persisted state from previous run (command dedup, job recovery info).

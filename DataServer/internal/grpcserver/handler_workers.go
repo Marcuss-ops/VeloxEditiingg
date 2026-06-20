@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"velox-server/internal/queue"
-	"velox-server/internal/store"
 	"velox-shared/controltransport"
 	pb "velox-shared/controltransport/pb"
 
@@ -157,12 +156,8 @@ func (h *Handler) sendPushJobOffer(ctx context.Context, workerID string) {
 	// Collect supported job types from worker capabilities for filtering.
 	allowedJobTypes := h.collectAllowedJobTypes(sess)
 
-	// Use repo directly since ClaimNextJob was removed from LifecycleService
-	claimResult, err := h.lifecycleSvc.Repo().ClaimNext(ctx, store.ClaimParams{
-		WorkerID:        workerID,
-		AllowedJobTypes: allowedJobTypes,
-		Now:             time.Now().UTC(),
-	})
+	// PR15.5: ClaimNext via canonical jobs.Writer
+	claimResult, err := h.lifecycleSvc.Jobs().ClaimNext(ctx, workerID, allowedJobTypes)
 	if err != nil {
 		log.Printf("[GRPC] ClaimNext failed for worker %s: %v", workerID, err)
 		return
@@ -170,44 +165,45 @@ func (h *Handler) sendPushJobOffer(ctx context.Context, workerID string) {
 	if claimResult == nil || claimResult.JobID == "" {
 		return
 	}
-	sj, err := h.lifecycleSvc.Repo().GetJob(ctx, claimResult.JobID)
+	// PR15.5: Get via canonical jobs.Reader — fields map to domain names
+	j, err := h.lifecycleSvc.Jobs().Get(ctx, claimResult.JobID)
 	if err != nil {
 		log.Printf("[GRPC] GetJob after claim failed for worker %s: %v", workerID, err)
 		// Release the claim so the job is not left orphaned.
-		if releaseErr := h.lifecycleSvc.Repo().ReleaseClaim(ctx, claimResult.JobID); releaseErr != nil {
+		if releaseErr := h.lifecycleSvc.Jobs().ReleaseLease(ctx, claimResult.JobID); releaseErr != nil {
 			log.Printf("[GRPC] Failed to release claim after GetJob error for %s: %v", claimResult.JobID, releaseErr)
 		}
 		return
 	}
-	if sj == nil {
+	if j == nil {
 		// Release the claim — job no longer exists.
-		if releaseErr := h.lifecycleSvc.Repo().ReleaseClaim(ctx, claimResult.JobID); releaseErr != nil {
+		if releaseErr := h.lifecycleSvc.Jobs().ReleaseLease(ctx, claimResult.JobID); releaseErr != nil {
 			log.Printf("[GRPC] Failed to release claim after nil GetJob for %s: %v", claimResult.JobID, releaseErr)
 		}
 		return
 	}
 
-	// Parse payload from the request_json column.
+	// Parse payload from the opaque Payload field (maps to request_json).
 	var payload map[string]interface{}
-	if sj.PayloadJSON != "" && sj.PayloadJSON != "{}" {
-		_ = json.Unmarshal([]byte(sj.PayloadJSON), &payload)
+	if j.Payload != "" && j.Payload != "{}" {
+		_ = json.Unmarshal([]byte(j.Payload), &payload)
 	}
 
 	job := &queue.Job{
-		JobID:       sj.JobID,
-		Status:      queue.JobStatus(sj.Status),
-		VideoName:   sj.VideoName,
-		ProjectID:   sj.ProjectID,
-		AssignedTo:  sj.AssignedTo,
-		LeaseID:     sj.LeaseID,
-		RetryCount:  sj.RetryCount,
-		MaxRetries:  sj.MaxRetries,
-		CreatedAt:   sj.CreatedAt,
-		UpdatedAt:   sj.UpdatedAt,
-		StartedAt:   sj.StartedAt,
-		CompletedAt: sj.CompletedAt,
+		JobID:       j.ID,
+		Status:      queue.JobStatus(j.Status),
+		VideoName:   j.VideoName,
+		ProjectID:   j.ProjectID,
+		AssignedTo:  j.WorkerID,
+		LeaseID:     j.LeaseID,
+		RetryCount:  j.Attempts,
+		MaxRetries:  j.MaxRetries,
+		CreatedAt:   j.CreatedAt,
+		UpdatedAt:   j.UpdatedAt,
+		StartedAt:   j.StartedAt,
+		CompletedAt: j.CompletedAt,
 		Attempt:     claimResult.Attempt,
-		RunID:       sj.RunID,
+		RunID:       j.RunID,
 		Payload:     payload,
 		LeaseExpiry: claimResult.LeaseExpires,
 	}
@@ -259,7 +255,7 @@ func (h *Handler) sendPushJobOffer(ctx context.Context, workerID string) {
 	// Issue 5 fix: send via sendCh instead of direct stream.Send().
 	if !safeSend(sess.sendCh, &outboundMessage{Envelope: env}) {
 		log.Printf("[GRPC] sendCh full/closed for JobOffer to worker %s — releasing claim", workerID)
-		if releaseErr := h.lifecycleSvc.Repo().ReleaseClaim(ctx, job.JobID); releaseErr != nil {
+		if releaseErr := h.lifecycleSvc.Jobs().ReleaseLease(ctx, job.JobID); releaseErr != nil {
 			log.Printf("[GRPC] Failed to release claim for job %s after send failure: %v", job.JobID, releaseErr)
 		}
 		return

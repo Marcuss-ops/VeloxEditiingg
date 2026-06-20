@@ -6,24 +6,39 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+
+	"velox-server/internal/jobs"
 )
 
-// SQLiteJobRepository implements JobRepository against *SQLiteStore (spec §5).
+// SQLiteJobRepository implements jobs.Repository against *SQLiteStore.
 //
+// It satisfies both jobs.Reader and jobs.Writer, making it the single
+// canonical job persistence implementation (PR15.5: adapter inlined).
 // The atomicity contract is enforced via either an internal BeginTx (for
-// CreateJob / Transition / ClaimNext) or via delegation to *SQLiteStore
+// CreateJob / Transition / claimNext) or via delegation to *SQLiteStore
 // methods that already own their own transactions (ClaimNextPendingJob).
 type SQLiteJobRepository struct {
 	store *SQLiteStore
 }
 
-// NewSQLiteJobRepository wraps a SQLiteStore as a JobRepository.
+// Compile-time assertion.
+var _ jobs.Repository = (*SQLiteJobRepository)(nil)
+
+// NewSQLiteJobRepository wraps a SQLiteStore as a jobs.Repository.
 func NewSQLiteJobRepository(store *SQLiteStore) *SQLiteJobRepository {
 	return &SQLiteJobRepository{store: store}
+}
+
+// NewJobsRepository returns the canonical jobs.Repository backed by the given
+// SQLiteJobRepository. Since PR15.5 inlined the adapter, this is a convenience
+// that returns its argument (now already a jobs.Repository).
+func NewJobsRepository(repo *SQLiteJobRepository) jobs.Repository {
+	return repo
 }
 
 // jobProjectionColumns lists the columns MaterializedBy JobRepository reads.
@@ -46,11 +61,11 @@ var jobProjectionColumns = []string{
 	"COALESCE(request_json, '{}')",
 }
 
-// scanJob reads one row in jobProjectionColumns order into a *Job.
+// scanJob reads one row in jobProjectionColumns order into a *JobRecord.
 func scanJob(row interface {
 	Scan(...interface{}) error
-}) (*Job, error) {
-	var j Job
+}) (*JobRecord, error) {
+	var j JobRecord
 	err := row.Scan(
 		&j.JobID, &j.Status, &j.VideoName, &j.ProjectID,
 		&j.AssignedTo, &j.LeaseID,
@@ -115,7 +130,7 @@ func (r *SQLiteJobRepository) CreateJob(ctx context.Context, params CreateJobPar
 }
 
 // GetJob returns one job projection, or (nil, nil) if missing.
-func (r *SQLiteJobRepository) GetJob(ctx context.Context, jobID string) (*Job, error) {
+func (r *SQLiteJobRepository) GetJob(ctx context.Context, jobID string) (*JobRecord, error) {
 	if jobID == "" {
 		return nil, fmt.Errorf("job repository: empty jobID")
 	}
@@ -132,10 +147,10 @@ func (r *SQLiteJobRepository) GetJob(ctx context.Context, jobID string) (*Job, e
 	return j, nil
 }
 
-// ClaimNext delegates to the well-tested ClaimNextPendingJob, which already
+// claimNext delegates to the well-tested ClaimNextPendingJob, which already
 // owns its own transaction. Wrapping it preserves the spec §5 single-method
 // atomicity contract while keeping the complex CAS update SQL in one place.
-func (r *SQLiteJobRepository) ClaimNext(ctx context.Context, claim ClaimParams) (*ClaimResult, error) {
+func (r *SQLiteJobRepository) claimNext(ctx context.Context, claim ClaimParams) (*ClaimResult, error) {
 	if claim.WorkerID == "" {
 		return nil, fmt.Errorf("job repository: claim with empty workerID")
 	}
@@ -201,7 +216,7 @@ func (r *SQLiteJobRepository) Transition(ctx context.Context, t TransitionParams
 //
 // Empty statuses returns nil with no error (semantically: "no filter, no
 // result"). limit <= 0 is treated as 1000.
-func (r *SQLiteJobRepository) ListByStatus(ctx context.Context, statuses []JobStatus, limit int) ([]Job, error) {
+func (r *SQLiteJobRepository) ListByStatus(ctx context.Context, statuses []JobStatus, limit int) ([]JobRecord, error) {
 	if len(statuses) == 0 {
 		return nil, nil
 	}
@@ -224,52 +239,15 @@ func (r *SQLiteJobRepository) ListByStatus(ctx context.Context, statuses []JobSt
 		return nil, fmt.Errorf("list by status: %w", err)
 	}
 	defer rows.Close()
-	var jobs []Job
+	var results []JobRecord
 	for rows.Next() {
 		j, err := scanJob(rows)
 		if err != nil {
 			continue
 		}
-		jobs = append(jobs, *j)
+		results = append(results, *j)
 	}
-	return jobs, rows.Err()
-}
-
-// RenewLease extends the lease on an active job atomically.
-// Validates internally that the job is in LEASED, RUNNING, or PROCESSING
-// status (the renewable states) via a single UPDATE with WHERE clause.
-// Returns ErrTransitionConflict if no rows matched.
-func (r *SQLiteJobRepository) RenewLease(ctx context.Context, params RenewLeaseParams) error {
-	if params.JobID == "" {
-		return fmt.Errorf("job repository: empty jobID in RenewLease")
-	}
-	if params.LeaseID == "" {
-		return fmt.Errorf("job repository: empty leaseID in RenewLease")
-	}
-	now := time.Now().UTC().Format(time.RFC3339)
-	leaseExpiry := params.LeaseExpiry.UTC().Format(time.RFC3339)
-	result, err := r.store.db.ExecContext(ctx,
-		`UPDATE jobs
-		 SET lease_id = ?,
-		     lease_expiry = ?,
-		     updated_at = ?,
-		     revision = revision + 1,
-		     attempt = CASE WHEN attempt = 0 THEN retry_count ELSE attempt END
-		 WHERE job_id = ?
-		   AND UPPER(status) IN ('LEASED', 'RUNNING')`,
-		params.LeaseID, leaseExpiry, now, params.JobID,
-	)
-	if err != nil {
-		return fmt.Errorf("renew lease exec: %w", err)
-	}
-	n, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("renew lease rows: %w", err)
-	}
-	if n == 0 {
-		return fmt.Errorf("renew lease %s: %w", params.JobID, ErrTransitionConflict)
-	}
-	return nil
+	return results, rows.Err()
 }
 
 // LeaseJob atomically leases a PENDING job to a worker.
@@ -349,40 +327,6 @@ func (r *SQLiteJobRepository) ReleaseClaim(ctx context.Context, jobID string) er
 		return fmt.Errorf("release claim %s: job not in LEASED/RUNNING state", jobID)
 	}
 	return nil
-}
-
-// RequeueZombieJobs finds jobs in LEASED/RUNNING state whose lease_expiry
-// has passed and atomically requeues them to PENDING. Returns the count of
-// requeued jobs.
-func (r *SQLiteJobRepository) RequeueZombieJobs(ctx context.Context, timeout time.Duration) (int, error) {
-	now := time.Now().UTC().Format(time.RFC3339)
-	// Requeue jobs with expired leases
-	result, err := r.store.db.ExecContext(ctx,
-		`UPDATE jobs
-		 SET status = 'PENDING',
-		     lease_id = '',
-		     lease_expiry = '',
-		     assigned_to = '',
-		     claimed_by = '',
-		     assigned_at = '',
-		     claimed_at = '',
-		     retry_count = retry_count + 1,
-		     updated_at = ?,
-		     revision = revision + 1
-		 WHERE UPPER(status) IN ('LEASED', 'RUNNING')
-		   AND lease_expiry IS NOT NULL
-		   AND lease_expiry != ''
-		   AND lease_expiry < ?`,
-		now, now,
-	)
-	if err != nil {
-		return 0, fmt.Errorf("requeue zombies exec: %w", err)
-	}
-	n, err := result.RowsAffected()
-	if err != nil {
-		return 0, fmt.Errorf("requeue zombies rows: %w", err)
-	}
-	return int(n), nil
 }
 
 // StartJob performs the LEASED → RUNNING transition atomically.
@@ -533,102 +477,264 @@ func (r *SQLiteJobRepository) CompleteJob(ctx context.Context, params CompleteJo
 	return nil
 }
 
-// RecordRenderFinished atomically verifies the worker-identity tuple against
-// the jobs row, marks the attempt as RENDER_FINISHED, and inserts a
-// RENDER_FINISHED event — all inside a single transaction. The job stays
-// RUNNING (no status transition). Idempotent: if the attempt is already
-// RENDER_FINISHED with the same lease_id and worker_id, returns nil.
-func (r *SQLiteJobRepository) RecordRenderFinished(ctx context.Context, cmd RecordRenderFinishedCommand) error {
-	if r.store == nil || r.store.db == nil {
-		return fmt.Errorf("job repository: store not initialized")
-	}
-	if cmd.JobID == "" {
-		return fmt.Errorf("job repository: empty jobID in RecordRenderFinished")
-	}
-	if cmd.WorkerID == "" {
-		return fmt.Errorf("job repository: empty workerID in RecordRenderFinished")
-	}
+// ── Mappers (jobs domain ↔ store row) ─────────────────────────────────────
 
-	now := cmd.FinishedAt
-	if now.IsZero() {
-		now = time.Now().UTC()
+// toJobsJob converts a store.JobRecord (DB projection) into a canonical jobs.Job.
+func toJobsJob(sj *JobRecord) *jobs.Job {
+	if sj == nil {
+		return nil
 	}
-	nowStr := now.UTC().Format(time.RFC3339)
-
-	tx, err := r.store.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("record render finished begin: %w", err)
+	createdAt, _ := time.Parse(time.RFC3339, sj.CreatedAt)
+	updatedAt, _ := time.Parse(time.RFC3339, sj.UpdatedAt)
+	startedAt, _ := time.Parse(time.RFC3339, sj.StartedAt)
+	completedAt, _ := time.Parse(time.RFC3339, sj.CompletedAt)
+	return &jobs.Job{
+		ID:          sj.JobID,
+		Status:      jobs.Status(sj.Status),
+		VideoName:   sj.VideoName,
+		ProjectID:   sj.ProjectID,
+		RunID:       sj.RunID,
+		Attempts:    sj.RetryCount,
+		Revision:    sj.Revision,
+		WorkerID:    sj.AssignedTo,
+		MaxRetries:  sj.MaxRetries,
+		LeaseID:     sj.LeaseID,
+		StartedAt:   startedAt,
+		CompletedAt: completedAt,
+		CreatedAt:   createdAt,
+		UpdatedAt:   updatedAt,
+		Payload:     sj.PayloadJSON,
 	}
-	defer tx.Rollback()
-
-	// 1. Read the current job identity tuple.
-	var status, assignedTo, leaseID string
-	var revision int
-	err = tx.QueryRowContext(ctx,
-		`SELECT COALESCE(status, ''), COALESCE(assigned_to, ''),
-		        COALESCE(lease_id, ''), COALESCE(revision, 0)
-		 FROM jobs WHERE job_id = ?`, cmd.JobID,
-	).Scan(&status, &assignedTo, &leaseID, &revision)
-	if err == sql.ErrNoRows {
-		return fmt.Errorf("record render finished: job %s not found", cmd.JobID)
-	}
-	if err != nil {
-		return fmt.Errorf("record render finished query: %w", err)
-	}
-
-	// 2. Verify the identity tuple.
-	if status != string(JobStatusRunning) {
-		return fmt.Errorf("record render finished: job %s is in status %s, expected RUNNING", cmd.JobID, status)
-	}
-	if assignedTo != cmd.WorkerID {
-		return fmt.Errorf("record render finished: worker %s does not own job %s (assigned to %s)", cmd.WorkerID, cmd.JobID, assignedTo)
-	}
-	if cmd.LeaseID != "" && leaseID != cmd.LeaseID {
-		return fmt.Errorf("record render finished: lease mismatch for job %s: expected %s, got %s", cmd.JobID, leaseID, cmd.LeaseID)
-	}
-	if cmd.ExpectedRevision != 0 && revision != cmd.ExpectedRevision {
-		return fmt.Errorf("record render finished: revision mismatch for job %s: expected %d, got %d", cmd.JobID, cmd.ExpectedRevision, revision)
-	}
-
-	// 3. Update the attempt to RENDER_FINISHED. Accept attempts in
-	//    RUNNING or PROCESSING state; idempotent if already RENDER_FINISHED
-	//    with the same lease and worker.
-	res, err := tx.ExecContext(ctx,
-		`UPDATE job_attempts
-		 SET status = 'RENDER_FINISHED',
-		     finished_at = ?
-		 WHERE job_id = ?
-		   AND attempt_number = ?
-		   AND worker_id = ?
-		   AND lease_id = ?
-		   AND status IN ('RUNNING', 'PROCESSING', 'RENDER_FINISHED')`,
-		nowStr, cmd.JobID, cmd.AttemptNumber, cmd.WorkerID, cmd.LeaseID,
-	)
-	if err != nil {
-		return fmt.Errorf("record render finished update attempt: %w", err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("record render finished attempt rows: %w", err)
-	}
-	if n == 0 {
-		return fmt.Errorf("record render finished: %w for job %s attempt %d (wrong worker, lease, or attempt not in RUNNING/PROCESSING)",
-			ErrRecordRenderFinishedNotFound, cmd.JobID, cmd.AttemptNumber)
-	}
-
-	// 4. Insert RENDER_FINISHED event (deduplicated by caller already,
-	//    but we insert unconditionally for audit trail).
-	_, err = tx.ExecContext(ctx,
-		`INSERT INTO job_events (job_id, event, timestamp)
-		 VALUES (?, 'RENDER_FINISHED', ?)`,
-		cmd.JobID, nowStr,
-	)
-	if err != nil {
-		return fmt.Errorf("record render finished insert event: %w", err)
-	}
-
-	return tx.Commit()
 }
 
-// Compile-time interface check.
-var _ JobRepository = (*SQLiteJobRepository)(nil)
+func toStoreParams(j *jobs.Job) CreateJobParams {
+	if j == nil {
+		return CreateJobParams{}
+	}
+	return CreateJobParams{
+		JobID:      j.ID,
+		VideoName:  j.VideoName,
+		ProjectID:  j.ProjectID,
+		RunID:      j.RunID,
+		MaxRetries: j.MaxRetries,
+	}
+}
+
+func toJobsFilter(f jobs.Filter) ([]JobStatus, int) {
+	statuses := make([]JobStatus, len(f.Statuses))
+	for i, s := range f.Statuses {
+		statuses[i] = JobStatus(s)
+	}
+	return statuses, f.Limit
+}
+
+func toJobsCounts(raw map[string]int64) jobs.Counts {
+	if raw == nil {
+		return nil
+	}
+	out := make(jobs.Counts, len(raw))
+	for k, v := range raw {
+		out[jobs.Status(k)] = v
+	}
+	return out
+}
+
+// ── jobs.Reader ────────────────────────────────────────────────────────────
+
+// Get returns a single job by ID in the canonical domain model, or (nil, nil) on missing.
+func (r *SQLiteJobRepository) Get(ctx context.Context, id string) (*jobs.Job, error) {
+	sj, err := r.GetJob(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	return toJobsJob(sj), nil
+}
+
+// List returns jobs matching the filter as canonical domain model objects.
+func (r *SQLiteJobRepository) List(ctx context.Context, filter jobs.Filter) ([]jobs.Job, error) {
+	statuses, limit := toJobsFilter(filter)
+	storeJobs, err := r.ListByStatus(ctx, statuses, limit)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]jobs.Job, 0, len(storeJobs))
+	for _, sj := range storeJobs {
+		if jj := toJobsJob(&sj); jj != nil {
+			out = append(out, *jj)
+		}
+	}
+	return out, nil
+}
+
+// Counts returns the aggregate count of jobs grouped by status.
+func (r *SQLiteJobRepository) Counts(ctx context.Context) (jobs.Counts, error) {
+	if r.store == nil {
+		return nil, fmt.Errorf("job repository: store not initialized")
+	}
+	raw, err := r.store.JobCounts(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("counts: %w", err)
+	}
+	return toJobsCounts(raw), nil
+}
+
+// ── jobs.Writer ────────────────────────────────────────────────────────────
+
+// Create inserts a new job in PENDING state. If job.ID is empty the repository assigns one.
+func (r *SQLiteJobRepository) Create(ctx context.Context, job *jobs.Job) error {
+	if job == nil {
+		return fmt.Errorf("job repository: nil job")
+	}
+	return r.CreateJob(ctx, toStoreParams(job))
+}
+
+// SetStatus performs a CAS status change from → to. Returns ErrTransitionConflict
+// if the precondition does not hold.
+func (r *SQLiteJobRepository) SetStatus(ctx context.Context, id string, from, to jobs.Status) error {
+	sj, err := r.GetJob(ctx, id)
+	if err != nil {
+		return fmt.Errorf("setstatus: get job %s: %w", id, err)
+	}
+	if sj == nil {
+		return fmt.Errorf("setstatus: job %s not found", id)
+	}
+	return r.Transition(ctx, TransitionParams{
+		JobID:          id,
+		ExpectedStatus: JobStatus(from),
+		NewStatus:      JobStatus(to),
+		Revision:       sj.Revision,
+	})
+}
+
+// Lease atomically assigns a PENDING job to a worker.
+func (r *SQLiteJobRepository) Lease(ctx context.Context, id, workerID string) error {
+	return r.LeaseJob(ctx, id, workerID)
+}
+
+// Fail marks a job FAILED and records the reason.
+func (r *SQLiteJobRepository) Fail(ctx context.Context, id, reason string) error {
+	sj, err := r.GetJob(ctx, id)
+	if err != nil {
+		return fmt.Errorf("fail: get job %s: %w", id, err)
+	}
+	if sj == nil {
+		return fmt.Errorf("fail: job %s not found", id)
+	}
+	if sj.Status.IsTerminal() {
+		return fmt.Errorf("fail: job %s is already terminal (%s)", id, sj.Status)
+	}
+	log.Printf("[JOBS] failing job %s: reason=%q", id, reason)
+	return r.Transition(ctx, TransitionParams{
+		JobID:          id,
+		ExpectedStatus: sj.Status,
+		NewStatus:      JobStatusFailed,
+		Revision:       sj.Revision,
+	})
+}
+
+// Start atomically transitions LEASED → RUNNING with full CAS tuple + history + event.
+func (r *SQLiteJobRepository) Start(ctx context.Context, id, workerID, leaseID string, attempt, revision int) error {
+	return r.PR3Start(ctx, StartCommand{
+		JobID:            id,
+		WorkerID:         workerID,
+		LeaseID:          leaseID,
+		Attempt:          attempt,
+		ExpectedRevision: revision,
+	})
+}
+
+// RenewLease extends the lease on an active job with CAS tuple + optional event.
+func (r *SQLiteJobRepository) RenewLease(ctx context.Context, id, workerID, leaseID string, expiry time.Time, emitEvent bool, revision int) error {
+	return r.PR3RenewLease(ctx, RenewLeaseCommand{
+		JobID:            id,
+		WorkerID:         workerID,
+		LeaseID:          leaseID,
+		LeaseExpiry:      expiry,
+		EmitEvent:        emitEvent,
+		ExpectedRevision: revision,
+	})
+}
+
+// FailWithRetry marks a job FAILED or RETRY_WAIT depending on retry budget.
+func (r *SQLiteJobRepository) FailWithRetry(ctx context.Context, id, errorCode, errorMessage string, retryable bool, revision int) error {
+	return r.PR3Fail(ctx, FailCommand{
+		JobID:            id,
+		ErrorCode:        errorCode,
+		ErrorMessage:     errorMessage,
+		Retryable:        retryable,
+		ExpectedRevision: revision,
+	})
+}
+
+// Cancel transitions a job to CANCELLED. Idempotent on terminal states.
+func (r *SQLiteJobRepository) Cancel(ctx context.Context, id, reason string, revision int) error {
+	return r.PR3Cancel(ctx, CancelCommand{
+		JobID:            id,
+		Reason:           reason,
+		ExpectedRevision: revision,
+	})
+}
+
+// RequeueExpiredLeases processes expired leases, returning PENDING or FAILED per job.
+func (r *SQLiteJobRepository) RequeueExpiredLeases(ctx context.Context, now time.Time, limit int) ([]jobs.RequeueResult, error) {
+	results, err := r.PR3RequeueExpiredLeases(ctx, now, limit)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]jobs.RequeueResult, len(results))
+	for i, r := range results {
+		out[i] = jobs.RequeueResult{
+			JobID:          r.JobID,
+			PreviousStatus: jobs.Status(r.PreviousStatus),
+			NewStatus:      jobs.Status(r.NewStatus),
+			Reason:         r.Reason,
+			Attempt:        r.Attempt,
+		}
+	}
+	return out, nil
+}
+
+// ClaimNext atomically claims the next PENDING job for a worker.
+func (r *SQLiteJobRepository) ClaimNext(ctx context.Context, workerID string, allowedJobTypes []string) (*jobs.ClaimNextResult, error) {
+	result, err := r.claimNext(ctx, ClaimParams{
+		WorkerID:        workerID,
+		AllowedJobTypes: allowedJobTypes,
+	})
+	if err != nil {
+		if errors.Is(err, ErrNoClaimableJob) {
+			return nil, err
+		}
+		return nil, fmt.Errorf("claim next: %w", err)
+	}
+	return &jobs.ClaimNextResult{
+		JobID:        result.JobID,
+		Attempt:      result.Attempt,
+		LeaseID:      result.LeaseID,
+		LeaseExpires: result.LeaseExpires,
+	}, nil
+}
+
+// ReleaseLease resets a LEASED/RUNNING job back to PENDING without retry increment.
+func (r *SQLiteJobRepository) ReleaseLease(ctx context.Context, id string) error {
+	return r.ReleaseClaim(ctx, id)
+}
+
+// RecordRenderFinished verifies the worker-identity tuple, marks attempt as
+// RENDER_FINISHED, inserts event. Job stays RUNNING.
+func (r *SQLiteJobRepository) RecordRenderFinished(ctx context.Context, id, workerID, leaseID string, attempt, revision int) error {
+	return r.PR3RecordRenderFinished(ctx, RecordRenderFinishedCommand{
+		JobID:            id,
+		WorkerID:         workerID,
+		LeaseID:          leaseID,
+		AttemptNumber:    attempt,
+		ExpectedRevision: revision,
+	})
+}
+
+// Delete hard-deletes a job and its supplementary rows from persistence.
+func (r *SQLiteJobRepository) Delete(ctx context.Context, id string) error {
+	if r.store == nil {
+		return fmt.Errorf("job repository: store not initialized")
+	}
+	return r.store.DeleteJob(id)
+}

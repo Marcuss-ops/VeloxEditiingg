@@ -3,10 +3,10 @@ package queue
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"velox-server/internal/jobs"
-	"velox-server/internal/store"
 )
 
 // JobStatus is a type alias for the canonical jobs.Status. It exists so
@@ -105,15 +105,18 @@ func (q *FileQueue) SubmitJob(ctx context.Context, jobID string, payload map[str
 		runID = s
 	}
 
-	params := store.CreateJobParams{
-		JobID:      jobID,
-		Payload:    payload,
+	// PR15.5: canonical Create via jobs.Writer (replaces Repo().CreateJob).
+	raw, _ := json.Marshal(payload)
+	job := &jobs.Job{
+		ID:         jobID,
+		Status:     jobs.StatusPending,
 		VideoName:  videoName,
 		ProjectID:  projectID,
 		RunID:      runID,
 		MaxRetries: q.maxRetries,
+		Payload:    string(raw),
 	}
-	if err := q.lifecycle.Repo().CreateJob(ctx, params); err != nil {
+	if err := q.lifecycle.Jobs().Create(ctx, job); err != nil {
 		return fmt.Errorf("submit job: %w", err)
 	}
 	return nil

@@ -1,24 +1,32 @@
 // Package worker — transport selection extracted from worker_init.go.
-// Creates a GRPCStreamTransport exclusively. HTTP polling has been removed.
+// Creates a GRPCStreamTransport or PollingHTTPTransport based on config.
+// gRPC push is the default and recommended transport (PR12).
 package worker
 
 import (
 	"fmt"
 	"os"
+	"time"
 
 	"velox-shared/controltransport"
 	"velox-worker-agent/internal/transport"
+	"velox-worker-agent/pkg/api"
 	"velox-worker-agent/pkg/config"
 	"velox-worker-agent/pkg/logger"
 )
 
-// newControlTransport creates a GRPCStreamTransport based on config.
-// gRPC is the only transport mode. The worker will not start if gRPC
-// is not properly configured. Returns (nil, err) on any configuration
-// problem so Worker.Start can propagate the failure instead of nil-panicking
-// on the first Connect call.
+// maxGRPCConnectFailuresBeforeFallback is the number of consecutive gRPC
+// connect failures before the worker falls back to HTTP polling (PR12).
+const maxGRPCConnectFailuresBeforeFallback = 3
+
+// newControlTransport creates a ControlTransport based on config.JobDelivery (PR12).
+// Supported modes:
+//   - "push" (default): GRPCStreamTransport with mTLS or insecure dev.
+//   - "polling": PollingHTTPTransport using the remaining V2 HTTP endpoints.
+// Returns (nil, err) on any configuration problem so Worker.Start can propagate
+// the failure instead of nil-panicking on the first Connect call.
 //
-// Validations enforced here:
+// Validations enforced for push (gRPC) mode:
 //   - `control_grpc_url` must be non-empty.
 //   - At least one of `tls_cert_file` / `tls_key_file` / `tls_ca_file` must
 //     be present OR none of them must be present. Mixing partial
@@ -27,11 +35,72 @@ import (
 //   - Unauthenticated gRPC requires VELOX_ALLOW_INSECURE_GRPC_DEV=true
 //     (or `AllowInsecureGRPC` set on WorkerConfig) — this prevents
 //     accidental cleartext in production.
+//
+// Validations enforced for polling (HTTP) mode:
+//   - `master_url` must be non-empty (used to create the api.Client).
 func newControlTransport(cfg *config.WorkerConfig, log *logger.Logger) (controltransport.ControlTransport, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("transport factory: nil WorkerConfig")
 	}
 
+	mode := cfg.JobDelivery
+	if mode == "" {
+		mode = "push"
+	}
+
+	switch mode {
+	case "polling":
+		return newHTTPPollingTransport(cfg, log)
+	default:
+		return newGRPCStreamTransport(cfg, log)
+	}
+}
+
+// newHTTPPollingTransport creates a PollingHTTPTransport using the master's
+// V2 HTTP endpoints. The HTTP client is created from cfg.MasterURL.
+// Exported for use by the gRPC-failure fallback path in worker.go (PR12).
+func newHTTPPollingTransport(cfg *config.WorkerConfig, log *logger.Logger) (controltransport.ControlTransport, error) {
+	if cfg.MasterURL == "" {
+		return nil, fmt.Errorf("transport factory: master_url is required for HTTP transport")
+	}
+
+	client := api.NewClient(cfg.MasterURL,
+		api.WithWorkerID(cfg.WorkerID),
+		api.WithRetry(3, 5*time.Second),
+	)
+
+	httpTransport := transport.NewPollingHTTPTransport(
+		client,
+		cfg.WorkerID,
+		transport.DefaultPollingTransportConfig(),
+	)
+
+	log.Info("[TRANSPORT] Using HTTP polling transport (url=%s)", cfg.MasterURL)
+	return httpTransport, nil
+}
+
+// newHTTPPollingTransportUnvalidated creates a fallback HTTP transport
+// without repeating all config validations (PR12 gRPC-failure fallback).
+// This is only called from inside the Start() reconnect loop after gRPC
+// validation has already passed — the HTTP URL is known-good.
+func newHTTPPollingTransportUnvalidated(cfg *config.WorkerConfig, log *logger.Logger) controltransport.ControlTransport {
+	client := api.NewClient(cfg.MasterURL,
+		api.WithWorkerID(cfg.WorkerID),
+		api.WithRetry(3, 5*time.Second),
+	)
+
+	httpTransport := transport.NewPollingHTTPTransport(
+		client,
+		cfg.WorkerID,
+		transport.DefaultPollingTransportConfig(),
+	)
+
+	log.Info("[TRANSPORT] Using HTTP polling transport (fallback — url=%s)", cfg.MasterURL)
+	return httpTransport
+}
+
+// newGRPCStreamTransport creates a GRPCStreamTransport with TLS or insecure dev.
+func newGRPCStreamTransport(cfg *config.WorkerConfig, log *logger.Logger) (controltransport.ControlTransport, error) {
 	if cfg.ControlGRPCURL == "" {
 		return nil, fmt.Errorf("transport factory: control_grpc_url is required — worker cannot start")
 	}
@@ -46,7 +115,7 @@ func newControlTransport(cfg *config.WorkerConfig, log *logger.Logger) (controlt
 		}
 		log.Info("[TRANSPORT] Insecure gRPC allowed by dev flag — NEVER USE IN PRODUCTION")
 	} else if !hasAnyTLS(cfg) {
-		return nil, fmt.Errorf("transport factory: no TLS configured. Set tls_cert_file/tls_key_file/tls_ca_file, " +
+		return nil, fmt.Errorf("transport factory: no TLS configured. Set tls_cert_file/tls_key_file/tls_ca_file, "+
 			"or enable allow_insecure_grpc_dev=true only for local development")
 	}
 
@@ -63,7 +132,7 @@ func newControlTransport(cfg *config.WorkerConfig, log *logger.Logger) (controlt
 		log.Info("[TRANSPORT] mTLS enabled for gRPC stream (cert=%s)", cfg.TLSCertFile)
 	}
 
-	log.Info("[TRANSPORT] Using gRPC stream transport (url=%s)", cfg.ControlGRPCURL)
+	log.Info("[TRANSPORT] Using gRPC push transport (url=%s)", cfg.ControlGRPCURL)
 	return grpcTransport, nil
 }
 

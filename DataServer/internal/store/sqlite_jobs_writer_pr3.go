@@ -394,21 +394,6 @@ func (r *SQLiteJobRepository) PR3Fail(ctx context.Context, cmd FailCommand) erro
 	return nil
 }
 
-// PR3ScheduleRetry is PR3Fail with Retryable=true forced. Same single-tx shape.
-func (r *SQLiteJobRepository) PR3ScheduleRetry(ctx context.Context, cmd RetryCommand) error {
-	return r.PR3Fail(ctx, FailCommand{
-		JobID:            cmd.JobID,
-		WorkerID:         cmd.WorkerID,
-		LeaseID:          cmd.LeaseID,
-		AttemptNumber:    cmd.AttemptNumber,
-		ExpectedRevision: cmd.ExpectedRevision,
-		ErrorCode:        cmd.ErrorCode,
-		ErrorMessage:     cmd.ErrorMessage,
-		Retryable:        true,
-		Now:              cmd.Now,
-	})
-}
-
 // PR3Cancel transitions a job to CANCELLED. Idempotent on terminal states.
 //
 // Spec note: this is a worker-ID optional transition (cancel can be

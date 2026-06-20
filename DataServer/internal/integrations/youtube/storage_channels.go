@@ -1,28 +1,18 @@
 package youtube
 
 import (
+	"fmt"
 	"time"
 )
 
-// AddChannel adds a channel to a group. Persists only the affected group via
-// SyncGroup (non-destructive per-group diff) — does NOT rewrite other groups.
+// AddChannel adds a channel to a group. Persists via direct store calls
+// (UpsertYouTubeGroupV2 + UpsertYouTubeChannel + AddChannelToGroupV2)
+// instead of the full-diff syncGroupLocked — avoids the per-channel upserts
+// and membership-list round-trip that syncGroupLocked would pay for a
+// single-channel add.
 func (s *Storage) AddChannel(groupName string, channel Channel) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
-	if s.store == nil {
-		group, ok := s.data.Groups[groupName]
-		if !ok {
-			return ErrGroupNotFound
-		}
-		for _, ch := range group.Channels {
-			if ch.URL == channel.URL {
-				return ErrChannelExists
-			}
-		}
-		group.Channels = append(group.Channels, channel)
-		return nil
-	}
 
 	group, ok := s.data.Groups[groupName]
 	if !ok {
@@ -35,7 +25,39 @@ func (s *Storage) AddChannel(groupName string, channel Channel) error {
 	}
 
 	group.Channels = append(group.Channels, channel)
-	return s.syncGroupLocked(groupName, group)
+
+	if s.store == nil {
+		return nil
+	}
+
+	groupType := group.GroupType
+	if groupType == "" {
+		groupType = "manager"
+	}
+
+	groupID, err := s.store.UpsertYouTubeGroupV2(groupName, groupType, "", "")
+	if err != nil {
+		return fmt.Errorf("add channel upsert group %q: %w", groupName, err)
+	}
+
+	addedAt := ""
+	if !channel.AddedAt.IsZero() {
+		addedAt = channel.AddedAt.Format(time.RFC3339)
+	}
+	lastSync := ""
+	if !channel.LastSync.IsZero() {
+		lastSync = channel.LastSync.Format(time.RFC3339)
+	}
+	if err := s.store.UpsertYouTubeChannel(
+		channel.ID, channel.Title, channel.Name, channel.URL, channel.Thumbnail,
+		channel.Language, channel.Notes,
+		channel.ViewCount, channel.SubCount,
+		addedAt, lastSync, "",
+	); err != nil {
+		return fmt.Errorf("add channel upsert channel %s: %w", safeChannelID(channel.ID), err)
+	}
+
+	return s.store.AddChannelToGroupV2(groupID, channel.ID)
 }
 
 // RemoveChannel removes a channel from a group. Persists only the affected
@@ -61,8 +83,11 @@ func (s *Storage) RemoveChannel(groupName, channelID string) error {
 	return ErrChannelNotFound
 }
 
-// MoveChannel moves a channel from one group to another. Persists only the
-// affected source and target groups via SyncGroup (non-destructive diff).
+// MoveChannel moves a channel from one group to another. Uses direct store
+// calls (UpsertYouTubeGroupV2 + AddChannelToGroupV2 / RemoveChannelFromGroupV2)
+// instead of the full-diff syncGroupLocked — avoids per-channel upserts and
+// membership-list round-trips that syncGroupLocked would pay for a single
+// membership change.
 //
 // Atomicity contract:
 //   - Snapshots both source and target channel slices BEFORE any mutation.
@@ -112,11 +137,7 @@ func (s *Storage) MoveChannel(sourceGroup, channelID, targetGroup string) error 
 			if s.store == nil {
 				return nil
 			}
-			if err := s.syncGroupLocked(sourceGroup, source); err != nil {
-				source.Channels = originalSource
-				return err
-			}
-			return nil
+			return s.removeChannelFromGroup(sourceGroup, source, channel.ID, originalSource)
 		}
 	}
 
@@ -129,30 +150,61 @@ func (s *Storage) MoveChannel(sourceGroup, channelID, targetGroup string) error 
 	}
 
 	// Persist target first.
-	if err := s.syncGroupLocked(targetGroup, target); err != nil {
+	targetType := target.GroupType
+	if targetType == "" {
+		targetType = "manager"
+	}
+	targetID, err := s.store.UpsertYouTubeGroupV2(targetGroup, targetType, "", "")
+	if err != nil {
 		source.Channels = originalSource
 		target.Channels = originalTarget
-		return err
+		return fmt.Errorf("move channel upsert target group %q: %w", targetGroup, err)
+	}
+	if err := s.store.AddChannelToGroupV2(targetID, channel.ID); err != nil {
+		source.Channels = originalSource
+		target.Channels = originalTarget
+		return fmt.Errorf("move channel add membership %s to target %q: %w", safeChannelID(channel.ID), targetGroup, err)
 	}
 
 	// Persist source removal.
-	if err := s.syncGroupLocked(sourceGroup, source); err != nil {
+	sourceType := source.GroupType
+	if sourceType == "" {
+		sourceType = "manager"
+	}
+	sourceID, err := s.store.UpsertYouTubeGroupV2(sourceGroup, sourceType, "", "")
+	if err != nil {
 		// DB-target succeeded; undo the membership in DB before restoring
-		// in-memory state so SQLite and memory stay aligned. The type passed
-		// to GetYouTubeGroupV2ID must match UpsertYouTubeGroupV2's
-		// normalisation: an empty GroupType becomes "manager" on insert,
-		// so the rollback lookup has to use the same value or the row
-		// won't be found.
-		targetType := target.GroupType
-		if targetType == "" {
-			targetType = "manager"
-		}
-		if targetID, terr := s.store.GetYouTubeGroupV2ID(targetGroup, targetType); terr == nil && targetID > 0 {
-			_ = s.store.RemoveChannelFromGroupV2(targetID, channel.ID)
-		}
+		// in-memory state.
+		_ = s.store.RemoveChannelFromGroupV2(targetID, channel.ID)
 		source.Channels = originalSource
 		target.Channels = originalTarget
-		return err
+		return fmt.Errorf("move channel upsert source group %q: %w", sourceGroup, err)
+	}
+	if err := s.store.RemoveChannelFromGroupV2(sourceID, channel.ID); err != nil {
+		// DB-target succeeded; undo the membership in DB.
+		_ = s.store.RemoveChannelFromGroupV2(targetID, channel.ID)
+		source.Channels = originalSource
+		target.Channels = originalTarget
+		return fmt.Errorf("move channel remove membership %s from source %q: %w", safeChannelID(channel.ID), sourceGroup, err)
+	}
+	return nil
+}
+
+// removeChannelFromGroup removes a channel from a group's DB membership.
+// Helper extracted from MoveChannel's collision path.
+func (s *Storage) removeChannelFromGroup(groupName string, group *Group, channelID string, original []Channel) error {
+	groupType := group.GroupType
+	if groupType == "" {
+		groupType = "manager"
+	}
+	sourceID, err := s.store.UpsertYouTubeGroupV2(groupName, groupType, "", "")
+	if err != nil {
+		group.Channels = original
+		return fmt.Errorf("remove channel upsert group %q: %w", groupName, err)
+	}
+	if err := s.store.RemoveChannelFromGroupV2(sourceID, channelID); err != nil {
+		group.Channels = original
+		return fmt.Errorf("remove channel remove membership %s from %q: %w", safeChannelID(channelID), groupName, err)
 	}
 	return nil
 }
