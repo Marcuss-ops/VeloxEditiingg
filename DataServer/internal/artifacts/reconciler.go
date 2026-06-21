@@ -59,7 +59,7 @@ import (
 // (graceful shutdown). Reconcile(ctx) is the one-shot callable that
 // callers (tests, admin commands) can invoke.
 type Reconciler struct {
-	maintRepo store.ArtifactMaintenanceRepository
+	maintRepo store.OrphanedArtifactRepository
 	blobStore store.BlobStore
 	repo      Repository
 	clock     clock.Clock
@@ -112,7 +112,7 @@ type ReconcileStats struct {
 // NewReconciler composes a Reconciler. maintRepo and blobStore must outlive
 // the Reconciler (Run holds references). repo can be the same
 // SQLiteRepository as Service uses (transitively via the same *sql.DB).
-func NewReconciler(maintRepo store.ArtifactMaintenanceRepository, blobStore store.BlobStore, repo Repository, c clock.Clock, config ReconcilerConfig) (*Reconciler, error) {
+func NewReconciler(maintRepo store.OrphanedArtifactRepository, blobStore store.BlobStore, repo Repository, c clock.Clock, config ReconcilerConfig) (*Reconciler, error) {
 	if maintRepo == nil {
 		return nil, fmt.Errorf("artifacts: Reconciler: nil maintenance repo")
 	}

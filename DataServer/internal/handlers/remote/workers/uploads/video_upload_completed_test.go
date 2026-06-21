@@ -3,7 +3,6 @@ package uploads
 import (
 	"bytes"
 	"crypto/sha256"
-	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"mime/multipart"
@@ -19,29 +18,17 @@ import (
 	"velox-server/internal/artifacts"
 	"velox-server/internal/config"
 	"velox-server/internal/store"
-	"velox-server/internal/store/migrations"
 )
 
 func TestUploadCompletedVideo_CanonicalPipeline(t *testing.T) {
 	tmp := t.TempDir()
 	dbPath := filepath.Join(tmp, "test.db")
-	db, err := sql.Open("sqlite3", dbPath+"?_busy_timeout=5000&_journal_mode=WAL")
+	sqliteStore, err := store.NewSQLiteStoreFromPath(dbPath, true)
 	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
+		t.Fatalf("open sqlite store: %v", err)
 	}
-	t.Cleanup(func() { _ = db.Close() })
-	for _, p := range []string{
-		"PRAGMA synchronous = NORMAL",
-		"PRAGMA foreign_keys = ON",
-	} {
-		if _, err := db.Exec(p); err != nil {
-			t.Fatalf("pragma: %v", err)
-		}
-	}
-
-	if err := migrations.RunMigrations(db, migrations.MigrationsFS, "."); err != nil {
-		t.Fatalf("migrations: %v", err)
-	}
+	t.Cleanup(func() { _ = sqliteStore.Close() })
+	db := sqliteStore.DB()
 
 	staging := filepath.Join(tmp, "staging")
 	final := filepath.Join(tmp, "final")
@@ -52,7 +39,10 @@ func TestUploadCompletedVideo_CanonicalPipeline(t *testing.T) {
 
 	repo := artifacts.NewSQLiteRepository(db)
 	finRepo := artifacts.NewSQLiteFinalizationRepository(db)
-	artifactSvc := artifacts.NewService(repo, finRepo, bs, db, nil)
+	artifactSvc := artifacts.NewService(repo, finRepo, bs,
+		store.NewSQLiteJobRepository(sqliteStore),
+		store.NewSQLiteArtifactRepository(sqliteStore),
+		nil)
 
 	now := time.Now().UTC().Format(time.RFC3339)
 	leaseExpiry := time.Now().UTC().Add(30 * time.Minute).Format(time.RFC3339)
@@ -187,22 +177,12 @@ func TestUploadCompletedVideo_CanonicalPipeline(t *testing.T) {
 func TestUploadCompletedVideo_BeginUploadRejected_MissingJob(t *testing.T) {
 	tmp := t.TempDir()
 	dbPath := filepath.Join(tmp, "test.db")
-	db, err := sql.Open("sqlite3", dbPath+"?_busy_timeout=5000&_journal_mode=WAL")
+	sqliteStore, err := store.NewSQLiteStoreFromPath(dbPath, true)
 	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
+		t.Fatalf("open sqlite store: %v", err)
 	}
-	t.Cleanup(func() { _ = db.Close() })
-	for _, p := range []string{
-		"PRAGMA synchronous = NORMAL",
-		"PRAGMA foreign_keys = ON",
-	} {
-		if _, err := db.Exec(p); err != nil {
-			t.Fatalf("pragma: %v", err)
-		}
-	}
-	if err := migrations.RunMigrations(db, migrations.MigrationsFS, "."); err != nil {
-		t.Fatalf("migrations: %v", err)
-	}
+	t.Cleanup(func() { _ = sqliteStore.Close() })
+	db := sqliteStore.DB()
 
 	staging := filepath.Join(tmp, "staging")
 	final := filepath.Join(tmp, "final")
@@ -213,7 +193,10 @@ func TestUploadCompletedVideo_BeginUploadRejected_MissingJob(t *testing.T) {
 
 	repo := artifacts.NewSQLiteRepository(db)
 	finRepo := artifacts.NewSQLiteFinalizationRepository(db)
-	artifactSvc := artifacts.NewService(repo, finRepo, bs, db, nil)
+	artifactSvc := artifacts.NewService(repo, finRepo, bs,
+		store.NewSQLiteJobRepository(sqliteStore),
+		store.NewSQLiteArtifactRepository(sqliteStore),
+		nil)
 
 	cfg := &config.Config{Runtime: config.RuntimeConfig{DataDir: tmp}}
 
@@ -243,22 +226,12 @@ func TestUploadCompletedVideo_BeginUploadRejected_MissingJob(t *testing.T) {
 func TestUploadCompletedVideo_MissingVideo(t *testing.T) {
 	tmp := t.TempDir()
 	dbPath := filepath.Join(tmp, "test.db")
-	db, err := sql.Open("sqlite3", dbPath+"?_busy_timeout=5000&_journal_mode=WAL")
+	sqliteStore, err := store.NewSQLiteStoreFromPath(dbPath, true)
 	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
+		t.Fatalf("open sqlite store: %v", err)
 	}
-	t.Cleanup(func() { _ = db.Close() })
-	for _, p := range []string{
-		"PRAGMA synchronous = NORMAL",
-		"PRAGMA foreign_keys = ON",
-	} {
-		if _, err := db.Exec(p); err != nil {
-			t.Fatalf("pragma: %v", err)
-		}
-	}
-	if err := migrations.RunMigrations(db, migrations.MigrationsFS, "."); err != nil {
-		t.Fatalf("migrations: %v", err)
-	}
+	t.Cleanup(func() { _ = sqliteStore.Close() })
+	db := sqliteStore.DB()
 
 	staging := filepath.Join(tmp, "staging")
 	final := filepath.Join(tmp, "final")
@@ -269,7 +242,10 @@ func TestUploadCompletedVideo_MissingVideo(t *testing.T) {
 
 	repo := artifacts.NewSQLiteRepository(db)
 	finRepo := artifacts.NewSQLiteFinalizationRepository(db)
-	artifactSvc := artifacts.NewService(repo, finRepo, bs, db, nil)
+	artifactSvc := artifacts.NewService(repo, finRepo, bs,
+		store.NewSQLiteJobRepository(sqliteStore),
+		store.NewSQLiteArtifactRepository(sqliteStore),
+		nil)
 
 	cfg := &config.Config{Runtime: config.RuntimeConfig{DataDir: tmp}}
 

@@ -7,9 +7,9 @@ import (
 	"time"
 )
 
-// ArtifactMaintenanceRepository is the persistence contract for artifact
+// OrphanedArtifactRepository is the persistence contract for artifact
 // maintenance operations used by the reconciler and other background tasks.
-type ArtifactMaintenanceRepository interface {
+type OrphanedArtifactRepository interface {
 	// ListReadyLocal returns all READY artifacts with local storage provider
 	// and non-empty storage_key + verified_at.
 	ListReadyLocal(ctx context.Context) ([]ReadyLocalArtifact, error)
@@ -34,21 +34,21 @@ type ReadyLocalArtifact struct {
 	VerifiedAt time.Time
 }
 
-// SQLiteArtifactMaintenanceRepository implements ArtifactMaintenanceRepository.
-type SQLiteArtifactMaintenanceRepository struct {
+// SQLiteOrphanedArtifactRepository implements OrphanedArtifactRepository.
+type SQLiteOrphanedArtifactRepository struct {
 	store *SQLiteStore
 }
 
-// NewSQLiteArtifactMaintenanceRepository creates a maintenance repo.
-func NewSQLiteArtifactMaintenanceRepository(store *SQLiteStore) *SQLiteArtifactMaintenanceRepository {
-	return &SQLiteArtifactMaintenanceRepository{store: store}
+// NewSQLiteOrphanedArtifactRepository creates a maintenance repo.
+func NewSQLiteOrphanedArtifactRepository(store *SQLiteStore) *SQLiteOrphanedArtifactRepository {
+	return &SQLiteOrphanedArtifactRepository{store: store}
 }
 
 // Compile-time check.
-var _ ArtifactMaintenanceRepository = (*SQLiteArtifactMaintenanceRepository)(nil)
+var _ OrphanedArtifactRepository = (*SQLiteOrphanedArtifactRepository)(nil)
 
 // ListReadyLocal selects all READY rows with local storage provider.
-func (r *SQLiteArtifactMaintenanceRepository) ListReadyLocal(ctx context.Context) ([]ReadyLocalArtifact, error) {
+func (r *SQLiteOrphanedArtifactRepository) ListReadyLocal(ctx context.Context) ([]ReadyLocalArtifact, error) {
 	rows, err := r.store.db.QueryContext(ctx, `
 		SELECT storage_key, id, COALESCE(verified_at, '')
 		FROM artifacts
@@ -95,7 +95,7 @@ var ErrQuarantineStatusOnly = fmt.Errorf("artifact maintenance: quarantine statu
 // QuarantineArtifact flips READY → QUARANTINED in its own tx, then emits
 // an outbox event in a second tx. The two-phase pattern avoids poisoning
 // the status tx if outbox_events is missing.
-func (r *SQLiteArtifactMaintenanceRepository) QuarantineArtifact(ctx context.Context, artifactID, reason string) error {
+func (r *SQLiteOrphanedArtifactRepository) QuarantineArtifact(ctx context.Context, artifactID, reason string) error {
 	if artifactID == "" {
 		return fmt.Errorf("artifact maintenance: QuarantineArtifact: empty artifactID")
 	}
@@ -149,7 +149,7 @@ func (r *SQLiteArtifactMaintenanceRepository) QuarantineArtifact(ctx context.Con
 }
 
 // ListStuckStaging returns STAGING artifact IDs older than cutoff.
-func (r *SQLiteArtifactMaintenanceRepository) ListStuckStaging(ctx context.Context, cutoff time.Time, limit int) ([]string, error) {
+func (r *SQLiteOrphanedArtifactRepository) ListStuckStaging(ctx context.Context, cutoff time.Time, limit int) ([]string, error) {
 	if limit <= 0 {
 		limit = 200
 	}
@@ -180,7 +180,7 @@ func (r *SQLiteArtifactMaintenanceRepository) ListStuckStaging(ctx context.Conte
 }
 
 // MarkStuckArtifactFailed CAS-flips STAGING → FAILED.
-func (r *SQLiteArtifactMaintenanceRepository) MarkStuckArtifactFailed(ctx context.Context, id string) (bool, error) {
+func (r *SQLiteOrphanedArtifactRepository) MarkStuckArtifactFailed(ctx context.Context, id string) (bool, error) {
 	if id == "" {
 		return false, fmt.Errorf("artifact maintenance: MarkStuckArtifactFailed: empty id")
 	}

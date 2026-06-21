@@ -693,7 +693,7 @@ func runServer(cfg *config.Config) error {
 	}
 
 	if deps.artifactSvc != nil {
-		maintRepo := store.NewSQLiteArtifactMaintenanceRepository(deps.sqliteStore)
+		maintRepo := store.NewSQLiteOrphanedArtifactRepository(deps.sqliteStore)
 		rec, recErr := artifacts.NewReconciler(
 			maintRepo,
 			deps.blobStore,
