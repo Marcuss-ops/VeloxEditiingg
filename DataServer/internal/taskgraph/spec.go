@@ -1,0 +1,54 @@
+package taskgraph
+
+import (
+	"crypto/sha256"
+	"encoding/json"
+	"fmt"
+)
+
+// SpecVersion is the current canonical task spec version.
+const SpecVersion = 1
+
+// TaskSpec is a typed, validated, versioned representation of the work
+// a task must perform. It is serialized for transport and storage but
+// must be validated before persistence. A deterministic spec_hash is
+// stored alongside for integrity verification.
+type TaskSpec struct {
+	Version    int                    `json:"version"`
+	JobID      string                 `json:"job_id"`
+	ExecutorID string                 `json:"executor_id"`
+	Payload    map[string]interface{} `json:"payload,omitempty"`
+}
+
+// Validate checks the task spec for structural correctness.
+func (s *TaskSpec) Validate() error {
+	if s.Version <= 0 {
+		return fmt.Errorf("%w: version must be > 0", ErrInvalidSpec)
+	}
+	if s.JobID == "" {
+		return fmt.Errorf("%w: job_id is required", ErrInvalidSpec)
+	}
+	return nil
+}
+
+// SpecHash returns a deterministic SHA-256 hex digest of the canonical
+// JSON serialization of the spec. Two specs with identical content produce
+// the same hash regardless of field ordering (encoding/json sorts map keys).
+func (s *TaskSpec) SpecHash() (string, error) {
+	data, err := json.Marshal(s)
+	if err != nil {
+		return "", fmt.Errorf("spec hash marshal: %w", err)
+	}
+	sum := sha256.Sum256(data)
+	return fmt.Sprintf("%x", sum), nil
+}
+
+// MustSpecHash is like SpecHash but panics on error. Safe for use after
+// successful Validate.
+func (s *TaskSpec) MustSpecHash() string {
+	h, err := s.SpecHash()
+	if err != nil {
+		panic("taskgraph: MustSpecHash called on invalid spec: " + err.Error())
+	}
+	return h
+}
