@@ -9,8 +9,9 @@ import (
 
 func loadRuntimeConfig(dataDir string) RuntimeConfig {
 	c := RuntimeConfig{
-		VideosDir: os.Getenv("VELOX_VIDEOS_DIR"),
-		StaticDir: os.Getenv("VELOX_STATIC_DIR"),
+		VideosDir:   os.Getenv("VELOX_VIDEOS_DIR"),
+		StaticDir:   os.Getenv("VELOX_STATIC_DIR"),
+		Environment: strings.TrimSpace(os.Getenv("VELOX_ENVIRONMENT")),
 	}
 	c.RuntimeDir = os.Getenv("VELOX_RUNTIME_DIR")
 	c.DataDir = dataDir
