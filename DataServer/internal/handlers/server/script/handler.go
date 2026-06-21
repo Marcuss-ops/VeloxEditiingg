@@ -43,14 +43,18 @@ func NewScriptHandlers(cfg *config.Config, sqliteDB *store.SQLiteStore, enqueuer
 	if cfg != nil {
 		dataDir = strings.TrimSpace(cfg.Runtime.DataDir)
 	}
+	var driveResolver store.DriveFolderResolver
+	if sqliteDB != nil {
+		driveResolver = store.NewSQLiteDriveFolderResolver(sqliteDB)
+	}
 	return &ScriptHandlers{
 		enqueuer: enqueuer,
 		sqliteDB: sqliteDB,
 		dataDir:  dataDir,
-		// creatorflow.New takes only (cfg, enqueuer) post-PR15.7a:
-		// the Enqueuer owns the queue so passing q again would be redundant
-		// and risks drift between two parallel references.
-		creator: creatorflow.New(cfg, enqueuer),
+		// creatorflow.New takes (cfg, enqueuer, driveResolver) post-DB-extraction:
+		// the resolver is required so BuildSceneImagePayloadForMaster can
+		// resolve drive_master_folders aliases without opening its own DB.
+		creator: creatorflow.New(cfg, enqueuer, driveResolver),
 	}
 }
 
@@ -107,7 +111,11 @@ func (h *ScriptHandlers) GenerateWithImagesHandler(cfg *config.Config) gin.Handl
 			}
 		}
 
-		normalized, err := enqueue.BuildSceneImagePayloadForMaster(payload, h.dataDir, cfg.Runtime.VideosDir, resolvedMasterURL)
+		var driveResolver store.DriveFolderResolver
+		if h.sqliteDB != nil {
+			driveResolver = store.NewSQLiteDriveFolderResolver(h.sqliteDB)
+		}
+		normalized, err := enqueue.BuildSceneImagePayloadForMaster(payload, h.dataDir, cfg.Runtime.VideosDir, resolvedMasterURL, driveResolver)
 		if err != nil {
 			if assetErr, ok := voiceoverassets.AsAcquisitionError(err); ok {
 				c.JSON(http.StatusUnprocessableEntity, gin.H{

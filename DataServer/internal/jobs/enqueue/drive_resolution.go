@@ -2,6 +2,7 @@ package enqueue
 
 import (
 	"context"
+	"path/filepath"
 	"strings"
 
 	"velox-server/internal/store"
@@ -14,35 +15,35 @@ import (
 //   - local aliases like "rap" stored in drive_master_folders metadata_json
 //   - exact folder names stored in drive_master_folders
 //
-// The resolver parameter may be nil; when nil only URL/ID extraction is
-// performed (no DB lookup). This keeps tests and offline callers simple.
-func ResolveDriveOutputFolderReference(ctx context.Context, resolver store.DriveFolderResolver, ref string) string {
+// The resolver parameter may be nil; when nil only URL/ID extraction and
+// filepath fallback are performed (no DB lookup). This keeps tests and
+// offline callers simple while preserving the legacy dataDir default.
+func ResolveDriveOutputFolderReference(ctx context.Context, dataDir string, resolver store.DriveFolderResolver, ref string) string {
 	ref = strings.TrimSpace(ref)
 	if ref == "" {
-		return ""
+		return filepath.Join(dataDir, "output")
 	}
 
 	if folderID := extractDriveFolderID(ref); folderID != "" {
 		return folderID
 	}
 
-	if resolver == nil {
-		return ref
-	}
-
-	folders, err := resolver.ListMasterFolders(ctx)
-	if err != nil {
-		return ref
-	}
-
-	normRef := normalizeDriveAlias(ref)
-	for _, f := range folders {
-		if driveFolderMatches(ref, normRef, f.ID, f.Name, f.URL, f.Language, f.Metadata) {
-			return f.ID
+	if resolver != nil {
+		folders, err := resolver.ListMasterFolders(ctx)
+		if err == nil {
+			normRef := normalizeDriveAlias(ref)
+			for _, f := range folders {
+				if driveFolderMatches(ref, normRef, f.ID, f.Name, f.URL, f.Language, f.Metadata) {
+					return f.ID
+				}
+			}
 		}
 	}
 
-	return ref
+	if filepath.IsAbs(ref) {
+		return ref
+	}
+	return filepath.Join(dataDir, ref)
 }
 
 func extractDriveFolderID(ref string) string {

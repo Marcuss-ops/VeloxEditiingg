@@ -14,6 +14,8 @@ import (
 	"velox-shared/paths"
 	"velox-shared/payload"
 
+	"velox-server/internal/store"
+
 	"github.com/google/uuid"
 )
 
@@ -25,18 +27,18 @@ import (
 // request body. This is the canonical builder used by the script/generate-with-images
 // endpoint. It auto-detects audio duration, normalizes scenes with image fallbacks,
 // and computes per-scene durations.
-func BuildSceneImagePayload(rawPayload map[string]interface{}, dataDir, videosDir string) (map[string]interface{}, error) {
-	return BuildSceneImagePayloadForMaster(rawPayload, dataDir, videosDir, "")
+func BuildSceneImagePayload(rawPayload map[string]interface{}, dataDir, videosDir string, driveResolver store.DriveFolderResolver) (map[string]interface{}, error) {
+	return BuildSceneImagePayloadForMaster(rawPayload, dataDir, videosDir, "", driveResolver)
 }
 
 // BuildSceneImagePayloadForMaster builds the canonical script-with-images payload
 // and stages remote voiceover assets behind the master so workers can fetch them
 // from a local master URL instead of Google Drive.
-func BuildSceneImagePayloadForMaster(rawPayload map[string]interface{}, dataDir, videosDir, masterURL string) (map[string]interface{}, error) {
-	return buildSceneImagePayload(rawPayload, dataDir, videosDir, masterURL)
+func BuildSceneImagePayloadForMaster(rawPayload map[string]interface{}, dataDir, videosDir, masterURL string, driveResolver store.DriveFolderResolver) (map[string]interface{}, error) {
+	return buildSceneImagePayload(rawPayload, dataDir, videosDir, masterURL, driveResolver)
 }
 
-func buildSceneImagePayload(rawPayload map[string]interface{}, dataDir, videosDir, masterURL string) (map[string]interface{}, error) {
+func buildSceneImagePayload(rawPayload map[string]interface{}, dataDir, videosDir, masterURL string, driveResolver store.DriveFolderResolver) (map[string]interface{}, error) {
 	videoName := payload.FirstString(rawPayload, "video_name", "title", "topic")
 	if videoName == "" {
 		videoName = paths.SanitizeVideoName(payload.FirstString(rawPayload, "topic", "source_text"))
@@ -155,7 +157,7 @@ func buildSceneImagePayload(rawPayload map[string]interface{}, dataDir, videosDi
 	normalized["audio_language_for_srt"] = audioLanguage
 	normalized["video_mode"] = "scene_image"
 	normalized["output_path"] = outputPath
-	normalized["drive_output_folder"] = ResolveDriveOutputFolderReference(context.Background(), nil, payload.FirstString(rawPayload, "drive_output_folder", "output_directory"))
+	normalized["drive_output_folder"] = ResolveDriveOutputFolderReference(context.Background(), dataDir, driveResolver, payload.FirstString(rawPayload, "drive_output_folder", "output_directory"))
 	normalized["scene_count"] = sceneCount
 	normalized["voiceover_count"] = len(voiceoverPaths)
 	normalized["total_duration_secs"] = totalDuration

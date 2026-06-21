@@ -12,6 +12,7 @@ import (
 	remoteansible "velox-server/internal/handlers/remote/ansible"
 	"velox-server/internal/jobs/enqueue"
 	"velox-server/internal/remoteengine"
+	"velox-server/internal/store"
 )
 
 // Service encapsulates the optional "creator" stage so multiple endpoints can
@@ -22,20 +23,20 @@ import (
 // at the composition root if they need the concrete type. This collapses
 // two parallel fields that always pointed to the same underlying queue.
 type Service struct {
-	enqueuer *enqueue.Enqueuer // PR15.7a: drops package-level voiceover global AND the q field; both rewrite + queue live here.
-	client   *remoteengine.Client
-	pollInterval time.Duration
-	dataDir      string
-	videosDir    string
-	masterURL    string
+	enqueuer      *enqueue.Enqueuer // PR15.7a: drops package-level voiceover global AND the q field; both rewrite + queue live here.
+	client        *remoteengine.Client
+	driveResolver store.DriveFolderResolver
+	pollInterval  time.Duration
+	dataDir       string
+	videosDir     string
+	masterURL     string
 }
 
 // New creates a creator-flow service from runtime config.
 // enqueuer is mandatory (PR15.7a): it owns the voiceover rewrite and the
-// The concrete type is no longer needed here —
-// callers can construct the Enqueuer (which embeds the JobQueue) once
-// at composition-root time and pass it down.
-func New(cfg *config.Config, enqueuer *enqueue.Enqueuer) *Service {
+// queue. driveResolver may be nil; when nil drive-output-folder alias
+// resolution falls back to filepath.Join without querying drive_master_folders.
+func New(cfg *config.Config, enqueuer *enqueue.Enqueuer, driveResolver store.DriveFolderResolver) *Service {
 	if cfg == nil || enqueuer == nil {
 		return nil
 	}
@@ -44,7 +45,8 @@ func New(cfg *config.Config, enqueuer *enqueue.Enqueuer) *Service {
 	}
 
 	return &Service{
-		enqueuer: enqueuer,
+		enqueuer:      enqueuer,
+		driveResolver: driveResolver,
 		client: remoteengine.NewClient(remoteengine.Config{
 			URL:       cfg.Render.RemoteEngineURL,
 			Token:     cfg.Render.RemoteEngineToken,
@@ -164,7 +166,7 @@ func (s *Service) forwardCompletedResult(ctx context.Context, result map[string]
 		masterURL = detectPublicMasterURL()
 	}
 	if s.dataDir != "" && masterURL != "" {
-		workerPayload, err = enqueue.BuildSceneImagePayloadForMaster(workerPayload, s.dataDir, s.videosDir, masterURL)
+		workerPayload, err = enqueue.BuildSceneImagePayloadForMaster(workerPayload, s.dataDir, s.videosDir, masterURL, s.driveResolver)
 		if err != nil {
 			return nil, err
 		}

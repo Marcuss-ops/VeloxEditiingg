@@ -23,7 +23,7 @@ func TestBuildSceneImagePayload(t *testing.T) {
 		},
 	}
 
-	result, err := BuildSceneImagePayload(payload, tempDir, filepath.Join(tempDir, "videos"))
+	result, err := BuildSceneImagePayload(payload, tempDir, filepath.Join(tempDir, "videos"), nil)
 	if err != nil {
 		t.Fatalf("BuildSceneImagePayload: %v", err)
 	}
@@ -85,7 +85,7 @@ func TestBuildSceneImagePayload_YoutubeGroupAlias(t *testing.T) {
 		"voiceover_path": "/tmp/v.mp3",
 		"scenes":         []interface{}{map[string]interface{}{"text": "S1", "image_link": "https://example.com/i.png"}},
 	}
-	result, err := BuildSceneImagePayload(payload, t.TempDir(), t.TempDir())
+	result, err := BuildSceneImagePayload(payload, t.TempDir(), t.TempDir(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +104,7 @@ func TestBuildSceneImagePayload_Fallbacks(t *testing.T) {
 			map[string]interface{}{"text": "S3"},
 		},
 	}
-	result, err := BuildSceneImagePayload(payload, t.TempDir(), t.TempDir())
+	result, err := BuildSceneImagePayload(payload, t.TempDir(), t.TempDir(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,11 +120,11 @@ func TestBuildSceneImagePayload_Fallbacks(t *testing.T) {
 func TestBuildSceneImagePayload_Errors(t *testing.T) {
 	t.Parallel()
 	base := map[string]interface{}{"voiceover_path": "/tmp/v.mp3"}
-	_, err := BuildSceneImagePayload(base, t.TempDir(), t.TempDir())
+	_, err := BuildSceneImagePayload(base, t.TempDir(), t.TempDir(), nil)
 	if err == nil {
 		t.Error("want error for missing scenes")
 	}
-	_, err = BuildSceneImagePayload(map[string]interface{}{"scenes": []interface{}{}}, t.TempDir(), t.TempDir())
+	_, err = BuildSceneImagePayload(map[string]interface{}{"scenes": []interface{}{}}, t.TempDir(), t.TempDir(), nil)
 	if err == nil {
 		t.Error("want error for missing voiceover")
 	}
@@ -142,7 +142,7 @@ func TestBuildSceneImagePayloadForMaster(t *testing.T) {
 		"video_name": "Master Test", "voiceover_path": srcVoice,
 		"scenes": []interface{}{map[string]interface{}{"text": "S1", "image_link": srcImage}},
 	}
-	result, err := BuildSceneImagePayloadForMaster(payload, tempDir, filepath.Join(tempDir, "videos"), "http://master.example")
+	result, err := BuildSceneImagePayloadForMaster(payload, tempDir, filepath.Join(tempDir, "videos"), "http://master.example", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -182,7 +182,7 @@ func TestBuildSceneImagePayloadForMaster_PreservesRemoteSources(t *testing.T) {
 		"scenes":         []interface{}{map[string]interface{}{"text": "S1", "image_link": sceneURL}},
 	}
 
-	result, err := BuildSceneImagePayloadForMaster(payload, tempDir, filepath.Join(tempDir, "videos"), "http://master.example")
+	result, err := BuildSceneImagePayloadForMaster(payload, tempDir, filepath.Join(tempDir, "videos"), "http://master.example", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -222,7 +222,7 @@ func TestBuildSceneImagePayload_PreservesIDs(t *testing.T) {
 		"voiceover_path": "/tmp/v.mp3", "job_id": "custom-id", "job_run_id": "custom-run", "correlation_id": "custom-corr",
 		"scenes": []interface{}{map[string]interface{}{"text": "S1", "image_link": "https://example.com/i.png"}},
 	}
-	result, err := BuildSceneImagePayload(payload, t.TempDir(), t.TempDir())
+	result, err := BuildSceneImagePayload(payload, t.TempDir(), t.TempDir(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -518,7 +518,7 @@ func TestBuildSceneImagePayload_RoundTrip(t *testing.T) {
 			map[string]interface{}{"text": "S1", "image_link": "https://example.com/i.png"},
 		},
 	}
-	result, err := BuildSceneImagePayload(payload, t.TempDir(), t.TempDir())
+	result, err := BuildSceneImagePayload(payload, t.TempDir(), t.TempDir(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
