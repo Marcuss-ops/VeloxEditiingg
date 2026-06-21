@@ -25,6 +25,12 @@ this capability from outside the canonical owner.
 | Audit logging | `internal/audit/data_layer` | Free-form `log.Printf` calls for events that the auditor must observe |
 | Migrations | Canonical SQL files + migration registration in `cmd/server/bootstrap.go` | Programmatic `CREATE TABLE IF NOT EXISTS` outside the migration registry |
 | Queue package | **REMOVED** — `internal/queue` has been deleted. LifecycleService lives at `internal/jobs`. | Reintroducing `internal/queue`, `queue.Job`, `queue.QueueItem`, `queue.JobStatus`, or `*queue.FileQueue` |
+| Task state (status, attempts, revision) | `internal/taskgraph` repository + `LifecycleService` | Direct SQL writes from handlers or background jobs; `internal/obs` |
+| TaskAttempt state (status, reports) | `internal/taskattempts` repository | Direct SQL writes from handlers or background jobs |
+| Task execution report ingestion | `internal/taskattempts` repository | Duplicate report writers or side-channel INSERTs |
+| Task observability / diagnostics | `internal/observability` (read-only aggregation) | Direct SQL aggregation from handlers; mutable state in observability package |
+| Task phase metrics | `internal/taskattempts` (PhaseTiming + AttemptMetrics tables) | Free-form phase identifiers; JSON-only metric storage |
+| Atomic Job+Task creation | `internal/store.AtomicJobTaskCreator` | Non-atomic Job or Task creation paths; handlers writing task SQL directly |
 
 ## The single-writer rule
 

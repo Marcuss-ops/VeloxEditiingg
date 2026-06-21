@@ -52,3 +52,15 @@ func (s *TaskSpec) MustSpecHash() string {
 	}
 	return h
 }
+
+// RenderPlanID extracts a render plan ID from the spec payload.
+// Returns empty string if not present.
+func (s *TaskSpec) RenderPlanID() string {
+	if s == nil || s.Payload == nil {
+		return ""
+	}
+	if v, ok := s.Payload["render_plan_id"].(string); ok {
+		return v
+	}
+	return ""
+}

@@ -18,10 +18,10 @@ import (
 // TestGRPCStreamTransportTwoKeyLock tests the double-consent pattern enforced
 // by newGRPCStreamTransport (called through New()):
 //
-//   Pass:  AllowInsecureGRPC=true  +  VELOX_ALLOW_INSECURE_GRPC_DEV=true
-//   Fail:  AllowInsecureGRPC=true  +  VELOX_ALLOW_INSECURE_GRPC_DEV unset
-//   Fail:  AllowInsecureGRPC=false +  VELOX_ALLOW_INSECURE_GRPC_DEV=true
-//   Fail:  AllowInsecureGRPC=false +  VELOX_ALLOW_INSECURE_GRPC_DEV unset
+//	Pass:  AllowInsecureGRPC=true  +  VELOX_ALLOW_INSECURE_GRPC_DEV=true
+//	Fail:  AllowInsecureGRPC=true  +  VELOX_ALLOW_INSECURE_GRPC_DEV unset
+//	Fail:  AllowInsecureGRPC=false +  VELOX_ALLOW_INSECURE_GRPC_DEV=true
+//	Fail:  AllowInsecureGRPC=false +  VELOX_ALLOW_INSECURE_GRPC_DEV unset
 //
 // The last case fails because neither TLS nor insecure flags are set.
 func TestGRPCStreamTransportTwoKeyLock(t *testing.T) {

@@ -64,6 +64,7 @@ type serverDeps struct {
 	lifecycleSvc        *jobs.LifecycleService
 	assetService        *voiceoverassets.AssetService
 	enqueuer            *enqueue.Enqueuer
+	taskDeps            *taskDeps
 }
 
 // ── Sentinels ─────────────────────────────────────────────────────────────
@@ -84,6 +85,10 @@ func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
 		return nil, err
 	}
 	j, err := buildJobs(p)
+	if err != nil {
+		return nil, err
+	}
+	t, err := buildTasks(p)
 	if err != nil {
 		return nil, err
 	}
@@ -109,6 +114,7 @@ func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
 		artifactSvc:         a.ArtifactSvc,
 		cmdMgr:              w.CommandManager,
 		lifecycleSvc:        j.Lifecycle,
+		taskDeps:            t,
 	}, nil
 }
 
@@ -133,6 +139,10 @@ func runServer(cfg *config.Config) error {
 	}()
 
 	j, err := buildJobs(p)
+	if err != nil {
+		return err
+	}
+	t, err := buildTasks(p)
 	if err != nil {
 		return err
 	}
@@ -171,6 +181,7 @@ func runServer(cfg *config.Config) error {
 		lifecycleSvc:        j.Lifecycle,
 		assetService:        m.AssetService,
 		enqueuer:            m.Enqueuer,
+		taskDeps:            t,
 	}
 
 	// 3. Build router
