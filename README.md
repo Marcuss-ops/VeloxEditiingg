@@ -86,4 +86,6 @@ the two-worker topology can still pass the existing greps. The
 
 ## Documentation
 
-ADRs, deployment notes, and architecture references live in [`docs/`](docs/).
+ADRs, deployment notes, and architecture references live in [`docs/`](docs/).
+
+The implementation plan for task DAGs, reusable precompositions, worker registries, rendering metrics, cost-aware scheduling, and temporal sharding lives in [`docs/architecture/distributed-rendering/`](docs/architecture/distributed-rendering/README.md).
