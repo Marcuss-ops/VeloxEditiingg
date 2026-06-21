@@ -375,11 +375,11 @@ if allow_insecure:
 else:
     cfg["allow_insecure_grpc_dev"] = False
 
-# Schema sanity defaults.
+# Schema sanity defaults. NOTE: HTTP-polling-era keys
+# (command_poll_interval_secs, use_v2_endpoints) were dropped in PR3 final;
+# the worker is gRPC-push only.
 cfg.setdefault("max_active_jobs", 1)
-cfg.setdefault("command_poll_interval_secs", 30)
 cfg.setdefault("prometheus_port", 0)
-cfg.setdefault("use_v2_endpoints", True)
 
 with open(dst, "w") as f:
     json.dump(cfg, f, indent=2, sort_keys=False)

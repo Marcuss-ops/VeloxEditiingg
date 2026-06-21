@@ -25,41 +25,14 @@ type WorkerConfig struct {
 	EngineVersion   string `json:"engine_version,omitempty"`
 
 	// Worker policy
-	MaxActiveJobs  int `json:"max_active_jobs"`  // Maximum concurrent active jobs (default: 1)
-	PrometheusPort int `json:"prometheus_port"`  // Prometheus metrics port (default: 9090, 0=disabled)
-	HealthPort     int `json:"health_port"`      // Health HTTP port (default: 8081, 0=disabled)
+	MaxActiveJobs  int `json:"max_active_jobs"` // Maximum concurrent active jobs (default: 1)
+	PrometheusPort int `json:"prometheus_port"` // Prometheus metrics port (default: 9090, 0=disabled)
+	HealthPort     int `json:"health_port"`     // Health HTTP port (default: 8081, 0=disabled)
 
-	// ControlGRPCURL is the gRPC endpoint for the worker control stream.
+	// ControlGRPCURL is the gRPC endpoint for the persistent worker control stream.
+	// Velox exclusively uses a gRPC-push architecture; this field is mandatory.
 	// Example: "master.example.com:8443"
 	ControlGRPCURL string `json:"control_grpc_url,omitempty"`
-
-	// ControlTransport selects the transport mode (DEPRECATED — use JobDelivery).
-	//   - "grpc" (default): GRPCStreamTransport (requires control_grpc_url).
-	//   - "http": PollingHTTPTransport (requires master_url).
-	// Migrated to JobDelivery in applyDefaults().
-	ControlTransport string `json:"control_transport,omitempty"`
-
-	// JobDelivery selects how jobs are delivered to the worker:
-	//   - "push" (default): gRPC bidirectional stream — master pushes JobOffer messages.
-	//   - "polling": HTTP polling — worker polls GET /api/v1/queue/job every 5s.
-	JobDelivery string `json:"job_delivery,omitempty"`
-
-	// FallbackToPolling enables automatic fallback to HTTP polling when gRPC push
-	// fails repeatedly. When true and gRPC connect fails N times in a row, the
-	// worker silently switches to HTTP polling for the remainder of the session.
-	// Default: false (fail fast — workers crash-loop until gRPC recovers).
-	FallbackToPolling bool `json:"fallback_to_polling,omitempty"`
-
-	// ShadowMode enables dual-transport comparison: primary HTTP polling (real
-	// claims) + shadow gRPC stream (observation only). The shadow transport
-	// receives JobOffer/Command messages but NEVER sends JobAccepted.
-	// Metrics track match/mismatch/latency between the two transports.
-	// When shadow_mode is true, both master_url and control_grpc_url are required.
-	ShadowMode bool `json:"shadow_mode,omitempty"`
-
-	// ShadowGRPCURL overrides control_grpc_url for the shadow gRPC transport.
-	// When empty, control_grpc_url is used for the shadow transport.
-	ShadowGRPCURL string `json:"shadow_grpc_url,omitempty"`
 
 	// mTLS configuration for gRPC transport (Phase 7).
 	// TLSCertFile is the path to the worker's client certificate (PEM).
@@ -158,16 +131,16 @@ func DefaultConfig(workDir string) *WorkerConfig {
 	}
 
 	return &WorkerConfig{
-		MasterURL:               "http://localhost:8000",
-		WorkerID:                GenerateWorkerID(),
-		WorkerName:              "velox-worker",
-		WorkDir:                 workDir,
-		LogLevel:                "info",
-		BundleVersion:           "",
-		ProtocolVersion:         "2026-06-worker-v1",
-		MaxActiveJobs:           1,    // 1 main job per VPS
-		HealthPort:              8081, // Health HTTP endpoint for Docker HEALTHCHECK
-		WorkerSecret:            "",   // Set via VELOX_WORKER_SECRET env var
+		MasterURL:       "http://localhost:8000",
+		WorkerID:        GenerateWorkerID(),
+		WorkerName:      "velox-worker",
+		WorkDir:         workDir,
+		LogLevel:        "info",
+		BundleVersion:   "",
+		ProtocolVersion: "2026-06-worker-v1",
+		MaxActiveJobs:   1,    // 1 main job per VPS
+		HealthPort:      8081, // Health HTTP endpoint for Docker HEALTHCHECK
+		WorkerSecret:    "",   // Set via VELOX_WORKER_SECRET env var
 	}
 }
 
@@ -179,18 +152,6 @@ func (c *WorkerConfig) applyDefaults() {
 	}
 	if c.HealthPort == 0 {
 		c.HealthPort = 8081
-	}
-
-	// ── PR12 migration: silent lift of legacy control_transport → job_delivery ────
-	if c.JobDelivery == "" {
-		switch c.ControlTransport {
-		case "http":
-			c.JobDelivery = "polling"
-		case "grpc", "":
-			c.JobDelivery = "push"
-		default:
-			c.JobDelivery = "push" // unknown → default push
-		}
 	}
 
 }
@@ -228,33 +189,9 @@ func (c *WorkerConfig) Validate() error {
 		errs = append(errs, fmt.Sprintf("invalid log_level: %s (valid: debug, info, warn, error)", c.LogLevel))
 	}
 
-	// Validate transport settings
-	if c.ControlTransport == "http" || c.ShadowMode {
-		// HTTP mode only needs MasterURL.
-		if c.MasterURL == "" {
-			errs = append(errs, "master_url is required for http transport")
-		}
-	}
-	if (c.ControlTransport != "http" || c.ShadowMode) && c.ControlGRPCURL == "" {
-		// gRPC mode (default) or shadow mode needs ControlGRPCURL.
+	// Velox uses a gRPC-push-only architecture; control_grpc_url is mandatory.
+	if c.ControlGRPCURL == "" {
 		errs = append(errs, "control_grpc_url is required")
-	}
-
-	// Validate job delivery settings (PR12).
-	needsHTTP := c.JobDelivery == "polling" || c.ShadowMode || c.FallbackToPolling
-	if needsHTTP && c.MasterURL == "" {
-		errs = append(errs, "master_url is required for polling job delivery")
-	}
-
-	// control_grpc_url required when primary is push (gRPC), shadow mode,
-	// or fallback is enabled from push (needs both URLs).
-	// Not required when primary is polling with no fallback or shadow.
-	needsGRPC := c.JobDelivery != "polling" || c.ShadowMode || (c.FallbackToPolling && c.JobDelivery != "polling")
-	if needsGRPC && c.ControlGRPCURL == "" {
-		errs = append(errs, "control_grpc_url is required for push job delivery")
-	}
-	if c.JobDelivery != "" && c.JobDelivery != "push" && c.JobDelivery != "polling" {
-		errs = append(errs, fmt.Sprintf("invalid job_delivery: %s (valid: push, polling)", c.JobDelivery))
 	}
 
 	if len(errs) > 0 {
