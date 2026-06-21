@@ -52,7 +52,7 @@ Anything not in this table — bare names, trailing-but-not-leading slashes,
 leading-but-not-trailing slashes, glob patterns without an explicit anchor
 — must be reviewed with extra scrutiny. The next section explains why.
 
-## Banned patterns
+## Constrained patterns
 
 ### Bare names: `controltransport`
 
@@ -116,11 +116,13 @@ to **make both axes explicit** even when you think one is obvious.
 *.swp
 ```
 
-A bare-name pattern that matches only a SUFFIX (or any name containing
-a glob meta-character) cannot collide with a tracked directory, because
-no tracked directory is literally named `*.bak` or `*.log`. These
-patterns are SAFE and should NOT be confused with the banned bare-name
-PATH-SEGMENT patterns in the previous subsections.
+A bare-name pattern that contains a literal DOT (`.`) is constrained to
+matching names that also contain a `.`. The tracked directory names in
+this repo (e.g. `controltransport`, `frontend_standalone`, `shared`,
+`docs`, `DataServer`, `RemoteCodex`) carry no `.`, so the pattern cannot
+silently hide any tracked directory. These file-extension globs are
+SAFE and should NOT be confused with the banned bare-name PATH-SEGMENT
+patterns in the previous subsections.
 
 The key contrast:
 
@@ -237,8 +239,7 @@ while IFS=: read -r lineno rule; do
     '')        continue ;;        # blank after trim
     */*)       continue ;;        # contains slash — path-anchored
     /*)        continue ;;        # leading slash — root-anchored
-    \*\.\*)    continue ;;        # bare-name suffix glob (e.g. *.bak)
-    \*\?*\*)   continue ;;        # bare-name glob with multi-char (e.g. *foo*)
+    \*\.[a-zA-Z0-9._-]*)  continue ;;  # file-extension glob (e.g. *.bak, *.tar.gz)
   esac
   echo "FAIL line $lineno: bare-name rule '$rule' (ambiguous scope)"
   fail=1
