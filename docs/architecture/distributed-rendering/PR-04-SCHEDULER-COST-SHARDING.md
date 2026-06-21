@@ -1,5 +1,27 @@
 # PR 4 - Adaptive scheduler, cost model, and temporal sharding
 
+## Status snapshot (2026-06-21)
+
+| Sub-task | Status | Landed on |
+| --- | --- | --- |
+| PR 4.0 — Baseline + recorded dataset | OPEN (PR 3 merge done; dataset export + EWMA not started) | — |
+| PR 4.1 — Worker performance profiles | OPEN | — |
+| PR 4.2 — Task cost estimator | OPEN (deterministic shape is decided by the canonical `Executor.Descriptor` exposure; estimator registry not built) | — |
+| PR 4.3 — Ready queue | OPEN (still using today’s FIFO claim-next path; the cost-aware placement slice is orthogonal) | — |
+| **PR 4.4 — Capability + resource filtering** | **LANDED (PR-04.5)** | `codex/pr-04-scheduler-cost-sharding` commit `52479f6d` |
+| **PR 4.5 — Locality-aware scoring** | **PARTIALLY LANDED (PR-04.5)** — write-side plumbing (per-job `Requirements` end-to-end) + structured `Explanation`. Bandwidth modelling + rank-site flip in PR-04.6. | `codex/pr-04-scheduler-cost-sharding` commit `52479f6d` |
+| PR 4.6 — Temporal shard planner | OPEN | — |
+| PR 4.7 — Shard execution contract | OPEN | — |
+| PR 4.8 — Compatible shard finalization | OPEN | — |
+| PR 4.9 — Critical path calculation | OPEN | — |
+| PR 4.10 — Straggler detection | OPEN | — |
+| PR 4.11 — Project diagnostics | OPEN | — |
+| PR 4.12 — Scheduler lifecycle and recovery | OPEN | — |
+| PR 4.13 — Ownership and guards | OPEN (PR-04.4/4.5 surface ownership rows already landed in `docs/architecture/OWNERSHIP.md`) | — |
+
+See "Operational TODO" further down for the per-sub-task acceptance bullets and
+the commit references that flip each bullet.
+
 ## Metadata
 
 Title: `feat(scheduler): add cost-aware placement and temporal render sharding`
@@ -115,21 +137,39 @@ global       -> do not split
 
 ### PR 4.4 - Add capability and resource filtering
 
-- [ ] Filter workers by executor ID/version.
-- [ ] Enforce CPU/RAM/GPU/VRAM/disk hard requirements.
-- [ ] Exclude draining, disconnected, or overcommitted workers.
-- [ ] Respect worker maximum active tasks.
-- [ ] Add tests for CPU-only, GPU-required, insufficient memory, and draining workers.
+> **Status — LANDED on `codex/pr-04-scheduler-cost-sharding` (commit `52479f6d`, PR-04.5).**
+> Landed as the costmodel.Score + Registry.GetEligibleWorkers path
+> (`DataServer/internal/costmodel`, mirror `RemoteCodex/native/worker-agent-go/internal/costmodel`)
+> with per-job `costmodel.JobRequirements` published at enqueue and threaded
+> through `jobs.Job → jobs.QueueItem → jobs.Writer.Create → SQLite` (migration 039:
+> dedicated columns `job_required_resource_class` + `job_required_temporal_mode`,
+> plus the `_requirements` sub-object inside `request_json`).
+> Rank call site (`sendPushJobOffer`) remains OFF at this slice per rollout
+> flag "Solo-eligibility on, rank off" (PR-04.6 will flip).
+
+- [x] Filter workers by executor ID/version. ⇐ ResourceClass / TemporalMode (executor.Descriptor)
+- [x] Enforce CPU/RAM/GPU/VRAM/disk hard requirements. ⇐ compatibility matrix in `costmodel.Score`
+- [x] Exclude draining, disconnected, or overcommitted workers. ⇐ drained / offline / capacity gates short-circuit `Score` before the four-field rules
+- [x] Respect worker maximum active tasks. ⇐ `MaxParallel > 0 && ActiveJobs >= MaxParallel` gate in `Score`
+- [x] Add tests for CPU-only, GPU-required, insufficient memory, and draining workers. ⇐ `DataServer/internal/costmodel/cost_test.go` covers GPU→CPU rejection, draining / offline / capacity exclusion, four-field compatibility matrix, executor-merge policy, permissiveness invariant
 
 ### PR 4.5 - Add locality-aware scoring
 
-- [ ] Calculate bytes already in local worker cache.
-- [ ] Calculate missing bytes and expected source tier.
-- [ ] Include measured/effective bandwidth.
-- [ ] Include worker queue time and resource pressure.
-- [ ] Return a structured explanation for the winning placement.
-- [ ] Persist or log the scoring components for diagnostics.
-- [ ] Add tests where a slower cached worker beats a faster uncached worker.
+> **Status — PARTIALLY LANDED on `codex/pr-04-scheduler-cost-sharding` (commit `52479f6d`, PR-04.5).**
+> Per-user scope: per-job `costmodel.JobRequirements` threaded end-to-end (write path
+> `Enqueuer.Enqueue → JobQueue.SubmitJob → jobs.Writer.Create`; read path
+> `jobs.Writer.Get → jobs.Job.Requirements → jobs.QueueItem.Requirements`).
+> Plus structured `costmodel.Explanation` carried by every `Score` call.
+> Bandwidth modelling and the rank site flip land in PR-04.6; "slower cached worker beats
+> faster uncached worker" test lands with the rank flip.
+
+- [x] Calculate bytes already in local worker cache. ⇐ `Cacheable` plumbed on per-job `Requirements` (rank-site consumption lands in PR-04.6)
+- [x] Calculate missing bytes and expected source tier. ⇐ `Deterministic` plumbed on per-job `Requirements` (rank-site consumption lands in PR-04.6)
+- [ ] Include measured/effective bandwidth. ⇐ follow-up (PR-04.6 / PR-04.7)
+- [x] Include worker queue time and resource pressure. ⇐ `LoadFactor = ActiveJobs / max(MaxParallel, 1)` in `costmodel.Explanation`
+- [x] Return a structured explanation for the winning placement. ⇐ `Explanation{CapabilityFit, LoadFactor, DeterminismHit, CacheableHint, ModeFit, IneligibilityReason}` plus `Cost{Eligible, Score}`
+- [x] Persist or log the scoring components for diagnostics. ⇐ per-job `Requirements` mirrored to SQLite columns + `request_json._requirements`; `Explanation` returned alongside `Cost`
+- [ ] Add tests where a slower cached worker beats a faster uncached worker. ⇐ Stage 2 — PR-04.6 flip after rank site consumes `Cacheable` + `Deterministic`
 
 ### PR 4.6 - Add temporal shard planner
 

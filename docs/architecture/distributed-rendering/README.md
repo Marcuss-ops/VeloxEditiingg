@@ -30,7 +30,7 @@ DataServer/internal/taskattempts
 DataServer/internal/observability
 DataServer/internal/renderplan
 DataServer/internal/scheduler
-DataServer/internal/costmodel
+DataServer/internal/costmodel        ← LANDED on `codex/pr-04-scheduler-cost-sharding` (commit `52479f6d`, PR-04.5): per-job cost-aware eligibility + cost model mirrored in worker-agent-go. Rank call site (sendPushJobOffer) flips in PR-04.6.
 RemoteCodex/native/worker-agent-go/internal/executor
 RemoteCodex/native/worker-agent-go/internal/taskrunner
 RemoteCodex/native/worker-agent-go/internal/localcache
