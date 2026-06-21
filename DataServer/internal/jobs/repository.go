@@ -20,11 +20,23 @@ type Counts map[Status]int64
 // ── Domain parameter types for Writer methods ──────────────────────────────
 
 // ClaimNextResult is the result of a successful ClaimNext call.
+//
+// Requirements is the per-job placement needs reconstructed at claim
+// time from the in-blob _requirements sub-object (PR-04.5 mirror that
+// the FIFO + rank claim paths write into result_json before the CAS
+// UPDATE). Populated symmetrically on ClaimNext + ClaimNextForProfile
+// so the dispatcher (sendPushJobOffer) can read claimResult.Requirements
+// directly without bouncing through jobs.Writer.Get to fetch the
+// full canonical Job. DefaultRequirements{} is returned when the
+// _requirements sub-object is absent (pre-PR-04.5 legacy rows) so
+// the dispatcher falls through to its existing Get-based fallback
+// path on the rare row that predates the mirror.
 type ClaimNextResult struct {
 	JobID        string    `json:"job_id"`
 	Attempt      int       `json:"attempt"`
 	LeaseID      string    `json:"lease_id,omitempty"`
 	LeaseExpires time.Time `json:"lease_expires,omitempty"`
+	Requirements costmodel.JobRequirements `json:"requirements,omitempty"`
 }
 
 // RequeueResult reports the outcome of a single expired-lease requeue.

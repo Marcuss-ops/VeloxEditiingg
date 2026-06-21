@@ -7,6 +7,7 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 
+	"velox-server/internal/costmodel"
 	"velox-server/internal/store"
 )
 
@@ -186,6 +187,130 @@ func JobRepositoryContract(t *testing.T, factory func(t *testing.T) (*store.SQLi
 		})
 		if err == nil {
 			t.Error("expected ErrTransitionConflict, got nil")
+		}
+	})
+
+	t.Run("ClaimNext round-trip populates Requirements from _requirements sub-object", func(t *testing.T) {
+		repo, cleanup := factory(t)
+		defer cleanup()
+		ctx := context.Background()
+		jobID := "job_req_fifo_" + randSuffix()
+		req := costmodel.JobRequirements{
+			ResourceClass:    costmodel.ResourceGPU,
+			TemporalMode:     costmodel.TemporalWindowed,
+			Deterministic:    true,
+			Cacheable:        true,
+			MinBandwidthMbps: 100,
+		}
+		if err := repo.CreateJob(ctx, store.CreateJobParams{
+			JobID:        jobID,
+			MaxRetries:   3,
+			Requirements: req,
+		}); err != nil {
+			t.Fatalf("CreateJob: %v", err)
+		}
+		got, err := repo.ClaimNext(ctx, "worker-fifo-req", nil)
+		if err != nil || got == nil {
+			t.Fatalf("ClaimNext: %v %v", got, err)
+		}
+		if got.JobID != jobID {
+			t.Errorf("JobID: want %q got %q", jobID, got.JobID)
+		}
+		if got.Requirements.ResourceClass != req.ResourceClass {
+			t.Errorf("ResourceClass: want %q got %q", req.ResourceClass, got.Requirements.ResourceClass)
+		}
+		if got.Requirements.TemporalMode != req.TemporalMode {
+			t.Errorf("TemporalMode: want %q got %q", req.TemporalMode, got.Requirements.TemporalMode)
+		}
+		if got.Requirements.Deterministic != req.Deterministic {
+			t.Errorf("Deterministic: want %v got %v", req.Deterministic, got.Requirements.Deterministic)
+		}
+		if got.Requirements.Cacheable != req.Cacheable {
+			t.Errorf("Cacheable: want %v got %v", req.Cacheable, got.Requirements.Cacheable)
+		}
+		if got.Requirements.MinBandwidthMbps != req.MinBandwidthMbps {
+			t.Errorf("MinBandwidthMbps: want %v got %v", req.MinBandwidthMbps, got.Requirements.MinBandwidthMbps)
+		}
+	})
+
+	t.Run("ClaimNextForProfile round-trip populates Requirements from _requirements sub-object", func(t *testing.T) {
+		repo, cleanup := factory(t)
+		defer cleanup()
+		ctx := context.Background()
+		jobID := "job_req_rank_" + randSuffix()
+		req := costmodel.JobRequirements{
+			ResourceClass:    costmodel.ResourceCPU,
+			TemporalMode:     costmodel.TemporalFrameLocal,
+			Deterministic:    false,
+			Cacheable:        true,
+			MinBandwidthMbps: 0,
+		}
+		if err := repo.CreateJob(ctx, store.CreateJobParams{
+			JobID:        jobID,
+			MaxRetries:   3,
+			Requirements: req,
+		}); err != nil {
+			t.Fatalf("CreateJob: %v", err)
+		}
+		// BuildWorkerProfile with nil capabilities yields the CPU +
+		// frame_local defaults; matches the on-disk requirements so
+		// ClaimNextForProfile's eligibility gate (cost.Eligible) is
+		// free to admit the candidate.
+		profile := costmodel.BuildWorkerProfile("worker-rank-req", true, false, "online", 0, 4, nil)
+		got, err := repo.ClaimNextForProfile(ctx, "worker-rank-req", nil, profile, 20)
+		if err != nil || got == nil {
+			t.Fatalf("ClaimNextForProfile: %v %v", got, err)
+		}
+		if got.JobID != jobID {
+			t.Errorf("JobID: want %q got %q", jobID, got.JobID)
+		}
+		if got.Requirements.ResourceClass != req.ResourceClass {
+			t.Errorf("ResourceClass: want %q got %q", req.ResourceClass, got.Requirements.ResourceClass)
+		}
+		if got.Requirements.TemporalMode != req.TemporalMode {
+			t.Errorf("TemporalMode: want %q got %q", req.TemporalMode, got.Requirements.TemporalMode)
+		}
+		if got.Requirements.Deterministic != req.Deterministic {
+			t.Errorf("Deterministic: want %v got %v", req.Deterministic, got.Requirements.Deterministic)
+		}
+		if got.Requirements.Cacheable != req.Cacheable {
+			t.Errorf("Cacheable: want %v got %v", req.Cacheable, got.Requirements.Cacheable)
+		}
+		if got.Requirements.MinBandwidthMbps != req.MinBandwidthMbps {
+			t.Errorf("MinBandwidthMbps: want %v got %v", req.MinBandwidthMbps, got.Requirements.MinBandwidthMbps)
+		}
+	})
+
+	t.Run("ClaimNext on legacy empty Requirements returns DefaultRequirements", func(t *testing.T) {
+		repo, cleanup := factory(t)
+		defer cleanup()
+		ctx := context.Background()
+		jobID := "job_req_legacy_" + randSuffix()
+		// Legacy-Posture: zero Requirements. The columns get inserted
+		// as empty strings, the mirror at claim time skips writing
+		// _requirements (its guard checks TrimSpace(rc) != ""), so
+		// the result_json field is absent. Reading it round-trips
+		// to DefaultRequirements() — the safe permissive fallback
+		// preserved for pre-PR-04.5 rows and for any future caller
+		// that hasn't yet migrated to publishing requirements.
+		if err := repo.CreateJob(ctx, store.CreateJobParams{
+			JobID:        jobID,
+			MaxRetries:   3,
+			Requirements: costmodel.DefaultRequirements(),
+		}); err != nil {
+			t.Fatalf("CreateJob: %v", err)
+		}
+		got, err := repo.ClaimNext(ctx, "worker-legacy-req", nil)
+		if err != nil || got == nil {
+			t.Fatalf("ClaimNext: %v %v", got, err)
+		}
+		def := costmodel.DefaultRequirements()
+		if got.Requirements.ResourceClass != def.ResourceClass ||
+			got.Requirements.TemporalMode != def.TemporalMode ||
+			got.Requirements.Deterministic != def.Deterministic ||
+			got.Requirements.Cacheable != def.Cacheable ||
+			got.Requirements.MinBandwidthMbps != def.MinBandwidthMbps {
+			t.Errorf("legacy-empty Requirements mismatch: got %+v want %+v", got.Requirements, def)
 		}
 	})
 

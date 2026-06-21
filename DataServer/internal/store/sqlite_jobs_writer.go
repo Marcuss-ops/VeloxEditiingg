@@ -259,6 +259,15 @@ func (r *SQLiteJobRepository) claimNext(ctx context.Context, claim ClaimParams) 
 	if lease, ok := parsed["lease_id"].(string); ok {
 		out.LeaseID = lease
 	}
+	// PR-04.6 + dispatcher-read: populate per-job Requirements from
+	// the in-blob _requirements sub-object (the PR-04.5 mirror
+	// ClaimNextPendingJob writes BEFORE the CAS UPDATE). Reading
+	// here means the dispatcher can consume claimResult.Requirements
+	// directly without bouncing through jobs.Writer.Get. Pre-PR-04.5
+	// rows (no _requirements key) fall through to requirementsFromPayload
+	// returning DefaultRequirements{}; that is the safe permissive
+	// default that preserves the legacy routing path.
+	out.Requirements = requirementsFromPayload(parsed)
 	switch a := parsed["attempt"].(type) {
 	case float64:
 		out.Attempt = int(a)
@@ -838,6 +847,7 @@ func (r *SQLiteJobRepository) ClaimNext(ctx context.Context, workerID string, al
 		Attempt:      result.Attempt,
 		LeaseID:      result.LeaseID,
 		LeaseExpires: result.LeaseExpires,
+		Requirements: result.Requirements,
 	}, nil
 }
 
@@ -895,6 +905,15 @@ func (r *SQLiteJobRepository) ClaimNextForProfile(
 				out.LeaseExpires = t
 			}
 		}
+		// PR-04.6 + dispatcher-read: populate per-job Requirements
+		// from the in-blob _requirements sub-object. The mirror
+		// write happens earlier in ClaimNextPendingJobForWorker's
+		// CAS block on the SAME result_json bytes, so this parse
+		// sees freshly-minted data. Reading here means PR-04.6
+		// (sendPushJobOffer rank path) can read claimResult.Requirements
+		// directly without bouncing through jobs.Writer.Get to
+		// fetch the full canonical Job.
+		out.Requirements = requirementsFromPayload(parsed)
 	}
 	return out, nil
 }
