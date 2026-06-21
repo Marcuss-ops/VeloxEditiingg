@@ -500,10 +500,6 @@ func (t *GRPCStreamTransport) envelopeToMessage(env *pb.MasterToWorkerEnvelope) 
 	case *pb.MasterToWorkerEnvelope_HelloAck:
 		msg.Type = controltransport.MsgHelloAck
 
-	case *pb.MasterToWorkerEnvelope_JobAvailable:
-		msg.Type = controltransport.MsgJobAvailable
-		msg.TypedPayload = m.JobAvailable
-
 	case *pb.MasterToWorkerEnvelope_JobOffer:
 		msg.Type = controltransport.MsgJobOffer
 		msg.TypedPayload = m.JobOffer
