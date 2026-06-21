@@ -48,15 +48,27 @@ shared_count="$(
 # 4. All GitHub workflow YAML lives under ./.github/workflows/.
 # We anchor on `./.github/workflows/*` (NOT `*/workflows/*`) so that no
 # stray `foo/workflows/stage.yml` from another tool slipped in.
+#
+# npm transitive deps (e.g. `frontend_standalone/web/node_modules/reusify/`
+# shipping its own `.github/workflows/ci.yml`) are NOT real project
+# workflows and are excluded here:
+#   - `find -prune` skips traversing any `*/node_modules/` subtree entirely
+#     so deps never enter the candidate set (consistent with how `.git` is
+#     pruned above and in rule #2);
+#   - the defensive case-branch below documents the allow-list inline and
+#     ensures the rule still skips node_modules paths even if the prune
+#     is later reordered/removed in a refactor.
 found_off_root=0
 while IFS= read -r workflow; do
   case "$workflow" in
     ./.github/workflows/*) ;;
     ./frontend_standalone/.github/workflows/*) ;;
+    */node_modules/*/.github/workflows/*) ;;
     *) printf '  off-root workflow: %s\n' "$workflow" >&2; found_off_root=1 ;;
   esac
 done < <(find . \
     -path './.git' -prune -o \
+    -path '*/node_modules' -prune -o \
     -type f \( -name '*.yml' -o -name '*.yaml' \) \
     -path '*/workflows/*' -print)
 [[ "$found_off_root" -eq 0 ]] \
@@ -102,6 +114,18 @@ fi
 # Scope: only non-test files inside the worker package. Tests are
 # allowed to mock the old surface for regression coverage; production
 # code MUST NOT contain these patterns any more.
+#
+# Comment-aware filter: package doc comments and doc-comment blocks
+# legitimately reference the deleted legacy helpers (e.g. "the
+# helpers ... are GONE in PR-3.9" or "matching the legacy
+# executeWorkflowJob contract"). Without a comment filter the grep
+# would flag those doc-only references as false positives. The
+# `grep -vE '^[^:]+:[0-9]+:[[:space:]]*(//|/\*|\*)'` filter drops any
+# line whose content (after the path:lineno: prefix and whitespace)
+# starts with a Go comment token: line comment `//`, block comment
+# opener `/*`, or block-comment continuation `*`. Pure code lines
+# (e.g. `case "render": ...`) are preserved so genuine regressions
+# still trip the guard.
 worker_dispatch_violations="$(
   grep -RInE \
     -e 'case[[:space:]]+"render"[[:space:]]*:' \
@@ -114,7 +138,9 @@ worker_dispatch_violations="$(
     -e 'newVideoWorkflow' \
     RemoteCodex/native/worker-agent-go/internal/worker \
     --include='*.go' --exclude='*_test.go' \
-    2>/dev/null || true
+    2>/dev/null \
+    | grep -vE '^[^:]+:[0-9]+:[[:space:]]*(//|/\*|\*)' \
+    || true
 )"
 if [[ -n "$worker_dispatch_violations" ]]; then
   printf 'PR-3.9: hardcoded worker dispatch detected (regression — every job type must resolve through executor.Registry):\n'
