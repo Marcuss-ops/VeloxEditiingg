@@ -28,6 +28,7 @@ type Handler struct {
 	reg         *workersreg.Registry
 	cmdMgr      *workersreg.CommandManager
 	tokenMgr    *workersreg.TokenManager
+	dbStore     *store.SQLiteStore // credential persistence + session store
 	codeVersion string
 }
 
@@ -38,6 +39,7 @@ func NewHandler(cfg *config.Config, reg *workersreg.Registry, dbStore *store.SQL
 		reg:         reg,
 		cmdMgr:      workersreg.NewCommandManager(dbStore),
 		tokenMgr:    workersreg.NewTokenManager(dbStore),
+		dbStore:     dbStore,
 		codeVersion: cfg.Workers.CodeVersion,
 	}
 }

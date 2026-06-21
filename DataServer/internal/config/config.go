@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 )
 
 // FromEnv loads configuration from environment variables.
@@ -98,10 +97,9 @@ func (c *Config) Validate() error {
 			return fmt.Errorf(
 				"config: VELOX_ALLOW_NOP_BLOBSTORE_DEV=true is forbidden when GIN_MODE=release")
 		}
-		env := strings.TrimSpace(os.Getenv("VELOX_ENVIRONMENT"))
-		if env == "production" || env == "prod" {
+		if c.Runtime.Environment == "production" || c.Runtime.Environment == "prod" {
 			return fmt.Errorf(
-				"config: VELOX_ALLOW_NOP_BLOBSTORE_DEV=true is forbidden in environment=%q", env)
+				"config: VELOX_ALLOW_NOP_BLOBSTORE_DEV=true is forbidden in environment=%q", c.Runtime.Environment)
 		}
 	}
 

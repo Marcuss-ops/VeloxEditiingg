@@ -36,9 +36,14 @@ type RuntimeConfig struct {
 	// Default 256 MiB; configured via VELOX_MAX_VOICEOVER_BYTES.
 	MaxVoiceoverBytes int64
 
+	// Environment mirrors VELOX_ENVIRONMENT ("development" | "staging" |
+	// "production" | "prod" | ""). Used by Validate() for production
+	// safety gates (NopBlobStore ban).
+	Environment string
+
 	// AllowNopBlobStoreDev enables the no-op blob store for local
 	// development ONLY.  The Validate() method bans this flag when
-	// GIN_MODE=release or VELOX_ENVIRONMENT is production/prod.
+	// GIN_MODE=release or Environment is production/prod.
 	// Configured via VELOX_ALLOW_NOP_BLOBSTORE_DEV=true.
 	AllowNopBlobStoreDev bool
 

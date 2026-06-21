@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 
-	"velox-server/internal/config"
 	"velox-server/internal/jobs"
 	"velox-server/internal/platform/clock"
 	"velox-server/internal/queue"
@@ -22,9 +21,7 @@ type jobsDeps struct {
 // persistence layer. The LifecycleService is the SOLE transactional
 // entry point for job status transitions; SUCCEEDED is reachable ONLY
 // through artifacts.Service.FinalizeArtifactAndCompleteJob.
-func buildJobs(cfg *config.Config, p *persistenceDeps) (*jobsDeps, error) {
-	_ = cfg // reserved for future per-module config gates
-
+func buildJobs(p *persistenceDeps) (*jobsDeps, error) {
 	jobRepo := store.NewSQLiteJobRepository(p.SQLite)
 	jobsRepository := store.NewJobsRepository(jobRepo)
 

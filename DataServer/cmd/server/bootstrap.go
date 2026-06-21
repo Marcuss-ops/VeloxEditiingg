@@ -82,7 +82,7 @@ func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
 	if err != nil {
 		return nil, err
 	}
-	j, err := buildJobs(cfg, p)
+	j, err := buildJobs(p)
 	if err != nil {
 		return nil, err
 	}
@@ -131,7 +131,7 @@ func runServer(cfg *config.Config) error {
 		}
 	}()
 
-	j, err := buildJobs(cfg, p)
+	j, err := buildJobs(p)
 	if err != nil {
 		return err
 	}
