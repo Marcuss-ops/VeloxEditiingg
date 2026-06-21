@@ -75,6 +75,12 @@ type jobWaiter struct {
 	jobID    string
 	ready    chan struct{}
 	priority int
+	// wg is incremented by admitOrQueue before spawning awaitWaiter and
+	// decremented (deferred) by awaitWaiter on its exit. Outer paths
+	// use wg.Wait to ensure awaitWaiter's admit-vs-cancel decision is
+	// final before deciding whether to Release the slot the waiter
+	// may have admitted.
+	wg sync.WaitGroup
 }
 
 // NewConcurrencyLimiter creates a new concurrency limiter.
@@ -95,16 +101,12 @@ func NewConcurrencyLimiter(maxActiveJobs int) *ConcurrencyLimiter {
 // success, ctx.Err() if the caller's context is canceled, or "limiter
 // stopped" if the limiter was Stop()ed.
 //
-// PR-3.5 priority handling:
-//   - priority>=3 takes a TEMPORARY +1 cap slot for the lifetime of this
-//     call. The bump is rolled back via defer so the cap never leaks.
-//   - All priorities share one queue and one slot counter, so no
-//     priority starvation. Critical callers simply get a brief headroom.
+// PR-3.5 priority handling (post-review fix): priority is stats-only.
+// All callers share one slot counter and one cap. Removing the
+// temporary-cap-bump preemption closes a race where two concurrent
+// priority>=3 calls could each snapshot the same cap, both bump, and
+// both defer-rollback, leaking the advertised cap on the wire.
 func (cl *ConcurrencyLimiter) Acquire(ctx context.Context, jobID string, priority int) error {
-	if priority >= 3 {
-		atomic.AddInt64(&cl.maxActiveJobs, 1)
-		defer atomic.AddInt64(&cl.maxActiveJobs, -1)
-	}
 	return cl.admitOrQueue(ctx, jobID, priority)
 }
 
@@ -138,6 +140,7 @@ func (cl *ConcurrencyLimiter) admitOrQueue(ctx context.Context, jobID string, pr
 	atomic.AddInt32(&cl.waitingJobs, 1)
 	cl.mu.Unlock()
 
+	waiter.wg.Add(1)
 	go cl.awaitWaiter(waiter)
 
 	select {
@@ -151,15 +154,23 @@ func (cl *ConcurrencyLimiter) admitOrQueue(ctx context.Context, jobID string, pr
 			delete(cl.waitList, waiter)
 			atomic.AddInt32(&cl.waitingJobs, -1)
 			atomic.AddInt64(&cl.rejectedJobs, 1)
-			cl.cond.Broadcast()
 		}
 		cl.mu.Unlock()
-		// Drain the awaitWaiter goroutine's still-open w.ready so it
-		// doesn't leak. The cancel-or-stop path already removed our
-		// waitList entry, so awaitWaiter will see the removed entry
-		// and exit on its next loop iteration.
+		cl.mu.Lock()
+		cl.cond.Broadcast()
+		cl.mu.Unlock()
+
+		// Block until awaitWaiter observably settled. After this
+		// returns, awaitWaiter's admit decision is final: either it
+		// was removed from waitList before admit (no activeJobs bump),
+		// or it admitted and closed waiter.ready (slot held). Without
+		// the wg.Wait barrier, a cancel that races with admit can
+		// observe "not in waitList" while the admit is mid-flight and
+		// leak the slot.
+		waiter.wg.Wait()
 		select {
 		case <-waiter.ready:
+			cl.Release()
 		default:
 		}
 		return ctx.Err()
@@ -169,19 +180,31 @@ func (cl *ConcurrencyLimiter) admitOrQueue(ctx context.Context, jobID string, pr
 			delete(cl.waitList, waiter)
 			atomic.AddInt32(&cl.waitingJobs, -1)
 		}
+		cl.mu.Unlock()
+		cl.mu.Lock()
 		cl.cond.Broadcast()
 		cl.mu.Unlock()
+
+		waiter.wg.Wait()
+		select {
+		case <-waiter.ready:
+			cl.Release()
+		default:
+		}
 		return fmt.Errorf("limiter stopped")
 	}
 }
 
 // awaitWaiter blocks on Cond.Wait and closes waiter.ready when the
-// signal arrives. The goroutine exits cleanly when the outer cancel
-// or stop path removes the waitList entry; a slot release race that
-// READMITTED a waiter after outer-cancel is impossible because the
-// second `if _, ok := cl.waitList[w]; !ok` check after cond.Wait
-// returns catches the removed-entry case before any state mutation.
+// signal arrives. wg.Done is deferred FIRST so the outer cancel/stop
+// path's wg.Wait is unblocked even on panic. The goroutine exits
+// cleanly when the outer cancel or stop path removes the waitList
+// entry; a slot release race that READMITTED a waiter after
+// outer-cancel is impossible because the second
+// `if _, ok := cl.waitList[w]; !ok` check after cond.Wait returns
+// catches the removed-entry case before any state mutation.
 func (cl *ConcurrencyLimiter) awaitWaiter(w *jobWaiter) {
+	defer w.wg.Done()
 	cl.mu.Lock()
 	defer cl.mu.Unlock()
 	for {
@@ -268,18 +291,15 @@ func (cl *ConcurrencyLimiter) Stats() ConcurrencyStats {
 }
 
 // CanAcceptJob is a best-effort non-blocking check. Returns true if a
-// slot is currently free OR we have headroom below the rejection
-// threshold. May become stale immediately on return; use Acquire for
-// guaranteed admission.
+// slot is currently free. May become stale immediately on return; use
+// Acquire for guaranteed admission. PR-3.5 (post-review fix):
+// priority no longer influences admission decisions. Callers that
+// need priority semantics should layer their own admission gate
+// outside this limiter.
 func (cl *ConcurrencyLimiter) CanAcceptJob(priority int) bool {
-	if priority >= 3 {
-		return true
-	}
+	_ = priority
 	current := atomic.LoadInt32(&cl.activeJobs)
 	max := atomic.LoadInt64(&cl.maxActiveJobs)
-	if priority >= 2 {
-		return int64(current) < max*2
-	}
 	return int64(current) < max
 }
 

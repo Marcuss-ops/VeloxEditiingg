@@ -29,6 +29,13 @@ func (w *Worker) Start(ctx context.Context) error {
 	w.concurrencyLimiter.Start(ctx)
 	w.logger.Info("[CONCURRENCY] Started with max_active_jobs=%d", w.config.MaxActiveJobs)
 
+	// PR-3.5: surface empty executor registry early. WithRegistry(empty)
+	// is the supported default; operators must see this on the wire
+	// before deciding the worker is broken or PR-3.6 hasn't shipped.
+	if w.executorRegistry != nil && len(w.executorRegistry.Descriptors()) == 0 {
+		w.logger.Warn("[STARTUP] executor registry is empty — ZERO executors will be advertised to master until scene.composite.v1 is registered (PR-3.6)")
+	}
+
 	// Connection state machine with automatic backoff
 	backoff := registrationInitialBackoff
 

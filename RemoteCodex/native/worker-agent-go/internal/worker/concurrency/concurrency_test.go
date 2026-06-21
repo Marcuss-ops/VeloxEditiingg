@@ -150,9 +150,13 @@ func TestConcurrencyLimiter_CtxCancelCleansUpWaitQueue(t *testing.T) {
 	cl.Release()
 }
 
-func TestConcurrencyLimiter_CriticalPriorityPreempts(t *testing.T) {
-	// priority>=3 preempts by raising the effective cap by 1 — the
-	// bump MUST be rolled back when the slot is released.
+func TestConcurrencyLimiter_PriorityIsStatsOnly(t *testing.T) {
+	// PR-3.5 (post-review fix): priority is stats-only. Two concurrent
+	// priority>=3 callers do not preempt; they queue like everyone else.
+	// The previous "bump maxActiveJobs+1 for priority>=3, defer
+	// rollback" pattern had a cap-leak race when two priority callers
+	// raced: each would snapshot cap=1, both bump to 2, both admit, both
+	// defer-rollback, leaking the advertised cap on the wire.
 	cl := NewConcurrencyLimiter(1)
 	defer cl.Stop()
 
@@ -160,21 +164,23 @@ func TestConcurrencyLimiter_CriticalPriorityPreempts(t *testing.T) {
 		t.Fatalf("first acquire failed: %v", err)
 	}
 
-	if err := cl.Acquire(context.Background(), "job-crit", 3); err != nil {
-		t.Fatalf("critical acquire failed: %v", err)
+	// Priority 3 with cap reached cannot preempt; Acquire blocks until
+	// the context deadline fires.
+	shortCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if err := cl.Acquire(shortCtx, "job-crit", 3); err == nil {
+		t.Fatalf("priority>=3 must NOT preempt; expected timeout error")
 	}
-	if cl.ActiveJobCount() != 2 {
-		t.Fatalf("ActiveJobCount should be 2 (preempt), got %d", cl.ActiveJobCount())
-	}
+
+	// Wire cap stable across the failed critical attempt.
 	if cl.MaxActiveJobs() != 1 {
 		t.Fatalf("MaxActiveJobs leaked — should still be 1, got %d", cl.MaxActiveJobs())
 	}
-
-	cl.Release() // release critical
-	if cl.MaxActiveJobs() != 1 {
-		t.Fatalf("MaxActiveJobs leaked after critical Release — got %d", cl.MaxActiveJobs())
+	if cl.ActiveJobCount() != 1 {
+		t.Fatalf("ActiveJobCount leaked — should still be 1, got %d", cl.ActiveJobCount())
 	}
-	cl.Release() // release first
+
+	cl.Release()
 }
 
 func TestConcurrencyLimiter_RaceSafeSetAndRead(t *testing.T) {
