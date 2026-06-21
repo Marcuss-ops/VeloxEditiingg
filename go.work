@@ -5,3 +5,10 @@ use (
 	./RemoteCodex/native/worker-agent-go
 	./shared
 )
+
+// Single canonical resolution for velox-shared inside the workspace.
+// A `replace` in go.work overrides conflicting `replace` directives of the
+// same module declared inside member go.mod files (Go 1.21+ workspace
+// semantics). The two member modules (DataServer and worker-agent-go) keep
+// their own in-tree `replace` clauses for non-workspace CI usage.
+replace velox-shared v0.0.0 => ./shared
