@@ -1154,7 +1154,6 @@ type MasterToWorkerEnvelope struct {
 	// Types that are valid to be assigned to Msg:
 	//
 	//	*MasterToWorkerEnvelope_HelloAck
-	//	*MasterToWorkerEnvelope_JobAvailable
 	//	*MasterToWorkerEnvelope_JobOffer
 	//	*MasterToWorkerEnvelope_JobLeaseGranted
 	//	*MasterToWorkerEnvelope_Command
@@ -1256,15 +1255,6 @@ func (x *MasterToWorkerEnvelope) GetHelloAck() *HelloAck {
 	return nil
 }
 
-func (x *MasterToWorkerEnvelope) GetJobAvailable() *JobAvailable {
-	if x != nil {
-		if x, ok := x.Msg.(*MasterToWorkerEnvelope_JobAvailable); ok {
-			return x.JobAvailable
-		}
-	}
-	return nil
-}
-
 func (x *MasterToWorkerEnvelope) GetJobOffer() *JobOffer {
 	if x != nil {
 		if x, ok := x.Msg.(*MasterToWorkerEnvelope_JobOffer); ok {
@@ -1345,10 +1335,6 @@ type MasterToWorkerEnvelope_HelloAck struct {
 	HelloAck *HelloAck `protobuf:"bytes,20,opt,name=hello_ack,json=helloAck,proto3,oneof"`
 }
 
-type MasterToWorkerEnvelope_JobAvailable struct {
-	JobAvailable *JobAvailable `protobuf:"bytes,21,opt,name=job_available,json=jobAvailable,proto3,oneof"`
-}
-
 type MasterToWorkerEnvelope_JobOffer struct {
 	JobOffer *JobOffer `protobuf:"bytes,22,opt,name=job_offer,json=jobOffer,proto3,oneof"`
 }
@@ -1382,8 +1368,6 @@ type MasterToWorkerEnvelope_Ping struct {
 }
 
 func (*MasterToWorkerEnvelope_HelloAck) isMasterToWorkerEnvelope_Msg() {}
-
-func (*MasterToWorkerEnvelope_JobAvailable) isMasterToWorkerEnvelope_Msg() {}
 
 func (*MasterToWorkerEnvelope_JobOffer) isMasterToWorkerEnvelope_Msg() {}
 
@@ -1435,58 +1419,6 @@ func (x *HelloAck) ProtoReflect() protoreflect.Message {
 // Deprecated: Use HelloAck.ProtoReflect.Descriptor instead.
 func (*HelloAck) Descriptor() ([]byte, []int) {
 	return file_proto_velox_control_worker_control_proto_rawDescGZIP(), []int{12}
-}
-
-type JobAvailable struct {
-	state               protoimpl.MessageState `protogen:"open.v1"`
-	CompatibleJobExists bool                   `protobuf:"varint,1,opt,name=compatible_job_exists,json=compatibleJobExists,proto3" json:"compatible_job_exists,omitempty"`
-	Message             string                 `protobuf:"bytes,2,opt,name=message,proto3" json:"message,omitempty"`
-	unknownFields       protoimpl.UnknownFields
-	sizeCache           protoimpl.SizeCache
-}
-
-func (x *JobAvailable) Reset() {
-	*x = JobAvailable{}
-	mi := &file_proto_velox_control_worker_control_proto_msgTypes[13]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *JobAvailable) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*JobAvailable) ProtoMessage() {}
-
-func (x *JobAvailable) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_velox_control_worker_control_proto_msgTypes[13]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use JobAvailable.ProtoReflect.Descriptor instead.
-func (*JobAvailable) Descriptor() ([]byte, []int) {
-	return file_proto_velox_control_worker_control_proto_rawDescGZIP(), []int{13}
-}
-
-func (x *JobAvailable) GetCompatibleJobExists() bool {
-	if x != nil {
-		return x.CompatibleJobExists
-	}
-	return false
-}
-
-func (x *JobAvailable) GetMessage() string {
-	if x != nil {
-		return x.Message
-	}
-	return ""
 }
 
 type JobOffer struct {
@@ -2138,7 +2070,7 @@ func file_proto_velox_control_worker_control_proto_rawDescGZIP() []byte {
 	return file_proto_velox_control_worker_control_proto_rawDescData
 }
 
-var file_proto_velox_control_worker_control_proto_msgTypes = make([]protoimpl.MessageInfo, 22)
+var file_proto_velox_control_worker_control_proto_msgTypes = make([]protoimpl.MessageInfo, 21)
 var file_proto_velox_control_worker_control_proto_goTypes = []any{
 	(*WorkerToMasterEnvelope)(nil), // 0: velox.control.WorkerToMasterEnvelope
 	(*Hello)(nil),                  // 1: velox.control.Hello
@@ -2153,17 +2085,17 @@ var file_proto_velox_control_worker_control_proto_goTypes = []any{
 	(*ArtifactUploaded)(nil),       // 10: velox.control.ArtifactUploaded
 	(*MasterToWorkerEnvelope)(nil), // 11: velox.control.MasterToWorkerEnvelope
 	(*HelloAck)(nil),               // 12: velox.control.HelloAck
-	(*JobAvailable)(nil),           // 13: velox.control.JobAvailable
-	(*JobOffer)(nil),               // 14: velox.control.JobOffer
-	(*JobLeaseGranted)(nil),        // 15: velox.control.JobLeaseGranted
-	(*Command)(nil),                // 16: velox.control.Command
-	(*CancelJob)(nil),              // 17: velox.control.CancelJob
-	(*Drain)(nil),                  // 18: velox.control.Drain
-	(*ConfigurationUpdate)(nil),    // 19: velox.control.ConfigurationUpdate
-	(*LeaseRevoked)(nil),           // 20: velox.control.LeaseRevoked
-	(*Ping)(nil),                   // 21: velox.control.Ping
-	(*timestamppb.Timestamp)(nil),  // 22: google.protobuf.Timestamp
-	(*structpb.Struct)(nil),        // 23: google.protobuf.Struct
+	// 13 was JobAvailable (removed in Phase E of PR3 — was a oneof case)
+	(*JobOffer)(nil),              // 14: velox.control.JobOffer
+	(*JobLeaseGranted)(nil),       // 15: velox.control.JobLeaseGranted
+	(*Command)(nil),               // 16: velox.control.Command
+	(*CancelJob)(nil),             // 17: velox.control.CancelJob
+	(*Drain)(nil),                 // 18: velox.control.Drain
+	(*ConfigurationUpdate)(nil),   // 19: velox.control.ConfigurationUpdate
+	(*LeaseRevoked)(nil),          // 20: velox.control.LeaseRevoked
+	(*Ping)(nil),                  // 21: velox.control.Ping
+	(*timestamppb.Timestamp)(nil), // 22: google.protobuf.Timestamp
+	(*structpb.Struct)(nil),       // 23: google.protobuf.Struct
 }
 var file_proto_velox_control_worker_control_proto_depIdxs = []int32{
 	22, // 0: velox.control.WorkerToMasterEnvelope.sent_at:type_name -> google.protobuf.Timestamp
@@ -2225,7 +2157,6 @@ func file_proto_velox_control_worker_control_proto_init() {
 	}
 	file_proto_velox_control_worker_control_proto_msgTypes[11].OneofWrappers = []any{
 		(*MasterToWorkerEnvelope_HelloAck)(nil),
-		(*MasterToWorkerEnvelope_JobAvailable)(nil),
 		(*MasterToWorkerEnvelope_JobOffer)(nil),
 		(*MasterToWorkerEnvelope_JobLeaseGranted)(nil),
 		(*MasterToWorkerEnvelope_Command)(nil),
@@ -2241,7 +2172,7 @@ func file_proto_velox_control_worker_control_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_velox_control_worker_control_proto_rawDesc), len(file_proto_velox_control_worker_control_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   22,
+			NumMessages:   21,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
