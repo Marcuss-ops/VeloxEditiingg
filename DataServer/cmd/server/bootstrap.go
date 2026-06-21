@@ -56,7 +56,8 @@ type serverDeps struct {
 	workflowRepo        workflow.Repository
 	outboxStore         *outbox.Store
 	outboxDispatcher    *outbox.Dispatcher
-	deliveryRunner      *deliveries.DeliveryRunner	blobStore           store.BlobStore
+	deliveryRunner      *deliveries.DeliveryRunner
+	blobStore           store.BlobStore
 	artifactSvc         *artifacts.Service
 	cmdMgr              *workersreg.CommandManager
 	chunkedHandler      *workerhandlersuploads.ChunkedUploadHandler
