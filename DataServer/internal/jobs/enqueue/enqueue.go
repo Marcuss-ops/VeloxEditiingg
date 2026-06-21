@@ -11,19 +11,17 @@
 package enqueue
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
 	assetbridge "velox-server/internal/assets"
 	"velox-shared/contract"
 	"velox-shared/payload"
-
-	"context"
 
 	"github.com/google/uuid"
 )
@@ -124,7 +122,7 @@ func RenderHTTPBoundaryJobResponse(job map[string]interface{}, full bool) map[st
 		"started_at":          job["started_at"],
 		"completed_at":        job["completed_at"],
 		"output_path":         payload.FirstString(job, "output_path"),
-		"drive_output_folder": ResolveDriveOutputFolderReference(os.Getenv("VELOX_DATA_DIR"), payload.FirstString(job, "drive_output_folder")),
+		"drive_output_folder": payload.FirstString(job, "drive_output_folder"),
 		"scene_count":         job["scene_count"],
 		"voiceover_count":     job["voiceover_count"],
 		"video_mode":          payload.FirstString(job, "video_mode"),

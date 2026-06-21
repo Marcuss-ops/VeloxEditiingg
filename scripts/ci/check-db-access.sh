@@ -39,23 +39,20 @@ violations=0
 # handlers, overwhelming false positives.
 call_pattern='\b(db|tx|conn)\.(Exec|ExecContext|Query|QueryContext|QueryRow|QueryRowContext|BeginTx|BeginTxContext)\('
 
-hits="$(scoped_grep "$call_pattern" -- \
+raw_hits="$(scoped_grep "$call_pattern" -- \
           'DataServer/**/*.go' \
           ':!DataServer/internal/store/**' \
           ':!DataServer/internal/platform/database/**' \
-          ':(glob)!DataServer/internal/artifacts/**/*_repository.go' \
-          ':(glob)!DataServer/internal/workflow/**/*_repository.go' \
-          ':(glob)!DataServer/internal/jobs/**/*_repository.go' \
-          ':(glob)!DataServer/internal/deliveries/**/*_repository.go' \
-          ':(glob)!DataServer/internal/assets/**/*_repository.go' \
-          ':(glob)!DataServer/internal/integrations/**/*_repository.go' \
-          ':(glob)!DataServer/internal/youtube/**/*_repository.go' \
           ':!DataServer/internal/audit/**' \
           ':!DataServer/internal/dbutil/**' \
           ':!DataServer/cmd/server/bootstrap.go' \
           ':!DataServer/**/*_test.go' \
           ':!scripts/ci/check-db-access.sh' \
           ':!scripts/ci/lib/diff-scope.sh')"
+
+# Post-filter: scoped_grep passes literal changed-file paths to git grep,
+# which overrides pathspec exclusions. Strip known repository files.
+hits="$(printf '%s\n' "$raw_hits" | grep -vE '_repository\.go:|sqlite_repository[^/]*\.go:|sqlite_[^/]*_resolver\.go:' || true)"
 
 if [[ -n "$hits" ]]; then
   printf 'NEW direct database call(s) outside repository/store:\n%s\n\n' \

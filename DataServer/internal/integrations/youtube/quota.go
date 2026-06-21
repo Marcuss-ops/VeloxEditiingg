@@ -4,7 +4,6 @@ package youtube
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -12,7 +11,8 @@ import (
 	"strings"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
+	"velox-server/internal/store"
+
 	"golang.org/x/oauth2"
 	"google.golang.org/api/option"
 	ytanalytics "google.golang.org/api/youtubeanalytics/v2"
@@ -29,9 +29,9 @@ const (
 
 // QuotaManager handles quota tracking and analytics for YouTube channels
 type QuotaManager struct {
-	service *Service
-	db      *sql.DB // Primary store connection (set via SetDB)
-	store   interface {
+	service      *Service
+	analyticsRepo store.YouTubeAnalyticsRepository
+	store        interface {
 		TrackQuotaUsage(units int) error
 		GetDailyQuotaUsage() (int, error)
 	}
@@ -44,9 +44,9 @@ func NewQuotaManager(s *Service) *QuotaManager {
 	}
 }
 
-// SetDB sets the primary store database connection.
-func (qm *QuotaManager) SetDB(db *sql.DB) {
-	qm.db = db
+// SetAnalyticsRepo sets the analytics repository.
+func (qm *QuotaManager) SetAnalyticsRepo(repo store.YouTubeAnalyticsRepository) {
+	qm.analyticsRepo = repo
 }
 
 // SetStore sets the store for quota tracking
@@ -212,38 +212,38 @@ func (qm *QuotaManager) UpdateAnalyticsCache(ctx context.Context, channelID stri
 
 	period := strconv.Itoa(days)
 
-	// 1. Update SQLite via primary store connection
-	if qm.db != nil {
+	// 1. Persist analytics via repository.
+	if qm.analyticsRepo != nil {
 		jsonData, _ := json.Marshal(cacheEntry)
-		_, err := qm.db.Exec("INSERT OR REPLACE INTO analytics_cache (cache_key, ts, data_json, migrated_at) VALUES (?, ?, ?, ?)",
-			period, float64(time.Now().Unix()), string(jsonData), time.Now().UTC().Format(time.RFC3339))
-		if err != nil {
+		if err := qm.analyticsRepo.SaveAnalyticsCache(ctx, store.AnalyticsCacheEntry{
+			CacheKey:   period,
+			TS:         float64(time.Now().Unix()),
+			DataJSON:   string(jsonData),
+			MigratedAt: time.Now().UTC().Format(time.RFC3339),
+		}); err != nil {
 			log.Printf("[WARN] SQLite analytics update failed: %v", err)
 		} else {
 			log.Printf("[OK] SQLite analytics updated for period %s", period)
 		}
 
 		// ALSO: Save historical metrics to structured tables
+		revenueMetrics := make([]store.RevenueMetric, 0, len(dailyStats))
 		for _, ds := range dailyStats {
-			dateStr := fmt.Sprintf("%v", ds["date"])
-			views := int64(ds["views"].(float64))
-			revenue := ds["revenue"].(float64)
-
-			_, err = qm.db.Exec(
-				`INSERT INTO youtube_revenue_metrics (channel_id, date, estimated_revenue, currency, views)
-				 VALUES (?, ?, ?, ?, ?)
-				 ON CONFLICT(channel_id, date) DO UPDATE SET
-				   estimated_revenue=excluded.estimated_revenue,
-				   views=excluded.views`,
-				channelID, dateStr, revenue, "USD", views,
-			)
-			if err != nil {
-				log.Printf("[WARN] Failed to save historical metric for %s on %s: %v", channelID, dateStr, err)
-			}
+			revenueMetrics = append(revenueMetrics, store.RevenueMetric{
+				ChannelID: channelID,
+				Date:      fmt.Sprintf("%v", ds["date"]),
+				Revenue:   ds["revenue"].(float64),
+				Currency:  "USD",
+				Views:     int64(ds["views"].(float64)),
+			})
 		}
-		log.Printf("[OK] YouTube historical metrics saved to SQLite for channel %s", channelID)
+		if err := qm.analyticsRepo.SaveRevenueMetrics(ctx, revenueMetrics); err != nil {
+			log.Printf("[WARN] Failed to save historical metrics for %s: %v", channelID, err)
+		} else {
+			log.Printf("[OK] YouTube historical metrics saved to SQLite for channel %s", channelID)
+		}
 	} else {
-		return fmt.Errorf("quota: database connection not set — analytics not persisted")
+		return fmt.Errorf("quota: analytics repository not set — analytics not persisted")
 	}
 
 	return nil
@@ -320,12 +320,13 @@ func (qm *QuotaManager) UpdateVideoAnalyticsCache(ctx context.Context, channelID
 		}
 	}
 
-	// 2. Save to structured SQLite table via primary store connection
-	if qm.db == nil {
-		return fmt.Errorf("quota: database connection not set")
+	// 2. Save to structured table via repository.
+	if qm.analyticsRepo == nil {
+		return fmt.Errorf("quota: analytics repository not set")
 	}
 
 	today := time.Now().Format("2006-01-02")
+	videoMetrics := make([]store.VideoMetric, 0, len(rows))
 	for _, row := range rows {
 		if len(row) < 3 {
 			continue
@@ -341,19 +342,17 @@ func (qm *QuotaManager) UpdateVideoAnalyticsCache(ctx context.Context, channelID
 			thumbnail = m.Thumbnail
 		}
 
-		_, err = qm.db.Exec(
-			`INSERT INTO youtube_video_metrics (video_id, channel_id, date, title, thumbnail_url, views, revenue)
-			 VALUES (?, ?, ?, ?, ?, ?, ?)
-			 ON CONFLICT(video_id, date) DO UPDATE SET
-			   views=excluded.views,
-			   revenue=excluded.revenue,
-			   title=excluded.title,
-			   thumbnail_url=excluded.thumbnail_url`,
-			videoID, channelID, today, title, thumbnail, views, revenue,
-		)
+		videoMetrics = append(videoMetrics, store.VideoMetric{
+			VideoID:      videoID,
+			ChannelID:    channelID,
+			Date:         today,
+			Title:        title,
+			ThumbnailURL: thumbnail,
+			Views:        views,
+			Revenue:      revenue,
+		})
 	}
-
-	return nil
+	return qm.analyticsRepo.SaveVideoMetrics(ctx, videoMetrics)
 }
 
 // toFloat converts various types to float64

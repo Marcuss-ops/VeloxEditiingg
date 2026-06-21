@@ -1,21 +1,22 @@
 package enqueue
 
 import (
-	"database/sql"
-	"os"
-	"path/filepath"
+	"context"
 	"strings"
 
-	_ "github.com/mattn/go-sqlite3"
+	"velox-server/internal/store"
 )
 
 // ResolveDriveOutputFolderReference normalizes a user-provided Drive target.
 // It accepts:
-// - direct folder URLs
-// - raw folder IDs
-// - local aliases like "rap" stored in drive_master_folders metadata_json
-// - exact folder names stored in drive_master_folders
-func ResolveDriveOutputFolderReference(dataDir, ref string) string {
+//   - direct folder URLs
+//   - raw folder IDs
+//   - local aliases like "rap" stored in drive_master_folders metadata_json
+//   - exact folder names stored in drive_master_folders
+//
+// The resolver parameter may be nil; when nil only URL/ID extraction is
+// performed (no DB lookup). This keeps tests and offline callers simple.
+func ResolveDriveOutputFolderReference(ctx context.Context, resolver store.DriveFolderResolver, ref string) string {
 	ref = strings.TrimSpace(ref)
 	if ref == "" {
 		return ""
@@ -25,31 +26,19 @@ func ResolveDriveOutputFolderReference(dataDir, ref string) string {
 		return folderID
 	}
 
-	dbPath := filepath.Join(strings.TrimSpace(dataDir), "velox.db")
-	if _, err := os.Stat(dbPath); err != nil {
+	if resolver == nil {
 		return ref
 	}
 
-	db, err := sql.Open("sqlite3", dbPath)
+	folders, err := resolver.ListMasterFolders(ctx)
 	if err != nil {
 		return ref
 	}
-	defer db.Close()
 
 	normRef := normalizeDriveAlias(ref)
-	rows, err := db.Query(`SELECT id, name, url, language, metadata_json FROM drive_master_folders`)
-	if err != nil {
-		return ref
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var id, name, url, language, meta string
-		if err := rows.Scan(&id, &name, &url, &language, &meta); err != nil {
-			continue
-		}
-		if driveFolderMatches(ref, normRef, id, name, url, language, meta) {
-			return id
+	for _, f := range folders {
+		if driveFolderMatches(ref, normRef, f.ID, f.Name, f.URL, f.Language, f.Metadata) {
+			return f.ID
 		}
 	}
 

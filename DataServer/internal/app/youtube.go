@@ -71,7 +71,7 @@ func (m *YouTubeModule) buildService() error {
 	}
 	m.youtubeService = ytSvc
 	m.youtubeService.GetQuotaManager().SetStore(m.sqliteStore)
-	m.youtubeService.GetQuotaManager().SetDB(m.sqliteStore.DB())
+	m.youtubeService.GetQuotaManager().SetAnalyticsRepo(store.NewSQLiteYouTubeAnalyticsRepository(m.sqliteStore))
 
 	if m.dataDir != "" {
 		storage, storageErr := integrationsYoutube.NewStorage(m.dataDir, m.sqliteStore)

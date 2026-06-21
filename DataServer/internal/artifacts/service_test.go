@@ -27,6 +27,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/require"
 
+	"velox-server/internal/platform/database"
 	"velox-server/internal/store"
 	"velox-server/internal/store/migrations"
 )
@@ -106,7 +107,15 @@ func setupTestEnv(t *testing.T) *testEnv {
 	// the same *sql.DB ensures the finalization tx can join with the
 	// concurrent update on artifact_uploads (FinalizeVerified step 7).
 	fin := NewSQLiteFinalizationRepository(db)
-	svc := NewService(repo, fin, bs, db, clk)
+
+	// Build a lightweight SQLiteStore wrapper around the test DB so we can
+	// construct the repository implementations NewService now requires.
+	handle := &database.Handle{DB: db, Driver: database.DriverSQLite}
+	sqliteStore, err := store.NewSQLiteStoreFromHandle(handle, dbPath, false)
+	require.NoError(t, err, "NewSQLiteStoreFromHandle")
+	jobRepo := store.NewSQLiteJobRepository(sqliteStore)
+	artRepo := store.NewSQLiteArtifactRepository(sqliteStore)
+	svc := NewService(repo, fin, bs, jobRepo, artRepo, clk)
 
 	t.Cleanup(func() {
 		_ = db.Close()
