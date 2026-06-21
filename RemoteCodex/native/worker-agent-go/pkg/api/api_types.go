@@ -106,3 +106,95 @@ type WorkerCommand struct {
 	Timestamp string                 `json:"timestamp"`
 	Payload   map[string]interface{} `json:"payload,omitempty"`
 }
+
+// ── Capability report (PR-3.5: registry-driven hello) ───────────────────────
+//
+// PR-3.5 drops the legacy boolean capability flags ("render_scene_image",
+// "ffmpeg", "cpp_engine", "supported_job_types", ...) and replaces them with
+// a typed, versioned schema derived directly from
+// worker-agent-go/internal/executor/Registry.Descriptors().
+//
+// The transport envelope is `map[string]interface{}` so we keep
+// CapabilityReport on pkg/api and provide AsMap() to flatten it for
+// heartbeat/hello envelopes without breaking the existing API.
+
+// CapabilitySchemaVersion is the canonical version of the CapabilityReport
+// schema. Bump on every ADDITIVE OR BREAKING shape change. The master uses
+// this to pick the right decoder.
+const CapabilitySchemaVersion = 1
+
+// ExecutorCapability mirrors one executor.Descriptor in the canonical
+// format the master expects to see in the hello payload.
+type ExecutorCapability struct {
+	ID            string   `json:"id"`
+	Version       int      `json:"version"`
+	ResourceClass string   `json:"resource_class"`
+	TemporalMode  string   `json:"temporal_mode"`
+	Deterministic bool     `json:"deterministic"`
+	Cacheable     bool     `json:"cacheable"`
+	SupportsAlpha bool     `json:"supports_alpha"`
+	OutputTypes   []string `json:"output_types,omitempty"`
+}
+
+// HostInfo is the static host layer of the report. Fields are pre-shaped
+// so PR-3.6's resource sampler can fill them in without changing the wire
+// contract. Unknown fields are zero-valued (never omitted) so the master
+// can distinguish "not sampled" from "actually zero".
+type HostInfo struct {
+	WorkerID        string `json:"worker_id"`
+	Hostname        string `json:"hostname"`
+	CPUCount        int    `json:"cpu_count"`
+	MaxParallelJobs int    `json:"max_parallel_jobs"`
+	HasGPU          bool   `json:"has_gpu"`
+	RAMBytes        int64  `json:"ram_bytes"`
+	DiskFreeBytes   int64  `json:"disk_free_bytes"`
+}
+
+// CapabilityReport is the typed hello/heartbeat capability payload.
+// PR-3.5 derives this entirely from executor.Registry — no duplicate
+// state lives anywhere else.
+type CapabilityReport struct {
+	SchemaVersion int                  `json:"schema_version"`
+	Executors     []ExecutorCapability `json:"executors"`
+	Host          HostInfo             `json:"host"`
+}
+
+// AsMap flattens the typed report into the map envelope used by the
+// control-transport heartbeat/hello wire format. Map ordering is
+// deterministic in Go's encoding/json — callers relying on byte stable
+// output MUST call this rather than building a map by hand.
+func (r CapabilityReport) AsMap() map[string]interface{} {
+	executors := make([]interface{}, 0, len(r.Executors))
+	for _, e := range r.Executors {
+		ec := map[string]interface{}{
+			"id":             e.ID,
+			"version":        e.Version,
+			"resource_class": e.ResourceClass,
+			"temporal_mode":  e.TemporalMode,
+			"deterministic":  e.Deterministic,
+			"cacheable":      e.Cacheable,
+			"supports_alpha": e.SupportsAlpha,
+		}
+		if len(e.OutputTypes) > 0 {
+			outs := make([]interface{}, 0, len(e.OutputTypes))
+			for _, o := range e.OutputTypes {
+				outs = append(outs, o)
+			}
+			ec["output_types"] = outs
+		}
+		executors = append(executors, ec)
+	}
+	return map[string]interface{}{
+		"schema_version": r.SchemaVersion,
+		"executors":      executors,
+		"host": map[string]interface{}{
+			"worker_id":         r.Host.WorkerID,
+			"hostname":          r.Host.Hostname,
+			"cpu_count":         r.Host.CPUCount,
+			"max_parallel_jobs": r.Host.MaxParallelJobs,
+			"has_gpu":           r.Host.HasGPU,
+			"ram_bytes":         r.Host.RAMBytes,
+			"disk_free_bytes":   r.Host.DiskFreeBytes,
+		},
+	}
+}

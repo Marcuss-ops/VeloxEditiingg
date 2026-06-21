@@ -15,6 +15,7 @@ import (
 	"strings"
 	"syscall"
 
+	"velox-worker-agent/internal/executor"
 	"velox-worker-agent/internal/telemetry"
 	"velox-worker-agent/internal/worker"
 	"velox-worker-agent/pkg/config"
@@ -235,7 +236,7 @@ func main() {
 	if *validateConfig {
 		// Branding line for human operators running docker run --rm ... --validate-config
 		fmt.Printf("velox-worker-agent version %s\n", Version)
-		w, vErr := worker.New(cfg, resolvedVersion)
+		w, vErr := worker.New(cfg, resolvedVersion, worker.WithRegistry(executor.NewRegistry()))
 		if vErr != nil {
 			fmt.Fprintf(os.Stderr, "Validation FAILED: %v\n", vErr)
 			os.Exit(1)
@@ -245,7 +246,15 @@ func main() {
 		os.Exit(0)
 	}
 
-	w, workerErr := worker.New(cfg, resolvedVersion)
+	// PR-3.5: build a real (empty-for-now) executor registry and pass it
+	// via WithRegistry. Empty registry is the supported PR-3.5 default;
+	// PR-3.6 will register scene.composite.v1 against the canonical
+	// pipeline.Runner in worker bootstrap. Splitting the surface keeps
+	// PR-3.5's wire-shape change minimal while exposing a stable seam
+	// that operator dashboards can already introspect.
+	registry := executor.NewRegistry()
+
+	w, workerErr := worker.New(cfg, resolvedVersion, worker.WithRegistry(registry))
 	if workerErr != nil {
 		logger.LogRegisterFailed("(initial)", cfg.MasterURL, workerErr)
 		os.Exit(1)

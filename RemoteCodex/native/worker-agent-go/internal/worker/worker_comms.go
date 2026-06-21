@@ -6,6 +6,7 @@ package worker
 import (
 	"context"
 	"math"
+	"os"
 	"runtime"
 	"time"
 
@@ -24,12 +25,15 @@ const (
 
 // detectMaxParallelJobs calculates the optimal concurrency based on hardware.
 // Formula: clamp(NumCPU / 2, min=1, max=8)
+//
+// Used at worker init time to size the concurrency limiter; runtime
+// capacity is read from w.concurrencyLimiter.MaxActiveJobs() everywhere
+// else (PR-3.5 invariant: single source of truth for max_parallel_jobs).
 func detectMaxParallelJobs() int {
 	cpuCount := runtime.NumCPU()
 	if cpuCount <= 0 {
 		cpuCount = 2
 	}
-	// Use half the CPUs, minimum 1, maximum 8
 	parallel := int(math.Max(1, math.Min(8, float64(cpuCount/2))))
 	return parallel
 }
@@ -60,7 +64,6 @@ func (w *Worker) heartbeatLoop(ctx context.Context) {
 	ticker := time.NewTicker(currentInterval)
 	defer ticker.Stop()
 
-	// Send initial heartbeat immediately
 	if err := w.sendHeartbeat(ctx); err != nil {
 		logger.LogHeartbeatFailed(w.config.WorkerID, err, 1, maxConsecutiveErrors)
 	} else {
@@ -78,7 +81,6 @@ func (w *Worker) heartbeatLoop(ctx context.Context) {
 			w.logger.Debug("Heartbeat loop exiting (stop signal)")
 			return
 		case <-ticker.C:
-			// Check if status changed and adjust interval
 			currentStatus := w.getStatus()
 			if currentStatus != lastStatus {
 				newInterval := w.getHeartbeatInterval()
@@ -96,7 +98,6 @@ func (w *Worker) heartbeatLoop(ctx context.Context) {
 				consecutiveErrors++
 				logger.LogHeartbeatFailed(w.config.WorkerID, err, consecutiveErrors, maxConsecutiveErrors)
 
-				// Apply exponential backoff on errors
 				if consecutiveErrors >= maxConsecutiveErrors {
 					currentInterval = time.Duration(float64(currentInterval) * heartbeatBackoffMultiplier)
 					if currentInterval > heartbeatMaxBackoff {
@@ -107,13 +108,11 @@ func (w *Worker) heartbeatLoop(ctx context.Context) {
 					ticker.Reset(currentInterval)
 				}
 			} else {
-				// Reset on success
 				if consecutiveErrors > 0 {
 					logger.LogHeartbeatRecover(w.config.WorkerID, consecutiveErrors)
 				}
 				consecutiveErrors = 0
 
-				// Reset to status-based interval
 				newInterval := w.getHeartbeatInterval()
 				if newInterval != currentInterval {
 					currentInterval = newInterval
@@ -130,6 +129,9 @@ func (w *Worker) getStatus() Status {
 }
 
 // sendHeartbeat sends a single heartbeat to the master via transport.Send().
+// PR-3.5: capabilities are derived from Worker.capabilitiesMap() —
+// the same single helper buildHello uses. Any wire-shape change
+// touches ONE function; hello and heartbeat stay in lock-step.
 func (w *Worker) sendHeartbeat(ctx context.Context) error {
 	status := w.Status()
 
@@ -152,25 +154,16 @@ func (w *Worker) sendHeartbeat(ctx context.Context) error {
 	payload["bundle_hash"] = w.config.BundleHash
 	payload["protocol_version"] = w.config.ProtocolVersion
 	payload["engine_version"] = w.config.EngineVersion
-	payload["capabilities"] = map[string]interface{}{
-		"render_scene_image": true,
-		"render_clip_stock":  true,
-		"upload_drive":       true,
-		"ffmpeg":             true,
-		"cpp_engine":         true,
-		"max_parallel_jobs":  w.concurrencyLimiter.MaxActiveJobs(),
-		"cpu_count":          runtime.NumCPU(),
-		"supported_job_types": []string{
-			"process_video",
-			"render",
-			"process_audio",
-			"health_check",
-		},
+
+	hostname := ""
+	if h, err := os.Hostname(); err == nil {
+		hostname = h
 	}
+	payload["capabilities"] = w.capabilitiesMap(hostname)
+
 	payload["jobs_completed"] = w.jobsCompleted.Load()
 	payload["jobs_failed"] = w.jobsFailed.Load()
 
-	// Report all active jobs with their individual progress
 	w.activeJobsMu.RLock()
 	activeJobList := make([]map[string]interface{}, 0, len(w.activeJobs))
 	var primaryJobID string

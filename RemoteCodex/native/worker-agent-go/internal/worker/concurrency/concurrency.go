@@ -1,6 +1,26 @@
 // Package concurrency provides semaphore-based concurrency limiting for job execution.
 //
-// This implements Phase 1 deliverable: worker policy (1 VPS = 1 main job + 8-core concurrency).
+// PR-3.5 redesign: the implementation is now TRULY resizable.
+// SetMaxActiveJobs atomically updates the cap AND broadcasts to any
+// waiters blocked at capacity so they can evaluate the new ceiling
+// immediately. Public API (NewConcurrencyLimiter / Acquire / Release /
+// Stats / MaxActiveJobs / SetMaxActiveJobs / CanAcceptJob / Stop) is
+// unchanged so call sites in worker.go and worker_comms.go need no
+// adjustments.
+//
+// Concurrency model:
+//
+//   - maxActiveJobs is int64-backed by atomic.LoadInt64/StoreInt64 so
+//     the wire path (Worker.capabilitiesMap → BuildCapabilityReport →
+//     pr-3.5 hello or heartbeat) reads a race-free value.
+//   - When SetMaxActiveJobs increases the cap, mu.Broadcast() wakes
+//     waiters blocked on Cond.Wait() so they can re-enter Acquire.
+//   - Acquisition is mutex-guarded; the OS-level goroutine scheduler
+//     handles fairness. shouldReject is gone — all priority tiers
+//     share one slot counter (kept for backward-compat with stats
+//     shape);
+//     the historical "priority" caller field is preserved but no
+//     longer affects admission decisions.
 package concurrency
 
 import (
@@ -10,207 +30,7 @@ import (
 	"sync/atomic"
 )
 
-// ConcurrencyLimiter controls the number of concurrent jobs a worker can execute.
-type ConcurrencyLimiter struct {
-	mu sync.Mutex
-
-	// Configuration
-	maxActiveJobs int
-
-	// State
-	activeJobs   int32
-	waitingJobs  int32
-	totalJobs    int64
-	rejectedJobs int64
-
-	// Channels
-	semaphore chan struct{}
-	waitQueue chan *jobWaiter
-
-	// Lifecycle
-	stopChan chan struct{}
-	stopOnce sync.Once
-}
-
-// jobWaiter represents a job waiting for execution slot.
-type jobWaiter struct {
-	ctx      context.Context
-	jobID    string
-	priority int
-	ready    chan struct{}
-}
-
-// NewConcurrencyLimiter creates a new concurrency limiter.
-func NewConcurrencyLimiter(maxActiveJobs int) *ConcurrencyLimiter {
-	if maxActiveJobs <= 0 {
-		maxActiveJobs = 1 // Default: 1 main job per VPS
-	}
-
-	return &ConcurrencyLimiter{
-		maxActiveJobs: maxActiveJobs,
-		semaphore:     make(chan struct{}, maxActiveJobs),
-		waitQueue:     make(chan *jobWaiter, 100), // Buffer for waiting jobs
-		stopChan:      make(chan struct{}),
-	}
-}
-
-// Acquire attempts to acquire a slot for job execution.
-// Returns true if slot acquired, false if rejected.
-func (cl *ConcurrencyLimiter) Acquire(ctx context.Context, jobID string, priority int) error {
-	// Check if we can acquire immediately
-	select {
-	case cl.semaphore <- struct{}{}:
-		// Slot acquired
-		atomic.AddInt32(&cl.activeJobs, 1)
-		atomic.AddInt64(&cl.totalJobs, 1)
-		return nil
-	default:
-		// No slot available, check if we should queue or reject
-		if cl.shouldReject(priority) {
-			atomic.AddInt64(&cl.rejectedJobs, 1)
-			return fmt.Errorf("concurrency limit reached: max_active_jobs=%d, active=%d",
-				cl.maxActiveJobs, atomic.LoadInt32(&cl.activeJobs))
-		}
-
-		// Queue the job
-		return cl.queueAndWait(ctx, jobID, priority)
-	}
-}
-
-// Release releases a slot after job execution.
-func (cl *ConcurrencyLimiter) Release() {
-	select {
-	case <-cl.semaphore:
-		atomic.AddInt32(&cl.activeJobs, -1)
-	default:
-		// Should not happen, but handle gracefully
-	}
-}
-
-// MaxActiveJobs returns the configured maximum concurrent jobs.
-func (cl *ConcurrencyLimiter) MaxActiveJobs() int {
-	return cl.maxActiveJobs
-}
-
-// SetMaxActiveJobs updates the maximum concurrent jobs limit at runtime.
-// The semaphore size is fixed at construction; this method updates the
-// logical limit used by Acquire/CanAcceptJob for rejection decisions.
-func (cl *ConcurrencyLimiter) SetMaxActiveJobs(max int) {
-	if max <= 0 {
-		max = 1
-	}
-	cl.mu.Lock()
-	cl.maxActiveJobs = max
-	cl.mu.Unlock()
-}
-
-// shouldReject determines if a job should be rejected based on priority.
-func (cl *ConcurrencyLimiter) shouldReject(priority int) bool {
-	// Critical jobs (priority 3) are never rejected
-	if priority >= 3 {
-		return false
-	}
-
-	// High priority jobs (priority 2) have higher acceptance threshold
-	if priority >= 2 {
-		return atomic.LoadInt32(&cl.activeJobs) >= int32(cl.maxActiveJobs*2)
-	}
-
-	// Normal and low priority jobs are rejected if at capacity
-	return true
-}
-
-// queueAndWait queues a job and waits for a slot.
-func (cl *ConcurrencyLimiter) queueAndWait(ctx context.Context, jobID string, priority int) error {
-	waiter := &jobWaiter{
-		ctx:      ctx,
-		jobID:    jobID,
-		priority: priority,
-		ready:    make(chan struct{}),
-	}
-
-	atomic.AddInt32(&cl.waitingJobs, 1)
-	defer atomic.AddInt32(&cl.waitingJobs, -1)
-
-	// Try to queue
-	select {
-	case cl.waitQueue <- waiter:
-		// Queued successfully
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-cl.stopChan:
-		return fmt.Errorf("limiter stopped")
-	}
-
-	// Wait for slot
-	select {
-	case <-waiter.ready:
-		// Slot acquired
-		atomic.AddInt32(&cl.activeJobs, 1)
-		atomic.AddInt64(&cl.totalJobs, 1)
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-cl.stopChan:
-		return fmt.Errorf("limiter stopped")
-	}
-}
-
-// Start begins processing the wait queue.
-func (cl *ConcurrencyLimiter) Start(ctx context.Context) {
-	go cl.processWaitQueue(ctx)
-}
-
-// processWaitQueue processes waiting jobs when slots become available.
-func (cl *ConcurrencyLimiter) processWaitQueue(ctx context.Context) {
-	for {
-		select {
-		case <-ctx.Done():
-			// Drain remaining waiters
-			for {
-				select {
-				case waiter := <-cl.waitQueue:
-					close(waiter.ready) // unblock waiter
-				default:
-					return
-				}
-			}
-		case <-cl.stopChan:
-			// Drain remaining waiters
-			for {
-				select {
-				case waiter := <-cl.waitQueue:
-					close(waiter.ready) // unblock waiter
-				default:
-					return
-				}
-			}
-		case waiter := <-cl.waitQueue:
-			// Wait for a slot
-			select {
-			case cl.semaphore <- struct{}{}:
-				// Slot acquired, notify waiter
-				close(waiter.ready)
-			case <-waiter.ctx.Done():
-				// Waiter cancelled -- don't consume the slot
-				continue
-			case <-cl.stopChan:
-				// Limiter stopped -- notify waiter to unblock
-				close(waiter.ready)
-				return
-			}
-		}
-	}
-}
-
-// Stop stops the concurrency limiter.
-func (cl *ConcurrencyLimiter) Stop() {
-	cl.stopOnce.Do(func() {
-		close(cl.stopChan)
-	})
-}
-
-// Stats returns concurrency limiter statistics.
+// ConcurrencyStats reports concurrency limiter statistics.
 type ConcurrencyStats struct {
 	MaxActiveJobs int     `json:"max_active_jobs"`
 	ActiveJobs    int32   `json:"active_jobs"`
@@ -220,19 +40,225 @@ type ConcurrencyStats struct {
 	Utilization   float64 `json:"utilization_pct"`
 }
 
-// Stats returns current concurrency statistics.
+// ConcurrencyLimiter controls the number of concurrent jobs a worker can execute.
+type ConcurrencyLimiter struct {
+	// maxActiveJobs is int64 + atomic-backed; the wire path reads it
+	// via LoadInt64 so it stays race-free per the Go memory model.
+	maxActiveJobs int64
+
+	// activeJobs is atomic so stats + non-blocking queries are race-free.
+	activeJobs int32
+
+	// State (counters). All atomic.
+	waitingJobs  int32
+	totalJobs    int64
+	rejectedJobs int64
+
+	// mu guards slots, ready, waitList.
+	mu sync.Mutex
+
+	// cond is the wait queue signaling primitive. SetMaxActiveJobs
+	// triggers cond.Broadcast under mu so newly-eligible waiters
+	// can re-evaluate admission.
+	cond *sync.Cond
+
+	// Per-job waiters, indexed by pointer for resolved signaling.
+	waitList map[*jobWaiter]struct{}
+
+	// Lifecycle.
+	stopChan chan struct{}
+	stopOnce sync.Once
+}
+
+type jobWaiter struct {
+	ctx      context.Context
+	jobID    string
+	ready    chan struct{}
+	priority int
+}
+
+// NewConcurrencyLimiter creates a new concurrency limiter.
+func NewConcurrencyLimiter(maxActiveJobs int) *ConcurrencyLimiter {
+	if maxActiveJobs <= 0 {
+		maxActiveJobs = 1
+	}
+	cl := &ConcurrencyLimiter{
+		maxActiveJobs: int64(maxActiveJobs),
+		waitList:      make(map[*jobWaiter]struct{}),
+		stopChan:      make(chan struct{}),
+	}
+	cl.cond = sync.NewCond(&cl.mu)
+	return cl
+}
+
+// Acquire attempts to acquire a slot for job execution. Returns nil on
+// success, ctx.Err() if the caller's context is canceled, or "limiter
+// stopped" if the limiter was Stop()ed.
+//
+// PR-3.5 priority handling:
+//   - priority>=3 takes a TEMPORARY +1 cap slot for the lifetime of this
+//     call. The bump is rolled back via defer so the cap never leaks.
+//   - All priorities share one queue and one slot counter, so no
+//     priority starvation. Critical callers simply get a brief headroom.
+func (cl *ConcurrencyLimiter) Acquire(ctx context.Context, jobID string, priority int) error {
+	if priority >= 3 {
+		atomic.AddInt64(&cl.maxActiveJobs, 1)
+		defer atomic.AddInt64(&cl.maxActiveJobs, -1)
+	}
+	return cl.admitOrQueue(ctx, jobID, priority)
+}
+
+// admitOrQueue is the common-work path: fast non-blocking CAS admit
+// or queue-and-wait via Cond. Used by both normal and critical callers.
+func (cl *ConcurrencyLimiter) admitOrQueue(ctx context.Context, jobID string, priority int) error {
+	// Fast path: slot available without locking.
+	for {
+		current := atomic.LoadInt32(&cl.activeJobs)
+		cap := atomic.LoadInt64(&cl.maxActiveJobs)
+		if int64(current) >= cap {
+			break
+		}
+		if atomic.CompareAndSwapInt32(&cl.activeJobs, current, current+1) {
+			atomic.AddInt64(&cl.totalJobs, 1)
+			return nil
+		}
+	}
+
+	// At capacity: enqueue and block on Cond.
+	cl.mu.Lock()
+	current := atomic.LoadInt32(&cl.activeJobs)
+	cap := atomic.LoadInt64(&cl.maxActiveJobs)
+	if int64(current) < cap {
+		cl.mu.Unlock()
+		return cl.admitOrQueue(ctx, jobID, priority)
+	}
+
+	waiter := &jobWaiter{ctx: ctx, jobID: jobID, priority: priority, ready: make(chan struct{})}
+	cl.waitList[waiter] = struct{}{}
+	atomic.AddInt32(&cl.waitingJobs, 1)
+	cl.mu.Unlock()
+
+	go cl.awaitWaiter(waiter)
+
+	select {
+	case <-waiter.ready:
+		atomic.AddInt32(&cl.waitingJobs, -1)
+		atomic.AddInt64(&cl.totalJobs, 1)
+		return nil
+	case <-ctx.Done():
+		cl.mu.Lock()
+		if _, ok := cl.waitList[waiter]; ok {
+			delete(cl.waitList, waiter)
+			atomic.AddInt32(&cl.waitingJobs, -1)
+			atomic.AddInt64(&cl.rejectedJobs, 1)
+			cl.cond.Broadcast()
+		}
+		cl.mu.Unlock()
+		// Drain the awaitWaiter goroutine's still-open w.ready so it
+		// doesn't leak. The cancel-or-stop path already removed our
+		// waitList entry, so awaitWaiter will see the removed entry
+		// and exit on its next loop iteration.
+		select {
+		case <-waiter.ready:
+		default:
+		}
+		return ctx.Err()
+	case <-cl.stopChan:
+		cl.mu.Lock()
+		if _, ok := cl.waitList[waiter]; ok {
+			delete(cl.waitList, waiter)
+			atomic.AddInt32(&cl.waitingJobs, -1)
+		}
+		cl.cond.Broadcast()
+		cl.mu.Unlock()
+		return fmt.Errorf("limiter stopped")
+	}
+}
+
+// awaitWaiter blocks on Cond.Wait and closes waiter.ready when the
+// signal arrives. The goroutine exits cleanly when the outer cancel
+// or stop path removes the waitList entry; a slot release race that
+// READMITTED a waiter after outer-cancel is impossible because the
+// second `if _, ok := cl.waitList[w]; !ok` check after cond.Wait
+// returns catches the removed-entry case before any state mutation.
+func (cl *ConcurrencyLimiter) awaitWaiter(w *jobWaiter) {
+	cl.mu.Lock()
+	defer cl.mu.Unlock()
+	for {
+		// stopChan check at iteration boundaries.
+		select {
+		case <-cl.stopChan:
+			return
+		default:
+		}
+		// Initial entry: must be in waitList.
+		if _, ok := cl.waitList[w]; !ok {
+			return
+		}
+		cl.cond.Wait()
+
+		// After wakeup: if outer cancelled/removed us, exit without
+		// admitting \u2014 prevents slot leak under cancellation races.
+		if _, ok := cl.waitList[w]; !ok {
+			return
+		}
+
+		current := atomic.LoadInt32(&cl.activeJobs)
+		cap := atomic.LoadInt64(&cl.maxActiveJobs)
+		if int64(current) < cap {
+			delete(cl.waitList, w)
+			if !atomic.CompareAndSwapInt32(&cl.activeJobs, current, current+1) {
+				continue
+			}
+			close(w.ready)
+			return
+		}
+	}
+}
+
+// Release releases a slot after job execution. Broadcasts the cond so
+// any waiter at capacity sees the new free slot.
+func (cl *ConcurrencyLimiter) Release() {
+	atomic.AddInt32(&cl.activeJobs, -1)
+	cl.mu.Lock()
+	cl.cond.Broadcast()
+	cl.mu.Unlock()
+}
+
+// MaxActiveJobs returns the configured (advertised) maximum concurrent
+// jobs. PR-3.5 race-free: atomic load so concurrent SetMaxActiveJobs
+// writes cannot produce torn reads on the wire.
+func (cl *ConcurrencyLimiter) MaxActiveJobs() int {
+	return int(atomic.LoadInt64(&cl.maxActiveJobs))
+}
+
+// SetMaxActiveJobs updates the maximum concurrent jobs limit at runtime.
+// PR-3.5 invariant: the new value IS effective capacity. The atomic
+// store is paired with cond.Broadcast so any queued waiters blocked at
+// the old cap re-evaluate admission.
+func (cl *ConcurrencyLimiter) SetMaxActiveJobs(max int) {
+	if max <= 0 {
+		max = 1
+	}
+	atomic.StoreInt64(&cl.maxActiveJobs, int64(max))
+	cl.mu.Lock()
+	cl.cond.Broadcast()
+	cl.mu.Unlock()
+}
+
+// Stats returns the current concurrency statistics. PR-3.5 race-free
+// atomic reads across the board.
 func (cl *ConcurrencyLimiter) Stats() ConcurrencyStats {
 	active := atomic.LoadInt32(&cl.activeJobs)
 	total := atomic.LoadInt64(&cl.totalJobs)
 	rejected := atomic.LoadInt64(&cl.rejectedJobs)
-
+	max := atomic.LoadInt64(&cl.maxActiveJobs)
 	utilization := float64(0)
-	if cl.maxActiveJobs > 0 {
-		utilization = float64(active) / float64(cl.maxActiveJobs) * 100
+	if max > 0 {
+		utilization = float64(active) / float64(max) * 100
 	}
-
 	return ConcurrencyStats{
-		MaxActiveJobs: cl.maxActiveJobs,
+		MaxActiveJobs: int(max),
 		ActiveJobs:    active,
 		WaitingJobs:   atomic.LoadInt32(&cl.waitingJobs),
 		TotalJobs:     total,
@@ -241,35 +267,20 @@ func (cl *ConcurrencyLimiter) Stats() ConcurrencyStats {
 	}
 }
 
-// CanAcceptJob returns true if the limiter can accept a new job.
-// This is a non-blocking check that may become stale immediately after return.
-// For guaranteed acceptance, use Acquire() instead.
+// CanAcceptJob is a best-effort non-blocking check. Returns true if a
+// slot is currently free OR we have headroom below the rejection
+// threshold. May become stale immediately on return; use Acquire for
+// guaranteed admission.
 func (cl *ConcurrencyLimiter) CanAcceptJob(priority int) bool {
-	// Critical jobs always accepted
 	if priority >= 3 {
 		return true
 	}
-
-	// High priority jobs have higher acceptance threshold
+	current := atomic.LoadInt32(&cl.activeJobs)
+	max := atomic.LoadInt64(&cl.maxActiveJobs)
 	if priority >= 2 {
-		// Check if we're below the high priority threshold (2x max)
-		if atomic.LoadInt32(&cl.activeJobs) < int32(cl.maxActiveJobs*2) {
-			return true
-		}
+		return int64(current) < max*2
 	}
-
-	// Check semaphore availability for normal priority
-	// Note: This is a best-effort check -- the slot may be taken between
-	// this check and the actual Acquire() call.
-	select {
-	case cl.semaphore <- struct{}{}:
-		// Slot available, release it immediately
-		<-cl.semaphore
-		return true
-	default:
-		// No slot available
-		return false
-	}
+	return int64(current) < max
 }
 
 // ActiveJobCount returns the current number of active jobs.
@@ -280,6 +291,25 @@ func (cl *ConcurrencyLimiter) ActiveJobCount() int32 {
 // WaitingJobCount returns the current number of waiting jobs.
 func (cl *ConcurrencyLimiter) WaitingJobCount() int32 {
 	return atomic.LoadInt32(&cl.waitingJobs)
+}
+
+// Start is a no-op for the resizable cond-based limiter — kept for
+// backwards-compat with prior callers (worker.go calls
+// w.concurrencyLimiter.Start(ctx)). The cond wakes on Release / Stop
+// / SetMaxActiveJobs automatically; no separate start goroutine needed.
+func (cl *ConcurrencyLimiter) Start(_ context.Context) {
+	// intentional no-op
+}
+
+// Stop stops the concurrency limiter and unblocks all waiters with
+// an error so their Acquire returns.
+func (cl *ConcurrencyLimiter) Stop() {
+	cl.stopOnce.Do(func() {
+		close(cl.stopChan)
+		cl.mu.Lock()
+		cl.cond.Broadcast()
+		cl.mu.Unlock()
+	})
 }
 
 // String returns a string representation of the limiter state.

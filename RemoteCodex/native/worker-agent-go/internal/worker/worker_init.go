@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"velox-shared/controltransport"
+	"velox-worker-agent/internal/executor"
 	"velox-worker-agent/internal/worker/concurrency"
 	"velox-worker-agent/internal/worker/stageexec"
 	"velox-worker-agent/pkg/api"
@@ -18,11 +19,58 @@ import (
 	"velox-worker-agent/pkg/logger"
 )
 
+// Option configures a Worker returned by New. Backward-compatible:
+// existing callers passing only (cfg, version) keep working.
+type Option func(*workerOptions)
+
+type workerOptions struct {
+	registry *executor.Registry
+}
+
+// WithRegistry replaces the default (empty) executor registry. The
+// caller owns the registry — Register calls after New() still take
+// effect because the worker holds the same pointer.
+//
+// PR-3.5: this is the single supported way to surface hello/heartbeat
+// capabilities. PR-3.6 will use the same registry for dispatch.
+//
+// Passing nil panics loudly. The previous silent fallback to a fresh
+// empty registry masked operator bugs (worker booted, advertised zero
+// executors, every job routed to dead-letter). Loud startup is the
+// correct safety posture.
+func WithRegistry(reg *executor.Registry) Option {
+	if reg == nil {
+		panic("worker.WithRegistry: registry must not be nil — pass an explicit *executor.Registry or omit WithRegistry")
+	}
+	return func(o *workerOptions) {
+		o.registry = reg
+	}
+}
+
 // New creates a new Worker instance.
 // Returns an error if the initial transport setup fails (bad TLS config,
 // missing control_grpc_url, insecure flag mismatch). Callers MUST check
 // the error before calling Start().
-func New(cfg *config.WorkerConfig, version string) (*Worker, error) {
+//
+// Options (PR-3.5): pass worker.WithRegistry(reg) to install a custom
+// executor registry; otherwise an empty registry is used so hello is
+// emitted immediately and dispatch upgrades in PR-3.6 are non-breaking.
+func New(cfg *config.WorkerConfig, version string, opts ...Option) (*Worker, error) {
+	wo := &workerOptions{registry: executor.NewRegistry()}
+	for _, opt := range opts {
+		if opt == nil {
+			continue
+		}
+		opt(wo)
+	}
+	// wo.registry is never nil after the loop: WithRegistry(nil) panics,
+	// the default above guarantees an empty registry. Defensive fallback
+	// kept only for paranoid future callers adding their own Option that
+	// deliberately clears the field; without it we'd crash on nil-deref.
+	if wo.registry == nil {
+		wo.registry = executor.NewRegistry()
+	}
+
 	logLevel := logger.ParseLevel(cfg.LogLevel)
 	recentLogs := newRecentLogBuffer(600)
 	logOut := io.MultiWriter(os.Stdout, recentLogs)
@@ -110,6 +158,7 @@ func New(cfg *config.WorkerConfig, version string) (*Worker, error) {
 		connState:          ConnDisconnected,
 		concurrencyLimiter: concurrency.NewConcurrencyLimiter(detectedConcurrency),
 		stageExecutor:      stageExecutor,
+		executorRegistry:   wo.registry,
 		exitFunc:           os.Exit,
 	}
 

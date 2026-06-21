@@ -14,6 +14,7 @@ import (
 
 	"velox-shared/controltransport"
 	pb "velox-shared/controltransport/pb"
+	"velox-worker-agent/internal/executor"
 	"velox-worker-agent/internal/telemetry"
 	"velox-worker-agent/pkg/api"
 	"velox-worker-agent/pkg/logger"
@@ -108,28 +109,11 @@ func (w *Worker) Start(ctx context.Context) error {
 }
 
 // buildHello constructs a WorkerHello from the worker configuration.
+// PR-3.5: the capability payload is derived EXCLUSIVELY from
+// w.capabilitiesMap(hostname) — a single helper also used by
+// sendHeartbeat. Any wire-shape change touches one function.
 func (w *Worker) buildHello() controltransport.WorkerHello {
 	hostname, _ := os.Hostname()
-	maxParallel := detectMaxParallelJobs()
-	if w.config.MaxActiveJobs > 1 {
-		maxParallel = w.config.MaxActiveJobs
-	}
-
-	capabilities := map[string]interface{}{
-		"render_scene_image": true,
-		"render_clip_stock":  true,
-		"upload_drive":       true,
-		"ffmpeg":             true,
-		"cpp_engine":         true,
-		"max_parallel_jobs":  maxParallel,
-		"cpu_count":          runtime.NumCPU(),
-		"supported_job_types": []string{
-			"process_video",
-			"render",
-			"process_audio",
-			"health_check",
-		},
-	}
 
 	hello := controltransport.WorkerHello{
 		WorkerID:        w.config.WorkerID,
@@ -140,7 +124,7 @@ func (w *Worker) buildHello() controltransport.WorkerHello {
 		BundleHash:      w.config.BundleHash,
 		ProtocolVersion: w.config.ProtocolVersion,
 		EngineVersion:   w.config.EngineVersion,
-		Capabilities:    capabilities,
+		Capabilities:    w.capabilitiesMap(hostname),
 	}
 
 	// Compute persistent credential hash if worker secret is configured.
@@ -155,35 +139,67 @@ func (w *Worker) buildHello() controltransport.WorkerHello {
 	return hello
 }
 
+// capabilitiesMap is the SINGLE source of truth for the worker's
+// capability map. Both buildHello and sendHeartbeat call it; any change
+// to wire shape touches one function, not two.
+//
+// Concurrency invariants:
+//   - max_parallel_jobs is sourced ONCE from w.concurrencyLimiter (host
+//     block). The top-level mirror reads from the SAME host value, so a
+//     ConfigurationUpdate flipped via SetMaxActiveJobs is visible in
+//     BOTH locations atomically per capabilitiesMap call.
+//   - AsMap emits an empty slice (not nil) when the registry is empty so
+//     encoding/json never silently drops the executors key.
+func (w *Worker) capabilitiesMap(hostname string) map[string]interface{} {
+	host := w.hostInfo(hostname, w.concurrencyLimiter.MaxActiveJobs())
+	report := executor.BuildCapabilityReport(w.executorRegistry, host)
+	m := report.AsMap()
+	// Top-level mirror of host.max_parallel_jobs for legacy master
+	// decoders that don't walk into the host sub-block. Sourced from
+	// the SAME host field — both paths MUST stay byte-identical.
+	m["max_parallel_jobs"] = host.MaxParallelJobs
+	return m
+}
+
+// hostInfo packages the static host-side fields of the capability report.
+// All values are pre-shaped so PR-3.6's resource sampler can fill
+// RAMBytes / DiskFreeBytes / HasGPU without breaking the wire contract —
+// the master will simply start seeing non-zero values.
+func (w *Worker) hostInfo(hostname string, maxParallel int) api.HostInfo {
+	return api.HostInfo{
+		WorkerID:        w.config.WorkerID,
+		Hostname:        hostname,
+		CPUCount:        runtime.NumCPU(),
+		MaxParallelJobs: maxParallel,
+		HasGPU:          false, // PR-3.6: resource sampler fills this
+		RAMBytes:        0,     // PR-3.6: resource sampler fills this
+		DiskFreeBytes:   0,     // PR-3.6: resource sampler fills this
+	}
+}
+
 // runSession starts all communication loops and returns true if the session
 // ended due to disconnect (should reconnect), false if stopped gracefully.
 func (w *Worker) runSession(ctx context.Context) bool {
 	sessionCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	// Start the receive channel for messages from master (jobs, commands)
 	recvCh, errCh, err := w.transport.Receive(sessionCtx)
 	if err != nil {
 		w.logger.Error("Failed to start receive channel: %v", err)
 		return false
 	}
 
-	// Start heartbeat goroutine (uses transport.Send)
 	w.wg.Add(1)
 	go w.heartbeatLoop(sessionCtx)
 
-	// Start dedicated lease renewal goroutine (uses transport.Send)
 	w.wg.Add(1)
 	go w.leaseRenewLoop(sessionCtx)
 
-	// Start unified receive loop (replaces jobLoop + commandLoop)
 	w.wg.Add(1)
 	go w.receiveLoop(sessionCtx, recvCh)
 
-	// Start local persistence loop (saves seen commands + job metadata)
 	w.startPersistenceLoop(sessionCtx)
 
-	// P0 reconnect fix: also watch the error channel for stream failures
 	sessionEnded := false
 	select {
 	case <-w.stopChan:
@@ -200,13 +216,11 @@ func (w *Worker) runSession(ctx context.Context) bool {
 			w.logger.Info("[SESSION] Transport closed cleanly")
 		}
 		w.setConnState(ConnDisconnected)
-		sessionEnded = true // Signal caller to reconnect
+		sessionEnded = true
 	}
 
-	// Cancel session context to stop all loops
 	cancel()
 
-	// Wait for goroutines to finish with timeout
 	done := make(chan struct{})
 	go func() {
 		w.wg.Wait()
@@ -246,17 +260,12 @@ func (w *Worker) receiveLoop(ctx context.Context, recvCh <-chan controltransport
 
 			switch msg.Type {
 			case controltransport.MsgJobOffer:
-				// Parse the offer exactly once — every reject path needs the
-				// job_id, and the accepted path also needs the typed payload.
 				offer := msgToJob(msg)
 				jobID := ""
 				if offer != nil {
 					jobID = offer.JobID
 				}
 
-				// P5 cleanup: never silently drop an offer. Send JobRejected so
-				// the master can re-route/retry instead of holding a
-				// pendingOffer and waiting on the lease expire timer.
 				if w.IsStopped() {
 					if err := w.sendReject(ctx, jobID, "stopped"); err != nil {
 						w.logger.Warn("[RECEIVE] Failed to send JobRejected (stopped): %v", err)
@@ -270,7 +279,6 @@ func (w *Worker) receiveLoop(ctx context.Context, recvCh <-chan controltransport
 					continue
 				}
 
-				// Check concurrency capacity
 				w.activeJobsMu.RLock()
 				activeCount := len(w.activeJobs)
 				w.activeJobsMu.RUnlock()
@@ -281,14 +289,12 @@ func (w *Worker) receiveLoop(ctx context.Context, recvCh <-chan controltransport
 					continue
 				}
 
-				// Parse job from payload (already parsed above)
 				if offer == nil {
 					w.logger.Warn("[RECEIVE] Failed to parse job from JobOffer message")
 					continue
 				}
 				job := offer
 
-				// Validate job offer (contract version, render plan, concurrency)
 				if err := w.validateJobOffer(job); err != nil {
 					w.logger.Warn("[RECEIVE] Job offer validation failed: %v", err)
 					_ = w.sendReject(ctx, job.JobID, err.Error())
@@ -297,17 +303,13 @@ func (w *Worker) receiveLoop(ctx context.Context, recvCh <-chan controltransport
 
 				w.logger.Info("[RECEIVE] JobOffer received: %s (type: %s, lease: %s)", job.JobID, job.JobType, job.LeaseID)
 
-				// Send JobAccepted via transport
 				if err := w.sendAccept(ctx, job); err != nil {
 					w.logger.Warn("[RECEIVE] Failed to send JobAccepted: %v", err)
 					continue
-				} // P0 protocol fix: store pending job, wait for JobLeaseGranted before executing.
-				// The master confirms the lease atomically in SQLite before sending JobLeaseGranted.
+				}
 				w.storePendingJob(job)
 
 			case controltransport.MsgJobLeaseGranted:
-				// P0 protocol fix: master confirms the lease.
-				// Only now can the worker safely execute the job.
 				leaseGranted, ok := msg.TypedPayload.(*pb.JobLeaseGranted)
 				if !ok || leaseGranted == nil {
 					w.logger.Warn("[RECEIVE] JobLeaseGranted without typed payload")
@@ -352,9 +354,6 @@ func (w *Worker) receiveLoop(ctx context.Context, recvCh <-chan controltransport
 				configUpdate, ok := msg.TypedPayload.(*pb.ConfigurationUpdate)
 				if ok && configUpdate != nil && configUpdate.GetConfiguration() != nil {
 					cfgMap := configUpdate.GetConfiguration().AsMap()
-					// RecoveryReport protocol: same envelope carries recovery_action_v1.
-					// handleRecoveryDirective is internally guarded against the absence of
-					// that key, so the call is unconditional.
 					w.handleRecoveryDirective(configUpdate.GetConfiguration())
 					if newMaxJobs, ok := cfgMap["max_parallel_jobs"]; ok {
 						switch v := newMaxJobs.(type) {
@@ -372,10 +371,6 @@ func (w *Worker) receiveLoop(ctx context.Context, recvCh <-chan controltransport
 						w.config.LogLevel = newLogLevel
 						w.logger.Info("[CONFIG] LogLevel updated to %s", newLogLevel)
 					}
-					// Gap #5 fix: send ack with the command_id from the
-					// envelope MessageId (ConfigurationUpdate proto has no
-					// dedicated command_id field). The master can match this
-					// via the CommandAck.CommandId field.
 					ackPayload := map[string]interface{}{
 						"command_id":        msg.MessageID,
 						"worker_id":         w.config.WorkerID,
@@ -401,7 +396,6 @@ func (w *Worker) receiveLoop(ctx context.Context, recvCh <-chan controltransport
 					jobID := leaseRevoked.GetJobId()
 					w.logger.Warn("[RECEIVE] Lease revoked for job %s: %s",
 						jobID, leaseRevoked.GetReason())
-					// Cancel the running job and remove from active list.
 					if jobID != "" {
 						w.cancelJob(jobID)
 						w.activeJobsMu.Lock()
@@ -414,14 +408,10 @@ func (w *Worker) receiveLoop(ctx context.Context, recvCh <-chan controltransport
 				}
 
 			case controltransport.MsgPing:
-				// Reply with a heartbeat via Send
 				w.sendHeartbeat(ctx)
 
 			case controltransport.MsgHelloAck:
 				w.logger.Debug("[RECEIVE] HelloAck received — session confirmed")
-				// RecoveryReport protocol: emit one enriched heartbeat carrying the
-				// persisted state from the previous run, so the master can issue a
-				// targeted CONTINUE / CANCEL / RESUME_UPLOAD / CLEANUP directive.
 				w.maybeSendRecoveryReport(ctx)
 
 			default:
@@ -433,9 +423,6 @@ func (w *Worker) receiveLoop(ctx context.Context, recvCh <-chan controltransport
 
 // msgToJob converts a ControlMessage (MsgJobOffer) to an api.Job.
 // The transport is gRPC-only — TypedPayload always carries *pb.JobOffer.
-// There is no legacy map-payload decoder: a map shape would either mean
-// a corrupted envelope or stale persisted state, both of which we surface
-// upstream as a JobRejected rather than silently mis-parsing.
 func msgToJob(msg controltransport.ControlMessage) *api.Job {
 	if offer, ok := msg.TypedPayload.(*pb.JobOffer); ok && offer != nil {
 		return msgToJobFromProto(offer)
@@ -450,7 +437,6 @@ func msgToJobFromProto(offer *pb.JobOffer) *api.Job {
 		return nil
 	}
 
-	// Extract dynamic fields from job_payload (job_type, priority, parameters, timeout_secs, contract_version)
 	var parameters map[string]interface{}
 	if jp := offer.GetJobPayload(); jp != nil {
 		parameters = jp.AsMap()
@@ -616,7 +602,6 @@ func isConnectionLevelError(err error) bool {
 	msg := err.Error()
 	lower := strings.ToLower(msg)
 
-	// Connection-level indicators
 	connectionPatterns := []string{
 		"connection refused",
 		"connection reset by peer",
@@ -625,7 +610,7 @@ func isConnectionLevelError(err error) bool {
 		"transport is closing",
 		"broken pipe",
 		"use of closed network connection",
-		"i/o timeout", // dial timeout, not application timeout
+		"i/o timeout",
 	}
 	for _, p := range connectionPatterns {
 		if strings.Contains(lower, p) {
@@ -633,8 +618,6 @@ func isConnectionLevelError(err error) bool {
 		}
 	}
 
-	// gRPC Unavailable status code (transient): the server may be restarting
-	// and the TCP listener is open but gRPC isn't serving yet.
 	if strings.Contains(lower, "unavailable") {
 		return true
 	}
