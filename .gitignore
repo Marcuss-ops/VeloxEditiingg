@@ -92,3 +92,12 @@ frontend_standalone/web/.svelte-kit/
 # ── OS files ─────────────────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
+
+# ── Transient build artifacts ────────────────────────────────────────────────
+# A top-level `controltransport/` directory sporadically appears when a
+# `protoc` regeneration attempt (paths=source_relative variant) writes its
+# output at the wrong relative path before a manual `mv` corrects it. The
+# canonical pb/ package lives under `shared/controltransport/`. This rule
+# catches the transient top-level artifact so it never accidentally lands
+# in a commit.
+controltransport/

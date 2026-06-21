@@ -119,9 +119,15 @@ message JobResult {
 }
 
 message ArtifactUploaded {
-  // ArtifactUploaded — PR 2 (chunk 4) trust boundary.
+  // ArtifactUploaded — master-authoritative artifact boundary.
   //
-  // DEPRECATED FIELDS (kept for wire-compat with old workers; never trusted
+  // The master is the single source of truth for artifact size, sha256, mime.
+  // The worker is only allowed to declare WHICH artifact it uploaded (via
+  // the upload_id returned by Service.BeginUpload); every other field the
+  // worker submits is recomputed by the master from the streamed bytes.
+  //
+  // DEPRECATED FIELDS (kept on the wire for compat with pre-cutover workers;
+  // master ignores them entirely):
   // by the master): artifact_path (4), artifact_size (5), upload_status (6),
   // error (7). The master recomputes size / sha / mime from the streamed
   // bytes; the worker-supplied path and size are NEVER used as sources of
