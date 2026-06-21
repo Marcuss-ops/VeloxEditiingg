@@ -7,7 +7,24 @@ import (
 	"time"
 
 	"velox-worker-agent/internal/executor"
+	"velox-worker-agent/pkg/blob"
+	"velox-worker-agent/pkg/cache"
 )
+
+// CacheStatsProvider surfaces cache counters into the taskrunner for
+// metrics. PR-3.7: pkg/cache.PersistedLocalCache satisfies this via
+// its Stats() method (single source of truth; Stats() is the canonical
+// public API).
+type CacheStatsProvider interface {
+	Stats() cache.CacheStats
+}
+
+// BlobStatsProvider surfaces blob counters into the taskrunner for
+// metrics. PR-3.7: pkg/blob.BlobArtifacts satisfies this via its
+// Stats() method.
+type BlobStatsProvider interface {
+	Stats() blob.BlobStats
+}
 
 // ContextOptions assemble the per-task ExecutionContext that the
 // TaskRunner hands to Executor.Execute. Required: Logger, ParentCtx.
@@ -34,6 +51,11 @@ type ContextOptions struct {
 	Resources  executor.ResourceLimits
 	LocalCache executor.LocalCache
 	Artifacts  executor.ArtifactAccess
+
+	// PR-3.7: stats providers for surfacing cache + blob counters into
+	// TaskExecutionReport.Metrics. Optional; nil falls back to noop.
+	CacheStats CacheStatsProvider
+	BlobStats  BlobStatsProvider
 }
 
 // runnerContext is the per-task ExecutionContext handed to Executor.Execute.
@@ -45,12 +67,14 @@ type runnerContext struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	logger    executor.Logger
-	clock     executor.Clock
-	telemetry executor.Telemetry
-	resources executor.ResourceLimits
-	cache     executor.LocalCache
-	artifacts executor.ArtifactAccess
+	logger     executor.Logger
+	clock      executor.Clock
+	telemetry  executor.Telemetry
+	resources  executor.ResourceLimits
+	cache      executor.LocalCache
+	artifacts  executor.ArtifactAccess
+	cacheStats CacheStatsProvider
+	blobStats  BlobStatsProvider
 }
 
 func newRunnerContext(opts ContextOptions) (*runnerContext, error) {
@@ -75,17 +99,25 @@ func newRunnerContext(opts ContextOptions) (*runnerContext, error) {
 	if opts.Artifacts == nil {
 		opts.Artifacts = noopArtifacts{}
 	}
+	if opts.CacheStats == nil {
+		opts.CacheStats = noopCacheStats{}
+	}
+	if opts.BlobStats == nil {
+		opts.BlobStats = noopBlobStats{}
+	}
 	derived, cancel := context.WithCancel(opts.ParentCtx)
 	return &runnerContext{
-		spec:      opts.Spec,
-		ctx:       derived,
-		cancel:    cancel,
-		logger:    opts.Logger,
-		clock:     opts.Clock,
-		telemetry: opts.Telemetry,
-		resources: opts.Resources,
-		cache:     opts.LocalCache,
-		artifacts: opts.Artifacts,
+		spec:       opts.Spec,
+		ctx:        derived,
+		cancel:     cancel,
+		logger:     opts.Logger,
+		clock:      opts.Clock,
+		telemetry:  opts.Telemetry,
+		resources:  opts.Resources,
+		cache:      opts.LocalCache,
+		artifacts:  opts.Artifacts,
+		cacheStats: opts.CacheStats,
+		blobStats:  opts.BlobStats,
 	}, nil
 }
 
@@ -100,6 +132,12 @@ func (c *runnerContext) Telemetry() executor.Telemetry      { return c.telemetry
 func (c *runnerContext) Resources() executor.ResourceLimits { return c.resources }
 func (c *runnerContext) Clock() executor.Clock              { return c.clock }
 func (c *runnerContext) Logger() executor.Logger            { return c.logger }
+
+// CacheStats and BlobStats surface counters for the post-run metrics
+// merge (PR-3.7). Both return noop zero snapshots when no provider
+// was wired.
+func (c *runnerContext) CacheStats() CacheStatsProvider { return c.cacheStats }
+func (c *runnerContext) BlobStats() BlobStatsProvider   { return c.blobStats }
 
 // Done is closed when the parent ctx is canceled AND when the runner
 // explicitly fires Cancel(). PR-3 invariant #8: executors MUST check
@@ -153,6 +191,18 @@ func (noopArtifacts) Get(_ context.Context, hash string) ([]byte, error) {
 func (noopArtifacts) Put(_ context.Context, hash string, _ []byte) error {
 	return fmt.Errorf("taskrunner: noopArtifacts.Put(%q): no artifact backend wired", hash)
 }
+
+// noopCacheStats and noopBlobStats are zero-value fallbacks for the
+// stats providers (PR-3.7). They keep report.Metrics merge safe when
+// no persistent backend is wired; tests that don't pass providers
+// still get a zero-valued metrics surface.
+type noopCacheStats struct{}
+
+func (noopCacheStats) Stats() cache.CacheStats { return cache.CacheStats{} }
+
+type noopBlobStats struct{}
+
+func (noopBlobStats) Stats() blob.BlobStats { return blob.BlobStats{} }
 
 // staticResources yields a fixed resource snapshot. PR-3.6 sampler
 // replaces this with dynamic sampling.

@@ -13,6 +13,13 @@ import (
 	"velox-worker-agent/pkg/logger"
 )
 
+// PR-3.7: mergeStatsInto reads cache.CacheStats / blob.BlobStats
+// values through the CacheStatsProvider / BlobStatsProvider interfaces
+// declared in context.go. The interfaces themselves (and the explicit
+// cache+blob imports) live in context.go, so runner.go does not need
+// to import cache/ blob directly here. Field accesses like cs.Hits and
+// bs.Publish resolve through the interface return types.
+
 // TaskRunner is the generic per-task lifecycle orchestrator. One
 // TaskRunner is safe to share across goroutines (Run is concurrency-safe);
 // each Run call gets its own derived ExecutionContext, report, and panic
@@ -33,6 +40,11 @@ type TaskRunner struct {
 	telemetry executor.Telemetry
 	resources executor.ResourceLimits
 	clock     executor.Clock
+
+	// PR-3.7: stats providers for surfacing cache + blob counters into
+	// TaskExecutionReport.Metrics as dotted-key entries.
+	cacheStats CacheStatsProvider
+	blobStats  BlobStatsProvider
 
 	callerLog *logger.Logger
 	version   int // spec-version default to attempt when master omits
@@ -76,6 +88,24 @@ func (r *TaskRunner) WithArtifacts(a executor.ArtifactAccess) *TaskRunner {
 // WithCache replaces the local cache backend. Returns r for chaining.
 func (r *TaskRunner) WithCache(c executor.LocalCache) *TaskRunner {
 	r.cache = c
+	return r
+}
+
+// WithCacheStats installs a PR-3.7 stats provider. After each Run, the
+// provider's Stats() snapshot is merged into the report metrics as
+// dotted-key entries (cache.hits, cache.misses, cache.evictions,
+// cache.corruptions, cache.entries, cache.bytes, cache.pinned).
+func (r *TaskRunner) WithCacheStats(p CacheStatsProvider) *TaskRunner {
+	r.cacheStats = p
+	return r
+}
+
+// WithBlobStats installs a PR-3.7 blob stats provider. After each Run,
+// the provider's Stats() snapshot is merged into the report metrics as
+// dotted-key entries (blob.publish, blob.publish_failed, blob.fetch,
+// blob.fetch_miss, blob.fetch_corruption, blob.entries, blob.bytes).
+func (r *TaskRunner) WithBlobStats(p BlobStatsProvider) *TaskRunner {
+	r.blobStats = p
 	return r
 }
 
@@ -164,6 +194,8 @@ func (r *TaskRunner) Run(parent context.Context, spec executor.TaskSpec) (TaskEx
 		Resources:  r.resources,
 		LocalCache: r.cache,
 		Artifacts:  r.artifacts,
+		CacheStats: r.cacheStats,
+		BlobStats:  r.blobStats,
 	})
 	if err != nil {
 		return r.completeError(report, appendPhase, CodeInternalRunnerFault,
@@ -217,7 +249,43 @@ func (r *TaskRunner) Run(parent context.Context, spec executor.TaskSpec) (TaskEx
 	report.Status = "succeeded"
 	report.Outputs = result.Outputs
 	report.Metrics = result.Metrics
+	// PR-3.7: surface cache + blob counters as dotted-key entries.
+	// Merge runs AFTER assign so a nil result.Metrics is preserved as
+	// a fresh map, and an executor-provided map is widened rather than
+	// overwritten.
+	if r.cacheStats != nil || r.blobStats != nil {
+		if report.Metrics == nil {
+			report.Metrics = make(map[string]interface{})
+		}
+		r.mergeStatsInto(report.Metrics)
+	}
 	return *report, nil
+}
+
+// mergeStatsInto writes the cache + blob counters into m using
+// dotted-key names. Safe under zero-valued providers (noop fallbacks
+// keep the merge safe and idempotent for tests).
+func (r *TaskRunner) mergeStatsInto(m map[string]interface{}) {
+	if r.cacheStats != nil {
+		cs := r.cacheStats.Stats()
+		m["cache.hits"] = cs.Hits
+		m["cache.misses"] = cs.Misses
+		m["cache.evictions"] = cs.Evictions
+		m["cache.corruptions"] = cs.Corruptions
+		m["cache.entries"] = cs.Entries
+		m["cache.bytes"] = cs.BytesUsed
+		m["cache.pinned"] = cs.PinnedEntries
+	}
+	if r.blobStats != nil {
+		bs := r.blobStats.Stats()
+		m["blob.publish"] = bs.Publish
+		m["blob.publish_failed"] = bs.PublishFailed
+		m["blob.fetch"] = bs.Fetch
+		m["blob.fetch_miss"] = bs.FetchMiss
+		m["blob.fetch_corruption"] = bs.FetchCorruption
+		m["blob.entries"] = bs.Entries
+		m["blob.bytes"] = bs.Bytes
+	}
 }
 
 // runExecute is the heart of PR-3.3: it invokes Executor.Execute under a
@@ -310,6 +378,9 @@ func (r *TaskRunner) runPhase(name string, fn func() error, fallbackStart time.T
 
 // completeError finalizes the report under the given code and detail,
 // then runs the report phase to keep the 5-phase invariant intact.
+// PR-3.7: failure paths also surface cache + blob counters so operators
+// see real hit/miss/eviction activity on failed-task reports rather
+// than a misleading zero-map.
 func (r *TaskRunner) completeError(report *TaskExecutionReport, appendPhase func(PhaseMarker), code, detail string) TaskExecutionReport {
 	report.Status = "failed"
 	report.ErrorCode = code
@@ -319,6 +390,14 @@ func (r *TaskRunner) completeError(report *TaskExecutionReport, appendPhase func
 	// that check `len(phaseMarkers) == 0` can rely on truth: failure
 	// means a phase WAS run.
 	appendPhase(PhaseMarker{Name: PhaseReport, StartedAt: r.now(), CompletedAt: r.now(), Status: "ok", Notes: "failure recorded"})
+	// Mirror the success-path merge; init Metrics if nil so the merge
+	// does not lose cache+blob data when the executor short-circuited.
+	if r.cacheStats != nil || r.blobStats != nil {
+		if report.Metrics == nil {
+			report.Metrics = make(map[string]interface{})
+		}
+		r.mergeStatsInto(report.Metrics)
+	}
 	return *report
 }
 

@@ -9,9 +9,13 @@ import (
 	"time"
 
 	"velox-shared/controltransport"
+	"velox-worker-agent/internal/executor"
+	"velox-worker-agent/internal/taskrunner"
 	"velox-worker-agent/internal/worker/concurrency"
 	"velox-worker-agent/internal/worker/stageexec"
 	"velox-worker-agent/pkg/api"
+	"velox-worker-agent/pkg/blob"
+	"velox-worker-agent/pkg/cache"
 	"velox-worker-agent/pkg/config"
 	"velox-worker-agent/pkg/logger"
 )
@@ -132,6 +136,20 @@ type Worker struct {
 	// Concurrency limiter (Phase 1: worker policy)
 	concurrencyLimiter *concurrency.ConcurrencyLimiter // Stage executor (Step 2: stage/chunk execution with retry)
 	stageExecutor      *stageexec.StageExecutor
+
+	// Executor registry (PR-3.5): single source of truth for hello/heartbeat
+	// capabilities and (eventually) for the taskrouter dispatch table.
+	// Never nil after Worker construction — defaults to an empty registry
+	// when no WithRegistry option is supplied to New().
+	executorRegistry *executor.Registry
+
+	// PR-3.7: persistent local cache + blob store + the TaskRunner
+	// built from them. cache + blobs are non-nil only when the
+	// corresponding With* option is supplied; taskRunner is always
+	// non-nil (built from cache/blobs/registry in New).
+	cache      *cache.PersistedLocalCache
+	blobs      *blob.BlobArtifacts
+	taskRunner *taskrunner.TaskRunner
 
 	// Exit function (for testing, defaults to os.Exit)
 	exitFunc ExitFunc

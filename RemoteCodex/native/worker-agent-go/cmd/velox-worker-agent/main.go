@@ -18,6 +18,8 @@ import (
 	"velox-worker-agent/internal/executor"
 	"velox-worker-agent/internal/telemetry"
 	"velox-worker-agent/internal/worker"
+	"velox-worker-agent/pkg/blob"
+	"velox-worker-agent/pkg/cache"
 	"velox-worker-agent/pkg/config"
 	"velox-worker-agent/pkg/logger"
 )
@@ -254,7 +256,31 @@ func main() {
 	// that operator dashboards can already introspect.
 	registry := executor.NewRegistry()
 
-	w, workerErr := worker.New(cfg, resolvedVersion, worker.WithRegistry(registry))
+	// PR-3.7: persistent local cache + content-addressed blob store.
+	// Roots are operator-overridable via env vars; the defaults reflect
+	// the production /opt/velox layout. Both invalidate the noop
+	// defaults in taskrunner/context.go (no silent-fallback policy).
+	cacheDir := envOr("VELOX_WORKER_CACHE_DIR", "/opt/velox/cache")
+	blobDir := envOr("VELOX_WORKER_BLOB_DIR", "/opt/velox/blobs")
+	localCache, cacheErr := cache.NewPersistedLocalCache(cache.CacheOptions{Root: cacheDir})
+	if cacheErr != nil {
+		fmt.Fprintf(os.Stderr, "Error: failed to construct local cache at %s: %v\n", cacheDir, cacheErr)
+		os.Exit(1)
+	}
+	blobs, blobErr := blob.NewBlobArtifacts(blob.BlobOptions{Root: blobDir})
+	if blobErr != nil {
+		fmt.Fprintf(os.Stderr, "Error: failed to construct blob store at %s: %v\n", blobDir, blobErr)
+		os.Exit(1)
+	}
+	defer func() { _ = blobs.Close() }()
+	logger.Info("[CACHE] PersistedLocalCache at %s (256 MiB default budget)", cacheDir)
+	logger.Info("[BLOB] BlobArtifacts at %s (upload queue size 1024)", blobDir)
+
+	w, workerErr := worker.New(cfg, resolvedVersion,
+		worker.WithRegistry(registry),
+		worker.WithCache(localCache),
+		worker.WithBlobs(blobs),
+	)
 	if workerErr != nil {
 		logger.LogRegisterFailed("(initial)", cfg.MasterURL, workerErr)
 		os.Exit(1)

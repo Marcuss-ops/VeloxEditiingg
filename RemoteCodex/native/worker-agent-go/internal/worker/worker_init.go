@@ -12,9 +12,12 @@ import (
 
 	"velox-shared/controltransport"
 	"velox-worker-agent/internal/executor"
+	"velox-worker-agent/internal/taskrunner"
 	"velox-worker-agent/internal/worker/concurrency"
 	"velox-worker-agent/internal/worker/stageexec"
 	"velox-worker-agent/pkg/api"
+	"velox-worker-agent/pkg/blob"
+	"velox-worker-agent/pkg/cache"
 	"velox-worker-agent/pkg/config"
 	"velox-worker-agent/pkg/logger"
 )
@@ -25,6 +28,8 @@ type Option func(*workerOptions)
 
 type workerOptions struct {
 	registry *executor.Registry
+	cache    *cache.PersistedLocalCache
+	blobs    *blob.BlobArtifacts
 }
 
 // WithRegistry replaces the default (empty) executor registry. The
@@ -44,6 +49,38 @@ func WithRegistry(reg *executor.Registry) Option {
 	}
 	return func(o *workerOptions) {
 		o.registry = reg
+	}
+}
+
+// WithCache (PR-3.7) wires a persistent local cache into the worker.
+// The same instance is exposed via Worker.cache and is threaded into
+// the TaskRunner built by New() so cache hits/misses/evictions/
+// corruptions appear in TaskExecutionReport.Metrics.
+//
+// Passing nil panics loudly; omit WithCache to fall back to noop
+// defaults (useful only for unit tests that don't exercise the
+// cache surface).
+func WithCache(c *cache.PersistedLocalCache) Option {
+	if c == nil {
+		panic("worker.WithCache: cache must not be nil — pass an explicit *cache.PersistedLocalCache or omit WithCache")
+	}
+	return func(o *workerOptions) {
+		o.cache = c
+	}
+}
+
+// WithBlobs (PR-3.7) wires a content-addressed blob store into the
+// worker. Same instance is exposed via Worker.blobs and threaded
+// into the TaskRunner built by New(); the upload queue is consumed
+// by PR-3.8 master-side transport.
+//
+// Passing nil panics loudly; omit WithBlobs to fall back to noop.
+func WithBlobs(b *blob.BlobArtifacts) Option {
+	if b == nil {
+		panic("worker.WithBlobs: blobs must not be nil — pass an explicit *blob.BlobArtifacts or omit WithBlobs")
+	}
+	return func(o *workerOptions) {
+		o.blobs = b
 	}
 }
 
@@ -135,6 +172,17 @@ func New(cfg *config.WorkerConfig, version string, opts ...Option) (*Worker, err
 		return nil, fmt.Errorf("transport factory: %w", err)
 	}
 
+	// PR-3.7: build the TaskRunner from registry + cache + blobs. The
+	// runner is shared by future executeJob routes (PR-3.8) and is also
+	// where cache + blob counters get surfaced as report.Metrics entries.
+	tr := taskrunner.NewTaskRunner(wo.registry, log)
+	if wo.cache != nil {
+		tr = tr.WithCache(wo.cache).WithCacheStats(wo.cache)
+	}
+	if wo.blobs != nil {
+		tr = tr.WithArtifacts(wo.blobs).WithBlobStats(wo.blobs)
+	}
+
 	w := &Worker{
 		config:           cfg,
 		apiClient:        apiClient,
@@ -159,6 +207,9 @@ func New(cfg *config.WorkerConfig, version string, opts ...Option) (*Worker, err
 		concurrencyLimiter: concurrency.NewConcurrencyLimiter(detectedConcurrency),
 		stageExecutor:      stageExecutor,
 		executorRegistry:   wo.registry,
+		cache:              wo.cache,
+		blobs:              wo.blobs,
+		taskRunner:         tr,
 		exitFunc:           os.Exit,
 	}
 
