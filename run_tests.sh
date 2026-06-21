@@ -1,5 +1,5 @@
 cd DataServer
-GOFLAGS="-mod=mod" go test -count=1 -v -timeout 60s ./internal/outbox/... 2>&1 | tee /tmp/ds_outbox_v3.log | tail -200
+go test -count=1 -v -timeout 60s ./internal/outbox/... 2>&1 | tee /tmp/ds_outbox_v3.log | tail -200
 echo "=== DS_OUTBOX_TEST=$? ==="
 echo "=== PASS_COUNTS ==="
 grep -cE "^--- PASS" /tmp/ds_outbox_v3.log

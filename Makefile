@@ -53,7 +53,7 @@ fmt-check:     ## gofmt -d on every Go module (CI-style dry run; fails on dirty)
 vet:           ## go vet ./... on every Go module
 	@for mod in DataServer RemoteCodex/native/worker-agent-go shared; do \
 	  echo "-> go vet $$mod"; \
-	  (cd $$mod && GOFLAGS=-mod=mod go vet ./...) || exit 1; \
+	  (cd $$mod && go vet ./...) || exit 1; \
 	done
 
 pilot:         ## Full pilot pipeline (build + start + submit + work + poll)

@@ -17,10 +17,6 @@ require (
 	velox-shared v0.0.0
 )
 
-// velox-shared is vendored in-tree at <repo-root>/shared/. Once it is
-// promoted to a real git submodule, change this to drop the `replace`
-// directive entirely (and pin the submodule path in `.gitmodules`).
-replace velox-shared v0.0.0 => ../shared
 
 require (
 	cloud.google.com/go/auth v0.20.0 // indirect
