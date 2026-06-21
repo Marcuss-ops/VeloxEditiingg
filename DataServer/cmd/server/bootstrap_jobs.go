@@ -5,7 +5,6 @@ import (
 
 	"velox-server/internal/jobs"
 	"velox-server/internal/platform/clock"
-	"velox-server/internal/queue"
 	"velox-server/internal/store"
 )
 
@@ -14,7 +13,7 @@ type jobsDeps struct {
 	// Repository is the canonical jobs.Repository (backed by SQLiteJobRepository).
 	Repository jobs.Repository
 	// Lifecycle owns transactional status transitions with CAS gating.
-	Lifecycle *queue.LifecycleService
+	Lifecycle *jobs.LifecycleService
 }
 
 // buildJobs creates the JobRepository and LifecycleService from the
@@ -25,7 +24,7 @@ func buildJobs(p *persistenceDeps) (*jobsDeps, error) {
 	jobRepo := store.NewSQLiteJobRepository(p.SQLite)
 	jobsRepository := store.NewJobsRepository(jobRepo)
 
-	lifecycleSvc, err := queue.NewLifecycleService(jobsRepository, clock.System{})
+	lifecycleSvc, err := jobs.NewLifecycleService(jobsRepository, clock.System{})
 	if err != nil {
 		return nil, fmt.Errorf("bootstrap: lifecycle service: %w", err)
 	}

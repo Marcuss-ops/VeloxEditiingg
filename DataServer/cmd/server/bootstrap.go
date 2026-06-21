@@ -29,9 +29,9 @@ import (
 	workerhandlers "velox-server/internal/handlers/remote/workers"
 	"velox-server/internal/handlers/remote/workers/lifecycle"
 	workerhandlersuploads "velox-server/internal/handlers/remote/workers/uploads"
+	"velox-server/internal/jobs"
 	"velox-server/internal/jobs/enqueue"
 	"velox-server/internal/outbox"
-	"velox-server/internal/queue"
 	"velox-server/internal/store"
 	workersreg "velox-server/internal/workers"
 	"velox-server/internal/workflow"
@@ -60,7 +60,7 @@ type serverDeps struct {
 	artifactSvc         *artifacts.Service
 	cmdMgr              *workersreg.CommandManager
 	chunkedHandler      *workerhandlersuploads.ChunkedUploadHandler
-	lifecycleSvc        *queue.LifecycleService
+	lifecycleSvc        *jobs.LifecycleService
 	assetService        *voiceoverassets.AssetService
 	enqueuer            *enqueue.Enqueuer
 }
