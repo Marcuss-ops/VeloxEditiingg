@@ -1,119 +1,177 @@
-# Velox distributed rendering roadmap
+# Velox distributed rendering implementation roadmap
 
-Status: implementation plan
+Status snapshot: 2026-06-21
 
-Owner: architecture / rendering runtime
+Owner: master rendering architecture
 
-Target branch for implementation PRs: `main`
+This directory is the execution contract for converting Velox from whole-job rendering into a deterministic distributed composition runtime. It describes only the work still missing from `main`.
 
-This directory is the operational source of truth for evolving Velox from whole-job rendering into a modular distributed rendering runtime.
+## Current repository state
 
-## Mission
+Already present and mandatory to reuse:
 
-Velox must compile one video project into an immutable execution plan, execute independent work across CPU/GPU workers, reuse cached artifacts, and report exactly where time is spent.
+- canonical `jobs` domain with repository, revision, lease and lifecycle service;
+- SQLite-first persistence through repositories;
+- `internal/platform/database` with SQLite/Postgres connection abstraction;
+- `buildPersistence` with mandatory outbox and fail-fast BlobStore;
+- canonical artifact upload/finalization path;
+- asset resolver registry;
+- explicit background supervisor;
+- gRPC-only worker control plane;
+- worker pipeline compiler registry;
+- worker-side RenderPlan V1 consumed by the C++/FFmpeg engine;
+- queue facade removed from the canonical architecture.
 
-The target flow is:
+Still missing from `main`:
 
 ```text
-Editor project
-  -> RenderPlan
-  -> Task DAG
-  -> Scheduler
-  -> Executor registry
-  -> CPU/GPU workers
-  -> Artifact store/cache
-  -> Final composition
+DataServer/internal/taskgraph
+DataServer/internal/taskattempts
+DataServer/internal/observability
+DataServer/internal/renderplan
+DataServer/internal/scheduler
+DataServer/internal/costmodel
+RemoteCodex/native/worker-agent-go/internal/executor
+RemoteCodex/native/worker-agent-go/internal/taskrunner
+RemoteCodex/native/worker-agent-go/internal/localcache
+RemoteCodex/native/worker-agent-go/internal/resource
 ```
 
-## Architectural invariants
+Also still missing:
 
-1. `jobs.Job` represents the user-visible render objective.
-2. `taskgraph.Task` represents one schedulable unit of work.
-3. `artifacts` owns every reusable output: normalized assets, overlays, precomps, masks, shards, stems, and final files.
-4. `taskattempts` records what happened on one worker attempt.
-5. The master owns planning, dependency resolution, lifecycle transitions, scheduling, and canonical metrics.
-6. Workers are simple executors. They do not reinterpret the project or invent dependencies.
-7. Every executor, resolver, sampler, and capability must enter a canonical registry. Do not add parallel switch/case routing.
-8. All persistent state remains SQLite-first through repositories. Do not add JSON/RAM authoritative state or a second writer.
-9. Large binary data remains in the BlobStore/artifact storage, never in SQLite.
-10. No silent fallback. Missing critical dependencies fail explicitly.
-11. Velox remains headless and server-side. This roadmap does not add an editor UI, browser renderer, or GUI runtime.
-12. GPU support is capability-based and optional. CPU rendering remains a valid first-class path.
+- typed task-level worker reports;
+- immutable master-owned RenderPlan publication;
+- persistent task dependencies;
+- late composition and reusable RGBA precompositions;
+- registry-derived worker capabilities;
+- persistent content-addressed worker cache;
+- cost/locality-aware scheduling;
+- temporal sharding and compatible shard finalization;
+- critical-path and parallel-efficiency reporting.
 
-## Required PR order
+## Immediate repository hygiene
 
-Implementation is split into four sequential PRs. Do not develop the four branches in parallel.
+Before implementation PR 1:
 
-1. [PR 1 - Task contracts and observability](PR-01-TASK-CONTRACTS-OBSERVABILITY.md)
-2. [PR 2 - Task DAG, artifacts, and late composition](PR-02-TASK-DAG-LATE-COMPOSITION.md)
-3. [PR 3 - Executor registry and modular worker runtime](PR-03-EXECUTOR-REGISTRY-WORKERS.md)
-4. [PR 4 - Adaptive scheduler, cost model, and temporal sharding](PR-04-SCHEDULER-COST-SHARDING.md)
+1. start from current `origin/main`;
+2. run `make verify` and record the result;
+3. remove the stale comment in `DataServer/cmd/server/bootstrap.go` claiming `internal/platform/database` is absent;
+4. resolve, close or completely rebase any older open PR touching bootstrap, artifacts, database, jobs or observability;
+5. do not merge or copy `DataServer/internal/obs/models.go` from stale branches: the canonical packages are `taskgraph`, `taskattempts` and `observability`;
+6. do not carry forward free-form phase names or opaque task parameter blobs as the canonical model.
 
-Each PR starts only after the previous PR is merged into `main`.
+A baseline repair unrelated to distributed rendering must be a separate minimal PR. Do not hide unrelated repairs inside PR 1.
 
-## Required Git workflow for every implementation PR
+## Target architecture
 
-```bash
-git fetch origin
-git checkout main
-git pull --ff-only origin main
-git checkout -b codex/<pr-specific-name>
+```text
+Editor/project input
+        |
+        v
+Canonical compiler registry
+        |
+        v
+Immutable RenderPlan
+        |
+        v
+Persistent TaskGraph
+        |
+        +---- verified artifact cache hit
+        |
+        v
+Ready-task lifecycle
+        |
+        v
+Scheduler: capability + load + cost + locality
+        |
+        v
+gRPC task contract
+        |
+        v
+Executor registry on worker
+        |
+        v
+Artifact outputs
+        |
+        v
+Final composition / concat / mux
 ```
 
-Before push:
-
-```bash
-git fetch origin
-git rebase origin/main
-git status -sb
-git diff origin/main...HEAD --stat
-```
-
-Then run the tests listed in the corresponding PR document.
-
-After push:
-
-```bash
-git log -n 5 --oneline
-```
-
-Rules:
-
-- One PR, one responsibility.
-- Do not touch files outside the documented scope unless compilation requires it.
-- Do not add generated files, binaries, output directories, or local caches.
-- Do not introduce a second queue, artifact store, registry, scheduler, or state writer.
-- Do not combine refactoring, new features, deployment changes, and UI work in one PR.
-- Keep compatibility read-only, explicitly owned, and time-bounded.
-
-## Canonical domain model
+## Domain ownership
 
 ```text
 Job
-  owns the user request and overall lifecycle
+  User-visible objective and overall lifecycle.
 
 RenderPlan
-  immutable compiled representation of the project
+  Immutable compiled description of what must be produced.
 
 TaskGraph
-  dependency graph derived from one RenderPlan
+  Persistent dependency graph derived from one RenderPlan.
 
 Task
-  one schedulable operation with explicit inputs and outputs
+  One schedulable unit with explicit executor, inputs, outputs and requirements.
 
 TaskAttempt
-  one execution of one Task on one Worker
+  One execution of one Task on one Worker.
 
 Artifact
-  immutable binary or metadata output identified by content hash
+  Immutable verified output identified by content hash.
 
-Worker
-  executor host with advertised capabilities and resources
+WorkerProfile
+  Advertised executor capabilities plus current resource state.
 ```
+
+## Purity invariants
+
+1. The master is the only planner, dependency resolver, scheduler and task-lifecycle authority.
+2. Workers execute assigned contracts; they never reinterpret the project or invent graph edges.
+3. Every mutable state has one writer and one repository.
+4. Every executor, compiler, resolver, estimator and sampler enters one canonical registry.
+5. No switch/case map may duplicate registry dispatch.
+6. RenderPlan, TaskSpec and Artifact identity are immutable after publication.
+7. Cache keys are deterministic functions of semantic inputs, executor version and engine version.
+8. SQLite stores state and metadata; BlobStore stores binary payloads.
+9. Memory queues and caches are reconstructible and never authoritative.
+10. No silent fallback, dual-write, hidden retry path or second renderer path.
+11. CPU-only workers remain valid. GPU support is explicit capability matching, never an implicit fallback.
+12. Drive is an ingestion source, not the normal rendering filesystem.
+13. Workers do not exchange authoritative state directly with other workers.
+14. Final job success remains owned by verified artifact finalization.
+15. Velox remains headless, deterministic and server-side.
+
+## Existing components that must not be recreated
+
+Do not add replacements for:
+
+```text
+jobs.Repository / jobs.LifecycleService
+artifacts.Service and canonical artifact repositories
+assets.ResolverRegistry
+outbox.Store / outbox.Registry
+BackgroundSupervisor
+platform/database
+worker pipeline.Registry
+worker RenderPlan V1 engine path
+gRPC WorkerControl stream
+```
+
+Extend these owners or add adapters around them. Do not create parallel domains with names such as `task_queue_v2`, `artifact_cache_v2`, `new_scheduler`, `legacy_executor` or `distributed_jobs`.
+
+## Required PR sequence
+
+The implementation remains four sequential PRs:
+
+1. [PR 1 - Canonical tasks and execution telemetry](PR-01-TASK-CONTRACTS-OBSERVABILITY.md)
+2. [PR 2 - Persistent DAG and late composition](PR-02-TASK-DAG-LATE-COMPOSITION.md)
+3. [PR 3 - Executor registry and worker runtime](PR-03-EXECUTOR-REGISTRY-WORKERS.md)
+4. [PR 4 - Scheduler, cost model and temporal sharding](PR-04-SCHEDULER-COST-SHARDING.md)
+
+A later PR must not begin before the previous PR is merged into `main` and its acceptance tests pass on the rebased branch.
 
 ## Canonical task phases
 
-All timing reports must use these names. Do not create free-form aliases.
+Task telemetry may use only these production phase identifiers:
 
 ```text
 queue
@@ -130,9 +188,11 @@ upload
 finalize
 ```
 
-## Canonical task categories
+Additional phases require an architecture update and registry change. Free-form names are forbidden.
 
-Initial executor IDs:
+## Canonical executor IDs
+
+Initial IDs:
 
 ```text
 asset.prepare.v1
@@ -146,39 +206,11 @@ video.concat.v1
 video.encode-h264.v1
 ```
 
-Additional executors must be registered through the same registry and versioned.
+Only executors backed by real implementations may be advertised.
 
-## Initial performance targets
+## Required measurements
 
-These are measurement targets, not hard-coded assumptions:
-
-- Drive must not be on the normal render critical path.
-- Duplicate download of the same content hash must be zero.
-- Cache byte hit ratio should be measurable per project and worker.
-- Task queue wait, asset wait, render, encode, and upload must be separately visible.
-- Finalization should concatenate/mux compatible shards instead of re-rendering the full project.
-- Scheduler decisions must be explainable from capability, load, estimated cost, and data locality.
-
-## Metrics required before optimization
-
-At project level:
-
-```text
-wall_clock_ms
-critical_path_ms
-total_worker_busy_ms
-parallel_efficiency
-workers_allocated
-workers_peak_active
-cache_byte_hit_ratio
-bytes_from_drive
-bytes_from_blobstore
-bytes_from_local_cache
-retry_count
-straggler_count
-```
-
-At task-attempt level:
+Task-attempt measurements:
 
 ```text
 queue_ms
@@ -196,6 +228,9 @@ finalize_ms
 total_ms
 input_bytes
 output_bytes
+bytes_from_drive
+bytes_from_blobstore
+bytes_from_local_cache
 cpu_time_ms
 gpu_time_ms
 peak_rss_bytes
@@ -204,29 +239,86 @@ estimated_ms
 estimation_error_ratio
 ```
 
-## Definition of done for the roadmap
+Project measurements:
 
-The roadmap is complete when:
+```text
+wall_clock_ms
+planned_critical_path_ms
+actual_critical_path_ms
+total_worker_busy_ms
+parallel_efficiency
+workers_allocated
+workers_peak_active
+cache_byte_hit_ratio
+retry_count
+straggler_count
+```
 
-- one job can expand into multiple dependent tasks;
-- independent overlay/precomp tasks can run while stock ingestion is pending;
-- workers advertise capabilities from a registry, not hard-coded maps;
-- task scheduling accounts for worker load and cached inputs;
-- temporal render shards can execute independently with pre/post-roll;
-- compatible shards are assembled without a full re-encode;
-- project reports identify the actual critical path and optimization opportunities;
-- all state follows the existing single-writer and repository rules.
+Measurements are stored as validated typed fields. An opaque JSON metrics blob cannot be the sole source of truth.
 
-## Explicit non-goals
+## Git workflow
 
-This roadmap does not include:
+For every implementation PR:
 
-- frontend/editor development;
+```bash
+git fetch origin
+git checkout main
+git pull --ff-only origin main
+git checkout -b codex/<focused-name>
+```
+
+Before push:
+
+```bash
+git fetch origin
+git rebase origin/main
+git status -sb
+git diff origin/main...HEAD --stat
+```
+
+After push:
+
+```bash
+git log -n 5 --oneline
+git fetch origin
+git status -sb
+```
+
+Rules:
+
+- one coherent responsibility per PR;
+- no generated binaries, output folders or local caches;
+- no broad formatting/refactor mixed with the feature;
+- verify remote diffs before touching files changed by another branch;
+- run targeted tests plus the documented verification gate;
+- compatibility may be read-only only, with owner and removal date;
+- delete temporary bridges in the PR explicitly assigned to remove them.
+
+## Roadmap completion criteria
+
+The roadmap is complete only when:
+
+- one Job expands into a persistent multi-task DAG;
+- independent overlays render while stock ingestion is pending;
+- verified precompositions are reused by content hash;
+- worker capabilities are produced from the executor registry;
+- task placement uses capability, resource state, measured cost and data locality;
+- frame-local/windowed work can be safely sharded;
+- finalization assembles compatible shards without full-project re-render;
+- actual critical path and parallel efficiency are available per project;
+- master restart reconstructs all scheduling state from repositories;
+- no duplicate owner, registry, scheduler, cache or renderer exists.
+
+## Non-goals
+
+This roadmap does not add:
+
+- editor/frontend work;
 - browser rendering;
-- a Blender or After Effects clone;
+- Kubernetes;
+- peer-to-peer authoritative state;
+- machine-learning prediction;
 - PostgreSQL cutover;
-- Kubernetes adoption;
-- peer-to-peer worker distribution;
-- machine-learning cost prediction;
-- a second renderer path beside the canonical pipeline;
-- speculative features not required by the four PRs.
+- a second C++/FFmpeg renderer path;
+- automatic feature discovery;
+- an After Effects or Blender clone.
