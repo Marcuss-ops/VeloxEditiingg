@@ -275,7 +275,15 @@ func main() {
 	logger.Info("[BOOT] Building executor registry at composition root (cmd/velox-worker-agent)")
 	registry := executor.NewRegistry()
 
-	pipelineRunner, pipeErr := video.NewPipelineRunner(nil) // logger nil here means use the package default; see video.NewPipelineRunner for resolution.
+	// PR-3.9 fix: NewPipelineRunner panics on a nil log — supply a real
+	// boot-time logger so renderer errors travel to stderr at start-up.
+	// The composition-root logger is the canonical logger that the
+	// run-loop later merges into worker.New (worker.New constructs its
+	// own *logger.Logger from cfg.LogLevel); before that point this
+	// bootLog is the only consumer of pipeline / native-client messages.
+	bootLog := logger.New(logger.InfoLevel, os.Stderr)
+	bootLog.SetPrefix("[BOOT]")
+	pipelineRunner, pipeErr := video.NewPipelineRunner(bootLog)
 	if pipeErr != nil {
 		// Fail closed: a missing C++ engine is a deploy-time problem.
 		// Silently downgrading to an empty registry re-introduces the
