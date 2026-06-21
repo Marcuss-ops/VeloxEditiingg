@@ -17,7 +17,6 @@ import (
 	"velox-server/internal/jobs"
 	jobenqueue "velox-server/internal/jobs/enqueue"
 	"velox-server/internal/platform/clock"
-	"velox-server/internal/queue"
 	"velox-server/internal/store"
 )
 
@@ -51,11 +50,6 @@ func TestGenerateWithImages_EnqueuesSceneImageJob(t *testing.T) {
 		t.Fatalf("new sqlite store: %v", err)
 	}
 	jobRepo := store.NewSQLiteJobRepository(db)
-	ts, err := queue.NewLifecycleService(jobRepo, clock.System{})
-	if err != nil {
-		t.Fatalf("new transition service: %v", err)
-	}
-	_ = ts
 
 	cfg := &config.Config{
 		Runtime: config.RuntimeConfig{
@@ -199,11 +193,6 @@ func TestGenerateWithImages_UsesCreatorStageWhenConfigured(t *testing.T) {
 		t.Fatalf("new sqlite store: %v", err)
 	}
 	jobRepo := store.NewSQLiteJobRepository(db)
-	ts, err := queue.NewLifecycleService(jobRepo, clock.System{})
-	if err != nil {
-		t.Fatalf("new transition service: %v", err)
-	}
-	_ = ts
 
 	mockCreator := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/script/generate-with-images" {
@@ -312,11 +301,6 @@ func TestGenerateWithImages_BypassesCreatorForRenderReadyPayload(t *testing.T) {
 		t.Fatalf("new sqlite store: %v", err)
 	}
 	jobRepo := store.NewSQLiteJobRepository(db)
-	ts, err := queue.NewLifecycleService(jobRepo, clock.System{})
-	if err != nil {
-		t.Fatalf("new transition service: %v", err)
-	}
-	_ = ts
 
 	creatorCalled := false
 	mockCreator := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

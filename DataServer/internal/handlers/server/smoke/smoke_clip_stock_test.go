@@ -11,8 +11,6 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"velox-server/internal/config"
-	"velox-server/internal/platform/clock"
-	"velox-server/internal/queue"
 	"velox-server/internal/store"
 )
 
@@ -26,12 +24,6 @@ func TestCreateSmokeClipStock_Validation(t *testing.T) {
 		t.Skipf("SQLite unavailable: %v", err)
 	}
 	jobRepo := store.NewSQLiteJobRepository(db)
-	ts, err := queue.NewLifecycleService(jobRepo, clock.System{})
-	if err != nil {
-		t.Skipf("Transition service unavailable: %v", err)
-	}
-	_ = ts
-
 	r := gin.New()
 	r.POST("/api/v1/video/smoke-clip-stock", CreateSmokeClipStock(config.FromEnv(), jobRepo))
 
@@ -55,12 +47,6 @@ func TestCreateSmokeClipStock_Enqueue(t *testing.T) {
 		t.Skipf("SQLite unavailable: %v", err)
 	}
 	jobRepo := store.NewSQLiteJobRepository(db)
-	ts, err := queue.NewLifecycleService(jobRepo, clock.System{})
-	if err != nil {
-		t.Skipf("Transition service unavailable: %v", err)
-	}
-	_ = ts
-
 	r := gin.New()
 	r.POST("/api/v1/video/smoke-clip-stock", CreateSmokeClipStock(config.FromEnv(), jobRepo))
 

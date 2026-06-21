@@ -57,7 +57,7 @@ func InitRemoteEngine(cfg *config.Config) {
 
 // PipelineGenerate handles POST /api/remote/pipeline/generate
 //
-// PR15.7a: drops the *queue.FileQueue parameter. The Enqueuer (wired
+// PR15.7a: The Enqueuer (wired
 // via InitPipelineEnqueuer) owns both the queue and the voiceover
 // rewrite service so forwarding can complete without package-level state.
 func PipelineGenerate(cfg *config.Config) gin.HandlerFunc {

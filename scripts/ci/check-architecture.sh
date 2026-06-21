@@ -79,7 +79,16 @@ if find . \
   fail "legacy/deprecated files are forbidden -- see above"
 fi
 
-# 6. BUILD_INFO.json ↔ VERSION.txt SSOT drift guard.
+# 6. Removed queue package must stay dead.
+# After PR "refactor(jobs): remove queue compatibility facade",
+# internal/queue was deleted. Reintroducing it would resurrect the
+# facade types (queue.Job, queue.QueueItem, queue.JobStatus,
+# *queue.FileQueue) that were swept in that PR.
+if [[ -d DataServer/internal/queue ]]; then
+  fail "DataServer/internal/queue/ exists -- forbidden (queue facade was removed; use internal/jobs instead)"
+fi
+
+# 7. BUILD_INFO.json ↔ VERSION.txt SSOT drift guard.
 #
 # Single-source-of-truth rule (scope: VERSION-LEVEL integrity only).
 # This rule catches the headline SSOT invariant: the `version` field in

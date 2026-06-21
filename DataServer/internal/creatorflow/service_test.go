@@ -13,8 +13,7 @@ import (
 
 	"velox-server/internal/jobs"
 	jobenqueue "velox-server/internal/jobs/enqueue"
-	"velox-server/internal/platform/clock"
-	"velox-server/internal/queue"
+
 	"velox-server/internal/remoteengine"
 	"velox-server/internal/store"
 )
@@ -56,14 +55,6 @@ func TestForwardSchedulesAsyncPollAndWorkerHandoff(t *testing.T) {
 		t.Fatalf("sqlite store: %v", err)
 	}
 	jobRepo := store.NewSQLiteJobRepository(db)
-	ts, tsErr := queue.NewLifecycleService(jobRepo, clock.System{})
-	if tsErr != nil {
-		t.Fatalf("new transition service: %v", tsErr)
-	}
-	_ = ts
-
-	// PR15.7a: build the Enqueuer once. No voiceover rewrite expected on
-	// this path (nil voiceover); the rewrite is a no-op.
 	enqueuer := jobenqueue.NewEnqueuer(&testSubmitQueue{writer: jobRepo, maxRetries: 3}, nil)
 
 	var mu sync.Mutex
@@ -180,12 +171,6 @@ func TestForwardCompletedResultEnqueuesWorkerJob(t *testing.T) {
 		t.Fatalf("sqlite store: %v", err)
 	}
 	jobRepo := store.NewSQLiteJobRepository(db)
-	ts, tsErr := queue.NewLifecycleService(jobRepo, clock.System{})
-	if tsErr != nil {
-		t.Fatalf("new transition service: %v", tsErr)
-	}
-	_ = ts
-
 	// PR15.7a: ForwardCompletedResult takes *enqueue.Enqueuer (not raw q).
 	// The free function constructs a temporary Enqueuer internally, but
 	// the new contract takes the enqueuer directly so the test mirrors

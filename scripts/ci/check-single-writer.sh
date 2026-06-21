@@ -66,6 +66,14 @@ scan "\.Finalize\("                          DataServer/internal/artifacts/
 scan "\.MarkFailed\("                        DataServer/internal/outbox/
 scan "\.MarkProcessed\("                     DataServer/internal/outbox/
 
+# Queue facade (removed in PR "refactor(jobs): remove queue compatibility facade")
+# Reintroducing any queue alias or the internal/queue package is forbidden.
+scan '"velox-server/internal/queue"'            DataServer/NO_SUCH_DIR_DO_NOT_IMPORT_QUEUE/
+scan '\*queue\.FileQueue'                      DataServer/NO_SUCH_DIR_DO_NOT_USE_QUEUE/
+scan 'queue\.JobStatus'                        DataServer/NO_SUCH_DIR_DO_NOT_USE_QUEUE/
+scan 'queue\.QueueItem'                        DataServer/NO_SUCH_DIR_DO_NOT_USE_QUEUE/
+scan 'queue\.Job[^a-zA-Z]'                     DataServer/NO_SUCH_DIR_DO_NOT_USE_QUEUE/
+
 # Compatibility shims: any NEW file in the PR that introduces a
 # COMPATIBILITY marker MUST carry `Remove after:`. Existing shims are
 # grandfathered.

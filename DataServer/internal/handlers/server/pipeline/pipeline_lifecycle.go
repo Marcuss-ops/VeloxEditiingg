@@ -28,7 +28,7 @@ func isTerminalStatus(status string) bool {
 // startPipelinePolling polls a pipeline job status every intervalSec seconds
 // in a background goroutine until completion, then forwards to workers.
 //
-// PR15.7a: drops the *queue.FileQueue parameter — the forwarding path now
+// PR15.7a: the forwarding path now
 // reads pipelineEnqueuer (wired via InitPipelineEnqueuer at boot) instead.
 func startPipelinePolling(client *remoteengine.Client, jobID string, intervalSec int) {
 	if client == nil || !client.IsConfigured() {

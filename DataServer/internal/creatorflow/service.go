@@ -17,8 +17,8 @@ import (
 // Service encapsulates the optional "creator" stage so multiple endpoints can
 // reuse the same remote-engine -> worker handoff path without duplicating it.
 //
-// PR15.7a: `queue *queue.FileQueue` was removed. The *enqueue.Enqueuer
-// holds the JobQueue reference; callers may type-assert to *queue.FileQueue
+// PR15.7a: `queue` was removed. The *enqueue.Enqueuer
+// holds the JobQueue reference.
 // at the composition root if they need the concrete type. This collapses
 // two parallel fields that always pointed to the same underlying queue.
 type Service struct {
@@ -32,7 +32,7 @@ type Service struct {
 
 // New creates a creator-flow service from runtime config.
 // enqueuer is mandatory (PR15.7a): it owns the voiceover rewrite and the
-// queue. The concrete *queue.FileQueue type is no longer needed here —
+// The concrete type is no longer needed here —
 // callers can construct the Enqueuer (which embeds the JobQueue) once
 // at composition-root time and pass it down.
 func New(cfg *config.Config, enqueuer *enqueue.Enqueuer) *Service {
@@ -125,7 +125,7 @@ func firstString(m map[string]interface{}, keys ...string) string {
 // and enqueues it for the remote worker pool.
 //
 // PR15.7a: takes *enqueue.Enqueuer (which owns voiceover rewrite + queue),
-// not a raw *queue.FileQueue + voiceover global. The caller must construct
+// not a raw queue + voiceover global. The caller must construct
 // the enqueuer once at composition-root time and pass it through.
 func ForwardCompletedResult(ctx context.Context, enqueuer *enqueue.Enqueuer, result map[string]interface{}) (map[string]interface{}, error) {
 	if enqueuer == nil || enqueuer.Queue == nil {

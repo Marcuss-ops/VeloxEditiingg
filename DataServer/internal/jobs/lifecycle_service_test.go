@@ -1,4 +1,4 @@
-package queue
+package jobs
 
 import (
 	"context"
@@ -7,27 +7,26 @@ import (
 	"testing"
 	"time"
 
-	"velox-server/internal/jobs"
 	"velox-server/internal/platform/clock"
 )
 
 // stubRepo is a minimal jobs.Repository used for nil validation and delegation tests.
-var stubRepo jobs.Repository = &stubImpl{}
+var stubRepo Repository = &stubImpl{}
 
 type stubImpl struct{}
 
 // ── jobs.Reader ─────────────────────────────────────────────────────────────
 
-func (s *stubImpl) Get(ctx context.Context, id string) (*jobs.Job, error)   { return nil, errNotImplemented }
-func (s *stubImpl) List(ctx context.Context, filter jobs.Filter) ([]jobs.Job, error) {
+func (s *stubImpl) Get(ctx context.Context, id string) (*Job, error) { return nil, errNotImplemented }
+func (s *stubImpl) List(ctx context.Context, filter Filter) ([]Job, error) {
 	return nil, errNotImplemented
 }
-func (s *stubImpl) Counts(ctx context.Context) (jobs.Counts, error) { return nil, errNotImplemented }
+func (s *stubImpl) Counts(ctx context.Context) (Counts, error) { return nil, errNotImplemented }
 
 // ── jobs.Writer ─────────────────────────────────────────────────────────────
 
-func (s *stubImpl) Create(ctx context.Context, job *jobs.Job) error    { return errNotImplemented }
-func (s *stubImpl) SetStatus(ctx context.Context, id string, from, to jobs.Status) error {
+func (s *stubImpl) Create(ctx context.Context, job *Job) error { return errNotImplemented }
+func (s *stubImpl) SetStatus(ctx context.Context, id string, from, to Status) error {
 	return errNotImplemented
 }
 func (s *stubImpl) Lease(ctx context.Context, id, workerID string) error { return errNotImplemented }
@@ -44,10 +43,10 @@ func (s *stubImpl) FailWithRetry(ctx context.Context, id, errorCode, errorMessag
 func (s *stubImpl) Cancel(ctx context.Context, id, reason string, revision int) error {
 	return errNotImplemented
 }
-func (s *stubImpl) RequeueExpiredLeases(ctx context.Context, now time.Time, limit int) ([]jobs.RequeueResult, error) {
+func (s *stubImpl) RequeueExpiredLeases(ctx context.Context, now time.Time, limit int) ([]RequeueResult, error) {
 	return nil, errNotImplemented
 }
-func (s *stubImpl) ClaimNext(ctx context.Context, workerID string, allowedJobTypes []string) (*jobs.ClaimNextResult, error) {
+func (s *stubImpl) ClaimNext(ctx context.Context, workerID string, allowedJobTypes []string) (*ClaimNextResult, error) {
 	return nil, errNotImplemented
 }
 func (s *stubImpl) ReleaseLease(ctx context.Context, id string) error { return errNotImplemented }
@@ -184,7 +183,7 @@ type limitRecordingStub struct {
 	calls     int
 }
 
-func (l *limitRecordingStub) RequeueExpiredLeases(ctx context.Context, now time.Time, limit int) ([]jobs.RequeueResult, error) {
+func (l *limitRecordingStub) RequeueExpiredLeases(ctx context.Context, now time.Time, limit int) ([]RequeueResult, error) {
 	l.lastLimit = limit
 	l.lastNow = now
 	l.calls++

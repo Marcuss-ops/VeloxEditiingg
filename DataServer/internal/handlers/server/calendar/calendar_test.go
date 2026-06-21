@@ -14,8 +14,6 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"velox-server/internal/jobs"
-	"velox-server/internal/platform/clock"
-	"velox-server/internal/queue"
 	"velox-server/internal/store"
 )
 
@@ -36,11 +34,6 @@ func setupCalendarTestEnv(t *testing.T) (*store.SQLiteStore, jobs.Repository, *g
 	t.Cleanup(func() { _ = db.Close() })
 
 	jobRepo := store.NewSQLiteJobRepository(db)
-	ts, err := queue.NewLifecycleService(jobRepo, clock.System{})
-	if err != nil {
-		t.Fatalf("new transition service: %v", err)
-	}
-	_ = ts
 
 	r := gin.New()
 	v1 := r.Group("/api/v1")

@@ -1,7 +1,7 @@
 // Package jobs defines the canonical job domain model.
 //
 // jobs.Status is the single source of truth for job state constants.
-// Both store.JobStatus and queue.JobStatus are type aliases pointing
+// Both store.JobStatus and jobs.Status are the canonical types.
 // here, so the entire codebase shares one set of statuses at compile time.
 //
 // State machine:
