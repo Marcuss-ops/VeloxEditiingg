@@ -28,16 +28,6 @@ import (
 // commands,ack,status}`, `/api/jobs/{get,result,complete,lease}`) have been
 // removed from the master, so the worker no longer hits them. We keep the small
 // set of v2 endpoints used by upload helpers, and `/health` for readiness probes.
-const (
-	endpointHealthCheck = "/health"
-
-	// V2 canonical endpoints (HTTP-only data-plane paths used by uploads/asset
-	// bridge; gRPC handles all control-plane traffic).
-	endpointV2GetJob       = "/api/v1/queue/job"
-	endpointV2SubmitResult = "/api/v1/jobs/%s/result"
-	endpointV2CompleteJob  = "/api/v1/jobs/%s/complete"
-	endpointV2RenewLease   = "/api/v1/jobs/%s/lease"
-)
 
 // Client is an HTTP client for the Velox Master API.
 type Client struct {
