@@ -25,6 +25,14 @@
 # Earlier v2 also scanned `var X = map[...]` -- dropped: too broad
 # (matches HTTP status text, MIME tables, error dictionaries).
 set -euo pipefail
+# shopt -s nullglob: harden any future glob expansion in this script.
+# Without it, an empty glob (e.g. an accidentally-empty list of
+# bootstrap*.go helper files) would expand to the literal pattern,
+# which `git grep -- "$pattern"` would then treat as an invalid
+# pathpec and produce a confusing error. With nullglob, missing
+# globs expand to nothing — cleaner failure mode and zero risk of
+# argument-quoting surprises.
+shopt -s nullglob
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO_ROOT"
@@ -44,9 +52,28 @@ canonical_registries=(
                                 # as a false-positive
 )
 
-bootstrap_symbols="$(git grep -nE \
-  'NewRegistry|NewResolverRegistry|workersreg\.New' \
-  -- "$bootstrap_rel" || true)"
+# Hardening: drop lines whose content is a comment-only mention of a
+# canonical factory symbol. git grep emits `path:lineno:content`. We
+# rejoin $3..$NF to recover any colons-in-content, then trim leading
+# whitespace. Lines starting with `//`, `/*`, or `*` are dropped —
+# they would falsely satisfy Rule 1 even though the symbol isn't
+# actually wired up. Real code lines — even those with a trailing
+# `// ...` comment — are preserved.
+bootstrap_symbols="$(
+  git grep -nE \
+    'NewRegistry|NewResolverRegistry|workersreg\.New' \
+    -- "$bootstrap_rel" 2>/dev/null |
+  awk -F: '
+    NF < 3 { print; next }
+    {
+      content = $3
+      for (i = 4; i <= NF; i++) content = content ":" $i
+      sub(/^[[:space:]]+/, "", content)
+      if (content ~ /^(\/\/|\*|\/\*)/) next
+      print
+    }
+  ' || true
+)"
 if [[ -z "$bootstrap_symbols" ]]; then
   if [[ -e "$bootstrap_rel" ]]; then
     printf 'No canonical registry factory referenced from %s\n' \
