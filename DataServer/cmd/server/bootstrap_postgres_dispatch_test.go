@@ -1,5 +1,14 @@
 package main
 
+// TODO(platform/database): the package velox-server/internal/platform/database
+// was dropped by the Phase 1 architecture refactor (eliminate queue facade
+// / remove dark_editor / make BlobStore mandatory) without propagating
+// downstream adaptations. Three consumers (this file,
+// internal/store/sqlite.go, and cmd/server/bootstrap.go) still depend on
+// its symbols (Open / Config / Handle / Driver / DriverSQLite /
+// DriverPostgres). The DataServer build is intentionally broken until a
+// platform/database restoration PR lands — see
+// docs/architecture/OWNERSHIP.md for the platform-cutover roadmap.
 import (
 	"context"
 	"errors"
