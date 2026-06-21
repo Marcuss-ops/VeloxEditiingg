@@ -14,6 +14,11 @@ type ServerConfig struct {
 	GRPCTLSKeyFile  string // gRPC server private key (PEM)
 	GRPCTLSCAFile   string // CA cert for verifying client certificates (mTLS). Empty = no client auth.
 	AllowLocalhost  bool
+
+	// GinMode mirrors GIN_MODE ("debug" | "release" | "test").
+	// Used by newRouter to set gin.SetMode() and by Validate() for
+	// the production safety gates (NopBlobStore ban).
+	GinMode string
 }
 
 // RuntimeConfig holds filesystem and data directory settings.
@@ -36,6 +41,11 @@ type RuntimeConfig struct {
 	// GIN_MODE=release or VELOX_ENVIRONMENT is production/prod.
 	// Configured via VELOX_ALLOW_NOP_BLOBSTORE_DEV=true.
 	AllowNopBlobStoreDev bool
+
+	// GRPCAllowInsecureDev enables insecure gRPC connections (no TLS)
+	// for local development ONLY. Configured via
+	// VELOX_GRPC_ALLOW_INSECURE_DEV=true.
+	GRPCAllowInsecureDev bool
 }
 
 // DatabaseConfig holds database connection settings for the

@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -40,7 +39,7 @@ func corsMiddleware() gin.HandlerFunc {
 
 func newRouter(cfg *config.Config, deps *serverDeps, registry *app.Registry) *gin.Engine {
 	var r *gin.Engine
-	if os.Getenv("GIN_MODE") == "release" {
+	if cfg.Server.GinMode == "release" {
 		gin.SetMode(gin.ReleaseMode)
 		r = gin.New()
 		r.Use(gin.Recovery())

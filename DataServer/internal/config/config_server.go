@@ -1,6 +1,9 @@
 package config
 
-import "os"
+import (
+	"os"
+	"strings"
+)
 
 func loadServerConfig() ServerConfig {
 	c := ServerConfig{
@@ -13,6 +16,7 @@ func loadServerConfig() ServerConfig {
 		GRPCTLSCertFile: os.Getenv("VELOX_GRPC_TLS_CERT_FILE"),
 		GRPCTLSKeyFile:  os.Getenv("VELOX_GRPC_TLS_KEY_FILE"),
 		GRPCTLSCAFile:   os.Getenv("VELOX_GRPC_TLS_CA_FILE"),
+		GinMode:         strings.TrimSpace(os.Getenv("GIN_MODE")),
 	}
 	c.AllowLocalhost = boolFromEnv("VELOX_ALLOW_LOCALHOST_MASTER", false) ||
 		boolFromEnv("VELOX_DEV_MODE", false)

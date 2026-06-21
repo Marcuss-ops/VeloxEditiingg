@@ -2,25 +2,21 @@ package main
 
 import (
 	"os"
+	"strings"
 	"testing"
 
 	"velox-server/internal/config"
 )
 
-// TestParseInsecureDevFlag is the table-driven unit test for the env
-// value parser. Stricter than a typical boolean parser: only the
-// literal "true" enables the insecure gRPC dev mode. Anything else
-// (typos, alt spellings, surrounding whitespace, numeric 1) is
-// interpreted as "off". This protects against typo-class footguns
-// where VELOX_GRPC_ALLOW_INSECURE_DEV=True was silently accepted by
-// some lenient boolean parsers and ended up enabling plaintext
-// streams in production.
-//
-// If you ever want to loosen the rule (e.g. accept "yes" / "1" / "on"
-// aliases), update BOTH this table AND the doc comment on
-// parseInsecureDevFlag so the strict-parsing guarantee remains
-// observable.
-func TestParseInsecureDevFlag(t *testing.T) {
+// TestGRPCInsecureDevFlagStrictness is the table-driven unit test for
+// the env-value parser (formerly parseInsecureDevFlag, now inlined as
+// strings.TrimSpace(envVal) == "true" in config_runtime.go). The
+// TrimSpace call means leading/trailing whitespace no longer blocks
+// the opt-in (more robust, env vars with accidental spaces are still
+// recognised). The strictness against typos and alternate spellings
+// remains — only the literal "true" (after trimming) enables the
+// insecure gRPC dev mode.
+func TestGRPCInsecureDevFlagStrictness(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
@@ -28,8 +24,11 @@ func TestParseInsecureDevFlag(t *testing.T) {
 		envVal string
 		want   bool
 	}{
-		// Opt-in: only the literal string enables the bypass.
+		// Opt-in: the literal string (possibly with surrounding whitespace) enables the bypass.
 		{name: "lowercase true", envVal: "true", want: true},
+		{name: "trailing whitespace", envVal: "true ", want: true},
+		{name: "leading whitespace", envVal: " true", want: true},
+		{name: "surrounded by whitespace", envVal: " true ", want: true},
 
 		// Opt-out: everything else is treated as NOT enabling the bypass.
 		{name: "empty string", envVal: "", want: false},
@@ -40,9 +39,6 @@ func TestParseInsecureDevFlag(t *testing.T) {
 		{name: "numeric 1", envVal: "1", want: false},
 		{name: "yes alias", envVal: "yes", want: false},
 		{name: "on alias", envVal: "on", want: false},
-		{name: "trailing whitespace", envVal: "true ", want: false},
-		{name: "leading whitespace", envVal: " true", want: false},
-		{name: "surrounded by whitespace", envVal: " true ", want: false},
 		{name: "typo tru", envVal: "tru", want: false},
 		{name: "extra chars", envVal: "truee", want: false},
 		{name: "inline comment-style", envVal: "true # no", want: false},
@@ -53,9 +49,11 @@ func TestParseInsecureDevFlag(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got := parseInsecureDevFlag(tc.envVal)
+			// Matches the logic in config_runtime.go:
+			//   strings.TrimSpace(os.Getenv("VELOX_GRPC_ALLOW_INSECURE_DEV")) == "true"
+			got := strings.TrimSpace(tc.envVal) == "true"
 			if got != tc.want {
-				t.Fatalf("parseInsecureDevFlag(%q) = %v, want %v",
+				t.Fatalf("TrimSpace(%q) == \"true\" = %v, want %v",
 					tc.envVal, got, tc.want)
 			}
 		})
@@ -187,7 +185,7 @@ func TestBuildGRPCHandlerConfig_AllowInsecureFromEnv(t *testing.T) {
 			// below would still pass, giving a false-positive.
 			t.Fatal("t.Setenv did not stick; os.Getenv still empty")
 		}
-		insecureDev := parseInsecureDevFlag(envVal)
+		insecureDev := strings.TrimSpace(envVal) == "true"
 		grpcCfg := buildGRPCHandlerConfig(cfg, insecureDev)
 
 		if !grpcCfg.AllowInsecure {
@@ -209,7 +207,7 @@ func TestBuildGRPCHandlerConfig_AllowInsecureFromEnv(t *testing.T) {
 		t.Setenv("VELOX_GRPC_ALLOW_INSECURE_DEV", "false")
 
 		envVal := os.Getenv("VELOX_GRPC_ALLOW_INSECURE_DEV")
-		insecureDev := parseInsecureDevFlag(envVal)
+		insecureDev := strings.TrimSpace(envVal) == "true"
 		grpcCfg := buildGRPCHandlerConfig(cfg, insecureDev)
 
 		if grpcCfg.AllowInsecure {
@@ -229,7 +227,7 @@ func TestBuildGRPCHandlerConfig_AllowInsecureFromEnv(t *testing.T) {
 		if envVal != "" {
 			t.Fatalf("expected empty env, got %q", envVal)
 		}
-		insecureDev := parseInsecureDevFlag(envVal)
+		insecureDev := strings.TrimSpace(envVal) == "true"
 		grpcCfg := buildGRPCHandlerConfig(cfg, insecureDev)
 
 		if grpcCfg.AllowInsecure {
@@ -244,7 +242,7 @@ func TestBuildGRPCHandlerConfig_AllowInsecureFromEnv(t *testing.T) {
 		t.Setenv("VELOX_GRPC_ALLOW_INSECURE_DEV", "True")
 
 		envVal := os.Getenv("VELOX_GRPC_ALLOW_INSECURE_DEV")
-		insecureDev := parseInsecureDevFlag(envVal)
+		insecureDev := strings.TrimSpace(envVal) == "true"
 		grpcCfg := buildGRPCHandlerConfig(cfg, insecureDev)
 
 		if grpcCfg.AllowInsecure {

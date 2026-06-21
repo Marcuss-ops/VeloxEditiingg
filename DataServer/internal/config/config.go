@@ -90,12 +90,11 @@ func (c *Config) Validate() error {
 	}
 
 	// NopBlobStore is a development-only escape hatch.  It MUST NOT be
-	// active in production — this guard reads the same env vars the
-	// old `allowNopBlobStoreDev()` helper did, but centralised here so
-	// no caller can silently bypass it.
+	// active in production — this guard uses the canonical Server.GinMode
+	// and VELOX_ENVIRONMENT env var, centralised here so no caller can
+	// silently bypass it.
 	if c.Runtime.AllowNopBlobStoreDev {
-		ginMode := strings.TrimSpace(os.Getenv("GIN_MODE"))
-		if ginMode == "release" {
+		if c.Server.GinMode == "release" {
 			return fmt.Errorf(
 				"config: VELOX_ALLOW_NOP_BLOBSTORE_DEV=true is forbidden when GIN_MODE=release")
 		}
