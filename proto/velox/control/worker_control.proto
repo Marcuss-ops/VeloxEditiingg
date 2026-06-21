@@ -173,8 +173,17 @@ message MasterToWorkerEnvelope {
   string protocol_version = 6;
 
   // JobAvailable removed in Phase E (forward-only notification, dropped in gRPC cutover).
-  // Tag 21 is intentionally RESERVED-but-unused so descriptor index numbering
-  // stays compatible with previously-deployed binaries that read MasterToWorkerEnvelope.
+  //
+  // The matching `reserved 21;` directive in the message-level reserved block
+  // below exists for wire-level compatibility with previously-deployed
+  // workers/masters: it prevents tag 21 from being accidentally reused in
+  // future oneof additions. It does NOT participate in descriptor init — the
+  // pre-existing `slice bounds out of range [:22] with capacity 21` init panic
+  // (PR-3.11) was caused by `worker_control.pb.go` having drifted from this
+  // schema after Phase E, not by the absence of a reserved directive. The
+  // canonical fix is `bash scripts/gen-proto.sh`, which regenerates the
+  // descriptor with `--go_opt=module=velox-shared` so the file lands at
+  // `shared/controltransport/pb/worker_control.pb.go`.
   oneof msg {
     HelloAck hello_ack = 20;
     JobOffer job_offer = 22;
@@ -186,6 +195,12 @@ message MasterToWorkerEnvelope {
     LeaseRevoked lease_revoked = 28;
     Ping ping = 29;
   }
+
+  // Reserved tag 21 in MasterToWorkerEnvelope — wire-level safety for the
+  // forward-only JobAvailable oneof member that was removed in Phase E.
+  // See the long-form comment above the oneof for the rationale and the
+  // reference to `scripts/gen-proto.sh`.
+  reserved 21;
 }
 
 message HelloAck {}
