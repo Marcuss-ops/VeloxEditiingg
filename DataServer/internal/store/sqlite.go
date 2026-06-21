@@ -61,13 +61,13 @@ func (s *SQLiteStore) SetOutbox(o OutboxEmitter) { s.outbox = o }
 // the outbox enqueue atomic with their state-change writes. Pass nil
 // for auto-commit (the helper uses s.db).
 //
-// Behavior with no wired emitter (s.outbox == nil): returns nil and
-// logs the skip — callers that have not yet completed the outbox
-// cutover still work without the master blowing up on every commit.
+// PR 2 (bootstrap hardening): when no emitter is wired, this returns
+// an error so callers MUST rollback their transaction.  A nil outbox
+// emitter is a bootstrap-level misconfiguration — the master should
+// fail-fast at startup rather than silently dropping events.
 func (s *SQLiteStore) emitOutbox(ctx context.Context, txn outbox.Executor, p outbox.InsertParams) error {
 	if s.outbox == nil {
-		log.Printf("[STORE] outbox not wired — skipping %s aggregate=%s", p.EventType, p.AggregateID)
-		return nil
+		return fmt.Errorf("store: emitOutbox %s aggregate=%s: outbox not wired — SetOutbox must be called at bootstrap", p.EventType, p.AggregateID)
 	}
 	if txn == nil {
 		txn = s.db
@@ -182,7 +182,7 @@ func NewSQLiteStoreFromHandle(handle *database.Handle, path string, migrateOnSta
 	// schema_migrations tracking prevent double-apply) so a caller
 	// that previously held the DB open sees no change on subsequent
 	// opens.
-	if err := migrations.RunMigrations(db, migrationsFS, "sqlite", migrations.DialectSQLite); err != nil {
+	if err := migrations.RunMigrations(db, migrationsFS, "."); err != nil {
 		return nil, fmt.Errorf("store: run migrations: %w", err)
 	}
 

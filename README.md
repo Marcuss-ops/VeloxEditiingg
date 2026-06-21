@@ -5,25 +5,56 @@ Distributed video generation and composition system.
 ## Repository layout
 
 ```
-DataServer/                # Master server (Go/Gin + gRPC)
-RemoteCodex/               # Worker agent (Go) + video engine (C++/FFmpeg)
-shared/                    # Shared Go lib (already promoted to root)
-deploy/                    # Install scripts, systemd unit, env templates, full Ansible suite (canonical)
-├── install-server.sh      # sudo ./deploy/install-server.sh
-├── velox-server.service   # systemd unit
-├── velox-server.env.example  # copy to /etc/velox-server.env
-├── ansible.cfg            # canonical ansible config for the suite below
-├── requirements.yml       # ansible collection requirements
-├── group_vars/            # all.yml + vault.yml.example (operator-fill only)
-├── inventory/             # production.ini.example (NEVER commit production.ini itself)
-├── playbooks/             # bootstrap-ssh.yml, deploy-master-config.yml, rollback.yml
-├── runtime/               # per-host worker.env.example, compose.yml, prepare-host.sh
-├── scripts/               # validate-jinja-render.py, apply-local-worker-config.sh
-└── templates/             # velox-server.env.j2 (renders /etc/velox-server.env)
-docs/                      # ADRs, deploy notes, post-PR operator runbook, archived architecture
-.github/workflows/         # CI + worker-image + master-image release pipelines
-frontend_standalone/       # SPA frontend (VELOX_SPA_DIR)
-VERSION.txt                # Single source of version truth
+DataServer/                     # Master server (Go/Gin + gRPC)
+├── cmd/server/                 # Entrypoint: main.go, bootstrap.go (composition root), router.go
+├── internal/
+│   ├── app/                    # Module composition (ansible, drive, frontend, health, livestream,
+│   │                           #   workers, youtube, module, registry)
+│   ├── artifacts/              # Artifact service (upload, finalization, storage, chunked uploads)
+│   ├── assets/                 # Asset registry, resolvers, service, store
+│   ├── audit/                  # Data-layer audit (file existence, naming, primary files)
+│   ├── config/                 # Env-based configuration loading and validation
+│   ├── creatorflow/            # Creator flow orchestration service
+│   ├── deliveries/             # Delivery runner + providers (drive, youtube, s3, localexport)
+│   ├── grpcserver/             # gRPC handler (jobs, workers, artifacts, recovery, auth)
+│   ├── handlers/
+│   │   ├── remote/             # ansible, livestream, workers (assets, lifecycle, management,
+│   │   │                       #   sse, uploads, validation)
+│   │   ├── server/             # api, audit, calendar, darkeditor, drive, groups, health,
+│   │   │                       #   pipeline, script, smoke, youtube
+│   │   └── web/                # explorer, proxy, spa
+│   ├── identity/               # Identity/ID generator
+│   ├── integrations/           # drive (auth, files), youtube (api, channels, oauth, uploads)
+│   ├── jobs/                   # Job model, repository, enqueue, status, transitions, views
+│   ├── logging/                # Structured logging
+│   ├── outbox/                 # Outbox event store, dispatcher, registry
+│   ├── platform/               # clock, database (sqlite/postgres handle), retry
+│   ├── queue/                  # File queue, lifecycle service, job status
+│   ├── remoteengine/           # Remote engine gRPC client
+│   ├── secrets/                # AES-GCM encryptor
+│   ├── services/               # drive, workflow_events, youtube
+│   ├── store/                  # SQLite stores, Postgres adapters, migrations, contracts, blobstore
+│   ├── workers/                # Worker registry, commands, auth, heartbeat
+│   └── workflow/               # Workflow repository, steps, migrate
+RemoteCodex/                     # Worker agent (Go) + video engine (C++/FFmpeg)
+shared/                          # Shared Go lib (identity, contract, controltransport, validation, media)
+deploy/                          # Install scripts, systemd unit, env templates, Ansible suite
+├── install-server.sh            # sudo ./deploy/install-server.sh
+├── velox-server.service         # systemd unit
+├── velox-server.env.example     # copy to /etc/velox-server.env
+├── ansible.cfg                  # canonical ansible config for the suite below
+├── requirements.yml             # ansible collection requirements
+├── group_vars/                  # all.yml + vault.yml.example (operator-fill only)
+├── inventory/                   # production.ini.example (NEVER commit production.ini itself)
+├── playbooks/                   # bootstrap-ssh.yml, deploy-master-config.yml, rollback.yml
+├── runtime/                     # per-host worker.env.example, compose.yml, prepare-host.sh
+├── scripts/                     # validate-jinja-render.py, apply-local-worker-config.sh
+└── templates/                   # velox-server.env.j2 (renders /etc/velox-server.env)
+docs/                            # ADRs, architecture ownership, roadmap, deployment notes
+.github/workflows/               # CI + worker-image + master-image release pipelines
+frontend_standalone/             # SPA frontend (VELOX_SPA_DIR)
+scripts/                         # CI checks (architecture, migrations, secrets, etc.)
+VERSION.txt                      # Single source of version truth
 ```
 
 ## Placeholder contract (canonical)

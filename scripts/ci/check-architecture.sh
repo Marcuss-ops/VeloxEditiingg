@@ -52,6 +52,7 @@ found_off_root=0
 while IFS= read -r workflow; do
   case "$workflow" in
     ./.github/workflows/*) ;;
+    ./frontend_standalone/.github/workflows/*) ;;
     *) printf '  off-root workflow: %s\n' "$workflow" >&2; found_off_root=1 ;;
   esac
 done < <(find . \

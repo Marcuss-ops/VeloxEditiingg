@@ -3,6 +3,8 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 )
 
 func loadRuntimeConfig(dataDir string) RuntimeConfig {
@@ -37,5 +39,17 @@ func loadRuntimeConfig(dataDir string) RuntimeConfig {
 	if c.StorageDir == "" {
 		c.StorageDir = filepath.Join(c.DataDir, "storage")
 	}
+
+	// Max voiceover asset store size (bytes). Default 256 MiB.
+	c.MaxVoiceoverBytes = 256 * 1024 * 1024
+	if raw := strings.TrimSpace(os.Getenv("VELOX_MAX_VOICEOVER_BYTES")); raw != "" {
+		if parsed, perr := strconv.ParseInt(raw, 10, 64); perr == nil && parsed > 0 {
+			c.MaxVoiceoverBytes = parsed
+		}
+	}
+
+	// NopBlobStore dev opt-in (production ban enforced in Validate()).
+	c.AllowNopBlobStoreDev = strings.TrimSpace(os.Getenv("VELOX_ALLOW_NOP_BLOBSTORE_DEV")) == "true"
+
 	return c
 }
