@@ -17,7 +17,6 @@ import (
 	"velox-server/internal/jobs"
 	jobenqueue "velox-server/internal/jobs/enqueue"
 	"velox-server/internal/platform/clock"
-	"velox-server/internal/queue"
 	"velox-server/internal/store"
 )
 
@@ -51,7 +50,7 @@ func TestGenerateWithImages_EnqueuesSceneImageJob(t *testing.T) {
 		t.Fatalf("new sqlite store: %v", err)
 	}
 	jobRepo := store.NewSQLiteJobRepository(db)
-	ts, err := queue.NewLifecycleService(jobRepo, clock.System{})
+	ts, err := jobs.NewLifecycleService(jobRepo, clock.System{})
 	if err != nil {
 		t.Fatalf("new transition service: %v", err)
 	}
@@ -199,7 +198,7 @@ func TestGenerateWithImages_UsesCreatorStageWhenConfigured(t *testing.T) {
 		t.Fatalf("new sqlite store: %v", err)
 	}
 	jobRepo := store.NewSQLiteJobRepository(db)
-	ts, err := queue.NewLifecycleService(jobRepo, clock.System{})
+	ts, err := jobs.NewLifecycleService(jobRepo, clock.System{})
 	if err != nil {
 		t.Fatalf("new transition service: %v", err)
 	}
@@ -312,7 +311,7 @@ func TestGenerateWithImages_BypassesCreatorForRenderReadyPayload(t *testing.T) {
 		t.Fatalf("new sqlite store: %v", err)
 	}
 	jobRepo := store.NewSQLiteJobRepository(db)
-	ts, err := queue.NewLifecycleService(jobRepo, clock.System{})
+	ts, err := jobs.NewLifecycleService(jobRepo, clock.System{})
 	if err != nil {
 		t.Fatalf("new transition service: %v", err)
 	}

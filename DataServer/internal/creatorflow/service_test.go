@@ -14,7 +14,6 @@ import (
 	"velox-server/internal/jobs"
 	jobenqueue "velox-server/internal/jobs/enqueue"
 	"velox-server/internal/platform/clock"
-	"velox-server/internal/queue"
 	"velox-server/internal/remoteengine"
 	"velox-server/internal/store"
 )
@@ -56,7 +55,7 @@ func TestForwardSchedulesAsyncPollAndWorkerHandoff(t *testing.T) {
 		t.Fatalf("sqlite store: %v", err)
 	}
 	jobRepo := store.NewSQLiteJobRepository(db)
-	ts, tsErr := queue.NewLifecycleService(jobRepo, clock.System{})
+	ts, tsErr := jobs.NewLifecycleService(jobRepo, clock.System{})
 	if tsErr != nil {
 		t.Fatalf("new transition service: %v", tsErr)
 	}
@@ -180,7 +179,7 @@ func TestForwardCompletedResultEnqueuesWorkerJob(t *testing.T) {
 		t.Fatalf("sqlite store: %v", err)
 	}
 	jobRepo := store.NewSQLiteJobRepository(db)
-	ts, tsErr := queue.NewLifecycleService(jobRepo, clock.System{})
+	ts, tsErr := jobs.NewLifecycleService(jobRepo, clock.System{})
 	if tsErr != nil {
 		t.Fatalf("new transition service: %v", tsErr)
 	}

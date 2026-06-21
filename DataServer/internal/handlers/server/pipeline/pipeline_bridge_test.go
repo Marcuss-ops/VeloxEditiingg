@@ -17,7 +17,6 @@ import (
 	"velox-server/internal/jobs"
 	"velox-server/internal/jobs/enqueue"
 	"velox-server/internal/platform/clock"
-	"velox-server/internal/queue"
 	"velox-server/internal/store"
 )
 
@@ -196,7 +195,7 @@ func TestPipelineGenerateForwardsCompletedResultToQueue(t *testing.T) {
 		t.Fatalf("sqlite store: %v", err)
 	}
 	jobRepo := store.NewSQLiteJobRepository(db)
-	ts, err := queue.NewLifecycleService(jobRepo, clock.System{})
+	ts, err := jobs.NewLifecycleService(jobRepo, clock.System{})
 	if err != nil {
 		t.Fatalf("transition service: %v", err)
 	}
