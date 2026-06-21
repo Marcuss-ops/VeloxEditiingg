@@ -132,8 +132,11 @@ func RenderHTTPBoundaryJobResponse(job map[string]interface{}, full bool) map[st
 	response := map[string]interface{}{
 		"ok":                  true,
 		"job_id":              payload.FirstString(job, "job_id"),
-		// legacy aliases kept only on HTTP-edge reads (PR15.6)
-		"script_id":           payload.FirstString(job, "job_id", "script_id"),
+		// legacy aliases kept only on HTTP-edge reads (PR15.6). The
+		// chain tolerates rows written before PR15.6 that still carry
+		// `id` (HTTP01 subtest basic_legacy_alias_fallback) — `id` is
+		// consulted LAST so canonical `job_id` wins when present.
+		"script_id":           payload.FirstString(job, "job_id", "script_id", "id"),
 		"status":              payload.FirstString(job, "status"),
 		"video_name":          payload.FirstString(job, "video_name", "title"),
 		"job_run_id":          payload.FirstString(job, "job_run_id", "run_id"),

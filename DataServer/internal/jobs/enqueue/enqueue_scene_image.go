@@ -137,8 +137,17 @@ func buildSceneImagePayload(rawPayload map[string]interface{}, dataDir, videosDi
 	for k, v := range rawPayload {
 		normalized[k] = v
 	}
-	// PR15.6: canonical-only writes. Legacy aliases `id`/`run_id`/
-	// `title`/`voiceover_path`/`audio_path` are NOT written here.
+	// PR15.6: canonical-only writes. The copy loop above would
+	// otherwise leak the legacy aliases `id`/`run_id`/`title`/
+	// `voiceover_path`/`audio_path` straight through from the raw
+	// input into the canonical payload. Strip them here so the
+	// writer is canonical-only on both top-level keys AND the
+	// `parameters` mirror below. Reads still tolerate these
+	// aliases via RenderHTTPBoundaryJobResponse + payload.FirstString's
+	// fallback chain.
+	for _, alias := range []string{"id", "run_id", "title", "voiceover_path", "audio_path"} {
+		delete(normalized, alias)
+	}
 	normalized["job_id"] = jobID
 	normalized["job_run_id"] = jobRunID
 	normalized["correlation_id"] = correlationID
