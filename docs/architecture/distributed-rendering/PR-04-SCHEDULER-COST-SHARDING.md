@@ -22,6 +22,23 @@
 See "Operational TODO" further down for the per-sub-task acceptance bullets and
 the commit references that flip each bullet.
 
+**Validation at PR-04.5 landing (`codex/pr-04-scheduler-cost-sharding` commit `52479f6d`):**
+`go vet ./...` green, `go build ./...` green, `scripts/ci/check-architecture.sh` exit 0,
+`go test -race ./internal/jobs/enqueue/... ./internal/costmodel/...` green for the
+two new tests (`TestEnqueuePropagatesRequirements`, `TestEnqueueDefaultsPreserved`).
+Four pre-existing baseline flakes reproduce on HEAD and are unrelated to PR-04.5
+(they exercise `BuildSceneImagePayload` + `RenderHTTPBoundaryJobResponse` which
+this slice does not touch; documented in commit `52479f6d`'s body):
+`TestBuildSceneImagePayload` (line 52), `TestBuildSceneImagePayloadForMaster`
+(line 158), `TestBuildSceneImagePayloadForMaster_PreservesRemoteSources` (line 199),
+`TestRenderHTTPBoundaryJobResponse/basic_legacy_alias_fallback` (line 482).
+
+**Numbering note:** the script-slice identifiers in the commit log (`PR-04.4`,
+`PR-04.5`, `PR-04.6`) are an alias for the design-doc sub-tasks `PR 4.4 –
+Capability + resource filtering` and `PR 4.5 – Locality-aware scoring`. The
+rank-site flip that `PR-04.6` will perform is contained inside design-doc
+`PR 4.5`, not `PR 4.6` (which targets temporal shard planning instead).
+
 ## Metadata
 
 Title: `feat(scheduler): add cost-aware placement and temporal render sharding`
