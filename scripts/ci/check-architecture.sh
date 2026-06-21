@@ -89,7 +89,40 @@ if [[ -d DataServer/internal/queue ]]; then
   fail "DataServer/internal/queue/ exists -- forbidden (queue facade was removed; use internal/jobs instead)"
 fi
 
-# 7. BUILD_INFO.json ↔ VERSION.txt SSOT drift guard.
+# 7. PR-3.9 guard: forbid reintroduction of hardcoded worker
+# dispatch maps. Every job type must resolve through the executor
+# registry inside internal/executor + internal/taskrunner. The worker
+# package is permitted exactly ONE switch arm in runJobTask: a
+# health_check carve-out kept for master-side health semantics. Any
+# other per-job-type switch arm, or any of the legacy duplicate-
+# routing helpers (executeWorkflowJob, runRenderJob, runVideoJob,
+# runAudioJob, newVideoWorkflow) effectively re-creates a parallel
+# dispatch table — exactly the regression PR-3.9 removed.
+#
+# Scope: only non-test files inside the worker package. Tests are
+# allowed to mock the old surface for regression coverage; production
+# code MUST NOT contain these patterns any more.
+worker_dispatch_violations="$(
+  grep -RInE \
+    -e 'case[[:space:]]+"render"[[:space:]]*:' \
+    -e 'case[[:space:]]+"process_video"[[:space:]]*:' \
+    -e 'case[[:space:]]+"process_audio"[[:space:]]*:' \
+    -e 'executeWorkflowJob' \
+    -e 'runRenderJob' \
+    -e 'runVideoJob' \
+    -e 'runAudioJob' \
+    -e 'newVideoWorkflow' \
+    RemoteCodex/native/worker-agent-go/internal/worker \
+    --include='*.go' --exclude='*_test.go' \
+    2>/dev/null || true
+)"
+if [[ -n "$worker_dispatch_violations" ]]; then
+  printf 'PR-3.9: hardcoded worker dispatch detected (regression — every job type must resolve through executor.Registry):\n'
+  printf '%s\n' "$worker_dispatch_violations" >&2
+  exit 1
+fi
+
+# 8. BUILD_INFO.json ↔ VERSION.txt SSOT drift guard.
 #
 # Single-source-of-truth rule (scope: VERSION-LEVEL integrity only).
 # This rule catches the headline SSOT invariant: the `version` field in

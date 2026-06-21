@@ -31,6 +31,12 @@ this capability from outside the canonical owner.
 | Task observability / diagnostics | `internal/observability` (read-only aggregation) | Direct SQL aggregation from handlers; mutable state in observability package |
 | Task phase metrics | `internal/taskattempts` (PhaseTiming + AttemptMetrics tables) | Free-form phase identifiers; JSON-only metric storage |
 | Atomic Job+Task creation | `internal/store.AtomicJobTaskCreator` | Non-atomic Job or Task creation paths; handlers writing task SQL directly |
+| Executor registry (worker-side capability catalog) | `internal/executor.Registry` (composition root registers executors in `cmd/velox-worker-agent/main.go`) | Hardcoded capability booleans on the worker hello; a second worker-side map keyed on executor ID; per-job-type switch arms inside `internal/worker/runJobTask` |
+| Worker dispatch (per-task executor lifecycle) | `internal/taskrunner.TaskRunner` (worker only invokes it via `worker.dispatchTaskRunner`) | Direct calls to `pipeline.Runner.Run` / `video.*` from inside `internal/worker`; legacy `executeWorkflowJob`/`runRenderJob`/`runVideoJob`/`runAudioJob` helpers; reverting to a second dispatch map keyed on `job.JobType` |
+| Resource sampler (worker-side limits snapshot) | `internal/resource` sampler wired through `taskrunner.WithResources` | Inline `runtime.NumCPU` / `os.Stat` reads in executor implementations; per-task resource lookups that bypass the sampler |
+| Persistent local artifact cache (worker-side) | `pkg/cache.PersistedLocalCache` (composition root constructs it in `cmd/velox-worker-agent/main.go`) | Hand-rolled `os.WriteFile` cache management inside executors; duplicated content-addressed lookups outside `PersistedLocalCache.Get` |
+| Content-addressed blob artifact store (worker-side) | `pkg/blob.BlobArtifacts` (composition root constructs it in `cmd/velox-worker-agent/main.go`) | Inline `os.Open` for blob reads from executors; parallel upload paths that bypass `BlobArtifacts.Put` |
+| Scene/composite render adapter (worker-side) | `internal/taskrunner/executors.SceneComposite` (constructed in `cmd/velox-worker-agent/main.go`, registered under `scene.composite.v1@1`) | Reimplementing the scene-composite logic inside `pkg/video` callers; calling `pipeline.Runner.Run` from worker orchestration |
 
 ## The single-writer rule
 

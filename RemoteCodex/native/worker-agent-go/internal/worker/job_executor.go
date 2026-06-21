@@ -1,11 +1,26 @@
 // Package worker provides job processing logic for the worker agent.
+//
+// PR-3.9 notes:
+//
+//   - The legacy render / process_video / process_audio helpers
+//     (executeWorkflowJob, runRenderJob, runVideoJob, runAudioJob,
+//     newVideoWorkflow, videoWorkflow interface) are GONE. They were
+//     duplicate routing: every job type now resolves through
+//     executor.Registry → TaskRunner, with worker.executeJob keeping
+//     only the concurrency / active-jobs / cancel / transport surface.
+//   - All legacy job types (render / process_video / process_audio)
+//     resolve to the scene.composite.v1 executor that the production
+//     composition root (cmd/velox-worker-agent/main.go) registers
+//     against the canonical pipeline.Runner.
+//   - worker.executeJob no longer imports pkg/video; the
+//     pipeline dependency lives in main.go where the SceneComposite
+//     adapter is wired.
 package worker
 
 import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -13,19 +28,8 @@ import (
 	"velox-worker-agent/internal/executor"
 	"velox-worker-agent/internal/telemetry"
 	"velox-worker-agent/pkg/api"
-	"velox-worker-agent/pkg/config"
 	"velox-worker-agent/pkg/logger"
-	"velox-worker-agent/pkg/video"
 )
-
-type videoWorkflow interface {
-	SetProgressCallback(func(percent, scene, total int, stage string))
-	ProcessSingleVideo(ctx context.Context, input renderJobParams, statusCallback func(string, bool)) (string, error)
-}
-
-var newVideoWorkflow = func(cfg *config.WorkerConfig, log *logger.Logger) videoWorkflow {
-	return video.NewVideoGenerationWorkflow(cfg, log)
-}
 
 // executeJob executes a job and reports the result.
 // executeJob esegue un job dall'acquisizione del concurrency slot fino alla
@@ -203,19 +207,16 @@ func shouldUploadCompletedVideo(job *api.Job, output map[string]interface{}) boo
 
 // runJobTask executes the actual job task.
 //
-// PR-3.8 dispatch surface: the legacy render / process_video /
-// process_audio switch was REPLACED with a single TaskRunner
-// dispatch that resolves the executor by job.JobType through the
-// worker's executor.Registry. Health-check stays as an explicit,
-// registry-free branch (out of PR-3.5 / PR-3.8 scope: master polls
-// the worker's health at registration time and the response payload
-// is intentionally minimal — adding it to the executor catalog would
-// conflict with master-side health semantics).
+// PR-3.9 invariant: there is exactly ONE dispatch surface. Every job
+// type resolves through executor.Registry → TaskRunner, except for
+// health_check which is intentionally OUT of the executor catalog
+// (master polls the worker's health at registration time and the
+// response payload is intentionally minimal — putting it in the
+// catalog would conflict with master-side health semantics).
 //
-// "render" / "process_video" / "process_audio" still resolve via the
-// registry; existing jobs keep working once the corresponding
-// executors are registered (PR-3.9 lands the scene.composite.v1
-// real implementation).
+// Hard rule: do NOT reintroduce per-job-type switch arms here. New
+// job types register an Executor; the registry does the routing.
+// scripts/ci/check-architecture.sh enforces this.
 func (w *Worker) runJobTask(ctx context.Context, job *api.Job) (map[string]interface{}, error) {
 	w.logger.Info("[JOB] Starting execution: id=%s type=%s", job.JobID, job.JobType)
 
@@ -252,9 +253,9 @@ func (w *Worker) runJobTask(ctx context.Context, job *api.Job) (map[string]inter
 //
 // Output shape: a single map[string]interface{} matching the legacy
 // executeWorkflowJob contract so the downstream upload pipeline
-// (shouldUploadCompletedVideo → uploadCompletedVideo) works without
-// modification. PR-3.9 promotes multi-output tasks to publish every
-// ArtifactRef via the master-side transport.
+// (shouldUploadCompletedVideo → uploadCompletedVideo) continues to
+// operate without modification. PR-3.9 promotes multi-output tasks
+// to publish every ArtifactRef via the master-side transport.
 //
 // Errors:
 //   - Nil taskRunner — defensive-only; New() always builds one, this
@@ -295,98 +296,11 @@ func (w *Worker) dispatchTaskRunner(ctx context.Context, job *api.Job) (map[stri
 		// Preserve legacy "output_path" semantics so the downstream
 		// upload pipeline in executeJob (shouldUploadCompletedVideo
 		// → uploadCompletedVideo) continues to operate without
-		// modification. The richer ArtifactRefs are surfaced to the
-		// master via the TaskExecutionReport (PR-3.9 wires this).
+		// modification. The richer ArtifactRefs are already inside
+		// report.Outputs and travel back via the canonical
+		// TaskExecutionReport on the master transport (PR-4).
 		out["output_path"] = report.Outputs[0].URI
 		out["output_hash"] = report.Outputs[0].Hash
 	}
 	return out, nil
-}
-
-// executeWorkflowJob is a shared implementation for render/video/audio jobs.
-func (w *Worker) executeWorkflowJob(ctx context.Context, job *api.Job, jobLabel string, defaultExt string) (map[string]interface{}, error) {
-	p := extractRenderJobParams(job.Parameters)
-	resolvedAudioPath, err := w.resolveVoiceoverAudioPath(ctx, p.AudioPath, job.Parameters)
-	if err != nil {
-		return nil, err
-	}
-	p.AudioPath = resolvedAudioPath
-
-	// Inject asset cache dir from worker config if not set in job params
-	assetCacheDir := strings.TrimSpace(p.AssetCacheDir)
-	if assetCacheDir == "" {
-		assetCacheDir = strings.TrimSpace(w.config.AssetCacheDir)
-	}
-	p.AssetCacheDir = assetCacheDir
-	if assetCacheDir != "" {
-		if err := os.MkdirAll(assetCacheDir, 0755); err == nil {
-			w.logger.Info("[CACHE] Asset cache enabled: %s", assetCacheDir)
-		} else {
-			w.logger.Warn("[CACHE] Cannot create asset cache dir %s: %v, caching disabled", assetCacheDir, err)
-			p.AssetCacheDir = ""
-		}
-	}
-
-	wfLogger := logger.New(logger.DebugLevel, os.Stdout)
-	wfLogger.SetPrefix("[WORKFLOW]")
-
-	workflow := newVideoWorkflow(&config.WorkerConfig{
-		WorkerID:   w.config.WorkerID,
-		WorkerName: w.config.WorkerName,
-		MasterURL:  w.config.MasterURL,
-		LogLevel:   w.config.LogLevel,
-	}, wfLogger)
-
-	// Capture jobID for per-job progress tracking via activeJobs map
-	jobID := job.JobID
-	workflow.SetProgressCallback(func(percent, scene, total int, stage string) {
-		w.activeJobsMu.Lock()
-		if aj, ok := w.activeJobs[jobID]; ok {
-			aj.Progress.Percent = int32(percent)
-			aj.Progress.Scene = int32(scene)
-			aj.Progress.TotalScenes = int32(total)
-			aj.Progress.Stage = stage
-		}
-		w.activeJobsMu.Unlock()
-	})
-
-	outputPath := p.OutputPath
-	if outputPath == "" {
-		outputPath = fmt.Sprintf("/tmp/velox/output/%s.%s", job.JobID, defaultExt)
-	}
-	p.OutputPath = outputPath
-	if err := os.MkdirAll(filepath.Dir(outputPath), 0o755); err != nil {
-		return nil, fmt.Errorf("create output directory %s: %w", filepath.Dir(outputPath), err)
-	}
-
-	statusCallback := func(msg string, isError bool) {
-		if isError {
-			w.logger.Error("%s", msg)
-		} else {
-			w.logger.Info("%s", msg)
-		}
-	}
-
-	resultPath, err := workflow.ProcessSingleVideo(ctx,
-		p,
-		statusCallback)
-
-	if err != nil {
-		return nil, fmt.Errorf("%s job failed: %w", jobLabel, err)
-	}
-	return map[string]interface{}{
-		"status": "completed", "job_id": job.JobID, "output_path": resultPath,
-	}, nil
-}
-
-func (w *Worker) runRenderJob(ctx context.Context, job *api.Job) (map[string]interface{}, error) {
-	return w.executeWorkflowJob(ctx, job, "render", "mp4")
-}
-
-func (w *Worker) runVideoJob(ctx context.Context, job *api.Job) (map[string]interface{}, error) {
-	return w.executeWorkflowJob(ctx, job, "video", "mp4")
-}
-
-func (w *Worker) runAudioJob(ctx context.Context, job *api.Job) (map[string]interface{}, error) {
-	return w.executeWorkflowJob(ctx, job, "audio", "mp3")
 }

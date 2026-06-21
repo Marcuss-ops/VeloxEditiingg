@@ -16,12 +16,14 @@ import (
 	"syscall"
 
 	"velox-worker-agent/internal/executor"
+	"velox-worker-agent/internal/taskrunner/executors"
 	"velox-worker-agent/internal/telemetry"
 	"velox-worker-agent/internal/worker"
 	"velox-worker-agent/pkg/blob"
 	"velox-worker-agent/pkg/cache"
 	"velox-worker-agent/pkg/config"
 	"velox-worker-agent/pkg/logger"
+	"velox-worker-agent/pkg/video"
 )
 
 // Version is set at build time via -ldflags.
@@ -90,6 +92,17 @@ func readTextFileFirst(workDir, filename string) string {
 		}
 	}
 	return ""
+}
+
+// envOr returns the value of the named environment variable, trimmed
+// of surrounding whitespace; if unset or empty, it returns fallback.
+// Centralised so main.go does not sprinkle os.Getenv calls across the
+// composition root.
+func envOr(key, fallback string) string {
+	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
+		return v
+	}
+	return fallback
 }
 
 func main() {
@@ -248,13 +261,35 @@ func main() {
 		os.Exit(0)
 	}
 
-	// PR-3.5: build a real (empty-for-now) executor registry and pass it
-	// via WithRegistry. Empty registry is the supported PR-3.5 default;
-	// PR-3.6 will register scene.composite.v1 against the canonical
-	// pipeline.Runner in worker bootstrap. Splitting the surface keeps
-	// PR-3.5's wire-shape change minimal while exposing a stable seam
-	// that operator dashboards can already introspect.
+	// PR-3.5/3.9: build the executor registry at the composition root
+	// (this file) — NOT inside pkg/worker — so the worker package
+	// stays free of pkg/video/pipeline. The composition root owns the
+	// "which executors does this binary advertise" decision; ops
+	// dashboards read it via worker.buildHello.
+	//
+	// PR-3.9 wires scene.composite.v1 against the canonical
+	// pipeline.Runner that powers the worker-agent whenever the C++
+	// video engine is installed + reachable. The pipeline + native
+	// render-client wiring lives in video.NewPipelineRunner, shared
+	// with the legacy VideoGenerationWorkflow.
+	logger.Info("[BOOT] Building executor registry at composition root (cmd/velox-worker-agent)")
 	registry := executor.NewRegistry()
+
+	pipelineRunner, pipeErr := video.NewPipelineRunner(nil) // logger nil here means use the package default; see video.NewPipelineRunner for resolution.
+	if pipeErr != nil {
+		// Fail closed: a missing C++ engine is a deploy-time problem.
+		// Silently downgrading to an empty registry re-introduces the
+		// dead-letter class of bug — every scene.composite job would
+		// route to ErrExecutorNotFound. This is a deliberate PR-3.9
+		// tightening vs the legacy "NewVideoGenerationWorkflow
+		// warns-and-continue" behaviour; ops must install the C++
+		// engine or set VELOX_VIDEO_ENGINE_CPP_BIN.
+		fmt.Fprintf(os.Stderr, "Error: failed to construct pipeline.runner for scene.composite.v1: %v\n", pipeErr)
+		os.Exit(1)
+	}
+	sceneComposite := executors.NewSceneComposite(pipelineRunner, "/tmp/velox/scene-composite")
+	registry.MustRegister(sceneComposite)
+	logger.Info("[BOOT] Registered executor: %s@%d", sceneComposite.Descriptor().ID, sceneComposite.Descriptor().Version)
 
 	// PR-3.7: persistent local cache + content-addressed blob store.
 	// Roots are operator-overridable via env vars; the defaults reflect

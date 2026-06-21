@@ -11,8 +11,6 @@ import (
 	"velox-worker-agent/pkg/config"
 	"velox-worker-agent/pkg/logger"
 	"velox-worker-agent/pkg/video/pipeline"
-	"velox-worker-agent/pkg/video/services/audio"
-	"velox-worker-agent/pkg/video/services/native"
 )
 
 // VideoGenerationWorkflow orchestrates the complete video generation process.
@@ -28,6 +26,10 @@ type VideoGenerationWorkflow struct {
 type VideoGenerationInput = contract.RenderJobParams
 
 // NewVideoGenerationWorkflow creates a new workflow instance.
+//
+// PR-3.9: the pipeline + render-client wiring lives in
+// video.NewPipelineRunner so the SceneComposite adapter (composition
+// root) and the legacy workflow share the same construction path.
 func NewVideoGenerationWorkflow(cfg *config.WorkerConfig, log *logger.Logger) *VideoGenerationWorkflow {
 	w := &VideoGenerationWorkflow{
 		config:    cfg,
@@ -35,16 +37,11 @@ func NewVideoGenerationWorkflow(cfg *config.WorkerConfig, log *logger.Logger) *V
 		tempFiles: make([]string, 0),
 	}
 
-	// Set up pipeline system
-	registry := pipeline.NewRegistry()
-	probe := &audio.FFprobe{}
-	registerPipelines(registry, probe)
-
-	client, err := native.NewRenderClient(log)
+	runner, err := NewPipelineRunner(log)
 	if err != nil {
-		log.Warn("Native render client unavailable: %v (legacy fallback only)", err)
+		log.Warn("Pipeline runner unavailable: %v (legacy fallback only)", err)
 	} else {
-		w.runner = pipeline.NewRunner(registry, client, log)
+		w.runner = runner
 	}
 
 	return w
