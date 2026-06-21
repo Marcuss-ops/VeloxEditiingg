@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"velox-server/internal/costmodel"
 	"velox-server/internal/logging"
 	"velox-shared/identity"
 )
@@ -106,8 +107,44 @@ func (r *Registry) GetActiveWorkers(ctx context.Context, timeout time.Duration) 
 	return result
 }
 
-// GetSchedulableWorkers returns workers that can accept new jobs
+// GetSchedulableWorkers returns workers that can accept new jobs.
+//
+// PR-04.4: routes through GetEligibleWorkers (costmodel.Score).
+// The default permissive JobRequirements preserves today's queue
+// routing until enqueue publishes per-job requirements on
+// QueueItem/Job (a follow-up PR). Callers that want a per-job filter
+// should call GetEligibleWorkers directly with a populated
+// costmodel.JobRequirements.
 func (r *Registry) GetSchedulableWorkers(ctx context.Context) []WorkerInfo {
+	return r.GetEligibleWorkers(ctx, costmodel.DefaultRequirements())
+}
+
+// GetEligibleWorkers is the canonical cost-aware eligibility entry
+// point. PR-04.4 replaces the legacy boolean-AND
+// (revoked + drain + offline) with costmodel.Score on a
+// WorkerProfile composed by BuildWorkerProfile from heartbeat state
+// and the heartbeat `capabilities` map. Empty JobRequirements = no
+// four-field gate (preserves legacy behavior). Non-empty
+// JobRequirements = canonical four-field resource-class / temporal-
+// mode matching per DataServer/internal/costmodel/cost.go.
+//
+// Why this replaces a hand-rolled boolean AND:
+//   - The four canonical Descriptor fields (ResourceClass,
+//     TemporalMode, Deterministic, Cacheable) are now the single
+//     source of truth for "is this worker eligible for X".
+//   - Exhaustiveness: extensible to additional eligibility axes
+//     (multi-resource requirements, resource pressure) by extending
+//     costmodel.Score — never by editing call sites.
+//   - Rank: when per-job requirements appear (PR-04.5), a parallel
+//     off-by-default rank call site already exists in the same
+//     module, ready to flip on.
+//
+// Forbidden patterns (see OWNERSHIP.md "Cost-aware eligibility"):
+//   - Hand-rolled boolean AND on WorkerInfo fields inside this
+//     package — use the cost-modeled path.
+//   - Per-job-type switch arms inside Registry methods for
+//     placement — they effectively re-create a parallel selector.
+func (r *Registry) GetEligibleWorkers(ctx context.Context, req costmodel.JobRequirements) []WorkerInfo {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
@@ -116,9 +153,19 @@ func (r *Registry) GetSchedulableWorkers(ctx context.Context) []WorkerInfo {
 		if r.revoked[w.WorkerID] {
 			continue
 		}
-		if w.Schedulable && !w.Drain && w.Status != "offline" {
-			result = append(result, w)
+		profile := costmodel.BuildWorkerProfile(
+			w.WorkerID,
+			w.Schedulable,
+			w.Drain,
+			w.Status,
+			0, 0,
+			w.Capabilities,
+		)
+		c, _ := costmodel.Score(profile, req)
+		if !c.Eligible {
+			continue
 		}
+		result = append(result, w)
 	}
 	return result
 }

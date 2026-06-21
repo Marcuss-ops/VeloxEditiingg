@@ -37,6 +37,7 @@ this capability from outside the canonical owner.
 | Persistent local artifact cache (worker-side) | `pkg/cache.PersistedLocalCache` (composition root constructs it in `cmd/velox-worker-agent/main.go`) | Hand-rolled `os.WriteFile` cache management inside executors; duplicated content-addressed lookups outside `PersistedLocalCache.Get` |
 | Content-addressed blob artifact store (worker-side) | `pkg/blob.BlobArtifacts` (composition root constructs it in `cmd/velox-worker-agent/main.go`) | Inline `os.Open` for blob reads from executors; parallel upload paths that bypass `BlobArtifacts.Put` |
 | Scene/composite render adapter (worker-side) | `internal/taskrunner/executors.SceneComposite` (constructed in `cmd/velox-worker-agent/main.go`, registered under `scene.composite.v1@1`) | Reimplementing the scene-composite logic inside `pkg/video` callers; calling `pipeline.Runner.Run` from worker orchestration |
+| Cost-aware worker eligibility + score breakdown (PR-04.4/4.5) | `velox-server/internal/costmodel` (master selector) + `velox-worker-agent/internal/costmodel` (mirror — deployment-independent per the "Duplicata in due" PR-04 scope choice) | Hardcoded boolean-AND filters (`Schedulable && !Drain && Status != "offline"` etc.) inside `velox-server/internal/workers`; per-job-type placement switch arms inside that package; per-package string-list allowlists (`supported_job_types`) that bypass the four canonical Descriptor fields (ResourceClass, TemporalMode, Deterministic, Cacheable) |
 
 ## The single-writer rule
 

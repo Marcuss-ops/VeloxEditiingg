@@ -148,7 +148,28 @@ if [[ -n "$worker_dispatch_violations" ]]; then
   exit 1
 fi
 
-# 8. BUILD_INFO.json ↔ VERSION.txt SSOT drift guard.
+# 8a. PR-04.4 guard: forbid hand-rolled boolean-AND selector filters
+# inside velox-server/internal/workers. The cost model
+# (internal/costmodel) is the canonical admission gate; any line
+# that ANDs `Schedulable` with `Drain` (in either order, within a
+# short window to suppress cross-function false positives) trips
+# this rule. Single-source-of-truth rule for selector placement.
+# _test.go is exempt because tests legitimately exercise legacy
+# state to verify the historical boolean AND is no longer in
+# production code.
+worker_selector_violations="$(
+  grep -RInE 'Schedulable.{1,80}Drain|Drain.{1,80}Schedulable' \
+    DataServer/internal/workers \
+    --include='*.go' --exclude='*_test.go' \
+    2>/dev/null || true
+)"
+if [[ -n "$worker_selector_violations" ]]; then
+  printf 'PR-04.4: hand-rolled boolean-AND selector filter in workers package — admission must route through costmodel.Score:\n' >&2
+  printf '%s\n' "$worker_selector_violations" >&2
+  exit 1
+fi
+
+# 9. BUILD_INFO.json ↔ VERSION.txt SSOT drift guard.
 #
 # Single-source-of-truth rule (scope: VERSION-LEVEL integrity only).
 # This rule catches the headline SSOT invariant: the `version` field in
