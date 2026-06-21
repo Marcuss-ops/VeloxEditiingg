@@ -6,9 +6,10 @@ use (
 	./shared
 )
 
-// Single canonical resolution for velox-shared inside the workspace.
-// A `replace` in go.work overrides conflicting `replace` directives of the
-// same module declared inside member go.mod files (Go 1.21+ workspace
-// semantics). The two member modules (DataServer and worker-agent-go) keep
-// their own in-tree `replace` clauses for non-workspace CI usage.
+// Canonical resolution for velox-shared inside the workspace.
+// A `replace` declared here takes precedence over matching `replace`
+// directives in member-module go.mod files (Go 1.21+ workspace resolution).
+// DataServer and worker-agent-go keep their own in-tree `replace` clauses
+// for non-workspace builds (CI runners / container entrypoints that enter
+// a single sub-module without `go.work` on their lookup path).
 replace velox-shared v0.0.0 => ./shared
