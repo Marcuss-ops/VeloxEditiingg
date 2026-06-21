@@ -28,8 +28,8 @@ import (
 	"github.com/google/uuid"
 )
 
-// JobQueue is the minimal surface Enqueuer depends on. *queue.FileQueue
-// (and any future in-memory or Redis-backed queue) satisfies this.
+// JobQueue is the minimal surface Enqueuer depends on. jobs.Writer
+// (and any future in-memory or Redis-backed queue) satisfies this via writerAdapter.
 type JobQueue interface {
 	SubmitJob(ctx context.Context, jobID string, payload map[string]interface{}) error
 }

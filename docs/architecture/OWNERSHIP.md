@@ -24,6 +24,7 @@ this capability from outside the canonical owner.
 | Worker ID minting | `internal/workers.Registry` | Random IDs generated from request payloads |
 | Audit logging | `internal/audit/data_layer` | Free-form `log.Printf` calls for events that the auditor must observe |
 | Migrations | Canonical SQL files + migration registration in `cmd/server/bootstrap.go` | Programmatic `CREATE TABLE IF NOT EXISTS` outside the migration registry |
+| Queue package | **REMOVED** — `internal/queue` has been deleted. LifecycleService lives at `internal/jobs`. | Reintroducing `internal/queue`, `queue.Job`, `queue.QueueItem`, `queue.JobStatus`, or `*queue.FileQueue` |
 
 ## The single-writer rule
 

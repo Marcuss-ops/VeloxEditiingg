@@ -16,8 +16,6 @@ import (
 	"velox-server/internal/config"
 	"velox-server/internal/jobs"
 	"velox-server/internal/jobs/enqueue"
-	"velox-server/internal/platform/clock"
-	"velox-server/internal/queue"
 	"velox-server/internal/store"
 )
 
@@ -196,12 +194,6 @@ func TestPipelineGenerateForwardsCompletedResultToQueue(t *testing.T) {
 		t.Fatalf("sqlite store: %v", err)
 	}
 	jobRepo := store.NewSQLiteJobRepository(db)
-	ts, err := queue.NewLifecycleService(jobRepo, clock.System{})
-	if err != nil {
-		t.Fatalf("transition service: %v", err)
-	}
-	_ = ts
-
 	// PR15.7a: wire the enqueuer singleton AFTER constructing the writer so
 	// NewEnqueuer(submitAdapter, nil) sees the live writer reference.
 	InitPipelineEnqueuer(enqueue.NewEnqueuer(&testSubmitQueue{writer: jobRepo, maxRetries: 3}, nil))

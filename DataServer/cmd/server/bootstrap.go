@@ -35,7 +35,7 @@ import (
 	"velox-server/internal/outbox"
 	"velox-server/internal/platform/clock"
 	"velox-server/internal/platform/database"
-	"velox-server/internal/queue"
+
 	workflowevents "velox-server/internal/services/workflow_events"
 	"velox-server/internal/store"
 	workersreg "velox-server/internal/workers"
@@ -88,7 +88,7 @@ type serverDeps struct {
 	// FileQueue, gRPC, HTTP handlers, reaper, and workflow. SUCCEEDED is
 	// reachable only through artifacts.Service.FinalizeArtifactAndCompleteJob
 	// which performs jobs CAS + artifacts CAS + outbox in a single tx.
-	lifecycleSvc *queue.LifecycleService
+	lifecycleSvc *jobs.LifecycleService
 
 	assetService *voiceoverassets.AssetService
 
@@ -367,7 +367,7 @@ func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
 	//
 	// PR15.5: jobsRepository is the *SQLiteJobRepository itself (no wrapper).
 	jobsRepository := store.NewJobsRepository(jobRepo)
-	lifecycleSvc, err := queue.NewLifecycleService(jobsRepository, clock.System{})
+	lifecycleSvc, err := jobs.NewLifecycleService(jobsRepository, clock.System{})
 	if err != nil {
 		return nil, fmt.Errorf("bootstrap: lifecycle service: %w", err)
 	}

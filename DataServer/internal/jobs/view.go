@@ -188,7 +188,7 @@ func ToFlatMap(j *Job) map[string]interface{} {
 	result["run_id"] = j.RunID
 	result["job_run_id"] = j.RunID
 
-	// Emulate zero-values of historical queue.Job map projection for back-compat.
+	// Emulate zero-values of historical Job map projection for back-compat.
 	// HTTP handlers depend on these keys being present (even if zero).
 	result["claimed_by"] = ""
 	result["claimed_at"] = ""
