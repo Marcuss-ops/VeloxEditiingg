@@ -26,6 +26,16 @@ type RuntimeConfig struct {
 	SecretsDir   string
 	StagingDir   string // Staging directory for artifact uploads (before verification)
 	StorageDir   string // Final storage directory for verified artifacts
+
+	// MaxVoiceoverBytes caps the total voiceover asset store size.
+	// Default 256 MiB; configured via VELOX_MAX_VOICEOVER_BYTES.
+	MaxVoiceoverBytes int64
+
+	// AllowNopBlobStoreDev enables the no-op blob store for local
+	// development ONLY.  The Validate() method bans this flag when
+	// GIN_MODE=release or VELOX_ENVIRONMENT is production/prod.
+	// Configured via VELOX_ALLOW_NOP_BLOBSTORE_DEV=true.
+	AllowNopBlobStoreDev bool
 }
 
 // DatabaseConfig holds database connection settings for the

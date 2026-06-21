@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // FromEnv loads configuration from environment variables.
@@ -84,18 +85,26 @@ func (c *Config) Validate() error {
 	}
 
 	// Worker policy: canonical, non-duplicated validator.
-	// ValidateProductionWorkers is the single source of truth — it
-	// rejects wildcards, requires at least one ID, and rejects duplicate
-	// IDs in that order. The fleet size is not bounded (an operator
-	// may run any N >= 1 workers); only the shape of the allowlist is
-	// checked. Empty entries are already dropped by parseCommaList at
-	// load time, so the validator sees a trimmed slice. Replicated
-	// copies in the gRPC handler, Ansible prechecks, and HTTP layer
-	// are FORBIDDEN: drift here opens the fleet to misconfiguration at
-	// exactly the layer we want centralised. If a caller needs to check
-	// the allowlist, it MUST call ValidateProductionWorkers.
 	if err := ValidateProductionWorkers(c.Workers.AllowedWorkerIDs); err != nil {
 		return fmt.Errorf("config: VELOX_ALLOWED_WORKERS: %w", err)
 	}
+
+	// NopBlobStore is a development-only escape hatch.  It MUST NOT be
+	// active in production — this guard reads the same env vars the
+	// old `allowNopBlobStoreDev()` helper did, but centralised here so
+	// no caller can silently bypass it.
+	if c.Runtime.AllowNopBlobStoreDev {
+		ginMode := strings.TrimSpace(os.Getenv("GIN_MODE"))
+		if ginMode == "release" {
+			return fmt.Errorf(
+				"config: VELOX_ALLOW_NOP_BLOBSTORE_DEV=true is forbidden when GIN_MODE=release")
+		}
+		env := strings.TrimSpace(os.Getenv("VELOX_ENVIRONMENT"))
+		if env == "production" || env == "prod" {
+			return fmt.Errorf(
+				"config: VELOX_ALLOW_NOP_BLOBSTORE_DEV=true is forbidden in environment=%q", env)
+		}
+	}
+
 	return nil
 }
