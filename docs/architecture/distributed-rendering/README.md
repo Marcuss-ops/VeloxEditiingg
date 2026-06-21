@@ -28,7 +28,7 @@ Still missing from `main`:
 DataServer/internal/taskgraph
 DataServer/internal/taskattempts
 DataServer/internal/observability
-DataServer/internal/renderplan
+DataServer/internal/executionplan
 DataServer/internal/scheduler
 DataServer/internal/costmodel
 RemoteCodex/native/worker-agent-go/internal/executor
@@ -40,7 +40,7 @@ RemoteCodex/native/worker-agent-go/internal/resource
 Also still missing:
 
 - typed task-level worker reports;
-- immutable master-owned RenderPlan publication;
+- immutable master-owned ExecutionPlan publication;
 - persistent task dependencies;
 - late composition and reusable RGBA precompositions;
 - registry-derived worker capabilities;
@@ -68,10 +68,10 @@ A baseline repair unrelated to distributed rendering must be a separate minimal 
 Editor/project input
         |
         v
-Canonical compiler registry
+Master planner registry
         |
         v
-Immutable RenderPlan
+Immutable ExecutionPlan
         |
         v
 Persistent TaskGraph
@@ -91,6 +91,9 @@ gRPC task contract
 Executor registry on worker
         |
         v
+Task-specific RenderPlan -> C++/FFmpeg engine
+        |
+        v
 Artifact outputs
         |
         v
@@ -103,14 +106,17 @@ Final composition / concat / mux
 Job
   User-visible objective and overall lifecycle.
 
+ExecutionPlan
+  Immutable master-owned description of tasks, edges and final output.
+
 RenderPlan
-  Immutable compiled description of what must be produced.
+  Existing worker-engine contract for one render/composite executor.
 
 TaskGraph
-  Persistent dependency graph derived from one RenderPlan.
+  Persistent dependency graph derived from one ExecutionPlan.
 
 Task
-  One schedulable unit with explicit executor, inputs, outputs and requirements.
+  One schedulable operation with explicit executor, inputs, outputs and requirements.
 
 TaskAttempt
   One execution of one Task on one Worker.
@@ -129,7 +135,7 @@ WorkerProfile
 3. Every mutable state has one writer and one repository.
 4. Every executor, compiler, resolver, estimator and sampler enters one canonical registry.
 5. No switch/case map may duplicate registry dispatch.
-6. RenderPlan, TaskSpec and Artifact identity are immutable after publication.
+6. ExecutionPlan, TaskSpec and Artifact identity are immutable after publication.
 7. Cache keys are deterministic functions of semantic inputs, executor version and engine version.
 8. SQLite stores state and metadata; BlobStore stores binary payloads.
 9. Memory queues and caches are reconstructible and never authoritative.
@@ -160,12 +166,14 @@ Extend these owners or add adapters around them. Do not create parallel domains 
 
 ## Required PR sequence
 
-The implementation remains four sequential PRs:
+The implementation is four sequential PRs:
 
 1. [PR 1 - Canonical tasks and execution telemetry](PR-01-TASK-CONTRACTS-OBSERVABILITY.md)
-2. [PR 2 - Persistent DAG and late composition](PR-02-TASK-DAG-LATE-COMPOSITION.md)
-3. [PR 3 - Executor registry and worker runtime](PR-03-EXECUTOR-REGISTRY-WORKERS.md)
-4. [PR 4 - Scheduler, cost model and temporal sharding](PR-04-SCHEDULER-COST-SHARDING.md)
+2. [PR 2 - Executor registry and modular worker runtime](PR-02-EXECUTOR-REGISTRY-WORKERS.md)
+3. [PR 3 - Persistent execution DAG and late composition](PR-03-TASK-DAG-LATE-COMPOSITION.md)
+4. [PR 4 - Cost-aware scheduler and temporal sharding](PR-04-SCHEDULER-COST-SHARDING.md)
+
+The executor runtime intentionally precedes late composition. New overlay/precomp/composite task types must enter the canonical registry immediately instead of landing through temporary dispatch branches.
 
 A later PR must not begin before the previous PR is merged into `main` and its acceptance tests pass on the rebased branch.
 
@@ -192,9 +200,10 @@ Additional phases require an architecture update and registry change. Free-form 
 
 ## Canonical executor IDs
 
-Initial IDs:
+Initial IDs are introduced only when backed by real adapters:
 
 ```text
+video.render.current.v1
 asset.prepare.v1
 text.compile.v1
 text.render.v1
@@ -206,7 +215,7 @@ video.concat.v1
 video.encode-h264.v1
 ```
 
-Only executors backed by real implementations may be advertised.
+Placeholder capability advertisement is forbidden.
 
 ## Required measurements
 
