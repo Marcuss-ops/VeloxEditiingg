@@ -107,4 +107,4 @@ Thumbs.db
 # canonical pb/ package lives under `shared/controltransport/`. This rule
 # catches the transient top-level artifact so it never accidentally lands
 # in a commit.
-controltransport
+/controltransport/
