@@ -121,7 +121,9 @@ message JobResult {
 message ArtifactUploaded {
   // ArtifactUploaded — master-authoritative artifact boundary.
   //
-  // The master is the single source of truth for artifact size, sha256, mime.
+  // The master is the authoritative source of truth for each artifact's
+// size and content hash; every other worker-supplied field is recomputed
+// by the master from the streamed bytes.
   // The worker is only allowed to declare WHICH artifact it uploaded (via
   // the upload_id returned by Service.BeginUpload); every other field the
   // worker submits is recomputed by the master from the streamed bytes.
