@@ -196,7 +196,7 @@ func runServer(cfg *config.Config) error {
 	if cfg.Server.GRPCPort > 0 {
 		jobsRepo := j.Lifecycle.Jobs()
 		if jobsRepo != nil && w.CommandManager != nil {
-			insecureDev := parseInsecureDevFlag(os.Getenv("VELOX_GRPC_ALLOW_INSECURE_DEV"))
+			insecureDev := cfg.Runtime.GRPCAllowInsecureDev
 			if err := grpcserver.ValidateWorkerAllowlist(cfg.Workers.AllowedWorkers, insecureDev); err != nil {
 				return err
 			}
