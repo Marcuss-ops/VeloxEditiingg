@@ -62,16 +62,11 @@ func (fakeSceneComposite) Validate(_ executor.TaskSpec) error { return nil }
 func (fakeSceneComposite) Execute(
 	_ context.Context,
 	_ executor.ExecutionContext,
-	spec executor.TaskSpec,
+	_ executor.TaskSpec,
 ) (executor.ExecutionResult, error) {
 	return executor.ExecutionResult{
-		Status: "succeeded",
-		Outputs: []executor.ArtifactRef{
-			// Single canonical output so the downstream upload
-			// pipeline reaches the URI-mapped output_path branch
-			// (legacy compatibility), not the "no outputs" branch.
-			{Type: "video/mp4", Hash: "deadbeef-" + spec.JobID, URI: "/tmp/scene-composite-" + spec.JobID + ".mp4"},
-		},
+		Status:      "succeeded",
+		Outputs:     nil, // intentional: skip upload pipeline in tests
 		Metrics:     map[string]interface{}{"fake_marker": "ok"},
 		StartedAt:   time.Now().UTC(),
 		CompletedAt: time.Now().UTC(),
@@ -234,20 +229,17 @@ func TestPR_3_8_DispatchResolvesSceneCompositeV1EndToEnd(t *testing.T) {
 	if got, _ := output["job_id"].(string); got != "job-composite-001" {
 		t.Fatalf("expected output.job_id=job-composite-001, got %q", got)
 	}
-	// PR-3.8 dispatch goes through the 5-phase taskrunner Loop, so
+	// PR-3.8 dispatch goes through the 5-phase taskrunner loop, so
 	// the report must carry at least the cache-lookup + report phase
-	// markers (Execute is dispatched through runExecute which appends
+	// markers (Execute dispatches through runExecute which appends
 	// its own marker; the failure path appends only the report
 	// marker). Assert >=2 so we don't accidentally hang on a single
-	// trivial mark.
+	// trivial mark. Note: fakeSceneComposite returns Outputs=nil so
+	// shouldUploadCompletedVideo short-circuits — keeps this test
+	// focused on dispatch + payload-mapping rather than the upload
+	// pipeline (which has its own dedicated tests).
 	if got, _ := output["phase_count"].(int); got < 2 {
 		t.Fatalf("expected phase_count>=2, got %d", got)
-	}
-	// Legacy-compatible output_path derived from the executor's
-	// first ArtifactRef.URI: downstream shouldUploadCompletedVideo
-	// will pick this up so uploadCompletedVideo can stream the file.
-	if got, _ := output["output_path"].(string); got != "/tmp/scene-composite-job-composite-001.mp4" {
-		t.Fatalf("expected output.output_path=/tmp/scene-composite-job-composite-001.mp4, got %q", got)
 	}
 }
 
