@@ -77,7 +77,7 @@ func (s *Service) Finalize(ctx context.Context, cmd FinalizeArtifactCommand) (*s
 			return nil, fmt.Errorf("%w: completed upload=%s attempt=%d->%d",
 				ErrAttemptMismatch, cmd.UploadID, session.AttemptNumber, cmd.AttemptNumber)
 		}
-		art, lerr := loadArtifactByID(ctx, s.db, session.ArtifactID)
+		art, lerr := s.artifactRepo.GetByID(ctx, session.ArtifactID)
 		if lerr != nil {
 			return nil, lerr
 		}

@@ -34,6 +34,13 @@ type RequeueResult struct {
 	Attempt        int    `json:"attempt"`
 }
 
+// Attempt is a single execution attempt of a job.
+type Attempt struct {
+	Status   string
+	WorkerID string
+	LeaseID  string
+}
+
 // Reader is the read-only job query surface.
 // Implemented by store.SQLiteJobRepository.
 type Reader interface {
@@ -45,6 +52,10 @@ type Reader interface {
 
 	// Counts returns the aggregate count of jobs grouped by status.
 	Counts(ctx context.Context) (Counts, error)
+
+	// GetAttempt returns a single attempt by job_id + attempt_number,
+	// or (nil, nil) on missing.
+	GetAttempt(ctx context.Context, jobID string, attemptNumber int) (*Attempt, error)
 }
 
 // Writer is the canonical write-only job mutation surface.

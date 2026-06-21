@@ -21,7 +21,7 @@ violations=0
 
 # ── Private-key blocks (most reliable signal) ───────────────────────────────
 if matches="$(
-       git grep -nE \
+       git grep -nE -- \
          '-----BEGIN ((RSA|EC|DSA|OPENSSH|PGP) )?PRIVATE KEY-----' \
          -- ':!docs/archive/**' \
          ':!*_test.go' \

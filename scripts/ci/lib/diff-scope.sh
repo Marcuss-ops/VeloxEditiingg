@@ -50,17 +50,28 @@ scoped_grep() {
 
   fail_if_no_base_ref
 
-  local -a changed_files
+  local -a changed_files=()
   mapfile -t changed_files < <(
     git diff --name-only --diff-filter=ACMR "$BASE_REF"...HEAD 2>/dev/null \
       || true
   )
 
-  if [[ ${#changed_files[@]} -eq 0 ]]; then
+  # Filter to only .go files (exclude tests) so git grep literal paths
+  # always match the '**/*.go' include pathspec. Without this, a
+  # non-matching literal path (e.g. .gitignore) causes git grep to fall
+  # back to searching the entire tree matching the include pathspec.
+  local -a go_files=()
+  for f in "${changed_files[@]}"; do
+    if [[ "$f" == *.go && "$f" != *_test.go ]]; then
+      go_files+=("$f")
+    fi
+  done
+
+  if [[ ${#go_files[@]} -eq 0 ]]; then
     # No diff vs BASE_REF => no PR changes to gate on. Cheaper than
     # letting git grep iterate the full tree.
     return 0
   fi
 
-  git grep -nE "$pattern" -- "$@" "${changed_files[@]}" 2>/dev/null || true
+  git grep -nE "$pattern" -- "$@" "${go_files[@]}" 2>/dev/null || true
 }

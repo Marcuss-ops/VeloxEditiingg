@@ -50,6 +50,7 @@ var jobProjectionColumns = []string{
 	"COALESCE(project_id, '')",
 	"COALESCE(assigned_to, '')",
 	"COALESCE(lease_id, '')",
+	"COALESCE(lease_expiry, '')",
 	"COALESCE(revision, 0)",
 	"COALESCE(retry_count, 0)",
 	"COALESCE(max_retries, 0)",
@@ -68,7 +69,7 @@ func scanJob(row interface {
 	var j JobRecord
 	err := row.Scan(
 		&j.JobID, &j.Status, &j.VideoName, &j.ProjectID,
-		&j.AssignedTo, &j.LeaseID,
+		&j.AssignedTo, &j.LeaseID, &j.LeaseExpiry,
 		&j.Revision, &j.RetryCount, &j.MaxRetries,
 		&j.CreatedAt, &j.UpdatedAt, &j.StartedAt, &j.CompletedAt,
 		&j.RunID, &j.PayloadJSON,
@@ -488,6 +489,7 @@ func toJobsJob(sj *JobRecord) *jobs.Job {
 	updatedAt, _ := time.Parse(time.RFC3339, sj.UpdatedAt)
 	startedAt, _ := time.Parse(time.RFC3339, sj.StartedAt)
 	completedAt, _ := time.Parse(time.RFC3339, sj.CompletedAt)
+	leaseExpiry, _ := time.Parse(time.RFC3339, sj.LeaseExpiry)
 	return &jobs.Job{
 		ID:          sj.JobID,
 		Status:      jobs.Status(sj.Status),
@@ -499,6 +501,7 @@ func toJobsJob(sj *JobRecord) *jobs.Job {
 		WorkerID:    sj.AssignedTo,
 		MaxRetries:  sj.MaxRetries,
 		LeaseID:     sj.LeaseID,
+		LeaseExpiry: leaseExpiry,
 		StartedAt:   startedAt,
 		CompletedAt: completedAt,
 		CreatedAt:   createdAt,
@@ -729,6 +732,26 @@ func (r *SQLiteJobRepository) RecordRenderFinished(ctx context.Context, id, work
 		AttemptNumber:    attempt,
 		ExpectedRevision: revision,
 	})
+}
+
+// GetAttempt returns a single attempt by job_id + attempt_number.
+func (r *SQLiteJobRepository) GetAttempt(ctx context.Context, jobID string, attemptNumber int) (*jobs.Attempt, error) {
+	if r.store == nil || r.store.db == nil {
+		return nil, fmt.Errorf("job repository: store not initialized")
+	}
+	row := r.store.db.QueryRowContext(ctx,
+		`SELECT status, COALESCE(worker_id, ''), COALESCE(lease_id, '')
+		 FROM job_attempts
+		 WHERE job_id = ? AND attempt_number = ?`,
+		jobID, attemptNumber)
+	var a jobs.Attempt
+	if err := row.Scan(&a.Status, &a.WorkerID, &a.LeaseID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get attempt: %w", err)
+	}
+	return &a, nil
 }
 
 // Delete hard-deletes a job and its supplementary rows from persistence.

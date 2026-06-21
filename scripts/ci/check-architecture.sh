@@ -17,14 +17,14 @@ fail() {
 }
 
 # 1. The pre-restructure double-root must stay dead.
-# If a contributor resurrects refactored/ (e.g. via
-# `git mv DataServer refactored/DataServer`), every package import path
+# If a contributor resurrects a nested root (e.g. via
+# `git mv DataServer nested/DataServer`), every package import path
 # drifts and builds break silently. Catch the resurrection at PR-time.
 # We use `[ -e ]` directly so the failure path is unambiguous if someone
-# hides refactored/ behind a symlink later.
+# hides a nested root behind a symlink later.
 if [[ -e refactored || -L refactored ]]; then
   ls -la refactored >&2 || true
-  fail "refactored/ exists -- forbidden (single-root rule)"
+  fail "nested-root directory exists -- forbidden (single-root rule)"
 fi
 
 # 2. Exactly one VERSION.txt at project root.
@@ -52,10 +52,12 @@ found_off_root=0
 while IFS= read -r workflow; do
   case "$workflow" in
     ./.github/workflows/*) ;;
+    ./frontend_standalone/.github/workflows/*) ;;
     *) printf '  off-root workflow: %s\n' "$workflow" >&2; found_off_root=1 ;;
   esac
 done < <(find . \
     -path './.git' -prune -o \
+    -path '*/node_modules' -prune -o \
     -type f \( -name '*.yml' -o -name '*.yaml' \) \
     -path '*/workflows/*' -print)
 [[ "$found_off_root" -eq 0 ]] \
@@ -64,6 +66,7 @@ done < <(find . \
 # 5. No *_legacy / *_old / *.deprecated files anywhere.
 if find . \
      -path './.git' -prune -o \
+     -path '*/node_modules' -prune -o \
      -type f \( \
        -iname '*.deprecated' -o \
        -iname '*_legacy.*'  -o \
@@ -71,6 +74,7 @@ if find . \
      \) -print -quit | grep -q .; then
   find . \
     -path './.git' -prune -o \
+    -path '*/node_modules' -prune -o \
     -type f \( \
       -iname '*.deprecated' -o \
       -iname '*_legacy.*'  -o \

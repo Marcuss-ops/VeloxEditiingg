@@ -7,6 +7,7 @@ require (
 	github.com/disintegration/imaging v1.6.2
 	github.com/gin-gonic/gin v1.12.0
 	github.com/google/uuid v1.6.0
+	github.com/jackc/pgx/v5 v5.10.0
 	github.com/mattn/go-sqlite3 v1.14.45
 	github.com/stretchr/testify v1.11.1
 	golang.org/x/oauth2 v0.36.0
@@ -17,6 +18,7 @@ require (
 	velox-shared v0.0.0
 )
 
+replace velox-shared v0.0.0 => ../shared
 
 require (
 	cloud.google.com/go/auth v0.20.0 // indirect
@@ -41,6 +43,9 @@ require (
 	github.com/google/s2a-go v0.1.9 // indirect
 	github.com/googleapis/enterprise-certificate-proxy v0.3.16 // indirect
 	github.com/googleapis/gax-go/v2 v2.22.0 // indirect
+	github.com/jackc/pgpassfile v1.0.0 // indirect
+	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
+	github.com/jackc/puddle/v2 v2.2.2 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
 	github.com/leodido/go-urn v1.4.0 // indirect
@@ -63,6 +68,7 @@ require (
 	golang.org/x/crypto v0.53.0 // indirect
 	golang.org/x/image v0.25.0 // indirect
 	golang.org/x/net v0.56.0 // indirect
+	golang.org/x/sync v0.21.0 // indirect
 	golang.org/x/sys v0.46.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260618152121-87f3d3e198d3 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect

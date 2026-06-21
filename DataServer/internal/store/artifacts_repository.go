@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -23,6 +24,9 @@ type ArtifactRepository interface {
 	GetByID(ctx context.Context, artifactID string) (*Artifact, error)
 	// ListByJob returns up to limit artifacts for a job, newest first.
 	ListByJob(ctx context.Context, jobID string, limit int) ([]Artifact, error)
+	// FindReadyByJobAndType returns the ID of a READY artifact for the given
+	// job and type, or empty string if none exists.
+	FindReadyByJobAndType(ctx context.Context, jobID, kind string) (string, error)
 }
 
 // SQLiteArtifactRepository implements ArtifactRepository against a SQLiteStore.
@@ -115,6 +119,26 @@ func (r *SQLiteArtifactRepository) ListByJob(ctx context.Context, jobID string, 
 		artifacts = append(artifacts, a)
 	}
 	return artifacts, rows.Err()
+}
+
+// FindReadyByJobAndType returns the ID of a READY artifact for the given
+// job and type, or empty string if none exists.
+func (r *SQLiteArtifactRepository) FindReadyByJobAndType(ctx context.Context, jobID, kind string) (string, error) {
+	if jobID == "" || kind == "" {
+		return "", nil
+	}
+	row := r.store.db.QueryRowContext(ctx,
+		`SELECT id FROM artifacts
+		 WHERE job_id = ? AND type = ? AND status = 'READY'
+		 LIMIT 1`, jobID, kind)
+	var id string
+	if err := row.Scan(&id); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", nil
+		}
+		return "", fmt.Errorf("artifact repo: FindReadyByJobAndType: %w", err)
+	}
+	return id, nil
 }
 
 // Compile-time check that SQLiteArtifactRepository satisfies ArtifactRepository.

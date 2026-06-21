@@ -18,13 +18,13 @@ set -Eeuo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 
-PLAYBOOK="$PROJECT_ROOT/refactored/DataServer/data/ansible/playbooks/update_workers.yml"
+PLAYBOOK="$PROJECT_ROOT/DataServer/data/ansible/playbooks/update_workers.yml"
 
 # Inventory auto-discovery (prefer inventory.ini over legacy JSON)
 INVENTORY=""
 for candidate in \
-    "$PROJECT_ROOT/refactored/DataServer/data/ansible/playbooks/inventory.ini" \
-    "$PROJECT_ROOT/refactored/DataServer/data/ansible/playbooks/inventory.example.ini"
+    "$PROJECT_ROOT/DataServer/data/ansible/playbooks/inventory.ini" \
+    "$PROJECT_ROOT/DataServer/data/ansible/playbooks/inventory.example.ini"
 do
     if [ -f "$candidate" ]; then
         INVENTORY="$candidate"

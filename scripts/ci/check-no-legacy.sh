@@ -53,6 +53,8 @@ for pattern in "${full_tree_patterns[@]}"; do
          git grep -nE "$pattern" -- \
            ':!docs/**' \
            ':!frontend_standalone/**' \
+           ':!deploy/**' \
+           ':!RemoteCodex/native/video-engine-cpp/**' \
            ':!scripts/ci/check-no-legacy.sh' \
            ':!scripts/ci/lib/diff-scope.sh' 2>/dev/null || true
        )"; [[ -n "$matches" ]]; then

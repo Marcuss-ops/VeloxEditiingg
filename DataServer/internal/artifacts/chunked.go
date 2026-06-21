@@ -18,7 +18,6 @@ package artifacts
 import (
 	"context"
 	"crypto/sha256"
-	"database/sql"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -60,7 +59,6 @@ type ChunkedUploadService struct {
 	artifactSvc *Service
 	repo        Repository
 	blobStore   store.BlobStore
-	db          *sql.DB
 }
 
 // GetUploadByJob returns the active CREATED/UPLOADING upload session for a
@@ -71,9 +69,7 @@ func (s *ChunkedUploadService) GetUploadByJob(ctx context.Context, jobID string)
 }
 
 // NewChunkedUploadService creates a ChunkedUploadService.
-// The *sql.DB must be the same one used by artifactSvc so transactions
-// can join when needed.
-func NewChunkedUploadService(artifactSvc *Service, repo Repository, blobStore store.BlobStore, db *sql.DB) *ChunkedUploadService {
+func NewChunkedUploadService(artifactSvc *Service, repo Repository, blobStore store.BlobStore) *ChunkedUploadService {
 	if artifactSvc == nil {
 		panic("artifacts: NewChunkedUploadService requires a non-nil artifactSvc")
 	}
@@ -84,7 +80,6 @@ func NewChunkedUploadService(artifactSvc *Service, repo Repository, blobStore st
 		artifactSvc: artifactSvc,
 		repo:        repo,
 		blobStore:   blobStore,
-		db:          db,
 	}
 }
 

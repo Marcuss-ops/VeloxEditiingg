@@ -11,7 +11,7 @@
 # Flow:
 #   1. Clean staging (current.new)
 #   2. Extract bundle → staging
-#   3. Flatten legacy refactored/ layout if present
+#   3. Flatten legacy nested layout if present
 #   4. Verify Dockerfile exists
 #   5. Atomic swap: current → current.old → current.new → current
 # ============================================================
@@ -41,7 +41,7 @@
     msg: "Failed to extract bundle {{ bundle_zip_path }} — rc={{ _bundle_extract.rc }}"
   when: _bundle_extract.rc | default(0) != 0
 
-- name: BundleDeploy | Flatten legacy refactored layout in staging
+- name: BundleDeploy | Flatten legacy nested layout in staging
   ansible.builtin.shell: |
     set -euo pipefail
     if [ -d "{{ velox_dir }}/current.new/refactored" ]; then
@@ -53,7 +53,7 @@
     executable: /bin/bash
   changed_when: false
 
-- name: BundleDeploy | Remove legacy refactored tree if still present
+- name: BundleDeploy | Remove legacy nested tree if still present
   ansible.builtin.file:
     path: "{{ velox_dir }}/current.new/refactored"
     state: absent

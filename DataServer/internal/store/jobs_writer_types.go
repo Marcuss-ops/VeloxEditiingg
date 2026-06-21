@@ -43,6 +43,7 @@ type JobRecord struct {
 	ProjectID   string    `json:"project_id,omitempty"`
 	AssignedTo  string    `json:"assigned_to,omitempty"`
 	LeaseID     string    `json:"lease_id,omitempty"`
+	LeaseExpiry string    `json:"lease_expiry,omitempty"`
 	Revision    int       `json:"revision"`
 	RetryCount  int       `json:"retry_count"`
 	MaxRetries  int       `json:"max_retries"`

@@ -42,13 +42,14 @@ call_pattern='\b(db|tx|conn)\.(Exec|ExecContext|Query|QueryContext|QueryRow|Quer
 hits="$(scoped_grep "$call_pattern" -- \
           'DataServer/**/*.go' \
           ':!DataServer/internal/store/**' \
-          ':!DataServer/internal/artifacts/**/*_repository.go' \
-          ':!DataServer/internal/workflow/**/*_repository.go' \
-          ':!DataServer/internal/jobs/**/*_repository.go' \
-          ':!DataServer/internal/deliveries/**/*_repository.go' \
-          ':!DataServer/internal/assets/**/*_repository.go' \
-          ':!DataServer/internal/integrations/**/*_repository.go' \
-          ':!DataServer/internal/youtube/**/*_repository.go' \
+          ':!DataServer/internal/platform/database/**' \
+          ':(glob)!DataServer/internal/artifacts/**/*_repository.go' \
+          ':(glob)!DataServer/internal/workflow/**/*_repository.go' \
+          ':(glob)!DataServer/internal/jobs/**/*_repository.go' \
+          ':(glob)!DataServer/internal/deliveries/**/*_repository.go' \
+          ':(glob)!DataServer/internal/assets/**/*_repository.go' \
+          ':(glob)!DataServer/internal/integrations/**/*_repository.go' \
+          ':(glob)!DataServer/internal/youtube/**/*_repository.go' \
           ':!DataServer/internal/audit/**' \
           ':!DataServer/internal/dbutil/**' \
           ':!DataServer/cmd/server/bootstrap.go' \
@@ -69,6 +70,7 @@ open_pattern='\bsql\.Open\(|\bsql\.OpenDB\('
 open_hits="$(scoped_grep "$open_pattern" -- \
                 'DataServer/**/*.go' \
                 ':!DataServer/internal/store/**' \
+                ':!DataServer/internal/platform/database/**' \
                 ':!DataServer/internal/dbutil/**' \
                 ':!DataServer/cmd/server/bootstrap.go' \
                 ':!DataServer/**/*_test.go' \

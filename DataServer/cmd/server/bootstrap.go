@@ -1,14 +1,4 @@
 package main
-
-// TODO(platform/database): the package velox-server/internal/platform/database
-// was dropped by the Phase 1 architecture refactor (eliminate queue facade
-// / remove dark_editor / make BlobStore mandatory) without propagating
-// downstream adaptations. Three consumers (this file,
-// internal/store/sqlite.go, and bootstrap_postgres_dispatch_test.go) still
-// depend on its symbols (Open / Config / Handle / Driver / DriverSQLite /
-// DriverPostgres). The DataServer build is intentionally broken until a
-// platform/database restoration PR lands — see
-// docs/architecture/OWNERSHIP.md for the platform-cutover roadmap.
 import (
 	"context"
 	"encoding/json"
@@ -40,6 +30,7 @@ import (
 	workerhandlersuploads "velox-server/internal/handlers/remote/workers/uploads"
 	"velox-server/internal/handlers/server/api"
 	"velox-server/internal/handlers/server/pipeline"
+	"velox-server/internal/jobs"
 	"velox-server/internal/jobs/enqueue"
 	"velox-server/internal/outbox"
 	"velox-server/internal/platform/clock"
@@ -98,6 +89,7 @@ type serverDeps struct {
 	// reachable only through artifacts.Service.FinalizeArtifactAndCompleteJob
 	// which performs jobs CAS + artifacts CAS + outbox in a single tx.
 	lifecycleSvc *jobs.LifecycleService
+	jobsRepo         jobs.Repository
 
 	assetService *voiceoverassets.AssetService
 
@@ -354,16 +346,16 @@ func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
 		return nil, fmt.Errorf("bootstrap: unsupported driver %q returned by platform/database.Open", handle.Driver)
 	}
 
-	reg := workersreg.New(handle)
+	reg := workersreg.New(sqliteStore)
 	revokedCount := len(reg.ListRevoked())
 	if revokedCount > 0 {
 		log.Printf("[BOOTSTRAP] Loaded %d revoked workers from DB", revokedCount)
 	}
 	workersRepo := store.NewSQLiteWorkersRepository(sqliteStore)
-	cmdMgr := workersreg.NewCommandManager(handle)
-	tokenMgr := workersreg.NewTokenManager(handle)
+	cmdMgr := workersreg.NewCommandManager(sqliteStore)
+	tokenMgr := workersreg.NewTokenManager(sqliteStore)
 	workerUpdateHandler := workerhandlers.NewWorkerUpdateHandler(cfg, reg, cmdMgr, tokenMgr, cfg.Runtime.DataDir)
-	workerLifecycle := lifecycle.NewHandler(cfg, reg, cmdMgr, tokenMgr)
+	workerLifecycle := lifecycle.NewHandler(cfg, reg, sqliteStore)
 
 	jobRepo := store.NewSQLiteJobRepository(sqliteStore)
 
@@ -380,6 +372,7 @@ func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
 	if err != nil {
 		return nil, fmt.Errorf("bootstrap: lifecycle service: %w", err)
 	}
+	depsJobsRepo := jobsRepository
 
 	outboxStore := outbox.NewStore(sqliteStore.DB())
 
@@ -409,7 +402,8 @@ func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
 		artifacts.NewSQLiteRepository(sqliteStore.DB()),
 		finRepo,
 		blobStore,
-		sqliteStore.DB(),
+		jobsRepository,
+		store.NewSQLiteArtifactRepository(sqliteStore),
 		nil, // clock.System default (production)
 	)
 	log.Printf("[BOOTSTRAP] artifacts.Service ready (single-tx SUCCEEDED gate via FinalizationRepository.FinalizeVerified + DeliveryPlanResolver)")
@@ -421,7 +415,6 @@ func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
 		artifactSvc,
 		artifacts.NewSQLiteRepository(sqliteStore.DB()),
 		blobStore,
-		sqliteStore.DB(),
 	)
 	chunkedHandler := workerhandlersuploads.NewChunkedUploadHandler(chunkedSvc)
 	log.Printf("[BOOTSTRAP] ChunkedUploadService ready (persistent chunked upload via artifact pipeline)")
@@ -468,6 +461,7 @@ func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
 		cmdMgr:              cmdMgr,
 		chunkedHandler:      chunkedHandler,
 		lifecycleSvc:        lifecycleSvc,
+		jobsRepo:            depsJobsRepo,
 	}, nil
 }
 
@@ -524,7 +518,7 @@ func runServer(cfg *config.Config) error {
 	// AND the legacy SetVoiceoverAssetService hook. Threaded through DI
 	// to script/{handler,RegisterRoutes}, creatorflow.Service, and the
 	// pipeline package (via the InitPipelineEnqueuer wiring below).
-	deps.enqueuer = enqueue.NewEnqueuer(&writerAdapter{w: jobsRepository}, deps.assetService)
+	deps.enqueuer = enqueue.NewEnqueuer(&writerAdapter{w: deps.jobsRepo}, deps.assetService)
 	// Must run after NewEnqueuer above — InitPipelineEnqueuer dereferences
 	// e.Queue for logging, and deps.enqueuer would still be nil otherwise.
 	pipeline.InitPipelineEnqueuer(deps.enqueuer)
@@ -699,15 +693,16 @@ func runServer(cfg *config.Config) error {
 	}
 
 	if deps.artifactSvc != nil {
+		maintRepo := store.NewSQLiteArtifactMaintenanceRepository(deps.sqliteStore)
 		rec, recErr := artifacts.NewReconciler(
-			deps.sqliteStore.DB(),
+			maintRepo,
 			deps.blobStore,
 			artifacts.NewSQLiteRepository(deps.sqliteStore.DB()),
 			nil, // clock.System default (production)
 			artifacts.DefaultReconcilerConfig(),
 		)
 		if recErr != nil {
-			return nil, fmt.Errorf("bootstrap: Reconciler init failed: %w — Reconciler is mandatory when artifacts are enabled", recErr)
+			return fmt.Errorf("bootstrap: Reconciler init failed: %w — Reconciler is mandatory when artifacts are enabled", recErr)
 		}
 		// Reconciler shares the same bgCtx as the rest of the bg
 		// runners — a separate recCtx/recCancel leaked past bgCancel()
@@ -801,10 +796,9 @@ func runDataLayerAudit(cfg *config.Config) error {
 	}
 
 	secretsDir := filepath.Join(dataDir, "secrets")
-	auditor := audit.NewDataLayerAuditorWithDriver(
+	auditor := audit.NewDataLayerAuditor(
 		dataDir,
 		secretsDir,
-		strings.ToLower(strings.TrimSpace(cfg.Database.Driver)),
 		cfg.Database.DBPath,
 	)
 

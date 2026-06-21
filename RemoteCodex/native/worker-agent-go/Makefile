@@ -2,7 +2,7 @@
 
 # Version is read VERBATIM from ../../../VERSION.txt (canonical project
 # root). The build FAILS HARD if that file is missing — there is no
-# git-describe / "dev" fallback by design: every release artifact must be
+# git-describe / dev fallback by design: every release artifact must be
 # produced from an explicitly-bumped VERSION.txt so the worker bundle hash
 # the master emits is reproducible.
 #

@@ -23,6 +23,7 @@ type Job struct {
 	RunID       string    `json:"run_id,omitempty"`       // workflow run identifier
 	MaxRetries  int       `json:"max_retries"`            // configured retry budget
 	LeaseID     string    `json:"lease_id,omitempty"`     // active lease (Ondata 3 PR3)
+	LeaseExpiry time.Time `json:"lease_expiry,omitempty"` // lease expiration (PR3)
 	StartedAt   time.Time `json:"started_at,omitempty"`   // when work began
 	CompletedAt time.Time `json:"completed_at,omitempty"` // when work finished
 	CreatedAt   time.Time `json:"created_at"`

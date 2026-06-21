@@ -2,7 +2,6 @@ package artifacts
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -60,7 +59,7 @@ import (
 // (graceful shutdown). Reconcile(ctx) is the one-shot callable that
 // callers (tests, admin commands) can invoke.
 type Reconciler struct {
-	db        *sql.DB
+	maintRepo store.ArtifactMaintenanceRepository
 	blobStore store.BlobStore
 	repo      Repository
 	clock     clock.Clock
@@ -110,12 +109,12 @@ type ReconcileStats struct {
 	StuckArtifacts        int // rule 4
 }
 
-// NewReconciler composes a Reconciler. db and blobStore must outlive
+// NewReconciler composes a Reconciler. maintRepo and blobStore must outlive
 // the Reconciler (Run holds references). repo can be the same
 // SQLiteRepository as Service uses (transitively via the same *sql.DB).
-func NewReconciler(db *sql.DB, blobStore store.BlobStore, repo Repository, c clock.Clock, config ReconcilerConfig) (*Reconciler, error) {
-	if db == nil {
-		return nil, fmt.Errorf("artifacts: Reconciler: nil db")
+func NewReconciler(maintRepo store.ArtifactMaintenanceRepository, blobStore store.BlobStore, repo Repository, c clock.Clock, config ReconcilerConfig) (*Reconciler, error) {
+	if maintRepo == nil {
+		return nil, fmt.Errorf("artifacts: Reconciler: nil maintenance repo")
 	}
 	if blobStore == nil {
 		return nil, fmt.Errorf("artifacts: Reconciler: nil blob store")
@@ -139,7 +138,7 @@ func NewReconciler(db *sql.DB, blobStore store.BlobStore, repo Repository, c clo
 		config.BatchLimit = 200
 	}
 	return &Reconciler{
-		db:        db,
+		maintRepo: maintRepo,
 		blobStore: blobStore,
 		repo:      repo,
 		clock:     c,
@@ -280,9 +279,18 @@ func (r *Reconciler) reconcileBlobs(ctx context.Context) (orphans, quarantinedWi
 	// 1. SELECT all artifacts with status='READY' and a verified_at
 	//    timestamp. The map is the source-of-truth for which blob paths
 	//    should exist on disk.
-	dbEntries, err := r.loadReadyEntries(ctx)
+	readyLocals, err := r.maintRepo.ListReadyLocal(ctx)
 	if err != nil {
 		return 0, 0, 0, err
+	}
+	// Convert to the map format the rest of the method expects.
+	dbEntries := make(map[string]readyEntry, len(readyLocals))
+	for _, rl := range readyLocals {
+		dbEntries[rl.StorageKey] = readyEntry{
+			artifactID: rl.ID,
+			storageKey: rl.StorageKey,
+			verifiedAt: rl.VerifiedAt,
+		}
 	}
 
 	// 2. Walk FinalDir. Build the on-disk relative-path set + the
@@ -329,10 +337,10 @@ func (r *Reconciler) reconcileBlobs(ctx context.Context) (orphans, quarantinedWi
 		switch {
 		case qerr == nil:
 			quarantinedWithEvent++
-		case errors.Is(qerr, ErrArtifactAlreadyQuarantined):
+		case errors.Is(qerr, store.ErrArtifactAlreadyQuarantined):
 			// idempotent — count neither bucket (not a failure)
 			continue
-		case errors.Is(qerr, ErrQuarantineStatusOnly):
+		case errors.Is(qerr, store.ErrQuarantineStatusOnly):
 			// status committed, outbox event deferred — surface as a
 			// separate so dashboards can detect it without log scraping
 			quarantinedStatusOnly++
@@ -348,47 +356,7 @@ func (r *Reconciler) reconcileBlobs(ctx context.Context) (orphans, quarantinedWi
 // No LIMIT: the in-memory map must include every READY row for the
 // (disk - db) / (db - disk) diff to be meaningful.
 //
-// Memory bound: target installs < 1M artifacts (~10MB map). At 10M+
-// READY the map would push >100MB per 15-minute cycle and a future
-// iteration should paginate the SELECT with intermediate disk-set
-// diffing. Within the documented target (<1M) this is acceptable.
-func (r *Reconciler) loadReadyEntries(ctx context.Context) (map[string]readyEntry, error) {
-	rows, err := r.db.QueryContext(ctx, `
-		SELECT storage_key, id, COALESCE(verified_at, '')
-		FROM artifacts
-		WHERE status = 'READY'
-		  AND storage_provider = 'local'
-		  AND storage_key <> ''
-		  AND verified_at IS NOT NULL AND verified_at <> ''`)
-	if err != nil {
-		return nil, fmt.Errorf("rule2/3: load READY: %w", err)
-	}
-	defer rows.Close()
 
-	out := make(map[string]readyEntry, 1024)
-	for rows.Next() {
-		var key, id, verifiedStr string
-		if err := rows.Scan(&key, &id, &verifiedStr); err != nil {
-			return nil, fmt.Errorf("rule2/3: scan: %w", err)
-		}
-		var ts time.Time
-		if verifiedStr != "" {
-			if t, perr := time.Parse(time.RFC3339, verifiedStr); perr == nil {
-				ts = t
-			}
-		}
-		// Normalize to forward-slashes so cross-platform path matching works.
-		out[filepath.ToSlash(key)] = readyEntry{
-			artifactID: id,
-			storageKey: key,
-			verifiedAt: ts,
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("rule2/3: rows: %w", err)
-	}
-	return out, nil
-}
 
 func (r *Reconciler) walkFinalDir() (map[string]fs.FileInfo, error) {
 	finalDir := r.blobStore.FinalDir()
@@ -445,84 +413,8 @@ func (r *Reconciler) deleteFinalFile(rel string) error {
 // emitted; outbox emission is best-effort and reported separately.
 // =====================================================================
 
-// ErrArtifactAlreadyQuarantined is returned when the UPDATE matches 0
-// rows because a concurrent reconciler (or admin) has already flipped
-// the status. Callers should treat this as success (idempotent).
-var ErrArtifactAlreadyQuarantined = errors.New("reconciler: artifact already terminal")
-
-// ErrQuarantineStatusOnly is returned when the QUARANTINED status was
-// committed but the ARTIFACT_QUARANTINED outbox event emission failed
-// (best-effort). Callers (rule 3 counting) surface this as a separate
-// bucket so dashboards can detect outbox schema drift without scraping logs.
-var ErrQuarantineStatusOnly = errors.New("reconciler: quarantine status committed but outbox event deferred")
-
 func (r *Reconciler) quarantineArtifactTx(ctx context.Context, artifactID, reason string) error {
-	if artifactID == "" {
-		return fmt.Errorf("reconciler: quarantineArtifactTx: empty artifactID")
-	}
-
-	// Phase 1: flip READY -> QUARANTINED in its own transaction.
-	// The CAS WHERE clause prevents stomping concurrent finalizers.
-	tx1, err := r.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("reconciler: quarantineArtifactTx begin-status: %w", err)
-	}
-	res, err := tx1.ExecContext(ctx, `
-		UPDATE artifacts
-		SET status = 'QUARANTINED'
-		WHERE id = ? AND status = 'READY'`, artifactID)
-	if err != nil {
-		_ = tx1.Rollback()
-		return fmt.Errorf("reconciler: quarantine UPDATE: %w", err)
-	}
-	affected, rerr := res.RowsAffected()
-	if rerr != nil {
-		_ = tx1.Rollback()
-		return rerr
-	}
-	if affected == 0 {
-		_ = tx1.Rollback()
-		// Idempotent: another reconciler (or admin, or a foreground
-		// Finalize that beat us) already flipped to a terminal state.
-		return ErrArtifactAlreadyQuarantined
-	}
-	if err := tx1.Commit(); err != nil {
-		return fmt.Errorf("reconciler: quarantineArtifactTx commit-status: %w", err)
-	}
-
-	// Phase 2: emit ARTIFACT_QUARANTINED outbox event in its own tx.
-	// Best-effort: if outbox_events is missing or the commit fails, the
-	// caller (rule 3) learns about it via ErrQuarantineStatusOnly so
-	// operators can distinguish "outbox healthy + successful quarantine"
-	// from "outbox broken + status-only quarantine" in dashboard stats.
-	// The QUARANTINED status flip from Phase 1 is the source of truth;
-	// downstream consumers can replay the missed event out of band by
-	// re-reading artifacts where status='QUARANTINED'.
-	tx2, err := r.db.BeginTx(ctx, nil)
-	if err != nil {
-		log.Printf("[RECONCILER] quarantine outbox begin failed artifact=%s (status committed): %v", artifactID, err)
-		return ErrQuarantineStatusOnly
-	}
-	payload := fmt.Sprintf(`{"artifact_id":%q,"reason":%q,"detected_at":%q}`,
-		artifactID, reason, r.clock.Now().UTC().Format(time.RFC3339))
-	now := r.clock.Now().UTC().Format(time.RFC3339)
-	if _, err := tx2.ExecContext(ctx, `
-		INSERT INTO outbox_events (aggregate_type, aggregate_id, event_type, payload_json, status, available_at, created_at)
-		VALUES ('artifact', ?, 'ARTIFACT_QUARANTINED', ?, 'PENDING', ?, ?)`,
-		artifactID, payload, now, now); err != nil {
-		_ = tx2.Rollback()
-		if isNoSuchTable(err) {
-			log.Printf("[RECONCILER] outbox_events missing; QUARANTINED status still committed for artifact=%s (event emission deferred)", artifactID)
-			return ErrQuarantineStatusOnly
-		}
-		log.Printf("[RECONCILER] quarantine outbox INSERT failed artifact=%s (status committed): %v", artifactID, err)
-		return ErrQuarantineStatusOnly
-	}
-	if err := tx2.Commit(); err != nil {
-		log.Printf("[RECONCILER] quarantine outbox commit failed artifact=%s (status committed): %v", artifactID, err)
-		return ErrQuarantineStatusOnly
-	}
-	return nil
+	return r.maintRepo.QuarantineArtifact(ctx, artifactID, reason)
 }
 
 // =====================================================================
@@ -545,30 +437,10 @@ func (r *Reconciler) quarantineArtifactTx(ctx context.Context, artifactID, reaso
 // =====================================================================
 
 func (r *Reconciler) reconcileStuckArtifacts(ctx context.Context) (int, error) {
-	cutoff := r.clock.Now().Add(-r.config.StuckArtifactAge).UTC().Format(time.RFC3339)
-
-	rows, err := r.db.QueryContext(ctx, `
-		SELECT id FROM artifacts
-		WHERE status = 'STAGING'
-		  AND created_at <> ''
-		  AND created_at < ?
-		ORDER BY created_at ASC
-		LIMIT ?`, cutoff, r.config.BatchLimit)
+	cutoff := r.clock.Now().Add(-r.config.StuckArtifactAge)
+	ids, err := r.maintRepo.ListStuckStaging(ctx, cutoff, r.config.BatchLimit)
 	if err != nil {
 		return 0, fmt.Errorf("rule4: query stuck artifacts: %w", err)
-	}
-	defer rows.Close()
-
-	var ids []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return 0, fmt.Errorf("rule4: scan: %w", err)
-		}
-		ids = append(ids, id)
-	}
-	if err := rows.Err(); err != nil {
-		return 0, fmt.Errorf("rule4: rows: %w", err)
 	}
 	if len(ids) == 0 {
 		return 0, nil
@@ -576,23 +448,12 @@ func (r *Reconciler) reconcileStuckArtifacts(ctx context.Context) (int, error) {
 
 	var n int
 	for _, id := range ids {
-		// CAS: only flip if still in STAGING. Concurrent foreground
-		// Finalize could have flipped this in the meantime - skip and
-		// let the next pass handle any residuals.
-		res, err := r.db.ExecContext(ctx, `
-			UPDATE artifacts
-			SET status = 'FAILED'
-			WHERE id = ? AND status = 'STAGING'`, id)
+		ok, err := r.maintRepo.MarkStuckArtifactFailed(ctx, id)
 		if err != nil {
-			log.Printf("[RECONCILER] rule4: UPDATE artifact %s failed: %v", id, err)
+			log.Printf("[RECONCILER] rule4: mark failed artifact %s failed: %v", id, err)
 			continue
 		}
-		affected, rerr := res.RowsAffected()
-		if rerr != nil {
-			log.Printf("[RECONCILER] rule4: RowsAffected artifact %s failed: %v", id, rerr)
-			continue
-		}
-		if affected == 1 {
+		if ok {
 			n++
 		}
 	}

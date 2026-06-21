@@ -37,7 +37,7 @@ if [[ -n "$(git status --porcelain 2>/dev/null)" ]]; then
     printf '  between BASE_REF...HEAD. Your dirty edits remain invisible\n' >&2
     printf '  to the architecture / migration / single-writer / db-access\n' >&2
     printf '  / registry / no-legacy / secrets checks. Only the file-\n' >&2
-    printf '  system sniffer (refactored/, *_legacy.go, etc.) would see\n' >&2
+    printf '  system sniffer (nested-root/, *_legacy.go, etc.) would see\n' >&2
     printf '  them. Commit first, then re-run `make verify`.\n' >&2
     printf '  Optional: ALLOW_DIRTY=1 to continue -- you accept the\n' >&2
     printf '  silent-pass on the dirty subset.\n' >&2

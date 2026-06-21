@@ -3,8 +3,6 @@ package artifacts
 import (
 	"context"
 	"crypto/sha256"
-	"database/sql"
-	"errors"
 	"fmt"
 	"io"
 	"mime"
@@ -14,6 +12,7 @@ import (
 	"time"
 
 	"velox-server/internal/identity"
+	"velox-server/internal/jobs"
 	"velox-server/internal/platform/clock"
 	"velox-server/internal/store"
 )
@@ -41,11 +40,12 @@ const defaultUploadTTL = 24 * time.Hour
 // flip). This struct holds the *reference* to that repo but cannot
 // itself produce a SUCCEEDED without going through the atomic tx.
 type Service struct {
-	repo      Repository
-	finRepo   FinalizationRepository // NEW in PR 3.5-a: sole writer of jobs.status='SUCCEEDED'
-	blobStore store.BlobStore
-	db        *sql.DB
-	clock     clock.Clock
+	repo        Repository
+	finRepo     FinalizationRepository // NEW in PR 3.5-a: sole writer of jobs.status='SUCCEEDED'
+	blobStore   store.BlobStore
+	jobsRepo    jobs.Repository
+	artifactRepo store.ArtifactRepository
+	clock       clock.Clock
 
 	uploadTTL time.Duration
 }
@@ -55,13 +55,12 @@ type Service struct {
 // repo: artifact uploads CRUD (State machine + ReadOnly loads).
 // finRepo: atomic single-tx SUCCEEDED write + atomic artifacts+artifact_uploads insert.
 // blobStore: FilesystemBlobStore in production, NopBlobStore in tests.
-//
-// The same *sql.DB is shared so the finalization tx can join with the
-// concurrent update on artifact_uploads (step 7 of FinalizeVerified).
+// jobsRepo: canonical job reader for auth CAS fields.
+// artifactRepo: canonical artifact reader for idempotent COMPLETED path.
 //
 // PR 3.5-a: finRepo is REQUIRED. Panic if nil so a misconfigured compose
 // always flakes on startup instead of silently producing no SUCCEEDED.
-func NewService(repo Repository, finRepo FinalizationRepository, blobStore store.BlobStore, db *sql.DB, c clock.Clock) *Service {
+func NewService(repo Repository, finRepo FinalizationRepository, blobStore store.BlobStore, jobsRepo jobs.Repository, artifactRepo store.ArtifactRepository, c clock.Clock) *Service {
 	if c == nil {
 		c = clock.System{}
 	}
@@ -72,12 +71,13 @@ func NewService(repo Repository, finRepo FinalizationRepository, blobStore store
 		panic("artifacts: NewService requires a non-nil FinalizationRepository (sole writer of jobs.status='SUCCEEDED')")
 	}
 	return &Service{
-		repo:      repo,
-		finRepo:   finRepo,
-		blobStore: blobStore,
-		db:        db,
-		clock:     c,
-		uploadTTL: defaultUploadTTL,
+		repo:         repo,
+		finRepo:      finRepo,
+		blobStore:    blobStore,
+		jobsRepo:     jobsRepo,
+		artifactRepo: artifactRepo,
+		clock:        c,
+		uploadTTL:    defaultUploadTTL,
 	}
 }
 
@@ -134,60 +134,7 @@ func (c *countingWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// jobState captures the columns BeginUpload / Finalize need from `jobs`.
-// Loaded with a single SELECT, then checked against the BeginUpload
-// auth fields in one place.
-type jobState struct {
-	status      string
-	assignedTo  string
-	leaseID     string
-	leaseExpiry time.Time
-	revision    int
-}
 
-// loadJob reads the auth-relevant columns of a `jobs` row.
-func (s *Service) loadJob(ctx context.Context, jobID string) (*jobState, error) {
-	if jobID == "" {
-		return nil, fmt.Errorf("artifacts: loadJob: empty jobID")
-	}
-	row := s.db.QueryRowContext(ctx,
-		`SELECT status, COALESCE(assigned_to, ''),
-		        COALESCE(lease_id, ''), COALESCE(lease_expiry, ''),
-		        COALESCE(revision, 0)
-		 FROM jobs WHERE job_id = ?`, jobID)
-	var j jobState
-	var leaseExp string
-	if err := row.Scan(&j.status, &j.assignedTo, &j.leaseID, &leaseExp,
-		&j.revision); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("artifacts: loadJob: %w", err)
-	}
-	if leaseExp != "" {
-		if ts, perr := time.Parse(time.RFC3339, leaseExp); perr == nil {
-			j.leaseExpiry = ts
-		}
-	}
-	return &j, nil
-}
-
-// loadAttempt reads auth-relevant columns of a `job_attempts` row.
-func (s *Service) loadAttempt(ctx context.Context, jobID string, attemptNumber int) (status, workerID, leaseID string, err error) {
-	row := s.db.QueryRowContext(ctx,
-		`SELECT status, COALESCE(worker_id, ''), COALESCE(lease_id, '')
-		 FROM job_attempts
-		 WHERE job_id = ? AND attempt_number = ?`,
-		jobID, attemptNumber)
-	if scanErr := row.Scan(&status, &workerID, &leaseID); scanErr != nil {
-		if errors.Is(scanErr, sql.ErrNoRows) {
-			return "", "", "", fmt.Errorf("%w: job=%s n=%d",
-				ErrAttemptMismatch, jobID, attemptNumber)
-		}
-		return "", "", "", fmt.Errorf("artifacts: loadAttempt: %w", scanErr)
-	}
-	return status, workerID, leaseID, nil
-}
 
 // verifyStagedBlob reads the staged temp file end-to-end and returns
 // (sha256 hex, byte count). Used AFTER io.Copy completes in Receive()
@@ -209,28 +156,7 @@ func verifyStagedBlob(path string) (string, int64, error) {
 	return fmt.Sprintf("%x", h.Sum(nil)), n, nil
 }
 
-// loadArtifactByID is a small helper used by Finalize's idempotent
-// COMPLETED path.
-func loadArtifactByID(ctx context.Context, db *sql.DB, id string) (*store.Artifact, error) {
-	row := db.QueryRowContext(ctx, `
-		SELECT id, job_id, COALESCE(attempt_id, 0), type, storage_provider,
-		       COALESCE(storage_key, ''), COALESCE(storage_url, ''),
-		       COALESCE(local_path, ''), COALESCE(sha256, ''),
-		       COALESCE(size_bytes, 0), COALESCE(duration_seconds, 0),
-		       status, COALESCE(verified_at, ''), created_at
-		FROM artifacts WHERE id = ?`, id)
-	var a store.Artifact
-	var verifiedAt string
-	if err := row.Scan(&a.ID, &a.JobID, &a.AttemptID, &a.Type, &a.StorageProvider,
-		&a.StorageKey, &a.StorageURL, &a.LocalPath, &a.SHA256,
-		&a.SizeBytes, &a.DurationSeconds, &a.Status, &verifiedAt, &a.CreatedAt); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("loadArtifactByID: %w", err)
-	}
-	return &a, nil
-}
+
 
 // isNoSuchTable returns true when err is the SQLite "no such table"
 // / "no such column" error. Used to soft-skip over schema-roll phases
@@ -272,61 +198,61 @@ func (s *Service) BeginUpload(ctx context.Context, cmd BeginUploadCommand) (*Upl
 	}
 
 	// ----- 1. job auth -----
-	job, err := s.loadJob(ctx, cmd.JobID)
+	job, err := s.jobsRepo.Get(ctx, cmd.JobID)
 	if err != nil {
 		return nil, err
 	}
 	if job == nil {
 		return nil, fmt.Errorf("%w: job=%s missing", ErrJobNotRunning, cmd.JobID)
 	}
-	if job.status != string(store.JobStatusRunning) {
-		return nil, fmt.Errorf("%w: job=%s status=%s", ErrJobNotRunning, cmd.JobID, job.status)
+	if job.Status != jobs.StatusRunning {
+		return nil, fmt.Errorf("%w: job=%s status=%s", ErrJobNotRunning, cmd.JobID, job.Status)
 	}
-	if job.assignedTo != cmd.WorkerID {
+	if job.WorkerID != cmd.WorkerID {
 		return nil, fmt.Errorf("%w: job=%s assigned_to=%s worker=%s",
-			ErrWrongJobOwner, cmd.JobID, job.assignedTo, cmd.WorkerID)
+			ErrWrongJobOwner, cmd.JobID, job.WorkerID, cmd.WorkerID)
 	}
-	if job.leaseID != cmd.LeaseID {
+	if job.LeaseID != cmd.LeaseID {
 		return nil, fmt.Errorf("%w: job=%s lease_mismatch", ErrLeaseInvalid, cmd.JobID)
 	}
-	if !job.leaseExpiry.IsZero() && s.clock.Now().After(job.leaseExpiry) {
+	if !job.LeaseExpiry.IsZero() && s.clock.Now().After(job.LeaseExpiry) {
 		return nil, fmt.Errorf("%w: job=%s expired_at=%s",
-			ErrLeaseInvalid, cmd.JobID, job.leaseExpiry.Format(time.RFC3339))
+			ErrLeaseInvalid, cmd.JobID, job.LeaseExpiry.Format(time.RFC3339))
 	}
-	if cmd.ExpectedRevision != 0 && job.revision != cmd.ExpectedRevision {
+	if cmd.ExpectedRevision != 0 && job.Revision != cmd.ExpectedRevision {
 		return nil, fmt.Errorf("%w: job=%s revision=%d want=%d",
-			ErrRevisionMismatch, cmd.JobID, job.revision, cmd.ExpectedRevision)
+			ErrRevisionMismatch, cmd.JobID, job.Revision, cmd.ExpectedRevision)
 	}
 
 	// ----- 2. attempt auth -----
-	attStatus, attWorker, attLease, err := s.loadAttempt(ctx, cmd.JobID, cmd.AttemptNumber)
+	attempt, err := s.jobsRepo.GetAttempt(ctx, cmd.JobID, cmd.AttemptNumber)
 	if err != nil {
 		return nil, err
 	}
-	if attWorker != cmd.WorkerID {
+	if attempt == nil {
+		return nil, fmt.Errorf("%w: job=%s n=%d",
+			ErrAttemptMismatch, cmd.JobID, cmd.AttemptNumber)
+	}
+	if attempt.WorkerID != cmd.WorkerID {
 		return nil, fmt.Errorf("%w: attempt_owner job=%s n=%d",
 			ErrWrongJobOwner, cmd.JobID, cmd.AttemptNumber)
 	}
-	if attLease != cmd.LeaseID {
+	if attempt.LeaseID != cmd.LeaseID {
 		return nil, fmt.Errorf("%w: attempt_lease job=%s n=%d",
 			ErrLeaseInvalid, cmd.JobID, cmd.AttemptNumber)
 	}
-	attStatus = strings.ToUpper(strings.TrimSpace(attStatus))
+	attStatus := strings.ToUpper(strings.TrimSpace(attempt.Status))
 	if attStatus != string(AttemptRenderFinished) && attStatus != string(AttemptProcessing) {
 		return nil, fmt.Errorf("%w: job=%s n=%d current=%s",
 			ErrAttemptNotRenderFinished, cmd.JobID, cmd.AttemptNumber, attStatus)
 	}
 
 	// ----- 3. uniqueness gate -----
-	var existingID string
-	if err := s.db.QueryRowContext(ctx,
-		`SELECT id FROM artifacts
-		 WHERE job_id = ? AND type = ? AND status = 'READY'
-		 LIMIT 1`, cmd.JobID, cmd.Kind).Scan(&existingID); err != nil {
-		if !errors.Is(err, sql.ErrNoRows) {
-			return nil, fmt.Errorf("artifacts: BeginUpload existing-ready check: %w", err)
-		}
-	} else if existingID != "" {
+	existingID, err := s.artifactRepo.FindReadyByJobAndType(ctx, cmd.JobID, cmd.Kind)
+	if err != nil {
+		return nil, fmt.Errorf("artifacts: BeginUpload existing-ready check: %w", err)
+	}
+	if existingID != "" {
 		return nil, fmt.Errorf("%w: job=%s kind=%s existing=%s",
 			ErrDuplicateReadyArtifact, cmd.JobID, cmd.Kind, existingID)
 	}
