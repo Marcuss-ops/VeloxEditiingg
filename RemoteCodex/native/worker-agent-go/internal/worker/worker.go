@@ -69,10 +69,10 @@ func (w *Worker) Start(ctx context.Context) error {
 			// Exponential backoff is reserved for application-level errors
 			// (credential mismatch, protocol version, TLS).
 			var sleepDuration time.Duration
-		if isConnectionLevelError(err) {
-			jitter := time.Duration(rand.Float64() * float64(connectionRetryBackoff) * 0.3)
-			sleepDuration = connectionRetryBackoff + jitter
-			w.logger.Info("[CONNECT] Connection-level error, retrying in %v", sleepDuration.Round(time.Millisecond))
+			if isConnectionLevelError(err) {
+				jitter := time.Duration(rand.Float64() * float64(connectionRetryBackoff) * 0.3)
+				sleepDuration = connectionRetryBackoff + jitter
+				w.logger.Info("[CONNECT] Connection-level error, retrying in %v", sleepDuration.Round(time.Millisecond))
 			} else {
 				jitter := time.Duration(rand.Float64() * float64(backoff) * 0.25)
 				sleepDuration = backoff + jitter
@@ -97,25 +97,14 @@ func (w *Worker) Start(ctx context.Context) error {
 			}
 		}
 
-	// Registration succeeded — reset backoff
-	backoff = registrationInitialBackoff
-	w.setConnState(ConnReady)
-	telemetry.SetHealthRegistered(true)
-	w.logger.Info("[CONNECT] Registration successful — running session")
+		// Registration succeeded — reset backoff
+		backoff = registrationInitialBackoff
+		w.setConnState(ConnReady)
+		telemetry.SetHealthRegistered(true)
+		w.logger.Info("[CONNECT] Registration successful — running session")
 
-	// ── Shadow mode (PR11): open gRPC observation transport ────────────
-	// Shadow runs alongside the primary transport. It receives JobOffer
-	// messages but NEVER sends JobAccepted — purely compares timing.
-	// The shadow goroutine is managed within runSession so it shares
-	// the session context and stops when the session ends.
-	var shadowActive bool
-	if w.config.ShadowMode && w.shadowTransportFactory != nil {
-		shadowActive = true
-		w.logger.Info("[SHADOW] Will start shadow gRPC stream in session")
-	}
-
-	// Run session: start all loops, manage lifecycle
-	sessionEnded := w.runSession(ctx, shadowActive)
+		// Run session: start all loops, manage lifecycle
+		sessionEnded := w.runSession(ctx)
 
 		_ = w.transport.Close()
 
@@ -185,9 +174,7 @@ func (w *Worker) buildHello() controltransport.WorkerHello {
 
 // runSession starts all communication loops and returns true if the session
 // ended due to disconnect (should reconnect), false if stopped gracefully.
-// When shadowMode is true, an additional gRPC shadow transport is opened
-// for observation-only comparison with the primary transport.
-func (w *Worker) runSession(ctx context.Context, shadowMode bool) bool {
+func (w *Worker) runSession(ctx context.Context) bool {
 	sessionCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -209,12 +196,6 @@ func (w *Worker) runSession(ctx context.Context, shadowMode bool) bool {
 	// Start unified receive loop (replaces jobLoop + commandLoop)
 	w.wg.Add(1)
 	go w.receiveLoop(sessionCtx, recvCh)
-
-	// ── Shadow mode (PR11): launch shadow gRPC transport for observation ────
-	if shadowMode {
-		w.wg.Add(1)
-		go w.shadowSessionLifecycle(sessionCtx)
-	}
 
 	// Start local persistence loop (saves seen commands + job metadata)
 	w.startPersistenceLoop(sessionCtx)
@@ -280,20 +261,14 @@ func (w *Worker) receiveLoop(ctx context.Context, recvCh <-chan controltransport
 				return
 			}
 
-			switch msg.Type {			case controltransport.MsgJobOffer:
+			switch msg.Type {
+			case controltransport.MsgJobOffer:
 				// Parse the offer exactly once — every reject path needs the
 				// job_id, and the accepted path also needs the typed payload.
 				offer := msgToJob(msg)
 				jobID := ""
 				if offer != nil {
 					jobID = offer.JobID
-				}
-
-				// ── Shadow mode (PR11): record primary job claim for comparison ────
-				// Compare this job arrival against the shadow gRPC stream to
-				// measure push-vs-poll latency and detect mismatches.
-				if w.isShadowModeActive() && jobID != "" {
-					w.recordPrimaryJobSeen(jobID)
 				}
 
 				// P5 cleanup: never silently drop an offer. Send JobRejected so
@@ -343,9 +318,9 @@ func (w *Worker) receiveLoop(ctx context.Context, recvCh <-chan controltransport
 				if err := w.sendAccept(ctx, job); err != nil {
 					w.logger.Warn("[RECEIVE] Failed to send JobAccepted: %v", err)
 					continue
-				}					// P0 protocol fix: store pending job, wait for JobLeaseGranted before executing.
-					// The master confirms the lease atomically in SQLite before sending JobLeaseGranted.
-					w.storePendingJob(job)
+				} // P0 protocol fix: store pending job, wait for JobLeaseGranted before executing.
+				// The master confirms the lease atomically in SQLite before sending JobLeaseGranted.
+				w.storePendingJob(job)
 
 			case controltransport.MsgJobAvailable:
 				// PR12: lightweight notification from master — "there are jobs for you".
