@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"velox-server/internal/config"
+	"velox-server/internal/costmodel"
 	remoteansible "velox-server/internal/handlers/remote/ansible"
 	"velox-server/internal/jobs/enqueue"
 	"velox-server/internal/remoteengine"
@@ -140,7 +141,11 @@ func ForwardCompletedResult(ctx context.Context, enqueuer *enqueue.Enqueuer, res
 		return nil, err
 	}
 
-	return enqueuer.Enqueue(ctx, workerPayload)
+	// PR-04.5: legacy creator-flow callers do not publish per-job
+	// JobRequirements — pass the permissive default so today's FIFO
+	// queue routing is preserved. Future slices that decide on
+	// concrete requirements can plumb them through here.
+	return enqueuer.Enqueue(ctx, workerPayload, costmodel.DefaultRequirements())
 }
 
 func (s *Service) forwardCompletedResult(ctx context.Context, result map[string]interface{}) (map[string]interface{}, error) {
@@ -170,7 +175,8 @@ func (s *Service) forwardCompletedResult(ctx context.Context, result map[string]
 		}
 	}
 
-	return s.enqueuer.Enqueue(ctx, workerPayload)
+	// PR-04.5: see ForwardCompletedResult comment above.
+	return s.enqueuer.Enqueue(ctx, workerPayload, costmodel.DefaultRequirements())
 }
 
 func (s *Service) scheduleCreatorPolling(creatorJobID string) {

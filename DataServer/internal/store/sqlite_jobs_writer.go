@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"velox-server/internal/costmodel"
 	"velox-server/internal/jobs"
 )
 
@@ -43,6 +44,11 @@ func NewJobsRepository(repo *SQLiteJobRepository) jobs.Repository {
 
 // jobProjectionColumns lists the columns MaterializedBy JobRepository reads.
 // Centralised so GetJob and ListByStatus stay in lock-step.
+//
+// PR-04.5: appends the two dedicated columns added by migration 039 so
+// RequiredResourceClass + RequiredTemporalMode are surfaced in the
+// DB-row projection. They're consumed by toJobsJob to reconstruct the
+// canonical jobs.Job.Requirements.
 var jobProjectionColumns = []string{
 	"job_id",
 	"status",
@@ -59,6 +65,8 @@ var jobProjectionColumns = []string{
 	"COALESCE(completed_at, '')",
 	"COALESCE(run_id, '')",
 	"COALESCE(request_json, '{}')",
+	"COALESCE(job_required_resource_class, '')",
+	"COALESCE(job_required_temporal_mode, '')",
 }
 
 // scanJob reads one row in jobProjectionColumns order into a *JobRecord.
@@ -72,11 +80,62 @@ func scanJob(row interface {
 		&j.Revision, &j.RetryCount, &j.MaxRetries,
 		&j.CreatedAt, &j.UpdatedAt, &j.StartedAt, &j.CompletedAt,
 		&j.RunID, &j.PayloadJSON,
+		&j.RequiredResourceClass, &j.RequiredTemporalMode,
 	)
 	if err != nil {
 		return nil, err
 	}
 	return &j, nil
+}
+
+// requirementsJSONKey is the JSON-only sub-object key inside request_json
+// where the per-job requirements are mirrored. PR-04.5 keeps the redundant
+// copy so legacy workers that introspect request_json continue to find
+// Requirements under the well-known key.
+const requirementsJSONKey = "_requirements"
+
+// attachRequirementsToPayload mutates payload in-place by setting (or
+// overwriting) the `_requirements` sub-object. The resulting map is
+// always serializable. Empty (default) requirements are still embedded
+// so the on-disk shape is stable across writers.
+func attachRequirementsToPayload(payload map[string]interface{}, req costmodel.JobRequirements) map[string]interface{} {
+	if payload == nil {
+		payload = make(map[string]interface{})
+	}
+	payload[requirementsJSONKey] = map[string]interface{}{
+		"resource_class": string(req.ResourceClass),
+		"temporal_mode":  string(req.TemporalMode),
+		"deterministic":  req.Deterministic,
+		"cacheable":      req.Cacheable,
+	}
+	return payload
+}
+
+// requirementsFromPayload reads the `_requirements` sub-object out of a
+// parsed payload map. Used by toJobsJob as a fallback when the dedicated
+// columns are blank (pre-PR-04.5 rows).
+func requirementsFromPayload(payload map[string]interface{}) costmodel.JobRequirements {
+	if payload == nil {
+		return costmodel.DefaultRequirements()
+	}
+	raw, ok := payload[requirementsJSONKey].(map[string]interface{})
+	if !ok || raw == nil {
+		return costmodel.DefaultRequirements()
+	}
+	req := costmodel.DefaultRequirements()
+	if v, ok := raw["resource_class"].(string); ok {
+		req.ResourceClass = costmodel.ResourceClass(strings.TrimSpace(v))
+	}
+	if v, ok := raw["temporal_mode"].(string); ok {
+		req.TemporalMode = costmodel.TemporalMode(strings.TrimSpace(v))
+	}
+	if v, ok := raw["deterministic"].(bool); ok {
+		req.Deterministic = v
+	}
+	if v, ok := raw["cacheable"].(bool); ok {
+		req.Cacheable = v
+	}
+	return req
 }
 
 // CreateJob inserts a job in PENDING state atomically. If params.JobID is
@@ -99,9 +158,17 @@ func (r *SQLiteJobRepository) CreateJob(ctx context.Context, params CreateJobPar
 	defer func() { _ = tx.Rollback() }()
 
 	now := time.Now().UTC().Format(time.RFC3339)
+	// PR-04.5: embed the per-job Requirements twice \u2014 once as a
+	// `_requirements` sub-object inside the request_json blob (legacy
+	// readers can introspect this without a schema change), and once on
+	// the dedicated columns added by migration 039 (canonical,
+	// query-time filterable). The two writes are independent so a row
+	// with pre-PR-04.5 schema (no columns yet) still gets the in-blob
+	// copy \u2014 the get path reads columns first, falls back to JSON.
+	payloadWithReq := attachRequirementsToPayload(params.Payload, params.Requirements)
 	requestJSON := "{}"
-	if len(params.Payload) > 0 {
-		if b, err := json.Marshal(params.Payload); err == nil {
+	if len(payloadWithReq) > 0 {
+		if b, err := json.Marshal(payloadWithReq); err == nil {
 			requestJSON = string(b)
 		}
 	}
@@ -112,12 +179,15 @@ func (r *SQLiteJobRepository) CreateJob(ctx context.Context, params CreateJobPar
 			video_name, project_id,
 			created_at, updated_at, migrated_at,
 			request_json, result_json, revision,
-			run_id, job_run_id
-		) VALUES (?, 'PENDING', ?, 0, ?, ?, ?, ?, ?, ?, '{}', 0, ?, ?)`,
+			run_id, job_run_id,
+			job_required_resource_class, job_required_temporal_mode
+		) VALUES (?, 'PENDING', ?, 0, ?, ?, ?, ?, ?, ?, '{}', 0, ?, ?, ?, ?)`,
 		params.JobID, params.MaxRetries, params.VideoName, params.ProjectID,
 		now, now, now,
 		requestJSON,
 		params.RunID, params.RunID,
+		string(params.Requirements.ResourceClass),
+		string(params.Requirements.TemporalMode),
 	)
 	if err != nil {
 		return fmt.Errorf("create job exec: %w", err)
@@ -480,6 +550,12 @@ func (r *SQLiteJobRepository) CompleteJob(ctx context.Context, params CompleteJo
 // ── Mappers (jobs domain ↔ store row) ─────────────────────────────────────
 
 // toJobsJob converts a store.JobRecord (DB projection) into a canonical jobs.Job.
+//
+// PR-04.5: Requirements is reconstructed from the dedicated columns
+// (added by migration 039) first, with a fallback to the
+// `_requirements` sub-object inside request_json. Pre-PR-04.5 rows
+// (no columns, no JSON sub-object) fold into JobRequirements{} =
+// DefaultRequirements = permissive, preserving legacy routing.
 func toJobsJob(sj *JobRecord) *jobs.Job {
 	if sj == nil {
 		return nil
@@ -504,6 +580,39 @@ func toJobsJob(sj *JobRecord) *jobs.Job {
 		CreatedAt:   createdAt,
 		UpdatedAt:   updatedAt,
 		Payload:     sj.PayloadJSON,
+		Requirements: reconstructRequirements(sj),
+	}
+}
+
+// reconstructRequirements reads the per-job Requirements from the
+// dedicated columns first; falls back to the JSON sub-object inside
+// request_json when the columns are blank (pre-PR-04.5 rows); defaults
+// to JobRequirements{} when both are blank (= DefaultRequirements = permissive).
+func reconstructRequirements(sj *JobRecord) costmodel.JobRequirements {
+	if sj == nil {
+		return costmodel.DefaultRequirements()
+	}
+	rc := strings.TrimSpace(sj.RequiredResourceClass)
+	tm := strings.TrimSpace(sj.RequiredTemporalMode)
+	if rc == "" && tm == "" {
+		// Fallback to JSON sub-object (legacy rows).
+		parsed := jobs.ParsePayloadJSON(sj.PayloadJSON)
+		jsonReq := requirementsFromPayload(parsed)
+		if jsonReq.ResourceClass != "" || jsonReq.TemporalMode != "" || jsonReq.Deterministic || jsonReq.Cacheable {
+			return jsonReq
+		}
+		return costmodel.DefaultRequirements()
+	}
+	// Columns present: authoritative for resource_class and temporal_mode.
+	// Deterministic + Cacheable are JSON-only \u2014 pick them up from the blob
+	// to fill the rank-side two booleans (PR-04.6 consumes them).
+	parsed := jobs.ParsePayloadJSON(sj.PayloadJSON)
+	jsonReq := requirementsFromPayload(parsed)
+	return costmodel.JobRequirements{
+		ResourceClass: costmodel.ResourceClass(rc),
+		TemporalMode:  costmodel.TemporalMode(tm),
+		Deterministic: jsonReq.Deterministic,
+		Cacheable:     jsonReq.Cacheable,
 	}
 }
 
@@ -512,11 +621,12 @@ func toStoreParams(j *jobs.Job) CreateJobParams {
 		return CreateJobParams{}
 	}
 	return CreateJobParams{
-		JobID:      j.ID,
-		VideoName:  j.VideoName,
-		ProjectID:  j.ProjectID,
-		RunID:      j.RunID,
-		MaxRetries: j.MaxRetries,
+		JobID:       j.ID,
+		VideoName:   j.VideoName,
+		ProjectID:   j.ProjectID,
+		RunID:       j.RunID,
+		MaxRetries:  j.MaxRetries,
+		Requirements: j.Requirements,
 	}
 }
 

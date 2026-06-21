@@ -4,6 +4,7 @@ import (
 	"errors"
 	"time"
 
+	"velox-server/internal/costmodel"
 	"velox-server/internal/jobs"
 )
 
@@ -36,35 +37,57 @@ const (
 //
 // PR15.5: the legacy `type Job = JobRecord` alias was removed. All callers
 // now reference JobRecord directly.
+//
+// PR-04.5: RequiredResourceClass + RequiredTemporalMode mirror the
+// dedicated columns added by migration 039. They are reconstructed into
+// Jobs.Job.Requirements by toJobsJob and consumed by the eligibility
+// layer + future rank sites. Pre-PR-04.5 rows have empty values here and
+// fall through to the JSON fallback inside request_json._requirements
+// (or to JobRequirements{} = permissive).
 type JobRecord struct {
-	JobID       string    `json:"job_id"`
-	Status      JobStatus `json:"status"`
-	VideoName   string    `json:"video_name,omitempty"`
-	ProjectID   string    `json:"project_id,omitempty"`
-	AssignedTo  string    `json:"assigned_to,omitempty"`
-	LeaseID     string    `json:"lease_id,omitempty"`
-	Revision    int       `json:"revision"`
-	RetryCount  int       `json:"retry_count"`
-	MaxRetries  int       `json:"max_retries"`
-	CreatedAt   string    `json:"created_at,omitempty"`
-	UpdatedAt   string    `json:"updated_at,omitempty"`
-	StartedAt   string    `json:"started_at,omitempty"`
-	CompletedAt string    `json:"completed_at,omitempty"`
-	RunID       string    `json:"run_id,omitempty"`
-	PayloadJSON string    `json:"-"`
+	JobID                string    `json:"job_id"`
+	Status               JobStatus `json:"status"`
+	VideoName            string    `json:"video_name,omitempty"`
+	ProjectID            string    `json:"project_id,omitempty"`
+	AssignedTo           string    `json:"assigned_to,omitempty"`
+	LeaseID              string    `json:"lease_id,omitempty"`
+	Revision             int       `json:"revision"`
+	RetryCount           int       `json:"retry_count"`
+	MaxRetries           int       `json:"max_retries"`
+	CreatedAt            string    `json:"created_at,omitempty"`
+	UpdatedAt            string    `json:"updated_at,omitempty"`
+	StartedAt            string    `json:"started_at,omitempty"`
+	CompletedAt          string    `json:"completed_at,omitempty"`
+	RunID                string    `json:"run_id,omitempty"`
+	PayloadJSON          string    `json:"-"`
+
+	// PR-04.5: per-job placement needs (canonical). Columns take
+	// priority on read; the JSON subobject inside PayloadJSON is
+	// the redundant copy maintained by the writer layer.
+	RequiredResourceClass string `json:"required_resource_class,omitempty"`
+	RequiredTemporalMode  string `json:"required_temporal_mode,omitempty"`
 }
 
 // CreateJobParams is the input for CreateJob.
 //
 // JobID may be empty; the repository must generate a unique ID in that case.
 // The rich payload map maps 1:1 onto the immutable request_json blob on disk.
+//
+// PR-04.5: Requirements fields are mirrored both in the dedicated
+// columns (job_required_resource_class, job_required_temporal_mode)
+// AND in the request_json._requirements subobject. The repository
+// layer is responsible for keeping the two representations
+// consistent; callers should pass a single canonical
+// costmodel.JobRequirements value and rely on the writer to embed
+// it in both places.
 type CreateJobParams struct {
-	JobID      string                 `json:"job_id,omitempty"`
-	Payload    map[string]interface{} `json:"payload"`
-	VideoName  string                 `json:"video_name,omitempty"`
-	ProjectID  string                 `json:"project_id,omitempty"`
-	RunID      string                 `json:"run_id,omitempty"`
-	MaxRetries int                    `json:"max_retries"`
+	JobID       string                 `json:"job_id,omitempty"`
+	Payload     map[string]interface{} `json:"payload"`
+	VideoName   string                 `json:"video_name,omitempty"`
+	ProjectID   string                 `json:"project_id,omitempty"`
+	RunID       string                 `json:"run_id,omitempty"`
+	MaxRetries  int                    `json:"max_retries"`
+	Requirements costmodel.JobRequirements `json:"requirements,omitempty"`
 }
 
 // ClaimParams carries worker identity and the timestamp at claim time.
@@ -81,11 +104,12 @@ type ClaimParams struct {
 // complete/fail; LeaseID and LeaseExpires are exposed separately so callers
 // can present them in clear surface areas (e.g. the v2 HTTP contract).
 type ClaimResult struct {
-	JobID        string    `json:"job_id"`
-	ResultJSON   []byte    `json:"-"`
-	Attempt      int       `json:"attempt"`
-	LeaseID      string    `json:"lease_id,omitempty"`
-	LeaseExpires time.Time `json:"lease_expires,omitempty"`
+	JobID        string                   `json:"job_id"`
+	ResultJSON   []byte                   `json:"-"`
+	Attempt      int                      `json:"attempt"`
+	LeaseID      string                   `json:"lease_id,omitempty"`
+	LeaseExpires time.Time                `json:"lease_expires,omitempty"`
+	Requirements costmodel.JobRequirements `json:"requirements,omitempty"`
 }
 
 // TransitionParams encodes a CAS-style state change.

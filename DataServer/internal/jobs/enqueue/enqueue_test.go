@@ -1,10 +1,13 @@
 package enqueue
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"velox-server/internal/costmodel"
 )
 
 func TestBuildSceneImagePayload(t *testing.T) {
@@ -527,5 +530,113 @@ func TestBuildSceneImagePayload_RoundTrip(t *testing.T) {
 	json.Unmarshal(data, &decoded)
 	if decoded["video_name"] != "RT" || decoded["job_type"] != "process_video" {
 		t.Errorf("round-trip mismatch: %v", decoded)
+	}
+}
+
+// =============================================================================
+// PR-04.5 (appended): Enqueuer.Enqueue(ctx, payload, req) propagates the
+// per-job costmodel.JobRequirements through JobQueue.SubmitJob byte-for-byte.
+// Without this invariant the cost-model-eligibility layer
+// (GetEligibleWorkers) and the future-rank site cannot consume concrete
+// per-job constraints end-to-end.
+// =============================================================================
+
+// recordingJobQueue captures every SubmitJob call so the test asserts
+// the canonical req travelled through unchanged. It satisfies the
+// JobQueue interface declared in enqueue.go.
+type recordingJobQueue struct {
+	calls []recordingJobQueueCall
+}
+
+type recordingJobQueueCall struct {
+	jobID   string
+	payload map[string]interface{}
+	req     costmodel.JobRequirements
+}
+
+func (r *recordingJobQueue) SubmitJob(_ context.Context, jobID string, payload map[string]interface{}, req costmodel.JobRequirements) error {
+	r.calls = append(r.calls, recordingJobQueueCall{jobID: jobID, payload: payload, req: req})
+	return nil
+}
+
+// TestEnqueuePropagatesRequirements is the PR-04.5 invariant: any
+// costmodel.JobRequirements passed to Enqueuer.Enqueue reaches
+// JobQueue.SubmitJob byte-for-byte. Future-rank sites depend on this.
+func TestEnqueuePropagatesRequirements(t *testing.T) {
+	t.Parallel()
+	q := &recordingJobQueue{}
+	enq := NewEnqueuer(q, nil)
+
+	payload := map[string]interface{}{
+		"video_name":  "demo.mp4",
+		"script_text": "hello world",
+		"scenes": []interface{}{
+			map[string]interface{}{"scene": "intro", "voiceover": "v1"},
+		},
+		"voiceover_paths": []string{"/tmp/v1.mp3"},
+	}
+	req := costmodel.JobRequirements{
+		ResourceClass: costmodel.ResourceGPU,
+		TemporalMode:  costmodel.TemporalWindowed,
+		Deterministic: true,
+		Cacheable:     true,
+	}
+
+	if _, err := enq.Enqueue(context.Background(), payload, req); err != nil {
+		t.Fatalf("Enqueue returned error: %v", err)
+	}
+
+	if len(q.calls) != 1 {
+		t.Fatalf("expected exactly 1 SubmitJob call, got %d", len(q.calls))
+	}
+	got := q.calls[0]
+	if got.req.ResourceClass != costmodel.ResourceGPU {
+		t.Errorf("ResourceClass lost in transit: want %q got %q", costmodel.ResourceGPU, got.req.ResourceClass)
+	}
+	if got.req.TemporalMode != costmodel.TemporalWindowed {
+		t.Errorf("TemporalMode lost in transit: want %q got %q", costmodel.TemporalWindowed, got.req.TemporalMode)
+	}
+	if !got.req.Deterministic {
+		t.Errorf("Deterministic lost in transit: want true got false")
+	}
+	if !got.req.Cacheable {
+		t.Errorf("Cacheable lost in transit: want true got false")
+	}
+	if got.jobID == "" {
+		t.Errorf("jobID expected to be assigned")
+	}
+	if got.payload["job_id"] != got.jobID {
+		t.Errorf("payload job_id (%v) mismatches submitted jobID (%v)", got.payload["job_id"], got.jobID)
+	}
+}
+
+// TestEnqueueDefaultsPreserved verifies the permissive behavior is
+// intact when no Requirements are published: an empty JobRequirements
+// flows through unchanged so pre-PR-04.5 callers (and any legacy
+// dispatch path) keep today's routing.
+func TestEnqueueDefaultsPreserved(t *testing.T) {
+	t.Parallel()
+	q := &recordingJobQueue{}
+	enq := NewEnqueuer(q, nil)
+
+	payload := map[string]interface{}{
+		"video_name":  "demo.mp4",
+		"script_text": "hello world",
+		"scenes": []interface{}{
+			map[string]interface{}{"scene": "intro", "voiceover": "v1"},
+		},
+		"voiceover_paths": []string{"/tmp/v1.mp3"},
+	}
+	req := costmodel.DefaultRequirements()
+
+	if _, err := enq.Enqueue(context.Background(), payload, req); err != nil {
+		t.Fatalf("Enqueue returned error: %v", err)
+	}
+	if len(q.calls) != 1 {
+		t.Fatalf("expected 1 SubmitJob call, got %d", len(q.calls))
+	}
+	got := q.calls[0]
+	if got.req.ResourceClass != "" || got.req.TemporalMode != "" || got.req.Deterministic || got.req.Cacheable {
+		t.Errorf("DefaultRequirements must stay zero-value; got %+v", got.req)
 	}
 }

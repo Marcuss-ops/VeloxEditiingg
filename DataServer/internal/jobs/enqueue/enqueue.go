@@ -20,6 +20,7 @@ import (
 	"time"
 
 	assetbridge "velox-server/internal/assets"
+	"velox-server/internal/costmodel"
 	"velox-shared/contract"
 	"velox-shared/payload"
 
@@ -30,8 +31,15 @@ import (
 
 // JobQueue is the minimal surface Enqueuer depends on. jobs.Writer
 // (and any future in-memory or Redis-backed queue) satisfies this via writerAdapter.
+//
+// PR-04.5: SubmitJob now carries the per-job costmodel.JobRequirements.
+// The requirements are persisted to SQLite alongside the request_json
+// blob (dedicated columns _plus_ a `_requirements` JSON sub-object for
+// redundancy). The canonical read path is
+// `jobs.Writer.Get → jobs.Job.Requirements`; future rank sites (PR-04.6)
+// and `Registry.GetEligibleWorkers(ctx, req)` consume from there.
 type JobQueue interface {
-	SubmitJob(ctx context.Context, jobID string, payload map[string]interface{}) error
+	SubmitJob(ctx context.Context, jobID string, payload map[string]interface{}, req costmodel.JobRequirements) error
 }
 
 // Enqueuer bundles the queue + the asset service that rewrites voiceover
@@ -60,10 +68,21 @@ func NewEnqueuer(q JobQueue, voiceover *assetbridge.AssetService) *Enqueuer {
 // invariants are applied exactly once before submission, with no
 // package-level mutable state involved.
 //
-// Callers MUST use *Enqueuer.Enqueue(ctx, payload) — there is no
-// package-level fallback. Callers must construct an Enqueuer (typically
-// once at composition-root time) and pass it down via DI.
-func (e *Enqueuer) Enqueue(ctx context.Context, payloadMap map[string]interface{}) (map[string]interface{}, error) {
+// PR-04.5: callers MUST publish the per-job
+// `costmodel.JobRequirements` for the eligibility layer + future-rank
+// site to consume. Legacy callers that have not yet decided on
+// requirements should pass `costmodel.DefaultRequirements()` (an
+// empty JobRequirements = permissive default = preserves today's
+// FIFO queue routing). Callers MUST construct an Enqueuer (typically
+// once at composition-root time) and pass it down via DI; there is
+// no package-level fallback.
+//
+// The Requirements are NOT injected into the `payload` map here; the
+// downstream adapter (jobs.Writer.Create) is responsible for
+// embedding them once in BOTH the dedicated columns AND the
+// `_requirements` JSON sub-object inside request_json. This split
+// keeps the Enqueuer free of SQLite-specific knowledge.
+func (e *Enqueuer) Enqueue(ctx context.Context, payloadMap map[string]interface{}, req costmodel.JobRequirements) (map[string]interface{}, error) {
 	if e == nil || e.Queue == nil {
 		return nil, fmt.Errorf("queue unavailable")
 	}
@@ -86,7 +105,7 @@ func (e *Enqueuer) Enqueue(ctx context.Context, payloadMap map[string]interface{
 		normalized["job_id"] = jobID
 	}
 
-	if err := e.Queue.SubmitJob(ctx, jobID, normalized); err != nil {
+	if err := e.Queue.SubmitJob(ctx, jobID, normalized, req); err != nil {
 		return nil, err
 	}
 

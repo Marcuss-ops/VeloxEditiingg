@@ -14,6 +14,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"velox-server/internal/config"
+	"velox-server/internal/costmodel"
 	"velox-server/internal/jobs"
 	"velox-server/internal/jobs/enqueue"
 	"velox-server/internal/store"
@@ -25,13 +26,19 @@ type testSubmitQueue struct {
 	maxRetries int
 }
 
-func (q *testSubmitQueue) SubmitJob(ctx context.Context, jobID string, payload map[string]interface{}) error {
+// PR-04.5: SubmitJob accepts costmodel.JobRequirements and forwards it
+// onto jobs.Job.Requirements so the canonical jobs.Writer.Create path
+// can persist them in the dedicated SQLite columns + the
+// request_json._requirements sub-object. Tests that don't publish
+// Requirements still pass costmodel.DefaultRequirements().
+func (q *testSubmitQueue) SubmitJob(ctx context.Context, jobID string, payload map[string]interface{}, req costmodel.JobRequirements) error {
 	raw, _ := json.Marshal(payload)
 	job := &jobs.Job{
-		ID:         jobID,
-		Status:     jobs.StatusPending,
-		MaxRetries: q.maxRetries,
-		Payload:    string(raw),
+		ID:          jobID,
+		Status:      jobs.StatusPending,
+		MaxRetries:  q.maxRetries,
+		Payload:     string(raw),
+		Requirements: req,
 	}
 	return q.writer.Create(ctx, job)
 }

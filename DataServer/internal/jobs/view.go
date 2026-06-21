@@ -29,7 +29,11 @@
 //   falls back to an empty map (consumer treats the job as having no payload metadata)
 package jobs
 
-import "encoding/json"
+import (
+	"encoding/json"
+
+	"velox-server/internal/costmodel"
+)
 
 // QueueItem is the scheduling/transport projection of a Job.
 // It carries the full operational state expected by HTTP handlers and legacy consumers.
@@ -77,6 +81,12 @@ type QueueItem struct {
 	RunID        string `json:"run_id,omitempty"`
 
 	Payload map[string]interface{} `json:"-"`
+
+	// Requirements is the per-job placement needs surfaced to the
+	// transport layer (PR-04.5). Consumers (gRPC workers, future
+	// rank sites, HTTP debug endpoints) read this directly. Empty
+	// ⇒ no per-job constraint (permissive default preserved).
+	Requirements costmodel.JobRequirements `json:"requirements,omitempty"`
 }
 
 // JobHistoryEntry represents a status change in job history.
@@ -118,6 +128,12 @@ func ParsePayloadJSON(raw string) map[string]interface{} {
 //   WorkerName = WorkerID  AND  AssignedTo = WorkerID  (legacy dual-aliasing)
 //   RetryCount = Attempts   AND  Attempt = Attempts    (legacy split-field aliasing)
 //   History/Logs/SlotData/LastError/etc. are zero-valued (no domain source today).
+//
+// PR-04.5: Requirements (costmodel.JobRequirements) threads end-to-end
+// here — QueueItem is the canonical transport projection and the
+// EligibilityLayer / future-rank sites read QueueItem.Requirements
+// (or Job.Requirements after jobs.Writer.Get) without re-parsing
+// request_json.
 func ToQueueItem(j *Job) *QueueItem {
 	if j == nil {
 		return nil
@@ -139,6 +155,7 @@ func ToQueueItem(j *Job) *QueueItem {
 		StartedAt:   j.StartedAt,
 		CompletedAt: j.CompletedAt,
 		Payload:     ParsePayloadJSON(j.Payload),
+		Requirements: j.Requirements,
 	}
 }
 

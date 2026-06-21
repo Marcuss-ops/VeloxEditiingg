@@ -13,6 +13,7 @@ import (
 
 	voiceoverassets "velox-server/internal/assets"
 	"velox-server/internal/config"
+	"velox-server/internal/costmodel"
 	"velox-server/internal/creatorflow"
 	remoteansible "velox-server/internal/handlers/remote/ansible"
 	"velox-server/internal/jobs/enqueue"
@@ -123,7 +124,7 @@ func (h *ScriptHandlers) GenerateWithImagesHandler(cfg *config.Config) gin.Handl
 			return
 		}
 
-		response, err := h.enqueuer.Enqueue(c.Request.Context(), normalized)
+		response, err := h.enqueuer.Enqueue(c.Request.Context(), normalized, costmodel.DefaultRequirements())
 		if err != nil {
 			if assetErr, ok := voiceoverassets.AsAcquisitionError(err); ok {
 				c.JSON(http.StatusUnprocessableEntity, gin.H{

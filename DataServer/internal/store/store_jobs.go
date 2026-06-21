@@ -15,6 +15,15 @@ import (
 // ClaimNextPendingJob atomically claims the next pending/queued job for a worker.
 // Reads columns directly (not raw_json), then writes the claim via result_json.
 // Returns the updated result_json blob and true if a job was claimed.
+//
+// PR-04.5: the per-job Requirements (columns
+// job_required_resource_class + job_required_temporal_mode + the
+// `_requirements` JSON sub-object inside request_json) are mirrored
+// into the result_json blob under the same `_requirements` key. The
+// future-rank site (PR-04.6) reads them straight from the blob; the
+// reader path (jobs.Writer.Get → jobs.Job.Requirements) reconstructs
+// them from the dedicated columns (canonical) with the JSON fallback
+// for legacy rows.
 func (s *SQLiteStore) ClaimNextPendingJob(workerID string, allowedJobTypes []string, now time.Time) ([]byte, bool, error) {
 	tx, err := s.db.BeginTx(context.Background(), &sql.TxOptions{})
 	if err != nil {
@@ -25,7 +34,9 @@ func (s *SQLiteStore) ClaimNextPendingJob(workerID string, allowedJobTypes []str
 	// Read candidate jobs with their status and assigned_to columns (not raw_json)
 	rows, err := tx.Query(
 		`SELECT job_id, status, assigned_to, claimed_by, job_fingerprint, run_id, job_run_id,
-		        video_name, project_id, retry_count, request_json, result_json
+		        video_name, project_id, retry_count, request_json, result_json,
+		        COALESCE(job_required_resource_class, ''),
+		        COALESCE(job_required_temporal_mode, '')
 		 FROM jobs
 		 WHERE UPPER(status) = 'PENDING'
 		   AND COALESCE(assigned_to, '') = ''
@@ -44,9 +55,11 @@ func (s *SQLiteStore) ClaimNextPendingJob(workerID string, allowedJobTypes []str
 			videoName, projectID                                                  sql.NullString
 			retryCount                                                            sql.NullInt64
 			requestJSON, resultJSON                                               sql.NullString
+			requiredResourceClass, requiredTemporalMode                            sql.NullString
 		)
 		if err := rows.Scan(&jobID, &status, &assignedTo, &claimedBy, &jobFingerprint, &runID, &jobRunID,
-			&videoName, &projectID, &retryCount, &requestJSON, &resultJSON); err != nil {
+			&videoName, &projectID, &retryCount, &requestJSON, &resultJSON,
+			&requiredResourceClass, &requiredTemporalMode); err != nil {
 			rows.Close()
 			return nil, false, err
 		}
@@ -92,6 +105,33 @@ func (s *SQLiteStore) ClaimNextPendingJob(workerID string, allowedJobTypes []str
 		resultMap["contract_version"] = 2
 		resultMap["updated_at"] = nowUnix
 		resultMap["retry_count"] = newRetry
+
+		// PR-04.5: mirror per-job Requirements into result_json so the
+		// dispatch path (handler_workers.sendPushJobOffer + future
+		// rank site) can read them straight from the response blob
+		// without bouncing through jobs.Writer.Get. ResourceClass +
+		// TemporalMode are sourced from the dedicated columns; the
+		// rank-only Deterministic + Cacheable come from the JSON
+		// sub-object inside request_json (already canonical there).
+		if requiredResourceClass.Valid && strings.TrimSpace(requiredResourceClass.String) != "" {
+			resultMap["_requirements"] = map[string]any{
+				"resource_class": strings.TrimSpace(requiredResourceClass.String),
+				"temporal_mode":  strings.TrimSpace(requiredTemporalMode.String),
+			}
+			if requestJSON.Valid && requestJSON.String != "" {
+				var reqParsed map[string]any
+				if err := json.Unmarshal([]byte(requestJSON.String), &reqParsed); err == nil {
+					if sub, ok := reqParsed["_requirements"].(map[string]any); ok {
+						if v, ok := sub["deterministic"].(bool); ok {
+							resultMap["_requirements"].(map[string]any)["deterministic"] = v
+						}
+						if v, ok := sub["cacheable"].(bool); ok {
+							resultMap["_requirements"].(map[string]any)["cacheable"] = v
+						}
+					}
+				}
+			}
+		}
 
 		updatedResult, err := json.Marshal(resultMap)
 		if err != nil {

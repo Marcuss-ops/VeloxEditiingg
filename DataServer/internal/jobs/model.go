@@ -1,6 +1,16 @@
 package jobs
 
-import "time"
+import (
+	"time"
+
+	"velox-server/internal/costmodel"
+)
+
+// Costmodel-dependency safety: jobs imports costmodel for the per-job
+// Requirements threading (PR-04.5). The reverse direction does NOT
+// hold — costmodel has no compile dependency on jobs (only on
+// "strings"). Adding Requirements to Job.Requirements is therefore a
+// forward-only edge and introduces no import cycle.
 
 // Job is the canonical domain model for a render job.
 //
@@ -28,4 +38,19 @@ type Job struct {
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
 	Payload     string    `json:"-"` // opaque JSON blob (Ondata 3 PR3 final)
+
+	// Requirements is the per-job placement needs consumed by the
+	// master-side cost model (PR-04.5). Default zero value
+	// (ResourceClass="", TemporalMode="") means "no per-job
+	// constraint" — the eligibility layer keeps legacy permissive
+	// routing for callers that have not yet migrated to publish
+	// explicit requirements.
+	//
+	// Persisted in two places: dedicated columns
+	// `job_required_resource_class` / `job_required_temporal_mode`
+	// (SQLite migration 039) AND JSON-only on `request_json` under
+	// the `_requirements` subobject. Deterministic + Cacheable live
+	// JSON-only inside request_json (rank-only fields, see
+	// sqlite_jobs_writer.go::CreateJob).
+	Requirements costmodel.JobRequirements `json:"requirements,omitempty"`
 }
