@@ -56,7 +56,7 @@ func (h *Handler) GetCommandsHandler() gin.HandlerFunc {
 			return
 		}
 
-		cmds := h.cmdMgr.GetPendingCommands(workerID)
+		cmds := h.cmdMgr.GetPendingCommandsAndMarkDelivered(workerID)
 
 		type commandResponse struct {
 			CommandID   string                 `json:"command_id"`
