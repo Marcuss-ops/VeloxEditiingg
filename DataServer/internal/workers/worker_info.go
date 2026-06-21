@@ -58,7 +58,7 @@ func applyMetadataFields(extra map[string]interface{}, info *WorkerInfo) {
 		if info.Capabilities == nil {
 			info.Capabilities = map[string]interface{}{}
 		}
-		info.Capabilities["supported_job_types"] = normalizeStringSlice(v)
+		info.Capabilities["supported_job_types"] = ExtractStringSlice(v)
 	}
 }
 
@@ -81,38 +81,6 @@ func normalizeCapabilities(v interface{}) map[string]interface{} {
 	default:
 		return nil
 	}
-}
-
-func normalizeStringSlice(v interface{}) []string {
-	if v == nil {
-		return nil
-	}
-	switch t := v.(type) {
-	case []string:
-		return t
-	case []interface{}:
-		out := make([]string, 0, len(t))
-		for _, it := range t {
-			if s, ok := it.(string); ok {
-				out = append(out, s)
-			}
-		}
-		return out
-	default:
-		return nil
-	}
-}
-
-// GetSupportedJobTypes returns the list of job types a worker supports.
-func (w *WorkerInfo) GetSupportedJobTypes() []string {
-	if w.Capabilities == nil {
-		return nil
-	}
-	v, ok := w.Capabilities["supported_job_types"]
-	if !ok {
-		return nil
-	}
-	return ExtractStringSlice(v)
 }
 
 // ExtractStringSlice converts various slice-like types to []string.

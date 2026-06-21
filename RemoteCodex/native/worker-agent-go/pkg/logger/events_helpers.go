@@ -11,7 +11,7 @@ import (
 	"fmt"
 	"time"
 
-	"velox-worker-agent/pkg/obs"
+	obs "velox-shared/obs"
 )
 
 // withEvent constructs an event with the supplied code and attaches every

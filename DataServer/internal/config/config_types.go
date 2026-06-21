@@ -94,8 +94,7 @@ type WorkersConfig struct {
 	// to ValidateProductionWorkers — the raw CSV is only kept so we
 	// can echo it back in the gRPC HandlerConfig unchanged.
 	AllowedWorkerIDs    []string
-	ForceSingleWorker   string
-	AllowlistRegistered bool
+
 	MaxJobAttempts      int
 	BundleDir           string
 	HeartbeatTimeout    int

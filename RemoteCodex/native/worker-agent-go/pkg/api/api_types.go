@@ -2,7 +2,7 @@
 package api
 
 import (
-	"velox-worker-agent/pkg/obs"
+	obs "velox-shared/obs"
 )
 
 // API event names for structured logging. The cross-component transport

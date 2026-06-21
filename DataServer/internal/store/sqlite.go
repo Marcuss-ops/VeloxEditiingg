@@ -102,12 +102,12 @@ func (s *SQLiteStore) emitOutbox(ctx context.Context, txn outbox.Executor, p out
 // database is created and stays here only for diff minimisation.
 var sqliteTunePragmas = []string{
 	"PRAGMA synchronous = NORMAL",      // Faster writes, safe with WAL
-	"PRAGMA cache_size = -16000",       // 16MB cache (negative = KB)
+	"PRAGMA cache_size = -32000",       // 32MB cache (negative = KB)
 	"PRAGMA temp_store = MEMORY",       // In-memory temp tables
 	"PRAGMA mmap_size = 268435456",     // 256MB memory-mapped I/O
 	"PRAGMA page_size = 4096",          // Larger pages for better I/O (no-op at runtime)
 	"PRAGMA foreign_keys = ON",         // Enforce referential integrity
-	"PRAGMA wal_autocheckpoint = 1000", // Checkpoint every 1000 pages
+	"PRAGMA wal_autocheckpoint = 2000", // Checkpoint every 2000 pages
 }
 
 // sqliteStorePoolSize returns the (max-open, max-idle, conn-max-
@@ -117,7 +117,7 @@ var sqliteTunePragmas = []string{
 // tuning without leaking Velox-specific opinions into
 // platform/database (which uses conservative 1/1/1h defaults).
 func sqliteStorePoolSize() (int, int, time.Duration) {
-	return 4, 2, 5 * time.Minute
+	return 8, 4, 5 * time.Minute
 }
 
 // NewSQLiteStoreFromHandle builds a *SQLiteStore from an already-open

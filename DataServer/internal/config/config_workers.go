@@ -16,9 +16,7 @@ func loadWorkersConfig() WorkersConfig {
 	// canonical two-worker validator (ValidateProductionWorkers) is
 	// invoked by Config.Validate() — see internal/config/config.go.
 	c.AllowedWorkerIDs = parseCommaList(c.AllowedWorkers)
-	c.ForceSingleWorker = os.Getenv("VELOX_FORCE_SINGLE_WORKER")
 	c.MaxJobAttempts = intFromEnv("VELOX_MAX_JOB_ATTEMPTS", 3, 1)
-	c.AllowlistRegistered = boolFromEnv("VELOX_ALLOWLIST_ALLOW_REGISTERED", false)
 	c.BundleDir = os.Getenv("VELOX_WORKER_BUNDLE_DIR")
 	c.CodeVersion = os.Getenv("VELOX_CODE_VERSION")
 	c.VersionNumber = os.Getenv("VELOX_VERSION_NUMBER")

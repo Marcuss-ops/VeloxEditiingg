@@ -35,12 +35,12 @@ import (
 // concurrent writers natively, so the defaults are larger and the
 // caller is free to grow them when the workload proves it safe.
 const (
-	sqliteDefaultMaxOpenConns   = 1
-	sqliteDefaultMaxIdleConns   = 1
+	sqliteDefaultMaxOpenConns   = 8
+	sqliteDefaultMaxIdleConns   = 4
 	sqliteDefaultConnMaxLifetime = time.Hour
 
-	postgresDefaultMaxOpenConns   = 16
-	postgresDefaultMaxIdleConns   = 4
+	postgresDefaultMaxOpenConns   = 32
+	postgresDefaultMaxIdleConns   = 8
 	postgresDefaultConnMaxLifetime = 5 * time.Minute
 
 	openPingTimeout = 10 * time.Second
@@ -97,7 +97,7 @@ func Open(ctx context.Context, cfg Config) (*Handle, error) {
 // (no WAL durability). Both regression vectors are documented in
 // the engine-history ticket filed when this was extracted from the
 // legacy NewSQLiteStore hard-coded URL string.
-const sqliteDSNParams = "_busy_timeout=5000&_journal_mode=WAL"
+const sqliteDSNParams = "_busy_timeout=10000&_journal_mode=WAL"
 
 // ensureSQLiteDSN normalises a SQLitePath into a fully-qualified DSN
 // with the standard connection-init parameters appended. Empty paths

@@ -12,7 +12,7 @@
 // pkg/obs/event.go.
 package logger
 
-import "velox-worker-agent/pkg/obs"
+import obs "velox-shared/obs"
 
 // ── Event re-exports ───────────────────────────────────────────────────────
 

@@ -54,7 +54,7 @@ type Handler struct {
 	config      *HandlerConfig
 	authorizer  WorkerAuthorizer // P0: gates workers against VELOX_ALLOWED_WORKERS
 
-	mu             sync.Mutex
+	mu             sync.RWMutex
 	sessions       map[string]*workerSession // sessionID → active stream session
 	workerSessions map[string]string         // workerID → sessionID (for lookup)
 }
@@ -632,8 +632,8 @@ func (h *Handler) closeOldSessionLocked(workerID string) {
 // isCurrentSession returns true if the given sessionID is still the active
 // session for workerID. Used to drop messages from stale/zombie connections.
 func (h *Handler) isCurrentSession(workerID, sessionID string) bool {
-	h.mu.Lock()
-	defer h.mu.Unlock()
+	h.mu.RLock()
+	defer h.mu.RUnlock()
 	sid, ok := h.workerSessions[workerID]
 	return ok && sid == sessionID
 }
@@ -692,8 +692,8 @@ func safeSend(ch chan *outboundMessage, out *outboundMessage) bool {
 
 // getSession returns the active session for a workerID, or nil if none.
 func (h *Handler) getSession(workerID string) *workerSession {
-	h.mu.Lock()
-	defer h.mu.Unlock()
+	h.mu.RLock()
+	defer h.mu.RUnlock()
 	sid, ok := h.workerSessions[workerID]
 	if !ok {
 		return nil
