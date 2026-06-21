@@ -8,24 +8,23 @@
 //
 // Layout served:
 //
-//   sqlite/   — SQLite-cumulative migration files (38 .sql, evolution
-//               from 001_initial through 038_drop_jobs_raw_json).
-//   postgres/ — Postgres-native migration files (10 .sql, 001_initial
-//               through 010_drive). Consolidated Phase 2 artifacts +
-//               jobs PG DDLs were folded into 006_artifacts.sql and
-//               002_jobs.sql respectively; the previous Phase 2 PG
-//               files deleted in the platform/database migration.
+//   sqlite/   — SQLite-cumulative migration files (45 .sql, evolution
+//               from 001_initial through 045 — see migrations/sqlite/
+//               for the canonical ordering; per-version historical
+//               context lives in git log, not in this doc).
+//   postgres/ — Postgres-native migration files (10 .sql — see
+//               migrations/postgres/ for the canonical ordering; same
+//               per-version scope caveat as sqlite/).
 //
 // Accessors:
 //
 //   SQLiteMigrationsFS() — caller-facing accessor for the SQLite FS.
-//                         Embedded under sqlite/*.sql.
+//                         Embedded under sqlite/*.sql. Use this for
+//                         production boot paths and any new code
+//                         (the only callsite in DataServer is
+//                         internal/store/sqlite.go::NewSQLiteStoreFromHandle).
 //   PostgresMigrationsFS() — caller-facing accessor for the Postgres FS.
 //                           Embedded under postgres/*.sql.
-//   MigrationsFS — backward-compat alias returning the SQLite FS.
-//                  Pre-platform/database callers reached for this
-//                  var directly; it stays so old callers keep
-//                  compiling without re-test rewrites.
 package migrations
 
 import (
@@ -37,12 +36,6 @@ var sqliteRootFS embed.FS
 
 //go:embed postgres/*.sql
 var postgresRootFS embed.FS
-
-// MigrationsFS is provided by embed.go (the tracked file).
-// This file adds dialect-specific accessors for the two-backend world.
-//
-// New code should prefer SQLiteMigrationsFS() so the dialect intent is
-// explicit at the call site.
 
 // SQLiteMigrationsFS exposes the embedded SQLite migration files to
 // callers outside the migrations package (notably internal/store/sqlite.go

@@ -2,10 +2,12 @@
 //
 // PR 2 chunk 6: integration tests for the artifacts.Service trust boundary.
 //
-// Each test owns a file-backed SQLite DB in t.TempDir() with all 029
-// migrations applied (via migrations.RunMigrations against the embedded
-// store/migrations/*.sql), plus a FilesystemBlobStore rooted in temp
-// subdirs. Per-test isolation; no shared state.
+// Each test owns a file-backed SQLite DB in t.TempDir() with all
+// SQLite-schema migrations applied (via migrations.RunMigrations against
+// the recursive migrations/sqlite/*.sql embed exposed by
+// migrations.SQLiteMigrationsFS() — see migrations/runner.go), plus
+// a FilesystemBlobStore rooted in temp subdirs. Per-test isolation;
+// no shared state.
 
 package artifacts
 
@@ -89,7 +91,7 @@ func setupTestEnv(t *testing.T) *testEnv {
 	}
 	db.SetMaxOpenConns(4)
 
-	err = migrations.RunMigrations(db, migrations.MigrationsFS, ".")
+	err = migrations.RunMigrations(db, migrations.SQLiteMigrationsFS(), "sqlite")
 	require.NoError(t, err, "migrations.RunMigrations")
 
 	// Seed a delivery destination for FinalizeVerified tests.

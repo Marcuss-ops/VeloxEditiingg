@@ -187,11 +187,13 @@ func NewSQLiteStoreFromHandle(handle *database.Handle, path string, migrateOnSta
 		return s, nil
 	}
 
-	// Run schema migrations. The runner is idempotent (checksums +
+	// Run schema migrations through the dialect-aware accessors
+	// declared by migrations/runner.go (SQLiteMigrationsFS() +
+	// "sqlite" dir). The runner is idempotent (checksums +
 	// schema_migrations tracking prevent double-apply) so a caller
 	// that previously held the DB open sees no change on subsequent
 	// opens.
-	if err := migrations.RunMigrations(db, migrationsFS, "."); err != nil {
+	if err := migrations.RunMigrations(db, migrations.SQLiteMigrationsFS(), "sqlite"); err != nil {
 		return nil, fmt.Errorf("store: run migrations: %w", err)
 	}
 

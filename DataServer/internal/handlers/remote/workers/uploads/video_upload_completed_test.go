@@ -39,7 +39,7 @@ func TestUploadCompletedVideo_CanonicalPipeline(t *testing.T) {
 		}
 	}
 
-	if err := migrations.RunMigrations(db, migrations.MigrationsFS, "."); err != nil {
+	if err := migrations.RunMigrations(db, migrations.SQLiteMigrationsFS(), "sqlite"); err != nil {
 		t.Fatalf("migrations: %v", err)
 	}
 
@@ -200,7 +200,7 @@ func TestUploadCompletedVideo_BeginUploadRejected_MissingJob(t *testing.T) {
 			t.Fatalf("pragma: %v", err)
 		}
 	}
-	if err := migrations.RunMigrations(db, migrations.MigrationsFS, "."); err != nil {
+	if err := migrations.RunMigrations(db, migrations.SQLiteMigrationsFS(), "sqlite"); err != nil {
 		t.Fatalf("migrations: %v", err)
 	}
 
@@ -256,7 +256,7 @@ func TestUploadCompletedVideo_MissingVideo(t *testing.T) {
 			t.Fatalf("pragma: %v", err)
 		}
 	}
-	if err := migrations.RunMigrations(db, migrations.MigrationsFS, "."); err != nil {
+	if err := migrations.RunMigrations(db, migrations.SQLiteMigrationsFS(), "sqlite"); err != nil {
 		t.Fatalf("migrations: %v", err)
 	}
 

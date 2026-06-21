@@ -197,6 +197,24 @@ func applyMigration(db *sql.DB, m Migration) error {
 				strings.Contains(strings.ToLower(err.Error()), "no such column") {
 				continue
 			}
+			// Tolerate "duplicate column name" for ADD COLUMN — the column
+			// may have been added by a prior partial run (a previous
+			// transaction committed before INSERT INTO schema_migrations
+			// succeeded) or by a sister migration on a parallel dialect
+			// track. Concretely this unblocks the Path B rollout: any
+			// pre-Path-B production DB that already applied the legacy
+			// migrations/039_add_job_required_resource_columns.sql sees
+			// the duplicate-column error here on its first boot through
+			// migrations.SQLiteMigrationsFS(), where the renamed
+			// 045_add_job_required_resource_columns.sql replays the same
+			// ALTER TABLE ADD COLUMN. Without this pass-through those
+			// boots would abort with "duplicate column name:
+			// job_required_resource_class" and crash NewSQLiteStore.
+			if strings.Contains(strings.ToLower(stmt), "alter table") &&
+				strings.Contains(strings.ToLower(stmt), "add column") &&
+				strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
+				continue
+			}
 			return fmt.Errorf("execute migration: %w", err)
 		}
 	}

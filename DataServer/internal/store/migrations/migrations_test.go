@@ -38,11 +38,20 @@ func TestDiscoverMigrations_AllVersions(t *testing.T) {
 		t.Fatalf("discoverMigrations failed: %v", err)
 	}
 
-	if len(migs) != 38 {
-		t.Fatalf("expected 38 migrations, got %d", len(migs))
+	// Self-updating count: the test asserts that discoverMigrations
+	// returns at least one migration and that the FIRST 8 follow the
+	// canonical version/name ordering produced by the runner. No
+	// hardcoded count — the file count at migrations/ root can
+	// shrink/grow as files relocate onto the recursive
+	// migrations/sqlite/ embed track (Path B architectural push) or
+	// new migrations land at the root. Mirrors the dynamic pattern
+	// already used by TestRunMigrations_FullLifecycle, TestAppliedVersions,
+	// TestPendingVersions, and TestIntegration_MigrationRunner_EndToEnd.
+	if len(migs) == 0 {
+		t.Fatal("expected discoverMigrations to return at least one migration, got 0")
 	}
 
-	expected := []struct {
+	expectedFirst8 := []struct {
 		Version int
 		Name    string
 	}{
@@ -56,12 +65,16 @@ func TestDiscoverMigrations_AllVersions(t *testing.T) {
 		{8, "drop_legacy_tables"},
 	}
 
-	for i, exp := range expected {
-		if migs[i].Version != exp.Version {
-			t.Errorf("migration[%d] version: got %d, want %d", i, migs[i].Version, exp.Version)
+	compareLen := len(expectedFirst8)
+	if len(migs) < compareLen {
+		compareLen = len(migs)
+	}
+	for i := 0; i < compareLen; i++ {
+		if migs[i].Version != expectedFirst8[i].Version {
+			t.Errorf("migration[%d] version: got %d, want %d", i, migs[i].Version, expectedFirst8[i].Version)
 		}
-		if migs[i].Name != exp.Name {
-			t.Errorf("migration[%d] name: got %q, want %q", i, migs[i].Name, exp.Name)
+		if migs[i].Name != expectedFirst8[i].Name {
+			t.Errorf("migration[%d] name: got %q, want %q", i, migs[i].Name, expectedFirst8[i].Name)
 		}
 		if migs[i].Checksum == "" {
 			t.Errorf("migration[%d] checksum is empty", i)
@@ -471,6 +484,87 @@ func TestEnsureApplied_ChecksumMismatch(t *testing.T) {
 	err := EnsureApplied(db, mig)
 	if err == nil {
 		t.Fatal("expected checksum mismatch error, got nil")
+	}
+}
+
+// ============================================================
+// applyMigration per-statement tolerance tests
+// ============================================================
+
+// TestApplyMigration_DuplicateColumnTolerated verifies the "duplicate
+// column name" tolerance introduced in applyMigration for ALTER TABLE
+// ADD COLUMN statements. The tolerance unblocks the Path B rollout
+// path for any pre-Path-B production DB that already applied the
+// legacy migrations/039_add_job_required_resource_columns.sql against
+// its jobs table: when the renamed sibling
+// 045_add_job_required_resource_columns.sql (on the recursive
+// migrations/sqlite/ embed track) replays the ALTER TABLE ADD COLUMN
+// on next boot through SQLiteMigrationsFS(), the duplicate-column
+// error is treated as a no-op and the schema_migrations entry is
+// recorded instead of aborting the boot.
+func TestApplyMigration_DuplicateColumnTolerated(t *testing.T) {
+	db := openTestDB(t)
+
+	// applyMigration itself does NOT call EnsureSchemaTable — that's
+	// the caller's responsibility (RunMigrations / EnsureApplied both
+	// do it before delegating). For a direct unit test of the
+	// duplicate-column tolerance pathway we must pre-establish the
+	// tracking table ourselves.
+	if err := EnsureSchemaTable(db); err != nil {
+		t.Fatalf("ensure schema_migrations table: %v", err)
+	}
+
+	if _, err := db.Exec(`CREATE TABLE jobs (id TEXT PRIMARY KEY)`); err != nil {
+		t.Fatalf("create jobs table: %v", err)
+	}
+
+	mig := Migration{
+		Version:  901,
+		Name:     "test_dup_col",
+		SQL:      "ALTER TABLE jobs ADD COLUMN foo TEXT NOT NULL DEFAULT '';",
+		Checksum: "checksum_add_col",
+	}
+
+	if err := applyMigration(db, mig); err != nil {
+		t.Fatalf("first applyMigration (add column) failed: %v", err)
+	}
+
+	// Simulate the Path B rollout: production DBs have the legacy
+	// 039 record for the column additions. Force a replay by
+	// clearing the schema_migrations entry; applyMigration then
+	// re-executes the SQL and trips the duplicate-column tolerance.
+	if _, err := db.Exec(`DELETE FROM schema_migrations WHERE version = ?`, mig.Version); err != nil {
+		t.Fatalf("clear schema_migrations entry for replay: %v", err)
+	}
+
+	if err := applyMigration(db, mig); err != nil {
+		t.Fatalf("second applyMigration should tolerate 'duplicate column name: foo', got: %v", err)
+	}
+
+	// The ALTER TABLE was silently skipped by the tolerance, so the
+	// column still exists exactly once.
+	var colCount int
+	if err := db.QueryRow(
+		`SELECT COUNT(*) FROM pragma_table_info('jobs') WHERE name = 'foo'`,
+	).Scan(&colCount); err != nil {
+		t.Fatalf("pragma_table_info(jobs): %v", err)
+	}
+	if colCount != 1 {
+		t.Errorf("expected foo column to exist exactly once after replay, got count=%d", colCount)
+	}
+
+	// schema_migrations entry is re-recorded by the second apply
+	// (without the tolerance, the surrounding tx would have rolled
+	// back and the entry would still be missing).
+	var recordedChecksum string
+	if err := db.QueryRow(
+		`SELECT checksum FROM schema_migrations WHERE version = ?`,
+		mig.Version,
+	).Scan(&recordedChecksum); err != nil {
+		t.Fatalf("schema_migrations lookup after replay: %v", err)
+	}
+	if recordedChecksum != mig.Checksum {
+		t.Errorf("expected checksum %q after replay, got %q", mig.Checksum, recordedChecksum)
 	}
 }
 
