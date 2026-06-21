@@ -46,6 +46,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"velox-server/internal/costmodel"
 	"velox-server/internal/jobs"
 	"velox-server/internal/platform/database"
 )
@@ -944,4 +945,29 @@ func (r *PostgresJobRepository) Delete(ctx context.Context, id string) error {
 		return fmt.Errorf("postgres jobs: Delete %s: %w", id, err)
 	}
 	return nil
+}
+
+// ClaimNextForProfile is the cost-rank sibling of ClaimNext (PR-04.6).
+// Phase 2 does NOT implement the rank path on Postgres: the master
+// scheduler (push mode) ships with the SQLite-backed jobs store, and
+// the Postgres adapter is a Phase 2 mirror that preserves the narrow
+// contract but does not yet thread the per-job Requirements end-to-end
+// (the dedicated columns + JSON subobject asymmetry on PG would force a
+// separate schema migration that lands once Postgres is the primary
+// scheduler backend).
+//
+// Returning ErrNoClaimableJob here is the safe fallback — the dispatch
+// site treats this exactly as "nothing eligible" and the worker pulls
+// no job in this round; the next tick will retry via FIFO ClaimNext.
+// Phase 3 closes this gap; tracked separately from PR-04.6.
+//
+// Cycle-safety: costmodel only imports `strings`, so jobs → costmodel
+// (already established in PR-04.5) plus store → costmodel is forward-
+// only from this adapter and does not introduce a new module boundary.
+func (r *PostgresJobRepository) ClaimNextForProfile(ctx context.Context, workerID string, allowedJobTypes []string, profile costmodel.WorkerProfile, maxCandidates int) (*jobs.ClaimNextResult, error) {
+	_ = workerID
+	_ = allowedJobTypes
+	_ = profile
+	_ = maxCandidates
+	return nil, ErrNoClaimableJob
 }

@@ -75,6 +75,13 @@ type JobRequirements struct {
 	TemporalMode  TemporalMode
 	Deterministic bool
 	Cacheable     bool
+	// MinBandwidthMbps: PR-04.6-rank-side mirror. When > 0, Score()
+	// assigns BandwidthFit = 1 if (w.LinkBandwidthMbps > 0 AND
+	// w.LinkBandwidthMbps < j.MinBandwidthMbps). Legacy / unreported
+	// workers (w == 0) are treated as "unknown" and pass through with
+	// no penalty so the rank path preserves legacy routing for
+	// pre-PR-04.6 queue payloads.
+	MinBandwidthMbps float64
 }
 
 // DefaultRequirements returns the safe permissive default.
@@ -96,10 +103,16 @@ type WorkerProfile struct {
 	Deterministic   bool
 	Cacheable       bool
 	SupportsAlpha   bool
-	IsDraining      bool
-	IsOffline       bool
-	ActiveJobs      int
-	MaxConcurrent   int
+	// LinkBandwidthMbps: PR-04.6 mirror. Reported by the worker
+	// through capabilities["link_bandwidth_mbps"] (per executor or
+	// root). 0 means the worker has not yet published the field
+	// (legacy) and Score.BandwidthFit treats it as "unknown" =
+	// pass-through so pre-PR-04.6 workers are not penalized.
+	LinkBandwidthMbps float64
+	IsDraining        bool
+	IsOffline         bool
+	ActiveJobs        int
+	MaxConcurrent     int
 }
 
 // ── Cost + Explanation ───────────────────────────────────────────────────────
@@ -109,6 +122,11 @@ type Explanation struct {
 	LoadFactor          float64
 	DeterminismHit      float64
 	CacheableHint       float64
+	// BandwidthFit: PR-04.6 mirror. 0 when the worker link is
+	// sufficient OR unreported (legacy = unknown = pass-through);
+	// 1 when w.LinkBandwidthMbps > 0 AND w.LinkBandwidthMbps <
+	// j.MinBandwidthMbps (penalty, NOT rejection).
+	BandwidthFit        float64
 	ModeFit             float64
 	IneligibilityReason string
 }
@@ -158,7 +176,18 @@ func Score(w WorkerProfile, j JobRequirements) (Cost, Explanation) {
 		exp.LoadFactor = float64(w.ActiveJobs) / float64(w.MaxConcurrent)
 	}
 
-	score := exp.CapabilityFit + exp.LoadFactor + exp.DeterminismHit + exp.CacheableHint + exp.ModeFit
+	// 4. BandwidthFit (PR-04.6). Penalty (NOT rejection) when the
+	// job declares a MinBandwidthMbps > 0 and the worker reports
+	// a positive LinkBandwidthMbps strictly less than the minimum.
+	// Legacy / unreported workers (LinkBandwidthMbps == 0) are
+	// treated as "unknown" bandwidth and pass through so pre-04.6
+	// queue payloads keep today's routing.
+	if j.MinBandwidthMbps > 0 && w.LinkBandwidthMbps > 0 &&
+		w.LinkBandwidthMbps < j.MinBandwidthMbps {
+		exp.BandwidthFit = 1
+	}
+
+	score := exp.CapabilityFit + exp.LoadFactor + exp.DeterminismHit + exp.CacheableHint + exp.BandwidthFit + exp.ModeFit
 	return Cost{Eligible: true, Score: score}, exp
 }
 

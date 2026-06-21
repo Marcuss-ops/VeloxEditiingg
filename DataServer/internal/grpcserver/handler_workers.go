@@ -7,6 +7,7 @@ import (
 	"log"
 	"time"
 
+	"velox-server/internal/costmodel"
 	"velox-server/internal/jobs"
 	"velox-shared/controltransport"
 	pb "velox-shared/controltransport/pb"
@@ -156,8 +157,12 @@ func (h *Handler) sendPushJobOffer(ctx context.Context, workerID string) {
 	// Collect supported job types from worker capabilities for filtering.
 	allowedJobTypes := h.collectAllowedJobTypes(sess)
 
-	// PR15.5: ClaimNext via canonical jobs.Writer
-	claimResult, err := h.jobsRepo.ClaimNext(ctx, workerID, allowedJobTypes)
+	// PR-04.6: Cost-rank path. Score each pending candidate
+	// against this worker's profile and CAS-claim the lowest-scored
+	// (best-fit) candidate rather than FIFO. Performance is bounded
+	// to a 20-candidate pool so worst-case latency stays bounded.
+	profile := h.buildProfileForPush(ctx, workerID, sess)
+	claimResult, err := h.jobsRepo.ClaimNextForProfile(ctx, workerID, allowedJobTypes, profile, 20)
 	if err != nil {
 		log.Printf("[GRPC] ClaimNext failed for worker %s: %v", workerID, err)
 		return
@@ -263,6 +268,45 @@ func (h *Handler) sendPushJobOffer(ctx context.Context, workerID string) {
 
 	// Issue 4 fix: store the offer under claimMu so we can match JobAccepted.
 	sess.pendingOffer = job
+}
+
+// buildProfileForPush derives the canonical costmodel.WorkerProfile
+// for the (workerID, sess) pair used by sendPushJobOffer (PR-04.6).
+// Sources: registry (Capabilities: executors array carries
+// resource_class / temporal_mode / link_bandwidth_mbps; supported
+// for the legacy Synthesized{ResClass=ResourceCPU, ...} fallback
+// when capabilities has no executors), session atomic counters
+// (active jobs + max parallel jobs), status + drain flags from
+// registry WorkerInfo. Returns a value type so the score call
+// doesn't escape to the heap.
+//
+// When info == nil (worker not yet registered in the registry this
+// peer loop), BuildWorkerProfile is still called with the session
+// counters so the resulting profile has CPU/frame_local defaults and
+// the rank path stays safe against an un-registered worker.
+func (h *Handler) buildProfileForPush(ctx context.Context, workerID string, sess *workerSession) costmodel.WorkerProfile {
+	if sess == nil {
+		// Caller guard should have already returned, but be defensive.
+		return costmodel.BuildWorkerProfile(workerID, true, false, "online", 0, 0, nil)
+	}
+	info := h.registry.GetWorker(ctx, workerID)
+	caps := map[string]interface{}{}
+	schedulable, drain, status := true, false, "online"
+	if info != nil {
+		caps = info.Capabilities
+		schedulable = info.Schedulable
+		drain = info.Drain
+		status = info.Status
+	}
+	return costmodel.BuildWorkerProfile(
+		workerID,
+		schedulable,
+		drain,
+		status,
+		int(sess.activeJobsCount.Load()),
+		int(sess.maxParallelJobs.Load()),
+		caps,
+	)
 }
 
 // collectAllowedJobTypes extracts supported_job_types from the worker's

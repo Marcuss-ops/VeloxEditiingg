@@ -98,22 +98,31 @@ const requirementsJSONKey = "_requirements"
 // overwriting) the `_requirements` sub-object. The resulting map is
 // always serializable. Empty (default) requirements are still embedded
 // so the on-disk shape is stable across writers.
+//
+// PR-04.6: min_bandwidth_mbps is JSON-only (no column was added by
+// migration 039 — bandwidth requirements are rare enough today that
+// keeping them inside the sub-object is acceptable; future PRs may
+// promote them to a dedicated column if SQL-level filtering becomes
+// load-bearing).
 func attachRequirementsToPayload(payload map[string]interface{}, req costmodel.JobRequirements) map[string]interface{} {
 	if payload == nil {
 		payload = make(map[string]interface{})
 	}
 	payload[requirementsJSONKey] = map[string]interface{}{
-		"resource_class": string(req.ResourceClass),
-		"temporal_mode":  string(req.TemporalMode),
-		"deterministic":  req.Deterministic,
-		"cacheable":      req.Cacheable,
+		"resource_class":    string(req.ResourceClass),
+		"temporal_mode":     string(req.TemporalMode),
+		"deterministic":     req.Deterministic,
+		"cacheable":         req.Cacheable,
+		"min_bandwidth_mbps": req.MinBandwidthMbps,
 	}
 	return payload
 }
 
 // requirementsFromPayload reads the `_requirements` sub-object out of a
 // parsed payload map. Used by toJobsJob as a fallback when the dedicated
-// columns are blank (pre-PR-04.5 rows).
+// columns are blank (pre-PR-04.5 rows) and by ClaimNextPendingJobForWorker
+// for the rank-side filters that have no dedicated column yet
+// (deterministic / cacheable / min_bandwidth_mbps).
 func requirementsFromPayload(payload map[string]interface{}) costmodel.JobRequirements {
 	if payload == nil {
 		return costmodel.DefaultRequirements()
@@ -134,6 +143,9 @@ func requirementsFromPayload(payload map[string]interface{}) costmodel.JobRequir
 	}
 	if v, ok := raw["cacheable"].(bool); ok {
 		req.Cacheable = v
+	}
+	if v, ok := raw["min_bandwidth_mbps"].(float64); ok {
+		req.MinBandwidthMbps = v
 	}
 	return req
 }
@@ -604,15 +616,20 @@ func reconstructRequirements(sj *JobRecord) costmodel.JobRequirements {
 		return costmodel.DefaultRequirements()
 	}
 	// Columns present: authoritative for resource_class and temporal_mode.
-	// Deterministic + Cacheable are JSON-only \u2014 pick them up from the blob
-	// to fill the rank-side two booleans (PR-04.6 consumes them).
+	// Deterministic + Cacheable + MinBandwidthMbps are JSON-only
+	// \u2014 pick them up from the blob so the rank-side three
+	// fields read correctly end-to-end (PR-04.6: this is the
+	// critical reader-path fix that keeps Job.Requirements on the
+	// dispatched JobOffer consistent with the rank-side selection
+	// that picked it).
 	parsed := jobs.ParsePayloadJSON(sj.PayloadJSON)
 	jsonReq := requirementsFromPayload(parsed)
 	return costmodel.JobRequirements{
-		ResourceClass: costmodel.ResourceClass(rc),
-		TemporalMode:  costmodel.TemporalMode(tm),
-		Deterministic: jsonReq.Deterministic,
-		Cacheable:     jsonReq.Cacheable,
+		ResourceClass:    costmodel.ResourceClass(rc),
+		TemporalMode:     costmodel.TemporalMode(tm),
+		Deterministic:    jsonReq.Deterministic,
+		Cacheable:        jsonReq.Cacheable,
+		MinBandwidthMbps: jsonReq.MinBandwidthMbps,
 	}
 }
 
@@ -822,6 +839,64 @@ func (r *SQLiteJobRepository) ClaimNext(ctx context.Context, workerID string, al
 		LeaseID:      result.LeaseID,
 		LeaseExpires: result.LeaseExpires,
 	}, nil
+}
+
+// ClaimNextForProfile is the cost-rank sibling of ClaimNext
+// (PR-04.6). Instead of FIFO across PENDING jobs, it loads up to
+// maxCandidates PENDING jobs whose job_type matches
+// allowedJobTypes, scores each against the supplied
+// costmodel.WorkerProfile using costmodel.Score, filters
+// Eligible=true, and CAS-claims the lowest-scored (best-fit)
+// candidate. Race-safe: if the CAS fails for the top-scored
+// candidate (another worker raced the row), the runner-up is
+// tried in Score-sorted order.
+//
+// Returns ErrNoClaimableJob when nothing is eligible OR every CAS
+// attempt failed. maxCandidates is clamped to [1, 100]; default 20.
+func (r *SQLiteJobRepository) ClaimNextForProfile(
+	ctx context.Context,
+	workerID string,
+	allowedJobTypes []string,
+	profile costmodel.WorkerProfile,
+	maxCandidates int,
+) (*jobs.ClaimNextResult, error) {
+	resultJSON, ok, err := r.store.ClaimNextPendingJobForWorker(ctx, workerID, allowedJobTypes, profile, maxCandidates, time.Time{})
+	if err != nil {
+		if errors.Is(err, ErrNoClaimableJob) {
+			return nil, err
+		}
+		return nil, fmt.Errorf("claim next for profile: %w", err)
+	}
+	if !ok {
+		return nil, ErrNoClaimableJob
+	}
+	// Parse result_json (the rank path emits the same shape as the
+	// FIFO path's ClaimNextPendingJob so this parser is byte-for-byte
+	// equivalent to the lowercase `claimNext` parsing block).
+	out := &jobs.ClaimNextResult{}
+	var parsed map[string]interface{}
+	if err := json.Unmarshal(resultJSON, &parsed); err == nil {
+		if id, ok := parsed["job_id"].(string); ok {
+			out.JobID = id
+		}
+		if lease, ok := parsed["lease_id"].(string); ok {
+			out.LeaseID = lease
+		}
+		switch a := parsed["attempt"].(type) {
+		case float64:
+			out.Attempt = int(a)
+		case int:
+			out.Attempt = a
+		case int64:
+			out.Attempt = int(a)
+		}
+		if leaseStr, ok := parsed["lease_expiry"].(string); ok && leaseStr != "" {
+			if t, perr := time.Parse(time.RFC3339, leaseStr); perr == nil {
+				out.LeaseExpires = t
+			}
+		}
+	}
+	return out, nil
 }
 
 // ReleaseLease resets a LEASED/RUNNING job back to PENDING without retry increment.

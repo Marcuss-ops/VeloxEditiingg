@@ -295,3 +295,128 @@ func TestScore_LoadFactor(t *testing.T) {
 		t.Fatalf("LoadFactor not monotonic with load: e0=%v e3=%v", e0.LoadFactor, e3.LoadFactor)
 	}
 }
+
+// ── Bandwidth math (PR-04.6) ────────────────────────────────────────────────
+
+// TestScore_BandwidthSufficient_PR04_6: worker link meets the
+// job's MinBandwidthMbps -> BandwidthFit stays at 0, score stays
+// at 0. Mirrors CapabilityFit's degraded-fallback convention for
+// "tolerable" by being clean here for "sufficient".
+func TestScore_BandwidthSufficient_PR04_6(t *testing.T) {
+	w := WorkerProfile{ResourceClass: ResourceCPU, TemporalMode: TemporalFrameLocal, LinkBandwidthMbps: 1000}
+	j := JobRequirements{ResourceClass: ResourceCPU, TemporalMode: TemporalFrameLocal, MinBandwidthMbps: 500}
+	c, exp := Score(w, j)
+	if !c.Eligible {
+		t.Fatalf("sufficient bandwidth should remain eligible, exp=%+v", exp)
+	}
+	if exp.BandwidthFit != 0 {
+		t.Fatalf("BandwidthFit=%v, want 0 (sufficient)", exp.BandwidthFit)
+	}
+	if c.Score != 0 {
+		t.Fatalf("clean score=0 expected, got %v", c.Score)
+	}
+}
+
+// TestScore_BandwidthInsufficient_PR04_6: worker link is positive
+// but below the job's MinBandwidthMbps -> BandwidthFit = 1
+// (penalty, NOT rejection).
+func TestScore_BandwidthInsufficient_PR04_6(t *testing.T) {
+	w := WorkerProfile{ResourceClass: ResourceCPU, TemporalMode: TemporalFrameLocal, LinkBandwidthMbps: 50}
+	j := JobRequirements{ResourceClass: ResourceCPU, TemporalMode: TemporalFrameLocal, MinBandwidthMbps: 100}
+	c, exp := Score(w, j)
+	if !c.Eligible {
+		t.Fatalf("under-bandwidth worker is tolerable (penalty, not reject), exp=%+v", exp)
+	}
+	if exp.BandwidthFit != 1 {
+		t.Fatalf("BandwidthFit=%v, want 1 (under-bandwidth penalty)", exp.BandwidthFit)
+	}
+	if c.Score != 1 {
+		t.Fatalf("score=%v, want 1 (penalty-only)", c.Score)
+	}
+}
+
+// TestScore_BandwidthBothZero_PR04_6: legacy job (MinBandwidthMbps=0)
+// + legacy worker (LinkBandwidthMbps=0) -> BandwidthFit stays at 0.
+func TestScore_BandwidthBothZero_PR04_6(t *testing.T) {
+	w := WorkerProfile{ResourceClass: ResourceCPU, TemporalMode: TemporalFrameLocal}
+	j := JobRequirements{ResourceClass: ResourceCPU, TemporalMode: TemporalFrameLocal}
+	c, exp := Score(w, j)
+	if !c.Eligible {
+		t.Fatalf("default-zero bandwidth should be eligible, exp=%+v", exp)
+	}
+	if exp.BandwidthFit != 0 {
+		t.Fatalf("BandwidthFit=%v, want 0", exp.BandwidthFit)
+	}
+}
+
+// TestScore_BandwidthLegacyWorker_PR04_6: A worker that hasn't
+// published link_bandwidth_mbps (w=0) MUST pass a MinBandwidthMbps
+// job without penalty -- pre-PR-04.6 workers must not be demoted by
+// the new score component.
+func TestScore_BandwidthLegacyWorker_PR04_6(t *testing.T) {
+	w := WorkerProfile{ResourceClass: ResourceCPU, TemporalMode: TemporalFrameLocal /* LinkBandwidthMbps=0 */}
+	j := JobRequirements{ResourceClass: ResourceCPU, TemporalMode: TemporalFrameLocal, MinBandwidthMbps: 1000}
+	c, exp := Score(w, j)
+	if !c.Eligible {
+		t.Fatalf("legacy worker (w.Link=0) must remain eligible for Min>0 jobs, exp=%+v", exp)
+	}
+	if exp.BandwidthFit != 0 {
+		t.Fatalf("BandwidthFit=%v on legacy worker, want 0 (pass-through)", exp.BandwidthFit)
+	}
+}
+
+// TestScore_BandwidthEqual_PR04_6: worker link exactly meets the
+// minimum -> BandwidthFit = 0 (>=, not strict).
+func TestScore_BandwidthEqual_PR04_6(t *testing.T) {
+	w := WorkerProfile{ResourceClass: ResourceCPU, TemporalMode: TemporalFrameLocal, LinkBandwidthMbps: 100}
+	j := JobRequirements{ResourceClass: ResourceCPU, TemporalMode: TemporalFrameLocal, MinBandwidthMbps: 100}
+	_, exp := Score(w, j)
+	if exp.BandwidthFit != 0 {
+		t.Fatalf("equal link/min: BandwidthFit=%v, want 0", exp.BandwidthFit)
+	}
+}
+
+// ── BuildWorkerProfile bandwidth merge (PR-04.6) ────────────────────────────
+
+// TestBuildWorkerProfile_BandwidthMerge: per-executor
+// link_bandwidth_mbps merges most-permissive (max) across the
+// executors array, mirroring the `max-wins` rule applied to
+// ResourceClass / TemporalMode.
+func TestBuildWorkerProfile_BandwidthMerge(t *testing.T) {
+	caps := map[string]interface{}{
+		"executors": []interface{}{
+			map[string]interface{}{
+				"resource_class":      "cpu",
+				"temporal_mode":       "frame_local",
+				"link_bandwidth_mbps": 100.0,
+			},
+			map[string]interface{}{
+				"resource_class":      "gpu",
+				"temporal_mode":       "global",
+				"link_bandwidth_mbps": 5000.0,
+			},
+		},
+	}
+	w := BuildWorkerProfile("w", true, false, "online", 0, 0, caps)
+	if w.LinkBandwidthMbps != 5000 {
+		t.Fatalf("merged LinkBandwidthMbps=%v, want 5000 (max-most-permissive)", w.LinkBandwidthMbps)
+	}
+}
+
+// TestBuildWorkerProfile_BandwidthLegacy: heartbeats that omit
+// `link_bandwidth_mbps` MUST leave LinkBandwidthMbps at 0 so Score
+// treats them as "unknown" = pass-through.
+func TestBuildWorkerProfile_BandwidthLegacy(t *testing.T) {
+	caps := map[string]interface{}{
+		"executors": []interface{}{
+			map[string]interface{}{
+				"resource_class": "cpu",
+				"temporal_mode":  "frame_local",
+			},
+		},
+	}
+	w := BuildWorkerProfile("legacy", true, false, "online", 0, 0, caps)
+	if w.LinkBandwidthMbps != 0 {
+		t.Fatalf("legacy profile LinkBandwidthMbps=%v, want 0", w.LinkBandwidthMbps)
+	}
+}

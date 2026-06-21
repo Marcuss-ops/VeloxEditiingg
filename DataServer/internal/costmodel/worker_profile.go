@@ -27,6 +27,14 @@ type WorkerProfile struct {
 	Cacheable     bool
 	SupportsAlpha bool
 
+	// LinkBandwidthMbps: PR-04.6. Reported by the worker through
+	// capabilities["link_bandwidth_mbps"] (per executor or root);
+	// merges most-permissive (max) across the executors array. 0
+	// means the worker has not yet published the field (legacy) and
+	// Score.BandwidthFit treats it as "unknown" = pass-through so
+	// pre-PR-04.6 workers are not penalized by the new component.
+	LinkBandwidthMbps float64
+
 	// Transient state, sourced from heartbeat / registry.
 	IsDraining   bool
 	IsOffline    bool
@@ -106,6 +114,17 @@ func mergeExecutorsInto(w *WorkerProfile, caps map[string]interface{}) {
 		}
 		if a, ok := m["supports_alpha"].(bool); ok && a {
 			w.SupportsAlpha = true
+		}
+		// PR-04.6: per-executor link_bandwidth_mbps (Mbps). Merge
+		// policy mirrors ResourceClass / TemporalMode: most-
+		// permissive wins (max across executors). A worker that does
+		// not publish the field on any executor keeps
+		// LinkBandwidthMbps == 0 ("unknown"); Score treats it as
+		// pass-through so today's routing is preserved.
+		if bw, ok := m["link_bandwidth_mbps"].(float64); ok && bw > 0 {
+			if bw > w.LinkBandwidthMbps {
+				w.LinkBandwidthMbps = bw
+			}
 		}
 	}
 }

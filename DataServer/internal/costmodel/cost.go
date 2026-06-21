@@ -91,6 +91,13 @@ type JobRequirements struct {
 	// Cacheable: PR-04.5-rank-only. Informationally surfaced through
 	// Explanation.CacheableHint.
 	Cacheable bool
+	// MinBandwidthMbps: PR-04.6-rank-side. When > 0, Score() assigns
+	// BandwidthFit = 1 if (w.LinkBandwidthMbps > 0 AND
+	// w.LinkBandwidthMbps < j.MinBandwidthMbps). Legacy / unreported
+	// workers (w == 0) are treated as "unknown" and pass through with
+	// no penalty so the rank path preserves legacy routing for
+	// pre-PR-04.6 queue payloads.
+	MinBandwidthMbps float64
 }
 
 // DefaultRequirements returns the safe, permissive default used at
@@ -124,6 +131,12 @@ type Explanation struct {
 	DeterminismHit float64
 	// CacheableHint: 0 here; reserved for PR-04.5 (cache-hit bonus).
 	CacheableHint float64
+	// BandwidthFit: PR-04.6. 0 when the worker link is sufficient OR
+	// unreported (legacy = unknown = pass-through); 1 when
+	// w.LinkBandwidthMbps > 0 AND w.LinkBandwidthMbps <
+	// j.MinBandwidthMbps (penalty, NOT rejection — preserves the
+	// "tolerable but penalized" convention set by CapabilityFit).
+	BandwidthFit float64
 	// ModeFit: 0 for exact match, 1 for fallback (reserved). PR-04.4
 	// is strict so ModeFit stays at 0 when eligible.
 	ModeFit float64
@@ -208,7 +221,18 @@ func Score(w WorkerProfile, j JobRequirements) (Cost, Explanation) {
 		exp.LoadFactor = float64(w.ActiveJobs) / float64(w.MaxParallel)
 	}
 
-	score := exp.CapabilityFit + exp.LoadFactor + exp.DeterminismHit + exp.CacheableHint + exp.ModeFit
+	// 4. BandwidthFit (PR-04.6). Penalty (NOT rejection) when the
+	// job declares a MinBandwidthMbps > 0 and the worker reports a
+	// positive LinkBandwidthMbps strictly less than the minimum.
+	// Legacy / unreported workers (LinkBandwidthMbps == 0) are
+	// treated as "unknown" bandwidth and pass through so pre-PR-04.6
+	// queue payloads keep today's routing.
+	if j.MinBandwidthMbps > 0 && w.LinkBandwidthMbps > 0 &&
+		w.LinkBandwidthMbps < j.MinBandwidthMbps {
+		exp.BandwidthFit = 1
+	}
+
+	score := exp.CapabilityFit + exp.LoadFactor + exp.DeterminismHit + exp.CacheableHint + exp.BandwidthFit + exp.ModeFit
 	return Cost{Eligible: true, Score: score}, exp
 }
 

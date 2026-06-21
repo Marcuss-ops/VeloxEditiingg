@@ -138,3 +138,72 @@ func TestScore_Reproductive_Mirror(t *testing.T) {
 		t.Fatalf("mirror: non-deterministic Explanation %+v vs %+v", e1, e2)
 	}
 }
+
+// ── Bandwidth math (PR-04.6 mirror) ─────────────────────────────────────────
+//
+// These vectors MUST byte-for-byte mirror the master-side tests in
+// DataServer/internal/costmodel/cost_test.go so the two packages
+// stay in lock-step per the "Duplicata in due" invariant.
+
+func TestScore_BandwidthSufficient_PR04_6_Mirror(t *testing.T) {
+	w := WorkerProfile{ResourceClass: ResourceCPU, TemporalMode: TemporalFrameLocal, LinkBandwidthMbps: 1000}
+	j := JobRequirements{ResourceClass: ResourceCPU, TemporalMode: TemporalFrameLocal, MinBandwidthMbps: 500}
+	c, exp := Score(w, j)
+	if !c.Eligible {
+		t.Fatalf("mirror: sufficient bandwidth should remain eligible, exp=%+v", exp)
+	}
+	if exp.BandwidthFit != 0 {
+		t.Fatalf("mirror: BandwidthFit=%v, want 0", exp.BandwidthFit)
+	}
+	if c.Score != 0 {
+		t.Fatalf("mirror: clean score=0, got %v", c.Score)
+	}
+}
+
+func TestScore_BandwidthInsufficient_PR04_6_Mirror(t *testing.T) {
+	w := WorkerProfile{ResourceClass: ResourceCPU, TemporalMode: TemporalFrameLocal, LinkBandwidthMbps: 50}
+	j := JobRequirements{ResourceClass: ResourceCPU, TemporalMode: TemporalFrameLocal, MinBandwidthMbps: 100}
+	c, exp := Score(w, j)
+	if !c.Eligible {
+		t.Fatalf("mirror: under-bandwidth tolerable (penalty), exp=%+v", exp)
+	}
+	if exp.BandwidthFit != 1 {
+		t.Fatalf("mirror: BandwidthFit=%v, want 1", exp.BandwidthFit)
+	}
+	if c.Score != 1 {
+		t.Fatalf("mirror: score=%v, want 1", c.Score)
+	}
+}
+
+func TestScore_BandwidthBothZero_PR04_6_Mirror(t *testing.T) {
+	w := WorkerProfile{ResourceClass: ResourceCPU, TemporalMode: TemporalFrameLocal}
+	j := JobRequirements{ResourceClass: ResourceCPU, TemporalMode: TemporalFrameLocal}
+	c, exp := Score(w, j)
+	if !c.Eligible {
+		t.Fatalf("mirror: default-zero bandwidth should be eligible, exp=%+v", exp)
+	}
+	if exp.BandwidthFit != 0 {
+		t.Fatalf("mirror: BandwidthFit=%v, want 0", exp.BandwidthFit)
+	}
+}
+
+func TestScore_BandwidthLegacyWorker_PR04_6_Mirror(t *testing.T) {
+	w := WorkerProfile{ResourceClass: ResourceCPU, TemporalMode: TemporalFrameLocal /* Link=0 */}
+	j := JobRequirements{ResourceClass: ResourceCPU, TemporalMode: TemporalFrameLocal, MinBandwidthMbps: 1000}
+	c, exp := Score(w, j)
+	if !c.Eligible {
+		t.Fatalf("mirror: legacy worker must remain eligible, exp=%+v", exp)
+	}
+	if exp.BandwidthFit != 0 {
+		t.Fatalf("mirror: BandwidthFit=%v on legacy worker, want 0", exp.BandwidthFit)
+	}
+}
+
+func TestScore_BandwidthEqual_PR04_6_Mirror(t *testing.T) {
+	w := WorkerProfile{ResourceClass: ResourceCPU, TemporalMode: TemporalFrameLocal, LinkBandwidthMbps: 100}
+	j := JobRequirements{ResourceClass: ResourceCPU, TemporalMode: TemporalFrameLocal, MinBandwidthMbps: 100}
+	_, exp := Score(w, j)
+	if exp.BandwidthFit != 0 {
+		t.Fatalf("mirror: equal link/min: BandwidthFit=%v, want 0", exp.BandwidthFit)
+	}
+}

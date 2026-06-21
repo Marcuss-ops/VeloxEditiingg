@@ -3,6 +3,8 @@ package jobs
 import (
 	"context"
 	"time"
+
+	"velox-server/internal/costmodel"
 )
 
 // Filter narrows list queries on the Reader surface.
@@ -102,6 +104,22 @@ type Writer interface {
 	// ClaimNext atomically claims the next PENDING job for a worker.
 	// Returns (nil, ErrNoClaimableJob) when nothing matches.
 	ClaimNext(ctx context.Context, workerID string, allowedJobTypes []string) (*ClaimNextResult, error)
+
+	// ClaimNextForProfile is the cost-rank path (PR-04.6). It loads
+	// up to maxCandidates PENDING jobs whose job_type matches
+	// allowedJobTypes, scores each against the supplied
+	// costmodel.WorkerProfile, filters Eligible=true, and CAS-claims
+	// the lowest-scored (best-fit) candidate.
+	//
+	// Race-safe: if the CAS fails for the top-scored candidate
+	// (e.g., another worker raced the row), the runner-up is tried
+	// in Score-sorted order. Returns ErrNoClaimableJob only when no
+	// candidate was eligible OR every CAS attempt failed.
+	//
+	// maxCandidates > 100 is clamped to 100 for safety; <= 0
+	// defaults to 20 (covers the typical pending backlog while
+	// keeping the per-worker dispatch path bounded).
+	ClaimNextForProfile(ctx context.Context, workerID string, allowedJobTypes []string, profile costmodel.WorkerProfile, maxCandidates int) (*ClaimNextResult, error)
 
 	// ReleaseLease atomically resets a LEASED/RUNNING job back to
 	// PENDING without incrementing retry count. Clears lease fields.

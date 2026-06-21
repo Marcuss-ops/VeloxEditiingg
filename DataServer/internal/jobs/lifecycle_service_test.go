@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"velox-server/internal/costmodel"
 	"velox-server/internal/platform/clock"
 )
 
@@ -54,6 +55,20 @@ func (s *stubImpl) RecordRenderFinished(ctx context.Context, id, workerID, lease
 	return errNotImplemented
 }
 func (s *stubImpl) Delete(ctx context.Context, id string) error { return errNotImplemented }
+
+// PR-04.6: cost-rank sibling of ClaimNext. stub returns the sentinel
+// so test code that exercises the rank path branches without the rank
+// backend in place stays green; the real impl lives on SQLite (and
+// Postgres returns ErrNoClaimableJob in Phase 2). Profile parameter
+// typed as interface{} so this test stub does not need to import
+// costmodel — it never inspects the value.
+func (s *stubImpl) ClaimNextForProfile(ctx context.Context, workerID string, allowedJobTypes []string, profile costmodel.WorkerProfile, maxCandidates int) (*ClaimNextResult, error) {
+	_ = workerID
+	_ = allowedJobTypes
+	_ = profile
+	_ = maxCandidates
+	return nil, errNotImplemented
+}
 
 var errNotImplemented = errors.New("not implemented")
 
