@@ -32,10 +32,11 @@ var errScriptHandlerNotConfigured = errors.New("script handler sqliteDB not conf
 // global and the legacy free-function EnqueueSceneVideoJob. Constructed
 // once at composition-root (cmd/server/bootstrap) and threaded through.
 type ScriptHandlers struct {
-	enqueuer *enqueue.Enqueuer
-	sqliteDB *store.SQLiteStore
-	dataDir  string
-	creator  *creatorflow.Service
+	enqueuer      *enqueue.Enqueuer
+	sqliteDB      *store.SQLiteStore
+	dataDir       string
+	driveResolver store.DriveFolderResolver
+	creator       *creatorflow.Service
 }
 
 func NewScriptHandlers(cfg *config.Config, sqliteDB *store.SQLiteStore, enqueuer *enqueue.Enqueuer) *ScriptHandlers {
@@ -48,9 +49,10 @@ func NewScriptHandlers(cfg *config.Config, sqliteDB *store.SQLiteStore, enqueuer
 		driveResolver = store.NewSQLiteDriveFolderResolver(sqliteDB)
 	}
 	return &ScriptHandlers{
-		enqueuer: enqueuer,
-		sqliteDB: sqliteDB,
-		dataDir:  dataDir,
+		enqueuer:      enqueuer,
+		sqliteDB:      sqliteDB,
+		dataDir:       dataDir,
+		driveResolver: driveResolver,
 		// creatorflow.New takes (cfg, enqueuer, driveResolver) post-DB-extraction:
 		// the resolver is required so BuildSceneImagePayloadForMaster can
 		// resolve drive_master_folders aliases without opening its own DB.
@@ -111,11 +113,7 @@ func (h *ScriptHandlers) GenerateWithImagesHandler(cfg *config.Config) gin.Handl
 			}
 		}
 
-		var driveResolver store.DriveFolderResolver
-		if h.sqliteDB != nil {
-			driveResolver = store.NewSQLiteDriveFolderResolver(h.sqliteDB)
-		}
-		normalized, err := enqueue.BuildSceneImagePayloadForMaster(payload, h.dataDir, cfg.Runtime.VideosDir, resolvedMasterURL, driveResolver)
+		normalized, err := enqueue.BuildSceneImagePayloadForMaster(payload, h.dataDir, cfg.Runtime.VideosDir, resolvedMasterURL, h.driveResolver)
 		if err != nil {
 			if assetErr, ok := voiceoverassets.AsAcquisitionError(err); ok {
 				c.JSON(http.StatusUnprocessableEntity, gin.H{

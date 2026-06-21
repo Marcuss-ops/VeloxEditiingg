@@ -70,6 +70,15 @@ func NewService(repo Repository, finRepo FinalizationRepository, blobStore store
 	if finRepo == nil {
 		panic("artifacts: NewService requires a non-nil FinalizationRepository (sole writer of jobs.status='SUCCEEDED')")
 	}
+	if jobsRepo == nil {
+		panic("artifacts: NewService requires a non-nil jobs.Repository")
+	}
+	if artifactRepo == nil {
+		panic("artifacts: NewService requires a non-nil store.ArtifactRepository")
+	}
+	if blobStore == nil {
+		panic("artifacts: NewService requires a non-nil BlobStore")
+	}
 	return &Service{
 		repo:         repo,
 		finRepo:      finRepo,
