@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"velox-shared/controltransport"
+	"velox-worker-agent/internal/executor"
 	"velox-worker-agent/internal/telemetry"
 	"velox-worker-agent/pkg/api"
 	"velox-worker-agent/pkg/config"
@@ -201,8 +202,20 @@ func shouldUploadCompletedVideo(job *api.Job, output map[string]interface{}) boo
 }
 
 // runJobTask executes the actual job task.
-// runJobTask seleziona ed esegue il task appropriato in base a job.JobType.
-// Job types supportati: render, process_video, process_audio, health_check.
+//
+// PR-3.8 dispatch surface: the legacy render / process_video /
+// process_audio switch was REPLACED with a single TaskRunner
+// dispatch that resolves the executor by job.JobType through the
+// worker's executor.Registry. Health-check stays as an explicit,
+// registry-free branch (out of PR-3.5 / PR-3.8 scope: master polls
+// the worker's health at registration time and the response payload
+// is intentionally minimal — adding it to the executor catalog would
+// conflict with master-side health semantics).
+//
+// "render" / "process_video" / "process_audio" still resolve via the
+// registry; existing jobs keep working once the corresponding
+// executors are registered (PR-3.9 lands the scene.composite.v1
+// real implementation).
 func (w *Worker) runJobTask(ctx context.Context, job *api.Job) (map[string]interface{}, error) {
 	w.logger.Info("[JOB] Starting execution: id=%s type=%s", job.JobID, job.JobType)
 
@@ -214,21 +227,80 @@ func (w *Worker) runJobTask(ctx context.Context, job *api.Job) (map[string]inter
 	defer cancel()
 
 	switch job.JobType {
-	case "render":
-		w.logger.Info("[JOB] Phase: render pipeline")
-		return w.runRenderJob(jobCtx, job)
-	case "process_video":
-		w.logger.Info("[JOB] Phase: video pipeline")
-		return w.runVideoJob(jobCtx, job)
-	case "process_audio":
-		w.logger.Info("[JOB] Phase: audio pipeline")
-		return w.runAudioJob(jobCtx, job)
 	case "health_check":
 		w.logger.Info("[JOB] Phase: health_check")
 		return map[string]interface{}{"status": "healthy", "worker_id": w.config.WorkerID}, nil
 	default:
-		return nil, fmt.Errorf("unknown job type: %s", job.JobType)
+		w.logger.Info("[JOB] Phase: registry dispatch for type=%s", job.JobType)
+		return w.dispatchTaskRunner(jobCtx, job)
 	}
+}
+
+// dispatchTaskRunner resolves job.JobType as the executor ID with
+// version 1 and runs the corresponding Executor through the worker's
+// TaskRunner (PR-3.8). It is the single dispatch entry point after
+// the health_check carve-out and the canonical surface for every
+// future executor registration.
+//
+// Mapping rules:
+//
+//   - job.JobType      → executor.TaskSpec.ExecutorID (trimmed).
+//   - Version          → always 1 today; promoted to a per-job value
+//     once the master starts announcing ExecutorIDs
+//     with embedded versions (PR-1 contracts).
+//   - job.Parameters   → executor.TaskSpec.Payload (verbatim).
+//
+// Output shape: a single map[string]interface{} matching the legacy
+// executeWorkflowJob contract so the downstream upload pipeline
+// (shouldUploadCompletedVideo → uploadCompletedVideo) works without
+// modification. PR-3.9 promotes multi-output tasks to publish every
+// ArtifactRef via the master-side transport.
+//
+// Errors:
+//   - Nil taskRunner — defensive-only; New() always builds one, this
+//     surfaces worker-bootstrap bugs instead of silently routing
+//     through the registry miss path.
+//   - TaskRunner.Run returning (report, err) at the program-fault
+//     level — wrapped with %w.
+//   - report.Status != "succeeded" — formatted with code+detail so
+//     executeJob's execErr path surfaces a sane error message.
+func (w *Worker) dispatchTaskRunner(ctx context.Context, job *api.Job) (map[string]interface{}, error) {
+	if w.taskRunner == nil {
+		return nil, fmt.Errorf("worker has no taskRunner configured; call worker.New with options to install one")
+	}
+	spec := executor.TaskSpec{
+		Version:    1,
+		JobID:      job.JobID,
+		ExecutorID: strings.TrimSpace(job.JobType),
+		Payload:    job.Parameters,
+	}
+	report, runErr := w.taskRunner.Run(ctx, spec)
+	if runErr != nil {
+		return nil, fmt.Errorf("taskrunner.Run: %w", runErr)
+	}
+	if report.Status != "succeeded" {
+		// Registry miss maps to CodeUnsupportedExecutor via the runner;
+		// executor-side failures land here with their canonical code.
+		return nil, fmt.Errorf("executor %s failed: code=%q detail=%q",
+			report.ExecutorKey, report.ErrorCode, report.ErrorDetail)
+	}
+	out := map[string]interface{}{
+		"status":       "completed",
+		"job_id":       job.JobID,
+		"executor_id":  job.JobType,
+		"executor_key": report.ExecutorKey,
+		"phase_count":  len(report.PhaseMarkers),
+	}
+	if len(report.Outputs) > 0 {
+		// Preserve legacy "output_path" semantics so the downstream
+		// upload pipeline in executeJob (shouldUploadCompletedVideo
+		// → uploadCompletedVideo) continues to operate without
+		// modification. The richer ArtifactRefs are surfaced to the
+		// master via the TaskExecutionReport (PR-3.9 wires this).
+		out["output_path"] = report.Outputs[0].URI
+		out["output_hash"] = report.Outputs[0].Hash
+	}
+	return out, nil
 }
 
 // executeWorkflowJob is a shared implementation for render/video/audio jobs.
