@@ -1,62 +1,82 @@
-# PR 1 - Task contracts and observability
+# PR 1 - Canonical tasks and execution telemetry
 
-## PR metadata
+## Metadata
 
-Title:
+Title: `feat(tasks): add canonical task lifecycle and execution reports`
+
+Branch: `codex/task-contracts-observability`
+
+Depends on: current `origin/main` passing the baseline verification gate.
+
+## Current state to reuse
+
+Already present:
+
+- canonical `jobs.Job`, repository, revision and lease fields;
+- SQLite repositories and migrations;
+- outbox and artifact finalization;
+- gRPC-only WorkerControl stream;
+- worker job telemetry;
+- background supervisor;
+- worker RenderPlan/pipeline execution.
+
+Not present:
 
 ```text
-feat(tasks): add task contracts and execution telemetry
+internal/taskgraph
+internal/taskattempts
+internal/observability
+TaskExecutionReport transport
+task/attempt migrations
+phase-level metrics
+job -> initial task integration
 ```
 
-Branch:
-
-```text
-codex/task-contracts-observability
-```
-
-Depends on: current `main` compiling and `make verify` passing.
-
-If `main` still fails because `internal/platform/database` is missing, do not hide that repair inside this PR. Restore the canonical database package first, verify `main`, then start this branch.
+Do not create `internal/obs`. Do not copy the stale `internal/obs/models.go` prototype from older branches.
 
 ## Goal
 
-Introduce the domain contracts and measurements required for distributed execution without changing current rendering behavior.
+Introduce one canonical Task domain and one canonical TaskAttempt domain without changing visual output or worker placement.
 
-At the end of this PR:
-
-- one existing render job still executes as before;
-- that execution is represented as one canonical task;
-- each attempt reports phase timings and resource/byte counters;
-- the master persists task and attempt state through repositories;
-- no scheduling or sharding behavior changes yet.
-
-## Allowed scope
-
-Create or modify only:
+At merge:
 
 ```text
-DataServer/internal/taskgraph/**
-DataServer/internal/taskattempts/**
-DataServer/internal/observability/**
-DataServer/internal/store/migrations/**
-DataServer/cmd/server/bootstrap*.go
-DataServer/internal/jobs/** only for task creation integration
-RemoteCodex/native/worker-agent-go/internal/telemetry/**
-RemoteCodex/native/worker-agent-go/internal/worker/** only for report wiring
-shared/** only for versioned task/report contracts
-scripts/ci/** only for architecture guards
-README/docs ownership files when required
+one current Job
+  -> one persistent Task
+  -> one persistent TaskAttempt per execution
+  -> one typed final TaskExecutionReport
+  -> existing verified artifact finalization
 ```
 
-Do not modify renderer output, FFmpeg behavior, node graph semantics, asset downloading, or worker assignment policy.
+This PR does not introduce multiple tasks per job, dependency scheduling or temporal sharding.
 
-## Required model
+## Package ownership
 
-### Task
+```text
+DataServer/internal/taskgraph
+  Task model, validation, lifecycle, repository interfaces.
 
-Create a canonical task model owned by `DataServer/internal/taskgraph`.
+DataServer/internal/taskattempts
+  Attempt model, report ingestion, repository interfaces.
 
-Minimum fields:
+DataServer/internal/observability
+  Read-only aggregation and diagnostics.
+
+DataServer/internal/store
+  SQLite implementations and cross-domain transaction coordinator.
+
+proto/velox/control + shared/controltransport
+  Versioned worker transport contract.
+
+RemoteCodex/.../internal/telemetry
+  Monotonic local phase timing and resource counters.
+```
+
+No other package may mutate task or attempt state.
+
+## Canonical Task contract
+
+Minimum semantic fields:
 
 ```go
 type Task struct {
@@ -64,15 +84,17 @@ type Task struct {
     JobID           string
     ProjectID       string
     RenderPlanID    string
-    Type            string
-    Version         int
+    ExecutorID      string
+    ExecutorVersion int
     Status          Status
-    Dependencies    []string
-    InputArtifacts  []ArtifactRef
-    OutputSpecs     []ArtifactSpec
-    Requirements    ResourceRequirements
-    EstimatedCost   CostEstimate
+    Priority        int
     Revision        int
+    AttemptCount    int
+    WorkerID        string
+    LeaseID         string
+    ReadyAt         *time.Time
+    StartedAt       *time.Time
+    CompletedAt     *time.Time
     CreatedAt       time.Time
     UpdatedAt       time.Time
 }
@@ -90,11 +112,17 @@ FAILED
 CANCELLED
 ```
 
-Do not reuse job status constants when task semantics differ.
+Rules:
 
-### TaskAttempt
+- identity and executor selection are immutable after publication;
+- status changes only through `taskgraph.LifecycleService`;
+- every mutation uses optimistic revision checks;
+- lease ownership is checked on worker-originated changes;
+- the Task never stores arbitrary unvalidated maps as its canonical spec.
 
-Create a separate attempt model owned by `DataServer/internal/taskattempts`.
+A typed versioned TaskSpec may be serialized for transport/storage, but it must be validated before persistence and accompanied by a deterministic `spec_hash`. Query-critical fields remain explicit columns.
+
+## Canonical TaskAttempt contract
 
 Minimum fields:
 
@@ -105,18 +133,38 @@ type TaskAttempt struct {
     AttemptNumber   int
     WorkerID        string
     LeaseID         string
-    Status          string
-    StartedAt       time.Time
-    CompletedAt     time.Time
-    Metrics         ExecutionMetrics
+    Status          AttemptStatus
+    StartedAt       *time.Time
+    CompletedAt     *time.Time
     ErrorCode       string
     ErrorMessage    string
+    ReportVersion   int
+    CreatedAt       time.Time
+    UpdatedAt       time.Time
 }
 ```
 
-### Canonical execution phases
+Attempt status:
 
-Use an enum/shared constants for:
+```text
+PENDING
+RUNNING
+SUCCEEDED
+FAILED
+CANCELLED
+```
+
+Rules:
+
+- unique `(task_id, attempt_number)`;
+- at most one active attempt for a task lease;
+- duplicate final reports are idempotent;
+- stale worker/lease reports are rejected;
+- an attempt report cannot mark the parent Job successful.
+
+## Canonical telemetry
+
+Production phase names are fixed:
 
 ```text
 queue
@@ -133,112 +181,138 @@ upload
 finalize
 ```
 
-No arbitrary strings outside this list in production code.
+Worker durations are measured using a monotonic local clock. Do not calculate phase durations from timestamps produced on different hosts.
 
-### TaskExecutionReport
+Store typed metrics:
 
-Add a versioned shared transport contract.
-
-Minimum payload:
-
-```go
-type TaskExecutionReport struct {
-    ContractVersion int
-    TaskID          string
-    AttemptID       string
-    WorkerID        string
-    Status          string
-    PhaseTimings    []PhaseTiming
-    Counters        ExecutionCounters
-    Resources       ResourceUsage
-    Error           *ExecutionError
-}
+```text
+phase duration_ms
+input_bytes
+output_bytes
+bytes_from_drive
+bytes_from_blobstore
+bytes_from_local_cache
+cpu_time_ms
+gpu_time_ms
+peak_rss_bytes
+peak_vram_bytes
 ```
 
-The master validates the contract version and owns persistence.
+GPU fields remain optional/zero on CPU-only workers.
+
+## Database shape
+
+Use forward-only migrations.
+
+Required tables:
+
+```text
+tasks
+task_specs
+task_attempts
+task_phase_timings
+task_attempt_metrics
+```
+
+`tasks` contains operational/queryable state.
+
+`task_specs` contains validated immutable versioned serialization plus `spec_hash`; it is not an opaque unvalidated parameter dump.
+
+`task_phase_timings` contains one row per canonical phase and attempt.
+
+`task_attempt_metrics` contains explicit typed counters. A JSON blob may be retained only as supplementary/debug data, never as the sole source.
 
 ## Operational TODO
 
-### PR 1.0 - Baseline gate
+### PR 1.0 - Clean baseline
 
-- [ ] Run `git fetch origin`.
-- [ ] Start from updated `origin/main`.
-- [ ] Run `make verify` before changing files.
-- [ ] Confirm no open PR already owns task contracts or telemetry.
-- [ ] Record the current job execution path and current worker report path.
-- [ ] Stop if baseline is red for unrelated reasons.
+- [ ] `git fetch origin` and start from updated `main`.
+- [ ] Run `make verify` before editing.
+- [ ] Remove the stale `bootstrap.go` comment claiming `internal/platform/database` is missing.
+- [ ] Inspect open PRs that touch bootstrap, artifacts, jobs, database or observability.
+- [ ] Close or rebase stale overlapping work; do not merge the old `internal/obs` prototype.
+- [ ] Keep any unrelated baseline repair in a separate minimal PR.
 
-### PR 1.1 - Add task graph contracts
+### PR 1.1 - Task domain
 
 - [ ] Create `internal/taskgraph/model.go`.
-- [ ] Create task status constants and legal transition table.
-- [ ] Create typed `ArtifactRef`, `ArtifactSpec`, `ResourceRequirements`, and `CostEstimate`.
-- [ ] Add validation for required IDs, positive versions, known statuses, and duplicate dependencies.
-- [ ] Reject self-dependencies.
-- [ ] Add unit tests for model validation and transitions.
+- [ ] Create typed status and legal transition table.
+- [ ] Create typed `ArtifactRef`, `ArtifactSpec`, `ResourceRequirements`, `TimeRange` and `CostEstimate` contracts for future PRs.
+- [ ] Add TaskSpec version validation and deterministic canonical serialization.
+- [ ] Add `taskgraph.Repository` and `taskgraph.LifecycleService` interfaces.
+- [ ] Reject empty IDs, invalid executor versions, invalid status, self-reference and mutable identity changes.
+- [ ] Add numeric transition/revision tests, not only no-crash tests.
 
-### PR 1.2 - Add task repository
+### PR 1.2 - Task persistence
 
-- [ ] Add canonical SQL migration for `tasks`.
-- [ ] Add canonical SQL migration for `task_dependencies` if dependencies are normalized.
-- [ ] Implement repository interfaces under `internal/taskgraph`.
-- [ ] Keep SQL implementation in the canonical persistence layer.
-- [ ] Use optimistic revision checks for task mutation.
-- [ ] Add repository tests for create, read, status transition, duplicate ID, and revision conflict.
-- [ ] Add one single-writer guard preventing direct task SQL updates from handlers/workers.
+- [ ] Add migrations for `tasks` and `task_specs`.
+- [ ] Implement the SQLite repository under the canonical persistence layer.
+- [ ] Add CAS revision updates.
+- [ ] Add indexes for job, status, executor, worker, lease and readiness timestamps.
+- [ ] Add tests for create/get/list, duplicate ID, immutable spec, revision conflict and lease mismatch.
+- [ ] Add CI single-writer guard for task tables.
 
-### PR 1.3 - Add task attempts
+### PR 1.3 - Attempt persistence
 
-- [ ] Add migration for `task_attempts`.
-- [ ] Store phase durations in explicit columns or a validated normalized table; do not store an unvalidated opaque metrics blob as the only source.
-- [ ] Implement attempt repository.
-- [ ] Enforce unique `(task_id, attempt_number)`.
-- [ ] Enforce one active attempt/lease per task according to lifecycle rules.
-- [ ] Add tests for idempotent report handling.
+- [ ] Add migrations for `task_attempts`, `task_phase_timings` and `task_attempt_metrics`.
+- [ ] Implement `taskattempts.Repository`.
+- [ ] Enforce attempt uniqueness and active-attempt constraints.
+- [ ] Persist final reports transactionally with task attempt completion.
+- [ ] Add tests for duplicate reports, stale reports and partial rollback.
 
-### PR 1.4 - Add worker-side phase timer
+### PR 1.4 - Atomic initial task creation
 
-- [ ] Replace whole-job-only measurement with a reusable `TaskSpan`/`PhaseTimer` abstraction.
-- [ ] Keep existing operational counters for backward-compatible monitoring.
-- [ ] Record monotonic durations, not wall-clock subtraction across hosts.
-- [ ] Record input/output bytes and local/network source bytes.
-- [ ] Record CPU time and peak RSS where available.
-- [ ] Keep GPU fields optional and zero when unsupported.
-- [ ] Add tests using an injected clock; do not use sleep-based assertions.
+- [ ] Keep `enqueue.Enqueuer` as the application entrypoint.
+- [ ] Add one store-level transaction coordinator that creates Job plus exactly one initial Task atomically.
+- [ ] Do not let handlers write task SQL.
+- [ ] Do not create a second enqueue service.
+- [ ] Add recovery/invariant test proving every newly enqueued render Job owns exactly one initial Task.
+- [ ] Preserve existing Job payload and visual output.
 
-### PR 1.5 - Add report transport and master ingestion
+### PR 1.5 - Worker phase timer
 
-- [ ] Add versioned `TaskExecutionReport` to the shared transport contract.
-- [ ] Add worker emission at task completion/failure.
-- [ ] Add master validation and repository persistence.
-- [ ] Make duplicate report delivery idempotent.
-- [ ] Reject reports for mismatched worker, attempt, or lease.
-- [ ] Do not let the worker directly mark the parent job successful.
+- [ ] Add `TaskSpan` and `PhaseTimer` using an injected monotonic clock.
+- [ ] Instrument the current whole-render path without changing renderer behavior.
+- [ ] Record every canonical phase, including zero durations where not applicable.
+- [ ] Record source bytes and resource usage.
+- [ ] Preserve existing Prometheus/job metrics for compatibility.
+- [ ] Add deterministic tests with fake clocks; no sleep-based assertions.
 
-### PR 1.6 - Wrap current render as one task
+### PR 1.6 - Typed transport report
 
-- [ ] When a job is enqueued, create one initial task representing current behavior.
-- [ ] Preserve existing job lifecycle and output.
-- [ ] Link the task output to the existing artifact finalization path.
-- [ ] Ensure job success still occurs only through the canonical artifact finalization service.
-- [ ] Add an integration test proving one job -> one task -> one attempt -> existing final artifact.
+- [ ] Add `TaskExecutionReport` to the canonical `.proto` source using a new unused field number.
+- [ ] Include contract version, task ID, attempt ID, worker ID, lease ID, status, phase timings, counters, resource usage and stable error.
+- [ ] Add task context fields to the current JobOffer bridge.
+- [ ] Mark that bridge with a compatibility owner and removal target in PR 3.
+- [ ] Regenerate protobuf outputs through the canonical generation command.
+- [ ] Worker emits exactly one final task report per attempt.
+- [ ] Master validates contract version, task, attempt, worker and lease before persistence.
 
-### PR 1.7 - Add project timing aggregation
+### PR 1.7 - Preserve finalization ownership
 
-- [ ] Add a read-only aggregation service under `internal/observability`.
-- [ ] Calculate wall-clock duration, total worker busy time, phase totals, retries, and byte sources.
-- [ ] Expose data through an internal/read-only endpoint or existing diagnostics module.
-- [ ] Do not add frontend work.
-- [ ] Add tests against fixed task-attempt fixtures.
+- [ ] Task success records execution completion only.
+- [ ] Artifact verification/finalization remains the sole writer of Job `SUCCEEDED`.
+- [ ] Link task output artifact IDs through the canonical artifact repository.
+- [ ] Ensure duplicate task report and duplicate artifact upload cannot double-finalize.
+- [ ] Add integration test: Job -> Task -> Attempt -> Artifact -> Job success.
 
-### PR 1.8 - Architecture documentation and guards
+### PR 1.8 - Read-only observability
 
-- [ ] Extend `docs/architecture/OWNERSHIP.md` with TaskGraph and TaskAttempt owners.
-- [ ] Extend CODEOWNERS if present.
-- [ ] Add CI guard against direct writes to task tables outside the canonical repository.
-- [ ] Add CI guard against free-form production phase names.
+- [ ] Create `internal/observability` aggregation service.
+- [ ] Report wall time, worker busy time, phase totals, retries and byte sources.
+- [ ] Expose bounded internal diagnostics only; no UI.
+- [ ] Use repositories, never direct SQL from handlers.
+- [ ] Add fixture-based aggregation tests.
 
-## Required tests
+### PR 1.9 - Ownership and guards
+
+- [ ] Extend `OWNERSHIP.md` for Task, TaskAttempt, report ingestion and diagnostics.
+- [ ] Update CODEOWNERS when present.
+- [ ] Add guard against `internal/obs` and duplicate task domains.
+- [ ] Add guard against direct task/attempt SQL outside repositories.
+- [ ] Add guard against free-form production phase identifiers.
+
+## Required verification
 
 ```bash
 cd DataServer
@@ -247,6 +321,8 @@ go test -race -count=1 ./internal/taskgraph/...
 go test -race -count=1 ./internal/taskattempts/...
 go test -race -count=1 ./internal/observability/...
 go test -race -count=1 ./internal/jobs/...
+go test -race -count=1 ./internal/artifacts/...
+go test -race -count=1 ./internal/grpcserver/...
 go test -race -count=1 ./cmd/server/...
 
 cd ../RemoteCodex/native/worker-agent-go
@@ -260,23 +336,16 @@ SKIP_HEAVY=1 make verify
 
 ## Acceptance criteria
 
-- [ ] Existing render output is unchanged.
-- [ ] One current job creates exactly one task.
-- [ ] Task state and attempt state are persisted in SQLite.
-- [ ] Worker reports all canonical phase fields, even when some durations are zero.
-- [ ] Duplicate reports do not create duplicate attempts or double-finalize work.
-- [ ] Parent job success still has one canonical writer.
-- [ ] No handler writes directly to task tables.
-- [ ] No JSON file or in-memory map becomes authoritative.
-- [ ] `SKIP_HEAVY=1 make verify` passes.
+- [ ] Current rendering output is unchanged.
+- [ ] Every new render Job owns exactly one persistent Task.
+- [ ] Every execution owns one persistent TaskAttempt.
+- [ ] Task/attempt state uses repositories and revision/lease checks.
+- [ ] Worker sends typed canonical phase metrics.
+- [ ] Duplicate/stale reports are harmless and rejected or idempotent.
+- [ ] Job success still has one artifact-finalization writer.
+- [ ] No `internal/obs`, second task queue or second lifecycle service exists.
+- [ ] `SKIP_HEAVY=1 make verify` passes after rebase on `origin/main`.
 
-## Explicitly out of scope
+## Out of scope
 
-- Multiple tasks per job.
-- Dependency scheduling.
-- Overlay prerendering.
-- Executor registry migration.
-- Cache-local scheduling.
-- Temporal sharding.
-- Cost-based worker selection.
-- UI/dashboard implementation.
+Multiple tasks per Job, dependency edges, late composition, executor registry migration, local cache scheduling, temporal sharding and cost-based placement.
