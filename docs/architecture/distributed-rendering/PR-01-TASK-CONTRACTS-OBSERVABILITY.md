@@ -83,7 +83,7 @@ type Task struct {
     ID              string
     JobID           string
     ProjectID       string
-    RenderPlanID    string
+    ExecutionPlanID string
     ExecutorID      string
     ExecutorVersion int
     Status          Status
@@ -99,6 +99,8 @@ type Task struct {
     UpdatedAt       time.Time
 }
 ```
+
+`ExecutionPlanID` may be empty only for the temporary one-task bootstrap created in this PR. PR 3 makes it mandatory when persistent multi-task plans are introduced.
 
 Initial statuses:
 
@@ -283,7 +285,7 @@ task_attempt_metrics
 - [ ] Add `TaskExecutionReport` to the canonical `.proto` source using a new unused field number.
 - [ ] Include contract version, task ID, attempt ID, worker ID, lease ID, status, phase timings, counters, resource usage and stable error.
 - [ ] Add task context fields to the current JobOffer bridge.
-- [ ] Mark that bridge with a compatibility owner and removal target in PR 3.
+- [ ] Mark that bridge with a compatibility owner and removal target in PR 2.
 - [ ] Regenerate protobuf outputs through the canonical generation command.
 - [ ] Worker emits exactly one final task report per attempt.
 - [ ] Master validates contract version, task, attempt, worker and lease before persistence.
