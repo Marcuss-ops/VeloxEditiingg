@@ -32,11 +32,14 @@ purposes and merging would dilute both.
 
 ## Canonical rule forms
 
-There are exactly **four** rule shapes that are accepted in this repo's
-`.gitignore`. Anything else is a smell that warrants verification (see
-[Pre-commit verification](#pre-commit-verification)). The leading `/`
-anchors the rule to the repository root; the trailing `/` restricts it to
-directories. Both together are the most common form.
+The four **anchor-pattern shapes** below cover path-rooted rules; they
+are the patterns with the highest collision risk (and therefore the
+highest review rigour). The `.gitignore` also commonly uses patterns
+outside this table — bare-name suffix globs (`*.bak`, `*.log`, `*.tmp`,
+`*.swp`), recursion globs (`<subdir>/**`), and negation rules
+(`!pattern`). Each of these must be verified case-by-case using
+[Pre-commit verification](#pre-commit-verification), but they do not
+require the "both anchors" rule below.
 
 | Form | Meaning | Example | When to use |
 | --- | --- | --- | --- |
@@ -104,7 +107,40 @@ the cartesian product of those two boolean axes. The easy mistake is to
 forget one axis and pay for it with a silent collision. The fix is always
 to **make both axes explicit** even when you think one is obvious.
 
+### Bare-name suffixes: `*.bak` (allowed, NOT banned)
+
+```gitignore
+*.bak
+*.tmp
+*.log
+*.swp
+```
+
+A bare-name pattern that matches only a SUFFIX (or any name containing
+a glob meta-character) cannot collide with a tracked directory, because
+no tracked directory is literally named `*.bak` or `*.log`. These
+patterns are SAFE and should NOT be confused with the banned bare-name
+PATH-SEGMENT patterns in the previous subsections.
+
+The key contrast:
+
+- `controltransport` — bare PATH SEGMENT, collides with
+  `shared/controltransport/...` (banned).
+- `*.bak` — bare SUFFIX GLOB, cannot collide with any tracked path
+  segment (allowed).
+
+If you are tempted to add `*.controltransport` or any pattern whose
+name segment is shared with a tracked subdir, **don't** — that crosses
+back from suffix-glob into banned territory.
+
 ## Pre-commit verification
+
+> **Manual recipe only — do NOT copy the probe-dir block below into a
+> CI script.** The probe block creates `./orphan_dir/` in the working
+> tree and removes it inline; a CI job that mimics this has a race
+> window where `./orphan_dir/` is visible to `git status` and could
+> pollute diff reports. For automated verification, see the bash
+> skeleton under [CI integration](#ci-integration-planned-not-in-this-commit).
 
 Before pushing any change to `.gitignore`, every new or modified rule
 MUST be smoke-tested with `git check-ignore -nv`. The `-n` flag includes
@@ -191,14 +227,20 @@ in a script scaffold:
 set -euo pipefail
 ROOT="$(git rev-parse --show-toplevel)"
 fail=0
-# Rule 1: reject bare-name rules (no leading slash, no path anchor).
-while IFS= read -r line; do
-  case "$line" in
-    ''|\#*) continue ;;                    # blank / comment
-    */*)   continue ;;                     # contains slash — path-anchored
-    /*)    continue ;;                     # leading slash — root-anchored
+# Rule 1: reject bare-name rules that are NOT suffix-glob safe.
+# Strip inline comments (anything from '#' onwards, AFTER the
+# lineno:rule split) so 'rule  # comment' is treated as 'rule'.
+while IFS=: read -r lineno rule; do
+  rule="${rule%%#*}"             # strip inline comment
+  rule="${rule%"${rule##*[![:space:]]}"}"  # trim trailing whitespace
+  case "$rule" in
+    '')        continue ;;        # blank after trim
+    */*)       continue ;;        # contains slash — path-anchored
+    /*)        continue ;;        # leading slash — root-anchored
+    \*\.\*)    continue ;;        # bare-name suffix glob (e.g. *.bak)
+    \*\?*\*)   continue ;;        # bare-name glob with multi-char (e.g. *foo*)
   esac
-  echo "FAIL: bare-name rule '$line' (ambiguous scope)"
+  echo "FAIL line $lineno: bare-name rule '$rule' (ambiguous scope)"
   fail=1
 done < <(grep -nE '^[[:space:]]*[^[:space:]#]' "$ROOT/.gitignore")
 # Rule 2: canonical tracked paths MUST NOT be ignored.
@@ -224,7 +266,8 @@ calibrated.
 - ✅ `/<name>` for top-level orphan files (rare)
 - ✅ `<subdir>/<name>` for path-scoped ignores (no recursion by default)
 - ✅ `<subdir>/**` for recursive ignores under one subdir (when needed)
-- ❌ bare names (`name`) — silent collision with subdirs
+- ✅ bare-name suffix globs (`*.bak`, `*.log`, `*.tmp`, `*.swp`) — cannot collide with a tracked path segment
+- ❌ bare-name **path-segment** patterns (`controltransport`) — silent collision with any tracked subdir of the same name
 - ❌ trailing-only-slash (`name/`) — silent collision with subdirs
 - ❌ leading-only-slash (`/name`) — wasted precision, matches file or dir
 - Always: `git check-ignore -nv <tracked-path>` before commit
