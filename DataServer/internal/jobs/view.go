@@ -35,8 +35,11 @@ import (
 	"velox-server/internal/costmodel"
 )
 
-// QueueItem is the scheduling/transport projection of a Job.
+// ToQueueItem is the scheduling/transport projection of a Job.
 // It carries the full operational state expected by HTTP handlers and legacy consumers.
+//
+// PR #7: runtime fields (WorkerName, AssignedTo, ClaimedBy, ClaimedAt,
+// LeaseID, LeaseExpiry, RetryCount, Attempt) removed — tasks carry these now.
 type QueueItem struct {
 	JobID        string      `json:"job_id"`
 	Status       Status      `json:"status"`
@@ -46,26 +49,12 @@ type QueueItem struct {
 	UpdatedAt    interface{} `json:"updated_at,omitempty"`
 	StartedAt    interface{} `json:"started_at,omitempty"`
 	CompletedAt  interface{} `json:"completed_at,omitempty"`
-	AssignedAt   interface{} `json:"assigned_at,omitempty"`
-	LeaseExpiry  interface{} `json:"lease_expiry,omitempty"`
 	ProcessingAt interface{} `json:"processing_at,omitempty"`
 
-	AssignedTo       string `json:"assigned_to,omitempty"`
-	AssignedWorkerIP string `json:"assigned_worker_ip,omitempty"`
-	WorkerName       string `json:"worker_name,omitempty"`
-	ClaimedBy        string `json:"claimed_by,omitempty"`
-	ClaimedAt        string `json:"claimed_at,omitempty"`
-	LeaseID          string `json:"lease_id,omitempty"`
-
-	RetryCount int `json:"retry_count,omitempty"`
-	Attempt    int `json:"attempt,omitempty"`
 	MaxRetries int `json:"max_retries,omitempty"`
 
 	LastError    string      `json:"last_error,omitempty"`
-	LastErrorAt  interface{} `json:"last_error_at,omitempty"`
 	ErrorMessage string      `json:"error_message,omitempty"`
-	FailedAt     interface{} `json:"failed_at,omitempty"`
-	FailedBy     string      `json:"failed_by,omitempty"`
 
 	History []JobHistoryEntry `json:"history,omitempty"`
 
@@ -123,17 +112,10 @@ func ParsePayloadJSON(raw string) map[string]interface{} {
 }
 
 // ToQueueItem converts a canonical jobs.Job into its transport projection.
-// HTTP consumers depend on these legacy dual-aliasing invariants:
 //
-//   WorkerName = WorkerID  AND  AssignedTo = WorkerID  (legacy dual-aliasing)
-//   RetryCount = Attempts   AND  Attempt = Attempts    (legacy split-field aliasing)
-//   History/Logs/SlotData/LastError/etc. are zero-valued (no domain source today).
-//
-// PR-04.5: Requirements (costmodel.JobRequirements) threads end-to-end
-// here — QueueItem is the canonical transport projection and the
-// EligibilityLayer / future-rank sites read QueueItem.Requirements
-// (or Job.Requirements after jobs.Writer.Get) without re-parsing
-// request_json.
+// PR #7: runtime fields (WorkerName, AssignedTo, LeaseID, RetryCount, Attempt)
+// removed — tasks carry the per-execution state now. The projection preserves
+// the existing wire keys for HTTP consumers but sets them to zero values.
 func ToQueueItem(j *Job) *QueueItem {
 	if j == nil {
 		return nil
@@ -143,11 +125,6 @@ func ToQueueItem(j *Job) *QueueItem {
 		Status:      j.Status,
 		VideoName:   j.VideoName,
 		ProjectID:   j.ProjectID,
-		WorkerName:  j.WorkerID,
-		AssignedTo:  j.WorkerID,
-		LeaseID:     j.LeaseID,
-		RetryCount:  j.Attempts,
-		Attempt:     j.Attempts,
 		MaxRetries:  j.MaxRetries,
 		RunID:       j.RunID,
 		CreatedAt:   j.CreatedAt,
@@ -162,19 +139,7 @@ func ToQueueItem(j *Job) *QueueItem {
 // ToPayloadMap projects the job into an enriched payload dictionary,
 // mirroring queue.QueryService.GetJobPayload's flattening semantics.
 //
-// Enriches the parsed payload with top-level fields: job_id, job_run_id,
-// run_id, status, video_name, project_id, calendar_event_id (when present
-// in either the Job struct's mirror column or in the persisted payload
-// JSON), and lease_id (only if non-empty). LeaseExpiry is NOT bound
-// (no domain source today).
-//
-// Calendar: jobs whose payload was minted by the calendar handler
-// (internal/handlers/server/calendar::buildCalendarJobPayload) carry
-// `calendar_event_id` directly inside the persisted JSON. We forward any
-// top-level key already present so calendar tests asserting
-// `ToPayloadMap(j)["calendar_event_id"] == event.ID` see the link they
-// expect, and any JSON-only key that production writers add later
-// (e.g. `youtube_group`, `external_id`) survives the projection round-trip.
+// PR #7: LeaseID injection removed — task carries the per-execution lease now.
 func ToPayloadMap(j *Job) map[string]interface{} {
 	payload := ParsePayloadJSON(j.Payload)
 	payload["job_id"] = j.ID
@@ -183,32 +148,22 @@ func ToPayloadMap(j *Job) map[string]interface{} {
 	payload["status"] = string(j.Status)
 	payload["video_name"] = j.VideoName
 	payload["project_id"] = j.ProjectID
-	if j.LeaseID != "" {
-		payload["lease_id"] = j.LeaseID
-	}
 	// Forward JSON-only keys that the Job struct does NOT carry on its own
 	// columns. calendar_event_id is the lead case: it lets the calendar
 	// scheduler reconcile jobs back to the originating CalendarEvent without
-	// an extra lookup. _requirements is the PR-04.5 mirror written by
-	// attachRequirementsToPayload and was already exposed via the JSON
-	// branch of ParsePayloadJSON; we re-emit it explicitly so callers that
-	// skipped ParsePayloadJSON can still see it in the projection.
+	// an extra lookup.
+	// PR #6: _requirements no longer stored in JSON blobs; Requirements live
+	// in dedicated columns and are surfaced via Job.Requirements.
 	if cid, ok := payload["calendar_event_id"].(string); ok && cid != "" {
 		payload["calendar_event_id"] = cid
-	}
-	if req, ok := payload["_requirements"].(map[string]interface{}); ok && req != nil {
-		payload["_requirements"] = req
 	}
 	return payload
 }
 
-// ToFlatMap returns a job as a flattened map for flexible field access,
-// mirroring queue.QueryService.GetJobAsMap's exact output shape.
+// ToFlatMap returns a job as a flattened map for flexible field access.
 //
-// Includes hardcoded scalar fields AND blank keys
-// (claimed_by/claimed_at/lease_expiry/last_error/error_message) — HTTP
-// consumers expect these keys to exist even when zero-valued.
-// Payload JSON keys are merged in only for keys not already in the result.
+// PR #7: runtime fields (assigned_to, worker_name, lease_id, retry_count,
+// attempt) set to zero — tasks carry the per-execution state.
 func ToFlatMap(j *Job) map[string]interface{} {
 	result := make(map[string]interface{})
 	result["job_id"] = j.ID
@@ -219,20 +174,19 @@ func ToFlatMap(j *Job) map[string]interface{} {
 	result["updated_at"] = j.UpdatedAt
 	result["started_at"] = j.StartedAt
 	result["completed_at"] = j.CompletedAt
-	result["assigned_to"] = j.WorkerID
-	result["worker_name"] = j.WorkerID
-	result["lease_id"] = j.LeaseID
-	result["retry_count"] = j.Attempts
-	result["attempt"] = j.Attempts
 	result["max_retries"] = j.MaxRetries
 	result["run_id"] = j.RunID
 	result["job_run_id"] = j.RunID
 
-	// Emulate zero-values of historical Job map projection for back-compat.
-	// HTTP handlers depend on these keys being present (even if zero).
+	// PR #7: zero-valued legacy keys preserved for HTTP consumer compat.
+	result["assigned_to"] = ""
+	result["worker_name"] = ""
+	result["lease_id"] = ""
 	result["claimed_by"] = ""
 	result["claimed_at"] = ""
 	result["lease_expiry"] = nil
+	result["retry_count"] = 0
+	result["attempt"] = 0
 	result["last_error"] = ""
 	result["error_message"] = ""
 

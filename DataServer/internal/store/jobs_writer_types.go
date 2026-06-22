@@ -38,21 +38,20 @@ const (
 // PR15.5: the legacy `type Job = JobRecord` alias was removed. All callers
 // now reference JobRecord directly.
 //
-// PR-04.5: RequiredResourceClass + RequiredTemporalMode mirror the
-// dedicated columns added by migration 039. They are reconstructed into
-// Jobs.Job.Requirements by toJobsJob and consumed by the eligibility
-// layer + future rank sites. Pre-PR-04.5 rows have empty values here and
-// fall through to the JSON fallback inside request_json._requirements
-// (or to JobRequirements{} = permissive).
+// PR #6: All 5 requirements fields live in dedicated columns only.
+// They are read directly by claim paths (ClaimNextPendingJob,
+// ClaimNextPendingJobForWorker) via reconstructRankRequirements.
+// No JSON fallback exists — the _requirements sub-object was stripped
+// from request_json/result_json by migration 047.
+// PR #9: assigned_to, claimed_by, lease_id, lease_expiry, retry_count
+// dropped from jobs table (migration 048). Runtime state lives on
+// job_attempts + tasks now; lease identity flows through result_json.
 type JobRecord struct {
 	JobID                string    `json:"job_id"`
 	Status               JobStatus `json:"status"`
 	VideoName            string    `json:"video_name,omitempty"`
 	ProjectID            string    `json:"project_id,omitempty"`
-	AssignedTo           string    `json:"assigned_to,omitempty"`
-	LeaseID              string    `json:"lease_id,omitempty"`
 	Revision             int       `json:"revision"`
-	RetryCount           int       `json:"retry_count"`
 	MaxRetries           int       `json:"max_retries"`
 	CreatedAt            string    `json:"created_at,omitempty"`
 	UpdatedAt            string    `json:"updated_at,omitempty"`
@@ -61,34 +60,18 @@ type JobRecord struct {
 	RunID                string    `json:"run_id,omitempty"`
 	PayloadJSON          string    `json:"-"`
 
-	// PR-04.5: per-job placement needs (canonical). Columns take
-	// priority on read; the JSON subobject inside PayloadJSON is
-	// the redundant copy maintained by the writer layer.
-	RequiredResourceClass string `json:"required_resource_class,omitempty"`
-	RequiredTemporalMode  string `json:"required_temporal_mode,omitempty"`
+	// PR #6: per-job placement needs (canonical). All 5 fields live in
+	// dedicated columns; no JSON fallback exists anymore.
+	RequiredResourceClass     string  `json:"required_resource_class,omitempty"`
+	RequiredTemporalMode      string  `json:"required_temporal_mode,omitempty"`
+	RequiredDeterministic     bool    `json:"required_deterministic,omitempty"`
+	RequiredCacheable         bool    `json:"required_cacheable,omitempty"`
+	RequiredMinBandwidthMbps  float64 `json:"required_min_bandwidth_mbps,omitempty"`
 }
 
-// CreateJobParams is the input for CreateJob.
-//
-// JobID may be empty; the repository must generate a unique ID in that case.
-// The rich payload map maps 1:1 onto the immutable request_json blob on disk.
-//
-// PR-04.5: Requirements fields are mirrored both in the dedicated
-// columns (job_required_resource_class, job_required_temporal_mode)
-// AND in the request_json._requirements subobject. The repository
-// layer is responsible for keeping the two representations
-// consistent; callers should pass a single canonical
-// costmodel.JobRequirements value and rely on the writer to embed
-// it in both places.
-type CreateJobParams struct {
-	JobID       string                 `json:"job_id,omitempty"`
-	Payload     map[string]interface{} `json:"payload"`
-	VideoName   string                 `json:"video_name,omitempty"`
-	ProjectID   string                 `json:"project_id,omitempty"`
-	RunID       string                 `json:"run_id,omitempty"`
-	MaxRetries  int                    `json:"max_retries"`
-	Requirements costmodel.JobRequirements `json:"requirements,omitempty"`
-}
+// PR #8: dead code after CreateJob was dropped from SQLiteJobRepository.
+// The canonical creation path is now AtomicJobTaskCreator.CreateJobWithTask
+// which reads job.Requirements from the *jobs.Job domain model directly.
 
 // ClaimParams carries worker identity and the timestamp at claim time.
 // AllowedJobTypes is the worker capability filter — empty means "no filter".

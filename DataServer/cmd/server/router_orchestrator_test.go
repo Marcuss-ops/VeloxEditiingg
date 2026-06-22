@@ -32,8 +32,8 @@ import (
 
 	"velox-server/internal/config"
 	"velox-server/internal/creatorflow"
+	"velox-server/internal/handlers/server/orchestratorv1"
 	"velox-server/internal/jobs"
-	"velox-server/internal/workflow"
 )
 
 const orchestratorTestPath = "/api/v1"
@@ -413,9 +413,9 @@ func TestOrchestratorGetList_DeprecationHeader(t *testing.T) {
 	}
 
 	var listResp struct {
-		Jobs       []workflow.Run `json:"jobs"`
-		Total      int            `json:"total"`
-		Deprecated bool           `json:"deprecated"`
+		Jobs       []orchestratorv1.LegacyRunResponse `json:"jobs"`
+		Total      int                                `json:"total"`
+		Deprecated bool                               `json:"deprecated"`
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &listResp); err != nil {
 		t.Fatalf("decode: %v body=%s", err, w.Body.String())
@@ -434,10 +434,10 @@ func TestOrchestratorGetList_DeprecationHeader(t *testing.T) {
 			t.Errorf("jobs[%d].run_id is empty", i)
 		}
 		if run.WorkflowType != "process_video" {
-			t.Errorf("jobs[%d].workflow_type=%q, want process_video (Job.Type → workflow.Run.WorkflowType)", i, run.WorkflowType)
+			t.Errorf("jobs[%d].workflow_type=%q, want process_video (Job.Type → LegacyRunResponse.WorkflowType)", i, run.WorkflowType)
 		}
-		if run.Status != workflow.RunStatus(jobs.StatusPending) {
-			t.Errorf("jobs[%d].status=%q, want PENDING (Job.Status → workflow.RunStatus)", i, run.Status)
+		if run.Status != orchestratorv1.LegacyRunStatus(jobs.StatusPending) {
+			t.Errorf("jobs[%d].status=%q, want PENDING (Job.Status → LegacyRunStatus)", i, run.Status)
 		}
 	}
 }
@@ -476,9 +476,9 @@ func TestOrchestratorGetJob_ProjectsRunShape(t *testing.T) {
 	}
 
 	var resp struct {
-		Run        workflow.Run    `json:"run"`
-		Steps      []workflow.Step `json:"steps"`
-		Deprecated bool            `json:"deprecated"`
+		Run        orchestratorv1.LegacyRunResponse    `json:"run"`
+		Steps      []orchestratorv1.LegacyStepResponse `json:"steps"`
+		Deprecated bool                                `json:"deprecated"`
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode: %v body=%s", err, w.Body.String())
@@ -487,12 +487,12 @@ func TestOrchestratorGetJob_ProjectsRunShape(t *testing.T) {
 		t.Errorf("response.deprecated=false, want true")
 	}
 	if resp.Run.RunID != seed.JobID {
-		t.Errorf("response.run.run_id=%q, want %q (Job.ID → workflow.Run.RunID projection)", resp.Run.RunID, seed.JobID)
+		t.Errorf("response.run.run_id=%q, want %q (Job.ID → LegacyRunResponse.RunID projection)", resp.Run.RunID, seed.JobID)
 	}
 	if resp.Run.WorkflowType != "process_video" {
 		t.Errorf("response.run.workflow_type=%q, want process_video", resp.Run.WorkflowType)
 	}
-	if resp.Run.Status != workflow.RunStatus(jobs.StatusPending) {
+	if resp.Run.Status != orchestratorv1.LegacyRunStatus(jobs.StatusPending) {
 		t.Errorf("response.run.status=%q, want PENDING", resp.Run.Status)
 	}
 	if len(resp.Steps) != 1 {
@@ -505,11 +505,11 @@ func TestOrchestratorGetJob_ProjectsRunShape(t *testing.T) {
 		t.Errorf("response.steps[0].job_id=%q, want %q", *resp.Steps[0].JobID, seed.JobID)
 	}
 	if resp.Steps[0].StepKey != "process_video" {
-		t.Errorf("response.steps[0].step_key=%q, want process_video (Task.ExecutorID → workflow.Step.StepKey)", resp.Steps[0].StepKey)
+		t.Errorf("response.steps[0].step_key=%q, want process_video (Task.ExecutorID → LegacyStepResponse.StepKey)", resp.Steps[0].StepKey)
 	}
 	// Single-task model: StatusPending maps to StepStatusBlocked per
 	// mapTaskStatusToStep (legacy convention kept for wire shape compat).
-	if resp.Steps[0].Status != workflow.StepStatusBlocked {
+	if resp.Steps[0].Status != orchestratorv1.LegacyStepStatusBlocked {
 		t.Errorf("response.steps[0].status=%q, want BLOCKED (StatusPending → StepStatusBlocked projection)", resp.Steps[0].Status)
 	}
 }
@@ -548,17 +548,17 @@ func TestOrchestratorGetStats_SeededShape(t *testing.T) {
 		t.Errorf("response header Sunset is empty — Fase 3 Compliance header missing")
 	}
 
-	var stats workflow.StatsReport
+	var stats orchestratorv1.LegacyStatsReport
 	if err := json.Unmarshal(w.Body.Bytes(), &stats); err != nil {
 		t.Fatalf("decode: %v body=%s", err, w.Body.String())
 	}
 
-	expectedRuns := []workflow.RunStatus{
-		workflow.RunStatusPending,
-		workflow.RunStatusRunning,
-		workflow.RunStatusSucceeded,
-		workflow.RunStatusFailed,
-		workflow.RunStatusCancelled,
+	expectedRuns := []orchestratorv1.LegacyRunStatus{
+		orchestratorv1.LegacyRunStatusPending,
+		orchestratorv1.LegacyRunStatusRunning,
+		orchestratorv1.LegacyRunStatusSucceeded,
+		orchestratorv1.LegacyRunStatusFailed,
+		orchestratorv1.LegacyRunStatusCancelled,
 	}
 	if len(stats.RunsByStatus) != len(expectedRuns) {
 		t.Errorf("RunsByStatus len=%d, want %d (allRunStatuses seed)",
@@ -569,16 +569,16 @@ func TestOrchestratorGetStats_SeededShape(t *testing.T) {
 			t.Errorf("RunsByStatus missing key %q (allRunStatuses seed contract violation)", st)
 		}
 	}
-	if v := stats.RunsByStatus[workflow.RunStatusPending]; v != 0 {
+	if v := stats.RunsByStatus[orchestratorv1.LegacyRunStatusPending]; v != 0 {
 		t.Errorf("empty-DB RunsByStatus[PENDING]=%d, want 0", v)
 	}
 
-	expectedSteps := []workflow.StepStatus{
-		workflow.StepStatusBlocked,
-		workflow.StepStatusReady,
-		workflow.StepStatusRunning,
-		workflow.StepStatusSucceeded,
-		workflow.StepStatusFailed,
+	expectedSteps := []orchestratorv1.LegacyStepStatus{
+		orchestratorv1.LegacyStepStatusBlocked,
+		orchestratorv1.LegacyStepStatusReady,
+		orchestratorv1.LegacyStepStatusRunning,
+		orchestratorv1.LegacyStepStatusSucceeded,
+		orchestratorv1.LegacyStepStatusFailed,
 	}
 	if len(stats.StepsByStatus) != len(expectedSteps) {
 		t.Errorf("StepsByStatus len=%d, want %d (allStepStatuses seed)",
@@ -615,14 +615,14 @@ func TestOrchestratorGetStats_Populated(t *testing.T) {
 		t.Fatalf("want 200, got %d", w.Code)
 	}
 
-	var stats workflow.StatsReport
+	var stats orchestratorv1.LegacyStatsReport
 	if err := json.Unmarshal(w.Body.Bytes(), &stats); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
 	if stats.TotalRuns != 1 {
 		t.Errorf("TotalRuns=%d, want 1 after seeding one Job", stats.TotalRuns)
 	}
-	if v := stats.RunsByStatus[workflow.RunStatusPending]; v != 1 {
+	if v := stats.RunsByStatus[orchestratorv1.LegacyRunStatusPending]; v != 1 {
 		t.Errorf("RunsByStatus[PENDING]=%d, want 1 (newly-created Job is PENDING)", v)
 	}
 	if stats.TotalSteps != 1 {
@@ -630,15 +630,13 @@ func TestOrchestratorGetStats_Populated(t *testing.T) {
 	}
 	// mapTaskStatusToStep(StatusPending) → StepStatusBlocked per the
 	// adapter's enum reconciliation table.
-	if v := stats.StepsByStatus[workflow.StepStatusBlocked]; v != 1 {
+	if v := stats.StepsByStatus[orchestratorv1.LegacyStepStatusBlocked]; v != 1 {
 		t.Errorf("StepsByStatus[BLOCKED]=%d, want 1 (PENDING task → BLOCKED step projection)", v)
 	}
 }
 
 // ── helpers ───────────────────────────────────────────────────────────
 
-// stringsHasPrefix is a tiny shim so we don't pull in the strings
-// package only for one call; saves an import noise.
 // TestOrchestratorGetStats_TruncationCap verifies the per-request
 // cap code path in getStats: when tasksRepo.List returns >= the
 // configured cap, warnStepCap is invoked exactly once with (cap, actual)

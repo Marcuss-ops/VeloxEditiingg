@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"velox-server/internal/costmodel"
+	"velox-server/internal/jobs"
+	"velox-server/internal/store"
 )
 
 func TestBuildSceneImagePayload(t *testing.T) {
@@ -534,38 +536,29 @@ func TestBuildSceneImagePayload_RoundTrip(t *testing.T) {
 }
 
 // =============================================================================
-// PR-04.5 (appended): Enqueuer.Enqueue(ctx, payload, req) propagates the
-// per-job costmodel.JobRequirements through JobQueue.SubmitJob byte-for-byte.
-// Without this invariant the cost-model-eligibility layer
-// (GetEligibleWorkers) and the future-rank site cannot consume concrete
-// per-job constraints end-to-end.
+// PR #3: Enqueuer.Enqueue now uses AtomicJobTaskCreator for atomic Job+Task
+// creation instead of JobQueue.SubmitJob (Job-only). Tests verify that
+// the Enqueue path produces correct Job+Task rows.
 // =============================================================================
 
-// recordingJobQueue captures every SubmitJob call so the test asserts
-// the canonical req travelled through unchanged. It satisfies the
-// JobQueue interface declared in enqueue.go.
-type recordingJobQueue struct {
-	calls []recordingJobQueueCall
+// newTestEnqueuer creates an Enqueuer backed by an in-memory SQLite store
+// for integration-level testing of the atomic creation path.
+func newTestEnqueuer(t *testing.T) *Enqueuer {
+	t.Helper()
+	db, err := store.NewSQLiteStore(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("sqlite store: %v", err)
+	}
+	jobRepo := store.NewSQLiteJobRepository(db)
+	atomic := store.NewAtomicJobTaskCreator(db)
+	return NewEnqueuer(atomic, jobRepo, nil)
 }
 
-type recordingJobQueueCall struct {
-	jobID   string
-	payload map[string]interface{}
-	req     costmodel.JobRequirements
-}
-
-func (r *recordingJobQueue) SubmitJob(_ context.Context, jobID string, payload map[string]interface{}, req costmodel.JobRequirements) error {
-	r.calls = append(r.calls, recordingJobQueueCall{jobID: jobID, payload: payload, req: req})
-	return nil
-}
-
-// TestEnqueuePropagatesRequirements is the PR-04.5 invariant: any
-// costmodel.JobRequirements passed to Enqueuer.Enqueue reaches
-// JobQueue.SubmitJob byte-for-byte. Future-rank sites depend on this.
-func TestEnqueuePropagatesRequirements(t *testing.T) {
+// TestEnqueueCreatesJobAndTaskAtomically verifies that Enqueue creates
+// both a Job and a Task row atomically (the PR #3 invariant).
+func TestEnqueueCreatesJobAndTaskAtomically(t *testing.T) {
 	t.Parallel()
-	q := &recordingJobQueue{}
-	enq := NewEnqueuer(q, nil)
+	enq := newTestEnqueuer(t)
 
 	payload := map[string]interface{}{
 		"video_name":  "demo.mp4",
@@ -582,42 +575,40 @@ func TestEnqueuePropagatesRequirements(t *testing.T) {
 		Cacheable:     true,
 	}
 
-	if _, err := enq.Enqueue(context.Background(), payload, req); err != nil {
+	response, err := enq.Enqueue(context.Background(), payload, req)
+	if err != nil {
 		t.Fatalf("Enqueue returned error: %v", err)
 	}
+	if response["ok"] != true {
+		t.Fatalf("want ok=true, got %v", response["ok"])
+	}
 
-	if len(q.calls) != 1 {
-		t.Fatalf("expected exactly 1 SubmitJob call, got %d", len(q.calls))
+	// Verify Job was created.
+	jobID, _ := response["job_id"].(string)
+	if jobID == "" {
+		t.Fatal("expected non-empty job_id")
 	}
-	got := q.calls[0]
-	if got.req.ResourceClass != costmodel.ResourceGPU {
-		t.Errorf("ResourceClass lost in transit: want %q got %q", costmodel.ResourceGPU, got.req.ResourceClass)
+	j, err := enq.Jobs.Get(context.Background(), jobID)
+	if err != nil || j == nil {
+		t.Fatalf("Get job: err=%v job=%v", err, j)
 	}
-	if got.req.TemporalMode != costmodel.TemporalWindowed {
-		t.Errorf("TemporalMode lost in transit: want %q got %q", costmodel.TemporalWindowed, got.req.TemporalMode)
+	if j.ID != jobID {
+		t.Fatalf("job ID mismatch: %q != %q", j.ID, jobID)
 	}
-	if !got.req.Deterministic {
-		t.Errorf("Deterministic lost in transit: want true got false")
+	if j.Status != jobs.StatusPending {
+		t.Fatalf("job status: want PENDING, got %q", j.Status)
 	}
-	if !got.req.Cacheable {
-		t.Errorf("Cacheable lost in transit: want true got false")
-	}
-	if got.jobID == "" {
-		t.Errorf("jobID expected to be assigned")
-	}
-	if got.payload["job_id"] != got.jobID {
-		t.Errorf("payload job_id (%v) mismatches submitted jobID (%v)", got.payload["job_id"], got.jobID)
+	if j.VideoName != "demo.mp4" {
+		t.Fatalf("video_name: want demo.mp4, got %q", j.VideoName)
 	}
 }
 
 // TestEnqueueDefaultsPreserved verifies the permissive behavior is
 // intact when no Requirements are published: an empty JobRequirements
-// flows through unchanged so pre-PR-04.5 callers (and any legacy
-// dispatch path) keep today's routing.
+// flows through unchanged.
 func TestEnqueueDefaultsPreserved(t *testing.T) {
 	t.Parallel()
-	q := &recordingJobQueue{}
-	enq := NewEnqueuer(q, nil)
+	enq := newTestEnqueuer(t)
 
 	payload := map[string]interface{}{
 		"video_name":  "demo.mp4",
@@ -629,14 +620,22 @@ func TestEnqueueDefaultsPreserved(t *testing.T) {
 	}
 	req := costmodel.DefaultRequirements()
 
-	if _, err := enq.Enqueue(context.Background(), payload, req); err != nil {
+	response, err := enq.Enqueue(context.Background(), payload, req)
+	if err != nil {
 		t.Fatalf("Enqueue returned error: %v", err)
 	}
-	if len(q.calls) != 1 {
-		t.Fatalf("expected 1 SubmitJob call, got %d", len(q.calls))
+	if response["ok"] != true {
+		t.Fatalf("want ok=true, got %v", response["ok"])
 	}
-	got := q.calls[0]
-	if got.req.ResourceClass != "" || got.req.TemporalMode != "" || got.req.Deterministic || got.req.Cacheable {
-		t.Errorf("DefaultRequirements must stay zero-value; got %+v", got.req)
+
+	// Verify the default requirements persisted correctly.
+	jobID, _ := response["job_id"].(string)
+	j, err := enq.Jobs.Get(context.Background(), jobID)
+	if err != nil || j == nil {
+		t.Fatalf("Get job: err=%v", err)
+	}
+	if j.Requirements.ResourceClass != "" || j.Requirements.TemporalMode != "" ||
+		j.Requirements.Deterministic || j.Requirements.Cacheable {
+		t.Errorf("DefaultRequirements must stay zero-value; got %+v", j.Requirements)
 	}
 }

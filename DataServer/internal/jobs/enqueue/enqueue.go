@@ -2,12 +2,12 @@
 // l'inoltro di job video (process_video) nella coda. Usato da endpoint canonici come
 // script/generate-with-images e pipeline.
 //
-// PR15.7a (enqueuer-struct): the package-level voiceoverAssetService mutex-guarded
-// global was removed. The single entry point is now `*Enqueuer`: callers construct
-// one with NewEnqueuer(queue, voiceoverService) and call .Enqueue(ctx, payload).
-// All rewrite invariants (voiceover + scene-image) live behind the Enqueuer
-// methods so the queue+service travel together as injected dependencies and
-// there is no longer any package-level mutable state to coordinate.
+// PR #3 (refactor/single-execution-create): Enqueuer is now a Compiler — it
+// normalizes, validates, resolves voiceover/scene-image assets, compiles a
+// TaskSpec, and delegates to store.AtomicJobTaskCreator for atomic Job+Task
+// creation. The JobQueue interface and writerAdapter are eliminated. ALL
+// producers (HTTP, creator result, calendar) route through the single atomic
+// creation path.
 package enqueue
 
 import (
@@ -21,6 +21,9 @@ import (
 
 	assetbridge "velox-server/internal/assets"
 	"velox-server/internal/costmodel"
+	"velox-server/internal/jobs"
+	"velox-server/internal/store"
+	"velox-server/internal/taskgraph"
 	"velox-shared/contract"
 	"velox-shared/payload"
 
@@ -29,34 +32,22 @@ import (
 	"github.com/google/uuid"
 )
 
-// JobQueue is the minimal surface Enqueuer depends on. jobs.Writer
-// (and any future in-memory or Redis-backed queue) satisfies this via writerAdapter.
+// Enqueuer bundles the atomic creator + jobs reader + the asset service
+// that rewrites voiceover and scene-image payload references. Construct via
+// NewEnqueuer.
 //
-// PR-04.5: SubmitJob now carries the per-job costmodel.JobRequirements.
-// The requirements are persisted to SQLite alongside the request_json
-// blob (dedicated columns _plus_ a `_requirements` JSON sub-object for
-// redundancy). The canonical read path is
-// `jobs.Writer.Get → jobs.Job.Requirements`; future rank sites (PR-04.6)
-// and `Registry.GetEligibleWorkers(ctx, req)` consume from there.
-type JobQueue interface {
-	SubmitJob(ctx context.Context, jobID string, payload map[string]interface{}, req costmodel.JobRequirements) error
-}
-
-// Enqueuer bundles the queue + the asset service that rewrites voiceover
-// and scene-image payload references. Construct via NewEnqueuer.
-//
-// Replaces the package-level voiceoverAssetService global (PR15.7a).
-// Tests can construct an Enqueuer directly without mutating shared state,
-// so each test owns its own dependencies.
+// PR #3: Queue (JobQueue) removed. The Enqueuer now compiles a Job+TaskSpec
+// and delegates to Creator (AtomicJobTaskCreator) for atomic insertion.
 type Enqueuer struct {
-	Queue     JobQueue
+	Creator  *store.AtomicJobTaskCreator
+	Jobs     jobs.Reader
 	Voiceover *assetbridge.AssetService
 }
 
-// NewEnqueuer constructs an Enqueuer with mandatory Queue. The voiceover
-// service is optional (nil-safe: voiceover resolution is skipped).
-func NewEnqueuer(q JobQueue, voiceover *assetbridge.AssetService) *Enqueuer {
-	return &Enqueuer{Queue: q, Voiceover: voiceover}
+// NewEnqueuer constructs an Enqueuer with mandatory Creator + Jobs.
+// The voiceover service is optional (nil-safe: voiceover resolution is skipped).
+func NewEnqueuer(creator *store.AtomicJobTaskCreator, jobsRepo jobs.Reader, voiceover *assetbridge.AssetService) *Enqueuer {
+	return &Enqueuer{Creator: creator, Jobs: jobsRepo, Voiceover: voiceover}
 }
 
 // =============================================================================
@@ -64,27 +55,19 @@ func NewEnqueuer(q JobQueue, voiceover *assetbridge.AssetService) *Enqueuer {
 // =============================================================================
 
 // Enqueue is the canonical scene-video enqueue. The Enqueuer owns both
-// the queue and the voiceover/scene-image asset service so rewrite
-// invariants are applied exactly once before submission, with no
-// package-level mutable state involved.
+// the atomic creator + asset service so rewrite invariants are applied
+// exactly once before the atomic Job+Task creation.
 //
-// PR-04.5: callers MUST publish the per-job
-// `costmodel.JobRequirements` for the eligibility layer + future-rank
-// site to consume. Legacy callers that have not yet decided on
-// requirements should pass `costmodel.DefaultRequirements()` (an
-// empty JobRequirements = permissive default = preserves today's
-// FIFO queue routing). Callers MUST construct an Enqueuer (typically
-// once at composition-root time) and pass it down via DI; there is
-// no package-level fallback.
+// PR #3: instead of delegating to Queue.SubmitJob (Job-only), the Enqueuer
+// now compiles a Job+TaskSpec from the normalized payload and calls
+// Creator.CreateJobWithTask(ctx, job, spec, priority) for atomic
+// Job+Task insertion. Jobs is used for idempotency pre-check.
 //
-// The Requirements are NOT injected into the `payload` map here; the
-// downstream adapter (jobs.Writer.Create) is responsible for
-// embedding them once in BOTH the dedicated columns AND the
-// `_requirements` JSON sub-object inside request_json. This split
-// keeps the Enqueuer free of SQLite-specific knowledge.
+// PR-04.5: callers MUST publish the per-job `costmodel.JobRequirements`
+// for the eligibility layer + future-rank site to consume.
 func (e *Enqueuer) Enqueue(ctx context.Context, payloadMap map[string]interface{}, req costmodel.JobRequirements) (map[string]interface{}, error) {
-	if e == nil || e.Queue == nil {
-		return nil, fmt.Errorf("queue unavailable")
+	if e == nil || e.Creator == nil {
+		return nil, fmt.Errorf("creator unavailable")
 	}
 
 	if err := e.resolveVoiceoverPayload(ctx, payloadMap); err != nil {
@@ -105,8 +88,18 @@ func (e *Enqueuer) Enqueue(ctx context.Context, payloadMap map[string]interface{
 		normalized["job_id"] = jobID
 	}
 
-	if err := e.Queue.SubmitJob(ctx, jobID, normalized, req); err != nil {
-		return nil, err
+	// PR #3: compile Job+TaskSpec and create atomically.
+	job, spec, priority := compileSceneVideoJob(normalized, req)
+
+	// Optimistic idempotency pre-check (same pattern as creatorflow.CreateJobWithPlan).
+	if e.Jobs != nil {
+		if existing, getErr := e.Jobs.Get(ctx, jobID); getErr == nil && existing != nil && existing.ID == jobID {
+			return buildSceneVideoResponse(normalized), nil
+		}
+	}
+
+	if err := e.Creator.CreateJobWithTask(ctx, job, spec, priority); err != nil {
+		return nil, fmt.Errorf("enqueue: atomic create: %w", err)
 	}
 
 	return buildSceneVideoResponse(normalized), nil
@@ -165,8 +158,48 @@ func RenderHTTPBoundaryJobResponse(job map[string]interface{}, full bool) map[st
 }
 
 // =============================================================================
-// Internal: scene video payload normalization (used by *Enqueuer.Enqueue)
+// PR #3: compile Job+TaskSpec from normalized scene-video payload
 // =============================================================================
+
+// compileSceneVideoJob builds a canonical *jobs.Job and *taskgraph.TaskSpec
+// from a normalized scene-video payload. The caller owns the atomic creation.
+func compileSceneVideoJob(normalized map[string]interface{}, req costmodel.JobRequirements) (*jobs.Job, *taskgraph.TaskSpec, int) {
+	jobID, _ := normalized["job_id"].(string)
+	videoName, _ := normalized["video_name"].(string)
+	projectID, _ := normalized["project_id"].(string)
+	jobRunID, _ := normalized["job_run_id"].(string)
+	if jobRunID == "" {
+		jobRunID, _ = normalized["run_id"].(string)
+	}
+	jobType, _ := normalized["job_type"].(string)
+	if jobType == "" {
+		jobType = "process_video"
+	}
+	priority := payload.EnsureInt(normalized["priority"], 5)
+
+	raw, _ := json.Marshal(normalized)
+
+	job := &jobs.Job{
+		ID:           jobID,
+		Type:         jobType,
+		Status:       jobs.StatusPending,
+		VideoName:    videoName,
+		ProjectID:    projectID,
+		RunID:        jobRunID,
+		MaxRetries:   3,
+		Payload:      string(raw),
+		Requirements: req,
+	}
+
+	spec := &taskgraph.TaskSpec{
+		Version:    taskgraph.SpecVersion,
+		JobID:      jobID,
+		ExecutorID: "scene.composite.v1@1",
+		Payload:    normalized,
+	}
+
+	return job, spec, priority
+}
 
 func normalizeSceneVideoPayload(payloadMap map[string]interface{}) (map[string]interface{}, error) {
 	title := strings.TrimSpace(payload.FirstString(payloadMap, "video_name", "title", "project_name"))

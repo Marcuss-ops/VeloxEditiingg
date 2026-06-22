@@ -12,13 +12,15 @@ import (
 
 	"velox-server/internal/config"
 	"velox-server/internal/jobs"
+	"velox-server/internal/store"
+	"velox-server/internal/taskgraph"
 )
 
 // CreateSmokeClipStock accepts POST /api/v1/video/smoke-clip-stock and enqueues
 // a minimal process_video job for the clip+stock pipeline.
-func CreateSmokeClipStock(cfg *config.Config, writer jobs.Writer) gin.HandlerFunc {
+func CreateSmokeClipStock(cfg *config.Config, atomic *store.AtomicJobTaskCreator) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if writer == nil {
+		if atomic == nil {
 			c.JSON(http.StatusServiceUnavailable, gin.H{"ok": false, "error": "queue unavailable"})
 			return
 		}
@@ -151,7 +153,11 @@ func CreateSmokeClipStock(cfg *config.Config, writer jobs.Writer) gin.HandlerFun
 			MaxRetries: 3,
 			Payload:    string(raw),
 		}
-		if err := writer.Create(c.Request.Context(), job); err != nil {
+		spec := &taskgraph.TaskSpec{
+			ExecutorID: "scene.composite.v1@1",
+			Version:    taskgraph.SpecVersion,
+		}
+		if err := atomic.CreateJobWithTask(c.Request.Context(), job, spec, 1); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": err.Error()})
 			return
 		}

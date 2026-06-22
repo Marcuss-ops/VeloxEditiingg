@@ -7,10 +7,14 @@ import (
 	"log"
 	"time"
 
+	"velox-server/internal/jobs"
 	"velox-server/internal/store"
+	"velox-server/internal/taskattempts"
+	"velox-server/internal/taskgraph"
 	"velox-shared/controltransport"
 	pb "velox-shared/controltransport/pb"
 
+	"github.com/google/uuid"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -74,11 +78,8 @@ func (h *Handler) handleJobResult(workerID string, jr *pb.JobResult) {
 			log.Printf("[GRPC] Job failure transition failed for %s: %v", jobID, err)
 		}
 	}
-}
-
-// handleJobAccepted processes typed JobAccepted — Phase 5+ real push mode.
-// The lease was already created by ClaimNextJob; we just verify and grant.
-// Issue 4 fix: uses claimMu instead of h.mu for pendingOffer access.
+}// handleJobAccepted processes typed JobAccepted — legacy job-based push mode.
+// Kept for backward compat with pre-PR #4 workers. New workers use TaskAccepted.
 func (h *Handler) handleJobAccepted(workerID string, ja *pb.JobAccepted) {
 	if !h.config.PushMode {
 		return
@@ -90,152 +91,286 @@ func (h *Handler) handleJobAccepted(workerID string, ja *pb.JobAccepted) {
 		return
 	}
 
-	// Issue 4 fix: lock claimMu to safely read and clear pendingOffer.
-	sess.claimMu.Lock()
-	offer := sess.pendingOffer
-	var offerJobID, offerLeaseID string
-	if offer != nil {
-		offerJobID = offer.JobID
-		offerLeaseID = offer.LeaseID
-	}
-	sess.claimMu.Unlock()
-
-	if offer == nil || offerJobID != jobID {
-		log.Printf("[GRPC] Worker %s accepted job %s but no matching pending offer", workerID, jobID)
-		return
-	}
-
-	// Verify the lease_id the worker is accepting matches what we offered.
-	declaredLeaseID := ja.GetLeaseId()
-	if declaredLeaseID != "" && declaredLeaseID != offerLeaseID {
-		log.Printf("[GRPC] Worker %s accepted job %s with mismatched lease_id: got %s, want %s",
-			workerID, jobID, declaredLeaseID, offerLeaseID)
-		return
-	}
-
-	// BUG FIX #1: LEASED → RUNNING transition MUST happen atomically BEFORE
-	// sending JobLeaseGranted. Otherwise a fast-completing job that ends
-	// before its first lease renewal would attempt LEASED → SUCCEEDED,
-	// which the state machine forbids (only LEASED → RUNNING → SUCCEEDED).
-	// The single CAS UPDATE inside StartJobWithLease verifies
-	// (job_id, worker_id, lease_id, attempt, revision) atomically.
-	//
-	// Revision comes from a fresh GetJob (jobs.QueueItem is the rich projection
-	// without revision; store.JobRecord carries it). The extra read is bounded by
-	// SQLite single-writer semantics: ClaimNextJob already committed, so
-	// the row is visible at our snapshot.
-	currentRev, attemptNum, revErr := h.lookupJobCASFields(jobID)
-	if revErr != nil {
-		log.Printf("[GRPC] Worker %s JobAccepted for %s but CAS fields unavailable: %v",
-			workerID, jobID, revErr)
-		// Cannot promote without CAS identity — drop the offer, do NOT
-		// send JobLeaseGranted (worker has stale view).
-		sess.claimMu.Lock()
-		if sess.pendingOffer != nil && sess.pendingOffer.JobID == jobID {
-			sess.pendingOffer = nil
-		}
-		sess.claimMu.Unlock()
-		return
-	}
-
-	if err := h.jobsRepo.Start(context.Background(), jobID, workerID, declaredLeaseID, attemptNum, currentRev); err != nil {
-		if errors.Is(err, store.ErrTransitionConflict) {
-			log.Printf("[GRPC] Worker %s accepted job %s but lease is stale (rev=%d attempt=%d) — rejecting",
-				workerID, jobID, currentRev, attemptNum)
-			// Stale lease: drop the offer, the lease reaper will reclaim
-			// the job or another offer will be made.
-			sess.claimMu.Lock()
-			if sess.pendingOffer != nil && sess.pendingOffer.JobID == jobID {
-				sess.pendingOffer = nil
-			}
-			sess.claimMu.Unlock()
-			return
-		}
-		// Non-conflict error (driver / ctx / schema): keep the pending
-		// offer so the next notifier tick can retry; do NOT send
-		// JobLeaseGranted because we could not promote.
-		log.Printf("[GRPC] StartJob (LEASED→RUNNING) failed for %s (worker %s): %v — keeping pending offer for retry",
-			jobID, workerID, err)
-		return
-	}
-
-	// Send typed JobLeaseGranted via sendCh — confirms the lease created by ClaimNextJob.
-	// P0 #1: include the lease_id so the worker can use it for heartbeat/renewals.
-	env := &pb.MasterToWorkerEnvelope{
-		MessageId:       fmt.Sprintf("leasegrant-%s-%s", workerID, jobID),
-		WorkerId:        workerID,
-		SentAt:          timestamppb.Now(),
-		ProtocolVersion: controltransport.ProtocolVersionCurrent,
-		Msg: &pb.MasterToWorkerEnvelope_JobLeaseGranted{
-			JobLeaseGranted: &pb.JobLeaseGranted{
-				JobId:    jobID,
-				WorkerId: workerID,
-				Status:   "granted",
-				LeaseId:  offer.LeaseID,
-			},
-		},
-	}
-
-	if !safeSend(sess.sendCh, &outboundMessage{Envelope: env}) {
-		// Phase 4.2 hardening: when we cannot deliver JobLeaseGranted the
-		// job must NOT stay LEASED with a stale pendingOffer. Release the
-		// claim so the job returns to PENDING (or another worker can claim).
-		log.Printf("[GRPC] sendCh full/closed for JobLeaseGranted to worker %s — releasing claim for job %s",
-			workerID, jobID)
-		if releaseErr := h.jobsRepo.ReleaseLease(context.Background(), jobID); releaseErr != nil {
-			log.Printf("[GRPC] Failed to release claim for job %s after JobLeaseGranted send failure: %v",
-				jobID, releaseErr)
-		}
-		sess.claimMu.Lock()
-		if sess.pendingOffer != nil && sess.pendingOffer.JobID == jobID {
-			sess.pendingOffer = nil
-		}
-		sess.claimMu.Unlock()
-		return
-	}
-
-	// Issue 4 fix: clear pending offer under claimMu — job is now running on this worker.
-	sess.claimMu.Lock()
-	if sess.pendingOffer != nil && sess.pendingOffer.JobID == jobID {
-		sess.pendingOffer = nil
-	}
-	sess.claimMu.Unlock()
+	// Legacy path: no pendingJobOffer on task-native sessions.
+	log.Printf("[GRPC] Worker %s sent JobAccepted for job %s — legacy path (no-op in task-native dispatch)", workerID, jobID)
 }
 
-// handleJobRejected processes typed JobRejected — releases the claimed job for requeue.
-// Issue 4 fix: uses claimMu instead of h.mu for pendingOffer access.
-//
-// Phase 3.3: ownership gate — a worker can only reject a job it has been
-// offered. Mismatched JobRejected messages are dropped silently (with a log).
+// handleJobRejected processes typed JobRejected — legacy job-based push mode.
+// Kept for backward compat with pre-PR #4 workers. New workers use TaskRejected.
 func (h *Handler) handleJobRejected(workerID string, jr *pb.JobRejected) {
 	jobID := jr.GetJobId()
 	reason := jr.GetReason()
 	if jobID == "" {
 		return
 	}
-	if !h.verifyJobOwnership(workerID, jobID) {
-		log.Printf("[GRPC] JobRejected from worker %s for job %s refused — ownership mismatch (reason=%q)",
-			workerID, jobID, reason)
+	log.Printf("[GRPC] Worker %s rejected job %s — legacy path (no-op in task-native dispatch, reason=%q)", workerID, jobID, reason)
+}
+
+// handleTaskAccepted processes typed TaskAccepted — PR #4 task-native push mode.
+// The lease was already created by ClaimNextReadyTask; we promote LEASED→RUNNING,
+// create a TaskAttempt record, and grant the lease.
+func (h *Handler) handleTaskAccepted(workerID string, ta *pb.TaskAccepted) {
+	if !h.config.PushMode {
 		return
 	}
-	log.Printf("[GRPC] Worker %s rejected job %s: %s", workerID, jobID, reason)
+	taskID := ta.GetTaskId()
 
-	if jobID != "" {
-		if err := h.jobsRepo.FailWithRetry(context.Background(), jobID, "", reason, true, 0); err != nil {
-			log.Printf("[GRPC] Failed to release rejected job %s: %v", jobID, err)
-		}
+	sess := h.getSession(workerID)
+	if sess == nil {
+		return
 	}
 
-	// Issue 4 fix: lock claimMu to safely access and clear pendingOffer.
+	// Lock claimMu to safely read and clear pendingTaskOffer.
+	sess.claimMu.Lock()
+	offer := sess.pendingTaskOffer
+	var offerTaskID, offerLeaseID string
+	if offer != nil {
+		offerTaskID = offer.ID
+		offerLeaseID = offer.LeaseID
+	}
+	sess.claimMu.Unlock()
+
+	if offer == nil || offerTaskID != taskID {
+		log.Printf("[GRPC] Worker %s accepted task %s but no matching pending offer", workerID, taskID)
+		return
+	}
+
+	// Verify the lease_id the worker is accepting matches what we offered.
+	declaredLeaseID := ta.GetLeaseId()
+	if declaredLeaseID != "" && declaredLeaseID != offerLeaseID {
+		log.Printf("[GRPC] Worker %s accepted task %s with mismatched lease_id: got %s, want %s",
+			workerID, taskID, declaredLeaseID, offerLeaseID)
+		return
+	}
+
+	// Promote LEASED → RUNNING atomically.
+	ctx := context.Background()
+	attemptNum := offer.AttemptCount + 1
+	if err := h.taskRepo.Start(ctx, taskID, workerID, declaredLeaseID, attemptNum, offer.Revision); err != nil {
+		if errors.Is(err, store.ErrTransitionConflict) {
+			log.Printf("[GRPC] Worker %s accepted task %s but lease is stale (rev=%d) — rejecting",
+				workerID, taskID, offer.Revision)
+			sess.claimMu.Lock()
+			if sess.pendingTaskOffer != nil && sess.pendingTaskOffer.ID == taskID {
+				sess.pendingTaskOffer = nil
+			}
+			sess.claimMu.Unlock()
+			return
+		}
+		log.Printf("[GRPC] StartTask (LEASED→RUNNING) failed for %s (worker %s): %v — keeping pending offer for retry",
+			taskID, workerID, err)
+		return
+	}
+
+	// Create TaskAttempt record.
+	attempt := &taskattempts.TaskAttempt{
+		ID:            uuid.NewString(),
+		TaskID:        taskID,
+		JobID:         offer.JobID,
+		WorkerID:      workerID,
+		AttemptNumber: attemptNum,
+		LeaseID:       declaredLeaseID,
+		Status:        taskattempts.AttemptStatusRunning,
+	}
+	if err := h.taskAttemptRepo.Create(ctx, attempt); err != nil {
+		log.Printf("[GRPC] Failed to create TaskAttempt for task %s: %v (task is RUNNING, attempt record missing)", taskID, err)
+		// Non-fatal: task is already RUNNING. Continue.
+	}
+
+	// Send typed TaskLeaseGranted via sendCh.
+	env := &pb.MasterToWorkerEnvelope{
+		MessageId:       fmt.Sprintf("taskgrant-%s-%s", workerID, taskID),
+		WorkerId:        workerID,
+		SentAt:          timestamppb.Now(),
+		ProtocolVersion: controltransport.ProtocolVersionCurrent,
+		Msg: &pb.MasterToWorkerEnvelope_TaskLeaseGranted{
+			TaskLeaseGranted: &pb.TaskLeaseGranted{
+				TaskId:    taskID,
+				JobId:     offer.JobID,
+				LeaseId:   offer.LeaseID,
+				AttemptId: attempt.ID,
+			},
+		},
+	}
+
+	if !safeSend(sess.sendCh, &outboundMessage{Envelope: env}) {
+		log.Printf("[GRPC] sendCh full/closed for TaskLeaseGranted to worker %s — releasing claim for task %s",
+			workerID, taskID)
+		if releaseErr := h.taskRepo.ReleaseLease(ctx, taskID); releaseErr != nil {
+			log.Printf("[GRPC] Failed to release claim for task %s after grant send failure: %v", taskID, releaseErr)
+		}
+		sess.claimMu.Lock()
+		if sess.pendingTaskOffer != nil && sess.pendingTaskOffer.ID == taskID {
+			sess.pendingTaskOffer = nil
+		}
+		sess.claimMu.Unlock()
+		return
+	}
+
+	// Clear pending offer under claimMu — task is now running on this worker.
+	sess.claimMu.Lock()
+	if sess.pendingTaskOffer != nil && sess.pendingTaskOffer.ID == taskID {
+		sess.pendingTaskOffer = nil
+	}
+	sess.claimMu.Unlock()
+}
+
+// handleTaskRejected processes typed TaskRejected — PR #4 task-native push mode.
+// Releases the claimed task back to READY for another worker.
+func (h *Handler) handleTaskRejected(workerID string, tr *pb.TaskRejected) {
+	taskID := tr.GetTaskId()
+	reason := tr.GetReason()
+	if taskID == "" {
+		return
+	}
+
+	// Verify the worker owns this task before releasing.
+	if !h.verifyTaskOwnership(workerID, taskID) {
+		log.Printf("[GRPC] TaskRejected from worker %s for task %s refused — ownership mismatch (reason=%q)",
+			workerID, taskID, reason)
+		return
+	}
+	log.Printf("[GRPC] Worker %s rejected task %s: %s", workerID, taskID, reason)
+
+	ctx := context.Background()
+	if err := h.taskRepo.ReleaseLease(ctx, taskID); err != nil {
+		log.Printf("[GRPC] Failed to release rejected task %s: %v", taskID, err)
+	}
+
+	// Clear pending offer under claimMu.
 	sess := h.getSession(workerID)
 	if sess == nil {
 		return
 	}
 	sess.claimMu.Lock()
-	if sess.pendingOffer != nil && sess.pendingOffer.JobID == jobID {
-		sess.pendingOffer = nil
+	if sess.pendingTaskOffer != nil && sess.pendingTaskOffer.ID == taskID {
+		sess.pendingTaskOffer = nil
 	}
 	sess.claimMu.Unlock()
+}
+
+// handleTaskResult processes typed TaskResult — PR #5 task-native reporting.
+// Receives the worker's execution report and transitions the TaskAttempt
+// and Task accordingly.
+func (h *Handler) handleTaskResult(workerID string, tr *pb.TaskResult) {
+	taskID := tr.GetTaskId()
+	if taskID == "" {
+		log.Printf("[GRPC] TaskResult from worker %s missing task_id — dropping", workerID)
+		return
+	}
+
+	status := tr.GetStatus()
+	log.Printf("[GRPC] Worker %s reported task %s: status=%s code=%q detail=%q",
+		workerID, taskID, status, tr.GetErrorCode(), tr.GetErrorDetail())
+
+	ctx := context.Background()
+	jobID := tr.GetJobId()
+
+	// Log output artifacts if present (PR #5).
+	if artifacts := tr.GetOutputArtifacts(); len(artifacts) > 0 {
+		log.Printf("[GRPC] TaskResult for %s includes %d output artifacts", taskID, len(artifacts))
+	}
+
+	if status == "succeeded" {
+		// Mark task SUCCEEDED.
+		t, err := h.taskRepo.Get(ctx, taskID)
+		if err != nil || t == nil {
+			log.Printf("[GRPC] TaskResult for unknown task %s: %v", taskID, err)
+			return
+		}
+		if err := h.taskRepo.SetStatus(ctx, taskID, taskgraph.StatusRunning, taskgraph.StatusSucceeded, t.Revision); err != nil {
+			log.Printf("[GRPC] TaskResult success transition failed for %s: %v", taskID, err)
+			return
+		}
+		// Update the attempt record.
+		if activeAttempt, err := h.taskAttemptRepo.GetActiveAttempt(ctx, taskID); err == nil && activeAttempt != nil {
+			_ = h.taskAttemptRepo.CompleteFinal(ctx, activeAttempt.ID, workerID, activeAttempt.LeaseID, taskattempts.AttemptStatusSucceeded, "", "", activeAttempt.ReportVersion)
+		}
+	} else {
+		// Task failed.
+		t, err := h.taskRepo.Get(ctx, taskID)
+		if err != nil || t == nil {
+			log.Printf("[GRPC] TaskResult for unknown task %s: %v", taskID, err)
+			return
+		}
+		if err := h.taskRepo.Fail(ctx, taskID, tr.GetErrorDetail(), t.Revision); err != nil {
+			log.Printf("[GRPC] TaskResult fail transition failed for %s: %v", taskID, err)
+			return
+		}
+		// Update the attempt record.
+		if activeAttempt, err := h.taskAttemptRepo.GetActiveAttempt(ctx, taskID); err == nil && activeAttempt != nil {
+			_ = h.taskAttemptRepo.CompleteFinal(ctx, activeAttempt.ID, workerID, activeAttempt.LeaseID, taskattempts.AttemptStatusFailed, tr.GetErrorCode(), tr.GetErrorDetail(), activeAttempt.ReportVersion)
+		}
+	}
+
+	// PR #5: after task transition, check if ALL tasks for this job are terminal.
+	// If so, transition the job to SUCCEEDED (all tasks succeeded) or FAILED (any failed).
+	if jobID != "" {
+		go h.maybeTransitionJob(ctx, jobID)
+	}
+}
+
+// maybeTransitionJob checks whether all tasks for a job are terminal and,
+// if so, transitions the job to SUCCEEDED (all succeeded) or FAILED (any failed).
+// PR #5: runs asynchronously after each task result to avoid blocking the gRPC loop.
+func (h *Handler) maybeTransitionJob(ctx context.Context, jobID string) {
+	tasks, err := h.taskRepo.List(ctx, taskgraph.Filter{JobIDs: []string{jobID}})
+	if err != nil || len(tasks) == 0 {
+		log.Printf("[GRPC] maybeTransitionJob: cannot list tasks for job %s: %v", jobID, err)
+		return
+	}
+
+	allTerminal := true
+	allSucceeded := true
+	for _, t := range tasks {
+		if !t.Status.IsTerminal() {
+			allTerminal = false
+			break
+		}
+		if t.Status != taskgraph.StatusSucceeded {
+			allSucceeded = false
+		}
+	}
+
+	if !allTerminal {
+		return // Some tasks still running; nothing to do.
+	}
+
+	// Determine the job's terminal status.
+	var newStatus jobs.Status
+	if allSucceeded {
+		newStatus = jobs.StatusSucceeded
+	} else {
+		newStatus = jobs.StatusFailed
+	}
+
+	// Read the job's current revision for CAS.
+	job, err := h.jobsRepo.Get(ctx, jobID)
+	if err != nil || job == nil {
+		log.Printf("[GRPC] maybeTransitionJob: cannot get job %s: %v", jobID, err)
+		return
+	}
+	if job.Status.IsTerminal() {
+		return // Already terminal; nothing to do.
+	}
+
+	if err := h.jobsRepo.SetStatus(ctx, jobID, job.Status, newStatus); err != nil {
+		log.Printf("[GRPC] maybeTransitionJob: failed to transition job %s to %s: %v", jobID, newStatus, err)
+		return
+	}
+	log.Printf("[GRPC] maybeTransitionJob: job %s transitioned to %s (all tasks terminal)", jobID, newStatus)
+}
+
+// verifyTaskOwnership checks that taskID currently belongs to workerID.
+func (h *Handler) verifyTaskOwnership(workerID, taskID string) bool {
+	if workerID == "" || taskID == "" {
+		return false
+	}
+	t, err := h.taskRepo.Get(context.Background(), taskID)
+	if err != nil || t == nil {
+		return false
+	}
+	return t.WorkerID == workerID
 }
 
 // handleJobProgress tracks per-job progress (typed, forwarded via heartbeat for now).
@@ -281,28 +416,24 @@ func (h *Handler) handleLeaseRenewal(workerID string, lr *pb.LeaseRenewal) {
 	}
 }
 
-// verifyJobOwnership checks that `jobID` currently belongs to `workerID`.
-// Returns true when the job's WorkerID equals `workerID`. The function
-// does NOT check the lease_id or the lease expiry here — callers that
-// carry an explicit lease_id should pass it (see verifyJobOwnershipFull).
-//
-// Phase 3.3: this is the lightweight gate behind every mutating message
-// (JobResult, LeaseRenewal, JobRejected, ArtifactUploaded, JobProgress).
-// Without it, an authenticated worker A could complete or steal a job
-// leased to worker B by sending JobResult{ job_id=<B's job> } — which
-// the protobuf contract alone does not protect against.
-//
-// Ondata 3 PR3: migrated from dbStore.GetJob (map-based) to
-// jobsRepo.Get (canonical jobs.Job domain model).
+// verifyJobOwnership checks that `jobID` currently belongs to `workerID`
+// by querying the task table (PR #7). The Job struct no longer carries
+// WorkerID — tasks carry the per-execution state.
 func (h *Handler) verifyJobOwnership(workerID, jobID string) bool {
 	if workerID == "" || jobID == "" {
 		return false
 	}
-	j, err := h.jobsRepo.Get(context.Background(), jobID)
-	if err != nil || j == nil {
+	// Check if any task for this job is currently held by workerID.
+	tasks, err := h.taskRepo.List(context.Background(), taskgraph.Filter{JobIDs: []string{jobID}})
+	if err != nil || len(tasks) == 0 {
 		return false
 	}
-	return j.WorkerID == workerID
+	for _, t := range tasks {
+		if t.WorkerID == workerID && !t.Status.IsTerminal() {
+			return true
+		}
+	}
+	return false
 }
 
 // lookupJobCASFields fetches the (revision, attempt) tuple required for the

@@ -46,7 +46,7 @@ type moduleDeps struct {
 //
 // The returned moduleDeps carries the per-module pointers so the caller
 // can wire them into the serverDeps compat path and the supervisor.
-func buildModules(cfg *config.Config, p *persistenceDeps, j *jobsDeps, w *workerDeps, a *assetDeps) (*moduleDeps, error) {
+func buildModules(cfg *config.Config, p *persistenceDeps, j *jobsDeps, w *workerDeps, a *assetDeps, t *taskDeps) (*moduleDeps, error) {
 	registry := app.NewRegistry()
 	auth := api.AdminAuthMiddleware(cfg)
 	pipeline.InitRemoteEngine(cfg)
@@ -76,9 +76,8 @@ func buildModules(cfg *config.Config, p *persistenceDeps, j *jobsDeps, w *worker
 	assetRepo := store.NewSQLiteAssetRepository(p.SQLite)
 	assetSvc := voiceoverassets.NewAssetService(assetRepo, p.BlobStore, assetRegistry, clock.System{})
 
-	// ── Enqueuer (needs jobs repository + asset service) ────────────
-	enqueuer := enqueue.NewEnqueuer(&writerAdapter{w: j.Repository}, assetSvc)
-	pipeline.InitPipelineEnqueuer(enqueuer)
+	// ── Enqueuer (needs atomic creator + jobs repository + asset service) ──
+	enqueuer := enqueue.NewEnqueuer(t.AtomicCreator, j.Repository, assetSvc)
 
 	// ── Register modules ────────────────────────────────────────────
 	healthMod := app.NewHealthModule()

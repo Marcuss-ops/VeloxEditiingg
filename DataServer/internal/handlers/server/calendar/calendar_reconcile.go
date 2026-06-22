@@ -11,6 +11,7 @@ import (
 
 	"velox-server/internal/jobs"
 	"velox-server/internal/store"
+	"velox-server/internal/taskgraph"
 )
 
 func (api *CalendarAPI) reconcileCalendarEvent(ctx context.Context, event *store.CalendarEvent, force bool) error {
@@ -77,7 +78,7 @@ func (api *CalendarAPI) reconcileCalendarEvent(ctx context.Context, event *store
 		event.JobID = "cal_" + uuid.NewString()
 		jobPayload = buildCalendarJobPayload(event, "")
 	}
-	if err := submitCalendarJob(ctx, api.writer, event.JobID, jobPayload); err != nil {
+	if err := submitCalendarJob(ctx, api.atomic, event.JobID, jobPayload); err != nil {
 		return err
 	}
 	event.Status = "queued"
@@ -164,10 +165,11 @@ func applyQueueStateToEvent(ctx context.Context, event *store.CalendarEvent, job
 	}
 }
 
-// submitCalendarJob creates a new job via jobs.Writer.Create (replaces queue.FileQueue.SubmitJob).
-func submitCalendarJob(ctx context.Context, writer jobs.Writer, jobID string, payload map[string]interface{}) error {
-	if writer == nil {
-		return fmt.Errorf("submit calendar job: writer is nil")
+// submitCalendarJob creates a new job via AtomicJobTaskCreator (Job+Task atomically).
+// PR #3: replaces jobs.Writer.Create (Job-only) with the single atomic creation path.
+func submitCalendarJob(ctx context.Context, atomic *store.AtomicJobTaskCreator, jobID string, payload map[string]interface{}) error {
+	if atomic == nil {
+		return fmt.Errorf("submit calendar job: creator is nil")
 	}
 	var videoName, projectID, runID string
 	if s, ok := payload["video_name"].(string); ok {
@@ -191,7 +193,14 @@ func submitCalendarJob(ctx context.Context, writer jobs.Writer, jobID string, pa
 		MaxRetries: 3,
 		Payload:    string(raw),
 	}
-	return writer.Create(ctx, job)
+	spec := &taskgraph.TaskSpec{
+		Version:    taskgraph.SpecVersion,
+		JobID:      jobID,
+		ExecutorID: "scene.composite.v1@1",
+		Payload:    payload,
+	}
+	priority := 5
+	return atomic.CreateJobWithTask(ctx, job, spec, priority)
 }
 
 // persistJobResult saves mutable job state to result_json via SQLiteStore
@@ -205,10 +214,6 @@ func persistJobResult(job *jobs.QueueItem, dbStore *store.SQLiteStore) error {
 	m["status"] = string(job.Status)
 	m["video_name"] = job.VideoName
 	m["project_id"] = job.ProjectID
-	m["assigned_to"] = job.AssignedTo
-	m["lease_id"] = job.LeaseID
-	m["retry_count"] = job.RetryCount
-	m["attempt"] = job.Attempt
 	m["max_retries"] = job.MaxRetries
 	m["last_error"] = job.LastError
 	m["error_message"] = job.ErrorMessage

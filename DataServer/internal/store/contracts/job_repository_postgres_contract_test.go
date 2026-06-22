@@ -7,12 +7,11 @@
 //
 // Note: the PRE-EXISTING JobRepositoryContract_SQLite test in
 // jobs_repository_contract_test.go is intentionally untouched — it uses
-// concrete *store.SQLiteJobRepository methods (CreateJob / GetJob /
-// ListByStatus / Transition) and the SQLite job_history / job_events
-// audit rows that are outside the narrow jobs.Writer contract. The
-// cross-backend contract here targets jobs.Repository (narrow) and
-// proves backend parity for those 17 methods only — internal audit
-// tables remain SQLite-only until a late Phase 2 port.
+// concrete *store.SQLiteJobRepository methods (GetJob / ListByStatus /
+// Transition) and the SQLite job_history / job_events audit rows that
+// are outside the narrow jobs.Writer contract. The cross-backend contract
+// here targets jobs.Repository (narrow) and proves backend parity.
+// PR #8: createJob is nil for Postgres — tests that need job setup skip.
 package contracts
 
 import (
@@ -27,5 +26,5 @@ func TestJobRepositoryContract_Postgres(t *testing.T) {
 	if os.Getenv(PostgresDsnEnvVar) == "" {
 		t.Skipf("Postgres contract tests skipped: set %s to enable", PostgresDsnEnvVar)
 	}
-	JobRepositoryContractCrossBackend(t, NewPostgresJobRepositoryFactory)
+	JobRepositoryContractCrossBackend(t, NewPostgresJobRepositoryFactory, nil)
 }

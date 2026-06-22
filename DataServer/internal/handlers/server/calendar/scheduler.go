@@ -16,13 +16,13 @@ import (
 type CalendarScheduler struct {
 	store    *store.SQLiteStore
 	reader   jobs.Reader
-	writer   jobs.Writer
+	atomic   *store.AtomicJobTaskCreator
 	interval time.Duration
 	api      *CalendarAPI
 }
 
 // NewCalendarScheduler creates a scheduler with a sane default interval.
-func NewCalendarScheduler(s *store.SQLiteStore, reader jobs.Reader, writer jobs.Writer) *CalendarScheduler {
+func NewCalendarScheduler(s *store.SQLiteStore, reader jobs.Reader, atomic *store.AtomicJobTaskCreator) *CalendarScheduler {
 	interval := 30 * time.Second
 	if raw := strings.TrimSpace(os.Getenv("VELOX_CALENDAR_SCHEDULER_INTERVAL_SECONDS")); raw != "" {
 		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
@@ -32,9 +32,9 @@ func NewCalendarScheduler(s *store.SQLiteStore, reader jobs.Reader, writer jobs.
 	return &CalendarScheduler{
 		store:    s,
 		reader:   reader,
-		writer:   writer,
+		atomic:   atomic,
 		interval: interval,
-		api:      &CalendarAPI{store: s, reader: reader, writer: writer},
+		api:      &CalendarAPI{store: s, reader: reader, atomic: atomic},
 	}
 }
 

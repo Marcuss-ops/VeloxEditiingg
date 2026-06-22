@@ -8,11 +8,15 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 
 	"velox-server/internal/costmodel"
+	"velox-server/internal/jobs"
 	"velox-server/internal/store"
+	"velox-server/internal/taskgraph"
 )
 
-// NewSQLiteJobRepositoryFactory returns a fresh SQLite-backed *SQLiteJobRepository.
-func NewSQLiteJobRepositoryFactory(t *testing.T) (*store.SQLiteJobRepository, func()) {
+// NewSQLiteJobRepositoryFactory returns a fresh SQLite-backed *SQLiteJobRepository
+// and its companion AtomicJobTaskCreator (canonical job-create path since PR #8
+// dead-code removal).
+func NewSQLiteJobRepositoryFactory(t *testing.T) (*store.SQLiteJobRepository, *store.AtomicJobTaskCreator, func()) {
 	t.Helper()
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "contract_jobs.db")
@@ -21,7 +25,25 @@ func NewSQLiteJobRepositoryFactory(t *testing.T) (*store.SQLiteJobRepository, fu
 		t.Fatalf("NewSQLiteStore: %v", err)
 	}
 	cleanup := func() { _ = dbStore.Close() }
-	return store.NewSQLiteJobRepository(dbStore), cleanup
+	return store.NewSQLiteJobRepository(dbStore), store.NewAtomicJobTaskCreator(dbStore), cleanup
+}
+
+// makeTestTaskSpec returns a minimal TaskSpec suitable for contract-test
+// job creation via AtomicJobTaskCreator.CreateJobWithTask.
+func makeTestTaskSpec() *taskgraph.TaskSpec {
+	return &taskgraph.TaskSpec{
+		ExecutorID: "test-executor",
+		Version:    1,
+	}
+}
+
+// prepareJob is a contract-test helper that creates a job via the canonical
+// AtomicJobTaskCreator path.
+func prepareJob(t *testing.T, atomic *store.AtomicJobTaskCreator, job *jobs.Job) {
+	t.Helper()
+	if err := atomic.CreateJobWithTask(context.Background(), job, makeTestTaskSpec(), 0); err != nil {
+		t.Fatalf("CreateJobWithTask: %v", err)
+	}
 }
 
 // pendingJobID returns the JobID of the most recently-created PENDING job, or
@@ -41,22 +63,19 @@ func pendingJobID(t *testing.T, repo *store.SQLiteJobRepository, ctx context.Con
 
 // JobRepositoryContract runs the cross-backend test suite for jobs.
 // Spec §5: identical behaviour across SQLite (today) and Postgres (PR-2b).
-func JobRepositoryContract(t *testing.T, factory func(t *testing.T) (*store.SQLiteJobRepository, func())) {
-	t.Run("CreateJob then GetJob round-trip", func(t *testing.T) {
-		repo, cleanup := factory(t)
+func JobRepositoryContract(t *testing.T, factory func(t *testing.T) (*store.SQLiteJobRepository, *store.AtomicJobTaskCreator, func())) {
+	t.Run("CreateJobWithTask then GetJob round-trip", func(t *testing.T) {
+		repo, atomic, cleanup := factory(t)
 		defer cleanup()
 		ctx := context.Background()
 		jobID := "job_roundtrip_" + randSuffix()
-		err := repo.CreateJob(ctx, store.CreateJobParams{
-			JobID:      jobID,
+		prepareJob(t, atomic, &jobs.Job{
+			ID:         jobID,
 			VideoName:  "test.mp4",
 			ProjectID:  "p1",
 			MaxRetries: 3,
-			Payload:    map[string]interface{}{"job_type": "render"},
+			Payload:    `{"job_type":"render"}`,
 		})
-		if err != nil {
-			t.Fatalf("CreateJob: %v", err)
-		}
 		got, err := repo.GetJob(ctx, jobID)
 		if err != nil {
 			t.Fatalf("GetJob: %v", err)
@@ -73,7 +92,7 @@ func JobRepositoryContract(t *testing.T, factory func(t *testing.T) (*store.SQLi
 	})
 
 	t.Run("GetJob missing returns (nil, nil)", func(t *testing.T) {
-		repo, cleanup := factory(t)
+		repo, _, cleanup := factory(t)
 		defer cleanup()
 		got, err := repo.GetJob(context.Background(), "job_does_not_exist")
 		if err != nil {
@@ -85,7 +104,7 @@ func JobRepositoryContract(t *testing.T, factory func(t *testing.T) (*store.SQLi
 	})
 
 	t.Run("ClaimNext returns ErrNoClaimableJob on empty queue", func(t *testing.T) {
-		repo, cleanup := factory(t)
+		repo, _, cleanup := factory(t)
 		defer cleanup()
 		got, err := repo.ClaimNext(context.Background(), "worker-1", nil)
 		if err == nil {
@@ -97,27 +116,21 @@ func JobRepositoryContract(t *testing.T, factory func(t *testing.T) (*store.SQLi
 	})
 
 	t.Run("ClaimNext end-to-end persists lease and updates status", func(t *testing.T) {
-		repo, cleanup := factory(t)
+		repo, atomic, cleanup := factory(t)
 		defer cleanup()
 		ctx := context.Background()
 		jobID := "job_claim_e2e_" + randSuffix()
-		if err := repo.CreateJob(ctx, store.CreateJobParams{
-			JobID: jobID, MaxRetries: 3,
-		}); err != nil {
-			t.Fatalf("CreateJob: %v", err)
-		}
+		prepareJob(t, atomic, &jobs.Job{ID: jobID, MaxRetries: 3})
 		got, err := repo.ClaimNext(ctx, "worker-1", nil)
 		if err != nil || got == nil {
 			t.Fatalf("ClaimNext: %v %v", got, err)
 		}
 		// Spec §5 atomicity: re-read the persisted row to confirm the claim
-		// committed end-to-end (status moved, lease populated).
+		// committed end-to-end (status moved). PR #9: lease_id column dropped —
+		// lease identity now lives in result_json + job_attempts.
 		persisted, err := repo.GetJob(ctx, got.JobID)
 		if err != nil || persisted == nil {
 			t.Fatalf("GetJob after claim: %v %v", persisted, err)
-		}
-		if persisted.LeaseID == "" {
-			t.Error("expected LeaseID populated on persisted row after claim (atomicity breach?)")
 		}
 		if persisted.Status == store.JobStatusPending {
 			t.Errorf("expected status to leave PENDING after claim, still %q", persisted.Status)
@@ -125,13 +138,11 @@ func JobRepositoryContract(t *testing.T, factory func(t *testing.T) (*store.SQLi
 	})
 
 	t.Run("Transition CAS success advances status and increments revision", func(t *testing.T) {
-		repo, cleanup := factory(t)
+		repo, atomic, cleanup := factory(t)
 		defer cleanup()
 		ctx := context.Background()
 		jobID := "job_trans_" + randSuffix()
-		if err := repo.CreateJob(ctx, store.CreateJobParams{JobID: jobID, MaxRetries: 3}); err != nil {
-			t.Fatalf("CreateJob: %v", err)
-		}
+		prepareJob(t, atomic, &jobs.Job{ID: jobID, MaxRetries: 3})
 		j, err := repo.GetJob(ctx, jobID)
 		if err != nil || j == nil {
 			t.Fatalf("GetJob pre-transition: %v %v", j, err)
@@ -157,13 +168,11 @@ func JobRepositoryContract(t *testing.T, factory func(t *testing.T) (*store.SQLi
 	})
 
 	t.Run("Transition CAS conflict returns ErrTransitionConflict", func(t *testing.T) {
-		repo, cleanup := factory(t)
+		repo, atomic, cleanup := factory(t)
 		defer cleanup()
 		ctx := context.Background()
 		jobID := "job_cas_" + randSuffix()
-		if err := repo.CreateJob(ctx, store.CreateJobParams{JobID: jobID, MaxRetries: 3}); err != nil {
-			t.Fatalf("CreateJob: %v", err)
-		}
+		prepareJob(t, atomic, &jobs.Job{ID: jobID, MaxRetries: 3})
 		jID := pendingJobID(t, repo, ctx)
 		j, err := repo.GetJob(ctx, jID)
 		if err != nil || j == nil {
@@ -190,8 +199,8 @@ func JobRepositoryContract(t *testing.T, factory func(t *testing.T) (*store.SQLi
 		}
 	})
 
-	t.Run("ClaimNext round-trip populates Requirements from _requirements sub-object", func(t *testing.T) {
-		repo, cleanup := factory(t)
+	t.Run("ClaimNext round-trip populates Requirements from dedicated columns", func(t *testing.T) {
+		repo, atomic, cleanup := factory(t)
 		defer cleanup()
 		ctx := context.Background()
 		jobID := "job_req_fifo_" + randSuffix()
@@ -202,13 +211,11 @@ func JobRepositoryContract(t *testing.T, factory func(t *testing.T) (*store.SQLi
 			Cacheable:        true,
 			MinBandwidthMbps: 100,
 		}
-		if err := repo.CreateJob(ctx, store.CreateJobParams{
-			JobID:        jobID,
+		prepareJob(t, atomic, &jobs.Job{
+			ID:           jobID,
 			MaxRetries:   3,
 			Requirements: req,
-		}); err != nil {
-			t.Fatalf("CreateJob: %v", err)
-		}
+		})
 		got, err := repo.ClaimNext(ctx, "worker-fifo-req", nil)
 		if err != nil || got == nil {
 			t.Fatalf("ClaimNext: %v %v", got, err)
@@ -233,8 +240,8 @@ func JobRepositoryContract(t *testing.T, factory func(t *testing.T) (*store.SQLi
 		}
 	})
 
-	t.Run("ClaimNextForProfile round-trip populates Requirements from _requirements sub-object", func(t *testing.T) {
-		repo, cleanup := factory(t)
+	t.Run("ClaimNextForProfile round-trip populates Requirements from dedicated columns", func(t *testing.T) {
+		repo, atomic, cleanup := factory(t)
 		defer cleanup()
 		ctx := context.Background()
 		jobID := "job_req_rank_" + randSuffix()
@@ -245,13 +252,11 @@ func JobRepositoryContract(t *testing.T, factory func(t *testing.T) (*store.SQLi
 			Cacheable:        true,
 			MinBandwidthMbps: 0,
 		}
-		if err := repo.CreateJob(ctx, store.CreateJobParams{
-			JobID:        jobID,
+		prepareJob(t, atomic, &jobs.Job{
+			ID:           jobID,
 			MaxRetries:   3,
 			Requirements: req,
-		}); err != nil {
-			t.Fatalf("CreateJob: %v", err)
-		}
+		})
 		// BuildWorkerProfile with nil capabilities yields the CPU +
 		// frame_local defaults; matches the on-disk requirements so
 		// ClaimNextForProfile's eligibility gate (cost.Eligible) is
@@ -281,25 +286,19 @@ func JobRepositoryContract(t *testing.T, factory func(t *testing.T) (*store.SQLi
 		}
 	})
 
-	t.Run("ClaimNext on legacy empty Requirements returns DefaultRequirements", func(t *testing.T) {
-		repo, cleanup := factory(t)
+	t.Run("ClaimNext on empty Requirements returns DefaultRequirements", func(t *testing.T) {
+		repo, atomic, cleanup := factory(t)
 		defer cleanup()
 		ctx := context.Background()
 		jobID := "job_req_legacy_" + randSuffix()
-		// Legacy-Posture: zero Requirements. The columns get inserted
-		// as empty strings, the mirror at claim time skips writing
-		// _requirements (its guard checks TrimSpace(rc) != ""), so
-		// the result_json field is absent. Reading it round-trips
-		// to DefaultRequirements() — the safe permissive fallback
-		// preserved for pre-PR-04.5 rows and for any future caller
-		// that hasn't yet migrated to publishing requirements.
-		if err := repo.CreateJob(ctx, store.CreateJobParams{
-			JobID:        jobID,
+		// PR #6: zero Requirements written to dedicated columns as
+		// empty strings / zero values. ClaimNext returns
+		// DefaultRequirements() — the safe permissive fallback.
+		prepareJob(t, atomic, &jobs.Job{
+			ID:           jobID,
 			MaxRetries:   3,
 			Requirements: costmodel.DefaultRequirements(),
-		}); err != nil {
-			t.Fatalf("CreateJob: %v", err)
-		}
+		})
 		got, err := repo.ClaimNext(ctx, "worker-legacy-req", nil)
 		if err != nil || got == nil {
 			t.Fatalf("ClaimNext: %v %v", got, err)
@@ -310,12 +309,12 @@ func JobRepositoryContract(t *testing.T, factory func(t *testing.T) (*store.SQLi
 			got.Requirements.Deterministic != def.Deterministic ||
 			got.Requirements.Cacheable != def.Cacheable ||
 			got.Requirements.MinBandwidthMbps != def.MinBandwidthMbps {
-			t.Errorf("legacy-empty Requirements mismatch: got %+v want %+v", got.Requirements, def)
+			t.Errorf("empty Requirements mismatch: got %+v want %+v", got.Requirements, def)
 		}
 	})
 
 	t.Run("ListByStatus with empty statuses returns nil", func(t *testing.T) {
-		repo, cleanup := factory(t)
+		repo, _, cleanup := factory(t)
 		defer cleanup()
 		got, err := repo.ListByStatus(context.Background(), nil, 10)
 		if err != nil {

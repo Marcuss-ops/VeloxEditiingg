@@ -3,8 +3,12 @@
 -- Mirrors the cumulative shape of the SQLite `jobs` table after
 -- migrations 001_initial + 015_revision + 017_normalization +
 -- 023_columns minus the columns DROPPED in
--- 033_drop_legacy_job_columns / 038_drop_jobs_raw_json. Result
--- matches store_jobs_query.go's `jobProjectionColumns` projection.
+-- 033_drop_legacy_job_columns / 038_drop_jobs_raw_json / 048_drop_jobs_runtime_columns.
+-- Result matches store_jobs_query.go's `jobProjectionColumns` projection.
+--
+-- PR #9: assigned_to, claimed_by, lease_id, lease_expiry, retry_count dropped.
+-- Runtime state (worker assignment, lease identity, attempt count) lives on
+-- tasks + job_attempts now.
 --
 -- Cross-domain FK strategy: deliberately omitted. jobs is referenced
 -- by artifacts.job_id, job_attempts.job_id, job_events.job_id, and
@@ -27,13 +31,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     started_at                   TEXT,
     completed_at                 TEXT,
     assigned_at                  TEXT,
-    assigned_to                  TEXT,
     worker_name                  TEXT,
-    claimed_by                   TEXT,
     claimed_at                   TEXT,
-    lease_id                     TEXT,
-    lease_expiry                 TEXT,
-    retry_count                  INTEGER NOT NULL DEFAULT 0,
     attempt                      INTEGER NOT NULL DEFAULT 0,
     max_retries                  INTEGER NOT NULL DEFAULT 3,
     revision                     INTEGER NOT NULL DEFAULT 0,
@@ -61,11 +60,8 @@ CREATE TABLE IF NOT EXISTS jobs (
 
 CREATE INDEX IF NOT EXISTS idx_pg_jobs_status ON jobs(status);
 CREATE INDEX IF NOT EXISTS idx_pg_jobs_updated ON jobs(updated_at);
-CREATE INDEX IF NOT EXISTS idx_pg_jobs_assigned_to ON jobs(assigned_to, status);
 CREATE INDEX IF NOT EXISTS idx_pg_jobs_last_error ON jobs(last_error);
 CREATE INDEX IF NOT EXISTS idx_pg_jobs_completed_at ON jobs(completed_at);
-CREATE INDEX IF NOT EXISTS idx_pg_jobs_lease_expiry ON jobs(lease_expiry)
-    WHERE lease_expiry IS NOT NULL AND lease_expiry <> '';
 -- Partial index for ClaimNext: keeps `WHERE UPPER(status)='PENDING'
 -- ORDER BY updated_at` cheap on large backlogs.
 CREATE INDEX IF NOT EXISTS idx_pg_jobs_pending_first ON jobs(updated_at)

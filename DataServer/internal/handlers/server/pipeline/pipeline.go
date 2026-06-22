@@ -31,7 +31,7 @@ var pipelineEnqueuer *enqueue.Enqueuer
 // composition root, BEFORE serving any HTTP traffic.
 func InitPipelineEnqueuer(e *enqueue.Enqueuer) {
 	pipelineEnqueuer = e
-	pipelineLog("INIT: pipeline enqueuer wired queue=%T voiceover=%v", e.Queue, e != nil && e.Voiceover != nil)
+	pipelineLog("INIT: pipeline enqueuer wired creator=%v voiceover=%v", e != nil && e.Creator != nil, e != nil && e.Voiceover != nil)
 }
 
 // structured log helper

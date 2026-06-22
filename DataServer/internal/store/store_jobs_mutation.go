@@ -19,8 +19,6 @@ func (s *SQLiteStore) UpsertJobResult(jobID string, resultJSON []byte) error {
 	projectID := asString(m["project_id"])
 	createdAt := toISO(m["created_at"])
 	updatedAt := toISO(m["updated_at"])
-	assignedTo := asString(m["assigned_to"])
-	retryCount := asInt(m["retry_count"])
 	lastError := asString(m["last_error"])
 	if lastError == "" {
 		lastError = asString(m["error_message"])
@@ -30,22 +28,20 @@ func (s *SQLiteStore) UpsertJobResult(jobID string, resultJSON []byte) error {
 	_, err := s.db.Exec(
 		`INSERT INTO jobs (
 			job_id, status, video_name, project_id, created_at, updated_at,
-			assigned_to, retry_count, last_error, completed_at,
+			last_error, completed_at,
 			result_json, migrated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(job_id) DO UPDATE SET
 			status=excluded.status,
 			video_name=excluded.video_name,
 			project_id=excluded.project_id,
 			updated_at=excluded.updated_at,
-			assigned_to=excluded.assigned_to,
-			retry_count=excluded.retry_count,
 			last_error=excluded.last_error,
 			completed_at=excluded.completed_at,
 			result_json=excluded.result_json,
 			migrated_at=excluded.migrated_at`,
 		jobID, status, videoName, projectID, createdAt, updatedAt,
-		assignedTo, retryCount, lastError, completedAt,
+		lastError, completedAt,
 		string(resultJSON), now,
 	)
 	return err

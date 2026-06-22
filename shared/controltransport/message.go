@@ -18,6 +18,9 @@ const (
 	MsgLeaseRenewal     ControlMessageType = "lease_renewal"
 	MsgJobAccepted      ControlMessageType = "job_accepted"
 	MsgJobRejected      ControlMessageType = "job_rejected"
+	MsgTaskAccepted     ControlMessageType = "task_accepted"
+	MsgTaskRejected     ControlMessageType = "task_rejected"
+	MsgTaskResult       ControlMessageType = "task_result"
 	MsgJobProgress      ControlMessageType = "job_progress"
 	MsgCommandAck       ControlMessageType = "command_ack"
 	MsgArtifactUploaded ControlMessageType = "artifact_uploaded"
@@ -28,8 +31,10 @@ const (
 // --- Master → Worker ---
 const (
 	MsgHelloAck            ControlMessageType = "hello_ack"
-	MsgJobOffer            ControlMessageType = "job_offer" // full job with lease_id from SQLite CAS (push mode)
+	MsgJobOffer            ControlMessageType = "job_offer"
+	MsgTaskOffer           ControlMessageType = "task_offer"
 	MsgJobLeaseGranted     ControlMessageType = "job_lease_granted"
+	MsgTaskLeaseGranted    ControlMessageType = "task_lease_granted"
 	MsgCommand             ControlMessageType = "command"
 	MsgCancelJob           ControlMessageType = "cancel_job"
 	MsgDrain               ControlMessageType = "drain"
@@ -42,7 +47,8 @@ const (
 func (t ControlMessageType) IsWorkerToMaster() bool {
 	switch t {
 	case MsgHello, MsgHeartbeat, MsgLeaseRenewal, MsgJobAccepted,
-		MsgJobRejected, MsgJobProgress, MsgCommandAck, MsgArtifactUploaded,
+		MsgJobRejected, MsgTaskAccepted, MsgTaskRejected, MsgTaskResult,
+		MsgJobProgress, MsgCommandAck, MsgArtifactUploaded,
 		MsgJobResult, MsgGoodbye:
 		return true
 	}
@@ -52,7 +58,7 @@ func (t ControlMessageType) IsWorkerToMaster() bool {
 // IsMasterToWorker returns true for messages sent from master to worker.
 func (t ControlMessageType) IsMasterToWorker() bool {
 	switch t {
-	case MsgHelloAck, MsgJobOffer, MsgJobLeaseGranted, MsgCommand, MsgCancelJob,
+	case MsgHelloAck, MsgJobOffer, MsgTaskOffer, MsgJobLeaseGranted, MsgTaskLeaseGranted, MsgCommand, MsgCancelJob,
 		MsgDrain, MsgConfigurationUpdate, MsgLeaseRevoked, MsgPing:
 		return true
 	}

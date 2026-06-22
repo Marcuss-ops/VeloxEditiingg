@@ -15,10 +15,11 @@ import (
 type Status string
 
 const (
-	StatusPending    Status = "PENDING"
-	StatusProcessing Status = "PROCESSING"
-	StatusProcessed  Status = "PROCESSED"
-	StatusFailed     Status = "FAILED"
+	StatusPending                Status = "PENDING"
+	StatusProcessing             Status = "PROCESSING"
+	StatusProcessed              Status = "PROCESSED"
+	StatusFailed                 Status = "FAILED"
+	StatusDiscardedLegacyCutover Status = "DISCARDED_LEGACY_CUTOVER"
 )
 
 // Event is the canonical in-memory representation of an outbox row.

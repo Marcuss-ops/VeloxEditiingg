@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -95,10 +96,9 @@ func (s *Store) Insert(ctx context.Context, txn Executor, p InsertParams) (strin
 	return id, nil
 }
 
-// Enqueue is a thin wrapper around Insert so legacy `OutboxWriter`-style
-// callers (workflow.Repository.SetOutbox wiring) can hand a fully-built
-// InsertParams to the store without duplicating validation. Returns the
-// generated event_id when the row commits cleanly.
+// Enqueue is a thin wrapper around Insert so callers can hand a
+// fully-built InsertParams to the store without duplicating validation.
+// Returns the generated event_id when the row commits cleanly.
 func (s *Store) Enqueue(ctx context.Context, txn Executor, p InsertParams) (string, error) {
 	return s.Insert(ctx, txn, p)
 }
@@ -316,3 +316,78 @@ func (s *Store) GetByID(ctx context.Context, eventID string) (*Event, string, er
 		AttemptCount:  attempt,
 	}, status, nil
 }
+
+// DrainLegacyEventsResult reports the outcome of a DrainLegacyEvents call.
+type DrainLegacyEventsResult struct {
+	TotalDiscarded int            `json:"total_discarded"`
+	ByEventType    map[string]int `json:"by_event_type"`
+}
+
+// DrainLegacyEvents atomically marks all PENDING or PROCESSING outbox
+// events whose event_type matches any entry in legacyTypes as
+// DISCARDED_LEGACY_CUTOVER. Returns counts per type for audit.
+//
+// This is the one-time migration for residual legacy outbox events
+// (WORKFLOW_STEP_READY, etc.) after the producers were stopped and
+// the no-op handlers were removed. Events already PROCESSED or FAILED
+// are left untouched.
+func (s *Store) DrainLegacyEvents(ctx context.Context, legacyTypes []string) (DrainLegacyEventsResult, error) {
+	var res DrainLegacyEventsResult
+	res.ByEventType = make(map[string]int)
+
+	if len(legacyTypes) == 0 {
+		return res, nil
+	}
+
+	// Build IN clause placeholders safely.
+	placeholders := make([]string, len(legacyTypes))
+	args := make([]interface{}, len(legacyTypes))
+	for i, t := range legacyTypes {
+		placeholders[i] = "?"
+		args[i] = t
+	}
+	inClause := "(" + strings.Join(placeholders, ",") + ")"
+
+	now := s.now().UTC().Format(time.RFC3339Nano)
+
+	// Query counts per type before updating (for audit).
+	countQuery := fmt.Sprintf(
+		`SELECT event_type, COUNT(*) FROM outbox_events
+		 WHERE event_type IN %s AND status IN ('PENDING', 'PROCESSING')
+		 GROUP BY event_type`, inClause)
+	rows, err := s.DB.QueryContext(ctx, countQuery, args...)
+	if err != nil {
+		return res, fmt.Errorf("outbox drain count: %w", err)
+	}
+	for rows.Next() {
+		var et string
+		var n int
+		if err := rows.Scan(&et, &n); err != nil {
+			rows.Close()
+			return res, fmt.Errorf("outbox drain count scan: %w", err)
+		}
+		res.ByEventType[et] = n
+		res.TotalDiscarded += n
+	}
+	rows.Close()
+
+	if res.TotalDiscarded == 0 {
+		return res, nil
+	}
+
+	// Atomically mark as DISCARDED_LEGACY_CUTOVER.
+	updateQuery := fmt.Sprintf(
+		`UPDATE outbox_events
+		 SET status = 'DISCARDED_LEGACY_CUTOVER',
+		     processed_at = ?,
+		     locked_by = NULL,
+		     locked_until = NULL
+		 WHERE event_type IN %s AND status IN ('PENDING', 'PROCESSING')`, inClause)
+	updateArgs := append([]interface{}{now}, args...)
+	if _, err := s.DB.ExecContext(ctx, updateQuery, updateArgs...); err != nil {
+		return res, fmt.Errorf("outbox drain update: %w", err)
+	}
+
+	return res, nil
+}
+

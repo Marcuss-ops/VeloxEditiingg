@@ -13,9 +13,9 @@
 // CHECK constraints are not added so legacy rows from before migration 021
 // continue to load.
 //
-// PR 8 + PR 9 cutover: ARTIFACT_READY outbox emission goes through the
-// generic outbox.Store (outbox_events table) instead of the legacy
-// orchestrator_outbox table.
+// PR 8 + PR 9 cutover: legacy ARTIFACT_READY outbox emission REMOVED.
+// The outbox event was acked by a no-op handler (Fase 4a) and the handler
+// was eliminated in PR #2 cleanup/outbox-legacy-drain.
 package store
 
 import (
@@ -24,8 +24,6 @@ import (
 	"errors"
 	"fmt"
 	"time"
-
-	"velox-server/internal/outbox"
 )
 
 // ErrArtifactTransitionConflict is returned when TransitionArtifactStatus
@@ -84,13 +82,7 @@ func (s *SQLiteStore) TransitionArtifactStatus(ctx context.Context, artifactID, 
 // 'VERIFYING') matches zero rows and the function returns ErrArtifactTransitionConflict;
 // callers must treat this as success (already finalized).
 //
-// PR 8 + PR 9: an ARTIFACT_READY outbox event is enqueued INSIDE the
-// same transaction as the artifact status flip (transactional-outbox
-// pattern). Aggregate_id = artifact_id so downstream consumers
-// (DeliveryRunner, JobSummary projection) can recover the source
-// artifact directly. Build the payload BEFORE commit so a crash between
-// the state-change commit and the outbox INSERT cannot silently drop the
-// event.
+// Legacy ARTIFACT_READY outbox emission removed in PR #2 (decommissioned).
 func (s *SQLiteStore) FinalizeArtifactVerified(ctx context.Context, artifactID, sha256 string, sizeBytes int64, mimeType string) (*Artifact, error) {
 	if artifactID == "" {
 		return nil, fmt.Errorf("artifact: FinalizeArtifactVerified: missing artifact_id")
@@ -150,29 +142,6 @@ func (s *SQLiteStore) FinalizeArtifactVerified(ctx context.Context, artifactID, 
 			return nil, ErrArtifactNotFound
 		}
 		return nil, fmt.Errorf("artifact: FinalizeArtifactVerified scan: %w", err)
-	}
-
-	// Enqueue the outbox event INSIDE the same tx so commit is the
-	// single atomicity boundary. emitOutbox forwards `tx` as the Executor
-	// so the INSERT joins the same write tx as the UPDATE above — a
-	// crash before commit means both state change and event roll back;
-	// a successful commit makes both rows durably visible in one step.
-	//
-	// If the outbox INSERT fails (busy DB, schema drift, etc.), we
-	// rollback the tx rather than commit a state change with no
-	// downstream notification. That preserves the transactional outbox
-	// guarantee: either both rows become visible, or neither does.
-	payload := []byte(fmt.Sprintf(
-		`{"artifact_id":"%s","sha256":"%s","size_bytes":%d,"mime_type":"%s","job_id":%q}`,
-		a.ID, a.SHA256, a.SizeBytes, mimeType, a.JobID,
-	))
-	if err := s.emitOutbox(ctx, tx, outbox.InsertParams{
-		AggregateType: "artifact",
-		AggregateID:   a.ID,
-		EventType:     "ARTIFACT_READY",
-		Payload:       payload,
-	}); err != nil {
-		return nil, fmt.Errorf("artifact: FinalizeArtifactVerified: outbox: %w", err)
 	}
 
 	if err := tx.Commit(); err != nil {

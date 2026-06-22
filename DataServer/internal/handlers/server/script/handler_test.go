@@ -14,40 +14,15 @@ import (
 
 	voiceoverassets "velox-server/internal/assets"
 	"velox-server/internal/config"
-	"velox-server/internal/costmodel"
 	"velox-server/internal/jobs"
 	jobenqueue "velox-server/internal/jobs/enqueue"
 	"velox-server/internal/platform/clock"
 	"velox-server/internal/store"
 )
 
-// testSubmitQueue implements enqueue.JobQueue by delegating to jobs.Writer.
-type testSubmitQueue struct {
-	writer     jobs.Writer
-	maxRetries int
-}
-
-// PR-04.5: SubmitJob accepts costmodel.JobRequirements and forwards it
-// onto jobs.Job.Requirements so the canonical jobs.Writer.Create path
-// can persist them in the dedicated SQLite columns + the
-// request_json._requirements sub-object. Tests that don't publish
-// Requirements still pass costmodel.DefaultRequirements().
-func (q *testSubmitQueue) SubmitJob(ctx context.Context, jobID string, payload map[string]interface{}, req costmodel.JobRequirements) error {
-	raw, _ := json.Marshal(payload)
-	job := &jobs.Job{
-		ID:          jobID,
-		Status:      jobs.StatusPending,
-		MaxRetries:  q.maxRetries,
-		Payload:     string(raw),
-		Requirements: req,
-	}
-	return q.writer.Create(ctx, job)
-}
-
-// PR15.7a: every test that wires the script routes now constructs an
-// *enqueue.Enqueuer and threads it through RegisterRoutes. There is no
-// SetVoiceoverAssetService global anymore — the asset service lives on
-// the Enqueuer and travels with the queue as an injected dependency.
+// PR-04.5 + PR #8: job creation is now canonical through AtomicJobTaskCreator.
+// The legacy testSubmitQueue adapter was removed after Create was dropped
+// from jobs.Writer.
 
 func TestGenerateWithImages_EnqueuesSceneImageJob(t *testing.T) {
 	tempDir := t.TempDir()
@@ -56,7 +31,8 @@ func TestGenerateWithImages_EnqueuesSceneImageJob(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new sqlite store: %v", err)
 	}
-	jobRepo := store.NewSQLiteJobRepository(db)
+	_ = store.NewSQLiteJobRepository(db)
+	atomic := store.NewAtomicJobTaskCreator(db)
 
 	cfg := &config.Config{
 		Runtime: config.RuntimeConfig{
@@ -69,7 +45,7 @@ func TestGenerateWithImages_EnqueuesSceneImageJob(t *testing.T) {
 	}
 
 	// Voiceover nil: this test exercises the basic enqueue path, no asset rewrite.
-	enqueuer := jobenqueue.NewEnqueuer(&testSubmitQueue{writer: jobRepo, maxRetries: 3}, nil)
+	enqueuer := jobenqueue.NewEnqueuer(atomic, nil, nil)
 
 	r := gin.New()
 	RegisterRoutes(r.Group("/api/script"), cfg, db, enqueuer)
@@ -205,6 +181,7 @@ func TestGenerateWithImages_UsesCreatorStageWhenConfigured(t *testing.T) {
 		t.Fatalf("new sqlite store: %v", err)
 	}
 	jobRepo := store.NewSQLiteJobRepository(db)
+	atomic := store.NewAtomicJobTaskCreator(db)
 
 	mockCreator := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/script/generate-with-images" {
@@ -248,7 +225,7 @@ func TestGenerateWithImages_UsesCreatorStageWhenConfigured(t *testing.T) {
 
 	// PR15.7a: creator-via-assetService path. The Enqueuer must carry the
 	// voiceover service so the rewrite step runs inside Enqueue.
-	enqueuer := jobenqueue.NewEnqueuer(&testSubmitQueue{writer: jobRepo, maxRetries: 3}, voiceoverSvc)
+	enqueuer := jobenqueue.NewEnqueuer(atomic, nil, voiceoverSvc)
 
 	r := gin.New()
 	RegisterRoutes(r.Group("/api/script"), cfg, db, enqueuer)
@@ -312,7 +289,8 @@ func TestGenerateWithImages_BypassesCreatorForRenderReadyPayload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new sqlite store: %v", err)
 	}
-	jobRepo := store.NewSQLiteJobRepository(db)
+	_ = store.NewSQLiteJobRepository(db)
+	atomic := store.NewAtomicJobTaskCreator(db)
 
 	creatorCalled := false
 	mockCreator := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -338,7 +316,7 @@ func TestGenerateWithImages_BypassesCreatorForRenderReadyPayload(t *testing.T) {
 
 	// PR15.7a: bypass path. Creator stage is short-circuited, no asset rewrite
 	// expected; voiceover nil is fine.
-	enqueuer := jobenqueue.NewEnqueuer(&testSubmitQueue{writer: jobRepo, maxRetries: 3}, nil)
+	enqueuer := jobenqueue.NewEnqueuer(atomic, nil, nil)
 
 	r := gin.New()
 	RegisterRoutes(r.Group("/api/script"), cfg, db, enqueuer)

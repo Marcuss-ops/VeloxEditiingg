@@ -15,11 +15,11 @@ func TestToQueueItemNilInput(t *testing.T) {
 }
 
 func TestToQueueItemDualAliasing(t *testing.T) {
-	// WorkerID must be aliased to BOTH WorkerName AND AssignedTo.
+	// PR #7: WorkerID/LeaseID removed from Job; WorkerName/AssignedTo/LeaseID
+	// removed from QueueItem. Verify QueueItem projection still works.
 	j := &Job{
-		ID:       "job-1",
-		Status:   StatusRunning,
-		WorkerID: "worker-7",
+		ID:     "job-1",
+		Status: StatusRunning,
 	}
 	q := ToQueueItem(j)
 	if q.JobID != "job-1" {
@@ -28,38 +28,21 @@ func TestToQueueItemDualAliasing(t *testing.T) {
 	if q.Status != StatusRunning {
 		t.Errorf("Status=%v, want %v", q.Status, StatusRunning)
 	}
-	if q.WorkerName != "worker-7" {
-		t.Errorf("WorkerName=%q, want %q (dual-aliasing with AssignedTo)", q.WorkerName, "worker-7")
-	}
-	if q.AssignedTo != "worker-7" {
-		t.Errorf("AssignedTo=%q, want %q (dual-aliasing with WorkerName)", q.AssignedTo, "worker-7")
-	}
-	if q.LeaseID != "" {
-		t.Errorf("LeaseID=%q, want \"\" (no domain LeaseID set)", q.LeaseID)
-	}
 }
 
 func TestToQueueItemAttemptsAlias(t *testing.T) {
+	// PR #7: RetryCount/Attempt removed from QueueItem. MaxRetries still present.
 	j := &Job{ID: "job-a", Attempts: 3, MaxRetries: 5}
 	q := ToQueueItem(j)
-	if q.RetryCount != 3 {
-		t.Errorf("RetryCount=%d, want 3 (= Attempts)", q.RetryCount)
-	}
-	if q.Attempt != 3 {
-		t.Errorf("Attempt=%d, want 3 (= Attempts)", q.Attempt)
-	}
 	if q.MaxRetries != 5 {
 		t.Errorf("MaxRetries=%d, want 5", q.MaxRetries)
 	}
 }
 
 func TestToPayloadMapLeaseIDInjection(t *testing.T) {
-	// LeaseID non-empty → injected
-	j := &Job{ID: "job-1", RunID: "run-1", LeaseID: "lease-abc"}
+	// PR #7: LeaseID removed from Job; lease_id no longer injected.
+	j := &Job{ID: "job-1", RunID: "run-1"}
 	m := ToPayloadMap(j)
-	if m["lease_id"] != "lease-abc" {
-		t.Errorf("lease_id=%v, want lease-abc", m["lease_id"])
-	}
 	for k, want := range map[string]string{
 		"job_id":     "job-1",
 		"job_run_id": "run-1",
@@ -69,15 +52,11 @@ func TestToPayloadMapLeaseIDInjection(t *testing.T) {
 			t.Errorf("%s=%v, want %s", k, m[k], want)
 		}
 	}
-
-	// LeaseID empty → lease_id key NOT present
-	j2 := &Job{ID: "job-2", RunID: "run-2"}
-	m2 := ToPayloadMap(j2)
-	if _, exists := m2["lease_id"]; exists {
-		t.Errorf("lease_id should be absent for empty LeaseID, got=%v", m2["lease_id"])
+	// lease_id key NOT present
+	if _, exists := m["lease_id"]; exists {
+		t.Errorf("lease_id should be absent")
 	}
-	// status always present
-	if _, exists := m2["status"]; !exists {
+	if _, exists := m["status"]; !exists {
 		t.Errorf("status key missing from payload map")
 	}
 }
@@ -234,27 +213,17 @@ func TestParsePayloadJSONEdgeCases(t *testing.T) {
 }
 
 // TestToQueueItemWireShapeSnapshot locks the JSON wire shape produced by
-// ToQueueItem. If this test ever fails, either ToQueueItem drifted OR the
-// expectations here must be updated to match an EXPLICIT, reviewed
-// wire-format change.
-//
-// NOTE: We deliberately test only NON-TIME fields here. QueueItem's time
-// fields are interface{}-typed; a zero time.Time{} gets boxed into a non-nil
-// interface{}, which json.Marshal then renders as "0001-01-01T00:00:00Z" —
-// omitempty does NOT drop non-nil interface{} values. Locking time formatting
-// here would be brittle; we instead test those fields separately by direct
-// struct comparison (MockFieldMarshal) or rely on integration tests.
+// ToQueueItem. PR #7: WorkerName, AssignedTo, LeaseID, RetryCount, Attempt
+// removed from QueueItem — verify new wire shape.
 func TestToQueueItemWireShapeSnapshot(t *testing.T) {
 	j := &Job{
 		ID:         "snap-1",
 		Status:     StatusRunning,
-		WorkerID:   "worker-X",
 		Attempts:   2,
 		MaxRetries: 5,
 		RunID:      "run-X",
 		VideoName:  "video.mp4",
 		ProjectID:  "proj-1",
-		LeaseID:    "lease-X",
 	}
 	q := ToQueueItem(j)
 	raw, err := json.Marshal(q)
@@ -267,15 +236,8 @@ func TestToQueueItemWireShapeSnapshot(t *testing.T) {
 		`"status":"RUNNING"`,
 		`"video_name":"video.mp4"`,
 		`"project_id":"proj-1"`,
-		`"worker_name":"worker-X"`, // dual-aliasing critical invariant
-		`"assigned_to":"worker-X"`, // dual-aliasing critical invariant
-		`"lease_id":"lease-X"`,
-		`"retry_count":2`,
-		`"attempt":2`,
 		`"max_retries":5`,
 		`"run_id":"run-X"`,
-		// Note: ToQueueItem does NOT emit "job_run_id" — that's a ToFlatMap-only
-		// enrichment field. Locking it here would have falsely failed.
 	} {
 		if !strings.Contains(got, key) {
 			t.Errorf("wire shape invariant missing: %q\nfull output: %s", key, got)
@@ -284,13 +246,11 @@ func TestToQueueItemWireShapeSnapshot(t *testing.T) {
 }
 
 // TestToPayloadMapWireShapeSnapshot locks the JSON wire shape produced by
-// ToPayloadMap (mirrors queue.QueryService.GetJobPayload).
+// ToPayloadMap. PR #7: LeaseID removed from Job; lease_id not injected.
 func TestToPayloadMapWireShapeSnapshot(t *testing.T) {
-	// Case 1: LeaseID non-empty → injected. Payload merges.
 	j := &Job{
 		ID:        "snap-payload-1",
 		RunID:     "run-payload-1",
-		LeaseID:   "lease-payload-1",
 		Status:    StatusRunning,
 		VideoName: "video.mp4",
 		ProjectID: "proj-1",
@@ -309,39 +269,29 @@ func TestToPayloadMapWireShapeSnapshot(t *testing.T) {
 		`"status":"RUNNING"`,
 		`"video_name":"video.mp4"`,
 		`"project_id":"proj-1"`,
-		`"lease_id":"lease-payload-1"`,
-		`"custom_field":"custom_value"`, // payload must be merged
+		`"custom_field":"custom_value"`,
 	} {
 		if !strings.Contains(got, key) {
 			t.Errorf("payload map invariant missing: %q\nfull output: %s", key, got)
 		}
 	}
-
-	// Case 2: LeaseID empty → lease_id key NOT present.
-	j2 := &Job{ID: "snap-payload-2", RunID: "run-payload-2"}
-	m2 := ToPayloadMap(j2)
-	if _, exists := m2["lease_id"]; exists {
-		t.Errorf("lease_id should be absent for empty LeaseID, got %v", m2["lease_id"])
+	// lease_id NOT present
+	if _, exists := m["lease_id"]; exists {
+		t.Errorf("lease_id should be absent")
 	}
 }
 
 // TestToFlatMapWireShapeSnapshot locks the JSON wire shape produced by
-// ToFlatMap (mirrors queue.QueryService.GetJobAsMap).
-//
-// Maps are JSON-marshaled with ALL keys present — blank strings become ""
-// and nil becomes null. We assert that all blank-string keys are emitted
-// as literal "" (HTTP consumer expectation).
+// ToFlatMap. PR #7: runtime fields set to zero; blank keys preserved.
 func TestToFlatMapWireShapeSnapshot(t *testing.T) {
 	j := &Job{
 		ID:         "snap-flat",
 		Status:     StatusPending,
-		WorkerID:   "worker-F",
 		Attempts:   1,
 		MaxRetries: 3,
 		RunID:      "run-F",
 		VideoName:  "flat.mp4",
 		ProjectID:  "proj-F",
-		LeaseID:    "lease-F",
 		Payload:    `{"custom":"val"}`,
 	}
 	m := ToFlatMap(j)
@@ -355,32 +305,31 @@ func TestToFlatMapWireShapeSnapshot(t *testing.T) {
 		`"status":"PENDING"`,
 		`"video_name":"flat.mp4"`,
 		`"project_id":"proj-F"`,
-		`"assigned_to":"worker-F"`,
-		`"worker_name":"worker-F"`,
-		`"lease_id":"lease-F"`,
-		`"retry_count":1`,
-		`"attempt":1`,
 		`"max_retries":3`,
 		`"run_id":"run-F"`,
 		`"job_run_id":"run-F"`,
-		`"custom":"val"`, // payload-merge (no override of top-level)
+		`"custom":"val"`,
 	} {
 		if !strings.Contains(got, key) {
 			t.Errorf("flat map invariant missing: %q\nfull output: %s", key, got)
 		}
 	}
-	// Blank-string keys MUST be present literally (HTTP consumer expectation).
+	// PR #7: runtime fields set to zero values for HTTP compat.
 	for _, key := range []string{
+		`"assigned_to":""`,
+		`"worker_name":""`,
 		`"claimed_by":""`,
 		`"claimed_at":""`,
+		`"lease_id":""`,
 		`"last_error":""`,
 		`"error_message":""`,
+		`"retry_count":0`,
+		`"attempt":0`,
 	} {
 		if !strings.Contains(got, key) {
-			t.Errorf("flat map blank-string key invariant missing: %q\nfull output: %s", key, got)
+			t.Errorf("flat map zero-key invariant missing: %q\nfull output: %s", key, got)
 		}
 	}
-	// lease_expiry is nil interface{} → marshaled as null.
 	if !strings.Contains(got, `"lease_expiry":null`) {
 		t.Errorf("flat map lease_expiry null invariant missing\nfull output: %s", got)
 	}

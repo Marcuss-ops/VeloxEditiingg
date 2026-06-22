@@ -26,7 +26,7 @@ func NewSQLiteTaskAttemptRepository(store *SQLiteStore) *SQLiteTaskAttemptReposi
 }
 
 var attemptColumns = []string{
-	"id", "task_id", "attempt_number", "worker_id", "lease_id",
+	"id", "task_id", "job_id", "attempt_number", "worker_id", "lease_id",
 	"status", "started_at", "completed_at", "error_code", "error_message",
 	"report_version", "created_at", "updated_at",
 }
@@ -35,7 +35,7 @@ func scanAttempt(row interface{ Scan(...interface{}) error }) (*taskattempts.Tas
 	var a taskattempts.TaskAttempt
 	var startedAt, completedAt sql.NullString
 	err := row.Scan(
-		&a.ID, &a.TaskID, &a.AttemptNumber, &a.WorkerID, &a.LeaseID,
+		&a.ID, &a.TaskID, &a.JobID, &a.AttemptNumber, &a.WorkerID, &a.LeaseID,
 		&a.Status, &startedAt, &completedAt, &a.ErrorCode, &a.ErrorMessage,
 		&a.ReportVersion, &a.CreatedAt, &a.UpdatedAt,
 	)
@@ -83,10 +83,10 @@ func (r *SQLiteTaskAttemptRepository) Create(ctx context.Context, attempt *taska
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, err = r.store.db.ExecContext(ctx,
 		`INSERT INTO task_attempts (
-			id, task_id, attempt_number, worker_id, lease_id,
+			id, task_id, job_id, attempt_number, worker_id, lease_id,
 			status, report_version, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)`,
-		attempt.ID, attempt.TaskID, attempt.AttemptNumber,
+		) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
+		attempt.ID, attempt.TaskID, attempt.JobID, attempt.AttemptNumber,
 		attempt.WorkerID, attempt.LeaseID,
 		string(attempt.Status), now, now,
 	)

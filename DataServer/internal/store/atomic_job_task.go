@@ -59,18 +59,31 @@ func (c *AtomicJobTaskCreator) CreateJobWithTask(
 	if job.Payload != "" {
 		jobPayload = job.Payload
 	}
+
+	// PR #8: dedup columns written from job.Requirements so the eligibility
+	// layer + claim paths see them without a second UPDATE after creation.
+	// PR #9: retry_count column dropped — attempt starts at 0.
+	req := job.Requirements
 	_, err = tx.ExecContext(ctx,
 		`INSERT INTO jobs (
-			job_id, status, max_retries, retry_count,
+			job_id, status, max_retries,
 			video_name, project_id,
 			created_at, updated_at, migrated_at,
 			request_json, result_json, revision,
-			run_id, job_run_id
-		) VALUES (?, 'PENDING', ?, 0, ?, ?, ?, ?, ?, ?, '{}', 0, ?, ?)`,
+			run_id, job_run_id,
+			job_required_resource_class, job_required_temporal_mode,
+			job_required_deterministic, job_required_cacheable,
+			job_required_min_bandwidth_mbps
+		) VALUES (?, 'PENDING', ?, ?, ?, ?, ?, ?, ?, '{}', 0, ?, ?,
+		          ?, ?, ?, ?,
+		          ?)`,
 		job.ID, job.MaxRetries, job.VideoName, job.ProjectID,
 		now, now, now,
 		jobPayload,
 		job.RunID, job.RunID,
+		req.ResourceClass, req.TemporalMode,
+		req.Deterministic, req.Cacheable,
+		req.MinBandwidthMbps,
 	)
 	if err != nil {
 		return fmt.Errorf("atomic creator job insert: %w", err)

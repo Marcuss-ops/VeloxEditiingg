@@ -27,12 +27,10 @@ type Job struct {
 	Status      Status    `json:"status"`
 	Attempts    int       `json:"attempts"` // retry_count / current attempt number
 	Revision    int       `json:"revision"` // optimistic-lock counter (Ondata 3 PR3 final)
-	WorkerID    string    `json:"worker_id,omitempty"`
 	VideoName   string    `json:"video_name,omitempty"`   // the asset being rendered
 	ProjectID   string    `json:"project_id,omitempty"`   // owning project
 	RunID       string    `json:"run_id,omitempty"`       // workflow run identifier
 	MaxRetries  int       `json:"max_retries"`            // configured retry budget
-	LeaseID     string    `json:"lease_id,omitempty"`     // active lease (Ondata 3 PR3)
 	StartedAt   time.Time `json:"started_at,omitempty"`   // when work began
 	CompletedAt time.Time `json:"completed_at,omitempty"` // when work finished
 	CreatedAt   time.Time `json:"created_at"`
@@ -40,17 +38,15 @@ type Job struct {
 	Payload     string    `json:"-"` // opaque JSON blob (Ondata 3 PR3 final)
 
 	// Requirements is the per-job placement needs consumed by the
-	// master-side cost model (PR-04.5). Default zero value
+	// master-side cost model (PR #6). Default zero value
 	// (ResourceClass="", TemporalMode="") means "no per-job
 	// constraint" — the eligibility layer keeps legacy permissive
 	// routing for callers that have not yet migrated to publish
 	// explicit requirements.
 	//
-	// Persisted in two places: dedicated columns
-	// `job_required_resource_class` / `job_required_temporal_mode`
-	// (SQLite migration 039) AND JSON-only on `request_json` under
-	// the `_requirements` subobject. Deterministic + Cacheable live
-	// JSON-only inside request_json (rank-only fields, see
-	// sqlite_jobs_writer.go::CreateJob).
+	// Persisted via dedicated columns (job_required_resource_class,
+	// job_required_temporal_mode, job_required_deterministic,
+	// job_required_cacheable, job_required_min_bandwidth_mbps).
+	// No JSON fallback exists.
 	Requirements costmodel.JobRequirements `json:"requirements,omitempty"`
 }

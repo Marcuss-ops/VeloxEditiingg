@@ -266,76 +266,146 @@ func (w *Worker) receiveLoop(ctx context.Context, recvCh <-chan controltransport
 			}
 
 			switch msg.Type {
-			case controltransport.MsgJobOffer:
-				offer := msgToJob(msg)
-				jobID := ""
-				if offer != nil {
-					jobID = offer.JobID
-				}
+		case controltransport.MsgJobOffer:
+			offer := msgToJob(msg)
+			jobID := ""
+			if offer != nil {
+				jobID = offer.JobID
+			}
 
-				if w.IsStopped() {
-					if err := w.sendReject(ctx, jobID, "stopped"); err != nil {
-						w.logger.Warn("[RECEIVE] Failed to send JobRejected (stopped): %v", err)
-					}
-					continue
+			if w.IsStopped() {
+				if err := w.sendReject(ctx, jobID, "stopped"); err != nil {
+					w.logger.Warn("[RECEIVE] Failed to send JobRejected (stopped): %v", err)
 				}
-				if w.drainMode.Load() {
-					if err := w.sendReject(ctx, jobID, "draining"); err != nil {
-						w.logger.Warn("[RECEIVE] Failed to send JobRejected (draining): %v", err)
-					}
-					continue
+				continue
+			}
+			if w.drainMode.Load() {
+				if err := w.sendReject(ctx, jobID, "draining"); err != nil {
+					w.logger.Warn("[RECEIVE] Failed to send JobRejected (draining): %v", err)
 				}
+				continue
+			}
 
-				w.activeJobsMu.RLock()
-				activeCount := len(w.activeJobs)
-				w.activeJobsMu.RUnlock()
-				if activeCount >= w.config.MaxActiveJobs {
-					if err := w.sendReject(ctx, jobID, "capacity_full"); err != nil {
-						w.logger.Warn("[RECEIVE] Failed to send JobRejected (capacity): %v", err)
-					}
-					continue
+			w.activeJobsMu.RLock()
+			activeCount := len(w.activeJobs)
+			w.activeJobsMu.RUnlock()
+			if activeCount >= w.config.MaxActiveJobs {
+				if err := w.sendReject(ctx, jobID, "capacity_full"); err != nil {
+					w.logger.Warn("[RECEIVE] Failed to send JobRejected (capacity): %v", err)
 				}
+				continue
+			}
 
-				if offer == nil {
-					w.logger.Warn("[RECEIVE] Failed to parse job from JobOffer message")
-					continue
+			if offer == nil {
+				w.logger.Warn("[RECEIVE] Failed to parse job from JobOffer message")
+				continue
+			}
+			job := offer
+
+			if err := w.validateJobOffer(job); err != nil {
+				w.logger.Warn("[RECEIVE] Job offer validation failed: %v", err)
+				_ = w.sendReject(ctx, job.JobID, err.Error())
+				continue
+			}
+
+			w.logger.Info("[RECEIVE] JobOffer received: %s (type: %s, lease: %s)", job.JobID, job.JobType, job.LeaseID)
+
+			if err := w.sendAccept(ctx, job); err != nil {
+				w.logger.Warn("[RECEIVE] Failed to send JobAccepted: %v", err)
+				continue
+			}
+			w.storePendingJob(job)
+
+		case controltransport.MsgTaskOffer:
+			// PR #5: task-native dispatch — receive pre-compiled TaskSpec from master.
+			taskOffer, ok := msg.TypedPayload.(*pb.TaskOffer)
+			if !ok || taskOffer == nil {
+				w.logger.Warn("[RECEIVE] TaskOffer without typed payload")
+				continue
+			}
+
+			taskID := taskOffer.GetTaskId()
+			if w.IsStopped() || w.drainMode.Load() {
+				if err := w.sendTaskReject(ctx, taskID, "draining"); err != nil {
+					w.logger.Warn("[RECEIVE] Failed to send TaskRejected: %v", err)
 				}
-				job := offer
+				continue
+			}
 
-				if err := w.validateJobOffer(job); err != nil {
-					w.logger.Warn("[RECEIVE] Job offer validation failed: %v", err)
-					_ = w.sendReject(ctx, job.JobID, err.Error())
-					continue
+			w.activeJobsMu.RLock()
+			activeCount := len(w.activeJobs)
+			w.activeJobsMu.RUnlock()
+			if activeCount >= w.config.MaxActiveJobs {
+				if err := w.sendTaskReject(ctx, taskID, "capacity_full"); err != nil {
+					w.logger.Warn("[RECEIVE] Failed to send TaskRejected (capacity): %v", err)
 				}
+				continue
+			}
 
-				w.logger.Info("[RECEIVE] JobOffer received: %s (type: %s, lease: %s)", job.JobID, job.JobType, job.LeaseID)
+			w.logger.Info("[RECEIVE] TaskOffer received: task=%s job=%s executor=%s@%d",
+				taskID, taskOffer.GetJobId(), taskOffer.GetExecutorId(), taskOffer.GetExecutorVersion())
 
-				if err := w.sendAccept(ctx, job); err != nil {
-					w.logger.Warn("[RECEIVE] Failed to send JobAccepted: %v", err)
-					continue
-				}
-				w.storePendingJob(job)
+			if err := w.sendTaskAccepted(ctx, taskOffer); err != nil {
+				w.logger.Warn("[RECEIVE] Failed to send TaskAccepted: %v", err)
+				continue
+			}
 
-			case controltransport.MsgJobLeaseGranted:
-				leaseGranted, ok := msg.TypedPayload.(*pb.JobLeaseGranted)
-				if !ok || leaseGranted == nil {
-					w.logger.Warn("[RECEIVE] JobLeaseGranted without typed payload")
-					continue
-				}
-				jobID := leaseGranted.GetJobId()
-				if jobID == "" {
-					w.logger.Warn("[RECEIVE] JobLeaseGranted without job_id")
-					continue
-				}
+			// Build api.Job from TaskOffer for the executeJob path.
+			// PR #5: the TaskSpec travels pre-compiled in task_spec — no reconstruction needed.
+			var specPayload map[string]interface{}
+			if tsp := taskOffer.GetTaskSpec(); tsp != nil {
+				specPayload = tsp.AsMap()
+			}
+			job := &api.Job{
+				JobID:   taskOffer.GetJobId(),
+				LeaseID: taskOffer.GetLeaseId(),
+				Attempt: int(taskOffer.GetAttemptNumber()),
+				// PR #5: store pre-compiled TaskSpec for dispatchTaskRunner.
+				Parameters:  map[string]interface{}{"task_spec": specPayload},
+				JobType:     taskOffer.GetExecutorId(),
+				Priority:    0,
+			}
+			// Store task_offer reference so executeJob can send TaskResult.
+			job.Parameters["_task_id"] = taskID
+			job.Parameters["_attempt_id"] = taskOffer.GetAttemptId()
 
-				job := w.takePendingJob(jobID)
-				if job == nil {
-					w.logger.Warn("[RECEIVE] JobLeaseGranted for unknown job %s", jobID)
-					continue
-				}
+			// Start execution directly — no JobLeaseGranted wait (task dispatch).
+			go w.executeJob(ctx, job)
 
-				w.logger.Info("[RECEIVE] JobLeaseGranted for %s — starting execution", jobID)
-				go w.executeJob(ctx, job)
+		case controltransport.MsgTaskLeaseGranted:
+			// TaskLeaseGranted is the task-scoped acknowledgment sent by the master
+			// after TaskAccepted. Task-native dispatch starts execution directly from
+			// MsgTaskOffer (PR #5), so this is informational only.
+			taskGrant, ok := msg.TypedPayload.(*pb.TaskLeaseGranted)
+			if !ok || taskGrant == nil {
+				w.logger.Warn("[RECEIVE] TaskLeaseGranted without typed payload")
+				continue
+			}
+			w.logger.Info("[RECEIVE] TaskLeaseGranted for task=%s job=%s lease=%s",
+				taskGrant.GetTaskId(), taskGrant.GetJobId(), taskGrant.GetLeaseId())
+
+		case controltransport.MsgJobLeaseGranted:
+			// Legacy path for JobOffer-based dispatch; task-native dispatch
+			// starts execution directly from MsgTaskOffer (PR #5).
+			leaseGranted, ok := msg.TypedPayload.(*pb.JobLeaseGranted)
+			if !ok || leaseGranted == nil {
+				w.logger.Warn("[RECEIVE] JobLeaseGranted without typed payload")
+				continue
+			}
+			jobID := leaseGranted.GetJobId()
+			if jobID == "" {
+				w.logger.Warn("[RECEIVE] JobLeaseGranted without job_id")
+				continue
+			}
+
+			job := w.takePendingJob(jobID)
+			if job == nil {
+				w.logger.Warn("[RECEIVE] JobLeaseGranted for unknown job %s", jobID)
+				continue
+			}
+
+			w.logger.Info("[RECEIVE] JobLeaseGranted for %s — starting execution", jobID)
+			go w.executeJob(ctx, job)
 
 			case controltransport.MsgCommand:
 				cmd := msgToCommand(msg)
@@ -562,6 +632,38 @@ func (w *Worker) sendReject(ctx context.Context, jobID, reason string) error {
 	}
 	rejectMsg := controltransport.NewMessageWithPayload(
 		controltransport.MsgJobRejected,
+		w.config.WorkerID,
+		w.config.ProtocolVersion,
+		rejectPayload,
+	)
+	return w.transport.Send(ctx, rejectMsg)
+}
+
+// sendTaskAccepted sends a TaskAccepted message via the transport (PR #5).
+func (w *Worker) sendTaskAccepted(ctx context.Context, offer *pb.TaskOffer) error {
+	acceptPayload := map[string]interface{}{
+		"task_id":    offer.GetTaskId(),
+		"job_id":     offer.GetJobId(),
+		"attempt_id": offer.GetAttemptId(),
+		"lease_id":   offer.GetLeaseId(),
+	}
+	acceptMsg := controltransport.NewMessageWithPayload(
+		controltransport.MsgTaskAccepted,
+		w.config.WorkerID,
+		w.config.ProtocolVersion,
+		acceptPayload,
+	)
+	return w.transport.Send(ctx, acceptMsg)
+}
+
+// sendTaskReject sends a TaskRejected message via the transport (PR #5).
+func (w *Worker) sendTaskReject(ctx context.Context, taskID, reason string) error {
+	rejectPayload := map[string]interface{}{
+		"task_id": taskID,
+		"reason":  reason,
+	}
+	rejectMsg := controltransport.NewMessageWithPayload(
+		controltransport.MsgTaskRejected,
 		w.config.WorkerID,
 		w.config.ProtocolVersion,
 		rejectPayload,

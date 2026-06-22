@@ -402,10 +402,10 @@ func TestFinalize_DoubleFinalizeIdempotent(t *testing.T) {
 	require.Equal(t, first.ID, second.ID)
 	require.Equal(t, "READY", second.Status)
 
-	// Outbox: exactly one ARTIFACT_READY for this artifact.
+	// Legacy outbox ARTIFACT_READY removed in PR #2. Verify no spurious emissions.
 	var n int
-	require.NoError(t, env.db.QueryRow(`SELECT COUNT(*) FROM outbox_events WHERE event_type='ARTIFACT_READY' AND aggregate_id=?`, first.ID).Scan(&n))
-	require.Equal(t, 1, n)
+	require.NoError(t, env.db.QueryRow(`SELECT COUNT(*) FROM outbox_events WHERE event_type='ARTIFACT_READY'`).Scan(&n))
+	require.Equal(t, 0, n, "legacy ARTIFACT_READY outbox emission must be gone (PR #2)")
 
 	// Delivery: exactly one row for (artifact, primary).
 	require.NoError(t, env.db.QueryRow(`SELECT COUNT(*) FROM job_deliveries WHERE artifact_id=? AND destination_id='primary'`, first.ID).Scan(&n))
@@ -484,7 +484,7 @@ func TestFinalize_Concurrent(t *testing.T) {
 
 	var n int
 	require.NoError(t, env.db.QueryRow(`SELECT COUNT(*) FROM outbox_events WHERE event_type='ARTIFACT_READY'`).Scan(&n))
-	require.Equal(t, 1, n, "exactly one ARTIFACT_READY")
+	require.Equal(t, 0, n, "legacy ARTIFACT_READY outbox emission must be gone (PR #2)")
 
 	require.NoError(t, env.db.QueryRow(`SELECT COUNT(*) FROM job_deliveries WHERE artifact_id=? AND destination_id='primary'`, sess.ArtifactID).Scan(&n))
 	require.Equal(t, 1, n, "exactly one delivery row")

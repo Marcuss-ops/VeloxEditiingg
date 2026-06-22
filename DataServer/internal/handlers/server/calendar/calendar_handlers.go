@@ -16,13 +16,13 @@ import (
 type CalendarAPI struct {
 	store    *store.SQLiteStore
 	reader   jobs.Reader
-	writer   jobs.Writer
+	atomic   *store.AtomicJobTaskCreator
 	scheduler *CalendarScheduler
 }
 
 // NewCalendarAPI creates a new CalendarAPI instance
-func NewCalendarAPI(s *store.SQLiteStore, reader jobs.Reader, writer jobs.Writer, sched *CalendarScheduler) *CalendarAPI {
-	return &CalendarAPI{store: s, reader: reader, writer: writer, scheduler: sched}
+func NewCalendarAPI(s *store.SQLiteStore, reader jobs.Reader, atomic *store.AtomicJobTaskCreator, sched *CalendarScheduler) *CalendarAPI {
+	return &CalendarAPI{store: s, reader: reader, atomic: atomic, scheduler: sched}
 }
 
 // MinimalEvent is a lightweight event representation for fast list queries
@@ -367,8 +367,8 @@ func (api *CalendarAPI) EnqueueEvent() gin.HandlerFunc {
 }
 
 // RegisterRoutes registers all calendar routes
-func RegisterRoutes(r *gin.RouterGroup, s *store.SQLiteStore, reader jobs.Reader, writer jobs.Writer, sched *CalendarScheduler) {
-	api := NewCalendarAPI(s, reader, writer, sched)
+func RegisterRoutes(r *gin.RouterGroup, s *store.SQLiteStore, reader jobs.Reader, atomic *store.AtomicJobTaskCreator, sched *CalendarScheduler) {
+	api := NewCalendarAPI(s, reader, atomic, sched)
 
 	r.GET("/calendar/events", api.ListEvents())
 	r.GET("/calendar/events/range", api.GetEventsByDateRange())

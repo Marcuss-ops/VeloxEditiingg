@@ -86,6 +86,7 @@ func (r *SQLiteJobRepository) PR3Start(ctx context.Context, cmd StartCommand) er
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	// PR #9: assigned_to + lease_id columns dropped — CAS uses attempt + revision only.
 	res, err := tx.ExecContext(ctx,
 		`UPDATE jobs
 		   SET status = 'RUNNING',
@@ -94,12 +95,10 @@ func (r *SQLiteJobRepository) PR3Start(ctx context.Context, cmd StartCommand) er
 		       revision = COALESCE(revision, 0) + 1
 		 WHERE job_id = ?
 		   AND UPPER(COALESCE(status, '')) = 'LEASED'
-		   AND COALESCE(assigned_to, '') = ?
-		   AND COALESCE(lease_id, '') = ?
 		   AND COALESCE(attempt, 0) = ?
 		   AND COALESCE(revision, 0) = ?`,
 		now, now,
-		cmd.JobID, cmd.WorkerID, cmd.LeaseID, cmd.Attempt, cmd.ExpectedRevision,
+		cmd.JobID, cmd.Attempt, cmd.ExpectedRevision,
 	)
 	if err != nil {
 		return fmt.Errorf("PR3Start UPDATE: %w", err)
@@ -152,19 +151,16 @@ func (r *SQLiteJobRepository) PR3RenewLease(ctx context.Context, cmd RenewLeaseC
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	// Conditional revision CAS: omit the `revision = ?` filter when the
-	// caller actively opted out via SkipRevisionCAS (migrations / tests).
+	// PR #9: assigned_to + lease_id columns dropped — CAS uses revision only.
+	// lease_expiry column dropped; lease expiry is tracked in job_attempts.
 	query := `UPDATE jobs
-		   SET lease_expiry = ?,
-		       updated_at = ?,
+		   SET updated_at = ?,
 		       revision = COALESCE(revision, 0) + 1
 		 WHERE job_id = ?
-		   AND UPPER(COALESCE(status, '')) IN ('LEASED', 'RUNNING')
-		   AND COALESCE(assigned_to, '') = ?
-		   AND COALESCE(lease_id, '') = ?`
+		   AND UPPER(COALESCE(status, '')) IN ('LEASED', 'RUNNING')`
 	args := []interface{}{
-		leaseExpiry, now,
-		cmd.JobID, cmd.WorkerID, cmd.LeaseID,
+		now,
+		cmd.JobID,
 	}
 	if !cmd.SkipRevisionCAS {
 		query += ` AND COALESCE(revision, 0) = ?`
@@ -238,6 +234,7 @@ func (r *SQLiteJobRepository) PR3RecordRenderFinished(ctx context.Context, cmd R
 	}
 
 	now := r.nowStr(cmd.FinishedAt)
+	// PR #9: assigned_to + lease_id columns dropped — CAS uses attempt + revision only.
 	res, err := tx.ExecContext(ctx,
 		`UPDATE jobs
 		   SET status = 'RENDER_FINISHED',
@@ -246,12 +243,10 @@ func (r *SQLiteJobRepository) PR3RecordRenderFinished(ctx context.Context, cmd R
 		       started_at = COALESCE(started_at, ?)
 		 WHERE job_id = ?
 		   AND UPPER(COALESCE(status, '')) = 'RUNNING'
-		   AND COALESCE(assigned_to, '') = ?
-		   AND COALESCE(lease_id, '') = ?
 		   AND COALESCE(attempt, 0) = ?
 		   AND COALESCE(revision, 0) = ?`,
 		now, now,
-		cmd.JobID, cmd.WorkerID, cmd.LeaseID, cmd.AttemptNumber, currentRev,
+		cmd.JobID, cmd.AttemptNumber, currentRev,
 	)
 	if err != nil {
 		return fmt.Errorf("PR3RecordRenderFinished UPDATE: %w", err)
@@ -289,12 +284,12 @@ func (r *SQLiteJobRepository) PR3Fail(ctx context.Context, cmd FailCommand) erro
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	// Determine next status based on retry budget.
-	var retryCount, maxRetries int
+	// PR #9: retry_count column dropped. Use attempt as proxy for retry count.
+	var attemptCount, maxRetries int
 	if err := tx.QueryRowContext(ctx,
-		`SELECT COALESCE(retry_count, 0), COALESCE(max_retries, 0) FROM jobs WHERE job_id = ?`,
+		`SELECT COALESCE(attempt, 0), COALESCE(max_retries, 0) FROM jobs WHERE job_id = ?`,
 		cmd.JobID,
-	).Scan(&retryCount, &maxRetries); err != nil {
+	).Scan(&attemptCount, &maxRetries); err != nil {
 		if err == sql.ErrNoRows {
 			return fmt.Errorf("PR3Fail %s: %w", cmd.JobID, ErrTransitionConflict)
 		}
@@ -307,7 +302,7 @@ func (r *SQLiteJobRepository) PR3Fail(ctx context.Context, cmd FailCommand) erro
 	eventType := "job_failed"
 	outboxEvent := "JOB_FAILED"
 	historyMessage := "Job failed: " + cmd.ErrorMessage
-	if cmd.Retryable && retryCount < maxRetries {
+	if cmd.Retryable && attemptCount < maxRetries {
 		nextStatus = JobStatusRetryWait
 		attemptStatus = "FAILED_RETRYABLE"
 		eventType = "job_retry_scheduled"
@@ -315,26 +310,22 @@ func (r *SQLiteJobRepository) PR3Fail(ctx context.Context, cmd FailCommand) erro
 		historyMessage = "Job retry scheduled: " + cmd.ErrorMessage
 	}
 
+	// PR #9: retry_count, lease_id, lease_expiry, assigned_to, claimed_by columns dropped.
 	res, err := tx.ExecContext(ctx,
 		`UPDATE jobs
 		   SET status = ?,
 		       updated_at = ?,
 		       revision = COALESCE(revision, 0) + 1,
-		       retry_count = retry_count + (CASE WHEN ? = 'RETRY_WAIT' THEN 1 ELSE 0 END),
 		       last_error = ?,
 		       error_message = ?,
 		       failed_at = ?,
 		       failed_by = ?,
-		       lease_id = '',
-		       lease_expiry = '',
-		       assigned_to = '',
-		       claimed_by = '',
 		       claimed_at = '',
 		       assigned_at = ''
 		 WHERE job_id = ?
 		   AND UPPER(COALESCE(status, '')) IN ('LEASED', 'RUNNING', 'RENDER_FINISHED', 'AWAITING_ARTIFACT')
 		   AND COALESCE(revision, 0) = ?`,
-		string(nextStatus), now, string(nextStatus), cmd.ErrorMessage, cmd.ErrorMessage, now, cmd.WorkerID,
+		string(nextStatus), now, cmd.ErrorMessage, cmd.ErrorMessage, now, cmd.WorkerID,
 		cmd.JobID, cmd.ExpectedRevision,
 	)
 	if err != nil {
@@ -359,13 +350,15 @@ func (r *SQLiteJobRepository) PR3Fail(ctx context.Context, cmd FailCommand) erro
 	}
 
 	// Update latest job_attempts status to FAILED / FAILED_RETRYABLE.
+	// error_message column does not exist on job_attempts (only error_code);
+	// the full error message lives in jobs.error_message.
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE job_attempts
-		   SET status = ?, finished_at = ?, error_code = ?, error_message = ?
+		   SET status = ?, finished_at = ?, error_code = ?
 		 WHERE job_id = ?
 		   AND status NOT IN ('succeeded', 'failed', 'expired')
 		   AND id = (SELECT id FROM job_attempts WHERE job_id = ? ORDER BY id DESC LIMIT 1)`,
-		attemptStatus, now, cmd.ErrorCode, cmd.ErrorMessage,
+		attemptStatus, now, cmd.ErrorCode,
 		cmd.JobID, cmd.JobID,
 	); err != nil {
 		return fmt.Errorf("PR3Fail attempt UPDATE: %w", err)
@@ -426,6 +419,7 @@ func (r *SQLiteJobRepository) PR3Cancel(ctx context.Context, cmd CancelCommand) 
 	}
 
 	now := r.nowStr(cmd.Now)
+	// PR #9: lease_id, lease_expiry, assigned_to, claimed_by columns dropped.
 	var res sql.Result
 	if cmd.WorkerID != "" {
 		res, err = tx.ExecContext(ctx,
@@ -433,12 +427,8 @@ func (r *SQLiteJobRepository) PR3Cancel(ctx context.Context, cmd CancelCommand) 
 		   SET status = 'CANCELLED',
 		       updated_at = ?,
 		       revision = COALESCE(revision, 0) + 1,
-		       lease_id = '',
-			       lease_expiry = '',
-			       assigned_to = '',
-			       claimed_by = '',
-			       claimed_at = '',
-			       assigned_at = ''
+		       claimed_at = '',
+		       assigned_at = ''
 			 WHERE job_id = ?
 			   AND UPPER(COALESCE(status, '')) NOT IN ('SUCCEEDED', 'FAILED', 'CANCELLED')
 			   AND COALESCE(revision, 0) = ?`,
@@ -450,12 +440,8 @@ func (r *SQLiteJobRepository) PR3Cancel(ctx context.Context, cmd CancelCommand) 
 		   SET status = 'CANCELLED',
 		       updated_at = ?,
 		       revision = COALESCE(revision, 0) + 1,
-		       lease_id = '',
-			       lease_expiry = '',
-			       assigned_to = '',
-			       claimed_by = '',
-			       claimed_at = '',
-			       assigned_at = ''
+		       claimed_at = '',
+		       assigned_at = ''
 			 WHERE job_id = ?
 			   AND UPPER(COALESCE(status, '')) NOT IN ('SUCCEEDED', 'FAILED', 'CANCELLED')`,
 			now, cmd.JobID,
@@ -500,18 +486,23 @@ func (r *SQLiteJobRepository) PR3RequeueExpiredLeases(ctx context.Context, now t
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	// PR #9: lease_expiry column dropped from jobs. Use job_attempts.started_at
+	// as proxy for lease expiry (stale leases = attempts started > 30 min ago).
+	cutoff := now.Add(-30 * time.Minute).UTC().Format(time.RFC3339)
 	rows, err := tx.QueryContext(ctx,
-		`SELECT job_id, COALESCE(revision, 0), COALESCE(retry_count, 0),
-		        COALESCE(max_retries, 0), COALESCE(lease_id, ''),
-		        UPPER(COALESCE(status, ''))
-		 FROM jobs
-		 WHERE UPPER(COALESCE(status, '')) IN ('LEASED', 'RUNNING')
-		   AND lease_expiry IS NOT NULL
-		   AND lease_expiry != ''
-		   AND lease_expiry < ?
-		 ORDER BY lease_expiry ASC
+		`SELECT j.job_id, COALESCE(j.revision, 0), COALESCE(j.attempt, 0),
+		        COALESCE(j.max_retries, 0), '',
+		        UPPER(COALESCE(j.status, ''))
+		 FROM jobs j
+		 JOIN job_attempts ja ON ja.job_id = j.job_id
+		        AND ja.id = (SELECT id FROM job_attempts WHERE job_id = j.job_id ORDER BY id DESC LIMIT 1)
+		 WHERE UPPER(COALESCE(j.status, '')) IN ('LEASED', 'RUNNING')
+		   AND ja.started_at IS NOT NULL
+		   AND ja.started_at != ''
+		   AND ja.started_at < ?
+		 ORDER BY ja.started_at ASC
 		 LIMIT ?`,
-		nowStr, limit,
+		cutoff, limit,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("PR3RequeueExpiredLeases SELECT: %w", err)
@@ -521,7 +512,7 @@ func (r *SQLiteJobRepository) PR3RequeueExpiredLeases(ctx context.Context, now t
 	type candidate struct {
 		jobID      string
 		revision   int
-		retryCount int
+		attemptCnt int
 		maxRetries int
 		leaseID    string
 		current    JobStatus
@@ -529,7 +520,7 @@ func (r *SQLiteJobRepository) PR3RequeueExpiredLeases(ctx context.Context, now t
 	var candidates []candidate
 	for rows.Next() {
 		var c candidate
-		if err := rows.Scan(&c.jobID, &c.revision, &c.retryCount, &c.maxRetries, &c.leaseID, &c.current); err != nil {
+		if err := rows.Scan(&c.jobID, &c.revision, &c.attemptCnt, &c.maxRetries, &c.leaseID, &c.current); err != nil {
 			continue
 		}
 		candidates = append(candidates, c)
@@ -543,7 +534,7 @@ func (r *SQLiteJobRepository) PR3RequeueExpiredLeases(ctx context.Context, now t
 	for _, c := range candidates {
 		// Decide next status: retry budget left → PENDING (clean requeue),
 		// retry budget exhausted → FAILED.
-		willRetry := c.retryCount < c.maxRetries
+		willRetry := c.attemptCnt < c.maxRetries
 		next := JobStatusPending
 		reason := "expired_lease_retry"
 		eventType := "lease_expired_requeue"
@@ -553,22 +544,18 @@ func (r *SQLiteJobRepository) PR3RequeueExpiredLeases(ctx context.Context, now t
 			eventType = "lease_expired_failed"
 		}
 
+		// PR #9: retry_count, lease_id, lease_expiry, assigned_to, claimed_by columns dropped.
 		res, err := tx.ExecContext(ctx,
 			`UPDATE jobs
 			   SET status = ?,
-			       lease_id = '',
-			       lease_expiry = '',
-			       assigned_to = '',
-			       claimed_by = '',
-			       claimed_at = '',
-			       assigned_at = '',
-		       retry_count = retry_count + (CASE WHEN ? = 'PENDING' THEN 1 ELSE 0 END),
+		       claimed_at = '',
+		       assigned_at = '',
 		       updated_at = ?,
 		       revision = COALESCE(revision, 0) + 1
 		 WHERE job_id = ?
 			   AND UPPER(COALESCE(status, '')) = ?
 			   AND COALESCE(revision, 0) = ?`,
-			string(next), string(next), nowStr, c.jobID, c.current, c.revision,
+			string(next), nowStr, c.jobID, c.current, c.revision,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("PR3RequeueExpiredLeases UPDATE %s: %w", c.jobID, err)
@@ -581,7 +568,7 @@ func (r *SQLiteJobRepository) PR3RequeueExpiredLeases(ctx context.Context, now t
 				PreviousStatus: c.current,
 				NewStatus:      c.current,
 				Reason:         "skipped_concurrent_transition",
-				Attempt:        c.retryCount,
+				Attempt:        c.attemptCnt,
 			})
 			continue
 		}
@@ -590,8 +577,7 @@ func (r *SQLiteJobRepository) PR3RequeueExpiredLeases(ctx context.Context, now t
 			return nil, fmt.Errorf("PR3RequeueExpiredLeases history: %w", err)
 		}
 		if err := r.insertEventTx(ctx, tx, c.jobID, eventType, map[string]interface{}{
-			"lease_id":    c.leaseID,
-			"retry_count": c.retryCount,
+			"attempt":     c.attemptCnt,
 			"max_retries": c.maxRetries,
 			"new_status":  string(next),
 			"reason":      reason,
@@ -619,7 +605,7 @@ func (r *SQLiteJobRepository) PR3RequeueExpiredLeases(ctx context.Context, now t
 			PreviousStatus: c.current,
 			NewStatus:      next,
 			Reason:         reason,
-			Attempt:        c.retryCount,
+			Attempt:        c.attemptCnt,
 		})
 	}
 

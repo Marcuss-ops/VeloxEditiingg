@@ -3,7 +3,7 @@
 // Cross-backend contract suite for jobs.Repository (jobs.Reader +
 // jobs.Writer). Companion to the pre-existing jobs_repository_contract_test.go
 // which is SQLite-specific (uses *store.SQLiteJobRepository concrete type
-// + store.CreateJobParams + store.JobRecord projection + job_history).
+// + store.JobRecord projection + job_history).
 //
 // This suite targets the narrow jobs.Repository interface and tests
 // behavioral invariants that ANY jobs.Repository implementation must
@@ -29,10 +29,10 @@ import (
 	"context"
 	"testing"
 
-	"github.com/google/uuid"
-
 	"velox-server/internal/jobs"
 	"velox-server/internal/store"
+
+	"github.com/google/uuid"
 )
 
 // JobRepositoryContractCrossBackend runs the cross-backend invariant
@@ -45,17 +45,20 @@ import (
 // suite exercises CreateJob / Transition / ListByStatus with store-package
 // types). This one targets the narrow jobs.Repository interface so
 // SQLite and Postgres compose identically.
-func JobRepositoryContractCrossBackend(t *testing.T, newRepo func(t *testing.T) (jobs.Repository, func())) {
+func JobRepositoryContractCrossBackend(t *testing.T, newRepo func(t *testing.T) (jobs.Repository, func()), createJob func(t *testing.T, job *jobs.Job)) {
 	t.Helper()
 
 	ctx := context.Background()
 
 	t.Run("Create+Get round-trip", func(t *testing.T) {
+		if createJob == nil {
+			t.Skip("backend has no job creation helper")
+		}
 		repo, cleanup := newRepo(t)
 		defer cleanup()
 
 		jobID := "job_rt_" + randSuffix()
-		err := repo.Create(ctx, &jobs.Job{
+		createJob(t, &jobs.Job{
 			ID:         jobID,
 			Status:     jobs.StatusPending,
 			VideoName:  "rt_video.mp4",
@@ -63,9 +66,6 @@ func JobRepositoryContractCrossBackend(t *testing.T, newRepo func(t *testing.T) 
 			MaxRetries: 3,
 			Payload:    `{"type":"render"}`,
 		})
-		if err != nil {
-			t.Fatalf("Create: %v", err)
-		}
 		got, err := repo.Get(ctx, jobID)
 		if err != nil {
 			t.Fatalf("Get: %v", err)
@@ -104,19 +104,19 @@ func JobRepositoryContractCrossBackend(t *testing.T, newRepo func(t *testing.T) 
 	})
 
 	t.Run("List with non-empty status filter returns matches", func(t *testing.T) {
+		if createJob == nil {
+			t.Skip("backend has no job creation helper")
+		}
 		repo, cleanup := newRepo(t)
 		defer cleanup()
 
 		prefix := "job_list_" + randSuffix()
 		for i := 0; i < 2; i++ {
-			err := repo.Create(ctx, &jobs.Job{
+			createJob(t, &jobs.Job{
 				ID:        prefix + "_" + uuid.NewString()[:8],
 				Status:    jobs.StatusPending,
 				VideoName: "v",
 			})
-			if err != nil {
-				t.Fatalf("Create #%d: %v", i, err)
-			}
 		}
 
 		list, err := repo.List(ctx, jobs.Filter{Statuses: []jobs.Status{jobs.StatusPending}, Limit: 100})
@@ -154,16 +154,17 @@ func JobRepositoryContractCrossBackend(t *testing.T, newRepo func(t *testing.T) 
 	})
 
 	t.Run("Counts includes pending jobs we just created", func(t *testing.T) {
+		if createJob == nil {
+			t.Skip("backend has no job creation helper")
+		}
 		repo, cleanup := newRepo(t)
 		defer cleanup()
 
 		prefix := "job_counts_" + randSuffix()
 		for i := 0; i < 3; i++ {
-			if err := repo.Create(ctx, &jobs.Job{
+			createJob(t, &jobs.Job{
 				ID: prefix + "_" + uuid.NewString()[:8],
-			}); err != nil {
-				t.Fatalf("Create #%d: %v", i, err)
-			}
+			})
 		}
 		counts, err := repo.Counts(ctx)
 		if err != nil {
@@ -175,13 +176,14 @@ func JobRepositoryContractCrossBackend(t *testing.T, newRepo func(t *testing.T) 
 	})
 
 	t.Run("Lease flips PENDING to LEASED", func(t *testing.T) {
+		if createJob == nil {
+			t.Skip("backend has no job creation helper")
+		}
 		repo, cleanup := newRepo(t)
 		defer cleanup()
 
 		jobID := "job_lease_" + randSuffix()
-		if err := repo.Create(ctx, &jobs.Job{ID: jobID, MaxRetries: 5}); err != nil {
-			t.Fatalf("Create: %v", err)
-		}
+		createJob(t, &jobs.Job{ID: jobID, MaxRetries: 5})
 		if err := repo.Lease(ctx, jobID, "worker-1"); err != nil {
 			t.Fatalf("Lease: %v", err)
 		}
@@ -192,25 +194,21 @@ func JobRepositoryContractCrossBackend(t *testing.T, newRepo func(t *testing.T) 
 		if got.Status != jobs.StatusLeased {
 			t.Errorf("expected LEASED, got %q", got.Status)
 		}
-		if got.LeaseID == "" {
-			t.Errorf("expected LeaseID populated")
-		}
-		if got.WorkerID != "worker-1" {
-			t.Errorf("expected WorkerID=worker-1, got %q", got.WorkerID)
-		}
+		// PR #7: Job no longer carries WorkerID/LeaseID — tasks carry them.
 		if got.Attempts < 1 {
 			t.Errorf("expected retry_count to bump, got %d", got.Attempts)
 		}
 	})
 
 	t.Run("Lease twice fails (CAS predicate)", func(t *testing.T) {
+		if createJob == nil {
+			t.Skip("backend has no job creation helper")
+		}
 		repo, cleanup := newRepo(t)
 		defer cleanup()
 
 		jobID := "job_lease2_" + randSuffix()
-		if err := repo.Create(ctx, &jobs.Job{ID: jobID, MaxRetries: 5}); err != nil {
-			t.Fatalf("Create: %v", err)
-		}
+		createJob(t, &jobs.Job{ID: jobID, MaxRetries: 5})
 		if err := repo.Lease(ctx, jobID, "worker-1"); err != nil {
 			t.Fatalf("first Lease: %v", err)
 		}
@@ -220,13 +218,14 @@ func JobRepositoryContractCrossBackend(t *testing.T, newRepo func(t *testing.T) 
 	})
 
 	t.Run("Fail transitions to FAILED", func(t *testing.T) {
+		if createJob == nil {
+			t.Skip("backend has no job creation helper")
+		}
 		repo, cleanup := newRepo(t)
 		defer cleanup()
 
 		jobID := "job_fail_" + randSuffix()
-		if err := repo.Create(ctx, &jobs.Job{ID: jobID}); err != nil {
-			t.Fatalf("Create: %v", err)
-		}
+		createJob(t, &jobs.Job{ID: jobID})
 		if err := repo.Fail(ctx, jobID, "intentional"); err != nil {
 			t.Fatalf("Fail: %v", err)
 		}
@@ -240,13 +239,14 @@ func JobRepositoryContractCrossBackend(t *testing.T, newRepo func(t *testing.T) 
 	})
 
 	t.Run("Fail on terminal job fails", func(t *testing.T) {
+		if createJob == nil {
+			t.Skip("backend has no job creation helper")
+		}
 		repo, cleanup := newRepo(t)
 		defer cleanup()
 
 		jobID := "job_failterm_" + randSuffix()
-		if err := repo.Create(ctx, &jobs.Job{ID: jobID}); err != nil {
-			t.Fatalf("Create: %v", err)
-		}
+		createJob(t, &jobs.Job{ID: jobID})
 		if err := repo.Fail(ctx, jobID, "first"); err != nil {
 			t.Fatalf("first Fail: %v", err)
 		}
@@ -256,13 +256,14 @@ func JobRepositoryContractCrossBackend(t *testing.T, newRepo func(t *testing.T) 
 	})
 
 	t.Run("SetStatus with valid from succeeds; stale from fails", func(t *testing.T) {
+		if createJob == nil {
+			t.Skip("backend has no job creation helper")
+		}
 		repo, cleanup := newRepo(t)
 		defer cleanup()
 
 		jobID := "job_setstatus_" + randSuffix()
-		if err := repo.Create(ctx, &jobs.Job{ID: jobID}); err != nil {
-			t.Fatalf("Create: %v", err)
-		}
+		createJob(t, &jobs.Job{ID: jobID})
 		// After Create, status is PENDING with revision=0. First SetStatus
 		// flips to LEASED (revision becomes 1). Second SetStatus uses stale
 		// revision=0 → CAS miss.
@@ -279,13 +280,14 @@ func JobRepositoryContractCrossBackend(t *testing.T, newRepo func(t *testing.T) 
 	})
 
 	t.Run("Cancel succeeds; second Cancel fails (terminal)", func(t *testing.T) {
+		if createJob == nil {
+			t.Skip("backend has no job creation helper")
+		}
 		repo, cleanup := newRepo(t)
 		defer cleanup()
 
 		jobID := "job_cancel_" + randSuffix()
-		if err := repo.Create(ctx, &jobs.Job{ID: jobID}); err != nil {
-			t.Fatalf("Create: %v", err)
-		}
+		createJob(t, &jobs.Job{ID: jobID})
 		// Use negative revision as orchestrator-initiated (no CAS) per
 		// postgres_jobs_repository.go's Cancel semantics.
 		if err := repo.Cancel(ctx, jobID, "stop", -1); err != nil {
@@ -297,13 +299,14 @@ func JobRepositoryContractCrossBackend(t *testing.T, newRepo func(t *testing.T) 
 	})
 
 	t.Run("Delete removes the row", func(t *testing.T) {
+		if createJob == nil {
+			t.Skip("backend has no job creation helper")
+		}
 		repo, cleanup := newRepo(t)
 		defer cleanup()
 
 		jobID := "job_del_" + randSuffix()
-		if err := repo.Create(ctx, &jobs.Job{ID: jobID}); err != nil {
-			t.Fatalf("Create: %v", err)
-		}
+		createJob(t, &jobs.Job{ID: jobID})
 		if err := repo.Delete(ctx, jobID); err != nil {
 			t.Fatalf("Delete: %v", err)
 		}
@@ -335,13 +338,14 @@ func JobRepositoryContractCrossBackend(t *testing.T, newRepo func(t *testing.T) 
 	})
 
 	t.Run("ClaimNext end-to-end returns the claimed job", func(t *testing.T) {
+		if createJob == nil {
+			t.Skip("backend has no job creation helper")
+		}
 		repo, cleanup := newRepo(t)
 		defer cleanup()
 
 		jobID := "job_claim_" + randSuffix()
-		if err := repo.Create(ctx, &jobs.Job{ID: jobID}); err != nil {
-			t.Fatalf("Create: %v", err)
-		}
+		createJob(t, &jobs.Job{ID: jobID})
 		got, err := repo.ClaimNext(ctx, "worker-1", nil)
 		if err != nil {
 			t.Fatalf("ClaimNext: %v", err)
@@ -360,11 +364,9 @@ func JobRepositoryContractCrossBackend(t *testing.T, newRepo func(t *testing.T) 
 		if err != nil {
 			t.Fatalf("Get post-claim: %v", err)
 		}
+		// PR #7: persisted Job no longer carries LeaseID.
 		if persisted.Status != jobs.StatusLeased {
 			t.Errorf("expected persisted status LEASED, got %q", persisted.Status)
-		}
-		if persisted.LeaseID == "" {
-			t.Error("expected persisted LeaseID populated")
 		}
 	})
 }

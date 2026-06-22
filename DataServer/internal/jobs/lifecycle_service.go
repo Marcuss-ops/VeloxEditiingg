@@ -112,7 +112,6 @@ func (l *LifecycleService) GetJobsByStatus(ctx context.Context, status Status) (
 			UpdatedAt:   j.UpdatedAt,
 			StartedAt:   j.StartedAt,
 			CompletedAt: j.CompletedAt,
-			RetryCount:  j.Attempts,
 			MaxRetries:  j.MaxRetries,
 		}
 		result = append(result, job)

@@ -4,18 +4,20 @@
 # Blacklist of CONCRETE forbidden symbols. These are not patterns to be
 # loosely interpreted -- each entry is a removed-alias / removed-flag /
 # removed-symbol from a completed restructure. Resurrecting any of
-# them in a NEW PR would reintroduce parallel-write or fallback drift.
+# them would reintroduce parallel-write or fallback drift.
 #
-# The grep is scoped to the current branch's diff vs BASE_REF (default
-# origin/main) via scoped_grep. This means:
-#   * HEAD main is trivially GREEN (no diff vs origin/main).
-#   * PR diffs surface new regressions only -- pre-existing historical
-#     references in `docs/...` / `frontend_standalone/README.md` etc.
-#     do not block CI; cleaning them up is a follow-up PR in itself.
+# Issue #10: Most patterns are full-tree checks (git grep against the
+# entire repository). Diff-scoped patterns catch method-call regressions
+# that overlap with legitimate pre-existing uses (e.g. \.Create\().
+# Historical references in CI workflows, deploy templates, and build
+# configs are explicitly excluded — new regressions must not appear
+# anywhere else.
 #
 # Excluded by default (still off-limits within the diff):
 #   * docs/**                 -- historical documentation (intentional)
 #   * frontend_standalone/**  -- sealed frontend bundle
+#   * .github/**              -- CI workflows referencing old paths
+#   * deploy/**               -- deploy templates with old env var names
 #   * scripts/ci/check-no-legacy.sh -- this script lists them
 set -euo pipefail
 
@@ -36,21 +38,45 @@ full_tree_patterns=(
   'handlers/web/darkeditor'           # Removed dead handler (Ondata 1)
   # Generic utility packages — use domain-specific packages.
   'internal/util'                     # Removed; use identity/, platform/clock/
+  # PR #8: workflow package removed — write method calls must not reappear.
+  # Matches workflow.Repository method invocations (workflow.CreateRun, etc.)
+  'velox-server/internal/workflow'    # Removed package import (PR #8)
+  'workflow\.CreateRun'               # workflow.Repository.CreateRun
+  'workflow\.MarkStepRunning'         # workflow.Repository.MarkStepRunning
+  'workflow\.CompleteStep'            # workflow.Repository.CompleteStep
+  'workflow\.FailStep'                # workflow.Repository.FailStep
+  'workflow\.CancelRun'               # workflow.Repository.CancelRun
+  # WriteEnabled flag removed — must not reappear.
+  'WriteEnabled'
+  # Ownership markers — all issues must be resolved, not deferred.
+  'TO-BE-OPENED'
+  # PR #2: legacy no-op outbox handlers removed.
+  'StepReadyHandler'
+  'JobSucceededHandler'
+  'ArtifactReadyHandler'
+  'DeliveryCreatedHandler'
+  # PR #6: _requirements removed from JSON blobs; must not reappear
+  # as a JSON sub-object key in read/write paths.
+  '"_requirements"'                  # JSON sub-object key (dedicated columns only)
+  # PR #8: CreateJobParams removed — must not reappear in any form.
+  # Canonical creation is now AtomicJobTaskCreator.CreateJobWithTask.
+  'CreateJobParams'                   # Removed struct + usage (PR #8)
+  # PR #9: toStoreParams helper removed — dead code after CreateJob dropped.
+  'func toStoreParams'                # Removed function definition (PR #9)
+  # PR #9: testSubmitQueue adapter removed — use AtomicJobTaskCreator + NewEnqueuer.
+  'type testSubmitQueue'              # Removed adapter struct definition (PR #9)
+  # De-legacy migration stubs — must never reappear in production code.
+  'NewLegacy'                         # Stub from de-legacy migration
+  'DeprecatedService'                 # Same
+  'local-workers\.sh\.deprecated'     # Replaced by data/ansible
 )
 
 # Prohibited patterns checked only on the DIFF (forbidden in new/modified code)
 diff_patterns=(
-  'NewLegacy'                         # Stub left from de-legacy migration
-  'DeprecatedService'                 # Same
-  'local-workers.sh.deprecated'       # Replaced by data/ansible
-  # PR-operation 01 / Fase 1 — legacy workflow decompression. NEW imports of
-  # the legacy package are forbidden; canonical writer path is
-  # velox-server/internal/taskgraph + velox-server/internal/store.AtomicJobTaskCreator.
-  # Promotion to full_tree_patterns is intentionally deferred to Fase 8
-  # (actual package removal); the diff-scoped check freezes NEW introductions
-  # while grandfathering existing imports scheduled for Fase 3 migration.
-  # See OWNERSHIP.md "Legacy Workflow v2 state (DECOMMISSIONING)".
-  'velox-server/internal/workflow'
+  # PR #8: .Create() method on job repository removed — new code must
+  # not reintroduce it. os.Create is pre-existing and excluded by diff
+  # scope (only new/modified lines trigger).
+  '\.Create\('   # Removed repository method (PR #8)
 )
 
 violations=0
@@ -61,8 +87,17 @@ for pattern in "${full_tree_patterns[@]}"; do
          git grep -nE "$pattern" -- \
            ':!docs/**' \
            ':!frontend_standalone/**' \
+           ':!.github/**' \
+           ':!deploy/**' \
+           ':!DataServer/data/ansible/**' \
+           ':!RemoteCodex/native/video-engine-cpp/CMakeLists.txt' \
+           ':!RemoteCodex/native/worker-agent-go/deploy/**' \
+           ':!RemoteCodex/native/worker-agent-go/velox-worker-agent' \
+           ':!scripts/ci/check-architecture.sh' \
+           ':!scripts/ci/verify.sh' \
            ':!scripts/ci/check-no-legacy.sh' \
-           ':!scripts/ci/lib/diff-scope.sh' 2>/dev/null || true
+           ':!scripts/ci/lib/diff-scope.sh' \
+           ':!DataServer/server.exe' 2>/dev/null || true
        )"; [[ -n "$matches" ]]; then
     printf 'FORBIDDEN (exists in repository): %s\n%s\n\n' \
       "$pattern" "$matches" >&2
@@ -77,7 +112,8 @@ for pattern in "${diff_patterns[@]}"; do
            ':!docs/**' \
            ':!frontend_standalone/**' \
            ':!scripts/ci/check-no-legacy.sh' \
-           ':!scripts/ci/lib/diff-scope.sh'
+           ':!scripts/ci/lib/diff-scope.sh' \
+           ':!DataServer/server.exe'
        )"; [[ -n "$matches" ]]; then
     printf 'FORBIDDEN (new in this PR): %s\n%s\n\n' \
       "$pattern" "$matches" >&2

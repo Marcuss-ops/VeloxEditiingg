@@ -14,57 +14,13 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"velox-server/internal/config"
-	"velox-server/internal/costmodel"
-	"velox-server/internal/jobs"
 	"velox-server/internal/jobs/enqueue"
 	"velox-server/internal/store"
 )
 
-// testSubmitQueue implements enqueue.JobQueue by delegating to jobs.Writer.
-type testSubmitQueue struct {
-	writer     jobs.Writer
-	maxRetries int
-}
-
-// PR-04.5: SubmitJob accepts costmodel.JobRequirements and forwards it
-// onto jobs.Job.Requirements so the canonical jobs.Writer.Create path
-// can persist them in the dedicated SQLite columns + the
-// request_json._requirements sub-object. Tests that don't publish
-// Requirements still pass costmodel.DefaultRequirements().
-//
-// Maps the canonical top-level keys (video_name, job_run_id, job_type)
-// from the payload onto the Job struct fields so that
-// SQLiteJobRepository.Create writes the dedicated `video_name` / `run_id` /
-// `job_run_id` columns that production writers fill via toStoreParams.
-// Without this mapping the column values stay empty and tests asserting
-// `j.VideoName == "..."` / `j.RunID != ""` after `jobRepo.Get(...)`
-// fail with empty strings.
-func (q *testSubmitQueue) SubmitJob(ctx context.Context, jobID string, payload map[string]interface{}, req costmodel.JobRequirements) error {
-	raw, _ := json.Marshal(payload)
-	job := &jobs.Job{
-		ID:          jobID,
-		Status:      jobs.StatusPending,
-		MaxRetries:  q.maxRetries,
-		Payload:     string(raw),
-		Requirements: req,
-	}
-	if v, ok := payload["video_name"].(string); ok {
-		job.VideoName = v
-	} else if v, ok := payload["title"].(string); ok {
-		job.VideoName = v
-	}
-	if v, ok := payload["job_run_id"].(string); ok && v != "" {
-		job.RunID = v
-	} else if v, ok := payload["run_id"].(string); ok && v != "" {
-		job.RunID = v
-	}
-	if v, ok := payload["job_type"].(string); ok && v != "" {
-		job.Type = v
-	} else {
-		job.Type = "process_video"
-	}
-	return q.writer.Create(ctx, job)
-}
+// PR-04.5 + PR #8: job creation is now canonical through AtomicJobTaskCreator.
+// The legacy testSubmitQueue adapter was removed after Create was dropped
+// from jobs.Writer.
 
 func TestBuildSceneVideoPayloadFromPipelineResult(t *testing.T) {
 	tempDir := t.TempDir()
@@ -224,9 +180,9 @@ func TestPipelineGenerateForwardsCompletedResultToQueue(t *testing.T) {
 		t.Fatalf("sqlite store: %v", err)
 	}
 	jobRepo := store.NewSQLiteJobRepository(db)
-	// PR15.7a: wire the enqueuer singleton AFTER constructing the writer so
-	// NewEnqueuer(submitAdapter, nil) sees the live writer reference.
-	InitPipelineEnqueuer(enqueue.NewEnqueuer(&testSubmitQueue{writer: jobRepo, maxRetries: 3}, nil))
+	atomic := store.NewAtomicJobTaskCreator(db)
+	// PR15.7a: wire the enqueuer singleton with the atomic creator.
+	InitPipelineEnqueuer(enqueue.NewEnqueuer(atomic, nil, nil))
 
 	gin.SetMode(gin.TestMode)
 	r := gin.New()

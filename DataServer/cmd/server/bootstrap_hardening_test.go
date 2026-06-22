@@ -16,7 +16,9 @@ import (
 	"velox-server/internal/app"
 	"velox-server/internal/artifacts"
 	"velox-server/internal/config"
+	"velox-server/internal/jobs"
 	"velox-server/internal/store"
+	"velox-server/internal/taskgraph"
 )
 
 // ── Test: BlobStore unavailable → bootstrap fails ──────────────────────
@@ -59,9 +61,12 @@ func TestBootstrapFailsWhenBlobStoreUnavailable(t *testing.T) {
 // ── Test: Outbox unavailable → operations that emit fail ───────────────
 //
 // Verifies that when the outbox is not wired (SetOutbox not called),
-// an operation that emits an outbox event (CompleteJob) returns an error.
-// This proves the emitOutbox hardening: the caller must see the error
-// and rollback the transaction.
+// an operation that emits an outbox event (FailWithRetry, via PR3Fail)
+// returns an error. This proves the emitOutbox hardening: the caller
+// must see the error and rollback the transaction.
+//
+// PR #9: switched from CompleteJob (no longer emits outbox) to
+// FailWithRetry which delegates to PR3Fail → calls emitOutbox.
 func TestBootstrapFailsWhenOutboxUnavailable(t *testing.T) {
 	t.Parallel()
 
@@ -75,66 +80,41 @@ func TestBootstrapFailsWhenOutboxUnavailable(t *testing.T) {
 	}
 	defer sqliteStore.Close()
 
-	jobRepo := store.NewSQLiteJobRepository(sqliteStore)
 	ctx := context.Background()
 	jobID := "outbox-fail-test"
 
-	// Create a job and advance it to RUNNING so CompleteJob can be called.
-	if err := jobRepo.CreateJob(ctx, store.CreateJobParams{
-		JobID:      jobID,
-		MaxRetries: 3,
-		Payload:    map[string]interface{}{"test": true},
-	}); err != nil {
-		t.Fatalf("CreateJob: %v", err)
+	// Create a job in PENDING, then advance to LEASED so FailWithRetry
+	// can run (PR3Fail accepts LEASED/RUNNING/RENDER_FINISHED/AWAITING_ARTIFACT).
+	atomic := store.NewAtomicJobTaskCreator(sqliteStore)
+	if err := atomic.CreateJobWithTask(ctx, &jobs.Job{ID: jobID, MaxRetries: 3}, &taskgraph.TaskSpec{Version: 1}, 0); err != nil {
+		t.Fatalf("CreateJobWithTask: %v", err)
 	}
 
-	claimResult, err := jobRepo.ClaimNext(ctx, "worker-1", nil)
-	if err != nil {
-		t.Fatalf("ClaimNext: %v", err)
-	}
-	if claimResult == nil {
-		t.Fatal("ClaimNext returned nil")
+	repo := store.NewSQLiteJobRepository(sqliteStore)
+	if err := repo.Lease(ctx, jobID, "worker-1"); err != nil {
+		t.Fatalf("Lease: %v", err)
 	}
 
-	sj, err := jobRepo.GetJob(ctx, jobID)
-	if err != nil || sj == nil {
-		t.Fatalf("GetJob after claim: %v", err)
-	}
-	if err := jobRepo.StartJob(ctx, store.StartJobParams{
-		JobID:            jobID,
-		WorkerID:         sj.AssignedTo,
-		LeaseID:          sj.LeaseID,
-		Attempt:          claimResult.Attempt,
-		ExpectedRevision: sj.Revision,
-	}); err != nil {
-		t.Fatalf("StartJob: %v", err)
-	}
+	// Read current revision after Lease so the CAS check in PR3Fail matches.
+	sj, _ := repo.GetJob(ctx, jobID)
 
-	sj, _ = jobRepo.GetJob(ctx, jobID)
-	// CompleteJob calls emitOutbox internally.  With no outbox wired,
-	// emitOutbox returns an error → CompleteJob must propagate it.
-	cErr := jobRepo.CompleteJob(ctx, store.CompleteJobParams{
-		JobID:            jobID,
-		WorkerID:         sj.AssignedTo,
-		LeaseID:          sj.LeaseID,
-		Attempt:          claimResult.Attempt,
-		ExpectedRevision: sj.Revision,
-		FinalStatus:      store.JobStatusSucceeded,
-	})
-	if cErr == nil {
-		t.Fatal("CompleteJob with unwired outbox must return error (emitOutbox hardening)")
+	// FailWithRetry calls PR3Fail → emitOutbox. With no outbox wired,
+	// emitOutbox returns an error → FailWithRetry must propagate it.
+	fErr := repo.FailWithRetry(ctx, jobID, "ERR_TEST", "test failure", false, sj.Revision)
+	if fErr == nil {
+		t.Fatal("FailWithRetry with unwired outbox must return error (emitOutbox hardening)")
 	}
-	if !strings.Contains(cErr.Error(), "outbox not wired") {
-		t.Fatalf("expected outbox-not-wired error, got: %v", cErr)
+	if !strings.Contains(fErr.Error(), "outbox not wired") {
+		t.Fatalf("expected outbox-not-wired error, got: %v", fErr)
 	}
-	t.Logf("CompleteJob correctly failed with unwired outbox: %v", cErr)
+	t.Logf("FailWithRetry correctly failed with unwired outbox: %v", fErr)
 
-	// Verify transaction rollback: job status must NOT be SUCCEEDED.
-	sjAfter, _ := jobRepo.GetJob(ctx, jobID)
-	if sjAfter != nil && sjAfter.Status == store.JobStatusSucceeded {
-		t.Fatal("CompleteJob failed but job status still flipped to SUCCEEDED — rollback did not occur")
+	// Verify transaction rollback: job status must NOT be FAILED.
+	sjAfter, _ := repo.GetJob(ctx, jobID)
+	if sjAfter != nil && sjAfter.Status == store.JobStatusFailed {
+		t.Fatal("FailWithRetry failed but job status still flipped to FAILED — rollback did not occur")
 	}
-	t.Logf("transaction rollback confirmed — job status is %s (not SUCCEEDED) ✓", sjAfter.Status)
+	t.Logf("transaction rollback confirmed — job status is %s (not FAILED) ✓", sjAfter.Status)
 }
 
 // TestBuildPersistenceWiresOutbox verifies that buildPersistence produces

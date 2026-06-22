@@ -17,36 +17,33 @@ import (
 
 // ClaimNextPendingJob atomically claims the next pending/queued job for a worker.
 // Reads columns directly (not raw_json), then writes the claim via result_json.
-// Returns the updated result_json blob and true if a job was claimed.
-//
-// PR-04.5: the per-job Requirements (columns
-// job_required_resource_class + job_required_temporal_mode + the
-// `_requirements` JSON sub-object inside request_json) are mirrored
-// into the result_json blob under the same `_requirements` key. The
-// future-rank site (PR-04.6) reads them straight from the blob; the
-// reader path (jobs.Writer.Get → jobs.Job.Requirements) reconstructs
-// them from the dedicated columns (canonical) with the JSON fallback
-// for legacy rows.
-func (s *SQLiteStore) ClaimNextPendingJob(workerID string, allowedJobTypes []string, now time.Time) ([]byte, bool, error) {
+// Returns the updated result_json blob, per-job Requirements from dedicated
+// columns, and true if a job was claimed.
+// PR #6: Requirements return is from columns only; no _requirements in result_json.
+func (s *SQLiteStore) ClaimNextPendingJob(workerID string, allowedJobTypes []string, now time.Time) ([]byte, costmodel.JobRequirements, bool, error) {
+	var zeroReq costmodel.JobRequirements
 	tx, err := s.db.BeginTx(context.Background(), &sql.TxOptions{})
 	if err != nil {
-		return nil, false, err
+		return nil, zeroReq, false, err
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	// Read candidate jobs with their status and assigned_to columns (not raw_json)
+	// PR #9: assigned_to, claimed_by, retry_count columns dropped.
+	// Use attempt column as retry count proxy; filter only by PENDING status.
 	rows, err := tx.Query(
-		`SELECT job_id, status, assigned_to, claimed_by, job_fingerprint, run_id, job_run_id,
-		        video_name, project_id, retry_count, request_json, result_json,
+		`SELECT job_id, status, job_fingerprint, run_id, job_run_id,
+		        video_name, project_id, COALESCE(attempt, 0) as retry_count, request_json, result_json,
 		        COALESCE(job_required_resource_class, ''),
-		        COALESCE(job_required_temporal_mode, '')
+		        COALESCE(job_required_temporal_mode, ''),
+		        COALESCE(job_required_deterministic, 0),
+		        COALESCE(job_required_cacheable, 0),
+		        COALESCE(job_required_min_bandwidth_mbps, 0.0)
 		 FROM jobs
 		 WHERE UPPER(status) = 'PENDING'
-		   AND COALESCE(assigned_to, '') = ''
 		 ORDER BY COALESCE(updated_at, created_at) ASC, job_id ASC`,
 	)
 	if err != nil {
-		return nil, false, err
+		return nil, zeroReq, false, err
 	}
 
 	nowISO := now.UTC().Format(time.RFC3339)
@@ -54,25 +51,20 @@ func (s *SQLiteStore) ClaimNextPendingJob(workerID string, allowedJobTypes []str
 
 	for rows.Next() {
 		var (
-			jobID, status, assignedTo, claimedBy, jobFingerprint, runID, jobRunID sql.NullString
-			videoName, projectID                                                  sql.NullString
-			retryCount                                                            sql.NullInt64
-			requestJSON, resultJSON                                               sql.NullString
-			requiredResourceClass, requiredTemporalMode                            sql.NullString
+			jobID, status, jobFingerprint, runID, jobRunID sql.NullString
+			videoName, projectID                              sql.NullString
+			retryCount                                        sql.NullInt64
+			requestJSON, resultJSON                           sql.NullString
+			requiredResourceClass, requiredTemporalMode        sql.NullString
+			requiredDeterministic, requiredCacheable          sql.NullInt64
+			requiredMinBandwidthMbps                          sql.NullFloat64
 		)
-		if err := rows.Scan(&jobID, &status, &assignedTo, &claimedBy, &jobFingerprint, &runID, &jobRunID,
+		if err := rows.Scan(&jobID, &status, &jobFingerprint, &runID, &jobRunID,
 			&videoName, &projectID, &retryCount, &requestJSON, &resultJSON,
-			&requiredResourceClass, &requiredTemporalMode); err != nil {
+			&requiredResourceClass, &requiredTemporalMode,
+			&requiredDeterministic, &requiredCacheable, &requiredMinBandwidthMbps); err != nil {
 			rows.Close()
-			return nil, false, err
-		}
-
-		// Double-check safety: already claimed
-		if assignedTo.Valid && strings.TrimSpace(assignedTo.String) != "" {
-			continue
-		}
-		if claimedBy.Valid && strings.TrimSpace(claimedBy.String) != "" {
-			continue
+			return nil, zeroReq, false, err
 		}
 
 		// Check job type filter if specified (parse request_json properly to avoid substring false positives)
@@ -89,89 +81,49 @@ func (s *SQLiteStore) ClaimNextPendingJob(workerID string, allowedJobTypes []str
 		leaseID := uuid.NewString()
 		leaseExpiry := now.UTC().Add(30 * time.Minute).Format(time.RFC3339)
 
-		// Build the updated result_json blob with claim data
+		// Build the updated result_json blob with claim data.
+		// PR #7/#9: runtime fields removed — tasks carry them.
+		// lease_id, attempt, lease_expiry kept for ClaimNextResult parsing.
 		resultMap := make(map[string]any)
 		if resultJSON.Valid && resultJSON.String != "" {
 			_ = json.Unmarshal([]byte(resultJSON.String), &resultMap)
 		}
 		resultMap["job_id"] = jobID.String
 		resultMap["status"] = "LEASED"
-		resultMap["assigned_to"] = workerID
-		resultMap["worker_name"] = workerID
-		resultMap["assigned_at"] = nowISO
-		resultMap["claimed_by"] = workerID
-		resultMap["claimed_at"] = nowISO
 		resultMap["lease_id"] = leaseID
 		resultMap["lease_expiry"] = leaseExpiry
-		resultMap["lease_expires_at"] = leaseExpiry
 		resultMap["attempt"] = newRetry
-		resultMap["contract_version"] = 2
+		resultMap["contract_version"] = 3
 		resultMap["updated_at"] = nowUnix
-		resultMap["retry_count"] = newRetry
-
-		// PR-04.5 + PR-04.6: mirror per-job Requirements into
-		// result_json so the dispatch path
-		// (handler_workers.sendPushJobOffer + future rank site) can
-		// read them straight from the response blob without bouncing
-		// through jobs.Writer.Get. ResourceClass + TemporalMode are
-		// sourced from the dedicated columns; the rank-only
-		// Deterministic + Cacheable + MinBandwidthMbps come from the
-		// JSON sub-object inside request_json (already canonical
-		// there; PR-04.6 only adds the bandwidth field).
-		if requiredResourceClass.Valid && strings.TrimSpace(requiredResourceClass.String) != "" {
-			resultMap["_requirements"] = map[string]any{
-				"resource_class": strings.TrimSpace(requiredResourceClass.String),
-				"temporal_mode":  strings.TrimSpace(requiredTemporalMode.String),
-			}
-			if requestJSON.Valid && requestJSON.String != "" {
-				var reqParsed map[string]any
-				if err := json.Unmarshal([]byte(requestJSON.String), &reqParsed); err == nil {
-					if sub, ok := reqParsed["_requirements"].(map[string]any); ok {
-						if v, ok := sub["deterministic"].(bool); ok {
-							resultMap["_requirements"].(map[string]any)["deterministic"] = v
-						}
-						if v, ok := sub["cacheable"].(bool); ok {
-							resultMap["_requirements"].(map[string]any)["cacheable"] = v
-						}
-						if v, ok := sub["min_bandwidth_mbps"].(float64); ok {
-							resultMap["_requirements"].(map[string]any)["min_bandwidth_mbps"] = v
-						}
-					}
-				}
-			}
-		}
 
 		updatedResult, err := json.Marshal(resultMap)
 		if err != nil {
 			rows.Close()
-			return nil, false, err
+			return nil, zeroReq, false, err
 		}
 
 		result, err := tx.Exec(
 			`UPDATE jobs
-			 SET status = ?, assigned_to = ?, worker_name = ?, retry_count = ?, attempt = ?,
+			 SET status = ?, worker_name = ?, attempt = ?,
 			     result_json = ?, updated_at = ?, migrated_at = ?,
 			     assigned_at = ?,
-			     lease_id = ?, lease_expiry = ?,
-			     claimed_by = ?, claimed_at = ?
+			     claimed_at = ?
 			 WHERE job_id = ?
-			   AND UPPER(status) = 'PENDING'
-			   AND COALESCE(assigned_to, '') = ''`,
-			"LEASED", workerID, workerID, newRetry, newRetry,
+			   AND UPPER(status) = 'PENDING'`,
+			"LEASED", workerID, newRetry,
 			string(updatedResult), nowISO, nowISO,
 			nowISO,
-			leaseID, leaseExpiry,
-			workerID, nowISO,
+			nowISO,
 			jobID.String,
 		)
 		if err != nil {
 			rows.Close()
-			return nil, false, err
+			return nil, zeroReq, false, err
 		}
 		affected, err := result.RowsAffected()
 		if err != nil {
 			rows.Close()
-			return nil, false, err
+			return nil, zeroReq, false, err
 		}
 		if affected == 0 {
 			continue
@@ -186,37 +138,45 @@ func (s *SQLiteStore) ClaimNextPendingJob(workerID string, allowedJobTypes []str
 		}}
 		if err := s.replaceJobHistoryTx(tx, jobID.String, history); err != nil {
 			rows.Close()
-			return nil, false, err
+			return nil, zeroReq, false, err
 		}
 
 		// Record job attempt
 		insertedID, attemptErr := s.InsertJobAttemptTx(tx, jobID.String, newRetry, workerID, leaseID)
 		if attemptErr != nil {
 			rows.Close()
-			return nil, false, fmt.Errorf("failed to record job attempt: %w", attemptErr)
+			return nil, zeroReq, false, fmt.Errorf("failed to record job attempt: %w", attemptErr)
 		}
 
 		if err := tx.Commit(); err != nil {
 			rows.Close()
-			return nil, false, err
+			return nil, zeroReq, false, err
 		}
 		rows.Close()
+
+		claimedReq := costmodel.JobRequirements{
+			ResourceClass:    costmodel.ResourceClass(strings.TrimSpace(requiredResourceClass.String)),
+			TemporalMode:     costmodel.TemporalMode(strings.TrimSpace(requiredTemporalMode.String)),
+			Deterministic:    requiredDeterministic.Int64 != 0,
+			Cacheable:        requiredCacheable.Int64 != 0,
+			MinBandwidthMbps: requiredMinBandwidthMbps.Float64,
+		}
 
 		if insertedID > 0 {
 			_ = s.LogJobEvent(jobID.String, "job_claimed", map[string]interface{}{
 				"worker_id": workerID, "lease_id": leaseID, "attempt": newRetry,
 			})
 		}
-		return bytes.Clone(updatedResult), true, nil
+		return bytes.Clone(updatedResult), claimedReq, true, nil
 	}
 
 	if err := rows.Err(); err != nil {
-		return nil, false, err
+		return nil, zeroReq, false, err
 	}
 	if err := tx.Commit(); err != nil {
-		return nil, false, err
+		return nil, zeroReq, false, err
 	}
-	return nil, false, nil
+	return nil, zeroReq, false, nil
 }
 
 func jobTypeAllowed(payload map[string]any, allowedJobTypes []string) bool {
@@ -252,14 +212,18 @@ func jobTypeAllowed(payload map[string]any, allowedJobTypes []string) bool {
 // rankCandidate captures the per-row data needed to score and CAS a
 // single pending job for the rank loop. Lives in store_jobs.go as a
 // package-local type so it doesn't leak into the public store API.
+// PR #6: all 5 Requirements columns read directly; no JSON fallback.
 type rankCandidate struct {
-	jobID                 string
-	retryCount            int64
-	requestJSON           string
-	resultJSON            string
-	reqRC                 string
-	reqTM                 string
-	updatedAt             string
+	jobID                  string
+	retryCount             int64
+	requestJSON            string
+	resultJSON             string
+	reqRC                  string
+	reqTM                  string
+	reqDeterministic       bool
+	reqCacheable           bool
+	reqMinBandwidthMbps    float64
+	updatedAt              string
 }
 
 func (s *SQLiteStore) ClaimNextPendingJobForWorker(
@@ -269,12 +233,12 @@ func (s *SQLiteStore) ClaimNextPendingJobForWorker(
 	profile costmodel.WorkerProfile,
 	maxCandidates int,
 	now time.Time,
-) ([]byte, bool, error) {
+) ([]byte, costmodel.JobRequirements, bool, error) {
 	if s == nil || s.db == nil {
-		return nil, false, fmt.Errorf("store not initialized")
+		return nil, costmodel.JobRequirements{}, false, fmt.Errorf("store not initialized")
 	}
 	if workerID == "" {
-		return nil, false, fmt.Errorf("claim with empty workerID")
+		return nil, costmodel.JobRequirements{}, false, fmt.Errorf("claim with empty workerID")
 	}
 	if maxCandidates <= 0 {
 		maxCandidates = 20
@@ -286,9 +250,11 @@ func (s *SQLiteStore) ClaimNextPendingJobForWorker(
 		now = time.Now().UTC()
 	}
 
+	var rankZeroReq costmodel.JobRequirements
+
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{})
 	if err != nil {
-		return nil, false, err
+		return nil, rankZeroReq, false, err
 	}
 	defer func() { _ = tx.Rollback() }()
 
@@ -296,41 +262,50 @@ func (s *SQLiteStore) ClaimNextPendingJobForWorker(
 	//    job_type filter dropouts; keep FIFO pre-sort so the rank's
 	//    secondary tiebreak (updated_at ASC) is consistent across
 	//    score-tied candidates.
+	//    PR #9: assigned_to column dropped — filter only by PENDING status.
+	//    Use attempt column as retry count proxy.
 	rows, err := tx.Query(
-		`SELECT job_id, retry_count,
+		`SELECT job_id, COALESCE(attempt, 0) as retry_count,
 		        COALESCE(request_json, ''),
 		        COALESCE(result_json, ''),
 		        COALESCE(job_required_resource_class, ''),
 		        COALESCE(job_required_temporal_mode, ''),
+		        COALESCE(job_required_deterministic, 0),
+		        COALESCE(job_required_cacheable, 0),
+		        COALESCE(job_required_min_bandwidth_mbps, 0.0),
 		        COALESCE(updated_at, created_at)
 		 FROM jobs
 		 WHERE UPPER(status) = 'PENDING'
-		   AND COALESCE(assigned_to, '') = ''
 		 ORDER BY COALESCE(updated_at, created_at) ASC, job_id ASC
 		 LIMIT ?`,
 		maxCandidates*4,
 	)
 	if err != nil {
-		return nil, false, err
+		return nil, rankZeroReq, false, err
 	}
 
 	var candidates []rankCandidate
 	for rows.Next() {
 		var (
-			jobID                          sql.NullString
-			retryCount                     sql.NullInt64
-			requestJSON, resultJSON        sql.NullString
-			reqRC, reqTM, updatedAt        sql.NullString
+			jobID                               sql.NullString
+			retryCount                          sql.NullInt64
+			requestJSON, resultJSON             sql.NullString
+			reqRC, reqTM                        sql.NullString
+			reqDeterministic, reqCacheable      sql.NullInt64
+			reqMinBandwidthMbps                 sql.NullFloat64
+			updatedAt                           sql.NullString
 		)
 		if err := rows.Scan(&jobID, &retryCount, &requestJSON, &resultJSON,
-			&reqRC, &reqTM, &updatedAt); err != nil {
+			&reqRC, &reqTM,
+			&reqDeterministic, &reqCacheable, &reqMinBandwidthMbps,
+			&updatedAt); err != nil {
 			rows.Close()
-			return nil, false, err
+			return nil, rankZeroReq, false, err
 		}
 		if !jobID.Valid || strings.TrimSpace(jobID.String) == "" {
 			continue
 		}
-		// Parse request_json once; reuse for type filter + req fallback.
+		// Parse request_json once; reuse for type filter.
 		var payloadMap map[string]any
 		if requestJSON.Valid && requestJSON.String != "" {
 			_ = json.Unmarshal([]byte(requestJSON.String), &payloadMap)
@@ -342,67 +317,71 @@ func (s *SQLiteStore) ClaimNextPendingJobForWorker(
 			break
 		}
 		candidates = append(candidates, rankCandidate{
-			jobID:       jobID.String,
-			retryCount:  retryCount.Int64,
-			requestJSON: requestJSON.String,
-			resultJSON:  resultJSON.String,
-			reqRC:       reqRC.String,
-			reqTM:       reqTM.String,
-			updatedAt:   updatedAt.String,
+			jobID:               jobID.String,
+			retryCount:          retryCount.Int64,
+			requestJSON:         requestJSON.String,
+			resultJSON:          resultJSON.String,
+			reqRC:               reqRC.String,
+			reqTM:               reqTM.String,
+			reqDeterministic:    reqDeterministic.Int64 != 0,
+			reqCacheable:        reqCacheable.Int64 != 0,
+			reqMinBandwidthMbps: reqMinBandwidthMbps.Float64,
+			updatedAt:           updatedAt.String,
 		})
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
-		return nil, false, err
+		return nil, rankZeroReq, false, err
 	}
 	if len(candidates) == 0 {
 		if err := tx.Commit(); err != nil {
-			return nil, false, err
+			return nil, rankZeroReq, false, err
 		}
-		return nil, false, nil
+		return nil, rankZeroReq, false, nil
 	}
 
 	// 2. Reconstruct Requirements + Score against profile; filter
 	//    Eligible=true; capture per-component breakdown for explain.
-	//    reqRC + reqTM + requestJSON are carried into each entry so the
-	//    CAS loop below can re-stitch the result_json._requirements
-	//    subobject when CLAIMing the row (parallel to
-	//    ClaimNextPendingJob's mirror logic).
+	//    PR #6: Requirements read from dedicated columns only; no JSON fallback.
 	type scoredCandidate struct {
-		jobID       string
-		retry       int64
-		resultJSON  string
-		reqRC       string
-		reqTM       string
-		requestJSON string
-		score       float64
-		exp         costmodel.Explanation
-		updatedAt   string
+		jobID               string
+		retry               int64
+		resultJSON          string
+		reqRC               string
+		reqTM               string
+		reqDeterministic    bool
+		reqCacheable        bool
+		reqMinBandwidthMbps float64
+		score               float64
+		exp                 costmodel.Explanation
+		updatedAt           string
 	}
 	sel := make([]scoredCandidate, 0, len(candidates))
 	for _, c := range candidates {
-		req := reconstructRankRequirements(c.reqRC, c.reqTM, c.requestJSON)
+		req := reconstructRankRequirements(c.reqRC, c.reqTM, c.reqDeterministic, c.reqCacheable, c.reqMinBandwidthMbps)
 		cost, exp := costmodel.Score(profile, req)
 		if !cost.Eligible {
 			continue
 		}
 		sel = append(sel, scoredCandidate{
-			jobID:       c.jobID,
-			retry:       c.retryCount,
-			resultJSON:  c.resultJSON,
-			reqRC:       c.reqRC,
-			reqTM:       c.reqTM,
-			requestJSON: c.requestJSON,
-			score:       cost.Score,
-			exp:         exp,
-			updatedAt:   c.updatedAt,
+			jobID:               c.jobID,
+			retry:               c.retryCount,
+			resultJSON:          c.resultJSON,
+			reqRC:               c.reqRC,
+			reqTM:               c.reqTM,
+			reqDeterministic:    c.reqDeterministic,
+			reqCacheable:        c.reqCacheable,
+			reqMinBandwidthMbps: c.reqMinBandwidthMbps,
+			score:               cost.Score,
+			exp:                 exp,
+			updatedAt:           c.updatedAt,
 		})
 	}
 	if len(sel) == 0 {
 		if err := tx.Commit(); err != nil {
-			return nil, false, err
+			return nil, costmodel.JobRequirements{}, false, err
 		}
-		return nil, false, nil
+		return nil, costmodel.JobRequirements{}, false, nil
 	}
 
 	// 3. Sort ASC by Score (lower = better), then updated_at ASC for
@@ -427,83 +406,45 @@ func (s *SQLiteStore) ClaimNextPendingJobForWorker(
 		newRetry := int(sc.retry) + 1
 		leaseID := uuid.NewString()
 
+		// PR #7/#9: runtime fields removed — tasks carry them.
+		// lease_id, attempt, lease_expiry kept for ClaimNextResult.
 		resultMap := make(map[string]any)
 		if sc.resultJSON != "" {
 			_ = json.Unmarshal([]byte(sc.resultJSON), &resultMap)
 		}
 		resultMap["job_id"] = sc.jobID
 		resultMap["status"] = "LEASED"
-		resultMap["assigned_to"] = workerID
-		resultMap["worker_name"] = workerID
-		resultMap["assigned_at"] = nowISO
-		resultMap["claimed_by"] = workerID
-		resultMap["claimed_at"] = nowISO
 		resultMap["lease_id"] = leaseID
 		resultMap["lease_expiry"] = leaseExpiry
-		resultMap["lease_expires_at"] = leaseExpiry
 		resultMap["attempt"] = newRetry
-		resultMap["contract_version"] = 2
+		resultMap["contract_version"] = 3
 		resultMap["updated_at"] = nowUnix
-		resultMap["retry_count"] = newRetry
-
-		// PR-04.5 + PR-04.6: mirror per-job Requirements into
-		// result_json so the offer-decoder side reads the same
-		// payload whether it goes through jobsRepo.Get (column path)
-		// or directly through result_json (legacy decoder path).
-		rcTrim := strings.TrimSpace(sc.reqRC)
-		tmTrim := strings.TrimSpace(sc.reqTM)
-		if rcTrim != "" || tmTrim != "" {
-			reqSub := map[string]any{
-				"resource_class": rcTrim,
-				"temporal_mode":  tmTrim,
-			}
-			if sc.requestJSON != "" {
-				var reqParsed map[string]any
-				if err := json.Unmarshal([]byte(sc.requestJSON), &reqParsed); err == nil {
-					if sub, ok := reqParsed["_requirements"].(map[string]any); ok {
-						if v, ok := sub["deterministic"].(bool); ok {
-							reqSub["deterministic"] = v
-						}
-						if v, ok := sub["cacheable"].(bool); ok {
-							reqSub["cacheable"] = v
-						}
-						if v, ok := sub["min_bandwidth_mbps"].(float64); ok {
-							reqSub["min_bandwidth_mbps"] = v
-						}
-					}
-				}
-			}
-			resultMap["_requirements"] = reqSub
-		}
 
 		updatedResult, err := json.Marshal(resultMap)
 		if err != nil {
-			return nil, false, err
+			return nil, costmodel.JobRequirements{}, false, err
 		}
 
 		res, err := tx.Exec(
 			`UPDATE jobs
-			 SET status = ?, assigned_to = ?, worker_name = ?, retry_count = ?, attempt = ?,
+			 SET status = ?, worker_name = ?, attempt = ?,
 			     result_json = ?, updated_at = ?, migrated_at = ?,
 			     assigned_at = ?,
-			     lease_id = ?, lease_expiry = ?,
-			     claimed_by = ?, claimed_at = ?
+			     claimed_at = ?
 			 WHERE job_id = ?
-			   AND UPPER(status) = 'PENDING'
-			   AND COALESCE(assigned_to, '') = ''`,
-			"LEASED", workerID, workerID, newRetry, newRetry,
+			   AND UPPER(status) = 'PENDING'`,
+			"LEASED", workerID, newRetry,
 			string(updatedResult), nowISO, nowISO,
 			nowISO,
-			leaseID, leaseExpiry,
-			workerID, nowISO,
+			nowISO,
 			sc.jobID,
 		)
 		if err != nil {
-			return nil, false, err
+			return nil, costmodel.JobRequirements{}, false, err
 		}
 		affected, err := res.RowsAffected()
 		if err != nil {
-			return nil, false, err
+			return nil, costmodel.JobRequirements{}, false, err
 		}
 		if affected == 0 {
 			continue // race: another worker claimed; try next-scored
@@ -516,14 +457,15 @@ func (s *SQLiteStore) ClaimNextPendingJobForWorker(
 			"message":   fmt.Sprintf("Job assigned to worker %s (rank-path)", workerID),
 		}}
 		if err := s.replaceJobHistoryTx(tx, sc.jobID, history); err != nil {
-			return nil, false, err
+			return nil, rankZeroReq, false, err
 		}
 		if _, err := s.InsertJobAttemptTx(tx, sc.jobID, newRetry, workerID, leaseID); err != nil {
-			return nil, false, fmt.Errorf("failed to record job attempt: %w", err)
+			return nil, costmodel.JobRequirements{}, false, fmt.Errorf("failed to record job attempt: %w", err)
 		}
 		if err := tx.Commit(); err != nil {
-			return nil, false, err
+			return nil, costmodel.JobRequirements{}, false, err
 		}
+		claimedReq := reconstructRankRequirements(sc.reqRC, sc.reqTM, sc.reqDeterministic, sc.reqCacheable, sc.reqMinBandwidthMbps)
 		_ = s.LogJobEvent(sc.jobID, "job_claimed", map[string]interface{}{
 			"worker_id":    workerID,
 			"lease_id":     leaseID,
@@ -532,88 +474,26 @@ func (s *SQLiteStore) ClaimNextPendingJobForWorker(
 			"rank_eligible": true,
 			"rank_bandwidth_fit": sc.exp.BandwidthFit,
 		})
-		return bytes.Clone(updatedResult), true, nil
+		return bytes.Clone(updatedResult), claimedReq, true, nil
 	}
 
 	// No candidate's CAS succeeded (every best-scored row was
 	// raced by another worker this round). Caller maps nil → nil
 	// into ErrNoClaimableJob at the repository layer.
 	if err := tx.Commit(); err != nil {
-		return nil, false, err
+		return nil, costmodel.JobRequirements{}, false, err
 	}
-	return nil, false, nil
+	return nil, costmodel.JobRequirements{}, false, nil
 }
 
-// reconstructRankRequirements mirrors reconstructRequirements in
-// sqlite_jobs_writer.go per-job; localised here so the rank loop
-// stays decoupled from the canonical JobRecord path. The two
-// implementations are kept textually identical (single-tx race
-// rows use this one; reader-path decode uses the other).
-func reconstructRankRequirements(rc, tm, requestJSON string) costmodel.JobRequirements {
-	rcTrim := strings.TrimSpace(rc)
-	tmTrim := strings.TrimSpace(tm)
-	if rcTrim == "" && tmTrim == "" {
-		if requestJSON == "" {
-			return costmodel.DefaultRequirements()
-		}
-		var payload map[string]any
-		if err := json.Unmarshal([]byte(requestJSON), &payload); err != nil {
-			return costmodel.DefaultRequirements()
-		}
-		jsonReq := readRankRequirementsFromJSON(payload)
-		if jsonReq.ResourceClass != "" || jsonReq.TemporalMode != "" ||
-			jsonReq.Deterministic || jsonReq.Cacheable || jsonReq.MinBandwidthMbps > 0 {
-			return jsonReq
-		}
-		return costmodel.DefaultRequirements()
-	}
-	var jsonReq costmodel.JobRequirements
-	if requestJSON != "" {
-		var payload map[string]any
-		if err := json.Unmarshal([]byte(requestJSON), &payload); err == nil {
-			jsonReq = readRankRequirementsFromJSON(payload)
-		}
-	}
+// reconstructRankRequirements builds a costmodel.JobRequirements from dedicated
+// column values (PR #6). All 5 fields come from columns; no JSON fallback.
+func reconstructRankRequirements(rc, tm string, deterministic, cacheable bool, minBandwidthMbps float64) costmodel.JobRequirements {
 	return costmodel.JobRequirements{
-		ResourceClass:    costmodel.ResourceClass(rcTrim),
-		TemporalMode:     costmodel.TemporalMode(tmTrim),
-		Deterministic:    jsonReq.Deterministic,
-		Cacheable:        jsonReq.Cacheable,
-		MinBandwidthMbps: jsonReq.MinBandwidthMbps,
+		ResourceClass:    costmodel.ResourceClass(strings.TrimSpace(rc)),
+		TemporalMode:     costmodel.TemporalMode(strings.TrimSpace(tm)),
+		Deterministic:    deterministic,
+		Cacheable:        cacheable,
+		MinBandwidthMbps: minBandwidthMbps,
 	}
-}
-
-// readRankRequirementsFromJSON reads the `_requirements` sub-object
-// from a parsed payload without leaning on the sqlite_jobs_writer
-// helpers (which have different field shapes from the rank loop's
-// local reconstruction). Single source of truth for the rank path;
-// mirror of requirementsFromPayload in sqlite_jobs_writer.go BUT
-// adapted to ONLY return non-zero fields when present so the rank
-// loop's row-level reconstruction stays in lockstep with what the
-// column read would have produced for legacy rows.
-func readRankRequirementsFromJSON(payload map[string]any) costmodel.JobRequirements {
-	if payload == nil {
-		return costmodel.JobRequirements{}
-	}
-	raw, ok := payload["_requirements"].(map[string]any)
-	if !ok || raw == nil {
-		return costmodel.JobRequirements{}
-	}
-	req := costmodel.JobRequirements{}
-	if v, ok := raw["resource_class"].(string); ok {
-		req.ResourceClass = costmodel.ResourceClass(strings.TrimSpace(v))
-	}
-	if v, ok := raw["temporal_mode"].(string); ok {
-		req.TemporalMode = costmodel.TemporalMode(strings.TrimSpace(v))
-	}
-	if v, ok := raw["deterministic"].(bool); ok {
-		req.Deterministic = v
-	}
-	if v, ok := raw["cacheable"].(bool); ok {
-		req.Cacheable = v
-	}
-	if v, ok := raw["min_bandwidth_mbps"].(float64); ok {
-		req.MinBandwidthMbps = v
-	}
-	return req
 }

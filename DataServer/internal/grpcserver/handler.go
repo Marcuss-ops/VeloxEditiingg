@@ -27,6 +27,8 @@ import (
 	"velox-server/internal/artifacts"
 	"velox-server/internal/jobs"
 	"velox-server/internal/store"
+	"velox-server/internal/taskattempts"
+	"velox-server/internal/taskgraph"
 	workersreg "velox-server/internal/workers"
 	"velox-shared/controltransport"
 	pb "velox-shared/controltransport/pb"
@@ -43,16 +45,20 @@ import (
 
 // Handler implements pb.WorkerControlServer. It manages persistent worker
 // streams and bridges gRPC messages to the existing control plane.
+//
+// PR #4: taskRepo + taskAttemptRepo added for task-native dispatch.
 type Handler struct {
 	pb.UnimplementedWorkerControlServer
 
-	registry    *workersreg.Registry
-	cmdMgr      *workersreg.CommandManager
-	jobsRepo    jobs.Repository
-	artifactSvc *artifacts.Service
-	dbStore     *store.SQLiteStore
-	config      *HandlerConfig
-	authorizer  WorkerAuthorizer // P0: gates workers against VELOX_ALLOWED_WORKERS
+	registry        *workersreg.Registry
+	cmdMgr          *workersreg.CommandManager
+	jobsRepo        jobs.Repository
+	taskRepo        taskgraph.Repository
+	taskAttemptRepo taskattempts.Repository
+	artifactSvc     *artifacts.Service
+	dbStore         *store.SQLiteStore
+	config          *HandlerConfig
+	authorizer      WorkerAuthorizer // P0: gates workers against VELOX_ALLOWED_WORKERS
 
 	mu             sync.RWMutex
 	sessions       map[string]*workerSession // sessionID → active stream session
@@ -94,11 +100,10 @@ type workerSession struct {
 	// requirement: a network-level send error MUST terminate the session,
 	// otherwise pending offers can be left orphaned silently. The main loop
 	// reads writerErr inside its select and triggers a teardown on receipt.
-	writerErr chan error
-
-	// Job offering synchronization (Issue 4 fix).
-	pendingOffer *jobs.QueueItem // JobOffer sent, awaiting JobAccepted/JobRejected
-	claimMu      sync.Mutex // serializes the claim+send+set flow; also guards pendingOffer r/w
+	writerErr chan error	// Job offering synchronization (Issue 4 fix).
+	// PR #4: replaced pendingOffer (job-based) with pendingTaskOffer (task-based).
+	pendingTaskOffer *taskgraph.TaskWithSpec // TaskOffer sent, awaiting TaskAccepted/TaskRejected
+	claimMu          sync.Mutex              // serializes the claim+send+set flow; also guards pendingTaskOffer r/w
 
 	// Worker capacity tracking (atomic — Phase 4.1 fix). The handleHeartbeat
 	// goroutine writes them, sendPushJobOffer reads them under claimMu. Using
@@ -131,6 +136,8 @@ func NewHandler(
 	registry *workersreg.Registry,
 	cmdMgr *workersreg.CommandManager,
 	jobsRepo jobs.Repository,
+	taskRepo taskgraph.Repository,
+	taskAttemptRepo taskattempts.Repository,
 	artifactSvc *artifacts.Service,
 	dbStore *store.SQLiteStore,
 	config *HandlerConfig,
@@ -139,15 +146,17 @@ func NewHandler(
 		config = &HandlerConfig{PushMode: true}
 	}
 	return &Handler{
-		registry:       registry,
-		cmdMgr:         cmdMgr,
-		jobsRepo:       jobsRepo,
-		artifactSvc:    artifactSvc,
-		dbStore:        dbStore,
-		config:         config,
-		authorizer:     NewAllowlistAuthorizer(config.AllowedWorkers, config.AllowInsecure),
-		sessions:       make(map[string]*workerSession),
-		workerSessions: make(map[string]string),
+		registry:        registry,
+		cmdMgr:          cmdMgr,
+		jobsRepo:        jobsRepo,
+		taskRepo:        taskRepo,
+		taskAttemptRepo: taskAttemptRepo,
+		artifactSvc:     artifactSvc,
+		dbStore:         dbStore,
+		config:          config,
+		authorizer:      NewAllowlistAuthorizer(config.AllowedWorkers, config.AllowInsecure),
+		sessions:        make(map[string]*workerSession),
+		workerSessions:  make(map[string]string),
 	}
 }
 
@@ -259,14 +268,13 @@ func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMasterEnvelo
 		// At this point no goroutine should be sending on sendCh.
 		close(sendCh)
 
-		// Gap #2 fix: release any pending offer that was not accepted/rejected
-		// so the job doesn't stay leased until lease expiry.
+		// PR #4: release any pending task offer on session teardown.
 		sess.claimMu.Lock()
-		if sess.pendingOffer != nil {
-			if releaseErr := h.jobsRepo.ReleaseLease(context.Background(), sess.pendingOffer.JobID); releaseErr != nil {
-				log.Printf("[GRPC] Failed to release pendingOffer for job %s on session teardown: %v", sess.pendingOffer.JobID, releaseErr)
+		if sess.pendingTaskOffer != nil {
+			if releaseErr := h.taskRepo.ReleaseLease(context.Background(), sess.pendingTaskOffer.ID); releaseErr != nil {
+				log.Printf("[GRPC] Failed to release pendingTaskOffer for task %s on session teardown: %v", sess.pendingTaskOffer.ID, releaseErr)
 			}
-			sess.pendingOffer = nil
+			sess.pendingTaskOffer = nil
 		}
 		sess.claimMu.Unlock()
 
@@ -325,7 +333,7 @@ func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMasterEnvelo
 		notifyCtx, cancel := context.WithCancel(sessionCtx)
 		notifyStop = cancel
 		notifyCh = make(chan struct{}, 1)
-		go h.notifyJobsAvailable(notifyCtx, workerID, notifyCh, sess.done)
+		go h.notifyTasksAvailable(notifyCtx, workerID, notifyCh, sess.done)
 	}
 
 	if notifyStop != nil {
@@ -370,15 +378,15 @@ func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMasterEnvelo
 			if h.dbStore != nil {
 				_ = h.dbStore.RevokeSession(sessionID)
 			}
-			// Gap #2 fix: release pendingOffer so the job doesn't stay leased.
-			sess.claimMu.Lock()
-			if sess.pendingOffer != nil {
-				if releaseErr := h.jobsRepo.ReleaseLease(context.Background(), sess.pendingOffer.JobID); releaseErr != nil {
-					log.Printf("[GRPC] Failed to release pendingOffer for job %s on writer failure: %v", sess.pendingOffer.JobID, releaseErr)
-				}
-				sess.pendingOffer = nil
+		// PR #4: release pending task offer on writer failure.
+		sess.claimMu.Lock()
+		if sess.pendingTaskOffer != nil {
+			if releaseErr := h.taskRepo.ReleaseLease(context.Background(), sess.pendingTaskOffer.ID); releaseErr != nil {
+				log.Printf("[GRPC] Failed to release pendingTaskOffer for task %s on writer failure: %v", sess.pendingTaskOffer.ID, releaseErr)
 			}
-			sess.claimMu.Unlock()
+			sess.pendingTaskOffer = nil
+		}
+		sess.claimMu.Unlock()
 			return fmt.Errorf("stream: writer failure: %w", err)
 
 		case err := <-recvErrCh:
@@ -417,14 +425,23 @@ func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMasterEnvelo
 			case *pb.WorkerToMasterEnvelope_LeaseRenewal:
 				h.handleLeaseRenewal(workerID, m.LeaseRenewal)
 
-			case *pb.WorkerToMasterEnvelope_JobAccepted:
-				h.handleJobAccepted(workerID, m.JobAccepted)
+		case *pb.WorkerToMasterEnvelope_JobAccepted:
+			h.handleJobAccepted(workerID, m.JobAccepted)
 
-			case *pb.WorkerToMasterEnvelope_JobRejected:
-				h.handleJobRejected(workerID, m.JobRejected)
+		case *pb.WorkerToMasterEnvelope_JobRejected:
+			h.handleJobRejected(workerID, m.JobRejected)
 
-			case *pb.WorkerToMasterEnvelope_JobProgress:
-				h.handleJobProgress(workerID, m.JobProgress)
+		case *pb.WorkerToMasterEnvelope_TaskAccepted:
+			h.handleTaskAccepted(workerID, m.TaskAccepted)
+
+		case *pb.WorkerToMasterEnvelope_TaskRejected:
+			h.handleTaskRejected(workerID, m.TaskRejected)
+
+		case *pb.WorkerToMasterEnvelope_TaskResult:
+			h.handleTaskResult(workerID, m.TaskResult)
+
+		case *pb.WorkerToMasterEnvelope_JobProgress:
+			h.handleJobProgress(workerID, m.JobProgress)
 
 			case *pb.WorkerToMasterEnvelope_CommandAck:
 				h.handleCommandAck(workerID, m.CommandAck)
@@ -609,15 +626,14 @@ func (h *Handler) closeOldSessionLocked(workerID string) {
 		if oldSess.cancel != nil {
 			oldSess.cancel()
 		}
-		// Gap #2: release any pendingOffer held by the old session
-		// so the claim is returned promptly on reconnect, not just
-		// when the old defer eventually runs.
+		// PR #4: release any pendingTaskOffer held by the old session
+		// so the claim is returned promptly on reconnect.
 		oldSess.claimMu.Lock()
-		if oldSess.pendingOffer != nil {
-			if releaseErr := h.jobsRepo.ReleaseLease(context.Background(), oldSess.pendingOffer.JobID); releaseErr != nil {
-				log.Printf("[GRPC] Failed to release old pendingOffer for job %s during reconnect: %v", oldSess.pendingOffer.JobID, releaseErr)
+		if oldSess.pendingTaskOffer != nil {
+			if releaseErr := h.taskRepo.ReleaseLease(context.Background(), oldSess.pendingTaskOffer.ID); releaseErr != nil {
+				log.Printf("[GRPC] Failed to release old pendingTaskOffer for task %s during reconnect: %v", oldSess.pendingTaskOffer.ID, releaseErr)
 			}
-			oldSess.pendingOffer = nil
+			oldSess.pendingTaskOffer = nil
 		}
 		oldSess.claimMu.Unlock()
 		// Issue 7 fix: revoke the old session in SQLite.

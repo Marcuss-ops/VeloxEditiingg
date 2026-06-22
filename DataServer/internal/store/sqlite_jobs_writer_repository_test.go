@@ -20,15 +20,13 @@ func openStartJobTestDB(t *testing.T) (*SQLiteStore, *SQLiteJobRepository) {
 		t.Fatalf("open in-memory db: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
+	// PR #9 + #10: assigned_to, lease_id, lease_expiry, retry_count,
+	// claimed_by columns dropped from jobs table (migration 048).
 	if _, err := db.Exec(`
 		CREATE TABLE jobs (
 			job_id TEXT PRIMARY KEY,
 			status TEXT NOT NULL,
-			assigned_to TEXT,
-			lease_id TEXT,
-			lease_expiry TEXT,
 			revision INTEGER NOT NULL DEFAULT 0,
-			retry_count INTEGER NOT NULL DEFAULT 0,
 			max_retries INTEGER NOT NULL DEFAULT 0,
 			attempt INTEGER,
 			started_at TEXT,
@@ -47,20 +45,18 @@ func openStartJobTestDB(t *testing.T) (*SQLiteStore, *SQLiteJobRepository) {
 }
 
 // seedLeasedJob inserts a row in LEASED status with the supplied identity.
-// Returns the revision assigned at insert time (always 0 for fresh rows).
+// PR #9: assigned_to, lease_id columns dropped — identity lives in job_attempts + tasks.
+// Returns the revision assigned at insert time.
 func seedLeasedJob(t *testing.T, db *sql.DB,
-	jobID, workerID, leaseID string, attempt int, revision int,
+	jobID string, attempt int, revision int,
 ) int {
 	t.Helper()
 	now := time.Now().UTC().Format(time.RFC3339)
-	// Set revision via ON CONFLICT semantics so tests can pick the starting value.
 	res, err := db.Exec(
 		`INSERT INTO jobs
-		    (job_id, status, assigned_to, lease_id, lease_expiry, revision, attempt, created_at, updated_at)
-		 VALUES (?, 'LEASED', ?, ?, ?, ?, ?, ?, ?)`,
-		jobID, workerID, leaseID,
-		time.Now().UTC().Add(30*time.Minute).Format(time.RFC3339),
-		revision, attempt, now, now,
+		    (job_id, status, revision, attempt, created_at, updated_at)
+		 VALUES (?, 'LEASED', ?, ?, ?, ?)`,
+		jobID, revision, attempt, now, now,
 	)
 	if err != nil {
 		t.Fatalf("seed LEASED job: %v", err)
@@ -74,7 +70,7 @@ func TestSQLiteJobRepository_StartJob_HappyPath(t *testing.T) {
 	ctx := context.Background()
 
 	sess := r.store.db
-	seedLeasedJob(t, sess, "job-1", "w1", "lease-A", 1, 7)
+	seedLeasedJob(t, sess, "job-1", 1, 7)
 
 	err := r.StartJob(ctx, StartJobParams{
 		JobID:            "job-1",
@@ -107,53 +103,16 @@ func TestSQLiteJobRepository_StartJob_HappyPath(t *testing.T) {
 	}
 }
 
-func TestSQLiteJobRepository_StartJob_WrongLeaseID(t *testing.T) {
-	_, r := openStartJobTestDB(t)
-	ctx := context.Background()
-	sess := r.store.db
-	seedLeasedJob(t, sess, "job-1", "w1", "lease-A", 1, 0)
-
-	err := r.StartJob(ctx, StartJobParams{
-		JobID:            "job-1",
-		WorkerID:         "w1",
-		LeaseID:          "lease-DIFFERENT",
-		Attempt:          1,
-		ExpectedRevision: 0,
-	})
-	if !errors.Is(err, ErrTransitionConflict) {
-		t.Fatalf("expected ErrTransitionConflict, got %v", err)
-	}
-	// Job must still be in LEASED.
-	var status string
-	_ = sess.QueryRow(`SELECT status FROM jobs WHERE job_id = 'job-1'`).Scan(&status)
-	if status != "LEASED" {
-		t.Errorf("expected status unchanged LEASED, got %q", status)
-	}
-}
-
-func TestSQLiteJobRepository_StartJob_WrongWorkerID(t *testing.T) {
-	_, r := openStartJobTestDB(t)
-	ctx := context.Background()
-	sess := r.store.db
-	seedLeasedJob(t, sess, "job-1", "w1", "lease-A", 1, 0)
-
-	err := r.StartJob(ctx, StartJobParams{
-		JobID:            "job-1",
-		WorkerID:         "w2-impostor",
-		LeaseID:          "lease-A",
-		Attempt:          1,
-		ExpectedRevision: 0,
-	})
-	if !errors.Is(err, ErrTransitionConflict) {
-		t.Fatalf("expected ErrTransitionConflict, got %v", err)
-	}
-}
+// PR #9 + #10: WorkerID/LeaseID CAS checks removed from jobs table (identity
+// lives in job_attempts + tasks). StartJob only checks status='LEASED' +
+// attempt + revision. WrongWorkerID + WrongLeaseID tests are no longer
+// meaningful (they'd succeed because the WHERE no longer filters on them).
 
 func TestSQLiteJobRepository_StartJob_WrongAttempt(t *testing.T) {
 	_, r := openStartJobTestDB(t)
 	ctx := context.Background()
 	sess := r.store.db
-	seedLeasedJob(t, sess, "job-1", "w1", "lease-A", 2, 0)
+	seedLeasedJob(t, sess, "job-1", 2, 0)
 
 	err := r.StartJob(ctx, StartJobParams{
 		JobID:            "job-1",
@@ -171,7 +130,7 @@ func TestSQLiteJobRepository_StartJob_WrongRevision(t *testing.T) {
 	_, r := openStartJobTestDB(t)
 	ctx := context.Background()
 	sess := r.store.db
-	seedLeasedJob(t, sess, "job-1", "w1", "lease-A", 1, 3)
+	seedLeasedJob(t, sess, "job-1", 1, 3)
 
 	err := r.StartJob(ctx, StartJobParams{
 		JobID:            "job-1",
@@ -192,9 +151,8 @@ func TestSQLiteJobRepository_StartJob_AlreadyRunning(t *testing.T) {
 	// Seed directly in RUNNING (rare race: reaper already promoted).
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, err := sess.Exec(
-		`INSERT INTO jobs (job_id, status, assigned_to, lease_id, lease_expiry, revision, attempt, created_at, updated_at, started_at)
-		 VALUES ('job-1', 'RUNNING', 'w1', 'lease-A', ?, 0, 1, ?, ?, ?)`,
-		time.Now().UTC().Add(30*time.Minute).Format(time.RFC3339),
+		`INSERT INTO jobs (job_id, status, revision, attempt, created_at, updated_at, started_at)
+		 VALUES ('job-1', 'RUNNING', 0, 1, ?, ?, ?)`,
 		now, now, now,
 	)
 	if err != nil {
@@ -220,9 +178,8 @@ func TestSQLiteJobRepository_StartJob_NullAttemptLegacy(t *testing.T) {
 	// Seed a legacy row with attempt IS NULL (older scheme that pre-dates
 	// explicit attempt tracking). COALESCE(attempt, 0) = 0 should match.
 	_, err := sess.Exec(
-		`INSERT INTO jobs (job_id, status, assigned_to, lease_id, lease_expiry, revision, attempt, created_at, updated_at)
-		 VALUES ('job-legacy', 'LEASED', 'w1', 'lease-A', ?, 0, NULL, ?, ?)`,
-		time.Now().UTC().Add(30*time.Minute).Format(time.RFC3339),
+		`INSERT INTO jobs (job_id, status, revision, attempt, created_at, updated_at)
+		 VALUES ('job-legacy', 'LEASED', 0, NULL, ?, ?)`,
 		time.Now().UTC().Format(time.RFC3339),
 		time.Now().UTC().Format(time.RFC3339),
 	)

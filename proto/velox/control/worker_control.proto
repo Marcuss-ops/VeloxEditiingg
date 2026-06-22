@@ -40,6 +40,9 @@ message WorkerToMasterEnvelope {
     LeaseRenewal lease_renewal = 12;
     JobAccepted job_accepted = 13;
     JobRejected job_rejected = 14;
+    TaskAccepted task_accepted = 20;
+    TaskRejected task_rejected = 21;
+    TaskResult task_result = 22;
     JobProgress job_progress = 15;
     CommandAck command_ack = 16;
     JobResult job_result = 17;
@@ -118,6 +121,37 @@ message JobResult {
   int32 attempt = 8;
 }
 
+// TaskResult is the task-native execution report (PR #5).
+// Sent by the worker after completing or failing a task.
+//
+// PR #5 (feat/task-result): output_artifacts carries the list of
+// artifacts produced by this task execution; the master registers
+// them via the artifact service. lease_id is the CAS token the
+// worker received with the TaskOffer.
+message TaskResult {
+  string task_id = 1;
+  string job_id = 2;
+  string attempt_id = 3;
+  string status = 4; // "succeeded" or "failed"
+  string error_code = 5;
+  string error_detail = 6;
+  google.protobuf.Struct metrics = 7;
+  repeated PhaseMarker phase_markers = 8;
+  string executor_id = 9;
+  string executor_key = 10;
+  repeated google.protobuf.Struct output_artifacts = 11;
+  string lease_id = 12;
+}
+
+// PhaseMarker records one canonical phase timing.
+message PhaseMarker {
+  string name = 1;
+  google.protobuf.Timestamp started_at = 2;
+  google.protobuf.Timestamp completed_at = 3;
+  string status = 4;
+  string notes = 5;
+}
+
 message ArtifactUploaded {
   // ArtifactUploaded — master-authoritative artifact boundary.
   //
@@ -187,7 +221,9 @@ message MasterToWorkerEnvelope {
   oneof msg {
     HelloAck hello_ack = 20;
     JobOffer job_offer = 22;
+    TaskOffer task_offer = 30;
     JobLeaseGranted job_lease_granted = 23;
+    TaskLeaseGranted task_lease_granted = 31;
     Command command = 24;
     CancelJob cancel_job = 25;
     Drain drain = 26;
@@ -217,11 +253,53 @@ message JobOffer {
   google.protobuf.Struct job_payload = 9;
 }
 
+// TaskOffer is the task-native dispatch message (PR #4).
+// Replaces JobOffer for task-based dispatching: the dispatcher claims
+// a READY Task, creates a TaskAttempt, and sends this message.
+message TaskOffer {
+  string task_id = 1;
+  string job_id = 2;
+  string attempt_id = 3;
+  string executor_id = 4;
+  int32 executor_version = 5;
+  google.protobuf.Struct task_spec = 6;
+  string lease_id = 7;
+  google.protobuf.Timestamp lease_deadline = 8;
+  google.protobuf.Struct requirements = 9;
+  google.protobuf.Struct output_contract = 10;
+  int32 attempt_number = 11;
+}
+
+// TaskAccepted is sent by a worker when it accepts a TaskOffer.
+message TaskAccepted {
+  string task_id = 1;
+  string job_id = 2;
+  string attempt_id = 3;
+  string lease_id = 4;
+}
+
+// TaskRejected is sent by a worker when it rejects a TaskOffer.
+message TaskRejected {
+  string task_id = 1;
+  string reason = 2;
+}
+
 message JobLeaseGranted {
   string job_id = 1;
   string worker_id = 2;
   string status = 3;
   string lease_id = 4;
+}
+
+// TaskLeaseGranted is the task-scoped grant (PR #5 followup).
+// Replaces JobLeaseGranted for task-native dispatch: the master
+// sends this after the worker accepts a TaskOffer and the task
+// transitions LEASED→RUNNING.
+message TaskLeaseGranted {
+  string task_id = 1;
+  string lease_id = 2;
+  string attempt_id = 3;
+  string job_id = 4;
 }
 
 message Command {

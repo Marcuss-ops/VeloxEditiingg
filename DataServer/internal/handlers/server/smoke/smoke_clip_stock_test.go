@@ -23,9 +23,9 @@ func TestCreateSmokeClipStock_Validation(t *testing.T) {
 	if err != nil {
 		t.Skipf("SQLite unavailable: %v", err)
 	}
-	jobRepo := store.NewSQLiteJobRepository(db)
+	atomic := store.NewAtomicJobTaskCreator(db)
 	r := gin.New()
-	r.POST("/api/v1/video/smoke-clip-stock", CreateSmokeClipStock(config.FromEnv(), jobRepo))
+	r.POST("/api/v1/video/smoke-clip-stock", CreateSmokeClipStock(config.FromEnv(), atomic))
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/video/smoke-clip-stock", bytes.NewReader([]byte(`{"video_name":"test"}`)))
@@ -46,9 +46,9 @@ func TestCreateSmokeClipStock_Enqueue(t *testing.T) {
 	if err != nil {
 		t.Skipf("SQLite unavailable: %v", err)
 	}
-	jobRepo := store.NewSQLiteJobRepository(db)
+	atomic := store.NewAtomicJobTaskCreator(db)
 	r := gin.New()
-	r.POST("/api/v1/video/smoke-clip-stock", CreateSmokeClipStock(config.FromEnv(), jobRepo))
+	r.POST("/api/v1/video/smoke-clip-stock", CreateSmokeClipStock(config.FromEnv(), atomic))
 
 	payload := map[string]interface{}{
 		"video_name":          "Smoke clip stock",

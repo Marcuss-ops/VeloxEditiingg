@@ -31,6 +31,7 @@ func (s AttemptStatus) IsTerminal() bool {
 type TaskAttempt struct {
 	ID            string        `json:"id"`
 	TaskID        string        `json:"task_id"`
+	JobID         string        `json:"job_id"`
 	AttemptNumber int           `json:"attempt_number"`
 	WorkerID      string        `json:"worker_id"`
 	LeaseID       string        `json:"lease_id"`

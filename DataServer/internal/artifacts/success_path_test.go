@@ -35,9 +35,10 @@
 // The "happy path" test (TestFinalizeVerified_HappyPath) covers the
 // inverse: with all preconditions met, Finalize produces precisely
 // one SUCCEEDED on jobs, READY on artifacts, SUCCEEDED on the
-// attempt, COMPLETED on the upload, and an outbox row for each of
-// ARTIFACT_READY / JOB_SUCCEEDED / DELIVERY_CREATED — idempotent
-// across concurrent finishers per the UNIQUE constraints.
+// attempt, COMPLETED on the upload, and one delivery row per
+// destination — idempotent across concurrent finishers per the
+// UNIQUE constraints. Legacy outbox events (ARTIFACT_READY,
+// JOB_SUCCEEDED, DELIVERY_CREATED) were removed in PR #2.
 package artifacts_test
 
 import (
@@ -285,17 +286,6 @@ func TestFinalizeVerified_HappyPath(t *testing.T) {
 		t.Errorf("artifacts.mime_type = %q; want %q", mime, "video/mp4")
 	}
 
-	// outbox JOB_SUCCEEDED payload MUST carry the canonical SHA so that
-	// downstream consumers see the verified fingerprint (cross-system
-	// invariant the writer is responsible for).
-	var payload string
-	if err := db.QueryRow(`SELECT payload_json FROM outbox_events WHERE event_type='JOB_SUCCEEDED'`).Scan(&payload); err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(payload, "deadbeef") {
-		t.Errorf("outbox JOB_SUCCEEDED payload missing SHA256: %q", payload)
-	}
-
 	// jobs.status flipped exactly once to SUCCEEDED.
 	var jobStatus string
 	if err := db.QueryRow(`SELECT status FROM jobs WHERE job_id=?`, f.JobID).Scan(&jobStatus); err != nil {
@@ -334,27 +324,15 @@ func TestFinalizeVerified_HappyPath(t *testing.T) {
 		t.Errorf("job_deliveries primary count = %d; want 1", deliveryCount)
 	}
 
-	// outbox: ARTIFACT_READY + JOB_SUCCEEDED + DELIVERY_CREATED — but
-	// only one ARTIFACT_READY for the same aggregate (idempotent on
-	// repeated finalize).
-	rows, err := db.Query(`SELECT event_type, COUNT(*) FROM outbox_events GROUP BY event_type`)
-	if err != nil {
+	// Legacy outbox events (ARTIFACT_READY, JOB_SUCCEEDED,
+	// DELIVERY_CREATED) removed in PR #2. Verify the outbox table
+	// is empty — no spurious emissions from the decommissioned path.
+	var nOutbox int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM outbox_events`).Scan(&nOutbox); err != nil {
 		t.Fatal(err)
 	}
-	defer rows.Close()
-	gotEvents := map[string]int{}
-	for rows.Next() {
-		var et string
-		var n int
-		if err := rows.Scan(&et, &n); err != nil {
-			t.Fatal(err)
-		}
-		gotEvents[et] = n
-	}
-	for _, want := range []string{"ARTIFACT_READY", "JOB_SUCCEEDED", "DELIVERY_CREATED"} {
-		if gotEvents[want] != 1 {
-			t.Errorf("outbox[%s] = %d; want 1", want, gotEvents[want])
-		}
+	if nOutbox != 0 {
+		t.Errorf("outbox events = %d; want 0 (legacy outbox emissions removed in PR #2)", nOutbox)
 	}
 }
 

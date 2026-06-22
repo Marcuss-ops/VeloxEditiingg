@@ -142,10 +142,8 @@ func (r *SQLiteFinalizationRepository) CreateArtifactAndUploadSession(
 
 // FinalizeVerified is the canonical atomic SUCCEEDED write. It flips
 // jobs RUNNING → SUCCEEDED, artifacts STAGING → READY,
-// job_attempts RENDER_FINISHED → SUCCEEDED, inserts outbox ARTIFACT_READY
-// + JOB_SUCCEEDED + DELIVERY_CREATED events, inserts the per-destination
-// job_deliveries rows (single primary destination today; commit 4.4
-// will swap to a per-job destination plan), and in-tx flips
+// job_attempts RENDER_FINISHED → SUCCEEDED, inserts the per-destination
+// job_deliveries rows, and in-tx flips
 // artifact_uploads FINALIZING → COMPLETED.
 //
 // NO other code path in the data server writes jobs.status='SUCCEEDED'.
@@ -278,23 +276,7 @@ func (r *SQLiteFinalizationRepository) FinalizeVerified(
 			ErrTransitionConflict, n, cmd.UploadID)
 	}
 
-	// 5. outbox ARTIFACT_READY + JOB_SUCCEEDED (transactional outbox).
-	if err := r.emitOutboxTx(ctx, tx,
-		"artifact", cmd.ArtifactID, "ARTIFACT_READY",
-		fmt.Sprintf(`{"artifact_id":%q,"job_id":%q,"sha256":%q,"size_bytes":%d,"mime_type":%q,"storage_key":%q}`,
-			cmd.ArtifactID, cmd.JobID, cmd.SHA256, cmd.SizeBytes, cmd.MIMEType, cmd.StorageKey),
-	); err != nil {
-		return nil, fmt.Errorf("artifacts: FinalizeVerified outbox ARTIFACT_READY: %w", err)
-	}
-	if err := r.emitOutboxTx(ctx, tx,
-		"job", cmd.JobID, "JOB_SUCCEEDED",
-		fmt.Sprintf(`{"job_id":%q,"artifact_id":%q,"sha256":%q}`,
-			cmd.JobID, cmd.ArtifactID, cmd.SHA256),
-	); err != nil {
-		return nil, fmt.Errorf("artifacts: FinalizeVerified outbox JOB_SUCCEEDED: %w", err)
-	}
-
-	// 6. Resolve delivery destinations via plan resolver or fallback.
+	// 5. Resolve delivery destinations via plan resolver or fallback.
 	var destIDs []string
 	if cmd.DestinationID != "" {
 		destIDs = []string{cmd.DestinationID}
@@ -322,7 +304,7 @@ func (r *SQLiteFinalizationRepository) FinalizeVerified(
 		if err != nil {
 			return nil, fmt.Errorf("generate delivery ID: %w", err)
 		}
-		delRes, err := tx.ExecContext(ctx, `
+		_, err = tx.ExecContext(ctx, `
 			INSERT INTO job_deliveries (delivery_id, artifact_id, destination_id, status, idempotency_key, created_at, updated_at)
 			SELECT ?, ?, ?, 'PENDING', ?, ?, ?
 			WHERE NOT EXISTS (
@@ -335,17 +317,6 @@ func (r *SQLiteFinalizationRepository) FinalizeVerified(
 		)
 		if err != nil {
 			return nil, fmt.Errorf("artifacts: FinalizeVerified job_deliveries insert (dest=%s): %w", destID, err)
-		}
-		if delRes != nil {
-			if n, _ := delRes.RowsAffected(); n == 1 {
-				if err := r.emitOutboxTx(ctx, tx,
-					"delivery", cmd.ArtifactID+":"+destID, "DELIVERY_CREATED",
-					fmt.Sprintf(`{"artifact_id":%q,"destination_id":%q}`,
-						cmd.ArtifactID, destID),
-				); err != nil {
-					return nil, fmt.Errorf("artifacts: FinalizeVerified outbox DELIVERY_CREATED (dest=%s): %w", destID, err)
-				}
-			}
 		}
 	}
 
@@ -388,20 +359,4 @@ func (r *SQLiteFinalizationRepository) FinalizeVerified(
 	return &out, nil
 }
 
-// emitOutboxTx inserts one outbox event row in the same tx as the
-// caller. If the schema is missing outbox_events the tx DOES fail
-// (commit 3.5-b 4.5 removes the previous soft-skip). The previous
-// `if isNoSuchTable(err) { return nil }` pattern would silently drop
-// delivery events on partial-migration schemas and was a defect.
-func (r *SQLiteFinalizationRepository) emitOutboxTx(ctx context.Context, tx *sql.Tx, aggType, aggID, eventType, payload string) error {
-	_, err := tx.ExecContext(ctx, `
-		INSERT INTO outbox_events (aggregate_type, aggregate_id, event_type, payload_json, status, available_at, created_at)
-		VALUES (?, ?, ?, ?, 'PENDING', ?, ?)`,
-		aggType, aggID, eventType, payload,
-		time.Now().UTC().Format(time.RFC3339),
-		time.Now().UTC().Format(time.RFC3339))
-	if err != nil {
-		return fmt.Errorf("artifacts: emitOutboxTx %s/%s: %w", aggID, eventType, err)
-	}
-	return nil
-}
+

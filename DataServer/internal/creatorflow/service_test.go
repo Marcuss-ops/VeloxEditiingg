@@ -53,50 +53,13 @@ func validPlan() RenderPlan {
 	}
 }
 
-// testSubmitQueue implements enqueue.JobQueue by delegating to jobs.Writer.
-type testSubmitQueue struct {
-	writer     jobs.Writer
-	maxRetries int
-}
-
-// PR-04.5: SubmitJob accepts costmodel.JobRequirements and forwards it
-// onto jobs.Job.Requirements so the canonical jobs.Writer.Create path
-// can persist them in the dedicated SQLite columns + the
-// request_json._requirements sub-object. Tests that don't publish
-// Requirements still pass costmodel.DefaultRequirements().
-//
-// Maps the canonical top-level keys (video_name, job_run_id, job_type)
-// from the payload onto the Job struct fields so that
-// SQLiteJobRepository.Create writes the dedicated `video_name` / `run_id` /
-// `job_run_id` columns that production writers fill via toStoreParams.
-// Without this mapping the column values stay empty and tests asserting
-// `j.VideoName == "..."` / `j.RunID != ""` after `jobRepo.Get(...)`
-// fail with empty strings.
-func (q *testSubmitQueue) SubmitJob(ctx context.Context, jobID string, payload map[string]interface{}, req costmodel.JobRequirements) error {
-	raw, _ := json.Marshal(payload)
-	job := &jobs.Job{
-		ID:           jobID,
-		Status:       jobs.StatusPending,
-		MaxRetries:   q.maxRetries,
-		Payload:      string(raw),
-		Requirements: req,
-	}
-	if v, ok := payload["video_name"].(string); ok {
-		job.VideoName = v
-	} else if v, ok := payload["title"].(string); ok {
-		job.VideoName = v
-	}
-	if v, ok := payload["job_run_id"].(string); ok && v != "" {
-		job.RunID = v
-	} else if v, ok := payload["run_id"].(string); ok && v != "" {
-		job.RunID = v
-	}
-	if v, ok := payload["job_type"].(string); ok && v != "" {
-		job.Type = v
-	} else {
-		job.Type = "process_video"
-	}
-	return q.writer.Create(ctx, job)
+// newTestEnqueuer creates an Enqueuer backed by an in-memory SQLite store
+// with AtomicJobTaskCreator for atomic Job+Task creation (PR #3).
+func newTestEnqueuer(t *testing.T, db *store.SQLiteStore) *jobenqueue.Enqueuer {
+	t.Helper()
+	jobRepo := store.NewSQLiteJobRepository(db)
+	atomic := store.NewAtomicJobTaskCreator(db)
+	return jobenqueue.NewEnqueuer(atomic, jobRepo, nil)
 }
 
 // PR15.7a: both tests construct svc literal with enqueuer field, no queue
@@ -119,7 +82,7 @@ func TestForwardSchedulesAsyncPollAndWorkerHandoff(t *testing.T) {
 		t.Fatalf("sqlite store: %v", err)
 	}
 	jobRepo := store.NewSQLiteJobRepository(db)
-	enqueuer := jobenqueue.NewEnqueuer(&testSubmitQueue{writer: jobRepo, maxRetries: 3}, nil)
+	enqueuer := newTestEnqueuer(t, db)
 
 	var mu sync.Mutex
 	polls := 0
@@ -250,10 +213,8 @@ func TestForwardCompletedResultEnqueuesWorkerJob(t *testing.T) {
 	}
 	jobRepo := store.NewSQLiteJobRepository(db)
 	// PR15.7a: ForwardCompletedResult takes *enqueue.Enqueuer (not raw q).
-	// The free function constructs a temporary Enqueuer internally, but
-	// the new contract takes the enqueuer directly so the test mirrors
-	// the production call site.
-	enqueuer := jobenqueue.NewEnqueuer(&testSubmitQueue{writer: jobRepo, maxRetries: 3}, nil)
+	// PR #3: Enqueuer now owns AtomicJobTaskCreator for atomic Job+Task creation.
+	enqueuer := newTestEnqueuer(t, db)
 
 	result := map[string]interface{}{
 		"ok":       true,

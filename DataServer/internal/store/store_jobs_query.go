@@ -10,9 +10,8 @@ import (
 const jobColumns = `job_id, status, video_name, project_id,
 	created_at, updated_at, started_at,
 	completed_at, assigned_at,
-	assigned_to, worker_name, claimed_by, claimed_at,
-	lease_id, lease_expiry,
-	retry_count, attempt, max_retries,
+	worker_name, claimed_at,
+	attempt, max_retries,
 	revision,
 	last_error, last_error_at, error_message, failed_at, failed_by,
 	processing_at,
@@ -30,9 +29,8 @@ func scanJobRow(scanner interface {
 		jobID, status, videoName, projectID                         sql.NullString
 		createdAt, updatedAt, startedAt                             sql.NullString
 		completedAt, assignedAt                                     sql.NullString
-		assignedTo, workerName, claimedBy, claimedAt                sql.NullString
-		leaseID, leaseExpiry                                        sql.NullString
-		retryCount, attempt, maxRetries, revision                   sql.NullInt64
+		workerName, claimedAt                                       sql.NullString
+		attempt, maxRetries, revision                               sql.NullInt64
 		lastError, errorMessage, failedBy                           sql.NullString
 		lastErrorAt, failedAt, processingAt                         sql.NullString
 		lastUploadAttemptAt                                         sql.NullString
@@ -46,9 +44,8 @@ func scanJobRow(scanner interface {
 		&jobID, &status, &videoName, &projectID,
 		&createdAt, &updatedAt, &startedAt,
 		&completedAt, &assignedAt,
-		&assignedTo, &workerName, &claimedBy, &claimedAt,
-		&leaseID, &leaseExpiry,
-		&retryCount, &attempt, &maxRetries, &revision,
+		&workerName, &claimedAt,
+		&attempt, &maxRetries, &revision,
 		&lastError, &lastErrorAt, &errorMessage, &failedAt, &failedBy,
 		&processingAt,
 		&lastUploadAttemptAt,
@@ -79,12 +76,8 @@ func scanJobRow(scanner interface {
 	setStr("started_at", startedAt)
 	setStr("completed_at", completedAt)
 	setStr("assigned_at", assignedAt)
-	setStr("assigned_to", assignedTo)
 	setStr("worker_name", workerName)
-	setStr("claimed_by", claimedBy)
 	setStr("claimed_at", claimedAt)
-	setStr("lease_id", leaseID)
-	setStr("lease_expiry", leaseExpiry)
 	setStr("last_error", lastError)
 	setStr("error_message", errorMessage)
 	setStr("failed_by", failedBy)
@@ -107,7 +100,6 @@ func scanJobRow(scanner interface {
 			m[key] = int(ni.Int64)
 		}
 	}
-	setInt("retry_count", retryCount)
 	setInt("attempt", attempt)
 	setInt("max_retries", maxRetries)
 	setInt("revision", revision)

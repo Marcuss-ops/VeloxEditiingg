@@ -38,8 +38,22 @@ type Writer interface {
 	// Returns ErrTransitionConflict if the task is not in READY.
 	Lease(ctx context.Context, id, workerID, leaseID string) error
 
+	// ClaimNextReadyTask atomically claims the next READY task for a worker.
+	// Returns the claimed task with its spec payload, or (nil, nil) if none available.
+	// PR #4: task-native dispatch path replaces job-based claim.
+	ClaimNextReadyTask(ctx context.Context, workerID, leaseID string) (*TaskWithSpec, error)
+
+	// ReleaseLease atomically resets a LEASED/RUNNING task back to READY.
+	// Used on session teardown to release orphaned task claims (PR #4).
+	ReleaseLease(ctx context.Context, taskID string) error
+
 	// Start transitions LEASED → RUNNING with full CAS tuple.
 	Start(ctx context.Context, id, workerID, leaseID string, attempt, revision int) error
+
+	// AreDependenciesSatisfied returns true when all tasks in dependsOn
+	// have status SUCCEEDED. Returns true when dependsOn is empty.
+	// PR #4: used by TickReadiness for real dependency verification.
+	AreDependenciesSatisfied(ctx context.Context, dependsOn []string) (bool, error)
 
 	// Fail marks a task FAILED.
 	Fail(ctx context.Context, id, reason string, revision int) error

@@ -21,16 +21,11 @@ type Counts map[Status]int64
 
 // ClaimNextResult is the result of a successful ClaimNext call.
 //
-// Requirements is the per-job placement needs reconstructed at claim
-// time from the in-blob _requirements sub-object (PR-04.5 mirror that
-// the FIFO + rank claim paths write into result_json before the CAS
-// UPDATE). Populated symmetrically on ClaimNext + ClaimNextForProfile
-// so the dispatcher (sendPushJobOffer) can read claimResult.Requirements
-// directly without bouncing through jobs.Writer.Get to fetch the
-// full canonical Job. DefaultRequirements{} is returned when the
-// _requirements sub-object is absent (pre-PR-04.5 legacy rows) so
-// the dispatcher falls through to its existing Get-based fallback
-// path on the rare row that predates the mirror.
+// Requirements is the per-job placement needs read from dedicated
+// columns at claim time (PR #6). Populated symmetrically on
+// ClaimNext + ClaimNextForProfile so the dispatcher
+// (sendPushJobOffer) can read claimResult.Requirements directly
+// without bouncing through jobs.Writer.Get.
 type ClaimNextResult struct {
 	JobID        string    `json:"job_id"`
 	Attempt      int       `json:"attempt"`
@@ -69,10 +64,6 @@ type Reader interface {
 // store.JobRepository. The legacy interface is dropped — Writer is now the
 // single canonical write surface.
 type Writer interface {
-	// Create inserts a new job in PENDING state. If id is empty the
-	// repository assigns one.
-	Create(ctx context.Context, job *Job) error
-
 	// SetStatus performs a CAS status change from → to.
 	// Returns ErrTransitionConflict if the precondition does not hold.
 	SetStatus(ctx context.Context, id string, from, to Status) error

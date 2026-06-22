@@ -10,8 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
-
 	"velox-server/internal/costmodel"
 	"velox-server/internal/jobs"
 )
@@ -54,10 +52,7 @@ var jobProjectionColumns = []string{
 	"status",
 	"COALESCE(video_name, '')",
 	"COALESCE(project_id, '')",
-	"COALESCE(assigned_to, '')",
-	"COALESCE(lease_id, '')",
 	"COALESCE(revision, 0)",
-	"COALESCE(retry_count, 0)",
 	"COALESCE(max_retries, 0)",
 	"COALESCE(created_at, '')",
 	"COALESCE(updated_at, '')",
@@ -67,6 +62,9 @@ var jobProjectionColumns = []string{
 	"COALESCE(request_json, '{}')",
 	"COALESCE(job_required_resource_class, '')",
 	"COALESCE(job_required_temporal_mode, '')",
+	"COALESCE(job_required_deterministic, 0)",
+	"COALESCE(job_required_cacheable, 0)",
+	"COALESCE(job_required_min_bandwidth_mbps, 0.0)",
 }
 
 // scanJob reads one row in jobProjectionColumns order into a *JobRecord.
@@ -76,139 +74,16 @@ func scanJob(row interface {
 	var j JobRecord
 	err := row.Scan(
 		&j.JobID, &j.Status, &j.VideoName, &j.ProjectID,
-		&j.AssignedTo, &j.LeaseID,
-		&j.Revision, &j.RetryCount, &j.MaxRetries,
+		&j.Revision, &j.MaxRetries,
 		&j.CreatedAt, &j.UpdatedAt, &j.StartedAt, &j.CompletedAt,
 		&j.RunID, &j.PayloadJSON,
 		&j.RequiredResourceClass, &j.RequiredTemporalMode,
+		&j.RequiredDeterministic, &j.RequiredCacheable, &j.RequiredMinBandwidthMbps,
 	)
 	if err != nil {
 		return nil, err
 	}
 	return &j, nil
-}
-
-// requirementsJSONKey is the JSON-only sub-object key inside request_json
-// where the per-job requirements are mirrored. PR-04.5 keeps the redundant
-// copy so legacy workers that introspect request_json continue to find
-// Requirements under the well-known key.
-const requirementsJSONKey = "_requirements"
-
-// attachRequirementsToPayload mutates payload in-place by setting (or
-// overwriting) the `_requirements` sub-object. The resulting map is
-// always serializable. Empty (default) requirements are still embedded
-// so the on-disk shape is stable across writers.
-//
-// PR-04.6: min_bandwidth_mbps is JSON-only (no column was added by
-// migration 039 — bandwidth requirements are rare enough today that
-// keeping them inside the sub-object is acceptable; future PRs may
-// promote them to a dedicated column if SQL-level filtering becomes
-// load-bearing).
-func attachRequirementsToPayload(payload map[string]interface{}, req costmodel.JobRequirements) map[string]interface{} {
-	if payload == nil {
-		payload = make(map[string]interface{})
-	}
-	payload[requirementsJSONKey] = map[string]interface{}{
-		"resource_class":     string(req.ResourceClass),
-		"temporal_mode":      string(req.TemporalMode),
-		"deterministic":      req.Deterministic,
-		"cacheable":          req.Cacheable,
-		"min_bandwidth_mbps": req.MinBandwidthMbps,
-	}
-	return payload
-}
-
-// requirementsFromPayload reads the `_requirements` sub-object out of a
-// parsed payload map. Used by toJobsJob as a fallback when the dedicated
-// columns are blank (pre-PR-04.5 rows) and by ClaimNextPendingJobForWorker
-// for the rank-side filters that have no dedicated column yet
-// (deterministic / cacheable / min_bandwidth_mbps).
-func requirementsFromPayload(payload map[string]interface{}) costmodel.JobRequirements {
-	if payload == nil {
-		return costmodel.DefaultRequirements()
-	}
-	raw, ok := payload[requirementsJSONKey].(map[string]interface{})
-	if !ok || raw == nil {
-		return costmodel.DefaultRequirements()
-	}
-	req := costmodel.DefaultRequirements()
-	if v, ok := raw["resource_class"].(string); ok {
-		req.ResourceClass = costmodel.ResourceClass(strings.TrimSpace(v))
-	}
-	if v, ok := raw["temporal_mode"].(string); ok {
-		req.TemporalMode = costmodel.TemporalMode(strings.TrimSpace(v))
-	}
-	if v, ok := raw["deterministic"].(bool); ok {
-		req.Deterministic = v
-	}
-	if v, ok := raw["cacheable"].(bool); ok {
-		req.Cacheable = v
-	}
-	if v, ok := raw["min_bandwidth_mbps"].(float64); ok {
-		req.MinBandwidthMbps = v
-	}
-	return req
-}
-
-// CreateJob inserts a job in PENDING state atomically. If params.JobID is
-// empty the repository assigns a UUID.
-func (r *SQLiteJobRepository) CreateJob(ctx context.Context, params CreateJobParams) error {
-	if r.store == nil || r.store.db == nil {
-		return fmt.Errorf("job repository: store not initialized")
-	}
-	if params.MaxRetries < 0 {
-		params.MaxRetries = 0
-	}
-	if params.JobID == "" {
-		params.JobID = uuid.NewString()
-	}
-
-	tx, err := r.store.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("create job begin: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	now := time.Now().UTC().Format(time.RFC3339)
-	// PR-04.5: embed the per-job Requirements twice \u2014 once as a
-	// `_requirements` sub-object inside the request_json blob (legacy
-	// readers can introspect this without a schema change), and once on
-	// the dedicated columns added by migration 039 (canonical,
-	// query-time filterable). The two writes are independent so a row
-	// with pre-PR-04.5 schema (no columns yet) still gets the in-blob
-	// copy \u2014 the get path reads columns first, falls back to JSON.
-	payloadWithReq := attachRequirementsToPayload(params.Payload, params.Requirements)
-	requestJSON := "{}"
-	if len(payloadWithReq) > 0 {
-		if b, err := json.Marshal(payloadWithReq); err == nil {
-			requestJSON = string(b)
-		}
-	}
-
-	res, err := tx.ExecContext(ctx,
-		`INSERT INTO jobs (
-			job_id, status, max_retries, retry_count,
-			video_name, project_id,
-			created_at, updated_at, migrated_at,
-			request_json, result_json, revision,
-			run_id, job_run_id,
-			job_required_resource_class, job_required_temporal_mode
-		) VALUES (?, 'PENDING', ?, 0, ?, ?, ?, ?, ?, ?, '{}', 0, ?, ?, ?, ?)`,
-		params.JobID, params.MaxRetries, params.VideoName, params.ProjectID,
-		now, now, now,
-		requestJSON,
-		params.RunID, params.RunID,
-		string(params.Requirements.ResourceClass),
-		string(params.Requirements.TemporalMode),
-	)
-	if err != nil {
-		return fmt.Errorf("create job exec: %w", err)
-	}
-	if _, err := res.RowsAffected(); err != nil {
-		return fmt.Errorf("create job rows: %w", err)
-	}
-
-	return tx.Commit()
 }
 
 // GetJob returns one job projection, or (nil, nil) if missing.
@@ -240,7 +115,7 @@ func (r *SQLiteJobRepository) claimNext(ctx context.Context, claim ClaimParams) 
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
-	resultJSON, ok, err := r.store.ClaimNextPendingJob(claim.WorkerID, claim.AllowedJobTypes, now)
+	resultJSON, claimedReq, ok, err := r.store.ClaimNextPendingJob(claim.WorkerID, claim.AllowedJobTypes, now)
 	if err != nil {
 		return nil, fmt.Errorf("claim: %w", err)
 	}
@@ -248,7 +123,7 @@ func (r *SQLiteJobRepository) claimNext(ctx context.Context, claim ClaimParams) 
 		return nil, ErrNoClaimableJob
 	}
 
-	out := &ClaimResult{ResultJSON: append([]byte(nil), resultJSON...)}
+	out := &ClaimResult{ResultJSON: append([]byte(nil), resultJSON...), Requirements: claimedReq}
 	var parsed map[string]interface{}
 	if err := json.Unmarshal(resultJSON, &parsed); err != nil {
 		return nil, fmt.Errorf("claim result unmarshal: %w", err)
@@ -259,15 +134,7 @@ func (r *SQLiteJobRepository) claimNext(ctx context.Context, claim ClaimParams) 
 	if lease, ok := parsed["lease_id"].(string); ok {
 		out.LeaseID = lease
 	}
-	// PR-04.6 + dispatcher-read: populate per-job Requirements from
-	// the in-blob _requirements sub-object (the PR-04.5 mirror
-	// ClaimNextPendingJob writes BEFORE the CAS UPDATE). Reading
-	// here means the dispatcher can consume claimResult.Requirements
-	// directly without bouncing through jobs.Writer.Get. Pre-PR-04.5
-	// rows (no _requirements key) fall through to requirementsFromPayload
-	// returning DefaultRequirements{}; that is the safe permissive
-	// default that preserves the legacy routing path.
-	out.Requirements = requirementsFromPayload(parsed)
+	// PR #6: Requirements returned from dedicated columns by the claim path.
 	switch a := parsed["attempt"].(type) {
 	case float64:
 		out.Attempt = int(a)
@@ -342,9 +209,9 @@ func (r *SQLiteJobRepository) ListByStatus(ctx context.Context, statuses []JobSt
 }
 
 // LeaseJob atomically leases a PENDING job to a worker.
-// Updates status to LEASED, sets lease_id (generated UUID), assigned_to,
-// claimed_by, assigned_at, claimed_at, lease_expiry (30 min), increments
-// retry_count, bumps revision.
+// Updates status to LEASED, sets assigned_at, claimed_at, bumps revision.
+// PR #9: lease_id, lease_expiry, assigned_to, claimed_by, retry_count columns
+// dropped — lease identity flows through result_json + job_attempts.
 func (r *SQLiteJobRepository) LeaseJob(ctx context.Context, jobID, workerID string) error {
 	if jobID == "" {
 		return fmt.Errorf("job repository: empty jobID in LeaseJob")
@@ -353,23 +220,16 @@ func (r *SQLiteJobRepository) LeaseJob(ctx context.Context, jobID, workerID stri
 		return fmt.Errorf("job repository: empty workerID in LeaseJob")
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
-	leaseID := uuid.NewString()
-	leaseExpiry := time.Now().UTC().Add(30 * time.Minute).Format(time.RFC3339)
 	result, err := r.store.db.ExecContext(ctx,
 		`UPDATE jobs
 		 SET status = 'LEASED',
-		     lease_id = ?,
-		     lease_expiry = ?,
-		     assigned_to = ?,
-		     claimed_by = ?,
 		     assigned_at = ?,
 		     claimed_at = ?,
 		     updated_at = ?,
-		     revision = revision + 1,
-		     retry_count = retry_count + 1
+		     revision = revision + 1
 		 WHERE job_id = ?
 		   AND UPPER(status) = 'PENDING'`,
-		leaseID, leaseExpiry, workerID, workerID, now, now, now, jobID,
+		now, now, now, jobID,
 	)
 	if err != nil {
 		return fmt.Errorf("lease job exec: %w", err)
@@ -385,8 +245,8 @@ func (r *SQLiteJobRepository) LeaseJob(ctx context.Context, jobID, workerID stri
 }
 
 // ReleaseClaim atomically resets a LEASED/RUNNING job back to PENDING
-// without incrementing retry count. Clears lease_id, lease_expiry,
-// assigned_to, claimed_by, assigned_at, claimed_at.
+// without incrementing retry count. Clears assigned_at, claimed_at.
+// PR #9: lease_id, lease_expiry, assigned_to, claimed_by columns dropped.
 func (r *SQLiteJobRepository) ReleaseClaim(ctx context.Context, jobID string) error {
 	if jobID == "" {
 		return fmt.Errorf("job repository: empty jobID in ReleaseClaim")
@@ -395,10 +255,6 @@ func (r *SQLiteJobRepository) ReleaseClaim(ctx context.Context, jobID string) er
 	result, err := r.store.db.ExecContext(ctx,
 		`UPDATE jobs
 		 SET status = 'PENDING',
-		     lease_id = '',
-		     lease_expiry = '',
-		     assigned_to = '',
-		     claimed_by = '',
 		     assigned_at = '',
 		     claimed_at = '',
 		     updated_at = ?,
@@ -422,11 +278,10 @@ func (r *SQLiteJobRepository) ReleaseClaim(ctx context.Context, jobID string) er
 
 // StartJob performs the LEASED → RUNNING transition atomically.
 //
-// The single UPDATE verifies all five identity columns at once:
+// PR #9: assigned_to and lease_id columns dropped from jobs table.
+// The single UPDATE verifies:
 //   - job_id     (primary key)
 //   - status     = 'LEASED' (only LEASED jobs can start)
-//   - assigned_to = workerID (worker must own the lease)
-//   - lease_id   = leaseID (lease identity must match)
 //   - attempt    matches the caller's view (COALESCE(attempt, 0))
 //   - revision   = ExpectedRevision (optimistic CAS)
 //
@@ -434,10 +289,6 @@ func (r *SQLiteJobRepository) ReleaseClaim(ctx context.Context, jobID string) er
 // zero), and updates updated_at. The ErrTransitionConflict sentinel is
 // returned for any predicate mismatch so callers can distinguish stale
 // acceptances from infrastructure errors via errors.Is.
-//
-// Test coverage in sqlite_jobs_writer_repository_test.go validates the
-// happy path plus all five mismatch variants (lease, worker, attempt,
-// revision, already-running, NULL-attempt legacy row).
 func (r *SQLiteJobRepository) StartJob(ctx context.Context, params StartJobParams) error {
 	if r.store == nil || r.store.db == nil {
 		return fmt.Errorf("job repository: store not initialized")
@@ -465,14 +316,10 @@ func (r *SQLiteJobRepository) StartJob(ctx context.Context, params StartJobParam
 		       attempt = ?
 		 WHERE job_id = ?
 		   AND UPPER(status) = 'LEASED'
-		   AND COALESCE(assigned_to, '') = ?
-		   AND COALESCE(lease_id, '') = ?
 		   AND COALESCE(attempt, 0) = ?
 		   AND revision = ?`,
 		nowStr, nowStr, params.Attempt,
 		params.JobID,
-		params.WorkerID,
-		params.LeaseID,
 		params.Attempt,
 		params.ExpectedRevision,
 	)
@@ -490,16 +337,13 @@ func (r *SQLiteJobRepository) StartJob(ctx context.Context, params StartJobParam
 }
 
 // CompleteJob performs the RUNNING → terminal transition (SUCCEEDED |
-// FAILED | CANCELLED) atomically, with the same worker-identity CAS tuple
-// as StartJob. Unlike StartJob (which requires LEASED), CompleteJob
-// accepts RUNNING, LEASED, or RETRY_WAIT — covering the case where a
-// worker completes quickly enough that the LEASED → RUNNING transition
-// was never recorded (the very race StartJob was introduced to fix).
+// FAILED | CANCELLED) atomically.
 //
+// PR #9: assigned_to, lease_id, lease_expiry, claimed_by columns dropped.
 // On success it bumps revision, sets completed_at, writes result_json
-// (storing empty blob if nil/empty), and clears lease fields so the
-// row is reconcilable by reaper/outbox. Matches the existing pattern
-// of returning ErrTransitionConflict on predicate mismatch.
+// (storing empty blob if nil/empty), and clears assigned_at/claimed_at.
+// Matches the existing pattern of returning ErrTransitionConflict on
+// predicate mismatch.
 func (r *SQLiteJobRepository) CompleteJob(ctx context.Context, params CompleteJobParams) error {
 	if r.store == nil || r.store.db == nil {
 		return fmt.Errorf("job repository: store not initialized")
@@ -535,23 +379,15 @@ func (r *SQLiteJobRepository) CompleteJob(ctx context.Context, params CompleteJo
 		       updated_at = ?,
 		       result_json = ?,
 		       revision = revision + 1,
-		       lease_id = '',
-		       lease_expiry = '',
-		       assigned_to = '',
-		       claimed_by = '',
 		       assigned_at = '',
 		       claimed_at = '',
 		       attempt = ?
 		 WHERE job_id = ?
 		   AND UPPER(status) IN ('RUNNING', 'LEASED', 'RETRY_WAIT')
-		   AND COALESCE(assigned_to, '') = ?
-		   AND COALESCE(lease_id, '') = ?
 		   AND COALESCE(attempt, 0) = ?
 		   AND revision = ?`,
 		string(params.FinalStatus), nowStr, nowStr, resultJSON, params.Attempt,
 		params.JobID,
-		params.WorkerID,
-		params.LeaseID,
 		params.Attempt,
 		params.ExpectedRevision,
 	)
@@ -572,11 +408,9 @@ func (r *SQLiteJobRepository) CompleteJob(ctx context.Context, params CompleteJo
 
 // toJobsJob converts a store.JobRecord (DB projection) into a canonical jobs.Job.
 //
-// PR-04.5: Requirements is reconstructed from the dedicated columns
-// (added by migration 039) first, with a fallback to the
-// `_requirements` sub-object inside request_json. Pre-PR-04.5 rows
-// (no columns, no JSON sub-object) fold into JobRequirements{} =
-// DefaultRequirements = permissive, preserving legacy routing.
+// PR #6: Requirements are read from dedicated columns only; no JSON fallback.
+// PR #7: WorkerID + LeaseID removed — tasks carry the per-execution state now.
+// PR #9: RetryCount removed — job_attempts count is authoritative.
 func toJobsJob(sj *JobRecord) *jobs.Job {
 	if sj == nil {
 		return nil
@@ -586,75 +420,36 @@ func toJobsJob(sj *JobRecord) *jobs.Job {
 	startedAt, _ := time.Parse(time.RFC3339, sj.StartedAt)
 	completedAt, _ := time.Parse(time.RFC3339, sj.CompletedAt)
 	return &jobs.Job{
-		ID:           sj.JobID,
-		Status:       jobs.Status(sj.Status),
-		VideoName:    sj.VideoName,
-		ProjectID:    sj.ProjectID,
-		RunID:        sj.RunID,
-		Attempts:     sj.RetryCount,
-		Revision:     sj.Revision,
-		WorkerID:     sj.AssignedTo,
-		MaxRetries:   sj.MaxRetries,
-		LeaseID:      sj.LeaseID,
-		StartedAt:    startedAt,
-		CompletedAt:  completedAt,
-		CreatedAt:    createdAt,
-		UpdatedAt:    updatedAt,
-		Payload:      sj.PayloadJSON,
-		Requirements: reconstructRequirements(sj),
+		ID:          sj.JobID,
+		Type:        "",
+		Status:      jobs.Status(sj.Status),
+		Attempts:    0,
+		Revision:    sj.Revision,
+		VideoName:   sj.VideoName,
+		ProjectID:   sj.ProjectID,
+		RunID:       sj.RunID,
+		MaxRetries:  sj.MaxRetries,
+		StartedAt:   startedAt,
+		CompletedAt: completedAt,
+		CreatedAt:   createdAt,
+		UpdatedAt:   updatedAt,
+		Payload:     sj.PayloadJSON,
+		Requirements: costmodel.JobRequirements{
+			ResourceClass:    costmodel.ResourceClass(strings.TrimSpace(sj.RequiredResourceClass)),
+			TemporalMode:     costmodel.TemporalMode(strings.TrimSpace(sj.RequiredTemporalMode)),
+			Deterministic:    sj.RequiredDeterministic,
+			Cacheable:        sj.RequiredCacheable,
+			MinBandwidthMbps: sj.RequiredMinBandwidthMbps,
+		},
 	}
 }
 
-// reconstructRequirements reads the per-job Requirements from the
-// dedicated columns first; falls back to the JSON sub-object inside
-// request_json when the columns are blank (pre-PR-04.5 rows); defaults
-// to JobRequirements{} when both are blank (= DefaultRequirements = permissive).
-func reconstructRequirements(sj *JobRecord) costmodel.JobRequirements {
-	if sj == nil {
-		return costmodel.DefaultRequirements()
+// boolToInt converts a bool to an int for SQLite (0/1).
+func boolToInt(b bool) int {
+	if b {
+		return 1
 	}
-	rc := strings.TrimSpace(sj.RequiredResourceClass)
-	tm := strings.TrimSpace(sj.RequiredTemporalMode)
-	if rc == "" && tm == "" {
-		// Fallback to JSON sub-object (legacy rows).
-		parsed := jobs.ParsePayloadJSON(sj.PayloadJSON)
-		jsonReq := requirementsFromPayload(parsed)
-		if jsonReq.ResourceClass != "" || jsonReq.TemporalMode != "" || jsonReq.Deterministic || jsonReq.Cacheable {
-			return jsonReq
-		}
-		return costmodel.DefaultRequirements()
-	}
-	// Columns present: authoritative for resource_class and temporal_mode.
-	// Deterministic + Cacheable + MinBandwidthMbps are JSON-only
-	// \u2014 pick them up from the blob so the rank-side three
-	// fields read correctly end-to-end (PR-04.6: this is the
-	// critical reader-path fix that keeps Job.Requirements on the
-	// dispatched JobOffer consistent with the rank-side selection
-	// that picked it).
-	parsed := jobs.ParsePayloadJSON(sj.PayloadJSON)
-	jsonReq := requirementsFromPayload(parsed)
-	return costmodel.JobRequirements{
-		ResourceClass:    costmodel.ResourceClass(rc),
-		TemporalMode:     costmodel.TemporalMode(tm),
-		Deterministic:    jsonReq.Deterministic,
-		Cacheable:        jsonReq.Cacheable,
-		MinBandwidthMbps: jsonReq.MinBandwidthMbps,
-	}
-}
-
-func toStoreParams(j *jobs.Job) CreateJobParams {
-	if j == nil {
-		return CreateJobParams{}
-	}
-	return CreateJobParams{
-		JobID:        j.ID,
-		Payload:      jobs.ParsePayloadJSON(j.Payload),
-		VideoName:    j.VideoName,
-		ProjectID:    j.ProjectID,
-		RunID:        j.RunID,
-		MaxRetries:   j.MaxRetries,
-		Requirements: j.Requirements,
-	}
+	return 0
 }
 
 func toJobsFilter(f jobs.Filter) ([]JobStatus, int) {
@@ -716,14 +511,6 @@ func (r *SQLiteJobRepository) Counts(ctx context.Context) (jobs.Counts, error) {
 }
 
 // ── jobs.Writer ────────────────────────────────────────────────────────────
-
-// Create inserts a new job in PENDING state. If job.ID is empty the repository assigns one.
-func (r *SQLiteJobRepository) Create(ctx context.Context, job *jobs.Job) error {
-	if job == nil {
-		return fmt.Errorf("job repository: nil job")
-	}
-	return r.CreateJob(ctx, toStoreParams(job))
-}
 
 // SetStatus performs a CAS status change from → to. Returns ErrTransitionConflict
 // if the precondition does not hold.
@@ -871,7 +658,7 @@ func (r *SQLiteJobRepository) ClaimNextForProfile(
 	profile costmodel.WorkerProfile,
 	maxCandidates int,
 ) (*jobs.ClaimNextResult, error) {
-	resultJSON, ok, err := r.store.ClaimNextPendingJobForWorker(ctx, workerID, allowedJobTypes, profile, maxCandidates, time.Time{})
+	resultJSON, claimedReq, ok, err := r.store.ClaimNextPendingJobForWorker(ctx, workerID, allowedJobTypes, profile, maxCandidates, time.Time{})
 	if err != nil {
 		if errors.Is(err, ErrNoClaimableJob) {
 			return nil, err
@@ -884,7 +671,7 @@ func (r *SQLiteJobRepository) ClaimNextForProfile(
 	// Parse result_json (the rank path emits the same shape as the
 	// FIFO path's ClaimNextPendingJob so this parser is byte-for-byte
 	// equivalent to the lowercase `claimNext` parsing block).
-	out := &jobs.ClaimNextResult{}
+	out := &jobs.ClaimNextResult{Requirements: claimedReq}
 	var parsed map[string]interface{}
 	if err := json.Unmarshal(resultJSON, &parsed); err == nil {
 		if id, ok := parsed["job_id"].(string); ok {
@@ -906,15 +693,7 @@ func (r *SQLiteJobRepository) ClaimNextForProfile(
 				out.LeaseExpires = t
 			}
 		}
-		// PR-04.6 + dispatcher-read: populate per-job Requirements
-		// from the in-blob _requirements sub-object. The mirror
-		// write happens earlier in ClaimNextPendingJobForWorker's
-		// CAS block on the SAME result_json bytes, so this parse
-		// sees freshly-minted data. Reading here means PR-04.6
-		// (sendPushJobOffer rank path) can read claimResult.Requirements
-		// directly without bouncing through jobs.Writer.Get to
-		// fetch the full canonical Job.
-		out.Requirements = requirementsFromPayload(parsed)
+		// PR #6: Requirements populated from dedicated columns by the claim path.
 	}
 	return out, nil
 }

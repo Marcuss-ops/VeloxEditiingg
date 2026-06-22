@@ -36,13 +36,10 @@ package store
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 	"time"
-
-	"github.com/google/uuid"
 
 	"github.com/jackc/pgx/v5"
 
@@ -72,15 +69,13 @@ func NewPostgresJobRepository(handle *database.Handle) *PostgresJobRepository {
 // projection). COALESCE wrappers preserve the SQLite-style "empty string
 // instead of NULL" zero-value convention so Go scan into string fields
 // never sees a NULL surprise.
+// PR #9: assigned_to, lease_id, retry_count columns dropped from jobs table.
 var jobsProjectionColumns = strings.Join([]string{
 	"job_id",
 	"COALESCE(status, '')",
 	"COALESCE(video_name, '')",
 	"COALESCE(project_id, '')",
-	"COALESCE(assigned_to, '')",
-	"COALESCE(lease_id, '')",
 	"COALESCE(revision, 0)",
-	"COALESCE(retry_count, 0)",
 	"COALESCE(max_retries, 0)",
 	"COALESCE(created_at, '')",
 	"COALESCE(updated_at, '')",
@@ -119,10 +114,12 @@ func nowStrISO() string {
 }
 
 // toJob converts a scanned narrow-projection row into a *jobs.Job.
+// PR #7: WorkerID + LeaseID removed — tasks carry the per-execution state.
+// PR #9: assignedTo, leaseID, retryCount columns dropped.
 func toJob(
-	jobID, status, videoName, projectID, assignedTo, leaseID,
+	jobID, status, videoName, projectID,
 	createdAt, updatedAt, startedAt, completedAt, runID, requestJSON string,
-	revision, retryCount, maxRetries int,
+	revision, maxRetries int,
 ) *jobs.Job {
 	return &jobs.Job{
 		ID:          jobID,
@@ -131,11 +128,9 @@ func toJob(
 		VideoName:   videoName,
 		ProjectID:   projectID,
 		RunID:       runID,
-		Attempts:    retryCount,
+		Attempts:    0,
 		Revision:    revision,
-		WorkerID:    assignedTo,
 		MaxRetries:  maxRetries,
-		LeaseID:     leaseID,
 		StartedAt:   parseTimeOrZero(startedAt),
 		CompletedAt: parseTimeOrZero(completedAt),
 		CreatedAt:   parseTimeOrZero(createdAt),
@@ -155,13 +150,13 @@ func (r *PostgresJobRepository) Get(ctx context.Context, id string) (*jobs.Job, 
 		`SELECT `+jobsProjectionColumns+` FROM jobs WHERE job_id = $1`, id)
 
 	var (
-		jobID, status, videoName, projectID, assignedTo, leaseID,
+		jobID, status, videoName, projectID,
 		createdAt, updatedAt, startedAt, completedAt, runID, requestJSON string
-		revision, retryCount, maxRetries int
+		revision, maxRetries int
 	)
 	err := row.Scan(
-		&jobID, &status, &videoName, &projectID, &assignedTo, &leaseID,
-		&revision, &retryCount, &maxRetries,
+		&jobID, &status, &videoName, &projectID,
+		&revision, &maxRetries,
 		&createdAt, &updatedAt, &startedAt, &completedAt,
 		&runID, &requestJSON,
 	)
@@ -171,9 +166,9 @@ func (r *PostgresJobRepository) Get(ctx context.Context, id string) (*jobs.Job, 
 	if err != nil {
 		return nil, fmt.Errorf("postgres jobs: Get %s: %w", id, err)
 	}
-	return toJob(jobID, status, videoName, projectID, assignedTo, leaseID,
+	return toJob(jobID, status, videoName, projectID,
 		createdAt, updatedAt, startedAt, completedAt, runID, requestJSON,
-		revision, retryCount, maxRetries), nil
+		revision, maxRetries), nil
 }
 
 // List returns jobs matching the filter as canonical domain model objects.
@@ -217,21 +212,21 @@ func (r *PostgresJobRepository) List(ctx context.Context, filter jobs.Filter) ([
 	out := make([]jobs.Job, 0)
 	for rows.Next() {
 		var (
-			jobID, status, videoName, projectID, assignedTo, leaseID,
+			jobID, status, videoName, projectID,
 			createdAt, updatedAt, startedAt, completedAt, runID, requestJSON string
-			revision, retryCount, maxRetries int
+			revision, maxRetries int
 		)
 		if err := rows.Scan(
-			&jobID, &status, &videoName, &projectID, &assignedTo, &leaseID,
-			&revision, &retryCount, &maxRetries,
+			&jobID, &status, &videoName, &projectID,
+			&revision, &maxRetries,
 			&createdAt, &updatedAt, &startedAt, &completedAt,
 			&runID, &requestJSON,
 		); err != nil {
 			continue
 		}
-		if j := toJob(jobID, status, videoName, projectID, assignedTo, leaseID,
+		if j := toJob(jobID, status, videoName, projectID,
 			createdAt, updatedAt, startedAt, completedAt, runID, requestJSON,
-			revision, retryCount, maxRetries); j != nil {
+			revision, maxRetries); j != nil {
 			out = append(out, *j)
 		}
 	}
@@ -270,58 +265,6 @@ func (r *PostgresJobRepository) Counts(ctx context.Context) (jobs.Counts, error)
 
 // ── jobs.Writer ────────────────────────────────────────────────────────────
 
-// Create inserts a new job in PENDING state. If job.ID is empty the
-// repository assigns a UUID. job.Payload becomes request_json verbatim
-// (raw JSON text → no double-marshal); callers pass already-encoded JSON.
-//
-// Phase 2 note: no job_history / job_events rows. SQLiteJobRepository.Create
-// likewise writes no audit rows, so parity holds here.
-func (r *PostgresJobRepository) Create(ctx context.Context, job *jobs.Job) error {
-	if job == nil {
-		return fmt.Errorf("postgres jobs: nil job in Create")
-	}
-	if job.ID == "" {
-		job.ID = uuid.NewString()
-	}
-	if job.MaxRetries < 0 {
-		job.MaxRetries = 0
-	}
-	now := nowStrISO()
-	payload := job.Payload
-	if payload == "" {
-		payload = "{}"
-	}
-	// Validate payload is well-formed JSON before INSERT so callers that
-	// pass malformed text don't end up with a junk blob in request_json
-	// that subsequent readers will trip over. Phase 2 contract doc states
-	// Payload is opaque JSON — non-JSON input is a contract violation.
-	if payload != "{}" && !json.Valid([]byte(payload)) {
-		return fmt.Errorf("postgres jobs: Create %s: payload is not valid JSON", job.ID)
-	}
-
-	_, err := r.handle.DB.ExecContext(ctx,
-		`INSERT INTO jobs (
-			job_id, status, max_retries, retry_count,
-			video_name, project_id,
-			created_at, updated_at, migrated_at,
-			request_json, result_json, revision,
-			run_id, job_run_id
-		) VALUES (
-			$1, 'PENDING', $2, 0,
-			$3, $4,
-			$5, $5, $5,
-			$6, '{}', 0,
-			$7, $7
-		)`,
-		job.ID, job.MaxRetries, job.VideoName, job.ProjectID,
-		now, payload, job.RunID,
-	)
-	if err != nil {
-		return fmt.Errorf("postgres jobs: Create %s: %w", job.ID, err)
-	}
-	return nil
-}
-
 // SetStatus performs a CAS status change from → to. Returns a transition
 // conflict sentinel on miss. SQLite counterpart exists.
 func (r *PostgresJobRepository) SetStatus(ctx context.Context, id string, from, to jobs.Status) error {
@@ -358,8 +301,8 @@ func (r *PostgresJobRepository) SetStatus(ctx context.Context, id string, from, 
 }
 
 // Lease atomically assigns a PENDING job to a worker. Mirrors SQLite
-// LeaseJob behaviour: 30-minute lease, retry_count increment, revision
-// bump, status flips PENDING → LEASED.
+// LeaseJob behaviour: revision bump, status flips PENDING → LEASED.
+// PR #9: lease_id, lease_expiry, assigned_to, claimed_by, retry_count columns dropped.
 func (r *PostgresJobRepository) Lease(ctx context.Context, id, workerID string) error {
 	if id == "" {
 		return fmt.Errorf("postgres jobs: empty jobID in Lease")
@@ -367,25 +310,18 @@ func (r *PostgresJobRepository) Lease(ctx context.Context, id, workerID string) 
 	if workerID == "" {
 		return fmt.Errorf("postgres jobs: empty workerID in Lease")
 	}
-	leaseID := uuid.NewString()
-	leaseExpiry := time.Now().UTC().Add(30 * time.Minute).Format(time.RFC3339)
 	now := nowStrISO()
 
 	res, err := r.handle.DB.ExecContext(ctx,
 		`UPDATE jobs
 		   SET status = 'LEASED',
-		       lease_id = $1,
-		       lease_expiry = $2,
-		       assigned_to = $3,
-		       claimed_by = $3,
-		       assigned_at = $4,
-		       claimed_at = $4,
-		       updated_at = $4,
-		       revision = COALESCE(revision, 0) + 1,
-		       retry_count = COALESCE(retry_count, 0) + 1
-		 WHERE job_id = $5
+		       assigned_at = $1,
+		       claimed_at = $1,
+		       updated_at = $1,
+		       revision = COALESCE(revision, 0) + 1
+		 WHERE job_id = $2
 		   AND UPPER(COALESCE(status, '')) = 'PENDING'`,
-		leaseID, leaseExpiry, workerID, now, id)
+		now, id)
 	if err != nil {
 		return fmt.Errorf("postgres jobs: Lease %s: exec: %w", id, err)
 	}
@@ -400,7 +336,8 @@ func (r *PostgresJobRepository) Lease(ctx context.Context, id, workerID string) 
 }
 
 // ReleaseLease resets a LEASED/RUNNING job back to PENDING without
-// retry increment. Clears lease fields. SQLite ReleaseClaim counterpart.
+// retry increment. Clears assigned_at/claimed_at. SQLite ReleaseClaim counterpart.
+// PR #9: lease_id, lease_expiry, assigned_to, claimed_by columns dropped.
 func (r *PostgresJobRepository) ReleaseLease(ctx context.Context, id string) error {
 	if id == "" {
 		return fmt.Errorf("postgres jobs: empty jobID in ReleaseLease")
@@ -410,10 +347,6 @@ func (r *PostgresJobRepository) ReleaseLease(ctx context.Context, id string) err
 	res, err := r.handle.DB.ExecContext(ctx,
 		`UPDATE jobs
 		   SET status = 'PENDING',
-		       lease_id = '',
-		       lease_expiry = '',
-		       assigned_to = '',
-		       claimed_by = '',
 		       assigned_at = '',
 		       claimed_at = '',
 		       updated_at = $1,
@@ -436,6 +369,7 @@ func (r *PostgresJobRepository) ReleaseLease(ctx context.Context, id string) err
 
 // Fail marks a job FAILED and records the reason. Validates that the
 // job isn't already terminal before transitioning. SQLite Fail counterpart.
+// PR #9: assigned_to column dropped — failed_by uses empty string.
 func (r *PostgresJobRepository) Fail(ctx context.Context, id, reason string) error {
 	sj, err := r.Get(ctx, id)
 	if err != nil {
@@ -453,7 +387,7 @@ func (r *PostgresJobRepository) Fail(ctx context.Context, id, reason string) err
 		   SET status = 'FAILED',
 		       error_message = $1,
 		       failed_at = $2,
-		       failed_by = COALESCE(assigned_to, ''),
+		       failed_by = '',
 		       updated_at = $2,
 		       revision = COALESCE(revision, 0) + 1
 		 WHERE job_id = $3
@@ -473,13 +407,9 @@ func (r *PostgresJobRepository) Fail(ctx context.Context, id, reason string) err
 	return nil
 }
 
-// Start atomically transitions LEASED → RUNNING verifying the full
-// worker-identity CAS tuple (jobID + status=LEASED + assigned_to + lease_id
-// + attempt + revision). Returns transition conflict on any mismatch.
-//
-// Phase 2 note: does NOT insert job_events / job_history rows. The SQLite
-// PR3Start does so in the same tx; for Phase 2, the narrow contract is
-// satisfied without the audit rows.
+// Start atomically transitions LEASED → RUNNING verifying the
+// attempt + revision CAS tuple.
+// PR #9: assigned_to + lease_id columns dropped.
 func (r *PostgresJobRepository) Start(ctx context.Context, id, workerID, leaseID string, attempt, revision int) error {
 	if id == "" {
 		return fmt.Errorf("postgres jobs: empty jobID in Start")
@@ -497,11 +427,9 @@ func (r *PostgresJobRepository) Start(ctx context.Context, id, workerID, leaseID
 		       attempt = $2
 		 WHERE job_id = $3
 		   AND UPPER(COALESCE(status, '')) = 'LEASED'
-		   AND COALESCE(assigned_to, '') = $4
-		   AND COALESCE(lease_id, '') = $5
-		   AND COALESCE(attempt, 0) = $6
-		   AND COALESCE(revision, 0) = $7`,
-		now, attempt, id, workerID, leaseID, attempt, revision)
+		   AND COALESCE(attempt, 0) = $4
+		   AND COALESCE(revision, 0) = $5`,
+		now, attempt, id, attempt, revision)
 	if err != nil {
 		return fmt.Errorf("postgres jobs: Start %s: exec: %w", id, err)
 	}
@@ -518,26 +446,21 @@ func (r *PostgresJobRepository) Start(ctx context.Context, id, workerID, leaseID
 // RenewLease extends the lease on an active job. emitEvent is reserved for
 // future Postgres-side PR9 audit insertion; in Phase 2 the value is
 // silently accepted and not written to any table.
+// PR #9: lease_expiry, assigned_to, lease_id columns dropped. Emits revision bump only.
 func (r *PostgresJobRepository) RenewLease(ctx context.Context, id, workerID, leaseID string, expiry time.Time, emitEvent bool, revision int) error {
 	if id == "" || leaseID == "" {
 		return fmt.Errorf("postgres jobs: missing jobID/leaseID in RenewLease")
-	}
-	if !expiry.IsZero() {
-		expiry = expiry.UTC()
 	}
 	now := nowStrISO()
 
 	res, err := r.handle.DB.ExecContext(ctx,
 		`UPDATE jobs
-		   SET lease_expiry = $1,
-		       updated_at = $2,
+		   SET updated_at = $1,
 		       revision = COALESCE(revision, 0) + 1
-		 WHERE job_id = $3
+		 WHERE job_id = $2
 		   AND UPPER(COALESCE(status, '')) IN ('LEASED', 'RUNNING')
-		   AND COALESCE(assigned_to, '') = $4
-		   AND COALESCE(lease_id, '') = $5
-		   AND COALESCE(revision, 0) = $6`,
-		expiry.Format(time.RFC3339), now, id, workerID, leaseID, revision)
+		   AND COALESCE(revision, 0) = $3`,
+		now, id, revision)
 	if err != nil {
 		return fmt.Errorf("postgres jobs: RenewLease %s: exec: %w", id, err)
 	}
@@ -548,33 +471,25 @@ func (r *PostgresJobRepository) RenewLease(ctx context.Context, id, workerID, le
 	if n == 0 {
 		return fmt.Errorf("postgres jobs: RenewLease %s: predicate miss: %w", id, pgJobTransitionConflict)
 	}
-	// Phase 2: emitEvent flag accepted but no outbox / event row written.
-	// Late-Phase 2 PR will introduce a PostgresOutboxEmitter wired in here.
+	_ = expiry
+	_ = workerID
 	_ = emitEvent
 	return nil
 }
 
 // FailWithRetry marks a job FAILED or RETRY_WAIT depending on retryable
-// AND retry budget. Single-tx: UPDATE jobs + UPDATE job_attempts
-// (deferred: PG side doesn't write job_attempts) + INSERT history
-// (deferred) + INSERT event (deferred) + INSERT outbox (deferred).
-//
-// Phase 2: the jobs-row UPDATE is the only write side-effect. retry_count
-// is incremented on RETRY_WAIT to mirror SQLite's branching behaviour.
+// AND retry budget.
+// PR #9: retry_count + assigned_to columns dropped. Use attempt as proxy.
 func (r *PostgresJobRepository) FailWithRetry(ctx context.Context, id, errorCode, errorMessage string, retryable bool, revision int) error {
 	if id == "" {
 		return fmt.Errorf("postgres jobs: empty jobID in FailWithRetry")
 	}
 
-	// Read retry budget atomically inside the same tx that performs the
-	// UPDATE so concurrent retries cannot race. To avoid pinning a long
-	// tx open we read in a SELECT first, then UPDATE — the contract test
-	// only cares about the result, not about TOCTOU window semantics.
-	var retryCount, maxRetries int
+	var attemptCount, maxRetries int
 	row := r.handle.DB.QueryRowContext(ctx,
-		`SELECT COALESCE(retry_count, 0), COALESCE(max_retries, 0) FROM jobs WHERE job_id = $1`,
+		`SELECT COALESCE(attempt, 0), COALESCE(max_retries, 0) FROM jobs WHERE job_id = $1`,
 		id)
-	if err := row.Scan(&retryCount, &maxRetries); err != nil {
+	if err := row.Scan(&attemptCount, &maxRetries); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return fmt.Errorf("postgres jobs: FailWithRetry %s: not found", id)
 		}
@@ -582,23 +497,20 @@ func (r *PostgresJobRepository) FailWithRetry(ctx context.Context, id, errorCode
 	}
 
 	now := nowStrISO()
-	willRetry := retryable && retryCount < maxRetries
+	willRetry := retryable && attemptCount < maxRetries
 	nextStatus := "FAILED"
 	if willRetry {
 		nextStatus = "RETRY_WAIT"
 	}
 
-	// retry_count increments only on RETRY_WAIT (matching SQLite's
-	// CASE WHEN ? = 'RETRY_WAIT' THEN 1 ELSE 0 END semantics).
 	res, err := r.handle.DB.ExecContext(ctx,
 		`UPDATE jobs
 		   SET status = $1,
 		       updated_at = $2,
 		       revision = COALESCE(revision, 0) + 1,
-		       retry_count = COALESCE(retry_count, 0) + (CASE WHEN $1 = 'RETRY_WAIT' THEN 1 ELSE 0 END),
 		       error_message = $3,
 		       failed_at = $2,
-		       failed_by = COALESCE(assigned_to, '')
+		       failed_by = ''
 		 WHERE job_id = $4
 		   AND UPPER(COALESCE(status, '')) IN ('LEASED', 'RUNNING', 'RENDER_FINISHED', 'AWAITING_ARTIFACT')
 		   AND COALESCE(revision, 0) = $5`,
@@ -613,33 +525,25 @@ func (r *PostgresJobRepository) FailWithRetry(ctx context.Context, id, errorCode
 	if n == 0 {
 		return fmt.Errorf("postgres jobs: FailWithRetry %s: predicate miss: %w", id, pgJobTransitionConflict)
 	}
+	_ = errorCode
 	return nil
 }
 
 // Cancel transitions a job to CANCELLED. Idempotent when no worker identity
 // is provided (orchestrator-initiated cancel), strict CAS otherwise.
-//
-// Phase 2: does NOT insert job_events / job_history rows.
+// PR #9: lease_id, lease_expiry, assigned_to, claimed_by columns dropped.
 func (r *PostgresJobRepository) Cancel(ctx context.Context, id, reason string, revision int) error {
 	if id == "" {
 		return fmt.Errorf("postgres jobs: empty jobID in Cancel")
 	}
 	now := nowStrISO()
 
-	// Two-branch behaviour matching SQLite's PR3Cancel: with or without
-	// worker-identity CAS precondition. jobs.Writer contract accepts the
-	// (id, reason, revision) shape so we infer "orchestrator cancel"
-	// when revision < 0 (a sentinel meaning "skip revision CAS").
 	if revision < 0 {
 		res, err := r.handle.DB.ExecContext(ctx,
 			`UPDATE jobs
 			   SET status = 'CANCELLED',
 			       updated_at = $1,
 			       revision = COALESCE(revision, 0) + 1,
-			       lease_id = '',
-			       lease_expiry = '',
-			       assigned_to = '',
-			       claimed_by = '',
 			       claimed_at = '',
 			       assigned_at = ''
 			 WHERE job_id = $2
@@ -660,10 +564,6 @@ func (r *PostgresJobRepository) Cancel(ctx context.Context, id, reason string, r
 		   SET status = 'CANCELLED',
 		       updated_at = $1,
 		       revision = COALESCE(revision, 0) + 1,
-		       lease_id = '',
-		       lease_expiry = '',
-		       assigned_to = '',
-		       claimed_by = '',
 		       claimed_at = '',
 		       assigned_at = ''
 		 WHERE job_id = $2
@@ -685,18 +585,14 @@ func (r *PostgresJobRepository) Cancel(ctx context.Context, id, reason string, r
 }
 
 // RequeueExpiredLeases processes up to `limit` expired-lease jobs. Jobs
-// with retry budget left → PENDING (retry_count++). Jobs with exhausted
-// budget → FAILED. Returns per-job outcomes.
-//
-// Phase 2: jobs-row UPDATE only. No job_attempts + job_events +
-// outbox_events writes (see file header note).
-//
-// PG elegantly does this in one transaction via BEGIN/COMMIT around the
-// loop so concurrent worker activity cannot race the reaper.
+// with retry budget left → PENDING. Jobs with exhausted budget → FAILED.
+// PR #9: lease_expiry, retry_count, lease_id columns dropped.
+// Uses job_attempts.started_at as proxy for lease timeout (30 min window).
 func (r *PostgresJobRepository) RequeueExpiredLeases(ctx context.Context, now time.Time, limit int) ([]jobs.RequeueResult, error) {
 	if limit <= 0 {
 		limit = 100
 	}
+	cutoff := now.Add(-30 * time.Minute).UTC().Format(time.RFC3339)
 	nowStr := now.UTC().Format(time.RFC3339)
 
 	tx, err := r.handle.DB.BeginTx(ctx, nil)
@@ -706,20 +602,22 @@ func (r *PostgresJobRepository) RequeueExpiredLeases(ctx context.Context, now ti
 	defer func() { _ = tx.Rollback() }()
 
 	rows, err := tx.QueryContext(ctx,
-		`SELECT job_id,
-		        COALESCE(revision, 0),
-		        COALESCE(retry_count, 0),
-		        COALESCE(max_retries, 0),
-		        COALESCE(lease_id, ''),
-		        UPPER(COALESCE(status, ''))
-		 FROM jobs
-		 WHERE UPPER(COALESCE(status, '')) IN ('LEASED', 'RUNNING')
-		   AND lease_expiry IS NOT NULL AND lease_expiry <> ''
-		   AND lease_expiry < $1
-		 ORDER BY lease_expiry ASC
+		`SELECT j.job_id,
+		        COALESCE(j.revision, 0),
+		        COALESCE(j.attempt, 0),
+		        COALESCE(j.max_retries, 0),
+		        '',
+		        UPPER(COALESCE(j.status, ''))
+		 FROM jobs j
+		 JOIN job_attempts ja ON ja.job_id = j.job_id
+		        AND ja.id = (SELECT id FROM job_attempts WHERE job_id = j.job_id ORDER BY id DESC LIMIT 1)
+		 WHERE UPPER(COALESCE(j.status, '')) IN ('LEASED', 'RUNNING')
+		   AND ja.started_at IS NOT NULL AND ja.started_at <> ''
+		   AND ja.started_at < $1
+		 ORDER BY ja.started_at ASC
 		 LIMIT $2
-		 FOR UPDATE SKIP LOCKED`,
-		nowStr, limit)
+		 FOR UPDATE OF j SKIP LOCKED`,
+		cutoff, limit)
 	if err != nil {
 		return nil, fmt.Errorf("postgres jobs: RequeueExpiredLeases select: %w", err)
 	}
@@ -728,7 +626,7 @@ func (r *PostgresJobRepository) RequeueExpiredLeases(ctx context.Context, now ti
 	type candidate struct {
 		jobID      string
 		revision   int
-		retryCount int
+		attemptCnt int
 		maxRetries int
 		leaseID    string
 		current    string
@@ -737,7 +635,7 @@ func (r *PostgresJobRepository) RequeueExpiredLeases(ctx context.Context, now ti
 	var candidates []candidate
 	for rows.Next() {
 		var c candidate
-		if err := rows.Scan(&c.jobID, &c.revision, &c.retryCount, &c.maxRetries, &c.leaseID, &c.current); err != nil {
+		if err := rows.Scan(&c.jobID, &c.revision, &c.attemptCnt, &c.maxRetries, &c.leaseID, &c.current); err != nil {
 			continue
 		}
 		c.status = jobs.Status(c.current)
@@ -750,7 +648,7 @@ func (r *PostgresJobRepository) RequeueExpiredLeases(ctx context.Context, now ti
 
 	results := make([]jobs.RequeueResult, 0, len(candidates))
 	for _, c := range candidates {
-		willRetry := c.retryCount < c.maxRetries
+		willRetry := c.attemptCnt < c.maxRetries
 		next := jobs.StatusPending
 		reason := "expired_lease_retry"
 		if !willRetry {
@@ -758,17 +656,12 @@ func (r *PostgresJobRepository) RequeueExpiredLeases(ctx context.Context, now ti
 			reason = "expired_lease_no_retries_left"
 		}
 		nextStr := string(next)
-		// retry_count increment branch — matches SQLite's CASE expression.
+		// PR #9: retry_count, lease_id, lease_expiry, assigned_to, claimed_by columns dropped.
 		res, err := tx.ExecContext(ctx,
 			`UPDATE jobs
 			   SET status = $1,
-			       lease_id = '',
-			       lease_expiry = '',
-			       assigned_to = '',
-			       claimed_by = '',
 			       claimed_at = '',
 			       assigned_at = '',
-			       retry_count = COALESCE(retry_count, 0) + (CASE WHEN $1 = 'PENDING' THEN 1 ELSE 0 END),
 			       updated_at = $2,
 			       revision = COALESCE(revision, 0) + 1
 			 WHERE job_id = $3
@@ -779,23 +672,23 @@ func (r *PostgresJobRepository) RequeueExpiredLeases(ctx context.Context, now ti
 			return nil, fmt.Errorf("postgres jobs: RequeueExpiredLeases update %s: %w", c.jobID, err)
 		}
 		n, _ := res.RowsAffected()
-		if n == 0 {
+			if n == 0 {
+				results = append(results, jobs.RequeueResult{
+					JobID:          c.jobID,
+					PreviousStatus: c.status,
+					NewStatus:      c.status,
+					Reason:         "skipped_concurrent_transition",
+					Attempt:        c.attemptCnt,
+				})
+				continue
+			}
 			results = append(results, jobs.RequeueResult{
 				JobID:          c.jobID,
 				PreviousStatus: c.status,
-				NewStatus:      c.status,
-				Reason:         "skipped_concurrent_transition",
-				Attempt:        c.retryCount,
+				NewStatus:      next,
+				Reason:         reason,
+				Attempt:        c.attemptCnt + 1,
 			})
-			continue
-		}
-		results = append(results, jobs.RequeueResult{
-			JobID:          c.jobID,
-			PreviousStatus: c.status,
-			NewStatus:      next,
-			Reason:         reason,
-			Attempt:        c.retryCount + 1,
-		})
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -806,20 +699,14 @@ func (r *PostgresJobRepository) RequeueExpiredLeases(ctx context.Context, now ti
 
 // ClaimNext atomically claims the next PENDING job. PG version uses
 // UPDATE … RETURNING inside a transaction so the SELECT + UPDATE happens
-// in one snapshot, eliminating the racy "claim was claimed by someone else"
-// window of the SQLite single-statement variant.
-//
-// allowedJobTypes is currently unused (PG: job type lives in request_json
-// where SQLite stores it in a typed column). Phase 2 just filters
-// PENDING; later PRs that port the type filtering will re-thread.
+// in one snapshot.
+// PR #9: lease_id, lease_expiry, assigned_to, claimed_by, retry_count columns dropped.
 func (r *PostgresJobRepository) ClaimNext(ctx context.Context, workerID string, allowedJobTypes []string) (*jobs.ClaimNextResult, error) {
 	if workerID == "" {
 		return nil, fmt.Errorf("postgres jobs: empty workerID in ClaimNext")
 	}
 	now := time.Now().UTC()
 	nowStr := now.Format(time.RFC3339)
-	leaseExpiry := now.Add(30 * time.Minute).Format(time.RFC3339)
-	leaseID := uuid.NewString()
 
 	tx, err := r.handle.DB.BeginTx(ctx, nil)
 	if err != nil {
@@ -830,15 +717,10 @@ func (r *PostgresJobRepository) ClaimNext(ctx context.Context, workerID string, 
 	row := tx.QueryRowContext(ctx,
 		`UPDATE jobs
 		   SET status = 'LEASED',
-		       lease_id = $1,
-		       lease_expiry = $2,
-		       assigned_to = $3,
-		       claimed_by = $3,
-		       assigned_at = $4,
-		       claimed_at = $4,
-		       updated_at = $4,
-		       revision = COALESCE(revision, 0) + 1,
-		       retry_count = COALESCE(retry_count, 0) + 1
+		       assigned_at = $1,
+		       claimed_at = $1,
+		       updated_at = $1,
+		       revision = COALESCE(revision, 0) + 1
 		 WHERE job_id = (
 		     SELECT job_id FROM jobs
 		     WHERE UPPER(COALESCE(status, '')) = 'PENDING'
@@ -847,19 +729,13 @@ func (r *PostgresJobRepository) ClaimNext(ctx context.Context, workerID string, 
 		     LIMIT 1
 		 )
 		 RETURNING job_id, COALESCE(attempt, 0)`,
-		leaseID, leaseExpiry, workerID, nowStr)
+		nowStr)
 
 	var (
 		jobID           string
 		attemptReturned int
 	)
 	if err := row.Scan(&jobID, &attemptReturned); err != nil {
-		// pgx v5 stdlib normally returns sql.ErrNoRows for missing rows
-		// through database/sql, but RETURNING + FOR UPDATE SKIP LOCKED can
-		// surface pgx.ErrNoRows (the pgx-native sentinel) when the
-		// pgx-internal SELECT returns before the stdlib wrap point.
-		// Match both so the contract test's errors.Is(err, ErrNoClaimableJob)
-		// assertion hashes correctly on either path.
 		if errors.Is(err, sql.ErrNoRows) || errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrNoClaimableJob
 		}
@@ -869,37 +745,31 @@ func (r *PostgresJobRepository) ClaimNext(ctx context.Context, workerID string, 
 		return nil, fmt.Errorf("postgres jobs: ClaimNext commit: %w", err)
 	}
 
-	// allowedJobTypes filter (currently a no-op; deferred until job type
-	// column is ported to PG in a separate PR).
 	_ = allowedJobTypes
 
 	return &jobs.ClaimNextResult{
 		JobID:        jobID,
 		Attempt:      attemptReturned,
-		LeaseID:      leaseID,
+		LeaseID:      "",
 		LeaseExpires: now.Add(30 * time.Minute),
 	}, nil
 }
 
 // RecordRenderFinished verifies the worker-identity CAS and stamps the
 // attempt status to RENDER_FINISHED. Job stays RUNNING.
-//
-// Phase 2: no job_events / job_history writes.
+// PR #9: assigned_to + lease_id columns dropped.
 func (r *PostgresJobRepository) RecordRenderFinished(ctx context.Context, id, workerID, leaseID string, attempt, revision int) error {
 	if id == "" {
 		return fmt.Errorf("postgres jobs: empty jobID in RecordRenderFinished")
 	}
 	now := nowStrISO()
 
-	// Idempotent guard: if the job is already RENDER_FINISHED or terminal,
-	// succeed without re-stamping. Mirrors SQLite's PR3RecordRenderFinished
-	// pre-check.
 	var currentStatus string
 	row := r.handle.DB.QueryRowContext(ctx,
 		`SELECT UPPER(COALESCE(status, '')) FROM jobs WHERE job_id = $1`, id)
 	if err := row.Scan(&currentStatus); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil // idempotent no-op
+			return nil
 		}
 		return fmt.Errorf("postgres jobs: RecordRenderFinished %s: status: %w", id, err)
 	}
@@ -915,11 +785,9 @@ func (r *PostgresJobRepository) RecordRenderFinished(ctx context.Context, id, wo
 		       started_at = COALESCE(started_at, $1)
 		 WHERE job_id = $2
 		   AND UPPER(COALESCE(status, '')) = 'RUNNING'
-		   AND COALESCE(assigned_to, '') = $3
-		   AND COALESCE(lease_id, '') = $4
-		   AND COALESCE(attempt, 0) = $5
-		   AND COALESCE(revision, 0) = $6`,
-		now, id, workerID, leaseID, attempt, revision)
+		   AND COALESCE(attempt, 0) = $3
+		   AND COALESCE(revision, 0) = $4`,
+		now, id, attempt, revision)
 	if err != nil {
 		return fmt.Errorf("postgres jobs: RecordRenderFinished %s: exec: %w", id, err)
 	}
@@ -930,6 +798,8 @@ func (r *PostgresJobRepository) RecordRenderFinished(ctx context.Context, id, wo
 	if n == 0 {
 		return fmt.Errorf("postgres jobs: RecordRenderFinished %s: predicate miss: %w", id, pgJobTransitionConflict)
 	}
+	_ = workerID
+	_ = leaseID
 	return nil
 }
 

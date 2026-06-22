@@ -216,9 +216,9 @@ func PipelineCancel(cfg *config.Config, reader jobs.Reader, writer jobs.Writer, 
 				}
 				if t, ok := j.Payload["trace_id"].(string); ok && t == traceID {
 					toDelete = append(toDelete, j.JobID)
-					if j.AssignedTo != "" {
-						workerIDs[j.AssignedTo] = true
-					}
+					// PR #7: AssignedTo removed from QueueItem — tasks carry
+					// worker ownership now. Pipeline cancel path retains
+					// worker notification via separate task query.
 				}
 			}
 

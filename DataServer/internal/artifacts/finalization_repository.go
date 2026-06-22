@@ -94,9 +94,10 @@ type DeliveryPlanResolver interface {
 //     rows in one transaction (PR 3.5-b 4.2).
 //   - FinalizeVerified: single transaction that flips jobs RUNNING →
 //     SUCCEEDED, artifacts STAGING → READY, job_attempts → SUCCEEDED,
-//     outbox events ARTIFACT_READY + JOB_SUCCEEDED, per-destination
-//     job_deliveries, DELIVERY_CREATED event on first insert, and the
+//     per-destination job_deliveries rows, and the
 //     artifact_uploads FINALIZING → COMPLETED flip.
+//     Legacy outbox events (ARTIFACT_READY, JOB_SUCCEEDED,
+//     DELIVERY_CREATED) were removed in PR #2 cleanup/outbox-legacy-drain.
 //
 // Callers MUST NOT call any JobRepository method that touches
 // jobs.status = 'SUCCEEDED'. LifecycleService does not expose this.

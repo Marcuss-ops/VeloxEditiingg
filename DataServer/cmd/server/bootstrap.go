@@ -179,7 +179,7 @@ func runServer(cfg *config.Config) error {
 	if err != nil {
 		return err
 	}
-	m, err := buildModules(cfg, p, j, w, a)
+	m, err := buildModules(cfg, p, j, w, a, t)
 	if err != nil {
 		return err
 	}
@@ -253,9 +253,9 @@ func runServer(cfg *config.Config) error {
 				return err
 			}
 			grpcHandler := grpcserver.NewHandler(
-				w.Registry, w.CommandManager, jobsRepo, a.ArtifactSvc, p.SQLite,
-				buildGRPCHandlerConfig(cfg, insecureDev),
-			)
+			w.Registry, w.CommandManager, jobsRepo, t.TaskRepository, t.AttemptRepository, a.ArtifactSvc, p.SQLite,
+			buildGRPCHandlerConfig(cfg, insecureDev),
+		)
 			gs, lis, gerr := grpcserver.StartGRPCServer(
 				cfg.Server.GRPCPort, grpcHandler,
 				cfg.Server.GRPCTLSCertFile, cfg.Server.GRPCTLSKeyFile, cfg.Server.GRPCTLSCAFile,

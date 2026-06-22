@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -307,6 +308,145 @@ func (r *SQLiteTaskRepository) IncrementAttempt(ctx context.Context, id string) 
 		return fmt.Errorf("task increment attempt: %w", err)
 	}
 	return nil
+}
+
+// ClaimNextReadyTask atomically claims the next READY task for a worker.
+// CAS: READY → LEASED with workerID + leaseID. Returns the task with its
+// spec payload from task_specs, or (nil, nil) if no READY task is available.
+// PR #4: task-native dispatch path replaces job-based claim.
+func (r *SQLiteTaskRepository) ClaimNextReadyTask(ctx context.Context, workerID, leaseID string) (*taskgraph.TaskWithSpec, error) {
+	if r.store == nil || r.store.db == nil {
+		return nil, fmt.Errorf("task repository: store not initialized")
+	}
+	if workerID == "" || leaseID == "" {
+		return nil, fmt.Errorf("task repository: claim requires workerID + leaseID")
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	// Find and CAS-claim the next READY task in a single tx.
+	tx, err := r.store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("task claim begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// Select the next READY task (highest priority, then oldest).
+	row := tx.QueryRowContext(ctx,
+		`SELECT `+strings.Join(taskColumns, ",")+`
+		 FROM tasks
+		 WHERE status = 'READY'
+		   AND (worker_id = '' OR worker_id IS NULL)
+		 ORDER BY priority DESC, created_at ASC
+		 LIMIT 1`,
+	)
+	t, err := scanTask(row)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("task claim select: %w", err)
+	}
+
+	// CAS: READY → LEASED with workerID + leaseID.
+	res, err := tx.ExecContext(ctx,
+		`UPDATE tasks
+		 SET status = 'LEASED', worker_id = ?, lease_id = ?,
+		     revision = revision + 1, updated_at = ?
+		 WHERE task_id = ? AND status = 'READY' AND revision = ?`,
+		workerID, leaseID, now, t.ID, t.Revision,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("task claim cas: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return nil, fmt.Errorf("task claim rows: %w", err)
+	}
+	if n == 0 {
+		// Raced with another claimer — return nil gracefully.
+		return nil, nil
+	}
+
+	// Read the task_spec payload.
+	var specPayloadJSON sql.NullString
+	err = tx.QueryRowContext(ctx,
+		`SELECT payload_json FROM task_specs WHERE task_id = ?`,
+		t.ID,
+	).Scan(&specPayloadJSON)
+	if err != nil && err != sql.ErrNoRows {
+		return nil, fmt.Errorf("task claim spec read: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("task claim commit: %w", err)
+	}
+
+	// Update in-memory fields after successful commit.
+	t.WorkerID = workerID
+	t.LeaseID = leaseID
+	t.Revision++
+
+	tws := &taskgraph.TaskWithSpec{Task: *t}
+	if specPayloadJSON.Valid && specPayloadJSON.String != "" && specPayloadJSON.String != "{}" {
+		var payload map[string]interface{}
+		if json.Unmarshal([]byte(specPayloadJSON.String), &payload) == nil {
+			tws.SpecPayload = payload
+		}
+	}
+	return tws, nil
+}
+
+// ReleaseLease atomically resets a LEASED/RUNNING task back to READY.
+// Used on session teardown to release orphaned task claims (PR #4).
+func (r *SQLiteTaskRepository) ReleaseLease(ctx context.Context, taskID string) error {
+	if taskID == "" {
+		return nil
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	res, err := r.store.db.ExecContext(ctx,
+		`UPDATE tasks
+		 SET status = 'READY', worker_id = '', lease_id = '',
+		     revision = revision + 1, updated_at = ?
+		 WHERE task_id = ? AND status IN ('LEASED', 'RUNNING')`,
+		now, taskID,
+	)
+	if err != nil {
+		return fmt.Errorf("task release lease: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("task release lease rows: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("task release lease %s: %w", taskID, taskgraph.ErrTransitionConflict)
+	}
+	return nil
+}
+
+// AreDependenciesSatisfied returns true when all tasks in dependsOn
+// have status SUCCEEDED. Returns true when dependsOn is empty.
+// PR #4: used by TickReadiness for real dependency verification.
+func (r *SQLiteTaskRepository) AreDependenciesSatisfied(ctx context.Context, dependsOn []string) (bool, error) {
+	if len(dependsOn) == 0 {
+		return true, nil
+	}
+	placeholders := strings.Repeat(",?", len(dependsOn))[1:]
+	args := make([]interface{}, len(dependsOn))
+	for i, id := range dependsOn {
+		args[i] = id
+	}
+	var count int
+	query := fmt.Sprintf(
+		`SELECT COUNT(*) FROM tasks
+		 WHERE task_id IN (%s) AND status = 'SUCCEEDED'`,
+		placeholders,
+	)
+	err := r.store.db.QueryRowContext(ctx, query, args...).Scan(&count)
+	if err != nil {
+		return false, fmt.Errorf("task deps check: %w", err)
+	}
+	return count == len(dependsOn), nil
 }
 
 // Delete hard-deletes a task.

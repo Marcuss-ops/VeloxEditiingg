@@ -23,15 +23,13 @@ func openPR3TestDB(t *testing.T) (*SQLiteStore, *SQLiteJobRepository, *sql.DB) {
 	}
 	t.Cleanup(func() { _ = db.Close() })
 
+	// PR #9 + #10: assigned_to, lease_id, lease_expiry, retry_count,
+	// claimed_by columns dropped from jobs table (migration 048).
 	if _, err := db.Exec(`
 		CREATE TABLE jobs (
 			job_id TEXT PRIMARY KEY,
 			status TEXT NOT NULL,
-			assigned_to TEXT,
-			lease_id TEXT,
-			lease_expiry TEXT,
 			revision INTEGER,
-			retry_count INTEGER NOT NULL DEFAULT 0,
 			max_retries INTEGER NOT NULL DEFAULT 0,
 			attempt INTEGER,
 			started_at TEXT,
@@ -40,7 +38,6 @@ func openPR3TestDB(t *testing.T) (*SQLiteStore, *SQLiteJobRepository, *sql.DB) {
 			project_id TEXT,
 			created_at TEXT,
 			completed_at TEXT,
-			claimed_by TEXT,
 			claimed_at TEXT,
 			assigned_at TEXT,
 			last_error TEXT,
@@ -112,7 +109,8 @@ func openPR3TestDB(t *testing.T) (*SQLiteStore, *SQLiteJobRepository, *sql.DB) {
 }
 
 // seedRunningJob inserts a job in RUNNING status with full identity.
-func seedRunningJob(t *testing.T, db *sql.DB, jobID, workerID, leaseID string, attempt, revision int) {
+// PR #9: assigned_to, lease_id columns dropped — identity lives in job_attempts + tasks.
+func seedRunningJob(t *testing.T, db *sql.DB, jobID string, attempt, revision int) {
 	t.Helper()
 	now := time.Now().UTC().Format(time.RFC3339)
 	// Use NULL for revision when revision < 0 (tests NULL handling).
@@ -122,13 +120,10 @@ func seedRunningJob(t *testing.T, db *sql.DB, jobID, workerID, leaseID string, a
 	}
 	_, err := db.Exec(
 		`INSERT INTO jobs
-		    (job_id, status, assigned_to, lease_id, lease_expiry, revision, attempt, retry_count,
+		    (job_id, status, revision, attempt,
 		     max_retries, started_at, created_at, updated_at)
-		 VALUES (?, 'RUNNING', ?, ?, ?, ?, ?, 0, 3, ?, ?, ?)`,
-		jobID, workerID, leaseID,
-		time.Now().UTC().Add(30*time.Minute).Format(time.RFC3339),
-		revArg, attempt,
-		now, now, now,
+		 VALUES (?, 'RUNNING', ?, ?, 3, ?, ?, ?)`,
+		jobID, revArg, attempt, now, now, now,
 	)
 	if err != nil {
 		t.Fatalf("seed RUNNING job %s: %v", jobID, err)
@@ -187,7 +182,7 @@ func TestPR3RecordRenderFinished_HappyPath(t *testing.T) {
 	_, repo, db := openPR3TestDB(t)
 	ctx := context.Background()
 
-	seedRunningJob(t, db, "job-rf-1", "w1", "lease-A", 1, 5)
+	seedRunningJob(t, db, "job-rf-1", 1, 5)
 	cmd := makeRenderCmd("job-rf-1", "w1", "lease-A", 1, time.Time{})
 
 	if err := repo.PR3RecordRenderFinished(ctx, cmd); err != nil {
@@ -217,9 +212,9 @@ func TestPR3RecordRenderFinished_Idempotent_AlreadyRenderFinished(t *testing.T) 
 	// Seed directly in RENDER_FINISHED.
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, err := db.Exec(
-		`INSERT INTO jobs (job_id, status, assigned_to, lease_id, lease_expiry, revision, attempt, started_at, created_at, updated_at)
-		 VALUES ('job-idem', 'RENDER_FINISHED', 'w1', 'lease-A', ?, 3, 1, ?, ?, ?)`,
-		time.Now().UTC().Add(30*time.Minute).Format(time.RFC3339), now, now, now,
+		`INSERT INTO jobs (job_id, status, revision, attempt, started_at, created_at, updated_at)
+		 VALUES ('job-idem', 'RENDER_FINISHED', 3, 1, ?, ?, ?)`,
+		now, now, now,
 	)
 	if err != nil {
 		t.Fatalf("seed RENDER_FINISHED: %v", err)
@@ -249,9 +244,9 @@ func TestPR3RecordRenderFinished_Idempotent_AlreadySucceeded(t *testing.T) {
 
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, err := db.Exec(
-		`INSERT INTO jobs (job_id, status, assigned_to, lease_id, lease_expiry, revision, attempt, started_at, created_at, updated_at)
-		 VALUES ('job-succ', 'SUCCEEDED', 'w1', 'lease-A', ?, 5, 1, ?, ?, ?)`,
-		time.Now().UTC().Add(30*time.Minute).Format(time.RFC3339), now, now, now,
+		`INSERT INTO jobs (job_id, status, revision, attempt, started_at, created_at, updated_at)
+		 VALUES ('job-succ', 'SUCCEEDED', 5, 1, ?, ?, ?)`,
+		now, now, now,
 	)
 	if err != nil {
 		t.Fatalf("seed SUCCEEDED: %v", err)
@@ -270,7 +265,7 @@ func TestPR3RecordRenderFinished_NullRevision_COALESCEHandles(t *testing.T) {
 	ctx := context.Background()
 
 	// revision < 0 signals NULL in seedRunningJob.
-	seedRunningJob(t, db, "job-nullrev", "w1", "lease-A", 1, -1)
+	seedRunningJob(t, db, "job-nullrev", 1, -1)
 
 	// Verify revision is actually NULL in the DB.
 	var revBefore sql.NullInt64
@@ -297,7 +292,7 @@ func TestPR3RecordRenderFinished_TOCTOU_ConcurrentRevisionBump(t *testing.T) {
 	_, repo, db := openPR3TestDB(t)
 	ctx := context.Background()
 
-	seedRunningJob(t, db, "job-toc", "w1", "lease-A", 1, 5)
+	seedRunningJob(t, db, "job-toc", 1, 5)
 
 	// Open a second connection to the same in-memory DB (cache=shared).
 	db2, err := sql.Open("sqlite3", "file::memory:?cache=shared")
@@ -337,41 +332,11 @@ func TestPR3RecordRenderFinished_TOCTOU_ConcurrentRevisionBump(t *testing.T) {
 	}
 }
 
-func TestPR3RecordRenderFinished_WrongWorkerID(t *testing.T) {
-	_, repo, db := openPR3TestDB(t)
-	ctx := context.Background()
-
-	seedRunningJob(t, db, "job-wrongw", "w1", "lease-A", 1, 0)
-
-	cmd := makeRenderCmd("job-wrongw", "w2-impostor", "lease-A", 1, time.Time{})
-	err := repo.PR3RecordRenderFinished(ctx, cmd)
-	if !errors.Is(err, ErrTransitionConflict) {
-		t.Fatalf("expected ErrTransitionConflict for wrong worker, got %v", err)
-	}
-
-	assertJobStatus(t, db, "job-wrongw", "RUNNING")
-}
-
-func TestPR3RecordRenderFinished_WrongLeaseID(t *testing.T) {
-	_, repo, db := openPR3TestDB(t)
-	ctx := context.Background()
-
-	seedRunningJob(t, db, "job-wrongl", "w1", "lease-A", 1, 0)
-
-	cmd := makeRenderCmd("job-wrongl", "w1", "lease-BOGUS", 1, time.Time{})
-	err := repo.PR3RecordRenderFinished(ctx, cmd)
-	if !errors.Is(err, ErrTransitionConflict) {
-		t.Fatalf("expected ErrTransitionConflict for wrong lease, got %v", err)
-	}
-
-	assertJobStatus(t, db, "job-wrongl", "RUNNING")
-}
-
 func TestPR3RecordRenderFinished_WrongAttempt(t *testing.T) {
 	_, repo, db := openPR3TestDB(t)
 	ctx := context.Background()
 
-	seedRunningJob(t, db, "job-wronga", "w1", "lease-A", 2, 0)
+	seedRunningJob(t, db, "job-wronga", 2, 0)
 
 	cmd := makeRenderCmd("job-wronga", "w1", "lease-A", 1, time.Time{})
 	err := repo.PR3RecordRenderFinished(ctx, cmd)
@@ -388,9 +353,9 @@ func TestPR3RecordRenderFinished_WrongStatus_NotRunning(t *testing.T) {
 
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, err := db.Exec(
-		`INSERT INTO jobs (job_id, status, assigned_to, lease_id, lease_expiry, revision, attempt, created_at, updated_at)
-		 VALUES ('job-pending', 'PENDING', 'w1', 'lease-A', ?, 0, 1, ?, ?)`,
-		time.Now().UTC().Add(30*time.Minute).Format(time.RFC3339), now, now,
+		`INSERT INTO jobs (job_id, status, revision, attempt, created_at, updated_at)
+		 VALUES ('job-pending', 'PENDING', 0, 1, ?, ?)`,
+		now, now,
 	)
 	if err != nil {
 		t.Fatalf("seed PENDING: %v", err)
@@ -411,9 +376,9 @@ func TestPR3RecordRenderFinished_WrongStatus_Leased(t *testing.T) {
 
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, err := db.Exec(
-		`INSERT INTO jobs (job_id, status, assigned_to, lease_id, lease_expiry, revision, attempt, created_at, updated_at)
-		 VALUES ('job-leased', 'LEASED', 'w1', 'lease-A', ?, 0, 1, ?, ?)`,
-		time.Now().UTC().Add(30*time.Minute).Format(time.RFC3339), now, now,
+		`INSERT INTO jobs (job_id, status, revision, attempt, created_at, updated_at)
+		 VALUES ('job-leased', 'LEASED', 0, 1, ?, ?)`,
+		now, now,
 	)
 	if err != nil {
 		t.Fatalf("seed LEASED: %v", err)
@@ -444,7 +409,7 @@ func TestPR3RecordRenderFinished_HistoryAndEventVerification(t *testing.T) {
 	_, repo, db := openPR3TestDB(t)
 	ctx := context.Background()
 
-	seedRunningJob(t, db, "job-he-verify", "w99", "lease-XYZ", 3, 10)
+	seedRunningJob(t, db, "job-he-verify", 3, 10)
 
 	cmd := makeRenderCmd("job-he-verify", "w99", "lease-XYZ", 3, time.Time{})
 	if err := repo.PR3RecordRenderFinished(ctx, cmd); err != nil {
@@ -487,7 +452,7 @@ func TestPR3RecordRenderFinished_MultipleJobsSequential(t *testing.T) {
 	ctx := context.Background()
 
 	for i, jid := range []string{"job-seq-a", "job-seq-b", "job-seq-c"} {
-		seedRunningJob(t, db, jid, fmt.Sprintf("w-%d", i), fmt.Sprintf("lease-%d", i), i+1, i*10)
+		seedRunningJob(t, db, jid, i+1, i*10)
 		cmd := makeRenderCmd(jid, fmt.Sprintf("w-%d", i), fmt.Sprintf("lease-%d", i), i+1, time.Time{})
 		if err := repo.PR3RecordRenderFinished(ctx, cmd); err != nil {
 			t.Fatalf("job %d (%s): %v", i, jid, err)
@@ -517,9 +482,9 @@ func TestPR3Start_NullRevision(t *testing.T) {
 
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, err := db.Exec(
-		`INSERT INTO jobs (job_id, status, assigned_to, lease_id, lease_expiry, revision, attempt, created_at, updated_at)
-		 VALUES ('job-start-null', 'LEASED', 'w1', 'lease-A', ?, NULL, 1, ?, ?)`,
-		time.Now().UTC().Add(30*time.Minute).Format(time.RFC3339), now, now,
+		`INSERT INTO jobs (job_id, status, revision, attempt, created_at, updated_at)
+		 VALUES ('job-start-null', 'LEASED', NULL, 1, ?, ?)`,
+		now, now,
 	)
 	if err != nil {
 		t.Fatalf("seed LEASED with NULL revision: %v", err)
@@ -545,9 +510,9 @@ func TestPR3Start_WrongRevisionCAS(t *testing.T) {
 
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, err := db.Exec(
-		`INSERT INTO jobs (job_id, status, assigned_to, lease_id, lease_expiry, revision, attempt, created_at, updated_at)
-		 VALUES ('job-start-cas', 'LEASED', 'w1', 'lease-A', ?, 7, 1, ?, ?)`,
-		time.Now().UTC().Add(30*time.Minute).Format(time.RFC3339), now, now,
+		`INSERT INTO jobs (job_id, status, revision, attempt, created_at, updated_at)
+		 VALUES ('job-start-cas', 'LEASED', 7, 1, ?, ?)`,
+		now, now,
 	)
 	if err != nil {
 		t.Fatalf("seed LEASED: %v", err)
@@ -579,9 +544,9 @@ func TestPR3RenewLease_SkipRevisionCAS(t *testing.T) {
 	now := time.Now().UTC()
 	nowStr := now.Format(time.RFC3339)
 	_, err := db.Exec(
-		`INSERT INTO jobs (job_id, status, assigned_to, lease_id, lease_expiry, revision, attempt, created_at, updated_at)
-		 VALUES ('job-renew-skip', 'LEASED', 'w1', 'lease-A', ?, 5, 1, ?, ?)`,
-		now.Add(30*time.Minute).Format(time.RFC3339), nowStr, nowStr,
+		`INSERT INTO jobs (job_id, status, revision, attempt, created_at, updated_at)
+		 VALUES ('job-renew-skip', 'LEASED', 5, 1, ?, ?)`,
+		nowStr, nowStr,
 	)
 	if err != nil {
 		t.Fatalf("seed LEASED: %v", err)
@@ -601,19 +566,16 @@ func TestPR3RenewLease_SkipRevisionCAS(t *testing.T) {
 	}
 
 	// Verify revision bumped despite CAS skip.
+	// PR #9: lease_expiry column dropped — check only revision.
 	var newRev int
-	var newExpiry string
 	if err := db.QueryRow(
-		`SELECT COALESCE(revision,0), COALESCE(lease_expiry,'') FROM jobs WHERE job_id = ?`,
+		`SELECT COALESCE(revision,0) FROM jobs WHERE job_id = ?`,
 		"job-renew-skip",
-	).Scan(&newRev, &newExpiry); err != nil {
+	).Scan(&newRev); err != nil {
 		t.Fatalf("read after renew: %v", err)
 	}
 	if newRev != 6 {
 		t.Errorf("expected revision 6 (5+1), got %d", newRev)
-	}
-	if newExpiry == "" {
-		t.Error("lease_expiry should be set")
 	}
 }
 
@@ -624,9 +586,9 @@ func TestPR3RenewLease_StaleRevisionConflict(t *testing.T) {
 	now := time.Now().UTC()
 	nowStr := now.Format(time.RFC3339)
 	_, err := db.Exec(
-		`INSERT INTO jobs (job_id, status, assigned_to, lease_id, lease_expiry, revision, attempt, created_at, updated_at)
-		 VALUES ('job-renew-conflict', 'LEASED', 'w1', 'lease-A', ?, 5, 1, ?, ?)`,
-		now.Add(30*time.Minute).Format(time.RFC3339), nowStr, nowStr,
+		`INSERT INTO jobs (job_id, status, revision, attempt, created_at, updated_at)
+		 VALUES ('job-renew-conflict', 'LEASED', 5, 1, ?, ?)`,
+		nowStr, nowStr,
 	)
 	if err != nil {
 		t.Fatalf("seed LEASED: %v", err)
@@ -654,9 +616,9 @@ func TestPR3RenewLease_NullRevision(t *testing.T) {
 	now := time.Now().UTC()
 	nowStr := now.Format(time.RFC3339)
 	_, err := db.Exec(
-		`INSERT INTO jobs (job_id, status, assigned_to, lease_id, lease_expiry, revision, attempt, created_at, updated_at)
-		 VALUES ('job-renew-null', 'LEASED', 'w1', 'lease-A', ?, NULL, 1, ?, ?)`,
-		now.Add(30*time.Minute).Format(time.RFC3339), nowStr, nowStr,
+		`INSERT INTO jobs (job_id, status, revision, attempt, created_at, updated_at)
+		 VALUES ('job-renew-null', 'LEASED', NULL, 1, ?, ?)`,
+		nowStr, nowStr,
 	)
 	if err != nil {
 		t.Fatalf("seed LEASED with NULL revision: %v", err)
@@ -682,9 +644,9 @@ func TestPR3RenewLease_EmitEvent(t *testing.T) {
 	now := time.Now().UTC()
 	nowStr := now.Format(time.RFC3339)
 	_, err := db.Exec(
-		`INSERT INTO jobs (job_id, status, assigned_to, lease_id, lease_expiry, revision, attempt, created_at, updated_at)
-		 VALUES ('job-renew-event', 'LEASED', 'w1', 'lease-A', ?, 0, 1, ?, ?)`,
-		now.Add(30*time.Minute).Format(time.RFC3339), nowStr, nowStr,
+		`INSERT INTO jobs (job_id, status, revision, attempt, created_at, updated_at)
+		 VALUES ('job-renew-event', 'LEASED', 0, 1, ?, ?)`,
+		nowStr, nowStr,
 	)
 	if err != nil {
 		t.Fatalf("seed LEASED: %v", err)
@@ -725,7 +687,7 @@ func TestPR3RecordRenderFinished_Atomicity_NoOrphanEvents(t *testing.T) {
 	_, repo, db := openPR3TestDB(t)
 	ctx := context.Background()
 
-	seedRunningJob(t, db, "job-atomic", "w1", "lease-A", 1, 5)
+	seedRunningJob(t, db, "job-atomic", 1, 5)
 
 	// First call succeeds.
 	cmd := makeRenderCmd("job-atomic", "w1", "lease-A", 1, time.Time{})
@@ -739,18 +701,18 @@ func TestPR3RecordRenderFinished_Atomicity_NoOrphanEvents(t *testing.T) {
 		t.Fatalf("expected 1 history + 1 event after success, got %d + %d", hc1, ec1)
 	}
 
-	// Bump the job back to RUNNING and change revision so it could match again,
-	// but with a WRONG worker ID so the UPDATE fails.
+        // Bump the job back to RUNNING and change revision so it could match again,
+	// but with a WRONG attempt number so the UPDATE fails.
+	// PR #9: worker_id/lease_id CAS checks removed — use attempt mismatch.
 	_, err := db.Exec(
-		`UPDATE jobs SET status = 'RUNNING', assigned_to = 'w1', lease_id = 'lease-A',
-		 revision = 10, attempt = 1 WHERE job_id = 'job-atomic'`,
+		`UPDATE jobs SET status = 'RUNNING', revision = 10, attempt = 2 WHERE job_id = 'job-atomic'`,
 	)
 	if err != nil {
 		t.Fatalf("reset job: %v", err)
 	}
 
-	// Now call with wrong worker — CAS should fail.
-	cmd2 := makeRenderCmd("job-atomic", "w2-impostor", "lease-A", 1, time.Time{})
+	// Now call with wrong attempt (1 vs. stored 2) — CAS should fail.
+	cmd2 := makeRenderCmd("job-atomic", "w1", "lease-A", 1, time.Time{})
 	err = repo.PR3RecordRenderFinished(ctx, cmd2)
 	if !errors.Is(err, ErrTransitionConflict) {
 		t.Fatalf("expected ErrTransitionConflict, got %v", err)

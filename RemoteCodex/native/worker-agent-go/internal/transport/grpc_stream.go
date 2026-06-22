@@ -420,6 +420,54 @@ func (t *GRPCStreamTransport) messageToEnvelope(msg controltransport.ControlMess
 			},
 		}
 
+	case controltransport.MsgTaskAccepted:
+		env.Msg = &pb.WorkerToMasterEnvelope_TaskAccepted{
+			TaskAccepted: &pb.TaskAccepted{
+				TaskId:    getPayloadStr(msg.Payload, "task_id"),
+				JobId:     getPayloadStr(msg.Payload, "job_id"),
+				AttemptId: getPayloadStr(msg.Payload, "attempt_id"),
+				LeaseId:   getPayloadStr(msg.Payload, "lease_id"),
+			},
+		}
+
+	case controltransport.MsgTaskRejected:
+		env.Msg = &pb.WorkerToMasterEnvelope_TaskRejected{
+			TaskRejected: &pb.TaskRejected{
+				TaskId: getPayloadStr(msg.Payload, "task_id"),
+				Reason: getPayloadStr(msg.Payload, "reason"),
+			},
+		}
+
+	case controltransport.MsgTaskResult:
+		tr := &pb.TaskResult{
+			TaskId:      getPayloadStr(msg.Payload, "task_id"),
+			JobId:       getPayloadStr(msg.Payload, "job_id"),
+			AttemptId:   getPayloadStr(msg.Payload, "attempt_id"),
+			Status:      getPayloadStr(msg.Payload, "status"),
+			ErrorCode:   getPayloadStr(msg.Payload, "error_code"),
+			ErrorDetail: getPayloadStr(msg.Payload, "error_detail"),
+			ExecutorId:  getPayloadStr(msg.Payload, "executor_id"),
+			ExecutorKey: getPayloadStr(msg.Payload, "executor_key"),
+			LeaseId:     getPayloadStr(msg.Payload, "lease_id"),
+		}
+		// Serialize output_artifacts as repeated Struct.
+		if raw, ok := msg.Payload["output_artifacts"].([]interface{}); ok {
+			for _, item := range raw {
+				if m, ok := item.(map[string]interface{}); ok {
+					if s, err := structpb.NewStruct(m); err == nil {
+						tr.OutputArtifacts = append(tr.OutputArtifacts, s)
+					}
+				}
+			}
+		} else if rawList, ok := msg.Payload["output_artifacts"].([]map[string]interface{}); ok {
+			for _, m := range rawList {
+				if s, err := structpb.NewStruct(m); err == nil {
+					tr.OutputArtifacts = append(tr.OutputArtifacts, s)
+				}
+			}
+		}
+		env.Msg = &pb.WorkerToMasterEnvelope_TaskResult{TaskResult: tr}
+
 	case controltransport.MsgJobRejected:
 		env.Msg = &pb.WorkerToMasterEnvelope_JobRejected{
 			JobRejected: &pb.JobRejected{
@@ -504,9 +552,17 @@ func (t *GRPCStreamTransport) envelopeToMessage(env *pb.MasterToWorkerEnvelope) 
 		msg.Type = controltransport.MsgJobOffer
 		msg.TypedPayload = m.JobOffer
 
+	case *pb.MasterToWorkerEnvelope_TaskOffer:
+		msg.Type = controltransport.MsgTaskOffer
+		msg.TypedPayload = m.TaskOffer
+
 	case *pb.MasterToWorkerEnvelope_JobLeaseGranted:
 		msg.Type = controltransport.MsgJobLeaseGranted
 		msg.TypedPayload = m.JobLeaseGranted
+
+	case *pb.MasterToWorkerEnvelope_TaskLeaseGranted:
+		msg.Type = controltransport.MsgTaskLeaseGranted
+		msg.TypedPayload = m.TaskLeaseGranted
 
 	case *pb.MasterToWorkerEnvelope_Command:
 		msg.Type = controltransport.MsgCommand

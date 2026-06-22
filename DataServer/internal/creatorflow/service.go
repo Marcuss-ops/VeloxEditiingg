@@ -130,12 +130,11 @@ func firstString(m map[string]interface{}, keys ...string) string {
 // ForwardCompletedResult converts a completed creator payload into a worker job
 // and enqueues it for the remote worker pool.
 //
-// PR15.7a: takes *enqueue.Enqueuer (which owns voiceover rewrite + queue),
-// not a raw queue + voiceover global. The caller must construct
-// the enqueuer once at composition-root time and pass it through.
+// PR #3: takes *enqueue.Enqueuer (which now owns AtomicJobTaskCreator + jobs.Reader
+// instead of Queue) for atomic Job+Task creation.
 func ForwardCompletedResult(ctx context.Context, enqueuer *enqueue.Enqueuer, result map[string]interface{}) (map[string]interface{}, error) {
-	if enqueuer == nil || enqueuer.Queue == nil {
-		return nil, fmt.Errorf("queue unavailable")
+	if enqueuer == nil || enqueuer.Creator == nil {
+		return nil, fmt.Errorf("creator unavailable")
 	}
 	if !enqueue.ShouldForwardPipelineResult(result) {
 		return nil, nil
@@ -157,8 +156,8 @@ func (s *Service) forwardCompletedResult(ctx context.Context, result map[string]
 	if s == nil {
 		return nil, fmt.Errorf("service unavailable")
 	}
-	if s.enqueuer == nil || s.enqueuer.Queue == nil {
-		return nil, fmt.Errorf("queue unavailable")
+	if s.enqueuer == nil || s.enqueuer.Creator == nil {
+		return nil, fmt.Errorf("creator unavailable")
 	}
 	if !enqueue.ShouldForwardPipelineResult(result) {
 		return nil, nil
@@ -271,13 +270,9 @@ func detectPublicMasterURL() string {
 // PR-operation 01 / Fase 2 — CreateService canonico
 // =============================================================================
 //
-// Before this addition, the legacy POST /api/v1/orchestrator/jobs compiled the
-// payload at the HTTP edge, then called workflow.Repository.CreateRun — a
-// hand-rolled shape that pre-dates taskgraph. Two writers for one logical
-// state. Per docs/operations/01-workflow-taskgraph-cutover.md §Fase 2:
-// CreateService is the single entry point that validates a RenderPlan, derives
-// the canonical TaskSpec, and delegates to store.AtomicJobTaskCreator for an
-// atomic Job+Task insertion. One writer.
+// PR #8: workflow package removed. CreateService validates a RenderPlan,
+// derives the canonical TaskSpec, and delegates to store.AtomicJobTaskCreator
+// for atomic Job+Task insertion. One writer.
 //
 // Idempotency: the (RenderPlan.IdempotencyKey) is the canonical dedupe token. Two
 // calls with the same plan yield ONE Job row. The job_id is a deterministic

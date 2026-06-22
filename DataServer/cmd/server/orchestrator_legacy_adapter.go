@@ -1,5 +1,5 @@
 // COMPATIBILITY:
-// Owner:        issue TO-BE-OPENED-in-Fase-8 (PR-operation 01 / Fase 3; tracking ref: docs/operations/01-workflow-taskgraph-cutover.md)
+// Owner:        PR #8 (workflow package removed; this adapter uses taskgraph/jobs only)
 // Remove after: 2026-12-31
 // Read-only:    yes (POST writes go to taskgraph/jobs/tasks/task_specs only) — see OWNERSHIP.md "Legacy Workflow v2 state (DECOMMISSIONING)"
 //
@@ -20,23 +20,23 @@
 //
 // GET /api/v1/orchestrator/jobs/:id :
 //   - read-only adapter that fetches jobs.Job + taskgraph.Task and projects
-//     them into the legacy workflow.Run + workflow.Step shape so existing
-//     frontend clients keep working
+//     them into the legacy orchestratorv1 DTO shape so existing frontend
+//     clients keep working
 //   - emits RFC 8594 Deprecation header.
 //
 // GET /api/v1/orchestrator/jobs :
 //   - read-only adapter that lists recent jobs via jobs.Writer and projects
-//     each entry into workflow.Run.
+//     each entry into orchestratorv1.LegacyRunResponse.
 //
 // GET /api/v1/orchestrator/stats :
 //   - read-only adapter that bins jobs by status (the legacy StatsReport
-//     exposed RunStatus + StepStatus buckets; we still emit the same shape
-//     so dashboards don't break, but the underlying counts come from
+//     shape) so dashboards don't break, but the underlying counts come from
 //     jobs.Writer, NOT from workflow_runs).
 
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -45,10 +45,10 @@ import (
 	"github.com/gin-gonic/gin"
 	"velox-server/internal/costmodel"
 	"velox-server/internal/creatorflow"
+	"velox-server/internal/handlers/server/orchestratorv1"
 	"velox-server/internal/jobs"
 	"velox-server/internal/store"
 	"velox-server/internal/taskgraph"
-	"velox-server/internal/workflow"
 )
 
 // orchestratorLegacyAdapter wires the POST cutover entry point and the
@@ -232,9 +232,9 @@ func (a *orchestratorLegacyAdapter) getJob(c *gin.Context) {
 		return
 	}
 	task, taskErr := a.tasksRepo.GetByJobID(c.Request.Context(), id)
-	steps := []workflow.Step{}
+	steps := []orchestratorv1.LegacyStepResponse{}
 	if taskErr == nil && task != nil {
-		steps = []workflow.Step{projectStep(task, id)}
+		steps = []orchestratorv1.LegacyStepResponse{projectStep(task, id)}
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"run":        projectRun(job),
@@ -245,9 +245,7 @@ func (a *orchestratorLegacyAdapter) getJob(c *gin.Context) {
 
 // listJobs is the read-only projection of /api/v1/orchestrator/jobs (list).
 // Reads from jobs.Reader (NOT workflow_runs) and projects each entry to
-// workflow.Run shape. jobs.Reader.List takes a jobs.Filter; we expose a
-// top-level `limit` query param for HTTP ergonomics but route it through
-// Filter{Limit: n} so we don't bypass the canonical query contract.
+// orchestratorv1.LegacyRunResponse shape.
 func (a *orchestratorLegacyAdapter) listJobs(c *gin.Context) {
 	c.Header("Deprecation", "true")
 	limit := 100
@@ -261,7 +259,7 @@ func (a *orchestratorLegacyAdapter) listJobs(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	runs := make([]workflow.Run, 0, len(js))
+	runs := make([]orchestratorv1.LegacyRunResponse, 0, len(js))
 	for i := range js {
 		runs = append(runs, projectRun(&js[i]))
 	}
@@ -273,30 +271,23 @@ func (a *orchestratorLegacyAdapter) listJobs(c *gin.Context) {
 }
 
 // allRunStatuses is the canonical 5-key RunStatus enum surface, used by
-// initRunsByStatusMap to seed the StatsReport with all keys = 0 even when
-// no jobs have run yet — the legacy StatsReport contract always emitted
-// a stable shape, and clients fan over the enum rather than the bounds.
-var allRunStatuses = []workflow.RunStatus{
-	workflow.RunStatusPending,
-	workflow.RunStatusRunning,
-	workflow.RunStatusSucceeded,
-	workflow.RunStatusFailed,
-	workflow.RunStatusCancelled,
+// getStats to seed the StatsReport with all keys = 0 even when no jobs
+// have run yet.
+var allRunStatuses = []orchestratorv1.LegacyRunStatus{
+	orchestratorv1.LegacyRunStatusPending,
+	orchestratorv1.LegacyRunStatusRunning,
+	orchestratorv1.LegacyRunStatusSucceeded,
+	orchestratorv1.LegacyRunStatusFailed,
+	orchestratorv1.LegacyRunStatusCancelled,
 }
 
-// allStepStatuses is the canonical 5-key StepStatus enum surface, used
-// symmetrically with allRunStatuses. Note: StepStatus has NO Cancelled
-// variant (legacy StepStatus enum is frozen with 5 keys per
-// workflow/types.go's COMPATIBILITY header). taskgraph.StatusCancelled
-// is mapped to StepStatusFailed in mapTaskStatusToStep below because
-// "cancelled" is semantically closer to "terminal failure" than to
-// "blocked" and dashboards can disambiguate via the run-level Cursor.
-var allStepStatuses = []workflow.StepStatus{
-	workflow.StepStatusBlocked,
-	workflow.StepStatusReady,
-	workflow.StepStatusRunning,
-	workflow.StepStatusSucceeded,
-	workflow.StepStatusFailed,
+// allStepStatuses is the canonical 5-key StepStatus enum surface.
+var allStepStatuses = []orchestratorv1.LegacyStepStatus{
+	orchestratorv1.LegacyStepStatusBlocked,
+	orchestratorv1.LegacyStepStatusReady,
+	orchestratorv1.LegacyStepStatusRunning,
+	orchestratorv1.LegacyStepStatusSucceeded,
+	orchestratorv1.LegacyStepStatusFailed,
 }
 
 // stepStatsCap is the per-request ceiling on tasksRepo.List inside
@@ -307,23 +298,13 @@ var stepStatsCap = 10000
 // warnStepCap is invoked when the stats request hit the per-request cap
 // and the step bucket counts may be truncated. Package-level var so a
 // test can swap the recorder without polluting log.SetOutput globally.
-// Defaults to a structured log.Printf so operators see the warning in
-// the master log stream.
 var warnStepCap = func(capArg, actual int) {
 	log.Printf("[ORCHESTRATOR] stats: step count may be truncated at %d (got %d) — backlog exceeded the per-request cap", capArg, actual)
 }
 
 // getStats is the read-only projection of /api/v1/orchestrator/stats.
 // Counts come from jobs.Reader.Counts() (Status-based), which is the
-// canonical post-cutover source. Step-level counts are mapped by reading
-// taskgraph.Reader.List per status. jobs.Counts is map[Status]int64
-// directly; workflow.StatsReport fields are int so we narrow on entry.
-//
-// Tradeoff: a 10k hardcoded ceiling on tasksRepo.List keeps the per-request
-// latency bounded. When the cap is hit, we log a warning so operators
-// notice the truncation in their logs. Surfacing "truncated" on the wire
-// is intentionally deferred to Fase 4 (workflow.StatsReport is a frozen
-// COMPATIBILITY type — wire changes belong in their own PR).
+// canonical post-cutover source.
 func (a *orchestratorLegacyAdapter) getStats(c *gin.Context) {
 	c.Header("Deprecation", "true")
 	c.Header("Sunset", "Sat, 31 Dec 2026 23:59:59 GMT")
@@ -336,18 +317,18 @@ func (a *orchestratorLegacyAdapter) getStats(c *gin.Context) {
 	for _, n := range counts {
 		totalRuns += int(n)
 	}
-	runsByStatus := make(map[workflow.RunStatus]int, len(allRunStatuses))
+	runsByStatus := make(map[orchestratorv1.LegacyRunStatus]int, len(allRunStatuses))
 	for _, st := range allRunStatuses {
 		runsByStatus[st] = 0
 	}
 	for st, n := range counts {
-		runsByStatus[workflow.RunStatus(st)] = int(n)
+		runsByStatus[orchestratorv1.LegacyRunStatus(st)] = int(n)
 	}
-	stepsByStatus := make(map[workflow.StepStatus]int, len(allStepStatuses))
+	stepsByStatus := make(map[orchestratorv1.LegacyStepStatus]int, len(allStepStatuses))
 	for _, st := range allStepStatuses {
 		stepsByStatus[st] = 0
 	}
-	out := workflow.StatsReport{
+	out := orchestratorv1.LegacyStatsReport{
 		TotalRuns:     totalRuns,
 		RunsByStatus:  runsByStatus,
 		TotalSteps:    0,
@@ -366,17 +347,15 @@ func (a *orchestratorLegacyAdapter) getStats(c *gin.Context) {
 	c.JSON(http.StatusOK, out)
 }
 
-// projectRun maps jobs.Job → workflow.Run. This is the canonical projection
-// used by the 3 GET handlers. It does NOT read workflow_runs directly —
-// after Fase 3 the legacy table is read-only archive.
-func projectRun(j *jobs.Job) workflow.Run {
+// projectRun maps jobs.Job → orchestratorv1.LegacyRunResponse.
+func projectRun(j *jobs.Job) orchestratorv1.LegacyRunResponse {
 	if j == nil {
-		return workflow.Run{}
+		return orchestratorv1.LegacyRunResponse{}
 	}
-	out := workflow.Run{
+	out := orchestratorv1.LegacyRunResponse{
 		RunID:        j.ID,
 		WorkflowType: j.Type,
-		Status:       workflow.RunStatus(j.Status),
+		Status:       orchestratorv1.LegacyRunStatus(j.Status),
 		Revision:     int64(j.Revision),
 		Output:       map[string]any{},
 	}
@@ -394,18 +373,9 @@ func projectRun(j *jobs.Job) workflow.Run {
 	return out
 }
 
-// projectStep maps taskgraph.Task + runID → workflow.Step. Single-task
-// model keeps it 1:1 per job; Status is reconciled to the legacy
-// step-shaped enum (BLOCKED/READY/RUNNING/SUCCEEDED/FAILED/CANCELLED).
-//
-// taskgraph.Task carries StartedAt/CompletedAt as *time.Time (nullable
-// to express "not yet started" without sentinel zero-values), and
-// workflow.Step also carries them as *time.Time. We pass the pointers
-// straight through rather than re-aliasing them — they are independent
-// storage sites (taskgraph row vs legacy projection) and the address
-// equality is irrelevant on the wire.
-func projectStep(t *taskgraph.Task, runID string) workflow.Step {
-	out := workflow.Step{
+// projectStep maps taskgraph.Task + runID → orchestratorv1.LegacyStepResponse.
+func projectStep(t *taskgraph.Task, runID string) orchestratorv1.LegacyStepResponse {
+	out := orchestratorv1.LegacyStepResponse{
 		StepID:      t.ID,
 		RunID:       runID,
 		StepKey:     t.ExecutorID,
@@ -418,9 +388,9 @@ func projectStep(t *taskgraph.Task, runID string) workflow.Step {
 	}
 	switch t.Status {
 	case taskgraph.StatusPending:
-		out.Status = workflow.StepStatusBlocked
+		out.Status = orchestratorv1.LegacyStepStatusBlocked
 	default:
-		out.Status = workflow.StepStatus(t.Status)
+		out.Status = orchestratorv1.LegacyStepStatus(t.Status)
 	}
 	if t.StartedAt != nil && !t.StartedAt.IsZero() {
 		out.StartedAt = t.StartedAt
@@ -431,40 +401,33 @@ func projectStep(t *taskgraph.Task, runID string) workflow.Step {
 	return out
 }
 
-// mapTaskStatusToStep reconciles taskgraph.Status → workflow.StepStatus.
-// PENDING/READY map back to BLOCKED/READY (the legacy workflow used BLOCKED
-// when "not yet executable"; post-cutover PENDING is the canonical start).
-// CANCELLED has no StepStatus equivalent (the legacy enum is frozen 5-key),
-// so we conservatively bucket it under FAILED — dashboards disambiguate
-// cancellation by inspecting the run-level RunStatus (which IS 5-key
-// with explicit CANCELLED) rather than the step-level StepStatus.
-func mapTaskStatusToStep(s taskgraph.Status) workflow.StepStatus {
+// mapTaskStatusToStep reconciles taskgraph.Status → orchestratorv1.LegacyStepStatus.
+func mapTaskStatusToStep(s taskgraph.Status) orchestratorv1.LegacyStepStatus {
 	switch s {
 	case taskgraph.StatusPending:
-		return workflow.StepStatusBlocked
+		return orchestratorv1.LegacyStepStatusBlocked
 	case taskgraph.StatusReady:
-		return workflow.StepStatusReady
+		return orchestratorv1.LegacyStepStatusReady
 	case taskgraph.StatusLeased, taskgraph.StatusRunning:
-		return workflow.StepStatusRunning
+		return orchestratorv1.LegacyStepStatusRunning
 	case taskgraph.StatusSucceeded:
-		return workflow.StepStatusSucceeded
+		return orchestratorv1.LegacyStepStatusSucceeded
 	case taskgraph.StatusFailed:
-		return workflow.StepStatusFailed
+		return orchestratorv1.LegacyStepStatusFailed
 	case taskgraph.StatusCancelled:
-		return workflow.StepStatusFailed
+		return orchestratorv1.LegacyStepStatusFailed
 	}
-	return workflow.StepStatusBlocked
+	return orchestratorv1.LegacyStepStatusBlocked
 }
 
 // readJSONMap is a tiny inline JSON parser for jobs.Payload (string column)
-// → workflow.Run.Input. We keep it local because the field carries the
-// canonical creator-flow payload, NOT the legacy input shape.
+// → LegacyRunResponse.Input.
 func readJSONMap(s string) map[string]any {
 	out := map[string]any{}
 	if s == "" {
 		return out
 	}
-	if err := jsonUnmarshal([]byte(s), &out); err != nil {
+	if err := json.Unmarshal([]byte(s), &out); err != nil {
 		return out
 	}
 	return out

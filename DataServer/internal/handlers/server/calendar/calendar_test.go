@@ -34,11 +34,12 @@ func setupCalendarTestEnv(t *testing.T) (*store.SQLiteStore, jobs.Repository, *g
 	t.Cleanup(func() { _ = db.Close() })
 
 	jobRepo := store.NewSQLiteJobRepository(db)
+	atomic := store.NewAtomicJobTaskCreator(db)
 
 	r := gin.New()
 	v1 := r.Group("/api/v1")
-	sched := NewCalendarScheduler(db, jobRepo, jobRepo)
-	RegisterRoutes(v1, db, jobRepo, jobRepo, sched)
+	sched := NewCalendarScheduler(db, jobRepo, atomic)
+	RegisterRoutes(v1, db, jobRepo, atomic, sched)
 
 	return db, jobRepo, r
 }

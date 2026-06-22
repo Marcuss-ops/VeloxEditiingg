@@ -2,16 +2,14 @@ package grpcserver
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"time"
 
-	"velox-server/internal/costmodel"
-	"velox-server/internal/jobs"
 	"velox-shared/controltransport"
 	pb "velox-shared/controltransport/pb"
 
+	"github.com/google/uuid"
 	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -41,8 +39,6 @@ func (h *Handler) handleHeartbeat(workerID, sessionID string, hb *pb.Heartbeat) 
 	}
 
 	// Update capacity tracking on the session (for max_parallel_jobs check).
-	// Phase 4.1 fix: use atomic.Int32 so writes from this heartbeat goroutine
-	// and reads from the notifier goroutine under claimMu are race-clean.
 	sess := h.getSession(workerID)
 	if sess != nil {
 		sess.activeJobsCount.Store(int32(hb.GetActiveJobsCount()))
@@ -56,12 +52,6 @@ func (h *Handler) handleHeartbeat(workerID, sessionID string, hb *pb.Heartbeat) 
 					sess.maxParallelJobs.Store(int32(v))
 				}
 			}
-			// Extract supported_job_types from capabilities for ClaimNext filtering.
-			if caps, ok := extraMap["capabilities"].(map[string]interface{}); ok {
-				if types := extractSupportedJobTypes(caps); len(types) > 0 {
-					sess.supportedJobTypes.Store(types)
-				}
-			}
 		}
 	}
 
@@ -73,14 +63,12 @@ func (h *Handler) handleHeartbeat(workerID, sessionID string, hb *pb.Heartbeat) 
 	h.handleRecoveryReport(workerID, sess, hb)
 
 	// Issue 7 fix / Phase 4.2 hardening: if the persisted session is gone
-	// or revoked or expired, we MUST tear the active session down — not just
-	// log. The worker should reconnect with a fresh sessionID.
+	// or revoked or expired, we MUST tear the active session down.
 	if h.dbStore != nil && sessionID != "" {
 		if dbSess, err := h.dbStore.ValidateSessionByID(sessionID); err != nil || dbSess == nil || dbSess.Revoked {
 			log.Printf("[GRPC] Session %s for worker %s is invalid — tearing down (revoked=%v, err=%v)",
 				sessionID, workerID, dbSess != nil && dbSess.Revoked, err)
 			if activeSess := h.getSession(workerID); activeSess != nil && activeSess.sessionID == sessionID {
-				// Also publish to writerErr so the main loop exits predictably.
 				select {
 				case activeSess.writerErr <- fmt.Errorf("session revoked or expired"):
 				default:
@@ -95,7 +83,6 @@ func (h *Handler) handleHeartbeat(workerID, sessionID string, hb *pb.Heartbeat) 
 
 // handleCommandAck processes typed CommandAck via gRPC stream.
 // Only accepts ACK by command_id — the legacy type-based fallback is removed.
-// Worker-scoped: the command_id must belong to the authenticated worker.
 func (h *Handler) handleCommandAck(workerID string, ca *pb.CommandAck) {
 	if ca.GetCommandId() != "" {
 		if err := h.cmdMgr.AckCommandByID(workerID, ca.GetCommandId()); err != nil {
@@ -104,8 +91,8 @@ func (h *Handler) handleCommandAck(workerID string, ca *pb.CommandAck) {
 	}
 }
 
-// notifyJobsAvailable checks for pending jobs and sends full JobOffers (push mode).
-func (h *Handler) notifyJobsAvailable(ctx context.Context, workerID string, trigger <-chan struct{}, done <-chan struct{}) {
+// notifyTasksAvailable checks for READY tasks and sends TaskOffers (push mode, PR #4).
+func (h *Handler) notifyTasksAvailable(ctx context.Context, workerID string, trigger <-chan struct{}, done <-chan struct{}) {
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 
@@ -120,33 +107,30 @@ func (h *Handler) notifyJobsAvailable(ctx context.Context, workerID string, trig
 		}
 
 		if h.config.PushMode {
-			h.sendPushJobOffer(ctx, workerID)
+			h.sendPushTaskOffer(ctx, workerID)
 		}
 	}
 }
 
-// sendPushJobOffer does a real SQLite CAS claim and sends a typed JobOffer (Push mode).
-// Issue 4 fix: claimMu serializes the entire check+claim+send+set flow to prevent
-// TOCTOU races between concurrent notifyJobsAvailable calls.
-func (h *Handler) sendPushJobOffer(ctx context.Context, workerID string) {
+// sendPushTaskOffer claims the next READY task for a worker, creates a
+// TaskAttempt, and sends a typed TaskOffer via gRPC push (PR #4).
+// Replaces the legacy sendPushJobOffer with task-native dispatch.
+func (h *Handler) sendPushTaskOffer(ctx context.Context, workerID string) {
 	sess := h.getSession(workerID)
 	if sess == nil {
 		return
 	}
 
-	// Issue 4 fix: atomically check pendingOffer, claim, send, and store.
-	// claimMu prevents concurrent offers from racing ClaimNextJob.
+	// Serialize the check+claim+send+set flow to prevent TOCTOU races.
 	sess.claimMu.Lock()
 	defer sess.claimMu.Unlock()
 
-	// If a previous offer is still pending (not yet accepted/rejected), skip.
-	if sess.pendingOffer != nil {
+	// If a previous offer is still pending, skip.
+	if sess.pendingTaskOffer != nil {
 		return
 	}
 
 	// Respect max_parallel_jobs: don't offer if worker is at capacity.
-	// pendingOffer is nil here (checked above), so the pending count is 1 (this offer).
-	// Phase 4.1: atomic loads are lock-free reads.
 	if sess.maxParallelJobs.Load() > 0 {
 		capacity := sess.maxParallelJobs.Load() - sess.activeJobsCount.Load() - 1
 		if capacity < 0 {
@@ -154,180 +138,60 @@ func (h *Handler) sendPushJobOffer(ctx context.Context, workerID string) {
 		}
 	}
 
-	// Collect supported job types from worker capabilities for filtering.
-	allowedJobTypes := h.collectAllowedJobTypes(sess)
+	// Generate a unique lease ID for this offer.
+	leaseID := fmt.Sprintf("l-%s-%s", workerID, uuid.NewString()[:8])
 
-	// PR-04.6: Cost-rank path. Score each pending candidate
-	// against this worker's profile and CAS-claim the lowest-scored
-	// (best-fit) candidate rather than FIFO. Performance is bounded
-	// to a 20-candidate pool so worst-case latency stays bounded.
-	profile := h.buildProfileForPush(ctx, workerID, sess)
-	claimResult, err := h.jobsRepo.ClaimNextForProfile(ctx, workerID, allowedJobTypes, profile, 20)
+	// CAS: READY → LEASED with workerID + leaseID.
+	tws, err := h.taskRepo.ClaimNextReadyTask(ctx, workerID, leaseID)
 	if err != nil {
-		log.Printf("[GRPC] ClaimNext failed for worker %s: %v", workerID, err)
+		log.Printf("[GRPC] ClaimNextReadyTask failed for worker %s: %v", workerID, err)
 		return
 	}
-	if claimResult == nil || claimResult.JobID == "" {
-		return
-	}
-	// PR15.5: Get via canonical jobs.Reader — fields map to domain names
-	j, err := h.jobsRepo.Get(ctx, claimResult.JobID)
-	if err != nil {
-		log.Printf("[GRPC] GetJob after claim failed for worker %s: %v", workerID, err)
-		// Release the claim so the job is not left orphaned.
-		if releaseErr := h.jobsRepo.ReleaseLease(ctx, claimResult.JobID); releaseErr != nil {
-			log.Printf("[GRPC] Failed to release claim after GetJob error for %s: %v", claimResult.JobID, releaseErr)
-		}
-		return
-	}
-	if j == nil {
-		// Release the claim — job no longer exists.
-		if releaseErr := h.jobsRepo.ReleaseLease(ctx, claimResult.JobID); releaseErr != nil {
-			log.Printf("[GRPC] Failed to release claim after nil GetJob for %s: %v", claimResult.JobID, releaseErr)
-		}
+	if tws == nil || tws.ID == "" {
 		return
 	}
 
-	// Parse payload from the opaque Payload field (maps to request_json).
-	var payload map[string]interface{}
-	if j.Payload != "" && j.Payload != "{}" {
-		_ = json.Unmarshal([]byte(j.Payload), &payload)
+	// Build TaskSpec payload as structpb.Struct.
+	var taskSpecPB *structpb.Struct
+	if tws.SpecPayload != nil {
+		taskSpecPB, _ = structpb.NewStruct(tws.SpecPayload)
 	}
 
-	job := &jobs.QueueItem{
-		JobID:       j.ID,
-		Status:      jobs.Status(j.Status),
-		VideoName:   j.VideoName,
-		ProjectID:   j.ProjectID,
-		AssignedTo:  j.WorkerID,
-		LeaseID:     j.LeaseID,
-		RetryCount:  j.Attempts,
-		MaxRetries:  j.MaxRetries,
-		CreatedAt:   j.CreatedAt,
-		UpdatedAt:   j.UpdatedAt,
-		StartedAt:   j.StartedAt,
-		CompletedAt: j.CompletedAt,
-		Attempt:     claimResult.Attempt,
-		RunID:       j.RunID,
-		Payload:     payload,
-		LeaseExpiry: claimResult.LeaseExpires,
-	}
-	// Build job payload struct from job.Payload map
-	var jobPayload *structpb.Struct
-	if job.Payload != nil {
-		jobPayload, _ = structpb.NewStruct(job.Payload)
-	}
+	// Calculate lease deadline (30 min from now).
+	leaseDeadline := time.Now().UTC().Add(30 * time.Minute)
 
-	// Parse LeaseExpiry for the proto message.
-	var leaseExpiryPB *timestamppb.Timestamp
-	if !claimResult.LeaseExpires.IsZero() {
-		leaseExpiryPB = timestamppb.New(claimResult.LeaseExpires)
-	}
-
-	// Parse CreatedAt timestamp if present
-	var createdAt *timestamppb.Timestamp
-	if job.CreatedAt != nil {
-		switch t := job.CreatedAt.(type) {
-		case time.Time:
-			createdAt = timestamppb.New(t)
-		case string:
-			if parsed, err := time.Parse(time.RFC3339, t); err == nil {
-				createdAt = timestamppb.New(parsed)
-			}
-		}
-	}
-
+	// Build TaskOffer envelope.
 	env := &pb.MasterToWorkerEnvelope{
-		MessageId:       fmt.Sprintf("joboffer-%s-%s", workerID, job.JobID),
+		MessageId:       fmt.Sprintf("taskoffer-%s-%s", workerID, tws.ID),
 		WorkerId:        workerID,
 		SentAt:          timestamppb.Now(),
 		ProtocolVersion: controltransport.ProtocolVersionCurrent,
-		Msg: &pb.MasterToWorkerEnvelope_JobOffer{
-			JobOffer: &pb.JobOffer{
-				JobId:       job.JobID,
-				RunId:       job.RunID,
-				VideoName:   job.VideoName,
-				CreatedAt:   createdAt,
-				LeaseId:     job.LeaseID,
-				LeaseExpiry: leaseExpiryPB,
-				Attempt:     int32(job.Attempt),
-				MaxRetries:  int32(job.MaxRetries),
-				JobPayload:  jobPayload,
+		Msg: &pb.MasterToWorkerEnvelope_TaskOffer{
+			TaskOffer: &pb.TaskOffer{
+				TaskId:          tws.ID,
+				JobId:           tws.JobID,
+				AttemptId:       leaseID,
+				ExecutorId:      tws.ExecutorID,
+				ExecutorVersion: int32(tws.ExecutorVersion),
+				TaskSpec:        taskSpecPB,
+				LeaseId:         leaseID,
+				LeaseDeadline:   timestamppb.New(leaseDeadline),
+				AttemptNumber:   int32(tws.AttemptCount + 1),
 			},
 		},
 	}
 
-	// Issue 5 fix: send via sendCh instead of direct stream.Send().
+	// Send via sendCh (sessionWriter handles the actual stream.Send).
 	if !safeSend(sess.sendCh, &outboundMessage{Envelope: env}) {
-		log.Printf("[GRPC] sendCh full/closed for JobOffer to worker %s — releasing claim", workerID)
-		if releaseErr := h.jobsRepo.ReleaseLease(ctx, job.JobID); releaseErr != nil {
-			log.Printf("[GRPC] Failed to release claim for job %s after send failure: %v", job.JobID, releaseErr)
+		log.Printf("[GRPC] sendCh full/closed for TaskOffer to worker %s — releasing claim for task %s", workerID, tws.ID)
+		if releaseErr := h.taskRepo.ReleaseLease(ctx, tws.ID); releaseErr != nil {
+			log.Printf("[GRPC] Failed to release claim for task %s after send failure: %v", tws.ID, releaseErr)
 		}
 		return
 	}
 
-	// Issue 4 fix: store the offer under claimMu so we can match JobAccepted.
-	sess.pendingOffer = job
-}
-
-// buildProfileForPush derives the canonical costmodel.WorkerProfile
-// for the (workerID, sess) pair used by sendPushJobOffer (PR-04.6).
-// Sources: registry (Capabilities: executors array carries
-// resource_class / temporal_mode / link_bandwidth_mbps; supported
-// for the legacy Synthesized{ResClass=ResourceCPU, ...} fallback
-// when capabilities has no executors), session atomic counters
-// (active jobs + max parallel jobs), status + drain flags from
-// registry WorkerInfo. Returns a value type so the score call
-// doesn't escape to the heap.
-//
-// When info == nil (worker not yet registered in the registry this
-// peer loop), BuildWorkerProfile is still called with the session
-// counters so the resulting profile has CPU/frame_local defaults and
-// the rank path stays safe against an un-registered worker.
-func (h *Handler) buildProfileForPush(ctx context.Context, workerID string, sess *workerSession) costmodel.WorkerProfile {
-	if sess == nil {
-		// Caller guard should have already returned, but be defensive.
-		return costmodel.BuildWorkerProfile(workerID, true, false, "online", 0, 0, nil)
-	}
-	info := h.registry.GetWorker(ctx, workerID)
-	caps := map[string]interface{}{}
-	schedulable, drain, status := true, false, "online"
-	if info != nil {
-		caps = info.Capabilities
-		schedulable = info.Schedulable
-		drain = info.Drain
-		status = info.Status
-	}
-	return costmodel.BuildWorkerProfile(
-		workerID,
-		schedulable,
-		drain,
-		status,
-		int(sess.activeJobsCount.Load()),
-		int(sess.maxParallelJobs.Load()),
-		caps,
-	)
-}
-
-// collectAllowedJobTypes extracts supported_job_types from the worker's
-// capabilities stored in the session. Capabilities are received via the
-// Hello message during connection and refreshed via heartbeat Extra.
-// Returns nil (no filter) if no capabilities have been received yet — the
-// ClaimNext query handles nil as "no filter" which ensures backward compat
-// with workers that predate the supported_job_types capability.
-func (h *Handler) collectAllowedJobTypes(sess *workerSession) []string {
-	if sess == nil {
-		return nil
-	}
-	v := sess.supportedJobTypes.Load()
-	if v == nil {
-		return nil
-	}
-	types, ok := v.([]string)
-	if !ok || len(types) == 0 {
-		return nil
-	}
-	return types
+	// Store the offer under claimMu so we can match TaskAccepted/TaskRejected.
+	sess.pendingTaskOffer = tws
 }
 
 // extractSupportedJobTypes parses a supported_job_types value from a
@@ -349,7 +213,6 @@ func extractSupportedJobTypes(capsMap map[string]interface{}) []string {
 		}
 		return types
 	case []string:
-		// Safety net: proto-generated code may preserve []string in edge cases.
 		return list
 	}
 	return nil
