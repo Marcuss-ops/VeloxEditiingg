@@ -17,13 +17,14 @@ import (
 type JobStatus = jobs.Status
 
 const (
-	JobStatusPending   = jobs.StatusPending
-	JobStatusLeased    = jobs.StatusLeased
-	JobStatusRunning   = jobs.StatusRunning
-	JobStatusRetryWait = jobs.StatusRetryWait
-	JobStatusSucceeded = jobs.StatusSucceeded
-	JobStatusFailed    = jobs.StatusFailed
-	JobStatusCancelled = jobs.StatusCancelled
+	JobStatusPending          = jobs.StatusPending
+	JobStatusLeased           = jobs.StatusLeased
+	JobStatusRunning          = jobs.StatusRunning
+	JobStatusAwaitingArtifact = jobs.StatusAwaitingArtifact
+	JobStatusRetryWait        = jobs.StatusRetryWait
+	JobStatusSucceeded        = jobs.StatusSucceeded
+	JobStatusFailed           = jobs.StatusFailed
+	JobStatusCancelled        = jobs.StatusCancelled
 )
 
 // IsTerminal delegates to the canonical jobs.Status.IsTerminal().

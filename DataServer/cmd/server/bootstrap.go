@@ -371,6 +371,23 @@ func buildSupervisor(a *assetDeps, m *moduleDeps, j *jobsDeps, p *persistenceDep
 		}
 	}
 	if j.Lifecycle != nil {
+		// PR-13 → PR-05 cutover: the Job-side reaper is DEPRECATED.
+		//
+		// History: PR-13 introduced VELOX_DISABLE_JOB_REAPER (default off)
+		// as a stop-gap while the jobs lease_expiry column went away
+		// (migration 048) and the canonical lease TTL moved to tasks
+		// (migration 049 + PR-05 TaskLeaseReaper). With TaskLeaseReaper
+		// registering as a separate supervisor runner (see below), the
+		// Job-side zombie reaper is redundant. We KEEP the env-var read
+		// and the supervisor runner for now (back-compat: removing
+		// either would break operators still relying on the flag) but
+		// emit a one-time DEPRECATED log on each boot so operators know
+		// to migrate to TaskLeaseReaper.
+		if os.Getenv("VELOX_DISABLE_JOB_REAPER") == "true" {
+			log.Printf("[BOOTSTRAP] DEPRECATED env=VELOX_DISABLE_JOB_REAPER=true (PR-13 superseded by PR-05 TaskLeaseReaper; flag is now a no-op, set VELOX_TASK_LEASE_REAPER_DISABLED=true at the TaskLeaseReaper runner if you need to disable on the canonical path)")
+		} else {
+			log.Printf("[BOOTSTRAP] note=job-side zombie reaper is DEPRECATED; TaskLeaseReaper is the canonical master-side lease enforcer")
+		}
 		if err := sup.Register(RunnerFunc{
 			name: "zombie-reaper",
 			fn: func(ctx context.Context) error {
@@ -381,10 +398,12 @@ func buildSupervisor(a *assetDeps, m *moduleDeps, j *jobsDeps, p *persistenceDep
 					case <-ctx.Done():
 						return ctx.Err()
 					case <-ticker.C:
-						results, err := j.Lifecycle.RequeueExpiredLeases(ctx, 100)
+						results, err := j.Lifecycle.RequeueExpiredLeasesSafe(ctx, 100)
 						if err != nil {
 							log.Printf("[ZOMBIE] requeue error: %v", err)
-						} else if len(results) > 0 {
+							continue
+						}
+						if len(results) > 0 {
 							log.Printf("[ZOMBIE] requeued %d stuck jobs", len(results))
 						}
 					}
@@ -428,6 +447,22 @@ func buildSupervisor(a *assetDeps, m *moduleDeps, j *jobsDeps, p *persistenceDep
 			},
 		}); err != nil {
 			return nil, fmt.Errorf("supervisor register taskgraph-dispatcher: %w", err)
+		}
+	}
+	// PR-05 follow-up: TaskLeaseReaper is now its own supervisor runner
+	// (independent ticker, independent log prefix) so its cadence is
+	// decoupled from the readiness dispatcher. 30 s default matches
+	// the master-side defaultTaskLeaseTTL (30 min) so a freshly
+	// claimed task waits at most TTL+30s before being reaped if its
+	// worker crashes mid-flight, within the audit §P0.4 budget.
+	if t.TaskLeaseReaper != nil {
+		if err := sup.Register(RunnerFunc{
+			name: "task-lease-reaper",
+			fn: func(ctx context.Context) error {
+				return t.TaskLeaseReaper.Run(ctx)
+			},
+		}); err != nil {
+			return nil, fmt.Errorf("supervisor register task-lease-reaper: %w", err)
 		}
 	}
 

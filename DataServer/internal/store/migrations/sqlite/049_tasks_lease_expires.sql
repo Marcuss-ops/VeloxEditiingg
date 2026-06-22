@@ -1,0 +1,25 @@
+-- PR-05: add a nullable `lease_expires_at` TEXT column on `tasks`.
+--
+-- Audit §P0.4 closed: the master used to send a lease deadline only in the
+-- gRPC envelope (TaskOffer / TaskLeaseGranted) but never persisted it on
+-- the tasks row. A worker crash therefore stranded the task in LEASED or
+-- RUNNING forever — there was no persisted state to scan for expiry.
+--
+-- After this migration:
+--   - ClaimNextReadyTask writes `lease_expires_at = now + lease_ttl` on
+--     every READY → LEASED transition (default TTL 30 min).
+--   - RequeueExpiredLeases (PR-05's added method on the canonical
+--     taskgraph.Repository) sweeps tasks whose `lease_expires_at` is
+--     in the past and requeues them per audit §P0.4:
+--       LEASED ⇒ READY (re-claimable),
+--       RUNNING with retries left ⇒ Attempt TIMED_OUT, Task back to READY,
+--       RUNNING with retries exhausted ⇒ Attempt FAILED, Task FAILED,
+--                                       aggregate Job.FAILED.
+--
+-- The column is NULLABLE to keep the migration back-safe: rows committed
+-- before running the migration continue to read with a NULL lease_expiry;
+-- the reaper's COALESCE(lease_expires_at, '') < ? predicate treats NULL
+-- as "never expires" so a long-running pre-cutover task is never wrongly
+-- reaped. After ClaimNextReadyTask is updated, all NEW claims populate
+-- the column.
+ALTER TABLE tasks ADD COLUMN lease_expires_at TEXT;

@@ -278,3 +278,92 @@ func TestLifecycleService_Now_Helper(t *testing.T) {
 		t.Fatalf("zero input not UTC-normalized: loc=%v", got.Location())
 	}
 }
+
+// ── PR-13: Job-side reaper gate (post-048) ─────────────────────────────────
+
+func TestLifecycleService_ReaperDisabled_DefaultsFalse(t *testing.T) {
+	t.Parallel()
+	svc, _ := NewLifecycleService(stubRepo, clock.System{})
+	if svc.ReaperDisabled() {
+		t.Fatal("ReaperDisabled() should default to false")
+	}
+}
+
+func TestLifecycleService_DisableReaper_FlipsFlagIdempotent(t *testing.T) {
+	t.Parallel()
+	svc, _ := NewLifecycleService(stubRepo, clock.System{})
+	svc.DisableReaper()
+	if !svc.ReaperDisabled() {
+		t.Fatal("ReaperDisabled() must be true after DisableReaper()")
+	}
+	// Second call is a no-op (idempotent).
+	svc.DisableReaper()
+	if !svc.ReaperDisabled() {
+		t.Fatal("DisableReaper() must remain idempotent on repeated calls")
+	}
+}
+
+func TestLifecycleService_RequeueExpiredLeasesSafe_NoOpsWhenDisabled(t *testing.T) {
+	t.Parallel()
+	rec := &limitRecordingStub{}
+	svc, _ := NewLifecycleService(rec, clock.System{})
+	svc.DisableReaper()
+
+	results, err := svc.RequeueExpiredLeasesSafe(context.Background(), 42)
+	if err != nil {
+		t.Fatalf("Safe variant should not error when disabled; got %v", err)
+	}
+	if results != nil {
+		t.Fatalf("Safe variant should return nil results when disabled; got %v", results)
+	}
+	if rec.calls != 0 {
+		t.Fatalf("Safe variant must not invoke the underlying repo when disabled; calls=%d", rec.calls)
+	}
+	if rec.lastLimit != 0 {
+		t.Fatalf("Safe variant must not record limit when disabled; lastLimit=%d", rec.lastLimit)
+	}
+}
+
+func TestLifecycleService_RequeueExpiredLeasesSafe_DelegatesWhenEnabled(t *testing.T) {
+	t.Parallel()
+	rec := &limitRecordingStub{}
+	svc, _ := NewLifecycleService(rec, clock.System{})
+	// ReaperDisabled() == false (default).
+
+	if _, err := svc.RequeueExpiredLeasesSafe(context.Background(), 42); !errors.Is(err, errNotImplemented) {
+		t.Fatalf("expected errNotImplemented from stub delegation; got %v", err)
+	}
+	if rec.calls != 1 {
+		t.Fatalf("Safe variant must delegate to repo when enabled; calls=%d", rec.calls)
+	}
+	if rec.lastLimit != 42 {
+		t.Fatalf("Safe variant must propagate limit to repo; lastLimit=%d", rec.lastLimit)
+	}
+}
+
+// TestJobReaper_DisabledPost048 is the integration-level assertion
+// required by PR-13. It guarantees the supervisor goroutine never
+// invokes the underlying repo once DisableReaper() has been called,
+// regardless of how many tick iterations elapse.
+func TestJobReaper_DisabledPost048(t *testing.T) {
+	t.Parallel()
+	rec := &limitRecordingStub{}
+	svc, _ := NewLifecycleService(rec, clock.System{})
+	svc.DisableReaper()
+
+	for tick := 0; tick < 10; tick++ {
+		results, err := svc.RequeueExpiredLeasesSafe(context.Background(), 100)
+		if err != nil {
+			t.Fatalf("tick=%d: unexpected error from Safe variant: %v", tick, err)
+		}
+		if results != nil {
+			t.Fatalf("tick=%d: expected nil results when reaper disabled; got %v", tick, results)
+		}
+	}
+	if rec.calls != 0 {
+		t.Fatalf("after 10 ticks with disabled reaper, repo calls=%d (want 0)", rec.calls)
+	}
+	if rec.lastLimit != 0 {
+		t.Fatalf("after 10 disabled ticks, lastLimit=%d (want 0 — limit must not leak)", rec.lastLimit)
+	}
+}

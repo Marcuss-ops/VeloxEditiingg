@@ -15,6 +15,10 @@ type taskDeps struct {
 	TaskRepository taskgraph.Repository
 	// TaskLifecycle owns transactional task status transitions.
 	TaskLifecycle *taskgraph.LifecycleService
+	// TaskLeaseReaper is the master-side lease enforcement runner (PR-05
+	// follow-up). Constructed here so buildSupervisor can register it as
+	// a dedicated supervisor tick (independent of taskgraph-dispatcher).
+	TaskLeaseReaper *taskgraph.TaskLeaseReaper
 	// AttemptRepository is the canonical taskattempts.Repository.
 	AttemptRepository taskattempts.Repository
 	// AtomicCreator provides store-level transaction coordinator for Job+Task creation.
@@ -24,7 +28,7 @@ type taskDeps struct {
 }
 
 // buildTasks creates the task repositories, lifecycle service, atomic creator,
-// and observability service from the persistence layer.
+// reaper, and observability service from the persistence layer.
 func buildTasks(p *persistenceDeps) (*taskDeps, error) {
 	taskRepo := store.NewSQLiteTaskRepository(p.SQLite)
 	attemptRepo := store.NewSQLiteTaskAttemptRepository(p.SQLite)
@@ -35,6 +39,8 @@ func buildTasks(p *persistenceDeps) (*taskDeps, error) {
 		return nil, fmt.Errorf("bootstrap: task lifecycle service: %w", err)
 	}
 
+	taskLeaseReaper := taskgraph.NewTaskLeaseReaper(taskRepo)
+
 	obsSvc, err := observability.NewService(taskRepo, attemptRepo)
 	if err != nil {
 		return nil, fmt.Errorf("bootstrap: observability service: %w", err)
@@ -43,6 +49,7 @@ func buildTasks(p *persistenceDeps) (*taskDeps, error) {
 	return &taskDeps{
 		TaskRepository:    taskRepo,
 		TaskLifecycle:     taskLifecycle,
+		TaskLeaseReaper:   taskLeaseReaper,
 		AttemptRepository: attemptRepo,
 		AtomicCreator:     atomicCreator,
 		Observability:     obsSvc,

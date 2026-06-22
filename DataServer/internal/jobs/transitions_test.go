@@ -36,10 +36,21 @@ func TestCanTransition(t *testing.T) {
 
 		// Valid transitions from Running
 		{StatusRunning, StatusSucceeded, true},
+		{StatusRunning, StatusAwaitingArtifact, true}, // PR-02: pre-finalization gate
 		{StatusRunning, StatusFailed, true},
 		{StatusRunning, StatusRetryWait, true},
 		{StatusRunning, StatusCancelled, true},
 		{StatusRunning, StatusPending, false},
+
+		// PR-02: AWAITING_ARTIFACT state machine
+		{StatusAwaitingArtifact, StatusSucceeded, true}, // verified-finalization only
+		{StatusAwaitingArtifact, StatusFailed, true},    // artifact timeout / hash mismatch
+		{StatusAwaitingArtifact, StatusCancelled, true}, // worker-drain / admin cancel
+		{StatusAwaitingArtifact, StatusAwaitingArtifact, true},
+		{StatusAwaitingArtifact, StatusRunning, false},
+		{StatusAwaitingArtifact, StatusPending, false},
+		{StatusAwaitingArtifact, StatusRetryWait, false},
+		{StatusAwaitingArtifact, StatusLeased, false},
 
 		// Valid transitions from RetryWait
 		{StatusRetryWait, StatusPending, true},

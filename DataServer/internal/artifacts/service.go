@@ -137,12 +137,16 @@ func (c *countingWriter) Write(p []byte) (int, error) {
 // jobState captures the columns BeginUpload / Finalize need from `jobs`.
 // Loaded with a single SELECT, then checked against the BeginUpload
 // auth fields in one place.
+//
+// PR-01 (post-migration 048): the columns assigned_to, lease_id,
+// lease_expiry were dropped from `jobs`. Worker / lease identity now
+// lives on task_attempts (PR 4/5) and on the artifact_uploads CAS chain
+// (PR 3.5-a). The jobs row only carries status and revision in this
+// code path — auth is verified after loadJob at the artifact_uploads
+// and job_attempts layers.
 type jobState struct {
-	status      string
-	assignedTo  string
-	leaseID     string
-	leaseExpiry time.Time
-	revision    int
+	status   string
+	revision int
 }
 
 // loadJob reads the auth-relevant columns of a `jobs` row.
@@ -151,28 +155,24 @@ func (s *Service) loadJob(ctx context.Context, jobID string) (*jobState, error) 
 		return nil, fmt.Errorf("artifacts: loadJob: empty jobID")
 	}
 	row := s.db.QueryRowContext(ctx,
-		`SELECT status, COALESCE(assigned_to, ''),
-		        COALESCE(lease_id, ''), COALESCE(lease_expiry, ''),
-		        COALESCE(revision, 0)
+		`SELECT status, COALESCE(revision, 0)
 		 FROM jobs WHERE job_id = ?`, jobID)
 	var j jobState
-	var leaseExp string
-	if err := row.Scan(&j.status, &j.assignedTo, &j.leaseID, &leaseExp,
-		&j.revision); err != nil {
+	if err := row.Scan(&j.status, &j.revision); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("artifacts: loadJob: %w", err)
 	}
-	if leaseExp != "" {
-		if ts, perr := time.Parse(time.RFC3339, leaseExp); perr == nil {
-			j.leaseExpiry = ts
-		}
-	}
 	return &j, nil
 }
 
 // loadAttempt reads auth-relevant columns of a `job_attempts` row.
+//
+// PR-01: post-migration 048, this is the canonical source of
+// worker_id / lease_id / attempt identity for the upload pipeline.
+// Anywhere else still selects assigned_to / lease_id from jobs WILL
+// FAIL because those columns are gone.
 func (s *Service) loadAttempt(ctx context.Context, jobID string, attemptNumber int) (status, workerID, leaseID string, err error) {
 	row := s.db.QueryRowContext(ctx,
 		`SELECT status, COALESCE(worker_id, ''), COALESCE(lease_id, '')
@@ -282,17 +282,12 @@ func (s *Service) BeginUpload(ctx context.Context, cmd BeginUploadCommand) (*Upl
 	if job.status != string(store.JobStatusRunning) {
 		return nil, fmt.Errorf("%w: job=%s status=%s", ErrJobNotRunning, cmd.JobID, job.status)
 	}
-	if job.assignedTo != cmd.WorkerID {
-		return nil, fmt.Errorf("%w: job=%s assigned_to=%s worker=%s",
-			ErrWrongJobOwner, cmd.JobID, job.assignedTo, cmd.WorkerID)
-	}
-	if job.leaseID != cmd.LeaseID {
-		return nil, fmt.Errorf("%w: job=%s lease_mismatch", ErrLeaseInvalid, cmd.JobID)
-	}
-	if !job.leaseExpiry.IsZero() && s.clock.Now().After(job.leaseExpiry) {
-		return nil, fmt.Errorf("%w: job=%s expired_at=%s",
-			ErrLeaseInvalid, cmd.JobID, job.leaseExpiry.Format(time.RFC3339))
-	}
+	// PR-01: assigned_to/lease_id/lease_expiry from jobs were dropped in
+	// migration 048. Worker + lease identity is verified at attempt
+	// level via loadAttempt below, and at the artifact_uploads CAS
+	// chain in FinalizeVerified. Lease expiry moves to PR-05
+	// (tasks.lease_expires_at). Keeping the lease_expiry check here
+	// would have resolved a column that no longer exists.
 	if cmd.ExpectedRevision != 0 && job.revision != cmd.ExpectedRevision {
 		return nil, fmt.Errorf("%w: job=%s revision=%d want=%d",
 			ErrRevisionMismatch, cmd.JobID, job.revision, cmd.ExpectedRevision)

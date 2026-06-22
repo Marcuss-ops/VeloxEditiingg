@@ -57,13 +57,18 @@ import (
 // minimalSchema covers the columns FinalizeVerified / CreateArtifactAndUploadSession
 // actually touch. Migrations are not required for this test — we are
 // validating the FinalizationRepository in isolation, not the wider store.
+//
+// PR-01 (post-migration 048): the runtime columns assigned_to,
+// lease_id, lease_expiry were DROPPED from `jobs` by migration 048.
+// Worker / lease identity for the upload pipeline now lives on
+// `job_attempts`. The fixture below reflects that contract so the
+// tests above exercise the SAME shape as the real store — fixing any
+// future regression where someone re-adds the dropped columns to the
+// jobs CAS chain by mistake.
 const minimalSchema = `
 CREATE TABLE jobs (
 	job_id        TEXT PRIMARY KEY,
 	status        TEXT,
-	assigned_to   TEXT,
-	lease_id      TEXT,
-	lease_expiry  TEXT,
 	revision      INTEGER,
 	completed_at  TEXT,
 	updated_at    TEXT,
@@ -183,11 +188,15 @@ type fixture struct {
 func setupVerifiedPipelineFixture(t *testing.T, db *sql.DB, f fixture) {
 	t.Helper()
 	now := time.Now().UTC().Format(time.RFC3339)
+	// PR-01: jobs.assigned_to / lease_id columns were dropped in
+	// migration 048; the jobs seed only carries the columns that still
+	// exist. Worker / lease identity is seed-attached via the
+	// job_attempts INSERT immediately below.
 	if _, err := db.Exec(`INSERT INTO jobs
-		(job_id, status, assigned_to, lease_id, revision, updated_at, migrated_at)
-		VALUES (?, 'RUNNING', ?, ?, ?, ?, ?)`,
-		f.JobID, f.WorkerID, f.LeaseID, f.Revision, now, now); err != nil {
-		t.Fatalf("seed job: %v", err)
+		(job_id, status, revision, updated_at, migrated_at)
+		VALUES (?, 'RUNNING', ?, ?, ?)`,
+		f.JobID, f.Revision, now, now); err != nil {
+		t.Fatalf("seed job (post-048): %v", err)
 	}
 	if _, err := db.Exec(`INSERT INTO job_attempts
 		(job_id, attempt_number, worker_id, lease_id, status, finished_at, created_at)
@@ -611,11 +620,14 @@ func TestNewSQLiteFinalizationRepository_NilDB(t *testing.T) {
 func setupJobAndAttempt(t *testing.T, db *sql.DB, jobID, workerID, leaseID string, revision, attemptNum int) {
 	t.Helper()
 	now := time.Now().UTC().Format(time.RFC3339)
+	// PR-01: jobs.assigned_to / lease_id dropped in migration 048.
+	// workerID / leaseID are still needed for the job_attempts seed
+	// below — they just no longer apply to the jobs row.
 	if _, err := db.Exec(`INSERT INTO jobs
-		(job_id, status, assigned_to, lease_id, revision, updated_at, migrated_at)
-		VALUES (?, 'RUNNING', ?, ?, ?, ?, ?)`,
-		jobID, workerID, leaseID, revision, now, now); err != nil {
-		t.Fatalf("seed job: %v", err)
+		(job_id, status, revision, updated_at, migrated_at)
+		VALUES (?, 'RUNNING', ?, ?, ?)`,
+		jobID, revision, now, now); err != nil {
+		t.Fatalf("seed job (post-048): %v", err)
 	}
 	if _, err := db.Exec(`INSERT INTO job_attempts
 		(job_id, attempt_number, worker_id, lease_id, status, finished_at, created_at)
@@ -629,3 +641,246 @@ func setupJobAndAttempt(t *testing.T, db *sql.DB, jobID, workerID, leaseID strin
 var (
 	_ artifacts.FinalizationRepository = (*artifacts.SQLiteFinalizationRepository)(nil)
 )
+
+// =====================================================================
+// PR-01: post-migration 048 behavior — the existing tests above use the
+// post-048 minimalSchema; the tests below additionally prove the CAS
+// chain holds BOTH for a sequential re-finalize attempt (correctly
+// rejects with ErrUploadStateInvalid) AND for two concurrent finalizers
+// (exactly one wins, exactly one delivery row inserted).
+// =====================================================================
+
+// post048Schema is an explicit, named copy of minimalSchema used by the
+// post-048-specific tests. It is intentionally identical to
+// minimalSchema today but is named so that future readers can spot
+// that this schema mirrors the post-048 reality (jobs without the
+// runtime columns dropped by migration 048).
+const post048Schema = minimalSchema
+
+func openPost048TestDB(t *testing.T) *sql.DB {
+	t.Helper()
+	// PR-01: use a connection-shared in-memory DSN so concurrent
+	// goroutines land on the same underlying DB instance. The plain
+	// ":memory:" is private to each pooled connection in
+	// mattn/go-sqlite3, which would silently defeat
+	// TestArtifactFinalize_Post048RejectsConcurrentFinalize by giving
+	// each goroutine a private database. cache=shared mirrors
+	// production semantics (multiple connections, one logical DB) and
+	// is the version SQLite itself recommends for race tests.
+	db, err := sql.Open("sqlite3", "file::memory:?cache=shared")
+	if err != nil {
+		t.Fatalf("open sqlite (post-048, shared cache): %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if _, err := db.Exec(post048Schema); err != nil {
+		t.Fatalf("apply post-048 schema: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO delivery_destinations (destination_id, provider, name, enabled, created_at, updated_at) VALUES ('primary', 'test', 'Test', 1, '', '')`); err != nil {
+		t.Fatalf("seed delivery_destinations: %v", err)
+	}
+	return db
+}
+
+// seedPost048JobAndArtifact seeds a post-048 jobs row (no assigned_to /
+// lease_id) plus the job_attempts row that is now the canonical owner /
+// lease carrier, plus a STAGING artifact and a FINALIZING upload —
+// ready for one FinalizeVerified call.
+func seedPost048JobAndArtifact(t *testing.T, db *sql.DB, f fixture) {
+	t.Helper()
+	now := time.Now().UTC().Format(time.RFC3339)
+	if _, err := db.Exec(`INSERT INTO jobs
+		(job_id, status, revision, updated_at, migrated_at)
+		VALUES (?, 'RUNNING', ?, ?, ?)`,
+		f.JobID, f.Revision, now, now); err != nil {
+		t.Fatalf("seed jobs (post-048): %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO job_attempts
+		(job_id, attempt_number, worker_id, lease_id, status, finished_at, created_at)
+		VALUES (?, ?, ?, ?, 'RENDER_FINISHED', ?, ?)`,
+		f.JobID, f.AttemptNumber, f.WorkerID, f.LeaseID, now, now); err != nil {
+		t.Fatalf("seed job_attempts: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO artifacts
+		(id, job_id, attempt_id, type, storage_provider, status, created_at)
+		VALUES (?, ?, ?, 'render', 'local', 'STAGING', ?)`,
+		f.ArtifactID, f.JobID, f.AttemptNumber, now); err != nil {
+		t.Fatalf("seed artifacts: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO artifact_uploads
+		(upload_id, artifact_id, job_id, attempt_number, worker_id, lease_id,
+		 status, created_at, expires_at, completed_at)
+		VALUES (?, ?, ?, ?, ?, ?, 'FINALIZING', ?, ?, NULL)`,
+		f.UploadID, f.ArtifactID, f.JobID, f.AttemptNumber,
+		f.WorkerID, f.LeaseID, now,
+		time.Now().Add(24*time.Hour).UTC().Format(time.RFC3339)); err != nil {
+		t.Fatalf("seed artifact_uploads FINALIZING: %v", err)
+	}
+}
+
+// TestArtifactFinalize_Post048SchemaIdempotent verifies:
+//   1. FinalizeVerified runs cleanly against a post-migration-048
+//      schema (jobs without assigned_to / lease_id / lease_expiry).
+//   2. A second finalize attempt with matching worker / lease / revision
+//      is correctly rejected with ErrUploadStateInvalid because step 1
+//      preconditions fail (artifact_uploads is now COMPLETED, not
+//      FINALIZING). This confirms the idempotency boundary holds after
+//      migration 048 even when the caller's stale view happens to match.
+//   3. Exactly one delivery row is inserted (UNIQUE (artifact_id, destination_id)).
+func TestArtifactFinalize_Post048SchemaIdempotent(t *testing.T) {
+	db := openPost048TestDB(t)
+	fin := artifacts.NewSQLiteFinalizationRepository(db)
+
+	f := fixture{
+		JobID: "J-post-048", WorkerID: "worker-7", LeaseID: "lease-7",
+		Revision:      4,
+		AttemptNumber: 2,
+		ArtifactID:    "art-post-048", UploadID: "up-post-048",
+	}
+	seedPost048JobAndArtifact(t, db, f)
+
+	ctx := context.Background()
+	art, err := fin.FinalizeVerified(ctx, artifacts.FinalizeVerifiedCommand{
+		UploadID:         f.UploadID,
+		ArtifactID:       f.ArtifactID,
+		JobID:            f.JobID,
+		WorkerID:         f.WorkerID,
+		LeaseID:          f.LeaseID,
+		AttemptNumber:    f.AttemptNumber,
+		ExpectedRevision: f.Revision,
+		StorageProvider:  "local",
+		StorageKey:       "artifacts/sha256/post048/J-post-048-2",
+		SHA256:           "post048cafe",
+		SizeBytes:        2048,
+		MIMEType:         "video/mp4",
+		VerifiedAt:       time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("first FinalizeVerified (post-048): %v", err)
+	}
+	if art == nil || art.Status != "READY" {
+		t.Fatalf("artifact post-state wrong: %+v", art)
+	}
+
+	var jobStatus string
+	if err := db.QueryRow(`SELECT status FROM jobs WHERE job_id=?`, f.JobID).Scan(&jobStatus); err != nil {
+		t.Fatal(err)
+	}
+	if jobStatus != "SUCCEEDED" {
+		t.Fatalf("jobs.status after first finalize = %s; want SUCCEEDED", jobStatus)
+	}
+
+	// Second finalize: re-issue with matching worker / lease /
+	// original revision. ExpectedRevision=0 disables step 2's revision
+	// CAS so the only gate being asserted here is step 1's
+	// artifact_uploads status='FINALIZING' precondition — which step 7
+	// broke by flipping the upload to COMPLETED. Cleaner intent: the
+	// idempotency boundary under test is the artifact_uploads lock, not
+	// the jobs revision.
+	if _, err := fin.FinalizeVerified(ctx, artifacts.FinalizeVerifiedCommand{
+		UploadID:      f.UploadID,
+		ArtifactID:    f.ArtifactID,
+		JobID:         f.JobID,
+		WorkerID:      f.WorkerID,
+		LeaseID:       f.LeaseID,
+		AttemptNumber: f.AttemptNumber,
+	}); err == nil {
+		t.Fatal("expected ErrUploadStateInvalid on second finalize, got nil")
+	} else if !errors.Is(err, artifacts.ErrUploadStateInvalid) {
+		t.Errorf("expected ErrUploadStateInvalid on second finalize; got %v", err)
+	}
+
+	var deliveryCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM job_deliveries
+		WHERE artifact_id=? AND destination_id='primary'`, f.ArtifactID).Scan(&deliveryCount); err != nil {
+		t.Fatal(err)
+	}
+	if deliveryCount != 1 {
+		t.Errorf("job_deliveries primary count = %d; want 1 (UNIQUE on (artifact_id, destination_id))", deliveryCount)
+	}
+}
+
+// TestArtifactFinalize_Post048RejectsConcurrentFinalize confirms that
+// two goroutines racing to FinalizeVerified against the same job /
+// artifact produce exactly ONE SUCCEEDED row + ONE delivery row.
+//
+// The jobs CAS (status='RUNNING' only — post-048 identity-free) +
+// the upload CAS (FINALIZING + worker + lease + attempt) +
+// the UNIQUE (artifact_id, destination_id) on job_deliveries together
+// serialize concurrent finishers without producing partial state.
+//
+// This is the explicit post-migration-048 version of the design-doc
+// requirement "race test due finalize concorrenti (atteso un solo
+// SUCCEEDED)".
+func TestArtifactFinalize_Post048RejectsConcurrentFinalize(t *testing.T) {
+	db := openPost048TestDB(t)
+	fin := artifacts.NewSQLiteFinalizationRepository(db)
+
+	f := fixture{
+		JobID: "J-race", WorkerID: "worker-race", LeaseID: "lease-race",
+		Revision:      1,
+		AttemptNumber: 1,
+		ArtifactID:    "art-race", UploadID: "up-race",
+	}
+	seedPost048JobAndArtifact(t, db, f)
+
+	type outcome struct {
+		err error
+	}
+	results := make(chan outcome, 2)
+	ctx := context.Background()
+	cmd := artifacts.FinalizeVerifiedCommand{
+		UploadID:         f.UploadID,
+		ArtifactID:       f.ArtifactID,
+		JobID:            f.JobID,
+		WorkerID:         f.WorkerID,
+		LeaseID:          f.LeaseID,
+		AttemptNumber:    f.AttemptNumber,
+		ExpectedRevision: f.Revision,
+		StorageProvider:  "local",
+		StorageKey:       "artifacts/sha256/race",
+		SHA256:           "racehash",
+		SizeBytes:        4096,
+		MIMEType:         "video/mp4",
+		VerifiedAt:       time.Now().UTC(),
+	}
+	for i := 0; i < 2; i++ {
+		go func() {
+			_, err := fin.FinalizeVerified(ctx, cmd)
+			results <- outcome{err: err}
+		}()
+	}
+
+	var successes int
+	for i := 0; i < 2; i++ {
+		r := <-results
+		if r.err == nil {
+			successes++
+		}
+	}
+	if successes != 1 {
+		t.Fatalf("concurrent finalize successes = %d; want exactly 1", successes)
+	}
+
+	var jobStatus string
+	if err := db.QueryRow(`SELECT status FROM jobs WHERE job_id=?`, f.JobID).Scan(&jobStatus); err != nil {
+		t.Fatal(err)
+	}
+	if jobStatus != "SUCCEEDED" {
+		t.Errorf("jobs.status = %s; want SUCCEEDED (one of two finalizers won)", jobStatus)
+	}
+	var succ int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM jobs WHERE job_id=? AND status='SUCCEEDED'`, f.JobID).Scan(&succ); err != nil {
+		t.Fatal(err)
+	}
+	if succ != 1 {
+		t.Errorf("SUCCEEDED rows on jobs = %d; want 1 (no double promotion)", succ)
+	}
+	var deliveryCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM job_deliveries
+		WHERE artifact_id=? AND destination_id='primary'`, f.ArtifactID).Scan(&deliveryCount); err != nil {
+		t.Fatal(err)
+	}
+	if deliveryCount != 1 {
+		t.Errorf("job_deliveries primary count = %d; want 1 (no double-deliver)", deliveryCount)
+	}
+}

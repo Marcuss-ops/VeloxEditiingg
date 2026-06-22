@@ -67,6 +67,36 @@ func (l *LifecycleService) Fail(ctx context.Context, id, reason string, revision
 	return l.repo.Fail(ctx, id, reason, revision)
 }
 
+// RenewLease extends a currently-leased task's deadline (PR-05 follow-up).
+// Delegates to Repository.RenewLease after enforcing the empty-id guard.
+// expiry must be a non-zero time; passing time.Time{} returns an error to
+// prevent accidentally writing a NULL-equivalent RFC3339 string.
+func (l *LifecycleService) RenewLease(ctx context.Context, id, workerID, leaseID string, expiry time.Time, revision int) error {
+	if id == "" || workerID == "" || leaseID == "" {
+		return fmt.Errorf("taskgraph.RenewLease: missing identity")
+	}
+	if expiry.IsZero() {
+		return fmt.Errorf("taskgraph.RenewLease: empty expiry")
+	}
+	return l.repo.RenewLease(ctx, id, workerID, leaseID, expiry.UTC(), revision)
+}
+
+// RequeueExpiredLeases sweeps tasks whose lease has expired (PR-05 / §P0.4
+// reaper). Delegates to Repository.RequeueExpiredLeases, which performs the
+// bulk LEASED→READY / RUNNING→READY (with attempt_count += 1) transition
+// inside a single SQLite tx. NULL leases are skipped (never-expiring). The
+// caller-supplied nowRFC3339 lets the supervisor pin the sweep time so the
+// tick is deterministic across goroutines.
+func (l *LifecycleService) RequeueExpiredLeases(ctx context.Context, nowRFC3339 string, limit int) ([]string, error) {
+	if nowRFC3339 == "" {
+		return nil, fmt.Errorf("taskgraph.RequeueExpiredLeases: empty nowRFC3339")
+	}
+	if limit <= 0 {
+		limit = 100
+	}
+	return l.repo.RequeueExpiredLeases(ctx, nowRFC3339, limit)
+}
+
 // now normalizes a time to UTC. If t is zero, returns current time.
 func now(t time.Time) time.Time {
 	if t.IsZero() {

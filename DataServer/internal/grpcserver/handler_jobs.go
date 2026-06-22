@@ -143,26 +143,13 @@ func (h *Handler) handleTaskAccepted(workerID string, ta *pb.TaskAccepted) {
 		return
 	}
 
-	// Promote LEASED → RUNNING atomically.
+	// PR-04 / §9.5 invariant: Task LEASED → RUNNING AND Attempt INSERT
+	// commit in ONE transaction (AcceptTaskAtomic). The previous
+	// two-statement pattern (taskRepo.Start + taskAttemptRepo.Create)
+	// could leave a Task RUNNING with no active Attempt on crash;
+	// the combined method closes that gap.
 	ctx := context.Background()
 	attemptNum := offer.AttemptCount + 1
-	if err := h.taskRepo.Start(ctx, taskID, workerID, declaredLeaseID, attemptNum, offer.Revision); err != nil {
-		if errors.Is(err, store.ErrTransitionConflict) {
-			log.Printf("[GRPC] Worker %s accepted task %s but lease is stale (rev=%d) — rejecting",
-				workerID, taskID, offer.Revision)
-			sess.claimMu.Lock()
-			if sess.pendingTaskOffer != nil && sess.pendingTaskOffer.ID == taskID {
-				sess.pendingTaskOffer = nil
-			}
-			sess.claimMu.Unlock()
-			return
-		}
-		log.Printf("[GRPC] StartTask (LEASED→RUNNING) failed for %s (worker %s): %v — keeping pending offer for retry",
-			taskID, workerID, err)
-		return
-	}
-
-	// Create TaskAttempt record.
 	attempt := &taskattempts.TaskAttempt{
 		ID:            uuid.NewString(),
 		TaskID:        taskID,
@@ -172,9 +159,20 @@ func (h *Handler) handleTaskAccepted(workerID string, ta *pb.TaskAccepted) {
 		LeaseID:       declaredLeaseID,
 		Status:        taskattempts.AttemptStatusRunning,
 	}
-	if err := h.taskAttemptRepo.Create(ctx, attempt); err != nil {
-		log.Printf("[GRPC] Failed to create TaskAttempt for task %s: %v (task is RUNNING, attempt record missing)", taskID, err)
-		// Non-fatal: task is already RUNNING. Continue.
+	if err := h.taskRepo.AcceptTaskAtomic(ctx, attempt, offer.Revision); err != nil {
+		if errors.Is(err, store.ErrTransitionConflict) {
+			log.Printf("[GRPC] Worker %s accepted task %s but lease is stale (rev=%d) — rejecting",
+				workerID, taskID, offer.Revision)
+		} else {
+			log.Printf("[GRPC] AcceptTaskAtomic (LEASED→RUNNING + Attempt) failed for %s (worker %s): %v — keeping pending offer for retry",
+				taskID, workerID, err)
+		}
+		sess.claimMu.Lock()
+		if sess.pendingTaskOffer != nil && sess.pendingTaskOffer.ID == taskID {
+			sess.pendingTaskOffer = nil
+		}
+		sess.claimMu.Unlock()
+		return
 	}
 
 	// Send typed TaskLeaseGranted via sendCh.
@@ -271,35 +269,27 @@ func (h *Handler) handleTaskResult(workerID string, tr *pb.TaskResult) {
 		log.Printf("[GRPC] TaskResult for %s includes %d output artifacts", taskID, len(artifacts))
 	}
 
+	// PR-04 / §9.5 invariant: Task terminal transition (SUCCEEDED or
+	// FAILED) AND matching Attempt terminal transition commit in ONE
+	// transaction. The previous two-statement pattern (taskRepo.SetStatus|
+	// Fail + taskAttemptRepo.CompleteFinal) could leave Task terminal
+	// while the Attempt was still RUNNING if the process crashed between
+	// the two writes; TransitionTaskToTerminalAtomic closes that gap.
+	leaseID := tr.GetLeaseId()
+	if leaseID == "" {
+		log.Printf("[GRPC] TaskResult dropped: missing lease_id for task %s (worker %s)", taskID, workerID)
+		return
+	}
+
 	if status == "succeeded" {
-		// Mark task SUCCEEDED.
-		t, err := h.taskRepo.Get(ctx, taskID)
-		if err != nil || t == nil {
-			log.Printf("[GRPC] TaskResult for unknown task %s: %v", taskID, err)
+		if err := h.taskRepo.TransitionTaskToTerminalAtomic(ctx, taskID, workerID, leaseID, taskgraph.StatusSucceeded, taskattempts.AttemptStatusSucceeded, "", ""); err != nil {
+			log.Printf("[GRPC] TaskResult atomic success transition failed for %s: %v", taskID, err)
 			return
-		}
-		if err := h.taskRepo.SetStatus(ctx, taskID, taskgraph.StatusRunning, taskgraph.StatusSucceeded, t.Revision); err != nil {
-			log.Printf("[GRPC] TaskResult success transition failed for %s: %v", taskID, err)
-			return
-		}
-		// Update the attempt record.
-		if activeAttempt, err := h.taskAttemptRepo.GetActiveAttempt(ctx, taskID); err == nil && activeAttempt != nil {
-			_ = h.taskAttemptRepo.CompleteFinal(ctx, activeAttempt.ID, workerID, activeAttempt.LeaseID, taskattempts.AttemptStatusSucceeded, "", "", activeAttempt.ReportVersion)
 		}
 	} else {
-		// Task failed.
-		t, err := h.taskRepo.Get(ctx, taskID)
-		if err != nil || t == nil {
-			log.Printf("[GRPC] TaskResult for unknown task %s: %v", taskID, err)
+		if err := h.taskRepo.TransitionTaskToTerminalAtomic(ctx, taskID, workerID, leaseID, taskgraph.StatusFailed, taskattempts.AttemptStatusFailed, tr.GetErrorCode(), tr.GetErrorDetail()); err != nil {
+			log.Printf("[GRPC] TaskResult atomic fail transition failed for %s: %v", taskID, err)
 			return
-		}
-		if err := h.taskRepo.Fail(ctx, taskID, tr.GetErrorDetail(), t.Revision); err != nil {
-			log.Printf("[GRPC] TaskResult fail transition failed for %s: %v", taskID, err)
-			return
-		}
-		// Update the attempt record.
-		if activeAttempt, err := h.taskAttemptRepo.GetActiveAttempt(ctx, taskID); err == nil && activeAttempt != nil {
-			_ = h.taskAttemptRepo.CompleteFinal(ctx, activeAttempt.ID, workerID, activeAttempt.LeaseID, taskattempts.AttemptStatusFailed, tr.GetErrorCode(), tr.GetErrorDetail(), activeAttempt.ReportVersion)
 		}
 	}
 
@@ -311,8 +301,32 @@ func (h *Handler) handleTaskResult(workerID string, tr *pb.TaskResult) {
 }
 
 // maybeTransitionJob checks whether all tasks for a job are terminal and,
-// if so, transitions the job to SUCCEEDED (all succeeded) or FAILED (any failed).
-// PR #5: runs asynchronously after each task result to avoid blocking the gRPC loop.
+// if so, transitions the Job downstream. The terminal-flip path is
+// intentionally split:
+//
+//   - All tasks SUCCEEDED ⇒ write jobs.StatusAwaitingArtifact (NOT
+//     SUCCEEDED). The verified-finalization path in
+//     artifacts.FinalizeVerified is the SOLE legal writer of
+//     jobs.StatusSucceeded — it dispatches the actual flip once the
+//     worker-reported artifact is verified and registered. See
+//     internal/artifacts/scan_test.go for the audit lock.
+//
+//   - Any task FAILED or the Job is in a terminal-broken state ⇒
+//     write jobs.StatusFailed directly. FAILED is a terminal that
+//     can be written by this handler because it never had a
+//     counterpart concurrent writer — there is only one place that
+//     fails a Job intentionally (this helper), and there is no
+//     artifact path that flips a Job to FAILED.
+//
+//   - Already at AWAITING_ARTIFACT or terminal ⇒ no-op (idempotent
+//     re-call; the artifact path will close it).
+//
+// PR-02 closes audit §P0.2 (two competing writers of
+// jobs.StatusSucceeded) by reserving that flip exclusively for the
+// verified-finalization contract.
+//
+// PR #5: this helper runs asynchronously (via `go maybeTransitionJob`
+// from handleTaskResult) to avoid blocking the gRPC loop.
 func (h *Handler) maybeTransitionJob(ctx context.Context, jobID string) {
 	tasks, err := h.taskRepo.List(ctx, taskgraph.Filter{JobIDs: []string{jobID}})
 	if err != nil || len(tasks) == 0 {
@@ -336,10 +350,12 @@ func (h *Handler) maybeTransitionJob(ctx context.Context, jobID string) {
 		return // Some tasks still running; nothing to do.
 	}
 
-	// Determine the job's terminal status.
+	// Determine the Job's downstream status. PR-02: SUCCEEDED is
+	// reserved for the verified-finalization path. This helper writes
+	// only AWAITING_ARTIFACT (success path) or FAILED (failure path).
 	var newStatus jobs.Status
 	if allSucceeded {
-		newStatus = jobs.StatusSucceeded
+		newStatus = jobs.StatusAwaitingArtifact
 	} else {
 		newStatus = jobs.StatusFailed
 	}
@@ -352,6 +368,14 @@ func (h *Handler) maybeTransitionJob(ctx context.Context, jobID string) {
 	}
 	if job.Status.IsTerminal() {
 		return // Already terminal; nothing to do.
+	}
+	// PR-02 idempotency: if the Job is already AWAITING_ARTIFACT (e.g.
+	// a sibling task result fired this helper first), the verified-
+	// finalization path will close it. Avoid a spurious re-write that
+	// would trigger an unnecessary revision bump or a recurrence of
+	// pre-PR-02 sometimes-flicker behavior on rapid-fire results.
+	if job.Status == jobs.StatusAwaitingArtifact && newStatus == jobs.StatusAwaitingArtifact {
+		return
 	}
 
 	if err := h.jobsRepo.SetStatus(ctx, jobID, job.Status, newStatus); err != nil {

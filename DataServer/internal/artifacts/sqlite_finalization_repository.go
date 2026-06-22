@@ -206,20 +206,38 @@ func (r *SQLiteFinalizationRepository) FinalizeVerified(
 	}
 	nowStr := verifiedAt.UTC().Format(time.RFC3339)
 
-	// 2. jobs CAS: RUNNING + owner + lease [+ revision if provided] → SUCCEEDED.
+	// 2. jobs CAS: RUNNING|AWAITING_ARTIFACT [+ revision if provided]
+	// → SUCCEEDED.
+	//
+	// PR-01 (post-migration 048): the runtime columns assigned_to,
+	// lease_id, lease_expiry, retry_count were dropped from `jobs`.
+	// Identity is verified end-to-end in step 1 (artifact_uploads CAS
+	// chain: status='FINALIZING' + worker_id + lease_id + attempt_number)
+	// and in step 4 (job_attempts CAS chain: status=RENDER_FINISHED +
+	// worker_id + lease_id). The `jobs` row no longer carries
+	// worker/lease identity — the CAS here is identity-free, gated only
+	// on the state-machine and (optionally) the revision.
+	//
+	// Releasing the dropped columns in the SET clause was also dropped:
+	// they no longer exist on the table — fixing the post-048 runtime
+	// error "no such column: lease_id".
+	//
+	// PR-02: WHERE now allows status IN ('RUNNING', 'AWAITING_ARTIFACT').
+	// `AWAITING_ARTIFACT` is the post-task-completion state written by
+	// handleTaskResult.maybeTransitionJob when all tasks succeed; this
+	// finalizer is the SINGLE legal writer that closes the loop to
+	// SUCCEEDED (closed by audit §P0.2 per internal/artifacts/scan_test.go).
+	// The direct RUNNING → SUCCEEDED path is preserved for legacy
+	// workers without an artifact contract (defensive backward compat).
 	jobQuery := `
 		UPDATE jobs
 		SET status = 'SUCCEEDED',
 		    completed_at = ?,
 		    updated_at   = ?,
-		    lease_id     = NULL,
-		    lease_expiry = NULL,
 		    revision     = revision + 1
 		WHERE job_id = ?
-		  AND status = 'RUNNING'
-		  AND assigned_to = ?
-		  AND lease_id = ?`
-	jobArgs := []interface{}{nowStr, nowStr, cmd.JobID, cmd.WorkerID, cmd.LeaseID}
+		  AND status IN ('RUNNING', 'AWAITING_ARTIFACT')`
+	jobArgs := []interface{}{nowStr, nowStr, cmd.JobID}
 	if cmd.ExpectedRevision != 0 {
 		jobQuery += ` AND revision = ?`
 		jobArgs = append(jobArgs, cmd.ExpectedRevision)
