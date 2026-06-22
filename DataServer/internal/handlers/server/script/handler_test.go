@@ -135,9 +135,14 @@ func TestGenerateWithImages_EnqueuesSceneImageJob(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get job: %v", err)
 	}
+	// request_json is stored as a JSON STRING column in SQLiteJobRepository;
+	// store.GetJob returns the raw column value. Parse it before reading top-level keys.
 	var videoMode string
-	if req, ok := rawJob["request_json"].(map[string]interface{}); ok {
-		videoMode, _ = req["video_mode"].(string)
+	if reqStr, ok := rawJob["request_json"].(string); ok && reqStr != "" {
+		var req map[string]interface{}
+		if err := json.Unmarshal([]byte(reqStr), &req); err == nil {
+			videoMode, _ = req["video_mode"].(string)
+		}
 	}
 	if videoMode != scriptSceneMode {
 		t.Fatalf("want persisted video_mode %q, got %v", scriptSceneMode, videoMode)

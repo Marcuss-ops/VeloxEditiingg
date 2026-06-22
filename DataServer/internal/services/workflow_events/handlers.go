@@ -1,184 +1,82 @@
-// Package workflowevents — concrete outbox handlers that translate
-// domain events emitted inside the master into workflow.state mutations.
+// Package workflowevents — concrete outbox handlers. During the workflow→
+// taskgraph cutover (PR-operation 01, Fase 4a) the step-resolution path is
+// mediation-free: artifacts.FinalizeArtifactVerified writes the canonical
+// job/artifact/delivery state, and the supervisor's zombie-reaper tick
+// (jobs.LifecycleService.RequeueExpiredLeases + taskgraph DAG propagation)
+// covers dependent-release.
+//
+// The four handlers here are kept as inert receivers so the outbox.Registry
+// registers a binding for the legacy event types. Any residual row sitting
+// in outbox_events from before/during the cutover gets ACK'd without side
+// effects, draining the queue cleanly. New traffic does NOT emit
+// WORKFLOW_STEP_READY (POST routes through creatorflow.CreateJobWithPlan,
+// which uses store.AtomicJobTaskCreator + jobs.Writer directly) and does
+// NOT route JOB_SUCCEEDED through workflow state (artifacts handles the
+// canonical transition), so these handlers stay quiet in steady state.
+// Schedule: deletion booked for Fase 8 once outbox_events is purged of
+// all legacy rows (see docs/operations/01-workflow-taskgraph-cutover.md).
 package workflowevents
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
 
-	"velox-server/internal/jobs"
 	"velox-server/internal/outbox"
-	"velox-server/internal/workflow"
 )
 
-// StepReadyHandler reacts to WORKFLOW_STEP_READY. It creates a jobs
-// job with workflow_steps.input_json as the payload and writes the new
-// job_id back into workflow_steps.job_id, then transitions the step from
-// READY → RUNNING.
-//
-// Idempotency: if workflow_steps.job_id is already set OR the step is no
-// longer in READY (was cancelled or already advanced), the handler is a
-// no-op — re-dispatches are safe.
-type StepReadyHandler struct {
-	Wf workflow.Repository
-	Q  jobs.Writer
-}
+// StepReadyHandler — drain-only stub for WORKFLOW_STEP_READY. The event is
+// no longer emitted by production writers because the legacy
+// workflow.Repository.CreateRun path was decommissioned in the Fase 3
+// cutover (POST /api/v1/orchestrator/jobs routes through the canonical
+// creatorflow.CreateJobWithPlan + AtomicJobTaskCreator).
+type StepReadyHandler struct{}
 
+// EventType returns the canonical outbox topic.
 func (StepReadyHandler) EventType() string { return "WORKFLOW_STEP_READY" }
 
-func (h StepReadyHandler) Handle(ctx context.Context, e outbox.Event) error {
-	var p struct {
-		RunID   string `json:"run_id"`
-		StepID  string `json:"step_id"`
-		StepKey string `json:"step_key"`
-	}
-	if err := outbox.ParsePayload(e, &p); err != nil {
-		return err
-	}
-	if p.RunID == "" || p.StepID == "" {
-		return outbox.Permanent(fmt.Errorf("workflowStepReady: run_id/step_id missing"))
-	}
-
-	steps, err := h.Wf.ListSteps(ctx, p.RunID)
-	if err != nil {
-		return outbox.Transient(fmt.Errorf("workflowStepReady: list steps: %w", err))
-	}
-	var st *workflow.Step
-	for i := range steps {
-		if steps[i].StepID == p.StepID || (p.StepKey != "" && steps[i].StepKey == p.StepKey) {
-			st = &steps[i]
-			break
-		}
-	}
-	if st == nil {
-		return outbox.Permanent(fmt.Errorf("workflowStepReady: step not found"))
-	}
-	if st.JobID != nil && *st.JobID != "" {
-		// Already dispatched (idempotency)
-		return nil
-	}
-	if st.Status != workflow.StepStatusReady {
-		// Step may have been cancelled or is no longer dispatchable.
-		return nil
-	}
-
-	// Build the worker payload from step input + workflow context.
-	payload := map[string]any{
-		"step_key": st.StepKey,
-		"step_id":  st.StepID,
-		"run_id":   p.RunID,
-	}
-	for k, v := range st.Input {
-		payload[k] = v
-	}
-
-	// job_id = "{run_id}-{step_key}" so the JOB_SUCCEEDED handler can
-	// recover the run via the workflow_steps.job_id UNIQUE column.
-	jobID := fmt.Sprintf("%s-%s", p.RunID, st.StepKey)
-	raw, _ := json.Marshal(payload)
-	job := &jobs.Job{
-		ID:         jobID,
-		Status:     jobs.StatusPending,
-		MaxRetries: 3,
-		Payload:    string(raw),
-	}
-	if err := h.Q.Create(ctx, job); err != nil {
-		return outbox.Transient(fmt.Errorf("workflowStepReady: create job: %w", err))
-	}
-
-	attempt := st.Attempt + 1
-	if attempt < 1 {
-		attempt = 1
-	}
-	if err := h.Wf.MarkStepRunning(ctx, workflow.StartStep{
-		RunID:   p.RunID,
-		StepID:  st.StepID,
-		JobID:   jobID,
-		Attempt: attempt,
-	}); err != nil {
-		return outbox.Transient(fmt.Errorf("workflowStepReady: mark running: %w", err))
-	}
+// Handle acks the event without side-effects. ACK semantics: returning nil
+// tells the dispatcher the row is consumed; a FAILED terminal row would
+// pollute metrics, so the safe default during a cutover is to ACK.
+func (StepReadyHandler) Handle(_ context.Context, _ outbox.Event) error {
 	return nil
 }
 
-// JobSucceededHandler reacts to JOB_SUCCEEDED events.
-// The outbox row's aggregate_id is the job_id; the handler asks the
-// Repository to recover the owning workflow step via job_id.
-type JobSucceededHandler struct {
-	Wf workflow.Repository
-}
+// JobSucceededHandler — drain-only stub for JOB_SUCCEEDED. The artifact
+// finalization path already updates canonical job state via
+// jobs.LifecycleService.Complete + jobs.Writer.Update; the step-level
+// lookup that used to bridge into workflow.Repository (Wf.GetStepByJobID →
+// Wf.CompleteStepAndReleaseDependents) is obsolete after Fase 4.
+type JobSucceededHandler struct{}
 
+// EventType returns the canonical outbox topic.
 func (JobSucceededHandler) EventType() string { return "JOB_SUCCEEDED" }
 
-func (h JobSucceededHandler) Handle(ctx context.Context, e outbox.Event) error {
-	var p struct {
-		JobID   string         `json:"job_id"`
-		Output  map[string]any `json:"output,omitempty"`
-		Attempt int            `json:"attempt,omitempty"`
-	}
-	if err := outbox.ParsePayload(e, &p); err != nil {
-		return err
-	}
-	// aggregate_id is the canonical source; payload.JobID is a fallback.
-	jobID := e.AggregateID
-	if jobID == "" {
-		jobID = p.JobID
-	}
-	if jobID == "" {
-		return outbox.Permanent(fmt.Errorf("jobSucceeded: empty job_id"))
-	}
-
-	step, runID, err := h.Wf.GetStepByJobID(ctx, jobID)
-	if err != nil {
-		return outbox.Transient(fmt.Errorf("jobSucceeded: lookup: %w", err))
-	}
-	if step == nil {
-		// Job isn't part of any workflow run — silently no-op.
-		return nil
-	}
-	if step.Status == workflow.StepStatusSucceeded {
-		return nil
-	}
-
-	_, err = h.Wf.CompleteStepAndReleaseDependents(ctx, workflow.CompleteStep{
-		RunID:   runID,
-		StepID:  step.StepID,
-		Output:  p.Output,
-		Attempt: p.Attempt,
-	})
-	if err != nil {
-		return outbox.Transient(fmt.Errorf("jobSucceeded: complete step: %w", err))
-	}
+// Handle acks the event without side-effects.
+func (JobSucceededHandler) Handle(_ context.Context, _ outbox.Event) error {
 	return nil
 }
 
-// ArtifactReadyHandler reacts to ARTIFACT_READY. ARTIFACT_READY events
-// are emitted by FinalizeArtifactVerified inside the store layer.
-type ArtifactReadyHandler struct {
-	Wf workflow.Repository
-}
+// ArtifactReadyHandler — drain-only stub for ARTIFACT_READY. Pre-cutover
+// implementations logged + forwarded; today the canonical pipeline
+// consumes artifact readiness inside the artifact finalization transaction.
+type ArtifactReadyHandler struct{}
 
+// EventType returns the canonical outbox topic.
 func (ArtifactReadyHandler) EventType() string { return "ARTIFACT_READY" }
 
-func (ArtifactReadyHandler) Handle(ctx context.Context, e outbox.Event) error {
-	var p struct {
-		JobID      string `json:"job_id"`
-		ArtifactID string `json:"artifact_id"`
-	}
-	if err := outbox.ParsePayload(e, &p); err != nil {
-		return err
-	}
+// Handle acks the event without side-effects.
+func (ArtifactReadyHandler) Handle(_ context.Context, _ outbox.Event) error {
 	return nil
 }
 
-// DeliveryCreatedHandler reacts to DELIVERY_CREATED. Currently a no-op.
-type DeliveryCreatedHandler struct {
-	Wf workflow.Repository
-}
+// DeliveryCreatedHandler — drain-only stub for DELIVERY_CREATED. The
+// delivery runner (deliveries.DeliveryRunner) polls PENDING
+// job_deliveries directly; no fan-out needed.
+type DeliveryCreatedHandler struct{}
 
+// EventType returns the canonical outbox topic.
 func (DeliveryCreatedHandler) EventType() string { return "DELIVERY_CREATED" }
 
-func (DeliveryCreatedHandler) Handle(ctx context.Context, e outbox.Event) error {
+// Handle acks the event without side-effects.
+func (DeliveryCreatedHandler) Handle(_ context.Context, _ outbox.Event) error {
 	return nil
 }

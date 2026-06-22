@@ -1,7 +1,7 @@
 package main
 
 import (
-	"fmt"
+	"log"
 	"path/filepath"
 	"strings"
 
@@ -13,7 +13,6 @@ import (
 	"velox-server/internal/handlers/server/darkeditor"
 	"velox-server/internal/handlers/server/groups"
 	scripthandlers "velox-server/internal/handlers/server/script"
-	"velox-server/internal/workflow"
 )
 
 func corsMiddleware() gin.HandlerFunc {
@@ -111,128 +110,33 @@ func registerScriptRoutes(r *gin.Engine, cfg *config.Config, deps *serverDeps) {
 // registerOrchestratorRoutes under the /api/v1 admin sub-group. Kept as a
 // distinct entry point so caller sites that already hold an *gin.Engine +
 // *serverDeps (router.go bootstrap path) don't have to know the
-// workflow.Repository indirection.
+// orchestratorLegacyAdapter indirection.
+//
+// PR-operation 01 / Fase 3 — this function now builds the cutover adapter
+// (creatorflow.CreateJobWithPlan for POST, Job→Run projection for GET) and
+// falls back to logging if any of the Fase 3 wiring pieces is nil. Fase 8
+// deletes the file entirely.
 func registerOrchestratorAdminRoutes(r *gin.Engine, cfg *config.Config, deps *serverDeps) {
-	if deps == nil || deps.workflowRepo == nil {
+	if deps == nil {
+		log.Printf("[ORCHESTRATOR] admin routes disabled: nil serverDeps")
+		return
+	}
+	adapter, err := newOrchestratorLegacyAdapter(deps)
+	if err != nil {
+		log.Printf("[ORCHESTRATOR] admin routes disabled: %v", err)
 		return
 	}
 	v1Admin := r.Group("/api/v1")
 	v1Admin.Use(api.AdminAuthMiddleware(cfg))
-	registerOrchestratorRoutes(v1Admin, deps.workflowRepo)
+	registerOrchestratorRoutes(v1Admin, adapter)
 }
 
-func registerOrchestratorRoutes(v1Admin gin.IRoutes, repo workflow.Repository) {
-	if repo == nil {
+func registerOrchestratorRoutes(v1Admin gin.IRoutes, adapter *orchestratorLegacyAdapter) {
+	if adapter == nil {
 		return
 	}
-
-	v1Admin.POST("/orchestrator/jobs", func(c *gin.Context) {
-		var req struct {
-			JobID        string                   `json:"job_id"`
-			PipelineType string                   `json:"pipeline_type"`
-			Steps        []map[string]interface{} `json:"steps"`
-			Metadata     map[string]interface{}   `json:"metadata,omitempty"`
-		}
-		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(400, gin.H{"error": "invalid JSON: " + err.Error()})
-			return
-		}
-		if req.JobID == "" || len(req.Steps) == 0 {
-			c.JSON(400, gin.H{"error": "job_id and steps required"})
-			return
-		}
-
-		spec := workflow.WorkflowSpec{
-			RunID:        req.JobID,
-			WorkflowType: req.PipelineType,
-			Input:        req.Metadata,
-			Steps:        make([]workflow.WorkflowStepSpec, len(req.Steps)),
-		}
-		for i, s := range req.Steps {
-			stepKey, _ := s["step_id"].(string)
-			if stepKey == "" {
-				stepKey = fmt.Sprintf("step-%d", i)
-			}
-			stepName, _ := s["step_name"].(string)
-			if stepName == "" {
-				stepName = stepKey
-			}
-			jobType, _ := s["job_type"].(string)
-			payload, _ := s["payload"].(map[string]interface{})
-			depsRaw, _ := s["dependencies"].([]interface{})
-			var deps []string
-			for _, d := range depsRaw {
-				if ds, ok := d.(string); ok {
-					deps = append(deps, ds)
-				}
-			}
-			maxRetries := 2
-			if mr, ok := s["max_retries"].(float64); ok {
-				maxRetries = int(mr)
-			}
-
-			jobTypeBuf := jobType
-			stepKeyVal := stepName // step_key defaults to step_name for stability
-			_ = stepKey
-			_ = jobTypeBuf
-			spec.Steps[i] = workflow.WorkflowStepSpec{
-				StepKey:       stepKeyVal,
-				JobType:       jobType,
-				Input:         payload,
-				DependsOnKeys: deps,
-				MaxAttempts:   maxRetries,
-			}
-		}
-
-		run, err := repo.CreateRun(c.Request.Context(), spec)
-		if err != nil {
-			c.JSON(409, gin.H{"error": err.Error()})
-			return
-		}
-
-		c.JSON(201, gin.H{
-			"job_id":        run.RunID,
-			"workflow_type": run.WorkflowType,
-			"total_steps":   len(run.Input),
-			"steps_count":   len(spec.Steps),
-			"status":        string(run.Status),
-			"created_at":    run.CreatedAt,
-		})
-	})
-
-	v1Admin.GET("/orchestrator/jobs/:id", func(c *gin.Context) {
-		run, err := repo.GetRun(c.Request.Context(), c.Param("id"))
-		if err != nil {
-			c.JSON(500, gin.H{"error": err.Error()})
-			return
-		}
-		if run == nil {
-			c.JSON(404, gin.H{"error": "workflow run not found"})
-			return
-		}
-		steps, err := repo.ListSteps(c.Request.Context(), run.RunID)
-		if err != nil {
-			c.JSON(500, gin.H{"error": err.Error()})
-			return
-		}
-		c.JSON(200, gin.H{"run": run, "steps": steps})
-	})
-
-	v1Admin.GET("/orchestrator/jobs", func(c *gin.Context) {
-		runs, err := repo.ListRuns(c.Request.Context(), 100)
-		if err != nil {
-			c.JSON(500, gin.H{"error": err.Error()})
-			return
-		}
-		c.JSON(200, gin.H{"jobs": runs, "total": len(runs)})
-	})
-
-	v1Admin.GET("/orchestrator/stats", func(c *gin.Context) {
-		stats, err := repo.Stats(c.Request.Context())
-		if err != nil {
-			c.JSON(500, gin.H{"error": err.Error()})
-			return
-		}
-		c.JSON(200, stats)
-	})
+	v1Admin.POST("/orchestrator/jobs", adapter.postJob)
+	v1Admin.GET("/orchestrator/jobs/:id", adapter.getJob)
+	v1Admin.GET("/orchestrator/jobs", adapter.listJobs)
+	v1Admin.GET("/orchestrator/stats", adapter.getStats)
 }

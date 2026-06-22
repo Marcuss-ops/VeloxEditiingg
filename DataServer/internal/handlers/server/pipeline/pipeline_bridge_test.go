@@ -31,6 +31,14 @@ type testSubmitQueue struct {
 // can persist them in the dedicated SQLite columns + the
 // request_json._requirements sub-object. Tests that don't publish
 // Requirements still pass costmodel.DefaultRequirements().
+//
+// Maps the canonical top-level keys (video_name, job_run_id, job_type)
+// from the payload onto the Job struct fields so that
+// SQLiteJobRepository.Create writes the dedicated `video_name` / `run_id` /
+// `job_run_id` columns that production writers fill via toStoreParams.
+// Without this mapping the column values stay empty and tests asserting
+// `j.VideoName == "..."` / `j.RunID != ""` after `jobRepo.Get(...)`
+// fail with empty strings.
 func (q *testSubmitQueue) SubmitJob(ctx context.Context, jobID string, payload map[string]interface{}, req costmodel.JobRequirements) error {
 	raw, _ := json.Marshal(payload)
 	job := &jobs.Job{
@@ -39,6 +47,21 @@ func (q *testSubmitQueue) SubmitJob(ctx context.Context, jobID string, payload m
 		MaxRetries:  q.maxRetries,
 		Payload:     string(raw),
 		Requirements: req,
+	}
+	if v, ok := payload["video_name"].(string); ok {
+		job.VideoName = v
+	} else if v, ok := payload["title"].(string); ok {
+		job.VideoName = v
+	}
+	if v, ok := payload["job_run_id"].(string); ok && v != "" {
+		job.RunID = v
+	} else if v, ok := payload["run_id"].(string); ok && v != "" {
+		job.RunID = v
+	}
+	if v, ok := payload["job_type"].(string); ok && v != "" {
+		job.Type = v
+	} else {
+		job.Type = "process_video"
 	}
 	return q.writer.Create(ctx, job)
 }

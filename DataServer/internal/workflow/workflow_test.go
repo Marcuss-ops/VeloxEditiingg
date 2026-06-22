@@ -108,6 +108,7 @@ var workflowSchema = []string{
 
 func newRepo(t *testing.T) *workflow.SQLiteRepository {
 	t.Helper()
+	workflow.WriteEnabled = true // Fase 4b gate: allow write methods in boundary tests only
 	return workflow.NewSQLiteRepository(newTestDB(t))
 }
 

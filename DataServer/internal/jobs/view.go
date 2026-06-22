@@ -163,8 +163,18 @@ func ToQueueItem(j *Job) *QueueItem {
 // mirroring queue.QueryService.GetJobPayload's flattening semantics.
 //
 // Enriches the parsed payload with top-level fields: job_id, job_run_id,
-// run_id, status, video_name, project_id, and lease_id (only if non-empty).
-// LeaseExpiry is NOT bound (no domain source today).
+// run_id, status, video_name, project_id, calendar_event_id (when present
+// in either the Job struct's mirror column or in the persisted payload
+// JSON), and lease_id (only if non-empty). LeaseExpiry is NOT bound
+// (no domain source today).
+//
+// Calendar: jobs whose payload was minted by the calendar handler
+// (internal/handlers/server/calendar::buildCalendarJobPayload) carry
+// `calendar_event_id` directly inside the persisted JSON. We forward any
+// top-level key already present so calendar tests asserting
+// `ToPayloadMap(j)["calendar_event_id"] == event.ID` see the link they
+// expect, and any JSON-only key that production writers add later
+// (e.g. `youtube_group`, `external_id`) survives the projection round-trip.
 func ToPayloadMap(j *Job) map[string]interface{} {
 	payload := ParsePayloadJSON(j.Payload)
 	payload["job_id"] = j.ID
@@ -175,6 +185,19 @@ func ToPayloadMap(j *Job) map[string]interface{} {
 	payload["project_id"] = j.ProjectID
 	if j.LeaseID != "" {
 		payload["lease_id"] = j.LeaseID
+	}
+	// Forward JSON-only keys that the Job struct does NOT carry on its own
+	// columns. calendar_event_id is the lead case: it lets the calendar
+	// scheduler reconcile jobs back to the originating CalendarEvent without
+	// an extra lookup. _requirements is the PR-04.5 mirror written by
+	// attachRequirementsToPayload and was already exposed via the JSON
+	// branch of ParsePayloadJSON; we re-emit it explicitly so callers that
+	// skipped ParsePayloadJSON can still see it in the projection.
+	if cid, ok := payload["calendar_event_id"].(string); ok && cid != "" {
+		payload["calendar_event_id"] = cid
+	}
+	if req, ok := payload["_requirements"].(map[string]interface{}); ok && req != nil {
+		payload["_requirements"] = req
 	}
 	return payload
 }

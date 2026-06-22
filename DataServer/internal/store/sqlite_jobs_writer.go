@@ -109,10 +109,10 @@ func attachRequirementsToPayload(payload map[string]interface{}, req costmodel.J
 		payload = make(map[string]interface{})
 	}
 	payload[requirementsJSONKey] = map[string]interface{}{
-		"resource_class":    string(req.ResourceClass),
-		"temporal_mode":     string(req.TemporalMode),
-		"deterministic":     req.Deterministic,
-		"cacheable":         req.Cacheable,
+		"resource_class":     string(req.ResourceClass),
+		"temporal_mode":      string(req.TemporalMode),
+		"deterministic":      req.Deterministic,
+		"cacheable":          req.Cacheable,
 		"min_bandwidth_mbps": req.MinBandwidthMbps,
 	}
 	return payload
@@ -586,21 +586,21 @@ func toJobsJob(sj *JobRecord) *jobs.Job {
 	startedAt, _ := time.Parse(time.RFC3339, sj.StartedAt)
 	completedAt, _ := time.Parse(time.RFC3339, sj.CompletedAt)
 	return &jobs.Job{
-		ID:          sj.JobID,
-		Status:      jobs.Status(sj.Status),
-		VideoName:   sj.VideoName,
-		ProjectID:   sj.ProjectID,
-		RunID:       sj.RunID,
-		Attempts:    sj.RetryCount,
-		Revision:    sj.Revision,
-		WorkerID:    sj.AssignedTo,
-		MaxRetries:  sj.MaxRetries,
-		LeaseID:     sj.LeaseID,
-		StartedAt:   startedAt,
-		CompletedAt: completedAt,
-		CreatedAt:   createdAt,
-		UpdatedAt:   updatedAt,
-		Payload:     sj.PayloadJSON,
+		ID:           sj.JobID,
+		Status:       jobs.Status(sj.Status),
+		VideoName:    sj.VideoName,
+		ProjectID:    sj.ProjectID,
+		RunID:        sj.RunID,
+		Attempts:     sj.RetryCount,
+		Revision:     sj.Revision,
+		WorkerID:     sj.AssignedTo,
+		MaxRetries:   sj.MaxRetries,
+		LeaseID:      sj.LeaseID,
+		StartedAt:    startedAt,
+		CompletedAt:  completedAt,
+		CreatedAt:    createdAt,
+		UpdatedAt:    updatedAt,
+		Payload:      sj.PayloadJSON,
 		Requirements: reconstructRequirements(sj),
 	}
 }
@@ -647,11 +647,12 @@ func toStoreParams(j *jobs.Job) CreateJobParams {
 		return CreateJobParams{}
 	}
 	return CreateJobParams{
-		JobID:       j.ID,
-		VideoName:   j.VideoName,
-		ProjectID:   j.ProjectID,
-		RunID:       j.RunID,
-		MaxRetries:  j.MaxRetries,
+		JobID:        j.ID,
+		Payload:      jobs.ParsePayloadJSON(j.Payload),
+		VideoName:    j.VideoName,
+		ProjectID:    j.ProjectID,
+		RunID:        j.RunID,
+		MaxRetries:   j.MaxRetries,
 		Requirements: j.Requirements,
 	}
 }

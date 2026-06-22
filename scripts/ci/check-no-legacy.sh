@@ -43,6 +43,14 @@ diff_patterns=(
   'NewLegacy'                         # Stub left from de-legacy migration
   'DeprecatedService'                 # Same
   'local-workers.sh.deprecated'       # Replaced by data/ansible
+  # PR-operation 01 / Fase 1 — legacy workflow decompression. NEW imports of
+  # the legacy package are forbidden; canonical writer path is
+  # velox-server/internal/taskgraph + velox-server/internal/store.AtomicJobTaskCreator.
+  # Promotion to full_tree_patterns is intentionally deferred to Fase 8
+  # (actual package removal); the diff-scoped check freezes NEW introductions
+  # while grandfathering existing imports scheduled for Fase 3 migration.
+  # See OWNERSHIP.md "Legacy Workflow v2 state (DECOMMISSIONING)".
+  'velox-server/internal/workflow'
 )
 
 violations=0

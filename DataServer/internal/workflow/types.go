@@ -1,9 +1,20 @@
+// COMPATIBILITY:
+// Owner:        issue TO-BE-OPENED-in-Fase-8 (tracking ref: docs/operations/01-workflow-taskgraph-cutover.md; concrete #NNN to be assigned when removal PR opens)
+// Remove after: 2026-12-31
+// Read-only:    freeze — see OWNERSHIP.md "Legacy Workflow v2 state (DECOMMISSIONING)"
+//
 // Package workflow — domain types for the Workflow v2 runtime (PR 8 + PR 9).
 //
 // The package owns the structured representation of a multi-step pipeline.
 // Persistence lives in sqlite_repository.go; transitions live in repository.go.
-// Handlers that bridge outbox events into workflow.Run transitions live in
-// internal/services/workflow_events (registered with the outbox.Registry at startup).
+// Handlers that previously bridged outbox events into workflow.Run
+// transitions lived in internal/services/workflow_events. After the Fase 4
+// cutover those handlers are no-op drain stubs kept only so the
+// outbox.Registry has a binding for the four legacy topics during the
+// decommissioning window; step-resolution now flows through
+// taskgraph.Repository.DependentPropagation + jobs.LifecycleService tick
+// primitives rather than workflow.Repository. See
+// docs/operations/01-workflow-taskgraph-cutover.md.
 package workflow
 
 import "time"

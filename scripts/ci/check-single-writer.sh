@@ -66,6 +66,15 @@ scan "\.Finalize\("                          DataServer/internal/artifacts/
 scan "\.MarkFailed\("                        DataServer/internal/outbox/
 scan "\.MarkProcessed\("                     DataServer/internal/outbox/
 
+# PR-operation 01 / Fase 1: legacy Workflow v2 repository is DECOMMISSIONING.
+# See docs/architecture/OWNERSHIP.md "Legacy Workflow v2 state (DECOMMISSIONING)".
+# New callsites for these writer methods are forbidden outside DataServer/internal/workflow/.
+scan "\.CreateRun\("                          DataServer/internal/workflow/
+scan "\.MarkStepRunning\("                    DataServer/internal/workflow/
+scan "\.CompleteStepAndReleaseDependents\("   DataServer/internal/workflow/
+scan "\.FailStep\("                           DataServer/internal/workflow/
+scan "\.CancelRun\("                          DataServer/internal/workflow/
+
 # Queue facade (removed in PR "refactor(jobs): remove queue compatibility facade")
 # Reintroducing any queue alias or the internal/queue package is forbidden.
 scan '"velox-server/internal/queue"'            DataServer/NO_SUCH_DIR_DO_NOT_IMPORT_QUEUE/
@@ -85,6 +94,19 @@ for f in $shim_files; do
       "$f" >&2
     violations=$((violations + 1))
   fi
+  # PR-operation 01 / Fase 1: legacy workflow freeze. New shims inside
+  # internal/workflow/ whose `Remove after:` deadline is in the past fail CI.
+  case "$f" in
+    DataServer/internal/workflow/*)
+      deadline="$(grep -oE 'Remove after:[[:space:]]+[0-9]{4}-[0-9]{2}-[0-9]{2}' "$f" 2>/dev/null \
+                  | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}' | head -n1 || true)"
+      if [[ -n "$deadline" && "$deadline" < "$(date -u +%Y-%m-%d)" ]]; then
+        printf 'COMPATIBILITY deadline expired for legacy workflow shim: %s (was %s)\n' \
+          "$f" "$deadline" >&2
+        violations=$((violations + 1))
+      fi
+      ;;
+  esac
 done
 
 if [[ "$violations" -gt 0 ]]; then

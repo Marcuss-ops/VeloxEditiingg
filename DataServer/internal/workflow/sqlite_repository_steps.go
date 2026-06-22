@@ -1,3 +1,7 @@
+// COMPATIBILITY:
+// Owner:        issue TO-BE-OPENED-in-Fase-8 (tracking ref: docs/operations/01-workflow-taskgraph-cutover.md; concrete #NNN to be assigned when removal PR opens)
+// Remove after: 2026-12-31
+// Read-only:    freeze — see OWNERSHIP.md "Legacy Workflow v2 state (DECOMMISSIONING)"
 package workflow
 
 import (
@@ -10,6 +14,9 @@ import (
 // ── MarkStepRunning ───────────────────────────────────────────────────────
 
 func (r *SQLiteRepository) MarkStepRunning(ctx context.Context, cmd StartStep) error {
+	if !WriteEnabled {
+		return fmt.Errorf("workflow: MarkStepRunning decommissioned — use taskgraph.LifecycleService")
+	}
 	if cmd.RunID == "" || cmd.StepID == "" {
 		return fmt.Errorf("workflow: MarkStepRunRunID/stepID required")
 	}
@@ -64,6 +71,9 @@ func (r *SQLiteRepository) MarkStepRunning(ctx context.Context, cmd StartStep) e
 // ── CompleteStepAndReleaseDependents ──────────────────────────────────────
 
 func (r *SQLiteRepository) CompleteStepAndReleaseDependents(ctx context.Context, cmd CompleteStep) (*RunProgress, error) {
+	if !WriteEnabled {
+		return nil, fmt.Errorf("workflow: CompleteStepAndReleaseDependents decommissioned — use taskgraph.LifecycleService")
+	}
 	if cmd.RunID == "" || cmd.StepID == "" {
 		return nil, fmt.Errorf("workflow: CompleteStep RunID/StepID required")
 	}
@@ -215,6 +225,9 @@ func (r *SQLiteRepository) CompleteStepAndReleaseDependents(ctx context.Context,
 // ── FailStep ──────────────────────────────────────────────────────────────
 
 func (r *SQLiteRepository) FailStep(ctx context.Context, cmd FailStep) (*RunProgress, error) {
+	if !WriteEnabled {
+		return nil, fmt.Errorf("workflow: FailStep decommissioned — use taskgraph.LifecycleService")
+	}
 	if cmd.RunID == "" || cmd.StepID == "" {
 		return nil, fmt.Errorf("workflow: FailStep RunID/StepID required")
 	}

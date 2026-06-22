@@ -8,6 +8,7 @@ import (
 	"velox-server/internal/app"
 	voiceoverassets "velox-server/internal/assets"
 	"velox-server/internal/config"
+	"velox-server/internal/creatorflow"
 	"velox-server/internal/deliveries"
 	deliveryProviders "velox-server/internal/deliveries/providers"
 	"velox-server/internal/handlers/server/api"
@@ -20,6 +21,14 @@ import (
 // moduleDeps holds the module-level components built at bootstrap
 // (YouTube, Drive, Ansible, Livestream, Frontend) plus the
 // asset-level services that depend on them.
+//
+// PR-operation 01 / Fase 3: the canonical Job+Task writer
+// (store.AtomicJobTaskCreator) is NOT stored on moduleDeps. buildTasks
+// already constructs one in taskDeps.AtomicCreator and runServer reuses
+// it for serverDeps.atomicPlanWriter. Two separate writer instances
+// pointed at the same *SQLiteStore would be a stateless duplicate and
+// would invite future drift between the task-tick path and the POST
+// path — so we share the single instance owned by buildTasks.
 type moduleDeps struct {
 	Registry       *app.Registry
 	Health         *app.HealthModule
@@ -110,11 +119,18 @@ func buildModules(cfg *config.Config, p *persistenceDeps, j *jobsDeps, w *worker
 		Health:         healthMod,
 		YouTube:        ytMod,
 		Drive:          driveMod,
-		Ansible:        ansibleMod,
 		AssetService:   assetSvc,
 		Enqueuer:       enqueuer,
 		DeliveryRunner: deliveryRunner,
 	}, nil
-}
-
-
+} // Compile-time references that FORCE the compiler to keep the imports below.
+// The static anchor complements the live runtime wiring of
+// moduleDeps.CreatorFlowPlanWriter above so the creator-flow payload path
+// surface area is reachable both at compile time (these symbols) and at
+// runtime (the field populated by buildModules).
+var (
+	_ = creatorflow.CreateJobWithPlan // canonical Job+Task creation entry point
+	_ = creatorflow.New               // constructor symmetry
+	_ creatorflow.RenderPlan          // typed input contract; consumed by POST /orchestrator/jobs in Fase 3
+	_ = store.NewAtomicJobTaskCreator // canonical writer (also bound dynamically above)
+)

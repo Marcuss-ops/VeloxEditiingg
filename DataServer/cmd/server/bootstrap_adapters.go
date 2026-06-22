@@ -6,8 +6,6 @@ import (
 
 	"velox-server/internal/costmodel"
 	"velox-server/internal/jobs"
-	"velox-server/internal/outbox"
-	"velox-server/internal/workflow"
 )
 
 // writerAdapter wraps a jobs.Writer to satisfy enqueue.JobQueue.
@@ -36,29 +34,14 @@ func (a *writerAdapter) SubmitJob(ctx context.Context, jobID string, payload map
 	}
 	raw, _ := json.Marshal(payload)
 	job := &jobs.Job{
-		ID:          jobID,
-		Status:      jobs.StatusPending,
-		VideoName:   videoName,
-		ProjectID:   projectID,
-		RunID:       runID,
-		MaxRetries:  3,
-		Payload:     string(raw),
+		ID:           jobID,
+		Status:       jobs.StatusPending,
+		VideoName:    videoName,
+		ProjectID:    projectID,
+		RunID:        runID,
+		MaxRetries:   3,
+		Payload:      string(raw),
 		Requirements: req,
 	}
 	return a.w.Create(ctx, job)
-}
-
-// outboxWorkflowAdapter adapts *outbox.Store to the workflow.OutboxWriter interface.
-type outboxWorkflowAdapter struct {
-	store *outbox.Store
-}
-
-func (a *outboxWorkflowAdapter) Enqueue(ctx context.Context, ev workflow.WorkflowOutboxEvent) error {
-	_, err := a.store.Insert(ctx, nil, outbox.InsertParams{
-		AggregateType: "workflow",
-		AggregateID:   ev.AggregateID,
-		EventType:     ev.EventType,
-		Payload:       ev.Payload,
-	})
-	return err
 }

@@ -1,3 +1,8 @@
+// COMPATIBILITY:
+// Owner:        issue TO-BE-OPENED-in-Fase-8 (tracking ref: docs/operations/01-workflow-taskgraph-cutover.md; concrete #NNN to be assigned when removal PR opens)
+// Remove after: 2026-12-31
+// Read-only:    freeze — see OWNERSHIP.md "Legacy Workflow v2 state (DECOMMISSIONING)"
+//
 // Package workflow/migrate — CLI command
 //
 //	velox-server migrate workflows-v2 --dry-run

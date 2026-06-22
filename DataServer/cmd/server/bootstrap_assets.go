@@ -10,15 +10,17 @@ import (
 	"velox-server/internal/deliveries"
 	"velox-server/internal/outbox"
 	workflowevents "velox-server/internal/services/workflow_events"
-	"velox-server/internal/workflow"
 )
 
-// assetDeps holds the artifact pipeline and workflow components built
-// before modules (YouTube, Drive) are available.  The AssetService and
-// Enqueuer are built LATER in buildModules because they require the
-// Drive/YouTube integration services for typed-resolver construction.
+// assetDeps holds the artifact pipeline components built before modules
+// (YouTube, Drive) are available. The AssetService and Enqueuer are built
+// LATER in buildModules because they require the Drive/YouTube integration
+// services for typed-resolver construction.
+//
+// Fase 4c: WorkflowRepo (workflow.Repository) removed — write methods are
+// gated (Fase 4b) and the 4 outbox handlers are inert no-op stubs (Fase 4a).
+// No runtime path consumes a workflow.Repository any more.
 type assetDeps struct {
-	WorkflowRepo     workflow.Repository
 	ArtifactSvc      *artifacts.Service
 	ChunkedUploadSvc *artifacts.ChunkedUploadService
 	Reconciler       *artifacts.Reconciler // mandatory — buildAssets fails fast if init fails
@@ -36,10 +38,6 @@ type assetDeps struct {
 // calling wireAssetServiceAndEnqueuer below.
 func buildAssets(cfg *config.Config, p *persistenceDeps, j *jobsDeps) (*assetDeps, error) {
 	_ = cfg
-
-	// ── Workflow repository ──────────────────────────────────────────
-	workflowRepo := workflow.NewSQLiteRepository(p.SQLite.DB())
-	workflowRepo.SetOutbox(&outboxWorkflowAdapter{store: p.Outbox})
 
 	// ── Artifacts.Service (sole SUCCEEDED gate) ─────────────────────
 	planResolver := deliveries.NewSQLiteDeliveryPlanResolver(p.SQLite.DB())
@@ -78,10 +76,10 @@ func buildAssets(cfg *config.Config, p *persistenceDeps, j *jobsDeps) (*assetDep
 
 	// ── Outbox registry + dispatcher ────────────────────────────────
 	outboxRegistry := outbox.NewRegistry()
-	stepReady := workflowevents.StepReadyHandler{Wf: workflowRepo, Q: j.Repository}
-	jobSucceeded := workflowevents.JobSucceededHandler{Wf: workflowRepo}
-	artifactReady := workflowevents.ArtifactReadyHandler{Wf: workflowRepo}
-	deliveryCreated := workflowevents.DeliveryCreatedHandler{Wf: workflowRepo}
+	stepReady := workflowevents.StepReadyHandler{}
+	jobSucceeded := workflowevents.JobSucceededHandler{}
+	artifactReady := workflowevents.ArtifactReadyHandler{}
+	deliveryCreated := workflowevents.DeliveryCreatedHandler{}
 	if err := outboxRegistry.Register(stepReady); err != nil {
 		return nil, fmt.Errorf("outbox register stepReady: %w", err)
 	}
@@ -102,7 +100,6 @@ func buildAssets(cfg *config.Config, p *persistenceDeps, j *jobsDeps) (*assetDep
 	})
 
 	return &assetDeps{
-		WorkflowRepo:     workflowRepo,
 		ArtifactSvc:      artifactSvc,
 		ChunkedUploadSvc: chunkedSvc,
 		Reconciler:       reconciler,

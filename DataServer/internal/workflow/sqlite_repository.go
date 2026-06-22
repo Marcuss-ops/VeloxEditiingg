@@ -1,3 +1,8 @@
+// COMPATIBILITY:
+// Owner:        issue TO-BE-OPENED-in-Fase-8 (tracking ref: docs/operations/01-workflow-taskgraph-cutover.md; concrete #NNN to be assigned when removal PR opens)
+// Remove after: 2026-12-31
+// Read-only:    freeze — see OWNERSHIP.md "Legacy Workflow v2 state (DECOMMISSIONING)"
+//
 // Package workflow/sqlite_repository — SQLite-backed Implementation of
 // Repository (see repository.go). The implementation uses BEGIN IMMEDIATE
 // for every mutating method so concurrent dispatchers do not race on the
@@ -27,6 +32,14 @@ import (
 	"time"
 )
 
+// WriteEnabled controls whether legacy write methods (CreateRun,
+// MarkStepRunning, CompleteStepAndReleaseDependents, FailStep, CancelRun)
+// are accessible. Defaults to false — runtime callers are blocked. Set to
+// true only in boundary tests (internal/workflow/workflow_test.go) since
+// production code must use creatorflow / taskgraph paths instead (Fase 3
+// cutover). Fase 8 will delete this gate and the write methods entirely.
+var WriteEnabled = false
+
 // SQLiteRepository is the production Repository implementation.
 type SQLiteRepository struct {
 	db    *sql.DB
@@ -53,6 +66,9 @@ func (r *SQLiteRepository) SetClock(fn func() time.Time) {
 // ── CreateRun ─────────────────────────────────────────────────────────────
 
 func (r *SQLiteRepository) CreateRun(ctx context.Context, spec WorkflowSpec) (*Run, error) {
+	if !WriteEnabled {
+		return nil, fmt.Errorf("workflow: CreateRun decommissioned — use creatorflow.CreateJobWithPlan")
+	}
 	if spec.RunID == "" {
 		return nil, fmt.Errorf("workflow: empty run_id")
 	}

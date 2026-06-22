@@ -33,8 +33,8 @@ import (
 	"velox-server/internal/jobs/enqueue"
 	"velox-server/internal/outbox"
 	"velox-server/internal/store"
+	"velox-server/internal/taskgraph"
 	workersreg "velox-server/internal/workers"
-	"velox-server/internal/workflow"
 )
 
 // ── Legacy mega-struct kept for test + router compatibility ──────────────
@@ -53,7 +53,6 @@ type serverDeps struct {
 	ansibleModule       *app.AnsibleModule
 	youtubeModule       *app.YouTubeModule
 	driveModule         *app.DriveModule
-	workflowRepo        workflow.Repository
 	outboxStore         *outbox.Store
 	outboxDispatcher    *outbox.Dispatcher
 	deliveryRunner      *deliveries.DeliveryRunner
@@ -65,6 +64,25 @@ type serverDeps struct {
 	assetService        *voiceoverassets.AssetService
 	enqueuer            *enqueue.Enqueuer
 	taskDeps            *taskDeps
+
+	// PR-operation 01 / Fase 3 — wiring for the orchestrator legacy adapter.
+	// atomicPlanWriter is the AtomicJobTaskCreator that backs
+	// creatorflow.CreateJobWithPlan for POST /orchestrator/jobs.
+	// jobsRepo is the canonical jobs.Writer/Reader (used for pre-check +
+	// list + Get). tasksRepo is the canonical taskgraph.Reader used by
+	// the GET projection adapter. Initialised in buildServerDeps and
+	// runServer from taskDeps + buildPersistence; nil-safe checks live in
+	// newOrchestratorLegacyAdapter so the legacy POST can be staged vs.
+	// the new POST without breaking the build.
+	atomicPlanWriter *store.AtomicJobTaskCreator
+	// jobsRepo is jobs.Reader (NOT Writer) — the orchestratorLegacyAdapter
+	// only needs the canonical read surface (Get/List/Counts) plus an
+	// idempotency pre-check inside creatorflow.CreateJobWithPlan. Writes
+	// go through store.AtomicJobTaskCreator on atomicPlanWriter. j.Repository
+	// implements both Reader and Writer, so we keep the field as jobs.Reader
+	// and drop the unused Write surface from the adapter dependency graph.
+	jobsRepo  jobs.Reader
+	tasksRepo taskgraph.Reader
 }
 
 // ── Sentinels ─────────────────────────────────────────────────────────────
@@ -107,7 +125,6 @@ func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
 		sqliteStore:         p.SQLite,
 		workerUpdateHandler: w.UpdateHandler,
 		workerLifecycle:     w.Lifecycle,
-		workflowRepo:        a.WorkflowRepo,
 		outboxStore:         p.Outbox,
 		outboxDispatcher:    a.OutboxDispatcher,
 		blobStore:           p.BlobStore,
@@ -115,6 +132,14 @@ func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
 		cmdMgr:              w.CommandManager,
 		lifecycleSvc:        j.Lifecycle,
 		taskDeps:            t,
+		// PR-operation 01 / Fase 3 — wire the canonical writer + canonical
+		// reader surface into the orchestrator legacy adapter. Until a
+		// future PR threads *tasksDeps through buildServerDeps, buildTasks
+		// has already produced t.AtomicCreator and t.TaskRepository, both
+		// pointing at the same *SQLiteStore.
+		atomicPlanWriter: t.AtomicCreator,
+		jobsRepo:         j.Repository,
+		tasksRepo:        t.TaskRepository,
 	}, nil
 }
 
@@ -170,7 +195,6 @@ func runServer(cfg *config.Config) error {
 		ansibleModule:       m.Ansible,
 		youtubeModule:       m.YouTube,
 		driveModule:         m.Drive,
-		workflowRepo:        a.WorkflowRepo,
 		outboxStore:         p.Outbox,
 		outboxDispatcher:    a.OutboxDispatcher,
 		deliveryRunner:      m.DeliveryRunner,
@@ -182,6 +206,14 @@ func runServer(cfg *config.Config) error {
 		assetService:        m.AssetService,
 		enqueuer:            m.Enqueuer,
 		taskDeps:            t,
+		// PR-operation 01 / Fase 3 — wire the canonical writer + readers
+		// into the orchestrator legacy adapter. moduleDeps.CreatorFlowPlanWriter
+		// is the bind we exposed in Fase 2; t.AtomicCreator is the same
+		// writer as taskDeps.AtomicCreator (both wrap *SQLiteStore, no
+		// state of their own).
+		atomicPlanWriter: t.AtomicCreator,
+		jobsRepo:         j.Repository,
+		tasksRepo:        t.TaskRepository,
 	}
 
 	// 3. Build router
@@ -262,7 +294,7 @@ func runServer(cfg *config.Config) error {
 	}
 
 	// 7. Background supervisor (started in a goroutine, signals done via channel)
-	supervisor, err := buildSupervisor(a, m, j, p, w)
+	supervisor, err := buildSupervisor(a, m, j, p, w, t)
 	if err != nil {
 		return err
 	}
@@ -313,7 +345,7 @@ func runServer(cfg *config.Config) error {
 
 // buildSupervisor registers all background runners, including the
 // manifest auto-generation as a one-shot fire-and-forget runner.
-func buildSupervisor(a *assetDeps, m *moduleDeps, j *jobsDeps, p *persistenceDeps, w *workerDeps) (*BackgroundSupervisor, error) {
+func buildSupervisor(a *assetDeps, m *moduleDeps, j *jobsDeps, p *persistenceDeps, w *workerDeps, t *taskDeps) (*BackgroundSupervisor, error) {
 	sup := NewBackgroundSupervisor()
 
 	if a.OutboxDispatcher != nil {
@@ -374,6 +406,31 @@ func buildSupervisor(a *assetDeps, m *moduleDeps, j *jobsDeps, p *persistenceDep
 			return nil, fmt.Errorf("supervisor register artifact-reconciler: %w", err)
 		}
 	}
+	if t.TaskLifecycle != nil {
+		if err := sup.Register(RunnerFunc{
+			name: "taskgraph-dispatcher",
+			fn: func(ctx context.Context) error {
+				ticker := time.NewTicker(2 * time.Second)
+				defer ticker.Stop()
+				for {
+					select {
+					case <-ctx.Done():
+						return ctx.Err()
+					case <-ticker.C:
+						n, err := t.TaskLifecycle.TickReadiness(ctx, 100)
+						if err != nil {
+							log.Printf("[TASKGRAPH] TickReadiness error: %v", err)
+						} else if n > 0 {
+							log.Printf("[TASKGRAPH] TickReadiness: %d PENDING→READY", n)
+						}
+					}
+				}
+			},
+		}); err != nil {
+			return nil, fmt.Errorf("supervisor register taskgraph-dispatcher: %w", err)
+		}
+	}
+
 	// Manifest auto-generation: one-shot fire-and-forget runner.
 	// Runs once on startup and exits; the supervisor treats it as
 	// a regular runner so it benefits from the same lifecycle.

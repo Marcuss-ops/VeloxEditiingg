@@ -74,3 +74,35 @@ func now(t time.Time) time.Time {
 	}
 	return t.UTC()
 }
+
+// TickReadiness evaluates PENDING tasks and transitions them to READY
+// when their dependencies are resolved. In the single-task model (each Job
+// owns exactly one Task with no predecessors), ALL PENDING tasks are
+// unconditionally transitioned to READY — the legacy WORKFLOW_STEP_READY
+// outbox event drove this, and this tick is its canonical replacement.
+//
+// Returns the number of tasks transitioned. limit caps how many tasks are
+// scanned per tick; 0 uses the safe default of 100.
+func (l *LifecycleService) TickReadiness(ctx context.Context, limit int) (int, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	tasks, err := l.repo.List(ctx, Filter{
+		Statuses: []Status{StatusPending},
+		Limit:    limit,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("taskgraph.TickReadiness: list PENDING: %w", err)
+	}
+	var transitioned int
+	for _, t := range tasks {
+		// Single-task model: no dependency check needed yet.
+		// Future multi-task graphs will verify t.DependsOn are all SUCCEEDED.
+		if err := l.repo.SetStatus(ctx, t.ID, StatusPending, StatusReady, t.Revision); err != nil {
+			// CAS failure (another goroutine raced) is non-fatal — skip.
+			continue
+		}
+		transitioned++
+	}
+	return transitioned, nil
+}
