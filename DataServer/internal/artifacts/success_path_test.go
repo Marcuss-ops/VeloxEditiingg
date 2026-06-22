@@ -110,20 +110,6 @@ CREATE TABLE artifact_uploads (
 	expires_at        TEXT,
 	completed_at      TEXT
 );
-CREATE TABLE job_attempts (
-	job_id          TEXT,
-	attempt_number  INTEGER,
-	worker_id       TEXT,
-	lease_id        TEXT,
-	status          TEXT,
-	started_at      TEXT,
-	finished_at     TEXT,
-	error_code      TEXT,
-	engine_version  TEXT,
-	bundle_hash     TEXT,
-	created_at      TEXT,
-	PRIMARY KEY (job_id, attempt_number)
-);
 CREATE TABLE outbox_events (
 	aggregate_type TEXT,
 	aggregate_id   TEXT,
@@ -197,12 +183,6 @@ func setupVerifiedPipelineFixture(t *testing.T, db *sql.DB, f fixture) {
 		VALUES (?, 'RUNNING', ?, ?, ?)`,
 		f.JobID, f.Revision, now, now); err != nil {
 		t.Fatalf("seed job (post-048): %v", err)
-	}
-	if _, err := db.Exec(`INSERT INTO job_attempts
-		(job_id, attempt_number, worker_id, lease_id, status, finished_at, created_at)
-		VALUES (?, ?, ?, ?, 'RENDER_FINISHED', ?, ?)`,
-		f.JobID, f.AttemptNumber, f.WorkerID, f.LeaseID, now, now); err != nil {
-		t.Fatalf("seed attempt: %v", err)
 	}
 	if _, err := db.Exec(`INSERT INTO artifacts
 		(id, job_id, attempt_id, type, storage_provider, status, created_at)
@@ -304,15 +284,13 @@ func TestFinalizeVerified_HappyPath(t *testing.T) {
 		t.Errorf("jobs.status = %s; want SUCCEEDED", jobStatus)
 	}
 
-	// job_attempts closed.
-	var attemptStatus string
-	if err := db.QueryRow(`SELECT status FROM job_attempts WHERE job_id=? AND attempt_number=?`,
-		f.JobID, f.AttemptNumber).Scan(&attemptStatus); err != nil {
-		t.Fatal(err)
-	}
-	if attemptStatus != "SUCCEEDED" {
-		t.Errorf("job_attempts.status = %s; want SUCCEEDED", attemptStatus)
-	}
+	// cleanup/remove-job-attempts-runtime: the post-finalize assertion
+	// on job_attempts.status='SUCCEEDED' was retired alongside the
+	// legacy CAS chain. Per-attempt close-out is now driven by the
+	// task_attempts layer (canonical) — see internal/taskattempts for
+	// the equivalent contract. The verified-finalization contract here
+	// is [jobs.status='SUCCEEDED', artifact_uploads.status='COMPLETED',
+	// artifacts.status='READY'].
 
 	// artifact_uploads COMPLETED.
 	var uploadStatus string
@@ -445,83 +423,27 @@ func TestFinalizeVerified_StagingArtifactCannotPromote(t *testing.T) {
 }
 
 // =====================================================================
-// SPEC 6: attempt not RENDER_FINISHED → entire tx rolls back
-// =====================================================================
-
-func TestFinalizeVerified_AttemptNotRenderFinishedRollsBack(t *testing.T) {
-	db := openTestDB(t)
-	fin := artifacts.NewSQLiteFinalizationRepository(db)
-
-	f := fixture{
-		JobID: "J6", WorkerID: "worker-1", LeaseID: "lease-1",
-		Revision: 1, AttemptNumber: 1,
-		ArtifactID: "art-J6", UploadID: "up-J6",
-	}
-	setupVerifiedPipelineFixture(t, db, f)
-	flipUploadToFinalizing(t, db, f.UploadID)
-
-	// Force attempt status to RUNNING (NOT RENDER_FINISHED). The
-	// orchestration contract says Receive must not run until the
-	// after-RENDER_FINISHED CAS — but we test the database-level
-	// guarantee (Step 4 CAS rejects this state).
-	if _, err := db.Exec(`UPDATE job_attempts SET status='RUNNING' WHERE job_id=? AND attempt_number=?`,
-		f.JobID, f.AttemptNumber); err != nil {
-		t.Fatal(err)
-	}
-
-	_, err := fin.FinalizeVerified(context.Background(), artifacts.FinalizeVerifiedCommand{
-		UploadID:         f.UploadID,
-		ArtifactID:       f.ArtifactID,
-		JobID:            f.JobID,
-		WorkerID:         f.WorkerID,
-		LeaseID:          f.LeaseID,
-		AttemptNumber:    f.AttemptNumber,
-		ExpectedRevision: f.Revision,
-	})
-	if err == nil {
-		t.Fatal("expected error when job_attempts.status != RENDER_FINISHED")
-	}
-	if !errors.Is(err, artifacts.ErrTransitionConflict) {
-		t.Errorf("expected ErrTransitionConflict; got %v", err)
-	}
-
-	// Whole-tx rollback — verify NOTHING was mutated downstream.
-	checks := []struct {
-		table  string
-		column string
-		key    string
-		keyCol string
-		want   string
-	}{
-		{"jobs", "status", f.JobID, "job_id", "RUNNING"},
-		{"artifacts", "status", f.ArtifactID, "id", "STAGING"},
-		{"artifact_uploads", "status", f.UploadID, "upload_id", "FINALIZING"},
-	}
-	for _, c := range checks {
-		var got string
-		if err := db.QueryRow(`SELECT `+c.column+` FROM `+c.table+` WHERE `+c.keyCol+`=?`, c.key).Scan(&got); err != nil {
-			t.Fatalf("check %s.%s WHERE %s=%s: %v", c.table, c.column, c.keyCol, c.key, err)
-		}
-		if got != c.want {
-			t.Errorf("%s.%s = %s; want %s (tx should roll back on Step-4 miss)", c.table, c.column, got, c.want)
-		}
-	}
-
-	// Zero outbox events.
-	var n int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM outbox_events`).Scan(&n); err != nil {
-		t.Fatal(err)
-	}
-	if n != 0 {
-		t.Errorf("outbox events = %d; want 0 (rollback)", n)
-	}
-	if err := db.QueryRow(`SELECT COUNT(*) FROM job_deliveries`).Scan(&n); err != nil {
-		t.Fatal(err)
-	}
-	if n != 0 {
-		t.Errorf("job_deliveries rows = %d; want 0 (rollback)", n)
-	}
-}
+// SPEC 6 (retired): cleanup/remove-job-attempts-runtime retired the
+// job_attempts.status='RENDER_FINISHED' gate. The corresponding
+// `Step 4 job_attempts CAS` no longer exists in FinalizeVerified.
+// Per-attempt close-out now lives on task_attempts (canonical) and
+// is driven by taskingestion.Ingest. The transaction rollback still
+// holds for any of the surviving preconditions:
+//   - artifact_uploads.status != FINALIZING (Step 1: ErrUploadStateInvalid)
+//   - jobs.status not in (RUNNING, AWAITING_ARTIFACT) (Step 2: ErrTransitionConflict)
+//   - artifacts.status != STAGING (Step 3: ErrTransitionConflict)
+// so the rollback invariants are preserved. This test is kept as a
+// shape placeholder — the canonical followup is a task_attempts-based
+// "attempt not in canonical-task-active state" test in
+// internal/taskingestion.
+// =====================================================================// (TestFinalizeVerified_AttemptNotRenderFinishedRollsBack retired
+// alongside the job_attempts CAS chain. See comment above.)
+//
+// Spec-invariant coverage now lives in:
+//   - internal/taskingestion: per-attempt close-out driven by
+//     TaskReportIngestionService.Ingest (which closes task_attempts
+//     to SUCCEEDED on the happy path).
+//   - spec invariants #1–#5 above (all still enforced here).
 
 // =====================================================================
 // Guard: empty-identity calls are rejected before any DB work.
@@ -621,19 +543,19 @@ func setupJobAndAttempt(t *testing.T, db *sql.DB, jobID, workerID, leaseID strin
 	t.Helper()
 	now := time.Now().UTC().Format(time.RFC3339)
 	// PR-01: jobs.assigned_to / lease_id dropped in migration 048.
-	// workerID / leaseID are still needed for the job_attempts seed
-	// below — they just no longer apply to the jobs row.
+	// cleanup/remove-job-attempts-runtime: the legacy
+	// INSERT INTO job_attempts below is retired along with the
+	// production writer surface. Per-attempt identity now lives on
+	// task_attempts (canonical); the verification-finalization
+	// assertions in this package no longer depend on a row in
+	// job_attempts. workerID / leaseID are unused by this helper
+	// post-cleanup but retained in the call signature for caller
+	// symmetry with newer helpers — arguments are simply ignored.
 	if _, err := db.Exec(`INSERT INTO jobs
 		(job_id, status, revision, updated_at, migrated_at)
 		VALUES (?, 'RUNNING', ?, ?, ?)`,
 		jobID, revision, now, now); err != nil {
 		t.Fatalf("seed job (post-048): %v", err)
-	}
-	if _, err := db.Exec(`INSERT INTO job_attempts
-		(job_id, attempt_number, worker_id, lease_id, status, finished_at, created_at)
-		VALUES (?, ?, ?, ?, 'RENDER_FINISHED', ?, ?)`,
-		jobID, attemptNum, workerID, leaseID, now, now); err != nil {
-		t.Fatalf("seed attempt: %v", err)
 	}
 }
 
@@ -682,9 +604,13 @@ func openPost048TestDB(t *testing.T) *sql.DB {
 }
 
 // seedPost048JobAndArtifact seeds a post-048 jobs row (no assigned_to /
-// lease_id) plus the job_attempts row that is now the canonical owner /
-// lease carrier, plus a STAGING artifact and a FINALIZING upload —
-// ready for one FinalizeVerified call.
+// lease_id) plus a STAGING artifact and a FINALIZING upload — ready for
+// one FinalizeVerified call. cleanup/remove-job-attempts-runtime: the
+// historical job_attempts INSERT that lived here was retired because
+// per-attempt identity is now the task_attempts canonical layer
+// (taskingestion.Ingest). Verification of worker/lease/attempt
+// identity in this fixture is implicit — the orchestrator-driven
+// FinalizeVerified path trusts the artifact_uploads CAS chain.
 func seedPost048JobAndArtifact(t *testing.T, db *sql.DB, f fixture) {
 	t.Helper()
 	now := time.Now().UTC().Format(time.RFC3339)
@@ -693,12 +619,6 @@ func seedPost048JobAndArtifact(t *testing.T, db *sql.DB, f fixture) {
 		VALUES (?, 'RUNNING', ?, ?, ?)`,
 		f.JobID, f.Revision, now, now); err != nil {
 		t.Fatalf("seed jobs (post-048): %v", err)
-	}
-	if _, err := db.Exec(`INSERT INTO job_attempts
-		(job_id, attempt_number, worker_id, lease_id, status, finished_at, created_at)
-		VALUES (?, ?, ?, ?, 'RENDER_FINISHED', ?, ?)`,
-		f.JobID, f.AttemptNumber, f.WorkerID, f.LeaseID, now, now); err != nil {
-		t.Fatalf("seed job_attempts: %v", err)
 	}
 	if _, err := db.Exec(`INSERT INTO artifacts
 		(id, job_id, attempt_id, type, storage_provider, status, created_at)

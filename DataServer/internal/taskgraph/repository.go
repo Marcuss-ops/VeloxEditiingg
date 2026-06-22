@@ -46,7 +46,40 @@ type Writer interface {
 	// ClaimNextReadyTask atomically claims the next READY task for a worker.
 	// Returns the claimed task with its spec payload, or (nil, nil) if none available.
 	// PR #4: task-native dispatch path replaces job-based claim.
+	//
+	// Pre-PR-2 implementation: it populated only the lease tuple (worker_id,
+	// lease_id, lease_expires_at) on the tasks row and a TaskAttempt was
+	// inserted later at handleTaskAccepted time via AcceptTaskAtomic.
+	// SUPERSEDED by ClaimNextWithAttemptAtomic which performs the canonical
+	// atomic claim (Task + PENDING TaskAttempt + tasks.attempt_id + tasks.attempt_number).
+	// Kept for backwards compatibility with non-task-native call sites;
+	// new dispatch code MUST use ClaimNextWithAttemptAtomic.
 	ClaimNextReadyTask(ctx context.Context, workerID, leaseID string) (*TaskWithSpec, error)
+
+	// ClaimNextWithAttemptAtomic atomically claims the next READY task for a
+	// worker AND inserts the matching PENDING TaskAttempt row AND stamps
+	// (tasks.attempt_id, tasks.attempt_number) on the tasks row — all in
+	// ONE transaction. PR-2 / fix/canonical-attempt-identity single-source
+	// invariant: the canonical attempt identity is minted at Claim time
+	// and is available on the wire in the subsequent TaskOffer envelope.
+	//
+	// Returns the claimed task with its spec payload AND the freshly-created
+	// PENDING attempt, OR (nil, nil, nil) if no READY task is currently
+	// available (replay-safe idempotent no-op for the next caller).
+	//
+	// Concurrency: SELECT…LIMIT 1 + CAS UPDATE READY→LEASED + INSERT attempt.
+	// A concurrent claimer that races us returns (nil, nil, nil) with no
+	// error — the caller treats this identical to "no READY task available"
+	// and surfaces it identically in dispatch.
+	//
+	// On success:
+	//   * tasks row reads: status=LEASED, worker_id=workerID, lease_id=leaseID,
+	//     lease_expires_at=now+defaultTaskLeaseTTL, attempt_id=<uuid>,
+	//     attempt_number=t.AttemptCount+1, revision=prev+1
+	//   * task_attempts row inserts: id=<same uuid>, status=PENDING,
+	//     report_version=0, task_id=t.ID, job_id=t.JobID,
+	//     attempt_number=t.AttemptCount+1, worker_id=workerID, lease_id=leaseID
+	ClaimNextWithAttemptAtomic(ctx context.Context, workerID, leaseID string) (*TaskWithSpec, *taskattempts.TaskAttempt, error)
 
 	// ReleaseLease atomically resets a LEASED/RUNNING task back to READY.
 	// Used on session teardown to release orphaned task claims (PR #4).
@@ -55,23 +88,20 @@ type Writer interface {
 	// Start transitions LEASED → RUNNING with full CAS tuple.
 	Start(ctx context.Context, id, workerID, leaseID string, attempt, revision int) error
 
-	// RequeueExpiredLeases scans tasks whose `lease_expires_at` is in the
-	// past and requeues them per audit §P0.4:
-	//   - LEASED  expired → READY (re-claimable),
-	//   - RUNNING expired → READY with attempt_count bumped (matches the
-	//     existing retry semantics; Job FAILed-on-retries-exhausted path
-	//     remains a follow-up that PR-08 will land with the reduced
-	//     jobs.Repository surface).
+	// RequeueExpiredLeases scans tasks whose `lease_expires_at` is in
+	// the past and surfaces them as RequeueCandidate rows. SELECT-only:
+	// no UPDATE happens here. Per-task ExpireTaskLeaseAtomic owns the
+	// write so the audit-mandated CAS tuple + retry budget + Attempt
+	// close always run in a single tx.
+	//
 	// Tasks with NULL `lease_expires_at` (pre-migration-049 rows) are
 	// treated as "never expires" so a long-running pre-cutover task is
 	// never wrongly reaped. limit caps how many tasks are scanned per
-	// call (0 defaults to 100). Returns the reaped task IDs.
+	// call (0 defaults to 100).
 	//
-	// PR-05: replaces the Job-side zombie reaper that PR-13 gated with
-	// VELOX_DISABLE_JOB_REAPER; once the bootstrap registers this
-	// reaper on top of taskgraph-dispatcher, the Job-level reaper can
-	// be deprecated (a separate PR closes the Job-side path).
-	RequeueExpiredLeases(ctx context.Context, nowRFC3339 string, limit int) (reaped []string, err error)
+	// PR-05: replaces the Job-side zombie reaper. PR-04 transforms
+	// this method SELECT-only so the per-row atomic path owns the write.
+	RequeueExpiredLeases(ctx context.Context, nowRFC3339 string, limit int) (candidates []RequeueCandidate, err error)
 
 	// AcceptTaskAtomic transitions the task LEASED→RUNNING AND inserts
 	// the matching TaskAttempt row in ONE transaction. The single legal
@@ -91,25 +121,65 @@ type Writer interface {
 	// Fail marks a task FAILED.
 	Fail(ctx context.Context, id, reason string, revision int) error
 
-	// RenewLease extends a currently-leased task's deadline. CAS-gated
-	// on `status='LEASED' AND worker_id=? AND lease_id=? AND revision=?`.
-	// On success the row's `lease_expires_at` is set to expiry (UTC,
-	// RFC3339) and `updated_at` is set to now; revision is NOT bumped —
-	// renewal is idempotent on its own lease and bumping would invalidate
-	// a worker's in-flight message queue that references the old revision.
-	// Returns taskgraph.ErrTransitionConflict on stale CAS (lease revoked,
-	// task already terminal, or revision mismatch). The lease-id-based CAS
-	// guarantees a worker cannot accidentally extend a lease that has
-	// already been reaped and re-issued to another worker (different
-	// leaseID ⇒ 0 rows affected).
+	// RenewLease extends a currently-leased or running task's deadline
+	// (PR-03 / fix/task-lease-renewal-protocol). CAS tuple:
+	//   task_id=? AND worker_id=? AND lease_id=?
+	//   AND status IN ('LEASED','RUNNING') AND revision=?
 	//
-	// PR-05 follow-up: enables long-running tasks to extend their lease
-	// past the 30-min defaultTaskLeaseTTL without losing the master-side
-	// reaper's "abort after TTL" guarantee.
+	// Acceptance of BOTH LEASED and RUNNING states is intentional: a
+	// worker progressed to RUNNING after TaskLeaseGranted is acknowledged
+	// and a task longer than the 30-min TTL must renew without first
+	// being reaped. RenewLease does NOT gate on attempt_id because
+	// AcceptTaskAtomic (PR-2 audit P0#5 fix) is the SOLE writer of
+	// attempt_id on tasks; the (task_id, worker_id, lease_id) tuple
+	// already binds the renewal to the canonical attempt implicitly.
+	// A worker cannot hold two different attempt_ids for the same task
+	// at the same time, so the TOCTOU race against reaper-reset is
+	// closed by the worker_id + lease_id gate alone.
+	//
+	// expiry is the absolute UTC deadline the master stamps into
+	// tasks.lease_expires_at (post-clamp to the master's TTL policy).
+	// revision is NOT bumped — renewal is idempotent on its own
+	// (task_id, worker_id, lease_id) tuple.
+	//
+	// Returns taskgraph.ErrTransitionConflict on stale CAS (lease
+	// revoked, task already terminal, or revision mismatch).
 	RenewLease(ctx context.Context, id, workerID, leaseID string, expiry time.Time, revision int) error
 
 	// IncrementAttempt bumps the attempt counter atomically.
 	IncrementAttempt(ctx context.Context, id string) error
+
+	// ExpireTaskLeaseAtomic atomically reaps a single expired-lease
+	// task in the audit-mandated atomic transitions:
+	//
+	//	1. verify task_id, lease_id, lease_expires_at observed (CAS gate)
+	//	2. close the active attempt as TIMED_OUT via attemptRepo txn
+	//	3. apply retry budget (compare t.AttemptCount + next_attempt_number
+	//	   against maxRetries supplied by caller; 0 maxRetries defaults to 3)
+	//	4. bring task to READY (re-claimable) or FAILED (retry budget
+	//	   exhausted, terminal)
+	//	5. clear worker_id, lease_id, lease_expires_at
+	//	6. return ExpireResult so the caller can update the Job aggregate
+	//	   when AttemptsExhausted is true
+	//
+	// The audit-mandated identity tuple is:
+	//   task_id=? AND lease_id=? AND lease_expires_at=? AND worker_id=?
+	//   AND status IN ('LEASED','RUNNING')
+	//
+	// attempt_count is INTENTIONALLY NOT bumped here (audit P0#4 fix:
+	// the counter reflects STARTED attempts, which AcceptTaskAtomic
+	// owns); a reaped task that has not yet reached the next Accept
+	// remains at its previous attempt_count.
+	//
+	// Returns ErrTransitionConflict on stale CAS (worker renewed or
+	// already terminal between SELECT and UPDATE). Returns
+	// (ExpireResult{}, nil) when the row was already at the expected
+	// state but no transition was required (replay-safe).
+	ExpireTaskLeaseAtomic(
+		ctx context.Context,
+		taskID, leaseID, leaseExpiresAtObserved string,
+		maxRetries int,
+	) (ExpireResult, error)
 
 	// TransitionTaskToTerminalAtomic marks the task AND the matching
 	// active TaskAttempt as terminal (SUCCEEDED/FAILED/CANCELLED) in
@@ -138,4 +208,46 @@ type Writer interface {
 type Repository interface {
 	Reader
 	Writer
+}
+
+// RequeueCandidate is a single expired-lease candidate surfaced by
+// RequeueExpiredLeases. The reaper iterates it and per-row runs
+// ExpireTaskLeaseAtomic so the per-task CAS still holds.
+//
+// PR-04 / fix/task-expiry-atomic-transition: RequeueExpiredLeases is now
+// SELECT-only. The legacy "bulk UPDATE tasks to READY, bump attempt_count"
+// behavior is REMOVED — ExpireTaskLeaseAtomic owns the per-task write and
+// applies the audit-mandated retry budget + attempt close.
+type RequeueCandidate struct {
+	ID             string
+	LeaseID        string
+	LeaseExpiresAt string
+	WorkerID       string
+	AttemptCount   int
+}
+
+// ExpireResult reports the outcome of ExpireTaskLeaseAtomic.
+//
+// PR-04 / fix/task-expiry-atomic-transition: the caller
+// (LifecycleService.ExpireTaskLease / TaskLeaseReaper) uses
+// AttemptsExhausted to decide whether to surface a Job-level failure
+// via jobsRepo.FailWithRetry downstream of the atomic.
+type ExpireResult struct {
+	// TaskID is the task that was reaped (echoed for the caller's log path).
+	TaskID string
+	// TaskStatus is the post-reap status: StatusReady (re-claimable,
+	// retries left) or StatusFailed (retries exhausted, terminal).
+	TaskStatus Status
+	// AttemptsExhausted is true when the task tripped retry budget and
+	// was marked FAILED. The caller must signal jobsRepo so the Job
+	// aggregate sees the FAILED-attempt count.
+	AttemptsExhausted bool
+	// AttemptID is the task_attempts.id that was closed as TIMED_OUT, if any.
+	// Empty when no active attempt existed for the (task_id, worker_id, lease_id)
+	// tuple (rare but possible — the reap path must still proceed Task-side).
+	AttemptID string
+	// AttemptClosed is true iff an active attempt was closed as TIMED_OUT by
+	// the atomic. False when the task had no matching attempt (the reap is
+	// still legal — the missing-attempt scenario is logged-only).
+	AttemptClosed bool
 }

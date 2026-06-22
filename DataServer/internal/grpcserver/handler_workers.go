@@ -141,13 +141,17 @@ func (h *Handler) sendPushTaskOffer(ctx context.Context, workerID string) {
 	// Generate a unique lease ID for this offer.
 	leaseID := fmt.Sprintf("l-%s-%s", workerID, uuid.NewString()[:8])
 
-	// CAS: READY → LEASED with workerID + leaseID.
-	tws, err := h.taskRepo.ClaimNextReadyTask(ctx, workerID, leaseID)
+	// CAS: READY → LEASED with workerID + leaseID + PENDING TaskAttempt
+	// INSERT + (attempt_id, attempt_number) stamp on tasks row. All in
+	// ONE tx via ClaimNextWithAttemptAtomic (PR-2 / canonical-attempt-identity).
+	tws, attempt, err := h.taskRepo.ClaimNextWithAttemptAtomic(ctx, workerID, leaseID)
 	if err != nil {
-		log.Printf("[GRPC] ClaimNextReadyTask failed for worker %s: %v", workerID, err)
+		log.Printf("[GRPC] ClaimNextWithAttemptAtomic failed for worker %s: %v", workerID, err)
 		return
 	}
-	if tws == nil || tws.ID == "" {
+	if tws == nil || tws.ID == "" || attempt == nil {
+		// No READY task or no canonical attempt was minted — nothing to
+		// do this tick. Caller invokes per-worker tick again later.
 		return
 	}
 
@@ -160,7 +164,10 @@ func (h *Handler) sendPushTaskOffer(ctx context.Context, workerID string) {
 	// Calculate lease deadline (30 min from now).
 	leaseDeadline := time.Now().UTC().Add(30 * time.Minute)
 
-	// Build TaskOffer envelope.
+	// Build TaskOffer envelope with the canonical attempt_id (NOT the
+	// lease_id echo that the pre-PR-2 implementation used) so handleTaskAccepted
+	// can pass the canonical (attempt_id, attempt_number) tuple through to
+	// AcceptTaskAtomic and task_attempts stays aligned 1:1 with tasks.attempt_id.
 	env := &pb.MasterToWorkerEnvelope{
 		MessageId:       fmt.Sprintf("taskoffer-%s-%s", workerID, tws.ID),
 		WorkerId:        workerID,
@@ -170,13 +177,13 @@ func (h *Handler) sendPushTaskOffer(ctx context.Context, workerID string) {
 			TaskOffer: &pb.TaskOffer{
 				TaskId:          tws.ID,
 				JobId:           tws.JobID,
-				AttemptId:       leaseID,
+				AttemptId:       attempt.ID,
 				ExecutorId:      tws.ExecutorID,
 				ExecutorVersion: int32(tws.ExecutorVersion),
 				TaskSpec:        taskSpecPB,
 				LeaseId:         leaseID,
 				LeaseDeadline:   timestamppb.New(leaseDeadline),
-				AttemptNumber:   int32(tws.AttemptCount + 1),
+				AttemptNumber:   int32(attempt.AttemptNumber),
 			},
 		},
 	}

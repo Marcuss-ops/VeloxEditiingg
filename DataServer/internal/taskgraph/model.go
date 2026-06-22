@@ -14,6 +14,15 @@ import "time"
 //
 // PR #4: DependsOn holds the task IDs this task must wait for.
 // Empty means no dependencies (single-task model).
+//
+// PR-2 / fix/canonical-attempt-identity: AttemptID + AttemptNumber are
+// stamped on the tasks row at Claim time (the same tx that flips the
+// status READY→LEASED AND inserts the matching PENDING TaskAttempt).
+// Pre-PR-2 these columns were NULL / 0; post-Claim they're populated
+// for every newly-leased task. CAS-keyed queries (RenewLease,
+// AcceptTaskAtomic-replay, etc.) read attempt_id from the tasks row,
+// closing the previous dependency on a pre-existing attempt row to
+// supply the canonical identity.
 type Task struct {
 	ID              string     `json:"id"`
 	JobID           string     `json:"job_id"`
@@ -25,6 +34,8 @@ type Task struct {
 	Priority        int        `json:"priority"`
 	Revision        int        `json:"revision"`
 	AttemptCount    int        `json:"attempt_count"`
+	AttemptID       string     `json:"attempt_id,omitempty"`
+	AttemptNumber   int        `json:"attempt_number"`
 	WorkerID        string     `json:"worker_id,omitempty"`
 	LeaseID         string     `json:"lease_id,omitempty"`
 	DependsOn       []string   `json:"depends_on,omitempty"`

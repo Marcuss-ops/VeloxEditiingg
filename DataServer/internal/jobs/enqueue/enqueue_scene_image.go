@@ -127,7 +127,6 @@ func buildSceneImagePayload(rawPayload map[string]interface{}, dataDir, videosDi
 		outputPath = paths.DefaultOutputPath(videosDir, dataDir, videoName, "script_with_images")
 	}
 
-	now := time.Now().UTC().Format(time.RFC3339)
 	audioLanguage := payload.FirstString(rawPayload, "audio_language_for_srt", "language")
 	if audioLanguage == "" {
 		audioLanguage = "it"
@@ -137,74 +136,52 @@ func buildSceneImagePayload(rawPayload map[string]interface{}, dataDir, videosDi
 	for k, v := range rawPayload {
 		normalized[k] = v
 	}
-	// PR15.6: canonical-only writes. The copy loop above would
-	// otherwise leak the legacy aliases `id`/`run_id`/`title`/
-	// `voiceover_path`/`audio_path` straight through from the raw
-	// input into the canonical payload. Strip them here so the
-	// writer is canonical-only on both top-level keys AND the
-	// `parameters` mirror below. Reads still tolerate these
-	// aliases via RenderHTTPBoundaryJobResponse + payload.FirstString's
-	// fallback chain.
+	// refactor/payload-v2-single-shape: strip raw-input legacy aliases
+	// (`id`/`run_id`/`title`/`voiceover_path`/`audio_path`) BEFORE the
+	// canonical projection so they cannot leak into the typed envelope
+	// even on noisy inputs.
 	for _, alias := range []string{"id", "run_id", "title", "voiceover_path", "audio_path"} {
 		delete(normalized, alias)
 	}
-	normalized["job_id"] = jobID
-	normalized["job_run_id"] = jobRunID
-	normalized["correlation_id"] = correlationID
-	normalized["job_type"] = "process_video"
-	normalized["version"] = "v1"
-	normalized["created_at"] = payload.EnsureRFC3339(payload.FirstString(rawPayload, "created_at"), now)
-	normalized["updated_at"] = payload.EnsureRFC3339(payload.FirstString(rawPayload, "updated_at"), now)
-	normalized["video_name"] = videoName
-	normalized["script_text"] = scriptText
-	normalized["scenes"] = sceneEntries
-	normalized["scenes_json"] = payload.MustJSON(sceneEntries)
-	normalized["voiceover_paths"] = stagedVoiceoverPaths
-	normalized["audio_language_for_srt"] = audioLanguage
-	normalized["video_mode"] = "scene_image"
-	normalized["output_path"] = outputPath
-	normalized["drive_output_folder"] = ResolveDriveOutputFolderReference(dataDir, payload.FirstString(rawPayload, "drive_output_folder", "output_directory"))
-	normalized["scene_count"] = sceneCount
-	normalized["voiceover_count"] = len(voiceoverPaths)
-	normalized["total_duration_secs"] = totalDuration
-	normalized["scene_duration_secs"] = perSceneDuration
-	normalized["scene_image_paths"] = stagedSceneImagePaths
-	if youtubeGroup := payload.FirstString(rawPayload, "youtube_group", "channel_id"); youtubeGroup != "" {
-		normalized["youtube_group"] = youtubeGroup
-		normalized["channel_id"] = youtubeGroup
-	}
-	normalized["priority"] = payload.EnsureInt(rawPayload["priority"], 1)
-	normalized["timeout_secs"] = payload.EnsureInt(rawPayload["timeout_secs"], 3600)
-	normalized["submitted_via"] = "api_script_generate_with_images"
-	normalized["source"] = "script_generate_with_images"
 
-	// PR15.6: canonical-only parameters mirror.
-	normalized["parameters"] = map[string]interface{}{
-		"version":                "v1",
-		"job_id":                 jobID,
-		"job_run_id":             jobRunID,
-		"correlation_id":         correlationID,
-		"job_type":               "process_video",
-		"video_name":             videoName,
-		"script_text":            scriptText,
-		"scenes_json":            normalized["scenes_json"],
-		"scenes":                 sceneEntries,
-		"voiceover_paths":        stagedVoiceoverPaths,
-		"audio_language_for_srt": audioLanguage,
-		"video_mode":             "scene_image",
-		"output_path":            outputPath,
-		"drive_output_folder":    normalized["drive_output_folder"],
-		"scene_count":            sceneCount,
-		"voiceover_count":        len(voiceoverPaths),
-		"total_duration_secs":    totalDuration,
-		"scene_duration_secs":    perSceneDuration,
-		"scene_image_paths":      stagedSceneImagePaths,
-		"youtube_group":          normalized["youtube_group"],
-		"channel_id":             normalized["channel_id"],
-		"priority":               normalized["priority"],
-		"timeout_secs":           normalized["timeout_secs"],
-		"submitted_via":          "api_script_generate_with_images",
-		"source":                 "script_generate_with_images",
+	// Build the canonical typed V2 envelope from the raw (alias-stripped)
+	// input. NewJobPayloadV2 ignores the just-deleted alias keys so the
+	// downstream ToMap emits only canonical fields; no `parameters`
+	// sub-map mirror. The struct fields are populated from the raw map
+	// directly; the post-projection assignments below finish the extra
+	// fields NormalizeScenesPayload + staging already computed for us.
+	v2 := contract.NewJobPayloadV2(normalized)
+	v2.SetIdentity(jobID, jobRunID, correlationID)
+	v2.VideoName = videoName
+	v2.ScriptText = scriptText
+	v2.Scenes = sceneEntries
+	v2.ScenesJSON = payload.MustJSON(sceneEntries)
+	v2.SceneCount = sceneCount
+	v2.VoiceoverPaths = stagedVoiceoverPaths
+	v2.VoiceoverCount = len(voiceoverPaths)
+	v2.AudioLanguage = audioLanguage
+	v2.VideoMode = "scene_image"
+	v2.OutputPath = outputPath
+	v2.DriveOutput = ResolveDriveOutputFolderReference(dataDir, payload.FirstString(rawPayload, "drive_output_folder", "output_directory"))
+	v2.SceneImagePaths = stagedSceneImagePaths
+	v2.SubmittedVia = "api_script_generate_with_images"
+	v2.Source = "script_generate_with_images"
+	v2.Version = "v2"
+	v2.Status = "PENDING"
+	v2.TotalDurationSecs = totalDuration
+	v2.SceneDurationSecs = perSceneDuration
+	if youtubeGroup := payload.FirstString(rawPayload, "youtube_group", "channel_id"); youtubeGroup != "" {
+		v2.YoutubeGroup = youtubeGroup
+		v2.ChannelID = youtubeGroup
+	}
+
+	// Single source of truth: project the typed envelope. Duration
+	// fields now flow through ToMap's canonical marshaling rather than
+	// being patched onto the map post-hoc — adding a new field to the
+	// struct now ripples automatically to every writer.
+	v2Out, err := v2.ToMap()
+	if err != nil {
+		return nil, err
 	}
 
 	// NOTE: voiceover/scene-image rewrite is intentionally NOT invoked here.
@@ -213,7 +190,7 @@ func buildSceneImagePayload(rawPayload map[string]interface{}, dataDir, videosDi
 	// would double-rewrite already-resolved paths. The pure builder stays
 	// free of side effects on injected services; service dependency travels
 	// downstream through the Enqueuer.
-	return normalized, nil
+	return v2Out, nil
 }
 
 func stageVoiceoverAssets(_ /* dataDir */, _ /* masterURL */, _ /* jobID */ string, voiceoverPaths []string) ([]string, error) {

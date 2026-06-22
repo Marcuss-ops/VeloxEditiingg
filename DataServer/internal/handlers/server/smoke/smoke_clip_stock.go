@@ -87,63 +87,41 @@ func CreateSmokeClipStock(cfg *config.Config, atomic *store.AtomicJobTaskCreator
 		}
 		driveOutputFolder := payload.FirstString(body, "drive_output_folder", "output_directory")
 
-		normalized := map[string]interface{}{
-			"job_id":                 jobID,
-			"id":                     jobID,
-			"job_run_id":             jobRunID,
-			"run_id":                 jobRunID,
-			"correlation_id":         correlationID,
-			"job_type":               "process_video",
-			"version":                "v1",
-			"created_at":             payload.EnsureRFC3339(payload.FirstString(body, "created_at"), now),
-			"updated_at":             payload.EnsureRFC3339(payload.FirstString(body, "updated_at"), now),
-			"video_name":             videoName,
-			"title":                  videoName,
-			"script_text":            scriptText,
-			"video_mode":             videoMode,
-			"voiceover_paths":        voiceoverPaths,
-			"voiceover_path":         voiceoverPaths[0],
-			"audio_path":             voiceoverPaths[0],
-			"intro_clip_paths":       introClipPaths,
-			"stock_clip_paths":       stockClipPaths,
-			"clip_segments":          clipSegments,
-			"scenes":                 []interface{}{},
-			"scenes_json":            "[]",
-			"output_path":            outputPath,
-			"drive_output_folder":    driveOutputFolder,
-			"audio_language_for_srt": payload.FirstString(body, "audio_language_for_srt", "audio_lang"),
-			"priority":               payload.EnsureInt(body["priority"], 1),
-			"timeout_secs":           payload.EnsureInt(body["timeout_secs"], 3600),
-			"submitted_via":          "api_v1_smoke_clip_stock",
-			"source":                 "smoke_clip_stock_api",
-			"scene_count":            0,
-			"voiceover_count":        len(voiceoverPaths),
-		}
-
-		normalized["parameters"] = map[string]interface{}{
-			"version":                "v1",
-			"job_id":                 jobID,
-			"job_run_id":             jobRunID,
-			"run_id":                 jobRunID,
-			"correlation_id":         correlationID,
-			"job_type":               "process_video",
-			"video_name":             videoName,
-			"script_text":            scriptText,
-			"video_mode":             videoMode,
-			"voiceover_paths":        voiceoverPaths,
-			"voiceover_path":         voiceoverPaths[0],
-			"audio_path":             voiceoverPaths[0],
-			"intro_clip_paths":       introClipPaths,
-			"stock_clip_paths":       stockClipPaths,
-			"clip_segments":          clipSegments,
-			"output_path":            outputPath,
-			"drive_output_folder":    driveOutputFolder,
-			"audio_language_for_srt": payload.FirstString(body, "audio_language_for_srt", "audio_lang"),
-			"priority":               payload.EnsureInt(body["priority"], 1),
-			"timeout_secs":           payload.EnsureInt(body["timeout_secs"], 3600),
-			"submitted_via":          "api_v1_smoke_clip_stock",
-			"source":                 "smoke_clip_stock_api",
-		}
+	// refactor/payload-v2-single-shape: canonical-only top-level keys.
+	// Drop the legacy aliases `id`/`run_id`/`title`/`voiceover_path`/
+	// `audio_path` and the entire `parameters` sub-map mirror. The
+	// typed envelope in shared/contract/enforces a single canonical
+	// shape; readers tolerate the legacy alias/mirror for back-compat
+	// with already-written rows only.
+	normalized := map[string]interface{}{
+		"job_id":                 jobID,
+		"job_run_id":             jobRunID,
+		"correlation_id":         correlationID,
+		"job_type":               "process_video",
+		"contract_version":       2,
+		"version":                "v2",
+		"created_at":             payload.EnsureRFC3339(payload.FirstString(body, "created_at"), now),
+		"updated_at":             payload.EnsureRFC3339(payload.FirstString(body, "updated_at"), now),
+		"video_name":             videoName,
+		"script_text":            scriptText,
+		"video_mode":             videoMode,
+		"voiceover_paths":        voiceoverPaths,
+		"intro_clip_paths":       introClipPaths,
+		"stock_clip_paths":       stockClipPaths,
+		"clip_segments":          clipSegments,
+		"scenes":                 []interface{}{},
+		"scenes_json":            "[]",
+		"output_path":            outputPath,
+		"drive_output_folder":    driveOutputFolder,
+		"audio_language_for_srt": payload.FirstString(body, "audio_language_for_srt", "audio_lang"),
+		"priority":               payload.EnsureInt(body["priority"], 1),
+		"timeout_secs":           payload.EnsureInt(body["timeout_secs"], 3600),
+		"submitted_via":          "api_v1_smoke_clip_stock",
+		"source":                 "smoke_clip_stock_api",
+		"scene_count":            0,
+		"voiceover_count":        len(voiceoverPaths),
+		"status":                 "PENDING",
+	}
 
 		raw, _ := json.Marshal(normalized)
 		job := &jobs.Job{

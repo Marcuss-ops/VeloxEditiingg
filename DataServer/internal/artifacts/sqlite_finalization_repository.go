@@ -141,10 +141,17 @@ func (r *SQLiteFinalizationRepository) CreateArtifactAndUploadSession(
 }
 
 // FinalizeVerified is the canonical atomic SUCCEEDED write. It flips
-// jobs RUNNING → SUCCEEDED, artifacts STAGING → READY,
-// job_attempts RENDER_FINISHED → SUCCEEDED, inserts the per-destination
-// job_deliveries rows, and in-tx flips
-// artifact_uploads FINALIZING → COMPLETED.
+// jobs RUNNING | AWAITING_ARTIFACT → SUCCEEDED, artifacts STAGING →
+// READY, inserts the per-destination job_deliveries rows, and in-tx
+// flips artifact_uploads FINALIZING → COMPLETED.
+//
+// cleanup/remove-job-attempts-runtime: the legacy "job_attempts
+// RENDER_FINISHED → SUCCEEDED" CAS step was removed. Identity is now
+// fully verified at the artifact_uploads CAS chain (worker_id +
+// lease_id + attempt_number) and through the new task_attempts
+// read-back at service.loadAttempt. jobs.status='SUCCEEDED' remains
+// the canonical audit-visible terminal write — scan_test enforces
+// single-writer.
 //
 // NO other code path in the data server writes jobs.status='SUCCEEDED'.
 // The scan test enforces this; the absence of any SUCCEEDED writer in
@@ -211,12 +218,18 @@ func (r *SQLiteFinalizationRepository) FinalizeVerified(
 	//
 	// PR-01 (post-migration 048): the runtime columns assigned_to,
 	// lease_id, lease_expiry, retry_count were dropped from `jobs`.
-	// Identity is verified end-to-end in step 1 (artifact_uploads CAS
+	// Identity is verified end-to-end at step 1 (artifact_uploads CAS
 	// chain: status='FINALIZING' + worker_id + lease_id + attempt_number)
-	// and in step 4 (job_attempts CAS chain: status=RENDER_FINISHED +
-	// worker_id + lease_id). The `jobs` row no longer carries
+	// and at service.loadAttempt (which now reads from task_attempts
+	// joined through tasks). The `jobs` row no longer carries
 	// worker/lease identity — the CAS here is identity-free, gated only
 	// on the state-machine and (optionally) the revision.
+	//
+	// cleanup/remove-job-attempts-runtime: removed the legacy step 4
+	// job_attempts CAS write; the in-tx integrity is preserved by
+	// artifact_uploads (single CAS at step 1) + task_attempts read
+	// (service.loadAttempt) which together close off any
+	// worker/lease/attempt mismatch window.
 	//
 	// Releasing the dropped columns in the SET clause was also dropped:
 	// they no longer exist on the table — fixing the post-048 runtime
@@ -273,26 +286,18 @@ func (r *SQLiteFinalizationRepository) FinalizeVerified(
 			ErrTransitionConflict, n, cmd.UploadID, cmd.ArtifactID)
 	}
 
-	// 4. job_attempts CAS: PROCESSING/RENDER_FINISHED + auth → SUCCEEDED.
-	attRes, err := tx.ExecContext(ctx, `
-		UPDATE job_attempts
-		SET status = 'SUCCEEDED',
-		    finished_at = ?
-		WHERE job_id = ?
-		  AND attempt_number = ?
-		  AND worker_id = ?
-		  AND lease_id = ?
-		  AND UPPER(status) IN ('RENDER_FINISHED', 'PROCESSING')`,
-		nowStr, cmd.JobID, cmd.AttemptNumber,
-		cmd.WorkerID, cmd.LeaseID,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("artifacts: FinalizeVerified job_attempts CAS: %w", err)
-	}
-	if n, _ := attRes.RowsAffected(); n != 1 {
-		return nil, fmt.Errorf("%w: job_attempts affected=%d upload=%s",
-			ErrTransitionConflict, n, cmd.UploadID)
-	}
+	// 4. job_attempts CAS: removed by cleanup/remove-job-attempts-runtime.
+	//    Previously this step UPDATEd job_attempts SET status='SUCCEEDED'
+	//    gated on (worker_id, lease_id, attempt_number) and
+	//    UPPER(status) IN ('RENDER_FINISHED','PROCESSING'). Per the
+	//    cleanup, the runtime CAS chain on job_attempts is retired;
+	//    per-attempt close-out is now driven by taskingestion.Ingest
+	//    via TransitionTaskToTerminalAtomic on task_attempts
+	//    (canonical layer). Auth is still fully gated at step 1
+	//    (artifact_uploads CAS: worker_id+lease_id+attempt_number) + the
+	//    task_attempts read-back in service.go::loadAttempt. The
+	//    audit-visible terminal write remains the jobs.status='SUCCEEDED'
+	//    flip in step 2 — scan_test enforces the single-writer contract.
 
 	// 5. Resolve delivery destinations via plan resolver or fallback.
 	var destIDs []string

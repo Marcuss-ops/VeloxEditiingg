@@ -11,100 +11,12 @@ import (
 	"velox-server/internal/store"
 	"velox-server/internal/taskattempts"
 	"velox-server/internal/taskgraph"
+	"velox-server/internal/ingest"
 	"velox-shared/controltransport"
 	pb "velox-shared/controltransport/pb"
 
-	"github.com/google/uuid"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
-
-// handleJobResult processes typed JobResult via gRPC stream.
-//
-// Artifact success gate (PR 1): a worker reporting status=success does NOT
-// transition the job to SUCCEEDED. RecordRenderFinished logs the event while
-// the job stays RUNNING. The actual SUCCEEDED transition is gated on the
-// artifact service verifying and registering the artifact (see handleArtifactUploaded).
-func (h *Handler) handleJobResult(workerID string, jr *pb.JobResult) {
-	ctx := context.Background()
-	jobID := jr.GetJobId()
-	status := jr.GetStatus()
-	errMsg := jr.GetError()
-
-	if jobID == "" {
-		log.Printf("[GRPC] JobResult from worker %s missing job_id — dropping", workerID)
-		return
-	}
-	if !h.verifyJobOwnership(workerID, jobID) {
-		log.Printf("[GRPC] JobResult from worker %s for job %s refused — ownership mismatch", workerID, jobID)
-		return
-	}
-
-	if status == "success" {
-		// Reject if lease_id or attempt is missing — these are required
-		// for the identity CAS.
-		leaseID := jr.GetLeaseId()
-		attempt := int(jr.GetAttempt())
-		if leaseID == "" {
-			log.Printf("[GRPC] JobResult success from worker %s for job %s refused — missing lease_id", workerID, jobID)
-			return
-		}
-		if attempt == 0 {
-			log.Printf("[GRPC] JobResult success from worker %s for job %s refused — missing attempt", workerID, jobID)
-			return
-		}
-
-		// Look up revision from the DB (protobuf does not carry it).
-		currentRev, _, revErr := h.lookupJobCASFields(jobID)
-		if revErr != nil {
-			log.Printf("[GRPC] JobResult success from worker %s for job %s — cannot read revision: %v", workerID, jobID, revErr)
-			return
-		}
-
-		cmd := store.RecordRenderFinishedCommand{
-			JobID:            jobID,
-			WorkerID:         workerID,
-			LeaseID:          leaseID,
-			AttemptNumber:    attempt,
-			ExpectedRevision: currentRev,
-			FinishedAt:       time.Now().UTC(),
-		}
-		if err := h.jobsRepo.RecordRenderFinished(ctx, cmd.JobID, cmd.WorkerID, cmd.LeaseID, cmd.AttemptNumber, cmd.ExpectedRevision); err != nil {
-			log.Printf("[GRPC] RecordRenderFinished failed for %s: %v", jobID, err)
-			return
-		}
-		log.Printf("[GRPC] Worker %s reported render finished for job %s — awaiting artifact", workerID, jobID)
-	} else if status == "failed" {
-		if err := h.jobsRepo.FailWithRetry(context.Background(), jobID, "", errMsg, true, 0); err != nil {
-			log.Printf("[GRPC] Job failure transition failed for %s: %v", jobID, err)
-		}
-	}
-}// handleJobAccepted processes typed JobAccepted — legacy job-based push mode.
-// Kept for backward compat with pre-PR #4 workers. New workers use TaskAccepted.
-func (h *Handler) handleJobAccepted(workerID string, ja *pb.JobAccepted) {
-	if !h.config.PushMode {
-		return
-	}
-	jobID := ja.GetJobId()
-
-	sess := h.getSession(workerID)
-	if sess == nil {
-		return
-	}
-
-	// Legacy path: no pendingJobOffer on task-native sessions.
-	log.Printf("[GRPC] Worker %s sent JobAccepted for job %s — legacy path (no-op in task-native dispatch)", workerID, jobID)
-}
-
-// handleJobRejected processes typed JobRejected — legacy job-based push mode.
-// Kept for backward compat with pre-PR #4 workers. New workers use TaskRejected.
-func (h *Handler) handleJobRejected(workerID string, jr *pb.JobRejected) {
-	jobID := jr.GetJobId()
-	reason := jr.GetReason()
-	if jobID == "" {
-		return
-	}
-	log.Printf("[GRPC] Worker %s rejected job %s — legacy path (no-op in task-native dispatch, reason=%q)", workerID, jobID, reason)
-}
 
 // handleTaskAccepted processes typed TaskAccepted — PR #4 task-native push mode.
 // The lease was already created by ClaimNextReadyTask; we promote LEASED→RUNNING,
@@ -143,15 +55,21 @@ func (h *Handler) handleTaskAccepted(workerID string, ta *pb.TaskAccepted) {
 		return
 	}
 
-	// PR-04 / §9.5 invariant: Task LEASED → RUNNING AND Attempt INSERT
-	// commit in ONE transaction (AcceptTaskAtomic). The previous
-	// two-statement pattern (taskRepo.Start + taskAttemptRepo.Create)
-	// could leave a Task RUNNING with no active Attempt on crash;
-	// the combined method closes that gap.
+	// PR-2 (canonical-attempt-identity): the canonical attempt_id was
+	// minted at Claim time (in ClaimNextWithAttemptAtomic inside the
+	// same tx as the LEASED CAS + PENDING TaskAttempt INSERT). handleTaskAccepted
+	// now CONSUMES the canonical attempt_id from the pending offer rather
+	// than minting a new UUID, AND closes the canonical TaskAttempt
+	// PENDING → RUNNING inside AcceptTaskAtomic's atomic tx.
+	//
+	// PR-04 / §9.5 invariant preserved: Task LEASED → RUNNING AND Attempt
+	// PENDING → RUNNING commit in ONE transaction (AcceptTaskAtomic). The
+	// pre-PR-2 INSERT pattern (Start + Create) had a crash window; PR-2's
+	// earlier-minted PENDING row + this UPDATE path closes it.
 	ctx := context.Background()
-	attemptNum := offer.AttemptCount + 1
+	attemptNum := offer.AttemptNumber
 	attempt := &taskattempts.TaskAttempt{
-		ID:            uuid.NewString(),
+		ID:            offer.AttemptID,
 		TaskID:        taskID,
 		JobID:         offer.JobID,
 		WorkerID:      workerID,
@@ -161,10 +79,10 @@ func (h *Handler) handleTaskAccepted(workerID string, ta *pb.TaskAccepted) {
 	}
 	if err := h.taskRepo.AcceptTaskAtomic(ctx, attempt, offer.Revision); err != nil {
 		if errors.Is(err, store.ErrTransitionConflict) {
-			log.Printf("[GRPC] Worker %s accepted task %s but lease is stale (rev=%d) — rejecting",
-				workerID, taskID, offer.Revision)
+			log.Printf("[GRPC] Worker %s accepted task %s but lease is stale or canonical attempt drift (offer.attempt_id=%s offer.attempt_number=%d attempt_id=%s attempt_number=%d) rev=%d — dropping TaskAccepted",
+				workerID, taskID, offer.AttemptID, offer.AttemptNumber, attempt.ID, attemptNum, offer.Revision)
 		} else {
-			log.Printf("[GRPC] AcceptTaskAtomic (LEASED→RUNNING + Attempt) failed for %s (worker %s): %v — keeping pending offer for retry",
+			log.Printf("[GRPC] AcceptTaskAtomic (LEASED→RUNNING + Attempt PENDING→RUNNING) failed for %s (worker %s): %v — keeping pending offer for retry",
 				taskID, workerID, err)
 		}
 		sess.claimMu.Lock()
@@ -247,57 +165,92 @@ func (h *Handler) handleTaskRejected(workerID string, tr *pb.TaskRejected) {
 	sess.claimMu.Unlock()
 }
 
-// handleTaskResult processes typed TaskResult — PR #5 task-native reporting.
-// Receives the worker's execution report and transitions the TaskAttempt
-// and Task accordingly.
+// handleTaskResult processes typed TaskResult — feat/task-report-ingestion.
+//
+// PR-29 (`feat/task-report-ingestion`): the handler is now a thin relay
+// to TaskReportIngestionService.Ingest, which centralizes the audit-cloused
+// sequence:
+//
+//  1. atomic Task + Attempt close (TransitionTaskToTerminalAtomic)
+//  2. worker-declared output_artifacts registration (with idempotent
+//     skip on duplicate (task_id, artifact_id))
+//  3. Job roll-up to AWAITING_ARTIFACT (all sibling tasks SUCCEEDED) or
+//     FAILED (any sibling task FAILED) when the roll-up condition holds
+//
+// The handler pre-validates the identity tuple (presence of task_id,
+// attempt_id, lease_id) before delegating. A nil ingestionSvc is treated
+// as a misconfiguration and surfaces as a structured error log rather
+// than a silent no-op — better to fail loud than to leak TaskResults
+// without ever closing the Attempt.
 func (h *Handler) handleTaskResult(workerID string, tr *pb.TaskResult) {
 	taskID := tr.GetTaskId()
 	if taskID == "" {
 		log.Printf("[GRPC] TaskResult from worker %s missing task_id — dropping", workerID)
 		return
 	}
-
-	status := tr.GetStatus()
-	log.Printf("[GRPC] Worker %s reported task %s: status=%s code=%q detail=%q",
-		workerID, taskID, status, tr.GetErrorCode(), tr.GetErrorDetail())
-
-	ctx := context.Background()
-	jobID := tr.GetJobId()
-
-	// Log output artifacts if present (PR #5).
-	if artifacts := tr.GetOutputArtifacts(); len(artifacts) > 0 {
-		log.Printf("[GRPC] TaskResult for %s includes %d output artifacts", taskID, len(artifacts))
-	}
-
-	// PR-04 / §9.5 invariant: Task terminal transition (SUCCEEDED or
-	// FAILED) AND matching Attempt terminal transition commit in ONE
-	// transaction. The previous two-statement pattern (taskRepo.SetStatus|
-	// Fail + taskAttemptRepo.CompleteFinal) could leave Task terminal
-	// while the Attempt was still RUNNING if the process crashed between
-	// the two writes; TransitionTaskToTerminalAtomic closes that gap.
+	attemptID := tr.GetAttemptId()
 	leaseID := tr.GetLeaseId()
-	if leaseID == "" {
-		log.Printf("[GRPC] TaskResult dropped: missing lease_id for task %s (worker %s)", taskID, workerID)
+	if attemptID == "" || leaseID == "" {
+		log.Printf("[GRPC] TaskResult from worker %s refused — missing identity (task=%q attempt=%q lease=%q)",
+			workerID, taskID, attemptID, leaseID)
 		return
 	}
 
-	if status == "succeeded" {
-		if err := h.taskRepo.TransitionTaskToTerminalAtomic(ctx, taskID, workerID, leaseID, taskgraph.StatusSucceeded, taskattempts.AttemptStatusSucceeded, "", ""); err != nil {
-			log.Printf("[GRPC] TaskResult atomic success transition failed for %s: %v", taskID, err)
-			return
-		}
-	} else {
-		if err := h.taskRepo.TransitionTaskToTerminalAtomic(ctx, taskID, workerID, leaseID, taskgraph.StatusFailed, taskattempts.AttemptStatusFailed, tr.GetErrorCode(), tr.GetErrorDetail()); err != nil {
-			log.Printf("[GRPC] TaskResult atomic fail transition failed for %s: %v", taskID, err)
-			return
-		}
+	log.Printf("[GRPC] Worker %s reported task %s (attempt %s): status=%s code=%q detail=%q, %d output artifacts",
+		workerID, taskID, attemptID, tr.GetStatus(), tr.GetErrorCode(), tr.GetErrorDetail(), len(tr.GetOutputArtifacts()))
+
+	if h.ingestionSvc == nil {
+		log.Printf("[GRPC] TaskResult from worker %s REJECTED — ingestionSvc not wired (boot misconfig)", workerID)
+		return
 	}
 
-	// PR #5: after task transition, check if ALL tasks for this job are terminal.
-	// If so, transition the job to SUCCEEDED (all tasks succeeded) or FAILED (any failed).
-	if jobID != "" {
-		go h.maybeTransitionJob(ctx, jobID)
+	// Translate protobuf output_artifacts (Struct items) into the typed
+	// DeclaredArtifact slice. Metadata is best-effort JSON.
+	declared := make([]ingest.DeclaredArtifact, 0, len(tr.GetOutputArtifacts()))
+	for _, item := range tr.GetOutputArtifacts() {
+		m := item.AsMap()
+		artID, _ := m["artifact_id"].(string)
+		if artID == "" {
+			continue
+		}
+		artType, _ := m["artifact_type"].(string)
+		path, _ := m["artifact_path"].(string)
+		var size int64
+		if v, ok := m["size_bytes"].(float64); ok {
+			size = int64(v)
+		} else if v, ok := m["artifact_size"].(float64); ok {
+			size = int64(v)
+		}
+		sha, _ := m["sha256"].(string)
+		d := ingest.DeclaredArtifact{
+			ArtifactID:   artID,
+			ArtifactType: artType,
+			Path:         path,
+			Size:         size,
+			SHA256:       sha,
+			Metadata:     m,
+		}
+		declared = append(declared, d)
 	}
+
+	ctx := context.Background()
+	res, err := h.ingestionSvc.IngestTaskResult(ctx, ingest.IngestCommand{
+		TaskID:          taskID,
+		AttemptID:       attemptID,
+		LeaseID:         leaseID,
+		WorkerID:        workerID,
+		JobID:           tr.GetJobId(),
+		Status:          tr.GetStatus(),
+		ErrorCode:       tr.GetErrorCode(),
+		ErrorDetail:     tr.GetErrorDetail(),
+		OutputArtifacts: declared,
+	})
+	if err != nil {
+		log.Printf("[GRPC] TaskResult ingest for task=%s attempt=%s FAILED: %v", taskID, attemptID, err)
+		return
+	}
+	log.Printf("[GRPC] TaskResult ingest for task=%s done: closed=%v artNew=%d artSkip=%d jobXn=%v jobStatus=%q",
+		taskID, res.AttemptClosed, res.ArtifactsNew, res.ArtifactsSkips, res.JobTransitioned, res.JobNewStatus)
 }
 
 // maybeTransitionJob checks whether all tasks for a job are terminal and,
@@ -397,47 +350,50 @@ func (h *Handler) verifyTaskOwnership(workerID, taskID string) bool {
 	return t.WorkerID == workerID
 }
 
-// handleJobProgress tracks per-job progress (typed, forwarded via heartbeat for now).
+// handleTaskRenewal processes a typed TaskLeaseRenewal via gRPC stream.
+// PR-03 / fix/task-lease-renewal-protocol: canonical task-native
+// renewal path. The worker sends the lease identity tuple
+// (task_id, lease_id) plus a hint expiry. We look up the current
+// task to obtain the live revision, then issue taskRepo.RenewLease
+// with the CAS tuple (task_id, worker_id, lease_id, revision,
+// status IN ('LEASED','RUNNING')) — no attempt_id predicate: PR-2's
+// AcceptTaskAtomic is the SOLE writer of tasks.attempt_id and a
+// worker cannot hold two different attempt_ids for the same task
+// concurrently. The (worker_id, lease_id) gate closes the TOCTOU
+// race against reaper-reset alone.
 //
-// Phase 3.3: relaxed ownership gate — progress is informational and is
-// only dropped when the worker definitely does not own the job. Mismatch
-// scenarios are logged but not rejected (a worker mid-reconnect might
-// legitimately race a late JobProgress against a freshly-reassigned job).
-func (h *Handler) handleJobProgress(workerID string, jp *pb.JobProgress) {
-	jobID := jp.GetJobId()
-	if jobID == "" {
-		return
-	}
-	if !h.verifyJobOwnership(workerID, jobID) {
-		log.Printf("[GRPC] JobProgress from worker %s for job %s ignored — ownership mismatch",
-			workerID, jobID)
-		return
-	}
-	log.Printf("[GRPC] Worker %s progress on job %s: stage=%s %d%% (scene %d/%d)",
-		workerID, jobID, jp.GetStage(), jp.GetProgressPercent(), jp.GetScene(), jp.GetTotalScenes())
-}
+// No session lock is required: the audit invariant (CAS gates the
+// database-side race) holds without serializing against the offer
+// pipeline, and read-then-CAS is a safe pattern under SQLite's
+// optimistic concurrency.
+func (h *Handler) handleTaskRenewal(workerID string, tr *pb.TaskLeaseRenewal) {
+	ctx := context.Background()
+	taskID := tr.GetTaskId()
+	leaseID := tr.GetLeaseId()
 
-// handleLeaseRenewal processes a typed LeaseRenewal via gRPC stream.
-//
-// Phase 3.3: verify the worker owns the job before extending the lease.
-// Without this gate a malicious worker could renew (and thus keep alive
-// forever) a job assigned to a different worker.
-func (h *Handler) handleLeaseRenewal(workerID string, lr *pb.LeaseRenewal) {
-	jobID := lr.GetJobId()
-	if jobID == "" {
+	if taskID == "" || leaseID == "" {
+		log.Printf("[GRPC] TaskLeaseRenewal from worker %s refused — missing identity (task=%q lease=%q)",
+			workerID, taskID, leaseID)
 		return
 	}
-	if !h.verifyJobOwnership(workerID, jobID) {
-		log.Printf("[GRPC] LeaseRenewal from worker %s for job %s refused — ownership mismatch", workerID, jobID)
+
+	t, err := h.taskRepo.Get(ctx, taskID)
+	if err != nil || t == nil {
+		log.Printf("[GRPC] TaskLeaseRenewal task %s not found: %v", taskID, err)
 		return
 	}
-	leaseExpiry := time.Now().UTC().Add(30 * time.Minute)
-	if lr.GetLeaseExpiresAt() != nil {
-		leaseExpiry = lr.GetLeaseExpiresAt().AsTime()
+
+	expiry := time.Now().UTC().Add(30 * time.Minute)
+	if tr.GetRequestedExpiry() != nil {
+		expiry = tr.GetRequestedExpiry().AsTime()
 	}
-	if err := h.jobsRepo.RenewLease(context.Background(), lr.GetJobId(), workerID, lr.GetLeaseId(), leaseExpiry, true, 0); err != nil {
-		log.Printf("[GRPC] Lease renewal failed for job %s worker %s: %v", lr.GetJobId(), workerID, err)
+
+	if err := h.taskRepo.RenewLease(ctx, taskID, workerID, leaseID, expiry, t.Revision); err != nil {
+		log.Printf("[GRPC] TaskLeaseRenewal failed for %s (worker %s lease %s): %v",
+			taskID, workerID, leaseID, err)
+		return
 	}
+	log.Printf("[GRPC] TaskLeaseRenewal extended task %s for worker %s lease=%s", taskID, workerID, leaseID)
 }
 
 // verifyJobOwnership checks that `jobID` currently belongs to `workerID`

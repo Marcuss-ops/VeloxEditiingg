@@ -210,7 +210,19 @@ func (w *Worker) sendHeartbeat(ctx context.Context) error {
 	return nil
 }
 
-// leaseRenewLoop sends periodic lease renewals for all active jobs via transport.Send().
+// leaseRenewLoop sends periodic lease renewals for all active jobs AND
+// task-native leases via transport.Send().
+//
+// PR-2 (canonical-attempt-identity): the task-native path fires
+// MsgTaskLeaseRenewal alongside the existing MsgLeaseRenewal so a worker
+// carrying BOTH legacy-job and task-native entries (during the PR #5
+// cutover) keeps both lease types current. Each MsgTaskLeaseRenewal
+// carries (task_id, attempt_id, lease_id, requested_expiry) so the
+// master's RenewLease CAS predicate matches the canonical TaskAttempt
+// row. Iteration source for task-native is the activeTaskLeases map
+// populated by the MsgTaskLeaseGranted handler (added in this PR;
+// pendingTasks → executeJob wiring is the caller-side population
+// surface).
 func (w *Worker) leaseRenewLoop(ctx context.Context) {
 	defer w.wg.Done()
 
@@ -266,8 +278,94 @@ func (w *Worker) leaseRenewLoop(ctx context.Context) {
 					w.logger.Debug("[LEASE] Renewed lease for job %s (lease_id=%s)", aj.Job.JobID, leaseID)
 				}
 			}
+
+			// PR-2: task-native renewals — dispatched ALONGSIDE the
+			// legacy job-loop. Snapshot under RLock, iterate outside the
+			// lock (transport.Send is network I/O; must NOT block the
+			// write-side Stop()/Remove callers).
+			taskLeases := w.SnapshotActiveTaskLeases()
+			for _, tl := range taskLeases {
+				if tl == nil || tl.TaskID == "" || tl.LeaseID == "" {
+					continue
+				}
+
+				taskExpiry := time.Now().UTC().Add(30 * time.Minute).Format(time.RFC3339)
+				payload := map[string]interface{}{
+					"task_id":          tl.TaskID,
+					"attempt_id":       tl.AttemptID,
+					"lease_id":         tl.LeaseID,
+					"requested_expiry": taskExpiry,
+				}
+
+				msg := controltransport.NewMessageWithPayload(
+					controltransport.MsgTaskLeaseRenewal,
+					w.config.WorkerID,
+					w.config.ProtocolVersion,
+					payload,
+				)
+
+				if err := w.transport.Send(ctx, msg); err != nil {
+					w.logger.Warn("[TASK_LEASE] Failed to renew lease for task %s: %v", tl.TaskID, err)
+				} else {
+					w.logger.Debug("[TASK_LEASE] Renewed lease for task %s (attempt=%s lease_id=%s)",
+						tl.TaskID, tl.AttemptID, tl.LeaseID)
+				}
+			}
 		}
 	}
+}
+
+// AddActiveTaskLease registers a task-native lease so leaseRenewLoop will
+// dispatch MsgTaskLeaseRenewal for it. Called by the MsgTaskLeaseGranted
+// handler (PR #5 / canonical-attempt-identity) right after it pops the
+// pending task from pendingTasks. Safe for concurrent callers; nil/empty
+// taskID or leaseID is a no-op (caller must drop via canonical-error path).
+//
+// The map is unconditionally initialized in worker_init.go New(); this
+// helper never performs lazy-init — if the map is nil here, the worker
+// was constructed defectively and a panic is the correct loud-failure
+// surface (cover-up via lazy init masks operator bugs).
+func (w *Worker) AddActiveTaskLease(taskID, attemptID, leaseID string) {
+	if taskID == "" || leaseID == "" {
+		return
+	}
+	w.activeTaskLeasesMu.Lock()
+	defer w.activeTaskLeasesMu.Unlock()
+	w.activeTaskLeases[taskID] = &ActiveTaskLease{
+		TaskID:    taskID,
+		AttemptID: attemptID,
+		LeaseID:   leaseID,
+	}
+}
+
+// RemoveActiveTaskLease deregisters a task-native lease so leaseRenewLoop
+// stops dispatching MsgTaskLeaseRenewal for it. Called on MsgLeaseRevoked
+// / canonical terminal-state transition (executeJob returns SUCCEEDED /
+// FAILED / CANCELLED / TIMED_OUT). Empty taskID is a no-op.
+func (w *Worker) RemoveActiveTaskLease(taskID string) {
+	if taskID == "" {
+		return
+	}
+	w.activeTaskLeasesMu.Lock()
+	defer w.activeTaskLeasesMu.Unlock()
+	delete(w.activeTaskLeases, taskID)
+}
+
+// SnapshotActiveTaskLeases returns a defensive copy of the current
+// task-native lease set. Iteration over the snapshot must occur WITHOUT
+// holding activeTaskLeasesMu — transport.Send is network I/O and would
+// otherwise block Remove-side writers (Stop, cancelJob, Revoked handlers).
+func (w *Worker) SnapshotActiveTaskLeases() []*ActiveTaskLease {
+	w.activeTaskLeasesMu.RLock()
+	defer w.activeTaskLeasesMu.RUnlock()
+	if len(w.activeTaskLeases) == 0 {
+		return nil
+	}
+	out := make([]*ActiveTaskLease, 0, len(w.activeTaskLeases))
+	for _, tl := range w.activeTaskLeases {
+		out = append(out, tl)
+	}
+	return out
 }
 
 // calculateBackoff returns the next backoff interval capped at heartbeatMaxBackoff.

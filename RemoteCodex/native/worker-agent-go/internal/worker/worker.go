@@ -318,6 +318,12 @@ func (w *Worker) receiveLoop(ctx context.Context, recvCh <-chan controltransport
 
 		case controltransport.MsgTaskOffer:
 			// PR #5: task-native dispatch — receive pre-compiled TaskSpec from master.
+			// PR-2 (canonical-attempt-identity): executeJob dispatch is DEFERRED
+			// to MsgTaskLeaseGranted so the master's canonical (attempt_id,
+			// attempt_number) tuple + RUNNING TaskAttempt is committed before
+			// execution starts. Mirrors the legacy JobOffer → JobLeaseGranted
+			// pattern using `pendingTasks` (keyed by task_id) instead of
+			// `pendingLeaseJobs` (keyed by job_id).
 			taskOffer, ok := msg.TypedPayload.(*pb.TaskOffer)
 			if !ok || taskOffer == nil {
 				w.logger.Warn("[RECEIVE] TaskOffer without typed payload")
@@ -325,6 +331,12 @@ func (w *Worker) receiveLoop(ctx context.Context, recvCh <-chan controltransport
 			}
 
 			taskID := taskOffer.GetTaskId()
+			attemptID := taskOffer.GetAttemptId()
+			if taskID == "" || attemptID == "" {
+				w.logger.Warn("[RECEIVE] TaskOffer missing canonical identity (task_id=%q attempt_id=%q) — dropping",
+					taskID, attemptID)
+				continue
+			}
 			if w.IsStopped() || w.drainMode.Load() {
 				if err := w.sendTaskReject(ctx, taskID, "draining"); err != nil {
 					w.logger.Warn("[RECEIVE] Failed to send TaskRejected: %v", err)
@@ -342,15 +354,15 @@ func (w *Worker) receiveLoop(ctx context.Context, recvCh <-chan controltransport
 				continue
 			}
 
-			w.logger.Info("[RECEIVE] TaskOffer received: task=%s job=%s executor=%s@%d",
-				taskID, taskOffer.GetJobId(), taskOffer.GetExecutorId(), taskOffer.GetExecutorVersion())
+			w.logger.Info("[RECEIVE] TaskOffer received: task=%s attempt=%s job=%s executor=%s@%d — deferring executeJob to TaskLeaseGranted",
+				taskID, attemptID, taskOffer.GetJobId(), taskOffer.GetExecutorId(), taskOffer.GetExecutorVersion())
 
 			if err := w.sendTaskAccepted(ctx, taskOffer); err != nil {
 				w.logger.Warn("[RECEIVE] Failed to send TaskAccepted: %v", err)
 				continue
 			}
 
-			// Build api.Job from TaskOffer for the executeJob path.
+			// Build api.Job from TaskOffer for the deferred executeJob path.
 			// PR #5: the TaskSpec travels pre-compiled in task_spec — no reconstruction needed.
 			var specPayload map[string]interface{}
 			if tsp := taskOffer.GetTaskSpec(); tsp != nil {
@@ -361,28 +373,60 @@ func (w *Worker) receiveLoop(ctx context.Context, recvCh <-chan controltransport
 				LeaseID: taskOffer.GetLeaseId(),
 				Attempt: int(taskOffer.GetAttemptNumber()),
 				// PR #5: store pre-compiled TaskSpec for dispatchTaskRunner.
-				Parameters:  map[string]interface{}{"task_spec": specPayload},
-				JobType:     taskOffer.GetExecutorId(),
-				Priority:    0,
+				Parameters: map[string]interface{}{"task_spec": specPayload},
+				JobType:    taskOffer.GetExecutorId(),
+				Priority:   0,
 			}
 			// Store task_offer reference so executeJob can send TaskResult.
 			job.Parameters["_task_id"] = taskID
-			job.Parameters["_attempt_id"] = taskOffer.GetAttemptId()
+			job.Parameters["_attempt_id"] = attemptID
 
-			// Start execution directly — no JobLeaseGranted wait (task dispatch).
-			go w.executeJob(ctx, job)
+			// PR-2: defer dispatch to MsgTaskLeaseGranted via pendingTasks map.
+			w.storePendingTask(taskID, job)
 
 		case controltransport.MsgTaskLeaseGranted:
-			// TaskLeaseGranted is the task-scoped acknowledgment sent by the master
-			// after TaskAccepted. Task-native dispatch starts execution directly from
-			// MsgTaskOffer (PR #5), so this is informational only.
+			// PR-2 (canonical-attempt-identity): executeJob dispatch is
+			// gated on TaskLeaseGranted. The master sends this AFTER
+			// accepting the worker's TaskAccepted and committing the
+			// TaskAttempt PENDING → RUNNING transition. consume the
+			// pending task from storePendingTask; if absent (unknown
+			// task_id) log + drop, identical to MsgJobLeaseGranted's
+			// unknown-job behavior.
 			taskGrant, ok := msg.TypedPayload.(*pb.TaskLeaseGranted)
 			if !ok || taskGrant == nil {
 				w.logger.Warn("[RECEIVE] TaskLeaseGranted without typed payload")
 				continue
 			}
-			w.logger.Info("[RECEIVE] TaskLeaseGranted for task=%s job=%s lease=%s",
-				taskGrant.GetTaskId(), taskGrant.GetJobId(), taskGrant.GetLeaseId())
+			taskID := taskGrant.GetTaskId()
+			if taskID == "" {
+				w.logger.Warn("[RECEIVE] TaskLeaseGranted without task_id — dropping")
+				continue
+			}
+
+			job := w.takePendingTask(taskID)
+			if job == nil {
+				w.logger.Warn("[RECEIVE] TaskLeaseGranted for unknown task %s — dropping", taskID)
+				continue
+			}
+
+			// PR-2 followup: register the canonical (task_id, attempt_id,
+			// lease_id) tuple so leaseRenewLoop fires MsgTaskLeaseRenewal
+			// every 15s for this task-native entry. Mirrors the legacy
+			// activeJobs wire-state slots populated by MsgJobLeaseGranted.
+			w.AddActiveTaskLease(taskID, taskGrant.GetAttemptId(), taskGrant.GetLeaseId())
+
+			w.logger.Info("[RECEIVE] TaskLeaseGranted for task=%s attempt=%s job=%s lease=%s — starting execution",
+				taskID, taskGrant.GetAttemptId(), taskGrant.GetJobId(), taskGrant.GetLeaseId())
+			// Defer RemoveActiveTaskLease so the lease slot is freed on
+			// every terminal exit: SUCCEEDED / FAILED / CANCELLED /
+			// TIMED_OUT, panic from stageexec, or pre-Stop drain. The
+			// wrapper covers all paths uniformly — relying on
+			// executeJob's internal cleanup would leave the slot stuck
+			// on the rare panic path.
+			go func() {
+				defer w.RemoveActiveTaskLease(taskID)
+				w.executeJob(ctx, job)
+			}()
 
 		case controltransport.MsgJobLeaseGranted:
 			// Legacy path for JobOffer-based dispatch; task-native dispatch
@@ -689,13 +733,92 @@ func (w *Worker) takePendingJob(jobID string) *api.Job {
 	return job
 }
 
+// storePendingTask records a TaskOffer-accepted task awaiting
+// TaskLeaseGranted before executeJob dispatch (PR-2 canonical-attempt-
+// identity). Keyed by task_id via pendingTasks / pendingTasksMu.
+//
+// PR-2 followup (Stop-drain race fix): if the worker is already stopped,
+// short-circuit so the Stop()-time drain cannot be raced by an
+// in-flight receiveLoop handler still mid-processing the next message.
+func (w *Worker) storePendingTask(taskID string, job *api.Job) {
+	w.pendingTasksMu.Lock()
+	defer w.pendingTasksMu.Unlock()
+	// PR-2 followup (Stop-drain race fix): check IsStopped INSIDE
+	// the critical section so the race with Stop()'s drain is
+	// obvious — the drain is also under pendingTasksMu; any
+	// goroutine holding the lock has either written already
+	// (and Stop will see + drain it) or sees stopped=true and
+	// short-circuits before writing. The pre-Lock precheck
+	// was a TOCTOU bug (drain could happen between precheck
+	// and Lock acquisition).
+	if w.IsStopped() {
+		return
+	}
+	w.pendingTasks[taskID] = job
+}
+
+// takePendingTask retrieves and removes a pending task by task_id.
+// Returns nil if the task was not found (caller treats as `unknown
+// task_id` and drops, symmetric with takePendingJob).
+//
+// PR-2 followup (Stop-drain race fix): if the worker is already stopped,
+// short-circuit to nil so the Stop()-time drain does not race an
+// in-flight receiveLoop handler that is just about to dispatch
+// executeJob post-Stop.
+func (w *Worker) takePendingTask(taskID string) *api.Job {
+	w.pendingTasksMu.Lock()
+	defer w.pendingTasksMu.Unlock()
+	// PR-2 followup (Stop-drain race fix): takePendingTask can
+	// legitimately be called AFTER Stop if the receiveLoop is
+	// mid-iteration when Stop is requested. Short-circuit on the
+	// IsStopped check to return nil so the caller logs + drops
+	// (the canonical "unknown task_id" path).
+	if w.IsStopped() {
+		return nil
+	}
+	job := w.pendingTasks[taskID]
+	delete(w.pendingTasks, taskID)
+	return job
+}
+
 // Stop signals the worker to stop gracefully.
 // This method is idempotent - calling it multiple times has no additional effect.
+//
+// PR-2 (fix/canonical-attempt-identity): drain pendingTasks + pendingLeaseJobs
+// under their respective mutexes so the next session starts with empty maps.
+// Without this, an offer->stop cycle would leak entries across restarts and
+// the next session would carry orphaned canonical (attempt_id, lease_id)
+// tuples whose master-side TaskAttempts are already in a terminal state.
 func (w *Worker) Stop() {
 	w.stopOnce.Do(func() {
 		w.logger.Info("Stop requested")
 		close(w.stopChan)
 		w.stopped.Store(true)
+		// Drain pendingTasks + pendingLeaseJobs on Stop. Entries here
+		// correspond to offers the worker accepted but never received
+		// a LeaseGranted for (worker died mid-flight, master restarted,
+		// etc). Master's lease reaper handles the stranded PENDING /
+		// RUNNING TaskAttempts on the master side; the local map is
+		// safe to clear so the next session starts empty.
+		w.pendingLeaseMu.Lock()
+		clearedLegacy := len(w.pendingLeaseJobs)
+		w.pendingLeaseJobs = make(map[string]*api.Job)
+		w.pendingLeaseMu.Unlock()
+		w.pendingTasksMu.Lock()
+		clearedTask := len(w.pendingTasks)
+		w.pendingTasks = make(map[string]*api.Job)
+		w.pendingTasksMu.Unlock()
+		// PR-2 followup: drain activeTaskLeases on Stop so the next
+		// session starts empty and any lease the master has already
+		// marked TIMED_OUT cannot keep driving phantom renewals.
+		w.activeTaskLeasesMu.Lock()
+		clearedTaskLeases := len(w.activeTaskLeases)
+		w.activeTaskLeases = make(map[string]*ActiveTaskLease)
+		w.activeTaskLeasesMu.Unlock()
+		if clearedLegacy > 0 || clearedTask > 0 || clearedTaskLeases > 0 {
+			w.logger.Info("[STOP] Drained pending entries: legacy=%d task=%d task_leases=%d",
+				clearedLegacy, clearedTask, clearedTaskLeases)
+		}
 	})
 }
 

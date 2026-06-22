@@ -142,11 +142,10 @@ func (s *SQLiteStore) ClaimNextPendingJob(workerID string, allowedJobTypes []str
 		}
 
 		// Record job attempt
-		insertedID, attemptErr := s.InsertJobAttemptTx(tx, jobID.String, newRetry, workerID, leaseID)
-		if attemptErr != nil {
-			rows.Close()
-			return nil, zeroReq, false, fmt.Errorf("failed to record job attempt: %w", attemptErr)
-		}
+		// cleanup/remove-job-attempts-runtime: no longer write to job_attempts.
+		// Per-attempt identity now lives on task_attempts (canonical); the
+		// canonical claim path is the task-native dispatch (PR-04). The
+		// legacy_job_dispatch path is being decommissioned alongside PR-07.
 
 		if err := tx.Commit(); err != nil {
 			rows.Close()
@@ -162,11 +161,9 @@ func (s *SQLiteStore) ClaimNextPendingJob(workerID string, allowedJobTypes []str
 			MinBandwidthMbps: requiredMinBandwidthMbps.Float64,
 		}
 
-		if insertedID > 0 {
-			_ = s.LogJobEvent(jobID.String, "job_claimed", map[string]interface{}{
-				"worker_id": workerID, "lease_id": leaseID, "attempt": newRetry,
-			})
-		}
+		_ = s.LogJobEvent(jobID.String, "job_claimed", map[string]interface{}{
+			"worker_id": workerID, "lease_id": leaseID, "attempt": newRetry,
+		})
 		return bytes.Clone(updatedResult), claimedReq, true, nil
 	}
 
@@ -459,9 +456,10 @@ func (s *SQLiteStore) ClaimNextPendingJobForWorker(
 		if err := s.replaceJobHistoryTx(tx, sc.jobID, history); err != nil {
 			return nil, rankZeroReq, false, err
 		}
-		if _, err := s.InsertJobAttemptTx(tx, sc.jobID, newRetry, workerID, leaseID); err != nil {
-			return nil, costmodel.JobRequirements{}, false, fmt.Errorf("failed to record job attempt: %w", err)
-		}
+			// cleanup/remove-job-attempts-runtime: no longer write to job_attempts.
+			// Per-attempt identity now lives on task_attempts (canonical); the
+			// canonical claim path is the task-native dispatch (PR-04). The
+			// legacy_job_dispatch path is being decommissioned alongside PR-07.
 		if err := tx.Commit(); err != nil {
 			return nil, costmodel.JobRequirements{}, false, err
 		}

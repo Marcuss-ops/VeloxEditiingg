@@ -16,7 +16,6 @@ package jobs
 import (
 	"context"
 	"fmt"
-	"log"
 	"time"
 
 	"velox-server/internal/platform/clock"
@@ -26,14 +25,6 @@ import (
 type LifecycleService struct {
 	jobsRepo Repository // canonical domain surface (PR15.5: sole write surface)
 	clock    clock.Clock
-	// reaperDisabled gates the Job-side zombie reaper (PR-13). During
-	// the cutover period between migration 048 (which dropped
-	// jobs.lease_expiry) and PR-05 (which introduces the TaskLeaseReaper
-	// over tasks.lease_expires_at) the Job-level reaper is either broken,
-	// references dropped columns, or operates on stale Job-level semantics.
-	// Operators can flip this on at boot (VELOX_DISABLE_JOB_REAPER=true)
-	// or after a one-shot schema probe detects an unsafe condition.
-	reaperDisabled bool
 }
 
 // NewLifecycleService constructs the transactional LifecycleService.
@@ -145,70 +136,6 @@ func (l *LifecycleService) GetNextJobID(ctx context.Context) (string, error) {
 
 // ── Internal helpers ───────────────────────────────────────────────────────
 
-// ── PR-13: Job-side reaper gate (DEPRECATED — superseded by PR-05 TaskLeaseReaper) ──
-//
-// History: PR-13 introduced VELOX_DISABLE_JOB_REAPER (default off) as a stop-gap
-// while jobs.lease_expiry was dropped by migration 048 and the canonical lease
-// TTL moved to tasks via migration 049 + PR-05. With TaskLeaseReaper (in the
-// taskgraph package) registering as a separate supervisor runner (see
-// cmd/server/bootstrap.go), the Job-side zombie reaper is now redundant.
-//
-// The methods below are KEPT for back-compat with operators still relying on
-// the env flag during cutover, but their behaviour has narrowed: DisableReaper
-// emits a one-time DEPRECATED warning on first call so operators know to
-// migrate; ReaperDisabled() / RequeueExpiredLeasesSafe() preserve the original
-// semantic so existing supervisor code keeps working without changes.
-
-// DisableReaper disables the Job-side zombie reaper. Idempotent. Called
-// once at boot when VELOX_DISABLE_JOB_REAPER=true OR after a one-shot
-// probe detects a post-048 unsafe condition (e.g. PostgreSQL mirror
-// still references jobs.lease_expiry). PR-05 has now superseded this
-// gate by introducing TaskLeaseReaper over tasks.lease_expires_at.
-//
-// DEPRECATED: the gate is now a no-op on the Job side — the canonical
-// master-side lease enforcer is TaskLeaseReaper (registered as a
-// separate supervisor runner). Operators should migrate to
-// VELOX_TASK_LEASE_REAPER_DISABLED (not yet wired; planned) if they
-// need to disable the canonical reaper.
-func (l *LifecycleService) DisableReaper() {
-	if l.reaperDisabled {
-		return
-	}
-	l.reaperDisabled = true
-	// Emit a one-time DEPRECATED warning so operators notice during
-	// cutover audits. After this first call, the method is silent.
-	log.Printf("[DEPRECATED] LifecycleService.DisableReaper: PR-13 gate is now a no-op as PR-05 TaskLeaseReaper is canonical; env VELOX_DISABLE_JOB_REAPER has no effect on the Job-side reaper.")
-}
-
-// ReaperDisabled reports whether the Job-side zombie reaper is currently
-// disabled. The supervisor uses this to decide whether to log the
-// boot-time disabled_until_cutover line exactly once.
-//
-// DEPRECATED: retained for back-compat; new supervisor code should
-// check TaskLeaseReaper state instead.
-func (l *LifecycleService) ReaperDisabled() bool {
-	return l.reaperDisabled
-}
-
-// RequeueExpiredLeasesSafe is the supervisor-facing variant of
-// RequeueExpiredLeases. It honours the PR-13 disable gate: when the
-// gate is active, the call no-ops returning (nil, nil) without
-// touching the database.
-//
-// DEPRECATED: the canonical lease enforcement is now TaskLeaseReaper.
-// This method is retained so the existing supervisor goroutine keeps
-// working during cutover; new callers should use TaskLeaseReaper.Run
-// directly.
-func (l *LifecycleService) RequeueExpiredLeasesSafe(ctx context.Context, limit int) ([]RequeueResult, error) {
-	if l.reaperDisabled {
-		return nil, nil
-	}
-	return l.RequeueExpiredLeases(ctx, limit)
-}
-
-// ── Internal helpers ───────────────────────────────────────────────────────
-
-// now resolves clock.Now and normalizes to UTC.
 func (l *LifecycleService) now(t time.Time) time.Time {
 	if t.IsZero() && l.clock != nil {
 		t = l.clock.Now()

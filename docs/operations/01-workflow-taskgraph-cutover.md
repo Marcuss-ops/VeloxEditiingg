@@ -1,10 +1,23 @@
 # Runbook operativo 01 — Cutover da `workflow` a `taskgraph`
 
-Status: operativo
+Status: **COMPLETED** (giugno 2026)
 
-Data snapshot: 2026-06-21
+Data snapshot: 2026-06-22
 
-Obiettivo: eliminare la doppia fonte di verità tra `DataServer/internal/workflow` e il nuovo dominio canonico composto da `taskgraph`, `taskattempts`, `observability`, `jobs`, `artifacts` e `outbox`.
+> **Stato attuale.** Il package `DataServer/internal/workflow` è stato
+> rimosso. La tabella canonical `taskgraph` + `task_attempts` +
+> `task_phase_timings` + `task_attempt_metrics` + `task_attempt_reports`
+> + `artifact_attachments` rappresenta la sola fonte di verità per lo
+> stato runtime. Vedere [docs/architecture/OWNERSHIP.md §Removed
+> packages](../architecture/OWNERSHIP.md#removed-packages-historical-retained-for-traceability)
+> per la storia del pacchetto rimosso.
+>
+> Questo runbook viene mantenuto come **retrospettiva operativa** del
+> cutover, non come guida attiva. Le sezioni "Fase 0..Fase 7" sotto
+> restano utili come storico per operatori che vogliono ricostruire
+> _perché_ il codice attuale è fatto così; non vanno ri-eseguite.
+
+Obiettivo (originario): eliminare la doppia fonte di verità tra `DataServer/internal/workflow` e il nuovo dominio canonico composto da `taskgraph`, `taskattempts`, `observability`, `jobs`, `artifacts` e `outbox`.
 
 Questo documento non autorizza un dual-write temporaneo. Durante tutto il cutover deve esistere un solo writer per ogni stato mutabile.
 

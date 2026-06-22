@@ -37,18 +37,27 @@ message WorkerToMasterEnvelope {
   oneof msg {
     Hello hello = 10;
     Heartbeat heartbeat = 11;
-    LeaseRenewal lease_renewal = 12;
-    JobAccepted job_accepted = 13;
-    JobRejected job_rejected = 14;
+    // 12 (LeaseRenewal) — superseded by TaskLeaseRenewal (23). Reserved.
+    // 13 (JobAccepted)  — superseded by TaskAccepted (20). Reserved.
+    // 14 (JobRejected)  — superseded by TaskRejected (21). Reserved.
+    // 15 (JobProgress)  — informational only; new workers use heartbeat extra.
     TaskAccepted task_accepted = 20;
     TaskRejected task_rejected = 21;
     TaskResult task_result = 22;
-    JobProgress job_progress = 15;
+    TaskLeaseRenewal task_lease_renewal = 23;
     CommandAck command_ack = 16;
-    JobResult job_result = 17;
+    // 17 (JobResult) — job-keyed execution report; superseded by TaskResult.
     ArtifactUploaded artifact_uploaded = 18;
     Goodbye goodbye = 19;
   }
+
+  // Reserved tags for messages removed in cleanup/remove-job-control-protocol.
+  // These are the wire-format field numbers of LeaseRenewal (12),
+  // JobAccepted (13), JobRejected (14), JobProgress (15), and JobResult (17);
+  // reserving them prevents accidental reuse in future oneof additions and
+  // makes the proto decoder reject legacy worker messages with these tags
+  // rather than silently accepting them.
+  reserved 12, 13, 14, 15, 17;
 }
 
 message Hello {
@@ -78,47 +87,10 @@ message Heartbeat {
   google.protobuf.Struct extra = 13;
 }
 
-message LeaseRenewal {
-  string job_id = 1;
-  string lease_id = 2;
-  int32 attempt = 3;
-  google.protobuf.Timestamp lease_expires_at = 4;
-}
-
-message JobAccepted {
-  string job_id = 1;
-  string job_run_id = 2;
-  string lease_id = 3;
-}
-
-message JobRejected {
-  string job_id = 1;
-  string reason = 2;
-}
-
-message JobProgress {
-  string job_id = 1;
-  string stage = 2;
-  int32 progress_percent = 3;
-  int32 scene = 4;
-  int32 total_scenes = 5;
-}
-
 message CommandAck {
   string command_id = 1;
   string command = 2;
   string error = 3;
-}
-
-message JobResult {
-  string job_id = 1;
-  string job_run_id = 2;
-  string status = 3;
-  string error = 4;
-  string start_time = 5;
-  string end_time = 6;
-  string lease_id = 7;
-  int32 attempt = 8;
 }
 
 // TaskResult is the task-native execution report (PR #5).
@@ -141,6 +113,22 @@ message TaskResult {
   string executor_key = 10;
   repeated google.protobuf.Struct output_artifacts = 11;
   string lease_id = 12;
+}
+
+// TaskLeaseRenewal is the task-native lease-extension request (PR-03 /
+// fix/task-lease-renewal-protocol). Replaces LeaseRenewal which was
+// keyed by job_id; the task-native path CAS-extends the task lease via
+// taskgraph.Repository.RenewLease on the (task_id, attempt_id,
+// worker_id, lease_id) tuple with status IN ('LEASED','RUNNING').
+//
+// The master is the clock authority: requested_expiry is interpreted
+// as a hint, not a directive — the master clamps to its lease TTL
+// policy and writes UTC RFC3339 into tasks.lease_expires_at.
+message TaskLeaseRenewal {
+  string task_id = 1;
+  string attempt_id = 2;
+  string lease_id = 3;
+  google.protobuf.Timestamp requested_expiry = 4;
 }
 
 // PhaseMarker records one canonical phase timing.
@@ -220,9 +208,9 @@ message MasterToWorkerEnvelope {
   // `shared/controltransport/pb/worker_control.pb.go`.
   oneof msg {
     HelloAck hello_ack = 20;
-    JobOffer job_offer = 22;
+    // 22 (JobOffer)         — superseded by TaskOffer (30). Reserved.
     TaskOffer task_offer = 30;
-    JobLeaseGranted job_lease_granted = 23;
+    // 23 (JobLeaseGranted)  — superseded by TaskLeaseGranted (31). Reserved.
     TaskLeaseGranted task_lease_granted = 31;
     Command command = 24;
     CancelJob cancel_job = 25;
@@ -232,26 +220,16 @@ message MasterToWorkerEnvelope {
     Ping ping = 29;
   }
 
-  // Reserved tag 21 in MasterToWorkerEnvelope — wire-level safety for the
-  // forward-only JobAvailable oneof member that was removed in Phase E.
-  // See the long-form comment above the oneof for the rationale and the
-  // reference to `scripts/gen-proto.sh`.
-  reserved 21;
+  // Reserved tags in MasterToWorkerEnvelope — wire-level safety for the
+  // forward-only JobAvailable oneof member removed in Phase E (tag 21)
+  // and the legacy JobOffer (22) / JobLeaseGranted (23) messages removed
+  // in cleanup/remove-job-control-protocol. See the long-form comment
+  // above the oneof for the rationale and the reference to
+  // `scripts/gen-proto.sh` for regenerating the descriptor.
+  reserved 21, 22, 23;
 }
 
 message HelloAck {}
-
-message JobOffer {
-  string job_id = 1;
-  string run_id = 2;
-  string video_name = 3;
-  google.protobuf.Timestamp created_at = 4;
-  string lease_id = 5;
-  google.protobuf.Timestamp lease_expiry = 6;
-  int32 attempt = 7;
-  int32 max_retries = 8;
-  google.protobuf.Struct job_payload = 9;
-}
 
 // TaskOffer is the task-native dispatch message (PR #4).
 // Replaces JobOffer for task-based dispatching: the dispatcher claims
@@ -282,13 +260,6 @@ message TaskAccepted {
 message TaskRejected {
   string task_id = 1;
   string reason = 2;
-}
-
-message JobLeaseGranted {
-  string job_id = 1;
-  string worker_id = 2;
-  string status = 3;
-  string lease_id = 4;
 }
 
 // TaskLeaseGranted is the task-scoped grant (PR #5 followup).

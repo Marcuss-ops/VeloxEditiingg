@@ -13,12 +13,18 @@ const (
 	AttemptStatusSucceeded AttemptStatus = "SUCCEEDED"
 	AttemptStatusFailed    AttemptStatus = "FAILED"
 	AttemptStatusCancelled AttemptStatus = "CANCELLED"
+	// AttemptStatusTimedOut is the canonical terminal state when the
+	// master-side reaper closes an attempt whose lease expired before
+	// the worker reported a result. Audit P0#4 fix; the reaper must
+	// distinguish "worker crashed" (TIMED_OUT) from "worker reported
+	// failure" (FAILED) for retry-budget accounting.
+	AttemptStatusTimedOut AttemptStatus = "TIMED_OUT"
 )
 
 // IsTerminal reports whether an attempt in this state has finished.
 func (s AttemptStatus) IsTerminal() bool {
 	switch s {
-	case AttemptStatusSucceeded, AttemptStatusFailed, AttemptStatusCancelled:
+	case AttemptStatusSucceeded, AttemptStatusFailed, AttemptStatusCancelled, AttemptStatusTimedOut:
 		return true
 	}
 	return false

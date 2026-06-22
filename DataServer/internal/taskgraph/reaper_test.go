@@ -12,10 +12,10 @@ import (
 
 // =====================================================================
 // PR-05 follow-up: TaskLeaseReaper extracted as a named runner.
-//
-// Tests verify the reaper's structural contract (independent ticker,
-// structured logging, ctx-aware shutdown). Behaviour is exercised
-// end-to-end by the existing sqlite_task_reaper_test.go fixtures.
+// PR-04 follow-up: reaper now calls LifecycleService.ExpireTaskLease
+// per candidate, so the reaper_test surface is split: countingRepo
+// stubs ExpireTaskLeaseAtomic on the Repository surface (no candidates
+// iterates through the real LifecycleService path).
 // =====================================================================
 
 // countingRepo records each RequeueExpiredLeases call's nowStr argument
@@ -25,7 +25,7 @@ type countingRepo struct {
 	mu        sync.Mutex
 	calls     int
 	lastNow   string
-	reply     []string
+	reply     []RequeueCandidate
 	errOnCall *int // if non-nil and matches calls-1, return err.
 }
 
@@ -40,7 +40,7 @@ func (c *countingRepo) Lease(_ context.Context, _, _, _ string) error           
 func (c *countingRepo) ReleaseLease(_ context.Context, _ string) error                           { panic("not used") }
 func (c *countingRepo) ClaimNextReadyTask(_ context.Context, _, _ string) (*TaskWithSpec, error) { panic("not used") }
 func (c *countingRepo) Start(_ context.Context, _, _, _ string, _, _ int) error                  { panic("not used") }
-func (c *countingRepo) RequeueExpiredLeases(_ context.Context, nowStr string, _ int) ([]string, error) {
+func (c *countingRepo) RequeueExpiredLeases(_ context.Context, nowStr string, _ int) ([]RequeueCandidate, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.calls++
@@ -49,6 +49,11 @@ func (c *countingRepo) RequeueExpiredLeases(_ context.Context, nowStr string, _ 
 		return nil, errRepo
 	}
 	return c.reply, nil
+}
+func (c *countingRepo) ExpireTaskLeaseAtomic(_ context.Context, _, _, _ string, _ int) (ExpireResult, error) {
+	// Default stub: reply with a "no-op" result so callers see success
+	// without asserting any specific rows mutated.
+	return ExpireResult{}, nil
 }
 func (c *countingRepo) AcceptTaskAtomic(_ context.Context, _ *taskattempts.TaskAttempt, _ int) error {
 	panic("not used")
@@ -67,13 +72,33 @@ func (c *countingRepo) RenewLease(_ context.Context, _, _, _ string, _ time.Time
 	panic("not used")
 }
 
+// ClaimNextWithAttemptAtomic is the PR-2 (canonical-attempt-identity)
+// sibling of ClaimNextReadyTask; the reaper test reuses countingRepo
+// against LifecycleService-only paths, so this is a panic-on-call
+// sentinel — any accidental fan-out into the new path from an
+// expanded test fails loud rather than silently returning zero
+// values.
+func (c *countingRepo) ClaimNextWithAttemptAtomic(_ context.Context, _, _ string) (*TaskWithSpec, *taskattempts.TaskAttempt, error) {
+	panic("countingRepo.ClaimNextWithAttemptAtomic: not used in this test scope")
+}
+
 var errRepo = errors.New("fake repo error")
+
+// stubReaperLifecycle wires a real LifecycleService to a countingRepo
+// so the TickReadiness delegation tests still pass against the renumbered
+// surface. The reaper tests that exercise Run() via LifecycleService now
+// need to pass *LifecycleService directly.
+func stubReaperLifecycle(repo *countingRepo) *LifecycleService {
+	lc, _ := NewLifecycleService(repo)
+	return lc
+}
 
 // TestTaskLeaseReaper_ConstructionDefaults: zero-value ticker / limit
 // get safe defaults.
 func TestTaskLeaseReaper_ConstructionDefaults(t *testing.T) {
 	repo := &countingRepo{}
-	r := NewTaskLeaseReaperWithConfig(repo, 0, 0)
+	lc := stubReaperLifecycle(repo)
+	r := NewTaskLeaseReaperWithConfig(lc, 0, 0)
 	if r == nil {
 		t.Fatal("NewTaskLeaseReaperWithConfig returned nil")
 	}
@@ -85,13 +110,13 @@ func TestTaskLeaseReaper_ConstructionDefaults(t *testing.T) {
 	}
 }
 
-// TestTaskLeaseReaper_NilRepoPanics: nil repo is a programming error —
-// the constructor fails loud rather than returning a reaper that
-// silently no-ops.
-func TestTaskLeaseReaper_NilRepoPanics(t *testing.T) {
+// TestTaskLeaseReaper_NilLifecyclePanics: nil lifecycle is a programming
+// error — the constructor fails loud rather than returning a reaper
+// that silently no-ops.
+func TestTaskLeaseReaper_NilLifecyclePanics(t *testing.T) {
 	defer func() {
 		if r := recover(); r == nil {
-			t.Error("expected panic on nil repo")
+			t.Error("expected panic on nil lifecycle")
 		}
 	}()
 	_ = NewTaskLeaseReaperWithConfig(nil, 30*time.Second, 100)
@@ -102,7 +127,8 @@ func TestTaskLeaseReaper_NilRepoPanics(t *testing.T) {
 // its context. Assert the called count is >=2 (>=1 is race-tricky).
 func TestTaskLeaseReaper_RunTicksUntilContextCancel(t *testing.T) {
 	repo := &countingRepo{}
-	r := NewTaskLeaseReaperWithConfig(repo, 5*time.Millisecond, 50)
+	lc := stubReaperLifecycle(repo)
+	r := NewTaskLeaseReaperWithConfig(lc, 5*time.Millisecond, 50)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -139,7 +165,8 @@ func TestTaskLeaseReaper_RepoErrorDoesNotKillLoop(t *testing.T) {
 	failOn := 2
 	repo.errOnCall = &failOn
 
-	r := NewTaskLeaseReaperWithConfig(repo, 5*time.Millisecond, 50)
+	lc := stubReaperLifecycle(repo)
+	r := NewTaskLeaseReaperWithConfig(lc, 5*time.Millisecond, 50)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -163,7 +190,8 @@ func TestTaskLeaseReaper_RepoErrorDoesNotKillLoop(t *testing.T) {
 // repo receives that exact RFC3339 string.
 func TestTaskLeaseReaper_SetClockReplacesNow(t *testing.T) {
 	repo := &countingRepo{}
-	r := NewTaskLeaseReaperWithConfig(repo, 5*time.Millisecond, 50)
+	lc := stubReaperLifecycle(repo)
+	r := NewTaskLeaseReaperWithConfig(lc, 5*time.Millisecond, 50)
 
 	fixed := time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)
 	r.SetClock(func() time.Time { return fixed })
@@ -190,7 +218,8 @@ func TestTaskLeaseReaper_SetClockReplacesNow(t *testing.T) {
 // panic on the next tick).
 func TestTaskLeaseReaper_SetClockNilNoOp(t *testing.T) {
 	repo := &countingRepo{}
-	r := NewTaskLeaseReaperWithConfig(repo, 5*time.Millisecond, 50)
+	lc := stubReaperLifecycle(repo)
+	r := NewTaskLeaseReaperWithConfig(lc, 5*time.Millisecond, 50)
 	r.SetClock(nil) // must not panic
 
 	ctx, cancel := context.WithCancel(context.Background())

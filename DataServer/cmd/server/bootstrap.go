@@ -34,6 +34,7 @@ import (
 	"velox-server/internal/outbox"
 	"velox-server/internal/store"
 	"velox-server/internal/taskgraph"
+	"velox-server/internal/ingest"
 	workersreg "velox-server/internal/workers"
 )
 
@@ -110,6 +111,27 @@ func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
 	if err != nil {
 		return nil, err
 	}
+	// PR-04 / fix/task-expiry-atomic-transition: wire the JobsLifecycle
+	// into the TaskLifecycle so ExpireTaskLease's retry-budget lookup and
+	// Job-aggregate update have context. nil-safe: omitted dependency
+	// means the reaper still runs and gracefully skips the Job update.
+	if j != nil && j.Lifecycle != nil && t != nil && t.TaskLifecycle != nil {
+		t.TaskLifecycle.SetJobsRepo(j.Lifecycle.Jobs())
+	}
+	// feat/task-report-ingestion: build the canonical
+	// TaskReportIngestionService now that all upstream deps (tasks +
+	// attempts + jobs + task_output_artifacts) are constructed. The
+	// service drives handleTaskResult's atomic-close + artifact-register
+	// + Job roll-up sequence.
+	if j != nil && j.Repository != nil && t != nil && t.TaskRepository != nil && t.OutputArtifacts != nil {
+		ingestionSvc, ingErr := ingest.NewTaskReportIngestionService(
+			t.TaskRepository, j.Repository, t.AttemptRepository, t.OutputArtifacts,
+		)
+		if ingErr != nil {
+			return nil, fmt.Errorf("bootstrap: task report ingestion service: %w", ingErr)
+		}
+		t.IngestionSvc = ingestionSvc
+	}
 	w, err := buildWorkers(cfg, p)
 	if err != nil {
 		return nil, err
@@ -170,6 +192,24 @@ func runServer(cfg *config.Config) error {
 	t, err := buildTasks(p)
 	if err != nil {
 		return err
+	}
+	// PR-04 / fix/task-expiry-atomic-transition: see buildServerDeps —
+	// wire jobsRepo into TaskLifecycle so the reaper can read
+	// jobs.max_retries and update the Job aggregate on retries-exhausted.
+	if j != nil && j.Lifecycle != nil && t != nil && t.TaskLifecycle != nil {
+		t.TaskLifecycle.SetJobsRepo(j.Lifecycle.Jobs())
+	}
+	// feat/task-report-ingestion: see buildServerDeps — build the
+	// canonical ingestion service after buildJobs + buildTasks return
+	// (it needs j.Repository for Job roll-up).
+	if j != nil && j.Repository != nil && t != nil && t.TaskRepository != nil && t.OutputArtifacts != nil {
+		ingestionSvc, ingErr := ingest.NewTaskReportIngestionService(
+			t.TaskRepository, j.Repository, t.AttemptRepository, t.OutputArtifacts,
+		)
+		if ingErr != nil {
+			return fmt.Errorf("bootstrap: task report ingestion service: %w", ingErr)
+		}
+		t.IngestionSvc = ingestionSvc
 	}
 	w, err := buildWorkers(cfg, p)
 	if err != nil {
@@ -253,9 +293,17 @@ func runServer(cfg *config.Config) error {
 				return err
 			}
 			grpcHandler := grpcserver.NewHandler(
-			w.Registry, w.CommandManager, jobsRepo, t.TaskRepository, t.AttemptRepository, a.ArtifactSvc, p.SQLite,
-			buildGRPCHandlerConfig(cfg, insecureDev),
-		)
+				w.Registry, w.CommandManager, jobsRepo, t.TaskRepository, t.AttemptRepository, a.ArtifactSvc, p.SQLite,
+				buildGRPCHandlerConfig(cfg, insecureDev),
+			)
+			// feat/task-report-ingestion: install the canonical
+			// TaskReportIngestionService so handleTaskResult delegates to
+			// the audit-mandated sequence (atomic close + artifact register
+			// + Job roll-up) rather than re-implementing it in handler code.
+			if t != nil && t.IngestionSvc != nil {
+				grpcHandler.SetIngestionSvc(t.IngestionSvc)
+				log.Printf("[BOOTSTRAP] installed TaskReportIngestionService on gRPC handler (feat/task-report-ingestion)")
+			}
 			gs, lis, gerr := grpcserver.StartGRPCServer(
 				cfg.Server.GRPCPort, grpcHandler,
 				cfg.Server.GRPCTLSCertFile, cfg.Server.GRPCTLSKeyFile, cfg.Server.GRPCTLSCAFile,
@@ -307,7 +355,7 @@ func runServer(cfg *config.Config) error {
 		_ = supervisor.Run(bgCtx)
 	}()
 
-	log.Printf("[BOOTSTRAP] Bootstrap complete — %d modules, %d background runners",
+	log.Printf("[BOOTSTRAP] Bootstrap complete \u2014 %d modules, %d background runners",
 		m.Registry.Len(), supervisor.Len())
 	if m.Health != nil {
 		m.Health.MarkReady()
@@ -327,13 +375,13 @@ func runServer(cfg *config.Config) error {
 
 	// 9. Graceful teardown
 	bgCancel()
-	log.Println("[SERVER] Background goroutines cancelling — waiting for them to exit...")
+	log.Println("[SERVER] Background goroutines cancelling \u2014 waiting for them to exit...")
 
 	select {
 	case <-supervisorDone:
 		log.Println("[SERVER] Background goroutines stopped cleanly")
 	case <-time.After(15 * time.Second):
-		log.Printf("[SERVER] background shutdown timed out after 15s — proceeding with teardown anyway")
+		log.Printf("[SERVER] background shutdown timed out after 15s \u2014 proceeding with teardown anyway")
 	}
 
 	shutdownGRPCServer(grpcSrv)
@@ -352,7 +400,7 @@ func buildSupervisor(a *assetDeps, m *moduleDeps, j *jobsDeps, p *persistenceDep
 		if err := sup.Register(RunnerFunc{
 			name: "outbox-dispatcher",
 			fn: func(ctx context.Context) error {
-				log.Printf("[BOOTSTRAP] Outbox dispatcher started — polling outbox_events")
+				log.Printf("[BOOTSTRAP] Outbox dispatcher started \u2014 polling outbox_events")
 				return a.OutboxDispatcher.Run(ctx)
 			},
 		}); err != nil {
@@ -363,7 +411,7 @@ func buildSupervisor(a *assetDeps, m *moduleDeps, j *jobsDeps, p *persistenceDep
 		if err := sup.Register(RunnerFunc{
 			name: "delivery-runner",
 			fn: func(ctx context.Context) error {
-				log.Printf("[BOOTSTRAP] DeliveryRunner started — polling PENDING job_deliveries")
+				log.Printf("[BOOTSTRAP] DeliveryRunner started \u2014 polling PENDING job_deliveries")
 				return m.DeliveryRunner.Run(ctx)
 			},
 		}); err != nil {
@@ -371,7 +419,7 @@ func buildSupervisor(a *assetDeps, m *moduleDeps, j *jobsDeps, p *persistenceDep
 		}
 	}
 	if j.Lifecycle != nil {
-		// PR-13 → PR-05 cutover: the Job-side reaper is DEPRECATED.
+		// PR-13 \u2192 PR-05 cutover: the Job-side reaper is DEPRECATED.
 		//
 		// History: PR-13 introduced VELOX_DISABLE_JOB_REAPER (default off)
 		// as a stop-gap while the jobs lease_expiry column went away
@@ -387,30 +435,6 @@ func buildSupervisor(a *assetDeps, m *moduleDeps, j *jobsDeps, p *persistenceDep
 			log.Printf("[BOOTSTRAP] DEPRECATED env=VELOX_DISABLE_JOB_REAPER=true (PR-13 superseded by PR-05 TaskLeaseReaper; flag is now a no-op, set VELOX_TASK_LEASE_REAPER_DISABLED=true at the TaskLeaseReaper runner if you need to disable on the canonical path)")
 		} else {
 			log.Printf("[BOOTSTRAP] note=job-side zombie reaper is DEPRECATED; TaskLeaseReaper is the canonical master-side lease enforcer")
-		}
-		if err := sup.Register(RunnerFunc{
-			name: "zombie-reaper",
-			fn: func(ctx context.Context) error {
-				ticker := time.NewTicker(60 * time.Second)
-				defer ticker.Stop()
-				for {
-					select {
-					case <-ctx.Done():
-						return ctx.Err()
-					case <-ticker.C:
-						results, err := j.Lifecycle.RequeueExpiredLeasesSafe(ctx, 100)
-						if err != nil {
-							log.Printf("[ZOMBIE] requeue error: %v", err)
-							continue
-						}
-						if len(results) > 0 {
-							log.Printf("[ZOMBIE] requeued %d stuck jobs", len(results))
-						}
-					}
-				}
-			},
-		}); err != nil {
-			return nil, fmt.Errorf("supervisor register zombie-reaper: %w", err)
 		}
 	}
 	if a.Reconciler != nil {
@@ -440,7 +464,7 @@ func buildSupervisor(a *assetDeps, m *moduleDeps, j *jobsDeps, p *persistenceDep
 						if err != nil {
 							log.Printf("[TASKGRAPH] TickReadiness error: %v", err)
 						} else if n > 0 {
-							log.Printf("[TASKGRAPH] TickReadiness: %d PENDING→READY", n)
+							log.Printf("[TASKGRAPH] TickReadiness: %d PENDING\u2192READY", n)
 						}
 					}
 				}
@@ -454,7 +478,7 @@ func buildSupervisor(a *assetDeps, m *moduleDeps, j *jobsDeps, p *persistenceDep
 	// decoupled from the readiness dispatcher. 30 s default matches
 	// the master-side defaultTaskLeaseTTL (30 min) so a freshly
 	// claimed task waits at most TTL+30s before being reaped if its
-	// worker crashes mid-flight, within the audit §P0.4 budget.
+	// worker crashes mid-flight, within the audit \u00a7P0.4 budget.
 	if t.TaskLeaseReaper != nil {
 		if err := sup.Register(RunnerFunc{
 			name: "task-lease-reaper",
@@ -476,7 +500,7 @@ func buildSupervisor(a *assetDeps, m *moduleDeps, j *jobsDeps, p *persistenceDep
 				if err := w.UpdateHandler.GenerateManifestV2(); err != nil {
 					log.Printf("[BOOTSTRAP] Manifest auto-generation skipped: %v", err)
 				}
-				// Always returns nil — manifest failure is never fatal.
+				// Always returns nil \u2014 manifest failure is never fatal.
 				return nil
 			},
 		}); err != nil {

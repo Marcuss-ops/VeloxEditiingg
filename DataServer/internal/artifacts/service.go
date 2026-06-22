@@ -16,6 +16,7 @@ import (
 	"velox-server/internal/identity"
 	"velox-server/internal/platform/clock"
 	"velox-server/internal/store"
+	"velox-server/internal/taskattempts"
 )
 
 // defaultUploadTTL matches the spec's reconciler rule
@@ -175,9 +176,10 @@ func (s *Service) loadJob(ctx context.Context, jobID string) (*jobState, error) 
 // FAIL because those columns are gone.
 func (s *Service) loadAttempt(ctx context.Context, jobID string, attemptNumber int) (status, workerID, leaseID string, err error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT status, COALESCE(worker_id, ''), COALESCE(lease_id, '')
-		 FROM job_attempts
-		 WHERE job_id = ? AND attempt_number = ?`,
+		`SELECT COALESCE(ta.status, ''), COALESCE(ta.worker_id, ''), COALESCE(ta.lease_id, '')
+		 FROM task_attempts ta
+		 JOIN tasks t ON ta.task_id = t.task_id
+		 WHERE t.job_id = ? AND ta.attempt_number = ?`,
 		jobID, attemptNumber)
 	if scanErr := row.Scan(&status, &workerID, &leaseID); scanErr != nil {
 		if errors.Is(scanErr, sql.ErrNoRows) {
@@ -307,7 +309,18 @@ func (s *Service) BeginUpload(ctx context.Context, cmd BeginUploadCommand) (*Upl
 			ErrLeaseInvalid, cmd.JobID, cmd.AttemptNumber)
 	}
 	attStatus = strings.ToUpper(strings.TrimSpace(attStatus))
-	if attStatus != string(AttemptRenderFinished) && attStatus != string(AttemptProcessing) {
+	// cleanup/remove-job-attempts-runtime: the legacy
+	// RENDER_FINISHED/PROCESSING check from the job_attempts enum is
+	// gone. task_attempts lifecycle is PENDING → RUNNING → SUCCEEDED
+	// (closes on taskingestion.Ingest via TransitionTaskToTerminalAtomic);
+	// artifacts BeginUpload runs WHILE the task_attempts is
+	// non-terminal (worker active) and stamps its worker_id +
+	// lease_id into artifact_uploads. A terminal state on the
+	// attempt is the failure signal — accept any non-terminal.
+	if attStatus == string(taskattempts.AttemptStatusSucceeded) ||
+		attStatus == string(taskattempts.AttemptStatusFailed) ||
+		attStatus == string(taskattempts.AttemptStatusCancelled) ||
+		attStatus == string(taskattempts.AttemptStatusTimedOut) {
 		return nil, fmt.Errorf("%w: job=%s n=%d current=%s",
 			ErrAttemptNotRenderFinished, cmd.JobID, cmd.AttemptNumber, attStatus)
 	}

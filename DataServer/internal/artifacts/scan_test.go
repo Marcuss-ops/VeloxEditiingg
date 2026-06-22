@@ -27,6 +27,16 @@ import (
 	"testing"
 )
 
+// cleanup/remove-job-attempts-runtime: forbid any writer on the
+// job_attempts table (case-insensitive, whitespace-tolerant).
+// Tracks every INSERT/UPDATE on job_attempts. The runtime writer
+// surface was removed (InsertJobAttempt / InsertJobAttemptTx /
+// UpdateJobAttemptStatus on store/store_attempts.go); no production
+// code path is allowed to revive it. READS are still permitted
+// (job_attempts.GetJobAttempts + the postgres-side started_at lookup
+// in postgres_jobs_repository.go) — SELECT is not in the regex.
+var forbiddenJobAttemptsWrite = regexp.MustCompile(`(?i)(INSERT\s+INTO|UPDATE)\s+job_attempts\b`)
+
 // forbiddenSUCCEEDEDWrite is the SQL fragment we forbid outside the
 // audited allowlist. Case-insensitive, whitespace-tolerant: a
 // `SET  status='SUCCEEDED'` style still trips the check.
@@ -76,6 +86,78 @@ var allowedTestFiles = map[string]bool{
 	// fixture (upload session, artifact, job attempt in RENDER_FINISHED state)
 	// which is out of scope for this API-level test.
 	filepath.Join("internal", "handlers", "server", "calendar", "calendar_test.go"): true,
+}
+
+// allowedJobAttemptsLegacyWriters is the explicit allowlist of files
+// that legitimately contain `INSERT INTO job_attempts` or
+// `UPDATE job_attempts` SQL fragments AFTER
+// cleanup/remove-job-attempts-runtime.
+//
+// After the cleanup, only:
+//   1. .sql migration files that historically created the table (still
+//      needed to provision the schema for backwards compat loads) —
+//      but Go source files don't apply.
+//   2. Test fixtures that pre-populate the table for smoke tests of
+//      read-side consumers (postgres_jobs_repository.go historic lease
+//      proxy lookup).
+//
+// Production source MUST stay empty here. If you find yourself adding
+// to this map for a new writer, you are reintroducing the runtime
+// surface that this PR explicitly retired.
+//
+// NOTE: success_path_test.go (a previously-allowlisted file) retired
+// the legacy job_attempts INSERTs alongside the production
+// FinalizeVerified step 4 cleanup — successful-finalization no
+// longer needs an attempt row in either job_attempts or
+// artifact_uploads; the canonical attempt identity is on task_attempts.
+// shrink the audit surface by the same number of DDL rows dropped.
+var allowedJobAttemptsLegacyWriters = map[string]bool{
+	filepath.Join("internal", "artifacts", "scan_test.go"): true,
+	filepath.Join("internal", "artifacts", "service_test.go"): true,
+	filepath.Join("internal", "handlers", "remote", "workers", "uploads", "video_upload_completed_test.go"): true,
+}
+
+// stripGoComments removes `// ... \n` and `/* ... */` comments from
+// Go source bytes. The scan test runs the SQL-fragment regex against
+// the stripped source so doc comments / backticked examples that
+// reference the canonical SQL verbatim don't trip a false-positive.
+//
+// Per-line handling: skip until newline on `//`; toggle in/out on
+// `/* ... */`. The block-comment parser is intentionally conservative
+// (it does NOT understand strings, raw strings, or rune literals) —
+// false negatives would re-flag legitimate SQL writers and the
+// reviewer would catch that, whereas false positives block CI on a
+// doc-only reference that cannot execute SQL.
+func stripGoComments(src []byte) []byte {
+	var out []byte
+	inBlock := false
+	for i := 0; i < len(src); i++ {
+		if inBlock {
+			if i+1 < len(src) && src[i] == '*' && src[i+1] == '/' {
+				inBlock = false
+				i++
+			}
+			continue
+		}
+		if i+1 < len(src) && src[i] == '/' && src[i+1] == '/' {
+			// Skip to end of line, preserving the newline so line
+			// counts in test output remain comparable.
+			for i < len(src) && src[i] != '\n' {
+				i++
+			}
+			if i < len(src) {
+				out = append(out, '\n')
+			}
+			continue
+		}
+		if i+1 < len(src) && src[i] == '/' && src[i+1] == '*' {
+			inBlock = true
+			i++
+			continue
+		}
+		out = append(out, src[i])
+	}
+	return out
 }
 
 // findInternalRoot walks from the package cwd upward (default
@@ -133,7 +215,12 @@ func TestSucceededWriterIsFinalizationOnly(t *testing.T) {
 		if readErr != nil {
 			return readErr
 		}
-		if forbiddenSUCCEEDEDWrite.Match(b) {
+		// Strip Go comments before regex matching so doc comments
+		// that reference the canonical SUCCEEDED-flip SQL
+		// (e.g. `SET status='SUCCEEDED'` in a backticked example)
+		// don't trip a false positive. Same guard as
+		// TestNoJobAttemptsWriter for symmetry.
+		if forbiddenSUCCEEDEDWrite.Match(stripGoComments(b)) {
 			violations = append(violations, rel)
 		}
 		return nil
@@ -172,13 +259,16 @@ func TestSucceededWriterCount(t *testing.T) {
 	matches := forbiddenSUCCEEDEDWrite.FindAll(b, -1)
 
 	const (
-		minExpected = 2 // jobs CAS + job_attempts CAS — required by verified finalization
+		// cleanup/remove-job-attempts-runtime: the legacy job_attempts
+		// CAS was removed from FinalizeVerified — the canonical
+		// SUCCEEDED write is now solely the jobs CAS.
+		minExpected = 1
 		maxExpected = 3 // small ceiling: catch accidental duplicate writers
 	)
 	switch {
 	case len(matches) < minExpected:
 		t.Fatalf("canonical writer contains %d `SET status='SUCCEEDED'` matches; expected >= %d.\n"+
-			"Verified finalization requires at least 2 distinct CAS (jobs + job_attempts).\n"+
+			"Verified finalization requires at least 1 distinct CAS (jobs).\n"+
 			"Did you delete one accidentally? Did the writer move? Investigate immediately.",
 			len(matches), minExpected)
 	case len(matches) > maxExpected:
@@ -187,5 +277,58 @@ func TestSucceededWriterCount(t *testing.T) {
 			"split your logic into a different status enum or move the extra flip out "+
 			"of the verified-finalization tx.",
 			len(matches), maxExpected)
+	}
+}
+
+// TestNoJobAttemptsWriter: cleanup/remove-job-attempts-runtime
+// enforces that no production .go file under internal/ contains
+// `INSERT INTO job_attempts` or `UPDATE job_attempts` SQL fragments.
+// Test fixtures are explicitly allowlisted.
+//
+// READS (SELECT) are not in the regex — the postgres-side
+// RequeueExpiredLeases path is a read consumer awaiting its own
+// decommissioning (PR-07 follow-up).
+func TestNoJobAttemptsWriter(t *testing.T) {
+	root := findInternalRoot(t)
+	internalDir := filepath.Join(root, "internal")
+
+	var violations []string
+	walkErr := filepath.WalkDir(internalDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		if filepath.Ext(path) != ".go" {
+			return nil
+		}
+		// Allowlist check: test fixtures that exercise read-side
+		// consumers + this guard's own definition file.
+		rel, _ := filepath.Rel(root, path)
+		if allowedJobAttemptsLegacyWriters[rel] {
+			return nil
+		}
+		b, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return readErr
+		}
+		// Strip Go comments before regex matching so doc comments
+		// that reference the canonical SQL (`UPDATE job_attempts`
+		// inside a backticked example) don't trip a false positive.
+		if forbiddenJobAttemptsWrite.Match(stripGoComments(b)) {
+			violations = append(violations, rel)
+		}
+		return nil
+	})
+	if walkErr != nil {
+		t.Fatalf("walk internal/: %v", walkErr)
+	}
+	if len(violations) > 0 {
+		t.Fatalf("`INSERT INTO job_attempts` / `UPDATE job_attempts` SQL writer detected outside the legacy-fixture allowlist.\n"+
+			"cleanup/remove-job-attempts-runtime: the runtime writer surface has been retired. Per-attempt identity lives on task_attempts.\n"+
+			"Offending files (must be added to allowedJobAttemptsLegacyWriters with a documenting comment, "+
+			"OR rewritten to use task_attempts):\n"+
+			"  %v", violations)
 	}
 }

@@ -90,8 +90,15 @@ type Writer interface {
 
 	// FailWithRetry marks a job FAILED or RETRY_WAIT depending on
 	// retryable AND retry budget (retry_count < max_retries).
-	// In one tx: UPDATE jobs, UPDATE job_attempts, INSERT history,
-	// INSERT event, INSERT outbox.
+	// In one tx: UPDATE jobs, INSERT history, INSERT event, INSERT outbox.
+	//
+	// cleanup/remove-job-attempts-runtime: the legacy
+	// `UPDATE job_attempts` is no longer part of this method.
+	// Per-attempt close-out is now driven by
+	// taskingestion.Ingest.TransitionTaskToTerminalAtomic on
+	// task_attempts (canonical layer). See
+	// internal/taskingestion and the doc above FailWithRetry's
+	// implementation in internal/store/sqlite_jobs_writer_pr3.go.
 	// Returns ErrTransitionConflict on revision mismatch.
 	FailWithRetry(ctx context.Context, id, errorCode, errorMessage string, retryable bool, revision int) error
 

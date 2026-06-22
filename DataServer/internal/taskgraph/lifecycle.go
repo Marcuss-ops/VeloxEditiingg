@@ -9,11 +9,31 @@ import (
 	"context"
 	"fmt"
 	"time"
+
+	"velox-server/internal/jobs"
 )
 
 // LifecycleService manages transactional task state transitions.
 type LifecycleService struct {
 	repo Repository
+	// jobsRepo is the canonical jobs-side surface ExpireTaskLease uses
+	// to read retry budgets (jobs.max_retries) and post-commit-update
+	// the Job aggregate when retries are exhausted. PR-04 wires this
+	// post-commit so the reap atomic stays single-domain.
+	jobsRepo JobsRetryQuerier
+	// now is overridable for tests; nil falls back to time.Now().UTC().
+	now func() time.Time
+}
+
+// JobsRetryQuerier is the narrow jobs-side surface ExpireTaskLease uses.
+// Defined as an interface so LifecycleService has no hard dependency on
+// the jobs.Repository surface and tests can substitute a stub.
+type JobsRetryQuerier interface {
+	// Get returns the canonical Job by ID, or (nil, nil) on missing.
+	Get(ctx context.Context, id string) (*jobs.Job, error)
+	// FailWithRetry marks the job FAILED or RETRY_WAIT depending on
+	// retryable flag and the job's retry_count/max_retries budget.
+	FailWithRetry(ctx context.Context, id, errorCode, errorMessage string, retryable bool, revision int) error
 }
 
 // NewLifecycleService constructs the transactional LifecycleService.
@@ -21,7 +41,24 @@ func NewLifecycleService(repo Repository) (*LifecycleService, error) {
 	if repo == nil {
 		return nil, fmt.Errorf("taskgraph.Repository is required")
 	}
-	return &LifecycleService{repo: repo}, nil
+	return &LifecycleService{repo: repo, now: func() time.Time { return time.Now().UTC() }}, nil
+}
+
+// SetJobsRepo wires the jobs-side retry querier into the lifecycle
+// service. Optional: when not set, ExpireTaskLease works without Job
+// aggregate updates (the audit's "update Job aggregate when retries
+// exhausted" step is skipped, all reaped tasks revert to READY).
+func (l *LifecycleService) SetJobsRepo(jobsRepo JobsRetryQuerier) {
+	l.jobsRepo = jobsRepo
+}
+
+// SetClock overrides the now() function used by ExpireTaskLease's
+// post-commit jobsRepo path. Tests use this to drive deterministic
+// timestamps. nil is a no-op (production keeps the default).
+func (l *LifecycleService) SetClock(now func() time.Time) {
+	if now != nil {
+		l.now = now
+	}
 }
 
 // Repo exposes the canonical taskgraph.Repository.
@@ -67,13 +104,17 @@ func (l *LifecycleService) Fail(ctx context.Context, id, reason string, revision
 	return l.repo.Fail(ctx, id, reason, revision)
 }
 
-// RenewLease extends a currently-leased task's deadline (PR-05 follow-up).
-// Delegates to Repository.RenewLease after enforcing the empty-id guard.
-// expiry must be a non-zero time; passing time.Time{} returns an error to
-// prevent accidentally writing a NULL-equivalent RFC3339 string.
+// RenewLease extends a currently-leased or running task's deadline
+// (PR-03 / fix/task-lease-renewal-protocol). Validates non-empty
+// identity and non-zero expiry, then delegates to the repository's
+// CAS which accepts the task in either LEASED or RUNNING state and
+// gates on the (task_id, worker_id, lease_id, revision) tuple — no
+// attempt_id predicate (AcceptTaskAtomic is the SOLE writer of
+// attempt_id; see Repository.RenewLease for the full CAS contract).
 func (l *LifecycleService) RenewLease(ctx context.Context, id, workerID, leaseID string, expiry time.Time, revision int) error {
 	if id == "" || workerID == "" || leaseID == "" {
-		return fmt.Errorf("taskgraph.RenewLease: missing identity")
+		return fmt.Errorf("taskgraph.RenewLease: missing identity (task=%q worker=%q lease=%q)",
+			id, workerID, leaseID)
 	}
 	if expiry.IsZero() {
 		return fmt.Errorf("taskgraph.RenewLease: empty expiry")
@@ -81,13 +122,12 @@ func (l *LifecycleService) RenewLease(ctx context.Context, id, workerID, leaseID
 	return l.repo.RenewLease(ctx, id, workerID, leaseID, expiry.UTC(), revision)
 }
 
-// RequeueExpiredLeases sweeps tasks whose lease has expired (PR-05 / §P0.4
-// reaper). Delegates to Repository.RequeueExpiredLeases, which performs the
-// bulk LEASED→READY / RUNNING→READY (with attempt_count += 1) transition
-// inside a single SQLite tx. NULL leases are skipped (never-expiring). The
-// caller-supplied nowRFC3339 lets the supervisor pin the sweep time so the
-// tick is deterministic across goroutines.
-func (l *LifecycleService) RequeueExpiredLeases(ctx context.Context, nowRFC3339 string, limit int) ([]string, error) {
+// RequeueExpiredLeases scans tasks whose lease has expired as
+// RequeueCandidate rows (PR-04: SELECT-only; the per-row atomic write
+// is ExpireTaskLeaseAtomic). The caller-supplied nowRFC3339 lets the
+// supervisor pin the sweep time so the tick is deterministic across
+// goroutines.
+func (l *LifecycleService) RequeueExpiredLeases(ctx context.Context, nowRFC3339 string, limit int) ([]RequeueCandidate, error) {
 	if nowRFC3339 == "" {
 		return nil, fmt.Errorf("taskgraph.RequeueExpiredLeases: empty nowRFC3339")
 	}
@@ -95,6 +135,72 @@ func (l *LifecycleService) RequeueExpiredLeases(ctx context.Context, nowRFC3339 
 		limit = 100
 	}
 	return l.repo.RequeueExpiredLeases(ctx, nowRFC3339, limit)
+}
+
+// ExpireTaskLease wraps the audit-mandated reap for one task:
+//
+//  1. derive retry budget from the parent Job (jobs.max_retries, 0 default 3)
+//  2. call Repository.ExpireTaskLeaseAtomic with candidate.LeaseID
+//     and candidate.LeaseExpiresAt as the OBSERVED values the reaper
+//     pulled from the SELECT phase
+//  3. if AttemptsExhausted, post-commit Job update via jobsRepo.FailWithRetry
+//
+// The Job update runs OUTSIDE the atomic so the audit-strict transactional
+// boundary (Task + Attempt CAS in one tx) is preserved. A failure to
+// update the Job is surfaced but does NOT roll back the Task reap \u2014 the
+// Task is already terminal; the next supervisor tick deduplicates.
+func (l *LifecycleService) ExpireTaskLease(ctx context.Context, candidate RequeueCandidate) (ExpireResult, error) {
+	if candidate.ID == "" {
+		return ExpireResult{}, fmt.Errorf("taskgraph.ExpireTaskLease: candidate.ID is empty")
+	}
+	if candidate.LeaseID == "" {
+		return ExpireResult{}, fmt.Errorf("taskgraph.ExpireTaskLease: candidate.LeaseID is empty for %s", candidate.ID)
+	}
+
+	// Retry budget derivation. Default to 3 so callers without
+	// jobsRepo wired (or with a missing job) get a sane baseline.
+	maxRetries := 3
+	if l.jobsRepo != nil && candidate.ID != "" {
+		t, terr := l.repo.Get(ctx, candidate.ID)
+		if terr == nil && t != nil && t.JobID != "" {
+			job, jerr := l.jobsRepo.Get(ctx, t.JobID)
+			if jerr == nil && job != nil && job.MaxRetries > 0 {
+				maxRetries = job.MaxRetries
+			}
+		}
+	}
+
+	res, err := l.repo.ExpireTaskLeaseAtomic(
+		ctx,
+		candidate.ID,
+		candidate.LeaseID,
+		candidate.LeaseExpiresAt,
+		maxRetries,
+	)
+	if err != nil {
+		return res, fmt.Errorf("taskgraph.ExpireTaskLease: atomic reap: %w", err)
+	}
+
+	// Post-commit Job aggregate update when retries are exhausted.
+	// Deliberately NOT failing the reap if the Job update itself fails:
+	// the Task reap committed already, lease is recovered regardless.
+	if res.AttemptsExhausted && l.jobsRepo != nil && candidate.ID != "" {
+		t, terr := l.repo.Get(ctx, candidate.ID)
+		if terr == nil && t != nil && t.JobID != "" {
+			job, jerr := l.jobsRepo.Get(ctx, t.JobID)
+			if jerr == nil && job != nil && !job.Status.IsTerminal() {
+				_ = l.jobsRepo.FailWithRetry(
+					ctx, t.JobID,
+					"LEASE_EXPIRED_RETRIES_EXHAUSTED",
+					fmt.Sprintf("task %s tripped retry budget via master-side reap", candidate.ID),
+					false, job.Revision,
+				)
+			}
+		}
+	}
+
+	res.TaskID = candidate.ID
+	return res, nil
 }
 
 // now normalizes a time to UTC. If t is zero, returns current time.

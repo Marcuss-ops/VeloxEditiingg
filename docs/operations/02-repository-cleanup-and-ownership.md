@@ -1,8 +1,16 @@
 # Runbook operativo 02 — Pulizia repository, ownership e rimozione del legacy
 
-Status: operativo
+Status: **operativo** (rotazione parziale post-cutover, giugno 2026)
 
-Data snapshot: 2026-06-21
+Data snapshot: 2026-06-22
+
+> **Risultati già acquisiti.** Diverse voci del runbook sono state
+> completate durante il cutover PR-01..PR-15. Le sezioni pertinenti
+> sono marcate **(✅ fatto)**; le altre restano come guida viva per
+> i cleanup ancora pendenti (PR-08, PR-10, PR-12, PR-14, PR-16).
+>
+> Cross-reference canonico della matrice di ownership attuale:
+> [`docs/architecture/OWNERSHIP.md`](../architecture/OWNERSHIP.md).
 
 Obiettivo: ridurre complessità accidentale, dipendenze residue, documentazione falsa, percorsi duplicati e compatibilità senza scadenza. Questo runbook non elimina componenti canonici: elimina soltanto superfici morte, transitorie o duplicate.
 
@@ -150,10 +158,12 @@ scripts/ci/check-architecture.sh
 Aggiungere ownership esplicita per:
 
 ```text
-DataServer/internal/taskgraph/
-DataServer/internal/taskattempts/
-DataServer/internal/observability/
-DataServer/internal/costmodel/
+DataServer/internal/taskgraph/                  ✅ landed in OWNERSHIP.md
+DataServer/internal/taskattempts/               ✅ landed in OWNERSHIP.md
+DataServer/internal/observability/              ✅ landed in OWNERSHIP.md
+DataServer/internal/costmodel/                  ✅ landed in OWNERSHIP.md
+DataServer/internal/jobs/enqueue/               ✅ landed in OWNERSHIP.md ("Payload V2 single shape")
+shared/contract/                                ✅ landed in OWNERSHIP.md ("Payload V2 single shape" + typed envelope)
 RemoteCodex/native/worker-agent-go/internal/executor/
 RemoteCodex/native/worker-agent-go/internal/taskrunner/
 RemoteCodex/native/worker-agent-go/internal/resource/
@@ -161,7 +171,14 @@ RemoteCodex/native/worker-agent-go/pkg/cache/
 RemoteCodex/native/worker-agent-go/pkg/blob/
 ```
 
-Rimuovere o marcare come proibiti percorsi non più esistenti, ad esempio `DataServer/internal/obs/`, se il package canonico è `internal/observability`.
+Rimuovere o marcare come proibiti percorsi non più esistenti:
+
+```text
+DataServer/internal/obs/                        ✅ rimosso, vedi OWNERSHIP.md "Removed packages"
+DataServer/internal/workflow/                   ✅ rimosso, vedi OWNERSHIP.md "Removed packages"
+DataServer/internal/queue/                       ✅ rimosso, vedi OWNERSHIP.md "Removed packages"
+RemoteCodex/native/worker-agent-go/internal/costmodel/   ✅ rimosso, vedi OWNERSHIP.md "Removed packages"
+```
 
 Aggiungere una verifica CI che confronti le directory canoniche dichiarate in `OWNERSHIP.md` con una allowlist in `CODEOWNERS`. La verifica può essere semplice e deterministica; non deve tentare di interpretare Markdown genericamente.
 

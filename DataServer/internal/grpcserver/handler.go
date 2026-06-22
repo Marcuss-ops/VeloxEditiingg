@@ -29,6 +29,7 @@ import (
 	"velox-server/internal/store"
 	"velox-server/internal/taskattempts"
 	"velox-server/internal/taskgraph"
+	"velox-server/internal/ingest"
 	workersreg "velox-server/internal/workers"
 	"velox-shared/controltransport"
 	pb "velox-shared/controltransport/pb"
@@ -56,9 +57,15 @@ type Handler struct {
 	taskRepo        taskgraph.Repository
 	taskAttemptRepo taskattempts.Repository
 	artifactSvc     *artifacts.Service
-	dbStore         *store.SQLiteStore
-	config          *HandlerConfig
-	authorizer      WorkerAuthorizer // P0: gates workers against VELOX_ALLOWED_WORKERS
+	// ingestionSvc is the canonical TaskReportIngestionService
+	// (feat/task-report-ingestion). Wired post-construction via
+	// SetIngestionSvc so the audit closure can run during bootstrap
+	// without forcing every NewHandler caller to thread a new dependency.
+	// Nil-checked defensively in handleTaskResult (rejects on misconfig).
+	ingestionSvc *ingest.TaskReportIngestionService
+	dbStore      *store.SQLiteStore
+	config       *HandlerConfig
+	authorizer   WorkerAuthorizer // P0: gates workers against VELOX_ALLOWED_WORKERS
 
 	mu             sync.RWMutex
 	sessions       map[string]*workerSession // sessionID → active stream session
@@ -421,33 +428,20 @@ func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMasterEnvelo
 					default:
 					}
 				}
+			case *pb.WorkerToMasterEnvelope_TaskLeaseRenewal:
+				h.handleTaskRenewal(workerID, m.TaskLeaseRenewal)
 
-			case *pb.WorkerToMasterEnvelope_LeaseRenewal:
-				h.handleLeaseRenewal(workerID, m.LeaseRenewal)
+			case *pb.WorkerToMasterEnvelope_TaskAccepted:
+				h.handleTaskAccepted(workerID, m.TaskAccepted)
 
-		case *pb.WorkerToMasterEnvelope_JobAccepted:
-			h.handleJobAccepted(workerID, m.JobAccepted)
+			case *pb.WorkerToMasterEnvelope_TaskRejected:
+				h.handleTaskRejected(workerID, m.TaskRejected)
 
-		case *pb.WorkerToMasterEnvelope_JobRejected:
-			h.handleJobRejected(workerID, m.JobRejected)
-
-		case *pb.WorkerToMasterEnvelope_TaskAccepted:
-			h.handleTaskAccepted(workerID, m.TaskAccepted)
-
-		case *pb.WorkerToMasterEnvelope_TaskRejected:
-			h.handleTaskRejected(workerID, m.TaskRejected)
-
-		case *pb.WorkerToMasterEnvelope_TaskResult:
-			h.handleTaskResult(workerID, m.TaskResult)
-
-		case *pb.WorkerToMasterEnvelope_JobProgress:
-			h.handleJobProgress(workerID, m.JobProgress)
+			case *pb.WorkerToMasterEnvelope_TaskResult:
+				h.handleTaskResult(workerID, m.TaskResult)
 
 			case *pb.WorkerToMasterEnvelope_CommandAck:
 				h.handleCommandAck(workerID, m.CommandAck)
-
-			case *pb.WorkerToMasterEnvelope_JobResult:
-				h.handleJobResult(workerID, m.JobResult)
 
 			case *pb.WorkerToMasterEnvelope_ArtifactUploaded:
 				h.handleArtifactUploaded(workerID, m.ArtifactUploaded)
@@ -758,6 +752,21 @@ func (h *Handler) extractWorkerIDFromStream(stream grpc.ServerStream) string {
 	}
 
 	return strings.TrimSpace(cn)
+}
+
+// SetIngestionSvc installs the canonical TaskReportIngestionService so
+// handleTaskResult can delegate to it. Bootstrap calls this immediately
+// after NewHandler to wire the audit closure. Setting nil clears the
+// reference (useful for tests that swap services mid-flight).
+func (h *Handler) SetIngestionSvc(svc *ingest.TaskReportIngestionService) {
+	h.ingestionSvc = svc
+}
+
+// ingestionService returns the wired TaskReportIngestionService, or nil
+// if not configured. Exported as a typed accessor for tests that want
+// to verify the wiring contract.
+func (h *Handler) ingestionService() *ingest.TaskReportIngestionService {
+	return h.ingestionSvc
 }
 
 // validateCredentialHash checks the worker's credential_hash against the

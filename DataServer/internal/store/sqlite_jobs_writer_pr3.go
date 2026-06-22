@@ -298,13 +298,11 @@ func (r *SQLiteJobRepository) PR3Fail(ctx context.Context, cmd FailCommand) erro
 
 	now := r.nowStr(cmd.Now)
 	nextStatus := JobStatusFailed
-	attemptStatus := "FAILED"
 	eventType := "job_failed"
 	outboxEvent := "JOB_FAILED"
 	historyMessage := "Job failed: " + cmd.ErrorMessage
 	if cmd.Retryable && attemptCount < maxRetries {
 		nextStatus = JobStatusRetryWait
-		attemptStatus = "FAILED_RETRYABLE"
 		eventType = "job_retry_scheduled"
 		outboxEvent = "JOB_RETRY_SCHEDULED"
 		historyMessage = "Job retry scheduled: " + cmd.ErrorMessage
@@ -350,19 +348,14 @@ func (r *SQLiteJobRepository) PR3Fail(ctx context.Context, cmd FailCommand) erro
 	}
 
 	// Update latest job_attempts status to FAILED / FAILED_RETRYABLE.
-	// error_message column does not exist on job_attempts (only error_code);
-	// the full error message lives in jobs.error_message.
-	if _, err := tx.ExecContext(ctx,
-		`UPDATE job_attempts
-		   SET status = ?, finished_at = ?, error_code = ?
-		 WHERE job_id = ?
-		   AND status NOT IN ('succeeded', 'failed', 'expired')
-		   AND id = (SELECT id FROM job_attempts WHERE job_id = ? ORDER BY id DESC LIMIT 1)`,
-		attemptStatus, now, cmd.ErrorCode,
-		cmd.JobID, cmd.JobID,
-	); err != nil {
-		return fmt.Errorf("PR3Fail attempt UPDATE: %w", err)
-	}
+	// cleanup/remove-job-attempts-runtime: removed the
+	// `UPDATE job_attempts SET status = ?` write path. Per-attempt
+	// identity now lives on task_attempts (canonical layer; this
+	// method's failure path is driven by task completion, not legacy
+	// job_attempts). The corresponding task_attempts update is owned
+	// by taskingestion.Ingest (TransitionTaskToTerminalAtomic) which
+	// has already observed the worker's TaskResult by the time
+	// PR3Fail is called.
 
 	payload, _ := json.Marshal(map[string]interface{}{
 		"job_id":     cmd.JobID,

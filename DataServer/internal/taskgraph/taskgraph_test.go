@@ -73,4 +73,23 @@ func TestStatusIsTerminal(t *testing.T) {
 	if StatusRunning.IsTerminal() != false {
 		t.Error("Running should not be terminal")
 	}
+	// PR-04 / fix/task-expiry-atomic-transition introduced
+	// StatusTimedOut as a Task terminal state (the reaper's atomic
+	// transition). The ingestion roll-up (Job→AWAITING_ARTIFACT only
+	// fires when ALL tasks are terminal) relies on this.
+	if StatusTimedOut.IsTerminal() != true {
+		t.Errorf("StatusTimedOut.IsTerminal()=%v; want true (PR-04 Task-terminal after reaper atomic)", StatusTimedOut.IsTerminal())
+	}
+	// AllStatuses must include the new terminal so DB CHECK constraints
+	// and validation paths accept it on insert.
+	foundTimedOut := false
+	for _, st := range AllStatuses() {
+		if st == StatusTimedOut {
+			foundTimedOut = true
+			break
+		}
+	}
+	if !foundTimedOut {
+		t.Errorf("AllStatuses() missing StatusTimedOut (PR-04)")
+	}
 }

@@ -64,6 +64,18 @@ type ActiveJob struct {
 	Progress  JobProgress
 }
 
+// ActiveTaskLease tracks a leased task-native entry for periodic
+// MsgTaskLeaseRenewal dispatch (PR-2 / canonical-attempt-identity).
+// Mirrors the canonical (task_id, attempt_id, lease_id) tuple from the
+// master's TaskAttempt row at the moment of TaskLeaseGranted. leaseRenewLoop
+// reads with an RLock snapshot + iterates outside the lock (transport.Send
+// is network I/O and must NOT block write-side stop/drain paths).
+type ActiveTaskLease struct {
+	TaskID    string
+	AttemptID string
+	LeaseID   string
+}
+
 // JobProgress tracks per-job execution progress.
 type JobProgress struct {
 	Percent     int32
@@ -126,6 +138,24 @@ type Worker struct {
 	// Pending lease jobs: accepted but waiting for JobLeaseGranted before execution
 	pendingLeaseJobs map[string]*api.Job
 	pendingLeaseMu   sync.Mutex
+
+	// Pending tasks: accepted via TaskOffer, waiting for TaskLeaseGranted
+	// before executeJob dispatch (PR-2 canonical-attempt-identity). The
+	// map is keyed by task_id (NOT job_id, NOT attempt_id) because
+	// (task_id, worker_id, lease_id) is the canonical worker-bound
+	// identity on the master's side and there is exactly one outstanding
+	// offer per task per session.
+	pendingTasks   map[string]*api.Job
+	pendingTasksMu sync.Mutex
+
+	// Active task-native leases: keyed by task_id; the iteration source
+	// for MsgTaskLeaseRenewal dispatch in leaseRenewLoop. Populated on
+	// MsgTaskLeaseGranted (alongside pendingTasks → executeJob), drained
+	// on Stop() / canonical terminal-state transition. Each entry carries
+	// (task_id, attempt_id, lease_id) so the master's RenewLease CAS
+	// predicate matches the canonical TaskAttempt row.
+	activeTaskLeases   map[string]*ActiveTaskLease
+	activeTaskLeasesMu sync.RWMutex
 
 	// Job completion stats for heartbeat reporting
 	jobsCompleted atomic.Int64

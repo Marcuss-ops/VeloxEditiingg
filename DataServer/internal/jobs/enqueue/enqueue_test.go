@@ -71,14 +71,16 @@ func TestBuildSceneImagePayload(t *testing.T) {
 	if len(paths) != 2 {
 		t.Errorf("want 2 scene_image_paths, got %d", len(paths))
 	}
-	params, _ := result["parameters"].(map[string]interface{})
-	if params["job_type"] != "process_video" {
-		t.Errorf("parameters.job_type: got %v", params["job_type"])
+	// refactor/payload-v2-single-shape: the canonical V2 writer does NOT
+	// emit a `parameters` sub-map mirror. Asserting its absence is now
+	// the strict invariant — every field reads from top-level only.
+	if v, present := result["parameters"]; present {
+		t.Errorf("`parameters` sub-map must NOT be present in canonical V2 writes, got %v", v)
 	}
-	// PR15.6: parameters mirror is canonical-only — id/run_id/title/voiceover_path/audio_path aliases must NOT be present.
+	// Legacy alias keys must also NOT leak through top-level writes.
 	for _, alias := range []string{"id", "run_id", "title", "voiceover_path", "audio_path"} {
-		if _, present := params[alias]; present {
-			t.Errorf("parameters[%q] alias must NOT be present in canonical writer, got %v", alias, params[alias])
+		if _, present := result[alias]; present {
+			t.Errorf("%q alias must NOT be present in canonical V2 writer, got %v", alias, result[alias])
 		}
 	}
 }

@@ -27,22 +27,32 @@ func NewSQLiteTaskRepository(store *SQLiteStore) *SQLiteTaskRepository {
 	return &SQLiteTaskRepository{store: store}
 }
 
+// taskColumns is the SELECT projection used by every Task read. Order
+// MUST stay in sync with scanTask below. PR-2 (canonical-attempt-identity)
+// added attempt_id + attempt_number; any later additions must update both
+// the slice and the scanner.
 var taskColumns = []string{
 	"task_id", "job_id", "project_id", "render_plan_id",
 	"executor_id", "executor_version", "status", "priority",
-	"revision", "attempt_count", "worker_id", "lease_id",
+	"revision", "attempt_count", "attempt_id", "attempt_number",
+	"worker_id", "lease_id",
 	"ready_at", "started_at", "completed_at", "created_at", "updated_at",
 }
 
 func scanTask(row interface{ Scan(...interface{}) error }) (*taskgraph.Task, error) {
 	var t taskgraph.Task
+	var attemptID sql.NullString
 	var readyAt, startedAt, completedAt sql.NullString
 	err := row.Scan(
 		&t.ID, &t.JobID, &t.ProjectID, &t.RenderPlanID,
 		&t.ExecutorID, &t.ExecutorVersion, &t.Status, &t.Priority,
-		&t.Revision, &t.AttemptCount, &t.WorkerID, &t.LeaseID,
+		&t.Revision, &t.AttemptCount, &attemptID, &t.AttemptNumber,
+		&t.WorkerID, &t.LeaseID,
 		&readyAt, &startedAt, &completedAt, &t.CreatedAt, &t.UpdatedAt,
 	)
+	if attemptID.Valid {
+		t.AttemptID = attemptID.String
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -314,15 +324,164 @@ func (r *SQLiteTaskRepository) Fail(ctx context.Context, id, reason string, revi
 // exclusively routed here.
 // =====================================================================
 
+// ClaimNextWithAttemptAtomic atomically claims the next READY task for a
+// worker AND inserts the matching PENDING TaskAttempt row AND stamps
+// (tasks.attempt_id, tasks.attempt_number) on the tasks row — all in
+// ONE transaction. PR-2 / fix/canonical-attempt-identity single-source
+// invariant: the canonical attempt identity is minted at Claim time
+// and is available on the wire in the subsequent TaskOffer envelope.
+//
+// On success returns the claimed task (with spec payload attached) AND
+// the freshly-created PENDING attempt. On contention (concurrent
+// claimer wins) returns (nil, nil, nil) identically to "no READY task
+// available" — the dispatcher's loop will retry on the next tick.
+//
+// Concurrency: SELECT…LIMIT 1 + CAS UPDATE READY→LEASED + INSERT attempt
+// + rowstamp attempt_id/attempt_number on tasks. All in one tx.
+//
+// Failure modes (ErrTransitionConflict surfaced clearly):
+//   * worker_id or lease_id is empty (programmer error)
+//   * no READY task is available → (nil, nil, nil), not an error
+//   * UPDATE row count != 1 (stale READY → another dispatcher took it)
+//   * INSERT attempt collision with UNIQUE(task_id, attempt_number) —
+//     should never happen for freshly-minted UUIDs but a stale manual
+//     duplicate inject would surface as ErrTransitionConflict
+func (r *SQLiteTaskRepository) ClaimNextWithAttemptAtomic(ctx context.Context, workerID, leaseID string) (*taskgraph.TaskWithSpec, *taskattempts.TaskAttempt, error) {
+	if r.store == nil || r.store.db == nil {
+		return nil, nil, fmt.Errorf("task repository: store not initialized")
+	}
+	if workerID == "" || leaseID == "" {
+		return nil, nil, fmt.Errorf("task repository: claim-with-attempt requires workerID + leaseID")
+	}
+
+	now := time.Now().UTC()
+	nowStr := now.Format(time.RFC3339)
+	leaseExpiresAt := now.Add(defaultTaskLeaseTTL).Format(time.RFC3339)
+
+	tx, err := r.store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, nil, fmt.Errorf("task claim-with-attempt begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// 1. SELECT next READY task candidate (priority DESC, created_at ASC).
+	row := tx.QueryRowContext(ctx,
+		`SELECT `+strings.Join(taskColumns, ", ")+`
+		 FROM tasks
+		 WHERE status = 'READY'
+		   AND (worker_id = '' OR worker_id IS NULL)
+		 ORDER BY priority DESC, created_at ASC
+		 LIMIT 1`,
+	)
+	t, err := scanTask(row)
+	if err == sql.ErrNoRows {
+		return nil, nil, nil
+	}
+	if err != nil {
+		return nil, nil, fmt.Errorf("task claim-with-attempt select: %w", err)
+	}
+
+	// 2. Generate canonical attempt identity BEFORE CAS so a CAS race
+	// failure doesn't leave a task_attempts row orphaned.
+	attemptID := uuid.NewString()
+	attemptNumber := t.AttemptCount + 1
+
+	// 3. CAS: READY → LEASED on tasks + stamp attempt_id + attempt_number.
+	res, err := tx.ExecContext(ctx,
+		`UPDATE tasks
+		 SET status = 'LEASED', worker_id = ?, lease_id = ?, lease_expires_at = ?,
+		     attempt_id = ?, attempt_number = ?,
+		     revision = revision + 1, updated_at = ?
+		 WHERE task_id = ? AND status = 'READY' AND revision = ?`,
+		workerID, leaseID, leaseExpiresAt, attemptID, attemptNumber,
+		nowStr, t.ID, t.Revision,
+	)
+	if err != nil {
+		return nil, nil, fmt.Errorf("task claim-with-attempt cas: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return nil, nil, fmt.Errorf("task claim-with-attempt rows: %w", err)
+	}
+	if n == 0 {
+		// Raced with another claimer — return nil gracefully.
+		return nil, nil, nil
+	}
+
+	// 4. INSERT PENDING TaskAttempt in the same tx.
+	_, err = tx.ExecContext(ctx,
+		`INSERT INTO task_attempts (
+			id, task_id, job_id, attempt_number, worker_id, lease_id,
+			status, report_version, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, 'PENDING', 0, ?, ?)`,
+		attemptID, t.ID, t.JobID, attemptNumber, workerID, leaseID, nowStr, nowStr,
+	)
+	if err != nil {
+		return nil, nil, fmt.Errorf("task claim-with-attempt insert: %w", err)
+	}
+
+	// 5. Read task_spec payload (continues ClaimNextReadyTask ergonomics).
+	var specPayloadJSON sql.NullString
+	err = tx.QueryRowContext(ctx,
+		`SELECT payload_json FROM task_specs WHERE task_id = ?`,
+		t.ID,
+	).Scan(&specPayloadJSON)
+	if err != nil && err != sql.ErrNoRows {
+		return nil, nil, fmt.Errorf("task claim-with-attempt spec read: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, nil, fmt.Errorf("task claim-with-attempt commit: %w", err)
+	}
+
+	// Update in-memory fields after successful commit.
+	t.WorkerID = workerID
+	t.LeaseID = leaseID
+	t.AttemptID = attemptID
+	t.AttemptNumber = attemptNumber
+	t.Revision++
+
+	tws := &taskgraph.TaskWithSpec{Task: *t}
+	if specPayloadJSON.Valid && specPayloadJSON.String != "" && specPayloadJSON.String != "{}" {
+		var payload map[string]interface{}
+		if json.Unmarshal([]byte(specPayloadJSON.String), &payload) == nil {
+			tws.SpecPayload = payload
+		}
+	}
+
+	att := &taskattempts.TaskAttempt{
+		ID:            attemptID,
+		TaskID:        t.ID,
+		JobID:         t.JobID,
+		AttemptNumber: attemptNumber,
+		WorkerID:      workerID,
+		LeaseID:       leaseID,
+		Status:        taskattempts.AttemptStatusPending,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
+	return tws, att, nil
+}
+
 // AcceptTaskAtomic atomically transitions a Task from LEASED → RUNNING
-// AND inserts the matching TaskAttempt row (PENDING or RUNNING) in the
-// SAME transaction. Returns taskgraph.ErrTransitionConflict if the Task
-// CAS does not match (stale lease or revision); the rolled-back DB is
-// indistinguishable from a never-called AcceptTaskAtomic.
+// AND UPDATES the matching PENDING TaskAttempt to RUNNING in the SAME
+// transaction. The single legal entry point for promoting a worker
+// offer to a running execution. Returns taskgraph.ErrTransitionConflict
+// if the Task CAS does not match (stale lease or revision); the
+// rolled-back DB is indistinguishable from a never-called AcceptTaskAtomic.
+//
+// PR-2 (canonical-attempt-identity) CHANGED this method:
+//   - Pre-PR-2 INSERTed the TaskAttempt row (because Claim did NOT pre-create one).
+//   - Post-PR-2 the PENDING TaskAttempt row was inserted by ClaimNextWithAttemptAtomic
+//     at Claim time, so AcceptTaskAtomic now UPDATEs status PENDING → RUNNING.
+//   - The CAS tuple gains attempt_id + attempt_number on the Task row stamp
+//     so a replay / stale-acceptance is bounded by both Task CAS and Attempt CAS.
 //
 // PR-04 / §9.5 closes the desync surface in handleTaskAccepted where a
 // crash between h.taskRepo.Start and h.taskAttemptRepo.Create could
-// leave a Task in RUNNING with no active Attempt.
+// leave a Task in RUNNING with no active Attempt. POST-PR-2 the PENDING
+// attempt row is created atomically with the LEASED CAS at Claim time,
+// so the §9.5 invariant holds at the moment of TaskOffer send.
 func (r *SQLiteTaskRepository) AcceptTaskAtomic(ctx context.Context, attempt *taskattempts.TaskAttempt, revision int) error {
 	if r.store == nil || r.store.db == nil {
 		return fmt.Errorf("task repository: store not initialized")
@@ -330,11 +489,8 @@ func (r *SQLiteTaskRepository) AcceptTaskAtomic(ctx context.Context, attempt *ta
 	if attempt == nil {
 		return fmt.Errorf("task repository: AcceptTaskAtomic requires a non-nil attempt")
 	}
-	if attempt.TaskID == "" || attempt.WorkerID == "" || attempt.LeaseID == "" {
-		return fmt.Errorf("task repository: AcceptTaskAtomic requires task_id, worker_id, lease_id on attempt")
-	}
-	if attempt.Status == "" {
-		attempt.Status = taskattempts.AttemptStatusRunning
+	if attempt.TaskID == "" || attempt.WorkerID == "" || attempt.LeaseID == "" || attempt.ID == "" {
+		return fmt.Errorf("task repository: AcceptTaskAtomic requires task_id, worker_id, lease_id, attempt_id (canonical from Claim)")
 	}
 
 	tx, err := r.store.db.BeginTx(ctx, nil)
@@ -348,41 +504,55 @@ func (r *SQLiteTaskRepository) AcceptTaskAtomic(ctx context.Context, attempt *ta
 		}
 	}()
 
-	// 1. Task CAS: LEASED → RUNNING with worker_id + lease_id + revision.
 	now := time.Now().UTC().Format(time.RFC3339)
+
+	// 1. Task CAS: LEASED → RUNNING with worker_id + lease_id + revision.
+	// PR-2 also asserts (attempt_id, attempt_number) match the canonical
+	// row stamped at Claim time, so a re-entry with a mismatched attempt
+	// surfaces as ErrTransitionConflict instead of silently advancing the
+	// wrong attempt.
 	taskRes, err := tx.ExecContext(ctx,
 		`UPDATE tasks
 		 SET status = 'RUNNING', started_at = ?, revision = revision + 1,
 		     attempt_count = ?, updated_at = ?
 		 WHERE task_id = ? AND status = 'LEASED'
-		   AND worker_id = ? AND lease_id = ? AND revision = ?`,
+		   AND worker_id = ? AND lease_id = ? AND revision = ?
+		   AND attempt_id = ? AND attempt_number = ?`,
 		now, attempt.AttemptNumber, now,
 		attempt.TaskID, attempt.WorkerID, attempt.LeaseID, revision,
+		attempt.ID, attempt.AttemptNumber,
 	)
 	if err != nil {
 		return fmt.Errorf("task accept atomic task cas: %w", err)
 	}
 	if n, _ := taskRes.RowsAffected(); n != 1 {
-		return fmt.Errorf("task accept atomic %s: %w", attempt.TaskID, taskgraph.ErrTransitionConflict)
+		return fmt.Errorf("task accept atomic %s (canonical attempt mismatch?): %w", attempt.TaskID, taskgraph.ErrTransitionConflict)
 	}
 
-	// 2. Attempt INSERT inside the same tx. The unique constraint on
-	// (task_id, attempt_number) protects against double-creates across
-	// retried Accept messages; any collision here triggers a rollback.
-	if attempt.ID == "" {
-		attempt.ID = uuid.NewString()
-	}
-	_, err = tx.ExecContext(ctx,
-		`INSERT INTO task_attempts (
-			id, task_id, job_id, attempt_number, worker_id, lease_id,
-			status, report_version, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
-		attempt.ID, attempt.TaskID, attempt.JobID, attempt.AttemptNumber,
+	// 2. Attempt UPDATE: PENDING → RUNNING in the same tx. The CAS tuple
+	// enforces (id, task_id, attempt_number, worker_id, lease_id, PENDING);
+	// any collision surfaces ErrTransitionConflict (attempt_row CAS gate
+	// matches the audit §9.5 invariant on Task RUNNING ⇒ Attempt RUNNING).
+	attRes, err := tx.ExecContext(ctx,
+		`UPDATE task_attempts
+		 SET status = 'RUNNING', updated_at = ?
+		 WHERE id = ? AND task_id = ? AND attempt_number = ?
+		   AND worker_id = ? AND lease_id = ?
+		   AND status = 'PENDING'`,
+		now, attempt.ID, attempt.TaskID, attempt.AttemptNumber,
 		attempt.WorkerID, attempt.LeaseID,
-		string(attempt.Status), now, now,
 	)
 	if err != nil {
-		return fmt.Errorf("task accept atomic attempt insert: %w", err)
+		return fmt.Errorf("task accept atomic attempt cas: %w", err)
+	}
+	if n, _ := attRes.RowsAffected(); n != 1 {
+		// Either: attempt row missing (reject — a §9.5 desync since
+		// ClaimNextWithAttemptAtomic would have created it) OR attempt
+		// is already RUNNING (replay-safe no-op: but in that case the
+		// UPDATE should have hit 1 row, so we land here only on
+		// genuinely-missing rows).
+		return fmt.Errorf("task accept atomic attempt %s not PENDING or missing (canonical drift): %w",
+			attempt.ID, taskgraph.ErrTransitionConflict)
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -391,6 +561,7 @@ func (r *SQLiteTaskRepository) AcceptTaskAtomic(ctx context.Context, attempt *ta
 	committed = true
 	attempt.CreatedAt, _ = time.Parse(time.RFC3339, now)
 	attempt.UpdatedAt = attempt.CreatedAt
+	attempt.Status = taskattempts.AttemptStatusRunning
 	return nil
 }
 
@@ -517,21 +688,27 @@ func (r *SQLiteTaskRepository) TransitionTaskToTerminalAtomic(
 	return nil
 }
 
-// RenewLease extends a currently-leased task's deadline (PR-05 follow-up).
-// CAS tuple: `task_id=? AND status='LEASED' AND worker_id=? AND lease_id=?
-// AND revision=?`. Only LEASED tasks are eligible because a RUNNING task
-// is mid-execution and a lease renewal there would mask a worker that
-// has been streaming UpdateResults without renewing; the master's normal
-// reaper sweep is the correct enforcement for RUNNING.
+// RenewLease extends a currently-leased or running task's deadline
+// (PR-03 / fix/task-lease-renewal-protocol). CAS tuple:
 //
-// The CAS gate on `lease_id=?» is critical: a worker whose lease has been
-// reaped (different leaseID re-issued to another worker) cannot
-// accidentally extend its stale lease — the WHERE clause matches 0 rows
-// and the caller learns the lease was already revoked.
+//	task_id=? AND worker_id=? AND lease_id=?
+//	AND status IN ('LEASED', 'RUNNING') AND revision=?
 //
-// revision is intentionally NOT bumped (see the interface comment in
-// repository.go): renewal is idempotent on its own lease and bumping
-// would invalidate the worker's in-flight message queue.
+// Acceptance of BOTH states is intentional: a worker progressed to
+// RUNNING after TaskLeaseGranted is acknowledged and a task longer
+// than the 30-min TTL must renew without first being reaped.
+//
+// The CAS intentionally does NOT gate on attempt_id: AcceptTaskAtomic
+// is the sole writer of attempt_id on tasks, and a worker cannot hold
+// two different attempt_ids for the same task concurrently. The
+// (worker_id, lease_id) tuple already binds the renewal to the
+// canonical attempt implicitly. The TOCTOU race against reaper-reset
+// is closed by (worker_id, lease_id) gates alone — a stale worker on
+// (W1, L1) cannot match a freshly re-stamped row with (W2, L2).
+//
+// revision is intentionally NOT bumped (see the interface comment):
+// renewal is idempotent on its own (task_id, worker_id, lease_id, revision)
+// tuple.
 func (r *SQLiteTaskRepository) RenewLease(ctx context.Context, id, workerID, leaseID string, expiry time.Time, revision int) error {
 	if r.store == nil || r.store.db == nil {
 		return fmt.Errorf("task repository: store not initialized")
@@ -547,8 +724,9 @@ func (r *SQLiteTaskRepository) RenewLease(ctx context.Context, id, workerID, lea
 	res, err := r.store.db.ExecContext(ctx,
 		`UPDATE tasks
 		 SET lease_expires_at = ?, updated_at = ?
-		 WHERE task_id = ? AND status = 'LEASED'
-		   AND worker_id = ? AND lease_id = ? AND revision = ?`,
+		 WHERE task_id = ?
+		   AND worker_id = ? AND lease_id = ? AND revision = ?
+		   AND status IN ('LEASED', 'RUNNING')`,
 		expiry.UTC().Format(time.RFC3339), now,
 		id, workerID, leaseID, revision,
 	)
@@ -563,6 +741,166 @@ func (r *SQLiteTaskRepository) RenewLease(ctx context.Context, id, workerID, lea
 		return fmt.Errorf("task renew lease %s: %w", id, taskgraph.ErrTransitionConflict)
 	}
 	return nil
+}
+
+// ExpireTaskLeaseAtomic reaps a single task in one atomic transaction
+// following the audit-mandated contract for PR-04 / fix/task-expiry-atomic-transition:
+//
+//  1. CAS-gate on (task_id, lease_id, lease_expires_at, worker_id) where
+//     lease_expires_at is the OBSERVED (pre-reap) value; a worker that
+//     just renewed would have written a NEWER lease_expires_at and our
+//     CAS sees 0 rows → ErrTransitionConflict (audit P0#6 fix).
+//  2. Attempt close: TX-gated UPDATE on task_attempts for the
+//     (task_id, worker_id, lease_id) tuple, status non-terminal →
+//     TIMED_OUT. Inlined into the same tx so a process crash between
+//     Task UPDATE and Attempt UPDATE cannot leave Task at READY/FAILED
+//     with Attempt RUNNING (audit §9.5 invariant).
+//  3. Retry budget: if attempt_count >= maxRetries + 1, set task →
+//     FAILED (terminal). Otherwise task → READY (re-claimable).
+//  4. Clear worker_id, lease_id, lease_expires_at; bump revision.
+//  5. attempt_count is INTENTIONALLY NOT bumped here (audit P0#4:
+//     counter reflects STARTED attempts, owned by AcceptTaskAtomic).
+//
+// maxRetries <= 0 falls back to a safe default of 3.
+func (r *SQLiteTaskRepository) ExpireTaskLeaseAtomic(
+	ctx context.Context,
+	taskID, leaseID, leaseExpiresAtObserved string,
+	maxRetries int,
+) (taskgraph.ExpireResult, error) {
+	if r.store == nil || r.store.db == nil {
+		return taskgraph.ExpireResult{}, fmt.Errorf("task repository: store not initialized")
+	}
+	if taskID == "" || leaseID == "" {
+		return taskgraph.ExpireResult{}, fmt.Errorf("task repository: ExpireTaskLeaseAtomic requires task_id and lease_id")
+	}
+	if maxRetries <= 0 {
+		maxRetries = 3
+	}
+
+	tx, err := r.store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return taskgraph.ExpireResult{}, fmt.Errorf("task expire atomic begin: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	// 1. Read task to obtain attempt_count + status + worker_id + lease_id
+	// + lease_expires_at for the CAS gate.
+	var (
+		attemptCount    int
+		currentStatus   string
+		currentWorker   string
+		currentLeaseID  string
+		currentLeaseExp string
+	)
+	err = tx.QueryRowContext(ctx,
+		`SELECT attempt_count, status, COALESCE(worker_id, ''), COALESCE(lease_id, ''), COALESCE(lease_expires_at, '')
+		 FROM tasks WHERE task_id = ?`,
+		taskID,
+	).Scan(&attemptCount, &currentStatus, &currentWorker, &currentLeaseID, &currentLeaseExp)
+	if err == sql.ErrNoRows {
+		return taskgraph.ExpireResult{}, fmt.Errorf("task expire atomic %s: not found", taskID)
+	}
+	if err != nil {
+		return taskgraph.ExpireResult{}, fmt.Errorf("task expire atomic read: %w", err)
+	}
+
+	if currentStatus != string(taskgraph.StatusLeased) && currentStatus != string(taskgraph.StatusRunning) {
+		return taskgraph.ExpireResult{}, fmt.Errorf("task expire atomic %s: not in LEASED/RUNNING (status=%s): %w",
+			taskID, currentStatus, taskgraph.ErrTransitionConflict)
+	}
+	if currentLeaseID != leaseID {
+		return taskgraph.ExpireResult{}, fmt.Errorf("task expire atomic %s: lease_id mismatch (got=%s, db=%s): %w",
+			taskID, leaseID, currentLeaseID, taskgraph.ErrTransitionConflict)
+	}
+	if currentLeaseExp != leaseExpiresAtObserved {
+		return taskgraph.ExpireResult{}, fmt.Errorf("task expire atomic %s: lease_expires_at mismatch (got=%s, db=%s): %w",
+			taskID, leaseExpiresAtObserved, currentLeaseExp, taskgraph.ErrTransitionConflict)
+	}
+
+	// 2. Attempt close: TX-gated UPDATE on task_attempts for the identity
+	// tuple. Inlined into the same tx (no CompleteByIdentityTimedOut
+	// indirection) so a process crash between Task UPDATE and Attempt
+	// UPDATE cannot leave Task at READY/FAILED with Attempt still
+	// RUNNING — both commit together or neither does (audit §9.5).
+	attRes, err := tx.ExecContext(ctx,
+		`UPDATE task_attempts
+		 SET status = 'TIMED_OUT', completed_at = ?, error_code = ?, error_message = ?,
+		     report_version = report_version + 1, updated_at = ?
+		 WHERE task_id = ? AND worker_id = ? AND lease_id = ?
+		   AND status NOT IN ('SUCCEEDED', 'FAILED', 'CANCELLED', 'TIMED_OUT')`,
+		now, "LEASE_EXPIRED", "master-side lease TTL exceeded", now,
+		taskID, currentWorker, leaseID,
+	)
+	if err != nil {
+		return taskgraph.ExpireResult{}, fmt.Errorf("task expire atomic attempt cas: %w", err)
+	}
+	attemptRows, _ := attRes.RowsAffected()
+
+	var attemptID string
+	idProbeErr := tx.QueryRowContext(ctx,
+		`SELECT id FROM task_attempts
+		 WHERE task_id = ? AND worker_id = ? AND lease_id = ?
+		 ORDER BY attempt_number DESC LIMIT 1`,
+		taskID, currentWorker, leaseID,
+	).Scan(&attemptID)
+	if idProbeErr != nil {
+		// Defensive §9.5 case: task in LEASED/RUNNING with no matching
+		// attempt row. The Task CAS still proceeds (lease recovered),
+		// but AttemptClosed=false so the reaper logs the breach.
+		attemptID = ""
+		attemptRows = 0
+	}
+
+	// 3. Retry budget. attempt_count >= maxRetries + 1 means the next
+	// AcceptTask would exceed the configured budget — reap terminates
+	// the task as FAILED. Otherwise the task is requeueable as READY.
+	exhausted := attemptCount >= maxRetries+1
+	newStatus := taskgraph.StatusReady
+	if exhausted {
+		newStatus = taskgraph.StatusFailed
+	}
+
+	// 4. Task CAS-gate update. Status flips to newStatus; worker/lease/
+	// lease_expires_at cleared; revision bumped. CAS-tuple reinforces
+	// the read above so a parallel AcceptTaskAtomic / Transition races
+	// us out instead of us blindly overwriting.
+	taskRes, err := tx.ExecContext(ctx,
+		`UPDATE tasks
+		 SET status = ?, completed_at = ?,
+		     worker_id = '', lease_id = '', lease_expires_at = NULL,
+		     revision = revision + 1, updated_at = ?
+		 WHERE task_id = ? AND status = ? AND worker_id = ? AND lease_id = ?`,
+		string(newStatus), now, now,
+		taskID, currentStatus, currentWorker, leaseID,
+	)
+	if err != nil {
+		return taskgraph.ExpireResult{}, fmt.Errorf("task expire atomic task cas: %w", err)
+	}
+	taskRows, _ := taskRes.RowsAffected()
+	if taskRows == 0 {
+		return taskgraph.ExpireResult{}, fmt.Errorf("task expire atomic %s: task CAS raced out: %w",
+			taskID, taskgraph.ErrTransitionConflict)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return taskgraph.ExpireResult{}, fmt.Errorf("task expire atomic commit: %w", err)
+	}
+	committed = true
+
+	return taskgraph.ExpireResult{
+		TaskID:            taskID,
+		TaskStatus:        newStatus,
+		AttemptsExhausted: exhausted,
+		AttemptID:         attemptID,
+		AttemptClosed:     attemptRows > 0 && attemptID != "",
+	}, nil
 }
 
 // IncrementAttempt bumps the attempt counter atomically.
@@ -684,12 +1022,10 @@ func (r *SQLiteTaskRepository) ClaimNextReadyTask(ctx context.Context, workerID,
 const defaultTaskLeaseTTL = 30 * time.Minute
 
 // RequeueExpiredLeases scans tasks whose `lease_expires_at` is in the
-// past and resets them per audit §P0.4:
-//
-//   - LEASED  expired → READY (re-claimable by another worker)
-//   - RUNNING expired → READY with attempt_count bumped (retry semantics,
-//     matches the existing per-task retry counter; "Job.FAILED on
-//     retries exhausted" is a sibling follow-up to PR-08)
+// past and surfaces them as RequeueCandidate rows. SELECT-only: no
+// UPDATE happens here. Per-task ExpireTaskLeaseAtomic owns the write
+// so the audit-mandated CAS tuple + retry budget + Attempt close
+// always run in a single tx.
 //
 // Tasks with NULL `lease_expires_at` (pre-migration-049 rows) are
 // treated as "never expires" via the COALESCE-default so a long-running
@@ -697,11 +1033,12 @@ const defaultTaskLeaseTTL = 30 * time.Minute
 // are scanned per call (0 defaults to 100). nowRFC3339 must be a
 // RFC3339-encoded timestamp string (the format the column uses).
 //
-// PR-05: closes the audit gap left by Job-side reapers that operated
-// on the dropped jobs.lease_expiry column. Once ClaimNextReadyTask
-// writes lease_expires_at, this sweep guarantees no Task is ever
-// permanently stranded by a worker crash.
-func (r *SQLiteTaskRepository) RequeueExpiredLeases(ctx context.Context, nowRFC3339 string, limit int) ([]string, error) {
+// PR-05 set up the master-side lease enforcement. PR-04 / audit
+// P0#4+P0#6 transforms this method into SELECT-only so per-task
+// ExpireTaskLeaseAtomic closes the attempt + applies retry budget +
+// CAS-gates on (task_id, lease_id, lease_expires_at, worker_id) in
+// one tx.
+func (r *SQLiteTaskRepository) RequeueExpiredLeases(ctx context.Context, nowRFC3339 string, limit int) ([]taskgraph.RequeueCandidate, error) {
 	if r.store == nil || r.store.db == nil {
 		return nil, fmt.Errorf("task repository: store not initialized")
 	}
@@ -713,11 +1050,13 @@ func (r *SQLiteTaskRepository) RequeueExpiredLeases(ctx context.Context, nowRFC3
 	}
 
 	// Select expired tasks in LEASED or RUNNING with worker_id+lease_id
-	// present (sanity: a leased task without a worker_id would be a
-	// half-claim artefact from PR-04's AcceptTaskAtomic; treating it as
-	// expired would deepen that breach).
+	// present. Full identity columns (worker_id, lease_id,
+	// lease_expires_at) are pulled so the reaper can build the
+	// candidate without a second roundtrip. A leased task without a
+	// worker_id is a half-claim artefact and is skipped.
 	rows, err := r.store.db.QueryContext(ctx,
-		`SELECT task_id
+		`SELECT task_id, COALESCE(worker_id, ''), COALESCE(lease_id, ''),
+		        COALESCE(lease_expires_at, ''), attempt_count
 		 FROM tasks
 		 WHERE status IN ('LEASED', 'RUNNING')
 		   AND COALESCE(lease_expires_at, '') <> ''
@@ -733,50 +1072,18 @@ func (r *SQLiteTaskRepository) RequeueExpiredLeases(ctx context.Context, nowRFC3
 	}
 	defer rows.Close()
 
-	var expired []string
+	var candidates []taskgraph.RequeueCandidate
 	for rows.Next() {
-		var id string
-		if scanErr := rows.Scan(&id); scanErr != nil {
+		var c taskgraph.RequeueCandidate
+		if scanErr := rows.Scan(&c.ID, &c.WorkerID, &c.LeaseID, &c.LeaseExpiresAt, &c.AttemptCount); scanErr != nil {
 			continue
 		}
-		expired = append(expired, id)
+		candidates = append(candidates, c)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("task reaper rows: %w", err)
 	}
-	if len(expired) == 0 {
-		return nil, nil
-	}
-
-	// Requeue each expired task. We deliberately use a single-statement
-	// UPDATE per task (NOT a single multi-row UPDATE) so a CAS failure
-	// on one task does not abort the rest of the sweep. The CAS gate on
-	// `status IN ('LEASED','RUNNING')` makes the requeue race-safe if
-	// the worker sends a TaskResult in the narrow window between SELECT
-	// and UPDATE — in that case the UPDATE affects 0 rows and the
-	// reaper correctly skips reaping a now-terminal task.
-	reaped := make([]string, 0, len(expired))
-	for _, id := range expired {
-		now := time.Now().UTC().Format(time.RFC3339)
-		res, err := r.store.db.ExecContext(ctx,
-			`UPDATE tasks
-			 SET status = 'READY', worker_id = '', lease_id = '',
-			     attempt_count = attempt_count + 1,
-			     revision = revision + 1, updated_at = ?
-			 WHERE task_id = ? AND status IN ('LEASED', 'RUNNING')`,
-			now, id,
-		)
-		if err != nil {
-			// Per-task error is logged-and-skipped to keep the sweep
-			// making progress on healthy tasks even when one is buggy.
-			// The next tick will retry.
-			continue
-		}
-		if n, _ := res.RowsAffected(); n == 1 {
-			reaped = append(reaped, id)
-		}
-	}
-	return reaped, nil
+	return candidates, nil
 }
 
 // ReleaseLease atomically resets a LEASED/RUNNING task back to READY.

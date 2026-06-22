@@ -17,7 +17,6 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"time"
 
 	assetbridge "velox-server/internal/assets"
 	"velox-server/internal/costmodel"
@@ -202,18 +201,26 @@ func compileSceneVideoJob(normalized map[string]interface{}, req costmodel.JobRe
 }
 
 func normalizeSceneVideoPayload(payloadMap map[string]interface{}) (map[string]interface{}, error) {
-	title := strings.TrimSpace(payload.FirstString(payloadMap, "video_name", "title", "project_name"))
+	// refactor/payload-v2-single-shape: build the canonical typed
+	// envelope, then project to the downstream map. No `parameters`
+	// sub-map. No legacy alias keys. Single source of truth is the
+	// contract.JobPayloadV2 struct.
+	base := contract.NewJobPayloadV2(payloadMap)
+
+	title := strings.TrimSpace(base.VideoName)
 	if title == "" {
 		return nil, &validationError{field: "video_name", message: "is required"}
 	}
+	base.VideoName = title
 
-	scriptText := strings.TrimSpace(payload.FirstString(payloadMap, "script_text", "script", "source_text", "title", "video_name"))
+	scriptText := strings.TrimSpace(base.ScriptText)
 	if scriptText == "" {
 		scriptText = title
 	}
 	if scriptText == "" {
 		return nil, &validationError{field: "script_text", message: "is required"}
 	}
+	base.ScriptText = scriptText
 
 	scenesValue, scenesJSON, err := normalizeScenes(payloadMap)
 	if err != nil {
@@ -222,104 +229,54 @@ func normalizeSceneVideoPayload(payloadMap map[string]interface{}) (map[string]i
 	if len(scenesValue) == 0 {
 		return nil, &validationError{field: "scenes", message: "at least one scene is required"}
 	}
+	base.Scenes = scenesValue
+	base.ScenesJSON = scenesJSON
+	base.SceneCount = len(scenesValue)
 
 	voiceovers := normalizeVoiceoverList(payloadMap)
 	if len(voiceovers) == 0 {
 		return nil, &validationError{field: "voiceover_paths", message: "at least one voiceover path is required"}
 	}
-	now := time.Now().UTC().Format(time.RFC3339)
+	base.VoiceoverPaths = voiceovers
+	base.VoiceoverCount = len(voiceovers)
+
+	// Identity enrichment — prefer explicit caller-provided IDs/new
+	// UUIDs over the constructor's defaults so the typed struct always
+	// ends with concrete, non-empty lifecycle fields.
 	jobID := strings.TrimSpace(payload.FirstString(payloadMap, "job_id", "id"))
-	if jobID == "" {
-		jobID = "scene_" + uuid.NewString()
-	}
 	jobRunID := strings.TrimSpace(payload.FirstString(payloadMap, "job_run_id", "run_id"))
-	if jobRunID == "" {
-		jobRunID = "run_" + uuid.NewString()
-	}
 	correlationID := strings.TrimSpace(payload.FirstString(payloadMap, "correlation_id"))
-	if correlationID == "" {
-		correlationID = "corr_" + uuid.NewString()
-	}
-	jobFingerprint := sceneVideoFingerprint(
-		jobID,
-		title,
-		scriptText,
-		scenesJSON,
-		voiceovers,
-		payload.FirstString(payloadMap, "youtube_group"),
-		payload.FirstString(payloadMap, "output_path"),
-		payload.FirstString(payloadMap, "audio_language_for_srt", "audio_lang"),
+	base.SetIdentity(jobID, jobRunID, correlationID)
+
+	base.SubmittedVia = "api_v1_scene_video"
+	base.Source = "scene_video_api"
+	base.Status = "PENDING"
+	base.Version = "v2"
+
+	// Apply the fingerprint AFTER all identity + business fields are
+	// finalized, so the hash reflects the canonical V2 shape.
+	base.JobFingerprint = sceneVideoFingerprint(
+		base.JobID,
+		base.VideoName,
+		base.ScriptText,
+		base.ScenesJSON,
+		base.VoiceoverPaths,
+		base.YoutubeGroup,
+		base.OutputPath,
+		base.AudioLanguage,
 	)
 
-	normalized := make(map[string]interface{}, len(payloadMap)+16)
-	for k, v := range payloadMap {
-		normalized[k] = v
-	}
-	normalized["job_id"] = jobID
-	normalized["job_run_id"] = jobRunID
-	normalized["correlation_id"] = correlationID
-	normalized["job_type"] = "process_video"
-	normalized["created_at"] = payload.EnsureRFC3339(payload.FirstString(payloadMap, "created_at"), now)
-	normalized["updated_at"] = payload.EnsureRFC3339(payload.FirstString(payloadMap, "updated_at"), now)
-	normalized["video_name"] = title
-	normalized["script_text"] = scriptText
-	normalized["scenes"] = scenesValue
-	normalized["scenes_json"] = scenesJSON
-	normalized["voiceover_paths"] = voiceovers
-	normalized["priority"] = payload.EnsureInt(payloadMap["priority"], 1)
-	normalized["timeout_secs"] = payload.EnsureInt(payloadMap["timeout_secs"], 3600)
-	normalized["scene_count"] = len(scenesValue)
-	normalized["voiceover_count"] = len(voiceovers)
-	normalized["submitted_via"] = "api_v1_scene_video"
-	normalized["source"] = "scene_video_api"
-	normalized["job_fingerprint"] = jobFingerprint
-	normalized["version"] = "v1"
-	// PR15.6: canonical-only parameters mirror. Legacy aliases
-	// (id, run_id, title, voiceover_path, audio_path) are NOT written here
-	// — they live in older rows and are read on the HTTP edge by the
-	// boundary adapter (RenderHTTPBoundaryJobResponse).
-	normalized["parameters"] = map[string]interface{}{
-		"version":         "v1",
-		"job_id":          jobID,
-		"job_run_id":      jobRunID,
-		"correlation_id":  correlationID,
-		"job_type":        "process_video",
-		"video_name":      title,
-		"script_text":     scriptText,
-		"scenes_json":     scenesJSON,
-		"scenes":          scenesValue,
-		"voiceover_paths": voiceovers,
-		"youtube_group":   payload.FirstString(payloadMap, "youtube_group"),
-		"output_path":     payload.FirstString(payloadMap, "output_path"),
-		"job_fingerprint": jobFingerprint,
-		"submitted_via":   "api_v1_scene_video",
-		"source":          "scene_video_api",
-		"scene_count":     len(scenesValue),
-		"voiceover_count": len(voiceovers),
-		"priority":        payload.EnsureInt(payloadMap["priority"], 1),
-		"timeout_secs":    payload.EnsureInt(payloadMap["timeout_secs"], 3600),
-	}
-
-	if v := strings.TrimSpace(payload.FirstString(payloadMap, "youtube_group")); v != "" {
-		normalized["youtube_group"] = v
-	}
 	if v := strings.TrimSpace(payload.FirstString(payloadMap, "output_video_id")); v != "" {
-		normalized["output_video_id"] = v
-	}
-	if v := strings.TrimSpace(payload.FirstString(payloadMap, "audio_language_for_srt", "audio_lang")); v != "" {
-		normalized["audio_language_for_srt"] = v
-		normalized["parameters"].(map[string]interface{})["audio_language_for_srt"] = v
-	}
-	if v := strings.TrimSpace(payload.FirstString(payloadMap, "output_path")); v != "" {
-		normalized["output_path"] = v
-		normalized["parameters"].(map[string]interface{})["output_path"] = v
-	}
-	if v := strings.TrimSpace(payload.FirstString(payloadMap, "scene_image_paths")); v != "" {
-		normalized["scene_image_paths"] = v
-		normalized["parameters"].(map[string]interface{})["scene_image_paths"] = v
+		base.OutputVideoID = v
 	}
 
-	return normalized, nil
+	// Spread to a canonical map for downstream consumers. NO
+	// `parameters` sub-map mirror; legacy alias keys NOT emitted.
+	out, err := base.ToMap()
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func buildSceneVideoResponse(normalized map[string]interface{}) map[string]interface{} {

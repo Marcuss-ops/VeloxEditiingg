@@ -185,7 +185,13 @@ func TestRenewLease_WrongLeaseIDRejected(t *testing.T) {
 }
 
 // TestRenewLease_RejectsEmptyIdentity: any of id / workerID / leaseID /
-// expiry zero returns an error before touching the DB.
+// expiry zero returns an error before touching the DB. (Pre-PR-3 the
+// attempt_id field was part of the CAS tuple; PR-3 dropped it because
+// AcceptTaskAtomic is the SOLE writer of attempt_id on tasks and a
+// worker cannot hold two different attempt_ids for the same task at
+// the same time, so the (task_id, worker_id, lease_id) tuple binds a
+// renewal to the canonical attempt implicitly and the SQL-level gate
+// is sufficient.)
 func TestRenewLease_RejectsEmptyIdentity(t *testing.T) {
 	s := openTaskRenewTestDB(t)
 	repo := NewSQLiteTaskRepository(s)

@@ -2,15 +2,27 @@ package store
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"time"
 )
 
 // --- Job Attempts ---
-
-// JobAttempt represents a single execution attempt of a job.
+//
+// cleanup/remove-job-attempts-runtime: the runtime writer surface
+// (`InsertJobAttempt`, `InsertJobAttemptTx`, `UpdateJobAttemptStatus`)
+// was removed. Per-attempt identity now lives in `task_attempts`
+// (canonical layer; task_attempts_writer), so any caller attempting
+// to insert / update a row on `job_attempts` is a regression — the
+// scan_test guard in `internal/artifacts/scan_test.go::TestNoJobAttemptsWriter`
+// enforces this at CI time. Any future reintroduction will trip
+// that test on the next CI run.
+//
+// The READ surface (`GetJobAttempts`, `GetLatestJobAttempt`,
+// `JobAttempt` struct) is preserved as a thin compatibility shim for
+// the postgres path, which still joins `job_attempts.started_at` from
+// `internal/store/postgres_jobs_repository.go` (RequeueExpiredLeases
+// path is being decommissioned alongside PR-07 / job protocol removal).
 type JobAttempt struct {
 	ID            int    `json:"id"`
 	JobID         string `json:"job_id"`
@@ -24,43 +36,6 @@ type JobAttempt struct {
 	EngineVersion string `json:"engine_version,omitempty"`
 	BundleHash    string `json:"bundle_hash,omitempty"`
 	CreatedAt     string `json:"created_at"`
-}
-
-func (s *SQLiteStore) InsertJobAttempt(jobID string, attemptNumber int, workerID, leaseID string) (int64, error) {
-	now := time.Now().UTC().Format(time.RFC3339)
-	result, err := s.db.Exec(
-		`INSERT INTO job_attempts (job_id, attempt_number, worker_id, lease_id, status, started_at, created_at)
-		 VALUES (?, ?, ?, ?, 'processing', ?, ?)`,
-		jobID, attemptNumber, workerID, leaseID, now, now,
-	)
-	if err != nil {
-		return 0, err
-	}
-	return result.LastInsertId()
-}
-
-func (s *SQLiteStore) InsertJobAttemptTx(tx interface {
-	Exec(string, ...interface{}) (sql.Result, error)
-}, jobID string, attemptNumber int, workerID, leaseID string) (int64, error) {
-	now := time.Now().UTC().Format(time.RFC3339)
-	result, err := tx.Exec(
-		`INSERT INTO job_attempts (job_id, attempt_number, worker_id, lease_id, status, started_at, created_at)
-		 VALUES (?, ?, ?, ?, 'processing', ?, ?)`,
-		jobID, attemptNumber, workerID, leaseID, now, now,
-	)
-	if err != nil {
-		return 0, err
-	}
-	return result.LastInsertId()
-}
-
-func (s *SQLiteStore) UpdateJobAttemptStatus(id int, status, errorCode string) error {
-	now := time.Now().UTC().Format(time.RFC3339)
-	_, err := s.db.Exec(
-		`UPDATE job_attempts SET status=?, error_code=?, finished_at=?, created_at=created_at WHERE id=?`,
-		status, errorCode, now, id,
-	)
-	return err
 }
 
 func (s *SQLiteStore) GetJobAttempts(jobID string, limit int) ([]JobAttempt, error) {

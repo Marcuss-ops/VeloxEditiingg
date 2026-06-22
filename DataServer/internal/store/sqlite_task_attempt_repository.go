@@ -161,6 +161,36 @@ func (r *SQLiteTaskAttemptRepository) GetActiveAttempt(ctx context.Context, task
 	return a, nil
 }
 
+// GetByTaskIDAndWorkerAndLease returns the active attempt for the
+// (task_id, worker_id, lease_id) tuple — used by the master's
+// handleTaskResult identity-validation wire-fallback path (PR-02 /
+// fix/canonical-attempt-identity). The canonical-attempt-id-first path
+// looks up via Reader.Get(attempt_id); this method backs off when a
+// legacy worker reports no canonical attempt_id (or sends the
+// pre-PR-02 leaseID placeholder). Returns (nil, nil) when no active
+// attempt matches.
+func (r *SQLiteTaskAttemptRepository) GetByTaskIDAndWorkerAndLease(
+	ctx context.Context, taskID, workerID, leaseID string,
+) (*taskattempts.TaskAttempt, error) {
+	if taskID == "" || workerID == "" || leaseID == "" {
+		return nil, nil
+	}
+	row := r.store.db.QueryRowContext(ctx,
+		`SELECT `+strings.Join(attemptColumns, ",")+` FROM task_attempts
+		 WHERE task_id = ? AND worker_id = ? AND lease_id = ?
+		   AND status NOT IN ('SUCCEEDED', 'FAILED', 'CANCELLED')
+		 ORDER BY attempt_number DESC LIMIT 1`,
+		taskID, workerID, leaseID)
+	a, err := scanAttempt(row)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("task attempt get by identity tuple: %w", err)
+	}
+	return a, nil
+}
+
 // SetStatus performs a CAS status change from → to.
 func (r *SQLiteTaskAttemptRepository) SetStatus(ctx context.Context, id string, from, to taskattempts.AttemptStatus, revision int) error {
 	if id == "" {
@@ -198,7 +228,7 @@ func (r *SQLiteTaskAttemptRepository) CompleteFinal(ctx context.Context, id, wor
 		 SET status = ?, completed_at = ?, error_code = ?, error_message = ?,
 		     report_version = report_version + 1, updated_at = ?
 		 WHERE id = ? AND worker_id = ? AND lease_id = ?
-		   AND status NOT IN ('SUCCEEDED', 'FAILED', 'CANCELLED')`,
+		   AND status NOT IN ('SUCCEEDED', 'FAILED', 'CANCELLED', 'TIMED_OUT')`,
 		string(status), now, errorCode, errorMessage, now,
 		id, workerID, leaseID,
 	)

@@ -411,6 +411,19 @@ func (t *GRPCStreamTransport) messageToEnvelope(msg controltransport.ControlMess
 		}
 		env.Msg = &pb.WorkerToMasterEnvelope_LeaseRenewal{LeaseRenewal: lr}
 
+	case controltransport.MsgTaskLeaseRenewal:
+		tlr := &pb.TaskLeaseRenewal{
+			TaskId:    getPayloadStr(msg.Payload, "task_id"),
+			AttemptId: getPayloadStr(msg.Payload, "attempt_id"),
+			LeaseId:   getPayloadStr(msg.Payload, "lease_id"),
+		}
+		if ts := getPayloadStr(msg.Payload, "requested_expiry"); ts != "" {
+			if parsed, err := time.Parse(time.RFC3339, ts); err == nil {
+				tlr.RequestedExpiry = timestamppb.New(parsed)
+			}
+		}
+		env.Msg = &pb.WorkerToMasterEnvelope_TaskLeaseRenewal{TaskLeaseRenewal: tlr}
+
 	case controltransport.MsgJobAccepted:
 		env.Msg = &pb.WorkerToMasterEnvelope_JobAccepted{
 			JobAccepted: &pb.JobAccepted{

@@ -16,6 +16,7 @@ const (
 	MsgHello            ControlMessageType = "hello"
 	MsgHeartbeat        ControlMessageType = "heartbeat"
 	MsgLeaseRenewal     ControlMessageType = "lease_renewal"
+	MsgTaskLeaseRenewal ControlMessageType = "task_lease_renewal"
 	MsgJobAccepted      ControlMessageType = "job_accepted"
 	MsgJobRejected      ControlMessageType = "job_rejected"
 	MsgTaskAccepted     ControlMessageType = "task_accepted"
@@ -46,7 +47,7 @@ const (
 // IsWorkerToMaster returns true for messages sent from worker to master.
 func (t ControlMessageType) IsWorkerToMaster() bool {
 	switch t {
-	case MsgHello, MsgHeartbeat, MsgLeaseRenewal, MsgJobAccepted,
+	case MsgHello, MsgHeartbeat, MsgLeaseRenewal, MsgTaskLeaseRenewal, MsgJobAccepted,
 		MsgJobRejected, MsgTaskAccepted, MsgTaskRejected, MsgTaskResult,
 		MsgJobProgress, MsgCommandAck, MsgArtifactUploaded,
 		MsgJobResult, MsgGoodbye:

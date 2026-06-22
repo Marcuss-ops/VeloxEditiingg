@@ -32,51 +32,42 @@ func buildCalendarJobPayload(event *store.CalendarEvent, jobRunID string) map[st
 		}
 	}
 
-	parameters := map[string]interface{}{
-		"calendar_event_id":    event.ID,
-		"external_id":          event.ExternalID,
-		"source":               event.Source,
-		"calendar_event_date":  event.Date,
-		"calendar_event_month": event.Month,
-		"calendar_event_year":  event.Year,
-		"job_run_id":           jobRunID,
-		"script_text":          event.ScriptText,
-		"titles":               event.Titles,
-		"youtube_links":        event.YouTubeLinks,
-		"youtube_group":        event.YouTubeGroup,
-		"category":             event.Category,
-		"start_clip_paths":     clipPaths(event.InitialClips),
-		"middle_clip_paths":    clipPaths(event.IntermediateClips),
-		"end_clip_paths":       clipPaths(event.FinalClips),
-		"stock_clip_paths":     clipPaths(event.StockFootage),
-		"voiceover_paths":      voiceovers,
-	}
-	if len(voiceovers) > 0 {
-		parameters["audio_path"] = voiceovers[0]
-	}
-
 	if strings.TrimSpace(jobRunID) == "" {
 		jobRunID = "run_" + uuid.NewString()
 	}
-	parameters["job_run_id"] = jobRunID
 	createdAt := time.Now().UTC().Format(time.RFC3339)
+	// refactor/payload-v2-single-shape: drop the `parameters` sub-map
+	// mirror that previously duplicated every field here. Single
+	// canonical map at top level only — readers that still expect the
+	// legacy mirror (e.g. older calendar handlers) now consult the
+	// top-level keys directly.
 	payload := map[string]interface{}{
-		"job_id":            event.JobID,
-		"job_run_id":        jobRunID,
-		"job_type":          "process_video",
-		"priority":          1,
-		"created_at":        createdAt,
-		"timeout_secs":      1800,
-		"video_name":        event.Title,
-		"project_id":        event.ID,
-		"youtube_group":     event.YouTubeGroup,
-		"status":            "PENDING",
-		"submitted_via":     "calendar",
-		"source":            event.Source,
-		"external_id":       event.ExternalID,
-		"calendar_event_id": event.ID,
-		"calendar_date":     event.Date,
-		"parameters":        parameters,
+		"job_id":                event.JobID,
+		"job_run_id":            jobRunID,
+		"job_type":              "process_video",
+		"priority":              1,
+		"created_at":            createdAt,
+		"timeout_secs":          1800,
+		"video_name":            event.Title,
+		"project_id":            event.ID,
+		"youtube_group":         event.YouTubeGroup,
+		"status":                "PENDING",
+		"submitted_via":         "calendar",
+		"source":                event.Source,
+		"external_id":           event.ExternalID,
+		"calendar_event_id":     event.ID,
+		"calendar_date":         event.Date,
+		"calendar_event_month":  event.Month,
+		"calendar_event_year":   event.Year,
+		"category":              event.Category,
+		"titles":                event.Titles,
+		"youtube_links":         event.YouTubeLinks,
+		"script_text":           event.ScriptText,
+		"start_clip_paths":      clipPaths(event.InitialClips),
+		"middle_clip_paths":     clipPaths(event.IntermediateClips),
+		"end_clip_paths":        clipPaths(event.FinalClips),
+		"stock_clip_paths":      clipPaths(event.StockFootage),
+		"voiceover_paths":       voiceovers,
 	}
 	return payload
 }

@@ -375,18 +375,19 @@ func collectVoiceoverReferences(payloadMap map[string]interface{}) []string {
 // applyVoiceoverReferences writes the canonical voiceover_paths array back
 // to the payload AND mirrors it into the parameters sub-map.
 //
-// PR15.6: writes ONLY the canonical `voiceover_paths` key (array). The
-// singular `voiceover_path` and `audio_path` aliases are intentionally
-// NOT written here — downstream HTTP-edge reads via RenderHTTPBoundaryJobResponse
-// still tolerate them when reading legacy SQLite rows.
+// PR15.6 + refactor/payload-v2-single-shape: writes ONLY the canonical
+// `voiceover_paths` key (array). The singular `voiceover_path` and
+// `audio_path` aliases are intentionally NOT written here — downstream
+// HTTP-edge reads via RenderHTTPBoundaryJobResponse still tolerate them
+// when reading legacy SQLite rows. The `parameters` sub-map mirror is
+// also NOT written: the refactor establishes top-level keys as the
+// single source of truth, and any legacy `parameters` mirror present on
+// input is left untouched (so the round-trip for old rows is preserved).
 func applyVoiceoverReferences(payloadMap map[string]interface{}, refs []string) {
 	if len(refs) == 0 || payloadMap == nil {
 		return
 	}
 	payloadMap["voiceover_paths"] = append([]string(nil), refs...)
-	if params, ok := payloadMap["parameters"].(map[string]interface{}); ok {
-		params["voiceover_paths"] = append([]string(nil), refs...)
-	}
 }
 
 // ── scene image payload helpers ─────────────────────────────────────────
@@ -441,7 +442,11 @@ func collectSceneImageReferences(payloadMap map[string]interface{}) []string {
 // back to the payload, AND mirrors per-scene rewrites (image_link +
 // image_links) AND the parameters sub-map.
 //
-// PR15.6: writes ONLY canonical keys; no legacy alias keys are written.
+// PR15.6 + refactor/payload-v2-single-shape: writes ONLY canonical keys;
+// no legacy alias keys are written AND the legacy `parameters` sub-map
+// mirror is no longer written either — top-level keys are the single
+// source of truth. Any legacy `parameters` mirror present on the input
+// is left untouched so the round-trip for old rows is preserved.
 func applySceneImageReferences(payloadMap map[string]interface{}, refs []string) {
 	if len(refs) == 0 || payloadMap == nil {
 		return
@@ -466,10 +471,6 @@ func applySceneImageReferences(payloadMap map[string]interface{}, refs []string)
 				}
 			}
 		}
-	}
-
-	if params, ok := payloadMap["parameters"].(map[string]interface{}); ok {
-		params["scene_image_paths"] = append([]string(nil), refs...)
 	}
 }
 
