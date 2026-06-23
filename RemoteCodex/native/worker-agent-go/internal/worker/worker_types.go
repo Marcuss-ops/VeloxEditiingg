@@ -11,6 +11,7 @@ import (
 	"velox-shared/controltransport"
 	"velox-worker-agent/internal/executor"
 	"velox-worker-agent/internal/taskrunner"
+	"velox-worker-agent/internal/telemetry"
 	"velox-worker-agent/internal/worker/concurrency"
 	"velox-worker-agent/internal/worker/stageexec"
 	"velox-worker-agent/pkg/api"
@@ -180,6 +181,15 @@ type Worker struct {
 	cache      *cache.PersistedLocalCache
 	blobs      *blob.BlobArtifacts
 	taskRunner *taskrunner.TaskRunner
+
+	// PR-3.6 / F4: worker-side resource sampler. Powers Heartbeat.resources
+	// (cumulative typed counters → master F2 decodes + delta-converts) AND
+	// api.HostInfo.{HasGPU,RAMBytes,DiskFreeBytes} (PR-3.6 future markers
+	// at worker.go:177-183). Created in New(); goroutine launched in
+	// runSession under sessionCtx so the loop terminates with the
+	// session. nil-safe read paths in hostInfo / sendHeartbeat tolerate
+	// a sampler that hasn't yet sampled.
+	sampler *telemetry.Sampler
 
 	// Exit function (for testing, defaults to os.Exit)
 	exitFunc ExitFunc

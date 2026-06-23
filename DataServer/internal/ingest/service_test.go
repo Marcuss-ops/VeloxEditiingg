@@ -271,6 +271,16 @@ type stubIngestAttemptRepo struct {
 	attempts map[string]*taskattempts.TaskAttempt
 
 	lookupErr error // injected error for store-side wire-fallback lookup
+
+	// Scorecard v1 / F1 — typed metrics persistence counters + last payloads.
+	// Tests assert these to confirm the typed envelope flowed through and
+	// to verify the stale-replay path correctly skipped the persistence step.
+	persistMetricsCalls int
+	persistCacheCalls   int
+	persistCostCalls    int
+	lastMetrics         taskattempts.AttemptMetrics
+	lastCacheStats      taskattempts.AttemptCacheStats
+	lastCostBasis       taskattempts.AttemptCostBasis
 }
 
 // seedAttempt inserts an entry into attempts as the canonical
@@ -360,6 +370,42 @@ func (s *stubIngestAttemptRepo) CompleteFinal(_ context.Context, _, _, _ string,
 }
 func (s *stubIngestAttemptRepo) Delete(_ context.Context, _ string) error {
 	panic("stubIngestAttemptRepo.Delete")
+}
+
+// Scorecard v1 / F1 — typed metrics persistence hooks. The ingest
+// service invokes these after the atomic close-write (gated by
+// res.AttemptClosed). The stub records counters so tests can assert
+// that the typed envelope flowed through AND that the stale-replay
+// path correctly skipped the persistence step.
+func (s *stubIngestAttemptRepo) PersistMetrics(_ context.Context, m taskattempts.AttemptMetrics) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.persistMetricsCalls++
+	s.lastMetrics = m
+	return nil
+}
+func (s *stubIngestAttemptRepo) PersistCacheStats(_ context.Context, c taskattempts.AttemptCacheStats) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.persistCacheCalls++
+	s.lastCacheStats = c
+	return nil
+}
+func (s *stubIngestAttemptRepo) PersistCostBasis(_ context.Context, b taskattempts.AttemptCostBasis) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.persistCostCalls++
+	s.lastCostBasis = b
+	return nil
+}
+func (s *stubIngestAttemptRepo) GetMetrics(_ context.Context, _ string) (*taskattempts.AttemptMetrics, error) {
+	panic("stubIngestAttemptRepo.GetMetrics: not exercised by IngestTaskResult")
+}
+func (s *stubIngestAttemptRepo) GetCacheStats(_ context.Context, _ string) (*taskattempts.AttemptCacheStats, error) {
+	panic("stubIngestAttemptRepo.GetCacheStats: not exercised by IngestTaskResult")
+}
+func (s *stubIngestAttemptRepo) GetCostBasis(_ context.Context, _ string) (*taskattempts.AttemptCostBasis, error) {
+	panic("stubIngestAttemptRepo.GetCostBasis: not exercised by IngestTaskResult")
 }
 
 // TestIngestionService_ValidateIdentityTuple_WireAttemptIDMismatch:

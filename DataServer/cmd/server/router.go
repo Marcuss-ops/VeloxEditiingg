@@ -91,6 +91,16 @@ func newRouter(cfg *config.Config, deps *serverDeps, registry *app.Registry) *gi
 		r.POST("/api/v1/video/chunked/:job_id/complete", deps.chunkedHandler.CompleteChunkedUpload())
 	}
 
+	// Scorecard v1 / PR-5: Prometheus /metrics exporter mount. Wired
+	// ONLY when deps.metricsRegistry is non-nil (tests may disable);
+	// the route is intentionally unauthenticated at the gin layer to
+	// match the Prometheus convention (k8s ingress must gate this
+	// route via Helm-level canary ingress). Content-type is
+	// text/plain; version=0.0.4 so Prometheus rooms scrape cleanly.
+	if deps.metricsRegistry != nil {
+		r.GET("/metrics", gin.WrapH(deps.metricsRegistry.Handler()))
+	}
+
 	return r
 }
 

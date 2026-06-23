@@ -13,6 +13,8 @@ import (
 	"syscall"
 	"time"
 
+	velmetrics "velox-server/internal/metrics"
+
 	"velox-server/internal/app"
 	"velox-server/internal/artifacts"
 	voiceoverassets "velox-server/internal/assets"
@@ -58,6 +60,12 @@ type serverDeps struct {
 	assetService        *voiceoverassets.AssetService
 	enqueuer            *enqueue.Enqueuer
 	taskDeps            *taskDeps
+
+	// Scorecard v1 / PR-5: master-side Prometheus /metrics exporter.
+	// Wired inside runServer when config.Server.EnableMetricsEnpoint is true;
+	// nil in tests means the route is omitted.
+	metricsRegistry *velmetrics.Registry
+	metricsCollector *velmetrics.Collector
 
 	// PR-operation 01 / Fase 3 — wiring for the orchestrator legacy adapter.
 	// atomicPlanWriter is the AtomicJobTaskCreator that backs
@@ -249,7 +257,10 @@ func runServer(cfg *config.Config) error {
 		tasksRepo:        t.TaskRepository,
 	}
 
-	// 3. Build router
+	// 3. Build router (scorecard v1 / PR-5: registry + collector wired
+	// here so /metrics mounts automatically inside newRouter).
+	deps.metricsRegistry = velmetrics.NewRegistry()
+	deps.metricsCollector = velmetrics.NewCollector(deps.metricsRegistry)
 	r := newRouter(cfg, deps, m.Registry)
 
 	// 4. HTTP server

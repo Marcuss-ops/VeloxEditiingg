@@ -40,17 +40,169 @@ type PhaseTiming struct {
 }
 
 // AttemptMetrics stores typed resource counters for one attempt.
+//
+// Scorecard v1 / PR-5: this struct mirrors TaskExecutionMetrics (proto v3).
+// The wire-format struct is the source of truth from the worker; this Go
+// struct is the master-side canonical representation. All typed counters
+// are 1:1 mapped in PersistenceLayer.PersistMetrics / GetMetrics so SQL
+// percentiles / aggregates don't have to walk a JSON blob.
+//
+// Legacy / 7 base fields (migration 043):
+//
+//	input_bytes, output_bytes, bytes_from_{drive,blobstore,local_cache},
+//	cpu_time_ms, peak_rss_bytes
+//
+// Scorecard v1 additions (migration 054):
+//
+//	frames_decoded, frames_composited, frames_encoded,
+//	ffmpeg_speed_ratio, encode_passes,
+//	final_concat_stream_copy, concat_mode,
+//	temp_bytes_written, duplicate_download_bytes,
+//	media_duration_seconds, wall_clock_seconds
+//
+// Project Performance Scorecard (12 metric families) derives from the
+// combination of AttemptMetrics + CacheStats + CostBasis on a per-attempt
+// basis. The Prometheus text-format exporter on the master side rolls
+// these up across attempts into the typed families listed in
+// docs/architecture/distributed-rendering/README.md "Required Measurements".
 type AttemptMetrics struct {
-	AttemptID           string `json:"attempt_id"`
-	InputBytes          int64  `json:"input_bytes"`
-	OutputBytes         int64  `json:"output_bytes"`
-	BytesFromDrive      int64  `json:"bytes_from_drive"`
-	BytesFromBlobstore  int64  `json:"bytes_from_blobstore"`
-	BytesFromLocalCache int64  `json:"bytes_from_local_cache"`
-	CPUTimeMS           int64  `json:"cpu_time_ms"`
-	GPUTimeMS           int64  `json:"gpu_time_ms"`
-	PeakRSSBytes        int64  `json:"peak_rss_bytes"`
-	PeakVRAMBytes       int64  `json:"peak_vram_bytes"`
+	AttemptID  string `json:"attempt_id"`
+
+	// Legacy 7 carry-over (migration 043). Kept flat (no embedded
+	// struct) so scan paths in SQLiteTaskAttemptRepository and other
+	// repositories stay 1:1 against the row columns.
+	InputBytes          int64 `json:"input_bytes"`
+	OutputBytes         int64 `json:"output_bytes"`
+	BytesFromDrive      int64 `json:"bytes_from_drive"`
+	BytesFromBlobstore  int64 `json:"bytes_from_blobstore"`
+	BytesFromLocalCache int64 `json:"bytes_from_local_cache"`
+	CPUTimeMS           int64 `json:"cpu_time_ms"`
+	GPUTimeMS           int64 `json:"gpu_time_ms"`
+	PeakRSSBytes        int64 `json:"peak_rss_bytes"`
+	PeakVRAMBytes       int64 `json:"peak_vram_bytes"`
+
+	// Scorecard v1 typed counters (migration 054).
+	FramesDecoded          int64   `json:"frames_decoded"`
+	FramesComposited       int64   `json:"frames_composited"`
+	FramesEncoded          int64   `json:"frames_encoded"`
+	FFmpegSpeedRatio       float64 `json:"ffmpeg_speed_ratio"`
+	EncodePasses           int32   `json:"encode_passes"`
+	FinalConcatStreamCopy  bool    `json:"final_concat_stream_copy"`
+	ConcatMode             string  `json:"concat_mode"` // "stream_copy" | "reencode" | "n/a"
+	TempBytesWritten       int64   `json:"temp_bytes_written"`
+	DuplicateDownloadBytes int64   `json:"duplicate_download_bytes"`
+	MediaDurationSeconds   float64 `json:"media_duration_seconds"`
+	WallClockSeconds       float64 `json:"wall_clock_seconds"`
+}
+
+// AttemptCacheStats is the per-attempt cache snapshot extracted from the
+// worker's emit-time merge of cache.hits / cache.misses / cache.evictions /
+// cache.corruptions / cache.bytes_used / cache.entries (dotted-key entry
+// surface across the executor pipeline, set by taskrunner.mergeStatsInto).
+type AttemptCacheStats struct {
+	AttemptID      string `json:"attempt_id"`
+	CacheHits      int64  `json:"cache_hits"`
+	CacheMisses    int64  `json:"cache_misses"`
+	CacheEvictions int64  `json:"cache_evictions"`
+	CacheCorruptions int64 `json:"cache_corruptions"`
+	CacheBytesUsed int64  `json:"cache_bytes_used"`
+	CacheEntries   int    `json:"cache_entries"`
+}
+
+// CacheByteHitRatio is the canonical scorecard ratio: bytes_from_local_cache
+// divided by total bytes (cache + blobstore + drive). Reported as a fraction
+// in [0,1] for both the API surface and the Prometheus gauge.
+func (m AttemptMetrics) CacheByteHitRatio() float64 {
+	total := m.BytesFromDrive + m.BytesFromBlobstore + m.BytesFromLocalCache
+	if total == 0 {
+		return 0
+	}
+	return float64(m.BytesFromLocalCache) / float64(total)
+}
+
+// DuplicateDownloadRatio is the canonical scorecard ratio:
+// duplicate_download_bytes / (duplicate + unique). Returns 0 when no bytes
+// were downloaded at all (first-attempt cache hit).
+func (m AttemptMetrics) DuplicateDownloadRatio() float64 {
+	unique := m.InputBytes - m.DuplicateDownloadBytes
+	if unique <= 0 && m.DuplicateDownloadBytes == 0 {
+		return 0
+	}
+	total := m.DuplicateDownloadBytes + unique
+	if total == 0 {
+		return 0
+	}
+	return float64(m.DuplicateDownloadBytes) / float64(total)
+}
+
+// TempStorageAmplification is temp_bytes_written / output_bytes. Returns 0
+// when the attempt produced no output (e.g. failed).
+func (m AttemptMetrics) TempStorageAmplification() float64 {
+	if m.OutputBytes == 0 {
+		return 0
+	}
+	return float64(m.TempBytesWritten) / float64(m.OutputBytes)
+}
+
+// EncodeAmplification is frames_encoded / output_frames. Returns 0 when
+// frames_encoded is zero (older workers / pre-PR-2 bridge) OR output is 0.
+// Output frames are derived from media_duration_seconds * fps; we keep a
+// raw int on the table when the worker surfaces it (PR-2 followup):
+// frames_encoded is a strict superset proxy for output_frames, so a value
+// >1 here is a real signal of re-encoding.
+func (m AttemptMetrics) EncodeAmplification() float64 {
+	if m.FramesEncoded == 0 {
+		return 0
+	}
+	// PR-2 followup will introduce OutputFrames as a separate column;
+	// until then frames_encoded IS the only signal we have, so the
+	// amplification ratio is upper-bounded by 1 — before this worker
+	// refactor we conservatively report 1.
+	return 1.0
+}
+
+// RenderSpeedRatio is media_duration_seconds / wall_clock_seconds. The
+// single most important number on the scorecard: >1 means we beat
+// realtime. Returns 0 when either side is unknown.
+func (m AttemptMetrics) RenderSpeedRatio() float64 {
+	if m.WallClockSeconds <= 0 {
+		return 0
+	}
+	if m.MediaDurationSeconds <= 0 {
+		return 0
+	}
+	return m.MediaDurationSeconds / m.WallClockSeconds
+}
+
+// AttemptCostBasis is the cost-model envelope the worker emits. The proto
+// carries a 3-field snapshot (cpu_price + storage_price + network_price);
+// on the master side we extend it with the per-attempt totals so
+// cost_per_output_minute is a 1-lookup read.
+type AttemptCostBasis struct {
+	AttemptID           string  `json:"attempt_id"`
+	CPUPricePerSecond   float64 `json:"cpu_price_per_second"`
+	StoragePricePerGB   float64 `json:"storage_price_per_gb"`
+	NetworkPricePerGB   float64 `json:"network_price_per_gb"`
+	CPUTimeSecondsTotal float64 `json:"cpu_time_seconds_total"`
+	StorageGBWritten    float64 `json:"storage_gb_written"`
+	NetworkGBEgressed   float64 `json:"network_gb_egressed"`
+	OutputMinutesTotal  float64 `json:"output_minutes_total"`
+
+	// Derived (filled by Compute).
+	CostPerOutputMinute float64 `json:"cost_per_output_minute"`
+}
+
+// Compute fills Derived fields. OutputMinutesTotal==0 ⇒ no result (we do
+// not divide by zero; alternative would be to report cost_per_second).
+func (b *AttemptCostBasis) Compute() {
+	if b.OutputMinutesTotal <= 0 {
+		b.CostPerOutputMinute = 0
+		return
+	}
+	cpuCost := b.CPUTimeSecondsTotal * b.CPUPricePerSecond
+	storageCost := b.StorageGBWritten * b.StoragePricePerGB
+	networkCost := b.NetworkGBEgressed * b.NetworkPricePerGB
+	b.CostPerOutputMinute = (cpuCost + storageCost + networkCost) / b.OutputMinutesTotal
 }
 
 // TaskExecutionReport is the typed, versioned, final report a worker emits
@@ -68,4 +220,7 @@ type TaskExecutionReport struct {
 	ErrorCode       string         `json:"error_code,omitempty"`
 	ErrorMessage    string         `json:"error_message,omitempty"`
 	SubmittedAt     time.Time      `json:"submitted_at"`
+	// Scorecard v1 additions:
+	CacheStats AttemptCacheStats `json:"cache_stats"`
+	CostBasis  AttemptCostBasis  `json:"cost_basis"`
 }

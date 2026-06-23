@@ -16,6 +16,12 @@ import (
 
 // handleHeartbeat processes a typed Heartbeat received via gRPC stream.
 // Issue 7 fix: accepts sessionID and updates last_seen in worker_sessions table.
+//
+// Scorecard v1 / F2: also decodes heartbeat.resources into a typed
+// ResourceSnapshot and forwards it to the WorkerResourceSink (promoted
+// to Prometheus gauge/counter families via metrics.Collector). The
+// cumulative→delta conversion lives in handler_workers_metrics.go so
+// the handler stays purely structural.
 func (h *Handler) handleHeartbeat(workerID, sessionID string, hb *pb.Heartbeat) {
 	extra := make(map[string]interface{})
 	// Populate extra from typed fields for backward compat with registry
@@ -38,6 +44,16 @@ func (h *Handler) handleHeartbeat(workerID, sessionID string, hb *pb.Heartbeat) 
 		}
 	}
 
+	// F2: merge the typed resource counters into `extra` so the
+	// persistent worker_registry row surfaces the same Prometheus-side
+	// fields via the legacy HTTP /admin/workers path (channelised
+	// worker debugging tools depend on this JSON view).
+	if resExtra := ResourcesToExtra(hb.GetResources()); resExtra != nil {
+		for k, v := range resExtra {
+			extra[k] = v
+		}
+	}
+
 	// Update capacity tracking on the session (for max_parallel_jobs check).
 	sess := h.getSession(workerID)
 	if sess != nil {
@@ -55,8 +71,24 @@ func (h *Handler) handleHeartbeat(workerID, sessionID string, hb *pb.Heartbeat) 
 		}
 	}
 
-	if err := h.registry.Heartbeat(context.Background(), workerID, hb.GetWorkerName(), hb.GetStatus(), hb.GetCurrentJob(), extra); err != nil {
-		log.Printf("[GRPC] Heartbeat failed for worker %s: %v", workerID, err)
+	// F2: defensive nil-check on h.registry so handler-level unit tests
+	// can wire a Handler without standing up the persistent worker_registry
+	// (preserves the existing pre-F2 contract that handleHeartbeat is
+	// safe with no registry; production code always supplies one).
+	if h.registry != nil {
+		if err := h.registry.Heartbeat(context.Background(), workerID, hb.GetWorkerName(), hb.GetStatus(), hb.GetCurrentJob(), extra); err != nil {
+			log.Printf("[GRPC] Heartbeat failed for worker %s: %v", workerID, err)
+		}
+	}
+
+	// F2: forward typed resource counters onto the Prometheus registry
+	// via the sink interface. NIL-tolerant — handlers running WITHOUT a
+	// metrics surface keep the registry.Heartbeat() side active and
+	// silently skip the projection (legacy mode).
+	if h.resourceSink != nil {
+		if snap := decodeWorkerResources(workerID, hb.GetResources()); snap != nil {
+			h.resourceSink.RecordWorker(workerID, snap)
+		}
 	}
 	// RecoveryReport protocol: inspect hb.extra for recovery_report_v1 and
 	// queue a ConfigurationUpdate carrying the master's directive via safeSend.

@@ -233,10 +233,46 @@ func (h *Handler) handleTaskResult(workerID string, tr *pb.TaskResult) {
 		declared = append(declared, d)
 	}
 
+	// Scorecard v1 / F1 — typed execution-metrics hoisting. Build the
+	// 3 typed Go structs from the wire payload (see handler_jobs_metrics.go
+	// for derivation rules + logs). They flow through IngestCommand to
+	// IngestTaskResult, which persists them under the per-task mutex
+	// immediately after the atomic close-write.
+	typedMetrics := executionMetricsToAttemptMetrics(attemptID, tr.GetExecutionMetrics())
+	typedCache := deriveCacheStats(attemptID, typedMetrics)
+	typedCost := executionMetricsToCostBasis(attemptID, tr.GetExecutionMetrics())
+
 	ctx := context.Background()
+
+	// PR-2 / attempt_number wire-strict-compare — the canonical attempt
+	// exists in task_attempts for (task_id, worker_id, lease_id); we
+	// resolve its attempt_number here so ValidateIdentityTuple's cheap
+	// field-presence check "AttemptNumber must be >0" no longer fires
+	// on the wire. If the canonical lookup misses (pseudo-spoof /
+	// impersonation), we pass 0 — the validator will surface the lookup-
+	// miss sentinel or the cheap-check error and the audit-closure path
+	// short-circuits cleanly. A LOOKUP ERROR is logged (distinct from
+	// "no row found") so a future DB outage doesn't masquerade as a
+	// wire-spoof in operator logs.
+	var attemptNumber int32
+	if h.taskAttemptRepo != nil {
+		att, lookErr := h.taskAttemptRepo.GetByTaskIDAndWorkerAndLease(
+			ctx, taskID, workerID, leaseID,
+		)
+		switch {
+		case lookErr != nil:
+			log.Printf("[GRPC] canonical attempt lookup failed for task=%s worker=%s lease=%s: %v (validator will likely fail cheap-check)", taskID, workerID, leaseID, lookErr)
+		case att == nil:
+			// No canonical row — handle as before (validator drops).
+		default:
+			attemptNumber = int32(att.AttemptNumber)
+		}
+	}
+
 	res, err := h.ingestionSvc.IngestTaskResult(ctx, ingest.IngestCommand{
 		TaskID:          taskID,
 		AttemptID:       attemptID,
+		AttemptNumber:   attemptNumber,
 		LeaseID:         leaseID,
 		WorkerID:        workerID,
 		JobID:           tr.GetJobId(),
@@ -244,6 +280,9 @@ func (h *Handler) handleTaskResult(workerID string, tr *pb.TaskResult) {
 		ErrorCode:       tr.GetErrorCode(),
 		ErrorDetail:     tr.GetErrorDetail(),
 		OutputArtifacts: declared,
+		TypedMetrics:    typedMetrics,
+		CacheStats:      typedCache,
+		CostBasis:       typedCost,
 	})
 	if err != nil {
 		log.Printf("[GRPC] TaskResult ingest for task=%s attempt=%s FAILED: %v", taskID, attemptID, err)

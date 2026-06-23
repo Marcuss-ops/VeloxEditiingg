@@ -1,12 +1,14 @@
 #include "velox/core/render_engine.hpp"
 #include "velox/services/file_utils.hpp"
 #include "velox/services/media_utils.hpp"
+#include <algorithm>
+#include <atomic>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <sstream>
+#include <string>
 #include <thread>
-#include <atomic>
-#include <algorithm>
 
 namespace fs = std::filesystem;
 
@@ -36,9 +38,79 @@ namespace {
         }
         return "";
     }
+
+    int64_t fileSize(const fs::path& p) {
+        std::error_code ec;
+        auto sz = fs::file_size(p, ec);
+        return ec ? 0 : static_cast<int64_t>(sz);
+    }
+
+    // Helper to run an ffmpeg invocation through the progress-capturing
+    // wrapper when a callback is wired; otherwise fall back to runCommand.
+    // Returns true on ffmpeg 0 exit.
+    bool runFfmpegSegmentWithProgress(
+        const std::string& full_cmd,
+        const services::ProgressCallback& cb,
+        int64_t expected_duration_us
+    ) {
+        if (!cb) {
+            return file::runCommand(full_cmd);
+        }
+        std::string stderr_out;
+        int exit_code = 0;
+        bool ok = services::runFfmpegCapturingProgress(
+            full_cmd,
+            fs::current_path(),
+            cb,
+            expected_duration_us,
+            stderr_out,
+            exit_code);
+        if (!ok || exit_code != 0) {
+            std::cerr << "ffmpeg failed (exit=" << exit_code << "): "
+                      << stderr_out << std::endl;
+        }
+        return ok && exit_code == 0;
+    }
+
+    // Build a per-segment ffmpeg command line, with `-progress pipe:1 -nostats`
+    // injected among the canonical global flags. Caller supplies ONLY the
+    // arg-builder output (no "ffmpeg " prefix).
+    std::string composeSegmentCmd(const std::string& args_only) {
+        return "ffmpeg -y -hide_banner -loglevel error -progress pipe:1 -nostats " + args_only;
+    }
+}
+
+void RenderEngine::setProgressCallback(services::ProgressCallback cb) {
+    progress_cb_ = std::move(cb);
 }
 
 RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
+    // Reset accumulators on every fresh render() call.
+    frames_encoded_.store(0);
+    encode_passes_.store(0);
+    temp_bytes_written_.store(0);
+    duration_seconds_.store(0.0);
+    concat_mode_ = "reencode";
+    last_progress_ = services::EngineProgress{};
+
+    const auto onProgress = progress_cb_;
+    auto recordProgress = [this](const services::EngineProgress& p) {
+        last_progress_ = p;
+        if (p.frame > 0) {
+            // Each block carries cumulative frame (since stream start);
+            // take the LAST observed value as the high-water mark.
+            int64_t cur = frames_encoded_.load();
+            if (p.frame > cur) frames_encoded_.store(p.frame);
+        }
+    };
+    services::ProgressCallback wrapped_cb;
+    if (onProgress) {
+        wrapped_cb = [onProgress, recordProgress](const services::EngineProgress& p) {
+            recordProgress(p);
+            onProgress(p);
+        };
+    }
+
     RenderResult result;
     result.output_path = plan.output_path;
 
@@ -62,7 +134,8 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
     } cleanup{workDir};
 
     fs::path outPath(plan.output_path);
-    fs::create_directories(outPath.parent_path());
+    std::error_code ec_parents;
+    fs::create_directories(outPath.parent_path(), ec_parents);
 
     // 1. Build timeline segments
     reportProgress(10, "resolving_assets");
@@ -70,38 +143,63 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
     std::vector<fs::path> segmentPaths;
     segmentPaths.reserve(plan.timeline.size());
 
+    double total_duration_seconds = 0.0;
+
     for (size_t i = 0; i < plan.timeline.size(); ++i) {
         const auto& item = plan.timeline[i];
         fs::path segmentOut = workDir / ("segment_" + std::to_string(i) + ".mp4");
         auto params = makeParams(plan.canvas, item.transform, extractColorHex(item.source));
 
-        bool built = false;
+        const int64_t expected_us = static_cast<int64_t>(item.duration_seconds * 1'000'000.0);
+        total_duration_seconds += item.duration_seconds;
+
+        std::string args_only;
         if (std::holds_alternative<plan::ImageSource>(item.source)) {
             auto src = std::get<plan::ImageSource>(item.source);
             fs::path localImg = workDir / ("image_" + std::to_string(i) + ".jpg");
-            if (file::downloadAsset(src.url, localImg, src.cache_key)) {
-                built = media::buildSceneSegment(localImg, segmentOut, item.duration_seconds, params);
+            bool gotImage = file::downloadAsset(src.url, localImg, src.cache_key);
+            if (gotImage) {
+                args_only = media::buildSceneSegmentArgs(localImg, segmentOut, item.duration_seconds, params);
             } else {
-                built = media::buildSceneSegment("", segmentOut, item.duration_seconds, params);
+                std::string hex = extractColorHex(item.source); // empty string for ImageSource
+                args_only = media::buildColorSegmentArgs(segmentOut, item.duration_seconds, params, hex);
             }
         } else if (std::holds_alternative<plan::VideoSource>(item.source)) {
             auto src = std::get<plan::VideoSource>(item.source);
             fs::path localVid = workDir / ("video_" + std::to_string(i) + ".mp4");
-            if (file::downloadAsset(src.url, localVid, src.cache_key)) {
-                built = media::buildVideoSegment(localVid, segmentOut, item.duration_seconds, params);
+            bool gotVid = file::downloadAsset(src.url, localVid, src.cache_key);
+            if (!gotVid) {
+                result.error = "failed to download video source for segment " + std::to_string(i);
+                return result;
             }
+            args_only = media::buildVideoSegmentArgs(localVid, segmentOut, item.duration_seconds, params);
         } else if (std::holds_alternative<plan::ColorSource>(item.source)) {
-            built = media::buildSceneSegment("", segmentOut, item.duration_seconds, params);
+            auto color = std::get<plan::ColorSource>(item.source);
+            args_only = media::buildColorSegmentArgs(segmentOut, item.duration_seconds, params, color.color_hex);
         }
 
+        if (args_only.empty()) {
+            result.error = "unknown segment source type for " + std::to_string(i);
+            return result;
+        }
+
+        bool built = runFfmpegSegmentWithProgress(
+            composeSegmentCmd(args_only), wrapped_cb, expected_us);
         if (!built) {
             result.error = "failed to build timeline segment " + std::to_string(i);
             return result;
         }
+
+        encode_passes_.fetch_add(1);
+        temp_bytes_written_.fetch_add(fileSize(segmentOut));
         segmentPaths.push_back(segmentOut);
 
         int pct = 10 + static_cast<int>((static_cast<double>(i + 1) / plan.timeline.size()) * 60);
         reportProgress(pct, "building_segments");
+    }
+
+    if (total_duration_seconds > 0.0) {
+        duration_seconds_.store(total_duration_seconds);
     }
 
     // 2. Concatenate video segments
@@ -111,11 +209,12 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
         result.error = "failed to concatenate video segments";
         return result;
     }
+    temp_bytes_written_.fetch_add(fileSize(videoOnly));
+    concat_mode_ = "stream_copy";
 
     // 3. Mix audio tracks (supports multi-track with volume/offset)
     reportProgress(85, "muxing_audio");
     if (!plan.audio_tracks.empty()) {
-        // Download all audio tracks first
         std::vector<std::pair<fs::path, const plan::AudioTrack*>> downloadedTracks;
         for (size_t t = 0; t < plan.audio_tracks.size(); ++t) {
             const auto& track = plan.audio_tracks[t];
@@ -129,28 +228,31 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
 
         if (downloadedTracks.empty()) {
             std::cerr << "warning: no audio tracks downloaded, exporting video without audio\n";
-            if (!file::copyFile(videoOnly, outPath)) {
+            std::error_code ec;
+            fs::copy_file(videoOnly, outPath, fs::copy_options::overwrite_existing, ec);
+            if (ec) {
                 result.error = "failed to copy final output (no audio)";
                 return result;
             }
             result.success = true;
         } else if (downloadedTracks.size() == 1) {
-            // Single track: apply volume + offset, mux directly
             fs::path finalMuxed = workDir / "final_muxed.mp4";
             double vol = downloadedTracks[0].second->volume;
             double offset = downloadedTracks[0].second->start_time_offset;
             if (media::muxAudio(videoOnly, downloadedTracks[0].first, finalMuxed, vol, offset)) {
-                if (!file::copyFile(finalMuxed, outPath)) {
+                std::error_code ec;
+                fs::copy_file(finalMuxed, outPath, fs::copy_options::overwrite_existing, ec);
+                if (ec) {
                     result.error = "failed to copy final output";
                     return result;
                 }
+                temp_bytes_written_.fetch_add(fileSize(finalMuxed));
                 result.success = true;
             } else {
                 result.error = "failed to mux audio track";
                 return result;
             }
         } else {
-            // Multiple tracks: use ffmpeg amix to merge them into a single .m4a
             std::ostringstream audioFilter;
             std::ostringstream audioInputs;
             for (size_t t = 0; t < downloadedTracks.size(); ++t) {
@@ -183,10 +285,13 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
             if (file::runCommand(mixCmd.str())) {
                 fs::path finalMuxed = workDir / "final_muxed.mp4";
                 if (media::muxAudio(videoOnly, mixedAudio, finalMuxed)) {
-                    if (!file::copyFile(finalMuxed, outPath)) {
+                    std::error_code ec;
+                    fs::copy_file(finalMuxed, outPath, fs::copy_options::overwrite_existing, ec);
+                    if (ec) {
                         result.error = "failed to copy final output";
                         return result;
                     }
+                    temp_bytes_written_.fetch_add(fileSize(finalMuxed));
                     result.success = true;
                 } else {
                     result.error = "failed to mux mixed audio";
@@ -194,7 +299,9 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
                 }
             } else {
                 std::cerr << "warning: audio mix failed, exporting video without audio\n";
-                if (!file::copyFile(videoOnly, outPath)) {
+                std::error_code ec;
+                fs::copy_file(videoOnly, outPath, fs::copy_options::overwrite_existing, ec);
+                if (ec) {
                     result.error = "failed to copy final output (mix failed)";
                     return result;
                 }
@@ -202,7 +309,9 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
             }
         }
     } else {
-        if (!file::copyFile(videoOnly, outPath)) {
+        std::error_code ec;
+        fs::copy_file(videoOnly, outPath, fs::copy_options::overwrite_existing, ec);
+        if (ec) {
             result.error = "failed to copy final output (no audio tracks)";
             return result;
         }
@@ -210,7 +319,48 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
     }
 
     reportProgress(100, "completed");
+
+    if (result.success) {
+        emitSidecar(outPath.string());
+    }
+
     return result;
+}
+
+void RenderEngine::emitSidecar(const std::string& output_path) const {
+    using services::escapeProgressJsonString;
+
+    fs::path outPath(output_path);
+    fs::path sidecar = outPath;
+    sidecar += ".progress.json";
+
+    const services::EngineProgress& last = last_progress_;
+
+    std::ostringstream s;
+    s << "{";
+    s << "\"progress\":" << static_cast<int>(last.progress_pct);
+    s << ",\"progress_pct\":" << static_cast<int>(last.progress_pct);
+    s << ",\"frames\":" << frames_encoded_.load();
+    s << ",\"fps\":" << last.fps;
+    s << ",\"speed\":\"" << escapeProgressJsonString(last.speed) << "\"";
+    s << ",\"speed_x\":" << last.speed_x;
+    s << ",\"encode_passes\":" << encode_passes_.load();
+    s << ",\"concat_mode\":\"" << concat_mode_ << "\"";
+    s << ",\"temp_bytes\":" << temp_bytes_written_.load();
+    s << ",\"out_time_us\":" << last.out_time_us;
+    s << ",\"out_time_ms\":" << last.out_time_ms;
+    s << ",\"out_time\":\"" << escapeProgressJsonString(last.out_time) << "\"";
+    s << ",\"total_size\":" << last.total_size;
+    s << ",\"dup_frames\":" << last.dup_frames;
+    s << ",\"drop_frames\":" << last.drop_frames;
+    s << ",\"bitrate\":" << last.bitrate;
+    s << ",\"duration_seconds\":" << duration_seconds_.load();
+    s << ",\"output_path\":\"" << escapeProgressJsonString(outPath.string()) << "\"";
+    s << "}";
+
+    if (!services::SidecarWriter::writeAtomic(sidecar, s.str())) {
+        std::cerr << "warning: failed to write progress sidecar at " << sidecar << "\n";
+    }
 }
 
 } // namespace velox::core

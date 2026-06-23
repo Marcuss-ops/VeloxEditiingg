@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"math/rand"
 	"os"
 	"runtime"
@@ -172,16 +173,27 @@ func (w *Worker) capabilitiesMap(hostname string) map[string]interface{} {
 // All values are pre-shaped so PR-3.6's resource sampler can fill
 // RAMBytes / DiskFreeBytes / HasGPU without breaking the wire contract —
 // the master will simply start seeing non-zero values.
+//
+// F4 integration: Host() is consulted lazily on every hostInfo call (cheap
+// atomic.Pointer load); the sampler publishes refreshed values from its
+// background 5s tick loop. If the sampler hasn't yet booted (pre-tick),
+// the related HostInfo fields default to zero — same wire contract the
+// master has handled for years (zero == "not yet sampled").
 func (w *Worker) hostInfo(hostname string, maxParallel int) api.HostInfo {
-	return api.HostInfo{
+	host := api.HostInfo{
 		WorkerID:        w.config.WorkerID,
 		Hostname:        hostname,
 		CPUCount:        runtime.NumCPU(),
 		MaxParallelJobs: maxParallel,
-		HasGPU:          false, // PR-3.6: resource sampler fills this
-		RAMBytes:        0,     // PR-3.6: resource sampler fills this
-		DiskFreeBytes:   0,     // PR-3.6: resource sampler fills this
 	}
+	if w.sampler != nil {
+		if h := w.sampler.Host(); h != nil {
+			host.HasGPU = h.HasGPU
+			host.RAMBytes = h.RAMBytes
+			host.DiskFreeBytes = h.DiskFreeBytes
+		}
+	}
+	return host
 }
 
 // runSession starts all communication loops and returns true if the session
@@ -201,6 +213,21 @@ func (w *Worker) runSession(ctx context.Context) bool {
 
 	w.wg.Add(1)
 	go w.leaseRenewLoop(sessionCtx)
+
+	// PR-3.6 / F4: kick the resource-sampler loop under the session
+	// context. Uses NewResourceSampler-registered 5s tick + 3-tick
+	// emit cadence (heartbeat.resources is the only consumer of
+	// Latest(); without this loop it would stay nil forever). On
+	// sessionCtx cancel, the loop exits and Sample() returns any
+	// partially-built snapshot would be discarded — acceptable
+	// because the next session restarts sampling.
+	w.wg.Add(1)
+	go func() {
+		defer w.wg.Done()
+		if err := w.sampler.Run(sessionCtx); err != nil && !errors.Is(err, context.Canceled) {
+			w.logger.Warn("[SAMPLER] resource sampler loop exited: %v", err)
+		}
+	}()
 
 	w.wg.Add(1)
 	go w.receiveLoop(sessionCtx, recvCh)

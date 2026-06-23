@@ -324,24 +324,143 @@ func (r *SQLiteTaskAttemptRepository) GetPhaseTimings(ctx context.Context, attem
 // ── Attempt Metrics ────────────────────────────────────────────────────────
 
 // PersistMetrics inserts or replaces metrics for an attempt.
+//
+// Scorecard v1 / migration 054: extended column list (frames_*, ffmpeg_*,
+// encode_passes, final_concat_stream_copy, concat_mode, temp_bytes_*,
+// duplicate_download_bytes, media/wall_clock_seconds). All DEFAULT 0
+// on the migration side so older workers that don't emit these fields
+// (zero structs) still persist cleanly.
 func (r *SQLiteTaskAttemptRepository) PersistMetrics(ctx context.Context, metrics taskattempts.AttemptMetrics) error {
 	if metrics.AttemptID == "" {
 		return nil
+	}
+	streamCopy := 0
+	if metrics.FinalConcatStreamCopy {
+		streamCopy = 1
+	}
+	concatMode := metrics.ConcatMode
+	if concatMode == "" {
+		concatMode = "n/a"
 	}
 	_, err := r.store.db.ExecContext(ctx,
 		`INSERT OR REPLACE INTO task_attempt_metrics (
 			attempt_id, input_bytes, output_bytes,
 			bytes_from_drive, bytes_from_blobstore, bytes_from_local_cache,
-			cpu_time_ms, gpu_time_ms, peak_rss_bytes, peak_vram_bytes
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			cpu_time_ms, gpu_time_ms, peak_rss_bytes, peak_vram_bytes,
+			frames_decoded, frames_composited, frames_encoded,
+			ffmpeg_speed_ratio, encode_passes,
+			final_concat_stream_copy, concat_mode,
+			temp_bytes_written, duplicate_download_bytes,
+			media_duration_seconds, wall_clock_seconds
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+		          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		metrics.AttemptID, metrics.InputBytes, metrics.OutputBytes,
 		metrics.BytesFromDrive, metrics.BytesFromBlobstore, metrics.BytesFromLocalCache,
 		metrics.CPUTimeMS, metrics.GPUTimeMS, metrics.PeakRSSBytes, metrics.PeakVRAMBytes,
+		metrics.FramesDecoded, metrics.FramesComposited, metrics.FramesEncoded,
+		metrics.FFmpegSpeedRatio, metrics.EncodePasses,
+		streamCopy, concatMode,
+		metrics.TempBytesWritten, metrics.DuplicateDownloadBytes,
+		metrics.MediaDurationSeconds, metrics.WallClockSeconds,
 	)
 	if err != nil {
 		return fmt.Errorf("metrics persist: %w", err)
 	}
 	return nil
+}
+
+// PersistCacheStats hoists the worker's dotted-key cache counters into a
+// typed row so the byte_hit_ratio can be computed in SQL. Idempotent
+// INSERT OR REPLACE keyed by attempt_id.
+func (r *SQLiteTaskAttemptRepository) PersistCacheStats(ctx context.Context, stats taskattempts.AttemptCacheStats) error {
+	if stats.AttemptID == "" {
+		return nil
+	}
+	_, err := r.store.db.ExecContext(ctx,
+		`INSERT OR REPLACE INTO task_attempt_cache_stats (
+			attempt_id, cache_hits, cache_misses, cache_evictions,
+			cache_corruptions, cache_bytes_used, cache_entries
+		) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		stats.AttemptID, stats.CacheHits, stats.CacheMisses, stats.CacheEvictions,
+		stats.CacheCorruptions, stats.CacheBytesUsed, stats.CacheEntries,
+	)
+	if err != nil {
+		return fmt.Errorf("cache stats persist: %w", err)
+	}
+	return nil
+}
+
+// GetCacheStats returns the typed cache snapshot for an attempt, or
+// (nil, nil) on miss.
+func (r *SQLiteTaskAttemptRepository) GetCacheStats(ctx context.Context, attemptID string) (*taskattempts.AttemptCacheStats, error) {
+	if attemptID == "" {
+		return nil, nil
+	}
+	row := r.store.db.QueryRowContext(ctx,
+		`SELECT attempt_id, cache_hits, cache_misses, cache_evictions,
+		        cache_corruptions, cache_bytes_used, cache_entries
+		 FROM task_attempt_cache_stats WHERE attempt_id = ?`,
+		attemptID,
+	)
+	var s taskattempts.AttemptCacheStats
+	err := row.Scan(
+		&s.AttemptID, &s.CacheHits, &s.CacheMisses, &s.CacheEvictions,
+		&s.CacheCorruptions, &s.CacheBytesUsed, &s.CacheEntries,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("cache stats get: %w", err)
+	}
+	return &s, nil
+}
+
+// PersistCostBasis hoists the cost-model envelope for one attempt; the
+// master derives cost_per_output_minute from this row via ComputeCostBasis.
+func (r *SQLiteTaskAttemptRepository) PersistCostBasis(ctx context.Context, basis taskattempts.AttemptCostBasis) error {
+	if basis.AttemptID == "" {
+		return nil
+	}
+	_, err := r.store.db.ExecContext(ctx,
+		`INSERT OR REPLACE INTO task_attempt_cost_basis (
+			attempt_id, cpu_price_per_second, storage_price_per_gb, network_price_per_gb,
+			cpu_time_seconds_total, storage_gb_written, network_gb_egressed, output_minutes_total
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		basis.AttemptID, basis.CPUPricePerSecond, basis.StoragePricePerGB, basis.NetworkPricePerGB,
+		basis.CPUTimeSecondsTotal, basis.StorageGBWritten, basis.NetworkGBEgressed, basis.OutputMinutesTotal,
+	)
+	if err != nil {
+		return fmt.Errorf("cost basis persist: %w", err)
+	}
+	return nil
+}
+
+// GetCostBasis returns the typed cost envelope for an attempt, or
+// (nil, nil) on miss.
+func (r *SQLiteTaskAttemptRepository) GetCostBasis(ctx context.Context, attemptID string) (*taskattempts.AttemptCostBasis, error) {
+	if attemptID == "" {
+		return nil, nil
+	}
+	row := r.store.db.QueryRowContext(ctx,
+		`SELECT attempt_id, cpu_price_per_second, storage_price_per_gb, network_price_per_gb,
+		        cpu_time_seconds_total, storage_gb_written, network_gb_egressed, output_minutes_total
+		 FROM task_attempt_cost_basis WHERE attempt_id = ?`,
+		attemptID,
+	)
+	var b taskattempts.AttemptCostBasis
+	err := row.Scan(
+		&b.AttemptID, &b.CPUPricePerSecond, &b.StoragePricePerGB, &b.NetworkPricePerGB,
+		&b.CPUTimeSecondsTotal, &b.StorageGBWritten, &b.NetworkGBEgressed, &b.OutputMinutesTotal,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("cost basis get: %w", err)
+	}
+	b.Compute()
+	return &b, nil
 }
 
 // GetMetrics returns metrics for an attempt, or nil if not found.
@@ -352,15 +471,27 @@ func (r *SQLiteTaskAttemptRepository) GetMetrics(ctx context.Context, attemptID 
 	row := r.store.db.QueryRowContext(ctx,
 		`SELECT attempt_id, input_bytes, output_bytes,
 		        bytes_from_drive, bytes_from_blobstore, bytes_from_local_cache,
-		        cpu_time_ms, gpu_time_ms, peak_rss_bytes, peak_vram_bytes
+		        cpu_time_ms, gpu_time_ms, peak_rss_bytes, peak_vram_bytes,
+		        frames_decoded, frames_composited, frames_encoded,
+		        ffmpeg_speed_ratio, encode_passes,
+		        final_concat_stream_copy, concat_mode,
+		        temp_bytes_written, duplicate_download_bytes,
+		        media_duration_seconds, wall_clock_seconds
 		 FROM task_attempt_metrics WHERE attempt_id = ?`,
 		attemptID,
 	)
 	var m taskattempts.AttemptMetrics
+	var concatMode string
+	var streamCopy int
 	err := row.Scan(
 		&m.AttemptID, &m.InputBytes, &m.OutputBytes,
 		&m.BytesFromDrive, &m.BytesFromBlobstore, &m.BytesFromLocalCache,
 		&m.CPUTimeMS, &m.GPUTimeMS, &m.PeakRSSBytes, &m.PeakVRAMBytes,
+		&m.FramesDecoded, &m.FramesComposited, &m.FramesEncoded,
+		&m.FFmpegSpeedRatio, &m.EncodePasses,
+		&streamCopy, &concatMode,
+		&m.TempBytesWritten, &m.DuplicateDownloadBytes,
+		&m.MediaDurationSeconds, &m.WallClockSeconds,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -368,5 +499,7 @@ func (r *SQLiteTaskAttemptRepository) GetMetrics(ctx context.Context, attemptID 
 	if err != nil {
 		return nil, fmt.Errorf("metrics get: %w", err)
 	}
+	m.FinalConcatStreamCopy = streamCopy != 0
+	m.ConcatMode = concatMode
 	return &m, nil
 }

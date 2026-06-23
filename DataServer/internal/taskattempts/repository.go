@@ -48,6 +48,35 @@ type Writer interface {
 
 	// Delete hard-deletes an attempt. Returns no error if already gone.
 	Delete(ctx context.Context, id string) error
+
+	// PersistMetrics inserts or replaces the typed AttemptMetrics row for an
+	// attempt (Scorecard v1 / migration 054). Idempotent on INSERT OR REPLACE
+	// keyed by attempt_id. Called from the master ingestion path after the
+	// atomic close-write so the typed execution metrics and the terminal
+	// status transition commit under the per-task mutex.
+	PersistMetrics(ctx context.Context, metrics AttemptMetrics) error
+
+	// PersistCacheStats hoists the (typed, attempted-derivable) cache snapshot
+	// for an attempt into task_attempt_cache_stats. Idempotent INSERT OR
+	// REPLACE. Fields the worker hasn't yet surfaced (Hits, Misses,
+	// Evictions, Corruptions, Entries) are stored as 0 — a deliberate,
+	// documented approximation; BytesUsed is derived from exec metrics.
+	PersistCacheStats(ctx context.Context, stats AttemptCacheStats) error
+
+	// PersistCostBasis inserts or replaces the cost envelope so
+	// cost_per_output_minute is a 1-lookup read downstream.
+	PersistCostBasis(ctx context.Context, basis AttemptCostBasis) error
+}
+
+// MetricsReader is the read-side of the typed metrics envelope so the
+// Prometheus exporter and the scorecard reporter can roll up attempt
+// rows on a periodic supervisor loop (see F8 follow-up). Implied by
+// Repository today; declared explicitly so callers and stubs can wire
+// just the metrics endpoints when the write surface is not needed.
+type MetricsReader interface {
+	GetMetrics(ctx context.Context, attemptID string) (*AttemptMetrics, error)
+	GetCacheStats(ctx context.Context, attemptID string) (*AttemptCacheStats, error)
+	GetCostBasis(ctx context.Context, attemptID string) (*AttemptCostBasis, error)
 }
 
 // Repository combines Reader and Writer into a single attempt persistence contract.

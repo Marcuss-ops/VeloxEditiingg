@@ -11,14 +11,18 @@
 // Phase 2 (typed protobuf): message types are strongly typed with oneof
 // instead of the legacy TransportMessage { string type; Struct payload; }.
 // google.protobuf.Struct is retained only for genuinely dynamic fields
-// (capabilities, extra, job_payload, params, configuration).
+// (extra, job_payload, params, configuration) — TaskResult.metrics is now
+// fully typed (TaskExecutionMetrics) per the scorecard-of-efficiency
+// design (taskattempts.report.go + observability.service.go).
+//
+// ProtocolVersion bumped to "v3" — old v2 workers (TaskResult.metrics as
+// google.protobuf.Struct) are no longer accepted at the gRPC handshake.
+// The PR-5 cutover is forward-only: drain the fleet before deploy.
 //
 // Phase E cutover (May 2026): the MasterToWorkerEnvelope oneof no longer
-// emits a forward-only JobAvailable notification. The wire-level field
+// emits a forward-only JobAvailable notification. Wire-level field
 // number 21 is reserved-but-unused to preserve field-number compatibility
-// with previously-deployed workers/masters. New clients MUST NOT expect
-// JobAvailable on this oneof; gRPC is the single delivery channel post
-// cutover.
+// with previously-deployed workers/masters.
 
 package pb
 
@@ -389,6 +393,10 @@ func (x *Hello) GetCapabilities() *structpb.Struct {
 	return nil
 }
 
+// Heartbeat carries typed resource counters plus the typed FFmpeg
+// counters and per-attempt metrics that the master aggregates for the
+// Project Performance Scorecard. `extra` is retained ONLY for free-form
+// worker logs; canonical metrics live on the typed sub-messages.
 type Heartbeat struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
 	WorkerName      string                 `protobuf:"bytes,1,opt,name=worker_name,json=workerName,proto3" json:"worker_name,omitempty"`
@@ -404,8 +412,13 @@ type Heartbeat struct {
 	JobsFailed      int64                  `protobuf:"varint,11,opt,name=jobs_failed,json=jobsFailed,proto3" json:"jobs_failed,omitempty"`
 	ActiveJobsCount int32                  `protobuf:"varint,12,opt,name=active_jobs_count,json=activeJobsCount,proto3" json:"active_jobs_count,omitempty"`
 	Extra           *structpb.Struct       `protobuf:"bytes,13,opt,name=extra,proto3" json:"extra,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// resources: typed counters (Linux /proc reads; sampled every 5s and
+	// averaged over the heartbeat period). Empty on builds that don't ship
+	// the resource sampler (macOS dev / unit tests); missing = "unknown"
+	// on the master side, not a falsy zero.
+	Resources     *WorkerResourceCounters `protobuf:"bytes,14,opt,name=resources,proto3" json:"resources,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Heartbeat) Reset() {
@@ -529,6 +542,13 @@ func (x *Heartbeat) GetExtra() *structpb.Struct {
 	return nil
 }
 
+func (x *Heartbeat) GetResources() *WorkerResourceCounters {
+	if x != nil {
+		return x.Resources
+	}
+	return nil
+}
+
 type CommandAck struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	CommandId     string                 `protobuf:"bytes,1,opt,name=command_id,json=commandId,proto3" json:"command_id,omitempty"`
@@ -589,29 +609,32 @@ func (x *CommandAck) GetError() string {
 	return ""
 }
 
-// TaskResult is the task-native execution report (PR #5).
-// Sent by the worker after completing or failing a task.
+// TaskResult is the task-native execution report.
 //
-// PR #5 (feat/task-result): output_artifacts carries the list of
-// artifacts produced by this task execution; the master registers
-// them via the artifact service. lease_id is the CAS token the
-// worker received with the TaskOffer.
+// PR-5 (typed metrics, scorecard v1): metrics is now the typed
+// TaskExecutionMetrics message. Legacy v2 clients sent a
+// google.protobuf.Struct here; v3 master rejects v2 TaskResults at the
+// typed-field check inside handler_jobs.go (an unmarshal of the
+// structpb-shaped wire payload into TaskExecutionMetrics will produce
+// a zero-value metrics — the master surfaces a WARN log and falls back
+// to scalar counters only). See migration 054 for the canonical schema
+// on `task_attempt_metrics`.
 type TaskResult struct {
-	state           protoimpl.MessageState `protogen:"open.v1"`
-	TaskId          string                 `protobuf:"bytes,1,opt,name=task_id,json=taskId,proto3" json:"task_id,omitempty"`
-	JobId           string                 `protobuf:"bytes,2,opt,name=job_id,json=jobId,proto3" json:"job_id,omitempty"`
-	AttemptId       string                 `protobuf:"bytes,3,opt,name=attempt_id,json=attemptId,proto3" json:"attempt_id,omitempty"`
-	Status          string                 `protobuf:"bytes,4,opt,name=status,proto3" json:"status,omitempty"` // "succeeded" or "failed"
-	ErrorCode       string                 `protobuf:"bytes,5,opt,name=error_code,json=errorCode,proto3" json:"error_code,omitempty"`
-	ErrorDetail     string                 `protobuf:"bytes,6,opt,name=error_detail,json=errorDetail,proto3" json:"error_detail,omitempty"`
-	Metrics         *structpb.Struct       `protobuf:"bytes,7,opt,name=metrics,proto3" json:"metrics,omitempty"`
-	PhaseMarkers    []*PhaseMarker         `protobuf:"bytes,8,rep,name=phase_markers,json=phaseMarkers,proto3" json:"phase_markers,omitempty"`
-	ExecutorId      string                 `protobuf:"bytes,9,opt,name=executor_id,json=executorId,proto3" json:"executor_id,omitempty"`
-	ExecutorKey     string                 `protobuf:"bytes,10,opt,name=executor_key,json=executorKey,proto3" json:"executor_key,omitempty"`
-	OutputArtifacts []*structpb.Struct     `protobuf:"bytes,11,rep,name=output_artifacts,json=outputArtifacts,proto3" json:"output_artifacts,omitempty"`
-	LeaseId         string                 `protobuf:"bytes,12,opt,name=lease_id,json=leaseId,proto3" json:"lease_id,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	TaskId           string                 `protobuf:"bytes,1,opt,name=task_id,json=taskId,proto3" json:"task_id,omitempty"`
+	JobId            string                 `protobuf:"bytes,2,opt,name=job_id,json=jobId,proto3" json:"job_id,omitempty"`
+	AttemptId        string                 `protobuf:"bytes,3,opt,name=attempt_id,json=attemptId,proto3" json:"attempt_id,omitempty"`
+	Status           string                 `protobuf:"bytes,4,opt,name=status,proto3" json:"status,omitempty"` // "succeeded" or "failed"
+	ErrorCode        string                 `protobuf:"bytes,5,opt,name=error_code,json=errorCode,proto3" json:"error_code,omitempty"`
+	ErrorDetail      string                 `protobuf:"bytes,6,opt,name=error_detail,json=errorDetail,proto3" json:"error_detail,omitempty"`
+	ExecutionMetrics *TaskExecutionMetrics  `protobuf:"bytes,7,opt,name=execution_metrics,json=executionMetrics,proto3" json:"execution_metrics,omitempty"`
+	PhaseMarkers     []*PhaseMarker         `protobuf:"bytes,8,rep,name=phase_markers,json=phaseMarkers,proto3" json:"phase_markers,omitempty"`
+	ExecutorId       string                 `protobuf:"bytes,9,opt,name=executor_id,json=executorId,proto3" json:"executor_id,omitempty"`
+	ExecutorKey      string                 `protobuf:"bytes,10,opt,name=executor_key,json=executorKey,proto3" json:"executor_key,omitempty"`
+	OutputArtifacts  []*structpb.Struct     `protobuf:"bytes,11,rep,name=output_artifacts,json=outputArtifacts,proto3" json:"output_artifacts,omitempty"`
+	LeaseId          string                 `protobuf:"bytes,12,opt,name=lease_id,json=leaseId,proto3" json:"lease_id,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *TaskResult) Reset() {
@@ -686,9 +709,9 @@ func (x *TaskResult) GetErrorDetail() string {
 	return ""
 }
 
-func (x *TaskResult) GetMetrics() *structpb.Struct {
+func (x *TaskResult) GetExecutionMetrics() *TaskExecutionMetrics {
 	if x != nil {
-		return x.Metrics
+		return x.ExecutionMetrics
 	}
 	return nil
 }
@@ -728,15 +751,6 @@ func (x *TaskResult) GetLeaseId() string {
 	return ""
 }
 
-// TaskLeaseRenewal is the task-native lease-extension request (PR-03 /
-// fix/task-lease-renewal-protocol). Replaces LeaseRenewal which was
-// keyed by job_id; the task-native path CAS-extends the task lease via
-// taskgraph.Repository.RenewLease on the (task_id, attempt_id,
-// worker_id, lease_id) tuple with status IN ('LEASED','RUNNING').
-//
-// The master is the clock authority: requested_expiry is interpreted
-// as a hint, not a directive — the master clamps to its lease TTL
-// policy and writes UTC RFC3339 into tasks.lease_expires_at.
 type TaskLeaseRenewal struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
 	TaskId          string                 `protobuf:"bytes,1,opt,name=task_id,json=taskId,proto3" json:"task_id,omitempty"`
@@ -806,6 +820,14 @@ func (x *TaskLeaseRenewal) GetRequestedExpiry() *timestamppb.Timestamp {
 }
 
 // PhaseMarker records one canonical phase timing.
+//
+// Canonical names (load-bearing for observability.aggregate scoring):
+//
+//	queue, asset_wait, cache_lookup, download, decode, compile,
+//	simulate, render, composite, encode, upload, finalize.
+//
+// Workers MUST emit only these names; free-form identifiers are
+// rejected by the master's IsCanonicalPhase() guard rail at ingest.
 type PhaseMarker struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
@@ -883,45 +905,18 @@ func (x *PhaseMarker) GetNotes() string {
 }
 
 type ArtifactUploaded struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// ArtifactUploaded — master-authoritative artifact boundary.
-	//
-	// The master is the authoritative source of truth for each artifact's
-	// size and content hash; every other worker-supplied field is recomputed
-	// by the master from the streamed bytes.
-	// The worker is only allowed to declare WHICH artifact it uploaded (via
-	// the upload_id returned by Service.BeginUpload); every other field the
-	// worker submits is recomputed by the master from the streamed bytes.
-	//
-	// DEPRECATED FIELDS (kept on the wire for compat with pre-cutover workers;
-	// master ignores them entirely):
-	// by the master): artifact_path (4), artifact_size (5), upload_status (6),
-	// error (7). The master recomputes size / sha / mime from the streamed
-	// bytes; the worker-supplied path and size are NEVER used as sources of
-	// truth in the new pipeline authorized via Service.Finalize.
-	//
-	// NEW REQUIRED FIELDS:
-	//   - upload_id (8)        — the master-side session identifier returned
-	//     by Service.BeginUpload. The worker forwards
-	//     this and the master uses it to recover the
-	//     artifact_uploads row + the streamed bytes.
-	//   - lease_id   (9)       — copied from the JOB_RUNNING state, CAS-gated
-	//     in Service.FinalizeArtifactAndCompleteJob.
-	//   - attempt    (10)      — attempt_number the worker finished.
-	//   - expected_revision (11) — the job.revision the worker observed when
-	//     it accepted the lease; CAS-gated in
-	//     Service.FinalizeArtifactAndCompleteJob.
-	JobId            string `protobuf:"bytes,1,opt,name=job_id,json=jobId,proto3" json:"job_id,omitempty"`
-	ArtifactId       string `protobuf:"bytes,2,opt,name=artifact_id,json=artifactId,proto3" json:"artifact_id,omitempty"`
-	ArtifactType     string `protobuf:"bytes,3,opt,name=artifact_type,json=artifactType,proto3" json:"artifact_type,omitempty"`
-	ArtifactPath     string `protobuf:"bytes,4,opt,name=artifact_path,json=artifactPath,proto3" json:"artifact_path,omitempty"`
-	ArtifactSize     int64  `protobuf:"varint,5,opt,name=artifact_size,json=artifactSize,proto3" json:"artifact_size,omitempty"`
-	UploadStatus     string `protobuf:"bytes,6,opt,name=upload_status,json=uploadStatus,proto3" json:"upload_status,omitempty"`
-	Error            string `protobuf:"bytes,7,opt,name=error,proto3" json:"error,omitempty"`
-	UploadId         string `protobuf:"bytes,8,opt,name=upload_id,json=uploadId,proto3" json:"upload_id,omitempty"`
-	LeaseId          string `protobuf:"bytes,9,opt,name=lease_id,json=leaseId,proto3" json:"lease_id,omitempty"`
-	Attempt          int32  `protobuf:"varint,10,opt,name=attempt,proto3" json:"attempt,omitempty"`
-	ExpectedRevision int32  `protobuf:"varint,11,opt,name=expected_revision,json=expectedRevision,proto3" json:"expected_revision,omitempty"`
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	JobId            string                 `protobuf:"bytes,1,opt,name=job_id,json=jobId,proto3" json:"job_id,omitempty"`
+	ArtifactId       string                 `protobuf:"bytes,2,opt,name=artifact_id,json=artifactId,proto3" json:"artifact_id,omitempty"`
+	ArtifactType     string                 `protobuf:"bytes,3,opt,name=artifact_type,json=artifactType,proto3" json:"artifact_type,omitempty"`
+	ArtifactPath     string                 `protobuf:"bytes,4,opt,name=artifact_path,json=artifactPath,proto3" json:"artifact_path,omitempty"`
+	ArtifactSize     int64                  `protobuf:"varint,5,opt,name=artifact_size,json=artifactSize,proto3" json:"artifact_size,omitempty"`
+	UploadStatus     string                 `protobuf:"bytes,6,opt,name=upload_status,json=uploadStatus,proto3" json:"upload_status,omitempty"`
+	Error            string                 `protobuf:"bytes,7,opt,name=error,proto3" json:"error,omitempty"`
+	UploadId         string                 `protobuf:"bytes,8,opt,name=upload_id,json=uploadId,proto3" json:"upload_id,omitempty"`
+	LeaseId          string                 `protobuf:"bytes,9,opt,name=lease_id,json=leaseId,proto3" json:"lease_id,omitempty"`
+	Attempt          int32                  `protobuf:"varint,10,opt,name=attempt,proto3" json:"attempt,omitempty"`
+	ExpectedRevision int32                  `protobuf:"varint,11,opt,name=expected_revision,json=expectedRevision,proto3" json:"expected_revision,omitempty"`
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
@@ -1080,19 +1075,6 @@ type MasterToWorkerEnvelope struct {
 	SequenceNumber  int64                  `protobuf:"varint,4,opt,name=sequence_number,json=sequenceNumber,proto3" json:"sequence_number,omitempty"`
 	SentAt          *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=sent_at,json=sentAt,proto3" json:"sent_at,omitempty"`
 	ProtocolVersion string                 `protobuf:"bytes,6,opt,name=protocol_version,json=protocolVersion,proto3" json:"protocol_version,omitempty"`
-	// JobAvailable removed in Phase E (forward-only notification, dropped in gRPC cutover).
-	//
-	// The matching `reserved 21;` directive in the message-level reserved block
-	// below exists for wire-level compatibility with previously-deployed
-	// workers/masters: it prevents tag 21 from being accidentally reused in
-	// future oneof additions. It does NOT participate in descriptor init — the
-	// pre-existing `slice bounds out of range [:22] with capacity 21` init panic
-	// (PR-3.11) was caused by `worker_control.pb.go` having drifted from this
-	// schema after Phase E, not by the absence of a reserved directive. The
-	// canonical fix is `bash scripts/gen-proto.sh`, which regenerates the
-	// descriptor with `--go_opt=module=velox-shared` so the file lands at
-	// `shared/controltransport/pb/worker_control.pb.go`.
-	//
 	// Types that are valid to be assigned to Msg:
 	//
 	//	*MasterToWorkerEnvelope_HelloAck
@@ -1278,12 +1260,12 @@ type MasterToWorkerEnvelope_HelloAck struct {
 }
 
 type MasterToWorkerEnvelope_TaskOffer struct {
-	// 22 (JobOffer)         — superseded by TaskOffer (30). Reserved.
+	// 22 (JobOffer) — superseded by TaskOffer (30). Reserved.
 	TaskOffer *TaskOffer `protobuf:"bytes,30,opt,name=task_offer,json=taskOffer,proto3,oneof"`
 }
 
 type MasterToWorkerEnvelope_TaskLeaseGranted struct {
-	// 23 (JobLeaseGranted)  — superseded by TaskLeaseGranted (31). Reserved.
+	// 23 (JobLeaseGranted) — superseded by TaskLeaseGranted (31). Reserved.
 	TaskLeaseGranted *TaskLeaseGranted `protobuf:"bytes,31,opt,name=task_lease_granted,json=taskLeaseGranted,proto3,oneof"`
 }
 
@@ -1365,9 +1347,6 @@ func (*HelloAck) Descriptor() ([]byte, []int) {
 	return file_velox_control_worker_control_proto_rawDescGZIP(), []int{10}
 }
 
-// TaskOffer is the task-native dispatch message (PR #4).
-// Replaces JobOffer for task-based dispatching: the dispatcher claims
-// a READY Task, creates a TaskAttempt, and sends this message.
 type TaskOffer struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
 	TaskId          string                 `protobuf:"bytes,1,opt,name=task_id,json=taskId,proto3" json:"task_id,omitempty"`
@@ -1492,7 +1471,6 @@ func (x *TaskOffer) GetAttemptNumber() int32 {
 	return 0
 }
 
-// TaskAccepted is sent by a worker when it accepts a TaskOffer.
 type TaskAccepted struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	TaskId        string                 `protobuf:"bytes,1,opt,name=task_id,json=taskId,proto3" json:"task_id,omitempty"`
@@ -1561,7 +1539,6 @@ func (x *TaskAccepted) GetLeaseId() string {
 	return ""
 }
 
-// TaskRejected is sent by a worker when it rejects a TaskOffer.
 type TaskRejected struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	TaskId        string                 `protobuf:"bytes,1,opt,name=task_id,json=taskId,proto3" json:"task_id,omitempty"`
@@ -1614,10 +1591,6 @@ func (x *TaskRejected) GetReason() string {
 	return ""
 }
 
-// TaskLeaseGranted is the task-scoped grant (PR #5 followup).
-// Replaces JobLeaseGranted for task-native dispatch: the master
-// sends this after the worker accepts a TaskOffer and the task
-// transitions LEASED→RUNNING.
 type TaskLeaseGranted struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	TaskId        string                 `protobuf:"bytes,1,opt,name=task_id,json=taskId,proto3" json:"task_id,omitempty"`
@@ -1974,6 +1947,419 @@ func (*Ping) Descriptor() ([]byte, []int) {
 	return file_velox_control_worker_control_proto_rawDescGZIP(), []int{20}
 }
 
+// TaskExecutionMetrics replaces the legacy google.protobuf.Struct at
+// TaskResult.execution_metrics. All 12 Scorecard metrics derive from
+// this struct + a PhaseMarker list + a worker Counter/Histogram set.
+//
+// Cardinality discipline: this struct carries 1:1 fields (per-attempt
+// scalar counters). The Prometheus exporter on the master side adds
+// the SAFE labels (executor_id, executor_version, worker_class,
+// codec, preset, resolution_bucket, cache_source, phase). The UNSAFE
+// labels (job_id, task_id, artifact_id, hash, video_title) belong in
+// the structured log + DB, NOT here.
+type TaskExecutionMetrics struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Legacy carry-over (7 base fields — present in v2 / migration 043).
+	InputBytes          int64 `protobuf:"varint,1,opt,name=input_bytes,json=inputBytes,proto3" json:"input_bytes,omitempty"`
+	OutputBytes         int64 `protobuf:"varint,2,opt,name=output_bytes,json=outputBytes,proto3" json:"output_bytes,omitempty"`
+	BytesFromDrive      int64 `protobuf:"varint,3,opt,name=bytes_from_drive,json=bytesFromDrive,proto3" json:"bytes_from_drive,omitempty"`
+	BytesFromBlobstore  int64 `protobuf:"varint,4,opt,name=bytes_from_blobstore,json=bytesFromBlobstore,proto3" json:"bytes_from_blobstore,omitempty"`
+	BytesFromLocalCache int64 `protobuf:"varint,5,opt,name=bytes_from_local_cache,json=bytesFromLocalCache,proto3" json:"bytes_from_local_cache,omitempty"`
+	CpuTimeMs           int64 `protobuf:"varint,6,opt,name=cpu_time_ms,json=cpuTimeMs,proto3" json:"cpu_time_ms,omitempty"`
+	PeakRssBytes        int64 `protobuf:"varint,7,opt,name=peak_rss_bytes,json=peakRssBytes,proto3" json:"peak_rss_bytes,omitempty"`
+	// Frame and FFmpeg counters (PR-2: scene.composite.v1 emits; the
+	// C++ engine parses -progress pipe:1 once PR-2 wires the bridge).
+	FramesDecoded    int64   `protobuf:"varint,8,opt,name=frames_decoded,json=framesDecoded,proto3" json:"frames_decoded,omitempty"`
+	FramesComposited int64   `protobuf:"varint,9,opt,name=frames_composited,json=framesComposited,proto3" json:"frames_composited,omitempty"`
+	FramesEncoded    int64   `protobuf:"varint,10,opt,name=frames_encoded,json=framesEncoded,proto3" json:"frames_encoded,omitempty"`
+	FfmpegSpeedRatio float64 `protobuf:"fixed64,11,opt,name=ffmpeg_speed_ratio,json=ffmpegSpeedRatio,proto3" json:"ffmpeg_speed_ratio,omitempty"`
+	// Re-encode / amplification (PR-2 + final concat).
+	EncodePasses          int32 `protobuf:"varint,12,opt,name=encode_passes,json=encodePasses,proto3" json:"encode_passes,omitempty"`
+	FinalConcatStreamCopy bool  `protobuf:"varint,13,opt,name=final_concat_stream_copy,json=finalConcatStreamCopy,proto3" json:"final_concat_stream_copy,omitempty"`
+	// concat_mode: "stream_copy" | "reencode" | "n/a".
+	ConcatMode string `protobuf:"bytes,14,opt,name=concat_mode,json=concatMode,proto3" json:"concat_mode,omitempty"`
+	// Cost basis (PR-4 / costmodel integration; emitted by the worker
+	// so the master can compute cost_per_output_minute without
+	// re-asking for CPU pricing config).
+	CpuPricePerSecond float64 `protobuf:"fixed64,15,opt,name=cpu_price_per_second,json=cpuPricePerSecond,proto3" json:"cpu_price_per_second,omitempty"`
+	StoragePricePerGb float64 `protobuf:"fixed64,16,opt,name=storage_price_per_gb,json=storagePricePerGb,proto3" json:"storage_price_per_gb,omitempty"`
+	NetworkPricePerGb float64 `protobuf:"fixed64,17,opt,name=network_price_per_gb,json=networkPricePerGb,proto3" json:"network_price_per_gb,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *TaskExecutionMetrics) Reset() {
+	*x = TaskExecutionMetrics{}
+	mi := &file_velox_control_worker_control_proto_msgTypes[21]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TaskExecutionMetrics) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TaskExecutionMetrics) ProtoMessage() {}
+
+func (x *TaskExecutionMetrics) ProtoReflect() protoreflect.Message {
+	mi := &file_velox_control_worker_control_proto_msgTypes[21]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TaskExecutionMetrics.ProtoReflect.Descriptor instead.
+func (*TaskExecutionMetrics) Descriptor() ([]byte, []int) {
+	return file_velox_control_worker_control_proto_rawDescGZIP(), []int{21}
+}
+
+func (x *TaskExecutionMetrics) GetInputBytes() int64 {
+	if x != nil {
+		return x.InputBytes
+	}
+	return 0
+}
+
+func (x *TaskExecutionMetrics) GetOutputBytes() int64 {
+	if x != nil {
+		return x.OutputBytes
+	}
+	return 0
+}
+
+func (x *TaskExecutionMetrics) GetBytesFromDrive() int64 {
+	if x != nil {
+		return x.BytesFromDrive
+	}
+	return 0
+}
+
+func (x *TaskExecutionMetrics) GetBytesFromBlobstore() int64 {
+	if x != nil {
+		return x.BytesFromBlobstore
+	}
+	return 0
+}
+
+func (x *TaskExecutionMetrics) GetBytesFromLocalCache() int64 {
+	if x != nil {
+		return x.BytesFromLocalCache
+	}
+	return 0
+}
+
+func (x *TaskExecutionMetrics) GetCpuTimeMs() int64 {
+	if x != nil {
+		return x.CpuTimeMs
+	}
+	return 0
+}
+
+func (x *TaskExecutionMetrics) GetPeakRssBytes() int64 {
+	if x != nil {
+		return x.PeakRssBytes
+	}
+	return 0
+}
+
+func (x *TaskExecutionMetrics) GetFramesDecoded() int64 {
+	if x != nil {
+		return x.FramesDecoded
+	}
+	return 0
+}
+
+func (x *TaskExecutionMetrics) GetFramesComposited() int64 {
+	if x != nil {
+		return x.FramesComposited
+	}
+	return 0
+}
+
+func (x *TaskExecutionMetrics) GetFramesEncoded() int64 {
+	if x != nil {
+		return x.FramesEncoded
+	}
+	return 0
+}
+
+func (x *TaskExecutionMetrics) GetFfmpegSpeedRatio() float64 {
+	if x != nil {
+		return x.FfmpegSpeedRatio
+	}
+	return 0
+}
+
+func (x *TaskExecutionMetrics) GetEncodePasses() int32 {
+	if x != nil {
+		return x.EncodePasses
+	}
+	return 0
+}
+
+func (x *TaskExecutionMetrics) GetFinalConcatStreamCopy() bool {
+	if x != nil {
+		return x.FinalConcatStreamCopy
+	}
+	return false
+}
+
+func (x *TaskExecutionMetrics) GetConcatMode() string {
+	if x != nil {
+		return x.ConcatMode
+	}
+	return ""
+}
+
+func (x *TaskExecutionMetrics) GetCpuPricePerSecond() float64 {
+	if x != nil {
+		return x.CpuPricePerSecond
+	}
+	return 0
+}
+
+func (x *TaskExecutionMetrics) GetStoragePricePerGb() float64 {
+	if x != nil {
+		return x.StoragePricePerGb
+	}
+	return 0
+}
+
+func (x *TaskExecutionMetrics) GetNetworkPricePerGb() float64 {
+	if x != nil {
+		return x.NetworkPricePerGb
+	}
+	return 0
+}
+
+// WorkerResourceCounters is the typed payload of Heartbeat.resources.
+// All values are PEAK-of-WINDOW snapshots: the worker samples the
+// underlying counters every 5 s and reports the peak observed between
+// successive heartbeats. Zero values are valid (report-the-truth for
+// idle workers).
+type WorkerResourceCounters struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// CPU.
+	CpuUtilizationRatio float64 `protobuf:"fixed64,1,opt,name=cpu_utilization_ratio,json=cpuUtilizationRatio,proto3" json:"cpu_utilization_ratio,omitempty"` // 0.0-1.0
+	CpuIowaitRatio      float64 `protobuf:"fixed64,2,opt,name=cpu_iowait_ratio,json=cpuIowaitRatio,proto3" json:"cpu_iowait_ratio,omitempty"`                // 0.0-1.0
+	CpuStealRatio       float64 `protobuf:"fixed64,3,opt,name=cpu_steal_ratio,json=cpuStealRatio,proto3" json:"cpu_steal_ratio,omitempty"`                   // 0.0-1.0
+	// Memory.
+	MemoryUsedBytes      int64 `protobuf:"varint,4,opt,name=memory_used_bytes,json=memoryUsedBytes,proto3" json:"memory_used_bytes,omitempty"`
+	MemoryAvailableBytes int64 `protobuf:"varint,5,opt,name=memory_available_bytes,json=memoryAvailableBytes,proto3" json:"memory_available_bytes,omitempty"`
+	ProcessRssBytes      int64 `protobuf:"varint,6,opt,name=process_rss_bytes,json=processRssBytes,proto3" json:"process_rss_bytes,omitempty"`
+	ProcessRssPeakBytes  int64 `protobuf:"varint,7,opt,name=process_rss_peak_bytes,json=processRssPeakBytes,proto3" json:"process_rss_peak_bytes,omitempty"`
+	SwapUsedBytes        int64 `protobuf:"varint,8,opt,name=swap_used_bytes,json=swapUsedBytes,proto3" json:"swap_used_bytes,omitempty"`
+	MajorPageFaultsTotal int64 `protobuf:"varint,9,opt,name=major_page_faults_total,json=majorPageFaultsTotal,proto3" json:"major_page_faults_total,omitempty"`
+	// Disk (worker-local mount: /opt/velox by default).
+	DiskReadBytesTotal  int64 `protobuf:"varint,10,opt,name=disk_read_bytes_total,json=diskReadBytesTotal,proto3" json:"disk_read_bytes_total,omitempty"`
+	DiskWriteBytesTotal int64 `protobuf:"varint,11,opt,name=disk_write_bytes_total,json=diskWriteBytesTotal,proto3" json:"disk_write_bytes_total,omitempty"`
+	DiskFreeBytes       int64 `protobuf:"varint,12,opt,name=disk_free_bytes,json=diskFreeBytes,proto3" json:"disk_free_bytes,omitempty"`
+	TempBytesWritten    int64 `protobuf:"varint,13,opt,name=temp_bytes_written,json=tempBytesWritten,proto3" json:"temp_bytes_written,omitempty"` // sum since worker start
+	TempFilesOpen       int32 `protobuf:"varint,14,opt,name=temp_files_open,json=tempFilesOpen,proto3" json:"temp_files_open,omitempty"`          // gauge at heartbeat time
+	// Network.
+	NetworkReceiveBytesTotal  int64 `protobuf:"varint,15,opt,name=network_receive_bytes_total,json=networkReceiveBytesTotal,proto3" json:"network_receive_bytes_total,omitempty"`
+	NetworkTransmitBytesTotal int64 `protobuf:"varint,16,opt,name=network_transmit_bytes_total,json=networkTransmitBytesTotal,proto3" json:"network_transmit_bytes_total,omitempty"`
+	NetworkRetransmitsTotal   int64 `protobuf:"varint,17,opt,name=network_retransmits_total,json=networkRetransmitsTotal,proto3" json:"network_retransmits_total,omitempty"`
+	// Scheduler.
+	ActiveTasks int32   `protobuf:"varint,18,opt,name=active_tasks,json=activeTasks,proto3" json:"active_tasks,omitempty"`
+	TaskSlots   int32   `protobuf:"varint,19,opt,name=task_slots,json=taskSlots,proto3" json:"task_slots,omitempty"`
+	Load1       float64 `protobuf:"fixed64,20,opt,name=load1,proto3" json:"load1,omitempty"`                      // unix-style 1-minute loadavg
+	RunQueue    int32   `protobuf:"varint,21,opt,name=run_queue,json=runQueue,proto3" json:"run_queue,omitempty"` // processes waiting on CPU
+	// Sampling book-keeping.
+	SampledAt     *timestamppb.Timestamp `protobuf:"bytes,22,opt,name=sampled_at,json=sampledAt,proto3" json:"sampled_at,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *WorkerResourceCounters) Reset() {
+	*x = WorkerResourceCounters{}
+	mi := &file_velox_control_worker_control_proto_msgTypes[22]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WorkerResourceCounters) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WorkerResourceCounters) ProtoMessage() {}
+
+func (x *WorkerResourceCounters) ProtoReflect() protoreflect.Message {
+	mi := &file_velox_control_worker_control_proto_msgTypes[22]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WorkerResourceCounters.ProtoReflect.Descriptor instead.
+func (*WorkerResourceCounters) Descriptor() ([]byte, []int) {
+	return file_velox_control_worker_control_proto_rawDescGZIP(), []int{22}
+}
+
+func (x *WorkerResourceCounters) GetCpuUtilizationRatio() float64 {
+	if x != nil {
+		return x.CpuUtilizationRatio
+	}
+	return 0
+}
+
+func (x *WorkerResourceCounters) GetCpuIowaitRatio() float64 {
+	if x != nil {
+		return x.CpuIowaitRatio
+	}
+	return 0
+}
+
+func (x *WorkerResourceCounters) GetCpuStealRatio() float64 {
+	if x != nil {
+		return x.CpuStealRatio
+	}
+	return 0
+}
+
+func (x *WorkerResourceCounters) GetMemoryUsedBytes() int64 {
+	if x != nil {
+		return x.MemoryUsedBytes
+	}
+	return 0
+}
+
+func (x *WorkerResourceCounters) GetMemoryAvailableBytes() int64 {
+	if x != nil {
+		return x.MemoryAvailableBytes
+	}
+	return 0
+}
+
+func (x *WorkerResourceCounters) GetProcessRssBytes() int64 {
+	if x != nil {
+		return x.ProcessRssBytes
+	}
+	return 0
+}
+
+func (x *WorkerResourceCounters) GetProcessRssPeakBytes() int64 {
+	if x != nil {
+		return x.ProcessRssPeakBytes
+	}
+	return 0
+}
+
+func (x *WorkerResourceCounters) GetSwapUsedBytes() int64 {
+	if x != nil {
+		return x.SwapUsedBytes
+	}
+	return 0
+}
+
+func (x *WorkerResourceCounters) GetMajorPageFaultsTotal() int64 {
+	if x != nil {
+		return x.MajorPageFaultsTotal
+	}
+	return 0
+}
+
+func (x *WorkerResourceCounters) GetDiskReadBytesTotal() int64 {
+	if x != nil {
+		return x.DiskReadBytesTotal
+	}
+	return 0
+}
+
+func (x *WorkerResourceCounters) GetDiskWriteBytesTotal() int64 {
+	if x != nil {
+		return x.DiskWriteBytesTotal
+	}
+	return 0
+}
+
+func (x *WorkerResourceCounters) GetDiskFreeBytes() int64 {
+	if x != nil {
+		return x.DiskFreeBytes
+	}
+	return 0
+}
+
+func (x *WorkerResourceCounters) GetTempBytesWritten() int64 {
+	if x != nil {
+		return x.TempBytesWritten
+	}
+	return 0
+}
+
+func (x *WorkerResourceCounters) GetTempFilesOpen() int32 {
+	if x != nil {
+		return x.TempFilesOpen
+	}
+	return 0
+}
+
+func (x *WorkerResourceCounters) GetNetworkReceiveBytesTotal() int64 {
+	if x != nil {
+		return x.NetworkReceiveBytesTotal
+	}
+	return 0
+}
+
+func (x *WorkerResourceCounters) GetNetworkTransmitBytesTotal() int64 {
+	if x != nil {
+		return x.NetworkTransmitBytesTotal
+	}
+	return 0
+}
+
+func (x *WorkerResourceCounters) GetNetworkRetransmitsTotal() int64 {
+	if x != nil {
+		return x.NetworkRetransmitsTotal
+	}
+	return 0
+}
+
+func (x *WorkerResourceCounters) GetActiveTasks() int32 {
+	if x != nil {
+		return x.ActiveTasks
+	}
+	return 0
+}
+
+func (x *WorkerResourceCounters) GetTaskSlots() int32 {
+	if x != nil {
+		return x.TaskSlots
+	}
+	return 0
+}
+
+func (x *WorkerResourceCounters) GetLoad1() float64 {
+	if x != nil {
+		return x.Load1
+	}
+	return 0
+}
+
+func (x *WorkerResourceCounters) GetRunQueue() int32 {
+	if x != nil {
+		return x.RunQueue
+	}
+	return 0
+}
+
+func (x *WorkerResourceCounters) GetSampledAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.SampledAt
+	}
+	return nil
+}
+
 var File_velox_control_worker_control_proto protoreflect.FileDescriptor
 
 const file_velox_control_worker_control_proto_rawDesc = "" +
@@ -2011,7 +2397,7 @@ const file_velox_control_worker_control_proto_rawDesc = "" +
 	"bundleHash\x12%\n" +
 	"\x0eengine_version\x18\x06 \x01(\tR\rengineVersion\x12'\n" +
 	"\x0fcredential_hash\x18\a \x01(\tR\x0ecredentialHash\x12;\n" +
-	"\fcapabilities\x18\b \x01(\v2\x17.google.protobuf.StructR\fcapabilities\"\xea\x03\n" +
+	"\fcapabilities\x18\b \x01(\v2\x17.google.protobuf.StructR\fcapabilities\"\xaf\x04\n" +
 	"\tHeartbeat\x12\x1f\n" +
 	"\vworker_name\x18\x01 \x01(\tR\n" +
 	"workerName\x12#\n" +
@@ -2030,13 +2416,14 @@ const file_velox_control_worker_control_proto_rawDesc = "" +
 	"\vjobs_failed\x18\v \x01(\x03R\n" +
 	"jobsFailed\x12*\n" +
 	"\x11active_jobs_count\x18\f \x01(\x05R\x0factiveJobsCount\x12-\n" +
-	"\x05extra\x18\r \x01(\v2\x17.google.protobuf.StructR\x05extra\"[\n" +
+	"\x05extra\x18\r \x01(\v2\x17.google.protobuf.StructR\x05extra\x12C\n" +
+	"\tresources\x18\x0e \x01(\v2%.velox.control.WorkerResourceCountersR\tresources\"[\n" +
 	"\n" +
 	"CommandAck\x12\x1d\n" +
 	"\n" +
 	"command_id\x18\x01 \x01(\tR\tcommandId\x12\x18\n" +
 	"\acommand\x18\x02 \x01(\tR\acommand\x12\x14\n" +
-	"\x05error\x18\x03 \x01(\tR\x05error\"\xcc\x03\n" +
+	"\x05error\x18\x03 \x01(\tR\x05error\"\xeb\x03\n" +
 	"\n" +
 	"TaskResult\x12\x17\n" +
 	"\atask_id\x18\x01 \x01(\tR\x06taskId\x12\x15\n" +
@@ -2046,8 +2433,8 @@ const file_velox_control_worker_control_proto_rawDesc = "" +
 	"\x06status\x18\x04 \x01(\tR\x06status\x12\x1d\n" +
 	"\n" +
 	"error_code\x18\x05 \x01(\tR\terrorCode\x12!\n" +
-	"\ferror_detail\x18\x06 \x01(\tR\verrorDetail\x121\n" +
-	"\ametrics\x18\a \x01(\v2\x17.google.protobuf.StructR\ametrics\x12?\n" +
+	"\ferror_detail\x18\x06 \x01(\tR\verrorDetail\x12P\n" +
+	"\x11execution_metrics\x18\a \x01(\v2#.velox.control.TaskExecutionMetricsR\x10executionMetrics\x12?\n" +
 	"\rphase_markers\x18\b \x03(\v2\x1a.velox.control.PhaseMarkerR\fphaseMarkers\x12\x1f\n" +
 	"\vexecutor_id\x18\t \x01(\tR\n" +
 	"executorId\x12!\n" +
@@ -2151,9 +2538,54 @@ const file_velox_control_worker_control_proto_rawDesc = "" +
 	"\fLeaseRevoked\x12\x15\n" +
 	"\x06job_id\x18\x01 \x01(\tR\x05jobId\x12\x16\n" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\"\x06\n" +
-	"\x04Ping2k\n" +
-	"\rWorkerControl\x12Z\n" +
-	"\x06Stream\x12%.velox.control.WorkerToMasterEnvelope\x1a%.velox.control.MasterToWorkerEnvelope(\x010\x01B\"Z velox-shared/controltransport/pbb\x06proto3"
+	"\x04Ping\"\xec\x05\n" +
+	"\x14TaskExecutionMetrics\x12\x1f\n" +
+	"\vinput_bytes\x18\x01 \x01(\x03R\n" +
+	"inputBytes\x12!\n" +
+	"\foutput_bytes\x18\x02 \x01(\x03R\voutputBytes\x12(\n" +
+	"\x10bytes_from_drive\x18\x03 \x01(\x03R\x0ebytesFromDrive\x120\n" +
+	"\x14bytes_from_blobstore\x18\x04 \x01(\x03R\x12bytesFromBlobstore\x123\n" +
+	"\x16bytes_from_local_cache\x18\x05 \x01(\x03R\x13bytesFromLocalCache\x12\x1e\n" +
+	"\vcpu_time_ms\x18\x06 \x01(\x03R\tcpuTimeMs\x12$\n" +
+	"\x0epeak_rss_bytes\x18\a \x01(\x03R\fpeakRssBytes\x12%\n" +
+	"\x0eframes_decoded\x18\b \x01(\x03R\rframesDecoded\x12+\n" +
+	"\x11frames_composited\x18\t \x01(\x03R\x10framesComposited\x12%\n" +
+	"\x0eframes_encoded\x18\n" +
+	" \x01(\x03R\rframesEncoded\x12,\n" +
+	"\x12ffmpeg_speed_ratio\x18\v \x01(\x01R\x10ffmpegSpeedRatio\x12#\n" +
+	"\rencode_passes\x18\f \x01(\x05R\fencodePasses\x127\n" +
+	"\x18final_concat_stream_copy\x18\r \x01(\bR\x15finalConcatStreamCopy\x12\x1f\n" +
+	"\vconcat_mode\x18\x0e \x01(\tR\n" +
+	"concatMode\x12/\n" +
+	"\x14cpu_price_per_second\x18\x0f \x01(\x01R\x11cpuPricePerSecond\x12/\n" +
+	"\x14storage_price_per_gb\x18\x10 \x01(\x01R\x11storagePricePerGb\x12/\n" +
+	"\x14network_price_per_gb\x18\x11 \x01(\x01R\x11networkPricePerGb\"\x92\b\n" +
+	"\x16WorkerResourceCounters\x122\n" +
+	"\x15cpu_utilization_ratio\x18\x01 \x01(\x01R\x13cpuUtilizationRatio\x12(\n" +
+	"\x10cpu_iowait_ratio\x18\x02 \x01(\x01R\x0ecpuIowaitRatio\x12&\n" +
+	"\x0fcpu_steal_ratio\x18\x03 \x01(\x01R\rcpuStealRatio\x12*\n" +
+	"\x11memory_used_bytes\x18\x04 \x01(\x03R\x0fmemoryUsedBytes\x124\n" +
+	"\x16memory_available_bytes\x18\x05 \x01(\x03R\x14memoryAvailableBytes\x12*\n" +
+	"\x11process_rss_bytes\x18\x06 \x01(\x03R\x0fprocessRssBytes\x123\n" +
+	"\x16process_rss_peak_bytes\x18\a \x01(\x03R\x13processRssPeakBytes\x12&\n" +
+	"\x0fswap_used_bytes\x18\b \x01(\x03R\rswapUsedBytes\x125\n" +
+	"\x17major_page_faults_total\x18\t \x01(\x03R\x14majorPageFaultsTotal\x121\n" +
+	"\x15disk_read_bytes_total\x18\n" +
+	" \x01(\x03R\x12diskReadBytesTotal\x123\n" +
+	"\x16disk_write_bytes_total\x18\v \x01(\x03R\x13diskWriteBytesTotal\x12&\n" +
+	"\x0fdisk_free_bytes\x18\f \x01(\x03R\rdiskFreeBytes\x12,\n" +
+	"\x12temp_bytes_written\x18\r \x01(\x03R\x10tempBytesWritten\x12&\n" +
+	"\x0ftemp_files_open\x18\x0e \x01(\x05R\rtempFilesOpen\x12=\n" +
+	"\x1bnetwork_receive_bytes_total\x18\x0f \x01(\x03R\x18networkReceiveBytesTotal\x12?\n" +
+	"\x1cnetwork_transmit_bytes_total\x18\x10 \x01(\x03R\x19networkTransmitBytesTotal\x12:\n" +
+	"\x19network_retransmits_total\x18\x11 \x01(\x03R\x17networkRetransmitsTotal\x12!\n" +
+	"\factive_tasks\x18\x12 \x01(\x05R\vactiveTasks\x12\x1d\n" +
+	"\n" +
+	"task_slots\x18\x13 \x01(\x05R\ttaskSlots\x12\x14\n" +
+	"\x05load1\x18\x14 \x01(\x01R\x05load1\x12\x1b\n" +
+	"\trun_queue\x18\x15 \x01(\x05R\brunQueue\x129\n" +
+	"\n" +
+	"sampled_at\x18\x16 \x01(\v2\x1a.google.protobuf.TimestampR\tsampledAtB\"Z velox-shared/controltransport/pbb\x06proto3"
 
 var (
 	file_velox_control_worker_control_proto_rawDescOnce sync.Once
@@ -2167,7 +2599,7 @@ func file_velox_control_worker_control_proto_rawDescGZIP() []byte {
 	return file_velox_control_worker_control_proto_rawDescData
 }
 
-var file_velox_control_worker_control_proto_msgTypes = make([]protoimpl.MessageInfo, 21)
+var file_velox_control_worker_control_proto_msgTypes = make([]protoimpl.MessageInfo, 23)
 var file_velox_control_worker_control_proto_goTypes = []any{
 	(*WorkerToMasterEnvelope)(nil), // 0: velox.control.WorkerToMasterEnvelope
 	(*Hello)(nil),                  // 1: velox.control.Hello
@@ -2190,11 +2622,13 @@ var file_velox_control_worker_control_proto_goTypes = []any{
 	(*ConfigurationUpdate)(nil),    // 18: velox.control.ConfigurationUpdate
 	(*LeaseRevoked)(nil),           // 19: velox.control.LeaseRevoked
 	(*Ping)(nil),                   // 20: velox.control.Ping
-	(*timestamppb.Timestamp)(nil),  // 21: google.protobuf.Timestamp
-	(*structpb.Struct)(nil),        // 22: google.protobuf.Struct
+	(*TaskExecutionMetrics)(nil),   // 21: velox.control.TaskExecutionMetrics
+	(*WorkerResourceCounters)(nil), // 22: velox.control.WorkerResourceCounters
+	(*timestamppb.Timestamp)(nil),  // 23: google.protobuf.Timestamp
+	(*structpb.Struct)(nil),        // 24: google.protobuf.Struct
 }
 var file_velox_control_worker_control_proto_depIdxs = []int32{
-	21, // 0: velox.control.WorkerToMasterEnvelope.sent_at:type_name -> google.protobuf.Timestamp
+	23, // 0: velox.control.WorkerToMasterEnvelope.sent_at:type_name -> google.protobuf.Timestamp
 	1,  // 1: velox.control.WorkerToMasterEnvelope.hello:type_name -> velox.control.Hello
 	2,  // 2: velox.control.WorkerToMasterEnvelope.heartbeat:type_name -> velox.control.Heartbeat
 	12, // 3: velox.control.WorkerToMasterEnvelope.task_accepted:type_name -> velox.control.TaskAccepted
@@ -2204,38 +2638,38 @@ var file_velox_control_worker_control_proto_depIdxs = []int32{
 	3,  // 7: velox.control.WorkerToMasterEnvelope.command_ack:type_name -> velox.control.CommandAck
 	7,  // 8: velox.control.WorkerToMasterEnvelope.artifact_uploaded:type_name -> velox.control.ArtifactUploaded
 	8,  // 9: velox.control.WorkerToMasterEnvelope.goodbye:type_name -> velox.control.Goodbye
-	22, // 10: velox.control.Hello.capabilities:type_name -> google.protobuf.Struct
-	22, // 11: velox.control.Heartbeat.extra:type_name -> google.protobuf.Struct
-	22, // 12: velox.control.TaskResult.metrics:type_name -> google.protobuf.Struct
-	6,  // 13: velox.control.TaskResult.phase_markers:type_name -> velox.control.PhaseMarker
-	22, // 14: velox.control.TaskResult.output_artifacts:type_name -> google.protobuf.Struct
-	21, // 15: velox.control.TaskLeaseRenewal.requested_expiry:type_name -> google.protobuf.Timestamp
-	21, // 16: velox.control.PhaseMarker.started_at:type_name -> google.protobuf.Timestamp
-	21, // 17: velox.control.PhaseMarker.completed_at:type_name -> google.protobuf.Timestamp
-	21, // 18: velox.control.MasterToWorkerEnvelope.sent_at:type_name -> google.protobuf.Timestamp
-	10, // 19: velox.control.MasterToWorkerEnvelope.hello_ack:type_name -> velox.control.HelloAck
-	11, // 20: velox.control.MasterToWorkerEnvelope.task_offer:type_name -> velox.control.TaskOffer
-	14, // 21: velox.control.MasterToWorkerEnvelope.task_lease_granted:type_name -> velox.control.TaskLeaseGranted
-	15, // 22: velox.control.MasterToWorkerEnvelope.command:type_name -> velox.control.Command
-	16, // 23: velox.control.MasterToWorkerEnvelope.cancel_job:type_name -> velox.control.CancelJob
-	17, // 24: velox.control.MasterToWorkerEnvelope.drain:type_name -> velox.control.Drain
-	18, // 25: velox.control.MasterToWorkerEnvelope.configuration_update:type_name -> velox.control.ConfigurationUpdate
-	19, // 26: velox.control.MasterToWorkerEnvelope.lease_revoked:type_name -> velox.control.LeaseRevoked
-	20, // 27: velox.control.MasterToWorkerEnvelope.ping:type_name -> velox.control.Ping
-	22, // 28: velox.control.TaskOffer.task_spec:type_name -> google.protobuf.Struct
-	21, // 29: velox.control.TaskOffer.lease_deadline:type_name -> google.protobuf.Timestamp
-	22, // 30: velox.control.TaskOffer.requirements:type_name -> google.protobuf.Struct
-	22, // 31: velox.control.TaskOffer.output_contract:type_name -> google.protobuf.Struct
-	21, // 32: velox.control.Command.timestamp:type_name -> google.protobuf.Timestamp
-	22, // 33: velox.control.Command.params:type_name -> google.protobuf.Struct
-	22, // 34: velox.control.ConfigurationUpdate.configuration:type_name -> google.protobuf.Struct
-	0,  // 35: velox.control.WorkerControl.Stream:input_type -> velox.control.WorkerToMasterEnvelope
-	9,  // 36: velox.control.WorkerControl.Stream:output_type -> velox.control.MasterToWorkerEnvelope
-	36, // [36:37] is the sub-list for method output_type
-	35, // [35:36] is the sub-list for method input_type
-	35, // [35:35] is the sub-list for extension type_name
-	35, // [35:35] is the sub-list for extension extendee
-	0,  // [0:35] is the sub-list for field type_name
+	24, // 10: velox.control.Hello.capabilities:type_name -> google.protobuf.Struct
+	24, // 11: velox.control.Heartbeat.extra:type_name -> google.protobuf.Struct
+	22, // 12: velox.control.Heartbeat.resources:type_name -> velox.control.WorkerResourceCounters
+	21, // 13: velox.control.TaskResult.execution_metrics:type_name -> velox.control.TaskExecutionMetrics
+	6,  // 14: velox.control.TaskResult.phase_markers:type_name -> velox.control.PhaseMarker
+	24, // 15: velox.control.TaskResult.output_artifacts:type_name -> google.protobuf.Struct
+	23, // 16: velox.control.TaskLeaseRenewal.requested_expiry:type_name -> google.protobuf.Timestamp
+	23, // 17: velox.control.PhaseMarker.started_at:type_name -> google.protobuf.Timestamp
+	23, // 18: velox.control.PhaseMarker.completed_at:type_name -> google.protobuf.Timestamp
+	23, // 19: velox.control.MasterToWorkerEnvelope.sent_at:type_name -> google.protobuf.Timestamp
+	10, // 20: velox.control.MasterToWorkerEnvelope.hello_ack:type_name -> velox.control.HelloAck
+	11, // 21: velox.control.MasterToWorkerEnvelope.task_offer:type_name -> velox.control.TaskOffer
+	14, // 22: velox.control.MasterToWorkerEnvelope.task_lease_granted:type_name -> velox.control.TaskLeaseGranted
+	15, // 23: velox.control.MasterToWorkerEnvelope.command:type_name -> velox.control.Command
+	16, // 24: velox.control.MasterToWorkerEnvelope.cancel_job:type_name -> velox.control.CancelJob
+	17, // 25: velox.control.MasterToWorkerEnvelope.drain:type_name -> velox.control.Drain
+	18, // 26: velox.control.MasterToWorkerEnvelope.configuration_update:type_name -> velox.control.ConfigurationUpdate
+	19, // 27: velox.control.MasterToWorkerEnvelope.lease_revoked:type_name -> velox.control.LeaseRevoked
+	20, // 28: velox.control.MasterToWorkerEnvelope.ping:type_name -> velox.control.Ping
+	24, // 29: velox.control.TaskOffer.task_spec:type_name -> google.protobuf.Struct
+	23, // 30: velox.control.TaskOffer.lease_deadline:type_name -> google.protobuf.Timestamp
+	24, // 31: velox.control.TaskOffer.requirements:type_name -> google.protobuf.Struct
+	24, // 32: velox.control.TaskOffer.output_contract:type_name -> google.protobuf.Struct
+	23, // 33: velox.control.Command.timestamp:type_name -> google.protobuf.Timestamp
+	24, // 34: velox.control.Command.params:type_name -> google.protobuf.Struct
+	24, // 35: velox.control.ConfigurationUpdate.configuration:type_name -> google.protobuf.Struct
+	23, // 36: velox.control.WorkerResourceCounters.sampled_at:type_name -> google.protobuf.Timestamp
+	37, // [37:37] is the sub-list for method output_type
+	37, // [37:37] is the sub-list for method input_type
+	37, // [37:37] is the sub-list for extension type_name
+	37, // [37:37] is the sub-list for extension extendee
+	0,  // [0:37] is the sub-list for field type_name
 }
 
 func init() { file_velox_control_worker_control_proto_init() }
@@ -2271,9 +2705,9 @@ func file_velox_control_worker_control_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_velox_control_worker_control_proto_rawDesc), len(file_velox_control_worker_control_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   21,
+			NumMessages:   23,
 			NumExtensions: 0,
-			NumServices:   1,
+			NumServices:   0,
 		},
 		GoTypes:           file_velox_control_worker_control_proto_goTypes,
 		DependencyIndexes: file_velox_control_worker_control_proto_depIdxs,

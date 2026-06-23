@@ -31,6 +31,7 @@ import (
 	"velox-server/internal/taskoutput_artifacts"
 )
 
+
 // IngestCommand is the typed input for TaskReportIngestionService.IngestTaskResult.
 // Mirrors the audit-mandated TaskResult identity tuple (PR-03) plus the
 // declaration fields. Output artifacts are worker-claimed descriptors;
@@ -62,6 +63,18 @@ type IngestCommand struct {
 	// and declared_sha256 are worker-supplied hints (NOT authoritative;
 	// the artifact upload pipeline's FinalizeVerified recomputes both).
 	OutputArtifacts []DeclaredArtifact
+
+	// Scorecard v1 / F1 — typed execution metrics hoisted from the
+	// pb.TaskExecutionMetrics wire payload by the gRPC handler via
+	// executionMetricsToAttemptMetrics (handler_jobs_metrics.go).
+	// Persisted by IngestTaskResult under the per-task mutex immediately
+	// after the atomic close-write so the typed metrics commit together
+	// with the terminal status flip — guaranteeing serializable scorecard
+	// ingest with NO observable window where a task is SUCCEEDED on
+	// task_attempts but missing on task_attempt_metrics.
+	TypedMetrics taskattempts.AttemptMetrics
+	CacheStats   taskattempts.AttemptCacheStats
+	CostBasis    taskattempts.AttemptCostBasis
 }
 
 // DeclaredArtifact is one worker-claimed artifact. Mirrors the proto
@@ -320,6 +333,47 @@ func (s *TaskReportIngestionService) IngestTaskResult(ctx context.Context, cmd I
 		)
 	} else {
 		res.AttemptClosed = true
+	}
+
+	// Step 2.5 — F1: persist the typed pb.TaskExecutionMetrics envelope
+	// into task_attempt_metrics + task_attempt_cache_stats + task_attempt_cost_basis.
+	//
+	// CRITICAL: gated on res.AttemptClosed — i.e. THIS caller won the
+	// CAS race. Without this gate, a stale-replay TaskResult
+	// (ErrTransitionConflict path above) would silently OVERWRITE the
+	// canonical attempt's typed metrics via INSERT OR REPLACE keyed on
+	// attempt_id. The canonical writer's first-write wins: a stale
+	// retry from a revoked worker MUST NOT corrupt the scorecard with
+	// the wrong attempt's bytes.
+	//
+	// Failure of any of the three rows is logged but does NOT bubble:
+	// the close-write has already committed, and observability gaps are
+	// recoverable on a future replay while an audit-closure rollback
+	// would not be. We ALWAYS persist on the happy path, even for
+	// legacy v2 workers (nil / zero-valued TypedMetrics) — the scorecard
+	// percentile queries depend on a row being present in
+	// task_attempt_metrics to compute aggregates.
+	if res.AttemptClosed {
+		metrics := cmd.TypedMetrics
+		if metrics.AttemptID == "" {
+			metrics.AttemptID = cmd.AttemptID
+		}
+		if err := s.attemptRepo.PersistMetrics(ctx, metrics); err != nil {
+			s.logger.Printf("[INGEST] task_attempt_metrics persist for task=%s attempt=%s FAILED (closure still committed): %v",
+				cmd.TaskID, cmd.AttemptID, err)
+		}
+		cs := cmd.CacheStats
+		if cs.AttemptID == "" {
+			cs.AttemptID = cmd.AttemptID
+		}
+		if err := s.attemptRepo.PersistCacheStats(ctx, cs); err != nil {
+			s.logger.Printf("[INGEST] task_attempt_cache_stats persist for task=%s attempt=%s FAILED: %v",
+				cmd.TaskID, cmd.AttemptID, err)
+		}
+		if err := s.attemptRepo.PersistCostBasis(ctx, cmd.CostBasis); err != nil {
+			s.logger.Printf("[INGEST] task_attempt_cost_basis persist for task=%s attempt=%s FAILED: %v",
+				cmd.TaskID, cmd.AttemptID, err)
+		}
 	}
 
 	// Step 3: register the worker-declared output artifacts. Duplicates

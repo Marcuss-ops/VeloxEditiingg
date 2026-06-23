@@ -27,6 +27,7 @@ import (
 	"velox-server/internal/artifacts"
 	"velox-server/internal/ingest"
 	"velox-server/internal/jobs"
+	velmetrics "velox-server/internal/metrics"
 	"velox-server/internal/store"
 	"velox-server/internal/taskattempts"
 	"velox-server/internal/taskgraph"
@@ -66,6 +67,14 @@ type Handler struct {
 	dbStore      *store.SQLiteStore
 	config       *HandlerConfig
 	authorizer   WorkerAuthorizer // P0: gates workers against VELOX_ALLOWED_WORKERS
+
+	// Scorecard v1 / F2: forward typed WorkerResourceCounters from the
+	// worker's periodic Heartbeat onto the Prometheus registry. Wired
+	// post-construction via SetResourceSink so tests can inject a stub
+	// sink without invoking the heavy Collector. Nil is safe: handleHeartbeat
+	// falls through to the existing registry.Heartbeat() side and skips
+	// the Prometheus projection (deployments without metrics still score).
+	resourceSink velmetrics.WorkerResourceSink
 
 	mu             sync.RWMutex
 	sessions       map[string]*workerSession // sessionID → active stream session
@@ -760,6 +769,15 @@ func (h *Handler) extractWorkerIDFromStream(stream grpc.ServerStream) string {
 // reference (useful for tests that swap services mid-flight).
 func (h *Handler) SetIngestionSvc(svc *ingest.TaskReportIngestionService) {
 	h.ingestionSvc = svc
+}
+
+// SetResourceSink installs the WorkerResourceSink used by handleHeartbeat
+// (Scorecard v1 / F2). Bootstrap wires metrics.NewCollector here; tests
+// inject a recording stub. NIL-safe — handlers without a metrics surface
+// still persist the typed heartbeat via registry.Heartbeat() but skip
+// the Prometheus projection.
+func (h *Handler) SetResourceSink(sink velmetrics.WorkerResourceSink) {
+	h.resourceSink = sink
 }
 
 // ingestionService returns the wired TaskReportIngestionService, or nil

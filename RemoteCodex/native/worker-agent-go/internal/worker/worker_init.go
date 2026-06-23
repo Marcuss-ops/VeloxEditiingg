@@ -13,6 +13,7 @@ import (
 	"velox-shared/controltransport"
 	"velox-worker-agent/internal/executor"
 	"velox-worker-agent/internal/taskrunner"
+	"velox-worker-agent/internal/telemetry"
 	"velox-worker-agent/internal/worker/concurrency"
 	"velox-worker-agent/internal/worker/stageexec"
 	"velox-worker-agent/pkg/api"
@@ -220,7 +221,14 @@ func New(cfg *config.WorkerConfig, version string, opts ...Option) (*Worker, err
 		cache:              wo.cache,
 		blobs:              wo.blobs,
 		taskRunner:         tr,
-		exitFunc:           os.Exit,
+		// PR-3.6 / F4: resource sampler. Empty procRoot/sysRoot
+		// defaults to /proc + /sys. cfg.WorkDir may be empty on
+		// minimal test setups; the sampler tolerates that path
+		// (statvfs + resolveWorkDirDevice degrade to best-effort).
+		// 5s tick + 3-tick emit cadence is the default from
+		// NewResourceSampler.
+		sampler: telemetry.NewResourceSampler("", "", cfg.WorkDir, 0, 0),
+		exitFunc:   os.Exit,
 	}
 
 	// Load persisted state from previous run (command dedup, job recovery info).

@@ -155,6 +155,22 @@ func (w *Worker) sendHeartbeat(ctx context.Context) error {
 	payload["protocol_version"] = w.config.ProtocolVersion
 	payload["engine_version"] = w.config.EngineVersion
 
+	// PR-3.6 / F4: attach typed WorkerResourceCounters on every
+	// heartbeat. The sampler publishes a refreshed snapshot to its
+	// emit slot every 3 ticks (≈ 15s on the master F2 LastSeenResources
+	// delta cadence); on a busy worker the bus cadence is 15s and the
+	// snapshot is therefore fresh on every beat. On the idle 60s cadence
+	// the same snapshot is replayed up to 4×, which is fine because the
+	// sampler generates no work between emits. Nil-safe: skip the field
+	// entirely if the sampler hasn't yet sampled (early session).
+	if w.sampler != nil {
+		if snap := w.sampler.Latest(); snap != nil {
+			if m := snap.ToWireMap(); m != nil {
+				payload["resources"] = m
+			}
+		}
+	}
+
 	hostname := ""
 	if h, err := os.Hostname(); err == nil {
 		hostname = h

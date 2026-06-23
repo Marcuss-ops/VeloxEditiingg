@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"velox-worker-agent/internal/executor"
+	"velox-worker-agent/internal/telemetry"
 	"velox-worker-agent/pkg/logger"
 )
 
@@ -257,15 +258,35 @@ func (r *TaskRunner) Run(parent context.Context, spec executor.TaskSpec) (TaskEx
 		if report.Metrics == nil {
 			report.Metrics = make(map[string]interface{})
 		}
-		r.mergeStatsInto(report.Metrics)
+		r.mergeStatsInto(report, report.Metrics)
 	}
 	return *report, nil
 }
 
 // mergeStatsInto writes the cache + blob counters into m using
-// dotted-key names. Safe under zero-valued providers (noop fallbacks
-// keep the merge safe and idempotent for tests).
-func (r *TaskRunner) mergeStatsInto(m map[string]interface{}) {
+// dotted-key names (legacy PR-3.7 shape) AND populates the typed
+// mirror on report.TypedMetrics (Scorecard v1 F3 shape). Both shapes
+// are produced until downstream consumers finish adopting the typed
+// envelope.
+//
+// The TypedMetrics fields populated today are limited to what the
+// worker's cache + blob stats providers actually expose:
+//   - InputBytes / OutputBytes / BytesFromDrive / BytesFromBlobstore:
+//     executor-supplied dotted keys (queue_bytes, drive_bytes, ...).
+//     Falls back to 0 if absent.
+//   - BytesFromLocalCache: cache.bytes (the local cache's authoritative
+//     "currently occupied bytes" gauge).
+//   - CpuTimeMs / PeakRssBytes / frames*: executor-supplied dotted keys.
+//   - FfmpegSpeedRatio / EncodePasses / FinalConcatStreamCopy /
+//     ConcatMode: executor-supplied dotted keys.
+//   - CpuPricePerSecond / StoragePricePerGb / NetworkPricePerGb: 0 on
+//     the worker — the master multiplies utilization × price to derive
+//     cost. PR-3.6 will let the worker carry these into the typed
+//     envelope once a sampler lands.
+//
+// Safe under zero-valued providers (noop fallbacks keep the merge
+// safe and idempotent for tests).
+func (r *TaskRunner) mergeStatsInto(report *TaskExecutionReport, m map[string]interface{}) {
 	if r.cacheStats != nil {
 		cs := r.cacheStats.Stats()
 		m["cache.hits"] = cs.Hits
@@ -286,6 +307,91 @@ func (r *TaskRunner) mergeStatsInto(m map[string]interface{}) {
 		m["blob.entries"] = bs.Entries
 		m["blob.bytes"] = bs.Bytes
 	}
+
+	// ── Scorecard v1 typed mirror ────────────────────────────────────
+	// Built on top of the dotted-key map so the canonical typed shape
+	// survives the F3 transition window. If the executor never produced
+	// any metric counters, the typed mirror carries the cache.bytes
+	// value alone (the only field CacheStatsProvider is authoritative
+	// for today) and zeros elsewhere — correct behavior.
+	typed := telemetry.TypedExecutionMetrics{
+		BytesFromLocalCache: positiveIntegerToInt64(m["cache.bytes"]),
+		InputBytes:          positiveIntegerToInt64(m["input.bytes"]),
+		OutputBytes:         positiveIntegerToInt64(m["output.bytes"]),
+		BytesFromDrive:      positiveIntegerToInt64(m["drive.bytes"]),
+		BytesFromBlobstore:  positiveIntegerToInt64(m["blobstore.bytes"]),
+		CpuTimeMs:           positiveIntegerToInt64(m["cpu.ms"]),
+		PeakRssBytes:        positiveIntegerToInt64(m["rss.peak.bytes"]),
+		FramesDecoded:       positiveIntegerToInt64(m["frames.decoded"]),
+		FramesComposited:    positiveIntegerToInt64(m["frames.composited"]),
+		FramesEncoded:       positiveIntegerToInt64(m["frames.encoded"]),
+		ConcatMode:          stringFromMap(m["concat.mode"]),
+	}
+	if v, ok := m["ffmpeg.speed_ratio"].(float64); ok {
+		typed.FfmpegSpeedRatio = v
+	}
+	// encode.passes is proto3 int32 — the legacy dotted-key producer
+	// may emit it as int32 or int64 depending on platform.
+	if v, ok := m["encode.passes"].(int32); ok {
+		typed.EncodePasses = v
+	} else if v, ok := m["encode.passes"].(int64); ok && v >= 0 && v <= 0x7fffffff {
+		typed.EncodePasses = int32(v)
+	}
+	// final_concat_stream_copy is conventionally a bool in the proto
+	// and a JSON-style key in the legacy map.
+	if v, ok := m["final.concat.stream_copy"].(bool); ok {
+		typed.FinalConcatStreamCopy = v
+	}
+	report.TypedMetrics = &typed
+	// ── End typed mirror ─────────────────────────────────────────────
+}
+
+// positiveIntegerToInt64 reads dotted-key counters (int64 / int32 /
+// int / float64 / uint64 / uint32) and returns a non-negative int64
+// compatible with proto3 wire shape. Negatives are floored to 0.
+// uint64 inputs are clipped at MaxInt64 to keep varint serialization
+// honest rather than silently wrapping at -1.
+func positiveIntegerToInt64(v any) int64 {
+	const maxInt64 = int64(^uint64(0) >> 1)
+	switch x := v.(type) {
+	case nil:
+		return 0
+	case int64:
+		if x < 0 {
+			return 0
+		}
+		return x
+	case int32:
+		if x < 0 {
+			return 0
+		}
+		return int64(x)
+	case int:
+		if x < 0 {
+			return 0
+		}
+		return int64(x)
+	case uint64:
+		if x > uint64(maxInt64) {
+			return maxInt64
+		}
+		return int64(x)
+	case uint32:
+		return int64(x)
+	case float64:
+		if x <= 0 {
+			return 0
+		}
+		return int64(x)
+	}
+	return 0
+}
+
+func stringFromMap(v any) string {
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return ""
 }
 
 // runExecute is the heart of PR-3.3: it invokes Executor.Execute under a
@@ -396,7 +502,7 @@ func (r *TaskRunner) completeError(report *TaskExecutionReport, appendPhase func
 		if report.Metrics == nil {
 			report.Metrics = make(map[string]interface{})
 		}
-		r.mergeStatsInto(report.Metrics)
+		r.mergeStatsInto(report, report.Metrics)
 	}
 	return *report
 }

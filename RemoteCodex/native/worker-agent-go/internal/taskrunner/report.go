@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"velox-worker-agent/internal/executor"
+	"velox-worker-agent/internal/telemetry"
 )
 
 // TaskExecutionReport is the canonical per-task report the TaskRunner
@@ -28,6 +29,14 @@ type TaskExecutionReport struct {
 	ErrorDetail  string                 `json:"error_detail,omitempty"`
 	Outputs      []executor.ArtifactRef `json:"outputs,omitempty"`
 	Metrics      map[string]interface{} `json:"metrics,omitempty"`
+	// TypedMetrics is the proto-shaped 17-field mirror of the legacy
+	// `Metrics` dotted-key map. PR-3.6 (Scorecard v1) populates it
+	// alongside the map so the wire envelope carries both shapes
+	// (typed + dotted-key) during the F3 transition window. Once
+	// downstream consumers adopt the typed shape exclusively, the
+	// legacy map will be retired. Nil-safe: workers that produce no
+	// ingest / egress traffic leave this pointer at nil.
+	TypedMetrics *telemetry.TypedExecutionMetrics `json:"typed_metrics,omitempty"`
 	Attempts     int                    `json:"attempts"`
 	StartedAt    time.Time              `json:"started_at"`
 	CompletedAt  time.Time              `json:"completed_at"`

@@ -50,11 +50,14 @@ import (
 	"velox-server/internal/costmodel"
 	"velox-server/internal/ingest"
 	"velox-server/internal/jobs"
+	"velox-server/internal/store"
 	"velox-server/internal/taskattempts"
 	"velox-server/internal/taskgraph"
 	"velox-server/internal/taskoutput_artifacts"
 
 	pb "velox-shared/controltransport/pb"
+
+	"google.golang.org/protobuf/types/known/structpb"
 )
 
 // spoofFixture bakes the canonical attempt + the wire-spoof tuple
@@ -267,6 +270,17 @@ var _ jobs.Repository = (*spoofStubJobsRepo)(nil)
 type spoofStubAttemptRepo struct {
 	mu       sync.Mutex
 	attempts map[string]*taskattempts.TaskAttempt
+
+	// Scorecard v1 / F1 — typed metrics persistence counters. Tests
+	// inspect these to assert that the typed pb.TaskExecutionMetrics
+	// payload was actually persisted through the master ingestion path.
+	persistMetricsCalls int
+	persistCacheCalls   int
+	persistCostCalls    int
+
+	lastMetrics    taskattempts.AttemptMetrics
+	lastCacheStats taskattempts.AttemptCacheStats
+	lastCostBasis  taskattempts.AttemptCostBasis
 }
 
 // seedCanonical inserts an attempt at the canonical (task_id, worker_id, lease_id)
@@ -327,6 +341,41 @@ func (s *spoofStubAttemptRepo) Delete(_ context.Context, _ string) error {
 
 var _ taskattempts.Repository = (*spoofStubAttemptRepo)(nil)
 
+// Scorecard v1 / F1 — counters for typed metrics persistence calls.
+// Tests asserting on persistCounts use a fully-typed pb.TaskExecutionMetrics
+// and verify each of the 3 helper methods (PersistMetrics/PersistCacheStats/
+// PersistCostBasis) was invoked exactly once with the expected values.
+func (s *spoofStubAttemptRepo) PersistMetrics(_ context.Context, m taskattempts.AttemptMetrics) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.persistMetricsCalls++
+	s.lastMetrics = m
+	return nil
+}
+func (s *spoofStubAttemptRepo) PersistCacheStats(_ context.Context, c taskattempts.AttemptCacheStats) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.persistCacheCalls++
+	s.lastCacheStats = c
+	return nil
+}
+func (s *spoofStubAttemptRepo) PersistCostBasis(_ context.Context, b taskattempts.AttemptCostBasis) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.persistCostCalls++
+	s.lastCostBasis = b
+	return nil
+}
+func (s *spoofStubAttemptRepo) GetMetrics(_ context.Context, _ string) (*taskattempts.AttemptMetrics, error) {
+	panic("spoofStubAttemptRepo.GetMetrics: not exercised in handler-level tests")
+}
+func (s *spoofStubAttemptRepo) GetCacheStats(_ context.Context, _ string) (*taskattempts.AttemptCacheStats, error) {
+	panic("spoofStubAttemptRepo.GetCacheStats: not exercised in handler-level tests")
+}
+func (s *spoofStubAttemptRepo) GetCostBasis(_ context.Context, _ string) (*taskattempts.AttemptCostBasis, error) {
+	panic("spoofStubAttemptRepo.GetCostBasis: not exercised in handler-level tests")
+}
+
 // spoofStubOutputArts: taskoutput_artifacts.Repository.
 // Register MUST stay zero on the rejection path.
 type spoofStubOutputArts struct {
@@ -365,7 +414,14 @@ func (s *spoofStubOutputArts) ListByTask(_ context.Context, taskID string) ([]ta
 var _ taskoutput_artifacts.Repository = (*spoofStubOutputArts)(nil)
 
 // buildSpoofHandler wires a Handler + ingestionSvc + canonical attempt
-// store with the spoof fixture baked in. Used by both sub-tests.
+// store with the spoof fixture baked in. Used by all sub-tests.
+//
+// The jobsRepo + taskRepo are pre-seeded so the Job roll-up path (step 4
+// of IngestTaskResult) has a target — without it the auditor gets
+// "job not found (spoof stub)" and SetStatus never fires, which makes
+// the F1 typed-metrics tests spuriously fail on the audit-closure
+// cross-check. The seeds match the canonical fixture
+// (T-spoof / J-canonical) so the audit closure runs end-to-end.
 func buildSpoofHandler(t *testing.T) (*Handler, *spoofStubTaskRepo, *spoofStubJobsRepo, *spoofStubOutputArts) {
 	t.Helper()
 	fx := newSpoofFixture()
@@ -373,8 +429,14 @@ func buildSpoofHandler(t *testing.T) (*Handler, *spoofStubTaskRepo, *spoofStubJo
 	attempts := &spoofStubAttemptRepo{}
 	attempts.seedCanonical(fx.taskID, fx.workerID, fx.canonicalLease)
 
-	taskRepo := &spoofStubTaskRepo{}
-	jobsRepo := &spoofStubJobsRepo{}
+	taskRepo := &spoofStubTaskRepo{
+		listTasks: []taskgraph.Task{
+			{ID: fx.taskID, JobID: fx.wireJobID, Status: taskgraph.StatusSucceeded},
+		},
+	}
+	jobsRepo := &spoofStubJobsRepo{
+		getJob: &jobs.Job{ID: fx.wireJobID, Status: jobs.StatusRunning, MaxRetries: 3, Revision: 0},
+	}
 	outputArts := newSpoofStubOutputArts()
 
 	svc, err := ingest.NewTaskReportIngestionService(taskRepo, jobsRepo, attempts, outputArts)
@@ -460,7 +522,6 @@ func TestHandleTaskResult_RejectsIdentitySpoofing_HandlerLayerDrop(t *testing.T)
 // drops the %w wrap would fail this test even if the side-effect
 // counters in (A) were silently loosened.
 // =====================================================================
-
 func TestHandleTaskResult_ValidateIdentityTuple_CanonicalSentinel_WireLeaseIDMismatch(t *testing.T) {
 	fx := newSpoofFixture()
 
@@ -497,5 +558,298 @@ func TestHandleTaskResult_ValidateIdentityTuple_CanonicalSentinel_WireLeaseIDMis
 	}
 	if vErr != nil && !errors.Is(vErr, taskattempts.ErrIdentityMismatch) {
 		t.Errorf("ValidateIdentityTuple returned %v; want taskattempts.ErrIdentityMismatch wrapped", vErr)
+	}
+}
+
+// =====================================================================
+// (C) F1 — Scorecard v1 typed metrics ingest. Drives handleTaskResult
+// with a fully-populated pb.TaskExecutionMetrics payload + an artifact
+// declaration; asserts that the typed Go structs flow through
+// IngestTaskResult → persistMetrics/PersistCacheStats/PersistCostBasis.
+// =====================================================================
+
+func TestHandleTaskResult_PersistTypedMetrics_F1(t *testing.T) {
+	handler, taskRepo, jobsRepo, outputArts := buildSpoofHandler(t)
+	fx := newSpoofFixture()
+
+	// A non-zero typed execution metrics envelope, every writable
+	// int32/int64/float64/bool populated. The derived CostBasis only
+	// depends on CpuTimeMs + the 3 price fields today (TempBytesWritten
+	// is NOT yet on the typed proto — derives to 0 in the cost row).
+	em := &pb.TaskExecutionMetrics{
+		InputBytes:            1048576,   // 1 MiB
+		OutputBytes:           524288,    // 512 KiB
+		BytesFromDrive:        262144,    // 256 KiB
+		BytesFromBlobstore:    262144,    // 256 KiB
+		BytesFromLocalCache:   524288,    // 512 KiB
+		CpuTimeMs:             12345,     // 12.345 s
+		PeakRssBytes:          536870912, // 512 MiB
+		FramesDecoded:         1800,
+		FramesComposited:      1800,
+		FramesEncoded:         1800,
+		FfmpegSpeedRatio:      1.42,
+		EncodePasses:          1,
+		FinalConcatStreamCopy: true,
+		ConcatMode:            "stream_copy",
+		CpuPricePerSecond:     0.000005,
+		StoragePricePerGb:     0.00012,
+		NetworkPricePerGb:     0.01,
+	}
+
+	artItem, _ := structpb.NewStruct(map[string]interface{}{
+		"artifact_id":   "art-1",
+		"artifact_type": "video",
+		"size_bytes":    524288,
+	})
+	tr := &pb.TaskResult{
+		TaskId:           fx.taskID,
+		AttemptId:        fx.wireAttemptID,
+		LeaseId:          fx.canonicalLease, // match canonical seed (sub-tests above already proved identity)
+		JobId:            fx.wireJobID,
+		Status:           "succeeded",
+		ExecutionMetrics: em,
+		OutputArtifacts:  []*structpb.Struct{artItem},
+	}
+
+	// Need to satisfy the canonical-attempt tuple for the happy path
+	// (buildSpoofHandler pre-seeds it under canonicalLease).
+	handler.handleTaskResult(fx.workerID, tr)
+
+	// 1) The scorecard writes MUT commit first: metrics, cache, cost.
+	attempts := handler.taskAttemptRepo.(*spoofStubAttemptRepo)
+	if attempts.persistMetricsCalls != 1 {
+		t.Errorf("PersistMetrics calls = %d; want 1 (F1 typed-wiring)", attempts.persistMetricsCalls)
+	}
+	if attempts.persistCacheCalls != 1 {
+		t.Errorf("PersistCacheStats calls = %d; want 1 (F1 typed-wiring)", attempts.persistCacheCalls)
+	}
+	if attempts.persistCostCalls != 1 {
+		t.Errorf("PersistCostBasis calls = %d; want 1 (F1 typed-wiring)", attempts.persistCostCalls)
+	}
+
+	// 2) Spot-check typed fields made the round-trip unchanged.
+	got := attempts.lastMetrics
+	if got.AttemptID != fx.wireAttemptID {
+		t.Errorf("AttemptMetrics.AttemptID = %q; want %q (handler must bind to wire attempt)", got.AttemptID, fx.wireAttemptID)
+	}
+	if got.InputBytes != em.GetInputBytes() || got.OutputBytes != em.GetOutputBytes() {
+		t.Errorf("AttemptMetrics bytes mismatch: got input=%d output=%d want input=%d output=%d",
+			got.InputBytes, got.OutputBytes, em.GetInputBytes(), em.GetOutputBytes())
+	}
+	if got.FramesEncoded != em.GetFramesEncoded() || got.FramesDecoded != em.GetFramesDecoded() {
+		t.Errorf("AttemptMetrics frame counters mismatch: got decoded=%d encoded=%d want decoded=%d encoded=%d",
+			got.FramesDecoded, got.FramesEncoded, em.GetFramesDecoded(), em.GetFramesEncoded())
+	}
+	if got.FFmpegSpeedRatio != em.GetFfmpegSpeedRatio() {
+		t.Errorf("AttemptMetrics ffmpeg_speed_ratio = %v; want %v", got.FFmpegSpeedRatio, em.GetFfmpegSpeedRatio())
+	}
+	if got.FinalConcatStreamCopy != em.GetFinalConcatStreamCopy() || got.ConcatMode != em.GetConcatMode() {
+		t.Errorf("AttemptMetrics concat fields wrong: sc=%v mode=%q want sc=%v mode=%q",
+			got.FinalConcatStreamCopy, got.ConcatMode, em.GetFinalConcatStreamCopy(), em.GetConcatMode())
+	}
+	// TempBytesWritten is NOT yet on the typed proto (future worker-side
+	// follow-up). Today the persisted value is 0; we still pin the
+	// round-trip contract so a future proto bump with this field
+	// surfaces immediately here.
+	if got.TempBytesWritten != 0 {
+		t.Errorf("AttemptMetrics TempBytesWritten = %d; want 0 (not yet on typed proto, derives to 0)", got.TempBytesWritten)
+	}
+
+	// 3) Spot-check CacheStats — must be honest about what is derivable
+	// (BytesUsed=from_local_cache), zero for the rest.
+	gotCache := attempts.lastCacheStats
+	if gotCache.AttemptID != fx.wireAttemptID {
+		t.Errorf("AttemptCacheStats.AttemptID = %q; want %q", gotCache.AttemptID, fx.wireAttemptID)
+	}
+	if gotCache.CacheBytesUsed != em.GetBytesFromLocalCache() {
+		t.Errorf("AttemptCacheStats.CacheBytesUsed = %d; want BytesFromLocalCache=%d",
+			gotCache.CacheBytesUsed, em.GetBytesFromLocalCache())
+	}
+	if gotCache.CacheHits != 0 || gotCache.CacheMisses != 0 ||
+		gotCache.CacheEvictions != 0 || gotCache.CacheCorruptions != 0 {
+		t.Errorf("AttemptCacheStats must report 0 for un-derivable counters; got H=%d M=%d E=%d C=%d",
+			gotCache.CacheHits, gotCache.CacheMisses, gotCache.CacheEvictions, gotCache.CacheCorruptions)
+	}
+
+	// 4) Spot-check CostBasis — master-side derivation from proto scalar
+	// fields. CPUTimeSecondsTotal = CPUTimeMS/1000; StorageGBWritten +
+	// NetworkGBEgressed + OutputMinutesTotal are all 0 today (not yet on
+	// the typed proto) so CostPerOutputMinute is 0 (short-circuit via
+	// Compute()).
+	gotCost := attempts.lastCostBasis
+	if gotCost.CPUTimeSecondsTotal != float64(em.GetCpuTimeMs())/1000.0 {
+		t.Errorf("CostBasis.CPUTimeSecondsTotal = %v; want %v", gotCost.CPUTimeSecondsTotal, float64(em.GetCpuTimeMs())/1000.0)
+	}
+	if gotCost.StorageGBWritten != 0 {
+		t.Errorf("CostBasis.StorageGBWritten = %v; want 0 (TempBytesWritten not on typed proto yet)", gotCost.StorageGBWritten)
+	}
+	if gotCost.NetworkGBEgressed != 0 {
+		t.Errorf("CostBasis.NetworkGBEgressed = %v; want 0 (TODO PR-3)", gotCost.NetworkGBEgressed)
+	}
+	if gotCost.CPUPricePerSecond != em.GetCpuPricePerSecond() || gotCost.StoragePricePerGB != em.GetStoragePricePerGb() {
+		t.Errorf("CostBasis prices mismatch: cpu=%v storage=%v want cpu=%v storage=%v",
+			gotCost.CPUPricePerSecond, gotCost.StoragePricePerGB, em.GetCpuPricePerSecond(), em.GetStoragePricePerGb())
+	}
+	if gotCost.CostPerOutputMinute != 0 {
+		t.Errorf("CostBasis.CostPerOutputMinute = %v; want 0 (OutputMinutesTotal is 0 today)", gotCost.CostPerOutputMinute)
+	}
+
+	// 5) Cross-check: the F1 typed writes must NOT regress the
+	// audit-closure path the older tests pin. close-write + Job roll-up
+	// + artifact register all run once on success.
+	if got := taskRepo.transitionCalls; got != 1 {
+		t.Errorf("taskRepo.TransitionTaskToTerminalAtomic calls = %d; want 1 (happy path)", got)
+	}
+	if got := jobsRepo.setStatusCalls; got != 1 {
+		t.Errorf("jobsRepo.SetStatus calls = %d; want 1 (Job roll-up must fire)", got)
+	}
+	if got := outputArts.registerCalls; got != 1 {
+		t.Errorf("outputArtRepo.Register calls = %d; want 1 (artifact declare must fire)", got)
+	}
+}
+
+// =====================================================================
+// (D) F1 legacy-em regression-guard. Older v2 workers send TaskResult
+// without execution_metrics (nil). Scorecard v1 must STILL persist a
+// zero-row so percentile queries on task_attempt_metrics find something;
+// the legacy-em-drop bug (where TypedMetrics.AttemptID=='' short-circuited
+// persistence entirely) is regression-tested here.
+// =====================================================================
+
+func TestHandleTaskResult_PersistTypedMetrics_NilExecutionMetrics(t *testing.T) {
+	handler, taskRepo, jobsRepo, outputArts := buildSpoofHandler(t)
+	fx := newSpoofFixture()
+
+	artItem, _ := structpb.NewStruct(map[string]interface{}{
+		"artifact_id":   "art-1",
+		"artifact_type": "video",
+	})
+	tr := &pb.TaskResult{
+		TaskId:           fx.taskID,
+		AttemptId:        fx.wireAttemptID,
+		LeaseId:          fx.canonicalLease,
+		JobId:            fx.wireJobID,
+		Status:           "succeeded",
+		ExecutionMetrics: nil, // LEGACY v2 worker path — no typed ExecMetrics
+		OutputArtifacts:  []*structpb.Struct{artItem},
+	}
+
+	handler.handleTaskResult(fx.workerID, tr)
+
+	// Scorecard writes; nil em MUST still produce a row (zero values
+	// on bytes/frames/cost are acceptable baseline).
+	attempts := handler.taskAttemptRepo.(*spoofStubAttemptRepo)
+	if attempts.persistMetricsCalls != 1 {
+		t.Errorf("PersistMetrics calls = %d; want 1 (legacy-em must persist zero-row)", attempts.persistMetricsCalls)
+	}
+	if attempts.persistCacheCalls != 1 {
+		t.Errorf("PersistCacheStats calls = %d; want 1 (legacy-em must persist zero-row)", attempts.persistCacheCalls)
+	}
+	if attempts.persistCostCalls != 1 {
+		t.Errorf("PersistCostBasis calls = %d; want 1 (legacy-em must persist zero-row)", attempts.persistCostCalls)
+	}
+	// And the row MUST be bound to the wire's canonical attempt ID —
+	// not produced with an empty AttemptID (would clobber SQL UNIQUE).
+	if attempts.lastMetrics.AttemptID != fx.wireAttemptID {
+		t.Errorf("nil-em AttemptMetrics.AttemptID = %q; want %q (handler must still bind wire attempt)",
+			attempts.lastMetrics.AttemptID, fx.wireAttemptID)
+	}
+	if attempts.lastCacheStats.AttemptID != fx.wireAttemptID {
+		t.Errorf("nil-em AttemptCacheStats.AttemptID = %q; want %q",
+			attempts.lastCacheStats.AttemptID, fx.wireAttemptID)
+	}
+
+	// Audit-closure side of the handler must still run on the legacy path.
+	if got := taskRepo.transitionCalls; got != 1 {
+		t.Errorf("taskRepo.TransitionTaskToTerminalAtomic calls = %d; want 1 (legacy happy path)", got)
+	}
+	if got := jobsRepo.setStatusCalls; got != 1 {
+		t.Errorf("jobsRepo.SetStatus calls = %d; want 1 (legacy Job roll-up)", got)
+	}
+	if got := outputArts.registerCalls; got != 1 {
+		t.Errorf("outputArtRepo.Register calls = %d; want 1 (legacy artifact declare)", got)
+	}
+}
+
+// =====================================================================
+// (E) F1 stale-replay regression-guard. When TransitionTaskToTerminalAtomic
+// hits ErrTransitionConflict (someone else already closed the task),
+// res.AttemptClosed is false, so step 2.5's metrics persist must be
+// SKIPPED. Otherwise we'd silently overwrite the canonical row's
+// metrics via INSERT OR REPLACE keyed on attempt_id. This test pins
+// the gate; without it a future refactor removing `if res.AttemptClosed`
+// would corrupt Prometheus with stale-replay metrics.
+// =====================================================================
+
+func TestHandleTaskResult_PersistTypedMetrics_StaleReplaySkipsMetrics(t *testing.T) {
+	fx := newSpoofFixture()
+
+	attempts := &spoofStubAttemptRepo{}
+	attempts.seedCanonical(fx.taskID, fx.workerID, fx.canonicalLease)
+
+	// The trigger: TransitionTaskToTerminalAtomic returns conflict -> step
+	// 2 closes via log+continue (AttemptClosed=false), gate skips persist.
+	taskRepo := &spoofStubTaskRepo{
+		transitionErr: store.ErrTransitionConflict,
+		listTasks: []taskgraph.Task{
+			{ID: fx.taskID, JobID: fx.wireJobID, Status: taskgraph.StatusSucceeded},
+		},
+	}
+	jobsRepo := &spoofStubJobsRepo{
+		getJob: &jobs.Job{ID: fx.wireJobID, Status: jobs.StatusAwaitingArtifact, Revision: 0},
+	}
+	outputArts := newSpoofStubOutputArts()
+
+	svc, err := ingest.NewTaskReportIngestionService(taskRepo, jobsRepo, attempts, outputArts)
+	if err != nil {
+		t.Fatalf("NewTaskReportIngestionService: %v", err)
+	}
+
+	handler := NewHandler(
+		nil, nil,
+		jobsRepo,
+		taskRepo,
+		attempts,
+		nil, nil,
+		&HandlerConfig{PushMode: true},
+	)
+	handler.SetIngestionSvc(svc)
+
+	em := &pb.TaskExecutionMetrics{
+		InputBytes: 999, // any non-zero to make stale-replay values distinguishable
+	}
+	tr := &pb.TaskResult{
+		TaskId:           fx.taskID,
+		AttemptId:        fx.wireAttemptID,
+		LeaseId:          fx.canonicalLease,
+		JobId:            fx.wireJobID,
+		Status:           "succeeded",
+		ExecutionMetrics: em,
+	}
+
+	handler.handleTaskResult(fx.workerID, tr)
+
+	// 1) Persist counters MUST stay zero — stale replay must NOT
+	// overwrite the canonical row's metrics via INSERT OR REPLACE.
+	if got := attempts.persistMetricsCalls; got != 0 {
+		t.Errorf("PersistMetrics calls = %d; want 0 (stale replay must skip step 2.5)", got)
+	}
+	if got := attempts.persistCacheCalls; got != 0 {
+		t.Errorf("PersistCacheStats calls = %d; want 0 (stale replay must skip step 2.5)", got)
+	}
+	if got := attempts.persistCostCalls; got != 0 {
+		t.Errorf("PersistCostBasis calls = %d; want 0 (stale replay must skip step 2.5)", got)
+	}
+
+	// 2) But the rest of IngestTaskResult kept running — artifact register
+	// + Job roll-up use idempotent skip / no-op paths on replay, NOT
+	// failure. We just need to confirm artifacts were still considered
+	// (nil -> 0 declared artifacts in this test) and that SetStatus
+	// fired exactly 0 times (because Job is already AWAITING_ARTIFACT).
+	if got := taskRepo.transitionCalls; got != 1 {
+		t.Errorf("taskRepo.TransitionTaskToTerminalAtomic calls = %d; want 1 (CAS attempted)", got)
+	}
+	if got := jobsRepo.setStatusCalls; got != 0 {
+		t.Errorf("jobsRepo.SetStatus calls = %d; want 0 (idempotent Job roll-up skip)", got)
 	}
 }

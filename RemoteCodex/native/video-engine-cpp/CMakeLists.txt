@@ -29,9 +29,31 @@ add_executable(velox_video_engine
     src/app/commands.cpp
     src/services/file_utils.cpp
     src/services/media_utils.cpp
+    src/services/ffmpeg_progress_parser.cpp
     src/core/render_engine.cpp
 )
 
 target_include_directories(velox_video_engine PRIVATE include src include/velox)
 
+# ─── F5 unit tests ──────────────────────────────────────────────────────
+# Standalone test binary for the FFmpeg progress parser + sidecar
+# writer. No GoogleTest dependency — runs the small in-repo expect()
+# macros. CI gates on this target's exit code.
+enable_testing()
 
+add_executable(velox_ffmpeg_progress_parser_tests
+    tests/test_ffmpeg_progress_parser.cpp
+    src/services/ffmpeg_progress_parser.cpp
+)
+
+target_include_directories(velox_ffmpeg_progress_parser_tests
+    PRIVATE include src include/velox)
+
+# Tests must not require LTO/IPO from the main executable — keep the
+# standalone binary small and stand-alone, exercised on every run.
+if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(velox_ffmpeg_progress_parser_tests PRIVATE -O2)
+endif()
+
+add_test(NAME ffmpeg_progress_parser_tests
+         COMMAND velox_ffmpeg_progress_parser_tests)

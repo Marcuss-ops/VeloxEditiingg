@@ -108,6 +108,29 @@ static void appendFfmpegVideoEncodingArgs(
     }
 }
 
+// Resolution/canvas helpers shared by all three builders.
+static void canvasDims(const SceneSegmentParams& p, int& w, int& h, int& fps) {
+    w = p.width > 0 ? p.width : 1920;
+    h = p.height > 0 ? p.height : 1080;
+    fps = p.fps > 0 ? p.fps : 30;
+}
+
+static std::string scaleFilterString(const std::string& scale_mode,
+                                      const std::string& size,
+                                      const std::string& res) {
+    std::string filter;
+    if (scale_mode == "contain") {
+        filter = "scale=" + size + ":force_original_aspect_ratio=decrease,pad=" + size + ":(ow-iw)/2:(oh-ih)/2,format=yuv420p";
+    } else if (scale_mode == "stretch") {
+        filter = "scale=" + size + ",format=yuv420p";
+    } else {
+        // cover (default) — for image sources.
+        filter = "scale=" + size + ":force_original_aspect_ratio=increase,crop=" + size + ",format=yuv420p";
+    }
+    (void)res;
+    return filter;
+}
+
 double probeMediaDurationSeconds(const fs::path& mediaPath) {
     if (mediaPath.empty() || !fs::exists(mediaPath)) {
         return 0.0;
@@ -127,114 +150,142 @@ double probeMediaDurationSeconds(const fs::path& mediaPath) {
     }
 }
 
-bool buildSceneSegment(const fs::path& imagePath, const fs::path& segmentPath, double duration, const SceneSegmentParams& params) {
+// ─── F5: args-only builders (canonical, the others are wrappers) ──────
+
+std::string buildColorSegmentArgs(
+    const fs::path& segmentPath,
+    double duration,
+    const SceneSegmentParams& params,
+    const std::string& color_hex
+) {
+    int w, h, fps;
+    canvasDims(params, w, h, fps);
+    const std::string res = std::to_string(w) + "x" + std::to_string(h);
+
+    std::string bgColor = "black";
+    if (!color_hex.empty()) {
+        std::string hex = color_hex;
+        if (!hex.empty() && hex[0] == '#') hex = hex.substr(1);
+        bgColor = "0x" + hex;
+    }
+
     std::ostringstream cmd;
-    cmd << "ffmpeg -y -hide_banner -loglevel error ";
-    const int w = params.width > 0 ? params.width : 1920;
-    const int h = params.height > 0 ? params.height : 1080;
-    const int fps = params.fps > 0 ? params.fps : 30;
+    cmd << "-f lavfi -t " << duration
+        << " -i " << file::shellQuote("color=c=" + bgColor + ":s=" + res)
+        << ffmpegRateControlArgsForCodec(ffmpegVideoCodec())
+        << " -pix_fmt yuv420p -r " << fps;
+    appendFfmpegVideoEncodingArgs(
+        cmd,
+        ffmpegVideoCodec(),
+        ffmpegVideoPresetForCodec(ffmpegVideoCodec()),
+        ffmpegVideoTuneForCodec(ffmpegVideoCodec(), true),
+        ffmpegThreadCount(),
+        "");
+    cmd << " " << file::shellQuote(segmentPath.string());
+    return cmd.str();
+}
+
+std::string buildSceneSegmentArgs(
+    const fs::path& imagePath,
+    const fs::path& segmentPath,
+    double duration,
+    const SceneSegmentParams& params
+) {
+    int w, h, fps;
+    canvasDims(params, w, h, fps);
     const std::string res = std::to_string(w) + "x" + std::to_string(h);
     const std::string size = std::to_string(w) + ":" + std::to_string(h);
+    const int frames = std::max(1, static_cast<int>(std::round(duration * fps)));
 
-    if (!imagePath.empty() && fs::exists(imagePath)) {
-        const int frames = std::max(1, static_cast<int>(std::round(duration * fps)));
+    std::string scaleFilter = scaleFilterString(params.scale_mode, size, res);
 
-        std::string scaleFilter;
-        if (params.scale_mode == "contain") {
-            scaleFilter = "scale=" + size + ":force_original_aspect_ratio=decrease,pad=" + size + ":(ow-iw)/2:(oh-ih)/2,format=yuv420p";
-        } else if (params.scale_mode == "stretch") {
-            scaleFilter = "scale=" + size + ",format=yuv420p";
-        } else {
-            // cover (default)
-            scaleFilter = "scale=" + size + ":force_original_aspect_ratio=increase,crop=" + size + ",format=yuv420p";
-        }
-
-        std::string filter;
-        if (params.slow_zoom) {
-            // Slow gradual zoom-in: starts at 1.0x, ends at ~1.08x over the duration.
-            // Uses zoompan with a gentle linear ramp — no panning, pure center zoom.
-            filter = scaleFilter
-                + ",zoompan=z='1+0.08*on/(" + std::to_string(frames) + ")'"
-                  ":x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'"
-                  ":d=" + std::to_string(frames)
-                  + ":s=" + res + ":fps=" + std::to_string(fps)
-                + ",format=yuv420p";
-        } else {
-            filter = scaleFilter;
-        }
-
-        cmd << "-stream_loop -1 -i " << file::shellQuote(imagePath.string())
-            << " -vf " << file::shellQuote(filter)
-            << " -frames:v " << frames
-            << ffmpegRateControlArgsForCodec(ffmpegVideoCodec())
-            << " -pix_fmt yuv420p -r " << fps;
-        appendFfmpegVideoEncodingArgs(
-            cmd,
-            ffmpegVideoCodec(),
-            ffmpegVideoPresetForCodec(ffmpegVideoCodec()),
-            ffmpegVideoTuneForCodec(ffmpegVideoCodec(), true),
-            ffmpegThreadCount(),
-            "");
-        cmd << " " << file::shellQuote(segmentPath.string());
+    std::string filter;
+    if (params.slow_zoom) {
+        // Slow gradual zoom-in: starts at 1.0x, ends at ~1.08x.
+        filter = scaleFilter
+            + ",zoompan=z='1+0.08*on/(" + std::to_string(frames) + ")'"
+              ":x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'"
+              ":d=" + std::to_string(frames)
+              + ":s=" + res + ":fps=" + std::to_string(fps)
+            + ",format=yuv420p";
     } else {
-        std::string bgColor = "black";
-        if (!params.color_hex.empty()) {
-            std::string hex = params.color_hex;
-            if (!hex.empty() && hex[0] == '#') hex = hex.substr(1);
-            bgColor = "0x" + hex;
-        }
-        cmd << "-f lavfi -t " << duration
-            << " -i " << file::shellQuote("color=c=" + bgColor + ":s=" + res)
-            << ffmpegRateControlArgsForCodec(ffmpegVideoCodec())
-            << " -pix_fmt yuv420p -r " << fps;
-        appendFfmpegVideoEncodingArgs(
-            cmd,
-            ffmpegVideoCodec(),
-            ffmpegVideoPresetForCodec(ffmpegVideoCodec()),
-            ffmpegVideoTuneForCodec(ffmpegVideoCodec(), true),
-            ffmpegThreadCount(),
-            "");
-        cmd << " " << file::shellQuote(segmentPath.string());
+        filter = scaleFilter;
     }
-    return file::runCommand(cmd.str());
+
+    std::ostringstream cmd;
+    cmd << "-stream_loop -1 -i " << file::shellQuote(imagePath.string())
+        << " -vf " << file::shellQuote(filter)
+        << " -frames:v " << frames
+        << ffmpegRateControlArgsForCodec(ffmpegVideoCodec())
+        << " -pix_fmt yuv420p -r " << fps;
+    appendFfmpegVideoEncodingArgs(
+        cmd,
+        ffmpegVideoCodec(),
+        ffmpegVideoPresetForCodec(ffmpegVideoCodec()),
+        ffmpegVideoTuneForCodec(ffmpegVideoCodec(), true),
+        ffmpegThreadCount(),
+        "");
+    cmd << " " << file::shellQuote(segmentPath.string());
+    return cmd.str();
+}
+
+std::string buildVideoSegmentArgs(
+    const fs::path& clipPath,
+    const fs::path& segmentPath,
+    double duration,
+    const SceneSegmentParams& params
+) {
+    int w, h, fps;
+    canvasDims(params, w, h, fps);
+    const std::string size = std::to_string(w) + ":" + std::to_string(h);
+
+    // contain (default for clips) — fit + pad
+    std::string scale_filter = "scale=" + size + ":force_original_aspect_ratio=decrease,pad=" + size + ":(ow-iw)/2:(oh-ih)/2,format=yuv420p";
+    if (params.scale_mode == "cover") {
+        scale_filter = "scale=" + size + ":force_original_aspect_ratio=increase,crop=" + size + ",format=yuv420p";
+    } else if (params.scale_mode == "stretch") {
+        scale_filter = "scale=" + size + ",format=yuv420p";
+    }
+
+    std::ostringstream cmd;
+    cmd << "-i " << file::shellQuote(clipPath.string())
+        << " -t " << duration
+        << " -vf " << file::shellQuote(scale_filter)
+        << ffmpegRateControlArgsForCodec(ffmpegVideoCodec())
+        << " -pix_fmt yuv420p -r " << fps << " -an";
+    appendFfmpegVideoEncodingArgs(
+        cmd,
+        ffmpegVideoCodec(),
+        ffmpegVideoPresetForCodec(ffmpegVideoCodec()),
+        ffmpegVideoTuneForCodec(ffmpegVideoCodec(), false),
+        ffmpegThreadCount(),
+        "");
+    cmd << " " << file::shellQuote(segmentPath.string());
+    return cmd.str();
+}
+
+// ─── Execution wrappers (preserve legacy surface used by cmd_full_video) ──
+
+bool buildSceneSegment(const fs::path& imagePath, const fs::path& segmentPath, double duration, const SceneSegmentParams& params) {
+    if (!imagePath.empty() && fs::exists(imagePath)) {
+        const std::string args = buildSceneSegmentArgs(imagePath, segmentPath, duration, params);
+        const std::string cmd = "ffmpeg -y -hide_banner -loglevel error " + args;
+        return file::runCommand(cmd);
+    }
+    // Color-source fallback (no imagePath). Reuse buildColorSegmentArgs with
+    // the configured params.color_hex.
+    const std::string args = buildColorSegmentArgs(segmentPath, duration, params, params.color_hex);
+    const std::string cmd = "ffmpeg -y -hide_banner -loglevel error " + args;
+    return file::runCommand(cmd);
 }
 
 bool buildVideoSegment(const fs::path& clipPath, const fs::path& segmentPath, double duration, const SceneSegmentParams& params) {
-    std::ostringstream cmd;
-    cmd << "ffmpeg -y -hide_banner -loglevel error ";
-    const int w = params.width > 0 ? params.width : 1920;
-    const int h = params.height > 0 ? params.height : 1080;
-    const int fps = params.fps > 0 ? params.fps : 30;
-    const std::string size = std::to_string(w) + ":" + std::to_string(h);
-
-    if (!clipPath.empty() && fs::exists(clipPath)) {
-        std::string scaleFilter;
-        if (params.scale_mode == "cover") {
-            scaleFilter = "scale=" + size + ":force_original_aspect_ratio=increase,crop=" + size + ",format=yuv420p";
-        } else if (params.scale_mode == "stretch") {
-            scaleFilter = "scale=" + size + ",format=yuv420p";
-        } else {
-            // contain (default for video clips) — fit within canvas, pad edges
-            scaleFilter = "scale=" + size + ":force_original_aspect_ratio=decrease,pad=" + size + ":(ow-iw)/2:(oh-ih)/2,format=yuv420p";
-        }
-
-        cmd << "-i " << file::shellQuote(clipPath.string())
-            << " -t " << duration
-            << " -vf " << file::shellQuote(scaleFilter)
-            << ffmpegRateControlArgsForCodec(ffmpegVideoCodec())
-            << " -pix_fmt yuv420p -r " << fps << " -an";
-        appendFfmpegVideoEncodingArgs(
-            cmd,
-            ffmpegVideoCodec(),
-            ffmpegVideoPresetForCodec(ffmpegVideoCodec()),
-            ffmpegVideoTuneForCodec(ffmpegVideoCodec(), false),
-            ffmpegThreadCount(),
-            "");
-        cmd << " " << file::shellQuote(segmentPath.string());
-    } else {
+    if (clipPath.empty() || !fs::exists(clipPath)) {
         return false;
     }
-    return file::runCommand(cmd.str());
+    const std::string args = buildVideoSegmentArgs(clipPath, segmentPath, duration, params);
+    const std::string cmd = "ffmpeg -y -hide_banner -loglevel error " + args;
+    return file::runCommand(cmd);
 }
 
 bool concatSegments(const std::vector<fs::path>& segments, const fs::path& outputPath, const fs::path& workDir) {
