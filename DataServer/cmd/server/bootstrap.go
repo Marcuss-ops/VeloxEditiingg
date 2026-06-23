@@ -282,6 +282,14 @@ func runServer(cfg *config.Config) error {
 		jobsRepo := j.Lifecycle.Jobs()
 		if jobsRepo != nil && w.CommandManager != nil {
 			insecureDev := cfg.Runtime.GRPCAllowInsecureDev
+			if err := // PR-5 P0 fail-fast: refuse to start the master with insecure gRPC
+			// outside the dev release channel. Production / staging MUST
+			// use the TLS cert+key+CA triple. See docs/SECURITY_RUNBOOK.md
+			// §5.1 for the release-channel rationale.
+			if insecureDev && cfg.Runtime.ReleaseChannel != "dev" {
+				log.Fatalf("[FAIL] PR-5 P0 guard: VELOX_GRPC_ALLOW_INSECURE_DEV=true on release channel =%q. Production / staging MUST use the TLS cert+key+CA triple. Set VELOX_RELEASE_CHANNEL=dev to confirm dev intent, or supply VELOX_GRPC_TLS_{CERT,KEY,CA}_FILE and unset VELOX_GRPC_ALLOW_INSECURE_DEV.",
+					cfg.Runtime.ReleaseChannel)
+			}
 			if err := grpcserver.ValidateWorkerAllowlist(cfg.Workers.AllowedWorkers, insecureDev); err != nil {
 				return err
 			}
