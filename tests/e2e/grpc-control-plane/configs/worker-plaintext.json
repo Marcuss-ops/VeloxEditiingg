@@ -1,0 +1,12 @@
+{
+  "_doc": "PR 3 e2e grpc-control-plane — plaintext (dev-insecure) worker config. Used by cases 1, 5, 6 to exercise the VELOX_ALLOW_INSECURE_DEV pathway. environment=dev is the opt-in required by PR 1 to satisfy the validate rule (`allow_insecure_grpc_dev=true && env != production`).",
+  "control_grpc_url": "localhost:50051",
+  "master_url": "localhost:50051",
+  "worker_id": "WORKER_ID_PLACEHOLDER",
+  "worker_name": "e2e-plaintext-worker",
+  "work_dir": "/tmp/velox-e2e-grpc/work",
+  "log_level": "info",
+  "max_active_jobs": 1,
+  "allow_insecure_grpc_dev": true,
+  "environment": "dev"
+}

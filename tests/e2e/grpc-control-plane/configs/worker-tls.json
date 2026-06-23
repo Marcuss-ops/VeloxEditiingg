@@ -1,0 +1,14 @@
+{
+  "_doc": "PR 3 e2e grpc-control-plane — TLS worker config. Cert paths are CASE-PATCHED by tests/e2e/grpc-control-plane/run.sh (sed-replace CERT_DIR before spawn). environment=production is the PR 1 safe-by-default invariant — only allowed-insecure-dev case bumps it to dev.",
+  "control_grpc_url": "localhost:50051",
+  "master_url": "localhost:50051",
+  "worker_id": "WORKER_ID_PLACEHOLDER",
+  "worker_name": "e2e-tls-worker",
+  "work_dir": "/tmp/velox-e2e-grpc/work",
+  "log_level": "info",
+  "max_active_jobs": 1,
+  "tls_cert_file": "CERT_DIR_PLACEHOLDER/worker.crt",
+  "tls_key_file": "CERT_DIR_PLACEHOLDER/worker.key",
+  "tls_ca_file": "CERT_DIR_PLACEHOLDER/ca.crt",
+  "environment": "production"
+}

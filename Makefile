@@ -18,7 +18,7 @@
 # RemoteCodex/native/worker-agent-go/Makefile.
 SHELL := /usr/bin/env bash
 
-.PHONY: verify verify-fast verify-heavy fmt fmt-check vet pilot help
+.PHONY: verify verify-fast verify-heavy fmt fmt-check vet pilot e2e-grpc help
 
 help:
 	@echo "Velox repo orchestrator"
@@ -29,6 +29,7 @@ help:
 	@echo "  make fmt-check      -- gofmt -d (dry run); fails if any file is dirty"
 	@echo "  make vet            -- go vet ./... on every Go module"
 	@echo "  make pilot          -- full pilot pipeline (build + start + submit + work + poll)"
+	@echo "  make e2e-grpc       -- PR 3 gRPC control-plane E2E matrix (6 cases, ~90s)"
 	@echo ""
 	@echo "All heavy targets defer to scripts/ci/verify.sh. Do not replicate steps."
 
@@ -67,3 +68,6 @@ verify-fast:   ## Architecture + Go (-race) only; skip cmake + docker
 
 verify-heavy:  ## Synonym for full verify (kept for legacy callers)
 	./scripts/ci/verify.sh
+
+e2e-grpc:      ## PR 3 — 6-case gRPC control-plane matrix on a host-native master + workers
+	@bash tests/e2e/grpc-control-plane/run.sh
