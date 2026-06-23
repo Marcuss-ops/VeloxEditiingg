@@ -272,7 +272,7 @@ func (w *Worker) runSession(ctx context.Context) bool {
 }
 
 // receiveLoop processes incoming messages from the transport receive channel.
-// Routes MsgJobOffer to executeJob and MsgCommand to processCommand.
+// Routes MsgTaskOffer to executeJob and MsgCommand to processCommand.
 func (w *Worker) receiveLoop(ctx context.Context, recvCh <-chan controltransport.ControlMessage) {
 	defer w.wg.Done()
 
@@ -293,56 +293,10 @@ func (w *Worker) receiveLoop(ctx context.Context, recvCh <-chan controltransport
 			}
 
 			switch msg.Type {
-			case controltransport.MsgJobOffer:
-				offer := msgToJob(msg)
-				jobID := ""
-				if offer != nil {
-					jobID = offer.JobID
-				}
-
-				if w.IsStopped() {
-					if err := w.sendReject(ctx, jobID, "stopped"); err != nil {
-						w.logger.Warn("[RECEIVE] Failed to send JobRejected (stopped): %v", err)
-					}
-					continue
-				}
-				if w.drainMode.Load() {
-					if err := w.sendReject(ctx, jobID, "draining"); err != nil {
-						w.logger.Warn("[RECEIVE] Failed to send JobRejected (draining): %v", err)
-					}
-					continue
-				}
-
-				w.activeJobsMu.RLock()
-				activeCount := len(w.activeJobs)
-				w.activeJobsMu.RUnlock()
-				if activeCount >= w.config.MaxActiveJobs {
-					if err := w.sendReject(ctx, jobID, "capacity_full"); err != nil {
-						w.logger.Warn("[RECEIVE] Failed to send JobRejected (capacity): %v", err)
-					}
-					continue
-				}
-
-				if offer == nil {
-					w.logger.Warn("[RECEIVE] Failed to parse job from JobOffer message")
-					continue
-				}
-				job := offer
-
-				if err := w.validateJobOffer(job); err != nil {
-					w.logger.Warn("[RECEIVE] Job offer validation failed: %v", err)
-					_ = w.sendReject(ctx, job.JobID, err.Error())
-					continue
-				}
-
-				w.logger.Info("[RECEIVE] JobOffer received: %s (type: %s, lease: %s)", job.JobID, job.JobType, job.LeaseID)
-
-				if err := w.sendAccept(ctx, job); err != nil {
-					w.logger.Warn("[RECEIVE] Failed to send JobAccepted: %v", err)
-					continue
-				}
-				w.storePendingJob(job)
-
+			/* PR-protobuf-refactor: MsgJobOffer + MsgJobLeaseGranted + pb.JobOffer
+			   removed — superseded by MsgTaskOffer + MsgTaskLeaseGranted + pb.TaskOffer.
+			   The old protobuf types no longer exist in the oneof. See grpc_stream.go
+			   for the transport-side removal. */
 			case controltransport.MsgTaskOffer:
 				// PR #5: task-native dispatch — receive pre-compiled TaskSpec from master.
 				// PR-2 (canonical-attempt-identity): executeJob dispatch is DEFERRED
@@ -455,29 +409,6 @@ func (w *Worker) receiveLoop(ctx context.Context, recvCh <-chan controltransport
 					w.executeJob(ctx, job)
 				}()
 
-			case controltransport.MsgJobLeaseGranted:
-				// Legacy path for JobOffer-based dispatch; task-native dispatch
-				// starts execution directly from MsgTaskOffer (PR #5).
-				leaseGranted, ok := msg.TypedPayload.(*pb.JobLeaseGranted)
-				if !ok || leaseGranted == nil {
-					w.logger.Warn("[RECEIVE] JobLeaseGranted without typed payload")
-					continue
-				}
-				jobID := leaseGranted.GetJobId()
-				if jobID == "" {
-					w.logger.Warn("[RECEIVE] JobLeaseGranted without job_id")
-					continue
-				}
-
-				job := w.takePendingJob(jobID)
-				if job == nil {
-					w.logger.Warn("[RECEIVE] JobLeaseGranted for unknown job %s", jobID)
-					continue
-				}
-
-				w.logger.Info("[RECEIVE] JobLeaseGranted for %s — starting execution", jobID)
-				go w.executeJob(ctx, job)
-
 			case controltransport.MsgCommand:
 				cmd := msgToCommand(msg)
 				w.logger.Info("[RECEIVE] Command received: %s (id: %s)", cmd.Command, cmd.CommandID)
@@ -569,51 +500,8 @@ func (w *Worker) receiveLoop(ctx context.Context, recvCh <-chan controltransport
 	}
 }
 
-// msgToJob converts a ControlMessage (MsgJobOffer) to an api.Job.
-// The transport is gRPC-only — TypedPayload always carries *pb.JobOffer.
-func msgToJob(msg controltransport.ControlMessage) *api.Job {
-	if offer, ok := msg.TypedPayload.(*pb.JobOffer); ok && offer != nil {
-		return msgToJobFromProto(offer)
-	}
-	return nil
-}
-
-// msgToJobFromProto extracts an api.Job from a typed *pb.JobOffer.
-func msgToJobFromProto(offer *pb.JobOffer) *api.Job {
-	jobID := offer.GetJobId()
-	if jobID == "" {
-		return nil
-	}
-
-	var parameters map[string]interface{}
-	if jp := offer.GetJobPayload(); jp != nil {
-		parameters = jp.AsMap()
-	}
-
-	createdAt := ""
-	if offer.GetCreatedAt() != nil {
-		createdAt = offer.GetCreatedAt().AsTime().UTC().Format(time.RFC3339)
-	}
-
-	leaseExpiry := ""
-	if offer.GetLeaseExpiry() != nil {
-		leaseExpiry = offer.GetLeaseExpiry().AsTime().UTC().Format(time.RFC3339)
-	}
-
-	return &api.Job{
-		JobID:           jobID,
-		JobRunID:        offer.GetRunId(),
-		JobType:         getStrParam(parameters, "job_type"),
-		Priority:        getIntParam(parameters, "priority"),
-		Parameters:      parameters,
-		CreatedAt:       createdAt,
-		TimeoutSecs:     getIntParam(parameters, "timeout_secs"),
-		ContractVersion: getIntParam(parameters, "contract_version"),
-		LeaseID:         offer.GetLeaseId(),
-		LeaseExpiry:     leaseExpiry,
-		Attempt:         int(offer.GetAttempt()),
-	}
-}
+/* PR-protobuf-refactor: msgToJob + msgToJobFromProto removed — pb.JobOffer
+   no longer exists. TaskOffer is now the canonical dispatch path. */
 
 // msgToCommand converts a ControlMessage (MsgCommand) to an api.WorkerCommand using typed proto fields.
 func msgToCommand(msg controltransport.ControlMessage) api.WorkerCommand {
@@ -679,36 +567,9 @@ func (w *Worker) newTransport() controltransport.ControlTransport {
 	return w.transportFactory()
 }
 
-// sendAccept sends a JobAccepted message via the transport.
-func (w *Worker) sendAccept(ctx context.Context, job *api.Job) error {
-	acceptPayload := map[string]interface{}{
-		"job_id":     job.JobID,
-		"job_run_id": job.JobRunID,
-		"lease_id":   job.LeaseID,
-	}
-	acceptMsg := controltransport.NewMessageWithPayload(
-		controltransport.MsgJobAccepted,
-		w.config.WorkerID,
-		w.config.ProtocolVersion,
-		acceptPayload,
-	)
-	return w.transport.Send(ctx, acceptMsg)
-}
-
-// sendReject sends a JobRejected message via the transport.
-func (w *Worker) sendReject(ctx context.Context, jobID, reason string) error {
-	rejectPayload := map[string]interface{}{
-		"job_id": jobID,
-		"reason": reason,
-	}
-	rejectMsg := controltransport.NewMessageWithPayload(
-		controltransport.MsgJobRejected,
-		w.config.WorkerID,
-		w.config.ProtocolVersion,
-		rejectPayload,
-	)
-	return w.transport.Send(ctx, rejectMsg)
-}
+/* PR-protobuf-refactor: sendAccept + sendReject removed — they used
+   MsgJobAccepted/MsgJobRejected which no longer have transport encoding.
+   Task-native sendTaskAccepted + sendTaskReject are the canonical path. */
 
 // sendTaskAccepted sends a TaskAccepted message via the transport (PR #5).
 func (w *Worker) sendTaskAccepted(ctx context.Context, offer *pb.TaskOffer) error {

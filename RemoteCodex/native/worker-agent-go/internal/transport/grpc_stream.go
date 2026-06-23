@@ -398,19 +398,6 @@ func (t *GRPCStreamTransport) messageToEnvelope(msg controltransport.ControlMess
 			"jobs_completed", "jobs_failed", "active_jobs_count")
 		env.Msg = &pb.WorkerToMasterEnvelope_Heartbeat{Heartbeat: hb}
 
-	case controltransport.MsgLeaseRenewal:
-		lr := &pb.LeaseRenewal{
-			JobId:   getPayloadStr(msg.Payload, "job_id"),
-			LeaseId: getPayloadStr(msg.Payload, "lease_id"),
-			Attempt: int32(getPayloadInt64(msg.Payload, "attempt")),
-		}
-		if ts := getPayloadStr(msg.Payload, "lease_expires_at"); ts != "" {
-			if t, err := time.Parse(time.RFC3339, ts); err == nil {
-				lr.LeaseExpiresAt = timestamppb.New(t)
-			}
-		}
-		env.Msg = &pb.WorkerToMasterEnvelope_LeaseRenewal{LeaseRenewal: lr}
-
 	case controltransport.MsgTaskLeaseRenewal:
 		tlr := &pb.TaskLeaseRenewal{
 			TaskId:    getPayloadStr(msg.Payload, "task_id"),
@@ -423,15 +410,6 @@ func (t *GRPCStreamTransport) messageToEnvelope(msg controltransport.ControlMess
 			}
 		}
 		env.Msg = &pb.WorkerToMasterEnvelope_TaskLeaseRenewal{TaskLeaseRenewal: tlr}
-
-	case controltransport.MsgJobAccepted:
-		env.Msg = &pb.WorkerToMasterEnvelope_JobAccepted{
-			JobAccepted: &pb.JobAccepted{
-				JobId:    getPayloadStr(msg.Payload, "job_id"),
-				JobRunId: getPayloadStr(msg.Payload, "job_run_id"),
-				LeaseId:  getPayloadStr(msg.Payload, "lease_id"),
-			},
-		}
 
 	case controltransport.MsgTaskAccepted:
 		env.Msg = &pb.WorkerToMasterEnvelope_TaskAccepted{
@@ -481,44 +459,11 @@ func (t *GRPCStreamTransport) messageToEnvelope(msg controltransport.ControlMess
 		}
 		env.Msg = &pb.WorkerToMasterEnvelope_TaskResult{TaskResult: tr}
 
-	case controltransport.MsgJobRejected:
-		env.Msg = &pb.WorkerToMasterEnvelope_JobRejected{
-			JobRejected: &pb.JobRejected{
-				JobId:  getPayloadStr(msg.Payload, "job_id"),
-				Reason: getPayloadStr(msg.Payload, "reason"),
-			},
-		}
-
-	case controltransport.MsgJobProgress:
-		env.Msg = &pb.WorkerToMasterEnvelope_JobProgress{
-			JobProgress: &pb.JobProgress{
-				JobId:           getPayloadStr(msg.Payload, "job_id"),
-				Stage:           getPayloadStr(msg.Payload, "stage"),
-				ProgressPercent: int32(getPayloadInt64(msg.Payload, "progress_percent")),
-				Scene:           int32(getPayloadInt64(msg.Payload, "scene")),
-				TotalScenes:     int32(getPayloadInt64(msg.Payload, "total_scenes")),
-			},
-		}
-
 	case controltransport.MsgCommandAck:
 		env.Msg = &pb.WorkerToMasterEnvelope_CommandAck{
 			CommandAck: &pb.CommandAck{
 				CommandId: getPayloadStr(msg.Payload, "command_id"),
 				Error:     getPayloadStr(msg.Payload, "error"),
-			},
-		}
-
-	case controltransport.MsgJobResult:
-		env.Msg = &pb.WorkerToMasterEnvelope_JobResult{
-			JobResult: &pb.JobResult{
-				JobId:     getPayloadStr(msg.Payload, "job_id"),
-				JobRunId:  getPayloadStr(msg.Payload, "job_run_id"),
-				Status:    getPayloadStr(msg.Payload, "status"),
-				Error:     getPayloadStr(msg.Payload, "error"),
-				StartTime: getPayloadStr(msg.Payload, "start_time"),
-				EndTime:   getPayloadStr(msg.Payload, "end_time"),
-				LeaseId:   getPayloadStr(msg.Payload, "lease_id"),
-				Attempt:   int32(getPayloadInt64(msg.Payload, "attempt")),
 			},
 		}
 
@@ -561,17 +506,9 @@ func (t *GRPCStreamTransport) envelopeToMessage(env *pb.MasterToWorkerEnvelope) 
 	case *pb.MasterToWorkerEnvelope_HelloAck:
 		msg.Type = controltransport.MsgHelloAck
 
-	case *pb.MasterToWorkerEnvelope_JobOffer:
-		msg.Type = controltransport.MsgJobOffer
-		msg.TypedPayload = m.JobOffer
-
 	case *pb.MasterToWorkerEnvelope_TaskOffer:
 		msg.Type = controltransport.MsgTaskOffer
 		msg.TypedPayload = m.TaskOffer
-
-	case *pb.MasterToWorkerEnvelope_JobLeaseGranted:
-		msg.Type = controltransport.MsgJobLeaseGranted
-		msg.TypedPayload = m.JobLeaseGranted
 
 	case *pb.MasterToWorkerEnvelope_TaskLeaseGranted:
 		msg.Type = controltransport.MsgTaskLeaseGranted

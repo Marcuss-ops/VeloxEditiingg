@@ -82,6 +82,15 @@ diff_patterns=(
 violations=0
 
 # 1. Full-tree checks
+#
+# Why scripts/ci/operator-history-scrub.sh is excluded from the
+# legacy double-root pattern: that script deliberately documents
+# the historical PR-5 scrub list, with the literal legacy paths-to-
+# scrub embedded in its plan. The substring is load-bearing
+# documentation -- operators need to see what to scrub before they
+# force-push. Excluding it here keeps the lint honest (a real
+# resurrection in any other location still fires) without forbidding
+# the historical-context document.
 for pattern in "${full_tree_patterns[@]}"; do
   if matches="$(
          git grep -nE "$pattern" -- \
@@ -97,6 +106,7 @@ for pattern in "${full_tree_patterns[@]}"; do
            ':!scripts/ci/verify.sh' \
            ':!scripts/ci/check-no-legacy.sh' \
            ':!scripts/ci/lib/diff-scope.sh' \
+           ':!scripts/ci/operator-history-scrub.sh' \
            ':!DataServer/server.exe' 2>/dev/null || true
        )"; [[ -n "$matches" ]]; then
     printf 'FORBIDDEN (exists in repository): %s\n%s\n\n' \

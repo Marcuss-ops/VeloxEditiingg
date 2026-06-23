@@ -27,7 +27,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
-REPO_ROOT="$(cd "$ROOT/../.." && pwd)"
+REPO_ROOT="$(cd "$ROOT/../../.." && pwd)"
 WORKDIR="${E2E_WORKDIR:-/tmp/velox-e2e-workload}"
 
 # ─── Paths ───────────────────────────────────────────────────────────────────
@@ -98,12 +98,12 @@ phase_build() {
   fi
 
   info "  → velox-server"
-  (cd "$REPO_ROOT/DataServer" && CGO_ENABLED=0 go build -o "$MASTER_BIN" \
+  (cd "$REPO_ROOT/DataServer" && go build -o "$MASTER_BIN" \
     -ldflags "-s -w -X main.Version=$VERSION" ./cmd/server) || {
     fail "master build failed"; exit 2; }
 
   info "  → velox-worker-agent"
-  (cd "$REPO_ROOT/RemoteCodex/native/worker-agent-go" && CGO_ENABLED=0 \
+  (cd "$REPO_ROOT/RemoteCodex/native/worker-agent-go" && \
     go build -o "$WORKER_BIN" -ldflags "-s -w" ./cmd/velox-worker-agent) || {
     fail "worker build failed"; exit 2; }
 

@@ -61,6 +61,7 @@ DataServer/completed_videos/
 DataServer/bin/
 DataServer/server
 DataServer/server.exe
+DataServer/dev-hello-client
 DataServer/velox-server
 RemoteCodex/native/worker-agent-go/bin/
 RemoteCodex/native/worker-agent-go/velox-worker-agent

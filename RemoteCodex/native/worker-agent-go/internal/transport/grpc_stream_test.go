@@ -24,7 +24,6 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
-	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -103,27 +102,20 @@ func (s *testStreamServer) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMas
 		go func() {
 			select {
 			case <-jobCh:
-				jobPayload, _ := structpb.NewStruct(map[string]interface{}{
-					"video_name": "test-video",
-					"priority":   1.0,
-				})
 				jobOfferEnv := &pb.MasterToWorkerEnvelope{
 					MessageId:       fmt.Sprintf("job-offer-%03d", connNum),
 					WorkerId:        workerID,
 					SessionId:       sessID,
 					SentAt:          timestamppb.Now(),
 					ProtocolVersion: env.ProtocolVersion,
-					Msg: &pb.MasterToWorkerEnvelope_JobOffer{
-						JobOffer: &pb.JobOffer{
-							JobId:      jobOfferID,
-							RunId:      "test-run-001",
-							VideoName:  "test-video",
-							LeaseId:    "lease-001",
-							Attempt:    1,
-							MaxRetries: 3,
-							JobPayload: jobPayload,
-						},
+				Msg: &pb.MasterToWorkerEnvelope_TaskOffer{
+					TaskOffer: &pb.TaskOffer{
+						TaskId:    "test-task-001",
+						JobId:     jobOfferID,
+						LeaseId:   "lease-001",
+						TaskSpec:  nil,
 					},
+				},
 				}
 				_ = stream.Send(jobOfferEnv)
 			case <-time.After(5 * time.Second):
@@ -167,10 +159,10 @@ func (s *testStreamServer) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMas
 			close(s.goodbyeCh)
 			return nil
 
-		case *pb.WorkerToMasterEnvelope_JobAccepted:
+		case *pb.WorkerToMasterEnvelope_TaskAccepted:
 			// Track it; no action needed for test
 
-		case *pb.WorkerToMasterEnvelope_JobRejected:
+		case *pb.WorkerToMasterEnvelope_TaskRejected:
 			// Track it; no action needed for test
 		}
 	}
@@ -317,7 +309,7 @@ func TestGRPCStreamTransport_SendHeartbeat(t *testing.T) {
 	}
 }
 
-func TestGRPCStreamTransport_ReceiveJobOffer(t *testing.T) {
+func TestGRPCStreamTransport_ReceiveTaskOffer(t *testing.T) {
 	ts := newTestStreamServer()
 	ts.sendJobOffer = true // Enable JobOffer after first heartbeat
 	srv, addr := startTestGRPCServer(t, ts)
@@ -377,20 +369,17 @@ func TestGRPCStreamTransport_ReceiveJobOffer(t *testing.T) {
 	if receivedJobOffer == nil {
 		t.Fatal("Received nil message")
 	}
-	if receivedJobOffer.Type != controltransport.MsgJobOffer {
-		t.Errorf("Received message type = %q, want %q", receivedJobOffer.Type, controltransport.MsgJobOffer)
+	if receivedJobOffer.Type != controltransport.MsgTaskOffer {
+		t.Errorf("Received message type = %q, want %q", receivedJobOffer.Type, controltransport.MsgTaskOffer)
 	}
 
-	// Verify JobOffer typed payload contains job details
-	offer, ok := receivedJobOffer.TypedPayload.(*pb.JobOffer)
+	// Verify TaskOffer typed payload contains task details
+	offer, ok := receivedJobOffer.TypedPayload.(*pb.TaskOffer)
 	if !ok || offer == nil {
-		t.Fatalf("JobOffer TypedPayload is not *pb.JobOffer: %T", receivedJobOffer.TypedPayload)
+		t.Fatalf("TaskOffer TypedPayload is not *pb.TaskOffer: %T", receivedJobOffer.TypedPayload)
 	}
 	if offer.GetJobId() != "test-job-001" {
-		t.Errorf("JobOffer JobId = %q, want %q", offer.GetJobId(), "test-job-001")
-	}
-	if offer.GetVideoName() != "test-video" {
-		t.Errorf("JobOffer VideoName = %q, want %q", offer.GetVideoName(), "test-video")
+		t.Errorf("TaskOffer JobId = %q, want %q", offer.GetJobId(), "test-job-001")
 	}
 }
 
@@ -549,10 +538,10 @@ func TestGRPCStreamTransport_DisconnectReconnect(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("Timed out waiting for JobOffer A")
 	}
-	if offerA.Type != controltransport.MsgJobOffer {
-		t.Fatalf("Offer A: want MsgJobOffer, got %s", offerA.Type)
+	if offerA.Type != controltransport.MsgTaskOffer {
+		t.Fatalf("Offer A: want MsgTaskOffer, got %s", offerA.Type)
 	}
-	offerAPB, _ := offerA.TypedPayload.(*pb.JobOffer)
+	offerAPB, _ := offerA.TypedPayload.(*pb.TaskOffer)
 	if offerAPB == nil || offerAPB.GetJobId() != "test-job-001" {
 		t.Fatalf("Offer A: want test-job-001, got %v", offerAPB)
 	}
@@ -611,10 +600,10 @@ func TestGRPCStreamTransport_DisconnectReconnect(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("Timed out waiting for JobOffer B")
 	}
-	if offerB.Type != controltransport.MsgJobOffer {
-		t.Fatalf("Offer B: want MsgJobOffer, got %s", offerB.Type)
+	if offerB.Type != controltransport.MsgTaskOffer {
+		t.Fatalf("Offer B: want MsgTaskOffer, got %s", offerB.Type)
 	}
-	offerBPB, _ := offerB.TypedPayload.(*pb.JobOffer)
+	offerBPB, _ := offerB.TypedPayload.(*pb.TaskOffer)
 	if offerBPB == nil || offerBPB.GetJobId() != "test-job-002" {
 		t.Fatalf("Offer B: want test-job-002 (2nd connection), got %v", offerBPB)
 	}

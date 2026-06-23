@@ -45,8 +45,8 @@ set -uo pipefail  # NOT -e: continue across case failures so the matrix reports 
 # ─── Paths ───────────────────────────────────────────────────────────────────
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 WORKDIR="${E2E_WORKDIR:-/tmp/velox-e2e-grpc}"
-DATASERVER_ROOT="${DATASERVER_ROOT:-$ROOT/../../DataServer}"
-WORKERAGENT_ROOT="${WORKERAGENT_ROOT:-$ROOT/../../RemoteCodex/native/worker-agent-go}"
+DATASERVER_ROOT="${DATASERVER_ROOT:-$ROOT/../../../DataServer}"
+WORKERAGENT_ROOT="${WORKERAGENT_ROOT:-$ROOT/../../../RemoteCodex/native/worker-agent-go}"
 BIN_DIR="$WORKDIR/bin"
 
 # go binaries
@@ -121,7 +121,7 @@ resolve_bin() {
     return 1
   fi
   assert_info "building $1 (one-time) into $bin"
-  (cd "$module_root" && CGO_ENABLED=0 "$GO_BIN" build -o "$bin" "./$cmd_rel")
+  (cd "$module_root" && "$GO_BIN" build -o "$bin" "./$cmd_rel")
   printf "%s\n" "$bin"
 }
 
