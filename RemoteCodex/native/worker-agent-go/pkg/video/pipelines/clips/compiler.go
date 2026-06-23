@@ -80,12 +80,12 @@ func Compile(ctx context.Context, jobID string, input map[string]interface{}, ou
 	}
 
 	return &plan.RenderPlan{
-		Version:    1,
-		JobID:      jobID,
-		Canvas:     plan.DefaultCanvas(),
-		Timeline:   timeline_items,
+		Version:     1,
+		JobID:       jobID,
+		Canvas:      plan.DefaultCanvas(),
+		Timeline:    timeline_items,
 		AudioTracks: audioTracks,
-		OutputPath: outputPath,
+		OutputPath:  outputPath,
 	}, nil
 }
 

@@ -341,8 +341,6 @@ func (s *Service) DeleteDriveFolder(folderID string) (int, error) {
 	return deletedCount, nil
 }
 
-
-
 // GetMasterFolders returns master folders
 func (s *Service) GetMasterFolders() (map[string]interface{}, error) {
 	masters := make(map[string]interface{})

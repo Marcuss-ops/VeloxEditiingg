@@ -7,11 +7,11 @@ import (
 	"log"
 	"time"
 
+	"velox-server/internal/ingest"
 	"velox-server/internal/jobs"
 	"velox-server/internal/store"
 	"velox-server/internal/taskattempts"
 	"velox-server/internal/taskgraph"
-	"velox-server/internal/ingest"
 	"velox-shared/controltransport"
 	pb "velox-shared/controltransport/pb"
 

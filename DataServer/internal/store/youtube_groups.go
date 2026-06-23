@@ -189,4 +189,3 @@ func (s *SQLiteStore) ListAllGroupMemberships() ([]map[string]interface{}, error
 	}
 	return result, rows.Err()
 }
-

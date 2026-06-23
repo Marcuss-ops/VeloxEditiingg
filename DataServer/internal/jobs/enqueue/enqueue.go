@@ -38,8 +38,8 @@ import (
 // PR #3: Queue (JobQueue) removed. The Enqueuer now compiles a Job+TaskSpec
 // and delegates to Creator (AtomicJobTaskCreator) for atomic insertion.
 type Enqueuer struct {
-	Creator  *store.AtomicJobTaskCreator
-	Jobs     jobs.Reader
+	Creator   *store.AtomicJobTaskCreator
+	Jobs      jobs.Reader
 	Voiceover *assetbridge.AssetService
 }
 
@@ -122,8 +122,8 @@ func RenderHTTPBoundaryJobResponse(job map[string]interface{}, full bool) map[st
 		return map[string]interface{}{"ok": false}
 	}
 	response := map[string]interface{}{
-		"ok":                  true,
-		"job_id":              payload.FirstString(job, "job_id"),
+		"ok":     true,
+		"job_id": payload.FirstString(job, "job_id"),
 		// legacy aliases kept only on HTTP-edge reads (PR15.6). The
 		// chain tolerates rows written before PR15.6 that still carry
 		// `id` (HTTP01 subtest basic_legacy_alias_fallback) — `id` is

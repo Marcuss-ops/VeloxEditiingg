@@ -52,12 +52,12 @@ func (s *SQLiteStore) ClaimNextPendingJob(workerID string, allowedJobTypes []str
 	for rows.Next() {
 		var (
 			jobID, status, jobFingerprint, runID, jobRunID sql.NullString
-			videoName, projectID                              sql.NullString
-			retryCount                                        sql.NullInt64
-			requestJSON, resultJSON                           sql.NullString
-			requiredResourceClass, requiredTemporalMode        sql.NullString
-			requiredDeterministic, requiredCacheable          sql.NullInt64
-			requiredMinBandwidthMbps                          sql.NullFloat64
+			videoName, projectID                           sql.NullString
+			retryCount                                     sql.NullInt64
+			requestJSON, resultJSON                        sql.NullString
+			requiredResourceClass, requiredTemporalMode    sql.NullString
+			requiredDeterministic, requiredCacheable       sql.NullInt64
+			requiredMinBandwidthMbps                       sql.NullFloat64
 		)
 		if err := rows.Scan(&jobID, &status, &jobFingerprint, &runID, &jobRunID,
 			&videoName, &projectID, &retryCount, &requestJSON, &resultJSON,
@@ -211,16 +211,16 @@ func jobTypeAllowed(payload map[string]any, allowedJobTypes []string) bool {
 // package-local type so it doesn't leak into the public store API.
 // PR #6: all 5 Requirements columns read directly; no JSON fallback.
 type rankCandidate struct {
-	jobID                  string
-	retryCount             int64
-	requestJSON            string
-	resultJSON             string
-	reqRC                  string
-	reqTM                  string
-	reqDeterministic       bool
-	reqCacheable           bool
-	reqMinBandwidthMbps    float64
-	updatedAt              string
+	jobID               string
+	retryCount          int64
+	requestJSON         string
+	resultJSON          string
+	reqRC               string
+	reqTM               string
+	reqDeterministic    bool
+	reqCacheable        bool
+	reqMinBandwidthMbps float64
+	updatedAt           string
 }
 
 func (s *SQLiteStore) ClaimNextPendingJobForWorker(
@@ -284,13 +284,13 @@ func (s *SQLiteStore) ClaimNextPendingJobForWorker(
 	var candidates []rankCandidate
 	for rows.Next() {
 		var (
-			jobID                               sql.NullString
-			retryCount                          sql.NullInt64
-			requestJSON, resultJSON             sql.NullString
-			reqRC, reqTM                        sql.NullString
-			reqDeterministic, reqCacheable      sql.NullInt64
-			reqMinBandwidthMbps                 sql.NullFloat64
-			updatedAt                           sql.NullString
+			jobID                          sql.NullString
+			retryCount                     sql.NullInt64
+			requestJSON, resultJSON        sql.NullString
+			reqRC, reqTM                   sql.NullString
+			reqDeterministic, reqCacheable sql.NullInt64
+			reqMinBandwidthMbps            sql.NullFloat64
+			updatedAt                      sql.NullString
 		)
 		if err := rows.Scan(&jobID, &retryCount, &requestJSON, &resultJSON,
 			&reqRC, &reqTM,
@@ -456,20 +456,20 @@ func (s *SQLiteStore) ClaimNextPendingJobForWorker(
 		if err := s.replaceJobHistoryTx(tx, sc.jobID, history); err != nil {
 			return nil, rankZeroReq, false, err
 		}
-			// cleanup/remove-job-attempts-runtime: no longer write to job_attempts.
-			// Per-attempt identity now lives on task_attempts (canonical); the
-			// canonical claim path is the task-native dispatch (PR-04). The
-			// legacy_job_dispatch path is being decommissioned alongside PR-07.
+		// cleanup/remove-job-attempts-runtime: no longer write to job_attempts.
+		// Per-attempt identity now lives on task_attempts (canonical); the
+		// canonical claim path is the task-native dispatch (PR-04). The
+		// legacy_job_dispatch path is being decommissioned alongside PR-07.
 		if err := tx.Commit(); err != nil {
 			return nil, costmodel.JobRequirements{}, false, err
 		}
 		claimedReq := reconstructRankRequirements(sc.reqRC, sc.reqTM, sc.reqDeterministic, sc.reqCacheable, sc.reqMinBandwidthMbps)
 		_ = s.LogJobEvent(sc.jobID, "job_claimed", map[string]interface{}{
-			"worker_id":    workerID,
-			"lease_id":     leaseID,
-			"attempt":      newRetry,
-			"rank_score":   sc.score,
-			"rank_eligible": true,
+			"worker_id":          workerID,
+			"lease_id":           leaseID,
+			"attempt":            newRetry,
+			"rank_score":         sc.score,
+			"rank_eligible":      true,
 			"rank_bandwidth_fit": sc.exp.BandwidthFit,
 		})
 		return bytes.Clone(updatedResult), claimedReq, true, nil

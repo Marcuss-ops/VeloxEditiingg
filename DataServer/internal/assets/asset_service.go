@@ -225,16 +225,16 @@ func (s *AssetService) RewriteSceneImagePayload(ctx context.Context, payloadMap 
 // Parameters
 //   - ctx:               request context for resolver + DB calls.
 //   - payloadMap:        mutable payload to rewrite (top-level and parameters
-//                        sub-map, depending on the applicator).
+//     sub-map, depending on the applicator).
 //   - kind:              asset role label (RoleVoiceover / RoleSceneImage etc.)
-//                        used when registering a freshly-resolved asset.
+//     used when registering a freshly-resolved asset.
 //   - collector:         extracts references from the payload. Must dedup
-//                        internally; returns nil/empty when nothing to do.
+//     internally; returns nil/empty when nothing to do.
 //   - applicator:        writes the rewritten references back. Receives the
-//                        already-resolved canonical reference list (each item
-//                        is either a velox-asset:// scheme URL returned by
-//                        ResolveAndRegister, or an already-canonical URL
-//                        that was passed-through).
+//     already-resolved canonical reference list (each item
+//     is either a velox-asset:// scheme URL returned by
+//     ResolveAndRegister, or an already-canonical URL
+//     that was passed-through).
 //
 // Errors from the asset service surface to the caller verbatim. nil-nil
 // short-circuits when the service is gone or the payload is nil; missing

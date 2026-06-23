@@ -390,4 +390,3 @@ func (s *Store) DrainLegacyEvents(ctx context.Context, legacyTypes []string) (Dr
 
 	return res, nil
 }
-

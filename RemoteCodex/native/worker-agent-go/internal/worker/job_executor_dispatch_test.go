@@ -92,7 +92,7 @@ func (fakeSceneComposite) Execute(
 }
 
 type recordingSceneComposite struct {
-	mu      sync.Mutex
+	mu       sync.Mutex
 	lastSpec executor.TaskSpec
 	gotSpec  bool
 }
@@ -253,16 +253,16 @@ func TestPR_3_9_DispatchResolvesVoiceoverAssetBeforeExecutor(t *testing.T) {
 			MasterURL:     srv.URL,
 			WorkDir:       t.TempDir(),
 		},
-		apiClient:        api.NewClient(srv.URL),
-		logger:           logger.New(logger.InfoLevel, io.Discard),
-		status:           StatusIdle,
-		stopChan:         make(chan struct{}),
-		heartbeatBackoff: &backoffConfig{initialInterval: time.Second, maxInterval: time.Minute, multiplier: 2.0},
-		seenCommands:     make(map[string]time.Time),
-		recentLogs:       newRecentLogBuffer(50),
-		activeJobs:       make(map[string]*ActiveJob),
-		jobCancelFuncs:   make(map[string]context.CancelFunc),
-		pendingLeaseJobs: make(map[string]*api.Job),
+		apiClient:          api.NewClient(srv.URL),
+		logger:             logger.New(logger.InfoLevel, io.Discard),
+		status:             StatusIdle,
+		stopChan:           make(chan struct{}),
+		heartbeatBackoff:   &backoffConfig{initialInterval: time.Second, maxInterval: time.Minute, multiplier: 2.0},
+		seenCommands:       make(map[string]time.Time),
+		recentLogs:         newRecentLogBuffer(50),
+		activeJobs:         make(map[string]*ActiveJob),
+		jobCancelFuncs:     make(map[string]context.CancelFunc),
+		pendingLeaseJobs:   make(map[string]*api.Job),
 		concurrencyLimiter: concurrency.NewConcurrencyLimiter(1),
 		version:            "test",
 	}
@@ -293,9 +293,9 @@ func TestPR_3_9_DispatchResolvesVoiceoverAssetBeforeExecutor(t *testing.T) {
 			// resolveVoiceoverAudioPath downloads it and rewrites
 			// this to a local path. dispatchTaskRunner then forwards
 			// the local path to the executor.
-			"audio_path": "velox-asset://asset-recording-001",
+			"audio_path":  "velox-asset://asset-recording-001",
 			"script_text": "voiceover asset resolve test",
-			"output_path":  "/tmp/voiceover-resolve.mp4",
+			"output_path": "/tmp/voiceover-resolve.mp4",
 		},
 	}
 

@@ -1,14 +1,7 @@
 package main
 
-// TODO(platform/database): the package velox-server/internal/platform/database
-// was dropped by the Phase 1 architecture refactor (eliminate queue facade
-// / remove dark_editor / make BlobStore mandatory) without propagating
-// downstream adaptations. Three consumers (this file,
-// internal/store/sqlite.go, and cmd/server/bootstrap.go) still depend on
-// its symbols (Open / Config / Handle / Driver / DriverSQLite /
-// DriverPostgres). The DataServer build is intentionally broken until a
-// platform/database restoration PR lands — see
-// docs/architecture/OWNERSHIP.md for the platform-cutover roadmap.
+// platform/database is the canonical database abstraction (see
+// docs/operations/02-repository-cleanup-and-ownership.md).
 import (
 	"context"
 	"errors"
@@ -178,7 +171,7 @@ func setupIsolatedPostgresBareSchema(t *testing.T, dsn, schema string) (*databas
 func TestBuildServerDeps_PostgresDispatch_IsolatedAndFailFast(t *testing.T) {
 	dsn := os.Getenv(postgresDsnEnvVar)
 	if dsn == "" {
-		t.Skipf("VELOX_TEST_POSTGRES_DSN unset; run DataServer/run-tests-postgres.sh "+
+		t.Skipf("VELOX_TEST_POSTGRES_DSN unset; run DataServer/run-tests-postgres.sh " +
 			"or export VELOX_TEST_POSTGRES_DSN=<postgres://...> pointing at a running Postgres")
 	}
 

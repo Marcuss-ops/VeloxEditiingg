@@ -48,26 +48,26 @@ const (
 // dropped from jobs table (migration 048). Runtime state lives on
 // job_attempts + tasks now; lease identity flows through result_json.
 type JobRecord struct {
-	JobID                string    `json:"job_id"`
-	Status               JobStatus `json:"status"`
-	VideoName            string    `json:"video_name,omitempty"`
-	ProjectID            string    `json:"project_id,omitempty"`
-	Revision             int       `json:"revision"`
-	MaxRetries           int       `json:"max_retries"`
-	CreatedAt            string    `json:"created_at,omitempty"`
-	UpdatedAt            string    `json:"updated_at,omitempty"`
-	StartedAt            string    `json:"started_at,omitempty"`
-	CompletedAt          string    `json:"completed_at,omitempty"`
-	RunID                string    `json:"run_id,omitempty"`
-	PayloadJSON          string    `json:"-"`
+	JobID       string    `json:"job_id"`
+	Status      JobStatus `json:"status"`
+	VideoName   string    `json:"video_name,omitempty"`
+	ProjectID   string    `json:"project_id,omitempty"`
+	Revision    int       `json:"revision"`
+	MaxRetries  int       `json:"max_retries"`
+	CreatedAt   string    `json:"created_at,omitempty"`
+	UpdatedAt   string    `json:"updated_at,omitempty"`
+	StartedAt   string    `json:"started_at,omitempty"`
+	CompletedAt string    `json:"completed_at,omitempty"`
+	RunID       string    `json:"run_id,omitempty"`
+	PayloadJSON string    `json:"-"`
 
 	// PR #6: per-job placement needs (canonical). All 5 fields live in
 	// dedicated columns; no JSON fallback exists anymore.
-	RequiredResourceClass     string  `json:"required_resource_class,omitempty"`
-	RequiredTemporalMode      string  `json:"required_temporal_mode,omitempty"`
-	RequiredDeterministic     bool    `json:"required_deterministic,omitempty"`
-	RequiredCacheable         bool    `json:"required_cacheable,omitempty"`
-	RequiredMinBandwidthMbps  float64 `json:"required_min_bandwidth_mbps,omitempty"`
+	RequiredResourceClass    string  `json:"required_resource_class,omitempty"`
+	RequiredTemporalMode     string  `json:"required_temporal_mode,omitempty"`
+	RequiredDeterministic    bool    `json:"required_deterministic,omitempty"`
+	RequiredCacheable        bool    `json:"required_cacheable,omitempty"`
+	RequiredMinBandwidthMbps float64 `json:"required_min_bandwidth_mbps,omitempty"`
 }
 
 // PR #8: dead code after CreateJob was dropped from SQLiteJobRepository.
@@ -88,11 +88,11 @@ type ClaimParams struct {
 // complete/fail; LeaseID and LeaseExpires are exposed separately so callers
 // can present them in clear surface areas (e.g. the v2 HTTP contract).
 type ClaimResult struct {
-	JobID        string                   `json:"job_id"`
-	ResultJSON   []byte                   `json:"-"`
-	Attempt      int                      `json:"attempt"`
-	LeaseID      string                   `json:"lease_id,omitempty"`
-	LeaseExpires time.Time                `json:"lease_expires,omitempty"`
+	JobID        string                    `json:"job_id"`
+	ResultJSON   []byte                    `json:"-"`
+	Attempt      int                       `json:"attempt"`
+	LeaseID      string                    `json:"lease_id,omitempty"`
+	LeaseExpires time.Time                 `json:"lease_expires,omitempty"`
 	Requirements costmodel.JobRequirements `json:"requirements,omitempty"`
 }
 

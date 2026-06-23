@@ -190,10 +190,10 @@ var _ JobsRetryQuerier = (*recordingJobsRepo)(nil)
 // invoke JobsRetryQuerier.FailWithRetry exactly once with the
 // LEASE_EXPIRED_RETRIES_EXHAUSTED tuple:
 //
-//   * errorCode  = "LEASE_EXPIRED_RETRIES_EXHAUSTED"
-//   * errorMessage must contain the candidate task_id
-//   * retryable  = false (terminal state, NOT a retryable failure)
-//   * revision   = the Job.Revision read at FailWithRetry time
+//   - errorCode  = "LEASE_EXPIRED_RETRIES_EXHAUSTED"
+//   - errorMessage must contain the candidate task_id
+//   - retryable  = false (terminal state, NOT a retryable failure)
+//   - revision   = the Job.Revision read at FailWithRetry time
 //
 // The Job wire-up runs OUTSIDE the reap-atomic so the audit-strict
 // transactional boundary (Task + Attempt in one tx) is preserved; a
@@ -397,10 +397,12 @@ type stubRepo struct {
 	requeueErr      error
 }
 
-func (s *stubRepo) Create(ctx context.Context, t *Task) error               { panic("stubRepo.Create") }
-func (s *stubRepo) Get(ctx context.Context, id string) (*Task, error)       { panic("stubRepo.Get") }
-func (s *stubRepo) GetByJobID(_ context.Context, _ string) (*Task, error)   { panic("stubRepo.GetByJobID") }
-func (s *stubRepo) List(ctx context.Context, f Filter) ([]Task, error)        { panic("stubRepo.List") }
+func (s *stubRepo) Create(ctx context.Context, t *Task) error         { panic("stubRepo.Create") }
+func (s *stubRepo) Get(ctx context.Context, id string) (*Task, error) { panic("stubRepo.Get") }
+func (s *stubRepo) GetByJobID(_ context.Context, _ string) (*Task, error) {
+	panic("stubRepo.GetByJobID")
+}
+func (s *stubRepo) List(ctx context.Context, f Filter) ([]Task, error) { panic("stubRepo.List") }
 func (s *stubRepo) SetStatus(ctx context.Context, id string, from, to Status, revision int) error {
 	panic("stubRepo.SetStatus")
 }

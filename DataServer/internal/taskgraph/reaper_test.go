@@ -29,17 +29,19 @@ type countingRepo struct {
 	errOnCall *int // if non-nil and matches calls-1, return err.
 }
 
-func (c *countingRepo) Get(_ context.Context, _ string) (*Task, error)             { panic("not used") }
-func (c *countingRepo) List(_ context.Context, _ Filter) ([]Task, error)            { panic("not used") }
-func (c *countingRepo) GetByJobID(_ context.Context, _ string) (*Task, error)       { panic("not used") }
-func (c *countingRepo) Create(_ context.Context, _ *Task) error                    { panic("not used") }
+func (c *countingRepo) Get(_ context.Context, _ string) (*Task, error)        { panic("not used") }
+func (c *countingRepo) List(_ context.Context, _ Filter) ([]Task, error)      { panic("not used") }
+func (c *countingRepo) GetByJobID(_ context.Context, _ string) (*Task, error) { panic("not used") }
+func (c *countingRepo) Create(_ context.Context, _ *Task) error               { panic("not used") }
 func (c *countingRepo) SetStatus(_ context.Context, _ string, _, _ Status, _ int) error {
 	panic("not used")
 }
-func (c *countingRepo) Lease(_ context.Context, _, _, _ string) error                            { panic("not used") }
-func (c *countingRepo) ReleaseLease(_ context.Context, _ string) error                           { panic("not used") }
-func (c *countingRepo) ClaimNextReadyTask(_ context.Context, _, _ string) (*TaskWithSpec, error) { panic("not used") }
-func (c *countingRepo) Start(_ context.Context, _, _, _ string, _, _ int) error                  { panic("not used") }
+func (c *countingRepo) Lease(_ context.Context, _, _, _ string) error  { panic("not used") }
+func (c *countingRepo) ReleaseLease(_ context.Context, _ string) error { panic("not used") }
+func (c *countingRepo) ClaimNextReadyTask(_ context.Context, _, _ string) (*TaskWithSpec, error) {
+	panic("not used")
+}
+func (c *countingRepo) Start(_ context.Context, _, _, _ string, _, _ int) error { panic("not used") }
 func (c *countingRepo) RequeueExpiredLeases(_ context.Context, nowStr string, _ int) ([]RequeueCandidate, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -58,9 +60,11 @@ func (c *countingRepo) ExpireTaskLeaseAtomic(_ context.Context, _, _, _ string, 
 func (c *countingRepo) AcceptTaskAtomic(_ context.Context, _ *taskattempts.TaskAttempt, _ int) error {
 	panic("not used")
 }
-func (c *countingRepo) AreDependenciesSatisfied(_ context.Context, _ []string) (bool, error) { panic("not used") }
-func (c *countingRepo) Fail(_ context.Context, _, _ string, _ int) error                     { panic("not used") }
-func (c *countingRepo) IncrementAttempt(_ context.Context, _ string) error                   { panic("not used") }
+func (c *countingRepo) AreDependenciesSatisfied(_ context.Context, _ []string) (bool, error) {
+	panic("not used")
+}
+func (c *countingRepo) Fail(_ context.Context, _, _ string, _ int) error   { panic("not used") }
+func (c *countingRepo) IncrementAttempt(_ context.Context, _ string) error { panic("not used") }
 func (c *countingRepo) TransitionTaskToTerminalAtomic(
 	_ context.Context, _, _, _ string, _ Status,
 	_ taskattempts.AttemptStatus, _, _ string,

@@ -21,7 +21,7 @@
 //     heartbeat RPC only. No more special-case carve-out.
 //   - dispatchTaskRunner receives a pre-compiled executor.TaskSpec
 //     (from TaskOffer.task_spec), never reconstructs from job.JobType
-//     + job.Parameters.
+//   - job.Parameters.
 //   - Returns a typed taskrunner.TaskExecutionReport instead of
 //     legacy map[string]interface{}.
 //   - executeJob sends typed pb.TaskResult for task-native jobs
@@ -171,14 +171,14 @@ func (w *Worker) submitTaskResult(ctx context.Context, job *api.Job, taskID, att
 	}
 
 	resultPayload := map[string]interface{}{
-		"task_id":       taskID,
-		"job_id":        job.JobID,
-		"attempt_id":    attemptID,
-		"status":        status,
-		"error_code":    errorCode,
-		"error_detail":  errorDetail,
-		"executor_id":   job.JobType,
-		"lease_id":      resolveLeaseID(job),
+		"task_id":      taskID,
+		"job_id":       job.JobID,
+		"attempt_id":   attemptID,
+		"status":       status,
+		"error_code":   errorCode,
+		"error_detail": errorDetail,
+		"executor_id":  job.JobType,
+		"lease_id":     resolveLeaseID(job),
 	}
 	if report != nil {
 		resultPayload["executor_key"] = report.ExecutorKey

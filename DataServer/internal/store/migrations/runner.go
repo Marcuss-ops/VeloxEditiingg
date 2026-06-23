@@ -8,23 +8,23 @@
 //
 // Layout served:
 //
-//   sqlite/   — SQLite-cumulative migration files (45 .sql, evolution
-//               from 001_initial through 045 — see migrations/sqlite/
-//               for the canonical ordering; per-version historical
-//               context lives in git log, not in this doc).
-//   postgres/ — Postgres-native migration files (10 .sql — see
-//               migrations/postgres/ for the canonical ordering; same
-//               per-version scope caveat as sqlite/).
+//	sqlite/   — SQLite-cumulative migration files (45 .sql, evolution
+//	            from 001_initial through 045 — see migrations/sqlite/
+//	            for the canonical ordering; per-version historical
+//	            context lives in git log, not in this doc).
+//	postgres/ — Postgres-native migration files (10 .sql — see
+//	            migrations/postgres/ for the canonical ordering; same
+//	            per-version scope caveat as sqlite/).
 //
 // Accessors:
 //
-//   SQLiteMigrationsFS() — caller-facing accessor for the SQLite FS.
-//                         Embedded under sqlite/*.sql. Use this for
-//                         production boot paths and any new code
-//                         (the only callsite in DataServer is
-//                         internal/store/sqlite.go::NewSQLiteStoreFromHandle).
-//   PostgresMigrationsFS() — caller-facing accessor for the Postgres FS.
-//                           Embedded under postgres/*.sql.
+//	SQLiteMigrationsFS() — caller-facing accessor for the SQLite FS.
+//	                      Embedded under sqlite/*.sql. Use this for
+//	                      production boot paths and any new code
+//	                      (the only callsite in DataServer is
+//	                      internal/store/sqlite.go::NewSQLiteStoreFromHandle).
+//	PostgresMigrationsFS() — caller-facing accessor for the Postgres FS.
+//	                        Embedded under postgres/*.sql.
 package migrations
 
 import (

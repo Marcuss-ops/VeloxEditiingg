@@ -25,11 +25,11 @@ import (
 	"time"
 
 	"velox-server/internal/artifacts"
+	"velox-server/internal/ingest"
 	"velox-server/internal/jobs"
 	"velox-server/internal/store"
 	"velox-server/internal/taskattempts"
 	"velox-server/internal/taskgraph"
-	"velox-server/internal/ingest"
 	workersreg "velox-server/internal/workers"
 	"velox-shared/controltransport"
 	pb "velox-shared/controltransport/pb"
@@ -107,7 +107,7 @@ type workerSession struct {
 	// requirement: a network-level send error MUST terminate the session,
 	// otherwise pending offers can be left orphaned silently. The main loop
 	// reads writerErr inside its select and triggers a teardown on receipt.
-	writerErr chan error	// Job offering synchronization (Issue 4 fix).
+	writerErr chan error // Job offering synchronization (Issue 4 fix).
 	// PR #4: replaced pendingOffer (job-based) with pendingTaskOffer (task-based).
 	pendingTaskOffer *taskgraph.TaskWithSpec // TaskOffer sent, awaiting TaskAccepted/TaskRejected
 	claimMu          sync.Mutex              // serializes the claim+send+set flow; also guards pendingTaskOffer r/w
@@ -385,15 +385,15 @@ func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMasterEnvelo
 			if h.dbStore != nil {
 				_ = h.dbStore.RevokeSession(sessionID)
 			}
-		// PR #4: release pending task offer on writer failure.
-		sess.claimMu.Lock()
-		if sess.pendingTaskOffer != nil {
-			if releaseErr := h.taskRepo.ReleaseLease(context.Background(), sess.pendingTaskOffer.ID); releaseErr != nil {
-				log.Printf("[GRPC] Failed to release pendingTaskOffer for task %s on writer failure: %v", sess.pendingTaskOffer.ID, releaseErr)
+			// PR #4: release pending task offer on writer failure.
+			sess.claimMu.Lock()
+			if sess.pendingTaskOffer != nil {
+				if releaseErr := h.taskRepo.ReleaseLease(context.Background(), sess.pendingTaskOffer.ID); releaseErr != nil {
+					log.Printf("[GRPC] Failed to release pendingTaskOffer for task %s on writer failure: %v", sess.pendingTaskOffer.ID, releaseErr)
+				}
+				sess.pendingTaskOffer = nil
 			}
-			sess.pendingTaskOffer = nil
-		}
-		sess.claimMu.Unlock()
+			sess.claimMu.Unlock()
 			return fmt.Errorf("stream: writer failure: %w", err)
 
 		case err := <-recvErrCh:

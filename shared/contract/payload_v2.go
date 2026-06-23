@@ -48,32 +48,32 @@ type JobPayloadV2 struct {
 	UpdatedAt       string `json:"updated_at"`
 
 	// Business fields
-	VideoName      string  `json:"video_name"`
-	ScriptText     string  `json:"script_text"`
-	ScenesJSON     string  `json:"scenes_json,omitempty"`
-	Scenes         []map[string]any `json:"scenes,omitempty"`
-	VoiceoverPaths []string `json:"voiceover_paths,omitempty"`
-	AudioLanguage  string   `json:"audio_language_for_srt,omitempty"`
-	VideoMode      string   `json:"video_mode,omitempty"`
-	OutputPath     string   `json:"output_path,omitempty"`
-	DriveOutput    string   `json:"drive_output_folder,omitempty"`
-	YoutubeGroup   string   `json:"youtube_group,omitempty"`
-	ChannelID      string   `json:"channel_id,omitempty"`
-	OutputVideoID  string   `json:"output_video_id,omitempty"`
-	SceneImagePaths []string `json:"scene_image_paths,omitempty"`
-	ImageSourceMap string   `json:"image_source_map,omitempty"`
+	VideoName       string           `json:"video_name"`
+	ScriptText      string           `json:"script_text"`
+	ScenesJSON      string           `json:"scenes_json,omitempty"`
+	Scenes          []map[string]any `json:"scenes,omitempty"`
+	VoiceoverPaths  []string         `json:"voiceover_paths,omitempty"`
+	AudioLanguage   string           `json:"audio_language_for_srt,omitempty"`
+	VideoMode       string           `json:"video_mode,omitempty"`
+	OutputPath      string           `json:"output_path,omitempty"`
+	DriveOutput     string           `json:"drive_output_folder,omitempty"`
+	YoutubeGroup    string           `json:"youtube_group,omitempty"`
+	ChannelID       string           `json:"channel_id,omitempty"`
+	OutputVideoID   string           `json:"output_video_id,omitempty"`
+	SceneImagePaths []string         `json:"scene_image_paths,omitempty"`
+	ImageSourceMap  string           `json:"image_source_map,omitempty"`
 
 	// Numeric metadata (sent as JSON numbers)
-	Priority        int     `json:"priority"`
-	TimeoutSecs     int     `json:"timeout_secs"`
-	SceneCount      int     `json:"scene_count,omitempty"`
-	VoiceoverCount  int     `json:"voiceover_count,omitempty"`
-	TotalDurationSecs   float64 `json:"total_duration_secs,omitempty"`
-	SceneDurationSecs   float64 `json:"scene_duration_secs,omitempty"`
+	Priority          int     `json:"priority"`
+	TimeoutSecs       int     `json:"timeout_secs"`
+	SceneCount        int     `json:"scene_count,omitempty"`
+	VoiceoverCount    int     `json:"voiceover_count,omitempty"`
+	TotalDurationSecs float64 `json:"total_duration_secs,omitempty"`
+	SceneDurationSecs float64 `json:"scene_duration_secs,omitempty"`
 
 	// Routing / audit
-	SubmittedVia string `json:"submitted_via,omitempty"`
-	Source       string `json:"source,omitempty"`
+	SubmittedVia   string `json:"submitted_via,omitempty"`
+	Source         string `json:"source,omitempty"`
 	JobFingerprint string `json:"job_fingerprint,omitempty"`
 	Status         string `json:"status,omitempty"`
 }

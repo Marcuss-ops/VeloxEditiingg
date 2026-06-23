@@ -27,10 +27,10 @@ type Counts map[Status]int64
 // (sendPushJobOffer) can read claimResult.Requirements directly
 // without bouncing through jobs.Writer.Get.
 type ClaimNextResult struct {
-	JobID        string    `json:"job_id"`
-	Attempt      int       `json:"attempt"`
-	LeaseID      string    `json:"lease_id,omitempty"`
-	LeaseExpires time.Time `json:"lease_expires,omitempty"`
+	JobID        string                    `json:"job_id"`
+	Attempt      int                       `json:"attempt"`
+	LeaseID      string                    `json:"lease_id,omitempty"`
+	LeaseExpires time.Time                 `json:"lease_expires,omitempty"`
 	Requirements costmodel.JobRequirements `json:"requirements,omitempty"`
 }
 
@@ -153,7 +153,8 @@ type Writer interface {
 // PR15.5 promoted PR3 write paths).
 //
 // Compile-time assertion:
-//   var _ Repository = (*store.SQLiteJobRepository)(nil)
+//
+//	var _ Repository = (*store.SQLiteJobRepository)(nil)
 type Repository interface {
 	Reader
 	Writer

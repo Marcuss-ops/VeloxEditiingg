@@ -3,11 +3,11 @@ package main
 import (
 	"fmt"
 
+	"velox-server/internal/ingest"
 	"velox-server/internal/observability"
 	"velox-server/internal/store"
 	"velox-server/internal/taskattempts"
 	"velox-server/internal/taskgraph"
-	"velox-server/internal/ingest"
 	"velox-server/internal/taskoutput_artifacts"
 )
 

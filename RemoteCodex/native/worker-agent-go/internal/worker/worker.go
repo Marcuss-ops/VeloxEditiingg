@@ -266,190 +266,190 @@ func (w *Worker) receiveLoop(ctx context.Context, recvCh <-chan controltransport
 			}
 
 			switch msg.Type {
-		case controltransport.MsgJobOffer:
-			offer := msgToJob(msg)
-			jobID := ""
-			if offer != nil {
-				jobID = offer.JobID
-			}
-
-			if w.IsStopped() {
-				if err := w.sendReject(ctx, jobID, "stopped"); err != nil {
-					w.logger.Warn("[RECEIVE] Failed to send JobRejected (stopped): %v", err)
+			case controltransport.MsgJobOffer:
+				offer := msgToJob(msg)
+				jobID := ""
+				if offer != nil {
+					jobID = offer.JobID
 				}
-				continue
-			}
-			if w.drainMode.Load() {
-				if err := w.sendReject(ctx, jobID, "draining"); err != nil {
-					w.logger.Warn("[RECEIVE] Failed to send JobRejected (draining): %v", err)
+
+				if w.IsStopped() {
+					if err := w.sendReject(ctx, jobID, "stopped"); err != nil {
+						w.logger.Warn("[RECEIVE] Failed to send JobRejected (stopped): %v", err)
+					}
+					continue
 				}
-				continue
-			}
-
-			w.activeJobsMu.RLock()
-			activeCount := len(w.activeJobs)
-			w.activeJobsMu.RUnlock()
-			if activeCount >= w.config.MaxActiveJobs {
-				if err := w.sendReject(ctx, jobID, "capacity_full"); err != nil {
-					w.logger.Warn("[RECEIVE] Failed to send JobRejected (capacity): %v", err)
+				if w.drainMode.Load() {
+					if err := w.sendReject(ctx, jobID, "draining"); err != nil {
+						w.logger.Warn("[RECEIVE] Failed to send JobRejected (draining): %v", err)
+					}
+					continue
 				}
-				continue
-			}
 
-			if offer == nil {
-				w.logger.Warn("[RECEIVE] Failed to parse job from JobOffer message")
-				continue
-			}
-			job := offer
-
-			if err := w.validateJobOffer(job); err != nil {
-				w.logger.Warn("[RECEIVE] Job offer validation failed: %v", err)
-				_ = w.sendReject(ctx, job.JobID, err.Error())
-				continue
-			}
-
-			w.logger.Info("[RECEIVE] JobOffer received: %s (type: %s, lease: %s)", job.JobID, job.JobType, job.LeaseID)
-
-			if err := w.sendAccept(ctx, job); err != nil {
-				w.logger.Warn("[RECEIVE] Failed to send JobAccepted: %v", err)
-				continue
-			}
-			w.storePendingJob(job)
-
-		case controltransport.MsgTaskOffer:
-			// PR #5: task-native dispatch — receive pre-compiled TaskSpec from master.
-			// PR-2 (canonical-attempt-identity): executeJob dispatch is DEFERRED
-			// to MsgTaskLeaseGranted so the master's canonical (attempt_id,
-			// attempt_number) tuple + RUNNING TaskAttempt is committed before
-			// execution starts. Mirrors the legacy JobOffer → JobLeaseGranted
-			// pattern using `pendingTasks` (keyed by task_id) instead of
-			// `pendingLeaseJobs` (keyed by job_id).
-			taskOffer, ok := msg.TypedPayload.(*pb.TaskOffer)
-			if !ok || taskOffer == nil {
-				w.logger.Warn("[RECEIVE] TaskOffer without typed payload")
-				continue
-			}
-
-			taskID := taskOffer.GetTaskId()
-			attemptID := taskOffer.GetAttemptId()
-			if taskID == "" || attemptID == "" {
-				w.logger.Warn("[RECEIVE] TaskOffer missing canonical identity (task_id=%q attempt_id=%q) — dropping",
-					taskID, attemptID)
-				continue
-			}
-			if w.IsStopped() || w.drainMode.Load() {
-				if err := w.sendTaskReject(ctx, taskID, "draining"); err != nil {
-					w.logger.Warn("[RECEIVE] Failed to send TaskRejected: %v", err)
+				w.activeJobsMu.RLock()
+				activeCount := len(w.activeJobs)
+				w.activeJobsMu.RUnlock()
+				if activeCount >= w.config.MaxActiveJobs {
+					if err := w.sendReject(ctx, jobID, "capacity_full"); err != nil {
+						w.logger.Warn("[RECEIVE] Failed to send JobRejected (capacity): %v", err)
+					}
+					continue
 				}
-				continue
-			}
 
-			w.activeJobsMu.RLock()
-			activeCount := len(w.activeJobs)
-			w.activeJobsMu.RUnlock()
-			if activeCount >= w.config.MaxActiveJobs {
-				if err := w.sendTaskReject(ctx, taskID, "capacity_full"); err != nil {
-					w.logger.Warn("[RECEIVE] Failed to send TaskRejected (capacity): %v", err)
+				if offer == nil {
+					w.logger.Warn("[RECEIVE] Failed to parse job from JobOffer message")
+					continue
 				}
-				continue
-			}
+				job := offer
 
-			w.logger.Info("[RECEIVE] TaskOffer received: task=%s attempt=%s job=%s executor=%s@%d — deferring executeJob to TaskLeaseGranted",
-				taskID, attemptID, taskOffer.GetJobId(), taskOffer.GetExecutorId(), taskOffer.GetExecutorVersion())
+				if err := w.validateJobOffer(job); err != nil {
+					w.logger.Warn("[RECEIVE] Job offer validation failed: %v", err)
+					_ = w.sendReject(ctx, job.JobID, err.Error())
+					continue
+				}
 
-			if err := w.sendTaskAccepted(ctx, taskOffer); err != nil {
-				w.logger.Warn("[RECEIVE] Failed to send TaskAccepted: %v", err)
-				continue
-			}
+				w.logger.Info("[RECEIVE] JobOffer received: %s (type: %s, lease: %s)", job.JobID, job.JobType, job.LeaseID)
 
-			// Build api.Job from TaskOffer for the deferred executeJob path.
-			// PR #5: the TaskSpec travels pre-compiled in task_spec — no reconstruction needed.
-			var specPayload map[string]interface{}
-			if tsp := taskOffer.GetTaskSpec(); tsp != nil {
-				specPayload = tsp.AsMap()
-			}
-			job := &api.Job{
-				JobID:   taskOffer.GetJobId(),
-				LeaseID: taskOffer.GetLeaseId(),
-				Attempt: int(taskOffer.GetAttemptNumber()),
-				// PR #5: store pre-compiled TaskSpec for dispatchTaskRunner.
-				Parameters: map[string]interface{}{"task_spec": specPayload},
-				JobType:    taskOffer.GetExecutorId(),
-				Priority:   0,
-			}
-			// Store task_offer reference so executeJob can send TaskResult.
-			job.Parameters["_task_id"] = taskID
-			job.Parameters["_attempt_id"] = attemptID
+				if err := w.sendAccept(ctx, job); err != nil {
+					w.logger.Warn("[RECEIVE] Failed to send JobAccepted: %v", err)
+					continue
+				}
+				w.storePendingJob(job)
 
-			// PR-2: defer dispatch to MsgTaskLeaseGranted via pendingTasks map.
-			w.storePendingTask(taskID, job)
+			case controltransport.MsgTaskOffer:
+				// PR #5: task-native dispatch — receive pre-compiled TaskSpec from master.
+				// PR-2 (canonical-attempt-identity): executeJob dispatch is DEFERRED
+				// to MsgTaskLeaseGranted so the master's canonical (attempt_id,
+				// attempt_number) tuple + RUNNING TaskAttempt is committed before
+				// execution starts. Mirrors the legacy JobOffer → JobLeaseGranted
+				// pattern using `pendingTasks` (keyed by task_id) instead of
+				// `pendingLeaseJobs` (keyed by job_id).
+				taskOffer, ok := msg.TypedPayload.(*pb.TaskOffer)
+				if !ok || taskOffer == nil {
+					w.logger.Warn("[RECEIVE] TaskOffer without typed payload")
+					continue
+				}
 
-		case controltransport.MsgTaskLeaseGranted:
-			// PR-2 (canonical-attempt-identity): executeJob dispatch is
-			// gated on TaskLeaseGranted. The master sends this AFTER
-			// accepting the worker's TaskAccepted and committing the
-			// TaskAttempt PENDING → RUNNING transition. consume the
-			// pending task from storePendingTask; if absent (unknown
-			// task_id) log + drop, identical to MsgJobLeaseGranted's
-			// unknown-job behavior.
-			taskGrant, ok := msg.TypedPayload.(*pb.TaskLeaseGranted)
-			if !ok || taskGrant == nil {
-				w.logger.Warn("[RECEIVE] TaskLeaseGranted without typed payload")
-				continue
-			}
-			taskID := taskGrant.GetTaskId()
-			if taskID == "" {
-				w.logger.Warn("[RECEIVE] TaskLeaseGranted without task_id — dropping")
-				continue
-			}
+				taskID := taskOffer.GetTaskId()
+				attemptID := taskOffer.GetAttemptId()
+				if taskID == "" || attemptID == "" {
+					w.logger.Warn("[RECEIVE] TaskOffer missing canonical identity (task_id=%q attempt_id=%q) — dropping",
+						taskID, attemptID)
+					continue
+				}
+				if w.IsStopped() || w.drainMode.Load() {
+					if err := w.sendTaskReject(ctx, taskID, "draining"); err != nil {
+						w.logger.Warn("[RECEIVE] Failed to send TaskRejected: %v", err)
+					}
+					continue
+				}
 
-			job := w.takePendingTask(taskID)
-			if job == nil {
-				w.logger.Warn("[RECEIVE] TaskLeaseGranted for unknown task %s — dropping", taskID)
-				continue
-			}
+				w.activeJobsMu.RLock()
+				activeCount := len(w.activeJobs)
+				w.activeJobsMu.RUnlock()
+				if activeCount >= w.config.MaxActiveJobs {
+					if err := w.sendTaskReject(ctx, taskID, "capacity_full"); err != nil {
+						w.logger.Warn("[RECEIVE] Failed to send TaskRejected (capacity): %v", err)
+					}
+					continue
+				}
 
-			// PR-2 followup: register the canonical (task_id, attempt_id,
-			// lease_id) tuple so leaseRenewLoop fires MsgTaskLeaseRenewal
-			// every 15s for this task-native entry. Mirrors the legacy
-			// activeJobs wire-state slots populated by MsgJobLeaseGranted.
-			w.AddActiveTaskLease(taskID, taskGrant.GetAttemptId(), taskGrant.GetLeaseId())
+				w.logger.Info("[RECEIVE] TaskOffer received: task=%s attempt=%s job=%s executor=%s@%d — deferring executeJob to TaskLeaseGranted",
+					taskID, attemptID, taskOffer.GetJobId(), taskOffer.GetExecutorId(), taskOffer.GetExecutorVersion())
 
-			w.logger.Info("[RECEIVE] TaskLeaseGranted for task=%s attempt=%s job=%s lease=%s — starting execution",
-				taskID, taskGrant.GetAttemptId(), taskGrant.GetJobId(), taskGrant.GetLeaseId())
-			// Defer RemoveActiveTaskLease so the lease slot is freed on
-			// every terminal exit: SUCCEEDED / FAILED / CANCELLED /
-			// TIMED_OUT, panic from stageexec, or pre-Stop drain. The
-			// wrapper covers all paths uniformly — relying on
-			// executeJob's internal cleanup would leave the slot stuck
-			// on the rare panic path.
-			go func() {
-				defer w.RemoveActiveTaskLease(taskID)
-				w.executeJob(ctx, job)
-			}()
+				if err := w.sendTaskAccepted(ctx, taskOffer); err != nil {
+					w.logger.Warn("[RECEIVE] Failed to send TaskAccepted: %v", err)
+					continue
+				}
 
-		case controltransport.MsgJobLeaseGranted:
-			// Legacy path for JobOffer-based dispatch; task-native dispatch
-			// starts execution directly from MsgTaskOffer (PR #5).
-			leaseGranted, ok := msg.TypedPayload.(*pb.JobLeaseGranted)
-			if !ok || leaseGranted == nil {
-				w.logger.Warn("[RECEIVE] JobLeaseGranted without typed payload")
-				continue
-			}
-			jobID := leaseGranted.GetJobId()
-			if jobID == "" {
-				w.logger.Warn("[RECEIVE] JobLeaseGranted without job_id")
-				continue
-			}
+				// Build api.Job from TaskOffer for the deferred executeJob path.
+				// PR #5: the TaskSpec travels pre-compiled in task_spec — no reconstruction needed.
+				var specPayload map[string]interface{}
+				if tsp := taskOffer.GetTaskSpec(); tsp != nil {
+					specPayload = tsp.AsMap()
+				}
+				job := &api.Job{
+					JobID:   taskOffer.GetJobId(),
+					LeaseID: taskOffer.GetLeaseId(),
+					Attempt: int(taskOffer.GetAttemptNumber()),
+					// PR #5: store pre-compiled TaskSpec for dispatchTaskRunner.
+					Parameters: map[string]interface{}{"task_spec": specPayload},
+					JobType:    taskOffer.GetExecutorId(),
+					Priority:   0,
+				}
+				// Store task_offer reference so executeJob can send TaskResult.
+				job.Parameters["_task_id"] = taskID
+				job.Parameters["_attempt_id"] = attemptID
 
-			job := w.takePendingJob(jobID)
-			if job == nil {
-				w.logger.Warn("[RECEIVE] JobLeaseGranted for unknown job %s", jobID)
-				continue
-			}
+				// PR-2: defer dispatch to MsgTaskLeaseGranted via pendingTasks map.
+				w.storePendingTask(taskID, job)
 
-			w.logger.Info("[RECEIVE] JobLeaseGranted for %s — starting execution", jobID)
-			go w.executeJob(ctx, job)
+			case controltransport.MsgTaskLeaseGranted:
+				// PR-2 (canonical-attempt-identity): executeJob dispatch is
+				// gated on TaskLeaseGranted. The master sends this AFTER
+				// accepting the worker's TaskAccepted and committing the
+				// TaskAttempt PENDING → RUNNING transition. consume the
+				// pending task from storePendingTask; if absent (unknown
+				// task_id) log + drop, identical to MsgJobLeaseGranted's
+				// unknown-job behavior.
+				taskGrant, ok := msg.TypedPayload.(*pb.TaskLeaseGranted)
+				if !ok || taskGrant == nil {
+					w.logger.Warn("[RECEIVE] TaskLeaseGranted without typed payload")
+					continue
+				}
+				taskID := taskGrant.GetTaskId()
+				if taskID == "" {
+					w.logger.Warn("[RECEIVE] TaskLeaseGranted without task_id — dropping")
+					continue
+				}
+
+				job := w.takePendingTask(taskID)
+				if job == nil {
+					w.logger.Warn("[RECEIVE] TaskLeaseGranted for unknown task %s — dropping", taskID)
+					continue
+				}
+
+				// PR-2 followup: register the canonical (task_id, attempt_id,
+				// lease_id) tuple so leaseRenewLoop fires MsgTaskLeaseRenewal
+				// every 15s for this task-native entry. Mirrors the legacy
+				// activeJobs wire-state slots populated by MsgJobLeaseGranted.
+				w.AddActiveTaskLease(taskID, taskGrant.GetAttemptId(), taskGrant.GetLeaseId())
+
+				w.logger.Info("[RECEIVE] TaskLeaseGranted for task=%s attempt=%s job=%s lease=%s — starting execution",
+					taskID, taskGrant.GetAttemptId(), taskGrant.GetJobId(), taskGrant.GetLeaseId())
+				// Defer RemoveActiveTaskLease so the lease slot is freed on
+				// every terminal exit: SUCCEEDED / FAILED / CANCELLED /
+				// TIMED_OUT, panic from stageexec, or pre-Stop drain. The
+				// wrapper covers all paths uniformly — relying on
+				// executeJob's internal cleanup would leave the slot stuck
+				// on the rare panic path.
+				go func() {
+					defer w.RemoveActiveTaskLease(taskID)
+					w.executeJob(ctx, job)
+				}()
+
+			case controltransport.MsgJobLeaseGranted:
+				// Legacy path for JobOffer-based dispatch; task-native dispatch
+				// starts execution directly from MsgTaskOffer (PR #5).
+				leaseGranted, ok := msg.TypedPayload.(*pb.JobLeaseGranted)
+				if !ok || leaseGranted == nil {
+					w.logger.Warn("[RECEIVE] JobLeaseGranted without typed payload")
+					continue
+				}
+				jobID := leaseGranted.GetJobId()
+				if jobID == "" {
+					w.logger.Warn("[RECEIVE] JobLeaseGranted without job_id")
+					continue
+				}
+
+				job := w.takePendingJob(jobID)
+				if job == nil {
+					w.logger.Warn("[RECEIVE] JobLeaseGranted for unknown job %s", jobID)
+					continue
+				}
+
+				w.logger.Info("[RECEIVE] JobLeaseGranted for %s — starting execution", jobID)
+				go w.executeJob(ctx, job)
 
 			case controltransport.MsgCommand:
 				cmd := msgToCommand(msg)

@@ -30,14 +30,14 @@ package jobs
 type Status string
 
 const (
-	StatusPending           Status = "PENDING"
-	StatusLeased            Status = "LEASED"
-	StatusRunning           Status = "RUNNING"
-	StatusAwaitingArtifact  Status = "AWAITING_ARTIFACT"
-	StatusRetryWait         Status = "RETRY_WAIT"
-	StatusSucceeded         Status = "SUCCEEDED"
-	StatusFailed            Status = "FAILED"
-	StatusCancelled         Status = "CANCELLED"
+	StatusPending          Status = "PENDING"
+	StatusLeased           Status = "LEASED"
+	StatusRunning          Status = "RUNNING"
+	StatusAwaitingArtifact Status = "AWAITING_ARTIFACT"
+	StatusRetryWait        Status = "RETRY_WAIT"
+	StatusSucceeded        Status = "SUCCEEDED"
+	StatusFailed           Status = "FAILED"
+	StatusCancelled        Status = "CANCELLED"
 )
 
 // IsTerminal reports whether a job in this state has finished its lifecycle.

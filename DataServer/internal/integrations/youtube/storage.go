@@ -7,12 +7,12 @@ import (
 
 // Custom errors
 var (
-	ErrGroupExists           = errors.New("group already exists")
-	ErrGroupNotFound         = errors.New("group not found")
-	ErrTargetGroupNotFound   = errors.New("target group not found")
-	ErrChannelExists         = errors.New("channel already in group")
-	ErrChannelNotFound       = errors.New("channel not found")
-	ErrStoreNotConfigured    = errors.New("storage store not configured")
+	ErrGroupExists         = errors.New("group already exists")
+	ErrGroupNotFound       = errors.New("group not found")
+	ErrTargetGroupNotFound = errors.New("target group not found")
+	ErrChannelExists       = errors.New("channel already in group")
+	ErrChannelNotFound     = errors.New("channel not found")
+	ErrStoreNotConfigured  = errors.New("storage store not configured")
 )
 
 // StorageStore defines the SQLite operations for YouTube manager persistence.

@@ -155,7 +155,7 @@ func seedRunningTask(t *testing.T, db *sql.DB,
 
 // seedReadyTask inserts a Task row in READY status with empty worker/lease
 // and the supplied revision. Used by ClaimNextWithAttemptAtomic test
-// (the dispatcher selector picks WHERE status='READY' AND worker_id='').
+// (the dispatcher selector picks WHERE status='READY' AND worker_id=”).
 func seedReadyTask(t *testing.T, db *sql.DB,
 	taskID string, revision int,
 ) int {
@@ -528,11 +528,11 @@ func TestClaimNextWithAttemptAtomic_Atomicity(t *testing.T) {
 	ctx := context.Background()
 
 	const (
-		taskID              = "T-claim-atomicity-1"
-		collisionAttemptID  = "A-collision-pre"
-		collisionStatus     = "PENDING"
-		newWorkerID         = "w-1"
-		newLeaseID          = "L-1"
+		taskID             = "T-claim-atomicity-1"
+		collisionAttemptID = "A-collision-pre"
+		collisionStatus    = "PENDING"
+		newWorkerID        = "w-1"
+		newLeaseID         = "L-1"
 	)
 	seedReadyTask(t, s.db, taskID, 0)
 
@@ -569,11 +569,11 @@ func TestClaimNextWithAttemptAtomic_Atomicity(t *testing.T) {
 
 	// Atomicity assertion 1–4: tasks row preserved at READY + pre-state.
 	var (
-		taskStatus                                string
-		workerCol, leaseCol                       string
-		attemptIDCol                              sql.NullString
-		attemptNumCol                             sql.NullInt64
-		revision                                  int
+		taskStatus                                    string
+		workerCol, leaseCol                           string
+		attemptIDCol                                  sql.NullString
+		attemptNumCol                                 sql.NullInt64
+		revision                                      int
 		leaseExpiresCol, startedAtCol, completedAtCol sql.NullString
 	)
 	err = s.db.QueryRowContext(ctx,

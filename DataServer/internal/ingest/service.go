@@ -127,19 +127,19 @@ func (s *TaskReportIngestionService) muFor(taskID string) *sync.Mutex {
 // four deps are REQUIRED.
 //
 //   - taskRepo      : task-side atomic transitions + listing (canonical
-//                      taskgraph.Repository).
+//     taskgraph.Repository).
 //   - jobsRepo      : job-side roll-up target (canonical jobs.Repository).
 //   - attemptRepo   : wire-fallback identity tuple validation. The
-//                      (task_id, worker_id, lease_id) tuple on the wire
-//                      must map to a non-terminal attempt at ingestion
-//                      time (PR-02 / canonical attempt identity). A nil
-//                      attemptRepo is rejected so the contract cannot be
-//                      silently weakened by a future bootstrap mistake.
+//     (task_id, worker_id, lease_id) tuple on the wire
+//     must map to a non-terminal attempt at ingestion
+//     time (PR-02 / canonical attempt identity). A nil
+//     attemptRepo is rejected so the contract cannot be
+//     silently weakened by a future bootstrap mistake.
 //   - outputArtRepo : persistent target for worker-declared artifacts.
-//                      Registered in step (3) of the audit sequence; the
-//                      artifact upload pipeline's FinalizeVerified later
-//                      joins to these declarations to validate that
-//                      bytes uploaded match what the worker promised.
+//     Registered in step (3) of the audit sequence; the
+//     artifact upload pipeline's FinalizeVerified later
+//     joins to these declarations to validate that
+//     bytes uploaded match what the worker promised.
 func NewTaskReportIngestionService(
 	taskRepo taskgraph.Repository,
 	jobsRepo jobs.Repository,

@@ -20,13 +20,13 @@ import (
 //
 // Env vars mapped here:
 //
-//   VELOX_DB_DRIVER          → Driver          (sqlite|postgres)
-//   VELOX_DATABASE_URL       → URL             (postgres DSN)
-//   VELOX_DB_PATH            → DBPath          (sqlite file path; absolute)
-//   VELOX_DB_MAX_OPEN_CONNS  → MaxOpenConns    (int ≥ 0)
-//   VELOX_DB_MAX_IDLE_CONNS  → MaxIdleConns    (int ≥ 0)
-//   VELOX_DB_CONN_MAX_LIFETIME → ConnMaxLifetime (duration string)
-//   VELOX_DB_MIGRATE_ON_START → MigrateOnStart (bool)
+//	VELOX_DB_DRIVER          → Driver          (sqlite|postgres)
+//	VELOX_DATABASE_URL       → URL             (postgres DSN)
+//	VELOX_DB_PATH            → DBPath          (sqlite file path; absolute)
+//	VELOX_DB_MAX_OPEN_CONNS  → MaxOpenConns    (int ≥ 0)
+//	VELOX_DB_MAX_IDLE_CONNS  → MaxIdleConns    (int ≥ 0)
+//	VELOX_DB_CONN_MAX_LIFETIME → ConnMaxLifetime (duration string)
+//	VELOX_DB_MIGRATE_ON_START → MigrateOnStart (bool)
 func loadDatabaseConfig() DatabaseConfig {
 	driver := strings.ToLower(strings.TrimSpace(os.Getenv("VELOX_DB_DRIVER")))
 

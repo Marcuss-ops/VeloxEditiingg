@@ -94,12 +94,12 @@ var allowedTestFiles = map[string]bool{
 // cleanup/remove-job-attempts-runtime.
 //
 // After the cleanup, only:
-//   1. .sql migration files that historically created the table (still
-//      needed to provision the schema for backwards compat loads) —
-//      but Go source files don't apply.
-//   2. Test fixtures that pre-populate the table for smoke tests of
-//      read-side consumers (postgres_jobs_repository.go historic lease
-//      proxy lookup).
+//  1. .sql migration files that historically created the table (still
+//     needed to provision the schema for backwards compat loads) —
+//     but Go source files don't apply.
+//  2. Test fixtures that pre-populate the table for smoke tests of
+//     read-side consumers (postgres_jobs_repository.go historic lease
+//     proxy lookup).
 //
 // Production source MUST stay empty here. If you find yourself adding
 // to this map for a new writer, you are reintroducing the runtime
@@ -112,8 +112,8 @@ var allowedTestFiles = map[string]bool{
 // artifact_uploads; the canonical attempt identity is on task_attempts.
 // shrink the audit surface by the same number of DDL rows dropped.
 var allowedJobAttemptsLegacyWriters = map[string]bool{
-	filepath.Join("internal", "artifacts", "scan_test.go"): true,
-	filepath.Join("internal", "artifacts", "service_test.go"): true,
+	filepath.Join("internal", "artifacts", "scan_test.go"):                                                  true,
+	filepath.Join("internal", "artifacts", "service_test.go"):                                               true,
 	filepath.Join("internal", "handlers", "remote", "workers", "uploads", "video_upload_completed_test.go"): true,
 }
 

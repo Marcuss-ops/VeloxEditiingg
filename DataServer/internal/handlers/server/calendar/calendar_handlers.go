@@ -14,9 +14,9 @@ import (
 
 // CalendarAPI provides handlers for calendar event operations
 type CalendarAPI struct {
-	store    *store.SQLiteStore
-	reader   jobs.Reader
-	atomic   *store.AtomicJobTaskCreator
+	store     *store.SQLiteStore
+	reader    jobs.Reader
+	atomic    *store.AtomicJobTaskCreator
 	scheduler *CalendarScheduler
 }
 

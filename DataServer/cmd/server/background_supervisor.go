@@ -24,7 +24,7 @@ type RunnerFunc struct {
 	fn   func(ctx context.Context) error
 }
 
-func (r RunnerFunc) Name() string                { return r.name }
+func (r RunnerFunc) Name() string                  { return r.name }
 func (r RunnerFunc) Run(ctx context.Context) error { return r.fn(ctx) }
 
 // BackgroundSupervisor owns a set of BackgroundRunners and provides

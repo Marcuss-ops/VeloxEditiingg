@@ -101,5 +101,3 @@ func buildPersistence(cfg *config.Config) (*persistenceDeps, error) {
 		Outbox:    outboxStore,
 	}, nil
 }
-
-

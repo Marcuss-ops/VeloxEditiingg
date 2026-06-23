@@ -1,14 +1,7 @@
 package main
 
-// TODO(platform/database): the package velox-server/internal/platform/database
-// was dropped by the Phase 1 architecture refactor (eliminate queue facade
-// / remove dark_editor / make BlobStore mandatory) without propagating
-// downstream adaptations. Three consumers (this file,
-// internal/store/sqlite.go, and bootstrap_postgres_dispatch_test.go) still
-// depend on its symbols (Open / Config / Handle / Driver / DriverSQLite /
-// DriverPostgres). The DataServer build is intentionally broken until a
-// platform/database restoration PR lands — see
-// docs/architecture/OWNERSHIP.md for the platform-cutover roadmap.
+// platform/database is the canonical database abstraction (see
+// docs/operations/02-repository-cleanup-and-ownership.md).
 import (
 	"context"
 	"errors"
@@ -29,12 +22,12 @@ import (
 	workerhandlers "velox-server/internal/handlers/remote/workers"
 	"velox-server/internal/handlers/remote/workers/lifecycle"
 	workerhandlersuploads "velox-server/internal/handlers/remote/workers/uploads"
+	"velox-server/internal/ingest"
 	"velox-server/internal/jobs"
 	"velox-server/internal/jobs/enqueue"
 	"velox-server/internal/outbox"
 	"velox-server/internal/store"
 	"velox-server/internal/taskgraph"
-	"velox-server/internal/ingest"
 	workersreg "velox-server/internal/workers"
 )
 

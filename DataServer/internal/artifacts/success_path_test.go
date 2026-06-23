@@ -638,14 +638,14 @@ func seedPost048JobAndArtifact(t *testing.T, db *sql.DB, f fixture) {
 }
 
 // TestArtifactFinalize_Post048SchemaIdempotent verifies:
-//   1. FinalizeVerified runs cleanly against a post-migration-048
-//      schema (jobs without assigned_to / lease_id / lease_expiry).
-//   2. A second finalize attempt with matching worker / lease / revision
-//      is correctly rejected with ErrUploadStateInvalid because step 1
-//      preconditions fail (artifact_uploads is now COMPLETED, not
-//      FINALIZING). This confirms the idempotency boundary holds after
-//      migration 048 even when the caller's stale view happens to match.
-//   3. Exactly one delivery row is inserted (UNIQUE (artifact_id, destination_id)).
+//  1. FinalizeVerified runs cleanly against a post-migration-048
+//     schema (jobs without assigned_to / lease_id / lease_expiry).
+//  2. A second finalize attempt with matching worker / lease / revision
+//     is correctly rejected with ErrUploadStateInvalid because step 1
+//     preconditions fail (artifact_uploads is now COMPLETED, not
+//     FINALIZING). This confirms the idempotency boundary holds after
+//     migration 048 even when the caller's stale view happens to match.
+//  3. Exactly one delivery row is inserted (UNIQUE (artifact_id, destination_id)).
 func TestArtifactFinalize_Post048SchemaIdempotent(t *testing.T) {
 	db := openPost048TestDB(t)
 	fin := artifacts.NewSQLiteFinalizationRepository(db)

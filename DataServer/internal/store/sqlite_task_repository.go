@@ -340,10 +340,10 @@ func (r *SQLiteTaskRepository) Fail(ctx context.Context, id, reason string, revi
 // + rowstamp attempt_id/attempt_number on tasks. All in one tx.
 //
 // Failure modes (ErrTransitionConflict surfaced clearly):
-//   * worker_id or lease_id is empty (programmer error)
-//   * no READY task is available → (nil, nil, nil), not an error
-//   * UPDATE row count != 1 (stale READY → another dispatcher took it)
-//   * INSERT attempt collision with UNIQUE(task_id, attempt_number) —
+//   - worker_id or lease_id is empty (programmer error)
+//   - no READY task is available → (nil, nil, nil), not an error
+//   - UPDATE row count != 1 (stale READY → another dispatcher took it)
+//   - INSERT attempt collision with UNIQUE(task_id, attempt_number) —
 //     should never happen for freshly-minted UUIDs but a stale manual
 //     duplicate inject would surface as ErrTransitionConflict
 func (r *SQLiteTaskRepository) ClaimNextWithAttemptAtomic(ctx context.Context, workerID, leaseID string) (*taskgraph.TaskWithSpec, *taskattempts.TaskAttempt, error) {

@@ -10,23 +10,23 @@
 // are the canonical projections that queue.QueryService is being
 // collapsed onto:
 //
-//   QueryService.GetJob        ↔  jobs.ToQueueItem(j)            [wired]
-//   QueryService.GetJobPayload ↔  jobs.ToPayloadMap(j)           [next sweep]
-//   QueryService.GetJobAsMap   ↔  jobs.ToFlatMap(j)              [next sweep]
-//   QueryService.Stats         ↔  jobs.FormatStats(reader.Counts(ctx))  [next sweep]
+//	QueryService.GetJob        ↔  jobs.ToQueueItem(j)            [wired]
+//	QueryService.GetJobPayload ↔  jobs.ToPayloadMap(j)           [next sweep]
+//	QueryService.GetJobAsMap   ↔  jobs.ToFlatMap(j)              [next sweep]
+//	QueryService.Stats         ↔  jobs.FormatStats(reader.Counts(ctx))  [next sweep]
 //
 // ToQueueItem is the only projection QueryService currently routes
 // through; the other three rows are still aspirational targets.
 //
 // Pre-existing wire shapes (HTTP/JSON output) are preserved verbatim:
-// - ToQueueItem: WorkerName=WorkerID AND AssignedTo=WorkerID (dual-aliasing)
-// - ToPayloadMap: lease_id injected only when non-empty; LeaseExpiry NOT bound
-//   (it has no domain source today)
-// - ToFlatMap: includes blank keys (claimed_by/claimed_at/last_error/error_message/lease_expiry)
-//   even when zero-valued — HTTP consumers expect the keys to exist
-// - FormatStats: string-cast of jobs.Status yields uppercase passthrough
-// - ParsePayloadJSON: empty string and "{}" yield an empty map; invalid JSON
-//   falls back to an empty map (consumer treats the job as having no payload metadata)
+//   - ToQueueItem: WorkerName=WorkerID AND AssignedTo=WorkerID (dual-aliasing)
+//   - ToPayloadMap: lease_id injected only when non-empty; LeaseExpiry NOT bound
+//     (it has no domain source today)
+//   - ToFlatMap: includes blank keys (claimed_by/claimed_at/last_error/error_message/lease_expiry)
+//     even when zero-valued — HTTP consumers expect the keys to exist
+//   - FormatStats: string-cast of jobs.Status yields uppercase passthrough
+//   - ParsePayloadJSON: empty string and "{}" yield an empty map; invalid JSON
+//     falls back to an empty map (consumer treats the job as having no payload metadata)
 package jobs
 
 import (
@@ -53,8 +53,8 @@ type QueueItem struct {
 
 	MaxRetries int `json:"max_retries,omitempty"`
 
-	LastError    string      `json:"last_error,omitempty"`
-	ErrorMessage string      `json:"error_message,omitempty"`
+	LastError    string `json:"last_error,omitempty"`
+	ErrorMessage string `json:"error_message,omitempty"`
 
 	History []JobHistoryEntry `json:"history,omitempty"`
 
@@ -121,17 +121,17 @@ func ToQueueItem(j *Job) *QueueItem {
 		return nil
 	}
 	return &QueueItem{
-		JobID:       j.ID,
-		Status:      j.Status,
-		VideoName:   j.VideoName,
-		ProjectID:   j.ProjectID,
-		MaxRetries:  j.MaxRetries,
-		RunID:       j.RunID,
-		CreatedAt:   j.CreatedAt,
-		UpdatedAt:   j.UpdatedAt,
-		StartedAt:   j.StartedAt,
-		CompletedAt: j.CompletedAt,
-		Payload:     ParsePayloadJSON(j.Payload),
+		JobID:        j.ID,
+		Status:       j.Status,
+		VideoName:    j.VideoName,
+		ProjectID:    j.ProjectID,
+		MaxRetries:   j.MaxRetries,
+		RunID:        j.RunID,
+		CreatedAt:    j.CreatedAt,
+		UpdatedAt:    j.UpdatedAt,
+		StartedAt:    j.StartedAt,
+		CompletedAt:  j.CompletedAt,
+		Payload:      ParsePayloadJSON(j.Payload),
 		Requirements: j.Requirements,
 	}
 }

@@ -36,10 +36,10 @@ type WorkerProfile struct {
 	LinkBandwidthMbps float64
 
 	// Transient state, sourced from heartbeat / registry.
-	IsDraining   bool
-	IsOffline    bool
-	ActiveJobs   int
-	MaxParallel  int
+	IsDraining  bool
+	IsOffline   bool
+	ActiveJobs  int
+	MaxParallel int
 }
 
 // BuildWorkerProfile maps a master-side schedulability state + a

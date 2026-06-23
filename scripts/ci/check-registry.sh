@@ -9,9 +9,12 @@
 #
 #   1. WHOLE-TREE: the canonical registry factories
 #      (NewRegistry, NewResolverRegistry, workersreg\.New) MUST be
-#      referenced from `DataServer/cmd/server/bootstrap.go`. If the
-#      symbol disappears entirely from bootstrap, the assembly wiring
-#      is broken for the whole repo.
+#      referenced from the assembly package `DataServer/cmd/server/`
+#      (excluding `*_test.go`). Phase-1 refactors split bootstrap.go
+#      into multiple helpers (buildWorkers, buildAssets, ...); the
+#      canonical factory MUST appear somewhere in this package, not
+#      only in the entrypoint file. Test files are excluded so
+#      package-level test setup doesn't satisfy Rule 1 on its own.
 #      NOTE: `NewProviderRegistry` was previously listed here but is a
 #      fictitious symbol -- bootstrap actually calls `deliveries.NewRegistry`
 #      and that path is already covered by the `NewRegistry` token.
@@ -24,6 +27,10 @@
 #
 # Earlier v2 also scanned `var X = map[...]` -- dropped: too broad
 # (matches HTTP status text, MIME tables, error dictionaries).
+# Earlier v3 hard-coded bootstrap_rel=DataServer/cmd/server/bootstrap.go;
+# the rule was widened to the assembly package directory to allow the
+# wiring to spread across helpers (buildWorkers, buildAssets, ...) without
+# re-introducing cargo-cult references into bootstrap.go itself.
 set -euo pipefail
 # shopt -s nullglob: harden any future glob expansion in this script.
 # Without it, an empty glob (e.g. an accidentally-empty list of
@@ -41,9 +48,15 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib/diff-scope.sh"
 fail() { printf 'REGISTRY ERROR: %s\n' "$*" >&2; exit 1; }
 violations=0
 
-bootstrap_rel="DataServer/cmd/server/bootstrap.go"
+# Canonical-assembly package directory. Phase-1 refactors split
+# bootstrap.go into multiple helpers (buildWorkers, buildAssets, ...);
+# the canonical factory MUST appear somewhere in this package, not
+# only in the entrypoint file.
+bootstrap_pkg_dir="DataServer/cmd/server"
+# Kept for backwards-compat rename-protocol diagnostics (see below).
+bootstrap_rel="${bootstrap_pkg_dir}/bootstrap.go"
 
-# Rule 1: canonical registry factories MUST appear in bootstrap.
+# Rule 1: canonical registry factories MUST appear in the assembly package.
 canonical_registries=(
   'NewRegistry'                 # outbox + deliveries
   'NewResolverRegistry'         # assets
@@ -62,7 +75,9 @@ canonical_registries=(
 bootstrap_symbols="$(
   git grep -nE \
     'NewRegistry|NewResolverRegistry|workersreg\.New' \
-    -- "$bootstrap_rel" 2>/dev/null |
+    -- "$bootstrap_pkg_dir" \
+    ":!${bootstrap_pkg_dir}/*_test.go" \
+    2>/dev/null |
   awk -F: '
     NF < 3 { print; next }
     {
@@ -75,20 +90,20 @@ bootstrap_symbols="$(
   ' || true
 )"
 if [[ -z "$bootstrap_symbols" ]]; then
-  if [[ -e "$bootstrap_rel" ]]; then
+  if [[ -d "$bootstrap_pkg_dir" ]]; then
     printf 'No canonical registry factory referenced from %s\n' \
-      "$bootstrap_rel" >&2
+      "$bootstrap_pkg_dir" >&2
     violations=$((violations + 1))
   else
-    printf 'bootstrap file %s missing -- rename protocol violated\n' \
-      "$bootstrap_rel" >&2
+    printf 'bootstrap package %s missing -- rename protocol violated\n' \
+      "$bootstrap_pkg_dir" >&2
     violations=$((violations + 1))
   fi
 else
   for sym in "${canonical_registries[@]}"; do
     if ! grep -q "$sym" <<<"$bootstrap_symbols"; then
       printf 'Canonical registry factory %s missing from %s\n' \
-        "$sym" "$bootstrap_rel" >&2
+        "$sym" "$bootstrap_pkg_dir" >&2
       violations=$((violations + 1))
     fi
   done

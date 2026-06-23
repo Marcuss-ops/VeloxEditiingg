@@ -11,12 +11,12 @@ import (
 )
 
 // LivestreamModule provides livestream management endpoints.
-///
-/// PR15.1: ytService is now a concrete *youtube.Service pointer instead
-/// of a lazy func() indirection. The YouTube module's Service is built
-/// eagerly by NewYouTubeModule, so bootstrap can inject the pointer
-/// directly. Storing a function made the lazy-init pattern mandatory
-/// (and hid the same lifecycle bug as NewYouTubeModule).
+// /
+// / PR15.1: ytService is now a concrete *youtube.Service pointer instead
+// / of a lazy func() indirection. The YouTube module's Service is built
+// / eagerly by NewYouTubeModule, so bootstrap can inject the pointer
+// / directly. Storing a function made the lazy-init pattern mandatory
+// / (and hid the same lifecycle bug as NewYouTubeModule).
 type LivestreamModule struct {
 	ytService *youtube.Service
 	dbStore   *store.SQLiteStore

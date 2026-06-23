@@ -107,8 +107,8 @@ func startPipelinePolling(client *remoteengine.Client, jobID string, intervalSec
 					}
 				}
 
-			if enqueue.ShouldForwardPipelineResult(forwardResult) {
-				if forwarded, fwdErr := forwardPipelineResultToWorker(context.Background(), pipelineEnqueuer, forwardResult); fwdErr != nil {
+				if enqueue.ShouldForwardPipelineResult(forwardResult) {
+					if forwarded, fwdErr := forwardPipelineResultToWorker(context.Background(), pipelineEnqueuer, forwardResult); fwdErr != nil {
 						pipelineLog("FORWARD: FAILED job_id=%s: %v", jobID, fwdErr)
 					} else {
 						workerJobID, _ := forwarded["job_id"].(string)

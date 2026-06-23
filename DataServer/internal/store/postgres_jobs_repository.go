@@ -26,8 +26,8 @@
 // repo can depend on Handle uniformly across both Phase 2 backends.
 //
 // Placeholder syntax: $1, $2, ... matching pgx v5 stdlib.
-// Predicate patterns: COALESCE(field, '') for text and COALESCE(field, 0)
-// for integers so a NULL in DB still matches Go '' / 0 zero-values.
+// Predicate patterns: COALESCE(field, ”) for text and COALESCE(field, 0)
+// for integers so a NULL in DB still matches Go ” / 0 zero-values.
 //
 // Compile-time assertion: jobs.Repository = jobs.Reader + jobs.Writer,
 // so all 16 methods below are mandatory.
@@ -672,23 +672,23 @@ func (r *PostgresJobRepository) RequeueExpiredLeases(ctx context.Context, now ti
 			return nil, fmt.Errorf("postgres jobs: RequeueExpiredLeases update %s: %w", c.jobID, err)
 		}
 		n, _ := res.RowsAffected()
-			if n == 0 {
-				results = append(results, jobs.RequeueResult{
-					JobID:          c.jobID,
-					PreviousStatus: c.status,
-					NewStatus:      c.status,
-					Reason:         "skipped_concurrent_transition",
-					Attempt:        c.attemptCnt,
-				})
-				continue
-			}
+		if n == 0 {
 			results = append(results, jobs.RequeueResult{
 				JobID:          c.jobID,
 				PreviousStatus: c.status,
-				NewStatus:      next,
-				Reason:         reason,
-				Attempt:        c.attemptCnt + 1,
+				NewStatus:      c.status,
+				Reason:         "skipped_concurrent_transition",
+				Attempt:        c.attemptCnt,
 			})
+			continue
+		}
+		results = append(results, jobs.RequeueResult{
+			JobID:          c.jobID,
+			PreviousStatus: c.status,
+			NewStatus:      next,
+			Reason:         reason,
+			Attempt:        c.attemptCnt + 1,
+		})
 	}
 
 	if err := tx.Commit(); err != nil {

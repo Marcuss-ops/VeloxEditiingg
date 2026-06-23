@@ -77,8 +77,8 @@ type LegacyStepResponse struct {
 // LegacyStatsReport is the JSON shape of GET /orchestrator/stats.
 // Mirrors workflow.StatsReport.
 type LegacyStatsReport struct {
-	TotalRuns     int                            `json:"TotalRuns"`
-	RunsByStatus  map[LegacyRunStatus]int        `json:"RunsByStatus"`
-	TotalSteps    int                            `json:"TotalSteps"`
-	StepsByStatus map[LegacyStepStatus]int       `json:"StepsByStatus"`
+	TotalRuns     int                      `json:"TotalRuns"`
+	RunsByStatus  map[LegacyRunStatus]int  `json:"RunsByStatus"`
+	TotalSteps    int                      `json:"TotalSteps"`
+	StepsByStatus map[LegacyStepStatus]int `json:"StepsByStatus"`
 }

@@ -35,12 +35,12 @@ import (
 // concurrent writers natively, so the defaults are larger and the
 // caller is free to grow them when the workload proves it safe.
 const (
-	sqliteDefaultMaxOpenConns   = 8
-	sqliteDefaultMaxIdleConns   = 4
+	sqliteDefaultMaxOpenConns    = 8
+	sqliteDefaultMaxIdleConns    = 4
 	sqliteDefaultConnMaxLifetime = time.Hour
 
-	postgresDefaultMaxOpenConns   = 32
-	postgresDefaultMaxIdleConns   = 8
+	postgresDefaultMaxOpenConns    = 32
+	postgresDefaultMaxIdleConns    = 8
 	postgresDefaultConnMaxLifetime = 5 * time.Minute
 
 	openPingTimeout = 10 * time.Second

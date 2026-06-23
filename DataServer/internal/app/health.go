@@ -20,9 +20,9 @@ type ReadinessCheck func() error
 // A 503 is returned with per-check details when any dependency is
 // not yet available (Kubernetes readiness probe).
 type HealthModule struct {
-	mu      sync.RWMutex
-	booted  bool
-	checks  []namedCheck
+	mu     sync.RWMutex
+	booted bool
+	checks []namedCheck
 }
 
 type namedCheck struct {

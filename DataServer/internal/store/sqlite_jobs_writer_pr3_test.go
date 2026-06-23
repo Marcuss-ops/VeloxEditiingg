@@ -701,7 +701,7 @@ func TestPR3RecordRenderFinished_Atomicity_NoOrphanEvents(t *testing.T) {
 		t.Fatalf("expected 1 history + 1 event after success, got %d + %d", hc1, ec1)
 	}
 
-        // Bump the job back to RUNNING and change revision so it could match again,
+	// Bump the job back to RUNNING and change revision so it could match again,
 	// but with a WRONG attempt number so the UPDATE fails.
 	// PR #9: worker_id/lease_id CAS checks removed — use attempt mismatch.
 	_, err := db.Exec(

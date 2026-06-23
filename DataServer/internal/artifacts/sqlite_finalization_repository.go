@@ -381,5 +381,3 @@ func (r *SQLiteFinalizationRepository) FinalizeVerified(
 	}
 	return &out, nil
 }
-
-

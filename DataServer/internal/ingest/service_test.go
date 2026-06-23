@@ -139,10 +139,10 @@ func (s *stubIngestTaskRepo) ClaimNextWithAttemptAtomic(_ context.Context, _, _ 
 type stubIngestJobsRepo struct {
 	mu sync.Mutex
 
-	getJob         *jobs.Job
-	setStatusCalls int
+	getJob           *jobs.Job
+	setStatusCalls   int
 	lastFrom, lastTo jobs.Status
-	lastSetErr     error
+	lastSetErr       error
 }
 
 func (s *stubIngestJobsRepo) Get(_ context.Context, _ string) (*jobs.Job, error) {

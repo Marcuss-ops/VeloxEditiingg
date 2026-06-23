@@ -93,14 +93,14 @@ type WorkersConfig struct {
 	// of worker IDs the master admits. This is the canonical input
 	// to ValidateProductionWorkers — the raw CSV is only kept so we
 	// can echo it back in the gRPC HandlerConfig unchanged.
-	AllowedWorkerIDs    []string
+	AllowedWorkerIDs []string
 
-	MaxJobAttempts      int
-	BundleDir           string
-	HeartbeatTimeout    int
-	CodeVersion         string
-	VersionNumber       string
-	ScriptDir           string
+	MaxJobAttempts   int
+	BundleDir        string
+	HeartbeatTimeout int
+	CodeVersion      string
+	VersionNumber    string
+	ScriptDir        string
 	// MasterURL is the publicly-advertised master URL (workers download bundles through it).
 	// Populated from the MASTER_PUBLIC_URL > VELOX_MASTER_URL > MASTER_URL chain.
 	MasterURL string

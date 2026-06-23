@@ -198,11 +198,11 @@ func New(cfg *config.WorkerConfig, version string, opts ...Option) (*Worker, err
 		},
 		version: version,
 
-		seenCommands:       make(map[string]time.Time),
-		recentLogs:         recentLogs,
-		jobCancelFuncs:     make(map[string]context.CancelFunc),
-		activeJobs:         make(map[string]*ActiveJob),
-		pendingLeaseJobs:   make(map[string]*api.Job),
+		seenCommands:     make(map[string]time.Time),
+		recentLogs:       recentLogs,
+		jobCancelFuncs:   make(map[string]context.CancelFunc),
+		activeJobs:       make(map[string]*ActiveJob),
+		pendingLeaseJobs: make(map[string]*api.Job),
 		// PR-2: TaskOffer-accepted tasks awaiting TaskLeaseGranted before
 		// executeJob dispatch. Mirrors pendingLeaseJobs shape; keyed by
 		// task_id so there is exactly one canonical entry per outstanding
@@ -212,7 +212,7 @@ func New(cfg *config.WorkerConfig, version string, opts ...Option) (*Worker, err
 		// PR-2 followup: per-task-native lease-state registry. Threaded
 		// by MsgTaskLeaseGranted handler (separate PR) so leaseRenewLoop
 		// can fire MsgTaskLeaseRenewal alongside legacy MsgLeaseRenewal.
-		activeTaskLeases: make(map[string]*ActiveTaskLease),
+		activeTaskLeases:   make(map[string]*ActiveTaskLease),
 		connState:          ConnDisconnected,
 		concurrencyLimiter: concurrency.NewConcurrencyLimiter(detectedConcurrency),
 		stageExecutor:      stageExecutor,

@@ -131,15 +131,15 @@ func GetGroupHandler(c *gin.Context) {
 			g.DefaultLang = safeString(row, "description")
 
 			// Load channel memberships
-		if gid, ok := row["id"].(int64); ok && gid > 0 {
-			channelIDs, err := groupsStore.ListGroupChannels(gid)
-			if err == nil && len(channelIDs) > 0 {
-				g.Channels = make([]Channel, len(channelIDs))
-				for i, id := range channelIDs {
-					g.Channels[i] = Channel{ID: id}
+			if gid, ok := row["id"].(int64); ok && gid > 0 {
+				channelIDs, err := groupsStore.ListGroupChannels(gid)
+				if err == nil && len(channelIDs) > 0 {
+					g.Channels = make([]Channel, len(channelIDs))
+					for i, id := range channelIDs {
+						g.Channels[i] = Channel{ID: id}
+					}
 				}
-			}
-		} else if chIDs, ok := row["channels"].([]string); ok {
+			} else if chIDs, ok := row["channels"].([]string); ok {
 				g.Channels = make([]Channel, len(chIDs))
 				for i, id := range chIDs {
 					g.Channels[i] = Channel{ID: id}
