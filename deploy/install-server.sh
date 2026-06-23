@@ -147,16 +147,46 @@ else
     warn "Env file already exists: $ENV_DST (not overwritten)"
 fi
 
+# Validate env (fail-fast, audit verdict #3)
+# Closes audit verdict block #3: 'deploy installer can declare success with
+# invalid config'. Single canonical validator at deploy/validate-master-env.sh
+# enforces: no CHANGE_ME_* literals, VELOX_ADMIN_TOKEN non-empty,
+# VELOX_ALLOWED_WORKERS non-empty + non-wildcard + unique IDs,
+# MASTER_PUBLIC_URL parsable, TLS triple consistent, VELOX_DB_PATH non-empty,
+# VELOX_GRPC_PORT numeric. Same script invoked by deploy/playbooks/*.yml so
+# ansible + bash install paths stay in lock-step.
+VALIDATOR="${SCRIPT_DIR}/validate-master-env.sh"
+if [[ ! -r "$VALIDATOR" ]]; then
+    fail "validator not found at $VALIDATOR — re-pull deploy/ tree. Audit verdict block #3 requires the validator BEFORE any systemd operation."
+fi
+log "Validating $ENV_DST..."
+if ! bash "$VALIDATOR" "$ENV_DST"; then
+    fail "validation of $ENV_DST failed (see errors above). Operator MUST replace every CHANGE_ME_*, set VELOX_ALLOWED_WORKERS / VELOX_ADMIN_TOKEN / MASTER_PUBLIC_URL / etc., then re-run. Refusing to silently claim 'Install complete!'."
+fi
+ok "env file accepted: $ENV_DST"
+
 # ─── Step 7: Enable and start ───────────────────────────────────────────────
 
-log "Reloading systemd..."
-systemctl daemon-reload
+# Old behaviour silently swallowed systemd failures with || warn and printed
+# 'Install complete!' — a fresh clone could terminate with rc=0 even when
+# the service never bound its port. Audit-verdict #3 mandates fail-fast:
+# either systemctl enable/start succeed or the installer exits non-zero.
+# Sandbox / chroot / docker hosts lacking /run/systemd/system only get a
+# loud warning + operator-action handoff (the validator at Step 6b is the
+# real gate for env correctness; the systemd block is then a documented
+# no-op so operators know they're on their own for the unit operations).
+if [[ ! -d /run/systemd/system ]] || ! systemctl is-system-running &>/dev/null; then
+    warn "/run/systemd/system not present OR systemd daemon unreachable (sandbox / chroot / docker without --privileged / degraded systemd). Skipping daemon-reload / enable / start. Operator MUST launch $SERVICE_NAME manually once env file is in place."
+else
+    log "Reloading systemd..."
+    systemctl daemon-reload || fail "systemctl daemon-reload failed — refusing to silently continue (audit-verdict #3 fail-fast mandate)"
 
-log "Enabling service (will start on boot)..."
-systemctl enable "$SERVICE_NAME"
+    log "Enabling service (will start on boot)..."
+    systemctl enable "$SERVICE_NAME" || fail "systemctl enable $SERVICE_NAME failed — refusing to silently continue"
 
-log "Starting service..."
-systemctl start "$SERVICE_NAME" || warn "Service failed to start — check: journalctl -u $SERVICE_NAME -f"
+    log "Starting service..."
+    systemctl start "$SERVICE_NAME" || fail "Failed to start service — check: journalctl -u $SERVICE_NAME -f. Refusing to silently claim success."
+fi
 
 # ─── Done ───────────────────────────────────────────────────────────────────
 

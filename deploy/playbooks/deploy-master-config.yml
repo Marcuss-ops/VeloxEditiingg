@@ -51,6 +51,19 @@
         group: velox
         mode: "0750"
 
+    # PR-2: the validator at validate-master-env.sh sources the lib via a
+    # 3-path search loop. After this ansible run copies the validator to
+    # {{ velox_validator_path }}, the lib at deploy/scripts/lib-validations.sh
+    # MUST also be on disk, otherwise the validator exits 64 with
+    # 'cannot find lib-validations.sh'.
+    - name: Ensure /opt/velox/current/deploy/scripts exists (validator lib directory)
+      ansible.builtin.file:
+        path: /opt/velox/current/deploy/scripts
+        state: directory
+        owner: root
+        group: velox
+        mode: "0750"
+
   tasks:
     - name: Render master env from Jinja2 template  # noqa: no-relative-paths
       ansible.builtin.template:
@@ -65,6 +78,16 @@
       ansible.builtin.copy:
         src: "../validate-master-env.sh"
         dest: "{{ velox_validator_path }}"
+        owner: root
+        group: root
+        mode: "0755"
+
+    # PR-2: ship the lib that validate-master-env.sh sources. Without this
+    # copy the validator's lib-search loop fails on a fresh deploy — exit 64.
+    - name: Ensure validator lib is in place  # noqa: no-relative-paths
+      ansible.builtin.copy:
+        src: "../scripts/lib-validations.sh"
+        dest: "{{ velox_validator_path }}/scripts/lib-validations.sh"
         owner: root
         group: root
         mode: "0755"

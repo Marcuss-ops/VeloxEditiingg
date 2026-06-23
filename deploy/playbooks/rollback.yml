@@ -45,6 +45,19 @@
         group: velox
         mode: "0750"
 
+    # PR-2: see deploy-master-config.yml for rationale — after rollback
+    # restores the env file, the validator copies (via this playbook's
+    # 'Restore latest backup' task) may overwrite the validator dir.
+    # The scripts/ subdir must be present so the validator's lib-search
+    # loop can resolve deploy/scripts/lib-validations.sh.
+    - name: Ensure /opt/velox/current/deploy/scripts exists (validator lib directory)
+      ansible.builtin.file:
+        path: /opt/velox/current/deploy/scripts
+        state: directory
+        owner: root
+        group: velox
+        mode: "0750"
+
   tasks:
     - name: Discover env backups under velox_env_backup_root
       ansible.builtin.find:
@@ -74,6 +87,16 @@
         mode: "{{ velox_env_mode }}"
         remote_src: true
       notify: validate env and restart velox-server
+
+    # PR-2: ship the lib that validate-master-env.sh sources. Without this
+    # copy the validator's lib-search loop fails post-rollback.
+    - name: Ensure validator lib is in place  # noqa: no-relative-paths
+      ansible.builtin.copy:
+        src: "../scripts/lib-validations.sh"
+        dest: "{{ velox_validator_path }}/scripts/lib-validations.sh"
+        owner: root
+        group: root
+        mode: "0755"
 
     - name: Run env validator after restore
       ansible.builtin.command: "{{ velox_validator_path }} {{ velox_env_dst }}"
