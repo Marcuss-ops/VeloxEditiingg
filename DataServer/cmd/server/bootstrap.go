@@ -64,7 +64,7 @@ type serverDeps struct {
 	// Scorecard v1 / PR-5: master-side Prometheus /metrics exporter.
 	// Wired inside runServer when config.Server.EnableMetricsEnpoint is true;
 	// nil in tests means the route is omitted.
-	metricsRegistry *velmetrics.Registry
+	metricsRegistry  *velmetrics.Registry
 	metricsCollector *velmetrics.Collector
 
 	// PR-operation 01 / Fase 3 — wiring for the orchestrator legacy adapter.
@@ -293,7 +293,7 @@ func runServer(cfg *config.Config) error {
 		jobsRepo := j.Lifecycle.Jobs()
 		if jobsRepo != nil && w.CommandManager != nil {
 			insecureDev := cfg.Runtime.GRPCAllowInsecureDev
-			if err := // PR-5 P0 fail-fast: refuse to start the master with insecure gRPC
+			// PR-5 P0 fail-fast: refuse to start the master with insecure gRPC
 			// outside the dev release channel. Production / staging MUST
 			// use the TLS cert+key+CA triple. See docs/SECURITY_RUNBOOK.md
 			// §5.1 for the release-channel rationale.
@@ -354,7 +354,7 @@ func runServer(cfg *config.Config) error {
 	}
 
 	// 7. Background supervisor (started in a goroutine, signals done via channel)
-	supervisor, err := buildSupervisor(a, m, j, p, w, t)
+	supervisor, err := buildSupervisor(a, m, j, p, w, t, deps.metricsCollector)
 	if err != nil {
 		return err
 	}
@@ -405,7 +405,7 @@ func runServer(cfg *config.Config) error {
 
 // buildSupervisor registers all background runners, including the
 // manifest auto-generation as a one-shot fire-and-forget runner.
-func buildSupervisor(a *assetDeps, m *moduleDeps, j *jobsDeps, p *persistenceDeps, w *workerDeps, t *taskDeps) (*BackgroundSupervisor, error) {
+func buildSupervisor(a *assetDeps, m *moduleDeps, j *jobsDeps, p *persistenceDeps, w *workerDeps, t *taskDeps, metricsCollector *velmetrics.Collector) (*BackgroundSupervisor, error) {
 	sup := NewBackgroundSupervisor()
 
 	if a.OutboxDispatcher != nil {
@@ -485,6 +485,29 @@ func buildSupervisor(a *assetDeps, m *moduleDeps, j *jobsDeps, p *persistenceDep
 			return nil, fmt.Errorf("supervisor register taskgraph-dispatcher: %w", err)
 		}
 	}
+	// SPEC §14 follow-up: metrics-supervisor is the periodic
+	// 15s tick that stamps the 4 cost-per-output-minute gauges and
+	// refreshes master-health gauges (RSS, goroutines, outbox
+	// pending). Nil-tolerance: collector, attempts, or outbox
+	// missing ⇒ runner NOT registered (master still serves
+	// /metrics but skips the supervisor projection — pre-PR-3
+	// deploys without the metrics surface fall through cleanly).
+	if metricsCollector != nil && p.SQLite != nil && p.Outbox != nil {
+		labelRes := velmetrics.NewSQLiteLabelResolver(p.SQLite.DB())
+		costFactors := velmetrics.LoadCostFactorsFromEnv()
+		if err := sup.Register(RunnerFunc{
+			name: "metrics-supervisor",
+			fn: func(ctx context.Context) error {
+				supv := velmetrics.NewSupervisor(metricsCollector, labelRes, p.Outbox, costFactors)
+				supv.SetTick(15 * time.Second)
+				supv.SetLimit(1000)
+				return supv.Run(ctx)
+			},
+		}); err != nil {
+			return nil, fmt.Errorf("supervisor register metrics-supervisor: %w", err)
+		}
+	}
+
 	// PR-05 follow-up: TaskLeaseReaper is now its own supervisor runner
 	// (independent ticker, independent log prefix) so its cadence is
 	// decoupled from the readiness dispatcher. 30 s default matches

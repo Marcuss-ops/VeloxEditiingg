@@ -137,7 +137,7 @@ func DefaultConfig(workDir string) *WorkerConfig {
 		WorkDir:         workDir,
 		LogLevel:        "info",
 		BundleVersion:   "",
-		ProtocolVersion: "2026-06-worker-v1",
+		ProtocolVersion: "v3",
 		MaxActiveJobs:   1,    // 1 main job per VPS
 		HealthPort:      8081, // Health HTTP endpoint for Docker HEALTHCHECK
 		WorkerSecret:    "",   // Set via VELOX_WORKER_SECRET env var

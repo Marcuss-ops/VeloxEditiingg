@@ -40,7 +40,7 @@ func (h *WorkerUpdateHandler) GenerateManifestV2() error {
 		"bundle_version":   version,
 		"build_hash":       actualSHA,
 		"bundle_hash":      actualSHA,
-		"protocol_version": "2026-06-worker-v1",
+		"protocol_version": "v3",
 		"engine_version":   version,
 		"platform":         "linux",
 		"arch":             "x86_64",
@@ -107,15 +107,15 @@ func (h *WorkerUpdateHandler) GenerateManifestV2Handler() gin.HandlerFunc {
 			"bundle_version":   version,
 			"build_hash":       actualSHA,
 			"bundle_hash":      actualSHA,
-			"protocol_version": "2026-06-worker-v1",
-			"engine_version":   version,
-			"platform":         "linux",
-			"arch":             "x86_64",
-			"timestamp":        now,
-			"generated_at":     now,
-		}
+		"protocol_version": "v3",
+		"engine_version":   version,
+		"platform":         "linux",
+		"arch":             "x86_64",
+		"timestamp":        now,
+		"generated_at":     now,
+	}
 
-		// Write manifest_v2.json atomically
+	// Write manifest_v2.json atomically
 		manifestPath := filepath.Join(h.bundleDir, "manifest_v2.json")
 		raw, err := json.MarshalIndent(manifest, "", "  ")
 		if err != nil {

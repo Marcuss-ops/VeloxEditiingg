@@ -230,7 +230,7 @@ func main() {
 		cfg.ProtocolVersion = protocolVersion
 	}
 	if cfg.ProtocolVersion == "" {
-		cfg.ProtocolVersion = "2026-06-worker-v1"
+		cfg.ProtocolVersion = "v3"
 	}
 	if workerSecret := os.Getenv("VELOX_WORKER_SECRET"); workerSecret != "" {
 		cfg.WorkerSecret = workerSecret

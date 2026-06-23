@@ -21,9 +21,11 @@
 //
 // Spec §14 consolidates the 4 legacy split-out families
 // (velox_compute_seconds_total{outcome=useful},
-//  velox_compute_seconds_total_failed,
-//  velox_compute_seconds_total_cancelled,
-//  velox_compute_seconds_total_stale)
+//
+//	velox_compute_seconds_total_failed,
+//	velox_compute_seconds_total_cancelled,
+//	velox_compute_seconds_total_stale)
+//
 // into a SINGLE family `velox_compute_seconds_total{outcome=...}` plus a
 // sibling `velox_compute_failure_reasons_total{reason=...}` for
 // failure-reason attribution.
@@ -115,6 +117,17 @@ type Collector struct {
 	// does NOT emit it directly.)
 	computeSeconds        *Family // velox_compute_seconds_total{outcome=...}
 	computeFailureReasons *Family // velox_compute_failure_reasons_total{reason=...}
+
+	// Cost-per-output-minute gauges (spec §14 follow-up). Each gauge
+	// is single-label `worker_class` (UNSAFE `project_id` was rejected;
+	// per-class aggregation covers the same operational use case).
+	// Cardinality discipline: only `worker_class` since worker
+	// profiles cluster cleanly into cpu/gpu/mixed/io — see
+	// cost_factors.go for the math caveat on averaging these gauges.
+	costCpuPerMin     *Family // velox_cost_cpu_core_seconds_per_output_minute
+	costNetworkPerMin *Family // velox_cost_network_gb_per_output_minute
+	costStoragePerMin *Family // velox_cost_storage_gb_written_per_output_minute
+	costTotalPerMin   *Family // velox_cost_total_per_output_minute
 
 	// Book-keeping for diffs.
 	stateMu  sync.Mutex
@@ -245,6 +258,26 @@ func NewCollector(reg *Registry) *Collector {
 		[]string{"reason"},
 	)
 
+	// Cost per output minute (spec §14 follow-up). Each gauge is
+	// single-label `worker_class`. Stamped per-tick by the
+	// supervisor with the per-class aggregate (sum/count) for the
+	// just-completed attempts — see RecordAggregateCost + the
+	// math caveat in cost_factors.go. Micro-EUR encoding
+	// (×1_000_000) so the int64 gauge can carry a fraction.
+	costLabels := []string{"worker_class"}
+	c.costCpuPerMin = NewGaugeFamily("velox_cost_cpu_core_seconds_per_output_minute",
+		"CPU cost per output minute (€ × 1e6) by worker class",
+		costLabels)
+	c.costNetworkPerMin = NewGaugeFamily("velox_cost_network_gb_per_output_minute",
+		"Network egress cost per output minute (€ × 1e6) by worker class",
+		costLabels)
+	c.costStoragePerMin = NewGaugeFamily("velox_cost_storage_gb_written_per_output_minute",
+		"Storage cost per output minute (€ × 1e6) by worker class",
+		costLabels)
+	c.costTotalPerMin = NewGaugeFamily("velox_cost_total_per_output_minute",
+		"Total cost per output minute (€ × 1e6) by worker class",
+		costLabels)
+
 	c.lastSeen = make(map[string]time.Time)
 
 	for _, f := range c.allFamilies() {
@@ -278,6 +311,10 @@ func (c *Collector) allFamilies() []*Family {
 		c.heartbeatAge,
 		c.computeSeconds,
 		c.computeFailureReasons,
+		c.costCpuPerMin,
+		c.costNetworkPerMin,
+		c.costStoragePerMin,
+		c.costTotalPerMin,
 	}
 }
 
@@ -418,6 +455,47 @@ func (c *Collector) RecordWorker(workerID string, rs *ResourceSnapshot) {
 	c.stateMu.Unlock()
 }
 
+// RecordAggregateCost stamps the 4 cost-per-output-minute gauges for
+// one worker class. Called by the supervisor once per tick after the
+// per-class aggregation (sum of cost components / sum of output
+// minutes for newly-terminal attempts on that class) is computed.
+//
+// Micro-EUR encoding (×1_000_000) so a fraction fits inside the int64
+// gauge — exposition is plain decimals. Pass output_minutes < 0.001
+// to skip all 4 stamps (zero safety matches the typed AttemptCostBasis
+// guards in taskattempts/report.go).
+//
+// The supervisor aggregates per tick, NOT incrementally, so this is
+// a GaugeSet (last-write-wins per tick) — see cost_factors.go for
+// the math caveat on averaging these gauges across time.
+func (c *Collector) RecordAggregateCost(
+	workerClass string,
+	cpuSeconds, networkGB, storageGB, outputMinutes float64,
+	f CostFactors,
+) {
+	if workerClass == "" {
+		workerClass = "default"
+	}
+	if outputMinutes < 0.001 {
+		return
+	}
+	wl := []string{workerClass}
+	c.costCpuPerMin.GaugeSet(wl, encodeMicroEUR(f.CPUPerOutputMinute(cpuSeconds, outputMinutes)))
+	c.costNetworkPerMin.GaugeSet(wl, encodeMicroEUR(f.NetworkPerOutputMinute(networkGB, outputMinutes)))
+	c.costStoragePerMin.GaugeSet(wl, encodeMicroEUR(f.StoragePerOutputMinute(storageGB, outputMinutes)))
+	c.costTotalPerMin.GaugeSet(wl, encodeMicroEUR(f.CostPerOutputMinute(cpuSeconds, networkGB, storageGB, outputMinutes)))
+}
+
+// encodeMicroEUR encodes a float64 EUR value as int64 micro-EUR.
+// Negative values clamp to zero so a misconfigured env var (or a
+// future cost-model bug) cannot emit negative gauge readings.
+func encodeMicroEUR(eur float64) int64 {
+	if eur <= 0 {
+		return 0
+	}
+	return int64(eur * 1_000_000)
+}
+
 // RecordMasterHealth refreshes the master-side gauges every few seconds.
 // Called from a supervisor goroutine.
 func (c *Collector) RecordMasterHealth(outboxPending int) {
@@ -487,6 +565,62 @@ func readProcessRSS() int64 {
 // to drive it from a parent goroutine.
 func (c *Collector) AverageHeartbeatAge(now time.Time) {
 	c.averageHeartbeatAge(now)
+}
+
+// ScanAttemptWithLabels ingests a single attempt from an
+// AttemptReader into the registry using caller-supplied labels
+// (execID, execVer, workerClass). Used by the supervisor poll loop
+// when it has already resolved the labels via AttemptsLabelResolver;
+// this avoids the hardcoded "unknown/0/default" that ScanAttempt
+// falls back to and lets per-worker-class gauges reflect real
+// worker_class values instead of all rows collapsing onto "default".
+//
+// The legacy ScanAttempt below is retained for back-compat with
+// any direct caller; it delegates to ScanAttemptWithLabels with
+// the historical defaults.
+func (c *Collector) ScanAttemptWithLabels(
+	ctx context.Context,
+	mem AttemptReader,
+	attemptID, execID, execVer, workerClass string,
+) error {
+	if mem == nil || attemptID == "" {
+		return nil
+	}
+	if execID == "" {
+		execID = "unknown"
+	}
+	if execVer == "" {
+		execVer = "0"
+	}
+	if workerClass == "" {
+		workerClass = "default"
+	}
+	am, err := mem.GetMetrics(ctx, attemptID)
+	if err != nil || am == nil {
+		return err
+	}
+	cs, err := mem.GetCacheStats(ctx, attemptID)
+	if err != nil {
+		cs = nil
+	}
+	cb, err := mem.GetCostBasis(ctx, attemptID)
+	if err != nil {
+		cb = nil
+	}
+	cache := taskattempts.AttemptCacheStats{}
+	if cs != nil {
+		cache = *cs
+	}
+	// Status drives the compute-outcome family spec §14. If the
+	// reader can't surface a status (legacy stub), we fall back to
+	// PENDING so RecordAttemptOutcome is a no-op — safe-by-default.
+	status := taskattempts.AttemptStatusPending
+	if s, sErr := mem.GetStatus(ctx, attemptID); sErr == nil && s != "" {
+		status = s
+	}
+	c.RecordAttempt(*am, cache, cb, execID, execVer, workerClass)
+	c.RecordAttemptOutcome(status, "", am.CPUTimeMS)
+	return nil
 }
 
 // ScanAttempt ingests a single attempt from an AttemptReader into

@@ -55,5 +55,14 @@ jobs:
       - name: Install cmake (native engine build)
         run: sudo apt-get update && sudo apt-get install -y cmake
 
+      # ── Cheap label-shape checks first (fail-fast before make verify spins up).
+      # Spec §14 compute-outcome single-family shape: dashboards/,
+      # alerts/, prometheus/ MUST consume `velox_compute_seconds_total{outcome=…}`
+      # and `velox_compute_failure_reasons_total{reason=…}` — the 4
+      # retired split-out family names are FORBIDDEN. See
+      # scripts/ci/check-compute-outcome-labels.sh.
+      - name: Guard — compute-outcome labels (spec §14)
+        run: ./scripts/ci/check-compute-outcome-labels.sh
+
       - name: Verify — architectural, Go, native, docker-image
         run: make verify

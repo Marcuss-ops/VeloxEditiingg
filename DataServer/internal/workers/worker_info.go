@@ -30,7 +30,7 @@ type WorkerInfo struct {
 	Metrics         map[string]interface{} `json:"metrics,omitempty"`
 }
 
-const DefaultWorkerProtocolVersion = "2026-06-worker-v1"
+const DefaultWorkerProtocolVersion = "v3"
 
 func applyMetadataFields(extra map[string]interface{}, info *WorkerInfo) {
 	if extra == nil || info == nil {

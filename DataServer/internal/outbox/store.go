@@ -279,6 +279,26 @@ func (s *Store) CountByStatus(ctx context.Context, status Status) (int64, error)
 	return n, nil
 }
 
+// PendingCount returns the count of outbox events currently in
+// PENDING state. Used by the metrics supervisor (spec §14 follow-up)
+// to refresh velox_master_outbox_pending without scanning the upper
+// StatusProcessed/PENDING/PROCESSING/FAILED partition.
+//
+// Cheap because the outbox_events table has an index on (status,
+// created_at) per migration 026; the supervisor polls this every
+// 15s and the cardinality is bounded by the actual queue depth
+// (not the total events emitted over the master lifetime).
+func (s *Store) PendingCount(ctx context.Context) (int64, error) {
+	var n int64
+	err := s.DB.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM outbox_events WHERE status = 'PENDING'`,
+	).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("outbox pending count: %w", err)
+	}
+	return n, nil
+}
+
 // GetByID retrieves an event by primary key; useful for tests/exploration.
 func (s *Store) GetByID(ctx context.Context, eventID string) (*Event, string, error) {
 	row := s.DB.QueryRowContext(ctx,
