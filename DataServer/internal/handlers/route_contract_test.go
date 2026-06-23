@@ -68,8 +68,10 @@ func TestRouteContract_AllModules(t *testing.T) {
 	// frontend/ansible/workers-asset) require a real *config.Config and
 	// per-module deps; their route enumeration lives in module-level tests.
 	want := []string{
-		"GET /health",
 		"GET /api/health",
+		"GET /api/ready",
+		"GET /health",
+		"GET /ready",
 	}
 	got := routesByMethod(t, r)
 

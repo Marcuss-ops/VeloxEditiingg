@@ -10,6 +10,7 @@ import (
 	workersapi "velox-server/internal/handlers/remote/workers"
 	"velox-server/internal/handlers/remote/workers/assets"
 	"velox-server/internal/handlers/remote/workers/lifecycle"
+	"velox-server/internal/handlers/server/api"
 	"velox-server/internal/store"
 	workersreg "velox-server/internal/workers"
 )
@@ -21,6 +22,7 @@ type WorkersModule struct {
 	workerLifecycle     *lifecycle.Handler
 	workerUpdateHandler *workersapi.WorkerUpdateHandler
 	workerAssetHandler  *assets.Handler
+	workersHandler      *api.WorkersHandler
 }
 
 // NewWorkersModule creates a new workers module.
@@ -35,6 +37,7 @@ func NewWorkersModule(cfg *config.Config, reg *workersreg.Registry, lifecycle *l
 		workerUpdateHandler: updateHandler,
 		adminAuth:           adminAuth,
 		workerAssetHandler:  assets.NewHandler(cfg, tokenMgr, assetSvc, blobStore),
+		workersHandler:      api.NewWorkersHandler(reg),
 	}
 }
 
@@ -65,6 +68,17 @@ func (m *WorkersModule) RegisterRoutes(r *gin.Engine) {
 
 	if m.workerAssetHandler != nil {
 		r.GET("/api/v1/worker-assets/:asset_id", m.workerAssetHandler.ServeAsset())
+	}
+
+	// PR 4 — canonical worker read-model endpoints.
+	// Protected by admin auth (local IP + read-only GET bypass for dashboards).
+	if m.workersHandler != nil {
+		v1Workers := r.Group("/api/v1/workers")
+		if m.adminAuth != nil {
+			v1Workers.Use(m.adminAuth)
+		}
+		v1Workers.GET("", m.workersHandler.ListWorkers())
+		v1Workers.GET("/:worker_id", m.workersHandler.GetWorker())
 	}
 
 	log.Printf("[WORKERS] Routes registered")
