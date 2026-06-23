@@ -227,8 +227,8 @@ func New(cfg *config.WorkerConfig, version string, opts ...Option) (*Worker, err
 		// (statvfs + resolveWorkDirDevice degrade to best-effort).
 		// 5s tick + 3-tick emit cadence is the default from
 		// NewResourceSampler.
-		sampler: telemetry.NewResourceSampler("", "", cfg.WorkDir, 0, 0),
-		exitFunc:   os.Exit,
+		sampler:  telemetry.NewResourceSampler("", "", cfg.WorkDir, 0, 0),
+		exitFunc: os.Exit,
 	}
 
 	// Load persisted state from previous run (command dedup, job recovery info).
