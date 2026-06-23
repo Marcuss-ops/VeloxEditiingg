@@ -142,6 +142,29 @@ make_vanilla "$F"
 sed -i 's|^MASTER_PUBLIC_URL=.*|MASTER_PUBLIC_URL=http://master.example.com|' "$F"
 check_case "12 http:// MASTER_URL (warning only)"   0 "$F"
 
+# ── MASTER_PUBLIC_URL empty → FAIL (no master URL means clients can't reach) ──
+F="$WORK/13_empty_master_url.env"
+make_vanilla "$F"
+sed -i 's|^MASTER_PUBLIC_URL=.*|MASTER_PUBLIC_URL=|' "$F"
+check_case "13 MASTER_PUBLIC_URL empty"             1 "$F"
+
+# ── VELOX_ADMIN_TOKEN with stray literal double-quote → FAIL ────────────────
+# Catches malformed env files where a stray `"` would either be absorbed into
+# the next variable (bash source-style parsing) or trip the validator's read
+# step. Operators MUST use plain tokens with no shell metacharacters.
+F="$WORK/14_dq_token.env"
+make_vanilla "$F"
+sed -i 's|^VELOX_ADMIN_TOKEN=.*|VELOX_ADMIN_TOKEN="|' "$F"
+check_case "14 VELOX_ADMIN_TOKEN literal double-quote" 1 "$F"
+
+# ── IPv6 https URL → PASS (hardening of is_https_url for IP-literal) ────────
+# Regression test for PR-2 reviewer WARN: lib-validations.sh now accepts
+# bracketed IPv6 hosts (RFC 3986 §3.2.2) like `https://[::1]:9000`.
+F="$WORK/15_ipv6_url.env"
+make_vanilla "$F"
+sed -i 's|^MASTER_PUBLIC_URL=.*|MASTER_PUBLIC_URL=https://[::1]:9000|' "$F"
+check_case "15 https IPv6 IP-literal"               0 "$F"
+
 # ── Summary ─────────────────────────────────────────────────────────────────
 printf '\n'
 if (( FAIL == 0 )); then

@@ -12,9 +12,10 @@
 #
 # API (function_name → return semantics):
 #   is_https_url <url>
-#     0 → valid https://...
+#     0 → valid https://... (DNS-style OR IPv6 IP-literal bracketed as [::1])
 #     1 → valid http://...   (warning-eligible, NOT a hard fail)
-#     2 → malformed / empty
+#     2 → malformed / empty (e.g. ftp://, unterminated IPv6 bracket, non-hex
+#                          inside [..], bare IPv4 with brackets mismatched)
 #   is_port <port>
 #     0 → 1..65535 numeric
 #     1 → empty / non-numeric / out of range
@@ -39,10 +40,13 @@ is_https_url() {
     [[ -z "$url" ]] && return 2
     # Scheme is case-insensitive per RFC 3986 §3.1; we treat lower-case as
     # canonical. Allow optional port + optional path.
-    if [[ "$url" =~ ^https://[A-Za-z0-9._-]+(:[0-9]+)?(/.*)?$ ]]; then
+    # Host is either a DNS-style hostname ([A-Za-z0-9._-]+, which also
+    # admits bare IPv4 like 192.168.1.1) OR an IPv6 IP-literal bracketed
+    # as `[<hex-or-colon>]+` per RFC 3986 §3.2.2 — e.g. `https://[::1]:9000`.
+    if [[ "$url" =~ ^https://(\[[0-9a-fA-F:]+\]|[A-Za-z0-9._-]+)(:[0-9]+)?(/.*)?$ ]]; then
         return 0
     fi
-    if [[ "$url" =~ ^http://[A-Za-z0-9._-]+(:[0-9]+)?(/.*)?$ ]]; then
+    if [[ "$url" =~ ^http://(\[[0-9a-fA-F:]+\]|[A-Za-z0-9._-]+)(:[0-9]+)?(/.*)?$ ]]; then
         return 1   # well-formed but http-only (warning-eligible)
     fi
     return 2       # malformed

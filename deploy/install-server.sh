@@ -160,9 +160,33 @@ if [[ ! -r "$VALIDATOR" ]]; then
     fail "validator not found at $VALIDATOR — re-pull deploy/ tree. Audit verdict block #3 requires the validator BEFORE any systemd operation."
 fi
 log "Validating $ENV_DST..."
-if ! bash "$VALIDATOR" "$ENV_DST"; then
-    fail "validation of $ENV_DST failed (see errors above). Operator MUST replace every CHANGE_ME_*, set VELOX_ALLOWED_WORKERS / VELOX_ADMIN_TOKEN / MASTER_PUBLIC_URL / etc., then re-run. Refusing to silently claim 'Install complete!'."
-fi
+# Capture the validator's exit code so we can distinguish:
+#   rc=2 → env file unreadable / missing / malformed at line 1
+#          (operator must create/fix the file itself before retrying)
+#   rc=1 → env file parsed but at least one hard-fail rule tripped
+#          (operator must edit VALUES, not the file structure)
+# Both block Step 7; each error path emits a distinct message so the
+# operator sees immediately which axis to repair. Stderr from the
+# validator is preserved (no redirect) so the per-rule line-items are
+# visible above whichever fail message we emit below.
+# IMPORTANT: this script has `set -e`; we MUST swallow the non-zero rc
+# explicitly via `|| validator_rc=$?` so errexit doesn't pre-empt the case.
+validator_rc=0
+bash "$VALIDATOR" "$ENV_DST" || validator_rc=$?
+case "$validator_rc" in
+    2)
+        fail "could not read env file $ENV_DST (validator rc=2). The file is missing, unreadable, or malformed (e.g. unmatched quote). Operator MUST create/fix $ENV_DST AND ensure line 1 parses before retrying. NOT silently claiming 'Install complete!'."
+        ;;
+    1)
+        fail "validation of $ENV_DST failed (validator rc=1, see hard-fail errors above). Operator MUST replace every CHANGE_ME_*, set VELOX_ALLOWED_WORKERS / VELOX_ADMIN_TOKEN / MASTER_PUBLIC_URL / etc., then re-run. Refusing to silently claim 'Install complete!'."
+        ;;
+    0)
+        # PASS — fall through to ok below (no body needed; just the terminator).
+        ;;
+    *)
+        fail "validator returned unexpected exit code rc=$validator_rc (only rc=0/1/2 are defined). Treating as hard failure. Operator MUST re-validate $ENV_DST before retrying. NOT silently claiming 'Install complete!'."
+        ;;
+esac
 ok "env file accepted: $ENV_DST"
 
 # ─── Step 7: Enable and start ───────────────────────────────────────────────
