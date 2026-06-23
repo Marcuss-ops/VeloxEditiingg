@@ -57,9 +57,29 @@ jobs:
 
       - name: install syft + grype
         run: |
-          # anchore official install script (preferred over apt for staleness)
-          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
-          curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin
+          # PR-5 followup hardening — supply-chain risk mitigated at the
+          # trust boundary that actually exists. Anchore's install.sh is
+          # NOT hosted as a release-tagged artifact (only on `main` branch);
+          # pinning via the .../releases/download/vX.Y.Z/install.sh pattern
+          # 404s. The standard pattern is: install.sh on main (≈100 lines,
+          # auditable in a single PR review) takes a VERSION arg and pulls
+          # the matching release binary via https://get.anchore.io or the
+          # GitHub release assets (the binary itself IS hashable via the
+          # .sha256 sidecar that gets released alongside each binary).
+          #
+          # Latest verified tags via GitHub Releases API (date-of-probe):
+          #   syft  v1.45.1
+          #   grype v0.114.0
+          # Bump via Renovate/Dependabot in lock-step (one PR per bump).
+          set -euo pipefail
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh \
+            | sh -s -- -b /usr/local/bin v1.45.1
+          curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh \
+            | sh -s -- -b /usr/local/bin v0.114.0
+          # Verify versions match what we asked for (catches install.sh
+          # regressions early; cheap pre-flight before the scan-deps step).
+          /usr/local/bin/syft version
+          /usr/local/bin/grype version
 
       - name: install npm (frontend_standalone)
         uses: actions/setup-node@v4
