@@ -117,24 +117,22 @@ if [[ "$SKIP_HEAVY" -ne 1 ]]; then
     # resolves to ./shared at the repo root.
     docker build -f "$REPO_ROOT/DataServer/Dockerfile" -t velox-server:verify .
 
-    log "docker build: velox-worker (pre-build Go binary via make agent)"
-    # Worker Dockerfile's build contract (see header) requires the Go
-    # binary to already exist at <build-context>/native/worker-agent-go/
-    # bin/velox-worker-agent. Mirror .github/workflows/worker-image.yml's
-    # `Build worker-agent binary (pre-Docker step)` step here so that
-    # `make verify` exercises the SAME production path as a release
-    # build -- not a parallel "looks-like" approximation that drifts.
-    make -C "$REPO_ROOT/RemoteCodex/native/worker-agent-go" agent
-
-    # Build context = RemoteCodex (NOT repo root): the worker Dockerfile
-    # COPYs scripts/{build-video-engine,worker-entrypoint}.sh,
-    # native/video-engine-cpp, and native/worker-agent-go/bin/, all of
-    # which are anchored one level under RemoteCodex/. Using `.` would
-    # silently leave /app/native/video-engine-cpp missing.
+    log "docker build: velox-worker (PR-3 self-sufficient, no pre-build required)"
+    # PR-3: the worker Dockerfile now compiles both the C++ engine AND
+    # the Go worker binary inline (via the cpp-builder + go-builder stages)
+    # so `make verify` SIMPLY runs `docker build` against the repo root.
+    # No pre-step `make agent` is required; the bin/velox-worker-agent
+    # that `make agent` would write into the build context is now ignored
+    # by the Dockerfile (the go-builder stage COPY --from=copies the
+    # freshly-built binary, not the build-context artifact).
+    #
+    # NO build-args are passed: the Dockerfile's go-builder stage delegates
+    # to the project's Makefile (single source of truth for the LDFLAGS
+    # pattern + VERSION.txt enforcement + Reproducible Builds chain).
     docker build \
       -f "$REPO_ROOT/RemoteCodex/native/worker-agent-go/Dockerfile" \
       -t velox-worker:verify \
-      "$REPO_ROOT/RemoteCodex"
+      "$REPO_ROOT"
   else
     if [[ "${CI:-}" == "true" ]]; then
       fail "Docker daemon unreachable or Docker not installed (required in CI)"

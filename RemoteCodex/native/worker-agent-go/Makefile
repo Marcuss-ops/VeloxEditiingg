@@ -154,24 +154,31 @@ run-agent: agent
 	./$(BIN_DIR)/$(AGENT_BINARY) -master http://localhost:8080 -work-dir .
 
 docker:
-	@echo "Building Docker image..."
-	# Build contract: the worker Dockerfile requires the Go binary to
-	# already exist at <context>/native/worker-agent-go/bin/... before
-	# docker build runs. `make agent` writes that path; the Docker image
-	# CANNOT recompile the Go worker because velox-shared is referenced
-	# via `replace velox-shared => ../../../shared` which only resolves
-	# from the agent module root.
-	$(MAKE) agent
-	# Build context MUST be RemoteCodex (NOT repo root, NOT worker-agent-go):
-	#   * scripts/{build-video-engine,worker-entrypoint}.sh are at RemoteCodex/scripts/
-	#   * native/video-engine-cpp is at RemoteCodex/native/video-engine-cpp
-	#   * native/worker-agent-go/bin/velox-worker-agent is at
-	#     RemoteCodex/native/worker-agent-go/bin/velox-worker-agent
-	# `cd ../..` from worker-agent-go lands at RemoteCodex/.
+	@echo "Building Docker image (PR-3 self-sufficient, no pre-build required)..."
+	# PR-3: the worker Dockerfile now compiles both the C++ engine
+	# (cpp-builder stage) and the Go worker binary (go-builder stage)
+	# INLINE. No `$(MAKE) agent` pre-step is needed; building from a
+	# clean checkout with `docker build` and nothing else works.
+	#
+	# Build context MUST be the repo root (cd ../.. from worker-agent-go
+	# lands at root, NOT at RemoteCodex/ — PR-3 moved everything to
+	# repo-root paths inside the Dockerfile):
+	#   * RemoteCodex/scripts/build-video-engine.sh (cpp-builder COPY)
+	#   * RemoteCodex/native/video-engine-cpp/        (cpp-builder COPY)
+	#   * RemoteCodex/native/worker-agent-go/         (go-builder COPY)
+	#   * shared/                                    (go-builder COPY,
+	#                                                  satisfies the
+	#                                                  `replace velox-shared`
+	#                                                  in worker-agent-go/go.mod)
+	#   * RemoteCodex/scripts/worker-entrypoint.sh   (runtime COPY)
+	# The bin/velox-worker-agent that `make agent` would have left is
+	# ignored by the Dockerfile (the COPY --from=go-builder stage
+	# supplies the freshly-built binary instead).
 	cd ../.. && docker build \
 		-f native/worker-agent-go/Dockerfile \
 		-t velox-worker-agent:$(VERSION) \
-		-t velox-worker-agent:latest \
+		--build-arg "VERSION=$(VERSION)" \
+		--build-arg "BUILD_TIME=$(BUILD_TIME)" \
 		.
 
 help:
