@@ -36,7 +36,6 @@ scan() {
             ':!*_test.go' \
             ':!*.sql' \
             ':!docs/**' \
-            ':!frontend_standalone/**' \
             ':!scripts/ci/check-single-writer.sh' \
             ':!scripts/ci/lib/diff-scope.sh')"
   [[ -z "$hits" ]] && return 0

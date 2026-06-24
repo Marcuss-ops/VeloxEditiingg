@@ -56,7 +56,6 @@ COMMON_EXCLUDES=(
   ':!**/*status*.go'
   ':!**/transitions*.go'
   ':!docs/**'
-  ':!frontend_standalone/**'
   ':!scripts/ci/check-task-runtime-invariants.sh'
   ':!scripts/ci/lib/diff-scope.sh'
 )

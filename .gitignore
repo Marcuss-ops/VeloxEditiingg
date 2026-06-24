@@ -66,8 +66,8 @@ DataServer/velox-server
 RemoteCodex/native/worker-agent-go/bin/
 RemoteCodex/native/worker-agent-go/velox-worker-agent
 RemoteCodex/native/video-engine-cpp/build*/
-frontend_standalone/web/dist/
-frontend_standalone/web/node_modules/
+# ── External frontend repo (standalone — developed in VeloxFrontend/) ────
+VeloxFrontend/
 
 # ── Environment & IDE ────────────────────────────────────────────────────────
 .env
@@ -89,8 +89,6 @@ venv/
 
 # ── Node ─────────────────────────────────────────────────────────────────────
 node_modules/
-frontend_standalone/web/test-results/
-frontend_standalone/web/.svelte-kit/
 
 # ── Go build cache ───────────────────────────────────────────────────────────
 *.test

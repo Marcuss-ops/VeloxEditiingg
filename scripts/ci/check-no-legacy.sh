@@ -15,7 +15,7 @@
 #
 # Excluded by default (still off-limits within the diff):
 #   * docs/**                 -- historical documentation (intentional)
-#   * frontend_standalone/**  -- sealed frontend bundle
+#   * frontend/**             -- extracted to VeloxFrontend repo
 #   * .github/**              -- CI workflows referencing old paths
 #   * deploy/**               -- deploy templates with old env var names
 #   * scripts/ci/check-no-legacy.sh -- this script lists them
@@ -95,7 +95,6 @@ for pattern in "${full_tree_patterns[@]}"; do
   if matches="$(
          git grep -nE "$pattern" -- \
            ':!docs/**' \
-           ':!frontend_standalone/**' \
            ':!.github/**' \
            ':!deploy/**' \
            ':!DataServer/data/ansible/**' \
@@ -120,7 +119,6 @@ for pattern in "${diff_patterns[@]}"; do
   if matches="$(
          scoped_grep "$pattern" -- \
            ':!docs/**' \
-           ':!frontend_standalone/**' \
            ':!scripts/ci/check-no-legacy.sh' \
            ':!scripts/ci/lib/diff-scope.sh' \
            ':!DataServer/server.exe'

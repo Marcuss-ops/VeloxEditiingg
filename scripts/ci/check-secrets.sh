@@ -9,7 +9,7 @@
 # Excluded (intentional):
 #   * docs/archive/            historical context
 #   * RemoteCodex/native/worker-agent-go/bin/ compiled worker binary
-#   * frontend_standalone/     bundled JS artefacts
+#   * VeloxFrontend/           bundled JS artefacts (extracted frontend repo)
 #   * *_test.go                unit tests deliberately reference fake keys
 #   * deploy/*example*         example inventory / env templates are placeholders
 #

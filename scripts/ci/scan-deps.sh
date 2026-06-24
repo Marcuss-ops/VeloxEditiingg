@@ -7,7 +7,7 @@
 #      RemoteCodex/native/worker-agent-go, shared).
 #   2. (Optional) syft + grype SBOM + CVE scan against any locally-built
 #      Docker images the operator has tagged.
-#   3. (Optional) npm audit + npm outdated on frontend_standalone/.
+#   3. (Optional) npm audit + npm outdated on frontend/.  (Frontend extracted to separate VeloxFrontend repo.)
 #
 # Tooling matrix — every missing tool skips cleanly with a one-line log;
 # the script never blocks on missing dependencies:
@@ -15,7 +15,7 @@
 #   govulncheck                          Go module vulns (Go std + dep vulns)
 #   syft                                 SBOM generation from image
 #   grype                                CVE scan against SBOM
-#   npm + frontend_standalone/package-lock.json  JS dep vulns
+#   npm + frontend/package-lock.json  JS dep vulns (extracted to VeloxFrontend)
 #
 # Failure modes:
 #   0   scan ran clean (or skipped cleanly with no tools available)
@@ -87,15 +87,12 @@ for image in $SCAN_IMAGE_LIST; do
     fi
 done
 
-# ── 3. npm audit (frontend_standalone) ────────────────────────────────────
-if [[ -f "$REPO_ROOT/frontend_standalone/package-lock.json" ]] && command -v npm >/dev/null 2>&1; then
-    log 'npm audit: frontend_standalone'
-    if ! (cd "$REPO_ROOT/frontend_standalone" && npm audit --omit=dev --audit-level=moderate); then
-        violations=$((violations + 1))
-    fi
-else
-    skip 'npm audit'
-fi
+# ── 3. npm audit (VeloxFrontend) ──────────────────────────────────────────
+# The frontend was extracted to its own repo (VeloxFrontend/); npm audit
+# on the frontend is the responsibility of that repo's CI pipeline.
+# This stanza is intentionally a skip — kept as a placeholder for a future
+# `cd VeloxFrontend/web && npm audit` if operators want in-repo scanning.
+skip 'npm audit (frontend extracted to VeloxFrontend)'
 
 # ── Summary ───────────────────────────────────────────────────────────────
 if (( violations > 0 )); then

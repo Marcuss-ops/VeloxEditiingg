@@ -52,7 +52,6 @@ deploy/                          # Install scripts, systemd unit, env templates,
 └── templates/                   # velox-server.env.j2 (renders /etc/velox-server.env)
 docs/                            # ADRs, architecture ownership, roadmap, deployment notes
 .github/workflows/               # CI + worker-image + master-image release pipelines
-frontend_standalone/             # SPA frontend (VELOX_SPA_DIR)
 scripts/                         # CI checks (architecture, migrations, secrets, etc.)
 VERSION.txt                      # Single source of version truth
 ```

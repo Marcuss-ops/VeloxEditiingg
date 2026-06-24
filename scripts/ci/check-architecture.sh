@@ -49,7 +49,7 @@ shared_count="$(
 # We anchor on `./.github/workflows/*` (NOT `*/workflows/*`) so that no
 # stray `foo/workflows/stage.yml` from another tool slipped in.
 #
-# npm transitive deps (e.g. `frontend_standalone/web/node_modules/reusify/`
+# npm transitive deps (e.g. `VeloxFrontend/web/node_modules/reusify/`
 # shipping its own `.github/workflows/ci.yml`) are NOT real project
 # workflows and are excluded here:
 #   - `find -prune` skips traversing any `*/node_modules/` subtree entirely
@@ -62,7 +62,6 @@ found_off_root=0
 while IFS= read -r workflow; do
   case "$workflow" in
     ./.github/workflows/*) ;;
-    ./frontend_standalone/.github/workflows/*) ;;
     */node_modules/*/.github/workflows/*) ;;
     *) printf '  off-root workflow: %s\n' "$workflow" >&2; found_off_root=1 ;;
   esac

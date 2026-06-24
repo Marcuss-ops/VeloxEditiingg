@@ -1,8 +1,9 @@
 name: dependency-scan
 
 # PR-5 5f — periodic dependency vulnerability scan. Runs scan-deps.sh against
-# the Go modules, the locally-built Docker images, and the frontend_standalone
-# npm deps. CRITICAL/MEDIUM vulnerabilities fail the build; LOW is logged.
+# the Go modules and the locally-built Docker images. The frontend npm deps
+# are scanned in the separate VeloxFrontend repo's CI pipeline. CRITICAL/MEDIUM
+# vulnerabilities fail the build; LOW is logged.
 #
 # Triggered:
 #   * on every push to main       (catches new vulns as soon as they appear)
@@ -13,7 +14,7 @@ name: dependency-scan
 #   * Go (latest stable; pinned via go.mod toolchain if applicable)
 #   * govulncheck (via `go install golang.org/x/vuln/cmd/govulncheck@latest`)
 #   * syft + grype (via official Debian packages from anchore)
-#   * Node.js LTS + npm (frontend_standalone only)
+#   * Node.js LTS + npm (no longer needed — frontend extracted to VeloxFrontend)
 #
 # scan-deps.sh exits non-zero on vulnerabilities, which fails the workflow.
 # Operators triage in the workflow run output and the SARIF artifact.
@@ -80,13 +81,6 @@ jobs:
           # regressions early; cheap pre-flight before the scan-deps step).
           /usr/local/bin/syft version
           /usr/local/bin/grype version
-
-      - name: install npm (frontend_standalone)
-        uses: actions/setup-node@v4
-        with:
-          node-version: 'lts/*'
-          cache: 'npm'
-          cache-dependency-path: 'frontend_standalone/package-lock.json'
 
       - name: run scan-deps.sh
         env:
