@@ -36,11 +36,35 @@ fail_if_no_base_ref() {
   fi
 }
 
-# scoped_grep PATTERN -- [':!exclude' ...]
-# Works like `git grep -nE PATTERN -- <excludes>` but BOTH:
-#   (a) restricted to files changed since BASE_REF...HEAD (so HEAD is
-#       trivially green)
-#   (b) tolerant of deletions in the diff (--diff-filter=ACMR drops D)
+# Convert a git pathspec to a bash glob suitable for [[ $f == $glob ]].
+# Git pathspec rules:
+#   - Patterns without '/' match against the filename component only.
+#     E.g. '*.go' matches 'foo.go' anywhere in the tree.
+#   - Patterns with '/' match against the full path from repo root.
+#     E.g. 'DataServer/**/*.go' matches files under DataServer/.
+#   - '**' matches across directory boundaries.
+#
+# Bash glob with globstar:
+#   - '**' matches across directory boundaries (same as git pathspec).
+#   - '*.go' only matches in the current directory — NOT at any depth.
+#     To match at any depth we prepend '**/'.
+_pathspec_to_bash_glob() {
+  local p="$1"
+  if [[ "$p" != */* ]]; then
+    # Bare filename pattern — match at any depth (git behaviour).
+    printf '**/%s' "$p"
+  else
+    printf '%s' "$p"
+  fi
+}
+
+# scoped_grep PATTERN -- [':!exclude' | include ...]
+#
+# Works like `git grep -nE PATTERN -- <pathspecs>` but ONLY against
+# files changed since BASE_REF...HEAD.  Exclusion patterns are properly
+# applied to the filtered file list — unlike the previous
+# implementation which appended all diff files as explicit paths
+# (bypassing git grep's pathspec exclude rules).
 scoped_grep() {
   local pattern="$1"
   shift
@@ -57,10 +81,56 @@ scoped_grep() {
   )
 
   if [[ ${#changed_files[@]} -eq 0 ]]; then
-    # No diff vs BASE_REF => no PR changes to gate on. Cheaper than
-    # letting git grep iterate the full tree.
     return 0
   fi
 
-  git grep -nE "$pattern" -- "$@" "${changed_files[@]}" 2>/dev/null || true
+  # Separate include pathspecs from exclude (':!...') pathspecs.
+  # Then pre-convert ALL pathspecs to bash globs once (O(N+M)).
+  local includes=() excludes=() inc_globs=() exc_globs=() filtered=()
+  local a
+  for a in "$@"; do
+    if [[ "$a" == ':!'* ]]; then
+      excludes+=("${a#:!}")
+    else
+      includes+=("$a")
+    fi
+  done
+  local inc
+  for inc in "${includes[@]}"; do
+    inc_globs+=("$(_pathspec_to_bash_glob "$inc")")
+  done
+  local exc
+  for exc in "${excludes[@]}"; do
+    exc_globs+=("$(_pathspec_to_bash_glob "$exc")")
+  done
+
+  # Enable globstar so that ** in bash matches across directories
+  # (same semantics as git pathspec's **).
+  shopt -s globstar 2>/dev/null || true
+
+  local f
+  for f in "${changed_files[@]}"; do
+    # If includes are specified, file must match at least one.
+    if [[ ${#inc_globs[@]} -gt 0 ]]; then
+      local in=0 g
+      for g in "${inc_globs[@]}"; do
+        [[ "$f" == $g ]] && { in=1; break; }
+      done
+      [[ $in -eq 0 ]] && continue
+    fi
+    # Drop if file matches any exclude.
+    local skip=0
+    for g in "${exc_globs[@]}"; do
+      [[ "$f" == $g ]] && { skip=1; break; }
+    done
+    [[ $skip -eq 0 ]] && filtered+=("$f")
+  done
+
+  shopt -u globstar 2>/dev/null || true
+
+  if [[ ${#filtered[@]} -eq 0 ]]; then
+    return 0
+  fi
+
+  git grep -nE "$pattern" -- "${filtered[@]}" 2>/dev/null || true
 }
