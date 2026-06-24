@@ -233,11 +233,13 @@ func (a *orchestratorLegacyAdapter) getJob(c *gin.Context) {
 	}
 	task, taskErr := a.tasksRepo.GetByJobID(c.Request.Context(), id)
 	steps := []orchestratorv1.LegacyStepResponse{}
+	workflowType := ""
 	if taskErr == nil && task != nil {
 		steps = []orchestratorv1.LegacyStepResponse{projectStep(task, id)}
+		workflowType = task.ExecutorID
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"run":        projectRun(job),
+		"run":        projectRun(job, workflowType),
 		"steps":      steps,
 		"deprecated": true,
 	})
@@ -261,7 +263,7 @@ func (a *orchestratorLegacyAdapter) listJobs(c *gin.Context) {
 	}
 	runs := make([]orchestratorv1.LegacyRunResponse, 0, len(js))
 	for i := range js {
-		runs = append(runs, projectRun(&js[i]))
+		runs = append(runs, projectRun(&js[i], ""))
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"jobs":       runs,
@@ -348,13 +350,17 @@ func (a *orchestratorLegacyAdapter) getStats(c *gin.Context) {
 }
 
 // projectRun maps jobs.Job → orchestratorv1.LegacyRunResponse.
-func projectRun(j *jobs.Job) orchestratorv1.LegacyRunResponse {
+// workflowType is the canonical executor_id from the paired Task.
+// The jobs table has no `type` column (executor_id lives on tasks),
+// so callers that have task context pass it explicitly; listJobs
+// passes "" which is acceptable for the deprecated projection.
+func projectRun(j *jobs.Job, workflowType string) orchestratorv1.LegacyRunResponse {
 	if j == nil {
 		return orchestratorv1.LegacyRunResponse{}
 	}
 	out := orchestratorv1.LegacyRunResponse{
 		RunID:        j.ID,
-		WorkflowType: j.Type,
+		WorkflowType: workflowType,
 		Status:       orchestratorv1.LegacyRunStatus(j.Status),
 		Revision:     int64(j.Revision),
 		Output:       map[string]any{},

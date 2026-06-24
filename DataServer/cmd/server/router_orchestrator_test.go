@@ -240,11 +240,12 @@ func TestOrchestratorPost_CreatesCanonicalJob(t *testing.T) {
 	if gotJob.VideoName != "orchestrator-smoke-test" {
 		t.Errorf("persisted VideoName=%q, want orchestrator-smoke-test", gotJob.VideoName)
 	}
-	if gotJob.Type != "process_video" {
-		t.Errorf("persisted Type=%q, want process_video", gotJob.Type)
-	}
-	if gotJob.RunID == "" {
-		t.Errorf("persisted RunID is empty (deriveJobID must stamp deterministic job_id as RunID)")
+	// The jobs table has no `type` column — executor_id lives on tasks.
+	// Dot NOT check gotJob.Type here. The POST response correctly
+	// surfaces workflow_type; the GET :id projection derives it from
+	// the paired task (see projectRun call-site in getJob).
+	if gotJob.RunID != resp.JobID {
+		t.Errorf("persisted RunID=%q, want %q (CreateJobWithPlan must stamp job_id as RunID when not provided)", gotJob.RunID, resp.JobID)
 	}
 
 	// Ground truth: taskgraph.Reader sees the matching Task.
@@ -440,9 +441,9 @@ func TestOrchestratorGetList_DeprecationHeader(t *testing.T) {
 		if run.RunID == "" {
 			t.Errorf("jobs[%d].run_id is empty", i)
 		}
-		if run.WorkflowType != "process_video" {
-			t.Errorf("jobs[%d].workflow_type=%q, want process_video (Job.Type → LegacyRunResponse.WorkflowType)", i, run.WorkflowType)
-		}
+		// listJobs does NOT join tasks (N+1 DOS surface); WorkflowType
+		// stays empty in the deprecated list projection. The GET :id
+		// endpoint DOES surface it via the task's executor_id.
 		if run.Status != orchestratorv1.LegacyRunStatus(jobs.StatusPending) {
 			t.Errorf("jobs[%d].status=%q, want PENDING (Job.Status → LegacyRunStatus)", i, run.Status)
 		}

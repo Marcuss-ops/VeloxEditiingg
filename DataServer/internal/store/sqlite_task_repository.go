@@ -43,12 +43,13 @@ func scanTask(row interface{ Scan(...interface{}) error }) (*taskgraph.Task, err
 	var t taskgraph.Task
 	var attemptID sql.NullString
 	var readyAt, startedAt, completedAt sql.NullString
+	var createdAt, updatedAt string
 	err := row.Scan(
 		&t.ID, &t.JobID, &t.ProjectID, &t.RenderPlanID,
 		&t.ExecutorID, &t.ExecutorVersion, &t.Status, &t.Priority,
 		&t.Revision, &t.AttemptCount, &attemptID, &t.AttemptNumber,
 		&t.WorkerID, &t.LeaseID,
-		&readyAt, &startedAt, &completedAt, &t.CreatedAt, &t.UpdatedAt,
+		&readyAt, &startedAt, &completedAt, &createdAt, &updatedAt,
 	)
 	if attemptID.Valid {
 		t.AttemptID = attemptID.String
@@ -69,6 +70,19 @@ func scanTask(row interface{ Scan(...interface{}) error }) (*taskgraph.Task, err
 	if completedAt.Valid && completedAt.String != "" {
 		if pt, e := time.Parse(time.RFC3339, completedAt.String); e == nil {
 			t.CompletedAt = &pt
+		}
+	}
+	// createdAt and updatedAt are non-nullable TIMESTAMP columns stored as
+	// RFC3339 strings — must be parsed explicitly (sql.Scan cannot convert
+	// a TEXT column into time.Time).
+	if createdAt != "" {
+		if pt, e := time.Parse(time.RFC3339, createdAt); e == nil {
+			t.CreatedAt = pt
+		}
+	}
+	if updatedAt != "" {
+		if pt, e := time.Parse(time.RFC3339, updatedAt); e == nil {
+			t.UpdatedAt = pt
 		}
 	}
 	return &t, nil

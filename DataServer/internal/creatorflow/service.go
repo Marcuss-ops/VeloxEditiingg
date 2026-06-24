@@ -408,13 +408,20 @@ func CreateJobWithPlan(
 		priority = 5
 	}
 
+	runID := plan.RunID
+	if runID == "" {
+		// When the caller does not supply a RunID, stamp the derived
+		// job_id as the canonical run identifier so every GET/list
+		// projection has a non-empty workflow scope.
+		runID = jobID
+	}
 	job := &jobs.Job{
 		ID:           jobID,
 		Type:         plan.ExecutorID,
 		Status:       jobs.StatusPending,
 		VideoName:    plan.VideoName,
 		ProjectID:    plan.ProjectID,
-		RunID:        plan.RunID,
+		RunID:        runID,
 		MaxRetries:   plan.MaxRetries,
 		Requirements: req,
 	}
