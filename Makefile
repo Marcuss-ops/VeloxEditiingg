@@ -75,3 +75,6 @@ e2e-grpc:      ## PR 3 — 6-case gRPC control-plane matrix on a host-native mas
 
 e2e-workload:  ## PR 5 — full workload E2E (Hello → HelloAck → Task → Artifact → SUCCEEDED)
 	@bash tests/e2e/workload/run.sh
+
+e2e-workload-mtls:  ## PR 7 — full workload E2E over mTLS (channel=staging, environment=staging, fail-closed: NO insecure fallback)
+	@bash tests/e2e/workload-mtls/run.sh

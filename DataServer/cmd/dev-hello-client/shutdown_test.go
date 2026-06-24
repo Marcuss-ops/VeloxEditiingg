@@ -255,3 +255,70 @@ func TestShutdownStateMutationFlow(t *testing.T) {
 		t.Fatalf("after drainStream: goodbyeSent should be true; got %+v", s)
 	}
 }
+
+// TestHeartbeatMidSessionPermissionDenied is the regression test for
+// the P0.3 fix on the heartbeat recv case-block. Before the fix, the
+// case-block fell through to `continue` whenever the recv goroutine
+// produced a non-normal-exit error (codes.PermissionDenied /
+// codes.Unauthenticated / codes.Unknown / codes.Unavailable / etc.),
+// so operators reading dev-hello-client logs saw a misleading
+// "✓ HelloAck" line followed by an exit 0 even when the master had
+// evicted the worker mid-heartbeat. The fix replaces `continue` with a
+// teardown path that propagates r.err as a non-zero exit code.
+//
+// This test asserts the contract in two halves, mirroring the run()'s
+// case-block flow:
+//
+//  1. With the in-flight heartbeat state (helloAckReceived=true,
+//     goodbyeSent=false, localCancelSent=false), codes.PermissionDenied
+//     does NOT classify as a normal local close — the fix's new branch
+//     DOES fire.
+//  2. After the fix's state mutation (localCancelSent=true) the
+//     drainStream-equivalent cleanup classifies the err as non-zero —
+//     we exercise this half via drainStream itself because run()'s
+//     inline teardown is hard to invoke without grpc.NewClient; the
+//     underlying classification primitive (isExpectedLocalClose on a
+//     non-normal-exit err with all-three state bits true → false) is
+//     exactly what the inline code relies on.
+func TestHeartbeatMidSessionPermissionDenied(t *testing.T) {
+	logger := log.New(io.Discard, "", 0)
+
+	// ── Half 1 — pre-mutation state ──────────────────────────────────────────
+	// At the moment the heartbeat case-block accepts a recv err, the
+	// shutdown flag board has exactly one bit set (HelloAck was
+	// received). Without the fix's mutation, this state cannot classify
+	// any recv err as an expected local close: the predicate requires
+	// all three bits.
+	state := shutdownState{
+		helloAckReceived: true,
+		goodbyeSent:      false,
+		localCancelSent:  false,
+	}
+	recvErr := status.Error(codes.PermissionDenied, "evicted mid-heartbeat")
+	if isExpectedLocalClose(recvErr, &state) {
+		t.Fatalf("isExpectedLocalClose(perm, mid-heartbeat state) = true; " +
+			"want false so the fix's new branch fires")
+	}
+
+	// ── Half 2 — post-mutation state + drainStream run ───────────────────────
+	// The fix's new branch flips state.localCancelSent=true and then
+	// runs the drainStream-equivalent cleanup. We simulate that here:
+	// flip the bit, push the consumed PermissionDenied onto recvCh, and
+	// let drainStream apply its classification (it sets
+	// state.goodbyeSent=true after CloseSend, completing the all-3-true
+	// gate so the err taxonomy branch fires).
+	state.localCancelSent = true
+	recvCh := make(chan recvResult, 1)
+	recvDone := make(chan struct{})
+	close(recvDone)
+	recvCh <- recvResult{err: recvErr}
+
+	err := drainStream(&mockStream{}, recvDone, recvCh, &state, logger)
+	if err == nil {
+		t.Fatalf("drainStream returned nil after post-fix state mutation; " +
+			"want codes.PermissionDenied propagation (non-zero exit)")
+	}
+	if got, want := status.Code(err), codes.PermissionDenied; got != want {
+		t.Fatalf("drainStream err code = %v, want %v (err=%v)", got, want, err)
+	}
+}

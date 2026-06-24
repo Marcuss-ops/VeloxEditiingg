@@ -58,6 +58,10 @@ const (
 	CodeRegistryPersistRevokeFail     = "REGISTRY_PERSIST_REVOKE_FAIL"
 	CodeRegistryPersistUnrevokeFail   = "REGISTRY_PERSIST_UNREVOKE_FAIL"
 	CodeRegistryStaleWorkerCleanup    = "REGISTRY_STALE_WORKER_CLEANUP"
+
+	// CONNECTED/STALE/DISCONNECTED read-model hydration (PR: session_active plumbing)
+	CodeRegistryLoadSessionsQueryFail = "REGISTRY_LOAD_SESSIONS_QUERY_FAIL"
+	CodeRegistryLoadSessionQueryFail  = "REGISTRY_LOAD_SESSION_QUERY_FAIL"
 )
 
 // Queue/Job codes
@@ -292,8 +296,11 @@ var CodeDescriptions = map[string]string{
 	CodeRegistryDeleteWorkerFail:      "Failed to delete worker",
 	CodeRegistryDeleteStaleWorkerFail: "Failed to delete stale worker",
 	CodeRegistryPersistRevokeFail:     "Failed to persist worker revoke",
-	CodeRegistryPersistUnrevokeFail:   "Failed to persist worker unrevoke",
-	CodeRegistryStaleWorkerCleanup:    "Cleaned up stale worker",
+	CodeRegistryPersistUnrevokeFail:   "Failed to persist worker unrevoke",	CodeRegistryStaleWorkerCleanup: "Cleaned up stale worker",
+
+	// CONNECTED/STALE/DISCONNECTED read-model hydration.
+	CodeRegistryLoadSessionsQueryFail: "Bulk session query failed; demoting fleet to conservative (DISCONNECTED) state",
+	CodeRegistryLoadSessionQueryFail:  "Per-worker session query failed; treating worker as DISCONNECTED",
 
 	// Queue/job.
 	CodeJobRequeued: "Job requeued",

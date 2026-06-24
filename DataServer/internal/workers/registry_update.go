@@ -60,7 +60,8 @@ func (r *Registry) RegisterWorker(ctx context.Context, workerID, workerName, ipA
 
 	r.inMem[workerID] = info
 
-	// Persist to SQLite
+	// Persist to SQLite. RegisterWorker builds a fresh struct (no prior
+	// SessionActive / ConnectionStatus) so no scrub is needed here.
 	if r.dbStore != nil {
 		raw, _ := json.Marshal(info)
 		if err := r.dbStore.UpsertWorker(raw); err != nil {
@@ -162,7 +163,9 @@ func (r *Registry) UpdateWorker(ctx context.Context, workerID string, updates ma
 	r.inMem[workerID] = info
 
 	if r.dbStore != nil {
-		raw, _ := json.Marshal(info)
+		persisted := info
+		ScrubForPersist(&persisted)
+		raw, _ := json.Marshal(persisted)
 		if err := r.dbStore.UpsertWorker(raw); err != nil {
 			registryLog.ErrorWithMsg(logging.CodeSQLiteUpsertWorkerUpdateFail,
 				"SQLite upsert worker update failed",

@@ -2,32 +2,104 @@ package workers
 
 import "strings"
 
-// WorkerInfo contains all information about a registered worker
+// WorkerInfo contains all information about a registered worker.
+//
+// Two fields are NOT persisted in workers.raw_json and are recomputed at
+// READ time on every List/GetWorker call so an explicit DB revoke (or a
+// new session) instantly demotes/promotes the cached worker without a
+// registry refresh:
+//
+//   - SessionActive   (bool)    — derived from worker_sessions
+//   - ConnectionStatus (string) — derived from drain + SessionActive +
+//                                 heartbeat freshness
+//
+// See registry_query.go (Hydrate / ConnectionStatusForInfo) for the
+// canonical read-time derivation. Persistence paths in Heartbeat and
+// UpdateWorker explicitly ZERO both fields before UpsertWorker so a
+// cached WorkerInfo returned by a previous GetWorker cannot leak derived
+// state across a registry restart.
 type WorkerInfo struct {
-	WorkerID        string                 `json:"worker_id"`
-	WorkerName      string                 `json:"worker_name"`
-	DisplayName     string                 `json:"display_name"`
-	Status          string                 `json:"status"`
-	LastHB          string                 `json:"last_heartbeat"`
-	FirstSeen       string                 `json:"first_seen"`
-	CurrentJob      string                 `json:"current_job"`
-	Drain           bool                   `json:"drain"`
-	Schedulable     bool                   `json:"schedulable"`
-	WorkerGroup     string                 `json:"worker_group"`
-	IPAddress       string                 `json:"ip_address"`
-	Host            string                 `json:"host"`
-	CodeVersion     string                 `json:"code_version"`
-	BundleVersion   string                 `json:"bundle_version"`
-	BundleHash      string                 `json:"bundle_hash,omitempty"`
-	ProtocolVersion string                 `json:"protocol_version,omitempty"`
-	EngineVersion   string                 `json:"engine_version,omitempty"`
+	WorkerID       string `json:"worker_id"`
+	WorkerName     string `json:"worker_name"`
+	DisplayName    string `json:"display_name"`
+	Status         string `json:"status"`
+	LastHB         string `json:"last_heartbeat"`
+	FirstSeen      string `json:"first_seen"`
+	CurrentJob     string `json:"current_job"`
+	Drain          bool   `json:"drain"`
+	Schedulable    bool   `json:"schedulable"`
+	WorkerGroup    string `json:"worker_group"`
+	IPAddress      string `json:"ip_address"`
+	Host           string `json:"host"`
+	CodeVersion    string `json:"code_version"`
+	BundleVersion  string `json:"bundle_version"`
+	BundleHash     string `json:"bundle_hash,omitempty"`
+	ProtocolVersion string `json:"protocol_version,omitempty"`
+	EngineVersion   string `json:"engine_version,omitempty"`
 	Capabilities    map[string]interface{} `json:"capabilities,omitempty"`
 	BootID          string                 `json:"boot_id,omitempty"`
 	BootTS          string                 `json:"boot_ts,omitempty"`
-	Readiness       map[string]interface{} `json:"readiness,omitempty"`
-	RecentLogs      []string               `json:"recent_logs,omitempty"`
-	RecentErrors    []string               `json:"recent_errors,omitempty"`
-	Metrics         map[string]interface{} `json:"metrics,omitempty"`
+
+	// SessionActive — computed at READ time from worker_sessions: true
+	// iff the worker has at least one non-revoked, non-expired auth
+	// session whose last_seen is inside WorkerSessionFreshnessWindow
+	// (5 min — see internal/store/store_worker_control.go). Combined with
+	// heartbeat freshness to derive ConnectionStatus.
+	//
+	// Note: deliberately NOT omitempty. Clients consuming this field
+	// MUST be able to distinguish "session_active=false (offline)" from
+	// "field missing (legacy client)" — the latter is ambiguous.
+	SessionActive bool `json:"session_active"`
+
+	// ConnectionStatus — canonical derived state, one of:
+	//   CONNECTED:    session_active && (now - last_heartbeat) < 30s
+	//   STALE:        session_active && 30s ≤ (now - last_heartbeat) < 5min
+	//   DISCONNECTED: !session_active OR (now - last_heartbeat) ≥ 5min
+	//   DRAINING:     drain=true (overrides heartbeat freshness)
+	// Always serialized (no omitempty) so the legacy/fallback path emits
+	// "" rather than silently dropping the field, which would dodge the
+	// sanitizeWorker invariant Status != "" (see handler-side guard).
+	ConnectionStatus string `json:"connection_status"`
+
+	Readiness    map[string]interface{} `json:"readiness,omitempty"`
+	RecentLogs   []string               `json:"recent_logs,omitempty"`
+	RecentErrors []string               `json:"recent_errors,omitempty"`
+	Metrics      map[string]interface{} `json:"metrics,omitempty"`
+}
+
+// ScrubForPersist zeroes the read-time-hydrated fields on `info` so a
+// cached WorkerInfo returned by a previous GetWorker cannot leak its
+// derived state into workers.raw_json (which would re-hydrate stale on
+// the next registry.Load).
+//
+// Persistence call sites that marshal a *WorkerInfo to workers.raw_json
+// (currently ONLY: Heartbeat in registry_heartbeat.go and UpdateWorker
+// in registry_update.go — RegisterWorker builds a fresh struct so it
+// cannot leak) MUST call ScrubForPersist on a COPY of `info` immediately
+// before json.Marshal. The canonical pattern is:
+//
+//   persisted := *info
+//   workers.ScrubForPersist(&persisted)
+//   raw, _ := json.Marshal(persisted)
+//   dbStore.UpsertWorker(raw)
+//
+// IMPORTANT — this helper is ONLY for sites that marshal a *WorkerInfo.
+// Other worker persistence paths (SetWorkerRevoked → worker_flags.raw_json)
+// deliberately persist a DIFFERENT shape — a tiny three-key audit blob —
+// and have no read-time-hydration contract. Calling ScrubForPersist on
+// a hardcoded map there would be a no-op; do NOT "harmonize" the two
+// raw_json paths, or you reintroduce the leak. The shape contract on
+// worker_flags.raw_json is enforced by store_workers_test.go.
+//
+// Treating SessionActive + ConnectionStatus as "never persisted" is the
+// only way to keep the workers.raw_json JSON contract and the
+// read-model enum consistent across restarts.
+func ScrubForPersist(info *WorkerInfo) {
+	if info == nil {
+		return
+	}
+	info.SessionActive = false
+	info.ConnectionStatus = ""
 }
 
 const DefaultWorkerProtocolVersion = "v3"

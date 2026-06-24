@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -342,6 +343,77 @@ func (s *SQLiteStore) CleanupExpiredSessions() (int64, error) {
 		return 0, err
 	}
 	return result.RowsAffected()
+}
+
+// WorkerSessionFreshnessWindow — a session is only considered active if its
+// `last_seen` is within this window, IN ADDITION to revoked=0 + expires_at>now.
+// Matches workers.ConnectionDisconnectedThreshold (5 min) so the canonical
+// state derivation can render a CONNECTED worker that has a live session
+// AND a recent heartbeat-side bump; without this gate, a worker idle for
+// 24h whose session expires in 1h would falsely read as CONNECTED.
+const WorkerSessionFreshnessWindow = 5 * time.Minute
+
+// IsSessionActive returns true if workerID has at least one non-revoked,
+// non-expired session whose last_seen is inside WorkerSessionFreshnessWindow.
+// Used by the registry to plumb `session_active` into the worker read model
+// (PR: CONNECTED/STALE/DISCONNECTED semantics). Returns false on DB error
+// to keep the conservative (DISCONNECTED) verdict.
+func (s *SQLiteStore) IsSessionActive(workerID string) (bool, error) {
+	now := time.Now().UTC().Format(time.RFC3339)
+	freshSince := time.Now().UTC().Add(-WorkerSessionFreshnessWindow).Format(time.RFC3339)
+	var count int
+	err := s.db.QueryRow(
+		`SELECT COUNT(*) FROM worker_sessions
+		 WHERE worker_id = ? AND revoked = 0 AND expires_at > ?
+		   AND last_seen > ?`,
+		workerID, now, freshSince,
+	).Scan(&count)
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
+// GetActiveSessionsByWorkerIDs bulk-fetches which of the given workerIDs
+// currently have a non-revoked, non-expired session. Returns a map keyed by
+// workerID with value=true. Used by Registry.List / StatusSnapshot to avoid
+// N+1 queries when computing session_active across the fleet.
+func (s *SQLiteStore) GetActiveSessionsByWorkerIDs(workerIDs []string) (map[string]bool, error) {
+	out := make(map[string]bool, len(workerIDs))
+	if len(workerIDs) == 0 {
+		return out, nil
+	}
+	placeholders := make([]string, len(workerIDs))
+	// Bind order MUST be: now, freshSince, worker_ids... matching the SQL
+	// placeholders `expires_at > ? AND last_seen > ? AND worker_id IN (?,?,…)`.
+	args := make([]interface{}, 0, len(workerIDs)+2)
+	nowStr := time.Now().UTC().Format(time.RFC3339)
+	freshSinceStr := time.Now().UTC().Add(-WorkerSessionFreshnessWindow).Format(time.RFC3339)
+	args = append(args, nowStr, freshSinceStr)
+	for i, id := range workerIDs {
+		placeholders[i] = "?"
+		args = append(args, id)
+	}
+	q := `SELECT DISTINCT worker_id FROM worker_sessions
+	      WHERE revoked = 0 AND expires_at > ?
+	        AND last_seen > ?
+	        AND worker_id IN (` + strings.Join(placeholders, ",") + `)`
+	rows, err := s.db.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out[id] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // ---------- worker_credentials (persistent identity) ----------

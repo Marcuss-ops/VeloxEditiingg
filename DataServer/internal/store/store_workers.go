@@ -119,6 +119,18 @@ func (s *SQLiteStore) ListWorkers() ([]map[string]any, error) {
 }
 
 // SetWorkerRevoked sets the revoked flag for a worker in worker_flags.
+//
+// SECURITY / SHAPE CONTRACT — read before "harmonizing" with workers.raw_json:
+// The `raw_json` blob here is INTENTIONALLY a separate three-key audit
+// shape ({worker_id, revoked, updated_at}), NOT a WorkerInfo copy. WorkerInfo
+// carries read-time-hydrated fields (SessionActive, ConnectionStatus) that
+// must NEVER be persisted (see workers.ScrubForPersist) — adding them to
+// this blob would reintroduce the persistence-leak class fixed by that
+// helper, but without a matching read-time hydrator on this side (there is
+// none, and none should exist). The shape is locked by
+// TestSetWorkerRevoked_RawJsonShapeContract below. If a future change needs
+// structured flag metadata beyond the three-key blob, add explicit columns
+// to worker_flags — keep raw_json as the audit map it is today.
 func (s *SQLiteStore) SetWorkerRevoked(workerID string, revoked bool) error {
 	revInt := 0
 	if revoked {

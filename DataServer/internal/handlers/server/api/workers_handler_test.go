@@ -11,33 +11,6 @@ import (
 	workersreg "velox-server/internal/workers"
 )
 
-func TestComputeStatus(t *testing.T) {
-	now := time.Now().UTC()
-	recent := now.Add(-5 * time.Second).Format(time.RFC3339)
-	stale := now.Add(-45 * time.Second).Format(time.RFC3339)
-
-	cases := []struct {
-		name   string
-		lastHB string
-		drain  bool
-		want   string
-	}{
-		{"connected (recent HB)", recent, false, "CONNECTED"},
-		{"stale (old HB)", stale, false, "STALE"},
-		{"disconnected (empty HB)", "", false, "DISCONNECTED"},
-		{"disconnected (bad timestamp)", "not-a-timestamp", false, "DISCONNECTED"},
-		{"draining with recent HB", recent, true, "DRAINING"},
-		{"draining with stale HB", stale, true, "DRAINING"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := computeStatus(tc.lastHB, tc.drain); got != tc.want {
-				t.Errorf("computeStatus() = %q, want %q", got, tc.want)
-			}
-		})
-	}
-}
-
 func TestHeartbeatAgeSeconds(t *testing.T) {
 	now := time.Now().UTC()
 	recent := now.Add(-10 * time.Second).Format(time.RFC3339)
@@ -61,16 +34,20 @@ func TestSanitizeWorker(t *testing.T) {
 	raw := workersreg.WorkerInfo{
 		WorkerID:        "worker-abc",
 		WorkerName:      "render-node-1",
-		Status:          "idle",
-		LastHB:          recent,
-		FirstSeen:       firstSeen,
-		CurrentJob:      "task-456",
-		Drain:           false,
-		Schedulable:     true,
-		Host:            "render-01.example.com",
-		ProtocolVersion: "v3",
-		EngineVersion:   "1.2.0",
-		BundleVersion:   "20260621",
+		// Post-hydration ConnectionStatus — sanitizeWorker trusts this
+		// directly. The canonical derivation is `workers.ConnectionStatus`
+		// (called via `ConnectionStatusForInfo` from `hydrate`/`hydrateBulk`
+		// in `registry_query.go`).
+		ConnectionStatus: "CONNECTED",
+		LastHB:           recent,
+		FirstSeen:        firstSeen,
+		CurrentJob:       "task-456",
+		Drain:            false,
+		Schedulable:      true,
+		Host:             "render-01.example.com",
+		ProtocolVersion:  "v3",
+		EngineVersion:    "1.2.0",
+		BundleVersion:    "20260621",
 		// These fields MUST be excluded from the response DTO.
 		IPAddress: "10.0.0.5",
 		BootID:    "boot-secret-123",
@@ -187,14 +164,64 @@ func TestSanitizeWorker(t *testing.T) {
 }
 
 func TestSanitizeWorker_Draining(t *testing.T) {
+	// Post-hydration ConnectionStatus — sanitizeWorker trusts this
+	// directly. The canonical derivation is `workers.ConnectionStatus`
+	// (called via `ConnectionStatusForInfo` from `hydrate`/`hydrateBulk`
+	// in `registry_query.go`).
 	raw := workersreg.WorkerInfo{
-		WorkerID: "w-drain",
-		LastHB:   time.Now().UTC().Format(time.RFC3339),
-		Drain:    true,
+		WorkerID:         "w-drain",
+		LastHB:           time.Now().UTC().Format(time.RFC3339),
+		Drain:            true,
+		ConnectionStatus: "DRAINING",
 	}
 	resp := sanitizeWorker(raw)
 	if resp.Status != "DRAINING" {
 		t.Errorf("Status = %q, want DRAINING", resp.Status)
+	}
+}
+
+// TestSanitizeWorker_NoDerivationInvariant pins the no-derivation
+// contract: sanitizeWorker trusts WorkerInfo.ConnectionStatus directly,
+// it MUST NOT derive status from heartbeat+drain.
+//
+// Exhaustive 4-state derivation coverage lives in TestConnectionStatus_*
+// in `worker_info_test.go`; this test exists only to pin the handler-
+// boundary invariant. If it ever fires, an inspector just re-introduced
+// a heartbeat/drain derivation inside sanitizeWorker.
+//
+//   subcase                legacy fallback (now disallowed)  → required resp.Status
+//   ────────────────────────────────────────────────────────────────────────────
+//   Drain=true             "DRAINING"  (drain rank)            → ""
+//   Drain=false + recent HB "CONNECTED" (recent-heartbeat branch) → ""
+//
+// A regression re-introducing the deleted
+// `if resp.Status == "" { resp.Status = computeStatusLegacy(...) }`
+// block inside sanitizeWorker would fail both subcases.
+func TestSanitizeWorker_NoDerivationInvariant(t *testing.T) {
+	now := time.Now().UTC().Format(time.RFC3339)
+	cases := []struct {
+		name string
+		raw  workersreg.WorkerInfo
+	}{
+		{
+			// Subcase name carries the legacy-fallback pattern so CI `-v`
+			// output names the regression shape even without reading the
+			// table comment above.
+			"drain=true (legacy: DRAINING; new: empty)",
+			workersreg.WorkerInfo{WorkerID: "w-noderive-1", LastHB: now, Drain: true},
+		},
+		{
+			"drain=false, recent HB (legacy: CONNECTED; new: empty)",
+			workersreg.WorkerInfo{WorkerID: "w-noderive-2", LastHB: now, Drain: false},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			resp := sanitizeWorker(tc.raw)
+			if resp.Status != "" {
+				t.Errorf("resp.Status = %q, want \"\" (sanitizeWorker must trust ConnectionStatus; consult workers.ConnectionStatus for canonical derivation)", resp.Status)
+			}
+		})
 	}
 }
 
@@ -210,6 +237,54 @@ func TestSanitizeWorker_NilMaps(t *testing.T) {
 	}
 	if len(resp.Executors) != 0 {
 		t.Errorf("expected no executors for nil capabilities, got %d", len(resp.Executors))
+	}
+}
+
+func TestSanitizeWorker_SessionActiveSurfacesInJSON(t *testing.T) {
+	// PR review fix: SessionActive MUST serialize on the JSON response so
+	// dashboards can distinguish session_active=false (offline) from
+	// "field missing (legacy client)". ConnectionStatus omitempty is
+	// preserved for the legacy/fallback path; here we set it explicitly.
+	cases := []struct {
+		name             string
+		sessionActive    bool
+		connectionStatus string
+		wantFieldTrue    bool
+	}{
+		{"online worker", true, "CONNECTED", true},
+		{"session dropped (heartbeat still fresh)", false, "DISCONNECTED", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			recent := time.Now().UTC().Format(time.RFC3339)
+			raw := workersreg.WorkerInfo{
+				WorkerID:           "worker-conn",
+				LastHB:             recent,
+				SessionActive:      tc.sessionActive,
+				ConnectionStatus:   tc.connectionStatus,
+			}
+			resp := sanitizeWorker(raw)
+			if resp.SessionActive != tc.wantFieldTrue {
+				t.Errorf("resp.SessionActive = %v, want %v", resp.SessionActive, tc.wantFieldTrue)
+			}
+			if resp.Status != tc.connectionStatus {
+				t.Errorf("resp.Status = %q, want %q", resp.Status, tc.connectionStatus)
+			}
+			b, err := json.Marshal(resp)
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			jsonStr := string(b)
+			if tc.wantFieldTrue && !contains(jsonStr, "\"session_active\":true") {
+				t.Errorf("JSON lost session_active=true: %s", jsonStr)
+			}
+			if !tc.wantFieldTrue && !contains(jsonStr, "\"session_active\":false") {
+				t.Errorf("JSON lost session_active=false: %s", jsonStr)
+			}
+			if !contains(jsonStr, "\"status\":\""+tc.connectionStatus+"\"") {
+				t.Errorf("JSON lost status=%s; got %s", tc.connectionStatus, jsonStr)
+			}
+		})
 	}
 }
 
@@ -297,6 +372,20 @@ func TestGetWorker_Success(t *testing.T) {
 	}
 	if resp.CurrentTaskID != "task-1" {
 		t.Errorf("CurrentTaskID = %q, want task-1", resp.CurrentTaskID)
+	}
+
+	// No DB wired (workersreg.New(nil) → dbStore=nil) so the hydrate path
+	// returns session_active=false → canonical ConnectionStatus returns
+	// DISCONNECTED for ALL workers that haven't hand-rolled a session
+	// INSERT. Pin the assertion here so a regression that drops the
+	// enum value (e.g. a future omitempty flip on WorkerResponse.Status)
+	// is caught at test time.
+
+	if resp.Status != "DISCONNECTED" {
+		t.Errorf("Status = %q, want DISCONNECTED (no DB wired, conservative fallback)", resp.Status)
+	}
+	if resp.SessionActive {
+		t.Errorf("SessionActive = true; want false (no DB; dbStore=nil; conservative fallback)")
 	}
 }
 

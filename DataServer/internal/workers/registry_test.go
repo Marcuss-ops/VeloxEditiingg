@@ -384,3 +384,289 @@ func TestRegistryGetStaleWorkers(t *testing.T) {
 		t.Fatalf("expected w2 to be stale, got %s", staleWorkers[0].WorkerID)
 	}
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// ConnectionStatus hydration (Registry → worker_sessions integration)
+// ─────────────────────────────────────────────────────────────────────
+//
+// Tests the canonical scenarios for /api/v1/workers/:worker_id:
+//   1. CONNECTED — fresh session + fresh heartbeat
+//   2. session_drop — fresh heartbeat but revoked session → DISCONNECTED
+//   3. STALE — fresh session + heartbeat older than 30s but younger than 5min
+//   4. DISCONNECTED — heartbeat older than 5min, even with active session
+//   5. DRAINING — drain=true overrides freshness on a fresh session/heartbeat
+//
+// Uses the real SQLite store (worker_sessions + workers) wired through
+// `store.NewSQLiteStore`; manipulates heartbeat timestamps directly via
+// the registry's locked `inMem` map (same pattern used by
+// TestRegistryCleanupStaleWorkers / TestRegistryGetStaleWorkers).
+func TestRegistryConnectionStatus_SessionDropAndOldHeartbeat(t *testing.T) {
+	s, err := store.NewSQLiteStore(t.TempDir() + "/test_connection_registry.db")
+	if err != nil {
+		t.Fatalf("failed to create test SQLite store: %v", err)
+	}
+	defer s.Close()
+
+	reg := New(s)
+	ctx := context.Background()
+
+	// insertSession inserts a non-revoked, non-expired worker session.
+	insertSession := func(workerID, sessionID string) {
+		sess := &store.PersistedSession{
+			SessionID: sessionID,
+			WorkerID:  workerID,
+			TokenHash: "hash-" + sessionID,
+			IPAddress: "10.0.0.1",
+			ExpiresAt: time.Now().UTC().Add(1 * time.Hour),
+		}
+		if err := s.InsertSession(sess); err != nil {
+			t.Fatalf("InsertSession(%s) failed: %v", sessionID, err)
+		}
+	}
+
+	// setHB rewinds the worker's last_heartbeat to now-age. Follows the
+	// existing pattern in TestRegistryCleanupStaleWorkers (write under
+	// the registry's mutex to bypass Heartbeat's mutator path).
+	setHB := func(workerID string, age time.Duration) {
+		reg.mu.Lock()
+		defer reg.mu.Unlock()
+		info := reg.inMem[workerID]
+		info.LastHB = time.Now().UTC().Add(-age).Format(time.RFC3339)
+		reg.inMem[workerID] = info
+	}
+
+	// ── 1. CONNECTED — fresh session + fresh heartbeat ─────────────
+	if err := reg.RegisterWorker(ctx, "w1", "worker-1", "10.0.0.1", nil); err != nil {
+		t.Fatalf("RegisterWorker: %v", err)
+	}
+	insertSession("w1", "sess-fresh")
+
+	info := reg.GetWorker(ctx, "w1")
+	if info == nil {
+		t.Fatal("expected worker w1 to exist after registration")
+	}
+	if !info.SessionActive {
+		t.Errorf("step 1: expected SessionActive=true with active session; got false")
+	}
+	if info.ConnectionStatus != StatusConnected {
+		t.Errorf("step 1: expected CONNECTED with fresh session+heartbeat; got %q (info=%+v)",
+			info.ConnectionStatus, info)
+	}
+
+	// ── 2. session_drop while heartbeat is fresh → DISCONNECTED ────
+	if err := s.RevokeSession("sess-fresh"); err != nil {
+		t.Fatalf("RevokeSession: %v", err)
+	}
+
+	info = reg.GetWorker(ctx, "w1")
+	if info == nil {
+		t.Fatal("expected worker w1 still present after session revoke")
+	}
+	if info.SessionActive {
+		t.Errorf("step 2: expected SessionActive=false after revocation; got true")
+	}
+	if info.ConnectionStatus != StatusDisconnected {
+		t.Errorf("step 2: expected DISCONNECTED on session_drop (heartbeat still fresh); got %q",
+			info.ConnectionStatus)
+	}
+
+	// ── 3. STALE — fresh session + heartbeat 60s ago ───────────────
+	insertSession("w1", "sess-stale")
+	setHB("w1", 60*time.Second)
+
+	info = reg.GetWorker(ctx, "w1")
+	if info == nil {
+		t.Fatal("expected worker w1 after second session insert + HB rewind")
+	}
+	if !info.SessionActive {
+		t.Errorf("step 3: expected SessionActive=true; got false")
+	}
+	if info.ConnectionStatus != StatusStale {
+		t.Errorf("step 3: expected STALE with fresh session + 60s-old heartbeat; got %q",
+			info.ConnectionStatus)
+	}
+
+	// ── 4. DISCONNECTED — heartbeat 6min ago, even with active session
+	setHB("w1", 6*time.Minute)
+
+	info = reg.GetWorker(ctx, "w1")
+	if info == nil {
+		t.Fatal("expected worker w1")
+	}
+	if !info.SessionActive {
+		t.Errorf("step 4: SessionActive should still be true (worker_sessions unchanged); got false")
+	}
+	if info.ConnectionStatus != StatusDisconnected {
+		t.Errorf("step 4: expected DISCONNECTED with 6min heartbeat age; got %q",
+			info.ConnectionStatus)
+	}
+
+	// ── 5. DRAINING — drain=true overrides a fresh session/heartbeat
+	insertSession("w1", "sess-drain")
+	setHB("w1", 0) // fresh
+
+	info = reg.GetWorker(ctx, "w1")
+	if info.ConnectionStatus != StatusConnected {
+		t.Errorf("step 5 pre-drain: expected CONNECTED baseline; got %q", info.ConnectionStatus)
+	}
+	if err := reg.SetWorkerDrain(ctx, "w1", true); err != nil {
+		t.Fatalf("SetWorkerDrain: %v", err)
+	}
+
+	info = reg.GetWorker(ctx, "w1")
+	if info.ConnectionStatus != StatusDraining {
+		t.Errorf("step 5: expected DRAINING override on fresh session/heartbeat; got %q",
+			info.ConnectionStatus)
+	}
+}
+
+// TestRegistryListPopulatesSessionActive_AcrossFleet confirms List
+// bulk-hydrates SessionActive + ConnectionStatus without N+1 — would
+// catch a regression where List went back to the pre-PR heartbeat-only
+// filtering (the gap this PR is intended to close).
+func TestRegistryListPopulatesSessionActive_AcrossFleet(t *testing.T) {
+	s, err := store.NewSQLiteStore(t.TempDir() + "/test_list_session.db")
+	if err != nil {
+		t.Fatalf("failed to create test SQLite store: %v", err)
+	}
+	defer s.Close()
+
+	reg := New(s)
+	ctx := context.Background()
+
+	_ = reg.RegisterWorker(ctx, "w1", "worker-1", "10.0.0.1", nil)
+	_ = reg.RegisterWorker(ctx, "w2", "worker-2", "10.0.0.2", nil)
+
+	sess := &store.PersistedSession{
+		SessionID: "sess-w1",
+		WorkerID:  "w1",
+		TokenHash: "hash-w1",
+		IPAddress: "10.0.0.1",
+		ExpiresAt: time.Now().UTC().Add(1 * time.Hour),
+	}
+	if err := s.InsertSession(sess); err != nil {
+		t.Fatalf("InsertSession: %v", err)
+	}
+
+	list := reg.List(ctx)
+	if len(list) != 2 {
+		t.Fatalf("expected 2 registered workers, got %d", len(list))
+	}
+
+	got := make(map[string]WorkerInfo, len(list))
+	for _, w := range list {
+		got[w.WorkerID] = w
+	}
+	if !got["w1"].SessionActive {
+		t.Errorf("w1.SessionActive: want true (active session inserted); got false (info=%+v)", got["w1"])
+	}
+	if got["w1"].ConnectionStatus != StatusConnected {
+		t.Errorf("w1.ConnectionStatus: want CONNECTED; got %q", got["w1"].ConnectionStatus)
+	}
+	if got["w2"].SessionActive {
+		t.Errorf("w2.SessionActive: want false (no session inserted); got true (info=%+v)", got["w2"])
+	}
+	if got["w2"].ConnectionStatus != StatusDisconnected {
+		t.Errorf("w2.ConnectionStatus: want DISCONNECTED (no session); got %q", got["w2"].ConnectionStatus)
+	}
+}
+
+
+// TestGetSchedulableWorkers_ExcludesDraining pins the dispatcher-side
+// drain-exclusion contract at the SAME entry the job-routing layer
+// uses. Two channels flow into `costmodel.WorkerProfile.IsDraining`
+// (see costmodel/worker_profile.go BuildWorkerProfile line:
+// `IsDraining: drain || !schedulable`):
+//
+//   1. drain == true                 → IsDraining=true → Eligible=false
+//   2. schedulable == false          → IsDraining=true → Eligible=false
+//
+// Both must be excluded from the result of GetSchedulableWorkers.
+// This test does NOT validate the implementation — only the
+// behavior contract. A regression that strips the canonical
+// costmodel-based exclusion (or adds a hand-rolled `if w.Drain`
+// block inside GetEligibleWorkers, which would itself be a
+// OWNERSHIP.md policy violation) will fail here.
+func TestGetSchedulableWorkers_ExcludesDraining(t *testing.T) {
+	reg := newTestRegistry(t)
+	ctx := context.Background()
+
+	// Pin now so the heartbeat is unambiguously "fresh" instead of
+	// sensitive to clock drift in CI.
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	// ── Channel 1: drain = true. Even with schedulable=true and a
+	// fresh heartbeat, the worker is excluded. This is the canonical
+	// "DRAINING" input that surfaces as ConnectionStatus="DRAINING".
+	reg.Heartbeat(ctx, "w-drain-1", "Draining Worker", "idle", "", nil)
+	reg.UpdateWorker(ctx, "w-drain-1", map[string]interface{}{
+		"drain":          true,
+		"last_heartbeat": now,
+		"schedulable":    true, // explicit: scheduled flag-wise, but drain overrides.
+	})
+
+	// ── Channel 2: schedulable = false (NOT draining per the drain
+	// field, but the costmodel treats `drain || !schedulable` as
+	// IsDraining=true). This worker should ALSO be excluded — a
+	// regression that only checks the drain field would erroneously
+	// pass this case.
+	reg.Heartbeat(ctx, "w-unsched-1", "Unschedulable Worker", "idle", "", nil)
+	reg.UpdateWorker(ctx, "w-unsched-1", map[string]interface{}{
+		"drain":          false,
+		"last_heartbeat": now,
+		"schedulable":    false,
+	})
+
+	// ── Control case: a healthy, schedulable, NON-draining worker.
+	// Expected to appear in the result; without it the test is ambiguous.
+	reg.Heartbeat(ctx, "w-ok-1", "Healthy Worker", "idle", "", nil)
+	reg.UpdateWorker(ctx, "w-ok-1", map[string]interface{}{
+		"drain":          false,
+		"last_heartbeat": now,
+		"schedulable":    true,
+	})
+
+	schedulable := reg.GetSchedulableWorkers(ctx)
+
+	if len(schedulable) != 1 {
+		t.Fatalf("expected exactly ONE schedulable worker (the control case); got %d: %+v",
+			len(schedulable), schedulable)
+	}
+	if schedulable[0].WorkerID != "w-ok-1" {
+		t.Errorf("wrong worker returned; want w-ok-1, got %s", schedulable[0].WorkerID)
+	}
+	if schedulable[0].ConnectionStatus == "DRAINING" {
+		t.Errorf("returned worker should NOT have ConnectionStatus=DRAINING (control-case regression)")
+	}
+
+	// Operator-facing canonical assertion: the drain-channel worker
+	// (w-drain-1, drain=true) MUST surface as `ConnectionStatus =
+	// StatusDraining` on the operator-facing read model. This pins
+	// the read-model derivation rule (drain=true ⇒ DRAINING,
+	// overrides freshness — see workers.ConnectionStatus) alongside
+	// the costmodel-exclusion rule so a regression on either side is
+	// caught by the same test.
+	//
+	// We deliberately do NOT assert ConnectionStatus on w-unsched-1:
+	// `schedulable=false` alone does NOT drive ConnectionStatus to
+	// DRAINING — that input is gated at the costmodel layer only
+	// (IsDraining := drain || !schedulable). The two channels are
+	// intentionally different in operator-surface semantics.
+	if got := reg.GetWorker(ctx, "w-drain-1"); got == nil {
+		t.Errorf("w-drain-1 not registered (sanity regression before derivation check)")
+	} else if got.ConnectionStatus != "DRAINING" {
+		t.Errorf("w-drain-1 ConnectionStatus = %q, want %q (operator-facing read-model derivation: drain=true ⇒ DRAINING)",
+			got.ConnectionStatus, "DRAINING")
+	}
+
+	// Sanity: the excluded workers MUST still be REGISTERED. The
+	// contract is "not eligible for new offers", NOT "removed from
+	// the registry". Misreading that would break health/decommission
+	// visibility (a draining worker still shows up on the admin list
+	// and on /api/v1/workers/:worker_id).
+	for _, id := range []string{"w-drain-1", "w-unsched-1"} {
+		if got := reg.GetWorker(ctx, id); got == nil {
+			t.Errorf("worker %s should still be REGISTERED; schedulable filter must NOT remove from registry", id)
+		}
+	}
+}

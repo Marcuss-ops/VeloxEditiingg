@@ -23,13 +23,25 @@ import (
 )
 
 // WorkerResponse is the sanitized, operator-facing JSON shape for a single
-// worker. It carries derived fields (status, heartbeat_age_seconds) computed
-// from the raw WorkerInfo. Fields intentionally EXCLUDED: credential hash,
-// TLS file paths, worker secret, raw IP addresses, internal readiness blob.
+// worker. It carries derived fields (status, heartbeat_age_seconds,
+// session_active) computed from the raw WorkerInfo. Fields intentionally
+// EXCLUDED: credential hash, TLS file paths, worker secret, raw IP
+// addresses, internal readiness blob.
+//
+// `status` is the canonical connection state
+// (CONNECTED | STALE | DISCONNECTED | DRAINING) derived from the
+// worker's heartbeat freshness AND whether the worker still has a
+// non-revoked, non-expired auth session in `worker_sessions`.
+//
+// `session_active` is the raw boolean that drove the derivation:
+// `true` when the worker has at least one valid session. Useful for
+// dashboards that want to display "session lost, but heartbeat still
+// recent" as a separate diagnostic state from outright DISCONNECTED.
 type WorkerResponse struct {
 	WorkerID            string                   `json:"worker_id"`
 	WorkerName          string                   `json:"worker_name"`
 	Status              string                   `json:"status"` // CONNECTED | STALE | DISCONNECTED | DRAINING
+	SessionActive       bool                     `json:"session_active"`
 	Hostname            string                   `json:"hostname"`
 	ProtocolVersion     string                   `json:"protocol_version"`
 	EngineVersion       string                   `json:"engine_version,omitempty"`
@@ -60,32 +72,6 @@ type WorkersListResponse struct {
 	Workers []WorkerResponse `json:"workers"`
 }
 
-// heartbeatStaleThreshold is the age after which a worker is considered
-// STALE in the dashboard / API response. This is the READ-model staleness
-// window (30 s) — distinct from the scheduler's eviction timeout
-// (VELOX_WORKER_HEARTBEAT_TIMEOUT, default 120 s). Operators see a STALE
-// worker here BEFORE the scheduler evicts it, giving time to investigate.
-const heartbeatStaleThreshold = 30 * time.Second
-
-// computeStatus derives the canonical status string from heartbeat age and
-// the drain flag.
-func computeStatus(lastHB string, drain bool) string {
-	if drain {
-		return "DRAINING"
-	}
-	if lastHB == "" {
-		return "DISCONNECTED"
-	}
-	t, err := time.Parse(time.RFC3339, lastHB)
-	if err != nil {
-		return "DISCONNECTED"
-	}
-	if time.Since(t) > heartbeatStaleThreshold {
-		return "STALE"
-	}
-	return "CONNECTED"
-}
-
 // heartbeatAgeSeconds returns the number of seconds since last heartbeat,
 // or 0 if the timestamp is unparseable.
 func heartbeatAgeSeconds(lastHB string) int64 {
@@ -105,11 +91,19 @@ func heartbeatAgeSeconds(lastHB string) int64 {
 
 // sanitizeWorker converts a raw workers.WorkerInfo into the operator-facing
 // WorkerResponse, stripping all sensitive fields.
+//
+// Connection status: trust the registry's `WorkerInfo.ConnectionStatus`
+// (CONNECTED | STALE | DISCONNECTED | DRAINING) since it merges heartbeat
+// freshness with the canonical `session_active` signal from `worker_sessions`.
+// The canonical `workers.ConnectionStatus` always returns one of the four
+// enum strings on every read path (registry_query.go guarantees this),
+// so no legacy/heartbeat-only fallback is needed.
 func sanitizeWorker(w workersreg.WorkerInfo) WorkerResponse {
 	resp := WorkerResponse{
 		WorkerID:            w.WorkerID,
 		WorkerName:          w.WorkerName,
-		Status:              computeStatus(w.LastHB, w.Drain),
+		SessionActive:       w.SessionActive,
+		Status:              w.ConnectionStatus,
 		Hostname:            w.Host,
 		ProtocolVersion:     w.ProtocolVersion,
 		EngineVersion:       w.EngineVersion,

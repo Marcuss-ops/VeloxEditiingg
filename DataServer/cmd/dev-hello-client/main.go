@@ -362,8 +362,40 @@ helloAckLoop:
 					<-hbDone
 					return drainStream(stream, recvDone, recvCh, &state, logger)
 				}
-				logger.Printf("recv error (non-fatal during heartbeat phase): %v", r.err)
-				continue
+				// PR FIX (P0.3 of the audit recap): heartbeat-phase
+				// terminal recv err. ANY non-normal-exit code
+				// (codes.PermissionDenied, codes.Unauthenticated,
+				// codes.Unknown, codes.Unavailable, codes.Internal, ...)
+				// means the master kicked us. Don't `continue` and
+				// silently absorb it — surface with exit != 0 so the
+				// operator reads the real cause instead of a misleading
+				// "✓ HelloAck" verdict at window-end.
+				logger.Printf("FATAL: unexpected recv error during heartbeat phase: %v", r.err)
+				state.localCancelSent = true
+				cancel() // also unblocks runHeartbeatLoop via ctx.Done()
+				<-hbDone
+				// Inline tail-cleanup mirrors drainStream's body but
+				// deliberately does NOT consult recvCh for
+				// classification: the recv goroutine can race-with-us
+				// and push a post-cancel codes.Canceled frame which,
+				// under an all-3-true state, would re-classify as a
+				// "normal exit" and mask the real cause.
+				if stream != nil {
+					_ = stream.CloseSend()
+				}
+				state.goodbyeSent = true
+				select {
+				case <-recvDone:
+				case <-time.After(2 * time.Second):
+					logger.Printf("WARN: recv goroutine did not exit within 2s after CloseSend (likely master is wedged on the auth path)")
+				}
+				for {
+					select {
+					case <-recvCh: // discard — verdict already decided
+					default:
+						return r.err
+					}
+				}
 			}
 			// We logged HelloAck already; log anything else to expose
 			// unexpected master-driven traffic.

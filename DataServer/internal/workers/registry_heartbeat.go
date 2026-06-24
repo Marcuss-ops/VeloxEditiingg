@@ -90,9 +90,16 @@ func (r *Registry) Heartbeat(ctx context.Context, workerID, workerName, status, 
 
 	r.inMem[workerID] = info
 
-	// Persist to SQLite (single source of truth)
+	// Persist to SQLite (single source of truth). ONLY heartbeat-derived
+	// state is persisted; the read-time-hydrated SessionActive +
+	// ConnectionStatus fields are scrubbed before UpsertWorker so a
+	// cached WorkerInfo returned by a previous GetWorker cannot leak
+	// its derived state into workers.raw_json (which would re-hydrate
+	// stale across a registry restart).
 	if r.dbStore != nil {
-		raw, _ := json.Marshal(info)
+		persisted := info
+		ScrubForPersist(&persisted)
+		raw, _ := json.Marshal(persisted)
 		if err := r.dbStore.UpsertWorker(raw); err != nil {
 			registryLog.ErrorWithMsg(logging.CodeSQLiteUpsertHeartbeatFail,
 				"SQLite upsert worker heartbeat failed",
