@@ -112,11 +112,13 @@ report_match "Tailscale tailnet hostname (*.ts.net)" "$m"
 m="$(git grep -nE '\b[a-z][a-z0-9-]*\.duckdns\.org\b' -- "${GIT_GREP_BASE[@]}" || true)"
 report_match "DuckDNS hostname (*.duckdns.org)" "$m"
 
-# ── Private IPv4 in committed source (RFC 1918 + loopback) ──────────────────
-# 10.0.0.0/8 · 172.16.0.0/12 · 192.168.0.0/16 · 127.0.0.0/8
+# ── Private IPv4 in committed source (RFC 1918 only — NOT loopback) ──────
+# 10.0.0.0/8 · 172.16.0.0/12 · 192.168.0.0/16
+# 127.0.0.0/8 is intentionally excluded: loopback can never be a real
+# security leak, and it appears legitimately in dev config / Dockerfiles /
+# pilot scripts / E2E tests / CI workflows throughout the tree.
 # We only flag these in obvious address contexts (URLs, env values, YAML).
-# Bare `127.0.0.1` in test fixtures is excluded by the test-file glob above.
-m="$(git grep -nE '\b(https?://|tcp://|VELOX_[A-Z_]+=)(10\.[0-9]{1,3}|192\.168\.[0-9]{1,3}|172\.(1[6-9]|2[0-9]|3[01])\.[0-9]{1,3}|127\.[0-9]{1,3})\.[0-9]{1,3}\b' -- "${GIT_GREP_BASE[@]}" || true)"
+m="$(git grep -nE '\b(https?://|tcp://|VELOX_[A-Z_]+=)(10\.[0-9]{1,3}|192\.168\.[0-9]{1,3}|172\.(1[6-9]|2[0-9]|3[01])\.[0-9]{1,3})\.[0-9]{1,3}\b' -- "${GIT_GREP_BASE[@]}" || true)"
 report_match "Private IPv4 in URL/env value" "$m"
 
 # ── Project IDs (channel-identifier leak: youtube-uploader-safe, …) ───────
