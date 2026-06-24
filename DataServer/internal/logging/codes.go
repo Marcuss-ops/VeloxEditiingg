@@ -296,7 +296,7 @@ var CodeDescriptions = map[string]string{
 	CodeRegistryDeleteWorkerFail:      "Failed to delete worker",
 	CodeRegistryDeleteStaleWorkerFail: "Failed to delete stale worker",
 	CodeRegistryPersistRevokeFail:     "Failed to persist worker revoke",
-	CodeRegistryPersistUnrevokeFail:   "Failed to persist worker unrevoke",	CodeRegistryStaleWorkerCleanup: "Cleaned up stale worker",
+	CodeRegistryPersistUnrevokeFail:   "Failed to persist worker unrevoke", CodeRegistryStaleWorkerCleanup: "Cleaned up stale worker",
 
 	// CONNECTED/STALE/DISCONNECTED read-model hydration.
 	CodeRegistryLoadSessionsQueryFail: "Bulk session query failed; demoting fleet to conservative (DISCONNECTED) state",

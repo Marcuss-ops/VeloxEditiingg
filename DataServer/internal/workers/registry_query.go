@@ -54,11 +54,11 @@ const (
 // in tests; production callers pass `time.Now().UTC()`.
 //
 // Rules (canonical, in evaluation order):
-//   1. drain=true                                    → DRAINING
-//   2. !sessionActive OR (now - lastHB) ≥ 5min OR   → DISCONNECTED
-//      lastHB unparseable OR lastHB == ""
-//   3. sessionActive AND (now - lastHB) ≥ 30s       → STALE
-//   4. sessionActive AND (now - lastHB) < 30s       → CONNECTED
+//  1. drain=true                                    → DRAINING
+//  2. !sessionActive OR (now - lastHB) ≥ 5min OR   → DISCONNECTED
+//     lastHB unparseable OR lastHB == ""
+//  3. sessionActive AND (now - lastHB) ≥ 30s       → STALE
+//  4. sessionActive AND (now - lastHB) < 30s       → CONNECTED
 func ConnectionStatus(sessionActive bool, lastHB string, drain bool, now time.Time) string {
 	if drain {
 		return StatusDraining

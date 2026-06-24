@@ -47,10 +47,10 @@ import (
 // negative counters; negative values are a worker bug.
 type TypedExecutionMetrics struct {
 	// ── Byte accounting (raw bytes, not GiB) proto3 int64 ───────────────
-	InputBytes         int64 `json:"input_bytes"`
-	OutputBytes        int64 `json:"output_bytes"`
-	BytesFromDrive     int64 `json:"bytes_from_drive"`     // source: drive
-	BytesFromBlobstore int64 `json:"bytes_from_blobstore"` // source: blobstore
+	InputBytes          int64 `json:"input_bytes"`
+	OutputBytes         int64 `json:"output_bytes"`
+	BytesFromDrive      int64 `json:"bytes_from_drive"`       // source: drive
+	BytesFromBlobstore  int64 `json:"bytes_from_blobstore"`   // source: blobstore
 	BytesFromLocalCache int64 `json:"bytes_from_local_cache"` // source: local cache
 
 	// ── CPU + memory proto3 int64 ────────────────────────────────────────
@@ -64,9 +64,9 @@ type TypedExecutionMetrics struct {
 	FfmpegSpeedRatio float64 `json:"ffmpeg_speed_ratio"` // wall/encoded-time multiplier
 
 	// ── Encode / concat metadata proto3 int32 / bool / string ───────────
-	EncodePasses           int32  `json:"encode_passes"`
+	EncodePasses          int32  `json:"encode_passes"`
 	FinalConcatStreamCopy bool   `json:"final_concat_stream_copy"`
-	ConcatMode             string `json:"concat_mode,omitempty"` // "stream_copy", "reencode", ""
+	ConcatMode            string `json:"concat_mode,omitempty"` // "stream_copy", "reencode", ""
 
 	// ── Cost basis (per-second / per-GiB rates — master multiplies) ─────
 	CpuPricePerSecond float64 `json:"cpu_price_per_second"`
@@ -83,11 +83,11 @@ type TypedExecutionMetrics struct {
 // function returns a *pb.TaskExecutionMetrics and never panics.
 //
 // Callers typically:
-//   1) Build the TypedExecutionMetrics inside TaskRunner.Run /
-//      mergeStatsInto from cache.Stats() / blob.Stats() + report.Metrics.
-//   2) In worker.job_executor.submitTaskResult, set
-//      resultPayload["execution_metrics"] = tm.ToProto() before the
-//      transport.Send dispatch.
+//  1. Build the TypedExecutionMetrics inside TaskRunner.Run /
+//     mergeStatsInto from cache.Stats() / blob.Stats() + report.Metrics.
+//  2. In worker.job_executor.submitTaskResult, set
+//     resultPayload["execution_metrics"] = tm.ToProto() before the
+//     transport.Send dispatch.
 func (t TypedExecutionMetrics) ToProto() *pb.TaskExecutionMetrics {
 	return &pb.TaskExecutionMetrics{
 		InputBytes:            t.InputBytes,

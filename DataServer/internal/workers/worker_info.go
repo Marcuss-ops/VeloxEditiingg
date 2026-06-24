@@ -11,7 +11,7 @@ import "strings"
 //
 //   - SessionActive   (bool)    — derived from worker_sessions
 //   - ConnectionStatus (string) — derived from drain + SessionActive +
-//                                 heartbeat freshness
+//     heartbeat freshness
 //
 // See registry_query.go (Hydrate / ConnectionStatusForInfo) for the
 // canonical read-time derivation. Persistence paths in Heartbeat and
@@ -19,23 +19,23 @@ import "strings"
 // cached WorkerInfo returned by a previous GetWorker cannot leak derived
 // state across a registry restart.
 type WorkerInfo struct {
-	WorkerID       string `json:"worker_id"`
-	WorkerName     string `json:"worker_name"`
-	DisplayName    string `json:"display_name"`
-	Status         string `json:"status"`
-	LastHB         string `json:"last_heartbeat"`
-	FirstSeen      string `json:"first_seen"`
-	CurrentJob     string `json:"current_job"`
-	Drain          bool   `json:"drain"`
-	Schedulable    bool   `json:"schedulable"`
-	WorkerGroup    string `json:"worker_group"`
-	IPAddress      string `json:"ip_address"`
-	Host           string `json:"host"`
-	CodeVersion    string `json:"code_version"`
-	BundleVersion  string `json:"bundle_version"`
-	BundleHash     string `json:"bundle_hash,omitempty"`
-	ProtocolVersion string `json:"protocol_version,omitempty"`
-	EngineVersion   string `json:"engine_version,omitempty"`
+	WorkerID        string                 `json:"worker_id"`
+	WorkerName      string                 `json:"worker_name"`
+	DisplayName     string                 `json:"display_name"`
+	Status          string                 `json:"status"`
+	LastHB          string                 `json:"last_heartbeat"`
+	FirstSeen       string                 `json:"first_seen"`
+	CurrentJob      string                 `json:"current_job"`
+	Drain           bool                   `json:"drain"`
+	Schedulable     bool                   `json:"schedulable"`
+	WorkerGroup     string                 `json:"worker_group"`
+	IPAddress       string                 `json:"ip_address"`
+	Host            string                 `json:"host"`
+	CodeVersion     string                 `json:"code_version"`
+	BundleVersion   string                 `json:"bundle_version"`
+	BundleHash      string                 `json:"bundle_hash,omitempty"`
+	ProtocolVersion string                 `json:"protocol_version,omitempty"`
+	EngineVersion   string                 `json:"engine_version,omitempty"`
 	Capabilities    map[string]interface{} `json:"capabilities,omitempty"`
 	BootID          string                 `json:"boot_id,omitempty"`
 	BootTS          string                 `json:"boot_ts,omitempty"`
@@ -78,10 +78,10 @@ type WorkerInfo struct {
 // cannot leak) MUST call ScrubForPersist on a COPY of `info` immediately
 // before json.Marshal. The canonical pattern is:
 //
-//   persisted := *info
-//   workers.ScrubForPersist(&persisted)
-//   raw, _ := json.Marshal(persisted)
-//   dbStore.UpsertWorker(raw)
+//	persisted := *info
+//	workers.ScrubForPersist(&persisted)
+//	raw, _ := json.Marshal(persisted)
+//	dbStore.UpsertWorker(raw)
 //
 // IMPORTANT — this helper is ONLY for sites that marshal a *WorkerInfo.
 // Other worker persistence paths (SetWorkerRevoked → worker_flags.raw_json)

@@ -60,12 +60,12 @@ func TestNormalizeCapabilities_Nil(t *testing.T) {
 // ─────────────────────────────────────────────────────────────────────
 //
 // Rules (canonical, in evaluation order):
-//   1. drain=true           → DRAINING     (overrides freshness)
-//   2. !sessionActive       → DISCONNECTED (no valid auth session)
-//   3. lastHB empty/unpars. → DISCONNECTED
-//   4. age ≥ 5min           → DISCONNECTED
-//   5. age ≥ 30s            → STALE
-//   6. age <  30s           → CONNECTED
+//  1. drain=true           → DRAINING     (overrides freshness)
+//  2. !sessionActive       → DISCONNECTED (no valid auth session)
+//  3. lastHB empty/unpars. → DISCONNECTED
+//  4. age ≥ 5min           → DISCONNECTED
+//  5. age ≥ 30s            → STALE
+//  6. age <  30s           → CONNECTED
 func hbOffset(now time.Time, age time.Duration) string {
 	return now.UTC().Add(-age).Format(time.RFC3339)
 }

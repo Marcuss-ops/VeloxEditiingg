@@ -79,8 +79,8 @@ type SampledResources struct {
 	TempFilesOpen    int32
 
 	// Process RSS — read from /proc/self/statm (per-process).
-	ProcessRSSBytes      int64
-	ProcessRSSPeakBytes  int64
+	ProcessRSSBytes     int64
+	ProcessRSSPeakBytes int64
 
 	// Major page faults cumulative from /proc/vmstat.
 	MajorPageFaultsTotal int64
@@ -98,7 +98,7 @@ type SampledResources struct {
 	DiskFreeBytes int64
 
 	// Network counters cumulative from /proc/net/dev.
-	NetworkReceiveBytesTotal int64
+	NetworkReceiveBytesTotal  int64
 	NetworkTransmitBytesTotal int64
 	NetworkRetransmitsTotal   int64
 
@@ -515,12 +515,12 @@ func (s *Sampler) readProcVmstatMajorFaults() (int64, error) {
 // the work-disk device. All values are CUMULATIVE since boot — no
 // delta math on the worker; master F2 LastSeenResources does the math.
 type diskCumulatives struct {
-	readBytes       int64
-	writeBytes      int64
-	readLatencyMs   int64
-	writeLatencyMs  int64
-	ioMsTotal       int64
-	sampleMs        int64 // ms since boot (used for io-util ratio baseline)
+	readBytes      int64
+	writeBytes     int64
+	readLatencyMs  int64
+	writeLatencyMs int64
+	ioMsTotal      int64
+	sampleMs       int64 // ms since boot (used for io-util ratio baseline)
 }
 
 // readProcDiskstatsForWorkDir resolves the cwd's device via
@@ -766,7 +766,8 @@ func (s *Sampler) statvfsFreeBytes() (int64, error) {
 // peak RSS in pages. RSS is in pages of 4KiB on Linux.
 //
 // /proc/self/statm layout:
-//   0 size, 1 resident, 2 shared, 3 text, 4 lib, 5 data, 6 dt
+//
+//	0 size, 1 resident, 2 shared, 3 text, 4 lib, 5 data, 6 dt
 func (s *Sampler) readSelfStatm() (rssPages, peakPages int64, err error) {
 	data, err := readFile(filepath.Join(s.procRoot, "self", "statm"))
 	if err != nil {
@@ -823,9 +824,9 @@ func (s *Sampler) readProcLoadavg() (load1 float64, runQueue int, err error) {
 
 // detectGPU returns true if there's any GPU visible to the worker.
 // Strategy (ordered cheapest-first):
-//   1. /dev/nvidia0 → /dev/nvidiaN existence (NVIDIA CUDA).
-//   2. /sys/class/drm/card*/device/vendor → known GPU vendors.
-//   3. Else false.
+//  1. /dev/nvidia0 → /dev/nvidiaN existence (NVIDIA CUDA).
+//  2. /sys/class/drm/card*/device/vendor → known GPU vendors.
+//  3. Else false.
 func (s *Sampler) detectGPU() bool {
 	// 1. /dev/nvidia* existence.
 	for _, p := range []string{"/dev/nvidia0", "/dev/nvidiactl", "/dev/dri/renderD128"} {

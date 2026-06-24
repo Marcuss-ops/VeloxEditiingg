@@ -31,7 +31,6 @@ import (
 	"velox-server/internal/taskoutput_artifacts"
 )
 
-
 // IngestCommand is the typed input for TaskReportIngestionService.IngestTaskResult.
 // Mirrors the audit-mandated TaskResult identity tuple (PR-03) plus the
 // declaration fields. Output artifacts are worker-claimed descriptors;

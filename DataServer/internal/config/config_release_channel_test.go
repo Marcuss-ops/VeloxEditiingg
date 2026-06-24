@@ -35,7 +35,7 @@ func TestReleaseChannel_ExplicitValues(t *testing.T) {
 		{"staging", "staging"},
 		{"dev", "dev"},
 		{"PRODUCTION", "PRODUCTION"}, // case NOT normalised; treated as-is
-		{"Staging", "Staging"},         // case NOT normalised; treated as-is
+		{"Staging", "Staging"},       // case NOT normalised; treated as-is
 	}
 	for _, tc := range cases {
 		os.Setenv("VELOX_RELEASE_CHANNEL", tc.in)

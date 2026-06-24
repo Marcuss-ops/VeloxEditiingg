@@ -108,14 +108,14 @@ func (s *testStreamServer) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMas
 					SessionId:       sessID,
 					SentAt:          timestamppb.Now(),
 					ProtocolVersion: env.ProtocolVersion,
-				Msg: &pb.MasterToWorkerEnvelope_TaskOffer{
-					TaskOffer: &pb.TaskOffer{
-						TaskId:    "test-task-001",
-						JobId:     jobOfferID,
-						LeaseId:   "lease-001",
-						TaskSpec:  nil,
+					Msg: &pb.MasterToWorkerEnvelope_TaskOffer{
+						TaskOffer: &pb.TaskOffer{
+							TaskId:   "test-task-001",
+							JobId:    jobOfferID,
+							LeaseId:  "lease-001",
+							TaskSpec: nil,
+						},
 					},
-				},
 				}
 				_ = stream.Send(jobOfferEnv)
 			case <-time.After(5 * time.Second):

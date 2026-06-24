@@ -21,11 +21,11 @@ import (
 // typed ResourceSnapshot for spot-check assertions. Single-threaded by
 // the gRPC stream consumer so a plain mutex is sufficient.
 type recordableSink struct {
-	mu        sync.Mutex
-	calls     int
-	lastWID   string
-	lastSnap  *velmetrics.ResourceSnapshot
-	allSnaps  []*velmetrics.ResourceSnapshot
+	mu       sync.Mutex
+	calls    int
+	lastWID  string
+	lastSnap *velmetrics.ResourceSnapshot
+	allSnaps []*velmetrics.ResourceSnapshot
 }
 
 func (r *recordableSink) RecordWorker(workerID string, snap *velmetrics.ResourceSnapshot) {
@@ -74,27 +74,27 @@ func TestHandleHeartbeat_F2_DecodesTypedResources(t *testing.T) {
 		WorkerStatus:  "idle",
 		EngineVersion: "engine-1.42",
 		Resources: &pb.WorkerResourceCounters{
-			CpuUtilizationRatio:      0.83,
-			CpuIowaitRatio:           0.04,
-			CpuStealRatio:            0.01,
-			ProcessRssBytes:          536870912,  // 512 MiB
-			ProcessRssPeakBytes:      805306368,  // 768 MiB
-			MemoryUsedBytes:          1677721600, // 1.5 GiB
-			MemoryAvailableBytes:     4294967296, // 4 GiB
-			SwapUsedBytes:            0,
-			DiskReadBytesTotal:       1073741824, // 1 GiB read
-			DiskWriteBytesTotal:      536870912,  // 512 MiB written
-			DiskFreeBytes:            53687091200,
-			TempBytesWritten:         4194304,
-			TempFilesOpen:            2,
-			NetworkReceiveBytesTotal: 20971520, // 20 MiB received cumulatively
+			CpuUtilizationRatio:       0.83,
+			CpuIowaitRatio:            0.04,
+			CpuStealRatio:             0.01,
+			ProcessRssBytes:           536870912,  // 512 MiB
+			ProcessRssPeakBytes:       805306368,  // 768 MiB
+			MemoryUsedBytes:           1677721600, // 1.5 GiB
+			MemoryAvailableBytes:      4294967296, // 4 GiB
+			SwapUsedBytes:             0,
+			DiskReadBytesTotal:        1073741824, // 1 GiB read
+			DiskWriteBytesTotal:       536870912,  // 512 MiB written
+			DiskFreeBytes:             53687091200,
+			TempBytesWritten:          4194304,
+			TempFilesOpen:             2,
+			NetworkReceiveBytesTotal:  20971520, // 20 MiB received cumulatively
 			NetworkTransmitBytesTotal: 4194304,  // 4 MiB transmitted cumulatively
 			NetworkRetransmitsTotal:   12,
-			ActiveTasks:              1,
-			TaskSlots:                4,
-			Load1:                    1.42,
-			RunQueue:                 0,
-			SampledAt:                timestamppb.Now(),
+			ActiveTasks:               1,
+			TaskSlots:                 4,
+			Load1:                     1.42,
+			RunQueue:                  0,
+			SampledAt:                 timestamppb.Now(),
 		},
 	}
 
@@ -183,15 +183,15 @@ func TestHandleHeartbeat_F2_DeltaBetweenBeats(t *testing.T) {
 	hbFirst := &pb.Heartbeat{
 		WorkerName: wID,
 		Resources: &pb.WorkerResourceCounters{
-			NetworkReceiveBytesTotal: 100,
+			NetworkReceiveBytesTotal:  100,
 			NetworkTransmitBytesTotal: 50,
 		},
 	}
 	hbSecond := &pb.Heartbeat{
 		WorkerName: wID,
 		Resources: &pb.WorkerResourceCounters{
-			NetworkReceiveBytesTotal: 200, // +100 since first beat
-			NetworkTransmitBytesTotal: 80, // +30 since first beat
+			NetworkReceiveBytesTotal:  200, // +100 since first beat
+			NetworkTransmitBytesTotal: 80,  // +30 since first beat
 		},
 	}
 
@@ -246,7 +246,7 @@ func TestHandleHeartbeat_F2_NilSinkSafe(t *testing.T) {
 	hb := &pb.Heartbeat{
 		WorkerName: "w-no-sink",
 		Resources: &pb.WorkerResourceCounters{
-			CpuUtilizationRatio: 0.91,
+			CpuUtilizationRatio:      0.91,
 			NetworkReceiveBytesTotal: 4096,
 		},
 	}

@@ -12,23 +12,23 @@ import (
 // non-zero value and assert each getter returns the expected result.
 func TestTypedExecutionMetrics_ToProto_AllFields(t *testing.T) {
 	in := TypedExecutionMetrics{
-		InputBytes:           1048576,   // 1 MiB
-		OutputBytes:          524288,    // 512 KiB
-		BytesFromDrive:       262144,    // 256 KiB
-		BytesFromBlobstore:   262144,    // 256 KiB
-		BytesFromLocalCache:  524288,    // 512 KiB
-		CpuTimeMs:            12345,     // 12.345 s
-		PeakRssBytes:         536870912, // 512 MiB
-		FramesDecoded:        1800,
-		FramesComposited:     1800,
-		FramesEncoded:        1800,
-		FfmpegSpeedRatio:     1.42,
-		EncodePasses:         1,
+		InputBytes:            1048576,   // 1 MiB
+		OutputBytes:           524288,    // 512 KiB
+		BytesFromDrive:        262144,    // 256 KiB
+		BytesFromBlobstore:    262144,    // 256 KiB
+		BytesFromLocalCache:   524288,    // 512 KiB
+		CpuTimeMs:             12345,     // 12.345 s
+		PeakRssBytes:          536870912, // 512 MiB
+		FramesDecoded:         1800,
+		FramesComposited:      1800,
+		FramesEncoded:         1800,
+		FfmpegSpeedRatio:      1.42,
+		EncodePasses:          1,
 		FinalConcatStreamCopy: true,
-		ConcatMode:           "stream_copy",
-		CpuPricePerSecond:    0.000005,
-		StoragePricePerGb:    0.00012,
-		NetworkPricePerGb:    0.01,
+		ConcatMode:            "stream_copy",
+		CpuPricePerSecond:     0.000005,
+		StoragePricePerGb:     0.00012,
+		NetworkPricePerGb:     0.01,
 	}
 	pb := in.ToProto()
 	if pb == nil {

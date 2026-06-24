@@ -1,8 +1,9 @@
 // Package api — PR 4 canonical worker endpoint handlers.
 //
 // Two endpoints:
-//   GET /api/v1/workers           — list all workers with computed status
-//   GET /api/v1/workers/:worker_id — get a single worker by ID
+//
+//	GET /api/v1/workers           — list all workers with computed status
+//	GET /api/v1/workers/:worker_id — get a single worker by ID
 //
 // Both read from the workers.Registry (the operational read model), NOT
 // from the gRPC session map. The session map is a transient connection
@@ -38,26 +39,26 @@ import (
 // dashboards that want to display "session lost, but heartbeat still
 // recent" as a separate diagnostic state from outright DISCONNECTED.
 type WorkerResponse struct {
-	WorkerID            string                   `json:"worker_id"`
-	WorkerName          string                   `json:"worker_name"`
-	Status              string                   `json:"status"` // CONNECTED | STALE | DISCONNECTED | DRAINING
-	SessionActive       bool                     `json:"session_active"`
-	Hostname            string                   `json:"hostname"`
-	ProtocolVersion     string                   `json:"protocol_version"`
-	EngineVersion       string                   `json:"engine_version,omitempty"`
-	BundleVersion       string                   `json:"bundle_version,omitempty"`
-	ConnectedAt         string                   `json:"connected_at,omitempty"`
-	LastHeartbeatAt     string                   `json:"last_heartbeat_at,omitempty"`
-	HeartbeatAgeSeconds int64                    `json:"heartbeat_age_seconds"`
-	CurrentTaskID       string                   `json:"current_task_id,omitempty"`
-	ActiveTasks         int32                    `json:"active_tasks"`
-	TaskSlots           int32                    `json:"task_slots"`
-	CPUUtilizationRatio float64                  `json:"cpu_utilization_ratio"`
-	MemoryUsedBytes     int64                    `json:"memory_used_bytes"`
-	DiskFreeBytes       int64                    `json:"disk_free_bytes"`
-	JobsCompleted       int64                    `json:"jobs_completed"`
-	JobsFailed          int64                    `json:"jobs_failed"`
-	Executors           []ExecutorEntry          `json:"executors,omitempty"`
+	WorkerID            string          `json:"worker_id"`
+	WorkerName          string          `json:"worker_name"`
+	Status              string          `json:"status"` // CONNECTED | STALE | DISCONNECTED | DRAINING
+	SessionActive       bool            `json:"session_active"`
+	Hostname            string          `json:"hostname"`
+	ProtocolVersion     string          `json:"protocol_version"`
+	EngineVersion       string          `json:"engine_version,omitempty"`
+	BundleVersion       string          `json:"bundle_version,omitempty"`
+	ConnectedAt         string          `json:"connected_at,omitempty"`
+	LastHeartbeatAt     string          `json:"last_heartbeat_at,omitempty"`
+	HeartbeatAgeSeconds int64           `json:"heartbeat_age_seconds"`
+	CurrentTaskID       string          `json:"current_task_id,omitempty"`
+	ActiveTasks         int32           `json:"active_tasks"`
+	TaskSlots           int32           `json:"task_slots"`
+	CPUUtilizationRatio float64         `json:"cpu_utilization_ratio"`
+	MemoryUsedBytes     int64           `json:"memory_used_bytes"`
+	DiskFreeBytes       int64           `json:"disk_free_bytes"`
+	JobsCompleted       int64           `json:"jobs_completed"`
+	JobsFailed          int64           `json:"jobs_failed"`
+	Executors           []ExecutorEntry `json:"executors,omitempty"`
 }
 
 // ExecutorEntry is a single executor advertised by a worker in its

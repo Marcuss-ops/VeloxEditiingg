@@ -66,7 +66,7 @@ type PhaseTiming struct {
 // these up across attempts into the typed families listed in
 // docs/architecture/distributed-rendering/README.md "Required Measurements".
 type AttemptMetrics struct {
-	AttemptID  string `json:"attempt_id"`
+	AttemptID string `json:"attempt_id"`
 
 	// Legacy 7 carry-over (migration 043). Kept flat (no embedded
 	// struct) so scan paths in SQLiteTaskAttemptRepository and other
@@ -100,13 +100,13 @@ type AttemptMetrics struct {
 // cache.corruptions / cache.bytes_used / cache.entries (dotted-key entry
 // surface across the executor pipeline, set by taskrunner.mergeStatsInto).
 type AttemptCacheStats struct {
-	AttemptID      string `json:"attempt_id"`
-	CacheHits      int64  `json:"cache_hits"`
-	CacheMisses    int64  `json:"cache_misses"`
-	CacheEvictions int64  `json:"cache_evictions"`
-	CacheCorruptions int64 `json:"cache_corruptions"`
-	CacheBytesUsed int64  `json:"cache_bytes_used"`
-	CacheEntries   int    `json:"cache_entries"`
+	AttemptID        string `json:"attempt_id"`
+	CacheHits        int64  `json:"cache_hits"`
+	CacheMisses      int64  `json:"cache_misses"`
+	CacheEvictions   int64  `json:"cache_evictions"`
+	CacheCorruptions int64  `json:"cache_corruptions"`
+	CacheBytesUsed   int64  `json:"cache_bytes_used"`
+	CacheEntries     int    `json:"cache_entries"`
 }
 
 // CacheByteHitRatio is the canonical scorecard ratio: bytes_from_local_cache

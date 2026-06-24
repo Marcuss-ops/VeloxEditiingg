@@ -32,8 +32,8 @@ func TestSanitizeWorker(t *testing.T) {
 	firstSeen := now.Add(-1 * time.Hour).Format(time.RFC3339)
 
 	raw := workersreg.WorkerInfo{
-		WorkerID:        "worker-abc",
-		WorkerName:      "render-node-1",
+		WorkerID:   "worker-abc",
+		WorkerName: "render-node-1",
 		// Post-hydration ConnectionStatus — sanitizeWorker trusts this
 		// directly. The canonical derivation is `workers.ConnectionStatus`
 		// (called via `ConnectionStatusForInfo` from `hydrate`/`hydrateBulk`
@@ -189,10 +189,10 @@ func TestSanitizeWorker_Draining(t *testing.T) {
 // boundary invariant. If it ever fires, an inspector just re-introduced
 // a heartbeat/drain derivation inside sanitizeWorker.
 //
-//   subcase                legacy fallback (now disallowed)  → required resp.Status
-//   ────────────────────────────────────────────────────────────────────────────
-//   Drain=true             "DRAINING"  (drain rank)            → ""
-//   Drain=false + recent HB "CONNECTED" (recent-heartbeat branch) → ""
+//	subcase                legacy fallback (now disallowed)  → required resp.Status
+//	────────────────────────────────────────────────────────────────────────────
+//	Drain=true             "DRAINING"  (drain rank)            → ""
+//	Drain=false + recent HB "CONNECTED" (recent-heartbeat branch) → ""
 //
 // A regression re-introducing the deleted
 // `if resp.Status == "" { resp.Status = computeStatusLegacy(...) }`
@@ -258,10 +258,10 @@ func TestSanitizeWorker_SessionActiveSurfacesInJSON(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			recent := time.Now().UTC().Format(time.RFC3339)
 			raw := workersreg.WorkerInfo{
-				WorkerID:           "worker-conn",
-				LastHB:             recent,
-				SessionActive:      tc.sessionActive,
-				ConnectionStatus:   tc.connectionStatus,
+				WorkerID:         "worker-conn",
+				LastHB:           recent,
+				SessionActive:    tc.sessionActive,
+				ConnectionStatus: tc.connectionStatus,
 			}
 			resp := sanitizeWorker(raw)
 			if resp.SessionActive != tc.wantFieldTrue {

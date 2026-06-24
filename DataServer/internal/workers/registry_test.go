@@ -390,11 +390,11 @@ func TestRegistryGetStaleWorkers(t *testing.T) {
 // ─────────────────────────────────────────────────────────────────────
 //
 // Tests the canonical scenarios for /api/v1/workers/:worker_id:
-//   1. CONNECTED — fresh session + fresh heartbeat
-//   2. session_drop — fresh heartbeat but revoked session → DISCONNECTED
-//   3. STALE — fresh session + heartbeat older than 30s but younger than 5min
-//   4. DISCONNECTED — heartbeat older than 5min, even with active session
-//   5. DRAINING — drain=true overrides freshness on a fresh session/heartbeat
+//  1. CONNECTED — fresh session + fresh heartbeat
+//  2. session_drop — fresh heartbeat but revoked session → DISCONNECTED
+//  3. STALE — fresh session + heartbeat older than 30s but younger than 5min
+//  4. DISCONNECTED — heartbeat older than 5min, even with active session
+//  5. DRAINING — drain=true overrides freshness on a fresh session/heartbeat
 //
 // Uses the real SQLite store (worker_sessions + workers) wired through
 // `store.NewSQLiteStore`; manipulates heartbeat timestamps directly via
@@ -571,15 +571,14 @@ func TestRegistryListPopulatesSessionActive_AcrossFleet(t *testing.T) {
 	}
 }
 
-
 // TestGetSchedulableWorkers_ExcludesDraining pins the dispatcher-side
 // drain-exclusion contract at the SAME entry the job-routing layer
 // uses. Two channels flow into `costmodel.WorkerProfile.IsDraining`
 // (see costmodel/worker_profile.go BuildWorkerProfile line:
 // `IsDraining: drain || !schedulable`):
 //
-//   1. drain == true                 → IsDraining=true → Eligible=false
-//   2. schedulable == false          → IsDraining=true → Eligible=false
+//  1. drain == true                 → IsDraining=true → Eligible=false
+//  2. schedulable == false          → IsDraining=true → Eligible=false
 //
 // Both must be excluded from the result of GetSchedulableWorkers.
 // This test does NOT validate the implementation — only the

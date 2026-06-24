@@ -21,14 +21,14 @@ import (
 //     (PhaseCacheLookup, PhasePrefetch, PhaseExecute, PhaseUpload,
 //     PhaseReport), in that order. Empty phases are not emitted.
 type TaskExecutionReport struct {
-	JobID        string                 `json:"job_id"`
-	ExecutorID   string                 `json:"executor_id"`
-	ExecutorKey  string                 `json:"executor_key"` // canonical "id@version"
-	Status       string                 `json:"status"`
-	ErrorCode    string                 `json:"error_code,omitempty"`
-	ErrorDetail  string                 `json:"error_detail,omitempty"`
-	Outputs      []executor.ArtifactRef `json:"outputs,omitempty"`
-	Metrics      map[string]interface{} `json:"metrics,omitempty"`
+	JobID       string                 `json:"job_id"`
+	ExecutorID  string                 `json:"executor_id"`
+	ExecutorKey string                 `json:"executor_key"` // canonical "id@version"
+	Status      string                 `json:"status"`
+	ErrorCode   string                 `json:"error_code,omitempty"`
+	ErrorDetail string                 `json:"error_detail,omitempty"`
+	Outputs     []executor.ArtifactRef `json:"outputs,omitempty"`
+	Metrics     map[string]interface{} `json:"metrics,omitempty"`
 	// TypedMetrics is the proto-shaped 17-field mirror of the legacy
 	// `Metrics` dotted-key map. PR-3.6 (Scorecard v1) populates it
 	// alongside the map so the wire envelope carries both shapes
@@ -37,10 +37,10 @@ type TaskExecutionReport struct {
 	// legacy map will be retired. Nil-safe: workers that produce no
 	// ingest / egress traffic leave this pointer at nil.
 	TypedMetrics *telemetry.TypedExecutionMetrics `json:"typed_metrics,omitempty"`
-	Attempts     int                    `json:"attempts"`
-	StartedAt    time.Time              `json:"started_at"`
-	CompletedAt  time.Time              `json:"completed_at"`
-	PhaseMarkers []PhaseMarker          `json:"phase_markers,omitempty"`
+	Attempts     int                              `json:"attempts"`
+	StartedAt    time.Time                        `json:"started_at"`
+	CompletedAt  time.Time                        `json:"completed_at"`
+	PhaseMarkers []PhaseMarker                    `json:"phase_markers,omitempty"`
 }
 
 // PhaseMarker records one canonical phase's timing and outcome. Status

@@ -4,9 +4,9 @@
 // legacy phases into 12 canonical, finer-grained phases that survive
 // independently on the wire and in Prometheus graphs:
 //
-//   queue, asset_wait, cache_lookup, download,
-//   decode, compile, simulate, render, composite, encode,
-//   upload, finalize.
+//	queue, asset_wait, cache_lookup, download,
+//	decode, compile, simulate, render, composite, encode,
+//	upload, finalize.
 //
 // The TaskRunner today emits only the 5 legacy boundary phases
 // (cache_lookup, prefetch, execute, upload, report). The 5→12 mapping
@@ -33,18 +33,18 @@ import (
 // 5→12 mapper. String constants rather than typed enum so wire shape
 // stays a plain string (already true on PhaseMarker.Name).
 const (
-	PhaseQueue      = "queue"
-	PhaseAssetWait  = "asset_wait"
+	PhaseQueue       = "queue"
+	PhaseAssetWait   = "asset_wait"
 	PhaseCacheLookup = "cache_lookup"
-	PhaseDownload   = "download"
-	PhaseDecode     = "decode"
-	PhaseCompile    = "compile"
-	PhaseSimulate   = "simulate"
-	PhaseRender     = "render"
-	PhaseComposite  = "composite"
-	PhaseEncode     = "encode"
-	PhaseUpload     = "upload"
-	PhaseFinalize   = "finalize"
+	PhaseDownload    = "download"
+	PhaseDecode      = "decode"
+	PhaseCompile     = "compile"
+	PhaseSimulate    = "simulate"
+	PhaseRender      = "render"
+	PhaseComposite   = "composite"
+	PhaseEncode      = "encode"
+	PhaseUpload      = "upload"
+	PhaseFinalize    = "finalize"
 )
 
 // CanonicalPhaseOrder is the stable ordering for the 12 canonical
@@ -93,15 +93,15 @@ var canonicalSet = func() map[string]struct{} {
 // Mapping rationale (Scorecard v1 PR-3.3 → PR-3.6 cutover):
 //   - "cache_lookup"  → cache_lookup           (1:1)
 //   - "prefetch"      → asset_wait + cache_lookup + download
-//                        (prefetch covers asset pre-stage + cache hit
-//                        + the actual download chunk)
+//     (prefetch covers asset pre-stage + cache hit
+//   - the actual download chunk)
 //   - "execute"       → decode + compile + simulate + render +
-//                        composite + encode     (the whole pipeline)
+//     composite + encode     (the whole pipeline)
 //   - "upload"        → upload + finalize      (upload emits the
-//                        artifacts, finalize closes the report)
+//     artifacts, finalize closes the report)
 //   - "report"        → finalize               (legacy "report" was
-//                        the meta-phase that produced the typed proto;
-//                        in v1 it collapses into finalize)
+//     the meta-phase that produced the typed proto;
+//     in v1 it collapses into finalize)
 //
 // IMPORTANT: consumers SHOULD prefer the canonical 12-phase vocabulary
 // for new graphs; legacy 5-phase names MUST still parse in dashboards
@@ -144,7 +144,7 @@ func MapLegacyPhase(legacyName string) []string {
 //
 // PhaseTimer is NOT safe for concurrent use.
 type PhaseTimer struct {
-	starts    map[string]time.Time // running → started-at
+	starts    map[string]time.Time     // running → started-at
 	durations map[string]time.Duration // completed → total
 	clock     func() time.Time
 	frozen    bool

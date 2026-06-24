@@ -43,8 +43,8 @@ import (
 // happen on the gRPC stream goroutine, so contention is bounded by the
 // per-worker heartbeat rate (15 s default).
 type LastSeenResources struct {
-	mu                                                              sync.Mutex
-	rxBytesTotal, txBytesTotal, evictionsTotal, corruptionsTotal     uint64
+	mu                                                           sync.Mutex
+	rxBytesTotal, txBytesTotal, evictionsTotal, corruptionsTotal uint64
 }
 
 // Snapshot records the cumulative values seen this beat and returns
@@ -138,8 +138,8 @@ func decodeWorkerResources(workerID string, r *pb.WorkerResourceCounters) *velme
 		RunQueue:            r.GetRunQueue(),
 		// NetworkRxBytesDelta / TxBytesDelta MUST stay under uint64 +
 		// use lastSeen.Snapshot to convert cumulative→delta.
-		NetworkRxBytesDelta:   rxDelta,
-		NetworkTxBytesDelta:   txDelta,
+		NetworkRxBytesDelta: rxDelta,
+		NetworkTxBytesDelta: txDelta,
 		// Cache counts not yet on the proto — keep 0 until PR-3 surfaces
 		// them. (PR-3 worker-agent-go resource sampler follow-up — F4.)
 		CacheEntries:          0,
@@ -176,28 +176,28 @@ func ResourcesToExtra(r *pb.WorkerResourceCounters) map[string]interface{} {
 		return nil
 	}
 	return map[string]interface{}{
-		"cpu_utilization_ratio":       r.GetCpuUtilizationRatio(),
-		"cpu_iowait_ratio":            r.GetCpuIowaitRatio(),
-		"cpu_steal_ratio":             r.GetCpuStealRatio(),
-		"process_rss_bytes":           r.GetProcessRssBytes(),
-		"process_rss_peak_bytes":      r.GetProcessRssPeakBytes(),
-		"memory_used_bytes":           r.GetMemoryUsedBytes(),
-		"memory_available_bytes":      r.GetMemoryAvailableBytes(),
-		"swap_used_bytes":             r.GetSwapUsedBytes(),
-		"major_page_faults_total":     r.GetMajorPageFaultsTotal(),
-		"disk_read_bytes_total":       r.GetDiskReadBytesTotal(),
-		"disk_write_bytes_total":      r.GetDiskWriteBytesTotal(),
-		"disk_free_bytes":             r.GetDiskFreeBytes(),
-		"temp_bytes_written":          r.GetTempBytesWritten(),
-		"temp_files_open":             r.GetTempFilesOpen(),
-		"network_receive_bytes_total": r.GetNetworkReceiveBytesTotal(),
+		"cpu_utilization_ratio":        r.GetCpuUtilizationRatio(),
+		"cpu_iowait_ratio":             r.GetCpuIowaitRatio(),
+		"cpu_steal_ratio":              r.GetCpuStealRatio(),
+		"process_rss_bytes":            r.GetProcessRssBytes(),
+		"process_rss_peak_bytes":       r.GetProcessRssPeakBytes(),
+		"memory_used_bytes":            r.GetMemoryUsedBytes(),
+		"memory_available_bytes":       r.GetMemoryAvailableBytes(),
+		"swap_used_bytes":              r.GetSwapUsedBytes(),
+		"major_page_faults_total":      r.GetMajorPageFaultsTotal(),
+		"disk_read_bytes_total":        r.GetDiskReadBytesTotal(),
+		"disk_write_bytes_total":       r.GetDiskWriteBytesTotal(),
+		"disk_free_bytes":              r.GetDiskFreeBytes(),
+		"temp_bytes_written":           r.GetTempBytesWritten(),
+		"temp_files_open":              r.GetTempFilesOpen(),
+		"network_receive_bytes_total":  r.GetNetworkReceiveBytesTotal(),
 		"network_transmit_bytes_total": r.GetNetworkTransmitBytesTotal(),
-		"network_retransmits_total":   r.GetNetworkRetransmitsTotal(),
-		"active_tasks":                r.GetActiveTasks(),
-		"task_slots":                  r.GetTaskSlots(),
-		"load1":                       r.GetLoad1(),
-		"run_queue":                   r.GetRunQueue(),
-		"sampled_at":                  timeOrZero(r.GetSampledAt()),
+		"network_retransmits_total":    r.GetNetworkRetransmitsTotal(),
+		"active_tasks":                 r.GetActiveTasks(),
+		"task_slots":                   r.GetTaskSlots(),
+		"load1":                        r.GetLoad1(),
+		"run_queue":                    r.GetRunQueue(),
+		"sampled_at":                   timeOrZero(r.GetSampledAt()),
 	}
 }
 

@@ -89,7 +89,7 @@ func executionMetricsToAttemptMetrics(attemptID string, em *pb.TaskExecutionMetr
 // field mapper rather than a derivation.
 func deriveCacheStats(attemptID string, am taskattempts.AttemptMetrics) taskattempts.AttemptCacheStats {
 	cs := taskattempts.AttemptCacheStats{
-		AttemptID:   attemptID,
+		AttemptID:    attemptID,
 		CacheEntries: 0,
 		// CacheBytesUsed is the one number we can derive honestly today:
 		// the worker DID report bytes_from_local_cache, which IS the size
