@@ -9,6 +9,8 @@
 # Excluded (intentional):
 #   * docs/archive/            historical context
 #   * RemoteCodex/native/worker-agent-go/bin/ compiled worker binary
+#   * DataServer/server / server.exe   compiled Go master (PEM-like strings
+#                                      inside TLS stdlib linked into binary)
 #   * VeloxFrontend/           bundled JS artefacts (extracted frontend repo)
 #   * *_test.go                unit tests deliberately reference fake keys
 #   * deploy/*example*         example inventory / env templates are placeholders
@@ -59,6 +61,8 @@ GIT_GREP_BASE=(
     ':!*_test.go'
     ':!scripts/ci/check-secrets.sh'
     ':!docs/SECURITY_RUNBOOK.md'
+    ':!DataServer/server'
+    ':!DataServer/server.exe'
 )
 
 # ── Private-key blocks (most reliable signal) ───────────────────────────────
