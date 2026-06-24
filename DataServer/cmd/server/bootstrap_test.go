@@ -20,9 +20,15 @@ func newTestConfig(t *testing.T) *config.Config {
 	t.Helper()
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "velox.db")
+	stagingDir := filepath.Join(tmpDir, "staging")
+	storageDir := filepath.Join(tmpDir, "storage")
 	return &config.Config{
 		Database: config.DatabaseConfig{DBPath: dbPath},
-		Runtime:  config.RuntimeConfig{DataDir: tmpDir},
+		Runtime: config.RuntimeConfig{
+			DataDir:    tmpDir,
+			StagingDir: stagingDir,
+			StorageDir: storageDir,
+		},
 		Workers: config.WorkersConfig{
 			MaxJobAttempts:   3,
 			AllowedWorkerIDs: []string{"test-worker-1"},

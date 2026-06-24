@@ -65,7 +65,11 @@ func newOrchestratorTestStack(t *testing.T) *orchestratorTestStack {
 	tmpDir := t.TempDir()
 	cfg := &config.Config{
 		Database: config.DatabaseConfig{DBPath: filepath.Join(tmpDir, "velox.db")},
-		Runtime:  config.RuntimeConfig{DataDir: tmpDir},
+		Runtime: config.RuntimeConfig{
+			DataDir:    tmpDir,
+			StagingDir: filepath.Join(tmpDir, "staging"),
+			StorageDir: filepath.Join(tmpDir, "storage"),
+		},
 		Workers: config.WorkersConfig{
 			MaxJobAttempts:   3,
 			AllowedWorkerIDs: []string{"test-worker-1"},
