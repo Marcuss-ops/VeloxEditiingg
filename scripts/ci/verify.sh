@@ -87,6 +87,7 @@ if [[ "$SKIP_LIGHT" -ne 1 ]]; then
       # Local dev: format was auto-applied; run `git commit -am gofmt` and retry.
       cd "$REPO_ROOT"
       git diff --exit-code -- "$mod"
+      cd "$REPO_ROOT/$mod"
       log "go-vet: ${mod}"
       go vet ./...
       log "go-test -race: ${mod}"
