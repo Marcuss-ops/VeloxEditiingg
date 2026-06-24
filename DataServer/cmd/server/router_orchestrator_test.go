@@ -482,6 +482,13 @@ func TestOrchestratorGetJob_ProjectsRunShape(t *testing.T) {
 	if got := w.Header().Get("Deprecation"); got != "true" {
 		t.Errorf("response header Deprecation=%q, want 'true'", got)
 	}
+	// Cross-endpoint consistency: every /api/v1/orchestrator GET advertises
+	// the RFC 8594 Sunset value (see orchestrator_legacy_adapter.getJob +
+	// listJobs + getStats). Lock it here so a future per-handler revert
+	// that drops Sunset on getJob alone is caught at test time.
+	if got := w.Header().Get("Sunset"); got == "" {
+		t.Errorf("response header Sunset is empty — orchestrator GET endpoints must advertise the RFC 8594 removal date")
+	}
 
 	var resp struct {
 		Run        orchestratorv1.LegacyRunResponse    `json:"run"`

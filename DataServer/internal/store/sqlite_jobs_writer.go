@@ -172,26 +172,39 @@ func (r *SQLiteJobRepository) Transition(ctx context.Context, t TransitionParams
 
 // ListByStatus returns up to limit jobs in any of the supplied statuses.
 //
-// Empty statuses returns nil with no error (semantically: "no filter, no
-// result"). limit <= 0 is treated as 1000.
+// Empty statuses means "all jobs" (no status filter) — the caller's
+// reader-side List() with an empty Filter.Statuses is the canonical
+// "list everything" intent, and shells out to the same SELECT projection
+// without a WHERE status-clause. limit <= 0 is treated as 1000.
+//
+// Note for future archeology: prior to PR-fix-orch-list-empty-statuses
+// this branch returned (nil, nil) for len(statuses)==0, which silently
+// broke GET /api/v1/orchestrator/jobs (listJobs handler passes
+// jobs.Filter{Limit: 100} with no Statuses). The orchestrator adapter
+// documents the fact that List with an empty filter means "all jobs" —
+// this contract is the source of truth for "no filter = list everything".
 func (r *SQLiteJobRepository) ListByStatus(ctx context.Context, statuses []JobStatus, limit int) ([]JobRecord, error) {
-	if len(statuses) == 0 {
-		return nil, nil
-	}
 	if limit <= 0 {
 		limit = 1000
 	}
-	placeholders := strings.Repeat(",?", len(statuses))[1:]
-	args := make([]interface{}, len(statuses)+1)
-	for i, s := range statuses {
-		args[i] = string(s)
+	var query string
+	var args []interface{}
+	if len(statuses) == 0 {
+		query = `SELECT ` + strings.Join(jobProjectionColumns, ",") + ` FROM jobs ORDER BY updated_at DESC LIMIT ?`
+		args = []interface{}{limit}
+	} else {
+		placeholders := strings.Repeat(",?", len(statuses))[1:]
+		args = make([]interface{}, len(statuses)+1)
+		for i, s := range statuses {
+			args[i] = string(s)
+		}
+		args[len(statuses)] = limit
+		query = fmt.Sprintf(
+			`SELECT %s FROM jobs WHERE UPPER(status) IN (%s) ORDER BY updated_at DESC LIMIT ?`,
+			strings.Join(jobProjectionColumns, ","),
+			placeholders,
+		)
 	}
-	args[len(statuses)] = limit
-	query := fmt.Sprintf(
-		`SELECT %s FROM jobs WHERE UPPER(status) IN (%s) ORDER BY updated_at DESC LIMIT ?`,
-		strings.Join(jobProjectionColumns, ","),
-		placeholders,
-	)
 	rows, err := r.store.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list by status: %w", err)

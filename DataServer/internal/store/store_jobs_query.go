@@ -158,13 +158,24 @@ func (s *SQLiteStore) GetJob(ctx context.Context, jobID string) (map[string]any,
 	return scanJobRow(row)
 }
 
+// JobCounts returns a status → count map keyed by the canonical UPPER
+// jobs.status name. Returns raw bucket counts only — NO binning and NO
+// "total" key. toJobsCounts (jobs.Status(k) literal cast) needs canonical
+// keys; non-canonical keys land under Status("pending") and get
+// double-counted by TotalRuns summation and lost under
+// LegacyRunStatusPending in the orchestrator adapter. The PostgreSQL
+// path uses the same canonical-key shape.
+//
+// Binning and totals are the caller's responsibility (getStats already
+// declares allRunStatuses / allStepStatuses and seeds the map with
+// zeros; TotalRuns = sum(canonical keys) by construction).
 func (s *SQLiteStore) JobCounts(ctx context.Context) (map[string]int64, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT UPPER(COALESCE(status, 'UNKNOWN')) AS s, COUNT(*) FROM jobs GROUP BY s`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	out := map[string]int64{"pending": 0, "processing": 0, "completed": 0, "error": 0, "total": 0}
+	out := map[string]int64{}
 	for rows.Next() {
 		select {
 		case <-ctx.Done():
@@ -176,21 +187,7 @@ func (s *SQLiteStore) JobCounts(ctx context.Context) (map[string]int64, error) {
 		if err := rows.Scan(&sname, &cnt); err != nil {
 			continue
 		}
-		out["total"] += cnt
-		switch sname {
-		case "PENDING":
-			out["pending"] += cnt
-		case "LEASED", "RUNNING":
-			out["processing"] += cnt
-		case "RETRY_WAIT":
-			out["pending"] += cnt
-		case "SUCCEEDED":
-			out["completed"] += cnt
-		case "FAILED":
-			out["error"] += cnt
-		case "CANCELLED":
-			out["error"] += cnt
-		}
+		out[sname] = cnt
 	}
 	return out, nil
 }

@@ -217,6 +217,7 @@ func (a *orchestratorLegacyAdapter) postJob(c *gin.Context) {
 // It emits the legacy {run, steps[]} shape via projectRun + projectStep.
 func (a *orchestratorLegacyAdapter) getJob(c *gin.Context) {
 	c.Header("Deprecation", "true")
+	c.Header("Sunset", orchestratorSunsetHeader)
 	id := c.Param("id")
 	if id == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "id required"})
@@ -245,11 +246,20 @@ func (a *orchestratorLegacyAdapter) getJob(c *gin.Context) {
 	})
 }
 
+// orchestratorSunsetHeader is the RFC 8594 §3 Sunset value advertised
+// by every /api/v1/orchestrator/* GET endpoint (getJob / listJobs /
+// getStats). Hoisted to a package const so the removal date lives in
+// exactly one place — drift between endpoints is a regretted class of
+// mistake. Update this single line (and the OWNERSHIP.md "Legacy
+// Workflow v2 state" Remove-after date) when the sunset moves.
+const orchestratorSunsetHeader = "Sat, 31 Dec 2026 23:59:59 GMT"
+
 // listJobs is the read-only projection of /api/v1/orchestrator/jobs (list).
 // Reads from jobs.Reader (NOT workflow_runs) and projects each entry to
 // orchestratorv1.LegacyRunResponse shape.
 func (a *orchestratorLegacyAdapter) listJobs(c *gin.Context) {
 	c.Header("Deprecation", "true")
+	c.Header("Sunset", orchestratorSunsetHeader)
 	limit := 100
 	if v := c.Query("limit"); v != "" {
 		if _, scanErr := fmt.Sscanf(v, "%d", &limit); scanErr != nil || limit <= 0 {
@@ -309,7 +319,7 @@ var warnStepCap = func(capArg, actual int) {
 // canonical post-cutover source.
 func (a *orchestratorLegacyAdapter) getStats(c *gin.Context) {
 	c.Header("Deprecation", "true")
-	c.Header("Sunset", "Sat, 31 Dec 2026 23:59:59 GMT")
+	c.Header("Sunset", orchestratorSunsetHeader)
 	counts, err := a.jobsRepo.Counts(c.Request.Context())
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
