@@ -135,13 +135,22 @@ done
 # CI-cheat path. The Makefile is now hard-failed if VERSION.txt is
 # absent (no fallback). NEW regressions (e.g. re-introducing the chain)
 # must surface.
-if matches="$(
-       scoped_grep 'git describe|\bdev\b["\047]|\bwildcard\s+VERSION' -- \
-         RemoteCodex/native/worker-agent-go/Makefile
-     )"; [[ -n "$matches" ]]; then
-  printf 'Worker version fallback is forbidden (new in this PR):\n%s\n\n' \
-    "$matches" >&2
-  violations=$((violations + 1))
+#
+# NOTE: Do NOT use scoped_grep here — it appends all diff files after
+# the provided path, defeating the intent of scoping to one file.
+# Check ONLY the Makefile via git diff + git grep so that unrelated
+# "dev" string literals in Go source files (config_release_channel_test,
+# resource_sampler) are never flagged.
+if git diff --name-only --diff-filter=ACMR "$BASE_REF"...HEAD 2>/dev/null \
+      | grep -qx 'RemoteCodex/native/worker-agent-go/Makefile' 2>/dev/null; then
+  if matches="$(git grep -nE \
+       'git describe|\bdev\b["\047]|\bwildcard\s+VERSION' -- \
+         RemoteCodex/native/worker-agent-go/Makefile 2>/dev/null \
+       || true)"; [[ -n "$matches" ]]; then
+    printf 'Worker version fallback is forbidden (new in this PR):\n%s\n\n' \
+      "$matches" >&2
+    violations=$((violations + 1))
+  fi
 fi
 
 if [[ "$violations" -gt 0 ]]; then
