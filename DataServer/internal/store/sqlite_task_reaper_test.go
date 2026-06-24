@@ -175,7 +175,7 @@ func TestRequeueExpiredLeases_ReapsLeaseAndClosesAttempt_HappyPath(t *testing.T)
 	}
 
 	// Tasks row post-reap: READY, worker/lease cleared, attempt_count=1,
-	// revision=0 (reaper does NOT bump either — audit P0#4).
+	// revision=1 (CAS increment from the reaper's UPDATE).
 	var status, worker, lease string
 	var attempts, rev int
 	if err := s.db.QueryRowContext(ctx,
@@ -194,8 +194,8 @@ func TestRequeueExpiredLeases_ReapsLeaseAndClosesAttempt_HappyPath(t *testing.T)
 	if attempts != 1 {
 		t.Errorf("attempt_count = %d; want 1 (reaper does NOT bump)", attempts)
 	}
-	if rev != 0 {
-		t.Errorf("revision = %d; want 0 (reaper does NOT bump)", rev)
+	if rev != 1 {
+		t.Errorf("revision = %d; want 1 (reaper CAS UPDATE bumps revision)", rev)
 	}
 
 	// Attempt post-reap: TIMED_OUT.

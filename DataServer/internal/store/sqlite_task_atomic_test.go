@@ -114,9 +114,13 @@ func openTaskAtomicTestDB(t *testing.T) (*SQLiteStore, *SQLiteTaskRepository) {
 }
 
 // seedLeasedTask inserts a Task row in LEASED status with supplied
-// (worker, lease, revision). Returns the assigned revision.
+// (worker, lease, attemptID, attemptNumber, revision) AND a matching
+// PENDING task_attempts row — mimicking what ClaimNextWithAttemptAtomic
+// produces. AcceptTaskAtomic's CAS gate checks all four identity fields
+// (worker + lease + attempt_id + attempt_number) and UPDATEs the
+// attempt from PENDING → RUNNING, so both rows must be pre-seeded.
 func seedLeasedTask(t *testing.T, db *sql.DB,
-	taskID, workerID, leaseID string, revision int,
+	taskID, workerID, leaseID, attemptID string, attemptNumber, revision int,
 ) int {
 	t.Helper()
 	ctx := context.Background()
@@ -124,11 +128,24 @@ func seedLeasedTask(t *testing.T, db *sql.DB,
 	if _, err := db.ExecContext(ctx,
 		`INSERT INTO tasks
 		 (task_id, job_id, status, priority, revision, worker_id, lease_id,
-		  created_at, updated_at)
-		 VALUES (?, ?, 'LEASED', 0, ?, ?, ?, ?, ?)`,
-		taskID, "job-"+taskID, revision, workerID, leaseID, now, now,
+		  attempt_id, attempt_number, created_at, updated_at)
+		 VALUES (?, ?, 'LEASED', 0, ?, ?, ?, ?, ?, ?, ?)`,
+		taskID, "job-"+taskID, revision, workerID, leaseID,
+		attemptID, attemptNumber, now, now,
 	); err != nil {
 		t.Fatalf("seed LEASED task: %v", err)
+	}
+	// Pre-seed PENDING attempt so AcceptTaskAtomic's UPDATE
+	// (PENDING→RUNNING) has a row to match.
+	if _, err := db.ExecContext(ctx,
+		`INSERT INTO task_attempts
+		 (id, task_id, job_id, attempt_number, worker_id, lease_id, status,
+		  report_version, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, 'PENDING', 0, ?, ?)`,
+		attemptID, taskID, "job-"+taskID, attemptNumber,
+		workerID, leaseID, now, now,
+	); err != nil {
+		t.Fatalf("seed PENDING attempt: %v", err)
 	}
 	return revision
 }
@@ -252,9 +269,10 @@ func attemptForTask(t *testing.T, db *sql.DB,
 func TestAcceptTaskAtomic_HappyPath(t *testing.T) {
 	s, r := openTaskAtomicTestDB(t)
 	ctx := context.Background()
-	seedLeasedTask(t, s.db, "T-accept-1", "w-1", "L-1", 0)
+	seedLeasedTask(t, s.db, "T-accept-1", "w-1", "L-1", "A-accept-1", 1, 0)
 
 	attempt := &taskattempts.TaskAttempt{
+		ID:            "A-accept-1",
 		TaskID:        "T-accept-1",
 		JobID:         "job-T-accept-1",
 		WorkerID:      "w-1",
@@ -298,9 +316,10 @@ func TestAcceptTaskAtomic_HappyPath(t *testing.T) {
 func TestAcceptTaskAtomic_StaleRevision(t *testing.T) {
 	s, r := openTaskAtomicTestDB(t)
 	ctx := context.Background()
-	seedLeasedTask(t, s.db, "T-accept-2", "w-2", "L-2", 0)
+	seedLeasedTask(t, s.db, "T-accept-2", "w-2", "L-2", "A-accept-2", 1, 0)
 
 	attempt := &taskattempts.TaskAttempt{
+		ID:            "A-accept-2",
 		TaskID:        "T-accept-2",
 		JobID:         "job-T-accept-2",
 		WorkerID:      "w-2",
@@ -316,7 +335,8 @@ func TestAcceptTaskAtomic_StaleRevision(t *testing.T) {
 		t.Errorf("expected taskgraph.ErrTransitionConflict; got %v", err)
 	}
 
-	// Verify rollback: task stayed LEASED, no attempt row inserted.
+	// Verify rollback: task stayed LEASED, PENDING attempt row remains
+	// unchanged (rollback preserved the pre-seeded state).
 	var taskStatus string
 	if err := s.db.QueryRowContext(ctx,
 		`SELECT status FROM tasks WHERE task_id = ?`,
@@ -327,13 +347,18 @@ func TestAcceptTaskAtomic_StaleRevision(t *testing.T) {
 		t.Errorf("tasks.status = %s; want LEASED (rollback)", taskStatus)
 	}
 	var n int
+	var attemptStatus string
 	if err := s.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM task_attempts WHERE task_id = ?`,
-		"T-accept-2").Scan(&n); err != nil {
-		t.Fatal(err)
+		`SELECT COUNT(*), COALESCE(MIN(status), '') FROM task_attempts WHERE task_id = ? GROUP BY task_id`,
+		"T-accept-2").Scan(&n, &attemptStatus); err != nil {
+		// No rows at all (unexpected — seedLeasedTask pre-inserts one)
+		n = 0
 	}
-	if n != 0 {
-		t.Errorf("task_attempts rows = %d; want 0 (rollback)", n)
+	if n != 1 {
+		t.Errorf("task_attempts rows = %d; want 1 (pre-seeded PENDING row, rollback preserved it)", n)
+	}
+	if attemptStatus != "PENDING" {
+		t.Errorf("task_attempts status = %s; want PENDING (rollback did NOT promote it)", attemptStatus)
 	}
 }
 
@@ -347,8 +372,9 @@ func TestTransitionTaskToTerminalAtomic_HappyPath(t *testing.T) {
 	s, r := openTaskAtomicTestDB(t)
 	ctx := context.Background()
 
-	seedLeasedTask(t, s.db, "T-term-1", "w-1", "L-1", 0)
+	seedLeasedTask(t, s.db, "T-term-1", "w-1", "L-1", "A-term-1", 1, 0)
 	attempt := &taskattempts.TaskAttempt{
+		ID:            "A-term-1",
 		TaskID:        "T-term-1",
 		JobID:         "job-T-term-1",
 		WorkerID:      "w-1",
@@ -398,9 +424,9 @@ func TestTransitionTaskToTerminalAtomic_IdempotentRetry(t *testing.T) {
 	s, r := openTaskAtomicTestDB(t)
 	ctx := context.Background()
 
-	seedLeasedTask(t, s.db, "T-term-2", "w-2", "L-2", 0)
+	seedLeasedTask(t, s.db, "T-term-2", "w-2", "L-2", "A-term-2", 1, 0)
 	attempt := &taskattempts.TaskAttempt{
-		TaskID: "T-term-2", JobID: "job-T-term-2",
+		ID: "A-term-2", TaskID: "T-term-2", JobID: "job-T-term-2",
 		WorkerID: "w-2", LeaseID: "L-2",
 		AttemptNumber: 1, Status: taskattempts.AttemptStatusRunning,
 	}
@@ -661,8 +687,9 @@ func TestSqliteTaskAtomic_Invariant_TaskRunningInvActiveAttempt(t *testing.T) {
 		workerID := fmt.Sprintf("w-sweep-%d", i)
 		leaseID := fmt.Sprintf("L-sweep-%d", i)
 
-		seedLeasedTask(t, s.db, taskID, workerID, leaseID, 0)
+		seedLeasedTask(t, s.db, taskID, workerID, leaseID, "A-sweep-"+fmt.Sprint(i), 1, 0)
 		attempt := &taskattempts.TaskAttempt{
+			ID: "A-sweep-" + fmt.Sprint(i),
 			TaskID: taskID, JobID: "job-" + taskID,
 			WorkerID: workerID, LeaseID: leaseID,
 			AttemptNumber: 1, Status: taskattempts.AttemptStatusRunning,
@@ -719,9 +746,9 @@ func TestSqliteTaskAtomic_Invariant_ConcurrentTerminalTransitionsIsSafe(t *testi
 	s, r := openTaskAtomicTestDB(t)
 	ctx := context.Background()
 
-	seedLeasedTask(t, s.db, "T-race", "w-race", "L-race", 0)
+	seedLeasedTask(t, s.db, "T-race", "w-race", "L-race", "A-race", 1, 0)
 	attempt := &taskattempts.TaskAttempt{
-		TaskID: "T-race", JobID: "job-T-race",
+		ID: "A-race", TaskID: "T-race", JobID: "job-T-race",
 		WorkerID: "w-race", LeaseID: "L-race",
 		AttemptNumber: 1, Status: taskattempts.AttemptStatusRunning,
 	}
