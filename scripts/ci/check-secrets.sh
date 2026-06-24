@@ -62,7 +62,9 @@ GIT_GREP_BASE=(
 )
 
 # ── Private-key blocks (most reliable signal) ───────────────────────────────
-m="$(git grep -nE '-----BEGIN ((RSA|EC|DSA|OPENSSH|PGP) )?PRIVATE KEY-----' -- "${GIT_GREP_BASE[@]}" || true)"
+# -e is REQUIRED here: the pattern starts with ----- which git grep
+# would otherwise parse as option prefix (---), producing "unknown option".
+m="$(git grep -nE -e '-----BEGIN ((RSA|EC|DSA|OPENSSH|PGP) )?PRIVATE KEY-----' -- "${GIT_GREP_BASE[@]}" || true)"
 report_match "Private key block(s)" "$m"
 
 # ── GitHub tokens ────────────────────────────────────────────────────────────
