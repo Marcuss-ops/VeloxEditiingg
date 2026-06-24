@@ -255,9 +255,9 @@ func (r *Registry) GetSchedulableWorkers(ctx context.Context) []WorkerInfo {
 // (short-circuit at the top of Score), with the explanation
 // "worker is draining" so operators can bisect drift at a glance.
 // A regression that strips the exclusion here will be caught by
-// `TestGetSchedulableWorkers_ExcludesDraining` (registry_test.go)
-// — that test does NOT validate the implementation, only the
-// behavior contract.
+// The draining-exclusion behavior test in
+// registry_test.go validates the contract, not the
+// implementation.
 //
 // Forbidden patterns (see OWNERSHIP.md "Cost-aware eligibility"):
 //   - Hand-rolled boolean AND on WorkerInfo fields inside this
