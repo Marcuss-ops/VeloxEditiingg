@@ -64,7 +64,10 @@ func newOrchestratorTestStack(t *testing.T) *orchestratorTestStack {
 
 	tmpDir := t.TempDir()
 	cfg := &config.Config{
-		Database: config.DatabaseConfig{DBPath: filepath.Join(tmpDir, "velox.db")},
+		Database: config.DatabaseConfig{
+			DBPath:         filepath.Join(tmpDir, "velox.db"),
+			MigrateOnStart: true, // tests need schema migrations applied at boot
+		},
 		Runtime: config.RuntimeConfig{
 			DataDir:    tmpDir,
 			StagingDir: filepath.Join(tmpDir, "staging"),

@@ -23,7 +23,10 @@ func newTestConfig(t *testing.T) *config.Config {
 	stagingDir := filepath.Join(tmpDir, "staging")
 	storageDir := filepath.Join(tmpDir, "storage")
 	return &config.Config{
-		Database: config.DatabaseConfig{DBPath: dbPath},
+		Database: config.DatabaseConfig{
+			DBPath:         dbPath,
+			MigrateOnStart: true, // tests need schema migrations applied at boot
+		},
 		Runtime: config.RuntimeConfig{
 			DataDir:    tmpDir,
 			StagingDir: stagingDir,
