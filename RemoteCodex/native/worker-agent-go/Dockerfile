@@ -206,8 +206,13 @@ ENV XDG_CACHE_HOME=/home/velox/.cache
 
 USER velox
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=3 \
-    CMD /bin/sh -c 'curl -sf "http://localhost:${VELOX_HEALTH_PORT:-8081}/health" || exit 1'
+# RW-PROD-004 §3 A5: probe canonical /health/ready (NOT legacy /health) so
+# docker health verdicts correctly track the reasons taxonomy (bootstrap,
+# executors, cache, blob, disk) instead of a misleading process-only "ok".
+# Timing matches deploy/runtime/compose.yml so `docker run` (no compose)
+# behaves identically.
+HEALTHCHECK --interval=10s --timeout=3s --start-period=30s --retries=5 \
+    CMD /bin/sh -c 'curl -sf "http://localhost:${VELOX_HEALTH_PORT:-8081}/health/ready" || exit 1'
 
 ENTRYPOINT ["/usr/local/bin/worker-entrypoint.sh"]
 CMD ["-master", "http://master:8000"]

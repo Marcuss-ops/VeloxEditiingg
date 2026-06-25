@@ -60,6 +60,10 @@ GIT_GREP_BASE=(
     ':!docs/archive/**'
     ':!*_test.go'
     ':!scripts/ci/check-secrets.sh'
+    # The companion test embeds literal `github_pat_*` / `ghp_*` fixture
+    # strings representing FAKE tokens. Without this exclusion, the GitHub
+    # token check would flag the test against itself on every CI run.
+    ':!scripts/ci/test-check-secrets.sh'
     ':!docs/SECURITY_RUNBOOK.md'
     ':!DataServer/server'
     ':!DataServer/server.exe'
@@ -72,8 +76,16 @@ m="$(git grep -nE -e '-----BEGIN ((RSA|EC|DSA|OPENSSH|PGP) )?PRIVATE KEY-----' -
 report_match "Private key block(s)" "$m"
 
 # ── GitHub tokens ────────────────────────────────────────────────────────────
-# `ghp_` PAT · `ghs_` server-to-server · `gho_` OAuth · `ghu_` user-to-server
-m="$(git grep -nE 'gh[psoru]_[A-Za-z0-9]{30,}' -- "${GIT_GREP_BASE[@]}" || true)"
+# Two distinct families emitted by GitHub: classic-prefix PATs AND
+# fine-grained PATs. The latter start with `github_pat_` (NOT `ghp_`)
+# and were added in 2022 — regex #1 alone leaves them undetected.
+#
+#   ghp_  classic PAT        github_pat_  fine-grained PAT
+#   ghs_  GitHub App secret  (82+ chars total, alphanumeric + `_`)
+#   gho_  OAuth              minimum 40 trailing chars required so
+#   ghu_  user-to-server     test fixtures with `github_pat_FOO`
+#                            placeholders don't false-positive.
+m="$(git grep -nE 'gh[psoru]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{40,}' -- "${GIT_GREP_BASE[@]}" || true)"
 report_match "GitHub token(s)" "$m"
 
 # ── AWS access-key IDs (AKIA = long-lived, ASIA = STS) ──────────────────────
@@ -155,7 +167,7 @@ if (( INCLUDE_UNTRACKED )); then
         DataServer/data/youtube/credentials/credentials.json \
         DataServer/data/drive/credentials/credentials.json; do
         if [[ -r "$path" ]]; then
-            if matches="$(grep -nE 'GOCSPX-[A-Za-z0-9_-]{20,}|\b[0-9]{6,}-[A-Za-z0-9_-]{20,}\.apps\.googleusercontent\.com\b|\b[a-z][a-z0-9-]*\.tail[a-z0-9]{4,}\.ts\.net\b|\b[a-z][a-z0-9-]*\.duckdns\.org\b|\b(youtube-uploader-safe|drive-uploading-[0-9]{3,}|veloxmanager)\b' "$path" 2>/dev/null)"; then
+            if matches="$(grep -nE 'GOCSPX-[A-Za-z0-9_-]{20,}|\b[0-9]{6,}-[A-Za-z0-9_-]{20,}\.apps\.googleusercontent\.com\b|\b[a-z][a-z0-9-]*\.tail[a-z0-9]{4,}\.ts\.net\b|\b[a-z][a-z0-9-]*\.duckdns\.org\b|\b(youtube-uploader-safe|drive-uploading-[0-9]{3,}|veloxmanager)\b|github_pat_[A-Za-z0-9_]{40,}' "$path" 2>/dev/null)"; then
                 report_match "LOCAL UNTRACKED in $path" "$matches"
             fi
         fi
