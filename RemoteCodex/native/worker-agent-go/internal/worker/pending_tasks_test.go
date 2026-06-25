@@ -127,10 +127,17 @@ func TestPendingTasks_ConcurrentStoreAndTake(t *testing.T) {
 	}()
 	wg.Wait()
 
-	// Final state: unknown task -> nil. Even if a stale take happened
-	// to return the job pointer in flight, the post-test invariant
-	// holds because take deletes the entry.
+	// This helper only guarantees serialized access. It does NOT guarantee
+	// that N stores and N takes leave the map empty because the last store
+	// may race after the last take. The important invariant is that the
+	// leftover entry, if any, is the same task we stored and it is removed
+	// by a subsequent take.
 	if got := w.takePendingTask("task-conc"); got != nil {
-		t.Errorf("expected nil after paired store/take storms, got %+v", got)
+		if got != job {
+			t.Errorf("expected same job pointer when a final store wins, got %+v", got)
+		}
+		if again := w.takePendingTask("task-conc"); again != nil {
+			t.Errorf("expected empty map after draining leftover entry, got %+v", again)
+		}
 	}
 }

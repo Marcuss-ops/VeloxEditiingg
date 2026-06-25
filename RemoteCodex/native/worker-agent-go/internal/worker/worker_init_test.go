@@ -21,14 +21,12 @@ func TestNewReturnsErrorOnBadTLS(t *testing.T) {
 	}
 	_, err := New(cfg, "test")
 	require.Error(t, err, "expected New() to surface transport init error")
-	require.Contains(t, err.Error(), "transport factory")
+	require.Contains(t, err.Error(), "invalid worker config")
 }
 
 func TestNewSucceedsWithInsecureDev(t *testing.T) {
-	// Set the dev flag so transport factory allows plaintext.
-	t.Setenv("VELOX_ALLOW_INSECURE_GRPC_DEV", "true")
-
 	cfg := &config.WorkerConfig{
+		Environment:       "dev",
 		WorkerID:          "test",
 		WorkerName:        "test",
 		WorkDir:           t.TempDir(),

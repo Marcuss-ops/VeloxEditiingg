@@ -94,6 +94,10 @@ func WithBlobs(b *blob.BlobArtifacts) Option {
 // executor registry; otherwise an empty registry is used so hello is
 // emitted immediately and dispatch upgrades in PR-3.6 are non-breaking.
 func New(cfg *config.WorkerConfig, version string, opts ...Option) (*Worker, error) {
+	if err := cfg.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid worker config: %w", err)
+	}
+
 	wo := &workerOptions{registry: executor.NewRegistry()}
 	for _, opt := range opts {
 		if opt == nil {

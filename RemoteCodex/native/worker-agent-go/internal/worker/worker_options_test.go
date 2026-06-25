@@ -30,8 +30,8 @@ func (r *regStubExecutor) Execute(_ context.Context, _ executor.ExecutionContext
 
 func newInsecureDevCfg(t *testing.T) *config.WorkerConfig {
 	t.Helper()
-	t.Setenv("VELOX_ALLOW_INSECURE_GRPC_DEV", "true")
 	return &config.WorkerConfig{
+		Environment:       "dev",
 		WorkerID:          "tests",
 		WorkerName:        "tests",
 		WorkDir:           t.TempDir(),

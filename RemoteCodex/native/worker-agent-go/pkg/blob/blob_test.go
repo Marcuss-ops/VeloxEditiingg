@@ -103,11 +103,11 @@ func TestBlob_CloseStopsProcessorAndRejectsPuts(t *testing.T) {
 }
 
 func TestBlob_FullQueueDropsPending(t *testing.T) {
-	// PR-3.7 invariant under flood load: every Put is accounted for
-	// exactly once. The sum of Publish + PublishFailed must equal the
-	// number of Put calls. Whether the producer outpaces the consumer
-	// depends on goroutine scheduling, so we don't pin a specific
-	// PublishFailed count — only the accounting invariant.
+	// Successful writes always bump Publish. Queue overflow is a secondary
+	// publication failure after the blob is already persisted, so
+	// PublishFailed is not mutually exclusive with Publish. The invariant
+	// here is narrower: all writes succeed, queue capacity stays fixed,
+	// and overflow is observable via PublishFailed > 0 under flood load.
 	b := makeBlobs(t, 1)
 	ctx := context.Background()
 	const flood = 5000
@@ -123,8 +123,13 @@ func TestBlob_FullQueueDropsPending(t *testing.T) {
 		t.Fatalf("uploadCh capacity = %d, want 1", cap(b.uploadCh))
 	}
 	s := b.Stats()
-	if s.Publish+s.PublishFailed != int64(flood) {
-		t.Fatalf("Publish(%d)+PublishFailed(%d) should equal floodSize(%d); accounting mismatch",
-			s.Publish, s.PublishFailed, flood)
+	if s.Publish != int64(flood) {
+		t.Fatalf("Publish = %d, want %d successful persisted blobs", s.Publish, flood)
+	}
+	if s.PublishFailed == 0 {
+		t.Fatalf("expected queue overflow to increment PublishFailed under flood load, got %+v", s)
+	}
+	if s.Entries != flood {
+		t.Fatalf("Entries = %d, want %d persisted blobs", s.Entries, flood)
 	}
 }
