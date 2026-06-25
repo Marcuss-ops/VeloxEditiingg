@@ -14,12 +14,15 @@ package config
 
 import (
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"time"
 
 	"velox-shared/identity"
 )
@@ -107,10 +110,47 @@ type WorkerConfig struct {
 	CircuitBreakerFailureThreshold int `json:"circuit_breaker_failure_threshold,omitempty"` // Failures to open circuit (default: 5)
 	CircuitBreakerSuccessThreshold int `json:"circuit_breaker_success_threshold,omitempty"` // Successes to close circuit (default: 3)
 	CircuitBreakerTimeoutSecs      int `json:"circuit_breaker_timeout_secs,omitempty"`      // Seconds before half-open (default: 60)
+
+	// MinDiskFreeMB is the disk-free floor the worker reports to
+	// /health/ready as `disk.critical` (RW-PROD-004 §3 reason
+	// taxonomy). The disk watcher (composition root) translates this
+	// to bytes and updates ReadyState.SetDiskState every 15s. Default
+	// 256 MiB matches the production scratch-pad envelope for the
+	// scene.composite.v1 pipeline (the bootstrap output dir typically
+	// sees a few hundred MiB of working-set at peak). Operators can
+	// raise it for richer masters / lower for tighter scratch disks.
+	MinDiskFreeMB int `json:"min_disk_free_mb,omitempty"` // Floor in MiB (default: 256)
+
+	// ReadyzEndpoint overrides the /health/ready mount path
+	// (default: /health/ready). Read by cmd/velox-worker-agent/main.go
+	// to wire the systemd-side reference (RW-PROD-004 §3 A9) — a
+	// Kubernetes podspec that wants /readyz works without changing
+	// the canonical mount. NEVER set this from main.go to anything
+	// that would conflict with the legacy /health endpoint family.
+	ReadyzEndpoint string `json:"readyz_endpoint,omitempty"`
+
+	// Warnings is populated by Validate() with non-fatal findings that should
+	// be surfaced to operators but do NOT block startup. The primary use is
+	// "weak_permissions_warn" on the TLS private key in non-production
+	// environments (RW-PROD-001 A2). Keep this field internal — it never
+	// participates in JSON serialization (tag: "-") so operators do not
+	// accidentally bake warnings into committed configs.
+	Warnings []string `json:"-"`
 }
 
 // ErrInvalidConfig is returned when configuration validation fails.
 var ErrInvalidConfig = errors.New("invalid configuration")
+
+// minCertValidity is the floor for ResidualValidity on a TLS leaf cert
+// (RW-PROD-001 A1). Anything under this triggers a hard reject so a worker
+// cannot connect with a cert that will expire during a typical task.
+//
+// Spec reference: docs/rw-prod/RW-PROD-001.md §2 (A1) — production pause
+// window: 14 days. Bumping this up to e.g. 30 days is allowed for
+// stakeholders who prefer a wider safety margin, but the runbook says
+// 14 days matches the production PKI rotation cadence
+// (cert TTL = 14 days, see scripts/gen-production-pki.sh `worker` cmd).
+const minCertValidity = 14 * 24 * time.Hour
 
 // LoadConfig reads and parses a WorkerConfig from a JSON file.
 // Returns an error if the file cannot be read or parsed.
@@ -213,6 +253,12 @@ func (c *WorkerConfig) applyDefaults() {
 	if c.HealthPort == 0 {
 		c.HealthPort = 8081
 	}
+	// RW-PROD-004: default disk-free floor in MiB. The disk watcher
+	// (composition root) downsamples to bytes for ReadyState.SetDiskState.
+	// 256 MiB matches the bootstrap output smoke-test envelope.
+	if c.MinDiskFreeMB <= 0 {
+		c.MinDiskFreeMB = 256
+	}
 	// Environment safe-by-default. The actual env-var overlay
 	// (`VELOX_ENV`) runs after this in `applyEnvOverrides`; both layers
 	// land on "production" if the operator never declares anything.
@@ -266,12 +312,26 @@ func (c *WorkerConfig) Validate() error {
 
 	var errs []string
 
+	// Reset any previous validation warnings (re-Validate() should not
+	// accumulate duplicate findings).
+	c.Warnings = nil
+
 	if c.MasterURL == "" {
 		errs = append(errs, "master_url is required")
 	}
 
+	// RW-PROD-001 A4: canonicalize the worker_id and enforce strict shape.
+	// Run AFTER the empty-check so a missing worker_id produces the more
+	// helpful "worker_id is required" error rather than a cryptic regex miss.
+	c.WorkerID = NormalizeWorkerID(c.WorkerID)
 	if c.WorkerID == "" {
 		errs = append(errs, "worker_id is required")
+	} else if !identity.IsValidWorkerID(c.WorkerID) {
+		// Caller (cmd/velox-worker-agent/main.go) logs via
+		// logger.LogCertRejected once validation completes; here we record
+		// both as an error (production-stop) AND carry the structured
+		// reason for downstream emission.
+		errs = append(errs, fmt.Sprintf("invalid worker_id shape: %q (RW-PROD-001 A4 enforces ^[a-z][a-z0-9-]{2,62}$)", c.WorkerID))
 	}
 
 	if c.WorkDir == "" {
@@ -353,7 +413,47 @@ func (c *WorkerConfig) Validate() error {
 	// Rule: full TLS means cert + key must be present on disk AND the key
 	// must actually pair against the cert (the user's spec listed
 	// "chiave non compatibile col certificato" as a test case).
+	//
+	// RW-PROD-001 additions layered on top of the existing pair-incompat
+	// guard, in this exact order:
+	//  1. stat the key for permissions (A2) — production hard-fails,
+	//     dev/staging records a non-fatal Warning.
+	//  2. stat the cert (existence + is-not-directory).
+	//  3. LoadX509KeyPair for cert/key compatibility.
+	//  4. parse the leaf certificate and reject if (a) expired OR
+	//     (b) expires in less than minCertValidity (14d).
 	if hasFullTLS {
+		// -------- A2: key file permissions enforcement --------
+		if runtime.GOOS != "windows" {
+			if keyInfo, err := os.Stat(tlsCfg.KeyFile); err == nil {
+				// POSIX mode bitmask & 0o077 isolates "group" + "other"
+				// rwx bits — anything non-zero is world-or-group readable,
+				// which is unsafe for a private key.
+				perm := keyInfo.Mode().Perm()
+				if perm&0o077 != 0 {
+					if env == "production" {
+						errs = append(errs, fmt.Sprintf(
+							"tls_key_file %q has insecure permissions %04o (must be 0600); "+
+								"RW-PROD-001 A2 fail-closed in production",
+							tlsCfg.KeyFile, perm))
+					} else {
+						// Non-production: record a non-fatal Warning so the
+						// caller can log via logger.LogCertRejected once
+						// validation completes. DO NOT add to errs — we want
+						// the worker to start so local development isn't
+						// blocked by chmod.
+						c.Warnings = append(c.Warnings, fmt.Sprintf(
+							"weak_permissions_warn: tls_key_file %q has %04o, must be 0600 (RW-PROD-001 A2)",
+							tlsCfg.KeyFile, perm))
+					}
+				}
+			}
+			// Stat failures on the key (NotExist, etc.) are reported later
+			// by the LoadX509KeyPair guard below — a duplicate check here
+			// would mask the more descriptive error.
+		}
+
+		// -------- existence + directory check on cert file --------
 		if info, err := os.Stat(tlsCfg.CertFile); err != nil {
 			if os.IsNotExist(err) {
 				errs = append(errs, fmt.Sprintf(
@@ -365,9 +465,29 @@ func (c *WorkerConfig) Validate() error {
 		} else if info.IsDir() {
 			errs = append(errs, fmt.Sprintf(
 				"tls_cert_file %q is a directory, not a PEM file", tlsCfg.CertFile))
-		} else if _, err := tls.LoadX509KeyPair(tlsCfg.CertFile, tlsCfg.KeyFile); err != nil {
+		} else if cert, err := tls.LoadX509KeyPair(tlsCfg.CertFile, tlsCfg.KeyFile); err != nil {
+			// -------- A1/cert-key compat (existing guard) --------
 			errs = append(errs, fmt.Sprintf(
 				"tls_cert_file / tls_key_file pair rejected by crypto/tls: %v", err))
+		} else if leaf, perr := x509.ParseCertificate(cert.Certificate[0]); perr != nil {
+			// -------- A1: parse leaf cert --------
+			errs = append(errs, fmt.Sprintf(
+				"tls_cert_file could not be parsed as x509 leaf: %v", perr))
+		} else {
+			// -------- A1: expiry window check (14-day floor) --------
+			now := time.Now().UTC()
+			switch {
+			case now.After(leaf.NotAfter):
+				errs = append(errs, fmt.Sprintf(
+					"certificate has expired: not_after=%s now=%s (RW-PROD-001 A1)",
+					leaf.NotAfter.UTC().Format(time.RFC3339), now.Format(time.RFC3339)))
+			case leaf.NotAfter.Sub(now) < minCertValidity:
+				errs = append(errs, fmt.Sprintf(
+					"certificate expires too soon: not_after=%s remaining=%s floor=%s (RW-PROD-001 A1)",
+					leaf.NotAfter.UTC().Format(time.RFC3339),
+					leaf.NotAfter.Sub(now).Round(time.Second),
+					minCertValidity))
+			}
 		}
 	}
 

@@ -1,0 +1,43 @@
+{
+  "ticket": "RW-PROD-001",
+  "date": "2026-06-24",
+  "agents_implemented": ["A1","A2","A3","A4","A5","A6","A7","A8","A9"],
+  "files_touched": [
+    "RemoteCodex/native/worker-agent-go/pkg/config/config.go",
+    "RemoteCodex/native/worker-agent-go/pkg/config/config_test.go",
+    "RemoteCodex/native/worker-agent-go/pkg/logger/logger.go",
+    "shared/identity/identity.go",
+    "DataServer/cmd/server/bootstrap_grpc.go",
+    "DataServer/cmd/server/bootstrap.go",
+    "DataServer/internal/grpcserver/plaintext_reject_test.go",
+    "scripts/check-share-cert.sh",
+    "scripts/gen-production-pki.sh",
+    "deploy/scripts/apply-local-worker-config.sh"
+  ],
+  "tests_added": [
+    "TestRWProd001_TLSExpiryWindow (TS-1.1, TS-1.2, TS-1.3)",
+    "TestRWProd001_KeyPermissions (TS-1.4 prod reject, TS-1.5 dev warn)",
+    "TestRWProd001_WorkerIDShape (TS-1.6)",
+    "TestServer_PlaintextRejectedWhenTLSRequired (A6)",
+    "shared/identity.IsValidWorkerID proofs"
+  ],
+  "acceptance_criteria_verified": [
+    "cert valid + scadenza > 14gg + key 0600 + fogli CN corretti → registration OK",
+    "cert scaduto → registration REJECTED",
+    "CA errata → handshake REJECTED",
+    "cert di altro worker (serial/fingerprint non in allowlist) → REJECTED",
+    "plaintext verso TLS-only master → connection REJECTED in <1s",
+    "TLS parziale (solo key, no CA) → worker NON si avvia",
+    "nessuna chiave privata, fingerprint, secret nei log"
+  ],
+  "evidence_template": {
+    "per_worker": ["worker_id","fingerprint","serial","not_before","not_after","owner_host"],
+    "scripts_to_run": [
+      "openssl verify -CAfile ca.crt worker.crt (per worker host)",
+      "scripts/check-share-cert.sh inventory deploy/inventory/.../hosts.ini --json ops/rw-prod-001-cert-sharing.json",
+      "scripts/gen-production-pki.sh worker --cn $WORKER_ID --intermediate-dir <dir> (con WORKER_ID=pin)",
+      "deploy/scripts/apply-local-worker-config.sh --worker-id $WORKER_ID ...; cat $WORK_DIR/worker_cert.meta",
+      "VELOX_GRPC_REQUIRE_TLS=true velox-server (fatale sui path TLS mancanti)"
+    ]
+  }
+}

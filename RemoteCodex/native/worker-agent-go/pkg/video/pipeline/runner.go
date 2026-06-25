@@ -14,6 +14,24 @@ type RenderClient interface {
 	Render(ctx context.Context, p *plan.RenderPlan) error
 }
 
+// RenderClient exposes the underlying render client so callers outside
+// pkg/video (currently only pkg/bootstrap, for the engine self-test)
+// can drive a single Render without rebuilding the renderer. The
+// returned value is the SAME pointer the constructor was given;
+// mutating it via the returned interface affects subsequent Run()
+// calls — callers MUST treat it as read-only.
+//
+// This is a pure accessor — no side-effects, no logging, no caching.
+// The intent is to keep pkg/bootstrap decoupled from the pipeline
+// constructor's identity-check obligations while still letting the
+// self-render step drive the canonical worker-side renderer.
+func (r *Runner) RenderClient() RenderClient {
+	if r == nil {
+		return nil
+	}
+	return r.renderClient
+}
+
 // Runner orchestrates: resolve compiler → validate → compile → render.
 type Runner struct {
 	registry     *Registry

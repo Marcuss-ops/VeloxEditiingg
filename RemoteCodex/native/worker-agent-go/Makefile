@@ -57,6 +57,7 @@ BIN_DIR := bin
 .PHONY: all build clean test install uninstall agent installer release
 .PHONY: release-linux release-darwin release-windows test-coverage
 .PHONY: fmt lint deps verify-deps docs run-agent docker help
+.PHONY: bootstrap-smoke bootstrap-selftest-regenerate
 
 all: build
 
@@ -180,6 +181,35 @@ docker:
 		--build-arg "VERSION=$(VERSION)" \
 		--build-arg "BUILD_TIME=$(BUILD_TIME)" \
 		.
+
+# RW-PROD-003 §5: smoke test the bootstrap gate WITHOUT going through
+# the full main() flow. Used by CI as a single-host canary before any
+# real production canary (RW-PROD-007) is even attempted.
+#
+#   - run `bash tests/bootstrap-smoke.sh` from the module root
+#   - exit 0  → every step OK, JSON boot report on stdout
+#   - exit 1  → at least one step FAIL, JSON dumps to stderr
+#
+# The script itself uses a fake cfg.BundleHash that matches a touched
+# BUNDLE_HASH.txt so we do not depend on the production artefact. The
+# `bootstrap-selftest-regenerate` target writes a fresh baseline SHA
+# after a confirmed-render against a verified C++ engine build.
+bootstrap-smoke: agent
+	@echo "Bootstrap smoke (RW-PROD-003 §5)…"
+	@bash tests/bootstrap-smoke.sh
+	@echo "Bootstrap smoke OK"
+
+# RW-PROD-003 §5 regeneration. Run ONLY after a confirmed C++ engine
+# build bump that produced a verified-byte-stable render. CI MUST
+# gate this via a manual approval — the operator pins
+# VERSION_FILE_BASELINE_TARBALL=<path-to-tarball> and the script
+# rejects any render whose surrounding metadata disagrees.
+#
+# Requires the C++ render binary at $VELOX_VIDEO_ENGINE_CPP_BIN.
+bootstrap-selftest-regenerate: agent
+	@echo "Regenerating tests/fixtures/engine_selftest_baseline.sha256 (RW-PROD-003 §3 A1+A2)…"
+	@bash tests/bootstrap-selftest-regenerate.sh
+	@echo "Baseline regenerated; commit alongside VERSION.txt bump"
 
 help:
 	@echo "Velox Worker Agent - Build System"

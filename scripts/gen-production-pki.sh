@@ -338,6 +338,20 @@ EXT
 
   echo "[gen-prod-pki] worker serial: $("$OPENSSL" x509 -in "$worker_crt" -serial -noout | cut -d= -f2)"
   echo "[gen-prod-pki] worker fingerprint: $("$OPENSSL" x509 -in "$worker_crt" -fingerprint -sha256 -noout | cut -d= -f2)"
+  # RW-PROD-001 A9: identity-binding guard (re-inserted INSIDE cmd_worker)
+  if [[ -n "${WORKER_ID:-}" ]]; then
+    actual_cn="$("$OPENSSL" x509 -in "$worker_crt" -noout -subject | sed -n "s/.*CN *= *\([^,/]*\).*/\1/p" | tr -d " ")"
+    if [[ -z "$actual_cn" ]]; then
+      echo "[gen-prod-pki] FATAL: cert subject has no CN; cannot verify A9 binding." >&2
+      rm -f "$worker_crt" "$worker_key"; exit 1
+    fi
+    if [[ "$actual_cn" != "$WORKER_ID" ]]; then
+      echo "[gen-prod-pki] FATAL: WORKER_ID=$WORKER_ID but cert CN=$actual_cn (RW-PROD-001 A9 binding mismatch)." >&2
+      rm -f "$worker_crt" "$worker_key"; exit 1
+    fi
+    echo "[gen-prod-pki] CN binding verified: cert CN=$actual_cn == WORKER_ID=$WORKER_ID"
+  fi
+
   echo "[gen-prod-pki] WORKER generated: $worker_crt"
   echo ""
   echo "  Worker config JSON:"
@@ -346,10 +360,3 @@ EXT
   echo "    \"tls_ca_file\":   \"$INTERMEDIATE_DIR/ca.crt\""
 }
 
-# ─── Dispatch ────────────────────────────────────────────────────────────────
-case "$CMD" in
-  root-ca)      cmd_root_ca ;;
-  intermediate) cmd_intermediate ;;
-  server)       cmd_server ;;
-  worker)       cmd_worker ;;
-esac

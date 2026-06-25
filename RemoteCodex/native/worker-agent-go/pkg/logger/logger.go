@@ -194,3 +194,33 @@ func Error(format string, args ...interface{}) {
 func Fatal(format string, args ...interface{}) {
 	defaultLogger.Fatal(format, args...)
 }
+
+// LogCertRejected emits a standardized Warn-level event when a peer certificate
+// (worker/mTLS client cert, or server-side leaf) is rejected for an
+// application-layer policy reason — distinct from a TLS-layer handshake failure.
+//
+// Reason is one of the canonical codes documented in docs/rw-prod/ACTIONS.md §A3:
+//
+//   "missing_cert"          : tls_cert_file path empty
+//   "missing_key"           : tls_key_file  path empty
+//   "missing_ca"            : tls_ca_file   path empty
+//   "partial_tls"           : one or two of cert/key/ca present, never all three
+//   "cert_unreadable"       : os.Stat failed for non-NotExist reason
+//   "key_pair_rejected"     : crypto/tls.LoadX509KeyPair rejected cert/key
+//   "key_permission_world_readable" : key file mode & 0o077 != 0 (RW-PROD-001 A2)
+//   "cert_expired"          : leaf.NotAfter < time.Now().UTC()
+//   "cert_too_soon_to_expire" : leaf.NotAfter - now < 14d (RW-PROD-001 A1)
+//   "cert_self_signed"      : leaf.Subject == leaf.Issuer (raise awareness)
+//   "worker_id_invalid_shape" : shared/identity.IsValidWorkerID == false (RW-PROD-001 A4)
+//
+// NEVER pass the TLS key material, certificate PEM blob, or credential hash
+// into this function — fingerprint is computed via openssl/sha256 OVER the
+// raw cert bytes, NOT the cert bytes themselves. The structured fields below
+// are the public-key surface operators need to triage a rejection without
+// ever seeing private material.
+func LogCertRejected(workerID, fingerprint, serial, reason string) {
+	defaultLogger.Warn(
+		"[AUTHZ] certificate rejected worker_id=%s fingerprint_sha256=%s serial=%s reason=%s",
+		workerID, fingerprint, serial, reason,
+	)
+}

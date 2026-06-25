@@ -68,12 +68,25 @@ services:
 
     # Healthcheck mirrors the Dockerfile HEALTHCHECK directive so that
     # `docker compose ps` reports the result.
+    #
+    # RW-PROD-004 §3 A5 migration: the readiness probe now points at
+    # /health/ready (NOT /health) so a freshly-booted worker returning
+    # 503 for still-pending prerequisites (bootstrap, executors, cache,
+    # blob, disk) does NOT cause docker to spin-restart the container.
+    # /health/live would never return 503 (process+liveness only),
+    # while /health (legacy) returns a misleading "ok" without surfacing
+    # the readiness taxonomy.
+    #
+    # start_period: 30s (was 120s pre-RW-PROD-004) — within the
+    # /health/ready "first sample lands before traffic" envelope
+    # (composition-root disk watcher initialises immediately on
+    # goroutine start).
     healthcheck:
-      test: ["CMD", "/bin/sh", "-c", "curl -sf http://localhost:${VELOX_HEALTH_PORT:-8081}/health || exit 1"]
-      interval: 30s
-      timeout: 5s
-      start_period: 120s
-      retries: 3
+      test: ["CMD", "/bin/sh", "-c", "curl -sf http://localhost:${VELOX_HEALTH_PORT:-8081}/health/ready || exit 1"]
+      interval: 10s
+      timeout: 3s
+      start_period: 30s
+      retries: 5
 
     logging:
       driver: json-file

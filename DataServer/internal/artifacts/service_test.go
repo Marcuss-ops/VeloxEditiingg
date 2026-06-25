@@ -122,16 +122,26 @@ func setupTestEnv(t *testing.T) *testEnv {
 // Other job columns get their DEFAULT values from the migration. We use
 // a minimal schema-defensive INSERT so future migrations that add
 // additional columns don't break this test.
+//
+// NOTE (PR-048 / canonical-cutover): assigned_to, lease_id, lease_expiry
+// were DROPPED from the jobs table; identity is now tracked strictly on
+// task_attempts / artifact_uploads. The signature is preserved so the
+// 6 caller call-sites (Begin/Receive/Finalize tests) don't all need
+// editing — the dropped values are simply no longer persisted here.
+// The attempt row inserted via seedAttempt continues to be the
+// authoritative source for (worker, lease) identity assertions.
 func (e *testEnv) seedJob(jobID, status, assignedTo, leaseID string, revision int, leaseExpiry time.Time) {
 	e.t.Helper()
+	_ = assignedTo // dropped by migration 048; retained for caller-signature stability
+	_ = leaseID    // dropped by migration 048; authority now lives on task_attempts
+	_ = leaseExpiry
 	now := e.clock.Now().UTC().Format(time.RFC3339)
 	_, err := e.db.Exec(`
 		INSERT INTO jobs (
-			job_id, status, assigned_to, lease_id, lease_expiry, revision,
+			job_id, status, revision,
 			created_at, updated_at, migrated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		jobID, status, assignedTo, leaseID,
-		nullableTime(leaseExpiry), revision, now, now, now,
+		) VALUES (?, ?, ?, ?, ?, ?)`,
+		jobID, status, revision, now, now, now,
 	)
 	require.NoError(e.t, err, "seedJob "+jobID)
 }

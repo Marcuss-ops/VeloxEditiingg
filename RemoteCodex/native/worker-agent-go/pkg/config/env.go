@@ -12,6 +12,7 @@ package config
 
 import (
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -27,6 +28,15 @@ const (
 	EnvTLSCAFile = "VELOX_GRPC_TLS_CA_FILE"
 	// EnvAllowInsecureGRPCDev toggles plaintext gRPC for local dev only.
 	EnvAllowInsecureGRPCDev = "VELOX_ALLOW_INSECURE_GRPC_DEV"
+	// EnvMinDiskFreeMB overrides the readiness disk floor (RW-PROD-004 §3 A4).
+	// Operators set this per-host to match the actual scratch-disk size;
+	// the disk watcher in main.go downsamples MiB → bytes for ReadyState.
+	EnvMinDiskFreeMB = "VELOX_MIN_DISK_FREE_MB"
+	// EnvReadyzEndpoint overrides the /health/ready mount path (RW-PROD-004 §3 A9).
+	// Default empty ⇒ /health/ready stays canonical. Operators set this on a
+	// Kubernetes podspec that wants /readyz to keep the canonical mount out
+	// of network policy scope.
+	EnvReadyzEndpoint = "VELOX_READYZ_ENDPOINT"
 )
 
 // EnvBindings is the set of env-var names this package inspects.
@@ -38,6 +48,8 @@ var EnvBindings = []string{
 	EnvTLSKeyFile,
 	EnvTLSCAFile,
 	EnvAllowInsecureGRPCDev,
+	EnvMinDiskFreeMB,
+	EnvReadyzEndpoint,
 }
 
 // envTruthy reports whether a string from os.Getenv should be interpreted
@@ -84,5 +96,20 @@ func applyEnvOverrides(cfg *WorkerConfig) {
 	}
 	if v := os.Getenv(EnvAllowInsecureGRPCDev); v != "" {
 		cfg.AllowInsecureGRPC = envTruthy(v)
+	}
+	// RW-PROD-004 §3 A4: MinDiskFreeMB takes the env-var lane (per-host
+	// resource floor). The disk watcher applies cfg.MinDiskFreeMB to the
+	// ready snapshot; we still want operators to ship a different floor
+	// per cluster without re-baking worker_config.json on every node.
+	if v := strings.TrimSpace(os.Getenv(EnvMinDiskFreeMB)); v != "" {
+		if mb, perr := strconv.Atoi(v); perr == nil && mb > 0 {
+			cfg.MinDiskFreeMB = mb
+		}
+	}
+	// RW-PROD-004 §3 A9: VELOX_READYZ_ENDPOINT chooses the /health/ready
+	// mount path. Empty string = canonical /health/ready; anything else
+	// overrides and main.go wires the secondary mux accordingly.
+	if v := strings.TrimSpace(os.Getenv(EnvReadyzEndpoint)); v != "" {
+		cfg.ReadyzEndpoint = v
 	}
 }

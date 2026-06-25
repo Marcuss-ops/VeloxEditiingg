@@ -175,6 +175,46 @@ func (r *Registry) GetWorkersByGroup(ctx context.Context, group string) []Worker
 	return result
 }
 
+// HasAtLeastOneLive (RW-PROD-004 §3 A7) is the master-side readiness
+// helper for the worker-side /health/ready migration. Returns true iff
+// at least ONE registered worker is currently live within
+// HasAtLeastOneLiveTimeout (30s). The semantics match GetActiveWorkers
+// (last heartbeat within timeout + session active) but the consumer
+// is the master's own /health/readiness subsystem, NOT the operator
+// dashboards.
+///
+/// Why a single tuple instead of a count:
+//
+//   - Dashboards already iterate GetActiveWorkers; a separate count
+//     function would be a third code path to maintain against drift.
+//   - Dashboards want per-worker ConnectionStatus (CONNECTED / STALE /
+//     DRAINING / DISCONNECTED enum); this helper collapses to a bool so
+//     the read-model semantics are not conflated with the
+//     readiness-pane semantics.
+//   - The master-side readiness pane only ever asks "is the fleet
+//     non-empty AND live" — a yes/no answer is the canonical gate
+//     (operators run on a one-shift boundary; a stuttering dashboard
+//     is worse than a hard fail-closed gate).
+//
+// The flag VELOX_REQUIRE_LIVE_WORKERS (A8) is the operator opt-in
+// that enables this gate at server boot — the helper is unconditionally
+// safe to call (returns false when nothing live) but the readiness
+// check is OPT-IN to keep production deployments that occasionally
+// run with zero live workers (e.g. a 6 AM scheduled drain window)
+// from spuriously reporting not_ready.
+func (r *Registry) HasAtLeastOneLive(ctx context.Context) bool {
+	if r == nil {
+		return false
+	}
+	return len(r.GetActiveWorkers(ctx, HasAtLeastOneLiveTimeout)) >= 1
+}
+
+// HasAtLeastOneLiveTimeout is the canonical freshness window for the
+// master-side readiness gate. Matches ConnectionStaleThreshold (30s)
+// so a fresh heartbeat keeps the gate satisfied while a stale one
+// drops the gate in lockstep with operator dashboards.
+const HasAtLeastOneLiveTimeout = ConnectionStaleThreshold
+
 // GetActiveWorkers returns workers that have a recent heartbeat AND a
 // live session. ConnectionStatus is populated; downstream consumers
 // may filter further on the enum.

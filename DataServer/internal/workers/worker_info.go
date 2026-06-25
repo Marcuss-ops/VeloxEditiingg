@@ -31,6 +31,20 @@ type WorkerInfo struct {
 	WorkerGroup     string                 `json:"worker_group"`
 	IPAddress       string                 `json:"ip_address"`
 	Host            string                 `json:"host"`
+
+	// Class (RW-PROD-005 §2.1) is the operator-assigned fleet class
+	// (cpu-xlarge / gpu-a100 / mixed / io ...) used by dispatchers
+	// and by the GET /api/v1/workers?class= filter. Empty string
+	// means "unclassified"; the handler ignores empty-class rows
+	// when the filter is active.
+	Class string `json:"worker_class,omitempty"`
+
+	// RolloutGroup (RW-PROD-005 §2.1) is the operator-assigned
+	// rollout cohort (v3.4 / canary / holdout ...) used to phase
+	// worker fleets into a new bundle. Empty string means
+	// "unassigned"; the handler ignores empty-rollout rows when
+	// the filter is active.
+	RolloutGroup string `json:"rollout_group,omitempty"`
 	CodeVersion     string                 `json:"code_version"`
 	BundleVersion   string                 `json:"bundle_version"`
 	BundleHash      string                 `json:"bundle_hash,omitempty"`

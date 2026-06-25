@@ -18,10 +18,21 @@ Group=velox
 WorkingDirectory=/opt/velox
 
 # Go worker as default entrypoint
+#
+# RW-PROD-004 §3 A9: --ready-endpoint /health/ready is the canonical
+# mount path exposed by telemetry.StartHealthServerWithMux. We pin it
+# here so the systemd Restart=always directive behaves correctly with
+# the docker HEALTHCHECK / healthcheck.test that probes the same path.
+#
+# In practice the canonical /health/ready is also the default when the
+# flag is omitted, so the explicit flag here is documentation-as-code:
+# if a future RW-PROD bumps the default mount, this service file
+# continues to enforce the canonical path for systemd-side monitoring.
 ExecStart=/usr/local/bin/velox-worker-agent \
     -config /opt/velox/worker_config.json \
     -master {{MASTER_URL}} \
-    -work-dir /opt/velox
+    -work-dir /opt/velox \
+    --ready-endpoint /health/ready
 
 # Fallback to Python worker (for rollback)
 # ExecStart=/opt/velox/venv/bin/python3 /opt/velox/ServerRemote/job_worker.py \

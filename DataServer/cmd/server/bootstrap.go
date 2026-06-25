@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -88,6 +89,15 @@ type serverDeps struct {
 }
 
 // ── Sentinels ─────────────────────────────────────────────────────────────
+
+// requireLiveWorkersEnabled is the canonical gate for the A8 opt-in.
+// Encapsulated as a package-level helper so the readiness check call
+// site stays readable AND so a future operator-mode (e.g. `velox fleet
+// live-only`) can flip the same flag from a non-env source without
+// rewriting the closure above.
+func requireLiveWorkersEnabled() bool {
+	return strings.EqualFold(strings.TrimSpace(os.Getenv("VELOX_REQUIRE_LIVE_WORKERS")), "true")
+}
 
 var ErrPostgresNotYetWired = errors.New(
 	"bootstrap: VELOX_DB_DRIVER=postgres is not yet wired end-to-end. " +
@@ -301,8 +311,24 @@ func runServer(cfg *config.Config) error {
 				log.Fatalf("[FAIL] PR-5 P0 guard: VELOX_GRPC_ALLOW_INSECURE_DEV=true on release channel =%q. Production / staging MUST use the TLS cert+key+CA triple. Set VELOX_RELEASE_CHANNEL=dev to confirm dev intent, or supply VELOX_GRPC_TLS_{CERT,KEY,CA}_FILE and unset VELOX_GRPC_ALLOW_INSECURE_DEV.",
 					cfg.Runtime.ReleaseChannel)
 			}
+			// RW-PROD-001 A5: an operator opt-in for hard-Reject of plaintext
+			// gRPC even outside the PR-5 release-channel gate. Runs AFTER the
+			// PR-5 guard so an operator who set both gets the most specific
+			// fatal (the release-channel one, which mentions channel name).
+			// RW-PROD-001 A5: an operator opt-in for hard-Reject of plaintext
+			// gRPC even outside the PR-5 release-channel gate. Runs AFTER the
+			// PR-5 guard so an operator who set both gets the most specific
+			// fatal (the release-channel one, which mentions channel name).
+			if err := enforceGRPCRequireTLS(cfg); err != nil {
+				log.Fatal(err) // M2: helper now returns error (testable); caller hard-fail-loud.
+			}
 			if err := grpcserver.ValidateWorkerAllowlist(cfg.Workers.AllowedWorkers, insecureDev); err != nil {
 				return err
+			}
+			// RW-PROD-001 M1 follow-up: opt-in silently ignored when GRPCPort=0.
+			// Emit a loud WARN so misconfigured operators notice before deploy.
+			if strings.TrimSpace(os.Getenv("VELOX_GRPC_REQUIRE_TLS")) == "true" && cfg.Server.GRPCPort == 0 {
+				log.Printf("[WARN] RW-PROD-001 A5: VELOX_GRPC_REQUIRE_TLS=true but VELOX_GRPC_PORT=0; opt-in ignored, gRPC will not start. Set VELOX_GRPC_PORT>0 (e.g. 8443) to enable the TLS-only gRPC plane.")
 			}
 			grpcHandler := grpcserver.NewHandler(
 				w.Registry, w.CommandManager, jobsRepo, t.TaskRepository, t.AttemptRepository, a.ArtifactSvc, p.SQLite,
@@ -351,6 +377,32 @@ func runServer(cfg *config.Config) error {
 			}
 			return nil
 		})
+		// RW-PROD-004 §3 A8: master-side readiness gate for the worker-side
+		// /health/ready migration. When VELOX_REQUIRE_LIVE_WORKERS=true the
+		// master refuses to mark ITSELF ready while the worker fleet is empty
+		// (no live CONNECTED worker within HasAtLeastOneLiveTimeout=30s).
+		//
+		// Why opt-in (not unconditional): a staging cluster may run with zero
+		// live workers during a scheduled drain window (e.g. a 6 AM batch
+		// restart), and a production-arrived cluster that crashes its last worker
+		// should still serve /api/v1/script-generation even before the next
+		// worker registration round-trip completes. Operators opt in when they
+		// want stricter pivots (e.g. a `velox-migrate-rollout-2026Q3` that needs
+		// "fleet non-empty" as a hard-cutover precondition).
+		//
+		// Env-var check is repeated on every Readyz Check call: enabling/
+		// disabling the gate at runtime is a one-line config push on k8s.
+		if w.Registry != nil {
+			m.Health.AddReadinessCheck("workers_at_least_one_live", func() error {
+				if !requireLiveWorkersEnabled() {
+					return nil // opt-in not active → gate satisfied
+				}
+				if !w.Registry.HasAtLeastOneLive(context.Background()) {
+					return fmt.Errorf("VELOX_REQUIRE_LIVE_WORKERS=true but no live worker is registered within 30s")
+				}
+				return nil
+			})
+		}
 	}
 
 	// 7. Background supervisor (started in a goroutine, signals done via channel)

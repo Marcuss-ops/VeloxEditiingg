@@ -61,7 +61,7 @@ func generateCompatibleTLSPair(t *testing.T) (certFile, keyFile, caFile string) 
 		SerialNumber: big.NewInt(1),
 		Subject:      pkix.Name{CommonName: "test-cert"},
 		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().Add(24 * time.Hour),
+		NotAfter:     time.Now().Add(30 * 24 * time.Hour),
 		KeyUsage:     x509.KeyUsageDigitalSignature,
 	}
 
@@ -473,7 +473,7 @@ func TestTLSValidation(t *testing.T) {
 			cfg: func(t *testing.T) *WorkerConfig {
 				certFile := writeTempDummy(t, "cert.pem")
 				return &WorkerConfig{
-					MasterURL: "http://localhost:8080", WorkerID: "w", WorkDir: "/opt",
+					MasterURL: "http://localhost:8080", WorkerID: "tlsw", WorkDir: "/opt",
 					ControlGRPCURL: "g", Environment: "production",
 					TLSCertFile: certFile,
 				}
@@ -494,7 +494,7 @@ func TestTLSValidation(t *testing.T) {
 			cfg: func(t *testing.T) *WorkerConfig {
 				caFile := writeTempDummy(t, "ca.pem")
 				return &WorkerConfig{
-					MasterURL: "http://localhost:8080", WorkerID: "w", WorkDir: "/opt",
+					MasterURL: "http://localhost:8080", WorkerID: "tlsw", WorkDir: "/opt",
 					ControlGRPCURL: "g", Environment: "production",
 					TLSCAFile: caFile,
 				}
@@ -505,7 +505,7 @@ func TestTLSValidation(t *testing.T) {
 			name: "5. No TLS, insecure=false (env=prod) -> err",
 			cfg: func(t *testing.T) *WorkerConfig {
 				return &WorkerConfig{
-					MasterURL: "http://localhost:8080", WorkerID: "w", WorkDir: "/opt",
+					MasterURL: "http://localhost:8080", WorkerID: "tlsw", WorkDir: "/opt",
 					ControlGRPCURL: "g", Environment: "production",
 				}
 			},
@@ -515,7 +515,7 @@ func TestTLSValidation(t *testing.T) {
 			name: "6. insecure=true, env=dev -> OK",
 			cfg: func(t *testing.T) *WorkerConfig {
 				return &WorkerConfig{
-					MasterURL: "http://localhost:8080", WorkerID: "w", WorkDir: "/opt",
+					MasterURL: "http://localhost:8080", WorkerID: "tlsw", WorkDir: "/opt",
 					ControlGRPCURL: "g", Environment: "dev",
 					AllowInsecureGRPC: true,
 				}
@@ -525,7 +525,7 @@ func TestTLSValidation(t *testing.T) {
 			name: "7. insecure=true, env=production -> err",
 			cfg: func(t *testing.T) *WorkerConfig {
 				return &WorkerConfig{
-					MasterURL: "http://localhost:8080", WorkerID: "w", WorkDir: "/opt",
+					MasterURL: "http://localhost:8080", WorkerID: "tlsw", WorkDir: "/opt",
 					ControlGRPCURL: "g", Environment: "production",
 					AllowInsecureGRPC: true,
 				}
@@ -536,7 +536,7 @@ func TestTLSValidation(t *testing.T) {
 			name: "8. cert file missing on disk -> err",
 			cfg: func(t *testing.T) *WorkerConfig {
 				return &WorkerConfig{
-					MasterURL: "http://localhost:8080", WorkerID: "w", WorkDir: "/opt",
+					MasterURL: "http://localhost:8080", WorkerID: "tlsw", WorkDir: "/opt",
 					ControlGRPCURL: "g", Environment: "production",
 					TLSCertFile: "/this/path/does/not/exist/cert.pem",
 					TLSKeyFile:  writeTempDummy(t, "key.pem"),
@@ -652,6 +652,249 @@ func TestEnvTruthy(t *testing.T) {
 		if got != expected {
 			t.Errorf("envTruthy(%q) = %v, want %v", input, got, expected)
 		}
+	}
+}
+
+// =============================================================================
+//  RW-PROD-001 — production hardening for the TLS validation chain.
+// =============================================================================
+
+// generateTLSPairWithNotAfter is the canonical test fixture factory for
+// RW-PROD-001 tests. Unlike generateCompatibleTLSPair (which hardcodes a
+// 24h NotAfter), this helper accepts an arbitrary NotAfter so the
+// expiry-window tests can sweep past the 14-day production floor
+// without re-generating the certificate each time.
+func generateTLSPairWithNotAfter(t *testing.T, notAfter time.Time) (certFile, keyFile, caFile string) {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("genkey: %v", err)
+	}
+
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(time.Now().UnixNano()),
+		Subject:      pkix.Name{CommonName: "rw-prod-001-fixture"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     notAfter,
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+	}
+
+	leafBytes, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatalf("createleaf: %v", err)
+	}
+	leafPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: leafBytes})
+	caBytes, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatalf("createca: %v", err)
+	}
+	caPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caBytes})
+	keyPEM := pem.EncodeToMemory(&pem.Block{
+		Type:  "RSA PRIVATE KEY",
+		Bytes: x509.MarshalPKCS1PrivateKey(key),
+	})
+
+	dir := t.TempDir()
+	certFile = filepath.Join(dir, "cert.pem")
+	keyFile = filepath.Join(dir, "key.pem")
+	caFile = filepath.Join(dir, "ca.pem")
+	mustWrite(t, certFile, leafPEM)
+	mustWrite(t, keyFile, keyPEM)
+	mustWrite(t, caFile, caPEM)
+	return
+}
+
+// writeKeyMode writes a key-shaped file at path with the requested POSIX mode.
+// Used by TS-1.4 (mode 0644 rejected in production) and TS-1.5 (mode 0644
+// recorded as a non-fatal Warning in dev). The companion pair-cert at the
+// returned certFile is generated by generateCompatibleTLSPair so LoadX509KeyPair
+// still pairs successfully — isolating the permission check from the
+// cert/key pairing guard.
+func writeKeyMode(t *testing.T, mode os.FileMode) (certFile, keyFile, caFile string) {
+	t.Helper()
+	// Build a compatible (cert, ca, key) triple first…
+	cert, key, ca := generateCompatibleTLSPair(t)
+	// …then overwrite the key file with one whose mode is the requested value.
+	data, err := os.ReadFile(key)
+	if err != nil {
+		t.Fatalf("read key: %v", err)
+	}
+	if err := os.Remove(key); err != nil {
+		t.Fatalf("remove key: %v", err)
+	}
+	if err := os.WriteFile(key, data, mode); err != nil {
+		t.Fatalf("rewrite key: %v", err)
+	}
+	return cert, key, ca
+}
+
+// TestRWProd001_TLSExpiryWindow covers TS-1.1, TS-1.2, TS-1.3 from
+// docs/rw-prod/RW-PROD-001.md §5.
+//   - TS-1.1: cert valid + remaining > 14d → Validate() passes
+//   - TS-1.2: cert expires in < 14d → Validate() rejects (RW-PROD-001 A1)
+//   - TS-1.3: cert already expired → Validate() rejects
+func TestRWProd001_TLSExpiryWindow(t *testing.T) {
+	const belowFloor = 13 * 24 * time.Hour
+	const aboveFloor = 30 * 24 * time.Hour
+
+	t.Run("TS-1.1: fresh cert (>14d) PASSES", func(t *testing.T) {
+		cert, key, ca := generateTLSPairWithNotAfter(t, time.Now().Add(aboveFloor))
+		cfg := fullTLSBase(t)
+		cfg.TLSCertFile = cert
+		cfg.TLSKeyFile = key
+		cfg.TLSCAFile = ca
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("expected nil for fresh cert with 30d remaining, got: %v", err)
+		}
+	})
+
+	t.Run("TS-1.2: cert expiring in <14d REJECTED", func(t *testing.T) {
+		cert, key, ca := generateTLSPairWithNotAfter(t, time.Now().Add(belowFloor))
+		cfg := fullTLSBase(t)
+		cfg.TLSCertFile = cert
+		cfg.TLSKeyFile = key
+		cfg.TLSCAFile = ca
+		err := cfg.Validate()
+		if err == nil {
+			t.Fatal("expected error for cert <14d, got nil")
+		}
+		if !strings.Contains(err.Error(), "expires too soon") {
+			t.Errorf("expected 'expires too soon' error, got: %v", err)
+		}
+		if !strings.Contains(err.Error(), "RW-PROD-001 A1") {
+			t.Errorf("expected RW-PROD-001 A1 marker, got: %v", err)
+		}
+	})
+
+	t.Run("TS-1.3: cert already expired REJECTED", func(t *testing.T) {
+		cert, key, ca := generateTLSPairWithNotAfter(t, time.Now().Add(-1*time.Hour))
+		cfg := fullTLSBase(t)
+		cfg.TLSCertFile = cert
+		cfg.TLSKeyFile = key
+		cfg.TLSCAFile = ca
+		err := cfg.Validate()
+		if err == nil {
+			t.Fatal("expected error for expired cert, got nil")
+		}
+		if !strings.Contains(err.Error(), "certificate has expired") {
+			t.Errorf("expected 'certificate has expired' error, got: %v", err)
+		}
+	})
+}
+
+// TestRWProd001_KeyPermissions covers TS-1.4 (production hard-fail) and
+// TS-1.5 (dev/staging record-only Warning) from RW-PROD-001 §5.
+func TestRWProd001_KeyPermissions(t *testing.T) {
+	t.Run("TS-1.4: key mode 0644 REJECTED in production", func(t *testing.T) {
+		cert, key, ca := writeKeyMode(t, 0o644)
+		cfg := fullTLSBase(t)
+		cfg.TLSCertFile = cert
+		cfg.TLSKeyFile = key
+		cfg.TLSCAFile = ca
+		cfg.Environment = "production"
+		err := cfg.Validate()
+		if err == nil {
+			t.Fatal("expected rejection for key 0644 in production, got nil")
+		}
+		if !strings.Contains(err.Error(), "insecure permissions") {
+			t.Errorf("expected 'insecure permissions' message, got: %v", err)
+		}
+		if !strings.Contains(err.Error(), "RW-PROD-001 A2") {
+			t.Errorf("expected RW-PROD-001 A2 marker, got: %v", err)
+		}
+	})
+
+	t.Run("TS-1.5: key mode 0644 WARN in dev (no error, Warning populated)", func(t *testing.T) {
+		cert, key, ca := writeKeyMode(t, 0o644)
+		cfg := fullTLSBase(t)
+		cfg.TLSCertFile = cert
+		cfg.TLSKeyFile = key
+		cfg.TLSCAFile = ca
+		cfg.Environment = "dev"
+		err := cfg.Validate()
+		if err != nil {
+			t.Fatalf("expected nil error in dev, got: %v", err)
+		}
+		found := false
+		for _, w := range cfg.Warnings {
+			if strings.Contains(w, "weak_permissions_warn") && strings.Contains(w, "RW-PROD-001 A2") {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("expected Warnings to include weak_permissions_warn (A2), got: %v", cfg.Warnings)
+		}
+	})
+
+	t.Run("key mode 0600 PASSES in production (sanity)", func(t *testing.T) {
+		cert, key, ca := writeKeyMode(t, 0o600)
+		cfg := fullTLSBase(t)
+		cfg.TLSCertFile = cert
+		cfg.TLSKeyFile = key
+		cfg.TLSCAFile = ca
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("expected nil for key 0600 in production, got: %v", err)
+		}
+		if len(cfg.Warnings) != 0 {
+			t.Errorf("expected no Warnings for key 0600, got: %v", cfg.Warnings)
+		}
+	})
+}
+
+// TestRWProd001_WorkerIDShape covers TS-1.6 from RW-PROD-001 §5.
+//
+// Note on error messages: the empty case produces two distinct error
+// messages depending on which branch fires first. With B1's regex
+// `[a-z][a-z0-9_-]{2,62}`:
+//   - empty input → "worker_id is required" (the missing-field branch,
+//     earlier in Validate's order of checks, fires before the shape check).
+//   - non-empty but shape-invalid → "invalid worker_id shape: ..."
+//
+// We therefore assert on err==nil vs err!=err, plus a substring check
+// that is loose enough to cover both messages.
+func TestRWProd001_WorkerIDShape(t *testing.T) {
+	cases := []struct {
+		name      string
+		id        string
+		wantErr   bool
+		errSubstr string // substring expected in err message when wantErr is true
+	}{
+		{"canonical worker-xxxxxxxx (15 chars)", "worker-8e98ce85", false, ""},
+		{"host prefix after Normalize", "host_57_129_132_133", false, ""},
+		{"underscore allowed (B1)", "worker_001", false, ""},
+		{"minimum 3 chars", "abc", false, ""},
+		{"max length 63", "a" + strings.Repeat("a", 62), false, ""},
+		// Negative cases
+		{"empty", "", true, "worker_id is required"},
+		{"too short (2 chars)", "ab", true, "invalid worker_id shape"},
+		{"too long (64 chars)", "a" + strings.Repeat("a", 63), true, "invalid worker_id shape"},
+		{"uppercase letter", "Worker-001", true, "invalid worker_id shape"},
+		{"starts with digit", "1-worker", true, "invalid worker_id shape"},
+		{"starts with hyphen", "-worker", true, "invalid worker_id shape"},
+		{"non-ASCII letter", "wörker-001", true, "invalid worker_id shape"},
+		{"special char", "worker@1", true, "invalid worker_id shape"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := devValidBase()
+			cfg.WorkerID = tc.id
+			err := cfg.Validate()
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("expected rejection for %q, got nil", tc.id)
+				}
+				if tc.errSubstr != "" && !strings.Contains(err.Error(), tc.errSubstr) {
+					t.Errorf("expected error to contain %q for %q, got: %v",
+						tc.errSubstr, tc.id, err)
+				}
+			} else {
+				if err != nil {
+					t.Fatalf("unexpected rejection for %q: %v", tc.id, err)
+				}
+			}
+		})
 	}
 }
 
@@ -890,7 +1133,7 @@ func generateKeyCertMismatchPair(t *testing.T) (certFile, keyFile, caFile string
 		SerialNumber: serial,
 		Subject:      pkix.Name{CommonName: "test-cert-mismatch"},
 		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().Add(24 * time.Hour),
+		NotAfter:     time.Now().Add(30 * 24 * time.Hour),
 		KeyUsage:     x509.KeyUsageDigitalSignature,
 	}
 
@@ -932,7 +1175,7 @@ func TestCertKeyMismatch(t *testing.T) {
 
 	cfg := &WorkerConfig{
 		MasterURL:      "http://localhost:8080",
-		WorkerID:       "w",
+		WorkerID: "tlsw",
 		WorkDir:        "/opt/velox",
 		ControlGRPCURL: "localhost:8443",
 		Environment:    "production",

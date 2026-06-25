@@ -55,6 +55,7 @@ readonly SRC_DEFAULT="${REPO_ROOT}/runtime/worker_config.example.json"
 readonly COMPOSE_FILE_DEFAULT="${REPO_ROOT}/runtime/compose.yml"
 readonly DST="/var/lib/velox-worker/worker_config.json"
 readonly FINGERPRINT_FILE="/var/lib/velox-worker/deployment-fingerprint"
+OPENSSL="${OPENSSL:-openssl}"
 readonly BACKUP_DIR="/var/lib/velox-worker/.backups"
 
 # ─── Defaults (mutable) ─────────────────────────────────────────────────────
@@ -538,3 +539,47 @@ cat <<NEXT
         journalctl -u velox-server --since '30s ago' 2>/dev/null | grep -E '$WORKER_ID|hello_ack|session'
         (or:   sudo journalctl -u velox-server -f   to follow live)
 NEXT
+
+# ─── Cert-metadata recording (RW-PROD-001 §3 A8) ────────────────────────────
+# After the JSON is installed we walk the dst and extract the worker`s
+# tls_cert_file, then compute SHA-256 + serial via openssl and stash
+# the pair in $WORK_DIR/worker_cert.meta so operators can answer
+# "which cert is currently deployed on this host?" without re-reading
+# the cert. Failure modes are NOT fatal — the meta is purely an
+# audit-trail convenience; the worker`s actual auth flow uses the
+# live cert/key on disk.
+record_cert_metadata() {
+  local dst="$1" work_dir="$2"
+  [[ -f "$dst" ]] || { warn "A8: $dst absent, skipping worker_cert.meta stamp"; return 0; }
+  command -v "$OPENSSL" >/dev/null 2>&1 || { warn "A8: openssl missing, skipping worker_cert.meta stamp"; return 0; }
+  local cert_path
+  cert_path="$(python3 -c "
+import json, sys
+try:
+    with open(sys.argv[1]) as f:
+        c = json.load(f)
+    print(c.get('tls_cert_file', '') or '')
+except Exception:
+    print('', end='')
+" "$dst")"
+  [[ -z "$cert_path" ]] && { warn "A8: dst $dst has no tls_cert_file, skipping"; return 0; }
+  [[ ! -f "$cert_path" ]] && { warn "A8: tls_cert_file $cert_path not on disk, skipping"; return 0; }
+  local fp serial
+  fp="$("$OPENSSL" x509 -in "$cert_path" -noout -fingerprint -sha256 2>/dev/null | cut -d'=' -f2 | tr -d ' ' || true)"
+  serial="$("$OPENSSL" x509 -in "$cert_path" -noout -serial 2>/dev/null | cut -d'=' -f2 | tr -d ' ' || true)"
+  [[ -z "$fp" || -z "$serial" ]] && { warn "A8: could not extract fingerprint/serial from $cert_path (corrupt?)"; return 0; }
+  local meta="$work_dir/worker_cert.meta"
+  if ! install -d -o 1000 -g 1000 -m 0750 "$(dirname "$meta")" 2>/dev/null; then
+    install -d -o root -g root -m 0750 "$(dirname "$meta")"
+  fi
+  local now
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  local tmp
+  tmp="$(mktemp "$(dirname "$meta")/.worker_cert.meta.XXXXXX")"
+  printf 'LAST_CERT_HASH=%s\nLAST_CERT_SERIAL=%s\nLAST_KNOWN_AT=%s\nCERT_PATH=%s\n' \
+    "$fp" "$serial" "$now" "$cert_path" > "$tmp"
+  mv -f "$tmp" "$meta"
+  chmod 0640 "$meta" 2>/dev/null || true
+  log "A8: recorded cert metadata to $meta (fingerprint=$fp serial=$serial)"
+}
+record_cert_metadata "$DST" "$WORK_DIR"

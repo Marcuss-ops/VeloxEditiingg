@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"math/rand"
 	"os"
 	"runtime"
@@ -18,12 +19,30 @@ import (
 	"velox-worker-agent/internal/executor"
 	"velox-worker-agent/internal/telemetry"
 	"velox-worker-agent/pkg/api"
+	"velox-worker-agent/pkg/bootstrap"
 	"velox-worker-agent/pkg/logger"
 )
 
 // Start begins the worker's main loop with automatic re-registration on failure.
 // Creates a fresh transport instance per session attempt (reconnect P0 fix).
+//
+// RW-PROD-003 §3 A6 defence-in-depth: the very first thing Start does is
+// call bootstrap.HardGate(). The composition root (cmd/velox-worker-agent/main.go)
+// already wired bootstrap.Run SYNCHRONOUSLY between the C++ pipeline
+// construction and the executor wiring (RW-PROD-003 A5), so by the time
+// Start is called in production the gate is already true. This check
+// exists to catch FUTURE refactors that might reorder the composition
+// root — e.g. someone calls worker.New(...).Start() directly from a
+// test harness or a future --doctor entry-point. In that case the gate
+// is false and Start returns with a "bootstrap_not_run" error BEFORE
+// touching the transport, the registry, or the heartbeat loop. The
+// worker is then correctly seen as `registered=false` from the master's
+// selector because no Hello message is ever produced.
 func (w *Worker) Start(ctx context.Context) error {
+	if err := bootstrap.HardGate(); err != nil {
+		w.logger.Error("[START_GUARD] refusing to start: %v", err)
+		return fmt.Errorf("worker.Start precondition: %w", err)
+	}
 	logger.LogStartup(w.config.WorkerID, w.version, w.config.MasterURL)
 	w.logger.Debug("Work Directory: %s", w.config.WorkDir)
 
@@ -54,6 +73,11 @@ func (w *Worker) Start(ctx context.Context) error {
 
 			w.logger.Warn("[CONNECT] Registration failed (attempt %d): %v", w.connFailureCount, err)
 			w.setConnState(ConnDisconnected)
+			// RW-PROD-004 A4: mirror ConnReady on every ConnDisconnected
+			// transition so /health/ready drops `not_registered` once the
+			// session is re-established. MarkRegistered queues an
+			// UpdateReady copy-and-store under the process-global atomic.Pointer.
+			telemetry.SetHealthRegistered(false)
 			_ = w.transport.Close()
 
 			// Use short fixed retry for connection-level errors (reset, refused,
@@ -93,6 +117,11 @@ func (w *Worker) Start(ctx context.Context) error {
 		backoff = registrationInitialBackoff
 		w.setConnState(ConnReady)
 		telemetry.SetHealthRegistered(true)
+		// RW-PROD-004 A4: MarkRegistered(true) is already chained via the
+		// legacy SetHealthRegistered setter. The explicit call here is
+		// defensive: if a future refactor decouples the legacy flag from
+		// the canonical ready snapshot, we still want the ready flip to
+		// happen at the ConnReady instant.
 		w.logger.Info("[CONNECT] Registration successful — running session")
 
 		// Run session: start all loops, manage lifecycle
@@ -112,6 +141,16 @@ func (w *Worker) Start(ctx context.Context) error {
 	}
 
 	w.setConnState(ConnDisconnected)
+	// RW-PROD-004 A4: final teardown clears both halves of the readiness
+	// taxonomy. MarkRegistered(false) drops the `not_registered` reading
+	// (it should already be false at this point, but the explicit call is
+	// defensive against future refactors that shift the order). MarkDrainMode
+	// is left as-is: drain_mode is sticky across reconnects (operators
+	// want to see it stay true until the worker exits), and Stop is the
+	// final exit point — clearer to drop the flag explicitly here too so a
+	// fresh process after a restart starts from a clean ready slate.
+	telemetry.SetHealthRegistered(false)
+	telemetry.MarkDrainMode(false)
 	w.logger.Info("Worker stopped")
 	return nil
 }
@@ -250,6 +289,13 @@ func (w *Worker) runSession(ctx context.Context) bool {
 			w.logger.Info("[SESSION] Transport closed cleanly")
 		}
 		w.setConnState(ConnDisconnected)
+		// RW-PROD-004 A4 (BLOCKER round-2 fix): the third ConnDisconnected
+		// site (transport-error / clean channel close) flips the readiness
+		// registered flag to false so /health/ready reports reasons=[not_registered]
+		// throughout the backoff-and-reconnect window. Without this hook the
+		// readiness snapshot stayed "true" between sessions even though no
+		// Hello+HelloAck roundtrip has been acknowledged yet.
+		telemetry.SetHealthRegistered(false)
 		sessionEnded = true
 	}
 
@@ -424,9 +470,13 @@ func (w *Worker) receiveLoop(ctx context.Context, recvCh <-chan controltransport
 					}
 				}
 
-			case controltransport.MsgDrain:
-				w.drainMode.Store(true)
-				w.logger.Info("[RECEIVE] Drain command received — no new jobs will be accepted")
+		case controltransport.MsgDrain:
+			w.drainMode.Store(true)
+			// RW-PROD-004 A4: MarkDrainMode(true) flips the canonical
+			// ReadyState immediately so /health/ready starts reporting
+			// reasons=[drain_mode] without waiting for the next tick.
+			telemetry.MarkDrainMode(true)
+			w.logger.Info("[RECEIVE] Drain command received — no new jobs will be accepted")
 
 			case controltransport.MsgConfigurationUpdate:
 				w.logger.Info("[RECEIVE] ConfigurationUpdate received")
