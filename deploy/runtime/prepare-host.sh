@@ -11,7 +11,7 @@
 #   1. Reads /etc/velox-worker/worker.env (gives VELOX_WORKER_ID,
 #      VELOX_WORKER_IMAGE, ...).
 #   2. ENFORCES that VELOX_WORKER_IMAGE matches
-#      `^ghcr\.io/[a-z0-9._-]+/[a-z0-9._/-]+@sha256:[a-f0-9]{64}$`
+#      '^ghcr\.io/[a-z0-9._-]+/[a-z0-9._/-]+@sha256:[a-f0-9]{64}$'
 #      (refs to :latest or any non-digest form are rejected before pull).
 #   3. Confirms /var/lib/velox-worker/worker_config.json exists and parses
 #      as JSON. This file is rendered by deploy/scripts/apply-local-worker-config.sh
@@ -19,14 +19,14 @@
 #   4. Creates the directory tree under /opt/velox-worker, /etc/velox-worker,
 #      and /var/lib/velox-worker/state|work|cache|output.
 #   5. Sets uid 10001 ownership AND group read+traversal on /etc/velox-worker
-#      so the container`s velox user can read mTLS certs + the per-worker
+#      so the container's velox user can read mTLS certs + the per-worker
 #      credential through the compose :ro bind-mounts.
 #   6. Installs compose.yml from this repo into /opt/velox-worker/compose.yml.
 #   7. Cosign signature verification (keyless OIDC against the GitHub
 #      Actions issuer). Verified images only. Failure aborts; operator
 #      override via VELOX_SKIP_COSIGN_VERIFY=1 for incident response only.
-#   8. `docker pull`s the pinned image digest.
-#   9. Brings the worker up with an isolated project name `velox-worker-<id>`
+#   8. 'docker pull's the pinned image digest.
+#   9. Brings the worker up with an isolated project name 'velox-worker-<id>'
 #      so multiple workers on one host do not collide.
 
 set -euo pipefail
@@ -40,7 +40,7 @@ readonly IMAGE_GID="10001"
 
 # Cosign verification: whitelist the workflow file + a tag-set / branch ref.
 # Symmetric with what the worker-image workflow stamps (keyless OIDC against
-# the GitHub Actions issuer). Held as a literal here so it`s easy to grep.
+# the GitHub Actions issuer). Held as a literal here so it's easy to grep.
 readonly COSIGN_IDENTITY_REGEXP='^https://github.com/Marcuss-ops/VeloxLEgit/\.github/workflows/worker-image\.yml@refs/(tags/worker-v.+|heads/.+)'
 readonly COSIGN_OIDC_ISSUER='https://token.actions.githubusercontent.com'
 
@@ -63,7 +63,7 @@ docker compose version >/dev/null 2>&1 \
 # check, the failure surfaces mid-execution as an opaque
 # 'permission denied while connecting to Docker daemon socket'.
 docker info >/dev/null 2>&1 \
-    || fail "Cannot reach the docker daemon — add the caller`s user to the 'docker' group, or set DOCKER_HOST explicitly."
+    || fail "Cannot reach the docker daemon — add the caller's user to the 'docker' group, or set DOCKER_HOST explicitly."
 # python3 is required for the worker_config.json JSON sanity check below.
 command -v python3 >/dev/null 2>&1 \
     || fail "python3 not found on PATH — required for JSON sanity check on worker_config.json."
@@ -85,8 +85,8 @@ log "Worker ID  : $VELOX_WORKER_ID"
 log "Image      : $VELOX_WORKER_IMAGE"
 
 # ── 0.5. Image digest gate ─────────────────────────────────────────────────
-# Compose uses `${VELOX_WORKER_IMAGE:?}` which only rejects EMPTY refs.
-# It silently accepts `ghcr.io/.../velox-worker:latest` which would break
+# Compose uses '${VELOX_WORKER_IMAGE:?}' which only rejects EMPTY refs.
+# It silently accepts 'ghcr.io/.../velox-worker:latest' which would break
 # the immutability guarantee. We enforce sha256-pinning here so the worker
 # host cannot pull a mutable ref by mistake or by malicious edit to worker.env.
 if ! [[ "$VELOX_WORKER_IMAGE" =~ ^ghcr\.io/[a-z0-9._-]+/[a-z0-9._/-]+@sha256:[a-f0-9]{64}$ ]]; then
@@ -130,7 +130,7 @@ log "Setting uid ${IMAGE_UID}:${IMAGE_GID} on /var/lib/velox-worker"
 chown -R "${IMAGE_UID}:${IMAGE_GID}" /var/lib/velox-worker
 ok "/var/lib/velox-worker owned by uid ${IMAGE_UID}:${IMAGE_GID}"
 
-# /etc/velox-worker MUST be traversable by uid 10001 (the container`s velox
+# /etc/velox-worker MUST be traversable by uid 10001 (the container's velox
 # user) so the worker can read the mTLS cert triple + the per-worker
 # credential through the compose :ro bind-mounts at /run/velox/...
 # Pattern matches DataServer/data/ansible/playbooks/tasks/systemd_setup.yml
