@@ -25,6 +25,10 @@ import (
 	workersreg "velox-server/internal/workers"
 )
 
+// WorkerInfo aliases the canonical registry read-model type so this package
+// can refer to the worker shape consistently across build, vet, and tests.
+type WorkerInfo = workersreg.WorkerInfo
+
 // Re-export ConnectionStaleThreshold so the canonical reason is
 // computed against the same threshold the registry uses for STALE.
 // Drift would create a window where the API reports reason=heartbeat_stale

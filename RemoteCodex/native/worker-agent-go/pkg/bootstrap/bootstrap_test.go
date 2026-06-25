@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"os/exec"
 	"os"
 	"path/filepath"
 	"testing"
@@ -58,6 +59,13 @@ func writeBaseline(t *testing.T, dir string, payload []byte) string {
 }
 
 func TestRun_AllOK_Smoke(t *testing.T) {
+	if _, err := exec.LookPath("ffprobe"); err != nil {
+		t.Skipf("ffprobe not available in PATH: %v", err)
+	}
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		t.Skipf("ffmpeg not available in PATH: %v", err)
+	}
+
 	// Arrange: workspace with fake render payload + matching baseline
 	// + stub BUNDLE_HASH.txt == cfg.BundleHash.
 	dir := t.TempDir()
