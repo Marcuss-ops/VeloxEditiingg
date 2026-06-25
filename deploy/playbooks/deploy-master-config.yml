@@ -37,6 +37,7 @@
     velox_env_group: velox
     velox_env_mode: "0640"
     velox_validator_path: /opt/velox/current/deploy/validate-master-env.sh
+    velox_deploy_dir: /opt/velox/current/deploy
 
   vars_files:
     - ../group_vars/all.yml
@@ -87,7 +88,7 @@
     - name: Ensure validator lib is in place  # noqa: no-relative-paths
       ansible.builtin.copy:
         src: "../scripts/lib-validations.sh"
-        dest: "{{ velox_validator_path }}/scripts/lib-validations.sh"
+        dest: "{{ velox_deploy_dir }}/scripts/lib-validations.sh"
         owner: root
         group: root
         mode: "0755"

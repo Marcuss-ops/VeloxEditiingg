@@ -19,7 +19,6 @@ require (
 	velox-shared v0.0.0
 )
 
-
 require (
 	cloud.google.com/go/auth v0.20.0 // indirect
 	cloud.google.com/go/auth/oauth2adapt v0.2.8 // indirect
@@ -73,3 +72,9 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260618152121-87f3d3e198d3 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
+
+// Required for standalone builds outside the workspace resolution
+// (notably the DataServer Docker builder stage). The repo-level go.work
+// resolves velox-shared during host builds, but the container build enters
+// the module directly and needs the module-local replace to find /shared.
+replace velox-shared v0.0.0 => ../shared

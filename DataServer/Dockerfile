@@ -80,6 +80,8 @@ FROM debian:bookworm-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV VELOX_HTTP_PORT=8000
+ARG VELOX_UID=10001
+ARG VELOX_GID=10001
 
 # Runtime deps only:
 #   - ca-certificates: outbound TLS to YouTube/Drive/Google APIs.
@@ -98,11 +100,16 @@ WORKDIR /app
 # Copy the compiled binary straight into /usr/local/bin.
 COPY --from=builder /out/velox-server /usr/local/bin/velox-server
 
-# Non-root runtime user — same `velox` name used by the worker image
-# for ops uniformity. UID/GID are not pinned because the ops role does
-# not depend on specific IDs yet; lock them in if/when a volume-mount
-# pattern needs stable ownership.
-RUN useradd -r -m -s /usr/sbin/nologin velox
+# Pinned runtime identity so bind-mounted state on the host can be
+# chowned deterministically by the install/deploy scripts.
+RUN groupadd --system --gid "${VELOX_GID}" velox && \
+    useradd --system \
+        --uid "${VELOX_UID}" \
+        --gid "${VELOX_GID}" \
+        --create-home \
+        --home-dir /home/velox \
+        --shell /usr/sbin/nologin \
+        velox
 
 USER velox
 

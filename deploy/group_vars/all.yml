@@ -57,6 +57,7 @@ velox_worker_heartbeat_timeout: 120
 
 # ── Worker image (consumed by future PR D/E playbooks) ──────────────────────
 velox_worker_image_repository: ghcr.io/marcuss-ops/velox-worker
+velox_server_image: "CHANGE_ME_SERVER_IMAGE"
 
 # ── SSH hardening drop-in tail (consumed by bootstrap-ssh.yml) ──────────────
 # Free-form snippet appended to /etc/ssh/sshd_config.d/99-velox-hardening.conf.

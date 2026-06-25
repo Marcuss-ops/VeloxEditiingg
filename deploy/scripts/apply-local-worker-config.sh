@@ -3,7 +3,7 @@
 # apply-local-worker-config.sh — operator helper for the co-located worker.
 # ─────────────────────────────────────────────────────────────────────────────
 # Renders deploy/runtime/worker_config.example.json to
-# /var/lib/velox-worker/worker_config.json (uid 1000:1000 mode 0640), validates
+# /var/lib/velox-worker/worker_config.json (uid 10001:10001 mode 0640), validates
 # it, and writes a deployment-fingerprint so a subsequent `docker compose up -d`
 # will NOT restart the worker when nothing material has changed.
 #
@@ -55,6 +55,8 @@ readonly SRC_DEFAULT="${REPO_ROOT}/runtime/worker_config.example.json"
 readonly COMPOSE_FILE_DEFAULT="${REPO_ROOT}/runtime/compose.yml"
 readonly DST="/var/lib/velox-worker/worker_config.json"
 readonly FINGERPRINT_FILE="/var/lib/velox-worker/deployment-fingerprint"
+readonly IMAGE_UID="10001"
+readonly IMAGE_GID="10001"
 OPENSSL="${OPENSSL:-openssl}"
 readonly BACKUP_DIR="/var/lib/velox-worker/.backups"
 
@@ -304,12 +306,12 @@ esac
 # freshly-provisioned hosts before prepare-host.sh has run.
 install -d -o root -g root -m 0755 "$(dirname "$DST")"   # /var/lib/velox-worker
 install -d -o root -g root -m 0750 "$BACKUP_DIR"
-# WorkDir siblings — try chowning to uid 1000 (velox in container). Fall
+# WorkDir siblings — try chowning to uid 10001 (velox in container). Fall
 # back to root:root if no user with that uid exists on the host yet.
 for sub in "$WORK_DIR" "$WORK_DIR/state" "$WORK_DIR/cache" "$WORK_DIR/output"; do
-  if ! install -d -o 1000 -g 1000 -m 0750 "$sub" 2>/dev/null; then
+  if ! install -d -o "$IMAGE_UID" -g "$IMAGE_GID" -m 0750 "$sub" 2>/dev/null; then
     install -d -o root -g root -m 0750 "$sub"
-    warn "$sub not chownable to uid 1000 on this host (no such user yet) — container writes may fail until prepare-host.sh provisions velox user."
+    warn "$sub not chownable to uid $IMAGE_UID on this host (no such user yet) — container writes may fail until prepare-host.sh provisions velox user."
   fi
 done
 # Traversal for the docker group so operators without root can `docker exec`.
@@ -436,12 +438,12 @@ if [[ -f "$DST" && -f "$FINGERPRINT_FILE" ]]; then
 fi
 
 # ─── Atomic install ──────────────────────────────────────────────────────────
-chown 1000:1000 "$TMP" 2>/dev/null || true
+chown "${IMAGE_UID}:${IMAGE_GID}" "$TMP" 2>/dev/null || true
 chmod 0640 "$TMP"
 if ! mv -f "$TMP" "$DST"; then
   die "atomic install of $DST failed" 6
 fi
-chown 1000:1000 "$DST"
+chown "${IMAGE_UID}:${IMAGE_GID}" "$DST"
 chmod 0640 "$DST"
 printf '%s\n' "$NEW_FINGERPRINT" > "$FINGERPRINT_FILE"
 chmod 0644 "$FINGERPRINT_FILE"

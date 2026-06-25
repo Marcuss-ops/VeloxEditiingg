@@ -11,7 +11,7 @@ worker-image.yml` (which builds and publishes the worker image).
 |---|---|
 | `compose.yml` | Referenceable Compose v2 service definition. Read-only root fs, `cap_drop: ALL`, `no-new-privileges`, isolated per-worker container name. |
 | `worker.env.example` | Template for the per-host env file the worker reads. Copy to `/etc/velox-worker/worker.env` on the host and fill in. |
-| `prepare-host.sh` | Idempotent setup: creates dirs, sets ownership to uid 1000 (matching the image's `velox` user), pulls the pinned image, brings the container up. |
+| `prepare-host.sh` | Idempotent setup: creates dirs, sets ownership to uid 10001 (matching the image's `velox` user), pulls the pinned image, brings the container up. |
 
 ## First-time setup on a fresh worker host
 
@@ -85,8 +85,8 @@ is recycled by `stop_grace_period: 60s`.
 * Both `/etc/velox-worker/certs` and `/etc/velox-worker/secrets` are
   `root:root` mode 0750 and mounted **read-only** into the container at
   `/run/velox/{certs,secrets}`.
-* The image runs as uid 1000 (non-root `velox` inside the Dockerfile).
-  `/var/lib/velox-worker/` is chowned to 1000:1000 by `prepare-host.sh`.
+* The image runs as uid 10001 (non-root `velox` inside the Dockerfile).
+  `/var/lib/velox-worker/` is chowned to 10001:10001 by `prepare-host.sh`.
 
 ## Observability
 

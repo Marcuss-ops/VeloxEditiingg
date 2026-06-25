@@ -1,0 +1,24 @@
+.git
+.gitignore
+.cline
+.env
+.env.*
+.venv
+venv
+node_modules
+
+# Local runtime state and secrets must never enter build contexts.
+.velox
+DataServer/.velox
+DataServer/data
+
+# Local build outputs are not Docker inputs.
+DataServer/bin
+RemoteCodex/native/worker-agent-go/bin
+RemoteCodex/native/video-engine-cpp/build*
+
+# Generic transient files.
+*.db
+*.db-shm
+*.db-wal
+*.log

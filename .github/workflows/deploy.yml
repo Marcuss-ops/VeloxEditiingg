@@ -6,8 +6,8 @@ on:
   push:
     branches: [main]
     paths:
-      - "refactored/DataServer/**"
-      - "refactored/RemoteCodex/native/worker-agent-go/**"
+      - "DataServer/**"
+      - "RemoteCodex/native/worker-agent-go/**"
       - ".github/workflows/deploy.yml"
       - "deploy/**"
   workflow_dispatch:
@@ -63,12 +63,8 @@ jobs:
       - name: Build and push worker image
         uses: docker/build-push-action@48aba3b46d1b1fec4febb7c5d0c644b249a11355 # v6.10.0
         with:
-          # Build context is refactored/RemoteCodex (NOT repo root) because the
-          # worker Dockerfile COPYs scripts/{build-video-engine,worker-entrypoint}.sh,
-          # native/video-engine-cpp, and native/worker-agent-go/bin/... — all are
-          # anchored one level under RemoteCodex/. See worker Dockerfile header.
-          context: refactored/RemoteCodex
-          file: refactored/RemoteCodex/native/worker-agent-go/Dockerfile
+          context: .
+          file: RemoteCodex/native/worker-agent-go/Dockerfile
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
@@ -90,14 +86,11 @@ jobs:
             echo "digest_$tag=$digest" >> "$GITHUB_OUTPUT"
           done
 
-  # ── velox-server image (Dockerfile NOT present yet) ─────────────────────
-  # This job is gated on the Dockerfile's existence so it auto-activates
-  # the moment refactored/DataServer/Dockerfile lands — no workflow edit
-  # required when downstream wants to publish a server image.
+  # ── velox-server image ───────────────────────────────────────────────────
   dataserver-image:
     name: velox-server image
     runs-on: ubuntu-latest
-    if: hashFiles('refactored/DataServer/Dockerfile') != ''
+    if: hashFiles('DataServer/Dockerfile') != ''
     steps:
       - name: Checkout
         # fetch-depth: 0 keeps BASE_REF=origin/main resolvable; defence
@@ -129,8 +122,8 @@ jobs:
       - name: Build and push server image
         uses: docker/build-push-action@48aba3b46d1b1fec4febb7c5d0c644b249a11355 # v6.10.0
         with:
-          context: refactored/DataServer
-          file: refactored/DataServer/Dockerfile
+          context: .
+          file: DataServer/Dockerfile
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

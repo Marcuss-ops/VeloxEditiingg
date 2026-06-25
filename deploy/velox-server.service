@@ -9,7 +9,8 @@
 # Status:  systemctl status velox-server
 #
 # Environment file: /etc/velox-server.env
-#   Configure all VELOX_* vars there (see deploy/velox-server.env.example for template).
+#   Configure all VELOX_* vars there, including VELOX_SERVER_IMAGE pinned to
+#   ghcr.io/<owner>/velox-server@sha256:<digest>.
 # =============================================
 
 [Unit]
@@ -17,28 +18,30 @@ Description=Velox Master Server
 Documentation=https://codebuff.com/docs
 After=network-online.target
 Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=3
 
 [Service]
 Type=simple
-
-# User and group to run as (create with: sudo useradd -r -s /usr/sbin/nologin -m velox)
-User=velox
-Group=velox
-
-# Working directory (project root containing DataServer/, RemoteCodex/, etc.)
-WorkingDirectory=/opt/velox/current
-
-# Environment file with all VELOX_* config vars
+# The unit drives Docker itself, so it must run as root. The application
+# process still runs inside the container as the image's unprivileged user.
 EnvironmentFile=/etc/velox-server.env
-
-# The binary path (relative to WorkingDirectory)
-ExecStart=/opt/velox/current/DataServer/bin/velox-server
+ExecStartPre=-/usr/bin/docker rm -f velox-server
+ExecStartPre=/usr/bin/docker pull ${VELOX_SERVER_IMAGE}
+ExecStart=/usr/bin/docker run --rm \
+    --name velox-server \
+    --network host \
+    --env-file /etc/velox-server.env \
+    --env VELOX_HTTP_PORT=${VELOX_MASTER_PORT} \
+    --mount type=bind,src=/var/lib/velox,dst=/var/lib/velox \
+    --mount type=bind,src=/etc/velox,dst=/etc/velox,readonly \
+    ${VELOX_SERVER_IMAGE}
+ExecStop=/usr/bin/docker stop -t 60 velox-server
+ExecStopPost=-/usr/bin/docker rm -f velox-server
 
 # Restart behavior
 Restart=always
 RestartSec=10
-StartLimitIntervalSec=60
-StartLimitBurst=3
 
 # Graceful shutdown — Stop() tears down gRPC immediately (workers hold
 # open bidirectional streams that would block GracefulStop forever).
@@ -50,14 +53,6 @@ KillSignal=SIGTERM
 # Resource limits
 LimitNOFILE=65536
 LimitNPROC=4096
-
-# Sandboxing (hardening)
-ProtectSystem=full
-ProtectHome=false
-NoNewPrivileges=true
-PrivateTmp=true
-CapabilityBoundingSet=
-AmbientCapabilities=
 
 # Logging
 StandardOutput=journal

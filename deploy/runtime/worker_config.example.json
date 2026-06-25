@@ -1,5 +1,5 @@
 {
-  "_comment": "Canonical Velox worker config template. Rendered by deploy/scripts/apply-local-worker-config.sh into /var/lib/velox-worker/worker_config.json (uid 1000:1000). Bind-mounted by deploy/runtime/compose.yml as /opt/velox/worker_config.json:ro. The apply script strips all keys prefixed with `_` at render time so this template can carry operator-facing documentation without leaking into the runtime JSON.",
+  "_comment": "Canonical Velox worker config template. Rendered by deploy/scripts/apply-local-worker-config.sh into /var/lib/velox-worker/worker_config.json (uid 10001:10001). Bind-mounted by deploy/runtime/compose.yml as /opt/velox/worker_config.json:ro. The apply script strips all keys prefixed with `_` at render time so this template can carry operator-facing documentation without leaking into the runtime JSON.",
 
   "_schema_version": "2026-06-worker-v1",
 

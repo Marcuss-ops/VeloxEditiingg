@@ -11,7 +11,7 @@
 #      VELOX_WORKER_IMAGE etc.).
 #   3. Creates the directory tree under /opt/velox-worker, /etc/velox-worker,
 #      and /var/lib/velox-worker/state|work|cache|output.
-#   4. Sets uid 1000 ownership on the persistent data dirs (matches the
+#   4. Sets uid 10001 ownership on the persistent data dirs (matches the
 #      non-root `velox` uid inside the container).
 #   5. Installs compose.yml from this repo into /opt/velox-worker/compose.yml.
 #   6. `docker pull`s the pinned image digest.
@@ -24,8 +24,8 @@ set -euo pipefail
 readonly ENV_FILE_DEFAULT="/etc/velox-worker/worker.env"
 readonly COMPOSE_YML_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/compose.yml"
 readonly COMPOSE_YML_DST="/opt/velox-worker/compose.yml"
-readonly IMAGE_UID="1000"
-readonly IMAGE_GID="1000"
+readonly IMAGE_UID="10001"
+readonly IMAGE_GID="10001"
 
 # ── Helpers ────────────────────────────────────────────────────────────────
 RED=$'\033[0;31m'; GREEN=$'\033[0;32m'; YELLOW=$'\033[1;33m'; BLUE=$'\033[0;34m'; NC=$'\033[0m'

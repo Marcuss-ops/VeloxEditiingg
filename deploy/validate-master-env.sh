@@ -86,6 +86,11 @@ get_env_value() {
     ' "$file"
 }
 
+is_pinned_image_ref() {
+    local ref="${1:-}"
+    [[ "$ref" =~ ^ghcr\.io/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+@sha256:[a-f0-9]{64}$ ]]
+}
+
 # ─── CHANGE_ME sweep on ACTIVE lines only ───────────────────────────────────
 # Match uncommented lines (anything that doesn't start with `#` after
 # whitespace). A comment mentioning CHANGE_ME is acceptable; an active line
@@ -175,6 +180,19 @@ else
         *) err "MASTER_PUBLIC_URL malformed: '$MASTER_URL' (expected https://host[:port][/path])"
             ERR_COUNT=$((ERR_COUNT + 1)) ;;
     esac
+fi
+
+# ─── VELOX_SERVER_IMAGE ─────────────────────────────────────────────────────
+SERVER_IMAGE="$(get_env_value "$ENV_FILE" VELOX_SERVER_IMAGE)"
+if [[ -z "$SERVER_IMAGE" ]]; then
+    err "VELOX_SERVER_IMAGE is empty (master deploy now requires a pinned container image)"
+    ERR_COUNT=$((ERR_COUNT + 1))
+elif [[ "$SERVER_IMAGE" =~ CHANGE_ME_ ]]; then
+    err "VELOX_SERVER_IMAGE still set to a CHANGE_ME_* placeholder"
+    ERR_COUNT=$((ERR_COUNT + 1))
+elif ! is_pinned_image_ref "$SERVER_IMAGE"; then
+    err "VELOX_SERVER_IMAGE must be a pinned GHCR digest, got '$SERVER_IMAGE'"
+    ERR_COUNT=$((ERR_COUNT + 1))
 fi
 
 # ─── TLS triple + insecure-dev opt-in ──────────────────────────────────────
