@@ -93,8 +93,11 @@ jobs:
         run: |
           set -euo pipefail
           if [ "${{ github.event_name }}" = "push" ]; then
+            # Strip the canonical "worker-v" prefix so TAG becomes a clean
+            # semver (no leading "v"). Trigger is `worker-v*` per `on.push.tags`
+            # above so GITHUB_REF_NAME here is always worker-vXXX.
             # e.g. refs/tags/worker-v1.2.3-rc1 → "1.2.3-rc1"
-            TAG="${GITHUB_REF_NAME#worker-}"
+            TAG="${GITHUB_REF_NAME#worker-v}"
           elif [ -n "${{ inputs.version }}" ]; then
             # workflow_dispatch: operator-supplied value (may have leading 'v')
             INPUT="${{ inputs.version }}"
@@ -105,6 +108,16 @@ jobs:
           fi
           if [ -z "$TAG" ]; then
             echo "::error::Could not resolve version (push ref empty, dispatch input missing, VERSION.txt empty)." >&2
+            exit 1
+          fi
+          # RW-PROD-005 audit: refuse to publish when the resolved tag
+          # disagrees with the canonical VERSION.txt. Without this guard
+          # an operator can tag refs/tags/worker-v9.9.9 while the binary
+          # built by Dockerfile (which reads VERSION.txt via the Makefile)
+          # reports 1.2.0 — silent version drift.
+          EXPECTED="${{ steps.read-version.outputs.version }}"
+          if [ -n "$EXPECTED" ] && [ "$TAG" != "$EXPECTED" ]; then
+            echo "::error::Resolved tag ($TAG) does not match canonical VERSION.txt ($EXPECTED). Refusing to publish." >&2
             exit 1
           fi
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
@@ -159,8 +172,16 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}
+          # RW-PROD-005 audit: prior block used `type=match,pattern=worker-v(.*)`
+          # which only fires on push.tag (GITHUB_REF_NAME=worker-vX.Y.Z). On
+          # workflow_dispatch the ref is a BRANCH so the pattern never matches
+          # and the operator-supplied inputs.version was silently dropped.
+          # Use `type=raw,value=${{ steps.version.outputs.tag }}` so both push
+          # and dispatch publish the same resolved tag (already validated
+          # against VERSION.txt above). Combined with the sha-tag this gives
+          # `velox-worker:<semver>` + `velox-worker:sha-<short>`.
           tags: |
-            type=match,pattern=worker-v(.*),group=1
+            type=raw,value=${{ steps.version.outputs.tag }}
             type=sha,prefix=sha-,format=short
           # Disable all default tag types (including :latest). Order matters:
           # metadata-action prefers earliest tags, so the two explicit tags
