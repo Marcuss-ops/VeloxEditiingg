@@ -58,7 +58,6 @@ jobs:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/velox-worker
           tags: |
             type=sha,prefix=
-            type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Build and push worker image
         uses: docker/build-push-action@48aba3b46d1b1fec4febb7c5d0c644b249a11355 # v6.10.0
@@ -90,7 +89,6 @@ jobs:
   dataserver-image:
     name: velox-server image
     runs-on: ubuntu-latest
-    if: hashFiles('DataServer/Dockerfile') != ''
     steps:
       - name: Checkout
         # fetch-depth: 0 keeps BASE_REF=origin/main resolvable; defence
@@ -117,7 +115,6 @@ jobs:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/velox-server
           tags: |
             type=sha,prefix=
-            type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Build and push server image
         uses: docker/build-push-action@48aba3b46d1b1fec4febb7c5d0c644b249a11355 # v6.10.0

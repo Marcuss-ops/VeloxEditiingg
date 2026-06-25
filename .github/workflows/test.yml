@@ -23,7 +23,7 @@ env:
 jobs:
   # ── DataServer: vet + race-enabled test sweep ───────────────────────────
   dataserver-tests:
-    name: DataServer (Go ${{ env.GO_VERSION }} + race)
+    name: DataServer (Go 1.25 + race)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -38,28 +38,28 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@0c52d547c9bc32b1aa3301fd7a9cb496313a4491 # v5.0.0
         with:
-          go-version: ${{ env.GO_VERSION }}
+          go-version: "1.25"
           cache: true
-          cache-dependency-path: refactored/DataServer/go.sum
+          cache-dependency-path: DataServer/go.sum
 
       - name: Download modules
-        working-directory: refactored/DataServer
+        working-directory: DataServer
         run: |
           go mod download
           go mod verify
 
       - name: Vet
-        working-directory: refactored/DataServer
+        working-directory: DataServer
         run: go vet ./...
 
       - name: Test (-race)
-        working-directory: refactored/DataServer
+        working-directory: DataServer
         # -count=1 disables cache; t.Helper-friendly verbose for action log.
         run: go test -race -count=1 -v ./...
 
   # ── Worker agent: same matrix slice ─────────────────────────────────────
   worker-tests:
-    name: worker-agent-go (Go ${{ env.GO_VERSION }} + race)
+    name: worker-agent-go (Go 1.25 + race)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -74,22 +74,22 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@0c52d547c9bc32b1aa3301fd7a9cb496313a4491 # v5.0.0
         with:
-          go-version: ${{ env.GO_VERSION }}
+          go-version: "1.25"
           cache: true
-          cache-dependency-path: refactored/RemoteCodex/native/worker-agent-go/go.sum
+          cache-dependency-path: RemoteCodex/native/worker-agent-go/go.sum
 
       - name: Download modules
-        working-directory: refactored/RemoteCodex/native/worker-agent-go
+        working-directory: RemoteCodex/native/worker-agent-go
         run: |
           go mod download
           go mod verify
 
       - name: Vet
-        working-directory: refactored/RemoteCodex/native/worker-agent-go
+        working-directory: RemoteCodex/native/worker-agent-go
         run: go vet ./...
 
       - name: Test (-race)
-        working-directory: refactored/RemoteCodex/native/worker-agent-go
+        working-directory: RemoteCodex/native/worker-agent-go
         run: go test -race -count=1 -v ./...
 
   # ── Ansible playbooks lint ──────────────────────────────────────────────
@@ -113,7 +113,7 @@ jobs:
         run: pip install --quiet ansible-lint
 
       - name: Lint playbooks
-        working-directory: refactored/DataServer/data/ansible/playbooks
+        working-directory: deploy/playbooks
         run: |
           ansible-lint --version
           ansible-lint -v .
