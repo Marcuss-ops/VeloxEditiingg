@@ -171,6 +171,8 @@ func (w *Worker) buildHello() controltransport.WorkerHello {
 		BundleHash:      w.config.BundleHash,
 		ProtocolVersion: w.config.ProtocolVersion,
 		EngineVersion:   w.config.EngineVersion,
+		WorkerClass:     w.config.WorkerClass,
+		RolloutGroup:    w.config.RolloutGroup,
 		Capabilities:    w.capabilitiesMap(hostname),
 	}
 

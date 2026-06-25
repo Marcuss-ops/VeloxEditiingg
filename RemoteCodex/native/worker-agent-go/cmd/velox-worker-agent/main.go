@@ -24,6 +24,7 @@ import (
 	"velox-worker-agent/pkg/bootstrap"
 	"velox-worker-agent/pkg/cache"
 	"velox-worker-agent/pkg/config"
+	"velox-worker-agent/pkg/doctor"
 	"velox-worker-agent/pkg/logger"
 	"velox-worker-agent/pkg/video"
 	"velox-worker-agent/pkg/video/pipeline"
@@ -171,7 +172,7 @@ func main() {
 	logLevel := flag.String("log-level", "", "log level: debug, info, warn, error (overrides config)")
 	showVersion := flag.Bool("version", false, "show version and exit")
 	generateConfig := flag.Bool("generate-config", false, "generate a default config file and exit")
-	validateConfig := flag.Bool("validate-config", false, "validate config JSON (transport check) and exit")
+	validateConfig := flag.Bool("validate-config", false, "validate production-readiness and exit (RW-PROD-002 / pkg/doctor)")
 	// RW-PROD-004 §3 A9: --ready-endpoint overrides the /health/ready
 	// mount path. Default is /health/ready (canonical). Operators set
 	// this on Kubernetes podspecs where /readyz is the network-policy-
@@ -321,17 +322,23 @@ func main() {
 	// insecure-flag misconfiguration is surfaced here instead of panicking
 	// during Start().
 
-	// --validate-config: validate and exit before starting the worker loop.
+	// --validate-config: run the doctor validators and exit.
+	// Replaces the transport-only config.Validate() with the full
+	// RW-PROD-002 validator suite (pkg/doctor).
 	if *validateConfig {
-		// Branding line for human operators running docker run --rm ... --validate-config
 		fmt.Printf("velox-worker-agent version %s\n", Version)
-		w, vErr := worker.New(cfg, resolvedVersion, worker.WithRegistry(executor.NewRegistry()))
-		if vErr != nil {
-			fmt.Fprintf(os.Stderr, "Validation FAILED: %v\n", vErr)
+		// Run without the executor registry — the doctor runs before
+		// pipeline wiring, so the registry isn't built yet.
+		validators := doctor.DefaultValidators()
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		docErr := doctor.Run(ctx, cfg, validators, os.Stdout)
+		// Also print a human-readable summary to stderr.
+		if docErr != nil {
+			fmt.Fprintf(os.Stderr, "Validation: %v\n", docErr)
 			os.Exit(1)
 		}
-		_ = w
-		fmt.Printf("Configuration valid for worker %s\n", cfg.WorkerID)
+		fmt.Fprintf(os.Stderr, "Validation: READY\n")
 		os.Exit(0)
 	}
 

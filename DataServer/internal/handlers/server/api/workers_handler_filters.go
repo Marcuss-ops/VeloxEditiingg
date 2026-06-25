@@ -23,6 +23,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	workersreg "velox-server/internal/workers"
 )
 
 const (
@@ -109,7 +110,7 @@ func (filterParseError) Error() string { return "filter parse failed; 400 alread
 // from a future bug before reaching operators. Running both reduces
 // the bug surface to a single line; running neither would let a
 // regression in the SQL pass through silently.
-func ApplyFilters(infos []WorkerInfo, f Filters) []WorkerInfo {
+func ApplyFilters(infos []workersreg.WorkerInfo, f Filters) []workersreg.WorkerInfo {
 	if f.IsZero() {
 		return infos
 	}
@@ -141,7 +142,7 @@ func ApplyFilters(infos []WorkerInfo, f Filters) []WorkerInfo {
 // the same logic when ranking.
 //
 // Returns false on empty Capabilities or absent "executors" key.
-func workerAdvertisesExecutor(w WorkerInfo, want string) bool {
+func workerAdvertisesExecutor(w workersreg.WorkerInfo, want string) bool {
 	want = strings.TrimSpace(want)
 	if want == "" {
 		return true

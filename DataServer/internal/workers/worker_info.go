@@ -75,6 +75,15 @@ type WorkerInfo struct {
 	// sanitizeWorker invariant Status != "" (see handler-side guard).
 	ConnectionStatus string `json:"connection_status"`
 
+	// Reason — canonical reason code for non-CONNECTED states (RW-PROD-005 A2).
+	// Set by ConnectionStatusForInfo alongside ConnectionStatus. One of:
+	//   drain            — Drain=true (precedence 1).
+	//   detached_session — session_active=false (stream closed).
+	//   heartbeat_stale  — session_active but last_heartbeat is stale/empty/unparseable.
+	//   ""               — status=CONNECTED: no reason emitted.
+	// Always serialized (no omitempty) so clients can distinguish "" from absent.
+	Reason string `json:"reason"`
+
 	Readiness    map[string]interface{} `json:"readiness,omitempty"`
 	RecentLogs   []string               `json:"recent_logs,omitempty"`
 	RecentErrors []string               `json:"recent_errors,omitempty"`
@@ -114,6 +123,7 @@ func ScrubForPersist(info *WorkerInfo) {
 	}
 	info.SessionActive = false
 	info.ConnectionStatus = ""
+	info.Reason = ""
 }
 
 const DefaultWorkerProtocolVersion = "v3"
@@ -136,6 +146,15 @@ func applyMetadataFields(extra map[string]interface{}, info *WorkerInfo) {
 	}
 	if v, ok := extra["engine_version"].(string); ok && v != "" {
 		info.EngineVersion = v
+	}
+	// RW-PROD-005 A9: class + rollout_group arrive in Hello metadata
+	// from the worker's buildHello; the master hydrates WorkerInfo.Class
+	// and .RolloutGroup here so the GET /api/v1/workers?class= filter works.
+	if v, ok := extra["worker_class"].(string); ok && v != "" {
+		info.Class = v
+	}
+	if v, ok := extra["rollout_group"].(string); ok && v != "" {
+		info.RolloutGroup = v
 	}
 	if v, ok := extra["capabilities"]; ok {
 		info.Capabilities = normalizeCapabilities(v)

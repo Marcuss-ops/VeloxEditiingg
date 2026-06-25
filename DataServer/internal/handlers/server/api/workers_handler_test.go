@@ -436,6 +436,130 @@ func TestExtractExecutors(t *testing.T) {
 	}
 }
 
+// TestSanitiseHostname_Fuzz exercises the defense-in-depth surface
+// (RW-PROD-005 A6) against IP addresses, secret-looking hex strings,
+// absolute credential paths, and whole-string IPs that could leak
+// internal topology if WorkerGroup/Host fields are later repurposed
+// by an ansible-pragmatic mistake. The test proves that sanitiseHostname
+// strips every input that might carry PII before it lands in a response.
+func TestSanitiseHostname_Fuzz(t *testing.T) {
+	cases := []struct {
+		input    string
+		mustNotContain []string
+	}{
+		// IPv4 addresses in various positions.
+		{"192.168.1.1", []string{"192.168"}},
+		{"ip172.17.0.4-vm", []string{"172.17"}},
+		{"host-10.0.0.5", []string{"10.0.0"}},
+		{"render-node-192.168.1.100.us-east", []string{"192.168"}},
+
+		// IPv6 addresses.
+		{"fe80:1:2:3:4:5:6:7", []string{"fe80:1"}},
+		{"2001:db8:1:2:3:4:5:6", []string{"2001:db8"}},
+		{"host-[fe80::1:2:3:4]", []string{"fe80::"}},
+
+		// Loopback / multicast (still topology leak).
+		{"127.0.0.1", []string{"127.0.0"}},
+		{"0.0.0.0", []string{"0.0.0"}},
+
+		// Long hex strings (credential hash / SHA halves).
+		{"abc123def456abc123def456abc123def456abc123de", []string{"abc123def"}},
+
+		// Credential-bearing paths.
+		{"/etc/velox/tls/cert.pem", []string{"/etc/"}},
+		{"/var/lib/velox/secrets/worker-token", []string{"/var/lib/velox/secrets"}},
+		{"/var/lib/velox/certs/ca.pem", []string{"/var/lib/velox/certs"}},
+
+		// Benign hostnames — must survive unmodified.
+		{"render-01", nil},
+		{"gpu-node-us-east-1d", nil},
+		{"worker-cpu-xlarge", nil},
+		{"", nil},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.input, func(t *testing.T) {
+			got := sanitiseHostname(tc.input)
+			for _, forbidden := range tc.mustNotContain {
+				if contains(got, forbidden) {
+					t.Errorf("sanitiseHostname(%q) = %q, must not contain %q", tc.input, got, forbidden)
+				}
+			}
+			// Benign hostnames must be returned verbatim (no redaction).
+			if tc.mustNotContain == nil && got != tc.input {
+				t.Errorf("sanitiseHostname(%q) = %q, want unchanged for benign input", tc.input, got)
+			}
+		})
+	}
+}
+
+// TestConnectionReason_Canonical exercises the 3-element Reason taxonomy
+// (RW-PROD-005 A2) against the canonical precedence rules.
+func TestConnectionReason_Canonical(t *testing.T) {
+	now := time.Now().UTC()
+	recent := now.Add(-5 * time.Second).Format(time.RFC3339)
+	stale := now.Add(-45 * time.Second).Format(time.RFC3339)
+
+	cases := []struct {
+		name          string
+		sessionActive bool
+		drain         bool
+		lastHB        string
+		wantReason    string
+	}{
+		{"connected", true, false, recent, ""},
+		{"drain wins over all", false, true, recent, "drain"},
+		{"drain even with stale hb", true, true, stale, "drain"},
+		{"detached_session", false, false, recent, "detached_session"},
+		{"empty hb → heartbeat_stale", true, false, "", "heartbeat_stale"},
+		{"unparseable hb → heartbeat_stale", true, false, "bogus", "heartbeat_stale"},
+		{"stale hb → heartbeat_stale", true, false, stale, "heartbeat_stale"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := workersreg.ConnectionReason(tc.sessionActive, tc.drain, tc.lastHB, now)
+			if got != tc.wantReason {
+				t.Errorf("ConnectionReason(session=%v drain=%v hb=%q) = %q, want %q",
+					tc.sessionActive, tc.drain, tc.lastHB, got, tc.wantReason)
+			}
+		})
+	}
+}
+
+// TestSanitizeWorker_ReasonAndClassAndRolloutGroup verifies that
+// the Reason, WorkerClass, and RolloutGroup fields (RW-PROD-005 A2+A9)
+// survive the sanitizeWorker round-trip into the JSON response.
+func TestSanitizeWorker_ReasonAndClassAndRolloutGroup(t *testing.T) {
+	raw := workersreg.WorkerInfo{
+		WorkerID:         "w-rwprod005",
+		LastHB:           time.Now().UTC().Format(time.RFC3339),
+		ConnectionStatus: "STALE",
+		Reason:           "heartbeat_stale",
+		SessionActive:    true,
+		Class:            "cpu-xlarge",
+		RolloutGroup:     "canary-2026q3",
+	}
+	resp := sanitizeWorker(raw)
+	if resp.Reason != "heartbeat_stale" {
+		t.Errorf("Reason = %q, want heartbeat_stale", resp.Reason)
+	}
+	if resp.WorkerClass != "cpu-xlarge" {
+		t.Errorf("WorkerClass = %q, want cpu-xlarge", resp.WorkerClass)
+	}
+	if resp.RolloutGroup != "canary-2026q3" {
+		t.Errorf("RolloutGroup = %q, want canary-2026q3", resp.RolloutGroup)
+	}
+
+	b, _ := json.Marshal(resp)
+	jsonStr := string(b)
+	if !contains(jsonStr, "\"reason\":\"heartbeat_stale\"") {
+		t.Errorf("JSON missing reason field: %s", jsonStr)
+	}
+	if !contains(jsonStr, "\"worker_class\":\"cpu-xlarge\"") {
+		t.Errorf("JSON missing worker_class field: %s", jsonStr)
+	}
+}
+
 func contains(s, sub string) bool {
 	for i := 0; i <= len(s)-len(sub); i++ {
 		if s[i:i+len(sub)] == sub {

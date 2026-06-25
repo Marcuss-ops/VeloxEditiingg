@@ -39,7 +39,10 @@ Rules (in evaluation order):
 | Field | Type | Description |
 |-------|------|-------------|
 | `status`               | string | canonical connection state (`CONNECTED` \| `STALE` \| `DISCONNECTED` \| `DRAINING`) |
+| `reason`               | string | canonical reason code for non-CONNECTED states (RW-PROD-005 A2). One of `drain`, `detached_session`, `heartbeat_stale`, or `""` when CONNECTED. Omitted when empty. |
 | `session_active`       | bool   | raw boolean that drove the derivation. `true` when the worker has at least one valid auth session whose `last_seen` is inside `WorkerSessionFreshnessWindow`. Always present in JSON (deliberately NOT `omitempty`) so dashboards can distinguish `false` (offline) from "field missing" (legacy client). |
+| `worker_class`         | string | operator-assigned fleet class (`cpu-xlarge`, `gpu-a100`, `mixed`, `io`, ...). Omitted when empty. Filterable via `?class=` query param (RW-PROD-005 A9). |
+| `rollout_group`        | string | operator-assigned rollout cohort (`v3.4`, `canary`, `holdout`, ...). Omitted when empty. Filterable via `?rollout_group=` query param (RW-PROD-005 A9). |
 | `last_heartbeat_at`    | string | RFC3339 timestamp of the last heartbeat received from the worker. Empty when no heartbeat has ever been recorded. |
 | `heartbeat_age_seconds`| int64  | `now - last_heartbeat` rounded down. 0 when heartbeat is missing or unparseable. |
 
@@ -56,8 +59,11 @@ List all registered workers with canonical status.
       "worker_id": "velox-worker-01",
       "worker_name": "render-01",
       "status": "CONNECTED",
+      "reason": "",
       "session_active": true,
       "hostname": "render-01",
+      "worker_class": "cpu-xlarge",
+      "rollout_group": "canary-2026q3",
       "protocol_version": "v3",
       "bundle_version": "v1.0.6",
       "connected_at": "2026-06-23T11:00:00Z",
@@ -74,6 +80,7 @@ List all registered workers with canonical status.
       "worker_id": "velox-worker-02",
       "worker_name": "render-02",
       "status": "DISCONNECTED",
+      "reason": "detached_session",
       "session_active": false,
       "last_heartbeat_at": "2026-06-23T11:55:01Z",
       "heartbeat_age_seconds": 299,
@@ -95,7 +102,10 @@ Same shape as a single element of the list. Returns `404` if the worker is not r
 {
   "worker_id": "velox-worker-02",
   "status": "STALE",
+  "reason": "heartbeat_stale",
   "session_active": true,
+  "worker_class": "gpu-a100",
+  "rollout_group": "holdout-2026q3",
   "last_heartbeat_at": "2026-06-23T12:00:42Z",
   "heartbeat_age_seconds": 18,
   "active_tasks": 1,

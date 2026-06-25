@@ -24,7 +24,7 @@ import (
 )
 
 // WorkerResponse is the sanitized, operator-facing JSON shape for a single
-// worker. It carries derived fields (status, heartbeat_age_seconds,
+// worker. It carries derived fields (status, reason, heartbeat_age_seconds,
 // session_active) computed from the raw WorkerInfo. Fields intentionally
 // EXCLUDED: credential hash, TLS file paths, worker secret, raw IP
 // addresses, internal readiness blob.
@@ -34,6 +34,10 @@ import (
 // worker's heartbeat freshness AND whether the worker still has a
 // non-revoked, non-expired auth session in `worker_sessions`.
 //
+// `reason` is the canonical reason code for non-CONNECTED states
+// (RW-PROD-005 A2). Set to "drain" | "detached_session" |
+// "heartbeat_stale" when status != CONNECTED; empty string otherwise.
+//
 // `session_active` is the raw boolean that drove the derivation:
 // `true` when the worker has at least one valid session. Useful for
 // dashboards that want to display "session lost, but heartbeat still
@@ -42,8 +46,11 @@ type WorkerResponse struct {
 	WorkerID            string          `json:"worker_id"`
 	WorkerName          string          `json:"worker_name"`
 	Status              string          `json:"status"` // CONNECTED | STALE | DISCONNECTED | DRAINING
+	Reason              string          `json:"reason,omitempty"` // drain | detached_session | heartbeat_stale | ""
 	SessionActive       bool            `json:"session_active"`
 	Hostname            string          `json:"hostname"`
+	WorkerClass         string          `json:"worker_class,omitempty"`
+	RolloutGroup        string          `json:"rollout_group,omitempty"`
 	ProtocolVersion     string          `json:"protocol_version"`
 	EngineVersion       string          `json:"engine_version,omitempty"`
 	BundleVersion       string          `json:"bundle_version,omitempty"`
@@ -105,7 +112,10 @@ func sanitizeWorker(w workersreg.WorkerInfo) WorkerResponse {
 		WorkerName:          w.WorkerName,
 		SessionActive:       w.SessionActive,
 		Status:              w.ConnectionStatus,
+		Reason:              w.Reason,
 		Hostname:            w.Host,
+		WorkerClass:         w.Class,
+		RolloutGroup:        w.RolloutGroup,
 		ProtocolVersion:     w.ProtocolVersion,
 		EngineVersion:       w.EngineVersion,
 		BundleVersion:       w.BundleVersion,

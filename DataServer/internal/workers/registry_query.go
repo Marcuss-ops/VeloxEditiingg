@@ -449,10 +449,50 @@ func (r *Registry) hydrate(ctx context.Context, info *WorkerInfo, now time.Time)
 	ConnectionStatusForInfo(info, active, now)
 }
 
-// ConnectionStatusForInfo mutates `info` to set SessionActive +
-// ConnectionStatus from the supplied session_active signal. Pure
-// logic — no DB calls — so tests can drive it directly.
+// Reason constants for non-CONNECTED states (RW-PROD-005 A2).
+// Consumed by ConnectionReason() and exposed in WorkerInfo.Reason.
+const (
+	ReasonDrain           = "drain"
+	ReasonDetachedSession = "detached_session"
+	ReasonHeartbeatStale  = "heartbeat_stale"
+)
+
+// ConnectionReason maps the canonical state-derivation inputs to the
+// 3-element Reason taxonomy. Pure function — no I/O. Callers supply
+// (sessionActive, drain, lastHB, now) so the mapping is testable
+// without DB plumbing.
+//
+// Precedence (RW-PROD-005 A2):
+//  1. drain=true                                   → "drain"
+//  2. session_active == false                      → "detached_session"
+//  3. lastHB empty/unparseable OR                  → "heartbeat_stale"
+//     now - lastHB >= ConnectionStaleThreshold
+//  4. fresh (connected)                            → ""
+func ConnectionReason(sessionActive bool, drain bool, lastHB string, now time.Time) string {
+	if drain {
+		return ReasonDrain
+	}
+	if !sessionActive {
+		return ReasonDetachedSession
+	}
+	if lastHB == "" {
+		return ReasonHeartbeatStale
+	}
+	t, err := time.Parse(time.RFC3339, lastHB)
+	if err != nil {
+		return ReasonHeartbeatStale
+	}
+	if now.Sub(t.UTC()) >= ConnectionStaleThreshold {
+		return ReasonHeartbeatStale
+	}
+	return ""
+}
+
+// ConnectionStatusForInfo mutates `info` to set SessionActive,
+// ConnectionStatus, and Reason from the supplied session_active signal.
+// Pure logic — no DB calls — so tests can drive it directly.
 func ConnectionStatusForInfo(info *WorkerInfo, sessionActive bool, now time.Time) {
 	info.SessionActive = sessionActive
 	info.ConnectionStatus = ConnectionStatus(sessionActive, info.LastHB, info.Drain, now)
+	info.Reason = ConnectionReason(sessionActive, info.Drain, info.LastHB, now)
 }

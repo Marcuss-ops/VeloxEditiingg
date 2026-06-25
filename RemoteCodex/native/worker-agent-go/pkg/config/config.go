@@ -121,6 +121,34 @@ type WorkerConfig struct {
 	// raise it for richer masters / lower for tighter scratch disks.
 	MinDiskFreeMB int `json:"min_disk_free_mb,omitempty"` // Floor in MiB (default: 256)
 
+	// OutputDir is the directory where the C++ engine writes rendered frames.
+	// Defaults to /tmp/velox/scene-composite (the composition root default).
+	// RW-PROD-002 §3 A4: validated by pkg/doctor for mkdir+write+remove.
+	OutputDir string `json:"output_dir,omitempty"`
+
+	// TempDir is the scratch directory for intermediate artifacts during
+	// video pipeline execution. Defaults to os.TempDir()/velox-worker.
+	// RW-PROD-002 §3 A4: validated by pkg/doctor for mkdir+write+remove.
+	TempDir string `json:"temp_dir,omitempty"`
+
+	// WorkerClass is the operator-assigned fleet class (cpu-xlarge, gpu-a100,
+	// mixed, io, ...). Binds from VELOX_WORKER_CLASS env. Surfaces in Hello
+	// metadata → master WorkerInfo.Class → GET /api/v1/workers?class= filter.
+	// RW-PROD-005 §3 A9.
+	WorkerClass string `json:"worker_class,omitempty"`
+
+	// RolloutGroup is the operator-assigned rollout cohort (v3.4, canary,
+	// holdout, ...). Binds from VELOX_ROLLOUT_GROUP env. Surfaces in Hello
+	// metadata → master WorkerInfo.RolloutGroup → GET /api/v1/workers?rollout_group= filter.
+	// RW-PROD-005 §3 A9.
+	RolloutGroup string `json:"rollout_group,omitempty"`
+
+	// VideoEngineCppBin is the path to the native C++ video-render binary.
+	// Defaults to "velox-render-cpp" (resolved via exec.LookPath).
+	// Operators override via VELOX_VIDEO_ENGINE_CPP_BIN env in main.go.
+	// RW-PROD-002 §3 A5: validated by pkg/doctor for existence + X_OK.
+	VideoEngineCppBin string `json:"video_engine_cpp_bin,omitempty"`
+
 	// ReadyzEndpoint overrides the /health/ready mount path
 	// (default: /health/ready). Read by cmd/velox-worker-agent/main.go
 	// to wire the systemd-side reference (RW-PROD-004 §3 A9) — a
@@ -264,6 +292,19 @@ func (c *WorkerConfig) applyDefaults() {
 	// land on "production" if the operator never declares anything.
 	if c.Environment == "" {
 		c.Environment = "production"
+	}
+	// RW-PROD-002: output & scratch directories for the C++ engine.
+	// Main.go injects VELOX_VIDEO_ENGINE_CPP_BIN as a CLI override
+	// later; these defaults keep the doctor functional even when
+	// the operator has not set the env var.
+	if c.OutputDir == "" {
+		c.OutputDir = "/tmp/velox/scene-composite"
+	}
+	if c.TempDir == "" {
+		c.TempDir = os.TempDir() + "/velox-worker"
+	}
+	if c.VideoEngineCppBin == "" {
+		c.VideoEngineCppBin = "velox-render-cpp"
 	}
 }
 

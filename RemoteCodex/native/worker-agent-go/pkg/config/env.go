@@ -37,6 +37,13 @@ const (
 	// Kubernetes podspec that wants /readyz to keep the canonical mount out
 	// of network policy scope.
 	EnvReadyzEndpoint = "VELOX_READYZ_ENDPOINT"
+	// EnvVideoEngineCppBin is the path to the C++ video render binary.
+	// Defaults to "velox-render-cpp" (resolved via exec.LookPath in worker).
+	EnvVideoEngineCppBin = "VELOX_VIDEO_ENGINE_CPP_BIN"
+	// EnvWorkerClass is the fleet class (cpu-xlarge, gpu-a100, ...).
+	EnvWorkerClass = "VELOX_WORKER_CLASS"
+	// EnvRolloutGroup is the rollout cohort (v3.4, canary, holdout, ...).
+	EnvRolloutGroup = "VELOX_ROLLOUT_GROUP"
 )
 
 // EnvBindings is the set of env-var names this package inspects.
@@ -50,6 +57,9 @@ var EnvBindings = []string{
 	EnvAllowInsecureGRPCDev,
 	EnvMinDiskFreeMB,
 	EnvReadyzEndpoint,
+	EnvVideoEngineCppBin,
+	EnvWorkerClass,
+	EnvRolloutGroup,
 }
 
 // envTruthy reports whether a string from os.Getenv should be interpreted
@@ -111,5 +121,14 @@ func applyEnvOverrides(cfg *WorkerConfig) {
 	// overrides and main.go wires the secondary mux accordingly.
 	if v := strings.TrimSpace(os.Getenv(EnvReadyzEndpoint)); v != "" {
 		cfg.ReadyzEndpoint = v
+	}
+	if v := strings.TrimSpace(os.Getenv(EnvVideoEngineCppBin)); v != "" {
+		cfg.VideoEngineCppBin = v
+	}
+	if v := strings.TrimSpace(os.Getenv(EnvWorkerClass)); v != "" {
+		cfg.WorkerClass = v
+	}
+	if v := strings.TrimSpace(os.Getenv(EnvRolloutGroup)); v != "" {
+		cfg.RolloutGroup = v
 	}
 }

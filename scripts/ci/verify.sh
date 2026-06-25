@@ -63,6 +63,8 @@ log "check-db-access"
 ./scripts/ci/check-db-access.sh
 log "check-registry"
 ./scripts/ci/check-registry.sh
+log "check-share-cert (RW-PROD-001 A7)"
+./scripts/ci/check-share-cert.sh
 
 # ── 2. Go modules: gofmt + vet + test (-race) ──────────────────────────────
 #
