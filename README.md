@@ -75,14 +75,6 @@ unique, no fixed fleet size) live in
 `ValidateProductionWorkers`. Operators may scale the fleet up or
 down freely; only the shape of the allowlist is enforced.
 
-The runtime grep at
-`docs/post-pr-two-worker-hardening.md` describes the historic
-two-worker operator runbook — that file is archived and remains in
-the repo only so operators who landed on a post-merge clone with
-the two-worker topology can still pass the existing greps. The
-**current canonical rule** is fleet-size-unbounded, validated by
-`ValidateProductionWorkers`.
-
 ## Documentation
 
 ADRs, deployment notes, and architecture references live in [`docs/`](docs/).
