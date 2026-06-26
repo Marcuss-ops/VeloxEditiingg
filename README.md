@@ -4,79 +4,81 @@ Distributed video generation and composition system.
 
 ## Repository layout
 
-```
+```text
 DataServer/                     # Master server (Go/Gin + gRPC)
-├── cmd/server/                 # Entrypoint: main.go, bootstrap.go (composition root), router.go
+├── cmd/server/                 # Entrypoint and composition root
 ├── internal/
-│   ├── app/                    # Module composition (ansible, drive, frontend, health, livestream,
-│   │                           #   workers, youtube, module, registry)
-│   ├── artifacts/              # Artifact service (upload, finalization, storage, chunked uploads)
-│   ├── assets/                 # Asset registry, resolvers, service, store
-│   ├── audit/                  # Data-layer audit (file existence, naming, primary files)
-│   ├── config/                 # Env-based configuration loading and validation
-│   ├── creatorflow/            # Creator flow orchestration service
-│   ├── deliveries/             # Delivery runner + providers (drive, youtube, s3, localexport)
-│   ├── grpcserver/             # gRPC handler (jobs, workers, artifacts, recovery, auth)
-│   ├── handlers/
-│   │   ├── remote/             # ansible, livestream, workers (assets, lifecycle, management,
-│   │   │                       #   sse, uploads, validation)
-│   │   ├── server/             # api, audit, calendar, darkeditor, drive, groups, health,
-│   │   │                       #   pipeline, script, smoke, youtube
-│   │   └── web/                # explorer, proxy, spa
-│   ├── identity/               # Identity/ID generator
-│   ├── integrations/           # drive (auth, files), youtube (api, channels, oauth, uploads)
-│   ├── jobs/                   # Job model, repository, enqueue, status, transitions, views
+│   ├── app/                    # Module composition and route registration
+│   ├── artifacts/              # Upload, verification, finalization and reconciliation
+│   ├── assets/                 # Asset registry, resolvers, service and store
+│   ├── audit/                  # Data-layer audit
+│   ├── config/                 # Canonical configuration loading and validation
+│   ├── costmodel/              # Master-owned placement requirements and scoring
+│   ├── creatorflow/            # Creator-flow orchestration
+│   ├── deliveries/             # Delivery runner and provider registry
+│   ├── grpcserver/             # Worker control plane and Task protocol
+│   ├── handlers/               # HTTP and remote-worker handlers
+│   ├── identity/               # Canonical identity generation
+│   ├── ingest/                 # Task report ingestion
+│   ├── integrations/           # Drive and YouTube integrations
+│   ├── jobs/                   # Job model, repository and lifecycle
 │   ├── logging/                # Structured logging
-│   ├── outbox/                 # Outbox event store, dispatcher, registry
-│   ├── platform/               # clock, database (sqlite/postgres handle), retry
-│   ├── queue/                  # File queue, lifecycle service, job status
-│   ├── remoteengine/           # Remote engine gRPC client
-│   ├── secrets/                # AES-GCM encryptor
-│   ├── services/               # drive, workflow_events, youtube
-│   ├── store/                  # SQLite stores, Postgres adapters, migrations, contracts, blobstore
-│   ├── workers/                # Worker registry, commands, auth, heartbeat
-│   └── workflow/               # Workflow repository, steps, migrate
-RemoteCodex/                     # Worker agent (Go) + video engine (C++/FFmpeg)
-shared/                          # Shared Go lib (identity, contract, controltransport, validation, media)
-deploy/                          # Install scripts, systemd unit, env templates, Ansible suite
-├── install-server.sh            # sudo ./deploy/install-server.sh
-├── velox-server.service         # systemd unit
-├── velox-server.env.example     # copy to /etc/velox-server.env
-├── ansible.cfg                  # canonical ansible config for the suite below
-├── requirements.yml             # ansible collection requirements
-├── group_vars/                  # all.yml + vault.yml.example (operator-fill only)
-├── inventory/                   # production.ini.example (NEVER commit production.ini itself)
-├── playbooks/                   # bootstrap-ssh.yml, deploy-master-config.yml, rollback.yml
-├── runtime/                     # per-host worker.env.example, compose.yml, prepare-host.sh
-├── scripts/                     # validate-jinja-render.py, apply-local-worker-config.sh
-└── templates/                   # velox-server.env.j2 (renders /etc/velox-server.env)
-docs/                            # ADRs, architecture ownership, roadmap, deployment notes
-.github/workflows/               # CI + worker-image + master-image release pipelines
-scripts/                         # CI checks (architecture, migrations, secrets, etc.)
-VERSION.txt                      # Single source of version truth
+│   ├── metrics/                # Runtime and cost metrics
+│   ├── observability/          # Read-only Task and attempt diagnostics
+│   ├── outbox/                 # Outbox store, dispatcher and registry
+│   ├── platform/               # Clock, database and retry primitives
+│   ├── remoteengine/           # Remote engine client
+│   ├── secrets/                # Encryption and secret handling
+│   ├── services/               # Application services
+│   ├── store/                  # SQLite stores, adapters, migrations and BlobStore
+│   ├── taskattempts/           # Canonical Task execution-attempt state
+│   ├── taskgraph/              # Canonical Task DAG, leases and readiness
+│   └── workers/                # Worker registry, sessions, commands and heartbeat
+RemoteCodex/                     # Worker agent (Go) + native video engine (C++/FFmpeg)
+shared/                          # Shared Go contracts, identity, validation and media types
+deploy/                          # Install scripts, systemd, runtime templates and Ansible
+├── install-server.sh
+├── velox-server.service
+├── velox-server.env.example
+├── ansible.cfg
+├── requirements.yml
+├── group_vars/
+├── inventory/
+├── playbooks/
+├── runtime/
+├── scripts/
+└── templates/
+docs/                            # Architecture, API, deployment and canonical completion plan
+.github/workflows/               # CI and image release pipelines
+scripts/                         # Canonical CI and repository checks
+VERSION.txt                      # Single source of product version truth
 ```
 
-## Placeholder contract (canonical)
+## Placeholder contract
 
-Every IP, hostname, worker ID, and credential in versioned files is
-a `CHANGE_ME_*` placeholder. Production secrets live ONLY in:
+Every IP, hostname, worker ID and credential in versioned files is a `CHANGE_ME_*` placeholder. Production secrets live only in:
 
-- `deploy/group_vars/vault.yml` (ansible-vault encrypted, never committed)
-- `deploy/inventory/production.ini` (excluded from git, **/production.ini)
-- `/etc/velox-server.env` on the master (excluded, `**/.env.production`)
-- `/etc/velox-worker/worker.env` per host (excluded)
+- `deploy/group_vars/vault.yml` encrypted with Ansible Vault and never committed;
+- `deploy/inventory/production.ini`, which is excluded from Git;
+- `/etc/velox-server.env` on the master;
+- `/etc/velox-worker/worker.env` on each worker.
 
-If anything in this README, the canonical templates, or the
-operator runbook references a `CHANGE_ME_*` token, it is meant to
-be replaced before deploy — NOT copied verbatim. The runtime
-guarantees on the worker allowlist (non-empty, no wildcard,
-unique, no fixed fleet size) live in
-`DataServer/internal/config/workers_validator.go`:
-`ValidateProductionWorkers`. Operators may scale the fleet up or
-down freely; only the shape of the allowlist is enforced.
+A `CHANGE_ME_*` token must be replaced before deployment and must never be copied verbatim into production.
 
-## Documentation
+The production worker allowlist is validated by `ValidateProductionWorkers` in `DataServer/internal/config/workers_validator.go`. The fleet may scale up or down; the runtime enforces the allowlist shape, uniqueness and absence of wildcards.
 
-ADRs, deployment notes, and architecture references live in [`docs/`](docs/).
+## Canonical architecture
 
-The implementation plan for task DAGs, reusable precompositions, worker registries, rendering metrics, cost-aware scheduling, and temporal sharding lives in [`docs/architecture/distributed-rendering/`](docs/architecture/distributed-rendering/README.md).
+The canonical ownership map is [`docs/architecture/OWNERSHIP.md`](docs/architecture/OWNERSHIP.md). Every important state must have one owner, one writer and one mutation path.
+
+## Canonical path to 100%
+
+The active completion roadmap is intentionally limited to five documents:
+
+1. [`00-TARGET-AND-DEFINITION-OF-DONE.md`](docs/100-percent-plan/00-TARGET-AND-DEFINITION-OF-DONE.md) — target system, invariants and final gates.
+2. [`01-RUNTIME-CONSISTENCY-AND-RECOVERY.md`](docs/100-percent-plan/01-RUNTIME-CONSISTENCY-AND-RECOVERY.md) — state correctness, artifacts and failure recovery.
+3. [`02-CI-TESTING-AND-RELEASE.md`](docs/100-percent-plan/02-CI-TESTING-AND-RELEASE.md) — required tests, E2E, images and immutable releases.
+4. [`03-PRODUCTION-OPERATIONS-AND-SECURITY.md`](docs/100-percent-plan/03-PRODUCTION-OPERATIONS-AND-SECURITY.md) — doctor, mTLS, readiness, observability and worker certification.
+5. [`04-DISTRIBUTED-RENDERING-PERFORMANCE-AND-SCALE.md`](docs/100-percent-plan/04-DISTRIBUTED-RENDERING-PERFORMANCE-AND-SCALE.md) — DAG execution, caching, scheduling, sharding and performance.
+
+Historical snapshot audits and temporary PR-by-PR roadmaps are not active implementation contracts. The five documents above must be reconciled with `main` whenever a checklist item is completed.
