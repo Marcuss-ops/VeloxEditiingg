@@ -433,6 +433,10 @@ func (w *Worker) receiveLoop(ctx context.Context, recvCh <-chan controltransport
 				// Store task_offer reference so executeJob can send TaskResult.
 				job.Parameters["_task_id"] = taskID
 				job.Parameters["_attempt_id"] = attemptID
+				// fix/executor-version: carry executor_version from the master's
+				// TaskOffer so dispatchTaskRunner can stamp it into executor.TaskSpec
+				// instead of hardcoding Version:1.
+				job.Parameters["_executor_version"] = int(taskOffer.GetExecutorVersion())
 
 				// PR-2: defer dispatch to MsgTaskLeaseGranted via pendingTasks map.
 				w.storePendingTask(taskID, job)

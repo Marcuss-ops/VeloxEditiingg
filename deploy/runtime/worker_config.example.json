@@ -18,6 +18,8 @@
   "work_dir": "/var/lib/velox-worker/work",
   "log_level": "info",
 
+  "_max_active_jobs_note": "Precedence: the configured value (max_active_jobs > 0) ALWAYS wins over hardware detection (NumCPU/2). With max_active_jobs=1 the worker runs exactly 1 job at a time. Set max_active_jobs=0 (or omit the field from JSON) to fall back to auto-detection (floor 1, cap 8). The value is propagated atomically via SetMaxActiveJobs → capabilitiesMap → hello/heartbeat.",
+
   "max_active_jobs": 1,
   "prometheus_port": 0,
   "health_port": 8081,

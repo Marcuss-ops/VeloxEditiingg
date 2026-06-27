@@ -401,10 +401,17 @@ func (w *Worker) dispatchTaskRunner(ctx context.Context, job *api.Job) (*taskrun
 
 	// PR #5: check for pre-compiled TaskSpec from TaskOffer.
 	var spec executor.TaskSpec
+	// fix/executor-version: read master-supplied executor_version from the
+	// TaskOffer (stored in _executor_version). Default to 1 for legacy jobs
+	// that were not dispatched via TaskOffer.
+	specVersion := 1
+	if v, ok := job.Parameters["_executor_version"].(int); ok && v > 0 {
+		specVersion = v
+	}
 	if specPayload, ok := job.Parameters["task_spec"].(map[string]interface{}); ok && len(specPayload) > 0 {
 		// Task-native path: spec arrives pre-compiled from master.
 		spec = executor.TaskSpec{
-			Version:    1,
+			Version:    specVersion,
 			JobID:      job.JobID,
 			ExecutorID: strings.TrimSpace(job.JobType),
 			Payload:    specPayload,
@@ -412,7 +419,7 @@ func (w *Worker) dispatchTaskRunner(ctx context.Context, job *api.Job) (*taskrun
 	} else {
 		// Legacy path: derive spec from job fields.
 		spec = executor.TaskSpec{
-			Version:    1,
+			Version:    specVersion,
 			JobID:      job.JobID,
 			ExecutorID: strings.TrimSpace(job.JobType),
 			Payload:    job.Parameters,

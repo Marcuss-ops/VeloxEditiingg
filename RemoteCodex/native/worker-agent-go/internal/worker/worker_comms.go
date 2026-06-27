@@ -24,7 +24,12 @@ const (
 )
 
 // detectMaxParallelJobs calculates the optimal concurrency based on hardware.
-// Formula: clamp(NumCPU / 2, min=1, max=8)
+// Formula: clamp(NumCPU / 2, min=1, max=8).
+//
+// ⚠️ This is a FALLBACK only: if cfg.MaxActiveJobs > 0 (which includes the
+// default value 1 from DefaultConfig), worker_init.go uses the configured
+// value instead. Operators who want hardware-detected concurrency must
+// explicitly set max_active_jobs=0 in their config.
 //
 // Used at worker init time to size the concurrency limiter; runtime
 // capacity is read from w.concurrencyLimiter.MaxActiveJobs() everywhere
