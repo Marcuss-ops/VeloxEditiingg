@@ -21,14 +21,14 @@ import (
 // and legacy methods (youtube_channel_metadata, youtube_groups) for migration.
 type YouTubeStore interface {
 	// Canonical: YouTube Channels (youtube_channels table)
-	ListYouTubeChannels() ([]map[string]interface{}, error)
-	GetYouTubeChannel(channelID string) (map[string]interface{}, error)
+	ListYouTubeChannels() ([]youtubetypes.YouTubeChannel, error)
+	GetYouTubeChannel(channelID string) (*youtubetypes.YouTubeChannel, error)
 	UpsertYouTubeChannel(channelID, title, displayName, channelURL, thumbnailURL, language, notes string, viewCount, subCount int64, addedAt, lastSyncAt, metadataJSON string) error
 	DeleteYouTubeChannel(channelID string) error
 	DeleteChannelAtomic(channelID string) (int64, error)
 
 	// Canonical: YouTube Groups (youtube_groups + youtube_group_channels)
-	ListYouTubeGroups() ([]map[string]interface{}, error)
+	ListYouTubeGroups() ([]youtubetypes.YouTubeGroup, error)
 	UpsertYouTubeGroup(name, groupType, description, privacy string) (int64, error)
 	GetYouTubeGroupID(name, groupType string) (int64, error)
 	DeleteYouTubeGroup(id int64) error
@@ -36,7 +36,7 @@ type YouTubeStore interface {
 	AddChannelToGroup(groupID int64, channelID string) error
 	RemoveChannelFromGroup(groupID int64, channelID string) error
 	ListGroupChannels(groupID int64) ([]string, error)
-	ListAllGroupMemberships() ([]map[string]interface{}, error)
+	ListAllGroupMemberships() ([]youtubetypes.GroupMembership, error)
 
 	// Typed metadata update (refresh path). Distinct from UpsertYouTubeChannel:
 	// only touches title + thumbnail_url + last_sync_at + updated_at so
@@ -52,10 +52,10 @@ type YouTubeStore interface {
 	// AuditYouTubeOAuthTokenOrphans surfaces oauth rows whose parent
 	// youtube_channels row is missing so operators see the canonical set is
 	// fully consistent on boot.
-	GetYouTubeOAuthToken(channelID string) (map[string]interface{}, error)
+	GetYouTubeOAuthToken(channelID string) (*youtubetypes.YouTubeOAuthToken, error)
 	UpsertYouTubeOAuthToken(channelID string, accessTokenEnc, refreshTokenEnc []byte, tokenType, expiry, scopes string, keyVersion int) error
 	MarkYouTubeOAuthTokenRevoked(channelID string) error
-	ListActiveYouTubeOAuthTokens() ([]map[string]interface{}, error)
+	ListActiveYouTubeOAuthTokens() ([]youtubetypes.YouTubeOAuthToken, error)
 	AuditYouTubeOAuthTokenOrphans() ([]youtubetypes.YouTubeTokenOrphan, error)
 
 	// Cache (shared, not legacy)

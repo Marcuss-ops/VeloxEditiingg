@@ -2,6 +2,8 @@ package youtube
 
 import (
 	"testing"
+
+	"velox-server/internal/store/youtubetypes"
 )
 
 // fakeStoreForGroups is a minimal fake YouTubeStore used by group tests.
@@ -10,21 +12,21 @@ import (
 type fakeStoreForGroups struct {
 	YouTubeStore
 
-	channels    map[string]map[string]interface{}
-	oauthTokens map[string]map[string]interface{}
-	groups      []map[string]interface{}
+	channels    map[string]*youtubetypes.YouTubeChannel
+	oauthTokens map[string]*youtubetypes.YouTubeOAuthToken
+	groups      []youtubetypes.YouTubeGroup
 	memberships map[int64][]string
 }
 
-func (f *fakeStoreForGroups) GetYouTubeChannel(channelID string) (map[string]interface{}, error) {
+func (f *fakeStoreForGroups) GetYouTubeChannel(channelID string) (*youtubetypes.YouTubeChannel, error) {
 	return f.channels[channelID], nil
 }
 
-func (f *fakeStoreForGroups) GetYouTubeOAuthToken(channelID string) (map[string]interface{}, error) {
+func (f *fakeStoreForGroups) GetYouTubeOAuthToken(channelID string) (*youtubetypes.YouTubeOAuthToken, error) {
 	return f.oauthTokens[channelID], nil
 }
 
-func (f *fakeStoreForGroups) ListYouTubeGroups() ([]map[string]interface{}, error) {
+func (f *fakeStoreForGroups) ListYouTubeGroups() ([]youtubetypes.YouTubeGroup, error) {
 	return f.groups, nil
 }
 
@@ -37,8 +39,8 @@ func mockService(t *testing.T) *Service {
 	t.Helper()
 	return &Service{
 		store: &fakeStoreForGroups{
-			channels:    make(map[string]map[string]interface{}),
-			oauthTokens: make(map[string]map[string]interface{}),
+			channels:    make(map[string]*youtubetypes.YouTubeChannel),
+			oauthTokens: make(map[string]*youtubetypes.YouTubeOAuthToken),
 			memberships: make(map[int64][]string),
 		},
 	}
@@ -48,14 +50,14 @@ func mockService(t *testing.T) *Service {
 func addMockChannel(t *testing.T, s *Service, id, name, language string) {
 	t.Helper()
 	fs := s.store.(*fakeStoreForGroups)
-	fs.channels[id] = map[string]interface{}{
-		"channel_id":   id,
-		"display_name": name,
-		"title":        name + " Title",
-		"language":     language,
+	fs.channels[id] = &youtubetypes.YouTubeChannel{
+		ChannelID:   id,
+		DisplayName: name,
+		Title:       name + " Title",
+		Language:    language,
 	}
-	fs.oauthTokens[id] = map[string]interface{}{
-		"channel_id": id,
+	fs.oauthTokens[id] = &youtubetypes.YouTubeOAuthToken{
+		ChannelID: id,
 	}
 }
 
@@ -64,12 +66,10 @@ func addMockGroup(t *testing.T, s *Service, name string, channelIDs []string) {
 	t.Helper()
 	fs := s.store.(*fakeStoreForGroups)
 	gid := int64(len(fs.groups) + 1)
-	fs.groups = append(fs.groups, map[string]interface{}{
-		"id":          gid,
-		"name":        name,
-		"group_type":  "upload",
-		"description": "",
-		"privacy":     "",
+	fs.groups = append(fs.groups, youtubetypes.YouTubeGroup{
+		ID:        gid,
+		Name:      name,
+		GroupType: "upload",
 	})
 	fs.memberships[gid] = append([]string{}, channelIDs...)
 }

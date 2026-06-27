@@ -97,7 +97,7 @@ func withSingleSchemaSearchPath(dsn, schema string) string {
 // skipped because this test:
 //   - (a) only writes its own probe table so an empty per-test schema is
 //     sufficient for the cross-leak assertion;
-//   - (b) exercises buildServerDeps's DriverPostgres branch which errors
+//   - (b) exercises buildTestDeps's DriverPostgres branch which errors
 //     out fast BEFORE the production migrations runner is invoked.
 //
 // If a future subtest needs a fully-migrated per-test schema, import
@@ -158,7 +158,7 @@ func setupIsolatedPostgresBareSchema(t *testing.T, dsn, schema string) (*databas
 //     against the same DSN after closing schema B's handle succeeds
 //     (proves no connection-level leak across the lifecycle).
 //
-//  4. buildServerDeps reaches the DriverPostgres branch and returns
+//  4. buildTestDeps reaches the DriverPostgres branch and returns
 //     ErrPostgresNotYetWired — proves the dispatch switch landed
 //     correctly without silently falling through to SQLite. The
 //     sentinel error is the documented forward-path message; this
@@ -262,7 +262,7 @@ func TestBuildServerDeps_PostgresDispatch_IsolatedAndFailFast(t *testing.T) {
 	})
 
 	t.Run("DispatchPathReturnsErrPostgresNotYetWired", func(t *testing.T) {
-		// buildServerDeps's DriverPostgres branch never reaches the
+		// buildTestDeps's DriverPostgres branch never reaches the
 		// per-test schema — it just dispatches Handle.Driver and
 		// returns the sentinel. So we point cfg.Database.URL at the
 		// bare DSN: no schema dance required, no leaked test
@@ -282,12 +282,12 @@ func TestBuildServerDeps_PostgresDispatch_IsolatedAndFailFast(t *testing.T) {
 		}
 		cfg.Database.DBPath = filepath.Join(t.TempDir(), "velox.db")
 
-		deps, err := buildServerDeps(cfg)
+		deps, err := buildTestDeps(cfg)
 		if deps != nil {
-			t.Errorf("buildServerDeps on Driver=postgres must return nil deps; got %v", deps)
+			t.Errorf("buildTestDeps on Driver=postgres must return nil deps; got %v", deps)
 		}
 		if err == nil {
-			t.Fatal("buildServerDeps on Driver=postgres must return error; got nil")
+			t.Fatal("buildTestDeps on Driver=postgres must return error; got nil")
 		}
 		// Sentinel match — declarative check that the dispatch
 		// landed on the documented fail-fast branch. Brittle string
@@ -303,7 +303,7 @@ func TestBuildServerDeps_PostgresDispatch_IsolatedAndFailFast(t *testing.T) {
 			!strings.Contains(err.Error(), "docs/pr/") {
 			t.Fatalf("ErrPostgresNotYetWired message lost operator-facing pointers: %q", err.Error())
 		}
-		// Connection-leak guard: after buildServerDeps returned the
+		// Connection-leak guard: after buildTestDeps returned the
 		// sentinel, a follow-up Open against the same DSN must
 		// succeed and Ping() must succeed. The dispatch branch
 		// calls `_ = handle.DB.Close()` before returning; if the

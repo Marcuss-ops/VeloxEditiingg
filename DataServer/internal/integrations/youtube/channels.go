@@ -31,26 +31,26 @@ func (s *Service) loadAuthChannel(channelID string) (*AuthChannel, error) {
 		return nil, nil
 	}
 	ch := &AuthChannel{ID: channelID}
-	ch.Title, _ = row["title"].(string)
-	ch.Name, _ = row["display_name"].(string)
-	ch.Thumbnail, _ = row["thumbnail_url"].(string)
-	ch.Language, _ = row["language"].(string)
+	ch.Title = row.Title
+	ch.Name = row.DisplayName
+	ch.Thumbnail = row.ThumbnailURL
+	ch.Language = row.Language
 
 	if s.oauthBuf != nil {
 		tokenRow, terr := s.store.GetYouTubeOAuthToken(channelID)
 		if terr == nil && tokenRow != nil {
-			if accessBlob, ok := tokenRow["access_token_encrypted"].([]byte); ok && len(accessBlob) > 0 {
-				if plain, derr := s.oauthBuf.Decrypt(accessBlob); derr == nil {
+			if len(tokenRow.AccessTokenEncrypted) > 0 {
+				if plain, derr := s.oauthBuf.Decrypt(tokenRow.AccessTokenEncrypted); derr == nil {
 					ch.AccessToken = string(plain)
 				}
 			}
-			if refreshBlob, ok := tokenRow["refresh_token_encrypted"].([]byte); ok && len(refreshBlob) > 0 {
-				if plain, derr := s.oauthBuf.Decrypt(refreshBlob); derr == nil {
+			if len(tokenRow.RefreshTokenEncrypted) > 0 {
+				if plain, derr := s.oauthBuf.Decrypt(tokenRow.RefreshTokenEncrypted); derr == nil {
 					ch.RefreshToken = string(plain)
 				}
 			}
-			if expiryStr, ok := tokenRow["expiry"].(string); ok && expiryStr != "" {
-				if t, perr := time.Parse(expiryTimeLayout, expiryStr); perr == nil {
+			if tokenRow.Expiry != "" {
+				if t, perr := time.Parse(expiryTimeLayout, tokenRow.Expiry); perr == nil {
 					ch.Expiry = t
 				}
 			}
@@ -70,11 +70,10 @@ func (s *Service) loadAuthChannels() ([]*AuthChannel, error) {
 	}
 	var out []*AuthChannel
 	for _, row := range tokenRows {
-		cid, _ := row["channel_id"].(string)
-		if cid == "" {
+		if row.ChannelID == "" {
 			continue
 		}
-		ch, err := s.loadAuthChannel(cid)
+		ch, err := s.loadAuthChannel(row.ChannelID)
 		if err != nil || ch == nil {
 			continue
 		}

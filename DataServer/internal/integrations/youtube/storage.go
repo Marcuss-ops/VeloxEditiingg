@@ -2,7 +2,8 @@ package youtube
 
 import (
 	"errors"
-	"fmt"
+
+	"velox-server/internal/store/youtubetypes"
 )
 
 // Custom errors
@@ -27,8 +28,8 @@ var (
 type StorageStore interface {
 	// Canonical channels
 	UpsertYouTubeChannel(channelID, title, displayName, channelURL, thumbnailURL, language, notes string, viewCount, subCount int64, addedAt, lastSyncAt, metadataJSON string) error
-	ListYouTubeChannels() ([]map[string]interface{}, error)
-	GetYouTubeChannel(channelID string) (map[string]interface{}, error)
+	ListYouTubeChannels() ([]youtubetypes.YouTubeChannel, error)
+	GetYouTubeChannel(channelID string) (*youtubetypes.YouTubeChannel, error)
 	DeleteYouTubeChannel(channelID string) error
 
 	// Targeted per-column channel updates (PR15.4: prevent the destructive
@@ -42,7 +43,7 @@ type StorageStore interface {
 	// Canonical groups
 	UpsertYouTubeGroup(name, groupType, description, privacy string) (int64, error)
 	GetYouTubeGroupID(name, groupType string) (int64, error)
-	ListYouTubeGroups() ([]map[string]interface{}, error)
+	ListYouTubeGroups() ([]youtubetypes.YouTubeGroup, error)
 	DeleteYouTubeGroup(id int64) error
 	DeleteYouTubeGroupChannelsByGroupID(groupID int64) error
 	DeleteYouTubeGroupChannelsByChannelID(channelID string) error
@@ -51,7 +52,7 @@ type StorageStore interface {
 	AddChannelToGroup(groupID int64, channelID string) error
 	RemoveChannelFromGroup(groupID int64, channelID string) error
 	ListGroupChannels(groupID int64) ([]string, error)
-	ListAllGroupMemberships() ([]map[string]interface{}, error)
+	ListAllGroupMemberships() ([]youtubetypes.GroupMembership, error)
 
 	// Tracked niches
 	UpsertYouTubeTrackedNiche(niche string) error
@@ -97,28 +98,6 @@ func safeChannelID(id string) string {
 	return id
 }
 
-func asStringField(m map[string]interface{}, key string) string {
-	v, _ := m[key].(string)
-	return v
-}
-
-func asInt64Field(m map[string]interface{}, key string) int64 {
-	switch v := m[key].(type) {
-	case float64:
-		return int64(v)
-	case int64:
-		return v
-	case int:
-		return int64(v)
-	case string:
-		var i int64
-		if _, err := fmt.Sscanf(v, "%d", &i); err == nil {
-			return i
-		}
-	}
-	return 0
-}
-
 // LoadData returns a fresh *StorageData hydrated from the canonical
 // SQLite tables. PR15.4: was an in-RAM mirror snapshot; is now a
 // one-shot SQL read populated on every call. Used by
@@ -140,19 +119,14 @@ func (s *Storage) LoadData() *StorageData {
 	}
 
 	for _, row := range groupRows {
-		name, _ := row["name"].(string)
-		if name == "" {
+		if row.Name == "" {
 			continue
 		}
-		groupType, _ := row["group_type"].(string)
-		createdAt, _ := row["created_at"].(string)
-		gid, _ := row["id"].(int64)
-
-		data.Groups[name] = &Group{
-			Name:      name,
-			CreatedAt: parseFlexTime(createdAt),
-			Channels:  s.channelsForGroupLocked(gid),
-			GroupType: groupType,
+		data.Groups[row.Name] = &Group{
+			Name:      row.Name,
+			CreatedAt: parseFlexTime(row.CreatedAt),
+			Channels:  s.channelsForGroupLocked(row.ID),
+			GroupType: row.GroupType,
 		}
 	}
 

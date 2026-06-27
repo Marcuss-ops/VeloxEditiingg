@@ -48,23 +48,23 @@ func prepareJob(t *testing.T, atomic *store.AtomicJobTaskCreator, job *jobs.Job)
 
 // pendingJobID returns the JobID of the most recently-created PENDING job, or
 // t.Fatal if there isn't one. Centralised so each test doesn't reinvent the
-// ListByStatus-then-pick logic.
+// List-then-pick logic.
 func pendingJobID(t *testing.T, repo *store.SQLiteJobRepository, ctx context.Context) string {
 	t.Helper()
-	pending, err := repo.ListByStatus(ctx, []store.JobStatus{store.JobStatusPending}, 1)
+	pending, err := repo.List(ctx, jobs.Filter{Statuses: []jobs.Status{jobs.Status("PENDING")}, Limit: 1})
 	if err != nil {
-		t.Fatalf("ListByStatus: %v", err)
+		t.Fatalf("List: %v", err)
 	}
 	if len(pending) == 0 {
 		t.Fatal("no pending jobs available")
 	}
-	return pending[0].JobID
+	return pending[0].ID
 }
 
 // JobRepositoryContract runs the cross-backend test suite for jobs.
 // Spec §5: identical behaviour across SQLite (today) and Postgres (PR-2b).
 func JobRepositoryContract(t *testing.T, factory func(t *testing.T) (*store.SQLiteJobRepository, *store.AtomicJobTaskCreator, func())) {
-	t.Run("CreateJobWithTask then GetJob round-trip", func(t *testing.T) {
+	t.Run("CreateJobWithTask then Get round-trip", func(t *testing.T) {
 		repo, atomic, cleanup := factory(t)
 		defer cleanup()
 		ctx := context.Background()
@@ -76,9 +76,9 @@ func JobRepositoryContract(t *testing.T, factory func(t *testing.T) (*store.SQLi
 			MaxRetries: 3,
 			Payload:    `{"job_type":"render"}`,
 		})
-		got, err := repo.GetJob(ctx, jobID)
+		got, err := repo.Get(ctx, jobID)
 		if err != nil {
-			t.Fatalf("GetJob: %v", err)
+			t.Fatalf("Get: %v", err)
 		}
 		if got == nil {
 			t.Fatal("expected job projection, got nil")
@@ -86,17 +86,17 @@ func JobRepositoryContract(t *testing.T, factory func(t *testing.T) (*store.SQLi
 		if got.VideoName != "test.mp4" || got.ProjectID != "p1" || got.MaxRetries != 3 {
 			t.Errorf("round-trip mismatch: %+v", got)
 		}
-		if got.Status != store.JobStatusPending {
+		if got.Status != jobs.Status("PENDING") {
 			t.Errorf("expected PENDING post-create, got %q", got.Status)
 		}
 	})
 
-	t.Run("GetJob missing returns (nil, nil)", func(t *testing.T) {
+	t.Run("Get missing returns (nil, nil)", func(t *testing.T) {
 		repo, _, cleanup := factory(t)
 		defer cleanup()
-		got, err := repo.GetJob(context.Background(), "job_does_not_exist")
+		got, err := repo.Get(context.Background(), "job_does_not_exist")
 		if err != nil {
-			t.Fatalf("GetJob missing: %v", err)
+			t.Fatalf("Get missing: %v", err)
 		}
 		if got != nil {
 			t.Errorf("expected nil for missing id, got %+v", got)
@@ -128,11 +128,11 @@ func JobRepositoryContract(t *testing.T, factory func(t *testing.T) (*store.SQLi
 		// Spec §5 atomicity: re-read the persisted row to confirm the claim
 		// committed end-to-end (status moved). PR #9: lease_id column dropped —
 		// lease identity now lives in result_json + job_attempts.
-		persisted, err := repo.GetJob(ctx, got.JobID)
+		persisted, err := repo.Get(ctx, got.JobID)
 		if err != nil || persisted == nil {
-			t.Fatalf("GetJob after claim: %v %v", persisted, err)
+			t.Fatalf("Get after claim: %v %v", persisted, err)
 		}
-		if persisted.Status == store.JobStatusPending {
+		if persisted.Status == jobs.Status("PENDING") {
 			t.Errorf("expected status to leave PENDING after claim, still %q", persisted.Status)
 		}
 	})
@@ -143,24 +143,24 @@ func JobRepositoryContract(t *testing.T, factory func(t *testing.T) (*store.SQLi
 		ctx := context.Background()
 		jobID := "job_trans_" + randSuffix()
 		prepareJob(t, atomic, &jobs.Job{ID: jobID, MaxRetries: 3})
-		j, err := repo.GetJob(ctx, jobID)
+		j, err := repo.Get(ctx, jobID)
 		if err != nil || j == nil {
-			t.Fatalf("GetJob pre-transition: %v %v", j, err)
+			t.Fatalf("Get pre-transition: %v %v", j, err)
 		}
 		if err := repo.Transition(ctx, store.TransitionParams{
-			JobID:          j.JobID,
+			JobID:          j.ID,
 			ExpectedStatus: store.JobStatusPending,
 			NewStatus:      store.JobStatusLeased,
 			Revision:       j.Revision,
 		}); err != nil {
 			t.Fatalf("Transition: %v", err)
 		}
-		got, err := repo.GetJob(ctx, j.JobID)
+		got, err := repo.Get(ctx, j.ID)
 		if err != nil || got == nil {
-			t.Fatalf("GetJob after transition: %v %v", got, err)
+			t.Fatalf("Get after transition: %v %v", got, err)
 		}
-		if got.Status != store.JobStatusLeased {
-			t.Errorf("expected PROCESSING, got %q", got.Status)
+		if got.Status != jobs.Status("LEASED") {
+			t.Errorf("expected LEASED, got %q", got.Status)
 		}
 		if got.Revision != j.Revision+1 {
 			t.Errorf("expected revision %d, got %d", j.Revision+1, got.Revision)
@@ -174,13 +174,13 @@ func JobRepositoryContract(t *testing.T, factory func(t *testing.T) (*store.SQLi
 		jobID := "job_cas_" + randSuffix()
 		prepareJob(t, atomic, &jobs.Job{ID: jobID, MaxRetries: 3})
 		jID := pendingJobID(t, repo, ctx)
-		j, err := repo.GetJob(ctx, jID)
+		j, err := repo.Get(ctx, jID)
 		if err != nil || j == nil {
-			t.Fatalf("GetJob: %v %v", j, err)
+			t.Fatalf("Get: %v %v", j, err)
 		}
 		// First transition succeeds.
 		if err := repo.Transition(ctx, store.TransitionParams{
-			JobID:          j.JobID,
+			JobID:          j.ID,
 			ExpectedStatus: store.JobStatusPending,
 			NewStatus:      store.JobStatusLeased,
 			Revision:       j.Revision,
@@ -189,8 +189,8 @@ func JobRepositoryContract(t *testing.T, factory func(t *testing.T) (*store.SQLi
 		}
 		// Second transition with the stale expectation must reject.
 		err = repo.Transition(ctx, store.TransitionParams{
-			JobID:          j.JobID,
-			ExpectedStatus: store.JobStatusPending, // stale: now PROCESSING
+			JobID:          j.ID,
+			ExpectedStatus: store.JobStatusPending, // stale: now LEASED
 			NewStatus:      store.JobStatusFailed,
 			Revision:       j.Revision, // stale: not the new revision
 		})
@@ -313,15 +313,15 @@ func JobRepositoryContract(t *testing.T, factory func(t *testing.T) (*store.SQLi
 		}
 	})
 
-	t.Run("ListByStatus with empty statuses returns nil", func(t *testing.T) {
+	t.Run("List with empty statuses returns nil on empty DB", func(t *testing.T) {
 		repo, _, cleanup := factory(t)
 		defer cleanup()
-		got, err := repo.ListByStatus(context.Background(), nil, 10)
+		got, err := repo.List(context.Background(), jobs.Filter{Statuses: nil, Limit: 10})
 		if err != nil {
-			t.Fatalf("ListByStatus nil: %v", err)
+			t.Fatalf("List nil statuses: %v", err)
 		}
 		if got != nil {
-			t.Errorf("expected nil for empty statuses, got %+v", got)
+			t.Errorf("expected nil for empty statuses on empty DB, got %+v", got)
 		}
 	})
 }

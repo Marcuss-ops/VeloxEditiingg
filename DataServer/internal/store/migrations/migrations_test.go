@@ -10,7 +10,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-//go:embed *.sql
+//go:embed testdata/*.sql
 var testMigrationsFS embed.FS
 
 //go:embed testdata/duplicates/*.sql
@@ -33,7 +33,7 @@ func openTestDB(t *testing.T) *sql.DB {
 // ============================================================
 
 func TestDiscoverMigrations_AllVersions(t *testing.T) {
-	migs, err := discoverMigrations(testMigrationsFS, ".")
+	migs, err := discoverMigrations(testMigrationsFS, "testdata")
 	if err != nil {
 		t.Fatalf("discoverMigrations failed: %v", err)
 	}
@@ -86,7 +86,7 @@ func TestDiscoverMigrations_AllVersions(t *testing.T) {
 }
 
 func TestDiscoverMigrations_SortedByVersion(t *testing.T) {
-	migs, err := discoverMigrations(testMigrationsFS, ".")
+	migs, err := discoverMigrations(testMigrationsFS, "testdata")
 	if err != nil {
 		t.Fatalf("discoverMigrations failed: %v", err)
 	}
@@ -114,8 +114,8 @@ func TestDiscoverMigrationsRejectsDuplicateVersions(t *testing.T) {
 }
 
 func TestDiscoverMigrations_ChecksumStable(t *testing.T) {
-	migs1, _ := discoverMigrations(testMigrationsFS, ".")
-	migs2, _ := discoverMigrations(testMigrationsFS, ".")
+	migs1, _ := discoverMigrations(testMigrationsFS, "testdata")
+	migs2, _ := discoverMigrations(testMigrationsFS, "testdata")
 
 	for i := range migs1 {
 		if migs1[i].Checksum != migs2[i].Checksum {
@@ -133,12 +133,12 @@ func TestRunMigrations_FullLifecycle(t *testing.T) {
 	db := openTestDB(t)
 
 	// First run: all migrations should be applied
-	if err := RunMigrations(db, testMigrationsFS, "."); err != nil {
+	if err := RunMigrations(db, testMigrationsFS, "testdata"); err != nil {
 		t.Fatalf("first RunMigrations failed: %v", err)
 	}
 
 	// Discover expected migration count
-	expectedMigs, _ := discoverMigrations(testMigrationsFS, ".")
+	expectedMigs, _ := discoverMigrations(testMigrationsFS, "testdata")
 	expectedCount := len(expectedMigs)
 
 	// Verify schema_migrations has the expected number of entries
@@ -184,14 +184,14 @@ func TestRunMigrations_Idempotent(t *testing.T) {
 	db := openTestDB(t)
 
 	// Discover expected count
-	expectedMigs, _ := discoverMigrations(testMigrationsFS, ".")
+	expectedMigs, _ := discoverMigrations(testMigrationsFS, "testdata")
 	expectedCount := len(expectedMigs)
 
 	// Run twice
-	if err := RunMigrations(db, testMigrationsFS, "."); err != nil {
+	if err := RunMigrations(db, testMigrationsFS, "testdata"); err != nil {
 		t.Fatalf("first RunMigrations failed: %v", err)
 	}
-	if err := RunMigrations(db, testMigrationsFS, "."); err != nil {
+	if err := RunMigrations(db, testMigrationsFS, "testdata"); err != nil {
 		t.Fatalf("second RunMigrations (idempotent) failed: %v", err)
 	}
 
@@ -207,7 +207,7 @@ func TestRunMigrations_ChecksumMismatch(t *testing.T) {
 	db := openTestDB(t)
 
 	// Apply migrations normally first
-	if err := RunMigrations(db, testMigrationsFS, "."); err != nil {
+	if err := RunMigrations(db, testMigrationsFS, "testdata"); err != nil {
 		t.Fatalf("first RunMigrations failed: %v", err)
 	}
 
@@ -217,7 +217,7 @@ func TestRunMigrations_ChecksumMismatch(t *testing.T) {
 	}
 
 	// Second run should fail with checksum mismatch
-	err := RunMigrations(db, testMigrationsFS, ".")
+	err := RunMigrations(db, testMigrationsFS, "testdata")
 	if err == nil {
 		t.Fatal("expected checksum mismatch error, got nil")
 	}
@@ -576,7 +576,7 @@ func TestAppliedVersions(t *testing.T) {
 	db := openTestDB(t)
 	applyAllMigrations(t, db)
 
-	expectedMigs, _ := discoverMigrations(testMigrationsFS, ".")
+	expectedMigs, _ := discoverMigrations(testMigrationsFS, "testdata")
 	expectedCount := len(expectedMigs)
 
 	versions, err := AppliedVersions(db)
@@ -598,7 +598,7 @@ func TestAppliedVersions(t *testing.T) {
 func TestPendingVersions(t *testing.T) {
 	db := openTestDB(t)
 
-	expectedMigs, _ := discoverMigrations(testMigrationsFS, ".")
+	expectedMigs, _ := discoverMigrations(testMigrationsFS, "testdata")
 	expectedCount := len(expectedMigs)
 
 	// ensureSchemaTable is needed before PendingVersions can query schema_migrations
@@ -607,7 +607,7 @@ func TestPendingVersions(t *testing.T) {
 	}
 
 	// Before applying anything, all migrations are pending
-	pending, err := PendingVersions(db, testMigrationsFS, ".")
+	pending, err := PendingVersions(db, testMigrationsFS, "testdata")
 	if err != nil {
 		t.Fatalf("PendingVersions failed: %v", err)
 	}
@@ -616,11 +616,11 @@ func TestPendingVersions(t *testing.T) {
 	}
 
 	// After applying, none should be pending
-	if err := RunMigrations(db, testMigrationsFS, "."); err != nil {
+	if err := RunMigrations(db, testMigrationsFS, "testdata"); err != nil {
 		t.Fatalf("RunMigrations failed: %v", err)
 	}
 
-	pending, err = PendingVersions(db, testMigrationsFS, ".")
+	pending, err = PendingVersions(db, testMigrationsFS, "testdata")
 	if err != nil {
 		t.Fatalf("PendingVersions after apply failed: %v", err)
 	}
@@ -640,7 +640,7 @@ func TestIntegration_MigrationRunner_EndToEnd(t *testing.T) {
 	db := openTestDB(t)
 	applyAllMigrations(t, db)
 
-	expectedMigs, _ := discoverMigrations(testMigrationsFS, ".")
+	expectedMigs, _ := discoverMigrations(testMigrationsFS, "testdata")
 	expectedCount := len(expectedMigs)
 
 	// ---- Phase 1: Verify schema_migrations has all entries ----
@@ -878,7 +878,7 @@ func TestIntegration_MigrationRunner_EndToEnd(t *testing.T) {
 func TestIntegration_NewSQLiteStore_AutoMigration(t *testing.T) {
 	t.Parallel()
 
-	expectedMigs, _ := discoverMigrations(testMigrationsFS, ".")
+	expectedMigs, _ := discoverMigrations(testMigrationsFS, "testdata")
 	expectedCount := len(expectedMigs)
 
 	dbPath := t.TempDir() + "/integration_test.db"
@@ -890,7 +890,7 @@ func TestIntegration_NewSQLiteStore_AutoMigration(t *testing.T) {
 	}
 
 	// Apply migrations via testMigrationsFS (embed of *.sql in this dir)
-	if err := RunMigrations(db, testMigrationsFS, "."); err != nil {
+	if err := RunMigrations(db, testMigrationsFS, "testdata"); err != nil {
 		t.Fatalf("first RunMigrations: %v", err)
 	}
 
@@ -924,7 +924,7 @@ func TestIntegration_NewSQLiteStore_AutoMigration(t *testing.T) {
 	defer db2.Close()
 
 	// Apply again — should be idempotent
-	if err := RunMigrations(db2, testMigrationsFS, "."); err != nil {
+	if err := RunMigrations(db2, testMigrationsFS, "testdata"); err != nil {
 		t.Fatalf("second RunMigrations: %v", err)
 	}
 
@@ -976,7 +976,7 @@ func ensureSchemaTable(db *sql.DB) error {
 
 func applyAllMigrations(t *testing.T, db *sql.DB) {
 	t.Helper()
-	if err := RunMigrations(db, testMigrationsFS, "."); err != nil {
+	if err := RunMigrations(db, testMigrationsFS, "testdata"); err != nil {
 		t.Fatalf("RunMigrations failed: %v", err)
 	}
 }

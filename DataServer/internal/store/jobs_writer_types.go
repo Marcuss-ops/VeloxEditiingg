@@ -109,34 +109,6 @@ type TransitionParams struct {
 	Revision       int
 }
 
-// StartJobParams encodes the LEASED → RUNNING transition.
-//
-// It carries the full identity of the worker that the master must verify
-// atomically: JobID + WorkerID + LeaseID + Attempt + ExpectedRevision.
-// Test callers use this directly on *SQLiteJobRepository.
-type StartJobParams struct {
-	JobID            string
-	WorkerID         string
-	LeaseID          string
-	Attempt          int
-	ExpectedRevision int
-	Now              time.Time // optional; defaults to time.Now().UTC()
-}
-
-// CompleteJobParams encodes a RUNNING → terminal transition
-// (SUCCEEDED, FAILED, or CANCELLED) with full worker-identity CAS tuple.
-// Test callers use this directly on *SQLiteJobRepository.
-type CompleteJobParams struct {
-	JobID            string
-	WorkerID         string
-	LeaseID          string
-	Attempt          int
-	ExpectedRevision int
-	FinalStatus      JobStatus
-	ResultJSON       []byte
-	Now              time.Time
-}
-
 // ── Shared error sentinels ────────────────────────────────────────────────
 
 // ErrTransitionConflict is returned when the CAS predicate does not match
@@ -161,3 +133,14 @@ type RecordRenderFinishedCommand struct {
 // ErrRecordRenderFinishedNotFound is returned when the attempt to record
 // render finished cannot find a matching attempt row.
 var ErrRecordRenderFinishedNotFound = errors.New("store: render finished attempt not found")
+
+// ClaimResultJSON is the typed representation of the result_json blob
+// returned by ClaimNextPendingJob / ClaimNextPendingJobForWorker.  It
+// replaces map[string]interface{} parsing in claimNext / ClaimNextForProfile.
+type ClaimResultJSON struct {
+	JobID       string  `json:"job_id"`
+	Status      string  `json:"status"`
+	LeaseID     string  `json:"lease_id"`
+	LeaseExpiry string  `json:"lease_expiry"`
+	Attempt     float64 `json:"attempt"` // JSON numbers unmarshal as float64
+}

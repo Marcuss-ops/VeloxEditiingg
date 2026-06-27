@@ -34,6 +34,66 @@ type YouTubeChannelSeed struct {
 	LastSyncAt   string
 }
 
+// YouTubeChannel is the typed representation of a youtube_channels row.
+// Used as the return type of ListYouTubeChannels / GetYouTubeChannel on
+// both the YouTubeStore and StorageStore interfaces.
+type YouTubeChannel struct {
+	ChannelID      string
+	Title          string
+	DisplayName    string
+	ChannelURL     string
+	ThumbnailURL   string
+	Language       string
+	Notes          string
+	ViewCount      int64
+	SubscriberCount int64
+	AddedAt        string
+	LastSyncAt     string
+	CreatedAt      string
+	UpdatedAt      string
+}
+
+// YouTubeOAuthToken is the typed row from youtube_oauth_tokens.
+// Used as the return type of GetYouTubeOAuthToken / ListActiveYouTubeOAuthTokens
+// on both the YouTubeStore and StorageStore interfaces.
+type YouTubeOAuthToken struct {
+	ChannelID             string
+	AccessTokenEncrypted  []byte
+	RefreshTokenEncrypted []byte
+	TokenType             string
+	Expiry                string
+	Scopes                string
+	KeyVersion            int64
+	RevokedAt             string // empty if not revoked
+	CreatedAt             string
+	UpdatedAt             string
+}
+
+// YouTubeGroup is the typed representation of a youtube_groups row.
+// Used as the return type of ListYouTubeGroups on both the YouTubeStore
+// and StorageStore interfaces.
+type YouTubeGroup struct {
+	ID          int64
+	Name        string
+	GroupType   string
+	Description string
+	Privacy     string
+	CreatedAt   string
+	UpdatedAt   string
+}
+
+// GroupMembership is the typed representation of a youtube_group_channels
+// row joined with youtube_groups (group_name, group_type).
+// Used as the return type of ListAllGroupMemberships on both the
+// YouTubeStore and StorageStore interfaces.
+type GroupMembership struct {
+	GroupID   int64
+	ChannelID string
+	Position  int
+	GroupName string
+	GroupType string
+}
+
 // YouTubeTokenOrphan describes an oauth token row whose parent channel row
 // is missing. The boot audit (AuditYouTubeOAuthTokenOrphans) returns slices
 // of these so operators can decide whether to backfill the parent row or

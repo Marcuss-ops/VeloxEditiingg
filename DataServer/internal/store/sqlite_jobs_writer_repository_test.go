@@ -35,6 +35,22 @@ func openStartJobTestDB(t *testing.T) (*SQLiteStore, *SQLiteJobRepository) {
 			project_id TEXT,
 			created_at TEXT,
 			completed_at TEXT
+		);
+		CREATE TABLE job_history (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			job_id TEXT NOT NULL,
+			status TEXT,
+			worker_id TEXT,
+			message TEXT,
+			raw_json TEXT,
+			event_ts TEXT NOT NULL
+		);
+		CREATE TABLE job_events (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			timestamp TEXT NOT NULL,
+			job_id TEXT NOT NULL,
+			event TEXT NOT NULL,
+			raw_json TEXT NOT NULL DEFAULT '{}'
 		)
 	`); err != nil {
 		t.Fatalf("create jobs table: %v", err)
@@ -65,14 +81,14 @@ func seedLeasedJob(t *testing.T, db *sql.DB,
 	return revision
 }
 
-func TestSQLiteJobRepository_StartJob_HappyPath(t *testing.T) {
+func TestSQLiteJobRepository_PR3Start_HappyPath(t *testing.T) {
 	_, r := openStartJobTestDB(t)
 	ctx := context.Background()
 
 	sess := r.store.db
 	seedLeasedJob(t, sess, "job-1", 1, 7)
 
-	err := r.StartJob(ctx, StartJobParams{
+	err := r.PR3Start(ctx, StartCommand{
 		JobID:            "job-1",
 		WorkerID:         "w1",
 		LeaseID:          "lease-A",
@@ -80,7 +96,7 @@ func TestSQLiteJobRepository_StartJob_HappyPath(t *testing.T) {
 		ExpectedRevision: 7,
 	})
 	if err != nil {
-		t.Fatalf("StartJob happy path: %v", err)
+		t.Fatalf("PR3Start happy path: %v", err)
 	}
 
 	// Verify state flipped + revision bumped + started_at set.
@@ -90,7 +106,7 @@ func TestSQLiteJobRepository_StartJob_HappyPath(t *testing.T) {
 		`SELECT status, started_at, revision FROM jobs WHERE job_id = ?`,
 		"job-1",
 	).Scan(&status, &startedAt, &newRevision); err != nil {
-		t.Fatalf("post-StartJob SELECT: %v", err)
+		t.Fatalf("post-PR3Start SELECT: %v", err)
 	}
 	if status != "RUNNING" {
 		t.Errorf("expected status RUNNING, got %q", status)
@@ -104,17 +120,17 @@ func TestSQLiteJobRepository_StartJob_HappyPath(t *testing.T) {
 }
 
 // PR #9 + #10: WorkerID/LeaseID CAS checks removed from jobs table (identity
-// lives in job_attempts + tasks). StartJob only checks status='LEASED' +
+// lives in job_attempts + tasks). PR3Start only checks status='LEASED' +
 // attempt + revision. WrongWorkerID + WrongLeaseID tests are no longer
 // meaningful (they'd succeed because the WHERE no longer filters on them).
 
-func TestSQLiteJobRepository_StartJob_WrongAttempt(t *testing.T) {
+func TestSQLiteJobRepository_PR3Start_WrongAttempt(t *testing.T) {
 	_, r := openStartJobTestDB(t)
 	ctx := context.Background()
 	sess := r.store.db
 	seedLeasedJob(t, sess, "job-1", 2, 0)
 
-	err := r.StartJob(ctx, StartJobParams{
+	err := r.PR3Start(ctx, StartCommand{
 		JobID:            "job-1",
 		WorkerID:         "w1",
 		LeaseID:          "lease-A",
@@ -126,13 +142,13 @@ func TestSQLiteJobRepository_StartJob_WrongAttempt(t *testing.T) {
 	}
 }
 
-func TestSQLiteJobRepository_StartJob_WrongRevision(t *testing.T) {
+func TestSQLiteJobRepository_PR3Start_WrongRevision(t *testing.T) {
 	_, r := openStartJobTestDB(t)
 	ctx := context.Background()
 	sess := r.store.db
 	seedLeasedJob(t, sess, "job-1", 1, 3)
 
-	err := r.StartJob(ctx, StartJobParams{
+	err := r.PR3Start(ctx, StartCommand{
 		JobID:            "job-1",
 		WorkerID:         "w1",
 		LeaseID:          "lease-A",
@@ -144,7 +160,7 @@ func TestSQLiteJobRepository_StartJob_WrongRevision(t *testing.T) {
 	}
 }
 
-func TestSQLiteJobRepository_StartJob_AlreadyRunning(t *testing.T) {
+func TestSQLiteJobRepository_PR3Start_AlreadyRunning(t *testing.T) {
 	_, r := openStartJobTestDB(t)
 	ctx := context.Background()
 	sess := r.store.db
@@ -159,7 +175,7 @@ func TestSQLiteJobRepository_StartJob_AlreadyRunning(t *testing.T) {
 		t.Fatalf("seed RUNNING: %v", err)
 	}
 
-	err = r.StartJob(ctx, StartJobParams{
+	err = r.PR3Start(ctx, StartCommand{
 		JobID:            "job-1",
 		WorkerID:         "w1",
 		LeaseID:          "lease-A",
@@ -171,7 +187,7 @@ func TestSQLiteJobRepository_StartJob_AlreadyRunning(t *testing.T) {
 	}
 }
 
-func TestSQLiteJobRepository_StartJob_NullAttemptLegacy(t *testing.T) {
+func TestSQLiteJobRepository_PR3Start_NullAttemptLegacy(t *testing.T) {
 	_, r := openStartJobTestDB(t)
 	ctx := context.Background()
 	sess := r.store.db
@@ -187,7 +203,7 @@ func TestSQLiteJobRepository_StartJob_NullAttemptLegacy(t *testing.T) {
 		t.Fatalf("seed legacy NULL attempt: %v", err)
 	}
 
-	err = r.StartJob(ctx, StartJobParams{
+	err = r.PR3Start(ctx, StartCommand{
 		JobID:            "job-legacy",
 		WorkerID:         "w1",
 		LeaseID:          "lease-A",
@@ -195,6 +211,6 @@ func TestSQLiteJobRepository_StartJob_NullAttemptLegacy(t *testing.T) {
 		ExpectedRevision: 0,
 	})
 	if err != nil {
-		t.Fatalf("StartJob on NULL-attempt legacy row should succeed with attempt=0, got %v", err)
+		t.Fatalf("PR3Start on NULL-attempt legacy row should succeed with attempt=0, got %v", err)
 	}
 }

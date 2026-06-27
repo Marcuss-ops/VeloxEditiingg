@@ -98,7 +98,7 @@ type Writer interface {
 	// taskingestion.Ingest.TransitionTaskToTerminalAtomic on
 	// task_attempts (canonical layer). See
 	// internal/taskingestion and the doc above FailWithRetry's
-	// implementation in internal/store/sqlite_jobs_writer_pr3.go.
+	// implementation in internal/store/sqlite_jobs_writer.go.
 	// Returns ErrTransitionConflict on revision mismatch.
 	FailWithRetry(ctx context.Context, id, errorCode, errorMessage string, retryable bool, revision int) error
 

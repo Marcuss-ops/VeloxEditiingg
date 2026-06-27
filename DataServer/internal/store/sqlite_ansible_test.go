@@ -225,17 +225,17 @@ func TestAnsibleRunsCRUD(t *testing.T) {
 	if got == nil {
 		t.Fatal("expected non-nil run")
 	}
-	if got["run_id"] != runID {
-		t.Errorf("run_id: got %v, want %q", got["run_id"], runID)
+	if got.RunID != runID {
+		t.Errorf("run_id: got %q, want %q", got.RunID, runID)
 	}
-	if got["action"] != "deploy" {
-		t.Errorf("action: got %v, want %q", got["action"], "deploy")
+	if got.Action != "deploy" {
+		t.Errorf("action: got %q, want %q", got.Action, "deploy")
 	}
-	if got["status"] != "success" {
-		t.Errorf("status: got %v, want %q", got["status"], "success")
+	if got.Status != "success" {
+		t.Errorf("status: got %q, want %q", got.Status, "success")
 	}
-	if got["return_code"] != 0 {
-		t.Errorf("return_code: got %v, want 0", got["return_code"])
+	if got.ReturnCode != 0 {
+		t.Errorf("return_code: got %d, want 0", got.ReturnCode)
 	}
 }
 
@@ -256,14 +256,14 @@ func TestAnsibleRunsListOrder(t *testing.T) {
 		t.Fatalf("expected 3 runs, got %d", len(runs))
 	}
 	// Should be DESC by started_at: 3000, 2000, 1000
-	if runs[0]["run_id"] != "run-001" {
-		t.Errorf("expected first run-001, got %v", runs[0]["run_id"])
+	if runs[0].RunID != "run-001" {
+		t.Errorf("expected first run-001, got %v", runs[0].RunID)
 	}
-	if runs[1]["run_id"] != "run-003" {
-		t.Errorf("expected second run-003, got %v", runs[1]["run_id"])
+	if runs[1].RunID != "run-003" {
+		t.Errorf("expected second run-003, got %v", runs[1].RunID)
 	}
-	if runs[2]["run_id"] != "run-002" {
-		t.Errorf("expected third run-002, got %v", runs[2]["run_id"])
+	if runs[2].RunID != "run-002" {
+		t.Errorf("expected third run-002, got %v", runs[2].RunID)
 	}
 }
 
@@ -311,11 +311,11 @@ func TestAnsibleRunsUpdate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetAnsibleRun failed: %v", err)
 	}
-	if got["status"] != "success" {
-		t.Errorf("status: got %v, want %q", got["status"], "success")
+	if got.Status != "success" {
+		t.Errorf("status: got %q, want %q", got.Status, "success")
 	}
-	if got["ended_at"] != int64(5000) {
-		t.Errorf("ended_at: got %v, want 5000", got["ended_at"])
+	if got.EndedAt != int64(5000) {
+		t.Errorf("ended_at: got %d, want 5000", got.EndedAt)
 	}
 }
 

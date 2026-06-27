@@ -199,8 +199,8 @@ func (s *Service) persistRefreshedToken(channelID string, newToken *oauth2.Token
 		// Preserve the previously-stored encrypted refresh_token blob.
 		cur, gerr := s.store.GetYouTubeOAuthToken(channelID)
 		if gerr == nil && cur != nil {
-			if v, ok := cur["refresh_token_encrypted"].([]byte); ok && len(v) > 0 {
-				refreshEnc = v
+			if len(cur.RefreshTokenEncrypted) > 0 {
+				refreshEnc = cur.RefreshTokenEncrypted
 			}
 		}
 	}

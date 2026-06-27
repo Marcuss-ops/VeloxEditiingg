@@ -29,23 +29,23 @@ func TestYouTubeChannelCRUD(t *testing.T) {
 	if ch == nil {
 		t.Fatal("expected non-nil channel")
 	}
-	if ch["channel_id"] != "UC_test123" {
-		t.Errorf("channel_id: got %v, want UC_test123", ch["channel_id"])
+	if ch.ChannelID != "UC_test123" {
+		t.Errorf("channel_id: got %v, want UC_test123", ch.ChannelID)
 	}
-	if ch["title"] != "Test Channel" {
-		t.Errorf("title: got %v, want %q", ch["title"], "Test Channel")
+	if ch.Title != "Test Channel" {
+		t.Errorf("title: got %v, want %q", ch.Title, "Test Channel")
 	}
-	if ch["display_name"] != "Test Display" {
-		t.Errorf("display_name: got %v, want %q", ch["display_name"], "Test Display")
+	if ch.DisplayName != "Test Display" {
+		t.Errorf("display_name: got %v, want %q", ch.DisplayName, "Test Display")
 	}
-	if ch["language"] != "en" {
-		t.Errorf("language: got %v, want %q", ch["language"], "en")
+	if ch.Language != "en" {
+		t.Errorf("language: got %v, want %q", ch.Language, "en")
 	}
-	if ch["view_count"] != int64(1500) {
-		t.Errorf("view_count: got %v, want 1500", ch["view_count"])
+	if ch.ViewCount != int64(1500) {
+		t.Errorf("view_count: got %v, want 1500", ch.ViewCount)
 	}
-	if ch["subscriber_count"] != int64(500) {
-		t.Errorf("subscriber_count: got %v, want 500", ch["subscriber_count"])
+	if ch.SubscriberCount != int64(500) {
+		t.Errorf("subscriber_count: got %v, want 500", ch.SubscriberCount)
 	}
 }
 
@@ -63,14 +63,14 @@ func TestYouTubeChannelUpdatePreservesAddedAt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetYouTubeChannel failed: %v", err)
 	}
-	if ch["title"] != "Updated Title" {
-		t.Errorf("title: got %v, want %q", ch["title"], "Updated Title")
+	if ch.Title != "Updated Title" {
+		t.Errorf("title: got %v, want %q", ch.Title, "Updated Title")
 	}
-	if ch["added_at"] != "2024-01-15T00:00:00Z" {
-		t.Errorf("added_at was overwritten: got %v, want 2024-01-15T00:00:00Z", ch["added_at"])
+	if ch.AddedAt != "2024-01-15T00:00:00Z" {
+		t.Errorf("added_at was overwritten: got %v, want 2024-01-15T00:00:00Z", ch.AddedAt)
 	}
-	if ch["last_sync_at"] != "2024-06-15T00:00:00Z" {
-		t.Errorf("last_sync_at: got %v, want 2024-06-15T00:00:00Z", ch["last_sync_at"])
+	if ch.LastSyncAt != "2024-06-15T00:00:00Z" {
+		t.Errorf("last_sync_at: got %v, want 2024-06-15T00:00:00Z", ch.LastSyncAt)
 	}
 }
 
@@ -98,8 +98,8 @@ func TestYouTubeChannelListAndDelete(t *testing.T) {
 		t.Fatalf("expected 2 channels, got %d", len(channels))
 	}
 	// Ordered by title
-	if channels[0]["title"] != "Alpha" || channels[1]["title"] != "Beta" {
-		t.Errorf("expected order Alpha, Beta; got %v, %v", channels[0]["title"], channels[1]["title"])
+	if channels[0].Title != "Alpha" || channels[1].Title != "Beta" {
+		t.Errorf("expected order Alpha, Beta; got %v, %v", channels[0].Title, channels[1].Title)
 	}
 
 	// Delete
@@ -141,31 +141,43 @@ func TestYouTubeChannelUpdateMetadataRefresh(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetYouTubeChannel: %v", err)
 	}
-	if got["title"] != "Refreshed Title" {
-		t.Errorf("title: got %v, want Refreshed Title", got["title"])
+	if got.Title != "Refreshed Title" {
+		t.Errorf("title: got %v, want Refreshed Title", got.Title)
 	}
-	if got["thumbnail_url"] != "https://img.example.com/refresh.jpg" {
-		t.Errorf("thumbnail_url: got %v, want refreshed thumbnail", got["thumbnail_url"])
+	if got.ThumbnailURL != "https://img.example.com/refresh.jpg" {
+		t.Errorf("thumbnail_url: got %v, want refreshed thumbnail", got.ThumbnailURL)
 	}
 	for _, c := range []struct {
-		col, want string
+		col  string
+		want string
 	}{
 		{"display_name", "Original Display"},
 		{"language", "en"},
 		{"notes", "user notes"},
 		{"channel_url", "https://youtube.com/@orig"},
 	} {
-		if got[c.col] != c.want {
-			t.Errorf("%s was clobbered by refresh: got %v, want %q", c.col, got[c.col], c.want)
+		var gotVal string
+		switch c.col {
+		case "display_name":
+			gotVal = got.DisplayName
+		case "language":
+			gotVal = got.Language
+		case "notes":
+			gotVal = got.Notes
+		case "channel_url":
+			gotVal = got.ChannelURL
+		}
+		if gotVal != c.want {
+			t.Errorf("%s was clobbered by refresh: got %v, want %q", c.col, gotVal, c.want)
 		}
 	}
-	if got["view_count"] != int64(1234) {
-		t.Errorf("view_count was clobbered: got %v, want 1234", got["view_count"])
+	if got.ViewCount != int64(1234) {
+		t.Errorf("view_count was clobbered: got %v, want 1234", got.ViewCount)
 	}
-	if got["subscriber_count"] != int64(567) {
-		t.Errorf("subscriber_count was clobbered: got %v, want 567", got["subscriber_count"])
+	if got.SubscriberCount != int64(567) {
+		t.Errorf("subscriber_count was clobbered: got %v, want 567", got.SubscriberCount)
 	}
-	if lastSyncAt, _ := got["last_sync_at"].(string); lastSyncAt == "" {
+	if lastSyncAt := got.LastSyncAt; lastSyncAt == "" {
 		t.Errorf("last_sync_at is empty after refresh; want recent RFC3339 timestamp")
 	}
 }
@@ -181,11 +193,11 @@ func TestYouTubeChannelEmptyDefaultValues(t *testing.T) {
 		t.Fatalf("GetYouTubeChannel failed: %v", err)
 	}
 	// title should default to empty string
-	if title, ok := ch["title"].(string); !ok || title != "" {
-		t.Errorf("title: got %v, want empty string", ch["title"])
+	if title := ch.Title; title != "" {
+		t.Errorf("title: got %v, want empty string", ch.Title)
 	}
 	// added_at should be auto-set
-	if added, ok := ch["added_at"].(string); !ok || added == "" {
+	if added := ch.AddedAt; added == "" {
 		t.Error("expected added_at to be auto-set")
 	}
 }
@@ -224,11 +236,11 @@ func TestYouTubeGroupCRUD(t *testing.T) {
 	if len(groups) != 1 {
 		t.Fatalf("expected 1 group, got %d", len(groups))
 	}
-	if groups[0]["name"] != "WNBA Zone" {
-		t.Errorf("name: got %v, want %q", groups[0]["name"], "WNBA Zone")
+	if groups[0].Name != "WNBA Zone" {
+		t.Errorf("name: got %v, want %q", groups[0].Name, "WNBA Zone")
 	}
-	if groups[0]["group_type"] != "manager" {
-		t.Errorf("group_type: got %v, want %q", groups[0]["group_type"], "manager")
+	if groups[0].GroupType != "manager" {
+		t.Errorf("group_type: got %v, want %q", groups[0].GroupType, "manager")
 	}
 }
 
@@ -260,15 +272,15 @@ func TestYouTubeGroupDifferentTypesSameName(t *testing.T) {
 	// Verify each type has correct data
 	var mgrID, uploadID int64
 	for _, g := range groups {
-		name := g["name"].(string)
-		gtype := g["group_type"].(string)
+		name := g.Name
+		gtype := g.GroupType
 		if name == "MyGroup" && gtype == "manager" {
-			mgrID = g["id"].(int64)
+			mgrID = g.ID
 		}
 		if name == "MyGroup" && gtype == "upload" {
-			uploadID = g["id"].(int64)
-			if g["privacy"] != "public" {
-				t.Errorf("upload privacy: got %v, want public", g["privacy"])
+			uploadID = g.ID
+			if g.Privacy != "public" {
+				t.Errorf("upload privacy: got %v, want public", g.Privacy)
 			}
 		}
 	}
@@ -376,10 +388,10 @@ func TestGroupChannelsPositionAutoIncrement(t *testing.T) {
 		t.Fatalf("expected 2 memberships, got %d", len(memberships))
 	}
 	// Position should increment (0, 1)
-	if memberships[0]["position"] != 0 || memberships[0]["channel_id"] != "UC_pos1" {
+	if memberships[0].Position != 0 || memberships[0].ChannelID != "UC_pos1" {
 		t.Errorf("expected first position 0 for UC_pos1, got %v", memberships[0])
 	}
-	if memberships[1]["position"] != 1 || memberships[1]["channel_id"] != "UC_pos2" {
+	if memberships[1].Position != 1 || memberships[1].ChannelID != "UC_pos2" {
 		t.Errorf("expected second position 1 for UC_pos2, got %v", memberships[1])
 	}
 }
@@ -411,7 +423,7 @@ func TestGroupChannelsAllMembershipsJoin(t *testing.T) {
 	// Verify group names in join results
 	found := map[string]bool{}
 	for _, m := range memberships {
-		key := m["group_name"].(string) + "/" + m["channel_id"].(string)
+		key := m.GroupName + "/" + m.ChannelID
 		found[key] = true
 	}
 	if !found["Group One/UC_g1a"] || !found["Group One/UC_g1b"] || !found["Group Two/UC_g2a"] {
@@ -582,20 +594,20 @@ func TestYouTubeOAuthTokenUpsertGetRevoke(t *testing.T) {
 	if row == nil {
 		t.Fatal("expected non-nil row on existing channel")
 	}
-	if row["channel_id"] != "UC_oauth_test" {
-		t.Errorf("channel_id: got %v, want UC_oauth_test", row["channel_id"])
+	if row.ChannelID != "UC_oauth_test" {
+		t.Errorf("channel_id: got %v, want UC_oauth_test", row.ChannelID)
 	}
-	if !bytes.Equal(row["access_token_encrypted"].([]byte), access1) {
-		t.Errorf("access blob not stored verbatim: got %v, want %v", row["access_token_encrypted"], access1)
+	if !bytes.Equal(row.AccessTokenEncrypted, access1) {
+		t.Errorf("access blob not stored verbatim: got %v, want %v", row.AccessTokenEncrypted, access1)
 	}
-	if !bytes.Equal(row["refresh_token_encrypted"].([]byte), refresh1) {
-		t.Errorf("refresh blob not stored verbatim: got %v, want %v", row["refresh_token_encrypted"], refresh1)
+	if !bytes.Equal(row.RefreshTokenEncrypted, refresh1) {
+		t.Errorf("refresh blob not stored verbatim: got %v, want %v", row.RefreshTokenEncrypted, refresh1)
 	}
-	if row["key_version"] != int64(1) {
-		t.Errorf("key_version: got %v, want 1", row["key_version"])
+	if row.KeyVersion != int64(1) {
+		t.Errorf("key_version: got %v, want 1", row.KeyVersion)
 	}
-	if row["revoked_at"] != "" {
-		t.Errorf("revoked_at should start empty, got %v", row["revoked_at"])
+	if row.RevokedAt != "" {
+		t.Errorf("revoked_at should start empty, got %v", row.RevokedAt)
 	}
 
 	// Upsert path (replace blobs and bump updated_at)
@@ -605,16 +617,16 @@ func TestYouTubeOAuthTokenUpsertGetRevoke(t *testing.T) {
 		t.Fatalf("second UpsertYouTubeOAuthToken: %v", err)
 	}
 	row, _ = s.GetYouTubeOAuthToken("UC_oauth_test")
-	if !bytes.Equal(row["access_token_encrypted"].([]byte), access2) {
+	if !bytes.Equal(row.AccessTokenEncrypted, access2) {
 		t.Error("access blob not updated on second upsert")
 	}
-	if !bytes.Equal(row["refresh_token_encrypted"].([]byte), refresh2) {
+	if !bytes.Equal(row.RefreshTokenEncrypted, refresh2) {
 		t.Error("refresh blob not updated on second upsert")
 	}
-	if row["expiry"] != "2027-01-01T00:00:00Z" {
-		t.Errorf("expiry: got %v, want 2027-01-01T00:00:00Z", row["expiry"])
+	if row.Expiry != "2027-01-01T00:00:00Z" {
+		t.Errorf("expiry: got %v, want 2027-01-01T00:00:00Z", row.Expiry)
 	}
-	if row["revoked_at"] != "" {
+	if row.RevokedAt != "" {
 		t.Error("upsert must not touch revoked_at")
 	}
 
@@ -623,17 +635,17 @@ func TestYouTubeOAuthTokenUpsertGetRevoke(t *testing.T) {
 		t.Fatalf("MarkYouTubeOAuthTokenRevoked: %v", err)
 	}
 	row, _ = s.GetYouTubeOAuthToken("UC_oauth_test")
-	if row["revoked_at"] == "" || row["revoked_at"] == nil {
+	if row.RevokedAt == "" {
 		t.Error("revoked_at should be set after MarkRevoked")
 	}
-	prevRevoked := row["revoked_at"]
+	prevRevoked := row.RevokedAt
 	time.Sleep(20 * time.Millisecond)
 	if err := s.MarkYouTubeOAuthTokenRevoked("UC_oauth_test"); err != nil {
 		t.Fatalf("second MarkRevoked: %v", err)
 	}
 	row2, _ := s.GetYouTubeOAuthToken("UC_oauth_test")
-	if row2["revoked_at"] != prevRevoked {
-		t.Errorf("second MarkRevoked changed revoked_at: before=%v, after=%v", prevRevoked, row2["revoked_at"])
+	if row2.RevokedAt != prevRevoked {
+		t.Errorf("second MarkRevoked changed revoked_at: before=%v, after=%v", prevRevoked, row2.RevokedAt)
 	}
 }
 
@@ -832,25 +844,25 @@ func TestConnectChannelAtomic_FirstTimeConnect(t *testing.T) {
 	if err != nil || ch == nil {
 		t.Fatalf("expected channel row after atomic upsert: err=%v row=%v", err, ch)
 	}
-	if ch["title"] != "Atomic First Connect" {
-		t.Errorf("title: got %v, want %q", ch["title"], "Atomic First Connect")
+	if ch.Title != "Atomic First Connect" {
+		t.Errorf("title: got %v, want %q", ch.Title, "Atomic First Connect")
 	}
-	if ch["language"] != "en" {
-		t.Errorf("language: got %v, want %q", ch["language"], "en")
+	if ch.Language != "en" {
+		t.Errorf("language: got %v, want %q", ch.Language, "en")
 	}
 
 	tok, err := s.GetYouTubeOAuthToken("UC_first_connect")
 	if err != nil || tok == nil {
 		t.Fatalf("expected oauth row after atomic upsert: err=%v row=%v", err, tok)
 	}
-	if !bytes.Equal(tok["access_token_encrypted"].([]byte), access) {
-		t.Errorf("access blob mismatch: got %v, want %v", tok["access_token_encrypted"], access)
+	if !bytes.Equal(tok.AccessTokenEncrypted, access) {
+		t.Errorf("access blob mismatch: got %v, want %v", tok.AccessTokenEncrypted, access)
 	}
-	if !bytes.Equal(tok["refresh_token_encrypted"].([]byte), refresh) {
-		t.Errorf("refresh blob mismatch: got %v, want %v", tok["refresh_token_encrypted"], refresh)
+	if !bytes.Equal(tok.RefreshTokenEncrypted, refresh) {
+		t.Errorf("refresh blob mismatch: got %v, want %v", tok.RefreshTokenEncrypted, refresh)
 	}
-	if tok["expiry"] != expiry {
-		t.Errorf("expiry: got %v, want %s", tok["expiry"], expiry)
+	if tok.Expiry != expiry {
+		t.Errorf("expiry: got %v, want %s", tok.Expiry, expiry)
 	}
 
 	// Cascade sanity: deleting the channel row must cascade the oauth
@@ -896,14 +908,14 @@ func TestConnectChannelAtomic_PreservesUserEdits(t *testing.T) {
 	if err != nil || before == nil {
 		t.Fatalf("snapshot read: err=%v row=%v", err, before)
 	}
-	origAddedAt, _ := before["added_at"].(string)
-	origCreatedAt, _ := before["created_at"].(string)
-	origNotes, _ := before["notes"].(string)
-	origLanguage, _ := before["language"].(string)
-	origDisplayName, _ := before["display_name"].(string)
-	origChannelURL, _ := before["channel_url"].(string)
-	origViewCount := before["view_count"].(int64)
-	origSubCount := before["subscriber_count"].(int64)
+	origAddedAt := before.AddedAt
+	origCreatedAt := before.CreatedAt
+	origNotes := before.Notes
+	origLanguage := before.Language
+	origDisplayName := before.DisplayName
+	origChannelURL := before.ChannelURL
+	origViewCount := before.ViewCount
+	origSubCount := before.SubscriberCount
 	if origAddedAt == "" {
 		t.Fatalf("pre: added_at must be set")
 	}
@@ -942,43 +954,43 @@ func TestConnectChannelAtomic_PreservesUserEdits(t *testing.T) {
 	}
 
 	// Seed-owned columns SHOULD have been overwritten.
-	if after["title"] != "Refreshed By OAuth" {
-		t.Errorf("title was not updated: got %v, want %q", after["title"], "Refreshed By OAuth")
+	if after.Title != "Refreshed By OAuth" {
+		t.Errorf("title was not updated: got %v, want %q", after.Title, "Refreshed By OAuth")
 	}
-	if after["thumbnail_url"] != "https://img.example.com/refresh.jpg" {
-		t.Errorf("thumbnail_url was not updated: got %v, want refreshed thumbnail", after["thumbnail_url"])
+	if after.ThumbnailURL != "https://img.example.com/refresh.jpg" {
+		t.Errorf("thumbnail_url was not updated: got %v, want refreshed thumbnail", after.ThumbnailURL)
 	}
-	if last, _ := after["last_sync_at"].(string); last != newExpiry {
+	if last := after.LastSyncAt; last != newExpiry {
 		t.Errorf("last_sync_at was not updated: got %v, want %s", last, newExpiry)
 	}
 
 	// User-edited typed columns SHOULD be preserved verbatim.
-	if after["notes"] != origNotes {
-		t.Errorf("notes was clobbered: got %v, want preserved %q", after["notes"], origNotes)
+	if after.Notes != origNotes {
+		t.Errorf("notes was clobbered: got %v, want preserved %q", after.Notes, origNotes)
 	}
-	if after["language"] != origLanguage {
-		t.Errorf("language was clobbered: got %v, want preserved %q", after["language"], origLanguage)
+	if after.Language != origLanguage {
+		t.Errorf("language was clobbered: got %v, want preserved %q", after.Language, origLanguage)
 	}
-	if after["display_name"] != origDisplayName {
-		t.Errorf("display_name was clobbered: got %v, want preserved %q", after["display_name"], origDisplayName)
+	if after.DisplayName != origDisplayName {
+		t.Errorf("display_name was clobbered: got %v, want preserved %q", after.DisplayName, origDisplayName)
 	}
-	if after["channel_url"] != origChannelURL {
-		t.Errorf("channel_url was clobbered: got %v, want preserved %q", after["channel_url"], origChannelURL)
+	if after.ChannelURL != origChannelURL {
+		t.Errorf("channel_url was clobbered: got %v, want preserved %q", after.ChannelURL, origChannelURL)
 	}
-	if got := after["view_count"].(int64); got != origViewCount {
+	if got := after.ViewCount; got != origViewCount {
 		t.Errorf("view_count was clobbered: got %d, want preserved %d", got, origViewCount)
 	}
-	if got := after["subscriber_count"].(int64); got != origSubCount {
+	if got := after.SubscriberCount; got != origSubCount {
 		t.Errorf("subscriber_count was clobbered: got %d, want preserved %d", got, origSubCount)
 	}
 
 	// added_at / created_at SHOULD be preserved (neither is in the
 	// UPDATE SET clause).
-	if after["added_at"] != origAddedAt {
-		t.Errorf("added_at was clobbered: got %v, want preserved %s", after["added_at"], origAddedAt)
+	if after.AddedAt != origAddedAt {
+		t.Errorf("added_at was clobbered: got %v, want preserved %s", after.AddedAt, origAddedAt)
 	}
-	if after["created_at"] != origCreatedAt {
-		t.Errorf("created_at was clobbered: got %v, want preserved %s", after["created_at"], origCreatedAt)
+	if after.CreatedAt != origCreatedAt {
+		t.Errorf("created_at was clobbered: got %v, want preserved %s", after.CreatedAt, origCreatedAt)
 	}
 
 	// OAuth blob side: the atomic call SHOULD have updated the new
@@ -988,20 +1000,20 @@ func TestConnectChannelAtomic_PreservesUserEdits(t *testing.T) {
 	if err != nil || tok == nil {
 		t.Fatalf("oauth read after atomic: err=%v", err)
 	}
-	if !bytes.Equal(tok["access_token_encrypted"].([]byte), newAccess) {
-		t.Errorf("oauth access blob not updated: got %v, want %v", tok["access_token_encrypted"], newAccess)
+	if !bytes.Equal(tok.AccessTokenEncrypted, newAccess) {
+		t.Errorf("oauth access blob not updated: got %v, want %v", tok.AccessTokenEncrypted, newAccess)
 	}
-	if !bytes.Equal(tok["refresh_token_encrypted"].([]byte), newRefresh) {
-		t.Errorf("oauth refresh blob not updated: got %v, want %v", tok["refresh_token_encrypted"], newRefresh)
+	if !bytes.Equal(tok.RefreshTokenEncrypted, newRefresh) {
+		t.Errorf("oauth refresh blob not updated: got %v, want %v", tok.RefreshTokenEncrypted, newRefresh)
 	}
-	if tok["expiry"] != newExpiry {
-		t.Errorf("oauth expiry not updated: got %v, want %s", tok["expiry"], newExpiry)
+	if tok.Expiry != newExpiry {
+		t.Errorf("oauth expiry not updated: got %v, want %s", tok.Expiry, newExpiry)
 	}
 
 	// updated_at must advance past created_at (we slept 20ms above to
 	// dodge the sub-second edge case). Lexicographic compare is safe for
 	// fixed-width RFC3339 with Z-suffixed times.
-	if updatedAfter, _ := after["updated_at"].(string); updatedAfter == "" {
+	if updatedAfter := after.UpdatedAt; updatedAfter == "" {
 		t.Errorf("updated_at is empty after re-auth")
 	} else if updatedAfter < origCreatedAt {
 		t.Errorf("updated_at did not advance: created_at=%s updated_at=%s", origCreatedAt, updatedAfter)
@@ -1043,11 +1055,11 @@ func TestUpsertYouTubeOAuthToken_PreservesRevokedAt(t *testing.T) {
 	if row == nil {
 		t.Fatal("setup: expected oauth row present after revoke")
 	}
-	originalRevokedAt, _ := row["revoked_at"].(string)
+	originalRevokedAt := row.RevokedAt
 	if originalRevokedAt == "" {
 		t.Fatal("setup: revoked_at empty after MarkRevoked")
 	}
-	originalUpdatedAt, _ := row["updated_at"].(string)
+	originalUpdatedAt := row.UpdatedAt
 	if originalUpdatedAt == "" {
 		t.Fatal("setup: updated_at empty")
 	}
@@ -1068,23 +1080,23 @@ func TestUpsertYouTubeOAuthToken_PreservesRevokedAt(t *testing.T) {
 	}
 
 	// The crucial invariant: revoked_at is NOT touched by the refresh path.
-	if gotRevokedAt, _ := row["revoked_at"].(string); gotRevokedAt != originalRevokedAt {
+	if gotRevokedAt := row.RevokedAt; gotRevokedAt != originalRevokedAt {
 		t.Errorf("revoked_at was reset on refresh path (was %q, now %q); auto-refresh MUST NOT un-revoke",
 			originalRevokedAt, gotRevokedAt)
 	}
 
 	// Sanity: the access blob did get rotated (this is the whole point
 	// of the refresh), so the test is exercising the right call.
-	if !bytes.Equal(row["access_token_encrypted"].([]byte), newAccess) {
-		t.Errorf("access blob not rotated by refresh: got %v, want %v", row["access_token_encrypted"], newAccess)
+	if !bytes.Equal(row.AccessTokenEncrypted, newAccess) {
+		t.Errorf("access blob not rotated by refresh: got %v, want %v", row.AccessTokenEncrypted, newAccess)
 	}
-	if !bytes.Equal(row["refresh_token_encrypted"].([]byte), newRefresh) {
-		t.Errorf("refresh blob not rotated by refresh: got %v, want %v", row["refresh_token_encrypted"], newRefresh)
+	if !bytes.Equal(row.RefreshTokenEncrypted, newRefresh) {
+		t.Errorf("refresh blob not rotated by refresh: got %v, want %v", row.RefreshTokenEncrypted, newRefresh)
 	}
-	if row["expiry"] != "2030-12-31T23:59:59Z" {
-		t.Errorf("expiry not updated by refresh: got %v, want 2030-12-31T23:59:59Z", row["expiry"])
+	if row.Expiry != "2030-12-31T23:59:59Z" {
+		t.Errorf("expiry not updated by refresh: got %v, want 2030-12-31T23:59:59Z", row.Expiry)
 	}
-	if upd, _ := row["updated_at"].(string); upd == "" {
+	if upd := row.UpdatedAt; upd == "" {
 		t.Error("updated_at is empty after refresh")
 	} else if upd < originalUpdatedAt {
 		t.Errorf("updated_at did not advance (was %s, now %s)", originalUpdatedAt, upd)
@@ -1097,7 +1109,7 @@ func TestUpsertYouTubeOAuthToken_PreservesRevokedAt(t *testing.T) {
 		t.Fatalf("ListActive: %v", err)
 	}
 	for _, r := range active {
-		if r["channel_id"] == channel {
+		if r.ChannelID == channel {
 			t.Errorf("ListActiveYouTubeOAuthTokens should still skip the revoked-and-refreshed channel; got %v", r)
 			break
 		}
@@ -1144,7 +1156,7 @@ func TestConnectChannelAtomic_ResetsRevokedAtOnReauth(t *testing.T) {
 	if row == nil {
 		t.Fatal("setup: expected oauth row present after revoke")
 	}
-	if row["revoked_at"] == "" {
+	if row.RevokedAt == "" {
 		t.Fatalf("setup: revoked_at empty after MarkYouTubeOAuthTokenRevoked: %v", row)
 	}
 	active, err := s.ListActiveYouTubeOAuthTokens()
@@ -1152,7 +1164,7 @@ func TestConnectChannelAtomic_ResetsRevokedAtOnReauth(t *testing.T) {
 		t.Fatalf("ListActive: %v", err)
 	}
 	for _, r := range active {
-		if r["channel_id"] == channel {
+		if r.ChannelID == channel {
 			t.Fatalf("setup: ListActiveYouTubeOAuthTokens should NOT include a revoked channel; got %v", r)
 		}
 	}
@@ -1184,24 +1196,24 @@ func TestConnectChannelAtomic_ResetsRevokedAtOnReauth(t *testing.T) {
 	if row == nil {
 		t.Fatal("post: expected oauth row still present after re-auth atomic")
 	}
-	if row["revoked_at"] != "" {
-		t.Errorf("revoked_at should be reset on re-auth; got %v", row["revoked_at"])
+	if row.RevokedAt != "" {
+		t.Errorf("revoked_at should be reset on re-auth; got %v", row.RevokedAt)
 	}
-	if !bytes.Equal(row["access_token_encrypted"].([]byte), newAccess) {
-		t.Errorf("access blob not refreshed: got %v, want %v", row["access_token_encrypted"], newAccess)
+	if !bytes.Equal(row.AccessTokenEncrypted, newAccess) {
+		t.Errorf("access blob not refreshed: got %v, want %v", row.AccessTokenEncrypted, newAccess)
 	}
-	if !bytes.Equal(row["refresh_token_encrypted"].([]byte), newRefresh) {
-		t.Errorf("refresh blob not refreshed: got %v, want %v", row["refresh_token_encrypted"], newRefresh)
+	if !bytes.Equal(row.RefreshTokenEncrypted, newRefresh) {
+		t.Errorf("refresh blob not refreshed: got %v, want %v", row.RefreshTokenEncrypted, newRefresh)
 	}
-	if row["expiry"] != newExpiry {
-		t.Errorf("expiry not refreshed: got %v, want %s", row["expiry"], newExpiry)
+	if row.Expiry != newExpiry {
+		t.Errorf("expiry not refreshed: got %v, want %s", row.Expiry, newExpiry)
 	}
 
 	// Step 6: ListActiveYouTubeOAuthTokens MUST now return the channel.
 	active, _ = s.ListActiveYouTubeOAuthTokens()
 	found := false
 	for _, r := range active {
-		if r["channel_id"] == channel {
+		if r.ChannelID == channel {
 			found = true
 			break
 		}
@@ -1216,11 +1228,11 @@ func TestConnectChannelAtomic_ResetsRevokedAtOnReauth(t *testing.T) {
 	// the only assertion we can make is that the channel row's title/thumb
 	// got the new values.
 	ch, _ := s.GetYouTubeChannel(channel)
-	if ch["title"] != "Channel After Reauth" {
-		t.Errorf("title not updated by re-auth atomic: got %v, want %q", ch["title"], "Channel After Reauth")
+	if ch.Title != "Channel After Reauth" {
+		t.Errorf("title not updated by re-auth atomic: got %v, want %q", ch.Title, "Channel After Reauth")
 	}
-	if ch["thumbnail_url"] != "https://img.example.com/reauth.jpg" {
-		t.Errorf("thumbnail_url not updated by re-auth atomic: got %v", ch["thumbnail_url"])
+	if ch.ThumbnailURL != "https://img.example.com/reauth.jpg" {
+		t.Errorf("thumbnail_url not updated by re-auth atomic: got %v", ch.ThumbnailURL)
 	}
 }
 
@@ -1256,8 +1268,8 @@ func TestYouTubeGroupsLegacy(t *testing.T) {
 	if len(groups) != 1 {
 		t.Fatalf("expected 1 legacy group, got %d", len(groups))
 	}
-	if groups[0]["name"] != "Legacy Group" {
-		t.Errorf("name: got %v, want %q", groups[0]["name"], "Legacy Group")
+	if groups[0].Name != "Legacy Group" {
+		t.Errorf("name: got %v, want %q", groups[0].Name, "Legacy Group")
 	}
 
 	// Delete via canonical DeleteYouTubeGroup

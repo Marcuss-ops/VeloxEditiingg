@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"log"
 	"time"
+
+	"velox-server/internal/store/youtubetypes"
 )
 
 // channelsForGroupLocked hydrates the channels for a single group id
@@ -34,21 +36,20 @@ func (s *Storage) channelsForGroupLocked(groupID int64) []Channel {
 	return out
 }
 
-// channelFromCanonicalRow converts a canonical youtube_channels row to a Channel.
-func channelFromCanonicalRow(row map[string]interface{}) *Channel {
-	id, _ := row["channel_id"].(string)
-	if id == "" {
+// channelFromCanonicalRow converts a typed youtube_channels row to a Channel.
+func channelFromCanonicalRow(row *youtubetypes.YouTubeChannel) *Channel {
+	if row == nil || row.ChannelID == "" {
 		return nil
 	}
 	return &Channel{
-		ID:        id,
-		Title:     asStringField(row, "title"),
-		Name:      asStringField(row, "display_name"),
-		URL:       asStringField(row, "channel_url"),
-		Thumbnail: asStringField(row, "thumbnail_url"),
-		Language:  asStringField(row, "language"),
-		ViewCount: asInt64Field(row, "view_count"),
-		SubCount:  asInt64Field(row, "subscriber_count"),
+		ID:        row.ChannelID,
+		Title:     row.Title,
+		Name:      row.DisplayName,
+		URL:       row.ChannelURL,
+		Thumbnail: row.ThumbnailURL,
+		Language:  row.Language,
+		ViewCount: row.ViewCount,
+		SubCount:  row.SubscriberCount,
 	}
 }
 
@@ -66,12 +67,10 @@ func (s *Storage) resolveGroupIDByName(name string) (int64, error) {
 		return 0, err
 	}
 	for _, row := range rows {
-		n, _ := row["name"].(string)
-		if n != name {
+		if row.Name != name {
 			continue
 		}
-		gid, _ := row["id"].(int64)
-		return gid, nil
+		return row.ID, nil
 	}
 	return 0, nil
 }
@@ -90,15 +89,13 @@ func (s *Storage) groupTypeForName(name string) string {
 		return "manager"
 	}
 	for _, row := range rows {
-		n, _ := row["name"].(string)
-		if n != name {
+		if row.Name != name {
 			continue
 		}
-		t, _ := row["group_type"].(string)
-		if t == "" {
+		if row.GroupType == "" {
 			return "manager"
 		}
-		return t
+		return row.GroupType
 	}
 	return "manager"
 }
@@ -122,18 +119,14 @@ func (s *Storage) GetGroup(name string) (*Group, bool) {
 		return nil, false
 	}
 	for _, row := range rows {
-		n, _ := row["name"].(string)
-		if n != name {
+		if row.Name != name {
 			continue
 		}
-		gid, _ := row["id"].(int64)
-		groupType, _ := row["group_type"].(string)
-		createdAt, _ := row["created_at"].(string)
 		g := &Group{
-			Name:      n,
-			CreatedAt: parseFlexTime(createdAt),
-			Channels:  s.channelsForGroupLocked(gid),
-			GroupType: groupType,
+			Name:      row.Name,
+			CreatedAt: parseFlexTime(row.CreatedAt),
+			Channels:  s.channelsForGroupLocked(row.ID),
+			GroupType: row.GroupType,
 		}
 		return g, true
 	}
@@ -202,28 +195,26 @@ func (s *Storage) CleanupOldData(retention time.Duration) int {
 	}
 	removedCount := 0
 	for _, row := range rows {
-		lastSync, _ := row["last_sync_at"].(string)
-		if lastSync == "" || lastSync >= cutoff {
+		if row.LastSyncAt == "" || row.LastSyncAt >= cutoff {
 			continue
 		}
-		chID, _ := row["channel_id"].(string)
-		if chID == "" {
+		if row.ChannelID == "" {
 			continue
 		}
 		// Roll forward without touching user columns.
 		if err := s.store.UpsertYouTubeChannel(
-			chID, "", // title (empty => keep)
-			asStringField(row, "display_name"),
-			asStringField(row, "channel_url"),
-			"", // thumbnail (empty => keep)
-			asStringField(row, "language"),
-			asStringField(row, "notes"),
-			0, 0, // view/sub count reset
-			asStringField(row, "added_at"),
-			cutoff, // last_sync_at pushed forward so we don't reflag
+			row.ChannelID, "",
+			row.DisplayName,
+			row.ChannelURL,
+			"",
+			row.Language,
+			row.Notes,
+			0, 0,
+			row.AddedAt,
+			cutoff,
 			"",
 		); err != nil {
-			log.Printf("[WARN] CleanupOldData: reset %s: %v", safeChannelID(chID), err)
+			log.Printf("[WARN] CleanupOldData: reset %s: %v", safeChannelID(row.ChannelID), err)
 			continue
 		}
 		removedCount++

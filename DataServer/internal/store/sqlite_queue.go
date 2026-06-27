@@ -1,9 +1,46 @@
 package store
 
 import (
-	"encoding/json"
 	"time"
 )
+
+// ── Typed queue structs ──────────────────────────────────────────────────
+
+// OrchestratorJob is the typed row from orchestrator_jobs.
+// RawJSON carries the full JSON blob for any fields not captured
+// by the dedicated columns.
+type OrchestratorJob struct {
+	JobID        string `json:"job_id"`
+	Status       string `json:"status"`
+	TotalSteps   int    `json:"total_steps"`
+	CurrentStep  int    `json:"current_step"`
+	PipelineType string `json:"pipeline_type"`
+	StartedAt    string `json:"started_at,omitempty"`
+	CompletedAt  string `json:"completed_at,omitempty"`
+	CreatedAt    string `json:"created_at"`
+	UpdatedAt    string `json:"updated_at"`
+	RawJSON      string `json:"-"`
+}
+
+// DLQJob is the typed row from dlq_jobs.
+type DLQJob struct {
+	JobID      string `json:"job_id"`
+	DeadAt     string `json:"dead_at"`
+	DeadReason string `json:"dead_reason"`
+	FailReason string `json:"fail_reason"`
+	FailCount  int    `json:"fail_count"`
+	Replayable bool   `json:"replayable"`
+	CreatedAt  string `json:"created_at"`
+	RawJSON    string `json:"-"`
+}
+
+// JobEvent is the typed row from job_events.
+type JobEvent struct {
+	Timestamp string `json:"timestamp"`
+	JobID     string `json:"job_id"`
+	Event     string `json:"event"`
+	RawJSON   string `json:"-"`
+}
 
 // --- Orchestrator Jobs ---
 
@@ -25,12 +62,12 @@ func (s *SQLiteStore) UpsertOrchestratorJob(jobID, status, pipelineType string, 
 func (s *SQLiteStore) SetOrchestratorJobTimestamps(jobID string, startedAt, completedAt *time.Time) error {
 	var started, completed *string
 	if startedAt != nil {
-		s := startedAt.UTC().Format(time.RFC3339)
-		started = &s
+		st := startedAt.UTC().Format(time.RFC3339)
+		started = &st
 	}
 	if completedAt != nil {
-		c := completedAt.UTC().Format(time.RFC3339)
-		completed = &c
+		ct := completedAt.UTC().Format(time.RFC3339)
+		completed = &ct
 	}
 	_, err := s.db.Exec(
 		`UPDATE orchestrator_jobs SET started_at=?, completed_at=?, updated_at=? WHERE job_id=?`,
@@ -39,23 +76,28 @@ func (s *SQLiteStore) SetOrchestratorJobTimestamps(jobID string, startedAt, comp
 	return err
 }
 
-// ListOrchestratorJobs returns all orchestrator jobs as raw JSON.
-func (s *SQLiteStore) ListOrchestratorJobs() ([]map[string]any, error) {
-	rows, err := s.db.Query(`SELECT raw_json FROM orchestrator_jobs ORDER BY updated_at DESC`)
+// ListOrchestratorJobs returns all orchestrator jobs, typed.
+func (s *SQLiteStore) ListOrchestratorJobs() ([]OrchestratorJob, error) {
+	rows, err := s.db.Query(
+		`SELECT job_id, status, total_steps, current_step, pipeline_type,
+		        COALESCE(started_at, ''), COALESCE(completed_at, ''),
+		        created_at, updated_at, raw_json
+		 FROM orchestrator_jobs ORDER BY updated_at DESC`,
+	)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var result []map[string]any
+	var result []OrchestratorJob
 	for rows.Next() {
-		var raw string
-		if err := rows.Scan(&raw); err != nil {
+		var j OrchestratorJob
+		if err := rows.Scan(
+			&j.JobID, &j.Status, &j.TotalSteps, &j.CurrentStep, &j.PipelineType,
+			&j.StartedAt, &j.CompletedAt, &j.CreatedAt, &j.UpdatedAt, &j.RawJSON,
+		); err != nil {
 			continue
 		}
-		var m map[string]any
-		if err := json.Unmarshal([]byte(raw), &m); err == nil {
-			result = append(result, m)
-		}
+		result = append(result, j)
 	}
 	return result, rows.Err()
 }
@@ -93,23 +135,29 @@ func (s *SQLiteStore) UpsertDLQJob(jobID, deadAt, deadReason, failReason string,
 	return err
 }
 
-// ListDLQJobs returns all DLQ jobs as raw JSON.
-func (s *SQLiteStore) ListDLQJobs() ([]map[string]any, error) {
-	rows, err := s.db.Query(`SELECT raw_json FROM dlq_jobs ORDER BY dead_at DESC`)
+// ListDLQJobs returns all DLQ jobs, typed.
+func (s *SQLiteStore) ListDLQJobs() ([]DLQJob, error) {
+	rows, err := s.db.Query(
+		`SELECT job_id, dead_at, dead_reason, fail_reason, fail_count,
+		        replayable, created_at, raw_json
+		 FROM dlq_jobs ORDER BY dead_at DESC`,
+	)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var result []map[string]any
+	var result []DLQJob
 	for rows.Next() {
-		var raw string
-		if err := rows.Scan(&raw); err != nil {
+		var j DLQJob
+		var replayInt int
+		if err := rows.Scan(
+			&j.JobID, &j.DeadAt, &j.DeadReason, &j.FailReason, &j.FailCount,
+			&replayInt, &j.CreatedAt, &j.RawJSON,
+		); err != nil {
 			continue
 		}
-		var m map[string]any
-		if err := json.Unmarshal([]byte(raw), &m); err == nil {
-			result = append(result, m)
-		}
+		j.Replayable = replayInt == 1
+		result = append(result, j)
 	}
 	return result, rows.Err()
 }
@@ -147,29 +195,27 @@ func (s *SQLiteStore) InsertJobEvent(timestamp, jobID, eventType, rawJSON string
 	return err
 }
 
-// ListJobEvents returns recent events for a job.
-func (s *SQLiteStore) ListJobEvents(jobID string, limit int) ([]map[string]any, error) {
+// ListJobEvents returns recent events for a job, typed.
+func (s *SQLiteStore) ListJobEvents(jobID string, limit int) ([]JobEvent, error) {
 	if limit <= 0 {
 		limit = 100
 	}
 	rows, err := s.db.Query(
-		`SELECT raw_json FROM job_events WHERE job_id=? ORDER BY timestamp DESC LIMIT ?`,
+		`SELECT timestamp, job_id, event, raw_json
+		 FROM job_events WHERE job_id=? ORDER BY timestamp DESC LIMIT ?`,
 		jobID, limit,
 	)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var result []map[string]any
+	var result []JobEvent
 	for rows.Next() {
-		var raw string
-		if err := rows.Scan(&raw); err != nil {
+		var e JobEvent
+		if err := rows.Scan(&e.Timestamp, &e.JobID, &e.Event, &e.RawJSON); err != nil {
 			continue
 		}
-		var m map[string]any
-		if err := json.Unmarshal([]byte(raw), &m); err == nil {
-			result = append(result, m)
-		}
+		result = append(result, e)
 	}
 	return result, rows.Err()
 }

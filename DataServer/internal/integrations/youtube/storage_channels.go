@@ -28,7 +28,7 @@ func (s *Storage) channelURLExistsInGroup(gid int64, url string) (bool, error) {
 		if gErr != nil || ch == nil {
 			continue
 		}
-		if asStringField(ch, "channel_url") == url {
+		if ch != nil && ch.ChannelURL == url {
 			return true, nil
 		}
 	}
@@ -215,15 +215,15 @@ func (s *Storage) UpdateChannelMetadata(groupName, channelID, title, name, thumb
 	if curErr != nil || cur == nil {
 		return ErrChannelNotFound
 	}
-	curTitle := asStringField(cur, "title")
-	curName := asStringField(cur, "display_name")
-	curThumb := asStringField(cur, "thumbnail_url")
-	curNotes := asStringField(cur, "notes")
-	curLang := asStringField(cur, "language")
-	curURL := asStringField(cur, "channel_url")
-	curView := asInt64Field(cur, "view_count")
-	curSub := asInt64Field(cur, "subscriber_count")
-	curAdded := asStringField(cur, "added_at")
+	curTitle := cur.Title
+	curName := cur.DisplayName
+	curThumb := cur.ThumbnailURL
+	curNotes := cur.Notes
+	curLang := cur.Language
+	curURL := cur.ChannelURL
+	curView := cur.ViewCount
+	curSub := cur.SubscriberCount
+	curAdded := cur.AddedAt
 	now := time.Now().UTC().Format(time.RFC3339)
 	if title != "" {
 		curTitle = title
@@ -287,12 +287,11 @@ func (s *Storage) GetAllChannels() []Channel {
 	seen := make(map[string]bool)
 	var channels []Channel
 	for _, m := range allGroups {
-		chID, _ := m["channel_id"].(string)
-		if chID == "" || seen[chID] {
+		if m.ChannelID == "" || seen[m.ChannelID] {
 			continue
 		}
-		seen[chID] = true
-		ch, gErr := s.store.GetYouTubeChannel(chID)
+		seen[m.ChannelID] = true
+		ch, gErr := s.store.GetYouTubeChannel(m.ChannelID)
 		if gErr != nil || ch == nil {
 			continue
 		}
@@ -325,9 +324,8 @@ func (s *Storage) GetGroupChannels(groupName string) ([]string, error) {
 		if gErr != nil || ch == nil {
 			continue
 		}
-		u := asStringField(ch, "channel_url")
-		if u != "" {
-			urls = append(urls, u)
+		if ch != nil && ch.ChannelURL != "" {
+			urls = append(urls, ch.ChannelURL)
 		}
 	}
 	return urls, nil

@@ -1,10 +1,10 @@
-// Package contract_test verifica che le strutture Go corrispondano esattamente
-// alle controparti C++ in RemoteCodex/native/video-engine-cpp/include/video_contract.hpp.
+// Package contract_test verifies that the Go structures match exactly
+// their C++ counterparts in RemoteCodex/native/video-engine-cpp/include/video_contract.hpp.
 //
-// I test marshallano ogni struct Go in JSON e verificano che:
-//  1. Tutti i field name JSON corrispondano ai field name C++ (snake_case)
-//  2. Il round-trip JSON (marshal → unmarshal) sia fedele
-//  3. Non ci siano field in eccesso o in difetto
+// Tests marshal each Go struct to JSON and verify that:
+//  1. All JSON field names match the C++ field names (snake_case)
+//  2. The JSON round-trip (marshal → unmarshal) is faithful
+//  3. There are no missing or extra fields
 package contract
 
 import (
@@ -31,11 +31,11 @@ var clipAssetFields = map[string]bool{
 	"kind":             true,
 }
 
-// sceneVideoRequestCppFields elenca i JSON key di VideoEngineRequest che corrispondono
-// ESATTAMENTE ai field di C++ video::SceneVideoRequest.
-// Due differenze note NON sono incluse qui (gestite in test separati):
+// sceneVideoRequestCppFields lists the VideoEngineRequest JSON keys that correspond
+// EXACTLY to C++ video::SceneVideoRequest fields.
+// Two known differences are NOT included here (handled in separate tests):
 //   - clip_segments:      Go []ClipRequest  ↔  C++ std::string clip_segments_json
-//   - scene_image_paths:  Go-only field, non presente in SceneVideoRequest C++
+//   - scene_image_paths:  Go-only field, not present in C++ SceneVideoRequest
 var sceneVideoRequestFields = map[string]bool{
 	"job_id":                 true,
 	"video_name":             true,
@@ -76,17 +76,17 @@ func assertKeysMatch(t *testing.T, v interface{}, expected map[string]bool, type
 
 	for k := range expected {
 		if !keys[k] {
-			t.Errorf("%s JSON è m Missante il field C++: %q", typeName, k)
+			t.Errorf("%s JSON is missing C++ field: %q", typeName, k)
 		}
 	}
 	for k := range keys {
 		if !expected[k] {
-			t.Errorf("%s JSON ha un field extra non presente in C++: %q", typeName, k)
+			t.Errorf("%s JSON has an extra field not present in C++: %q", typeName, k)
 		}
 	}
 	if t.Failed() {
 		data, _ := json.MarshalIndent(v, "", "  ")
-		t.Logf("JSON attuale:\n%s", string(data))
+		t.Logf("Actual JSON:\n%s", string(data))
 	}
 }
 
@@ -185,9 +185,9 @@ func TestClipRequest_JSONRoundTrip(t *testing.T) {
 // ──────────────────────────────────────────────
 
 func TestVideoEngineRequest_MatchesSceneVideoRequest(t *testing.T) {
-	// NOTA: ClipSegments e SceneImagePaths sono volutamente omessi perché
-	// non hanno corrispettivo diretto in C++ SceneVideoRequest.
-	// Vedi TestVideoEngineRequest_KnownDifferences per i dettagli.
+	// NOTE: ClipSegments and SceneImagePaths are intentionally omitted because
+	// they have no direct counterpart in C++ SceneVideoRequest.
+	// See TestVideoEngineRequest_KnownDifferences for details.
 	v := VideoEngineRequest{
 		JobID:          "job_123",
 		VideoName:      "My Video",
@@ -225,9 +225,9 @@ func TestVideoEngineRequest_JSONRoundTrip(t *testing.T) {
 // ──────────────────────────────────────────────
 
 func TestVideoEngineRequest_KnownDifferences(t *testing.T) {
-	// Differenza 1: clip_segments vs clip_segments_json
-	// Go serializza i clip segments come array tipizzato:       "clip_segments": [{...}]
-	// C++ li riceve come stringa JSON pre-serializzata:        "clip_segments_json": "[{...}]"
+	// Difference 1: clip_segments vs clip_segments_json
+	// Go serializes clip segments as a typed array:       "clip_segments": [{...}]
+	// C++ receives them as a pre-serialized JSON string:  "clip_segments_json": "[{...}]"
 	v := VideoEngineRequest{
 		JobID:      "diff_test",
 		VideoName:  "Diff",
@@ -241,31 +241,31 @@ func TestVideoEngineRequest_KnownDifferences(t *testing.T) {
 	keys := jsonKeys(t, v)
 
 	if !keys["clip_segments"] {
-		t.Error("clip_segments dovrebbe essere presente (popolato con ClipSegments)")
+		t.Error("clip_segments should be present (populated with ClipSegments)")
 	} else {
-		t.Logf("OK — Go serializza clip_segments come array JSON")
-		t.Logf("NOTA: C++ riceve questo dato come stringa JSON in clip_segments_json — " +
-			"la conversione avviene nel worker-agent-go prima di inviarlo al C++ engine")
+		t.Logf("OK — Go serializes clip_segments as a JSON array")
+		t.Logf("NOTE: C++ receives this data as a JSON string in clip_segments_json — " +
+			"the conversion happens in worker-agent-go before sending it to the C++ engine")
 	}
 	if keys["clip_segments_json"] {
-		t.Log("NOTA: clip_segments_json NON è un JSON key Go — è solo il nome del field C++")
+		t.Log("NOTE: clip_segments_json is NOT a Go JSON key — it's only the C++ field name")
 	}
 
-	// Differenza 2: scene_image_paths è Go-only
+	// Difference 2: scene_image_paths is Go-only
 	v.SceneImagePaths = []string{"https://example.com/s1.jpg"}
 	keys2 := jsonKeys(t, v)
 	if !keys2["scene_image_paths"] {
-		t.Error("scene_image_paths dovrebbe essere presente (popolato)")
+		t.Error("scene_image_paths should be present (populated)")
 	} else {
-		t.Logf("OK — scene_image_paths è un field aggiuntivo Go")
-		t.Logf("NOTA: Non presente in SceneVideoRequest C++ — viene parsato separatamente")
+		t.Logf("OK — scene_image_paths is a Go-only extra field")
+		t.Logf("NOTE: Not present in C++ SceneVideoRequest — it is parsed separately")
 	}
 
-	// Verifica che scenes_json sia presente quando impostato
+	// Verify that scenes_json is present when set
 	v.ScenesJSON = `[{"text":"S1"}]`
 	keys3 := jsonKeys(t, v)
 	if !keys3["scenes_json"] {
-		t.Error("scenes_json dovrebbe essere presente quando impostato")
+		t.Error("scenes_json should be present when set")
 	}
 }
 
@@ -506,7 +506,7 @@ func TestUnmarshalClips(t *testing.T) {
 }
 
 // ──────────────────────────────────────────────
-// ParseClipsJSON (simmetrica a ParseScenes)
+// ParseClipsJSON (symmetric with ParseScenes)
 // ──────────────────────────────────────────────
 
 func TestParseClipsJSON(t *testing.T) {

@@ -1,5 +1,5 @@
-// Package media fornisce utility per il rilevamento di metadati multimediali
-// (durata audio/video) e la risoluzione di URL per ffprobe/ffmpeg.
+// Package media provides utilities for detecting multimedia metadata
+// (audio/video duration) and URL resolution for ffprobe/ffmpeg.
 package media
 
 import (
@@ -8,9 +8,9 @@ import (
 	"strings"
 )
 
-// DetectAudioDurationSecs rileva la durata di un file audio tramite ffprobe.
-// Supporta URL diretti e Google Drive (risolti automaticamente).
-// Restituisce 0 se il rilevamento fallisce.
+// DetectAudioDurationSecs detects the duration of an audio file via ffprobe.
+// Supports direct URLs and Google Drive (resolved automatically).
+// Returns 0 if detection fails.
 func DetectAudioDurationSecs(url string) float64 {
 	if url == "" {
 		return 0
@@ -37,8 +37,8 @@ func DetectAudioDurationSecs(url string) float64 {
 	return duration
 }
 
-// ResolveAudioURL converte URL Google Drive in formato di download diretto
-// per compatibilità con ffprobe. Lascia invariati gli altri URL.
+// ResolveAudioURL converts Google Drive URLs into direct download format
+// for ffprobe compatibility. Leaves other URLs unchanged.
 func ResolveAudioURL(url string) string {
 	const drivePrefix = "https://drive.google.com/file/d/"
 	if strings.HasPrefix(url, drivePrefix) {

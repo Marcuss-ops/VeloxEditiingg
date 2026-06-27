@@ -177,6 +177,22 @@ func (s *SQLiteStore) ListAnsibleHosts() ([]AnsibleHostFields, error) {
 // Structured ansible_runs methods
 // ============================================================
 
+// AnsibleRun is the typed representation of an ansible_runs row.
+type AnsibleRun struct {
+	RunID           string
+	Action          string
+	Playbook        string
+	Status          string
+	StartedAt       int64
+	EndedAt         int64
+	ReturnCode      int
+	Commands        []string
+	Output          string
+	Preamble        string
+	MasterURL       string
+	MasterURLSource string
+}
+
 // UpsertAnsibleRun inserts or updates a run record.
 func (s *SQLiteStore) UpsertAnsibleRun(runID, action, playbook, status string, startedAt, endedAt int64, returnCode int, commands, output, preamble, masterURL, masterURLSource string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
@@ -194,27 +210,20 @@ func (s *SQLiteStore) UpsertAnsibleRun(runID, action, playbook, status string, s
 	return err
 }
 
-// GetAnsibleRun returns a run record.
-func (s *SQLiteStore) GetAnsibleRun(runID string) (map[string]interface{}, error) {
+// GetAnsibleRun returns a typed run record.
+func (s *SQLiteStore) GetAnsibleRun(runID string) (*AnsibleRun, error) {
 	row := s.db.QueryRow(`SELECT run_id, action, playbook, status, started_at, ended_at, return_code, commands_json, output, preamble, master_url, master_url_source FROM ansible_runs WHERE run_id=?`, runID)
-	var id, action, playbook, status, commandsJSON, output, preamble, masterURL, masterURLSource string
-	var startedAt, endedAt int64
-	var returnCode int
-	if err := row.Scan(&id, &action, &playbook, &status, &startedAt, &endedAt, &returnCode, &commandsJSON, &output, &preamble, &masterURL, &masterURLSource); err != nil {
+	var r AnsibleRun
+	var commandsJSON string
+	if err := row.Scan(&r.RunID, &r.Action, &r.Playbook, &r.Status, &r.StartedAt, &r.EndedAt, &r.ReturnCode, &commandsJSON, &r.Output, &r.Preamble, &r.MasterURL, &r.MasterURLSource); err != nil {
 		return nil, err
 	}
-	var commands []string
-	json.Unmarshal([]byte(commandsJSON), &commands)
-	return map[string]interface{}{
-		"run_id": id, "action": action, "playbook": playbook, "status": status,
-		"started_at": startedAt, "ended_at": endedAt, "return_code": returnCode,
-		"commands": commands, "output": output, "preamble": preamble,
-		"master_url": masterURL, "master_url_source": masterURLSource,
-	}, nil
+	json.Unmarshal([]byte(commandsJSON), &r.Commands)
+	return &r, nil
 }
 
-// ListAnsibleRuns returns all run records ordered by started_at descending.
-func (s *SQLiteStore) ListAnsibleRuns(limit int) ([]map[string]interface{}, error) {
+// ListAnsibleRuns returns all typed run records ordered by started_at descending.
+func (s *SQLiteStore) ListAnsibleRuns(limit int) ([]AnsibleRun, error) {
 	if limit <= 0 {
 		limit = 200
 	}
@@ -224,22 +233,15 @@ func (s *SQLiteStore) ListAnsibleRuns(limit int) ([]map[string]interface{}, erro
 	}
 	defer rows.Close()
 
-	var result []map[string]interface{}
+	var result []AnsibleRun
 	for rows.Next() {
-		var id, action, playbook, status, commandsJSON, output, preamble, masterURL, masterURLSource string
-		var startedAt, endedAt int64
-		var returnCode int
-		if err := rows.Scan(&id, &action, &playbook, &status, &startedAt, &endedAt, &returnCode, &commandsJSON, &output, &preamble, &masterURL, &masterURLSource); err != nil {
+		var r AnsibleRun
+		var commandsJSON string
+		if err := rows.Scan(&r.RunID, &r.Action, &r.Playbook, &r.Status, &r.StartedAt, &r.EndedAt, &r.ReturnCode, &commandsJSON, &r.Output, &r.Preamble, &r.MasterURL, &r.MasterURLSource); err != nil {
 			continue
 		}
-		var commands []string
-		json.Unmarshal([]byte(commandsJSON), &commands)
-		result = append(result, map[string]interface{}{
-			"run_id": id, "action": action, "playbook": playbook, "status": status,
-			"started_at": startedAt, "ended_at": endedAt, "return_code": returnCode,
-			"commands": commands, "output": output, "preamble": preamble,
-			"master_url": masterURL, "master_url_source": masterURLSource,
-		})
+		json.Unmarshal([]byte(commandsJSON), &r.Commands)
+		result = append(result, r)
 	}
 	return result, rows.Err()
 }

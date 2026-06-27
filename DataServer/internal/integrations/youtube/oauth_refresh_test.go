@@ -21,16 +21,16 @@ type fakeYTStore struct {
 	YouTubeStore
 
 	upsertCalls []fakeUpsert
-	getReturns  map[string]map[string]interface{}
+	getReturns  map[string]*youtubetypes.YouTubeOAuthToken
 	getErr      error
 	getCalled   int
 
 	// Boot-hydrator inputs/outputs used by TestLoadOAuthChannelsFromSQLiteHydratesCache.
-	listReturns    []map[string]interface{}
+	listReturns    []youtubetypes.YouTubeOAuthToken
 	listErr        error
 	orphanReturns  []youtubetypes.YouTubeTokenOrphan
 	orphanErr      error
-	channelRows    []map[string]interface{}
+	channelRows    []youtubetypes.YouTubeChannel
 	channelRowsErr error
 }
 
@@ -53,7 +53,7 @@ func (f *fakeYTStore) UpsertYouTubeOAuthToken(channelID string, accessEnc, refre
 	return nil
 }
 
-func (f *fakeYTStore) GetYouTubeOAuthToken(channelID string) (map[string]interface{}, error) {
+func (f *fakeYTStore) GetYouTubeOAuthToken(channelID string) (*youtubetypes.YouTubeOAuthToken, error) {
 	f.getCalled++
 	if row, ok := f.getReturns[channelID]; ok {
 		return row, f.getErr
@@ -86,14 +86,14 @@ func TestYouTubeRefreshPersistsNewAccessTokenToSQLite(t *testing.T) {
 	}
 
 	fake := &fakeYTStore{
-		getReturns: map[string]map[string]interface{}{
+		getReturns: map[string]*youtubetypes.YouTubeOAuthToken{
 			channelID: {
-				"channel_id":              channelID,
-				"access_token_encrypted":  oldAccessEnc,
-				"refresh_token_encrypted": oldRefreshEnc,
-				"token_type":              "Bearer",
-				"expiry":                  oldExpiry.Format(time.RFC3339),
-				"key_version":             int64(1),
+				ChannelID:            channelID,
+				AccessTokenEncrypted: oldAccessEnc,
+				RefreshTokenEncrypted: oldRefreshEnc,
+				TokenType:            "Bearer",
+				Expiry:               oldExpiry.Format(time.RFC3339),
+				KeyVersion:           1,
 			},
 		},
 	}
@@ -250,14 +250,14 @@ func TestYouTubeRefreshPreservesNullRefreshToken(t *testing.T) {
 	// Seed fake store with refresh_token_encrypted ABSENT
 	// (mimicking a SQL NULL row when the store scan drops NULL keys).
 	fake := &fakeYTStore{
-		getReturns: map[string]map[string]interface{}{
+		getReturns: map[string]*youtubetypes.YouTubeOAuthToken{
 			channelID: {
-				"channel_id":             channelID,
-				"access_token_encrypted": oldAccessEnc,
-				// NOTE: no refresh_token_encrypted key
-				"token_type":  "Bearer",
-				"expiry":      oldExpiry.Format(time.RFC3339),
-				"key_version": int64(1),
+				ChannelID:            channelID,
+				AccessTokenEncrypted: oldAccessEnc,
+				// NOTE: no RefreshTokenEncrypted
+				TokenType:  "Bearer",
+				Expiry:     oldExpiry.Format(time.RFC3339),
+				KeyVersion: 1,
 			},
 		},
 	}
@@ -301,7 +301,7 @@ var _ = errors.New
 
 // fakeYTStore extensions for tests that need them.
 
-func (f *fakeYTStore) ListActiveYouTubeOAuthTokens() ([]map[string]interface{}, error) {
+func (f *fakeYTStore) ListActiveYouTubeOAuthTokens() ([]youtubetypes.YouTubeOAuthToken, error) {
 	if f.listReturns == nil {
 		return nil, nil
 	}
@@ -315,7 +315,7 @@ func (f *fakeYTStore) AuditYouTubeOAuthTokenOrphans() ([]youtubetypes.YouTubeTok
 	return f.orphanReturns, f.orphanErr
 }
 
-func (f *fakeYTStore) ListYouTubeChannels() ([]map[string]interface{}, error) {
+func (f *fakeYTStore) ListYouTubeChannels() ([]youtubetypes.YouTubeChannel, error) {
 	if f.channelRows == nil {
 		return nil, nil
 	}

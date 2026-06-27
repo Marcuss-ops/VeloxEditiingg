@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"time"
+
+	"velox-server/internal/store/youtubetypes"
 )
 
 // ============================================================
@@ -58,63 +60,33 @@ func (s *SQLiteStore) UpsertYouTubeChannel(channelID, title, displayName, channe
 	return err
 }
 
-// ListYouTubeChannels returns all canonical channels.
-func (s *SQLiteStore) ListYouTubeChannels() ([]map[string]interface{}, error) {
+// ListYouTubeChannels returns all typed canonical channels.
+func (s *SQLiteStore) ListYouTubeChannels() ([]youtubetypes.YouTubeChannel, error) {
 	rows, err := s.db.Query(`SELECT channel_id, title, display_name, channel_url, thumbnail_url, language, notes, view_count, subscriber_count, added_at, last_sync_at, created_at, updated_at FROM youtube_channels ORDER BY title`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	var result []map[string]interface{}
+	var result []youtubetypes.YouTubeChannel
 	for rows.Next() {
-		var channelID, title, displayName, channelURL, thumbnailURL, language, notes, addedAt, lastSyncAt, createdAt, updatedAt string
-		var viewCount, subCount int64
-		if err := rows.Scan(&channelID, &title, &displayName, &channelURL, &thumbnailURL, &language, &notes, &viewCount, &subCount, &addedAt, &lastSyncAt, &createdAt, &updatedAt); err != nil {
+		var ch youtubetypes.YouTubeChannel
+		if err := rows.Scan(&ch.ChannelID, &ch.Title, &ch.DisplayName, &ch.ChannelURL, &ch.ThumbnailURL, &ch.Language, &ch.Notes, &ch.ViewCount, &ch.SubscriberCount, &ch.AddedAt, &ch.LastSyncAt, &ch.CreatedAt, &ch.UpdatedAt); err != nil {
 			continue
 		}
-		result = append(result, map[string]interface{}{
-			"channel_id":       channelID,
-			"title":            title,
-			"display_name":     displayName,
-			"channel_url":      channelURL,
-			"thumbnail_url":    thumbnailURL,
-			"language":         language,
-			"notes":            notes,
-			"view_count":       viewCount,
-			"subscriber_count": subCount,
-			"added_at":         addedAt,
-			"last_sync_at":     lastSyncAt,
-			"created_at":       createdAt,
-			"updated_at":       updatedAt,
-		})
+		result = append(result, ch)
 	}
 	return result, rows.Err()
 }
 
-// GetYouTubeChannel returns a single canonical channel.
-func (s *SQLiteStore) GetYouTubeChannel(channelID string) (map[string]interface{}, error) {
+// GetYouTubeChannel returns a typed canonical channel.
+func (s *SQLiteStore) GetYouTubeChannel(channelID string) (*youtubetypes.YouTubeChannel, error) {
 	row := s.db.QueryRow(`SELECT channel_id, title, display_name, channel_url, thumbnail_url, language, notes, view_count, subscriber_count, added_at, last_sync_at, created_at, updated_at FROM youtube_channels WHERE channel_id=?`, channelID)
-	var cid, title, displayName, channelURL, thumbnailURL, language, notes, addedAt, lastSyncAt, createdAt, updatedAt string
-	var viewCount, subCount int64
-	if err := row.Scan(&cid, &title, &displayName, &channelURL, &thumbnailURL, &language, &notes, &viewCount, &subCount, &addedAt, &lastSyncAt, &createdAt, &updatedAt); err != nil {
+	var ch youtubetypes.YouTubeChannel
+	if err := row.Scan(&ch.ChannelID, &ch.Title, &ch.DisplayName, &ch.ChannelURL, &ch.ThumbnailURL, &ch.Language, &ch.Notes, &ch.ViewCount, &ch.SubscriberCount, &ch.AddedAt, &ch.LastSyncAt, &ch.CreatedAt, &ch.UpdatedAt); err != nil {
 		return nil, err
 	}
-	return map[string]interface{}{
-		"channel_id":       cid,
-		"title":            title,
-		"display_name":     displayName,
-		"channel_url":      channelURL,
-		"thumbnail_url":    thumbnailURL,
-		"language":         language,
-		"notes":            notes,
-		"view_count":       viewCount,
-		"subscriber_count": subCount,
-		"added_at":         addedAt,
-		"last_sync_at":     lastSyncAt,
-		"created_at":       createdAt,
-		"updated_at":       updatedAt,
-	}, nil
+	return &ch, nil
 }
 
 // DeleteYouTubeChannel removes a canonical channel.

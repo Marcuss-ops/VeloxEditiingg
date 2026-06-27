@@ -119,9 +119,12 @@ func New(cfg *config.WorkerConfig, version string, opts ...Option) (*Worker, err
 	log := logger.New(logLevel, logOut)
 	log.SetPrefix(fmt.Sprintf("[%s]", cfg.WorkerID))
 
-	// Detect optimal concurrency from hardware
+	// Use the configured MaxActiveJobs when explicitly set (>0).
+	// Falls back to hardware-detected concurrency when the operator
+	// has not set a value (MaxActiveJobs=0 in config). The >0 guard
+	// replaces the previous >1 which silently ignored MaxActiveJobs=1.
 	detectedConcurrency := detectMaxParallelJobs()
-	if cfg.MaxActiveJobs > 1 {
+	if cfg.MaxActiveJobs > 0 {
 		detectedConcurrency = cfg.MaxActiveJobs
 	}
 	log.Info("[CONCURRENCY] Detected %d CPUs, using %d max parallel jobs", runtime.NumCPU(), detectedConcurrency)

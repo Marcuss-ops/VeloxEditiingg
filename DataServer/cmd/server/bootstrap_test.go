@@ -12,7 +12,7 @@ import (
 )
 
 // newTestConfig returns a minimal config pointing at an in-memory SQLite DB
-// in a temporary directory, suitable for unit-testing buildServerDeps.
+// in a temporary directory, suitable for unit-testing buildTestDeps.
 // AllowedWorkerIDs is seeded with a single test ID so the production
 // allowlist invariant (non-empty, no wildcard, unique) is satisfied
 // without producing a real-world worker ID in fixtures.
@@ -46,12 +46,12 @@ func TestBuildServerDeps_SingletonCommandManager(t *testing.T) {
 	t.Parallel()
 	cfg := newTestConfig(t)
 
-	deps, err := buildServerDeps(cfg)
+	deps, err := buildTestDeps(cfg)
 	if err != nil {
-		t.Fatalf("buildServerDeps: %v", err)
+		t.Fatalf("buildTestDeps: %v", err)
 	}
 	if deps.cmdMgr == nil {
-		t.Fatal("deps.cmdMgr must be non-nil after buildServerDeps (PR15.3 invariant)")
+		t.Fatal("deps.cmdMgr must be non-nil after buildTestDeps (PR15.3 invariant)")
 	}
 	if deps.workerUpdateHandler == nil {
 		t.Fatal("workerUpdateHandler must be non-nil to verify singleton")
@@ -67,14 +67,14 @@ func TestBuildServerDeps_SingletonCommandManager(t *testing.T) {
 }
 
 // TestBuildServerDeps_CreatesLifecycleService verifies that
-// buildServerDeps creates a LifecycleService instance.
+// buildTestDeps creates a LifecycleService instance.
 func TestBuildServerDeps_CreatesLifecycleService(t *testing.T) {
 	t.Parallel()
 	cfg := newTestConfig(t)
 
-	deps, err := buildServerDeps(cfg)
+	deps, err := buildTestDeps(cfg)
 	if err != nil {
-		t.Fatalf("buildServerDeps: %v", err)
+		t.Fatalf("buildTestDeps: %v", err)
 	}
 	if deps == nil {
 		t.Fatal("expected non-nil serverDeps")
@@ -91,14 +91,14 @@ func TestBuildServerDeps_CreatesLifecycleService(t *testing.T) {
 }
 
 // TestBuildServerDeps_JobsRepoIsFunctional verifies that the jobs.Repository
-// created by buildServerDeps is independently functional.
+// created by buildTestDeps is independently functional.
 func TestBuildServerDeps_JobsRepoIsFunctional(t *testing.T) {
 	t.Parallel()
 	cfg := newTestConfig(t)
 
-	deps, err := buildServerDeps(cfg)
+	deps, err := buildTestDeps(cfg)
 	if err != nil {
-		t.Fatalf("buildServerDeps: %v", err)
+		t.Fatalf("buildTestDeps: %v", err)
 	}
 
 	// PR #8: Create removed from jobs.Writer. The canonical creation path
@@ -114,9 +114,9 @@ func TestClaimAndCompleteFlow(t *testing.T) {
 	t.Parallel()
 	cfg := newTestConfig(t)
 
-	deps, err := buildServerDeps(cfg)
+	deps, err := buildTestDeps(cfg)
 	if err != nil {
-		t.Fatalf("buildServerDeps: %v", err)
+		t.Fatalf("buildTestDeps: %v", err)
 	}
 
 	ctx := context.Background()
@@ -141,29 +141,23 @@ func TestClaimAndCompleteFlow(t *testing.T) {
 	if err != nil || sj == nil {
 		t.Fatalf("GetJob after claim: %v", err)
 	}
-	if err := repo.StartJob(ctx, store.StartJobParams{
+	if err := repo.PR3Start(ctx, store.StartCommand{
 		JobID:            jobID,
 		WorkerID:         "worker-1",
 		LeaseID:          claimResult.LeaseID,
 		Attempt:          claimResult.Attempt,
 		ExpectedRevision: sj.Revision,
 	}); err != nil {
-		t.Fatalf("StartJob: %v", err)
+		t.Fatalf("PR3Start: %v", err)
 	}
 
 	sj, err = repo.GetJob(ctx, jobID)
 	if err != nil || sj == nil {
-		t.Fatalf("GetJob after StartJob: %v", err)
+		t.Fatalf("GetJob after PR3Start: %v", err)
 	}
-	if err := repo.CompleteJob(ctx, store.CompleteJobParams{
-		JobID:            jobID,
-		WorkerID:         "worker-1",
-		LeaseID:          claimResult.LeaseID,
-		Attempt:          claimResult.Attempt,
-		ExpectedRevision: sj.Revision,
-		FinalStatus:      store.JobStatusSucceeded,
-	}); err != nil {
-		t.Fatalf("CompleteJob: %v", err)
+	// PR 3.5-a: CompleteJob removed; use SetStatus for RUNNING → SUCCEEDED.
+	if err := repo.SetStatus(ctx, jobID, store.JobStatusRunning, store.JobStatusSucceeded); err != nil {
+		t.Fatalf("SetStatus → SUCCEEDED: %v", err)
 	}
 
 	got, err := repo.GetJob(ctx, jobID)
@@ -182,9 +176,9 @@ func TestBuildServerDeps_RestartDoesNotLoseJob(t *testing.T) {
 	t.Parallel()
 	cfg := newTestConfig(t)
 
-	deps1, err := buildServerDeps(cfg)
+	deps1, err := buildTestDeps(cfg)
 	if err != nil {
-		t.Fatalf("buildServerDeps 1: %v", err)
+		t.Fatalf("buildTestDeps 1: %v", err)
 	}
 
 	ctx := context.Background()
@@ -205,9 +199,9 @@ func TestBuildServerDeps_RestartDoesNotLoseJob(t *testing.T) {
 		}
 	}
 
-	deps2, err := buildServerDeps(cfg)
+	deps2, err := buildTestDeps(cfg)
 	if err != nil {
-		t.Fatalf("buildServerDeps 2: %v", err)
+		t.Fatalf("buildTestDeps 2: %v", err)
 	}
 
 	repo2 := deps2.lifecycleSvc.Jobs().(*store.SQLiteJobRepository)
@@ -225,14 +219,14 @@ func TestBuildServerDeps_RestartDoesNotLoseJob(t *testing.T) {
 }
 
 // TestBuildServerDeps_ServerRequiresValidRepository verifies that
-// buildServerDeps creates a valid LifecycleService.
+// buildTestDeps creates a valid LifecycleService.
 func TestBuildServerDeps_ServerRequiresValidRepository(t *testing.T) {
 	t.Parallel()
 
 	cfg := newTestConfig(t)
-	deps, err := buildServerDeps(cfg)
+	deps, err := buildTestDeps(cfg)
 	if err != nil {
-		t.Fatalf("buildServerDeps with valid config should succeed, got: %v", err)
+		t.Fatalf("buildTestDeps with valid config should succeed, got: %v", err)
 	}
 	if deps.lifecycleSvc == nil {
 		t.Fatal("expected non-nil lifecycleSvc")

@@ -186,13 +186,57 @@ func (w *Worker) submitTaskResult(ctx context.Context, job *api.Job, taskID, att
 		if len(report.Outputs) > 0 {
 			artifacts := make([]map[string]interface{}, 0, len(report.Outputs))
 			for _, ref := range report.Outputs {
+				// fix/artifact-format-alignment: master expects artifact_id,
+				// artifact_type, artifact_path, size_bytes, sha256 — not uri/hash/type.
 				artifacts = append(artifacts, map[string]interface{}{
-					"uri":  ref.URI,
-					"hash": ref.Hash,
-					"type": ref.Type,
+					"artifact_id":   ref.Hash,
+					"artifact_type": ref.Type,
+					"artifact_path": ref.URI,
+					"size_bytes":    int64(0),
+					"sha256":        ref.Hash,
 				})
 			}
 			resultPayload["output_artifacts"] = artifacts
+		}
+		// fix/execution-metrics-emit: populate typed execution_metrics from the
+		// report so the master's ingestion service persists them alongside the
+		// atomic Task+Attempt close.
+		if report.TypedMetrics != nil {
+			m := report.TypedMetrics
+			resultPayload["execution_metrics"] = map[string]interface{}{
+				"input_bytes":              m.InputBytes,
+				"output_bytes":             m.OutputBytes,
+				"bytes_from_drive":         m.BytesFromDrive,
+				"bytes_from_blobstore":     m.BytesFromBlobstore,
+				"bytes_from_local_cache":   m.BytesFromLocalCache,
+				"cpu_time_ms":              m.CpuTimeMs,
+				"peak_rss_bytes":           m.PeakRssBytes,
+				"frames_decoded":           m.FramesDecoded,
+				"frames_composited":        m.FramesComposited,
+				"frames_encoded":           m.FramesEncoded,
+				"ffmpeg_speed_ratio":       m.FfmpegSpeedRatio,
+				"encode_passes":            m.EncodePasses,
+				"final_concat_stream_copy": m.FinalConcatStreamCopy,
+				"concat_mode":              m.ConcatMode,
+				"cpu_price_per_second":     m.CpuPricePerSecond,
+				"storage_price_per_gb":     m.StoragePricePerGb,
+				"network_price_per_gb":     m.NetworkPricePerGb,
+			}
+		}
+		// fix/phase-markers-emit: populate canonical phase_markers for the
+		// master's observability aggregation (scorecard v1).
+		if len(report.PhaseMarkers) > 0 {
+			markers := make([]map[string]interface{}, 0, len(report.PhaseMarkers))
+			for _, pm := range report.PhaseMarkers {
+				markers = append(markers, map[string]interface{}{
+					"name":         pm.Name,
+					"started_at":   pm.StartedAt.Format(time.RFC3339),
+					"completed_at": pm.CompletedAt.Format(time.RFC3339),
+					"status":       pm.Status,
+					"notes":        pm.Notes,
+				})
+			}
+			resultPayload["phase_markers"] = markers
 		}
 	}
 

@@ -63,6 +63,23 @@ func (w *Worker) Start(ctx context.Context) error {
 		// P0 reconnect fix: create a fresh transport each session attempt.
 		// After Close(), transports are not reusable (channels + sync.Once).
 		w.transport = w.newTransport()
+		if w.transport == nil {
+			w.connFailureCount++
+			w.logger.Warn("[CONNECT] Transport factory returned nil — backing off")
+			w.setConnState(ConnDisconnected)
+			telemetry.SetHealthRegistered(false)
+			jitter := time.Duration(rand.Float64() * float64(connectionRetryBackoff) * 0.3)
+			sleepDuration := connectionRetryBackoff + jitter
+			select {
+			case <-time.After(sleepDuration):
+				continue
+			case <-w.stopChan:
+				w.logger.Info("Worker stopping during transport-factory backoff")
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
 
 		w.setConnState(ConnConnecting)
 		w.connFailureCount = 0
@@ -376,7 +393,14 @@ func (w *Worker) receiveLoop(ctx context.Context, recvCh <-chan controltransport
 				w.activeJobsMu.RLock()
 				activeCount := len(w.activeJobs)
 				w.activeJobsMu.RUnlock()
-				if activeCount >= w.config.MaxActiveJobs {
+				// PR-bugfix: also count pendingTasks (offers accepted
+				// but waiting for TaskLeaseGranted). The worker must not
+				// accept more offers than MaxActiveJobs including tasks
+				// that will soon become active but haven't yet started.
+				w.pendingTasksMu.Lock()
+				pendingCount := len(w.pendingTasks)
+				w.pendingTasksMu.Unlock()
+				if activeCount+pendingCount >= w.config.MaxActiveJobs {
 					if err := w.sendTaskReject(ctx, taskID, "capacity_full"); err != nil {
 						w.logger.Warn("[RECEIVE] Failed to send TaskRejected (capacity): %v", err)
 					}
@@ -515,8 +539,9 @@ func (w *Worker) receiveLoop(ctx context.Context, recvCh <-chan controltransport
 						ackPayload,
 					)
 					ackCtx, ackCancel := context.WithTimeout(context.Background(), 30*time.Second)
-					defer ackCancel()
-					if ackErr := w.transport.Send(ackCtx, ackMsg); ackErr != nil {
+					ackErr := w.transport.Send(ackCtx, ackMsg)
+					ackCancel()
+					if ackErr != nil {
 						w.logger.Warn("[CONFIG] Failed to ack ConfigurationUpdate: %v", ackErr)
 					}
 				}

@@ -31,41 +31,31 @@ func (s *SQLiteStore) UpsertYouTubeOAuthToken(channelID string, accessTokenEnc, 
 	return err
 }
 
-func (s *SQLiteStore) GetYouTubeOAuthToken(channelID string) (map[string]interface{}, error) {
+// GetYouTubeOAuthToken returns a typed oauth token row, or (nil, nil) if missing.
+func (s *SQLiteStore) GetYouTubeOAuthToken(channelID string) (*youtubetypes.YouTubeOAuthToken, error) {
 	row := s.db.QueryRow(
 		`SELECT channel_id, access_token_encrypted, refresh_token_encrypted, token_type, expiry, scopes, key_version, revoked_at, created_at, updated_at
 		 FROM youtube_oauth_tokens WHERE channel_id = ?`,
 		channelID,
 	)
-	var cid, tokenType, scopes, expiry, createdAt, updatedAt string
-	var accessBlob, refreshBlob []byte
-	var keyVersion int64
+	var tok youtubetypes.YouTubeOAuthToken
 	var revokedAt sql.NullString
-	if err := row.Scan(&cid, &accessBlob, &refreshBlob, &tokenType, &expiry, &scopes, &keyVersion, &revokedAt, &createdAt, &updatedAt); err != nil {
+	if err := row.Scan(&tok.ChannelID, &tok.AccessTokenEncrypted, &tok.RefreshTokenEncrypted,
+		&tok.TokenType, &tok.Expiry, &tok.Scopes, &tok.KeyVersion, &revokedAt,
+		&tok.CreatedAt, &tok.UpdatedAt); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
 		}
 		return nil, err
 	}
-	revokedAtStr := ""
 	if revokedAt.Valid {
-		revokedAtStr = revokedAt.String
+		tok.RevokedAt = revokedAt.String
 	}
-	return map[string]interface{}{
-		"channel_id":              cid,
-		"access_token_encrypted":  accessBlob,
-		"refresh_token_encrypted": refreshBlob,
-		"token_type":              tokenType,
-		"expiry":                  expiry,
-		"scopes":                  scopes,
-		"key_version":             keyVersion,
-		"revoked_at":              revokedAtStr,
-		"created_at":              createdAt,
-		"updated_at":              updatedAt,
-	}, nil
+	return &tok, nil
 }
 
-func (s *SQLiteStore) ListActiveYouTubeOAuthTokens() ([]map[string]interface{}, error) {
+// ListActiveYouTubeOAuthTokens returns all typed non-revoked oauth token rows.
+func (s *SQLiteStore) ListActiveYouTubeOAuthTokens() ([]youtubetypes.YouTubeOAuthToken, error) {
 	rows, err := s.db.Query(
 		`SELECT channel_id, access_token_encrypted, refresh_token_encrypted, token_type, expiry, scopes, key_version, revoked_at, created_at, updated_at
 		 FROM youtube_oauth_tokens
@@ -76,31 +66,19 @@ func (s *SQLiteStore) ListActiveYouTubeOAuthTokens() ([]map[string]interface{}, 
 	}
 	defer rows.Close()
 
-	var result []map[string]interface{}
+	var result []youtubetypes.YouTubeOAuthToken
 	for rows.Next() {
-		var cid, tokenType, scopes, expiry, createdAt, updatedAt string
-		var accessBlob, refreshBlob []byte
-		var keyVersion int64
+		var tok youtubetypes.YouTubeOAuthToken
 		var revokedAt sql.NullString
-		if err := rows.Scan(&cid, &accessBlob, &refreshBlob, &tokenType, &expiry, &scopes, &keyVersion, &revokedAt, &createdAt, &updatedAt); err != nil {
+		if err := rows.Scan(&tok.ChannelID, &tok.AccessTokenEncrypted, &tok.RefreshTokenEncrypted,
+			&tok.TokenType, &tok.Expiry, &tok.Scopes, &tok.KeyVersion, &revokedAt,
+			&tok.CreatedAt, &tok.UpdatedAt); err != nil {
 			return nil, err
 		}
-		revokedAtStr := ""
 		if revokedAt.Valid {
-			revokedAtStr = revokedAt.String
+			tok.RevokedAt = revokedAt.String
 		}
-		result = append(result, map[string]interface{}{
-			"channel_id":              cid,
-			"access_token_encrypted":  accessBlob,
-			"refresh_token_encrypted": refreshBlob,
-			"token_type":              tokenType,
-			"expiry":                  expiry,
-			"scopes":                  scopes,
-			"key_version":             keyVersion,
-			"revoked_at":              revokedAtStr,
-			"created_at":              createdAt,
-			"updated_at":              updatedAt,
-		})
+		result = append(result, tok)
 	}
 	return result, rows.Err()
 }

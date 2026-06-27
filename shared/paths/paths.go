@@ -1,5 +1,5 @@
-// Package paths fornisce utility per la manipolazione di path, slug di nomi video
-// e normalizzazione di URL (in particolare Google Drive).
+// Package paths provides utilities for path manipulation, video name slugs,
+// and URL normalization (particularly Google Drive URLs).
 package paths
 
 import (
@@ -7,9 +7,9 @@ import (
 	"strings"
 )
 
-// SanitizeVideoName converte un nome video in uno slug safe per filesystem.
-// Mantiene solo lettere minuscole e numeri, sostituendo tutto il resto con underscore.
-// Esempio: "My Awesome Video! (2024)" → "my_awesome_video_2024"
+// SanitizeVideoName converts a video name into a filesystem-safe slug.
+// Keeps only lowercase letters and digits, replacing everything else with underscores.
+// Example: "My Awesome Video! (2024)" → "my_awesome_video_2024"
 func SanitizeVideoName(value string) string {
 	value = strings.ToLower(strings.TrimSpace(value))
 	if value == "" {
@@ -35,8 +35,8 @@ func SanitizeVideoName(value string) string {
 	return strings.Trim(b.String(), "_")
 }
 
-// SanitizeStrings trima e rimuove stringhe vuote da una slice.
-// Restituisce nil se non rimangono elementi validi.
+// SanitizeStrings trims and removes empty strings from a slice.
+// Returns nil if no valid elements remain.
 func SanitizeStrings(values []string) []string {
 	if len(values) == 0 {
 		return nil
@@ -53,9 +53,9 @@ func SanitizeStrings(values []string) []string {
 	return out
 }
 
-// DefaultOutputPath genera un path di output predefinito per un video.
-// Usa videosDir se specificato, altrimenti dataDir/generated_videos, altrimenti ./generated_videos.
-// Il nome file è {slug}.mp4 nella sottodirectory specificata.
+// DefaultOutputPath generates a default output path for a video.
+// Uses videosDir if specified, otherwise dataDir/generated_videos, otherwise ./generated_videos.
+// The filename is {slug}.mp4 in the specified subdirectory.
 func DefaultOutputPath(videosDir, dataDir, videoName, subdir string) string {
 	base := strings.TrimSpace(videosDir)
 	if base == "" {
@@ -75,16 +75,16 @@ func DefaultOutputPath(videosDir, dataDir, videoName, subdir string) string {
 	return filepath.Join(base, subdir, slug+".mp4")
 }
 
-// VideoNameFromPath estrae il nome base del video (senza estensione) da un path.
-// Esempio: "/output/videos/my_video.mp4" → "my_video"
+// VideoNameFromPath extracts the base video name (without extension) from a path.
+// Example: "/output/videos/my_video.mp4" → "my_video"
 func VideoNameFromPath(outputPath string) string {
 	base := filepath.Base(outputPath)
 	ext := filepath.Ext(base)
 	return strings.TrimSuffix(base, ext)
 }
 
-// SanitizeDriveFolderName converte un nome in un formato accettabile per cartelle Google Drive
-// (solo lowercase, numeri, trattini e underscore).
+// SanitizeDriveFolderName converts a name into an acceptable format for Google Drive folders
+// (lowercase, digits, dashes, and underscores only).
 func SanitizeDriveFolderName(raw string) string {
 	s := strings.TrimSpace(raw)
 	if s == "" {
@@ -104,8 +104,8 @@ func SanitizeDriveFolderName(raw string) string {
 	return strings.Trim(b.String(), "_")
 }
 
-// NormalizeDriveURL converte URL di Google Drive in URL di download diretto.
-// Supporta formati:
+// NormalizeDriveURL converts Google Drive URLs into direct download URLs.
+// Supports formats:
 //   - https://drive.google.com/file/d/FILE_ID/view → https://drive.google.com/uc?export=download&id=FILE_ID&confirm=t
 //   - https://drive.google.com/uc?id=FILE_ID → +&confirm=t
 func NormalizeDriveURL(url string) string {
@@ -129,9 +129,9 @@ func NormalizeDriveURL(url string) string {
 	return s
 }
 
-// ExtractDriveID estrae il file ID da un URL di Google Drive.
-// Cerca pattern /d/FILE_ID e id=FILE_ID, validando lunghezza >= 10.
-// Restituisce stringa vuota se non trova un ID valido.
+// ExtractDriveID extracts the file ID from a Google Drive URL.
+// Looks for /d/FILE_ID and id=FILE_ID patterns, validating length >= 10.
+// Returns an empty string if no valid ID is found.
 func ExtractDriveID(url string) string {
 	s := strings.TrimSpace(url)
 	if s == "" {

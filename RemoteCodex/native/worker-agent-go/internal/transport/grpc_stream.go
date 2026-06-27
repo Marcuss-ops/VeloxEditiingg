@@ -457,6 +457,53 @@ func (t *GRPCStreamTransport) messageToEnvelope(msg controltransport.ControlMess
 				}
 			}
 		}
+		// fix/execution-metrics-emit: decode worker-emitted execution_metrics
+		// map into the typed *pb.TaskExecutionMetrics.
+		if m, ok := msg.Payload["execution_metrics"].(map[string]interface{}); ok {
+			tr.ExecutionMetrics = &pb.TaskExecutionMetrics{
+				InputBytes:            getPayloadInt64(m, "input_bytes"),
+				OutputBytes:           getPayloadInt64(m, "output_bytes"),
+				BytesFromDrive:        getPayloadInt64(m, "bytes_from_drive"),
+				BytesFromBlobstore:    getPayloadInt64(m, "bytes_from_blobstore"),
+				BytesFromLocalCache:   getPayloadInt64(m, "bytes_from_local_cache"),
+				CpuTimeMs:             getPayloadInt64(m, "cpu_time_ms"),
+				PeakRssBytes:          getPayloadInt64(m, "peak_rss_bytes"),
+				FramesDecoded:         getPayloadInt64(m, "frames_decoded"),
+				FramesComposited:      getPayloadInt64(m, "frames_composited"),
+				FramesEncoded:         getPayloadInt64(m, "frames_encoded"),
+				FfmpegSpeedRatio:      getPayloadFloat64(m, "ffmpeg_speed_ratio"),
+				EncodePasses:          int32(getPayloadInt64(m, "encode_passes")),
+				FinalConcatStreamCopy: getPayloadBool(m, "final_concat_stream_copy"),
+				ConcatMode:            getPayloadStr(m, "concat_mode"),
+				CpuPricePerSecond:     getPayloadFloat64(m, "cpu_price_per_second"),
+				StoragePricePerGb:     getPayloadFloat64(m, "storage_price_per_gb"),
+				NetworkPricePerGb:     getPayloadFloat64(m, "network_price_per_gb"),
+			}
+		}
+		// fix/phase-markers-emit: decode worker-emitted phase_markers
+		// into the typed []*pb.PhaseMarker.
+		if raw, ok := msg.Payload["phase_markers"].([]interface{}); ok {
+			for _, item := range raw {
+				if m, ok := item.(map[string]interface{}); ok {
+					pm := &pb.PhaseMarker{
+						Name:   getPayloadStr(m, "name"),
+						Status: getPayloadStr(m, "status"),
+						Notes:  getPayloadStr(m, "notes"),
+					}
+					if ts := getPayloadStr(m, "started_at"); ts != "" {
+						if parsed, err := time.Parse(time.RFC3339, ts); err == nil {
+							pm.StartedAt = timestamppb.New(parsed)
+						}
+					}
+					if ts := getPayloadStr(m, "completed_at"); ts != "" {
+						if parsed, err := time.Parse(time.RFC3339, ts); err == nil {
+							pm.CompletedAt = timestamppb.New(parsed)
+						}
+					}
+					tr.PhaseMarkers = append(tr.PhaseMarkers, pm)
+				}
+			}
+		}
 		env.Msg = &pb.WorkerToMasterEnvelope_TaskResult{TaskResult: tr}
 
 	case controltransport.MsgCommandAck:
@@ -562,6 +609,31 @@ func getPayloadInt64(m map[string]interface{}, key string) int64 {
 		return int64(v)
 	}
 	return 0
+}
+
+// getPayloadFloat64 extracts a float64 value from a payload map sub-key,
+// returning 0.0 when missing or of a different type.
+func getPayloadFloat64(m map[string]interface{}, key string) float64 {
+	switch v := m[key].(type) {
+	case float64:
+		return v
+	case int:
+		return float64(v)
+	case int64:
+		return float64(v)
+	case int32:
+		return float64(v)
+	}
+	return 0.0
+}
+
+// getPayloadBool extracts a bool value from a payload map sub-key,
+// returning false when missing or of a different type.
+func getPayloadBool(m map[string]interface{}, key string) bool {
+	if v, ok := m[key].(bool); ok {
+		return v
+	}
+	return false
 }
 
 // collectPayloadExtra builds a *structpb.Struct from payload fields that are

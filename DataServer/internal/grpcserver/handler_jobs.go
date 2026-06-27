@@ -8,10 +8,8 @@ import (
 	"time"
 
 	"velox-server/internal/ingest"
-	"velox-server/internal/jobs"
 	"velox-server/internal/store"
 	"velox-server/internal/taskattempts"
-	"velox-server/internal/taskgraph"
 	"velox-shared/controltransport"
 	pb "velox-shared/controltransport/pb"
 
@@ -81,15 +79,20 @@ func (h *Handler) handleTaskAccepted(workerID string, ta *pb.TaskAccepted) {
 		if errors.Is(err, store.ErrTransitionConflict) {
 			log.Printf("[GRPC] Worker %s accepted task %s but lease is stale or canonical attempt drift (offer.attempt_id=%s offer.attempt_number=%d attempt_id=%s attempt_number=%d) rev=%d — dropping TaskAccepted",
 				workerID, taskID, offer.AttemptID, offer.AttemptNumber, attempt.ID, attemptNum, offer.Revision)
+			// Stale lease: clear the pending offer so the next
+			// ClaimNextReadyTask can re-offer this task.
+			sess.claimMu.Lock()
+			if sess.pendingTaskOffer != nil && sess.pendingTaskOffer.ID == taskID {
+				sess.pendingTaskOffer = nil
+			}
+			sess.claimMu.Unlock()
 		} else {
 			log.Printf("[GRPC] AcceptTaskAtomic (LEASED→RUNNING + Attempt PENDING→RUNNING) failed for %s (worker %s): %v — keeping pending offer for retry",
 				taskID, workerID, err)
+			// Non-stale error: keep pendingTaskOffer so the next
+			// TaskAccepted from the worker can retry the same offer
+			// without a fresh ClaimNextReadyTask roundtrip.
 		}
-		sess.claimMu.Lock()
-		if sess.pendingTaskOffer != nil && sess.pendingTaskOffer.ID == taskID {
-			sess.pendingTaskOffer = nil
-		}
-		sess.claimMu.Unlock()
 		return
 	}
 
@@ -292,91 +295,6 @@ func (h *Handler) handleTaskResult(workerID string, tr *pb.TaskResult) {
 		taskID, res.AttemptClosed, res.ArtifactsNew, res.ArtifactsSkips, res.JobTransitioned, res.JobNewStatus)
 }
 
-// maybeTransitionJob checks whether all tasks for a job are terminal and,
-// if so, transitions the Job downstream. The terminal-flip path is
-// intentionally split:
-//
-//   - All tasks SUCCEEDED ⇒ write jobs.StatusAwaitingArtifact (NOT
-//     SUCCEEDED). The verified-finalization path in
-//     artifacts.FinalizeVerified is the SOLE legal writer of
-//     jobs.StatusSucceeded — it dispatches the actual flip once the
-//     worker-reported artifact is verified and registered. See
-//     internal/artifacts/scan_test.go for the audit lock.
-//
-//   - Any task FAILED or the Job is in a terminal-broken state ⇒
-//     write jobs.StatusFailed directly. FAILED is a terminal that
-//     can be written by this handler because it never had a
-//     counterpart concurrent writer — there is only one place that
-//     fails a Job intentionally (this helper), and there is no
-//     artifact path that flips a Job to FAILED.
-//
-//   - Already at AWAITING_ARTIFACT or terminal ⇒ no-op (idempotent
-//     re-call; the artifact path will close it).
-//
-// PR-02 closes audit §P0.2 (two competing writers of
-// jobs.StatusSucceeded) by reserving that flip exclusively for the
-// verified-finalization contract.
-//
-// PR #5: this helper runs asynchronously (via `go maybeTransitionJob`
-// from handleTaskResult) to avoid blocking the gRPC loop.
-func (h *Handler) maybeTransitionJob(ctx context.Context, jobID string) {
-	tasks, err := h.taskRepo.List(ctx, taskgraph.Filter{JobIDs: []string{jobID}})
-	if err != nil || len(tasks) == 0 {
-		log.Printf("[GRPC] maybeTransitionJob: cannot list tasks for job %s: %v", jobID, err)
-		return
-	}
-
-	allTerminal := true
-	allSucceeded := true
-	for _, t := range tasks {
-		if !t.Status.IsTerminal() {
-			allTerminal = false
-			break
-		}
-		if t.Status != taskgraph.StatusSucceeded {
-			allSucceeded = false
-		}
-	}
-
-	if !allTerminal {
-		return // Some tasks still running; nothing to do.
-	}
-
-	// Determine the Job's downstream status. PR-02: SUCCEEDED is
-	// reserved for the verified-finalization path. This helper writes
-	// only AWAITING_ARTIFACT (success path) or FAILED (failure path).
-	var newStatus jobs.Status
-	if allSucceeded {
-		newStatus = jobs.StatusAwaitingArtifact
-	} else {
-		newStatus = jobs.StatusFailed
-	}
-
-	// Read the job's current revision for CAS.
-	job, err := h.jobsRepo.Get(ctx, jobID)
-	if err != nil || job == nil {
-		log.Printf("[GRPC] maybeTransitionJob: cannot get job %s: %v", jobID, err)
-		return
-	}
-	if job.Status.IsTerminal() {
-		return // Already terminal; nothing to do.
-	}
-	// PR-02 idempotency: if the Job is already AWAITING_ARTIFACT (e.g.
-	// a sibling task result fired this helper first), the verified-
-	// finalization path will close it. Avoid a spurious re-write that
-	// would trigger an unnecessary revision bump or a recurrence of
-	// pre-PR-02 sometimes-flicker behavior on rapid-fire results.
-	if job.Status == jobs.StatusAwaitingArtifact && newStatus == jobs.StatusAwaitingArtifact {
-		return
-	}
-
-	if err := h.jobsRepo.SetStatus(ctx, jobID, job.Status, newStatus); err != nil {
-		log.Printf("[GRPC] maybeTransitionJob: failed to transition job %s to %s: %v", jobID, newStatus, err)
-		return
-	}
-	log.Printf("[GRPC] maybeTransitionJob: job %s transitioned to %s (all tasks terminal)", jobID, newStatus)
-}
-
 // verifyTaskOwnership checks that taskID currently belongs to workerID.
 func (h *Handler) verifyTaskOwnership(workerID, taskID string) bool {
 	if workerID == "" || taskID == "" {
@@ -435,37 +353,4 @@ func (h *Handler) handleTaskRenewal(workerID string, tr *pb.TaskLeaseRenewal) {
 	log.Printf("[GRPC] TaskLeaseRenewal extended task %s for worker %s lease=%s", taskID, workerID, leaseID)
 }
 
-// verifyJobOwnership checks that `jobID` currently belongs to `workerID`
-// by querying the task table (PR #7). The Job struct no longer carries
-// WorkerID — tasks carry the per-execution state.
-func (h *Handler) verifyJobOwnership(workerID, jobID string) bool {
-	if workerID == "" || jobID == "" {
-		return false
-	}
-	// Check if any task for this job is currently held by workerID.
-	tasks, err := h.taskRepo.List(context.Background(), taskgraph.Filter{JobIDs: []string{jobID}})
-	if err != nil || len(tasks) == 0 {
-		return false
-	}
-	for _, t := range tasks {
-		if t.WorkerID == workerID && !t.Status.IsTerminal() {
-			return true
-		}
-	}
-	return false
-}
 
-// lookupJobCASFields fetches the (revision, attempt) tuple required for the
-// StartJob CAS. Uses the canonical jobs.Job via Jobs().Get() — revision is
-// on the domain model (Ondata 3 PR3 final), attempt maps to Attempts/RetryCount.
-// No more map-based reads from dbStore.GetJob.
-func (h *Handler) lookupJobCASFields(jobID string) (revision, attempt int, err error) {
-	j, err := h.jobsRepo.Get(context.Background(), jobID)
-	if err != nil {
-		return 0, 0, err
-	}
-	if j == nil {
-		return 0, 0, fmt.Errorf("job %s not found", jobID)
-	}
-	return j.Revision, j.Attempts, nil
-}

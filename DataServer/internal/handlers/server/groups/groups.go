@@ -73,25 +73,19 @@ func GetGroupsHandler(c *gin.Context) {
 	result := make([]Group, 0, len(rows))
 	for _, row := range rows {
 		g := Group{
-			Name:    safeString(row, "name"),
-			Privacy: safeString(row, "privacy"),
+			Name:    row.Name,
+			Privacy: row.Privacy,
 		}
-		g.DefaultLang = safeString(row, "description")
+		g.DefaultLang = row.Description
 
 		// Load channel memberships from canonical group_channels if group ID is available
-		if gid, ok := row["id"].(int64); ok && gid > 0 {
-			channelIDs, err := groupsStore.ListGroupChannels(gid)
+		if row.ID > 0 {
+			channelIDs, err := groupsStore.ListGroupChannels(row.ID)
 			if err == nil && len(channelIDs) > 0 {
 				g.Channels = make([]Channel, len(channelIDs))
 				for i, id := range channelIDs {
 					g.Channels[i] = Channel{ID: id}
 				}
-			}
-		} else if chIDs, ok := row["channels"].([]string); ok {
-			// Fallback: legacy youtube_groups.channels_json as []string
-			g.Channels = make([]Channel, len(chIDs))
-			for i, id := range chIDs {
-				g.Channels[i] = Channel{ID: id}
 			}
 		}
 		result = append(result, g)
@@ -123,26 +117,21 @@ func GetGroupHandler(c *gin.Context) {
 	}
 
 	for _, row := range rows {
-		if safeString(row, "name") == name {
+		if row.Name == name {
 			g := Group{
 				Name:    name,
-				Privacy: safeString(row, "privacy"),
+				Privacy: row.Privacy,
 			}
-			g.DefaultLang = safeString(row, "description")
+			g.DefaultLang = row.Description
 
 			// Load channel memberships
-			if gid, ok := row["id"].(int64); ok && gid > 0 {
-				channelIDs, err := groupsStore.ListGroupChannels(gid)
+			if row.ID > 0 {
+				channelIDs, err := groupsStore.ListGroupChannels(row.ID)
 				if err == nil && len(channelIDs) > 0 {
 					g.Channels = make([]Channel, len(channelIDs))
 					for i, id := range channelIDs {
 						g.Channels[i] = Channel{ID: id}
 					}
-				}
-			} else if chIDs, ok := row["channels"].([]string); ok {
-				g.Channels = make([]Channel, len(chIDs))
-				for i, id := range chIDs {
-					g.Channels[i] = Channel{ID: id}
 				}
 			}
 
@@ -157,11 +146,4 @@ func GetGroupHandler(c *gin.Context) {
 	})
 }
 
-// safeString safely extracts a string value from a map.
-func safeString(m map[string]interface{}, key string) string {
-	if m == nil {
-		return ""
-	}
-	v, _ := m[key].(string)
-	return v
-}
+

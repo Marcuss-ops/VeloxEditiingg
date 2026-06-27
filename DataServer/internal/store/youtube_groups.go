@@ -3,6 +3,8 @@ package store
 import (
 	"database/sql"
 	"time"
+
+	"velox-server/internal/store/youtubetypes"
 )
 
 // ============================================================
@@ -44,26 +46,21 @@ func (s *SQLiteStore) GetYouTubeGroupID(name, groupType string) (int64, error) {
 	return id, err
 }
 
-// ListYouTubeGroups returns all groups.
-func (s *SQLiteStore) ListYouTubeGroups() ([]map[string]interface{}, error) {
+// ListYouTubeGroups returns all typed groups.
+func (s *SQLiteStore) ListYouTubeGroups() ([]youtubetypes.YouTubeGroup, error) {
 	rows, err := s.db.Query(`SELECT id, name, group_type, description, privacy, created_at, updated_at FROM youtube_groups ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	var result []map[string]interface{}
+	var result []youtubetypes.YouTubeGroup
 	for rows.Next() {
-		var id int64
-		var name, groupType, description, privacy, createdAt, updatedAt string
-		if err := rows.Scan(&id, &name, &groupType, &description, &privacy, &createdAt, &updatedAt); err != nil {
+		var g youtubetypes.YouTubeGroup
+		if err := rows.Scan(&g.ID, &g.Name, &g.GroupType, &g.Description, &g.Privacy, &g.CreatedAt, &g.UpdatedAt); err != nil {
 			continue
 		}
-		result = append(result, map[string]interface{}{
-			"id": id, "name": name, "group_type": groupType,
-			"description": description, "privacy": privacy,
-			"created_at": createdAt, "updated_at": updatedAt,
-		})
+		result = append(result, g)
 	}
 	return result, rows.Err()
 }
@@ -160,8 +157,8 @@ func (s *SQLiteStore) ListGroupChannels(groupID int64) ([]string, error) {
 	return ids, rows.Err()
 }
 
-// ListAllGroupMemberships returns all group-channel memberships (for loading full state).
-func (s *SQLiteStore) ListAllGroupMemberships() ([]map[string]interface{}, error) {
+// ListAllGroupMemberships returns all typed group-channel memberships.
+func (s *SQLiteStore) ListAllGroupMemberships() ([]youtubetypes.GroupMembership, error) {
 	rows, err := s.db.Query(`SELECT gc.group_id, gc.channel_id, gc.position, g.name as group_name, g.group_type
 		FROM youtube_group_channels gc
 		JOIN youtube_groups g ON g.id = gc.group_id
@@ -171,21 +168,13 @@ func (s *SQLiteStore) ListAllGroupMemberships() ([]map[string]interface{}, error
 	}
 	defer rows.Close()
 
-	var result []map[string]interface{}
+	var result []youtubetypes.GroupMembership
 	for rows.Next() {
-		var groupID int64
-		var channelID, groupName, groupType string
-		var position int
-		if err := rows.Scan(&groupID, &channelID, &position, &groupName, &groupType); err != nil {
+		var m youtubetypes.GroupMembership
+		if err := rows.Scan(&m.GroupID, &m.ChannelID, &m.Position, &m.GroupName, &m.GroupType); err != nil {
 			continue
 		}
-		result = append(result, map[string]interface{}{
-			"group_id":   groupID,
-			"channel_id": channelID,
-			"position":   position,
-			"group_name": groupName,
-			"group_type": groupType,
-		})
+		result = append(result, m)
 	}
 	return result, rows.Err()
 }

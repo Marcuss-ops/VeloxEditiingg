@@ -1,15 +1,15 @@
-// Package contract definisce i tipi condivisi tra Go e C++ per la serializzazione JSON
-// dei job di elaborazione video. Le strutture qui devono corrispondere esattamente
-// alle controparti C++ in RemoteCodex/native/video-engine-cpp/include/video_contract.hpp.
+// Package contract defines the shared types between Go and C++ for JSON serialization
+// of video processing jobs. The structures here must match exactly
+// their C++ counterparts in RemoteCodex/native/video-engine-cpp/include/video_contract.hpp.
 //
-// Mapping Go ↔ C++:
+// Go ↔ C++ Mapping:
 //
 //	Go (shared/contract)        C++ (video_contract.hpp)
 //	─────────────────────        ─────────────────────────
 //	SceneRequest                 video::SceneAsset (alias velox::SceneRuntime)
 //	ClipRequest                  video::ClipAsset  (alias velox::ClipRuntime)
 //	VideoEngineRequest           video::SceneVideoRequest
-//	(nessun equivalente)         video::SceneVideoResult
+//	(no equivalent)              video::SceneVideoResult
 package contract
 
 import (
@@ -19,7 +19,7 @@ import (
 	"velox-shared/payload"
 )
 
-// SceneRequest corrisponde a video::SceneAsset in C++ (video_contract.hpp).
+// SceneRequest corresponds to video::SceneAsset in C++ (video_contract.hpp).
 // JSON fields: text, image_link, image_links, duration_seconds
 type SceneRequest struct {
 	Text            string   `json:"text"`
@@ -28,7 +28,7 @@ type SceneRequest struct {
 	DurationSeconds float64  `json:"duration_seconds,omitempty"`
 }
 
-// ClipRequest corrisponde a video::ClipAsset in C++ (video_contract.hpp).
+// ClipRequest corresponds to video::ClipAsset in C++ (video_contract.hpp).
 // JSON fields: text, clip_link, clip_links, duration_seconds, kind
 type ClipRequest struct {
 	Text            string   `json:"text,omitempty"`
@@ -38,7 +38,7 @@ type ClipRequest struct {
 	Kind            string   `json:"kind,omitempty"`
 }
 
-// VideoEngineRequest corrisponde a video::SceneVideoRequest in C++ (video_contract.hpp).
+// VideoEngineRequest corresponds to video::SceneVideoRequest in C++ (video_contract.hpp).
 // JSON fields: job_id, video_name, script_text, voiceover_paths, scenes, video_mode,
 // intro_clip_paths, stock_clip_paths, clip_segments (C++: clip_segments_json string),
 // scenes_json, scene_image_paths, output_path, drive_output_folder, audio_language_for_srt
@@ -61,14 +61,14 @@ type VideoEngineRequest struct {
 	AssetCacheDir       string         `json:"asset_cache_dir,omitempty"`
 }
 
-// RenderJobParams raggruppa tutti i parametri necessari per l'elaborazione di un job video.
-// Viene popolato da ExtractRenderJobParams a partire da una mappa di parametri
-// (tipicamente da JSON job).
+// RenderJobParams groups all parameters required for processing a video job.
+// Populated by ExtractRenderJobParams from a parameter map
+// (typically from job JSON).
 //
-//	// Nota: è l'unione di parametri per pipeline render + video + SRT.
+//	// Note: this is the union of parameters for the render + video + SRT pipeline.
 //
-// I campi sovrapposti con VideoEngineRequest vengono riconciliati in
-// native_engine.go prima di inviare la richiesta al C++ engine.
+// Fields overlapping with VideoEngineRequest are reconciled in
+// native_engine.go before sending the request to the C++ engine.
 type RenderJobParams struct {
 	AudioPath                         string
 	OutputPath                        string
@@ -95,11 +95,11 @@ type RenderJobParams struct {
 	AssetCacheDir                     string
 }
 
-// ExtractRenderJobParams estrae i parametri di un job da una mappa generica
-// (tipicamente job.Parameters deserializzato da JSON) in un RenderJobParams tipizzato.
+// ExtractRenderJobParams extracts job parameters from a generic map
+// (typically job.Parameters deserialized from JSON) into a typed RenderJobParams.
 //
-// Gestisce alias di campi (es. intro_clip_paths ← start_clip_paths) e fallback
-// (es. drive_output_folder ← output_directory).
+// Handles field aliases (e.g. intro_clip_paths ← start_clip_paths) and fallbacks
+// (e.g. drive_output_folder ← output_directory).
 func ExtractRenderJobParams(params map[string]interface{}) RenderJobParams {
 	introClipPaths := payload.ToSliceString(params["intro_clip_paths"])
 	if len(introClipPaths) == 0 {
@@ -163,9 +163,9 @@ func ParseScenes(scenesJSON string) []SceneRequest {
 	return scenes
 }
 
-// ParseClipsJSON parsa un JSON string contenente un array di clip in []ClipRequest.
-// È simmetrica a ParseScenes: input stringa JSON, output slice tipizzata.
-// Gli errori di parsing vengono silenziati (restituisce nil).
+// ParseClipsJSON parses a JSON string containing an array of clips into []ClipRequest.
+// Symmetric with ParseScenes: JSON string input, typed slice output.
+// Parsing errors are silently swallowed (returns nil).
 func ParseClipsJSON(clipsJSON string) []ClipRequest {
 	trimmed := strings.TrimSpace(clipsJSON)
 	if trimmed == "" {
@@ -194,8 +194,8 @@ func ParseClipsJSON(clipsJSON string) []ClipRequest {
 	return clips
 }
 
-// ParseClips parsa un []interface{} (tipicamente da json.Unmarshal in map[string]interface{})
-// in []ClipRequest. Utile quando i dati arrivano già deserializzati.
+// ParseClips parses a []interface{} (typically from json.Unmarshal into map[string]interface{})
+// into []ClipRequest. Useful when the data arrives already deserialized.
 func ParseClips(raw []interface{}) []ClipRequest {
 	if len(raw) == 0 {
 		return nil
@@ -222,8 +222,8 @@ func ParseClips(raw []interface{}) []ClipRequest {
 	return clips
 }
 
-// UnmarshalSceneRequest parsa un JSON string (singolo oggetto scena) in *SceneRequest.
-// Restituisce errore se il JSON è malformato.
+// UnmarshalSceneRequest parses a JSON string (single scene object) into *SceneRequest.
+// Returns an error if the JSON is malformed.
 func UnmarshalSceneRequest(data []byte) (*SceneRequest, error) {
 	trimmed := strings.TrimSpace(string(data))
 	if trimmed == "" {
@@ -245,8 +245,8 @@ func UnmarshalSceneRequest(data []byte) (*SceneRequest, error) {
 	return &scene, nil
 }
 
-// UnmarshalClipRequest parsa un JSON string (singolo oggetto clip) in *ClipRequest.
-// Restituisce errore se il JSON è malformato.
+// UnmarshalClipRequest parses a JSON string (single clip object) into *ClipRequest.
+// Returns an error if the JSON is malformed.
 func UnmarshalClipRequest(data []byte) (*ClipRequest, error) {
 	trimmed := strings.TrimSpace(string(data))
 	if trimmed == "" {
@@ -269,8 +269,8 @@ func UnmarshalClipRequest(data []byte) (*ClipRequest, error) {
 	return &clip, nil
 }
 
-// UnmarshalScenes parsa un JSON string (array di scene) in []SceneRequest.
-// Simile a ParseScenes ma restituisce l'errore in caso di JSON malformato.
+// UnmarshalScenes parses a JSON string (scene array) into []SceneRequest.
+// Similar to ParseScenes but returns an error on malformed JSON.
 func UnmarshalScenes(data []byte) ([]SceneRequest, error) {
 	trimmed := strings.TrimSpace(string(data))
 	if trimmed == "" {
@@ -292,8 +292,8 @@ func UnmarshalScenes(data []byte) ([]SceneRequest, error) {
 	return scenes, nil
 }
 
-// UnmarshalClips parsa un JSON string (array di clip) in []ClipRequest.
-// Simile a ParseClipsJSON ma restituisce l'errore in caso di JSON malformato.
+// UnmarshalClips parses a JSON string (clip array) into []ClipRequest.
+// Similar to ParseClipsJSON but returns an error on malformed JSON.
 func UnmarshalClips(data []byte) ([]ClipRequest, error) {
 	trimmed := strings.TrimSpace(string(data))
 	if trimmed == "" {
@@ -320,9 +320,9 @@ func UnmarshalClips(data []byte) ([]ClipRequest, error) {
 	return clips, nil
 }
 
-// NormalizeSceneEntry normalizza un entry scena da una mappa generica.
-// Unifica campi: text, image_link (da image_url/image), image_links.
-// Imposta duration_seconds a 5.0 se non specificato o <= 0.
+// NormalizeSceneEntry normalizes a scene entry from a generic map.
+// Unifies fields: text, image_link (from image_url/image), image_links.
+// Sets duration_seconds to 5.0 if not specified or <= 0.
 func NormalizeSceneEntry(scene map[string]interface{}) map[string]interface{} {
 	normalized := make(map[string]interface{}, len(scene)+4)
 	for k, v := range scene {
@@ -345,8 +345,8 @@ func NormalizeSceneEntry(scene map[string]interface{}) map[string]interface{} {
 	return normalized
 }
 
-// FirstSceneImageLink restituisce il primo image_link disponibile da una scena,
-// cercando in image_link, image_url, image e image_links[0] in ordine.
+// FirstSceneImageLink returns the first available image_link from a scene,
+// searching image_link, image_url, image, and image_links[0] in order.
 func FirstSceneImageLink(scene map[string]interface{}) string {
 	return firstSceneImageLink(scene)
 }

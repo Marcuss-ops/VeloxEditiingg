@@ -73,7 +73,7 @@ type serverDeps struct {
 	// creatorflow.CreateJobWithPlan for POST /orchestrator/jobs.
 	// jobsRepo is the canonical jobs.Writer/Reader (used for pre-check +
 	// list + Get). tasksRepo is the canonical taskgraph.Reader used by
-	// the GET projection adapter. Initialised in buildServerDeps and
+	// the GET projection adapter. Initialised in buildTestDeps and
 	// runServer from taskDeps + buildPersistence; nil-safe checks live in
 	// newOrchestratorLegacyAdapter so the legacy POST can be staged vs.
 	// the new POST without breaking the build.
@@ -107,9 +107,37 @@ var ErrPostgresNotYetWired = errors.New(
 		"and docs/pr/ for the per-module cutover roadmap",
 )
 
-// ── buildServerDeps (compat wrapper for tests) ─────────────────────────────
+// ── wirePostBuild (shared post-construction wiring) ──────────────────────
 
-func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
+// wirePostBuild connects dependencies that cross build-layer boundaries
+// (jobs↔tasks). Called by both buildTestDeps (tests) and runServer
+// (production) so the wiring stays canonical in exactly one place.
+func wirePostBuild(j *jobsDeps, t *taskDeps) error {
+	// PR-04 / fix/task-expiry-atomic-transition: wire the JobsLifecycle
+	// into the TaskLifecycle so ExpireTaskLease's retry-budget lookup and
+	// Job-aggregate update have context.
+	if j != nil && j.Lifecycle != nil && t != nil && t.TaskLifecycle != nil {
+		t.TaskLifecycle.SetJobsRepo(j.Lifecycle.Jobs())
+	}
+
+	// feat/task-report-ingestion: build the canonical
+	// TaskReportIngestionService now that all upstream deps (tasks +
+	// attempts + jobs + task_output_artifacts) are constructed.
+	if j != nil && j.Repository != nil && t != nil && t.TaskRepository != nil && t.OutputArtifacts != nil {
+		ingestionSvc, ingErr := ingest.NewTaskReportIngestionService(
+			t.TaskRepository, j.Repository, t.AttemptRepository, t.OutputArtifacts,
+		)
+		if ingErr != nil {
+			return fmt.Errorf("bootstrap: task report ingestion service: %w", ingErr)
+		}
+		t.IngestionSvc = ingestionSvc
+	}
+	return nil
+}
+
+// ── buildTestDeps (compat wrapper for tests) ───────────────────────────────
+
+func buildTestDeps(cfg *config.Config) (*serverDeps, error) {
 	p, err := buildPersistence(cfg)
 	if err != nil {
 		return nil, err
@@ -122,26 +150,8 @@ func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
 	if err != nil {
 		return nil, err
 	}
-	// PR-04 / fix/task-expiry-atomic-transition: wire the JobsLifecycle
-	// into the TaskLifecycle so ExpireTaskLease's retry-budget lookup and
-	// Job-aggregate update have context. nil-safe: omitted dependency
-	// means the reaper still runs and gracefully skips the Job update.
-	if j != nil && j.Lifecycle != nil && t != nil && t.TaskLifecycle != nil {
-		t.TaskLifecycle.SetJobsRepo(j.Lifecycle.Jobs())
-	}
-	// feat/task-report-ingestion: build the canonical
-	// TaskReportIngestionService now that all upstream deps (tasks +
-	// attempts + jobs + task_output_artifacts) are constructed. The
-	// service drives handleTaskResult's atomic-close + artifact-register
-	// + Job roll-up sequence.
-	if j != nil && j.Repository != nil && t != nil && t.TaskRepository != nil && t.OutputArtifacts != nil {
-		ingestionSvc, ingErr := ingest.NewTaskReportIngestionService(
-			t.TaskRepository, j.Repository, t.AttemptRepository, t.OutputArtifacts,
-		)
-		if ingErr != nil {
-			return nil, fmt.Errorf("bootstrap: task report ingestion service: %w", ingErr)
-		}
-		t.IngestionSvc = ingestionSvc
+	if err := wirePostBuild(j, t); err != nil {
+		return nil, err
 	}
 	w, err := buildWorkers(cfg, p)
 	if err != nil {
@@ -167,7 +177,7 @@ func buildServerDeps(cfg *config.Config) (*serverDeps, error) {
 		taskDeps:            t,
 		// PR-operation 01 / Fase 3 — wire the canonical writer + canonical
 		// reader surface into the orchestrator legacy adapter. Until a
-		// future PR threads *tasksDeps through buildServerDeps, buildTasks
+		// future PR threads *tasksDeps through buildTestDeps, buildTasks
 		// has already produced t.AtomicCreator and t.TaskRepository, both
 		// pointing at the same *SQLiteStore.
 		atomicPlanWriter: t.AtomicCreator,
@@ -204,23 +214,8 @@ func runServer(cfg *config.Config) error {
 	if err != nil {
 		return err
 	}
-	// PR-04 / fix/task-expiry-atomic-transition: see buildServerDeps —
-	// wire jobsRepo into TaskLifecycle so the reaper can read
-	// jobs.max_retries and update the Job aggregate on retries-exhausted.
-	if j != nil && j.Lifecycle != nil && t != nil && t.TaskLifecycle != nil {
-		t.TaskLifecycle.SetJobsRepo(j.Lifecycle.Jobs())
-	}
-	// feat/task-report-ingestion: see buildServerDeps — build the
-	// canonical ingestion service after buildJobs + buildTasks return
-	// (it needs j.Repository for Job roll-up).
-	if j != nil && j.Repository != nil && t != nil && t.TaskRepository != nil && t.OutputArtifacts != nil {
-		ingestionSvc, ingErr := ingest.NewTaskReportIngestionService(
-			t.TaskRepository, j.Repository, t.AttemptRepository, t.OutputArtifacts,
-		)
-		if ingErr != nil {
-			return fmt.Errorf("bootstrap: task report ingestion service: %w", ingErr)
-		}
-		t.IngestionSvc = ingestionSvc
+	if err := wirePostBuild(j, t); err != nil {
+		return err
 	}
 	w, err := buildWorkers(cfg, p)
 	if err != nil {

@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"velox-server/internal/store"
 )
 
 // AnsibleRunRecord stores the execution state for a playbook or ad-hoc command.
@@ -36,8 +38,8 @@ type AnsibleRunRecord struct {
 // AnsibleRunStore defines the SQLite operations needed by AnsibleRunManager.
 type AnsibleRunStore interface {
 	UpsertAnsibleRun(runID, action, playbook, status string, startedAt, endedAt int64, returnCode int, commands, output, preamble, masterURL, masterURLSource string) error
-	GetAnsibleRun(runID string) (map[string]interface{}, error)
-	ListAnsibleRuns(limit int) ([]map[string]interface{}, error)
+	GetAnsibleRun(runID string) (*store.AnsibleRun, error)
+	ListAnsibleRuns(limit int) ([]store.AnsibleRun, error)
 	DeleteAnsibleRun(runID string) error
 	AddAnsibleRunHost(runID, host string) error
 	ListAnsibleRunHosts(runID string) ([]string, error)
@@ -127,54 +129,21 @@ func (m *AnsibleRunManager) loadRuns() error {
 	return nil
 }
 
-func ansibleRunRecordFromRow(row map[string]interface{}) AnsibleRunRecord {
-	runID, _ := row["run_id"].(string)
-	action, _ := row["action"].(string)
-	playbook, _ := row["playbook"].(string)
-	status, _ := row["status"].(string)
-	startedAt, _ := row["started_at"].(int64)
-	endedAt, _ := row["ended_at"].(int64)
-	returnCode, _ := row["return_code"].(int)
-	output, _ := row["output"].(string)
-	preamble, _ := row["preamble"].(string)
-	masterURL, _ := row["master_url"].(string)
-	masterURLSource, _ := row["master_url_source"].(string)
-
-	var commands []string
-	if cmds, ok := row["commands"]; ok {
-		if cmdList, ok := cmds.([]string); ok {
-			commands = cmdList
-		}
-	}
-
-	hosts := extractStringSlice(row["hosts"])
-
+func ansibleRunRecordFromRow(row store.AnsibleRun) AnsibleRunRecord {
 	return AnsibleRunRecord{
-		ID: runID, Action: action, Playbook: playbook, Status: status,
-		StartedAt: startedAt, EndedAt: endedAt, ReturnCode: returnCode,
-		Hosts: hosts, Commands: commands,
-		Output: output, Preamble: preamble,
-		MasterURL: masterURL, MasterURLSource: masterURLSource,
+		ID:              row.RunID,
+		Action:          row.Action,
+		Playbook:        row.Playbook,
+		Status:          row.Status,
+		StartedAt:       row.StartedAt,
+		EndedAt:         row.EndedAt,
+		ReturnCode:      row.ReturnCode,
+		Commands:        row.Commands,
+		Output:          row.Output,
+		Preamble:        row.Preamble,
+		MasterURL:       row.MasterURL,
+		MasterURLSource: row.MasterURLSource,
 	}
-}
-
-func extractStringSlice(v interface{}) []string {
-	if v == nil {
-		return nil
-	}
-	if s, ok := v.([]string); ok {
-		return s
-	}
-	if arr, ok := v.([]interface{}); ok {
-		var result []string
-		for _, item := range arr {
-			if s, ok := item.(string); ok {
-				result = append(result, s)
-			}
-		}
-		return result
-	}
-	return nil
 }
 
 func (m *AnsibleRunManager) persistRunToSQLite(run AnsibleRunRecord) error {

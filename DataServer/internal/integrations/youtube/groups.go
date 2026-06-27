@@ -18,20 +18,15 @@ func (s *Service) loadChannelGroup(name string) (*ChannelGroup, error) {
 		return nil, err
 	}
 	for _, row := range rows {
-		n, _ := row["name"].(string)
-		if n != name {
+		if row.Name != name {
 			continue
 		}
-		gid, _ := row["id"].(int64)
-		groupType, _ := row["group_type"].(string)
-		desc, _ := row["description"].(string)
-		privacy, _ := row["privacy"].(string)
-		channelIDs, _ := s.store.ListGroupChannels(gid)
+		channelIDs, _ := s.store.ListGroupChannels(row.ID)
 		return &ChannelGroup{
-			Name:        n,
-			Description: desc,
-			Privacy:     privacy,
-			GroupType:   groupType,
+			Name:        row.Name,
+			Description: row.Description,
+			Privacy:     row.Privacy,
+			GroupType:   row.GroupType,
 			Channels:    channelIDs,
 		}, nil
 	}
@@ -53,28 +48,21 @@ func (s *Service) loadChannelGroups() (map[string]*ChannelGroup, error) {
 	}
 	groupChannels := make(map[int64][]string)
 	for _, m := range memberships {
-		gid, _ := m["group_id"].(int64)
-		chID, _ := m["channel_id"].(string)
-		if gid > 0 && chID != "" {
-			groupChannels[gid] = append(groupChannels[gid], chID)
+		if m.GroupID > 0 && m.ChannelID != "" {
+			groupChannels[m.GroupID] = append(groupChannels[m.GroupID], m.ChannelID)
 		}
 	}
 	out := make(map[string]*ChannelGroup, len(groupRows))
 	for _, row := range groupRows {
-		name, _ := row["name"].(string)
-		if name == "" {
+		if row.Name == "" {
 			continue
 		}
-		gid, _ := row["id"].(int64)
-		groupType, _ := row["group_type"].(string)
-		desc, _ := row["description"].(string)
-		privacy, _ := row["privacy"].(string)
-		out[name] = &ChannelGroup{
-			Name:        name,
-			Description: desc,
-			Privacy:     privacy,
-			GroupType:   groupType,
-			Channels:    append([]string{}, groupChannels[gid]...),
+		out[row.Name] = &ChannelGroup{
+			Name:        row.Name,
+			Description: row.Description,
+			Privacy:     row.Privacy,
+			GroupType:   row.GroupType,
+			Channels:    append([]string{}, groupChannels[row.ID]...),
 		}
 	}
 	return out, nil

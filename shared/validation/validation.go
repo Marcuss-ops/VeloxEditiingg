@@ -6,8 +6,6 @@
 // schema.
 package validation
 
-import "unicode"
-
 // MaxIdentifierLength is the upper bound enforced by IsAlphanumericID.
 const MaxIdentifierLength = 128
 
@@ -25,7 +23,6 @@ func IsAlphanumericID(s string) bool {
 		case r >= '0' && r <= '9':
 		case r == '-' || r == '_':
 		default:
-			_ = unicode.IsSpace(r) // touch unicode to keep import; harmless if removed
 			return false
 		}
 	}
