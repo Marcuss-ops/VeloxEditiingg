@@ -358,16 +358,16 @@ func TestPR_3_9_DispatchResolvesVoiceoverAssetBeforeExecutor(t *testing.T) {
 	}
 }
 
-// runExecuteJobAsync launches executeJob on a goroutine and returns a
+// runExecuteTaskAsync launches executeTask on a goroutine and returns a
 // channel closed when the goroutine returns. Tests use this pattern
-// because executeJob does not return a value — the only observable
+// because executeTask does not return a value — the only observable
 // outcome is the transport.Send call captured by the recording stub.
-func runExecuteJobAsync(t *testing.T, w *Worker, ctx context.Context, job *api.Job) <-chan struct{} {
+func runExecuteTaskAsync(t *testing.T, w *Worker, ctx context.Context, job *api.Job, taskID, attemptID string) <-chan struct{} {
 	t.Helper()
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		w.executeJob(ctx, job)
+		w.executeTask(ctx, job, taskID, attemptID)
 	}()
 	return done
 }
@@ -387,55 +387,36 @@ func TestPR_3_8_DispatchResolvesSceneCompositeV1EndToEnd(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	done := runExecuteJobAsync(t, w, ctx, job)
+	done := runExecuteTaskAsync(t, w, ctx, job, "task-composite-001", "attempt-composite-001")
 
 	select {
 	case <-done:
 	case <-time.After(15 * time.Second):
-		t.Fatal("executeJob did not complete within 15s")
+		t.Fatal("executeTask did not complete within 15s")
 	}
 
 	msg, ok := rt.last()
 	if !ok {
-		t.Fatal("transport.Send was never called; JobResult lost")
+		t.Fatal("transport.Send was never called; TaskResult lost")
 	}
-	if msg.Type != controltransport.MsgJobResult {
-		t.Fatalf("expected MsgJobResult, got %q", msg.Type)
+	if msg.Type != controltransport.MsgTaskResult {
+		t.Fatalf("expected MsgTaskResult, got %q", msg.Type)
 	}
 	payload := msg.Payload
 	if payload == nil {
-		t.Fatal("job_result message had nil payload")
+		t.Fatal("task_result message had nil payload")
 	}
-	if status, _ := payload["status"].(string); status != "success" {
-		t.Fatalf("expected payload.status=success, got %q (full payload: %#v)", status, payload)
+	if status, _ := payload["status"].(string); status != "succeeded" {
+		t.Fatalf("expected payload.status=succeeded, got %q (full payload: %#v)", status, payload)
 	}
-	output, _ := payload["output"].(map[string]interface{})
-	if output == nil {
-		t.Fatalf("expected payload.output map, got nil (full payload: %#v)", payload)
+	if got, _ := payload["task_id"].(string); got != "task-composite-001" {
+		t.Fatalf("expected task_id=task-composite-001, got %q", got)
 	}
-	if got, _ := output["status"].(string); got != "completed" {
-		t.Fatalf("expected output.status=completed, got %q", got)
+	if got, _ := payload["job_id"].(string); got != "job-composite-001" {
+		t.Fatalf("expected job_id=job-composite-001, got %q", got)
 	}
-	if got, _ := output["executor_id"].(string); got != "scene.composite.v1" {
-		t.Fatalf("expected output.executor_id=scene.composite.v1, got %q", got)
-	}
-	if got, _ := output["executor_key"].(string); got != "scene.composite.v1@1" {
-		t.Fatalf("expected output.executor_key=scene.composite.v1@1, got %q", got)
-	}
-	if got, _ := output["job_id"].(string); got != "job-composite-001" {
-		t.Fatalf("expected output.job_id=job-composite-001, got %q", got)
-	}
-	// PR-3.8 dispatch goes through the 5-phase taskrunner loop, so
-	// the report must carry at least the cache-lookup + report phase
-	// markers (Execute dispatches through runExecute which appends
-	// its own marker; the failure path appends only the report
-	// marker). Assert >=2 so we don't accidentally hang on a single
-	// trivial mark. Note: fakeSceneComposite returns Outputs=nil so
-	// shouldUploadCompletedVideo short-circuits — keeps this test
-	// focused on dispatch + payload-mapping rather than the upload
-	// pipeline (which has its own dedicated tests).
-	if got, _ := output["phase_count"].(int); got < 2 {
-		t.Fatalf("expected phase_count>=2, got %d", got)
+	if got, _ := payload["executor_id"].(string); got != "scene.composite.v1" {
+		t.Fatalf("expected executor_id=scene.composite.v1, got %q", got)
 	}
 }
 
@@ -450,23 +431,23 @@ func TestPR_3_8_DispatchUnknownExecutorSurfacesFailure(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	done := runExecuteJobAsync(t, w, ctx, job)
+	done := runExecuteTaskAsync(t, w, ctx, job, "task-unknown-001", "attempt-unknown-001")
 
 	select {
 	case <-done:
 	case <-time.After(15 * time.Second):
-		t.Fatal("executeJob did not complete within 15s")
+		t.Fatal("executeTask did not complete within 15s")
 	}
 
 	msg, ok := rt.last()
 	if !ok {
-		t.Fatal("transport.Send was never called; expected failure JobResult")
+		t.Fatal("transport.Send was never called; expected failure TaskResult")
 	}
 	payload := msg.Payload
 	if status, _ := payload["status"].(string); status != "failed" {
 		t.Fatalf("expected payload.status=failed, got %q (full payload: %#v)", status, payload)
 	}
-	errMsg, _ := payload["error"].(string)
+	errMsg, _ := payload["error_detail"].(string)
 	if errMsg == "" {
 		t.Fatal("expected non-empty error message for unknown executor")
 	}
