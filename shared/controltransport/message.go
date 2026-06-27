@@ -15,26 +15,19 @@ type ControlMessageType string
 const (
 	MsgHello            ControlMessageType = "hello"
 	MsgHeartbeat        ControlMessageType = "heartbeat"
-	MsgLeaseRenewal     ControlMessageType = "lease_renewal"
 	MsgTaskLeaseRenewal ControlMessageType = "task_lease_renewal"
-	MsgJobAccepted      ControlMessageType = "job_accepted"
-	MsgJobRejected      ControlMessageType = "job_rejected"
 	MsgTaskAccepted     ControlMessageType = "task_accepted"
 	MsgTaskRejected     ControlMessageType = "task_rejected"
 	MsgTaskResult       ControlMessageType = "task_result"
-	MsgJobProgress      ControlMessageType = "job_progress"
 	MsgCommandAck       ControlMessageType = "command_ack"
 	MsgArtifactUploaded ControlMessageType = "artifact_uploaded"
-	MsgJobResult        ControlMessageType = "job_result"
 	MsgGoodbye          ControlMessageType = "goodbye"
 )
 
 // --- Master → Worker ---
 const (
 	MsgHelloAck            ControlMessageType = "hello_ack"
-	MsgJobOffer            ControlMessageType = "job_offer"
 	MsgTaskOffer           ControlMessageType = "task_offer"
-	MsgJobLeaseGranted     ControlMessageType = "job_lease_granted"
 	MsgTaskLeaseGranted    ControlMessageType = "task_lease_granted"
 	MsgCommand             ControlMessageType = "command"
 	MsgCancelJob           ControlMessageType = "cancel_job"
@@ -47,10 +40,8 @@ const (
 // IsWorkerToMaster returns true for messages sent from worker to master.
 func (t ControlMessageType) IsWorkerToMaster() bool {
 	switch t {
-	case MsgHello, MsgHeartbeat, MsgLeaseRenewal, MsgTaskLeaseRenewal, MsgJobAccepted,
-		MsgJobRejected, MsgTaskAccepted, MsgTaskRejected, MsgTaskResult,
-		MsgJobProgress, MsgCommandAck, MsgArtifactUploaded,
-		MsgJobResult, MsgGoodbye:
+	case MsgHello, MsgHeartbeat, MsgTaskLeaseRenewal, MsgTaskAccepted, MsgTaskRejected,
+		MsgTaskResult, MsgCommandAck, MsgArtifactUploaded, MsgGoodbye:
 		return true
 	}
 	return false
@@ -59,7 +50,7 @@ func (t ControlMessageType) IsWorkerToMaster() bool {
 // IsMasterToWorker returns true for messages sent from master to worker.
 func (t ControlMessageType) IsMasterToWorker() bool {
 	switch t {
-	case MsgHelloAck, MsgJobOffer, MsgTaskOffer, MsgJobLeaseGranted, MsgTaskLeaseGranted, MsgCommand, MsgCancelJob,
+	case MsgHelloAck, MsgTaskOffer, MsgTaskLeaseGranted, MsgCommand, MsgCancelJob,
 		MsgDrain, MsgConfigurationUpdate, MsgLeaseRevoked, MsgPing:
 		return true
 	}

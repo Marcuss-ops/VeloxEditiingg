@@ -217,6 +217,13 @@ message TaskAccepted {
 message TaskRejected {
   string task_id = 1;
   string reason = 2;
+  // fix/task-rejected-lease-identity: the full tuple (task_id, attempt_id,
+  // lease_id, revision) allows the master to CAS-validate the rejection
+  // against the canonical TaskAttempt row. A stale rejection must NOT
+  // release a newer lease for the same (task_id, worker_id).
+  string attempt_id = 3;
+  string lease_id = 4;
+  int32 revision = 5;
 }
 
 message TaskLeaseGranted {

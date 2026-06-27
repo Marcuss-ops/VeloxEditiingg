@@ -18,8 +18,7 @@
 //
 // fix/remove-legacy-execution-path: the legacy JobOffer → JobResult path
 // has been fully removed. Every execution now flows through the task-native
-// dispatch (TaskOffer → executeTask → TaskResult). The submitLegacyJobResult,
-// extractLegacyOutput, and shouldUploadCompletedVideo helpers are gone.
+// dispatch (TaskOffer → executeTask → TaskResult).
 // The _task_id / _attempt_id hidden keys in Parameters are gone — taskID
 // and attemptID flow as explicit parameters from the caller.
 package worker
@@ -27,6 +26,7 @@ package worker
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"velox-shared/controltransport"
@@ -53,23 +53,37 @@ func (w *Worker) executeTask(ctx context.Context, job *api.Job, taskID, attemptI
 		return
 	}
 
-	activeJob := &ActiveJob{
+	activeTask := &ActiveTaskExecution{
+		TaskID:    taskID,
+		AttemptID: attemptID,
+		JobID:     job.JobID,
 		Job:       job,
 		LeaseID:   resolveLeaseID(job),
 		StartedAt: time.Now(),
 	}
-	w.activeJobsMu.Lock()
-	w.activeJobs[job.JobID] = activeJob
-	w.activeJobsMu.Unlock()
+	w.activeTasksMu.Lock()
+	w.activeTasks[taskID] = activeTask
+	w.taskIDsByJob[job.JobID] = append(w.taskIDsByJob[job.JobID], taskID)
+	w.activeTasksMu.Unlock()
 	defer func() {
-		w.activeJobsMu.Lock()
-		delete(w.activeJobs, job.JobID)
-		w.activeJobsMu.Unlock()
+		w.activeTasksMu.Lock()
+		delete(w.activeTasks, taskID)
+		taskIDs := w.taskIDsByJob[job.JobID]
+		for i, tid := range taskIDs {
+			if tid == taskID {
+				w.taskIDsByJob[job.JobID] = append(taskIDs[:i], taskIDs[i+1:]...)
+				break
+			}
+		}
+		if len(w.taskIDsByJob[job.JobID]) == 0 {
+			delete(w.taskIDsByJob, job.JobID)
+		}
+		w.activeTasksMu.Unlock()
 	}()
 
 	jobCtx, jobCancel := context.WithCancel(ctx)
-	w.registerJobCancel(job.JobID, jobCancel)
-	defer w.unregisterJobCancel(job.JobID)
+	activeTask.Cancel = jobCancel
+	defer jobCancel()
 
 	telemetry.GetPrometheusMetrics().SetWorkerStatus(w.config.WorkerID, 2)
 	telemetry.GetPrometheusMetrics().SetWorkerActiveJobs(w.config.WorkerID, float64(w.concurrencyLimiter.ActiveJobCount()))
@@ -88,12 +102,12 @@ func (w *Worker) executeTask(ctx context.Context, job *api.Job, taskID, attemptI
 	if execErr != nil {
 		logger.LogJobFailedWithType(w.config.WorkerID, job.JobID, job.JobType, execErr, duration)
 		w.setStatus(StatusError)
-		w.jobsFailed.Add(1)
+		w.tasksFailed.Add(1)
 		telemetry.RecordJobFailure(duration.Milliseconds())
 		telemetry.GetPrometheusMetrics().RecordJobRuntime(job.JobType, float64(duration.Milliseconds()))
 	} else {
 		logger.LogJobSuccess(w.config.WorkerID, job.JobID, job.JobType, duration)
-		w.jobsCompleted.Add(1)
+		w.tasksCompleted.Add(1)
 		telemetry.RecordJobSuccess(duration.Milliseconds())
 		telemetry.GetPrometheusMetrics().RecordJobRuntime(job.JobType, float64(duration.Milliseconds()))
 	}
@@ -259,7 +273,7 @@ func (w *Worker) dispatchTaskRunner(ctx context.Context, job *api.Job) (*taskrun
 		spec = executor.TaskSpec{
 			Version:    specVersion,
 			JobID:      job.JobID,
-			ExecutorID: job.JobType,
+			ExecutorID: strings.TrimSpace(job.JobType),
 			Payload:    specPayload,
 		}
 	} else {

@@ -115,7 +115,7 @@ func (h *Handler) handleTaskAccepted(workerID string, ta *pb.TaskAccepted) {
 	if !safeSend(sess.sendCh, &outboundMessage{Envelope: env}) {
 		log.Printf("[GRPC] sendCh full/closed for TaskLeaseGranted to worker %s — releasing claim for task %s",
 			workerID, taskID)
-		if releaseErr := h.taskRepo.ReleaseLease(ctx, taskID); releaseErr != nil {
+		if releaseErr := h.taskRepo.ReleaseLease(ctx, taskID, workerID, offer.LeaseID); releaseErr != nil {
 			log.Printf("[GRPC] Failed to release claim for task %s after grant send failure: %v", taskID, releaseErr)
 		}
 		sess.claimMu.Lock()
@@ -136,6 +136,19 @@ func (h *Handler) handleTaskAccepted(workerID string, ta *pb.TaskAccepted) {
 
 // handleTaskRejected processes typed TaskRejected — PR #4 task-native push mode.
 // Releases the claimed task back to READY for another worker.
+//
+// fix/task-rejected-lease-identity: validates the full identity tuple
+// (task_id, attempt_id, lease_id, worker_id) against the stored task
+// state BEFORE calling ReleaseLease. The pre-validation provides clear
+// log diagnostics for stale rejects. The TOCTOU gap between taskRepo.Get()
+// and taskRepo.ReleaseLease() is now CLOSED by ReleaseLease's CAS gate
+// on (worker_id, lease_id) — a stale reject cannot release a task already
+// reassigned to a different worker/lease.
+//
+// The revision field from the proto is not used as a CAS gate because
+// the worker sends revision=0 (it does not know the master-side revision
+// at reject time — the offer was never accepted). This is documented and
+// expected; the (worker_id, lease_id) tuple is the primary gate.
 func (h *Handler) handleTaskRejected(workerID string, tr *pb.TaskRejected) {
 	taskID := tr.GetTaskId()
 	reason := tr.GetReason()
@@ -143,20 +156,70 @@ func (h *Handler) handleTaskRejected(workerID string, tr *pb.TaskRejected) {
 		return
 	}
 
-	// Verify the worker owns this task before releasing.
-	if !h.verifyTaskOwnership(workerID, taskID) {
-		log.Printf("[GRPC] TaskRejected from worker %s for task %s refused — ownership mismatch (reason=%q)",
+	// fix/task-rejected-lease-identity: read the full identity tuple
+	// from the typed proto and validate against the authoritative
+	// task state BEFORE calling ReleaseLease.
+	attemptID := tr.GetAttemptId()
+	leaseID := tr.GetLeaseId()
+
+	// h.taskRepo is wired at construction by bootstrap.go; nil here is a
+	// programmer error (bootstrap must reject nil taskRepo before
+	// creating the Handler).
+	ctx := context.Background()
+	t, err := h.taskRepo.Get(ctx, taskID)
+	if err != nil || t == nil {
+		log.Printf("[GRPC] TaskRejected from worker %s for task %s — task not found (reason=%q)",
 			workerID, taskID, reason)
+		h.clearPendingOfferForTask(workerID, taskID)
 		return
 	}
-	log.Printf("[GRPC] Worker %s rejected task %s: %s", workerID, taskID, reason)
 
-	ctx := context.Background()
-	if err := h.taskRepo.ReleaseLease(ctx, taskID); err != nil {
+	// Guard 1: ownership — the rejecting worker must still own the task.
+	// A stale reject arriving after the master's reaper reassigned the
+	// task to a different worker must be silently dropped.
+	if t.WorkerID != workerID {
+		log.Printf("[GRPC] TaskRejected from worker %s for task %s refused — task now owned by %s (reason=%q)",
+			workerID, taskID, t.WorkerID, reason)
+		h.clearPendingOfferForTask(workerID, taskID)
+		return
+	}
+
+	// Guard 2: lease identity — the reported lease_id must match the
+	// stored lease_id. A stale reject from a previous lease cycle must
+	// NOT release a task that was re-leased to a different lease.
+	if leaseID != "" && t.LeaseID != "" && t.LeaseID != leaseID {
+		log.Printf("[GRPC] TaskRejected from worker %s for task %s refused — lease mismatch (reported=%s stored=%s, reason=%q)",
+			workerID, taskID, leaseID, t.LeaseID, reason)
+		h.clearPendingOfferForTask(workerID, taskID)
+		return
+	}
+
+	// Guard 3: attempt identity — the reported attempt_id must match the
+	// canonical attempt stamped at Claim time (defense-in-depth; the
+	// lease_id gate above is the primary defence).
+	if attemptID != "" && t.AttemptID != "" && t.AttemptID != attemptID {
+		log.Printf("[GRPC] TaskRejected from worker %s for task %s refused — attempt mismatch (reported=%s stored=%s, reason=%q)",
+			workerID, taskID, attemptID, t.AttemptID, reason)
+		h.clearPendingOfferForTask(workerID, taskID)
+		return
+	}
+
+	log.Printf("[GRPC] Worker %s rejected task %s (attempt=%s lease=%s): %s",
+		workerID, taskID, attemptID, leaseID, reason)
+
+	if err := h.taskRepo.ReleaseLease(ctx, taskID, workerID, leaseID); err != nil {
 		log.Printf("[GRPC] Failed to release rejected task %s: %v", taskID, err)
 	}
 
 	// Clear pending offer under claimMu.
+	h.clearPendingOfferForTask(workerID, taskID)
+}
+
+// clearPendingOfferForTask removes the pending offer for a task if the
+// worker still holds it. Safe to call when sess is nil (no-op). Extracted
+// from handleTaskRejected so every early-return path clears the offer
+// without duplicating the claimMu lock dance.
+func (h *Handler) clearPendingOfferForTask(workerID, taskID string) {
 	sess := h.getSession(workerID)
 	if sess == nil {
 		return
@@ -293,18 +356,6 @@ func (h *Handler) handleTaskResult(workerID string, tr *pb.TaskResult) {
 	}
 	log.Printf("[GRPC] TaskResult ingest for task=%s done: closed=%v artNew=%d artSkip=%d jobXn=%v jobStatus=%q",
 		taskID, res.AttemptClosed, res.ArtifactsNew, res.ArtifactsSkips, res.JobTransitioned, res.JobNewStatus)
-}
-
-// verifyTaskOwnership checks that taskID currently belongs to workerID.
-func (h *Handler) verifyTaskOwnership(workerID, taskID string) bool {
-	if workerID == "" || taskID == "" {
-		return false
-	}
-	t, err := h.taskRepo.Get(context.Background(), taskID)
-	if err != nil || t == nil {
-		return false
-	}
-	return t.WorkerID == workerID
 }
 
 // handleTaskRenewal processes a typed TaskLeaseRenewal via gRPC stream.

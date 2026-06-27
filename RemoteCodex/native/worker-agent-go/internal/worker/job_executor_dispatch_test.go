@@ -1,7 +1,7 @@
 // PR-3.8/3.9: end-to-end dispatch via executor.Registry → TaskRunner.Run.
 // Verifies the registry-driven dispatch replaces the legacy render /
 // process_video / process_audio switch with a single TaskRunner entry
-// point inside Worker.runJobTask, and that Worker.executeJob exercises
+// point inside Worker.runJobTask, and that Worker.executeTask exercises
 // the full pipeline (concurrency + active-jobs + cancel registration +
 // transport submit) against a synthetic scene.composite.v1 executor.
 //
@@ -16,7 +16,7 @@
 // executor.Registry at boot.
 //
 // The test builds the minimum Worker struct literal needed by
-// executeJob (executeJob does NOT touch stageExecutor, apiClient,
+// executeTask (executeTask does NOT touch stageExecutor, apiClient,
 // transportFactory, cache, blobs, executorRegistry other than the
 // hello-time report). The transport is a recording stub that captures
 // the job_result message for assertions.
@@ -135,7 +135,7 @@ func (r *recordingSceneComposite) Execute(
 // recordingTransport satisfies controltransport.ControlTransport.
 // Connect / Receive / Close are no-ops; Send captures every message
 // into a mutex-protected slice for post-run assertions. Receive
-// returns nil channels because executeJob never reads from them —
+// returns nil channels because executeTask never reads from them —
 // nil-nil-nil is the standard "no master → worker traffic in this
 // test" pattern.
 type recordingTransport struct {
@@ -178,7 +178,7 @@ func (r *recordingTransport) last() (controltransport.ControlMessage, bool) {
 }
 
 // newDispatchTestWorker builds a minimal Worker suitable for
-// executeJob end-to-end tests. The registry is pre-populated with
+// executeTask end-to-end tests. The registry is pre-populated with
 // fakeSceneComposite; the transport is the recording stub.
 func newDispatchTestWorker(t *testing.T) (*Worker, *recordingTransport) {
 	t.Helper()
@@ -210,9 +210,8 @@ func newDispatchTestWorker(t *testing.T) (*Worker, *recordingTransport) {
 		heartbeatBackoff:   &backoffConfig{initialInterval: time.Second, maxInterval: time.Minute, multiplier: 2.0},
 		seenCommands:       make(map[string]time.Time),
 		recentLogs:         newRecentLogBuffer(50),
-		activeJobs:         make(map[string]*ActiveJob),
-		jobCancelFuncs:     make(map[string]context.CancelFunc),
-		pendingLeaseJobs:   make(map[string]*api.Job),
+		activeTasks:        make(map[string]*ActiveTaskExecution),
+		taskIDsByJob:       make(map[string][]string),
 		executorRegistry:   reg,
 		taskRunner:         tr,
 		concurrencyLimiter: concurrency.NewConcurrencyLimiter(1),
@@ -260,9 +259,8 @@ func TestPR_3_9_DispatchResolvesVoiceoverAssetBeforeExecutor(t *testing.T) {
 		heartbeatBackoff:   &backoffConfig{initialInterval: time.Second, maxInterval: time.Minute, multiplier: 2.0},
 		seenCommands:       make(map[string]time.Time),
 		recentLogs:         newRecentLogBuffer(50),
-		activeJobs:         make(map[string]*ActiveJob),
-		jobCancelFuncs:     make(map[string]context.CancelFunc),
-		pendingLeaseJobs:   make(map[string]*api.Job),
+		activeTasks:        make(map[string]*ActiveTaskExecution),
+		taskIDsByJob:       make(map[string][]string),
 		concurrencyLimiter: concurrency.NewConcurrencyLimiter(1),
 		version:            "test",
 	}
@@ -276,10 +274,10 @@ func TestPR_3_9_DispatchResolvesVoiceoverAssetBeforeExecutor(t *testing.T) {
 	tr := taskrunner.NewTaskRunner(registry, w.logger)
 
 	// runJobTask is intentionally NOT called here — the asset-bridge
-	// resolves voiceover BEFORE runJobTask (inside executeJob +
+	// resolves voiceover BEFORE runJobTask (inside executeTask +
 	// runDispatchWithAssetBridge), and we want to assert the resolved
 	// path flows into dispatcher.payload["audio_path"]. To keep the
-	// test independent of the heavy executeJob lifecycle, we assert the
+	// test independent of the heavy executeTask lifecycle, we assert the
 	// invariant directly: simulating the bridge step ("asset resolved")
 	// and proving the recordingSceneComposite sees the resolved path.
 	jobCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)

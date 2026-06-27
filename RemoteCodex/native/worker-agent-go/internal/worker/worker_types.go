@@ -56,8 +56,12 @@ const (
 	connectionRetryBackoff = 2 * time.Second
 )
 
-// ActiveJob represents a job currently being executed by the worker.
-type ActiveJob struct {
+// ActiveTaskExecution represents a single task execution in progress.
+// Keyed by taskID (not jobID) so multi-task DAGs never collide.
+type ActiveTaskExecution struct {
+	TaskID    string
+	AttemptID string
+	JobID     string
 	Job       *api.Job
 	LeaseID   string
 	StartedAt time.Time
@@ -103,13 +107,15 @@ type Worker struct {
 	transportFactory func() controltransport.ControlTransport // Factory for new transport instances
 	logger           *logger.Logger
 
-	// Status management — error state only; busy/idle derived from activeJobs
+	// Status management — error state only; busy/idle derived from activeTasks
 	status Status
 	mu     sync.RWMutex
 
-	// Multi-job support: maps jobID -> ActiveJob for parallel execution
-	activeJobs   map[string]*ActiveJob
-	activeJobsMu sync.RWMutex
+	// Active task executions: keyed by taskID for collision-free multi-task DAGs.
+	// taskIDsByJob provides the reverse-lookup needed for CancelJob.
+	activeTasks   map[string]*ActiveTaskExecution
+	activeTasksMu sync.RWMutex
+	taskIDsByJob  map[string][]string // jobID → []taskID
 
 	// Connection state machine
 	connState        ConnectionState
@@ -132,14 +138,6 @@ type Worker struct {
 	commandMu    sync.Mutex
 	seenCommands map[string]time.Time
 
-	// Job cancellation: maps jobID -> cancel function for active jobs
-	jobCancelFuncs map[string]context.CancelFunc
-	jobCancelMu    sync.Mutex
-
-	// Pending lease jobs: accepted but waiting for JobLeaseGranted before execution
-	pendingLeaseJobs map[string]*api.Job
-	pendingLeaseMu   sync.Mutex
-
 	// Pending tasks: accepted via TaskOffer, waiting for TaskLeaseGranted
 	// before executeJob dispatch (PR-2 canonical-attempt-identity). The
 	// map is keyed by task_id (NOT job_id, NOT attempt_id) because
@@ -158,9 +156,10 @@ type Worker struct {
 	activeTaskLeases   map[string]*ActiveTaskLease
 	activeTaskLeasesMu sync.RWMutex
 
-	// Job completion stats for heartbeat reporting
-	jobsCompleted atomic.Int64
-	jobsFailed    atomic.Int64
+	// Task completion stats for heartbeat reporting.
+	// Wire keys (jobs_completed / jobs_failed) kept for master compatibility.
+	tasksCompleted atomic.Int64
+	tasksFailed    atomic.Int64
 
 	recentLogs *recentLogBuffer
 

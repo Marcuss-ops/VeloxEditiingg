@@ -22,10 +22,8 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"sync"
 
 	"velox-server/internal/jobs"
-	"velox-server/internal/store"
 	"velox-server/internal/taskattempts"
 	"velox-server/internal/taskgraph"
 	"velox-server/internal/taskoutput_artifacts"
@@ -90,13 +88,18 @@ type DeclaredArtifact struct {
 // IngestResult reports what IngestTaskResult did. Counters let callers
 // (handler, observability) emit structured logs without re-querying
 // the database.
+//
+// fix/atomic-ingestion: ArtifactsSkips is always 0 — duplicate detection
+// now happens inside IngestTaskResultAtomic's SQL transaction (UNIQUE
+// constraint skip), so the ingest service no longer distinguishes new
+// vs duplicate declarations.
 type IngestResult struct {
 	TaskID          string
 	AttemptID       string
 	JobID           string
 	AttemptClosed   bool // true iff the atomic actually flipped an attempt
-	ArtifactsNew    int  // number of artifact declarations newly registered
-	ArtifactsSkips  int  // number of duplicate declarations already present
+	ArtifactsNew    int  // number of artifact declarations sent (all registered or skipped as duplicates)
+	ArtifactsSkips  int  // always 0 under atomic ingestion; kept for API compatibility
 	JobTransitioned bool // true iff Ingest transitioned the Job to AWAITING_ARTIFACT or FAILED
 	JobNewStatus    string
 }
@@ -105,34 +108,23 @@ type IngestResult struct {
 // worker TaskResult messages. Wired in cmd/server/bootstrap.go and called
 // from grpcserver.handleTaskResult (one-line delegate).
 //
-// Concurrency: the gRPC handler fans out each TaskResult onto a goroutine
-// (`go ingestionService.IngestTaskResult(...)`). Two concurrent reports
-// for the same task_id would race the close-write + artifact register +
-// Job roll-up sequence (audit §P0.7 — "ingest MUST be serializable per
-// task"). The goroutine fan-out is fine for cross-task parallelism, but
-// intra-task ordering must hold at the service boundary.
+// fix/atomic-ingestion: outputArtRepo is no longer called directly from
+// IngestTaskResult (artifact registration now happens inside the
+// taskRepo.IngestTaskResultAtomic transaction). The field is kept for
+// API compatibility and may be used by future methods.
 //
-// We enforce intra-task serialization via a sync.Map keyed by task_id.
-// LoadOrStore returns an existing *sync.Mutex for an in-flight task so
-// the second goroutine waits; the mutex is never explicitly deleted
-// (the entry stays as a 24-byte *sync.Mutex header until process exit)
-// — bounded memory growth tracks at-rest task IDs which are themselves
-// ephemeral.
+// Concurrency: handleTaskResult calls IngestTaskResult synchronously
+// (no goroutine fan-out). Cross-session concurrency is serialized by
+// IngestTaskResultAtomic's database-level CAS — the caller that
+// wins the CAS commits everything atomically; the loser gets
+// ErrTransitionConflict and the tx rolls back entirely.
+// No in-process lock is needed.
 type TaskReportIngestionService struct {
 	taskRepo      taskgraph.Repository
 	jobsRepo      jobs.Repository
 	attemptRepo   taskattempts.Repository
 	outputArtRepo taskoutput_artifacts.Repository
 	logger        *log.Logger
-
-	muByTaskID sync.Map // map[string]*sync.Mutex — see Concurrency note above
-}
-
-// muFor returns (creating if needed) the per-taskID mutex used to serialize
-// IngestTaskResult calls for the same TaskID. Exposed only via IngestTaskResult.
-func (s *TaskReportIngestionService) muFor(taskID string) *sync.Mutex {
-	muIface, _ := s.muByTaskID.LoadOrStore(taskID, &sync.Mutex{})
-	return muIface.(*sync.Mutex)
 }
 
 // NewTaskReportIngestionService constructs the ingest service. ALL
@@ -259,10 +251,12 @@ func (s *TaskReportIngestionService) ValidateIdentityTuple(ctx context.Context, 
 //
 //  1. Validate wire identity tuple (TaskID + AttemptID + LeaseID + WorkerID
 //     non-empty AND canonical attempt lookup via GetByTaskIDAndWorkerAndLease).
-//  2. Transition Task + Attempt atomically; replay-safe (CAS misses on stale state).
-//  3. Register each OutputArtifact in task_output_artifacts (skip-on-duplicate).
-//  4. Roll up Job transition when all sibling tasks are terminal.
-//  5. Return IngestResult counters.
+//  2. Call IngestTaskResultAtomic — one database transaction that transitions
+//     Task + Attempt to terminal AND persists typed metrics, cache stats,
+//     cost basis, AND registers output artifact declarations atomically.
+//     fix/atomic-ingestion: replaces the former 3-step sequence.
+//  3. Roll up Job transition when all sibling tasks are terminal.
+//  4. Return IngestResult counters.
 //
 // Errors are surfaced (no silent swallowing); the handler logs and
 // continues — the per-row error does not stop subsequent best-effort
@@ -279,18 +273,11 @@ func (s *TaskReportIngestionService) IngestTaskResult(ctx context.Context, cmd I
 		return res, err
 	}
 
-	// Audit §P0.7: serialize per-task ingest. The gRPC handler runs
-	// IngestTaskResult in a goroutine, so without this lock a delayed
-	// retry from the same worker (or a stale retry from a different
-	// worker post-lease-revoke) could race step (2) + step (3) + step (4)
-	// concurrently.
-	taskMu := s.muFor(cmd.TaskID)
-	taskMu.Lock()
-	defer taskMu.Unlock()
-
-	// Step 2: atomic Task + Attempt terminal transition. Mirror handler
-	// semantics: status=="failed" maps to FAILED + AttemptStatusFailed;
-	// otherwise SUCCEEDED. Error fields only meaningful on failure.
+	// Step 2: atomic ingestion — Task CAS + Attempt CAS + metrics +
+	// cache + cost + artifact registration in ONE database transaction.
+	// fix/atomic-ingestion: replaces TransitionTaskToTerminalAtomic +
+	// PersistMetrics + PersistCacheStats + PersistCostBasis +
+	// per-artifact Register with a single atomic call.
 	var (
 		taskStatus    taskgraph.Status
 		attemptStatus taskattempts.AttemptStatus
@@ -307,76 +294,9 @@ func (s *TaskReportIngestionService) IngestTaskResult(ctx context.Context, cmd I
 		attemptStatus = taskattempts.AttemptStatusFailed
 	}
 
-	if err := s.taskRepo.TransitionTaskToTerminalAtomic(
-		ctx,
-		cmd.TaskID, cmd.WorkerID, cmd.LeaseID,
-		taskStatus, attemptStatus,
-		cmd.ErrorCode, cmd.ErrorDetail,
-	); err != nil {
-		// ErrTransitionConflict on a stale Task means: someone else
-		// already closed it (replay, sibling result arrived first, OR
-		// lease was revoked and reassigned to a different worker since
-		// the original report was queued — prev/audit-stale-worker
-		// retry). Per audit §P1.4 + replay-safe semantics, we treat
-		// this as success-but-no-op: step (3) (artifact register) and
-		// step (4) (job roll-up) still run, but log the observed vs
-		// expected worker_id so an operator can disambiguate a true
-		// replay from a second-attempt report that landed on a
-		// different worker.
-		if !errors.Is(err, store.ErrTransitionConflict) {
-			return res, fmt.Errorf("ingest.IngestTaskResult: close %s: %w", cmd.TaskID, err)
-		}
-		s.logger.Printf(
-			"[INGEST] Task %s CAS miss (stale/replay/lease-revoked) reporter=%s lease=%s — proceeding to artifact registration + job roll-up",
-			cmd.TaskID, cmd.WorkerID, cmd.LeaseID,
-		)
-	} else {
-		res.AttemptClosed = true
-	}
-
-	// Step 2.5 — F1: persist the typed pb.TaskExecutionMetrics envelope
-	// into task_attempt_metrics + task_attempt_cache_stats + task_attempt_cost_basis.
-	//
-	// CRITICAL: gated on res.AttemptClosed — i.e. THIS caller won the
-	// CAS race. Without this gate, a stale-replay TaskResult
-	// (ErrTransitionConflict path above) would silently OVERWRITE the
-	// canonical attempt's typed metrics via INSERT OR REPLACE keyed on
-	// attempt_id. The canonical writer's first-write wins: a stale
-	// retry from a revoked worker MUST NOT corrupt the scorecard with
-	// the wrong attempt's bytes.
-	//
-	// Failure of any of the three rows is logged but does NOT bubble:
-	// the close-write has already committed, and observability gaps are
-	// recoverable on a future replay while an audit-closure rollback
-	// would not be. We ALWAYS persist on the happy path, even for
-	// legacy v2 workers (nil / zero-valued TypedMetrics) — the scorecard
-	// percentile queries depend on a row being present in
-	// task_attempt_metrics to compute aggregates.
-	if res.AttemptClosed {
-		metrics := cmd.TypedMetrics
-		if metrics.AttemptID == "" {
-			metrics.AttemptID = cmd.AttemptID
-		}
-		if err := s.attemptRepo.PersistMetrics(ctx, metrics); err != nil {
-			s.logger.Printf("[INGEST] task_attempt_metrics persist for task=%s attempt=%s FAILED (closure still committed): %v",
-				cmd.TaskID, cmd.AttemptID, err)
-		}
-		cs := cmd.CacheStats
-		if cs.AttemptID == "" {
-			cs.AttemptID = cmd.AttemptID
-		}
-		if err := s.attemptRepo.PersistCacheStats(ctx, cs); err != nil {
-			s.logger.Printf("[INGEST] task_attempt_cache_stats persist for task=%s attempt=%s FAILED: %v",
-				cmd.TaskID, cmd.AttemptID, err)
-		}
-		if err := s.attemptRepo.PersistCostBasis(ctx, cmd.CostBasis); err != nil {
-			s.logger.Printf("[INGEST] task_attempt_cost_basis persist for task=%s attempt=%s FAILED: %v",
-				cmd.TaskID, cmd.AttemptID, err)
-		}
-	}
-
-	// Step 3: register the worker-declared output artifacts. Duplicates
-	// are skipped silently (counted as ArtifactsSkips).
+	// Build typed artifacts from declared artifacts.
+	var typedArtifacts []taskoutput_artifacts.OutputArtifact
+	artifactCount := 0
 	for _, decl := range cmd.OutputArtifacts {
 		if decl.ArtifactID == "" {
 			continue
@@ -387,7 +307,7 @@ func (s *TaskReportIngestionService) IngestTaskResult(ctx context.Context, cmd I
 				metadataJSON = string(buf)
 			}
 		}
-		err := s.outputArtRepo.Register(ctx, taskoutput_artifacts.OutputArtifact{
+		typedArtifacts = append(typedArtifacts, taskoutput_artifacts.OutputArtifact{
 			TaskID:         cmd.TaskID,
 			AttemptID:      cmd.AttemptID,
 			ArtifactID:     decl.ArtifactID,
@@ -397,18 +317,59 @@ func (s *TaskReportIngestionService) IngestTaskResult(ctx context.Context, cmd I
 			DeclaredSHA256: decl.SHA256,
 			MetadataJSON:   metadataJSON,
 		})
-		switch {
-		case err == nil:
-			res.ArtifactsNew++
-		case errors.Is(err, taskoutput_artifacts.ErrAlreadyRegistered):
-			res.ArtifactsSkips++
-		default:
-			s.logger.Printf("[INGEST] output_artifacts register failed for task=%s artifact=%s: %v",
-				cmd.TaskID, decl.ArtifactID, err)
-		}
+		artifactCount++
 	}
 
-	// Step 4: Job roll-up. Skip when the worker did not declare a
+	// Ensure metrics/cache/cost have attempt_id stamped.
+	metrics := cmd.TypedMetrics
+	if metrics.AttemptID == "" {
+		metrics.AttemptID = cmd.AttemptID
+	}
+	cs := cmd.CacheStats
+	if cs.AttemptID == "" {
+		cs.AttemptID = cmd.AttemptID
+	}
+	cb := cmd.CostBasis
+	if cb.AttemptID == "" {
+		cb.AttemptID = cmd.AttemptID
+	}
+
+	ingestErr := s.taskRepo.IngestTaskResultAtomic(ctx, taskgraph.IngestResultCommand{
+		TaskID:        cmd.TaskID,
+		WorkerID:      cmd.WorkerID,
+		LeaseID:       cmd.LeaseID,
+		TaskStatus:    taskStatus,
+		AttemptStatus: attemptStatus,
+		ErrorCode:     cmd.ErrorCode,
+		ErrorMsg:      cmd.ErrorDetail,
+		Metrics:       metrics,
+		CacheStats:    cs,
+		CostBasis:     cb,
+		Artifacts:     typedArtifacts,
+	})
+	if ingestErr != nil {
+		// fix/cas-conflict-noop: ErrTransitionConflict on a stale Task
+		// means someone else already closed it (replay, sibling result
+		// arrived first, OR lease was revoked and reassigned). With
+		// atomic ingestion, the ENTIRE transaction rolled back — no
+		// metrics, no cache stats, no cost basis, no artifacts were
+		// written. We must NOT proceed to job roll-up either: the
+		// report that WON the CAS race will trigger the correct Job
+		// transition when IT lands. A stale report triggering a
+		// spurious job roll-up would produce a ghost transition
+		// (e.g. AWAITING_ARTIFACT before all tasks are truly terminal)
+		// and mask the true audit trail.
+		if !errors.Is(ingestErr, taskgraph.ErrTransitionConflict) {
+			return res, fmt.Errorf("ingest.IngestTaskResult: atomic ingest %s: %w", cmd.TaskID, ingestErr)
+		}
+		s.logger.Printf(
+			"[INGEST] Task %s CAS miss (stale/replay/lease-revoked) reporter=%s lease=%s — complete no-op, skipping job roll-up",
+			cmd.TaskID, cmd.WorkerID, cmd.LeaseID,
+		)
+		return res, nil
+	}
+
+	// Step 3: Job roll-up. Skip when the worker did not declare a
 	// job_id (defensive — task-native dispatch always sets it; legacy
 	// wires may not).
 	if cmd.JobID == "" {

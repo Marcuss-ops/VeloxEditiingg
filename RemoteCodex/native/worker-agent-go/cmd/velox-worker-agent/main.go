@@ -351,8 +351,7 @@ func main() {
 	// PR-3.9 wires scene.composite.v1 against the canonical
 	// pipeline.Runner that powers the worker-agent whenever the C++
 	// video engine is installed + reachable. The pipeline + native
-	// render-client wiring lives in video.NewPipelineRunner, shared
-	// with the legacy VideoGenerationWorkflow.
+	// render-client wiring lives in video.NewPipelineRunner.
 	logger.Info("[BOOT] Building executor registry at composition root (cmd/velox-worker-agent)")
 	registry := executor.NewRegistry()
 
@@ -369,9 +368,7 @@ func main() {
 		// Fail closed: a missing C++ engine is a deploy-time problem.
 		// Silently downgrading to an empty registry re-introduces the
 		// dead-letter class of bug — every scene.composite job would
-		// route to ErrExecutorNotFound. This is a deliberate PR-3.9
-		// tightening vs the legacy "NewVideoGenerationWorkflow
-		// warns-and-continue" behaviour; ops must install the C++
+		// route to ErrExecutorNotFound. Ops must install the C++
 		// engine or set VELOX_VIDEO_ENGINE_CPP_BIN.
 		fmt.Fprintf(os.Stderr, "Error: failed to construct pipeline.runner for scene.composite.v1: %v\n", pipeErr)
 		os.Exit(1)

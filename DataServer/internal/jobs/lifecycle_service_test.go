@@ -48,7 +48,7 @@ func (s *stubImpl) RequeueExpiredLeases(ctx context.Context, now time.Time, limi
 func (s *stubImpl) ClaimNext(ctx context.Context, workerID string, allowedJobTypes []string) (*ClaimNextResult, error) {
 	return nil, errNotImplemented
 }
-func (s *stubImpl) ReleaseLease(ctx context.Context, id string) error { return errNotImplemented }
+func (s *stubImpl) ReleaseLease(ctx context.Context, id, workerID, leaseID string) error { return errNotImplemented }
 func (s *stubImpl) RecordRenderFinished(ctx context.Context, id, workerID, leaseID string, attempt, revision int) error {
 	return errNotImplemented
 }

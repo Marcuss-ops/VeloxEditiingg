@@ -69,6 +69,29 @@ full_tree_patterns=(
   'NewLegacy'                         # Stub from de-legacy migration
   'DeprecatedService'                 # Same
   'local-workers\.sh\.deprecated'     # Replaced by data/ansible
+  # Item 7 (worker state consolidation): removed dead maps + functions.
+  'pendingLeaseJobs'                  # Removed: never-populated map (PR #7)
+  'storePendingJob'                   # Removed: dead method (PR #7)
+  'takePendingJob'                    # Removed: dead method (PR #7)
+  'jobCancelFuncs'                    # Removed: replaced by ActiveTaskExecution.Cancel (PR #7)
+  'registerJobCancel'                 # Removed: cancel embedded in ActiveTaskExecution (PR #7)
+  'unregisterJobCancel'               # Removed: cancel embedded in ActiveTaskExecution (PR #7)
+  # Item 8 (renderer cleanup): removed legacy engine + fallback paths.
+  'CompileLegacyRenderJobParams'      # Removed: legacy render-plan adapter (PR #8)
+  'runNativeCxxEngine'                # Removed: --full-video engine launcher (PR #8)
+  # Item 11 (duplicate roll-up): removed Handler-level Job helpers.
+  'verifyJobOwnership'                # Removed: dead Job-era ownership check (PR #11)
+  'lookupJobCASFields'                # Removed: dead Job-era CAS helper (PR #11)
+  # Additional legacy removals.
+  'submitLegacyJobResult'             # Removed: legacy JobResult submission path
+  # Item 9: Job-era message constants removed — must not reappear.
+  'MsgJobOffer'                       # Removed: superseded by MsgTaskOffer (PR #9)
+  'MsgJobResult'                      # Removed: superseded by MsgTaskResult (PR #9)
+  'MsgJobAccepted'                    # Removed: superseded by MsgTaskAccepted (PR #9)
+  'MsgJobRejected'                    # Removed: superseded by MsgTaskRejected (PR #9)
+  'MsgJobProgress'                    # Removed: dead constant (PR #9)
+  'MsgJobLeaseGranted'                # Removed: superseded by MsgTaskLeaseGranted (PR #9)
+  'MsgLeaseRenewal'                   # Removed: superseded by MsgTaskLeaseRenewal (PR #9)
 )
 
 # Prohibited patterns checked only on the DIFF (forbidden in new/modified code)
@@ -77,6 +100,15 @@ diff_patterns=(
   # not reintroduce it. os.Create is pre-existing and excluded by diff
   # scope (only new/modified lines trigger).
   '\.Create\('   # Removed repository method (PR #8)
+  # Item 7: worker state fields — replaced by activeTasks keyed by taskID.
+  # Existing comments/docs still reference the old names; only NEW code
+  # (modified/added lines) is flagged.
+  '\.activeJobs\b'                    # Replaced by activeTasks (PR #7)
+  '\bActiveJob\b'                     # Replaced by ActiveTaskExecution (PR #7)
+  # Item 8: --full-video fallback removed — new code must only use --render.
+  # C++ engine sources may still reference it (diff-scoped so only new
+  # additions in modified files are flagged).
+  '--full-video'                      # Legacy engine flag (use --render only)
 )
 
 violations=0
@@ -106,7 +138,8 @@ for pattern in "${full_tree_patterns[@]}"; do
            ':!scripts/ci/check-no-legacy.sh' \
            ':!scripts/ci/lib/diff-scope.sh' \
            ':!scripts/ci/operator-history-scrub.sh' \
-           ':!DataServer/server.exe' 2>/dev/null || true
+           ':!DataServer/server.exe' \
+           ':!server' 2>/dev/null || true
        )"; [[ -n "$matches" ]]; then
     printf 'FORBIDDEN (exists in repository): %s\n%s\n\n' \
       "$pattern" "$matches" >&2

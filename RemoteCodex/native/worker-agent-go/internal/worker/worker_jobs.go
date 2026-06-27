@@ -1,6 +1,6 @@
 // Package worker provides job processing logic for the worker agent.
 // Job polling is now handled by the ControlTransport; the receiveLoop in
-// worker.go routes JobOffer messages to executeJob. This file retains
+// worker.go routes JobOffer messages to executeTask. This file retains
 // job validation helpers used by the receive loop and job executor.
 package worker
 

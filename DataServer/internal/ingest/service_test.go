@@ -96,7 +96,7 @@ func (s *stubIngestTaskRepo) GetByJobID(_ context.Context, jobID string) (*taskg
 func (s *stubIngestTaskRepo) ClaimNextReadyTask(_ context.Context, _, _ string) (*taskgraph.TaskWithSpec, error) {
 	panic("stubIngestTaskRepo.ClaimNextReadyTask")
 }
-func (s *stubIngestTaskRepo) ReleaseLease(_ context.Context, _ string) error {
+func (s *stubIngestTaskRepo) ReleaseLease(_ context.Context, _, _, _ string) error {
 	panic("stubIngestTaskRepo.ReleaseLease")
 }
 func (s *stubIngestTaskRepo) Start(_ context.Context, _, _, _ string, _, _ int) error {
@@ -215,7 +215,7 @@ func (s *stubIngestJobsRepo) ClaimNext(_ context.Context, _ string, _ []string) 
 func (s *stubIngestJobsRepo) ClaimNextForProfile(_ context.Context, _ string, _ []string, _ costmodel.WorkerProfile, _ int) (*jobs.ClaimNextResult, error) {
 	panic("stubIngestJobsRepo.ClaimNextForProfile")
 }
-func (s *stubIngestJobsRepo) ReleaseLease(_ context.Context, _ string) error {
+func (s *stubIngestJobsRepo) ReleaseLease(_ context.Context, _, _, _ string) error {
 	panic("stubIngestJobsRepo.ReleaseLease")
 }
 func (s *stubIngestJobsRepo) RecordRenderFinished(_ context.Context, _, _, _ string, _, _ int) error {

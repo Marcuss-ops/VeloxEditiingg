@@ -206,20 +206,17 @@ func New(cfg *config.WorkerConfig, version string, opts ...Option) (*Worker, err
 		},
 		version: version,
 
-		seenCommands:     make(map[string]time.Time),
-		recentLogs:       recentLogs,
-		jobCancelFuncs:   make(map[string]context.CancelFunc),
-		activeJobs:       make(map[string]*ActiveJob),
-		pendingLeaseJobs: make(map[string]*api.Job),
+		seenCommands:  make(map[string]time.Time),
+		recentLogs:    recentLogs,
+		activeTasks:   make(map[string]*ActiveTaskExecution),
+		taskIDsByJob:  make(map[string][]string),
 		// PR-2: TaskOffer-accepted tasks awaiting TaskLeaseGranted before
-		// executeJob dispatch. Mirrors pendingLeaseJobs shape; keyed by
-		// task_id so there is exactly one canonical entry per outstanding
-		// offer per session (handleTaskAccepted on master side uses the
-		// same canonical task_id for the pendingTaskOffer slot).
+		// executeJob dispatch. Keyed by task_id — one canonical entry per
+		// outstanding offer per session.
 		pendingTasks: make(map[string]*api.Job),
 		// PR-2 followup: per-task-native lease-state registry. Threaded
 		// by MsgTaskLeaseGranted handler (separate PR) so leaseRenewLoop
-		// can fire MsgTaskLeaseRenewal alongside legacy MsgLeaseRenewal.
+		// can fire MsgTaskLeaseRenewal.
 		activeTaskLeases:   make(map[string]*ActiveTaskLease),
 		connState:          ConnDisconnected,
 		concurrencyLimiter: concurrency.NewConcurrencyLimiter(detectedConcurrency),
@@ -320,15 +317,15 @@ func (w *Worker) SetExitFunc(fn ExitFunc) {
 	w.exitFunc = fn
 }
 
-// Status returns the current worker status, derived from activeJobs count and error state.
-// Busy = at least one active job. Error = last job failed (status field). Idle = no jobs, no error.
+// Status returns the current worker status, derived from activeTasks count and error state.
+// Busy = at least one active task. Error = last task failed (status field). Idle = none.
 func (w *Worker) Status() Status {
 	if w.stopped.Load() {
 		return StatusStopped
 	}
-	w.activeJobsMu.RLock()
-	activeCount := len(w.activeJobs)
-	w.activeJobsMu.RUnlock()
+	w.activeTasksMu.RLock()
+	activeCount := len(w.activeTasks)
+	w.activeTasksMu.RUnlock()
 	if activeCount > 0 {
 		return StatusBusy
 	}
@@ -380,37 +377,34 @@ func (w *Worker) IsDraining() bool {
 	return w.drainMode.Load()
 }
 
-// registerJobCancel stores a cancel function for a job.
-// Called when a job starts executing, allowing cancel_job command to abort it.
-func (w *Worker) registerJobCancel(jobID string, cancel context.CancelFunc) {
-	w.jobCancelMu.Lock()
-	defer w.jobCancelMu.Unlock()
-	w.jobCancelFuncs[jobID] = cancel
-	w.logger.Debug("[CANCEL] Registered cancel for job %s", jobID)
-}
-
-// unregisterJobCancel removes a stored cancel function for a job.
-// Called when a job finishes execution (success or failure).
-func (w *Worker) unregisterJobCancel(jobID string) {
-	w.jobCancelMu.Lock()
-	defer w.jobCancelMu.Unlock()
-	delete(w.jobCancelFuncs, jobID)
-	w.logger.Debug("[CANCEL] Unregistered cancel for job %s", jobID)
-}
-
-// cancelJob cancels a running job by calling its stored cancel function.
-// Called by the cancel_job command handler.
+// cancelJob cancels all running tasks for a job by looking up taskIDsByJob.
+// Called by MsgCancelJob + MsgLeaseRevoked + recovery directive handlers.
+// Snapshots cancel funcs under activeTasksMu, then calls them outside the
+// lock to avoid blocking heartbeat/Status readers during cancellation.
 func (w *Worker) cancelJob(jobID string) bool {
-	w.jobCancelMu.Lock()
-	defer w.jobCancelMu.Unlock()
-	cancel, ok := w.jobCancelFuncs[jobID]
-	if !ok {
-		w.logger.Warn("[CANCEL] No cancel function found for job %s (not running here?)", jobID)
+	w.activeTasksMu.Lock()
+	taskIDs := w.taskIDsByJob[jobID]
+	if len(taskIDs) == 0 {
+		w.activeTasksMu.Unlock()
+		w.logger.Warn("[CANCEL] No active tasks for job %s", jobID)
 		return false
 	}
-	cancel()
-	delete(w.jobCancelFuncs, jobID)
-	w.logger.Info("[CANCEL] Cancel signal sent for job %s", jobID)
-	return true
+	// Snapshot cancel funcs before unlocking to avoid holding the write
+	// lock during context cancellation (which may trigger defers that
+	// try to RLock activeTasksMu in heartbeat/Status paths).
+	cancels := make([]context.CancelFunc, 0, len(taskIDs))
+	for _, taskID := range taskIDs {
+		if at, ok := w.activeTasks[taskID]; ok && at.Cancel != nil {
+			cancels = append(cancels, at.Cancel)
+		}
+	}
+	w.activeTasksMu.Unlock()
 
+	cancelled := 0
+	for _, cancel := range cancels {
+		cancel()
+		cancelled++
+	}
+	w.logger.Info("[CANCEL] Cancelled %d/%d tasks for job %s", cancelled, len(taskIDs), jobID)
+	return cancelled > 0
 }

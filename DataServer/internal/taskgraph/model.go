@@ -5,7 +5,12 @@
 // out of scope for this PR.
 package taskgraph
 
-import "time"
+import (
+	"time"
+
+	"velox-server/internal/taskattempts"
+	"velox-server/internal/taskoutput_artifacts"
+)
 
 // Task is the canonical domain model for a render task.
 //
@@ -51,4 +56,21 @@ type Task struct {
 type TaskWithSpec struct {
 	Task
 	SpecPayload map[string]interface{} `json:"spec_payload,omitempty"`
+}
+
+// IngestResultCommand bundles all data required for IngestTaskResultAtomic.
+// The repository implementation wraps Task+Attempt close, metrics/cache/cost
+// persistence, and artifact registration in a single database transaction.
+type IngestResultCommand struct {
+	TaskID        string
+	WorkerID      string
+	LeaseID       string
+	TaskStatus    Status
+	AttemptStatus taskattempts.AttemptStatus
+	ErrorCode     string
+	ErrorMsg      string
+	Metrics       taskattempts.AttemptMetrics
+	CacheStats    taskattempts.AttemptCacheStats
+	CostBasis     taskattempts.AttemptCostBasis
+	Artifacts     []taskoutput_artifacts.OutputArtifact
 }

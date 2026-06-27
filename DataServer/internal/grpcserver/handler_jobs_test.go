@@ -150,7 +150,7 @@ func (s *spoofStubTaskRepo) GetByJobID(_ context.Context, jobID string) (*taskgr
 func (s *spoofStubTaskRepo) ClaimNextReadyTask(_ context.Context, _, _ string) (*taskgraph.TaskWithSpec, error) {
 	panic("spoofStubTaskRepo.ClaimNextReadyTask: not exercised by IngestTaskResult on rejection path")
 }
-func (s *spoofStubTaskRepo) ReleaseLease(_ context.Context, _ string) error {
+func (s *spoofStubTaskRepo) ReleaseLease(_ context.Context, _, _, _ string) error {
 	panic("spoofStubTaskRepo.ReleaseLease: not exercised by IngestTaskResult on rejection path")
 }
 func (s *spoofStubTaskRepo) Start(_ context.Context, _, _, _ string, _, _ int) error {
@@ -248,7 +248,7 @@ func (s *spoofStubJobsRepo) ClaimNext(_ context.Context, _ string, _ []string) (
 func (s *spoofStubJobsRepo) ClaimNextForProfile(_ context.Context, _ string, _ []string, _ costmodel.WorkerProfile, _ int) (*jobs.ClaimNextResult, error) {
 	panic("spoofStubJobsRepo.ClaimNextForProfile")
 }
-func (s *spoofStubJobsRepo) ReleaseLease(_ context.Context, _ string) error {
+func (s *spoofStubJobsRepo) ReleaseLease(_ context.Context, _, _, _ string) error {
 	panic("spoofStubJobsRepo.ReleaseLease")
 }
 func (s *spoofStubJobsRepo) RecordRenderFinished(_ context.Context, _, _, _ string, _, _ int) error {

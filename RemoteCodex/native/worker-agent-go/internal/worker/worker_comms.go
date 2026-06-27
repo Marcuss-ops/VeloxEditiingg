@@ -182,35 +182,35 @@ func (w *Worker) sendHeartbeat(ctx context.Context) error {
 	}
 	payload["capabilities"] = w.capabilitiesMap(hostname)
 
-	payload["jobs_completed"] = w.jobsCompleted.Load()
-	payload["jobs_failed"] = w.jobsFailed.Load()
+	payload["jobs_completed"] = w.tasksCompleted.Load()
+	payload["jobs_failed"] = w.tasksFailed.Load()
 
-	w.activeJobsMu.RLock()
-	activeJobList := make([]map[string]interface{}, 0, len(w.activeJobs))
+	w.activeTasksMu.RLock()
+	activeJobList := make([]map[string]interface{}, 0, len(w.activeTasks))
 	var primaryJobID string
-	for _, aj := range w.activeJobs {
+	for _, at := range w.activeTasks {
 		if primaryJobID == "" {
-			primaryJobID = aj.Job.JobID
+			primaryJobID = at.JobID
 		}
 		jobInfo := map[string]interface{}{
-			"job_id":     aj.Job.JobID,
-			"job_run_id": aj.Job.JobRunID,
-			"job_type":   aj.Job.JobType,
-			"priority":   aj.Job.Priority,
-			"lease_id":   aj.LeaseID,
-			"attempt":    resolveJobAttempt(aj.Job),
+			"job_id":     at.JobID,
+			"job_run_id": at.Job.JobRunID,
+			"job_type":   at.Job.JobType,
+			"priority":   at.Job.Priority,
+			"lease_id":   at.LeaseID,
+			"attempt":    resolveJobAttempt(at.Job),
 		}
-		if aj.Progress.Percent > 0 {
-			jobInfo["progress_percent"] = aj.Progress.Percent
-			jobInfo["progress_scene"] = aj.Progress.Scene
-			jobInfo["progress_total"] = aj.Progress.TotalScenes
-			if aj.Progress.Stage != "" {
-				jobInfo["progress_stage"] = aj.Progress.Stage
+		if at.Progress.Percent > 0 {
+			jobInfo["progress_percent"] = at.Progress.Percent
+			jobInfo["progress_scene"] = at.Progress.Scene
+			jobInfo["progress_total"] = at.Progress.TotalScenes
+			if at.Progress.Stage != "" {
+				jobInfo["progress_stage"] = at.Progress.Stage
 			}
 		}
 		activeJobList = append(activeJobList, jobInfo)
 	}
-	w.activeJobsMu.RUnlock()
+	w.activeTasksMu.RUnlock()
 
 	if len(activeJobList) > 0 {
 		payload["active_jobs"] = activeJobList
@@ -234,16 +234,8 @@ func (w *Worker) sendHeartbeat(ctx context.Context) error {
 // leaseRenewLoop sends periodic lease renewals for all active jobs AND
 // task-native leases via transport.Send().
 //
-// PR-2 (canonical-attempt-identity): the task-native path fires
-// MsgTaskLeaseRenewal alongside the existing MsgLeaseRenewal so a worker
-// carrying BOTH legacy-job and task-native entries (during the PR #5
-// cutover) keeps both lease types current. Each MsgTaskLeaseRenewal
-// carries (task_id, attempt_id, lease_id, requested_expiry) so the
-// master's RenewLease CAS predicate matches the canonical TaskAttempt
-// row. Iteration source for task-native is the activeTaskLeases map
-// populated by the MsgTaskLeaseGranted handler (added in this PR;
-// pendingTasks → executeJob wiring is the caller-side population
-// surface).
+// PR-2 (canonical-attempt-identity): fires MsgTaskLeaseRenewal for
+// every activeTaskLeases entry. Legacy job lease renewal removed.
 func (w *Worker) leaseRenewLoop(ctx context.Context) {
 	defer w.wg.Done()
 
@@ -259,51 +251,7 @@ func (w *Worker) leaseRenewLoop(ctx context.Context) {
 			w.logger.Debug("Lease renew loop exiting (stop signal)")
 			return
 		case <-ticker.C:
-			w.activeJobsMu.RLock()
-			jobs := make([]*ActiveJob, 0, len(w.activeJobs))
-			for _, aj := range w.activeJobs {
-				jobs = append(jobs, aj)
-			}
-			w.activeJobsMu.RUnlock()
-
-			for _, aj := range jobs {
-				if aj == nil || aj.Job == nil {
-					continue
-				}
-
-				leaseID := aj.LeaseID
-				if leaseID == "" {
-					continue
-				}
-
-				leaseExpiry := time.Now().UTC().Add(30 * time.Minute).Format(time.RFC3339)
-				attempt := resolveJobAttempt(aj.Job)
-
-				payload := map[string]interface{}{
-					"job_id":           aj.Job.JobID,
-					"lease_id":         leaseID,
-					"attempt":          attempt,
-					"lease_expires_at": leaseExpiry,
-				}
-
-				msg := controltransport.NewMessageWithPayload(
-					controltransport.MsgLeaseRenewal,
-					w.config.WorkerID,
-					w.config.ProtocolVersion,
-					payload,
-				)
-
-				if err := w.transport.Send(ctx, msg); err != nil {
-					w.logger.Warn("[LEASE] Failed to renew lease for job %s: %v", aj.Job.JobID, err)
-				} else {
-					w.logger.Debug("[LEASE] Renewed lease for job %s (lease_id=%s)", aj.Job.JobID, leaseID)
-				}
-			}
-
-			// PR-2: task-native renewals — dispatched ALONGSIDE the
-			// legacy job-loop. Snapshot under RLock, iterate outside the
-			// lock (transport.Send is network I/O; must NOT block the
-			// write-side Stop()/Remove callers).
+			// PR-2: task-native lease renewals only — dispatched via activeTaskLeases.
 			taskLeases := w.SnapshotActiveTaskLeases()
 			for _, tl := range taskLeases {
 				if tl == nil || tl.TaskID == "" || tl.LeaseID == "" {

@@ -223,7 +223,7 @@ func (h *Handler) sendPushTaskOffer(ctx context.Context, workerID string) {
 	// Send via sendCh (sessionWriter handles the actual stream.Send).
 	if !safeSend(sess.sendCh, &outboundMessage{Envelope: env}) {
 		log.Printf("[GRPC] sendCh full/closed for TaskOffer to worker %s — releasing claim for task %s", workerID, tws.ID)
-		if releaseErr := h.taskRepo.ReleaseLease(ctx, tws.ID); releaseErr != nil {
+		if releaseErr := h.taskRepo.ReleaseLease(ctx, tws.ID, workerID, leaseID); releaseErr != nil {
 			log.Printf("[GRPC] Failed to release claim for task %s after send failure: %v", tws.ID, releaseErr)
 		}
 		return

@@ -424,8 +424,11 @@ func (t *GRPCStreamTransport) messageToEnvelope(msg controltransport.ControlMess
 	case controltransport.MsgTaskRejected:
 		env.Msg = &pb.WorkerToMasterEnvelope_TaskRejected{
 			TaskRejected: &pb.TaskRejected{
-				TaskId: getPayloadStr(msg.Payload, "task_id"),
-				Reason: getPayloadStr(msg.Payload, "reason"),
+				TaskId:    getPayloadStr(msg.Payload, "task_id"),
+				Reason:    getPayloadStr(msg.Payload, "reason"),
+				AttemptId: getPayloadStr(msg.Payload, "attempt_id"),
+				LeaseId:   getPayloadStr(msg.Payload, "lease_id"),
+				Revision:  int32(getPayloadInt64(msg.Payload, "revision")),
 			},
 		}
 

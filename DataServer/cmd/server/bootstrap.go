@@ -113,11 +113,12 @@ var ErrPostgresNotYetWired = errors.New(
 // (jobs↔tasks). Called by both buildTestDeps (tests) and runServer
 // (production) so the wiring stays canonical in exactly one place.
 func wirePostBuild(j *jobsDeps, t *taskDeps) error {
-	// PR-04 / fix/task-expiry-atomic-transition: wire the JobsLifecycle
-	// into the TaskLifecycle so ExpireTaskLease's retry-budget lookup and
-	// Job-aggregate update have context.
-	if j != nil && j.Lifecycle != nil && t != nil && t.TaskLifecycle != nil {
-		t.TaskLifecycle.SetJobsRepo(j.Lifecycle.Jobs())
+	// fix/remove-job-lease-ops: j.SQLiteRepo (concrete *SQLiteJobRepository)
+	// satisfies taskgraph.JobsRetryQuerier via structural typing (Get +
+	// FailWithRetry). j.Lifecycle.Jobs() returns jobs.Repository which
+	// no longer has FailWithRetry on the canonical interface.
+	if j != nil && j.SQLiteRepo != nil && t != nil && t.TaskLifecycle != nil {
+		t.TaskLifecycle.SetJobsRepo(j.SQLiteRepo)
 	}
 
 	// feat/task-report-ingestion: build the canonical

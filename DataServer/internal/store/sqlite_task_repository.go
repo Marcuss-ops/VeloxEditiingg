@@ -702,6 +702,200 @@ func (r *SQLiteTaskRepository) TransitionTaskToTerminalAtomic(
 	return nil
 }
 
+// IngestTaskResultAtomic is the single legal entry point for ingesting
+// a worker TaskResult. It atomically transitions Task + Attempt to
+// terminal AND persists typed metrics, cache stats, cost basis, AND
+// registers output artifact declarations in ONE database transaction.
+// No partial writes: if any step fails, everything rolls back.
+//
+// fix/atomic-ingestion: replaces the 4-step sequence
+// (TransitionTaskToTerminalAtomic + PersistMetrics + PersistCacheStats +
+// PersistCostBasis + per-artifact Register) with a single atomic call.
+//
+// Returns ErrTransitionConflict on stale Task CAS; the caller must NOT
+// proceed with artifact registration or job roll-up on this error.
+// Returns taskattempts.ErrStaleReport when the Task CAS succeeds but
+// no active attempt exists for the identity tuple (§9.5 guard).
+func (r *SQLiteTaskRepository) IngestTaskResultAtomic(ctx context.Context, cmd taskgraph.IngestResultCommand) error {
+	if r.store == nil || r.store.db == nil {
+		return fmt.Errorf("task repository: store not initialized")
+	}
+	if cmd.TaskID == "" || cmd.WorkerID == "" || cmd.LeaseID == "" {
+		return fmt.Errorf("task repository: IngestTaskResultAtomic requires task_id, worker_id, lease_id")
+	}
+	if !cmd.TaskStatus.IsTerminal() {
+		return fmt.Errorf("task repository: IngestTaskResultAtomic requires terminal task status, got %s", cmd.TaskStatus)
+	}
+	if !cmd.AttemptStatus.IsTerminal() {
+		return fmt.Errorf("task repository: IngestTaskResultAtomic requires terminal attempt status, got %s", cmd.AttemptStatus)
+	}
+
+	tx, err := r.store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("task ingest atomic begin: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	// 1. Task CAS: any non-terminal → taskStatus (gated on worker + lease).
+	taskRes, err := tx.ExecContext(ctx,
+		`UPDATE tasks
+		 SET status = ?, completed_at = ?, revision = revision + 1, updated_at = ?
+		 WHERE task_id = ? AND status IN ('LEASED', 'RUNNING', 'READY')
+		   AND worker_id = ? AND lease_id = ?`,
+		string(cmd.TaskStatus), now, now,
+		cmd.TaskID, cmd.WorkerID, cmd.LeaseID,
+	)
+	if err != nil {
+		return fmt.Errorf("task ingest atomic task cas: %w", err)
+	}
+	if n, _ := taskRes.RowsAffected(); n != 1 {
+		return fmt.Errorf("task ingest atomic %s: %w", cmd.TaskID, taskgraph.ErrTransitionConflict)
+	}
+
+	// 2. Attempt CAS: non-terminal → attemptStatus (gated on worker + lease).
+	attRes, err := tx.ExecContext(ctx,
+		`UPDATE task_attempts
+		 SET status = ?, completed_at = ?, error_code = ?, error_message = ?,
+		     report_version = report_version + 1, updated_at = ?
+		 WHERE task_id = ?
+		   AND worker_id = ? AND lease_id = ?
+		   AND status NOT IN ('SUCCEEDED', 'FAILED', 'CANCELLED')`,
+		string(cmd.AttemptStatus), now, cmd.ErrorCode, cmd.ErrorMsg, now,
+		cmd.TaskID, cmd.WorkerID, cmd.LeaseID,
+	)
+	if err != nil {
+		return fmt.Errorf("task ingest atomic attempt cas: %w", err)
+	}
+	attemptRows, _ := attRes.RowsAffected()
+	if attemptRows == 0 {
+		// Either the attempt is already terminal (replay-safe) OR no
+		// attempt exists at all for this (task_id, worker_id, lease_id).
+		var existingTerminal int
+		probeErr := tx.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM task_attempts
+			 WHERE task_id = ? AND worker_id = ? AND lease_id = ?
+			   AND status IN ('SUCCEEDED', 'FAILED', 'CANCELLED')`,
+			cmd.TaskID, cmd.WorkerID, cmd.LeaseID,
+		).Scan(&existingTerminal)
+		if probeErr != nil {
+			return fmt.Errorf("task ingest atomic attempt probe: %w", probeErr)
+		}
+		if existingTerminal == 0 {
+			return fmt.Errorf("task ingest atomic %s: missing attempt row for worker=%s lease=%s (§9.5 invariant guard): %w",
+				cmd.TaskID, cmd.WorkerID, cmd.LeaseID, taskattempts.ErrStaleReport)
+		}
+		// existingTerminal > 0: replay-safe — continue with idempotent
+		// metrics/cache/cost/artifact writes below.
+	}
+
+	// 3. Persist typed execution metrics (idempotent INSERT OR REPLACE).
+	if cmd.Metrics.AttemptID != "" {
+		streamCopy := 0
+		if cmd.Metrics.FinalConcatStreamCopy {
+			streamCopy = 1
+		}
+		concatMode := cmd.Metrics.ConcatMode
+		if concatMode == "" {
+			concatMode = "n/a"
+		}
+		_, err = tx.ExecContext(ctx,
+			`INSERT OR REPLACE INTO task_attempt_metrics (
+				attempt_id, input_bytes, output_bytes,
+				bytes_from_drive, bytes_from_blobstore, bytes_from_local_cache,
+				cpu_time_ms, gpu_time_ms, peak_rss_bytes, peak_vram_bytes,
+				frames_decoded, frames_composited, frames_encoded,
+				ffmpeg_speed_ratio, encode_passes,
+				final_concat_stream_copy, concat_mode,
+				temp_bytes_written, duplicate_download_bytes,
+				media_duration_seconds, wall_clock_seconds
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+			          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			cmd.Metrics.AttemptID, cmd.Metrics.InputBytes, cmd.Metrics.OutputBytes,
+			cmd.Metrics.BytesFromDrive, cmd.Metrics.BytesFromBlobstore, cmd.Metrics.BytesFromLocalCache,
+			cmd.Metrics.CPUTimeMS, cmd.Metrics.GPUTimeMS, cmd.Metrics.PeakRSSBytes, cmd.Metrics.PeakVRAMBytes,
+			cmd.Metrics.FramesDecoded, cmd.Metrics.FramesComposited, cmd.Metrics.FramesEncoded,
+			cmd.Metrics.FFmpegSpeedRatio, cmd.Metrics.EncodePasses,
+			streamCopy, concatMode,
+			cmd.Metrics.TempBytesWritten, cmd.Metrics.DuplicateDownloadBytes,
+			cmd.Metrics.MediaDurationSeconds, cmd.Metrics.WallClockSeconds,
+		)
+		if err != nil {
+			return fmt.Errorf("task ingest atomic metrics: %w", err)
+		}
+	}
+
+	// 4. Persist cache stats (idempotent INSERT OR REPLACE).
+	if cmd.CacheStats.AttemptID != "" {
+		_, err = tx.ExecContext(ctx,
+			`INSERT OR REPLACE INTO task_attempt_cache_stats (
+				attempt_id, cache_hits, cache_misses, cache_evictions,
+				cache_corruptions, cache_bytes_used, cache_entries
+			) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			cmd.CacheStats.AttemptID, cmd.CacheStats.CacheHits, cmd.CacheStats.CacheMisses,
+			cmd.CacheStats.CacheEvictions, cmd.CacheStats.CacheCorruptions,
+			cmd.CacheStats.CacheBytesUsed, cmd.CacheStats.CacheEntries,
+		)
+		if err != nil {
+			return fmt.Errorf("task ingest atomic cache stats: %w", err)
+		}
+	}
+
+	// 5. Persist cost basis (idempotent INSERT OR REPLACE).
+	if cmd.CostBasis.AttemptID != "" {
+		_, err = tx.ExecContext(ctx,
+			`INSERT OR REPLACE INTO task_attempt_cost_basis (
+				attempt_id, cpu_price_per_second, storage_price_per_gb, network_price_per_gb,
+				cpu_time_seconds_total, storage_gb_written, network_gb_egressed, output_minutes_total
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			cmd.CostBasis.AttemptID, cmd.CostBasis.CPUPricePerSecond,
+			cmd.CostBasis.StoragePricePerGB, cmd.CostBasis.NetworkPricePerGB,
+			cmd.CostBasis.CPUTimeSecondsTotal, cmd.CostBasis.StorageGBWritten,
+			cmd.CostBasis.NetworkGBEgressed, cmd.CostBasis.OutputMinutesTotal,
+		)
+		if err != nil {
+			return fmt.Errorf("task ingest atomic cost basis: %w", err)
+		}
+	}
+
+	// 6. Register output artifacts (skip on UNIQUE conflict, fail on other errors).
+	for _, a := range cmd.Artifacts {
+		if a.ArtifactID == "" {
+			continue
+		}
+		metadata := a.MetadataJSON
+		if metadata == "" {
+			metadata = "{}"
+		}
+		_, artErr := tx.ExecContext(ctx,
+			`INSERT INTO task_output_artifacts
+			 (task_id, attempt_id, artifact_id, artifact_type, declared_path,
+			  declared_size, declared_sha256, metadata_json, registered_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			a.TaskID, a.AttemptID, a.ArtifactID, a.ArtifactType, a.DeclaredPath,
+			a.DeclaredSize, a.DeclaredSHA256, metadata, now,
+		)
+		if artErr != nil {
+			if isUniqueConflict(artErr) {
+				continue // duplicate declaration → skip, don't fail the tx
+			}
+			return fmt.Errorf("task ingest atomic artifact %s: %w", a.ArtifactID, artErr)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("task ingest atomic commit: %w", err)
+	}
+	committed = true
+	return nil
+}
+
 // RenewLease extends a currently-leased or running task's deadline
 // (PR-03 / fix/task-lease-renewal-protocol). CAS tuple:
 //
@@ -1101,8 +1295,14 @@ func (r *SQLiteTaskRepository) RequeueExpiredLeases(ctx context.Context, nowRFC3
 }
 
 // ReleaseLease atomically resets a LEASED/RUNNING task back to READY.
-// Used on session teardown to release orphaned task claims (PR #4).
-func (r *SQLiteTaskRepository) ReleaseLease(ctx context.Context, taskID string) error {
+// CAS gates on (task_id, worker_id, lease_id) so a stale reject from
+// Worker A with lease L1 cannot release a task reassigned to Worker B
+// with lease L2 (TOCTOU closure for handleTaskRejected — the previously
+// documented read-then-release gap is now closed at the SQL level).
+//
+// Used on session teardown to release orphaned task claims (PR #4)
+// and by handleTaskRejected to return a rejected task to the pool.
+func (r *SQLiteTaskRepository) ReleaseLease(ctx context.Context, taskID, workerID, leaseID string) error {
 	if taskID == "" {
 		return nil
 	}
@@ -1111,8 +1311,9 @@ func (r *SQLiteTaskRepository) ReleaseLease(ctx context.Context, taskID string) 
 		`UPDATE tasks
 		 SET status = 'READY', worker_id = '', lease_id = '',
 		     revision = revision + 1, updated_at = ?
-		 WHERE task_id = ? AND status IN ('LEASED', 'RUNNING')`,
-		now, taskID,
+		 WHERE task_id = ? AND worker_id = ? AND lease_id = ?
+		   AND status IN ('LEASED', 'RUNNING')`,
+		now, taskID, workerID, leaseID,
 	)
 	if err != nil {
 		return fmt.Errorf("task release lease: %w", err)

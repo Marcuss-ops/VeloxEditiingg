@@ -16,7 +16,6 @@ package jobs
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"velox-server/internal/platform/clock"
 )
@@ -47,47 +46,6 @@ func (l *LifecycleService) Jobs() Repository { return l.jobsRepo }
 
 // Clock returns the clock the service uses for time stamping.
 func (l *LifecycleService) Clock() clock.Clock { return l.clock }
-
-// ── PR 3 mutators ──────────────────────────────────────────────────────────
-
-// Start validates and performs the LEASED → RUNNING transition via
-// jobs.Writer.Start (full CAS tuple + history + event in one tx).
-func (l *LifecycleService) Start(ctx context.Context, id, workerID, leaseID string, attempt, revision int) error {
-	if id == "" || workerID == "" || leaseID == "" {
-		return fmt.Errorf("lifecycle.Start: missing job/worker/lease identity")
-	}
-	return l.jobsRepo.Start(ctx, id, workerID, leaseID, attempt, revision)
-}
-
-// Fail validates and performs a retry-budget-aware failure via
-// jobs.Writer.FailWithRetry. The repository decides FAILED vs RETRY_WAIT
-// based on retryable flag and the job's retry_count/max_retries.
-func (l *LifecycleService) Fail(ctx context.Context, id, errorCode, errorMessage string, retryable bool, revision int) error {
-	if id == "" {
-		return fmt.Errorf("lifecycle.Fail: empty jobID")
-	}
-	return l.jobsRepo.FailWithRetry(ctx, id, errorCode, errorMessage, retryable, revision)
-}
-
-// Cancel validates and transitions a job to CANCELLED via jobs.Writer.Cancel.
-// Idempotent on already-terminal states.
-func (l *LifecycleService) Cancel(ctx context.Context, id, reason string, revision int) error {
-	if id == "" {
-		return fmt.Errorf("lifecycle.Cancel: empty jobID")
-	}
-	return l.jobsRepo.Cancel(ctx, id, reason, revision)
-}
-
-// RequeueExpiredLeases processes expired leases via jobs.Writer.RequeueExpiredLeases.
-// The reaper calls this on a timer (typically 60-300s) to recover jobs
-// whose workers crashed without releasing the lease. limit <= 0 forces
-// the safe default of 100.
-func (l *LifecycleService) RequeueExpiredLeases(ctx context.Context, limit int) ([]RequeueResult, error) {
-	if limit <= 0 {
-		limit = 100
-	}
-	return l.jobsRepo.RequeueExpiredLeases(ctx, l.now(time.Time{}), limit)
-}
 
 // ── Queries ────────────────────────────────────────────────────────────────
 
@@ -134,11 +92,4 @@ func (l *LifecycleService) GetNextJobID(ctx context.Context) (string, error) {
 	return pending[0].ID, nil
 }
 
-// ── Internal helpers ───────────────────────────────────────────────────────
 
-func (l *LifecycleService) now(t time.Time) time.Time {
-	if t.IsZero() && l.clock != nil {
-		t = l.clock.Now()
-	}
-	return t.UTC()
-}

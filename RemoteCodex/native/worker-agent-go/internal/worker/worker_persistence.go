@@ -1,8 +1,8 @@
 // Package worker — local persistence for worker state recovery.
 // Uses a JSON file on disk (no SQLite dependency) to persist:
 //   - seenCommands for command deduplication across restarts
-//   - activeJobs metadata for job recovery after restart
-//   - pendingLeaseJobs metadata for lease recovery after restart
+//   - activeTasks metadata for job recovery after restart
+//   - pendingTasks metadata for lease recovery after restart
 package worker
 
 import (
@@ -66,36 +66,24 @@ func (w *Worker) saveLocalState() error {
 	}
 	w.commandMu.Unlock()
 
-	// Copy active jobs metadata
-	w.activeJobsMu.RLock()
-	for _, aj := range w.activeJobs {
-		if aj == nil || aj.Job == nil {
+	// Copy active tasks metadata
+	w.activeTasksMu.RLock()
+	for _, at := range w.activeTasks {
+		if at == nil || at.Job == nil {
 			continue
 		}
-		state.ActiveJobs[aj.Job.JobID] = persistedJobInfo{
-			JobID:     aj.Job.JobID,
-			JobRunID:  aj.Job.JobRunID,
-			JobType:   aj.Job.JobType,
-			LeaseID:   aj.LeaseID,
-			StartedAt: aj.StartedAt.UTC().Format(time.RFC3339),
+		state.ActiveJobs[at.JobID] = persistedJobInfo{
+			JobID:     at.JobID,
+			JobRunID:  at.Job.JobRunID,
+			JobType:   at.Job.JobType,
+			LeaseID:   at.LeaseID,
+			StartedAt: at.StartedAt.UTC().Format(time.RFC3339),
 		}
 	}
-	w.activeJobsMu.RUnlock()
+	w.activeTasksMu.RUnlock()
 
-	// Copy pending lease jobs metadata
-	w.pendingLeaseMu.Lock()
-	for _, job := range w.pendingLeaseJobs {
-		if job == nil {
-			continue
-		}
-		state.PendingLeaseJobs[job.JobID] = persistedJobInfo{
-			JobID:    job.JobID,
-			JobRunID: job.JobRunID,
-			JobType:  job.JobType,
-			LeaseID:  job.LeaseID,
-		}
-	}
-	w.pendingLeaseMu.Unlock()
+	// PendingLeaseJobs left empty — the legacy map was dead code,
+	// never populated. The serialized field stays for schema compat.
 
 	path := stateFilePath(workDir)
 	tmpPath := path + ".tmp"

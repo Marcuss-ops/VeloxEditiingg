@@ -244,10 +244,8 @@ func (w *Worker) handleRecoveryDirective(cfgUpdate *structpb.Struct) {
 			actStr, _ := rawAct.(string)
 			switch actStr {
 			case RecoveryActionCancel:
+				// cancelJob handles activeTasks + taskIDsByJob cleanup.
 				w.cancelJob(jobID)
-				w.activeJobsMu.Lock()
-				delete(w.activeJobs, jobID)
-				w.activeJobsMu.Unlock()
 				w.logger.Info("[RECOVERY] Cancelled job %s", jobID)
 			case RecoveryActionContinue:
 				w.logger.Info("[RECOVERY] Continue directive for job %s (lease re-acquisition by master)", jobID)
@@ -256,10 +254,8 @@ func (w *Worker) handleRecoveryDirective(cfgUpdate *structpb.Struct) {
 				// log and let the master re-issue the JobOffer if state allows.
 				w.logger.Info("[RECOVERY] RESUME_UPLOAD directive for job %s (no-op stub)", jobID)
 			case RecoveryActionCleanup:
+				// cancelJob handles activeTasks + taskIDsByJob cleanup.
 				w.cancelJob(jobID)
-				w.activeJobsMu.Lock()
-				delete(w.activeJobs, jobID)
-				w.activeJobsMu.Unlock()
 				w.logger.Info("[RECOVERY] CLEANUP performed for job %s", jobID)
 			default:
 				w.logger.Warn("[RECOVERY] Unknown per-job directive %q for job %s", actStr, jobID)

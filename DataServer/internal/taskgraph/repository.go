@@ -82,8 +82,13 @@ type Writer interface {
 	ClaimNextWithAttemptAtomic(ctx context.Context, workerID, leaseID string) (*TaskWithSpec, *taskattempts.TaskAttempt, error)
 
 	// ReleaseLease atomically resets a LEASED/RUNNING task back to READY.
-	// Used on session teardown to release orphaned task claims (PR #4).
-	ReleaseLease(ctx context.Context, taskID string) error
+	// CAS gates on (task_id, worker_id, lease_id) so a stale reject from
+	// Worker A with lease L1 cannot release a task reassigned to Worker B
+	// with lease L2 (TOCTOU closure for handleTaskRejected).
+	//
+	// Used on session teardown to release orphaned task claims (PR #4)
+	// and by handleTaskRejected to return a rejected task to the pool.
+	ReleaseLease(ctx context.Context, taskID, workerID, leaseID string) error
 
 	// Start transitions LEASED → RUNNING with full CAS tuple.
 	Start(ctx context.Context, id, workerID, leaseID string, attempt, revision int) error
@@ -199,6 +204,19 @@ type Writer interface {
 		attemptStatus taskattempts.AttemptStatus,
 		errorCode, errorMessage string,
 	) error
+
+	// IngestTaskResultAtomic is the single legal entry point for ingesting
+	// a worker TaskResult. It atomically transitions Task + Attempt to
+	// terminal AND persists typed metrics, cache stats, cost basis, AND
+	// registers output artifact declarations in ONE database transaction.
+	// No partial writes: if any step fails, everything rolls back.
+	//
+	// fix/atomic-ingestion: replaces the 4-step sequence
+	// (TransitionTaskToTerminalAtomic + PersistMetrics + PersistCacheStats +
+	// PersistCostBasis + per-artifact Register) with a single atomic call.
+	// Returns ErrTransitionConflict on stale CAS; the caller must NOT
+	// proceed with artifact registration or job roll-up on this error.
+	IngestTaskResultAtomic(ctx context.Context, cmd IngestResultCommand) error
 
 	// Delete hard-deletes a task. Returns no error if already gone.
 	Delete(ctx context.Context, id string) error

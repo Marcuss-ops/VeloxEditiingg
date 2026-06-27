@@ -149,7 +149,7 @@ func (s *exhaustedExpireStubRepo) ClaimNextReadyTask(context.Context, string, st
 func (s *exhaustedExpireStubRepo) ClaimNextWithAttemptAtomic(context.Context, string, string) (*TaskWithSpec, *taskattempts.TaskAttempt, error) {
 	panic("exhaustedExpireStubRepo.ClaimNextWithAttemptAtomic: not exercised by ExpireTaskLease tests")
 }
-func (s *exhaustedExpireStubRepo) ReleaseLease(context.Context, string) error {
+func (s *exhaustedExpireStubRepo) ReleaseLease(context.Context, string, string, string) error {
 	panic("exhaustedExpireStubRepo.ReleaseLease: not exercised by ExpireTaskLease tests")
 }
 func (s *exhaustedExpireStubRepo) Start(context.Context, string, string, string, int, int) error {
@@ -412,7 +412,7 @@ func (s *stubRepo) Lease(ctx context.Context, id, workerID, leaseID string) erro
 func (s *stubRepo) ClaimNextReadyTask(_ context.Context, _, _ string) (*TaskWithSpec, error) {
 	panic("stubRepo.ClaimNextReadyTask")
 }
-func (s *stubRepo) ReleaseLease(_ context.Context, _ string) error {
+func (s *stubRepo) ReleaseLease(_ context.Context, _, _, _ string) error {
 	panic("stubRepo.ReleaseLease")
 }
 func (s *stubRepo) Start(ctx context.Context, id, workerID, leaseID string, attempt, revision int) error {

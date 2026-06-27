@@ -84,21 +84,21 @@ func TestJobProgressZeroValues(t *testing.T) {
 	}
 }
 
-func TestActiveJobFields(t *testing.T) {
-	// Verify ActiveJob struct has expected fields (compile-time check)
-	aj := &ActiveJob{
+func TestActiveTaskExecutionFields(t *testing.T) {
+	// Verify ActiveTaskExecution struct has expected fields (compile-time check)
+	at := &ActiveTaskExecution{
 		StartedAt: time.Now(),
 	}
-	if aj.Job != nil {
+	if at.Job != nil {
 		t.Error("default Job should be nil")
 	}
-	if aj.LeaseID != "" {
-		t.Errorf("default LeaseID should be empty, got %q", aj.LeaseID)
+	if at.LeaseID != "" {
+		t.Errorf("default LeaseID should be empty, got %q", at.LeaseID)
 	}
-	if aj.Cancel != nil {
+	if at.Cancel != nil {
 		t.Error("default Cancel should be nil")
 	}
-	if aj.StartedAt.IsZero() {
+	if at.StartedAt.IsZero() {
 		t.Error("StartedAt should be set")
 	}
 }
@@ -167,31 +167,31 @@ func TestBackoffConfigDefaults(t *testing.T) {
 	}
 }
 
-func TestActiveJobsMap_Concurrency(t *testing.T) {
-	// Verify activeJobs map supports concurrent access patterns
-	ajMap := make(map[string]*ActiveJob)
+func TestActiveTasksMap_Concurrency(t *testing.T) {
+	// Verify activeTasks map supports concurrent access patterns
+	atMap := make(map[string]*ActiveTaskExecution)
 
-	// Add jobs
-	ajMap["job-1"] = &ActiveJob{LeaseID: "lease-1", StartedAt: time.Now()}
-	ajMap["job-2"] = &ActiveJob{LeaseID: "lease-2", StartedAt: time.Now()}
+	// Add tasks
+	atMap["task-1"] = &ActiveTaskExecution{TaskID: "task-1", LeaseID: "lease-1", StartedAt: time.Now()}
+	atMap["task-2"] = &ActiveTaskExecution{TaskID: "task-2", LeaseID: "lease-2", StartedAt: time.Now()}
 
-	if len(ajMap) != 2 {
-		t.Errorf("expected 2 active jobs, got %d", len(ajMap))
+	if len(atMap) != 2 {
+		t.Errorf("expected 2 active tasks, got %d", len(atMap))
 	}
 
-	// Read job
-	aj1, ok := ajMap["job-1"]
-	if !ok || aj1.LeaseID != "lease-1" {
-		t.Error("job-1 not found or wrong lease")
+	// Read task
+	at1, ok := atMap["task-1"]
+	if !ok || at1.LeaseID != "lease-1" {
+		t.Error("task-1 not found or wrong lease")
 	}
 
-	// Delete job
-	delete(ajMap, "job-1")
-	if len(ajMap) != 1 {
-		t.Errorf("expected 1 job after delete, got %d", len(ajMap))
+	// Delete task
+	delete(atMap, "task-1")
+	if len(atMap) != 1 {
+		t.Errorf("expected 1 task after delete, got %d", len(atMap))
 	}
-	if _, ok := ajMap["job-1"]; ok {
-		t.Error("job-1 should be deleted")
+	if _, ok := atMap["task-1"]; ok {
+		t.Error("task-1 should be deleted")
 	}
 }
 
@@ -239,24 +239,24 @@ func TestReRegistrationBackoffCapsAtMax(t *testing.T) {
 	}
 }
 
-func TestStatusDerivationFromActiveJobs(t *testing.T) {
+func TestStatusDerivationFromActiveTasks(t *testing.T) {
 	// Simulate the Status() derivation logic
 	type scenario struct {
-		name       string
-		stopped    bool
-		activeJobs int
-		errorState Status
-		expected   Status
+		name        string
+		stopped     bool
+		activeTasks int
+		errorState  Status
+		expected    Status
 	}
 
 	scenarios := []scenario{
 		{"idle-empty", false, 0, StatusIdle, StatusIdle},
-		{"busy-one-job", false, 1, StatusIdle, StatusBusy},
+		{"busy-one-task", false, 1, StatusIdle, StatusBusy},
 		{"busy-multiple", false, 3, StatusIdle, StatusBusy},
-		{"error-no-jobs", false, 0, StatusError, StatusError},
+		{"error-no-tasks", false, 0, StatusError, StatusError},
 		{"busy-with-error-bg", false, 2, StatusError, StatusBusy}, // Busy takes priority
 		{"stopped", true, 0, StatusIdle, StatusStopped},
-		{"stopped-with-jobs", true, 1, StatusIdle, StatusStopped}, // Stopped overrides
+		{"stopped-with-tasks", true, 1, StatusIdle, StatusStopped}, // Stopped overrides
 	}
 
 	for _, sc := range scenarios {
@@ -264,7 +264,7 @@ func TestStatusDerivationFromActiveJobs(t *testing.T) {
 			var result Status
 			if sc.stopped {
 				result = StatusStopped
-			} else if sc.activeJobs > 0 {
+			} else if sc.activeTasks > 0 {
 				result = StatusBusy
 			} else if sc.errorState == StatusError {
 				result = StatusError
@@ -273,8 +273,8 @@ func TestStatusDerivationFromActiveJobs(t *testing.T) {
 			}
 
 			if result != sc.expected {
-				t.Errorf("expected %s, got %s (stopped=%v, jobs=%d, err=%s)",
-					sc.expected, result, sc.stopped, sc.activeJobs, sc.errorState)
+				t.Errorf("expected %s, got %s (stopped=%v, tasks=%d, err=%s)",
+					sc.expected, result, sc.stopped, sc.activeTasks, sc.errorState)
 			}
 		})
 	}

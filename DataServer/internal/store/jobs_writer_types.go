@@ -2,9 +2,7 @@ package store
 
 import (
 	"errors"
-	"time"
 
-	"velox-server/internal/costmodel"
 	"velox-server/internal/jobs"
 )
 
@@ -76,25 +74,10 @@ type JobRecord struct {
 
 // ClaimParams carries worker identity and the timestamp at claim time.
 // AllowedJobTypes is the worker capability filter — empty means "no filter".
-type ClaimParams struct {
-	WorkerID        string
-	AllowedJobTypes []string
-	Now             time.Time
-}
-
-// ClaimResult is what a successful ClaimNext returns.
 //
-// ResultJSON is the canonical opaque blob the worker should echo back on
-// complete/fail; LeaseID and LeaseExpires are exposed separately so callers
-// can present them in clear surface areas (e.g. the v2 HTTP contract).
-type ClaimResult struct {
-	JobID        string                    `json:"job_id"`
-	ResultJSON   []byte                    `json:"-"`
-	Attempt      int                       `json:"attempt"`
-	LeaseID      string                    `json:"lease_id,omitempty"`
-	LeaseExpires time.Time                 `json:"lease_expires,omitempty"`
-	Requirements costmodel.JobRequirements `json:"requirements,omitempty"`
-}
+// fix/remove-job-lease-ops: ClaimParams, ClaimResult, ClaimResultJSON,
+// RecordRenderFinishedCommand, ErrRecordRenderFinishedNotFound, and
+// ErrNoClaimableJob are REMOVED (their implementations were deleted).
 
 // TransitionParams encodes a CAS-style state change.
 //
@@ -115,32 +98,4 @@ type TransitionParams struct {
 // (ExpectedStatus wrong OR Revision stale).
 var ErrTransitionConflict = errors.New("store: job transition conflict (status or revision mismatch)")
 
-// ErrNoClaimableJob is returned by ClaimNext when no job in PENDING state
-// matches the caller's filter.
-var ErrNoClaimableJob = errors.New("store: no claimable job available")
-
-// RecordRenderFinishedCommand carries the identity tuple for recording render
-// completion (used by PR3RecordRenderFinished).
-type RecordRenderFinishedCommand struct {
-	JobID            string
-	WorkerID         string
-	LeaseID          string
-	AttemptNumber    int
-	ExpectedRevision int
-	FinishedAt       time.Time
-}
-
-// ErrRecordRenderFinishedNotFound is returned when the attempt to record
-// render finished cannot find a matching attempt row.
-var ErrRecordRenderFinishedNotFound = errors.New("store: render finished attempt not found")
-
-// ClaimResultJSON is the typed representation of the result_json blob
-// returned by ClaimNextPendingJob / ClaimNextPendingJobForWorker.  It
-// replaces map[string]interface{} parsing in claimNext / ClaimNextForProfile.
-type ClaimResultJSON struct {
-	JobID       string  `json:"job_id"`
-	Status      string  `json:"status"`
-	LeaseID     string  `json:"lease_id"`
-	LeaseExpiry string  `json:"lease_expiry"`
-	Attempt     float64 `json:"attempt"` // JSON numbers unmarshal as float64
-}
+// fix/remove-job-lease-ops: ErrNoClaimableJob is REMOVED.

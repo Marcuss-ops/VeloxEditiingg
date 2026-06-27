@@ -337,7 +337,7 @@ func (w *Worker) runSession(ctx context.Context) bool {
 }
 
 // receiveLoop processes incoming messages from the transport receive channel.
-// Routes MsgTaskOffer to executeJob and MsgCommand to processCommand.
+// Routes MsgTaskOffer to executeTask and MsgCommand to processCommand.
 func (w *Worker) receiveLoop(ctx context.Context, recvCh <-chan controltransport.ControlMessage) {
 	defer w.wg.Done()
 
@@ -358,18 +358,18 @@ func (w *Worker) receiveLoop(ctx context.Context, recvCh <-chan controltransport
 			}
 
 			switch msg.Type {
-			/* PR-protobuf-refactor: MsgJobOffer + MsgJobLeaseGranted + pb.JobOffer
+			/* PR-protobuf-refactor: legacy JobOffer / JobLeaseGranted / pb.JobOffer
 			   removed — superseded by MsgTaskOffer + MsgTaskLeaseGranted + pb.TaskOffer.
 			   The old protobuf types no longer exist in the oneof. See grpc_stream.go
 			   for the transport-side removal. */
 			case controltransport.MsgTaskOffer:
 				// PR #5: task-native dispatch — receive pre-compiled TaskSpec from master.
-				// PR-2 (canonical-attempt-identity): executeJob dispatch is DEFERRED
+				// PR-2 (canonical-attempt-identity): executeTask dispatch is DEFERRED
 				// to MsgTaskLeaseGranted so the master's canonical (attempt_id,
 				// attempt_number) tuple + RUNNING TaskAttempt is committed before
 				// execution starts. Mirrors the legacy JobOffer → JobLeaseGranted
-				// pattern using `pendingTasks` (keyed by task_id) instead of
-				// `pendingLeaseJobs` (keyed by job_id).
+				// Mirrors the legacy pattern using `pendingTasks` (keyed by
+				// task_id) instead of the removed, jobID-keyed legacy map.
 				taskOffer, ok := msg.TypedPayload.(*pb.TaskOffer)
 				if !ok || taskOffer == nil {
 					w.logger.Warn("[RECEIVE] TaskOffer without typed payload")
@@ -384,15 +384,15 @@ func (w *Worker) receiveLoop(ctx context.Context, recvCh <-chan controltransport
 					continue
 				}
 				if w.IsStopped() || w.drainMode.Load() {
-					if err := w.sendTaskReject(ctx, taskID, "draining"); err != nil {
+					if err := w.sendTaskReject(ctx, taskID, attemptID, taskOffer.GetLeaseId(), "draining", 0); err != nil {
 						w.logger.Warn("[RECEIVE] Failed to send TaskRejected: %v", err)
 					}
 					continue
 				}
 
-				w.activeJobsMu.RLock()
-				activeCount := len(w.activeJobs)
-				w.activeJobsMu.RUnlock()
+				w.activeTasksMu.RLock()
+				activeCount := len(w.activeTasks)
+				w.activeTasksMu.RUnlock()
 				// PR-bugfix: also count pendingTasks (offers accepted
 				// but waiting for TaskLeaseGranted). The worker must not
 				// accept more offers than MaxActiveJobs including tasks
@@ -401,13 +401,13 @@ func (w *Worker) receiveLoop(ctx context.Context, recvCh <-chan controltransport
 				pendingCount := len(w.pendingTasks)
 				w.pendingTasksMu.Unlock()
 				if activeCount+pendingCount >= w.config.MaxActiveJobs {
-					if err := w.sendTaskReject(ctx, taskID, "capacity_full"); err != nil {
+					if err := w.sendTaskReject(ctx, taskID, attemptID, taskOffer.GetLeaseId(), "capacity_full", 0); err != nil {
 						w.logger.Warn("[RECEIVE] Failed to send TaskRejected (capacity): %v", err)
 					}
 					continue
 				}
 
-				w.logger.Info("[RECEIVE] TaskOffer received: task=%s attempt=%s job=%s executor=%s@%d — deferring executeJob to TaskLeaseGranted",
+				w.logger.Info("[RECEIVE] TaskOffer received: task=%s attempt=%s job=%s executor=%s@%d — deferring executeTask to TaskLeaseGranted",
 					taskID, attemptID, taskOffer.GetJobId(), taskOffer.GetExecutorId(), taskOffer.GetExecutorVersion())
 
 				if err := w.sendTaskAccepted(ctx, taskOffer); err != nil {
@@ -415,7 +415,7 @@ func (w *Worker) receiveLoop(ctx context.Context, recvCh <-chan controltransport
 					continue
 				}
 
-				// Build api.Job from TaskOffer for the deferred executeJob path.
+				// Build api.Job from TaskOffer for the deferred executeTask path.
 				// PR #5: the TaskSpec travels pre-compiled in task_spec — no reconstruction needed.
 				var specPayload map[string]interface{}
 				if tsp := taskOffer.GetTaskSpec(); tsp != nil {
@@ -445,8 +445,8 @@ func (w *Worker) receiveLoop(ctx context.Context, recvCh <-chan controltransport
 				// accepting the worker's TaskAccepted and committing the
 				// TaskAttempt PENDING → RUNNING transition. consume the
 				// pending task from storePendingTask; if absent (unknown
-				// task_id) log + drop, identical to MsgJobLeaseGranted's
-				// unknown-job behavior.
+				// task_id) log + drop, identical to MsgTaskLeaseGranted's
+				// unknown-task behavior.
 				taskGrant, ok := msg.TypedPayload.(*pb.TaskLeaseGranted)
 				if !ok || taskGrant == nil {
 					w.logger.Warn("[RECEIVE] TaskLeaseGranted without typed payload")
@@ -466,8 +466,7 @@ func (w *Worker) receiveLoop(ctx context.Context, recvCh <-chan controltransport
 
 				// PR-2 followup: register the canonical (task_id, attempt_id,
 				// lease_id) tuple so leaseRenewLoop fires MsgTaskLeaseRenewal
-				// every 15s for this task-native entry. Mirrors the legacy
-				// activeJobs wire-state slots populated by MsgJobLeaseGranted.
+				// every 15s for this task-native entry.
 				w.AddActiveTaskLease(taskID, taskGrant.GetAttemptId(), taskGrant.GetLeaseId())
 
 				w.logger.Info("[RECEIVE] TaskLeaseGranted for task=%s attempt=%s job=%s lease=%s — starting execution",
@@ -555,13 +554,8 @@ func (w *Worker) receiveLoop(ctx context.Context, recvCh <-chan controltransport
 					w.logger.Warn("[RECEIVE] Lease revoked for job %s: %s",
 						jobID, leaseRevoked.GetReason())
 					if jobID != "" {
+						// cancelJob handles activeTasks + taskIDsByJob cleanup.
 						w.cancelJob(jobID)
-						w.activeJobsMu.Lock()
-						delete(w.activeJobs, jobID)
-						w.activeJobsMu.Unlock()
-						w.pendingLeaseMu.Lock()
-						delete(w.pendingLeaseJobs, jobID)
-						w.pendingLeaseMu.Unlock()
 					}
 				}
 
@@ -646,8 +640,8 @@ func (w *Worker) newTransport() controltransport.ControlTransport {
 	return w.transportFactory()
 }
 
-/* PR-protobuf-refactor: sendAccept + sendReject removed — they used
-   MsgJobAccepted/MsgJobRejected which no longer have transport encoding.
+/* PR-protobuf-refactor: sendAccept + sendReject removed — legacy
+   JobAccepted/JobRejected messages no longer have transport encoding.
    Task-native sendTaskAccepted + sendTaskReject are the canonical path. */
 
 // sendTaskAccepted sends a TaskAccepted message via the transport (PR #5).
@@ -667,11 +661,17 @@ func (w *Worker) sendTaskAccepted(ctx context.Context, offer *pb.TaskOffer) erro
 	return w.transport.Send(ctx, acceptMsg)
 }
 
-// sendTaskReject sends a TaskRejected message via the transport (PR #5).
-func (w *Worker) sendTaskReject(ctx context.Context, taskID, reason string) error {
+// sendTaskReject sends a TaskRejected message via the transport.
+// fix/task-rejected-lease-identity: carries the full identity tuple
+// (task_id, attempt_id, lease_id, revision) so the master can CAS-validate
+// against the canonical TaskAttempt row.
+func (w *Worker) sendTaskReject(ctx context.Context, taskID, attemptID, leaseID, reason string, revision int32) error {
 	rejectPayload := map[string]interface{}{
-		"task_id": taskID,
-		"reason":  reason,
+		"task_id":    taskID,
+		"attempt_id": attemptID,
+		"lease_id":   leaseID,
+		"reason":     reason,
+		"revision":   revision,
 	}
 	rejectMsg := controltransport.NewMessageWithPayload(
 		controltransport.MsgTaskRejected,
@@ -680,24 +680,6 @@ func (w *Worker) sendTaskReject(ctx context.Context, taskID, reason string) erro
 		rejectPayload,
 	)
 	return w.transport.Send(ctx, rejectMsg)
-}
-
-// storePendingJob records a job that has been accepted but is waiting for
-// JobLeaseGranted before execution.
-func (w *Worker) storePendingJob(job *api.Job) {
-	w.pendingLeaseMu.Lock()
-	defer w.pendingLeaseMu.Unlock()
-	w.pendingLeaseJobs[job.JobID] = job
-}
-
-// takePendingJob retrieves and removes a pending job by ID.
-// Returns nil if the job was not found.
-func (w *Worker) takePendingJob(jobID string) *api.Job {
-	w.pendingLeaseMu.Lock()
-	defer w.pendingLeaseMu.Unlock()
-	job := w.pendingLeaseJobs[jobID]
-	delete(w.pendingLeaseJobs, jobID)
-	return job
 }
 
 // storePendingTask records a TaskOffer-accepted task awaiting
@@ -726,7 +708,7 @@ func (w *Worker) storePendingTask(taskID string, job *api.Job) {
 
 // takePendingTask retrieves and removes a pending task by task_id.
 // Returns nil if the task was not found (caller treats as `unknown
-// task_id` and drops, symmetric with takePendingJob).
+// task_id` and drops).
 //
 // PR-2 followup (Stop-drain race fix): if the worker is already stopped,
 // short-circuit to nil so the Stop()-time drain does not race an
@@ -751,8 +733,8 @@ func (w *Worker) takePendingTask(taskID string) *api.Job {
 // Stop signals the worker to stop gracefully.
 // This method is idempotent - calling it multiple times has no additional effect.
 //
-// PR-2 (fix/canonical-attempt-identity): drain pendingTasks + pendingLeaseJobs
-// under their respective mutexes so the next session starts with empty maps.
+// PR-2 (fix/canonical-attempt-identity): drain pendingTasks
+// on Stop so the next session starts with an empty map.
 // Without this, an offer->stop cycle would leak entries across restarts and
 // the next session would carry orphaned canonical (attempt_id, lease_id)
 // tuples whose master-side TaskAttempts are already in a terminal state.
@@ -761,16 +743,11 @@ func (w *Worker) Stop() {
 		w.logger.Info("Stop requested")
 		close(w.stopChan)
 		w.stopped.Store(true)
-		// Drain pendingTasks + pendingLeaseJobs on Stop. Entries here
-		// correspond to offers the worker accepted but never received
-		// a LeaseGranted for (worker died mid-flight, master restarted,
-		// etc). Master's lease reaper handles the stranded PENDING /
-		// RUNNING TaskAttempts on the master side; the local map is
-		// safe to clear so the next session starts empty.
-		w.pendingLeaseMu.Lock()
-		clearedLegacy := len(w.pendingLeaseJobs)
-		w.pendingLeaseJobs = make(map[string]*api.Job)
-		w.pendingLeaseMu.Unlock()
+		// Drain pendingTasks on Stop. Entries here correspond to offers
+		// the worker accepted but never received a LeaseGranted for
+		// (worker died mid-flight, master restarted, etc). Master's lease
+		// reaper handles the stranded PENDING / RUNNING TaskAttempts on
+		// the master side; the local map is safe to clear.
 		w.pendingTasksMu.Lock()
 		clearedTask := len(w.pendingTasks)
 		w.pendingTasks = make(map[string]*api.Job)
@@ -782,9 +759,9 @@ func (w *Worker) Stop() {
 		clearedTaskLeases := len(w.activeTaskLeases)
 		w.activeTaskLeases = make(map[string]*ActiveTaskLease)
 		w.activeTaskLeasesMu.Unlock()
-		if clearedLegacy > 0 || clearedTask > 0 || clearedTaskLeases > 0 {
-			w.logger.Info("[STOP] Drained pending entries: legacy=%d task=%d task_leases=%d",
-				clearedLegacy, clearedTask, clearedTaskLeases)
+		if clearedTask > 0 || clearedTaskLeases > 0 {
+			w.logger.Info("[STOP] Drained pending entries: task=%d task_leases=%d",
+				clearedTask, clearedTaskLeases)
 		}
 	})
 }

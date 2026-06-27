@@ -287,7 +287,7 @@ func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMasterEnvelo
 		// PR #4: release any pending task offer on session teardown.
 		sess.claimMu.Lock()
 		if sess.pendingTaskOffer != nil {
-			if releaseErr := h.taskRepo.ReleaseLease(context.Background(), sess.pendingTaskOffer.ID); releaseErr != nil {
+			if releaseErr := h.taskRepo.ReleaseLease(context.Background(), sess.pendingTaskOffer.ID, sess.workerID, sess.pendingTaskOffer.LeaseID); releaseErr != nil {
 				log.Printf("[GRPC] Failed to release pendingTaskOffer for task %s on session teardown: %v", sess.pendingTaskOffer.ID, releaseErr)
 			}
 			sess.pendingTaskOffer = nil
@@ -420,7 +420,7 @@ func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMasterEnvelo
 			// PR #4: release pending task offer on writer failure.
 			sess.claimMu.Lock()
 			if sess.pendingTaskOffer != nil {
-				if releaseErr := h.taskRepo.ReleaseLease(context.Background(), sess.pendingTaskOffer.ID); releaseErr != nil {
+				if releaseErr := h.taskRepo.ReleaseLease(context.Background(), sess.pendingTaskOffer.ID, sess.workerID, sess.pendingTaskOffer.LeaseID); releaseErr != nil {
 					log.Printf("[GRPC] Failed to release pendingTaskOffer for task %s on writer failure: %v", sess.pendingTaskOffer.ID, releaseErr)
 				}
 				sess.pendingTaskOffer = nil
@@ -656,7 +656,7 @@ func (h *Handler) closeOldSessionLocked(workerID string) {
 		// so the claim is returned promptly on reconnect.
 		oldSess.claimMu.Lock()
 		if oldSess.pendingTaskOffer != nil {
-			if releaseErr := h.taskRepo.ReleaseLease(context.Background(), oldSess.pendingTaskOffer.ID); releaseErr != nil {
+			if releaseErr := h.taskRepo.ReleaseLease(context.Background(), oldSess.pendingTaskOffer.ID, oldSess.workerID, oldSess.pendingTaskOffer.LeaseID); releaseErr != nil {
 				log.Printf("[GRPC] Failed to release old pendingTaskOffer for task %s during reconnect: %v", oldSess.pendingTaskOffer.ID, releaseErr)
 			}
 			oldSess.pendingTaskOffer = nil

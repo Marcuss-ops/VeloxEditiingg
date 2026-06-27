@@ -14,6 +14,13 @@ type jobsDeps struct {
 	Repository jobs.Repository
 	// Lifecycle owns transactional status transitions with CAS gating.
 	Lifecycle *jobs.LifecycleService
+	// SQLiteRepo is the concrete *SQLiteJobRepository that still carries
+	// FailWithRetry as a concrete method (removed from jobs.Repository).
+	// Used by wirePostBuild to pass to taskgraph.LifecycleService.SetJobsRepo
+	// which needs the narrower taskgraph.JobsRetryQuerier (Get + FailWithRetry).
+	// Go structural typing: *SQLiteJobRepository satisfies JobsRetryQuerier
+	// because it embeds baseJobRepository which has both Get and FailWithRetry.
+	SQLiteRepo *store.SQLiteJobRepository
 }
 
 // buildJobs creates the JobRepository and LifecycleService from the
@@ -32,5 +39,6 @@ func buildJobs(p *persistenceDeps) (*jobsDeps, error) {
 	return &jobsDeps{
 		Repository: jobsRepository,
 		Lifecycle:  lifecycleSvc,
+		SQLiteRepo: jobRepo,
 	}, nil
 }

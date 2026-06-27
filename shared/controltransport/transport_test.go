@@ -88,9 +88,9 @@ func TestControlMessageJSONOmitEmpty(t *testing.T) {
 
 func TestControlMessageTypeClassification(t *testing.T) {
 	workerToMaster := []ControlMessageType{
-		MsgHello, MsgHeartbeat, MsgLeaseRenewal, MsgJobAccepted,
-		MsgJobRejected, MsgJobProgress, MsgCommandAck, MsgArtifactUploaded,
-		MsgJobResult, MsgGoodbye,
+		MsgHello, MsgHeartbeat, MsgTaskLeaseRenewal,
+		MsgTaskAccepted, MsgTaskRejected, MsgTaskResult,
+		MsgCommandAck, MsgArtifactUploaded, MsgGoodbye,
 	}
 	for _, mt := range workerToMaster {
 		if !mt.IsWorkerToMaster() {
@@ -102,7 +102,7 @@ func TestControlMessageTypeClassification(t *testing.T) {
 	}
 
 	masterToWorker := []ControlMessageType{
-		MsgHelloAck, MsgJobOffer, MsgCommand, MsgCancelJob,
+		MsgHelloAck, MsgTaskOffer, MsgTaskLeaseGranted, MsgCommand, MsgCancelJob,
 		MsgDrain, MsgConfigurationUpdate, MsgLeaseRevoked, MsgPing,
 	}
 	for _, mt := range masterToWorker {
@@ -136,7 +136,7 @@ func TestNewMessage(t *testing.T) {
 
 func TestNewMessageWithPayload(t *testing.T) {
 	payload := map[string]interface{}{"key": "value"}
-	m := NewMessageWithPayload(MsgJobResult, "w1", ProtocolVersionCurrent, payload)
+	m := NewMessageWithPayload(MsgTaskResult, "w1", ProtocolVersionCurrent, payload)
 	if m.Payload == nil {
 		t.Fatal("Payload should not be nil")
 	}
