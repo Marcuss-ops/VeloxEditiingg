@@ -430,9 +430,7 @@ func (w *Worker) receiveLoop(ctx context.Context, recvCh <-chan controltransport
 					JobType:    taskOffer.GetExecutorId(),
 					Priority:   0,
 				}
-				// Store task_offer reference so executeJob can send TaskResult.
-				job.Parameters["_task_id"] = taskID
-				job.Parameters["_attempt_id"] = attemptID
+				// Store task_offer reference so executeTask can send TaskResult.
 				// fix/executor-version: carry executor_version from the master's
 				// TaskOffer so dispatchTaskRunner can stamp it into executor.TaskSpec
 				// instead of hardcoding Version:1.
@@ -482,7 +480,7 @@ func (w *Worker) receiveLoop(ctx context.Context, recvCh <-chan controltransport
 				// on the rare panic path.
 				go func() {
 					defer w.RemoveActiveTaskLease(taskID)
-					w.executeJob(ctx, job)
+					w.executeTask(ctx, job, taskID, taskGrant.GetAttemptId())
 				}()
 
 			case controltransport.MsgCommand:
