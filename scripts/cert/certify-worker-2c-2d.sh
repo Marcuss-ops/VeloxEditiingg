@@ -50,15 +50,33 @@
 set -uo pipefail  # NOT -e: continue across checks so all failures report
 
 usage() {
-  cat <<USG
-usage: $0 --worker-id ID --worker-image REF --expected-bundle-hash HEX
-          --worker-cert-file PATH --worker-key-file PATH --worker-ca-file PATH
-          [--master-url HOST:PORT] [--master-restserver URL]
-          [--protocol-version v3] [--handshake-timeout-s 20]
-          [--expected-max-concurrency N] [--evidence-root DIR] [--date YYYY-MM-DD] [--help]
+  cat <<'USG'
+usage: certify-worker-2c-2d.sh
+          --worker-id ID
+          --worker-image REF                  # ghcr.io/<owner>/velox-worker@sha256:<64>; refuses :latest
+          --expected-bundle-hash HEX          # 64 lowercase hex
+          --worker-cert-file PATH
+          --worker-key-file  PATH
+          --worker-ca-file   PATH
+          [--master-url HOST:PORT]            # gRPC endpoint for 2D-2 dev-hello-client handshake
+          [--master-restserver URL]           # HTTPS base for /api/v1/workers (sets 2D-3 in scope)
+          [--expected-bundle-version VER]     # REQUIRED if --master-restserver is set (B3' preflight)
+          [--expected-max-concurrency N]      # optional, asserted vs /api/v1/workers
+          [--protocol-version v3]             # default: v3
+          [--handshake-timeout-s 20]          # floor: 15 (dev-hello-client internal HelloAckTimeout) — H3
+          [--allow-skip-dynamic]              # opt-in skip of 2D-2 dynamic handshake when no master
+          [--evidence-root DIR]               # default: $HOME/evidence
+          [--date YYYY-MM-DD]                 # default: today UTC
+          [--help]
 
-Sub-phases 2C (bootstrap) + 2D (mTLS handshake) of the 100% Velox
-certification plan (cap. 3 of docs/100-percent-plan/).
+Sub-phases 2C (real bootstrap on the worker image, asserting verdict=OK +
+4 step PASS) + 2D (mTLS handshake: cert static checks + dev-hello-client
+dynamic probe + master /api/v1/workers state assertion).
+
+Evidence path: $EVIDENCE_ROOT/<date>/<worker_id>/ — see
+docs/100-percent-plan/cap-3-evidence.md for the canonical file layout.
+Exit: 0 on CERTIFIED | 1 on 2C fail | 2 on 2D-1 fail | 3 on 2D-2 fail
+| 4 on 2D-3 fail | 5 on preflight sanity fail.
 USG
   exit "${1:-0}"
 }
@@ -74,6 +92,11 @@ MASTER_RESTSERVER="${MASTER_RESTSERVER:-}"
 PROTOCOL_VERSION="${PROTOCOL_VERSION:-v3}"
 HANDSHAKE_TIMEOUT_S="${HANDSHAKE_TIMEOUT_S:-20}"
 EXPECTED_MAX_CONCURRENCY=""
+# B3' fix (closure of original user request gap): bundle_version is
+# half of "bundle/versione corretta" — the operator MUST assert against
+# the master's record when running 2D-3 master-state probe. Empty by
+# default; required when MASTER_RESTSERVER is set (preflight below).
+EXPECTED_BUNDLE_VERSION=""
 EVIDENCE_ROOT=""
 CERT_DATE=""
 # B2 fix: opt-in flag default empty; setting --allow-skip-dynamic flips
@@ -94,6 +117,9 @@ while [[ $# -gt 0 ]]; do
     --protocol-version)        PROTOCOL_VERSION="$2"; shift 2 ;;
     --handshake-timeout-s)     HANDSHAKE_TIMEOUT_S="$2"; shift 2 ;;
     --expected-max-concurrency) EXPECTED_MAX_CONCURRENCY="$2"; shift 2 ;;
+    # B3' fix: half of the original user-request pair bundle/versione.
+    # Required when --master-restserver is set.
+    --expected-bundle-version) EXPECTED_BUNDLE_VERSION="$2"; shift 2 ;;
     --evidence-root)           EVIDENCE_ROOT="$2"; shift 2 ;;
     --date)                    CERT_DATE="$2"; shift 2 ;;
     # B2 fix: opt-in escape hatch for diagnostic runs on hosts that
@@ -140,6 +166,16 @@ if (( HANDSHAKE_TIMEOUT_S < 15 )); then
   exit 2
 fi
 
+# B3' preflight: when operator probes the master's REST surface (2D-3),
+# require EXPLICIT assertion of bundle_version. This closes the
+# user-request gap "bundle/versione corretta" — without this gate a
+# negligent operator could trigger 2D-3 just to verify CN/ConnectED,
+# missing the bundle_version half.
+if [[ -n "$MASTER_RESTSERVER" && -z "$EXPECTED_BUNDLE_VERSION" ]]; then
+  printf '::error::--master-restserver is set but --expected-bundle-version is empty; pass --expected-bundle-version (the published worker image VERSION.txt, e.g. 1.2.3) to assert bundle/versione on the master-state probe.\n' >&2
+  exit 2
+fi
+
 # ─── Locate supporting scripts + binaries ───────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REAL_BOOTSTRAP="$SCRIPT_DIR/real-bootstrap.sh"
@@ -168,6 +204,9 @@ EVIDENCE_ROOT="${EVIDENCE_ROOT:-$HOME/evidence}"
 CERT_DATE="${CERT_DATE:-$(date -u +%Y-%m-%d)}"
 EV_DIR="$EVIDENCE_ROOT/$CERT_DATE/$WORKER_ID"
 mkdir -p "$EV_DIR"
+# Used by the verdict-emit python heredoc to surface
+# master_observed_bundle_version (H11 hardening).
+STATE_OUT_OR_EMPTY="$EV_DIR/master-state.json"
 
 # ─── Status accumulators ────────────────────────────────────────────────────
 declare -A PHASE_STATUS=(
@@ -504,14 +543,15 @@ if [[ -n "$MASTER_RESTSERVER" ]]; then
     # version+hash that the master recorded matches the worker image
     # we just bootstrapped. Both checks were missing in the first pass.
     python3 - "$WORKER_ID" "$PROTOCOL_VERSION" "$EXPECTED_MAX_CONCURRENCY" \
-      "$EXPECTED_BUNDLE_HASH" "$STATE_OUT" <<'PYEOF'
+      "$EXPECTED_BUNDLE_HASH" "$EXPECTED_BUNDLE_VERSION" "$STATE_OUT" <<'PYEOF'
 import json, sys
-expected_id       = sys.argv[1]
-expected_proto    = sys.argv[2]
-expected_max      = sys.argv[3]
-expected_bhash    = sys.argv[4]   # 64 lowercase hex from --expected-bundle-hash
+expected_id          = sys.argv[1]
+expected_proto       = sys.argv[2]
+expected_max         = sys.argv[3]
+expected_bhash       = sys.argv[4]   # 64 lowercase hex from --expected-bundle-hash
+expected_bversion    = sys.argv[5]   # operator-supplied bundle_version (B3' fix)
 try:
-    d = json.load(open(sys.argv[5]))
+    d = json.load(open(sys.argv[6]))
 except Exception as e:
     print(f"::error::could not parse master-state.json: {e}")
     sys.exit(0)
@@ -534,11 +574,15 @@ if expected_proto and match.get("protocol_version") and match["protocol_version"
     print(f"::error::worker {expected_id} protocol_version={match['protocol_version']!r} != {expected_proto!r}")
     sys.exit(0)
 
-# (3) bundle_version — must match if the master carries it (B4 fix)
+# (3) bundle_version — must match EXPECTED_BUNDLE_VERSION (B3' + B5 fix;
+# preflight already refused to enter 2D-3 without a value, and the
+# B5 fix makes the empty-master case fail-CLOSED rather than warn).
 master_bundle_version = match.get("bundle_version") or ""
-expected_bundle_version = ""  # we don't have EXPECTED_BUNDLE_VERSION; report what the master sees
-if expected_bundle_version and master_bundle_version and master_bundle_version != expected_bundle_version:
-    print(f"::error::worker {expected_id} bundle_version={master_bundle_version!r} != {expected_bundle_version!r}")
+if expected_bversion and not master_bundle_version:
+    print(f"::error::worker {expected_id} bundle_version absent from master /api/v1/workers response (B5 fail-closed); operator should verify DataServer/internal/handlers/server/api/workers_handler_types.go exposes BundleVersion in the response struct, OR pass plain 'CONNECTED' state assertion via an explicit per-worker API contract change.")
+    sys.exit(20)
+if expected_bversion and master_bundle_version and master_bundle_version != expected_bversion:
+    print(f"::error::worker {expected_id} bundle_version={master_bundle_version!r} != {expected_bversion!r} (B3' cross-check fail)")
     sys.exit(0)
 
 # (4) bundle_hash — must match EXPECTED_BUNDLE_HASH (B4 fix)
@@ -577,8 +621,13 @@ PYEOF
       PHASE_STATUS[2d_master_state]="PASS"
       PHASE_DETAIL[2d_master_state]="worker present in /api/v1/workers; state=CONNECTED"
     else
+      # B5 fix: python exits 20 when bundle_version is absent. Map to
+      # a clear PHASE_DETAIL so the verdict.json surfaces it.
       PHASE_STATUS[2d_master_state]="FAIL"
-      PHASE_DETAIL[2d_master_state]="master-state probe missing fields (see master-state.err)"
+      case $PROBE_RC in
+        20) PHASE_DETAIL[2d_master_state]="bundle_version absent from master /api/v1/workers response (B5 fail-closed)" ;;
+        *)  PHASE_DETAIL[2d_master_state]="master-state probe failed (python exit $PROBE_RC, see master-state.err)" ;;
+      esac
     fi
   fi
 else
@@ -654,27 +703,45 @@ if [[ "$ANY_FAIL" == "yes" && "$OVERALL" != "FAIL" ]]; then OVERALL="PARTIAL"; f
 } > "$EV_DIR/_phases.json"
 
 python3 - "$WORKER_ID" "$CERT_DATE" "$WORKER_IMAGE" "$EXPECTED_BUNDLE_HASH" \
-        "$PROTOCOL_VERSION" "$OVERALL" "$ANY_FAIL" "$ANY_SKIP" \
-        "$REQUIRED_PASS" "$EV_DIR" "$EV_DIR/_phases.json" "$VERDICT_FILE" \
+        "$EXPECTED_BUNDLE_VERSION" "$PROTOCOL_VERSION" "$OVERALL" "$ANY_FAIL" \
+        "$ANY_SKIP" "$REQUIRED_PASS" "$EV_DIR" "$EV_DIR/_phases.json" \
+        "$STATE_OUT_OR_EMPTY" "$VERDICT_FILE" \
         <<'PYEOF'
-import json, sys, time
-(worker_id, cert_date, worker_image, bundle_hash, proto, overall, any_fail,
- any_skip, required_pass, evid_dir, phases_path, verdict_path) = sys.argv[1:13]
+import json, sys, time, os
+(worker_id, cert_date, worker_image, bundle_hash, expected_bversion, proto,
+ overall, any_fail, any_skip, required_pass, evid_dir, phases_path,
+ state_path, verdict_path) = sys.argv[1:14]
 phases = json.load(open(phases_path))
+
+# H11 fix: capture master's observed bundle_version so verifiers have
+# a non-empty record even on FAIL or partial fields.
+master_observed_bundle_version = ""
+try:
+    if state_path and os.path.exists(state_path):
+        d_master = json.load(open(state_path))
+        for w in d_master.get("workers") or []:
+            if w.get("worker_id") == worker_id:
+                master_observed_bundle_version = w.get("bundle_version") or ""
+                break
+except Exception:
+    master_observed_bundle_version = ""
+
 out = {
-    "schema":               "velox.phase-2c-2d.v1",
-    "worker_id":            worker_id,
-    "cert_date":            cert_date,
-    "worker_image":         worker_image,
-    "expected_bundle_hash": bundle_hash,
-    "protocol_version":     proto,
-    "phase_status":         phases,
-    "overall_verdict":      overall,
-    "any_fail":             any_fail == "yes",
-    "any_skip":             any_skip == "yes",
-    "required_passes":      required_pass == "yes",
-    "evidence_dir":         evid_dir,
-    "generated_at_utc":     time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    "schema":                          "velox.phase-2c-2d.v2",
+    "worker_id":                       worker_id,
+    "cert_date":                       cert_date,
+    "worker_image":                    worker_image,
+    "expected_bundle_hash":            bundle_hash,
+    "expected_bundle_version":         expected_bversion,
+    "master_observed_bundle_version":  master_observed_bundle_version,
+    "protocol_version":                proto,
+    "phase_status":                    phases,
+    "overall_verdict":                 overall,
+    "any_fail":                        any_fail == "yes",
+    "any_skip":                        any_skip == "yes",
+    "required_passes":                 required_pass == "yes",
+    "evidence_dir":                    evid_dir,
+    "generated_at_utc":                time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
 }
 with open(verdict_path, "w") as f:
     json.dump(out, f, indent=2, sort_keys=True)
@@ -682,16 +749,23 @@ print(json.dumps(out, indent=2, sort_keys=True))
 PYEOF
 rm -f "$EV_DIR/_phases.json"
 
-# H10 fix: real-bootstrap.sh writes `verdict.json` to EV_DIR, and the
-# cap. 2C+2D generic verdict emitter here writes `verdict-2c-2d.json`.
-# Two verdict files per worker confuses the cap. 11 collector (which
-# expects exactly one canonical verdict per (date, worker)). Promote
-# verdict-2c-2d.json → verdict.json (canonical name, reading order
-# also matches `ls -t | head -1`), and drop the legacy alias.
+# H10 fix: real-bootstrap.sh writes a NARROW `verdict.json` to EV_DIR
+# (only 2C scope), and the cap. 2C+2D generic verdict emitter here writes
+# `verdict-2c-2d.json` (combined 2C+2D scope). The cap. 11 collector
+# expects ONE canonical verdict per (date, worker). We promote the
+# combined verdict → verdict.json AND preserve the narrow 2C-only
+# verdict as `verdict.json.2c-original` so historical dashboards plotting
+# "the original 2C-only verdict over time" don't lose granularity.
 if [[ -r "$EV_DIR/verdict-2c-2d.json" ]]; then
+  # If real-bootstrap.sh already wrote a verdict.json (the 2C-only
+  # narrow verdict), preserve it before promoting the combined verdict.
+  if [[ -r "$EV_DIR/verdict.json" ]]; then
+    cp "$EV_DIR/verdict.json" "$EV_DIR/verdict.json.2c-original"
+    printf '→ preserved narrow 2C verdict: %s\n' "$EV_DIR/verdict.json.2c-original"
+  fi
   mv "$EV_DIR/verdict-2c-2d.json" "$EV_DIR/verdict.json"
   VERDICT_FILE="$EV_DIR/verdict.json"
-  printf '→ canonical verdict promoted to: %s\n' "$VERDICT_FILE"
+  printf '→ canonical (combined 2C+2D) verdict promoted to: %s\n' "$VERDICT_FILE"
 fi
 
 # ─── Final exit ────────────────────────────────────────────────────────────
