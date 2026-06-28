@@ -29,16 +29,20 @@ package outbox
 
 import (
 	"context"
+	"fmt"
+	"log"
+
+	"velox-server/internal/alerts"
 )
 
 // KnownEventTypes is the canonical, hand-maintained list of every
 // event_type a production producer may emit (via EmitOutboxTx or
 // outbox.Store.Insert).
 //
-// Last manual inventory at PR-2 (outbox completeness test landed):
+// Last manual inventory at PR-OUTBOX-HANDLER:
 //
-//   • jobs_repository_shared.go:193 (baseJobRepository.Fail)
-//     emits "JOB_FAILED".
+//   • jobs_repository_shared.go Fail/FailWithCode emit "JOB_FAILED"
+//     with payload { job_id, error_code, error }.
 //
 // When you add a producer:
 //   - Add the event_type here.
@@ -54,6 +58,45 @@ var KnownEventTypes = []string{
 	"JOB_FAILED",
 }
 
+// ── Alert sink injection ─────────────────────────────────────────────────
+//
+// The JOB_FAILED handler in ProductionRegistry constructs an Alert and
+// forwards it to the configured Notifier. The notifier is provided by
+// the composition root (cmd/server/bootstrap_alerts.go) via
+// SetAlertNotifier BEFORE the OutboxDispatcher goroutine starts.
+//
+// The package-level var is read once per dispatcher cycle (handler
+// invocation), so a SetAlertNotifier call after boot requires a
+// supervisor restart to take effect. That is intentional: alert
+// routing is a hot-reload-sensitive surface (an alert from before
+// a sink swap could end up at the new sink), so we keep the
+// configuration change explicit.
+
+// defaultAlertNotifier is the safe-zero default. Until SetAlertNotifier
+// is called at boot, every JOB_FAILED alert is silently dropped. This
+// is preferable to a panic in production code — the dispatcher must
+// not crash because alert routing is optional at the wire-format level.
+var defaultAlertNotifier alerts.Notifier = alerts.NopNotifier{}
+
+// SetAlertNotifier overrides the production alert sink. Called once
+// from the composition root BEFORE the OutboxDispatcher goroutine
+// starts. Calling SetAlertNotifier with nil resets to the no-op
+// default.
+func SetAlertNotifier(n alerts.Notifier) {
+	if n == nil {
+		defaultAlertNotifier = alerts.NopNotifier{}
+		return
+	}
+	defaultAlertNotifier = n
+}
+
+// AlertNotifier returns the currently wired sink. ProductionRegistry
+// reads it via this accessor so tests can swap sinks by calling
+// SetAlertNotifier without rebuilding the registry.
+func AlertNotifier() alerts.Notifier { return defaultAlertNotifier }
+
+// ── ProductionRegistry ────────────────────────────────────────────────────
+
 // ProductionRegistry returns the canonical *Registry that the
 // supervisor's OutboxDispatcher is wired to at boot.
 //
@@ -62,26 +105,62 @@ var KnownEventTypes = []string{
 // one place. The exhaustive contracts in completeness_test.go define
 // what "canonical" means in testable terms.
 //
-// Today's state: empty registry (PR-2 prep). The dispatcher marks
-// every emitted event as FAILED via the "no handler → MarkFailed"
-// path. PR-2 (outbox cleanup) wires real handlers here.
+// Today: registers a real handler for JOB_FAILED (PR-OUTBOX-HANDLER).
+// The handler decodes the canonical payload {job_id, error_code,
+// error} and forwards an Alert to the wired Notifier.
 func ProductionRegistry() *Registry {
 	reg := NewRegistry()
-	// PR-2 future wiring goes here:
+
+	// PR-OUTBOX-HANDLER: real handler for JOB_FAILED.
 	//
-	//   MustRegisterFunc(reg, "JOB_FAILED", func(ctx context.Context, e Event) error {
-	//       var p struct {
-	//           JobID string `json:"job_id"`
-	//       }
-	//       if err := ParsePayload(e, &p); err != nil {
-	//           return err
-	//       }
-	//       // ...handler logic...
-	//       return nil
-	//   })
+	// Payload contract (declarative — actual producer is
+	// jobs_repository_shared.go Fail / FailWithCode):
 	//
-	// Keep registrations above the comment so the production
-	// inventory is greppable from a single location.
+	//   { "job_id":     string (job primary key),
+	//     "error_code": string (one of JOB_FAILED_GENERIC, OUTBOX_NOT_WIRED,
+	//                          TERMINAL_ALREADY, ... — see FailWithCode callers),
+	//     "error":      string (human-readable reason) }
+	//
+	// Decode failure surfaces as a Permanent HandlerError so the
+	// dispatcher's "no retry" path fires (a malformed payload is not
+	// a transient condition we want to retry forever). Notification
+	// delivery wire-format mismatch (decoder ok, alert wire broken)
+	// is logged but reported as nil so a degraded alert path never
+	// stalls the dispatch loop.
+	MustRegisterFunc(reg, "JOB_FAILED", func(ctx context.Context, e Event) error {
+		var p struct {
+			JobID     string `json:"job_id"`
+			ErrorCode string `json:"error_code"`
+			Error     string `json:"error"`
+		}
+		if err := ParsePayload(e, &p); err != nil {
+			// Permanent: malformed payload will not heal on retry.
+			return err
+		}
+		if p.JobID == "" {
+			// Permanent: missing required field.
+			return Permanent(fmt.Errorf("JOB_FAILED payload missing job_id"))
+		}
+		alert := alerts.Alert{
+			Source:    "outbox.JOB_FAILED",
+			Severity:  alerts.SeverityError,
+			Subject:   p.JobID,
+			Body:      p.Error,
+			Tags:      map[string]string{"job_id": p.JobID, "error_code": p.ErrorCode, "event_id": e.EventID},
+			Timestamp: e.CreatedAt,
+		}
+		// Best-effort delivery. Alert path is never authoritative — a
+		// transient sink hiccup must not block the dispatcher's
+		// "claim next event" loop. We log the error and swallow it
+		// so the OutboxDispatcher marks the event PROCESSED even
+		// when the alert sink is degraded.
+		if err := AlertNotifier().Notify(ctx, alert); err != nil {
+			log.Printf("[OUTBOX] alert sink Notify failed for event_id=%s job_id=%s: %v",
+				e.EventID, p.JobID, err)
+		}
+		return nil
+	})
+
 	return reg
 }
 

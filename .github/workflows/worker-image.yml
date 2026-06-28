@@ -1,31 +1,11 @@
 ---
 # PR D — Worker Docker image release pipeline.
-# ─────────────────────────────────────────────────────────────────────────────
-# Triggers:
-#   * push tag matching worker-v*  (e.g. refs/tags/worker-v1.2.3)
-#   * workflow_dispatch with `version` + `no_push` inputs
-#
-# What this workflow does:
-#   1. Resolves effective version from tag or input.
-#   2. Runs `go test -race` on the worker agent (fail-fast on regression).
-#   3. Builds the Go binary via the project's Makefile (bin/velox-worker-agent).
-#   4. Builds the Debian-slim Docker image from native/worker-agent-go/Dockerfile.
-#   5. Tags the image as `<owner>/velox-worker:<semver>` + `sha-<short>` — explicitly
-#      NO `:latest` tag.
-#   6. Generates SBOM + provenance attestations via BuildKit (baked into the
-#      OCI manifest, surfaced by GHCR).
-#   7. Extracts the digest, exports it to `$GITHUB_STEP_SUMMARY`, and uploads
-#      it as a `worker-image-digest` workflow artifact consumable by the
-#      deploy scripts.
-#   8. Signs the image with `cosign` using keyless OIDC against GitHub's
-#      Sigstore-compliant oidc issuer (requires `id-token: write`).
-#   9. Smoke-tests the image: `docker run` + assert container is still
-#      Running after 5 s. We intentionally do not await HEALTHCHECK here
-#      because the worker agent's HEALTHCHECK depends on a live gRPC
-#      handshake to the master, which is not mockable in a CI runner.
-#
-# Operators wanting a fully-pinned deploy should consume the digest artifact
-# via `velox-deploy-worker.sh --image ghcr.io/<owner>/velox-worker@<digest>`.
+# ----------------------------------------------------------------------------
+# Phase 1 of 100% Velox certification plan (cap. 2): every published digest
+# is sign + verify + baseline-recorded + bootstrap-tested under REAL deps
+# before the operator side ever sees a tag. NO `:latest`. NO fake-ffmpeg
+# bootstrap smoke. NO unsigned image accepted.
+# ----------------------------------------------------------------------------
 
 name: Worker image release
 
@@ -55,14 +35,11 @@ env:
   IMAGE_NAME: velox-worker
   BUILD_DIR: RemoteCodex/native/worker-agent-go
   DOCKERFILE: RemoteCodex/native/worker-agent-go/Dockerfile
-  # PR-3: build context is the repo root so that the agent's go.mod
-  # `replace velox-shared v0.0.0 => ../../../shared` resolves to the
-  # in-tree shared/ tree at /src/shared inside the go-builder stage.
   BUILD_CONTEXT: .
 
 jobs:
   build-publish:
-    name: Build, test, push, sign
+    name: Build, test, push, sign, verify, baseline, real-bootstrap
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -72,10 +49,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      # Read VERSION.txt (canonical source of truth per docs/architecture/OWNERSHIP.md,
-      # enforced as exactly-one at the repo root by scripts/ci/check-architecture.sh).
-      # Routed through a step because GitHub Actions cannot read a repo file directly
-      # into a workflow_dispatch input default.
       - name: Read VERSION.txt (canonical source)
         id: read-version
         run: |
@@ -93,40 +66,25 @@ jobs:
         run: |
           set -euo pipefail
           if [ "${{ github.event_name }}" = "push" ]; then
-            # Strip the canonical "worker-v" prefix so TAG becomes a clean
-            # semver (no leading "v"). Trigger is `worker-v*` per `on.push.tags`
-            # above so GITHUB_REF_NAME here is always worker-vXXX.
-            # e.g. refs/tags/worker-v1.2.3-rc1 → "1.2.3-rc1"
             TAG="${GITHUB_REF_NAME#worker-v}"
           elif [ -n "${{ inputs.version }}" ]; then
-            # workflow_dispatch: operator-supplied value (may have leading 'v')
             INPUT="${{ inputs.version }}"
             TAG="${INPUT#v}"
           else
-            # workflow_dispatch with empty input: fall back to canonical VERSION.txt
             TAG="${{ steps.read-version.outputs.version }}"
           fi
           if [ -z "$TAG" ]; then
-            echo "::error::Could not resolve version (push ref empty, dispatch input missing, VERSION.txt empty)." >&2
+            echo "::error::Could not resolve version." >&2
             exit 1
           fi
-          # RW-PROD-005 audit: refuse to publish when the resolved tag
-          # disagrees with the canonical VERSION.txt. Without this guard
-          # an operator can tag refs/tags/worker-v9.9.9 while the binary
-          # built by Dockerfile (which reads VERSION.txt via the Makefile)
-          # reports 1.2.0 — silent version drift.
           EXPECTED="${{ steps.read-version.outputs.version }}"
           if [ -n "$EXPECTED" ] && [ "$TAG" != "$EXPECTED" ]; then
-            echo "::error::Resolved tag ($TAG) does not match canonical VERSION.txt ($EXPECTED). Refusing to publish." >&2
+            echo "::error::Resolved tag ($TAG) != canonical VERSION.txt ($EXPECTED). Refusing." >&2
             exit 1
           fi
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-          # Compute commit-count-based pre-release marker so PR previews don't
-          # collide with release tags without ambiguity.
           SHORT_SHA="${GITHUB_SHA::7}"
           echo "short_sha=${SHORT_SHA}" >> "$GITHUB_OUTPUT"
-          # Skip push when explicitly dry-run on a tag push is impossible
-          # (tag pushes always perform full publish). For dispatch, honor `no_push`.
           if [ "${{ github.event_name }}" = "push" ]; then
             SHOULD_PUSH="true"
           else
@@ -148,14 +106,6 @@ jobs:
         working-directory: ${{ env.BUILD_DIR }}
         run: go test -race -timeout 5m ./internal/... ./pkg/...
 
-      # PR-3: the pre-Docker `make agent` step is no longer required.
-      # The worker Dockerfile now compiles the Go binary inline inside
-      # the go-builder stage with the same LDFLAGS the Makefile used
-      # (-X main.Version=$VERSION -X main.BuildTime=$BUILD_TIME),
-      # fed via the build-args below. The standalone `go test -race`
-      # above remains as a separate fail-fast gate so a broken test
-      # short-circuits before the much slower Docker build.
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -167,25 +117,17 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Phase 1: NEVER tag :latest. metadata-action's `flavor: latest=false`
+      # disables all default tag-generation paths; the two explicit tags
+      # below (raw semver + sha-<short>) carry every release.
       - name: "Compute image tags (NO :latest)"
         id: meta
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}
-          # RW-PROD-005 audit: prior block used `type=match,pattern=worker-v(.*)`
-          # which only fires on push.tag (GITHUB_REF_NAME=worker-vX.Y.Z). On
-          # workflow_dispatch the ref is a BRANCH so the pattern never matches
-          # and the operator-supplied inputs.version was silently dropped.
-          # Use `type=raw,value=${{ steps.version.outputs.tag }}` so both push
-          # and dispatch publish the same resolved tag (already validated
-          # against VERSION.txt above). Combined with the sha-tag this gives
-          # `velox-worker:<semver>` + `velox-worker:sha-<short>`.
           tags: |
             type=raw,value=${{ steps.version.outputs.tag }}
             type=sha,prefix=sha-,format=short
-          # Disable all default tag types (including :latest). Order matters:
-          # metadata-action prefers earliest tags, so the two explicit tags
-          # above take precedence over any default.
           flavor: |
             latest=false
 
@@ -198,22 +140,8 @@ jobs:
           push: ${{ steps.version.outputs.push == 'true' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          # PR-3: NO build-args are passed. The Dockerfile's go-builder
-          # stage delegates to the project's Makefile (`make BIN_DIR=/out
-          # agent`), which is the single source of truth for the
-          # LDFLAGS pattern + VERSION.txt enforcement + Reproducible
-          # Builds BUILD_TIME chain. The Makefile reads VERSION.txt
-          # (copied into the builder container) and falls back to a
-          # deterministic short_sha-based timestamp when SOURCE_DATE_EPOCH
-          # is unavailable. See RemoteCodex/native/worker-agent-go/Makefile
-          # for the contract.
-          # BuildKit-native provenance + SBOM carry the image digest
-          # through the OCI manifest; no separate build-arg is needed.
           provenance: true
           sbom: true
-          # Per-ref cache scope prevents layer-cache poisoning across
-          # unrelated feature branches and keeps build-warming local
-          # to the branch that produced the layers.
           cache-from: type=gha,scope=${{ github.workflow }}-${{ github.ref_name }}
           cache-to:   type=gha,mode=max,scope=${{ github.workflow }}-${{ github.ref_name }}
 
@@ -226,7 +154,6 @@ jobs:
           echo "${{ steps.build.outputs.digest }}" > image-digest.txt
           echo "## Image digest" >> "$GITHUB_STEP_SUMMARY"
           echo ":package: \`${{ steps.build.outputs.digest }}\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "Tags:" >> "$GITHUB_STEP_SUMMARY"
           for t in ${{ steps.meta.outputs.tags }}; do
             echo "- \`$t\`" >> "$GITHUB_STEP_SUMMARY"
           done
@@ -255,14 +182,128 @@ jobs:
           echo "Signing image: $IMAGE"
           cosign sign --yes "$IMAGE"
 
+      # Phase 1 of 100% Velox certification plan (cap. 2): close the
+      # sign+verify loop inside CI. Mirrors prepare-host.sh's regex so
+      # the worker host and CI agree on the canonical signatory
+      # identity for the worker-image workflow file in this exact repo.
+      - name: Cosign keyless verify (OIDC, Phase 1)
+        if: steps.digest.outputs.digest != '' && steps.version.outputs.push == 'true'
+        env:
+          COSIGN_EXPERIMENTAL: '1'
+        run: |
+          set -euo pipefail
+          IMAGE="${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}@${{ steps.digest.outputs.digest }}"
+          echo "Verifying image: $IMAGE"
+          cosign verify \
+            --certificate-identity-regexp='^https://github.com/Marcuss-ops/VeloxLEgit/\.github/workflows/worker-image\.yml@refs/(tags/worker-v.+|heads/.+)' \
+            --certificate-oidc-issuer='https://token.actions.githubusercontent.com' \
+            "$IMAGE"
+
+      # Phase 1 baseline manifest (cap. 2): record canonical mapping
+      # digest -> version + bundle_hash + source_hash so certifiers
+      # + cap. 11 evidence pack can pin every running worker to a
+      # known bundle identity without an extra DB lookup.
+      - name: Record baseline manifest (Phase 1)
+        if: steps.digest.outputs.digest != ''
+        run: |
+          set -euo pipefail
+          VERSION="$(tr -d '[:space:]' < VERSION.txt 2>/dev/null || echo '')"
+          BUNDLE_HASH="$(tr -d '[:space:]' < RemoteCodex/BUNDLE_HASH.txt 2>/dev/null || echo '')"
+          SOURCE_HASH="$(python3 -c 'import json;print(json.load(open("RemoteCodex/BUILD_INFO.json")).get("source_hash",""))' 2>/dev/null || echo '')"
+          if [[ -z "$VERSION" ]]; then
+            echo "::error::VERSION.txt is empty at the build commit" >&2
+            exit 1
+          fi
+          python3 - <<PYEOF
+          import json, os
+          tags = "${{ steps.meta.outputs.tags }}".split()
+          manifest = {
+            "digest":         "${{ steps.digest.outputs.digest }}",
+            "registry_image": "${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}",
+            "tags":           tags,
+            "version":        "$VERSION",
+            "bundle_hash":    "$BUNDLE_HASH",
+            "source_hash":    "$SOURCE_HASH",
+            "github_run":     "${{ github.run_id }}",
+            "github_run_url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+            "workflow_file":  "worker-image.yml",
+          }
+          with open("worker-baseline-manifest.json", "w") as f:
+              json.dump(manifest, f, indent=2, sort_keys=True)
+          print(json.dumps(manifest, indent=2, sort_keys=True))
+          PYEOF
+
+      - name: Upload baseline manifest artifact
+        if: steps.digest.outputs.digest != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: worker-baseline-manifest
+          path: worker-baseline-manifest.json
+          if-no-files-found: error
+
+      # Phase 1 (cap. 2): REAL bootstrap smoke against the published
+      # image. NOT the fake-FFmpeg path of `make bootstrap-smoke`; this
+      # runs the binary against the production deps baked into the
+      # image, captures [BOOTSTRAP_REPORT] from stderr (worker-agent's
+      # new --bootstrap-report mode) and asserts verdict=OK + all 4
+      # canonical step PASS.
+      - name: "Real bootstrap smoke (Phase 1 cap. 2)"
+        if: steps.digest.outputs.digest != '' && steps.version.outputs.push == 'true'
+        run: |
+          set -euo pipefail
+          IMAGE="${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}@${{ steps.digest.outputs.digest }}"
+          BUNDLE_HASH="$(tr -d '[:space:]' < RemoteCodex/BUNDLE_HASH.txt 2>/dev/null || echo '')"
+          mkdir -p /tmp/velox-real-bootstrap
+          docker run --rm \
+            --name worker-real-bootstrap \
+            -e VELOX_WORKER_ID=ci-real-bootstrap \
+            -e VELOX_BUNDLE_HASH="$BUNDLE_HASH" \
+            -e VELOX_GRPC_MASTER_URL=127.0.0.1:9999 \
+            -v /tmp/velox-real-bootstrap:/var/lib/velox-worker \
+            "$IMAGE" \
+            --bootstrap-report > /tmp/velox-real-bootstrap/stdout.log 2> /tmp/velox-real-bootstrap/stderr.log
+          rc=$?
+          if [[ ! "$rc" =~ ^(0|1)$ ]]; then
+            echo "::error::bootstrap-report exited with $rc (expected 0=OK or 1=FAIL)"
+            cat /tmp/velox-real-bootstrap/stderr.log >&2 || true
+            exit 1
+          fi
+          JSON="$(awk '/^\[BOOTSTRAP_REPORT\]$/{flag=1;next}flag && /^\[/ {exit} flag' /tmp/velox-real-bootstrap/stderr.log)"
+          if [[ -z "$JSON" ]]; then
+            echo "::error::no [BOOTSTRAP_REPORT] JSON block"
+            cat /tmp/velox-real-bootstrap/stderr.log >&2 || true
+            exit 2
+          fi
+          echo "--- [BOOTSTRAP_REPORT] ---"
+          printf '%s\n' "$JSON"
+          echo "--- /[BOOTSTRAP_REPORT] ---"
+          printf '%s' "$JSON" > /tmp/velox-real-bootstrap/bootstrap-report.json
+          printf '%s' "$JSON" | python3 - <<'PYEOF'
+          import json, sys
+          d = json.load(sys.stdin)
+          verdict = d.get("verdict", "UNKNOWN")
+          steps = {s.get("name"): s.get("status") for s in d.get("steps", [])}
+          required = ("bundle_hash", "ffmpeg", "output_dir", "engine_self_render")
+          missing = [r for r in required if r not in steps]
+          if missing:
+              print(f"::error::bootstrap report missing required step: {missing}")
+              sys.exit(2)
+          bad = [r for r in required if steps.get(r) != "OK"]
+          if verdict != "OK" or bad:
+              print(f"::error::bootstrap verdict={verdict}, failed={bad}, all={steps}")
+              sys.exit(3)
+          print(f"OK: real-bootstrap verdict=OK; all 4 step PASS: {steps}")
+          PYEOF
+
+      # Phase 1 also keeps the legacy "stays up" smoke as a fast-fail
+      # before the slower real-bootstrap smoke. Companion to the
+      # health endpoint probe on the Dockerfile.
       - name: "Smoke test: entrypoint stays up (no immediate crash)"
         if: steps.digest.outputs.digest != '' && steps.version.outputs.push == 'true'
         run: |
           set -euo pipefail
           IMAGE="${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}@${{ steps.digest.outputs.digest }}"
           echo "Smoke testing entrypoint of: $IMAGE"
-          # Run container with bogus master URL — the worker will retry
-          # connection but should NOT crash.
           docker run --rm -d \
             --name worker-smoke \
             -e VELOX_WORKER_ID=ci-smoke \

@@ -12,6 +12,13 @@
 velox-master.pid
 *.pid
 
+# .e2e-expected-sha256.local is the per-developer capture for the
+# deterministic E2E_EXPECTED_SHA256 baseline that scripts/ci/local-verify-mirror.sh
+# uses to pin the workload render. NOT a secret — derived from the
+# rendered artifact — but per-developer drift would cause CI confusion, so
+# excluded from version control.
+.e2e-expected-sha256.local
+
 # ── Production deployment artefacts (NEVER commit — see CHANGELOG) ──────────
 # These wrap any depth to catch live operator inventories / env files that
 # are generated next to test data or in sub-checkouts. Templates live under

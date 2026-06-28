@@ -3,7 +3,6 @@ package ansible
 import (
 	"log"
 	"path/filepath"
-	"sync"
 	"time"
 
 	"velox-server/internal/store"
@@ -43,52 +42,43 @@ type AnsibleComputerStore interface {
 	DeleteAnsibleHost(host string) error
 	GetAnsibleHost(host string) (*store.AnsibleHostFields, error)
 	ListAnsibleHosts() ([]store.AnsibleHostFields, error)
+	CountAnsibleHosts() (int, error)
+	CountAnsibleHostsEnabled() (int, error)
 }
 
-// AnsibleComputerManager manages the Ansible computers inventory.
+// AnsibleComputerManager owns the Ansible computers inventory.
+//
+// PR-ANSIBLE-SOT: the previous in-RAM `computers map[string]AnsibleComputer`
+// mirror is REMOVED. SQLite (`ansible_hosts`) is the single source of
+// truth — every read (`GetComputer`, `ListComputers`, `Count`,
+// `CountEnabled`, `GetSecretRef`) hits the store on every call. The
+// bootstrap-time `loadFromSQLite` + `SetStore` are gone; the store is
+// mandatory at construction. Linear DB roundtrips replace the O(N)
+// in-RAM loops that the mirror allowed.
 type AnsibleComputerManager struct {
 	dataDir        string
 	store          AnsibleComputerStore
-	computers      map[string]AnsibleComputer
 	secretResolver *SecretResolver
-	mu             sync.RWMutex
 }
 
-// NewAnsibleComputerManager creates a new Ansible computer manager.
-func NewAnsibleComputerManager(dataDir string) *AnsibleComputerManager {
+// NewAnsibleComputerManager creates a new computer manager.
+//
+// store is required: passing nil returns a no-op manager whose reads
+// return the zero-value / empty result so the test-mode contract is
+// preserved (test fixtures without a backing store still construct
+// without panic and report "no computers" / zero counts).
+//
+// PR-ANSIBLE-SOT: the previous `(dataDir string)` only signature is
+// replaced because `SetStore`-then-`loadFromSQLite` was eliminated —
+// the store is wired once at construction. Callers in app/ansible.go
+// pass `m.store` directly.
+func NewAnsibleComputerManager(dataDir string, store AnsibleComputerStore) *AnsibleComputerManager {
 	secretsDir := filepath.Join(dataDir, "secrets", "ansible")
 	return &AnsibleComputerManager{
 		dataDir:        dataDir,
-		computers:      make(map[string]AnsibleComputer),
+		store:          store,
 		secretResolver: NewSecretResolver(secretsDir),
 	}
-}
-
-// SetStore sets the SQLite store and loads from it.
-func (m *AnsibleComputerManager) SetStore(store AnsibleComputerStore) {
-	m.store = store
-	m.loadFromSQLite()
-}
-
-// loadFromSQLite loads computers from the structured ansible_hosts table.
-func (m *AnsibleComputerManager) loadFromSQLite() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if m.store == nil {
-		return
-	}
-
-	hosts, err := m.store.ListAnsibleHosts()
-	if err != nil {
-		log.Printf("[ANSIBLE] Failed to load hosts from ansible_hosts: %v", err)
-		return
-	}
-
-	for _, h := range hosts {
-		m.computers[h.Host] = ansibleHostFieldsToComputer(h)
-	}
-	log.Printf("[OK] Loaded %d Ansible computers from ansible_hosts", len(hosts))
 }
 
 // ansibleHostFieldsToComputer converts structured fields to AnsibleComputer.
@@ -99,7 +89,7 @@ func ansibleHostFieldsToComputer(h store.AnsibleHostFields) AnsibleComputer {
 		Host:             h.Host,
 		AnsibleUser:      h.AnsibleUser,
 		SSHKeyPath:       h.SSHKeyPath,
-		SSHPassword:      "", // Not stored in plaintext — use secret_ref
+		SSHPassword:      "",
 		Enabled:          h.Enabled,
 		Availability:     h.Availability,
 		Group:            h.Group,
@@ -129,7 +119,6 @@ func ansibleHostFieldsToComputer(h store.AnsibleHostFields) AnsibleComputer {
 func computerToAnsibleHostFields(c AnsibleComputer, resolver *SecretResolver) store.AnsibleHostFields {
 	secretRef := ""
 
-	// If the computer already has a known secret_ref, use it
 	if c.SSHPassword != "" && resolver != nil {
 		ref, err := resolver.MigrateSSHPassword(c.Host, c.SSHPassword)
 		if err != nil {
@@ -139,7 +128,6 @@ func computerToAnsibleHostFields(c AnsibleComputer, resolver *SecretResolver) st
 		}
 	}
 
-	// If no password was set, check if a secret file already exists
 	if secretRef == "" && resolver != nil {
 		secretRef = resolver.BuildSecretRef(c.Host)
 	}
@@ -172,107 +160,126 @@ func computerToAnsibleHostFields(c AnsibleComputer, resolver *SecretResolver) st
 	}
 }
 
-// persistToAnsibleHosts writes to the new structured table.
-// SSHPassword is migrated to secret_ref before persisting.
-func (m *AnsibleComputerManager) persistToAnsibleHosts(c AnsibleComputer) error {
-	if m.store == nil {
-		return nil
-	}
-	return m.store.UpsertAnsibleHost(computerToAnsibleHostFields(c, m.secretResolver))
-}
-
-// LoadComputers loads computers from SQLite.
-func (m *AnsibleComputerManager) LoadComputers() error {
-	if m.store != nil {
-		m.loadFromSQLite()
-	}
-	return nil
-}
-
-// ListComputers returns all computers.
+// ListComputers returns the full inventory as a fresh SQLite read.
+//
+// PR-ANSIBLE-SOT: every read goes through the `ListAnsibleHosts()` SQL
+// query — no in-RAM mirror, no SetStore+loadFromSQLite bootstrap. With
+// a nil store the method still produces an empty map so callers
+// iterating `for _, c := range m.ListComputers()` stay panic-free.
 func (m *AnsibleComputerManager) ListComputers() map[string]AnsibleComputer {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	result := make(map[string]AnsibleComputer, len(m.computers))
-	for k, v := range m.computers {
-		result[k] = v
+	result := map[string]AnsibleComputer{}
+	if m.store == nil {
+		return result
+	}
+	hosts, err := m.store.ListAnsibleHosts()
+	if err != nil {
+		log.Printf("[ANSIBLE] ListComputers: ListAnsibleHosts: %v", err)
+		return result
+	}
+	for _, h := range hosts {
+		result[h.Host] = ansibleHostFieldsToComputer(h)
 	}
 	return result
 }
 
-// GetComputer returns a specific computer by ID.
+// GetComputer returns a specific computer by host name from SQLite.
+//
+// PR-ANSIBLE-SOT: a single `GetAnsibleHost` query replaces the in-RAM
+// map lookup. With a nil store the method returns the zero AnsibleComputer
+// and `false` so callers retain their pre-existing panic-free path.
 func (m *AnsibleComputerManager) GetComputer(id string) (AnsibleComputer, bool) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	computer, ok := m.computers[id]
-	return computer, ok
+	if m.store == nil {
+		return AnsibleComputer{}, false
+	}
+	h, err := m.store.GetAnsibleHost(id)
+	if err != nil {
+		// sql.ErrNoRows → ok=false, zero value; other errors logged but
+		// also surface ok=false so the audit endpoint degrades gracefully
+		// rather than mis-reporting stale data.
+		return AnsibleComputer{}, false
+	}
+	if h == nil {
+		return AnsibleComputer{}, false
+	}
+	return ansibleHostFieldsToComputer(*h), true
 }
 
-// SaveComputer saves or updates a computer.
-// SQLite (ansible_hosts) is the single source of truth.
-// SSHPassword is migrated to a secret file by persistToAnsibleHosts —
-// plaintext passwords are never stored in the database.
+// SaveComputer upserts a computer in SQLite.
+//
+// PR-ANSIBLE-SOT: the in-RAM `m.computers[host] = computer` assignment
+// is replaced by a single `UpsertAnsibleHost` call. SSHPassword is
+// migrated to a secret file by `persistToAnsibleHosts` so plaintext
+// passwords never reach the database.
 func (m *AnsibleComputerManager) SaveComputer(computer AnsibleComputer) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	computer.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
-	m.computers[computer.Host] = computer
-
 	if m.store == nil {
 		return nil
 	}
-
-	return m.persistToAnsibleHosts(computer)
+	computer.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	return m.store.UpsertAnsibleHost(computerToAnsibleHostFields(computer, m.secretResolver))
 }
 
-// DeleteComputer deletes a computer.
+// DeleteComputer removes a computer from SQLite.
+//
+// PR-ANSIBLE-SOT: the in-RAM `delete(m.computers, id)` is replaced by a
+// single `DeleteAnsibleHost` call.
 func (m *AnsibleComputerManager) DeleteComputer(id string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	delete(m.computers, id)
 	if m.store == nil {
 		return nil
 	}
-
 	return m.store.DeleteAnsibleHost(id)
 }
 
-// Count returns the number of computers.
+// Count returns the total number of computers via a SQL `COUNT(*)` query.
+//
+// PR-ANSIBLE-SOT: replaces the O(N) in-RAM `len(m.computers)` with a
+// constant-cost aggregate. With a nil store the manager reports 0.
 func (m *AnsibleComputerManager) Count() int {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return len(m.computers)
+	if m.store == nil {
+		return 0
+	}
+	n, err := m.store.CountAnsibleHosts()
+	if err != nil {
+		log.Printf("[ANSIBLE] CountAnsibleHosts: %v", err)
+		return 0
+	}
+	return n
 }
 
-// CountEnabled returns the number of enabled computers.
+// CountEnabled returns the number of enabled computers via a SQL
+// `COUNT(*) WHERE enabled=1` query.
+//
+// PR-ANSIBLE-SOT: replaces the O(N) in-RAM `if c.Enabled { count++ }` with
+// a constant-cost aggregate. With a nil store the manager reports 0.
 func (m *AnsibleComputerManager) CountEnabled() int {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	count := 0
-	for _, c := range m.computers {
-		if c.Enabled {
-			count++
-		}
+	if m.store == nil {
+		return 0
 	}
-	return count
+	n, err := m.store.CountAnsibleHostsEnabled()
+	if err != nil {
+		log.Printf("[ANSIBLE] CountAnsibleHostsEnabled: %v", err)
+		return 0
+	}
+	return n
 }
 
 // GetSecretRef returns the secret_ref for a host (for inventory generation).
 // Used by AnsibleRunManager to reference secrets instead of plaintext passwords.
+//
+// PR-ANSIBLE-SOT: the in-RAM `m.computers[host]` existence check is
+// replaced by a single `GetAnsibleHost` query — host existence is
+// validated against SQLite before the secret_ref is constructed.
 func (m *AnsibleComputerManager) GetSecretRef(host string) string {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	if _, ok := m.computers[host]; ok {
-		return m.secretResolver.BuildSecretRef(host)
+	if m.store == nil {
+		return ""
 	}
-	return ""
+	if _, err := m.store.GetAnsibleHost(host); err != nil {
+		return ""
+	}
+	return m.secretResolver.BuildSecretRef(host)
 }
 
 // ResolveSecret resolves a secret_ref to the actual secret value.
+// Pure helper; doesn't hit the store.
 func (m *AnsibleComputerManager) ResolveSecret(secretRef string) (string, error) {
 	return m.secretResolver.Resolve(secretRef)
 }

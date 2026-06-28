@@ -16,57 +16,15 @@ import (
 
 	velmetrics "velox-server/internal/metrics"
 
-	"velox-server/internal/app"
-	"velox-server/internal/artifacts"
-	voiceoverassets "velox-server/internal/assets"
 	"velox-server/internal/config"
-	"velox-server/internal/deliveries"
 	"velox-server/internal/grpcserver"
 	workerhandlers "velox-server/internal/handlers/remote/workers"
-	"velox-server/internal/handlers/remote/workers/lifecycle"
 	workerhandlersuploads "velox-server/internal/handlers/remote/workers/uploads"
 	"velox-server/internal/ingest"
 	"velox-server/internal/jobs"
-	"velox-server/internal/jobs/enqueue"
-	"velox-server/internal/outbox"
 	"velox-server/internal/store"
 	workersreg "velox-server/internal/workers"
 )
-
-// ── Legacy mega-struct kept for test + router compatibility ──────────────
-
-type serverPaths struct {
-	dataDir string
-}
-
-type serverDeps struct {
-	paths               *serverPaths
-	reg                 *workersreg.Registry
-	workersRepo         store.WorkersRepository
-	sqliteStore         *store.SQLiteStore
-	workerUpdateHandler *workerhandlers.WorkerUpdateHandler
-	workerLifecycle     *lifecycle.Handler
-	ansibleModule       *app.AnsibleModule
-	youtubeModule       *app.YouTubeModule
-	driveModule         *app.DriveModule
-	outboxStore         *outbox.Store
-	outboxDispatcher    *outbox.Dispatcher
-	deliveryRunner      *deliveries.DeliveryRunner
-	blobStore           store.BlobStore
-	artifactSvc         *artifacts.Service
-	cmdMgr              *workersreg.CommandManager
-	chunkedHandler      *workerhandlersuploads.ChunkedUploadHandler
-	lifecycleSvc        *jobs.LifecycleService
-	assetService        *voiceoverassets.AssetService
-	enqueuer            *enqueue.Enqueuer
-	taskDeps            *taskDeps
-
-	// Scorecard v1 / PR-5: master-side Prometheus /metrics exporter.
-	// Wired inside runServer when config.Server.EnableMetricsEnpoint is true;
-	// nil in tests means the route is omitted.
-	metricsRegistry  *velmetrics.Registry
-	metricsCollector *velmetrics.Collector
-}
 
 // ── Sentinels ─────────────────────────────────────────────────────────────
 
@@ -88,15 +46,15 @@ var ErrPostgresNotYetWired = errors.New(
 )
 
 // ── wirePostBuild (shared post-construction wiring) ──────────────────────
-
+//
 // wirePostBuild connects dependencies that cross build-layer boundaries
 // (jobs↔tasks). Called by both buildTestDeps (tests) and runServer
 // (production) so the wiring stays canonical in exactly one place.
 func wirePostBuild(j *jobsDeps, t *taskDeps) error {
 	// fix/remove-job-lease-ops: j.SQLiteRepo (concrete *SQLiteJobRepository)
 	// satisfies taskgraph.JobsRetryQuerier via structural typing (Get +
-	// FailWithRetry). j.Lifecycle.Jobs() returns jobs.Repository which
-	// no longer has FailWithRetry on the canonical interface.
+	// FailWithRetry). j.Repository returns jobs.Repository which no
+	// longer has FailWithRetry on the canonical interface.
 	if j != nil && j.SQLiteRepo != nil && t != nil && t.TaskLifecycle != nil {
 		t.TaskLifecycle.SetJobsRepo(j.SQLiteRepo)
 	}
@@ -116,9 +74,31 @@ func wirePostBuild(j *jobsDeps, t *taskDeps) error {
 	return nil
 }
 
-// ── buildTestDeps (compat wrapper for tests) ───────────────────────────────
+// ── testServerDeps: NOT a generic dependency bag ──────────────────────────
+//
+// PR-ROUTER-DEPS: the legacy *serverDeps mega-struct is gone. The HTTP
+// router no longer accepts a global deps blob — it consumes a typed
+// RouterBundle (cmd/server/router.go). Tests that previously inspected
+// `deps.cmdMgr` / `deps.workerUpdateHandler` / `deps.lifecycleSvc.Jobs()`
+// now exercise the build* helpers directly OR consume the slim
+// testServerDeps struct below, which contains ONLY the fields the
+// test suite actually asserts on (none of these leak into the router).
 
-func buildTestDeps(cfg *config.Config) (*serverDeps, error) {
+// testServerDeps is the minimum-bag-of-deps returned by buildTestDeps.
+// Production code never reads this; newRouter takes a RouterBundle.
+// Keeping this struct test-local prevents future "let's add one more
+// dep to serverDeps" temptation — every test contract must justify a
+// new field here explicitly.
+type testServerDeps struct {
+	cmdMgr              *workersreg.CommandManager
+	workerUpdateHandler *workerhandlers.WorkerUpdateHandler
+	jobsRepo            jobs.Repository
+	sqliteStore         *store.SQLiteStore
+}
+
+// buildTestDeps is the test-only composition root. It constructs the
+// canonical dependency graph tests inspect; it does NOT touch serverDeps.
+func buildTestDeps(cfg *config.Config) (*testServerDeps, error) {
 	p, err := buildPersistence(cfg)
 	if err != nil {
 		return nil, err
@@ -138,35 +118,40 @@ func buildTestDeps(cfg *config.Config) (*serverDeps, error) {
 	if err != nil {
 		return nil, err
 	}
-	a, err := buildAssets(cfg, p, j)
-	if err != nil {
+	// buildAssets is called for its side-effects on the persistence
+	// layer (e.g. wiring artifact service back to the SQLite store)
+	// even though testServerDeps does not expose anything from `a`.
+	// The `_` discards the return value cleanly without an unused-var
+	// compile error.
+	if _, err := buildAssets(cfg, p, j); err != nil {
 		return nil, err
 	}
-	return &serverDeps{
-		paths:               &serverPaths{dataDir: cfg.Runtime.DataDir},
-		reg:                 w.Registry,
-		workersRepo:         w.Repository,
-		sqliteStore:         p.SQLite,
-		workerUpdateHandler: w.UpdateHandler,
-		workerLifecycle:     w.Lifecycle,
-		outboxStore:         p.Outbox,
-		outboxDispatcher:    a.OutboxDispatcher,
-		blobStore:           p.BlobStore,
-		artifactSvc:         a.ArtifactSvc,
+
+	return &testServerDeps{
 		cmdMgr:              w.CommandManager,
-		lifecycleSvc:        j.Lifecycle,
-		taskDeps:            t,
+		workerUpdateHandler: w.UpdateHandler,
+		jobsRepo:            j.Repository,
+		sqliteStore:         p.SQLite,
 	}, nil
 }
 
-// ── runServer: the slim composition root ───────────────────────────────────
+// ── runServer: the slim composition root (no serverDeps) ───────────────────
 
 func runServer(cfg *config.Config) error {
 	if err := runDataLayerAudit(cfg); err != nil {
 		return err
 	}
 
-	// 1. Build domain dependencies
+	// 0. Wire the alert sink before buildSupervisor so the
+	//    outbox-dispatcher's first JOB_FAILED delivery hits the real
+	//    sink, not the NopNotifier default. buildSupervisor registers
+	//    outbox-dispatcher as a ClassCritical supervisor runner, and
+	//    we don't want any startup-window alerts silently dropped.
+	if _, err := buildAlerts(); err != nil {
+		return fmt.Errorf("bootstrap: alerts: %w", err)
+	}
+
+	// 1. Build domain dependencies (same shape as before).
 	p, err := buildPersistence(cfg)
 	if err != nil {
 		return err
@@ -203,37 +188,32 @@ func runServer(cfg *config.Config) error {
 		return err
 	}
 
-	// 2. Assemble serverDeps for newRouter + gRPC compat
-	deps := &serverDeps{
-		paths:               &serverPaths{dataDir: cfg.Runtime.DataDir},
-		reg:                 w.Registry,
-		workersRepo:         w.Repository,
-		sqliteStore:         p.SQLite,
-		workerUpdateHandler: w.UpdateHandler,
-		workerLifecycle:     w.Lifecycle,
-		ansibleModule:       m.Ansible,
-		youtubeModule:       m.YouTube,
-		driveModule:         m.Drive,
-		outboxStore:         p.Outbox,
-		outboxDispatcher:    a.OutboxDispatcher,
-		deliveryRunner:      m.DeliveryRunner,
-		blobStore:           p.BlobStore,
-		artifactSvc:         a.ArtifactSvc,
-		cmdMgr:              w.CommandManager,
-		chunkedHandler:      workerhandlersuploads.NewChunkedUploadHandler(a.ChunkedUploadSvc),
-		lifecycleSvc:        j.Lifecycle,
-		assetService:        m.AssetService,
-		enqueuer:            m.Enqueuer,
-		taskDeps:            t,
+	// 2. Build the per-route RouterBundle directly from the build*
+	//    return values — no mega-struct in between.
+	bundle := RouterBundle{
+		Script: ScriptRouteDeps{
+			Cfg:         cfg,
+			SQLiteStore: p.SQLite,
+			Enqueuer:    m.Enqueuer,
+		},
+		Groups:     GroupsRouteDeps{SQLiteStore: p.SQLite},
+		Pipeline:   PipelineRouteDeps{Cfg: cfg, Enqueuer: m.Enqueuer, JobsRepo: j.Repository, CmdMgr: w.CommandManager},
+		Darkeditor: DarkeditorRouteDeps{Cfg: cfg, SQLiteStore: p.SQLite},
+		Upload: UploadRouteDeps{
+			Cfg:            cfg,
+			ArtifactSvc:    a.ArtifactSvc,
+			ChunkedHandler: workerhandlersuploads.NewChunkedUploadHandler(a.ChunkedUploadSvc),
+		},
 	}
 
-	// 3. Build router (scorecard v1 / PR-5: registry + collector wired
-	// here so /metrics mounts automatically inside newRouter).
-	deps.metricsRegistry = velmetrics.NewRegistry()
-	deps.metricsCollector = velmetrics.NewCollector(deps.metricsRegistry)
-	r := newRouter(cfg, deps, m.Registry)
+	// 3. Prometheus /metrics exporter (scorecard v1 / PR-5). Nil in
+	//    tests means the route is omitted by registerMetricsRoutes.
+	metricsRegistry := velmetrics.NewRegistry()
+	bundle.Metrics = MetricsRouteDeps{Registry: metricsRegistry}
+	metricsCollector := velmetrics.NewCollector(metricsRegistry)
+	r := newRouter(cfg, bundle, m.Registry)
 
-	// 4. HTTP server
+	// 4. HTTP server.
 	addr := fmt.Sprintf(":%d", cfg.Server.Port)
 	srv := &http.Server{
 		Addr:              addr,
@@ -257,10 +237,12 @@ func runServer(cfg *config.Config) error {
 		errChan <- err
 	}()
 
-	// 5. gRPC server
+	// 5. gRPC server.
 	var grpcSrv grpcServer
 	if cfg.Server.GRPCPort > 0 {
-		jobsRepo := j.Lifecycle.Jobs()
+		// PR-REMOVE-LIFECYCLE: j.Repository is the canonical jobs
+		// surface; the old `j.Lifecycle.Jobs()` indirection layer is gone.
+		jobsRepo := j.Repository
 		if jobsRepo != nil && w.CommandManager != nil {
 			insecureDev := cfg.Runtime.GRPCAllowInsecureDev
 			// PR-5 P0 fail-fast: refuse to start the master with insecure gRPC
@@ -271,10 +253,6 @@ func runServer(cfg *config.Config) error {
 				log.Fatalf("[FAIL] PR-5 P0 guard: VELOX_GRPC_ALLOW_INSECURE_DEV=true on release channel =%q. Production / staging MUST use the TLS cert+key+CA triple. Set VELOX_RELEASE_CHANNEL=dev to confirm dev intent, or supply VELOX_GRPC_TLS_{CERT,KEY,CA}_FILE and unset VELOX_GRPC_ALLOW_INSECURE_DEV.",
 					cfg.Runtime.ReleaseChannel)
 			}
-			// RW-PROD-001 A5: an operator opt-in for hard-Reject of plaintext
-			// gRPC even outside the PR-5 release-channel gate. Runs AFTER the
-			// PR-5 guard so an operator who set both gets the most specific
-			// fatal (the release-channel one, which mentions channel name).
 			// RW-PROD-001 A5: an operator opt-in for hard-Reject of plaintext
 			// gRPC even outside the PR-5 release-channel gate. Runs AFTER the
 			// PR-5 guard so an operator who set both gets the most specific
@@ -314,7 +292,7 @@ func runServer(cfg *config.Config) error {
 		}
 	}
 
-	// 6. Wire readiness checks
+	// 6. Wire readiness checks.
 	if m.Health != nil {
 		m.Health.AddReadinessCheck("db-ping", func() error {
 			if p.SQLite == nil {
@@ -365,27 +343,57 @@ func runServer(cfg *config.Config) error {
 		}
 	}
 
-	// 7. Background supervisor (started in a goroutine, signals done via channel)
-	supervisor, err := buildSupervisor(a, m, j, p, w, t, deps.metricsCollector)
+	// 7. Background supervisor (started in a goroutine, signals done via channel).
+	supervisor, err := buildSupervisor(a, m, j, p, w, t, metricsCollector)
 	if err != nil {
 		return err
 	}
+
+	// PR-SUPERVISOR-TAXONOMY: gate `/ready` red when any
+	// expected-to-be-running background runner has silently died.
+	// ClassOneShot runners are excluded from this check (they
+	// are expected to exit after completing their fire-and-forget
+	// task). ClassRestartable + ClassCritical runners MUST stay
+	// alive; if metrics-supervisor / taskgraph-dispatcher /
+	// outbox-dispatcher ever exhaust retries and return, we want
+	// the orchestrator to know within one tick. Wired HERE (after
+	// buildSupervisor returns) so the closure captures `supervisor`
+	// without an out-of-scope compile error.
+	if m.Health != nil {
+		m.Health.AddReadinessCheck("supervisor_runners", func() error {
+			if supervisor == nil {
+				return nil
+			}
+			missing := supervisor.Missing()
+			if len(missing) > 0 {
+				return fmt.Errorf("background supervisor: %d expected runner(s) dead: %v", len(missing), missing)
+			}
+			return nil
+		})
+	}
+
+	// 7b. Start the supervisor goroutine.
 	bgCtx, bgCancel := context.WithCancel(context.Background())
 	defer bgCancel()
 
 	supervisorDone := make(chan struct{})
 	go func() {
 		defer close(supervisorDone)
-		_ = supervisor.Run(bgCtx)
+		if supErr := supervisor.Run(bgCtx); supErr != nil {
+			// ClassCritical exhaustion → supervisor returns the
+			// footgun error so k8s can restart the pod. Log loudly
+			// here so a human spot-check catches it on first deploy.
+			log.Printf("[SERVER] supervisor returned critical error: %v", supErr)
+		}
 	}()
 
-	log.Printf("[BOOTSTRAP] Bootstrap complete \u2014 %d modules, %d background runners",
+	log.Printf("[BOOTSTRAP] Bootstrap complete — %d modules, %d background runners",
 		m.Registry.Len(), supervisor.Len())
 	if m.Health != nil {
 		m.Health.MarkReady()
 	}
 
-	// 8. Wait for signal or error
+	// 8. Wait for signal or error.
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	select {
@@ -397,15 +405,15 @@ func runServer(cfg *config.Config) error {
 		log.Println("[SERVER] Shutdown signal received, shutting down gracefully...")
 	}
 
-	// 9. Graceful teardown
+	// 9. Graceful teardown.
 	bgCancel()
-	log.Println("[SERVER] Background goroutines cancelling \u2014 waiting for them to exit...")
+	log.Println("[SERVER] Background goroutines cancelling — waiting for them to exit...")
 
 	select {
 	case <-supervisorDone:
 		log.Println("[SERVER] Background goroutines stopped cleanly")
 	case <-time.After(15 * time.Second):
-		log.Printf("[SERVER] background shutdown timed out after 15s \u2014 proceeding with teardown anyway")
+		log.Printf("[SERVER] background shutdown timed out after 15s — proceeding with teardown anyway")
 	}
 
 	shutdownGRPCServer(grpcSrv)
@@ -415,16 +423,53 @@ func runServer(cfg *config.Config) error {
 	return nil
 }
 
-// buildSupervisor registers all background runners, including the
-// manifest auto-generation as a one-shot fire-and-forget runner.
+// ── buildSupervisor (re-categorised via SupervisedRunner taxonomy) ──────────
+//
+// PR-SUPERVISOR-TAXONOMY: every runner is registered with an explicit
+// Class + RestartPolicy. Criticality guarantees:
+//
+//   * outbox-dispatcher / delivery-runner / task-lease-reaper — ClassCritical
+//     If any of these dies the master is dead in the water, so the
+//     supervisor eventually cancels its context and returns the error
+//     so k8s can restart the pod.
+//   * taskgraph-dispatcher / artifact-reconciler / metrics-supervisor — ClassRestartable
+//     Bounded retries with backoff. After exhaustion the runner is
+//     removed and the supervisor logs WARN.
+//   * manifest-generator — ClassOneShot
+//     Run once on startup; failure is non-fatal (logged WARN, never restarted).
 func buildSupervisor(a *assetDeps, m *moduleDeps, j *jobsDeps, p *persistenceDeps, w *workerDeps, t *taskDeps, metricsCollector *velmetrics.Collector) (*BackgroundSupervisor, error) {
 	sup := NewBackgroundSupervisor()
 
+	// critical defaults: short backoff, near-infinite retry budget so
+	// transient DB blips do NOT trip the fail-loud path; the operator
+	// only sees a hard exit when the runner has been failing for hours.
+	const criticalMaxRetries = 0 // 0 = infinite for ClassCritical
+	criticalPolicy := RestartPolicy{
+		MaxRetries:     criticalMaxRetries,
+		InitialBackoff: 1 * time.Second,
+		MaxBackoff:     30 * time.Second,
+		RestartOnPanic: true,
+	}
+	// restartable defaults: bounded retries (~5 attempts over a few
+	// minutes) before the runner is removed. The supervisor itself
+	// keeps running; the operator sees a WARN log + Names() list.
+	const restartableMaxRetries = 5
+	restartablePolicy := RestartPolicy{
+		MaxRetries:     restartableMaxRetries,
+		InitialBackoff: 500 * time.Millisecond,
+		MaxBackoff:     30 * time.Second,
+		RestartOnPanic: true,
+	}
+	// one-shot: no policy needed.
+
+	// ── ClassCritical ────────────────────────────────────────────────
 	if a.OutboxDispatcher != nil {
-		if err := sup.Register(RunnerFunc{
-			name: "outbox-dispatcher",
-			fn: func(ctx context.Context) error {
-				log.Printf("[BOOTSTRAP] Outbox dispatcher started \u2014 polling outbox_events")
+		if err := sup.Register(&SupervisedRunner{
+			Name:   "outbox-dispatcher",
+			Class:  ClassCritical,
+			Policy: criticalPolicy,
+			Run: func(ctx context.Context) error {
+				log.Printf("[BOOTSTRAP] Outbox dispatcher started — polling outbox_events")
 				return a.OutboxDispatcher.Run(ctx)
 			},
 		}); err != nil {
@@ -432,39 +477,58 @@ func buildSupervisor(a *assetDeps, m *moduleDeps, j *jobsDeps, p *persistenceDep
 		}
 	}
 	if m.DeliveryRunner != nil {
-		if err := sup.Register(RunnerFunc{
-			name: "delivery-runner",
-			fn: func(ctx context.Context) error {
-				log.Printf("[BOOTSTRAP] DeliveryRunner started \u2014 polling PENDING job_deliveries")
+		if err := sup.Register(&SupervisedRunner{
+			Name:   "delivery-runner",
+			Class:  ClassCritical,
+			Policy: criticalPolicy,
+			Run: func(ctx context.Context) error {
+				log.Printf("[BOOTSTRAP] DeliveryRunner started — polling PENDING job_deliveries")
 				return m.DeliveryRunner.Run(ctx)
 			},
 		}); err != nil {
 			return nil, fmt.Errorf("supervisor register delivery-runner: %w", err)
 		}
 	}
-	if j.Lifecycle != nil {
-		// PR-13 \u2192 PR-05 cutover: the Job-side reaper is DEPRECATED.
+	if t.TaskLeaseReaper != nil {
+		if err := sup.Register(&SupervisedRunner{
+			Name:   "task-lease-reaper",
+			Class:  ClassCritical,
+			Policy: criticalPolicy,
+			Run: func(ctx context.Context) error {
+				return t.TaskLeaseReaper.Run(ctx)
+			},
+		}); err != nil {
+			return nil, fmt.Errorf("supervisor register task-lease-reaper: %w", err)
+		}
+	}
+
+	// ── Legacy Job-side reaper DEPRECATED log (PR-13 → PR-05 cutover) ─
+	if j.Repository != nil {
+		// PR-13 → PR-05 cutover: the Job-side reaper is DEPRECATED.
 		//
 		// History: PR-13 introduced VELOX_DISABLE_JOB_REAPER (default off)
 		// as a stop-gap while the jobs lease_expiry column went away
 		// (migration 048) and the canonical lease TTL moved to tasks
 		// (migration 049 + PR-05 TaskLeaseReaper). With TaskLeaseReaper
-		// registering as a separate supervisor runner (see below), the
-		// Job-side zombie reaper is redundant. We KEEP the env-var read
-		// and the supervisor runner for now (back-compat: removing
-		// either would break operators still relying on the flag) but
-		// emit a one-time DEPRECATED log on each boot so operators know
-		// to migrate to TaskLeaseReaper.
+		// registered as its own ClassCritical supervisor runner above,
+		// the Job-side zombie reaper is redundant. We KEEP the env-var
+		// read for back-compat (operators still relying on the flag
+		// would break otherwise) and emit a one-time DEPRECATED log so
+		// operators know to migrate to TaskLeaseReaper.
 		if os.Getenv("VELOX_DISABLE_JOB_REAPER") == "true" {
 			log.Printf("[BOOTSTRAP] DEPRECATED env=VELOX_DISABLE_JOB_REAPER=true (PR-13 superseded by PR-05 TaskLeaseReaper; flag is now a no-op, set VELOX_TASK_LEASE_REAPER_DISABLED=true at the TaskLeaseReaper runner if you need to disable on the canonical path)")
 		} else {
 			log.Printf("[BOOTSTRAP] note=job-side zombie reaper is DEPRECATED; TaskLeaseReaper is the canonical master-side lease enforcer")
 		}
 	}
+
+	// ── ClassRestartable ─────────────────────────────────────────────
 	if a.Reconciler != nil {
-		if err := sup.Register(RunnerFunc{
-			name: "artifact-reconciler",
-			fn: func(ctx context.Context) error {
+		if err := sup.Register(&SupervisedRunner{
+			Name:   "artifact-reconciler",
+			Class:  ClassRestartable,
+			Policy: restartablePolicy,
+			Run: func(ctx context.Context) error {
 				log.Printf("[BOOTSTRAP] artifacts.Reconciler started (4 rules: expired-uploads + staging, orphan-final-blobs, READY-no-blob QUARANTINED, stuck-STAGING; 15m tick)")
 				a.Reconciler.Run(ctx, 15*time.Minute)
 				return nil
@@ -474,9 +538,11 @@ func buildSupervisor(a *assetDeps, m *moduleDeps, j *jobsDeps, p *persistenceDep
 		}
 	}
 	if t.TaskLifecycle != nil {
-		if err := sup.Register(RunnerFunc{
-			name: "taskgraph-dispatcher",
-			fn: func(ctx context.Context) error {
+		if err := sup.Register(&SupervisedRunner{
+			Name:   "taskgraph-dispatcher",
+			Class:  ClassRestartable,
+			Policy: restartablePolicy,
+			Run: func(ctx context.Context) error {
 				ticker := time.NewTicker(2 * time.Second)
 				defer ticker.Stop()
 				for {
@@ -487,8 +553,10 @@ func buildSupervisor(a *assetDeps, m *moduleDeps, j *jobsDeps, p *persistenceDep
 						n, err := t.TaskLifecycle.TickReadiness(ctx, 100)
 						if err != nil {
 							log.Printf("[TASKGRAPH] TickReadiness error: %v", err)
-						} else if n > 0 {
-							log.Printf("[TASKGRAPH] TickReadiness: %d PENDING\u2192READY", n)
+							return err
+						}
+						if n > 0 {
+							log.Printf("[TASKGRAPH] TickReadiness: %d PENDING→READY", n)
 						}
 					}
 				}
@@ -507,9 +575,11 @@ func buildSupervisor(a *assetDeps, m *moduleDeps, j *jobsDeps, p *persistenceDep
 	if metricsCollector != nil && p.SQLite != nil && p.Outbox != nil {
 		labelRes := velmetrics.NewSQLiteLabelResolver(p.SQLite.DB())
 		costFactors := velmetrics.LoadCostFactorsFromEnv()
-		if err := sup.Register(RunnerFunc{
-			name: "metrics-supervisor",
-			fn: func(ctx context.Context) error {
+		if err := sup.Register(&SupervisedRunner{
+			Name:   "metrics-supervisor",
+			Class:  ClassRestartable,
+			Policy: restartablePolicy,
+			Run: func(ctx context.Context) error {
 				supv := velmetrics.NewSupervisor(metricsCollector, labelRes, p.Outbox, costFactors)
 				supv.SetTick(15 * time.Second)
 				supv.SetLimit(1000)
@@ -520,34 +590,19 @@ func buildSupervisor(a *assetDeps, m *moduleDeps, j *jobsDeps, p *persistenceDep
 		}
 	}
 
-	// PR-05 follow-up: TaskLeaseReaper is now its own supervisor runner
-	// (independent ticker, independent log prefix) so its cadence is
-	// decoupled from the readiness dispatcher. 30 s default matches
-	// the master-side defaultTaskLeaseTTL (30 min) so a freshly
-	// claimed task waits at most TTL+30s before being reaped if its
-	// worker crashes mid-flight, within the audit \u00a7P0.4 budget.
-	if t.TaskLeaseReaper != nil {
-		if err := sup.Register(RunnerFunc{
-			name: "task-lease-reaper",
-			fn: func(ctx context.Context) error {
-				return t.TaskLeaseReaper.Run(ctx)
-			},
-		}); err != nil {
-			return nil, fmt.Errorf("supervisor register task-lease-reaper: %w", err)
-		}
-	}
-
-	// Manifest auto-generation: one-shot fire-and-forget runner.
-	// Runs once on startup and exits; the supervisor treats it as
-	// a regular runner so it benefits from the same lifecycle.
+	// ── ClassOneShot ─────────────────────────────────────────────────
+	// Manifest auto-generation: fire-and-forget on startup. Failure is
+	// non-fatal (logged WARN, always returns nil) so no restart loop is
+	// needed even if the manifest endpoint is briefly unreachable.
 	if w.UpdateHandler != nil {
-		if err := sup.Register(RunnerFunc{
-			name: "manifest-generator",
-			fn: func(_ context.Context) error {
+		if err := sup.Register(&SupervisedRunner{
+			Name:  "manifest-generator",
+			Class: ClassOneShot,
+			Run: func(_ context.Context) error {
 				if err := w.UpdateHandler.GenerateManifestV2(); err != nil {
 					log.Printf("[BOOTSTRAP] Manifest auto-generation skipped: %v", err)
 				}
-				// Always returns nil \u2014 manifest failure is never fatal.
+				// Always returns nil — manifest failure is never fatal.
 				return nil
 			},
 		}); err != nil {
@@ -556,3 +611,8 @@ func buildSupervisor(a *assetDeps, m *moduleDeps, j *jobsDeps, p *persistenceDep
 	}
 	return sup, nil
 }
+
+// Compile-time check: ensure legacy BackgroundRunner types (e.g.
+// *metrics.Supervisor passed via RunnerFunc) keep working through the
+// back-compat Register branch.
+var _ BackgroundRunner = RunnerFunc{}

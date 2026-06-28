@@ -222,12 +222,16 @@ func (s *SQLiteStore) GetAnsibleRun(runID string) (*AnsibleRun, error) {
 	return &r, nil
 }
 
-// ListAnsibleRuns returns all typed run records ordered by started_at descending.
+// ListAnsibleRuns returns all typed run records ordered by started_at
+// descending, with run_id as the deterministic tiebreaker when two runs
+// collide at the same ms. (start_at, run_id) gives a stable order that
+// matches the pre-refactor Go-side sort.Slice, so callers that depended
+// on the tiebreaker (Linear UpdateRun, audit endpoint) see no regression.
 func (s *SQLiteStore) ListAnsibleRuns(limit int) ([]AnsibleRun, error) {
 	if limit <= 0 {
 		limit = 200
 	}
-	rows, err := s.db.Query(`SELECT run_id, action, playbook, status, started_at, ended_at, return_code, commands_json, output, preamble, master_url, master_url_source FROM ansible_runs ORDER BY started_at DESC LIMIT ?`, limit)
+	rows, err := s.db.Query(`SELECT run_id, action, playbook, status, started_at, ended_at, return_code, commands_json, output, preamble, master_url, master_url_source FROM ansible_runs ORDER BY started_at DESC, run_id DESC LIMIT ?`, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -256,11 +260,58 @@ func (s *SQLiteStore) DeleteAnsibleRun(runID string) error {
 // ansible_run_hosts methods
 // ============================================================
 
-// AddAnsibleRunHost associates a host with a run.
+// AddAnsibleRunHost associates a host with a run (idempotent).
 func (s *SQLiteStore) AddAnsibleRunHost(runID, host string) error {
 	_, err := s.db.Exec(`INSERT OR IGNORE INTO ansible_run_hosts (run_id, host) VALUES (?, ?)`, runID, host)
 	return err
 }
+
+// DeleteAnsibleRunHost removes a host association from a run.
+// Linear counterpart to AddAnsibleRunHost; lets persistRunToSQLite
+// (or any caller that wants a real host-set write) drop stale entries
+// when the closure removes a host.
+func (s *SQLiteStore) DeleteAnsibleRunHost(runID, host string) error {
+	_, err := s.db.Exec(`DELETE FROM ansible_run_hosts WHERE run_id=? AND host=?`, runID, host)
+	return err
+}
+
+// Compile-time assertions: *SQLiteStore satisfies both manager store
+// contract surfaces for the remote/ansible package.
+//
+// NOTE: We redeclare the contract interfaces here instead of importing
+// them from velox-server/internal/handlers/remote/ansible because the
+// store package is a dependency of that handler package — importing it
+// back would create a cycle. Asserting against local interfaces keeps
+// the gate honest: any method drop on either side fails this build
+// instead of failing at runtime in app/ansible.go.
+//
+// The interface bodies MUST stay in lock-step with the corresponding
+// declarations in internal/handlers/remote/ansible/manager_computers.go
+// (AnsibleComputerStore) and manager_runs.go (AnsibleRunStore).
+type (
+	ansibleComputerStoreContract interface {
+		UpsertAnsibleHost(fields AnsibleHostFields) error
+		DeleteAnsibleHost(host string) error
+		GetAnsibleHost(host string) (*AnsibleHostFields, error)
+		ListAnsibleHosts() ([]AnsibleHostFields, error)
+		CountAnsibleHosts() (int, error)
+		CountAnsibleHostsEnabled() (int, error)
+	}
+	ansibleRunStoreContract interface {
+		UpsertAnsibleRun(runID, action, playbook, status string, startedAt, endedAt int64, returnCode int, commands, output, preamble, masterURL, masterURLSource string) error
+		GetAnsibleRun(runID string) (*AnsibleRun, error)
+		ListAnsibleRuns(limit int) ([]AnsibleRun, error)
+		DeleteAnsibleRun(runID string) error
+		AddAnsibleRunHost(runID, host string) error
+		DeleteAnsibleRunHost(runID, host string) error
+		ListAnsibleRunHosts(runID string) ([]string, error)
+	}
+)
+
+var (
+	_ ansibleComputerStoreContract = (*SQLiteStore)(nil)
+	_ ansibleRunStoreContract      = (*SQLiteStore)(nil)
+)
 
 // ListAnsibleRunHosts returns all hosts for a run.
 func (s *SQLiteStore) ListAnsibleRunHosts(runID string) ([]string, error) {
@@ -278,4 +329,25 @@ func (s *SQLiteStore) ListAnsibleRunHosts(runID string) ([]string, error) {
 		hosts = append(hosts, host)
 	}
 	return hosts, nil
+}
+
+// CountAnsibleHosts returns the total number of structured ansible hosts.
+// Linear SQL aggregate — keeps the manager's Count() O(1) at the Go layer
+// instead of streaming all rows into RAM.
+func (s *SQLiteStore) CountAnsibleHosts() (int, error) {
+	var n int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM ansible_hosts`).Scan(&n); err != nil {
+		return 0, err
+	}
+	return n, nil
+}
+
+// CountAnsibleHostsEnabled returns the number of enabled hosts only.
+// Linear SQL aggregate with WHERE predicate.
+func (s *SQLiteStore) CountAnsibleHostsEnabled() (int, error) {
+	var n int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM ansible_hosts WHERE enabled=1`).Scan(&n); err != nil {
+		return 0, err
+	}
+	return n, nil
 }

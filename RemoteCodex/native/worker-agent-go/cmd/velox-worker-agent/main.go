@@ -180,6 +180,15 @@ func main() {
 	// read AFTER cfg.Validate() so a typed WorkerConfig.ReadyzEndpoint
 	// may also be sourced from worker_config.json or VELOX_READYZ_ENDPOINT.
 	readyzEndpointFlag := flag.String("ready-endpoint", "", "override the /health/ready mount path (RW-PROD-004 A9; default: /health/ready)")
+	// Phase 1 (cap. 2 of 100% Velox certification plan): the
+	// --bootstrap-report flag makes main.go run bootstrap.Run(), dump
+	// the [BOOTSTRAP_REPORT] JSON to stderr, and exit with the verdict
+	// code. It does NOT register with the master or bind any ports
+	// beyond the existing health/metrics servers (when configured).
+	// The real-bootstrap certifier (scripts/cert/real-bootstrap.sh)
+	// uses this flag to verify a freshly-built image under production
+	// deps, without needing a live mock master.
+	bootstrapReportFlag := flag.Bool("bootstrap-report", false, "run bootstrap.Run() once + dump [BOOTSTRAP_REPORT] JSON to stderr + exit with verdict (Phase 1 of 100% Velox certification plan; cap. 2)")
 	flag.Parse()
 
 	// Show version and exit
@@ -387,11 +396,27 @@ func main() {
 	// any registration attempt. Master side selector therefore never sees
 	// `registered=true` for a malformed worker.
 	bootCtx, bootCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	if err := dispatchBootstrap(bootCtx, cfg, pipelineRunner, bootLog); err != nil {
+	report, err := dispatchBootstrap(bootCtx, cfg, pipelineRunner, bootLog)
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: bootstrap gate failed (RW-PROD-003): %v\n", err)
 		os.Exit(1)
 	}
 	bootCancel()
+
+	// --bootstrap-report certifier hook (Phase 1 of 100% certification
+	// plan; cap. 2): the real-bootstrap operator wrapper invokes
+	// `velox-worker-agent --bootstrap-report` to verify a freshly-built
+	// image under production deps WITHOUT registering with a master.
+	// dispatchBootstrap has already written [BOOTSTRAP_REPORT] to
+	// stderr; the certifier reads it + asserts verdict=OK + 4 step
+	// PASS. Here we map the verdict to the exit code (0=OK, 1=FAIL)
+	// so the wrapper's `docker run ... ; echo $?` round-trip works.
+	if *bootstrapReportFlag {
+		if report != nil && report.Verdict == "OK" {
+			os.Exit(0)
+		}
+		os.Exit(1)
+	}
 
 	sceneComposite := executors.NewSceneComposite(pipelineRunner, "/tmp/velox/scene-composite")
 	registry.MustRegister(sceneComposite)
@@ -531,24 +556,28 @@ func main() {
 // tiny adapter because pkg/bootstrap keeps pkg/video at arm's length
 // to keep its test surface free of CGO coupling.
 //
-// On failure we ALWAYS dump the JSON boot report to stderr before
-// returning the error so ops triage stays in one place — the per-step
-// record travels with the short-form error caught by main().
+// On success and failure alike we ALWAYS dump the JSON boot report to
+// stderr so ops triage stays in one place — the per-step record travels
+// with the short-form error caught by main(). The --bootstrap-report
+// certifier reads the same [BOOTSTRAP_REPORT] block off stderr to
+// assert verdict+steps without re-instrumenting the worker.
+//
+// Returns the *Report so --bootstrap-report can exit with the verdict
+// code (0=OK, !0=FAIL) without re-deriving verdict from message text.
 func dispatchBootstrap(
 	ctx context.Context,
 	cfg *config.WorkerConfig,
 	runner *pipeline.Runner,
 	log *logger.Logger,
-) error {
+) (*bootstrap.Report, error) {
 	adapter := &pipelineRunnerAdapter{runner: runner}
 	report, err := bootstrap.Run(ctx, cfg, adapter, bootstrap.Options{
 		Logger: log,
 	})
-	if err != nil {
+	if report != nil {
 		_ = bootstrap.DumpReport(report)
-		return err
 	}
-	return nil
+	return report, err
 }
 
 // pipelineRunnerAdapter is the one-method shim required by

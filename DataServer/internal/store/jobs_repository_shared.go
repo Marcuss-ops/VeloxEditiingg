@@ -190,12 +190,100 @@ func (b *baseJobRepository) Fail(ctx context.Context, id, reason string) error {
 	})
 
 	payload, _ := json.Marshal(map[string]interface{}{
-		"job_id": id, "error": reason,
+		"job_id":     id,
+		"error_code": "JOB_FAILED_GENERIC",
+		"error":      reason,
 	})
-	_ = p.EmitOutboxTx(ctx, tx, "job", id, "JOB_FAILED", payload)
+	// PR-EMITOUTBOX-HARDENING: outbox-not-wired ⇒ EmitOutboxTx returns
+	// error; the transaction must rollback so the FAILED status flip
+	// does NOT persist (callers see the error and can re-attempt after
+	// wiring outbox).
+	if outboxErr := p.EmitOutboxTx(ctx, tx, "job", id, "JOB_FAILED", payload); outboxErr != nil {
+		return fmt.Errorf("fail %s: %w", id, outboxErr)
+	}
 
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("fail commit: %w", err)
+	}
+	return nil
+}
+
+// FailWithCode is the explicit-code variant of Fail. Callers that
+// know the specific failure reason (e.g. "OUTBOX_NOT_WIRED",
+// "TERMINAL_ALREADY", "EXTERNAL_DEPENDENCY_TIMEOUT") pass a stable
+// error_code here so downstream consumers (outbox JOB_FAILED handler,
+// alert/notify surface) can route on the code instead of regex-ing
+// the human-readable reason string.
+//
+// The PR-OUTBOX-HANDLER wiring decodes the resulting payload as
+// {job_id, error_code, error}; see internal/outbox/production.go
+// for the canonical receiver.
+//
+// Status transitions: same as Fail (terminal-guard + revision CAS).
+func (b *baseJobRepository) FailWithCode(ctx context.Context, id, errorCode, reason string) error {
+	if id == "" {
+		return fmt.Errorf("job repository: empty jobID in FailWithCode")
+	}
+	if errorCode == "" {
+		errorCode = "JOB_FAILED_GENERIC"
+	}
+	p := b.dialect
+
+	tx, err := b.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failwithcode begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var current string
+	row := tx.QueryRowContext(ctx,
+		`SELECT `+p.CoalesceStatus()+` FROM jobs WHERE job_id = `+p.Placeholder(1), id)
+	if err := row.Scan(&current); err != nil {
+		if err == sql.ErrNoRows {
+			return fmt.Errorf("failwithcode %s: not found", id)
+		}
+		return fmt.Errorf("failwithcode status: %w", err)
+	}
+	switch current {
+	case "SUCCEEDED", "FAILED", "CANCELLED":
+		return fmt.Errorf("failwithcode: job %s is already terminal (%s)", id, current)
+	}
+
+	now := nowStrISO()
+	res, err := tx.ExecContext(ctx,
+		`UPDATE jobs
+		   SET status = 'FAILED',
+		       updated_at = `+p.Placeholder(1)+`,
+		       revision = COALESCE(revision, 0) + 1,
+		       error_message = `+p.Placeholder(2)+`,
+		       failed_at = `+p.Placeholder(3)+`,
+		       failed_by = ''
+		 WHERE job_id = `+p.Placeholder(4)+`
+		   AND `+p.CoalesceStatus()+` NOT IN ('SUCCEEDED', 'FAILED', 'CANCELLED')`,
+		now, reason, now, id)
+	if err != nil {
+		return fmt.Errorf("failwithcode update: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("failwithcode %s: %w", id, p.ConflictError())
+	}
+
+	_ = p.InsertHistoryTx(ctx, tx, id, "FAILED", "" /* workerID */, "Job failed ["+errorCode+"]: "+reason)
+	_ = p.InsertEventTx(ctx, tx, id, "job_failed", map[string]interface{}{
+		"error_code": errorCode,
+		"error":      reason,
+	})
+
+	payload, _ := json.Marshal(map[string]interface{}{
+		"job_id":     id,
+		"error_code": errorCode,
+		"error":      reason,
+	})
+	if outboxErr := p.EmitOutboxTx(ctx, tx, "job", id, "JOB_FAILED", payload); outboxErr != nil {
+		return fmt.Errorf("failwithcode %s: %w", id, outboxErr)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failwithcode commit: %w", err)
 	}
 	return nil
 }

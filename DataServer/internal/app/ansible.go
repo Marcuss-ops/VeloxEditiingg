@@ -53,15 +53,13 @@ func (m *AnsibleModule) RegisterRoutes(r *gin.Engine) {
 		return
 	}
 
+	// PR-ANSIBLE-SOT: both managers now take the SQLite store at
+	// construction. SetStore + LoadComputers + loadRuns are gone;
+	// every read hits SQLite on-the-fly so the canonical query
+	// results are never shadowed by a stale in-RAM mirror.
 	ansibleManager := remoteansible.NewAnsibleRunManager(m.cfg.Ansible.PlaybookDir, m.dataDir, m.store)
-	computerMgr := remoteansible.NewAnsibleComputerManager(m.dataDir)
-	if m.store != nil {
-		computerMgr.SetStore(m.store)
-	}
+	computerMgr := remoteansible.NewAnsibleComputerManager(m.dataDir, m.store)
 	ansibleManager.SetComputerManager(computerMgr)
-	if err := computerMgr.LoadComputers(); err != nil {
-		log.Printf("[ANSIBLE] Failed to load computers: %v", err)
-	}
 
 	handlers := remoteansible.NewAnsibleHandlers(ansibleManager)
 	handlers.SetComputerManager(computerMgr, m.dataDir)

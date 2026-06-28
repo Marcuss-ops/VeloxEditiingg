@@ -63,6 +63,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
+    # ── Phase 0 — E2E_EXPECTED_SHA256 binding ────────────────────────────
+    # Same precedence as e2e-workload.yml: input > secret > fail-closed.
+    # The mTLS variant renders the same deterministic FFmpeg fixture, so
+    # the pin is identical to the plaintext workload — operators only
+    # need to track one E2E_EXPECTED_SHA256 secret across both workflows.
+    env:
+      E2E_EXPECTED_SHA256: ${{ secrets.E2E_EXPECTED_SHA256 }}
+
     steps:
       - uses: actions/checkout@v4
         with:

@@ -65,6 +65,18 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
+    # ── Phase 0 — E2E_EXPECTED_SHA256 binding ────────────────────────────
+    # Precedence (highest → lowest, surfaced in the runner audit log by
+    # the Pin E2E_EXPECTED_SHA256 step below):
+    #   1. workflow_dispatch input `e2e_expected_sha256` (operator override)
+    #   2. repo secret `E2E_EXPECTED_SHA256`     (canonical pin; preferred)
+    #   3. absent → fail-closed with ::error::
+    # The Pin step below already implements the precedence test; the env:
+    # block here just wires the secret into the runner env so [ -n "$x" ]
+    # picks it up.
+    env:
+      E2E_EXPECTED_SHA256: ${{ secrets.E2E_EXPECTED_SHA256 }}
+
     steps:
       - uses: actions/checkout@v4
         with:
