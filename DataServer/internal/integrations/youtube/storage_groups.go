@@ -1,28 +1,86 @@
 package youtube
 
 import (
-	"fmt"
 	"log"
 	"time"
 
 	"velox-server/internal/store/youtubetypes"
 )
 
+// LoadData returns a complete snapshot of the YouTube catalog in the
+// legacy `*StorageData` shape expected by the business-layer service in
+// `internal/services/youtube`. Returns an empty-but-non-nil
+// StorageData on error so callers can iterate `nil`-safely and render
+// degraded responses without nil-pointer crashes.
+//
+// PR-YT-REPO: this is the canonical "give me a single view of the
+// catalog" entry point that replaces `storage.LoadData()` from the
+// deleted *Storage facade. The output is computed on every call
+// (no in-memory cache) so SQLite remains the single source of
+// truth.
+func (s *Service) LoadData() *StorageData {
+	if s.repo == nil {
+		return &StorageData{Groups: map[string]*Group{}}
+	}
+	out := &StorageData{Groups: map[string]*Group{}}
+	rows, err := s.repo.ListYouTubeGroups()
+	if err != nil {
+		return out
+	}
+	memberships, _ := s.repo.ListAllGroupMemberships()
+	groupChannels := make(map[int64][]string)
+	for _, m := range memberships {
+		if m.GroupID > 0 && m.ChannelID != "" {
+			groupChannels[m.GroupID] = append(groupChannels[m.GroupID], m.ChannelID)
+		}
+	}
+	for _, row := range rows {
+		if row.Name == "" {
+			continue
+		}
+		g := &Group{
+			Name:      row.Name,
+			CreatedAt: parseFlexTime(row.CreatedAt),
+			Channels:  []Channel{},
+			GroupType: row.GroupType,
+		}
+		for _, chID := range groupChannels[row.ID] {
+			rowCh, gErr := s.repo.GetYouTubeChannel(chID)
+			if gErr != nil || rowCh == nil {
+				g.Channels = append(g.Channels, Channel{ID: chID})
+				continue
+			}
+			if c := channelFromCanonicalRow(rowCh); c != nil {
+				g.Channels = append(g.Channels, *c)
+			} else {
+				g.Channels = append(g.Channels, Channel{ID: chID})
+			}
+		}
+		out.Groups[row.Name] = g
+	}
+	if niches, nErr := s.repo.ListYouTubeTrackedNiches(); nErr == nil {
+		out.TrackedNiches = niches
+	}
+	return out
+}
+
 // channelsForGroupLocked hydrates the channels for a single group id
-// from SQL. Returns an empty slice on nil store / lookup failure (so
-// callers never panic on a partial group). PR15.4: replaces the
-// in-RAM `group.Channels` slice that used to live on Storage.
-func (s *Storage) channelsForGroupLocked(groupID int64) []Channel {
-	if s.store == nil || groupID <= 0 {
+// from SQL.
+//
+// PR-YT-REPO: package helper (was a Storage method pre-PB15.4). The
+// receiver is *Service because GroupChannels-for-id is invoked from
+// Service.LoadData() + Service-level GetGroup orchestrations.
+func (s *Service) channelsForGroupLocked(groupID int64) []Channel {
+	if groupID <= 0 {
 		return []Channel{}
 	}
-	channelIDs, err := s.store.ListGroupChannels(groupID)
+	channelIDs, err := s.repo.ListGroupChannels(groupID)
 	if err != nil {
 		return []Channel{}
 	}
 	out := make([]Channel, 0, len(channelIDs))
 	for _, chID := range channelIDs {
-		ch, err := s.store.GetYouTubeChannel(chID)
+		ch, err := s.repo.GetYouTubeChannel(chID)
 		if err != nil || ch == nil {
 			out = append(out, Channel{ID: chID})
 			continue
@@ -36,7 +94,8 @@ func (s *Storage) channelsForGroupLocked(groupID int64) []Channel {
 	return out
 }
 
-// channelFromCanonicalRow converts a typed youtube_channels row to a Channel.
+// channelFromCanonicalRow converts a typed youtube_channels row to a
+// public Channel. PR-YT-REPO: package-level helper.
 func channelFromCanonicalRow(row *youtubetypes.YouTubeChannel) *Channel {
 	if row == nil || row.ChannelID == "" {
 		return nil
@@ -53,16 +112,9 @@ func channelFromCanonicalRow(row *youtubetypes.YouTubeChannel) *Channel {
 	}
 }
 
-// resolveGroupIDByName looks up the integer group_id for a name. The
-// pre-PR15.4 path stored GroupType on the in-RAM Group snapshot and
-// used it as the lookup key. With the RAM snapshot gone, we list all
-// groups and pick the first row whose name matches. Returns 0 if no
-// group named `name` exists.
-func (s *Storage) resolveGroupIDByName(name string) (int64, error) {
-	if s.store == nil {
-		return 0, ErrStoreNotConfigured
-	}
-	rows, err := s.store.ListYouTubeGroups()
+// resolveGroupIDByName looks up the integer group_id for a name.
+func (s *Service) resolveGroupIDByName(name string) (int64, error) {
+	rows, err := s.repo.ListYouTubeGroups()
 	if err != nil {
 		return 0, err
 	}
@@ -75,16 +127,11 @@ func (s *Storage) resolveGroupIDByName(name string) (int64, error) {
 	return 0, nil
 }
 
-// groupTypeForName returns the canonical group_type string for a group
-// by name. PR15.4: previously this came from in-RAM `group.GroupType`;
-// now it comes from a ListYouTubeGroups + scan. Defaults to "manager"
-// if the row is missing or has an empty group_type (matches the
-// pre-PR15.4 normalisation in UpsertYouTubeGroup).
-func (s *Storage) groupTypeForName(name string) string {
-	if s.store == nil {
-		return "manager"
-	}
-	rows, err := s.store.ListYouTubeGroups()
+// groupTypeForName returns the canonical group_type string for a
+// group by name. Defaults to "manager" if the row is missing or has
+// an empty group_type.
+func (s *Service) groupTypeForName(name string) string {
+	rows, err := s.repo.ListYouTubeGroups()
 	if err != nil {
 		return "manager"
 	}
@@ -100,95 +147,13 @@ func (s *Storage) groupTypeForName(name string) string {
 	return "manager"
 }
 
-// ListGroups returns all groups hydrated from SQL.
-func (s *Storage) ListGroups() (map[string]*Group, []string) {
-	if s.store == nil {
-		return map[string]*Group{}, nil
-	}
-	data := s.LoadData()
-	return data.Groups, data.TrackedNiches
-}
-
-// GetGroup returns a specific group hydrated from SQL.
-func (s *Storage) GetGroup(name string) (*Group, bool) {
-	if s.store == nil {
-		return nil, false
-	}
-	rows, err := s.store.ListYouTubeGroups()
-	if err != nil {
-		return nil, false
-	}
-	for _, row := range rows {
-		if row.Name != name {
-			continue
-		}
-		g := &Group{
-			Name:      row.Name,
-			CreatedAt: parseFlexTime(row.CreatedAt),
-			Channels:  s.channelsForGroupLocked(row.ID),
-			GroupType: row.GroupType,
-		}
-		return g, true
-	}
-	return nil, false
-}
-
-// CreateGroup creates a new group with the specified type.
-//
-// PR15.4: restores the pre-PR15.4 ErrGroupExists semantic via an O(1)
-// GetYouTubeGroupID pre-check so a duplicate "create" call returns
-// ErrGroupExists instead of silently overwriting description/privacy
-// via the UNIQUE-ON-CONFLICT DO UPDATE branch of UpsertYouTubeGroup.
-// Without this check, callers that pre-screen before create would
-// silently clobber existing groups on retry.
-func (s *Storage) CreateGroup(name string, groupType string) error {
-	if s.store == nil {
-		return ErrStoreNotConfigured
-	}
-	if groupType == "" {
-		groupType = "manager"
-	}
-	if existing, err := s.store.GetYouTubeGroupID(name, groupType); err != nil {
-		return fmt.Errorf("create group %q: pre-check: %w", name, err)
-	} else if existing > 0 {
-		return ErrGroupExists
-	}
-	if _, err := s.store.UpsertYouTubeGroup(name, groupType, "", ""); err != nil {
-		return fmt.Errorf("create group %q: %w", name, err)
-	}
-	return nil
-}
-
-// DeleteGroup removes a group by name (id resolved via O(1) lookup).
-func (s *Storage) DeleteGroup(name string) error {
-	if s.store == nil {
-		return ErrStoreNotConfigured
-	}
-	gid, err := s.store.GetYouTubeGroupID(name, s.groupTypeForName(name))
-	if err != nil {
-		return err
-	}
-	if gid == 0 {
-		return ErrGroupNotFound
-	}
-	if err := s.store.DeleteYouTubeGroupChannelsByGroupID(gid); err != nil {
-		return err
-	}
-	return s.store.DeleteYouTubeGroup(gid)
-}
-
 // CleanupOldData clears cached channel metadata for channels whose
-// last_sync_at is older than retention. PR15.4: was a destructive
-// per-group diff via syncGroupLocked. Now performs targeted per-channel
-// UPDATEs so untouched channels are not rewritten. Returns the number
-// of channels touched.
-func (s *Storage) CleanupOldData(retention time.Duration) int {
-	if s.store == nil {
-		return 0
-	}
-
+// last_sync_at is older than retention. PR15.4: targeted per-channel
+// UPDATEs so untouched channels are not rewritten. PR-YT-REPO: now a
+// Service method (was a Storage method) reading s.repo.
+func (s *Service) CleanupOldData(retention time.Duration) int {
 	cutoff := time.Now().UTC().Add(-retention).Format(time.RFC3339)
-	rows, listErr := s.store.ListYouTubeChannels()
+	rows, listErr := s.repo.ListYouTubeChannels()
 	if listErr != nil {
 		log.Printf("[WARN] CleanupOldData: list channels: %v", listErr)
 		return 0
@@ -202,7 +167,7 @@ func (s *Storage) CleanupOldData(retention time.Duration) int {
 			continue
 		}
 		// Roll forward without touching user columns.
-		if err := s.store.UpsertYouTubeChannel(
+		if err := s.repo.UpsertYouTubeChannel(
 			row.ChannelID, "",
 			row.DisplayName,
 			row.ChannelURL,
@@ -220,4 +185,29 @@ func (s *Storage) CleanupOldData(retention time.Duration) int {
 		removedCount++
 	}
 	return removedCount
+}
+
+// parseFlexTime flexibly parses RFC3339 / RFC3339-nano / DB-stored
+// timestamp variants. PR-YT-REPO: package helper (used by LoadData
+// via groups.go) — kept here for cohesion with the other SQL-row
+// shape decoders.
+func parseFlexTime(s string) time.Time {
+	if s == "" {
+		return time.Time{}
+	}
+	layouts := []string{
+		"2006-01-02T15:04:05.999999999Z07:00",
+		"2006-01-02T15:04:05Z07:00",
+		time.RFC3339Nano,
+		time.RFC3339,
+		"2006-01-02T15:04:05.999999999",
+		"2006-01-02T15:04:05",
+		"2006-01-02",
+	}
+	for _, layout := range layouts {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t
+		}
+	}
+	return time.Time{}
 }

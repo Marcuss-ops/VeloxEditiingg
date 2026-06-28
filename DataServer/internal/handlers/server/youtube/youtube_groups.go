@@ -13,15 +13,29 @@ import (
 	ytService "velox-server/internal/services/youtube"
 )
 
-// YouTubeManager holds the dependencies for YouTube manager handlers
+// YouTubeManager holds the dependencies for YouTube manager handlers.
+//
+// PR-YT-REPO: the previous (dataDir, apiKey, existingStorage, service)
+// signature is replaced with (apiKey, service). dataDir is no longer
+// needed at construction (Storage's `data.Groups` RAM mirror is gone);
+// existingStorage is no longer needed (Storage facade is deleted).
+// Manager methods operate directly on the canonical youtube.Repository
+// held by service.Repo().
 type YouTubeManager struct {
 	svc *ytService.Service
 }
 
 // NewYouTubeManager creates a new YouTube manager handler instance.
-func NewYouTubeManager(dataDir, apiKey string, existingStorage *youtube.Storage, ytIntegrationService *youtube.Service) *YouTubeManager {
+//
+// PR-YT-REPO: dataDir is the workspace directory used by the underlying
+// business service's NewCache + NewFeedCache. It was dropped from the
+// (dataDir, apiKey, existingStorage, service) signature pre-PR-YT-REPO
+// because the storage facade was deleted — but the underlying
+// ytService.New requires it for cache initialization, so it is restored
+// here as a positional argument (no longer mid-signature-storage).
+func NewYouTubeManager(dataDir, apiKey string, ytIntegrationService *youtube.Service) *YouTubeManager {
 	return &YouTubeManager{
-		svc: ytService.New(dataDir, apiKey, existingStorage, ytIntegrationService),
+		svc: ytService.New(dataDir, apiKey, ytIntegrationService),
 	}
 }
 

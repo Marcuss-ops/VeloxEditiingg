@@ -21,16 +21,16 @@ env:
   GO_VERSION: "1.25"
 
 jobs:
-  # ── DataServer: vet + race-enabled test sweep ───────────────────────────
-  dataserver-tests:
-    name: DataServer (Go 1.25 + race)
+  # ── Canonical verify: dispatches to make verify (scripts/ci/verify.sh) ──
+  # Replaces the previous manual go-vet + go-test steps per module.
+  # verify.sh runs architecture checks, gofmt/vet/test (-race) on every
+  # Go module (DataServer, worker-agent-go, shared), legacy guard, cmake
+  # build + ctest for the C++ video engine, and Docker image builds.
+  verify:
+    name: make verify (Go 1.25 + race + cmake + ctest + docker)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        # fetch-depth: 0 keeps BASE_REF resolvable for any future
-        # scoped check (e.g. if this workflow begins running the
-        # architectural invariants). Current jobs do not require it
-        # but the cost is negligible.
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -40,59 +40,17 @@ jobs:
         with:
           go-version: "1.25"
           cache: true
-          cache-dependency-path: DataServer/go.sum
+          # Cache across all three modules — setup-go scans go.sum files
+          # recursively under the cache-dependency-path.
+          cache-dependency-path: |
+            DataServer/go.sum
+            RemoteCodex/native/worker-agent-go/go.sum
+            shared/go.sum
 
-      - name: Download modules
-        working-directory: DataServer
-        run: |
-          go mod download
-          go mod verify
+      - name: make verify
+        run: make verify
 
-      - name: Vet
-        working-directory: DataServer
-        run: go vet ./...
-
-      - name: Test (-race)
-        working-directory: DataServer
-        # -count=1 disables cache; t.Helper-friendly verbose for action log.
-        run: go test -race -count=1 -v ./...
-
-  # ── Worker agent: same matrix slice ─────────────────────────────────────
-  worker-tests:
-    name: worker-agent-go (Go 1.25 + race)
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        # fetch-depth: 0 keeps BASE_REF resolvable for any future
-        # scoped check (e.g. if this workflow begins running the
-        # architectural invariants). Current jobs do not require it
-        # but the cost is negligible.
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Set up Go
-        uses: actions/setup-go@0c52d547c9bc32b1aa3301fd7a9cb496313a4491 # v5.0.0
-        with:
-          go-version: "1.25"
-          cache: true
-          cache-dependency-path: RemoteCodex/native/worker-agent-go/go.sum
-
-      - name: Download modules
-        working-directory: RemoteCodex/native/worker-agent-go
-        run: |
-          go mod download
-          go mod verify
-
-      - name: Vet
-        working-directory: RemoteCodex/native/worker-agent-go
-        run: go vet ./...
-
-      - name: Test (-race)
-        working-directory: RemoteCodex/native/worker-agent-go
-        run: go test -race -count=1 -v ./...
-
-  # ── Ansible playbooks lint ──────────────────────────────────────────────
+  # ── Ansible playbooks lint (fast, parallel with verify) ──────────────────
   ansible-lint:
     name: ansible-lint
     runs-on: ubuntu-latest

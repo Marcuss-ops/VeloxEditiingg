@@ -34,11 +34,14 @@ func (h *YouTubeHandlers) BulkDeleteChannels(c *gin.Context) {
 			continue
 		}
 
-		groups, _ := h.storage.ListGroups()
-		for groupName, group := range groups {
-			for _, ch := range group.Channels {
-				if ch.ID == channelID {
-					h.storage.RemoveChannel(groupName, channelID)
+		groups := h.service.GetGroups()
+		for groupName, cg := range groups {
+			if cg == nil {
+				continue
+			}
+			for _, chID := range cg.Channels {
+				if chID == channelID {
+					h.service.RemoveChannel(groupName, channelID)
 					break
 				}
 			}
@@ -78,10 +81,13 @@ func (h *YouTubeHandlers) MoveChannelToGroupV1(c *gin.Context) {
 
 	sourceGroup := req.RemoveFrom
 	if sourceGroup == "" {
-		groups, _ := h.storage.ListGroups()
-		for name, group := range groups {
-			for _, ch := range group.Channels {
-				if ch.ID == channelID {
+		groups := h.service.GetGroups()
+		for name, cg := range groups {
+			if cg == nil {
+				continue
+			}
+			for _, chID := range cg.Channels {
+				if chID == channelID {
 					sourceGroup = name
 					break
 				}
@@ -97,7 +103,7 @@ func (h *YouTubeHandlers) MoveChannelToGroupV1(c *gin.Context) {
 		return
 	}
 
-	if err := h.storage.MoveChannel(sourceGroup, channelID, req.TargetGroup); err != nil {
+	if err := h.service.MoveChannel(sourceGroup, channelID, req.TargetGroup); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": err.Error()})
 		return
 	}
@@ -187,15 +193,18 @@ func (h *YouTubeHandlers) ValidateAllTokens(c *gin.Context) {
 func (h *YouTubeHandlers) ListUndefinedChannels(c *gin.Context) {
 	authChannels := h.service.GetAuthChannels()
 
-	groups, _ := h.storage.ListGroups()
+	groups := h.service.GetGroups()
 
 	assigned := make(map[string]bool, len(authChannels))
-	for _, g := range groups {
-		if g.GroupType != "" && g.GroupType != "upload" {
+	for _, cg := range groups {
+		if cg == nil {
 			continue
 		}
-		for _, ch := range g.Channels {
-			assigned[ch.ID] = true
+		if cg.GroupType != "" && cg.GroupType != "upload" {
+			continue
+		}
+		for _, chID := range cg.Channels {
+			assigned[chID] = true
 		}
 	}
 

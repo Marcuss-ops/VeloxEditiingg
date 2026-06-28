@@ -47,7 +47,6 @@ import (
 	"testing"
 	"time"
 
-	"velox-server/internal/costmodel"
 	"velox-server/internal/ingest"
 	"velox-server/internal/jobs"
 	"velox-server/internal/store"
@@ -183,6 +182,9 @@ func (s *spoofStubTaskRepo) Delete(_ context.Context, _ string) error {
 func (s *spoofStubTaskRepo) ClaimNextWithAttemptAtomic(_ context.Context, _, _ string) (*taskgraph.TaskWithSpec, *taskattempts.TaskAttempt, error) {
 	panic("spoofStubTaskRepo.ClaimNextWithAttemptAtomic")
 }
+func (s *spoofStubTaskRepo) IngestTaskResultAtomic(_ context.Context, _ taskgraph.IngestResultCommand) error {
+	panic("spoofStubTaskRepo.IngestTaskResultAtomic: not exercised by IngestTaskResult on rejection path")
+}
 
 var _ taskgraph.Repository = (*spoofStubTaskRepo)(nil)
 
@@ -224,35 +226,8 @@ func (s *spoofStubJobsRepo) SetStatus(_ context.Context, _ string, _, _ jobs.Sta
 func (s *spoofStubJobsRepo) Cancel(_ context.Context, _ string, _ string, _ int) error {
 	panic("spoofStubJobsRepo.Cancel")
 }
-func (s *spoofStubJobsRepo) Lease(_ context.Context, _, _ string) error {
-	panic("spoofStubJobsRepo.Lease")
-}
 func (s *spoofStubJobsRepo) Fail(_ context.Context, _ string, _ string) error {
 	panic("spoofStubJobsRepo.Fail")
-}
-func (s *spoofStubJobsRepo) Start(_ context.Context, _, _, _ string, _, _ int) error {
-	panic("spoofStubJobsRepo.Start")
-}
-func (s *spoofStubJobsRepo) RenewLease(_ context.Context, _, _, _ string, _ time.Time, _ bool, _ int) error {
-	panic("spoofStubJobsRepo.RenewLease")
-}
-func (s *spoofStubJobsRepo) FailWithRetry(_ context.Context, _, _, _ string, _ bool, _ int) error {
-	panic("spoofStubJobsRepo.FailWithRetry")
-}
-func (s *spoofStubJobsRepo) RequeueExpiredLeases(_ context.Context, _ time.Time, _ int) ([]jobs.RequeueResult, error) {
-	panic("spoofStubJobsRepo.RequeueExpiredLeases")
-}
-func (s *spoofStubJobsRepo) ClaimNext(_ context.Context, _ string, _ []string) (*jobs.ClaimNextResult, error) {
-	panic("spoofStubJobsRepo.ClaimNext")
-}
-func (s *spoofStubJobsRepo) ClaimNextForProfile(_ context.Context, _ string, _ []string, _ costmodel.WorkerProfile, _ int) (*jobs.ClaimNextResult, error) {
-	panic("spoofStubJobsRepo.ClaimNextForProfile")
-}
-func (s *spoofStubJobsRepo) ReleaseLease(_ context.Context, _, _, _ string) error {
-	panic("spoofStubJobsRepo.ReleaseLease")
-}
-func (s *spoofStubJobsRepo) RecordRenderFinished(_ context.Context, _, _, _ string, _, _ int) error {
-	panic("spoofStubJobsRepo.RecordRenderFinished")
 }
 func (s *spoofStubJobsRepo) Delete(_ context.Context, _ string) error {
 	panic("spoofStubJobsRepo.Delete")

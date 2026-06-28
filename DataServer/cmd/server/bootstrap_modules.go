@@ -12,7 +12,6 @@ import (
 	"velox-server/internal/deliveries"
 	deliveryProviders "velox-server/internal/deliveries/providers"
 	"velox-server/internal/handlers/server/api"
-	"velox-server/internal/handlers/server/pipeline"
 	"velox-server/internal/jobs/enqueue"
 	"velox-server/internal/platform/clock"
 	"velox-server/internal/store"
@@ -22,13 +21,13 @@ import (
 // (YouTube, Drive, Ansible, Livestream, Frontend) plus the
 // asset-level services that depend on them.
 //
-// PR-operation 01 / Fase 3: the canonical Job+Task writer
-// (store.AtomicJobTaskCreator) is NOT stored on moduleDeps. buildTasks
-// already constructs one in taskDeps.AtomicCreator and runServer reuses
-// it for serverDeps.atomicPlanWriter. Two separate writer instances
-// pointed at the same *SQLiteStore would be a stateless duplicate and
-// would invite future drift between the task-tick path and the POST
-// path — so we share the single instance owned by buildTasks.
+// PR 1: the canonical Job+Task writer (store.AtomicJobTaskCreator) is
+// NOT stored on moduleDeps. buildTasks already constructs one in
+// taskDeps.AtomicCreator; the only job-write caller is
+// creatorflow.CreateJobWithPlan (canonical POST /api/v1/jobs) which
+// threads the writer from taskDeps directly. Two separate writer
+// instances pointed at the same *SQLiteStore would be a stateless
+// duplicate — we share the single instance owned by buildTasks.
 type moduleDeps struct {
 	Registry       *app.Registry
 	Health         *app.HealthModule
@@ -49,7 +48,6 @@ type moduleDeps struct {
 func buildModules(cfg *config.Config, p *persistenceDeps, j *jobsDeps, w *workerDeps, a *assetDeps, t *taskDeps) (*moduleDeps, error) {
 	registry := app.NewRegistry()
 	auth := api.AdminAuthMiddleware(cfg)
-	pipeline.InitRemoteEngine(cfg)
 
 	// ── YouTube module ───────────────────────────────────────────────
 	ytMod, err := app.NewYouTubeModule(cfg, cfg.Runtime.DataDir, p.SQLite)
@@ -130,6 +128,6 @@ func buildModules(cfg *config.Config, p *persistenceDeps, j *jobsDeps, w *worker
 var (
 	_ = creatorflow.CreateJobWithPlan // canonical Job+Task creation entry point
 	_ = creatorflow.New               // constructor symmetry
-	_ creatorflow.RenderPlan          // typed input contract; consumed by POST /orchestrator/jobs in Fase 3
+	_ creatorflow.RenderPlan          // typed input contract; consumed by canonical POST /api/v1/jobs
 	_ = store.NewAtomicJobTaskCreator // canonical writer (also bound dynamically above)
 )

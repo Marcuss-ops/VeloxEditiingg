@@ -35,7 +35,7 @@ func TestYouTubeModule_NilAccessors(t *testing.T) {
 	if m.Service() != nil {
 		t.Error("Service() should be nil with nil sqliteStore (test-mode contract)")
 	}
-	if m.Storage() != nil {
+	if m.youtubeService != nil {
 		t.Error("Storage() should be nil with nil sqliteStore (test-mode contract)")
 	}
 }

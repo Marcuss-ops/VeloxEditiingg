@@ -314,36 +314,15 @@ func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMasterEnvelo
 		log.Printf("[GRPC] Worker %s disconnected (session: %s)", workerID, sessionID)
 	}()
 
-	// Protocol-version handshake validation. SPEC §14 follow-up: the
-	// master accepts a CLOSED set of versions (ProtocolVersionCurrent +
-	// ProtocolVersionLegacy + empty-string pre-versioned builds) so a
-	// mixed fleet keeps operating through the v3 rollout window.
-	//
-	// Behaviour per branch:
-	//
-	//   - empty string: accepted (pre-versioned workers log no
-	//     protocol_version); no warn log — emit only once per session
-	//     on the FIRST envelope to keep the log volume sane.
-	//   - ProtocolVersionCurrent ("v3"): accepted silently.
-	//   - ProtocolVersionLegacy or any other supported past version:
-	//     accepted with a one-time [DEPRECATED] log so operators know
-	//     to upgrade that worker. Session is otherwise healthy.
-	//   - unknown / future forward-only version: rejected with
-	//     status.Errorf(FailedPrecondition) so the worker agent
-	//     surfaces a clear gRPC status and refuses the connect.
-	if env.ProtocolVersion != "" && !controltransport.IsSupportedProtocol(env.ProtocolVersion) {
-		log.Printf("[GRPC] worker %s protocol version %q is not in the supported set %v — rejecting",
+	// Protocol-version handshake validation — STRICT mode.
+	// Only ProtocolVersionCurrent ("v3") is accepted. Empty strings and
+	// legacy versions return FailedPrecondition.
+	if !controltransport.IsSupportedProtocol(env.ProtocolVersion) {
+		log.Printf("[GRPC] worker %s protocol version %q rejected — supported: %v",
 			workerID, env.ProtocolVersion, controltransport.SupportedProtocolVersions)
 		return status.Errorf(codes.FailedPrecondition,
 			"worker %s protocol_version %q is not supported (supported: %v)",
 			workerID, env.ProtocolVersion, controltransport.SupportedProtocolVersions)
-	}
-	if controltransport.IsDeprecatedProtocol(env.ProtocolVersion) {
-		// Deprecation log dedup: log only once per (workerID,
-		// protocolVersion) pair per process lifetime, so a fleet
-		// of legacy workers rotating through sessions doesn't
-		// flood the master log on every reconnect.
-		deprecationLogDedup(workerID, env.ProtocolVersion)
 	}
 
 	// Send typed HelloAck via sendCh (sessionWriter handles the actual Send).
@@ -576,7 +555,13 @@ func StartGRPCServer(port int, handler *Handler, certFile, keyFile, caFile strin
 // sends each as a typed Command via sendCh, and marks only successfully
 // sent commands as delivered. Commands that fail to send remain in pending
 // state for retry on the next dispatch cycle.
+//
+// Nil cmdMgr is safe: returns immediately — this lets protocol-level
+// tests and boot-dry-run handlers operate without a command manager.
 func (h *Handler) dispatchCommands(workerID string, sess *workerSession) {
+	if h.cmdMgr == nil {
+		return
+	}
 	cmds := h.cmdMgr.GetPendingCommands(workerID)
 	if len(cmds) == 0 {
 		return
@@ -743,28 +728,7 @@ func (h *Handler) getSession(workerID string) *workerSession {
 	return h.sessions[sid]
 }
 
-// deprecationLogDedup emits a [DEPRECATED] line EXACTLY ONCE per
-// (workerID, protocolVersion) pair per process lifetime. Without
-// this, a fleet of fifty legacy workers rotating through gRPC
-// sessions every 60s produces ~50 lines/hour of identical log
-// spam. The cache is a package-level sync.Map — entry keys are
-// (workerID, protocolVersion) tuples; missing entries trigger
-// the log and a Store().
-func deprecationLogDedup(workerID, protocolVersion string) {
-	key := workerID + "\x00" + protocolVersion
-	if _, seen := deprecationLogged.LoadOrStore(key, struct{}{}); seen {
-		return
-	}
-	log.Printf("[GRPC] [DEPRECATED] worker %s protocol_version=%q (legacy) accepted; supported set %v — please upgrade worker to ProtocolVersionCurrent=%q",
-		workerID, protocolVersion, controltransport.SupportedProtocolVersions,
-		controltransport.ProtocolVersionCurrent)
-}
 
-// deprecationLogged caches (workerID, protocolVersion) tuples that
-// have already emitted the [DEPRECATED] log. Package-level var —
-// no cleanup on shutdown because the benefit (silencing reconnect
-// spam) is a process-lifetime concern.
-var deprecationLogged sync.Map // map[string]struct{}
 
 // ---- Security Helpers ----
 
@@ -836,7 +800,13 @@ func (h *Handler) ingestionService() *ingest.TaskReportIngestionService {
 // validateCredentialHash checks the worker's credential_hash against the
 // stored persistent credential in SQLite (worker_credentials table).
 // Accepts the credential hash string directly from typed Hello message.
+//
+// Nil dbStore is safe: returns nil (skip validation) — this lets protocol-
+// level tests and boot-dry-run handlers operate without a live DB handle.
 func (h *Handler) validateCredentialHash(workerID string, declaredHash string) error {
+	if h.dbStore == nil {
+		return nil
+	}
 	// Check if this worker has a stored credential
 	hasCred, err := h.dbStore.HasWorkerCredential(workerID)
 	if err != nil {

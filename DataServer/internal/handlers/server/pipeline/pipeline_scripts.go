@@ -5,12 +5,16 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"velox-server/internal/config"
 	"velox-server/internal/remoteengine"
 )
 
-// ScriptSimple handles POST /api/script-simple
-func ScriptSimple(cfg *config.Config) gin.HandlerFunc {
+// ScriptSimple handles POST /api/script-simple.
+//
+// PR-DI-pipeline: the *remoteengine.Client dependency is now read
+// from the receiver `h` rather than from the previous package-level
+// `remoteEngineClient` global. Returns 503 cleanly when the client is
+// nil or unconfigured (i.e. VELOX_REMOTE_ENGINE_URL was not set).
+func (h *Handlers) ScriptSimple() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req remoteengine.SimpleScriptRequest
 		if err := c.ShouldBindJSON(&req); err != nil {
@@ -20,8 +24,8 @@ func ScriptSimple(cfg *config.Config) gin.HandlerFunc {
 
 		pipelineLog("SCRIPT_SIMPLE: topic=%q language=%s", req.Topic, req.Language)
 
-		if remoteEngineClient != nil && remoteEngineClient.IsConfigured() {
-			result, err := remoteEngineClient.GenerateSimpleScript(c.Request.Context(), req)
+		if h.client != nil && h.client.IsConfigured() {
+			result, err := h.client.GenerateSimpleScript(c.Request.Context(), req)
 			if err != nil {
 				pipelineLog("SCRIPT_SIMPLE: FAILED: %v", err)
 				c.JSON(http.StatusBadGateway, gin.H{"ok": false, "error": err.Error()})
@@ -40,8 +44,11 @@ func ScriptSimple(cfg *config.Config) gin.HandlerFunc {
 	}
 }
 
-// ScriptMultiple handles POST /api/script-multiple
-func ScriptMultiple(cfg *config.Config) gin.HandlerFunc {
+// ScriptBatch handles POST /api/script-multiple.
+//
+// PR-DI-pipeline: dependency moved from the previous
+// `remoteEngineClient` global to the receiver `h.client`.
+func (h *Handlers) ScriptBatch() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req remoteengine.BatchScriptRequest
 		if err := c.ShouldBindJSON(&req); err != nil {
@@ -51,8 +58,8 @@ func ScriptMultiple(cfg *config.Config) gin.HandlerFunc {
 
 		pipelineLog("SCRIPT_MULTIPLE: topics=%d language=%s", len(req.Topics), req.Language)
 
-		if remoteEngineClient != nil && remoteEngineClient.IsConfigured() {
-			result, err := remoteEngineClient.GenerateBatchScripts(c.Request.Context(), req)
+		if h.client != nil && h.client.IsConfigured() {
+			result, err := h.client.GenerateBatchScripts(c.Request.Context(), req)
 			if err != nil {
 				pipelineLog("SCRIPT_MULTIPLE: FAILED: %v", err)
 				c.JSON(http.StatusBadGateway, gin.H{"ok": false, "error": err.Error()})

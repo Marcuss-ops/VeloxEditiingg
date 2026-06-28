@@ -99,7 +99,7 @@ func TestYouTubeRefreshPersistsNewAccessTokenToSQLite(t *testing.T) {
 	}
 
 	srv := &Service{
-		store:    fake,
+repo:    fake,
 		oauthBuf: enc,
 	}
 
@@ -202,7 +202,7 @@ func TestYouTubeRefreshIdempotentOnSameAccessToken(t *testing.T) {
 		Expiry:      time.Now().Add(1 * time.Hour),
 	}
 	srv := &Service{
-		store:    &fakeYTStore{},
+repo:    &fakeYTStore{},
 		oauthBuf: enc,
 	}
 	pts := &PersistedTokenSource{
@@ -215,7 +215,7 @@ func TestYouTubeRefreshIdempotentOnSameAccessToken(t *testing.T) {
 		},
 	}
 	pts.Token()
-	store := srv.store.(*fakeYTStore)
+	store := srv.repo.(*fakeYTStore)
 	if len(store.upsertCalls) != 0 {
 		t.Errorf("expected zero upserts when access_token unchanged; got %d", len(store.upsertCalls))
 	}
@@ -263,7 +263,7 @@ func TestYouTubeRefreshPreservesNullRefreshToken(t *testing.T) {
 	}
 
 	srv := &Service{
-		store:    fake,
+repo:    fake,
 		oauthBuf: enc,
 	}
 

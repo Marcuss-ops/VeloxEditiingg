@@ -24,13 +24,17 @@ func isVideoURL(url string) bool {
 }
 
 // AddChannelToGroup adds a channel to a group, resolving metadata and extracting keywords.
+//
+// PR-YT-REPO: s.storage.GetGroup → s.ytService.GetGroup (returns *ChannelGroup,
+// nil when absent); s.storage.AddChannel → s.ytService.AddChannel.
+// All other behavior unchanged.
 func (s *Service) AddChannelToGroup(ctx context.Context, groupName string, req youtube.AddChannelRequest) (youtube.Channel, error) {
 	url := strings.TrimSpace(req.URL)
 	if url == "" {
 		return youtube.Channel{}, fmt.Errorf("URL cannot be empty")
 	}
 
-	if _, ok := s.storage.GetGroup(groupName); !ok {
+	if s.ytService.GetGroup(groupName) == nil {
 		return youtube.Channel{}, fmt.Errorf("group not found")
 	}
 
@@ -96,7 +100,7 @@ func (s *Service) AddChannelToGroup(ctx context.Context, groupName string, req y
 		Keywords:  keywords,
 	}
 
-	if err := s.storage.AddChannel(groupName, channel); err != nil {
+	if err := s.ytService.AddChannel(groupName, channel); err != nil {
 		return youtube.Channel{}, err
 	}
 
@@ -105,8 +109,10 @@ func (s *Service) AddChannelToGroup(ctx context.Context, groupName string, req y
 }
 
 // RemoveChannelFromGroup removes a channel from a group.
+//
+// PR-YT-REPO: s.storage.RemoveChannel → s.ytService.RemoveChannel.
 func (s *Service) RemoveChannelFromGroup(groupName string, channelID string) error {
-	if err := s.storage.RemoveChannel(groupName, channelID); err != nil {
+	if err := s.ytService.RemoveChannel(groupName, channelID); err != nil {
 		return err
 	}
 	s.feedCache.Clear()
@@ -114,29 +120,36 @@ func (s *Service) RemoveChannelFromGroup(groupName string, channelID string) err
 }
 
 // MoveChannel moves a channel between two groups.
+//
+// PR-YT-REPO: s.storage.MoveChannel → s.ytService.MoveChannel.
 func (s *Service) MoveChannel(sourceGroup string, channelID string, targetGroup string) error {
-	if err := s.storage.MoveChannel(sourceGroup, channelID, targetGroup); err != nil {
+	if err := s.ytService.MoveChannel(sourceGroup, channelID, targetGroup); err != nil {
 		return err
 	}
 	return nil
 }
 
 // RefreshChannelStats updates stats for a channel in a group.
+//
+// PR-YT-REPO: GetGroup returns *ChannelGroup whose `Channels` is now
+// `[]string` (channel IDs) — we only need a presence check here. The
+// post-write `updatedGroup.Channels` slice is similarly ID-only; the
+// returned *Channel is hydrated from SQLite (Membership) so callers
+// get the canonical Title/Thumbnail.
 func (s *Service) RefreshChannelStats(ctx context.Context, groupName string, channelID string) (youtube.Channel, error) {
-	group, ok := s.storage.GetGroup(groupName)
-	if !ok {
+	group := s.ytService.GetGroup(groupName)
+	if group == nil {
 		return youtube.Channel{}, fmt.Errorf("group not found")
 	}
 
-	var channel *youtube.Channel
-	for _, ch := range group.Channels {
-		if ch.ID == channelID {
-			channel = &ch
+	found := false
+	for _, chID := range group.Channels {
+		if chID == channelID {
+			found = true
 			break
 		}
 	}
-
-	if channel == nil {
+	if !found {
 		return youtube.Channel{}, fmt.Errorf("channel not found")
 	}
 
@@ -157,18 +170,25 @@ func (s *Service) RefreshChannelStats(ctx context.Context, groupName string, cha
 		subCount = int64(sc)
 	}
 
-	if err := s.storage.UpdateChannelStats(groupName, channelID, viewCount, subCount); err != nil {
+	if err := s.ytService.UpdateChannelStats(groupName, channelID, viewCount, subCount); err != nil {
 		return youtube.Channel{}, err
 	}
 
-	updatedGroup, _ := s.storage.GetGroup(groupName)
-	for _, ch := range updatedGroup.Channels {
-		if ch.ID == channelID {
-			return ch, nil
+	updatedGroup := s.ytService.GetGroup(groupName)
+	if updatedGroup != nil {
+		for _, chID := range updatedGroup.Channels {
+			if chID == channelID {
+				// Hydrate the canonical row instead of returning the
+				// legacy in-memory Channel slice (which no longer exists).
+				if full, mErr := s.ytService.Membership(channelID); mErr == nil && full != nil {
+					return *full, nil
+				}
+				return youtube.Channel{ID: channelID}, nil
+			}
 		}
 	}
 
-	return *channel, nil
+	return youtube.Channel{ID: channelID}, nil
 }
 
 // MoveChannelToGroupResult holds the result of MoveChannelToGroup operation.
@@ -181,12 +201,24 @@ type MoveChannelToGroupResult struct {
 }
 
 // MoveChannelToGroup handles drag & drop move of a channel to a target group.
+//
+// PR-YT-REPO: every storage call migrates to s.ytService.*. The
+// previous `s.storage.CreateGroup(targetGroup, "manager")` two-arg
+// overload is gone — s.ytService.CreateGroup hardcodes "upload" so
+// `manager` groups fall back to the Repository's UpsertYouTubeGroup
+// so the original semantic is preserved.
 func (s *Service) MoveChannelToGroup(ctx context.Context, channelID string, targetGroup string) (*MoveChannelToGroupResult, error) {
 	var sourceGroup string
-	groups, _ := s.storage.ListGroups()
+	groups := s.ytService.GetGroups()
 	for groupName, group := range groups {
-		for _, ch := range group.Channels {
-			if ch.ID == channelID {
+		if group == nil {
+			continue
+		}
+		// GetGroups() returns map of *ChannelGroup whose Channels is
+		// `[]string` (channel IDs) — drop the `.ID` accessor that was
+		// type-correct under the legacy Storage.data.Groups shape.
+		for _, chID := range group.Channels {
+			if chID == channelID {
 				sourceGroup = groupName
 				break
 			}
@@ -201,8 +233,8 @@ func (s *Service) MoveChannelToGroup(ctx context.Context, channelID string, targ
 			return nil, fmt.Errorf("channel not found in any group and invalid channel ID format")
 		}
 
-		if _, ok := s.storage.GetGroup(targetGroup); !ok {
-			if err := s.storage.CreateGroup(targetGroup, "manager"); err != nil {
+		if s.ytService.GetGroup(targetGroup) == nil {
+			if _, err := s.ytService.Repo().UpsertYouTubeGroup(targetGroup, "manager", "", ""); err != nil {
 				return nil, fmt.Errorf("failed to create target group: %w", err)
 			}
 		}
@@ -231,7 +263,7 @@ func (s *Service) MoveChannelToGroup(ctx context.Context, channelID string, targ
 			Notes:     "Added via drag & drop / bulk move",
 		}
 
-		if err := s.storage.AddChannel(targetGroup, ch); err != nil {
+		if err := s.ytService.AddChannel(targetGroup, ch); err != nil {
 			return nil, err
 		}
 
@@ -256,13 +288,13 @@ func (s *Service) MoveChannelToGroup(ctx context.Context, channelID string, targ
 		}, nil
 	}
 
-	if _, ok := s.storage.GetGroup(targetGroup); !ok {
-		if err := s.storage.CreateGroup(targetGroup, "manager"); err != nil {
+	if s.ytService.GetGroup(targetGroup) == nil {
+		if _, err := s.ytService.Repo().UpsertYouTubeGroup(targetGroup, "manager", "", ""); err != nil {
 			return nil, fmt.Errorf("failed to create target group: %w", err)
 		}
 	}
 
-	if err := s.storage.MoveChannel(sourceGroup, channelID, targetGroup); err != nil {
+	if err := s.ytService.MoveChannel(sourceGroup, channelID, targetGroup); err != nil {
 		return nil, err
 	}
 

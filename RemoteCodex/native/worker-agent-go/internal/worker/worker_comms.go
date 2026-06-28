@@ -11,7 +11,11 @@ import (
 	"time"
 
 	"velox-shared/controltransport"
+	pb "velox-shared/controltransport/pb"
 	"velox-worker-agent/pkg/logger"
+
+	"google.golang.org/protobuf/types/known/structpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // Heartbeat intervals based on worker status
@@ -140,38 +144,39 @@ func (w *Worker) getStatus() Status {
 func (w *Worker) sendHeartbeat(ctx context.Context) error {
 	status := w.Status()
 
+	// Build typed Heartbeat proto directly instead of map payload.
+	hb := &pb.Heartbeat{
+		WorkerName:      w.config.WorkerName,
+		WorkerStatus:    string(status),
+		Status:          string(status),
+		CodeVersion:     w.version,
+		BundleVersion:   w.config.BundleVersion,
+		BundleHash:      w.config.BundleHash,
+		ProtocolVersion: w.config.ProtocolVersion,
+		EngineVersion:   w.config.EngineVersion,
+		JobsCompleted:   w.tasksCompleted.Load(),
+		JobsFailed:      w.tasksFailed.Load(),
+	}
+
+	// Collect dynamic extra fields (recent_logs, capabilities, active_jobs,
+	// resources, current_job) into Heartbeat.Extra as structpb.Struct.
+	extraMap := make(map[string]interface{})
+
 	recentLogs, recentErrors := w.recentLogs.Snapshot(300, 100)
-	payload := map[string]interface{}{}
 	if len(recentLogs) > 0 {
-		payload["recent_logs"] = recentLogs
-		payload["recent_logs_count"] = len(recentLogs)
+		extraMap["recent_logs"] = recentLogs
+		extraMap["recent_logs_count"] = len(recentLogs)
 	}
 	if len(recentErrors) > 0 {
-		payload["recent_errors"] = recentErrors
-		payload["recent_errors_count"] = len(recentErrors)
+		extraMap["recent_errors"] = recentErrors
+		extraMap["recent_errors_count"] = len(recentErrors)
 	}
-	payload["worker_status"] = string(status)
-	payload["worker_id"] = w.config.WorkerID
-	payload["worker_name"] = w.config.WorkerName
-	payload["status"] = string(status)
-	payload["code_version"] = w.version
-	payload["bundle_version"] = w.config.BundleVersion
-	payload["bundle_hash"] = w.config.BundleHash
-	payload["protocol_version"] = w.config.ProtocolVersion
-	payload["engine_version"] = w.config.EngineVersion
 
-	// PR-3.6 / F4: attach typed WorkerResourceCounters on every
-	// heartbeat. The sampler publishes a refreshed snapshot to its
-	// emit slot every 3 ticks (≈ 15s on the master F2 LastSeenResources
-	// delta cadence); on a busy worker the bus cadence is 15s and the
-	// snapshot is therefore fresh on every beat. On the idle 60s cadence
-	// the same snapshot is replayed up to 4×, which is fine because the
-	// sampler generates no work between emits. Nil-safe: skip the field
-	// entirely if the sampler hasn't yet sampled (early session).
+	// PR-3.6 / F4: attach typed WorkerResourceCounters.
 	if w.sampler != nil {
 		if snap := w.sampler.Latest(); snap != nil {
 			if m := snap.ToWireMap(); m != nil {
-				payload["resources"] = m
+				extraMap["resources"] = m
 			}
 		}
 	}
@@ -180,10 +185,8 @@ func (w *Worker) sendHeartbeat(ctx context.Context) error {
 	if h, err := os.Hostname(); err == nil {
 		hostname = h
 	}
-	payload["capabilities"] = w.capabilitiesMap(hostname)
-
-	payload["jobs_completed"] = w.tasksCompleted.Load()
-	payload["jobs_failed"] = w.tasksFailed.Load()
+	extraMap["capabilities"] = w.capabilitiesMap(hostname)
+	extraMap["worker_id"] = w.config.WorkerID
 
 	w.activeTasksMu.RLock()
 	activeJobList := make([]map[string]interface{}, 0, len(w.activeTasks))
@@ -194,11 +197,11 @@ func (w *Worker) sendHeartbeat(ctx context.Context) error {
 		}
 		jobInfo := map[string]interface{}{
 			"job_id":     at.JobID,
-			"job_run_id": at.Job.JobRunID,
-			"job_type":   at.Job.JobType,
-			"priority":   at.Job.Priority,
+			"job_run_id": "",
+			"job_type":   at.Task.ExecutorID,
+			"priority":   0,
 			"lease_id":   at.LeaseID,
-			"attempt":    resolveJobAttempt(at.Job),
+			"attempt":    at.Task.AttemptNumber,
 		}
 		if at.Progress.Percent > 0 {
 			jobInfo["progress_percent"] = at.Progress.Percent
@@ -213,16 +216,23 @@ func (w *Worker) sendHeartbeat(ctx context.Context) error {
 	w.activeTasksMu.RUnlock()
 
 	if len(activeJobList) > 0 {
-		payload["active_jobs"] = activeJobList
-		payload["active_jobs_count"] = len(activeJobList)
+		extraMap["active_jobs"] = activeJobList
 	}
-	payload["current_job"] = primaryJobID
+	hb.CurrentJob = primaryJobID
+	hb.ActiveJobsCount = int32(len(activeJobList))
 
-	msg := controltransport.NewMessageWithPayload(
+	// Serialize extra map to structpb.Struct.
+	if len(extraMap) > 0 {
+		if extra, err := structpb.NewStruct(extraMap); err == nil {
+			hb.Extra = extra
+		}
+	}
+
+	msg := controltransport.NewTypedMessage(
 		controltransport.MsgHeartbeat,
 		w.config.WorkerID,
 		w.config.ProtocolVersion,
-		payload,
+		hb,
 	)
 
 	if err := w.transport.Send(ctx, msg); err != nil {
@@ -251,26 +261,30 @@ func (w *Worker) leaseRenewLoop(ctx context.Context) {
 			w.logger.Debug("Lease renew loop exiting (stop signal)")
 			return
 		case <-ticker.C:
-			// PR-2: task-native lease renewals only — dispatched via activeTaskLeases.
+			// PR-2: task-native lease renewals — dispatched via activeTaskLeases.
+			// Builds typed pb.TaskLeaseRenewal directly instead of map payload.
 			taskLeases := w.SnapshotActiveTaskLeases()
 			for _, tl := range taskLeases {
-				if tl == nil || tl.TaskID == "" || tl.LeaseID == "" {
+				if tl == nil || tl.TaskID == "" || tl.JobID == "" || tl.AttemptID == "" || tl.LeaseID == "" || tl.AttemptNumber <= 0 {
 					continue
 				}
 
-				taskExpiry := time.Now().UTC().Add(30 * time.Minute).Format(time.RFC3339)
-				payload := map[string]interface{}{
-					"task_id":          tl.TaskID,
-					"attempt_id":       tl.AttemptID,
-					"lease_id":         tl.LeaseID,
-					"requested_expiry": taskExpiry,
+				taskExpiry := time.Now().UTC().Add(30 * time.Minute)
+				renewal := &pb.TaskLeaseRenewal{
+					TaskId:          tl.TaskID,
+					JobId:           tl.JobID,
+					AttemptId:       tl.AttemptID,
+					LeaseId:         tl.LeaseID,
+					AttemptNumber:   int32(tl.AttemptNumber),
+					Revision:        int32(tl.Revision),
+					RequestedExpiry: timestamppb.New(taskExpiry),
 				}
 
-				msg := controltransport.NewMessageWithPayload(
+				msg := controltransport.NewTypedMessage(
 					controltransport.MsgTaskLeaseRenewal,
 					w.config.WorkerID,
 					w.config.ProtocolVersion,
-					payload,
+					renewal,
 				)
 
 				if err := w.transport.Send(ctx, msg); err != nil {
@@ -294,22 +308,25 @@ func (w *Worker) leaseRenewLoop(ctx context.Context) {
 // helper never performs lazy-init — if the map is nil here, the worker
 // was constructed defectively and a panic is the correct loud-failure
 // surface (cover-up via lazy init masks operator bugs).
-func (w *Worker) AddActiveTaskLease(taskID, attemptID, leaseID string) {
-	if taskID == "" || leaseID == "" {
+func (w *Worker) AddActiveTaskLease(taskID, jobID, attemptID, leaseID string, attemptNumber, revision int) {
+	if taskID == "" || jobID == "" || attemptID == "" || leaseID == "" || attemptNumber <= 0 {
 		return
 	}
 	w.activeTaskLeasesMu.Lock()
 	defer w.activeTaskLeasesMu.Unlock()
 	w.activeTaskLeases[taskID] = &ActiveTaskLease{
-		TaskID:    taskID,
-		AttemptID: attemptID,
-		LeaseID:   leaseID,
+		TaskID:        taskID,
+		JobID:         jobID,
+		AttemptID:     attemptID,
+		LeaseID:       leaseID,
+		AttemptNumber: attemptNumber,
+		Revision:      revision,
 	}
 }
 
 // RemoveActiveTaskLease deregisters a task-native lease so leaseRenewLoop
 // stops dispatching MsgTaskLeaseRenewal for it. Called on MsgLeaseRevoked
-// / canonical terminal-state transition (executeJob returns SUCCEEDED /
+// / canonical terminal-state transition (executeTask returns SUCCEEDED /
 // FAILED / CANCELLED / TIMED_OUT). Empty taskID is a no-op.
 func (w *Worker) RemoveActiveTaskLease(taskID string) {
 	if taskID == "" {

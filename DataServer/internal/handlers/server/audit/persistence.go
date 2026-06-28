@@ -19,22 +19,31 @@ import (
 	"velox-server/internal/store"
 )
 
-// PersistenceHandler reads the live YouTube Storage in memory, the canonical
-// SQLite database on disk, and the last save status recorded by the Storage
-// safety guard.
+// PersistenceHandler reads the live YouTube integration Service, the canonical
+// SQLite database on disk, and the audit snapshots derived from each.
+//
+// PR-YT-REPO: `ytStorage *youtubeintegration.Storage` is replaced by
+// `ytsvc *youtubeintegration.Service` — the Storage facade was
+// deleted when YouTubeStore + StorageStore were merged into a single
+// Repository owned by *youtube.Service. The runtime still requires
+// Group + Channel counts for the audit view; both are now produced
+// via GetGroups() / GetAllChannels() on the Service.
 type PersistenceHandler struct {
 	cfg         *config.Config
 	sqliteStore *store.SQLiteStore
-	ytStorage   *youtubeintegration.Storage
+	ytsvc       *youtubeintegration.Service
 }
 
 // NewPersistenceHandler builds a handler. All deps are optional; missing
 // ones degrade the response gracefully instead of erroring.
-func NewPersistenceHandler(cfg *config.Config, sqliteStore *store.SQLiteStore, ytStorage *youtubeintegration.Storage) *PersistenceHandler {
+//
+// PR-YT-REPO: the third argument switched from
+// *youtubeintegration.Storage to *youtubeintegration.Service.
+func NewPersistenceHandler(cfg *config.Config, sqliteStore *store.SQLiteStore, ytsvc *youtubeintegration.Service) *PersistenceHandler {
 	return &PersistenceHandler{
 		cfg:         cfg,
 		sqliteStore: sqliteStore,
-		ytStorage:   ytStorage,
+		ytsvc:       ytsvc,
 	}
 }
 
@@ -108,14 +117,20 @@ func (h *PersistenceHandler) sourceOfTruth() gin.H {
 	}
 }
 
-// liveCounts returns the in-memory snapshot (Storage.data.Groups) reflecting
-// what was last loaded from SQLite. Distinct fields:
+// liveCounts returns the snapshot produced by *youtube.Service.LoadData()
+// reflecting the canonical SQLite read at the moment of the request.
+// Distinct fields:
 //   - groups_total: count of manager/upload groups loaded
 //   - channels_total: kept for SPA backward compat — equals channels_in_groups
 //   - channels_in_groups: total Channel entries summed across every group
 //     (counts duplicates if a channel is in multiple groups)
 //   - channels_assigned: distinct channel IDs that appear in any group
 //   - channels_undefined: catalog channels not in any manager group
+//
+// PR-YT-REPO: StorageData.Groups values are *Group (Channels []Channel)
+// so iteration of group.Channels yields a Channel (with ID/Title/etc.)
+// — the canonical post-PR15.4 shape, free of the legacy in-memory
+// mirror that was destroyed by Storage facade removal.
 func (h *PersistenceHandler) liveCounts() gin.H {
 	result := gin.H{
 		"available":          false,
@@ -126,11 +141,15 @@ func (h *PersistenceHandler) liveCounts() gin.H {
 		"channels_undefined": 0,
 	}
 
-	if h.ytStorage == nil {
+	if h.ytsvc == nil {
 		result["reason"] = "youtube_storage_unavailable"
 		return result
 	}
-	groups, _ := h.ytStorage.ListGroups()
+	data := h.ytsvc.LoadData()
+	groups := data.Groups
+	if groups == nil {
+		groups = map[string]*youtubeintegration.Group{}
+	}
 	result["available"] = true
 	result["groups_total"] = len(groups)
 
@@ -157,11 +176,13 @@ func (h *PersistenceHandler) liveCounts() gin.H {
 // deriveUndefined returns the count of catalog channels not present in the
 // assigned set. O(n) over GetAllChannels which is fine for the catalog sizes
 // the audit endpoint targets (hundreds to low thousands).
+//
+// PR-YT-REPO: GetAllChannels is now served by *youtube.Service.
 func (h *PersistenceHandler) deriveUndefined(assignedIDs map[string]bool) int {
-	if h.ytStorage == nil {
+	if h.ytsvc == nil {
 		return 0
 	}
-	all := h.ytStorage.GetAllChannels()
+	all := h.ytsvc.GetAllChannels()
 	count := 0
 	for _, ch := range all {
 		if ch.ID == "" {
@@ -260,7 +281,7 @@ func canonicalAbs(p string) string {
 // endpoint now surfaces this as `safety_guard_disabled` with the
 // rationale so operators can confirm the cutover happened.
 func (h *PersistenceHandler) safetyGuardStatus() gin.H {
-	if h.ytStorage == nil {
+	if h.ytsvc == nil {
 		return gin.H{
 			"available": false,
 			"reason":    "youtube_storage_unavailable",

@@ -43,8 +43,13 @@ type AutoOrganizeResult struct {
 }
 
 // AutoOrganizeUndefinedChannels groups unassigned channels into topic-based upload groups.
+//
+// PR-YT-REPO: s.storage.<Method>() is gone — the storage facade was deleted.
+// All persistence routes through s.ytService (which owns the merged
+// Repository). GetGroups/GetGroup return *ChannelGroup, so the existing
+// nil-check idiom (cg == nil) replaces the (Group, bool) pair.
 func (s *Service) AutoOrganizeUndefinedChannels(ctx context.Context) (*AutoOrganizeResult, error) {
-	if s.ytService == nil || s.storage == nil {
+	if s.ytService == nil {
 		return nil, fmt.Errorf("YouTube services are not initialized")
 	}
 
@@ -59,9 +64,12 @@ func (s *Service) AutoOrganizeUndefinedChannels(ctx context.Context) (*AutoOrgan
 		}, nil
 	}
 
-	existingGroups, _ := s.storage.ListGroups()
+	existingGroups := s.ytService.GetGroups()
 	existingNames := make([]string, 0, len(existingGroups))
 	for name, group := range existingGroups {
+		if group == nil {
+			continue
+		}
 		if group.GroupType != "" && group.GroupType != "upload" {
 			continue
 		}
@@ -82,8 +90,8 @@ func (s *Service) AutoOrganizeUndefinedChannels(ctx context.Context) (*AutoOrgan
 		}
 
 		if !createdGroups[target] {
-			if _, ok := s.storage.GetGroup(target); !ok {
-				if err := s.storage.CreateGroup(target, "upload"); err != nil && err != yt.ErrGroupExists {
+			if s.ytService.GetGroup(target) == nil {
+				if err := s.ytService.CreateGroup(target, "", nil); err != nil && err != yt.ErrGroupExists {
 					skipped++
 					continue
 				}
@@ -102,7 +110,7 @@ func (s *Service) AutoOrganizeUndefinedChannels(ctx context.Context) (*AutoOrgan
 			Notes:     "Auto-organized from undefined channels",
 		}
 
-		if err := s.storage.AddChannel(target, channel); err != nil {
+		if err := s.ytService.AddChannel(target, channel); err != nil {
 			if err == yt.ErrChannelExists {
 				skipped++
 				continue

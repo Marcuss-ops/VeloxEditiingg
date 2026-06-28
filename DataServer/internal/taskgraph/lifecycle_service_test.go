@@ -34,15 +34,15 @@ import (
 //
 // These are SQL-gate rejections; the lifecycle wrapper just wraps
 // their ErrTransitionConflict. The audit's end-to-end check is the
-// FailWithRetry propagation captured below.
+// Fail propagation captured below.
 // =====================================================================
 
 // recordingJobsRepo is a JobsRetryQuerier stub that records the
-// (args, callCount) of every FailWithRetry invocation. Get returns
-// the seeded Job (or nil to force the no-FailWithRetry-branch path).
+// (args, callCount) of every Fail invocation. Get returns
+// the seeded Job (or nil to force the no-Fail-branch path).
 // Satisfies JobsRetryQuerier so SetJobsRepo can wire it directly.
 //
-// Concurrency: LifecycleService.ExpireTaskLease runs FailWithRetry
+// Concurrency: LifecycleService.ExpireTaskLease runs Fail
 // synchronously in the test scope, so no mutex is required. Mirrors
 // the lock-free stubRepo pattern already in this file.
 type recordingJobsRepo struct {
@@ -50,13 +50,10 @@ type recordingJobsRepo struct {
 	replyJob *jobs.Job
 	replyErr error
 
-	// FailWithRetry recording.
-	fwrCalls      int
-	lastJobID     string
-	lastErrCode   string
-	lastErrMsg    string
-	lastRetryable bool
-	lastRevision  int
+	// Fail recording.
+	failCalls    int
+	lastJobID    string
+	lastReason   string
 }
 
 func (r *recordingJobsRepo) Get(_ context.Context, _ string) (*jobs.Job, error) {
@@ -70,13 +67,10 @@ func (r *recordingJobsRepo) Get(_ context.Context, _ string) (*jobs.Job, error) 
 	return &cp, nil
 }
 
-func (r *recordingJobsRepo) FailWithRetry(_ context.Context, jobID, errorCode, errorMessage string, retryable bool, revision int) error {
-	r.fwrCalls++
+func (r *recordingJobsRepo) Fail(_ context.Context, jobID string, reason string) error {
+	r.failCalls++
 	r.lastJobID = jobID
-	r.lastErrCode = errorCode
-	r.lastErrMsg = errorMessage
-	r.lastRetryable = retryable
-	r.lastRevision = revision
+	r.lastReason = reason
 	return nil
 }
 
@@ -179,35 +173,32 @@ func (s *exhaustedExpireStubRepo) RequeueExpiredLeases(context.Context, string, 
 func (s *exhaustedExpireStubRepo) Delete(context.Context, string) error {
 	panic("exhaustedExpireStubRepo.Delete: not exercised by ExpireTaskLease tests")
 }
+func (s *exhaustedExpireStubRepo) IngestTaskResultAtomic(context.Context, IngestResultCommand) error {
+	panic("exhaustedExpireStubRepo.IngestTaskResultAtomic: not exercised by ExpireTaskLease tests")
+}
 
 // compile-time assertion that both stubs satisfy their interfaces.
 var _ Repository = (*exhaustedExpireStubRepo)(nil)
 var _ JobsRetryQuerier = (*recordingJobsRepo)(nil)
 
-// TestLifecycleService_ExpireTaskLease_CallsFailWithRetryOnExhausted:
+// TestLifecycleService_ExpireTaskLease_CallsFailOnExhausted:
 // audit-P0#4 end-to-end coverage. When ExpireTaskLeaseAtomic replies
 // with AttemptsExhausted=true, the lifecycle wrapper MUST post-commit
-// invoke JobsRetryQuerier.FailWithRetry exactly once with the
-// LEASE_EXPIRED_RETRIES_EXHAUSTED tuple:
-//
-//   - errorCode  = "LEASE_EXPIRED_RETRIES_EXHAUSTED"
-//   - errorMessage must contain the candidate task_id
-//   - retryable  = false (terminal state, NOT a retryable failure)
-//   - revision   = the Job.Revision read at FailWithRetry time
+// invoke JobsRetryQuerier.Fail exactly once with the
+// LEASE_EXPIRED_RETRIES_EXHAUSTED reason.
 //
 // The Job wire-up runs OUTSIDE the reap-atomic so the audit-strict
 // transactional boundary (Task + Attempt in one tx) is preserved; a
-// failure of FailWithRetry does NOT roll back the Task reap. The
+// failure of Fail does NOT roll back the Task reap. The
 // post-condition here asserts the call was made (not its outcome);
-// the wrap-with-`_ = l.jobsRepo.FailWithRetry(...)` block tests the
+// the wrap-with-`_ = l.jobsRepo.Fail(...)` block tests the
 // no-rollback invariant at the smoke-test level.
-func TestLifecycleService_ExpireTaskLease_CallsFailWithRetryOnExhausted(t *testing.T) {
+func TestLifecycleService_ExpireTaskLease_CallsFailOnExhausted(t *testing.T) {
 	const (
 		taskID   = "T-exh"
 		jobID    = "J-exh"
 		leaseID  = "L-exh"
 		observed = "2026-06-22T12:00:00Z"
-		wantRev  = 42
 	)
 
 	taskRepo := &exhaustedExpireStubRepo{
@@ -224,7 +215,7 @@ func TestLifecycleService_ExpireTaskLease_CallsFailWithRetryOnExhausted(t *testi
 			ID:         jobID,
 			MaxRetries: 3,
 			Status:     jobs.StatusRunning, // non-terminal
-			Revision:   wantRev,
+			Revision:   42,
 		},
 	}
 	svc, err := NewLifecycleService(taskRepo)
@@ -270,41 +261,34 @@ func TestLifecycleService_ExpireTaskLease_CallsFailWithRetryOnExhausted(t *testi
 	}
 
 	// The job-aggregate wire-up MUST have fired exactly once.
-	if jobsRepo.fwrCalls != 1 {
-		t.Fatalf("JobsRetryQuerier.FailWithRetry calls = %d; want 1 (audit P0#4 end-to-end)",
-			jobsRepo.fwrCalls)
+	if jobsRepo.failCalls != 1 {
+		t.Fatalf("JobsRetryQuerier.Fail calls = %d; want 1 (audit P0#4 end-to-end)",
+			jobsRepo.failCalls)
 	}
 
 	// Assert every field of the canonical LEASE_EXPIRED_RETRIES_EXHAUSTED
-	// tuple — a future regression that drops or renames the errorCode
+	// reason — a future regression that drops or renames the error code
 	// surfaces here.
 	if jobsRepo.lastJobID != jobID {
-		t.Errorf("FailWithRetry jobID = %q; want %q", jobsRepo.lastJobID, jobID)
+		t.Errorf("Fail jobID = %q; want %q", jobsRepo.lastJobID, jobID)
 	}
-	if jobsRepo.lastErrCode != "LEASE_EXPIRED_RETRIES_EXHAUSTED" {
-		t.Errorf("FailWithRetry errorCode = %q; want LEASE_EXPIRED_RETRIES_EXHAUSTED",
-			jobsRepo.lastErrCode)
+	if !strings.Contains(jobsRepo.lastReason, "LEASE_EXPIRED_RETRIES_EXHAUSTED") {
+		t.Errorf("Fail reason = %q; want substring LEASE_EXPIRED_RETRIES_EXHAUSTED",
+			jobsRepo.lastReason)
 	}
-	if !strings.Contains(jobsRepo.lastErrMsg, taskID) {
-		t.Errorf("FailWithRetry errorMessage = %q; want substring %q",
-			jobsRepo.lastErrMsg, taskID)
-	}
-	if jobsRepo.lastRetryable {
-		t.Errorf("FailWithRetry retryable = true; want false (FAILED is terminal, not a retryable failure)")
-	}
-	if jobsRepo.lastRevision != wantRev {
-		t.Errorf("FailWithRetry revision = %d; want %d (Job.Revision captured at read-time)",
-			jobsRepo.lastRevision, wantRev)
+	if !strings.Contains(jobsRepo.lastReason, taskID) {
+		t.Errorf("Fail reason = %q; want substring %q",
+			jobsRepo.lastReason, taskID)
 	}
 }
 
-// TestLifecycleService_ExpireTaskLease_NoFailWithRetryOnNonExhausted:
+// TestLifecycleService_ExpireTaskLease_NoFailOnNonExhausted:
 // the negative complement of the test above. When the atomic replies
 // with AttemptsExhausted=false, the lifecycle wrapper MUST NOT call
-// FailWithRetry. The task is re-claimed (READDY) and the Job stays
+// FailWithRetry. The task is re-claimed (READY) and the Job stays
 // RUNNING — the supervisor's next tick observes the re-claimable
 // Task and re-decides without altering the Job aggregate.
-func TestLifecycleService_ExpireTaskLease_NoFailWithRetryOnNonExhausted(t *testing.T) {
+func TestLifecycleService_ExpireTaskLease_NoFailOnNonExhausted(t *testing.T) {
 	const (
 		taskID  = "T-recoverable"
 		jobID   = "J-recoverable"
@@ -331,15 +315,15 @@ func TestLifecycleService_ExpireTaskLease_NoFailWithRetryOnNonExhausted(t *testi
 	}); err != nil {
 		t.Fatalf("ExpireTaskLease (non-exhausted): %v", err)
 	}
-	if jobsRepo.fwrCalls != 0 {
-		t.Errorf("FailWithRetry calls = %d; want 0 on AttemptsExhausted=false",
-			jobsRepo.fwrCalls)
+	if jobsRepo.failCalls != 0 {
+		t.Errorf("Fail calls = %d; want 0 on AttemptsExhausted=false",
+			jobsRepo.failCalls)
 	}
-	// Even though the Job is wired, FailWithRetry is NOT called for
+	// Even though the Job is wired, Fail is NOT called for
 	// non-exhausted reaps; Job stays RUNNING for the next supervise tick.
 }
 
-// TestLifecycleService_ExpireTaskLease_NoFailWithRetryOnTerminalJob:
+// TestLifecycleService_ExpireTaskLease_NoFailOnTerminalJob:
 // even when the task reaps exhausted, a Job already in a terminal
 // state SHOULD NOT be re-flipped. The lifecycle wrapper's guard
 // `if !job.Status.IsTerminal()` short-circuits the FailWithRetry call
@@ -347,7 +331,7 @@ func TestLifecycleService_ExpireTaskLease_NoFailWithRetryOnNonExhausted(t *testi
 // noise. Reference audit §P0#4 idempotency: the audit-mandated retry
 // classification must never overwrite a Job already FAILED /
 // SUCCEEDED / CANCELLED.
-func TestLifecycleService_ExpireTaskLease_NoFailWithRetryOnTerminalJob(t *testing.T) {
+func TestLifecycleService_ExpireTaskLease_NoFailOnTerminalJob(t *testing.T) {
 	const (
 		taskID  = "T-terminal"
 		jobID   = "J-terminal"
@@ -377,9 +361,9 @@ func TestLifecycleService_ExpireTaskLease_NoFailWithRetryOnTerminalJob(t *testin
 	}); err != nil {
 		t.Fatalf("ExpireTaskLease: %v", err)
 	}
-	if jobsRepo.fwrCalls != 0 {
-		t.Errorf("FailWithRetry calls = %d; want 0 when Job.IsTerminal() (idempotency guard §P0#4)",
-			jobsRepo.fwrCalls)
+	if jobsRepo.failCalls != 0 {
+		t.Errorf("Fail calls = %d; want 0 when Job.IsTerminal() (idempotency guard §P0#4)",
+			jobsRepo.failCalls)
 	}
 }
 
@@ -467,6 +451,9 @@ func (s *stubRepo) ExpireTaskLeaseAtomic(_ context.Context, _, _, _ string, _ in
 // loud.
 func (s *stubRepo) ClaimNextWithAttemptAtomic(_ context.Context, _, _ string) (*TaskWithSpec, *taskattempts.TaskAttempt, error) {
 	panic("stubRepo.ClaimNextWithAttemptAtomic: not used in this test scope")
+}
+func (s *stubRepo) IngestTaskResultAtomic(_ context.Context, _ IngestResultCommand) error {
+	panic("stubRepo.IngestTaskResultAtomic: not used in this test scope")
 }
 
 // TestLifecycleService_RequeueExpiredLeases_DelegatesToRepo: the

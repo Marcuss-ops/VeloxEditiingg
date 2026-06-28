@@ -16,11 +16,6 @@ func TestControlMessageRoundTrip(t *testing.T) {
 		SequenceNumber:  42,
 		SentAt:          time.Now().UTC(),
 		ProtocolVersion: ProtocolVersionCurrent,
-		Payload: map[string]interface{}{
-			"status":       "busy",
-			"active_jobs":  2,
-			"capabilities": []string{"render", "video"},
-		},
 	}
 
 	data, err := original.ToJSON()
@@ -52,13 +47,6 @@ func TestControlMessageRoundTrip(t *testing.T) {
 		t.Errorf("ProtocolVersion mismatch: %q != %q", restored.ProtocolVersion, original.ProtocolVersion)
 	}
 
-	// Payload round-trip
-	if len(restored.Payload) != len(original.Payload) {
-		t.Errorf("Payload length mismatch: %d != %d", len(restored.Payload), len(original.Payload))
-	}
-	if v, ok := restored.Payload["status"].(string); !ok || v != "busy" {
-		t.Errorf("Payload status mismatch: got %v", restored.Payload["status"])
-	}
 }
 
 func TestControlMessageJSONOmitEmpty(t *testing.T) {
@@ -80,9 +68,6 @@ func TestControlMessageJSONOmitEmpty(t *testing.T) {
 	}
 	if _, exists := raw["session_id"]; exists {
 		t.Error("session_id should be omitted when empty")
-	}
-	if _, exists := raw["payload"]; exists {
-		t.Error("payload should be omitted when empty")
 	}
 }
 
@@ -115,6 +100,42 @@ func TestControlMessageTypeClassification(t *testing.T) {
 	}
 }
 
+// TestProtocolVersionStrict validates the strict protocol enforcement:
+// only ProtocolVersionCurrent ("v3") is accepted. Empty strings and
+// legacy versions are rejected. IsDeprecatedProtocol was removed.
+func TestProtocolVersionStrict(t *testing.T) {
+	// Only "v3" is accepted.
+	if !IsSupportedProtocol(ProtocolVersionCurrent) {
+		t.Errorf("IsSupportedProtocol(%q) must be true", ProtocolVersionCurrent)
+	}
+
+	// Empty string is rejected.
+	if IsSupportedProtocol("") {
+		t.Error("IsSupportedProtocol(\"\") must be false — empty string is not a valid protocol version")
+	}
+
+	// Legacy / unknown versions are rejected.
+	for _, legacy := range []string{
+		"2026-06-worker-v1",
+		"v2",
+		"v1",
+		"unknown",
+		"latest",
+	} {
+		if IsSupportedProtocol(legacy) {
+			t.Errorf("IsSupportedProtocol(%q) must be false — only %q is accepted", legacy, ProtocolVersionCurrent)
+		}
+	}
+
+	// SupportedProtocolVersions contains ONLY the current version.
+	if len(SupportedProtocolVersions) != 1 {
+		t.Fatalf("SupportedProtocolVersions should have exactly 1 entry, got %d: %v", len(SupportedProtocolVersions), SupportedProtocolVersions)
+	}
+	if SupportedProtocolVersions[0] != ProtocolVersionCurrent {
+		t.Errorf("SupportedProtocolVersions[0] should be %q, got %q", ProtocolVersionCurrent, SupportedProtocolVersions[0])
+	}
+}
+
 func TestNewMessage(t *testing.T) {
 	m := NewMessage(MsgHello, "worker-001", ProtocolVersionCurrent)
 	if m.MessageID == "" {
@@ -134,14 +155,13 @@ func TestNewMessage(t *testing.T) {
 	}
 }
 
-func TestNewMessageWithPayload(t *testing.T) {
-	payload := map[string]interface{}{"key": "value"}
-	m := NewMessageWithPayload(MsgTaskResult, "w1", ProtocolVersionCurrent, payload)
-	if m.Payload == nil {
-		t.Fatal("Payload should not be nil")
+func TestNewTypedMessage(t *testing.T) {
+	m := NewTypedMessage(MsgTaskResult, "w1", ProtocolVersionCurrent, "typed-fake-payload")
+	if m.TypedPayload == nil {
+		t.Fatal("TypedPayload should not be nil")
 	}
-	if v, ok := m.Payload["key"].(string); !ok || v != "value" {
-		t.Errorf("Payload mismatch: %v", m.Payload["key"])
+	if tp, ok := m.TypedPayload.(string); !ok || tp != "typed-fake-payload" {
+		t.Errorf("TypedPayload mismatch: %v", m.TypedPayload)
 	}
 }
 

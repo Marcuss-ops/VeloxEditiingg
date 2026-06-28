@@ -633,6 +633,8 @@ type TaskResult struct {
 	ExecutorKey      string                 `protobuf:"bytes,10,opt,name=executor_key,json=executorKey,proto3" json:"executor_key,omitempty"`
 	OutputArtifacts  []*structpb.Struct     `protobuf:"bytes,11,rep,name=output_artifacts,json=outputArtifacts,proto3" json:"output_artifacts,omitempty"`
 	LeaseId          string                 `protobuf:"bytes,12,opt,name=lease_id,json=leaseId,proto3" json:"lease_id,omitempty"`
+	AttemptNumber    int32                  `protobuf:"varint,13,opt,name=attempt_number,json=attemptNumber,proto3" json:"attempt_number,omitempty"`
+	Revision         int32                  `protobuf:"varint,14,opt,name=revision,proto3" json:"revision,omitempty"`
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
@@ -751,12 +753,29 @@ func (x *TaskResult) GetLeaseId() string {
 	return ""
 }
 
+func (x *TaskResult) GetAttemptNumber() int32 {
+	if x != nil {
+		return x.AttemptNumber
+	}
+	return 0
+}
+
+func (x *TaskResult) GetRevision() int32 {
+	if x != nil {
+		return x.Revision
+	}
+	return 0
+}
+
 type TaskLeaseRenewal struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
 	TaskId          string                 `protobuf:"bytes,1,opt,name=task_id,json=taskId,proto3" json:"task_id,omitempty"`
 	AttemptId       string                 `protobuf:"bytes,2,opt,name=attempt_id,json=attemptId,proto3" json:"attempt_id,omitempty"`
 	LeaseId         string                 `protobuf:"bytes,3,opt,name=lease_id,json=leaseId,proto3" json:"lease_id,omitempty"`
 	RequestedExpiry *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=requested_expiry,json=requestedExpiry,proto3" json:"requested_expiry,omitempty"`
+	JobId           string                 `protobuf:"bytes,5,opt,name=job_id,json=jobId,proto3" json:"job_id,omitempty"`
+	AttemptNumber   int32                  `protobuf:"varint,6,opt,name=attempt_number,json=attemptNumber,proto3" json:"attempt_number,omitempty"`
+	Revision        int32                  `protobuf:"varint,7,opt,name=revision,proto3" json:"revision,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -817,6 +836,27 @@ func (x *TaskLeaseRenewal) GetRequestedExpiry() *timestamppb.Timestamp {
 		return x.RequestedExpiry
 	}
 	return nil
+}
+
+func (x *TaskLeaseRenewal) GetJobId() string {
+	if x != nil {
+		return x.JobId
+	}
+	return ""
+}
+
+func (x *TaskLeaseRenewal) GetAttemptNumber() int32 {
+	if x != nil {
+		return x.AttemptNumber
+	}
+	return 0
+}
+
+func (x *TaskLeaseRenewal) GetRevision() int32 {
+	if x != nil {
+		return x.Revision
+	}
+	return 0
 }
 
 // PhaseMarker records one canonical phase timing.
@@ -1360,6 +1400,7 @@ type TaskOffer struct {
 	Requirements    *structpb.Struct       `protobuf:"bytes,9,opt,name=requirements,proto3" json:"requirements,omitempty"`
 	OutputContract  *structpb.Struct       `protobuf:"bytes,10,opt,name=output_contract,json=outputContract,proto3" json:"output_contract,omitempty"`
 	AttemptNumber   int32                  `protobuf:"varint,11,opt,name=attempt_number,json=attemptNumber,proto3" json:"attempt_number,omitempty"`
+	Revision        int32                  `protobuf:"varint,12,opt,name=revision,proto3" json:"revision,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -1471,12 +1512,21 @@ func (x *TaskOffer) GetAttemptNumber() int32 {
 	return 0
 }
 
+func (x *TaskOffer) GetRevision() int32 {
+	if x != nil {
+		return x.Revision
+	}
+	return 0
+}
+
 type TaskAccepted struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	TaskId        string                 `protobuf:"bytes,1,opt,name=task_id,json=taskId,proto3" json:"task_id,omitempty"`
 	JobId         string                 `protobuf:"bytes,2,opt,name=job_id,json=jobId,proto3" json:"job_id,omitempty"`
 	AttemptId     string                 `protobuf:"bytes,3,opt,name=attempt_id,json=attemptId,proto3" json:"attempt_id,omitempty"`
 	LeaseId       string                 `protobuf:"bytes,4,opt,name=lease_id,json=leaseId,proto3" json:"lease_id,omitempty"`
+	AttemptNumber int32                  `protobuf:"varint,5,opt,name=attempt_number,json=attemptNumber,proto3" json:"attempt_number,omitempty"`
+	Revision      int32                  `protobuf:"varint,6,opt,name=revision,proto3" json:"revision,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1539,17 +1589,29 @@ func (x *TaskAccepted) GetLeaseId() string {
 	return ""
 }
 
+func (x *TaskAccepted) GetAttemptNumber() int32 {
+	if x != nil {
+		return x.AttemptNumber
+	}
+	return 0
+}
+
+func (x *TaskAccepted) GetRevision() int32 {
+	if x != nil {
+		return x.Revision
+	}
+	return 0
+}
+
 type TaskRejected struct {
-	state  protoimpl.MessageState `protogen:"open.v1"`
-	TaskId string                 `protobuf:"bytes,1,opt,name=task_id,json=taskId,proto3" json:"task_id,omitempty"`
-	Reason string                 `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"`
-	// fix/task-rejected-lease-identity: the full tuple (task_id, attempt_id,
-	// lease_id, revision) allows the master to CAS-validate the rejection
-	// against the canonical TaskAttempt row. A stale rejection must NOT
-	// release a newer lease for the same (task_id, worker_id).
-	AttemptId     string `protobuf:"bytes,3,opt,name=attempt_id,json=attemptId,proto3" json:"attempt_id,omitempty"`
-	LeaseId       string `protobuf:"bytes,4,opt,name=lease_id,json=leaseId,proto3" json:"lease_id,omitempty"`
-	Revision      int32  `protobuf:"varint,5,opt,name=revision,proto3" json:"revision,omitempty"`
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TaskId        string                 `protobuf:"bytes,1,opt,name=task_id,json=taskId,proto3" json:"task_id,omitempty"`
+	Reason        string                 `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"`
+	AttemptId     string                 `protobuf:"bytes,3,opt,name=attempt_id,json=attemptId,proto3" json:"attempt_id,omitempty"`
+	LeaseId       string                 `protobuf:"bytes,4,opt,name=lease_id,json=leaseId,proto3" json:"lease_id,omitempty"`
+	Revision      int32                  `protobuf:"varint,5,opt,name=revision,proto3" json:"revision,omitempty"`
+	JobId         string                 `protobuf:"bytes,6,opt,name=job_id,json=jobId,proto3" json:"job_id,omitempty"`
+	AttemptNumber int32                  `protobuf:"varint,7,opt,name=attempt_number,json=attemptNumber,proto3" json:"attempt_number,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1619,12 +1681,28 @@ func (x *TaskRejected) GetRevision() int32 {
 	return 0
 }
 
+func (x *TaskRejected) GetJobId() string {
+	if x != nil {
+		return x.JobId
+	}
+	return ""
+}
+
+func (x *TaskRejected) GetAttemptNumber() int32 {
+	if x != nil {
+		return x.AttemptNumber
+	}
+	return 0
+}
+
 type TaskLeaseGranted struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	TaskId        string                 `protobuf:"bytes,1,opt,name=task_id,json=taskId,proto3" json:"task_id,omitempty"`
 	LeaseId       string                 `protobuf:"bytes,2,opt,name=lease_id,json=leaseId,proto3" json:"lease_id,omitempty"`
 	AttemptId     string                 `protobuf:"bytes,3,opt,name=attempt_id,json=attemptId,proto3" json:"attempt_id,omitempty"`
 	JobId         string                 `protobuf:"bytes,4,opt,name=job_id,json=jobId,proto3" json:"job_id,omitempty"`
+	AttemptNumber int32                  `protobuf:"varint,5,opt,name=attempt_number,json=attemptNumber,proto3" json:"attempt_number,omitempty"`
+	Revision      int32                  `protobuf:"varint,6,opt,name=revision,proto3" json:"revision,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1685,6 +1763,20 @@ func (x *TaskLeaseGranted) GetJobId() string {
 		return x.JobId
 	}
 	return ""
+}
+
+func (x *TaskLeaseGranted) GetAttemptNumber() int32 {
+	if x != nil {
+		return x.AttemptNumber
+	}
+	return 0
+}
+
+func (x *TaskLeaseGranted) GetRevision() int32 {
+	if x != nil {
+		return x.Revision
+	}
+	return 0
 }
 
 type Command struct {
@@ -2451,7 +2543,7 @@ const file_velox_control_worker_control_proto_rawDesc = "" +
 	"\n" +
 	"command_id\x18\x01 \x01(\tR\tcommandId\x12\x18\n" +
 	"\acommand\x18\x02 \x01(\tR\acommand\x12\x14\n" +
-	"\x05error\x18\x03 \x01(\tR\x05error\"\xeb\x03\n" +
+	"\x05error\x18\x03 \x01(\tR\x05error\"\xae\x04\n" +
 	"\n" +
 	"TaskResult\x12\x17\n" +
 	"\atask_id\x18\x01 \x01(\tR\x06taskId\x12\x15\n" +
@@ -2469,13 +2561,18 @@ const file_velox_control_worker_control_proto_rawDesc = "" +
 	"\fexecutor_key\x18\n" +
 	" \x01(\tR\vexecutorKey\x12B\n" +
 	"\x10output_artifacts\x18\v \x03(\v2\x17.google.protobuf.StructR\x0foutputArtifacts\x12\x19\n" +
-	"\blease_id\x18\f \x01(\tR\aleaseId\"\xac\x01\n" +
+	"\blease_id\x18\f \x01(\tR\aleaseId\x12%\n" +
+	"\x0eattempt_number\x18\r \x01(\x05R\rattemptNumber\x12\x1a\n" +
+	"\brevision\x18\x0e \x01(\x05R\brevision\"\x86\x02\n" +
 	"\x10TaskLeaseRenewal\x12\x17\n" +
 	"\atask_id\x18\x01 \x01(\tR\x06taskId\x12\x1d\n" +
 	"\n" +
 	"attempt_id\x18\x02 \x01(\tR\tattemptId\x12\x19\n" +
 	"\blease_id\x18\x03 \x01(\tR\aleaseId\x12E\n" +
-	"\x10requested_expiry\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\x0frequestedExpiry\"\xc9\x01\n" +
+	"\x10requested_expiry\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\x0frequestedExpiry\x12\x15\n" +
+	"\x06job_id\x18\x05 \x01(\tR\x05jobId\x12%\n" +
+	"\x0eattempt_number\x18\x06 \x01(\x05R\rattemptNumber\x12\x1a\n" +
+	"\brevision\x18\a \x01(\x05R\brevision\"\xc9\x01\n" +
 	"\vPhaseMarker\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x129\n" +
 	"\n" +
@@ -2520,7 +2617,7 @@ const file_velox_control_worker_control_proto_rawDesc = "" +
 	"\x04ping\x18\x1d \x01(\v2\x13.velox.control.PingH\x00R\x04pingB\x05\n" +
 	"\x03msgJ\x04\b\x15\x10\x16J\x04\b\x16\x10\x17J\x04\b\x17\x10\x18\"\n" +
 	"\n" +
-	"\bHelloAck\"\xe0\x03\n" +
+	"\bHelloAck\"\xfc\x03\n" +
 	"\tTaskOffer\x12\x17\n" +
 	"\atask_id\x18\x01 \x01(\tR\x06taskId\x12\x15\n" +
 	"\x06job_id\x18\x02 \x01(\tR\x05jobId\x12\x1d\n" +
@@ -2535,26 +2632,33 @@ const file_velox_control_worker_control_proto_rawDesc = "" +
 	"\frequirements\x18\t \x01(\v2\x17.google.protobuf.StructR\frequirements\x12@\n" +
 	"\x0foutput_contract\x18\n" +
 	" \x01(\v2\x17.google.protobuf.StructR\x0eoutputContract\x12%\n" +
-	"\x0eattempt_number\x18\v \x01(\x05R\rattemptNumber\"x\n" +
+	"\x0eattempt_number\x18\v \x01(\x05R\rattemptNumber\x12\x1a\n" +
+	"\brevision\x18\f \x01(\x05R\brevision\"\xbb\x01\n" +
 	"\fTaskAccepted\x12\x17\n" +
 	"\atask_id\x18\x01 \x01(\tR\x06taskId\x12\x15\n" +
 	"\x06job_id\x18\x02 \x01(\tR\x05jobId\x12\x1d\n" +
 	"\n" +
 	"attempt_id\x18\x03 \x01(\tR\tattemptId\x12\x19\n" +
-	"\blease_id\x18\x04 \x01(\tR\aleaseId\"\x95\x01\n" +
+	"\blease_id\x18\x04 \x01(\tR\aleaseId\x12%\n" +
+	"\x0eattempt_number\x18\x05 \x01(\x05R\rattemptNumber\x12\x1a\n" +
+	"\brevision\x18\x06 \x01(\x05R\brevision\"\xd3\x01\n" +
 	"\fTaskRejected\x12\x17\n" +
 	"\atask_id\x18\x01 \x01(\tR\x06taskId\x12\x16\n" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\x12\x1d\n" +
 	"\n" +
 	"attempt_id\x18\x03 \x01(\tR\tattemptId\x12\x19\n" +
 	"\blease_id\x18\x04 \x01(\tR\aleaseId\x12\x1a\n" +
-	"\brevision\x18\x05 \x01(\x05R\brevision\"|\n" +
+	"\brevision\x18\x05 \x01(\x05R\brevision\x12\x15\n" +
+	"\x06job_id\x18\x06 \x01(\tR\x05jobId\x12%\n" +
+	"\x0eattempt_number\x18\a \x01(\x05R\rattemptNumber\"\xbf\x01\n" +
 	"\x10TaskLeaseGranted\x12\x17\n" +
 	"\atask_id\x18\x01 \x01(\tR\x06taskId\x12\x19\n" +
 	"\blease_id\x18\x02 \x01(\tR\aleaseId\x12\x1d\n" +
 	"\n" +
 	"attempt_id\x18\x03 \x01(\tR\tattemptId\x12\x15\n" +
-	"\x06job_id\x18\x04 \x01(\tR\x05jobId\"\xad\x01\n" +
+	"\x06job_id\x18\x04 \x01(\tR\x05jobId\x12%\n" +
+	"\x0eattempt_number\x18\x05 \x01(\x05R\rattemptNumber\x12\x1a\n" +
+	"\brevision\x18\x06 \x01(\x05R\brevision\"\xad\x01\n" +
 	"\aCommand\x12\x1d\n" +
 	"\n" +
 	"command_id\x18\x01 \x01(\tR\tcommandId\x12\x18\n" +

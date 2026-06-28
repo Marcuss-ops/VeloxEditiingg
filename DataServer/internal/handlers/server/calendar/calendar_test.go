@@ -372,9 +372,9 @@ func TestCalendarAPI_StatusLifecycleAndOutputs(t *testing.T) {
 	}
 	event := decodeEvent(t, w)
 
-	// Use Lease via jobs.Writer to set RUNNING
-	if err := jobRepo.Lease(ctx, event.JobID, "worker-1"); err != nil {
-		t.Fatalf("lease job: %v", err)
+	// Use SetStatus via jobs.Writer to advance to LEASED, then RUNNING
+	if err := jobRepo.SetStatus(ctx, event.JobID, jobs.StatusPending, jobs.StatusLeased); err != nil {
+		t.Fatalf("set job leased: %v", err)
 	}
 
 	w = httptest.NewRecorder()

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"log"
 	"path/filepath"
 	"strings"
 
@@ -12,6 +11,7 @@ import (
 	"velox-server/internal/handlers/server/api"
 	"velox-server/internal/handlers/server/darkeditor"
 	"velox-server/internal/handlers/server/groups"
+	"velox-server/internal/handlers/server/pipeline"
 	scripthandlers "velox-server/internal/handlers/server/script"
 )
 
@@ -46,6 +46,12 @@ func newRouter(cfg *config.Config, deps *serverDeps, registry *app.Registry) *gi
 		r = gin.Default()
 	}
 
+	// Admin auth (regular routes) — used by the groups + pipeline
+	// groups registered below. The auth is built here so its scope
+	// spans every RegisterRoutes call; bootstrap_modules.go also
+	// creates one for the worker module path, both are identical.
+	auth := api.AdminAuthMiddleware(cfg)
+
 	configureTrustedProxies(r)
 
 	r.Use(corsMiddleware())
@@ -57,11 +63,35 @@ func newRouter(cfg *config.Config, deps *serverDeps, registry *app.Registry) *gi
 	registry.RegisterRoutes(r)
 
 	// ── Remaining routes not yet in modules ──────────────────────────────────
-	registerOrchestratorAdminRoutes(r, cfg, deps)
 	registerScriptRoutes(r, cfg, deps)
 
-	// Initialize groups handlers with SQLite store
-	groups.InitGroupsStore(deps.sqliteStore)
+	// Initialize groups handlers with SQLite store (constructor DI).
+	// PR-DI-groups: replaces the previous `groups.InitGroupsStore`
+	// package-level mutator. Handlers now owns its dependency on the
+	// struct so two `/api/v1/groups` mounts (e.g. prod + admin canary)
+	// cannot collide through shared state.
+	if deps.sqliteStore != nil {
+		groupsGroup := r.Group("/api/v1/groups")
+		groupsGroup.Use(auth)
+		groups.NewHandlers(deps.sqliteStore).RegisterRoutes(groupsGroup)
+	}
+
+	// Pipeline (constructor DI).
+	// PR-DI-pipeline: replaces the previous
+	// `pipeline.InitRemoteEngine` + `pipeline.InitPipelineEnqueuer`
+	// package-level mutators. NewHandlersFull wires every dep the
+	// pipeline endpoints need (cfg, enqueuer, remote engine client,
+	// jobs reader/writer for pipeline cancellation cleanup, worker
+	// CommandManager for per-worker cancel notifications).
+	if deps.enqueuer != nil && deps.lifecycleSvc != nil {
+		jobsRepo := deps.lifecycleSvc.Jobs()
+		pipeline.NewHandlersFull(
+			cfg,
+			deps.enqueuer,
+			pipeline.NewRemoteClientFromConfig(cfg),
+			jobsRepo, jobsRepo, deps.cmdMgr,
+		).RegisterRoutes(r, auth)
+	}
 
 	// Dark Editor API routes
 	deCfg := &darkeditor.Config{
@@ -114,39 +144,4 @@ func registerScriptRoutes(r *gin.Engine, cfg *config.Config, deps *serverDeps) {
 	// PR15.7a: thread the *enqueue.Enqueuer through RegisterRoutes so the
 	// script endpoint can submit jobs without any package-level state.
 	scripthandlers.RegisterRoutes(v1Group, cfg, deps.sqliteStore, deps.enqueuer)
-}
-
-// registerOrchestratorAdminRoutes is a thin wrapper that mounts
-// registerOrchestratorRoutes under the /api/v1 admin sub-group. Kept as a
-// distinct entry point so caller sites that already hold an *gin.Engine +
-// *serverDeps (router.go bootstrap path) don't have to know the
-// orchestratorLegacyAdapter indirection.
-//
-// PR-operation 01 / Fase 3 — this function now builds the cutover adapter
-// (creatorflow.CreateJobWithPlan for POST, Job→Run projection for GET) and
-// falls back to logging if any of the Fase 3 wiring pieces is nil. Fase 8
-// deletes the file entirely.
-func registerOrchestratorAdminRoutes(r *gin.Engine, cfg *config.Config, deps *serverDeps) {
-	if deps == nil {
-		log.Printf("[ORCHESTRATOR] admin routes disabled: nil serverDeps")
-		return
-	}
-	adapter, err := newOrchestratorLegacyAdapter(deps)
-	if err != nil {
-		log.Printf("[ORCHESTRATOR] admin routes disabled: %v", err)
-		return
-	}
-	v1Admin := r.Group("/api/v1")
-	v1Admin.Use(api.AdminAuthMiddleware(cfg))
-	registerOrchestratorRoutes(v1Admin, adapter)
-}
-
-func registerOrchestratorRoutes(v1Admin gin.IRoutes, adapter *orchestratorLegacyAdapter) {
-	if adapter == nil {
-		return
-	}
-	v1Admin.POST("/orchestrator/jobs", adapter.postJob)
-	v1Admin.GET("/orchestrator/jobs/:id", adapter.getJob)
-	v1Admin.GET("/orchestrator/jobs", adapter.listJobs)
-	v1Admin.GET("/orchestrator/stats", adapter.getStats)
 }

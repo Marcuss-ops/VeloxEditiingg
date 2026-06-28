@@ -10,8 +10,15 @@ import (
 )
 
 // GetVideoFeed gets aggregated videos from channels in a group.
+//
+// PR-YT-REPO: s.storage.LoadData() → s.ytService.LoadData() which now
+// returns *StorageData (map[string]*Group with full []Channel) — the
+// legacy in-memory shape that handlers and feed searches iterate over.
 func (s *Service) GetVideoFeed(ctx context.Context, groupName, timeRange, sortBy string) (*youtube.FeedResponse, error) {
-	data := s.storage.LoadData()
+	if s.ytService == nil {
+		return nil, fmt.Errorf("youtube integration service not configured")
+	}
+	data := s.ytService.LoadData()
 	var targetChannels []youtube.Channel
 
 	if groupName != "" {
@@ -118,7 +125,10 @@ func (s *Service) GetVideoFeed(ctx context.Context, groupName, timeRange, sortBy
 
 // RefreshAllGroupsFeed refreshes feed caches for all groups.
 func (s *Service) RefreshAllGroupsFeed(ctx context.Context) (int, error) {
-	data := s.storage.LoadData()
+	if s.ytService == nil {
+		return 0, nil
+	}
+	data := s.ytService.LoadData()
 	if len(data.Groups) == 0 {
 		return 0, nil
 	}
@@ -136,8 +146,15 @@ func (s *Service) RefreshAllGroupsFeed(ctx context.Context) (int, error) {
 }
 
 // RefreshGroupFeed refreshes the feed cache for a group.
+//
+// PR-YT-REPO: LoadData() now lives on the canonical *youtube.Service
+// and is fresh on every call.
 func (s *Service) RefreshGroupFeed(ctx context.Context, groupName string) (int, error) {
-	group, ok := s.storage.LoadData().Groups[groupName]
+	if s.ytService == nil {
+		return 0, fmt.Errorf("youtube integration service not configured")
+	}
+	data := s.ytService.LoadData()
+	group, ok := data.Groups[groupName]
 	if !ok {
 		return 0, fmt.Errorf("group not found: %s", groupName)
 	}

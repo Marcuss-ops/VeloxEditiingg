@@ -16,8 +16,6 @@
 //   List status   → Create 2 + List with []Status{StatusPending} returns both
 //   List empty    → List with empty Statuses returns nil
 //   Counts        → Counts aggregates correctly per status
-//   Lease         → Create + Lease flips PENDING → LEASED and populates lease_id
-//   Lease twice   → Lease again fails (CAS predicate rejects)
 //   Fail          → Create + Fail transitions to FAILED; second Fail rejects (terminal)
 //   SetStatus     → Create + SetStatus on valid from → succeeds; SetStatus with stale from fails
 //   Cancel        → Create + Cancel succeeds; second Cancel fails (terminal)
@@ -30,7 +28,6 @@ import (
 	"testing"
 
 	"velox-server/internal/jobs"
-	"velox-server/internal/store"
 
 	"github.com/google/uuid"
 )
@@ -175,48 +172,6 @@ func JobRepositoryContractCrossBackend(t *testing.T, newRepo func(t *testing.T) 
 		}
 	})
 
-	t.Run("Lease flips PENDING to LEASED", func(t *testing.T) {
-		if createJob == nil {
-			t.Skip("backend has no job creation helper")
-		}
-		repo, cleanup := newRepo(t)
-		defer cleanup()
-
-		jobID := "job_lease_" + randSuffix()
-		createJob(t, &jobs.Job{ID: jobID, MaxRetries: 5})
-		if err := repo.Lease(ctx, jobID, "worker-1"); err != nil {
-			t.Fatalf("Lease: %v", err)
-		}
-		got, err := repo.Get(ctx, jobID)
-		if err != nil {
-			t.Fatalf("Get post-lease: %v", err)
-		}
-		if got.Status != jobs.StatusLeased {
-			t.Errorf("expected LEASED, got %q", got.Status)
-		}
-		// PR #7: Job no longer carries WorkerID/LeaseID — tasks carry them.
-		if got.Attempts < 1 {
-			t.Errorf("expected retry_count to bump, got %d", got.Attempts)
-		}
-	})
-
-	t.Run("Lease twice fails (CAS predicate)", func(t *testing.T) {
-		if createJob == nil {
-			t.Skip("backend has no job creation helper")
-		}
-		repo, cleanup := newRepo(t)
-		defer cleanup()
-
-		jobID := "job_lease2_" + randSuffix()
-		createJob(t, &jobs.Job{ID: jobID, MaxRetries: 5})
-		if err := repo.Lease(ctx, jobID, "worker-1"); err != nil {
-			t.Fatalf("first Lease: %v", err)
-		}
-		if err := repo.Lease(ctx, jobID, "worker-2"); err == nil {
-			t.Error("expected second Lease to fail (job no longer PENDING), got nil")
-		}
-	})
-
 	t.Run("Fail transitions to FAILED", func(t *testing.T) {
 		if createJob == nil {
 			t.Skip("backend has no job creation helper")
@@ -316,57 +271,6 @@ func JobRepositoryContractCrossBackend(t *testing.T, newRepo func(t *testing.T) 
 		}
 		if got != nil {
 			t.Errorf("expected nil after Delete, got %+v", got)
-		}
-	})
-
-	t.Run("ClaimNext returns ErrNoClaimableJob on empty queue", func(t *testing.T) {
-		repo, cleanup := newRepo(t)
-		defer cleanup()
-
-		// Don't Create anything — fresh per-test store. ClaimNext should
-		// hit ErrNoClaimableJob.
-		got, err := repo.ClaimNext(ctx, "worker-claimtest", nil)
-		if err == nil {
-			t.Fatalf("expected ErrNoClaimableJob on empty, got %+v", got)
-		}
-		if got != nil {
-			t.Errorf("expected nil claim on empty queue, got %+v", got)
-		}
-		if err != store.ErrNoClaimableJob {
-			t.Errorf("expected ErrNoClaimableJob, got %v", err)
-		}
-	})
-
-	t.Run("ClaimNext end-to-end returns the claimed job", func(t *testing.T) {
-		if createJob == nil {
-			t.Skip("backend has no job creation helper")
-		}
-		repo, cleanup := newRepo(t)
-		defer cleanup()
-
-		jobID := "job_claim_" + randSuffix()
-		createJob(t, &jobs.Job{ID: jobID})
-		got, err := repo.ClaimNext(ctx, "worker-1", nil)
-		if err != nil {
-			t.Fatalf("ClaimNext: %v", err)
-		}
-		if got == nil {
-			t.Fatal("expected ClaimNextResult, got nil")
-		}
-		if got.JobID != jobID {
-			t.Errorf("claimed JobID: got %q want %q", got.JobID, jobID)
-		}
-		if got.LeaseID == "" {
-			t.Error("expected LeaseID populated post-claim")
-		}
-		// Verify the persisted row reflects the claim (status flipped).
-		persisted, err := repo.Get(ctx, got.JobID)
-		if err != nil {
-			t.Fatalf("Get post-claim: %v", err)
-		}
-		// PR #7: persisted Job no longer carries LeaseID.
-		if persisted.Status != jobs.StatusLeased {
-			t.Errorf("expected persisted status LEASED, got %q", persisted.Status)
 		}
 	})
 }

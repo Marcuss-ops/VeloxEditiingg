@@ -38,44 +38,6 @@ type WorkerInfo struct {
 	Credential      string                 `json:"credential,omitempty"`
 }
 
-// JobRequest represents a request to get a job from the master.
-type JobRequest struct {
-	WorkerID string `json:"worker_id"`
-}
-
-// Job represents a job returned by the master.
-type Job struct {
-	JobID           string                 `json:"job_id"`
-	JobRunID        string                 `json:"job_run_id"`
-	JobType         string                 `json:"job_type"`
-	Priority        int                    `json:"priority"`
-	Parameters      map[string]interface{} `json:"parameters"`
-	CreatedAt       interface{}            `json:"created_at"`
-	TimeoutSecs     int                    `json:"timeout_secs"`
-	ContractVersion int                    `json:"contract_version,omitempty"`
-	LeaseID         string                 `json:"lease_id,omitempty"`
-	LeaseExpiry     string                 `json:"lease_expiry,omitempty"`
-	Attempt         int                    `json:"attempt,omitempty"`
-}
-
-// JobResult represents the result of a job execution.
-type JobResult struct {
-	JobID           string                 `json:"job_id"`
-	JobRunID        string                 `json:"job_run_id"`
-	WorkerID        string                 `json:"worker_id"`
-	Status          string                 `json:"status"`
-	Output          map[string]interface{} `json:"output"`
-	Error           string                 `json:"error,omitempty"`
-	StartTime       string                 `json:"start_time"`
-	EndTime         string                 `json:"end_time"`
-	ContractVersion int                    `json:"contract_version,omitempty"`
-	LeaseID         string                 `json:"lease_id,omitempty"`
-	Attempt         int                    `json:"attempt,omitempty"`
-	ArtifactID      string                 `json:"artifact_id,omitempty"`
-	OutputSHA256    string                 `json:"output_sha256,omitempty"`
-	IdempotencyKey  string                 `json:"idempotency_key,omitempty"`
-}
-
 // HeartbeatPayload represents a heartbeat message.
 type HeartbeatPayload struct {
 	WorkerID        string                 `json:"worker_id"`

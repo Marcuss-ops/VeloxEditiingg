@@ -212,8 +212,8 @@ func (am *AuthManager) HandleOAuthCallback(ctx context.Context, code string, cha
 	}
 
 	// Persist to SQLite (single source of truth).
-	if am.service.store != nil && am.service.oauthBuf != nil {
-		if err := am.service.store.UpsertYouTubeChannel(channel.ID, channel.Title, channel.Name, "", channel.Thumbnail, "", "", 0, 0, "", "", ""); err != nil {
+	if am.service.repo != nil && am.service.oauthBuf != nil {
+		if err := am.service.repo.UpsertYouTubeChannel(channel.ID, channel.Title, channel.Name, "", channel.Thumbnail, "", "", 0, 0, "", "", ""); err != nil {
 			log.Printf("[WARN] Failed to upsert channel metadata: %v", err)
 		}
 		accessEnc, _ := am.service.oauthBuf.Encrypt([]byte(channel.AccessToken))
@@ -225,7 +225,7 @@ func (am *AuthManager) HandleOAuthCallback(ctx context.Context, code string, cha
 		if !channel.Expiry.IsZero() {
 			expiry = channel.Expiry.Format(time.RFC3339)
 		}
-		if err := am.service.store.UpsertYouTubeOAuthToken(channel.ID, accessEnc, refreshEnc, "Bearer", expiry, "", am.service.oauthBuf.KeyVersion()); err != nil {
+		if err := am.service.repo.UpsertYouTubeOAuthToken(channel.ID, accessEnc, refreshEnc, "Bearer", expiry, "", am.service.oauthBuf.KeyVersion()); err != nil {
 			log.Printf("[WARN] Failed to upsert OAuth token: %v", err)
 		}
 	}
@@ -301,7 +301,7 @@ func (am *AuthManager) ValidateStoredYouTubeCredentials(ctx context.Context, cha
 			}
 
 			// Persist refreshed token to SQLite (single source of truth)
-			if am.service.store != nil && am.service.oauthBuf != nil {
+			if am.service.repo != nil && am.service.oauthBuf != nil {
 				if err := am.service.persistRefreshedToken(channelID, newToken); err != nil {
 					log.Printf("[WARN] Failed to persist refreshed token: %v", err)
 				}
@@ -379,8 +379,8 @@ func (am *AuthManager) RevokeToken(ctx context.Context, channelID string) error 
 	}
 
 	// Revoke in SQLite (single source of truth).
-	if am.service.store != nil {
-		if err := am.service.store.MarkYouTubeOAuthTokenRevoked(channelID); err != nil {
+	if am.service.repo != nil {
+		if err := am.service.repo.MarkYouTubeOAuthTokenRevoked(channelID); err != nil {
 			log.Printf("[WARN] Failed to revoke OAuth token in DB: %v", err)
 		}
 	}

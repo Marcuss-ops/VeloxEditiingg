@@ -68,6 +68,13 @@ func NewMessage(msgType ControlMessageType, workerID, protocolVersion string) Co
 	}
 }
 
+// NewTypedMessage creates a ControlMessage with a typed proto payload.
+func NewTypedMessage(msgType ControlMessageType, workerID, protocolVersion string, typedPayload interface{}) ControlMessage {
+	m := NewMessage(msgType, workerID, protocolVersion)
+	m.TypedPayload = typedPayload
+	return m
+}
+
 func newMessageID() string {
 	b := make([]byte, 16)
 	_, _ = rand.Read(b)
@@ -80,13 +87,6 @@ func newMessageID() string {
 		hex.EncodeToString(b[6:8]),
 		hex.EncodeToString(b[8:10]),
 		hex.EncodeToString(b[10:16]))
-}
-
-// NewMessageWithPayload creates a ControlMessage with payload data.
-func NewMessageWithPayload(msgType ControlMessageType, workerID, protocolVersion string, payload map[string]interface{}) ControlMessage {
-	m := NewMessage(msgType, workerID, protocolVersion)
-	m.Payload = payload
-	return m
 }
 
 // WithSession attaches a session ID to the message.

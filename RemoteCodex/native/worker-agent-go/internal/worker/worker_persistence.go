@@ -1,8 +1,9 @@
-// Package worker — local persistence for worker state recovery.
-// Uses a JSON file on disk (no SQLite dependency) to persist:
-//   - seenCommands for command deduplication across restarts
-//   - activeTasks metadata for job recovery after restart
-//   - pendingTasks metadata for lease recovery after restart
+// Package worker — local persistence for command deduplication across
+// restarts. The RecoveryReport protocol that historically piggybacked on
+// this struct (ActiveJobs/PendingLeaseJobs + heartbeat.extra snapshot) was
+// removed in PR 1: master-side lease expiry + TaskLeaseReaper are the
+// canonical recovery mechanism. The worker only persists seen command IDs
+// so duplicate MasterToWorkerEnvelope deliveries after a restart are deduped.
 package worker
 
 import (
@@ -13,25 +14,17 @@ import (
 	"time"
 )
 
-// persistedState is the on-disk JSON structure for local recovery.
+// persistedState is the on-disk JSON structure for in-restart dedup.
+//
+// PR 1: ActiveJobs and PendingLeaseJobs fields have been removed. The
+// canonical lease is held by the master (TaskLeaseReaper); on worker
+// restart, in-flight tasks expire via lease_expiry and the master re-mints
+// a fresh attempt. The worker keeps no copy.
 type persistedState struct {
 	// SeenCommands maps command key → first-seen timestamp for dedup.
 	SeenCommands map[string]time.Time `json:"seen_commands"`
-	// ActiveJobs saves metadata for in-flight jobs.
-	ActiveJobs map[string]persistedJobInfo `json:"active_jobs"`
-	// PendingLeaseJobs saves metadata for jobs waiting for JobLeaseGranted.
-	PendingLeaseJobs map[string]persistedJobInfo `json:"pending_lease_jobs"`
 	// SavedAt is the last save timestamp.
 	SavedAt time.Time `json:"saved_at"`
-}
-
-// persistedJobInfo is the minimal metadata for a job.
-type persistedJobInfo struct {
-	JobID     string `json:"job_id"`
-	JobRunID  string `json:"job_run_id"`
-	JobType   string `json:"job_type"`
-	LeaseID   string `json:"lease_id"`
-	StartedAt string `json:"started_at,omitempty"`
 }
 
 // stateFilePath builds the path to the local state file.
@@ -51,13 +44,11 @@ func (w *Worker) saveLocalState() error {
 	}
 
 	state := persistedState{
-		SeenCommands:     make(map[string]time.Time),
-		ActiveJobs:       make(map[string]persistedJobInfo),
-		PendingLeaseJobs: make(map[string]persistedJobInfo),
-		SavedAt:          time.Now().UTC(),
+		SeenCommands: make(map[string]time.Time),
+		SavedAt:      time.Now().UTC(),
 	}
 
-	// Copy seen commands
+	// Copy seen commands.
 	w.commandMu.Lock()
 	for k, t := range w.seenCommands {
 		if time.Since(t) <= seenCommandTTL {
@@ -65,25 +56,6 @@ func (w *Worker) saveLocalState() error {
 		}
 	}
 	w.commandMu.Unlock()
-
-	// Copy active tasks metadata
-	w.activeTasksMu.RLock()
-	for _, at := range w.activeTasks {
-		if at == nil || at.Job == nil {
-			continue
-		}
-		state.ActiveJobs[at.JobID] = persistedJobInfo{
-			JobID:     at.JobID,
-			JobRunID:  at.Job.JobRunID,
-			JobType:   at.Job.JobType,
-			LeaseID:   at.LeaseID,
-			StartedAt: at.StartedAt.UTC().Format(time.RFC3339),
-		}
-	}
-	w.activeTasksMu.RUnlock()
-
-	// PendingLeaseJobs left empty — the legacy map was dead code,
-	// never populated. The serialized field stays for schema compat.
 
 	path := stateFilePath(workDir)
 	tmpPath := path + ".tmp"
@@ -109,14 +81,16 @@ func (w *Worker) saveLocalState() error {
 		w.logger.Warn("[PERSIST] Failed to rename tmp → state file %s: %v", path, err)
 		return err
 	}
-	w.logger.Debug("[PERSIST] State saved to %s (%d seen commands, %d active jobs, %d pending leases)",
-		path, len(state.SeenCommands), len(state.ActiveJobs), len(state.PendingLeaseJobs))
+	w.logger.Debug("[PERSIST] State saved to %s (%d seen commands)", path, len(state.SeenCommands))
 	return nil
 }
 
 // loadLocalState restores in-memory state from the JSON state file.
-// Called once at worker startup (after New) to recover command dedup
-// state and basic job metadata from the previous run.
+// Called once at worker startup (after New) to recover command-dedup state.
+//
+// Forward-compat: legacy files written by PR < 1 also contained
+// "active_jobs" and "pending_lease_jobs" maps. Those fields are simply
+// ignored on load — Go json.Unmarshal silently drops unknown JSON keys.
 func (w *Worker) loadLocalState() {
 	workDir := w.config.WorkDir
 	if workDir == "" {
@@ -151,17 +125,7 @@ func (w *Worker) loadLocalState() {
 	}
 	w.commandMu.Unlock()
 
-	w.logger.Info("[PERSIST] State loaded: %d seen commands restored, %d active jobs from previous run, %d pending leases",
-		restoredCmds, len(state.ActiveJobs), len(state.PendingLeaseJobs))
-
-	// Log previous active jobs for operator visibility — the worker
-	// does NOT auto-resume them (leases expire, master re-dispatches).
-	if len(state.ActiveJobs) > 0 {
-		w.logger.Warn("[PERSIST] Previous run had %d active jobs — master will re-dispatch via lease expiry", len(state.ActiveJobs))
-	}
-	if len(state.PendingLeaseJobs) > 0 {
-		w.logger.Warn("[PERSIST] Previous run had %d pending lease jobs — master will re-dispatch via lease expiry", len(state.PendingLeaseJobs))
-	}
+	w.logger.Info("[PERSIST] State loaded: %d seen commands restored", restoredCmds)
 }
 
 // startPersistenceLoop saves local state periodically.

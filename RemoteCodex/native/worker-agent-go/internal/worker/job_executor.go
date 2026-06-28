@@ -1,49 +1,28 @@
-// Package worker provides job processing logic for the worker agent.
-//
-// PR-3.9 notes:
-//
-//   - The legacy render / process_video / process_audio helpers
-//     (executeWorkflowJob, runRenderJob, runVideoJob, runAudioJob,
-//     newVideoWorkflow, videoWorkflow interface) are GONE. They were
-//     duplicate routing: every job type now resolves through
-//     executor.Registry → TaskRunner, with worker.executeTask keeping
-//     only the concurrency / active-jobs / cancel / transport surface.
-//   - All legacy job types (render / process_video / process_audio)
-//     resolve to the scene.composite.v1 executor that the production
-//     composition root (cmd/velox-worker-agent/main.go) registers
-//     against the canonical pipeline.Runner.
-//   - worker.executeTask no longer imports pkg/video; the
-//     pipeline dependency lives in main.go where the SceneComposite
-//     adapter is wired.
-//
-// fix/remove-legacy-execution-path: the legacy JobOffer → JobResult path
-// has been fully removed. Every execution now flows through the task-native
-// dispatch (TaskOffer → executeTask → TaskResult).
-// The _task_id / _attempt_id hidden keys in Parameters are gone — taskID
-// and attemptID flow as explicit parameters from the caller.
+// Package worker provides task processing logic for the worker agent.
+// Every execution flows through the task-native dispatch:
+// TaskOffer → executeTask → TaskResult, using PendingTaskExecution
+// as the canonical typed carrier for all identity and spec data.
 package worker
 
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	"velox-shared/controltransport"
-	"velox-worker-agent/internal/executor"
+	pb "velox-shared/controltransport/pb"
 	"velox-worker-agent/internal/taskrunner"
 	"velox-worker-agent/internal/telemetry"
-	"velox-worker-agent/pkg/api"
 	"velox-worker-agent/pkg/logger"
+
+	"google.golang.org/protobuf/types/known/structpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // executeTask executes a task and reports the result via typed TaskResult.
-// taskID and attemptID are passed explicitly by the caller (receiveLoop
-// TaskLeaseGranted handler) — they no longer live as hidden keys in
-// job.Parameters.
-func (w *Worker) executeTask(ctx context.Context, job *api.Job, taskID, attemptID string) {
-	if err := w.concurrencyLimiter.Acquire(ctx, job.JobID, job.Priority); err != nil {
-		w.logger.Warn("[CONCURRENCY] Failed to acquire slot for job %s: %v", job.JobID, err)
+func (w *Worker) executeTask(ctx context.Context, pte *PendingTaskExecution, taskID, attemptID string) {
+	if err := w.concurrencyLimiter.Acquire(ctx, pte.JobID, 0); err != nil {
+		w.logger.Warn("[CONCURRENCY] Failed to acquire slot for job %s: %v", pte.JobID, err)
 		return
 	}
 	defer w.concurrencyLimiter.Release()
@@ -56,27 +35,27 @@ func (w *Worker) executeTask(ctx context.Context, job *api.Job, taskID, attemptI
 	activeTask := &ActiveTaskExecution{
 		TaskID:    taskID,
 		AttemptID: attemptID,
-		JobID:     job.JobID,
-		Job:       job,
-		LeaseID:   resolveLeaseID(job),
+		JobID:     pte.JobID,
+		Task:      pte,
+		LeaseID:   pte.LeaseID,
 		StartedAt: time.Now(),
 	}
 	w.activeTasksMu.Lock()
 	w.activeTasks[taskID] = activeTask
-	w.taskIDsByJob[job.JobID] = append(w.taskIDsByJob[job.JobID], taskID)
+	w.taskIDsByJob[pte.JobID] = append(w.taskIDsByJob[pte.JobID], taskID)
 	w.activeTasksMu.Unlock()
 	defer func() {
 		w.activeTasksMu.Lock()
 		delete(w.activeTasks, taskID)
-		taskIDs := w.taskIDsByJob[job.JobID]
+		taskIDs := w.taskIDsByJob[pte.JobID]
 		for i, tid := range taskIDs {
 			if tid == taskID {
-				w.taskIDsByJob[job.JobID] = append(taskIDs[:i], taskIDs[i+1:]...)
+				w.taskIDsByJob[pte.JobID] = append(taskIDs[:i], taskIDs[i+1:]...)
 				break
 			}
 		}
-		if len(w.taskIDsByJob[job.JobID]) == 0 {
-			delete(w.taskIDsByJob, job.JobID)
+		if len(w.taskIDsByJob[pte.JobID]) == 0 {
+			delete(w.taskIDsByJob, pte.JobID)
 		}
 		w.activeTasksMu.Unlock()
 	}()
@@ -88,28 +67,27 @@ func (w *Worker) executeTask(ctx context.Context, job *api.Job, taskID, attemptI
 	telemetry.GetPrometheusMetrics().SetWorkerStatus(w.config.WorkerID, 2)
 	telemetry.GetPrometheusMetrics().SetWorkerActiveJobs(w.config.WorkerID, float64(w.concurrencyLimiter.ActiveJobCount()))
 
-	logger.LogJobStart(w.config.WorkerID, job.JobID, job.JobType, job.Priority)
+	logger.LogJobStart(w.config.WorkerID, pte.JobID, pte.ExecutorID, 0)
 
 	startTime := time.Now()
 
-	w.logger.Info("[TASK] Executing task %s (job=%s attempt=%s)", taskID, job.JobID, attemptID)
+	w.logger.Info("[TASK] Executing task %s (job=%s attempt=%s)", taskID, pte.JobID, attemptID)
 
-	// runJobTask returns typed TaskExecutionReport.
-	report, execErr := w.runJobTask(jobCtx, job)
+	report, execErr := w.runJobTask(jobCtx, pte)
 
 	duration := time.Since(startTime)
 
 	if execErr != nil {
-		logger.LogJobFailedWithType(w.config.WorkerID, job.JobID, job.JobType, execErr, duration)
+		logger.LogJobFailedWithType(w.config.WorkerID, pte.JobID, pte.ExecutorID, execErr, duration)
 		w.setStatus(StatusError)
 		w.tasksFailed.Add(1)
 		telemetry.RecordJobFailure(duration.Milliseconds())
-		telemetry.GetPrometheusMetrics().RecordJobRuntime(job.JobType, float64(duration.Milliseconds()))
+		telemetry.GetPrometheusMetrics().RecordJobRuntime(pte.ExecutorID, float64(duration.Milliseconds()))
 	} else {
-		logger.LogJobSuccess(w.config.WorkerID, job.JobID, job.JobType, duration)
+		logger.LogJobSuccess(w.config.WorkerID, pte.JobID, pte.ExecutorID, duration)
 		w.tasksCompleted.Add(1)
 		telemetry.RecordJobSuccess(duration.Milliseconds())
-		telemetry.GetPrometheusMetrics().RecordJobRuntime(job.JobType, float64(duration.Milliseconds()))
+		telemetry.GetPrometheusMetrics().RecordJobRuntime(pte.ExecutorID, float64(duration.Milliseconds()))
 	}
 
 	telemetry.GetPrometheusMetrics().SetWorkerStatus(w.config.WorkerID, 1)
@@ -120,10 +98,9 @@ func (w *Worker) executeTask(ctx context.Context, job *api.Job, taskID, attemptI
 
 	ackStartTime := time.Now()
 
-	// Always send typed TaskResult — the legacy JobResult path is gone.
-	w.submitTaskResult(submitCtx, job, taskID, attemptID, report, execErr)
+	w.submitTaskResult(submitCtx, pte, taskID, attemptID, report, execErr)
 
-	telemetry.GetPrometheusMetrics().RecordJobCompleteAck(job.JobType, float64(time.Since(ackStartTime).Milliseconds()))
+	telemetry.GetPrometheusMetrics().RecordJobCompleteAck(pte.ExecutorID, float64(time.Since(ackStartTime).Milliseconds()))
 
 	if execErr != nil {
 		time.Sleep(2 * time.Second)
@@ -134,9 +111,7 @@ func (w *Worker) executeTask(ctx context.Context, job *api.Job, taskID, attemptI
 }
 
 // submitTaskResult sends a typed pb.TaskResult via the transport.
-// Includes output_artifacts, execution_metrics, and phase_markers from the
-// TaskExecutionReport.
-func (w *Worker) submitTaskResult(ctx context.Context, job *api.Job, taskID, attemptID string, report *taskrunner.TaskExecutionReport, execErr error) {
+func (w *Worker) submitTaskResult(ctx context.Context, pte *PendingTaskExecution, taskID, attemptID string, report *taskrunner.TaskExecutionReport, execErr error) {
 	status := "succeeded"
 	var errorCode, errorDetail string
 	if execErr != nil {
@@ -147,81 +122,82 @@ func (w *Worker) submitTaskResult(ctx context.Context, job *api.Job, taskID, att
 		}
 	}
 
-	resultPayload := map[string]interface{}{
-		"task_id":      taskID,
-		"job_id":       job.JobID,
-		"attempt_id":   attemptID,
-		"status":       status,
-		"error_code":   errorCode,
-		"error_detail": errorDetail,
-		"executor_id":  job.JobType,
-		"lease_id":     resolveLeaseID(job),
+	tr := &pb.TaskResult{
+		TaskId:        taskID,
+		JobId:         pte.JobID,
+		AttemptId:     attemptID,
+		Status:        status,
+		ErrorCode:     errorCode,
+		ErrorDetail:   errorDetail,
+		ExecutorId:    pte.ExecutorID,
+		LeaseId:       pte.LeaseID,
+		AttemptNumber: int32(pte.AttemptNumber),
+		Revision:      int32(pte.Revision),
 	}
+
 	if report != nil {
-		resultPayload["executor_key"] = report.ExecutorKey
-		// Collect output artifacts from the report.
-		if len(report.Outputs) > 0 {
-			artifacts := make([]map[string]interface{}, 0, len(report.Outputs))
-			for _, ref := range report.Outputs {
-				// fix/artifact-format-alignment: master expects artifact_id,
-				// artifact_type, artifact_path, size_bytes, sha256 — not uri/hash/type.
-				artifacts = append(artifacts, map[string]interface{}{
-					"artifact_id":   ref.Hash,
-					"artifact_type": ref.Type,
-					"artifact_path": ref.URI,
-					"size_bytes":    int64(0),
-					"sha256":        ref.Hash,
-				})
-			}
-			resultPayload["output_artifacts"] = artifacts
-		}
-		// fix/execution-metrics-emit: populate typed execution_metrics from the
-		// report so the master's ingestion service persists them alongside the
-		// atomic Task+Attempt close.
+		tr.ExecutorKey = report.ExecutorKey
+
+		// Build typed execution_metrics.
 		if report.TypedMetrics != nil {
 			m := report.TypedMetrics
-			resultPayload["execution_metrics"] = map[string]interface{}{
-				"input_bytes":              m.InputBytes,
-				"output_bytes":             m.OutputBytes,
-				"bytes_from_drive":         m.BytesFromDrive,
-				"bytes_from_blobstore":     m.BytesFromBlobstore,
-				"bytes_from_local_cache":   m.BytesFromLocalCache,
-				"cpu_time_ms":              m.CpuTimeMs,
-				"peak_rss_bytes":           m.PeakRssBytes,
-				"frames_decoded":           m.FramesDecoded,
-				"frames_composited":        m.FramesComposited,
-				"frames_encoded":           m.FramesEncoded,
-				"ffmpeg_speed_ratio":       m.FfmpegSpeedRatio,
-				"encode_passes":            m.EncodePasses,
-				"final_concat_stream_copy": m.FinalConcatStreamCopy,
-				"concat_mode":              m.ConcatMode,
-				"cpu_price_per_second":     m.CpuPricePerSecond,
-				"storage_price_per_gb":     m.StoragePricePerGb,
-				"network_price_per_gb":     m.NetworkPricePerGb,
+			tr.ExecutionMetrics = &pb.TaskExecutionMetrics{
+				InputBytes:            m.InputBytes,
+				OutputBytes:           m.OutputBytes,
+				BytesFromDrive:        m.BytesFromDrive,
+				BytesFromBlobstore:    m.BytesFromBlobstore,
+				BytesFromLocalCache:   m.BytesFromLocalCache,
+				CpuTimeMs:             m.CpuTimeMs,
+				PeakRssBytes:          m.PeakRssBytes,
+				FramesDecoded:         m.FramesDecoded,
+				FramesComposited:      m.FramesComposited,
+				FramesEncoded:         m.FramesEncoded,
+				FfmpegSpeedRatio:      m.FfmpegSpeedRatio,
+				EncodePasses:          m.EncodePasses,
+				FinalConcatStreamCopy: m.FinalConcatStreamCopy,
+				ConcatMode:            m.ConcatMode,
+				CpuPricePerSecond:     m.CpuPricePerSecond,
+				StoragePricePerGb:     m.StoragePricePerGb,
+				NetworkPricePerGb:     m.NetworkPricePerGb,
 			}
 		}
-		// fix/phase-markers-emit: populate canonical phase_markers for the
-		// master's observability aggregation (scorecard v1).
-		if len(report.PhaseMarkers) > 0 {
-			markers := make([]map[string]interface{}, 0, len(report.PhaseMarkers))
-			for _, pm := range report.PhaseMarkers {
-				markers = append(markers, map[string]interface{}{
-					"name":         pm.Name,
-					"started_at":   pm.StartedAt.Format(time.RFC3339),
-					"completed_at": pm.CompletedAt.Format(time.RFC3339),
-					"status":       pm.Status,
-					"notes":        pm.Notes,
-				})
+
+		// Build typed phase_markers.
+		for _, pm := range report.PhaseMarkers {
+			tr.PhaseMarkers = append(tr.PhaseMarkers, &pb.PhaseMarker{
+				Name:        pm.Name,
+				StartedAt:   timestamppb.New(pm.StartedAt),
+				CompletedAt: timestamppb.New(pm.CompletedAt),
+				Status:      pm.Status,
+				Notes:       pm.Notes,
+			})
+		}
+
+		// Build output_artifacts as repeated structpb.Struct.
+		// artifact_id is now separate from sha256; SizeBytes carries real byte count.
+		for _, ref := range report.Outputs {
+			artifactID := ref.ArtifactID
+			if artifactID == "" {
+				// Backward-compat fallback: use Hash when ArtifactID is not set.
+				artifactID = ref.Hash
 			}
-			resultPayload["phase_markers"] = markers
+			if s, err := structpb.NewStruct(map[string]interface{}{
+				"artifact_id":   artifactID,
+				"artifact_type": ref.Type,
+				"artifact_path": ref.URI,
+				"size_bytes":    ref.SizeBytes,
+				"sha256":        ref.Hash,
+			}); err == nil {
+				tr.OutputArtifacts = append(tr.OutputArtifacts, s)
+			}
 		}
 	}
 
-	resultMsg := controltransport.NewMessageWithPayload(
+	resultMsg := controltransport.NewTypedMessage(
 		controltransport.MsgTaskResult,
 		w.config.WorkerID,
 		w.config.ProtocolVersion,
-		resultPayload,
+		tr,
 	)
 
 	if submitErr := w.transport.Send(ctx, resultMsg); submitErr != nil {
@@ -235,56 +211,30 @@ func (w *Worker) submitTaskResult(ctx context.Context, job *api.Job, taskID, att
 	}
 }
 
-// runJobTask executes the actual job task.
-func (w *Worker) runJobTask(ctx context.Context, job *api.Job) (*taskrunner.TaskExecutionReport, error) {
-	w.logger.Info("[JOB] Starting execution: id=%s type=%s", job.JobID, job.JobType)
+// runJobTask executes the actual task via the TaskRunner.
+func (w *Worker) runJobTask(ctx context.Context, pte *PendingTaskExecution) (*taskrunner.TaskExecutionReport, error) {
+	w.logger.Info("[JOB] Starting execution: id=%s executor=%s", pte.JobID, pte.ExecutorID)
 
 	jobTimeout := 30 * time.Minute
-	if job.TimeoutSecs > 0 {
-		jobTimeout = time.Duration(job.TimeoutSecs) * time.Second
-	}
 	jobCtx, cancel := context.WithTimeout(ctx, jobTimeout)
 	defer cancel()
 
-	w.logger.Info("[JOB] Phase: registry dispatch for type=%s", job.JobType)
-	report, err := w.dispatchTaskRunner(jobCtx, job)
+	w.logger.Info("[JOB] Phase: registry dispatch for executor=%s", pte.ExecutorID)
+	report, err := w.dispatchTaskRunner(jobCtx, pte)
 	if err != nil {
 		return report, err
 	}
 	return report, nil
 }
 
-// dispatchTaskRunner runs the TaskRunner with a pre-compiled or
-// job-derived TaskSpec.
-func (w *Worker) dispatchTaskRunner(ctx context.Context, job *api.Job) (*taskrunner.TaskExecutionReport, error) {
+// dispatchTaskRunner runs the TaskRunner with the pre-compiled TaskSpec
+// from PendingTaskExecution.
+func (w *Worker) dispatchTaskRunner(ctx context.Context, pte *PendingTaskExecution) (*taskrunner.TaskExecutionReport, error) {
 	if w.taskRunner == nil {
 		return nil, fmt.Errorf("worker has no taskRunner configured; call worker.New with options to install one")
 	}
 
-	var spec executor.TaskSpec
-	// fix/executor-version: read master-supplied executor_version from the
-	// TaskOffer (stored in _executor_version). Default to 1 when not supplied.
-	specVersion := 1
-	if v, ok := job.Parameters["_executor_version"].(int); ok && v > 0 {
-		specVersion = v
-	}
-	if specPayload, ok := job.Parameters["task_spec"].(map[string]interface{}); ok && len(specPayload) > 0 {
-		// Task-native path: spec arrives pre-compiled from master.
-		spec = executor.TaskSpec{
-			Version:    specVersion,
-			JobID:      job.JobID,
-			ExecutorID: strings.TrimSpace(job.JobType),
-			Payload:    specPayload,
-		}
-	} else {
-		// Legacy path: derive spec from job fields.
-		spec = executor.TaskSpec{
-			Version:    specVersion,
-			JobID:      job.JobID,
-			ExecutorID: job.JobType,
-			Payload:    job.Parameters,
-		}
-	}
+	spec := pte.Spec
 
 	report, runErr := w.taskRunner.Run(ctx, spec)
 	if runErr != nil {
@@ -293,6 +243,14 @@ func (w *Worker) dispatchTaskRunner(ctx context.Context, job *api.Job) (*taskrun
 	if report.Status != "succeeded" {
 		return &report, fmt.Errorf("executor %s failed: code=%q detail=%q",
 			report.ExecutorKey, report.ErrorCode, report.ErrorDetail)
+	}
+	// fix/artifact-metadata: validate every output artifact has a non-empty
+	// Hash before declaring the task succeeded.
+	for i, ref := range report.Outputs {
+		if ref.Hash == "" {
+			return &report, fmt.Errorf("executor %s succeeded but output artifact %d has empty hash (type=%q uri=%q) — executor must provide a content hash for every produced artifact",
+				report.ExecutorKey, i, ref.Type, ref.URI)
+		}
 	}
 	return &report, nil
 }

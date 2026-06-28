@@ -4,24 +4,6 @@ import (
 	"time"
 )
 
-// ── Typed queue structs ──────────────────────────────────────────────────
-
-// OrchestratorJob is the typed row from orchestrator_jobs.
-// RawJSON carries the full JSON blob for any fields not captured
-// by the dedicated columns.
-type OrchestratorJob struct {
-	JobID        string `json:"job_id"`
-	Status       string `json:"status"`
-	TotalSteps   int    `json:"total_steps"`
-	CurrentStep  int    `json:"current_step"`
-	PipelineType string `json:"pipeline_type"`
-	StartedAt    string `json:"started_at,omitempty"`
-	CompletedAt  string `json:"completed_at,omitempty"`
-	CreatedAt    string `json:"created_at"`
-	UpdatedAt    string `json:"updated_at"`
-	RawJSON      string `json:"-"`
-}
-
 // DLQJob is the typed row from dlq_jobs.
 type DLQJob struct {
 	JobID      string `json:"job_id"`
@@ -40,79 +22,6 @@ type JobEvent struct {
 	JobID     string `json:"job_id"`
 	Event     string `json:"event"`
 	RawJSON   string `json:"-"`
-}
-
-// --- Orchestrator Jobs ---
-
-// UpsertOrchestratorJob creates or updates an orchestrator job.
-func (s *SQLiteStore) UpsertOrchestratorJob(jobID, status, pipelineType string, totalSteps, currentStep int, rawJSON string) error {
-	now := time.Now().UTC().Format(time.RFC3339)
-	_, err := s.db.Exec(
-		`INSERT INTO orchestrator_jobs (job_id, status, total_steps, current_step, pipeline_type, created_at, updated_at, raw_json)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-		 ON CONFLICT(job_id) DO UPDATE SET
-		   status=excluded.status, total_steps=excluded.total_steps, current_step=excluded.current_step,
-		   pipeline_type=excluded.pipeline_type, updated_at=excluded.updated_at, raw_json=excluded.raw_json`,
-		jobID, status, totalSteps, currentStep, pipelineType, now, now, rawJSON,
-	)
-	return err
-}
-
-// SetOrchestratorJobTimestamps updates started_at and completed_at for a job.
-func (s *SQLiteStore) SetOrchestratorJobTimestamps(jobID string, startedAt, completedAt *time.Time) error {
-	var started, completed *string
-	if startedAt != nil {
-		st := startedAt.UTC().Format(time.RFC3339)
-		started = &st
-	}
-	if completedAt != nil {
-		ct := completedAt.UTC().Format(time.RFC3339)
-		completed = &ct
-	}
-	_, err := s.db.Exec(
-		`UPDATE orchestrator_jobs SET started_at=?, completed_at=?, updated_at=? WHERE job_id=?`,
-		started, completed, time.Now().UTC().Format(time.RFC3339), jobID,
-	)
-	return err
-}
-
-// ListOrchestratorJobs returns all orchestrator jobs, typed.
-func (s *SQLiteStore) ListOrchestratorJobs() ([]OrchestratorJob, error) {
-	rows, err := s.db.Query(
-		`SELECT job_id, status, total_steps, current_step, pipeline_type,
-		        COALESCE(started_at, ''), COALESCE(completed_at, ''),
-		        created_at, updated_at, raw_json
-		 FROM orchestrator_jobs ORDER BY updated_at DESC`,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var result []OrchestratorJob
-	for rows.Next() {
-		var j OrchestratorJob
-		if err := rows.Scan(
-			&j.JobID, &j.Status, &j.TotalSteps, &j.CurrentStep, &j.PipelineType,
-			&j.StartedAt, &j.CompletedAt, &j.CreatedAt, &j.UpdatedAt, &j.RawJSON,
-		); err != nil {
-			continue
-		}
-		result = append(result, j)
-	}
-	return result, rows.Err()
-}
-
-// GetOrchestratorJob returns a single job as raw JSON.
-func (s *SQLiteStore) GetOrchestratorJob(jobID string) (string, error) {
-	var raw string
-	err := s.db.QueryRow(`SELECT raw_json FROM orchestrator_jobs WHERE job_id=?`, jobID).Scan(&raw)
-	return raw, err
-}
-
-// DeleteOrchestratorJob removes an orchestrator job.
-func (s *SQLiteStore) DeleteOrchestratorJob(jobID string) error {
-	_, err := s.db.Exec(`DELETE FROM orchestrator_jobs WHERE job_id=?`, jobID)
-	return err
 }
 
 // --- Dead Letter Queue ---

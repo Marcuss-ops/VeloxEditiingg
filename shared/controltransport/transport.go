@@ -38,7 +38,9 @@ type ControlTransport interface {
 }
 
 // ControlMessage represents a typed message exchanged over the control transport.
-// Payload is deprecated in favor of TypedPayload for proto-typed messages.
+// For master→worker messages, TypedPayload carries a proto message (e.g. *pb.TaskOffer).
+// For worker→master sends, TypedPayload carries a typed proto message (e.g. *pb.TaskAccepted)
+// that the transport converts to a WorkerToMasterEnvelope — the legacy Payload map is removed.
 type ControlMessage struct {
 	MessageID       string                 `json:"message_id"`
 	Type            ControlMessageType     `json:"type"`
@@ -47,8 +49,7 @@ type ControlMessage struct {
 	SequenceNumber  int64                  `json:"sequence_number,omitempty"`
 	SentAt          time.Time              `json:"sent_at"`
 	ProtocolVersion string                 `json:"protocol_version"`
-	Payload         map[string]interface{} `json:"payload,omitempty"` // deprecated: use TypedPayload
-	TypedPayload    interface{}            `json:"-"`                 // typed proto message (e.g. *pb.JobOffer, *pb.Command)
+	TypedPayload    interface{}            `json:"-"` // typed proto message (e.g. *pb.TaskOffer, *pb.TaskAccepted)
 }
 
 // WorkerHello contains the data sent during initial connection/registration.
@@ -71,62 +72,20 @@ type WorkerHello struct {
 	Capabilities    map[string]interface{} `json:"capabilities,omitempty"`
 }
 
-// ProtocolVersionCurrent is the protocol version declared by this package.
-// v3 is the canonical version after the typed-metrics cutover (PR-5 / F2
-// follow-up). Old workers that speak the calendar-named v1 still connect
-// but receive a `[DEPRECATED]` log line — see IsSupportedProtocol.
+// ProtocolVersionCurrent is the ONLY accepted protocol version.
+// Workers that emit any other version (including empty string) are rejected
+// at the gRPC handshake with FailedPrecondition.
 const ProtocolVersionCurrent = "v3"
 
-// ProtocolVersionLegacy is the calendar-named v1 string used by workers
-// shipped before the typed-metrics cutover (pre-PR-5). The master
-// accepts this version with a deprecation warning so a mixed fleet
-// (some v1 workers, some v3 workers) keeps operating until operators
-// finish rolling the fleet to v3.
-const ProtocolVersionLegacy = "2026-06-worker-v1"
-
 // SupportedProtocolVersions is the closed set of protocol versions the
-// master accepts at the gRPC handshake. New workers MUST emit
-// ProtocolVersionCurrent; older versions still work but log a
-// deprecation warning.
-//
-// Bump policy: add a new legacy entry on a backward-compat cutover,
-// remove an old entry after the fleet has been drained (6-month
-// rolling window is the audit-canonical grace period).
+// master accepts at the gRPC handshake. Only ProtocolVersionCurrent is
+// accepted; legacy versions are no longer supported.
 var SupportedProtocolVersions = []string{
-	ProtocolVersionCurrent, // "v3" (current; typed metrics)
-	ProtocolVersionLegacy,  // "2026-06-worker-v1" (legacy; pre-typed-metrics)
+	ProtocolVersionCurrent,
 }
 
-// IsSupportedProtocol reports whether `v` is one of the protocol
-// versions the master accepts. The empty string is supported because
-// pre-versioned workers (builds older than this convention) emit no
-// protocol_version field — we accept them with a [DEPRECATED] log on
-// the master side so the heartbeat stream is healthy.
-//
-// Use IsDeprecatedProtocol to additionally distinguish the legacy
-// calendar-named v1 from the current.
+// IsSupportedProtocol reports whether `v` is the current protocol version.
+// Empty strings and legacy versions are rejected.
 func IsSupportedProtocol(v string) bool {
-	if v == "" {
-		return true
-	}
-	for _, s := range SupportedProtocolVersions {
-		if s == v {
-			return true
-		}
-	}
-	return false
-}
-
-// IsDeprecatedProtocol reports whether `v` is supported but is NOT the
-// current version. Used by gRPC handler.go to emit a one-time
-// [DEPRECATED] log on the Hello handshake so operators know to
-// upgrade their fleet.
-func IsDeprecatedProtocol(v string) bool {
-	if v == "" {
-		return false
-	}
-	if v == ProtocolVersionCurrent {
-		return false
-	}
-	return IsSupportedProtocol(v)
+	return v == ProtocolVersionCurrent
 }

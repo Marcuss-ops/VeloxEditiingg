@@ -1,8 +1,8 @@
 // Package transport — gRPC bidirectional stream transport for worker↔master.
 // grpc_stream.go provides GRPCStreamTransport that satisfies ControlTransport
 // via a single bidirectional gRPC stream using typed protobuf envelopes.
-// Phase 2 (typed protobuf): eliminates TransportMessage { string type; Struct payload }
-// in favor of WorkerToMasterEnvelope / MasterToWorkerEnvelope with typed oneof messages.
+// Uses WorkerToMasterEnvelope / MasterToWorkerEnvelope with typed oneof messages
+// (TaskAccepted, TaskRejected, Heartbeat, etc.) instead of generic Struct payloads.
 package transport
 
 import (
@@ -74,7 +74,6 @@ func NewGRPCStreamTransport(grpcURL, workerID string) *GRPCStreamTransport {
 }
 
 // WithTLS configures mTLS credentials from cert, key, and CA file paths.
-// The client presents its certificate and verifies the server against the CA.
 func (t *GRPCStreamTransport) WithTLS(certFile, keyFile, caFile string) error {
 	if certFile == "" || keyFile == "" || caFile == "" {
 		return fmt.Errorf("tls cert, key, and ca files are required")
@@ -103,14 +102,12 @@ func (t *GRPCStreamTransport) WithTLS(certFile, keyFile, caFile string) error {
 	return nil
 }
 
-// Connect establishes a gRPC connection, opens a bidirectional stream,
-// and completes the Hello/HelloAck handshake using typed envelopes.
+// Connect establishes a gRPC connection and completes the Hello/HelloAck handshake.
 func (t *GRPCStreamTransport) Connect(ctx context.Context, hello controltransport.WorkerHello) error {
 	t.mu.Lock()
 	t.state = stateConnecting
 	t.mu.Unlock()
 
-	// Establish gRPC connection with TLS or insecure credentials
 	var transportCreds grpc.DialOption
 	if t.tlsConfig != nil {
 		transportCreds = grpc.WithTransportCredentials(credentials.NewTLS(t.tlsConfig))
@@ -140,7 +137,6 @@ func (t *GRPCStreamTransport) Connect(ctx context.Context, hello controltranspor
 
 	t.stream = stream
 
-	// Build typed Hello envelope
 	helloEnv := t.helloToEnvelope(hello)
 	if err := stream.Send(helloEnv); err != nil {
 		stream.CloseSend()
@@ -151,7 +147,6 @@ func (t *GRPCStreamTransport) Connect(ctx context.Context, hello controltranspor
 		return fmt.Errorf("grpc transport: send hello: %w", err)
 	}
 
-	// Wait for HelloAck
 	resp, err := stream.Recv()
 	if err != nil {
 		stream.CloseSend()
@@ -162,7 +157,6 @@ func (t *GRPCStreamTransport) Connect(ctx context.Context, hello controltranspor
 		return fmt.Errorf("grpc transport: recv hello_ack: %w", err)
 	}
 
-	// Verify response is HelloAck
 	if resp.GetHelloAck() == nil {
 		stream.CloseSend()
 		conn.Close()
@@ -181,8 +175,6 @@ func (t *GRPCStreamTransport) Connect(ctx context.Context, hello controltranspor
 }
 
 // Receive returns the message channel (master→worker) and an error channel.
-// The message channel is closed when the transport is closed or the stream fails.
-// The error channel receives the terminal error (if any) and is then closed.
 func (t *GRPCStreamTransport) Receive(ctx context.Context) (<-chan controltransport.ControlMessage, <-chan error, error) {
 	t.mu.Lock()
 	if t.closed {
@@ -202,29 +194,21 @@ func (t *GRPCStreamTransport) Receive(ctx context.Context) (<-chan controltransp
 	return t.recvCh, t.errCh, nil
 }
 
-// recvLoop reads typed MasterToWorkerEnvelope messages from the gRPC stream
-// and converts them to ControlMessage for the worker's receiveLoop.
+// recvLoop reads typed MasterToWorkerEnvelope messages and converts to ControlMessage.
 func (t *GRPCStreamTransport) recvLoop() {
 	defer func() {
-		// Publish the terminal error to errCh so the caller can diagnose the
-		// reason for the disconnect (previously the error was silently dropped).
 		t.errCloseOnce.Do(func() {
 			close(t.errCh)
 		})
-		// Gap #6 fix: only recvLoop closes recvCh — Close() must not touch it.
-		// This prevents "send on closed channel" panics when Close() races
-		// with recvLoop writing to recvCh.
 		if t.recvCh != nil {
 			close(t.recvCh)
 		}
-		// Signal that recvLoop has exited so Close() can proceed.
 		close(t.recvDone)
 	}()
 
 	for {
 		env, err := t.stream.Recv()
 		if err != nil {
-			// Non-blocking send of the error for diagnostics.
 			select {
 			case t.errCh <- err:
 			default:
@@ -242,7 +226,9 @@ func (t *GRPCStreamTransport) recvLoop() {
 	}
 }
 
-// Send transmits a ControlMessage over the gRPC stream as a typed envelope.
+// Send transmits a ControlMessage over the gRPC stream.
+// The ControlMessage.TypedPayload contains a typed proto message (e.g. *pb.TaskAccepted)
+// that messageToEnvelope wraps in a WorkerToMasterEnvelope.
 func (t *GRPCStreamTransport) Send(ctx context.Context, msg controltransport.ControlMessage) error {
 	t.mu.Lock()
 	if t.closed {
@@ -276,16 +262,11 @@ func (t *GRPCStreamTransport) Close() error {
 	conn := t.conn
 	t.mu.Unlock()
 
-	// Signal recvLoop to stop via closeCh BEFORE closing the receive channel.
-	// The recvLoop checks closeCh on every write to recvCh, so closing it
-	// first ensures the goroutine exits before we close recvCh.
 	t.closeOnce.Do(func() {
 		close(t.closeCh)
 	})
 
 	if stream != nil {
-		// Send typed Goodbye before closing — use sendMu to serialize with
-		// concurrent Send() calls and prevent a race on stream.Send().
 		t.sendMu.Lock()
 		goodbye := &pb.WorkerToMasterEnvelope{
 			MessageId:       fmt.Sprintf("goodbye-%s-%d", t.workerID, time.Now().UnixNano()),
@@ -294,19 +275,13 @@ func (t *GRPCStreamTransport) Close() error {
 			SentAt:          timestamppb.Now(),
 			Msg:             &pb.WorkerToMasterEnvelope_Goodbye{Goodbye: &pb.Goodbye{}},
 		}
-
 		_, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		_ = stream.Send(goodbye) // Best effort
+		_ = stream.Send(goodbye)
 		t.sendMu.Unlock()
 		_ = stream.CloseSend()
 	}
 
-	// Wait for recvLoop to exit before returning, with a timeout in case
-	// the stream Recv() does not unblock promptly (e.g. in tests).
-	// closeCh signals recvLoop to stop sending, CloseSend makes Recv() return,
-	// and recvDone confirms the goroutine has fully exited.
-	// Gap #6 fix: do NOT close recvCh here — only recvLoop's defer does that.
 	select {
 	case <-t.recvDone:
 	case <-time.After(5 * time.Second):
@@ -375,168 +350,33 @@ func (t *GRPCStreamTransport) messageToEnvelope(msg controltransport.ControlMess
 		ProtocolVersion: msg.ProtocolVersion,
 	}
 
-	switch msg.Type {
-	case controltransport.MsgHeartbeat:
-		hb := &pb.Heartbeat{
-			WorkerName:      getPayloadStr(msg.Payload, "worker_name"),
-			WorkerStatus:    getPayloadStr(msg.Payload, "worker_status"),
-			Status:          getPayloadStr(msg.Payload, "status"),
-			CurrentJob:      getPayloadStr(msg.Payload, "current_job"),
-			CodeVersion:     getPayloadStr(msg.Payload, "code_version"),
-			BundleVersion:   getPayloadStr(msg.Payload, "bundle_version"),
-			BundleHash:      getPayloadStr(msg.Payload, "bundle_hash"),
-			ProtocolVersion: getPayloadStr(msg.Payload, "protocol_version"),
-			EngineVersion:   getPayloadStr(msg.Payload, "engine_version"),
-			JobsCompleted:   getPayloadInt64(msg.Payload, "jobs_completed"),
-			JobsFailed:      getPayloadInt64(msg.Payload, "jobs_failed"),
-			ActiveJobsCount: int32(getPayloadInt64(msg.Payload, "active_jobs_count")),
-		}
-		// Collect remaining dynamic fields into Extra (recent_logs, capabilities, active_jobs, etc.)
-		hb.Extra = collectPayloadExtra(msg.Payload,
-			"worker_name", "worker_status", "status", "current_job", "code_version",
-			"bundle_version", "bundle_hash", "protocol_version", "engine_version",
-			"jobs_completed", "jobs_failed", "active_jobs_count")
-		env.Msg = &pb.WorkerToMasterEnvelope_Heartbeat{Heartbeat: hb}
+	switch tp := msg.TypedPayload.(type) {
+	case *pb.Heartbeat:
+		env.Msg = &pb.WorkerToMasterEnvelope_Heartbeat{Heartbeat: tp}
 
-	case controltransport.MsgTaskLeaseRenewal:
-		tlr := &pb.TaskLeaseRenewal{
-			TaskId:    getPayloadStr(msg.Payload, "task_id"),
-			AttemptId: getPayloadStr(msg.Payload, "attempt_id"),
-			LeaseId:   getPayloadStr(msg.Payload, "lease_id"),
-		}
-		if ts := getPayloadStr(msg.Payload, "requested_expiry"); ts != "" {
-			if parsed, err := time.Parse(time.RFC3339, ts); err == nil {
-				tlr.RequestedExpiry = timestamppb.New(parsed)
-			}
-		}
-		env.Msg = &pb.WorkerToMasterEnvelope_TaskLeaseRenewal{TaskLeaseRenewal: tlr}
+	case *pb.TaskLeaseRenewal:
+		env.Msg = &pb.WorkerToMasterEnvelope_TaskLeaseRenewal{TaskLeaseRenewal: tp}
 
-	case controltransport.MsgTaskAccepted:
-		env.Msg = &pb.WorkerToMasterEnvelope_TaskAccepted{
-			TaskAccepted: &pb.TaskAccepted{
-				TaskId:    getPayloadStr(msg.Payload, "task_id"),
-				JobId:     getPayloadStr(msg.Payload, "job_id"),
-				AttemptId: getPayloadStr(msg.Payload, "attempt_id"),
-				LeaseId:   getPayloadStr(msg.Payload, "lease_id"),
-			},
-		}
+	case *pb.TaskAccepted:
+		env.Msg = &pb.WorkerToMasterEnvelope_TaskAccepted{TaskAccepted: tp}
 
-	case controltransport.MsgTaskRejected:
-		env.Msg = &pb.WorkerToMasterEnvelope_TaskRejected{
-			TaskRejected: &pb.TaskRejected{
-				TaskId:    getPayloadStr(msg.Payload, "task_id"),
-				Reason:    getPayloadStr(msg.Payload, "reason"),
-				AttemptId: getPayloadStr(msg.Payload, "attempt_id"),
-				LeaseId:   getPayloadStr(msg.Payload, "lease_id"),
-				Revision:  int32(getPayloadInt64(msg.Payload, "revision")),
-			},
-		}
+	case *pb.TaskRejected:
+		env.Msg = &pb.WorkerToMasterEnvelope_TaskRejected{TaskRejected: tp}
 
-	case controltransport.MsgTaskResult:
-		tr := &pb.TaskResult{
-			TaskId:      getPayloadStr(msg.Payload, "task_id"),
-			JobId:       getPayloadStr(msg.Payload, "job_id"),
-			AttemptId:   getPayloadStr(msg.Payload, "attempt_id"),
-			Status:      getPayloadStr(msg.Payload, "status"),
-			ErrorCode:   getPayloadStr(msg.Payload, "error_code"),
-			ErrorDetail: getPayloadStr(msg.Payload, "error_detail"),
-			ExecutorId:  getPayloadStr(msg.Payload, "executor_id"),
-			ExecutorKey: getPayloadStr(msg.Payload, "executor_key"),
-			LeaseId:     getPayloadStr(msg.Payload, "lease_id"),
-		}
-		// Serialize output_artifacts as repeated Struct.
-		if raw, ok := msg.Payload["output_artifacts"].([]interface{}); ok {
-			for _, item := range raw {
-				if m, ok := item.(map[string]interface{}); ok {
-					if s, err := structpb.NewStruct(m); err == nil {
-						tr.OutputArtifacts = append(tr.OutputArtifacts, s)
-					}
-				}
-			}
-		} else if rawList, ok := msg.Payload["output_artifacts"].([]map[string]interface{}); ok {
-			for _, m := range rawList {
-				if s, err := structpb.NewStruct(m); err == nil {
-					tr.OutputArtifacts = append(tr.OutputArtifacts, s)
-				}
-			}
-		}
-		// fix/execution-metrics-emit: decode worker-emitted execution_metrics
-		// map into the typed *pb.TaskExecutionMetrics.
-		if m, ok := msg.Payload["execution_metrics"].(map[string]interface{}); ok {
-			tr.ExecutionMetrics = &pb.TaskExecutionMetrics{
-				InputBytes:            getPayloadInt64(m, "input_bytes"),
-				OutputBytes:           getPayloadInt64(m, "output_bytes"),
-				BytesFromDrive:        getPayloadInt64(m, "bytes_from_drive"),
-				BytesFromBlobstore:    getPayloadInt64(m, "bytes_from_blobstore"),
-				BytesFromLocalCache:   getPayloadInt64(m, "bytes_from_local_cache"),
-				CpuTimeMs:             getPayloadInt64(m, "cpu_time_ms"),
-				PeakRssBytes:          getPayloadInt64(m, "peak_rss_bytes"),
-				FramesDecoded:         getPayloadInt64(m, "frames_decoded"),
-				FramesComposited:      getPayloadInt64(m, "frames_composited"),
-				FramesEncoded:         getPayloadInt64(m, "frames_encoded"),
-				FfmpegSpeedRatio:      getPayloadFloat64(m, "ffmpeg_speed_ratio"),
-				EncodePasses:          int32(getPayloadInt64(m, "encode_passes")),
-				FinalConcatStreamCopy: getPayloadBool(m, "final_concat_stream_copy"),
-				ConcatMode:            getPayloadStr(m, "concat_mode"),
-				CpuPricePerSecond:     getPayloadFloat64(m, "cpu_price_per_second"),
-				StoragePricePerGb:     getPayloadFloat64(m, "storage_price_per_gb"),
-				NetworkPricePerGb:     getPayloadFloat64(m, "network_price_per_gb"),
-			}
-		}
-		// fix/phase-markers-emit: decode worker-emitted phase_markers
-		// into the typed []*pb.PhaseMarker.
-		if raw, ok := msg.Payload["phase_markers"].([]interface{}); ok {
-			for _, item := range raw {
-				if m, ok := item.(map[string]interface{}); ok {
-					pm := &pb.PhaseMarker{
-						Name:   getPayloadStr(m, "name"),
-						Status: getPayloadStr(m, "status"),
-						Notes:  getPayloadStr(m, "notes"),
-					}
-					if ts := getPayloadStr(m, "started_at"); ts != "" {
-						if parsed, err := time.Parse(time.RFC3339, ts); err == nil {
-							pm.StartedAt = timestamppb.New(parsed)
-						}
-					}
-					if ts := getPayloadStr(m, "completed_at"); ts != "" {
-						if parsed, err := time.Parse(time.RFC3339, ts); err == nil {
-							pm.CompletedAt = timestamppb.New(parsed)
-						}
-					}
-					tr.PhaseMarkers = append(tr.PhaseMarkers, pm)
-				}
-			}
-		}
-		env.Msg = &pb.WorkerToMasterEnvelope_TaskResult{TaskResult: tr}
+	case *pb.TaskResult:
+		env.Msg = &pb.WorkerToMasterEnvelope_TaskResult{TaskResult: tp}
 
-	case controltransport.MsgCommandAck:
-		env.Msg = &pb.WorkerToMasterEnvelope_CommandAck{
-			CommandAck: &pb.CommandAck{
-				CommandId: getPayloadStr(msg.Payload, "command_id"),
-				Error:     getPayloadStr(msg.Payload, "error"),
-			},
-		}
+	case *pb.CommandAck:
+		env.Msg = &pb.WorkerToMasterEnvelope_CommandAck{CommandAck: tp}
 
-	case controltransport.MsgArtifactUploaded:
-		env.Msg = &pb.WorkerToMasterEnvelope_ArtifactUploaded{
-			ArtifactUploaded: &pb.ArtifactUploaded{
-				JobId:        getPayloadStr(msg.Payload, "job_id"),
-				ArtifactId:   getPayloadStr(msg.Payload, "artifact_id"),
-				ArtifactType: getPayloadStr(msg.Payload, "artifact_type"),
-				ArtifactPath: getPayloadStr(msg.Payload, "artifact_path"),
-				ArtifactSize: getPayloadInt64(msg.Payload, "artifact_size"),
-				UploadStatus: getPayloadStr(msg.Payload, "upload_status"),
-				Error:        getPayloadStr(msg.Payload, "error"),
-			},
-		}
+	case *pb.ArtifactUploaded:
+		env.Msg = &pb.WorkerToMasterEnvelope_ArtifactUploaded{ArtifactUploaded: tp}
 	}
 
 	return env
 }
 
 // envelopeToMessage converts a typed MasterToWorkerEnvelope to a ControlMessage.
-// Populates the Payload map for backward compatibility with the worker's
-// receiveLoop (msgToJob, msgToCommand, etc.).
 func (t *GRPCStreamTransport) envelopeToMessage(env *pb.MasterToWorkerEnvelope) controltransport.ControlMessage {
 	sentAt := time.Now().UTC()
 	if env.SentAt != nil {
@@ -589,80 +429,4 @@ func (t *GRPCStreamTransport) envelopeToMessage(env *pb.MasterToWorkerEnvelope) 
 	}
 
 	return msg
-}
-
-// ---- Payload helpers (used by messageToEnvelope for ControlMessage.Payload access) ----
-
-func getPayloadStr(m map[string]interface{}, key string) string {
-	if v, ok := m[key].(string); ok {
-		return v
-	}
-	return ""
-}
-
-func getPayloadInt64(m map[string]interface{}, key string) int64 {
-	switch v := m[key].(type) {
-	case float64:
-		return int64(v)
-	case int:
-		return int64(v)
-	case int64:
-		return v
-	case int32:
-		return int64(v)
-	}
-	return 0
-}
-
-// getPayloadFloat64 extracts a float64 value from a payload map sub-key,
-// returning 0.0 when missing or of a different type.
-func getPayloadFloat64(m map[string]interface{}, key string) float64 {
-	switch v := m[key].(type) {
-	case float64:
-		return v
-	case int:
-		return float64(v)
-	case int64:
-		return float64(v)
-	case int32:
-		return float64(v)
-	}
-	return 0.0
-}
-
-// getPayloadBool extracts a bool value from a payload map sub-key,
-// returning false when missing or of a different type.
-func getPayloadBool(m map[string]interface{}, key string) bool {
-	if v, ok := m[key].(bool); ok {
-		return v
-	}
-	return false
-}
-
-// collectPayloadExtra builds a *structpb.Struct from payload fields that are
-// NOT in the namedKeys set. Used to forward dynamic telemetry fields (e.g.
-// recent_logs, capabilities, active_jobs) that don't map to proto typed fields.
-// Returns nil if no extra fields exist.
-func collectPayloadExtra(payload map[string]interface{}, namedKeys ...string) *structpb.Struct {
-	known := make(map[string]bool, len(namedKeys))
-	for _, k := range namedKeys {
-		known[k] = true
-	}
-
-	extraMap := make(map[string]interface{})
-	for k, v := range payload {
-		if !known[k] {
-			extraMap[k] = v
-		}
-	}
-
-	if len(extraMap) == 0 {
-		return nil
-	}
-
-	extra, err := structpb.NewStruct(extraMap)
-	if err != nil {
-		return nil
-	}
-	return extra
 }

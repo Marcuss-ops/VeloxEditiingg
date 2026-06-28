@@ -8,12 +8,12 @@ import (
 )
 
 // loadChannelGroup hydrates a single ChannelGroup from the canonical
-// tables. Returns nil when the group is absent or the store is unavailable.
+// tables. Returns nil when the group is absent.
+//
+// PR-YT-REPO: receiver.repo is required at NewService time, so the
+// `if s.repo == nil` early-out is gone.
 func (s *Service) loadChannelGroup(name string) (*ChannelGroup, error) {
-	if s.store == nil {
-		return nil, nil
-	}
-	rows, err := s.store.ListYouTubeGroups()
+	rows, err := s.repo.ListYouTubeGroups()
 	if err != nil {
 		return nil, err
 	}
@@ -21,7 +21,7 @@ func (s *Service) loadChannelGroup(name string) (*ChannelGroup, error) {
 		if row.Name != name {
 			continue
 		}
-		channelIDs, _ := s.store.ListGroupChannels(row.ID)
+		channelIDs, _ := s.repo.ListGroupChannels(row.ID)
 		return &ChannelGroup{
 			Name:        row.Name,
 			Description: row.Description,
@@ -35,14 +35,11 @@ func (s *Service) loadChannelGroup(name string) (*ChannelGroup, error) {
 
 // loadChannelGroups hydrates every group from the canonical tables.
 func (s *Service) loadChannelGroups() (map[string]*ChannelGroup, error) {
-	if s.store == nil {
-		return map[string]*ChannelGroup{}, nil
-	}
-	groupRows, err := s.store.ListYouTubeGroups()
+	groupRows, err := s.repo.ListYouTubeGroups()
 	if err != nil {
 		return map[string]*ChannelGroup{}, err
 	}
-	memberships, err := s.store.ListAllGroupMemberships()
+	memberships, err := s.repo.ListAllGroupMemberships()
 	if err != nil {
 		memberships = nil
 	}
@@ -70,20 +67,19 @@ func (s *Service) loadChannelGroups() (map[string]*ChannelGroup, error) {
 
 // CreateGroup creates a new channel group and persists only that group via a
 // direct SQL upsert.
+//
+// PR-YT-REPO: `if s.repo == nil` early-out removed; repo is required.
 func (s *Service) CreateGroup(name, description string, channelIDs []string) error {
 	if s.GetGroup(name) != nil {
 		return fmt.Errorf("group '%s' already exists", name)
 	}
 
-	if s.store == nil {
-		return nil
-	}
-	groupID, err := s.store.UpsertYouTubeGroup(name, "upload", description, "")
+	groupID, err := s.repo.UpsertYouTubeGroup(name, "upload", description, "")
 	if err != nil {
 		return fmt.Errorf("create upload group %q: %w", name, err)
 	}
 	for _, chID := range channelIDs {
-		if err := s.store.AddChannelToGroup(groupID, chID); err != nil {
+		if err := s.repo.AddChannelToGroup(groupID, chID); err != nil {
 			log.Printf("[WARN] CreateGroup: add channel %s to %q: %v", safeChannelID(chID), name, err)
 		}
 	}
@@ -91,28 +87,29 @@ func (s *Service) CreateGroup(name, description string, channelIDs []string) err
 }
 
 // DeleteGroup deletes a channel group and persists the change via direct SQL.
+//
+// PR-YT-REPO: `if s.repo == nil` early-out removed.
 func (s *Service) DeleteGroup(name string) error {
 	if s.GetGroup(name) == nil {
 		return fmt.Errorf("group '%s' not found", name)
 	}
 
-	if s.store == nil {
-		return nil
-	}
-	groupID, err := s.store.GetYouTubeGroupID(name, "upload")
+	groupID, err := s.repo.GetYouTubeGroupID(name, "upload")
 	if err != nil {
 		return err
 	}
 	if groupID == 0 {
 		return nil
 	}
-	if err := s.store.DeleteYouTubeGroupChannelsByGroupID(groupID); err != nil {
+	if err := s.repo.DeleteYouTubeGroupChannelsByGroupID(groupID); err != nil {
 		return err
 	}
-	return s.store.DeleteYouTubeGroup(groupID)
+	return s.repo.DeleteYouTubeGroup(groupID)
 }
 
 // AddChannelToGroup adds a channel to a group and persists via direct SQL.
+//
+// PR-YT-REPO: `if s.repo == nil` early-out removed.
 func (s *Service) AddChannelToGroup(groupName, channelID string) error {
 	group := s.GetGroup(groupName)
 	if group == nil {
@@ -125,32 +122,28 @@ func (s *Service) AddChannelToGroup(groupName, channelID string) error {
 		}
 	}
 
-	if s.store == nil {
-		return nil
-	}
-	groupID, err := s.store.GetYouTubeGroupID(groupName, "upload")
+	groupID, err := s.repo.GetYouTubeGroupID(groupName, "upload")
 	if err != nil {
 		return fmt.Errorf("resolve upload group %q: %w", groupName, err)
 	}
 	if groupID == 0 {
-		groupID, err = s.store.UpsertYouTubeGroup(groupName, "upload", group.Description, group.Privacy)
+		groupID, err = s.repo.UpsertYouTubeGroup(groupName, "upload", group.Description, group.Privacy)
 		if err != nil {
 			return err
 		}
 	}
-	return s.store.AddChannelToGroup(groupID, channelID)
+	return s.repo.AddChannelToGroup(groupID, channelID)
 }
 
 // RemoveChannelFromGroup removes a channel from a group.
+//
+// PR-YT-REPO: `if s.repo == nil` early-out removed.
 func (s *Service) RemoveChannelFromGroup(groupName, channelID string) error {
 	if s.GetGroup(groupName) == nil {
 		return fmt.Errorf("group '%s' not found", groupName)
 	}
 
-	if s.store == nil {
-		return nil
-	}
-	groupID, err := s.store.GetYouTubeGroupID(groupName, "upload")
+	groupID, err := s.repo.GetYouTubeGroupID(groupName, "upload")
 	if err != nil {
 		return err
 	}
@@ -159,7 +152,7 @@ func (s *Service) RemoveChannelFromGroup(groupName, channelID string) error {
 	}
 
 	// Verify membership so we keep the same error semantics.
-	currentIDs, err := s.store.ListGroupChannels(groupID)
+	currentIDs, err := s.repo.ListGroupChannels(groupID)
 	if err != nil {
 		return err
 	}
@@ -173,7 +166,7 @@ func (s *Service) RemoveChannelFromGroup(groupName, channelID string) error {
 	if !found {
 		return fmt.Errorf("channel '%s' not found in group '%s'", channelID, groupName)
 	}
-	return s.store.RemoveChannelFromGroup(groupID, channelID)
+	return s.repo.RemoveChannelFromGroup(groupID, channelID)
 }
 
 // GetGroups returns all channel groups hydrated from SQLite.

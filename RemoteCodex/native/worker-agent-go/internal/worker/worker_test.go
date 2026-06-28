@@ -85,12 +85,12 @@ func TestJobProgressZeroValues(t *testing.T) {
 }
 
 func TestActiveTaskExecutionFields(t *testing.T) {
-	// Verify ActiveTaskExecution struct has expected fields (compile-time check)
+	// Verify ActiveTaskExecution struct has expected fields (compile-time check).
+	// PR 1: the `Job` field on ActiveTaskExecution was removed when the legacy
+	// Job-side state mirror (`persistedState.ActiveJobs`) was deleted. Test now
+	// checks the canonical task-native fields.
 	at := &ActiveTaskExecution{
 		StartedAt: time.Now(),
-	}
-	if at.Job != nil {
-		t.Error("default Job should be nil")
 	}
 	if at.LeaseID != "" {
 		t.Errorf("default LeaseID should be empty, got %q", at.LeaseID)

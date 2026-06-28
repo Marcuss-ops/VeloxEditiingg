@@ -1,31 +1,7 @@
 // PR-3.8/3.9: end-to-end dispatch via executor.Registry → TaskRunner.Run.
-// Verifies the registry-driven dispatch replaces the legacy render /
-// process_video / process_audio switch with a single TaskRunner entry
-// point inside Worker.runJobTask, and that Worker.executeTask exercises
-// the full pipeline (concurrency + active-jobs + cancel registration +
-// transport submit) against a synthetic scene.composite.v1 executor.
-//
-// fakeSceneComposite is preserved as the canonical test double for
-// the dispatch path: the real scene.composite.v1 implementation in
-// internal/taskrunner/executors.SceneComposite requires a
-// pipeline.Runner pointing at the C++ render client, which the
-// internal/worker test binary MUST NOT link against (test-binary
-// scope is intentionally slice-thin). Production wiring lives in
-// cmd/velox-worker-agent/main.go, which constructs the pipeline +
-// SceneComposite and registers scene.composite.v1@1 on the worker
-// executor.Registry at boot.
-//
-// The test builds the minimum Worker struct literal needed by
-// executeTask (executeTask does NOT touch stageExecutor, apiClient,
-// transportFactory, cache, blobs, executorRegistry other than the
-// hello-time report). The transport is a recording stub that captures
-// the job_result message for assertions.
 //
 // NOTE: the internal/worker test binary currently panics at protobuf
-// init time (pre-existing baseline, not introduced by PR-3.8 / 3.9).
-// Run these tests once that baseline is fixed; the dispatch logic is
-// independently reachable via `go vet ./internal/worker/...` and
-// the build check.
+// init time (pre-existing baseline). Run these tests once that is fixed.
 package worker
 
 import (
@@ -39,6 +15,7 @@ import (
 	"time"
 
 	"velox-shared/controltransport"
+	pb "velox-shared/controltransport/pb"
 	"velox-worker-agent/internal/executor"
 	"velox-worker-agent/internal/taskrunner"
 	"velox-worker-agent/internal/worker/concurrency"
@@ -47,20 +24,7 @@ import (
 	"velox-worker-agent/pkg/logger"
 )
 
-// fakeSceneComposite implements executor.Executor for an executor
-// registered under "scene.composite.v1". The fake returns the
-// canonical (Status="succeeded") shape with no Outputs so the
-// downstream upload pipeline (shouldUploadCompletedVideo) short-
-// circuits naturally and the test assertions stay focused on
-// dispatch + payload-mapping rather than upload mechanics. PR-3.9
-// wires the real scene-composite implementation; this stub exists
-// only so the dispatch path is reachable from a test.
-//
-// recordingSceneComposite mirrors fakeSceneComposite but captures the
-// TaskSpec it was invoked with so tests can assert how the worker
-// shaped the dispatcher's payload (NOTably the resolved local
-// voiceover path that the asset bridge swaps in for velox-asset:// URI
-// references — see TestPR_3_9_DispatchResolvesVoiceoverAssetBeforeExecutor).
+// fakeSceneComposite implements executor.Executor for "scene.composite.v1".
 type fakeSceneComposite struct{}
 
 func (fakeSceneComposite) Descriptor() executor.Descriptor {
@@ -84,7 +48,7 @@ func (fakeSceneComposite) Execute(
 ) (executor.ExecutionResult, error) {
 	return executor.ExecutionResult{
 		Status:      "succeeded",
-		Outputs:     nil, // intentional: skip upload pipeline in tests
+		Outputs:     nil,
 		Metrics:     map[string]interface{}{"fake_marker": "ok"},
 		StartedAt:   time.Now().UTC(),
 		CompletedAt: time.Now().UTC(),
@@ -132,12 +96,6 @@ func (r *recordingSceneComposite) Execute(
 	}, nil
 }
 
-// recordingTransport satisfies controltransport.ControlTransport.
-// Connect / Receive / Close are no-ops; Send captures every message
-// into a mutex-protected slice for post-run assertions. Receive
-// returns nil channels because executeTask never reads from them —
-// nil-nil-nil is the standard "no master → worker traffic in this
-// test" pattern.
 type recordingTransport struct {
 	mu       sync.Mutex
 	messages []controltransport.ControlMessage
@@ -177,9 +135,6 @@ func (r *recordingTransport) last() (controltransport.ControlMessage, bool) {
 	return r.messages[len(r.messages)-1], true
 }
 
-// newDispatchTestWorker builds a minimal Worker suitable for
-// executeTask end-to-end tests. The registry is pre-populated with
-// fakeSceneComposite; the transport is the recording stub.
 func newDispatchTestWorker(t *testing.T) (*Worker, *recordingTransport) {
 	t.Helper()
 
@@ -198,7 +153,7 @@ func newDispatchTestWorker(t *testing.T) (*Worker, *recordingTransport) {
 		WorkerID:      "test-worker-dispatch-001",
 		WorkerName:    "test-worker-dispatch",
 		LogLevel:      "info",
-		MaxActiveJobs: 1, // required for concurrency limiter to accept any job
+		MaxActiveJobs: 1,
 	}
 
 	w := &Worker{
@@ -220,24 +175,9 @@ func newDispatchTestWorker(t *testing.T) (*Worker, *recordingTransport) {
 	return w, rt
 }
 
-// TestPR_3_9_DispatchResolvesVoiceoverAssetBeforeExecutor exercises the
-// asset-bridge -> executor seam end-to-end. The legacy
-// TestExecuteWorkflowJobPassesResolvedLocalAudioPathToWorkflow (deleted
-// in PR-3.9) covered the same surface; this new test replicates the
-// behaviour now that the dispatch goes through executor.Registry ->
-// TaskRunner instead of the removed executeWorkflowJob helper.
-//
-// Setup: register a recordingSceneComposite that captures the TaskSpec
-// it received. Build a job of type "process_video" whose audio_path is a
-// velox-asset:// URI; point the worker at an httptest server serving the
-// underlying .mp3 bytes. Run dispatchTaskRunner. Assert the recording
-// stub received a TaskSpec whose Payload["audio_path"] points at the
-// downloaded local file (not the velox-asset:// URI).
 func TestPR_3_9_DispatchResolvesVoiceoverAssetBeforeExecutor(t *testing.T) {
 	wantAudioBytes := []byte("ID3recorded-audio-bytes")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Stub every well-known asset id the worker may resolve
-		// during the dispatch path.
 		w.Header().Set("Content-Type", "audio/mpeg")
 		_, _ = w.Write(wantAudioBytes)
 	}))
@@ -273,63 +213,46 @@ func TestPR_3_9_DispatchResolvesVoiceoverAssetBeforeExecutor(t *testing.T) {
 	}
 	tr := taskrunner.NewTaskRunner(registry, w.logger)
 
-	// runJobTask is intentionally NOT called here — the asset-bridge
-	// resolves voiceover BEFORE runJobTask (inside executeTask +
-	// runDispatchWithAssetBridge), and we want to assert the resolved
-	// path flows into dispatcher.payload["audio_path"]. To keep the
-	// test independent of the heavy executeTask lifecycle, we assert the
-	// invariant directly: simulating the bridge step ("asset resolved")
-	// and proving the recordingSceneComposite sees the resolved path.
 	jobCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	job := &api.Job{
-		JobID:   "job-voiceover-resolve",
-		JobType: "scene.composite.v1", // matches recordingSceneComposite.Descriptor().ID
-		Parameters: map[string]interface{}{
-			// Thevelox-asset:// URI is the master-supplied form;
-			// resolveVoiceoverAudioPath downloads it and rewrites
-			// this to a local path. dispatchTaskRunner then forwards
-			// the local path to the executor.
-			"audio_path":  "velox-asset://asset-recording-001",
+	// Build a PendingTaskExecution for the dispatch test.
+	pte := &PendingTaskExecution{
+		JobID:      "job-voiceover-resolve",
+		ExecutorID: "scene.composite.v1",
+		Spec: executor.TaskSpec{
+			Version:    1,
+			JobID:      "job-voiceover-resolve",
+			ExecutorID: "scene.composite.v1",
+			Payload: map[string]interface{}{
+				"audio_path":  "velox-asset://asset-recording-001",
+				"script_text": "voiceover asset resolve test",
+				"output_path": "/tmp/voiceover-resolve.mp4",
+			},
+		},
+	}
+
+	resolvedLocal, err := w.resolveVoiceoverAudioPath(jobCtx, "velox-asset://asset-recording-001", pte.Spec.Payload)
+	if err != nil {
+		t.Fatalf("resolveVoiceoverAudioPath: %v", err)
+	}
+	if resolvedLocal == "velox-asset://asset-recording-001" {
+		t.Fatalf("resolveVoiceoverAudioPath must rewrite velox-asset:// URI; got same value %q", resolvedLocal)
+	}
+
+	// Build a fresh spec with resolved path and feed through TaskRunner.
+	resolvedSpec := executor.TaskSpec{
+		Version:    1,
+		JobID:      "job-voiceover-resolve",
+		ExecutorID: "scene.composite.v1",
+		Payload: map[string]interface{}{
+			"audio_path":  resolvedLocal,
 			"script_text": "voiceover asset resolve test",
 			"output_path": "/tmp/voiceover-resolve.mp4",
 		},
 	}
 
-	// Simulate the asset-bridge resolution. The worker code path is:
-	//   job.Parameters["audio_path"] = velox-asset://...
-	//   -> resolveVoiceoverAudioPath(...) returns a local file path
-	//   -> dispatcher.Payload["audio_path"] = local file path
-	// We call resolveVoiceoverAudioPath with the same httptest backend,
-	// then overwrite job.Parameters["audio_path"] with the resolved
-	// value and feed it through dispatchTaskRunner.
-	resolvedLocal, err := w.resolveVoiceoverAudioPath(jobCtx, job.Parameters["audio_path"].(string), job.Parameters)
-	if err != nil {
-		t.Fatalf("resolveVoiceoverAudioPath: %v", err)
-	}
-	if resolvedLocal == job.Parameters["audio_path"] {
-		t.Fatalf("resolveVoiceoverAudioPath must rewrite velox-asset:// URI; got same value %q", resolvedLocal)
-	}
-
-	// Build a fresh scenario: feed the resolved payload directly into
-	// the TaskRunner (simulating runDispatchWithAssetBridge wiring).
-	// We use the already-built `tr` (which has the recordingSceneComposite
-	// registered), so the spec delivered below lands on the recorder.
-
-	resolvedPayload := make(map[string]interface{}, len(job.Parameters))
-	for k, v := range job.Parameters {
-		resolvedPayload[k] = v
-	}
-	resolvedPayload["audio_path"] = resolvedLocal
-
-	spec := executor.TaskSpec{
-		Version:    1,
-		JobID:      job.JobID,
-		ExecutorID: strings.TrimSpace(job.JobType),
-		Payload:    resolvedPayload,
-	}
-	report, runErr := tr.Run(jobCtx, spec)
+	report, runErr := tr.Run(jobCtx, resolvedSpec)
 	if runErr != nil {
 		t.Fatalf("taskrunner.Run: %v", runErr)
 	}
@@ -339,10 +262,6 @@ func TestPR_3_9_DispatchResolvesVoiceoverAssetBeforeExecutor(t *testing.T) {
 	}
 	if !rec.gotSpec {
 		t.Fatal("recordingSceneComposite was never invoked")
-	}
-	if rec.lastSpec.JobID != job.JobID {
-		t.Fatalf("recordingSceneComposite JobID %q, want %q",
-			rec.lastSpec.JobID, job.JobID)
 	}
 	gotAudio, ok := rec.lastSpec.Payload["audio_path"].(string)
 	if !ok {
@@ -356,16 +275,12 @@ func TestPR_3_9_DispatchResolvesVoiceoverAssetBeforeExecutor(t *testing.T) {
 	}
 }
 
-// runExecuteTaskAsync launches executeTask on a goroutine and returns a
-// channel closed when the goroutine returns. Tests use this pattern
-// because executeTask does not return a value — the only observable
-// outcome is the transport.Send call captured by the recording stub.
-func runExecuteTaskAsync(t *testing.T, w *Worker, ctx context.Context, job *api.Job, taskID, attemptID string) <-chan struct{} {
+func runExecuteTaskAsync(t *testing.T, w *Worker, ctx context.Context, pte *PendingTaskExecution, taskID, attemptID string) <-chan struct{} {
 	t.Helper()
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		w.executeTask(ctx, job, taskID, attemptID)
+		w.executeTask(ctx, pte, taskID, attemptID)
 	}()
 	return done
 }
@@ -373,19 +288,26 @@ func runExecuteTaskAsync(t *testing.T, w *Worker, ctx context.Context, job *api.
 func TestPR_3_8_DispatchResolvesSceneCompositeV1EndToEnd(t *testing.T) {
 	w, rt := newDispatchTestWorker(t)
 
-	job := &api.Job{
-		JobID:    "job-composite-001",
-		JobType:  "scene.composite.v1",
-		Priority: 1,
-		Parameters: map[string]interface{}{
-			"scenes": []interface{}{"sunrise", "noon"},
+	pte := &PendingTaskExecution{
+		TaskID:    "task-composite-001",
+		JobID:     "job-composite-001",
+		AttemptID: "attempt-composite-001",
+		LeaseID:   "lease-composite-001",
+		ExecutorID: "scene.composite.v1",
+		Spec: executor.TaskSpec{
+			Version:    1,
+			JobID:      "job-composite-001",
+			ExecutorID: "scene.composite.v1",
+			Payload: map[string]interface{}{
+				"scenes": []interface{}{"sunrise", "noon"},
+			},
 		},
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	done := runExecuteTaskAsync(t, w, ctx, job, "task-composite-001", "attempt-composite-001")
+	done := runExecuteTaskAsync(t, w, ctx, pte, "task-composite-001", "attempt-composite-001")
 
 	select {
 	case <-done:
@@ -400,36 +322,44 @@ func TestPR_3_8_DispatchResolvesSceneCompositeV1EndToEnd(t *testing.T) {
 	if msg.Type != controltransport.MsgTaskResult {
 		t.Fatalf("expected MsgTaskResult, got %q", msg.Type)
 	}
-	payload := msg.Payload
-	if payload == nil {
-		t.Fatal("task_result message had nil payload")
+	tr, ok := msg.TypedPayload.(*pb.TaskResult)
+	if !ok || tr == nil {
+		t.Fatal("task_result TypedPayload is not *pb.TaskResult")
 	}
-	if status, _ := payload["status"].(string); status != "succeeded" {
-		t.Fatalf("expected payload.status=succeeded, got %q (full payload: %#v)", status, payload)
+	if tr.GetStatus() != "succeeded" {
+		t.Fatalf("expected status=succeeded, got %q", tr.GetStatus())
 	}
-	if got, _ := payload["task_id"].(string); got != "task-composite-001" {
-		t.Fatalf("expected task_id=task-composite-001, got %q", got)
+	if tr.GetTaskId() != "task-composite-001" {
+		t.Fatalf("expected task_id=task-composite-001, got %q", tr.GetTaskId())
 	}
-	if got, _ := payload["job_id"].(string); got != "job-composite-001" {
-		t.Fatalf("expected job_id=job-composite-001, got %q", got)
+	if tr.GetJobId() != "job-composite-001" {
+		t.Fatalf("expected job_id=job-composite-001, got %q", tr.GetJobId())
 	}
-	if got, _ := payload["executor_id"].(string); got != "scene.composite.v1" {
-		t.Fatalf("expected executor_id=scene.composite.v1, got %q", got)
+	if tr.GetExecutorId() != "scene.composite.v1" {
+		t.Fatalf("expected executor_id=scene.composite.v1, got %q", tr.GetExecutorId())
 	}
 }
 
 func TestPR_3_8_DispatchUnknownExecutorSurfacesFailure(t *testing.T) {
 	w, rt := newDispatchTestWorker(t)
 
-	job := &api.Job{
-		JobID:   "job-unknown-001",
-		JobType: "definitely.not.registered",
+	pte := &PendingTaskExecution{
+		TaskID:    "task-unknown-001",
+		JobID:     "job-unknown-001",
+		AttemptID: "attempt-unknown-001",
+		LeaseID:   "lease-unknown-001",
+		ExecutorID: "definitely.not.registered",
+		Spec: executor.TaskSpec{
+			Version:    1,
+			JobID:      "job-unknown-001",
+			ExecutorID: "definitely.not.registered",
+		},
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	done := runExecuteTaskAsync(t, w, ctx, job, "task-unknown-001", "attempt-unknown-001")
+	done := runExecuteTaskAsync(t, w, ctx, pte, "task-unknown-001", "attempt-unknown-001")
 
 	select {
 	case <-done:
@@ -441,23 +371,21 @@ func TestPR_3_8_DispatchUnknownExecutorSurfacesFailure(t *testing.T) {
 	if !ok {
 		t.Fatal("transport.Send was never called; expected failure TaskResult")
 	}
-	payload := msg.Payload
-	if status, _ := payload["status"].(string); status != "failed" {
-		t.Fatalf("expected payload.status=failed, got %q (full payload: %#v)", status, payload)
+	tr, ok := msg.TypedPayload.(*pb.TaskResult)
+	if !ok || tr == nil {
+		t.Fatalf("task_result TypedPayload is not *pb.TaskResult, got %T", msg.TypedPayload)
 	}
-	errMsg, _ := payload["error_detail"].(string)
-	if errMsg == "" {
-		t.Fatal("expected non-empty error message for unknown executor")
+	if tr.GetStatus() != "failed" {
+		t.Fatalf("expected status=failed, got %q", tr.GetStatus())
 	}
-	// Registry miss maps to the taskrunner's CodeUnsupportedExecutor;
-	// dispatchTaskRunner formats it as "executor <key> failed:
-	// code=... detail=...", so the error string contains "executor"
-	// and either "not found" (wrapped sentinel) or "code=" (runner
-	// mapping).
-	if !strings.Contains(errMsg, "executor") {
-		t.Fatalf("expected error to mention executor, got %q", errMsg)
+	errDetail := tr.GetErrorDetail()
+	if errDetail == "" {
+		t.Fatal("expected non-empty error_detail for unknown executor")
 	}
-	if !strings.Contains(errMsg, "not found") && !strings.Contains(errMsg, "code=") {
-		t.Fatalf("expected error to mention lookup/code, got %q", errMsg)
+	if !strings.Contains(errDetail, "executor") {
+		t.Fatalf("expected error to mention executor, got %q", errDetail)
+	}
+	if !strings.Contains(errDetail, "not found") && !strings.Contains(errDetail, "code=") {
+		t.Fatalf("expected error to mention lookup/code, got %q", errDetail)
 	}
 }

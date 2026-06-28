@@ -181,7 +181,7 @@ func New(cfg *config.WorkerConfig, version string, opts ...Option) (*Worker, err
 	}
 
 	// PR-3.7: build the TaskRunner from registry + cache + blobs. The
-	// runner is shared by future executeJob routes (PR-3.8) and is also
+	// runner is shared by future executeTask routes (PR-3.8) and is also
 	// where cache + blob counters get surfaced as report.Metrics entries.
 	tr := taskrunner.NewTaskRunner(wo.registry, log)
 	if wo.cache != nil {
@@ -211,9 +211,9 @@ func New(cfg *config.WorkerConfig, version string, opts ...Option) (*Worker, err
 		activeTasks:   make(map[string]*ActiveTaskExecution),
 		taskIDsByJob:  make(map[string][]string),
 		// PR-2: TaskOffer-accepted tasks awaiting TaskLeaseGranted before
-		// executeJob dispatch. Keyed by task_id — one canonical entry per
+		// executeTask dispatch. Keyed by task_id — one canonical entry per
 		// outstanding offer per session.
-		pendingTasks: make(map[string]*api.Job),
+		pendingTasks: make(map[string]*PendingTaskExecution),
 		// PR-2 followup: per-task-native lease-state registry. Threaded
 		// by MsgTaskLeaseGranted handler (separate PR) so leaseRenewLoop
 		// can fire MsgTaskLeaseRenewal.

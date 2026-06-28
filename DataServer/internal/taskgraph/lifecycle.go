@@ -31,9 +31,8 @@ type LifecycleService struct {
 type JobsRetryQuerier interface {
 	// Get returns the canonical Job by ID, or (nil, nil) on missing.
 	Get(ctx context.Context, id string) (*jobs.Job, error)
-	// FailWithRetry marks the job FAILED or RETRY_WAIT depending on
-	// retryable flag and the job's retry_count/max_retries budget.
-	FailWithRetry(ctx context.Context, id, errorCode, errorMessage string, retryable bool, revision int) error
+	// Fail marks the job FAILED with the given reason.
+	Fail(ctx context.Context, id string, reason string) error
 }
 
 // NewLifecycleService constructs the transactional LifecycleService.
@@ -143,7 +142,7 @@ func (l *LifecycleService) RequeueExpiredLeases(ctx context.Context, nowRFC3339 
 //  2. call Repository.ExpireTaskLeaseAtomic with candidate.LeaseID
 //     and candidate.LeaseExpiresAt as the OBSERVED values the reaper
 //     pulled from the SELECT phase
-//  3. if AttemptsExhausted, post-commit Job update via jobsRepo.FailWithRetry
+//  3. if AttemptsExhausted, post-commit Job update via jobsRepo.Fail
 //
 // The Job update runs OUTSIDE the atomic so the audit-strict transactional
 // boundary (Task + Attempt CAS in one tx) is preserved. A failure to
@@ -189,11 +188,9 @@ func (l *LifecycleService) ExpireTaskLease(ctx context.Context, candidate Requeu
 		if terr == nil && t != nil && t.JobID != "" {
 			job, jerr := l.jobsRepo.Get(ctx, t.JobID)
 			if jerr == nil && job != nil && !job.Status.IsTerminal() {
-				_ = l.jobsRepo.FailWithRetry(
+				_ = l.jobsRepo.Fail(
 					ctx, t.JobID,
-					"LEASE_EXPIRED_RETRIES_EXHAUSTED",
-					fmt.Sprintf("task %s tripped retry budget via master-side reap", candidate.ID),
-					false, job.Revision,
+					fmt.Sprintf("LEASE_EXPIRED_RETRIES_EXHAUSTED: task %s tripped retry budget via master-side reap", candidate.ID),
 				)
 			}
 		}

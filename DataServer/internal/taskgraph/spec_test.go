@@ -4,19 +4,24 @@ package taskgraph
 import "testing"
 
 func TestSpecValidate(t *testing.T) {
-	valid := &TaskSpec{Version: 1, JobID: "j1"}
+	valid := &TaskSpec{Version: 1, JobID: "j1", ExecutorID: "exec1"}
 	if err := valid.Validate(); err != nil {
 		t.Errorf("valid spec: %v", err)
 	}
 
-	noVersion := &TaskSpec{JobID: "j1"}
+	noVersion := &TaskSpec{JobID: "j1", ExecutorID: "exec1"}
 	if err := noVersion.Validate(); err == nil {
 		t.Error("spec without version should fail")
 	}
 
-	noJob := &TaskSpec{Version: 1}
+	noJob := &TaskSpec{Version: 1, ExecutorID: "exec1"}
 	if err := noJob.Validate(); err == nil {
 		t.Error("spec without job_id should fail")
+	}
+
+	noExecutor := &TaskSpec{Version: 1, JobID: "j1"}
+	if err := noExecutor.Validate(); err == nil {
+		t.Error("spec without executor_id should fail")
 	}
 }
 

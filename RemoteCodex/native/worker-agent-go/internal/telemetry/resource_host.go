@@ -15,7 +15,7 @@ import (
 )
 
 // ToWireMap flattens a SampledResources snapshot into a
-// map suitable for controltransport.NewMessageWithPayload.
+// map suitable for Heartbeat.Extra (structpb.Struct) via sendHeartbeat.
 //
 // Field names are snake_case to match the proto so the master's
 // decodeWorkerResources helper can map straight onto WorkerResourceCounters.

@@ -6,7 +6,10 @@ package executors
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
+	"io"
+	"os"
 	"path/filepath"
 	"time"
 
@@ -140,9 +143,25 @@ func (s *SceneComposite) Execute(ctx context.Context, _ executor.ExecutionContex
 		}, nil
 	}
 
+	// Compute output file hash and size for artifact metadata.
+	// Hash is mandatory per fix/artifact-metadata — dispatchTaskRunner
+	// rejects succeeded tasks with empty-hash outputs.
+	// Uses streaming hash (io.Copy) to avoid loading large video files
+	// into memory.
+	var outputHash string
+	var outputSize int64
+	if f, err := os.Open(outputPath); err == nil {
+		defer f.Close()
+		h := sha256.New()
+		if n, copyErr := io.Copy(h, f); copyErr == nil {
+			outputHash = fmt.Sprintf("%x", h.Sum(nil))
+			outputSize = n
+		}
+	}
+
 	return executor.ExecutionResult{
-		Status:      "succeeded",
-		Outputs:     []executor.ArtifactRef{{Type: "render.output", Hash: "", URI: outputPath}},
+		Status:  "succeeded",
+		Outputs: []executor.ArtifactRef{{Type: "render.output", Hash: outputHash, URI: outputPath, SizeBytes: outputSize}},
 		StartedAt:   startedAt,
 		CompletedAt: time.Now().UTC(),
 	}, nil

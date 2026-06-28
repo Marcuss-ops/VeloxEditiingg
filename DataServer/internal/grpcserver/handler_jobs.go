@@ -19,11 +19,27 @@ import (
 // handleTaskAccepted processes typed TaskAccepted — PR #4 task-native push mode.
 // The lease was already created by ClaimNextReadyTask; we promote LEASED→RUNNING,
 // create a TaskAttempt record, and grant the lease.
+//
+// fix/identity-tuple-mandatory: the full 6-field identity tuple
+// (task_id, job_id, attempt_id, lease_id, attempt_number, revision) is
+// now MANDATORY. The handler rejects any TaskAccepted with missing or
+// zero-valued identity fields BEFORE touching the session or taskRepo.
 func (h *Handler) handleTaskAccepted(workerID string, ta *pb.TaskAccepted) {
 	if !h.config.PushMode {
 		return
 	}
 	taskID := ta.GetTaskId()
+	jobID := ta.GetJobId()
+	attemptID := ta.GetAttemptId()
+	leaseID := ta.GetLeaseId()
+	attemptNumber := ta.GetAttemptNumber()
+	revision := ta.GetRevision()
+
+	if taskID == "" || jobID == "" || attemptID == "" || leaseID == "" || attemptNumber <= 0 {
+		log.Printf("[GRPC] TaskAccepted from worker %s refused — incomplete identity (task=%q job=%q attempt=%q lease=%q attempt_num=%d rev=%d)",
+			workerID, taskID, jobID, attemptID, leaseID, attemptNumber, revision)
+		return
+	}
 
 	sess := h.getSession(workerID)
 	if sess == nil {
@@ -45,11 +61,18 @@ func (h *Handler) handleTaskAccepted(workerID string, ta *pb.TaskAccepted) {
 		return
 	}
 
-	// Verify the lease_id the worker is accepting matches what we offered.
-	declaredLeaseID := ta.GetLeaseId()
-	if declaredLeaseID != "" && declaredLeaseID != offerLeaseID {
+	// Verify the lease_id and attempt_id the worker is accepting match
+	// what we offered. The offer carries the canonical (attempt_id, lease_id)
+	// pair minted by ClaimNextWithAttemptAtomic; the worker must echo both
+	// back exactly.
+	if leaseID != offerLeaseID {
 		log.Printf("[GRPC] Worker %s accepted task %s with mismatched lease_id: got %s, want %s",
-			workerID, taskID, declaredLeaseID, offerLeaseID)
+			workerID, taskID, leaseID, offerLeaseID)
+		return
+	}
+	if attemptID != offer.AttemptID {
+		log.Printf("[GRPC] Worker %s accepted task %s with mismatched attempt_id: got %s, want %s",
+			workerID, taskID, attemptID, offer.AttemptID)
 		return
 	}
 
@@ -65,20 +88,19 @@ func (h *Handler) handleTaskAccepted(workerID string, ta *pb.TaskAccepted) {
 	// pre-PR-2 INSERT pattern (Start + Create) had a crash window; PR-2's
 	// earlier-minted PENDING row + this UPDATE path closes it.
 	ctx := context.Background()
-	attemptNum := offer.AttemptNumber
 	attempt := &taskattempts.TaskAttempt{
-		ID:            offer.AttemptID,
+		ID:            attemptID,
 		TaskID:        taskID,
-		JobID:         offer.JobID,
+		JobID:         jobID,
 		WorkerID:      workerID,
-		AttemptNumber: attemptNum,
-		LeaseID:       declaredLeaseID,
+		AttemptNumber: int(attemptNumber),
+		LeaseID:       leaseID,
 		Status:        taskattempts.AttemptStatusRunning,
 	}
-	if err := h.taskRepo.AcceptTaskAtomic(ctx, attempt, offer.Revision); err != nil {
+	if err := h.taskRepo.AcceptTaskAtomic(ctx, attempt, int(revision)); err != nil {
 		if errors.Is(err, store.ErrTransitionConflict) {
 			log.Printf("[GRPC] Worker %s accepted task %s but lease is stale or canonical attempt drift (offer.attempt_id=%s offer.attempt_number=%d attempt_id=%s attempt_number=%d) rev=%d — dropping TaskAccepted",
-				workerID, taskID, offer.AttemptID, offer.AttemptNumber, attempt.ID, attemptNum, offer.Revision)
+			workerID, taskID, offer.AttemptID, offer.AttemptNumber, attempt.ID, attemptNumber, offer.Revision)
 			// Stale lease: clear the pending offer so the next
 			// ClaimNextReadyTask can re-offer this task.
 			sess.claimMu.Lock()
@@ -96,7 +118,7 @@ func (h *Handler) handleTaskAccepted(workerID string, ta *pb.TaskAccepted) {
 		return
 	}
 
-	// Send typed TaskLeaseGranted via sendCh.
+	// Send typed TaskLeaseGranted via sendCh with the full identity tuple.
 	env := &pb.MasterToWorkerEnvelope{
 		MessageId:       fmt.Sprintf("taskgrant-%s-%s", workerID, taskID),
 		WorkerId:        workerID,
@@ -104,10 +126,12 @@ func (h *Handler) handleTaskAccepted(workerID string, ta *pb.TaskAccepted) {
 		ProtocolVersion: controltransport.ProtocolVersionCurrent,
 		Msg: &pb.MasterToWorkerEnvelope_TaskLeaseGranted{
 			TaskLeaseGranted: &pb.TaskLeaseGranted{
-				TaskId:    taskID,
-				JobId:     offer.JobID,
-				LeaseId:   offer.LeaseID,
-				AttemptId: attempt.ID,
+				TaskId:        taskID,
+				JobId:         jobID,
+				LeaseId:       offer.LeaseID,
+				AttemptId:     attemptID,
+				AttemptNumber: attemptNumber,
+				Revision:      revision,
 			},
 		},
 	}
@@ -137,30 +161,24 @@ func (h *Handler) handleTaskAccepted(workerID string, ta *pb.TaskAccepted) {
 // handleTaskRejected processes typed TaskRejected — PR #4 task-native push mode.
 // Releases the claimed task back to READY for another worker.
 //
-// fix/task-rejected-lease-identity: validates the full identity tuple
-// (task_id, attempt_id, lease_id, worker_id) against the stored task
-// state BEFORE calling ReleaseLease. The pre-validation provides clear
-// log diagnostics for stale rejects. The TOCTOU gap between taskRepo.Get()
-// and taskRepo.ReleaseLease() is now CLOSED by ReleaseLease's CAS gate
-// on (worker_id, lease_id) — a stale reject cannot release a task already
-// reassigned to a different worker/lease.
-//
-// The revision field from the proto is not used as a CAS gate because
-// the worker sends revision=0 (it does not know the master-side revision
-// at reject time — the offer was never accepted). This is documented and
-// expected; the (worker_id, lease_id) tuple is the primary gate.
+// fix/identity-tuple-mandatory: the full 6-field identity tuple is now
+// MANDATORY. Every field must be present and non-empty / non-zero.
+// Permissive "if x != """ guards replaced by strict field-presence checks.
 func (h *Handler) handleTaskRejected(workerID string, tr *pb.TaskRejected) {
 	taskID := tr.GetTaskId()
-	reason := tr.GetReason()
-	if taskID == "" {
-		return
-	}
-
-	// fix/task-rejected-lease-identity: read the full identity tuple
-	// from the typed proto and validate against the authoritative
-	// task state BEFORE calling ReleaseLease.
+	jobID := tr.GetJobId()
 	attemptID := tr.GetAttemptId()
 	leaseID := tr.GetLeaseId()
+	attemptNumber := tr.GetAttemptNumber()
+	revision := tr.GetRevision()
+	reason := tr.GetReason()
+
+	if taskID == "" || jobID == "" || attemptID == "" || leaseID == "" || attemptNumber <= 0 {
+		log.Printf("[GRPC] TaskRejected from worker %s refused — incomplete identity (task=%q job=%q attempt=%q lease=%q attempt_num=%d rev=%d reason=%q)",
+			workerID, taskID, jobID, attemptID, leaseID, attemptNumber, revision, reason)
+		h.clearPendingOfferForTask(workerID, taskID)
+		return
+	}
 
 	// h.taskRepo is wired at construction by bootstrap.go; nil here is a
 	// programmer error (bootstrap must reject nil taskRepo before
@@ -175,8 +193,6 @@ func (h *Handler) handleTaskRejected(workerID string, tr *pb.TaskRejected) {
 	}
 
 	// Guard 1: ownership — the rejecting worker must still own the task.
-	// A stale reject arriving after the master's reaper reassigned the
-	// task to a different worker must be silently dropped.
 	if t.WorkerID != workerID {
 		log.Printf("[GRPC] TaskRejected from worker %s for task %s refused — task now owned by %s (reason=%q)",
 			workerID, taskID, t.WorkerID, reason)
@@ -184,20 +200,16 @@ func (h *Handler) handleTaskRejected(workerID string, tr *pb.TaskRejected) {
 		return
 	}
 
-	// Guard 2: lease identity — the reported lease_id must match the
-	// stored lease_id. A stale reject from a previous lease cycle must
-	// NOT release a task that was re-leased to a different lease.
-	if leaseID != "" && t.LeaseID != "" && t.LeaseID != leaseID {
+	// Guard 2: lease identity — strict compare (both fields are mandatory).
+	if t.LeaseID != leaseID {
 		log.Printf("[GRPC] TaskRejected from worker %s for task %s refused — lease mismatch (reported=%s stored=%s, reason=%q)",
 			workerID, taskID, leaseID, t.LeaseID, reason)
 		h.clearPendingOfferForTask(workerID, taskID)
 		return
 	}
 
-	// Guard 3: attempt identity — the reported attempt_id must match the
-	// canonical attempt stamped at Claim time (defense-in-depth; the
-	// lease_id gate above is the primary defence).
-	if attemptID != "" && t.AttemptID != "" && t.AttemptID != attemptID {
+	// Guard 3: attempt identity — strict compare (both fields are mandatory).
+	if t.AttemptID != attemptID {
 		log.Printf("[GRPC] TaskRejected from worker %s for task %s refused — attempt mismatch (reported=%s stored=%s, reason=%q)",
 			workerID, taskID, attemptID, t.AttemptID, reason)
 		h.clearPendingOfferForTask(workerID, taskID)
@@ -250,15 +262,15 @@ func (h *Handler) clearPendingOfferForTask(workerID, taskID string) {
 // without ever closing the Attempt.
 func (h *Handler) handleTaskResult(workerID string, tr *pb.TaskResult) {
 	taskID := tr.GetTaskId()
-	if taskID == "" {
-		log.Printf("[GRPC] TaskResult from worker %s missing task_id — dropping", workerID)
-		return
-	}
+	jobID := tr.GetJobId()
 	attemptID := tr.GetAttemptId()
 	leaseID := tr.GetLeaseId()
-	if attemptID == "" || leaseID == "" {
-		log.Printf("[GRPC] TaskResult from worker %s refused — missing identity (task=%q attempt=%q lease=%q)",
-			workerID, taskID, attemptID, leaseID)
+	attemptNumber := tr.GetAttemptNumber()
+	revision := tr.GetRevision()
+
+	if taskID == "" || jobID == "" || attemptID == "" || leaseID == "" || attemptNumber <= 0 {
+		log.Printf("[GRPC] TaskResult from worker %s refused — incomplete identity (task=%q job=%q attempt=%q lease=%q attempt_num=%d rev=%d)",
+			workerID, taskID, jobID, attemptID, leaseID, attemptNumber, revision)
 		return
 	}
 
@@ -310,30 +322,15 @@ func (h *Handler) handleTaskResult(workerID string, tr *pb.TaskResult) {
 
 	ctx := context.Background()
 
-	// PR-2 / attempt_number wire-strict-compare — the canonical attempt
-	// exists in task_attempts for (task_id, worker_id, lease_id); we
-	// resolve its attempt_number here so ValidateIdentityTuple's cheap
-	// field-presence check "AttemptNumber must be >0" no longer fires
-	// on the wire. If the canonical lookup misses (pseudo-spoof /
-	// impersonation), we pass 0 — the validator will surface the lookup-
-	// miss sentinel or the cheap-check error and the audit-closure path
-	// short-circuits cleanly. A LOOKUP ERROR is logged (distinct from
-	// "no row found") so a future DB outage doesn't masquerade as a
-	// wire-spoof in operator logs.
-	var attemptNumber int32
-	if h.taskAttemptRepo != nil {
-		att, lookErr := h.taskAttemptRepo.GetByTaskIDAndWorkerAndLease(
-			ctx, taskID, workerID, leaseID,
-		)
-		switch {
-		case lookErr != nil:
-			log.Printf("[GRPC] canonical attempt lookup failed for task=%s worker=%s lease=%s: %v (validator will likely fail cheap-check)", taskID, workerID, leaseID, lookErr)
-		case att == nil:
-			// No canonical row — handle as before (validator drops).
-		default:
-			attemptNumber = int32(att.AttemptNumber)
-		}
-	}
+	// PR-2 / attempt_number wire-strict-compare — now sourced directly
+	// from the proto (no longer resolved via a canonical lookup because
+	// the worker sends the canonical attempt_number on the wire). The
+	// revision is also consumed from the proto for CAS validation.
+	//
+	// A zero attempt_number (legacy worker) is rejected at the
+	// field-presence check above; a non-zero value that mismatches the
+	// canonical row triggers ErrIdentityMismatch in the ingestion
+	// service's ValidateIdentityTuple.
 
 	res, err := h.ingestionSvc.IngestTaskResult(ctx, ingest.IngestCommand{
 		TaskID:          taskID,
@@ -341,7 +338,7 @@ func (h *Handler) handleTaskResult(workerID string, tr *pb.TaskResult) {
 		AttemptNumber:   attemptNumber,
 		LeaseID:         leaseID,
 		WorkerID:        workerID,
-		JobID:           tr.GetJobId(),
+		JobID:           jobID,
 		Status:          tr.GetStatus(),
 		ErrorCode:       tr.GetErrorCode(),
 		ErrorDetail:     tr.GetErrorDetail(),
@@ -359,29 +356,21 @@ func (h *Handler) handleTaskResult(workerID string, tr *pb.TaskResult) {
 }
 
 // handleTaskRenewal processes a typed TaskLeaseRenewal via gRPC stream.
-// PR-03 / fix/task-lease-renewal-protocol: canonical task-native
-// renewal path. The worker sends the lease identity tuple
-// (task_id, lease_id) plus a hint expiry. We look up the current
-// task to obtain the live revision, then issue taskRepo.RenewLease
-// with the CAS tuple (task_id, worker_id, lease_id, revision,
-// status IN ('LEASED','RUNNING')) — no attempt_id predicate: PR-2's
-// AcceptTaskAtomic is the SOLE writer of tasks.attempt_id and a
-// worker cannot hold two different attempt_ids for the same task
-// concurrently. The (worker_id, lease_id) gate closes the TOCTOU
-// race against reaper-reset alone.
-//
-// No session lock is required: the audit invariant (CAS gates the
-// database-side race) holds without serializing against the offer
-// pipeline, and read-then-CAS is a safe pattern under SQLite's
-// optimistic concurrency.
+// fix/identity-tuple-mandatory: the worker sends the full 6-field
+// identity tuple on every renewal. We validate all fields are present
+// then issue the CAS-backed RenewLease against the live DB revision.
 func (h *Handler) handleTaskRenewal(workerID string, tr *pb.TaskLeaseRenewal) {
 	ctx := context.Background()
 	taskID := tr.GetTaskId()
+	jobID := tr.GetJobId()
+	attemptID := tr.GetAttemptId()
 	leaseID := tr.GetLeaseId()
+	attemptNumber := tr.GetAttemptNumber()
+	renewalRevision := tr.GetRevision()
 
-	if taskID == "" || leaseID == "" {
-		log.Printf("[GRPC] TaskLeaseRenewal from worker %s refused — missing identity (task=%q lease=%q)",
-			workerID, taskID, leaseID)
+	if taskID == "" || jobID == "" || attemptID == "" || leaseID == "" || attemptNumber <= 0 {
+		log.Printf("[GRPC] TaskLeaseRenewal from worker %s refused — incomplete identity (task=%q job=%q attempt=%q lease=%q attempt_num=%d rev=%d)",
+			workerID, taskID, jobID, attemptID, leaseID, attemptNumber, renewalRevision)
 		return
 	}
 

@@ -5,43 +5,19 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"velox-shared/taskcontract"
 )
 
-// ── Task description (worker-side mirror of master TaskSpec) ────────────────
+// ── Task description (worker-side import of shared TaskSpec) ────────────
 //
-// TaskSpec structure intentionally mirrors DataServer/internal/taskgraph/spec.go
-// until a shared/contract extraction unifies both sides. Field semantics and
-// validation invariants must stay aligned. A future PR will move TaskSpec to
-// shared/contract/ and have both sides import from there.
+// TaskSpec is re-exported from velox-shared/taskcontract so master and
+// worker share a single definition. executor.TaskSpec is a type alias —
+// existing call-sites remain unchanged.
 
-// TaskSpec is the typed, versioned description of work the master sends to
-// the worker. Encoding/json sorts map keys; combined with SHA-256 this gives
-// a stable SpecHash for cache-key and reproducibility.
-type TaskSpec struct {
-	Version    int                    `json:"version"`
-	JobID      string                 `json:"job_id"`
-	ExecutorID string                 `json:"executor_id"`
-	Payload    map[string]interface{} `json:"payload,omitempty"`
-}
-
-// Validate ensures the spec is well-formed before being handed to an
-// Executor. Executor implementations may add stricter checks via their
-// own Validate method.
-func (s *TaskSpec) Validate() error {
-	if s == nil {
-		return fmt.Errorf("%w: TaskSpec is nil", ErrInvalidDescriptor)
-	}
-	if strings.TrimSpace(s.JobID) == "" {
-		return fmt.Errorf("%w: TaskSpec.JobID is required", ErrInvalidDescriptor)
-	}
-	if strings.TrimSpace(s.ExecutorID) == "" {
-		return fmt.Errorf("%w: TaskSpec.ExecutorID is required", ErrInvalidDescriptor)
-	}
-	if s.Version <= 0 {
-		return fmt.Errorf("%w: TaskSpec.Version must be > 0 (got %d)", ErrInvalidDescriptor, s.Version)
-	}
-	return nil
-}
+// TaskSpec is the canonical task specification, re-exported from the
+// shared contract package.
+type TaskSpec = taskcontract.TaskSpec
 
 // ── Enums ────────────────────────────────────────────────────────────────────
 
@@ -232,10 +208,15 @@ type ExecutionResult struct {
 }
 
 // ArtifactRef is the canonical pointer to one published artifact.
+// fix/artifact-metadata: ArtifactID is now separate from Hash (sha256).
+// SizeBytes carries the real byte count of the produced file.
+// Hash is mandatory for succeeded tasks — validated by dispatchTaskRunner.
 type ArtifactRef struct {
-	Type string `json:"type"`
-	Hash string `json:"hash"`
-	URI  string `json:"uri,omitempty"`
+	Type       string `json:"type"`
+	Hash       string `json:"hash"`
+	ArtifactID string `json:"artifact_id,omitempty"`
+	URI        string `json:"uri,omitempty"`
+	SizeBytes  int64  `json:"size_bytes"`
 }
 
 // ── Executor ──────────────────────────────────────────────────────────────────

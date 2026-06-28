@@ -30,7 +30,6 @@ import (
 	"velox-server/internal/jobs/enqueue"
 	"velox-server/internal/outbox"
 	"velox-server/internal/store"
-	"velox-server/internal/taskgraph"
 	workersreg "velox-server/internal/workers"
 )
 
@@ -67,25 +66,6 @@ type serverDeps struct {
 	// nil in tests means the route is omitted.
 	metricsRegistry  *velmetrics.Registry
 	metricsCollector *velmetrics.Collector
-
-	// PR-operation 01 / Fase 3 — wiring for the orchestrator legacy adapter.
-	// atomicPlanWriter is the AtomicJobTaskCreator that backs
-	// creatorflow.CreateJobWithPlan for POST /orchestrator/jobs.
-	// jobsRepo is the canonical jobs.Writer/Reader (used for pre-check +
-	// list + Get). tasksRepo is the canonical taskgraph.Reader used by
-	// the GET projection adapter. Initialised in buildTestDeps and
-	// runServer from taskDeps + buildPersistence; nil-safe checks live in
-	// newOrchestratorLegacyAdapter so the legacy POST can be staged vs.
-	// the new POST without breaking the build.
-	atomicPlanWriter *store.AtomicJobTaskCreator
-	// jobsRepo is jobs.Reader (NOT Writer) — the orchestratorLegacyAdapter
-	// only needs the canonical read surface (Get/List/Counts) plus an
-	// idempotency pre-check inside creatorflow.CreateJobWithPlan. Writes
-	// go through store.AtomicJobTaskCreator on atomicPlanWriter. j.Repository
-	// implements both Reader and Writer, so we keep the field as jobs.Reader
-	// and drop the unused Write surface from the adapter dependency graph.
-	jobsRepo  jobs.Reader
-	tasksRepo taskgraph.Reader
 }
 
 // ── Sentinels ─────────────────────────────────────────────────────────────
@@ -176,14 +156,6 @@ func buildTestDeps(cfg *config.Config) (*serverDeps, error) {
 		cmdMgr:              w.CommandManager,
 		lifecycleSvc:        j.Lifecycle,
 		taskDeps:            t,
-		// PR-operation 01 / Fase 3 — wire the canonical writer + canonical
-		// reader surface into the orchestrator legacy adapter. Until a
-		// future PR threads *tasksDeps through buildTestDeps, buildTasks
-		// has already produced t.AtomicCreator and t.TaskRepository, both
-		// pointing at the same *SQLiteStore.
-		atomicPlanWriter: t.AtomicCreator,
-		jobsRepo:         j.Repository,
-		tasksRepo:        t.TaskRepository,
 	}, nil
 }
 
@@ -253,14 +225,6 @@ func runServer(cfg *config.Config) error {
 		assetService:        m.AssetService,
 		enqueuer:            m.Enqueuer,
 		taskDeps:            t,
-		// PR-operation 01 / Fase 3 — wire the canonical writer + readers
-		// into the orchestrator legacy adapter. moduleDeps.CreatorFlowPlanWriter
-		// is the bind we exposed in Fase 2; t.AtomicCreator is the same
-		// writer as taskDeps.AtomicCreator (both wrap *SQLiteStore, no
-		// state of their own).
-		atomicPlanWriter: t.AtomicCreator,
-		jobsRepo:         j.Repository,
-		tasksRepo:        t.TaskRepository,
 	}
 
 	// 3. Build router (scorecard v1 / PR-5: registry + collector wired

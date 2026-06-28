@@ -1,3 +1,14 @@
+// Package pipeline serves the remote-engine + creatorflow integration
+// endpoints. The HTTP layer fans out to a remote script-generation
+// service, then forwards completed results into the Velox job queue.
+//
+// PR-DI-pipeline: constructor-based dependency injection. The previous
+// design exposed three package-level globals (remoteEngineClient,
+// pipelineEnqueuer, plus the old voiceover global removed in PR15.7a)
+// mutated by InitRemoteEngine / InitPipelineEnqueuer at boot. Handlers
+// now holds its dependencies on the struct so composition-root wiring
+// is explicit, tests construct their own graphs, and `go test -race`
+// stays clean across concurrent pipelines.
 package pipeline
 
 import (
@@ -14,59 +25,138 @@ import (
 	voiceoverassets "velox-server/internal/assets"
 	"velox-server/internal/config"
 	"velox-server/internal/creatorflow"
+	"velox-server/internal/jobs"
 	"velox-server/internal/jobs/enqueue"
 	"velox-server/internal/remoteengine"
+	"velox-server/internal/workers"
 )
 
-var remoteEngineClient *remoteengine.Client
-
-// pipelineEnqueuer holds the *enqueue.Enqueuer used for forwarding
-// pipeline results to the Velox worker queue. PR15.7a: replaces the
-// package-level voiceover global + raw queue reference with the
-// canonical Enqueuer type, mirroring InitRemoteEngine's pattern.
-var pipelineEnqueuer *enqueue.Enqueuer
-
-// InitPipelineEnqueuer wires the singleton enqueuer shared with the
-// rest of the server (script handler, creatorflow). Call once at
-// composition root, BEFORE serving any HTTP traffic.
-func InitPipelineEnqueuer(e *enqueue.Enqueuer) {
-	pipelineEnqueuer = e
-	pipelineLog("INIT: pipeline enqueuer wired creator=%v voiceover=%v", e != nil && e.Creator != nil, e != nil && e.Voiceover != nil)
+// Handlers carries every dependency the pipeline HTTP layer needs.
+//
+// The struct carries only the mandatory remote params (cfg,
+// enqueuer, client). Cancellation-side dependencies (jobs Reader/Writer
+// for local cleanup, worker CommandManager for per-worker cancellation
+// notification) are bundled in JobsDeps and set when wiring the full
+// composition root via NewHandlersFull. nil-safe — a nil JobsDeps
+// disables local cancellation while leaving remote cancel reachable.
+type Handlers struct {
+	cfg      *config.Config
+	enqueuer *enqueue.Enqueuer
+	client   *remoteengine.Client
+	jobs     JobsDeps
 }
 
-// structured log helper
-func pipelineLog(format string, args ...interface{}) {
-	log.Printf("[PIPELINE] "+format, args...)
+// JobsDeps bundles the optional jobs-layer dependencies used by
+// PipelineCancel: list-all for hit-detection, delete for cleanup,
+// command manager for per-worker cancel notifications.
+type JobsDeps struct {
+	Reader jobs.Reader
+	Writer jobs.Writer
+	CmdMgr *workers.CommandManager
 }
 
-// InitRemoteEngine initializes the remote engine client
-func InitRemoteEngine(cfg *config.Config) {
-	if cfg.Render.RemoteEngineURL == "" {
-		pipelineLog("INIT: remote engine NOT configured (VELOX_REMOTE_ENGINE_URL empty)")
-		return
+// NewHandlers constructs a Handlers with the three mandatory deps:
+//
+//   cfg       — render settings (remote URL, poll interval, ...)
+//   enqueuer  — the canonical *enqueue.Enqueuer shared with the rest
+//                of the server (script handler, creatorflow), used to
+//                forward completed pipeline results to Velox workers.
+//   client    — the *remoteengine.Client talking to the script service
+//                (may be nil when VELOX_REMOTE_ENGINE_URL is unset).
+//
+// Compose with WithJobsDeps to add the optional cancel deps.
+func NewHandlers(cfg *config.Config, enqueuer *enqueue.Enqueuer, client *remoteengine.Client) *Handlers {
+	return &Handlers{cfg: cfg, enqueuer: enqueuer, client: client}
+}
+
+// NewHandlersFull is the composition-root constructor that wires
+// every optional dependency (jobs reader/writer for cancellation
+// cleanup, worker command manager for per-worker cancel notifications).
+func NewHandlersFull(
+	cfg *config.Config,
+	enqueuer *enqueue.Enqueuer,
+	client *remoteengine.Client,
+	jobsReader jobs.Reader,
+	jobsWriter jobs.Writer,
+	cmdMgr *workers.CommandManager,
+) *Handlers {
+	return &Handlers{
+		cfg:      cfg,
+		enqueuer: enqueuer,
+		client:   client,
+		jobs:     JobsDeps{Reader: jobsReader, Writer: jobsWriter, CmdMgr: cmdMgr},
 	}
-	remoteEngineClient = remoteengine.NewClient(remoteengine.Config{
+}
+
+// WithJobsDeps returns a copy of h with the optional JobsDeps set.
+// Returns the same handler (mutated) for fluent composition.
+func (h *Handlers) WithJobsDeps(reader jobs.Reader, writer jobs.Writer, cmdMgr *workers.CommandManager) *Handlers {
+	h.jobs = JobsDeps{Reader: reader, Writer: writer, CmdMgr: cmdMgr}
+	return h
+}
+
+// NewRemoteClientFromConfig constructs the canonical
+// *remoteengine.Client from a *config.Config at composition root.
+//
+// PR-DI-pipeline: replaces the previous `pipeline.InitRemoteEngine`
+// package-level mutator that built the client and parked it on the
+// `remoteEngineClient` global. Returns nil when the remote engine
+// is unconfigured (VELOX_REMOTE_ENGINE_URL empty) so the handler's
+// IsConfigured checks flow naturally into a 503 response.
+//
+// Callers: cmd/server/router.go (production), tests (with a custom
+// URL/TimeoutMS pointing at a stub httptest server).
+func NewRemoteClientFromConfig(cfg *config.Config) *remoteengine.Client {
+	if cfg == nil || cfg.Render.RemoteEngineURL == "" {
+		return nil
+	}
+	return remoteengine.NewClient(remoteengine.Config{
 		URL:       cfg.Render.RemoteEngineURL,
 		Token:     cfg.Render.RemoteEngineToken,
 		TimeoutMS: cfg.Render.RemoteEngineTimeoutMS,
 		Retries:   cfg.Render.RemoteEngineRetries,
 	})
-	pipelineLog("INIT: remote engine configured url=%s timeout_ms=%d retries=%d poll_interval=%ds",
-		cfg.Render.RemoteEngineURL, cfg.Render.RemoteEngineTimeoutMS, cfg.Render.RemoteEngineRetries, cfg.Render.RemoteEnginePollInterval)
 }
 
-// PipelineGenerate handles POST /api/remote/pipeline/generate
+// RegisterRoutes mounts all pipeline endpoints on the given engine.
 //
-// PR15.7a: The Enqueuer (wired
-// via InitPipelineEnqueuer) owns both the queue and the voiceover
-// rewrite service so forwarding can complete without package-level state.
-func PipelineGenerate(cfg *config.Config) gin.HandlerFunc {
+//   adminAuth — when non-nil, applied to the operator routes
+//                (generate/status/cancel). Pass nil for the trusted
+//                network or test mounts.
+func (h *Handlers) RegisterRoutes(r *gin.Engine, adminAuth gin.HandlerFunc) {
+	r.POST("/api/script-simple", h.ScriptSimple())
+	r.POST("/api/script-multiple", h.ScriptBatch())
+
+	remote := r.Group("/api/remote/pipeline")
+	if adminAuth != nil {
+		remote.Use(adminAuth)
+	}
+	remote.POST("/generate", h.Generate())
+	remote.GET("/status/:trace_id", h.Status())
+	remote.DELETE("/cancel/:trace_id", h.Cancel())
+}
+
+// pipelineLog is the package-internal structured-log helper. Kept
+// package-level (not a method on Handlers) so sibling files can call
+// it without ceremony, and so diagnostic context such as "[PIPELINE]"
+// remains uniform across all pipeline-installed routes.
+func pipelineLog(format string, args ...interface{}) {
+	log.Printf("[PIPELINE] "+format, args...)
+}
+
+// Generate handles POST /api/remote/pipeline/generate.
+//
+// Dependencies (enqueuer, remote engine client) are read from the
+// receiver `h` rather than from package-level globals, so two
+// concurrent tests or two pipelines mounted on different admin groups
+// cannot collide through shared state.
+func (h *Handlers) Generate() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if pipelineEnqueuer == nil {
+		if h.enqueuer == nil {
 			pipelineLog("REQUEST: enqueuer not wired — returning 503")
 			c.JSON(http.StatusServiceUnavailable, gin.H{
 				"ok":    false,
-				"error": "pipeline enqueuer not wired (call InitPipelineEnqueuer at boot)",
+				"error": "pipeline enqueuer not wired (call NewHandlers(... enqueuer) at composition root)",
 			})
 			return
 		}
@@ -84,7 +174,7 @@ func PipelineGenerate(cfg *config.Config) gin.HandlerFunc {
 		sceneCount := reqPayload["scene_count"]
 		pipelineLog("REQUEST: received topic=%q language=%s style=%s scenes=%v", topic, language, style, sceneCount)
 
-		if remoteEngineClient == nil || !remoteEngineClient.IsConfigured() {
+		if h.client == nil || !h.client.IsConfigured() {
 			pipelineLog("REQUEST: remote engine NOT configured — returning 503")
 			c.JSON(http.StatusServiceUnavailable, gin.H{
 				"ok":    false,
@@ -94,8 +184,8 @@ func PipelineGenerate(cfg *config.Config) gin.HandlerFunc {
 			return
 		}
 
-		pipelineLog("REMOTE: forwarding to %s/api/script/generate-with-images", cfg.Render.RemoteEngineURL)
-		result, err := remoteEngineClient.StartPipeline(c.Request.Context(), reqPayload)
+		pipelineLog("REMOTE: forwarding to %s/api/script/generate-with-images", h.cfg.Render.RemoteEngineURL)
+		result, err := h.client.StartPipeline(c.Request.Context(), reqPayload)
 		if err != nil {
 			pipelineLog("REMOTE: request FAILED: %v", err)
 			c.JSON(http.StatusBadGateway, gin.H{"ok": false, "error": err.Error()})
@@ -115,10 +205,11 @@ func PipelineGenerate(cfg *config.Config) gin.HandlerFunc {
 			response[k] = v
 		}
 
-		// Try synchronous forward if result is already complete
+		// Try synchronous forward if the remote already returned a
+		// complete result.
 		if enqueue.ShouldForwardPipelineResult(result) {
 			pipelineLog("FORWARD: result complete — forwarding to Velox workers (sync)")
-			if forwarded, forwardErr := forwardPipelineResultToWorker(c.Request.Context(), pipelineEnqueuer, result); forwardErr != nil {
+			if forwarded, forwardErr := forwardPipelineResultToWorker(c.Request.Context(), h.enqueuer, result); forwardErr != nil {
 				if assetErr, ok := voiceoverassets.AsAcquisitionError(forwardErr); ok {
 					c.JSON(http.StatusUnprocessableEntity, gin.H{
 						"ok":          false,
@@ -139,8 +230,10 @@ func PipelineGenerate(cfg *config.Config) gin.HandlerFunc {
 				response["worker_forward_result"] = forwarded
 			}
 		} else if jobID != "" && !isTerminalStatus(status) {
-			// Async: start background polling
-			pollInterval := cfg.Render.RemoteEnginePollInterval
+			// Async: spin up background polling. h.startPolling reads
+			// client/enqueuer from the receiver, so the goroutine
+			// captures the handler instance, not package state.
+			pollInterval := h.cfg.Render.RemoteEnginePollInterval
 			if pollInterval <= 0 {
 				pollInterval = 30
 			}
@@ -150,7 +243,7 @@ func PipelineGenerate(cfg *config.Config) gin.HandlerFunc {
 			}
 			pipelineLog("POLL: starting background polling job_id=%s status=%s interval=%ds max_polls=%d (~%d min timeout)",
 				jobID, status, pollInterval, maxPolls, pollInterval*maxPolls/60)
-			startPipelinePolling(remoteEngineClient, jobID, pollInterval)
+			h.startPolling(jobID, pollInterval)
 			response["polling_enabled"] = true
 			response["poll_interval_sec"] = pollInterval
 			response["worker_forwarded"] = false
@@ -165,6 +258,11 @@ func PipelineGenerate(cfg *config.Config) gin.HandlerFunc {
 	}
 }
 
+// forwardPipelineResultToWorker is the package-internal helper that
+// turns a remote-engine result map into a Velox job payload and
+// enqueues it. It already took *enqueue.Enqueuer as an explicit
+// parameter before the refactor; constructor injection simply makes
+// `h.Generate` the upstream caller that supplies it.
 func forwardPipelineResultToWorker(ctx context.Context, enqueuer *enqueue.Enqueuer, result map[string]interface{}) (map[string]interface{}, error) {
 	pipelineLog("FORWARD: building worker payload...")
 	enqueued, err := creatorflow.ForwardCompletedResult(ctx, enqueuer, result)

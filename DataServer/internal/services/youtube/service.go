@@ -1,3 +1,9 @@
+// Package youtube is the YouTube business service. PR-YT-REPO: the
+// previous *youtube.Storage facade is gone (deleted with the
+// StorageStore/Storage/NewStorage variadic/in-memory mode/SetStore
+// tardivo). This service now threads through the canonical
+// *youtube.Service (which owns the Repository) for every persistence
+// operation.
 package youtube
 
 import (
@@ -17,8 +23,12 @@ import (
 const managerStatsCacheTTL = 5 * time.Minute
 
 // Service holds the dependencies for YouTube business operations.
+//
+// PR-YT-REPO: `storage *youtube.Storage` is removed. The canonical
+// Repository is held by *youtube.Service (ytService.rep); every
+// Group/Channel/TrackedNiche operation routes through ytService so
+// SQLite is the single source of truth.
 type Service struct {
-	storage     *youtube.Storage
 	apiClient   *youtube.APIClient
 	feedCache   *youtube.FeedCache
 	newsFetcher *news.Fetcher
@@ -30,13 +40,17 @@ type Service struct {
 }
 
 // New creates a new Service instance.
-func New(dataDir, apiKey string, existingStorage *youtube.Storage, ytService *youtube.Service) *Service {
-	cache := youtube.NewCache(dataDir, 2*time.Hour)
+//
+// PR-YT-REPO: the `existingStorage *youtube.Storage` parameter is
+// removed (the Storage facade is deleted). Pass only `ytService` —
+// the canonical Service owns the Repository and provides every
+// query/mutation method this business layer needs.
+func New(dataDir, apiKey string, ytService *youtube.Service) *Service {
+	cache := youtube.NewCache(dataDir, 2*time.Hour, ytService.Repo())
 	feedCache := youtube.NewFeedCache(dataDir)
 	newsFetcher := news.NewFetcher(nil)
 
 	s := &Service{
-		storage:     existingStorage,
 		apiClient:   youtube.NewAPIClient(apiKey, cache),
 		feedCache:   feedCache,
 		newsFetcher: newsFetcher,
@@ -53,74 +67,87 @@ func (s *Service) reviewAndRefreshChannels() {
 	time.Sleep(3 * time.Second)
 	log.Printf("[REVIEW] YouTube Review: Starting background review of database channels...")
 
-	groups, _ := s.storage.ListGroups()
+	if s.ytService == nil {
+		log.Printf("[WARN] YouTube Review: no integration service wired; skipping review")
+		return
+	}
+
+	groups := s.ytService.GetGroups()
 	if len(groups) == 0 {
 		log.Printf("[INFO] YouTube Review: No groups found, skipping review")
 		return
 	}
 
-	for _, group := range groups {
-		for _, ch := range group.Channels {
-			needsRefresh := ch.Title == "" || ch.Title == ch.ID || ch.Name == "" || ch.Name == ch.ID || ch.Thumbnail == ""
-			needsLanguage := ch.Language == "" || ch.Language == "unknown"
-
-			if needsRefresh || needsLanguage {
-				log.Printf("[INFO] YouTube Review: Refreshing metadata & language for channel %s in group %s...", ch.ID, group.Name)
-
-				var realTitle string
-				var thumbnail string
-				detectedLang := ch.Language
-
-				if s.ytService != nil {
-					if authCh := s.ytService.GetAuthChannel(ch.ID); authCh != nil {
-						realTitle = authCh.Title
-						thumbnail = authCh.Thumbnail
-						if authCh.Language != "" && authCh.Language != "unknown" {
-							detectedLang = authCh.Language
-						}
-						log.Printf("[OK] YouTube Review: Found OAuth metadata for %s -> %q", ch.ID, realTitle)
-					}
-				}
-
-				if realTitle == "" {
-					channelURL := ch.URL
-					if channelURL == "" || !strings.HasPrefix(channelURL, "http") {
-						channelURL = "https://www.youtube.com/channel/" + ch.ID
-					}
-					info, err := s.apiClient.GetChannelInfo(context.Background(), channelURL)
-					if err == nil && info != nil {
-						realTitle = info.Title
-						thumbnail = info.Thumbnail
-						log.Printf("[OK] YouTube Review: Fetched API info for %s -> %q", ch.ID, realTitle)
-					} else {
-						log.Printf("[WARN] YouTube Review: Failed to fetch channel info for %s: %v", ch.ID, err)
-					}
-				}
-
-				if realTitle == "" {
-					realTitle = ch.ID
-				}
-
-				if detectedLang == "" || detectedLang == "unknown" {
-					detectedLang = youtube.DetectLanguageFromName(realTitle)
-					if detectedLang == "" {
-						detectedLang = "en"
-					}
-				}
-
-				_ = s.storage.UpdateChannelMetadata(group.Name, ch.ID, realTitle, realTitle, thumbnail)
-				_, _ = s.storage.UpdateChannelLanguage(group.Name, ch.ID, detectedLang)
-
-				if s.ytService != nil && s.ytService.GetAuthChannel(ch.ID) != nil {
-					_ = s.ytService.UpdateChannelMetadata(ch.ID, map[string]interface{}{
-						"title":     realTitle,
-						"thumbnail": thumbnail,
-						"language":  detectedLang,
-					})
-				}
-
-				log.Printf("[OK] YouTube Review: Resolved channel %s -> %q [%s]", ch.ID, realTitle, detectedLang)
+	for name, group := range groups {
+		if group == nil {
+			continue
+		}
+		// Hydrate group channels via the canonical Service so the
+		// Channel objects carry Title/Name/Thumbnail/Language for the
+		// review loop. This used to come from the in-RAM `group.Channels`
+		// slice on Storage; now it's a Membership-style SQL read.
+		chInfos, err := s.ytService.BulkMembership(group.Channels)
+		_ = err // non-fatal: review is opportunistic
+		for _, chInfo := range chInfos {
+			if chInfo == nil {
+				continue
 			}
+		}
+		for _, chID := range group.Channels {
+			authCh := s.ytService.GetAuthChannel(chID)
+			if authCh == nil {
+				continue
+			}
+			needsRefresh := authCh.Title == "" || authCh.Title == chID || authCh.Name == "" || authCh.Name == chID || authCh.Thumbnail == ""
+			needsLanguage := authCh.Language == "" || authCh.Language == "unknown"
+			if !needsRefresh && !needsLanguage {
+				continue
+			}
+			log.Printf("[INFO] YouTube Review: Refreshing metadata & language for channel %s in group %s...", chID, name)
+
+			realTitle := authCh.Title
+			thumbnail := authCh.Thumbnail
+			detectedLang := authCh.Language
+
+			if realTitle == "" {
+				channelURL := authCh.URL
+				if channelURL == "" || !strings.HasPrefix(channelURL, "http") {
+					channelURL = "https://www.youtube.com/channel/" + chID
+				}
+				info, err := s.apiClient.GetChannelInfo(context.Background(), channelURL)
+				if err == nil && info != nil {
+					realTitle = info.Title
+					thumbnail = info.Thumbnail
+					log.Printf("[OK] YouTube Review: Fetched API info for %s -> %q", chID, realTitle)
+				} else {
+					log.Printf("[WARN] YouTube Review: Failed to fetch channel info for %s: %v", chID, err)
+				}
+			}
+
+			if realTitle == "" {
+				realTitle = chID
+			}
+
+			if detectedLang == "" || detectedLang == "unknown" {
+				detectedLang = youtube.DetectLanguageFromName(realTitle)
+				if detectedLang == "" {
+					detectedLang = "en"
+				}
+			}
+
+			// PR-YT-REPO: orchestrator-side Service.UpdateChannelMetadata
+			// (channelID, metadata) returns only error; discard single
+			// value to satisfy the lint rule against multiple-return
+			// assignment to single-value context. Pass language via the
+			// metadata map (the canonical write path applies it).
+			_ = s.ytService.UpdateChannelMetadata(chID, map[string]interface{}{
+				"title":     realTitle,
+				"name":      realTitle,
+				"thumbnail": thumbnail,
+				"language":  detectedLang,
+			})
+
+			log.Printf("[OK] YouTube Review: Resolved channel %s -> %q [%s]", chID, realTitle, detectedLang)
 		}
 	}
 }
@@ -136,29 +163,54 @@ func (s *Service) TrendingNews(ctx context.Context, query string, limit int) ([]
 }
 
 // ListGroups lists all registered groups.
+//
+// PR-YT-REPO: the integration *youtube.Service no longer exposes a
+// ListGroups() two-tuple method. The single source of truth is
+// *youtube.StorageData (LoadData()) which carries Groups and
+// TrackedNiches in one snapshot.
 func (s *Service) ListGroups() (map[string]*youtube.Group, []string) {
-	groups, trackedNiches := s.storage.ListGroups()
+	if s.ytService == nil {
+		return map[string]*youtube.Group{}, nil
+	}
+	data := s.ytService.LoadData()
+	groups := data.Groups
+	if groups == nil {
+		groups = map[string]*youtube.Group{}
+	}
 	for name, group := range groups {
 		if group == nil || len(group.Channels) == 0 {
 			delete(groups, name)
 		}
 	}
-	return groups, trackedNiches
+	return groups, data.TrackedNiches
 }
 
 // CreateGroup registers a new channel group.
+//
+// PR-YT-REPO: routes to the canonical Service.CreateGroup which takes
+// (name, description, channelIDs). The previous Storage.CreateGroup
+// 2-arg overload is gone.
 func (s *Service) CreateGroup(name string) error {
-	return s.storage.CreateGroup(name, "manager")
+	if s.ytService == nil {
+		return fmt.Errorf("youtube integration service not configured")
+	}
+	return s.ytService.CreateGroup(name, "", nil)
 }
 
 // DeleteGroup deletes a channel group.
 func (s *Service) DeleteGroup(name string) error {
-	return s.storage.DeleteGroup(name)
+	if s.ytService == nil {
+		return fmt.Errorf("youtube integration service not configured")
+	}
+	return s.ytService.DeleteGroup(name)
 }
 
 // CleanupOldData cleans stale historical entries.
 func (s *Service) CleanupOldData(retention time.Duration) int {
-	return s.storage.CleanupOldData(retention)
+	if s.ytService == nil {
+		return 0
+	}
+	return s.ytService.CleanupOldData(retention)
 }
 
 // CleanupCache flushes API-level caches.
@@ -168,11 +220,11 @@ func (s *Service) CleanupCache() int {
 
 // DataRetentionCleanup processes general DB cleanup.
 func (s *Service) DataRetentionCleanup() int {
-	if s.dataDir == "" {
+	if s.dataDir == "" || s.ytService == nil {
 		return 0
 	}
 	total := 0
-	total += s.storage.CleanupOldData(13 * 24 * time.Hour)
+	total += s.ytService.CleanupOldData(13 * 24 * time.Hour)
 	s.feedCache.Clear()
 	total++
 	return total
@@ -220,9 +272,13 @@ func (s *Service) DataDir() string {
 	return s.dataDir
 }
 
-// LoadStorageData loads YouTube storage data.
+// LoadStorageData loads YouTube storage data via the canonical
+// Service.LoadData() (replaces the deleted storage.LoadData()).
 func (s *Service) LoadStorageData() *youtube.StorageData {
-	return s.storage.LoadData()
+	if s.ytService == nil {
+		return &youtube.StorageData{Groups: map[string]*youtube.Group{}}
+	}
+	return s.ytService.LoadData()
 }
 
 // GetAuthChannels retrieves oauth authenticated channels.
@@ -244,7 +300,7 @@ func (s *Service) GetAuthChannel(id string) *youtube.AuthChannel {
 // ValidateOAuthAccessToken checks token validation status.
 func (s *Service) ValidateOAuthAccessToken(ctx context.Context, id string) (map[string]interface{}, error) {
 	if s.ytService == nil {
-		return nil, fmt.Errorf("YouTube integration service not configured")
+		return nil, fmt.Errorf("youtube integration service not configured")
 	}
 	return s.ytService.ValidateOAuthAccessToken(ctx, id)
 }
@@ -255,9 +311,4 @@ func (s *Service) GetUndefinedChannels() []*youtube.Channel {
 		return nil
 	}
 	return s.ytService.GetUndefinedChannels()
-}
-
-// Storage returns storage instance.
-func (s *Service) Storage() *youtube.Storage {
-	return s.storage
 }

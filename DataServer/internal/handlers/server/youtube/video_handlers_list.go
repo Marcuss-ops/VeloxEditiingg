@@ -91,7 +91,7 @@ func (h *YouTubeHandlers) ListGroupPrivateVideos(c *gin.Context) {
 	cutoff := time.Now().AddDate(0, 0, -days)
 	cacheKey := fmt.Sprintf("%s:%d", groupName, days)
 
-	data := h.storage.LoadData()
+	data := h.service.LoadData()
 	group, ok := data.Groups[groupName]
 	if !ok {
 		c.JSON(http.StatusNotFound, gin.H{"ok": false, "error": "group not found: " + groupName})

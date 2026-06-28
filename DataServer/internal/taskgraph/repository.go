@@ -249,7 +249,7 @@ type RequeueCandidate struct {
 // PR-04 / fix/task-expiry-atomic-transition: the caller
 // (LifecycleService.ExpireTaskLease / TaskLeaseReaper) uses
 // AttemptsExhausted to decide whether to surface a Job-level failure
-// via jobsRepo.FailWithRetry downstream of the atomic.
+// via jobsRepo.Fail downstream of the atomic.
 type ExpireResult struct {
 	// TaskID is the task that was reaped (echoed for the caller's log path).
 	TaskID string

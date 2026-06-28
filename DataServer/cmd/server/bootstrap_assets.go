@@ -75,7 +75,13 @@ func buildAssets(cfg *config.Config, p *persistenceDeps, j *jobsDeps) (*assetDep
 	log.Printf("[BOOTSTRAP] artifacts.Reconciler ready (mandatory — 4 rules)")
 
 	// ── Outbox registry + dispatcher ────────────────────────────────
-	outboxRegistry := outbox.NewRegistry()
+	// PR 2: outbox.ProductionRegistry() is the canonical wiring location
+	// for all outbox handlers. Today the registry is empty (the dispatcher
+	// marks every emitted event as FAILED via the "no handler → MarkFailed"
+	// path); once PR 2 wires real handlers, this single call point picks
+	// them up with no bootstrap change. The completeness invariant is
+	// asserted by internal/outbox/completeness_test.go.
+	outboxRegistry := outbox.ProductionRegistry()
 	outboxDispatcher := outbox.NewDispatcher(p.Outbox, outboxRegistry, outbox.Config{
 		PollInterval: 750 * time.Millisecond,
 		BatchSize:    32,

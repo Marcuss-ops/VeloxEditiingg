@@ -196,8 +196,13 @@ func (h *YouTubeHandlers) CreateGroup(c *gin.Context) {
 	}
 
 	// Create in unified Storage with GroupType="upload"
-	if err := h.storage.CreateGroup(req.Name, "upload"); err != nil {
-		if err == youtube.ErrGroupExists {
+	//
+	// PR-YT-REPO: h.storage.CreateGroup → h.service.CreateGroup. The
+	// integration Service.CreateGroup now takes (name, description,
+	// channelIDs) and hardcodes group_type="upload" under the hood, so
+	// the previous Storage-style (name, groupType) overload is gone.
+	if err := h.service.CreateGroup(req.Name, "", nil); err != nil {
+		if err.Error() == "group '"+req.Name+"' already exists" || err == youtube.ErrGroupExists {
 			c.JSON(http.StatusConflict, gin.H{"ok": false, "error": "Group already exists"})
 			return
 		}
@@ -211,7 +216,7 @@ func (h *YouTubeHandlers) CreateGroup(c *gin.Context) {
 		for _, chID := range req.Channels {
 			// Add to Storage with enriched metadata
 			channel := h.buildChannelFromID(chID)
-			if err := h.storage.AddChannel(req.Name, channel); err != nil {
+			if err := h.service.AddChannel(req.Name, channel); err != nil {
 				// Log and continue
 				continue
 			}
@@ -233,7 +238,7 @@ func (h *YouTubeHandlers) CreateGroup(c *gin.Context) {
 func (h *YouTubeHandlers) DeleteGroup(c *gin.Context) {
 	name := c.Param("name")
 
-	if err := h.storage.DeleteGroup(name); err != nil {
+	if err := h.service.DeleteGroup(name); err != nil {
 		if err == youtube.ErrGroupNotFound {
 			c.JSON(http.StatusNotFound, gin.H{"ok": false, "error": "Group not found"})
 			return
@@ -265,7 +270,7 @@ func (h *YouTubeHandlers) AddChannelToGroup(c *gin.Context) {
 	// Build enriched Channel object from Service.channels
 	channel := h.buildChannelFromID(req.ChannelID)
 
-	if err := h.storage.AddChannel(groupName, channel); err != nil {
+	if err := h.service.AddChannel(groupName, channel); err != nil {
 		if err == youtube.ErrChannelExists {
 			c.JSON(http.StatusConflict, gin.H{"ok": false, "error": "Channel already in group"})
 			return
@@ -290,7 +295,7 @@ func (h *YouTubeHandlers) RemoveChannelFromGroup(c *gin.Context) {
 	groupName := c.Param("name")
 	channelID := c.Param("channel")
 
-	if err := h.storage.RemoveChannel(groupName, channelID); err != nil {
+	if err := h.service.RemoveChannel(groupName, channelID); err != nil {
 		if err == youtube.ErrGroupNotFound {
 			c.JSON(http.StatusNotFound, gin.H{"ok": false, "error": "Group not found"})
 			return

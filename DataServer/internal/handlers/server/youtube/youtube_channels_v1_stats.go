@@ -24,15 +24,18 @@ type DuplicateChannel struct {
 func (h *YouTubeHandlers) GetChannelGroups(c *gin.Context) {
 	channelID := c.Param("id")
 
-	groups, _ := h.storage.ListGroups()
+	groups := h.service.GetGroups()
 	memberGroups := []gin.H{}
 
-	for name, group := range groups {
-		for _, ch := range group.Channels {
-			if ch.ID == channelID {
+	for name, cg := range groups {
+		if cg == nil {
+			continue
+		}
+		for _, chID := range cg.Channels {
+			if chID == channelID {
 				memberGroups = append(memberGroups, gin.H{
 					"name":       name,
-					"group_type": group.GroupType,
+					"group_type": cg.GroupType,
 				})
 				break
 			}
@@ -50,16 +53,19 @@ func (h *YouTubeHandlers) GetChannelGroups(c *gin.Context) {
 // DetectDuplicateChannels finds channels that appear in multiple groups.
 // GET /api/v1/youtube/channels/duplicates
 func (h *YouTubeHandlers) DetectDuplicateChannels(c *gin.Context) {
-	groups, _ := h.storage.ListGroups()
+	groups := h.service.GetGroups()
 
 	channelGroups := make(map[string][]string)
 	channelTitles := make(map[string]string)
 
-	for name, group := range groups {
-		for _, ch := range group.Channels {
-			channelGroups[ch.ID] = append(channelGroups[ch.ID], name)
-			if ch.Title != "" {
-				channelTitles[ch.ID] = ch.Title
+	for name, cg := range groups {
+		if cg == nil {
+			continue
+		}
+		for _, chID := range cg.Channels {
+			channelGroups[chID] = append(channelGroups[chID], name)
+			if auth := h.service.GetAuthChannel(chID); auth != nil && auth.Title != "" {
+				channelTitles[chID] = auth.Title
 			}
 		}
 	}
@@ -88,12 +94,15 @@ func (h *YouTubeHandlers) ExportChannels(c *gin.Context) {
 	format := c.DefaultQuery("format", "json")
 
 	channels := h.service.GetAuthChannels()
-	groups, _ := h.storage.ListGroups()
+	groups := h.service.GetGroups()
 
 	channelGroupsMap := make(map[string][]string)
-	for name, group := range groups {
-		for _, ch := range youtubeChannelIDs(group.Channels) {
-			channelGroupsMap[ch] = append(channelGroupsMap[ch], name)
+	for name, cg := range groups {
+		if cg == nil {
+			continue
+		}
+		for _, chID := range cg.Channels {
+			channelGroupsMap[chID] = append(channelGroupsMap[chID], name)
 		}
 	}
 
@@ -160,14 +169,17 @@ type ChannelStats struct {
 // GET /api/v1/youtube/channels/stats
 func (h *YouTubeHandlers) GetChannelStats(c *gin.Context) {
 	channels := h.service.GetAuthChannels()
-	groups, _ := h.storage.ListGroups()
+	groups := h.service.GetGroups()
 
 	groupedChannels := make(map[string]bool)
 	byGroup := make(map[string]int)
-	for name, group := range groups {
-		byGroup[name] = len(group.Channels)
-		for _, ch := range group.Channels {
-			groupedChannels[ch.ID] = true
+	for name, cg := range groups {
+		if cg == nil {
+			continue
+		}
+		byGroup[name] = len(cg.Channels)
+		for _, chID := range cg.Channels {
+			groupedChannels[chID] = true
 		}
 	}
 
@@ -227,11 +239,14 @@ func (h *YouTubeHandlers) BatchUpdateLanguage(c *gin.Context) {
 			continue
 		}
 
-		groups, _ := h.storage.ListGroups()
-		for _, group := range groups {
-			for _, ch := range group.Channels {
-				if ch.ID == channelID {
-					h.storage.UpdateChannelLanguage(group.Name, channelID, req.Language)
+		groups := h.service.GetGroups()
+		for _, cg := range groups {
+			if cg == nil {
+				continue
+			}
+			for _, chID := range cg.Channels {
+				if chID == channelID {
+					h.service.UpdateChannelLanguage(cg.Name, channelID, req.Language)
 					break
 				}
 			}

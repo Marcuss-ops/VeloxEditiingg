@@ -38,7 +38,7 @@ func (f *fakeStoreForGroups) ListGroupChannels(groupID int64) ([]string, error) 
 func mockService(t *testing.T) *Service {
 	t.Helper()
 	return &Service{
-		store: &fakeStoreForGroups{
+		repo: &fakeStoreForGroups{
 			channels:    make(map[string]*youtubetypes.YouTubeChannel),
 			oauthTokens: make(map[string]*youtubetypes.YouTubeOAuthToken),
 			memberships: make(map[int64][]string),
@@ -49,7 +49,7 @@ func mockService(t *testing.T) *Service {
 // helper: add a channel to the fake store.
 func addMockChannel(t *testing.T, s *Service, id, name, language string) {
 	t.Helper()
-	fs := s.store.(*fakeStoreForGroups)
+	fs := s.repo.(*fakeStoreForGroups)
 	fs.channels[id] = &youtubetypes.YouTubeChannel{
 		ChannelID:   id,
 		DisplayName: name,
@@ -64,7 +64,7 @@ func addMockChannel(t *testing.T, s *Service, id, name, language string) {
 // helper: add a group with channel IDs to the fake store.
 func addMockGroup(t *testing.T, s *Service, name string, channelIDs []string) {
 	t.Helper()
-	fs := s.store.(*fakeStoreForGroups)
+	fs := s.repo.(*fakeStoreForGroups)
 	gid := int64(len(fs.groups) + 1)
 	fs.groups = append(fs.groups, youtubetypes.YouTubeGroup{
 		ID:        gid,

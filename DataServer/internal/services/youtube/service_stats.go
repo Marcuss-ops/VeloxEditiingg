@@ -83,12 +83,18 @@ func (s *Service) GetCachedStats(forceRefresh bool, ctx context.Context) (Manage
 	return resp, false, 0, "MISS", nil
 }
 
+// aggregateManagerStats walks every group and per-channel stat, hydrating
+// from the canonical *youtube.Service. The migration to a single
+// Repository dropped the legacy Storage; LoadData() returns the
+// legacy `*StorageData` shape so this loop's iteration pattern over
+// `group.Channels []Channel` continues to type-check.
 func (s *Service) aggregateManagerStats(ctx context.Context) (ManagerStatsResponse, error) {
-	if s.storage == nil {
-		return ManagerStatsResponse{}, fmt.Errorf("storage not configured")
+	if s.ytService == nil {
+		return ManagerStatsResponse{Groups: map[string]ManagerGroupStats{}}, fmt.Errorf("youtube integration service not configured")
 	}
 
-	groups, _ := s.storage.ListGroups()
+	data := s.ytService.LoadData()
+	groups := data.Groups
 
 	resp := ManagerStatsResponse{
 		OK:                true,

@@ -70,12 +70,23 @@ full_tree_patterns=(
   'DeprecatedService'                 # Same
   'local-workers\.sh\.deprecated'     # Replaced by data/ansible
   # Item 7 (worker state consolidation): removed dead maps + functions.
-  'pendingLeaseJobs'                  # Removed: never-populated map (PR #7)
   'storePendingJob'                   # Removed: dead method (PR #7)
   'takePendingJob'                    # Removed: dead method (PR #7)
   'jobCancelFuncs'                    # Removed: replaced by ActiveTaskExecution.Cancel (PR #7)
   'registerJobCancel'                 # Removed: cancel embedded in ActiveTaskExecution (PR #7)
   'unregisterJobCancel'               # Removed: cancel embedded in ActiveTaskExecution (PR #7)
+  # PR #1: dead orchestrator legacy adapter + RecoveryReport protocol removed.
+  'recovery_report_v1'                # Removed: heartbeat.extra key (PR #1)
+  'recovery_action_v1'                # Removed: ConfigurationUpdate key (PR #1)
+  'orchestrator_legacy_adapter'       # Removed: COMPAT adapter (PR #1)
+  'orchestratorv1'                    # Removed: legacy DTO package (PR #1)
+  'UpsertJobResult'                   # Removed: legacy store mutation (PR #1)
+  'OrchestratorJob'                   # Removed: legacy sqlite_queue struct (PR #1)
+  'UpsertOrchestratorJob'             # Removed: legacy sqlite_queue method (PR #1)
+  'ListOrchestratorJobs'              # Removed: legacy sqlite_queue method (PR #1)
+  'GetOrchestratorJob'                # Removed: legacy sqlite_queue method (PR #1)
+  'DeleteOrchestratorJob'             # Removed: legacy sqlite_queue method (PR #1)
+  'RunPlaybook'                       # Removed: legacy ansible fake executor (PR #1)
   # Item 8 (renderer cleanup): removed legacy engine + fallback paths.
   'CompileLegacyRenderJobParams'      # Removed: legacy render-plan adapter (PR #8)
   'runNativeCxxEngine'                # Removed: --full-video engine launcher (PR #8)
@@ -132,14 +143,11 @@ for pattern in "${full_tree_patterns[@]}"; do
            ':!DataServer/data/ansible/**' \
            ':!RemoteCodex/native/video-engine-cpp/CMakeLists.txt' \
            ':!RemoteCodex/native/worker-agent-go/deploy/**' \
-           ':!RemoteCodex/native/worker-agent-go/velox-worker-agent' \
            ':!scripts/ci/check-architecture.sh' \
            ':!scripts/ci/verify.sh' \
            ':!scripts/ci/check-no-legacy.sh' \
            ':!scripts/ci/lib/diff-scope.sh' \
-           ':!scripts/ci/operator-history-scrub.sh' \
-           ':!DataServer/server.exe' \
-           ':!server' 2>/dev/null || true
+           ':!scripts/ci/operator-history-scrub.sh' 2>/dev/null || true
        )"; [[ -n "$matches" ]]; then
     printf 'FORBIDDEN (exists in repository): %s\n%s\n\n' \
       "$pattern" "$matches" >&2
@@ -153,8 +161,7 @@ for pattern in "${diff_patterns[@]}"; do
          scoped_grep "$pattern" -- \
            ':!docs/**' \
            ':!scripts/ci/check-no-legacy.sh' \
-           ':!scripts/ci/lib/diff-scope.sh' \
-           ':!DataServer/server.exe'
+           ':!scripts/ci/lib/diff-scope.sh'
        )"; [[ -n "$matches" ]]; then
     printf 'FORBIDDEN (new in this PR): %s\n%s\n\n' \
       "$pattern" "$matches" >&2

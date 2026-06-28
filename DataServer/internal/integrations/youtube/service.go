@@ -1,8 +1,21 @@
 // Package youtube provides YouTube API integration for the Velox server.
+//
+// PR-YT-REPO: the previous two-interface layout (YouTubeStore + StorageStore +
+// thin Storage facade) is consolidated into a single canonical
+// `youtube.Repository` that *SQLiteStore satisfies 1-for-1. YouTubeStore
+// and YouTubeRepository are kept as type aliases of Repository so existing
+// callers (tests that embed YouTubeStore as a nil field, the
+// interface_compliance_test assertion, downstream packages that already
+// depend on those names) keep compiling without churn.
+//
+// Service stores its dependency on the struct (s.repo Repository). There is
+// no SetStore late binding and no in-memory fallback: every operation
+// either hits the canonical repo or returns an explicit error.
 package youtube
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -15,40 +28,66 @@ import (
 	ytanalytics "google.golang.org/api/youtubeanalytics/v2"
 )
 
-// YouTubeStore defines the interface for SQLite-backed YouTube persistence,
-// avoiding a direct import of the store package.
-// It includes both canonical methods (youtube_channels, youtube_groups_v2)
-// and legacy methods (youtube_channel_metadata, youtube_groups) for migration.
-type YouTubeStore interface {
-	// Canonical: YouTube Channels (youtube_channels table)
+// Repository is the SINGLE canonical read/write surface for the YouTube
+// domain. It collapses YouTubeStore (channel + oauth + cache CRUD) and
+// the unique methods previously declared on StorageStore (per-column
+// channel updates, group-channel deletion by channel id, tracked-niche
+// upsert/delete/list).
+//
+// Conflict resolution: every method name uses bare canonical names
+// (UpsertYouTubeChannel, AddChannelToGroup, ...). When YouTubeStore and
+// StorageStore disagreed on a signature pre-PR-YT-REPO, the one used
+// widely is kept verbatim — both shared the same shape because
+// *SQLiteStore was the only implementor.
+//
+// *SQLiteStore satisfies Repository via a compile-time assertion in
+// store/interface_compliance_test.go (`var _ youtube.YouTubeStore =
+// (*store.SQLiteStore)(nil)`); since YouTubeStore is now an alias of
+// Repository, that line continues to assert union satisfaction.
+type Repository interface {
+	// Canonical: YouTube Channels (youtube_channels table).
 	ListYouTubeChannels() ([]youtubetypes.YouTubeChannel, error)
 	GetYouTubeChannel(channelID string) (*youtubetypes.YouTubeChannel, error)
 	UpsertYouTubeChannel(channelID, title, displayName, channelURL, thumbnailURL, language, notes string, viewCount, subCount int64, addedAt, lastSyncAt, metadataJSON string) error
 	DeleteYouTubeChannel(channelID string) error
 	DeleteChannelAtomic(channelID string) (int64, error)
 
-	// Canonical: YouTube Groups (youtube_groups + youtube_group_channels)
+	// Targeted per-column channel updates — promoted from StorageStore
+	// so user-edited typed columns are preserved when only a single
+	// column changes (language refresh, stats refresh, title edit, etc.).
+	UpdateChannelLanguage(channelID, language string) error
+	UpdateChannelStats(channelID string, viewCount, subCount int64, lastSyncAt string) error
+	UpdateChannelTitle(channelID, title string) error
+	UpdateChannelDisplayName(channelID, name string) error
+	UpdateChannelNotes(channelID, notes string) error
+
+	// Typed metadata refresh — distinct from wide UpsertYouTubeChannel
+	// (only touches title + thumbnail_url + last_sync_at + updated_at).
+	UpdateYouTubeChannelMetadata(channelID, title, thumbnailURL string) error
+
+	// Canonical: YouTube Groups (youtube_groups + youtube_group_channels).
 	ListYouTubeGroups() ([]youtubetypes.YouTubeGroup, error)
 	UpsertYouTubeGroup(name, groupType, description, privacy string) (int64, error)
 	GetYouTubeGroupID(name, groupType string) (int64, error)
 	DeleteYouTubeGroup(id int64) error
+	DeleteYouTubeGroupByName(name, groupType string) error
 	DeleteYouTubeGroupChannelsByGroupID(groupID int64) error
+	DeleteYouTubeGroupChannelsByChannelID(channelID string) error
 	AddChannelToGroup(groupID int64, channelID string) error
 	RemoveChannelFromGroup(groupID int64, channelID string) error
 	ListGroupChannels(groupID int64) ([]string, error)
 	ListAllGroupMemberships() ([]youtubetypes.GroupMembership, error)
 
-	// Typed metadata update (refresh path). Distinct from UpsertYouTubeChannel:
-	// only touches title + thumbnail_url + last_sync_at + updated_at so
-	// user-edited typed columns are preserved (S11 contract).
-	UpdateYouTubeChannelMetadata(channelID, title, thumbnailURL string) error
+	// Tracked niches (was: StorageStore-only).
+	UpsertYouTubeTrackedNiche(niche string) error
+	DeleteYouTubeTrackedNiche(niche string) error
+	ListYouTubeTrackedNiches() ([]string, error)
 
-	// Canonical: OAuth tokens (youtube_oauth_tokens table; S5-S11 boot hydrator)
+	// Canonical: OAuth tokens (youtube_oauth_tokens table; S5-S11 boot hydrator).
 	// GetYouTubeOAuthToken returns (nil, nil) when no row exists so callers can
 	// use the row presence to drive merge-with-existing-refresh-token-blob.
 	// ListActiveYouTubeOAuthTokens is the boot-hydrator enumeration; revoked
-	// rows are filtered out so a stale revoke cannot silently re-enter RAM
-	// after a server restart.
+	// rows are filtered out so a stale revoke cannot silently re-enter RAM.
 	// AuditYouTubeOAuthTokenOrphans surfaces oauth rows whose parent
 	// youtube_channels row is missing so operators see the canonical set is
 	// fully consistent on boot.
@@ -58,7 +97,7 @@ type YouTubeStore interface {
 	ListActiveYouTubeOAuthTokens() ([]youtubetypes.YouTubeOAuthToken, error)
 	AuditYouTubeOAuthTokenOrphans() ([]youtubetypes.YouTubeTokenOrphan, error)
 
-	// Cache (shared, not legacy)
+	// Cache (SQL-backed key/json cache; TTL enforced at the Cache wrapper layer).
 	GetYouTubeCache(key string) (int64, string, error)
 	SetYouTubeCache(key string, timestamp int64, dataJSON string) error
 	CleanupYouTubeCache(maxAge int64) (int64, error)
@@ -69,16 +108,32 @@ type YouTubeStore interface {
 	}) (int, error)
 }
 
+// YouTubeStore is kept as a strict type alias of Repository for the
+// transition period. Every method that compiles against YouTubeStore
+// transitively depends on Repository. New code MUST spell the canonical
+// name Repository directly.
+type YouTubeStore = Repository
+
+// (Re-exported via repository.go for consistency with the previous
+// alias declaration.)
+// YouTubeRepository = Repository.
+
+var _ Repository = (YouTubeStore)(nil) // compile-time: alias identity is preserved.
+
 // Service provides YouTube API functionality.
-// SQLite is the single source of truth for channels and groups; there is
-// no in-memory mirror. Every read goes through a fresh DB query and every
-// write is persisted immediately.
+//
+// PR-YT-REPO: the legacy `var store YouTubeStore` package-level cache
+// pointer and `SetStore` late-binding mutator are gone. The repo is
+// injected at construction and held for the lifetime of the Service.
+// SQLite is the single source of truth for channels and groups; every
+// read goes through a fresh SQL query and every write is persisted
+// immediately.
 type Service struct {
 	config      *ServiceConfig
 	oauthConfig *oauth2.Config
 	cache       *Cache
-	store       YouTubeStore
-	oauthBuf    OAuthCipher // Encryption cipher for OAuth token persistence
+	repo        Repository
+	oauthBuf    OAuthCipher
 
 	authManager  *AuthManager
 	uploader     *Uploader
@@ -87,8 +142,19 @@ type Service struct {
 }
 
 // NewService creates a new YouTube service.
-// store is optional — if nil, in-memory-only mode is used.
-func NewService(cfg *ServiceConfig, store YouTubeStore) (*Service, error) {
+//
+// PR-YT-REPO: the repo argument is REQUIRED. Passing nil is a programmer
+// error and returns a non-nil error so the call site fails fast instead
+// of silently entering a degraded mode (the previous "store is optional
+// → in-memory-only" behaviour is removed entirely).
+func NewService(cfg *ServiceConfig, repo Repository) (*Service, error) {
+	if cfg == nil {
+		return nil, fmt.Errorf("youtube.NewService: cfg is required")
+	}
+	if repo == nil {
+		return nil, fmt.Errorf("youtube.NewService: Repository is required")
+	}
+
 	if cfg.TokensDir == "" {
 		if env := os.Getenv("VELOX_YOUTUBE_TOKENS_DIR"); env != "" {
 			cfg.TokensDir = env
@@ -106,14 +172,14 @@ func NewService(cfg *ServiceConfig, store YouTubeStore) (*Service, error) {
 
 	s := &Service{
 		config: cfg,
-		store:  store,
-		cache:  NewCache(cfg.DataDir, 12*time.Hour, store),
+		repo:   repo,
+		cache:  NewCache(cfg.DataDir, 12*time.Hour, repo),
 	}
 
 	s.authManager = NewAuthManager(s)
 	s.uploader = NewUploader(s)
 	s.videoManager = NewVideoManager(s)
-	s.quotaManager = NewQuotaManager(s)
+	s.quotaManager = NewQuotaManager(s) // PR-YT-REPO: repo/db wiring done by app/youtube.go via the QuotaManager's own SetStore/SetDB.
 
 	if err := s.loadOAuthConfig(); err != nil {
 		log.Printf("[WARN] YouTube OAuth config not loaded: %v", err)
@@ -122,37 +188,23 @@ func NewService(cfg *ServiceConfig, store YouTubeStore) (*Service, error) {
 	return s, nil
 }
 
-// AuthManager returns the auth manager
-func (s *Service) AuthManager() *AuthManager {
-	return s.authManager
-}
+// AuthManager returns the auth manager.
+func (s *Service) AuthManager() *AuthManager { return s.authManager }
 
-// Uploader returns the uploader
-func (s *Service) Uploader() *Uploader {
-	return s.uploader
-}
+// Uploader returns the uploader.
+func (s *Service) Uploader() *Uploader { return s.uploader }
 
-// VideoManager returns the video manager
-func (s *Service) VideoManager() *VideoManager {
-	return s.videoManager
-}
+// VideoManager returns the video manager.
+func (s *Service) VideoManager() *VideoManager { return s.videoManager }
 
-// QuotaManager returns the quota manager
-func (s *Service) QuotaManager() *QuotaManager {
-	return s.quotaManager
-}
+// QuotaManager returns the quota manager.
+func (s *Service) QuotaManager() *QuotaManager { return s.quotaManager }
 
-// SetStore sets the SQLite store for persistence, type-asserting from interface{}.
-// If a store was already provided via NewService, this is a no-op.
-func (s *Service) SetStore(st interface{}) {
-	if s.store != nil {
-		return // Already set via NewService
-	}
-	if store, ok := st.(YouTubeStore); ok {
-		s.store = store
-		s.cache.SetStore(store)
-	}
-}
+// Repo returns the Repository this Service was wired to. Exposed for
+// handlers/tests that need to chain SQL operations; production code
+// should preferentially call Service methods (which centralise the
+// SQL→domain mapping).
+func (s *Service) Repo() Repository { return s.repo }
 
 // --- Public API: OAuth (Delegated to AuthManager) ---
 
@@ -164,9 +216,8 @@ func (s *Service) HandleOAuthCallback(ctx context.Context, code string, channelN
 	return s.authManager.HandleOAuthCallback(ctx, code, channelName)
 }
 
-// ValidateOAuthAccessToken validates a channel's OAuth access token by
-// calling the remote YouTube API. Renamed from ValidateToken to eliminate
-// ambiguity with the stored-credentials validator and the worker token validator.
+// ValidateOAuthAccessToken validates a channel's OAuth access token
+// against the live YouTube API.
 func (s *Service) ValidateOAuthAccessToken(ctx context.Context, channelID string) (map[string]interface{}, error) {
 	return s.authManager.ValidateStoredYouTubeCredentials(ctx, channelID)
 }

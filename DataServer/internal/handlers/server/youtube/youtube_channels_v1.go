@@ -8,8 +8,6 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-
-	"velox-server/internal/integrations/youtube"
 )
 
 // ── ListChannels ────────────────────────────────────────────────────────────
@@ -101,11 +99,14 @@ func (h *YouTubeHandlers) GetChannel(c *gin.Context) {
 func (h *YouTubeHandlers) DeleteChannel(c *gin.Context) {
 	channelID := c.Param("id")
 
-	groups, _ := h.storage.ListGroups()
-	for groupName, group := range groups {
-		for _, ch := range group.Channels {
-			if ch.ID == channelID {
-				h.storage.RemoveChannel(groupName, channelID)
+	groups := h.service.GetGroups()
+	for groupName, cg := range groups {
+		if cg == nil {
+			continue
+		}
+		for _, chID := range cg.Channels {
+			if chID == channelID {
+				h.service.RemoveChannel(groupName, channelID)
 				break
 			}
 		}
@@ -158,11 +159,14 @@ func (h *YouTubeHandlers) UpdateChannel(c *gin.Context) {
 	}
 
 	if lang, ok := req["language"].(string); ok && lang != "" {
-		groups, _ := h.storage.ListGroups()
-		for _, group := range groups {
-			for i := range group.Channels {
-				if group.Channels[i].ID == channelID {
-					if _, err := h.storage.UpdateChannelLanguage(group.Name, channelID, lang); err != nil {
+		groups := h.service.GetGroups()
+		for _, cg := range groups {
+			if cg == nil {
+				continue
+			}
+			for _, chID := range cg.Channels {
+				if chID == channelID {
+					if _, err := h.service.UpdateChannelLanguage(cg.Name, channelID, lang); err != nil {
 						log.Printf("[WARN] Failed to update language in storage for channel %s: %v", channelID, err)
 					}
 					break
@@ -201,11 +205,14 @@ func (h *YouTubeHandlers) AutoDetectLanguage(c *gin.Context) {
 		"language": lang,
 	})
 
-	groups, _ := h.storage.ListGroups()
-	for _, group := range groups {
-		for i := range group.Channels {
-			if group.Channels[i].ID == channelID {
-				if _, err := h.storage.UpdateChannelLanguage(group.Name, channelID, lang); err != nil {
+	groups := h.service.GetGroups()
+	for _, cg := range groups {
+		if cg == nil {
+			continue
+		}
+		for _, chID := range cg.Channels {
+			if chID == channelID {
+				if _, err := h.service.UpdateChannelLanguage(cg.Name, channelID, lang); err != nil {
 					log.Printf("[WARN] Failed to save language in storage for channel %s: %v", channelID, err)
 				}
 				break
@@ -249,11 +256,7 @@ func languageCodeToFlag(code string) string {
 	return ""
 }
 
-// youtubeChannelIDs returns the list of channel IDs in a group.
-func youtubeChannelIDs(channels []youtube.Channel) []string {
-	ids := make([]string, len(channels))
-	for i, ch := range channels {
-		ids[i] = ch.ID
-	}
-	return ids
-}
+// youtubeChannelIDs was REMOVED in PR-YT-REPO. After the Repository
+// union + Service.GetGroups() migration, every caller iterates
+// *ChannelGroup.Channels (already `[]string` of channel IDs) directly.
+// The old helper projected `[]Channel` → `[]string` and is dead code.

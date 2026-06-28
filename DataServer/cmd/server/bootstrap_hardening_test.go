@@ -61,12 +61,12 @@ func TestBootstrapFailsWhenBlobStoreUnavailable(t *testing.T) {
 // ── Test: Outbox unavailable → operations that emit fail ───────────────
 //
 // Verifies that when the outbox is not wired (SetOutbox not called),
-// an operation that emits an outbox event (FailWithRetry, via PR3Fail)
-// returns an error. This proves the emitOutbox hardening: the caller
-// must see the error and rollback the transaction.
+// an operation that emits an outbox event (Fail) returns an error.
+// This proves the emitOutbox hardening: the caller must see the error
+// and rollback the transaction.
 //
-// PR #9: switched from CompleteJob (no longer emits outbox) to
-// FailWithRetry which delegates to PR3Fail → calls emitOutbox.
+// PR #10: updated from FailWithRetry to Fail which now carries the
+// transactional history/events/outbox logic.
 func TestBootstrapFailsWhenOutboxUnavailable(t *testing.T) {
 	t.Parallel()
 
@@ -83,36 +83,33 @@ func TestBootstrapFailsWhenOutboxUnavailable(t *testing.T) {
 	ctx := context.Background()
 	jobID := "outbox-fail-test"
 
-	// Create a job in PENDING, then advance to LEASED so FailWithRetry
-	// can run (PR3Fail accepts LEASED/RUNNING/RENDER_FINISHED/AWAITING_ARTIFACT).
+	// Create a job in PENDING, then advance to RUNNING so Fail
+	// can run (Fail accepts non-terminal jobs).
 	atomic := store.NewAtomicJobTaskCreator(sqliteStore)
 	if err := atomic.CreateJobWithTask(ctx, &jobs.Job{ID: jobID, MaxRetries: 3}, &taskgraph.TaskSpec{Version: 1}, 0); err != nil {
 		t.Fatalf("CreateJobWithTask: %v", err)
 	}
 
 	repo := store.NewSQLiteJobRepository(sqliteStore)
-	if err := repo.Lease(ctx, jobID, "worker-1"); err != nil {
-		t.Fatalf("Lease: %v", err)
+	if err := repo.SetStatus(ctx, jobID, jobs.StatusPending, jobs.StatusRunning); err != nil {
+		t.Fatalf("SetStatus to RUNNING: %v", err)
 	}
 
-	// Read current revision after Lease so the CAS check in PR3Fail matches.
-	sj, _ := repo.GetJob(ctx, jobID)
-
-	// FailWithRetry calls PR3Fail → emitOutbox. With no outbox wired,
-	// emitOutbox returns an error → FailWithRetry must propagate it.
-	fErr := repo.FailWithRetry(ctx, jobID, "ERR_TEST", "test failure", false, sj.Revision)
+	// Fail calls emitOutbox. With no outbox wired, emitOutbox returns
+	// an error → Fail must propagate it.
+	fErr := repo.Fail(ctx, jobID, "test outbox hardening failure")
 	if fErr == nil {
-		t.Fatal("FailWithRetry with unwired outbox must return error (emitOutbox hardening)")
+		t.Fatal("Fail with unwired outbox must return error (emitOutbox hardening)")
 	}
 	if !strings.Contains(fErr.Error(), "outbox not wired") {
 		t.Fatalf("expected outbox-not-wired error, got: %v", fErr)
 	}
-	t.Logf("FailWithRetry correctly failed with unwired outbox: %v", fErr)
+	t.Logf("Fail correctly failed with unwired outbox: %v", fErr)
 
 	// Verify transaction rollback: job status must NOT be FAILED.
-	sjAfter, _ := repo.GetJob(ctx, jobID)
-	if sjAfter != nil && sjAfter.Status == store.JobStatusFailed {
-		t.Fatal("FailWithRetry failed but job status still flipped to FAILED — rollback did not occur")
+	sjAfter, _ := repo.Get(ctx, jobID)
+	if sjAfter != nil && sjAfter.Status == jobs.StatusFailed {
+		t.Fatal("Fail failed but job status still flipped to FAILED — rollback did not occur")
 	}
 	t.Logf("transaction rollback confirmed — job status is %s (not FAILED) ✓", sjAfter.Status)
 }

@@ -271,10 +271,10 @@ func TestGRPCStreamTransport_SendHeartbeat(t *testing.T) {
 		WorkerID:        "test-worker-002",
 		SentAt:          time.Now().UTC(),
 		ProtocolVersion: controltransport.ProtocolVersionCurrent,
-		Payload: map[string]interface{}{
-			"status":            "idle",
-			"worker_name":       "test-worker",
-			"active_jobs_count": 0,
+		TypedPayload: &pb.Heartbeat{
+			Status:          "idle",
+			WorkerName:      "test-worker",
+			ActiveJobsCount: 0,
 		},
 	}
 
@@ -346,8 +346,8 @@ func TestGRPCStreamTransport_ReceiveTaskOffer(t *testing.T) {
 		WorkerID:        "test-worker-003",
 		SentAt:          time.Now().UTC(),
 		ProtocolVersion: controltransport.ProtocolVersionCurrent,
-		Payload: map[string]interface{}{
-			"status": "idle",
+		TypedPayload: &pb.Heartbeat{
+			Status: "idle",
 		},
 	}
 	if err := transport.Send(ctx, heartbeatMsg); err != nil {
@@ -521,7 +521,9 @@ func TestGRPCStreamTransport_DisconnectReconnect(t *testing.T) {
 		WorkerID:        "test-worker-e2e",
 		SentAt:          time.Now().UTC(),
 		ProtocolVersion: controltransport.ProtocolVersionCurrent,
-		Payload:         map[string]interface{}{"status": "idle"},
+		TypedPayload: &pb.Heartbeat{
+			Status: "idle",
+		},
 	}
 	if err := transportA.Send(ctx, hbA); err != nil {
 		t.Fatalf("Send heartbeat A failed: %v", err)
@@ -583,7 +585,9 @@ func TestGRPCStreamTransport_DisconnectReconnect(t *testing.T) {
 		WorkerID:        "test-worker-e2e",
 		SentAt:          time.Now().UTC(),
 		ProtocolVersion: controltransport.ProtocolVersionCurrent,
-		Payload:         map[string]interface{}{"status": "idle"},
+		TypedPayload: &pb.Heartbeat{
+			Status: "idle",
+		},
 	}
 	if err := transportB.Send(ctx, hbB); err != nil {
 		t.Fatalf("Send heartbeat B failed: %v", err)
@@ -927,8 +931,8 @@ func TestGRPCStreamTransport_mTLS_HeartbeatSend(t *testing.T) {
 		WorkerID:        "test-worker-mtls-hb",
 		SentAt:          time.Now().UTC(),
 		ProtocolVersion: controltransport.ProtocolVersionCurrent,
-		Payload: map[string]interface{}{
-			"status": "idle",
+		TypedPayload: &pb.Heartbeat{
+			Status: "idle",
 		},
 	}
 

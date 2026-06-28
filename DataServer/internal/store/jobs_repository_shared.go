@@ -4,8 +4,10 @@
 // and PostgresJobRepository.  The Dialect interface encapsulates every
 // SQL-dialect difference plus optional audit hooks.
 //
-// ClaimNext / ClaimNextForProfile are NOT shared because their
-// implementation strategies diverge fundamentally.
+// Job-level ClaimNext / ClaimNextForProfile were REMOVED in favor of
+// task-level ClaimNextWithAttemptAtomic (PR-2 / canonical-attempt-identity).
+// The shared Writer (SetStatus / Fail / Cancel) and Reader (Get / List)
+// are the remaining domain surface.
 
 package store
 
@@ -136,178 +138,64 @@ func (b *baseJobRepository) SetStatus(ctx context.Context, id string, from, to j
 	return nil
 }
 
-func (b *baseJobRepository) Lease(ctx context.Context, id, workerID string) error {
-	if id == "" {
-		return fmt.Errorf("job repository: empty jobID in Lease")
-	}
-	if workerID == "" {
-		return fmt.Errorf("job repository: empty workerID in Lease")
-	}
-	p := b.dialect
-	now := nowStrISO()
-	res, err := b.db.ExecContext(ctx,
-		`UPDATE jobs
-		   SET status = 'LEASED',
-		       assigned_at = `+p.Placeholder(1)+`,
-		       claimed_at = `+p.Placeholder(2)+`,
-		       updated_at = `+p.Placeholder(3)+`,
-		       revision = COALESCE(revision, 0) + 1
-		 WHERE job_id = `+p.Placeholder(4)+`
-		   AND `+p.CoalesceStatus()+` = 'PENDING'`,
-		now, now, now, id)
-	if err != nil {
-		return fmt.Errorf("lease exec: %w", err)
-	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return fmt.Errorf("lease %s: %w", id, p.ConflictError())
-	}
-	return nil
-}
-
 func (b *baseJobRepository) Fail(ctx context.Context, id, reason string) error {
-	sj, err := b.getJob(ctx, id)
-	if err != nil {
-		return fmt.Errorf("fail: get job %s: %w", id, err)
-	}
-	if sj.Status.IsTerminal() {
-		return fmt.Errorf("fail: job %s is already terminal (%s)", id, sj.Status)
+	if id == "" {
+		return fmt.Errorf("job repository: empty jobID in Fail")
 	}
 	p := b.dialect
+
+	tx, err := b.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("fail begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// Idempotency check: reject terminal jobs.
+	var current string
+	row := tx.QueryRowContext(ctx,
+		`SELECT `+p.CoalesceStatus()+` FROM jobs WHERE job_id = `+p.Placeholder(1), id)
+	if err := row.Scan(&current); err != nil {
+		if err == sql.ErrNoRows {
+			return fmt.Errorf("fail %s: not found", id)
+		}
+		return fmt.Errorf("fail status: %w", err)
+	}
+	switch current {
+	case "SUCCEEDED", "FAILED", "CANCELLED":
+		return fmt.Errorf("fail: job %s is already terminal (%s)", id, current)
+	}
+
 	now := nowStrISO()
-	res, err := b.db.ExecContext(ctx,
+	res, err := tx.ExecContext(ctx,
 		`UPDATE jobs
 		   SET status = 'FAILED',
-		       error_message = `+p.Placeholder(1)+`,
-		       failed_at = `+p.Placeholder(2)+`,
-		       failed_by = '',
-		       updated_at = `+p.Placeholder(3)+`,
-		       revision = COALESCE(revision, 0) + 1
+		       updated_at = `+p.Placeholder(1)+`,
+		       revision = COALESCE(revision, 0) + 1,
+		       error_message = `+p.Placeholder(2)+`,
+		       failed_at = `+p.Placeholder(3)+`,
+		       failed_by = ''
 		 WHERE job_id = `+p.Placeholder(4)+`
-		   AND `+p.CoalesceStatus()+` NOT IN ('SUCCEEDED', 'FAILED', 'CANCELLED')
-		   AND COALESCE(revision, 0) = `+p.Placeholder(5),
-		reason, now, now, id, sj.Revision)
+		   AND `+p.CoalesceStatus()+` NOT IN ('SUCCEEDED', 'FAILED', 'CANCELLED')`,
+		now, reason, now, id)
 	if err != nil {
-		return fmt.Errorf("fail exec: %w", err)
+		return fmt.Errorf("fail update: %w", err)
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return fmt.Errorf("fail %s: %w", id, p.ConflictError())
 	}
-	return nil
-}
 
-func (b *baseJobRepository) Start(ctx context.Context, id, workerID, leaseID string, attempt, revision int) error {
-	if id == "" {
-		return fmt.Errorf("job repository: empty jobID in Start")
-	}
-	if workerID == "" || leaseID == "" {
-		return fmt.Errorf("job repository: missing worker/lease identity in Start")
-	}
-	p := b.dialect
-	now := nowStrISO()
-
-	tx, err := b.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("start begin: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	res, err := tx.ExecContext(ctx,
-		`UPDATE jobs
-		   SET status = 'RUNNING',
-		       started_at = `+p.Placeholder(1)+`,
-		       updated_at = `+p.Placeholder(2)+`,
-		       revision = COALESCE(revision, 0) + 1
-		 WHERE job_id = `+p.Placeholder(3)+`
-		   AND `+p.CoalesceStatus()+` = 'LEASED'
-		   AND COALESCE(attempt, 0) = `+p.Placeholder(4)+`
-		   AND COALESCE(revision, 0) = `+p.Placeholder(5),
-		now, now, id, attempt, revision)
-	if err != nil {
-		return fmt.Errorf("start update: %w", err)
-	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return fmt.Errorf("start %s: %w", id, p.ConflictError())
-	}
-
-	_ = p.InsertHistoryTx(ctx, tx, id, "RUNNING", workerID, "Job started")
-	_ = p.InsertEventTx(ctx, tx, id, "job_started", map[string]interface{}{
-		"worker_id": workerID, "lease_id": leaseID, "attempt": attempt,
-	})
-
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("start commit: %w", err)
-	}
-	return nil
-}
-
-func (b *baseJobRepository) FailWithRetry(ctx context.Context, id, errorCode, errorMessage string, retryable bool, revision int) error {
-	if id == "" {
-		return fmt.Errorf("job repository: empty jobID in FailWithRetry")
-	}
-	p := b.dialect
-
-	tx, err := b.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("failwithretry begin: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	var attemptCnt, maxRetries int
-	row := tx.QueryRowContext(ctx,
-		`SELECT COALESCE(attempt, 0), COALESCE(max_retries, 0) FROM jobs WHERE job_id = `+p.Placeholder(1),
-		id)
-	if err := row.Scan(&attemptCnt, &maxRetries); err != nil {
-		if err == sql.ErrNoRows {
-			return fmt.Errorf("failwithretry %s: %w", id, p.ConflictError())
-		}
-		return fmt.Errorf("failwithretry budget lookup: %w", err)
-	}
-
-	now := nowStrISO()
-	willRetry := retryable && attemptCnt < maxRetries
-	nextStatus := "FAILED"
-	eventType := "job_failed"
-	outboxEvent := "JOB_FAILED"
-	historyMessage := "Job failed: " + errorMessage
-	if willRetry {
-		nextStatus = "RETRY_WAIT"
-		eventType = "job_retry_scheduled"
-		outboxEvent = "JOB_RETRY_SCHEDULED"
-		historyMessage = "Job retry scheduled: " + errorMessage
-	}
-
-	res, err := tx.ExecContext(ctx,
-		`UPDATE jobs
-		   SET status = `+p.Placeholder(1)+`,
-		       updated_at = `+p.Placeholder(2)+`,
-		       revision = COALESCE(revision, 0) + 1,
-		       error_message = `+p.Placeholder(3)+`,
-		       failed_at = `+p.Placeholder(4)+`,
-		       failed_by = ''
-		 WHERE job_id = `+p.Placeholder(5)+`
-		   AND `+p.CoalesceStatus()+` IN ('LEASED', 'RUNNING', 'RENDER_FINISHED', 'AWAITING_ARTIFACT')
-		   AND COALESCE(revision, 0) = `+p.Placeholder(6),
-		nextStatus, now, errorMessage, now, id, revision)
-	if err != nil {
-		return fmt.Errorf("failwithretry update: %w", err)
-	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return fmt.Errorf("failwithretry %s: %w", id, p.ConflictError())
-	}
-
-	_ = p.InsertHistoryTx(ctx, tx, id, nextStatus, "" /* workerID */, historyMessage)
-	_ = p.InsertEventTx(ctx, tx, id, eventType, map[string]interface{}{
-		"error_code": errorCode, "error": errorMessage, "retryable": retryable,
+	_ = p.InsertHistoryTx(ctx, tx, id, "FAILED", "" /* workerID */, "Job failed: "+reason)
+	_ = p.InsertEventTx(ctx, tx, id, "job_failed", map[string]interface{}{
+		"error": reason,
 	})
 
 	payload, _ := json.Marshal(map[string]interface{}{
-		"job_id": id, "error": errorMessage, "error_code": errorCode,
-		"retryable": willRetry,
+		"job_id": id, "error": reason,
 	})
-	_ = p.EmitOutboxTx(ctx, tx, "job", id, outboxEvent, payload)
+	_ = p.EmitOutboxTx(ctx, tx, "job", id, "JOB_FAILED", payload)
 
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("failwithretry commit: %w", err)
+		return fmt.Errorf("fail commit: %w", err)
 	}
 	return nil
 }

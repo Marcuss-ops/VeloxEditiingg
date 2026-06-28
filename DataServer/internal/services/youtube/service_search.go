@@ -135,8 +135,16 @@ func (s *Service) SimilarChannels(ctx context.Context, searchQuery string, limit
 }
 
 // AutoSimilarChannels automatically finds similar channels based on stored keywords.
+//
+// PR-YT-REPO: data.Groups hydrates from the canonical *youtube.Service
+// LoadData() which returns *StorageData (map[string]*Group, full
+// []Channel rows). SQLite is the single source of truth; there is no
+// in-memory mirror.
 func (s *Service) AutoSimilarChannels(ctx context.Context, limit int, minVelocity int64) ([]youtube.SimilarChannelHit, []string, int, error) {
-	data := s.storage.LoadData()
+	if s.ytService == nil {
+		return []youtube.SimilarChannelHit{}, []string{}, 0, fmt.Errorf("youtube integration service not configured")
+	}
+	data := s.ytService.LoadData()
 
 	var allChannels []youtube.Channel
 	seenURLs := make(map[string]bool)

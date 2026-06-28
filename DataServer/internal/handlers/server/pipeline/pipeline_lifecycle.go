@@ -2,40 +2,40 @@ package pipeline
 
 import (
 	"context"
+	"net/http"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"net/http"
 
-	"velox-server/internal/config"
 	"velox-server/internal/jobs"
 	"velox-server/internal/jobs/enqueue"
-	"velox-server/internal/remoteengine"
-	"velox-server/internal/workers"
 )
 
-// PR15.7a: pipelineEnqueuer (wired by InitPipelineEnqueuer) lives in
-// pipeline.go and is the shared Enqueuer used by both the sync forward
-// path and this async poll path. Cancellation uses jobs.Reader + jobs.Writer
-// directly to iterate queued jobs and delete by ID.
-
+// isTerminalStatus is the pure helper that classifies a remote-engine
+// status string into "stop polling" vs "keep polling". Kept package-level
+// (not a method) because it takes no receiver dependency.
 func isTerminalStatus(status string) bool {
 	s := strings.ToLower(strings.TrimSpace(status))
 	return s == "completed" || s == "succeeded" || s == "done" || s == "failed" || s == "error"
 }
 
-// startPipelinePolling polls a pipeline job status every intervalSec seconds
-// in a background goroutine until completion, then forwards to workers.
+// startPolling is the package-internal background polling helper that
+// replaces the previous `startPipelinePolling(client, jobID, int)` free
+// function.
 //
-// PR15.7a: the forwarding path now
-// reads pipelineEnqueuer (wired via InitPipelineEnqueuer at boot) instead.
-func startPipelinePolling(client *remoteengine.Client, jobID string, intervalSec int) {
-	if client == nil || !client.IsConfigured() {
+// PR-DI-pipeline: the goroutine reads its dependencies (client,
+// enqueuer) from the receiver `h` rather than from package-level
+// globals, so concurrent pipelines running on the same process can
+// never observe each other's state. `h.startPolling` is also implicitly
+// nil-safe — if `h.client` is nil or unconfigured we drop the
+// goroutine, if `h.enqueuer` is nil we drop the goroutine.
+func (h *Handlers) startPolling(jobID string, intervalSec int) {
+	if h.client == nil || !h.client.IsConfigured() {
 		pipelineLog("POLL: client not configured — cannot poll job %s", jobID)
 		return
 	}
-	if pipelineEnqueuer == nil {
+	if h.enqueuer == nil {
 		pipelineLog("POLL: enqueuer not wired — cannot forward job %s", jobID)
 		return
 	}
@@ -65,7 +65,7 @@ func startPipelinePolling(client *remoteengine.Client, jobID string, intervalSec
 			elapsed := time.Since(startTime).Round(time.Second)
 
 			pipelineLog("POLL: checking job_id=%s attempt=%d/%d elapsed=%s", jobID, i+1, maxPolls, elapsed)
-			status, err := client.GetPipelineStatus(context.Background(), jobID)
+			status, err := h.client.GetPipelineStatus(context.Background(), jobID)
 			if err != nil {
 				pipelineLog("POLL: ERROR job_id=%s attempt=%d/%d: %v", jobID, i+1, maxPolls, err)
 				continue
@@ -108,7 +108,7 @@ func startPipelinePolling(client *remoteengine.Client, jobID string, intervalSec
 				}
 
 				if enqueue.ShouldForwardPipelineResult(forwardResult) {
-					if forwarded, fwdErr := forwardPipelineResultToWorker(context.Background(), pipelineEnqueuer, forwardResult); fwdErr != nil {
+					if forwarded, fwdErr := forwardPipelineResultToWorker(context.Background(), h.enqueuer, forwardResult); fwdErr != nil {
 						pipelineLog("FORWARD: FAILED job_id=%s: %v", jobID, fwdErr)
 					} else {
 						workerJobID, _ := forwarded["job_id"].(string)
@@ -144,7 +144,7 @@ func startPipelinePolling(client *remoteengine.Client, jobID string, intervalSec
 				return
 
 			default:
-				// Continue polling for running/queued/pending
+				// Continue polling for running/queued/pending.
 			}
 		}
 
@@ -152,13 +152,15 @@ func startPipelinePolling(client *remoteengine.Client, jobID string, intervalSec
 	}()
 }
 
-// PipelineStatus handles GET /api/remote/pipeline/status/<trace_id>
-func PipelineStatus(cfg *config.Config) gin.HandlerFunc {
+// Status handles GET /api/remote/pipeline/status/:trace_id.
+//
+// PR-DI-pipeline: client dependency now read from receiver `h`.
+func (h *Handlers) Status() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		traceID := c.Param("trace_id")
 		pipelineLog("STATUS: requested job_id=%s", traceID)
 
-		if remoteEngineClient == nil || !remoteEngineClient.IsConfigured() {
+		if h.client == nil || !h.client.IsConfigured() {
 			pipelineLog("STATUS: remote engine NOT configured")
 			c.JSON(http.StatusServiceUnavailable, gin.H{
 				"ok":       false,
@@ -169,7 +171,7 @@ func PipelineStatus(cfg *config.Config) gin.HandlerFunc {
 			return
 		}
 
-		status, err := remoteEngineClient.GetPipelineStatus(c.Request.Context(), traceID)
+		status, err := h.client.GetPipelineStatus(c.Request.Context(), traceID)
 		if err != nil {
 			pipelineLog("STATUS: ERROR job_id=%s: %v", traceID, err)
 			c.JSON(http.StatusBadGateway, gin.H{"ok": false, "error": err.Error()})
@@ -181,8 +183,16 @@ func PipelineStatus(cfg *config.Config) gin.HandlerFunc {
 	}
 }
 
-// PipelineCancel handles DELETE /api/remote/pipeline/cancel/<trace_id>
-func PipelineCancel(cfg *config.Config, reader jobs.Reader, writer jobs.Writer, cmdMgr *workers.CommandManager) gin.HandlerFunc {
+// Cancel handles DELETE /api/remote/pipeline/cancel/:trace_id.
+//
+// PR-DI-pipeline: every dependency is now structural (h.client and
+// h.jobs.{Reader,Writer,CmdMgr}). The previous top-level form took
+// reader/writer/cmdMgr as bound parameters, but the global
+// `remoteEngineClient` is gone: this method reads it from `h`. If the
+// caller did not pass cancel-side deps to NewHandlersFull, that side
+// of the response is silently skipped (the remote cancel still
+// proceeds, which is the operator-correct behaviour).
+func (h *Handlers) Cancel() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		traceID := c.Param("trace_id")
 		pipelineLog("CANCEL: requested job_id=%s", traceID)
@@ -192,8 +202,8 @@ func PipelineCancel(cfg *config.Config, reader jobs.Reader, writer jobs.Writer, 
 		remoteCancel := false
 		remoteErr := ""
 
-		if remoteEngineClient != nil && remoteEngineClient.IsConfigured() {
-			if err := remoteEngineClient.CancelPipeline(c.Request.Context(), traceID); err != nil {
+		if h.client != nil && h.client.IsConfigured() {
+			if err := h.client.CancelPipeline(c.Request.Context(), traceID); err != nil {
 				pipelineLog("CANCEL: remote cancel FAILED job_id=%s: %v", traceID, err)
 				remoteErr = err.Error()
 			} else {
@@ -204,11 +214,11 @@ func PipelineCancel(cfg *config.Config, reader jobs.Reader, writer jobs.Writer, 
 			pipelineLog("CANCEL: remote engine not configured — skipping remote cancel for job_id=%s", traceID)
 		}
 
-		if reader != nil {
+		if h.jobs.Reader != nil {
 			toDelete := []string{traceID}
 			workerIDs := map[string]bool{}
 
-			allDomainJobs, _ := reader.List(c.Request.Context(), jobs.Filter{Limit: 10000})
+			allDomainJobs, _ := h.jobs.Reader.List(c.Request.Context(), jobs.Filter{Limit: 10000})
 			for i := range allDomainJobs {
 				j := jobs.ToQueueItem(&allDomainJobs[i])
 				if j == nil || j.Payload == nil {
@@ -222,9 +232,9 @@ func PipelineCancel(cfg *config.Config, reader jobs.Reader, writer jobs.Writer, 
 				}
 			}
 
-			if cmdMgr != nil {
+			if h.jobs.CmdMgr != nil {
 				for workerID := range workerIDs {
-					cmdMgr.PushCommand(workerID, "cancel_job", map[string]interface{}{
+					h.jobs.CmdMgr.PushCommand(workerID, "cancel_job", map[string]interface{}{
 						"job_id": traceID,
 					})
 					workerCancelled = append(workerCancelled, workerID)
@@ -232,9 +242,9 @@ func PipelineCancel(cfg *config.Config, reader jobs.Reader, writer jobs.Writer, 
 				}
 			}
 
-			if writer != nil {
+			if h.jobs.Writer != nil {
 				for _, id := range toDelete {
-					if err := writer.Delete(c.Request.Context(), id); err == nil {
+					if err := h.jobs.Writer.Delete(c.Request.Context(), id); err == nil {
 						localCancelled = append(localCancelled, id)
 					}
 				}

@@ -14,13 +14,8 @@ import (
 // Reader methods (Get, List, Counts) are inherited from the embedded
 // baseJobRepository.
 //
-// FailWithRetry is NOT on the jobs.Writer interface but IS a concrete
-// method on *SQLiteJobRepository so it satisfies taskgraph.JobsRetryQuerier
-// via Go structural typing. Keep it here so the task-reaper's post-commit
-// Job update (fail-on-retries-exhausted) still works after the method was
-// removed from the canonical Writer.
-//
-// fix/remove-job-lease-ops: ClaimNext, ClaimNextForProfile, and all
+// fix/remove-job-lease-ops: Lease, Start, FailWithRetry, ClaimNext,
+// ClaimNextForProfile, and all
 // PR3 legacy wrappers (PR3Start, PR3RenewLease, PR3RecordRenderFinished,
 // PR3Fail, PR3RequeueExpiredLeases) are REMOVED. Lease/claim/reap
 // operations now live in the Task domain (taskgraph.Repository).

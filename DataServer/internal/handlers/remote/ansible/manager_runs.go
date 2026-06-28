@@ -1,19 +1,13 @@
 package ansible
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log"
 	"os"
 	"os/exec"
 	"sort"
-	"strings"
 	"sync"
-	"time"
-
-	"github.com/google/uuid"
 
 	"velox-server/internal/store"
 )
@@ -45,20 +39,17 @@ type AnsibleRunStore interface {
 	ListAnsibleRunHosts(runID string) ([]string, error)
 }
 
-// ErrExecutorRemoved is the sentinel error returned by legacy
-// AnsibleRunManager.RunPlaybook after the PR 8 executor migration.
-// Callers can errors.Is against it to surface an operator-action hint
-// through the API response and log line.
+// ErrExecutorRemoved is the sentinel error surfaced by every run-time
+// ansible action entry-point (deploy, update, install, preflight,
+// test_ssh) after PR 8 removed the in-process ansible-playbook executor
+// and PR 1 deleted the RunPlaybook fake stub. Callers in handlers.go /
+// runDeployWorkers return this error synchronously so the HTTP layer can
+// surface an operator-action hint. A real executor lands under
+// internal/ansible/executor (planned PR) — once wired, this sentinel is
+// replaced by the executor's typed errors.
 var ErrExecutorRemoved = errors.New(
-	"ansible RunPlaybook executor removed in PR8: use internal/ansible/executor package (operator action required)",
+	"ansible executor removed: no RunPlaybook path available; install a real executor under internal/ansible/executor (operator action required)",
 )
-
-// StatusExecutorMissing is the run-record status persisted alongside a
-// failed RunPlaybook due to ErrExecutorRemoved. The recorded run stays in
-// the API-visible list so operators can detect deploy breaks via
-// GET /ansible/runs/{id} instead of seeing only a stack trace in the boot
-// log.
-const StatusExecutorMissing = "executor_missing"
 
 // AnsibleRunManager manages playbook executions and run history.
 type AnsibleRunManager struct {
@@ -261,51 +252,10 @@ func (m *AnsibleRunManager) GetRun(runID string) (AnsibleRunRecord, bool) {
 	return m.getRun(runID)
 }
 
-// RunPlaybook is a backwards-compatible thin wrapper around the (intentionally
-// deleted) executor path. The async executor was split into manager_runs_inventory.go
-// and manager_runs_executor.go which were removed as part of the dedup cleanup in
-// PR8. To keep the deploy.go + handlers.go call sites compiling while the new
-// executor lives under internal/ansible/executor (planned for a follow-up),
-// we preserve the signature and route the call through the legacy TBD channel.
-// On removal, callers should migrate to the new executor entry-point.
-func (m *AnsibleRunManager) RunPlaybook(ctx context.Context, host, playbook string, vars map[string]interface{}) (string, error) {
-	if m == nil {
-		return "", errors.New("ansible run manager unavailable")
-	}
-	// PR 8 cutover: the in-process ansible-playbook executor was removed.
-	// Even though no executor runs, we still mint a run ID and persist an
-	// AnsibleRunRecord with StatusExecutorMissing + ErrExecutorRemoved
-	// text, then return the typed sentinel. This keeps the deploy break
-	// visible in two places operators consult:
-	//   (a) the typed error surfaces in the HTTP response (callers can
-	//       map ErrExecutorRemoved -> HTTP 503 + operator-action hint).
-	//   (b) GET /ansible/runs/{id} and the runs listing render the saved
-	//       record with Status="executor_missing", so a missing executor
-	//       shows up where operators already look for run history.
-	runID := strings.ReplaceAll(uuid.NewString(), "-", "")[:8]
-	if runID == "" {
-		runID = fmt.Sprintf("%08x", time.Now().UnixNano())
-	}
-	now := time.Now().Unix()
-	if host == "" {
-		host = "unknown"
-	}
-	record := AnsibleRunRecord{
-		ID:        runID,
-		Action:    playbook,
-		Playbook:  playbook,
-		Hosts:     []string{host},
-		Status:    StatusExecutorMissing,
-		StartedAt: now,
-		EndedAt:   now,
-		Output:    ErrExecutorRemoved.Error(),
-		Preamble:  ErrExecutorRemoved.Error() + "\n",
-	}
-	if v, ok := vars["master_url"].(string); ok && strings.TrimSpace(v) != "" {
-		record.MasterURL = v
-		record.MasterURLSource = "body"
-	}
-	// Best-effort persist: a store error must NOT mask ErrExecutorRemoved.
-	_ = m.saveRun(record)
-	return runID, ErrExecutorRemoved
-}
+// PR 1: AnsibleRunManager.RunPlaybook was a fake-executor method that
+// minted a `StatusExecutorMissing` row each time it was called without
+// actually invoking ansible-playbook. The HTTP-layer callers now return
+// ErrExecutorRemoved synchronously from handlers.go / runDeployWorkers so
+// no fake run records are written. PR 1 deletes the method entirely;
+// future PR wiring a real executor lands under
+// internal/ansible/executor and registers a typed handler here.

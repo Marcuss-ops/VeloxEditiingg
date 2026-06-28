@@ -378,13 +378,17 @@ func (w *Worker) receiveLoop(ctx context.Context, recvCh <-chan controltransport
 
 				taskID := taskOffer.GetTaskId()
 				attemptID := taskOffer.GetAttemptId()
-				if taskID == "" || attemptID == "" {
-					w.logger.Warn("[RECEIVE] TaskOffer missing canonical identity (task_id=%q attempt_id=%q) — dropping",
-						taskID, attemptID)
+				jobID := taskOffer.GetJobId()
+				leaseID := taskOffer.GetLeaseId()
+				attemptNumber := taskOffer.GetAttemptNumber()
+				revision := taskOffer.GetRevision()
+				if taskID == "" || jobID == "" || attemptID == "" || leaseID == "" || attemptNumber <= 0 {
+					w.logger.Warn("[RECEIVE] TaskOffer refused — incomplete identity tuple (task=%q job=%q attempt=%q lease=%q attempt_num=%d rev=%d) — dropping",
+						taskID, jobID, attemptID, leaseID, attemptNumber, revision)
 					continue
 				}
 				if w.IsStopped() || w.drainMode.Load() {
-					if err := w.sendTaskReject(ctx, taskID, attemptID, taskOffer.GetLeaseId(), "draining", 0); err != nil {
+					if err := w.sendTaskReject(ctx, taskID, jobID, attemptID, leaseID, "draining", attemptNumber, revision); err != nil {
 						w.logger.Warn("[RECEIVE] Failed to send TaskRejected: %v", err)
 					}
 					continue
@@ -401,46 +405,48 @@ func (w *Worker) receiveLoop(ctx context.Context, recvCh <-chan controltransport
 				pendingCount := len(w.pendingTasks)
 				w.pendingTasksMu.Unlock()
 				if activeCount+pendingCount >= w.config.MaxActiveJobs {
-					if err := w.sendTaskReject(ctx, taskID, attemptID, taskOffer.GetLeaseId(), "capacity_full", 0); err != nil {
+					if err := w.sendTaskReject(ctx, taskID, jobID, attemptID, leaseID, "capacity_full", attemptNumber, revision); err != nil {
 						w.logger.Warn("[RECEIVE] Failed to send TaskRejected (capacity): %v", err)
 					}
 					continue
 				}
 
 				w.logger.Info("[RECEIVE] TaskOffer received: task=%s attempt=%s job=%s executor=%s@%d — deferring executeTask to TaskLeaseGranted",
-					taskID, attemptID, taskOffer.GetJobId(), taskOffer.GetExecutorId(), taskOffer.GetExecutorVersion())
+					taskID, attemptID, jobID, taskOffer.GetExecutorId(), taskOffer.GetExecutorVersion())
 
 				if err := w.sendTaskAccepted(ctx, taskOffer); err != nil {
 					w.logger.Warn("[RECEIVE] Failed to send TaskAccepted: %v", err)
 					continue
 				}
 
-				// Build api.Job from TaskOffer for the deferred executeTask path.
-				// PR #5: the TaskSpec travels pre-compiled in task_spec — no reconstruction needed.
+				// Build PendingTaskExecution from TaskOffer for the deferred
+				// executeTask path. TaskSpec travels pre-compiled from master.
 				var specPayload map[string]interface{}
 				if tsp := taskOffer.GetTaskSpec(); tsp != nil {
 					specPayload = tsp.AsMap()
 				}
-				job := &api.Job{
-					JobID:   taskOffer.GetJobId(),
-					LeaseID: taskOffer.GetLeaseId(),
-					Attempt: int(taskOffer.GetAttemptNumber()),
-					// PR #5: store pre-compiled TaskSpec for dispatchTaskRunner.
-					Parameters: map[string]interface{}{"task_spec": specPayload},
-					JobType:    taskOffer.GetExecutorId(),
-					Priority:   0,
+				pte := &PendingTaskExecution{
+					TaskID:          taskID,
+					JobID:           jobID,
+					AttemptID:       attemptID,
+					AttemptNumber:   int(attemptNumber),
+					LeaseID:         leaseID,
+					ExecutorID:      taskOffer.GetExecutorId(),
+					ExecutorVersion: int(taskOffer.GetExecutorVersion()),
+					Revision:        int(revision),
+					Spec: executor.TaskSpec{
+						Version:    int(taskOffer.GetExecutorVersion()),
+						JobID:      jobID,
+						ExecutorID: taskOffer.GetExecutorId(),
+						Payload:    specPayload,
+					},
 				}
-				// Store task_offer reference so executeTask can send TaskResult.
-				// fix/executor-version: carry executor_version from the master's
-				// TaskOffer so dispatchTaskRunner can stamp it into executor.TaskSpec
-				// instead of hardcoding Version:1.
-				job.Parameters["_executor_version"] = int(taskOffer.GetExecutorVersion())
 
 				// PR-2: defer dispatch to MsgTaskLeaseGranted via pendingTasks map.
-				w.storePendingTask(taskID, job)
+				w.storePendingTask(taskID, pte)
 
 			case controltransport.MsgTaskLeaseGranted:
-				// PR-2 (canonical-attempt-identity): executeJob dispatch is
+				// PR-2 (canonical-attempt-identity): executeTask dispatch is
 				// gated on TaskLeaseGranted. The master sends this AFTER
 				// accepting the worker's TaskAccepted and committing the
 				// TaskAttempt PENDING → RUNNING transition. consume the
@@ -458,28 +464,43 @@ func (w *Worker) receiveLoop(ctx context.Context, recvCh <-chan controltransport
 					continue
 				}
 
-				job := w.takePendingTask(taskID)
-				if job == nil {
+				// Validate the full identity tuple on the grant.
+				grantJobID := taskGrant.GetJobId()
+				grantAttemptID := taskGrant.GetAttemptId()
+				grantLeaseID := taskGrant.GetLeaseId()
+				grantAttemptNumber := taskGrant.GetAttemptNumber()
+				grantRevision := taskGrant.GetRevision()
+
+				if grantJobID == "" || grantAttemptID == "" || grantLeaseID == "" || grantAttemptNumber <= 0 {
+					w.logger.Warn("[RECEIVE] TaskLeaseGranted for task %s refused — incomplete identity (job=%q attempt=%q lease=%q attempt_num=%d rev=%d)",
+						taskID, grantJobID, grantAttemptID, grantLeaseID, grantAttemptNumber, grantRevision)
+					continue
+				}
+
+				pte := w.takePendingTask(taskID)
+				if pte == nil {
 					w.logger.Warn("[RECEIVE] TaskLeaseGranted for unknown task %s — dropping", taskID)
 					continue
 				}
 
-				// PR-2 followup: register the canonical (task_id, attempt_id,
-				// lease_id) tuple so leaseRenewLoop fires MsgTaskLeaseRenewal
-				// every 15s for this task-native entry.
-				w.AddActiveTaskLease(taskID, taskGrant.GetAttemptId(), taskGrant.GetLeaseId())
+				// Cross-validate the grant identity against the pending task.
+				if grantJobID != pte.JobID || grantAttemptID != pte.AttemptID || grantLeaseID != pte.LeaseID || int(grantAttemptNumber) != pte.AttemptNumber {
+					w.logger.Warn("[RECEIVE] TaskLeaseGranted for task %s identity mismatch against pending task (grant: job=%q attempt=%q lease=%q num=%d) vs (pending: job=%q attempt=%q lease=%q num=%d) — dropping",
+						taskID, grantJobID, grantAttemptID, grantLeaseID, grantAttemptNumber, pte.JobID, pte.AttemptID, pte.LeaseID, pte.AttemptNumber)
+					continue
+				}
 
-				w.logger.Info("[RECEIVE] TaskLeaseGranted for task=%s attempt=%s job=%s lease=%s — starting execution",
-					taskID, taskGrant.GetAttemptId(), taskGrant.GetJobId(), taskGrant.GetLeaseId())
+				// PR-2 followup: register the full identity tuple so
+				// leaseRenewLoop fires MsgTaskLeaseRenewal with all fields.
+				w.AddActiveTaskLease(taskID, grantJobID, grantAttemptID, grantLeaseID, int(grantAttemptNumber), int(grantRevision))
+
+				w.logger.Info("[RECEIVE] TaskLeaseGranted for task=%s attempt=%s job=%s lease=%s num=%d rev=%d — starting execution",
+					taskID, grantAttemptID, grantJobID, grantLeaseID, grantAttemptNumber, grantRevision)
 				// Defer RemoveActiveTaskLease so the lease slot is freed on
-				// every terminal exit: SUCCEEDED / FAILED / CANCELLED /
-				// TIMED_OUT, panic from stageexec, or pre-Stop drain. The
-				// wrapper covers all paths uniformly — relying on
-				// executeJob's internal cleanup would leave the slot stuck
-				// on the rare panic path.
+				// every terminal exit.
 				go func() {
 					defer w.RemoveActiveTaskLease(taskID)
-					w.executeTask(ctx, job, taskID, taskGrant.GetAttemptId())
+					w.executeTask(ctx, pte, taskID, grantAttemptID)
 				}()
 
 			case controltransport.MsgCommand:
@@ -510,7 +531,6 @@ func (w *Worker) receiveLoop(ctx context.Context, recvCh <-chan controltransport
 				configUpdate, ok := msg.TypedPayload.(*pb.ConfigurationUpdate)
 				if ok && configUpdate != nil && configUpdate.GetConfiguration() != nil {
 					cfgMap := configUpdate.GetConfiguration().AsMap()
-					w.handleRecoveryDirective(configUpdate.GetConfiguration())
 					if newMaxJobs, ok := cfgMap["max_parallel_jobs"]; ok {
 						switch v := newMaxJobs.(type) {
 						case float64:
@@ -523,28 +543,24 @@ func (w *Worker) receiveLoop(ctx context.Context, recvCh <-chan controltransport
 							w.logger.Info("[CONFIG] MaxActiveJobs updated to %d", v)
 						}
 					}
-					if newLogLevel, ok := cfgMap["log_level"].(string); ok && newLogLevel != "" {
-						w.config.LogLevel = newLogLevel
-						w.logger.Info("[CONFIG] LogLevel updated to %s", newLogLevel)
-					}
-					ackPayload := map[string]interface{}{
-						"command_id":        msg.MessageID,
-						"worker_id":         w.config.WorkerID,
-						"max_parallel_jobs": w.config.MaxActiveJobs,
-						"log_level":         w.config.LogLevel,
-					}
-					ackMsg := controltransport.NewMessageWithPayload(
-						controltransport.MsgCommandAck,
-						w.config.WorkerID,
-						w.config.ProtocolVersion,
-						ackPayload,
-					)
-					ackCtx, ackCancel := context.WithTimeout(context.Background(), 30*time.Second)
-					ackErr := w.transport.Send(ackCtx, ackMsg)
-					ackCancel()
-					if ackErr != nil {
-						w.logger.Warn("[CONFIG] Failed to ack ConfigurationUpdate: %v", ackErr)
-					}
+				if newLogLevel, ok := cfgMap["log_level"].(string); ok && newLogLevel != "" {
+					w.config.LogLevel = newLogLevel
+					w.logger.Info("[CONFIG] LogLevel updated to %s", newLogLevel)
+				}
+				ackMsg := controltransport.NewTypedMessage(
+					controltransport.MsgCommandAck,
+					w.config.WorkerID,
+					w.config.ProtocolVersion,
+					&pb.CommandAck{
+						CommandId: msg.MessageID,
+					},
+				)
+				ackCtx, ackCancel := context.WithTimeout(context.Background(), 30*time.Second)
+				ackErr := w.transport.Send(ackCtx, ackMsg)
+				ackCancel()
+				if ackErr != nil {
+					w.logger.Warn("[CONFIG] Failed to ack ConfigurationUpdate: %v", ackErr)
+				}
 				}
 
 			case controltransport.MsgLeaseRevoked:
@@ -564,7 +580,6 @@ func (w *Worker) receiveLoop(ctx context.Context, recvCh <-chan controltransport
 
 			case controltransport.MsgHelloAck:
 				w.logger.Debug("[RECEIVE] HelloAck received — session confirmed")
-				w.maybeSendRecoveryReport(ctx)
 
 			default:
 				w.logger.Debug("[RECEIVE] Unhandled message type: %s", msg.Type)
@@ -644,90 +659,66 @@ func (w *Worker) newTransport() controltransport.ControlTransport {
    JobAccepted/JobRejected messages no longer have transport encoding.
    Task-native sendTaskAccepted + sendTaskReject are the canonical path. */
 
-// sendTaskAccepted sends a TaskAccepted message via the transport (PR #5).
+// sendTaskAccepted sends a typed TaskAccepted message via the transport.
 func (w *Worker) sendTaskAccepted(ctx context.Context, offer *pb.TaskOffer) error {
-	acceptPayload := map[string]interface{}{
-		"task_id":    offer.GetTaskId(),
-		"job_id":     offer.GetJobId(),
-		"attempt_id": offer.GetAttemptId(),
-		"lease_id":   offer.GetLeaseId(),
-	}
-	acceptMsg := controltransport.NewMessageWithPayload(
+	acceptMsg := controltransport.NewTypedMessage(
 		controltransport.MsgTaskAccepted,
 		w.config.WorkerID,
 		w.config.ProtocolVersion,
-		acceptPayload,
+		&pb.TaskAccepted{
+			TaskId:        offer.GetTaskId(),
+			JobId:         offer.GetJobId(),
+			AttemptId:     offer.GetAttemptId(),
+			LeaseId:       offer.GetLeaseId(),
+			AttemptNumber: offer.GetAttemptNumber(),
+			Revision:      offer.GetRevision(),
+		},
 	)
 	return w.transport.Send(ctx, acceptMsg)
 }
 
-// sendTaskReject sends a TaskRejected message via the transport.
-// fix/task-rejected-lease-identity: carries the full identity tuple
-// (task_id, attempt_id, lease_id, revision) so the master can CAS-validate
-// against the canonical TaskAttempt row.
-func (w *Worker) sendTaskReject(ctx context.Context, taskID, attemptID, leaseID, reason string, revision int32) error {
-	rejectPayload := map[string]interface{}{
-		"task_id":    taskID,
-		"attempt_id": attemptID,
-		"lease_id":   leaseID,
-		"reason":     reason,
-		"revision":   revision,
-	}
-	rejectMsg := controltransport.NewMessageWithPayload(
+// sendTaskReject sends a typed TaskRejected message via the transport.
+func (w *Worker) sendTaskReject(ctx context.Context, taskID, jobID, attemptID, leaseID, reason string, attemptNumber, revision int32) error {
+	rejectMsg := controltransport.NewTypedMessage(
 		controltransport.MsgTaskRejected,
 		w.config.WorkerID,
 		w.config.ProtocolVersion,
-		rejectPayload,
+		&pb.TaskRejected{
+			TaskId:        taskID,
+			JobId:         jobID,
+			AttemptId:     attemptID,
+			LeaseId:       leaseID,
+			Reason:        reason,
+			AttemptNumber: attemptNumber,
+			Revision:      revision,
+		},
 	)
 	return w.transport.Send(ctx, rejectMsg)
 }
 
 // storePendingTask records a TaskOffer-accepted task awaiting
-// TaskLeaseGranted before executeJob dispatch (PR-2 canonical-attempt-
+// TaskLeaseGranted before executeTask dispatch (PR-2 canonical-attempt-
 // identity). Keyed by task_id via pendingTasks / pendingTasksMu.
-//
-// PR-2 followup (Stop-drain race fix): if the worker is already stopped,
-// short-circuit so the Stop()-time drain cannot be raced by an
-// in-flight receiveLoop handler still mid-processing the next message.
-func (w *Worker) storePendingTask(taskID string, job *api.Job) {
+func (w *Worker) storePendingTask(taskID string, pte *PendingTaskExecution) {
 	w.pendingTasksMu.Lock()
 	defer w.pendingTasksMu.Unlock()
-	// PR-2 followup (Stop-drain race fix): check IsStopped INSIDE
-	// the critical section so the race with Stop()'s drain is
-	// obvious — the drain is also under pendingTasksMu; any
-	// goroutine holding the lock has either written already
-	// (and Stop will see + drain it) or sees stopped=true and
-	// short-circuits before writing. The pre-Lock precheck
-	// was a TOCTOU bug (drain could happen between precheck
-	// and Lock acquisition).
 	if w.IsStopped() {
 		return
 	}
-	w.pendingTasks[taskID] = job
+	w.pendingTasks[taskID] = pte
 }
 
 // takePendingTask retrieves and removes a pending task by task_id.
-// Returns nil if the task was not found (caller treats as `unknown
-// task_id` and drops).
-//
-// PR-2 followup (Stop-drain race fix): if the worker is already stopped,
-// short-circuit to nil so the Stop()-time drain does not race an
-// in-flight receiveLoop handler that is just about to dispatch
-// executeJob post-Stop.
-func (w *Worker) takePendingTask(taskID string) *api.Job {
+// Returns nil if the task was not found.
+func (w *Worker) takePendingTask(taskID string) *PendingTaskExecution {
 	w.pendingTasksMu.Lock()
 	defer w.pendingTasksMu.Unlock()
-	// PR-2 followup (Stop-drain race fix): takePendingTask can
-	// legitimately be called AFTER Stop if the receiveLoop is
-	// mid-iteration when Stop is requested. Short-circuit on the
-	// IsStopped check to return nil so the caller logs + drops
-	// (the canonical "unknown task_id" path).
 	if w.IsStopped() {
 		return nil
 	}
-	job := w.pendingTasks[taskID]
+	pte := w.pendingTasks[taskID]
 	delete(w.pendingTasks, taskID)
-	return job
+	return pte
 }
 
 // Stop signals the worker to stop gracefully.
@@ -750,7 +741,7 @@ func (w *Worker) Stop() {
 		// the master side; the local map is safe to clear.
 		w.pendingTasksMu.Lock()
 		clearedTask := len(w.pendingTasks)
-		w.pendingTasks = make(map[string]*api.Job)
+		w.pendingTasks = make(map[string]*PendingTaskExecution)
 		w.pendingTasksMu.Unlock()
 		// PR-2 followup: drain activeTaskLeases on Stop so the next
 		// session starts empty and any lease the master has already

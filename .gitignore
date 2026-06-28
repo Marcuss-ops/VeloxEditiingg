@@ -99,6 +99,9 @@ node_modules/
 .DS_Store
 Thumbs.db
 
+# ── Top-level compiled binary (NEVER commit) ──────────────────────────────
+/server
+
 # ── Transient build artifacts ────────────────────────────────────────────────
 # A top-level `controltransport/` directory sporadically appears when a
 # `protoc` regeneration attempt (paths=source_relative variant) writes its

@@ -90,9 +90,6 @@ func (h *Handler) handleHeartbeat(workerID, sessionID string, hb *pb.Heartbeat) 
 			h.resourceSink.RecordWorker(workerID, snap)
 		}
 	}
-	// RecoveryReport protocol: inspect hb.extra for recovery_report_v1 and
-	// queue a ConfigurationUpdate carrying the master's directive via safeSend.
-	h.handleRecoveryReport(workerID, sess, hb)
 
 	// Issue 7 fix / Phase 4.2 hardening: if the persisted session is gone
 	// or revoked or expired, we MUST tear the active session down.
@@ -216,6 +213,7 @@ func (h *Handler) sendPushTaskOffer(ctx context.Context, workerID string) {
 				LeaseId:         leaseID,
 				LeaseDeadline:   timestamppb.New(leaseDeadline),
 				AttemptNumber:   int32(attempt.AttemptNumber),
+				Revision:        int32(tws.Revision),
 			},
 		},
 	}

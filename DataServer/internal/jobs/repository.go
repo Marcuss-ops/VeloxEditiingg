@@ -30,29 +30,21 @@ type Reader interface {
 // Writer is the canonical write-only job mutation surface.
 // Implemented by store.SQLiteJobRepository.
 //
-// fix/remove-job-lease-ops: ReleaseLease, RenewLease, ClaimNext,
-// ClaimNextForProfile, FailWithRetry, RequeueExpiredLeases, and
-// RecordRenderFinished are REMOVED. Lease/claim/reap operations now
-// live exclusively in the Task domain (taskgraph.Repository). The
-// Job Writer surface is reduced to status transitions (SetStatus,
-// Cancel, Fail) and idempotent bookkeeping (Lease, Start, Delete).
+// fix/remove-job-lease-ops: Lease, Start, FailWithRetry, ReleaseLease,
+// RenewLease, ClaimNext, ClaimNextForProfile, RequeueExpiredLeases, and
+// RecordRenderFinished are REMOVED. Lease/claim/reap/retry operations
+// now live exclusively in the Task domain (taskgraph.Repository,
+// taskattempts.Repository). The Job Writer surface is reduced to pure
+// status transitions (SetStatus, Fail, Cancel) and idempotent
+// bookkeeping (Delete).
 type Writer interface {
 	// SetStatus performs a CAS status change from → to.
 	// Returns ErrTransitionConflict if the precondition does not hold.
 	SetStatus(ctx context.Context, id string, from, to Status) error
 
-	// Lease atomically assigns a PENDING job to a worker.
-	// Returns ErrTransitionConflict if the job is not in PENDING.
-	Lease(ctx context.Context, id, workerID string) error
-
-	// Fail marks a job FAILED and records the reason.
+	// Fail marks a job FAILED and records the reason. Single-tx:
+	// UPDATE + history + event + outbox. Rejects terminal jobs.
 	Fail(ctx context.Context, id string, reason string) error
-
-	// Start atomically transitions LEASED → RUNNING, verifying the full
-	// worker-identity CAS tuple (workerID, leaseID, attempt, revision).
-	// Inserts history + JOB_STARTED event in the same tx.
-	// Returns ErrTransitionConflict on any predicate mismatch.
-	Start(ctx context.Context, id, workerID, leaseID string, attempt, revision int) error
 
 	// Cancel transitions a job to CANCELLED. Idempotent on terminal
 	// states. Single-tx: UPDATE + history + event.

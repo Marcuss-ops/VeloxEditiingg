@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"velox-shared/controltransport"
+	pb "velox-shared/controltransport/pb"
 	"velox-worker-agent/pkg/api"
 )
 
@@ -72,19 +73,20 @@ func (w *Worker) processCommand(ctx context.Context, cmd api.WorkerCommand) {
 	}
 
 	// Ack the command via transport so the master knows it was received.
-	ackPayload := map[string]interface{}{
-		"command":    cmd.Command,
-		"command_id": cmd.CommandID,
-	}
+	var ackError string
 	if resultErr != nil {
-		ackPayload["error"] = resultErr.Error()
+		ackError = resultErr.Error()
 	}
 
-	ackMsg := controltransport.NewMessageWithPayload(
+	ackMsg := controltransport.NewTypedMessage(
 		controltransport.MsgCommandAck,
 		w.config.WorkerID,
 		w.config.ProtocolVersion,
-		ackPayload,
+		&pb.CommandAck{
+			CommandId: cmd.CommandID,
+			Command:   cmd.Command,
+			Error:     ackError,
+		},
 	)
 	// Use a background context with timeout for the ack
 	ackCtx, ackCancel := context.WithTimeout(context.Background(), 30*time.Second)

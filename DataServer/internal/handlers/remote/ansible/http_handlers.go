@@ -1,6 +1,7 @@
 package ansible
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -153,13 +154,23 @@ func (h *AnsibleHandlers) RunActionHandler(c *gin.Context) {
 	}
 
 	if body.Action == "deploy_workers" || body.Action == "rollout_update" {
-		runID, err := h.runDeployWorkers(targets, body.BatchSize, body.CanaryPercent)
+		_, err := h.runDeployWorkers(targets, body.BatchSize, body.CanaryPercent)
 		if err != nil {
+			// PR 1: ErrExecutorRemoved → HTTP 501 Not Implemented so
+			// operators see a clear capability-missing signal rather
+			// than a generic 500.
+			if errors.Is(err, ErrExecutorRemoved) {
+				c.JSON(http.StatusNotImplemented, gin.H{
+					"error": err.Error(),
+					"hint":  "install internal/ansible/executor + restart master to enable this action",
+				})
+				return
+			}
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{
-			"run_id":  runID,
+			"run_id":  "",
 			"status":  "queued",
 			"action":  "deploy_workers",
 			"targets": targets,
@@ -167,14 +178,21 @@ func (h *AnsibleHandlers) RunActionHandler(c *gin.Context) {
 		return
 	}
 
-	runID, err := h.runActionForTargets(body.Action, targets)
+	_, err := h.runActionForTargets(body.Action, targets)
 	if err != nil {
+		if errors.Is(err, ErrExecutorRemoved) {
+			c.JSON(http.StatusNotImplemented, gin.H{
+				"error": err.Error(),
+				"hint":  "install internal/ansible/executor + restart master to enable this action",
+			})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"run_id":  runID,
+		"run_id":  "",
 		"status":  "queued",
 		"action":  body.Action,
 		"targets": targets,
@@ -208,14 +226,21 @@ func (h *AnsibleHandlers) TestSSHHandler(c *gin.Context) {
 		return
 	}
 
-	runID, err := h.runActionForTargets("test_ssh", targets)
+	_, err := h.runActionForTargets("test_ssh", targets)
 	if err != nil {
+		if errors.Is(err, ErrExecutorRemoved) {
+			c.JSON(http.StatusNotImplemented, gin.H{
+				"error": err.Error(),
+				"hint":  "install internal/ansible/executor + restart master to enable this action",
+			})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"run_id":  runID,
+		"run_id":  "",
 		"status":  "queued",
 		"action":  "test_ssh",
 		"targets": targets,

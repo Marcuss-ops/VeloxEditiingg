@@ -1,16 +1,5 @@
-// Package jobs lifecycle_service.go — LifecycleService moved from internal/queue.
-//
-// LifecycleService manages transactional job state transitions, requeueing,
-// and queries. The struct, constructor, accessors, PR3 transactional
-// mutators, and query helpers all live here so the canonical lifecycle
-// contract reads in a single coherent linear scan.
-//
-// PR15.5: LifecycleService uses jobs.Repository (canonical domain
-// surface) exclusively. The legacy store.JobRepository field, Repo()
-// accessor, and dual-stack design are removed. All PR3 operations
-// (Start/Fail/Cancel/RequeueExpiredLeases) go through jobs.Writer methods
-// (Start/FailWithRetry/Cancel/RequeueExpiredLeases) which are implemented
-// by the store.jobsAdapter wrapper.
+// Package jobs lifecycle_service.go — LifecycleService manages job
+// queries and orchestration via the canonical jobs.Repository domain surface.
 package jobs
 
 import (

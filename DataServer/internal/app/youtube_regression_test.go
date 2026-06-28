@@ -51,7 +51,7 @@ func TestYouTubeModule_EagerBuildWithRealStoreAndDataDir(t *testing.T) {
 	}
 
 	// Storage() is also eagerly built when dataDir != "".
-	if m.Storage() == nil {
+	if m.youtubeService == nil {
 		t.Fatal("Storage() must be non-nil after NewYouTubeModule(real store, dataDir) — " +
 			"manager/feed paths depend on it")
 	}
@@ -62,12 +62,18 @@ func TestYouTubeModule_EagerBuildWithRealStoreAndDataDir(t *testing.T) {
 	}
 }
 
-// TestYouTubeModule_EagerBuild_NilDataDir_OmitsStorage locks the
-// complementary behavior: with dataDir == "" the constructor still
-// builds Service() (it doesn't depend on dataDir) but Storage() stays
-// nil. This is the path that lets operator deployments pass empty
-// dataDir legitimately without panics.
-func TestYouTubeModule_EagerBuild_NilDataDir_OmitsStorage(t *testing.T) {
+// TestYouTubeModule_EagerBuild_NilDataDir pins the post-PR-YT-REPO
+// contract: with dataDir == "" but valid cfg + sqliteStore, the
+// constructor still builds the integration *youtube.Service (the
+// canonical Repository owner). dataDir only affects the cache sub-path
+// — it does NOT gate the service build. This is the path that lets
+// operator deployments pass empty dataDir legitimately without panics.
+//
+// The pre-PR-YT-REPO test asserted a separate "Storage() stays nil"
+// invariant, but the Storage facade was deleted in the union refactor:
+// the new *youtube.Service is the entire persistence layer, so it is
+// built whenever cfg + sqliteStore are valid regardless of dataDir.
+func TestYouTubeModule_EagerBuild_NilDataDir(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "velox_yt_empty_datadir.db")
 
@@ -87,9 +93,9 @@ func TestYouTubeModule_EagerBuild_NilDataDir_OmitsStorage(t *testing.T) {
 		t.Fatal("expected non-nil module")
 	}
 	if m.Service() == nil {
-		t.Error("Service() must be non-nil even with empty dataDir")
+		t.Error("Service() must be non-nil when cfg + sqliteStore are valid, even with empty dataDir (PR-YT-REPO contract)")
 	}
-	if m.Storage() != nil {
-		t.Error("Storage() must be nil when dataDir is empty")
+	if m.youtubeService == nil {
+		t.Error("youtubeService field must be non-nil when cfg + sqliteStore are valid, even with empty dataDir")
 	}
 }

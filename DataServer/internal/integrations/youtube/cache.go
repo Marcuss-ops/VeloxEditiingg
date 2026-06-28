@@ -8,12 +8,22 @@ import (
 	"time"
 )
 
-// Cache provides a SQLite-backed cache with TTL support
+// Cache provides a SQLite-backed cache with TTL support.
+//
+// PR-YT-REPO: this is the **API response cache** — a legitimate
+// in-RAM map keyed by cache key, with the canonical SQLite-backed
+// store as the durable fallback. This is NOT the deprecated in-memory
+// groups/channels mirror (PR15.4 removal); the two are different
+// concerns and only the latter was a data-drift liability.
+//
+// NewCache is non-variadic and requires a Repository. SetStore is
+// gone — the repo is wired at construction and held for the lifetime
+// of the Cache.
 type Cache struct {
-	mu    sync.RWMutex
-	data  map[string]cacheEntry
-	ttl   time.Duration
-	store YouTubeStore
+	mu   sync.RWMutex
+	data map[string]cacheEntry
+	ttl  time.Duration
+	repo Repository
 }
 
 type cacheEntry struct {
@@ -21,91 +31,74 @@ type cacheEntry struct {
 	Data      interface{} `json:"data"`
 }
 
-// NewCache creates a new cache instance
-func NewCache(dataDir string, ttl time.Duration, store ...YouTubeStore) *Cache {
-	// Default to 2 hours TTL
+// NewCache creates a new cache instance backed by the canonical
+// Repository (Repository is required). Defaults to 2-hour TTL when
+// `ttl` is 0.
+func NewCache(dataDir string, ttl time.Duration, repo Repository) *Cache {
 	if ttl == 0 {
 		ttl = 2 * time.Hour
 	}
-
-	var ytStore YouTubeStore
-	if len(store) > 0 {
-		ytStore = store[0]
+	if repo == nil {
+		// Fail-closed: a Cache without a repo would silently swallow
+		// every Set because the SQLite write path gets nil-rejected.
+		// Panicking surfaces the misconfiguration at boot rather than
+		// at first request.
+		panic("youtube.NewCache: Repository is required (PR-YT-REPO drops SetStore)")
 	}
 
 	c := &Cache{
-		data:  make(map[string]cacheEntry),
-		ttl:   ttl,
-		store: ytStore,
+		data: make(map[string]cacheEntry),
+		ttl:  ttl,
+		repo: repo,
 	}
-
-	// Load existing cache from SQLite
 	c.load()
-
 	return c
-}
-
-// SetStore sets the SQLite store for cache persistence
-func (c *Cache) SetStore(store YouTubeStore) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.store = store
 }
 
 // load reads cache from SQLite (without preloading all entries).
 func (c *Cache) load() error {
-	// Entries are fetched on-demand via Get() with SQLite fallback.
 	return nil
 }
 
 // save writes cache to SQLite.
 func (c *Cache) save() {
-	if c.store != nil {
-		for key, entry := range c.data {
-			dataJSON, _ := json.Marshal(entry.Data)
-			if err := c.store.SetYouTubeCache(key, entry.Timestamp, string(dataJSON)); err != nil {
-				log.Printf("[WARN] YouTube cache: SQLite save error for key %s: %v", key, err)
-			}
+	for key, entry := range c.data {
+		dataJSON, _ := json.Marshal(entry.Data)
+		if err := c.repo.SetYouTubeCache(key, entry.Timestamp, string(dataJSON)); err != nil {
+			log.Printf("[WARN] YouTube cache: SQLite save error for key %s: %v", key, err)
 		}
 	}
 }
 
-// Get retrieves a cached value if not expired, falling back to SQLite if not in memory.
+// Get retrieves a cached value if not expired, falling back to SQLite
+// if not in memory.
 func (c *Cache) Get(key string) (interface{}, bool) {
 	c.mu.RLock()
 	entry, ok := c.data[key]
 	c.mu.RUnlock()
 
 	if ok {
-		// Check if expired
 		if time.Since(time.Unix(entry.Timestamp, 0)) <= c.ttl {
 			return entry.Data, true
 		}
 	}
 
-	// Fallback: try SQLite if not found or expired in memory
-	if c.store != nil {
-		timestamp, dataJSON, err := c.store.GetYouTubeCache(key)
-		if err == nil && dataJSON != "" {
-			// Unmarshal the cached data
-			var data interface{}
-			if err := json.Unmarshal([]byte(dataJSON), &data); err == nil {
-				// Check TTL
-				if time.Since(time.Unix(timestamp, 0)) <= c.ttl {
-					// Populate back into memory
-					c.mu.Lock()
-					c.data[key] = cacheEntry{Timestamp: timestamp, Data: data}
-					c.mu.Unlock()
-					return data, true
-				}
+	timestamp, dataJSON, err := c.repo.GetYouTubeCache(key)
+	if err == nil && dataJSON != "" {
+		var data interface{}
+		if err := json.Unmarshal([]byte(dataJSON), &data); err == nil {
+			if time.Since(time.Unix(timestamp, 0)) <= c.ttl {
+				c.mu.Lock()
+				c.data[key] = cacheEntry{Timestamp: timestamp, Data: data}
+				c.mu.Unlock()
+				return data, true
 			}
 		}
 	}
-
 	return nil, false
 }
 
-// Set stores a value in cache
+// Set stores a value in cache.
 func (c *Cache) Set(key string, value interface{}) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -114,52 +107,44 @@ func (c *Cache) Set(key string, value interface{}) {
 		Timestamp: time.Now().Unix(),
 		Data:      value,
 	}
-
-	// Save asynchronously to not block
 	go c.save()
 }
 
-// Delete removes a key from cache
+// Delete removes a key from cache.
 func (c *Cache) Delete(key string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-
 	delete(c.data, key)
 }
 
-// Clear removes all entries from cache
+// Clear removes all entries from cache.
 func (c *Cache) Clear() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-
 	c.data = make(map[string]cacheEntry)
-
 	go c.save()
 }
 
-// Cleanup removes expired entries
+// Cleanup removes expired entries.
 func (c *Cache) Cleanup() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	now := time.Now()
 	count := 0
-
 	for key, entry := range c.data {
 		if now.Sub(time.Unix(entry.Timestamp, 0)) > c.ttl {
 			delete(c.data, key)
 			count++
 		}
 	}
-
 	if count > 0 {
 		go c.save()
 	}
-
 	return count
 }
 
-// --- Feed Cache (10 hour TTL) ---
+// --- Feed Cache (10 hour TTL, no file persistence) ---
 
 // FeedCache provides an in-memory cache for video feeds.
 // No file persistence — the cache is rebuilt on each server restart.
@@ -183,7 +168,7 @@ func NewFeedCache(dataDir string) *FeedCache {
 	}
 }
 
-// Get retrieves a cached feed if not expired
+// Get retrieves a cached feed if not expired.
 func (fc *FeedCache) Get(key string) (*FeedResponse, bool) {
 	fc.mu.RLock()
 	defer fc.mu.RUnlock()
@@ -192,29 +177,25 @@ func (fc *FeedCache) Get(key string) (*FeedResponse, bool) {
 	if !ok {
 		return nil, false
 	}
-
 	if time.Since(time.Unix(entry.Timestamp, 0)) > fc.ttl {
 		return nil, false
 	}
-
 	return entry.Data, true
 }
 
-// Set stores a feed in cache
+// Set stores a feed in cache.
 func (fc *FeedCache) Set(key string, feed *FeedResponse) {
 	fc.mu.Lock()
 	defer fc.mu.Unlock()
-
 	fc.data[key] = feedCacheEntry{
 		Timestamp: time.Now().Unix(),
 		Data:      feed,
 	}
 }
 
-// Clear removes all entries from feed cache
+// Clear removes all entries from feed cache.
 func (fc *FeedCache) Clear() {
 	fc.mu.Lock()
 	defer fc.mu.Unlock()
-
 	fc.data = make(map[string]feedCacheEntry)
 }

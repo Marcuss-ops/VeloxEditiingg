@@ -17,12 +17,12 @@ const expiryTimeLayout = time.RFC3339
 // loadAuthChannel builds an AuthChannel for channelID by reading the
 // canonical youtube_channels row and the youtube_oauth_tokens row,
 // decrypting token blobs on the fly. Returns nil when the channel does
-// not exist or the store is unavailable.
+// not exist.
+//
+// PR-YT-REPO: repo is required at NewService time; the `if s.repo == nil`
+// early-out is gone.
 func (s *Service) loadAuthChannel(channelID string) (*AuthChannel, error) {
-	if s.store == nil {
-		return nil, nil
-	}
-	row, err := s.store.GetYouTubeChannel(channelID)
+	row, err := s.repo.GetYouTubeChannel(channelID)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return nil, err
 	}
@@ -37,7 +37,7 @@ func (s *Service) loadAuthChannel(channelID string) (*AuthChannel, error) {
 	ch.Language = row.Language
 
 	if s.oauthBuf != nil {
-		tokenRow, terr := s.store.GetYouTubeOAuthToken(channelID)
+		tokenRow, terr := s.repo.GetYouTubeOAuthToken(channelID)
 		if terr == nil && tokenRow != nil {
 			if len(tokenRow.AccessTokenEncrypted) > 0 {
 				if plain, derr := s.oauthBuf.Decrypt(tokenRow.AccessTokenEncrypted); derr == nil {
@@ -60,11 +60,10 @@ func (s *Service) loadAuthChannel(channelID string) (*AuthChannel, error) {
 }
 
 // loadAuthChannels returns all channels that have an active OAuth token.
+//
+// PR-YT-REPO: repo is required.
 func (s *Service) loadAuthChannels() ([]*AuthChannel, error) {
-	if s.store == nil {
-		return nil, nil
-	}
-	tokenRows, err := s.store.ListActiveYouTubeOAuthTokens()
+	tokenRows, err := s.repo.ListActiveYouTubeOAuthTokens()
 	if err != nil {
 		return nil, err
 	}
@@ -99,11 +98,10 @@ func (s *Service) loadAuthChannels() ([]*AuthChannel, error) {
 // DB-first: errors are surfaced (not logged-and-swallowed) so callers
 // can abort an outgoing response rather than render stale RAM data
 // that no longer matches the canonical row.
+//
+// PR-YT-REPO: `if s.repo == nil` early-out removed; repo is required.
 func (s *Service) Membership(channelID string) (*Channel, error) {
-	if s.store == nil {
-		return nil, nil
-	}
-	row, err := s.store.GetYouTubeChannel(channelID)
+	row, err := s.repo.GetYouTubeChannel(channelID)
 	// sql.ErrNoRows is the canonical "row absent" sentinel from
 	// *SQLiteStore.QueryRow().Scan(...); treat it as (nil, nil) so the
 	// Membership typed view matches its doc-comment contract ("Returns
@@ -174,10 +172,9 @@ func (s *Service) UpdateChannelMetadata(channelID string, metadata map[string]in
 		title = t
 	}
 
-	if s.store != nil {
-		return s.store.UpsertYouTubeChannel(channelID, title, "", "", "", lang, "", 0, 0, "", "", "")
-	}
-	return nil
+	// PR-YT-REPO: repo is unconditional; UpdateChannelMetadata errors
+	// are surfaced to the caller instead of swallowed when store is nil.
+	return s.repo.UpsertYouTubeChannel(channelID, title, "", "", "", lang, "", 0, 0, "", "", "")
 }
 
 // GetChannels returns all available channels
@@ -210,18 +207,18 @@ func (s *Service) GetConfig() *ServiceConfig {
 // DeleteChannel permanently deletes a channel: removes the channel row,
 // every group membership, and the OAuth token row (FK CASCADE) in a
 // single atomic transaction. SQLite is the single source of truth.
+//
+// PR-YT-REPO: `if s.repo != nil` guard removed; repo is required so the
+// atomic cleanup is unconditional.
 func (s *Service) DeleteChannel(channelID string) error {
 	if s.GetAuthChannel(channelID) == nil {
 		return fmt.Errorf("channel not found")
 	}
 
-	if s.store != nil {
-		if _, err := s.store.DeleteChannelAtomic(channelID); err != nil {
-			return fmt.Errorf("delete channel: transactional cleanup failed for %s: %w", channelID, err)
-		}
-		log.Printf("[DEL] Atomic SQL cleanup for channel %s completed", channelID)
+	if _, err := s.repo.DeleteChannelAtomic(channelID); err != nil {
+		return fmt.Errorf("delete channel: transactional cleanup failed for %s: %w", channelID, err)
 	}
-
+	log.Printf("[DEL] Atomic SQL cleanup for channel %s completed", channelID)
 	log.Printf("[OK] Channel permanently deleted: %s", channelID)
 	return nil
 }
@@ -256,10 +253,9 @@ func (s *Service) RefreshChannelMetadata(ctx context.Context, channelID string) 
 	newTitle := item.Snippet.Title
 	newThumbnail := item.Snippet.Thumbnails.Default.Url
 
-	if s.store != nil {
-		if err := s.store.UpdateYouTubeChannelMetadata(channelID, newTitle, newThumbnail); err != nil {
-			return nil, fmt.Errorf("persist refreshed metadata for %s: %w", channelID, err)
-		}
+	// PR-YT-REPO: repo is unconditional.
+	if err := s.repo.UpdateYouTubeChannelMetadata(channelID, newTitle, newThumbnail); err != nil {
+		return nil, fmt.Errorf("persist refreshed metadata for %s: %w", channelID, err)
 	}
 
 	log.Printf("[OK] Refreshed metadata for channel %s: title=%q", channelID, newTitle)

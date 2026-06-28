@@ -62,23 +62,40 @@ type ActiveTaskExecution struct {
 	TaskID    string
 	AttemptID string
 	JobID     string
-	Job       *api.Job
+	Task      *PendingTaskExecution
 	LeaseID   string
 	StartedAt time.Time
 	Cancel    context.CancelFunc
 	Progress  JobProgress
 }
 
+// PendingTaskExecution is the typed, strongly-validated representation of
+// a task the worker has accepted via TaskOffer and is awaiting
+// TaskLeaseGranted before dispatch. All identity fields are explicit
+// typed members — no hidden keys in Parameters.
+type PendingTaskExecution struct {
+	TaskID          string
+	JobID           string
+	AttemptID       string
+	AttemptNumber   int
+	LeaseID         string
+	ExecutorID      string
+	ExecutorVersion int
+	Revision        int
+	Spec            executor.TaskSpec
+}
+
 // ActiveTaskLease tracks a leased task-native entry for periodic
 // MsgTaskLeaseRenewal dispatch (PR-2 / canonical-attempt-identity).
-// Mirrors the canonical (task_id, attempt_id, lease_id) tuple from the
-// master's TaskAttempt row at the moment of TaskLeaseGranted. leaseRenewLoop
-// reads with an RLock snapshot + iterates outside the lock (transport.Send
-// is network I/O and must NOT block write-side stop/drain paths).
+// Carries the full 6-field identity tuple so leaseRenewLoop can send
+// it on every renewal tick.
 type ActiveTaskLease struct {
-	TaskID    string
-	AttemptID string
-	LeaseID   string
+	TaskID        string
+	JobID         string
+	AttemptID     string
+	LeaseID       string
+	AttemptNumber int
+	Revision      int
 }
 
 // JobProgress tracks per-job execution progress.
@@ -139,17 +156,17 @@ type Worker struct {
 	seenCommands map[string]time.Time
 
 	// Pending tasks: accepted via TaskOffer, waiting for TaskLeaseGranted
-	// before executeJob dispatch (PR-2 canonical-attempt-identity). The
+	// before executeTask dispatch (PR-2 canonical-attempt-identity). The
 	// map is keyed by task_id (NOT job_id, NOT attempt_id) because
 	// (task_id, worker_id, lease_id) is the canonical worker-bound
 	// identity on the master's side and there is exactly one outstanding
 	// offer per task per session.
-	pendingTasks   map[string]*api.Job
+	pendingTasks   map[string]*PendingTaskExecution
 	pendingTasksMu sync.Mutex
 
 	// Active task-native leases: keyed by task_id; the iteration source
 	// for MsgTaskLeaseRenewal dispatch in leaseRenewLoop. Populated on
-	// MsgTaskLeaseGranted (alongside pendingTasks → executeJob), drained
+	// MsgTaskLeaseGranted (alongside pendingTasks → executeTask), drained
 	// on Stop() / canonical terminal-state transition. Each entry carries
 	// (task_id, attempt_id, lease_id) so the master's RenewLease CAS
 	// predicate matches the canonical TaskAttempt row.

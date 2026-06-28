@@ -65,6 +65,8 @@ log "check-registry"
 ./scripts/ci/check-registry.sh
 log "check-share-cert (RW-PROD-001 A7)"
 ./scripts/ci/check-share-cert.sh
+log "check-no-binaries"
+./scripts/ci/check-no-binaries.sh
 
 # ── 2. Go modules: gofmt + vet + test (-race) ──────────────────────────────
 #
@@ -112,6 +114,9 @@ if [[ "$SKIP_HEAVY" -ne 1 ]]; then
     -B /tmp/velox-engine \
     -DCMAKE_BUILD_TYPE=Release
   cmake --build /tmp/velox-engine --parallel
+
+  log "ctest: run C++ video engine tests"
+  ctest --test-dir /tmp/velox-engine --output-on-failure
 
   if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
     log "docker build: velox-server"

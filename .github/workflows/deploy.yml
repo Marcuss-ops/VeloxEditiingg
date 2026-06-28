@@ -1,140 +1,266 @@
 name: deploy
 
-# Runs on pushes to main that touch deployable code, and on-demand dispatch.
-# The path filter keeps us from rebuilding on docs-only commits.
+# Triggers on version tags and manual dispatch. Does NOT rebuild images —
+# resolves the pre-built, cosign-signed digests from ghcr.io (published by
+# worker-image.yml and master-image.yml) and feeds them into Ansible.
+#
+# ⚠️  Tag-push trigger fires simultaneously with the image workflows.
+# A retry-with-backoff loop in the resolve step handles the race.
+# Prefer workflow_dispatch after both image workflows have completed.
 on:
   push:
-    branches: [main]
-    paths:
-      - "DataServer/**"
-      - "RemoteCodex/native/worker-agent-go/**"
-      - ".github/workflows/deploy.yml"
-      - "deploy/**"
+    tags:
+      - 'v*'         # master-image.yml publishes ghcr.io/.../velox-server:<semver>
+      - 'worker-v*'   # worker-image.yml publishes ghcr.io/.../velox-worker:<semver>
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to deploy (semver, e.g. 1.2.3) — used for BOTH worker and server images'
+        required: false
+      worker_version:
+        description: 'Worker image version override (semver, e.g. 1.2.3)'
+        required: false
+      server_version:
+        description: 'Server image version override (semver, e.g. 1.2.3)'
+        required: false
 
-# Deploys must NOT cancel one another mid-flight: cancel-in-progress=false.
+# Deploys must NOT cancel one another mid-flight.
 concurrency:
   group: deploy-main-${{ github.ref }}
   cancel-in-progress: false
 
-# contents:read for checkout; packages:write to push to GHCR. token auth is
-# provided automatically via secrets.GITHUB_TOKEN (no extra secret required).
+# packages:read to pull image digests from GHCR; id-token:write for cosign.
 permissions:
   contents: read
-  packages: write
+  packages: read
+  id-token: write
 
 env:
   REGISTRY: ghcr.io
   IMAGE_OWNER: ${{ github.repository_owner }}
 
 jobs:
-  # ── velox-worker image (worker-agent-go Dockerfile is present) ───────────
-  worker-image:
-    name: velox-worker image
+  deploy:
+    name: Deploy (resolve digests + verify signatures + Ansible)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+
     steps:
       - name: Checkout
-        # fetch-depth: 0 keeps BASE_REF=origin/main resolvable; defence
-        # in depth so future scoped checks in this workflow do not silently
-        # turn red.
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Set up Docker Buildx
+      - name: Resolve versions
+        id: version
+        run: |
+          set -euo pipefail
+
+          # Default: resolve from tag prefix.
+          if [ "${{ github.event_name }}" = 'push' ]; then
+            TAG="${GITHUB_REF_NAME}"
+            TAG="${TAG#v}"
+            TAG="${TAG#worker-v}"
+            DEFAULT_VERSION="${TAG}"
+          elif [ -n "${{ inputs.version }}" ]; then
+            DEFAULT_VERSION="${{ inputs.version }}"
+            DEFAULT_VERSION="${DEFAULT_VERSION#v}"
+          else
+            echo "::error::No version provided (push tag missing 'v' prefix, or dispatch without inputs.version)."
+            exit 1
+          fi
+
+          if [ -z "$DEFAULT_VERSION" ]; then
+            echo "::error::Could not resolve version from tag or input."
+            exit 1
+          fi
+
+          WORKER_VERSION="${DEFAULT_VERSION}"
+          SERVER_VERSION="${DEFAULT_VERSION}"
+
+          # Override with explicit inputs when provided.
+          if [ -n "${{ inputs.worker_version }}" ]; then
+            WORKER_VERSION="${{ inputs.worker_version }}"
+            WORKER_VERSION="${WORKER_VERSION#v}"
+          fi
+          if [ -n "${{ inputs.server_version }}" ]; then
+            SERVER_VERSION="${{ inputs.server_version }}"
+            SERVER_VERSION="${SERVER_VERSION#v}"
+          fi
+
+          echo "default=${DEFAULT_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "worker=${WORKER_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "server=${SERVER_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Resolved: default=${DEFAULT_VERSION} worker=${WORKER_VERSION} server=${SERVER_VERSION}"
+
+      - name: Set up Docker Buildx (for imagetools inspect)
         uses: docker/setup-buildx-action@b5ca514318bd6ebac0fb2aedd5d36ec1b5c232a2 # v3.10.0
 
-      - name: Log in to GHCR
+      - name: Log in to GHCR (read-only — pull digests)
         uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 # v3.3.0
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract image metadata
-        id: meta
-        uses: docker/metadata-action@902fa8ec7d6ecbf8d84d538b9b233a880e428804 # v5.7.0
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/velox-worker
-          tags: |
-            type=sha,prefix=
-
-      - name: Build and push worker image
-        uses: docker/build-push-action@48aba3b46d1b1fec4febb7c5d0c644b249a11355 # v6.10.0
-        with:
-          context: .
-          file: RemoteCodex/native/worker-agent-go/Dockerfile
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      - name: Print image sha256 digest
-        env:
-          TAGS: ${{ steps.meta.outputs.tags }}
+      - name: Resolve image digests from versioned tags
+        id: resolve
         run: |
-          # Resolve each pushed tag → its manifest digest via buildx
-          # imagetools (avoids a docker pull). Each digest is also emitted
-          # as a step output so downstream jobs can pick it up.
-          for tag in $TAGS; do
-            ref="${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/velox-worker:$tag"
-            digest=$(docker buildx imagetools inspect "$ref" \
-                      | awk '/Digest:/ {print $2; exit}')
-            echo "::notice::$ref  $digest"
-            echo "digest_$tag=$digest" >> "$GITHUB_OUTPUT"
-          done
+          set -euo pipefail
+          WORKER_VERSION="${{ steps.version.outputs.worker }}"
+          SERVER_VERSION="${{ steps.version.outputs.server }}"
+          OWNER="${{ env.IMAGE_OWNER }}"
+          REGISTRY="${{ env.REGISTRY }}"
 
-  # ── velox-server image ───────────────────────────────────────────────────
-  dataserver-image:
-    name: velox-server image
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        # fetch-depth: 0 keeps BASE_REF=origin/main resolvable; defence
-        # in depth so future scoped checks in this workflow do not silently
-        # turn red.
-        uses: actions/checkout@v4
+          # Retry helper: tag-push fires simultaneously with the image
+          # workflows, so the image may not be pushed yet. Retry with
+          # backoff for up to 5 min.
+          resolve_digest() {
+            local ref="$1"
+            local label="$2"
+            local attempt=1
+            local max_attempts=15
+            local wait=5
+
+            while [ $attempt -le $max_attempts ]; do
+              local digest
+              digest=$(docker buildx imagetools inspect "${ref}" 2>/dev/null \
+                | awk '/Digest:/ {print $2; exit}' || true)
+              if [ -n "$digest" ]; then
+                echo "$digest"
+                return 0
+              fi
+              if [ $attempt -lt $max_attempts ]; then
+                echo "::notice::${label}: attempt ${attempt}/${max_attempts} — image not yet available, retrying in ${wait}s…"
+                sleep $wait
+              fi
+              attempt=$((attempt + 1))
+              # Exponential backoff: 5, 10, 20, 30 (capped)
+              wait=$(( wait * 2 ))
+              [ $wait -gt 30 ] && wait=30
+            done
+            return 1
+          }
+
+          # ── Worker image ──────────────────────────────────────────────
+          WORKER_TAG="${REGISTRY}/${OWNER}/velox-worker:${WORKER_VERSION}"
+          echo "::group::Resolving worker image: ${WORKER_TAG}"
+          WORKER_DIGEST=$(resolve_digest "${WORKER_TAG}" "worker")
+          if [ -z "$WORKER_DIGEST" ]; then
+            echo "::error::Failed to resolve worker image digest for ${WORKER_TAG} after retries. Is worker-image.yml published?"
+            exit 1
+          fi
+          WORKER_REF="${REGISTRY}/${OWNER}/velox-worker@${WORKER_DIGEST}"
+          echo "worker_ref=${WORKER_REF}" >> "$GITHUB_OUTPUT"
+          echo "worker_digest=${WORKER_DIGEST}" >> "$GITHUB_OUTPUT"
+          echo "Resolved: ${WORKER_REF}"
+          echo "::endgroup::"
+
+          # ── Server image ──────────────────────────────────────────────
+          SERVER_TAG="${REGISTRY}/${OWNER}/velox-server:${SERVER_VERSION}"
+          echo "::group::Resolving server image: ${SERVER_TAG}"
+          SERVER_DIGEST=$(resolve_digest "${SERVER_TAG}" "server")
+          if [ -z "$SERVER_DIGEST" ]; then
+            echo "::error::Failed to resolve server image digest for ${SERVER_TAG} after retries. Is master-image.yml published?"
+            exit 1
+          fi
+          SERVER_REF="${REGISTRY}/${OWNER}/velox-server@${SERVER_DIGEST}"
+          echo "server_ref=${SERVER_REF}" >> "$GITHUB_OUTPUT"
+          echo "server_digest=${SERVER_DIGEST}" >> "$GITHUB_OUTPUT"
+          echo "Resolved: ${SERVER_REF}"
+          echo "::endgroup::"
+
+          # Summary
+          echo "## Resolved image digests" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Image | Version | Digest |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---|---|---|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| velox-worker | ${WORKER_VERSION} | \`${WORKER_DIGEST}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| velox-server | ${SERVER_VERSION} | \`${SERVER_DIGEST}\` |" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
         with:
-          fetch-depth: 0
+          cosign-release: 'v2.4.1'
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@b5ca514318bd6ebac0fb2aedd5d36ec1b5c232a2 # v3.10.0
-
-      - name: Log in to GHCR
-        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 # v3.3.0
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Extract image metadata
-        id: meta
-        uses: docker/metadata-action@902fa8ec7d6ecbf8d84d538b9b233a880e428804 # v5.7.0
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/velox-server
-          tags: |
-            type=sha,prefix=
-
-      - name: Build and push server image
-        uses: docker/build-push-action@48aba3b46d1b1fec4febb7c5d0c644b249a11355 # v6.10.0
-        with:
-          context: .
-          file: DataServer/Dockerfile
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      - name: Print image sha256 digest
+      - name: Verify cosign signatures (keyless OIDC)
         env:
-          TAGS: ${{ steps.meta.outputs.tags }}
+          COSIGN_EXPERIMENTAL: '1'
         run: |
-          for tag in $TAGS; do
-            ref="${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/velox-server:$tag"
-            digest=$(docker buildx imagetools inspect "$ref" \
-                      | awk '/Digest:/ {print $2; exit}')
-            echo "::notice::$ref  $digest"
-            echo "digest_$tag=$digest" >> "$GITHUB_OUTPUT"
-          done
+          set -euo pipefail
+
+          WORKER_REF="${{ steps.resolve.outputs.worker_ref }}"
+          SERVER_REF="${{ steps.resolve.outputs.server_ref }}"
+
+          echo "::group::Verifying cosign signature on ${WORKER_REF}"
+          cosign verify \
+            --certificate-identity-regexp '.*' \
+            --certificate-oidc-issuer-regexp '.*' \
+            "${WORKER_REF}"
+          echo "Worker image signature verified."
+          echo "::endgroup::"
+
+          echo "::group::Verifying cosign signature on ${SERVER_REF}"
+          cosign verify \
+            --certificate-identity-regexp '.*' \
+            --certificate-oidc-issuer-regexp '.*' \
+            "${SERVER_REF}"
+          echo "Server image signature verified."
+          echo "::endgroup::"
+
+          echo "## Cosign verification" >> "$GITHUB_STEP_SUMMARY"
+          echo ":white_check_mark: Both images verified (keyless OIDC)" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Install Ansible
+        run: |
+          pip install --quiet ansible
+          ansible-galaxy collection install -r deploy/requirements.yml
+
+      - name: Deploy master config (Ansible)
+        env:
+          ANSIBLE_HOST_KEY_CHECKING: 'false'
+          ANSIBLE_VAULT_PASSWORD: ${{ secrets.ANSIBLE_VAULT_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          SERVER_REF="${{ steps.resolve.outputs.server_ref }}"
+          WORKER_REF="${{ steps.resolve.outputs.worker_ref }}"
+          VERSION="${{ steps.version.outputs.default }}"
+
+          echo "::group::Deploying Velox master config"
+          echo "Server image: ${SERVER_REF}"
+          echo "Worker image:  ${WORKER_REF}"
+          echo "Version:      ${VERSION}"
+
+          # Resolve vault password: prefer ANSIBLE_VAULT_PASSWORD secret,
+          # fall back to ANSIBLE_VAULT_PASSWORD_FILE, then --ask-vault-pass
+          # (interactive, blocks in CI without a secret).
+          VAULT_ARGS=()
+          if [ -n "${ANSIBLE_VAULT_PASSWORD:-}" ]; then
+            echo "${ANSIBLE_VAULT_PASSWORD}" > /tmp/vault-pass
+            chmod 600 /tmp/vault-pass
+            VAULT_ARGS=(--vault-password-file /tmp/vault-pass)
+          elif [ -n "${ANSIBLE_VAULT_PASSWORD_FILE:-}" ]; then
+            VAULT_ARGS=(--vault-password-file "${ANSIBLE_VAULT_PASSWORD_FILE}")
+          else
+            echo "::warning::No vault password configured (ANSIBLE_VAULT_PASSWORD or ANSIBLE_VAULT_PASSWORD_FILE). Ansible will prompt interactively — this will hang in CI without a TTY."
+            VAULT_ARGS=(--ask-vault-pass)
+          fi
+
+          # Run the master config playbook with extra vars to pin the image
+          # references. The template velox-server.env.j2 renders
+          # VELOX_SERVER_IMAGE={{ velox_server_image }}.
+          ansible-playbook \
+            -i deploy/inventory/production.ini \
+            "${VAULT_ARGS[@]}" \
+            -e velox_server_image="${SERVER_REF}" \
+            -e velox_version="${VERSION}" \
+            deploy/playbooks/deploy-master-config.yml
+
+          echo "::endgroup::"
+
+      - name: Deploy summary
+        run: |
+          echo "## Deploy complete" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Version**: ${{ steps.version.outputs.default }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Worker**: \`${{ steps.resolve.outputs.worker_ref }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Server**: \`${{ steps.resolve.outputs.server_ref }}\`" >> "$GITHUB_STEP_SUMMARY"

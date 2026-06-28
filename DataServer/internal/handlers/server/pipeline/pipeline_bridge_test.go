@@ -15,6 +15,7 @@ import (
 
 	"velox-server/internal/config"
 	"velox-server/internal/jobs/enqueue"
+	"velox-server/internal/remoteengine"
 	"velox-server/internal/store"
 )
 
@@ -160,18 +161,13 @@ func TestPipelineGenerateForwardsCompletedResultToQueue(t *testing.T) {
 	}))
 	defer mockEngine.Close()
 
-	originalClient := remoteEngineClient
-	originalEnqueuer := pipelineEnqueuer
-	defer func() {
-		remoteEngineClient = originalClient
-		pipelineEnqueuer = originalEnqueuer
-	}()
-	InitRemoteEngine(&config.Config{
-		Render: config.RenderConfig{
-			RemoteEngineURL:       mockEngine.URL,
-			RemoteEngineTimeoutMS: 5000,
-			RemoteEngineRetries:   1,
-		},
+	// PR-DI-pipeline: build the Handlers via the constructor surface
+	// instead of mutating package-level globals (the previous
+	// remoteEngineClient/pipelineEnqueuer/InitRemoteEngine/InitPipelineEnqueuer).
+	remoteClient := remoteengine.NewClient(remoteengine.Config{
+		URL:       mockEngine.URL,
+		TimeoutMS: 5000,
+		Retries:   1,
 	})
 
 	dbPath := filepath.Join(tempDir, "velox.db")
@@ -181,12 +177,22 @@ func TestPipelineGenerateForwardsCompletedResultToQueue(t *testing.T) {
 	}
 	jobRepo := store.NewSQLiteJobRepository(db)
 	atomic := store.NewAtomicJobTaskCreator(db)
-	// PR15.7a: wire the enqueuer singleton with the atomic creator.
-	InitPipelineEnqueuer(enqueue.NewEnqueuer(atomic, nil, nil))
+	// PR15.7a: previously wired via InitPipelineEnqueuer global;
+	// after the refactor it is now an explicit constructor argument.
+	testEnqueuer := enqueue.NewEnqueuer(atomic, nil, nil)
 
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	r.POST("/api/remote/pipeline/generate", PipelineGenerate(&config.Config{}))
+
+	pipelineCfg := &config.Config{
+		Render: config.RenderConfig{
+			RemoteEngineURL:       mockEngine.URL,
+			RemoteEngineTimeoutMS: 5000,
+			RemoteEngineRetries:   1,
+		},
+	}
+	pipelineHandlers := NewHandlers(pipelineCfg, testEnqueuer, remoteClient)
+	r.POST("/api/remote/pipeline/generate", pipelineHandlers.Generate())
 
 	reqBody, _ := json.Marshal(map[string]interface{}{
 		"source_text": "Test source",

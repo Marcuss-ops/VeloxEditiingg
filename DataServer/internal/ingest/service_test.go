@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"velox-server/internal/costmodel"
 	"velox-server/internal/jobs"
 	"velox-server/internal/store"
 	"velox-server/internal/taskattempts"
@@ -134,6 +133,9 @@ func (s *stubIngestTaskRepo) Delete(_ context.Context, _ string) error {
 func (s *stubIngestTaskRepo) ClaimNextWithAttemptAtomic(_ context.Context, _, _ string) (*taskgraph.TaskWithSpec, *taskattempts.TaskAttempt, error) {
 	panic("stubIngestTaskRepo.ClaimNextWithAttemptAtomic: not used in this test scope")
 }
+func (s *stubIngestTaskRepo) IngestTaskResultAtomic(_ context.Context, _ taskgraph.IngestResultCommand) error {
+	panic("stubIngestTaskRepo.IngestTaskResultAtomic: not exercised by current tests")
+}
 
 // stubIngestJobsRepo implements jobs.Repository with the minimum surface.
 type stubIngestJobsRepo struct {
@@ -191,35 +193,8 @@ func (s *stubIngestJobsRepo) Cancel(_ context.Context, _ string, _ string, _ int
 // All remaining jobs.Writer methods are stubbed as panic-on-call sentinels
 // so any accidental write path surfaces loud while satisfying the
 // jobs.Repository interface.
-func (s *stubIngestJobsRepo) Lease(_ context.Context, _, _ string) error {
-	panic("stubIngestJobsRepo.Lease")
-}
 func (s *stubIngestJobsRepo) Fail(_ context.Context, _ string, _ string) error {
 	panic("stubIngestJobsRepo.Fail")
-}
-func (s *stubIngestJobsRepo) Start(_ context.Context, _, _, _ string, _, _ int) error {
-	panic("stubIngestJobsRepo.Start")
-}
-func (s *stubIngestJobsRepo) RenewLease(_ context.Context, _, _, _ string, _ time.Time, _ bool, _ int) error {
-	panic("stubIngestJobsRepo.RenewLease")
-}
-func (s *stubIngestJobsRepo) FailWithRetry(_ context.Context, _, _, _ string, _ bool, _ int) error {
-	panic("stubIngestJobsRepo.FailWithRetry")
-}
-func (s *stubIngestJobsRepo) RequeueExpiredLeases(_ context.Context, _ time.Time, _ int) ([]jobs.RequeueResult, error) {
-	panic("stubIngestJobsRepo.RequeueExpiredLeases")
-}
-func (s *stubIngestJobsRepo) ClaimNext(_ context.Context, _ string, _ []string) (*jobs.ClaimNextResult, error) {
-	panic("stubIngestJobsRepo.ClaimNext")
-}
-func (s *stubIngestJobsRepo) ClaimNextForProfile(_ context.Context, _ string, _ []string, _ costmodel.WorkerProfile, _ int) (*jobs.ClaimNextResult, error) {
-	panic("stubIngestJobsRepo.ClaimNextForProfile")
-}
-func (s *stubIngestJobsRepo) ReleaseLease(_ context.Context, _, _, _ string) error {
-	panic("stubIngestJobsRepo.ReleaseLease")
-}
-func (s *stubIngestJobsRepo) RecordRenderFinished(_ context.Context, _, _, _ string, _, _ int) error {
-	panic("stubIngestJobsRepo.RecordRenderFinished")
 }
 func (s *stubIngestJobsRepo) Delete(_ context.Context, _ string) error {
 	panic("stubIngestJobsRepo.Delete")

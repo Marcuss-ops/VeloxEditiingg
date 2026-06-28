@@ -178,7 +178,7 @@ func (pts *PersistedTokenSource) Token() (*oauth2.Token, error) {
 // unnoticed — the [ERR] log inside PersistedTokenSource.Token
 // surfaces it.
 func (s *Service) persistRefreshedToken(channelID string, newToken *oauth2.Token) error {
-	if s.store == nil || s.oauthBuf == nil {
+	if s.repo == nil || s.oauthBuf == nil {
 		return nil // degraded mode (no cipher / no store): nothing to persist
 	}
 
@@ -197,7 +197,7 @@ func (s *Service) persistRefreshedToken(channelID string, newToken *oauth2.Token
 	}
 	if refreshEnc == nil {
 		// Preserve the previously-stored encrypted refresh_token blob.
-		cur, gerr := s.store.GetYouTubeOAuthToken(channelID)
+		cur, gerr := s.repo.GetYouTubeOAuthToken(channelID)
 		if gerr == nil && cur != nil {
 			if len(cur.RefreshTokenEncrypted) > 0 {
 				refreshEnc = cur.RefreshTokenEncrypted
@@ -210,7 +210,7 @@ func (s *Service) persistRefreshedToken(channelID string, newToken *oauth2.Token
 		expiry = newToken.Expiry.Format(time.RFC3339)
 	}
 
-	if err := s.store.UpsertYouTubeOAuthToken(channelID, accessEnc, refreshEnc, "Bearer", expiry, "", s.oauthBuf.KeyVersion()); err != nil {
+	if err := s.repo.UpsertYouTubeOAuthToken(channelID, accessEnc, refreshEnc, "Bearer", expiry, "", s.oauthBuf.KeyVersion()); err != nil {
 		return fmt.Errorf("upsert youtube_oauth_tokens: %w", err)
 	}
 	return nil
@@ -243,7 +243,7 @@ func (s *Service) GetYouTubeService(ctx context.Context, channelID string) (*you
 			}
 			// DB-first: persist the refreshed token to SQLite. There is
 			// no in-memory mirror to keep coherent.
-			if s.store != nil && s.oauthBuf != nil {
+			if s.repo != nil && s.oauthBuf != nil {
 				if err := s.persistRefreshedToken(channel.ID, newToken); err != nil {
 					return fmt.Errorf("refresh: persist to sqlite: %w", err)
 				}

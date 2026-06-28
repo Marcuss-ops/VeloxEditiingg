@@ -54,9 +54,6 @@ func (api *CalendarAPI) reconcileCalendarEvent(ctx context.Context, event *store
 				existing.Payload[k] = v
 			}
 		}
-		if err := persistJobResult(existing, api.store); err != nil {
-			return err
-		}
 		applyQueueStateToEvent(ctx, event, existing, api.store)
 		return nil
 	}
@@ -67,9 +64,6 @@ func (api *CalendarAPI) reconcileCalendarEvent(ctx context.Context, event *store
 			for k, v := range jobPayload {
 				existing.Payload[k] = v
 			}
-		}
-		if err := persistJobResult(existing, api.store); err != nil {
-			return err
 		}
 		applyQueueStateToEvent(ctx, event, existing, api.store)
 		return nil
@@ -201,37 +195,4 @@ func submitCalendarJob(ctx context.Context, atomic *store.AtomicJobTaskCreator, 
 	}
 	priority := 5
 	return atomic.CreateJobWithTask(ctx, job, spec, priority)
-}
-
-// persistJobResult saves mutable job state to result_json via SQLiteStore
-// (replaces queue.PersistJob).
-func persistJobResult(job *jobs.QueueItem, dbStore *store.SQLiteStore) error {
-	if job == nil || dbStore == nil {
-		return nil
-	}
-	m := make(map[string]interface{})
-	m["job_id"] = job.JobID
-	m["status"] = string(job.Status)
-	m["video_name"] = job.VideoName
-	m["project_id"] = job.ProjectID
-	m["max_retries"] = job.MaxRetries
-	m["last_error"] = job.LastError
-	m["error_message"] = job.ErrorMessage
-	m["run_id"] = job.RunID
-	m["created_at"] = job.CreatedAt
-	m["updated_at"] = job.UpdatedAt
-	m["started_at"] = job.StartedAt
-	m["completed_at"] = job.CompletedAt
-	if job.Payload != nil {
-		for k, v := range job.Payload {
-			if _, exists := m[k]; !exists {
-				m[k] = v
-			}
-		}
-	}
-	rawJSON, err := json.Marshal(m)
-	if err != nil {
-		return fmt.Errorf("failed to marshal result_json: %w", err)
-	}
-	return dbStore.UpsertJobResult(job.JobID, rawJSON)
 }
