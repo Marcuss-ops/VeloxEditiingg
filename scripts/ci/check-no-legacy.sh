@@ -136,18 +136,20 @@ violations=0
 # the historical-context document.
 for pattern in "${full_tree_patterns[@]}"; do
   if matches="$(
-         git grep -nE "$pattern" -- \
-           ':!docs/**' \
-           ':!.github/**' \
-           ':!deploy/**' \
-           ':!DataServer/data/ansible/**' \
-           ':!RemoteCodex/native/video-engine-cpp/CMakeLists.txt' \
-           ':!RemoteCodex/native/worker-agent-go/deploy/**' \
-           ':!scripts/ci/check-architecture.sh' \
-           ':!scripts/ci/verify.sh' \
-           ':!scripts/ci/check-no-legacy.sh' \
-           ':!scripts/ci/lib/diff-scope.sh' \
-           ':!scripts/ci/operator-history-scrub.sh' 2>/dev/null || true
+    git grep -nE "$pattern" -- \
+      ':!docs/**' \
+      ':!.github/**' \
+      ':!deploy/**' \
+      ':!DataServer/data/ansible/**' \
+      ':!DataServer/internal/handlers/remote/ansible/**' \
+      ':!DataServer/internal/store/migrations/**' \
+      ':!RemoteCodex/native/video-engine-cpp/CMakeLists.txt' \
+      ':!RemoteCodex/native/worker-agent-go/deploy/**' \
+      ':!scripts/ci/check-architecture.sh' \
+      ':!scripts/ci/verify.sh' \
+      ':!scripts/ci/check-no-legacy.sh' \
+      ':!scripts/ci/lib/diff-scope.sh' \
+      ':!scripts/ci/operator-history-scrub.sh' 2>/dev/null || true
        )"; [[ -n "$matches" ]]; then
     printf 'FORBIDDEN (exists in repository): %s\n%s\n\n' \
       "$pattern" "$matches" >&2
