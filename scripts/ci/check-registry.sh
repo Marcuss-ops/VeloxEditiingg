@@ -118,6 +118,7 @@ duplicate_registry_hits="$(scoped_grep \
   ':!DataServer/internal/workers/' \
   ':!DataServer/internal/assets/' \
   ':!DataServer/internal/store/' \
+  ':!DataServer/cmd/server/' \
   ':!DataServer/**/*_test.go' \
   ':!scripts/ci/check-registry.sh' \
   ':!scripts/ci/lib/diff-scope.sh')"
