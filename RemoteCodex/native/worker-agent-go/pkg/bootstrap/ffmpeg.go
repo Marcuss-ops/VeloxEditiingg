@@ -98,7 +98,8 @@ func runFFmpegSelfTest(ctx context.Context, opts Options) StepResult {
 }
 
 // ffprobeVersionRE matches the first line of `ffprobe -version`:
-//   ffprobe version 4.4.2-0ubuntu0.22.04.1 Copyright ...
+//
+//	ffprobe version 4.4.2-0ubuntu0.22.04.1 Copyright ...
 var ffprobeVersionRE = regexp.MustCompile(`(?i)ffprobe version\s+(\d+)(?:\.(\d+))?`)
 
 // ffmpegEncoderHelpRE matches the section header of `ffmpeg -h

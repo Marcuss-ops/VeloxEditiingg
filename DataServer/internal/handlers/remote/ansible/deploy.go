@@ -14,4 +14,3 @@ package ansible
 // PRs (real executor under internal/ansible/executor) can hang their
 // plan builders and helpers here without re-introducing the legacy
 // RunPlaybook bridge.
-

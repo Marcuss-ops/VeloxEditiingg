@@ -56,14 +56,15 @@ const blackFrameRenderJobID = "bootstrap.engine_selftest"
 // parser. If the C++ engine rejects the type, the production smoke
 // will fail with code="engine_missing". Resolution paths in priority
 // order:
-//   (a) confirm via /usr/local/bin/velox_video_engine --help render that
-//       "color" is a recognized source.kind;
-//   (b) if not, fall back to a Go-side PNG producer (1×1 black PNG
-//       written into t.TempDir/cache_key.png + MediaSource.Type="image"
-//       + MediaSource.CacheKey pointing at the file);
-//   (c) only after (a)/(b) can `make bootstrap-selftest-regenerate`
-//       produce a real baseline sha256 to commit in
-//       tests/fixtures/engine_selftest_baseline.sha256.
+//
+//	(a) confirm via /usr/local/bin/velox_video_engine --help render that
+//	    "color" is a recognized source.kind;
+//	(b) if not, fall back to a Go-side PNG producer (1×1 black PNG
+//	    written into t.TempDir/cache_key.png + MediaSource.Type="image"
+//	    + MediaSource.CacheKey pointing at the file);
+//	(c) only after (a)/(b) can `make bootstrap-selftest-regenerate`
+//	    produce a real baseline sha256 to commit in
+//	    tests/fixtures/engine_selftest_baseline.sha256.
 func buildOnePixelPlan(outputPath string) *plan.RenderPlan {
 	return &plan.RenderPlan{
 		Version: 1,

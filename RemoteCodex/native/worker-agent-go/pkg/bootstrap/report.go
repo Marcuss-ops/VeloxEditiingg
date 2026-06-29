@@ -48,13 +48,13 @@ func (r *Report) HasFailure() bool {
 // Operators can wire alerts on individual codes — Dashboarding for
 // residency review does not need to parse the prose Error field.
 type StepResult struct {
-	Name       string    `json:"name"`              // engine_self_render | ffmpeg | output_dir | bundle_hash
-	Status     string    `json:"status"`            // "OK" | "FAIL" | "SKIP"
-	Code       string    `json:"code,omitempty"`    // stable error code
-	Detail     string    `json:"detail,omitempty"`  // human-readable
-	StartedAt  time.Time `json:"started_at"`
+	Name        string    `json:"name"`             // engine_self_render | ffmpeg | output_dir | bundle_hash
+	Status      string    `json:"status"`           // "OK" | "FAIL" | "SKIP"
+	Code        string    `json:"code,omitempty"`   // stable error code
+	Detail      string    `json:"detail,omitempty"` // human-readable
+	StartedAt   time.Time `json:"started_at"`
 	CompletedAt time.Time `json:"completed_at"`
-	DurMs      int64     `json:"dur_ms"`
+	DurMs       int64     `json:"dur_ms"`
 }
 
 // AsJSON marshals the report to stable JSON (sorted map keys via

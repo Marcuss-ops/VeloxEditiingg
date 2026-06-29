@@ -4,8 +4,8 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"os/exec"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -87,10 +87,10 @@ func TestRun_AllOK_Smoke(t *testing.T) {
 		makeCfg(hash),
 		&fakeRunner{rc: rc},
 		Options{
-			WorkDir:           dir,
-			OutputDir:         outputDir,
+			WorkDir:            dir,
+			OutputDir:          outputDir,
 			BaselineSHA256Path: baseline,
-			FFmpegMinMajor:    0, // 0 → default applied
+			FFmpegMinMajor:     0, // 0 → default applied
 		},
 	)
 	if err != nil {
@@ -131,8 +131,8 @@ func TestRun_RenderClientNil(t *testing.T) {
 		makeCfg(hash),
 		nil, // runner is nil → engine_self_render fails with engine_missing + bootstrap.go also adds FAIL row
 		Options{
-			WorkDir:           dir,
-			OutputDir:         dir,
+			WorkDir:            dir,
+			OutputDir:          dir,
 			BaselineSHA256Path: filepath.Join(dir, "baseline.sha256"),
 		},
 	)
@@ -167,8 +167,8 @@ func TestRun_BundleMismatch(t *testing.T) {
 		makeCfg("cfg-value"),
 		&fakeRunner{rc: &fakeRenderClient{payload: []byte("x")}},
 		Options{
-			WorkDir:           dir,
-			OutputDir:         dir,
+			WorkDir:            dir,
+			OutputDir:          dir,
 			BaselineSHA256Path: filepath.Join(dir, "baseline.sha256"),
 		},
 	)
@@ -190,8 +190,8 @@ func TestRun_BundleMissing(t *testing.T) {
 		makeCfg("doesnt-matter"),
 		&fakeRunner{rc: &fakeRenderClient{payload: []byte("x")}},
 		Options{
-			WorkDir:           dir,
-			OutputDir:         dir,
+			WorkDir:            dir,
+			OutputDir:          dir,
 			BaselineSHA256Path: filepath.Join(dir, "baseline.sha256"),
 		},
 	)

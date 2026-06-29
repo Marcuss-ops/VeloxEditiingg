@@ -7,6 +7,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"velox-server/internal/artifacts"
 	"velox-server/internal/config"
+	workerhandlersuploads "velox-server/internal/handlers/remote/workers/uploads"
 	"velox-server/internal/handlers/server/api"
 	"velox-server/internal/handlers/server/darkeditor"
 	"velox-server/internal/handlers/server/groups"
@@ -17,7 +18,6 @@ import (
 	velmetrics "velox-server/internal/metrics"
 	"velox-server/internal/store"
 	"velox-server/internal/workers"
-	workerhandlersuploads "velox-server/internal/handlers/remote/workers/uploads"
 )
 
 // ── Per-route dependency structs ──────────────────────────────────────────
@@ -70,9 +70,9 @@ type DarkeditorRouteDeps struct {
 // UploadRouteDeps carries the deps for upload POST routes
 // (upload-completed + chunked upload).
 type UploadRouteDeps struct {
-	Cfg             *config.Config
-	ArtifactSvc     *artifacts.Service
-	ChunkedHandler  *workerhandlersuploads.ChunkedUploadHandler
+	Cfg            *config.Config
+	ArtifactSvc    *artifacts.Service
+	ChunkedHandler *workerhandlersuploads.ChunkedUploadHandler
 }
 
 // MetricsRouteDeps carries the deps for the /metrics route (Prometheus
@@ -92,12 +92,12 @@ type MetricsRouteDeps struct {
 // bundle never carries it — production and tests must converge on the
 // same auth source.
 type RouterBundle struct {
-	Script      ScriptRouteDeps
-	Groups      GroupsRouteDeps
-	Pipeline    PipelineRouteDeps
-	Darkeditor  DarkeditorRouteDeps
-	Upload      UploadRouteDeps
-	Metrics     MetricsRouteDeps
+	Script     ScriptRouteDeps
+	Groups     GroupsRouteDeps
+	Pipeline   PipelineRouteDeps
+	Darkeditor DarkeditorRouteDeps
+	Upload     UploadRouteDeps
+	Metrics    MetricsRouteDeps
 }
 
 // corsMiddleware + adminAuth are unchanged from the pre-refactor router.

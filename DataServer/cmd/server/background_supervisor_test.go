@@ -296,15 +296,15 @@ func TestEffectiveMaxRetries(t *testing.T) {
 		n     int
 		want  int
 	}{
-		{ClassOneShot, 5, 0},     // one-shot always zero
-		{ClassOneShot, 0, 0},     // even with 0
-		{ClassRestartable, 5, 5}, // bounded retry
-		{ClassRestartable, 0, 0}, // 0 → no retries for restartable
+		{ClassOneShot, 5, 0},      // one-shot always zero
+		{ClassOneShot, 0, 0},      // even with 0
+		{ClassRestartable, 5, 5},  // bounded retry
+		{ClassRestartable, 0, 0},  // 0 → no retries for restartable
 		{ClassRestartable, -1, 0}, // negative → no retries
-		{ClassCritical, 0, -1},   // 0 → infinite (-1 sentinel)
-		{ClassCritical, 7, 7},    // bounded retry
-		{ClassCritical, -1, -1},  // negative → infinite
-		{RunnerClass(99), 5, 5},  // unknown class falls through
+		{ClassCritical, 0, -1},    // 0 → infinite (-1 sentinel)
+		{ClassCritical, 7, 7},     // bounded retry
+		{ClassCritical, -1, -1},   // negative → infinite
+		{RunnerClass(99), 5, 5},   // unknown class falls through
 	}
 	for _, tc := range cases {
 		got := effectiveMaxRetries(tc.class, tc.n)

@@ -14,7 +14,7 @@ import (
 // verify that RenderClient() exposes the same instance the constructor
 // was given.
 type fakeRenderClient struct {
-	called bool
+	called  bool
 	payload []byte
 }
 

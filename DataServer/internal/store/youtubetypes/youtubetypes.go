@@ -38,19 +38,19 @@ type YouTubeChannelSeed struct {
 // Used as the return type of ListYouTubeChannels / GetYouTubeChannel on
 // both the YouTubeStore and StorageStore interfaces.
 type YouTubeChannel struct {
-	ChannelID      string
-	Title          string
-	DisplayName    string
-	ChannelURL     string
-	ThumbnailURL   string
-	Language       string
-	Notes          string
-	ViewCount      int64
+	ChannelID       string
+	Title           string
+	DisplayName     string
+	ChannelURL      string
+	ThumbnailURL    string
+	Language        string
+	Notes           string
+	ViewCount       int64
 	SubscriberCount int64
-	AddedAt        string
-	LastSyncAt     string
-	CreatedAt      string
-	UpdatedAt      string
+	AddedAt         string
+	LastSyncAt      string
+	CreatedAt       string
+	UpdatedAt       string
 }
 
 // YouTubeOAuthToken is the typed row from youtube_oauth_tokens.

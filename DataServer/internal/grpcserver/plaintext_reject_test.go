@@ -5,9 +5,9 @@ import (
 	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
-	"math/big"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"math/big"
 	"net"
 	"os"
 	"testing"
@@ -28,7 +28,8 @@ import (
 // without TLS gets rejected promptly, never hangs forever.
 //
 // Acceptance criteria (RW-PROD-001 §4):
-//   "Plaintext verso TLS-only master → connection REJECTED in <1s."
+//
+//	"Plaintext verso TLS-only master → connection REJECTED in <1s."
 func TestServer_PlaintextRejectedWhenTLSRequired(t *testing.T) {
 	// 1. Generate a self-signed cert+key+CA triple (compatible pair) on
 	//    disk so the runtime parser reads real PEMs.
@@ -121,8 +122,8 @@ func writeTestTLSMaterial(t *testing.T) (certFile, keyFile, caFile string) {
 		NotBefore:    time.Now().Add(-time.Hour),
 		// 24h validity is intentional — server-side test fixture, no Validate()
 		// round-trip (the cert stays in grpcserver pkg test scope).
-		NotAfter:     time.Now().Add(24 * time.Hour),
-		KeyUsage:     x509.KeyUsageDigitalSignature,
+		NotAfter: time.Now().Add(24 * time.Hour),
+		KeyUsage: x509.KeyUsageDigitalSignature,
 	}
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
 	if err != nil {

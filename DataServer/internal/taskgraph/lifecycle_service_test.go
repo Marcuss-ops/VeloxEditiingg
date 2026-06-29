@@ -51,9 +51,9 @@ type recordingJobsRepo struct {
 	replyErr error
 
 	// Fail recording.
-	failCalls    int
-	lastJobID    string
-	lastReason   string
+	failCalls  int
+	lastJobID  string
+	lastReason string
 }
 
 func (r *recordingJobsRepo) Get(_ context.Context, _ string) (*jobs.Job, error) {

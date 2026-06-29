@@ -35,8 +35,8 @@ type RunnerClass int
 
 const (
 	ClassOneShot     RunnerClass = iota // run once, never restart
-	ClassRestartable                     // restart on failure, bounded retries + backoff
-	ClassCritical                        // restart forever, eventually fail-loud the master
+	ClassRestartable                    // restart on failure, bounded retries + backoff
+	ClassCritical                       // restart forever, eventually fail-loud the master
 )
 
 func (c RunnerClass) String() string {
@@ -57,10 +57,10 @@ func (c RunnerClass) String() string {
 // RestartPolicy drives the restart loop's backoff schedule. MaxRetries
 // is interpreted in the context of Class:
 //
-//   * ClassOneShot: ignored (always zero restarts)
-//   * ClassRestartable: bounded retry count; after this many restarts
+//   - ClassOneShot: ignored (always zero restarts)
+//   - ClassRestartable: bounded retry count; after this many restarts
 //     the runner is removed and the supervisor logs WARN.
-//   * ClassCritical: if zero, restart infinitely; if positive, restart
+//   - ClassCritical: if zero, restart infinitely; if positive, restart
 //     at most this many times before the supervisor cancels the
 //     internal context and returns error to the caller.
 //
@@ -96,10 +96,10 @@ func (p RestartPolicy) backoffFor(attempt int) time.Duration {
 // SupervisedRunner is the canonical unit the supervisor manages. Each
 // runner has:
 //
-//   * Name — unique within a supervisor; duplicates are rejected.
-//   * Class — drives the restart policy semantics.
-//   * Policy — zero-policies are interpreted as "no backoff, no retries".
-//   * Run — the actual loop body. When it returns nil, the supervisor
+//   - Name — unique within a supervisor; duplicates are rejected.
+//   - Class — drives the restart policy semantics.
+//   - Policy — zero-policies are interpreted as "no backoff, no retries".
+//   - Run — the actual loop body. When it returns nil, the supervisor
 //     treats it as a clean exit (no restart regardless of Class).
 type SupervisedRunner struct {
 	Name   string
@@ -139,13 +139,13 @@ func (r RunnerFunc) Run(ctx context.Context) error { return r.fn(ctx) }
 // BackgroundSupervisor owns a set of SupervisedRunner entries and
 // orchestrates their lifecycle:
 //
-//   * Start every runner in its own goroutine.
-//   * On unexpected exit (non-nil error), apply the runner's
+//   - Start every runner in its own goroutine.
+//   - On unexpected exit (non-nil error), apply the runner's
 //     Class-specific restart loop with exponential backoff.
-//   * Cancel the supervisor-internal context when:
-//       (a) the parent ctx is cancelled (graceful shutdown), OR
-//       (b) a ClassCritical runner exhausts its retry budget.
-//   * Return from Run when ALL runners have stopped.
+//   - Cancel the supervisor-internal context when:
+//     (a) the parent ctx is cancelled (graceful shutdown), OR
+//     (b) a ClassCritical runner exhausts its retry budget.
+//   - Return from Run when ALL runners have stopped.
 type BackgroundSupervisor struct {
 	runners []SupervisedRunner
 
@@ -296,14 +296,14 @@ func (s *BackgroundSupervisor) Run(ctx context.Context) error {
 // runLoop is the per-runner goroutine body. Honours the runner's
 // Class and Policy:
 //
-//   * ClassOneShot:    Run once; non-nil error is logged WARN; no restart.
-//   * ClassRestartable: Run, exponential backoff, bounded retries. On
-//                       exhaustion log WARN and stop looping.
-//   * ClassCritical:   Run, exponential backoff, infinite retries (or
-//                       up to Policy.MaxRetries if non-zero). On
-//                       exhaustion cancel supCtx and stash the error
-//                       so Run() propagates it as the supervisor's
-//                       return value.
+//   - ClassOneShot:    Run once; non-nil error is logged WARN; no restart.
+//   - ClassRestartable: Run, exponential backoff, bounded retries. On
+//     exhaustion log WARN and stop looping.
+//   - ClassCritical:   Run, exponential backoff, infinite retries (or
+//     up to Policy.MaxRetries if non-zero). On
+//     exhaustion cancel supCtx and stash the error
+//     so Run() propagates it as the supervisor's
+//     return value.
 func (s *BackgroundSupervisor) runLoop(
 	ctx context.Context,
 	fatalMu *sync.Mutex,

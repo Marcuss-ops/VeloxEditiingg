@@ -518,13 +518,13 @@ func (w *Worker) receiveLoop(ctx context.Context, recvCh <-chan controltransport
 					}
 				}
 
-		case controltransport.MsgDrain:
-			w.drainMode.Store(true)
-			// RW-PROD-004 A4: MarkDrainMode(true) flips the canonical
-			// ReadyState immediately so /health/ready starts reporting
-			// reasons=[drain_mode] without waiting for the next tick.
-			telemetry.MarkDrainMode(true)
-			w.logger.Info("[RECEIVE] Drain command received — no new jobs will be accepted")
+			case controltransport.MsgDrain:
+				w.drainMode.Store(true)
+				// RW-PROD-004 A4: MarkDrainMode(true) flips the canonical
+				// ReadyState immediately so /health/ready starts reporting
+				// reasons=[drain_mode] without waiting for the next tick.
+				telemetry.MarkDrainMode(true)
+				w.logger.Info("[RECEIVE] Drain command received — no new jobs will be accepted")
 
 			case controltransport.MsgConfigurationUpdate:
 				w.logger.Info("[RECEIVE] ConfigurationUpdate received")
@@ -543,24 +543,24 @@ func (w *Worker) receiveLoop(ctx context.Context, recvCh <-chan controltransport
 							w.logger.Info("[CONFIG] MaxActiveJobs updated to %d", v)
 						}
 					}
-				if newLogLevel, ok := cfgMap["log_level"].(string); ok && newLogLevel != "" {
-					w.config.LogLevel = newLogLevel
-					w.logger.Info("[CONFIG] LogLevel updated to %s", newLogLevel)
-				}
-				ackMsg := controltransport.NewTypedMessage(
-					controltransport.MsgCommandAck,
-					w.config.WorkerID,
-					w.config.ProtocolVersion,
-					&pb.CommandAck{
-						CommandId: msg.MessageID,
-					},
-				)
-				ackCtx, ackCancel := context.WithTimeout(context.Background(), 30*time.Second)
-				ackErr := w.transport.Send(ackCtx, ackMsg)
-				ackCancel()
-				if ackErr != nil {
-					w.logger.Warn("[CONFIG] Failed to ack ConfigurationUpdate: %v", ackErr)
-				}
+					if newLogLevel, ok := cfgMap["log_level"].(string); ok && newLogLevel != "" {
+						w.config.LogLevel = newLogLevel
+						w.logger.Info("[CONFIG] LogLevel updated to %s", newLogLevel)
+					}
+					ackMsg := controltransport.NewTypedMessage(
+						controltransport.MsgCommandAck,
+						w.config.WorkerID,
+						w.config.ProtocolVersion,
+						&pb.CommandAck{
+							CommandId: msg.MessageID,
+						},
+					)
+					ackCtx, ackCancel := context.WithTimeout(context.Background(), 30*time.Second)
+					ackErr := w.transport.Send(ackCtx, ackMsg)
+					ackCancel()
+					if ackErr != nil {
+						w.logger.Warn("[CONFIG] Failed to ack ConfigurationUpdate: %v", ackErr)
+					}
 				}
 
 			case controltransport.MsgLeaseRevoked:

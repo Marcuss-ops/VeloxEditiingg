@@ -42,34 +42,34 @@ type ControlTransport interface {
 // For worker→master sends, TypedPayload carries a typed proto message (e.g. *pb.TaskAccepted)
 // that the transport converts to a WorkerToMasterEnvelope — the legacy Payload map is removed.
 type ControlMessage struct {
-	MessageID       string                 `json:"message_id"`
-	Type            ControlMessageType     `json:"type"`
-	WorkerID        string                 `json:"worker_id"`
-	SessionID       string                 `json:"session_id,omitempty"`
-	SequenceNumber  int64                  `json:"sequence_number,omitempty"`
-	SentAt          time.Time              `json:"sent_at"`
-	ProtocolVersion string                 `json:"protocol_version"`
-	TypedPayload    interface{}            `json:"-"` // typed proto message (e.g. *pb.TaskOffer, *pb.TaskAccepted)
+	MessageID       string             `json:"message_id"`
+	Type            ControlMessageType `json:"type"`
+	WorkerID        string             `json:"worker_id"`
+	SessionID       string             `json:"session_id,omitempty"`
+	SequenceNumber  int64              `json:"sequence_number,omitempty"`
+	SentAt          time.Time          `json:"sent_at"`
+	ProtocolVersion string             `json:"protocol_version"`
+	TypedPayload    interface{}        `json:"-"` // typed proto message (e.g. *pb.TaskOffer, *pb.TaskAccepted)
 }
 
 // WorkerHello contains the data sent during initial connection/registration.
 type WorkerHello struct {
-	WorkerID        string                 `json:"worker_id"`
-	WorkerName      string                 `json:"worker_name"`
-	Hostname        string                 `json:"hostname"`
-	Version         string                 `json:"version"`
-	BundleVersion   string                 `json:"bundle_version,omitempty"`
-	BundleHash      string                 `json:"bundle_hash,omitempty"`
-	ProtocolVersion string                 `json:"protocol_version"`
-	EngineVersion   string                 `json:"engine_version,omitempty"`
-	CredentialHash  string                 `json:"credential_hash,omitempty"`
+	WorkerID        string `json:"worker_id"`
+	WorkerName      string `json:"worker_name"`
+	Hostname        string `json:"hostname"`
+	Version         string `json:"version"`
+	BundleVersion   string `json:"bundle_version,omitempty"`
+	BundleHash      string `json:"bundle_hash,omitempty"`
+	ProtocolVersion string `json:"protocol_version"`
+	EngineVersion   string `json:"engine_version,omitempty"`
+	CredentialHash  string `json:"credential_hash,omitempty"`
 	// WorkerClass is the operator-assigned fleet class (RW-PROD-005 §3 A9).
 	// Binds from VELOX_WORKER_CLASS env on worker side → master WorkerInfo.Class.
-	WorkerClass     string                 `json:"worker_class,omitempty"`
+	WorkerClass string `json:"worker_class,omitempty"`
 	// RolloutGroup is the operator-assigned rollout cohort (RW-PROD-005 §3 A9).
 	// Binds from VELOX_ROLLOUT_GROUP env on worker side → master WorkerInfo.RolloutGroup.
-	RolloutGroup    string                 `json:"rollout_group,omitempty"`
-	Capabilities    map[string]interface{} `json:"capabilities,omitempty"`
+	RolloutGroup string                 `json:"rollout_group,omitempty"`
+	Capabilities map[string]interface{} `json:"capabilities,omitempty"`
 }
 
 // ProtocolVersionCurrent is the ONLY accepted protocol version.

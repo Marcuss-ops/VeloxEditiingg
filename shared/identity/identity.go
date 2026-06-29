@@ -45,15 +45,15 @@ func GenerateSecureWorkerID() string {
 
 // workerIDRegexp is the canonical shape enforced by RW-PROD-001 A4:
 //
-//   ^                   start
-//   [a-z]               first character: lowercase ASCII letter (rejects Worker, W@rker)
-//   [a-z0-9_-]{2,62}    2..62 trailing characters: lowercase ASCII letter, digit, hyphen, or underscore
-//   $                   end
+//	^                   start
+//	[a-z]               first character: lowercase ASCII letter (rejects Worker, W@rker)
+//	[a-z0-9_-]{2,62}    2..62 trailing characters: lowercase ASCII letter, digit, hyphen, or underscore
+//	$                   end
 //
 // Total length 3..64. The underscore is included on purpose: the
 // canonical IP-derived form produced by NormalizeWorkerID is
 //
-//   host_57_129_132_133
+//	host_57_129_132_133
 //
 // which would otherwise be silently rejected at validate time even
 // though it is the documented output of NormalizeWorkerID (see
@@ -65,13 +65,13 @@ func GenerateSecureWorkerID() string {
 //
 // Examples:
 //
-//   worker-8e98ce85        OK (15 chars)
-//   host_57_129_132_133    OK (20 chars, post-Normalize)
-//   Worker-001             REJECT (uppercase W)
-//   w1                     REJECT (too short, 2 chars)
-//   -worker                REJECT (starts with hyphen)
-//   host-X                 OK  (hyphen allowed)
-//   host_X1                OK  (underscore allowed)
+//	worker-8e98ce85        OK (15 chars)
+//	host_57_129_132_133    OK (20 chars, post-Normalize)
+//	Worker-001             REJECT (uppercase W)
+//	w1                     REJECT (too short, 2 chars)
+//	-worker                REJECT (starts with hyphen)
+//	host-X                 OK  (hyphen allowed)
+//	host_X1                OK  (underscore allowed)
 var workerIDRegexp = regexp.MustCompile(`^[a-z][a-z0-9_-]{2,62}$`)
 
 // IsValidWorkerID returns true iff id matches the canonical worker_id shape

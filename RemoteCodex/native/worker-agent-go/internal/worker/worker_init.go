@@ -206,10 +206,10 @@ func New(cfg *config.WorkerConfig, version string, opts ...Option) (*Worker, err
 		},
 		version: version,
 
-		seenCommands:  make(map[string]time.Time),
-		recentLogs:    recentLogs,
-		activeTasks:   make(map[string]*ActiveTaskExecution),
-		taskIDsByJob:  make(map[string][]string),
+		seenCommands: make(map[string]time.Time),
+		recentLogs:   recentLogs,
+		activeTasks:  make(map[string]*ActiveTaskExecution),
+		taskIDsByJob: make(map[string][]string),
 		// PR-2: TaskOffer-accepted tasks awaiting TaskLeaseGranted before
 		// executeTask dispatch. Keyed by task_id — one canonical entry per
 		// outstanding offer per session.

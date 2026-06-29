@@ -204,12 +204,12 @@ func (s *ReadySnapshot) NotReadyReasons() []string {
 // without parsing the string-typed reasons array.
 func (s *ReadySnapshot) DetailMap() map[string]interface{} {
 	d := map[string]interface{}{
-		"registered":     s.Registered,
-		"drain_mode":     s.DrainMode,
-		"bootstrapped":   s.Bootstrapped,
+		"registered":      s.Registered,
+		"drain_mode":      s.DrainMode,
+		"bootstrapped":    s.Bootstrapped,
 		"executors_count": s.Executors,
-		"cache_ready":    s.CacheReady,
-		"blob_ready":     s.BlobReady,
+		"cache_ready":     s.CacheReady,
+		"blob_ready":      s.BlobReady,
 	}
 	if s.DiskFreeBytes > 0 || s.DiskThresholdBytes > 0 {
 		d["disk_free_bytes"] = s.DiskFreeBytes

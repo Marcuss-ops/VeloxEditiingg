@@ -66,12 +66,12 @@ const (
 // resource counters are exposed because they are operator-observability
 // signals and have no PII value.
 type HostSummary struct {
-	Hostname       string `json:"hostname"`        // sanitised via sanitiseHostname()
-	CPUCount       int    `json:"cpu_count"`       // runtime.NumCPU()
-	HasGPU         bool   `json:"has_gpu"`         // sampler-derived
-	RAMBytes       int64  `json:"ram_bytes"`       // sampler-derived
-	DiskFreeBytes  int64  `json:"disk_free_bytes"` // sampler-derived (snapshot, not realtime)
-	MaxParallelJobs int32 `json:"max_parallel_jobs"`
+	Hostname        string `json:"hostname"`        // sanitised via sanitiseHostname()
+	CPUCount        int    `json:"cpu_count"`       // runtime.NumCPU()
+	HasGPU          bool   `json:"has_gpu"`         // sampler-derived
+	RAMBytes        int64  `json:"ram_bytes"`       // sampler-derived
+	DiskFreeBytes   int64  `json:"disk_free_bytes"` // sampler-derived (snapshot, not realtime)
+	MaxParallelJobs int32  `json:"max_parallel_jobs"`
 }
 
 // ExecutorSummary is a single executor descriptor flattened from the
@@ -79,8 +79,8 @@ type HostSummary struct {
 // dispatcher can render "velox-worker-fleet: 4×cpu + 2×gpu" without
 // re-decoding the full capabilities map.
 type ExecutorSummary struct {
-	ID           string `json:"id"`
-	Version      int32  `json:"version"`
+	ID            string `json:"id"`
+	Version       int32  `json:"version"`
 	ResourceClass string `json:"resource_class,omitempty"`
 }
 
@@ -212,7 +212,7 @@ func redactSecretHex(s string) string {
 //  2. session_active == false                           → "detached_session"
 //  3. lastHB empty/unparseable OR
 //     session_active AND (now - lastHB) >= ConnectionStaleThreshold
-//                                                          → "heartbeat_stale"
+//     → "heartbeat_stale"
 //  4. fresh (session_active AND now - lastHB < 30s)       → ""
 //
 // Note on the third rule: spec text says "lastHB stale|empty" maps

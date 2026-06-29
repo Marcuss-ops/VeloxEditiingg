@@ -182,8 +182,8 @@ func (r *Registry) GetWorkersByGroup(ctx context.Context, group string) []Worker
 // (last heartbeat within timeout + session active) but the consumer
 // is the master's own /health/readiness subsystem, NOT the operator
 // dashboards.
-///
-/// Why a single tuple instead of a count:
+// /
+// / Why a single tuple instead of a count:
 //
 //   - Dashboards already iterate GetActiveWorkers; a separate count
 //     function would be a third code path to maintain against drift.

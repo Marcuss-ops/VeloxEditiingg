@@ -386,9 +386,9 @@ func (b *baseJobRepository) getJob(ctx context.Context, id string) (*jobs.Job, e
 		        COALESCE(run_id,''), COALESCE(request_json,'')
 		 FROM jobs WHERE job_id = `+p.Placeholder(1), id)
 	var (
-		jID, status, videoName, projectID                                                                      string
-		createdAt, updatedAt, startedAt, completedAt, runID, requestJSON                                        string
-		rev, maxRet                                                                                             int
+		jID, status, videoName, projectID                                string
+		createdAt, updatedAt, startedAt, completedAt, runID, requestJSON string
+		rev, maxRet                                                      int
 	)
 	if err := row.Scan(&jID, &status, &videoName, &projectID, &rev, &maxRet,
 		&createdAt, &updatedAt, &startedAt, &completedAt, &runID, &requestJSON); err != nil {
@@ -412,4 +412,3 @@ func (b *baseJobRepository) getJob(ctx context.Context, id string) (*jobs.Job, e
 		Payload:     requestJSON,
 	}, nil
 }
-

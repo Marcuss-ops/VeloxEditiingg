@@ -2,27 +2,27 @@
 //
 // Three endpoints, three concerns:
 //
-//   /health/live   — 200 iff the process is alive. Operators can
-//                    guarantee Kubernetes / Docker Compose will not
-//                    repeatedly restart the container for a process
-//                    that is up but not yet registered.
+//	/health/live   — 200 iff the process is alive. Operators can
+//	                 guarantee Kubernetes / Docker Compose will not
+//	                 repeatedly restart the container for a process
+//	                 that is up but not yet registered.
 //
-//   /health/ready  — 200 iff ReadySnapshot.IsReady() (see ready.go).
-//                    Six canonical readiness reasons drive the body
-//                    so dashboards + canary scripts can grep on the
-//                    stable string taxonomy (bootstrap_not_run,
-//                    not_registered, drain_mode, executors.empty,
-//                    cache.not_initialized, blob.not_initialized,
-//                    disk.critical).
+//	/health/ready  — 200 iff ReadySnapshot.IsReady() (see ready.go).
+//	                 Six canonical readiness reasons drive the body
+//	                 so dashboards + canary scripts can grep on the
+//	                 stable string taxonomy (bootstrap_not_run,
+//	                 not_registered, drain_mode, executors.empty,
+//	                 cache.not_initialized, blob.not_initialized,
+//	                 disk.critical).
 //
-//   /health        — legacy adapter. Proxies the current ready
-//                    verdict into the legacy HealthResponse body and
-//                    returns 200 if ready, 503 otherwise, with an
-//                    X-Velox-Health-Deprecated header so monitoring
-//                    scripts emit a loud one-line warning during the
-//                    deprecation window. Pre-existing callers
-//                    (Docker HEALTHCHECK, Kubernetes probes) keep
-//                    working unchanged.
+//	/health        — legacy adapter. Proxies the current ready
+//	                 verdict into the legacy HealthResponse body and
+//	                 returns 200 if ready, 503 otherwise, with an
+//	                 X-Velox-Health-Deprecated header so monitoring
+//	                 scripts emit a loud one-line warning during the
+//	                 deprecation window. Pre-existing callers
+//	                 (Docker HEALTHCHECK, Kubernetes probes) keep
+//	                 working unchanged.
 package telemetry
 
 import (

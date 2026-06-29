@@ -88,18 +88,18 @@ func TestYouTubeRefreshPersistsNewAccessTokenToSQLite(t *testing.T) {
 	fake := &fakeYTStore{
 		getReturns: map[string]*youtubetypes.YouTubeOAuthToken{
 			channelID: {
-				ChannelID:            channelID,
-				AccessTokenEncrypted: oldAccessEnc,
+				ChannelID:             channelID,
+				AccessTokenEncrypted:  oldAccessEnc,
 				RefreshTokenEncrypted: oldRefreshEnc,
-				TokenType:            "Bearer",
-				Expiry:               oldExpiry.Format(time.RFC3339),
-				KeyVersion:           1,
+				TokenType:             "Bearer",
+				Expiry:                oldExpiry.Format(time.RFC3339),
+				KeyVersion:            1,
 			},
 		},
 	}
 
 	srv := &Service{
-repo:    fake,
+		repo:     fake,
 		oauthBuf: enc,
 	}
 
@@ -202,7 +202,7 @@ func TestYouTubeRefreshIdempotentOnSameAccessToken(t *testing.T) {
 		Expiry:      time.Now().Add(1 * time.Hour),
 	}
 	srv := &Service{
-repo:    &fakeYTStore{},
+		repo:     &fakeYTStore{},
 		oauthBuf: enc,
 	}
 	pts := &PersistedTokenSource{
@@ -263,7 +263,7 @@ func TestYouTubeRefreshPreservesNullRefreshToken(t *testing.T) {
 	}
 
 	srv := &Service{
-repo:    fake,
+		repo:     fake,
 		oauthBuf: enc,
 	}
 

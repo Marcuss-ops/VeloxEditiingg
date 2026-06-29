@@ -19,18 +19,18 @@ import "strings"
 // cached WorkerInfo returned by a previous GetWorker cannot leak derived
 // state across a registry restart.
 type WorkerInfo struct {
-	WorkerID        string                 `json:"worker_id"`
-	WorkerName      string                 `json:"worker_name"`
-	DisplayName     string                 `json:"display_name"`
-	Status          string                 `json:"status"`
-	LastHB          string                 `json:"last_heartbeat"`
-	FirstSeen       string                 `json:"first_seen"`
-	CurrentJob      string                 `json:"current_job"`
-	Drain           bool                   `json:"drain"`
-	Schedulable     bool                   `json:"schedulable"`
-	WorkerGroup     string                 `json:"worker_group"`
-	IPAddress       string                 `json:"ip_address"`
-	Host            string                 `json:"host"`
+	WorkerID    string `json:"worker_id"`
+	WorkerName  string `json:"worker_name"`
+	DisplayName string `json:"display_name"`
+	Status      string `json:"status"`
+	LastHB      string `json:"last_heartbeat"`
+	FirstSeen   string `json:"first_seen"`
+	CurrentJob  string `json:"current_job"`
+	Drain       bool   `json:"drain"`
+	Schedulable bool   `json:"schedulable"`
+	WorkerGroup string `json:"worker_group"`
+	IPAddress   string `json:"ip_address"`
+	Host        string `json:"host"`
 
 	// Class (RW-PROD-005 §2.1) is the operator-assigned fleet class
 	// (cpu-xlarge / gpu-a100 / mixed / io ...) used by dispatchers
@@ -44,7 +44,7 @@ type WorkerInfo struct {
 	// worker fleets into a new bundle. Empty string means
 	// "unassigned"; the handler ignores empty-rollout rows when
 	// the filter is active.
-	RolloutGroup string `json:"rollout_group,omitempty"`
+	RolloutGroup    string                 `json:"rollout_group,omitempty"`
 	CodeVersion     string                 `json:"code_version"`
 	BundleVersion   string                 `json:"bundle_version"`
 	BundleHash      string                 `json:"bundle_hash,omitempty"`

@@ -444,7 +444,7 @@ func TestExtractExecutors(t *testing.T) {
 // strips every input that might carry PII before it lands in a response.
 func TestSanitiseHostname_Fuzz(t *testing.T) {
 	cases := []struct {
-		input    string
+		input          string
 		mustNotContain []string
 	}{
 		// IPv4 addresses in various positions.

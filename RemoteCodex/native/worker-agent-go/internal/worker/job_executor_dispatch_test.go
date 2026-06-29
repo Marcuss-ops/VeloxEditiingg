@@ -289,10 +289,10 @@ func TestPR_3_8_DispatchResolvesSceneCompositeV1EndToEnd(t *testing.T) {
 	w, rt := newDispatchTestWorker(t)
 
 	pte := &PendingTaskExecution{
-		TaskID:    "task-composite-001",
-		JobID:     "job-composite-001",
-		AttemptID: "attempt-composite-001",
-		LeaseID:   "lease-composite-001",
+		TaskID:     "task-composite-001",
+		JobID:      "job-composite-001",
+		AttemptID:  "attempt-composite-001",
+		LeaseID:    "lease-composite-001",
 		ExecutorID: "scene.composite.v1",
 		Spec: executor.TaskSpec{
 			Version:    1,
@@ -344,10 +344,10 @@ func TestPR_3_8_DispatchUnknownExecutorSurfacesFailure(t *testing.T) {
 	w, rt := newDispatchTestWorker(t)
 
 	pte := &PendingTaskExecution{
-		TaskID:    "task-unknown-001",
-		JobID:     "job-unknown-001",
-		AttemptID: "attempt-unknown-001",
-		LeaseID:   "lease-unknown-001",
+		TaskID:     "task-unknown-001",
+		JobID:      "job-unknown-001",
+		AttemptID:  "attempt-unknown-001",
+		LeaseID:    "lease-unknown-001",
 		ExecutorID: "definitely.not.registered",
 		Spec: executor.TaskSpec{
 			Version:    1,

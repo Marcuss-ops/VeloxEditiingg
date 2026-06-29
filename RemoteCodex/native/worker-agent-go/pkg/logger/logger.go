@@ -201,17 +201,17 @@ func Fatal(format string, args ...interface{}) {
 //
 // Reason is one of the canonical codes documented in docs/rw-prod/ACTIONS.md §A3:
 //
-//   "missing_cert"          : tls_cert_file path empty
-//   "missing_key"           : tls_key_file  path empty
-//   "missing_ca"            : tls_ca_file   path empty
-//   "partial_tls"           : one or two of cert/key/ca present, never all three
-//   "cert_unreadable"       : os.Stat failed for non-NotExist reason
-//   "key_pair_rejected"     : crypto/tls.LoadX509KeyPair rejected cert/key
-//   "key_permission_world_readable" : key file mode & 0o077 != 0 (RW-PROD-001 A2)
-//   "cert_expired"          : leaf.NotAfter < time.Now().UTC()
-//   "cert_too_soon_to_expire" : leaf.NotAfter - now < 14d (RW-PROD-001 A1)
-//   "cert_self_signed"      : leaf.Subject == leaf.Issuer (raise awareness)
-//   "worker_id_invalid_shape" : shared/identity.IsValidWorkerID == false (RW-PROD-001 A4)
+//	"missing_cert"          : tls_cert_file path empty
+//	"missing_key"           : tls_key_file  path empty
+//	"missing_ca"            : tls_ca_file   path empty
+//	"partial_tls"           : one or two of cert/key/ca present, never all three
+//	"cert_unreadable"       : os.Stat failed for non-NotExist reason
+//	"key_pair_rejected"     : crypto/tls.LoadX509KeyPair rejected cert/key
+//	"key_permission_world_readable" : key file mode & 0o077 != 0 (RW-PROD-001 A2)
+//	"cert_expired"          : leaf.NotAfter < time.Now().UTC()
+//	"cert_too_soon_to_expire" : leaf.NotAfter - now < 14d (RW-PROD-001 A1)
+//	"cert_self_signed"      : leaf.Subject == leaf.Issuer (raise awareness)
+//	"worker_id_invalid_shape" : shared/identity.IsValidWorkerID == false (RW-PROD-001 A4)
 //
 // NEVER pass the TLS key material, certificate PEM blob, or credential hash
 // into this function — fingerprint is computed via openssl/sha256 OVER the

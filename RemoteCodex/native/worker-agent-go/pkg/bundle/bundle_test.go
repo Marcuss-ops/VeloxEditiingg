@@ -1,9 +1,9 @@
 package bundle
 
 import (
-	"strings"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -108,5 +108,3 @@ func TestCanonicalCandidates_PathOrder(t *testing.T) {
 		}
 	}
 }
-
-

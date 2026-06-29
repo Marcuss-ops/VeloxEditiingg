@@ -11,13 +11,13 @@
 //
 // Design notes:
 //
-//   * The interface is intentionally tiny (one method) so a future
+//   - The interface is intentionally tiny (one method) so a future
 //     Slack / PagerDuty / Kafka sink can implement it without forcing
 //     every existing call site to grow helpers.
-//   * Notifier implementations MUST be safe for concurrent calls:
+//   - Notifier implementations MUST be safe for concurrent calls:
 //     outbox dispatcher fires Notify from a single goroutine but a
 //     future multi-dispatcher world would parallelise them.
-//   * Returning a non-nil error signals "delivery failed" to the
+//   - Returning a non-nil error signals "delivery failed" to the
 //     outbox dispatcher. Transient errors (network blip) should be
 //     wrapped as outbox.Transient; permanent (4xx from sink) as
 //     outbox.Permanent. The handler in production.go decides based

@@ -689,7 +689,7 @@ func TestSqliteTaskAtomic_Invariant_TaskRunningInvActiveAttempt(t *testing.T) {
 
 		seedLeasedTask(t, s.db, taskID, workerID, leaseID, "A-sweep-"+fmt.Sprint(i), 1, 0)
 		attempt := &taskattempts.TaskAttempt{
-			ID: "A-sweep-" + fmt.Sprint(i),
+			ID:     "A-sweep-" + fmt.Sprint(i),
 			TaskID: taskID, JobID: "job-" + taskID,
 			WorkerID: workerID, LeaseID: leaseID,
 			AttemptNumber: 1, Status: taskattempts.AttemptStatusRunning,

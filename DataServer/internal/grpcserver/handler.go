@@ -728,8 +728,6 @@ func (h *Handler) getSession(workerID string) *workerSession {
 	return h.sessions[sid]
 }
 
-
-
 // ---- Security Helpers ----
 
 // extractPeerIP extracts the client IP address from the gRPC stream context

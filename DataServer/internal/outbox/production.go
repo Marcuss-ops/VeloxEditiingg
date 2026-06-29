@@ -41,7 +41,7 @@ import (
 //
 // Last manual inventory at PR-OUTBOX-HANDLER:
 //
-//   • jobs_repository_shared.go Fail/FailWithCode emit "JOB_FAILED"
+//   - jobs_repository_shared.go Fail/FailWithCode emit "JOB_FAILED"
 //     with payload { job_id, error_code, error }.
 //
 // When you add a producer:

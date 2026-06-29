@@ -100,7 +100,7 @@ func (h *Handler) handleTaskAccepted(workerID string, ta *pb.TaskAccepted) {
 	if err := h.taskRepo.AcceptTaskAtomic(ctx, attempt, int(revision)); err != nil {
 		if errors.Is(err, store.ErrTransitionConflict) {
 			log.Printf("[GRPC] Worker %s accepted task %s but lease is stale or canonical attempt drift (offer.attempt_id=%s offer.attempt_number=%d attempt_id=%s attempt_number=%d) rev=%d — dropping TaskAccepted",
-			workerID, taskID, offer.AttemptID, offer.AttemptNumber, attempt.ID, attemptNumber, offer.Revision)
+				workerID, taskID, offer.AttemptID, offer.AttemptNumber, attempt.ID, attemptNumber, offer.Revision)
 			// Stale lease: clear the pending offer so the next
 			// ClaimNextReadyTask can re-offer this task.
 			sess.claimMu.Lock()
@@ -392,5 +392,3 @@ func (h *Handler) handleTaskRenewal(workerID string, tr *pb.TaskLeaseRenewal) {
 	}
 	log.Printf("[GRPC] TaskLeaseRenewal extended task %s for worker %s lease=%s", taskID, workerID, leaseID)
 }
-
-

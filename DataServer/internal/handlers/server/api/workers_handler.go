@@ -45,7 +45,7 @@ import (
 type WorkerResponse struct {
 	WorkerID            string          `json:"worker_id"`
 	WorkerName          string          `json:"worker_name"`
-	Status              string          `json:"status"` // CONNECTED | STALE | DISCONNECTED | DRAINING
+	Status              string          `json:"status"`           // CONNECTED | STALE | DISCONNECTED | DRAINING
 	Reason              string          `json:"reason,omitempty"` // drain | detached_session | heartbeat_stale | ""
 	SessionActive       bool            `json:"session_active"`
 	Hostname            string          `json:"hostname"`

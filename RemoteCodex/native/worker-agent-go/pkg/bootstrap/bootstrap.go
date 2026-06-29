@@ -133,13 +133,13 @@ func Run(ctx context.Context, cfg *config.WorkerConfig, runner RunnerView, opts 
 		// pipelineRunner" from "the engine is broken".
 		failAt := time.Now().UTC()
 		appender(StepResult{
-			Name:       "engine_self_render",
-			Status:     "FAIL",
-			Code:       "engine_missing",
-			Detail:     "RunnerView param is nil — composition root did not pass pipelineRunner into bootstrap.Run",
-			StartedAt:  failAt,
+			Name:        "engine_self_render",
+			Status:      "FAIL",
+			Code:        "engine_missing",
+			Detail:      "RunnerView param is nil — composition root did not pass pipelineRunner into bootstrap.Run",
+			StartedAt:   failAt,
 			CompletedAt: failAt,
-			DurMs:      failAt.Sub(failAt).Milliseconds(),
+			DurMs:       failAt.Sub(failAt).Milliseconds(),
 		})
 	} else {
 		appender(runEngineSelfRender(ctx, resolved, runner.RenderClient()))

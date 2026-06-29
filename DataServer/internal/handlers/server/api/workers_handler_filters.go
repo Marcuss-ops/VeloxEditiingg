@@ -5,7 +5,7 @@
 //   - ?status=            (must be one of CONNECTED|STALE|DISCONNECTED|DRAINING)
 //   - ?rollout_group=     (matches RolloutGroup)
 //   - ?needs_executor=    (executor id like "scene.composite.v1@1" — match the
-//                          executor list in Capabilities)
+//     executor list in Capabilities)
 //
 // Filters are validated at the boundary (400 Bad Request on parse failure)
 // so the rest of the handler can rely on a typed Filters struct. The applier

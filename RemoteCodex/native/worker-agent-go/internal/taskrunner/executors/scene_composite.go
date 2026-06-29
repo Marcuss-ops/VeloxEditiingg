@@ -160,8 +160,8 @@ func (s *SceneComposite) Execute(ctx context.Context, _ executor.ExecutionContex
 	}
 
 	return executor.ExecutionResult{
-		Status:  "succeeded",
-		Outputs: []executor.ArtifactRef{{Type: "render.output", Hash: outputHash, URI: outputPath, SizeBytes: outputSize}},
+		Status:      "succeeded",
+		Outputs:     []executor.ArtifactRef{{Type: "render.output", Hash: outputHash, URI: outputPath, SizeBytes: outputSize}},
 		StartedAt:   startedAt,
 		CompletedAt: time.Now().UTC(),
 	}, nil

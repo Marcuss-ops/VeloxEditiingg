@@ -86,10 +86,10 @@ func (l *sqliteCurrentTaskLoader) LoadCurrentTask(ctx context.Context, workerID 
 	}
 	row := l.db.QueryRowContext(ctx, currentTaskQuery, workerID)
 	var (
-		ts               TaskSummary
-		startedRaw       sql.NullString
-		executor         sql.NullString
-		executorVersion  sql.NullInt32
+		ts              TaskSummary
+		startedRaw      sql.NullString
+		executor        sql.NullString
+		executorVersion sql.NullInt32
 	)
 	err := row.Scan(&ts.TaskID, &ts.JobID, new(sql.NullString), &startedRaw, &executor, &executorVersion)
 	if err == sql.ErrNoRows {

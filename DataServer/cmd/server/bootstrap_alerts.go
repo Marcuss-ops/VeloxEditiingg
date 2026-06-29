@@ -40,14 +40,14 @@ type alertsDeps struct {
 //
 // Sink composition (greppable from this single function):
 //
-//   ┌─ alerts.MultiNotifier
-//   │
-//   ├─ LogNotifier("[ALERTS]") — minimum-viable visibility, always on.
+//	┌─ alerts.MultiNotifier
+//	│
+//	├─ LogNotifier("[ALERTS]") — minimum-viable visibility, always on.
 //
-//   Future sinks: append to children here, e.g.:
+//	Future sinks: append to children here, e.g.:
 //
-//     &slackNotifier{channel: cfg.Alerts.SlackChannel, token: cfg.Alerts.SlackToken},
-//     &pagerDutyNotifier{apiKey: cfg.Alerts.PagerDutyKey, ...},
+//	  &slackNotifier{channel: cfg.Alerts.SlackChannel, token: cfg.Alerts.SlackToken},
+//	  &pagerDutyNotifier{apiKey: cfg.Alerts.PagerDutyKey, ...},
 //
 // The MultiNotifier does NOT short-circuit on individual failures, so
 // a Slack outage does NOT silence the log sink.

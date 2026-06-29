@@ -36,7 +36,7 @@ func (c *countingRepo) Create(_ context.Context, _ *Task) error               { 
 func (c *countingRepo) SetStatus(_ context.Context, _ string, _, _ Status, _ int) error {
 	panic("not used")
 }
-func (c *countingRepo) Lease(_ context.Context, _, _, _ string) error  { panic("not used") }
+func (c *countingRepo) Lease(_ context.Context, _, _, _ string) error        { panic("not used") }
 func (c *countingRepo) ReleaseLease(_ context.Context, _, _, _ string) error { panic("not used") }
 func (c *countingRepo) ClaimNextReadyTask(_ context.Context, _, _ string) (*TaskWithSpec, error) {
 	panic("not used")

@@ -57,12 +57,12 @@ type JobsDeps struct {
 
 // NewHandlers constructs a Handlers with the three mandatory deps:
 //
-//   cfg       — render settings (remote URL, poll interval, ...)
-//   enqueuer  — the canonical *enqueue.Enqueuer shared with the rest
-//                of the server (script handler, creatorflow), used to
-//                forward completed pipeline results to Velox workers.
-//   client    — the *remoteengine.Client talking to the script service
-//                (may be nil when VELOX_REMOTE_ENGINE_URL is unset).
+//	cfg       — render settings (remote URL, poll interval, ...)
+//	enqueuer  — the canonical *enqueue.Enqueuer shared with the rest
+//	             of the server (script handler, creatorflow), used to
+//	             forward completed pipeline results to Velox workers.
+//	client    — the *remoteengine.Client talking to the script service
+//	             (may be nil when VELOX_REMOTE_ENGINE_URL is unset).
 //
 // Compose with WithJobsDeps to add the optional cancel deps.
 func NewHandlers(cfg *config.Config, enqueuer *enqueue.Enqueuer, client *remoteengine.Client) *Handlers {
@@ -120,9 +120,9 @@ func NewRemoteClientFromConfig(cfg *config.Config) *remoteengine.Client {
 
 // RegisterRoutes mounts all pipeline endpoints on the given engine.
 //
-//   adminAuth — when non-nil, applied to the operator routes
-//                (generate/status/cancel). Pass nil for the trusted
-//                network or test mounts.
+//	adminAuth — when non-nil, applied to the operator routes
+//	             (generate/status/cancel). Pass nil for the trusted
+//	             network or test mounts.
 func (h *Handlers) RegisterRoutes(r *gin.Engine, adminAuth gin.HandlerFunc) {
 	r.POST("/api/script-simple", h.ScriptSimple())
 	r.POST("/api/script-multiple", h.ScriptBatch())

@@ -1175,7 +1175,7 @@ func TestCertKeyMismatch(t *testing.T) {
 
 	cfg := &WorkerConfig{
 		MasterURL:      "http://localhost:8080",
-		WorkerID: "tlsw",
+		WorkerID:       "tlsw",
 		WorkDir:        "/opt/velox",
 		ControlGRPCURL: "localhost:8443",
 		Environment:    "production",

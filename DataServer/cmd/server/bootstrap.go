@@ -428,14 +428,14 @@ func runServer(cfg *config.Config) error {
 // PR-SUPERVISOR-TAXONOMY: every runner is registered with an explicit
 // Class + RestartPolicy. Criticality guarantees:
 //
-//   * outbox-dispatcher / delivery-runner / task-lease-reaper — ClassCritical
+//   - outbox-dispatcher / delivery-runner / task-lease-reaper — ClassCritical
 //     If any of these dies the master is dead in the water, so the
 //     supervisor eventually cancels its context and returns the error
 //     so k8s can restart the pod.
-//   * taskgraph-dispatcher / artifact-reconciler / metrics-supervisor — ClassRestartable
+//   - taskgraph-dispatcher / artifact-reconciler / metrics-supervisor — ClassRestartable
 //     Bounded retries with backoff. After exhaustion the runner is
 //     removed and the supervisor logs WARN.
-//   * manifest-generator — ClassOneShot
+//   - manifest-generator — ClassOneShot
 //     Run once on startup; failure is non-fatal (logged WARN, never restarted).
 func buildSupervisor(a *assetDeps, m *moduleDeps, j *jobsDeps, p *persistenceDeps, w *workerDeps, t *taskDeps, metricsCollector *velmetrics.Collector) (*BackgroundSupervisor, error) {
 	sup := NewBackgroundSupervisor()
