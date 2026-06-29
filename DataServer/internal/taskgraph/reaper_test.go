@@ -75,6 +75,9 @@ func (c *countingRepo) Delete(_ context.Context, _ string) error { panic("not us
 func (c *countingRepo) RenewLease(_ context.Context, _, _, _ string, _ time.Time, _ int) error {
 	panic("not used")
 }
+func (c *countingRepo) IngestTaskResultAtomic(_ context.Context, _ IngestResultCommand) error {
+	panic("not used")
+}
 
 // ClaimNextWithAttemptAtomic is the PR-2 (canonical-attempt-identity)
 // sibling of ClaimNextReadyTask; the reaper test reuses countingRepo
