@@ -347,6 +347,13 @@ func (s *TaskReportIngestionService) IngestTaskResult(ctx context.Context, cmd I
 		CostBasis:     cb,
 		Artifacts:     typedArtifacts,
 	})
+
+	// fix/atomic-ingestion: IngestTaskResultAtomic succeeded — the Task +
+	// Attempt transition committed atomically together with metrics,
+	// cache stats, cost basis, and artifact declarations.
+	res.AttemptClosed = true
+	res.ArtifactsNew = artifactCount
+
 	if ingestErr != nil {
 		// fix/cas-conflict-noop: ErrTransitionConflict on a stale Task
 		// means someone else already closed it (replay, sibling result
@@ -362,6 +369,10 @@ func (s *TaskReportIngestionService) IngestTaskResult(ctx context.Context, cmd I
 		if !errors.Is(ingestErr, taskgraph.ErrTransitionConflict) {
 			return res, fmt.Errorf("ingest.IngestTaskResult: atomic ingest %s: %w", cmd.TaskID, ingestErr)
 		}
+		// CAS miss: Task was already closed by another report. We must NOT
+		// report AttemptClosed=true — someone else won the race.
+		res.AttemptClosed = false
+		res.ArtifactsNew = 0
 		s.logger.Printf(
 			"[INGEST] Task %s CAS miss (stale/replay/lease-revoked) reporter=%s lease=%s — complete no-op, skipping job roll-up",
 			cmd.TaskID, cmd.WorkerID, cmd.LeaseID,

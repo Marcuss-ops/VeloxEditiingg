@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"velox-server/internal/jobs"
-	"velox-server/internal/store"
 	"velox-server/internal/taskattempts"
 	"velox-server/internal/taskgraph"
 	"velox-server/internal/taskoutput_artifacts"
@@ -668,7 +667,7 @@ func TestIngestionService_ValidateIdentityTuple_EmptyFields(t *testing.T) {
 // ArtifactsNew=0, ArtifactsSkips=2, no SetStatus write.
 func TestIngestionService_IdempotentReplay(t *testing.T) {
 	taskRepo := &stubIngestTaskRepo{
-		transitionErr: store.ErrTransitionConflict, // already terminal
+		transitionErr: taskgraph.ErrTransitionConflict, // already terminal
 		listTasks: []taskgraph.Task{
 			{ID: "T1", JobID: "J1", Status: taskgraph.StatusSucceeded},
 		},
@@ -707,8 +706,11 @@ func TestIngestionService_IdempotentReplay(t *testing.T) {
 	if res.ArtifactsNew != 0 {
 		t.Errorf("ArtifactsNew=%d; want 0 (all duplicates)", res.ArtifactsNew)
 	}
-	if res.ArtifactsSkips != 2 {
-		t.Errorf("ArtifactsSkips=%d; want 2 (counted skips)", res.ArtifactsSkips)
+	// fix/atomic-ingestion: ArtifactsSkips is always 0 under atomic ingestion —
+	// duplicate detection now happens inside IngestTaskResultAtomic's SQL
+	// transaction (UNIQUE constraint skip). The field is kept for API compat.
+	if res.ArtifactsSkips != 0 {
+		t.Errorf("ArtifactsSkips=%d; want 0 (atomic ingestion: counted by DB, not service)", res.ArtifactsSkips)
 	}
 	if jobsRepo.setStatusCalls != 0 {
 		t.Errorf("setStatusCalls=%d; want 0 (Job already AWAITING_ARTIFACT -> idempotent no-op)", jobsRepo.setStatusCalls)
