@@ -133,8 +133,24 @@ func (s *stubIngestTaskRepo) Delete(_ context.Context, _ string) error {
 func (s *stubIngestTaskRepo) ClaimNextWithAttemptAtomic(_ context.Context, _, _ string) (*taskgraph.TaskWithSpec, *taskattempts.TaskAttempt, error) {
 	panic("stubIngestTaskRepo.ClaimNextWithAttemptAtomic: not used in this test scope")
 }
-func (s *stubIngestTaskRepo) IngestTaskResultAtomic(_ context.Context, _ taskgraph.IngestResultCommand) error {
-	panic("stubIngestTaskRepo.IngestTaskResultAtomic: not exercised by current tests")
+func (s *stubIngestTaskRepo) IngestTaskResultAtomic(_ context.Context, cmd taskgraph.IngestResultCommand) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.transitionCalls++
+	s.transitionedTask = cmd.TaskID
+	s.transitionedState = cmd.TaskStatus
+
+	if s.transitionErr != nil {
+		return s.transitionErr
+	}
+
+	for i := range s.listTasks {
+		if s.listTasks[i].ID == cmd.TaskID {
+			s.listTasks[i].Status = cmd.TaskStatus
+		}
+	}
+	return nil
 }
 
 // stubIngestJobsRepo implements jobs.Repository with the minimum surface.

@@ -149,12 +149,23 @@ func (e *testEnv) seedJob(jobID, status, assignedTo, leaseID string, revision in
 func (e *testEnv) seedAttempt(jobID string, attemptNumber int, status, workerID, leaseID string) {
 	e.t.Helper()
 	now := e.clock.Now().UTC().Format(time.RFC3339)
+	taskID := jobID + "-task"
+
+	// Seed the parent task first (loadAttempt JOINs task_attempts→tasks).
 	_, err := e.db.Exec(`
-		INSERT INTO job_attempts (
-			job_id, attempt_number, worker_id, lease_id, status,
-			started_at, error_code, engine_version, bundle_hash, created_at
-		) VALUES (?, ?, ?, ?, ?, ?, '', '', '', ?)`,
-		jobID, attemptNumber, workerID, leaseID, status, now, now,
+		INSERT OR IGNORE INTO tasks (task_id, job_id, status, created_at, updated_at)
+		VALUES (?, ?, 'RUNNING', ?, ?)`,
+		taskID, jobID, now, now,
+	)
+	require.NoError(e.t, err, "seedAttempt task "+jobID)
+
+	// Seed the attempt row that loadAttempt reads.
+	_, err = e.db.Exec(`
+		INSERT INTO task_attempts (
+			id, task_id, attempt_number, worker_id, lease_id, status,
+			started_at, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		jobID+"-attempt", taskID, attemptNumber, workerID, leaseID, status, now, now, now,
 	)
 	require.NoError(e.t, err, "seedAttempt "+jobID)
 }
