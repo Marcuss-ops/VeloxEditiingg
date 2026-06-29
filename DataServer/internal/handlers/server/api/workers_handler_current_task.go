@@ -25,26 +25,23 @@ package api
 import (
 	"context"
 	"database/sql"
-	"fmt"
-	"time"
+
+	"velox-server/internal/store"
 )
 
 // CurrentTaskLoader abstracts the SQL backend so tests can pass a
-// fake (sqlite in-mem or pgx) and production passes *sql.DB. The
-// default NewCurrentTaskLoader(sqldb) is the wiring path used by
-// the WorkersHandler.
+// fake (sqlite in-mem or pgx) and production passes a store-backed
+// implementation. The canonical SQL query lives in
+// DataServer/internal/store (LoadCurrentTaskRow).
 type CurrentTaskLoader interface {
 	LoadCurrentTask(ctx context.Context, workerID string) (*TaskSummary, error)
 }
 
-// sqliteCurrentTaskLoader implements CurrentTaskLoader against
-// *sql.DB. The query joins task_attempts (status, started_at,
-// attempt_id, task_id, worker_id) JOIN tasks (task_id, executor,
-// executor_version) on the running attempt for the worker.
-//
-// The WHERE clause filters status='RUNNING'; if the schema evolves
-// to use an enum with multiple running-shaped states (e.g. WAITING_FOR_LEASE),
-// extend the IN-list here, NOT in handler code.
+// sqliteCurrentTaskLoader implements CurrentTaskLoader by delegating
+// to store.LoadCurrentTaskRow. The *sql.DB field is stored here
+// (not used for direct queries) so the handler can inject the DB
+// dependency without importing the store package at the call site —
+// only this adapter file imports store.
 type sqliteCurrentTaskLoader struct {
 	db *sql.DB
 }
@@ -58,62 +55,23 @@ func NewCurrentTaskLoader(db *sql.DB) CurrentTaskLoader {
 	return &sqliteCurrentTaskLoader{db: db}
 }
 
-const currentTaskQuery = `
-SELECT
-    ta.task_id, ta.job_id, ta.attempt_id,
-    ta.started_at,
-    t.executor, t.executor_version
-FROM task_attempts ta
-LEFT JOIN tasks t ON t.task_id = ta.task_id
-WHERE ta.worker_id = ?
-  AND ta.status = 'RUNNING'
-ORDER BY ta.started_at DESC
-LIMIT 1
-`
-
-// LoadCurrentTask returns the most-recently-started RUNNING TaskAttempt
-// for `workerID`. Returns (nil, sql.ErrNoRows)-equivalent (nil, nil)
-// when no RUNNING attempt exists — handlers translate that into
-// current_task=omitted in the JSON response.
-//
-// The query is keyed on ta.task_id + ta.started_at DESC LIMIT 1 so
-// concurrent RUNNING rows (which should not exist by spec — a
-// worker has at most one task RUNNING at any moment) degrade to the
-// most-recently-started as the tiebreaker.
+// LoadCurrentTask delegates to store.LoadCurrentTaskRow and adapts the
+// raw row into an api.TaskSummary for JSON serialization.
 func (l *sqliteCurrentTaskLoader) LoadCurrentTask(ctx context.Context, workerID string) (*TaskSummary, error) {
-	if l == nil || l.db == nil {
-		return nil, nil
-	}
-	row := l.db.QueryRowContext(ctx, currentTaskQuery, workerID)
-	var (
-		ts              TaskSummary
-		startedRaw      sql.NullString
-		executor        sql.NullString
-		executorVersion sql.NullInt32
-	)
-	err := row.Scan(&ts.TaskID, &ts.JobID, new(sql.NullString), &startedRaw, &executor, &executorVersion)
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
+	row, err := store.LoadCurrentTaskRow(l.db, ctx, workerID)
 	if err != nil {
-		return nil, fmt.Errorf("LoadCurrentTask scan: %w", err)
+		return nil, err
 	}
-	if startedRaw.Valid && startedRaw.String != "" {
-		if t, perr := time.Parse(time.RFC3339Nano, startedRaw.String); perr == nil {
-			ts.StartedAt = t.UTC().Format(time.RFC3339)
-		} else {
-			ts.StartedAt = startedRaw.String
-		}
+	if row == nil {
+		return nil, nil
 	}
-	if executor.Valid {
-		execStr := executor.String
-		if executorVersion.Valid && executorVersion.Int32 > 0 {
-			execStr = fmt.Sprintf("%s@%d", execStr, executorVersion.Int32)
-		}
-		ts.Executor = execStr
-	}
-	ts.Status = "RUNNING"
-	return &ts, nil
+	return &TaskSummary{
+		TaskID:    row.TaskID,
+		JobID:     row.JobID,
+		Executor:  row.Executor,
+		Status:    row.Status,
+		StartedAt: row.StartedAt,
+	}, nil
 }
 
 // noopCurrentTaskLoader is the fallback used when the handler is wired
