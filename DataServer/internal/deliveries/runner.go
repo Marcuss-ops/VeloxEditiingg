@@ -185,7 +185,9 @@ func (r *DeliveryRunner) tick(ctx context.Context) error {
 }
 
 // processLease resolves the provider for a claimed delivery and runs
-// Deliver. The outcome is persisted via the typed MarkDelivery* methods.
+// Deliver with a heartbeat goroutine that renews the lease every
+// leaseDuration/3. If the renewal fails, the deliver context is
+// cancelled to interrupt the upload.
 func (r *DeliveryRunner) processLease(ctx context.Context, lease store.DeliveryLease) error {
 	provider, err := r.registry.Resolve(lease.Provider)
 	if err != nil {
@@ -211,7 +213,25 @@ func (r *DeliveryRunner) processLease(ctx context.Context, lease store.DeliveryL
 		return fmt.Errorf("hydrate artifact: %w", err)
 	}
 
-	res, runErr := provider.Deliver(ctx, artifact, dest)
+	// Start a heartbeat goroutine to renew the lease periodically while
+	// provider.Deliver is executing. If renewal fails (CAS conflict, e.g.
+	// another runner reclaimed the lease), cancel the deliver context to
+	// interrupt the upload.
+	deliverCtx, cancelDeliver := context.WithCancel(ctx)
+	defer cancelDeliver()
+
+	heartbeatDone := make(chan struct{})
+	go r.renewDeliveryLeaseLoop(deliverCtx, heartbeatDone, lease,
+		func(err error) {
+			log.Printf("[DELIVERY] lease renewal failed for %s: %v; interrupting upload", lease.DeliveryID, err)
+			cancelDeliver()
+		})
+
+	res, runErr := provider.Deliver(deliverCtx, artifact, dest)
+
+	// Stop the heartbeat goroutine and wait for it to exit.
+	cancelDeliver()
+	<-heartbeatDone
 
 	// ── Success ──
 	if runErr == nil && res != nil && res.Success {
@@ -273,6 +293,38 @@ func (r *DeliveryRunner) processLease(ctx context.Context, lease store.DeliveryL
 			log.Printf("[DELIVERY] mark retry for %s: %v", lease.DeliveryID, err)
 		}
 		return nil
+	}
+}
+
+// renewDeliveryLeaseLoop extends the lease periodically (every
+// leaseDuration/3) while provider.Deliver is running. When the deliver
+// context is cancelled, the goroutine exits. When a renewal fails (e.g.
+// CAS conflict from another runner reclaiming the lease), the onFailure
+// callback is invoked so the upload can be interrupted.
+func (r *DeliveryRunner) renewDeliveryLeaseLoop(ctx context.Context, done chan<- struct{}, lease store.DeliveryLease, onFailure func(error)) {
+	defer close(done)
+
+	interval := r.cfg.LeaseDuration / 3
+	if interval <= 0 {
+		interval = 30 * time.Second
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			newExpiry := time.Now().UTC().Add(r.cfg.LeaseDuration)
+			if err := r.dbStore.RenewDeliveryLease(
+				context.Background(), // intentionally detached from request ctx
+				lease.DeliveryID, lease.RunnerID, lease.LeaseID, newExpiry,
+			); err != nil {
+				onFailure(err)
+				return
+			}
+		}
 	}
 }
 
