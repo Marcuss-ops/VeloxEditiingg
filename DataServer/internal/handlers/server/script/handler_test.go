@@ -31,7 +31,7 @@ func TestGenerateWithImages_EnqueuesSceneImageJob(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new sqlite store: %v", err)
 	}
-	_ = store.NewSQLiteJobRepository(db)
+	jobRepo := store.NewJobsRepository(store.NewSQLiteJobRepository(db))
 	atomic := store.NewAtomicJobTaskCreator(db)
 
 	cfg := &config.Config{
@@ -107,19 +107,12 @@ func TestGenerateWithImages_EnqueuesSceneImageJob(t *testing.T) {
 		t.Fatalf("want 3 scenes, got %v", got)
 	}
 
-	rawJob, err := db.GetJob(context.Background(), jobID)
+	j, err := jobRepo.Get(context.Background(), jobID)
 	if err != nil {
-		t.Fatalf("get job: %v", err)
+		t.Fatalf("jobRepo.Get: %v", err)
 	}
-	// request_json is stored as a JSON STRING column in SQLiteJobRepository;
-	// store.GetJob returns the raw column value. Parse it before reading top-level keys.
-	var videoMode string
-	if reqStr, ok := rawJob["request_json"].(string); ok && reqStr != "" {
-		var req map[string]interface{}
-		if err := json.Unmarshal([]byte(reqStr), &req); err == nil {
-			videoMode, _ = req["video_mode"].(string)
-		}
-	}
+	rawJob := jobs.ToPayloadMap(j)
+	videoMode, _ := rawJob["video_mode"].(string)
 	if videoMode != scriptSceneMode {
 		t.Fatalf("want persisted video_mode %q, got %v", scriptSceneMode, videoMode)
 	}
@@ -343,5 +336,214 @@ func TestGenerateWithImages_BypassesCreatorForRenderReadyPayload(t *testing.T) {
 	}
 	if w.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestGenerateFromClips_EnqueuesClipJob(t *testing.T) {
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "velox.db")
+	db, err := store.NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("new sqlite store: %v", err)
+	}
+	jobRepo := store.NewJobsRepository(store.NewSQLiteJobRepository(db))
+	atomic := store.NewAtomicJobTaskCreator(db)
+
+	cfg := &config.Config{
+		Runtime: config.RuntimeConfig{
+			DataDir:   tempDir,
+			VideosDir: filepath.Join(tempDir, "videos"),
+		},
+		Database: config.DatabaseConfig{
+			DBPath: dbPath,
+		},
+	}
+
+	enqueuer := jobenqueue.NewEnqueuer(atomic, nil, nil)
+
+	r := gin.New()
+	RegisterRoutes(r.Group("/api/script"), cfg, db, enqueuer)
+
+	payload := map[string]interface{}{
+		"video_name": "Jackie Chan Funniest Moments",
+		"scenes": []interface{}{
+			map[string]interface{}{
+				"text":                        "Intro clip",
+				"kind":                        "intro",
+				"voiceover_duration_seconds":  3.5,
+				"final_clip_duration_seconds": 4.0,
+				"bindings": map[string]interface{}{
+					"voiceover": map[string]interface{}{
+						"link": "https://example.com/voice-intro.mp3",
+					},
+					"stock": map[string]interface{}{
+						"drive_link": "https://example.com/stock-intro.mp4",
+					},
+					"clip": map[string]interface{}{
+						"drive_link": "https://example.com/clip-intro.mp4",
+					},
+				},
+			},
+			map[string]interface{}{
+				"text":                        "Second clip",
+				"kind":                        "clip",
+				"voiceover_duration_seconds":  5.0,
+				"final_clip_duration_seconds": 6.0,
+				"bindings": map[string]interface{}{
+					"voiceover": map[string]interface{}{
+						"link": "https://example.com/voice-scene-2.mp3",
+					},
+					"stock": map[string]interface{}{
+						"drive_link": "https://example.com/stock-scene-2.mp4",
+					},
+					"clip": map[string]interface{}{
+						"drive_link": "https://example.com/clip-scene-2.mp4",
+					},
+				},
+			},
+		},
+	}
+	body, _ := json.Marshal(payload)
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/script/generate-from-clips", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.RemoteAddr = "127.0.0.1:12345"
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d body=%s", w.Code, w.Body.String())
+	}
+
+	var res map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &res); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	jobID, _ := res["job_id"].(string)
+	if jobID == "" {
+		t.Fatalf("expected non-empty job_id")
+	}
+	if got := res["video_mode"]; got != "clip_stock" {
+		t.Fatalf("want video_mode %q, got %v", "clip_stock", got)
+	}
+	if got := res["clip_count"]; got != float64(2) {
+		t.Fatalf("want clip_count 2, got %v", got)
+	}
+
+	j, err := jobRepo.Get(context.Background(), jobID)
+	if err != nil {
+		t.Fatalf("jobRepo.Get: %v", err)
+	}
+	stored := jobs.ToPayloadMap(j)
+	if got := stored["video_mode"]; got != "clip_stock" {
+		t.Fatalf("want stored video_mode %q, got %v", "clip_stock", got)
+	}
+	clips, ok := stored["clips"].([]interface{})
+	if !ok || len(clips) != 2 {
+		t.Fatalf("want 2 stored clips, got %#v", stored["clips"])
+	}
+	items, ok := stored["items"].([]interface{})
+	if !ok || len(items) != 4 {
+		t.Fatalf("want 4 stored items, got %#v", stored["items"])
+	}
+	audioTracks, ok := stored["audio_tracks"].([]interface{})
+	if !ok || len(audioTracks) != 2 {
+		t.Fatalf("want 2 stored audio tracks, got %#v", stored["audio_tracks"])
+	}
+	firstTrack, ok := audioTracks[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("want first audio track object, got %#v", audioTracks[0])
+	}
+	if got := firstTrack["source_url"]; got != "https://example.com/voice-intro.mp3" {
+		t.Fatalf("want first audio source preserved, got %#v", got)
+	}
+	secondTrack, ok := audioTracks[1].(map[string]interface{})
+	if !ok {
+		t.Fatalf("want second audio track object, got %#v", audioTracks[1])
+	}
+	if got := secondTrack["start_time_offset"]; got != float64(7.5) {
+		t.Fatalf("want second audio offset 7.5, got %#v", got)
+	}
+	if got := stored["pipeline_id"]; got != "hybrid.v1" {
+		t.Fatalf("want pipeline_id hybrid.v1, got %#v", got)
+	}
+}
+
+func TestSubmitJob_SlideshowVideo_EnqueuesImagesPipelineJob(t *testing.T) {
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "velox.db")
+	db, err := store.NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("new sqlite store: %v", err)
+	}
+	jobRepo := store.NewJobsRepository(store.NewSQLiteJobRepository(db))
+	atomic := store.NewAtomicJobTaskCreator(db)
+
+	cfg := &config.Config{
+		Runtime: config.RuntimeConfig{
+			DataDir:   tempDir,
+			VideosDir: filepath.Join(tempDir, "videos"),
+		},
+		Database: config.DatabaseConfig{
+			DBPath: dbPath,
+		},
+	}
+
+	enqueuer := jobenqueue.NewEnqueuer(atomic, nil, nil)
+	r := gin.New()
+	RegisterRoutes(r.Group("/api/script"), cfg, db, enqueuer)
+
+	reqBody, _ := json.Marshal(map[string]interface{}{
+		"video_name":     "Slideshow Demo",
+		"voiceover_path": "https://example.com/voice.mp3",
+		"orientation":    "vertical",
+		"scenes": []interface{}{
+			map[string]interface{}{"text": "Scene 1", "image_link": "https://example.com/1.jpg"},
+			map[string]interface{}{"text": "Scene 2", "image_link": "https://example.com/2.jpg"},
+		},
+	})
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/script/jobs/slideshow-video", bytes.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+	req.RemoteAddr = "127.0.0.1:12345"
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d body=%s", w.Code, w.Body.String())
+	}
+
+	var res map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &res); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if got := res["kind"]; got != "slideshow-video" {
+		t.Fatalf("want kind slideshow-video, got %v", got)
+	}
+	if got := res["video_mode"]; got != "slideshow" {
+		t.Fatalf("want video_mode slideshow, got %v", got)
+	}
+	if got := res["clip_count"]; got != nil {
+		t.Fatalf("want no clip_count on slideshow response, got %v", got)
+	}
+
+	jobID, _ := res["job_id"].(string)
+	j, err := jobRepo.Get(context.Background(), jobID)
+	if err != nil {
+		t.Fatalf("jobRepo.Get: %v", err)
+	}
+	stored := jobs.ToPayloadMap(j)
+	if got := stored["pipeline_id"]; got != "images.v1" {
+		t.Fatalf("want pipeline_id images.v1, got %#v", got)
+	}
+	images, ok := stored["images"].([]interface{})
+	if !ok || len(images) != 2 {
+		t.Fatalf("want 2 stored images, got %#v", stored["images"])
+	}
+	if got := stored["audio_url"]; got != "https://example.com/voice.mp3" {
+		t.Fatalf("want audio_url voiceover mirrored, got %#v", got)
+	}
+	if got := stored["orientation"]; got != "vertical" {
+		t.Fatalf("want orientation vertical, got %#v", got)
 	}
 }
