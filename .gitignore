@@ -117,3 +117,7 @@ Thumbs.db
 # catches the transient top-level artifact so it never accidentally lands
 # in a commit.
 /controltransport/
+
+# Accidentale recursive cp --parents artifact from local builds
+/DataServer/DataServer/
+
