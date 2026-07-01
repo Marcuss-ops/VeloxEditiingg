@@ -75,6 +75,21 @@ message Hello {
   string bundle_hash = 5;
   string engine_version = 6;
   string credential_hash = 7;
+  // Capability string literals (constants, not enum, so old workers
+  // can advertise older caps without rebuilding the proto).
+  //   "artifact.commit.v1"
+  //   "executor.hybrid.v1"
+  //   "task.output.declared.v1"
+  //   "artifact.upload.plan.v1"
+  //   "artifact.upload.completed.v1"
+  //   "task.commit.ack.v1"
+  //
+  // The Struct field is intentionally opaque (json-shaped map) so
+  // new capability strings ride in the wire without a regen. The
+  // canonical Go-side constants live in
+  // shared/controltransport/capabilities.go and are the wire surface
+  // — see the design note in that file for the proto-vs-impl
+  // divergence rationale.
   google.protobuf.Struct capabilities = 8;
 }
 
