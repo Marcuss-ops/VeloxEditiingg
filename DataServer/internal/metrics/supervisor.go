@@ -331,6 +331,13 @@ func workerClassFromExecutorID(executorID string) string {
 	}
 }
 
+func isNoSuchColumnErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "no such column")
+}
+
 // SQLiteLabelResolver is the production-grade AttemptsDataSource
 // implementation. Backed by a raw *sql.DB on the canonical velox
 // schema (task_attempts + tasks + workers). One humble query per
@@ -415,11 +422,24 @@ func (r *SQLiteLabelResolver) Labels(ctx context.Context, attemptID string) (str
 		    COALESCE(CAST(t.executor_version AS TEXT), '0'),
 		    COALESCE(w.resource_class, '')
 		FROM task_attempts a
-		LEFT JOIN tasks t ON t.id = a.task_id
+		LEFT JOIN tasks t ON t.task_id = a.task_id
 		LEFT JOIN workers w ON w.worker_id = a.worker_id
 		WHERE a.id = ?`,
 		attemptID,
 	).Scan(&execID, &execVer, &resourceClass)
+	if isNoSuchColumnErr(err) {
+		err = r.DB.QueryRowContext(ctx, `
+			SELECT
+			    COALESCE(t.executor_id, ''),
+			    COALESCE(CAST(t.executor_version AS TEXT), '0'),
+			    COALESCE(w.worker_class, '')
+			FROM task_attempts a
+			LEFT JOIN tasks t ON t.task_id = a.task_id
+			LEFT JOIN workers w ON w.worker_id = a.worker_id
+			WHERE a.id = ?`,
+			attemptID,
+		).Scan(&execID, &execVer, &resourceClass)
+	}
 	if err == sql.ErrNoRows {
 		return "unknown", "0", "default", nil
 	}
