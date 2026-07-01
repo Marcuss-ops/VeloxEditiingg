@@ -5,6 +5,10 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"velox-server/internal/costmodel"
+	"velox-server/internal/jobs"
+	"velox-server/internal/taskgraph"
 )
 
 func setupForwardingTestDB(t *testing.T) *SQLiteStore {
@@ -537,6 +541,181 @@ func TestListReadyToForward(t *testing.T) {
 	}
 	if len(ready) != 2 {
 		t.Errorf("expected 2 ready, got %d", len(ready))
+	}
+}
+
+// ── Atomic Enqueue + Forward ───────────────────────────────────────────────
+
+func TestAtomicForwardAndEnqueue_CreatesJobAndMarksForwarded(t *testing.T) {
+	db := setupForwardingTestDB(t)
+	ctx := context.Background()
+
+	// Arrange: insert a READY_TO_FORWARD forwarding with stored payload.
+	insertTestForwardingWithPayload(t, db, "cf-atomic", "openai", "creator-atomic",
+		"scene.composite.v1", "READY_TO_FORWARD", `{"video":"test"}`, "abc")
+
+	// Build a minimal Job and TaskSpec.
+	job := &jobs.Job{
+		ID:        "job-atomic-001",
+		Type:      "process_video",
+		Status:    jobs.StatusPending,
+		VideoName: "AtomicTest",
+		RunID:     "run-atomic",
+		Payload:   `{"video":"test"}`,
+		Requirements: costmodel.JobRequirements{
+			ResourceClass: "GPU",
+			Deterministic: true,
+		},
+	}
+	spec := &taskgraph.TaskSpec{
+		Version:    taskgraph.SpecVersion,
+		JobID:      "job-atomic-001",
+		ExecutorID: "scene.composite.v1@1",
+		Payload:    map[string]any{"video": "test"},
+	}
+
+	// Act: atomic enqueue + forward.
+	err := db.AtomicForwardAndEnqueue(ctx, "cf-atomic", job, spec, 5)
+	if err != nil {
+		t.Fatalf("AtomicForwardAndEnqueue: %v", err)
+	}
+
+	// Assert: forwarding is FORWARDED with target_job_id.
+	cf, err := db.GetCreatorForwarding(ctx, "cf-atomic")
+	if err != nil {
+		t.Fatalf("GetCreatorForwarding: %v", err)
+	}
+	if cf.Status != "FORWARDED" {
+		t.Errorf("status = %q, want FORWARDED", cf.Status)
+	}
+	if cf.TargetJobID != "job-atomic-001" {
+		t.Errorf("target_job_id = %q, want job-atomic-001", cf.TargetJobID)
+	}
+	if cf.ForwardedAt == "" {
+		t.Error("forwarded_at should be set")
+	}
+
+	// Assert: Job row exists.
+	jobRepo := NewSQLiteJobRepository(db)
+	savedJob, err := jobRepo.Get(ctx, "job-atomic-001")
+	if err != nil || savedJob == nil {
+		t.Fatalf("Get job: err=%v", err)
+	}
+	if savedJob.ID != "job-atomic-001" {
+		t.Errorf("job ID = %q, want job-atomic-001", savedJob.ID)
+	}
+	if savedJob.Status != jobs.StatusPending {
+		t.Errorf("job status = %q, want PENDING", savedJob.Status)
+	}
+}
+
+func TestAtomicForwardAndEnqueue_ConflictWhenAlreadyClaimed(t *testing.T) {
+	db := setupForwardingTestDB(t)
+	ctx := context.Background()
+
+	// Insert a READY_TO_FORWARD row and claim it (simulating another runner).
+	insertTestForwardingWithPayload(t, db, "cf-conflict", "openai", "creator-conflict",
+		"scene.composite.v1", "READY_TO_FORWARD", `{"v":"1"}`, "abc")
+
+	// Manually transition to FORWARDING (simulating another runner claimed it).
+	_, err := db.db.ExecContext(ctx,
+		`UPDATE creator_forwardings SET status = 'FORWARDING' WHERE forwarding_id = ?`,
+		"cf-conflict")
+	if err != nil {
+		t.Fatalf("manual transition: %v", err)
+	}
+
+	// Attempt atomic enqueue — should fail because it's no longer READY_TO_FORWARD.
+	job := &jobs.Job{ID: "job-conflict", Type: "process_video", Status: jobs.StatusPending,
+		VideoName: "Conflict", RunID: "run-conflict"}
+	spec := &taskgraph.TaskSpec{Version: taskgraph.SpecVersion, JobID: "job-conflict",
+		ExecutorID: "scene.composite.v1@1"}
+
+	err = db.AtomicForwardAndEnqueue(ctx, "cf-conflict", job, spec, 5)
+	if err != ErrTransitionConflict {
+		t.Errorf("expected ErrTransitionConflict, got %v", err)
+	}
+
+	// Verify forwarding is still FORWARDING (not mutated).
+	cf, err := db.GetCreatorForwarding(ctx, "cf-conflict")
+	if err != nil {
+		t.Fatalf("GetCreatorForwarding: %v", err)
+	}
+	if cf.Status != "FORWARDING" {
+		t.Errorf("status = %q, want FORWARDING (unchanged)", cf.Status)
+	}
+	if cf.TargetJobID != "" {
+		t.Error("target_job_id should be empty after failed atomic enqueue")
+	}
+}
+
+// ── Enqueue Retry ──────────────────────────────────────────────────────
+
+func TestMarkCreatorForwardingEnqueueRetry_FromForwarding(t *testing.T) {
+	db := setupForwardingTestDB(t)
+	ctx := context.Background()
+
+	// Insert a FORWARDING record (simulating failed atomic enqueue).
+	cf := &CreatorForwarding{
+		ForwardingID:     "cf-enq-retry",
+		SourceProvider:   "openai",
+		SourceJobID:      "creator-enq-retry",
+		TargetExecutorID: "scene.composite.v1",
+		Status:           "FORWARDING",
+		PayloadJSON:      `{"video":"test"}`,
+		PayloadSHA256:    "abc",
+		CreatedAt:        time.Now().UTC().Format(time.RFC3339),
+		UpdatedAt:        time.Now().UTC().Format(time.RFC3339),
+	}
+	if err := db.InsertCreatorForwarding(cf); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	nextAttempt := time.Now().UTC().Add(2 * time.Minute)
+	err := db.MarkCreatorForwardingEnqueueRetry(ctx, "cf-enq-retry",
+		"ENQUEUE_FAILED", "atomic write conflict", nextAttempt)
+	if err != nil {
+		t.Fatalf("MarkCreatorForwardingEnqueueRetry: %v", err)
+	}
+
+	saved, err := db.GetCreatorForwarding(ctx, "cf-enq-retry")
+	if err != nil {
+		t.Fatalf("GetCreatorForwarding: %v", err)
+	}
+	if saved.Status != "RETRY_WAIT" {
+		t.Errorf("status = %q, want RETRY_WAIT", saved.Status)
+	}
+	if saved.NextAttemptAt == "" {
+		t.Error("next_attempt_at should be set")
+	}
+	if saved.LastErrorCode != "ENQUEUE_FAILED" {
+		t.Errorf("last_error_code = %q, want ENQUEUE_FAILED", saved.LastErrorCode)
+	}
+	if saved.LockedBy != "" || saved.LeaseID != "" {
+		t.Error("locked_by/lease_id should be cleared")
+	}
+}
+
+func TestMarkCreatorForwardingEnqueueRetry_FromReadyToForward(t *testing.T) {
+	db := setupForwardingTestDB(t)
+	ctx := context.Background()
+
+	insertTestForwardingWithPayload(t, db, "cf-r2f-retry", "openai", "creator-r2f-retry",
+		"scene.composite.v1", "READY_TO_FORWARD", `{"v":"1"}`, "abc")
+
+	nextAttempt := time.Now().UTC().Add(30 * time.Second)
+	err := db.MarkCreatorForwardingEnqueueRetry(ctx, "cf-r2f-retry",
+		"PREPARE_FAILED", "invalid payload", nextAttempt)
+	if err != nil {
+		t.Fatalf("MarkCreatorForwardingEnqueueRetry: %v", err)
+	}
+
+	saved, err := db.GetCreatorForwarding(ctx, "cf-r2f-retry")
+	if err != nil {
+		t.Fatalf("GetCreatorForwarding: %v", err)
+	}
+	if saved.Status != "RETRY_WAIT" {
+		t.Errorf("status = %q, want RETRY_WAIT", saved.Status)
 	}
 }
 

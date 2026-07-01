@@ -70,21 +70,61 @@ func NewEnqueuer(creator *store.AtomicJobTaskCreator, jobsRepo jobs.Reader, voic
 // from that key (via DeriveForwardingJobID) instead of generating a
 // random UUID. This ensures concurrent pollers, duplicate webhooks, and
 // post-crash retries always produce the same Job ID.
+//
+// Callers that need the Job+TaskSpec without a DB write (e.g. for an
+// atomic multi-table transaction with creator_forwardings) should use
+// PrepareJobAndTask instead.
 func (e *Enqueuer) Enqueue(ctx context.Context, payloadMap map[string]interface{}, req costmodel.JobRequirements) (map[string]interface{}, error) {
 	if e == nil || e.Creator == nil {
 		return nil, fmt.Errorf("creator unavailable")
 	}
 
-	if err := e.resolveVoiceoverPayload(ctx, payloadMap); err != nil {
+	job, spec, priority, err := e.PrepareJobAndTask(ctx, payloadMap, req)
+	if err != nil {
 		return nil, err
 	}
+
+	jobID := job.ID
+	normalized := spec.Payload
+
+	// Optimistic idempotency pre-check (same pattern as creatorflow.CreateJobWithPlan).
+	if e.Jobs != nil {
+		if existing, getErr := e.Jobs.Get(ctx, jobID); getErr == nil && existing != nil && existing.ID == jobID {
+			return buildSceneVideoResponse(normalized), nil
+		}
+	}
+
+	if err := e.Creator.CreateJobWithTask(ctx, job, spec, priority); err != nil {
+		return nil, fmt.Errorf("enqueue: atomic create: %w", err)
+	}
+
+	return buildSceneVideoResponse(normalized), nil
+}
+
+// PrepareJobAndTask normalizes the payload, resolves assets, and compiles
+// a Job+TaskSpec WITHOUT writing to the database. This is the extraction of
+// the pure business logic from Enqueue, intended for callers that need to
+// manage the atomic write themselves (e.g. AtomicForwardAndEnqueue which
+// combines the Job+Task+TaskSpec creation with a creator_forwardings status
+// update in a single SQLite transaction).
+//
+// Returns the prepared Job, TaskSpec, priority, and the normalized payload
+// embedded in spec.Payload.
+func (e *Enqueuer) PrepareJobAndTask(ctx context.Context, payloadMap map[string]interface{}, req costmodel.JobRequirements) (*jobs.Job, *taskgraph.TaskSpec, int, error) {
+	if e == nil || e.Creator == nil {
+		return nil, nil, 0, fmt.Errorf("creator unavailable")
+	}
+
+	if err := e.resolveVoiceoverPayload(ctx, payloadMap); err != nil {
+		return nil, nil, 0, err
+	}
 	if err := e.resolveSceneImagePayload(ctx, payloadMap); err != nil {
-		return nil, err
+		return nil, nil, 0, err
 	}
 
 	normalized, err := normalizeSceneVideoPayload(payloadMap)
 	if err != nil {
-		return nil, err
+		return nil, nil, 0, err
 	}
 
 	jobID, _ := normalized["job_id"].(string)
@@ -104,21 +144,9 @@ func (e *Enqueuer) Enqueue(ctx context.Context, payloadMap map[string]interface{
 		normalized["job_id"] = jobID
 	}
 
-	// PR #3: compile Job+TaskSpec and create atomically.
+	// PR #3: compile Job+TaskSpec.
 	job, spec, priority := compileSceneVideoJob(normalized, req)
-
-	// Optimistic idempotency pre-check (same pattern as creatorflow.CreateJobWithPlan).
-	if e.Jobs != nil {
-		if existing, getErr := e.Jobs.Get(ctx, jobID); getErr == nil && existing != nil && existing.ID == jobID {
-			return buildSceneVideoResponse(normalized), nil
-		}
-	}
-
-	if err := e.Creator.CreateJobWithTask(ctx, job, spec, priority); err != nil {
-		return nil, fmt.Errorf("enqueue: atomic create: %w", err)
-	}
-
-	return buildSceneVideoResponse(normalized), nil
+	return job, spec, priority, nil
 }
 
 // =============================================================================
@@ -513,7 +541,7 @@ func copyTimelinePayloadFields(out, src map[string]interface{}) {
 	if out == nil || src == nil {
 		return
 	}
-	for _, key := range []string{"images", "clips", "items", "clip_segments", "intro_clip_paths", "stock_clip_paths", "fit", "effect", "orientation"} {
+	for _, key := range []string{"images", "clips", "items", "audio_tracks", "clip_segments", "intro_clip_paths", "stock_clip_paths", "fit", "effect", "orientation"} {
 		if value, ok := src[key]; ok && value != nil {
 			out[key] = value
 		}

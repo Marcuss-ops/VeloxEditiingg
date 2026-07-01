@@ -70,7 +70,9 @@ func buildModules(cfg *config.Config, p *persistenceDeps, j *jobsDeps, w *worker
 	// The drive module's Service() is already non-nil after NewDriveModule.
 	var driveSvc voiceoverassets.DriveDownloader
 	if driveMod != nil {
-		driveSvc = driveMod.Service()
+		if svc := driveMod.Service(); svc != nil {
+			driveSvc = svc
+		}
 	}
 	typedResolvers := voiceoverassets.NewTypedResolversFromStore(voiceoverStore, driveSvc, nil)
 	assetRegistry := voiceoverassets.NewResolverRegistry(typedResolvers...)
@@ -127,6 +129,7 @@ func buildModules(cfg *config.Config, p *persistenceDeps, j *jobsDeps, w *worker
 			forwarding.DefaultRunnerConfig(),
 			p.SQLite,
 			reClient,
+			enqueuer,
 			fmt.Sprintf("cf-runner-%d", time.Now().UnixNano()),
 		)
 		log.Printf("[BOOTSTRAP] CreatorForwardingRunner initialized (remote_engine=%s)", cfg.Render.RemoteEngineURL)

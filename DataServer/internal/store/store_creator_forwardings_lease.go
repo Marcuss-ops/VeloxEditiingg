@@ -21,6 +21,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"velox-server/internal/jobs"
+	"velox-server/internal/taskgraph"
 )
 
 // ── Claim ────────────────────────────────────────────────────────────────
@@ -389,6 +392,172 @@ func (s *SQLiteStore) MarkCreatorForwardingBlocked(ctx context.Context, forwardi
 	}
 
 	return tx.Commit()
+}
+
+// ── Atomic Enqueue + Forward ───────────────────────────────────────────
+
+// AtomicForwardAndEnqueue combines the Job+Task+TaskSpec creation AND the
+// forwarding status update into a single SQLite transaction. This guarantees
+// that a crash between the enqueue and the FORWARDED marking cannot leave a
+// forwarded Job with the forwarding row still in FORWARDING, or vice versa.
+//
+// The transaction:
+//  1. CAS: READY_TO_FORWARD → FORWARDING (claim the row)
+//  2. INSERT Job, Task, TaskSpec (same semantics as CreateJobWithTask)
+//  3. CAS: FORWARDING → FORWARDED (set target_job_id = job.ID)
+//
+// If the initial CAS fails (another runner claimed the row), the
+// transaction rolls back and ErrTransitionConflict is returned without
+// any side effects.
+func (s *SQLiteStore) AtomicForwardAndEnqueue(
+	ctx context.Context,
+	forwardingID string,
+	job *jobs.Job,
+	taskSpec *taskgraph.TaskSpec,
+	priority int,
+) error {
+	if forwardingID == "" || job == nil || job.ID == "" {
+		return fmt.Errorf("store: AtomicForwardAndEnqueue: missing required fields")
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("AtomicForwardAndEnqueue begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	// 1. CAS: READY_TO_FORWARD → FORWARDING
+	claimResult, err := tx.ExecContext(ctx,
+		`UPDATE creator_forwardings
+		 SET status = 'FORWARDING', updated_at = ?
+		 WHERE forwarding_id = ?
+		   AND status = 'READY_TO_FORWARD'`,
+		now, forwardingID,
+	)
+	if err != nil {
+		return fmt.Errorf("AtomicForwardAndEnqueue claim: %w", err)
+	}
+	affected, _ := claimResult.RowsAffected()
+	if affected == 0 {
+		return ErrTransitionConflict
+	}
+
+	// 2. Insert Job, Task, TaskSpec (same pattern as CreateJobWithTask)
+	jobPayload := "{}"
+	if job.Payload != "" {
+		jobPayload = job.Payload
+	}
+
+	req := job.Requirements
+	_, err = tx.ExecContext(ctx,
+		`INSERT INTO jobs (
+			job_id, status, max_retries,
+			video_name, project_id,
+			created_at, updated_at, migrated_at,
+			request_json, result_json, revision,
+			run_id, job_run_id,
+			job_required_resource_class, job_required_temporal_mode,
+			job_required_deterministic, job_required_cacheable,
+			job_required_min_bandwidth_mbps
+		) VALUES (?, 'PENDING', ?, ?, ?, ?, ?, ?, ?, '{}', 0, ?, ?,
+		          ?, ?, ?, ?,
+		          ?)`,
+		job.ID, job.MaxRetries, job.VideoName, job.ProjectID,
+		now, now, now,
+		jobPayload,
+		job.RunID, job.RunID,
+		req.ResourceClass, req.TemporalMode,
+		req.Deterministic, req.Cacheable,
+		req.MinBandwidthMbps,
+	)
+	if err != nil {
+		return fmt.Errorf("AtomicForwardAndEnqueue job insert: %w", err)
+	}
+
+	taskID := uuid.NewString()
+	_, err = tx.ExecContext(ctx,
+		`INSERT INTO tasks (
+			task_id, job_id, project_id, render_plan_id,
+			executor_id, executor_version, status, priority,
+			revision, attempt_count, worker_id, lease_id,
+			created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, 'PENDING', ?, 0, 0, '', '', ?, ?)`,
+		taskID, job.ID, job.ProjectID,
+		taskSpec.RenderPlanID(),
+		taskSpec.ExecutorID, taskSpec.Version,
+		priority, now, now,
+	)
+	if err != nil {
+		return fmt.Errorf("AtomicForwardAndEnqueue task insert: %w", err)
+	}
+
+	if taskSpec != nil {
+		specHash := taskSpec.MustSpecHash()
+		specPayloadJSON, _ := marshalSpecPayload(taskSpec)
+		_, err = tx.ExecContext(ctx,
+			`INSERT INTO task_specs (task_id, spec_version, spec_hash, executor_id, payload_json, created_at)
+			 VALUES (?, ?, ?, ?, ?, ?)`,
+			taskID, taskSpec.Version, specHash, taskSpec.ExecutorID, specPayloadJSON, now,
+		)
+		if err != nil {
+			return fmt.Errorf("AtomicForwardAndEnqueue task spec insert: %w", err)
+		}
+	}
+
+	// 3. CAS: FORWARDING → FORWARDED
+	forwardResult, err := tx.ExecContext(ctx,
+		`UPDATE creator_forwardings
+		 SET status = 'FORWARDED', target_job_id = ?,
+		     forwarded_at = ?, updated_at = ?
+		 WHERE forwarding_id = ?
+		   AND status = 'FORWARDING'`,
+		job.ID, now, now, forwardingID,
+	)
+	if err != nil {
+		return fmt.Errorf("AtomicForwardAndEnqueue forward: %w", err)
+	}
+	affected, _ = forwardResult.RowsAffected()
+	if affected == 0 {
+		return fmt.Errorf("store: AtomicForwardAndEnqueue: FORWARDING→FORWARDED CAS failed")
+	}
+
+	return tx.Commit()
+}
+
+// MarkCreatorForwardingEnqueueRetry moves a forwarding that failed to enqueue
+// (FORWARDING or READY_TO_FORWARD) to RETRY_WAIT with a backoff delay.
+// This is the enqueue-phase analog of MarkCreatorForwardingRetry (which
+// handles the POLLING phase). CAS on (forwarding_id, status IN enqueue
+// states). Clears lock/lease fields.
+func (s *SQLiteStore) MarkCreatorForwardingEnqueueRetry(ctx context.Context, forwardingID, errorCode, errorMsg string, nextAttemptAt time.Time) error {
+	if forwardingID == "" {
+		return fmt.Errorf("store: MarkCreatorForwardingEnqueueRetry: empty forwarding_id")
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	nextISO := nextAttemptAt.UTC().Format(time.RFC3339)
+	result, err := s.db.ExecContext(ctx,
+		`UPDATE creator_forwardings
+		 SET status = 'RETRY_WAIT',
+		     locked_by = '', lease_id = '', lease_expires_at = '',
+		     next_attempt_at = ?,
+		     last_error_code = ?, last_error_message = ?,
+		     updated_at = ?
+		 WHERE forwarding_id = ?
+		   AND status IN ('FORWARDING', 'READY_TO_FORWARD')`,
+		nextISO, nullIfEmpty(errorCode), nullIfEmpty(errorMsg), now,
+		forwardingID,
+	)
+	if err != nil {
+		return fmt.Errorf("store: MarkCreatorForwardingEnqueueRetry: %w", err)
+	}
+	affected, _ := result.RowsAffected()
+	if affected == 0 {
+		return ErrTransitionConflict
+	}
+	return nil
 }
 
 // ── Recovery / Sweep ────────────────────────────────────────────────────

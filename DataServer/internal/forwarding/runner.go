@@ -32,6 +32,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"velox-server/internal/costmodel"
+	"velox-server/internal/jobs/enqueue"
 	"velox-server/internal/remoteengine"
 	"velox-server/internal/store"
 )
@@ -121,11 +123,13 @@ func (m *RunnerMetrics) Snapshot() map[string]int64 {
 // ── Runner ───────────────────────────────────────────────────────────────
 
 // CreatorForwardingRunner drives the persistent polling of remote creator
-// jobs and transitions completed results to READY_TO_FORWARD.
+// jobs and transitions completed results atomically to FORWARDED (Job+Task
+// creation + forwarding status update in a single SQLite transaction).
 type CreatorForwardingRunner struct {
 	cfg      *RunnerConfig
 	dbStore  *store.SQLiteStore
 	client   *remoteengine.Client
+	enqueuer *enqueue.Enqueuer
 	identity string
 	metrics  *RunnerMetrics
 
@@ -137,8 +141,10 @@ type CreatorForwardingRunner struct {
 }
 
 // NewCreatorForwardingRunner wires a runner. dbStore is the durable anchor;
-// client provides access to the remote creator engine.
-func NewCreatorForwardingRunner(cfg *RunnerConfig, dbStore *store.SQLiteStore, client *remoteengine.Client, identity string) *CreatorForwardingRunner {
+// client provides access to the remote creator engine. enqueuer is optional
+// (nil-safe) — when set, the runner handles the full poll+enqueue lifecycle
+// atomically; when nil, the runner only polls and stores payloads.
+func NewCreatorForwardingRunner(cfg *RunnerConfig, dbStore *store.SQLiteStore, client *remoteengine.Client, enqueuer *enqueue.Enqueuer, identity string) *CreatorForwardingRunner {
 	if cfg == nil {
 		cfg = DefaultRunnerConfig()
 	}
@@ -152,6 +158,7 @@ func NewCreatorForwardingRunner(cfg *RunnerConfig, dbStore *store.SQLiteStore, c
 		cfg:       cfg,
 		dbStore:   dbStore,
 		client:    client,
+		enqueuer:  enqueuer,
 		identity:  identity,
 		metrics:   &RunnerMetrics{},
 		sem:       make(chan struct{}, cfg.Concurrency),
@@ -254,7 +261,10 @@ func (r *CreatorForwardingRunner) tick(ctx context.Context) error {
 
 // processLease handles a single claimed forwarding: polls the remote
 // creator, manages lease renewal, and transitions to the appropriate
-// next state.
+// next state. When the enqueuer is configured and the remote creator
+// completes successfully, the runner handles the full lifecycle
+// atomically: Job+Task+TaskSpec creation + FORWARDED marking in a
+// single SQLite transaction.
 func (r *CreatorForwardingRunner) processLease(ctx context.Context, lease store.CreatorForwardingLease) {
 	// Start lease renewal in background.
 	renewCtx, cancelRenew := context.WithCancel(ctx)
@@ -275,19 +285,26 @@ func (r *CreatorForwardingRunner) processLease(ctx context.Context, lease store.
 	switch {
 	case isTerminalSuccess(resp.Status):
 		// Remote creator completed successfully.
-		payloadJSON, payloadSHA256 := marshalPayload(resp.Result)
-		if err := r.dbStore.MarkCreatorForwardingReadyToForward(ctx,
-			lease.ForwardingID, r.identity, lease.LeaseID,
-			payloadJSON, payloadSHA256,
-		); err != nil {
-			log.Printf("[FORWARDING] mark ready-to-forward failed forwarding=%s: %v", lease.ForwardingID, err)
-			r.handleRetry(ctx, lease, "MARK_READY_ERROR", err.Error())
-			r.metrics.Retried.Add(1)
-			return
+		if r.enqueuer != nil {
+			// Full atomic lifecycle: build Job+TaskSpec and enqueue+forward
+			// in a single SQLite transaction.
+			r.atomicEnqueueAndForward(ctx, lease, resp.Result)
+		} else {
+			// Fallback: store payload for a separate forwarding service.
+			payloadJSON, payloadSHA256 := marshalPayload(resp.Result)
+			if err := r.dbStore.MarkCreatorForwardingReadyToForward(ctx,
+				lease.ForwardingID, r.identity, lease.LeaseID,
+				payloadJSON, payloadSHA256,
+			); err != nil {
+				log.Printf("[FORWARDING] mark ready-to-forward failed forwarding=%s: %v", lease.ForwardingID, err)
+				r.handleRetry(ctx, lease, "MARK_READY_ERROR", err.Error())
+				r.metrics.Retried.Add(1)
+				return
+			}
+			log.Printf("[FORWARDING] ready-to-forward forwarding=%s source_job=%s source_provider=%s",
+				lease.ForwardingID, lease.SourceJobID, lease.SourceProvider)
+			r.metrics.Forwarded.Add(1)
 		}
-		log.Printf("[FORWARDING] ready-to-forward forwarding=%s source_job=%s source_provider=%s",
-			lease.ForwardingID, lease.SourceJobID, lease.SourceProvider)
-		r.metrics.Forwarded.Add(1)
 
 	case isTerminalFailure(resp.Status):
 		// Remote creator failed.
@@ -318,6 +335,97 @@ func (r *CreatorForwardingRunner) processLease(ctx context.Context, lease store.
 			log.Printf("[FORWARDING] mark retry (still-running) failed forwarding=%s: %v", lease.ForwardingID, err)
 		}
 	}
+}
+
+// atomicEnqueueAndForward builds the Job+TaskSpec from the remote creator
+// result and calls AtomicForwardAndEnqueue to create the Job+Task+TaskSpec
+// and mark the forwarding as FORWARDED in a single SQLite transaction.
+// On failure, the forwarding is transitioned to RETRY_WAIT with backoff.
+func (r *CreatorForwardingRunner) atomicEnqueueAndForward(ctx context.Context, lease store.CreatorForwardingLease, result map[string]interface{}) {
+	if result == nil {
+		result = map[string]interface{}{}
+	}
+	// Inject the forwarding key so DeriveForwardingJobID produces a
+	// deterministic job_id.
+	result["_internal_forwarding_key"] = fmt.Sprintf("%s:%s:%s",
+		lease.SourceProvider, lease.SourceJobID, lease.TargetExecutorID)
+
+	// 1. Store the payload + release the poll lease (POLLING → READY_TO_FORWARD).
+	//    The atomic enqueue will claim it back (READY_TO_FORWARD → FORWARDING)
+	//    inside the same DB transaction.
+	payloadJSON, payloadSHA256 := marshalPayload(result)
+	if err := r.dbStore.MarkCreatorForwardingReadyToForward(ctx,
+		lease.ForwardingID, r.identity, lease.LeaseID,
+		payloadJSON, payloadSHA256,
+	); err != nil {
+		log.Printf("[FORWARDING] mark ready-to-forward failed forwarding=%s: %v", lease.ForwardingID, err)
+		r.handleRetry(ctx, lease, "MARK_READY_ERROR", err.Error())
+		r.metrics.Retried.Add(1)
+		return
+	}
+
+	// 2. Prepare the Job+TaskSpec (business logic, no DB write).
+	job, spec, priority, err := r.enqueuer.PrepareJobAndTask(ctx, result, costmodel.DefaultRequirements())
+	if err != nil {
+		log.Printf("[FORWARDING] prepare job+task failed forwarding=%s: %v", lease.ForwardingID, err)
+		r.handleEnqueueRetry(ctx, lease, "PREPARE_FAILED", err.Error())
+		return
+	}
+
+	// 3. Atomic enqueue + forward (one SQLite transaction).
+	if err := r.dbStore.AtomicForwardAndEnqueue(ctx, lease.ForwardingID, job, spec, priority); err != nil {
+		log.Printf("[FORWARDING] atomic forward+enqueue failed forwarding=%s: %v", lease.ForwardingID, err)
+		r.handleEnqueueRetry(ctx, lease, "ENQUEUE_FAILED", err.Error())
+		return
+	}
+
+	log.Printf("[FORWARDING] forwarded forwarding=%s → job=%s source=%s",
+		lease.ForwardingID, job.ID, lease.SourceProvider)
+	r.metrics.Forwarded.Add(1)
+}
+
+// handleEnqueueRetry transitions the forwarding to RETRY_WAIT with backoff
+// when the enqueue phase fails (e.g. payload build error, atomic write
+// conflict). Uses MarkCreatorForwardingEnqueueRetry which handles
+// FORWARDING/READY_TO_FORWARD states. On max attempts or CAS failure,
+// falls back to MarkCreatorForwardingFailed to prevent silent stuck rows.
+func (r *CreatorForwardingRunner) handleEnqueueRetry(ctx context.Context, lease store.CreatorForwardingLease, code, msg string) {
+	maxAttempts := r.cfg.MaxAttempts
+	if maxAttempts <= 0 {
+		maxAttempts = 12
+	}
+	if lease.AttemptCount >= maxAttempts {
+		if err := r.dbStore.MarkCreatorForwardingFailed(ctx,
+			lease.ForwardingID, "MAX_ENQUEUE_ATTEMPTS",
+			fmt.Sprintf("exhausted %d attempts: %s", maxAttempts, msg),
+		); err != nil {
+			log.Printf("[FORWARDING] mark failed (max enqueue attempts) forwarding=%s: %v", lease.ForwardingID, err)
+		}
+		log.Printf("[FORWARDING] max enqueue attempts exhausted forwarding=%s source_job=%s attempts=%d",
+			lease.ForwardingID, lease.SourceJobID, lease.AttemptCount)
+		r.metrics.Failed.Add(1)
+		return
+	}
+
+	backoff := r.cfg.backoffForAttempt(lease.AttemptCount)
+	nextAttempt := time.Now().UTC().Add(backoff)
+	if err := r.dbStore.MarkCreatorForwardingEnqueueRetry(ctx,
+		lease.ForwardingID, code, msg, nextAttempt,
+	); err != nil {
+		// CAS failure (race with another runner or already transitioned) —
+		// fall back to terminal failure to prevent the row from being
+		// silently stuck in FORWARDING/READY_TO_FORWARD forever.
+		log.Printf("[FORWARDING] enqueue retry CAS failed forwarding=%s: %v; marking FAILED", lease.ForwardingID, err)
+		if ferr := r.dbStore.MarkCreatorForwardingFailed(ctx,
+			lease.ForwardingID, "ENQUEUE_RETRY_CAS_FAILED",
+			fmt.Sprintf("CAS failure on enqueue retry: %v", err),
+		); ferr != nil {
+			log.Printf("[FORWARDING] mark failed (CAS fallback) forwarding=%s: %v", lease.ForwardingID, ferr)
+		}
+		r.metrics.Failed.Add(1)
+		return
+	}
+	r.metrics.Retried.Add(1)
 }
 
 // handleRetry transitions the forwarding to RETRY_WAIT with the
