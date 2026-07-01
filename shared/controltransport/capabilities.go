@@ -1,0 +1,87 @@
+// Package controltransport / capabilities.go
+//
+// Capability strings advertised by workers in the WorkerHello handshake
+// and consulted by the master at dispatch time. All constants live here
+// so both sides of the wire define the namespace in exactly one place;
+// any new capability MUST be added here and re-emitted by the worker
+// side (RemoteCodex/.../internal/worker/worker.go) before any master
+// code can rely on it.
+//
+// Capability negotiation mechanism today
+// --------------------------------------
+//
+// Hello.capabilities (worker_control.proto) is typed as
+// `google.protobuf.Struct`, an opaque JSON-shaped map. The wire format
+// therefore tolerates ANY key string, so adding capabilities does NOT
+// require proto regeneration — workers can advertise new capability
+// strings as soon as this Go file publishes them. The master side
+// reads structpb.NewStruct() output of Hello.capabilities and consults
+// CapabilityArtifactCommitV1 / CapabilityExecutorHybridV1 at dispatch
+// time.
+//
+// Adding a new capability
+// -----------------------
+//
+//   1. Append the constant below — kebab-case <<version-suffixed>>
+//      form ("<area>.<version>", e.g. "artifact.commit.v1") so old
+//      workers can advertise deprecated versions naturally without
+//      tripping the upgrade path.
+//   2. Bump HasCapability() to include any new ALL_CAPS alias only if
+//      you want it to be implicit-on (almost never — explicit
+//      advertising is the rule).
+//   3. Add a unit test in capabilities_test.go asserting the constant
+//      round-trips through Struct → JSON → Struct without distortion.
+//
+// The capability namespace is forward-only: a master MUST accept any
+// string it does not understand and log a single verbose-WARN line per
+// unknown capability. Removing a capability is a hard cutover (drain
+// the fleet, see docs/completion-protocol.md §Phase 6).
+package controltransport
+
+// Well-known worker capability strings (Fase 1.4 of the Artifact
+// Commit Protocol, see docs/completion-protocol.md). Keep kebab-case
+// for wire readability; keep the literal value stable across releases
+// since legacy workers carry this string verbatim in their worker_config.
+const (
+	// CapabilityArtifactCommitV1 — the worker speaks the Artifact
+	// Commit Protocol (Fase 1+ of docs/completion-protocol.md):
+	// publishes TaskOutputDeclared, consumes ArtifactUploadPlan,
+	// uploads via the transport registry, gates cleanup on
+	// TaskCommitAck. Masters consult this capability at dispatch to
+	// decide whether the Task requires required_outputs (Phase 2
+	// routes required_outputs-bearing Tasks only to v1+ workers).
+	CapabilityArtifactCommitV1 = "artifact.commit.v1"
+
+	// CapabilityExecutorHybridV1 — the worker ships the hybrid
+	// executor (audio_url relaxation + explicit pipeline_id
+	// resolution, see Phase 2 follow-ups). Pre-hybrid workers
+	// keep emitting the legacy audio_url-as-spool-key contract;
+	// hybrid-aware masters preferentially route to workers that
+	// advertise this so resolving pipeline IDs goes through
+	// ResolvePipelineID() instead of the wire-provided ID.
+	CapabilityExecutorHybridV1 = "executor.hybrid.v1"
+)
+
+// AllCapabilities is the canonical closed-set of capabilities the
+// master TODAY recognises. Unknown strings are silently accepted and
+// logged; recognised strings are inspected against the dispatch policy.
+// Kept as a slice (not a map) so the iteration order is deterministic
+// across builds — important for log readability and snapshot diffing.
+var AllCapabilities = []string{
+	CapabilityArtifactCommitV1,
+	CapabilityExecutorHybridV1,
+}
+
+// IsKnownCapability reports whether the given string is one of the
+// recognised capabilities (above). Unknown strings are NOT an error:
+// forward-only capability negotiation means new workers may emit new
+// strings, and the master logs a single verbose WARN per unknown
+// capability per session.
+func IsKnownCapability(s string) bool {
+	for _, c := range AllCapabilities {
+		if c == s {
+			return true
+		}
+	}
+	return false
+}

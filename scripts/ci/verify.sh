@@ -59,6 +59,8 @@ log "check-single-writer"
 ./scripts/ci/check-single-writer.sh
 log "check-task-runtime-invariants"
 ./scripts/ci/check-task-runtime-invariants.sh
+log "check-completion-protocol-invariants"
+./scripts/ci/check-completion-protocol-invariants.sh
 log "check-db-access"
 ./scripts/ci/check-db-access.sh
 log "check-registry"

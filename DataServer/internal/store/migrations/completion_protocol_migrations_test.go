@@ -926,3 +926,41 @@ func indexExists(t *testing.T, db *sql.DB, name string) bool {
 func checksumHex(content string) string {
 	return fmt.Sprintf("%x", sha256.Sum256([]byte(content)))
 }
+func TestCompletionProtocolInvariants(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	if err := RunMigrations(db, SQLiteMigrationsFS(), "sqlite"); err != nil {
+		t.Fatalf("failed to run migrations: %v", err)
+	}
+
+	queries := []string{
+		"SELECT j.job_id FROM jobs j WHERE j.status='SUCCEEDED' AND NOT EXISTS (SELECT 1 FROM artifacts a WHERE a.job_id=j.job_id AND a.status='READY');",
+		"SELECT t.task_id FROM tasks t WHERE t.status='SUCCEEDED' AND EXISTS (SELECT 1 FROM task_output_declarations d LEFT JOIN artifacts a ON a.id=d.artifact_id AND a.status='READY' WHERE d.task_id=t.task_id AND d.required=1 AND a.id IS NULL);",
+		"SELECT job_id, output_kind, COUNT(*) FROM artifacts WHERE status='READY' GROUP BY job_id, output_kind HAVING COUNT(*)>1;",
+		"SELECT d.delivery_id FROM job_deliveries d JOIN artifacts a ON a.id=d.artifact_id WHERE a.status!='READY';",
+	}
+
+	for i, q := range queries {
+		rows, err := db.Query(q)
+		if err != nil {
+			t.Fatalf("query %d failed: %v", i+1, err)
+		}
+		defer rows.Close()
+
+		if rows.Next() {
+			t.Errorf("invariant query %d returned rows, expected 0", i+1)
+		}
+		if err := rows.Err(); err != nil {
+			t.Errorf("invariant query %d error: %v", i+1, err)
+		}
+	}
+
+	var integrity string
+	if err := db.QueryRow("PRAGMA integrity_check").Scan(&integrity); err != nil {
+		t.Fatalf("integrity check failed: %v", err)
+	}
+	if integrity != "ok" {
+		t.Errorf("integrity check: expected 'ok', got '%s'", integrity)
+	}
+}
