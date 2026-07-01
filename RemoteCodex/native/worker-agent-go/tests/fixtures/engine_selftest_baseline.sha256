@@ -1,7 +1,7 @@
-# RW-PROD-003 A1+A2 — engine self-render SHA-256 baseline (PLACEHOLDER).
+# RW-PROD-003 A1+A2 — engine self-render SHA-256 baseline.
 #
 # This file is the CANONICAL sha256sum-format fingerprint for the
-# 1-pixel (1×1, 0.1s, 1fps, ColorHex=#000000) render that pkg/bootstrap's
+# minimal even-dimension (2×2, 0.1s, 1fps, ColorHex=#000000) render that pkg/bootstrap's
 # runEngineSelfRender step drives through the C++ engine on boot.
 #
 # The bootstrap reads this file, computes SHA-256 over the output of:
@@ -24,9 +24,4 @@
 #   4. Commit. NEVER regenerate without bumping VERSION.txt — the
 #      invariant is bundle-version ≡ engine-binary ≡ baseline-SHA.
 #
-# The placeholder "0000...0000" below will FAIL every smoke run until
-# a real value is committed. This is intentional: the failure makes
-# the gap visible in CI, and the [BOOTSTRAP_FAIL] log line carries the
-# `code=engine_selftest_baseline_mismatch` so dashboards alert BEFORE
-# the worker-agent boots.
-0000000000000000000000000000000000000000000000000000000000000000  tests/fixtures/engine_selftest_baseline_PLACEHOLDER.txt
+985f1c38959897ca69a07408211277769b4c48a43c2dc85daad0a53c76f2f49e  tests/fixtures/engine_selftest_baseline.sha256

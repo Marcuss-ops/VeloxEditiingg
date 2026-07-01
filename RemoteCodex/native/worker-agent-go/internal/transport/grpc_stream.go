@@ -10,6 +10,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
+	"log"
 	"os"
 	"sync"
 	"time"
@@ -209,11 +210,20 @@ func (t *GRPCStreamTransport) recvLoop() {
 	for {
 		env, err := t.stream.Recv()
 		if err != nil {
+			log.Printf("[GRPC-TRANSPORT] recvLoop error for worker %s: %v", t.workerID, err)
 			select {
 			case t.errCh <- err:
 			default:
 			}
 			return
+		}
+		switch env.Msg.(type) {
+		case *pb.MasterToWorkerEnvelope_TaskOffer:
+			log.Printf("[GRPC-TRANSPORT] recvLoop received TaskOffer for worker %s: msg=%s session=%s",
+				t.workerID, env.MessageId, env.SessionId)
+		case *pb.MasterToWorkerEnvelope_TaskLeaseGranted:
+			log.Printf("[GRPC-TRANSPORT] recvLoop received TaskLeaseGranted for worker %s: msg=%s session=%s",
+				t.workerID, env.MessageId, env.SessionId)
 		}
 
 		msg := t.envelopeToMessage(env)

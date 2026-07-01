@@ -389,3 +389,12 @@ func TestPR_3_8_DispatchUnknownExecutorSurfacesFailure(t *testing.T) {
 		t.Fatalf("expected error to mention lookup/code, got %q", errDetail)
 	}
 }
+
+func TestNormalizeOfferedExecutorID_StripsVersionedKey(t *testing.T) {
+	if got := normalizeOfferedExecutorID("scene.composite.v1@1"); got != "scene.composite.v1" {
+		t.Fatalf("normalizeOfferedExecutorID(versioned) = %q, want %q", got, "scene.composite.v1")
+	}
+	if got := normalizeOfferedExecutorID("scene.composite.v1"); got != "scene.composite.v1" {
+		t.Fatalf("normalizeOfferedExecutorID(unversioned) = %q, want unchanged", got)
+	}
+}

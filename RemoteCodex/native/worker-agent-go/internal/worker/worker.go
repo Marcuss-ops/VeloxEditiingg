@@ -227,6 +227,17 @@ func (w *Worker) capabilitiesMap(hostname string) map[string]interface{} {
 	return m
 }
 
+// normalizeOfferedExecutorID strips an accidental "@version" suffix
+// from a task offer's executor_id when the master already split the
+// version into executor_version. Registry descriptors forbid '@' in
+// the base ID, so the last '@' unambiguously identifies the suffix.
+func normalizeOfferedExecutorID(id string) string {
+	if i := strings.LastIndex(id, "@"); i > 0 {
+		return id[:i]
+	}
+	return id
+}
+
 // hostInfo packages the static host-side fields of the capability report.
 // All values are pre-shaped so PR-3.6's resource sampler can fill
 // RAMBytes / DiskFreeBytes / HasGPU without breaking the wire contract —
@@ -411,8 +422,9 @@ func (w *Worker) receiveLoop(ctx context.Context, recvCh <-chan controltransport
 					continue
 				}
 
+				executorID := normalizeOfferedExecutorID(taskOffer.GetExecutorId())
 				w.logger.Info("[RECEIVE] TaskOffer received: task=%s attempt=%s job=%s executor=%s@%d — deferring executeTask to TaskLeaseGranted",
-					taskID, attemptID, jobID, taskOffer.GetExecutorId(), taskOffer.GetExecutorVersion())
+					taskID, attemptID, jobID, executorID, taskOffer.GetExecutorVersion())
 
 				if err := w.sendTaskAccepted(ctx, taskOffer); err != nil {
 					w.logger.Warn("[RECEIVE] Failed to send TaskAccepted: %v", err)
@@ -431,13 +443,13 @@ func (w *Worker) receiveLoop(ctx context.Context, recvCh <-chan controltransport
 					AttemptID:       attemptID,
 					AttemptNumber:   int(attemptNumber),
 					LeaseID:         leaseID,
-					ExecutorID:      taskOffer.GetExecutorId(),
+					ExecutorID:      executorID,
 					ExecutorVersion: int(taskOffer.GetExecutorVersion()),
 					Revision:        int(revision),
 					Spec: executor.TaskSpec{
 						Version:    int(taskOffer.GetExecutorVersion()),
 						JobID:      jobID,
-						ExecutorID: taskOffer.GetExecutorId(),
+						ExecutorID: executorID,
 						Payload:    specPayload,
 					},
 				}

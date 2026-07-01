@@ -1,6 +1,6 @@
 // pkg/bootstrap/renderer.go — engine self-render (RW-PROD-003 §3 A1 + A2).
 //
-// The bootstrap builds a synthetic one-frame, one-by-one black
+// The bootstrap builds a synthetic one-frame, minimal even-dimension black
 // RenderPlan, asks the canonical Runner to render it through the same
 // RenderClient that production tasks use, computes the SHA-256 of the
 // output file, and compares it against a baseline committed at
@@ -44,11 +44,13 @@ const DefaultSelfRenderTimeout = 5 * time.Second
 // engine's stderr.
 const blackFrameRenderJobID = "bootstrap.engine_selftest"
 
-// buildOnePixelPlan constructs the minimal RenderPlan that asks the
-// engine for a single still frame: 1×1 px canvas, one timeline item
-// with a solid black ColorHex source lasting 0.1s at 1 fps. The plan
-// is committed at build time so the C++ engine's output is byte-stable
-// across host installations — required for SHA-256 matching.
+// buildSelfRenderPlan constructs the minimal RenderPlan that asks the
+// engine for a single still frame. We intentionally use a 2x2 canvas
+// instead of 1x1 because the current x264-backed engine requires even
+// dimensions and rejects odd widths/heights during bootstrap.
+//
+// The plan is committed at build time so the C++ engine's output is
+// byte-stable across host installations — required for SHA-256 matching.
 //
 // TODO(rw-prod-003-cpp-engine-contract): the choice of MediaSource.Type
 // = "color" with ColorHex = "#000000" is a CONVENTION that has not yet
@@ -65,13 +67,13 @@ const blackFrameRenderJobID = "bootstrap.engine_selftest"
 //	(c) only after (a)/(b) can `make bootstrap-selftest-regenerate`
 //	    produce a real baseline sha256 to commit in
 //	    tests/fixtures/engine_selftest_baseline.sha256.
-func buildOnePixelPlan(outputPath string) *plan.RenderPlan {
+func buildSelfRenderPlan(outputPath string) *plan.RenderPlan {
 	return &plan.RenderPlan{
 		Version: 1,
 		JobID:   blackFrameRenderJobID,
 		Canvas: plan.CanvasSpec{
-			Width:  1,
-			Height: 1,
+			Width:  2,
+			Height: 2,
 			Fps:    1,
 		},
 		Timeline: []plan.TimelineItem{
@@ -152,7 +154,7 @@ func runEngineSelfRender(
 	defer os.RemoveAll(tmpDir)
 
 	outputPath := tmpDir + "/frame.mp4"
-	if err := rc.Render(rCtx, buildOnePixelPlan(outputPath)); err != nil {
+	if err := rc.Render(rCtx, buildSelfRenderPlan(outputPath)); err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
 			res.Status = "FAIL"
 			res.Code = "engine_selftest_timeout"
