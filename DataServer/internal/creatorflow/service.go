@@ -20,6 +20,7 @@ import (
 	"velox-server/internal/remoteengine"
 	"velox-server/internal/store"
 	"velox-server/internal/taskgraph"
+	"velox-shared/payload"
 )
 
 // Service encapsulates the optional "creator" stage so multiple endpoints can
@@ -88,6 +89,16 @@ func (s *Service) Forward(ctx context.Context, rawPayload map[string]interface{}
 	}
 
 	if enqueue.ShouldForwardPipelineResult(creatorResult) {
+		// PR-forwarding-deterministic-id: inject the forwarding key so
+		// the enqueuer derives a deterministic job_id instead of a
+		// random UUID. Two identical forwardings produce the same Job.
+		sourceJobID := firstString(creatorResult, "job_id", "trace_id", "id")
+		targetExecID := firstString(creatorResult, "executor_id", "pipeline_id")
+		if targetExecID == "" {
+			targetExecID = "scene.composite.v1"
+		}
+		creatorResult["_internal_forwarding_key"] = "remote_engine:" + sourceJobID + ":" + targetExecID
+
 		workerResponse, err := s.ForwardCompleted(ctx, creatorResult)
 		if err != nil {
 			return nil, false, err
@@ -195,6 +206,14 @@ func (s *Service) ForwardCompleted(ctx context.Context, result map[string]interf
 		}
 	}
 
+	// PR-forwarding-deterministic-id: carry the forwarding key through
+	// payload transformations so Enqueue can derive a deterministic job_id.
+	// BuildPipelinePayload and BuildSceneImagePayloadForMaster each produce
+	// fresh maps that drop the original key, so we re-inject it here.
+	if fwdKey := strings.TrimSpace(payload.FirstString(result, "_internal_forwarding_key")); fwdKey != "" {
+		workerPayload["_internal_forwarding_key"] = fwdKey
+	}
+
 	return s.enqueuer.Enqueue(ctx, workerPayload, costmodel.DefaultRequirements())
 }
 
@@ -224,6 +243,33 @@ func detectPublicMasterURL() string {
 		}
 	}
 	return remoteansible.DetectLocalMasterURL()
+}
+
+// ForwardCompletedResult is the package-level compatibility entry point for
+// callers that only have an Enqueuer and a completed creator result.
+// It preserves the pre-refactor contract used by pipeline handlers while the
+// method-based Service path owns the richer URL-rewrite flow.
+func ForwardCompletedResult(
+	ctx context.Context,
+	enqueuer *enqueue.Enqueuer,
+	result map[string]interface{},
+) (map[string]interface{}, error) {
+	if enqueuer == nil {
+		return nil, fmt.Errorf("creatorflow.ForwardCompletedResult: nil enqueuer")
+	}
+	if !enqueue.ShouldForwardPipelineResult(result) {
+		return nil, nil
+	}
+
+	workerPayload, err := enqueue.BuildPipelinePayload(result)
+	if err != nil {
+		return nil, fmt.Errorf("creatorflow.ForwardCompletedResult: build payload: %w", err)
+	}
+	if fwdKey := strings.TrimSpace(payload.FirstString(result, "_internal_forwarding_key")); fwdKey != "" {
+		workerPayload["_internal_forwarding_key"] = fwdKey
+	}
+
+	return enqueuer.Enqueue(ctx, workerPayload, costmodel.DefaultRequirements())
 }
 
 // =============================================================================

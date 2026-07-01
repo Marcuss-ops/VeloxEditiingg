@@ -64,6 +64,12 @@ func NewEnqueuer(creator *store.AtomicJobTaskCreator, jobsRepo jobs.Reader, voic
 //
 // PR-04.5: callers MUST publish the per-job `costmodel.JobRequirements`
 // for the eligibility layer + future-rank site to consume.
+//
+// PR-forwarding-deterministic-id: when the payload carries
+// `_internal_forwarding_key`, the job_id is derived deterministically
+// from that key (via DeriveForwardingJobID) instead of generating a
+// random UUID. This ensures concurrent pollers, duplicate webhooks, and
+// post-crash retries always produce the same Job ID.
 func (e *Enqueuer) Enqueue(ctx context.Context, payloadMap map[string]interface{}, req costmodel.JobRequirements) (map[string]interface{}, error) {
 	if e == nil || e.Creator == nil {
 		return nil, fmt.Errorf("creator unavailable")
@@ -82,6 +88,17 @@ func (e *Enqueuer) Enqueue(ctx context.Context, payloadMap map[string]interface{
 	}
 
 	jobID, _ := normalized["job_id"].(string)
+
+	// PR-forwarding-deterministic-id: when a forwarding key is present,
+	// derive the job_id deterministically regardless of any auto-generated
+	// ID from NewJobPayloadV2 or SetIdentity. This ensures concurrent
+	// pollers, duplicate webhooks, and post-crash retries always produce
+	// the same Job ID.
+	if fwdKey := strings.TrimSpace(payload.FirstString(normalized, "_internal_forwarding_key")); fwdKey != "" {
+		jobID = DeriveForwardingJobID(fwdKey)
+		normalized["job_id"] = jobID
+	}
+
 	if jobID == "" {
 		jobID = uuid.NewString()
 		normalized["job_id"] = jobID
@@ -190,10 +207,15 @@ func compileSceneVideoJob(normalized map[string]interface{}, req costmodel.JobRe
 		Requirements: req,
 	}
 
+	executorID := "scene.composite.v1@1"
+	if resolved := resolveInternalExecutorID(normalized); resolved != "" {
+		executorID = resolved
+	}
+
 	spec := &taskgraph.TaskSpec{
 		Version:    taskgraph.SpecVersion,
 		JobID:      jobID,
-		ExecutorID: "scene.composite.v1@1",
+		ExecutorID: executorID,
 		Payload:    normalized,
 	}
 
@@ -234,7 +256,7 @@ func normalizeSceneVideoPayload(payloadMap map[string]interface{}) (map[string]i
 	base.SceneCount = len(scenesValue)
 
 	voiceovers := normalizeVoiceoverList(payloadMap)
-	if len(voiceovers) == 0 {
+	if len(voiceovers) == 0 && !hasClipTimelinePayload(payloadMap) {
 		return nil, &validationError{field: "voiceover_paths", message: "at least one voiceover path is required"}
 	}
 	base.VoiceoverPaths = voiceovers
@@ -276,6 +298,7 @@ func normalizeSceneVideoPayload(payloadMap map[string]interface{}) (map[string]i
 	if err != nil {
 		return nil, err
 	}
+	copyTimelinePayloadFields(out, payloadMap)
 	return out, nil
 }
 
@@ -453,7 +476,11 @@ func (e *Enqueuer) resolveVoiceoverPayload(ctx context.Context, payloadMap map[s
 	if e == nil {
 		return nil
 	}
-	return rewriteVoiceoverPayloadFor(ctx, e.Voiceover, payloadMap)
+	if err := rewriteVoiceoverPayloadFor(ctx, e.Voiceover, payloadMap); err != nil {
+		return err
+	}
+	syncAudioURLFromVoiceover(payloadMap)
+	return nil
 }
 
 func (e *Enqueuer) resolveSceneImagePayload(ctx context.Context, payloadMap map[string]interface{}) error {
@@ -461,6 +488,76 @@ func (e *Enqueuer) resolveSceneImagePayload(ctx context.Context, payloadMap map[
 		return nil
 	}
 	return rewriteSceneImagePayloadFor(ctx, e.Voiceover, payloadMap)
+}
+
+func hasClipTimelinePayload(payloadMap map[string]interface{}) bool {
+	if payloadMap == nil {
+		return false
+	}
+	for _, key := range []string{"clips", "items", "clip_segments", "intro_clip_paths", "stock_clip_paths"} {
+		switch v := payloadMap[key].(type) {
+		case []string:
+			if len(v) > 0 {
+				return true
+			}
+		case []interface{}:
+			if len(v) > 0 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func copyTimelinePayloadFields(out, src map[string]interface{}) {
+	if out == nil || src == nil {
+		return
+	}
+	for _, key := range []string{"images", "clips", "items", "clip_segments", "intro_clip_paths", "stock_clip_paths", "fit", "effect", "orientation"} {
+		if value, ok := src[key]; ok && value != nil {
+			out[key] = value
+		}
+	}
+	if pipelineID := strings.TrimSpace(payload.FirstString(src, "_internal_pipeline_id")); pipelineID != "" {
+		out["pipeline_id"] = pipelineID
+	}
+	if audioURL := strings.TrimSpace(payload.FirstString(src, "audio_url")); audioURL != "" {
+		out["audio_url"] = audioURL
+	}
+	// PR-forwarding-deterministic-id: preserve the forwarding key so
+	// normalizeSceneVideoPayload carries it into the normalized payload
+	// consumed by Enqueue → DeriveForwardingJobID.
+	if fwdKey := strings.TrimSpace(payload.FirstString(src, "_internal_forwarding_key")); fwdKey != "" {
+		out["_internal_forwarding_key"] = fwdKey
+	}
+}
+
+func syncAudioURLFromVoiceover(payloadMap map[string]interface{}) {
+	if payloadMap == nil {
+		return
+	}
+	voiceovers := normalizeVoiceoverList(payloadMap)
+	if len(voiceovers) == 0 {
+		return
+	}
+	if strings.TrimSpace(payload.FirstString(payloadMap, "audio_url")) == "" || hasClipTimelinePayload(payloadMap) || strings.TrimSpace(payload.FirstString(payloadMap, "pipeline_id", "_internal_pipeline_id")) != "" {
+		payloadMap["audio_url"] = voiceovers[0]
+	}
+}
+
+func resolveInternalExecutorID(payloadMap map[string]interface{}) string {
+	if payloadMap == nil {
+		return ""
+	}
+	executorID := strings.TrimSpace(payload.FirstString(payloadMap, "_internal_executor_id"))
+	if executorID == "" {
+		return ""
+	}
+	version := payload.EnsureInt(payloadMap["_internal_executor_version"], 0)
+	if version > 0 && !strings.Contains(executorID, "@") {
+		return fmt.Sprintf("%s@%d", executorID, version)
+	}
+	return executorID
 }
 
 func sceneVideoFingerprint(parts ...interface{}) string {
@@ -488,6 +585,20 @@ func sceneVideoFingerprint(parts ...interface{}) string {
 		h.Write([]byte{0})
 	}
 	return hex.EncodeToString(h.Sum(nil))[:32]
+}
+
+// DeriveForwardingJobID produces a deterministic, UUID-shaped job ID from a
+// forwarding key. The key should be formatted as:
+//
+//	source_provider + ":" + source_job_id + ":" + target_executor_id
+//
+// Two calls with the same key always produce the same job ID, ensuring that
+// concurrent pollers, duplicate webhooks, and post-crash retries converge on
+// a single Velox Job row. The UNIQUE constraint on jobs.job_id is the
+// authoritative dedup; this helper makes the deterministic derivation explicit.
+func DeriveForwardingJobID(forwardingKey string) string {
+	sum := sha256.Sum256([]byte(forwardingKey))
+	return "job_" + hex.EncodeToString(sum[:8])
 }
 
 type validationError struct {
