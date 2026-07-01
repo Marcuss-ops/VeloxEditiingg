@@ -57,6 +57,11 @@ var allowedWriters = map[string]bool{
 	// PR 3.5-a legal writer of jobs.status='SUCCEEDED' (verified
 	// finalization: jobs CAS + job_attempts CAS in single tx).
 	filepath.Join("internal", "artifacts", "sqlite_finalization_repository.go"): true,
+	// Phase 2.5: Coordinator.CommitAttempt is the canonical atomic
+	// SUCCEEDED tx writer for tasks + task_attempts + jobs. Listed
+	// alongside sqlite_finalization_repository.go during the
+	// cutover window; Phase 6.6 retires the legacy writer.
+	filepath.Join("internal", "completion", "coordinator.go"): true,
 	// Interface + commands: contains the regex literal in a doc
 	// comment EXPLAINING the contract. No executable SQL update.
 	filepath.Join("internal", "artifacts", "finalization_repository.go"): true,

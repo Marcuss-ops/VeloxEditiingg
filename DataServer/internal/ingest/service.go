@@ -338,6 +338,7 @@ func (s *TaskReportIngestionService) IngestTaskResult(ctx context.Context, cmd I
 		TaskID:        cmd.TaskID,
 		WorkerID:      cmd.WorkerID,
 		LeaseID:       cmd.LeaseID,
+		AttemptID:     cmd.AttemptID,
 		TaskStatus:    taskStatus,
 		AttemptStatus: attemptStatus,
 		ErrorCode:     cmd.ErrorCode,
@@ -446,10 +447,13 @@ func (s *TaskReportIngestionService) IngestTaskResult(ctx context.Context, cmd I
 	return res, nil
 }
 
-// maybeTransitionJob mirrors the helpers introduced in PR-4 + #5:
-// when all sibling tasks are terminal, flip the Job to AWAITING_ARTIFACT
-// (all-succeeded) or FAILED (any failed). PR-02: SUCCEEDED is reserved
-// for the verified-finalization path so this helper NEVER writes it.
+// maybeTransitionJob mirrors the helpers introduced in PR-4 + #5 with
+// the Phase 2.8 gating: when all sibling tasks are terminal AND each
+// succeeded task has an attempt_commits row with status='COMMITTED',
+// flip the Job to AWAITING_ARTIFACT. If any task failed, the Job
+// moves to FAILED. PR-02 / Phase 2.5: SUCCEEDED on the Job itself is
+// reserved for Coordinator.CommitAttempt and we still do NOT write it
+// here.
 //
 // Returns (transitioned, newStatus, err):
 //
@@ -477,6 +481,7 @@ func (s *TaskReportIngestionService) maybeTransitionJob(ctx context.Context, job
 
 	allTerminal := true
 	anyFailed := false
+	allSucceededAndCommitted := true
 	for _, t := range tasks {
 		if !t.Status.IsTerminal() {
 			allTerminal = false
@@ -484,17 +489,38 @@ func (s *TaskReportIngestionService) maybeTransitionJob(ctx context.Context, job
 		}
 		if t.Status == taskgraph.StatusFailed || t.Status == taskgraph.StatusCancelled {
 			anyFailed = true
+			allSucceededAndCommitted = false
 		}
 	}
 	if !allTerminal {
 		return false, string(job.Status), nil
 	}
 
-	var newStatus jobs.Status
+	// Phase 2.8 guard: a Task is "succeeded-and-committed" only when
+	// status='SUCCEEDED' AND an attempt_commits row exists for it
+	// with status='COMMITTED'. RUNNING+winning_attempt_terminal_pending
+	// = FALSE (the Ingest path left it there temporarily); the commit
+	// protocol must ratify it before the Job promotes. Until that
+	// happens, the Job stays at RUNNING.
 	if allSucceeded && !anyFailed {
-		newStatus = jobs.StatusAwaitingArtifact
+		allSucceededAndCommitted, err = s.allTasksCommitted(ctx, tasks)
+		if err != nil {
+			return false, string(job.Status), fmt.Errorf("check task commits for job %s: %w", jobID, err)
+		}
 	} else {
+		allSucceededAndCommitted = false
+	}
+
+	var newStatus jobs.Status
+	if allSucceededAndCommitted {
+		newStatus = jobs.StatusAwaitingArtifact
+	} else if anyFailed {
 		newStatus = jobs.StatusFailed
+	} else {
+		// allSucceeded AND !anyFailed but the commit-protocol gate
+		// block suceeded-only-by-terminal_pending. Stay RUNNING until
+		// CommitAttempt ratifies.
+		return false, string(job.Status), nil
 	}
 
 	// PR-02 idempotency: skip a spurious re-write. We return
@@ -510,4 +536,32 @@ func (s *TaskReportIngestionService) maybeTransitionJob(ctx context.Context, job
 	}
 	s.logger.Printf("[INGEST] job %s transitioned %s → %s (all sibling tasks terminal)", jobID, job.Status, newStatus)
 	return true, string(newStatus), nil
+}
+
+// allTasksCommitted returns true iff every Task in `tasks` has an
+// attempt_commits row with status='COMMITTED'. Phase 2.8: this is the
+// gating condition for AWAITING_ARTIFACT roll-up — pre-Phase-2 the
+// roll-up fired as soon as TaskStatus='SUCCEEDED', which produced the
+// "Task SUCCEEDED, Job AWAITING_ARTIFACT, no artifact READY"
+// impossible state the closure-gate preserves.
+func (s *TaskReportIngestionService) allTasksCommitted(ctx context.Context, tasks []taskgraph.Task) (bool, error) {
+	if len(tasks) == 0 {
+		return false, nil
+	}
+	taskRepo, ok := s.taskRepo.(interface {
+		IsAllAttemptCommitsCommittedForTasks(ctx context.Context, taskIDs []string) (bool, error)
+	})
+	if !ok {
+		return false, fmt.Errorf("ingest.allTasksCommitted: taskRepo %T does not expose commit-presence check (Phase 2.8 wiring)", s.taskRepo)
+	}
+	ids := make([]string, 0, len(tasks))
+	for _, t := range tasks {
+		if t.Status == taskgraph.StatusSucceeded {
+			ids = append(ids, t.ID)
+		}
+	}
+	if len(ids) == 0 {
+		return false, nil
+	}
+	return taskRepo.IsAllAttemptCommitsCommittedForTasks(ctx, ids)
 }

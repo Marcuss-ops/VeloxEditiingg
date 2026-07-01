@@ -771,20 +771,66 @@ func (r *SQLiteTaskRepository) IngestTaskResultAtomic(ctx context.Context, cmd t
 
 	now := time.Now().UTC().Format(time.RFC3339)
 
-	// 1. Task CAS: any non-terminal → taskStatus (gated on worker + lease).
-	taskRes, err := tx.ExecContext(ctx,
-		`UPDATE tasks
-		 SET status = ?, completed_at = ?, revision = revision + 1, updated_at = ?
-		 WHERE task_id = ? AND status IN ('LEASED', 'RUNNING', 'READY')
-		   AND worker_id = ? AND lease_id = ?`,
-		string(cmd.TaskStatus), now, now,
-		cmd.TaskID, cmd.WorkerID, cmd.LeaseID,
-	)
-	if err != nil {
-		return fmt.Errorf("task ingest atomic task cas: %w", err)
+	// 1. Task CAS:
+	//   - SUCCEEDED: Phase 2.6 — do NOT flip tasks.status to
+	//     SUCCEEDED. Instead stamp winning_attempt_terminal_pending=1
+	//     while leaving status='RUNNING'. Coordinator.CommitAttempt
+	//     ratifies SUCCEEDED in a single atomic tx (Fase 2.5).
+	//     REPLAY-SAFE: if the task is already SUCCEEDED for THIS
+	//     attempt (CommitAttempt may have raced ahead and committed
+	//     before this Ingest landed), we skip the Task CAS so the
+	//     metric/cache/cost/artifacts writes below still commit.
+	//   - FAILED: existing terminal write (no commit-protocol gate;
+	//     the task truly failed and must NOT be reanimated by
+	//     Reconcile).
+	alreadyTerminalForThisAttempt, probeErr := func() (bool, error) {
+		var cs, ca string
+		probeErr := tx.QueryRowContext(ctx,
+			`SELECT status, COALESCE(attempt_id, '') FROM tasks WHERE task_id = ? AND worker_id = ? AND lease_id = ?`,
+			cmd.TaskID, cmd.WorkerID, cmd.LeaseID,
+		).Scan(&cs, &ca)
+		if probeErr == sql.ErrNoRows {
+			return false, fmt.Errorf("task ingest atomic %s: %w", cmd.TaskID, taskgraph.ErrTransitionConflict)
+		}
+		if probeErr != nil {
+			return false, fmt.Errorf("task ingest atomic probe: %w", probeErr)
+		}
+		return cs == "SUCCEEDED" && ca == cmd.AttemptID, nil
+	}()
+	if probeErr != nil {
+		return probeErr
 	}
-	if n, _ := taskRes.RowsAffected(); n != 1 {
-		return fmt.Errorf("task ingest atomic %s: %w", cmd.TaskID, taskgraph.ErrTransitionConflict)
+	if !alreadyTerminalForThisAttempt {
+		var (
+			taskRes sql.Result
+			errCas  error
+		)
+		if cmd.TaskStatus == taskgraph.StatusSucceeded {
+			taskRes, errCas = tx.ExecContext(ctx,
+				`UPDATE tasks
+				 SET winning_attempt_terminal_pending = 1,
+				     completed_at = ?, updated_at = ?
+				 WHERE task_id = ? AND status = 'RUNNING'
+				   AND attempt_id = ? AND worker_id = ? AND lease_id = ?`,
+				now, now,
+				cmd.TaskID, cmd.AttemptID, cmd.WorkerID, cmd.LeaseID,
+			)
+		} else {
+			taskRes, errCas = tx.ExecContext(ctx,
+				`UPDATE tasks
+				 SET status = ?, completed_at = ?, revision = revision + 1, updated_at = ?
+				 WHERE task_id = ? AND status IN ('LEASED', 'RUNNING', 'READY')
+				   AND worker_id = ? AND lease_id = ?`,
+				string(cmd.TaskStatus), now, now,
+				cmd.TaskID, cmd.WorkerID, cmd.LeaseID,
+			)
+		}
+		if errCas != nil {
+			return fmt.Errorf("task ingest atomic task cas: %w", errCas)
+		}
+		if n, _ := taskRes.RowsAffected(); n != 1 {
+			return fmt.Errorf("task ingest atomic %s: %w", cmd.TaskID, taskgraph.ErrTransitionConflict)
+		}
 	}
 
 	// 2. Attempt CAS: non-terminal → attemptStatus (gated on worker + lease).
@@ -1254,6 +1300,42 @@ func (r *SQLiteTaskRepository) ClaimNextReadyTask(ctx context.Context, workerID,
 		}
 	}
 	return tws, nil
+}
+
+// IsAllAttemptCommitsCommittedForTasks is the Phase 2.8 roll-up gate
+// consumed by TaskReportIngestionService.maybeTransitionJob. Returns
+// true iff every taskID has an attempt_commits row with status='COMMITTED'.
+// Tasks with no attempt_commits row (legacy pre-Phase-2 paths or
+// pre-commit-protocol workers) are treated as NOT-committed and block
+// the Job's AWAITING_ARTIFACT promotion.
+//
+// Distinct CAST ensures the COUNT only counts rows that are uniquely
+// matched per task_id; duplicates from re-declaration (UNIQUE
+// task_id+attempt_id is a different layer) are still distinct here.
+//
+// Empty taskIDs returns false (defensive: nothing to commit).
+func (r *SQLiteTaskRepository) IsAllAttemptCommitsCommittedForTasks(ctx context.Context, taskIDs []string) (bool, error) {
+	if r.store == nil || r.store.db == nil {
+		return false, fmt.Errorf("task repository: store not initialized")
+	}
+	if len(taskIDs) == 0 {
+		return false, nil
+	}
+	placeholders := strings.Repeat(",?", len(taskIDs))[1:]
+	args := make([]interface{}, len(taskIDs))
+	for i, id := range taskIDs {
+		args[i] = id
+	}
+	var committed int
+	err := r.store.db.QueryRowContext(ctx,
+		`SELECT COUNT(DISTINCT task_id) FROM attempt_commits
+		  WHERE task_id IN (`+placeholders+`) AND status = 'COMMITTED'`,
+		args...,
+	).Scan(&committed)
+	if err != nil {
+		return false, fmt.Errorf("task repository: IsAllAttemptCommitsCommittedForTasks: %w", err)
+	}
+	return committed == len(taskIDs), nil
 }
 
 // defaultTaskLeaseTTL is the master-side lease TTL written by

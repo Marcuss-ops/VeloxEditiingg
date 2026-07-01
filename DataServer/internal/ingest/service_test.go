@@ -36,6 +36,11 @@ type stubIngestTaskRepo struct {
 
 	nowTask taskgraph.Task
 	nowErr  error
+
+	// Phase 2.8 hook for the commit-presence gate; defaults to true so
+	// pre-Phase-2 tests keep their happy-path roll-up without rewriting
+	// fixtures. Tests that want to deny the roll-up set this to false.
+	allCommitsCommitted bool
 }
 
 func (s *stubIngestTaskRepo) Get(_ context.Context, id string) (*taskgraph.Task, error) {
@@ -123,6 +128,17 @@ func (s *stubIngestTaskRepo) RequeueExpiredLeases(_ context.Context, _ string, _
 }
 func (s *stubIngestTaskRepo) Delete(_ context.Context, _ string) error {
 	panic("stubIngestTaskRepo.Delete")
+}
+
+// IsAllAttemptCommitsCommittedForTasks is the Phase 2.8 roll-up gate.
+// Defaults to true so the existing happy-path test (which exercises
+// pre-Phase-2 paths without seeding attempt_commits) keeps passing.
+// Tests that exercise the commit-bounded AWAITING_ARTIFACT path flip
+// this to false explicitly.
+func (s *stubIngestTaskRepo) IsAllAttemptCommitsCommittedForTasks(_ context.Context, _ []string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.allCommitsCommitted, nil
 }
 
 // mirror of stubRepo.ClaimNextWithAttemptAtomic (PR-2). Not exercised
@@ -504,9 +520,16 @@ func TestIngestionService_ValidateIdentityTuple_WireJobIDMismatch(t *testing.T) 
 // fixture uses in TestIngestionService_HappyPathSucceeded + Idempotent
 // replay so the wire-fallback lookup succeeds. Returns the service for
 // tests that don't need to tweak individual stubs.
+//
+// Phase 2.8: pre-existing test fixtures do NOT seed the attempt_commits
+// table; the rollup gate defaults to "all committed = true" so the
+// happy-path AWAITING_ARTIFACT promotion fires without rewriting fixtures.
+// Tests that need to deny the rollup explicitly set
+// taskRepo.allCommitsCommitted = false.
 func newWiredSvc(t *testing.T, taskRepo *stubIngestTaskRepo, jobsRepo *stubIngestJobsRepo, attemptRepo *stubIngestAttemptRepo, out *stubIngestOutputArtifacts) *TaskReportIngestionService {
 	t.Helper()
 	attemptRepo.seedAttempt("T1", "w-1", "L1")
+	taskRepo.allCommitsCommitted = true
 	svc, err := NewTaskReportIngestionService(taskRepo, jobsRepo, attemptRepo, out)
 	if err != nil {
 		t.Fatalf("NewTaskReportIngestionService: %v", err)

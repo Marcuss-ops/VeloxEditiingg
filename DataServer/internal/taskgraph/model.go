@@ -61,10 +61,15 @@ type TaskWithSpec struct {
 // IngestResultCommand bundles all data required for IngestTaskResultAtomic.
 // The repository implementation wraps Task+Attempt close, metrics/cache/cost
 // persistence, and artifact registration in a single database transaction.
+//
+// Phase 2.6: AttemptID carries the canonical attempt identity (UUID
+// minted at ClaimNextWithAttemptAtomic) so the Task CAS can read the
+// tasks.attempt_id column and reject replays whose attempt_id drifts.
 type IngestResultCommand struct {
 	TaskID        string
 	WorkerID      string
 	LeaseID       string
+	AttemptID     string
 	TaskStatus    Status
 	AttemptStatus taskattempts.AttemptStatus
 	ErrorCode     string

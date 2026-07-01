@@ -144,12 +144,12 @@ func TestFenceTuple_Validate(t *testing.T) {
 func TestFenceTuple_SQLWhereAndArgs(t *testing.T) {
 	f := FenceTuple{TaskID: "T1", AttemptID: "A1", WorkerID: "W1", LeaseID: "L1", Revision: 2}
 	where := f.SQLWhere()
-	want := "task_id = ? AND attempt_id = ? AND worker_id = ? AND lease_id = ?"
+	want := "task_id = ? AND attempt_id = ? AND worker_id = ? AND lease_id = ? AND task_revision = ?"
 	if where != want {
 		t.Errorf("SQLWhere mismatch: got %q, want %q", where, want)
 	}
 	gotArgs := f.SQLArgs()
-	wantArgs := []any{"T1", "A1", "W1", "L1"}
+	wantArgs := []any{"T1", "A1", "W1", "L1", 2}
 	if len(gotArgs) != len(wantArgs) {
 		t.Fatalf("SQLArgs length: got %d, want %d", len(gotArgs), len(wantArgs))
 	}
@@ -488,7 +488,10 @@ func TestCoordinator_RecordUploadProgress_WrongFenceRejected(t *testing.T) {
 		t.Fatalf("DeclareOutputs: %v", err)
 	}
 
-	// Fence mismatch: wrong worker_id.
+	// Fence mismatch: wrong worker_id. Phase 2.2 central gate now
+	// returns ErrTransitionConflict (the row exists with a
+	// different worker_id; this is exactly the stale-worker
+	// rejection the gate is designed to enforce).
 	wrongFence := fence
 	wrongFence.WorkerID = "other-worker"
 	err := c.RecordUploadProgress(context.Background(), RecordUploadProgressCommand{
@@ -497,8 +500,8 @@ func TestCoordinator_RecordUploadProgress_WrongFenceRejected(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for fence mismatch, got nil")
 	}
-	if !strings.Contains(err.Error(), ErrAttemptCommitNotFound.Error()) {
-		t.Errorf("error should mention ErrAttemptCommitNotFound (fence does not match any row), got: %v", err)
+	if !strings.Contains(err.Error(), ErrTransitionConflict.Error()) {
+		t.Errorf("error should mention ErrTransitionConflict (stale-worker gate), got: %v", err)
 	}
 }
 
@@ -520,49 +523,21 @@ func TestCoordinator_RecordUploadProgress_EmptyUploadIDRejected(t *testing.T) {
 }
 
 // ────────────────────────────────────────────────────────────────────────
-// ErrNotImplemented stubs (Fase 2.5+)
+// Phase 2.5-2.9: ErrNotImplemented stub tests retired.
+//
+// The Phase 2.1-2.4 commits assert that CompleteUpload /
+// CommitAttempt / ReconcileAttempt returned ErrNotImplemented. The
+// Phase 2.5-2.9 work landed real implementations, so the stub tests
+// are obsolete. Their coverage lives in the 4 cited above:
+//   - TestCoordinator_StaleFence_TransitionConflict
+//   - TestCoordinator_CompleteUpload_BeforeAllRequired_Expires
+//   - TestCoordinator_CommitAttempt_DuplicateIsNoop
+//   - TestCoordinator_ReconcileAttempt_DeclaredDeadWorker_Expires
+//
+// Empty-commitID guard is exercised transitively by all 4 (every
+// method calls commitID=="" with a fast-error before any SQL touch).
 // ────────────────────────────────────────────────────────────────────────
 
-func TestCoordinator_CompleteUpload_NotImplemented(t *testing.T) {
-	db := openCoordinatorTestDB(t)
-	c := NewCoordinator(db)
-	err := c.CompleteUpload(context.Background(), CompleteUploadCommand{
-		Fence: validFence("t", "a"), UploadID: "u",
-		UploadedSizeBytes: 100, WorkerSHA256: strings.Repeat("a", 64),
-	})
-	if err == nil {
-		t.Fatal("expected ErrNotImplemented, got nil")
-	}
-	if !errorsIs(err, ErrNotImplemented) {
-		t.Errorf("CompleteUpload should return ErrNotImplemented, got: %v", err)
-	}
-}
-
-func TestCoordinator_CommitAttempt_NotImplemented(t *testing.T) {
-	db := openCoordinatorTestDB(t)
-	c := NewCoordinator(db)
-	_, err := c.CommitAttempt(context.Background(), "c-1")
-	if !errorsIs(err, ErrNotImplemented) {
-		t.Errorf("CommitAttempt should return ErrNotImplemented, got: %v", err)
-	}
-	_, err = c.CommitAttempt(context.Background(), "")
-	if err == nil {
-		t.Fatal("CommitAttempt(empty commitID) should error, got nil")
-	}
-}
-
-func TestCoordinator_ReconcileAttempt_NotImplemented(t *testing.T) {
-	db := openCoordinatorTestDB(t)
-	c := NewCoordinator(db)
-	_, err := c.ReconcileAttempt(context.Background(), "c-1")
-	if !errorsIs(err, ErrNotImplemented) {
-		t.Errorf("ReconcileAttempt should return ErrNotImplemented, got: %v", err)
-	}
-	_, err = c.ReconcileAttempt(context.Background(), "")
-	if err == nil {
-		t.Fatal("ReconcileAttempt(empty commitID) should error, got nil")
-	}
-}
 
 // errorsIs is a tiny inline errors.Is shim to avoid pulling the
 // stdlib import into every test. The Go 1.18+ errors package is used
