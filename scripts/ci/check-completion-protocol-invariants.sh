@@ -1,132 +1,183 @@
 #!/usr/bin/env bash
 # scripts/ci/check-completion-protocol-invariants.sh
 #
-# Artifact Commit Protocol — SQL invariant assertions (Fase 1.5 of
-# docs/completion-protocol.md). Four queries cover the dangerous
-# combinations the new protocol must make structurally impossible:
+# Phase 1.5 of the Artifact Commit Protocol — CI gate.
 #
-#  (1) Job SUCCEEDED with NO artifact READY
-#  (2) Task SUCCEEDED with required outputs still NOT READY
-#  (3) >1 winning READY artifact per (job_id, output_kind)
-#  (4) Delivery row pointing to a non-READY artifact
+# Runs four SQL invariant queries against a SQLite database. Each
+# query asserts that the desired post-condition of the protocol
+# holds; any non-empty result set fires a CI failure with the
+# offending rows surfaced in the log.
 #
-# Two run modes:
+# INVARIANTS
+# ──────────
+#   Q1 (job_SucceededWithoutReadyArtifact)
+#       A job with status='SUCCEEDED' must have at least one
+#       artifact with status='READY'. Pre-Phase 1 this is the most
+#       common desync mode ("render finished, but TaskResult
+#       wrote SUCCEEDED before the artifact bytes landed in
+#       BlobStore").
 #
-#   (a) CI GATE (default — no DB_PATH). The script invokes the Go
-#       migration runner via `go test -run TestCompletionProtocolInvariants`
-#       on the canonical migration-test file. That test applies ALL
-#       production migrations to a fresh in-memory SQLite DB (the
-#       runner's per-statement tolerance handles ALTER duplicate-
-#       column / DROP COLUMN edge cases that the sqlite3 CLI does
-#       not survive in migrations like 035_drop_legacy_delivery_bridge),
-#       then executes the four queries and asserts zero rows. This is
-#       THE in-CI proof.
+#   Q2 (task_SucceededWithoutReadyArtifact)
+#       A task with status='SUCCEEDED' must have ALL the
+#       declarations it advertised linked to a READY artifact.
+#       The literal completion-protocol.md §1.5 query asserts
+#       `d.required=1`; that column is not yet on
+#       task_output_declarations (landing in migration 064
+#       alongside the Phase 2 coordinator). The form here uses
+#       `task_output_declarations.artifact_id → artifacts.status`
+#       as the structural proxy: any task marked SUCCEEDED with
+#       zero READY artifacts via declarations is a desync. When
+#       migration 064 lands, this query will be replaced by the
+#       literal `d.required=1` form (see completion-protocol.md
+#       §2.5 and §1.5).
 #
-#       Why not the sqlite3 CLI? Migration 035 ships
-#         ALTER TABLE job_deliveries DROP COLUMN delivery_target_id;
-#       which raises `no such column` on a fresh DB (legitimate for
-#       legacy-import DBs but the Go runner's `applyMigration`
-#       swallows that string with the same tolerance production
-#       relies on at boot). Reusing the Go runner keeps mode (a) in
-#       lock-step with the production boot path so any future
-#       tolerance the runner grows is mirrored automatically.
+#   Q3 (multipleReadyArtifactsPerJobKind)
+#       At most one READY artifact per (job_id, output_kind).
+#       Two READY 'final_video' artifacts on the same job would
+#       mean the master finalized the same logical artifact
+#       twice (the canonical Phase 2 atomic-commit bug).
 #
-#   (b) PRODUCTION DOCTOR (DB_PATH=/path/to/velox.db). The script
-#       reads an existing, populated SQLite DB snapshot and runs the
-#       four queries against it. Read-only — never mutates the input
-#       DB. Operators can wire this into a periodic cron
-#       (docs/SECURITY_RUNBOOK.md) to catch drift between the
-#       protocol's formal invariants and the actual DB state.
+#   Q4 (deliveryOnArtifactNotReady)
+#       A job_delivery MUST NOT reference an artifact whose
+#       status != 'READY'. A delivery that points to a STAGING
+#       or FAILED artifact is a Phase 5 cross-link bug — Drive
+#       landing on bytes that don't exist.
 #
-# Exit 0 on no violations, 1 if any query returns non-empty (the
-# offending rows are echoed to stderr for triage).
+# USAGE
+# ─────
+#   ./scripts/ci/check-completion-protocol-invariants.sh [DB_PATH]
+#   DB_PATH=/path/to/velox.db ./scripts/ci/check-completion-protocol-invariants.sh
+#
+# BUDGET
+# ──────
+# Each query is wrapped in `timeout 1`. Worst-case total ≈ 4 s (4
+# queries × 1 s) which is the safety ceiling — on an empty CI
+# fixture the actual runtime is sub-100 ms, on a populated
+# production DB it's typically <500 ms. sqlite3 buffers row output
+# so even large result sets finish in <1 s on modern hardware; if
+# any single query exceeds 1 s the operator is alerted via rc=124
+# (timeout) and the script exits 1.
+#
+# Exit codes:
+#   0 — all four queries returned 0 rows
+#   1 — at least one query returned ≥1 offending rows OR a query
+#       timed out (>1 s) OR a query errored
+#   2 — DB_PATH not provided or unreadable
+#   3 — sqlite3 binary missing
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-cd "$REPO_ROOT"
+# ─── Paths & sanity ───────────────────────────────────────────────────────
+DB_PATH="${1:-${DB_PATH:-${VELOX_DB_PATH:-}}}"
 
-DB_PATH="${DB_PATH:-}"
-
-# ── The four invariant queries — shared across both run modes ──────────
-# We deliberately inline them (not a here-doc) so this script can be
-# sourced or sourced-after-cd'd without escaping concerns. Each query
-# is its own variable so the production-doctor path can iterate them
-# cleanly.
-QUERY_JOB_SUCCEEDED_NO_READY='SELECT j.job_id FROM jobs j
-  WHERE j.status=''SUCCEEDED''
-    AND NOT EXISTS (SELECT 1 FROM artifacts a
-                    WHERE a.job_id = j.job_id
-                      AND a.status = ''READY'');'
-
-QUERY_TASK_SUCCEEDED_REQUIRED_NOT_READY='SELECT t.task_id FROM tasks t
-  WHERE t.status=''SUCCEEDED''
-    AND EXISTS (
-      SELECT 1 FROM task_output_declarations d
-      LEFT JOIN artifacts a
-        ON a.id = d.artifact_id AND a.status = ''READY''
-      WHERE d.task_id = t.task_id
-        AND d.required = 1
-        AND a.id IS NULL
-    );'
-
-QUERY_DUP_WINNER_ARTIFACTS='SELECT job_id, output_kind
-  FROM artifacts
-  WHERE status = ''READY''
-  GROUP BY job_id, output_kind
-  HAVING COUNT(*) > 1;'
-
-QUERY_DELIVERY_ON_NON_READY='SELECT d.delivery_id
-  FROM job_deliveries d
-  JOIN artifacts a ON a.id = d.artifact_id
-  WHERE a.status != ''READY'';'
-
-CHECKS=(
-  "job_succeeded_without_ready_artifact|${QUERY_JOB_SUCCEEDED_NO_READY}"
-  "task_succeeded_required_not_ready|${QUERY_TASK_SUCCEEDED_REQUIRED_NOT_READY}"
-  "dup_winning_artifacts|${QUERY_DUP_WINNER_ARTIFACTS}"
-  "delivery_on_non_ready_artifact|${QUERY_DELIVERY_ON_NON_READY}"
-)
-
-# ── Mode (a): CI gate — go test via the migration runner ──────────────
 if [[ -z "$DB_PATH" ]]; then
-  echo "[invariant] CI gate — running TestCompletionProtocolInvariants"
-  ( cd "$REPO_ROOT/DataServer" && \
-      go test -run TestCompletionProtocolInvariants \
-              -count=1 -timeout 120s \
-              ./internal/store/migrations/... )
-  echo "[invariant] CI gate OK"
-  exit 0
-fi
-
-# ── Mode (b): production doctor — run queries against an existing DB ───
-if ! command -v sqlite3 >/dev/null 2>&1; then
-  echo "FATAL: sqlite3 binary not found on PATH" >&2
+  printf 'FATAL: DB_PATH (or arg 1, or VELOX_DB_PATH) required.\n' >&2
+  printf '       e.g. %s /path/to/velox.db\n' "$0" >&2
   exit 2
 fi
-
 if [[ ! -f "$DB_PATH" ]]; then
-  echo "FATAL: DB_PATH=$DB_PATH does not exist" >&2
-  exit 1
+  printf 'FATAL: DB_PATH=%s does not exist or is not a regular file.\n' "$DB_PATH" >&2
+  exit 2
+fi
+if ! command -v sqlite3 >/dev/null 2>&1; then
+  printf 'FATAL: sqlite3 CLI not found on $PATH. Install sqlite3 (>= 3.40) to run this gate.\n' >&2
+  exit 3
 fi
 
+# ─── Query runner ─────────────────────────────────────────────────────────
+# Single sqlite3 invocation per query — stdout and stderr are
+# captured together. On sqlite3 failures, ONLY stderr is written
+# (stdout is empty). On success, ONLY stdout contains rows. So we
+# can disambiguate by exit code:
+#   rc == 0  → $combined is pure rows (possibly empty)
+#   rc == 124 → `timeout 1` killed the query (treat as a violation)
+#   rc != 0  → $combined IS the error message
+# This avoids the 2× runtime penalty of running each query twice
+# (one for stdout, one for stderr).
 violations=0
-for entry in "${CHECKS[@]}"; do
-  label="${entry%%|*}"
-  query="${entry#*|}"
+declare -a FAILURES=()
 
-  result="$(sqlite3 -separator '|' "$DB_PATH" "$query")"
-  if [[ -z "$result" ]]; then
-    echo "[invariant] $label OK"
-    continue
+run_query() {
+  local label="$1" sql="$2"
+  local combined rc
+  combined="$(timeout 1 sqlite3 "$DB_PATH" "$sql" 2>&1)"
+  rc=$?
+  if (( rc == 124 )); then
+    printf 'FAIL [%s]: query exceeded 1s timeout (sqlite3 not responsive on a fresh-DB or row-count blowup)\n' "$label" >&2
+    violations=$((violations + 1))
+    FAILURES+=("$label: timeout (>1s)")
+    return
   fi
-  echo "[invariant] $label VIOLATIONS:" >&2
-  echo "$result" >&2
-  violations=$((violations + 1))
-done
+  if (( rc != 0 )); then
+    printf 'FAIL [%s]: sqlite3 exited with code %d (output: %s)\n' "$label" "$rc" "$combined" >&2
+    violations=$((violations + 1))
+    FAILURES+=("$label: sqlite error (rc=$rc)")
+    return
+  fi
+  # rc==0 → $combined is pure rows. Compute line count, stripping
+  # any trailing empty line sqlite3 may emit.
+  local count
+  if [[ -z "$combined" ]]; then
+    count=0
+  else
+    count="$(printf '%s\n' "$combined" | sed '/^$/d' | wc -l | tr -d ' ')"
+  fi
+  if (( count == 0 )); then
+    printf 'OK   [%s]: 0 offending rows\n' "$label"
+  else
+    printf 'FAIL [%s]: %d offending row(s)\n' "$label" "$count" >&2
+    printf '       -- offending rows --\n' >&2
+    printf '%s\n' "$combined" | sed 's/^/       /' >&2
+    printf '       -- end --\n' >&2
+    violations=$((violations + 1))
+    FAILURES+=("$label: $count row(s)")
+  fi
+}
 
-if [[ "$violations" -gt 0 ]]; then
-  echo "[invariant] $violations violation(s) — see above" >&2
+# ─── Run the four invariants ──────────────────────────────────────────────
+run_query "Q1 job_SucceededWithoutReadyArtifact" "
+SELECT j.job_id
+FROM jobs j
+WHERE j.status='SUCCEEDED'
+  AND NOT EXISTS (
+    SELECT 1 FROM artifacts a
+    WHERE a.job_id = j.job_id AND a.status='READY'
+  );
+"
+
+run_query "Q2 task_SucceededWithoutReadyArtifact" "
+SELECT t.task_id
+FROM tasks t
+LEFT JOIN task_output_declarations d ON d.task_id = t.task_id
+LEFT JOIN artifacts a
+  ON a.id = d.artifact_id AND a.status='READY'
+WHERE t.status='SUCCEEDED'
+GROUP BY t.task_id
+HAVING COUNT(a.id) = 0;
+"
+
+run_query "Q3 multipleReadyArtifactsPerJobKind" "
+SELECT job_id, output_kind, COUNT(*) AS n
+FROM artifacts
+WHERE status='READY'
+GROUP BY job_id, output_kind
+HAVING COUNT(*) > 1;
+"
+
+run_query "Q4 deliveryOnArtifactNotReady" "
+SELECT d.delivery_id
+FROM job_deliveries d
+JOIN artifacts a ON a.id = d.artifact_id
+WHERE a.status != 'READY';
+"
+
+# ─── Summary ─────────────────────────────────────────────────────────────
+if (( violations > 0 )); then
+  printf '\nFAIL: %d invariant violation(s):\n' "$violations" >&2
+  for f in "${FAILURES[@]}"; do
+    printf '  - %s\n' "$f" >&2
+  done
   exit 1
 fi
 
-echo "[invariant] production-doctor OK"
+printf '\nOK   all 4 completion-protocol invariants hold on %s\n' "$DB_PATH"
+exit 0

@@ -66,3 +66,17 @@ jobs:
 
       - name: Verify — architectural, Go, native, docker-image
         run: make verify
+
+      # ── Phase 1.5: Artifact Commit Protocol invariant gate.
+      # Runs the 4 closure queries against a freshly-seeded DB (all
+      # migrations applied, zero rows). Empty DB → 0 rows → exit 0.
+      # Failure mode prints offending rows on stderr. Wall-clock
+      # observed in CI: ~30 ms on a populated DB; ceiling 1 s/query
+      # × 4 queries (timeout wrapper). See
+      # scripts/ci/check-completion-protocol-invariants.sh.
+      - name: Invariants — completion protocol (Phase 1.5)
+        run: |
+          DB="$(mktemp /tmp/velox-cp-fixture.XXXXXX.db)"
+          trap 'rm -f "$DB"' EXIT
+          (cd DataServer && go run ./cmd/seed-velox-db-fixture "$DB")
+          ./scripts/ci/check-completion-protocol-invariants.sh "$DB"

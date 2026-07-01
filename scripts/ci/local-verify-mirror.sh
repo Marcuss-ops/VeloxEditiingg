@@ -131,6 +131,21 @@ run_step "git pull --ff-only origin main" bash -c '
 # ─── 2. Required check: CI / make verify ─────────────────────────────────
 run_step "make verify" make verify
 
+# ─── 2b. Phase 1.5: completion-protocol invariant gate (mirrors ci.yml) ──
+# Read-only probe: seeds a temp DB through the canonical migration
+# runner (DataServer/cmd/seed-velox-db-fixture) and runs the 4
+# invariant queries. Always sub-100 ms on an empty fixture; ceiling
+# ≤4 s. Always runs even with SKIP_E2E=1 — it's a different concern
+# from the workload gates (it exercises schema + invariants, not
+# the rendering pipeline).
+run_step "completion-protocol invariants (Phase 1.5)" bash -c '
+  set -euo pipefail
+  DB="$(mktemp /tmp/velox-cp-fixture.XXXXXX.db)"
+  trap 'rm -f "$DB"' EXIT
+  (cd DataServer && go run ./cmd/seed-velox-db-fixture "$DB")
+  ./scripts/ci/check-completion-protocol-invariants.sh "$DB"
+'
+
 # ─── 3-5. Required checks: E2E gRPC + 2 workload variants ─────────────────
 if [[ "${SKIP_E2E:-0}" != "1" ]]; then
   # Capture mode: workload scripts REQUIRE the var. Pin a known
