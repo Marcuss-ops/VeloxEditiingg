@@ -229,6 +229,8 @@ func (h *Handler) sendPushTaskOffer(ctx context.Context, workerID string) {
 
 	// Store the offer under claimMu so we can match TaskAccepted/TaskRejected.
 	sess.pendingTaskOffer = tws
+	log.Printf("[GRPC] TaskOffer queued for worker %s: task=%s job=%s attempt=%s lease=%s executor=%s@%d rev=%d",
+		workerID, tws.ID, tws.JobID, attempt.ID, leaseID, tws.ExecutorID, tws.ExecutorVersion, tws.Revision)
 }
 
 // extractSupportedJobTypes parses a supported_job_types value from a

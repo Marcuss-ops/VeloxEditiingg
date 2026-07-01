@@ -697,6 +697,22 @@ func (h *Handler) sessionWriter(sess *workerSession) {
 			}
 			break
 		}
+		switch msg := out.Envelope.Msg.(type) {
+		case *pb.MasterToWorkerEnvelope_TaskOffer:
+			if msg.TaskOffer != nil {
+				log.Printf("[GRPC] TaskOffer sent to worker %s (session %s): task=%s job=%s attempt=%s lease=%s",
+					sess.workerID, sess.sessionID,
+					msg.TaskOffer.GetTaskId(), msg.TaskOffer.GetJobId(),
+					msg.TaskOffer.GetAttemptId(), msg.TaskOffer.GetLeaseId())
+			}
+		case *pb.MasterToWorkerEnvelope_TaskLeaseGranted:
+			if msg.TaskLeaseGranted != nil {
+				log.Printf("[GRPC] TaskLeaseGranted sent to worker %s (session %s): task=%s job=%s attempt=%s lease=%s",
+					sess.workerID, sess.sessionID,
+					msg.TaskLeaseGranted.GetTaskId(), msg.TaskLeaseGranted.GetJobId(),
+					msg.TaskLeaseGranted.GetAttemptId(), msg.TaskLeaseGranted.GetLeaseId())
+			}
+		}
 		// Call OnSent callback after successful send (gap #1 fix).
 		if out.OnSent != nil {
 			out.OnSent()

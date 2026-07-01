@@ -60,6 +60,8 @@ func (h *Handler) handleTaskAccepted(workerID string, ta *pb.TaskAccepted) {
 		log.Printf("[GRPC] Worker %s accepted task %s but no matching pending offer", workerID, taskID)
 		return
 	}
+	log.Printf("[GRPC] TaskAccepted received from worker %s: task=%s job=%s attempt=%s lease=%s offer_attempt=%s offer_lease=%s rev=%d",
+		workerID, taskID, jobID, attemptID, leaseID, offer.AttemptID, offerLeaseID, revision)
 
 	// Verify the lease_id and attempt_id the worker is accepting match
 	// what we offered. The offer carries the canonical (attempt_id, lease_id)

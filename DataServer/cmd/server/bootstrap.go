@@ -187,6 +187,18 @@ func runServer(cfg *config.Config) error {
 	if err != nil {
 		return err
 	}
+	log.Printf(
+		"[ROUTES] script dependency state: enqueuer=%t store=%t remote_engine=%t",
+		m != nil && m.Enqueuer != nil,
+		p != nil && p.SQLite != nil,
+		cfg != nil && strings.TrimSpace(cfg.Render.RemoteEngineURL) != "",
+	)
+	if m == nil || m.Enqueuer == nil {
+		return fmt.Errorf("server composition: script API requires a non-nil enqueuer")
+	}
+	if p == nil || p.SQLite == nil {
+		return fmt.Errorf("server composition: script API requires a non-nil sqlite store")
+	}
 
 	// 2. Build the per-route RouterBundle directly from the build*
 	//    return values — no mega-struct in between.
@@ -212,6 +224,7 @@ func runServer(cfg *config.Config) error {
 	bundle.Metrics = MetricsRouteDeps{Registry: metricsRegistry}
 	metricsCollector := velmetrics.NewCollector(metricsRegistry)
 	r := newRouter(cfg, bundle, m.Registry)
+	logRegisteredRoutesAtBoot(r)
 
 	// 4. HTTP server.
 	addr := fmt.Sprintf(":%d", cfg.Server.Port)

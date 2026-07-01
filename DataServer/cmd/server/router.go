@@ -1,6 +1,8 @@
 package main
 
 import (
+	"log"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -163,6 +165,7 @@ func newRouter(cfg *config.Config, bundle RouterBundle, registry interface {
 // it returns silently when its bundle is empty.
 func registerScriptRoutes(r *gin.Engine, deps ScriptRouteDeps) {
 	if deps.Enqueuer == nil {
+		log.Printf("[ROUTES] script routes skipped: enqueuer=false store=%t", deps.SQLiteStore != nil)
 		return
 	}
 
@@ -171,6 +174,15 @@ func registerScriptRoutes(r *gin.Engine, deps ScriptRouteDeps) {
 	// PR15.7a: thread *enqueue.Enqueuer through RegisterRoutes so the
 	// script endpoint can submit jobs without package-level state.
 	scripthandlers.RegisterRoutes(v1Group, deps.Cfg, deps.SQLiteStore, deps.Enqueuer)
+}
+
+func logRegisteredRoutesAtBoot(r *gin.Engine) {
+	if r == nil || !strings.EqualFold(strings.TrimSpace(os.Getenv("VELOX_LOG_ROUTES_AT_BOOT")), "true") {
+		return
+	}
+	for _, route := range r.Routes() {
+		log.Printf("[ROUTE] %s %s", route.Method, route.Path)
+	}
 }
 
 // registerGroupsRoutes mounts the /api/v1/groups routes under the
