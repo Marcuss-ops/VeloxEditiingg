@@ -38,7 +38,7 @@ func (y *YouTubeProvider) Name() string { return "youtube" }
 //
 // Uses blobStore to read the artifact's bytes. Falls back to artifact.LocalPath
 // if the blob store is not configured (legacy path).
-func (y *YouTubeProvider) Deliver(ctx context.Context, artifact *store.Artifact, destination *deliveries.Destination) (*deliveries.Result, error) {
+func (y *YouTubeProvider) Deliver(ctx context.Context, artifact *store.Artifact, destination *deliveries.Destination, deliveryID, idempotencyKey string) (*deliveries.Result, error) {
 	if y == nil || y.service == nil {
 		return nil, deliveries.ErrProviderNotConfigured
 	}
@@ -72,9 +72,10 @@ func (y *YouTubeProvider) Deliver(ctx context.Context, artifact *store.Artifact,
 	}
 
 	cfg := integrationsYouTube.UploadConfig{
-		Title:         artifact.ID,
-		Description:   "",
-		PrivacyStatus: "private",
+		Title:           artifact.ID,
+		Description:     "",
+		PrivacyStatus:   "private",
+		IdempotencyToken: deliveryID,
 	}
 
 	uploadRes, err := y.service.UploadVideo(ctx, destination.ChannelID, filePath, cfg)

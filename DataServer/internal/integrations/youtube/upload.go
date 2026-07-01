@@ -71,6 +71,12 @@ func (u *Uploader) UploadVideo(ctx context.Context, channelID string, videoPath 
 		},
 	}
 
+	// Stamp the idempotency token as a tag so retries of the same delivery
+	// are traceable to the canonical delivery_id.
+	if config.IdempotencyToken != "" {
+		video.Snippet.Tags = append(video.Snippet.Tags, "velox-delivery:"+config.IdempotencyToken)
+	}
+
 	// Set default category if not specified
 	if video.Snippet.CategoryId == "" {
 		video.Snippet.CategoryId = "22" // People & Blogs

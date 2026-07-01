@@ -20,7 +20,7 @@ func TestLocalExportProvider_Name(t *testing.T) {
 
 func TestLocalExportProvider_NilReceiver(t *testing.T) {
 	var p *LocalExportProvider
-	_, err := p.Deliver(context.Background(), &store.Artifact{}, &deliveries.Destination{})
+	_, err := p.Deliver(context.Background(), &store.Artifact{}, &deliveries.Destination{}, "", "")
 	if !errors.Is(err, deliveries.ErrProviderNotConfigured) {
 		t.Fatalf("want ErrProviderNotConfigured, got %v", err)
 	}
@@ -28,7 +28,7 @@ func TestLocalExportProvider_NilReceiver(t *testing.T) {
 
 func TestLocalExportProvider_EmptyRoot(t *testing.T) {
 	p := NewLocalExportProvider("")
-	_, err := p.Deliver(context.Background(), &store.Artifact{}, &deliveries.Destination{})
+	_, err := p.Deliver(context.Background(), &store.Artifact{}, &deliveries.Destination{}, "", "")
 	if !errors.Is(err, deliveries.ErrProviderNotConfigured) {
 		t.Fatalf("want ErrProviderNotConfigured, got %v", err)
 	}
@@ -36,7 +36,7 @@ func TestLocalExportProvider_EmptyRoot(t *testing.T) {
 
 func TestLocalExportProvider_NilArtifact(t *testing.T) {
 	p := NewLocalExportProvider(t.TempDir())
-	_, err := p.Deliver(context.Background(), nil, &deliveries.Destination{})
+	_, err := p.Deliver(context.Background(), nil, &deliveries.Destination{}, "", "")
 	if !errors.Is(err, deliveries.ErrProviderPermanent) {
 		t.Fatalf("want ErrProviderPermanent, got %v", err)
 	}
@@ -44,7 +44,7 @@ func TestLocalExportProvider_NilArtifact(t *testing.T) {
 
 func TestLocalExportProvider_EmptyLocalPath(t *testing.T) {
 	p := NewLocalExportProvider(t.TempDir())
-	_, err := p.Deliver(context.Background(), &store.Artifact{LocalPath: ""}, &deliveries.Destination{})
+	_, err := p.Deliver(context.Background(), &store.Artifact{LocalPath: ""}, &deliveries.Destination{}, "", "")
 	if !errors.Is(err, deliveries.ErrProviderPermanent) {
 		t.Fatalf("want ErrProviderPermanent, got %v", err)
 	}
@@ -52,7 +52,7 @@ func TestLocalExportProvider_EmptyLocalPath(t *testing.T) {
 
 func TestLocalExportProvider_FileNotFound(t *testing.T) {
 	p := NewLocalExportProvider(t.TempDir())
-	_, err := p.Deliver(context.Background(), &store.Artifact{LocalPath: "/nonexistent/file.mp4"}, &deliveries.Destination{})
+	_, err := p.Deliver(context.Background(), &store.Artifact{LocalPath: "/nonexistent/file.mp4"}, &deliveries.Destination{}, "", "")
 	if err == nil {
 		t.Fatal("want error for nonexistent file")
 	}
@@ -74,7 +74,7 @@ func TestLocalExportProvider_Success(t *testing.T) {
 		LocalPath: srcFile,
 	}
 
-	result, err := p.Deliver(context.Background(), artifact, &deliveries.Destination{})
+	result, err := p.Deliver(context.Background(), artifact, &deliveries.Destination{}, "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -104,7 +104,7 @@ func TestS3Provider_Name(t *testing.T) {
 
 func TestS3Provider_AlwaysNotConfigured(t *testing.T) {
 	p := NewS3Provider()
-	_, err := p.Deliver(context.Background(), &store.Artifact{}, &deliveries.Destination{})
+	_, err := p.Deliver(context.Background(), &store.Artifact{}, &deliveries.Destination{}, "", "")
 	if !errors.Is(err, deliveries.ErrProviderNotConfigured) {
 		t.Fatalf("want ErrProviderNotConfigured, got %v", err)
 	}

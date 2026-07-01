@@ -250,14 +250,15 @@ type ServiceConfig struct {
 
 // UploadConfig represents the configuration for a YouTube upload
 type UploadConfig struct {
-	Title         string   `json:"title"`
-	Description   string   `json:"description"`
-	Tags          []string `json:"tags"`
-	CategoryID    string   `json:"category_id"`
-	PrivacyStatus string   `json:"privacy_status"` // private, unlisted, public
-	ThumbnailPath string   `json:"thumbnail_path"`
-	ChannelID     string   `json:"channel_id"`
-	ChannelName   string   `json:"channel_name"`
+	Title            string   `json:"title"`
+	Description      string   `json:"description"`
+	Tags             []string `json:"tags"`
+	CategoryID       string   `json:"category_id"`
+	PrivacyStatus    string   `json:"privacy_status"` // private, unlisted, public
+	ThumbnailPath    string   `json:"thumbnail_path"`
+	ChannelID        string   `json:"channel_id"`
+	ChannelName      string   `json:"channel_name"`
+	IdempotencyToken string   `json:"idempotency_token,omitempty"`
 }
 
 // UploadResult represents the result of a YouTube upload

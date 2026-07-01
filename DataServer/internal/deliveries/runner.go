@@ -227,7 +227,7 @@ func (r *DeliveryRunner) processLease(ctx context.Context, lease store.DeliveryL
 			cancelDeliver()
 		})
 
-	res, runErr := provider.Deliver(deliverCtx, artifact, dest)
+	res, runErr := provider.Deliver(deliverCtx, artifact, dest, lease.DeliveryID, lease.DeliveryID)
 
 	// Stop the heartbeat goroutine and wait for it to exit.
 	cancelDeliver()

@@ -38,7 +38,7 @@ func (d *DriveProvider) Name() string { return "drive" }
 //
 // Uses blobStore to read the artifact's bytes. Falls back to artifact.LocalPath
 // if the blob store is not configured (legacy path).
-func (d *DriveProvider) Deliver(ctx context.Context, artifact *store.Artifact, destination *deliveries.Destination) (*deliveries.Result, error) {
+func (d *DriveProvider) Deliver(ctx context.Context, artifact *store.Artifact, destination *deliveries.Destination, deliveryID, idempotencyKey string) (*deliveries.Result, error) {
 	if d == nil || d.service == nil {
 		return nil, deliveries.ErrProviderNotConfigured
 	}
@@ -71,7 +71,7 @@ func (d *DriveProvider) Deliver(ctx context.Context, artifact *store.Artifact, d
 		}
 	}
 
-	uploadRes, err := d.service.UploadVideo(ctx, filePath, artifact.ID, destination.FolderID)
+	uploadRes, err := d.service.UploadVideo(ctx, filePath, artifact.ID, destination.FolderID, deliveryID)
 	if err != nil {
 		return nil, err
 	}

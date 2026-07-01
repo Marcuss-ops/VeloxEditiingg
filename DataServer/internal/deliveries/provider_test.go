@@ -238,6 +238,6 @@ type stubProvider struct {
 }
 
 func (s *stubProvider) Name() string { return s.name }
-func (s *stubProvider) Deliver(_ context.Context, _ *store.Artifact, _ *Destination) (*Result, error) {
+func (s *stubProvider) Deliver(_ context.Context, _ *store.Artifact, _ *Destination, _, _ string) (*Result, error) {
 	return &Result{Success: true}, nil
 }

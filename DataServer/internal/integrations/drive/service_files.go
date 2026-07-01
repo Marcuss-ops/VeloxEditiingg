@@ -17,7 +17,7 @@ import (
 )
 
 // UploadFile uploads a file to Drive
-func (s *Service) UploadFile(ctx context.Context, filePath string, folderID string) (*UploadResult, error) {
+func (s *Service) UploadFile(ctx context.Context, filePath string, folderID string, deliveryID string) (*UploadResult, error) {
 	token, err := s.getToken(ctx)
 	if err != nil {
 		return nil, err
@@ -48,6 +48,14 @@ func (s *Service) UploadFile(ctx context.Context, filePath string, folderID stri
 	}
 	if folderID != "" {
 		meta["parents"] = []string{folderID}
+	}
+	// Stamp deliveryID as a public properties key so retries of the same
+	// delivery are traceable to the canonical delivery_id without requiring
+	// the drive.appdata OAuth scope.
+	if deliveryID != "" {
+		meta["properties"] = map[string]string{
+			"velox_delivery_id": deliveryID,
+		}
 	}
 
 	metaJSON, _ := json.Marshal(meta)
@@ -200,8 +208,10 @@ func (s *Service) DownloadFilesFromFolder(ctx context.Context, folderID string, 
 	return downloadedFiles, nil
 }
 
-// UploadVideo uploads a video file to a project folder
-func (s *Service) UploadVideo(ctx context.Context, filePath string, projectName string, parentFolderID string) (*UploadResult, error) {
+// UploadVideo uploads a video file to a project folder.
+// deliveryID is passed through from the runner as an idempotency key;
+// Drive-native resumable upload sessions handle dedup internally.
+func (s *Service) UploadVideo(ctx context.Context, filePath string, projectName string, parentFolderID string, deliveryID string) (*UploadResult, error) {
 	// Create or reuse a project subfolder under the resolved parent folder.
 	// If no parent is provided we fall back to a top-level folder with the project name.
 	var folderID string
@@ -223,5 +233,5 @@ func (s *Service) UploadVideo(ctx context.Context, filePath string, projectName 
 		folderID = folder.ID
 	}
 
-	return s.UploadFile(ctx, filePath, folderID)
+	return s.UploadFile(ctx, filePath, folderID, deliveryID)
 }

@@ -36,7 +36,7 @@ func (l *LocalExportProvider) Name() string { return "local_export" }
 
 // Deliver copies the artifact's local file into <outputRoot>/<artifact_id>
 // and returns its absolute path on Result.RemoteURL.
-func (l *LocalExportProvider) Deliver(_ context.Context, artifact *store.Artifact, destination *deliveries.Destination) (*deliveries.Result, error) {
+func (l *LocalExportProvider) Deliver(_ context.Context, artifact *store.Artifact, destination *deliveries.Destination, _, _ string) (*deliveries.Result, error) {
 	if l == nil || l.outputRoot == "" {
 		return nil, deliveries.ErrProviderNotConfigured
 	}

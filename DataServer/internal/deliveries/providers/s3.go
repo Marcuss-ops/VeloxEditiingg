@@ -24,6 +24,6 @@ func (s *S3Provider) Name() string { return "s3" }
 
 // Deliver always returns ErrProviderNotConfigured until the S3 client +
 // bucket credentials are propagated via internal/config.
-func (s *S3Provider) Deliver(_ context.Context, _ *store.Artifact, _ *deliveries.Destination) (*deliveries.Result, error) {
+func (s *S3Provider) Deliver(_ context.Context, _ *store.Artifact, _ *deliveries.Destination, _, _ string) (*deliveries.Result, error) {
 	return nil, deliveries.ErrProviderNotConfigured
 }

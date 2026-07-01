@@ -119,14 +119,15 @@ type Provider interface {
 	Name() string
 
 	// Deliver performs the upload. Implementations must:
-	//   * be idempotent under retry — re-running the same (artifact,
-	//     destination) MUST NOT cause data duplication
+	//   * be idempotent under retry — the runner supplies deliveryID
+	//     and idempotencyKey so adapters can stamp them on the remote
+	//     API call and prevent data duplication
 	//   * honor ctx cancellation between byte ranges / chunks so a
 	//     runner shutdown is responsive
 	//   * return ProviderError (or wrap one) so the runner can classify
 	//     the failure. Returning a plain error means the runner treats
 	//     it as transient and retries with backoff.
-	Deliver(ctx context.Context, artifact *store.Artifact, destination *Destination) (*Result, error)
+	Deliver(ctx context.Context, artifact *store.Artifact, destination *Destination, deliveryID, idempotencyKey string) (*Result, error)
 }
 
 // Destination is the typed view of a delivery_destinations row.
