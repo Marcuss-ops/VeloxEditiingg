@@ -40,7 +40,7 @@ func buildAssets(cfg *config.Config, p *persistenceDeps, j *jobsDeps) (*assetDep
 	_ = cfg
 
 	// ── Artifacts.Service (sole SUCCEEDED gate) ─────────────────────
-	planResolver := deliveries.NewSQLiteDeliveryPlanResolver(p.SQLite.DB())
+	planResolver := deliveries.NewSQLiteDeliveryPlanResolver(p.SQLite.DB(), cfg.Runtime.DeliveryGlobalFallback)
 	finRepo := artifacts.NewSQLiteFinalizationRepository(p.SQLite.DB())
 	finRepo.WithPlanResolver(planResolver)
 	artifactSvc := artifacts.NewService(

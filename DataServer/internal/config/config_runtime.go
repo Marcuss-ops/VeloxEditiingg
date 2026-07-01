@@ -55,6 +55,9 @@ func loadRuntimeConfig(dataDir string) RuntimeConfig {
 	// gRPC insecure dev opt-in.
 	c.GRPCAllowInsecureDev = strings.TrimSpace(os.Getenv("VELOX_GRPC_ALLOW_INSECURE_DEV")) == "true"
 
+	// Delivery global fallback dev opt-in.
+	c.DeliveryGlobalFallback = strings.TrimSpace(os.Getenv("VELOX_DELIVERY_GLOBAL_FALLBACK")) == "true"
+
 	// Release channel — PR-5 P0 guard. Default "dev" preserves
 	// backward compatibility for installs that pre-date PR-5. The
 	// fail-fast in bootstrap.go refuses to start the master with

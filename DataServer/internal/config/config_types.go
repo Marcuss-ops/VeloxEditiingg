@@ -52,6 +52,14 @@ type RuntimeConfig struct {
 	// VELOX_GRPC_ALLOW_INSECURE_DEV=true.
 	GRPCAllowInsecureDev bool
 
+	// DeliveryGlobalFallback enables the legacy global
+	// delivery_destinations fallback when no per-job plan exists.
+	// For development ONLY — production deployments should leave this
+	// disabled so artifacts without explicit job_delivery_plans return
+	// ErrNoExplicitPlan instead of being sent to all destinations.
+	// Configured via VELOX_DELIVERY_GLOBAL_FALLBACK=true.
+	DeliveryGlobalFallback bool
+
 	// ReleaseChannel mirrors VELOX_RELEASE_CHANNEL
 	// ("dev" | "staging" | "production"). PR-5 P0: when != "dev",
 	// GRPCAllowInsecureDev=true is treated as a fatal misconfiguration
