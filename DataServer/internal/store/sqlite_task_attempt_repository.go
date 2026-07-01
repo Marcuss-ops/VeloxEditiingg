@@ -34,13 +34,24 @@ var attemptColumns = []string{
 func scanAttempt(row interface{ Scan(...interface{}) error }) (*taskattempts.TaskAttempt, error) {
 	var a taskattempts.TaskAttempt
 	var startedAt, completedAt sql.NullString
+	var createdAt, updatedAt string
 	err := row.Scan(
 		&a.ID, &a.TaskID, &a.JobID, &a.AttemptNumber, &a.WorkerID, &a.LeaseID,
 		&a.Status, &startedAt, &completedAt, &a.ErrorCode, &a.ErrorMessage,
-		&a.ReportVersion, &a.CreatedAt, &a.UpdatedAt,
+		&a.ReportVersion, &createdAt, &updatedAt,
 	)
 	if err != nil {
 		return nil, err
+	}
+	if createdAt != "" {
+		if pt, e := time.Parse(time.RFC3339, createdAt); e == nil {
+			a.CreatedAt = pt
+		}
+	}
+	if updatedAt != "" {
+		if pt, e := time.Parse(time.RFC3339, updatedAt); e == nil {
+			a.UpdatedAt = pt
+		}
 	}
 	if startedAt.Valid && startedAt.String != "" {
 		if pt, e := time.Parse(time.RFC3339, startedAt.String); e == nil {
@@ -353,7 +364,7 @@ func (r *SQLiteTaskAttemptRepository) PersistMetrics(ctx context.Context, metric
 			temp_bytes_written, duplicate_download_bytes,
 			media_duration_seconds, wall_clock_seconds
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-		          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		metrics.AttemptID, metrics.InputBytes, metrics.OutputBytes,
 		metrics.BytesFromDrive, metrics.BytesFromBlobstore, metrics.BytesFromLocalCache,
 		metrics.CPUTimeMS, metrics.GPUTimeMS, metrics.PeakRSSBytes, metrics.PeakVRAMBytes,
