@@ -174,8 +174,8 @@ func (f FenceTuple) Read(ctx context.Context, tx *sql.Tx) (*AttemptCommitState, 
 		return nil, fmt.Errorf("completion.FenceTuple.Read: %w", err)
 	}
 	if storedWorker != f.WorkerID || storedLease != f.LeaseID || storedRev != f.Revision {
-		return nil, fmt.Errorf("%w: fence mismatch (stored worker_id=%q lease_id=%q revision=%d; supplied worker_id=%q lease_id=%q revision=%d)",
-			ErrTransitionConflict, storedWorker, storedLease, storedRev, f.WorkerID, f.LeaseID, f.Revision)
+	return nil, fmt.Errorf("%w: fence mismatch (stored worker_id=%q lease_id=%q revision=%d status=%q; supplied worker_id=%q lease_id=%q revision=%d)",
+		ErrTransitionConflict, storedWorker, storedLease, storedRev, status, f.WorkerID, f.LeaseID, f.Revision)
 	}
 	return &AttemptCommitState{CommitID: commitID, Status: status, TaskRevision: storedRev}, nil
 }
@@ -214,8 +214,8 @@ func (f FenceTuple) ReadOrMissing(ctx context.Context, tx *sql.Tx) (*AttemptComm
 		return nil, fmt.Errorf("completion.FenceTuple.ReadOrMissing: %w", err)
 	}
 	if storedWorker != f.WorkerID || storedLease != f.LeaseID || storedRev != f.Revision {
-		return nil, fmt.Errorf("%w: fence mismatch (stored worker_id=%q lease_id=%q revision=%d; supplied worker_id=%q lease_id=%q revision=%d)",
-			ErrTransitionConflict, storedWorker, storedLease, storedRev, f.WorkerID, f.LeaseID, f.Revision)
+	return nil, fmt.Errorf("%w: fence mismatch (stored worker_id=%q lease_id=%q revision=%d status=%q; supplied worker_id=%q lease_id=%q revision=%d)",
+		ErrTransitionConflict, storedWorker, storedLease, storedRev, status, f.WorkerID, f.LeaseID, f.Revision)
 	}
 	return &AttemptCommitState{CommitID: commitID, Status: status, TaskRevision: storedRev}, nil
 }
