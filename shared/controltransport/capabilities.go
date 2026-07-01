@@ -79,6 +79,40 @@ const (
 	// advertise this so resolving pipeline IDs goes through
 	// ResolvePipelineID() instead of the wire-provided ID.
 	CapabilityExecutorHybridV1 = "executor.hybrid.v1"
+
+	// CapabilityTaskOutputDeclaredV1 — the worker emits the typed
+	// TaskOutputDeclared message (Fase 3.3 of
+	// docs/completion-protocol.md) carrying a repeated
+	// OutputManifest list per Attempt. Pre-v1 workers publish the
+	// legacy ArtifactUploaded (field 18) instead. Masters route
+	// the typed path only when this capability is advertised.
+	CapabilityTaskOutputDeclaredV1 = "task.output.declared.v1"
+
+	// CapabilityArtifactUploadPlanV1 — the worker consumes the
+	// typed ArtifactUploadPlan message (Fase 3.4) with a
+	// per-manifest UploadTarget list, commit_token bearer, and
+	// per-target upload_url / chunk_size / expires_at_unix. The
+	// master only emits this message to workers that advertise
+	// the capability; otherwise it falls back to the v0 plain
+	// ArtifactUploaded shape.
+	CapabilityArtifactUploadPlanV1 = "artifact.upload.plan.v1"
+
+	// CapabilityArtifactUploadCompletedV1 — the worker emits the
+	// typed ArtifactUploadCompleted message (Fase 3.5) reporting
+	// uploaded_bytes + worker_sha256 for the master's verification
+	// pass. Pre-v1 workers fall back to the legacy ArtifactUploaded
+	// upload_status="completed" payload.
+	CapabilityArtifactUploadCompletedV1 = "artifact.upload.completed.v1"
+
+	// CapabilityTaskCommitAckV1 — the worker consumes the typed
+	// TaskCommitAck message (Fase 3.6) signaling the attempt is
+	// durably committed (jobs.status='SUCCEEDED',
+	// attempt_commits.status='COMMITTED'). On receipt the worker
+	// transitions the local spool row to COMMITTED and may unlink
+	// the on-disk file. Without this capability the worker falls
+	// back to a polling reconciliation against
+	// attempt_commits.status.
+	CapabilityTaskCommitAckV1 = "task.commit.ack.v1"
 )
 
 // AllCapabilities is the canonical closed-set of capabilities the
@@ -89,6 +123,10 @@ const (
 var AllCapabilities = []string{
 	CapabilityArtifactCommitV1,
 	CapabilityExecutorHybridV1,
+	CapabilityTaskOutputDeclaredV1,
+	CapabilityArtifactUploadPlanV1,
+	CapabilityArtifactUploadCompletedV1,
+	CapabilityTaskCommitAckV1,
 }
 
 // IsKnownCapability reports whether the given string is one of the

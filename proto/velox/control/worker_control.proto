@@ -53,9 +53,18 @@ message WorkerToMasterEnvelope {
     // 17 (JobResult) — job-keyed execution report; superseded by TaskResult.
     ArtifactUploaded artifact_uploaded = 18;
     Goodbye goodbye = 19;
+
+    // Phase 3.3 / 3.5 (Artifact Commit Protocol) — typed
+    // declared-and-completed pipeline. The legacy ArtifactUploaded
+    // message (18) remains in place for backward compatibility with
+    // pre-v1-capability workers; the new TaskOutputDeclared /
+    // ArtifactUploadCompleted pair is the typed, fencing-aware
+    // successor and is the one referenced by CapabilityArtifactCommitV1.
+    TaskOutputDeclared task_output_declared = 32;
+    ArtifactUploadCompleted artifact_upload_completed = 33;
   }
 
-  reserved 12, 13, 14, 15, 17;
+  reserved 12, 13, 14, 15, 17, 34;
 }
 
 message Hello {
@@ -191,9 +200,18 @@ message MasterToWorkerEnvelope {
     ConfigurationUpdate configuration_update = 27;
     LeaseRevoked lease_revoked = 28;
     Ping ping = 29;
+
+    // Phase 3.4 / 3.6 (Artifact Commit Protocol) — typed
+    // upload-plan-and-commit-ack pipeline. The UploadPlan
+    // (Fase 3.4) carries the per-manifest upload targets plus the
+    // master's canonical commit_id; TaskCommitAck (Fase 3.6) is
+    // the master's terminal signal that the attempt is durable
+    // and the worker can clean up the local spool row.
+    ArtifactUploadPlan artifact_upload_plan = 32;
+    TaskCommitAck task_commit_ack = 33;
   }
 
-  reserved 21, 22, 23;
+  reserved 21, 22, 23, 34;
 }
 
 message HelloAck {}
@@ -266,6 +284,138 @@ message LeaseRevoked {
 }
 
 message Ping {}
+
+// ---------------------------------------------------------
+// Artifact Commit Protocol (Fase 3.3-3.6) — typed
+// declare / plan / complete / ack pipeline.
+//
+// Wire flow (per docs/completion-protocol.md):
+//
+//   1. worker → TaskOutputDeclared (32): after RENDERING the
+//      worker-side spool row is in OUTPUT_READY; the worker
+//      publishes the per-file manifest to the master.
+//   2. master → ArtifactUploadPlan (32): the master stamps
+//      attempt_commits with a canonical commit_id and replies
+//      with the per-manifest upload targets (URLs, chunk size,
+//      bearer token, expiry). The worker stores commit_id +
+//      upload_id on the spool row.
+//   3. worker → ArtifactUploadCompleted (33): the worker has
+//      finished the multipart transfer and reports the
+//      uploaded_bytes + worker_sha256 for the master's
+//      verification pass.
+//   4. master → TaskCommitAck (33): the master has durably
+//      committed the attempt; the worker can CLEAN the local
+//      spool row + delete the on-disk file.
+//
+// All four messages are gated by their respective capability
+// strings in shared/controltransport/capabilities.go; a v2
+// worker that has not published capability v1 will be routed
+// to the legacy ArtifactUploaded path by the master's dispatch.
+// ---------------------------------------------------------
+
+// OutputManifest is the per-file declaration carried inside
+// TaskOutputDeclared. The shape is the canonical one the master
+// stores on attempt_declarations: a logical output identity
+// (OutputKind, LogicalName, MimeType) + content hash (SHA256,
+// SizeBytes) + the worker-side identity (WorkerSpoolKey) the
+// master returns verbatim in the matching UploadTarget.
+//
+// proto3 field-number convention: most-frequently-set fields
+// get the lowest numbers (1-15 pack into one byte on the wire).
+// The master needs OutputKind+LogicalName for every row of every
+// attempt, so they lead.
+message OutputManifest {
+  string output_kind = 1;       // "final_video" | "thumbnail" | ...
+  string logical_name = 2;      // "out.mp4" — also the on-disk filename
+  string mime_type = 3;         // "video/mp4" | "image/png" | ...
+  int64 size_bytes = 4;         // total file size in bytes
+  string sha256 = 5;            // lowercase hex (64 chars)
+  string worker_spool_key = 6;  // worker's per-attempt UUID; carries
+                                // through to the UploadTarget so the
+                                // worker can correlate the plan back
+                                // to its local spool row
+}
+
+// UploadTarget is the per-manifest upload instructions carried
+// inside ArtifactUploadPlan. The transport_id is opaque to the
+// worker; it resolves to a transport plugin via the master's
+// transport registry (Fase 3.7) and is reported back verbatim
+// on the ArtifactUploadCompleted call.
+message UploadTarget {
+  string declaration_id = 1;    // master's attempt_declarations.id
+  string artifact_id = 2;       // master's attempt_artifacts.id (post-commit)
+  string upload_id = 3;         // worker's row key for the upload window
+  string transport_id = 4;      // "s3" | "gcs" | "azblob" | ...
+  string upload_url = 5;        // signed URL the worker PUTs to
+  int64 chunk_size = 6;         // recommended multipart chunk size
+  int64 expires_at_unix = 7;    // unix-seconds; upload window deadline
+}
+
+// TaskOutputDeclared is the worker's first message post-render.
+// The master replies with ArtifactUploadPlan (32). FenceTuple
+// (worker_id, lease_id, attempt_id, task_id, revision) is carried
+// verbatim across the four messages so the master can CAS-gate
+// every transition without an extra roundtrip.
+message TaskOutputDeclared {
+  string task_id = 1;
+  string job_id = 2;
+  string attempt_id = 3;
+  string lease_id = 4;
+  int32 attempt_number = 5;
+  int32 revision = 6;
+  repeated OutputManifest manifests = 7;
+}
+
+// ArtifactUploadPlan is the master's reply to TaskOutputDeclared.
+// The master stamps attempt_commits with a canonical commit_id
+// and returns the per-manifest upload targets. The worker stores
+// commit_id + upload_id on the local spool row and proceeds with
+// the multipart upload.
+message ArtifactUploadPlan {
+  string task_id = 1;
+  string attempt_id = 2;
+  string commit_id = 3;          // master's canonical DB key
+  string commit_token = 4;       // opaque bearer token (sha256-hashed
+                                 // on the attempt_commits row; plain
+                                 // form never persisted on master)
+  string lease_id = 5;
+  repeated UploadTarget targets = 6;
+}
+
+// ArtifactUploadCompleted is the worker's "bytes transferred"
+// signal. The master runs the verification pass
+// (CompleteUploadCommand equivalent on the DataServer side):
+// SHA-256 of the received bytes vs worker_sha256; on match,
+// transitions attempt_commits.status from UPLOADING to RECEIVED
+// and queues the canonical SUCCEEDED write.
+message ArtifactUploadCompleted {
+  string task_id = 1;
+  string attempt_id = 2;
+  string commit_id = 3;
+  string lease_id = 4;
+  string upload_id = 5;
+  int64 uploaded_bytes = 6;
+  string worker_sha256 = 7;
+}
+
+// TaskCommitAck is the master's terminal signal that the attempt
+// is durable: jobs.status='SUCCEEDED', attempt_commits.status=
+// 'COMMITTED', attempt_artifacts rows exist. The worker
+// transitions the local spool row from UPLOADED to COMMITTED and
+// can safely unlink the on-disk file (then mark the row CLEANED).
+//
+// FenceTuple is repeated so the master can fence late acks: a
+// worker that re-connects after lease-revocation MUST NOT see a
+// stale TaskCommitAck applied to a re-claimed attempt.
+message TaskCommitAck {
+  string task_id = 1;
+  string attempt_id = 2;
+  string commit_id = 3;
+  string job_id = 4;
+  string lease_id = 5;
+  int32 revision = 6;
+  google.protobuf.Timestamp committed_at = 7;
+}
 
 // ---------------------------------------------------------
 // Typed metrics (PR-5 / scorecard v1)
