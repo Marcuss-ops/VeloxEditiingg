@@ -60,13 +60,30 @@ func TestCapabilities_IsKnownCapability(t *testing.T) {
 // negative tests but the master would never iterate it for log
 // inspection.
 func TestCapabilities_AllCapabilitiesIsClosedSet(t *testing.T) {
-	declared := []string{
-		CapabilityArtifactCommitV1,
-		CapabilityExecutorHybridV1,
+	declared := map[string]bool{
+		CapabilityArtifactCommitV1: true,
+		CapabilityExecutorHybridV1: true,
 	}
-	if len(declared) != len(AllCapabilities) {
-		t.Errorf("AllCapabilities length (%d) != declared constants (%d);"+
+	allAsSet := map[string]bool{}
+	for _, c := range AllCapabilities {
+		if allAsSet[c] {
+			t.Errorf("AllCapabilities contains duplicate entry %q", c)
+		}
+		allAsSet[c] = true
+	}
+	if len(declared) != len(allAsSet) {
+		t.Fatalf("AllCapabilities length (%d) != declared constants (%d);"+
 			" either add the constant to AllCapabilities or remove the orphan",
-			len(AllCapabilities), len(declared))
+			len(allAsSet), len(declared))
+	}
+	for c := range declared {
+		if !allAsSet[c] {
+			t.Errorf("declared constant %q missing from AllCapabilities", c)
+		}
+	}
+	for c := range allAsSet {
+		if !declared[c] {
+			t.Errorf("AllCapabilities contains undeclared string %q", c)
+		}
 	}
 }

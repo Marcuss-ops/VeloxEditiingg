@@ -36,6 +36,25 @@
 // string it does not understand and log a single verbose-WARN line per
 // unknown capability. Removing a capability is a hard cutover (drain
 // the fleet, see docs/completion-protocol.md §Phase 6).
+//
+// Design note on proto §1.4 vs impl
+// ---------------------------------
+// completion-protocol.md §1.4 says "edit worker_control.proto to add
+// the new capability string, then regenerate". The implementation
+// here deliberately diverges: the existing `Hello.capabilities = 8`
+// field is a `google.protobuf.Struct` (opaque JSON-shaped map) that
+// already tolerates arbitrary key strings. We advertise capability
+// strings (e.g. "artifact.commit.v1") as Struct keys, so adding new
+// caps does NOT require proto regeneration — old workers can carry
+// new strings without rebuilding WHILE the capability rides in the
+// (opaque) `Hello.capabilities = 8` Struct field. The proto is
+// therefore unchanged in Phase 1.4; gen-proto.sh is run for
+// verification only (SHA-256 of worker_control.pb.go stays stable).
+// If a future protocol revision needs to constrain the capability
+// shape (forbid arbitrary Struct keys, require legacy clients to drop
+// unknown caps), migrate to a dedicated
+// `repeated string capability_versions = N` field on Hello and
+// rebind the typed strings here in lockstep with the regen.
 package controltransport
 
 // Well-known worker capability strings (Fase 1.4 of the Artifact
@@ -73,10 +92,13 @@ var AllCapabilities = []string{
 }
 
 // IsKnownCapability reports whether the given string is one of the
-// recognised capabilities (above). Unknown strings are NOT an error:
-// forward-only capability negotiation means new workers may emit new
-// strings, and the master logs a single verbose WARN per unknown
-// capability per session.
+// recognised capabilities (above). Unknown strings return false: this
+// is the forward-only capability negotiation contract — new workers
+// may emit new strings and the master MUST accept and pass them
+// through without rejecting the worker. The master-side logging of
+// unknown capabilities is the caller's responsibility (typically the
+// handshake handler at session start); IsKnownCapability itself is a
+// pure predicate.
 func IsKnownCapability(s string) bool {
 	for _, c := range AllCapabilities {
 		if c == s {
