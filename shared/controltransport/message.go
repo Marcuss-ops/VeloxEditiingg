@@ -22,6 +22,14 @@ const (
 	MsgCommandAck       ControlMessageType = "command_ack"
 	MsgArtifactUploaded ControlMessageType = "artifact_uploaded"
 	MsgGoodbye          ControlMessageType = "goodbye"
+
+	// Artifact Commit Protocol (Fase 3.3 / 3.5) — typed
+	// declare-and-completed pipeline. The legacy MsgArtifactUploaded
+	// remains the v0 transport; the typed pair below is the one
+	// gated by CapabilityTaskOutputDeclaredV1 /
+	// CapabilityArtifactUploadCompletedV1.
+	MsgTaskOutputDeclared       ControlMessageType = "task_output_declared"
+	MsgArtifactUploadCompleted  ControlMessageType = "artifact_upload_completed"
 )
 
 // --- Master → Worker ---
@@ -35,13 +43,20 @@ const (
 	MsgConfigurationUpdate ControlMessageType = "configuration_update"
 	MsgLeaseRevoked        ControlMessageType = "lease_revoked"
 	MsgPing                ControlMessageType = "ping"
+
+	// Artifact Commit Protocol (Fase 3.4 / 3.6) — typed
+	// upload-plan-and-commit-ack pipeline. Gated by
+	// CapabilityArtifactUploadPlanV1 / CapabilityTaskCommitAckV1.
+	MsgArtifactUploadPlan ControlMessageType = "artifact_upload_plan"
+	MsgTaskCommitAck      ControlMessageType = "task_commit_ack"
 )
 
 // IsWorkerToMaster returns true for messages sent from worker to master.
 func (t ControlMessageType) IsWorkerToMaster() bool {
 	switch t {
 	case MsgHello, MsgHeartbeat, MsgTaskLeaseRenewal, MsgTaskAccepted, MsgTaskRejected,
-		MsgTaskResult, MsgCommandAck, MsgArtifactUploaded, MsgGoodbye:
+		MsgTaskResult, MsgCommandAck, MsgArtifactUploaded, MsgGoodbye,
+		MsgTaskOutputDeclared, MsgArtifactUploadCompleted:
 		return true
 	}
 	return false
@@ -51,7 +66,8 @@ func (t ControlMessageType) IsWorkerToMaster() bool {
 func (t ControlMessageType) IsMasterToWorker() bool {
 	switch t {
 	case MsgHelloAck, MsgTaskOffer, MsgTaskLeaseGranted, MsgCommand, MsgCancelJob,
-		MsgDrain, MsgConfigurationUpdate, MsgLeaseRevoked, MsgPing:
+		MsgDrain, MsgConfigurationUpdate, MsgLeaseRevoked, MsgPing,
+		MsgArtifactUploadPlan, MsgTaskCommitAck:
 		return true
 	}
 	return false

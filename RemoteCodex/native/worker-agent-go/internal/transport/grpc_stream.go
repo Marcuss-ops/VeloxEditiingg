@@ -381,6 +381,12 @@ func (t *GRPCStreamTransport) messageToEnvelope(msg controltransport.ControlMess
 
 	case *pb.ArtifactUploaded:
 		env.Msg = &pb.WorkerToMasterEnvelope_ArtifactUploaded{ArtifactUploaded: tp}
+
+	case *pb.TaskOutputDeclared:
+		env.Msg = &pb.WorkerToMasterEnvelope_TaskOutputDeclared{TaskOutputDeclared: tp}
+
+	case *pb.ArtifactUploadCompleted:
+		env.Msg = &pb.WorkerToMasterEnvelope_ArtifactUploadCompleted{ArtifactUploadCompleted: tp}
 	}
 
 	return env
@@ -436,6 +442,14 @@ func (t *GRPCStreamTransport) envelopeToMessage(env *pb.MasterToWorkerEnvelope) 
 
 	case *pb.MasterToWorkerEnvelope_Ping:
 		msg.Type = controltransport.MsgPing
+
+	case *pb.MasterToWorkerEnvelope_ArtifactUploadPlan:
+		msg.Type = controltransport.MsgArtifactUploadPlan
+		msg.TypedPayload = m.ArtifactUploadPlan
+
+	case *pb.MasterToWorkerEnvelope_TaskCommitAck:
+		msg.Type = controltransport.MsgTaskCommitAck
+		msg.TypedPayload = m.TaskCommitAck
 	}
 
 	return msg

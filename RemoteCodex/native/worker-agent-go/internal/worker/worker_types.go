@@ -173,6 +173,16 @@ type Worker struct {
 	activeTaskLeases   map[string]*ActiveTaskLease
 	activeTaskLeasesMu sync.RWMutex
 
+	// Artifact Commit Protocol v1 (Fase 3.4 / 3.6) — typed pending
+	// reply dispatcher. The executeTask pipeline registers a
+	// per-taskID channel before sending TaskOutputDeclared /
+	// ArtifactUploadCompleted; the receive loop dispatches the
+	// master's ArtifactUploadPlan / TaskCommitAck reply into the
+	// channel and the pipeline unblocks. Channels are buffered (cap 1)
+	// and removed on terminal exit or worker Stop.
+	pendingArtifactAcks   map[string]chan controltransport.ControlMessage
+	pendingArtifactAcksMu sync.RWMutex
+
 	// Task completion stats for heartbeat reporting.
 	// Wire keys (jobs_completed / jobs_failed) kept for master compatibility.
 	tasksCompleted atomic.Int64

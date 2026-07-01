@@ -216,6 +216,13 @@ func (w *Worker) buildHello() controltransport.WorkerHello {
 //     BOTH locations atomically per capabilitiesMap call.
 //   - AsMap emits an empty slice (not nil) when the registry is empty so
 //     encoding/json never silently drops the executors key.
+//
+// Artifact Commit Protocol (Fase 3.7-3.12): the umbrella
+// CapabilityArtifactCommitV1 is the load-bearing capability that
+// routes the worker to the typed declare/plan/complete/ack path on
+// the master. The 4 phase-specific caps are published alongside for
+// forward-compat dispatch; the master only consults the umbrella for
+// the v1 cutover.
 func (w *Worker) capabilitiesMap(hostname string) map[string]interface{} {
 	host := w.hostInfo(hostname, w.concurrencyLimiter.MaxActiveJobs())
 	report := executor.BuildCapabilityReport(w.executorRegistry, host)
@@ -224,6 +231,14 @@ func (w *Worker) capabilitiesMap(hostname string) map[string]interface{} {
 	// decoders that don't walk into the host sub-block. Sourced from
 	// the SAME host field — both paths MUST stay byte-identical.
 	m["max_parallel_jobs"] = host.MaxParallelJobs
+	// Artifact Commit Protocol v1: typed declare/plan/complete/ack
+	// pipeline. The master consults this capability at dispatch and
+	// routes the worker to the typed path only when it is present.
+	m[controltransport.CapabilityArtifactCommitV1] = true
+	m[controltransport.CapabilityTaskOutputDeclaredV1] = true
+	m[controltransport.CapabilityArtifactUploadPlanV1] = true
+	m[controltransport.CapabilityArtifactUploadCompletedV1] = true
+	m[controltransport.CapabilityTaskCommitAckV1] = true
 	return m
 }
 
@@ -593,6 +608,18 @@ func (w *Worker) receiveLoop(ctx context.Context, recvCh <-chan controltransport
 			case controltransport.MsgHelloAck:
 				w.logger.Debug("[RECEIVE] HelloAck received — session confirmed")
 
+			case controltransport.MsgArtifactUploadPlan, controltransport.MsgTaskCommitAck:
+				// Artifact Commit Protocol v1 (Fase 3.4 / 3.6) —
+				// typed master→worker reply on the declare/complete
+				// pipeline. The receive loop dispatches into a
+				// per-task channel map populated by the executor
+				// pipeline; the pipeline blocks waiting for the
+				// reply and proceeds with the next stage on receipt.
+				if !w.dispatchTypedPlanOrAck(msg) {
+					w.logger.Warn("[RECEIVE] %s arrived with no pending pipeline (msg=%s) — dropping",
+						msg.Type, msg.MessageID)
+				}
+
 			default:
 				w.logger.Debug("[RECEIVE] Unhandled message type: %s", msg.Type)
 			}
@@ -626,10 +653,140 @@ func msgToCommand(msg controltransport.ControlMessage) api.WorkerCommand {
 	return wc
 }
 
-// getStrParam extracts a string value from a parameters map, returning "" if missing.
-func getStrParam(params map[string]interface{}, key string) string {
-	if v, ok := params[key].(string); ok {
-		return v
+// ── Artifact Commit Protocol v1 — typed pending-msg dispatcher ──
+//
+// MsgArtifactUploadPlan and MsgTaskCommitAck are request/response
+// replies to the executor pipeline. The pipeline registers a
+// per-task channel before issuing TaskOutputDeclared /
+// ArtifactUploadCompleted; the receive loop dispatches the master's
+// reply into that channel and the pipeline unblocks.
+//
+// Timeout: the pipeline MUST call waitForArtifactAck with a
+// deadline (typically lease_deadline - safety margin) — otherwise
+// a master that never replies would leak the goroutine forever.
+// The receive loop non-blocking-sends; if the channel is full
+// (pipeline already abandoned the slot) the message is dropped
+// with a WARN so a slow pipeline is observable.
+//
+// Concurrency: pendingArtifactAcks is protected by
+// pendingArtifactAcksMu. Channels are buffered (cap 1) so the
+// receive loop never blocks on a slow pipeline. Stale entries
+// (channels the pipeline has already abandoned) are GC'd by
+// unregisterPendingArtifactAck. Stop() drains the entire map.
+
+func (w *Worker) registerPendingArtifactAck(taskID string) chan controltransport.ControlMessage {
+	w.pendingArtifactAcksMu.Lock()
+	defer w.pendingArtifactAcksMu.Unlock()
+	if w.pendingArtifactAcks == nil {
+		w.pendingArtifactAcks = make(map[string]chan controltransport.ControlMessage)
+	}
+	ch := make(chan controltransport.ControlMessage, 1)
+	w.pendingArtifactAcks[taskID] = ch
+	return ch
+}
+
+// waitForArtifactAck blocks until a message for taskID arrives on
+// the dispatcher channel OR the deadline elapses. Returns the
+// typed reply on success; nil + a timeout error on deadline. The
+// caller MUST call unregisterPendingArtifactAck in a defer to keep
+// the map tidy.
+func (w *Worker) waitForArtifactAck(ctx context.Context, taskID string, deadline time.Time) (controltransport.ControlMessage, error) {
+	ch := w.registerPendingArtifactAck(taskID)
+	defer w.unregisterPendingArtifactAck(taskID)
+
+	timeout := time.NewTimer(time.Until(deadline))
+	defer timeout.Stop()
+
+	select {
+	case msg := <-ch:
+		return msg, nil
+	case <-timeout.C:
+		return controltransport.ControlMessage{}, ErrArtifactAckTimeout
+	case <-ctx.Done():
+		return controltransport.ControlMessage{}, ctx.Err()
+	}
+}
+
+// ErrArtifactAckTimeout is returned by waitForArtifactAck when the
+// master fails to deliver the expected ArtifactUploadPlan /
+// TaskCommitAck before the lease deadline. The pipeline surfaces
+// this as a TaskResult with error_code="artifact_ack_timeout".
+var ErrArtifactAckTimeout = errors.New("worker: timed out waiting for artifact ack")
+
+func (w *Worker) dispatchTypedPlanOrAck(msg controltransport.ControlMessage) bool {
+	taskID := extractTaskIDFromTyped(msg)
+	if taskID == "" {
+		w.logger.Warn("[ARTIFACT-ACK] typed reply with no GetTaskId (concrete=%T) — dropping msg=%s",
+			msg.TypedPayload, msg.Type)
+		return false
+	}
+	w.pendingArtifactAcksMu.RLock()
+	ch, ok := w.pendingArtifactAcks[taskID]
+	w.pendingArtifactAcksMu.RUnlock()
+	if !ok {
+		return false
+	}
+	// Non-blocking send. If the pipeline already abandoned the slot
+	// the channel buffer holds the message and is GC'd on
+	// unregister. We use select-default to avoid blocking the
+	// receive loop on a stuck pipeline.
+	select {
+	case ch <- msg:
+	default:
+		w.logger.Warn("[ARTIFACT-ACK] dispatcher channel full for task=%s msg=%s — dropping",
+			taskID, msg.Type)
+	}
+	return true
+}
+
+func (w *Worker) unregisterPendingArtifactAck(taskID string) {
+	w.pendingArtifactAcksMu.Lock()
+	defer w.pendingArtifactAcksMu.Unlock()
+	if w.pendingArtifactAcks == nil {
+		return
+	}
+	ch, ok := w.pendingArtifactAcks[taskID]
+	if !ok {
+		return
+	}
+	delete(w.pendingArtifactAcks, taskID)
+	// Drain any leftover message so the channel can be GC'd.
+	select {
+	case <-ch:
+	default:
+	}
+}
+
+// drainPendingArtifactAcks is called by Stop() to release every
+// registered channel + map entry. Prevents goroutine leaks on
+// shutdown.
+func (w *Worker) drainPendingArtifactAcks() {
+	w.pendingArtifactAcksMu.Lock()
+	defer w.pendingArtifactAcksMu.Unlock()
+	cleared := len(w.pendingArtifactAcks)
+	for taskID, ch := range w.pendingArtifactAcks {
+		// Non-blocking drain to release any buffered message.
+		select {
+		case <-ch:
+		default:
+		}
+		_ = taskID
+	}
+	w.pendingArtifactAcks = make(map[string]chan controltransport.ControlMessage)
+	if cleared > 0 {
+		w.logger.Info("[STOP] Drained pending artifact-ack dispatchers: %d", cleared)
+	}
+}
+
+// extractTaskIDFromTyped pulls the (task_id) field from the typed
+// proto payload of an ArtifactUploadPlan or TaskCommitAck message.
+// Both messages satisfy the anonymous-interface check because the
+// proto-generated `GetTaskId() string` accessor is on the pointer
+// receiver.
+func extractTaskIDFromTyped(msg controltransport.ControlMessage) string {
+	switch p := msg.TypedPayload.(type) {
+	case interface{ GetTaskId() string }:
+		return p.GetTaskId()
 	}
 	return ""
 }
@@ -763,9 +920,18 @@ func (w *Worker) Stop() {
 		w.activeTaskLeases = make(map[string]*ActiveTaskLease)
 		w.activeTaskLeasesMu.Unlock()
 		if clearedTask > 0 || clearedTaskLeases > 0 {
-			w.logger.Info("[STOP] Drained pending entries: task=%d task_leases=%d",
-				clearedTask, clearedTaskLeases)
-		}
+		w.logger.Info("[STOP] Drained pending entries: task=%d task_leases=%d",
+			clearedTask, clearedTaskLeases)
+	}
+		// Artifact Commit Protocol v1: drain the typed reply
+		// dispatcher so no goroutine is left blocked on a channel
+		// after Stop. Channels have buffered capacity 1 and the
+		// pipeline reads them via waitForArtifactAck, which is
+		// bound to the supplied ctx; ctx-canceled reads return
+		// immediately. This drain is a belt-and-suspenders cleanup
+		// for stragglers (e.g. dispatcher registered but the
+		// pipeline never read it).
+		w.drainPendingArtifactAcks()
 	})
 }
 
