@@ -71,6 +71,39 @@ func New(cfg *config.Config, enqueuer *enqueue.Enqueuer, dbStore *store.SQLiteSt
 	}
 }
 
+// NewForwarder constructs a PurposeService stripped to the fields that the
+// authoritative ForwardCompleted needs:
+//
+//   enqueuer + dataDir + videosDir + masterURL.
+//
+// client and dbStore are nil. As a consequence:
+//
+//   - ForwardCompleted is fully available (the only entry point that
+//     callers should use via this constructor).
+//   - Forward returns (nil, false, nil) without touching the network,
+//     which is the correct early-exit semantics for a forwarder-only
+//     service: there is no remote engine to talk to and no forwarding
+//     table to persist to.
+//
+// This is the constructor handlers (e.g. pipeline.Generate) must use when
+// they only need the forward-completed path. It collapses the legacy free
+// function ForwardCompletedResult into a Service instance without dragging
+// unrelated dependencies (remote engine, SQLite store) into the wiring
+// graph of callers that do not need them.
+func NewForwarder(cfg *config.Config, enqueuer *enqueue.Enqueuer) *Service {
+	if cfg == nil || enqueuer == nil {
+		return nil
+	}
+	return &Service{
+		enqueuer:  enqueuer,
+		client:    nil,
+		dbStore:   nil,
+		dataDir:   strings.TrimSpace(cfg.Runtime.DataDir),
+		videosDir: strings.TrimSpace(cfg.Runtime.VideosDir),
+		masterURL: resolvePublicMasterURL(cfg),
+	}
+}
+
 // Forward tries the creator stage and, if it returns a complete payload,
 // forwards the resulting job to the worker queue.
 //
@@ -165,19 +198,32 @@ func firstString(m map[string]interface{}, keys ...string) string {
 	return ""
 }
 
-// ForwardCompleted is the SINGLE authoritative entry point for converting
-// a completed creator result into a Velox Job. It:
+// ForwardCompleted is the SINGLE authoritative entry point on the
+// creatorflow.ForwardingService for converting a completed creator result
+// into a Velox Job. There is intentionally no parallel free-function form:
+// every entry point — handlers, CreatorForwardingRunner, external services,
+// test harnesses — MUST go through this method so that master-URL
+// resolution, URL rewriting, deterministic forwarding-key injection, and
+// idempotency enforcement happen exactly once.
 //
-//  1. Validates the result via ShouldForwardPipelineResult.
-//  2. Builds the canonical worker payload via BuildPipelinePayload.
-//  3. Resolves the public master URL and applies BuildSceneImagePayloadForMaster
-//     (URL rewriting for worker-side asset downloads).
-//  4. Enqueues atomically via Enqueuer.Enqueue.
+// Pipeline:
 //
-// Callers that do not need URL rewriting (test harnesses, external services
-// that supply pre-resolved URLs) can use s.ForwardCompleted directly with
-// an empty masterURL — BuildSceneImagePayloadForMaster is a no-op when
-// masterURL is empty.
+//  1. Validate the result via ShouldForwardPipelineResult.
+//  2. Guard creator dependency wiring (enqueuer + creator must be present).
+//  3. Build the canonical worker payload via BuildPipelinePayload.
+//  4. Resolve the public master URL and apply BuildSceneImagePayloadForMaster
+//     (URL rewriting for worker-side asset downloads). This step is a no-op
+//     when s.masterURL is empty AND s.dataDir is empty (test harness path).
+//  5. Re-inject `_internal_forwarding_key` so Enqueue can derive a
+//     deterministic job_id (PR-forwarding-deterministic-id).
+//  6. Enqueue atomically via Enqueuer.Enqueue.
+//
+// Migration: legacy callers that used the now-removed free function
+// `ForwardCompletedResult(ctx, enqueuer, result)` must be rewired to obtain
+// a Service (via creatorflow.New(cfg, enqueuer, dbStore)) and call
+// svc.ForwardCompleted. The free function was an ad-hoc compatibility shim
+// that bypassed master-URL rewriting; keeping it around split the contract
+// into two divergent paths.
 func (s *Service) ForwardCompleted(ctx context.Context, result map[string]interface{}) (map[string]interface{}, error) {
 	if s == nil {
 		return nil, fmt.Errorf("creatorflow: ForwardCompleted: nil service")
@@ -243,33 +289,6 @@ func detectPublicMasterURL() string {
 		}
 	}
 	return remoteansible.DetectLocalMasterURL()
-}
-
-// ForwardCompletedResult is the package-level compatibility entry point for
-// callers that only have an Enqueuer and a completed creator result.
-// It preserves the pre-refactor contract used by pipeline handlers while the
-// method-based Service path owns the richer URL-rewrite flow.
-func ForwardCompletedResult(
-	ctx context.Context,
-	enqueuer *enqueue.Enqueuer,
-	result map[string]interface{},
-) (map[string]interface{}, error) {
-	if enqueuer == nil {
-		return nil, fmt.Errorf("creatorflow.ForwardCompletedResult: nil enqueuer")
-	}
-	if !enqueue.ShouldForwardPipelineResult(result) {
-		return nil, nil
-	}
-
-	workerPayload, err := enqueue.BuildPipelinePayload(result)
-	if err != nil {
-		return nil, fmt.Errorf("creatorflow.ForwardCompletedResult: build payload: %w", err)
-	}
-	if fwdKey := strings.TrimSpace(payload.FirstString(result, "_internal_forwarding_key")); fwdKey != "" {
-		workerPayload["_internal_forwarding_key"] = fwdKey
-	}
-
-	return enqueuer.Enqueue(ctx, workerPayload, costmodel.DefaultRequirements())
 }
 
 // =============================================================================
@@ -375,11 +394,13 @@ func deriveJobID(idempotencyKey string) string {
 // error, the tx is rolled back so the Job row does not orphan (per runbook
 // "errore nella creazione di una Task esegue rollback del Job").
 //
-// The free function form (vs. a method on Service) matches the pattern of
-// ForwardCompletedResult, and avoids touching the existing Service struct,
-// which has its own dependencies wired through New(cfg, enqueuer) at the
-// composition root. Atomic creator + jobs repo are wired alongside inside
-// buildTasks / buildJobs (see cmd/server/bootstrap_tasks.go).
+// The free-function form (vs. a method on Service) is intentional:
+// CreateJobWithPlan is part of the PR-operation 01 / Fase 2 cutover, which
+// owns the (jobs, tasks, task_specs) writer surface and reaches into the
+// store package directly. Keeping it off the Service struct isolates the
+// dependency graph (atomic creator + jobs repo) from the Service's runtime
+// topology (enqueuer + remoteengine client + dbStore). Both wiring paths
+// reach the same composition root under cmd/server/bootstrap.go.
 func CreateJobWithPlan(
 	ctx context.Context,
 	atomic *store.AtomicJobTaskCreator,

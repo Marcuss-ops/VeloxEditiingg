@@ -33,16 +33,18 @@ import (
 
 // Handlers carries every dependency the pipeline HTTP layer needs.
 //
-// The struct carries only the mandatory remote params (cfg,
-// enqueuer, client). Cancellation-side dependencies (jobs Reader/Writer
-// for local cleanup, worker CommandManager for per-worker cancellation
-// notification) are bundled in JobsDeps and set when wiring the full
-// composition root via NewHandlersFull. nil-safe — a nil JobsDeps
-// disables local cancellation while leaving remote cancel reachable.
+// The struct carries the mandatory remote params (cfg, enqueuer, client,
+// forwarder) plus optional cancel-side dependencies bundled in JobsDeps.
+// forwarder is the authoritative creatorflow.Service used to satisfy the
+// single canonical forward-completed path. It is built ONCE at
+// construction time (so resolvePublicMasterURL → detectPublicMasterURL
+// → `hostname -I` does NOT run per request) and reused for every poll
+// completion and synchronous forward.
 type Handlers struct {
 	cfg      *config.Config
 	enqueuer *enqueue.Enqueuer
 	client   *remoteengine.Client
+	forwarder *creatorflow.Service
 	jobs     JobsDeps
 }
 
@@ -64,14 +66,25 @@ type JobsDeps struct {
 //	client    — the *remoteengine.Client talking to the script service
 //	             (may be nil when VELOX_REMOTE_ENGINE_URL is unset).
 //
+// The forwarder creatorflow.Service is pre-built here so the master-URL
+// resolution (which shells out to `hostname -I` when no VELOX_MASTER_URL
+// is set) happens once per process, not once per request.
+//
 // Compose with WithJobsDeps to add the optional cancel deps.
 func NewHandlers(cfg *config.Config, enqueuer *enqueue.Enqueuer, client *remoteengine.Client) *Handlers {
-	return &Handlers{cfg: cfg, enqueuer: enqueuer, client: client}
+	return &Handlers{
+		cfg:      cfg,
+		enqueuer: enqueuer,
+		client:   client,
+		forwarder: creatorflow.NewForwarder(cfg, enqueuer),
+	}
 }
 
 // NewHandlersFull is the composition-root constructor that wires
 // every optional dependency (jobs reader/writer for cancellation
 // cleanup, worker command manager for per-worker cancel notifications).
+// Pre-builds the forwarder creatorflow.Service at construction time
+// for the same performance reason as NewHandlers.
 func NewHandlersFull(
 	cfg *config.Config,
 	enqueuer *enqueue.Enqueuer,
@@ -84,6 +97,7 @@ func NewHandlersFull(
 		cfg:      cfg,
 		enqueuer: enqueuer,
 		client:   client,
+		forwarder: creatorflow.NewForwarder(cfg, enqueuer),
 		jobs:     JobsDeps{Reader: jobsReader, Writer: jobsWriter, CmdMgr: cmdMgr},
 	}
 }
@@ -209,7 +223,7 @@ func (h *Handlers) Generate() gin.HandlerFunc {
 		// complete result.
 		if enqueue.ShouldForwardPipelineResult(result) {
 			pipelineLog("FORWARD: result complete — forwarding to Velox workers (sync)")
-			if forwarded, forwardErr := forwardPipelineResultToWorker(c.Request.Context(), h.enqueuer, result); forwardErr != nil {
+			if forwarded, forwardErr := h.forwardPipelineResultToWorker(c.Request.Context(), result); forwardErr != nil {
 				if assetErr, ok := voiceoverassets.AsAcquisitionError(forwardErr); ok {
 					c.JSON(http.StatusUnprocessableEntity, gin.H{
 						"ok":          false,
@@ -258,16 +272,18 @@ func (h *Handlers) Generate() gin.HandlerFunc {
 	}
 }
 
-// forwardPipelineResultToWorker is the package-internal helper that
+// forwardPipelineResultToWorker is the package-internal method that
 // turns a remote-engine result map into a Velox job payload and
-// enqueues it. It already took *enqueue.Enqueuer as an explicit
-// parameter before the refactor; constructor injection simply makes
-// `h.Generate` the upstream caller that supplies it.
-func forwardPipelineResultToWorker(ctx context.Context, enqueuer *enqueue.Enqueuer, result map[string]interface{}) (map[string]interface{}, error) {
+// enqueues it through the authoritative creatorflow.Service.ForwardCompleted
+// entry point (no free-function form). The Service was pre-built once
+// in NewHandlers/NewHandlersFull so resolvePublicMasterURL +
+// detectPublicMasterURL + `hostname -I` only execute at boot, not per
+// request.
+func (h *Handlers) forwardPipelineResultToWorker(ctx context.Context, result map[string]interface{}) (map[string]interface{}, error) {
 	pipelineLog("FORWARD: building worker payload...")
-	enqueued, err := creatorflow.ForwardCompletedResult(ctx, enqueuer, result)
+	enqueued, err := h.forwarder.ForwardCompleted(ctx, result)
 	if err != nil {
-		pipelineLog("FORWARD: ForwardCompletedResult FAILED: %v", err)
+		pipelineLog("FORWARD: ForwardCompleted FAILED: %v", err)
 		return nil, err
 	}
 	if enqueued == nil {
