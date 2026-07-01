@@ -6,9 +6,12 @@ package worker
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -173,6 +176,42 @@ func newDispatchTestWorker(t *testing.T) (*Worker, *recordingTransport) {
 		version:            "test",
 	}
 	return w, rt
+}
+
+type uploadRecordingExecutor struct {
+	outputPath string
+}
+
+func (e uploadRecordingExecutor) Descriptor() executor.Descriptor {
+	return executor.Descriptor{
+		ID:            "scene.composite.v1",
+		Version:       1,
+		ResourceClass: executor.ResourceCPU,
+		TemporalMode:  executor.TemporalGlobal,
+	}
+}
+
+func (e uploadRecordingExecutor) Validate(_ executor.TaskSpec) error { return nil }
+
+func (e uploadRecordingExecutor) Execute(
+	_ context.Context,
+	_ executor.ExecutionContext,
+	_ executor.TaskSpec,
+) (executor.ExecutionResult, error) {
+	if err := os.WriteFile(e.outputPath, []byte("fake-mp4-bytes"), 0o644); err != nil {
+		return executor.ExecutionResult{}, err
+	}
+	return executor.ExecutionResult{
+		Status: "succeeded",
+		Outputs: []executor.ArtifactRef{{
+			Type:      "render.output",
+			Hash:      "deadbeefcafebabe",
+			URI:       e.outputPath,
+			SizeBytes: int64(len("fake-mp4-bytes")),
+		}},
+		StartedAt:   time.Now().UTC(),
+		CompletedAt: time.Now().UTC(),
+	}, nil
 }
 
 func TestPR_3_9_DispatchResolvesVoiceoverAssetBeforeExecutor(t *testing.T) {
@@ -387,6 +426,194 @@ func TestPR_3_8_DispatchUnknownExecutorSurfacesFailure(t *testing.T) {
 	}
 	if !strings.Contains(errDetail, "not found") && !strings.Contains(errDetail, "code=") {
 		t.Fatalf("expected error to mention lookup/code, got %q", errDetail)
+	}
+}
+
+func TestExecuteTask_UploadsOutputBeforeSubmittingTaskResult(t *testing.T) {
+	var mu sync.Mutex
+	uploadCalls := 0
+	var uploadedJobID, uploadedLeaseID string
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/video/upload-completed" {
+			t.Fatalf("unexpected path %q", r.URL.Path)
+		}
+		if err := r.ParseMultipartForm(16 << 20); err != nil {
+			t.Fatalf("ParseMultipartForm: %v", err)
+		}
+		uploadedJobID = r.FormValue("job_id")
+		uploadedLeaseID = r.FormValue("lease_id")
+		file, _, err := r.FormFile("video")
+		if err != nil {
+			t.Fatalf("FormFile(video): %v", err)
+		}
+		defer file.Close()
+		payload, err := io.ReadAll(file)
+		if err != nil {
+			t.Fatalf("ReadAll(video): %v", err)
+		}
+		if string(payload) != "fake-mp4-bytes" {
+			t.Fatalf("uploaded payload = %q, want fake-mp4-bytes", string(payload))
+		}
+		mu.Lock()
+		uploadCalls++
+		mu.Unlock()
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"ok":          true,
+			"job_id":      r.FormValue("job_id"),
+			"artifact_id": "artifact-upload-001",
+			"upload_id":   "upload-001",
+			"status":      "SUCCEEDED",
+			"size":        len(payload),
+			"sha256":      "deadbeefcafebabe",
+		})
+	}))
+	defer srv.Close()
+
+	log := logger.New(logger.InfoLevel, io.Discard)
+	reg := executor.NewRegistry()
+	outputPath := filepath.Join(t.TempDir(), "rendered.mp4")
+	if err := reg.Register(uploadRecordingExecutor{outputPath: outputPath}); err != nil {
+		t.Fatalf("register uploadRecordingExecutor: %v", err)
+	}
+
+	rt := &recordingTransport{}
+	w := &Worker{
+		config: &config.WorkerConfig{
+			WorkerID:      "test-worker-upload-001",
+			WorkerName:    "test-worker-upload",
+			LogLevel:      "info",
+			MaxActiveJobs: 1,
+			MasterURL:     srv.URL,
+		},
+		apiClient:          api.NewClient(srv.URL, api.WithWorkerID("test-worker-upload-001")),
+		logger:             log,
+		transport:          rt,
+		status:             StatusIdle,
+		stopChan:           make(chan struct{}),
+		heartbeatBackoff:   &backoffConfig{initialInterval: time.Second, maxInterval: time.Minute, multiplier: 2.0},
+		seenCommands:       make(map[string]time.Time),
+		recentLogs:         newRecentLogBuffer(50),
+		activeTasks:        make(map[string]*ActiveTaskExecution),
+		taskIDsByJob:       make(map[string][]string),
+		executorRegistry:   reg,
+		taskRunner:         taskrunner.NewTaskRunner(reg, log),
+		concurrencyLimiter: concurrency.NewConcurrencyLimiter(1),
+		version:            "test",
+	}
+
+	pte := &PendingTaskExecution{
+		TaskID:          "task-upload-001",
+		JobID:           "job-upload-001",
+		AttemptID:       "attempt-upload-001",
+		AttemptNumber:   3,
+		LeaseID:         "lease-upload-001",
+		ExecutorID:      "scene.composite.v1",
+		ExecutorVersion: 1,
+		Revision:        17,
+		Spec: executor.TaskSpec{
+			Version:    1,
+			JobID:      "job-upload-001",
+			ExecutorID: "scene.composite.v1",
+		},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	<-runExecuteTaskAsync(t, w, ctx, pte, pte.TaskID, pte.AttemptID)
+
+	msg, ok := rt.last()
+	if !ok {
+		t.Fatal("transport.Send was never called; TaskResult lost")
+	}
+	tr, ok := msg.TypedPayload.(*pb.TaskResult)
+	if !ok || tr == nil {
+		t.Fatalf("task_result TypedPayload is not *pb.TaskResult, got %T", msg.TypedPayload)
+	}
+	if tr.GetStatus() != "succeeded" {
+		t.Fatalf("expected status=succeeded, got %q", tr.GetStatus())
+	}
+	if uploadedJobID != pte.JobID || uploadedLeaseID != pte.LeaseID {
+		t.Fatalf("upload fields mismatch: job=%q lease=%q", uploadedJobID, uploadedLeaseID)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if uploadCalls != 1 {
+		t.Fatalf("uploadCalls = %d, want 1", uploadCalls)
+	}
+}
+
+func TestExecuteTask_FailsTaskWhenUploadFails(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"ok":false,"error":"begin upload rejected"}`, http.StatusBadRequest)
+	}))
+	defer srv.Close()
+
+	log := logger.New(logger.InfoLevel, io.Discard)
+	reg := executor.NewRegistry()
+	outputPath := filepath.Join(t.TempDir(), "rendered.mp4")
+	if err := reg.Register(uploadRecordingExecutor{outputPath: outputPath}); err != nil {
+		t.Fatalf("register uploadRecordingExecutor: %v", err)
+	}
+
+	rt := &recordingTransport{}
+	w := &Worker{
+		config: &config.WorkerConfig{
+			WorkerID:      "test-worker-upload-fail-001",
+			WorkerName:    "test-worker-upload-fail",
+			LogLevel:      "info",
+			MaxActiveJobs: 1,
+			MasterURL:     srv.URL,
+		},
+		apiClient:          api.NewClient(srv.URL, api.WithWorkerID("test-worker-upload-fail-001")),
+		logger:             log,
+		transport:          rt,
+		status:             StatusIdle,
+		stopChan:           make(chan struct{}),
+		heartbeatBackoff:   &backoffConfig{initialInterval: time.Second, maxInterval: time.Minute, multiplier: 2.0},
+		seenCommands:       make(map[string]time.Time),
+		recentLogs:         newRecentLogBuffer(50),
+		activeTasks:        make(map[string]*ActiveTaskExecution),
+		taskIDsByJob:       make(map[string][]string),
+		executorRegistry:   reg,
+		taskRunner:         taskrunner.NewTaskRunner(reg, log),
+		concurrencyLimiter: concurrency.NewConcurrencyLimiter(1),
+		version:            "test",
+	}
+
+	pte := &PendingTaskExecution{
+		TaskID:          "task-upload-fail-001",
+		JobID:           "job-upload-fail-001",
+		AttemptID:       "attempt-upload-fail-001",
+		AttemptNumber:   2,
+		LeaseID:         "lease-upload-fail-001",
+		ExecutorID:      "scene.composite.v1",
+		ExecutorVersion: 1,
+		Revision:        11,
+		Spec: executor.TaskSpec{
+			Version:    1,
+			JobID:      "job-upload-fail-001",
+			ExecutorID: "scene.composite.v1",
+		},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	<-runExecuteTaskAsync(t, w, ctx, pte, pte.TaskID, pte.AttemptID)
+
+	msg, ok := rt.last()
+	if !ok {
+		t.Fatal("transport.Send was never called; expected failure TaskResult")
+	}
+	tr, ok := msg.TypedPayload.(*pb.TaskResult)
+	if !ok || tr == nil {
+		t.Fatalf("task_result TypedPayload is not *pb.TaskResult, got %T", msg.TypedPayload)
+	}
+	if tr.GetStatus() != "failed" {
+		t.Fatalf("expected status=failed, got %q", tr.GetStatus())
+	}
+	if !strings.Contains(tr.GetErrorDetail(), "upload task outputs") {
+		t.Fatalf("expected upload failure in error_detail, got %q", tr.GetErrorDetail())
 	}
 }
 

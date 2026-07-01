@@ -84,10 +84,19 @@ func (w *Worker) executeTask(ctx context.Context, pte *PendingTaskExecution, tas
 		telemetry.RecordJobFailure(duration.Milliseconds())
 		telemetry.GetPrometheusMetrics().RecordJobRuntime(pte.ExecutorID, float64(duration.Milliseconds()))
 	} else {
-		logger.LogJobSuccess(w.config.WorkerID, pte.JobID, pte.ExecutorID, duration)
-		w.tasksCompleted.Add(1)
-		telemetry.RecordJobSuccess(duration.Milliseconds())
-		telemetry.GetPrometheusMetrics().RecordJobRuntime(pte.ExecutorID, float64(duration.Milliseconds()))
+		if uploadErr := w.uploadTaskOutputs(jobCtx, pte, report); uploadErr != nil {
+			execErr = fmt.Errorf("upload task outputs: %w", uploadErr)
+			logger.LogJobFailedWithType(w.config.WorkerID, pte.JobID, pte.ExecutorID, execErr, duration)
+			w.setStatus(StatusError)
+			w.tasksFailed.Add(1)
+			telemetry.RecordJobFailure(duration.Milliseconds())
+			telemetry.GetPrometheusMetrics().RecordJobRuntime(pte.ExecutorID, float64(duration.Milliseconds()))
+		} else {
+			logger.LogJobSuccess(w.config.WorkerID, pte.JobID, pte.ExecutorID, duration)
+			w.tasksCompleted.Add(1)
+			telemetry.RecordJobSuccess(duration.Milliseconds())
+			telemetry.GetPrometheusMetrics().RecordJobRuntime(pte.ExecutorID, float64(duration.Milliseconds()))
+		}
 	}
 
 	telemetry.GetPrometheusMetrics().SetWorkerStatus(w.config.WorkerID, 1)
