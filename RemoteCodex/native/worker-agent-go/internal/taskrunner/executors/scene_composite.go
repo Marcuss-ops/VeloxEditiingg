@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"velox-worker-agent/internal/executor"
@@ -107,13 +108,8 @@ func (s *SceneComposite) Validate(spec executor.TaskSpec) error {
 }
 
 // Execute performs the canonical work. It delegates to the existing
-// pipeline.Runner with the canonical "hybrid.v1" pipeline ID and a
-// synthesized output path.
-//
-// We hard-code "hybrid.v1" so future pipeline additions that could
-// match this payload do not silently route to a different renderer
-// (PR-3.4 invariant: keep one underlying renderer path for the
-// migrated scene composite).
+// pipeline.Runner using the explicit payload `pipeline_id` when present;
+// otherwise it falls back to the historical "hybrid.v1" route.
 //
 // CAVEAT: the C++ engine runs as a synchronous subprocess; context
 // cancellation propagates only AFTER the engine finishes. The
@@ -133,11 +129,12 @@ func (s *SceneComposite) Execute(ctx context.Context, _ executor.ExecutionContex
 		}, nil
 	}
 
-	if err := s.pipelineRunner.Run(ctx, "hybrid.v1", spec.JobID, spec.Payload, outputPath); err != nil {
+	pipelineID := resolvePipelineID(spec.Payload)
+	if err := s.pipelineRunner.Run(ctx, pipelineID, spec.JobID, spec.Payload, outputPath); err != nil {
 		return executor.ExecutionResult{
 			Status:      "failed",
 			ErrorCode:   "execute_failed",
-			ErrorDetail: fmt.Sprintf("pipeline.Runner.Run(hybrid.v1): %v", err),
+			ErrorDetail: fmt.Sprintf("pipeline.Runner.Run(%s): %v", pipelineID, err),
 			StartedAt:   startedAt,
 			CompletedAt: time.Now().UTC(),
 		}, nil
@@ -165,6 +162,15 @@ func (s *SceneComposite) Execute(ctx context.Context, _ executor.ExecutionContex
 		StartedAt:   startedAt,
 		CompletedAt: time.Now().UTC(),
 	}, nil
+}
+
+func resolvePipelineID(payload map[string]interface{}) string {
+	if payload != nil {
+		if pipelineID, _ := payload["pipeline_id"].(string); strings.TrimSpace(pipelineID) != "" {
+			return strings.TrimSpace(pipelineID)
+		}
+	}
+	return "hybrid.v1"
 }
 
 // resolveOutputPath prefers spec.Payload["output_path"] (master override);

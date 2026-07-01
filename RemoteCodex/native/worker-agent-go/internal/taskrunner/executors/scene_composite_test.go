@@ -67,6 +67,7 @@ func (f *fakeRenderClient) Render(_ context.Context, p *plan.RenderPlan) error {
 func newTestSceneComposite(renderErr error) (*SceneComposite, *fakeRenderClient) {
 	pipeRegistry := pipeline.NewRegistry()
 	pipeRegistry.Register(&fakeCompiler{id: "hybrid.v1", validate: true})
+	pipeRegistry.Register(&fakeCompiler{id: "clips.v1", validate: true})
 
 	rclient := &fakeRenderClient{renderErr: renderErr}
 	runner := pipeline.NewRunner(pipeRegistry, rclient, logger.New(logger.InfoLevel, &strings.Builder{}))
@@ -214,6 +215,38 @@ func TestSceneComposite_Execute_SynthesizesOutputPath(t *testing.T) {
 	wantPath := filepath.Join("/tmp/velox/scene-composite-test", "j-no-path.mp4")
 	if got := res.Outputs[0].URI; got != wantPath {
 		t.Errorf("synthesized path = %q, want %q", got, wantPath)
+	}
+}
+
+func TestSceneComposite_Execute_UsesExplicitPipelineID(t *testing.T) {
+	exec, rclient := newTestSceneComposite(nil)
+	spec := executor.TaskSpec{
+		Version: 1, JobID: "j-clips", ExecutorID: SceneCompositeID,
+		Payload: map[string]interface{}{
+			"pipeline_id": "clips.v1",
+			"items": []interface{}{
+				map[string]interface{}{
+					"type":     "video",
+					"url":      "https://example.com/clip.mp4",
+					"duration": 4.0,
+				},
+			},
+			"output_path": "/tmp/clips.mp4",
+		},
+	}
+
+	res, err := exec.Execute(context.Background(), nil, spec)
+	if err != nil {
+		t.Fatalf("Execute err = %v", err)
+	}
+	if res.Status != "succeeded" {
+		t.Fatalf("res.Status = %q, want succeeded (code=%q detail=%q)", res.Status, res.ErrorCode, res.ErrorDetail)
+	}
+	if !rclient.called || rclient.lastPlan == nil {
+		t.Fatalf("RenderClient.Render was not invoked")
+	}
+	if got := resolvePipelineID(spec.Payload); got != "clips.v1" {
+		t.Fatalf("resolvePipelineID = %q, want clips.v1", got)
 	}
 }
 

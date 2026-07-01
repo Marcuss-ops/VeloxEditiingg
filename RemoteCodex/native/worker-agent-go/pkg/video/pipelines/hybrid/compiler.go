@@ -13,9 +13,10 @@ import (
 
 // Request is the validated input for the hybrid.v1 pipeline.
 type Request struct {
-	Items    []ItemInput
-	AudioURL string
-	Fit      string
+	Items       []ItemInput
+	AudioURL    string
+	AudioTracks []AudioTrackInput
+	Fit         string
 }
 
 // ItemInput is a single timeline item.
@@ -25,6 +26,13 @@ type ItemInput struct {
 	ColorHex string
 	Duration float64
 	Fit      string
+}
+
+// AudioTrackInput is a single audio source mixed into the render plan.
+type AudioTrackInput struct {
+	SourceURL       string
+	Volume          float64
+	StartTimeOffset float64
 }
 
 // Validate checks raw input parameters for the hybrid.v1 pipeline.
@@ -42,10 +50,6 @@ func Validate(input map[string]interface{}) error {
 	itemList, ok := items.([]interface{})
 	if !ok || len(itemList) == 0 {
 		return fmt.Errorf("hybrid.v1: at least one item is required")
-	}
-	audioURL, _ := input["audio_url"].(string)
-	if strings.TrimSpace(audioURL) == "" {
-		return fmt.Errorf("hybrid.v1: audio_url is required")
 	}
 	return nil
 }
@@ -80,8 +84,22 @@ func Compile(ctx context.Context, jobID string, input map[string]interface{}, ou
 	}
 
 	// Audio tracks
-	var audioTracks []plan.AudioTrack
-	if req.AudioURL != "" {
+	audioTracks := make([]plan.AudioTrack, 0, len(req.AudioTracks))
+	for _, track := range req.AudioTracks {
+		if track.SourceURL == "" {
+			continue
+		}
+		volume := track.Volume
+		if volume <= 0 {
+			volume = 1.0
+		}
+		audioTracks = append(audioTracks, plan.AudioTrack{
+			SourceURL:       track.SourceURL,
+			Volume:          volume,
+			StartTimeOffset: track.StartTimeOffset,
+		})
+	}
+	if len(audioTracks) == 0 && req.AudioURL != "" {
 		audioTracks = append(audioTracks, plan.AudioTrack{
 			SourceURL: req.AudioURL,
 			Volume:    1.0,
@@ -102,6 +120,20 @@ func parseRequest(input map[string]interface{}) *Request {
 	req := &Request{
 		AudioURL: toString(input["audio_url"]),
 		Fit:      toStringDefault(input["fit"], "contain"),
+	}
+
+	if rawTracks, ok := input["audio_tracks"].([]interface{}); ok {
+		for _, item := range rawTracks {
+			trackMap, ok := item.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			req.AudioTracks = append(req.AudioTracks, AudioTrackInput{
+				SourceURL:       toStringDefault(trackMap["source_url"], toString(trackMap["url"])),
+				Volume:          toFloat64Default(trackMap["volume"], 1.0),
+				StartTimeOffset: toFloat64Default(trackMap["start_time_offset"], 0.0),
+			})
+		}
 	}
 
 	// Try explicit items array first
