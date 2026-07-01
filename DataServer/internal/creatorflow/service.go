@@ -88,7 +88,7 @@ func (s *Service) Forward(ctx context.Context, rawPayload map[string]interface{}
 	}
 
 	if enqueue.ShouldForwardPipelineResult(creatorResult) {
-		workerResponse, err := s.forwardCompletedResult(ctx, creatorResult)
+		workerResponse, err := s.ForwardCompleted(ctx, creatorResult)
 		if err != nil {
 			return nil, false, err
 		}
@@ -154,37 +154,25 @@ func firstString(m map[string]interface{}, keys ...string) string {
 	return ""
 }
 
-// ForwardCompletedResult converts a completed creator payload into a worker job
-// and enqueues it for the remote worker pool.
+// ForwardCompleted is the SINGLE authoritative entry point for converting
+// a completed creator result into a Velox Job. It:
 //
-// PR #3: takes *enqueue.Enqueuer (which now owns AtomicJobTaskCreator + jobs.Reader
-// instead of Queue) for atomic Job+Task creation.
-func ForwardCompletedResult(ctx context.Context, enqueuer *enqueue.Enqueuer, result map[string]interface{}) (map[string]interface{}, error) {
-	if enqueuer == nil || enqueuer.Creator == nil {
-		return nil, fmt.Errorf("creator unavailable")
-	}
-	if !enqueue.ShouldForwardPipelineResult(result) {
-		return nil, nil
-	}
-
-	workerPayload, err := enqueue.BuildPipelinePayload(result)
-	if err != nil {
-		return nil, err
-	}
-
-	// PR-04.5: legacy creator-flow callers do not publish per-job
-	// JobRequirements — pass the permissive default so today's FIFO
-	// queue routing is preserved. Future slices that decide on
-	// concrete requirements can plumb them through here.
-	return enqueuer.Enqueue(ctx, workerPayload, costmodel.DefaultRequirements())
-}
-
-func (s *Service) forwardCompletedResult(ctx context.Context, result map[string]interface{}) (map[string]interface{}, error) {
+//  1. Validates the result via ShouldForwardPipelineResult.
+//  2. Builds the canonical worker payload via BuildPipelinePayload.
+//  3. Resolves the public master URL and applies BuildSceneImagePayloadForMaster
+//     (URL rewriting for worker-side asset downloads).
+//  4. Enqueues atomically via Enqueuer.Enqueue.
+//
+// Callers that do not need URL rewriting (test harnesses, external services
+// that supply pre-resolved URLs) can use s.ForwardCompleted directly with
+// an empty masterURL — BuildSceneImagePayloadForMaster is a no-op when
+// masterURL is empty.
+func (s *Service) ForwardCompleted(ctx context.Context, result map[string]interface{}) (map[string]interface{}, error) {
 	if s == nil {
-		return nil, fmt.Errorf("service unavailable")
+		return nil, fmt.Errorf("creatorflow: ForwardCompleted: nil service")
 	}
 	if s.enqueuer == nil || s.enqueuer.Creator == nil {
-		return nil, fmt.Errorf("creator unavailable")
+		return nil, fmt.Errorf("creatorflow: ForwardCompleted: creator unavailable")
 	}
 	if !enqueue.ShouldForwardPipelineResult(result) {
 		return nil, nil
@@ -192,9 +180,10 @@ func (s *Service) forwardCompletedResult(ctx context.Context, result map[string]
 
 	workerPayload, err := enqueue.BuildPipelinePayload(result)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("creatorflow: ForwardCompleted: build payload: %w", err)
 	}
 
+	// Resolve master URL for worker-side asset download rewriting.
 	masterURL := strings.TrimSpace(s.masterURL)
 	if masterURL == "" || remoteansible.IsLocalhostURL(masterURL) {
 		masterURL = detectPublicMasterURL()
@@ -202,11 +191,10 @@ func (s *Service) forwardCompletedResult(ctx context.Context, result map[string]
 	if s.dataDir != "" && masterURL != "" {
 		workerPayload, err = enqueue.BuildSceneImagePayloadForMaster(workerPayload, s.dataDir, s.videosDir, masterURL)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("creatorflow: ForwardCompleted: resolve master URL: %w", err)
 		}
 	}
 
-	// PR-04.5: see ForwardCompletedResult comment above.
 	return s.enqueuer.Enqueue(ctx, workerPayload, costmodel.DefaultRequirements())
 }
 

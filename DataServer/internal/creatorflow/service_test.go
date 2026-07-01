@@ -137,7 +137,9 @@ func TestForwardSchedulesAsyncPollAndWorkerHandoff(t *testing.T) {
 	}
 }
 
-func TestForwardCompletedResultEnqueuesWorkerJob(t *testing.T) {
+// TestForwardCompletedEnqueuesWorkerJob verifies the unified ForwardCompleted
+// method properly converts a completed creator result into a Velox Job.
+func TestForwardCompletedEnqueuesWorkerJob(t *testing.T) {
 	tempDir := t.TempDir()
 	dbPath := filepath.Join(tempDir, "velox.db")
 	db, err := store.NewSQLiteStore(dbPath)
@@ -145,8 +147,6 @@ func TestForwardCompletedResultEnqueuesWorkerJob(t *testing.T) {
 		t.Fatalf("sqlite store: %v", err)
 	}
 	jobRepo := store.NewSQLiteJobRepository(db)
-	// PR15.7a: ForwardCompletedResult takes *enqueue.Enqueuer (not raw q).
-	// PR #3: Enqueuer now owns AtomicJobTaskCreator for atomic Job+Task creation.
 	enqueuer := newTestEnqueuer(t, db)
 
 	result := map[string]interface{}{
@@ -161,9 +161,19 @@ func TestForwardCompletedResultEnqueuesWorkerJob(t *testing.T) {
 		},
 	}
 
-	response, err := ForwardCompletedResult(context.Background(), enqueuer, result)
+	// Create a Service with minimal config — masterURL is empty so
+	// URL rewriting is a no-op (test doesn't need real master URL).
+	svc := &Service{
+		enqueuer: enqueuer,
+		dbStore:  db,
+		dataDir:  tempDir,
+		videosDir: filepath.Join(tempDir, "videos"),
+		masterURL: "",
+	}
+
+	response, err := svc.ForwardCompleted(context.Background(), result)
 	if err != nil {
-		t.Fatalf("ForwardCompletedResult: %v", err)
+		t.Fatalf("ForwardCompleted: %v", err)
 	}
 	if response["ok"] != true {
 		t.Fatalf("want ok=true, got %v", response["ok"])
