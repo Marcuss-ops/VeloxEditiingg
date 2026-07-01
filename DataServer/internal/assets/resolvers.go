@@ -260,6 +260,9 @@ func looksLikeDriveURL(reference string) bool {
 		return false
 	}
 	lower := strings.ToLower(trimmed)
+	if strings.Contains(lower, "drive.usercontent.google.com") {
+		return false
+	}
 	if strings.Contains(lower, "drive.google.com") {
 		return true
 	}

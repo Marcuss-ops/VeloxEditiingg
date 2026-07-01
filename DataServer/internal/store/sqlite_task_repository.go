@@ -19,6 +19,13 @@ type SQLiteTaskRepository struct {
 	store *SQLiteStore
 }
 
+func maxAttemptOrdinal(a, b int) int {
+	if b > a {
+		return b
+	}
+	return a
+}
+
 // Compile-time assertion.
 var _ taskgraph.Repository = (*SQLiteTaskRepository)(nil)
 
@@ -395,19 +402,39 @@ func (r *SQLiteTaskRepository) ClaimNextWithAttemptAtomic(ctx context.Context, w
 		return nil, nil, fmt.Errorf("task claim-with-attempt select: %w", err)
 	}
 
-	// 2. Generate canonical attempt identity BEFORE CAS so a CAS race
+	// 2. Self-heal stale attempt_count from immutable attempt history.
+	// If a prior timeout/requeue left tasks.attempt_count behind the
+	// actual max(task_attempts.attempt_number), deriving the next attempt
+	// from the stale task row would collide on UNIQUE(task_id,
+	// attempt_number) and strand the task in READY forever.
+	var maxSeenAttempt sql.NullInt64
+	if err := tx.QueryRowContext(ctx,
+		`SELECT MAX(attempt_number) FROM task_attempts WHERE task_id = ?`,
+		t.ID,
+	).Scan(&maxSeenAttempt); err != nil {
+		return nil, nil, fmt.Errorf("task claim-with-attempt max attempt read: %w", err)
+	}
+	effectiveAttemptCount := t.AttemptCount
+	if maxSeenAttempt.Valid {
+		effectiveAttemptCount = maxAttemptOrdinal(effectiveAttemptCount, int(maxSeenAttempt.Int64))
+	}
+
+	// 3. Generate canonical attempt identity BEFORE CAS so a CAS race
 	// failure doesn't leave a task_attempts row orphaned.
 	attemptID := uuid.NewString()
-	attemptNumber := t.AttemptCount + 1
+	attemptNumber := effectiveAttemptCount + 1
 
-	// 3. CAS: READY → LEASED on tasks + stamp attempt_id + attempt_number.
+	// 4. CAS: READY → LEASED on tasks + stamp attempt_id + attempt_number.
+	// attempt_count advances to the freshly-minted attempt so the task row
+	// stays aligned with immutable task_attempts history even before the
+	// worker accepts the offer.
 	res, err := tx.ExecContext(ctx,
 		`UPDATE tasks
 		 SET status = 'LEASED', worker_id = ?, lease_id = ?, lease_expires_at = ?,
-		     attempt_id = ?, attempt_number = ?,
+		     attempt_count = ?, attempt_id = ?, attempt_number = ?,
 		     revision = revision + 1, updated_at = ?
 		 WHERE task_id = ? AND status = 'READY' AND revision = ?`,
-		workerID, leaseID, leaseExpiresAt, attemptID, attemptNumber,
+		workerID, leaseID, leaseExpiresAt, attemptNumber, attemptID, attemptNumber,
 		nowStr, t.ID, t.Revision,
 	)
 	if err != nil {
@@ -422,7 +449,7 @@ func (r *SQLiteTaskRepository) ClaimNextWithAttemptAtomic(ctx context.Context, w
 		return nil, nil, nil
 	}
 
-	// 4. INSERT PENDING TaskAttempt in the same tx.
+	// 5. INSERT PENDING TaskAttempt in the same tx.
 	_, err = tx.ExecContext(ctx,
 		`INSERT INTO task_attempts (
 			id, task_id, job_id, attempt_number, worker_id, lease_id,
@@ -434,7 +461,7 @@ func (r *SQLiteTaskRepository) ClaimNextWithAttemptAtomic(ctx context.Context, w
 		return nil, nil, fmt.Errorf("task claim-with-attempt insert: %w", err)
 	}
 
-	// 5. Read task_spec payload (continues ClaimNextReadyTask ergonomics).
+	// 6. Read task_spec payload (continues ClaimNextReadyTask ergonomics).
 	var specPayloadJSON sql.NullString
 	err = tx.QueryRowContext(ctx,
 		`SELECT payload_json FROM task_specs WHERE task_id = ?`,
@@ -451,6 +478,7 @@ func (r *SQLiteTaskRepository) ClaimNextWithAttemptAtomic(ctx context.Context, w
 	// Update in-memory fields after successful commit.
 	t.WorkerID = workerID
 	t.LeaseID = leaseID
+	t.AttemptCount = attemptNumber
 	t.AttemptID = attemptID
 	t.AttemptNumber = attemptNumber
 	t.Revision++
@@ -816,7 +844,7 @@ func (r *SQLiteTaskRepository) IngestTaskResultAtomic(ctx context.Context, cmd t
 				temp_bytes_written, duplicate_download_bytes,
 				media_duration_seconds, wall_clock_seconds
 			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-			          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			cmd.Metrics.AttemptID, cmd.Metrics.InputBytes, cmd.Metrics.OutputBytes,
 			cmd.Metrics.BytesFromDrive, cmd.Metrics.BytesFromBlobstore, cmd.Metrics.BytesFromLocalCache,
 			cmd.Metrics.CPUTimeMS, cmd.Metrics.GPUTimeMS, cmd.Metrics.PeakRSSBytes, cmd.Metrics.PeakVRAMBytes,
@@ -1001,17 +1029,19 @@ func (r *SQLiteTaskRepository) ExpireTaskLeaseAtomic(
 	// 1. Read task to obtain attempt_count + status + worker_id + lease_id
 	// + lease_expires_at for the CAS gate.
 	var (
-		attemptCount    int
-		currentStatus   string
-		currentWorker   string
-		currentLeaseID  string
-		currentLeaseExp string
+		attemptCount         int
+		currentAttemptNumber int
+		currentStatus        string
+		currentWorker        string
+		currentLeaseID       string
+		currentLeaseExp      string
 	)
 	err = tx.QueryRowContext(ctx,
-		`SELECT attempt_count, status, COALESCE(worker_id, ''), COALESCE(lease_id, ''), COALESCE(lease_expires_at, '')
+		`SELECT attempt_count, attempt_number, status,
+		        COALESCE(worker_id, ''), COALESCE(lease_id, ''), COALESCE(lease_expires_at, '')
 		 FROM tasks WHERE task_id = ?`,
 		taskID,
-	).Scan(&attemptCount, &currentStatus, &currentWorker, &currentLeaseID, &currentLeaseExp)
+	).Scan(&attemptCount, &currentAttemptNumber, &currentStatus, &currentWorker, &currentLeaseID, &currentLeaseExp)
 	if err == sql.ErrNoRows {
 		return taskgraph.ExpireResult{}, fmt.Errorf("task expire atomic %s: not found", taskID)
 	}
@@ -1066,10 +1096,12 @@ func (r *SQLiteTaskRepository) ExpireTaskLeaseAtomic(
 		attemptRows = 0
 	}
 
+	effectiveAttemptCount := maxAttemptOrdinal(attemptCount, currentAttemptNumber)
+
 	// 3. Retry budget. attempt_count >= maxRetries + 1 means the next
 	// AcceptTask would exceed the configured budget — reap terminates
 	// the task as FAILED. Otherwise the task is requeueable as READY.
-	exhausted := attemptCount >= maxRetries+1
+	exhausted := effectiveAttemptCount >= maxRetries+1
 	newStatus := taskgraph.StatusReady
 	if exhausted {
 		newStatus = taskgraph.StatusFailed
@@ -1083,9 +1115,10 @@ func (r *SQLiteTaskRepository) ExpireTaskLeaseAtomic(
 		`UPDATE tasks
 		 SET status = ?, completed_at = ?,
 		     worker_id = '', lease_id = '', lease_expires_at = NULL,
+		     attempt_count = ?, attempt_id = '', attempt_number = 0,
 		     revision = revision + 1, updated_at = ?
 		 WHERE task_id = ? AND status = ? AND worker_id = ? AND lease_id = ?`,
-		string(newStatus), now, now,
+		string(newStatus), now, effectiveAttemptCount, now,
 		taskID, currentStatus, currentWorker, leaseID,
 	)
 	if err != nil {
@@ -1306,17 +1339,29 @@ func (r *SQLiteTaskRepository) ReleaseLease(ctx context.Context, taskID, workerI
 	if taskID == "" {
 		return nil
 	}
+	tx, err := r.store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("task release lease begin: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+
 	now := time.Now().UTC().Format(time.RFC3339)
-	res, err := r.store.db.ExecContext(ctx,
+	res, err := tx.ExecContext(ctx,
 		`UPDATE tasks
 		 SET status = 'READY', worker_id = '', lease_id = '',
+		     lease_expires_at = NULL, attempt_id = NULL, attempt_number = 0,
 		     revision = revision + 1, updated_at = ?
 		 WHERE task_id = ? AND worker_id = ? AND lease_id = ?
 		   AND status IN ('LEASED', 'RUNNING')`,
 		now, taskID, workerID, leaseID,
 	)
 	if err != nil {
-		return fmt.Errorf("task release lease: %w", err)
+		return fmt.Errorf("task release lease task update: %w", err)
 	}
 	n, err := res.RowsAffected()
 	if err != nil {
@@ -1325,6 +1370,38 @@ func (r *SQLiteTaskRepository) ReleaseLease(ctx context.Context, taskID, workerI
 	if n == 0 {
 		return fmt.Errorf("task release lease %s: %w", taskID, taskgraph.ErrTransitionConflict)
 	}
+
+	// A released offer was never accepted into RUNNING, so its canonical
+	// PENDING attempt must be removed to let the next claim reuse the same
+	// attempt number (attempt_count only advances on AcceptTaskAtomic).
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM task_attempts
+		 WHERE task_id = ? AND worker_id = ? AND lease_id = ? AND status = 'PENDING'`,
+		taskID, workerID, leaseID,
+	); err != nil {
+		return fmt.Errorf("task release lease delete pending attempt: %w", err)
+	}
+
+	// Recompute attempt_count from the immutable residual history after
+	// deleting the released PENDING offer. This keeps
+	// tasks.attempt_count >= MAX(task_attempts.attempt_number) without
+	// permanently skipping an ordinal for offers that never started.
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE tasks
+		    SET attempt_count = COALESCE(
+		    	(SELECT MAX(attempt_number) FROM task_attempts WHERE task_id = ?),
+		    	0
+		    )
+		  WHERE task_id = ?`,
+		taskID, taskID,
+	); err != nil {
+		return fmt.Errorf("task release lease reconcile attempt_count: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("task release lease commit: %w", err)
+	}
+	committed = true
 	return nil
 }
 

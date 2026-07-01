@@ -38,7 +38,7 @@ func insertTestForwardingRecord(t *testing.T, db *store.SQLiteStore, forwardingI
 }
 
 func TestNewCreatorForwardingRunner_Defaults(t *testing.T) {
-	r := NewCreatorForwardingRunner(nil, nil, nil, "")
+	r := NewCreatorForwardingRunner(nil, nil, nil, nil, "")
 	if r == nil {
 		t.Fatal("NewCreatorForwardingRunner returned nil")
 	}
@@ -54,7 +54,7 @@ func TestNewCreatorForwardingRunner_Defaults(t *testing.T) {
 }
 
 func TestRunner_Stop(t *testing.T) {
-	r := NewCreatorForwardingRunner(DefaultRunnerConfig(), nil, nil, "test-runner")
+	r := NewCreatorForwardingRunner(DefaultRunnerConfig(), nil, nil, nil, "test-runner")
 	ctx, cancel := context.WithCancel(context.Background())
 
 	done := make(chan error, 1)
@@ -173,7 +173,7 @@ func TestRunner_Tick_NoClient(t *testing.T) {
 	insertTestForwardingRecord(t, db, "cf-no-client", "openai", "src-1", "scene.composite.v1", "PENDING")
 
 	// Runner with nil client should not claim anything.
-	r := NewCreatorForwardingRunner(DefaultRunnerConfig(), db, nil, "test")
+	r := NewCreatorForwardingRunner(DefaultRunnerConfig(), db, nil, nil, "test")
 
 	err := r.tick(context.Background())
 	if err != nil {
@@ -196,7 +196,7 @@ func TestRunner_Tick_UnconfiguredClient(t *testing.T) {
 
 	// Client that is not configured (no URL).
 	client := remoteengine.NewClient(remoteengine.Config{})
-	r := NewCreatorForwardingRunner(DefaultRunnerConfig(), db, client, "test")
+	r := NewCreatorForwardingRunner(DefaultRunnerConfig(), db, client, nil, "test")
 
 	err := r.tick(context.Background())
 	if err != nil {

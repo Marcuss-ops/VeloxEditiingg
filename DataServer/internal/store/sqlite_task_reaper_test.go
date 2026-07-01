@@ -46,6 +46,8 @@ CREATE TABLE tasks (
 	priority           INTEGER,
 	revision           INTEGER NOT NULL DEFAULT 0,
 	attempt_count      INTEGER NOT NULL DEFAULT 0,
+	attempt_id         TEXT,
+	attempt_number     INTEGER NOT NULL DEFAULT 0,
 	worker_id          TEXT,
 	lease_id           TEXT,
 	lease_expires_at   TEXT,
@@ -97,23 +99,23 @@ func seedLeasedTaskAt(t *testing.T, db *sql.DB,
 	now := time.Now().UTC().Format(time.RFC3339)
 	if _, err := db.ExecContext(context.Background(),
 		`INSERT INTO tasks
-		 (task_id, job_id, status, priority, revision, attempt_count,
+		 (task_id, job_id, status, priority, revision, attempt_count, attempt_number,
 		  worker_id, lease_id, lease_expires_at, created_at, updated_at)
-		 VALUES (?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?)`,
-		taskID, "job-"+taskID, status, revision, attemptCount,
+		 VALUES (?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		taskID, "job-"+taskID, status, revision, attemptCount, attemptCount,
 		workerID, leaseID, leaseExpiresAt, now, now,
 	); err != nil {
 		t.Fatalf("seed LEASED task %q: %v", taskID, err)
 	}
 }
 
-func seedRunningAttempt(t *testing.T, db *sql.DB, attemptID, taskID, workerID, leaseID string) {
+func seedRunningAttempt(t *testing.T, db *sql.DB, attemptID, taskID, workerID, leaseID string, attemptNumber int) {
 	t.Helper()
 	now := time.Now().UTC().Format(time.RFC3339)
 	if _, err := db.ExecContext(context.Background(),
 		`INSERT INTO task_attempts (id, task_id, job_id, worker_id, attempt_number, lease_id, status, revision, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, 1, ?, 'RUNNING', 0, ?, ?)`,
-		attemptID, taskID, "job-"+taskID, workerID, leaseID, now, now,
+		 VALUES (?, ?, ?, ?, ?, ?, 'RUNNING', 0, ?, ?)`,
+		attemptID, taskID, "job-"+taskID, workerID, attemptNumber, leaseID, now, now,
 	); err != nil {
 		t.Fatalf("seed RUNNING attempt %q: %v", attemptID, err)
 	}
@@ -151,7 +153,7 @@ func TestRequeueExpiredLeases_ReapsLeaseAndClosesAttempt_HappyPath(t *testing.T)
 
 	past := time.Now().UTC().Add(-5 * time.Minute).Format(time.RFC3339)
 	seedLeasedTaskAt(t, s.db, "T-expired-leased", "w-1", "L-1", past, "LEASED", 0, 1)
-	seedRunningAttempt(t, s.db, "A-expired", "T-expired-leased", "w-1", "L-1")
+	seedRunningAttempt(t, s.db, "A-expired", "T-expired-leased", "w-1", "L-1", 1)
 
 	nowStr := time.Now().UTC().Format(time.RFC3339)
 	cands, results, err := reapOne(t, taskR, nowStr, 3)
@@ -359,7 +361,7 @@ func TestExpireTaskLeaseAtomic_RetriesExhaustedFailsTask(t *testing.T) {
 	past := time.Now().UTC().Add(-5 * time.Minute).Format(time.RFC3339)
 	// attempt_count=3 with maxRetries=2 ⇒ exhausted.
 	seedLeasedTaskAt(t, s.db, "T-exhausted", "w-1", "L-1", past, "LEASED", 0, 3)
-	seedRunningAttempt(t, s.db, "A-exhausted", "T-exhausted", "w-1", "L-1")
+	seedRunningAttempt(t, s.db, "A-exhausted", "T-exhausted", "w-1", "L-1", 3)
 
 	res, err := taskR.ExpireTaskLeaseAtomic(ctx,
 		"T-exhausted", "L-1", past, 2)
@@ -409,6 +411,53 @@ func TestExpireTaskLeaseAtomic_RetriesExhaustedFailsTask(t *testing.T) {
 	}
 }
 
+func TestExpireTaskLeaseAtomic_ReconcilesAttemptCountFromActiveAttempt(t *testing.T) {
+	s, taskR := openTaskReaperTestDB(t)
+	ctx := context.Background()
+
+	past := time.Now().UTC().Add(-5 * time.Minute).Format(time.RFC3339)
+	// Reproduce the Jackie-Chan class of drift:
+	// tasks.attempt_count = 0 while the active lease/attempt is #1.
+	seedLeasedTaskAt(t, s.db, "T-drifted", "w-1", "L-1", past, "LEASED", 0, 0)
+	seedRunningAttempt(t, s.db, "A-drifted-1", "T-drifted", "w-1", "L-1", 1)
+	if _, err := s.db.ExecContext(ctx,
+		`UPDATE tasks SET attempt_number = 1 WHERE task_id = ?`,
+		"T-drifted",
+	); err != nil {
+		t.Fatalf("align tasks.attempt_number to active attempt: %v", err)
+	}
+
+	res, err := taskR.ExpireTaskLeaseAtomic(ctx, "T-drifted", "L-1", past, 3)
+	if err != nil {
+		t.Fatalf("ExpireTaskLeaseAtomic drifted-count: %v", err)
+	}
+	if res.TaskStatus != taskgraph.StatusReady {
+		t.Fatalf("TaskStatus = %s; want READY", res.TaskStatus)
+	}
+
+	var attemptCount, attemptNumber int
+	var status, worker, lease string
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT status, attempt_count, attempt_number, COALESCE(worker_id,''), COALESCE(lease_id,'')
+		 FROM tasks WHERE task_id = ?`,
+		"T-drifted",
+	).Scan(&status, &attemptCount, &attemptNumber, &worker, &lease); err != nil {
+		t.Fatalf("post-expire SELECT drifted task: %v", err)
+	}
+	if status != "READY" {
+		t.Errorf("status = %s; want READY", status)
+	}
+	if attemptCount != 1 {
+		t.Errorf("attempt_count = %d; want 1 after timing out active attempt #1", attemptCount)
+	}
+	if attemptNumber != 0 {
+		t.Errorf("attempt_number = %d; want 0 after requeue", attemptNumber)
+	}
+	if worker != "" || lease != "" {
+		t.Errorf("worker/lease still set after requeue: worker=%q lease=%q", worker, lease)
+	}
+}
+
 // TestExpireTaskLeaseAtomic_StaleExpiryReturnsConflict: audit P0#6
 // closure at the ATOMIC layer (companion to the SELECT-level test
 // TestRequeueExpiredLeases_StaleCASDoesNotReap above). A worker
@@ -441,7 +490,7 @@ func TestExpireTaskLeaseAtomic_StaleExpiryReturnsConflict(t *testing.T) {
 	seedLeasedTaskAt(t, s.db, "T-renewed-after-select", "w-1", "L-1",
 		freshExpiry, "LEASED", 0, 1)
 	seedRunningAttempt(t, s.db, "A-renewed-after-select", "T-renewed-after-select",
-		"w-1", "L-1")
+		"w-1", "L-1", 1)
 
 	// Reaper-pass observed lease_expires_at: PAST (from before the
 	// renewable worker's RenewLease fire). The CAS gate must see

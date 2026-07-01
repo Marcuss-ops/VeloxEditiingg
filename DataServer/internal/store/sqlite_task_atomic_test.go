@@ -95,6 +95,14 @@ CREATE TABLE task_attempts (
 	UNIQUE (task_id, attempt_number),
 	FOREIGN KEY (task_id) REFERENCES tasks(task_id) ON DELETE CASCADE
 );
+CREATE TABLE task_specs (
+	task_id        TEXT NOT NULL PRIMARY KEY,
+	spec_version   INTEGER NOT NULL DEFAULT 1,
+	spec_hash      TEXT NOT NULL DEFAULT '',
+	executor_id    TEXT NOT NULL DEFAULT '',
+	payload_json   TEXT NOT NULL DEFAULT '{}',
+	created_at     TEXT NOT NULL
+);
 `
 
 // openTaskAtomicTestDB returns *SQLiteStore + *SQLiteTaskRepository scoped
@@ -181,9 +189,9 @@ func seedReadyTask(t *testing.T, db *sql.DB,
 	now := time.Now().UTC().Format(time.RFC3339)
 	if _, err := db.ExecContext(ctx,
 		`INSERT INTO tasks
-		 (task_id, job_id, status, priority, revision, worker_id, lease_id,
-		  created_at, updated_at)
-		 VALUES (?, ?, 'READY', 0, ?, '', '', ?, ?)`,
+		 (task_id, job_id, project_id, render_plan_id, executor_id, executor_version,
+		  status, priority, revision, attempt_number, worker_id, lease_id, created_at, updated_at)
+		 VALUES (?, ?, '', '', '', 0, 'READY', 0, ?, 0, '', '', ?, ?)`,
 		taskID, "job-"+taskID, revision, now, now,
 	); err != nil {
 		t.Fatalf("seed READY task: %v", err)
@@ -528,20 +536,17 @@ func TestTransitionTaskToTerminalAtomic_RejectsTerminalStatusInput(t *testing.T)
 // leave the Task in a half-claimed state with attempt_id stamped but
 // no Attempt row minted — that would violate the §9.5 invariant.
 //
-// Failure-injection mechanism: pre-seed a TaskAttempt row for the
-// candidate task with attempt_number=1 (the value
-// ClaimNextWithAttemptAtomic will compute as t.AttemptCount+1). When
-// the claim tx reaches step-4 INSERT, the UNIQUE(task_id,
-// attempt_number) constraint fires and the tx rolls back. The test
-// then asserts:
+// Failure-injection mechanism: drop task_specs so the final
+// `SELECT payload_json FROM task_specs ...` fails AFTER the tx has
+// already done the READY→LEASED CAS and inserted the PENDING attempt.
+// The tx must roll back fully. The test then asserts:
 //   1. tasks.status remained 'READY' (step-3 UPDATE rolled back)
 //   2. tasks.attempt_id is NULL/'' (NOT stamped with uuid from step-2)
 //   3. tasks.attempt_number is 0 (NOT stamped with computed value)
 //   4. tasks.revision is unchanged (NOT bumped)
 //   5. tasks.lease_expires_at is empty (NOT stamped with TTL date)
-//   6. task_attempts has exactly the pre-seeded row (no orphan inserted)
-//   7. The pre-seeded row is unmodified (id + status unchanged)
-//   8. The function returned (nil, nil, err) — no phantom claim contract
+//   6. task_attempts has zero rows (the inserted pending attempt rolled back)
+//   7. The function returned (nil, nil, err) — no phantom claim contract
 //
 // migration 052 added lease_expires_at to the production schema (mirrored
 // at the top of this file) so ClaimNextWithAttemptAtomic's UPDATE can
@@ -554,38 +559,21 @@ func TestClaimNextWithAttemptAtomic_Atomicity(t *testing.T) {
 	ctx := context.Background()
 
 	const (
-		taskID             = "T-claim-atomicity-1"
-		collisionAttemptID = "A-collision-pre"
-		collisionStatus    = "PENDING"
-		newWorkerID        = "w-1"
-		newLeaseID         = "L-1"
+		taskID      = "T-claim-atomicity-1"
+		newWorkerID = "w-1"
+		newLeaseID  = "L-1"
 	)
 	seedReadyTask(t, s.db, taskID, 0)
 
-	// Pre-seed a colliding TaskAttempt row with attempt_number=1. Since the
-	// Task.AttemptCount starts at 0, ClaimNextWithAttemptAtomic will compute
-	// attempt_number = 0 + 1 = 1, colliding on UNIQUE(task_id, attempt_number)
-	// in step-4 INSERT.
-	now := time.Now().UTC().Format(time.RFC3339)
-	if _, err := s.db.ExecContext(ctx,
-		`INSERT INTO task_attempts
-		 (id, task_id, job_id, attempt_number, worker_id, lease_id, status,
-		  report_version, created_at, updated_at)
-		 VALUES (?, ?, ?, 1, ?, ?, ?, 0, ?, ?)`,
-		collisionAttemptID, taskID, "job-"+taskID, newWorkerID, newLeaseID,
-		collisionStatus, now, now,
-	); err != nil {
-		t.Fatalf("seed collision attempt: %v", err)
+	if _, err := s.db.ExecContext(ctx, `DROP TABLE task_specs`); err != nil {
+		t.Fatalf("drop task_specs for rollback injection: %v", err)
 	}
 
-	// Claim — step-4 INSERT must collide on UNIQUE(task_id, attempt_number=1).
+	// Claim — the final task_specs read must fail, forcing full rollback.
 	tws, att, err := r.ClaimNextWithAttemptAtomic(ctx, newWorkerID, newLeaseID)
 	if err == nil {
-		t.Fatalf("ClaimNextWithAttemptAtomic: expected UNIQUE-collision error, got nil (tws=%v att=%v)", tws, att)
+		t.Fatalf("ClaimNextWithAttemptAtomic: expected spec-read failure, got nil (tws=%v att=%v)", tws, att)
 	}
-	// The error is a wrapped sqlite UNIQUE constraint failure. The
-	// canonical sentinel is NOT touched here (this is a tx-level tx
-	// failure, not an identity-spoof rejection).
 	if tws != nil {
 		t.Errorf("tws=%v; want nil (rollback prevented claim contract)", tws)
 	}
@@ -638,8 +626,7 @@ func TestClaimNextWithAttemptAtomic_Atomicity(t *testing.T) {
 		t.Errorf("tasks.completed_at = %q; want empty", completedAtCol.String)
 	}
 
-	// Atomicity assertion 5: no NEW task_attempts rows. Exactly the
-	// pre-seeded collision row remains.
+	// Atomicity assertion 5: the inserted pending attempt rolled back.
 	var count int
 	if err := s.db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM task_attempts WHERE task_id = ?`,
@@ -647,26 +634,142 @@ func TestClaimNextWithAttemptAtomic_Atomicity(t *testing.T) {
 	).Scan(&count); err != nil {
 		t.Fatalf("COUNT task_attempts: %v", err)
 	}
-	if count != 1 {
-		t.Errorf("task_attempts count = %d; want 1 (only pre-seeded collision row)", count)
+	if count != 0 {
+		t.Errorf("task_attempts count = %d; want 0 after rollback", count)
+	}
+}
+
+func TestReleaseLease_DeletesPendingAttemptAndClearsClaimIdentity(t *testing.T) {
+	s, r := openTaskAtomicTestDB(t)
+	ctx := context.Background()
+
+	const (
+		taskID      = "T-release-1"
+		workerID    = "w-release-1"
+		leaseID     = "L-release-1"
+		attemptID   = "A-release-1"
+		attemptNum  = 1
+		taskRevSeed = 0
+	)
+	seedLeasedTask(t, s.db, taskID, workerID, leaseID, attemptID, attemptNum, taskRevSeed)
+
+	if err := r.ReleaseLease(ctx, taskID, workerID, leaseID); err != nil {
+		t.Fatalf("ReleaseLease: %v", err)
 	}
 
-	// Atomicity assertion 6: the pre-seeded collision row is unchanged.
 	var (
-		sawID     string
-		sawStatus string
+		taskStatus      string
+		clearedWorkerID string
+		clearedLeaseID  string
+		revision        int
+		attemptIDCol    sql.NullString
+		attemptNumCol   int
+		leaseExpCol     sql.NullString
 	)
 	if err := s.db.QueryRowContext(ctx,
-		`SELECT id, status FROM task_attempts WHERE task_id = ? AND attempt_number = 1`,
+		`SELECT status, COALESCE(worker_id, ''), COALESCE(lease_id, ''),
+		        revision, attempt_id, attempt_number, lease_expires_at
+		 FROM tasks WHERE task_id = ?`,
 		taskID,
-	).Scan(&sawID, &sawStatus); err != nil {
-		t.Fatalf("SELECT pre-seeded row: %v", err)
+	).Scan(&taskStatus, &clearedWorkerID, &clearedLeaseID,
+		&revision, &attemptIDCol, &attemptNumCol, &leaseExpCol); err != nil {
+		t.Fatalf("post-release SELECT tasks: %v", err)
 	}
-	if sawID != collisionAttemptID {
-		t.Errorf("pre-seeded row id = %q; want %q (unchanged by failed claim)", sawID, collisionAttemptID)
+	if taskStatus != "READY" {
+		t.Errorf("tasks.status = %q; want READY", taskStatus)
 	}
-	if sawStatus != collisionStatus {
-		t.Errorf("pre-seeded row status = %q; want %q (unchanged by failed claim)", sawStatus, collisionStatus)
+	if clearedWorkerID != "" || clearedLeaseID != "" {
+		t.Errorf("tasks worker_id=%q lease_id=%q; want both empty", clearedWorkerID, clearedLeaseID)
+	}
+	if attemptIDCol.Valid && attemptIDCol.String != "" {
+		t.Errorf("tasks.attempt_id = %q; want NULL/empty after release", attemptIDCol.String)
+	}
+	if attemptNumCol != 0 {
+		t.Errorf("tasks.attempt_number = %d; want 0 after release", attemptNumCol)
+	}
+	if leaseExpCol.Valid && leaseExpCol.String != "" {
+		t.Errorf("tasks.lease_expires_at = %q; want NULL/empty after release", leaseExpCol.String)
+	}
+	if revision != 1 {
+		t.Errorf("tasks.revision = %d; want 1 after release CAS", revision)
+	}
+
+	var attempts int
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM task_attempts WHERE task_id = ?`,
+		taskID,
+	).Scan(&attempts); err != nil {
+		t.Fatalf("count task_attempts after release: %v", err)
+	}
+	if attempts != 0 {
+		t.Errorf("task_attempts rows = %d; want 0 after release deletes pending attempt", attempts)
+	}
+}
+
+func TestClaimNextWithAttemptAtomic_UsesHistoricalMaxAttemptNumber(t *testing.T) {
+	s, r := openTaskAtomicTestDB(t)
+	ctx := context.Background()
+
+	const (
+		taskID          = "T-claim-historical-max"
+		workerID        = "w-history-1"
+		leaseID         = "L-history-1"
+		previousAttempt = "A-history-1"
+	)
+
+	seedReadyTask(t, s.db, taskID, 0)
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	if _, err := s.db.ExecContext(ctx,
+		`INSERT INTO task_attempts
+		 (id, task_id, job_id, attempt_number, worker_id, lease_id, status,
+		  report_version, created_at, updated_at)
+		 VALUES (?, ?, ?, 1, ?, ?, 'TIMED_OUT', 0, ?, ?)`,
+		previousAttempt, taskID, "job-"+taskID, workerID, leaseID, now, now,
+	); err != nil {
+		t.Fatalf("seed historical attempt: %v", err)
+	}
+
+	tws, att, err := r.ClaimNextWithAttemptAtomic(ctx, workerID, "L-history-2")
+	if err != nil {
+		t.Fatalf("ClaimNextWithAttemptAtomic drift-repair: %v", err)
+	}
+	if tws == nil || att == nil {
+		t.Fatalf("claim returned nil tws/att: tws=%v att=%v", tws, att)
+	}
+	if att.AttemptNumber != 2 {
+		t.Fatalf("attempt.AttemptNumber = %d; want 2", att.AttemptNumber)
+	}
+
+	var attemptCount, attemptNumber int
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT attempt_count, attempt_number FROM tasks WHERE task_id = ?`,
+		taskID,
+	).Scan(&attemptCount, &attemptNumber); err != nil {
+		t.Fatalf("SELECT repaired task: %v", err)
+	}
+	if attemptCount != 2 {
+		t.Errorf("tasks.attempt_count = %d; want newly-minted attempt ordinal 2", attemptCount)
+	}
+	if attemptNumber != 2 {
+		t.Errorf("tasks.attempt_number = %d; want claimed attempt 2", attemptNumber)
+	}
+
+	var invariantBreaches int
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*)
+		   FROM (
+		     SELECT t.task_id
+		     FROM tasks t
+		     JOIN task_attempts ta ON ta.task_id = t.task_id
+		     GROUP BY t.task_id
+		     HAVING t.attempt_count < MAX(ta.attempt_number)
+		   )`,
+	).Scan(&invariantBreaches); err != nil {
+		t.Fatalf("invariant query: %v", err)
+	}
+	if invariantBreaches != 0 {
+		t.Errorf("attempt-count invariant breaches = %d; want 0", invariantBreaches)
 	}
 }
 
