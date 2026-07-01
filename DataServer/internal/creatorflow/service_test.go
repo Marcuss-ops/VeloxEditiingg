@@ -5,11 +5,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"path/filepath"
 	"sync"
 	"testing"
-	"time"
 
 	"velox-server/internal/costmodel"
 	"velox-server/internal/jobs"
@@ -66,71 +64,27 @@ func newTestEnqueuer(t *testing.T, db *store.SQLiteStore) *jobenqueue.Enqueuer {
 // field. The Enqueuer owns the queue; this removes duplicate references
 // that previously could drift.
 
+// TestForwardSchedulesAsyncPollAndWorkerHandoff verifies that when the remote
+// creator returns a non-terminal status, Forward persists a durable
+// creator_forwardings row (PENDING) instead of spawning a volatile goroutine.
+// The CreatorForwardingRunner picks up the row on its next tick.
 func TestForwardSchedulesAsyncPollAndWorkerHandoff(t *testing.T) {
 	tempDir := t.TempDir()
 	dbPath := filepath.Join(tempDir, "velox.db")
-	voicePath := filepath.Join(tempDir, "voice.mp3")
-	imagePath := filepath.Join(tempDir, "scene.png")
-	if err := os.WriteFile(voicePath, []byte("voice"), 0o644); err != nil {
-		t.Fatalf("write voice: %v", err)
-	}
-	if err := os.WriteFile(imagePath, []byte("image"), 0o644); err != nil {
-		t.Fatalf("write image: %v", err)
-	}
 	db, err := store.NewSQLiteStore(dbPath)
 	if err != nil {
 		t.Fatalf("sqlite store: %v", err)
 	}
-	jobRepo := store.NewSQLiteJobRepository(db)
 	enqueuer := newTestEnqueuer(t, db)
 
-	var mu sync.Mutex
-	polls := 0
 	mockCreator := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.Method == http.MethodPost && r.URL.Path == "/api/script/generate-with-images":
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{
-				"ok":       true,
-				"status":   "running",
-				"trace_id": "creator-async-1",
-				"job_id":   "creator-async-1",
-			})
-		case r.Method == http.MethodGet && r.URL.Path == "/api/jobs/creator-async-1":
-			mu.Lock()
-			polls++
-			current := polls
-			mu.Unlock()
-
-			if current < 2 {
-				_ = json.NewEncoder(w).Encode(map[string]interface{}{
-					"job": map[string]interface{}{
-						"id":       "creator-async-1",
-						"status":   "running",
-						"progress": 25,
-						"result": map[string]interface{}{
-							"status": "running",
-						},
-					},
-				})
-				return
-			}
-
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{
-				"job": map[string]interface{}{
-					"id":       "creator-async-1",
-					"status":   "completed",
-					"progress": 100,
-					"result": map[string]interface{}{
-						"title":          "Async Creator Video",
-						"script_text":    "Async creator script",
-						"scenes_json":    `[{"text":"Scene 1","image_link":"` + imagePath + `"}]`,
-						"voiceover_path": voicePath,
-					},
-				},
-			})
-		default:
-			http.NotFound(w, r)
-		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"ok":       true,
+			"status":   "running",
+			"trace_id": "creator-async-1",
+			"job_id":   "creator-async-1",
+			"pipeline_id": "scene.composite.v1",
+		})
 	}))
 	defer mockCreator.Close()
 
@@ -143,10 +97,10 @@ func TestForwardSchedulesAsyncPollAndWorkerHandoff(t *testing.T) {
 				Retries:   1,
 			})
 		}(),
-		pollInterval: 10 * time.Millisecond,
-		dataDir:      tempDir,
-		videosDir:    filepath.Join(tempDir, "videos"),
-		masterURL:    "http://master.test",
+		dbStore:   db,
+		dataDir:   tempDir,
+		videosDir: filepath.Join(tempDir, "videos"),
+		masterURL: "http://master.test",
 	}
 
 	response, used, err := svc.Forward(context.Background(), map[string]interface{}{
@@ -162,45 +116,24 @@ func TestForwardSchedulesAsyncPollAndWorkerHandoff(t *testing.T) {
 		t.Fatalf("want creator_polling=true, got %v", response["creator_polling"])
 	}
 
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		j, jobErr := jobRepo.Get(context.Background(), "creator-async-1")
-		if jobErr == nil && j != nil {
-			if j.ID != "creator-async-1" {
-				t.Fatalf("want worker job_id creator-async-1, got %s", j.ID)
-			}
-			if j.VideoName != "Async Creator Video" {
-				t.Fatalf("want Async Creator Video, got %s", j.VideoName)
-			}
-			payload := jobs.ToPayloadMap(j)
-			// PR15.6: voiceover_paths is canonical. After jobs.ToPayloadMap
-			// (which parses the persisted JSON via ParsePayloadJSON), slices
-			// round-trip as []interface{} — accept either shape.
-			var vpFirst interface{}
-			switch v := payload["voiceover_paths"].(type) {
-			case []string:
-				if len(v) > 0 {
-					vpFirst = v[0]
-				}
-			case []interface{}:
-				if len(v) > 0 {
-					vpFirst = v[0]
-				}
-			default:
-				t.Fatalf("want voiceover_paths to be []string or []interface{}, got %T (%v)", payload["voiceover_paths"], payload["voiceover_paths"])
-			}
-			if vpFirst != voicePath {
-				t.Fatalf("want voiceover_paths[0] %q, got %v", voicePath, vpFirst)
-			}
-			if _, present := payload["voiceover_path"]; present {
-				t.Fatalf("voiceover_path alias must NOT be present in canonical creator payload, got %v", payload["voiceover_path"])
-			}
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("job not enqueued after async poll: %v", jobErr)
-		}
-		time.Sleep(25 * time.Millisecond)
+	// Verify the durable forwarding row was inserted.
+	cf, getErr := db.GetCreatorForwardingBySource(
+		context.Background(), "remote_engine", "creator-async-1", "scene.composite.v1",
+	)
+	if getErr != nil {
+		t.Fatalf("GetCreatorForwardingBySource: %v", getErr)
+	}
+	if cf == nil {
+		t.Fatal("expected creator_forwardings row to be persisted")
+	}
+	if cf.Status != string(store.CFStatusPending) {
+		t.Errorf("forwarding status = %q, want PENDING", cf.Status)
+	}
+	if cf.SourceProvider != "remote_engine" {
+		t.Errorf("source_provider = %q, want remote_engine", cf.SourceProvider)
+	}
+	if cf.SourceJobID != "creator-async-1" {
+		t.Errorf("source_job_id = %q, want creator-async-1", cf.SourceJobID)
 	}
 }
 

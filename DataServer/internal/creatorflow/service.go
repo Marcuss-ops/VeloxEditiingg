@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"velox-server/internal/config"
 	"velox-server/internal/costmodel"
 	remoteansible "velox-server/internal/handlers/remote/ansible"
@@ -27,22 +29,26 @@ import (
 // holds the JobQueue reference.
 // at the composition root if they need the concrete type. This collapses
 // two parallel fields that always pointed to the same underlying queue.
+//
+// PR-forwarding-runner: `dbStore` was added so Forward can persist a
+// durable creator_forwardings row (PENDING) instead of spawning a
+// volatile in-memory goroutine. The CreatorForwardingRunner picks up
+// the row on its next tick and handles polling + forwarding durably.
 type Service struct {
-	enqueuer     *enqueue.Enqueuer // PR15.7a: drops package-level voiceover global AND the q field; both rewrite + queue live here.
-	client       *remoteengine.Client
-	pollInterval time.Duration
-	dataDir      string
-	videosDir    string
-	masterURL    string
+	enqueuer *enqueue.Enqueuer
+	client   *remoteengine.Client
+	dbStore  *store.SQLiteStore
+	dataDir  string
+	videosDir string
+	masterURL string
 }
 
 // New creates a creator-flow service from runtime config.
-// enqueuer is mandatory (PR15.7a): it owns the voiceover rewrite and the
-// The concrete type is no longer needed here —
-// callers can construct the Enqueuer (which embeds the JobQueue) once
-// at composition-root time and pass it down.
-func New(cfg *config.Config, enqueuer *enqueue.Enqueuer) *Service {
-	if cfg == nil || enqueuer == nil {
+// enqueuer is mandatory (PR15.7a): it owns the voiceover rewrite.
+// dbStore is mandatory (PR-forwarding-runner): used to persist
+// PENDING creator_forwardings rows for durable polling.
+func New(cfg *config.Config, enqueuer *enqueue.Enqueuer, dbStore *store.SQLiteStore) *Service {
+	if cfg == nil || enqueuer == nil || dbStore == nil {
 		return nil
 	}
 	if strings.TrimSpace(cfg.Render.RemoteEngineURL) == "" {
@@ -57,10 +63,10 @@ func New(cfg *config.Config, enqueuer *enqueue.Enqueuer) *Service {
 			TimeoutMS: cfg.Render.RemoteEngineTimeoutMS,
 			Retries:   cfg.Render.RemoteEngineRetries,
 		}),
-		pollInterval: time.Duration(max(cfg.Render.RemoteEnginePollInterval, 5)) * time.Second,
-		dataDir:      strings.TrimSpace(cfg.Runtime.DataDir),
-		videosDir:    strings.TrimSpace(cfg.Runtime.VideosDir),
-		masterURL:    resolvePublicMasterURL(cfg),
+		dbStore:   dbStore,
+		dataDir:   strings.TrimSpace(cfg.Runtime.DataDir),
+		videosDir: strings.TrimSpace(cfg.Runtime.VideosDir),
+		masterURL: resolvePublicMasterURL(cfg),
 	}
 }
 
@@ -105,7 +111,28 @@ func (s *Service) Forward(ctx context.Context, rawPayload map[string]interface{}
 		return nil, false, nil
 	}
 
-	s.scheduleCreatorPolling(creatorJobID)
+	// PR-forwarding-runner: persist a durable forwarding record instead of
+	// spawning a volatile goroutine. The CreatorForwardingRunner picks up
+	// PENDING rows on its next tick and handles polling + forwarding.
+	targetExecutorID := firstString(creatorResult, "executor_id", "pipeline_id")
+	if targetExecutorID == "" {
+		targetExecutorID = "scene.composite.v1"
+	}
+	forwardingID := "cf_" + uuid.NewString()
+	now := time.Now().UTC().Format(time.RFC3339)
+	if err := s.dbStore.InsertCreatorForwarding(&store.CreatorForwarding{
+		ForwardingID:     forwardingID,
+		SourceProvider:   "remote_engine",
+		SourceJobID:      creatorJobID,
+		TargetExecutorID: targetExecutorID,
+		Status:           string(store.CFStatusPending),
+		CreatedAt:        now,
+		UpdatedAt:        now,
+	}); err != nil {
+		log.Printf("[CREATOR] failed to insert forwarding row for job_id=%s: %v", creatorJobID, err)
+		return nil, false, fmt.Errorf("insert creator forwarding: %w", err)
+	}
+
 	return map[string]interface{}{
 		"ok":               true,
 		"creator_stage":    "remote_engine",
@@ -183,62 +210,7 @@ func (s *Service) forwardCompletedResult(ctx context.Context, result map[string]
 	return s.enqueuer.Enqueue(ctx, workerPayload, costmodel.DefaultRequirements())
 }
 
-func (s *Service) scheduleCreatorPolling(creatorJobID string) {
-	if s == nil || s.client == nil || s.enqueuer == nil {
-		return
-	}
-	interval := s.pollInterval
-	if interval <= 0 {
-		interval = 30 * time.Second
-	}
-	go func() {
-		ticker := time.NewTicker(interval)
-		defer ticker.Stop()
 
-		for i := 0; i < 120; i++ {
-			<-ticker.C
-			status, err := s.client.GetPipelineStatus(context.Background(), creatorJobID)
-			if err != nil {
-				log.Printf("[CREATOR] poll failed job_id=%s attempt=%d: %v", creatorJobID, i+1, err)
-				continue
-			}
-			if !isTerminalStatus(status.Status) {
-				continue
-			}
-			if status.Status == "completed" || status.Status == "succeeded" || status.Status == "done" {
-				result := map[string]interface{}{
-					"ok":       true,
-					"status":   status.Status,
-					"trace_id": creatorJobID,
-					"result":   status.Result,
-				}
-				if forwarded, err := s.forwardCompletedResult(context.Background(), result); err != nil {
-					log.Printf("[CREATOR] forward after poll failed job_id=%s: %v", creatorJobID, err)
-				} else {
-					log.Printf("[CREATOR] forward after poll succeeded job_id=%s worker_job_id=%v", creatorJobID, forwarded["job_id"])
-				}
-			}
-			return
-		}
-		log.Printf("[CREATOR] poll timeout job_id=%s", creatorJobID)
-	}()
-}
-
-func isTerminalStatus(status string) bool {
-	switch strings.ToLower(strings.TrimSpace(status)) {
-	case "completed", "succeeded", "done", "failed", "error":
-		return true
-	default:
-		return false
-	}
-}
-
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
 
 func resolvePublicMasterURL(cfg *config.Config) string {
 	if cfg != nil {

@@ -16,7 +16,9 @@ import (
 	"velox-server/internal/costmodel"
 	"velox-server/internal/creatorflow"
 	remoteansible "velox-server/internal/handlers/remote/ansible"
+	jobshandler "velox-server/internal/handlers/server/jobs"
 	"velox-server/internal/jobs/enqueue"
+	"velox-server/internal/jobs/ingress"
 	"velox-server/internal/store"
 )
 
@@ -51,7 +53,7 @@ func NewScriptHandlers(cfg *config.Config, sqliteDB *store.SQLiteStore, enqueuer
 		// creatorflow.New takes only (cfg, enqueuer) post-PR15.7a:
 		// the Enqueuer owns the queue so passing q again would be redundant
 		// and risks drift between two parallel references.
-		creator: creatorflow.New(cfg, enqueuer),
+		creator: creatorflow.New(cfg, enqueuer, sqliteDB),
 	}
 }
 
@@ -60,11 +62,40 @@ func NewScriptHandlers(cfg *config.Config, sqliteDB *store.SQLiteStore, enqueuer
 // PR15.7a: a *enqueue.Enqueuer is now mandatory alongside sqliteDB.
 func RegisterRoutes(group gin.IRoutes, cfg *config.Config, sqliteDB *store.SQLiteStore, enqueuer *enqueue.Enqueuer) *ScriptHandlers {
 	handlers := NewScriptHandlers(cfg, sqliteDB, enqueuer)
+	registry := newScriptIngressRegistry(cfg, handlers.dataDir)
+	ingressHandler := jobshandler.NewHandler(registry, enqueuer)
 	group.POST("/generate-with-images", handlers.GenerateWithImagesHandler(cfg))
+	group.POST("/jobs/:kind", ingressHandler.Submit())
+	group.POST("/generate-from-clips", ingressHandler.SubmitFixed("generate-from-clips"))
 	group.GET("/jobs/:job_id", handlers.ScriptJobHandler(false))
 	group.GET("/jobs/:job_id/full", handlers.ScriptJobHandler(true))
 	group.GET("/:script_id", handlers.ScriptByIDHandler())
 	return handlers
+}
+
+func newScriptIngressRegistry(cfg *config.Config, dataDir string) *ingress.Registry {
+	registry := ingress.NewRegistry()
+	registry.MustRegister(ingress.Definition{
+		Kind:            "generate-from-clips",
+		ExecutorID:      "scene.composite.v1",
+		ExecutorVersion: 1,
+		PipelineID:      "hybrid.v1",
+		Builder: func(ctx context.Context, raw map[string]any) (map[string]any, error) {
+			return enqueue.BuildClipPayloadForMaster(raw, dataDir, cfg.Runtime.VideosDir, "")
+		},
+		Requirements: costmodel.DefaultRequirements(),
+	})
+	registry.MustRegister(ingress.Definition{
+		Kind:            "slideshow-video",
+		ExecutorID:      "scene.composite.v1",
+		ExecutorVersion: 1,
+		PipelineID:      "images.v1",
+		Builder: func(ctx context.Context, raw map[string]any) (map[string]any, error) {
+			return enqueue.BuildSlideshowPayloadForMaster(raw, dataDir, cfg.Runtime.VideosDir, "")
+		},
+		Requirements: costmodel.DefaultRequirements(),
+	})
+	return registry
 }
 
 // GenerateWithImagesHandler accepts a job payload built from scenes or images,
