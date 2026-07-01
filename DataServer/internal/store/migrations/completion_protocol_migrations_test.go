@@ -332,7 +332,7 @@ func TestMigration062_TaskOutputDeclarations_AllColumns(t *testing.T) {
 	}
 }
 
-func TestMigration062_TaskOutputDeclarations_Index(t *testing.T) {
+func TestMigration062_TaskOutputDeclarations_Indexes(t *testing.T) {
 	db := openTestDB(t)
 	applyMigrationSQL(t, db, sql062TaskOutputDeclarations)
 
@@ -841,9 +841,9 @@ func TestCompletionProtocol_Production_RunMigrations_FreshDB(t *testing.T) {
 	// everything discoverable from the production embed FS so the
 	// assertion stays correct as the migration set grows (a future
 	// migration 064 simply adds one row without breaking the test).
-	discovered, discErr := discoverMigrations(SQLiteMigrationsFS(), "sqlite")
-	if discErr != nil {
-		t.Fatalf("discoverMigrations: %v", discErr)
+	discovered, err := discoverMigrations(SQLiteMigrationsFS(), "sqlite")
+	if err != nil {
+		t.Fatalf("discoverMigrations: %v", err)
 	}
 	var migCount int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&migCount); err != nil {
