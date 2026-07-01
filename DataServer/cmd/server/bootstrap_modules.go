@@ -11,9 +11,11 @@ import (
 	"velox-server/internal/creatorflow"
 	"velox-server/internal/deliveries"
 	deliveryProviders "velox-server/internal/deliveries/providers"
+	"velox-server/internal/forwarding"
 	"velox-server/internal/handlers/server/api"
 	"velox-server/internal/jobs/enqueue"
 	"velox-server/internal/platform/clock"
+	"velox-server/internal/remoteengine"
 	"velox-server/internal/store"
 )
 
@@ -29,14 +31,15 @@ import (
 // instances pointed at the same *SQLiteStore would be a stateless
 // duplicate — we share the single instance owned by buildTasks.
 type moduleDeps struct {
-	Registry       *app.Registry
-	Health         *app.HealthModule
-	YouTube        *app.YouTubeModule
-	Drive          *app.DriveModule
-	Ansible        *app.AnsibleModule
-	AssetService   *voiceoverassets.AssetService
-	Enqueuer       *enqueue.Enqueuer
-	DeliveryRunner *deliveries.DeliveryRunner
+	Registry         *app.Registry
+	Health           *app.HealthModule
+	YouTube          *app.YouTubeModule
+	Drive            *app.DriveModule
+	Ansible          *app.AnsibleModule
+	AssetService     *voiceoverassets.AssetService
+	Enqueuer         *enqueue.Enqueuer
+	DeliveryRunner   *deliveries.DeliveryRunner
+	ForwardingRunner *forwarding.CreatorForwardingRunner
 }
 
 // buildModules creates all Gin modules, the asset service (which needs
@@ -111,14 +114,33 @@ func buildModules(cfg *config.Config, p *persistenceDeps, j *jobsDeps, w *worker
 		fmt.Sprintf("delivery-runner-%d", time.Now().UnixNano()),
 	)
 
+	// ── Creator Forwarding runner ───────────────────────────────────
+	var fwdRunner *forwarding.CreatorForwardingRunner
+	if cfg.Render.RemoteEngineURL != "" {
+		reClient := remoteengine.NewClient(remoteengine.Config{
+			URL:       cfg.Render.RemoteEngineURL,
+			Token:     cfg.Render.RemoteEngineToken,
+			TimeoutMS: cfg.Render.RemoteEngineTimeoutMS,
+			Retries:   cfg.Render.RemoteEngineRetries,
+		})
+		fwdRunner = forwarding.NewCreatorForwardingRunner(
+			forwarding.DefaultRunnerConfig(),
+			p.SQLite,
+			reClient,
+			fmt.Sprintf("cf-runner-%d", time.Now().UnixNano()),
+		)
+		log.Printf("[BOOTSTRAP] CreatorForwardingRunner initialized (remote_engine=%s)", cfg.Render.RemoteEngineURL)
+	}
+
 	return &moduleDeps{
-		Registry:       registry,
-		Health:         healthMod,
-		YouTube:        ytMod,
-		Drive:          driveMod,
-		AssetService:   assetSvc,
-		Enqueuer:       enqueuer,
-		DeliveryRunner: deliveryRunner,
+		Registry:         registry,
+		Health:           healthMod,
+		YouTube:          ytMod,
+		Drive:            driveMod,
+		AssetService:     assetSvc,
+		Enqueuer:         enqueuer,
+		DeliveryRunner:   deliveryRunner,
+		ForwardingRunner: fwdRunner,
 	}, nil
 } // Compile-time references that FORCE the compiler to keep the imports below.
 // The static anchor complements the live runtime wiring of

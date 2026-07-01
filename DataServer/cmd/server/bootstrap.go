@@ -489,6 +489,19 @@ func buildSupervisor(a *assetDeps, m *moduleDeps, j *jobsDeps, p *persistenceDep
 			return nil, fmt.Errorf("supervisor register delivery-runner: %w", err)
 		}
 	}
+	if m.ForwardingRunner != nil {
+		if err := sup.Register(&SupervisedRunner{
+			Name:   "creator-forwarding-runner",
+			Class:  ClassCritical,
+			Policy: criticalPolicy,
+			Run: func(ctx context.Context) error {
+				log.Printf("[BOOTSTRAP] CreatorForwardingRunner started — polling creator_forwardings")
+				return m.ForwardingRunner.Run(ctx)
+			},
+		}); err != nil {
+			return nil, fmt.Errorf("supervisor register creator-forwarding-runner: %w", err)
+		}
+	}
 	if t.TaskLeaseReaper != nil {
 		if err := sup.Register(&SupervisedRunner{
 			Name:   "task-lease-reaper",
