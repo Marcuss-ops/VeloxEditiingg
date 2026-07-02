@@ -43,8 +43,15 @@ const defaultUploadTTL = 24 * time.Hour
 // artifacts + job_attempts + outbox + delivery + artifact_uploads
 // flip). This struct holds the *reference* to that repo but cannot
 // itself produce a SUCCEEDED without going through the atomic tx.
+//
+// Migration: the per-session CRUD repository moved to
+// internal/store as store.UploadRepository during file-1/4 of the
+// canonical-SQL-gateway migration. The Service now depends on the
+// typed store interface; raw db.ExecContext calls only remain on
+// Service.loadJob / loadAttempt (read paths gated by the
+// sql-allowlist marker at the top of this file).
 type Service struct {
-	repo      Repository
+	repo      store.UploadRepository
 	finRepo   FinalizationRepository // NEW in PR 3.5-a: sole writer of jobs.status='SUCCEEDED'
 	blobStore store.BlobStore
 	db        *sql.DB
@@ -64,12 +71,17 @@ type Service struct {
 //
 // PR 3.5-a: finRepo is REQUIRED. Panic if nil so a misconfigured compose
 // always flakes on startup instead of silently producing no SUCCEEDED.
-func NewService(repo Repository, finRepo FinalizationRepository, blobStore store.BlobStore, db *sql.DB, c clock.Clock) *Service {
+//
+// Migration note: the repo parameter is now store.UploadRepository
+// (typed SQLite CRUD for artifact_uploads). The repo is shared with
+// store.NewSQLiteUploadRepository(db) at the same *sql.DB so a future
+// in-tx UpdateUploadStatus call can join through the same handle.
+func NewService(repo store.UploadRepository, finRepo FinalizationRepository, blobStore store.BlobStore, db *sql.DB, c clock.Clock) *Service {
 	if c == nil {
 		c = clock.System{}
 	}
 	if repo == nil {
-		panic("artifacts: NewService requires a non-nil Repository")
+		panic("artifacts: NewService requires a non-nil UploadRepository")
 	}
 	if finRepo == nil {
 		panic("artifacts: NewService requires a non-nil FinalizationRepository (sole writer of jobs.status='SUCCEEDED')")
@@ -270,7 +282,7 @@ func isNoSuchTable(err error) bool {
 // ATOMICALLY in a single transaction via finRepo.CreateArtifactAndUploadSession.
 // The temporary storage key is allocated in blobStore.StagingDir() but
 // no blob is written yet — Receive() will stream bytes into it.
-func (s *Service) BeginUpload(ctx context.Context, cmd BeginUploadCommand) (*UploadSession, error) {
+func (s *Service) BeginUpload(ctx context.Context, cmd BeginUploadCommand) (*store.UploadSession, error) {
 	if cmd.JobID == "" || cmd.WorkerID == "" || cmd.LeaseID == "" {
 		return nil, fmt.Errorf("artifacts: BeginUpload: job_id, worker_id and lease_id are required")
 	}
@@ -377,7 +389,7 @@ func (s *Service) BeginUpload(ctx context.Context, cmd BeginUploadCommand) (*Upl
 		return nil, fmt.Errorf("artifacts: BeginUpload atomic insert: %w", err)
 	}
 
-	session := &UploadSession{
+	session := &store.UploadSession{
 		UploadID:            uploadID,
 		ArtifactID:          artifactID,
 		JobID:               cmd.JobID,
@@ -390,7 +402,7 @@ func (s *Service) BeginUpload(ctx context.Context, cmd BeginUploadCommand) (*Upl
 		TemporaryStorageKey: tempKey,
 		ExpectedSizeBytes:   cmd.ExpectedSizeBytes,
 		ExpectedSHA256:      cmd.ExpectedSHA256,
-		Status:              string(UploadCreated),
+		Status:              string(store.UploadCreated),
 		CreatedAt:           now,
 		ExpiresAt:           now.Add(s.uploadTTL),
 	}

@@ -56,9 +56,16 @@ type ChunkState struct {
 // ChunkedUploadService provides persistent chunked upload sessions.
 // It wraps the canonical artifacts.Service pipeline (BeginUpload → Receive → Finalize)
 // with chunk-level persistence via artifact_upload_chunks.
+//
+// Migration note: the per-session + per-chunk CRUD repository moved to
+// internal/store as store.UploadRepository during file-1/4 of the
+// canonical-SQL-gateway migration. The chunk service depends on the
+// typed store interface for chunktable + resumable state; raw SQL
+// stays only on the writer-finalize path inside the artifacts package
+// (the chunk file IO + assembly IO).
 type ChunkedUploadService struct {
 	artifactSvc *Service
-	repo        Repository
+	repo        store.UploadRepository
 	blobStore   store.BlobStore
 	db          *sql.DB
 }
@@ -66,19 +73,22 @@ type ChunkedUploadService struct {
 // GetUploadByJob returns the active CREATED/UPLOADING upload session for a
 // job_id. This bridges the worker protocol (which identifies uploads by job_id
 // in URL paths) with the persistent artifact_uploads (keyed by upload_id).
-func (s *ChunkedUploadService) GetUploadByJob(ctx context.Context, jobID string) (*UploadSession, error) {
+func (s *ChunkedUploadService) GetUploadByJob(ctx context.Context, jobID string) (*store.UploadSession, error) {
 	return s.repo.GetActiveUploadByJob(ctx, jobID)
 }
 
 // NewChunkedUploadService creates a ChunkedUploadService.
 // The *sql.DB must be the same one used by artifactSvc so transactions
 // can join when needed.
-func NewChunkedUploadService(artifactSvc *Service, repo Repository, blobStore store.BlobStore, db *sql.DB) *ChunkedUploadService {
+//
+// Migration note: the repo parameter is now store.UploadRepository
+// (typed SQLite CRUD for artifact_uploads + artifact_upload_chunks).
+func NewChunkedUploadService(artifactSvc *Service, repo store.UploadRepository, blobStore store.BlobStore, db *sql.DB) *ChunkedUploadService {
 	if artifactSvc == nil {
 		panic("artifacts: NewChunkedUploadService requires a non-nil artifactSvc")
 	}
 	if repo == nil {
-		panic("artifacts: NewChunkedUploadService requires a non-nil Repository")
+		panic("artifacts: NewChunkedUploadService requires a non-nil UploadRepository")
 	}
 	return &ChunkedUploadService{
 		artifactSvc: artifactSvc,
@@ -90,7 +100,7 @@ func NewChunkedUploadService(artifactSvc *Service, repo Repository, blobStore st
 
 // InitChunkedSession creates a chunked upload session via BeginUpload.
 // It returns the upload session so the handler can respond with session metadata.
-func (s *ChunkedUploadService) InitChunkedSession(ctx context.Context, cmd BeginUploadCommand) (*UploadSession, error) {
+func (s *ChunkedUploadService) InitChunkedSession(ctx context.Context, cmd BeginUploadCommand) (*store.UploadSession, error) {
 	return s.artifactSvc.BeginUpload(ctx, cmd)
 }
 
@@ -104,12 +114,12 @@ func (s *ChunkedUploadService) UploadChunk(ctx context.Context, cmd ChunkedUploa
 
 	session, err := s.repo.GetUploadSession(ctx, cmd.UploadID)
 	if err != nil {
-		return err
+		return translateStoreErr(err)
 	}
 	if session == nil {
 		return fmt.Errorf("%w: upload_id=%s", ErrUploadNotFound, cmd.UploadID)
 	}
-	if session.Status != "CREATED" && session.Status != "UPLOADING" {
+	if session.Status != string(store.UploadCreated) && session.Status != string(store.UploadUploading) {
 		return fmt.Errorf("%w: upload=%s status=%s", ErrUploadStateInvalid, cmd.UploadID, session.Status)
 	}
 	if !session.ExpiresAt.IsZero() && time.Now().After(session.ExpiresAt) {
@@ -153,7 +163,7 @@ func (s *ChunkedUploadService) UploadChunk(ctx context.Context, cmd ChunkedUploa
 	}
 
 	// Persist chunk record.
-	if err := s.repo.InsertChunk(ctx, ChunkRecord{
+	if err := s.repo.InsertChunk(ctx, store.ChunkRecord{
 		UploadID:   cmd.UploadID,
 		ChunkIndex: cmd.ChunkIndex,
 		SizeBytes:  written,
@@ -162,7 +172,7 @@ func (s *ChunkedUploadService) UploadChunk(ctx context.Context, cmd ChunkedUploa
 		ReceivedAt: time.Now().UTC(),
 	}); err != nil {
 		_ = os.Remove(chunkKey)
-		return err
+		return translateStoreErr(err)
 	}
 
 	return nil
@@ -174,7 +184,7 @@ func (s *ChunkedUploadService) UploadChunk(ctx context.Context, cmd ChunkedUploa
 func (s *ChunkedUploadService) GetChunkState(ctx context.Context, uploadID string) (*ChunkState, error) {
 	session, err := s.repo.GetUploadSession(ctx, uploadID)
 	if err != nil {
-		return nil, err
+		return nil, translateStoreErr(err)
 	}
 	if session == nil {
 		return nil, fmt.Errorf("%w: upload_id=%s", ErrUploadNotFound, uploadID)
@@ -182,7 +192,7 @@ func (s *ChunkedUploadService) GetChunkState(ctx context.Context, uploadID strin
 
 	chunks, err := s.repo.ListChunks(ctx, uploadID)
 	if err != nil {
-		return nil, err
+		return nil, translateStoreErr(err)
 	}
 
 	if len(chunks) == 0 {
@@ -218,7 +228,7 @@ func (s *ChunkedUploadService) CompleteChunked(ctx context.Context, cmd ChunkedC
 
 	session, err := s.repo.GetUploadSession(ctx, cmd.UploadID)
 	if err != nil {
-		return nil, err
+		return nil, translateStoreErr(err)
 	}
 	if session == nil {
 		return nil, fmt.Errorf("%w: upload_id=%s", ErrUploadNotFound, cmd.UploadID)
@@ -226,7 +236,7 @@ func (s *ChunkedUploadService) CompleteChunked(ctx context.Context, cmd ChunkedC
 
 	chunks, err := s.repo.ListChunks(ctx, cmd.UploadID)
 	if err != nil {
-		return nil, err
+		return nil, translateStoreErr(err)
 	}
 	if len(chunks) == 0 {
 		return nil, fmt.Errorf("artifacts: CompleteChunked: no chunks for upload=%s", cmd.UploadID)
@@ -308,14 +318,14 @@ func (s *ChunkedUploadService) CompleteChunked(ctx context.Context, cmd ChunkedC
 func (s *ChunkedUploadService) cleanupChunks(ctx context.Context, uploadID string) error {
 	chunks, err := s.repo.ListChunks(ctx, uploadID)
 	if err != nil {
-		return err
+		return translateStoreErr(err)
 	}
 	for _, c := range chunks {
 		if c.StorageKey != "" {
 			_ = os.Remove(filepath.Clean(c.StorageKey))
 		}
 	}
-	return s.repo.DeleteChunks(ctx, uploadID)
+	return translateStoreErr(s.repo.DeleteChunks(ctx, uploadID))
 }
 
 // chunkStagingKey returns the staging path for a single chunk.
