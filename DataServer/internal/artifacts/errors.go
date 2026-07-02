@@ -13,7 +13,12 @@
 // underlying tx control.
 package artifacts
 
-import "errors"
+import (
+	"errors"
+	"fmt"
+
+	"velox-server/internal/store"
+)
 
 // Sentinel errors returned by Service methods. Callers should compare
 // via errors.Is so wrapped variants (fmt.Errorf("%w: ...")) propagate.
@@ -41,3 +46,35 @@ var (
 	ErrBlobPromoteFailed  = errors.New("artifacts: blob promotion to final storage failed")
 	ErrOrphanedBlob       = errors.New("artifacts: blob promoted but SQL transaction rolled back")
 )
+
+// translateStoreErr re-wraps a store-layer sentinel into the matching
+// artifacts sentinel so existing callers using `errors.Is(err,
+// artifacts.ErrX)` keep matching without test churn. Multi-%w (Go 1.20+)
+// leaves the inner store.ErrX in the wrap chain so future store-side
+// unit tests can also target `errors.Is(err, store.ErrX)` directly.
+//
+// File-1/4 of the migration moved artifact_uploads CRUD to store;
+// Service methods return store.Err{X} from s.repo. We translate at
+// the Service boundary (in every place that previously returned a raw
+// repo error) so the public-facing sentinel is the artifacts one.
+//
+// Returns nil when err is nil. Returns err unchanged when no sentinel
+// matched (so unrelated errors propagate verbatim).
+func translateStoreErr(err error) error {
+	if err == nil {
+		return nil
+	}
+	// Mapping: store.Err{X} → artifacts.Err{X}. Order is irrelevant —
+	// each test branch walks the chain independently.
+	switch {
+	case errors.Is(err, store.ErrUploadStateInvalid):
+		return fmt.Errorf("%w: %w", ErrUploadStateInvalid, err)
+	case errors.Is(err, store.ErrTransitionConflict):
+		return fmt.Errorf("%w: %w", ErrTransitionConflict, err)
+	case errors.Is(err, store.ErrUploadNotFound):
+		return fmt.Errorf("%w: %w", ErrUploadNotFound, err)
+	case errors.Is(err, store.ErrUploadExpired):
+		return fmt.Errorf("%w: %w", ErrUploadExpired, err)
+	}
+	return err
+}

@@ -51,13 +51,44 @@
 //	--db          required, path to the master's SQLite file
 //	--logical-name  optional, default "out.mp4"
 //	--output-kind   optional, default "final_video"
+
+// ─────────────────────────────────────────────────────────────────────
+// TRIAGE FINDING (2026-07-02, audit-driven disposition)
+//
+// Prior categorization was (c) "active architectural violation" because
+// the file lives in cmd/worker/ — a directory named like a worker-process
+// bootstrap. Three db.ExecContext hits landed the file in the cross-
+// package audit's offender list.
+//
+// The file's own docstring fully contradicts the (c) classification:
+//
+//	"the administrative escape hatch for an MP4 that was rendered to
+//	 disk but the worker crashed BEFORE declaring it... runs on the
+//	 master host (or any host with read access to the master's
+//	 SQLite DB + the local MP4)"
+//
+// This is a MASTER-SIDE admin CLI, NOT a worker-process bootstrap.
+// The `cmd/worker/` path-name is historical artifact predating the
+// planned gRPC recovery admin endpoint (Phase 6.4+ follow-up).
+//
+// Disposition: case (b) — recovery path that legitimately needs
+// server-side tx. The 2 INSERTs in the original
+// registerRecoveredArtifact helper (now removed) move to
+// internal/store/artifact_recovery.go (`store.RegisterRecoveryUploadSession`).
+// The CLI retains its local `*sql.DB` open because opening a
+// connection is an admin tool's bootstrap concern; only the SQL
+// itself moves to the typed store/ helper.
+//
+// newUUIDLowerHexRecover is removed: the typed helper requires the
+// caller to derive IDs deterministically from a stable commit_id so
+// INSERT OR IGNORE absorbs re-runs of the CLI on the same attempt.
+// A fresh UUID per call would break that contract.
+// ─────────────────────────────────────────────────────────────────────
 package main
 
 import (
 	"context"
 	"crypto/sha256"
-	"crypto/rand"
-	"database/sql"
 	"encoding/hex"
 	"flag"
 	"fmt"
@@ -67,9 +98,8 @@ import (
 	"strings"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
-
 	"velox-server/internal/completion"
+	"velox-server/internal/store"
 )
 
 // cliOptions captures the parsed CLI flags. All fields are
@@ -159,26 +189,27 @@ func recoverOutput(ctx context.Context, opts *cliOptions) (int, error) {
 	}
 	log.Printf("[RECOVER] file=%s size=%d sha256=%s", opts.File, size, sha)
 
-	// 2. Open the master's DB. We use the same WAL+FK pragmas
-	// the master uses (mattn/go-sqlite3 with busy_timeout).
-	db, err := sql.Open("sqlite3", opts.DBPath+"?_busy_timeout=5000&_journal_mode=WAL&_synchronous=NORMAL")
+	// 2 + 3. Open the master's DB through the canonical typed
+	// store factory. store.NewSQLiteStore applies the same
+	// WAL+busy_timeout+FK pragmas the master uses (see
+	// internal/store/sqlite.go). The CLI does NOT register the
+	// sqlite3 driver or run additional pragmas — those are
+	// encapsulated in the typed store/open primitive.
+	sqliteStore, err := store.NewSQLiteStore(opts.DBPath)
 	if err != nil {
 		return 1, fmt.Errorf("recover_output: open db: %w", err)
 	}
-	defer db.Close()
-	if _, err := db.ExecContext(ctx, `PRAGMA foreign_keys = ON`); err != nil {
-		return 1, fmt.Errorf("recover_output: enable FK: %w", err)
-	}
+	defer sqliteStore.Close()
 
-	// 3. Build the in-process Coordinator. This is the SAME
-	// type the master uses; the recovery path uses exactly the
-	// same code that the happy path uses. The HMAC key is the
-	// master-side VELOX_COMMIT_HMAC_KEY (passed via --hmac-key or
-	// the env var); without it DeclareOutputs cannot derive a
+	// Build the in-process Coordinator. This is the SAME type the
+	// master uses; the recovery path uses exactly the same code
+	// that the happy path uses. The HMAC key is the master-side
+	// VELOX_COMMIT_HMAC_KEY (passed via --hmac-key or the env
+	// var); without it DeclareOutputs cannot derive a
 	// commit_token, and the master will refuse to start (Verdetto
 	// P0 #6).
 	coord, err := completion.NewCoordinator(completion.CoordinatorConfig{
-		DB:      db,
+		DB:      sqliteStore.DB(),
 		HMACKey: []byte(opts.HMACKey),
 	})
 	if err != nil {
@@ -229,8 +260,23 @@ func recoverOutput(ctx context.Context, opts *cliOptions) (int, error) {
 	// BeginUpload gRPC call; the recovery flow does it inline
 	// because the file is already at rest locally and we do
 	// NOT need the master-stream chunked upload.
-	uploadID, artifactID, err := registerRecoveredArtifact(ctx, db, opts, size, sha, plan.CommitID)
-	if err != nil {
+	// IDs derived deterministically from commit_id so the
+	// INSERT OR IGNORE inside RegisterRecoveryUploadSession absorbs
+	// re-runs of the CLI on the same (task_id, attempt_id). See
+	// internal/store/artifact_recovery.go docstring for the
+	// idempotency contract.
+	uploadID := "recover-" + plan.CommitID
+	artifactID := "art_recover_" + plan.CommitID
+	if err := store.RegisterRecoveryUploadSession(ctx, sqliteStore.DB(), store.RecoveryUploadSession{
+		UploadID:   uploadID,
+		ArtifactID: artifactID,
+		JobID:      opts.JobID,
+		WorkerID:   opts.WorkerID,
+		LeaseID:    opts.LeaseID,
+		FilePath:   opts.File,
+		SizeBytes:  size,
+		SHA256:     sha,
+	}); err != nil {
 		return 1, fmt.Errorf("recover_output: register artifact: %w", err)
 	}
 	log.Printf("[RECOVER] artifact_uploads registered upload_id=%s artifact_id=%s", uploadID, artifactID)
@@ -294,78 +340,6 @@ func hashFile(path string) (int64, string, error) {
 	}
 	return n, hex.EncodeToString(h.Sum(nil)), nil
 }
-
-// newUUIDLowerHexRecover returns a 32-hex-char sequence (16 bytes of
-// entropy) or an error when crypto/rand.Read fails (Verdetto P0 #7:
-// entropy failure is fail-closed). The recover CLI only needs this
-// helper for the artifact_uploads synthetic row id; the canonical
-// attempt_commits row id is minted by Coordinator.DeclareOutputs.
-//
-// On entropy failure we return errors.New so the caller can surface a
-// hard exit; bytes are NOT inferred from a deterministic seed, which
-// is exactly the bug we removed in coordinator.go.
-func newUUIDLowerHexRecover() (string, error) {
-	var b [16]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		return "", fmt.Errorf("recover_output: entropy failure for UUID (crypto/rand): %w", err)
-	}
-	const hexdigits = "0123456789abcdef"
-	out := make([]byte, len(b)*2)
-	for i, by := range b {
-		out[i*2] = hexdigits[by>>4]
-		out[i*2+1] = hexdigits[by&0x0f]
-	}
-	return string(out), nil
-}
-
-// registerRecoveredArtifact creates the artifact + artifact_uploads
-// rows that CompleteUpload's CAS expects. This is the recovery
-// path's pre-pipeline setup: the file is already at rest locally
-// (the worker rendered it before crashing), so the master does
-// not need to receive bytes over the wire.
-//
-// Idempotency: the artifact_uploads UNIQUE(upload_id) is enforced
-// at the SQL layer. A re-run of the CLI with the same (task_id,
-// attempt_id) hits the INSERT-OR-IGNORE in DeclareOutputs first
-// (no-op) and reuses the same plan.CommitID, which means the
-// upload_id is deterministic and the INSERT below is also a
-// no-op.
-//
-// Returns (upload_id, artifact_id, error).
-func registerRecoveredArtifact(ctx context.Context, db *sql.DB, opts *cliOptions, size int64, sha, commitID string) (string, string, error) {
-	now := time.Now().UTC().Format(time.RFC3339Nano)
-	uploadID := "recover-" + commitID
-	artifactID := "art_recover_" + commitID
-	// Idempotent on (upload_id, artifact_id) via PRIMARY KEY +
-	// UNIQUE. A re-run is a no-op.
-	if _, err := db.ExecContext(ctx, `
-		INSERT OR IGNORE INTO artifacts (
-			id, job_id, type, storage_provider, storage_key, sha256, size_bytes,
-			status, created_at, updated_at
-		) VALUES (?, ?, 'video', 'local', ?, ?, ?, 'STAGING', ?, ?)`,
-		artifactID, opts.JobID, opts.File, sha, size, now, now,
-	); err != nil {
-		return "", "", fmt.Errorf("insert artifact: %w", err)
-	}
-	if _, err := db.ExecContext(ctx, `
-		INSERT OR IGNORE INTO artifact_uploads (
-			upload_id, artifact_id, job_id, attempt_number,
-			worker_id, lease_id, status, temporary_storage_key,
-			expected_size_bytes, expected_sha256, created_at, expires_at
-		) VALUES (?, ?, ?, 1, ?, ?, 'CREATED', ?, ?, ?, ?, ?)`,
-		uploadID, artifactID, opts.JobID,
-		opts.WorkerID, opts.LeaseID,
-		opts.File, size, sha,
-		now, now,
-	); err != nil {
-		return "", "", fmt.Errorf("insert artifact_uploads: %w", err)
-	}
-	return uploadID, artifactID, nil
-}
-
-// (helper: newUUIDLowerHexRecover) is the entropy-safe UUID mint
-// used by registerRecoveredArtifact. See its body for the
-// fail-closed contract on crypto/rand.Read errors.
 
 func main() {
 	opts, err := parseOptions(os.Args[1:])

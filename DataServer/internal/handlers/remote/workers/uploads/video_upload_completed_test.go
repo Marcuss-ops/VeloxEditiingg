@@ -50,7 +50,12 @@ func TestUploadCompletedVideo_CanonicalPipeline(t *testing.T) {
 		t.Fatalf("blob store: %v", err)
 	}
 
-	repo := artifacts.NewSQLiteRepository(db)
+	// Migration note: store.NewSQLiteUploadRepository is the typed
+	// artifact_uploads + artifact_upload_chunks repository that
+	// replaced artifacts.NewSQLiteRepository during file-1/4 of the
+	// canonical-SQL-gateway migration. The Service / Finalization
+	// surfaces that wrap it stay inside the artifacts package.
+	repo := store.NewSQLiteUploadRepository(db)
 	finRepo := artifacts.NewSQLiteFinalizationRepository(db)
 	artifactSvc := artifacts.NewService(repo, finRepo, bs, db, nil)
 
@@ -211,7 +216,7 @@ func TestUploadCompletedVideo_BeginUploadRejected_MissingJob(t *testing.T) {
 		t.Fatalf("blob store: %v", err)
 	}
 
-	repo := artifacts.NewSQLiteRepository(db)
+	repo := store.NewSQLiteUploadRepository(db)
 	finRepo := artifacts.NewSQLiteFinalizationRepository(db)
 	artifactSvc := artifacts.NewService(repo, finRepo, bs, db, nil)
 
@@ -267,7 +272,7 @@ func TestUploadCompletedVideo_MissingVideo(t *testing.T) {
 		t.Fatalf("blob store: %v", err)
 	}
 
-	repo := artifacts.NewSQLiteRepository(db)
+	repo := store.NewSQLiteUploadRepository(db)
 	finRepo := artifacts.NewSQLiteFinalizationRepository(db)
 	artifactSvc := artifacts.NewService(repo, finRepo, bs, db, nil)
 

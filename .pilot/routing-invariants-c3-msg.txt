@@ -1,0 +1,38 @@
+ci(routing-invariants): add dedicated gate workflow
+
+New workflow at .github/workflows/routing-invariants.yml runs the
+exact spec the user requested:
+
+  go test -short -count=1 \
+    ./internal/creatorflow/... \
+    ./internal/routing/... \
+    ./internal/forwarding/...
+
+Run = the contract: any drift between the typed routing methods
+(ForwardingKey.InjectIntoPayload, InternalRoutingMetadata.InjectIntoPayload,
+and the PipelineID/ExecutorRef typed methods locked by commit
+e3c0cd3 test(routing): lock InjectIntoPayload contracts) and their
+symmetric guards fails the gate with a clear unit-test failure
+rather than silently regressing.
+
+Conventions (mirrors canonical ci.yml):
+  - actions/checkout@v4
+  - actions/setup-go@v5 with go-version-file: DataServer/go.mod
+  - shared Go cache (key shape matches ci.yml)
+  - contents: read permission (least-privilege)
+
+Trigger set (refined to match ci.yml scope):
+  - push: branches: [main]
+  - pull_request: branches: [main]
+  - workflow_dispatch
+
+PR status check name is "Routing Invariants" so it surfaces its OWN
+status in the PR UI rather than nesting inside the make-verify log.
+Concurrency group routing-invariants-${ref} is independent of ci-${ref}
+so both gates run in parallel. cancel-in-progress is scoped to PR only;
+pushes to main run to completion so the post-merge status reflects
+reality.
+
+timeout-minutes: 10 is much cheaper than ci's 30 because this gate
+runs only 3 packages in -short mode with no race detector and no
+docker builds.

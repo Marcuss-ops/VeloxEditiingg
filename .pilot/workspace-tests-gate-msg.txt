@@ -1,0 +1,32 @@
+ci(tests): add workspace-tests gate running go test ./... per module
+
+New workflow at .github/workflows/workspace-tests.yml is a dedicated
+CI gate (not extending ci.yml) that runs the user's exact spec:
+
+  # per-module invocation in a single job (workspace ./... not supported
+  # by go.work semantics, so 3 sequential working-directory steps):
+  (cd DataServer && go test -count=1 ./...)
+  (cd RemoteCodex/native/worker-agent-go && go test -count=1 ./...)
+  (cd shared && go test -count=1 ./...)
+
+PR status check: "Workspace Tests". Concurrency group
+`workspace-tests-${ref}` is independent of `ci-${ref}` so this gate
+runs in parallel with `make verify` rather than being nested inside
+its log. Pull-request runs cancel-in-progress (push runs go to
+completion so the post-merge status reflects reality).
+
+Trade-off vs matrix strategy: 3 sequential steps share a single job
+log for end-to-end diagnostic continuity. Matrix would give per-
+module status names but triple CI-minute cost; sequential is the
+right call for a 3-module workspace, becomes attractive to matrix
+above ~6 modules.
+
+Cache key spans all 3 go.sum files (mirrors ci.yml's workspace-wide
+cache shape). timeout-minutes: 15 (worst-case ~6 min DataServer +
+~30 s worker-agent + ~10 s shared observed locally).
+
+Verified locally: WORKSPACE gate runs all 3 modules successfully (the
+shared + worker-agent modules pass; DataServer fails against the 5
+known pre-existing test breakages surfaced by an earlier audit —
+that's the gate's entire point: to surface those as a named PR
+status check rather than hidden inside the monolithic make-verify log).

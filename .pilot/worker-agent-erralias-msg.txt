@@ -1,0 +1,40 @@
+fix(worker-agent/executor): alias ErrInvalidDescriptor to taskcontract.ErrInvalidSpec
+
+Sentinel-fragmentation fix in RemoteCodex/native/worker-agent-go/internal/executor.
+TestRegistry_TaskSpec_Validate (4 sub-tests: noJob, noExec, zeroV, nil) all
+failed because the test asserted errors.Is(err, executor.ErrInvalidDescriptor)
+while the SUT's shared/taskcontract.(*TaskSpec).Validate() correctly wraps
+descriptive errors with taskcontract.ErrInvalidSpec via fmt.Errorf("%w: ...").
+
+Two sentinels with semantically-equivalent intent but different pointer
+identity produced the mismatch:
+
+  executor.ErrInvalidDescriptor   = errors.New("executor: invalid descriptor")   [standalone, executor-only]
+  taskcontract.ErrInvalidSpec     = fmt.Errorf("taskcontract: invalid spec")     [standalone, shared-only]
+
+Go's errors.Is requires the EXACT sentinel pointer (traversed via Unwrap),
+not just a string-equal match. The wrap chain (taskcontract.ErrInvalidSpec)
+did not include executor.ErrInvalidDescriptor, so the test's assertion
+returned FALSE even though the descriptive error was semantically correct.
+
+Fix: alias executor.ErrInvalidDescriptor := taskcontract.ErrInvalidSpec so
+both names point at the SAME sentinel. Mirrors the existing
+`type TaskSpec = taskcontract.TaskSpec` alias convention in
+executor/types.go (canonical source lives in shared; executor-side name
+preserved for backwards compatibility with legacy call sites and
+registry_test.go).
+
+ErrExecutorNotFound and ErrExecutorExists left as standalone errors.New:
+those are executor-package-specific sentinels with no shared contract
+counterpart. Adding aliases would be over-engineering.
+
+Added a godoc paragraph documenting why the alias exists and the
+sentinel-coverage scope (Descriptor invariants + TaskSpec struct invariants
+both surface as ErrInvalidDescriptor). The shape of the error chain
+(failure prose + sentinel at the base) is unchanged for callers — only
+the sentinel pointer identity is now consistent across packages.
+
+Verified: go build ./...  EXIT 0
+          go test -count=1 -run TestRegistry_TaskSpec_Validate ./internal/executor/
+                                 EXIT 0 (all 4 sub-tests pass)
+          go test -count=1 ./internal/executor/  EXIT 0 (full package green)

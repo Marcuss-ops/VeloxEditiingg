@@ -44,7 +44,7 @@ func (s *Service) Finalize(ctx context.Context, cmd FinalizeArtifactCommand) (*s
 
 	session, err := s.repo.GetUploadSession(ctx, cmd.UploadID)
 	if err != nil {
-		return nil, err
+		return nil, translateStoreErr(err)
 	}
 	if session == nil {
 		return nil, fmt.Errorf("%w: upload_id=%s", ErrUploadNotFound, cmd.UploadID)
@@ -144,11 +144,11 @@ func (s *Service) Finalize(ctx context.Context, cmd FinalizeArtifactCommand) (*s
 	// to PromoteToCanonical and run a SECOND os.Rename to the same
 	// canonical path, racing the winner's first promote.
 	switch session.Status {
-	case "RECEIVED":
-		if err := s.repo.TransitionUploadStatus(ctx, cmd.UploadID, "RECEIVED", "FINALIZING"); err != nil {
-			return nil, fmt.Errorf("%w: %w", ErrTransitionConflict, err)
+	case string(store.UploadReceived):
+		if err := s.repo.TransitionUploadStatus(ctx, cmd.UploadID, string(store.UploadReceived), string(store.UploadFinalizing)); err != nil {
+			return nil, fmt.Errorf("%w: %w", ErrTransitionConflict, translateStoreErr(err))
 		}
-	case "FINALIZING":
+	case string(store.UploadFinalizing):
 		return nil, fmt.Errorf("%w: upload=%s peer-mid-flight",
 			ErrTransitionConflict, cmd.UploadID)
 	default:

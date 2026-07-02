@@ -27,13 +27,18 @@
 #                   speak only through the typed UoW repos, so any
 #                   direct SQL hit there is a violation.
 #
-# Forbidden tokens (canonical receiver-prefixed SQL methods on db.* or
-# tx.* (or any local var named ending in those tokens, which is the
-# codebase convention for tx handles)):
+# Forbidden tokens (canonical receiver-prefixed SQL method CALLS on
+# db.* or tx.* — tx handles follow the codebase convention of being a
+# local var whose name ends in those tokens). Each family matches the
+# bare plain form AND the Ctx-aware form per the regex group:
 #
-#   - .BeginTx(  .Begin(   .Exec(    .ExecContext(
-#   - .Query(    .QueryContext(
-#   - .QueryRow( .QueryRowContext(
+#   db.BeginTx               (no Context variant)
+#   db.Exec     | db.ExecContext
+#   db.Query    | db.QueryContext
+#   db.QueryRow | db.QueryRowContext
+#   tx.Exec     | tx.ExecContext
+#   tx.Query    | tx.QueryContext
+#   tx.QueryRow | tx.QueryRowContext
 #
 # Production-only (excludes *_test.go so the test fixtures — which
 # routinely open short-lived in-memory DBs — stay out of scope).
@@ -44,17 +49,29 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO_ROOT"
 
-# Forbidden token regex — exactly the user-specified literals.
-# Per the spec, the receivers are db. and tx. (NOT any var ending in
-# those tokens — that would catch Gin/Chi HTTP-context Query() calls
-# like c.Query("name") which are routinely used in handlers and
-# share zero surface area with the SQL gateway). Strict-spec: only
-# the seven receiver-prefixed methods named in the user's spec are
-# flagged; the auto-commit db.Begin() and the Context variants
-# (.ExecContext, .QueryContext, .QueryRowContext) are intentionally
-# excluded so this lint stays a SQL-ownership check, not a stylistic
-# one.
-SQL_REGEX='(db\.BeginTx|db\.Exec|db\.Query|db\.QueryRow|tx\.Exec|tx\.Query|tx\.QueryRow)\('
+# Forbidden token regex — broader-shape per the cross-package audit.
+# Catches both plain AND Context-variant method calls on db.* / tx.*
+# receivers. BeginTx is receiver-bound: no Context variant exists, so
+# the bare alternative `db.BeginTx` is what we grep for. The other six
+# methods each ship a `<name>` plain form and a `<name>Context` ctxt-
+# aware form; the `(Context)?` GROUP makes the literal word 'Context'
+# optional atom-wise and covers both forms in one pattern.
+#
+# Why the group, not bare `Context?`: in ERE, `?` is a POSTFIX
+# quantifier that applies to the IMMEDIATELY preceding atom only.
+# Bare `Context?` therefore makes the FINAL `t` optional — it would
+# match `db.ExecContex(` AND `db.ExecContext(`, but does NOT match
+# `db.Exec(` (no `Contex…` substring). Grouping with `(Context)?`
+# actually expresses "the literal word 'Context' is optional",
+# catching both legacy plain-shape calls AND the modern ctxt-aware
+# shape required by the cross-package audit's broader scope.
+#
+# Strict-spec: only the seven receiver-prefixed method FAMILIES named
+# in the user's spec (BeginTx + (db|tx) × (Exec|Query|QueryRow)) are
+# flagged. The auto-commit `db.Begin()` and unrelated Go API accesses
+# (`sql.DB{}` field accesses, etc.) stay outside this regex scope on
+# purpose — the lint stays a SQL-ownership check, not a stylistic one.
+SQL_REGEX='(db\.BeginTx|db\.Exec(Context)?|db\.Query(Context)?|db\.QueryRow(Context)?|tx\.Exec(Context)?|tx\.Query(Context)?|tx\.QueryRow(Context)?)\('
 
 # Locate all production Go files in DataServer/internal/* excluding
 # _test.go. Scope matches the user spec ("DataServer/internal/*" only);

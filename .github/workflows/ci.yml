@@ -74,6 +74,17 @@ jobs:
       - name: Guard — conflict-budget call pattern (Blocco 5)
         run: ./scripts/ci/check-conflict-budget-call-pattern.sh
 
+      # SQL-ownership shape guard (companion to the method-call-level
+      # check inside `make verify`): forbids imports of `database/sql`,
+      # usage of `sql.DB` / `sql.Tx` types, and any raw DML strings
+      # (INSERT/UPDATE/DELETE) outside the canonical SQL gateway at
+      # internal/store/** and the UoW adapter at
+      # internal/completion/sqlite_uow.go. Path-based allowlist only,
+      # no marker escape hatch — this is the target state, not a
+      # transition. See scripts/ci/check-sql-ownership.sh.
+      - name: Guard — sql-ownership shape
+        run: ./scripts/ci/check-sql-ownership.sh
+
       - name: Verify — architectural, Go, native, docker-image
         run: make verify
 

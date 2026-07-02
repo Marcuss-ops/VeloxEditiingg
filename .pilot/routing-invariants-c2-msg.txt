@@ -1,0 +1,23 @@
+fix(creatorflow): cast status to plain string in buildFreshResolveResponse
+
+Resolver.buildFreshResolveResponse returned response["status"] as the
+typed jobs.StatusPending constant (alias-shared with store.JobStatus
+via type JobStatus = jobs.Status). The sibling builder
+buildIdempotentResolveResponse returned response["status"] as
+string(existing.Status), a plain string. This inconsistency caused
+TestForwardCompletedEnqueuesWorkerJob to fail intermittently when
+asserting response["status"] against the untyped literal "PENDING"
+because Go interface equality requires both dynamic type AND dynamic
+value to match (typed-string("PENDING") != string("PENDING") despite
+identical underlying contents).
+
+Fix: cast to string(...) in buildFreshResolveResponse, matching the
+existing pattern in buildIdempotentResolveResponse. The typed-vs-
+untyped rationale is documented in the builder godoc so future
+maintainers know the constraint.
+
+Wire compatibility: HTTP/script callers across pipeline.Generate,
+forwarding.runner's logged out.Response, and the test surface all
+treat response["status"] as a plain string already; this change
+makes both response builders uniformly produce plain-string status
+values for cross-builder symmetric guarantees.

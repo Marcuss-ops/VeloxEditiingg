@@ -258,7 +258,7 @@ func (h *Handler) handleUnsupportedExecutorRejection(
 	workerID string,
 	t *taskgraph.Task,
 ) {
-	executorKey := placement.ExecutorKey{ID: t.ExecutorID, Version: t.ExecutorVersion}
+	executorKey := placement.NormalizeExecutorKey(t.ExecutorID, t.ExecutorVersion)
 
 	log.Printf("[PLACEMENT] Worker %s rejected task %s as unsupported_executor (executor=%s@%d) — capability inconsistency, invalidating for session",
 		workerID, t.ID, t.ExecutorID, t.ExecutorVersion)

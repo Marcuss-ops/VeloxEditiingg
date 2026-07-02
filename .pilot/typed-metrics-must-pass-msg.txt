@@ -1,0 +1,37 @@
+ci(typed-metrics): add must-pass gate locking the 3 typed-metrics sub-tests
+
+Lands `.github/workflows/typed-metrics-must-pass.yml` as a dedicated
+PR status check that locks the 3 typed-metrics sub-tests
+(`TestHandleTaskResult_PersistTypedMetrics_F1`,
+`TestHandleTaskResult_PersistTypedMetrics_NilExecutionMetrics`,
+`TestHandleTaskResult_PersistTypedMetrics_StaleReplaySkipsMetrics`)
+as MUST-PASS.
+
+Mirrors the precedent of `routing-invariants.yml` +
+`pre-existing-test-watchlist.yml` + `workspace-tests.yml`: a focused
+gate that runs in parallel with `make verify` rather than being
+hidden inside its log. PR UI status check name: "Typed Metrics
+Must-Pass".
+
+Why a dedicated gate (now that the 3 sub-tests are verde post
+commits a705a92 + 23308d5):
+
+* The 3 sub-tests pin the audit-mandated contract that
+  handleTaskResult -> ingestionSvc.IngestTaskResult ->
+  taskRepo.IngestTaskResultAtomic commits typed metrics + cache +
+  cost + artifact-register in ONE atomic SQL transaction.
+* A silent regression in the fan-out contract would let metrics
+  drift out of sync with the Task close-write, producing corrupt
+  Prometheus data. The dedicated gate surfaces this as a NAMED
+  status check rather than buried in `make verify` log.
+* Anchored full-name regex (not a prefix-only match) ensures any
+  new typed-metrics sub-test requires an explicit edit to this
+  workflow. Intentional: the gate is meant to lock SPECIFIC tests
+  by name, not a wildcard family.
+
+Verification (local):
+
+* `go test -count=1 -v -run '<anchored regex>' ./internal/grpcserver/`
+  -> 3/3 PASS (F1, NilExecutionMetrics, StaleReplaySkipsMetrics)
+* YAML structurally valid (name / on / jobs / 1 step set)
+* File: 107 lines including 40-line header doc

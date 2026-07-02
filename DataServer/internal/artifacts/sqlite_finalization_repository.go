@@ -24,6 +24,19 @@ import (
 // FinalizeVerified callers on the same job_id race-free at the SQL
 // layer; service-layer ENFORCES the state-machine legality (RECEIVED
 // then FINALIZING then COMPLETED) before this code runs.
+//
+// Migration note: file-1/4 of the canonical-SQL-gateway migration
+// moved `artifact_uploads` CRUD to store/artifact_uploads.go. This
+// file remains in artifacts/ because the PR 3.5-a single-writer
+// contract for jobs.status='SUCCEEDED' (audit §P0.2, enforced by
+// scan_test.go) requires the *atomic* finalization tx to live
+// adjacent to the Service that orchestrates it, AND the
+// CreateArtifactAndUploadSession path inserts into
+// artifact_uploads directly. The 4 helpers at the bottom of this
+// file (nilOrString / nilOrStringPtr / formatTimePtr /
+// parseTimeRFC3339) are an inline duplicate of the same-named
+// private helpers in store/artifact_uploads.go — they will be
+// retired together when file-3/4 migrates this repository to store.
 type SQLiteFinalizationRepository struct {
 	db           *sql.DB
 	planResolver DeliveryPlanResolver // optional; nil falls back to all enabled destinations
@@ -382,4 +395,24 @@ func (r *SQLiteFinalizationRepository) FinalizeVerified(
 		return nil, fmt.Errorf("artifacts: FinalizeVerified post-load: %w", scanErr)
 	}
 	return &out, nil
+}
+
+// ── package-local helpers (file-1/4 migration duplicate) ────────────────
+//
+// nilOrString / formatTimePtr mirror the unexported helpers in
+// store/artifact_uploads.go. They are kept private to this file so
+// the CreateArtifactAndUploadSession INSERTs that build the
+// artifacts + artifact_uploads rows still compile after
+// artifacts/uploads.go was deleted (file-1/4 of the
+// canonical-SQL-gateway migration). They will dissolve together
+// with this file when file-3/4 migrates SQLiteFinalizationRepository
+// to store.
+
+// nilOrString maps "" -> nil so the column stores NULL rather than "",
+// matching the migration's nullable TEXT columns for expected_sha256.
+func nilOrString(s string) interface{} {
+	if s == "" {
+		return nil
+	}
+	return s
 }

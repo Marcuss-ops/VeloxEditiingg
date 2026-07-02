@@ -3,7 +3,12 @@
 // for a given Worker snapshot without any dependency on SQL, gRPC, or protobuf.
 package placement
 
-import "time"
+import (
+	"fmt"
+	"strconv"
+	"strings"
+	"time"
+)
 
 // ExecutorKey is the canonical (id, version) pair that the worker advertises
 // and the task requires.
@@ -17,13 +22,44 @@ func (k ExecutorKey) Valid() bool {
 	return k.ID != "" && k.Version > 0
 }
 
+// NormalizeExecutorKey converts historical "id@version" storage into the
+// canonical split shape used by placement decisions: {ID: "id", Version: N}.
+// If the suffix is absent or malformed, the input is returned unchanged.
+func NormalizeExecutorKey(id string, version int) ExecutorKey {
+	key := ExecutorKey{ID: strings.TrimSpace(id), Version: version}
+	if !strings.Contains(key.ID, "@") || key.Version <= 0 {
+		return key
+	}
+	base, suffix, ok := strings.Cut(key.ID, "@")
+	if !ok || base == "" || suffix == "" {
+		return key
+	}
+	parsed, err := strconv.Atoi(suffix)
+	if err != nil || parsed != key.Version {
+		return key
+	}
+	key.ID = base
+	return key
+}
+
+// VersionedExecutorID rebuilds the legacy "id@version" storage form from the
+// canonical split executor identity. Used only where the repository must CAS
+// against historical rows still persisted in that shape.
+func VersionedExecutorID(id string, version int) string {
+	id = strings.TrimSpace(id)
+	if id == "" || version <= 0 {
+		return id
+	}
+	return fmt.Sprintf("%s@%d", id, version)
+}
+
 // TaskCandidate is a lightweight task metadata row used by the matcher.
 // It does NOT carry the full payload JSON.
 type TaskCandidate struct {
-	TaskID   string
-	JobID    string
-	Revision int
-	Priority int
+	TaskID    string
+	JobID     string
+	Revision  int
+	Priority  int
 	CreatedAt time.Time
 
 	Executor ExecutorKey

@@ -1,0 +1,25 @@
+fix(store): canonicalize ErrTransitionConflict + qualify UploadSession across the artifacts cutover
+
+Three mechanical changes that unblock `go build ./...` so the typed-
+metrics test work can run on a verde baseline:
+
+1. internal/store/artifact_uploads.go — REMOVE the duplicate
+   `ErrTransitionConflict` declaration. The canonical CAS-mismatch
+   sentinel now lives ONLY in internal/store/jobs_writer_types.go
+   (single-source-of-truth). The artifact_uploads.go comment block
+   references the canonical sentinel symbolically (no shadowing).
+   Both call sites now resolve to the same pointer → `errors.Is` is
+   consistent across the jobs ↔ artifact_uploads boundary.
+
+2. internal/artifacts/chunked.go — qualify `UploadSession` to
+   `*store.UploadSession`. The struct lives in the store package
+   post-artifact-cutover; the artifacts package keeps a thin
+   service boundary over it.
+
+3. internal/artifacts/service.go — same qualification. The
+   `BeginUpload` return signature now points at the canonical
+   store-package type.
+
+This is the build-blocker that was masking the typed-metrics
+fixture + stub-canonicalization work. With this in, `go build ./...`
+exits 0 and the test suite is reachable end-to-end.

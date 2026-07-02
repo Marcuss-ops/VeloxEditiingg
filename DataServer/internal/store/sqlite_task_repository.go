@@ -1534,7 +1534,7 @@ const placementCandidateBatch = 64
 //
 // Query: SELECT task_id, job_id, revision, priority, created_at,
 // executor_id, executor_version FROM tasks WHERE status='READY'
-// AND (worker_id='' OR worker_id IS NULL) ORDER BY priority DESC,
+// AND (worker_id=” OR worker_id IS NULL) ORDER BY priority DESC,
 // created_at ASC LIMIT ?.
 //
 // limit <= 0 falls back to a safe default (placementCandidateBatch = 64).
@@ -1567,14 +1567,14 @@ func (r *SQLiteTaskRepository) ListReadyCandidates(ctx context.Context, limit in
 	var candidates []placement.TaskCandidate
 	for rows.Next() {
 		var (
-			taskID               string
-			jobID                string
-			revision             int
-			priority             int
-			createdAt            string
-			executorID           string
-			executorVersion      int
-			capabilitiesConcat   sql.NullString
+			taskID             string
+			jobID              string
+			revision           int
+			priority           int
+			createdAt          string
+			executorID         string
+			executorVersion    int
+			capabilitiesConcat sql.NullString
 		)
 		if scanErr := rows.Scan(&taskID, &jobID, &revision, &priority, &createdAt, &executorID, &executorVersion, &capabilitiesConcat); scanErr != nil {
 			continue
@@ -1592,16 +1592,15 @@ func (r *SQLiteTaskRepository) ListReadyCandidates(ctx context.Context, limit in
 			capabilities = strings.Split(capabilitiesConcat.String, ",")
 		}
 
+		execKey := placement.NormalizeExecutorKey(executorID, executorVersion)
+
 		candidates = append(candidates, placement.TaskCandidate{
 			TaskID:               taskID,
 			JobID:                jobID,
 			Revision:             revision,
 			Priority:             priority,
 			CreatedAt:            parsedTime,
-			Executor: placement.ExecutorKey{
-				ID:      executorID,
-				Version: executorVersion,
-			},
+			Executor:             execKey,
 			RequiredCapabilities: capabilities,
 		})
 	}
@@ -1642,9 +1641,11 @@ func (r *SQLiteTaskRepository) ClaimTaskForWorkerAtomic(
 	if cmd.TaskID == "" || cmd.WorkerID == "" || cmd.LeaseID == "" {
 		return nil, nil, fmt.Errorf("task repository: ClaimTaskForWorkerAtomic requires task_id, worker_id, lease_id")
 	}
-	if cmd.ExecutorID == "" || cmd.ExecutorVersion <= 0 {
+	execKey := placement.NormalizeExecutorKey(cmd.ExecutorID, cmd.ExecutorVersion)
+	if execKey.ID == "" || execKey.Version <= 0 {
 		return nil, nil, fmt.Errorf("task repository: ClaimTaskForWorkerAtomic requires executor_id and executor_version > 0")
 	}
+	legacyExecutorID := placement.VersionedExecutorID(execKey.ID, execKey.Version)
 
 	now := time.Now().UTC()
 	nowStr := now.Format(time.RFC3339)
@@ -1663,10 +1664,10 @@ func (r *SQLiteTaskRepository) ClaimTaskForWorkerAtomic(
 		 WHERE task_id = ?
 		   AND status = 'READY'
 		   AND revision = ?
-		   AND executor_id = ?
+		   AND executor_id IN (?, ?)
 		   AND executor_version = ?
 		   AND (worker_id = '' OR worker_id IS NULL)`,
-		cmd.TaskID, cmd.ExpectedTaskRevision, cmd.ExecutorID, cmd.ExecutorVersion,
+		cmd.TaskID, cmd.ExpectedTaskRevision, execKey.ID, legacyExecutorID, execKey.Version,
 	)
 	t, err := scanTask(row)
 	if err == sql.ErrNoRows {
@@ -1700,10 +1701,10 @@ func (r *SQLiteTaskRepository) ClaimTaskForWorkerAtomic(
 		     attempt_count = ?, attempt_id = ?, attempt_number = ?,
 		     revision = revision + 1, updated_at = ?
 		 WHERE task_id = ? AND status = 'READY' AND revision = ?
-		   AND executor_id = ? AND executor_version = ?`,
+		   AND executor_id IN (?, ?) AND executor_version = ?`,
 		cmd.WorkerID, cmd.LeaseID, leaseExpiresAt, attemptNumber, attemptID, attemptNumber,
 		nowStr, t.ID, cmd.ExpectedTaskRevision,
-		cmd.ExecutorID, cmd.ExecutorVersion,
+		execKey.ID, legacyExecutorID, execKey.Version,
 	)
 	if err != nil {
 		return nil, nil, fmt.Errorf("task claim-for-worker cas: %w", err)

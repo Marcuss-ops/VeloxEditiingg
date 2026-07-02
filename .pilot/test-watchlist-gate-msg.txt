@@ -1,0 +1,49 @@
+ci(tests): add pre-existing test watchlist gate
+
+New workflow at .github/workflows/pre-existing-test-watchlist.yml
+is a dedicated targeted CI gate (not extending ci.yml) that runs
+exactly the 4 tests the user specified — names fixed verbatim, each
+known to FAIL on main today:
+
+  - TestSucceededWriterIsFinalizationOnly
+      (DataServer/internal/artifacts/)
+  - TestBeginUpload_WrongAttemptStatus
+      (DataServer/internal/artifacts/)
+  - TestUploadCompletedVideo_CanonicalPipeline
+      (DataServer/internal/handlers/remote/workers/uploads/)
+  - TestGenerateWithImages_UsesCreatorStageWhenConfigured
+      (DataServer/internal/handlers/server/script/)
+
+The user's exact `-run` pattern (anchored with ^(...)$ to match
+EXACTLY without prefix aliases) is preserved verbatim:
+
+  go test -count=1 -v -run \
+    '^(TestSucceededWriterIsFinalizationOnly|TestBeginUpload_WrongAttemptStatus|TestUploadCompletedVideo_CanonicalPipeline|TestGenerateWithImages_UsesCreatorStageWhenConfigured)$' \
+    ./internal/artifacts/ \
+    ./internal/handlers/remote/workers/uploads/ \
+    ./internal/handlers/server/script/
+
+PR status check: "Pre-existing Test Watchlist". Concurrency group
+`watchlist-${ref}` is independent of `ci-${ref}` so this gate runs
+in parallel with `make verify`, `routing-invariants.yml`, and
+`workspace-tests.yml`. Pull-request runs cancel-in-progress; pushes
+to main run to completion.
+
+Cache key uses only DataServer/go.sum (the watchlist does not test
+anything in worker-agent-go or shared). timeout-minutes: 10 (4 tests
+each ~3 s when green, comfortably gives latitude for SQLite-migration
+plumbing and contention-burst paths).
+
+Standard fail-fast (no continue-on-error): the user explicitly wants
+these tests surfaced as PR status checks rather than hidden in
+aggregate runs. The 4 tests are EXPECTED to go RED when this gate
+lands; fixing them becomes the team's measurable work-in-progress.
+
+Run-step also echoes a one-line watchlist summary at the end of the
+run (PASS / FAIL counts per test) so PR reviewers can skim the
+status check log without scrolling through verbose Go test output.
+
+Verified locally: WATCHLIST gate run confirms all 4 specified tests
+FAIL as expected. The gate is wired correctly; promotion to a
+required check on main is the natural next step once the underlying
+test fixtures are aligned with the SUT contracts.

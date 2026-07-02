@@ -61,10 +61,17 @@ import (
 // Goroutine lifecycle: Run(ctx, interval) loops until ctx is cancelled
 // (graceful shutdown). Reconcile(ctx) is the one-shot callable that
 // callers (tests, admin commands) can invoke.
+//
+// Migration: the per-session repository moved to internal/store during
+// file-1/4 of the canonical-SQL-gateway migration. The Reconciler
+// still holds a *sql.DB because rules 2/3/4 use direct SELECT / UPDATE
+// on the artifacts + outbox_events tables (sql-allowlist marker at
+// the top of this file); Rule 1 alone uses the typed repo via
+// FindStuckStaging + TransitionUploadStatus.
 type Reconciler struct {
 	db        *sql.DB
 	blobStore store.BlobStore
-	repo      Repository
+	repo      store.UploadRepository
 	clock     clock.Clock
 	config    ReconcilerConfig
 }
@@ -114,8 +121,9 @@ type ReconcileStats struct {
 
 // NewReconciler composes a Reconciler. db and blobStore must outlive
 // the Reconciler (Run holds references). repo can be the same
-// SQLiteRepository as Service uses (transitively via the same *sql.DB).
-func NewReconciler(db *sql.DB, blobStore store.BlobStore, repo Repository, c clock.Clock, config ReconcilerConfig) (*Reconciler, error) {
+// store.NewSQLiteUploadRepository(db) as Service uses (transitively via
+// the same *sql.DB).
+func NewReconciler(db *sql.DB, blobStore store.BlobStore, repo store.UploadRepository, c clock.Clock, config ReconcilerConfig) (*Reconciler, error) {
 	if db == nil {
 		return nil, fmt.Errorf("artifacts: Reconciler: nil db")
 	}
@@ -246,8 +254,12 @@ func (r *Reconciler) reconcileExpiredUploads(ctx context.Context) (int, error) {
 
 		// Best-effort: flip status. TransitionUploadStatus is CAS;
 		// loser rows are skipped and re-evaluated on the next pass.
-		if err := r.repo.TransitionUploadStatus(ctx, s.UploadID, s.Status, "EXPIRED"); err != nil {
-			if errors.Is(err, ErrUploadStateInvalid) {
+		// The repo returns store.ErrUploadStateInvalid on RowsAffected
+		// mismatch; we check via errors.Is so the wrap chain works in
+		// both store-direct callers (post-1/4) and the legacy
+		// in-place-translation callers.
+		if err := r.repo.TransitionUploadStatus(ctx, s.UploadID, s.Status, string(store.UploadExpired)); err != nil {
+			if errors.Is(err, store.ErrUploadStateInvalid) || errors.Is(err, ErrUploadStateInvalid) {
 				continue
 			}
 			log.Printf("[RECONCILER] rule1: upload %s transition failed: %v", s.UploadID, err)

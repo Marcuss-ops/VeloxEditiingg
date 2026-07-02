@@ -10,6 +10,7 @@ import (
 	"velox-server/internal/config"
 	"velox-server/internal/deliveries"
 	"velox-server/internal/outbox"
+	"velox-server/internal/store"
 )
 
 // assetDeps holds the artifact pipeline components built before modules
@@ -40,11 +41,17 @@ func buildAssets(cfg *config.Config, p *persistenceDeps, j *jobsDeps) (*assetDep
 	_ = cfg
 
 	// ── Artifacts.Service (sole SUCCEEDED gate) ─────────────────────
+	//
+	// Migration note: artifacts.NewSQLiteRepository was retired in
+	// file-1/4 of the canonical-SQL-gateway migration. The typed
+	// per-session CRUD now lives at store.NewSQLiteUploadRepository(db)
+	// (artifact_uploads + artifact_upload_chunks); the artifacts-package
+	// Service/ChunkedUploadService/Reconciler take store.UploadRepository.
 	planResolver := deliveries.NewSQLiteDeliveryPlanResolver(p.SQLite.DB(), cfg.Runtime.DeliveryGlobalFallback)
 	finRepo := artifacts.NewSQLiteFinalizationRepository(p.SQLite.DB())
 	finRepo.WithPlanResolver(planResolver)
 	artifactSvc := artifacts.NewService(
-		artifacts.NewSQLiteRepository(p.SQLite.DB()),
+		store.NewSQLiteUploadRepository(p.SQLite.DB()),
 		finRepo,
 		p.BlobStore,
 		p.SQLite.DB(),
@@ -55,7 +62,7 @@ func buildAssets(cfg *config.Config, p *persistenceDeps, j *jobsDeps) (*assetDep
 	// ── Chunked upload service ───────────────────────────────────────
 	chunkedSvc := artifacts.NewChunkedUploadService(
 		artifactSvc,
-		artifacts.NewSQLiteRepository(p.SQLite.DB()),
+		store.NewSQLiteUploadRepository(p.SQLite.DB()),
 		p.BlobStore,
 		p.SQLite.DB(),
 	)
@@ -65,7 +72,7 @@ func buildAssets(cfg *config.Config, p *persistenceDeps, j *jobsDeps) (*assetDep
 	reconciler, recErr := artifacts.NewReconciler(
 		p.SQLite.DB(),
 		p.BlobStore,
-		artifacts.NewSQLiteRepository(p.SQLite.DB()),
+		store.NewSQLiteUploadRepository(p.SQLite.DB()),
 		nil, // clock.System default (production)
 		artifacts.DefaultReconcilerConfig(),
 	)

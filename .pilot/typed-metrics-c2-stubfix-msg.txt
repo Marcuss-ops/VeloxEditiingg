@@ -1,0 +1,57 @@
+test(grpcserver): canonicalize typed-metrics fixtures for atomic-ingestion
+
+The 3 sub-tests in `TestHandleTaskResult_PersistTypedMetrics_*`
+(F1, NilExecutionMetrics, StaleReplaySkipsMetrics) were failing
+because the test fixtures + stub semantics lagged behind the
+production-side fix/atomic-ingestion cutover. Two coherent
+changes bring them in line:
+
+1. Fixture fix — `pb.TaskResult` carries `attempt_number` (proto
+   field 13). The handler's cheap `attemptNumber <= 0` identity
+   gate in `handleTaskResult` refused the request before
+   delegating to `ingestionSvc.IngestTaskResult`. All 4 test
+   fixtures now stamp `AttemptNumber: 1` on the wire payload,
+   matching the canonical seeded attempt's AttemptNumber.
+
+2. Stub canonicalization — `taskRepo.IngestTaskResultAtomic` is
+   now the single legal entry point for ingesting a TaskResult
+   (one SQL transaction that commits Task close + typed metrics +
+   cache stats + cost basis + artifact-register). The previous
+   stub `panic`'d on this method, modelled after the rejection
+   path the older spoofing tests pinned. Replaced with a fan-out
+   simulator that:
+     - bumps `transitionCalls++` on every call (CAS attempted)
+     - returns `s.transitionErr` early with NO side-effects on
+       CAS conflict (mirrors fix/cas-conflict-noop)
+     - otherwise bumps the 4 side-effect counters + captures the
+       typed payload (mirrors the production tx fan-out)
+   Plus: implemented `IsAllAttemptCommitsCommittedForTasks` on
+   the stub (Phase 2.8 commit-presence gate that
+   `maybeTransitionJob`'s allTasksCommitted helper does via a
+   runtime type-assertion). Without it, the post-atomic Job
+   roll-up path errors out and SetStatus never fires, masking
+   the F1 cross-check assertion.
+
+The 3 typed-metrics sub-tests' assertions now point at
+`taskRepo.{persistMetricsCalls,persistCacheCalls,persistCostCalls,
+registerCalls,lastMetrics,lastCacheStats,lastCostBasis}` because
+that is the repo the production atomic tx ticks. The
+spoofing-rejection tests (RejectsIdentitySpoofing_* + 
+ValidateIdentityTuple_CanonicalSentinel) are unaffected — the
+validator catches the wire-tuple spoof BEFORE IngestTaskResultAtomic
+is called, so all their `transitionCalls = 0` /
+`setStatusCalls = 0` / `outputArts.registerCalls = 0` assertions
+continue to hold without modification.
+
+Vestigial fields/methods on `spoofStubAttemptRepo` (PersistMetrics
++ Cache + Cost + the related counters) are kept because the
+`var _ taskattempts.Repository = (*spoofStubAttemptRepo)(nil)`
+interface assertion still requires them. They are no longer
+called by the production path; removal would be a follow-up
+cleanup that requires a coordinated interface trim.
+
+Verification:
+  - go build ./...                                    EXIT 0
+  - go test -count=1 -run '^TestHandleTaskResult_'    5/5 PASS
+  - go test -count=1 ./internal/grpcserver/           PASS
+  - go vet ./internal/grpcserver/                     EXIT 0

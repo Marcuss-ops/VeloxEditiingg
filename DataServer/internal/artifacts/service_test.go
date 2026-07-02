@@ -48,7 +48,7 @@ type testEnv struct {
 	db     *sql.DB
 	bs     store.BlobStore
 	svc    *Service
-	repo   Repository
+	repo   store.UploadRepository
 	fin    FinalizationRepository
 	clock  *manualClock
 	tmpDir string
@@ -103,7 +103,13 @@ func setupTestEnv(t *testing.T) *testEnv {
 	require.NoError(t, err, "NewFilesystemBlobStore")
 
 	clk := newManualClock()
-	repo := NewSQLiteRepository(db)
+	// Migration note: store.NewSQLiteUploadRepository is the typed
+	// artifact_uploads + artifact_upload_chunks repository that
+	// replaced NewSQLiteRepository during file-1/4 of the
+	// canonical-SQL-gateway migration. Sharing the same *sql.DB
+	// ensures the finalization tx can still join with the concurrent
+	// UpdateUploadStatus on artifact_uploads.
+	repo := store.NewSQLiteUploadRepository(db)
 	// PR 3.5-a: FinalizationRepository is REQUIRED by NewService. Sharing
 	// the same *sql.DB ensures the finalization tx can join with the
 	// concurrent update on artifact_uploads (FinalizeVerified step 7).
@@ -719,7 +725,7 @@ func TestReceive_StateMachineGuards(t *testing.T) {
 
 	// Force upload to FAILED.
 	failed := "FAILED"
-	require.NoError(t, env.repo.UpdateUploadStatus(context.Background(), sess.UploadID, UploadFields{Status: &failed}))
+	require.NoError(t, env.repo.UpdateUploadStatus(context.Background(), sess.UploadID, store.UploadFields{Status: &failed}))
 
 	_, err = env.svc.Receive(context.Background(), sess.UploadID, uploadBytes([]byte("resurrect")))
 	require.Error(t, err)
