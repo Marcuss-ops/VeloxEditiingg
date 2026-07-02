@@ -6,7 +6,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -23,7 +22,7 @@ func failProbe(marker string) func() error {
 	return func() error { return fmt.Errorf("%w: %s", errProbeFail, marker) }
 }
 
-// TestCapabilityRegistry_Readyz_SnapshotOrdering locks down two
+// TestCapabilityRegistry_Readyz_SnapshotOrdering locks down the
 // invariants of CapabilityRegistry.Readyz():
 //
 //  1. Iteration order over failing probes in the aggregated error
@@ -34,10 +33,12 @@ func failProbe(marker string) func() error {
 //
 //  2. The Readyz() call takes a deterministic snapshot under the
 //     RWMutex (RLock + copy + RUnlock) BEFORE invoking any probe.
-//     Concurrent Register calls during a Readyz pass do not race
-//     with the snapshot — verified by running under `go test -race`
-//     with concurrent Register goroutines interleaving with
-//     long-running probes.
+//     Concurrent Register / Unregister calls during a Readyz pass
+//     do not race with the snapshot — verified by running under
+//     `go test -race` with concurrent goroutines interleaving.
+//
+//  3. Register / Readyz / Unregister / Names accept explicit
+//     fail-closed inputs (nil registry, empty Name, nil Check).
 //
 // Run with: `go test -race ./internal/registry/...`
 func TestCapabilityRegistry_Readyz_SnapshotOrdering(t *testing.T) {
@@ -78,8 +79,12 @@ func TestCapabilityRegistry_Readyz_SnapshotOrdering(t *testing.T) {
 		if !(idxA < idxM && idxM < idxZ) {
 			t.Errorf("expected sorted order alpha→mu→zeta, got: %q", msg)
 		}
+		// Folded-in guard (replaces the formerly-separate
+		// MixedPassFail_OnlyFailingInMessage sub-test): the ok probe
+		// must NOT appear in the failing list — a future refactor that
+		// re-shapes the failing aggregation should fail this guard.
 		if strings.Contains(msg, "beta(") {
-			t.Errorf("ok probes should not appear in failing list: %q", msg)
+			t.Errorf("ok probes must not appear in failing list: %q", msg)
 		}
 	})
 
@@ -114,37 +119,70 @@ func TestCapabilityRegistry_Readyz_SnapshotOrdering(t *testing.T) {
 		}
 	})
 
-	t.Run("MixedPassFail_OnlyFailingInMessage", func(t *testing.T) {
-		r := NewCapabilityRegistry()
-		_ = r.Register(Probe{Name: "ok_a", Check: okProbe()})
-		_ = r.Register(Probe{Name: "fail_x", Check: failProbe("x")})
-		_ = r.Register(Probe{Name: "ok_b", Check: okProbe()})
-		_ = r.Register(Probe{Name: "fail_y", Check: failProbe("y")})
-		err := r.Readyz()
-		if err == nil {
-			t.Fatalf("expected non-nil error")
-		}
-		msg := err.Error()
-		idxX := strings.Index(msg, "fail_x")
-		idxY := strings.Index(msg, "fail_y")
-		if idxX < 0 || idxY < 0 {
-			t.Fatalf("missing failing entries: %q", msg)
-		}
-		if idxX >= idxY {
-			t.Errorf("expected sorted order fail_x→fail_y, got: %q", msg)
-		}
-		if strings.Contains(msg, "ok_a(") || strings.Contains(msg, "ok_b(") {
-			t.Errorf("ok probes should NOT appear in failing list: %q", msg)
-		}
+	// Guards — round-2 addition. The registry implements explicit
+	// fail-closed inputs for nil registry / empty Name / nil Check.
+	// These branches are cheap to test and lock the contract against
+	// future refactors that might drop them.
+	t.Run("Guards_NilAndEmptyInputs", func(t *testing.T) {
+		t.Run("Register_NilRegistry", func(t *testing.T) {
+			var r *CapabilityRegistry // nil
+			err := r.Register(Probe{Name: "x", Check: okProbe()})
+			if err == nil {
+				t.Errorf("Register on nil registry must return error")
+			}
+		})
+		t.Run("Register_EmptyName", func(t *testing.T) {
+			r := NewCapabilityRegistry()
+			err := r.Register(Probe{Name: "", Check: okProbe()})
+			if err == nil {
+				t.Errorf("Register with empty Name must return error")
+			}
+		})
+		t.Run("Register_NilCheck", func(t *testing.T) {
+			r := NewCapabilityRegistry()
+			err := r.Register(Probe{Name: "x", Check: nil})
+			if err == nil {
+				t.Errorf("Register with nil Check must return error")
+			}
+		})
+		t.Run("Readyz_NilRegistry", func(t *testing.T) {
+			var r *CapabilityRegistry // nil
+			err := r.Readyz()
+			if err == nil {
+				t.Errorf("Readyz on nil registry must return error")
+			} else if !errors.Is(err, ErrCapabilityNotReady) {
+				t.Errorf("Readyz on nil registry must wrap ErrCapabilityNotReady, got: %v", err)
+			}
+		})
+		t.Run("Names_NilRegistry", func(t *testing.T) {
+			var r *CapabilityRegistry // nil
+			if names := r.Names(); names != nil {
+				t.Errorf("Names on nil registry must return nil, got: %v", names)
+			}
+		})
+		t.Run("Unregister_NilRegistry", func(t *testing.T) {
+			var r *CapabilityRegistry // nil
+			// Must NOT panic; Unregister explicitly nil-checks.
+			r.Unregister("anything")
+		})
+		t.Run("Unregister_EmptyName", func(t *testing.T) {
+			r := NewCapabilityRegistry()
+			// Must NOT panic + must NOT remove any probe.
+			_ = r.Register(Probe{Name: "kept", Check: okProbe()})
+			r.Unregister("")
+			if names := r.Names(); len(names) != 1 || names[0] != "kept" {
+				t.Errorf("Unregister(\"\") must be no-op, got: %v", names)
+			}
+		})
 	})
 
 	t.Run("ConcurrentRegisterDuringReadyz_NoRace", func(t *testing.T) {
-		// This is the headline race-cover test: drive Readyz() concurrently
-		// with Register() so that if CapabilityRegistry ever re-introduces
-		// a data race (e.g. iterating r.probes without RLock), `go test -race`
-		// will catch it here. The two slow_a / slow_b probes widen the
-		// snapshot window so the concurrent Register goroutines actually
-		// overlap probe execution.
+		// Round-2 refactor: deterministic overlap is enforced with a
+		// `start` channel barrier. Without it, fast machines can finish
+		// the 240 Register calls before any slow_a/slow_b probe yields.
+		// Writers block on <-start; the test closes `start` AFTER the
+		// first Readyz pass commits, guaranteeing concurrent Register
+		// is in flight while subsequent Readyz passes execute probes.
 		r := NewCapabilityRegistry()
 		_ = r.Register(Probe{Name: "slow_a", Check: func() error {
 			time.Sleep(30 * time.Millisecond)
@@ -160,16 +198,14 @@ func TestCapabilityRegistry_Readyz_SnapshotOrdering(t *testing.T) {
 			registersPerWriter     = 60
 			readyzPassesDuringLoad = 12
 		)
+		start := make(chan struct{})
 		stop := make(chan struct{})
-		var (
-			wg        sync.WaitGroup
-			startedAt atomic.Int32
-		)
+		var wg sync.WaitGroup
 		for i := 0; i < concurrentWriters; i++ {
 			wg.Add(1)
 			go func(seed int) {
 				defer wg.Done()
-				startedAt.Add(1)
+				<-start // Barrier: block until test releases writers.
 				for n := 0; n < registersPerWriter; n++ {
 					select {
 					case <-stop:
@@ -187,10 +223,17 @@ func TestCapabilityRegistry_Readyz_SnapshotOrdering(t *testing.T) {
 			}(i)
 		}
 
-		// Run Readyz passes while the writers are hammering Register.
-		// Each Readyz takes >= 60ms (slow_a + slow_b serial execution).
-		// 12 passes = ~720ms — wide overlap with writer goroutines.
-		for pass := 0; pass < readyzPassesDuringLoad; pass++ {
+		// First Readyz: primes the snapshot window. Must succeed (only
+		// slow_a + slow_b are registered, both returning nil).
+		if err := r.Readyz(); err != nil {
+			t.Errorf("priming Readyz: unexpected err: %v", err)
+		}
+		// Release writers, then run the remaining passes. From this
+		// point onward every Readyz passes must observe at least some
+		// concurrent_X_N probes AS WELL AS still-pending ones being
+		// added in between — that is the substantive race-cover.
+		close(start)
+		for pass := 1; pass < readyzPassesDuringLoad; pass++ {
 			if err := r.Readyz(); err != nil {
 				t.Errorf("Readyz pass %d: unexpected err: %v", pass, err)
 			}
@@ -238,5 +281,33 @@ func TestCapabilityRegistry_Readyz_SnapshotOrdering(t *testing.T) {
 			t.Errorf("Readyz during Unregister: unexpected err: %v", err)
 		}
 		wg.Wait()
+	})
+
+	t.Run("OverwriteExistingName", func(t *testing.T) {
+		// Documents the "overwrite permitted" semantics explicitly so a
+		// future refactor that locks the contract survives the change
+		// because this sub-test pins the behaviour. Used by hot-swap
+		// paths (toggling a probe from ok to failing without renaming).
+		r := NewCapabilityRegistry()
+		if err := r.Register(Probe{Name: "x", Check: okProbe()}); err != nil {
+			t.Fatalf("Register(x): %v", err)
+		}
+		if err := r.Readyz(); err != nil {
+			t.Errorf("first Readyz must be nil (ok probe), got: %v", err)
+		}
+		// Overwrite with a failing check on the same name.
+		if err := r.Register(Probe{Name: "x", Check: failProbe("now-broken")}); err != nil {
+			t.Fatalf("Register(x overwrite): %v", err)
+		}
+		if err := r.Readyz(); err == nil {
+			t.Errorf("Readyz after overwrite must surface ErrCapabilityNotReady")
+		} else if !errors.Is(err, ErrCapabilityNotReady) {
+			t.Errorf("overwrite failure must wrap ErrCapabilityNotReady, got: %v", err)
+		}
+		// Names() count must NOT double-after-overwrite (single X slot).
+		names := r.Names()
+		if len(names) != 1 || names[0] != "x" {
+			t.Errorf("Names() after overwrite: got %v, want [x]", names)
+		}
 	})
 }
