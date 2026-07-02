@@ -229,7 +229,7 @@ func (h *Handler) handleTaskRejected(workerID string, tr *pb.TaskRejected) {
 	// and the worker's actual runtime state. The session's executor
 	// map is invalidated so the matcher won't pick this pair again.
 	if reason == "unsupported_executor" {
-		h.handleUnsupportedExecutorRejection(ctx, workerID, t, reason)
+		h.handleUnsupportedExecutorRejection(ctx, workerID, t)
 		h.clearPendingOfferForTask(workerID, taskID)
 		return
 	}
@@ -257,7 +257,6 @@ func (h *Handler) handleUnsupportedExecutorRejection(
 	ctx context.Context,
 	workerID string,
 	t *taskgraph.Task,
-	reason string,
 ) {
 	executorKey := placement.ExecutorKey{ID: t.ExecutorID, Version: t.ExecutorVersion}
 
