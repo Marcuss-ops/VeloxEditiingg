@@ -29,6 +29,7 @@ import (
 	"velox-server/internal/jobs"
 	"velox-server/internal/placement"
 	velmetrics "velox-server/internal/metrics"
+	"velox-server/internal/registry"
 	"velox-server/internal/store"
 	"velox-server/internal/taskattempts"
 	"velox-server/internal/taskgraph"
@@ -86,6 +87,17 @@ type Handler struct {
 	placementRejectionSink velmetrics.PlacementRejectionSink
 
 	placementMatcher *placement.Matcher
+
+	// capabilityRegistry gates ArtifactUploaded (the on-the-wire
+	// "artifact.commit.v1" commit path) against the readiness state
+	// of the master subsystems the commit depends on (coordinator,
+	// spool, transport). Wired post-construction via
+	// SetCapabilityRegistry. NIL-safe — a Handler constructed without
+	// the registry skips the gate (legacy test paths + bootstrap
+	// variants that don't wire it). The Stream() dispatch invokes
+	// checkArtifactCommitGate() before handleArtifactUploaded; a
+	// not-ready registry returns codes.PermissionDenied.
+	capabilityRegistry *registry.CapabilityRegistry
 
 	mu             sync.RWMutex
 	sessions       map[string]*workerSession // sessionID → active stream session
@@ -495,8 +507,20 @@ func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMasterEnvelo
 			case *pb.WorkerToMasterEnvelope_CommandAck:
 				h.handleCommandAck(workerID, m.CommandAck)
 
-			case *pb.WorkerToMasterEnvelope_ArtifactUploaded:
-				h.handleArtifactUploaded(workerID, m.ArtifactUploaded)
+		case *pb.WorkerToMasterEnvelope_ArtifactUploaded:
+			// Blocco 1 final-wire (P0 #2, #3, #4): invoke the
+			// capability gate before delegating. ArtifactUploaded
+			// is the on-the-wire "artifact.commit.v1" message and
+			// the canonical write path through artifacts.Service.
+			// A misconfigured/spool-broken/transport-empty master
+			// MUST NOT accept a commit because that would yield a
+			// SUCCEEDED job with no on-disk blob. See
+			// handler_artifacts.go::checkArtifactCommitGate for
+			// the fail-closed semantic (PermissionDenied).
+			if gateErr := h.checkArtifactCommitGate(workerID); gateErr != nil {
+				return gateErr
+			}
+			h.handleArtifactUploaded(workerID, m.ArtifactUploaded)
 
 			case *pb.WorkerToMasterEnvelope_Goodbye:
 				return nil
@@ -922,6 +946,18 @@ func (h *Handler) SetResourceSink(sink velmetrics.WorkerResourceSink) {
 // skip the Prometheus projection.
 func (h *Handler) SetPlacementRejectionSink(sink velmetrics.PlacementRejectionSink) {
 	h.placementRejectionSink = sink
+}
+
+// SetCapabilityRegistry installs the readiness registry that gates the
+// on-the-wire "artifact.commit.v1" dispatch path. Bootstrap wires the
+// canonical registry.NewCapabilityRegistry() (with coordinator + spool +
+// transport probes) here; tests can inject a focused registry to verify
+// the fail-closed semantic in handler_artifacts_test.go.
+//
+// NIL-safe — a Handler constructed without the registry (legacy test
+// paths, partial-wiring bootstrap variants) skips the gate entirely.
+func (h *Handler) SetCapabilityRegistry(r *registry.CapabilityRegistry) {
+	h.capabilityRegistry = r
 }
 
 // ingestionService returns the wired TaskReportIngestionService, or nil

@@ -364,6 +364,14 @@ func runServer(cfg *config.Config) error {
 				grpcHandler.SetPlacementRejectionSink(metricsCollector)
 				log.Printf("[BOOTSTRAP] wired metrics collector sinks on gRPC handler (placement + worker resources)")
 			}
+			// Blocco 1 final-wire (P0 #2, #3, #4): wire the canonical
+			// capability registry so the on-the-wire
+			// "artifact.commit.v1" dispatch path can fail-closed via
+			// codes.PermissionDenied before handleArtifactUploaded
+			// delegates to artifactSvc. See
+			// handler_artifacts.go::checkArtifactCommitGate.
+			grpcHandler.SetCapabilityRegistry(capabilityRegistry)
+			log.Printf("[BOOTSTRAP] wired capability registry (artifact.commit.v1 gate) on gRPC handler")
 		gs, lis, gerr := grpcserver.StartGRPCServer(
 			cfg.Server.GRPCPort, grpcHandler,
 			cfg.Server.GRPCTLSCertFile, cfg.Server.GRPCTLSKeyFile, cfg.Server.GRPCTLSCAFile,
