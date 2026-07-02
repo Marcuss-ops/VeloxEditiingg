@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // FromEnv loads configuration from environment variables.
@@ -86,9 +87,7 @@ func (c *Config) Validate() error {
 	// Worker policy: canonical, non-duplicated validator.
 	if err := ValidateProductionWorkers(c.Workers.AllowedWorkerIDs); err != nil {
 		return fmt.Errorf("config: VELOX_ALLOWED_WORKERS: %w", err)
-	}
-
-	// NopBlobStore is a development-only escape hatch.  It MUST NOT be
+	}	// NopBlobStore is a development-only escape hatch.  It MUST NOT be
 	// active in production — this guard uses the canonical Server.GinMode
 	// and VELOX_ENVIRONMENT env var, centralised here so no caller can
 	// silently bypass it.
@@ -99,9 +98,41 @@ func (c *Config) Validate() error {
 		}
 		if c.Runtime.Environment == "production" || c.Runtime.Environment == "prod" {
 			return fmt.Errorf(
-				"config: VELOX_ALLOW_NOP_BLOBSTORE_DEV=true is forbidden in environment=%q", c.Runtime.Environment)
+				"config: VELOX_ALLOW_NOP_BLOBSTORE_DEV=true is forbidden in environment=%q",
+				c.Runtime.Environment)
 		}
 	}
 
+	// Commit HMAC key (P0 #6, Blocco 2). Production deployments MUST
+	// supply VELOX_COMMIT_HMAC_KEY with at least 32 raw bytes (64 hex
+	// chars). A missing or short key produces a deterministic (and
+	// therefore replay-able) commit-token derivation, which quietly
+	// re-introduces the Verdetto P0 #6 / #7 class of bug.
+	if c.Runtime.Environment == "production" || c.Runtime.Environment == "prod" {
+		if err := validateCommitHMACKey(c.Runtime.CommitHMACKey); err != nil {
+			return fmt.Errorf("config: VELOX_COMMIT_HMAC_KEY: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// validateCommitHMACKey enforces a minimum of 32 RAW bytes when the
+// key is hex-encoded (64 hex chars). Empty key is allowed for non-
+// production deployments so dev/test fixtures stay succinct; the
+// Coordinator itself rejects zero/short keys at construction time.
+func validateCommitHMACKey(hexKey string) error {
+	hexKey = strings.TrimSpace(hexKey)
+	if hexKey == "" {
+		return fmt.Errorf("required in production (32+ raw bytes / 64+ hex chars)")
+	}
+	if len(hexKey) < 64 {
+		return fmt.Errorf("hex-encoded key too short: got %d hex chars, want >= 64", len(hexKey))
+	}
+	for _, c := range hexKey {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+			return fmt.Errorf("non-hex character %q at position %d", c, strings.Index(hexKey, string(c)))
+		}
+	}
 	return nil
 }

@@ -83,6 +83,7 @@ type cliOptions struct {
 	JobID       string
 	File        string
 	DBPath      string
+	HMACKey     string
 	LogicalName string
 	OutputKind  string
 }
@@ -97,6 +98,12 @@ func parseOptions(args []string) (*cliOptions, error) {
 	fs.StringVar(&opts.JobID, "job-id", "", "canonical job_id (required)")
 	fs.StringVar(&opts.File, "file", "", "path to the local MP4 (required)")
 	fs.StringVar(&opts.DBPath, "db", "", "path to the master's SQLite file (required)")
+	// --hmac-key takes precedence; if absent we fall back to the
+	// master-side VELOX_COMMIT_HMAC_KEY env var, then to an
+	// operator-provided stdin prompt as a last resort. The key is
+	// expected as hex (64 chars = 32 raw bytes); non-hex input is
+	// rejected with a usage error.
+	fs.StringVar(&opts.HMACKey, "hmac-key", "", "master VELOX_COMMIT_HMAC_KEY (hex, required)")
 	fs.StringVar(&opts.LogicalName, "logical-name", "", "logical name of the output (default: out.mp4)")
 	fs.StringVar(&opts.OutputKind, "output-kind", "", "output kind (default: final_video)")
 	if err := fs.Parse(args); err != nil {
@@ -119,6 +126,18 @@ func parseOptions(args []string) (*cliOptions, error) {
 	if len(missing) > 0 {
 		return nil, fmt.Errorf("missing required flags: %s", strings.Join(missing, ", "))
 	}
+	// Fall-back: VELOX_COMMIT_HMAC_KEY env if --hmac-key missing.
+	if opts.HMACKey == "" {
+		opts.HMACKey = strings.TrimSpace(os.Getenv("VELOX_COMMIT_HMAC_KEY"))
+	}
+	if opts.HMACKey == "" {
+		return nil, fmt.Errorf("--hmac-key (or VELOX_COMMIT_HMAC_KEY env) required (must decode to >= 32 raw bytes)")
+	}
+	rawKey, kerr := hex.DecodeString(opts.HMACKey)
+	if kerr != nil || len(rawKey) < 32 {
+		return nil, fmt.Errorf("--hmac-key must be hex of >= 32 raw bytes (got %d raw bytes after decode)", len(rawKey))
+	}
+	opts.HMACKey = string(rawKey) // raw bytes; hex-decoded
 	return opts, nil
 }
 
@@ -153,8 +172,18 @@ func recoverOutput(ctx context.Context, opts *cliOptions) (int, error) {
 
 	// 3. Build the in-process Coordinator. This is the SAME
 	// type the master uses; the recovery path uses exactly the
-	// same code that the happy path uses.
-	coord := completion.NewCoordinator(db)
+	// same code that the happy path uses. The HMAC key is the
+	// master-side VELOX_COMMIT_HMAC_KEY (passed via --hmac-key or
+	// the env var); without it DeclareOutputs cannot derive a
+	// commit_token, and the master will refuse to start (Verdetto
+	// P0 #6).
+	coord, err := completion.NewCoordinator(completion.CoordinatorConfig{
+		DB:      db,
+		HMACKey: []byte(opts.HMACKey),
+	})
+	if err != nil {
+		return 1, fmt.Errorf("recover_output: build coordinator: %w", err)
+	}
 
 	fence := completion.FenceTuple{
 		TaskID:    opts.TaskID,
@@ -260,15 +289,19 @@ func hashFile(path string) (int64, string, error) {
 	return n, hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// newUUIDLowerHex returns a 32-hex-char sequence (16 bytes of
-// entropy). Mirrors the helper in completion.coordinator so the
-// recover CLI emits the same id format.
-func newUUIDLowerHexRecover() string {
+// newUUIDLowerHexRecover returns a 32-hex-char sequence (16 bytes of
+// entropy) or an error when crypto/rand.Read fails (Verdetto P0 #7:
+// entropy failure is fail-closed). The recover CLI only needs this
+// helper for the artifact_uploads synthetic row id; the canonical
+// attempt_commits row id is minted by Coordinator.DeclareOutputs.
+//
+// On entropy failure we return errors.New so the caller can surface a
+// hard exit; bytes are NOT inferred from a deterministic seed, which
+// is exactly the bug we removed in coordinator.go.
+func newUUIDLowerHexRecover() (string, error) {
 	var b [16]byte
 	if _, err := rand.Read(b[:]); err != nil {
-		for i := range b {
-			b[i] = byte(i + 1)
-		}
+		return "", fmt.Errorf("recover_output: entropy failure for UUID (crypto/rand): %w", err)
 	}
 	const hexdigits = "0123456789abcdef"
 	out := make([]byte, len(b)*2)
@@ -276,7 +309,7 @@ func newUUIDLowerHexRecover() string {
 		out[i*2] = hexdigits[by>>4]
 		out[i*2+1] = hexdigits[by&0x0f]
 	}
-	return string(out)
+	return string(out), nil
 }
 
 // registerRecoveredArtifact creates the artifact + artifact_uploads
@@ -323,6 +356,10 @@ func registerRecoveredArtifact(ctx context.Context, db *sql.DB, opts *cliOptions
 	}
 	return uploadID, artifactID, nil
 }
+
+// (helper: newUUIDLowerHexRecover) is the entropy-safe UUID mint
+// used by registerRecoveredArtifact. See its body for the
+// fail-closed contract on crypto/rand.Read errors.
 
 func main() {
 	opts, err := parseOptions(os.Args[1:])

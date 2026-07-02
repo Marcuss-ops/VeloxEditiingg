@@ -38,6 +38,7 @@ package completion
 
 import (
 	"context"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
@@ -55,22 +56,41 @@ import (
 // values waste bytes on the wire.
 const commitTokenByteLen = 32
 
-// NewCoordinator constructs a Coordinator backed by db. db is expected
-// to be a *sql.DB whose schema includes attempt_commits (migration
-// 061+) and task_output_declarations (migration 062+, with the
-// `required` column from migration 064, and a 1:1 between commit_id
-// columns on the two tables).
+// CoordinatorConfig groups the inputs the Coordinator needs at
+// construction time. The HMACKey is the master-side secret used as
+// the HMAC-SHA256 key for the deterministic commit-token derivation
+// in DeclareOutputs (P0 #6, Verdetto Blocco 2); it MUST be at least
+// 32 raw bytes so HMAC-SHA256 operates with its nominal entropy.
+type CoordinatorConfig struct {
+	DB      *sql.DB
+	HMACKey []byte
+}
+
+// NewCoordinator constructs a Coordinator backed by cfg. cfg.DB is
+// expected to be a *sql.DB whose schema includes attempt_commits
+// (migration 061+) and task_output_declarations (migration 062+).
 //
-// Tests construct an in-memory sqlite3 handle via mattn/go-sqlite3 and
-// apply migrations via migrations.RunMigrations before calling
-// NewCoordinator.
-func NewCoordinator(db *sql.DB) Coordinator {
-	return &coordinator{db: db}
+// cfg.HMACKey is the master-side secret used as the HMAC-SHA256 key
+// for the deterministic commit-token derivation. NewCoordinator
+// returns an error when the key is missing or short; the caller
+// (bootstrap, recover_output) MUST refuse to start the master with a
+// replayable token derivation.
+//
+// Tests pass an explicit 32-byte testkey via CoordinatorConfig{HMACKey: ...}.
+func NewCoordinator(cfg CoordinatorConfig) (Coordinator, error) {
+	if cfg.DB == nil {
+		return nil, fmt.Errorf("completion.NewCoordinator: cfg.DB is required")
+	}
+	if len(cfg.HMACKey) < 32 {
+		return nil, fmt.Errorf("completion.NewCoordinator: cfg.HMACKey must be >= 32 bytes for HMAC-SHA256 nominal entropy (got %d)", len(cfg.HMACKey))
+	}
+	return &coordinator{db: cfg.DB, hmacKey: cfg.HMACKey}, nil
 }
 
 // coordinator is the canonical Coordinator implementation.
 type coordinator struct {
-	db *sql.DB
+	db      *sql.DB
+	hmacKey []byte
 }
 
 // DeclareOutputs upserts an AttemptCommit row + per-decl declaration
@@ -103,8 +123,21 @@ func (c *coordinator) DeclareOutputs(ctx context.Context, cmd DeclareOutputsComm
 		return nil, fmt.Errorf("completion.DeclareOutputs: at least one OutputManifest required (task_id=%s attempt_id=%s)", cmd.Fence.TaskID, cmd.Fence.AttemptID)
 	}
 
-	commitID := newUUIDLowerHex()
-	token, tokenHash := generateCommitToken()
+	// Mint commit_id from crypto/rand. Entropy failure is fail-closed
+	// (Verdetto P0 #7): a deterministic fallback would collide commits
+	// across the cluster and break UNIQUE(task_id, attempt_id) dedup.
+	commitID, err := newUUIDLowerHex()
+	if err != nil {
+		return nil, fmt.Errorf("completion.DeclareOutputs: mint commit_id: %w", err)
+	}
+	// Derive the commit_token from (commit_id, fence, HMACKey). The
+	// derivation is deterministic so a replay of DeclareOutputs with
+	// the same fence returns the same plaintext token and writes the
+	// same commit_token_hash on attempt_commits (Verdetto P0 #6).
+	token, tokenHash, err := generateDeterministicCommitToken(c, commitID, cmd.Fence)
+	if err != nil {
+		return nil, fmt.Errorf("completion.DeclareOutputs: derive commit_token: %w", err)
+	}
 
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	deadline := time.Now().UTC().Add(commitGraceDefault).Format(time.RFC3339Nano)
@@ -184,7 +217,10 @@ func (c *coordinator) DeclareOutputs(ctx context.Context, cmd DeclareOutputsComm
 		if err := validateManifest(&m); err != nil {
 			return nil, fmt.Errorf("completion.DeclareOutputs: invalid manifest: %w", err)
 		}
-		declarationID := newUUIDLowerHex()
+		declarationID, derr := newUUIDLowerHex()
+		if derr != nil {
+			return nil, fmt.Errorf("completion.DeclareOutputs: mint declaration_id: %w", derr)
+		}
 		_, err := tx.ExecContext(ctx,
 			`INSERT OR IGNORE INTO task_output_declarations (
 				declaration_id, commit_id, task_id, attempt_id,
@@ -388,30 +424,79 @@ func (c *coordinator) CompleteUpload(ctx context.Context, cmd CompleteUploadComm
 	if receivedSHA.Valid && receivedSHA.String != "" {
 		effectiveExpected = receivedSHA.String
 	}
+	// Worker fabrication early-reject: the worker's local SHA must
+	// match the canonical expected_sha256 declared earlier in
+	// DeclareOutputs. This protects against a worker that
+	// post-Declare rewrites its claimed hash to anything different
+	// (e.g., trying to align with a forged file). The ServerSHA256
+	// gate below is independent and authoritative for STAGING->READY.
 	if cmd.WorkerSHA256 != "" && effectiveExpected != "" && cmd.WorkerSHA256 != effectiveExpected {
-		return fmt.Errorf("%w: upload=%s worker_sha=%s master_sha=%s", ErrStaleReport, cmd.UploadID, cmd.WorkerSHA256, effectiveExpected)
+		return fmt.Errorf("%w: upload=%s worker_sha=%s master_declared=%s",
+			ErrStaleReport, cmd.UploadID, cmd.WorkerSHA256, effectiveExpected)
 	}
 
-	// 2. artifact_uploads → COMPLETED.
+	// Verdetto P0 #5 — authoritative SHA gate.
+	//
+	// Four branches determined by ServerSHA256 + effectiveExpected:
+	//
+	//   A. ServerSHA="" AND effectiveExpected="" — no canonical reference
+	//      on either side. Bytes transferred but neither side has a
+	//      hash. Stay at VERIFYING (uniform "pending verification").
+	//      A master-side verification tick (HEAD on the storage
+	//      backend, sidecar manifest, or multipart
+	//      ChecksumSHA256 metadata) will reconcile later.
+	//   B. ServerSHA="" AND effectiveExpected!="" — declarative SHA
+	//      present, master hasn't verified. Stay at VERIFYING; the
+	//      artifact MUST NOT advance to READY on worker-only evidence.
+	//   C. ServerSHA matches effectiveExpected (or ServerSHA!="" with no
+	//      canonical reference) — master agrees with declarative.
+	//      Promote artifact STAGING/VERIFYING → READY.
+	//   D. ServerSHA!="" AND differs from effectiveExpected — reject
+	//      with ErrStaleReport; tx rolls back; the worker must
+	//      reconnect with the correct sha.
+	mismatchedServer := cmd.ServerSHA256 != "" && effectiveExpected != "" && cmd.ServerSHA256 != effectiveExpected
+	switch {
+	case mismatchedServer:
+		return fmt.Errorf("%w: upload=%s server_sha=%s master_declared=%s",
+			ErrStaleReport, cmd.UploadID, cmd.ServerSHA256, effectiveExpected)
+	}
+
+	// 2. artifact_uploads → COMPLETED. received_sha256 is stamped
+	//    with the master-derived ServerSHA256 (NEVER the worker
+	//    self-report). COALESCE keeps an earlier master-derived
+	//    value if one was set by an earlier tick (e.g., a partial
+	//    chunked-handshake probe that already wrote the SHA).
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE artifact_uploads
 		   SET status = 'COMPLETED', completed_at = ?, received_sha256 = COALESCE(received_sha256, ?),
 		       updated_at = ?
 		 WHERE upload_id = ? AND status IN ('CREATED','UPLOADING','RECEIVED')`,
-		nowStr, cmd.WorkerSHA256, nowStr, cmd.UploadID,
+		nowStr, cmd.ServerSHA256, nowStr, cmd.UploadID,
 	); err != nil {
 		return fmt.Errorf("completion.CompleteUpload: artifact_uploads CAS: %w", err)
 	}
 
-	// 3. artifacts STAGING → READY (0 rows tolerated).
+	// 3. artifacts gate — Branch C promotes STAGING/VERIFYING → READY;
+	//    Branches A/B ride the storm and stay at VERIFYING so a
+	//    later reconciliation / head-request verification tick can
+	//    pick them up. The CAS guard is identical (status IN
+	//    'STAGING','VERIFYING'); only the target status differs.
+	var artifactTargetStatus string
+	switch {
+	case cmd.ServerSHA256 != "" && (effectiveExpected == "" || cmd.ServerSHA256 == effectiveExpected):
+		artifactTargetStatus = "READY"
+	default:
+		// Branch A or B: keep at VERIFYING.
+		artifactTargetStatus = "VERIFYING"
+	}
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE artifacts
-		   SET status = 'READY', verified_at = ?, updated_at = ?
+		   SET status = ?, verified_at = ?, updated_at = ?
 		 WHERE id = (SELECT artifact_id FROM artifact_uploads WHERE upload_id = ?)
 		   AND status IN ('STAGING','VERIFYING')`,
-		nowStr, nowStr, cmd.UploadID,
+		artifactTargetStatus, nowStr, nowStr, cmd.UploadID,
 	); err != nil {
-		return fmt.Errorf("completion.CompleteUpload: artifacts STAGING->READY: %w", err)
+		return fmt.Errorf("completion.CompleteUpload: artifacts -> %s: %w", artifactTargetStatus, err)
 	}
 
 	// 4. attempt_commits.ready_output_count derived from
@@ -790,20 +875,16 @@ const commitGraceDefault = 2 * time.Minute
 //
 // NOTE: This is NOT a UUIDv4 because we do not permute the version
 // bits. It is a 16-byte hex string with the same collision property.
-// For testability we accept any non-zero-distribution source; for
-// production use crypto/rand (Phase 0). Tests may swap newUUIDLowerHex
-// with a deterministic generator if needed.
-func newUUIDLowerHex() string {
+//
+// Verdetto P0 #7: entropy failure is fail-closed. A previous
+// `byte(i+1)` fallback was deterministic and would have collided
+// commits across the cluster, breaking UNIQUE(task_id, attempt_id)
+// dedup at scale. The error propagates through DeclareOutputs into
+// the tx rollback path, surfacing in /ready and the supervisor.
+func newUUIDLowerHex() (string, error) {
 	var b [16]byte
 	if _, err := rand.Read(b[:]); err != nil {
-		// crypto/rand never errors on Linux/macOS. If it does, fall
-		// through to a process-local counter-based fallback so that
-		// the daemon does not crash on a transient entropy failure.
-		// Phase 0 strict: surfaces a panic instead — until then the
-		// graceful fallback keeps the cluster running.
-		for i := range b {
-			b[i] = byte(i + 1) // deterministic non-zero marker
-		}
+		return "", fmt.Errorf("completion: entropy failure for UUID (crypto/rand): %w", err)
 	}
 	const hexdigits = "0123456789abcdef"
 	out := make([]byte, len(b)*2)
@@ -811,28 +892,42 @@ func newUUIDLowerHex() string {
 		out[i*2] = hexdigits[by>>4]
 		out[i*2+1] = hexdigits[by&0x0f]
 	}
-	return string(out)
+	return string(out), nil
 }
 
-// generateCommitToken returns the canonical (token, hash) pair. The
-// token is a random 32-byte sequence hex-encoded for wire readability;
-// the hash is its SHA256 hex.
+// generateDeterministicCommitToken derives a replay-safe bearer
+// token from the canonical (commit_id, fence) and the master-side
+// HMAC key. Two calls with the same inputs return the same token,
+// so the INSERT-OR-IGNORE on attempt_commits and the worker's
+// retry-on-network-drop both observe the same commit_token_hash
+// on disk and the same plaintext token on the wire (Verdetto P0
+// #6, Blocco 2).
 //
-// Idempotency note: this function is called once per DeclareOutputs
-// call. A replay of DeclareOutputs (because the worker's network
-// dropped) will produce a fresh token — the worker, holding the first
-// one, ignores the second. The plan documents this trade-off as
-// acceptable: the master never persists the plain token beyond its
-// first delivery.
-func generateCommitToken() (token, hash string) {
-	var b [commitTokenByteLen]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		for i := range b {
-			b[i] = byte(i + 1)
-		}
+// Token shape: HMAC-SHA256(key, "v1|<commitID>|<taskID>|<attemptID>|<workerID>|<leaseID>|<revision>").
+// The token is the hex-encoded HMAC digest (32 bytes -> 64 hex
+// chars). The hash persisted on attempt_commits.commit_token_hash
+// is the SHA256 hex of the decoded token bytes; this preserves the
+// same shape the migration 061 schema was written against and the
+// same length the existing tests assert on (commitTokenByteLen*2).
+//
+// The HMAC key length is validated by NewCoordinator (>= 32 bytes);
+// the in-function check is a defence-in-depth guard against future
+// callers that build a coordinator{} lite without going through the
+// canonical constructor.
+func generateDeterministicCommitToken(c *coordinator, commitID string, fence FenceTuple) (token, hash string, err error) {
+	if len(c.hmacKey) < 32 {
+		return "", "", fmt.Errorf("completion: commit HMAC key not configured (must be >= 32 bytes)")
 	}
-	sum := sha256.Sum256(b[:])
-	return hex.EncodeToString(b[:]), hex.EncodeToString(sum[:])
+	mac := hmac.New(sha256.New, c.hmacKey)
+	if _, ferr := fmt.Fprintf(mac, "v1|%s|%s|%s|%s|%s|%d",
+		commitID, fence.TaskID, fence.AttemptID, fence.WorkerID, fence.LeaseID, fence.Revision,
+	); ferr != nil {
+		return "", "", fmt.Errorf("completion: derive commit_token hmac write: %w", ferr)
+	}
+	sum := mac.Sum(nil)
+	token = hex.EncodeToString(sum)
+	hashSum := sha256.Sum256(sum)
+	return token, hex.EncodeToString(hashSum[:]), nil
 }
 
 // validateManifest enforces the basic invariants on a per-file

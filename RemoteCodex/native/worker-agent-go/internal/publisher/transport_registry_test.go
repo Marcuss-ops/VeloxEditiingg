@@ -208,8 +208,15 @@ func TestObjectStoreMultipart_Upload_Success(t *testing.T) {
 	if res.UploadedBytes != int64(len(payload)) {
 		t.Errorf("UploadedBytes = %d; want %d", res.UploadedBytes, len(payload))
 	}
-	if res.ServerSHA256 != wantSHAHex {
-		t.Errorf("ServerSHA256 = %q; want %q", res.ServerSHA256, wantSHAHex)
+	// Verdetto P0 #5: object-store-multipart does NOT have a server-
+	// side canonical SHA-256 in this code path (S3 ETag is MD5 of
+	// concatenated part MD5s). The worker MUST return ServerSHA256=""
+	// so the master can fall back to its own server-side SHA derivation
+	// (HEAD request, sidecar manifest, or ChecksumSHA256 metadata).
+	// Returning the worker's own SHA would defeat the purpose of the
+	// fail-closed default.
+	if res.ServerSHA256 != "" {
+		t.Errorf("ServerSHA256 = %q; want \"\" (fail-closed Verdetto P0 #5)", res.ServerSHA256)
 	}
 
 	fake := tr.S3Client.(*fakeS3Client)
@@ -596,12 +603,16 @@ func TestMasterStreamTransport_Upload_Roundtrip(t *testing.T) {
 }
 
 func TestMasterStreamTransport_Upload_ServerChecksumMismatch_Errors(t *testing.T) {
+	// Worker reports "hello" SHA; the master returns a valid but
+	// DIFFERENT 64-char lowercase hex SHA on /complete. The transport
+	// MUST surface ErrChecksumMismatch (Verdetto P0 #5: server SHA
+	// is authoritative when it returns one).
+	wrongSHA := strings.Repeat("d", 64) // lowercase hex, 64 chars, != sha256("hello")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/complete") {
-			// Return a wrong SHA on the complete step.
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"ok":     true,
-				"sha256": "deadbeef",
+				"sha256": wrongSHA,
 			})
 			return
 		}

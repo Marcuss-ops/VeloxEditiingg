@@ -14,6 +14,28 @@ import (
 	"velox-server/internal/store/migrations"
 )
 
+// testHMACKey is the deterministic 32-byte HMAC key used by every
+// Coordinator built in this package (Verdetto P0 #6). It is the
+// SHA-256 of a fixed string ("velox-test-commit-hmac-key-v1") and is
+// stable across runs so DeclareOutputs produces the same
+// commit_token + commit_token_hash for the same (commit_id, fence)
+// — the exact property the new replay-safe derivation ships with.
+var testHMACKey = func() []byte {
+	h := sha256.Sum256([]byte("velox-test-commit-hmac-key-v1"))
+	return h[:]
+}()
+
+// newTestCoordinator builds the canonical Coordinator with the test
+// HMAC key for this package. NewCoordinator's >=32-byte guard passes
+// (testHMACKey is exactly 32 bytes).
+func newTestCoordinator(db *sql.DB) Coordinator {
+	c, err := NewCoordinator(CoordinatorConfig{DB: db, HMACKey: testHMACKey})
+	if err != nil {
+		panic(err) // test-only; cannot reasonably happen
+	}
+	return c
+}
+
 // ────────────────────────────────────────────────────────────────────────
 // helpers: open the canonical migrations-seeded DB used by every test
 // in this file.
@@ -166,7 +188,7 @@ func TestFenceTuple_SQLWhereAndArgs(t *testing.T) {
 
 func TestCoordinator_DeclareOutputs_HappyPath(t *testing.T) {
 	db := openCoordinatorTestDB(t)
-	c := NewCoordinator(db)
+	c := newTestCoordinator(db)
 	fence := validFence("task-1", "attempt-1")
 
 	plan, err := c.DeclareOutputs(context.Background(), DeclareOutputsCommand{
@@ -225,7 +247,7 @@ func TestCoordinator_DeclareOutputs_HappyPath(t *testing.T) {
 
 func TestCoordinator_DeclareOutputs_IdempotentOnReplay(t *testing.T) {
 	db := openCoordinatorTestDB(t)
-	c := NewCoordinator(db)
+	c := newTestCoordinator(db)
 	fence := validFence("task-replay", "attempt-replay")
 
 	cmd := DeclareOutputsCommand{
@@ -267,7 +289,7 @@ func TestCoordinator_DeclareOutputs_IdempotentOnReplay(t *testing.T) {
 
 func TestCoordinator_DeclareOutputs_MultipleManifests(t *testing.T) {
 	db := openCoordinatorTestDB(t)
-	c := NewCoordinator(db)
+	c := newTestCoordinator(db)
 	fence := validFence("task-multi", "attempt-multi")
 	manifests := []OutputManifest{
 		{
@@ -311,7 +333,7 @@ func TestCoordinator_DeclareOutputs_MultipleManifests(t *testing.T) {
 
 func TestCoordinator_DeclareOutputs_PartialReplayMixed(t *testing.T) {
 	db := openCoordinatorTestDB(t)
-	c := NewCoordinator(db)
+	c := newTestCoordinator(db)
 	fence := validFence("task-mix", "attempt-mix")
 	manifests := []OutputManifest{
 		{
@@ -373,7 +395,7 @@ func TestCoordinator_DeclareOutputs_PartialReplayMixed(t *testing.T) {
 
 func TestCoordinator_DeclareOutputs_EmptyFenceRejected(t *testing.T) {
 	db := openCoordinatorTestDB(t)
-	c := NewCoordinator(db)
+	c := newTestCoordinator(db)
 	_, err := c.DeclareOutputs(context.Background(), DeclareOutputsCommand{
 		Fence:           FenceTuple{}, // empty
 		JobID:           "j",
@@ -389,7 +411,7 @@ func TestCoordinator_DeclareOutputs_EmptyFenceRejected(t *testing.T) {
 
 func TestCoordinator_DeclareOutputs_NoManifestsRejected(t *testing.T) {
 	db := openCoordinatorTestDB(t)
-	c := NewCoordinator(db)
+	c := newTestCoordinator(db)
 	_, err := c.DeclareOutputs(context.Background(), DeclareOutputsCommand{
 		Fence:           validFence("task-empty", "attempt-empty"),
 		JobID:           "j",
@@ -402,7 +424,7 @@ func TestCoordinator_DeclareOutputs_NoManifestsRejected(t *testing.T) {
 
 func TestCoordinator_DeclareOutputs_InvalidManifestRejected(t *testing.T) {
 	db := openCoordinatorTestDB(t)
-	c := NewCoordinator(db)
+	c := newTestCoordinator(db)
 	_, err := c.DeclareOutputs(context.Background(), DeclareOutputsCommand{
 		Fence: validFence("task-bad-manifest", "attempt-bad-manifest"),
 		JobID: "j",
@@ -427,7 +449,7 @@ func TestCoordinator_DeclareOutputs_InvalidManifestRejected(t *testing.T) {
 
 func TestCoordinator_RecordUploadProgress_BumpsProgress(t *testing.T) {
 	db := openCoordinatorTestDB(t)
-	c := NewCoordinator(db)
+	c := newTestCoordinator(db)
 	fence := validFence("task-prog", "attempt-prog")
 	plan, err := c.DeclareOutputs(context.Background(), DeclareOutputsCommand{
 		Fence: fence, JobID: "job-prog", OutputManifests: validManifests(),
@@ -480,7 +502,7 @@ func TestCoordinator_RecordUploadProgress_BumpsProgress(t *testing.T) {
 
 func TestCoordinator_RecordUploadProgress_WrongFenceRejected(t *testing.T) {
 	db := openCoordinatorTestDB(t)
-	c := NewCoordinator(db)
+	c := newTestCoordinator(db)
 	fence := validFence("task-bad-fence", "attempt-bad-fence")
 	if _, err := c.DeclareOutputs(context.Background(), DeclareOutputsCommand{
 		Fence: fence, JobID: "job", OutputManifests: validManifests(),
@@ -507,7 +529,7 @@ func TestCoordinator_RecordUploadProgress_WrongFenceRejected(t *testing.T) {
 
 func TestCoordinator_RecordUploadProgress_EmptyUploadIDRejected(t *testing.T) {
 	db := openCoordinatorTestDB(t)
-	c := NewCoordinator(db)
+	c := newTestCoordinator(db)
 	fence := validFence("task-up-empty", "attempt-up-empty")
 	if _, err := c.DeclareOutputs(context.Background(), DeclareOutputsCommand{
 		Fence: fence, JobID: "job", OutputManifests: validManifests(),

@@ -67,5 +67,11 @@ func loadRuntimeConfig(dataDir string) RuntimeConfig {
 		c.ReleaseChannel = "dev"
 	}
 
+	// Commit HMAC key (P0 #6, Blocco 2). Hex-encoded raw bytes; the
+	// config layer keeps it as the on-wire string so operators can
+	// inject via VELOX_COMMIT_HMAC_KEY=<hex>. The Coordinator
+	// validates length on NewCoordinator() and boot fails-fast.
+	c.CommitHMACKey = strings.TrimSpace(os.Getenv("VELOX_COMMIT_HMAC_KEY"))
+
 	return c
 }

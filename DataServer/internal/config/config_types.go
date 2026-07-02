@@ -67,6 +67,15 @@ type RuntimeConfig struct {
 	// Default: "dev" for backward compatibility with installs that
 	// pre-date PR-5.
 	ReleaseChannel string
+
+	// CommitHMACKey mirrors VELOX_COMMIT_HMAC_KEY (P0 #6, Verdetto
+	// Blocco 2). Hex-encoded bytes used as the HMAC-SHA256 key for the
+	// deterministic commit-token derivation in completion.Coordinator.
+	// Must be at least 32 raw bytes (64 hex chars) for HMAC-SHA256 to
+	// operate with its nominal entropy; production deployments MUST
+	// set this to a random secret. Validate() fail-closes on
+	// Environment == production with a missing or short key.
+	CommitHMACKey string
 }
 
 // DatabaseConfig holds database connection settings for the

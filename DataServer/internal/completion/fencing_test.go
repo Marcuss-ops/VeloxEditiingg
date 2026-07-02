@@ -15,7 +15,11 @@ import (
 // tests can assert against the gate's response.
 func seedAttemptCommit(t *testing.T, db *sql.DB, fence FenceTuple, status string, requiredCount int) string {
 	t.Helper()
-	commitID := newUUIDLowerHex() + "_test"
+	commitIDRaw, err := newUUIDLowerHex()
+	if err != nil {
+		t.Fatalf("seedAttemptCommit: mint commit_id: %v", err)
+	}
+	commitID := commitIDRaw + "_test"
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	if _, err := db.Exec(`
 		INSERT INTO attempt_commits (

@@ -359,14 +359,21 @@ func (t *MasterStreamTransport) Upload(ctx context.Context, req UploadRequest) (
 			ErrUploadFailed, resp.StatusCode, string(body))
 	}
 
-	// The complete response may carry a server SHA256. The legacy
+	// The complete response MAY carry a server SHA256. The legacy
 	// /complete handler returns a JSON shape with "sha256" /
-	// "output_sha256"; we accept either, defaulting to the worker's
-	// own SHA256 if the server omitted it.
-	serverSHA := req.WorkerSHA256
-	if s := extractJSONString(body, `"sha256"`); s != "" {
+	// "output_sha256"; we accept either, defaulting to EMPTY when the
+	// server omitted it.
+	//
+	// Verdetto P0 #5: the worker self-report is NOT authoritative.
+	// When the master does not return a server-side SHA, the worker
+	// MUST surface ServerSHA256="" so the artifact stays VERIFYING on
+	// the master side rather than being advanced to COMPLETED on
+	// worker-only evidence. This avoids a master trusting a hash the
+	// worker could fabricate.
+	serverSHA := ""
+	if s := extractJSONString(body, `"sha256"`); s != "" && isLowerHex64(s) {
 		serverSHA = s
-	} else if s := extractJSONString(body, `"output_sha256"`); s != "" {
+	} else if s := extractJSONString(body, `"output_sha256"`); s != "" && isLowerHex64(s) {
 		serverSHA = s
 	}
 	if serverSHA != "" && serverSHA != req.WorkerSHA256 {
@@ -379,6 +386,23 @@ func (t *MasterStreamTransport) Upload(ctx context.Context, req UploadRequest) (
 		UploadedBytes: uploaded,
 		ServerSHA256:  serverSHA,
 	}, nil
+}
+
+// isLowerHex64 returns true when s is a 64-character lowercase hex
+// string (i.e. a SHA-256 digest). It's a sanity check on the master-
+// returned server SHA before we accept it as authoritative — a
+// malformed SHA would otherwise slip through into the upload result
+// and the master would have nothing meaningful to compare against.
+func isLowerHex64(s string) bool {
+	if len(s) != 64 {
+		return false
+	}
+	for _, c := range s {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+			return false
+		}
+	}
+	return true
 }
 
 // extractJSONString is a tiny helper for the complete-response
@@ -622,15 +646,20 @@ func (t *ObjectStoreMultipartTransport) Upload(ctx context.Context, req UploadRe
 
 	// The server-side ETag is not the SHA-256 of the assembled
 	// object (S3 computes an MD5 of the concatenated part MD5s).
-	// Trust the worker's WorkerSHA256 as the canonical content
-	// hash; S3 side verification is the master's job (Fase 3.4's
-	// CompleteUpload + Receive).
+	//
+	// Verdetto P0 #5: a missing server SHA cannot be substituted by
+	// the worker self-report. We intentionally do NOT return
+	// req.WorkerSHA256 here — the master expects to derive its own
+	// SHA (HEAD request to the S3 key, sidecar manifest verification
+	// or the multipart's ChecksumSHA256 metadata on completion). If
+	// those master paths do not produce a SHA, the artifact stays
+	// VERIFYING rather than being advanced on worker evidence alone.
 	_ = compRes
 
 	return &UploadResult{
 		UploadID:      req.Target.UploadID,
 		UploadedBytes: uploaded,
-		ServerSHA256:  req.WorkerSHA256,
+		ServerSHA256:  "",
 	}, nil
 }
 

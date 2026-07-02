@@ -83,7 +83,7 @@ func setupReconcileDB(t *testing.T) (*sql.DB, *ReconcileSupervisor, *fakeReconci
 	}
 
 	metrics := &fakeReconcileMetrics{}
-	coord := NewCoordinator(db)
+	coord := newTestCoordinator(db)
 	sup := NewReconcileSupervisor(db, coord, metrics)
 	// Tight tick / low limit so a single TickOnce is fully
 	// deterministic; no goroutine scheduling involved.

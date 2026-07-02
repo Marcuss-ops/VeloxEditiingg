@@ -137,7 +137,20 @@ type CompleteUploadCommand struct {
 	Fence             FenceTuple
 	UploadID          string
 	UploadedSizeBytes int64
-	WorkerSHA256      string
+	// WorkerSHA256 is the SHA-256 the worker computed locally. Used
+	// ONLY for CAS staleness detection against expected_sha256 — it
+	// must NEVER be persisted as received_sha256 (the master has its
+	// own verification path; see P0 #5 in the Verdetto).
+	WorkerSHA256 string
+	// ServerSHA256 is the SHA-256 the master computed server-side
+	// (from bytes it received / an object store round-trip). When
+	// empty, the artifact MUST stay VERIFYING — the worker self-report
+	// is not authoritative. Master-stream /complete and object-store
+	// multipart head requests are the canonical sources for this
+	// field at the master side. recover_output sets this to the
+	// locally-recomputed SHA because the file is already at rest on
+	// the master host and there is no actual wire transfer.
+	ServerSHA256 string
 }
 
 // CommitResult describes what CommitAttempt/ReconcileAttempt produced.
