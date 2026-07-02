@@ -50,8 +50,12 @@ type RunnerConfig struct {
 	// MaxAttempts per delivery before declaring FAILED.
 	MaxAttempts int
 	// ClaimBatch limits how many deliveries the runner can claim in a
-	// single tick (concurrency).
+	// single tick. Should be ≥ Concurrency to keep the pool saturated.
 	ClaimBatch int
+	// Concurrency limits how many deliveries are processed concurrently.
+	// Each delivery gets its own lease renewal goroutine; a bounded pool
+	// prevents resource exhaustion. Default 2.
+	Concurrency int
 
 	// BackoffSchedule maps attempt number (1-based) to the delay before
 	// the next attempt. The last entry is used for all subsequent attempts.
@@ -66,6 +70,7 @@ func DefaultRunnerConfig() *RunnerConfig {
 		LeaseDuration: 5 * time.Minute,
 		MaxAttempts:   5,
 		ClaimBatch:    4,
+		Concurrency:   2,
 		BackoffSchedule: []time.Duration{
 			30 * time.Second,
 			2 * time.Minute,
@@ -98,6 +103,8 @@ type DeliveryRunner struct {
 	registry *Registry
 	dbStore  *store.SQLiteStore
 
+	sem chan struct{} // bounded concurrency
+
 	mu        sync.Mutex
 	stopCh    chan struct{}
 	stoppedCh chan struct{}
@@ -119,11 +126,15 @@ func NewDeliveryRunner(cfg *RunnerConfig, registry *Registry, dbStore *store.SQL
 	if identity == "" {
 		identity = fmt.Sprintf("delivery-runner-%d", time.Now().UnixNano())
 	}
+	if cfg.Concurrency <= 0 {
+		cfg.Concurrency = 2
+	}
 	return &DeliveryRunner{
 		cfg:       cfg,
 		registry:  registry,
 		dbStore:   dbStore,
 		identity:  identity,
+		sem:       make(chan struct{}, cfg.Concurrency),
 		stopCh:    make(chan struct{}),
 		stoppedCh: make(chan struct{}),
 	}
@@ -169,18 +180,42 @@ func (r *DeliveryRunner) Stop() {
 }
 
 // tick performs one poll: claim up to ClaimBatch claimable deliveries,
-// run each through the registry, persist the outcome via typed methods.
-// Errors are logged; they do not stop the loop.
+// then process each one with bounded concurrency. Each lease starts
+// processing immediately — the claim batch is capped at Concurrency so
+// no row sits idle in memory with a ticking lease and no heartbeat.
 func (r *DeliveryRunner) tick(ctx context.Context) error {
-	leases, err := r.dbStore.ClaimDeliveries(ctx, r.identity, r.cfg.LeaseDuration, r.cfg.ClaimBatch)
+	batch := r.cfg.ClaimBatch
+	if r.cfg.Concurrency > 0 && batch > r.cfg.Concurrency {
+		batch = r.cfg.Concurrency
+	}
+	leases, err := r.dbStore.ClaimDeliveries(ctx, r.identity, r.cfg.LeaseDuration, batch)
 	if err != nil {
 		return fmt.Errorf("claim deliveries: %w", err)
 	}
-	for _, lease := range leases {
-		if err := r.processLease(ctx, lease); err != nil {
-			log.Printf("[DELIVERY] delivery %s: %v", lease.DeliveryID, err)
-		}
+	if len(leases) == 0 {
+		return nil
 	}
+
+	var wg sync.WaitGroup
+	for _, lease := range leases {
+		wg.Add(1)
+		go func(l store.DeliveryLease) {
+			defer wg.Done()
+			// Acquire semaphore (bounded concurrency).
+			select {
+			case r.sem <- struct{}{}:
+			case <-ctx.Done():
+				log.Printf("[DELIVERY] abandoning claimed lease %s: runner shutting down", l.DeliveryID)
+				return
+			}
+			defer func() { <-r.sem }()
+
+			if err := r.processLease(ctx, l); err != nil {
+				log.Printf("[DELIVERY] delivery %s: %v", l.DeliveryID, err)
+			}
+		}(lease)
+	}
+	wg.Wait()
 	return nil
 }
 
@@ -254,6 +289,16 @@ func (r *DeliveryRunner) processLease(ctx context.Context, lease store.DeliveryL
 
 	// ── Success ──
 	if runErr == nil && res != nil && res.Success {
+		// Validate the provider result carries verifiable evidence.
+		// A Success:true without a remote ID or URL is a programming
+		// error in the provider adapter — treat as permanent failure.
+		if err := validateProviderResult(res); err != nil {
+			log.Printf("[DELIVERY] provider result validation failed for %s: %v", lease.DeliveryID, err)
+			if merr := r.dbStore.MarkDeliveryFailed(ctx, lease.DeliveryID, lease.RunnerID, lease.LeaseID, "INVALID_RESULT", err.Error()); merr != nil {
+				log.Printf("[DELIVERY] mark failed for %s: %v", lease.DeliveryID, merr)
+			}
+			return err
+		}
 		if err := r.dbStore.MarkDeliverySucceeded(ctx, lease.DeliveryID, lease.RunnerID, lease.LeaseID, res.RemoteID, res.RemoteURL); err != nil {
 			return fmt.Errorf("mark succeeded: %w", err)
 		}
@@ -355,6 +400,23 @@ func (r *DeliveryRunner) resolveRetryAfter(err error) time.Time {
 		return pe.RetryAfter
 	}
 	return time.Time{}
+}
+
+// validateProviderResult checks that a successful provider result carries
+// verifiable evidence that the remote side actually created the output.
+// A Success:true without at least one of RemoteID or RemoteURL is treated
+// as a permanent failure — there is no proof the delivery completed.
+func validateProviderResult(res *Result) error {
+	if res == nil {
+		return fmt.Errorf("%w: result is nil", ErrProviderPermanent)
+	}
+	if !res.Success {
+		return fmt.Errorf("%w: result.Success is false", ErrProviderPermanent)
+	}
+	if res.RemoteID == "" && res.RemoteURL == "" {
+		return fmt.Errorf("%w: both RemoteID and RemoteURL are empty after Success=true — no verifiable output", ErrProviderPermanent)
+	}
+	return nil
 }
 
 // classifyErrorCode produces a short machine-readable code for the error.

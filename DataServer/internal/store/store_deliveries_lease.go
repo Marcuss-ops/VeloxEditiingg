@@ -93,17 +93,19 @@ func (s *SQLiteStore) ClaimDeliveries(ctx context.Context, runnerID string, leas
 	var claimed []claimedRow
 	for rows.Next() {
 		var c claimedRow
-		if err :=			rows.Scan(&c.deliveryID, &c.artifactID, &c.destID, &c.attemptCount, &c.maxAttempts); err != nil {
-			continue
+		if err := rows.Scan(&c.deliveryID, &c.artifactID, &c.destID, &c.attemptCount, &c.maxAttempts); err != nil {
+			return nil, fmt.Errorf("ClaimDeliveries: scan claimed row: %w", err)
 		}
 		claimed = append(claimed, c)
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("ClaimDeliveries: rows iteration: %w", err)
 	}
 	if len(claimed) == 0 {
-		_ = tx.Commit()
+		if err := tx.Commit(); err != nil {
+			return nil, fmt.Errorf("ClaimDeliveries: commit empty batch: %w", err)
+		}
 		return nil, nil
 	}
 
