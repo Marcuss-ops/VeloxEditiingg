@@ -107,9 +107,22 @@ CREATE TABLE task_specs (
 
 // openTaskAtomicTestDB returns *SQLiteStore + *SQLiteTaskRepository scoped
 // to a connection-shared in-memory SQLite with the minimal schema.
+//
+// _busy_timeout=5000 (added 2026-07-02, Blocco 1 of the Verdetto):
+// concurrent-claim tests (TestClaimTaskForWorkerAtomic_AlreadyClaimed)
+// were intermittently failing with `database table is locked: tasks`
+// because the mattn/go-sqlite3 driver's default busy_timeout is 0
+// (immediate fail on SQLITE_BUSY). Two goroutines racing on the
+// same task's CAS UPDATE produced a SQLITE_BUSY from the loser
+// connection; without a busy_timeout the loser surfaced as a hard
+// error instead of retrying. Setting _busy_timeout=5000 matches
+// the master-side DSN and the production filesystem WAL pragmas
+// so the test mirrors real-world contention semantics. Mirror
+// consistent with openInMemoryTestDB in scan_test.go (artifacts
+// package) and the newSQLiteStore helper.
 func openTaskAtomicTestDB(t *testing.T) (*SQLiteStore, *SQLiteTaskRepository) {
 	t.Helper()
-	db, err := sql.Open("sqlite3", "file::memory:?cache=shared")
+	db, err := sql.Open("sqlite3", "file::memory:?cache=shared&_busy_timeout=5000")
 	if err != nil {
 		t.Fatalf("open sqlite (task atomic): %v", err)
 	}
