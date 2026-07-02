@@ -84,11 +84,35 @@ func (p RestartPolicy) backoffFor(attempt int) time.Duration {
 	if n > capAttempt {
 		n = capAttempt
 	}
-	d := p.InitialBackoff << n
-	if d <= 0 || d > p.MaxBackoff {
+	// Shift by n-1 so attempt=1 gives InitialBackoff (not ×2).
+	d := p.InitialBackoff << (n - 1)
+	// MaxBackoff == 0 means no cap — only clamp when positive.
+	if d <= 0 {
+		return 24 * time.Hour
+	}
+	if p.MaxBackoff > 0 && d > p.MaxBackoff {
 		return p.MaxBackoff
 	}
 	return d
+}
+
+// ── RunnerState ───────────────────────────────────────────────────────────
+
+// RunnerState tracks the current lifecycle phase of a supervised runner.
+// The /ready probe uses this to fail when a critical runner is BACKING_OFF,
+// FAILED, or STOPPED instead of relying on a simple alive/dead boolean.
+type RunnerState string
+
+const (
+	RunnerStarting   RunnerState = "STARTING"
+	RunnerRunning    RunnerState = "RUNNING"
+	RunnerBackingOff RunnerState = "BACKING_OFF"
+	RunnerStopped    RunnerState = "STOPPED"
+	RunnerFailed     RunnerState = "FAILED"
+)
+
+func (s RunnerState) IsHealthy() bool {
+	return s == RunnerStarting || s == RunnerRunning
 }
 
 // ── SupervisedRunner ───────────────────────────────────────────────────────
@@ -149,19 +173,17 @@ func (r RunnerFunc) Run(ctx context.Context) error { return r.fn(ctx) }
 type BackgroundSupervisor struct {
 	runners []SupervisedRunner
 
-	// alive tracks which runners are currently executing. A runner
-	// is added when its goroutine starts and removed when it
-	// returns (cleanly OR with error OR after a critical exhausting
-	// retries). /ready uses Missing() to surface silent-deaths of
-	// ClassRestartable + ClassCritical runners.
-	mu    sync.RWMutex
-	alive map[string]bool
+	// states tracks the lifecycle state of each registered runner.
+	// A runner transitions STARTING → RUNNING → (BACKING_OFF → RUNNING)* → STOPPED/FAILED.
+	// The /ready probe uses IsHealthy() to determine readiness.
+	mu     sync.RWMutex
+	states map[string]RunnerState
 }
 
 // NewBackgroundSupervisor creates an empty supervisor.
 func NewBackgroundSupervisor() *BackgroundSupervisor {
 	return &BackgroundSupervisor{
-		alive: make(map[string]bool),
+		states: make(map[string]RunnerState),
 	}
 }
 
@@ -269,16 +291,20 @@ func (s *BackgroundSupervisor) Run(ctx context.Context) error {
 
 	for _, r := range s.runners {
 		r := r
-		// Pre-mark the runner as alive so a /ready check before
+		// Pre-mark the runner as STARTING so a /ready check before
 		// runLoop starts doesn't gate-fail spuriously.
 		s.mu.Lock()
-		s.alive[r.Name] = true
+		s.states[r.Name] = RunnerStarting
 		s.mu.Unlock()
 		go func() {
 			defer wg.Done()
 			defer func() {
 				s.mu.Lock()
-				s.alive[r.Name] = false
+				// Preserve RunnerFailed set by runLoop on exhaustion —
+				// only demote to Stopped if the runner exited cleanly.
+				if s.states[r.Name] != RunnerFailed {
+					s.states[r.Name] = RunnerStopped
+				}
 				s.mu.Unlock()
 			}()
 			s.runLoop(supCtx, &fatalMu, &fatalErr, r, supCancel)
@@ -314,6 +340,11 @@ func (s *BackgroundSupervisor) runLoop(
 	maxR := effectiveMaxRetries(r.Class, r.Policy.MaxRetries)
 	attempt := 0
 	for {
+		// Transition to RUNNING before each invocation.
+		s.mu.Lock()
+		s.states[r.Name] = RunnerRunning
+		s.mu.Unlock()
+
 		log.Printf("[SUPERVISOR] starting runner: name=%s class=%s attempt=%d/%d",
 			r.Name, r.Class.String(), attempt+1, maxR)
 		err := safeCall(ctx, r.Run, r.Policy.RestartOnPanic, r.Name)
@@ -326,11 +357,19 @@ func (s *BackgroundSupervisor) runLoop(
 
 		// Clean exit — Run returned nil regardless of Class.
 		if err == nil {
+			s.mu.Lock()
+			s.states[r.Name] = RunnerStopped
+			s.mu.Unlock()
 			log.Printf("[SUPERVISOR] runner %s exited cleanly", r.Name)
 			return
 		}
 
 		attempt++
+
+		// Mark as FAILED before deciding whether to restart.
+		s.mu.Lock()
+		s.states[r.Name] = RunnerFailed
+		s.mu.Unlock()
 
 		switch r.Class {
 		case ClassOneShot:
@@ -344,6 +383,9 @@ func (s *BackgroundSupervisor) runLoop(
 					r.Name, maxR, r.Class.String(), err)
 				return
 			}
+			s.mu.Lock()
+			s.states[r.Name] = RunnerBackingOff
+			s.mu.Unlock()
 			delay := r.Policy.backoffFor(attempt)
 			log.Printf("[SUPERVISOR] runner %s FAILED (restartable); sleeping %s before retry %d/%d: err=%v",
 				r.Name, delay, attempt+1, maxR, err)
@@ -362,6 +404,9 @@ func (s *BackgroundSupervisor) runLoop(
 				supCancel()
 				return
 			}
+			s.mu.Lock()
+			s.states[r.Name] = RunnerBackingOff
+			s.mu.Unlock()
 			delay := r.Policy.backoffFor(attempt)
 			log.Printf("[SUPERVISOR] runner %s FAILED (critical); sleeping %s before retry %d/%s: err=%v",
 				r.Name, delay, attempt+1, retryCeilingString(maxR), err)
@@ -442,36 +487,51 @@ func (s *BackgroundSupervisor) Classes() []RunnerClass {
 	return out
 }
 
-// Missing returns the names of every registered runner that has STOPPED
-// but is still EXPECTED to be running. ClassOneShot runners are
-// returned only while they are still alive (they are EXPECTED to exit
-// cleanly post-startup, so a dead one is NOT flagged as missing here).
-// ClassRestartable and ClassCritical runners are flagged the moment
-// their goroutine returns — even if the supervisor as a whole is still
-// running other runners.
+// Missing returns the names of every registered runner whose current state
+// is not healthy. ClassOneShot runners in STOPPED state are NOT flagged
+// (they are expected to exit cleanly). ClassRestartable and ClassCritical
+// runners are flagged when their state is BACKING_OFF, FAILED, or STOPPED.
 //
 // This is the gate the /ready check uses to fail-loud on runner
-// silent-death (e.g. metrics-supervisor exhausts its 5 retries and the
-// master is now serving stale metrics but looks "healthy").
+// silent-death (e.g. a critical runner exhausted retries and the master
+// is now serving with a dead delivery pipeline).
 func (s *BackgroundSupervisor) Missing() []string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	var missing []string
 	for _, r := range s.runners {
-		if r.Class == ClassOneShot {
-			// One-shot runners are expected to exit. Only flag them
-			// as missing if they haven't even started yet (alive
-			// was never set true) — which would indicate a
-			// construction-time bug, not a runtime failure.
-			if _, started := s.alive[r.Name]; !started {
-				missing = append(missing, r.Name)
-			}
+		state, ok := s.states[r.Name]
+		if !ok {
+			// Runner was registered but never started — structural bug.
+			missing = append(missing, r.Name)
 			continue
 		}
-		if alive, ok := s.alive[r.Name]; !ok || !alive {
+		if r.Class == ClassOneShot {
+			// One-shot runners are expected to exit cleanly.
+			// The !ok branch above handles the never-started case;
+			// a stopped OneShot is not flagged as missing.
+			continue
+		}
+		if !state.IsHealthy() {
 			missing = append(missing, r.Name)
 		}
 	}
 	sort.Strings(missing)
 	return missing
+}
+
+// States returns the current state of every registered runner.
+// Used by the /ready probe to surface per-runner health details.
+func (s *BackgroundSupervisor) States() map[string]RunnerState {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make(map[string]RunnerState, len(s.runners))
+	for _, r := range s.runners {
+		if state, ok := s.states[r.Name]; ok {
+			out[r.Name] = state
+		} else {
+			out[r.Name] = ""
+		}
+	}
+	return out
 }

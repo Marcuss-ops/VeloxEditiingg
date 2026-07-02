@@ -14,6 +14,10 @@
 #      contributors use. This is the layer that actually fires when
 #      a handler decides to flip status itself.
 #
+# Phase 5: added INSERT guards for jobs/tasks/task_specs — these three
+# tables are created ONLY by the canonical AtomicJobTaskCreator. Any new
+# file that inserts into them directly fails CI.
+#
 # ALL rules are scoped to the current branch's diff via scoped_grep --
 # HEAD main is trivially green; PRs surface new regressions only.
 set -euo pipefail
@@ -58,6 +62,14 @@ scan "INSERT INTO outbox_events"             DataServer/internal/outbox/
 scan "UPDATE deliveries SET status"          DataServer/internal/deliveries/
 scan "UPDATE asset_blobs"                    DataServer/internal/assets/
 scan "UPDATE workers SET last_heartbeat"     DataServer/internal/workers/
+
+# Phase 5: INSERT guards for the three core tables created ONLY by
+# AtomicJobTaskCreator (DataServer/internal/store/atomic_job_task.go).
+# Any new file that inserts into jobs, tasks, or task_specs directly
+# fails CI — the canonical writer owns these mutations exclusively.
+scan "INSERT INTO jobs"       DataServer/internal/store/
+scan "INSERT INTO tasks"      DataServer/internal/store/
+scan "INSERT INTO task_specs" DataServer/internal/store/
 
 scan "\.MarkSucceeded\("                     DataServer/internal/artifacts/
 scan "\.MarkFinalized\("                     DataServer/internal/artifacts/

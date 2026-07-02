@@ -23,6 +23,10 @@
 #
 # ALL checks are scoped to the current branch's diff via scoped_grep.
 # HEAD main is trivially green; PRs surface new regressions only.
+#
+# Phase 5: added chain-call patterns (.DB().QueryRowContext,
+# .DB().ExecContext, .Handle().Query) to catch repository-
+# bypass call sites that the original db/tx/conn patterns missed.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -59,6 +63,25 @@ hits="$(scoped_grep "$call_pattern" -- \
 if [[ -n "$hits" ]]; then
   printf 'NEW direct database call(s) outside repository/store:\n%s\n\n' \
     "$hits" >&2
+  violations=$((violations + 1))
+fi
+
+# Chain-call patterns: .DB().QueryRowContext(...), r.dbStore.DB().ExecContext(...),
+# repository.Handle().Query(...). These bypass the store abstraction by reaching
+# through to the raw *sql.DB handle. Only allowed inside the store layer.
+chain_pattern='\.DB\(\)\.(Exec|ExecContext|Query|QueryContext|QueryRow|QueryRowContext|BeginTx|BeginTxContext)\('
+
+chain_hits="$(scoped_grep "$chain_pattern" -- \
+                'DataServer/**/*.go' \
+                ':!DataServer/internal/store/**' \
+                ':!DataServer/cmd/server/bootstrap.go' \
+                ':!DataServer/**/*_test.go' \
+                ':!scripts/ci/check-db-access.sh' \
+                ':!scripts/ci/lib/diff-scope.sh')"
+
+if [[ -n "$chain_hits" ]]; then
+  printf 'NEW .DB()-chain call(s) outside store (repository bypass):\n%s\n\n' \
+    "$chain_hits" >&2
   violations=$((violations + 1))
 fi
 

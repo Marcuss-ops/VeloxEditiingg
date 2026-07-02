@@ -490,38 +490,20 @@ func (r *CreatorForwardingRunner) renewLeaseLoop(ctx context.Context, lease stor
 // age gauges. Called periodically by the Run loop (see refreshInterval).
 // Errors are logged but not returned — metrics are best-effort.
 //
-// Two DB queries every 30s (not every tick) to keep the load minimal.
+// Delegates to the store's GetForwardingQueueMetrics so the runner
+// never reaches through to r.dbStore.DB() directly — the repository
+// owns the SQL, the runner owns the scheduling.
 func (r *CreatorForwardingRunner) refreshMetrics(ctx context.Context) {
 	if r.dbStore == nil {
 		return
 	}
-	// Query approximate queue depth: PENDING + RETRY_WAIT.
-	var queueDepth int64
-	err := r.dbStore.DB().QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM creator_forwardings
-		 WHERE status IN ('PENDING', 'RETRY_WAIT')`,
-	).Scan(&queueDepth)
+	m, err := r.dbStore.GetForwardingQueueMetrics(ctx)
 	if err != nil {
-		log.Printf("[FORWARDING] metrics queue_depth query: %v", err)
-	} else {
-		r.metrics.QueueDepth.Store(queueDepth)
+		log.Printf("[FORWARDING] metrics refresh: %v", err)
+		return
 	}
-
-	// Query oldest PENDING age in seconds.
-	var oldestAgeSeconds int64
-	err = r.dbStore.DB().QueryRowContext(ctx,
-		`SELECT COALESCE(
-		    CAST((strftime('%s','now') - strftime('%s', created_at)) AS INTEGER),
-		    0)
-		 FROM creator_forwardings
-		 WHERE status = 'PENDING'
-		 ORDER BY created_at ASC LIMIT 1`,
-	).Scan(&oldestAgeSeconds)
-	if err != nil {
-		log.Printf("[FORWARDING] metrics oldest_pending query: %v", err)
-	} else {
-		r.metrics.OldestPending.Store(oldestAgeSeconds)
-	}
+	r.metrics.QueueDepth.Store(m.QueueDepth)
+	r.metrics.OldestPending.Store(int64(m.OldestPendingAge.Seconds()))
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────
