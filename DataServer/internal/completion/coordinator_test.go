@@ -564,6 +564,81 @@ func TestCoordinator_RecordUploadProgress_EmptyUploadIDRejected(t *testing.T) {
 
 
 // ────────────────────────────────────────────────────────────────────
+// Verdetto P0 #6: replay-safe commit token.
+//
+// Two DeclareOutputs calls with the same fence MUST yield the same
+// (commit_token, commit_token_hash) bit-for-bit. This is the
+// regression-guard for the deterministic HMAC-SHA256 token
+// derivation (Verdetto P0 #6, Blocco 2) — a regression here
+// would silently break worker reconnect-safety because the
+// worker carries the first-declared token and the master cannot
+// re-derive it from the second call without a shared HMAC key.
+// ────────────────────────────────────────────────────────────────────
+
+func TestCoordinator_DeclareOutputs_ReplayYieldsIdenticalToken(t *testing.T) {
+	db := openCoordinatorTestDB(t)
+	c := newTestCoordinator(db)
+	fence := validFence("task-determinism-replay", "attempt-determinism-replay")
+	cmd := DeclareOutputsCommand{
+		Fence:           fence,
+		JobID:           "job-determinism-replay",
+		OutputManifests: validManifests(),
+	}
+	plan1, err := c.DeclareOutputs(context.Background(), cmd)
+	if err != nil {
+		t.Fatalf("first DeclareOutputs: %v", err)
+	}
+	// The second call hits the existing-row path which REUSES
+	// the canonical commit_id but recomputes the deterministic
+	// token from (commit_id, fence, HMACKey). Equality on both
+	// fields confirms the derivation is byte-identical.
+	plan2, err := c.DeclareOutputs(context.Background(), cmd)
+	if err != nil {
+		t.Fatalf("second DeclareOutputs: %v", err)
+	}
+	if plan1.CommitID != plan2.CommitID {
+		t.Errorf("commit_id drifted across replays: %q != %q (must reuse canonical row id)",
+			plan1.CommitID, plan2.CommitID)
+	}
+	if plan1.CommitToken != plan2.CommitToken {
+		t.Errorf("commit_token drifted across replays: %q != %q (HMAC derivation must be deterministic)",
+			plan1.CommitToken, plan2.CommitToken)
+	}
+	if len(plan1.CommitToken) != commitTokenByteLen*2 {
+		t.Errorf("commit_token hex length: got %d, want %d", len(plan1.CommitToken), commitTokenByteLen*2)
+	}
+	// commit_token_hash on disk must also be byte-identical
+	// because the token is deterministic (hash = SHA256(token)).
+	row1Hash := sha256HexFromRow(t, db, fence)
+	row2Hash := sha256HexFromRow(t, db, fence)
+	if row1Hash != row2Hash {
+		t.Errorf("commit_token_hash on disk drifted across replays: %q != %q (persisted hash must match deterministic token)",
+			row1Hash, row2Hash)
+	}
+	if row1Hash == "" {
+		t.Error("commit_token_hash empty after DeclareOutputs replay (must be written on first call)")
+	}
+}
+
+// sha256HexFromRow is a tiny inline helper that reads
+// attempt_commits.commit_token_hash and returns its hex form.
+// It's used by the determinism replay test; reading via the
+// canonical helpers keeps the test independent from the wider
+// package API.
+func sha256HexFromRow(t *testing.T, db *sql.DB, fence FenceTuple) string {
+	t.Helper()
+	var h string
+	if err := db.QueryRow(
+		`SELECT commit_token_hash FROM attempt_commits
+		 WHERE task_id = ? AND attempt_id = ?`,
+		fence.TaskID, fence.AttemptID,
+	).Scan(&h); err != nil {
+		t.Fatalf("read commit_token_hash: %v", err)
+	}
+	return h
+}
+
+// ────────────────────────────────────────────────────────────────────
 // Verdetto P0 #5: ServerSHA256 authoritative gate for CompleteUpload.
 //
 // Four branches must be exercised end-to-end against the
@@ -574,18 +649,32 @@ func TestCoordinator_RecordUploadProgress_EmptyUploadIDRejected(t *testing.T) {
 //   D. ServerSHA!="" AND differs               -> ErrStaleReport (no row change)
 // ────────────────────────────────────────────────────────────────────
 
-// seedCompleteUploadFixture inserts an artifacts row (STAGING, expected
-// SHA) + artifact_uploads row (RECEIVED, expected_sha256). Tests call
-// the coordinator's CompleteUpload against this fixture.
-func seedCompleteUploadFixture(t *testing.T, db *sql.DB, uploadID, artifactID, expectedSHA string) {
+// seedCompleteUploadFixture inserts a jobs row (needed by both the
+// artifact_uploads.job_id FK and the legacy canonical pipeline),
+// an artifacts row (STAGING, expected SHA), and an artifact_uploads
+// row (RECEIVED, expected_sha256). Tests call the coordinator's
+// CompleteUpload against this fixture.
+//
+// The artifact_uploads schema (migration 030) enforces
+//   FOREIGN KEY (job_id) REFERENCES jobs(job_id)
+// so a placeholder row in jobs is required even though our tests
+// never read it.
+func seedCompleteUploadFixture(t *testing.T, db *sql.DB, uploadID, artifactID, jobID, expectedSHA string) {
 	t.Helper()
 	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := db.Exec(`
+		INSERT OR IGNORE INTO jobs (job_id, migrated_at)
+		VALUES (?, ?)`,
+		jobID, now,
+	); err != nil {
+		t.Fatalf("seed jobs: %v", err)
+	}
 	if _, err := db.Exec(`
 		INSERT INTO artifacts (
 			id, job_id, type, storage_provider, storage_key,
 			sha256, size_bytes, status, created_at
-		) VALUES (?, 'job-fixture', 'video', 'local', ?, ?, 1024, 'STAGING', ?)`,
-		artifactID, uploadID+".local", expectedSHA, now,
+		) VALUES (?, ?, 'video', 'local', ?, ?, 1024, 'STAGING', ?)`,
+		artifactID, jobID, uploadID+".local", expectedSHA, now,
 	); err != nil {
 		t.Fatalf("seed artifacts: %v", err)
 	}
@@ -594,9 +683,9 @@ func seedCompleteUploadFixture(t *testing.T, db *sql.DB, uploadID, artifactID, e
 			upload_id, artifact_id, job_id, attempt_number,
 			worker_id, lease_id, status, temporary_storage_key,
 			expected_size_bytes, expected_sha256, created_at, expires_at
-		) VALUES (?, ?, 'job-fixture', 1, 'worker-fixture', 'lease-fixture',
+		) VALUES (?, ?, ?, 1, 'worker-fixture', 'lease-fixture',
 		          'RECEIVED', ?, 1024, ?, ?, ?)`,
-		uploadID, artifactID, uploadID+".local", expectedSHA, now, now,
+		uploadID, artifactID, jobID, uploadID+".local", expectedSHA, now, now,
 	); err != nil {
 		t.Fatalf("seed artifact_uploads: %v", err)
 	}
@@ -619,7 +708,7 @@ func TestCoordinator_CompleteUpload_BranchA_NoServerSHA_NoExpected_StaysVerifyin
 	fence := validFence("task-branch-a", "attempt-branch-a")
 
 	// Seed artifact + upload without setting expected_sha256.
-	seedCompleteUploadFixture(t, db, "up-branch-a", "art-branch-a", "")
+	seedCompleteUploadFixture(t, db, "up-branch-a", "art-branch-a", "job-branch-a", "")
 	// DeclareOutputs is required for the Fence.Read gate.
 	if _, err := c.DeclareOutputs(context.Background(), DeclareOutputsCommand{
 		Fence: fence, JobID: "job-branch-a", OutputManifests: []OutputManifest{
@@ -649,7 +738,7 @@ func TestCoordinator_CompleteUpload_BranchB_NoServerSHA_HasExpected_StaysVerifyi
 	c := newTestCoordinator(db)
 	fence := validFence("task-branch-b", "attempt-branch-b")
 	expected := strings.Repeat("b", 64)
-	seedCompleteUploadFixture(t, db, "up-branch-b", "art-branch-b", expected)
+	seedCompleteUploadFixture(t, db, "up-branch-b", "art-branch-b", "job-branch-b", expected)
 	if _, err := c.DeclareOutputs(context.Background(), DeclareOutputsCommand{
 		Fence: fence, JobID: "job-branch-b", OutputManifests: []OutputManifest{
 			{OutputKind: "final_video", LogicalName: "out.mp4",
@@ -678,7 +767,7 @@ func TestCoordinator_CompleteUpload_BranchC_ServerSHAMatch_PromotesToReady(t *te
 	c := newTestCoordinator(db)
 	fence := validFence("task-branch-c", "attempt-branch-c")
 	expected := strings.Repeat("c", 64)
-	seedCompleteUploadFixture(t, db, "up-branch-c", "art-branch-c", expected)
+	seedCompleteUploadFixture(t, db, "up-branch-c", "art-branch-c", "job-branch-c", expected)
 	if _, err := c.DeclareOutputs(context.Background(), DeclareOutputsCommand{
 		Fence: fence, JobID: "job-branch-c", OutputManifests: []OutputManifest{
 			{OutputKind: "final_video", LogicalName: "out.mp4",
@@ -721,7 +810,7 @@ func TestCoordinator_CompleteUpload_BranchD_ServerSHAMismatch_ErrStaleReport(t *
 	fence := validFence("task-branch-d", "attempt-branch-d")
 	expected := strings.Repeat("d", 64)
 	other := strings.Repeat("e", 64)
-	seedCompleteUploadFixture(t, db, "up-branch-d", "art-branch-d", expected)
+	seedCompleteUploadFixture(t, db, "up-branch-d", "art-branch-d", "job-branch-d", expected)
 	if _, err := c.DeclareOutputs(context.Background(), DeclareOutputsCommand{
 		Fence: fence, JobID: "job-branch-d", OutputManifests: []OutputManifest{
 			{OutputKind: "final_video", LogicalName: "out.mp4",

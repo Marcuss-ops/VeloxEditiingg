@@ -103,14 +103,25 @@ func (c *Config) Validate() error {
 		}
 	}
 
-	// Commit HMAC key (P0 #6, Blocco 2). Production deployments MUST
-	// supply VELOX_COMMIT_HMAC_KEY with at least 32 raw bytes (64 hex
-	// chars). A missing or short key produces a deterministic (and
-	// therefore replay-able) commit-token derivation, which quietly
-	// re-introduces the Verdetto P0 #6 / #7 class of bug.
-	if c.Runtime.Environment == "production" || c.Runtime.Environment == "prod" {
+	// Commit HMAC key (P0 #6/#7, Blocco 2). Two-tier guard:
+	//   (1) When the key is non-empty, validate length + hex format
+	//       in EVERY environment so dev/staging catches a malformed
+	//       key pre-promote to production (no more "works in staging,
+	//       fails in prod" surprises).
+	//   (2) In production, additionally fail-fast on empty key so a
+	//       stale deploy without VELOX_COMMIT_HMAC_KEY never reaches
+	//       Coordinator construction. The Coordinator is itself
+	//       defense-in-depth fail-closed on short keys (NewCoordinator
+	//       returns an error when len(HMACKey) < 32), so this is the
+	//       last line of defense, not the only one.
+	if c.Runtime.CommitHMACKey != "" {
 		if err := validateCommitHMACKey(c.Runtime.CommitHMACKey); err != nil {
 			return fmt.Errorf("config: VELOX_COMMIT_HMAC_KEY: %w", err)
+		}
+	}
+	if c.Runtime.Environment == "production" || c.Runtime.Environment == "prod" {
+		if strings.TrimSpace(c.Runtime.CommitHMACKey) == "" {
+			return fmt.Errorf("config: VELOX_COMMIT_HMAC_KEY required in environment=%q (hex of >= 32 raw bytes)", c.Runtime.Environment)
 		}
 	}
 
