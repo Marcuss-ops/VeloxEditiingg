@@ -273,10 +273,21 @@ func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMasterEnvelo
 	log.Printf("[GRPC] Worker %s connected (session: %s, name: %s)", workerID, sessionID, hello.GetWorkerName())
 
 	// Extract supported_job_types from Hello capabilities for ClaimNext filtering.
+	// Placement: parse typed executor capabilities from the worker's
+	// capability report and store them on the session. A worker whose
+	// executors block is missing or malformed is NOT eligible for
+	// placement and must be rejected at registration.
 	if hello.GetCapabilities() != nil {
-		if types := extractSupportedJobTypes(hello.GetCapabilities().AsMap()); len(types) > 0 {
+		capsMap := hello.GetCapabilities().AsMap()
+		if types := extractSupportedJobTypes(capsMap); len(types) > 0 {
 			sess.supportedJobTypes.Store(types)
 		}
+		executors, err := parseExecutorCapabilities(capsMap)
+		if err != nil {
+			log.Printf("[GRPC] Worker %s: failed to parse executor capabilities: %v", workerID, err)
+			return fmt.Errorf("stream: invalid executor capabilities: %w", err)
+		}
+		sess.replaceCapabilities(executors, capabilitiesBoolMap(capsMap))
 	}
 
 	// Issue 7 fix: persist the session to SQLite worker_sessions table.
