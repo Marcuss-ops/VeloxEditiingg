@@ -122,7 +122,7 @@ func (d *Dispatcher) Run(ctx context.Context) error {
 	d.logger.Printf("[OUTBOX] dispatcher started (poll=%s batch=%d lock=%s max_attempts=%d)",
 		d.cfg.PollInterval, d.cfg.BatchSize, d.cfg.LockDuration, d.cfg.MaxAttempts)
 
-	tracker := supervisor.NewFailureTracker(supervisor.DefaultRetryPolicy())
+	tracker := supervisor.NewFailureTrackerWithClock(supervisor.DefaultRetryPolicy(), supervisor.RealClock{})
 
 	for {
 		select {

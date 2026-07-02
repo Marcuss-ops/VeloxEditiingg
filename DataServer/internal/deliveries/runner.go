@@ -165,7 +165,7 @@ func (r *DeliveryRunner) Run(ctx context.Context) error {
 	ticker := time.NewTicker(r.cfg.PollInterval)
 	defer ticker.Stop()
 
-	tracker := supervisor.NewFailureTracker(supervisor.DefaultRetryPolicy())
+	tracker := supervisor.NewFailureTrackerWithClock(supervisor.DefaultRetryPolicy(), supervisor.RealClock{})
 
 	for {
 		select {

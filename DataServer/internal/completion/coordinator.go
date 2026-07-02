@@ -589,6 +589,12 @@ func (c *coordinator) CommitAttempt(ctx context.Context, commitID string) (*Comm
 		return nil, fmt.Errorf("completion.CommitAttempt: tasks CAS: %w", err)
 	}
 	if err := repos.AttemptCommits().MarkCommitted(ctx, commitID, nowStr); err != nil {
+		// Verdetto P2 (Blocco 5): MarkCommitted is the third
+		// canonical attempt_commits CAS path that counts toward
+		// the conflict budget.
+		if budgetErr := c.recordAttemptCommitsCAS(err); budgetErr != nil {
+			return nil, fmt.Errorf("completion.CommitAttempt: attempt_commits CAS: %w", budgetErr)
+		}
 		return nil, fmt.Errorf("completion.CommitAttempt: attempt_commits CAS: %w", err)
 	}
 	if err := repos.Jobs().MarkSucceededIfTasksDone(ctx, row.JobID, nowStr); err != nil {
@@ -687,6 +693,12 @@ func (c *coordinator) ReconcileAttempt(ctx context.Context, commitID string) (*C
 	}
 
 	if err := repos.AttemptCommits().SetExpiredByID(ctx, commitID, nowStr); err != nil {
+		// Verdetto P2 (Blocco 5): SetExpiredByID is the canonical
+		// attempt_commits CAS path on the reconcile side; count
+		// toward the same conflict budget.
+		if budgetErr := c.recordAttemptCommitsCAS(err); budgetErr != nil {
+			return nil, fmt.Errorf("completion.ReconcileAttempt: attempt_commits CAS: %w", budgetErr)
+		}
 		return nil, fmt.Errorf("completion.ReconcileAttempt: attempt_commits CAS: %w", err)
 	}
 	payloadJSON := `{"commit_id":"` + commitID + `","attempt_id":"` + row.AttemptID + `","job_id":"` + row.JobID + `"}`
@@ -705,6 +717,9 @@ func (c *coordinator) ReconcileAttempt(ctx context.Context, commitID string) (*C
 		return nil, fmt.Errorf("completion.ReconcileAttempt: commit: %w", err)
 	}
 	committed = true
+	// Verdetto P2 (Blocco 5): reset the conflict budget on a
+	// successful ReconcileAttempt so a fresh streak starts next time.
+	c.recordAttemptCommitsCAS(nil)
 	return res, nil
 }
 

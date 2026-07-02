@@ -159,7 +159,7 @@ func (s *Supervisor) Run(ctx context.Context) error {
 	log.Printf("[METRICS-SUPERVISOR] starting — tick=%s, attempt_cap=%d, cost_factors: cpu=€%.6f/core·s network=€%.4f/GB storage=€%.6f/GB",
 		s.tick, s.limit, s.costFactors.CPUCoreSecondEUR, s.costFactors.NetworkGBEUR, s.costFactors.StorageGBEUR)
 
-	tracker := supervisor.NewFailureTracker(supervisor.DefaultRetryPolicy())
+	tracker := supervisor.NewFailureTrackerWithClock(supervisor.DefaultRetryPolicy(), supervisor.RealClock{})
 
 	for {
 		select {

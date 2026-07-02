@@ -236,7 +236,7 @@ func (r *CreatorForwardingRunner) Run(ctx context.Context) error {
 	metricsTicker := time.NewTicker(30 * time.Second)
 	defer metricsTicker.Stop()
 
-	tracker := supervisor.NewFailureTracker(supervisor.DefaultRetryPolicy())
+	tracker := supervisor.NewFailureTrackerWithClock(supervisor.DefaultRetryPolicy(), supervisor.RealClock{})
 
 	// Initial metrics snapshot on startup.
 	r.refreshMetrics(ctx)
