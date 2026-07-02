@@ -62,6 +62,16 @@ var allowedWriters = map[string]bool{
 	// alongside sqlite_finalization_repository.go during the
 	// cutover window; Phase 6.6 retires the legacy writer.
 	filepath.Join("internal", "completion", "coordinator.go"): true,
+	// UoW adapter: the SQL gateway the coordinator speaks through
+	// (six typed repos bound to a single *sql.Tx). The
+	// MarkSucceededIfTasksDone method's `SET status = 'SUCCEEDED'`
+	// is the SAME atomic tx as coordinator.go — the SQL lives in
+	// sqlite_uow.go while the orchestration (BeginTx → CAS → Commit)
+	// lives in coordinator.go. The SQL-ownership shape guard
+	// (scripts/ci/check-sql-ownership.sh) explicitly allows
+	// `internal/completion/sqlite_uow.go` as the second canonical
+	// SQL gateway alongside internal/store/**.
+	filepath.Join("internal", "completion", "sqlite_uow.go"): true,
 	// Interface + commands: contains the regex literal in a doc
 	// comment EXPLAINING the contract. No executable SQL update.
 	filepath.Join("internal", "artifacts", "finalization_repository.go"): true,
