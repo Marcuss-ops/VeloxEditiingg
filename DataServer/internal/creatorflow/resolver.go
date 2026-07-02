@@ -394,12 +394,32 @@ func buildIdempotentResolveResponse(existing *jobs.Job, payload map[string]inter
 
 // buildFreshResolveResponse is the response body for the freshly-created
 // path (Job did not exist before Resolve ran).
+//
+// Status string-typing consistency: `jobs.StatusPending` is a typed
+// `jobs.Status` constant (alias-shared with `store.JobStatus`). When
+// stored in a `map[string]interface{}`, the value's DYNAMIC TYPE is the
+// typed alias — not an untyped `string`. Downstream consumers that
+// compare to the untyped literal "PENDING" (e.g.
+// TestForwardCompletedEnqueuesWorkerJob) hit Go's interface-equality
+// rule: two interface values are equal iff both their dynamic type AND
+// dynamic value are equal. typed-string("PENDING") != string("PENDING")
+// even when both values spell PENDING.
+//
+// To keep both response builders (buildIdempotentResolveResponse +
+// buildFreshResolveResponse) wire-compatible with the HTTP/script
+// callers — which universally treat response["status"] as a plain
+// string — both builders cast to `string(...)`. This is the same
+// pattern that jobStatus comparisons throughout the codebase already
+// use (e.g. sqlite_writer.go does `string(j.Status)` for comparison
+// with literal "PENDING"). The duplication is deliberate: the typed
+// constant stays in the domain model (jobs.Status) and the wire shape
+// stays as plain string.
 func buildFreshResolveResponse(job *jobs.Job, payload map[string]interface{}) map[string]interface{} {
 	resp := map[string]interface{}{
 		"ok":                true,
 		"job_id":            job.ID,
 		"created":           true,
-		"status":            jobs.StatusPending,
+		"status":            string(jobs.StatusPending),
 		"enqueue_confirmed": true,
 		"job_type":          "process_video",
 	}
