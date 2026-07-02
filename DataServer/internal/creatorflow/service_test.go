@@ -12,6 +12,7 @@ import (
 	"velox-server/internal/costmodel"
 	"velox-server/internal/jobs"
 	jobenqueue "velox-server/internal/jobs/enqueue"
+	"velox-server/internal/routing"
 
 	"strings"
 	"velox-server/internal/remoteengine"
@@ -163,6 +164,20 @@ func TestForwardCompletedEnqueuesWorkerJob(t *testing.T) {
 
 	// Create a Service with minimal config — masterURL is empty so
 	// URL rewriting is a no-op (test doesn't need real master URL).
+	// Compute the canonical job_id that Resolver.Resolve will derive
+	// from (SourceProvider, SourceJobID, TargetExecutorID). The legacy
+	// expectation "creator-complete-1" was the upstream trace_id; the
+	// deterministic-id contract (Blocco 5 / PR-forwarding-deterministic-id)
+	// replaces it with a SHA-256-derived ID computed via the same
+	// DeriveForwardingJobID helper the SUT uses. Reusing the helper
+	// ties the test to the SUT's exact derivation so any future drift
+	// in the algorithm (prefix change, hash algo change) breaks the
+	// test loudly rather than silently passing against a hardcoded
+	// magic value.
+	expectedJobID := jobenqueue.DeriveForwardingJobID(
+		routing.FormatForwardingKey("remote_engine", "creator-complete-1", "scene.composite.v1").String(),
+	)
+
 	svc := &Service{
 		enqueuer: enqueuer,
 		dbStore:  db,
@@ -178,22 +193,22 @@ func TestForwardCompletedEnqueuesWorkerJob(t *testing.T) {
 	if response["ok"] != true {
 		t.Fatalf("want ok=true, got %v", response["ok"])
 	}
-	if response["job_id"] != "creator-complete-1" {
-		t.Fatalf("want job_id creator-complete-1, got %v", response["job_id"])
+	if response["job_id"] != expectedJobID {
+		t.Fatalf("want job_id %s, got %v", expectedJobID, response["job_id"])
 	}
 	if response["status"] != "PENDING" {
 		t.Fatalf("want pending response, got %v", response["status"])
 	}
 
-	j, jobErr := jobRepo.Get(context.Background(), "creator-complete-1")
+	j, jobErr := jobRepo.Get(context.Background(), expectedJobID)
 	if jobErr != nil {
 		t.Fatalf("Get: %v", jobErr)
 	}
 	if j == nil {
 		t.Fatalf("want job")
 	}
-	if j.ID != "creator-complete-1" {
-		t.Fatalf("want job_id creator-complete-1, got %s", j.ID)
+	if j.ID != expectedJobID {
+		t.Fatalf("want job_id %s, got %s", expectedJobID, j.ID)
 	}
 	if j.VideoName != "Creator Video" {
 		t.Fatalf("want video name Creator Video, got %s", j.VideoName)
