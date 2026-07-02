@@ -9,6 +9,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"velox-server/internal/artifacts"
 	"velox-server/internal/config"
+	"velox-server/internal/creatorflow"
 	workerhandlersuploads "velox-server/internal/handlers/remote/workers/uploads"
 	"velox-server/internal/handlers/server/api"
 	"velox-server/internal/handlers/server/darkeditor"
@@ -60,6 +61,12 @@ type PipelineRouteDeps struct {
 	Enqueuer *enqueue.Enqueuer
 	JobsRepo jobs.Repository
 	CmdMgr   *workers.CommandManager
+	// Resolver is the Blocco 5 forward-completed entry point. When
+	// wired, the pipeline handler delegates to Resolver.Resolve so the
+	// creator_forwardings row + Job row land in the same write path as
+	// the CreatorForwardingRunner. Optional; nil falls back to the
+	// legacy creatorflow.Service forwarder.
+	Resolver *creatorflow.Resolver
 }
 
 // DarkeditorRouteDeps carries the deps for the /api/darkeditor routes
@@ -202,8 +209,23 @@ func registerGroupsRoutes(r *gin.Engine, auth gin.HandlerFunc, deps GroupsRouteD
 // jobsRepo is split into Reader + Writer for the Handlers' JobsDeps,
 // but since jobs.Repository (the canonical surface) satisfies BOTH
 // interfaces by structural typing, the same value passes for both.
+//
+// Blocco 5: when deps.Resolver is set, use NewHandlersWithResolver so
+// the handler delegates to the canonical Resolver (the same instance
+// the CreatorForwardingRunner uses). Otherwise fall back to
+// NewHandlersFull which builds a Service shim.
 func registerPipelineRoutes(r *gin.Engine, auth gin.HandlerFunc, deps PipelineRouteDeps) {
 	if deps.Enqueuer == nil || deps.JobsRepo == nil {
+		return
+	}
+	if deps.Resolver != nil {
+		pipeline.NewHandlersWithResolver(
+			deps.Cfg,
+			deps.Enqueuer,
+			pipeline.NewRemoteClientFromConfig(deps.Cfg),
+			deps.Resolver,
+			deps.JobsRepo, deps.JobsRepo, deps.CmdMgr,
+		).RegisterRoutes(r, auth)
 		return
 	}
 	pipeline.NewHandlersFull(

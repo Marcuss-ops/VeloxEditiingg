@@ -196,33 +196,26 @@ func firstString(m map[string]interface{}, keys ...string) string {
 		}
 	}
 	return ""
-}
-
-// ForwardCompleted is the SINGLE authoritative entry point on the
-// creatorflow.ForwardingService for converting a completed creator result
-// into a Velox Job. There is intentionally no parallel free-function form:
-// every entry point — handlers, CreatorForwardingRunner, external services,
-// test harnesses — MUST go through this method so that master-URL
-// resolution, URL rewriting, deterministic forwarding-key injection, and
-// idempotency enforcement happen exactly once.
+}// ForwardCompleted is a THIN SHIM that delegates to the canonical
+// Resolver. It is retained on the Service struct for backward
+// compatibility — every existing caller (pipeline.Handlers, tests) goes
+// through this method without modification.
 //
-// Pipeline:
+// The actual logic lives in (*Resolver).Resolve, which is the SINGLE
+// authoritative entry point. Blocco 5 of the Verdetto (P1 #11) moved
+// the forward-completed body out of this method and into the
+// Resolver so that CreatorForwardingRunner and the HTTP handler share
+// the same code path: URL rewriting + payload normalization +
+// AtomicForwardAndEnqueue + idempotent enqueue. Keeping a thin shim
+// here preserves the documented "SINGLE authoritative entry point"
+// contract (now relocated to Resolver) without breaking the existing
+// caller surface.
 //
-//  1. Validate the result via ShouldForwardPipelineResult.
-//  2. Guard creator dependency wiring (enqueuer + creator must be present).
-//  3. Build the canonical worker payload via BuildPipelinePayload.
-//  4. Resolve the public master URL and apply BuildSceneImagePayloadForMaster
-//     (URL rewriting for worker-side asset downloads). This step is a no-op
-//     when s.masterURL is empty AND s.dataDir is empty (test harness path).	//  5. Carry forwarding metadata (routing.InternalRoutingMetadata) through
-	//     payload transformations so Enqueue can derive a deterministic job_id.
-//  6. Enqueue atomically via Enqueuer.Enqueue.
-//
-// Migration: legacy callers that used the now-removed free function
-// `ForwardCompletedResult(ctx, enqueuer, result)` must be rewired to obtain
-// a Service (via creatorflow.New(cfg, enqueuer, dbStore)) and call
-// svc.ForwardCompleted. The free function was an ad-hoc compatibility shim
-// that bypassed master-URL rewriting; keeping it around split the contract
-// into two divergent paths.
+// Migration: new callers should construct a Resolver explicitly
+// (creatorflow.NewResolver(cfg, enqueuer, dbStore)) and call
+// rs.Resolve. This method remains for backward compatibility and will
+// be removed once the script/handler.go and pipeline/handler.go
+// callers are rewired to use the Resolver directly.
 func (s *Service) ForwardCompleted(ctx context.Context, result map[string]interface{}) (map[string]interface{}, error) {
 	if s == nil {
 		return nil, fmt.Errorf("creatorflow: ForwardCompleted: nil service")
@@ -230,16 +223,65 @@ func (s *Service) ForwardCompleted(ctx context.Context, result map[string]interf
 	if s.enqueuer == nil || s.enqueuer.Creator == nil {
 		return nil, fmt.Errorf("creatorflow: ForwardCompleted: creator unavailable")
 	}
+
+	// Lazy-build the resolver on first call so callers that never
+	// invoke ForwardCompleted (e.g. pure forwarders in tests) do not
+	// pay the construction cost. s.dbStore is nil on NewForwarder-
+	// constructed services (pure forwarders); in that case the
+	// resolver cannot INSERT a creator_forwardings row, so we fall
+	// back to the legacy enqueuer.Enqueue path. This preserves the
+	// distinction between forwarder-only and full Service.
+	if s.dbStore == nil {
+		return s.forwardCompletedForwarderOnly(ctx, result)
+	}
+
+	rs := s.resolver()
+	if rs == nil {
+		return nil, fmt.Errorf("creatorflow: ForwardCompleted: resolver construction failed")
+	}
+
+	out, err := rs.Resolve(ctx, ResolveRequest{
+		ForwardingID:     "",
+		SourceProvider:   "remote_engine",
+		SourceJobID:      firstString(result, "job_id", "trace_id", "id"),
+		TargetExecutorID: firstString(result, "executor_id", "pipeline_id"),
+		Payload:          result,
+	})
+	if err != nil {
+		if err == ErrResolverNotComplete {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if out == nil {
+		return nil, nil
+	}
+	return out.Response, nil
+}
+
+// resolver returns the canonical Resolver for this Service. It is
+// called on demand by ForwardCompleted; the Service struct does NOT
+// hold a permanent Resolver to keep the NewForwarder constructor
+// (which produces a dbStore-less Service) cheap and side-effect-free.
+func (s *Service) resolver() *Resolver {
+	if s == nil {
+		return nil
+	}
+	return NewResolverFromDeps(s.enqueuer, s.dbStore, s.dataDir, s.videosDir, s.masterURL)
+}
+
+// forwardCompletedForwarderOnly preserves the legacy enqueuer.Enqueue
+// path for Service instances constructed via NewForwarder (which
+// intentionally leaves dbStore nil so the forwarder can be wired into
+// handlers that do NOT need creator_forwardings audit rows).
+func (s *Service) forwardCompletedForwarderOnly(ctx context.Context, result map[string]interface{}) (map[string]interface{}, error) {
 	if !enqueue.ShouldForwardPipelineResult(result) {
 		return nil, nil
 	}
-
 	workerPayload, err := enqueue.BuildPipelinePayload(result)
 	if err != nil {
 		return nil, fmt.Errorf("creatorflow: ForwardCompleted: build payload: %w", err)
 	}
-
-	// Resolve master URL for worker-side asset download rewriting.
 	masterURL := strings.TrimSpace(s.masterURL)
 	if masterURL == "" || remoteansible.IsLocalhostURL(masterURL) {
 		masterURL = detectPublicMasterURL()
@@ -250,16 +292,10 @@ func (s *Service) ForwardCompleted(ctx context.Context, result map[string]interf
 			return nil, fmt.Errorf("creatorflow: ForwardCompleted: resolve master URL: %w", err)
 		}
 	}
-
-	// PR-forwarding-deterministic-id: carry the forwarding metadata through
-	// payload transformations so Enqueue can derive a deterministic job_id.
-	// BuildPipelinePayload and BuildSceneImagePayloadForMaster each produce
-	// fresh maps that drop the original key, so we re-inject it here.
 	fwdMeta := routing.FromPayload(result)
 	if fwdMeta.ForwardingKey != "" {
 		fwdMeta.InjectIntoPayload(workerPayload)
 	}
-
 	return s.enqueuer.Enqueue(ctx, workerPayload, costmodel.DefaultRequirements())
 }
 

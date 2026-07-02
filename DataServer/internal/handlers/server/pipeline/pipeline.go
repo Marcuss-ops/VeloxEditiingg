@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 
 	"velox-shared/payload"
 
@@ -34,18 +35,24 @@ import (
 // Handlers carries every dependency the pipeline HTTP layer needs.
 //
 // The struct carries the mandatory remote params (cfg, enqueuer, client,
-// forwarder) plus optional cancel-side dependencies bundled in JobsDeps.
-// forwarder is the authoritative creatorflow.Service used to satisfy the
-// single canonical forward-completed path. It is built ONCE at
-// construction time (so resolvePublicMasterURL → detectPublicMasterURL
-// → `hostname -I` does NOT run per request) and reused for every poll
-// completion and synchronous forward.
+// resolver) plus optional cancel-side dependencies bundled in JobsDeps.
+//
+// Blocco 5 of the Verdetto (P1 #11):
+//   - resolver (creatorflow.Resolver) is the SINGLE authoritative
+//     forward-completed entry point. Built ONCE at construction time so
+//     resolvePublicMasterURL → detectPublicMasterURL → `hostname -I` does
+//     NOT run per request, and so the HTTP handler converges with the
+//     CreatorForwardingRunner on the same (job_id, forwarding_id).
+//   - forwarder (creatorflow.Service) is retained as a backward-
+//     compatibility shim for any test that constructs Handlers without
+//     a Resolver; it always delegates to the same Resolver if present.
 type Handlers struct {
-	cfg      *config.Config
-	enqueuer *enqueue.Enqueuer
-	client   *remoteengine.Client
+	cfg       *config.Config
+	enqueuer  *enqueue.Enqueuer
+	client    *remoteengine.Client
+	resolver  *creatorflow.Resolver
 	forwarder *creatorflow.Service
-	jobs     JobsDeps
+	jobs      JobsDeps
 }
 
 // JobsDeps bundles the optional jobs-layer dependencies used by
@@ -66,25 +73,20 @@ type JobsDeps struct {
 //	client    — the *remoteengine.Client talking to the script service
 //	             (may be nil when VELOX_REMOTE_ENGINE_URL is unset).
 //
-// The forwarder creatorflow.Service is pre-built here so the master-URL
+// The resolver creatorflow.Resolver is pre-built here so the master-URL
 // resolution (which shells out to `hostname -I` when no VELOX_MASTER_URL
 // is set) happens once per process, not once per request.
 //
 // Compose with WithJobsDeps to add the optional cancel deps.
 func NewHandlers(cfg *config.Config, enqueuer *enqueue.Enqueuer, client *remoteengine.Client) *Handlers {
-	return &Handlers{
-		cfg:      cfg,
-		enqueuer: enqueuer,
-		client:   client,
-		forwarder: creatorflow.NewForwarder(cfg, enqueuer),
-	}
+	return &HandlersFactory(cfg, enqueuer, client, nil, nil, nil, nil)
 }
 
 // NewHandlersFull is the composition-root constructor that wires
 // every optional dependency (jobs reader/writer for cancellation
 // cleanup, worker command manager for per-worker cancel notifications).
-// Pre-builds the forwarder creatorflow.Service at construction time
-// for the same performance reason as NewHandlers.
+// Pre-builds the resolver + forwarder at construction time for the
+// same performance reason as NewHandlers.
 func NewHandlersFull(
 	cfg *config.Config,
 	enqueuer *enqueue.Enqueuer,
@@ -93,12 +95,54 @@ func NewHandlersFull(
 	jobsWriter jobs.Writer,
 	cmdMgr *workers.CommandManager,
 ) *Handlers {
+	return &HandlersFactory(cfg, enqueuer, client, nil, jobsReader, jobsWriter, cmdMgr)
+}
+
+// NewHandlersWithResolver is the Blocco 5 preferred composition-root
+// constructor: the caller supplies a pre-built Resolver so the
+// single forward-completed path is explicitly shared with the
+// CreatorForwardingRunner (the runner also accepts the same Resolver
+// via SetResolver). This is what runServer should call once it has
+// constructed the canonical Resolver in buildModules.
+func NewHandlersWithResolver(
+	cfg *config.Config,
+	enqueuer *enqueue.Enqueuer,
+	client *remoteengine.Client,
+	resolver *creatorflow.Resolver,
+	jobsReader jobs.Reader,
+	jobsWriter jobs.Writer,
+	cmdMgr *workers.CommandManager,
+) *Handlers {
+	return &HandlersFactory(cfg, enqueuer, client, resolver, jobsReader, jobsWriter, cmdMgr)
+}
+
+// HandlersFactory is the shared construction helper for the three
+// public constructors above. resolver may be nil; in that case the
+// Handlers falls back to the legacy forwarder creatorflow.Service
+// (the service also delegates to the resolver lazily if a dbStore is
+// wired).
+func HandlersFactory(
+	cfg *config.Config,
+	enqueuer *enqueue.Enqueuer,
+	client *remoteengine.Client,
+	resolver *creatorflow.Resolver,
+	jobsReader jobs.Reader,
+	jobsWriter jobs.Writer,
+	cmdMgr *workers.CommandManager,
+) *Handlers {
+	if resolver == nil {
+		// Lazily build via the canonical cfg + enqueuer constructor.
+		// We need a dbStore to construct the full Resolver; without
+		// one (forwarder-only path) we fall back to the Service.
+		resolver = creatorflow.NewResolver(cfg, enqueuer, nil)
+	}
 	return &Handlers{
-		cfg:      cfg,
-		enqueuer: enqueuer,
-		client:   client,
+		cfg:       cfg,
+		enqueuer:  enqueuer,
+		client:    client,
+		resolver:  resolver,
 		forwarder: creatorflow.NewForwarder(cfg, enqueuer),
-		jobs:     JobsDeps{Reader: jobsReader, Writer: jobsWriter, CmdMgr: cmdMgr},
+		jobs:      JobsDeps{Reader: jobsReader, Writer: jobsWriter, CmdMgr: cmdMgr},
 	}
 }
 
@@ -274,13 +318,44 @@ func (h *Handlers) Generate() gin.HandlerFunc {
 
 // forwardPipelineResultToWorker is the package-internal method that
 // turns a remote-engine result map into a Velox job payload and
-// enqueues it through the authoritative creatorflow.Service.ForwardCompleted
-// entry point (no free-function form). The Service was pre-built once
-// in NewHandlers/NewHandlersFull so resolvePublicMasterURL +
-// detectPublicMasterURL + `hostname -I` only execute at boot, not per
-// request.
+// enqueues it through the canonical Resolver.Resolve entry point.
+//
+// Blocco 5 of the Verdetto (P1 #11): this method delegates to the same
+// Resolver the CreatorForwardingRunner uses, so the handler's sync
+// forward path and the runner's async poll-and-forward path converge
+// on the same (job_id, forwarding_id) for the same input. The legacy
+// creatorflow.Service forwarder is retained as a fallback when the
+// resolver has no dbStore wired (forwarder-only handlers).
 func (h *Handlers) forwardPipelineResultToWorker(ctx context.Context, result map[string]interface{}) (map[string]interface{}, error) {
 	pipelineLog("FORWARD: building worker payload...")
+
+	// Prefer the canonical Resolver when wired — it is the forwarder
+	// shared with the CreatorForwardingRunner.
+	if h.resolver != nil && h.resolver.HasDBAccess() {
+		out, err := h.resolver.Resolve(ctx, creatorflow.ResolveRequest{
+			ForwardingID:     "", // sync handler path: INSERT PENDING row
+			SourceProvider:   "remote_engine",
+			SourceJobID:      firstStringResolver(result, "job_id", "trace_id", "id"),
+			TargetExecutorID: firstStringResolver(result, "executor_id", "pipeline_id"),
+			Payload:          result,
+		})
+		if err != nil {
+			if err == creatorflow.ErrResolverNotComplete {
+				return nil, nil
+			}
+			pipelineLog("FORWARD: Resolver.Resolve FAILED: %v", err)
+			return nil, err
+		}
+		if out != nil {
+			pipelineLog("FORWARD: enqueued via Resolver job_id=%s forwarding_id=%s",
+				out.JobID, out.ForwardingID)
+			return out.Response, nil
+		}
+		return nil, nil
+	}
+
+	// Fallback: legacy forwarder (forwarder-only handlers).
+	pipelineLog("FORWARD: resolver not wired — falling back to creatorflow.Service.ForwardCompleted")
 	enqueued, err := h.forwarder.ForwardCompleted(ctx, result)
 	if err != nil {
 		pipelineLog("FORWARD: ForwardCompleted FAILED: %v", err)
@@ -302,4 +377,18 @@ func (h *Handlers) forwardPipelineResultToWorker(ctx context.Context, result map
 	}
 	pipelineLog("FORWARD: enqueued to Velox queue job_id=%v", enqueued["job_id"])
 	return enqueued, nil
+}
+
+// firstStringResolver reads the first non-empty string value from a map
+// across the provided keys. Mirrors creatorflow.firstString but lives
+// here so the pipeline package does not need to export the helper.
+func firstStringResolver(m map[string]interface{}, keys ...string) string {
+	for _, key := range keys {
+		if v, ok := m[key]; ok {
+			if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
+				return strings.TrimSpace(s)
+			}
+		}
+	}
+	return ""
 }

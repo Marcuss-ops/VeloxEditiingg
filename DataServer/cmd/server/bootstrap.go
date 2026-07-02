@@ -17,7 +17,9 @@ import (
 	velmetrics "velox-server/internal/metrics"
 
 	"velox-server/internal/config"
+	"velox-server/internal/creatorflow"
 	"velox-server/internal/grpcserver"
+	"velox-server/internal/creatorflow"
 	workerhandlers "velox-server/internal/handlers/remote/workers"
 	workerhandlersuploads "velox-server/internal/handlers/remote/workers/uploads"
 	"velox-server/internal/ingest"
@@ -200,6 +202,20 @@ func runServer(cfg *config.Config) error {
 		return fmt.Errorf("server composition: script API requires a non-nil sqlite store")
 	}
 
+	// PR-taskgraph-wiring: forward the canonical Resolver (built by
+	// buildModules) to the pipeline handler so the handler's sync
+	// forward path and the runner's async poll-and-forward path
+	// converge on the same (job_id, forwarding_id). The runner picks
+	// up the same Resolver via ForwardingRunner.SetResolver below.
+	var resolverForPipeline *creatorflow.Resolver
+	if p != nil && p.SQLite != nil && m != nil && m.Enqueuer != nil {
+		resolverForPipeline = creatorflow.NewResolver(cfg, m.Enqueuer, p.SQLite)
+	}
+	if m != nil && m.ForwardingRunner != nil && resolverForPipeline != nil {
+		m.ForwardingRunner.SetResolver(resolverForPipeline)
+		log.Printf("[BOOTSTRAP] CreatorForwardingRunner wired to canonical Resolver (Blocco 5)")
+	}
+
 	// 2. Build the per-route RouterBundle directly from the build*
 	//    return values — no mega-struct in between.
 	bundle := RouterBundle{
@@ -208,8 +224,12 @@ func runServer(cfg *config.Config) error {
 			SQLiteStore: p.SQLite,
 			Enqueuer:    m.Enqueuer,
 		},
-		Groups:     GroupsRouteDeps{SQLiteStore: p.SQLite},
-		Pipeline:   PipelineRouteDeps{Cfg: cfg, Enqueuer: m.Enqueuer, JobsRepo: j.Repository, CmdMgr: w.CommandManager},
+		Groups: GroupsRouteDeps{SQLiteStore: p.SQLite},
+		Pipeline: PipelineRouteDeps{
+			Cfg: cfg, Enqueuer: m.Enqueuer,
+			JobsRepo: j.Repository, CmdMgr: w.CommandManager,
+			Resolver: resolverForPipeline,
+		},
 		Darkeditor: DarkeditorRouteDeps{Cfg: cfg, SQLiteStore: p.SQLite},
 		Upload: UploadRouteDeps{
 			Cfg:            cfg,

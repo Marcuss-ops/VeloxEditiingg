@@ -201,18 +201,38 @@ type FailureTracker struct {
 	nowFn       func() time.Time // injectable for tests
 }
 
-// NewFailureTracker constructs a tracker with the given policy.
-// The default clock is time.Now; tests can override via WithClock.
+// NewFailureTracker constructs a tracker with the given policy and a
+// RealClock default (time.Now). Convenience wrapper over
+// NewFailureTrackerWithClock — kept for back-compat with callers that
+// do not care about the clock seam. Tests that need a mock clock
+// MUST use NewFailureTrackerWithClock directly.
+//
+// Verdetto P2 (Blocco 5): Clock is now an explicit constructor seam
+// so the FailureTracker can be advanced deterministically in unit
+// tests, integration tests, and any future code that wants to drive
+// the streak-refresh wall-clock without sleeping through real time.
 func NewFailureTracker(p RetryPolicy) *FailureTracker {
+	return NewFailureTrackerWithClock(p, RealClock{})
+}
+
+// NewFailureTrackerWithClock is the canonical FailureTracker
+// constructor. Callers that need to inject a mock clock (e.g. via a
+// MockClock in policy_test.go that maintains a virtual Now) pass it
+// here. Passing nil falls back to RealClock so the API matches the
+// existing NewFailureTracker contract.
+func NewFailureTrackerWithClock(p RetryPolicy, clk Clock) *FailureTracker {
 	if p.ConsecutiveErrorThreshold <= 0 {
 		p.ConsecutiveErrorThreshold = 5
 	}
 	if p.ResetWindow <= 0 {
 		p.ResetWindow = 30 * time.Second
 	}
+	if clk == nil {
+		clk = RealClock{}
+	}
 	return &FailureTracker{
 		Policy: p,
-		nowFn:  time.Now,
+		nowFn:  clk.Now,
 	}
 }
 

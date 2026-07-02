@@ -104,8 +104,8 @@ func TestFormatStatsCounts(t *testing.T) {
 		StatusRunning: 2,
 	}
 	m := FormatStats(c)
-	if len(m) != 2 {
-		t.Fatalf("expected 2 keys, got %d (%v)", len(m), m)
+	if len(m) != 3 {
+		t.Fatalf("expected 3 keys (PENDING + RUNNING + total), got %d (%v)", len(m), m)
 	}
 	// Keys are string-cast of jobs.Status — verify exact case mapped.
 	if _, ok := m[string(StatusPending)]; !ok {
@@ -113,6 +113,12 @@ func TestFormatStatsCounts(t *testing.T) {
 	}
 	if _, ok := m[string(StatusRunning)]; !ok {
 		t.Errorf("missing key %q (StatusRunning string form)", string(StatusRunning))
+	}
+	// "total" aggregates all status counts.
+	if total, ok := m["total"]; !ok {
+		t.Errorf("missing key \"total\"")
+	} else if total != 7 {
+		t.Errorf("total=%d, want 7 (5+2)", total)
 	}
 }
 

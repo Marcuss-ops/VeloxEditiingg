@@ -487,6 +487,47 @@ func (s *SQLiteStore) AtomicForwardAndEnqueue(
 	return tx.Commit()
 }
 
+// MarkCreatorForwardingReadySync transitions a PENDING/POLLING forwarding to
+// READY_TO_FORWARD WITHOUT a (locked_by, lease_id) CAS. This is the
+// synchronous handler path: the HTTP request INSERTed a fresh PENDING row
+// (no lease) and immediately needs to promote it for the atomic enqueue step.
+//
+// Diff vs MarkCreatorForwardingReadyToForward: the latter is the legitimate
+// runner lease-holder promotion (CAS on qualifier+lease_id pair). The sync
+// path has no lease — using a CAS that requires one would never match. So
+// the sync method uses a relaxed guard: forwarding_id + status in
+// (PENDING, POLLING) only. Safe because the sync caller just INSERTed the
+// row in the same logical operation (no other runner can have claimed it
+// yet: PENDING = claimable, POLLING = lock/unlikely-immediately-after-insert).
+//
+// Returns ErrTransitionConflict if the row is not in a promotable state
+// (already READY_TO_FORWARD, FORWARDED, FAILED, BLOCKED, etc.).
+func (s *SQLiteStore) MarkCreatorForwardingReadySync(ctx context.Context, forwardingID, payloadJSON, payloadSHA256 string) error {
+	if forwardingID == "" {
+		return fmt.Errorf("store: MarkCreatorForwardingReadySync: empty forwarding_id")
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	result, err := s.db.ExecContext(ctx,
+		`UPDATE creator_forwardings
+		 SET status = 'READY_TO_FORWARD',
+		     source_status = 'completed',
+		     payload_json = ?, payload_sha256 = ?,
+		     locked_by = '', lease_id = '', lease_expires_at = '',
+		     updated_at = ?
+		 WHERE forwarding_id = ?
+		   AND status IN ('PENDING', 'POLLING')`,
+		payloadJSON, payloadSHA256, now, forwardingID,
+	)
+	if err != nil {
+		return fmt.Errorf("store: MarkCreatorForwardingReadySync: %w", err)
+	}
+	affected, _ := result.RowsAffected()
+	if affected == 0 {
+		return ErrTransitionConflict
+	}
+	return nil
+}
+
 // MarkCreatorForwardingEnqueueRetry moves a forwarding that failed to enqueue
 // (FORWARDING or READY_TO_FORWARD) to RETRY_WAIT with a backoff delay.
 // This is the enqueue-phase analog of MarkCreatorForwardingRetry (which

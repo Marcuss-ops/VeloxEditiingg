@@ -93,6 +93,7 @@ func NewCoordinator(cfg CoordinatorConfig) (Coordinator, error) {
 		db:         cfg.DB,
 		hmacKey:    cfg.HMACKey,
 		uowFactory: NewSQLiteUnitOfWorkFactory(cfg.DB),
+		budget:     NewConflictBudget(DefaultConflictBudgetPolicy()),
 	}, nil
 }
 
@@ -101,6 +102,36 @@ type coordinator struct {
 	db         *sql.DB
 	hmacKey    []byte
 	uowFactory UnitOfWorkFactory
+	// budget counts consecutive ErrTransitionConflict on the
+	// three canonical attempt_commits CAS paths
+	// (UpdateReadyCountExhaustive + SetExpired + MarkCommitted) and
+	// escalates to ErrConflictBudgetExhausted at the threshold.
+	// Initialised in NewCoordinator with the default policy.
+	budget *ConflictBudget
+}
+
+// recordAttemptCommitsCAS routes a CAS error from one of the three
+// canonical attempt_commits CAS paths through the conflict budget.
+//
+// Returns the original err unchanged when the budget is under
+// threshold (or no err) so the caller can surface it; returns a
+// wrapped ErrConflictBudgetExhausted when the streak crossed the
+// boundary so the caller can escalate to its supervisor.
+//
+// Calls with err == nil reset the budget counter (record-able as a
+// successful Coordinator-method exit).
+func (c *coordinator) recordAttemptCommitsCAS(err error) error {
+	if c.budget == nil {
+		return err
+	}
+	budgetErr := c.budget.Record(err)
+	if budgetErr == nil {
+		// nil from Record means either a reset (err was nil) or
+		// under-threshold continuation. In both cases the caller
+		// should proceed with its normal err.
+		return err
+	}
+	return budgetErr
 }
 
 // ────────────────────────────────────────────────────────────────────────
@@ -403,6 +434,10 @@ func (c *coordinator) CompleteUpload(ctx context.Context, cmd CompleteUploadComm
 		return err
 	}
 	if uploadState.Status == "COMPLETED" {
+		// Verdetto P2 (Blocco 5): replay-safe no-op is a
+		// successful exit — reset the budget counter so a
+		// previous streak does not poison the next attempt.
+		c.recordAttemptCommitsCAS(nil)
 		return nil // replay-safe no-op
 	}
 	if uploadState.Status != "CREATED" && uploadState.Status != "UPLOADING" && uploadState.Status != "RECEIVED" {
@@ -454,10 +489,23 @@ func (c *coordinator) CompleteUpload(ctx context.Context, cmd CompleteUploadComm
 	}
 
 	if err := repos.AttemptCommits().UpdateReadyCountExhaustive(ctx, cmd.Fence, nowStr); err != nil {
+		// Verdetto P2 (Blocco 5): route through the conflict budget.
+		// Under threshold → propagate the original ErrTransitionConflict
+		// unchanged. Over threshold → propagate
+		// ErrConflictBudgetExhausted so the caller can escalate.
+		if budgetErr := c.recordAttemptCommitsCAS(err); budgetErr != nil {
+			return fmt.Errorf("completion.CompleteUpload: ready_output_count bump: %w", budgetErr)
+		}
 		return fmt.Errorf("completion.CompleteUpload: ready_output_count bump: %w", err)
 	}
 
 	if err := repos.AttemptCommits().SetExpired(ctx, cmd.Fence, nowStr); err != nil {
+		// Verdetto P2 (Blocco 5): same pattern as
+		// UpdateReadyCountExhaustive — both are canonical
+		// attempt_commits CAS paths that count toward the budget.
+		if budgetErr := c.recordAttemptCommitsCAS(err); budgetErr != nil {
+			return fmt.Errorf("completion.CompleteUpload: deadline-breach EXPIRED: %w", budgetErr)
+		}
 		return fmt.Errorf("completion.CompleteUpload: deadline-breach EXPIRED: %w", err)
 	}
 
@@ -465,6 +513,9 @@ func (c *coordinator) CompleteUpload(ctx context.Context, cmd CompleteUploadComm
 		return fmt.Errorf("completion.CompleteUpload: commit: %w", err)
 	}
 	committed = true
+	// Verdetto P2 (Blocco 5): reset the conflict budget on a
+	// successful CompleteUpload so a fresh streak starts next time.
+	c.recordAttemptCommitsCAS(nil)
 	return nil
 }
 
@@ -564,6 +615,9 @@ func (c *coordinator) CommitAttempt(ctx context.Context, commitID string) (*Comm
 		return nil, fmt.Errorf("completion.CommitAttempt: commit: %w", err)
 	}
 	committed = true
+	// Verdetto P2 (Blocco 5): reset the conflict budget on a
+	// successful CommitAttempt so a fresh streak starts next time.
+	c.recordAttemptCommitsCAS(nil)
 	return res, nil
 }
 

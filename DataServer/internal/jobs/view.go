@@ -204,10 +204,14 @@ func ToFlatMap(j *Job) map[string]interface{} {
 // FormatStats converts Reader.Counts into a string-keyed map for HTTP/JSON
 // consumers. String-cast of jobs.Status yields uppercase passthrough
 // (matches pre-Batch-3 wire format produced by queue.QueryService.Stats).
+// Includes a "total" key aggregating all status counts.
 func FormatStats(c Counts) map[string]int64 {
-	res := make(map[string]int64, len(c))
+	res := make(map[string]int64, len(c)+1)
+	var total int64
 	for k, v := range c {
 		res[string(k)] = v
+		total += v
 	}
+	res["total"] = total
 	return res
 }

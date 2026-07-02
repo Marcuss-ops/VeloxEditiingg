@@ -33,6 +33,7 @@ import (
 	"time"
 
 	"velox-server/internal/costmodel"
+	"velox-server/internal/creatorflow"
 	"velox-server/internal/jobs/enqueue"
 	"velox-server/internal/remoteengine"
 	"velox-server/internal/routing"
@@ -128,12 +129,13 @@ func (m *RunnerMetrics) Snapshot() map[string]int64 {
 // jobs and transitions completed results atomically to FORWARDED (Job+Task
 // creation + forwarding status update in a single SQLite transaction).
 type CreatorForwardingRunner struct {
-	cfg      *RunnerConfig
-	dbStore  *store.SQLiteStore
-	client   *remoteengine.Client
-	enqueuer *enqueue.Enqueuer
-	identity string
-	metrics  *RunnerMetrics
+	cfg       *RunnerConfig
+	dbStore   *store.SQLiteStore
+	client    *remoteengine.Client
+	enqueuer  *enqueue.Enqueuer
+	identity  string
+	metrics   *RunnerMetrics
+	resolver  *creatorflow.Resolver // canonical forward-completed entry point
 
 	sem chan struct{} // bounded concurrency
 
@@ -146,6 +148,10 @@ type CreatorForwardingRunner struct {
 // client provides access to the remote creator engine. enqueuer is optional
 // (nil-safe) — when set, the runner handles the full poll+enqueue lifecycle
 // atomically; when nil, the runner only polls and stores payloads.
+//
+// Resolver is built lazily via NewResolverMinimal on first call to
+// atomicEnqueueAndForward; callers may pre-build it via SetResolver to
+// share a single Resolver instance with the HTTP handler.
 func NewCreatorForwardingRunner(cfg *RunnerConfig, dbStore *store.SQLiteStore, client *remoteengine.Client, enqueuer *enqueue.Enqueuer, identity string) *CreatorForwardingRunner {
 	if cfg == nil {
 		cfg = DefaultRunnerConfig()
@@ -167,6 +173,35 @@ func NewCreatorForwardingRunner(cfg *RunnerConfig, dbStore *store.SQLiteStore, c
 		stopCh:    make(chan struct{}),
 		stoppedCh: make(chan struct{}),
 	}
+}
+
+// SetResolver injects a pre-built Resolver so the runner uses the same
+// instance the HTTP handler uses. Without this call the runner builds
+// its own NewResolverMinimal on first use; both paths produce the
+// same job_id + forwarding_id because both go through Resolver.Resolve.
+//
+// Blocco 5 of the Verdetto (P1 #11): the runner's atomicEnqueueAndForward
+// delegates to Resolver.Resolve rather than building the Job+TaskSpec
+// inline + calling AtomicForwardAndEnqueue. This unifies the
+// forward-completed path: handler and runner converge on the Resolver's
+// idempotency + payload-marshal + URL-rewrite + atomic-write pipeline.
+func (r *CreatorForwardingRunner) SetResolver(rs *creatorflow.Resolver) {
+	if r == nil {
+		return
+	}
+	r.resolver = rs
+}
+
+// lazyResolver returns the runner's Resolver, building a minimal one
+// on first use if SetResolver was not called. The minimal resolver
+// skips URL rewriting (the runner already received a complete payload
+// from the remote engine) but owns the full atomic + idempotency flow.
+func (r *CreatorForwardingRunner) lazyResolver() *creatorflow.Resolver {
+	if r.resolver != nil {
+		return r.resolver
+	}
+	r.resolver = creatorflow.NewResolverMinimal(r.enqueuer, r.dbStore)
+	return r.resolver
 }
 
 // Metrics returns the runner's metrics for external consumption.
@@ -392,27 +427,38 @@ func (r *CreatorForwardingRunner) processLease(ctx context.Context, lease store.
 	}
 }
 
-// atomicEnqueueAndForward builds the Job+TaskSpec from the remote creator
-// result and calls AtomicForwardAndEnqueue to create the Job+Task+TaskSpec
-// and mark the forwarding as FORWARDED in a single SQLite transaction.
-// On failure, the forwarding is transitioned to RETRY_WAIT with backoff.
+// atomicEnqueueAndForward resolves the forwarding through the canonical
+// Resolver. The runner:
+//
+//  1. Marshals the result map first — non-serializable payloads mark the
+//     forwarding BLOCKED before any Resolver call (the Resolver would
+//     return a hard marshal error anyway, but BLOCKED is the row state
+//     the runner already understands).
+//  2. Promotes POLLING → READY_TO_FORWARD via the lease-aware
+//     MarkCreatorForwardingReadyToForward transition (the runner has
+//     a legitimate lease; the sync handler does not).
+//  3. Delegates to Resolver.Resolve with req.ForwardingID = the run's
+//     lease id. The Resolver runs idempotency + payload normalization +
+//     URL rewriting + atomic CAS in a single place, returning the
+//     (job_id, forwarding_id) pair the runner logs.
+//
+// On Resolve error, the runner falls back to its existing retry path
+// (handleEnqueueRetry) so retries/backoff/max-attempts semantics are
+// preserved. On success, the runner records the forwarded metric.
+//
+// Blocco 5 of the Verdetto (P1 #11): this method is now the single
+// path the runner uses for the FORWARDING transition. The legacy
+// inline (BuildPayload + PrepareJobAndTask + AtomicForwardAndEnqueue)
+// sequence lives only inside the Resolver.
 func (r *CreatorForwardingRunner) atomicEnqueueAndForward(ctx context.Context, lease store.CreatorForwardingLease, result map[string]interface{}) {
 	if result == nil {
 		result = map[string]interface{}{}
 	}
-	// Inject the forwarding key so DeriveForwardingJobID produces a
-	// deterministic job_id.
-	fwdKey := routing.FormatForwardingKey(
-		lease.SourceProvider, lease.SourceJobID, lease.TargetExecutorID,
-	)
-	result[routing.KeyForwardingKey] = fwdKey.String()
 
-	// 1. Store the payload + release the poll lease (POLLING → READY_TO_FORWARD).
-	//    The atomic enqueue will claim it back (READY_TO_FORWARD → FORWARDING)
-	//    inside the same DB transaction.
+	// 1. Marshal safety check (same semantics as the runner's
+	//    pre-resolver code path — non-serializable payloads BLOCK).
 	payloadJSON, payloadSHA256 := marshalPayload(result)
 	if payloadJSON == "" && payloadSHA256 == "" {
-		// Non-serializable payload — mark BLOCKED permanently.
 		log.Printf("[FORWARDING] payload marshal failed forwarding=%s; marking BLOCKED", lease.ForwardingID)
 		if err := r.dbStore.MarkCreatorForwardingBlocked(ctx,
 			lease.ForwardingID, r.identity, lease.LeaseID,
@@ -424,6 +470,9 @@ func (r *CreatorForwardingRunner) atomicEnqueueAndForward(ctx context.Context, l
 		r.metrics.Failed.Add(1)
 		return
 	}
+
+	// 2. POLLING → READY_TO_FORWARD. The runner has a legitimate
+	//    lease so the leasable CAS guard applies.
 	if err := r.dbStore.MarkCreatorForwardingReadyToForward(ctx,
 		lease.ForwardingID, r.identity, lease.LeaseID,
 		payloadJSON, payloadSHA256,
@@ -434,23 +483,37 @@ func (r *CreatorForwardingRunner) atomicEnqueueAndForward(ctx context.Context, l
 		return
 	}
 
-	// 2. Prepare the Job+TaskSpec (business logic, no DB write).
-	job, spec, priority, err := r.enqueuer.PrepareJobAndTask(ctx, result, costmodel.DefaultRequirements())
-	if err != nil {
-		log.Printf("[FORWARDING] prepare job+task failed forwarding=%s: %v", lease.ForwardingID, err)
-		r.handleEnqueueRetry(ctx, lease, "PREPARE_FAILED", err.Error())
+	// 3. Delegate to the Resolver. The Resolver applies idempotency
+	//    + payload normalization + atomic CAS.
+	rs := r.lazyResolver()
+	if rs == nil {
+		// No enqueuer wired (forwarder-only runner); skip the
+		// atomic step. The forwarding row is already READY_TO_FORWARD;
+		// a separate forwarder can pick it up via ListReadyToForward.
+		log.Printf("[FORWARDING] resolver unavailable for forwarding=%s; row left at READY_TO_FORWARD", lease.ForwardingID)
 		return
 	}
-
-	// 3. Atomic enqueue + forward (one SQLite transaction).
-	if err := r.dbStore.AtomicForwardAndEnqueue(ctx, lease.ForwardingID, job, spec, priority); err != nil {
-		log.Printf("[FORWARDING] atomic forward+enqueue failed forwarding=%s: %v", lease.ForwardingID, err)
+	out, err := rs.Resolve(ctx, creatorflow.ResolveRequest{
+		ForwardingID:     lease.ForwardingID,
+		SourceProvider:   lease.SourceProvider,
+		SourceJobID:      lease.SourceJobID,
+		TargetExecutorID: lease.TargetExecutorID,
+		Payload:          result,
+	})
+	if err != nil {
+		log.Printf("[FORWARDING] resolver.Resolve failed forwarding=%s: %v", lease.ForwardingID, err)
 		r.handleEnqueueRetry(ctx, lease, "ENQUEUE_FAILED", err.Error())
 		return
 	}
-
-	log.Printf("[FORWARDING] forwarded forwarding=%s → job=%s source=%s",
-		lease.ForwardingID, job.ID, lease.SourceProvider)
+	if out == nil {
+		// Resolver returned ErrResolverNotComplete-equivalent
+		// sentinel (nil output normally paired with error, but be
+		// conservative). Leave the row in READY_TO_FORWARD so the
+		// next tick re-runs the resolve.
+		return
+	}
+	log.Printf("[FORWARDING] forwarded forwarding=%s → job=%s source=%s (via Resolver)",
+		lease.ForwardingID, out.JobID, lease.SourceProvider)
 	r.metrics.Forwarded.Add(1)
 }
 
