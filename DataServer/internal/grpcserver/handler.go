@@ -833,6 +833,20 @@ func (s *workerSession) replaceCapabilities(
 	s.capabilityRevision.Add(1)
 }
 
+// invalidateExecutor removes a single executor key from the session's
+// executor map and bumps the capability revision. Called when the
+// worker rejects a task with reason="unsupported_executor" — the
+// placement snapshot said the worker supports this executor, but the
+// worker disagrees. Invalidating prevents further offers of the same
+// incompatible executor until the next Hello re-advertises it.
+func (s *workerSession) invalidateExecutor(key placement.ExecutorKey) {
+	s.executorsMu.Lock()
+	delete(s.executors, key)
+	s.executorsMu.Unlock()
+
+	s.capabilityRevision.Add(1)
+}
+
 // ---- Security Helpers ----
 
 // extractPeerIP extracts the client IP address from the gRPC stream context

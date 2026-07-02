@@ -49,6 +49,7 @@ import (
 
 	"velox-server/internal/ingest"
 	"velox-server/internal/jobs"
+	"velox-server/internal/placement"
 	"velox-server/internal/store"
 	"velox-server/internal/taskattempts"
 	"velox-server/internal/taskgraph"

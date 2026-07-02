@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"velox-server/internal/jobs"
+	"velox-server/internal/placement"
 	"velox-server/internal/taskattempts"
 	"velox-server/internal/taskgraph"
 	"velox-server/internal/taskoutput_artifacts"

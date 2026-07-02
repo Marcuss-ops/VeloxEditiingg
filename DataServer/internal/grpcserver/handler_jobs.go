@@ -8,8 +8,10 @@ import (
 	"time"
 
 	"velox-server/internal/ingest"
+	"velox-server/internal/placement"
 	"velox-server/internal/store"
 	"velox-server/internal/taskattempts"
+	"velox-server/internal/taskgraph"
 	"velox-shared/controltransport"
 	pb "velox-shared/controltransport/pb"
 
@@ -221,12 +223,64 @@ func (h *Handler) handleTaskRejected(workerID string, tr *pb.TaskRejected) {
 	log.Printf("[GRPC] Worker %s rejected task %s (attempt=%s lease=%s): %s",
 		workerID, taskID, attemptID, leaseID, reason)
 
+	// Special-case: unsupported_executor — the worker rejected a task
+	// it cannot execute because the executor is not in its registry.
+	// This is a capability inconsistency between the placement snapshot
+	// and the worker's actual runtime state. The session's executor
+	// map is invalidated so the matcher won't pick this pair again.
+	if reason == "unsupported_executor" {
+		h.handleUnsupportedExecutorRejection(ctx, workerID, t, reason)
+		h.clearPendingOfferForTask(workerID, taskID)
+		return
+	}
+
 	if err := h.taskRepo.ReleaseLease(ctx, taskID, workerID, leaseID); err != nil {
 		log.Printf("[GRPC] Failed to release rejected task %s: %v", taskID, err)
 	}
 
 	// Clear pending offer under claimMu.
 	h.clearPendingOfferForTask(workerID, taskID)
+}
+
+// handleUnsupportedExecutorRejection handles a task rejected with
+// reason="unsupported_executor". The placement snapshot claimed the
+// worker supported this executor but the worker disagreed at runtime.
+//
+// The handler:
+//  1. Logs the capability inconsistency.
+//  2. Invalidates the (executor_id, executor_version) pair in the
+//     worker's session so the matcher won't offer it again.
+//  3. Releases the lease — returns the task to READY without
+//     consuming retry budget (PENDING attempts don't count).
+//  4. Records a placement rejection metric placeholder.
+func (h *Handler) handleUnsupportedExecutorRejection(
+	ctx context.Context,
+	workerID string,
+	t *taskgraph.Task,
+	reason string,
+) {
+	executorKey := placement.ExecutorKey{ID: t.ExecutorID, Version: t.ExecutorVersion}
+
+	log.Printf("[PLACEMENT] Worker %s rejected task %s as unsupported_executor (executor=%s@%d) — capability inconsistency, invalidating for session",
+		workerID, t.ID, t.ExecutorID, t.ExecutorVersion)
+
+	// Invalidate this executor/version pair so the matcher won't
+	// select another task with the same requirement for this session.
+	sess := h.getSession(workerID)
+	if sess != nil {
+		sess.invalidateExecutor(executorKey)
+	}
+
+	// Release the lease. ReleaseLease sets the task back to READY
+	// and removes the PENDING attempt. The attempt_count is NOT
+	// consumed: PENDING attempts that never started don't count
+	// toward the retry budget.
+	if err := h.taskRepo.ReleaseLease(ctx, t.ID, workerID, t.LeaseID); err != nil {
+		log.Printf("[PLACEMENT] ReleaseLease for unsupported_executor task %s failed: %v", t.ID, err)
+	}
+
+	// TODO: increment velox_placement_rejections_total{reason="unsupported_executor"}
+	// when the Prometheus counter family is wired.
 }
 
 // clearPendingOfferForTask removes the pending offer for a task if the

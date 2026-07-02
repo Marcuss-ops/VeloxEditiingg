@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"velox-server/internal/placement"
 	"velox-server/internal/taskattempts"
 )
 
