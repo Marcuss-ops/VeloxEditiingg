@@ -444,66 +444,11 @@ func (s *SQLiteStore) AtomicForwardAndEnqueue(
 		return ErrTransitionConflict
 	}
 
-	// 2. Insert Job, Task, TaskSpec (same pattern as CreateJobWithTask)
-	jobPayload := "{}"
-	if job.Payload != "" {
-		jobPayload = job.Payload
-	}
-
-	req := job.Requirements
-	_, err = tx.ExecContext(ctx,
-		`INSERT INTO jobs (
-			job_id, status, max_retries,
-			video_name, project_id,
-			created_at, updated_at, migrated_at,
-			request_json, result_json, revision,
-			run_id, job_run_id,
-			job_required_resource_class, job_required_temporal_mode,
-			job_required_deterministic, job_required_cacheable,
-			job_required_min_bandwidth_mbps
-		) VALUES (?, 'PENDING', ?, ?, ?, ?, ?, ?, ?, '{}', 0, ?, ?,
-		          ?, ?, ?, ?,
-		          ?)`,
-		job.ID, job.MaxRetries, job.VideoName, job.ProjectID,
-		now, now, now,
-		jobPayload,
-		job.RunID, job.RunID,
-		req.ResourceClass, req.TemporalMode,
-		req.Deterministic, req.Cacheable,
-		req.MinBandwidthMbps,
-	)
-	if err != nil {
-		return fmt.Errorf("AtomicForwardAndEnqueue job insert: %w", err)
-	}
-
-	taskID := uuid.NewString()
-	_, err = tx.ExecContext(ctx,
-		`INSERT INTO tasks (
-			task_id, job_id, project_id, render_plan_id,
-			executor_id, executor_version, status, priority,
-			revision, attempt_count, worker_id, lease_id,
-			created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, 'PENDING', ?, 0, 0, '', '', ?, ?)`,
-		taskID, job.ID, job.ProjectID,
-		taskSpec.RenderPlanID(),
-		taskSpec.ExecutorID, taskSpec.Version,
-		priority, now, now,
-	)
-	if err != nil {
-		return fmt.Errorf("AtomicForwardAndEnqueue task insert: %w", err)
-	}
-
-	if taskSpec != nil {
-		specHash := taskSpec.MustSpecHash()
-		specPayloadJSON, _ := marshalSpecPayload(taskSpec)
-		_, err = tx.ExecContext(ctx,
-			`INSERT INTO task_specs (task_id, spec_version, spec_hash, executor_id, payload_json, created_at)
-			 VALUES (?, ?, ?, ?, ?, ?)`,
-			taskID, taskSpec.Version, specHash, taskSpec.ExecutorID, specPayloadJSON, now,
-		)
-		if err != nil {
-			return fmt.Errorf("AtomicForwardAndEnqueue task spec insert: %w", err)
-		}
+	// 2. Delegate Job+Task+TaskSpec creation to the canonical single-writer
+	//    path (CreateJobWithTaskTx) so the SQL lives in exactly one place.
+	creator := NewAtomicJobTaskCreator(s)
+	if err := creator.CreateJobWithTaskTx(ctx, tx, job, taskSpec, priority); err != nil {
+		return fmt.Errorf("AtomicForwardAndEnqueue create job+task: %w", err)
 	}
 
 	// 3. CAS: FORWARDING → FORWARDED

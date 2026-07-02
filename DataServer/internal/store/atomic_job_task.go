@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -52,6 +53,37 @@ func (c *AtomicJobTaskCreator) CreateJobWithTask(
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	if err := c.CreateJobWithTaskTx(ctx, tx, job, taskSpec, priority); err != nil {
+		return err
+	}
+
+	return tx.Commit()
+}
+
+// CreateJobWithTaskTx performs the 3-table INSERT (jobs, tasks, task_specs)
+// inside the caller's transaction. This is the canonical single-writer path
+// for Job+Task creation — AtomicForwardAndEnqueue and any future multi-table
+// transaction MUST call this method instead of duplicating the SQL.
+func (c *AtomicJobTaskCreator) CreateJobWithTaskTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	job *jobs.Job,
+	taskSpec *taskgraph.TaskSpec,
+	priority int,
+) error {
+	if c.store == nil || c.store.db == nil {
+		return fmt.Errorf("atomic creator: store not initialized")
+	}
+	if tx == nil {
+		return fmt.Errorf("atomic creator: nil tx")
+	}
+	if job == nil {
+		return fmt.Errorf("atomic creator: nil job")
+	}
+	if job.ID == "" {
+		job.ID = uuid.NewString()
+	}
+
 	now := time.Now().UTC().Format(time.RFC3339)
 
 	// 1. Insert Job
@@ -64,7 +96,7 @@ func (c *AtomicJobTaskCreator) CreateJobWithTask(
 	// layer + claim paths see them without a second UPDATE after creation.
 	// PR #9: retry_count column dropped — attempt starts at 0.
 	req := job.Requirements
-	_, err = tx.ExecContext(ctx,
+	_, err := tx.ExecContext(ctx,
 		`INSERT INTO jobs (
 			job_id, status, max_retries,
 			video_name, project_id,
@@ -124,7 +156,7 @@ func (c *AtomicJobTaskCreator) CreateJobWithTask(
 		}
 	}
 
-	return tx.Commit()
+	return nil
 }
 
 // marshalSpecPayload serializes the spec payload to JSON.

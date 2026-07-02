@@ -87,10 +87,14 @@ func (e *Enqueuer) Enqueue(ctx context.Context, payloadMap map[string]interface{
 	jobID := job.ID
 	normalized := spec.Payload
 
-	// Optimistic idempotency pre-check (same pattern as creatorflow.CreateJobWithPlan).
+	// Idempotency check: when the Job already exists, return the REAL
+	// persisted status instead of claiming PENDING with enqueue_confirmed=true.
+	// The UNIQUE constraint on jobs.job_id is the authoritative dedup;
+	// this pre-check reads the actual state so callers know whether the
+	// job is still running, succeeded, or failed.
 	if e.Jobs != nil {
 		if existing, getErr := e.Jobs.Get(ctx, jobID); getErr == nil && existing != nil && existing.ID == jobID {
-			return buildSceneVideoResponse(normalized), nil
+			return buildIdempotentResponse(normalized, existing), nil
 		}
 	}
 
@@ -349,6 +353,40 @@ func buildSceneVideoResponse(normalized map[string]interface{}) map[string]inter
 		"voiceover_count":   voiceoverCountFromPayload(normalized),
 		"job_fingerprint":   jobFingerprint,
 	}
+}
+
+// buildIdempotentResponse returns a response for an already-existing Job,
+// carrying the REAL persisted status instead of hardcoding PENDING.
+// When the existing Job is SUCCEEDED, FAILED, or any other terminal state,
+// callers see the truth instead of a misleading "queued_for_workers".
+func buildIdempotentResponse(normalized map[string]interface{}, existing *jobs.Job) map[string]interface{} {
+	jobID := existing.ID
+	status := string(existing.Status)
+	jobRunID := existing.RunID
+	correlationID := strings.TrimSpace(payload.FirstString(normalized, "correlation_id"))
+	jobFingerprint := strings.TrimSpace(payload.FirstString(normalized, "job_fingerprint"))
+
+	resp := map[string]interface{}{
+		"ok":                true,
+		"job_id":            jobID,
+		"created":           false,
+		"status":            status,
+		"enqueue_confirmed": true,
+		"job_type":          "process_video",
+		"scene_count":       sceneCountFromPayload(normalized),
+		"voiceover_count":   voiceoverCountFromPayload(normalized),
+	}
+	if jobRunID != "" {
+		resp["job_run_id"] = jobRunID
+		resp["run_id"] = jobRunID
+	}
+	if correlationID != "" {
+		resp["correlation_id"] = correlationID
+	}
+	if jobFingerprint != "" {
+		resp["job_fingerprint"] = jobFingerprint
+	}
+	return resp
 }
 
 // =============================================================================
