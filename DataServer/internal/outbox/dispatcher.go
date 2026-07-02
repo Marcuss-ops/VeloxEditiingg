@@ -25,6 +25,8 @@ import (
 	"log"
 	"sync"
 	"time"
+
+	"velox-server/internal/supervisor"
 )
 
 // Config holds dispatcher behaviour knobs.
@@ -86,7 +88,22 @@ func NewDispatcher(store *Store, registry *Registry, cfg Config) *Dispatcher {
 }
 
 // Run starts the polling loop. Blocks until ctx is cancelled or Stop
-// is called. A panic inside the loop is caught and a tick is skipped.
+// is called.
+//
+// Verdetto P1 #10 (Blocco 4): panic recovery previously lived in
+// safeTick (per-cycle swallowing); that hid runaway panics from the
+// BackgroundSupervisor's restart-on-panic machinery. The dispatcher
+// now propagates panics upward — the BackgroundSupervisor's
+// safeCall(..., RestartOnPanic) decides whether to convert them to
+// an error (panic recovery is registered per-policy via the
+// SupervisedRunner at boot).
+//
+// Tick errors are CLASSIFIED: per-element failures (handler errors)
+// are persisted on the event row by dispatchEvent; infrastructure
+// errors (DB closed, sql.ErrConnDone) accumulate in a
+// supervisor.FailureTracker; once the consecutive-error threshold
+// trips, Run returns the wrapped ErrInfrastructure to the
+// BackgroundSupervisor.
 //
 // Run is safe to call once per Dispatcher; concurrent Run calls return
 // immediately.
@@ -105,6 +122,8 @@ func (d *Dispatcher) Run(ctx context.Context) error {
 	d.logger.Printf("[OUTBOX] dispatcher started (poll=%s batch=%d lock=%s max_attempts=%d)",
 		d.cfg.PollInterval, d.cfg.BatchSize, d.cfg.LockDuration, d.cfg.MaxAttempts)
 
+	tracker := supervisor.NewFailureTracker(supervisor.DefaultRetryPolicy())
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -116,7 +135,19 @@ func (d *Dispatcher) Run(ctx context.Context) error {
 			d.markStopped()
 			return nil
 		case <-ticker.C:
-			d.safeTick(ctx)
+			err := d.Poll(ctx)
+			if err == nil {
+				tracker.Reset()
+				continue
+			}
+			classified := supervisor.ClassifyError(err)
+			if escalated := tracker.Record(classified); escalated != nil {
+				d.markStopped()
+				return fmt.Errorf("outbox dispatcher: %w", escalated)
+			}
+			// Per-element failures are persisted on the event row
+			// by dispatchEvent; lease-lost cancels in-flight
+			// reads. No log-and-continue residue.
 		}
 	}
 }
@@ -134,15 +165,16 @@ func (d *Dispatcher) Stop() {
 
 // safeTick swallows panics per-cycle so a buggy handler cannot kill
 // the loop for the entire master process.
+//
+// Deprecated as of Blocco 4 (Verdetto P1 #10): panic recovery now
+// lives at the BackgroundSupervisor level via safeCall(...
+// RestartOnPanic). The dispatcher intentionally propagates panics
+// upward so the supervisor's restart-on-panic policy decides the
+// fate of a misbehaving handler. Retained as a no-op stub so
+// existing call sites that invoke d.safeTick continue to compile;
+// new call sites should call d.Poll directly inside Run.
 func (d *Dispatcher) safeTick(ctx context.Context) {
-	defer func() {
-		if r := recover(); r != nil {
-			d.logger.Printf("[OUTBOX] PANIC in tick: %v", r)
-		}
-	}()
-	if err := d.Poll(ctx); err != nil {
-		d.logger.Printf("[OUTBOX] poll error: %v", err)
-	}
+	_ = ctx
 }
 
 func (d *Dispatcher) markStopped() {

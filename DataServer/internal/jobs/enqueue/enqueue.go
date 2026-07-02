@@ -247,10 +247,11 @@ func compileSceneVideoJob(normalized map[string]interface{}, req costmodel.JobRe
 	}
 
 	spec := &taskgraph.TaskSpec{
-		Version:    taskgraph.SpecVersion,
-		JobID:      jobID,
-		ExecutorID: executorID,
-		Payload:    normalized,
+		Version:              taskgraph.SpecVersion,
+		JobID:                jobID,
+		ExecutorID:           executorID,
+		Payload:              normalized,
+		RequiredCapabilities: resolveRequiredCapabilities(executorID),
 	}
 
 	return job, spec, priority
@@ -626,6 +627,20 @@ func resolveInternalExecutorID(payloadMap map[string]interface{}) string {
 		return fmt.Sprintf("%s@%d", meta.Executor.ID, meta.Executor.Version)
 	}
 	return meta.Executor.ID
+}
+
+// resolveRequiredCapabilities returns the capability strings a task requires
+// based on its executor. These are stored in task_requirements and consumed
+// by the placement matcher's capability gate (matcher.go Select).
+//
+// For now the mapping is executor-driven:
+//   - scene.composite.* → artifact.commit.v1
+//   - All other executors → nil (no extra capabilities yet)
+func resolveRequiredCapabilities(executorID string) []string {
+	if strings.HasPrefix(executorID, "scene.composite") {
+		return []string{"artifact.commit.v1"}
+	}
+	return nil
 }
 
 func sceneVideoFingerprint(parts ...interface{}) string {

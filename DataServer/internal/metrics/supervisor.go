@@ -35,6 +35,7 @@ import (
 	"sync"
 	"time"
 
+	"velox-server/internal/supervisor"
 	"velox-server/internal/taskattempts"
 )
 
@@ -139,9 +140,18 @@ func (s *Supervisor) SetLimit(n int) {
 	}
 }
 
-// Run loops until ctx is done. Errors from individual ticks are
-// logged and do NOT abort the run. Returns ctx.Err() on graceful
-// shutdown.
+// Run loops until ctx is done.
+//
+// Verdetto P1 #10 (Blocco 4): per-tick errors are CLASSIFIED rather
+// than logged-and-continued. The primary RecentAttemptIDs scan is
+// the infrastructure probe; if it fails repeatedly, the run
+// goroutine returns the wrapped ErrInfrastructure to the
+// BackgroundSupervisor so the ClassRestartable / ClassCritical
+// restart machinery kicks in. Per-attempt label/scan failures are
+// element-scoped (each row is logged once and skipped) and do not
+// count toward the consecutive-error threshold.
+//
+// Returns ctx.Err() on graceful shutdown.
 func (s *Supervisor) Run(ctx context.Context) error {
 	ticker := time.NewTicker(s.tick)
 	defer ticker.Stop()
@@ -149,13 +159,29 @@ func (s *Supervisor) Run(ctx context.Context) error {
 	log.Printf("[METRICS-SUPERVISOR] starting — tick=%s, attempt_cap=%d, cost_factors: cpu=€%.6f/core·s network=€%.4f/GB storage=€%.6f/GB",
 		s.tick, s.limit, s.costFactors.CPUCoreSecondEUR, s.costFactors.NetworkGBEUR, s.costFactors.StorageGBEUR)
 
+	tracker := supervisor.NewFailureTracker(supervisor.DefaultRetryPolicy())
+
 	for {
 		select {
 		case <-ctx.Done():
 			log.Printf("[METRICS-SUPERVISOR] exit: %v", ctx.Err())
 			return ctx.Err()
 		case tick := <-ticker.C:
-			s.tickOnce(ctx, tick.UTC())
+			err := s.tickOnce(ctx, tick.UTC())
+			if err == nil {
+				tracker.Reset()
+				continue
+			}
+			classified := supervisor.ClassifyError(err)
+			if escalated := tracker.Record(classified); escalated != nil {
+				return fmt.Errorf("metrics supervisor: %w", escalated)
+			}
+			// Single per-tick infra error (e.g. master-side
+			// outbox gauge failure) is logged once at the
+			// element-scoped site, NOT log-and-continued across
+			// many ticks. The BackgroundSupervisor /ready probe
+			// surfaces the state through RunnerState.Failed if
+			// the streak survives consecutive tick boundaries.
 		}
 	}
 }
@@ -163,7 +189,16 @@ func (s *Supervisor) Run(ctx context.Context) error {
 // tickOnce is the body of one supervisor tick. Extracted so tests
 // can drive it deterministically without sleeping through ticker
 // waits.
-func (s *Supervisor) tickOnce(ctx context.Context, now time.Time) {
+//
+// Verdetto P1 #10 (Blocco 4): returns the FIRST infrastructure
+// error encountered in the tick (RecentAttemptIDs failure or
+// refreshMasterHealth outbox-gauge failure) so the Run loop can
+// route it through the supervisor.FailureTracker. Per-attempt
+// label / scan errors are ELEMENT-scoped: each affected row is
+// logged once at the site and skipped without affecting the
+// consecutive-error counter. Returns nil when the tick completes
+// without infrastructure trouble.
+func (s *Supervisor) tickOnce(ctx context.Context, now time.Time) error {
 	s.tickMu.Lock()
 	since := s.last
 	s.last = now
@@ -172,16 +207,26 @@ func (s *Supervisor) tickOnce(ctx context.Context, now time.Time) {
 	// 1. Pull newly-terminal attempts since the LAST tick.
 	ids, err := s.attempts.RecentAttemptIDs(ctx, since, s.limit)
 	if err != nil {
+		// RecentAttemptIDs is the primary tick error — DB scan
+		// failure is the canonical infrastructure signal. We
+		// still attempt master-health refresh (RSI / goroutines
+		// are independent of the attempts query) but the tick
+		// error IS this one. Per-tick ambient log line for
+		// operational visibility (single entry, not repeated).
 		log.Printf("[METRICS-SUPERVISOR] recent attempts query failed since=%s: %v",
 			since.Format(time.RFC3339), err)
-		// Still refresh master-side gauges even if the per-attempt
-		// pass failed — RSS / goroutines / outbox are independent.
-		s.refreshMasterHealth(ctx, now)
-		return
+		if mhErr := s.refreshMasterHealth(ctx, now); mhErr != nil {
+			log.Printf("[METRICS-SUPERVISOR] master-health refresh: %v", mhErr)
+		}
+		return fmt.Errorf("metrics supervisor: recent attempts query since=%s: %w",
+			since.Format(time.RFC3339), err)
 	}
 	if len(ids) == 0 {
-		s.refreshMasterHealth(ctx, now)
-		return
+		if mhErr := s.refreshMasterHealth(ctx, now); mhErr != nil {
+			log.Printf("[METRICS-SUPERVISOR] master-health refresh: %v", mhErr)
+			return mhErr
+		}
+		return nil
 	}
 
 	log.Printf("[METRICS-SUPERVISOR] tick=%s since=%s — %d newly-terminal attempts",
@@ -208,35 +253,26 @@ func (s *Supervisor) tickOnce(ctx context.Context, now time.Time) {
 
 		execID, execVer, workerClass, lerr := s.attempts.Labels(ctx, id)
 		if lerr != nil {
+			// Element-scoped: log once, scan with default
+			// labels so the per-attempt counter still stamps.
 			log.Printf("[METRICS-SUPERVISOR] labels resolve for %s: %v", id, lerr)
-			// DO NOT continue — keep scanning via
-			// ScanAttemptWithLabels below with default labels
-			// (the function fills "unknown/0/default" itself).
 			execID, execVer, workerClass = "unknown", "0", "default"
 		}
 
 		// 2a. Stamp per-attempt metrics + compute-outcome counter
 		// via ScanAttemptWithLabels. This is the same path ingest
-		// service uses (ScanAttempt → RecordAttempt +
-		// RecordAttemptOutcome) — supervisor and ingest service
-		// produce identical per-attempt counter behaviour for the
-		// same input.
+		// service uses — supervisor and ingest service produce
+		// identical per-attempt counter behaviour for the same
+		// input.
 		if scanErr := s.collector.ScanAttemptWithLabels(ctx, s.attempts, id, execID, execVer, workerClass); scanErr != nil {
+			// Element-scoped: log once, skip aggregation.
 			log.Printf("[METRICS-SUPERVISOR] scan %s: %v", id, scanErr)
 		}
 
 		// 2b. Cost aggregation: read AttemptCostBasis and roll
-		// into per-class totals. The supervisor does NOT
-		// divide-by-min per attempt; it sums first and divides
-		// ONCE per class on the OUTBOUND cost-factors application
-		// — this preserves the math caveat in cost_factors.go
-		// (single-per-tick gauge, not incremental Inc that
-		// averages-of-averages).
+		// into per-class totals.
 		cb, cbErr := s.attempts.GetCostBasis(ctx, id)
 		if cbErr != nil || cb == nil {
-			// Skip aggregation for this attempt — the
-			// scan+outcome step above still stamps the
-			// per-attempt counters.
 			continue
 		}
 		a := aggByClass[workerClass]
@@ -262,28 +298,40 @@ func (s *Supervisor) tickOnce(ctx context.Context, now time.Time) {
 		s.collector.RecordAggregateCost("all", total.cpuSecs, total.networkGB, total.storageGB, total.outputMin, s.costFactors)
 	}
 
-	// 4. Refresh master-side health gauges.
-	s.refreshMasterHealth(ctx, now)
+	// 4. Refresh master-side health gauges (best-effort).
+	if mhErr := s.refreshMasterHealth(ctx, now); mhErr != nil {
+		log.Printf("[METRICS-SUPERVISOR] master-health refresh: %v", mhErr)
+		return mhErr
+	}
 
 	// 5. GC the seenIDs map so it doesn't grow unbounded.
 	s.gcSeenIDs(now)
+	return nil
 }
 
 // refreshMasterHealth refreshes the heartbeat-age + master-health
 // gauges from a single tick. Hoisted out of tickOnce so error
 // paths can still call it without re-entering the per-attempt pass.
-func (s *Supervisor) refreshMasterHealth(ctx context.Context, now time.Time) {
+//
+// Verdetto P1 #10 (Blocco 4): the outbox-gauge error path now
+// returns the error to the caller (tickOnce) instead of just
+// logging. The outbox.Store is a separate handle so a failure
+// here is more likely infrastructure (e.g. shared-cache lock
+// exhaustion, sqlite contention) than per-attempt script. RSI /
+// goroutines (AverageHeartbeatAge / RecordMasterHealth) remain
+// in-memory and do not return errors.
+func (s *Supervisor) refreshMasterHealth(ctx context.Context, now time.Time) error {
 	s.collector.AverageHeartbeatAge(now)
-	var pending int64
 	if s.outbox != nil {
 		n, err := s.outbox.PendingCount(ctx)
 		if err != nil {
-			log.Printf("[METRICS-SUPERVISOR] outbox.PendingCount: %v", err)
-		} else {
-			pending = n
+			return fmt.Errorf("outbox.PendingCount: %w", err)
 		}
+		s.collector.RecordMasterHealth(int(n))
+		return nil
 	}
-	s.collector.RecordMasterHealth(int(pending))
+	s.collector.RecordMasterHealth(0)
+	return nil
 }
 
 // gcSeenIDs clears the seenIDs map when it exceeds seenCap. The

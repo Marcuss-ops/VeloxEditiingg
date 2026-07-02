@@ -38,6 +38,7 @@ import (
 	"time"
 
 	"velox-server/internal/store"
+	"velox-server/internal/supervisor"
 )
 
 // RunnerConfig tunes the runner.
@@ -144,6 +145,17 @@ func NewDeliveryRunner(cfg *RunnerConfig, registry *Registry, dbStore *store.SQL
 // called. The loop polls the database at cfg.PollInterval, claims up to
 // ClaimBatch claimable deliveries per cycle, and dispatches each to its
 // provider through the registry.
+//
+// Verdetto P1 #10 (Blocco 4): tick errors are CLASSIFIED rather than
+// logged-and-continued. Per-element errors (one delivery hit a
+// permanent / auth / rate-limit error) are persisted on the row by
+// processLease via MarkDeliveryFailed / MarkDeliveryBlockedAuth /
+// MarkDeliveryRetry and don't count. Lease-lost cancels the in-flight
+// upload via the renewal-loop onFailure callback. Infrastructure errors
+// (DB closed, sql.ErrConnDone) accumulate in a supervisor.FailureTracker;
+// once the consecutive-error threshold trips, Run returns the wrapped
+// ErrInfrastructure to the BackgroundSupervisor so the ClassRestartable /
+// ClassCritical restart machinery kicks in.
 func (r *DeliveryRunner) Run(ctx context.Context) error {
 	if r == nil {
 		return errors.New("deliveries: nil runner")
@@ -153,6 +165,8 @@ func (r *DeliveryRunner) Run(ctx context.Context) error {
 	ticker := time.NewTicker(r.cfg.PollInterval)
 	defer ticker.Stop()
 
+	tracker := supervisor.NewFailureTracker(supervisor.DefaultRetryPolicy())
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -160,9 +174,18 @@ func (r *DeliveryRunner) Run(ctx context.Context) error {
 		case <-r.stopCh:
 			return nil
 		case <-ticker.C:
-			if err := r.tick(ctx); err != nil {
-				log.Printf("[DELIVERY] tick error: %v", err)
+			err := r.tick(ctx)
+			if err == nil {
+				tracker.Reset()
+				continue
 			}
+			classified := supervisor.ClassifyError(err)
+			if escalated := tracker.Record(classified); escalated != nil {
+				return fmt.Errorf("delivery runner: %w", escalated)
+			}
+			// Per-element errors are already persisted on disk by
+			// processLease. Lease-lost cancels the in-flight upload.
+			// Neither needs a log-and-continue entry.
 		}
 	}
 }

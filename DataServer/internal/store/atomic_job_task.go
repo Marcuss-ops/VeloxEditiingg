@@ -154,6 +154,20 @@ func (c *AtomicJobTaskCreator) CreateJobWithTaskTx(
 		if err != nil {
 			return fmt.Errorf("atomic creator task spec insert: %w", err)
 		}
+
+		// 3b. Insert TaskRequirements for placement matcher capability gating.
+		for _, capability := range taskSpec.RequiredCapabilities {
+			if capability == "" {
+				continue
+			}
+			_, err = tx.ExecContext(ctx,
+				`INSERT INTO task_requirements (task_id, capability) VALUES (?, ?)`,
+				taskID, capability,
+			)
+			if err != nil {
+				return fmt.Errorf("atomic creator task requirements insert: %w", err)
+			}
+		}
 	}
 
 	return nil

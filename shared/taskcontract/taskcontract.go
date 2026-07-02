@@ -26,10 +26,11 @@ var ErrInvalidSpec = fmt.Errorf("taskcontract: invalid spec")
 // must be validated before persistence. A deterministic spec_hash is
 // stored alongside for integrity verification.
 type TaskSpec struct {
-	Version    int                    `json:"version"`
-	JobID      string                 `json:"job_id"`
-	ExecutorID string                 `json:"executor_id"`
-	Payload    map[string]interface{} `json:"payload,omitempty"`
+	Version              int                    `json:"version"`
+	JobID                string                 `json:"job_id"`
+	ExecutorID           string                 `json:"executor_id"`
+	Payload              map[string]interface{} `json:"payload,omitempty"`
+	RequiredCapabilities []string               `json:"required_capabilities,omitempty"`
 }
 
 // Validate checks the task spec for structural correctness.
