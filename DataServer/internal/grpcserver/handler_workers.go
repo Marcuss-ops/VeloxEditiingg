@@ -2,10 +2,14 @@ package grpcserver
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"time"
 
+	"velox-server/internal/placement"
+	"velox-server/internal/taskattempts"
+	"velox-server/internal/taskgraph"
 	"velox-shared/controltransport"
 	pb "velox-shared/controltransport/pb"
 
@@ -141,16 +145,18 @@ func (h *Handler) notifyTasksAvailable(ctx context.Context, workerID string, tri
 	}
 }
 
-// sendPushTaskOffer claims the next READY task for a worker, creates a
-// TaskAttempt, and sends a typed TaskOffer via gRPC push (PR #4).
-// Replaces the legacy sendPushJobOffer with task-native dispatch.
+// sendPushTaskOffer runs the placement pipeline: snapshot the worker,
+// list READY candidates, select the best match via the placement
+// matcher, atomically claim that specific task, and send a TaskOffer.
+// Fencing is applied before and after the claim so a stale session or
+// capability bump tears the offer down cleanly.
 func (h *Handler) sendPushTaskOffer(ctx context.Context, workerID string) {
 	sess := h.getSession(workerID)
 	if sess == nil {
 		return
 	}
 
-	// Serialize the check+claim+send+set flow to prevent TOCTOU races.
+	// Serialize the check+select+claim+send flow to prevent TOCTOU races.
 	sess.claimMu.Lock()
 	defer sess.claimMu.Unlock()
 
@@ -159,47 +165,98 @@ func (h *Handler) sendPushTaskOffer(ctx context.Context, workerID string) {
 		return
 	}
 
-	// Respect max_parallel_jobs: don't offer if worker is at capacity.
-	if sess.maxParallelJobs.Load() > 0 {
-		capacity := sess.maxParallelJobs.Load() - sess.activeJobsCount.Load() - 1
-		if capacity < 0 {
-			return
-		}
+	snapshot := sess.placementSnapshot(workerID)
+
+	candidates, err := h.taskRepo.ListReadyCandidates(ctx, 64)
+	if err != nil {
+		log.Printf("[PLACEMENT] ListReadyCandidates failed worker=%s: %v", workerID, err)
+		return
 	}
 
-	// Generate a unique lease ID for this offer.
+	result := h.placementMatcher.Select(snapshot, candidates)
+
+	if result.Candidate == nil {
+		h.recordPlacementRejections(snapshot, result.Rejections)
+		return
+	}
+
+	// ── Fencing pre-claim ────────────────────────────────────────────
+	// After building the snapshot and selecting a candidate, verify
+	// the session hasn't been replaced by a reconnect. If it has,
+	// the chosen candidate belongs to a stale view of the worker.
+	current := h.getSession(workerID)
+	if current != sess || current.sessionID != snapshot.SessionID {
+		return
+	}
+
+	candidate := result.Candidate
 	leaseID := fmt.Sprintf("l-%s-%s", workerID, uuid.NewString()[:8])
 
-	// CAS: READY → LEASED with workerID + leaseID + PENDING TaskAttempt
-	// INSERT + (attempt_id, attempt_number) stamp on tasks row. All in
-	// ONE tx via ClaimNextWithAttemptAtomic (PR-2 / canonical-attempt-identity).
-	tws, attempt, err := h.taskRepo.ClaimNextWithAttemptAtomic(ctx, workerID, leaseID)
+	tws, attempt, err := h.taskRepo.ClaimTaskForWorkerAtomic(ctx, taskgraph.ClaimTaskForWorkerCommand{
+		TaskID:               candidate.TaskID,
+		ExpectedTaskRevision: candidate.Revision,
+		WorkerID:             workerID,
+		SessionID:            snapshot.SessionID,
+		LeaseID:              leaseID,
+		ExecutorID:           candidate.Executor.ID,
+		ExecutorVersion:      candidate.Executor.Version,
+		CapabilityRevision:   snapshot.CapabilityRevision,
+	})
+
 	if err != nil {
-		log.Printf("[GRPC] ClaimNextWithAttemptAtomic failed for worker %s: %v", workerID, err)
+		if errors.Is(err, taskgraph.ErrTransitionConflict) {
+			// The task was claimed by a concurrent dispatcher between
+			// ListReadyCandidates and our Claim — harmless, retry on
+			// the next tick.
+			return
+		}
+		log.Printf("[PLACEMENT] ClaimTaskForWorkerAtomic failed worker=%s task=%s: %v", workerID, candidate.TaskID, err)
 		return
 	}
 	if tws == nil || tws.ID == "" || attempt == nil {
-		// No READY task or no canonical attempt was minted — nothing to
-		// do this tick. Caller invokes per-worker tick again later.
 		return
 	}
 
-	// Build TaskSpec payload as structpb.Struct.
+	// ── Fencing post-claim ───────────────────────────────────────────
+	// After the claim has been committed, verify the session is still
+	// the current one AND the capability revision hasn't changed. If
+	// the worker reconnected between the claim and this check, release
+	// the lease immediately so it can be re-dispatched.
+	current = h.getSession(workerID)
+	if current != sess ||
+		current.sessionID != snapshot.SessionID ||
+		current.capabilityRevision.Load() != snapshot.CapabilityRevision {
+
+		if releaseErr := h.taskRepo.ReleaseLease(ctx, tws.ID, workerID, leaseID); releaseErr != nil {
+			log.Printf("[PLACEMENT] ReleaseLease after fencing failure worker=%s task=%s: %v", workerID, tws.ID, releaseErr)
+		}
+		return
+	}
+
+	h.sendClaimedTaskOffer(ctx, sess, tws, attempt, leaseID)
+}
+
+// sendClaimedTaskOffer builds the protobuf TaskOffer envelope from a
+// successfully claimed task+attempt and sends it via the session's
+// sendCh. Extracted from sendPushTaskOffer to keep the placement
+// pipeline readable. On send failure the claim is released.
+func (h *Handler) sendClaimedTaskOffer(
+	ctx context.Context,
+	sess *workerSession,
+	tws *taskgraph.TaskWithSpec,
+	attempt *taskattempts.TaskAttempt,
+	leaseID string,
+) {
 	var taskSpecPB *structpb.Struct
 	if tws.SpecPayload != nil {
 		taskSpecPB, _ = structpb.NewStruct(tws.SpecPayload)
 	}
 
-	// Calculate lease deadline (30 min from now).
 	leaseDeadline := time.Now().UTC().Add(30 * time.Minute)
 
-	// Build TaskOffer envelope with the canonical attempt_id (NOT the
-	// lease_id echo that the pre-PR-2 implementation used) so handleTaskAccepted
-	// can pass the canonical (attempt_id, attempt_number) tuple through to
-	// AcceptTaskAtomic and task_attempts stays aligned 1:1 with tasks.attempt_id.
 	env := &pb.MasterToWorkerEnvelope{
-		MessageId:       fmt.Sprintf("taskoffer-%s-%s", workerID, tws.ID),
-		WorkerId:        workerID,
+		MessageId:       fmt.Sprintf("taskoffer-%s-%s", sess.workerID, tws.ID),
+		WorkerId:        sess.workerID,
 		SentAt:          timestamppb.Now(),
 		ProtocolVersion: controltransport.ProtocolVersionCurrent,
 		Msg: &pb.MasterToWorkerEnvelope_TaskOffer{
@@ -218,19 +275,27 @@ func (h *Handler) sendPushTaskOffer(ctx context.Context, workerID string) {
 		},
 	}
 
-	// Send via sendCh (sessionWriter handles the actual stream.Send).
 	if !safeSend(sess.sendCh, &outboundMessage{Envelope: env}) {
-		log.Printf("[GRPC] sendCh full/closed for TaskOffer to worker %s — releasing claim for task %s", workerID, tws.ID)
-		if releaseErr := h.taskRepo.ReleaseLease(ctx, tws.ID, workerID, leaseID); releaseErr != nil {
-			log.Printf("[GRPC] Failed to release claim for task %s after send failure: %v", tws.ID, releaseErr)
+		log.Printf("[PLACEMENT] sendCh full/closed for TaskOffer to worker %s — releasing claim for task %s", sess.workerID, tws.ID)
+		if releaseErr := h.taskRepo.ReleaseLease(ctx, tws.ID, sess.workerID, leaseID); releaseErr != nil {
+			log.Printf("[PLACEMENT] Failed to release claim for task %s after send failure: %v", tws.ID, releaseErr)
 		}
 		return
 	}
 
-	// Store the offer under claimMu so we can match TaskAccepted/TaskRejected.
 	sess.pendingTaskOffer = tws
-	log.Printf("[GRPC] TaskOffer queued for worker %s: task=%s job=%s attempt=%s lease=%s executor=%s@%d rev=%d",
-		workerID, tws.ID, tws.JobID, attempt.ID, leaseID, tws.ExecutorID, tws.ExecutorVersion, tws.Revision)
+	log.Printf("[PLACEMENT] TaskOffer queued for worker %s: task=%s job=%s attempt=%s lease=%s executor=%s@%d rev=%d",
+		sess.workerID, tws.ID, tws.JobID, attempt.ID, leaseID, tws.ExecutorID, tws.ExecutorVersion, tws.Revision)
+}
+
+// recordPlacementRejections logs the rejection reasons produced by the
+// placement matcher. In a future iteration this will be wired to
+// Prometheus counters (velox_placement_rejections_total).
+func (h *Handler) recordPlacementRejections(snapshot placement.WorkerSnapshot, rejections []placement.Rejection) {
+	for _, r := range rejections {
+		log.Printf("[PLACEMENT] Rejection worker=%s task=%s code=%s detail=%s",
+			snapshot.WorkerID, r.TaskID, r.Code, r.Detail)
+	}
 }
 
 // extractSupportedJobTypes parses a supported_job_types value from a

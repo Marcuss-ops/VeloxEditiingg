@@ -77,6 +77,8 @@ type Handler struct {
 	// the Prometheus projection (deployments without metrics still score).
 	resourceSink velmetrics.WorkerResourceSink
 
+	placementMatcher *placement.Matcher
+
 	mu             sync.RWMutex
 	sessions       map[string]*workerSession // sessionID → active stream session
 	workerSessions map[string]string         // workerID → sessionID (for lookup)
@@ -189,9 +191,10 @@ func NewHandler(
 		artifactSvc:     artifactSvc,
 		dbStore:         dbStore,
 		config:          config,
-		authorizer:      NewAllowlistAuthorizer(config.AllowedWorkers, config.AllowInsecure),
-		sessions:        make(map[string]*workerSession),
-		workerSessions:  make(map[string]string),
+		authorizer:       NewAllowlistAuthorizer(config.AllowedWorkers, config.AllowInsecure),
+		placementMatcher: placement.NewMatcher(),
+		sessions:         make(map[string]*workerSession),
+		workerSessions:   make(map[string]string),
 	}
 }
 
