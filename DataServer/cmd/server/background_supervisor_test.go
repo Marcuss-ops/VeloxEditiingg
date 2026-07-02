@@ -346,39 +346,273 @@ func TestBackgroundSupervisor_Register_Validation(t *testing.T) {
 
 func TestBackgroundSupervisor_PanicRecovery(t *testing.T) {
 	silentLog(t)
-	sup := NewBackgroundSupervisor()
 
-	// Restartable runner that panics once, then succeeds on the
-	// retry. With RestartOnPanic=true, the panic is converted to
-	// an error and the restart loop retries. We expect exactly 2
-	// runs to land: 1 panic (counted as err) + 1 success.
+	t.Run("panic-recovery-then-block-on-ctx", func(t *testing.T) {
+		silentLog(t)
+		sup := NewBackgroundSupervisor()
+
+		// Verdetto P0 #3 (Blocco 2) contract: a non-OneShot runner
+		// that returns nil with a live context is treated as an
+		// unexpected exit and retried. So a ClassRestartable
+		// runner that wants to "succeed and stop" must block on
+		// ctx.Done() instead of returning nil — the canonical
+		// pattern for permanent runners (delivery, outbox,
+		// forwarding) is "loop until ctx is cancelled". This test
+		// pins down panic-recovery under that contract: the
+		// runner panics on first invocation, succeeds on the
+		// retry, then blocks on ctx.Done() until the test
+		// cancels the parent ctx. We expect >= 2 runs: 1 panic
+		// (counted as err) + 1 success (blocks on ctx).
+		var runs int32
+		recovered := &SupervisedRunner{
+			Name:  "panic-recovery",
+			Class: ClassRestartable,
+			Policy: RestartPolicy{
+				MaxRetries:     5,
+				InitialBackoff: 1 * time.Millisecond,
+				MaxBackoff:     2 * time.Millisecond,
+				RestartOnPanic: true,
+			},
+			Run: func(ctx context.Context) error {
+				n := atomic.AddInt32(&runs, 1)
+				if n == 1 {
+					panic("first invocation boom")
+				}
+				// Success path: block until ctx is cancelled.
+				// Returning nil here would be remapped to
+				// supervisor.ErrUnexpectedExit by the runLoop
+				// (Verdetto P0 #3) and cause a retry, so we
+				// must block instead.
+				<-ctx.Done()
+				return ctx.Err()
+			},
+		}
+		if err := sup.Register(recovered); err != nil {
+			t.Fatalf("register: %v", err)
+		}
+
+		parentCtx, parentCancel := context.WithCancel(context.Background())
+		defer parentCancel()
+
+		// Cancel parent ctx after the runner has been called at
+		// least 2 times (1 panic + 1 success-blocking). The
+		// runner is in the success-blocking state on call 2,
+		// so ctx cancel unblocks it and the supervisor exits
+		// gracefully.
+		const minRuns = 2
+		cancelDone := make(chan struct{})
+		go func() {
+			defer close(cancelDone)
+			for {
+				if atomic.LoadInt32(&runs) >= minRuns {
+					parentCancel()
+					return
+				}
+				select {
+				case <-time.After(1 * time.Millisecond):
+				case <-parentCtx.Done():
+					return
+				}
+			}
+		}()
+
+		runErr := runWithTimeout(t, sup, parentCtx, 2*time.Second)
+		if runErr != nil {
+			t.Fatalf("restart-after-panic must succeed cleanly on ctx cancel, got: %v", runErr)
+		}
+		<-cancelDone
+
+		if got := atomic.LoadInt32(&runs); got < minRuns {
+			t.Errorf("expected >= %d runs (panic + recovery-blocking), got: %d", minRuns, got)
+		}
+	})
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Verdetto P0 #4 (Blocco 1.1): shouldExitAfterFailure is the single
+// source of truth for the exit-after-failure rule. This table-driven
+// test pins the rule matrix down so a future refactor can't regress
+// the zero-case (which was the original bug: `if maxR > 0 && attempt > maxR`
+// short-circuited on maxR==0, causing ClassRestartable with MaxRetries=0
+// to loop forever instead of exiting on the first error).
+// ─────────────────────────────────────────────────────────────────────────
+
+func TestShouldExitAfterFailure(t *testing.T) {
+	cases := []struct {
+		name       string
+		class      RunnerClass
+		maxRetries int
+		attempt    int
+		want       bool
+	}{
+		// (a) ClassOneShot: always exit, regardless of maxRetries or attempt.
+		{"OneShot/maxRetries=5/attempt=1", ClassOneShot, 5, 1, true},
+		{"OneShot/maxRetries=0/attempt=1", ClassOneShot, 0, 1, true},
+		{"OneShot/maxRetries=5/attempt=10", ClassOneShot, 5, 10, true},
+
+		// (b) ClassRestartable: MaxRetries=0 → exit at first error (the bug fix).
+		{"Restartable/maxRetries=0/attempt=1", ClassRestartable, 0, 1, true},
+		{"Restartable/maxRetries=0/attempt=5", ClassRestartable, 0, 5, true},
+		{"Restartable/maxRetries=-1/attempt=1", ClassRestartable, -1, 1, true},
+		// ClassRestartable with positive budget: exit only when attempt exceeds it.
+		{"Restartable/maxRetries=3/attempt=1", ClassRestartable, 3, 1, false},
+		{"Restartable/maxRetries=3/attempt=3", ClassRestartable, 3, 3, false},
+		{"Restartable/maxRetries=3/attempt=4", ClassRestartable, 3, 4, true},
+		{"Restartable/maxRetries=3/attempt=10", ClassRestartable, 3, 10, true},
+
+		// (c) ClassCritical: MaxRetries<=0 → never exit (infinite, only ctx cancel).
+		{"Critical/maxRetries=0/attempt=1", ClassCritical, 0, 1, false},
+		{"Critical/maxRetries=0/attempt=1000", ClassCritical, 0, 1000, false},
+		{"Critical/maxRetries=-1/attempt=1", ClassCritical, -1, 1, false},
+		// ClassCritical with positive budget: exit when attempt exceeds it.
+		{"Critical/maxRetries=2/attempt=1", ClassCritical, 2, 1, false},
+		{"Critical/maxRetries=2/attempt=2", ClassCritical, 2, 2, false},
+		{"Critical/maxRetries=2/attempt=3", ClassCritical, 2, 3, true},
+
+		// Defensive: unknown class exits immediately.
+		{"Unknown/maxRetries=5/attempt=1", RunnerClass(99), 5, 1, true},
+		{"Unknown/maxRetries=0/attempt=1", RunnerClass(99), 0, 1, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := shouldExitAfterFailure(tc.class, tc.maxRetries, tc.attempt)
+			if got != tc.want {
+				t.Errorf("shouldExitAfterFailure(%s, maxRetries=%d, attempt=%d) = %v, want %v",
+					tc.class, tc.maxRetries, tc.attempt, got, tc.want)
+			}
+		})
+	}
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Verdetto P0 #4 (Blocco 1.1) integration tests — case (b) and case (c)
+// from the spec. Case (a) is already covered by
+// TestBackgroundSupervisor_ClassOneShot_RunsOnceNeverRestarts above.
+// ─────────────────────────────────────────────────────────────────────────
+
+// Case (b): ClassRestartable with MaxRetries=0 must exit on the first
+// error. Pre-fix, the `if maxR > 0 && attempt > maxR` guard short-circuited
+// on maxR==0 and the runner looped forever through the backoff path.
+func TestBackgroundSupervisor_ClassRestartable_ZeroMaxRetriesExitsAtFirstError(t *testing.T) {
+	silentLog(t)
+
+	sup := NewBackgroundSupervisor()
+	errBoom := errors.New("restartable boom")
 	var runs int32
-	recovered := &SupervisedRunner{
-		Name:  "panic-recovery",
+	restartable := &SupervisedRunner{
+		Name:  "zero-maxretries",
 		Class: ClassRestartable,
 		Policy: RestartPolicy{
-			MaxRetries:     5,
+			MaxRetries:     0, // zero = exit at first error (the bug fix)
 			InitialBackoff: 1 * time.Millisecond,
 			MaxBackoff:     2 * time.Millisecond,
-			RestartOnPanic: true,
 		},
 		Run: func(ctx context.Context) error {
-			n := atomic.AddInt32(&runs, 1)
-			if n == 1 {
-				panic("first invocation boom")
-			}
-			return nil
+			atomic.AddInt32(&runs, 1)
+			return errBoom
 		},
 	}
-	if err := sup.Register(recovered); err != nil {
+	if err := sup.Register(restartable); err != nil {
 		t.Fatalf("register: %v", err)
 	}
 
 	runErr := runWithTimeout(t, sup, context.Background(), 2*time.Second)
+	// ClassRestartable exhaustion must NOT escalate to the supervisor's
+	// return value — same invariant as the positive-budget case.
 	if runErr != nil {
-		t.Fatalf("restart-after-panic must succeed cleanly, got: %v", runErr)
+		t.Fatalf("ClassRestartable MaxRetries=0 exhaustion must NOT yield a fatal error, got: %v", runErr)
 	}
-	if got := atomic.LoadInt32(&runs); got != 2 {
-		t.Errorf("expected 2 runs (panic + recovery), got: %d", got)
+	// Exactly one invocation: the first error must trigger exit.
+	if got := atomic.LoadInt32(&runs); got != 1 {
+		t.Errorf("ClassRestartable MaxRetries=0: want 1 run, got %d", got)
+	}
+	// Post-exhaustion, the runner must surface in Missing() so /ready
+	// flips red (the same invariant as the positive-budget case).
+	missing := sup.Missing()
+	found := false
+	for _, m := range missing {
+		if m == "zero-maxretries" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected %q in Missing() post-exhaustion, got: %v", "zero-maxretries", missing)
+	}
+}
+
+// Case (c): ClassCritical with MaxRetries=0 must keep retrying
+// indefinitely — only parent-ctx cancellation exits the loop.
+// Pre-fix, the same `maxR > 0` guard would have caused the runner to
+// exit (because effectiveMaxRetries returns -1 for ClassCritical/0
+// and -1 > 0 is false, so the guard would NEVER trigger — but the
+// pre-fix code path was correct for this case by accident). The new
+// shouldExitAfterFailure makes the contract explicit: MaxRetries<=0
+// for ClassCritical means "infinite retries, only ctx cancellation
+// exits". This test pins that contract down.
+func TestBackgroundSupervisor_ClassCritical_ZeroMaxRetriesContinuesUntilCtxCancel(t *testing.T) {
+	silentLog(t)
+
+	sup := NewBackgroundSupervisor()
+	errBoom := errors.New("critical boom")
+	var runs int32
+	critical := &SupervisedRunner{
+		Name:  "infinite-critical",
+		Class: ClassCritical,
+		Policy: RestartPolicy{
+			MaxRetries:     0, // zero = infinite retries for ClassCritical
+			InitialBackoff: 1 * time.Millisecond,
+			MaxBackoff:     2 * time.Millisecond,
+		},
+		Run: func(ctx context.Context) error {
+			atomic.AddInt32(&runs, 1)
+			return errBoom
+		},
+	}
+	if err := sup.Register(critical); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+
+	parentCtx, parentCancel := context.WithCancel(context.Background())
+	defer parentCancel()
+
+	// Cancel parent ctx as soon as the runner has been called at least
+	// 5 times. The runner is called, fails, enters backoff, gets called
+	// again, fails, etc. — without ctx cancel, this would loop forever.
+	const minRuns = 5
+	cancelDone := make(chan struct{})
+	go func() {
+		defer close(cancelDone)
+		for {
+			if atomic.LoadInt32(&runs) >= minRuns {
+				parentCancel()
+				return
+			}
+			select {
+			case <-time.After(1 * time.Millisecond):
+			case <-parentCtx.Done():
+				return
+			}
+		}
+	}()
+
+	// Supervisor must exit gracefully (nil error) when parent ctx is
+	// cancelled — ctx cancellation is NOT a ClassCritical exhaustion,
+	// so it must NOT propagate as a fatal error.
+	runErr := runWithTimeout(t, sup, parentCtx, 2*time.Second)
+	if runErr != nil {
+		t.Errorf("ClassCritical MaxRetries=0 with ctx cancel must NOT yield a fatal error, got: %v", runErr)
+	}
+
+	// Wait for the cancel goroutine to actually observe ctx cancellation
+	// (it's polling, so there may be a brief race after the supervisor
+	// exits before the goroutine sees the cancelled parent ctx).
+	<-cancelDone
+
+	// The runner must have been called at least minRuns times before
+	// the ctx cancel landed — proving it kept retrying past the first
+	// failure rather than exiting on the zero-budget.
+	if got := atomic.LoadInt32(&runs); got < minRuns {
+		t.Errorf("ClassCritical MaxRetries=0: want >= %d runs before ctx cancel, got %d", minRuns, got)
 	}
 }

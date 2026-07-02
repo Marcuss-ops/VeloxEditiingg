@@ -40,7 +40,7 @@ import (
 	"time"
 )
 
-// RECOVERY_DEFAULT_TTL is the default expires_at - now() interval
+// recoveryDefaultTTL is the default expires_at - now() interval
 // applied by RegisterRecoveryUploadSession when the caller leaves
 // RecoveryUploadSession.ExpiresAtTTL at zero. The 24h constant is
 // tuned against the recovery CLI's worst-case Coordinator-pause
@@ -56,7 +56,7 @@ import (
 // pipeline's downstream CompleteUpload CAS. Setting a 24h default
 // gives every well-formed recovery enough wall-clock budget to
 // reach the CAS.
-const RECOVERY_DEFAULT_TTL = 24 * time.Hour
+const recoveryDefaultTTL = 24 * time.Hour
 
 // RecoveryUploadSession is the input to RegisterRecoveryUploadSession.
 // The caller computes UploadID and ArtifactID deterministically from a
@@ -94,13 +94,13 @@ type RecoveryUploadSession struct {
 	// reconciler's EXPIRE rule (migration 030's
 	// idx_artifact_uploads_expiry feeds "staging session troppo
 	// vecchio -> EXPIRED"). Leave zero and the helper applies
-	// RECOVERY_DEFAULT_TTL (24h); if the caller needs a TTL other
+	// recoveryDefaultTTL (24h); if the caller needs a TTL other
 	// than 24h, they MUST set the field to a duration strictly
 	// greater than the wall-clock interval between
 	// RegisterRecoveryUploadSession returning and
 	// CompleteUpload's CAS landing. There is no DEFAULT value of
 	// `ExpiresAtTTL` that means "expire immediately" (the helper
-	// applies 24h only for zero/negative values — tiny positive
+	// applies 24h only for zero/negative values; tiny positive
 	// values like 1*time.Nanosecond are NOT clamped and would
 	// produce near-immediate expiry) — that semantic was the bug
 	// this fix removes (a previous version set expires_at =
@@ -176,7 +176,7 @@ type RecoveryUploadSession struct {
 // duration STRICTLY greater than the wall-clock interval between
 // RegisterRecoveryUploadSession returning and CompleteUpload's CAS
 // landing. Zero/negative values are tolerated by the helper (it
-// applies RECOVERY_DEFAULT_TTL, 24h), but production callers with
+// applies recoveryDefaultTTL, 24h), but production callers with
 // a tighter budget than 24h MUST override. The helper does NOT
 // verify this bound — a future PR could add a `ttl > 0` precondition
 // for callers that opt in via RecoveryUploadSession, but doing so
@@ -208,7 +208,7 @@ func RegisterRecoveryUploadSession(ctx context.Context, db *sql.DB, s RecoveryUp
 	// Time computation: capture now() once and derive both created_at
 	// and expires_at from it so the two stamps are guaranteed to
 	// share the same UTC second. expires_at = now + ExpiresAtTTL
-	// (or RECOVERY_DEFAULT_TTL when ExpiresAtTTL is left at zero);
+	// (or recoveryDefaultTTL when ExpiresAtTTL is left at zero);
 	// a historical version of this helper set expires_at = created_at
 	// = now, which the reconciler's "staging session troppo vecchio
 	// -> EXPIRED" rule (migration 030) would EXPIRE on the very next
@@ -219,7 +219,7 @@ func RegisterRecoveryUploadSession(ctx context.Context, db *sql.DB, s RecoveryUp
 	createdAt := now.Format(time.RFC3339Nano)
 	ttl := s.ExpiresAtTTL
 	if ttl <= 0 {
-		ttl = RECOVERY_DEFAULT_TTL
+		ttl = recoveryDefaultTTL
 	}
 	expiresAt := now.Add(ttl).Format(time.RFC3339Nano)
 

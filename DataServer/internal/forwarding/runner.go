@@ -26,6 +26,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"sync"
@@ -279,7 +280,14 @@ func (r *CreatorForwardingRunner) Stop() {
 }
 
 // tick performs one poll: claim up to ClaimBatch claimable forwardings,
-// then process each one with bounded concurrency.
+// then process each one with bounded concurrency. Errors from the
+// inner goroutines are aggregated under a mutex and the FIRST
+// classified error is returned to Run so the existing
+// supervisor.FailureTracker machinery can route it through the
+// ClassRestartable / ClassCritical restart policy. Per-element errors
+// are persisted on the row by processLease (so a single bad forwarding
+// does not poison the consecutive-error counter); lease-lost cancels
+// the in-flight context; infrastructure errors propagate.
 func (r *CreatorForwardingRunner) tick(ctx context.Context) error {
 	if r.client == nil || !r.client.IsConfigured() {
 		return nil // remote creator not configured; no work to do
@@ -296,7 +304,11 @@ func (r *CreatorForwardingRunner) tick(ctx context.Context) error {
 	r.metrics.Claimed.Add(int64(len(leases)))
 	log.Printf("[FORWARDING] claimed %d forwardings", len(leases))
 
-	var wg sync.WaitGroup
+	var (
+		wg          sync.WaitGroup
+		errMu       sync.Mutex
+		aggregated  error
+	)
 	for _, lease := range leases {
 		wg.Add(1)
 		go func(l store.CreatorForwardingLease) {
@@ -309,19 +321,38 @@ func (r *CreatorForwardingRunner) tick(ctx context.Context) error {
 			}
 			defer func() { <-r.sem }()
 
-			r.processLease(ctx, l)
+			if leaseErr := r.processLease(ctx, l); leaseErr != nil {
+				errMu.Lock()
+				if aggregated == nil {
+					aggregated = leaseErr
+				}
+				errMu.Unlock()
+			}
 		}(lease)
 	}
 	wg.Wait()
-	return nil
+	return aggregated
 }
 
 // processLease handles a single claimed forwarding: polls the remote
 // creator, manages lease renewal, and transitions to the appropriate
-// next state. When the enqueuer is configured and the remote creator
-// completes successfully, the runner handles the full lifecycle
-// atomically: Job+Task+TaskSpec creation + FORWARDED marking in a
-// single SQLite transaction.
+// next state. Returns an error classified by supervisor.ClassifyError
+// so the tick aggregator + FailureTracker can route it through the
+// ClassRestartable / ClassCritical restart policy.
+//
+// Verdetto P0 #1 (Blocco 2): the previous void-returning variant
+// produced false-success paths — MarkCreatorForwardingFailed /
+// MarkCreatorForwardingRetry failures were only logged, while
+// metrics (Failed / Retried) were incremented BEFORE the CAS
+// actually persisted. The new contract:
+//   - metrics are incremented ONLY after the SQL CAS returns nil
+//   - non-nil CAS results return supervisor.ErrElementScoped so
+//     the tracker does not count them toward the consecutive-error
+//     threshold (they are per-row failures already represented in
+//     the row state machine)
+//   - lease-lost (procCtx cancelled by the renewal loop) returns
+//     supervisor.ErrLeaseLost so the runner does not touch the row
+//     (the new lease holder owns it)
 //
 // Lease-loss propagation: a cancellable processing context (procCtx) is
 // created for this lease. The renewal loop receives its cancel function;
@@ -330,7 +361,7 @@ func (r *CreatorForwardingRunner) tick(ctx context.Context) error {
 // in-flight operations (GetPipelineStatus, DB writes) to fail with a
 // context error. The runner then exits without touching the row — the
 // new lease holder owns it.
-func (r *CreatorForwardingRunner) processLease(ctx context.Context, lease store.CreatorForwardingLease) {
+func (r *CreatorForwardingRunner) processLease(ctx context.Context, lease store.CreatorForwardingLease) error {
 	// Create a processing context that the renewal loop can cancel
 	// if the lease is lost.
 	procCtx, procCancel := context.WithCancel(ctx)
@@ -348,11 +379,16 @@ func (r *CreatorForwardingRunner) processLease(ctx context.Context, lease store.
 		// Check if we lost the lease (procCtx was cancelled by renewal loop).
 		if procCtx.Err() != nil {
 			log.Printf("[FORWARDING] lease lost during poll forwarding=%s; abandoning", lease.ForwardingID)
-			return
+			return errors.Join(supervisor.ErrLeaseLost, err)
 		}
-		r.handleRetry(ctx, lease, "POLL_ERROR", err.Error())
-		r.metrics.Retried.Add(1)
-		return
+		// Poll error: the per-row retry path is run via handleRetry,
+		// which returns an error if the MarkCreatorForwardingRetry
+		// CAS failed. The metric increment is owned by handleRetry
+		// (post-CAS).
+		if retryErr := r.handleRetry(ctx, lease, "POLL_ERROR", err.Error()); retryErr != nil {
+			return retryErr
+		}
+		return nil
 	}
 
 	// Classify the remote status.
@@ -361,37 +397,43 @@ func (r *CreatorForwardingRunner) processLease(ctx context.Context, lease store.
 		// Remote creator completed successfully.
 		if r.enqueuer != nil {
 			// Full atomic lifecycle: build Job+TaskSpec and enqueue+forward
-			// in a single SQLite transaction.
-			r.atomicEnqueueAndForward(ctx, lease, resp.Result)
-		} else {
-			// Fallback: store payload for a separate forwarding service.
-			payloadJSON, payloadSHA256 := marshalPayload(resp.Result)
-			if payloadJSON == "" && payloadSHA256 == "" {
-				// Non-serializable payload — mark BLOCKED permanently.
-				log.Printf("[FORWARDING] payload marshal failed forwarding=%s; marking BLOCKED", lease.ForwardingID)
-				if err := r.dbStore.MarkCreatorForwardingBlocked(ctx,
-					lease.ForwardingID, r.identity, lease.LeaseID,
-					"PAYLOAD_MARSHAL_ERROR",
-					"result payload is not JSON-serializable",
-				); err != nil {
-					log.Printf("[FORWARDING] mark blocked forwarding=%s: %v", lease.ForwardingID, err)
-				}
-				r.metrics.Failed.Add(1)
-				return
-			}
-			if err := r.dbStore.MarkCreatorForwardingReadyToForward(ctx,
-				lease.ForwardingID, r.identity, lease.LeaseID,
-				payloadJSON, payloadSHA256,
-			); err != nil {
-				log.Printf("[FORWARDING] mark ready-to-forward failed forwarding=%s: %v", lease.ForwardingID, err)
-				r.handleRetry(ctx, lease, "MARK_READY_ERROR", err.Error())
-				r.metrics.Retried.Add(1)
-				return
-			}
-			log.Printf("[FORWARDING] ready-to-forward forwarding=%s source_job=%s source_provider=%s",
-				lease.ForwardingID, lease.SourceJobID, lease.SourceProvider)
-			r.metrics.Forwarded.Add(1)
+			// in a single SQLite transaction. The metrics + classification
+			// are owned by atomicEnqueueAndForward (post-CAS).
+			return r.atomicEnqueueAndForward(ctx, lease, resp.Result)
 		}
+		// Fallback: store payload for a separate forwarding service.
+		payloadJSON, payloadSHA256 := marshalPayload(resp.Result)
+		if payloadJSON == "" && payloadSHA256 == "" {
+			// Non-serializable payload — mark BLOCKED permanently.
+			if err := r.dbStore.MarkCreatorForwardingBlocked(ctx,
+				lease.ForwardingID, r.identity, lease.LeaseID,
+				"PAYLOAD_MARSHAL_ERROR",
+				"result payload is not JSON-serializable",
+			); err != nil {
+				return errors.Join(supervisor.ErrElementScoped,
+					fmt.Errorf("mark blocked: %w", err))
+			}
+			log.Printf("[FORWARDING] payload marshal failed forwarding=%s; marked BLOCKED", lease.ForwardingID)
+			r.metrics.Failed.Add(1)
+			return nil
+		}
+		if err := r.dbStore.MarkCreatorForwardingReadyToForward(ctx,
+			lease.ForwardingID, r.identity, lease.LeaseID,
+			payloadJSON, payloadSHA256,
+		); err != nil {
+			// CAS failure: persist the retry on the row (if possible)
+			// and report the element-scoped error so the tracker
+			// does not count it.
+			log.Printf("[FORWARDING] mark ready-to-forward failed forwarding=%s: %v", lease.ForwardingID, err)
+			if retryErr := r.handleRetry(ctx, lease, "MARK_READY_ERROR", err.Error()); retryErr != nil {
+				return retryErr
+			}
+			return nil
+		}
+		log.Printf("[FORWARDING] ready-to-forward forwarding=%s source_job=%s source_provider=%s",
+			lease.ForwardingID, lease.SourceJobID, lease.SourceProvider)
+		r.metrics.Forwarded.Add(1)
+		return nil
 
 	case isTerminalFailure(resp.Status):
 		// Remote creator failed.
@@ -403,25 +445,31 @@ func (r *CreatorForwardingRunner) processLease(ctx context.Context, lease store.
 			lease.ForwardingID, r.identity, lease.LeaseID,
 			"REMOTE_FAILED", errMsg,
 		); err != nil {
-			log.Printf("[FORWARDING] mark failed forwarding=%s: %v", lease.ForwardingID, err)
+			// CAS failure: keep row visible (a reaper can retry) but report
+			// the failure so the supervisor knows the state didn't transition.
+			return errors.Join(supervisor.ErrElementScoped,
+				fmt.Errorf("mark failed: %w", err))
 		}
 		log.Printf("[FORWARDING] failed forwarding=%s source_job=%s status=%s",
 			lease.ForwardingID, lease.SourceJobID, resp.Status)
 		r.metrics.Failed.Add(1)
+		return nil
 
 	default:
 		// Still running / queued — release the claim immediately so another
 		// runner (or the next tick) can pick it up. No backoff: the job is
 		// still in progress, not errored.
 		nextAttempt := time.Now().UTC() // immediate re-claim eligibility
-		r.metrics.Retried.Add(1)
 		if err := r.dbStore.MarkCreatorForwardingRetry(ctx,
 			lease.ForwardingID, r.identity, lease.LeaseID,
 			"NOT_FINISHED", fmt.Sprintf("remote status: %s", resp.Status),
 			nextAttempt,
 		); err != nil {
-			log.Printf("[FORWARDING] mark retry (still-running) failed forwarding=%s: %v", lease.ForwardingID, err)
+			return errors.Join(supervisor.ErrElementScoped,
+				fmt.Errorf("mark retry (still-running): %w", err))
 		}
+		r.metrics.Retried.Add(1)
+		return nil
 	}
 }
 
@@ -440,15 +488,17 @@ func (r *CreatorForwardingRunner) processLease(ctx context.Context, lease store.
 //     URL rewriting + atomic CAS in a single place, returning the
 //     (job_id, forwarding_id) pair the runner logs.
 //
-// On Resolve error, the runner falls back to its existing retry path
-// (handleEnqueueRetry) so retries/backoff/max-attempts semantics are
-// preserved. On success, the runner records the forwarded metric.
+// Returns an error classified by supervisor.ClassifyError. The
+// Verdetto P0 #1 contract: metrics (Forwarded) and per-row state
+// transitions are persisted only when the corresponding CAS returns
+// nil. CAS failures bubble up as supervisor.ErrElementScoped so the
+// consecutive-error counter does not include them.
 //
 // Blocco 5 of the Verdetto (P1 #11): this method is now the single
 // path the runner uses for the FORWARDING transition. The legacy
 // inline (BuildPayload + PrepareJobAndTask + AtomicForwardAndEnqueue)
 // sequence lives only inside the Resolver.
-func (r *CreatorForwardingRunner) atomicEnqueueAndForward(ctx context.Context, lease store.CreatorForwardingLease, result map[string]interface{}) {
+func (r *CreatorForwardingRunner) atomicEnqueueAndForward(ctx context.Context, lease store.CreatorForwardingLease, result map[string]interface{}) error {
 	if result == nil {
 		result = map[string]interface{}{}
 	}
@@ -457,16 +507,17 @@ func (r *CreatorForwardingRunner) atomicEnqueueAndForward(ctx context.Context, l
 	//    pre-resolver code path — non-serializable payloads BLOCK).
 	payloadJSON, payloadSHA256 := marshalPayload(result)
 	if payloadJSON == "" && payloadSHA256 == "" {
-		log.Printf("[FORWARDING] payload marshal failed forwarding=%s; marking BLOCKED", lease.ForwardingID)
 		if err := r.dbStore.MarkCreatorForwardingBlocked(ctx,
 			lease.ForwardingID, r.identity, lease.LeaseID,
 			"PAYLOAD_MARSHAL_ERROR",
 			"enqueue payload is not JSON-serializable",
 		); err != nil {
-			log.Printf("[FORWARDING] mark blocked forwarding=%s: %v", lease.ForwardingID, err)
+			return errors.Join(supervisor.ErrElementScoped,
+				fmt.Errorf("mark blocked: %w", err))
 		}
+		log.Printf("[FORWARDING] payload marshal failed forwarding=%s; marked BLOCKED", lease.ForwardingID)
 		r.metrics.Failed.Add(1)
-		return
+		return nil
 	}
 
 	// 2. POLLING → READY_TO_FORWARD. The runner has a legitimate
@@ -476,9 +527,10 @@ func (r *CreatorForwardingRunner) atomicEnqueueAndForward(ctx context.Context, l
 		payloadJSON, payloadSHA256,
 	); err != nil {
 		log.Printf("[FORWARDING] mark ready-to-forward failed forwarding=%s: %v", lease.ForwardingID, err)
-		r.handleRetry(ctx, lease, "MARK_READY_ERROR", err.Error())
-		r.metrics.Retried.Add(1)
-		return
+		if retryErr := r.handleRetry(ctx, lease, "MARK_READY_ERROR", err.Error()); retryErr != nil {
+			return retryErr
+		}
+		return nil
 	}
 
 	// 3. Delegate to the Resolver. The Resolver applies idempotency
@@ -489,7 +541,7 @@ func (r *CreatorForwardingRunner) atomicEnqueueAndForward(ctx context.Context, l
 		// atomic step. The forwarding row is already READY_TO_FORWARD;
 		// a separate forwarder can pick it up via ListReadyToForward.
 		log.Printf("[FORWARDING] resolver unavailable for forwarding=%s; row left at READY_TO_FORWARD", lease.ForwardingID)
-		return
+		return nil
 	}
 	out, err := rs.Resolve(ctx, creatorflow.ResolveRequest{
 		ForwardingID:     lease.ForwardingID,
@@ -499,20 +551,28 @@ func (r *CreatorForwardingRunner) atomicEnqueueAndForward(ctx context.Context, l
 		Payload:          result,
 	})
 	if err != nil {
+		if errors.Is(err, creatorflow.ErrResolverNotComplete) {
+			// Element-scoped: leave row at READY_TO_FORWARD for the
+			// next tick to re-run the resolve.
+			return errors.Join(supervisor.ErrElementScoped, err)
+		}
 		log.Printf("[FORWARDING] resolver.Resolve failed forwarding=%s: %v", lease.ForwardingID, err)
-		r.handleEnqueueRetry(ctx, lease, "ENQUEUE_FAILED", err.Error())
-		return
+		if retryErr := r.handleEnqueueRetry(ctx, lease, "ENQUEUE_FAILED", err.Error()); retryErr != nil {
+			return retryErr
+		}
+		return nil
 	}
 	if out == nil {
 		// Resolver returned ErrResolverNotComplete-equivalent
 		// sentinel (nil output normally paired with error, but be
 		// conservative). Leave the row in READY_TO_FORWARD so the
 		// next tick re-runs the resolve.
-		return
+		return nil
 	}
 	log.Printf("[FORWARDING] forwarded forwarding=%s → job=%s source=%s (via Resolver)",
 		lease.ForwardingID, out.JobID, lease.SourceProvider)
 	r.metrics.Forwarded.Add(1)
+	return nil
 }
 
 // handleEnqueueRetry transitions the forwarding to RETRY_WAIT with backoff
@@ -520,7 +580,11 @@ func (r *CreatorForwardingRunner) atomicEnqueueAndForward(ctx context.Context, l
 // conflict). Uses MarkCreatorForwardingEnqueueRetry which handles
 // FORWARDING/READY_TO_FORWARD states. On max attempts or CAS failure,
 // falls back to MarkCreatorForwardingFailed to prevent silent stuck rows.
-func (r *CreatorForwardingRunner) handleEnqueueRetry(ctx context.Context, lease store.CreatorForwardingLease, code, msg string) {
+//
+// Returns an error classified by supervisor.ClassifyError. The
+// Verdetto P0 #1 contract: metrics (Failed / Retried) are persisted
+// only after the underlying SQL CAS returns nil.
+func (r *CreatorForwardingRunner) handleEnqueueRetry(ctx context.Context, lease store.CreatorForwardingLease, code, msg string) error {
 	maxAttempts := r.cfg.MaxAttempts
 	if maxAttempts <= 0 {
 		maxAttempts = 12
@@ -531,12 +595,13 @@ func (r *CreatorForwardingRunner) handleEnqueueRetry(ctx context.Context, lease 
 			"MAX_ENQUEUE_ATTEMPTS",
 			fmt.Sprintf("exhausted %d attempts: %s", maxAttempts, msg),
 		); err != nil {
-			log.Printf("[FORWARDING] mark failed (max enqueue attempts) forwarding=%s: %v", lease.ForwardingID, err)
+			return errors.Join(supervisor.ErrElementScoped,
+				fmt.Errorf("mark failed (max enqueue attempts): %w", err))
 		}
 		log.Printf("[FORWARDING] max enqueue attempts exhausted forwarding=%s source_job=%s attempts=%d",
 			lease.ForwardingID, lease.SourceJobID, lease.AttemptCount)
 		r.metrics.Failed.Add(1)
-		return
+		return nil
 	}
 
 	backoff := r.cfg.backoffForAttempt(lease.AttemptCount)
@@ -556,18 +621,25 @@ func (r *CreatorForwardingRunner) handleEnqueueRetry(ctx context.Context, lease 
 			"ENQUEUE_RETRY_CAS_FAILED",
 			fmt.Sprintf("CAS failure on enqueue retry: %v", err),
 		); ferr != nil {
-			log.Printf("[FORWARDING] mark failed (CAS fallback) forwarding=%s: %v", lease.ForwardingID, ferr)
+			return errors.Join(supervisor.ErrElementScoped,
+				fmt.Errorf("mark failed (CAS fallback): %w (orig=%v)", ferr, err))
 		}
 		r.metrics.Failed.Add(1)
-		return
+		return nil
 	}
 	r.metrics.Retried.Add(1)
+	return nil
 }
 
 // handleRetry transitions the forwarding to RETRY_WAIT with the
 // backoff schedule applied. If max attempts are exhausted, the
 // forwarding is marked FAILED instead.
-func (r *CreatorForwardingRunner) handleRetry(ctx context.Context, lease store.CreatorForwardingLease, code, msg string) {
+//
+// Returns an error classified by supervisor.ClassifyError. The
+// Verdetto P0 #1 contract: metrics (Failed / Retried) are persisted
+// only after the underlying SQL CAS returns nil. The caller no
+// longer adds the Retried metric — handleRetry owns it.
+func (r *CreatorForwardingRunner) handleRetry(ctx context.Context, lease store.CreatorForwardingLease, code, msg string) error {
 	maxAttempts := r.cfg.MaxAttempts
 	if maxAttempts <= 0 {
 		maxAttempts = 12
@@ -578,12 +650,13 @@ func (r *CreatorForwardingRunner) handleRetry(ctx context.Context, lease store.C
 			"MAX_ATTEMPTS",
 			fmt.Sprintf("exhausted %d attempts: %s", maxAttempts, msg),
 		); err != nil {
-			log.Printf("[FORWARDING] mark failed (max attempts) forwarding=%s: %v", lease.ForwardingID, err)
+			return errors.Join(supervisor.ErrElementScoped,
+				fmt.Errorf("mark failed (max attempts): %w", err))
 		}
 		log.Printf("[FORWARDING] max attempts exhausted forwarding=%s source_job=%s attempts=%d",
 			lease.ForwardingID, lease.SourceJobID, lease.AttemptCount)
 		r.metrics.Failed.Add(1)
-		return
+		return nil
 	}
 
 	backoff := r.cfg.backoffForAttempt(lease.AttemptCount)
@@ -592,8 +665,11 @@ func (r *CreatorForwardingRunner) handleRetry(ctx context.Context, lease store.C
 		lease.ForwardingID, r.identity, lease.LeaseID,
 		code, msg, nextAttempt,
 	); err != nil {
-		log.Printf("[FORWARDING] mark retry failed forwarding=%s: %v", lease.ForwardingID, err)
+		return errors.Join(supervisor.ErrElementScoped,
+			fmt.Errorf("mark retry: %w", err))
 	}
+	r.metrics.Retried.Add(1)
+	return nil
 }
 
 // renewLeaseLoop extends the lease periodically while processLease is

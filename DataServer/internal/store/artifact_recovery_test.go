@@ -105,6 +105,13 @@ func TestRegisterRecoveryUploadSession_Idempotency(t *testing.T) {
 	assertRFC3339Nano(t, first.CreatedAt, "artifacts.created_at after first insert")
 	assertRFC3339Nano(t, firstUpload.CreatedAt, "artifact_uploads.created_at after first insert")
 
+	// Regression lock for the expires_at = created_at bug: the helper
+	// must stamp expires_at strictly AFTER created_at, otherwise
+	// migration 030's reconciler EXPIRES the row on the very next
+	// pass. See artifact_recovery.go's `expires_at contract`
+	// docstring for the full failure-mode description.
+	assertExpiresAtAfterCreatedAt(t, firstUpload, "after first call (regression lock for expires_at = created_at bug)")
+
 	// ── 2. Second call with the SAME PKs: must succeed AND must NOT duplicate ──
 	if err := RegisterRecoveryUploadSession(ctx, db, sess); err != nil {
 		t.Fatalf("second RegisterRecoveryUploadSession: %v (expected idempotent success, not error)", err)
@@ -124,6 +131,16 @@ func TestRegisterRecoveryUploadSession_Idempotency(t *testing.T) {
 	if firstUpload != secondUpload {
 		t.Errorf("artifact_uploads row drift across idempotent re-insert:\n  first:  %+v\n  second: %+v", firstUpload, secondUpload)
 	}
+
+	// Belt-and-suspenders: after the idempotent re-insert the TTL
+	// contract must still hold. Since the second INSERT OR IGNORE
+	// doesn't mutate any column, this is a structural check that
+	// `firstUpload.ExpiresAt` and `secondUpload.ExpiresAt` are both
+	// strictly AFTER their respective `CreatedAt` (they share the
+	// same `CreatedAt` and `ExpiresAt` strings after the no-op
+	// re-insert, so this would only fail if the helper's TTL
+	// computation changed under a same-PK re-insert).
+	assertExpiresAtAfterCreatedAt(t, secondUpload, "after second call (idempotency preserved expires_at > created_at)")
 
 	// ── 3. Distinct PKs: a different (upload_id, artifact_id) pair MUST insert fresh rows ──
 	//
@@ -216,15 +233,23 @@ type artifactUploadRow struct {
 	ExpectedSHA256    string
 	ExpectedSizeBytes int64
 	CreatedAt         string
+	// ExpiresAt is captured here so the regression-locking
+	// assertion below (assertExpiresAtAfterCreatedAt) can verify
+	// the helper's TTL contract end-to-end. Migration 030's
+	// idx_artifact_uploads_expiry feeds the reconciler rule
+	// "staging session troppo vecchio -> EXPIRED", so a flat
+	// expires_at == created_at would EXPIRE the row on the very
+	// next reconciler pass — the exact bug this fix removes.
+	ExpiresAt string
 }
 
 func snapshotArtifactUpload(t *testing.T, db *sql.DB, uploadID string) artifactUploadRow {
 	t.Helper()
 	var r artifactUploadRow
 	err := db.QueryRow(`
-		SELECT status, temporary_storage_key, expected_sha256, expected_size_bytes, created_at
+		SELECT status, temporary_storage_key, expected_sha256, expected_size_bytes, created_at, expires_at
 		FROM artifact_uploads WHERE upload_id = ?`, uploadID).Scan(
-		&r.Status, &r.StorageKey, &r.ExpectedSHA256, &r.ExpectedSizeBytes, &r.CreatedAt,
+		&r.Status, &r.StorageKey, &r.ExpectedSHA256, &r.ExpectedSizeBytes, &r.CreatedAt, &r.ExpiresAt,
 	)
 	if err != nil {
 		t.Fatalf("snapshot artifact_uploads(upload_id=%q): %v", uploadID, err)
@@ -275,6 +300,38 @@ func assertRFC3339Nano(t *testing.T, raw, msg string) {
 	}
 	if _, err := time.Parse(time.RFC3339Nano, raw); err != nil {
 		t.Errorf("%s: timestamp %q does not parse as RFC3339Nano: %v", msg, raw, err)
+	}
+}
+
+// assertExpiresAtAfterCreatedAt is the regression lock for the
+// expires_at = created_at bug that motivated the helper's TTL field
+// (RecoveryUploadSession.ExpiresAtTTL). The helper must stamp
+// expires_at STRICTLY AFTER created_at; otherwise migration 030's
+// idx_artifact_uploads_expiry-backed reconciler rule "staging
+// session troppo vecchio -> EXPIRED" would fire on the very next
+// pass, killing the recovery session before CompleteUpload's CAS
+// could advance it. This assertion parses both RFC3339Nano strings
+// back to time.Time and fails the test if expires_at <= created_at,
+// with the actual delta in the error message so a future regression
+// surface area is debuggable in seconds. A future regression that
+// flattens the two columns back to equal (e.g. accidentally passing
+// a zero TTL to time.Time.Add) would surface as a failing test
+// immediately.
+func assertExpiresAtAfterCreatedAt(t *testing.T, r artifactUploadRow, msg string) {
+	t.Helper()
+	if r.CreatedAt == "" || r.ExpiresAt == "" {
+		t.Fatalf("%s: created_at and expires_at both must be non-empty (got created_at=%q expires_at=%q)", msg, r.CreatedAt, r.ExpiresAt)
+	}
+	created, err := time.Parse(time.RFC3339Nano, r.CreatedAt)
+	if err != nil {
+		t.Fatalf("%s: parse created_at=%q: %v", msg, r.CreatedAt, err)
+	}
+	expires, err := time.Parse(time.RFC3339Nano, r.ExpiresAt)
+	if err != nil {
+		t.Fatalf("%s: parse expires_at=%q: %v", msg, r.ExpiresAt, err)
+	}
+	if !expires.After(created) {
+		t.Errorf("%s: expires_at=%s must be STRICTLY AFTER created_at=%s (delta=%s); this is a regression of the helper's TTL contract — see artifact_recovery.go's `expires_at contract` docstring for the failure mode", msg, expires.Format(time.RFC3339Nano), created.Format(time.RFC3339Nano), expires.Sub(created))
 	}
 }
 

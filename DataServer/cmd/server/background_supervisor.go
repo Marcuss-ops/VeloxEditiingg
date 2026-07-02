@@ -7,6 +7,8 @@ import (
 	"sort"
 	"sync"
 	"time"
+
+	"velox-server/internal/supervisor"
 )
 
 // ── Runner taxonomy ────────────────────────────────────────────────────────
@@ -265,6 +267,50 @@ func effectiveMaxRetries(c RunnerClass, n int) int {
 	}
 }
 
+// shouldExitAfterFailure is the single source of truth for the
+// Verdetto P0 #4 exit-after-failure rule. Given a runner of class c
+// configured with maxRetries (the RAW Policy.MaxRetries value, NOT
+// the effective budget from effectiveMaxRetries) and the current
+// 1-based attempt count, it reports whether the runLoop should exit
+// (stop retrying) after the current failed attempt.
+//
+// Rule matrix:
+//
+//	ClassOneShot,   maxRetries=*    → true  (fire-and-forget, no retry)
+//	ClassRestartable, maxRetries=0  → true  (bounded=0 → exit on first error)
+//	ClassRestartable, maxRetries>0  → attempt > maxRetries
+//	ClassCritical,   maxRetries<=0  → false (0 or negative = infinite; only
+//	                                    ctx cancellation exits the loop)
+//	ClassCritical,   maxRetries>0  → attempt > maxRetries
+//	unknown class                    → true  (defensive: don't loop forever)
+//
+// Why this replaces the old `if maxR > 0 && attempt > maxR` check:
+// the old guard short-circuited on maxR==0, so a ClassRestartable
+// runner with MaxRetries=0 never exhausted — it fell through to the
+// backoff/sleep path and looped forever, which is the opposite of
+// the intended "zero retries = exit on first error" semantic. The
+// single-function centralization makes the zero-case explicit and
+// testable in isolation, and aligns ClassCritical with the
+// conventional infinite-retry sentinel (maxRetries <= 0).
+func shouldExitAfterFailure(c RunnerClass, maxRetries int, attempt int) bool {
+	switch c {
+	case ClassOneShot:
+		return true
+	case ClassRestartable:
+		if maxRetries <= 0 {
+			return true
+		}
+		return attempt > maxRetries
+	case ClassCritical:
+		if maxRetries <= 0 {
+			return false // 0 or negative = infinite; ctx cancellation is the only exit
+		}
+		return attempt > maxRetries
+	default:
+		return true // unknown class: don't loop forever
+	}
+}
+
 // Run starts every registered runner in its own goroutine and blocks
 // until ALL runners have exited.
 //
@@ -337,16 +383,25 @@ func (s *BackgroundSupervisor) runLoop(
 	r SupervisedRunner,
 	supCancel context.CancelFunc,
 ) {
-	maxR := effectiveMaxRetries(r.Class, r.Policy.MaxRetries)
 	attempt := 0
+	// maxR is the EFFECTIVE retry budget (raw MaxRetries mapped through
+	// effectiveMaxRetries: 0 for OneShot, n for Restartable, -1 for
+	// ClassCritical-with-0). It's used in the log lines that communicate
+	// the retry ceiling to operators — the "retry N/ceiling" format
+	// needs the effective budget so ClassCritical/MaxRetries=0 reads
+	// as "retry 1/inf" (infinite) rather than "retry 1/0" (which would
+	// misleadingly suggest the runner has no retries left). The exit
+	// decision itself goes through shouldExitAfterFailure which takes
+	// the raw Policy.MaxRetries.
+	maxR := effectiveMaxRetries(r.Class, r.Policy.MaxRetries)
 	for {
 		// Transition to RUNNING before each invocation.
 		s.mu.Lock()
 		s.states[r.Name] = RunnerRunning
 		s.mu.Unlock()
 
-		log.Printf("[SUPERVISOR] starting runner: name=%s class=%s attempt=%d/%d",
-			r.Name, r.Class.String(), attempt+1, maxR)
+		log.Printf("[SUPERVISOR] starting runner: name=%s class=%s attempt=%d/%s",
+			r.Name, r.Class.String(), attempt+1, retryCeilingString(maxR))
 		err := safeCall(ctx, r.Run, r.Policy.RestartOnPanic, r.Name)
 
 		// Graceful shutdown path: parent ctx cancelled mid-run.
@@ -355,7 +410,28 @@ func (s *BackgroundSupervisor) runLoop(
 			return
 		}
 
-		// Clean exit — Run returned nil regardless of Class.
+		// Verdetto P0 #3 (Blocco 2): nil err with a LIVE ctx is a
+		// false-success path for permanent runners. A ClassOneShot
+		// runner may legitimately return nil (fire-and-forget); for
+		// ClassRestartable + ClassCritical we MUST treat a nil
+		// return as an unexpected exit and feed it into the
+		// restart machinery. Without this guard, a permanent runner
+		// that silently dies (e.g. the loop body's last iteration
+		// returns nil while the context is still live) would be
+		// marked STOPPED and never restarted, leaving the master
+		// serving with a dead delivery / forwarding / outbox
+		// pipeline. Verdetto: 'un ritorno nil mentre il contesto è
+		// ancora attivo non è una conclusione corretta: è una
+		// morte inaspettata'.
+		if err == nil && r.Class != ClassOneShot {
+			err = supervisor.ErrUnexpectedExit
+			log.Printf("[SUPERVISOR] runner %s returned nil err with live ctx (class=%s); treating as supervisor.ErrUnexpectedExit",
+				r.Name, r.Class.String())
+		}
+
+		// Clean exit — Run returned nil (only possible for
+		// ClassOneShot at this point, since other classes were
+		// re-mapped to ErrUnexpectedExit above).
 		if err == nil {
 			s.mu.Lock()
 			s.states[r.Name] = RunnerStopped
@@ -378,28 +454,43 @@ func (s *BackgroundSupervisor) runLoop(
 			return
 
 		case ClassRestartable:
-			if maxR > 0 && attempt > maxR {
+			// Verdetto P0 #4 (Blocco 1.1): shouldExitAfterFailure
+			// replaces the old `if maxR > 0 && attempt > maxR`
+			// guard, which short-circuited on maxR==0 and caused
+			// ClassRestartable with MaxRetries=0 to loop forever
+			// instead of exiting on the first error. The new
+			// function centralizes the rule: MaxRetries=0 → exit
+			// on first error; MaxRetries>0 → exit when attempt
+			// exceeds the budget.
+			if shouldExitAfterFailure(r.Class, r.Policy.MaxRetries, attempt) {
 				log.Printf("[SUPERVISOR] runner %s restartable budget EXHAUSTED after %d attempts; removing from supervisor: class=%s last_err=%v",
-					r.Name, maxR, r.Class.String(), err)
+					r.Name, r.Policy.MaxRetries, r.Class.String(), err)
 				return
 			}
 			s.mu.Lock()
 			s.states[r.Name] = RunnerBackingOff
 			s.mu.Unlock()
 			delay := r.Policy.backoffFor(attempt)
-			log.Printf("[SUPERVISOR] runner %s FAILED (restartable); sleeping %s before retry %d/%d: err=%v",
-				r.Name, delay, attempt+1, maxR, err)
+			log.Printf("[SUPERVISOR] runner %s FAILED (restartable); sleeping %s before retry %d/%s: err=%v",
+				r.Name, delay, attempt+1, retryCeilingString(maxR), err)
 			if !sleepCtx(ctx, delay) {
 				log.Printf("[SUPERVISOR] runner %s restartable: ctx cancelled during backoff", r.Name)
 				return
 			}
 
 		case ClassCritical:
-			if maxR > 0 && attempt > maxR {
+			// Verdetto P0 #4 (Blocco 1.1): shouldExitAfterFailure
+			// centralizes the ClassCritical exit rule. For
+			// MaxRetries=0 the function returns false (infinite
+			// retries — only ctx cancellation exits the loop),
+			// so the old `maxR > 0` short-circuit is no longer
+			// needed: for ClassCritical, shouldExit is only
+			// true when MaxRetries>0 AND attempt exceeds it.
+			if shouldExitAfterFailure(r.Class, r.Policy.MaxRetries, attempt) {
 				log.Printf("[SUPERVISOR] runner %s CRITICAL budget EXHAUSTED after %d attempts; cancelling supervisor: class=%s last_err=%v",
-					r.Name, maxR, r.Class.String(), err)
+					r.Name, r.Policy.MaxRetries, r.Class.String(), err)
 				fatalMu.Lock()
-				*fatalErr = fmt.Errorf("supervisor: critical runner %q exhausted %d retries: %w", r.Name, maxR, err)
+				*fatalErr = fmt.Errorf("supervisor: critical runner %q exhausted %d retries: %w", r.Name, r.Policy.MaxRetries, err)
 				fatalMu.Unlock()
 				supCancel()
 				return

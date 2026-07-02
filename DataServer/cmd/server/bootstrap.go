@@ -324,7 +324,18 @@ func runServer(cfg *config.Config) error {
 	}()
 
 	// 5. gRPC server.
-	var grpcSrv grpcServer
+	//
+	// Verdetto P0 #5 (Blocco 2): grpcStarted is set to true ONLY
+	// when StartGRPCServer returns nil and the server is actually
+	// listening. The transport probe (step 6) captures this flag
+	// so a misconfigured gRPC plane (cert error, port in use,
+	// auth failure) shows up in /ready as a missing-transport
+	// failure rather than silently serving the HTTP API with a
+	// dead gRPC transport.
+	var (
+		grpcSrv     grpcServer
+		grpcStarted bool
+	)
 	if cfg.Server.GRPCPort > 0 {
 		// PR-REMOVE-LIFECYCLE: j.Repository is the canonical jobs
 		// surface; the old `j.Lifecycle.Jobs()` indirection layer is gone.
@@ -335,16 +346,27 @@ func runServer(cfg *config.Config) error {
 			// outside the dev release channel. Production / staging MUST
 			// use the TLS cert+key+CA triple. See docs/SECURITY_RUNBOOK.md
 			// §5.1 for the release-channel rationale.
+			//
+			// Verdetto P0 #5 (Blocco 2): replaced log.Fatalf with
+			// `return fmt.Errorf` so the misconfiguration surfaces
+			// as a non-zero runServer exit (fail-loud to k8s)
+			// rather than a bare log-and-die that bypasses any
+			// upstream error pipeline.
 			if insecureDev && cfg.Runtime.ReleaseChannel != "dev" {
-				log.Fatalf("[FAIL] PR-5 P0 guard: VELOX_GRPC_ALLOW_INSECURE_DEV=true on release channel =%q. Production / staging MUST use the TLS cert+key+CA triple. Set VELOX_RELEASE_CHANNEL=dev to confirm dev intent, or supply VELOX_GRPC_TLS_{CERT,KEY,CA}_FILE and unset VELOX_GRPC_ALLOW_INSECURE_DEV.",
+				return fmt.Errorf("[FAIL] PR-5 P0 guard: VELOX_GRPC_ALLOW_INSECURE_DEV=true on release channel =%q. Production / staging MUST use the TLS cert+key+CA triple. Set VELOX_RELEASE_CHANNEL=dev to confirm dev intent, or supply VELOX_GRPC_TLS_{CERT,KEY,CA}_FILE and unset VELOX_GRPC_ALLOW_INSECURE_DEV",
 					cfg.Runtime.ReleaseChannel)
 			}
 			// RW-PROD-001 A5: an operator opt-in for hard-Reject of plaintext
 			// gRPC even outside the PR-5 release-channel gate. Runs AFTER the
 			// PR-5 guard so an operator who set both gets the most specific
 			// fatal (the release-channel one, which mentions channel name).
+			//
+			// Verdetto P0 #5 (Blocco 2): replaced log.Fatal with
+			// `return fmt.Errorf` so the failure is composable
+			// (testable, propagates to runServer's main select,
+			// surfaces as a k8s fail-loud exit).
 			if err := enforceGRPCRequireTLS(cfg); err != nil {
-				log.Fatal(err) // M2: helper now returns error (testable); caller hard-fail-loud.
+				return fmt.Errorf("gRPC require-TLS guard: %w", err)
 			}
 			if err := grpcserver.ValidateWorkerAllowlist(cfg.Workers.AllowedWorkers, insecureDev); err != nil {
 				return err
@@ -397,6 +419,14 @@ func runServer(cfg *config.Config) error {
 		}
 		if gs != nil {
 			grpcSrv = &grpcServerWrapper{Server: gs, Listener: lis}
+			// Verdetto P0 #5 (Blocco 2): grpcStarted = true ONLY
+			// after StartGRPCServer returns nil. The transport
+			// probe closure (step 6) captures this so a
+			// GRPCPort>0 + grpcStarted=false state fails /ready
+			// with a "transport: gRPC server failed to start"
+			// message instead of the previous "always nil" stub
+			// that masked gRPC misconfigurations.
+			grpcStarted = true
 		}
 	}
 	}
@@ -433,20 +463,46 @@ func runServer(cfg *config.Config) error {
 			},
 		},
 		{
-			// Transport probe: placeholder until the canonical
-			// TransportRegistry is wired into moduleDeps (Blocco 1.1
-			// followup). Returning nil here keeps the registry in
-			// the "ready" state on smoke paths; once the real
-			// registry surfaces, swap this closure for the
-			// `Len() > 0` check.
+			// Transport probe: real, fail-closed check that the
+			// gRPC server is actually listening. Verdetto P0 #5
+			// (Blocco 2) replaces the previous "always nil" stub
+			// (which masked misconfigurations like a TLS cert
+			// mismatch or a port-in-use error) with a closure
+			// that captures the real `grpcStarted` flag set at
+			// step 5. If the operator requested gRPC (GRPCPort>0)
+			// but StartGRPCServer failed, the probe surfaces
+			// the misconfiguration in /ready instead of serving
+			// the HTTP API with a dead gRPC transport.
+			//
+			// When GRPCPort=0 the probe is satisfied: the operator
+			// has explicitly opted out of the gRPC transport, so
+			// the readiness gate should not require it. The
+			// "gRPC disabled" state is observable in
+			// /health/ready.response.transport = "disabled" once
+			// the response-payload PR lands.
 			Name: "transport",
 			Check: func() error {
+				if cfg.Server.GRPCPort == 0 {
+					return nil // gRPC opt-out; no transport probe required
+				}
+				if !grpcStarted {
+					return fmt.Errorf("transport: GRPCPort=%d configured but gRPC server failed to start (see [SERVER] gRPC server failed to start log); HTTP API serving but gRPC plane is dead",
+						cfg.Server.GRPCPort)
+				}
 				return nil
 			},
 		},
 	} {
+		// Verdetto P0 #5 (Blocco 2): capability probe registration
+		// is FAIL-CLOSED. A duplicate name (or any other Register
+		// error) is a structural composition bug — failing the
+		// bootstrap is the correct outcome (k8s restarts the pod
+		// with a fresh probe list). The previous WARN-and-continue
+		// silently registered partial state, leaving /ready in
+		// an undefined state where a probe the operator expected
+		// to be checking was actually absent.
 		if regErr := capabilityRegistry.Register(probe); regErr != nil {
-			log.Printf("[BOOTSTRAP] WARN: capabilities: register %q failed: %v", probe.Name, regErr)
+			return fmt.Errorf("capability registry: register %q failed: %w", probe.Name, regErr)
 		}
 	}
 	log.Printf("[BOOTSTRAP] capabilities: registered probes=%v", capabilityRegistry.Names())
@@ -478,6 +534,23 @@ func runServer(cfg *config.Config) error {
 			}
 			return nil
 		})
+		// Verdetto P0 #5 (Blocco 2): expose the canonical
+		// CapabilityRegistry.Readyz() aggregation to the /ready
+		// HTTP handler. The closure delegates directly to
+		// Readyz() so a single failing probe (transport,
+		// coordinator, spool, future probes) flips the gate
+		// red; the previous code only logged a WARN and the
+		// operator had no way to know that, e.g., the transport
+		// probe had failed at boot. Readyz() returns nil when
+		// all probes pass and ErrCapabilityNotReady wrapped
+		// with the offending probe name when at least one
+		// fails — the existing /ready response body surfaces
+		// the error verbatim so curl /health/ready | jq .checks
+		// tells the operator which probe is failing.
+		m.Health.AddReadinessCheck("capability_registry", func() error {
+			return capabilityRegistry.Readyz()
+		})
+
 		// RW-PROD-004 §3 A8: master-side readiness gate for the worker-side
 		// /health/ready migration. When VELOX_REQUIRE_LIVE_WORKERS=true the
 		// master refuses to mark ITSELF ready while the worker fleet is empty
@@ -581,6 +654,33 @@ func runServer(cfg *config.Config) error {
 		// caller (main) can log + exit non-zero, matching the
 		// k8s/systemd fail-loud contract.
 		return fmt.Errorf("[SERVER] supervisor reported fatal error: %w", supErr)
+	case <-supervisorDone:
+		// Verdetto P0 #5 (Blocco 2): the supervisor goroutine
+		// exited WITHOUT sending an error to supervisorErrCh
+		// and without a SIGINT/SIGTERM being observed. The
+		// only legitimate way this fires is the supervisor.Run
+		// returning nil (graceful shutdown via parent ctx
+		// cancel) which propagates to bgCancel, which then
+		// causes every supervised runner to exit cleanly. In
+		// that case the quit signal is typically received
+		// FIRST; if we reach this branch without a quit, the
+		// supervisor has terminated with a nil return under
+		// a live bgCtx — a false-success path that means a
+		// critical runner has silently died. Surface it as
+		// an error so k8s/systemd restarts the pod.
+		//
+		// Race note: in a Go select, when BOTH <-quit and
+		// <-supervisorDone are ready the runtime picks ONE at
+		// random. The normal-shutdown drain is handled by the
+		// teardown block below (which waits on supervisorDone
+		// with a 15s timeout). The spec calls for an
+		// unconditional return here so a silent death always
+		// surfaces; the only false-positive scenario is a
+		// SIGINT observed at the same scheduling tick as a
+		// clean drain, in which case main() will see the
+		// non-zero exit and the pod restarts anyway (no data
+		// loss, just one extra restart cycle).
+		return errors.New("background supervisor exited unexpectedly")
 	case <-quit:
 		log.Println("[SERVER] Shutdown signal received, shutting down gracefully...")
 	}

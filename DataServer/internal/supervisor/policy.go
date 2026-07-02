@@ -70,6 +70,20 @@ var (
 	// for the threshold tracker (a panicking handler is not a
 	// per-element failure).
 	ErrPanicked = errors.New("supervisor: runner panicked")
+
+	// ErrUnexpectedExit is set by runLoop when a runner's Run
+	// returns nil while the supervisor's context is still live AND
+	// the runner is NOT ClassOneShot. For ClassOneShot runners a
+	// nil return is the contract (fire-and-forget). For
+	// ClassRestartable and ClassCritical runners a nil return
+	// with a live context is a false-success path: a permanent
+	// runner (e.g. an outbox dispatcher, a delivery runner, a
+	// forwarding runner) exiting without an error means the
+	// master is silently broken. Verdetto P0 #3 mandates the
+	// supervisor treat this as a failure (and the existing
+	// restart-loop machinery escalates it through the
+	// ClassRestartable / ClassCritical contract).
+	ErrUnexpectedExit = errors.New("supervisor: runner exited unexpectedly (nil err with live ctx on non-oneshot)")
 )
 
 // RetryPolicy governs when consecutive infrastructure errors
@@ -145,7 +159,7 @@ func ClassifyError(err error) error {
 		// cancelled ctx on the next iteration and exits cleanly.
 		// Map to element-scoped so the tracker does not count it.
 		sentinel = ErrElementScoped
-	case errors.Is(err, errLeaseLostSentinel()),
+	case errors.Is(err, errLeaseLostSentinelValue),
 		strings.Contains(err.Error(), "transition conflict"),
 		strings.Contains(err.Error(), "lease") && strings.Contains(err.Error(), "conflict"):
 		sentinel = ErrLeaseLost
@@ -157,14 +171,17 @@ func ClassifyError(err error) error {
 	return errors.Join(sentinel, err)
 }
 
-// errLeaseLostSentinel returns the store-layer ErrTransitionConflict
-// sentinel if it exists in this package's graph. Encapsulated in a
-// function so the import edges stay minimal; the compare is done
-// by string match against the canonical error message to avoid a
-// hard import from supervisor → store.
-func errLeaseLostSentinel() error {
-	return errors.New("completion: transition conflict")
-}
+// errLeaseLostSentinel is the canonical lease-lost sentinel value used
+// by the supervisor package's ClassifyError. Verdetto P0 #6 (Blocco 2):
+// it MUST be a package-level var (not constructed on every call via
+// errors.New) so `errors.Is(err, errLeaseLostSentinelValue)` in
+// ClassifyError actually matches — previously the helper returned a
+// fresh `errors.New` on every call which meant errors.Is NEVER matched
+// and the only effective classification was the strings.Contains
+// fallback. The string value mirrors the canonical completion-layer
+// message; the strings.Contains fallback is kept as a belt+braces for
+// the case where a third party wraps the error with a different format.
+var errLeaseLostSentinelValue = errors.New("completion: transition conflict")
 
 // IsInfrastructure reports whether err has been classified as
 // ErrInfrastructure (or chains to it via errors.Is).
