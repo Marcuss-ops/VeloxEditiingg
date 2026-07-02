@@ -79,7 +79,7 @@ type JobsDeps struct {
 //
 // Compose with WithJobsDeps to add the optional cancel deps.
 func NewHandlers(cfg *config.Config, enqueuer *enqueue.Enqueuer, client *remoteengine.Client) *Handlers {
-	return &HandlersFactory(cfg, enqueuer, client, nil, nil, nil, nil)
+	return HandlersFactory(cfg, enqueuer, client, nil, nil, nil, nil)
 }
 
 // NewHandlersFull is the composition-root constructor that wires
@@ -95,7 +95,7 @@ func NewHandlersFull(
 	jobsWriter jobs.Writer,
 	cmdMgr *workers.CommandManager,
 ) *Handlers {
-	return &HandlersFactory(cfg, enqueuer, client, nil, jobsReader, jobsWriter, cmdMgr)
+	return HandlersFactory(cfg, enqueuer, client, nil, jobsReader, jobsWriter, cmdMgr)
 }
 
 // NewHandlersWithResolver is the Blocco 5 preferred composition-root
@@ -113,7 +113,7 @@ func NewHandlersWithResolver(
 	jobsWriter jobs.Writer,
 	cmdMgr *workers.CommandManager,
 ) *Handlers {
-	return &HandlersFactory(cfg, enqueuer, client, resolver, jobsReader, jobsWriter, cmdMgr)
+	return HandlersFactory(cfg, enqueuer, client, resolver, jobsReader, jobsWriter, cmdMgr)
 }
 
 // HandlersFactory is the shared construction helper for the three
