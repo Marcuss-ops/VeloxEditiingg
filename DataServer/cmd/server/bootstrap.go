@@ -20,7 +20,6 @@ import (
 	"velox-server/internal/config"
 	"velox-server/internal/creatorflow"
 	"velox-server/internal/grpcserver"
-	"velox-server/internal/creatorflow"
 	workerhandlers "velox-server/internal/handlers/remote/workers"
 	workerhandlersuploads "velox-server/internal/handlers/remote/workers/uploads"
 	"velox-server/internal/ingest"
@@ -288,6 +287,18 @@ func runServer(cfg *config.Config) error {
 	r := newRouter(cfg, bundle, m.Registry)
 	logRegisteredRoutesAtBoot(r)
 
+	// 4a. Construct the canonical capability registry. Hoisted above
+	// the gRPC wiring step (step 5) so grpcHandler.SetCapabilityRegistry
+	// at line ~373 has a non-nil registry available. The Register-probes
+	// loop + readiness-checks live at step 6; here we only DECLARE the
+	// variable so it is in scope by the time the gRPC handler is wired.
+	//
+	// Blocco 1 (P0 #2, #3, #4): the variable order is
+	//   construct -> register -> gRPC.SetCapabilityRegistry -> readiness
+	// so the registry is observable to the on-the-wire artifact.commit.v1
+	// gate BEFORE the /ready tick fires.
+	capabilityRegistry := registry.NewCapabilityRegistry()
+
 	// 4. HTTP server.
 	addr := fmt.Sprintf(":%d", cfg.Server.Port)
 	srv := &http.Server{
@@ -392,13 +403,10 @@ func runServer(cfg *config.Config) error {
 
 	// 6. Wire readiness checks.
 
-	// Blocco 1 (P0 #2, #3, #4): instantiate the CapabilityRegistry
-	// and bind coordinator + spool + transport probes. The registry
-	// is queried at runtime by any caller that gates artifact.commit.v1
-	// on a healthy master (start here: the /ready health check below;
-	// follow-up Blocco 1.1 will surface it inside the gRPC
-	// handler.CompleteUpload dispatch).
-	capabilityRegistry := registry.NewCapabilityRegistry()
+	// Blocco 1 (P0 #2, #3, #4): bind coordinator + spool + transport
+	// probes. capabilityRegistry was constructed at step 4a so the
+	// gRPC handler's SetCapabilityRegistry call has a non-nil value;
+	// here we just populate the registry.
 	for _, probe := range []registry.Probe{
 		{
 			Name: "coordinator",
@@ -447,7 +455,6 @@ func runServer(cfg *config.Config) error {
 	// `curl /health/ready | jq .capabilities` (when a future PR lifts
 	// this to a structured response). Today we just log a WARN if any
 	// probe is failing on the readiness tick.
-	_ = capabilityRegistry // referenced by the readiness check below.
 
 	if m.Health != nil {
 		m.Health.AddReadinessCheck("db-ping", func() error {
