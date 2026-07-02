@@ -21,6 +21,7 @@ import (
 	assetbridge "velox-server/internal/assets"
 	"velox-server/internal/costmodel"
 	"velox-server/internal/jobs"
+	"velox-server/internal/routing"
 	"velox-server/internal/store"
 	"velox-server/internal/taskgraph"
 	"velox-shared/contract"
@@ -138,8 +139,9 @@ func (e *Enqueuer) PrepareJobAndTask(ctx context.Context, payloadMap map[string]
 	// ID from NewJobPayloadV2 or SetIdentity. This ensures concurrent
 	// pollers, duplicate webhooks, and post-crash retries always produce
 	// the same Job ID.
-	if fwdKey := strings.TrimSpace(payload.FirstString(normalized, "_internal_forwarding_key")); fwdKey != "" {
-		jobID = DeriveForwardingJobID(fwdKey)
+	fwdMeta := routing.FromPayload(normalized)
+	if fwdMeta.ForwardingKey != "" {
+		jobID = DeriveForwardingJobID(fwdMeta.ForwardingKey.String())
 		normalized["job_id"] = jobID
 	}
 
@@ -584,17 +586,18 @@ func copyTimelinePayloadFields(out, src map[string]interface{}) {
 			out[key] = value
 		}
 	}
-	if pipelineID := strings.TrimSpace(payload.FirstString(src, "_internal_pipeline_id")); pipelineID != "" {
-		out["pipeline_id"] = pipelineID
+	meta := routing.FromPayload(src)
+	if meta.PipelineID != "" {
+		out["pipeline_id"] = meta.PipelineID.String()
 	}
 	if audioURL := strings.TrimSpace(payload.FirstString(src, "audio_url")); audioURL != "" {
 		out["audio_url"] = audioURL
 	}
-	// PR-forwarding-deterministic-id: preserve the forwarding key so
+	// PR-forwarding-deterministic-id: preserve the forwarding metadata so
 	// normalizeSceneVideoPayload carries it into the normalized payload
 	// consumed by Enqueue → DeriveForwardingJobID.
-	if fwdKey := strings.TrimSpace(payload.FirstString(src, "_internal_forwarding_key")); fwdKey != "" {
-		out["_internal_forwarding_key"] = fwdKey
+	if meta.ForwardingKey != "" {
+		out[routing.KeyForwardingKey] = meta.ForwardingKey.String()
 	}
 }
 
@@ -606,7 +609,7 @@ func syncAudioURLFromVoiceover(payloadMap map[string]interface{}) {
 	if len(voiceovers) == 0 {
 		return
 	}
-	if strings.TrimSpace(payload.FirstString(payloadMap, "audio_url")) == "" || hasClipTimelinePayload(payloadMap) || strings.TrimSpace(payload.FirstString(payloadMap, "pipeline_id", "_internal_pipeline_id")) != "" {
+	if strings.TrimSpace(payload.FirstString(payloadMap, "audio_url")) == "" || hasClipTimelinePayload(payloadMap) || strings.TrimSpace(payload.FirstString(payloadMap, "pipeline_id", routing.KeyPipelineID)) != "" {
 		payloadMap["audio_url"] = voiceovers[0]
 	}
 }
@@ -615,15 +618,14 @@ func resolveInternalExecutorID(payloadMap map[string]interface{}) string {
 	if payloadMap == nil {
 		return ""
 	}
-	executorID := strings.TrimSpace(payload.FirstString(payloadMap, "_internal_executor_id"))
-	if executorID == "" {
+	meta := routing.FromPayload(payloadMap)
+	if meta.Executor.ID == "" {
 		return ""
 	}
-	version := payload.EnsureInt(payloadMap["_internal_executor_version"], 0)
-	if version > 0 && !strings.Contains(executorID, "@") {
-		return fmt.Sprintf("%s@%d", executorID, version)
+	if meta.Executor.Version > 0 && !strings.Contains(meta.Executor.ID, "@") {
+		return fmt.Sprintf("%s@%d", meta.Executor.ID, meta.Executor.Version)
 	}
-	return executorID
+	return meta.Executor.ID
 }
 
 func sceneVideoFingerprint(parts ...interface{}) string {

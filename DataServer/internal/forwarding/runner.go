@@ -35,6 +35,7 @@ import (
 	"velox-server/internal/costmodel"
 	"velox-server/internal/jobs/enqueue"
 	"velox-server/internal/remoteengine"
+	"velox-server/internal/routing"
 	"velox-server/internal/store"
 )
 
@@ -292,6 +293,18 @@ func (r *CreatorForwardingRunner) processLease(ctx context.Context, lease store.
 		} else {
 			// Fallback: store payload for a separate forwarding service.
 			payloadJSON, payloadSHA256 := marshalPayload(resp.Result)
+			if payloadJSON == "" && payloadSHA256 == "" {
+				// Non-serializable payload — mark BLOCKED permanently.
+				log.Printf("[FORWARDING] payload marshal failed forwarding=%s; marking BLOCKED", lease.ForwardingID)
+				if err := r.dbStore.MarkCreatorForwardingBlocked(ctx,
+					lease.ForwardingID, "PAYLOAD_MARSHAL_ERROR",
+					"result payload is not JSON-serializable",
+				); err != nil {
+					log.Printf("[FORWARDING] mark blocked forwarding=%s: %v", lease.ForwardingID, err)
+				}
+				r.metrics.Failed.Add(1)
+				return
+			}
 			if err := r.dbStore.MarkCreatorForwardingReadyToForward(ctx,
 				lease.ForwardingID, r.identity, lease.LeaseID,
 				payloadJSON, payloadSHA256,
@@ -347,13 +360,27 @@ func (r *CreatorForwardingRunner) atomicEnqueueAndForward(ctx context.Context, l
 	}
 	// Inject the forwarding key so DeriveForwardingJobID produces a
 	// deterministic job_id.
-	result["_internal_forwarding_key"] = fmt.Sprintf("%s:%s:%s",
-		lease.SourceProvider, lease.SourceJobID, lease.TargetExecutorID)
+	fwdKey := routing.FormatForwardingKey(
+		lease.SourceProvider, lease.SourceJobID, lease.TargetExecutorID,
+	)
+	result[routing.KeyForwardingKey] = fwdKey.String()
 
 	// 1. Store the payload + release the poll lease (POLLING → READY_TO_FORWARD).
 	//    The atomic enqueue will claim it back (READY_TO_FORWARD → FORWARDING)
 	//    inside the same DB transaction.
 	payloadJSON, payloadSHA256 := marshalPayload(result)
+	if payloadJSON == "" && payloadSHA256 == "" {
+		// Non-serializable payload — mark BLOCKED permanently.
+		log.Printf("[FORWARDING] payload marshal failed forwarding=%s; marking BLOCKED", lease.ForwardingID)
+		if err := r.dbStore.MarkCreatorForwardingBlocked(ctx,
+			lease.ForwardingID, "PAYLOAD_MARSHAL_ERROR",
+			"enqueue payload is not JSON-serializable",
+		); err != nil {
+			log.Printf("[FORWARDING] mark blocked forwarding=%s: %v", lease.ForwardingID, err)
+		}
+		r.metrics.Failed.Add(1)
+		return
+	}
 	if err := r.dbStore.MarkCreatorForwardingReadyToForward(ctx,
 		lease.ForwardingID, r.identity, lease.LeaseID,
 		payloadJSON, payloadSHA256,
@@ -526,13 +553,18 @@ func isTerminalFailure(status string) bool {
 	}
 }
 
+// marshalPayload serializes the result map. On JSON marshal failure,
+// returns an empty payload with a zero hash — the caller should treat
+// an empty SHA256 as a signal that the payload is not serializable.
 func marshalPayload(result map[string]interface{}) (payloadJSON, payloadSHA256 string) {
 	if result == nil {
 		return "{}", sha256Hex([]byte("{}"))
 	}
 	raw, err := json.Marshal(result)
 	if err != nil {
-		return "{}", sha256Hex([]byte("{}"))
+		// Non-serializable payload — return empty so the caller can
+		// detect and mark BLOCKED rather than silently writing {}.
+		return "", ""
 	}
 	payloadJSON = string(raw)
 	payloadSHA256 = sha256Hex(raw)

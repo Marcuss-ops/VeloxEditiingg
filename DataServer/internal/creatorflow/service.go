@@ -18,9 +18,9 @@ import (
 	"velox-server/internal/jobs"
 	"velox-server/internal/jobs/enqueue"
 	"velox-server/internal/remoteengine"
+	"velox-server/internal/routing"
 	"velox-server/internal/store"
 	"velox-server/internal/taskgraph"
-	"velox-shared/payload"
 )
 
 // Service encapsulates the optional "creator" stage so multiple endpoints can
@@ -130,7 +130,7 @@ func (s *Service) Forward(ctx context.Context, rawPayload map[string]interface{}
 		if targetExecID == "" {
 			targetExecID = "scene.composite.v1"
 		}
-		creatorResult["_internal_forwarding_key"] = "remote_engine:" + sourceJobID + ":" + targetExecID
+		creatorResult[routing.KeyForwardingKey] = routing.FormatForwardingKey("remote_engine", sourceJobID, targetExecID).String()
 
 		workerResponse, err := s.ForwardCompleted(ctx, creatorResult)
 		if err != nil {
@@ -213,9 +213,8 @@ func firstString(m map[string]interface{}, keys ...string) string {
 //  3. Build the canonical worker payload via BuildPipelinePayload.
 //  4. Resolve the public master URL and apply BuildSceneImagePayloadForMaster
 //     (URL rewriting for worker-side asset downloads). This step is a no-op
-//     when s.masterURL is empty AND s.dataDir is empty (test harness path).
-//  5. Re-inject `_internal_forwarding_key` so Enqueue can derive a
-//     deterministic job_id (PR-forwarding-deterministic-id).
+//     when s.masterURL is empty AND s.dataDir is empty (test harness path).	//  5. Carry forwarding metadata (routing.InternalRoutingMetadata) through
+	//     payload transformations so Enqueue can derive a deterministic job_id.
 //  6. Enqueue atomically via Enqueuer.Enqueue.
 //
 // Migration: legacy callers that used the now-removed free function
@@ -252,12 +251,13 @@ func (s *Service) ForwardCompleted(ctx context.Context, result map[string]interf
 		}
 	}
 
-	// PR-forwarding-deterministic-id: carry the forwarding key through
+	// PR-forwarding-deterministic-id: carry the forwarding metadata through
 	// payload transformations so Enqueue can derive a deterministic job_id.
 	// BuildPipelinePayload and BuildSceneImagePayloadForMaster each produce
 	// fresh maps that drop the original key, so we re-inject it here.
-	if fwdKey := strings.TrimSpace(payload.FirstString(result, "_internal_forwarding_key")); fwdKey != "" {
-		workerPayload["_internal_forwarding_key"] = fwdKey
+	fwdMeta := routing.FromPayload(result)
+	if fwdMeta.ForwardingKey != "" {
+		fwdMeta.InjectIntoPayload(workerPayload)
 	}
 
 	return s.enqueuer.Enqueue(ctx, workerPayload, costmodel.DefaultRequirements())

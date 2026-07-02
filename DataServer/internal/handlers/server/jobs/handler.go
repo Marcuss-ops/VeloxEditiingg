@@ -8,6 +8,7 @@ import (
 
 	"velox-server/internal/jobs/enqueue"
 	"velox-server/internal/jobs/ingress"
+	"velox-server/internal/routing"
 	"velox-shared/payload"
 )
 
@@ -125,12 +126,12 @@ func applyDefinition(payloadMap map[string]any, def ingress.Definition) {
 		return
 	}
 	if strings.TrimSpace(def.ExecutorID) != "" {
-		payloadMap["_internal_executor_id"] = strings.TrimSpace(def.ExecutorID)
+		payloadMap[routing.KeyExecutorID] = strings.TrimSpace(def.ExecutorID)
 	}
 	if def.ExecutorVersion > 0 {
-		payloadMap["_internal_executor_version"] = def.ExecutorVersion
+		payloadMap[routing.KeyExecutorVersion] = def.ExecutorVersion
 	}
 	if strings.TrimSpace(def.PipelineID) != "" {
-		payloadMap["_internal_pipeline_id"] = strings.TrimSpace(def.PipelineID)
+		payloadMap[routing.KeyPipelineID] = strings.TrimSpace(def.PipelineID)
 	}
 }

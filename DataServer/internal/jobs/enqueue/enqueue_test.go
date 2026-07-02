@@ -10,6 +10,7 @@ import (
 
 	"velox-server/internal/costmodel"
 	"velox-server/internal/jobs"
+	"velox-server/internal/routing"
 	"velox-server/internal/store"
 )
 
@@ -679,7 +680,7 @@ func TestEnqueueWithForwardingKey(t *testing.T) {
 	payload := map[string]interface{}{
 		"video_name":               "Forwarded Video",
 		"script_text":              "forwarded script",
-		"_internal_forwarding_key": "remote_engine:creator-forward-1:scene.composite.v1",
+		routing.KeyForwardingKey: "remote_engine:creator-forward-1:scene.composite.v1",
 		"scenes": []interface{}{
 			map[string]interface{}{"scene": "intro", "voiceover": "v1"},
 		},

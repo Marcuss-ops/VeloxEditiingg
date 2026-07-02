@@ -103,7 +103,7 @@ func (s *SQLiteStore) ClaimCreatorForwardings(ctx context.Context, runnerID, lea
 		if err := rows.Scan(&c.forwardingID, &c.sourceProvider, &c.sourceJobID,
 			&c.targetExecutorID, &c.attemptCount,
 			&c.payloadJSON, &c.payloadSHA256); err != nil {
-			continue
+			return nil, fmt.Errorf("ClaimCreatorForwardings: scan claimed row: %w", err)
 		}
 		claimed = append(claimed, c)
 	}
@@ -112,7 +112,9 @@ func (s *SQLiteStore) ClaimCreatorForwardings(ctx context.Context, runnerID, lea
 		return nil, fmt.Errorf("ClaimCreatorForwardings: rows iteration: %w", err)
 	}
 	if len(claimed) == 0 {
-		_ = tx.Commit()
+		if err := tx.Commit(); err != nil {
+			return nil, fmt.Errorf("ClaimCreatorForwardings: commit empty batch: %w", err)
+		}
 		return nil, nil
 	}
 
@@ -553,7 +555,7 @@ func (s *SQLiteStore) ExpiredCreatorForwardingLeases(ctx context.Context, nowRFC
 			&cf.LastErrorCode, &cf.LastErrorMessage,
 			&cf.CreatedAt, &cf.UpdatedAt, &cf.ForwardedAt,
 		); err != nil {
-			continue
+			return nil, fmt.Errorf("store: ExpiredCreatorForwardingLeases scan: %w", err)
 		}
 		result = append(result, cf)
 	}
@@ -602,7 +604,7 @@ func (s *SQLiteStore) ListReadyToForward(ctx context.Context, limit int) ([]Crea
 			&cf.LastErrorCode, &cf.LastErrorMessage,
 			&cf.CreatedAt, &cf.UpdatedAt, &cf.ForwardedAt,
 		); err != nil {
-			continue
+			return nil, fmt.Errorf("store: ListReadyToForward scan: %w", err)
 		}
 		result = append(result, cf)
 	}
