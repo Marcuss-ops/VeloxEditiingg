@@ -218,7 +218,11 @@ func TestGenerateWithImages_UsesCreatorStageWhenConfigured(t *testing.T) {
 
 	// PR15.7a: creator-via-assetService path. The Enqueuer must carry the
 	// voiceover service so the rewrite step runs inside Enqueue.
-	enqueuer := jobenqueue.NewEnqueuer(atomic, nil, voiceoverSvc)
+	// The jobRepo is REQUIRED when the creator stage is active: the
+	// Resolver's idempotency fast-path calls enqueuer.Jobs.Get to
+	// short-circuit duplicate webhooks. Without a non-nil Jobs handle,
+	// the fast path dereferences nil and the handler panics.
+	enqueuer := jobenqueue.NewEnqueuer(atomic, jobRepo, voiceoverSvc)
 
 	r := gin.New()
 	RegisterRoutes(r.Group("/api/script"), cfg, db, enqueuer)

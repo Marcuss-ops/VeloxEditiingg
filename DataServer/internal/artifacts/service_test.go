@@ -278,7 +278,12 @@ func TestBeginUpload_WrongRevision(t *testing.T) {
 func TestBeginUpload_WrongAttemptStatus(t *testing.T) {
 	env := setupTestEnv(t)
 	env.seedJob("J4", "RUNNING", testWorkerID, testLeaseID, testRevision, env.clock.Now().Add(5*time.Minute))
-	env.seedAttempt("J4", 1, "CREATING", testWorkerID, testLeaseID)
+	// cleanup/remove-job-attempts-runtime: the legacy
+	// RENDER_FINISHED gate is gone. task_attempts now uses the
+	// terminal/non-terminal contract: non-terminal = OK to upload,
+	// terminal = ErrAttemptNotRenderFinished. Seed a SUCCEEDED
+	// task_attempt to exercise the terminal branch.
+	env.seedAttempt("J4", 1, "SUCCEEDED", testWorkerID, testLeaseID)
 
 	cmd := beginUploadDefaultCmd("J4")
 	_, err := env.svc.BeginUpload(context.Background(), cmd)

@@ -40,6 +40,24 @@ import (
 	"time"
 )
 
+// RECOVERY_DEFAULT_TTL is the default expires_at - now() interval
+// applied by RegisterRecoveryUploadSession when the caller leaves
+// RecoveryUploadSession.ExpiresAtTTL at zero. The 24h constant is
+// tuned against the recovery CLI's worst-case Coordinator-pause
+// interval observed historically; a future PR can tighten this once
+// the recovery path's wall-clock budget is empirically measured.
+//
+// Rationale: migration 030's idx_artifact_uploads_expiry (status,
+// expires_at) feeds the reconciler rule "staging session troppo
+// vecchio -> EXPIRED". A previous version of this helper set
+// expires_at == created_at == now, which marked the row as stale the
+// moment real wall-clock ticked past insertion — the reconciler
+// would EXPIRE the row before the worker could drive the recovery
+// pipeline's downstream CompleteUpload CAS. Setting a 24h default
+// gives every well-formed recovery enough wall-clock budget to
+// reach the CAS.
+const RECOVERY_DEFAULT_TTL = 24 * time.Hour
+
 // RecoveryUploadSession is the input to RegisterRecoveryUploadSession.
 // The caller computes UploadID and ArtifactID deterministically from a
 // stable (commit_id) source so the INSERT OR IGNORE below absorbs
@@ -71,6 +89,23 @@ type RecoveryUploadSession struct {
 	// (master-derived; the worker's self-reported SHA-256 is NOT
 	// trusted per PR 2 spec Fase 4).
 	SHA256 string
+	// ExpiresAtTTL is the time interval from the helper's now() at
+	// which the artifact_uploads row becomes eligible for the
+	// reconciler's EXPIRE rule (migration 030's
+	// idx_artifact_uploads_expiry feeds "staging session troppo
+	// vecchio -> EXPIRED"). Leave zero and the helper applies
+	// RECOVERY_DEFAULT_TTL (24h); if the caller needs a TTL other
+	// than 24h, they MUST set the field explicitly. There is no
+	// struct-shape value that means "expire immediately" — that
+	// semantic was the bug this fix removes (a previous version
+	// set expires_at = created_at = now, which the reconciler's
+	// EXPIRE rule would fire on the very next pass, killing the
+	// recovery session before CompleteUpload's CAS could advance
+	// it). Production callers with a tighter budget than 24h MUST
+	// set the field to a duration strictly greater than the
+	// wall-clock interval between RegisterRecoveryUploadSession
+	// returning and CompleteUpload's CAS landing.
+	ExpiresAtTTL time.Duration
 }
 
 // RegisterRecoveryUploadSession atomically inserts the (artifact
@@ -89,6 +124,60 @@ type RecoveryUploadSession struct {
 // Idempotency: artifacts id PK + artifact_uploads.upload_id PK absorb
 // re-runs of the CLI on the same attempt. INSERT OR IGNORE silently
 // returns 0 affected rows on conflict.
+//
+// Silent-IGNORE contract on the artifacts insert: `INSERT OR IGNORE`
+// swallows BOTH (a) PRIMARY KEY conflicts on `artifacts.id` (intended
+// — this is the idempotent re-run case the recovery CLI relies on
+// when an admin re-invokes the same recovery CLI on the same
+// commit_id, OR when the multi-step recovery pipeline
+// (DeclareOutputs / CompleteUpload / CommitAttempt) re-stages the
+// row across steps) AND (b) UNIQUE INDEX `idx_artifacts_storage_key`
+// violations on (storage_provider, storage_key) WHERE storage_key <>
+// ” (NOT intended — would surface only on a cross-session collision
+// between two distinct artifact_ids that happen to share a local-path
+// FilePath). The helper does NOT currently distinguish between these
+// cases: both yield zero `RowsAffected` on the artifacts INSERT and
+// the helper then proceeds to INSERT 2. The recovery CLI today never
+// hits case (b) under well-formed inputs because distinct commit_ids
+// produce distinct rendered file paths on the master host (the
+// renderer writes each commit to a commit-derived subpath, so two
+// sessions can never share a (storage_provider='local', storage_key)
+// tuple unless the caller explicitly reuses a path), but the
+// helper's contract is silently inconsistent here — a future caller
+// that feeds a cross-commit recovery under a shared local-path
+// FilePath will lose the row without an error signal. Hardening
+// option (NOT implemented in this version): inspect
+// `result.RowsAffected()` on the artifacts INSERT and, when it is 0
+// AND the helper can prove (e.g. via a prior SELECT-for-existence
+// check on `artifacts.id` at call entry) that the artifact_id was
+// not previously INSERTed successfully against this `*sql.DB`, return
+// a sentinel `ErrStorageKeyConflict` so the caller can decide how to
+// react. A second equally-valid shape is to extend `RecoveryUploadSession`
+// with an `AllowStorageKeyReuse bool` opt-in flag and treat
+// RowsAffected==0 under that flag as an error path; whichever
+// surface is adopted, future callers in cross-commit flows MUST be
+// able to tell PK-absorb from storage_key-collision.
+//
+// expires_at contract — REQUIRED READING for callers: migration
+// 030's `idx_artifact_uploads_expiry ON
+// artifact_uploads(status, expires_at)` feeds the reconciler rule
+// "staging session troppo vecchio -> EXPIRED", which transitions
+// status='CREATED' rows whose expires_at has fallen behind wall-clock
+// into status='EXPIRED' on the next reconciler pass. The helper
+// therefore MUST stamp expires_at > created_at; if expires_at <=
+// created_at, EXPIRE fires before the worker drives the recovery
+// pipeline's downstream CompleteUpload CAS and the recovery row
+// vanishes silently. The TTL surface is
+// RecoveryUploadSession.ExpiresAtTTL: callers MUST set it to a
+// duration STRICTLY greater than the wall-clock interval between
+// RegisterRecoveryUploadSession returning and CompleteUpload's CAS
+// landing. Zero/negative values are tolerated by the helper (it
+// applies RECOVERY_DEFAULT_TTL, 24h), but production callers with
+// a tighter budget than 24h MUST override. The helper does NOT
+// verify this bound — a future PR could add a `ttl > 0` precondition
+// for callers that opt in via RecoveryUploadSession, but doing so
+// here would force all existing callers to set the field, which is
+// outside the scope of this fix.
 //
 // Returns nil on success; non-nil error on either INSERT failure.
 func RegisterRecoveryUploadSession(ctx context.Context, db *sql.DB, s RecoveryUploadSession) error {
@@ -111,7 +200,24 @@ func RegisterRecoveryUploadSession(ctx context.Context, db *sql.DB, s RecoveryUp
 	// readers (Upload repository + reconciler) parse with
 	// time.RFC3339Nano; aligning the helper avoids a silent round-trip
 	// regression on re-runs.
-	now := time.Now().UTC().Format(time.RFC3339Nano)
+	//
+	// Time computation: capture now() once and derive both created_at
+	// and expires_at from it so the two stamps are guaranteed to
+	// share the same UTC second. expires_at = now + ExpiresAtTTL
+	// (or RECOVERY_DEFAULT_TTL when ExpiresAtTTL is left at zero);
+	// a historical version of this helper set expires_at = created_at
+	// = now, which the reconciler's "staging session troppo vecchio
+	// -> EXPIRED" rule (migration 030) would EXPIRE on the very next
+	// pass — killing the recovery session before CompleteUpload's
+	// CAS can advance it. The TTL field on RecoveryUploadSession is
+	// the surface for tuning this.
+	now := time.Now().UTC()
+	createdAt := now.Format(time.RFC3339Nano)
+	ttl := s.ExpiresAtTTL
+	if ttl <= 0 {
+		ttl = RECOVERY_DEFAULT_TTL
+	}
+	expiresAt := now.Add(ttl).Format(time.RFC3339Nano)
 
 	// ── INSERT 1: artifacts (STAGING, local storage provider) ──
 	//
@@ -130,7 +236,7 @@ func RegisterRecoveryUploadSession(ctx context.Context, db *sql.DB, s RecoveryUp
 			id, job_id, type, storage_provider, storage_key, sha256, size_bytes,
 			status, created_at
 		) VALUES (?, ?, 'video', 'local', ?, ?, ?, 'STAGING', ?)`,
-		s.ArtifactID, s.JobID, s.FilePath, s.SHA256, s.SizeBytes, now,
+		s.ArtifactID, s.JobID, s.FilePath, s.SHA256, s.SizeBytes, createdAt,
 	); err != nil {
 		return fmt.Errorf("store: RegisterRecoveryUploadSession insert artifacts: %w", err)
 	}
@@ -145,7 +251,7 @@ func RegisterRecoveryUploadSession(ctx context.Context, db *sql.DB, s RecoveryUp
 		s.UploadID, s.ArtifactID, s.JobID,
 		s.WorkerID, s.LeaseID,
 		s.FilePath, s.SizeBytes, s.SHA256,
-		now, now,
+		createdAt, expiresAt,
 	); err != nil {
 		return fmt.Errorf("store: RegisterRecoveryUploadSession insert artifact_uploads: %w", err)
 	}

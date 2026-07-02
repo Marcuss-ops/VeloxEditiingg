@@ -79,7 +79,7 @@ func TestRegisterRecoveryUploadSession_Idempotency(t *testing.T) {
 	// arrives earlier via the Coordinator.DeclareOutputs step
 	// (formerly cmd/worker/recover_output.go step 3). The test
 	// replicates that ordering locally so the FK is satisfied.
-	seedJobsRow(t, db, sess.JobID, sess.WorkerID, sess.LeaseID)
+	seedJobsRow(t, db, sess.JobID)
 
 	// ── 1. First call: insert both rows ──
 	if err := RegisterRecoveryUploadSession(ctx, db, sess); err != nil {
@@ -150,7 +150,7 @@ func TestRegisterRecoveryUploadSession_Idempotency(t *testing.T) {
 	// rendered file path on the master host), so a divergent path
 	// here mirrors production semantics.
 	altSess.FilePath = "/tmp/rendered-alt.mp4"
-	seedJobsRow(t, db, altSess.JobID, altSess.WorkerID, altSess.LeaseID)
+	seedJobsRow(t, db, altSess.JobID)
 	if err := RegisterRecoveryUploadSession(ctx, db, altSess); err != nil {
 		t.Fatalf("third RegisterRecoveryUploadSession (distinct PKs): %v", err)
 	}
@@ -283,8 +283,20 @@ func assertRFC3339Nano(t *testing.T, raw, msg string) {
 // minimal working set the recovery CLI's Coordinator.DeclareOutputs
 // would have stamped on a real recovery session. We use a sentinel
 // status of "RUNNING" which is the recovery CLI's documented
-// pre-finalization interval.
-func seedJobsRow(t *testing.T, db *sql.DB, jobID, workerID, leaseID string) {
+// pre-finalization interval. Note that worker_id / lease_id are
+// intentionally NOT seeded here — migration
+// 048_drop_jobs_runtime_columns dropped those columns off `jobs`
+// (worker assignment and lease identity moved to the `tasks` table
+// per the task-native dispatch model). Those identities DO still
+// surface on artifact_uploads.worker_id / artifact_uploads.lease_id
+// (migration 030 keeps those columns and RegisterRecoveryUploadSession
+// populates them from sess.WorkerID / sess.LeaseID in the
+// artifact_uploads INSERT); the test sets those sess fields so that
+// the helper's input-validation gate (`if s.WorkerID == "" ||
+// s.LeaseID == ""` early-return) does not trip, but it's harmless
+// from the jobs-row perspective — that's why this helper only needs
+// jobID.
+func seedJobsRow(t *testing.T, db *sql.DB, jobID string) {
 	t.Helper()
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	if _, err := db.Exec(`
@@ -294,7 +306,4 @@ func seedJobsRow(t *testing.T, db *sql.DB, jobID, workerID, leaseID string) {
 	); err != nil {
 		t.Fatalf("seed jobs(job_id=%q): %v", jobID, err)
 	}
-	_ = workerID // PR-01: columns dropped post-migration 048; identity lives on task_attempts
-	_ = leaseID  // ditto
-	_ = db.Exec  // keep db referenced for clarity of intent
 }

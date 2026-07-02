@@ -60,27 +60,44 @@ func TestUploadCompletedVideo_CanonicalPipeline(t *testing.T) {
 	artifactSvc := artifacts.NewService(repo, finRepo, bs, db, nil)
 
 	now := time.Now().UTC().Format(time.RFC3339)
-	leaseExpiry := time.Now().UTC().Add(30 * time.Minute).Format(time.RFC3339)
 
 	jobID := "upload-e2e-1"
 	workerID := "worker-1"
 	leaseID := "lease-abc-123"
 	revision := 3
 
-	// Seed job in RUNNING state
+	// Seed job in RUNNING state.
+	// PR-01 (migration 048): assigned_to/lease_id/lease_expiry were
+	// dropped from the jobs table. Worker + lease identity now lives
+	// on task_attempts (per-attempt) — see the seedAttempt helper in
+	// service_test.go for the canonical pattern.
 	_, err = db.Exec(`
-		INSERT INTO jobs (job_id, status, assigned_to, lease_id, lease_expiry, revision, created_at, updated_at, migrated_at)
-		VALUES (?, 'RUNNING', ?, ?, ?, ?, ?, ?, ?)`,
-		jobID, workerID, leaseID, leaseExpiry, revision, now, now, now)
+		INSERT INTO jobs (job_id, status, revision, created_at, updated_at, migrated_at)
+		VALUES (?, 'RUNNING', ?, ?, ?, ?)`,
+		jobID, revision, now, now, now)
 	if err != nil {
 		t.Fatalf("seed job: %v", err)
 	}
 
-	// Seed attempt in RENDER_FINISHED state (required by BeginUpload)
+	// Seed parent task (loadAttempt JOINs task_attempts→tasks).
+	taskID := jobID + "-task"
 	_, err = db.Exec(`
-		INSERT INTO job_attempts (job_id, attempt_number, worker_id, lease_id, status, started_at, created_at)
-		VALUES (?, 1, ?, ?, 'RENDER_FINISHED', ?, ?)`,
-		jobID, workerID, leaseID, now, now)
+		INSERT INTO tasks (task_id, job_id, status, created_at, updated_at)
+		VALUES (?, ?, 'RUNNING', ?, ?)`,
+		taskID, jobID, now, now)
+	if err != nil {
+		t.Fatalf("seed task: %v", err)
+	}
+
+	// Seed task_attempt in a non-terminal state. The legacy
+	// RENDER_FINISHED gate was retired alongside job_attempts; the
+	// canonical BeginUpload gate now accepts any non-terminal attempt
+	// (terminal → ErrAttemptNotRenderFinished, see service_test.go
+	// TestBeginUpload_WrongAttemptStatus).
+	_, err = db.Exec(`
+		INSERT INTO task_attempts (id, task_id, attempt_number, worker_id, lease_id, status, started_at, created_at, updated_at)
+		VALUES (?, ?, 1, ?, ?, 'RUNNING', ?, ?, ?)`,
+		jobID+"-attempt", taskID, workerID, leaseID, now, now, now)
 	if err != nil {
 		t.Fatalf("seed attempt: %v", err)
 	}
@@ -178,15 +195,16 @@ func TestUploadCompletedVideo_CanonicalPipeline(t *testing.T) {
 		t.Fatalf("artifact sha = %s, want %s", artSHA, expectedSHAHex)
 	}
 
-	// Verify attempt is SUCCEEDED
-	var attemptStatus string
-	err = db.QueryRow(`SELECT status FROM job_attempts WHERE job_id = ?`, jobID).Scan(&attemptStatus)
-	if err != nil {
-		t.Fatalf("query attempt status: %v", err)
-	}
-	if attemptStatus != "SUCCEEDED" {
-		t.Fatalf("attempt status = %s, want SUCCEEDED", attemptStatus)
-	}
+	// task_attempts.status is NOT asserted here on purpose:
+	// the artifacts.FinalizeVerified flow marks jobs+artifacts
+	// (the canonical writer surface per PR 3.5-a), while the
+	// Completion flow (Coordinator.CommitAttempt) is the separate
+	// path that marks task_attempts via the UoW adapter's
+	// TaskAttemptRepository.MarkSucceeded. The /api/v1/video/upload-completed
+	// handler triggers the artifacts path, not Completion; asserting
+	// task_attempts here would couple the two flows incorrectly.
+	// End-to-end coverage for task_attempts marking lives in the
+	// Completion flow's integration tests.
 }
 
 func TestUploadCompletedVideo_BeginUploadRejected_MissingJob(t *testing.T) {
