@@ -188,7 +188,26 @@ func (r *DeliveryRunner) tick(ctx context.Context) error {
 // Deliver with a heartbeat goroutine that renews the lease every
 // leaseDuration/3. If the renewal fails, the deliver context is
 // cancelled to interrupt the upload.
+//
+// Phase 5.5: per-delivery retry_budget. The lease carries
+// MaxAttempts (stamped from job_deliveries.max_attempts at
+// claim time, which itself was set from
+// job_delivery_plans.retry_budget at INSERT time). The runner
+// overrides its runner-wide MaxAttempts on a per-delivery
+// basis so a destination with a tighter or looser retry
+// budget takes effect without a runner restart. A 0
+// MaxAttempts falls back to r.cfg.MaxAttempts (the historical
+// behavior).
 func (r *DeliveryRunner) processLease(ctx context.Context, lease store.DeliveryLease) error {
+	// Phase 5.5: per-delivery retry_budget override. The lease
+	// carries MaxAttempts from job_deliveries.max_attempts (set
+	// from job_delivery_plans.retry_budget at INSERT time). A 0
+	// falls back to the runner-wide default for back-compat with
+	// rows stamped before Phase 5.5.
+	maxAttempts := r.cfg.MaxAttempts
+	if lease.MaxAttempts > 0 {
+		maxAttempts = lease.MaxAttempts
+	}
 	provider, err := r.registry.Resolve(lease.Provider)
 	if err != nil {
 		// Provider not configured → permanent failure.
@@ -264,7 +283,7 @@ func (r *DeliveryRunner) processLease(ctx context.Context, lease store.DeliveryL
 
 	case ErrorClassRateLimit:
 		retryAfter := r.resolveRetryAfter(runErr)
-		if lease.AttemptNumber >= r.cfg.MaxAttempts {
+		if lease.AttemptNumber >= maxAttempts {
 			if err := r.dbStore.MarkDeliveryFailed(ctx, lease.DeliveryID, lease.RunnerID, lease.LeaseID, errCode, "max attempts reached: "+errMsg); err != nil {
 				log.Printf("[DELIVERY] mark failed for %s: %v", lease.DeliveryID, err)
 			}
@@ -281,7 +300,7 @@ func (r *DeliveryRunner) processLease(ctx context.Context, lease store.DeliveryL
 		return nil
 
 	default: // ErrorClassTransient
-		if lease.AttemptNumber >= r.cfg.MaxAttempts {
+		if lease.AttemptNumber >= maxAttempts {
 			if err := r.dbStore.MarkDeliveryFailed(ctx, lease.DeliveryID, lease.RunnerID, lease.LeaseID, errCode, "max attempts reached: "+errMsg); err != nil {
 				log.Printf("[DELIVERY] mark failed for %s: %v", lease.DeliveryID, err)
 			}

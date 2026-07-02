@@ -77,8 +77,7 @@ func (s *SQLiteStore) ClaimDeliveries(ctx context.Context, runnerID string, leas
 		     AND a.verified_at IS NOT NULL
 		   ORDER BY jd.created_at ASC
 		   LIMIT ?
-		 )
-		 RETURNING delivery_id, artifact_id, destination_id, attempt_count`,
+		 )		RETURNING delivery_id, artifact_id, destination_id, attempt_count, max_attempts`,
 		runnerID, provisionalLeaseID, leaseExpiresISO, nowISO,
 		nowISO, nowISO, batch,
 	)
@@ -89,11 +88,12 @@ func (s *SQLiteStore) ClaimDeliveries(ctx context.Context, runnerID string, leas
 	type claimedRow struct {
 		deliveryID, artifactID, destID string
 		attemptCount                   int
+		maxAttempts                   int
 	}
 	var claimed []claimedRow
 	for rows.Next() {
 		var c claimedRow
-		if err := rows.Scan(&c.deliveryID, &c.artifactID, &c.destID, &c.attemptCount); err != nil {
+		if err :=			rows.Scan(&c.deliveryID, &c.artifactID, &c.destID, &c.attemptCount, &c.maxAttempts); err != nil {
 			continue
 		}
 		claimed = append(claimed, c)
@@ -160,6 +160,13 @@ func (s *SQLiteStore) ClaimDeliveries(ctx context.Context, runnerID string, leas
 			LeaseID:       deliveryLeaseID,
 			LeaseExpires:  leaseExpires,
 			AttemptNumber: c.attemptCount,
+			// Phase 5.5: per-delivery retry_budget from
+			// job_deliveries.max_attempts (set from
+			// job_delivery_plans.retry_budget at INSERT time).
+			// The DeliveryRunner overrides its runner-wide
+			// MaxAttempts on a per-delivery basis. 0 falls
+			// back to the runner default.
+			MaxAttempts:   c.maxAttempts,
 			Provider:      provider,
 			ConfigJSON:    configJSON,
 			ArtifactID:    c.artifactID,

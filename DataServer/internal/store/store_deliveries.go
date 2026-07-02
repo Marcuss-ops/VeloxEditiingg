@@ -69,6 +69,15 @@ type DeliveryLease struct {
 	LeaseID       string
 	LeaseExpires  time.Time
 	AttemptNumber int
+	// MaxAttempts is the per-delivery retry budget stamped from
+	// job_deliveries.max_attempts (which itself comes from
+	// job_delivery_plans.retry_budget at INSERT time — see
+	// internal/completion.coordinator.insertJobDeliveriesIdempotent).
+	// The DeliveryRunner reads this at claim time and overrides
+	// its runner-wide MaxAttempts on a per-delivery basis. 0 =
+	// "use runner default" (back-compat with rows stamped before
+	// Phase 5.5).
+	MaxAttempts   int
 	Provider      string
 	ConfigJSON    string
 	ArtifactID    string

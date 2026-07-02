@@ -129,6 +129,20 @@ type Collector struct {
 	costStoragePerMin *Family // velox_cost_storage_gb_written_per_output_minute
 	costTotalPerMin   *Family // velox_cost_total_per_output_minute
 
+	// Phase 4.3 — Reconcile supervisor counters. The supervisor in
+	// internal/completion/reconcile_supervisor.go writes
+	//   velox_completion_reconcile_total{case,action}
+	// where case ∈ 11 anomaly labels (see completion.AllReconcileCases)
+	// and action ∈ {noop, transition, escalate}. Separately, every
+	// attempt whose commit_deadline_at crossed in this tick
+	// increments
+	//   velox_commit_deadline_exceeded_total
+	// (regardless of whether the dispatch path then transitioned the
+	// row to EXPIRED — the counter measures the underlying anomaly
+	// surface, not the coordinator's response).
+	reconcileTotal         *Family // velox_completion_reconcile_total{case,action}
+	commitDeadlineExceeded *Family // velox_commit_deadline_exceeded_total
+
 	// Book-keeping for diffs.
 	stateMu  sync.Mutex
 	lastSeen map[string]time.Time // worker_id → last heartbeat timestamp
@@ -278,6 +292,22 @@ func NewCollector(reg *Registry) *Collector {
 		"Total cost per output minute (€ × 1e6) by worker class",
 		costLabels)
 
+	// Phase 4.3 — reconcile supervisor counters. Cardinality
+	// discipline: 11 cases × 3 actions = 33 series (closed enum, no
+	// host-IDs or job-IDs). commit_deadline_exceeded_total has no
+	// labels at all — the supervisor's tick owns the rate; a label
+	// would force operators to aggregate on their side.
+	c.reconcileTotal = NewCounterFamily(
+		"velox_completion_reconcile_total",
+		"Reconcile supervisor dispatch counts by case × action",
+		[]string{"case", "action"},
+	)
+	c.commitDeadlineExceeded = NewCounterFamily(
+		"velox_commit_deadline_exceeded_total",
+		"Attempts whose commit_deadline_at crossed without a terminal transition",
+		[]string{},
+	)
+
 	c.lastSeen = make(map[string]time.Time)
 
 	for _, f := range c.allFamilies() {
@@ -315,6 +345,8 @@ func (c *Collector) allFamilies() []*Family {
 		c.costNetworkPerMin,
 		c.costStoragePerMin,
 		c.costTotalPerMin,
+		c.reconcileTotal,
+		c.commitDeadlineExceeded,
 	}
 }
 
@@ -565,6 +597,36 @@ func readProcessRSS() int64 {
 // to drive it from a parent goroutine.
 func (c *Collector) AverageHeartbeatAge(now time.Time) {
 	c.averageHeartbeatAge(now)
+}
+
+// IncReconcile stamps one observation on the reconcile supervisor's
+// {case, action} counter. Called from internal/completion's
+// ReconcileSupervisor after every Coordinator.ReconcileAttempt
+// dispatch (and once for every deadline-expired row that the
+// coordinator couldn't reach in this tick). The case/action
+// dimensions are exposed as strings on the metric labels.
+//
+// Compile-time guard: the *Collector satisfies
+// completion.ReconcileMetrics — wiring mistakes break loudly at
+// build time.
+func (c *Collector) IncReconcile(caseLabel, actionLabel string) {
+	if string(caseLabel) == "" || string(actionLabel) == "" {
+		// Surface malformed labels loudly (a programming error in
+		// the supervisor); an empty label would expose an invalid
+		// series and make PromQL aggregations silently wrong.
+		return
+	}
+	c.reconcileTotal.Inc([]string{string(caseLabel), string(actionLabel)}, 1)
+}
+
+// IncCommitDeadlineExceeded stamps one observation on the deadline
+// counter. Called once per attempt whose commit_deadline_at has
+// crossed without a terminal transition. Distinct from the
+// {case,action} counter because a single tick can produce multiple
+// deadline-expired rows and a single row can be observed across
+// ticks (the seenIDs dedup map is bounded by seenCap).
+func (c *Collector) IncCommitDeadlineExceeded() {
+	c.commitDeadlineExceeded.Inc([]string{}, 1)
 }
 
 // ScanAttemptWithLabels ingests a single attempt from an
