@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"velox-server/internal/placement"
 	"velox-server/internal/taskattempts"
 )
 
@@ -220,6 +221,13 @@ type Writer interface {
 
 	// Delete hard-deletes a task. Returns no error if already gone.
 	Delete(ctx context.Context, id string) error
+
+	// ListReadyCandidates returns a lightweight list of READY tasks
+	// suitable for the placement matcher. Only metadata fields
+	// (task_id, job_id, revision, priority, created_at, executor_id,
+	// executor_version) are loaded — full payloads are deferred to
+	// the subsequent ClaimTaskForWorkerAtomic call.
+	ListReadyCandidates(ctx context.Context, limit int) ([]placement.TaskCandidate, error)
 }
 
 // Repository combines Reader and Writer into a single task persistence contract.

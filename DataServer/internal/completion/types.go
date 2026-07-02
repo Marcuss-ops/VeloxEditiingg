@@ -53,13 +53,6 @@ var (
 	// — caller should never reach Coordinator with such an input.
 	ErrFenceMismatch = errors.New("completion: fence tuple mismatch")
 
-	// ErrNotImplemented signals that the requested operation is part
-	// of the public interface but the current phase does not implement
-	// it yet. Phase 2.1-2.4 ships only DeclareOutputs and
-	// RecordUploadProgress; CompleteUpload, CommitAttempt, and
-	// ReconcileAttempt are reserved for Phase 2.5-2.9.
-	ErrNotImplemented = errors.New("completion: not implemented in this phase")
-
 	// ErrAttemptCommitNotFound signals that the supplied commitID does
 	// not exist in attempt_commits. Reconciliation will get this on a
 	// stale worker re-declaring an Attempt good-for-EXPIRED; the
@@ -139,7 +132,7 @@ type RecordUploadProgressCommand struct {
 
 // CompleteUploadCommand is the worker's "bytes transferred" signal in
 // the same tx as the master-side SHA256 + artifact-uploads acceptance.
-// Reserved for Fase 2.5; this phase returns ErrNotImplemented.
+// Fase 2.5 implementation complete.
 type CompleteUploadCommand struct {
 	Fence             FenceTuple
 	UploadID          string
@@ -148,9 +141,8 @@ type CompleteUploadCommand struct {
 }
 
 // CommitResult describes what CommitAttempt/ReconcileAttempt produced.
-// Reserved for Fase 2.5: this phase always returns ErrNotImplemented
-// from those entry points. The shape is fixed now so CommitAttempt
-// tests written later can refer to a stable type.
+// Fase 2.5-4.1: implemented — returns the post-tx snapshot of
+// attempt_commits joined with tasks + jobs.
 type CommitResult struct {
 	CommitID    string
 	TaskID      string
@@ -176,14 +168,16 @@ type Coordinator interface {
 	RecordUploadProgress(ctx context.Context, cmd RecordUploadProgressCommand) error
 
 	// CompleteUpload is the worker's "bytes transferred" signal.
-	// Reserved for Fase 2.5; returns ErrNotImplemented in this phase.
+	// Fase 2.5: verifies SHA256, advances artifact status, detects
+	// deadline breaches, and bumps ready_output_count.
 	CompleteUpload(ctx context.Context, cmd CompleteUploadCommand) error
 
 	// CommitAttempt performs the canonical atomic SUCCEEDED write.
-	// Reserved for Fase 2.5; returns ErrNotImplemented in this phase.
+	// Fase 2.5: idempotent — a duplicate call on COMMITTED is a no-op.
 	CommitAttempt(ctx context.Context, commitID string) (*CommitResult, error)
 
 	// ReconcileAttempt is the supervisor's repair-forward entry point.
-	// Reserved for Fase 4.1; returns ErrNotImplemented in this phase.
+	// Fase 4.1: handles DECLARED-with-dead-worker, deadline-expired,
+	// and other repair cases.
 	ReconcileAttempt(ctx context.Context, commitID string) (*CommitResult, error)
 }

@@ -398,13 +398,6 @@ LIMIT ?`
 func (s *ReconcileSupervisor) dispatch(ctx context.Context, c ReconcileCandidate) {
 	res, err := s.Coord.ReconcileAttempt(ctx, c.CommitID)
 	if err != nil {
-		// Distinguish ErrNotImplemented (the legacy path) from
-		// a real reconcile error. ErrNotImplemented is treated
-		// as a noop (the coordinator is mid-cutover).
-		if isReconcileNotImplemented(err) {
-			s.Metrics.IncReconcile(string(c.Case), string(ActionNoop))
-			return
-		}
 		// TransitionConflict means a concurrent writer raced us
 		// ahead — treat as noop (the desired terminal state was
 		// achieved, just not by us).
@@ -436,16 +429,9 @@ func (s *ReconcileSupervisor) gcSeen() {
 	}
 }
 
-// isReconcileNotImplemented / isReconcileConflict use substring
-// matching to avoid an import cycle on the sentinel errors
-// defined in types.go. The wording is part of the wire contract.
-func isReconcileNotImplemented(err error) bool {
-	if err == nil {
-		return false
-	}
-	return strings.Contains(err.Error(), "not implemented")
-}
-
+// isReconcileConflict uses substring matching to avoid an import
+// cycle on the sentinel errors defined in types.go. The wording
+// is part of the wire contract.
 func isReconcileConflict(err error) bool {
 	if err == nil {
 		return false
