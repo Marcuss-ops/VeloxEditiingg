@@ -9,7 +9,11 @@
 // expected failure mode is a sentinel.
 package executor
 
-import "errors"
+import (
+	"errors"
+
+	"velox-shared/taskcontract"
+)
 
 // Sentinel errors returned by Registry and friends. Match with errors.Is.
 var (
@@ -23,8 +27,19 @@ var (
 	// BEFORE the worker hello is published.
 	ErrExecutorExists = errors.New("executor: already registered")
 
-	// ErrInvalidDescriptor: a Descriptor failed its invariants (empty or
+	// ErrInvalidDescriptor: a Descriptor failed its invariants — empty or
 	// malformed ID, version <= 0, unknown ResourceClass or TemporalMode,
-	// "@" in ID). Wrapped with %w so callers can match the sentinel.
-	ErrInvalidDescriptor = errors.New("executor: invalid descriptor")
+	// "@" in ID — OR a TaskSpec failed its struct invariants (job_id or
+	// executor_id missing, version <= 0, nil spec). The TaskSpec.Validate
+	// method in the shared velox-shared/taskcontract package wraps each
+	// violation with taskcontract.ErrInvalidSpec via fmt.Errorf("%w: ...").
+	//
+	// This sentinel is an ALIAS of taskcontract.ErrInvalidSpec (same Go
+	// value, same pointer) so errors.Is semantics round-trip across the
+	// shared-contract → executor-package boundary. Mirrors the existing
+	// `type TaskSpec = taskcontract.TaskSpec` alias convention in
+	// executor/types.go: canonical source lives in shared; executor-side
+	// name preserved for backwards compatibility with legacy call sites
+	// and registry_test.go's pre-cutover assertions.
+	ErrInvalidDescriptor = taskcontract.ErrInvalidSpec
 )
