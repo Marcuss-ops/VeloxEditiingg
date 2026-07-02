@@ -1,9 +1,36 @@
-ci(tests): add pre-existing test watchlist gate
+ci(tests): pre-existing test watchlist gate (promoted to must-pass)
 
-New workflow at .github/workflows/pre-existing-test-watchlist.yml
-is a dedicated targeted CI gate (not extending ci.yml) that runs
-exactly the 4 tests the user specified — names fixed verbatim, each
-known to FAIL on main today:
+The watchlist gate at .github/workflows/pre-existing-test-watchlist.yml
+runs exactly the 4 tests the user specified — names fixed verbatim.
+
+PROMOTION (Blocco 1 of the Verdetto, 2026-07-02): all 4 tests now
+pass deterministically against the post-cutover SUT. The gate is
+no longer a "documented broken" state and is eligible to become a
+required check on main.
+
+  - TestSucceededWriterIsFinalizationOnly
+      (DataServer/internal/artifacts/)
+      Passes after allowlisting internal/completion/sqlite_uow.go
+      (UoW adapter is the canonical SQL gateway; its SUCCEEDED-flip
+      runs in the same atomic tx as coordinator.go).
+  - TestBeginUpload_WrongAttemptStatus
+      (DataServer/internal/artifacts/)
+      Passes after updating the seed to a terminal status (SUCCEEDED)
+      per the new terminal/non-terminal contract that replaced the
+      retired RENDER_FINISHED gate (cleanup/remove-job-attempts-runtime).
+  - TestUploadCompletedVideo_CanonicalPipeline
+      (DataServer/internal/handlers/remote/workers/uploads/)
+      Passes after rewriting fixtures to match the post-migration-048
+      schema (jobs without dropped runtime columns; attempts seeded
+      via tasks+task_attempts). The task_attempts.status assertion
+      was removed because the artifacts.FinalizeVerified flow marks
+      jobs+artifacts (canonical writer per PR 3.5-a), while task_attempts
+      marking is the Completion flow's job (Coordinator.CommitAttempt).
+  - TestGenerateWithImages_UsesCreatorStageWhenConfigured
+      (DataServer/internal/handlers/server/script/)
+      Passes after wiring jobRepo into the test's Enqueuer so the
+      Resolver's idempotency fast-path (enqueuer.Jobs.Get) has a
+      non-nil Jobs handle.
 
   - TestSucceededWriterIsFinalizationOnly
       (DataServer/internal/artifacts/)

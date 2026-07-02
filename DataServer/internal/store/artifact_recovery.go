@@ -95,16 +95,17 @@ type RecoveryUploadSession struct {
 	// idx_artifact_uploads_expiry feeds "staging session troppo
 	// vecchio -> EXPIRED"). Leave zero and the helper applies
 	// RECOVERY_DEFAULT_TTL (24h); if the caller needs a TTL other
-	// than 24h, they MUST set the field explicitly. There is no
-	// struct-shape value that means "expire immediately" — that
-	// semantic was the bug this fix removes (a previous version
-	// set expires_at = created_at = now, which the reconciler's
-	// EXPIRE rule would fire on the very next pass, killing the
-	// recovery session before CompleteUpload's CAS could advance
-	// it). Production callers with a tighter budget than 24h MUST
-	// set the field to a duration strictly greater than the
-	// wall-clock interval between RegisterRecoveryUploadSession
-	// returning and CompleteUpload's CAS landing.
+	// than 24h, they MUST set the field to a duration strictly
+	// greater than the wall-clock interval between
+	// RegisterRecoveryUploadSession returning and the recovery
+	// pipeline's downstream CompleteUpload CAS landing. There is
+	// no struct-shape value that means "expire immediately" —
+	// that semantic was the bug this fix removes (a previous
+	// version set expires_at = created_at = now, which migration
+	// 030's `idx_artifact_uploads_expiry`-backed reconciler rule
+	// (status, expires_at) would fire on the very next pass,
+	// killing the recovery session before CompleteUpload's CAS
+	// could advance it).
 	ExpiresAtTTL time.Duration
 }
 

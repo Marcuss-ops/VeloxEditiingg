@@ -12,25 +12,32 @@
 # gives the PR author a sharper signal: each failing test's name
 # appears in the gate's status, not buried inside the aggregate run.
 #
-# The 4 watchlist tests:
+# The 4 watchlist tests (promoted to must-pass on main after Blocco 1
+# of the Verdetto landed; previously documented as "known FAIL" but
+# all 4 now pass deterministically against the post-cutover SUT):
 #   - TestSucceededWriterIsFinalizationOnly     (DataServer/internal/artifacts/)
 #       Asserts SucceededWriter is finalization-only (no other writer
-#       method). Currently FAIL: the assertion or contract has drifted
-#       from the SUT; flagged for fix in a follow-up PR.
+#       method). Passes after allowlisting internal/completion/sqlite_uow.go
+#       (the UoW adapter is the canonical SQL gateway the Coordinator
+#       speaks through; its `SET status = 'SUCCEEDED'` runs in the
+#       SAME atomic tx as coordinator.go).
 #   - TestBeginUpload_WrongAttemptStatus        (DataServer/internal/artifacts/)
-#       Asserts BeginUpload returns an error when the attempt is not
-#       in RENDER_FINISHED state. Currently FAIL: SUT now succeeds
-#       where the test expects failure; SUT error path has tightened.
+#       Asserts BeginUpload returns an error when the attempt is
+#       terminal. Passes after updating the seed to a terminal
+#       status (SUCCEEDED) per the new terminal/non-terminal contract
+#       that replaced the retired RENDER_FINISHED gate.
 #   - TestUploadCompletedVideo_CanonicalPipeline
 #       (DataServer/internal/handlers/remote/workers/uploads/)
 #       Canonical pipeline assertion for the cross-engine upload-
-#       completed-video flow. Currently FAIL with the same kind of
-#       typed-vs-string drift the resolver.go fix addressed.
+#       completed-video flow. Passes after rewriting fixtures to
+#       match the post-migration-048 schema (jobs without dropped
+#       runtime columns; attempts seeded via tasks+task_attempts).
 #   - TestGenerateWithImages_UsesCreatorStageWhenConfigured
 #       (DataServer/internal/handlers/server/script/)
 #       Asserts the script-generation handler defers to the creator
-#       stage when configured. Currently FAIL with a nil-pointer
-#       dereference; test wiring likely missing a handler dependency.
+#       stage when configured. Passes after wiring jobRepo into the
+#       test's Enqueuer so the Resolver's idempotency fast-path has
+#       a non-nil Jobs handle.
 #
 # This gate uses the EXACT specification the user supplied — names
 # fixed in the `-run` regex below. The user explicitly chose this
