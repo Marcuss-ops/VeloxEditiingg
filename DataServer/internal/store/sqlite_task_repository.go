@@ -1547,12 +1547,15 @@ func (r *SQLiteTaskRepository) ListReadyCandidates(ctx context.Context, limit in
 	}
 
 	rows, err := r.store.db.QueryContext(ctx,
-		`SELECT task_id, job_id, revision, priority, created_at,
-		        executor_id, executor_version
-		 FROM tasks
-		 WHERE status = 'READY'
-		   AND (worker_id = '' OR worker_id IS NULL)
-		 ORDER BY priority DESC, created_at ASC
+		`SELECT t.task_id, t.job_id, t.revision, t.priority, t.created_at,
+		        t.executor_id, t.executor_version,
+		        GROUP_CONCAT(tr.capability) AS required_capabilities
+		 FROM tasks t
+		 LEFT JOIN task_requirements tr ON tr.task_id = t.task_id
+		 WHERE t.status = 'READY'
+		   AND (t.worker_id = '' OR t.worker_id IS NULL)
+		 GROUP BY t.task_id
+		 ORDER BY t.priority DESC, t.created_at ASC
 		 LIMIT ?`,
 		limit,
 	)
@@ -1564,15 +1567,16 @@ func (r *SQLiteTaskRepository) ListReadyCandidates(ctx context.Context, limit in
 	var candidates []placement.TaskCandidate
 	for rows.Next() {
 		var (
-			taskID          string
-			jobID           string
-			revision        int
-			priority        int
-			createdAt       string
-			executorID      string
-			executorVersion int
+			taskID               string
+			jobID                string
+			revision             int
+			priority             int
+			createdAt            string
+			executorID           string
+			executorVersion      int
+			capabilitiesConcat   sql.NullString
 		)
-		if scanErr := rows.Scan(&taskID, &jobID, &revision, &priority, &createdAt, &executorID, &executorVersion); scanErr != nil {
+		if scanErr := rows.Scan(&taskID, &jobID, &revision, &priority, &createdAt, &executorID, &executorVersion, &capabilitiesConcat); scanErr != nil {
 			continue
 		}
 
@@ -1583,16 +1587,22 @@ func (r *SQLiteTaskRepository) ListReadyCandidates(ctx context.Context, limit in
 			}
 		}
 
+		var capabilities []string
+		if capabilitiesConcat.Valid && capabilitiesConcat.String != "" {
+			capabilities = strings.Split(capabilitiesConcat.String, ",")
+		}
+
 		candidates = append(candidates, placement.TaskCandidate{
-			TaskID:   taskID,
-			JobID:    jobID,
-			Revision: revision,
-			Priority: priority,
-			CreatedAt: parsedTime,
+			TaskID:               taskID,
+			JobID:                jobID,
+			Revision:             revision,
+			Priority:             priority,
+			CreatedAt:            parsedTime,
 			Executor: placement.ExecutorKey{
 				ID:      executorID,
 				Version: executorVersion,
 			},
+			RequiredCapabilities: capabilities,
 		})
 	}
 	if err := rows.Err(); err != nil {

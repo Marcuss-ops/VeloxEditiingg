@@ -41,6 +41,12 @@ CREATE TABLE tasks (
     created_at       TEXT,
     updated_at       TEXT
 );
+CREATE TABLE IF NOT EXISTS task_requirements (
+    task_id    TEXT NOT NULL,
+    capability TEXT NOT NULL,
+    PRIMARY KEY (task_id, capability),
+    FOREIGN KEY (task_id) REFERENCES tasks(task_id) ON DELETE CASCADE
+);
 `
 
 // openCandidatesTestDB returns a SQLiteTaskRepository scoped to a
@@ -257,6 +263,13 @@ func TestSQLiteTaskRepository_ListReadyCandidates_InteropWithMatcher(t *testing.
 
 	t0 := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
 	seedCandidateTask(t, db, "T-match", "J-match", 5, "READY", false, "", "scene.composite.v1", 1, t0)
+	// Seed capability: the task requires artifact.commit.v1.
+	if _, err := db.ExecContext(ctx,
+		`INSERT INTO task_requirements (task_id, capability) VALUES (?, ?)`,
+		"T-match", "artifact.commit.v1",
+	); err != nil {
+		t.Fatalf("seed task_requirements: %v", err)
+	}
 
 	candidates, err := r.ListReadyCandidates(ctx, 10)
 	if err != nil {
@@ -265,10 +278,13 @@ func TestSQLiteTaskRepository_ListReadyCandidates_InteropWithMatcher(t *testing.
 	if len(candidates) != 1 {
 		t.Fatalf("expected 1 candidate; got %d", len(candidates))
 	}
-	if candidates[0].RequiredCapabilities != nil {
-		t.Errorf("RequiredCapabilities=%v; want nil (ListReadyCandidates must not fabricate the field from non-existent columns)", candidates[0].RequiredCapabilities)
+
+	// RequiredCapabilities must now be populated from the JOIN.
+	if len(candidates[0].RequiredCapabilities) != 1 || candidates[0].RequiredCapabilities[0] != "artifact.commit.v1" {
+		t.Errorf("RequiredCapabilities=%v; want [artifact.commit.v1] (LEFT JOIN task_requirements must populate the field)", candidates[0].RequiredCapabilities)
 	}
 
+	// Worker WITH the capability → matcher should select the task.
 	m := placement.NewMatcher()
 	result := m.Select(placement.WorkerSnapshot{
 		WorkerID:        "w-1",
@@ -282,12 +298,35 @@ func TestSQLiteTaskRepository_ListReadyCandidates_InteropWithMatcher(t *testing.
 	}, candidates)
 
 	if result.Candidate == nil {
-		t.Fatalf("matcher returned nil Candidate for an executable task; rejections=%v", result.Rejections)
+		t.Fatalf("matcher returned nil Candidate for an executable task (worker has the capability); rejections=%v", result.Rejections)
 	}
 	if result.Candidate.TaskID != "T-match" {
 		t.Errorf("Matched TaskID=%q want T-match", result.Candidate.TaskID)
 	}
-	if result.Candidate.Executor.ID != "scene.composite.v1" || result.Candidate.Executor.Version != 1 {
-		t.Errorf("Matched ExecutorKey=%+v want {scene.composite.v1, 1}", result.Candidate.Executor)
+
+	// Worker WITHOUT the capability → matcher must reject.
+	resultNoCap := m.Select(placement.WorkerSnapshot{
+		WorkerID:        "w-2",
+		SessionID:       "S-2",
+		Ready:           true,
+		SessionAlive:    true,
+		MaxParallelJobs: 4,
+		ActiveJobs:      0,
+		Executors:       map[placement.ExecutorKey]struct{}{{ID: "scene.composite.v1", Version: 1}: {}},
+		Capabilities:    map[string]bool{}, // no capabilities
+	}, candidates)
+
+	if resultNoCap.Candidate != nil {
+		t.Errorf("matcher selected Candidate when worker lacks required capability; candidate=%+v", resultNoCap.Candidate)
+	}
+	foundRejection := false
+	for _, rej := range resultNoCap.Rejections {
+		if rej.TaskID == "T-match" && rej.Code == placement.RejectMissingCapability {
+			foundRejection = true
+			break
+		}
+	}
+	if !foundRejection {
+		t.Errorf("expected RejectMissingCapability rejection for T-match; got: %+v", resultNoCap.Rejections)
 	}
 }
