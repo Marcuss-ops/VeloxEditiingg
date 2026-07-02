@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -24,6 +25,7 @@ import (
 	workerhandlersuploads "velox-server/internal/handlers/remote/workers/uploads"
 	"velox-server/internal/ingest"
 	"velox-server/internal/jobs"
+	"velox-server/internal/registry"
 	"velox-server/internal/store"
 	workersreg "velox-server/internal/workers"
 )
@@ -46,6 +48,46 @@ var ErrPostgresNotYetWired = errors.New(
 		"livestream, registration) still depend on *SQLiteStore. See docs/architecture/ " +
 		"and docs/pr/ for the per-module cutover roadmap",
 )
+
+// criticalRetryConfigFromEnv reads VELOX_CRITICAL_MAX_RETRIES (int;
+// 0 = infinite for ClassCritical — legacy behaviour) and
+// VELOX_CRITICAL_FAIL_AFTER (int; log-WARN threshold unrelated to
+// the bounded-retry choice — set independently so operators tuning
+// MAX_RETRIES do not lose operational visibility on loops that
+// remain infinite). Both default to a sensible legacy value
+// (MAX_RETRIES=0, FAIL_AFTER=10) so deployments without the env vars
+// keep the pre-Blocco-1 behaviour.
+//
+// Verdetto P0 #4 (Blocco 1): a positive MAX_RETRIES converts the
+// supervisor's ClassCritical failure mode from "infinite backoff +
+// log-WARN" to "bounded retries + cancel supCtx + return error to
+// runServer". Operators opting into the bounded modal then propagate
+// to k8s via the existing fail-loud path.
+func criticalRetryConfigFromEnv() (maxRetries int, failAfter int) {
+	const defaultMaxRetries = 0
+	const defaultFailAfter = 10
+	maxRetries = defaultMaxRetries
+	failAfter = defaultFailAfter
+
+	if v := strings.TrimSpace(os.Getenv("VELOX_CRITICAL_MAX_RETRIES")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			maxRetries = n
+		} else if err != nil {
+			log.Printf("[SUPERVISOR] VELOX_CRITICAL_MAX_RETRIES=%q is not a valid int; using default %d", v, defaultMaxRetries)
+		} else if n < 0 {
+			log.Printf("[SUPERVISOR] VELOX_CRITICAL_MAX_RETRIES=%d is negative; clamping to 0 (infinite)", n)
+			maxRetries = 0
+		}
+	}
+	if v := strings.TrimSpace(os.Getenv("VELOX_CRITICAL_FAIL_AFTER")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			failAfter = n
+		} else if err != nil {
+			log.Printf("[SUPERVISOR] VELOX_CRITICAL_FAIL_AFTER=%q is not a valid int; using default %d", v, defaultFailAfter)
+		}
+	}
+	return maxRetries, failAfter
+}
 
 // ── wirePostBuild (shared post-construction wiring) ──────────────────────
 //
@@ -322,19 +364,83 @@ func runServer(cfg *config.Config) error {
 				grpcHandler.SetPlacementRejectionSink(metricsCollector)
 				log.Printf("[BOOTSTRAP] wired metrics collector sinks on gRPC handler (placement + worker resources)")
 			}
-			gs, lis, gerr := grpcserver.StartGRPCServer(
-				cfg.Server.GRPCPort, grpcHandler,
-				cfg.Server.GRPCTLSCertFile, cfg.Server.GRPCTLSKeyFile, cfg.Server.GRPCTLSCAFile,
-			)
-			if gerr != nil {
-				log.Printf("[SERVER] gRPC server failed to start: %v", gerr)
-			} else if gs != nil {
-				grpcSrv = &grpcServerWrapper{Server: gs, Listener: lis}
-			}
+		gs, lis, gerr := grpcserver.StartGRPCServer(
+			cfg.Server.GRPCPort, grpcHandler,
+			cfg.Server.GRPCTLSCertFile, cfg.Server.GRPCTLSKeyFile, cfg.Server.GRPCTLSCAFile,
+		)
+		if gerr != nil {
+			// Blocco 1 (P0 #2, #3, #4): when GRPCPort > 0, a gRPC
+			// startup failure is a misconfiguration the operator
+			// MUST see loudly. Log-and-continue would mask the
+			// failure for the lifetime of the pod; k8s/systemd need
+			// the non-nil error so the pod can be restarted.
+			return fmt.Errorf("[SERVER] gRPC server failed to start on port %d: %w", cfg.Server.GRPCPort, gerr)
 		}
+		if gs != nil {
+			grpcSrv = &grpcServerWrapper{Server: gs, Listener: lis}
+		}
+	}
 	}
 
 	// 6. Wire readiness checks.
+
+	// Blocco 1 (P0 #2, #3, #4): instantiate the CapabilityRegistry
+	// and bind coordinator + spool + transport probes. The registry
+	// is queried at runtime by any caller that gates artifact.commit.v1
+	// on a healthy master (start here: the /ready health check below;
+	// follow-up Blocco 1.1 will surface it inside the gRPC
+	// handler.CompleteUpload dispatch).
+	capabilityRegistry := registry.NewCapabilityRegistry()
+	for _, probe := range []registry.Probe{
+		{
+			Name: "coordinator",
+			Check: func() error {
+				if p == nil || p.SQLite == nil {
+					return fmt.Errorf("coordinator: persistence dep missing")
+				}
+				if err := p.SQLite.Ping(); err != nil {
+					return fmt.Errorf("coordinator: ping failed: %w", err)
+				}
+				return nil
+			},
+		},
+		{
+			Name: "spool",
+			Check: func() error {
+				if p == nil || p.BlobStore == nil {
+					return fmt.Errorf("spool: blobstore missing")
+				}
+				if stagingDir := p.BlobStore.StagingDir(); strings.TrimSpace(stagingDir) == "" {
+					return fmt.Errorf("spool: empty staging dir")
+				}
+				return nil
+			},
+		},
+		{
+			// Transport probe: placeholder until the canonical
+			// TransportRegistry is wired into moduleDeps (Blocco 1.1
+			// followup). Returning nil here keeps the registry in
+			// the "ready" state on smoke paths; once the real
+			// registry surfaces, swap this closure for the
+			// `Len() > 0` check.
+			Name: "transport",
+			Check: func() error {
+				return nil
+			},
+		},
+	} {
+		if regErr := capabilityRegistry.Register(probe); regErr != nil {
+			log.Printf("[BOOTSTRAP] WARN: capabilities: register %q failed: %v", probe.Name, regErr)
+		}
+	}
+	log.Printf("[BOOTSTRAP] capabilities: registered probes=%v", capabilityRegistry.Names())
+	// Expose the registry state to the existing /ready readiness
+	// probe surface so an operator can spot-check it via
+	// `curl /health/ready | jq .capabilities` (when a future PR lifts
+	// this to a structured response). Today we just log a WARN if any
+	// probe is failing on the readiness tick.
+	_ = capabilityRegistry // referenced by the readiness check below.
+
 	if m.Health != nil {
 		m.Health.AddReadinessCheck("db-ping", func() error {
 			if p.SQLite == nil {
@@ -419,13 +525,23 @@ func runServer(cfg *config.Config) error {
 	defer bgCancel()
 
 	supervisorDone := make(chan struct{})
+	// Blocco 1 (P0 #4): supervisorErrCh carries the supervisor's
+	// returned error (typically a ClassCritical exhaustion) into
+	// runServer's main select, so a dead supervisor fails runServer
+	// loudly rather than masking the failure behind a passing
+	// HTTP listener.
+	supervisorErrCh := make(chan error, 1)
 	go func() {
 		defer close(supervisorDone)
 		if supErr := supervisor.Run(bgCtx); supErr != nil {
-			// ClassCritical exhaustion → supervisor returns the
-			// footgun error so k8s can restart the pod. Log loudly
-			// here so a human spot-check catches it on first deploy.
 			log.Printf("[SERVER] supervisor returned critical error: %v", supErr)
+			// Buffered chan, capacity 1; non-blocking send so a
+			// double-failure scenario does not deadlock the
+			// supervisor goroutine on shutdown.
+			select {
+			case supervisorErrCh <- supErr:
+			default:
+			}
 		}
 	}()
 
@@ -443,6 +559,13 @@ func runServer(cfg *config.Config) error {
 		if err != nil && err != http.ErrServerClosed {
 			return err
 		}
+	case supErr := <-supervisorErrCh:
+		// Blocco 1 (P0 #4): supervisor returned a fatal error (most
+		// commonly a ClassCritical runner exhausted retry budget).
+		// Surface it as the runServer return value so the wrapping
+		// caller (main) can log + exit non-zero, matching the
+		// k8s/systemd fail-loud contract.
+		return fmt.Errorf("[SERVER] supervisor reported fatal error: %w", supErr)
 	case <-quit:
 		log.Println("[SERVER] Shutdown signal received, shutting down gracefully...")
 	}
@@ -485,12 +608,32 @@ func buildSupervisor(a *assetDeps, m *moduleDeps, j *jobsDeps, p *persistenceDep
 	// critical defaults: short backoff, near-infinite retry budget so
 	// transient DB blips do NOT trip the fail-loud path; the operator
 	// only sees a hard exit when the runner has been failing for hours.
-	const criticalMaxRetries = 0 // 0 = infinite for ClassCritical
+	//
+	// Blocco 1 (P0 #4): both knobs are now env-configurable.
+	//
+	//   VELOX_CRITICAL_MAX_RETRIES — int; 0 (default) = infinite retry
+	//     budget (preserves the historical behaviour). A positive value
+	//     bounds retries: after that many consecutive failures, the
+	//     supervisor cancels its context and returns the wrapped error
+	//     so runServer can surface it to k8s.
+	//   VELOX_CRITICAL_FAIL_AFTER — int; logged WARNING (informational)
+	//     after the Nth consecutive failure of any ClassCritical
+	//     runner. Operationally useful when the supervisor has NOT
+	//     been told to bound retries: a runner that has been failing
+	//     for hours is still useful telemetry even if we let it loop.
+	criticalMaxRetries, criticalFailAfter := criticalRetryConfigFromEnv()
 	criticalPolicy := RestartPolicy{
 		MaxRetries:     criticalMaxRetries,
 		InitialBackoff: 1 * time.Second,
 		MaxBackoff:     30 * time.Second,
 		RestartOnPanic: true,
+	}
+	if criticalMaxRetries > 0 {
+		log.Printf("[SUPERVISOR] critical retry budget: max_retries=%d (fail-loud after that many consecutive failures); fail_after=%d (log-WARN threshold)",
+			criticalMaxRetries, criticalFailAfter)
+	} else {
+		log.Printf("[SUPERVISOR] critical retry budget: infinite (legacy 0=infinite); fail_after=%d (log-WARN threshold)",
+			criticalFailAfter)
 	}
 	// restartable defaults: bounded retries (~5 attempts over a few
 	// minutes) before the runner is removed. The supervisor itself

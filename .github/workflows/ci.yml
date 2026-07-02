@@ -64,6 +64,16 @@ jobs:
       - name: Guard — compute-outcome labels (spec §14)
         run: ./scripts/ci/check-compute-outcome-labels.sh
 
+      # Spec §14 Blocco 5 wrap-pattern enforcement: production callers
+      # of (*ConflictBudget).Record MUST funnel through
+      # (*coordinator).recordAttemptCommitsCAS or another helper that
+      # preserves the "keep input err separate" contract. A naive
+      # `err := budget.Record(e)` shadows the input and reintroduces
+      # the nil-return ambiguity the wrap-pattern dodges. See
+      # scripts/ci/check-conflict-budget-call-pattern.sh.
+      - name: Guard — conflict-budget call pattern (Blocco 5)
+        run: ./scripts/ci/check-conflict-budget-call-pattern.sh
+
       - name: Verify — architectural, Go, native, docker-image
         run: make verify
 
