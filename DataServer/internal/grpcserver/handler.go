@@ -27,6 +27,7 @@ import (
 	"velox-server/internal/artifacts"
 	"velox-server/internal/ingest"
 	"velox-server/internal/jobs"
+	"velox-server/internal/placement"
 	velmetrics "velox-server/internal/metrics"
 	"velox-server/internal/store"
 	"velox-server/internal/taskattempts"
@@ -134,6 +135,24 @@ type workerSession struct {
 
 	// Sequence numbers for replay protection (Issue 7 fix).
 	lastRecvSeq int64 // last received sequence number from worker
+
+	// Placement snapshot fields: typed executor map, capability map,
+	// and their revision counter. Populated at Hello time and updated
+	// on heartbeat-driven re-advertisement. The placement snapshot is
+	// built from these fields under RLock so the snapshot is always
+	// consistent without blocking the main message loop.
+	executorsMu sync.RWMutex
+	executors   map[placement.ExecutorKey]struct{}
+
+	capabilitiesMu sync.RWMutex
+	capabilities   map[string]bool
+
+	capabilityRevision atomic.Uint64
+
+	ready    atomic.Bool
+	draining atomic.Bool
+
+	lastHeartbeatUnix atomic.Int64
 }
 
 // NewHandler creates a new gRPC WorkerControl handler.
@@ -742,6 +761,62 @@ func (h *Handler) getSession(workerID string) *workerSession {
 		return nil
 	}
 	return h.sessions[sid]
+}
+
+// placementSnapshot builds an immutable WorkerSnapshot from the in-memory
+// session state. The snapshot is consistent at a single instant (executors
+// and capabilities read under their respective RLock). The caller must
+// NOT hold any session mutex when calling this method.
+func (s *workerSession) placementSnapshot(workerID string) placement.WorkerSnapshot {
+	s.executorsMu.RLock()
+	executors := make(map[placement.ExecutorKey]struct{}, len(s.executors))
+	for key := range s.executors {
+		executors[key] = struct{}{}
+	}
+	s.executorsMu.RUnlock()
+
+	s.capabilitiesMu.RLock()
+	caps := make(map[string]bool, len(s.capabilities))
+	for key, enabled := range s.capabilities {
+		caps[key] = enabled
+	}
+	s.capabilitiesMu.RUnlock()
+
+	return placement.WorkerSnapshot{
+		WorkerID:          workerID,
+		SessionID:         s.sessionID,
+		Ready:             s.ready.Load(),
+		Draining:          s.draining.Load(),
+		SessionAlive:      true,
+		MaxParallelJobs:   int(s.maxParallelJobs.Load()),
+		ActiveJobs:        int(s.activeJobsCount.Load()),
+		Executors:         executors,
+		Capabilities:      caps,
+		CapabilityRevision: s.capabilityRevision.Load(),
+		LastHeartbeat: time.Unix(
+			s.lastHeartbeatUnix.Load(),
+			0,
+		).UTC(),
+	}
+}
+
+// replaceCapabilities atomically replaces the session's executor and
+// capability maps with the parsed values from the Hello handshake.
+// It bumps the capability revision so any pending claim that was
+// built from a stale snapshot can be detected by the fencing check.
+func (s *workerSession) replaceCapabilities(
+	executors map[placement.ExecutorKey]struct{},
+	capabilities map[string]bool,
+) {
+	s.executorsMu.Lock()
+	s.executors = executors
+	s.executorsMu.Unlock()
+
+	s.capabilitiesMu.Lock()
+	s.capabilities = capabilities
+	s.capabilitiesMu.Unlock()
+
+	s.capabilityRevision.Add(1)
 }
 
 // ---- Security Helpers ----
