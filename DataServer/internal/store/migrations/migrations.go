@@ -105,7 +105,11 @@ func discoverMigrations(fs embed.FS, dir string) ([]Migration, error) {
 	seenVersions := make(map[int]string) // version → first filename
 
 	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".sql") {
+		// Skip non-SQL, subdirectories, AND *.down.sql files. DOWN
+		// migrations are paired reversals — they must not be
+		// applied at startup. Operators invoke them explicitly via
+		// RunDown(db, fs, dir, version).
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".sql") || strings.HasSuffix(e.Name(), ".down.sql") {
 			continue
 		}
 
@@ -228,6 +232,79 @@ func applyMigration(db *sql.DB, m Migration) error {
 	}
 
 	return tx.Commit()
+}
+
+// RunDown discovers and explicitly applies the `.down.sql` paired
+// with the given forward version. The DOWN reverses the schema
+// changes the matching UP made AND removes the row from
+// schema_migrations for that version — so a subsequent
+// RunMigrations call re-applies the UP cleanly (giving the
+// UP -> DOWN -> UP round-trip its idempotency on the schema subset
+// the pair owns).
+//
+// Filename lookup: <NNN>_*.down.sql where NNN is the zero-padded
+// version. The human-readable name segment is not constrained so
+// future pairs can encode the UP slogon (e.g. 068_task_requirements.down.sql).
+//
+// Idempotency: applying RunDown twice on the same version is safe
+// but wasteful — the second call's DROP INDEX/DROP TABLE statements
+// are no-ops due to IF EXISTS, but the schema_migrations DELETE
+// hits zero rows. Operators preferring a one-shot DOWN outcome
+// can guard externally.
+//
+// Returns an error if no DOWN file is found for the given version.
+func RunDown(db *sql.DB, migrationsFS embed.FS, dir string, version int) error {
+	entries, err := migrationsFS.ReadDir(dir)
+	if err != nil {
+		return fmt.Errorf("read migrations dir %s: %w", dir, err)
+	}
+
+	prefix := fmt.Sprintf("%03d_", version)
+	var downFile string
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if strings.HasPrefix(name, prefix) && strings.HasSuffix(name, ".down.sql") {
+			downFile = name
+			break
+		}
+	}
+	if downFile == "" {
+		return fmt.Errorf("migrations: no down file found for version %03d in %s", version, dir)
+	}
+
+	content, err := migrationsFS.ReadFile(path.Join(dir, downFile))
+	if err != nil {
+		return fmt.Errorf("read %s: %w", downFile, err)
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("down migration begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	stmts := splitStatements(string(content))
+	for _, stmt := range stmts {
+		if _, err := tx.Exec(stmt); err != nil {
+			return fmt.Errorf("execute down migration %s: %w", downFile, err)
+		}
+	}
+
+	// Remove the tracking row so a subsequent RunMigrations re-applies
+	// the UP cleanly. Without this delete, the next RunMigrations would
+	// see version N as already applied (checksum match) and skip it,
+	// leaving the schema trapped in the DOWN state.
+	if _, err := tx.Exec(`DELETE FROM schema_migrations WHERE version = ?`, version); err != nil {
+		return fmt.Errorf("remove schema_migrations row for version %d: %w", version, err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit down migration %s: %w", downFile, err)
+	}
+	return nil
 }
 
 // EnsureApplied guarantees a specific migration has been applied, running it if needed.

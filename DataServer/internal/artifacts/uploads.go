@@ -1,3 +1,5 @@
+// sql-allowlist: artifacts SQLiteRepository — persistent CRUD for artifact_uploads + artifact_upload_chunks; supplements SQLiteFinalizationRepository atomic-tx path. Future refactor candidate for internal/store typed repos.
+
 package artifacts
 
 import (

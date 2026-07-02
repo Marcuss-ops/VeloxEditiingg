@@ -1,3 +1,5 @@
+// sql-allowlist: platform/database Open factory — owns driver registration, DSN normalization, connection pool defaults, and PingContext. The platform layer legitimately owns these. Migrations are the only sequence call after Open returns.
+
 // Package database — database.go
 //
 // Handle + Open: backend-neutral connection factory. SQLite + Postgres

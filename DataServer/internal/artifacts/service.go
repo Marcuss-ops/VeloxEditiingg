@@ -1,3 +1,5 @@
+// sql-allowlist: artifacts service loadJob / loadAttempt + uniqueness-gate read paths inside the SUCCEEDED-write pipeline; the atomic jobs.status=SUCCEEDED tx is owned by SQLiteFinalizationRepository (single-writer enforced by scan_test.go). Future refactor candidate for the read paths via internal/store typed repos.
+
 package artifacts
 
 import (

@@ -1,3 +1,5 @@
+// sql-allowlist: artifacts SQLiteFinalizationRepository — sole atomic-tx writer for jobs.status=SUCCEEDED (single-writer enforced by scan_test.go). Future refactor candidate for relocation into internal/store alongside the other typed repos.
+
 // Package artifacts / sqlite_finalization_repository.go — PR 3.5-a impl.
 //
 // This is the ONLY legal writer of jobs.status=<terminal-state>.

@@ -1,3 +1,5 @@
+// sql-allowlist: deliveries SQLiteDeliveryPlanResolver — per-job delivery_plan lookup (job_delivery_plans + delivery_destinations fallback). Consumed by artifacts.FinalizeVerified at the point of job_deliveries INSERT. Read-only contract; future refactor candidate for internal/store typed repos.
+
 // Package deliveries / plan_resolver.go — PR delivery plan resolver.
 //
 // SQLiteDeliveryPlanResolver implements artifacts.DeliveryPlanResolver by

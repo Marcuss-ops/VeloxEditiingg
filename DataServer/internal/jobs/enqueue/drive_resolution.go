@@ -1,3 +1,5 @@
+// sql-allowlist: jobs/enqueue Drive resolution helper — read-only lookup of drive_master_folders aliases inside the enqueue path. Resolves a user-provided Drive reference (URL / folder ID / alias / name) to a canonical folder_id. Future refactor candidate for move into store as a typed DriveFolderRepository.
+
 package enqueue
 
 import (

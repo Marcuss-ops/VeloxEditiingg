@@ -1,3 +1,5 @@
+// sql-allowlist: artifacts reconciler — orphan-blob + QUARANTINED cleanup sweeps via raw SQL; future refactor candidate for typed repos in internal/store. Read-heavy SELECTs + two non-atomic txs (status flip + outbox emission) documented inline as split for transactional safety.
+
 package artifacts
 
 import (

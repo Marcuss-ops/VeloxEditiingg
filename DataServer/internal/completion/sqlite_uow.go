@@ -4,6 +4,12 @@
 // interfaces declared in unitofwork.go against the canonical
 // migrations 010/030/039/041/045/061/062/014/022/013 schemas.
 //
+// sql-allowlist: completion UnitOfWork adapter — owns the six typed
+// repositories (attempt_commits, task_attempts, tasks, jobs, deliveries,
+// outbox); sole SQL gateway per the UnitOfWork pattern documented in
+// docs/architecture/unit-of-work.md. The Coordinator speaks only typed
+// Go parameters; no SQL leaks beyond this file's package boundary.
+//
 // Every method receives the underlying *sql.Tx at construction time
 // (via sqliteUnitOfWork.WithTx) and holds it as private state. No
 // SQL is exposed beyond this file's package boundary; the

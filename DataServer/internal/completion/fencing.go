@@ -1,5 +1,10 @@
 // Package completion / fencing.go
 //
+// sql-allowlist: completion FenceTuple central gate — read-only check on
+// attempt_commits tightly coupled to DeclareOutputs/RecordUploadProgress;
+// future refactor candidate for moving the (task_id, attempt_id) lookup
+// into the UoW AttemptCommits repo.
+//
 // Artifact Commit Protocol (Fase 2.2 of docs/completion-protocol.md):
 // the FenceTuple is the canonical doubling identity for every CAS step
 // in the commit pipeline. Tasks / attempts can be retried across

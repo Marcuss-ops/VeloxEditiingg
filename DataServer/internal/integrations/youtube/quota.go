@@ -1,3 +1,5 @@
+// sql-allowlist: youtube QuotaManager writes analytics_cache + youtube_revenue_metrics + youtube_video_metrics from runtime YouTube Analytics API fetches. Legacy direct access — tracked for refactor into internal/store typed repos.
+
 // Package youtube provides YouTube API integration for the Velox server.
 // This file contains quota and analytics functionality.
 package youtube
