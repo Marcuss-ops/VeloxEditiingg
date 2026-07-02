@@ -121,3 +121,4 @@ Thumbs.db
 # Accidentale recursive cp --parents artifact from local builds
 /DataServer/DataServer/
 
+DataServer/worker

@@ -293,6 +293,15 @@ func runServer(cfg *config.Config) error {
 				grpcHandler.SetIngestionSvc(t.IngestionSvc)
 				log.Printf("[BOOTSTRAP] installed TaskReportIngestionService on gRPC handler (feat/task-report-ingestion)")
 			}
+			// Scorecard v1: wire the placement rejection counter and
+			// worker resource sink onto the gRPC handler so placement
+			// rejections and heartbeat resource counters land on the
+			// Prometheus /metrics endpoint.
+			if metricsCollector != nil {
+				grpcHandler.SetResourceSink(metricsCollector)
+				grpcHandler.SetPlacementRejectionSink(metricsCollector)
+				log.Printf("[BOOTSTRAP] wired metrics collector sinks on gRPC handler (placement + worker resources)")
+			}
 			gs, lis, gerr := grpcserver.StartGRPCServer(
 				cfg.Server.GRPCPort, grpcHandler,
 				cfg.Server.GRPCTLSCertFile, cfg.Server.GRPCTLSKeyFile, cfg.Server.GRPCTLSCAFile,
