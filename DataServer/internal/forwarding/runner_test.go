@@ -32,7 +32,7 @@ func insertTestForwardingRecord(t *testing.T, db *store.SQLiteStore, forwardingI
 		CreatedAt:        time.Now().UTC().Format(time.RFC3339),
 		UpdatedAt:        time.Now().UTC().Format(time.RFC3339),
 	}
-	if err := db.InsertCreatorForwarding(cf); err != nil {
+	if _, err := db.InsertCreatorForwarding(context.Background(), cf); err != nil {
 		t.Fatalf("insert forwarding: %v", err)
 	}
 }

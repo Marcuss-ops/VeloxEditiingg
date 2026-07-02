@@ -33,7 +33,7 @@ func insertTestForwarding(t *testing.T, db *SQLiteStore, forwardingID, provider,
 		CreatedAt:        time.Now().UTC().Format(time.RFC3339),
 		UpdatedAt:        time.Now().UTC().Format(time.RFC3339),
 	}
-	if err := db.InsertCreatorForwarding(cf); err != nil {
+	if _, err := db.InsertCreatorForwarding(context.Background(), cf); err != nil {
 		t.Fatalf("insert forwarding: %v", err)
 	}
 }
@@ -51,7 +51,7 @@ func insertTestForwardingWithPayload(t *testing.T, db *SQLiteStore, forwardingID
 		CreatedAt:        time.Now().UTC().Format(time.RFC3339),
 		UpdatedAt:        time.Now().UTC().Format(time.RFC3339),
 	}
-	if err := db.InsertCreatorForwarding(cf); err != nil {
+	if _, err := db.InsertCreatorForwarding(context.Background(), cf); err != nil {
 		t.Fatalf("insert forwarding with payload: %v", err)
 	}
 }
@@ -463,7 +463,7 @@ func TestMarkForwardingFailed(t *testing.T) {
 
 	insertTestForwarding(t, db, "cf-fail", "openai", "creator-fail", "scene.composite.v1", "RETRY_WAIT")
 
-	err := db.MarkCreatorForwardingFailed(ctx, "cf-fail", "MAX_ATTEMPTS", "exhausted retries")
+	err := db.MarkCreatorForwardingFailed(ctx, "cf-fail", "", "", "MAX_ATTEMPTS", "exhausted retries")
 	if err != nil {
 		t.Fatalf("MarkCreatorForwardingFailed: %v", err)
 	}
@@ -486,7 +486,7 @@ func TestMarkForwardingBlocked(t *testing.T) {
 
 	insertTestForwarding(t, db, "cf-block", "openai", "creator-block", "scene.composite.v1", "PENDING")
 
-	err := db.MarkCreatorForwardingBlocked(ctx, "cf-block", "INVALID_PAYLOAD", "bad schema")
+	err := db.MarkCreatorForwardingBlocked(ctx, "cf-block", "", "", "INVALID_PAYLOAD", "bad schema")
 	if err != nil {
 		t.Fatalf("MarkCreatorForwardingBlocked: %v", err)
 	}

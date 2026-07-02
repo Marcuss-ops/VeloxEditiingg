@@ -438,6 +438,13 @@ func (w *Worker) receiveLoop(ctx context.Context, recvCh <-chan controltransport
 				}
 
 				executorID := normalizeOfferedExecutorID(taskOffer.GetExecutorId())
+				executorVersion := int(taskOffer.GetExecutorVersion())
+				if !w.executorRegistry.Has(executorID, executorVersion) {
+					if err := w.sendTaskReject(ctx, taskID, jobID, attemptID, leaseID, "unsupported_executor", attemptNumber, revision); err != nil {
+						w.logger.Warn("[RECEIVE] Failed to send TaskRejected (unsupported executor): %v", err)
+					}
+					continue
+				}
 				w.logger.Info("[RECEIVE] TaskOffer received: task=%s attempt=%s job=%s executor=%s@%d — deferring executeTask to TaskLeaseGranted",
 					taskID, attemptID, jobID, executorID, taskOffer.GetExecutorVersion())
 
@@ -920,9 +927,9 @@ func (w *Worker) Stop() {
 		w.activeTaskLeases = make(map[string]*ActiveTaskLease)
 		w.activeTaskLeasesMu.Unlock()
 		if clearedTask > 0 || clearedTaskLeases > 0 {
-		w.logger.Info("[STOP] Drained pending entries: task=%d task_leases=%d",
-			clearedTask, clearedTaskLeases)
-	}
+			w.logger.Info("[STOP] Drained pending entries: task=%d task_leases=%d",
+				clearedTask, clearedTaskLeases)
+		}
 		// Artifact Commit Protocol v1: drain the typed reply
 		// dispatcher so no goroutine is left blocked on a channel
 		// after Stop. Channels have buffered capacity 1 and the

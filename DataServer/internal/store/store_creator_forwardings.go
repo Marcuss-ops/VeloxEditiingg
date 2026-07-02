@@ -102,14 +102,30 @@ type CreatorForwardingLease struct {
 // ErrCreatorForwardingNoRow is returned when a lookup misses.
 var ErrCreatorForwardingNoRow = errors.New("store: creator forwarding row not found")
 
+// InsertCreatorForwardingResult is returned by InsertCreatorForwarding to
+// distinguish between a new insert (Created=true, Forwarding set) and an
+// idempotent duplicate (Created=false, Forwarding returns the existing row
+// looked up by the UNIQUE key).
+type InsertCreatorForwardingResult struct {
+	Created    bool
+	Forwarding *CreatorForwarding
+}
+
 // ── CRUD ────────────────────────────────────────────────────────────────
 
 // InsertCreatorForwarding persists a new forwarding record. Idempotent on
 // (source_provider, source_job_id, target_executor_id) via INSERT OR IGNORE
 // enforced by the UNIQUE index.
-func (s *SQLiteStore) InsertCreatorForwarding(cf *CreatorForwarding) error {
+//
+// Returns an InsertCreatorForwardingResult:
+//   - Created=true, Forwarding=cf when the row was newly inserted.
+//   - Created=false, Forwarding=<existing row> when the UNIQUE key
+//     already existed (idempotent duplicate). The existing row is
+//     looked up by (source_provider, source_job_id, target_executor_id)
+//     and returned so callers always receive the persisted state.
+func (s *SQLiteStore) InsertCreatorForwarding(ctx context.Context, cf *CreatorForwarding) (*InsertCreatorForwardingResult, error) {
 	if cf.ForwardingID == "" || cf.SourceProvider == "" || cf.SourceJobID == "" || cf.TargetExecutorID == "" {
-		return fmt.Errorf("store: InsertCreatorForwarding: missing required fields (forwarding_id, source_provider, source_job_id, target_executor_id)")
+		return nil, fmt.Errorf("store: InsertCreatorForwarding: missing required fields (forwarding_id, source_provider, source_job_id, target_executor_id)")
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
 	if cf.CreatedAt == "" {
@@ -126,7 +142,7 @@ func (s *SQLiteStore) InsertCreatorForwarding(cf *CreatorForwarding) error {
 	// TEXT columns are NOT NULL DEFAULT '' so they must receive the Go
 	// string directly — nullIfEmpty would produce nil (SQL NULL), which
 	// violates the NOT NULL constraint on SQLite.
-	_, err := s.db.ExecContext(context.Background(),
+	res, err := s.db.ExecContext(ctx,
 		`INSERT OR IGNORE INTO creator_forwardings
 		 (forwarding_id, source_provider, source_job_id, source_status,
 		  target_executor_id, target_job_id, payload_json, payload_sha256,
@@ -148,7 +164,21 @@ func (s *SQLiteStore) InsertCreatorForwarding(cf *CreatorForwarding) error {
 		cf.CreatedAt, cf.UpdatedAt,
 		cf.ForwardedAt,
 	)
-	return err
+	if err != nil {
+		return nil, fmt.Errorf("store: InsertCreatorForwarding: %w", err)
+	}
+
+	affected, _ := res.RowsAffected()
+	if affected == 1 {
+		return &InsertCreatorForwardingResult{Created: true, Forwarding: cf}, nil
+	}
+
+	// Duplicate — look up the existing row by its UNIQUE key.
+	existing, err := s.GetCreatorForwardingBySource(ctx, cf.SourceProvider, cf.SourceJobID, cf.TargetExecutorID)
+	if err != nil {
+		return nil, fmt.Errorf("store: InsertCreatorForwarding: duplicate lookup: %w", err)
+	}
+	return &InsertCreatorForwardingResult{Created: false, Forwarding: existing}, nil
 }
 
 // GetCreatorForwarding returns a single forwarding by ID, or

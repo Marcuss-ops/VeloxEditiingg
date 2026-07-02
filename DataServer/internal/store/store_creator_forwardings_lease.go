@@ -325,9 +325,15 @@ func (s *SQLiteStore) MarkCreatorForwardingRetry(ctx context.Context, forwarding
 }
 
 // MarkCreatorForwardingFailed moves a leasable forwarding to FAILED
-// (permanent failure, max attempts exhausted). CAS on (forwarding_id,
-// status IN leasable states). Clears lock/lease so no zombie claim lingers.
-func (s *SQLiteStore) MarkCreatorForwardingFailed(ctx context.Context, forwardingID, errorCode, errorMsg string) error {
+// (permanent failure, max attempts exhausted). Full CAS on (forwarding_id,
+// status IN leasable states, locked_by, lease_id) — only the current lease
+// holder may declare terminal failure, preventing a race where a preempted
+// runner overwrites a row that another runner has already claimed.
+//
+// When the caller is not a lease holder (e.g. the row is in RETRY_WAIT with
+// no lock), pass empty strings for runnerID and leaseID — the CAS degrades
+// to forwarding_id + status only.
+func (s *SQLiteStore) MarkCreatorForwardingFailed(ctx context.Context, forwardingID, runnerID, leaseID, errorCode, errorMsg string) error {
 	if forwardingID == "" {
 		return fmt.Errorf("store: MarkCreatorForwardingFailed: empty forwarding_id")
 	}
@@ -346,8 +352,12 @@ func (s *SQLiteStore) MarkCreatorForwardingFailed(ctx context.Context, forwardin
 		     last_error_code = ?, last_error_message = ?,
 		     updated_at = ?
 		 WHERE forwarding_id = ?
-		   AND status IN ('PENDING', 'POLLING', 'RETRY_WAIT', 'READY_TO_FORWARD', 'FORWARDING')`,
+		   AND status IN ('PENDING', 'POLLING', 'RETRY_WAIT', 'READY_TO_FORWARD', 'FORWARDING')
+		   AND (? = '' OR locked_by = ?)
+		   AND (? = '' OR lease_id = ?)`,
 		nullIfEmpty(errorCode), nullIfEmpty(errorMsg), now, forwardingID,
+		runnerID, runnerID,
+		leaseID, leaseID,
 	)
 	if err != nil {
 		return fmt.Errorf("MarkCreatorForwardingFailed: %w", err)
@@ -361,9 +371,9 @@ func (s *SQLiteStore) MarkCreatorForwardingFailed(ctx context.Context, forwardin
 }
 
 // MarkCreatorForwardingBlocked moves a leasable forwarding to BLOCKED
-// (operator intervention required). Same semantics as MarkCreatorForwardingFailed
-// but the status signals that a human must unblock the record.
-func (s *SQLiteStore) MarkCreatorForwardingBlocked(ctx context.Context, forwardingID, errorCode, errorMsg string) error {
+// (operator intervention required). Same full-CAS semantics as
+// MarkCreatorForwardingFailed: (forwarding_id, status, locked_by, lease_id).
+func (s *SQLiteStore) MarkCreatorForwardingBlocked(ctx context.Context, forwardingID, runnerID, leaseID, errorCode, errorMsg string) error {
 	if forwardingID == "" {
 		return fmt.Errorf("store: MarkCreatorForwardingBlocked: empty forwarding_id")
 	}
@@ -382,8 +392,12 @@ func (s *SQLiteStore) MarkCreatorForwardingBlocked(ctx context.Context, forwardi
 		     last_error_code = ?, last_error_message = ?,
 		     updated_at = ?
 		 WHERE forwarding_id = ?
-		   AND status IN ('PENDING', 'POLLING', 'RETRY_WAIT', 'READY_TO_FORWARD', 'FORWARDING')`,
+		   AND status IN ('PENDING', 'POLLING', 'RETRY_WAIT', 'READY_TO_FORWARD', 'FORWARDING')
+		   AND (? = '' OR locked_by = ?)
+		   AND (? = '' OR lease_id = ?)`,
 		nullIfEmpty(errorCode), nullIfEmpty(errorMsg), now, forwardingID,
+		runnerID, runnerID,
+		leaseID, leaseID,
 	)
 	if err != nil {
 		return fmt.Errorf("MarkCreatorForwardingBlocked: %w", err)

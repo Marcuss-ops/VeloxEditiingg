@@ -164,7 +164,7 @@ func (s *Service) Forward(ctx context.Context, rawPayload map[string]interface{}
 	}
 	forwardingID := "cf_" + uuid.NewString()
 	now := time.Now().UTC().Format(time.RFC3339)
-	if err := s.dbStore.InsertCreatorForwarding(&store.CreatorForwarding{
+	if _, err := s.dbStore.InsertCreatorForwarding(ctx, &store.CreatorForwarding{
 		ForwardingID:     forwardingID,
 		SourceProvider:   "remote_engine",
 		SourceJobID:      creatorJobID,
