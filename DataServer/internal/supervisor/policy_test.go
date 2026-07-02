@@ -190,9 +190,14 @@ func TestFailureTracker_ResetWindowRefreshesStreak(t *testing.T) {
 func TestFailureTracker_MixedErrors_OnlyInfraCounts(t *testing.T) {
 	tk := NewFailureTracker(RetryPolicy{ConsecutiveErrorThreshold: 3})
 
-	// pattern: infra, infra, element, infra, infra
-	// expected: counter=4 — element doesn't reset; counter only
-	// resets on a clean tick.
+	// Pattern: infra, infra, element, infra.
+	// Documented semantics: counter increments per infrastructure
+	// error, ignores element-scoped errors, escalates when
+	// consecutive >= threshold. With threshold=3:
+	//   - 1st infra: counter=1, no escalate
+	//   - 2nd infra: counter=2, no escalate
+	//   - element: counter still 2 (skipped)
+	//   - 3rd infra: counter=3 == threshold → escalate now.
 	if err := tk.Record(sql.ErrConnDone); err != nil {
 		t.Errorf("infra #1 unexpected escalate: %v", err)
 	}
@@ -203,19 +208,19 @@ func TestFailureTracker_MixedErrors_OnlyInfraCounts(t *testing.T) {
 	if err := tk.Record(elementErr); err != nil {
 		t.Errorf("element error should not escalate: %v", err)
 	}
-	if err := tk.Record(sql.ErrConnDone); err != nil {
-		t.Errorf("infra #3 unexpected escalate: %v", err)
+	if tk.Consecutive() != 2 {
+		t.Errorf("after element, consecutive = %d, want 2 (element does not count)", tk.Consecutive())
 	}
-	if tk.Consecutive() != 3 {
-		t.Errorf("consecutive = %d, want 3 (infra-only counter)", tk.Consecutive())
-	}
-	// 4th infra: escalate.
+	// 3rd infra: at the threshold boundary — escalate.
 	err := tk.Record(sql.ErrConnDone)
 	if err == nil {
-		t.Fatal("4th consecutive infra should escalate")
+		t.Fatal("3rd consecutive infra should escalate (threshold=3 is the boundary)")
 	}
 	if !IsInfrastructure(err) {
 		t.Errorf("expected ErrInfrastructure: %v", err)
+	}
+	if tk.Consecutive() != 3 {
+		t.Errorf("consecutive at escalation = %d, want 3", tk.Consecutive())
 	}
 }
 

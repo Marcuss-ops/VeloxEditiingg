@@ -116,49 +116,45 @@ func DefaultRetryPolicy() RetryPolicy {
 //     not per-element by definition).
 //   - everything else → ErrElementScoped.
 //
-// The wrapped error preserves the original via errors.Unwrap so
-// callers can introspect both the sentinel and the underlying
-// cause.
+// Wrapping uses errors.Join(sentinel, err) so the resulting error
+// chain supports errors.Is for BOTH the sentinel AND the original
+// cause. This preserves callers' ability to introspect both —
+// e.g. errors.Is(classified, sql.ErrConnDone) still hits the
+// underlying DB error even after ClassifyError wrapped it as
+// ErrInfrastructure.
 func ClassifyError(err error) error {
 	if err == nil {
 		return nil
 	}
 	if errors.Is(err, ErrLeaseLost) || errors.Is(err, ErrElementScoped) || errors.Is(err, ErrInfrastructure) || errors.Is(err, ErrPanicked) {
-		// Already classified — re-wrap so the caller can still
-		// rely on errors.Is at the outer boundary.
+		// Already classified — return as-is so the caller can
+		// still rely on errors.Is at the outer boundary.
 		return err
 	}
-	if errors.Is(err, sql.ErrConnDone) {
-		return fmt.Errorf("%w: %v", ErrInfrastructure, err)
+	// shorthand: pick a sentinel by classification rule then
+	// errors.Join it with the original error.
+	sentinel := ErrElementScoped
+	switch {
+	case errors.Is(err, sql.ErrConnDone):
+		sentinel = ErrInfrastructure
+	case errors.Is(err, context.DeadlineExceeded):
+		sentinel = ErrInfrastructure
+	case errors.Is(err, context.Canceled):
+		// Context cancellation in a tick function is usually the
+		// supervisor shutting down — the run loop sees the
+		// cancelled ctx on the next iteration and exits cleanly.
+		// Map to element-scoped so the tracker does not count it.
+		sentinel = ErrElementScoped
+	case errors.Is(err, errLeaseLostSentinel()),
+		strings.Contains(err.Error(), "transition conflict"),
+		strings.Contains(err.Error(), "lease") && strings.Contains(err.Error(), "conflict"):
+		sentinel = ErrLeaseLost
+	case strings.Contains(err.Error(), "database is closed"),
+		strings.Contains(err.Error(), "sql: connection is busy"),
+		strings.Contains(err.Error(), "no such table"):
+		sentinel = ErrInfrastructure
 	}
-	if errors.Is(err, context.DeadlineExceeded) {
-		return fmt.Errorf("%w: %v", ErrInfrastructure, err)
-	}
-	if errors.Is(err, context.Canceled) {
-		// Context cancellation is almost always the supervisor
-		// shutting down. NOT infrastructure — treat as
-		// element-scoped so the runner returns nil and the loop
-		// sees the cancelled ctx on the next iteration.
-		return fmt.Errorf("%w: %v", ErrElementScoped, err)
-	}
-	// Lease-CAS conflicts surface as ErrTransitionConflict from
-	// the store layer. Distinct from infrastructure (the row still
-	// observes a successful CAS path; the runner is just not the
-	// winner). Map to ErrLeaseLost so the in-flight cancellation
-	// contract kicks in.
-	if errors.Is(err, errLeaseLostSentinel()) || strings.Contains(err.Error(), "transition conflict") ||
-		strings.Contains(err.Error(), "lease") && strings.Contains(err.Error(), "conflict") {
-		return fmt.Errorf("%w: %v", ErrLeaseLost, err)
-	}
-	// Bare "database is closed" string match — drivers vary on
-	// whether it surfaces as sql.ErrConnDone or a custom string
-	// error.
-	if strings.Contains(err.Error(), "database is closed") ||
-		strings.Contains(err.Error(), "sql: connection is busy") ||
-		strings.Contains(err.Error(), "no such table") {
-		return fmt.Errorf("%w: %v", ErrInfrastructure, err)
-	}
-	return fmt.Errorf("%w: %v", ErrElementScoped, err)
+	return errors.Join(sentinel, err)
 }
 
 // errLeaseLostSentinel returns the store-layer ErrTransitionConflict
