@@ -13,6 +13,9 @@ import (
 	"time"
 )
 
+// Compile-time check: Policy satisfies BackoffPolicy.
+var _ BackoffPolicy = Policy{}
+
 // Policy defines the retry budget for an operation.
 type Policy struct {
 	// MaxAttempts is the total number of attempts (1 = no retry).
@@ -49,6 +52,12 @@ func (p Policy) Backoff(attempt int) time.Duration {
 	// Add 10-50% jitter to avoid thundering-herd
 	jitter := time.Duration(rand.Float64() * backoff * 0.5)
 	return time.Duration(backoff) + jitter
+}
+
+// Delay implements BackoffPolicy. Attempt is 1-based (first call = 1);
+// internally delegated to Backoff which expects a 0-indexed attempt.
+func (p Policy) Delay(attempt int) time.Duration {
+	return p.Backoff(attempt - 1)
 }
 
 // SleepWithContext sleeps for the given duration or until ctx is cancelled.
