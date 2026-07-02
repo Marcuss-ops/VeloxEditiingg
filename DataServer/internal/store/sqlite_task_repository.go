@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"velox-server/internal/placement"
 	"velox-server/internal/taskattempts"
 	"velox-server/internal/taskgraph"
 )
@@ -1522,4 +1523,81 @@ func (r *SQLiteTaskRepository) Delete(ctx context.Context, id string) error {
 		return fmt.Errorf("task delete: %w", err)
 	}
 	return nil
+}
+
+// placementCandidateBatch is the default limit for ListReadyCandidates.
+const placementCandidateBatch = 64
+
+// ListReadyCandidates returns lightweight task metadata rows for the
+// placement matcher. Only the columns needed for placement decisions
+// are fetched — full payloads are loaded later by ClaimTaskForWorkerAtomic.
+//
+// Query: SELECT task_id, job_id, revision, priority, created_at,
+// executor_id, executor_version FROM tasks WHERE status='READY'
+// AND (worker_id='' OR worker_id IS NULL) ORDER BY priority DESC,
+// created_at ASC LIMIT ?.
+//
+// limit <= 0 falls back to a safe default (placementCandidateBatch = 64).
+func (r *SQLiteTaskRepository) ListReadyCandidates(ctx context.Context, limit int) ([]placement.TaskCandidate, error) {
+	if r.store == nil || r.store.db == nil {
+		return nil, fmt.Errorf("task repository: store not initialized")
+	}
+	if limit <= 0 {
+		limit = placementCandidateBatch
+	}
+
+	rows, err := r.store.db.QueryContext(ctx,
+		`SELECT task_id, job_id, revision, priority, created_at,
+		        executor_id, executor_version
+		 FROM tasks
+		 WHERE status = 'READY'
+		   AND (worker_id = '' OR worker_id IS NULL)
+		 ORDER BY priority DESC, created_at ASC
+		 LIMIT ?`,
+		limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("task list ready candidates: %w", err)
+	}
+	defer rows.Close()
+
+	var candidates []placement.TaskCandidate
+	for rows.Next() {
+		var (
+			taskID          string
+			jobID           string
+			revision        int
+			priority        int
+			createdAt       string
+			executorID      string
+			executorVersion int
+		)
+		if scanErr := rows.Scan(&taskID, &jobID, &revision, &priority, &createdAt, &executorID, &executorVersion); scanErr != nil {
+			continue
+		}
+
+		var parsedTime time.Time
+		if createdAt != "" {
+			if pt, e := time.Parse(time.RFC3339, createdAt); e == nil {
+				parsedTime = pt
+			}
+		}
+
+		candidates = append(candidates, placement.TaskCandidate{
+			TaskID:   taskID,
+			JobID:    jobID,
+			Revision: revision,
+			Priority: priority,
+			CreatedAt: parsedTime,
+			Executor: placement.ExecutorKey{
+				ID:      executorID,
+				Version: executorVersion,
+			},
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("task list ready candidates rows: %w", err)
+	}
+
+	return candidates, nil
 }

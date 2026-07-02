@@ -143,6 +143,10 @@ func (s *exhaustedExpireStubRepo) ClaimNextReadyTask(context.Context, string, st
 func (s *exhaustedExpireStubRepo) ClaimNextWithAttemptAtomic(context.Context, string, string) (*TaskWithSpec, *taskattempts.TaskAttempt, error) {
 	panic("exhaustedExpireStubRepo.ClaimNextWithAttemptAtomic: not exercised by ExpireTaskLease tests")
 }
+
+func (s *exhaustedExpireStubRepo) ListReadyCandidates(context.Context, int) ([]placement.TaskCandidate, error) {
+	panic("exhaustedExpireStubRepo.ListReadyCandidates: not exercised by ExpireTaskLease tests")
+}
 func (s *exhaustedExpireStubRepo) ReleaseLease(context.Context, string, string, string) error {
 	panic("exhaustedExpireStubRepo.ReleaseLease: not exercised by ExpireTaskLease tests")
 }
@@ -451,6 +455,10 @@ func (s *stubRepo) ExpireTaskLeaseAtomic(_ context.Context, _, _, _ string, _ in
 // loud.
 func (s *stubRepo) ClaimNextWithAttemptAtomic(_ context.Context, _, _ string) (*TaskWithSpec, *taskattempts.TaskAttempt, error) {
 	panic("stubRepo.ClaimNextWithAttemptAtomic: not used in this test scope")
+}
+
+func (s *stubRepo) ListReadyCandidates(_ context.Context, _ int) ([]placement.TaskCandidate, error) {
+	panic("stubRepo.ListReadyCandidates: not used in this test scope")
 }
 func (s *stubRepo) IngestTaskResultAtomic(_ context.Context, _ IngestResultCommand) error {
 	panic("stubRepo.IngestTaskResultAtomic: not used in this test scope")

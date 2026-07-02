@@ -89,6 +89,10 @@ func (c *countingRepo) ClaimNextWithAttemptAtomic(_ context.Context, _, _ string
 	panic("countingRepo.ClaimNextWithAttemptAtomic: not used in this test scope")
 }
 
+func (c *countingRepo) ListReadyCandidates(_ context.Context, _ int) ([]placement.TaskCandidate, error) {
+	panic("countingRepo.ListReadyCandidates: not used in this test scope")
+}
+
 var errRepo = errors.New("fake repo error")
 
 // stubReaperLifecycle wires a real LifecycleService to a countingRepo

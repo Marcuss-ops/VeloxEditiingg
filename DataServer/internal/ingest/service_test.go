@@ -148,6 +148,10 @@ func (s *stubIngestTaskRepo) IsAllAttemptCommitsCommittedForTasks(_ context.Cont
 func (s *stubIngestTaskRepo) ClaimNextWithAttemptAtomic(_ context.Context, _, _ string) (*taskgraph.TaskWithSpec, *taskattempts.TaskAttempt, error) {
 	panic("stubIngestTaskRepo.ClaimNextWithAttemptAtomic: not used in this test scope")
 }
+
+func (s *stubIngestTaskRepo) ListReadyCandidates(_ context.Context, _ int) ([]placement.TaskCandidate, error) {
+	panic("stubIngestTaskRepo.ListReadyCandidates: not used in this test scope")
+}
 func (s *stubIngestTaskRepo) IngestTaskResultAtomic(_ context.Context, cmd taskgraph.IngestResultCommand) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
