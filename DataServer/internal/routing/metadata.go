@@ -107,6 +107,27 @@ func (k ForwardingKey) Parse() (provider, sourceJobID, executorID string) {
 	return
 }
 
+// InjectIntoPayload writes this ForwardingKey into the target map under
+// KeyForwardingKey, if and only if k is non-empty.
+//
+// Round-out of the ForwardingKey method surface: alongside (k).String
+// and (k).Parse, (k).InjectIntoPayload is the symmetric write-side
+// helper for callers that hold ONLY a ForwardingKey value (rather than
+// the broader InternalRoutingMetadata, whose InjectIntoPayload writes
+// all non-zero routing fields atomically).
+//
+// A nil target is a no-op (matching InternalRoutingMetadata.InjectIntoPayload)
+// so callers can use the method unconditionally on a freshly-allocated map.
+// An empty receiver is likewise a no-op — the caller did not produce a
+// forwarding key, so we do not want to write a zero-value entry that would
+// later be confused with a real key by routing.FromPayload.
+func (k ForwardingKey) InjectIntoPayload(target map[string]interface{}) {
+	if target == nil || k == "" {
+		return
+	}
+	target[KeyForwardingKey] = string(k)
+}
+
 // String returns the string representation of the ForwardingKey.
 func (k ForwardingKey) String() string { return string(k) }
 
