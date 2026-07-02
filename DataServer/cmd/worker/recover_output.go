@@ -238,11 +238,17 @@ func recoverOutput(ctx context.Context, opts *cliOptions) (int, error) {
 	// 6. CompleteUpload. We pass the freshly-computed size +
 	// SHA so the master's CAS advances artifact_uploads →
 	// COMPLETED and artifacts STAGING → READY in the same tx.
+	// ServerSHA256 must equal sha: this is the admin recovery path
+	// and the file is already at rest on the master host. The CLI
+	// just hashed the bytes via hashFile() so sha IS the master-
+	// derived SHA. Omitting it would route the artifact through
+	// Branch A/B (verifying) and stall the recovery (Verdetto P0 #5).
 	if err := coord.CompleteUpload(ctx, completion.CompleteUploadCommand{
 		Fence:             fence,
 		UploadID:          uploadID,
 		UploadedSizeBytes: size,
 		WorkerSHA256:      sha,
+		ServerSHA256:      sha,
 	}); err != nil {
 		return 1, fmt.Errorf("recover_output: CompleteUpload: %w", err)
 	}

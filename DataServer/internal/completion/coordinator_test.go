@@ -5,9 +5,11 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 
@@ -560,6 +562,199 @@ func TestCoordinator_RecordUploadProgress_EmptyUploadIDRejected(t *testing.T) {
 // method calls commitID=="" with a fast-error before any SQL touch).
 // ────────────────────────────────────────────────────────────────────────
 
+
+// ────────────────────────────────────────────────────────────────────
+// Verdetto P0 #5: ServerSHA256 authoritative gate for CompleteUpload.
+//
+// Four branches must be exercised end-to-end against the
+// artifact_uploads + artifacts schema:
+//   A. ServerSHA="" AND effectiveExpected=""  -> artifact stays VERIFYING
+//   B. ServerSHA="" AND effectiveExpected!="" -> artifact stays VERIFYING
+//   C. ServerSHA matches effectiveExpected     -> artifact STAGING/VERIFYING -> READY
+//   D. ServerSHA!="" AND differs               -> ErrStaleReport (no row change)
+// ────────────────────────────────────────────────────────────────────
+
+// seedCompleteUploadFixture inserts an artifacts row (STAGING, expected
+// SHA) + artifact_uploads row (RECEIVED, expected_sha256). Tests call
+// the coordinator's CompleteUpload against this fixture.
+func seedCompleteUploadFixture(t *testing.T, db *sql.DB, uploadID, artifactID, expectedSHA string) {
+	t.Helper()
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := db.Exec(`
+		INSERT INTO artifacts (
+			id, job_id, type, storage_provider, storage_key,
+			sha256, size_bytes, status, created_at
+		) VALUES (?, 'job-fixture', 'video', 'local', ?, ?, 1024, 'STAGING', ?)`,
+		artifactID, uploadID+".local", expectedSHA, now,
+	); err != nil {
+		t.Fatalf("seed artifacts: %v", err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO artifact_uploads (
+			upload_id, artifact_id, job_id, attempt_number,
+			worker_id, lease_id, status, temporary_storage_key,
+			expected_size_bytes, expected_sha256, created_at, expires_at
+		) VALUES (?, ?, 'job-fixture', 1, 'worker-fixture', 'lease-fixture',
+		          'RECEIVED', ?, 1024, ?, ?, ?)`,
+		uploadID, artifactID, uploadID+".local", expectedSHA, now, now,
+	); err != nil {
+		t.Fatalf("seed artifact_uploads: %v", err)
+	}
+}
+
+// readArtifactStatus returns the post-call status of the
+// artifact row, used by the four-branch assertions.
+func readArtifactStatus(t *testing.T, db *sql.DB, artifactID string) string {
+	t.Helper()
+	var status string
+	if err := db.QueryRow(`SELECT status FROM artifacts WHERE id = ?`, artifactID).Scan(&status); err != nil {
+		t.Fatalf("read artifact status: %v", err)
+	}
+	return status
+}
+
+func TestCoordinator_CompleteUpload_BranchA_NoServerSHA_NoExpected_StaysVerifying(t *testing.T) {
+	db := openCoordinatorTestDB(t)
+	c := newTestCoordinator(db)
+	fence := validFence("task-branch-a", "attempt-branch-a")
+
+	// Seed artifact + upload without setting expected_sha256.
+	seedCompleteUploadFixture(t, db, "up-branch-a", "art-branch-a", "")
+	// DeclareOutputs is required for the Fence.Read gate.
+	if _, err := c.DeclareOutputs(context.Background(), DeclareOutputsCommand{
+		Fence: fence, JobID: "job-branch-a", OutputManifests: []OutputManifest{
+			{OutputKind: "final_video", LogicalName: "out.mp4",
+				MimeType: "video/mp4", SizeBytes: 1024,
+				SHA256: strings.Repeat("a", 64)},
+		},
+	}); err != nil {
+		t.Fatalf("DeclareOutputs: %v", err)
+	}
+
+	if err := c.CompleteUpload(context.Background(), CompleteUploadCommand{
+		Fence:        fence,
+		UploadID:     "up-branch-a",
+		WorkerSHA256: strings.Repeat("a", 64),
+		ServerSHA256: "", // Branch A
+	}); err != nil {
+		t.Fatalf("Branch A CompleteUpload: %v", err)
+	}
+	if got := readArtifactStatus(t, db, "art-branch-a"); got != "VERIFYING" {
+		t.Errorf("Branch A artifact.status: got %q, want VERIFYING (no master SHA, no declarative SHA)", got)
+	}
+}
+
+func TestCoordinator_CompleteUpload_BranchB_NoServerSHA_HasExpected_StaysVerifying(t *testing.T) {
+	db := openCoordinatorTestDB(t)
+	c := newTestCoordinator(db)
+	fence := validFence("task-branch-b", "attempt-branch-b")
+	expected := strings.Repeat("b", 64)
+	seedCompleteUploadFixture(t, db, "up-branch-b", "art-branch-b", expected)
+	if _, err := c.DeclareOutputs(context.Background(), DeclareOutputsCommand{
+		Fence: fence, JobID: "job-branch-b", OutputManifests: []OutputManifest{
+			{OutputKind: "final_video", LogicalName: "out.mp4",
+				MimeType: "video/mp4", SizeBytes: 1024,
+				SHA256: expected},
+		},
+	}); err != nil {
+		t.Fatalf("DeclareOutputs: %v", err)
+	}
+
+	if err := c.CompleteUpload(context.Background(), CompleteUploadCommand{
+		Fence:        fence,
+		UploadID:     "up-branch-b",
+		WorkerSHA256: expected,
+		ServerSHA256: "", // Branch B
+	}); err != nil {
+		t.Fatalf("Branch B CompleteUpload: %v", err)
+	}
+	if got := readArtifactStatus(t, db, "art-branch-b"); got != "VERIFYING" {
+		t.Errorf("Branch B artifact.status: got %q, want VERIFYING (no master SHA despite declarative SHA)", got)
+	}
+}
+
+func TestCoordinator_CompleteUpload_BranchC_ServerSHAMatch_PromotesToReady(t *testing.T) {
+	db := openCoordinatorTestDB(t)
+	c := newTestCoordinator(db)
+	fence := validFence("task-branch-c", "attempt-branch-c")
+	expected := strings.Repeat("c", 64)
+	seedCompleteUploadFixture(t, db, "up-branch-c", "art-branch-c", expected)
+	if _, err := c.DeclareOutputs(context.Background(), DeclareOutputsCommand{
+		Fence: fence, JobID: "job-branch-c", OutputManifests: []OutputManifest{
+			{OutputKind: "final_video", LogicalName: "out.mp4",
+				MimeType: "video/mp4", SizeBytes: 1024,
+				SHA256: expected},
+		},
+	}); err != nil {
+		t.Fatalf("DeclareOutputs: %v", err)
+	}
+
+	if err := c.CompleteUpload(context.Background(), CompleteUploadCommand{
+		Fence:        fence,
+		UploadID:     "up-branch-c",
+		WorkerSHA256: expected,
+		ServerSHA256: expected, // Branch C (match)
+	}); err != nil {
+		t.Fatalf("Branch C CompleteUpload: %v", err)
+	}
+	if got := readArtifactStatus(t, db, "art-branch-c"); got != "READY" {
+		t.Errorf("Branch C artifact.status: got %q, want READY (server SHA matches declarative)", got)
+	}
+	// received_sha256 must be the server-derived SHA, NOT the
+	// worker self-report. This is the canonical ledger entry; if
+	// the worker ever wrote it independently the ledger would be
+	// forgeable.
+	var receivedSHA string
+	if err := db.QueryRow(`SELECT received_sha256 FROM artifact_uploads WHERE upload_id = ?`,
+		"up-branch-c").Scan(&receivedSHA); err != nil {
+		t.Fatalf("read received_sha256: %v", err)
+	}
+	if receivedSHA != expected {
+		t.Errorf("artifact_uploads.received_sha256: got %q, want %q (master-derived only, never worker self-report)",
+			receivedSHA, expected)
+	}
+}
+
+func TestCoordinator_CompleteUpload_BranchD_ServerSHAMismatch_ErrStaleReport(t *testing.T) {
+	db := openCoordinatorTestDB(t)
+	c := newTestCoordinator(db)
+	fence := validFence("task-branch-d", "attempt-branch-d")
+	expected := strings.Repeat("d", 64)
+	other := strings.Repeat("e", 64)
+	seedCompleteUploadFixture(t, db, "up-branch-d", "art-branch-d", expected)
+	if _, err := c.DeclareOutputs(context.Background(), DeclareOutputsCommand{
+		Fence: fence, JobID: "job-branch-d", OutputManifests: []OutputManifest{
+			{OutputKind: "final_video", LogicalName: "out.mp4",
+				MimeType: "video/mp4", SizeBytes: 1024,
+				SHA256: expected},
+		},
+	}); err != nil {
+		t.Fatalf("DeclareOutputs: %v", err)
+	}
+
+	err := c.CompleteUpload(context.Background(), CompleteUploadCommand{
+		Fence:        fence,
+		UploadID:     "up-branch-d",
+		WorkerSHA256: expected,
+		ServerSHA256: other, // Branch D (mismatch)
+	})
+	if !errors.Is(err, ErrStaleReport) {
+		t.Fatalf("Branch D CompleteUpload: expected ErrStaleReport, got %v", err)
+	}
+	// Branch D must roll back: artifact stays STAGING (no
+	// advancement), artifact_uploads stays RECEIVED.
+	if got := readArtifactStatus(t, db, "art-branch-d"); got != "STAGING" {
+		t.Errorf("Branch D artifact.status after rollback: got %q, want STAGING (rollback preserves pre-call state)", got)
+	}
+	var upStatus string
+	if err := db.QueryRow(`SELECT status FROM artifact_uploads WHERE upload_id = ?`,
+		"up-branch-d").Scan(&upStatus); err != nil {
+		t.Fatalf("read artifact_uploads status: %v", err)
+	}
+	if upStatus != "RECEIVED" {
+		t.Errorf("Branch D artifact_uploads.status after rollback: got %q, want RECEIVED", upStatus)
+	}
+}
 
 // errorsIs is a tiny inline errors.Is shim to avoid pulling the
 // stdlib import into every test. The Go 1.18+ errors package is used

@@ -461,19 +461,36 @@ func (c *coordinator) CompleteUpload(ctx context.Context, cmd CompleteUploadComm
 			ErrStaleReport, cmd.UploadID, cmd.ServerSHA256, effectiveExpected)
 	}
 
-	// 2. artifact_uploads → COMPLETED. received_sha256 is stamped
-	//    with the master-derived ServerSHA256 (NEVER the worker
-	//    self-report). COALESCE keeps an earlier master-derived
-	//    value if one was set by an earlier tick (e.g., a partial
-	//    chunked-handshake probe that already wrote the SHA).
-	if _, err := tx.ExecContext(ctx, `
-		UPDATE artifact_uploads
-		   SET status = 'COMPLETED', completed_at = ?, received_sha256 = COALESCE(received_sha256, ?),
-		       updated_at = ?
-		 WHERE upload_id = ? AND status IN ('CREATED','UPLOADING','RECEIVED')`,
-		nowStr, cmd.ServerSHA256, nowStr, cmd.UploadID,
-	); err != nil {
-		return fmt.Errorf("completion.CompleteUpload: artifact_uploads CAS: %w", err)
+	// 2. artifact_uploads → COMPLETED. The canonical received_sha256
+	//    column is stamped with the master-derived ServerSHA256
+	//    (NEVER the worker self-report). Branch C (server SHA
+	//    present and matching) overwrites received_sha256
+	//    unconditionally so a stale chunked-handshake probe value
+	//    cannot survive a verified re-CAS. Branches A/B (no master
+	//    SHA available) keep the COALESCE so a partial probe from a
+	//    earlier tick's chunked handler is preserved until the
+	//    master-side verification tick writes a value. The CAS
+	//    guard on (status IN 'CREATED','UPLOADING','RECEIVED') is
+	//    shared; only the column expression differs.
+	if branchC := cmd.ServerSHA256 != ""; branchC {
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE artifact_uploads
+			   SET status = 'COMPLETED', completed_at = ?, received_sha256 = ?
+			 WHERE upload_id = ? AND status IN ('CREATED','UPLOADING','RECEIVED')`,
+			nowStr, cmd.ServerSHA256, cmd.UploadID,
+		); err != nil {
+			return fmt.Errorf("completion.CompleteUpload: artifact_uploads CAS (Branch C): %w", err)
+		}
+	} else {
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE artifact_uploads
+			   SET status = 'COMPLETED', completed_at = ?,
+			       received_sha256 = COALESCE(received_sha256, ?)
+			 WHERE upload_id = ? AND status IN ('CREATED','UPLOADING','RECEIVED')`,
+			nowStr, cmd.ServerSHA256, cmd.UploadID,
+		); err != nil {
+			return fmt.Errorf("completion.CompleteUpload: artifact_uploads CAS (Branch A/B): %w", err)
+		}
 	}
 
 	// 3. artifacts gate — Branch C promotes STAGING/VERIFYING → READY;
@@ -481,20 +498,24 @@ func (c *coordinator) CompleteUpload(ctx context.Context, cmd CompleteUploadComm
 	//    later reconciliation / head-request verification tick can
 	//    pick them up. The CAS guard is identical (status IN
 	//    'STAGING','VERIFYING'); only the target status differs.
+	//
+	//    Note: the artifacts schema has created_at (no updated_at)
+	//    so we manage freshness via verified_at + completed_at on
+	//    artifact_uploads instead.
 	var artifactTargetStatus string
 	switch {
 	case cmd.ServerSHA256 != "" && (effectiveExpected == "" || cmd.ServerSHA256 == effectiveExpected):
 		artifactTargetStatus = "READY"
 	default:
-		// Branch A or B: keep at VERIFYING.
+		// Branch A or B: stay at VERIFYING uniformly.
 		artifactTargetStatus = "VERIFYING"
 	}
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE artifacts
-		   SET status = ?, verified_at = ?, updated_at = ?
+		   SET status = ?, verified_at = ?
 		 WHERE id = (SELECT artifact_id FROM artifact_uploads WHERE upload_id = ?)
 		   AND status IN ('STAGING','VERIFYING')`,
-		artifactTargetStatus, nowStr, nowStr, cmd.UploadID,
+		artifactTargetStatus, nowStr, cmd.UploadID,
 	); err != nil {
 		return fmt.Errorf("completion.CompleteUpload: artifacts -> %s: %w", artifactTargetStatus, err)
 	}

@@ -143,6 +143,12 @@ type Collector struct {
 	reconcileTotal         *Family // velox_completion_reconcile_total{case,action}
 	commitDeadlineExceeded *Family // velox_commit_deadline_exceeded_total
 
+	// Placement rejection counter. Incremented every time the
+	// placement matcher rejects a candidate (velox_placement_rejections_total)
+	// with a single label `reason` carrying the stable RejectionCode
+	// (e.g. capacity_full, unsupported_executor, missing_capability).
+	placementRejections *Family // velox_placement_rejections_total{reason}
+
 	// Book-keeping for diffs.
 	stateMu  sync.Mutex
 	lastSeen map[string]time.Time // worker_id → last heartbeat timestamp
@@ -308,6 +314,12 @@ func NewCollector(reg *Registry) *Collector {
 		[]string{},
 	)
 
+	c.placementRejections = NewCounterFamily(
+		"velox_placement_rejections_total",
+		"Placement rejections by reason code (capacity_full, unsupported_executor, missing_capability, ...)",
+		[]string{"reason"},
+	)
+
 	c.lastSeen = make(map[string]time.Time)
 
 	for _, f := range c.allFamilies() {
@@ -347,6 +359,7 @@ func (c *Collector) allFamilies() []*Family {
 		c.costTotalPerMin,
 		c.reconcileTotal,
 		c.commitDeadlineExceeded,
+		c.placementRejections,
 	}
 }
 
@@ -766,3 +779,26 @@ type WorkerResourceSink interface {
 // Compile-time guard: *Collector implements WorkerResourceSink by default.
 // Tests skipping this assertion would break RecordWorker wire-up silently.
 var _ WorkerResourceSink = (*Collector)(nil)
+
+// RecordPlacementRejection increments velox_placement_rejections_total
+// for a single reason code. Called from the gRPC handler's placement
+// pipeline: recordPlacementRejections for matcher-side skips and
+// handleUnsupportedExecutorRejection for worker-side executor mismatches.
+func (c *Collector) RecordPlacementRejection(reason string) {
+	c.placementRejections.Inc([]string{reason}, 1)
+}
+
+// PlacementRejectionSink is the contract the gRPC handler depends on
+// for forwarding placement rejection counters onto the Prometheus
+// registry. Defined here (consumed-by-handler) following the same
+// pattern as WorkerResourceSink.
+//
+// The placement pipeline calls RecordPlacementRejection for every
+// candidate the placement matcher skipped, producing a per-reason
+// time series (e.g. capacity_full, unsupported_executor).
+type PlacementRejectionSink interface {
+	RecordPlacementRejection(reason string)
+}
+
+// Compile-time guard: *Collector implements PlacementRejectionSink.
+var _ PlacementRejectionSink = (*Collector)(nil)

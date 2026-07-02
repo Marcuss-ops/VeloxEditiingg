@@ -289,12 +289,15 @@ func (h *Handler) sendClaimedTaskOffer(
 }
 
 // recordPlacementRejections logs the rejection reasons produced by the
-// placement matcher. In a future iteration this will be wired to
-// Prometheus counters (velox_placement_rejections_total).
+// placement matcher and increments the per-reason Prometheus counter
+// via the PlacementRejectionSink (when wired).
 func (h *Handler) recordPlacementRejections(snapshot placement.WorkerSnapshot, rejections []placement.Rejection) {
 	for _, r := range rejections {
 		log.Printf("[PLACEMENT] Rejection worker=%s task=%s code=%s detail=%s",
 			snapshot.WorkerID, r.TaskID, r.Code, r.Detail)
+		if h.placementRejectionSink != nil {
+			h.placementRejectionSink.RecordPlacementRejection(string(r.Code))
+		}
 	}
 }
 

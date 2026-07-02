@@ -77,6 +77,14 @@ type Handler struct {
 	// the Prometheus projection (deployments without metrics still score).
 	resourceSink velmetrics.WorkerResourceSink
 
+	// Scorecard v1 / placement: forward placement rejection counters
+	// from the placement pipeline (recordPlacementRejections) and
+	// unsupported_executor handler onto the Prometheus registry.
+	// Wired post-construction via SetPlacementRejectionSink so tests
+	// can inject a stub. NIL-safe — handlers without a metrics
+	// surface silently skip the projection (log-only mode).
+	placementRejectionSink velmetrics.PlacementRejectionSink
+
 	placementMatcher *placement.Matcher
 
 	mu             sync.RWMutex
@@ -905,6 +913,15 @@ func (h *Handler) SetIngestionSvc(svc *ingest.TaskReportIngestionService) {
 // the Prometheus projection.
 func (h *Handler) SetResourceSink(sink velmetrics.WorkerResourceSink) {
 	h.resourceSink = sink
+}
+
+// SetPlacementRejectionSink installs the PlacementRejectionSink used by
+// the placement pipeline (recordPlacementRejections + handleUnsupportedExecutorRejection).
+// Bootstrap wires metrics.NewCollector here; tests inject a recording stub.
+// NIL-safe — handlers without a metrics surface still log rejections but
+// skip the Prometheus projection.
+func (h *Handler) SetPlacementRejectionSink(sink velmetrics.PlacementRejectionSink) {
+	h.placementRejectionSink = sink
 }
 
 // ingestionService returns the wired TaskReportIngestionService, or nil

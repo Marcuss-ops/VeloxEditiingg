@@ -278,8 +278,11 @@ func (h *Handler) handleUnsupportedExecutorRejection(
 		log.Printf("[PLACEMENT] ReleaseLease for unsupported_executor task %s failed: %v", t.ID, err)
 	}
 
-	// TODO: increment velox_placement_rejections_total{reason="unsupported_executor"}
-	// when the Prometheus counter family is wired.
+	// Increment velox_placement_rejections_total{reason="unsupported_executor"}
+	// via the PlacementRejectionSink (when wired).
+	if h.placementRejectionSink != nil {
+		h.placementRejectionSink.RecordPlacementRejection("unsupported_executor")
+	}
 }
 
 // clearPendingOfferForTask removes the pending offer for a task if the
