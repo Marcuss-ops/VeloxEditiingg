@@ -96,7 +96,7 @@ func TestInsertForwarding_Idempotent(t *testing.T) {
 		CreatedAt:        time.Now().UTC().Format(time.RFC3339),
 		UpdatedAt:        time.Now().UTC().Format(time.RFC3339),
 	}
-	if err := db.InsertCreatorForwarding(cf2); err != nil {
+	if _, err := db.InsertCreatorForwarding(ctx, cf2); err != nil {
 		t.Fatalf("second insert: %v", err)
 	}
 
@@ -252,7 +252,7 @@ func TestClaimForwardings_RetryWaitWithFutureNextAttempt(t *testing.T) {
 		CreatedAt:        time.Now().UTC().Format(time.RFC3339),
 		UpdatedAt:        time.Now().UTC().Format(time.RFC3339),
 	}
-	if err := db.InsertCreatorForwarding(cf); err != nil {
+	if _, err := db.InsertCreatorForwarding(ctx, cf); err != nil {
 		t.Fatalf("insert: %v", err)
 	}
 
@@ -282,7 +282,7 @@ func TestClaimForwardings_RetryWaitWithPastNextAttempt(t *testing.T) {
 		CreatedAt:        time.Now().UTC().Format(time.RFC3339),
 		UpdatedAt:        time.Now().UTC().Format(time.RFC3339),
 	}
-	if err := db.InsertCreatorForwarding(cf); err != nil {
+	if _, err := db.InsertCreatorForwarding(ctx, cf); err != nil {
 		t.Fatalf("insert: %v", err)
 	}
 
@@ -667,7 +667,7 @@ func TestMarkCreatorForwardingEnqueueRetry_FromForwarding(t *testing.T) {
 		CreatedAt:        time.Now().UTC().Format(time.RFC3339),
 		UpdatedAt:        time.Now().UTC().Format(time.RFC3339),
 	}
-	if err := db.InsertCreatorForwarding(cf); err != nil {
+	if _, err := db.InsertCreatorForwarding(ctx, cf); err != nil {
 		t.Fatalf("insert: %v", err)
 	}
 

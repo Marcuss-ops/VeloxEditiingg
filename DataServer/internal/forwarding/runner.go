@@ -463,7 +463,10 @@ func (r *CreatorForwardingRunner) handleEnqueueRetry(ctx context.Context, lease 
 		// CAS failure (race with another runner or already transitioned) —
 		// fall back to terminal failure to prevent the row from being
 		// silently stuck in FORWARDING/READY_TO_FORWARD forever.
-		log.Printf("[FORWARDING] enqueue retry CAS failed forwarding=%s: %v; marking FAILED", lease.ForwardingID, err)
+		// With full lease-authority CAS, this is a best-effort safety
+		// net: if another runner already claimed the row, the CAS will
+		// also fail (which is correct — the new lease holder owns it).
+		log.Printf("[FORWARDING] enqueue retry CAS failed forwarding=%s: %v; best-effort FAILED (may no-op if preempted)", lease.ForwardingID, err)
 		if ferr := r.dbStore.MarkCreatorForwardingFailed(ctx,
 			lease.ForwardingID, r.identity, lease.LeaseID,
 			"ENQUEUE_RETRY_CAS_FAILED",
