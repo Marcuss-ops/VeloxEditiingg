@@ -20,6 +20,29 @@ package supervisor
 
 import "time"
 
+// Nil-clock contract (DOCUMENTED, NOT A BUG): passing a nil Clock
+// to any supervisor constructor (notably NewFailureTrackerWithClock)
+// gracefully falls back to a RealClock. This guarantees that
+// time-dependent tracking (ResetWindow, streak refresh, escalation
+// cadence) keeps using the system clock instead of panicking if
+// clock injection is missed. Tests and runtime code alike get a
+// working tracker by default; only callers that genuinely need a
+// virtual Now must pass a non-nil Clock explicitly.
+//
+// Why not panic on nil? Two reasons:
+//   - symmetry with NewFailureTracker(p), the no-clock constructor
+//     wrapper, which already defaults to wall-clock time;
+//   - long-running runners must not crash over a missing seam —
+//     the supervisor's contract is to surface infra failures via
+//     ErrInfrastructure, not to die on cold-start typos.
+//
+// If a stricter posture is desired (nil-clock is a programming
+// error, fail fast), change the `if clk == nil { clk =
+// RealClock{} }` guards in NewFailureTrackerWithClock to a panic
+// and update clock_test.go accordingly. The fail-loud policy is
+// valid but BREAKS any caller — internal or external — that
+// relies on the symmetry with NewFailureTracker.
+
 // Clock is the minimal wall-clock + ticker surface the supervisor
 // package depends on. Both methods mirror time.Now + time.NewTicker
 // semantics — RealClock is a one-line wrapper; tests can pass any

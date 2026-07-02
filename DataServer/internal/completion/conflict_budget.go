@@ -91,6 +91,57 @@ type ConflictBudget struct {
 	firstErrAt  time.Time
 	lastErrAt   time.Time
 	nowFn       func() time.Time
+
+	// sink is the optional Prometheus instrumentation point. When
+	// non-nil, Record/Reset notify it of state-machine transitions
+	// so dashboards can show the streak shape next to the under-
+	// threshold counts. Nil-safe; tests construct the budget
+	// without a sink (the default). See WithMetricsSink.
+	sink ConflictBudgetSink
+}
+
+// ConflictBudgetSink is the optional completion-side contract the
+// budget emits to after each state-machine transition. Defined
+// here (consumed-by-completion) to avoid a metrics import in the
+// completion package and to keep the structural-method-shape
+// shared with the metrics-side interface of the same name.
+//
+// Three semantically distinct calls so the test surface can mock
+// each transition independently:
+//
+//   - ResetConflictBudget()                 — real reset (Record(nil) on
+//                                              a non-zero prior streak).
+//                                              No-op resets (streak=0) do
+//                                              NOT increment.
+//   - ObserveConflictStreakUnderThreshold(streak int)
+//                                            — Record(ErrTransitionConflict)
+//                                              that incremented the streak
+//                                              but stayed under threshold.
+//                                              streak is the POST-increment
+//                                              value (>= 1, <= threshold-1).
+//   - EscalateConflictBudget(streak int)     — Record(ErrTransitionConflict)
+//                                              that crossed the threshold.
+//                                              streak is the POST-increment
+//                                              value (= threshold).
+//
+// The metrics.Collector method set matches this interface via Go's
+// structural typing; bootstrap can wire it without an explicit cast.
+type ConflictBudgetSink interface {
+	ResetConflictBudget()
+	ObserveConflictStreakUnderThreshold(streak int)
+	EscalateConflictBudget(streak int)
+}
+
+// WithMetricsSink installs (or replaces) the Prometheus sink used
+// to instrument Record/Reset transitions. Nil is allowed and is
+// treated as "no instrumentation" (the budget keeps the same state-
+// machine behaviour but emits no metrics). Mirrors WithClock so the
+// constructor seam stays minimal.
+func (b *ConflictBudget) WithMetricsSink(sink ConflictBudgetSink) *ConflictBudget {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.sink = sink
+	return b
 }
 
 // NewConflictBudget constructs a budget with the supplied policy.
@@ -142,9 +193,11 @@ func (b *ConflictBudget) Record(err error) error {
 	if !errors.Is(err, ErrTransitionConflict) {
 		return err
 	}
-	// ErrTransitionConflict path
+	// ErrTransitionConflict path: capture the prior lock + sink
+	// references under the mutex, drop the lock, and notify the
+	// sink AFTER the lock is released so the Prometheus registry's
+	// own mutexes do not chain on the budget's CAS hot path.
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	now := b.nowFn()
 	if b.consecutive == 0 || (b.Policy.ResetWindow > 0 && now.Sub(b.firstErrAt) > b.Policy.ResetWindow) {
 		b.consecutive = 1
@@ -154,26 +207,56 @@ func (b *ConflictBudget) Record(err error) error {
 		b.consecutive++
 		b.lastErrAt = now
 	}
-	if b.consecutive >= b.Policy.ConsecutiveConflictThreshold {
+	escalated := b.consecutive >= b.Policy.ConsecutiveConflictThreshold
+	streakSnapshot := b.consecutive
+	sink := b.sink
+	firstErrAt := b.firstErrAt
+	lastErrAt := b.lastErrAt
+	b.mu.Unlock()
+
+	wrapErr := func() error {
 		return fmt.Errorf("%w: consecutive=%d (since=%s last=%s) original=%v",
-			ErrConflictBudgetExhausted, b.consecutive,
-			b.firstErrAt.Format(time.RFC3339Nano),
-			b.lastErrAt.Format(time.RFC3339Nano),
+			ErrConflictBudgetExhausted, streakSnapshot,
+			firstErrAt.Format(time.RFC3339Nano),
+			lastErrAt.Format(time.RFC3339Nano),
 			err)
 	}
+	if sink == nil {
+		if escalated {
+			return wrapErr()
+		}
+		return nil
+	}
+	if escalated {
+		sink.EscalateConflictBudget(streakSnapshot)
+		return wrapErr()
+	}
+	sink.ObserveConflictStreakUnderThreshold(streakSnapshot)
 	return nil
 }
 
 // Reset clears the consecutive-conflict counter. Called automatically
 // on a successful Coordinator method exit (Record(nil)) and exposed
 // so callers can reset manually — e.g. when the master recovers
-// from a transient contention-out-of-band.
+// from a transient contention-out-of-band. Notifies the sink only
+// on a REAL reset (the prior streak was non-zero) so the reset
+// counter does not double-count trivial no-op resets on every
+// successful exit.
 func (b *ConflictBudget) Reset() {
 	b.mu.Lock()
-	defer b.mu.Unlock()
+	wasStreak := b.consecutive > 0
 	b.consecutive = 0
 	b.firstErrAt = time.Time{}
 	b.lastErrAt = time.Time{}
+	sink := b.sink
+	b.mu.Unlock()
+
+	if wasStreak && sink != nil {
+		// Notify OUTSIDE the mutex for the same reason as Record:
+		// the registry's own mutexes should not chain on the
+		// budget's hot path.
+		sink.ResetConflictBudget()
+	}
 }
 
 // Consecutive returns the current consecutive-conflict counter value.

@@ -97,6 +97,29 @@ func NewCoordinator(cfg CoordinatorConfig) (Coordinator, error) {
 	}, nil
 }
 
+// SetConflictBudgetSink installs (or replaces) the Prometheus
+// instrumentation point the ConflictBudget emits state-machine
+// transitions to. The sink parameter MAY be nil, which clears
+// any previously installed sink and returns the budget to a
+// no-instrumentation state (useful for tests that want to swap
+// sinks between phases).
+//
+// The seam is additive — bootstrap wires the metrics.Collector
+// post-construct, so callers that already build a Coordinator
+// without this method are unaffected. Internally the call
+// delegates to (*ConflictBudget).WithMetricsSink, which is nil-
+// safe and lock-guarded.
+//
+// Idempotent across multiple calls: replacing an existing sink
+// is allowed; the new one becomes the active sink on the next
+// Record/Reset.
+func (c *coordinator) SetConflictBudgetSink(sink ConflictBudgetSink) {
+	if c.budget == nil {
+		return
+	}
+	c.budget.WithMetricsSink(sink)
+}
+
 // coordinator is the canonical Coordinator implementation.
 type coordinator struct {
 	db         *sql.DB

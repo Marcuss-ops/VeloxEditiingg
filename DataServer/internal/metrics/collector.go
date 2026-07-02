@@ -149,6 +149,21 @@ type Collector struct {
 	// (e.g. capacity_full, unsupported_executor, missing_capability).
 	placementRejections *Family // velox_placement_rejections_total{reason}
 
+	// ConflictBudget (spec §14 Blocco 5) instrumentation. Three
+	// counters + one histogram capture the consecutive-err
+	// conflict path on the canonical attempt_commits CAS surface
+	// (UpdateReadyCountExhaustive, SetExpired, MarkCommitted,
+	// SetExpiredByID). Cardinality is bounded — no labels — so
+	// the families stay single-series. The histogram observes
+	// the SHAPE of the streak at every conflict increment, both
+	// before and at the threshold boundary. Buckets [1,2,3,5,10]
+	// cover the canonical default threshold=3 plus headroom for
+	// future policy bumps.
+	conflictStreakReset       *Family // velox_conflict_streak_reset_total
+	conflictEscalations       *Family // velox_conflict_escalations_total
+	conflictStayedUnder       *Family // velox_conflict_stayed_under_threshold_total
+	conflictStreakLength      *Family // velox_conflict_streak_length
+
 	// Book-keeping for diffs.
 	stateMu  sync.Mutex
 	lastSeen map[string]time.Time // worker_id → last heartbeat timestamp
@@ -320,6 +335,37 @@ func NewCollector(reg *Registry) *Collector {
 		[]string{"reason"},
 	)
 
+	// ConflictBudget instrumentation (spec §14 Blocco 5). Three
+	// counters + one histogram. Cardinality discipline: NO labels —
+	// the conflict path's relevant dimension is the streak length,
+	// which the histogram captures as an observed value rather than
+	// as a label series. Bucket choice [1,2,3,5,10] covers the
+	// default threshold=3 plus 2x and 3x headroom for future
+	// policy bumps; anything above 10 saturates the +Inf bucket
+	// (a deadlock signal that operators should already have alerted
+	// on through the escalation counter).
+	c.conflictStreakReset = NewCounterFamily(
+		"velox_conflict_streak_reset_total",
+		"ConflictBudget streak resets on a successful Coordinator-method exit (Record(nil) with non-zero prior streak)",
+		[]string{},
+	)
+	c.conflictEscalations = NewCounterFamily(
+		"velox_conflict_escalations_total",
+		"ConflictBudget escalations to ErrConflictBudgetExhausted when the consecutive-conflict threshold is crossed",
+		[]string{},
+	)
+	c.conflictStayedUnder = NewCounterFamily(
+		"velox_conflict_stayed_under_threshold_total",
+		"ConflictBudget observations of ErrTransitionConflict that incremented the streak but stayed under threshold",
+		[]string{},
+	)
+	c.conflictStreakLength = NewHistogramFamily(
+		"velox_conflict_streak_length",
+		"Distribution of consecutive-conflict streak lengths observed on the attempt_commits CAS path",
+		[]string{},
+		[]float64{1, 2, 3, 5, 10},
+	)
+
 	c.lastSeen = make(map[string]time.Time)
 
 	for _, f := range c.allFamilies() {
@@ -360,6 +406,10 @@ func (c *Collector) allFamilies() []*Family {
 		c.reconcileTotal,
 		c.commitDeadlineExceeded,
 		c.placementRejections,
+		c.conflictStreakReset,
+		c.conflictEscalations,
+		c.conflictStayedUnder,
+		c.conflictStreakLength,
 	}
 }
 
@@ -802,3 +852,77 @@ type PlacementRejectionSink interface {
 
 // Compile-time guard: *Collector implements PlacementRejectionSink.
 var _ PlacementRejectionSink = (*Collector)(nil)
+
+// ConflictBudgetSink is the contract the completion package depends
+// on for forwarding ConflictBudget state-machine transitions onto
+// the Prometheus registry. The completion package owns a local
+// structurally-identical interface (also named ConflictBudgetSink)
+// to avoid a metrics→completion import; Go's structural typing
+// matches the metrics.Collector method set to the local interface
+// when bootstrap wires it up.
+//
+// Three semantically distinct calls so the test surface can mock
+// each transition independently:
+//
+//   - ResetConflictBudget()                 — Record(nil) on a non-zero streak
+//                                              (real reset, not a no-op reset).
+//   - ObserveConflictStreakUnderThreshold(streak int)
+//                                            — ErrTransitionConflict incremented
+//                                              the streak but stayed under
+//                                              threshold (counter + histogram
+//                                              observation).
+//   - EscalateConflictBudget(streak int)     — threshold crossed, the budget
+//                                              returns ErrConflictBudgetExhausted
+//                                              (counter + histogram observation
+//                                              at the runup length, which is
+//                                              the value of streak at the
+//                                              escalation decision).
+//
+// The histogram observation on the escalation path is INTENTIONAL:
+// it captures the runup length just before the threshold is crossed,
+// which lets dashboards show the pre-escalation distribution alongside
+// the under-threshold distribution.
+type ConflictBudgetSink interface {
+	ResetConflictBudget()
+	ObserveConflictStreakUnderThreshold(streak int)
+	EscalateConflictBudget(streak int)
+}
+
+// Compile-time guard: *Collector implements ConflictBudgetSink.
+// Bootstrap wires the collector into the coordinator via the local
+// completion.ConflictBudgetSink interface; structural typing matches.
+var _ ConflictBudgetSink = (*Collector)(nil)
+
+// ResetConflictBudget increments velox_conflict_streak_reset_total
+// once per REAL reset (Record(nil) on a non-zero streak). No-op
+// resets (streak already zero) deliberately do not increment so the
+// counter measures actual transition density, not exit-rate noise.
+func (c *Collector) ResetConflictBudget() {
+	c.conflictStreakReset.Inc([]string{}, 1)
+}
+
+// ObserveConflictStreakUnderThreshold increments
+// velox_conflict_stayed_under_threshold_total AND observes the
+// histogram at the current streak length. Called inside Record
+// for ErrTransitionConflict observations that did NOT cross the
+// threshold. streak <= 0 is a no-op (the budget never decrements
+// the counter on non-conflict inputs).
+func (c *Collector) ObserveConflictStreakUnderThreshold(streak int) {
+	if streak <= 0 {
+		return
+	}
+	c.conflictStayedUnder.Inc([]string{}, 1)
+	c.conflictStreakLength.Observe([]string{}, float64(streak))
+}
+
+// EscalateConflictBudget increments velox_conflict_escalations_total
+// AND observes the histogram at the runup length. Called inside
+// Record for ErrTransitionConflict observations that crossed the
+// threshold; the same observation point records the runup shape.
+func (c *Collector) EscalateConflictBudget(streak int) {
+	if streak <= 0 {
+		return
+	}
+	c.conflictEscalations.Inc([]string{}, 1)
+	c.conflictStreakLength.Observe([]string{}, float64(streak))
+}

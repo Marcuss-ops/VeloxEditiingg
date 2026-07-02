@@ -218,8 +218,21 @@ func NewFailureTracker(p RetryPolicy) *FailureTracker {
 // NewFailureTrackerWithClock is the canonical FailureTracker
 // constructor. Callers that need to inject a mock clock (e.g. via a
 // MockClock in policy_test.go that maintains a virtual Now) pass it
-// here. Passing nil falls back to RealClock so the API matches the
-// existing NewFailureTracker contract.
+// here.
+//
+// Nil Clock contract: passing nil is explicitly supported and falls
+// back to RealClock, matching the existing NewFailureTracker
+// contract and the documentation above the Clock interface in
+// clock.go. This avoids crashing long-running runners if clock
+// injection is missed and gives every caller a working
+// time-dependent state machine by default.
+//
+// Production callers SHOULD pass RealClock{} explicitly for
+// code-review clarity even though nil silently degrades; both
+// forms work. Defensive `if clk == nil` checks at call sites are
+// unnecessary because the fallback is documented behavior, not
+// an undocumented bug surface, but explicit injection at every
+// production call site reads better in PR review.
 func NewFailureTrackerWithClock(p RetryPolicy, clk Clock) *FailureTracker {
 	if p.ConsecutiveErrorThreshold <= 0 {
 		p.ConsecutiveErrorThreshold = 5
