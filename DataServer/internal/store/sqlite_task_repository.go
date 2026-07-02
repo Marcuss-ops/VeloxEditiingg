@@ -1601,3 +1601,163 @@ func (r *SQLiteTaskRepository) ListReadyCandidates(ctx context.Context, limit in
 
 	return candidates, nil
 }
+
+// ClaimTaskForWorkerAtomic atomically claims a specific READY task
+// chosen by the placement matcher. CAS-gates on (task_id, revision,
+// executor_id, executor_version) so a concurrent dispatcher that
+// claimed the same task between ListReadyCandidates and this call
+// will see the CAS fail and return ErrTransitionConflict.
+//
+// The transaction steps mirror ClaimNextWithAttemptAtomic:
+//  1. SELECT task WHERE task_id=? AND status='READY' AND revision=?
+//     AND executor_id=? AND executor_version=?
+//  2. Self-heal attempt_count from immutable attempt history.
+//  3. Generate canonical attempt ID before CAS.
+//  4. CAS READY → LEASED + stamp attempt_id / attempt_number.
+//  5. INSERT PENDING TaskAttempt.
+//  6. Read task_spec payload.
+//  7. Commit.
+//
+// SessionID and CapabilityRevision are carried through for fencing
+// (the caller checks them before and after the claim); they are NOT
+// persisted yet but must travel in the command so the eventual
+// transactional fencing doesn't require a signature change.
+func (r *SQLiteTaskRepository) ClaimTaskForWorkerAtomic(
+	ctx context.Context,
+	cmd taskgraph.ClaimTaskForWorkerCommand,
+) (*taskgraph.TaskWithSpec, *taskattempts.TaskAttempt, error) {
+	if r.store == nil || r.store.db == nil {
+		return nil, nil, fmt.Errorf("task repository: store not initialized")
+	}
+	if cmd.TaskID == "" || cmd.WorkerID == "" || cmd.LeaseID == "" {
+		return nil, nil, fmt.Errorf("task repository: ClaimTaskForWorkerAtomic requires task_id, worker_id, lease_id")
+	}
+	if cmd.ExecutorID == "" || cmd.ExecutorVersion <= 0 {
+		return nil, nil, fmt.Errorf("task repository: ClaimTaskForWorkerAtomic requires executor_id and executor_version > 0")
+	}
+
+	now := time.Now().UTC()
+	nowStr := now.Format(time.RFC3339)
+	leaseExpiresAt := now.Add(defaultTaskLeaseTTL).Format(time.RFC3339)
+
+	tx, err := r.store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, nil, fmt.Errorf("task claim-for-worker begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// 1. SELECT the specific task candidate with revision + executor gate.
+	row := tx.QueryRowContext(ctx,
+		`SELECT `+strings.Join(taskColumns, ", ")+`
+		 FROM tasks
+		 WHERE task_id = ?
+		   AND status = 'READY'
+		   AND revision = ?
+		   AND executor_id = ?
+		   AND executor_version = ?
+		   AND (worker_id = '' OR worker_id IS NULL)`,
+		cmd.TaskID, cmd.ExpectedTaskRevision, cmd.ExecutorID, cmd.ExecutorVersion,
+	)
+	t, err := scanTask(row)
+	if err == sql.ErrNoRows {
+		return nil, nil, fmt.Errorf("task claim-for-worker %s: task not READY or executor/revision mismatch: %w", cmd.TaskID, taskgraph.ErrTransitionConflict)
+	}
+	if err != nil {
+		return nil, nil, fmt.Errorf("task claim-for-worker select: %w", err)
+	}
+
+	// 2. Self-heal stale attempt_count from immutable attempt history.
+	var maxSeenAttempt sql.NullInt64
+	if err := tx.QueryRowContext(ctx,
+		`SELECT MAX(attempt_number) FROM task_attempts WHERE task_id = ?`,
+		t.ID,
+	).Scan(&maxSeenAttempt); err != nil {
+		return nil, nil, fmt.Errorf("task claim-for-worker max attempt read: %w", err)
+	}
+	effectiveAttemptCount := t.AttemptCount
+	if maxSeenAttempt.Valid {
+		effectiveAttemptCount = maxAttemptOrdinal(effectiveAttemptCount, int(maxSeenAttempt.Int64))
+	}
+
+	// 3. Generate canonical attempt identity BEFORE CAS.
+	attemptID := uuid.NewString()
+	attemptNumber := effectiveAttemptCount + 1
+
+	// 4. CAS: READY → LEASED on tasks + stamp attempt_id + attempt_number.
+	res, err := tx.ExecContext(ctx,
+		`UPDATE tasks
+		 SET status = 'LEASED', worker_id = ?, lease_id = ?, lease_expires_at = ?,
+		     attempt_count = ?, attempt_id = ?, attempt_number = ?,
+		     revision = revision + 1, updated_at = ?
+		 WHERE task_id = ? AND status = 'READY' AND revision = ?
+		   AND executor_id = ? AND executor_version = ?`,
+		cmd.WorkerID, cmd.LeaseID, leaseExpiresAt, attemptNumber, attemptID, attemptNumber,
+		nowStr, t.ID, cmd.ExpectedTaskRevision,
+		cmd.ExecutorID, cmd.ExecutorVersion,
+	)
+	if err != nil {
+		return nil, nil, fmt.Errorf("task claim-for-worker cas: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return nil, nil, fmt.Errorf("task claim-for-worker rows: %w", err)
+	}
+	if n == 0 {
+		return nil, nil, fmt.Errorf("task claim-for-worker %s: CAS raced out (revision/executor mismatch or concurrent claim): %w", cmd.TaskID, taskgraph.ErrTransitionConflict)
+	}
+
+	// 5. INSERT PENDING TaskAttempt in the same tx.
+	_, err = tx.ExecContext(ctx,
+		`INSERT INTO task_attempts (
+			id, task_id, job_id, attempt_number, worker_id, lease_id,
+			status, report_version, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, 'PENDING', 0, ?, ?)`,
+		attemptID, t.ID, t.JobID, attemptNumber, cmd.WorkerID, cmd.LeaseID, nowStr, nowStr,
+	)
+	if err != nil {
+		return nil, nil, fmt.Errorf("task claim-for-worker insert: %w", err)
+	}
+
+	// 6. Read task_spec payload.
+	var specPayloadJSON sql.NullString
+	err = tx.QueryRowContext(ctx,
+		`SELECT payload_json FROM task_specs WHERE task_id = ?`,
+		t.ID,
+	).Scan(&specPayloadJSON)
+	if err != nil && err != sql.ErrNoRows {
+		return nil, nil, fmt.Errorf("task claim-for-worker spec read: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, nil, fmt.Errorf("task claim-for-worker commit: %w", err)
+	}
+
+	// Update in-memory fields after successful commit.
+	t.WorkerID = cmd.WorkerID
+	t.LeaseID = cmd.LeaseID
+	t.AttemptCount = attemptNumber
+	t.AttemptID = attemptID
+	t.AttemptNumber = attemptNumber
+	t.Revision++
+
+	tws := &taskgraph.TaskWithSpec{Task: *t}
+	if specPayloadJSON.Valid && specPayloadJSON.String != "" && specPayloadJSON.String != "{}" {
+		var payload map[string]interface{}
+		if json.Unmarshal([]byte(specPayloadJSON.String), &payload) == nil {
+			tws.SpecPayload = payload
+		}
+	}
+
+	att := &taskattempts.TaskAttempt{
+		ID:            attemptID,
+		TaskID:        t.ID,
+		JobID:         t.JobID,
+		AttemptNumber: attemptNumber,
+		WorkerID:      cmd.WorkerID,
+		LeaseID:       cmd.LeaseID,
+		Status:        taskattempts.AttemptStatusPending,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
+	return tws, att, nil
+}

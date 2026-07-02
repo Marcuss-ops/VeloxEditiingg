@@ -93,6 +93,10 @@ func (c *countingRepo) ListReadyCandidates(_ context.Context, _ int) ([]placemen
 	panic("countingRepo.ListReadyCandidates: not used in this test scope")
 }
 
+func (c *countingRepo) ClaimTaskForWorkerAtomic(_ context.Context, _ ClaimTaskForWorkerCommand) (*TaskWithSpec, *taskattempts.TaskAttempt, error) {
+	panic("countingRepo.ClaimTaskForWorkerAtomic: not used in this test scope")
+}
+
 var errRepo = errors.New("fake repo error")
 
 // stubReaperLifecycle wires a real LifecycleService to a countingRepo

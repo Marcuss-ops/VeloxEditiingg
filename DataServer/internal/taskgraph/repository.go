@@ -228,6 +228,20 @@ type Writer interface {
 	// executor_version) are loaded — full payloads are deferred to
 	// the subsequent ClaimTaskForWorkerAtomic call.
 	ListReadyCandidates(ctx context.Context, limit int) ([]placement.TaskCandidate, error)
+
+	// ClaimTaskForWorkerAtomic atomically claims a specific READY task
+	// chosen by the placement matcher. Unlike ClaimNextWithAttemptAtomic
+	// (which picks the next available READY task), this method CAS-gates
+	// on (task_id, revision, executor_id, executor_version) so the
+	// repository verifies the task was not claimed by a concurrent
+	// dispatcher between ListReadyCandidates and the claim.
+	//
+	// On success returns the claimed TaskWithSpec AND the freshly-created
+	// PENDING TaskAttempt. On CAS failure (stale revision, executor
+	// mismatch, or concurrent claim) returns (nil, nil,
+	// taskgraph.ErrTransitionConflict) — identical to "no applicable
+	// task" for the caller.
+	ClaimTaskForWorkerAtomic(ctx context.Context, cmd ClaimTaskForWorkerCommand) (*TaskWithSpec, *taskattempts.TaskAttempt, error)
 }
 
 // Repository combines Reader and Writer into a single task persistence contract.

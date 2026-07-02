@@ -186,6 +186,10 @@ func (s *spoofStubTaskRepo) ClaimNextWithAttemptAtomic(_ context.Context, _, _ s
 func (s *spoofStubTaskRepo) ListReadyCandidates(_ context.Context, _ int) ([]placement.TaskCandidate, error) {
 	panic("spoofStubTaskRepo.ListReadyCandidates")
 }
+
+func (s *spoofStubTaskRepo) ClaimTaskForWorkerAtomic(_ context.Context, _ taskgraph.ClaimTaskForWorkerCommand) (*taskgraph.TaskWithSpec, *taskattempts.TaskAttempt, error) {
+	panic("spoofStubTaskRepo.ClaimTaskForWorkerAtomic")
+}
 func (s *spoofStubTaskRepo) IngestTaskResultAtomic(_ context.Context, _ taskgraph.IngestResultCommand) error {
 	panic("spoofStubTaskRepo.IngestTaskResultAtomic: not exercised by IngestTaskResult on rejection path")
 }

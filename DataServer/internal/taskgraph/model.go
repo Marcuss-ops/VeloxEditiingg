@@ -58,6 +58,26 @@ type TaskWithSpec struct {
 	SpecPayload map[string]interface{} `json:"spec_payload,omitempty"`
 }
 
+// ClaimTaskForWorkerCommand is the input for ClaimTaskForWorkerAtomic.
+// The placement matcher selects a specific TaskCandidate; this command
+// carries the chosen identity so the repository can CAS-gate the claim
+// without re-deciding compatibility. The repository verifies that the
+// task is still READY with the expected revision and executor match.
+type ClaimTaskForWorkerCommand struct {
+	TaskID               string
+	ExpectedTaskRevision int
+
+	WorkerID  string
+	SessionID string
+
+	LeaseID string
+
+	ExecutorID      string
+	ExecutorVersion int
+
+	CapabilityRevision uint64
+}
+
 // IngestResultCommand bundles all data required for IngestTaskResultAtomic.
 // The repository implementation wraps Task+Attempt close, metrics/cache/cost
 // persistence, and artifact registration in a single database transaction.
