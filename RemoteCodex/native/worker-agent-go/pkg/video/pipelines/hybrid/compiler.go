@@ -20,12 +20,33 @@ type Request struct {
 }
 
 // ItemInput is a single timeline item.
+//
+// For role-aware compilation (see compileItemsToTimeline), an item
+// may declare its semantic role via the Role field:
+//
+//   - "voiceover_bed": the item is the stock clip that visually
+//     carries the voiceover; DurationSeconds is taken from
+//     VoiceoverDurationSeconds (the detected voiceover length).
+//   - "scene_clip": the item is the final user-visible clip for that
+//     scene; DurationSeconds is taken from FinalClipDurationSeconds.
+//   - "" (empty) or any other value: the legacy path is used and
+//     DurationSeconds comes from the generic Duration field.
+//
+// NOTE on naming: in the worker-side contract, "Item" in
+// compileItemsToTimeline's signature corresponds to this struct, and
+// "TimelineSegment" corresponds to plan.TimelineItem. We keep the
+// canonical names here (ItemInput / plan.TimelineItem) for Go
+// idiomaticity and because plan.TimelineItem is the V1 wire contract
+// shared with the C++ engine.
 type ItemInput struct {
-	Type     string // "image", "video", "color"
-	URL      string
-	ColorHex string
-	Duration float64
-	Fit      string
+	Type                     string // "image", "video", "color"
+	URL                      string
+	ColorHex                 string
+	Duration                 float64
+	Fit                      string
+	Role                     string // "voiceover_bed", "scene_clip", or "" (legacy)
+	VoiceoverDurationSeconds float64
+	FinalClipDurationSeconds float64
 }
 
 // AudioTrackInput is a single audio source mixed into the render plan.
@@ -62,26 +83,14 @@ func Compile(ctx context.Context, jobID string, input map[string]interface{}, ou
 
 	req := parseRequest(input)
 
-	// Build timeline
-	timeline_items := make([]plan.TimelineItem, len(req.Items))
-	for i, item := range req.Items {
-		source := plan.MediaSource{Type: item.Type}
-		switch item.Type {
-		case "image":
-			source.URL = item.URL
-		case "video":
-			source.URL = item.URL
-		case "color":
-			source.ColorHex = item.ColorHex
-		}
-
-		transform := &plan.TransformSpec{ScaleMode: item.Fit}
-		timeline_items[i] = plan.TimelineItem{
-			Source:          source,
-			DurationSeconds: item.Duration,
-			Transform:       transform,
-		}
-	}
+	// Build timeline using the role-aware compileItemsToTimeline
+	// helper. When req.Items contains items with role=voiceover_bed or
+	// role=scene_clip, the helper selects DurationSeconds from the
+	// role-specific field (VoiceoverDurationSeconds /
+	// FinalClipDurationSeconds). Items without a role fall through
+	// to the legacy Duration field. The request-level Fit is passed
+	// as the default for items that do not declare their own.
+	timeline_items := compileItemsToTimeline(req.Items, req.Fit)
 
 	// Audio tracks
 	audioTracks := make([]plan.AudioTrack, 0, len(req.AudioTracks))
@@ -116,9 +125,103 @@ func Compile(ctx context.Context, jobID string, input map[string]interface{}, ou
 	}, nil
 }
 
+// compileItemsToTimeline maps a list of role-aware items to the
+// canonical RenderPlan.Timeline. When an item carries a non-empty
+// Role, the function selects DurationSeconds based on the role:
+//
+//   - "voiceover_bed" → VoiceoverDurationSeconds (the stock clip
+//     plays for as long as the voiceover lasts).
+//   - "scene_clip"    → FinalClipDurationSeconds (the final clip
+//     plays for its own intrinsic duration).
+//
+// For items without a role, the legacy Duration field is used
+// (falling back to 4.0 if both Duration and the role-specific field
+// are non-positive). The function preserves the order of input
+// items and forces MediaSource.Type to "video" for both role-aware
+// kinds since they are by definition video segments.
+//
+// The defaultFit argument is the request-level fallback for items
+// that do not declare their own Fit; it preserves the legacy
+// behavior where an item without an explicit fit inherited the
+// request-level fit (req.Fit, which itself defaults to "contain").
+//
+// NOTE on naming: the user-facing signature is
+// `compileItemsToTimeline(items []Item) []TimelineSegment`; in this
+// package, "Item" is ItemInput and "TimelineSegment" is
+// plan.TimelineItem (the V1 wire contract shared with the C++ engine).
+func compileItemsToTimeline(items []ItemInput, defaultFit string) []plan.TimelineItem {
+	timeline := make([]plan.TimelineItem, len(items))
+	for i, item := range items {
+		timeline[i] = plan.TimelineItem{
+			Source:          sourceForItem(item),
+			DurationSeconds: effectiveDuration(item),
+			Transform:       &plan.TransformSpec{ScaleMode: effectiveFit(item, defaultFit)},
+		}
+	}
+	return timeline
+}
+
+// sourceForItem builds the MediaSource for a single item. Role-aware
+// items (voiceover_bed / scene_clip) are always video; legacy items
+// follow the original Type-driven switch.
+func sourceForItem(item ItemInput) plan.MediaSource {
+	if item.Role == "voiceover_bed" || item.Role == "scene_clip" {
+		return plan.MediaSource{Type: "video", URL: item.URL}
+	}
+	src := plan.MediaSource{Type: item.Type}
+	switch item.Type {
+	case "image", "video":
+		src.URL = item.URL
+	case "color":
+		src.ColorHex = item.ColorHex
+	}
+	if src.Type == "" {
+		src.Type = "image"
+	}
+	return src
+}
+
+// effectiveDuration picks the duration field per role contract.
+// Role-specific fields take precedence; legacy Duration is the
+// fallback; the package-wide 4.0 default is the last resort.
+func effectiveDuration(item ItemInput) float64 {
+	switch item.Role {
+	case "voiceover_bed":
+		if item.VoiceoverDurationSeconds > 0 {
+			return item.VoiceoverDurationSeconds
+		}
+	case "scene_clip":
+		if item.FinalClipDurationSeconds > 0 {
+			return item.FinalClipDurationSeconds
+		}
+	}
+	if item.Duration > 0 {
+		return item.Duration
+	}
+	return 4.0
+}
+
+// effectiveFit returns the item's Fit if set, else the
+// request-level defaultFit (which itself defaults to "contain" via
+// parseRequest). This preserves the legacy behavior where items
+// without an explicit fit inherited the request-level fit.
+func effectiveFit(item ItemInput, defaultFit string) string {
+	if item.Fit != "" {
+		return item.Fit
+	}
+	if defaultFit != "" {
+		return defaultFit
+	}
+	return "contain"
+}
+
 func parseRequest(input map[string]interface{}) *Request {
+	// audio_url is the canonical field; voiceover_url is accepted as
+	// an alias for parity with payloads emitted by enqueue_clips.go
+	// (which uses "voiceover_url" for the shared voiceover track).
+	// audio_url wins when both are set.
 	req := &Request{
-		AudioURL: toString(input["audio_url"]),
+		AudioURL: toStringDefault(input["audio_url"], toString(input["voiceover_url"])),
 		Fit:      toStringDefault(input["fit"], "contain"),
 	}
 
@@ -136,6 +239,10 @@ func parseRequest(input map[string]interface{}) *Request {
 		}
 	}
 
+	// Try explicit items array first. When present, this is the
+	// CANONICAL timeline; the `clips` / `images` fallback below is
+	// only used when items is absent (legacy compatibility index).
+	//
 	// Canonical-purity contract (Step 2/8): when items[] carries a
 	// (role, scene) reference, resolve the URL and (when missing) the
 	// duration from scene-level metadata rather than reconstructing
@@ -150,8 +257,6 @@ func parseRequest(input map[string]interface{}) *Request {
 			}
 		}
 	}
-
-	// Try explicit items array first
 	if items, ok := input["items"].([]interface{}); ok {
 		for _, item := range items {
 			im, ok := item.(map[string]interface{})
@@ -200,13 +305,15 @@ func parseRequest(input map[string]interface{}) *Request {
 					}
 				}
 			}
-
 			req.Items = append(req.Items, ItemInput{
-				Type:     itemType,
-				URL:      itemURL,
-				ColorHex: toStringDefault(im["color_hex"], "#000000"),
-				Duration: itemDuration,
-				Fit:      itemFit,
+				Type:                     itemType,
+				URL:                      itemURL,
+				ColorHex:                 toStringDefault(im["color_hex"], "#000000"),
+				Duration:                 itemDuration,
+				Fit:                      itemFit,
+				Role:                     toString(im["role"]),
+				VoiceoverDurationSeconds: toFloat64Default(im["voiceover_duration_seconds"], 0.0),
+				FinalClipDurationSeconds: toFloat64Default(im["final_clip_duration_seconds"], 0.0),
 			})
 		}
 		return req

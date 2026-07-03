@@ -196,7 +196,7 @@ func PayloadOutputPath(spec executor.TaskSpec) string {
 // hasAnyMediaSource scans the payload for any one of the canonical
 // sources. Used by Validate and the synthetic-output-path branch.
 func hasAnyMediaSource(payload map[string]interface{}) bool {
-	keys := []string{"images", "clips", "intro_clip_paths", "stock_clip_paths", "scene_image_paths", "scenes_json"}
+	keys := []string{"items", "images", "clips", "intro_clip_paths", "stock_clip_paths", "scene_image_paths", "scenes_json"}
 	for _, k := range keys {
 		if v, ok := payload[k]; ok && v != nil {
 			switch vv := v.(type) {
