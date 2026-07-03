@@ -136,6 +136,21 @@ func parseRequest(input map[string]interface{}) *Request {
 		}
 	}
 
+	// Canonical-purity contract (Step 2/8): when items[] carries a
+	// (role, scene) reference, resolve the URL and (when missing) the
+	// duration from scene-level metadata rather than reconstructing
+	// from clips[]/stock_clip_paths. scenes[] MAY be absent (legacy
+	// callers pre-resolve URLs in items[]); in that case items[i].url
+	// and items[i].duration are honored verbatim.
+	var scenes []map[string]interface{}
+	if rawScenes, ok := input["scenes"].([]interface{}); ok {
+		for _, s := range rawScenes {
+			if sm, ok := s.(map[string]interface{}); ok {
+				scenes = append(scenes, sm)
+			}
+		}
+	}
+
 	// Try explicit items array first
 	if items, ok := input["items"].([]interface{}); ok {
 		for _, item := range items {
@@ -143,12 +158,55 @@ func parseRequest(input map[string]interface{}) *Request {
 			if !ok {
 				continue
 			}
+
+			itemType := toStringDefault(im["type"], "image")
+			itemURL := toString(im["url"])
+			itemDuration := toFloat64Default(im["duration"], 4.0)
+			itemFit := toStringDefault(im["fit"], req.Fit)
+			itemHasDuration := toFloat64Default(im["duration"], 0.0) > 0
+
+			// Role-based URL + (optional) duration routing.
+			if role := toString(im["role"]); role != "" {
+				sceneIdx := -1
+				switch v := im["scene"].(type) {
+				case int:
+					sceneIdx = v
+				case int64:
+					sceneIdx = int(v)
+				case float64:
+					sceneIdx = int(v)
+				}
+				if sceneIdx >= 0 && sceneIdx < len(scenes) {
+					scene := scenes[sceneIdx]
+					switch role {
+					case "voiceover_bed":
+						if s := toString(scene["stock_link"]); s != "" {
+							itemURL = s
+						}
+						if !itemHasDuration {
+							if d := toFloat64Default(scene["voiceover_duration_seconds"], 0.0); d > 0 {
+								itemDuration = d
+							}
+						}
+					case "scene_clip":
+						if s := toString(scene["clip_link"]); s != "" {
+							itemURL = s
+						}
+						if !itemHasDuration {
+							if d := toFloat64Default(scene["final_clip_duration_seconds"], 0.0); d > 0 {
+								itemDuration = d
+							}
+						}
+					}
+				}
+			}
+
 			req.Items = append(req.Items, ItemInput{
-				Type:     toStringDefault(im["type"], "image"),
-				URL:      toString(im["url"]),
+				Type:     itemType,
+				URL:      itemURL,
 				ColorHex: toStringDefault(im["color_hex"], "#000000"),
-				Duration: toFloat64Default(im["duration"], 4.0),
-				Fit:      toStringDefault(im["fit"], req.Fit),
+				Duration: itemDuration,
+				Fit:      itemFit,
 			})
 		}
 		return req
