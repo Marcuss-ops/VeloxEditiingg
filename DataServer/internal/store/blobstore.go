@@ -112,7 +112,8 @@ func (b *FilesystemBlobStore) RemoveStaging(path string) error {
 
 // ReadFinal opens the final file for reading.
 func (b *FilesystemBlobStore) ReadFinal(storageKey string) (*os.File, error) {
-	f, err := os.Open(filepath.Clean(storageKey))
+	fullPath := filepath.Join(b.finalDir, filepath.Clean(storageKey))
+	f, err := os.Open(fullPath)
 	if err != nil {
 		return nil, fmt.Errorf("blobstore: open %s: %w", storageKey, err)
 	}
