@@ -18,6 +18,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -110,10 +111,22 @@ func (b *FilesystemBlobStore) RemoveStaging(path string) error {
 	return nil
 }
 
-// ReadFinal opens the final file for reading.
+// ReadFinal opens the final file for reading. If storageKey is a relative
+// path it is resolved against finalDir; if it is already absolute (legacy
+// behaviour from PromoteToFinal returning absolute paths) it is used as-is.
+// Relative keys that would escape finalDir via ".." are rejected to prevent
+// path traversal outside the final directory.
 func (b *FilesystemBlobStore) ReadFinal(storageKey string) (*os.File, error) {
-	fullPath := filepath.Join(b.finalDir, filepath.Clean(storageKey))
-	f, err := os.Open(fullPath)
+	cleaned := filepath.Clean(storageKey)
+	if !filepath.IsAbs(cleaned) {
+		resolved := filepath.Join(b.finalDir, cleaned)
+		rel, err := filepath.Rel(filepath.Clean(b.finalDir), resolved)
+		if err != nil || strings.HasPrefix(filepath.ToSlash(rel), "../") || rel == ".." {
+			return nil, fmt.Errorf("blobstore: reject traversal in storage_key %q", storageKey)
+		}
+		cleaned = resolved
+	}
+	f, err := os.Open(cleaned)
 	if err != nil {
 		return nil, fmt.Errorf("blobstore: open %s: %w", storageKey, err)
 	}
