@@ -22,7 +22,15 @@ import (
 	"velox-server/internal/store/migrations"
 )
 
-func TestUploadCompletedVideo_CanonicalPipeline(t *testing.T) {
+// TestUploadCompletedVideo_ArtifactsPipeline exercises the /api/v1/video/upload-completed
+// handler end-to-end through the artifacts.Service + Finalization pipeline
+// (file-1/4 of the canonical-SQL-gateway migration). It deliberately does
+// NOT cover the Completion flow (Coordinator.CommitAttempt → task_attempts
+// SUCCEEDED): that path lives in the Completion package's integration tests
+// because the two flows mark different tables (jobs+artifacts here;
+// task_attempts in Completion) and the PR 3.5-a single-writer contract
+// forbids coupling them inside one test.
+func TestUploadCompletedVideo_ArtifactsPipeline(t *testing.T) {
 	tmp := t.TempDir()
 	dbPath := filepath.Join(tmp, "test.db")
 	db, err := sql.Open("sqlite3", dbPath+"?_busy_timeout=5000&_journal_mode=WAL")
