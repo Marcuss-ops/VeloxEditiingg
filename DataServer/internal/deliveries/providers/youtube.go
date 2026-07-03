@@ -6,7 +6,6 @@ package providers
 
 import (
 	"context"
-	"log"
 
 	"velox-server/internal/deliveries"
 	integrationsYouTube "velox-server/internal/integrations/youtube"
@@ -35,40 +34,17 @@ func (y *YouTubeProvider) Name() string { return "youtube" }
 // caller supplies a matching content-length + mime; the runner is
 // responsible for the idempotency_key stamping on job_deliveries so
 // subsequent claims produce the same YouTube video id.
-//
-// Uses blobStore to read the artifact's bytes. Falls back to artifact.LocalPath
-// if the blob store is not configured (legacy path).
 func (y *YouTubeProvider) Deliver(ctx context.Context, artifact *store.Artifact, destination *deliveries.Destination, deliveryID, idempotencyKey string) (*deliveries.Result, error) {
 	if y == nil || y.service == nil {
 		return nil, deliveries.ErrProviderNotConfigured
 	}
-	if artifact == nil || destination == nil {
+	if destination == nil {
 		return nil, deliveries.ErrProviderPermanent
 	}
 
-	// Resolve the file path: prefer storage_key (canonical) over LocalPath.
-	filePath := artifact.StorageKey
-	if filePath == "" {
-		filePath = artifact.LocalPath
-	}
-	if filePath == "" {
-		return nil, deliveries.ErrProviderPermanent
-	}
-
-	// If blobStore is available, verify the file exists at storage_key.
-	if y.blobStore != nil {
-		f, err := y.blobStore.ReadFinal(filePath)
-		if err != nil {
-			log.Printf("[YOUTUBE] Cannot read artifact %s at %s, falling back to LocalPath %s: %v",
-				artifact.ID, filePath, artifact.LocalPath, err)
-			if artifact.LocalPath != "" {
-				filePath = artifact.LocalPath
-			} else {
-				return nil, deliveries.ErrProviderPermanent
-			}
-		} else {
-			f.Close()
-		}
+	filePath, err := resolveArtifactFilePath(y.blobStore, artifact)
+	if err != nil {
+		return nil, err
 	}
 
 	cfg := integrationsYouTube.UploadConfig{
