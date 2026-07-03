@@ -1,17 +1,36 @@
 // sql-allowlist: artifacts SQLiteFinalizationRepository — sole atomic-tx writer for jobs.status=SUCCEEDED (single-writer enforced by scan_test.go). Future refactor candidate for relocation into internal/store alongside the other typed repos.
 
-// Package artifacts / sqlite_finalization_repository.go — PR 3.5-a impl.
+// Package artifacts / sqlite_finalization_repository.go — PR 3.5-a / Blocco 4 step #5.
 //
-// This is the ONLY legal writer of jobs.status=<terminal-state>.
+// This file is the ONLY legal writer of jobs.status='SUCCEEDED'.
 // The scan test (scan_test.go) greps every .go under internal/ and
 // rejects any single-quoted SQL writer of that terminal state outside
 // the audited allowlist (see scan_test.go for the precise regex).
+//
+// Blocco 4 step #5 split: per-table SQL previously interleaved in
+// this file is now split into two unexported per-table writers:
+//
+//   - artifact_writer.go        (`artifacts` table — STAGING insert, READY CAS, post-tx projection read)
+//   - upload_session_writer.go  (`artifact_uploads` table — CREATED insert, FINALIZING CAS-precondition load, COMPLETED CAS, nilOrString helpers)
+//
+// This file is now a slim TX coordinator: owns the *sql.Tx lifecycle,
+// the jobs.status='SUCCEEDED' write (kept INLINE to satisfy the
+// scan_test.go allowlist that explicitly pin-points this file), and
+// the per-destination job_deliveries INSERT resolver pipeline.
+// job_deliveries INSERT stays here because the per-destination set is
+// computed by the DeliveryPlanResolver (or the fallback all-enabled
+// scan) inside the same tx, and splitting it would force the writer
+// to receive a destination slice — ergonomics noise without any
+// separation win.
+//
+// Atomicity is preserved exactly: every per-table write still joins
+// the same *sql.Tx. The split is structural — same SQL, same
+// ordering, same guarantees.
 package artifacts
 
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"time"
 
@@ -25,18 +44,10 @@ import (
 // layer; service-layer ENFORCES the state-machine legality (RECEIVED
 // then FINALIZING then COMPLETED) before this code runs.
 //
-// Migration note: file-1/4 of the canonical-SQL-gateway migration
-// moved `artifact_uploads` CRUD to store/artifact_uploads.go. This
-// file remains in artifacts/ because the PR 3.5-a single-writer
-// contract for jobs.status='SUCCEEDED' (audit §P0.2, enforced by
-// scan_test.go) requires the *atomic* finalization tx to live
-// adjacent to the Service that orchestrates it, AND the
-// CreateArtifactAndUploadSession path inserts into
-// artifact_uploads directly. The 4 helpers at the bottom of this
-// file (nilOrString / nilOrStringPtr / formatTimePtr /
-// parseTimeRFC3339) are an inline duplicate of the same-named
-// private helpers in store/artifact_uploads.go — they will be
-// retired together when file-3/4 migrates this repository to store.
+// Blocco 4 step #5 note: this struct no longer embeds any per-table
+// SQL. It owns the *sql.DB handle + the optional DeliveryPlanResolver.
+// Per-table writes are routed to artifact_writer.go /
+// upload_session_writer.go through the coordinator's *sql.Tx.
 type SQLiteFinalizationRepository struct {
 	db           *sql.DB
 	planResolver DeliveryPlanResolver // optional; nil falls back to all enabled destinations
@@ -70,9 +81,9 @@ var (
 // INSERT fails, the entire tx rolls back — no orphan STAGING row can
 // leak from a half-initialized upload session.
 //
-// Replaces the previous two-step BeginUpload pattern (artifacts INSERT
-// then repo.CreateUploadSession) where a failure between the two left
-// STAGING rows orphaned.
+// Blocco 4 step #5: per-table SQL routed to artifact_writer.go +
+// upload_session_writer.go. The coordinator owns the tx lifecycle;
+// the writers own their table's columns.
 //
 // Defensive zero-time guards: if the caller leaves CreatedAt/ExpiresAt
 // at their zero values (e.g. forgotten by a handler), the method fills
@@ -99,12 +110,6 @@ func (r *SQLiteFinalizationRepository) CreateArtifactAndUploadSession(
 		expiresAt = now.Add(defaultUploadTTL)
 	}
 
-	// Resolve storage provider (callers can opt in to e.g. "s3"; default "local").
-	storageProvider := cmd.StorageProvider
-	if storageProvider == "" {
-		storageProvider = "local"
-	}
-
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("artifacts: CreateArtifactAndUploadSession begin: %w", err)
@@ -116,36 +121,18 @@ func (r *SQLiteFinalizationRepository) CreateArtifactAndUploadSession(
 		}
 	}()
 
-	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO artifacts (id, job_id, attempt_id, type,
-		                       storage_provider, status, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		cmd.ArtifactID, cmd.JobID, cmd.AttemptID, cmd.Kind,
-		storageProvider, "STAGING", now.UTC().Format(time.RFC3339),
-	); err != nil {
-		return fmt.Errorf("artifacts: CreateArtifactAndUploadSession INSERT artifacts: %w", err)
+	// Per-table writes routed to the writers (joined tx).
+	if err := insertArtifactStagingInTx(ctx, tx, artifactStagingRow{
+		ArtifactID: cmd.ArtifactID,
+		JobID:      cmd.JobID,
+		AttemptID:  cmd.AttemptID,
+		Kind:       cmd.Kind,
+		CreatedAt:  now,
+	}); err != nil {
+		return err
 	}
-
-	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO artifact_uploads (
-			upload_id, artifact_id, job_id, attempt_number, worker_id, lease_id,
-			status, temporary_storage_key,
-			expected_size_bytes, expected_sha256,
-			expected_revision,
-			received_size_bytes, received_sha256,
-			created_at, expires_at, completed_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		cmd.UploadID, cmd.ArtifactID, cmd.JobID, cmd.AttemptNumber,
-		cmd.WorkerID, cmd.LeaseID,
-		"CREATED", cmd.TemporaryStorageKey,
-		cmd.ExpectedSizeBytes, nilOrString(cmd.ExpectedSHA256),
-		cmd.ExpectedRevision,
-		0, nil,
-		now.UTC().Format(time.RFC3339),
-		expiresAt.UTC().Format(time.RFC3339),
-		nil,
-	); err != nil {
-		return fmt.Errorf("artifacts: CreateArtifactAndUploadSession INSERT artifact_uploads: %w", err)
+	if err := insertUploadSessionCreatedInTx(ctx, tx, cmd, now, expiresAt); err != nil {
+		return err
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -172,6 +159,12 @@ func (r *SQLiteFinalizationRepository) CreateArtifactAndUploadSession(
 // The scan test enforces this; the absence of any SUCCEEDED writer in
 // the JobRepository interface also enforces it.
 //
+// Blocco 4 step #5: jobs CAS stays INLINE here (scan_test allowlist
+// explicitly pins the `SET status = 'SUCCEEDED'` SQL fragment to
+// sqlite_finalization_repository.go). The artifacts CAS and the
+// artifact_uploads CAS precondition load + COMPLETED flip move to
+// the per-table writers.
+//
 // Returns the post-tx artifact row.
 func (r *SQLiteFinalizationRepository) FinalizeVerified(
 	ctx context.Context,
@@ -192,34 +185,26 @@ func (r *SQLiteFinalizationRepository) FinalizeVerified(
 		}
 	}()
 
-	// 1. artifact_uploads must be in 'FINALIZING' state. The
-	//    RECEIVED -> FINALIZING CAS happens in Service.Finalize BEFORE
-	//    calling FinalizeVerified (see the orchestration contract in
-	//    service.go::Finalize). Accepting 'RECEIVED' here would mask
-	//    a missing orchestration step with a misleading late-stage
-	//    ErrTransitionConflict from the step 7 flip; tightening to
-	//    'FINALIZING' only surfaces the precondition failure here
-	//    with the correct ErrUploadStateInvalid sentinel.
-	var uploadStatus, uploadWorker, uploadLease string
-	var uploadAttempt int
-	if err := tx.QueryRowContext(ctx, `
-		SELECT status, worker_id, lease_id, attempt_number
-		FROM artifact_uploads WHERE upload_id = ?`, cmd.UploadID,
-	).Scan(&uploadStatus, &uploadWorker, &uploadLease, &uploadAttempt); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, fmt.Errorf("%w: upload_id=%s", ErrUploadNotFound, cmd.UploadID)
-		}
-		return nil, fmt.Errorf("artifacts: FinalizeVerified load upload: %w", err)
+	// 1. artifact_uploads CAS-precondition load (routed to
+	//    upload_session_writer.go). Must be 'FINALIZING' state with
+	//    matching worker + lease + attempt. Accepting 'RECEIVED' here
+	//    would mask a missing orchestration step with a misleading
+	//    late-stage ErrTransitionConflict from the step 7 flip;
+	//    tightening to 'FINALIZING' only surfaces the precondition
+	//    failure here with the correct ErrUploadStateInvalid sentinel.
+	pre, err := loadUploadSessionForCASInTx(ctx, tx, cmd.UploadID)
+	if err != nil {
+		return nil, err
 	}
-	if uploadStatus != "FINALIZING" {
+	if pre.Status != "FINALIZING" {
 		return nil, fmt.Errorf("%w: upload=%s status=%s (expected FINALIZING — Service.Finalize must CAS RECEIVED->FINALIZING first)",
-			ErrUploadStateInvalid, cmd.UploadID, uploadStatus)
+			ErrUploadStateInvalid, cmd.UploadID, pre.Status)
 	}
-	if uploadWorker != cmd.WorkerID || uploadLease != cmd.LeaseID || uploadAttempt != cmd.AttemptNumber {
+	if pre.WorkerID != cmd.WorkerID || pre.LeaseID != cmd.LeaseID || pre.AttemptNumber != cmd.AttemptNumber {
 		return nil, fmt.Errorf("%w: auth upload=%s worker=%s->%s lease=%s->%s attempt=%d->%d",
 			ErrTransitionConflict, cmd.UploadID,
-			uploadWorker, cmd.WorkerID, uploadLease, cmd.LeaseID,
-			uploadAttempt, cmd.AttemptNumber)
+			pre.WorkerID, cmd.WorkerID, pre.LeaseID, cmd.LeaseID,
+			pre.AttemptNumber, cmd.AttemptNumber)
 	}
 
 	verifiedAt := cmd.VerifiedAt
@@ -228,8 +213,8 @@ func (r *SQLiteFinalizationRepository) FinalizeVerified(
 	}
 	nowStr := verifiedAt.UTC().Format(time.RFC3339)
 
-	// 2. jobs CAS: RUNNING|AWAITING_ARTIFACT [+ revision if provided]
-	// → SUCCEEDED.
+	// 2. jobs CAS — KEPT INLINE (scan_test allowlist pins this fragment
+	//    to this file).
 	//
 	// PR-01 (post-migration 048): the runtime columns assigned_to,
 	// lease_id, lease_expiry, retry_count were dropped from `jobs`.
@@ -245,10 +230,6 @@ func (r *SQLiteFinalizationRepository) FinalizeVerified(
 	// artifact_uploads (single CAS at step 1) + task_attempts read
 	// (service.loadAttempt) which together close off any
 	// worker/lease/attempt mismatch window.
-	//
-	// Releasing the dropped columns in the SET clause was also dropped:
-	// they no longer exist on the table — fixing the post-048 runtime
-	// error "no such column: lease_id".
 	//
 	// PR-02: WHERE now allows status IN ('RUNNING', 'AWAITING_ARTIFACT').
 	// `AWAITING_ARTIFACT` is the post-task-completion state written by
@@ -279,26 +260,18 @@ func (r *SQLiteFinalizationRepository) FinalizeVerified(
 			ErrTransitionConflict, n, cmd.UploadID)
 	}
 
-	// 3. artifacts CAS: STAGING → READY, master-stamp metadata.
-	artRes, err := tx.ExecContext(ctx, `
-		UPDATE artifacts
-		SET status = 'READY',
-		    storage_provider = ?,
-		    storage_key = ?,
-		    sha256 = ?, size_bytes = ?, mime_type = ?,
-		    verified_at = ?
-		WHERE id = ? AND job_id = ? AND status = 'STAGING'`,
-		cmd.StorageProvider, cmd.StorageKey,
-		cmd.SHA256, cmd.SizeBytes, cmd.MIMEType,
-		nowStr,
-		cmd.ArtifactID, cmd.JobID,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("artifacts: FinalizeVerified artifacts CAS: %w", err)
-	}
-	if n, _ := artRes.RowsAffected(); n != 1 {
-		return nil, fmt.Errorf("%w: artifacts affected=%d upload=%s artifact=%s",
-			ErrTransitionConflict, n, cmd.UploadID, cmd.ArtifactID)
+	// 3. artifacts CAS: STAGING → READY (routed to artifact_writer.go).
+	if err := casArtifactReadyInTx(ctx, tx, artifactReadyFields{
+		ArtifactID:      cmd.ArtifactID,
+		JobID:           cmd.JobID,
+		StorageProvider: cmd.StorageProvider,
+		StorageKey:      cmd.StorageKey,
+		SHA256Hex:       cmd.SHA256,
+		SizeBytes:       cmd.SizeBytes,
+		MIMEType:        cmd.MIMEType,
+		VerifiedAtStr:   nowStr,
+	}); err != nil {
+		return nil, err
 	}
 
 	// 4. job_attempts CAS: removed by cleanup/remove-job-attempts-runtime.
@@ -309,12 +282,16 @@ func (r *SQLiteFinalizationRepository) FinalizeVerified(
 	//    per-attempt close-out is now driven by taskingestion.Ingest
 	//    via TransitionTaskToTerminalAtomic on task_attempts
 	//    (canonical layer). Auth is still fully gated at step 1
-	//    (artifact_uploads CAS: worker_id+lease_id+attempt_number) + the
-	//    task_attempts read-back in service.go::loadAttempt. The
+	//    (artifact_uploads CAS: worker_id+lease_id+attempt_number) +
+	//    the task_attempts read-back in service.go::loadAttempt. The
 	//    audit-visible terminal write remains the jobs.status='SUCCEEDED'
 	//    flip in step 2 — scan_test enforces the single-writer contract.
 
 	// 5. Resolve delivery destinations via plan resolver or fallback.
+	//    Stays inline because the per-destination set is computed by
+	//    the resolver (or the fallback all-enabled scan) inside the
+	//    same tx; splitting it out would force the writer to receive
+	//    a destination slice — cosmetics, no separation win.
 	var destIDs []string
 	if cmd.DestinationID != "" {
 		destIDs = []string{cmd.DestinationID}
@@ -358,20 +335,11 @@ func (r *SQLiteFinalizationRepository) FinalizeVerified(
 		}
 	}
 
-	// 7. In-tx flip FINALIZING → COMPLETED — atomic with steps 1-6.
-	upRes, err := tx.ExecContext(ctx, `
-		UPDATE artifact_uploads
-		SET status = 'COMPLETED',
-		    completed_at = ?
-		WHERE upload_id = ?
-		  AND status = 'FINALIZING'`,
-		nowStr, cmd.UploadID)
-	if err != nil {
-		return nil, fmt.Errorf("artifacts: FinalizeVerified upload COMPLETED flip: %w", err)
-	}
-	if n, _ := upRes.RowsAffected(); n != 1 {
-		return nil, fmt.Errorf("%w: upload affected=%d upload=%s",
-			ErrTransitionConflict, n, cmd.UploadID)
+	// 7. artifact_uploads CAS: FINALIZING → COMPLETED (routed to
+	//    upload_session_writer.go). Closing in-tx write of the
+	//    verified-finalization tx.
+	if err := casUploadSessionCompletedInTx(ctx, tx, cmd.UploadID, nowStr); err != nil {
+		return nil, err
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -379,40 +347,7 @@ func (r *SQLiteFinalizationRepository) FinalizeVerified(
 	}
 	committed = true
 
-	// Re-load the post-update artifact for the caller.
-	row := r.db.QueryRowContext(ctx, `
-		SELECT id, job_id, COALESCE(attempt_id, 0), type, storage_provider,
-		       COALESCE(storage_key, ''), COALESCE(storage_url, ''),
-		       COALESCE(local_path, ''), COALESCE(sha256, ''),
-		       COALESCE(size_bytes, 0), COALESCE(duration_seconds, 0),
-		       status, COALESCE(verified_at, ''), created_at
-		FROM artifacts WHERE id = ?`, cmd.ArtifactID)
-	var out store.Artifact
-	var verifiedAtStr string
-	if scanErr := row.Scan(&out.ID, &out.JobID, &out.AttemptID, &out.Type, &out.StorageProvider,
-		&out.StorageKey, &out.StorageURL, &out.LocalPath, &out.SHA256,
-		&out.SizeBytes, &out.DurationSeconds, &out.Status, &verifiedAtStr, &out.CreatedAt); scanErr != nil {
-		return nil, fmt.Errorf("artifacts: FinalizeVerified post-load: %w", scanErr)
-	}
-	return &out, nil
-}
-
-// ── package-local helpers (file-1/4 migration duplicate) ────────────────
-//
-// nilOrString / formatTimePtr mirror the unexported helpers in
-// store/artifact_uploads.go. They are kept private to this file so
-// the CreateArtifactAndUploadSession INSERTs that build the
-// artifacts + artifact_uploads rows still compile after
-// artifacts/uploads.go was deleted (file-1/4 of the
-// canonical-SQL-gateway migration). They will dissolve together
-// with this file when file-3/4 migrates SQLiteFinalizationRepository
-// to store.
-
-// nilOrString maps "" -> nil so the column stores NULL rather than "",
-// matching the migration's nullable TEXT columns for expected_sha256.
-func nilOrString(s string) interface{} {
-	if s == "" {
-		return nil
-	}
-	return s
+	// Re-load the post-update artifact for the caller (routed to
+	// artifact_writer.go — the projection SELECT lives there).
+	return loadArtifactProjection(ctx, r.db, cmd.ArtifactID)
 }
