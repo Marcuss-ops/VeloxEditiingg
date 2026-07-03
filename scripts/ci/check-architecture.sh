@@ -204,4 +204,39 @@ VIOLATION
   fi
 fi
 
+# 10. Canonical worker playbook — structural syntax check.
+# The normalize_worker_systemd.yml playbook guards canonical runtime
+# purity via its STEP 7 strict idempotency assert task: only
+# velox-worker-<inventory_hostname>.service plus the two named
+# siblings (watchdog, auto-update) are tolerated, AND the canonical
+# unit must be present in the post-state enumeration. We verify here
+# at PR-time that the YAML parses cleanly (and its include_tasks
+# resolves) so a regression in the assert lands here rather than at
+# the next worker deploy. Pure syntax-check: no remote connections
+# are opened, no remote state is read or written.
+#
+# Fail-loud convention (matches rules 1–9): if ansible-playbook
+# cannot be located the script exits 1 instead of silently skipping
+# — letting a regression pass in CI would defeat the entire gate.
+ansible_bin=""
+if command -v ansible-playbook >/dev/null 2>&1; then
+  ansible_bin="$(command -v ansible-playbook)"
+elif [[ -x "/home/pierone/venv/bin/ansible-playbook" ]]; then
+  ansible_bin="/home/pierone/venv/bin/ansible-playbook"
+fi
+[[ -n "$ansible_bin" ]] \
+  || fail "ansible-playbook not on PATH and venv fallback missing; install ansible-core in PATH or in /home/pierone/venv (cannot verify canonical-worker playbook)"
+
+ANSIBLE_LOG="$(mktemp /tmp/check-arch-ansible.XXXXXX.log)"
+ANSIBLE_COLLECTIONS_PATH="${ANSIBLE_COLLECTIONS_PATH:-/home/pierone/.ansible/collections}" \
+  "$ansible_bin" --syntax-check -i 'localhost,' -c local \
+    DataServer/data/ansible/playbooks/normalize_worker_systemd.yml \
+    >"$ANSIBLE_LOG" 2>&1 \
+  || {
+      cat "$ANSIBLE_LOG" >&2
+      rm -f "$ANSIBLE_LOG"
+      fail "normalize_worker_systemd.yml failed syntax check"
+    }
+rm -f "$ANSIBLE_LOG"
+
 echo "check-architecture: OK"

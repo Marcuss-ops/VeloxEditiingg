@@ -70,7 +70,10 @@
         for f in /etc/systemd/system/velox-worker-*.service; do
           [ ! -f "$f" ] && continue
           BASE=$(basename "$f")
-          if [ "$BASE" != "$KEEP" ] && [ "$BASE" != "velox-worker-console.service" ]; then
+          # Only keep the canonical unit. Watchdog / auto-update /
+          # console are removed too: Step 7 assert forbids them in the
+          # post-state enumeration (canonical-only contract).
+          if [ "$BASE" != "$KEEP" ]; then
             rm -f "$f"
             echo "Removed: $f"
           fi
@@ -117,6 +120,60 @@
     - name: Normalize | Show recent journal
       ansible.builtin.debug:
         msg: "{{ journal_output.stdout_lines | default([]) }}"
+
+    # ── STEP 7: Assert Idempotency & Purity ───────────────────
+    # Hard-fail if the post-normalization state is not canonical-only.
+    #
+    # Operationally this is a *stricter idempotency gate*: every run
+    # must terminate with the host holding exactly one canonical
+    # `velox-worker-<inventory_hostname>.service` plus the two named
+    # siblings (watchdog, auto-update). Any other surviving unit, or
+    # the absence of the canonical unit itself, fails the play.
+    #
+    # Notes:
+    #   * `shell` runs the real `systemctl list-unit-files` even in
+    #     `--check` mode; that intentional — we assert *actual* on-host
+    #     state, not would-be state.
+    #   * The loop runs over the live enumeration. Empty list = loop
+    #     is a no-op, so the per-iteration assert is paired with a
+    #     separate "canonical present" assert below.
+    #   * `velox-worker-console.service` is a transient debug unit
+    #     intentionally NOT whitelisted: a leftover console instance
+    #     after a real production deploy would trip the gate.
+    - name: Normalize | Enumerate surviving velox-worker units
+      ansible.builtin.shell: |
+        set -euo pipefail
+        systemctl list-unit-files 'velox-worker*.service' --no-legend --no-pager 2>/dev/null \
+          | awk '{print $1}'
+      args:
+        executable: /bin/bash
+      register: check_remaining_units
+      changed_when: false
+
+    - name: Normalize | Assert canonical unit present (no-empty-state guard)
+      ansible.builtin.assert:
+        that:
+          - check_remaining_units.stdout_lines | length > 0
+          - "'velox-worker-' ~ inventory_hostname ~ '.service' in check_remaining_units.stdout_lines"
+        fail_msg: >-
+          Idempotency fail: canonical unit `velox-worker-{{ inventory_hostname }}.service`
+          is missing from `systemctl list-unit-files`. Surviving: {{ check_remaining_units.stdout_lines | default([]) }}.
+        success_msg: "OK canonical present: velox-worker-{{ inventory_hostname }}.service"
+
+    - name: Normalize | Assert no non-canonical stragglers
+      ansible.builtin.assert:
+        that:
+          - >-
+            item in [
+              'velox-worker-' ~ inventory_hostname ~ '.service',
+              'velox-worker-watchdog.service',
+              'velox-auto-update.service'
+            ]
+        fail_msg: >-
+          Idempotency fail: non-canonical unit survived normalization -> {{ item }}.
+          Surviving full list: {{ check_remaining_units.stdout_lines | default([]) }}.
+        success_msg: "OK canonical: {{ item }}"
+      loop: "{{ check_remaining_units.stdout_lines | default([]) }}"
 
     # ── STEP 8: Riepilogo finale ──────────────────────────────
     - name: Normalize | Final summary
