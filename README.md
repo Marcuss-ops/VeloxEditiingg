@@ -67,6 +67,8 @@ A `CHANGE_ME_*` token must be replaced before deployment and must never be copie
 
 The production worker allowlist is validated by `ValidateProductionWorkers` in `DataServer/internal/config/workers_validator.go`. The fleet may scale up or down; the runtime enforces the allowlist shape, uniqueness and absence of wildcards.
 
+The agent operating contract — where canonical values live, what an agent (LLM, scripted, or CI-driven) must never print, and which workflow is allowed to publish an image — is the single source of truth in [`docs/architecture/AGENT-CONTRACT.md`](docs/architecture/AGENT-CONTRACT.md). The seven rules in that document bind every action on `main` and are backed by `scripts/ci/check-secrets.sh`, `deploy/validate-master-env.sh`, and `scripts/operator/with-production-env.sh`.
+
 ## Canonical architecture
 
 The canonical ownership map is [`docs/architecture/OWNERSHIP.md`](docs/architecture/OWNERSHIP.md). Every important state must have one owner, one writer and one mutation path.
