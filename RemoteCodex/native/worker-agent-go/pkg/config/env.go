@@ -44,6 +44,11 @@ const (
 	EnvWorkerClass = "VELOX_WORKER_CLASS"
 	// EnvRolloutGroup is the rollout cohort (v3.4, canary, holdout, ...).
 	EnvRolloutGroup = "VELOX_ROLLOUT_GROUP"
+	// EnvStateDir is the canonical root for ALL mutable worker state
+	// (Step 6/8). Replaces the legacy bind-mount for the per-job
+	// assets_cache and the per-subsystem /opt defaults (cache, blobs).
+	// Default: "/var/lib/velox/worker" (applied by applyDefaults).
+	EnvStateDir = "VELOX_STATE_DIR"
 )
 
 // EnvBindings is the set of env-var names this package inspects.
@@ -60,6 +65,7 @@ var EnvBindings = []string{
 	EnvVideoEngineCppBin,
 	EnvWorkerClass,
 	EnvRolloutGroup,
+	EnvStateDir,
 }
 
 // envTruthy reports whether a string from os.Getenv should be interpreted
@@ -130,5 +136,13 @@ func applyEnvOverrides(cfg *WorkerConfig) {
 	}
 	if v := strings.TrimSpace(os.Getenv(EnvRolloutGroup)); v != "" {
 		cfg.RolloutGroup = v
+	}
+	// Step 6/8: VELOX_STATE_DIR canonicalizes where the worker
+	// materializes cache, blob, executor spool, and scratch assets.
+	// Empty falls back to "/var/lib/velox/worker" via applyDefaults
+	// so the doctor + sub-constructors can resolve without further
+	// branching.
+	if v := strings.TrimSpace(os.Getenv(EnvStateDir)); v != "" {
+		cfg.StateDir = v
 	}
 }

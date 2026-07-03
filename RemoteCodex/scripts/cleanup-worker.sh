@@ -46,6 +46,12 @@ rm -rf "$VELOX_DIR/cache/"*
 rm -f "$VELOX_DIR/worker_config.json"
 rm -f "$VELOX_DIR/velox-installer"
 rm -f /etc/velox-worker.env
+# Step 6/8: scrub legacy /app/RemoteCodex/assets_cache footprint
+# (transitional — the bind mount is dead weight post-cut-over).
+if [ -d /app/RemoteCodex/assets_cache ]; then
+  rm -rf /app/RemoteCodex/assets_cache
+  log "  Removed legacy: /app/RemoteCodex/assets_cache"
+fi
 log "  Files removed"
 
 # 5) Verify clean state

@@ -91,6 +91,23 @@
         path: "{{ velox_dir }}/current"
         state: absent
 
+    # Step 6/8: scrub the legacy /app/RemoteCodex/assets_cache
+    # bind-mount footprint when present. Post-cut-over this RB is
+    # dead weight; transitional one-shot (idempotent: silently
+    # does nothing when the dir is absent).
+    - name: Cleanup | Remove legacy /app/RemoteCodex/assets_cache (Step 6/8)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        if [ -d /app/RemoteCodex/assets_cache ]; then
+          rm -rf /app/RemoteCodex/assets_cache
+          echo "Removed legacy: /app/RemoteCodex/assets_cache"
+        fi
+      args:
+        executable: /bin/bash
+      register: removed_legacy_cache
+      changed_when: "'Removed legacy:' in (removed_legacy_cache.stdout | default(''))"
+      failed_when: false
+
     - name: Cleanup | Remove staging directories
       ansible.builtin.shell: |
         rm -rf "{{ velox_dir }}/current.new" "{{ velox_dir }}/current.old"

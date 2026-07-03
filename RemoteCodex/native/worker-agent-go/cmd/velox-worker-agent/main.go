@@ -438,11 +438,13 @@ func main() {
 	logger.Info("[BOOT] Registered executor: %s@%d", sceneComposite.Descriptor().ID, sceneComposite.Descriptor().Version)
 
 	// PR-3.7: persistent local cache + content-addressed blob store.
-	// Roots are operator-overridable via env vars; the defaults reflect
-	// the production /opt/velox layout. Both invalidate the noop
-	// defaults in taskrunner/context.go (no silent-fallback policy).
-	cacheDir := envOr("VELOX_WORKER_CACHE_DIR", "/opt/velox/cache")
-	blobDir := envOr("VELOX_WORKER_BLOB_DIR", "/opt/velox/blobs")
+	// Step 6/8 roots are operator-overridable via env vars; the
+	// defaults reflect the new canonical layout (subdirs of
+	// cfg.StateDir = /var/lib/velox/worker). Both invalidate the
+	// noop defaults in taskrunner/context.go (no silent-fallback
+	// policy).
+	cacheDir := envOr("VELOX_WORKER_CACHE_DIR", filepath.Join(cfg.StateDir, "cache"))
+	blobDir := envOr("VELOX_WORKER_BLOB_DIR", filepath.Join(cfg.StateDir, "blobs"))
 	localCache, cacheErr := cache.NewPersistedLocalCache(cache.CacheOptions{Root: cacheDir})
 	if cacheErr != nil {
 		fmt.Fprintf(os.Stderr, "Error: failed to construct local cache at %s: %v\n", cacheDir, cacheErr)
@@ -492,6 +494,20 @@ func main() {
 	// Set up context with cancellation
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	// Step 6/8: fail-fast self-check on cfg.StateDir writability.
+	// Runs BEFORE any cache/blob wiring or disk-watcher startup so a
+	// host where the canonical root is unwritable exits with a
+	// precise diagnostic (UID + chown recipe) instead of mid-task
+	// EACCES failures. The validator also emits a one-shot
+	// DEPRECATION warning when the legacy assets_cache bind-mount
+	// holds stranded data — informational, not blocking.
+	stateCtx, stateCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	if err := doctor.Run(stateCtx, cfg, []doctor.Validator{&doctor.StateDirValidator{}}, os.Stderr); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: state dir not writable (Step 6/8 fail-fast): %v\n", err)
+		os.Exit(1)
+	}
+	stateCancel()
 
 	// RW-PROD-004 §3 A4: start the disk watcher now that ctx is in scope.
 	// Uses the worker's shutdown context so SIGTERM/SIGINT also exits the

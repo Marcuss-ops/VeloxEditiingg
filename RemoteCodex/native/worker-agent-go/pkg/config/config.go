@@ -68,6 +68,15 @@ type WorkerConfig struct {
 	// so the absence of an explicit declaration is safe-by-default.
 	Environment string `json:"environment,omitempty"`
 
+	// StateDir is the canonical root for ALL mutable worker state:
+	// assets_cache, blobs, executor_spool, scratch tmp. Step 6/8
+	// replaces the legacy assets_cache bind-mount and the per-subsystem
+	// /opt defaults (cache, blobs). When empty at applyDefaults time,
+	// falls back to "/var/lib/velox/worker" so systemd-toggled
+	// deployments do not silently regress to the legacy /opt layout.
+	// Operators override via VELOX_STATE_DIR.
+	StateDir string `json:"state_dir,omitempty"`
+
 	// Worker policy
 	MaxActiveJobs  int `json:"max_active_jobs"` // Maximum concurrent active jobs (default: 1)
 	PrometheusPort int `json:"prometheus_port"` // Prometheus metrics port (default: 9090, 0=disabled)
@@ -292,6 +301,15 @@ func (c *WorkerConfig) applyDefaults() {
 	// land on "production" if the operator never declares anything.
 	if c.Environment == "" {
 		c.Environment = "production"
+	}
+	// Step 6/8: canonical root for ALL mutable worker state. Wired
+	// into StateDirValidator (fail-fast) and consumed by the
+	// cache/blob constructors. Default "/var/lib/velox/worker"
+	// matches canonical_worker_runtime.yml (UID 10001 mounts the
+	// host /var/lib/velox/worker into the container at the same
+	// path). Operators can pin to a different root via VELOX_STATE_DIR.
+	if c.StateDir == "" {
+		c.StateDir = "/var/lib/velox/worker"
 	}
 	// RW-PROD-002: output & scratch directories for the C++ engine.
 	// Main.go injects VELOX_VIDEO_ENGINE_CPP_BIN as a CLI override

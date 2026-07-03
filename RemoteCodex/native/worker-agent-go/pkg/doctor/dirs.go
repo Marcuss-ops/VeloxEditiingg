@@ -24,16 +24,24 @@ func (v *DirsValidator) Run(_ context.Context, cfg *config.WorkerConfig) Result 
 		"temp_dir":   cfg.TempDir,
 	}
 
-	// Add optional directories from env vars.
+	// Step 6/8: cache_dir + blob_dir default to subdirs of cfg.StateDir
+	// when the dedicated env var is not set. This replaces the legacy
+	// /opt/velox/{cache,blobs} layout, which leaked into systemd
+	// bind mounts that bit anyone running the worker under a
+	// non-canonical filesystem.
+	stateRoot := cfg.StateDir
+	if stateRoot == "" {
+		stateRoot = "/var/lib/velox/worker"
+	}
 	if cd := trim(os.Getenv("VELOX_WORKER_CACHE_DIR")); cd != "" {
 		dirs["cache_dir"] = cd
 	} else {
-		dirs["cache_dir"] = "/opt/velox/cache"
+		dirs["cache_dir"] = filepath.Join(stateRoot, "cache")
 	}
 	if bd := trim(os.Getenv("VELOX_WORKER_BLOB_DIR")); bd != "" {
 		dirs["blob_dir"] = bd
 	} else {
-		dirs["blob_dir"] = "/opt/velox/blobs"
+		dirs["blob_dir"] = filepath.Join(stateRoot, "blobs")
 	}
 
 	var failures []string
