@@ -181,12 +181,29 @@ func (r *driveResolver) Open(ctx context.Context, reference string) (*Source, er
 	if r == nil || r.store == nil {
 		return nil, fmt.Errorf("asset store unavailable")
 	}
-	if src, err := r.openPublicDriveFile(ctx, reference); err == nil && src != nil {
-		return src, nil
+
+	var publicErr error
+
+	if _, _, ok := publicDriveDownloadURL(reference); ok {
+		src, err := r.openPublicDriveFile(ctx, reference)
+		if err == nil && src != nil {
+			return src, nil
+		}
+		publicErr = err
 	}
+
 	if r.drive == nil {
+		if publicErr != nil {
+			return nil, newAcquisitionError(
+				"reference",
+				"drive_public",
+				"public Drive download failed and authenticated Drive is unavailable",
+				publicErr,
+			)
+		}
 		return nil, newAcquisitionError("reference", "drive", "Drive authentication is unavailable", nil)
 	}
+
 	fileID := paths.ExtractDriveID(reference)
 	if fileID == "" {
 		return nil, newAcquisitionError("reference", "drive", "unable to extract Drive file id", nil)

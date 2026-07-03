@@ -3,10 +3,16 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PAYLOAD_FILE="${ROOT_DIR}/ops/jobs/jackie_chan_doc_voiceover.generate-from-clips.json"
-MASTER_URL="${VELOX_MASTER_URL:-http://127.0.0.1:8000}"
-ADMIN_TOKEN="${VELOX_ADMIN_TOKEN:-velox-dev-token}"
+MASTER_URL="${VELOX_MASTER_URL}"
+ADMIN_TOKEN="${VELOX_ADMIN_TOKEN}"
 
-curl -sS -X POST "${MASTER_URL}/api/script/generate-from-clips" \
+if [[ -z "${MASTER_URL}" || -z "${ADMIN_TOKEN}" ]]; then
+  echo "FATAL: VELOX_MASTER_URL and VELOX_ADMIN_TOKEN must be set" >&2
+  exit 1
+fi
+
+curl -sS --fail-with-body -X POST \
+  "${MASTER_URL}/api/v1/script/generate-from-clips" \
   -H "Authorization: Bearer ${ADMIN_TOKEN}" \
   -H "Content-Type: application/json" \
   --data-binary @"${PAYLOAD_FILE}"

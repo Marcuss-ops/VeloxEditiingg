@@ -42,6 +42,9 @@ env:
 jobs:
   deploy:
     name: Deploy (resolve digests + verify signatures + Ansible)
+    environment:
+      name: production
+      url: ${{ vars.VELOX_MASTER_URL }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -258,9 +261,34 @@ jobs:
 
           echo "::endgroup::"
 
+      - name: Production smoke test
+        env:
+          VELOX_MASTER_URL: ${{ vars.VELOX_MASTER_URL }}
+          VELOX_ADMIN_TOKEN: ${{ secrets.VELOX_ADMIN_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          # Retry with backoff — the master may still be restarting after the
+          # Ansible deploy. Up to 30 s with 5 s intervals.
+          for i in $(seq 1 6); do
+            if curl -sS --fail-with-body \
+              -H "Authorization: Bearer ${VELOX_ADMIN_TOKEN}" \
+              "${VELOX_MASTER_URL}/health/ready"; then
+              echo "::notice::Smoke test PASSED on attempt ${i}"
+              break
+            fi
+            if [ "$i" -eq 6 ]; then
+              echo "::error::Smoke test FAILED after 6 attempts"
+              exit 1
+            fi
+            echo "::notice::Smoke test attempt ${i}/6 failed — retrying in 5 s…"
+            sleep 5
+          done
+
       - name: Deploy summary
         run: |
           echo "## Deploy complete" >> "$GITHUB_STEP_SUMMARY"
           echo "- **Version**: ${{ steps.version.outputs.default }}" >> "$GITHUB_STEP_SUMMARY"
           echo "- **Worker**: \`${{ steps.resolve.outputs.worker_ref }}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "- **Server**: \`${{ steps.resolve.outputs.server_ref }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Smoke test**: :white_check_mark: /health/ready" >> "$GITHUB_STEP_SUMMARY"
