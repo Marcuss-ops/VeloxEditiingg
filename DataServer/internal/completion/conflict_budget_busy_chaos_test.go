@@ -262,7 +262,7 @@ func TestConflictBudget_Chaos_BusyThenEscalationBoundary_Reachable(t *testing.T)
 	if c := b.Consecutive(); c != 0 {
 		t.Errorf("final counter = %d; want 0 (eager-delete on escalation, no active streaks)", c)
 	}
-	if c := b.ConsecutiveForKey(testKey); c != 0 {
-		t.Errorf("final ConsecutiveForKey(testKey) = %d; want 0 (key eagerly removed)", c)
+	if c := b.consecutiveForKey(testKey); c != 0 {
+		t.Errorf("final consecutiveForKey(testKey) = %d; want 0 (key eagerly removed)", c)
 	}
 }

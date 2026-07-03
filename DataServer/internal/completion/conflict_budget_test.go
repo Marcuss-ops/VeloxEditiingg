@@ -88,33 +88,33 @@ func TestConflictBudget_NonConflictPassesThrough(t *testing.T) {
 	}
 }
 
-// TestConflictBudget_ConsecutiveForKey_ZeroDefault locks down the
+// TestConflictBudget_consecutiveForKey_ZeroDefault locks down the
 // "absent key returns 0" contract for the per-key accessor. This
 // covers three cases the docstring promises:
 //   - key was never recorded (truly absent)
 //   - key was recorded then nil-reset (eagerly removed)
 //   - key was recorded then escalated (eagerly removed)
 //
-// In all three cases ConsecutiveForKey must return 0, NOT panic
+// In all three cases consecutiveForKey must return 0, NOT panic
 // and NOT return a stale value from a sibling key.
-func TestConflictBudget_ConsecutiveForKey_ZeroDefault(t *testing.T) {
+func TestConflictBudget_consecutiveForKey_ZeroDefault(t *testing.T) {
 	b := NewConflictBudget(ConflictBudgetPolicy{ConsecutiveConflictThreshold: 3})
 	cErr := conflictErr("stale fence")
 
 	// Case 1: key was never recorded → 0.
-	if got := b.ConsecutiveForKey("never-seen"); got != 0 {
-		t.Errorf("never-seen key: ConsecutiveForKey = %d, want 0", got)
+	if got := b.consecutiveForKey("never-seen"); got != 0 {
+		t.Errorf("never-seen key: consecutiveForKey = %d, want 0", got)
 	}
 
 	// Case 2: key recorded then nil-reset → 0.
 	_ = b.Record(testKey, cErr)
 	_ = b.Record(testKey, cErr)
-	if got := b.ConsecutiveForKey(testKey); got != 2 {
-		t.Fatalf("setup: ConsecutiveForKey = %d, want 2 before nil reset", got)
+	if got := b.consecutiveForKey(testKey); got != 2 {
+		t.Fatalf("setup: consecutiveForKey = %d, want 2 before nil reset", got)
 	}
 	_ = b.Record(testKey, nil) // nil reset removes the key
-	if got := b.ConsecutiveForKey(testKey); got != 0 {
-		t.Errorf("post-nil-reset: ConsecutiveForKey = %d, want 0 (key eagerly removed)", got)
+	if got := b.consecutiveForKey(testKey); got != 0 {
+		t.Errorf("post-nil-reset: consecutiveForKey = %d, want 0 (key eagerly removed)", got)
 	}
 
 	// Case 3: key recorded then escalated → 0 (eager-delete on
@@ -125,16 +125,16 @@ func TestConflictBudget_ConsecutiveForKey_ZeroDefault(t *testing.T) {
 	if !errors.Is(boundary, ErrConflictBudgetExhausted) {
 		t.Fatalf("setup: boundary should escalate, got %v", boundary)
 	}
-	if got := b.ConsecutiveForKey("escalate-me"); got != 0 {
-		t.Errorf("post-escalation: ConsecutiveForKey = %d, want 0 (key eagerly removed)", got)
+	if got := b.consecutiveForKey("escalate-me"); got != 0 {
+		t.Errorf("post-escalation: consecutiveForKey = %d, want 0 (key eagerly removed)", got)
 	}
 
 	// Case 4: a sibling key with a non-zero streak must NOT bleed
 	// into the absent-key probe.
 	_ = b.Record("sibling", cErr)
 	_ = b.Record("sibling", cErr)
-	if got := b.ConsecutiveForKey("never-seen"); got != 0 {
-		t.Errorf("absent key with active sibling streak: ConsecutiveForKey = %d, want 0 (no bleed)", got)
+	if got := b.consecutiveForKey("never-seen"); got != 0 {
+		t.Errorf("absent key with active sibling streak: consecutiveForKey = %d, want 0 (no bleed)", got)
 	}
 }
 
@@ -168,14 +168,14 @@ func TestConflictBudget_EscalatesAtThresholdBoundary(t *testing.T) {
 		t.Errorf("expected ErrConflictBudgetExhausted, got %v", err)
 	}
 	// Blocco 3: the key is eagerly removed from the per-key map
-	// on escalation, so BOTH Consecutive() and ConsecutiveForKey
+	// on escalation, so BOTH Consecutive() and consecutiveForKey
 	// return 0 after the boundary. The escalation error is the
 	// real signal, not the post-escalation counter.
 	if got := b.Consecutive(); got != 0 {
 		t.Errorf("Consecutive() at boundary = %d, want 0 (eager-delete on escalation, no active streaks)", got)
 	}
-	if got := b.ConsecutiveForKey(testKey); got != 0 {
-		t.Errorf("ConsecutiveForKey at boundary = %d, want 0 (key eagerly removed)", got)
+	if got := b.consecutiveForKey(testKey); got != 0 {
+		t.Errorf("consecutiveForKey at boundary = %d, want 0 (key eagerly removed)", got)
 	}
 }
 
@@ -383,13 +383,13 @@ func TestConflictBudget_ConcurrentKeys_IndependentStreaks(t *testing.T) {
 	if err := b.Record(keyA, cErr); err != nil {
 		t.Fatalf("alpha conflict #1 should not escalate: %v", err)
 	}
-	if got := b.ConsecutiveForKey(keyA); got != 1 {
+	if got := b.consecutiveForKey(keyA); got != 1 {
 		t.Errorf("alpha counter after 1 conflict = %d, want 1", got)
 	}
 	if err := b.Record(keyA, cErr); err != nil {
 		t.Fatalf("alpha conflict #2 should not escalate: %v", err)
 	}
-	if got := b.ConsecutiveForKey(keyA); got != 2 {
+	if got := b.consecutiveForKey(keyA); got != 2 {
 		t.Errorf("alpha counter after 2 conflicts = %d, want 2", got)
 	}
 	// 3rd conflict: boundary → escalate, key eagerly removed.
@@ -401,10 +401,10 @@ func TestConflictBudget_ConcurrentKeys_IndependentStreaks(t *testing.T) {
 		t.Errorf("alpha boundary: want errors.Is(_, ErrConflictBudgetExhausted), got %v", aBoundary)
 	}
 	// Post-escalation: the key is eagerly removed from the map
-	// (ConsecutiveForKey returns 0 for absent keys). This is the
+	// (consecutiveForKey returns 0 for absent keys). This is the
 	// intended Blocco 3 behaviour: the budget is "armed" again
 	// for a fresh streak.
-	if got := b.ConsecutiveForKey(keyA); got != 0 {
+	if got := b.consecutiveForKey(keyA); got != 0 {
 		t.Errorf("alpha counter post-escalation = %d, want 0 (key eagerly removed)", got)
 	}
 	if got := b.Consecutive(); got != 0 {
@@ -423,11 +423,11 @@ func TestConflictBudget_ConcurrentKeys_IndependentStreaks(t *testing.T) {
 	if err := b.Record(keyB, cErr); err != nil {
 		t.Errorf("beta conflict #1 must NOT escalate (per-key isolation): %v", err)
 	}
-	if got := b.ConsecutiveForKey(keyB); got != 1 {
+	if got := b.consecutiveForKey(keyB); got != 1 {
 		t.Errorf("beta counter = %d, want 1 (independent from alpha's escalation)", got)
 	}
 	// alpha is still 0 (eager-deleted) — keys MUST NOT bleed.
-	if got := b.ConsecutiveForKey(keyA); got != 0 {
+	if got := b.consecutiveForKey(keyA); got != 0 {
 		t.Errorf("alpha counter after beta conflict = %d, want 0 (eager-deleted, no bleed)", got)
 	}
 
@@ -438,15 +438,15 @@ func TestConflictBudget_ConcurrentKeys_IndependentStreaks(t *testing.T) {
 			t.Errorf("gamma conflict #%d must not escalate: %v", i+1, err)
 		}
 	}
-	if got := b.ConsecutiveForKey(keyC); got != 2 {
+	if got := b.consecutiveForKey(keyC); got != 2 {
 		t.Errorf("gamma counter = %d, want 2 (independent from alpha/beta)", got)
 	}
 	// Per-key isolation: alpha=0 (eager-deleted), beta=1, gamma=2.
 	// No bleed between keys.
-	if got := b.ConsecutiveForKey(keyA); got != 0 {
+	if got := b.consecutiveForKey(keyA); got != 0 {
 		t.Errorf("alpha counter after gamma conflicts = %d, want 0 (eager-deleted, no bleed)", got)
 	}
-	if got := b.ConsecutiveForKey(keyB); got != 1 {
+	if got := b.consecutiveForKey(keyB); got != 1 {
 		t.Errorf("beta counter after gamma conflicts = %d, want 1 (no bleed)", got)
 	}
 	// Consecutive() returns the MAX across all keys = max(0, 1, 2) = 2.
@@ -461,7 +461,7 @@ func TestConflictBudget_ConcurrentKeys_IndependentStreaks(t *testing.T) {
 	if err := b.Record(keyA, cErr); err != nil {
 		t.Errorf("post-escalation alpha conflict must NOT escalate (eager delete re-armed the key): %v", err)
 	}
-	if got := b.ConsecutiveForKey(keyA); got != 1 {
+	if got := b.consecutiveForKey(keyA); got != 1 {
 		t.Errorf("alpha counter after post-escalation conflict = %d, want 1 (eager delete re-armed the key)", got)
 	}
 
@@ -483,10 +483,10 @@ func TestConflictBudget_ConcurrentKeys_IndependentStreaks(t *testing.T) {
 	if got := b.Consecutive(); got != 2 {
 		t.Errorf("post-beta-escalation Consecutive() = %d, want 2 (max = gamma's 2)", got)
 	}
-	if got := b.ConsecutiveForKey(keyA); got != 1 {
+	if got := b.consecutiveForKey(keyA); got != 1 {
 		t.Errorf("alpha counter after beta escalation = %d, want 1 (still independent)", got)
 	}
-	if got := b.ConsecutiveForKey(keyC); got != 2 {
+	if got := b.consecutiveForKey(keyC); got != 2 {
 		t.Errorf("gamma counter after beta escalation = %d, want 2 (still independent)", got)
 	}
 }

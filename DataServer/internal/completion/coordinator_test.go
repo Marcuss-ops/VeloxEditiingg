@@ -1015,7 +1015,7 @@ func TestCoordinator_RecordAttemptCommitsCAS_CASExhaustionFallsBackToBudgetError
 	// NO LONGER in the errors.Is chain (documented quirk: original
 	// is %v-text, not %w-chain). The key is eagerly removed from
 	// the per-key map (Blocco 3 per-key design), so BOTH
-	// Consecutive() and ConsecutiveForKey("test") return 0 after
+	// Consecutive() and consecutiveForKey("test") return 0 after
 	// the boundary — the escalation error is the real signal, not
 	// the post-escalation counter. The pre-boundary counter check
 	// above (line ~1015) confirms the streak reached 2.
@@ -1029,12 +1029,12 @@ func TestCoordinator_RecordAttemptCommitsCAS_CASExhaustionFallsBackToBudgetError
 	if errors.Is(boundaryErr, ErrTransitionConflict) {
 		t.Errorf("3rd consecutive: ErrTransitionConflict must NOT be in errors.Is chain (only %%v-formatted; got %v)", boundaryErr)
 	}
-	// Post-escalation: the key is eagerly removed (ConsecutiveForKey
+	// Post-escalation: the key is eagerly removed (consecutiveForKey
 	// returns 0 for a non-existent key). This is the intended
 	// Blocco 3 behaviour — the budget is "armed" again, ready for a
 	// fresh streak if the caller retries.
-	if got := c.budget.ConsecutiveForKey("test"); got != 0 {
-		t.Errorf("budget.ConsecutiveForKey(\"test\") = %d, want 0 (eager-delete on escalation)", got)
+	if got := c.budget.consecutiveForKey("test"); got != 0 {
+		t.Errorf("budget.consecutiveForKey(\"test\") = %d, want 0 (eager-delete on escalation)", got)
 	}
 	if got := c.budget.Consecutive(); got != 0 {
 		t.Errorf("budget.Consecutive() = %d, want 0 (no active streaks after eager-delete)", got)

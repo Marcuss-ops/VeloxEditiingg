@@ -335,6 +335,14 @@ func (c *coordinator) DeclareOutputs(ctx context.Context, cmd DeclareOutputsComm
 // AND status. uploaded_bytes on the corresponding task_output_declar
 // ations row(s) is incremented monotonically.
 //
+// The MAX(uploaded_bytes, ?) inline aggregate that enforces the
+// monotonic-progress guarantee lives in this function's tx.ExecContext
+// SQL below (no `store.UpdateProgress` helper exists — pace the Blocco
+// 3 doc-vs-impl audit, the aggregate was always inline; do NOT
+// reintroduce a removed helper). updated_at follows the same
+// MAX-rule so a stale heartbeat cannot roll back the reconciler's
+// last_progress_at timestamp.
+//
 // Idempotency:
 //
 //   - last_progress_at = MAX(last_progress_at, new_value): a worker

@@ -360,10 +360,12 @@ func (b *ConflictBudget) Reset() {
 	}
 }
 
+// MAX across keys (NOT the sum).
+//
 // Consecutive returns the MAX consecutive-conflict counter across
 // all keys. Useful for tests and observability where the caller
 // doesn't need per-key granularity. For per-key queries, use
-// ConsecutiveForKey.
+// consecutiveForKey.
 //
 // Returning the max (rather than the sum) preserves the semantics
 // of the old single-counter design: "how bad is the worst streak
@@ -381,13 +383,13 @@ func (b *ConflictBudget) Consecutive() int {
 	return max
 }
 
-// ConsecutiveForKey returns the consecutive-conflict counter for a
+// consecutiveForKey returns the consecutive-conflict counter for a
 // specific key. Returns 0 if the key has no active streak — this
 // covers both "never seen this key" and "the key escalated and
 // was eagerly removed". The zero-default is intentional so
-// callers (tests, diagnostics) can use ConsecutiveForKey as a
+// callers (tests, diagnostics) can use consecutiveForKey as a
 // presence-and-streak probe without a separate `hasKey` check.
-func (b *ConflictBudget) ConsecutiveForKey(key string) int {
+func (b *ConflictBudget) consecutiveForKey(key string) int {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if state, ok := b.streaks[key]; ok {

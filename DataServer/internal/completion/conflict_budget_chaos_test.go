@@ -254,8 +254,8 @@ func TestConflictBudget_Chaos_FinalSpecSequenceTriggersEscalation(t *testing.T) 
 	if c := b.Consecutive(); c != 0 {
 		t.Errorf("final counter = %d, want 0 (eager-delete on escalation, no active streaks)", c)
 	}
-	if c := b.ConsecutiveForKey(testKey); c != 0 {
-		t.Errorf("final ConsecutiveForKey(testKey) = %d, want 0 (key eagerly removed)", c)
+	if c := b.consecutiveForKey(testKey); c != 0 {
+		t.Errorf("final consecutiveForKey(testKey) = %d, want 0 (key eagerly removed)", c)
 	}
 	// Post-escalation: a fresh conflict on the same key starts a
 	// NEW streak at 1 (eager-delete re-arms the key). The next
@@ -274,8 +274,8 @@ func TestConflictBudget_Chaos_FinalSpecSequenceTriggersEscalation(t *testing.T) 
 	if got := b.Record(testKey, cErr); got != nil && errors.Is(got, ErrConflictBudgetExhausted) {
 		t.Errorf("post-escalation conflict must start a fresh streak (under threshold, no escalation); got %v", got)
 	}
-	if got := b.ConsecutiveForKey(testKey); got != 1 {
-		t.Errorf("post-escalation ConsecutiveForKey(testKey) = %d, want 1 (fresh streak)", got)
+	if got := b.consecutiveForKey(testKey); got != 1 {
+		t.Errorf("post-escalation consecutiveForKey(testKey) = %d, want 1 (fresh streak)", got)
 	}
 }
 
@@ -366,7 +366,7 @@ func TestConflictBudget_Chaos_WrapPatternMirrorsCoordinator(t *testing.T) {
 	if c := budget.Consecutive(); c != 0 {
 		t.Errorf("step 7: counter = %d, want 0 (eager-delete on escalation, no active streaks)", c)
 	}
-	if c := budget.ConsecutiveForKey(testKey); c != 0 {
-		t.Errorf("step 7: ConsecutiveForKey(testKey) = %d, want 0 (key eagerly removed)", c)
+	if c := budget.consecutiveForKey(testKey); c != 0 {
+		t.Errorf("step 7: consecutiveForKey(testKey) = %d, want 0 (key eagerly removed)", c)
 	}
 }
