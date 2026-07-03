@@ -40,14 +40,6 @@ func requireLiveWorkersEnabled() bool {
 	return strings.EqualFold(strings.TrimSpace(os.Getenv("VELOX_REQUIRE_LIVE_WORKERS")), "true")
 }
 
-var ErrPostgresNotYetWired = errors.New(
-	"bootstrap: VELOX_DB_DRIVER=postgres is not yet wired end-to-end. " +
-		"Narrow-repository adapters (jobs, artifacts) accept *database.Handle. " +
-		"The remaining master modules (workers, lifecycle, ansible, youtube, drive, " +
-		"livestream, registration) still depend on *SQLiteStore. See docs/architecture/ " +
-		"and docs/pr/ for the per-module cutover roadmap",
-)
-
 // criticalRetryConfigFromEnv reads VELOX_CRITICAL_MAX_RETRIES (int;
 // 0 = infinite for ClassCritical — legacy behaviour) and
 // VELOX_CRITICAL_FAIL_AFTER (int; log-WARN threshold unrelated to
