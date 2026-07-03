@@ -2,6 +2,7 @@ package jobs
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -9,6 +10,10 @@ import (
 	"velox-server/internal/queue"
 	"velox-server/internal/store"
 )
+
+// _ keeps fmt imported even if other helpers are inlined; silenced by go vet if unused.
+// This file intentionally references fmt.Errorf / fmt.Sprintf to exercise the
+// inline Service stub's error and string-format paths.
 
 // ── Service stub (PR 3.5-b WIP — production code TBD) ─────────────────────────
 //
