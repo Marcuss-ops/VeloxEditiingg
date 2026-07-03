@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"time"
@@ -18,6 +19,42 @@ import (
 	"velox-server/internal/remoteengine"
 	"velox-server/internal/store"
 )
+
+// deliveryPlanResolverAdapter bridges the concrete
+// *deliveries.SQLiteDeliveryPlanResolver to the enqueue.PlanResolver
+// interface. The two layers (enqueue and deliveries) intentionally do not
+// import each other — the enqueue package defines a minimal local
+// PlanResolver contract to avoid an import cycle and to keep the
+// precondition testable in isolation. The adapter is the single bridge
+// at the composition root; it converts deliveries.PlanContext into the
+// minimal enqueue.PlanDestination (only the fields the precondition
+// needs: DestinationID, Priority, RetryBudget). Backoff and AcquiredAt
+// are dropped because the enqueue precondition does not consume them.
+type deliveryPlanResolverAdapter struct {
+	inner *deliveries.SQLiteDeliveryPlanResolver
+}
+
+func (a *deliveryPlanResolverAdapter) ResolvePlan(ctx context.Context, jobID, artifactID string) (*enqueue.ResolvedPlan, error) {
+	if a == nil || a.inner == nil {
+		return nil, nil
+	}
+	plan, err := a.inner.ResolvePlan(ctx, jobID, artifactID)
+	if err != nil {
+		return nil, err
+	}
+	if plan == nil {
+		return nil, nil
+	}
+	out := &enqueue.ResolvedPlan{JobID: plan.JobID}
+	for _, d := range plan.Destinations {
+		out.Destinations = append(out.Destinations, enqueue.PlanDestination{
+			DestinationID: d.DestinationID,
+			Priority:      d.Priority,
+			RetryBudget:   d.RetryBudget,
+		})
+	}
+	return out, nil
+}
 
 // moduleDeps holds the module-level components built at bootstrap
 // (YouTube, Drive, Ansible, Livestream, Frontend) plus the
@@ -84,7 +121,16 @@ func buildModules(cfg *config.Config, p *persistenceDeps, j *jobsDeps, w *worker
 	// permits the resolver's dev fallback also relaxes enqueue-time validation,
 	// so creation and finalization can never disagree about plan requirements.
 	t.AtomicCreator.WithDeliveryPlanPolicy(!cfg.Runtime.DeliveryGlobalFallback)
-	enqueuer := enqueue.NewEnqueuer(t.AtomicCreator, j.Repository, assetSvc)
+
+	// PR-delivery-plan-precondition: wire the real DB-backed delivery plan
+	// resolver into the Enqueuer. ResolvePlan (NOT ResolveDestinations) is
+	// called before every enqueue so retry_budget can be validated and
+	// propagated to job.MaxRetries upfront, eliminating the late re-resolve
+	// in FinalizeVerified. The local adapter bridges the concrete deliveries
+	// resolver to the enqueue.PlanResolver interface (see type above).
+	planResolver := deliveries.NewSQLiteDeliveryPlanResolver(p.SQLite.DB(), cfg.Runtime.DeliveryGlobalFallback)
+	planAdapter := &deliveryPlanResolverAdapter{inner: planResolver}
+	enqueuer := enqueue.NewEnqueuer(t.AtomicCreator, j.Repository, assetSvc, planAdapter)
 
 	// ── Register modules ────────────────────────────────────────────
 	healthMod := app.NewHealthModule()
