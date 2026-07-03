@@ -69,6 +69,59 @@ The production worker allowlist is validated by `ValidateProductionWorkers` in `
 
 The agent operating contract — where canonical values live, what an agent (LLM, scripted, or CI-driven) must never print, and which workflow is allowed to publish an image — is the single source of truth in [`docs/architecture/AGENT-CONTRACT.md`](docs/architecture/AGENT-CONTRACT.md). The seven rules in that document bind every action on `main` and are backed by `scripts/ci/check-secrets.sh`, `deploy/validate-master-env.sh`, and `scripts/operator/with-production-env.sh`.
 
+## Operator onboarding
+
+> One-time local setup for any operator running jobs, canaries, or smoke checks against the production master from a workstation. Once set up, every local command runs through [`scripts/operator/with-production-env.sh`](scripts/operator/with-production-env.sh) — the wrapper is the only sanctioned path that exports the canonical env into a child process.
+
+### One-time setup
+
+```bash
+# 1. Create the local config directory (already .gitignored).
+mkdir -p .velox
+
+# 2. Copy the tracked template. NEVER handwrite this from scratch —
+#    the canonical variable names and order live in
+#    `.velox/production.env.example`, not in human memory.
+cp .velox/production.env.example .velox/production.env
+
+# 3. Restrict permissions — the wrapper refuses anything looser.
+chmod 600 .velox/production.env
+
+# 4. Fill in real values from your operator's secret notes.
+$EDITOR .velox/production.env
+```
+
+Required values (the wrapper validates every one on every run):
+
+- `VELOX_MASTER_HOST`, `VELOX_MASTER_URL`
+- `VELOX_ADMIN_TOKEN`
+- `GHCR_SERVER_REPOSITORY`, `GHCR_WORKER_REPOSITORY`
+
+### Daily workflow
+
+Every local operator command must be wrapped, so the canonical env is exported into the child process:
+
+```bash
+scripts/operator/with-production-env.sh <command>
+```
+
+Examples:
+
+- Submit a job: `scripts/operator/with-production-env.sh bash ops/jobs/submit_jackie_chan_doc_voiceover_clips.sh`
+- Run the canary: `scripts/operator/with-production-env.sh bash deploy/runtime/submit-canary.sh`
+- Probe readiness directly: `scripts/operator/with-production-env.sh curl -sS -H "Authorization: Bearer ${VELOX_ADMIN_TOKEN}" "${VELOX_MASTER_URL}/health/ready"`
+
+Skip the wrapper at your own risk: the master token and admin endpoints are not in the shell environment by default, and pasting them into a command line pollutes shell history and bypasses agent rule §2 ([`docs/architecture/AGENT-CONTRACT.md`](docs/architecture/AGENT-CONTRACT.md)).
+
+### What the wrapper enforces
+
+- refuses world/group-readable `.velox/production.env` (must be `chmod 600`);
+- refuses to start if `VELOX_MASTER_URL`, `VELOX_ADMIN_TOKEN`, or `GHCR_SERVER_REPOSITORY` are missing;
+- exports the env into the child process via `set -a; source … ; set +a`;
+- never echoes secret values — only reports presence or absence.
+
+Override the env-file location with `VELOX_PRODUCTION_ENV=/path/to/file` if you need to source a non-default file (CI smoke, second operator, etc.).
+
 ## Canonical architecture
 
 The canonical ownership map is [`docs/architecture/OWNERSHIP.md`](docs/architecture/OWNERSHIP.md). Every important state must have one owner, one writer and one mutation path.
