@@ -45,6 +45,53 @@ func TestBuildNarratedClipPayload_UsesRealVoiceoverDurationNotScenePlaceholder(t
 	assertDuration(t, tracks[0]["start_time_offset"], 0, "first audio offset")
 }
 
+func TestNormalizeClipPayload_UsesTopLevelStockClipForNarrationBed(t *testing.T) {
+	t.Parallel()
+
+	rawPayload := map[string]interface{}{
+		"stock_clip_paths": []interface{}{"https://example.com/stock-1.mp4"},
+		"scenes": []interface{}{
+			map[string]interface{}{
+				"text":                        "Jackie Chan scene",
+				"clip_link":                   "https://example.com/final-1.mp4",
+				"reference_voiceover":         "https://example.com/voice-1.mp3",
+				"voiceover_duration_seconds":  6.0,
+				"final_clip_duration_seconds": 2.0,
+				"stock_fallback":              true,
+			},
+		},
+	}
+
+	entries, items, clips, tracks, mode, err := normalizeClipPayload(rawPayload)
+	if err != nil {
+		t.Fatalf("normalizeClipPayload: %v", err)
+	}
+	if mode != "clip_stock" {
+		t.Fatalf("mode = %q, want clip_stock", mode)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("entries = %d, want 1", len(entries))
+	}
+	if len(items) != 2 {
+		t.Fatalf("items = %d, want 2", len(items))
+	}
+	if got := items[0]["url"]; got != "https://example.com/stock-1.mp4" {
+		t.Fatalf("voiceover bed url = %v, want stock clip", got)
+	}
+	if got := items[1]["url"]; got != "https://example.com/final-1.mp4" {
+		t.Fatalf("final scene clip url = %v, want final clip", got)
+	}
+	if len(clips) != 1 || clips[0] != "https://example.com/final-1.mp4" {
+		t.Fatalf("clips = %#v, want only final clip", clips)
+	}
+	if len(tracks) != 1 {
+		t.Fatalf("audio tracks = %d, want 1", len(tracks))
+	}
+	assertDuration(t, entries[0]["voiceover_duration_seconds"], 6.0, "voiceover duration")
+	assertDuration(t, entries[0]["final_clip_duration_seconds"], 2.0, "final clip duration")
+	assertDuration(t, entries[0]["duration_seconds"], 8.0, "scene duration")
+}
+
 func TestBuildNarratedClipPayload_MixedScenesKeepCanonicalOffsets(t *testing.T) {
 	t.Parallel()
 

@@ -1,15 +1,31 @@
 #!/usr/bin/env bash
-# with-production-env.sh — Source the local production environment and invoke a command.
+# scripts/operator/with-production-env.sh — Source the local production env.
 #
-# Usage:
-#   scripts/operator/with-production-env.sh bash ops/jobs/submit_jackie_chan_doc_voiceover_clips.sh
+# Canonical usage (after this redesign):
+#   source scripts/operator/with-production-env.sh
+#   ansible-playbook -i inventory/production.ini --check --diff <playbook>
+#
+#   # or, for `make canonical-dry`, the make target wraps the source + playbook
+#   # in a single line that is the only supported invocation path.
+#
+# Legacy direct-exec usage (still works, will be removed in a future release):
+#   scripts/operator/with-production-env.sh <command> [args...]
 #   scripts/operator/with-production-env.sh curl -sS "$VELOX_MASTER_URL/health/ready"
 #
 # Override the env file location:
-#   VELOX_PRODUCTION_ENV=/path/to/custom.env scripts/operator/with-production-env.sh ...
+#   VELOX_PRODUCTION_ENV=/path/to/custom.env source scripts/operator/with-production-env.sh
 #
-# Agents MUST use this wrapper or explicitly source .velox/production.env.
+# Agents MUST source this wrapper (or run via `make canonical-dry`) instead of
+# `source .velox/production.env` directly. The wrapper enforces:
+#   - file exists,
+#   - file permissions are 600 (refuses world/group-readable credentials),
+#   - the three REQUIRED variables are set after sourcing,
+#   - the secret values are never echoed back to the terminal.
 # Agents MUST NOT print VELOX_ADMIN_TOKEN, PATs, vault passwords, or SSH keys.
+#
+# Foot-gun guarded: ansible-playbook -i <script>.sh would parse this file as
+# an inventory script and choke on `exec "$@"`. Source here + pass a separate
+# inventory path (-i inventory/production.ini).
 
 set -euo pipefail
 
@@ -53,8 +69,22 @@ set +a
 : "${VELOX_ADMIN_TOKEN:?missing VELOX_ADMIN_TOKEN in $ENV_FILE}"
 : "${GHCR_SERVER_REPOSITORY:?missing GHCR_SERVER_REPOSITORY in $ENV_FILE}"
 
+# ── LEGACY DIRECT-EXEC PATH (deprecated; will be removed) ────────────────────
+# Detect direct execution (not sourcing). When sourced via `source ...`, this
+# branch is skipped and the env vars above flow into the calling shell. When
+# invoked as `with-production-env.sh <cmd> [args...]`, the BASH_SOURCE/$0
+# identity check distinguishes and routes to `exec "$@"`.
+# New operators must use `source` (or `make canonical-dry`); direct-exec is
+# kept only for back-compat with cron-era scripts.
+if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
+    # Sourced mode: vars exported, return control to caller.
+    return 0
+fi
+
+# Direct-exec mode (legacy): print usage if no args, else exec the child.
 if [[ $# -eq 0 ]]; then
     echo "Usage: $0 <command> [args...]" >&2
+    echo "       (prefer: source $0 && ansible-playbook -i inventory/production.ini <args>)" >&2
     exit 1
 fi
 

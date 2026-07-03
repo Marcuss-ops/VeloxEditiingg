@@ -36,7 +36,6 @@ done
 # 3) Remove velox Docker images
 log "Removing Docker images..."
 docker images --filter "reference=velox-worker*" -q 2>/dev/null | xargs -r docker rmi 2>/dev/null || true
-docker rmi velox-worker-console:latest 2>/dev/null || true
 log "  Images removed"
 
 # 4) Remove old bundle and cache files
