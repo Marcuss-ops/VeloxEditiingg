@@ -43,6 +43,13 @@
   ansible.builtin.set_fact:
     velox_worker_heartbeat_masters: "{{ master_url }}"
     velox_worker_secondary_master_url: ""
+    velox_worker_control_grpc_url: >-
+      {{
+        master_url
+        | regex_replace('^https?://', '')
+        | regex_replace('/.*$', '')
+        | regex_replace(':8000$', ':9000')
+      }}
 
 - name: Write env file
   ansible.builtin.copy:
@@ -76,18 +83,18 @@
     velox_current_root: "{{ velox_dir }}/current"
     velox_assets_cache_host_path: "{{ velox_dir }}/current/RemoteCodex/assets_cache"
     velox_worker_dockerfile_host: "{{ velox_dir }}/current/RemoteCodex/native/worker-agent-go/Dockerfile"
-    velox_worker_docker_context: "{{ velox_dir }}/current/RemoteCodex"
+    velox_worker_docker_context: "{{ velox_dir }}/current"
 
 - name: Verify worker agent binary is present in build context
   ansible.builtin.stat:
-    path: "{{ velox_worker_docker_context }}/native/worker-agent-go/bin/velox-worker-agent"
+    path: "{{ velox_worker_docker_context }}/RemoteCodex/native/worker-agent-go/bin/velox-worker-agent"
   register: worker_agent_binary_stat
 
 - name: Fail if worker agent binary is missing from build context
   ansible.builtin.fail:
     msg: >-
       Missing velox-worker-agent binary at
-      {{ velox_worker_docker_context }}/native/worker-agent-go/bin/velox-worker-agent.
+      {{ velox_worker_docker_context }}/RemoteCodex/native/worker-agent-go/bin/velox-worker-agent.
       Rebuild the agent on the controller before running the Docker rebuild.
   when: not worker_agent_binary_stat.stat.exists
 
@@ -126,45 +133,39 @@
     msg: "{{ worker_image_build.stdout | default('no output') }}"
 
 # ── Config generation AFTER Docker build (needs worker image) ──
-- name: Ensure worker config exists and disables Prometheus metrics
-  ansible.builtin.shell: |
-    set -euo pipefail
-    CFG={{ velox_worker_runtime_dir }}/worker_config.json
-    mkdir -p {{ velox_worker_runtime_dir }}
-    if [ ! -f "$CFG" ]; then
-      /usr/bin/docker run --rm \
-        --user root \
-        --entrypoint /usr/local/bin/velox-worker-agent \
-        -v {{ velox_worker_runtime_dir }}:{{ velox_worker_runtime_dir }} \
-        "{{ _worker_image_tag }}" \
-        -generate-config -config "$CFG" -work-dir /app/RemoteCodex >/dev/null
-    fi
-    python3 - <<'PY'
-    import json
-    from pathlib import Path
+- name: Ensure worker runtime dir exists before writing config
+  ansible.builtin.file:
+    path: "{{ velox_worker_runtime_dir }}"
+    state: directory
+    owner: "10001"
+    group: "10001"
+    mode: "0775"
 
-    cfg_path = Path("{{ velox_worker_runtime_dir }}/worker_config.json")
-    data = json.loads(cfg_path.read_text())
-    data["master_url"] = "{{ master_url }}"
-    data["worker_id"] = "{{ worker_id | default(inventory_hostname) }}"
-    data["worker_name"] = "{{ inventory_hostname }}"
-    data["prometheus_port"] = 0
-    data["health_port"] = {{ velox_worker_health_port }}
-    cfg_path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
-    PY
-    # worker_config.json is created by `docker run --user root` (the
-    # one-shot -generate-config) and then mutated by the python
-    # heredoc. Both run as root from ansible's SSH context, leaving
-    # the file owned by root. Hand ownership to uid 10001 so the
-    # runtime velox process can read AND write the file (the worker
-    # may regenerate it on reload, e.g. after a flag change). mode
-    # 0640 keeps unrelated users on the host from reading it.
-    chown 10001:10001 {{ velox_worker_runtime_dir }}/worker_config.json
-    chmod 0640 {{ velox_worker_runtime_dir }}/worker_config.json
-  args:
-    executable: /bin/bash
-  register: worker_config_patch
-  changed_when: true
+- name: Write canonical worker config
+  ansible.builtin.copy:
+    dest: "{{ velox_worker_runtime_dir }}/worker_config.json"
+    owner: "10001"
+    group: "10001"
+    mode: "0640"
+    content: |
+      {
+        "master_url": "{{ master_url }}",
+        "worker_id": "{{ worker_id | default(inventory_hostname) }}",
+        "worker_name": "{{ inventory_hostname }}",
+        "work_dir": "/app/RemoteCodex",
+        "log_level": "info",
+        "bundle_version": "{{ version_number | default('v1.0.6') }}",
+        "bundle_hash": "{{ bundle_hash | default('') }}",
+        "protocol_version": "{{ worker_protocol_version | default('2026-06-worker-v1') }}",
+        "engine_version": "{{ engine_version | default(version_number | default('v1.0.6')) }}",
+        "environment": "staging",
+        "max_active_jobs": 1,
+        "prometheus_port": 0,
+        "health_port": {{ velox_worker_health_port }},
+        "control_grpc_url": "{{ velox_worker_control_grpc_url }}",
+        "allow_insecure_grpc_dev": true,
+        "video_engine_cpp_bin": "/usr/local/bin/velox_video_engine"
+      }
 
 - name: Build velox-worker-console Docker image (optional)
   ansible.builtin.shell: |
@@ -321,6 +322,19 @@
     group: "10001"
     mode: "0775"
 
+- name: Ensure bootstrap fixture directory exists in release tree
+  ansible.builtin.file:
+    path: "{{ velox_current_root }}/RemoteCodex/tests/fixtures"
+    state: directory
+    mode: "0755"
+
+- name: Copy bootstrap selftest baseline fixture into canonical runtime path
+  ansible.builtin.copy:
+    src: "{{ velox_current_root }}/RemoteCodex/native/worker-agent-go/tests/fixtures/engine_selftest_baseline.sha256"
+    dest: "{{ velox_current_root }}/RemoteCodex/tests/fixtures/engine_selftest_baseline.sha256"
+    remote_src: true
+    mode: "0644"
+
 # ── DOCKER GO WORKER SERVICE (Single Source of Truth) ──────────
 - name: Create systemd service
   ansible.builtin.copy:
@@ -393,11 +407,14 @@
   ansible.builtin.systemd:
     name: "velox-worker-{{ inventory_hostname }}"
   register: worker_service_status
+  retries: 6
+  delay: 5
+  until: worker_service_status.status.ActiveState | default('unknown') in ['active', 'activating']
 
 - name: Fail if worker service not active after setup
   ansible.builtin.fail:
     msg: "Worker service not active after systemd setup — state: {{ worker_service_status.status.ActiveState | default('unknown') }}"
-  when: worker_service_status.status.ActiveState | default('unknown') != 'active'
+  when: worker_service_status.status.ActiveState | default('unknown') not in ['active', 'activating']
 
 - name: Install velox-worker watchdog (auto-restart if service stopped)
   ansible.builtin.copy:
