@@ -13,7 +13,7 @@
   become: true
   vars:
     velox_dir: "/opt/velox"
-    master_url: "{{ master_url | default('http://127.0.0.1:8000') }}"
+    velox_worker_master_url: "{{ master_url | default('http://127.0.0.1:8000', true) }}"
     ansible_become_method: sudo
     ansible_become_flags: "-n"
 
@@ -45,10 +45,10 @@
           deliberately unsupported by the worker deploy pipeline.
       become: false
 
-    - name: Update | Verify master_url
+    - name: Update | Verify master URL
       ansible.builtin.assert:
         that:
-          - master_url | length > 0
+          - velox_worker_master_url | length > 0
         fail_msg: "master_url non impostato — impossibile scaricare bundle"
       become: false
 
@@ -97,7 +97,7 @@
 
     - name: Update | Download worker bundle from master
       ansible.builtin.get_url:
-        url: "{{ master_url }}/api/worker/bundle?platform=linux&arch=x86_64"
+        url: "{{ velox_worker_master_url }}/api/worker/bundle?platform=linux&arch=x86_64"
         dest: "/tmp/velox_worker_update.zip"
         timeout: 120
         force: true
@@ -113,7 +113,7 @@
     - name: "Update | Fallback: download bundle with curl"
       ansible.builtin.shell: |
         set -euo pipefail
-        curl -sf --max-time 120 "{{ master_url }}/api/worker/bundle?platform=linux&arch=x86_64" \
+        curl -sf --max-time 120 "{{ velox_worker_master_url }}/api/worker/bundle?platform=linux&arch=x86_64" \
           -o /tmp/velox_worker_update.zip
       args:
         executable: /bin/bash
@@ -132,6 +132,7 @@
       ansible.builtin.include_tasks:
         file: tasks/deploy_worker_release.yml
       vars:
+        master_url: "{{ velox_worker_master_url }}"
         bundle_zip_path: "/tmp/velox_worker_update.zip"
         reinject_agent_src: "{{ playbook_dir }}/../../../../RemoteCodex/native/worker-agent-go/bin/velox-worker-agent"
         reinject_scripts_dir: "{{ playbook_dir }}/../../../../RemoteCodex/scripts"
