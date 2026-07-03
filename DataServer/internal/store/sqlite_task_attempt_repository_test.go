@@ -10,7 +10,11 @@ import (
 func openTaskAttemptTestDB(t *testing.T) *SQLiteTaskAttemptRepository {
 	t.Helper()
 
-	db, err := sql.Open("sqlite3", ":memory:")
+	// Append `_busy_timeout=5000` so concurrent readers/writers don't
+	// immediately trip SQLITE_BUSY when the test races on the private
+	// in-memory connection pool. Matches the canonical pattern used
+	// across DataServer/internal/store/*_test.go.
+	db, err := sql.Open("sqlite3", ":memory:?_busy_timeout=5000")
 	if err != nil {
 		t.Fatalf("sql.Open: %v", err)
 	}
