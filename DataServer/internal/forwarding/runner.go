@@ -128,12 +128,12 @@ func (m *RunnerMetrics) Snapshot() map[string]int64 {
 // jobs and transitions completed results atomically to FORWARDED (Job+Task
 // creation + forwarding status update in a single SQLite transaction).
 type CreatorForwardingRunner struct {
-	cfg      *RunnerConfig
-	dbStore  *store.SQLiteStore
-	client   *remoteengine.Client
-	enqueuer *enqueue.Enqueuer
-	identity string
-	metrics  *RunnerMetrics
+	cfg          *RunnerConfig
+	dbStore      *store.SQLiteStore
+	client       *remoteengine.Client
+	enqueuer     *enqueue.Enqueuer
+	identity     string
+	metrics      *RunnerMetrics
 	resolver     *creatorflow.Resolver // canonical forward-completed entry point
 	resolverOnce sync.Once             // guards lazyResolver against concurrent first-call race
 
