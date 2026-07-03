@@ -83,6 +83,14 @@ VeloxFrontend/
 .velox/
 .cline/
 
+# ── Pilot triage notes (transient -- per-checkpoint scratch from AI assistance) ──
+# These `*-msg.txt` files accumulate during AI-assisted checkpoint work. They
+# are throwaway operator-facing artifacts, one-per-commit, and intended to be
+# untracked. `launcher.sh` (Codebuff's own pilot launcher infrastructure) MUST
+# stay tracked — the `*.txt` glob excludes only the ephemeral notes, not the
+# runtime scripts.
+.pilot/*.txt
+
 # ── Logs ─────────────────────────────────────────────────────────────────────
 logs/
 *.log
