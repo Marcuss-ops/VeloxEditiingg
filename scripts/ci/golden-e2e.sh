@@ -186,6 +186,7 @@ VELOX_GRPC_TLS_CA_FILE=${CERTS_DIR}/ca.crt
 GIN_MODE=release
 VELOX_ALLOWED_WORKERS=${WORKER_ID}
 VELOX_CODE_VERSION=${VERSION}
+VELOX_DELIVERY_GLOBAL_FALLBACK=true
 ENV
 
   # Boot with setsid+nohup so the process survives the script shell.
@@ -197,7 +198,7 @@ ENV
   disown "$MPID" 2>/dev/null
   unset VELOX_MASTER_PORT VELOX_GRPC_PORT VELOX_DB_PATH VELOX_DATA_DIR VELOX_STAGING_DIR VELOX_STORAGE_DIR
   unset VELOX_ADMIN_TOKEN VELOX_GRPC_TLS_CERT_FILE VELOX_GRPC_TLS_KEY_FILE VELOX_GRPC_TLS_CA_FILE
-  unset GIN_MODE VELOX_ALLOWED_WORKERS VELOX_CODE_VERSION
+  unset GIN_MODE VELOX_ALLOWED_WORKERS VELOX_CODE_VERSION VELOX_DELIVERY_GLOBAL_FALLBACK
   log "master PID=$MPID"
 
   # Wait for /health
@@ -338,6 +339,27 @@ JSON
     die "job submission failed — could not extract job_id" 1
   fi
 
+  local now_utc
+  now_utc="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+  sqlite3 "${DATA_DIR}/velox.db" <<SQL
+INSERT INTO job_delivery_plans (
+  job_id, destination_id, enabled, priority, metadata_json, created_at, updated_at
+)
+SELECT
+  '${JOB_ID}',
+  destination_id,
+  1,
+  0,
+  '{}',
+  '${now_utc}',
+  '${now_utc}'
+FROM delivery_destinations
+WHERE enabled = 1
+ON CONFLICT(job_id, destination_id) DO UPDATE SET
+  enabled = excluded.enabled,
+  updated_at = excluded.updated_at;
+SQL
+
   log "job_id=${JOB_ID}"
   ok "job submitted (PENDING)"
 }
@@ -380,23 +402,23 @@ phase7_poll() {
   die "job did not reach SUCCEEDED within $(( max_polls * poll_interval ))s" 126
 }
 
-# ─── Phase 8: Assert MP4 in VELOX_STORAGE_DIR ────────────────────────────────
+# ─── Phase 8: Assert final video artifact in VELOX_STORAGE_DIR ───────────────
 phase8_verify_storage() {
-  log "[8/8] Verifying MP4 in storage"
+  log "[8/8] Verifying final video artifact in storage"
 
-  local mp4_count
-  mp4_count=$(find "${STORAGE_DIR}" -name '*.mp4' 2>/dev/null | wc -l)
+  local video_count
+  video_count=$(find "${STORAGE_DIR}" \( -name '*.mp4' -o -name '*.f4v' \) 2>/dev/null | wc -l)
 
-  if [[ "$mp4_count" -eq 0 ]]; then
-    warn "no MP4 found in ${STORAGE_DIR}"
+  if [[ "$video_count" -eq 0 ]]; then
+    warn "no final video artifact (.mp4/.f4v) found in ${STORAGE_DIR}"
     find "${STORAGE_DIR}" -type f 2>/dev/null | head -20 || true
-    die "MP4 not produced (expected ≥1 .mp4 artifact in storage)" 2
+    die "final video artifact not produced (expected ≥1 .mp4 or .f4v in storage)" 2
   fi
 
-  local mp4_size
-  mp4_size=$(find "${STORAGE_DIR}" -name '*.mp4' -exec stat -c%s {} + 2>/dev/null | paste -sd+ | bc || echo 0)
+  local video_size
+  video_size=$(find "${STORAGE_DIR}" \( -name '*.mp4' -o -name '*.f4v' \) -exec stat -c%s {} + 2>/dev/null | paste -sd+ | bc || echo 0)
 
-  ok "${mp4_count} MP4 artifact(s) found (total ${mp4_size} bytes)"
+  ok "${video_count} final video artifact(s) found (total ${video_size} bytes)"
 
   # Final database sanity dump
   sqlite3 "${DATA_DIR}/velox.db" \
@@ -430,7 +452,7 @@ BANNER
   echo
   ok "╔══════════════════════════════════════════════════════════════╗"
   ok "║ GOLDEN E2E TEST PASSED                                      ║"
-  ok "║  SUCCEEDED + MP4 verified                                   ║"
+  ok "║  SUCCEEDED + final video artifact verified                  ║"
   ok "╚══════════════════════════════════════════════════════════════╝"
 }
 

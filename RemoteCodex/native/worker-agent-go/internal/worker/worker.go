@@ -462,6 +462,7 @@ func (w *Worker) receiveLoop(ctx context.Context, recvCh <-chan controltransport
 				pte := &PendingTaskExecution{
 					TaskID:          taskID,
 					JobID:           jobID,
+					JobRevision:     int(taskOffer.GetJobRevision()),
 					AttemptID:       attemptID,
 					AttemptNumber:   int(attemptNumber),
 					LeaseID:         leaseID,
@@ -522,6 +523,9 @@ func (w *Worker) receiveLoop(ctx context.Context, recvCh <-chan controltransport
 					w.logger.Warn("[RECEIVE] TaskLeaseGranted for task %s identity mismatch against pending task (grant: job=%q attempt=%q lease=%q num=%d) vs (pending: job=%q attempt=%q lease=%q num=%d) — dropping",
 						taskID, grantJobID, grantAttemptID, grantLeaseID, grantAttemptNumber, pte.JobID, pte.AttemptID, pte.LeaseID, pte.AttemptNumber)
 					continue
+				}
+				if grantJobRevision := int(taskGrant.GetJobRevision()); grantJobRevision > 0 {
+					pte.JobRevision = grantJobRevision
 				}
 
 				// PR-2 followup: register the full identity tuple so

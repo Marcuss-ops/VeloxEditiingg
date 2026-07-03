@@ -31,7 +31,7 @@ func (w *Worker) uploadTaskOutputs(ctx context.Context, pte *PendingTaskExecutio
 		WorkerID:      w.config.WorkerID,
 		LeaseID:       pte.LeaseID,
 		AttemptNumber: pte.AttemptNumber,
-		Revision:      pte.Revision,
+		Revision:      pte.JobRevision,
 		FilePath:      ref.URI,
 	})
 	if err != nil {

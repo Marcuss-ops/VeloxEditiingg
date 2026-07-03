@@ -76,6 +76,7 @@ type ActiveTaskExecution struct {
 type PendingTaskExecution struct {
 	TaskID          string
 	JobID           string
+	JobRevision     int
 	AttemptID       string
 	AttemptNumber   int
 	LeaseID         string

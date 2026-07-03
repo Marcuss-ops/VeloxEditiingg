@@ -1477,6 +1477,7 @@ type TaskOffer struct {
 	OutputContract  *structpb.Struct       `protobuf:"bytes,10,opt,name=output_contract,json=outputContract,proto3" json:"output_contract,omitempty"`
 	AttemptNumber   int32                  `protobuf:"varint,11,opt,name=attempt_number,json=attemptNumber,proto3" json:"attempt_number,omitempty"`
 	Revision        int32                  `protobuf:"varint,12,opt,name=revision,proto3" json:"revision,omitempty"`
+	JobRevision     int32                  `protobuf:"varint,13,opt,name=job_revision,json=jobRevision,proto3" json:"job_revision,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -1591,6 +1592,13 @@ func (x *TaskOffer) GetAttemptNumber() int32 {
 func (x *TaskOffer) GetRevision() int32 {
 	if x != nil {
 		return x.Revision
+	}
+	return 0
+}
+
+func (x *TaskOffer) GetJobRevision() int32 {
+	if x != nil {
+		return x.JobRevision
 	}
 	return 0
 }
@@ -1779,6 +1787,7 @@ type TaskLeaseGranted struct {
 	JobId         string                 `protobuf:"bytes,4,opt,name=job_id,json=jobId,proto3" json:"job_id,omitempty"`
 	AttemptNumber int32                  `protobuf:"varint,5,opt,name=attempt_number,json=attemptNumber,proto3" json:"attempt_number,omitempty"`
 	Revision      int32                  `protobuf:"varint,6,opt,name=revision,proto3" json:"revision,omitempty"`
+	JobRevision   int32                  `protobuf:"varint,7,opt,name=job_revision,json=jobRevision,proto3" json:"job_revision,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1851,6 +1860,13 @@ func (x *TaskLeaseGranted) GetAttemptNumber() int32 {
 func (x *TaskLeaseGranted) GetRevision() int32 {
 	if x != nil {
 		return x.Revision
+	}
+	return 0
+}
+
+func (x *TaskLeaseGranted) GetJobRevision() int32 {
+	if x != nil {
+		return x.JobRevision
 	}
 	return 0
 }
@@ -3276,7 +3292,7 @@ const file_velox_control_worker_control_proto_rawDesc = "" +
 	"\x0ftask_commit_ack\x18! \x01(\v2\x1c.velox.control.TaskCommitAckH\x00R\rtaskCommitAckB\x05\n" +
 	"\x03msgJ\x04\b\x15\x10\x16J\x04\b\x16\x10\x17J\x04\b\x17\x10\x18J\x04\b\"\x10#\"\n" +
 	"\n" +
-	"\bHelloAck\"\xfc\x03\n" +
+	"\bHelloAck\"\x9f\x04\n" +
 	"\tTaskOffer\x12\x17\n" +
 	"\atask_id\x18\x01 \x01(\tR\x06taskId\x12\x15\n" +
 	"\x06job_id\x18\x02 \x01(\tR\x05jobId\x12\x1d\n" +
@@ -3292,7 +3308,8 @@ const file_velox_control_worker_control_proto_rawDesc = "" +
 	"\x0foutput_contract\x18\n" +
 	" \x01(\v2\x17.google.protobuf.StructR\x0eoutputContract\x12%\n" +
 	"\x0eattempt_number\x18\v \x01(\x05R\rattemptNumber\x12\x1a\n" +
-	"\brevision\x18\f \x01(\x05R\brevision\"\xbb\x01\n" +
+	"\brevision\x18\f \x01(\x05R\brevision\x12!\n" +
+	"\fjob_revision\x18\r \x01(\x05R\vjobRevision\"\xbb\x01\n" +
 	"\fTaskAccepted\x12\x17\n" +
 	"\atask_id\x18\x01 \x01(\tR\x06taskId\x12\x15\n" +
 	"\x06job_id\x18\x02 \x01(\tR\x05jobId\x12\x1d\n" +
@@ -3309,7 +3326,7 @@ const file_velox_control_worker_control_proto_rawDesc = "" +
 	"\blease_id\x18\x04 \x01(\tR\aleaseId\x12\x1a\n" +
 	"\brevision\x18\x05 \x01(\x05R\brevision\x12\x15\n" +
 	"\x06job_id\x18\x06 \x01(\tR\x05jobId\x12%\n" +
-	"\x0eattempt_number\x18\a \x01(\x05R\rattemptNumber\"\xbf\x01\n" +
+	"\x0eattempt_number\x18\a \x01(\x05R\rattemptNumber\"\xe2\x01\n" +
 	"\x10TaskLeaseGranted\x12\x17\n" +
 	"\atask_id\x18\x01 \x01(\tR\x06taskId\x12\x19\n" +
 	"\blease_id\x18\x02 \x01(\tR\aleaseId\x12\x1d\n" +
@@ -3317,7 +3334,8 @@ const file_velox_control_worker_control_proto_rawDesc = "" +
 	"attempt_id\x18\x03 \x01(\tR\tattemptId\x12\x15\n" +
 	"\x06job_id\x18\x04 \x01(\tR\x05jobId\x12%\n" +
 	"\x0eattempt_number\x18\x05 \x01(\x05R\rattemptNumber\x12\x1a\n" +
-	"\brevision\x18\x06 \x01(\x05R\brevision\"\xad\x01\n" +
+	"\brevision\x18\x06 \x01(\x05R\brevision\x12!\n" +
+	"\fjob_revision\x18\a \x01(\x05R\vjobRevision\"\xad\x01\n" +
 	"\aCommand\x12\x1d\n" +
 	"\n" +
 	"command_id\x18\x01 \x01(\tR\tcommandId\x12\x18\n" +

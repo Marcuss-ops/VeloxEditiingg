@@ -269,6 +269,15 @@ func (h *Handler) sendClaimedTaskOffer(
 	}
 
 	leaseDeadline := time.Now().UTC().Add(30 * time.Minute)
+	jobRevision := int32(0)
+	if h.jobsRepo != nil {
+		job, err := h.jobsRepo.Get(ctx, tws.JobID)
+		if err != nil {
+			log.Printf("[PLACEMENT] Failed to load job revision for task %s job %s: %v", tws.ID, tws.JobID, err)
+		} else if job != nil {
+			jobRevision = int32(job.Revision)
+		}
+	}
 
 	env := &pb.MasterToWorkerEnvelope{
 		MessageId:       fmt.Sprintf("taskoffer-%s-%s", sess.workerID, tws.ID),
@@ -287,6 +296,7 @@ func (h *Handler) sendClaimedTaskOffer(
 				LeaseDeadline:   timestamppb.New(leaseDeadline),
 				AttemptNumber:   int32(attempt.AttemptNumber),
 				Revision:        int32(tws.Revision),
+				JobRevision:     jobRevision,
 			},
 		},
 	}

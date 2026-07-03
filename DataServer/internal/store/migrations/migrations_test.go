@@ -665,8 +665,12 @@ func TestIntegration_MigrationRunner_EndToEnd(t *testing.T) {
 		if err := rows.Scan(&v, &name, &checksum, &appliedAt); err != nil {
 			t.Fatalf("scan: %v", err)
 		}
-		if v != migIdx+1 {
-			t.Errorf("row %d: expected version %d, got %d", migIdx, migIdx+1, v)
+		want := expectedMigs[migIdx]
+		if v != want.Version {
+			t.Errorf("row %d: expected version %d, got %d", migIdx, want.Version, v)
+		}
+		if name != want.Name {
+			t.Errorf("row %d: expected name %q, got %q", migIdx, want.Name, name)
 		}
 		if name == "" || checksum == "" || appliedAt == "" {
 			t.Errorf("version %d: missing name/checksum/applied_at", v)

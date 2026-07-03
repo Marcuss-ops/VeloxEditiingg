@@ -121,6 +121,15 @@ func (h *Handler) handleTaskAccepted(workerID string, ta *pb.TaskAccepted) {
 		}
 		return
 	}
+	jobRevision := int32(0)
+	if h.jobsRepo != nil {
+		job, jobErr := h.jobsRepo.Get(ctx, jobID)
+		if jobErr != nil {
+			log.Printf("[GRPC] Failed to load job revision for TaskLeaseGranted task=%s job=%s: %v", taskID, jobID, jobErr)
+		} else if job != nil {
+			jobRevision = int32(job.Revision)
+		}
+	}
 
 	// Send typed TaskLeaseGranted via sendCh with the full identity tuple.
 	env := &pb.MasterToWorkerEnvelope{
@@ -136,6 +145,7 @@ func (h *Handler) handleTaskAccepted(workerID string, ta *pb.TaskAccepted) {
 				AttemptId:     attemptID,
 				AttemptNumber: attemptNumber,
 				Revision:      revision,
+				JobRevision:   jobRevision,
 			},
 		},
 	}

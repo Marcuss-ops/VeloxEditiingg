@@ -103,6 +103,16 @@ CREATE TABLE task_specs (
 	payload_json   TEXT NOT NULL DEFAULT '{}',
 	created_at     TEXT NOT NULL
 );
+CREATE TABLE jobs (
+	job_id             TEXT PRIMARY KEY,
+	status             TEXT NOT NULL,
+	revision           INTEGER NOT NULL DEFAULT 0,
+	max_retries        INTEGER NOT NULL DEFAULT 0,
+	started_at         TEXT,
+	updated_at         TEXT,
+	created_at         TEXT,
+	completed_at       TEXT
+);
 `
 
 // openTaskAtomicTestDB returns *SQLiteStore + *SQLiteTaskRepository with the
@@ -156,6 +166,14 @@ func seedLeasedTask(t *testing.T, db *sql.DB,
 		workerID, leaseID, now, now,
 	); err != nil {
 		t.Fatalf("seed PENDING attempt: %v", err)
+	}
+	if _, err := db.ExecContext(ctx,
+		`INSERT INTO jobs
+		 (job_id, status, revision, max_retries, created_at, updated_at)
+		 VALUES (?, 'PENDING', 0, 3, ?, ?)`,
+		"job-"+taskID, now, now,
+	); err != nil {
+		t.Fatalf("seed PENDING job: %v", err)
 	}
 	return revision
 }
@@ -319,6 +337,23 @@ func TestAcceptTaskAtomic_HappyPath(t *testing.T) {
 	if att.Status != taskattempts.AttemptStatusRunning {
 		t.Errorf("task_attempts.status = %s; want RUNNING", att.Status)
 	}
+
+	var jobStatus, jobStartedAt string
+	var jobRevision int
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT status, COALESCE(started_at, ''), revision FROM jobs WHERE job_id = ?`,
+		"job-T-accept-1").Scan(&jobStatus, &jobStartedAt, &jobRevision); err != nil {
+		t.Fatalf("post-accept SELECT jobs: %v", err)
+	}
+	if jobStatus != "RUNNING" {
+		t.Errorf("jobs.status = %s; want RUNNING", jobStatus)
+	}
+	if jobStartedAt == "" {
+		t.Errorf("jobs.started_at empty; want RFC3339 timestamp")
+	}
+	if jobRevision != 1 {
+		t.Errorf("jobs.revision = %d; want 1", jobRevision)
+	}
 }
 
 // TestAcceptTaskAtomic_StaleRevision: wrong revision ⇒ ErrTransitionConflict
@@ -369,6 +404,104 @@ func TestAcceptTaskAtomic_StaleRevision(t *testing.T) {
 	}
 	if attemptStatus != "PENDING" {
 		t.Errorf("task_attempts status = %s; want PENDING (rollback did NOT promote it)", attemptStatus)
+	}
+
+	var jobStatus string
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT status FROM jobs WHERE job_id = ?`,
+		"job-T-accept-2").Scan(&jobStatus); err != nil {
+		t.Fatalf("post-reject SELECT jobs: %v", err)
+	}
+	if jobStatus != "PENDING" {
+		t.Errorf("jobs.status = %s; want PENDING (rollback)", jobStatus)
+	}
+}
+
+func TestAcceptTaskAtomic_PromotesRetryWaitJob(t *testing.T) {
+	s, r := openTaskAtomicTestDB(t)
+	ctx := context.Background()
+	seedLeasedTask(t, s.db, "T-accept-retry", "w-r", "L-r", "A-accept-r", 1, 0)
+
+	if _, err := s.db.ExecContext(ctx,
+		`UPDATE jobs SET status = 'RETRY_WAIT', revision = 4 WHERE job_id = ?`,
+		"job-T-accept-retry"); err != nil {
+		t.Fatalf("seed RETRY_WAIT job: %v", err)
+	}
+
+	attempt := &taskattempts.TaskAttempt{
+		ID:            "A-accept-r",
+		TaskID:        "T-accept-retry",
+		JobID:         "job-T-accept-retry",
+		WorkerID:      "w-r",
+		LeaseID:       "L-r",
+		AttemptNumber: 1,
+		Status:        taskattempts.AttemptStatusRunning,
+	}
+	if err := r.AcceptTaskAtomic(ctx, attempt, 0); err != nil {
+		t.Fatalf("AcceptTaskAtomic retry_wait job: %v", err)
+	}
+
+	var jobStatus string
+	var jobRevision int
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT status, revision FROM jobs WHERE job_id = ?`,
+		"job-T-accept-retry").Scan(&jobStatus, &jobRevision); err != nil {
+		t.Fatalf("post-accept retry_wait SELECT jobs: %v", err)
+	}
+	if jobStatus != "RUNNING" {
+		t.Errorf("jobs.status = %s; want RUNNING", jobStatus)
+	}
+	if jobRevision != 5 {
+		t.Errorf("jobs.revision = %d; want 5", jobRevision)
+	}
+}
+
+func TestAcceptTaskAtomic_RejectsTerminalJobState(t *testing.T) {
+	s, r := openTaskAtomicTestDB(t)
+	ctx := context.Background()
+	seedLeasedTask(t, s.db, "T-accept-terminal", "w-t", "L-t", "A-accept-t", 1, 0)
+
+	if _, err := s.db.ExecContext(ctx,
+		`UPDATE jobs SET status = 'FAILED', revision = 2 WHERE job_id = ?`,
+		"job-T-accept-terminal"); err != nil {
+		t.Fatalf("seed FAILED job: %v", err)
+	}
+
+	attempt := &taskattempts.TaskAttempt{
+		ID:            "A-accept-t",
+		TaskID:        "T-accept-terminal",
+		JobID:         "job-T-accept-terminal",
+		WorkerID:      "w-t",
+		LeaseID:       "L-t",
+		AttemptNumber: 1,
+		Status:        taskattempts.AttemptStatusRunning,
+	}
+	err := r.AcceptTaskAtomic(ctx, attempt, 0)
+	if err == nil {
+		t.Fatal("expected ErrTransitionConflict on terminal job state, got nil")
+	}
+	if !errors.Is(err, taskgraph.ErrTransitionConflict) {
+		t.Errorf("expected taskgraph.ErrTransitionConflict; got %v", err)
+	}
+
+	var taskStatus string
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT status FROM tasks WHERE task_id = ?`,
+		"T-accept-terminal").Scan(&taskStatus); err != nil {
+		t.Fatalf("post-terminal-conflict SELECT tasks: %v", err)
+	}
+	if taskStatus != "LEASED" {
+		t.Errorf("tasks.status = %s; want LEASED (rollback)", taskStatus)
+	}
+
+	var attemptStatusAfter string
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT status FROM task_attempts WHERE id = ?`,
+		"A-accept-t").Scan(&attemptStatusAfter); err != nil {
+		t.Fatalf("post-terminal-conflict SELECT task_attempts: %v", err)
+	}
+	if attemptStatusAfter != "PENDING" {
+		t.Errorf("task_attempts.status = %s; want PENDING (rollback)", attemptStatusAfter)
 	}
 }
 
@@ -1257,7 +1390,8 @@ func TestClaimTaskForWorkerAtomic_AlreadyClaimed(t *testing.T) {
 	for err := range errs {
 		if err == nil {
 			successes++
-		} else if errors.Is(err, taskgraph.ErrTransitionConflict) {
+		} else if errors.Is(err, taskgraph.ErrTransitionConflict) ||
+			strings.Contains(err.Error(), "database table is locked") {
 			conflicts++
 		} else {
 			t.Errorf("unexpected error: %v", err)

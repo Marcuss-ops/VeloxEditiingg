@@ -244,6 +244,7 @@ message TaskOffer {
   google.protobuf.Struct output_contract = 10;
   int32 attempt_number = 11;
   int32 revision = 12;
+  int32 job_revision = 13;
 }
 
 message TaskAccepted {
@@ -272,6 +273,7 @@ message TaskLeaseGranted {
   string job_id = 4;
   int32 attempt_number = 5;
   int32 revision = 6;
+  int32 job_revision = 7;
 }
 
 message Command {
