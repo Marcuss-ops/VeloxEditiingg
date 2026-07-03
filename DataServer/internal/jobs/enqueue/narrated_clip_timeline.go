@@ -1,47 +1,36 @@
-// Package enqueue / narrated_clip_timeline.go
-//
-// Voiceover-bed + final-clip timeline builder. Used by normalizeClipPayload
-// when the scenes-array carries a voiceover URL. Each scene contributes up
-// to TWO timeline items (voiceover bed + final clip), with offsetSeconds
-// carrying consecutive scenes forward.
-//
-// Voiceover timing must come from an explicit `voiceover_duration_seconds`
-// value on the scene or from probing the actual audio asset via the
-// supplied `audioDurationProbe` (production: sharedmedia.DetectAudioDurationSecs).
-// Scene-level `duration_seconds` is INTENTIONALLY ignored here because it
-// is a presentation placeholder, not an audio timing contract.
+// Package enqueue — narrated clip timeline builder (voiceover bed + final clip).
 package enqueue
 
 import (
 	"fmt"
 
-	"velox-shared/payload"
 	sharedmedia "velox-shared/media"
+	"velox-shared/payload"
 )
 
-// audioDurationProbe resolves the voiceover audio duration for an audio
-// URL when an explicit `voiceover_duration_seconds` is not provided on
-// the scene. Production callers pass sharedmedia.DetectAudioDurationSecs;
-// tests pass a stub like `func(string) float64 { return 4.0 }`.
-//
-// Returns 0 when the probe cannot determine duration (asset missing or
-// unreadable). Callers must distinguish 0 from the explicit value.
+// audioDurationProbe is the function type for probing audio duration.
 type audioDurationProbe func(string) float64
 
-// buildNarratedClipPayload is the production entry to the
-// voiceover-bed + final-clip timeline. Voiceover timing is resolved via
-// the default probe (sharedmedia.DetectAudioDurationSecs).
-//
-// Returns videoMode="clip_stock" to signal that the scene.composite
-// worker must consume the per-scene audio_tracks (with start_time_offset)
-// rather than a single global voiceover_path.
+// supportsNarratedClipScenes returns true when any scene carries a
+// voiceover binding — signalling the narrated-clip timeline path.
+func supportsNarratedClipScenes(scenes []map[string]interface{}) bool {
+	for _, scene := range scenes {
+		if sceneVoiceoverURL(scene) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// buildNarratedClipPayload is the canonical "voiceover bed + final clip"
+// timeline builder. Voiceover timing must come from an explicit
+// voiceover_duration_seconds value or from probing the actual audio asset.
+// Generic scene duration_seconds is deliberately ignored here because it is a
+// presentation placeholder, not an audio timing contract.
 func buildNarratedClipPayload(scenes []map[string]interface{}) ([]map[string]interface{}, []map[string]interface{}, []string, []map[string]interface{}, string, error) {
 	return buildNarratedClipPayloadWithDurationProbe(scenes, sharedmedia.DetectAudioDurationSecs)
 }
 
-// buildNarratedClipPayloadWithDurationProbe is the testable seam of
-// buildNarratedClipPayload. Production callers use the wrapper above;
-// tests pass a deterministic stub probe.
 func buildNarratedClipPayloadWithDurationProbe(scenes []map[string]interface{}, probe audioDurationProbe) ([]map[string]interface{}, []map[string]interface{}, []string, []map[string]interface{}, string, error) {
 	sceneEntries := make([]map[string]interface{}, 0, len(scenes))
 	items := make([]map[string]interface{}, 0, len(scenes)*2)
@@ -113,15 +102,13 @@ func buildNarratedClipPayloadWithDurationProbe(scenes []map[string]interface{}, 
 	return sceneEntries, items, payload.DedupeStrings(clips), audioTracks, "clip_stock", nil
 }
 
-// resolveSceneVoiceoverDuration returns the voiceover duration for a
-// scene. Resolution order:
-//  1. Explicit `voiceover_duration_seconds` on the scene.
-//  2. probe(voiceoverURL) when supplied.
+// resolveSceneVoiceoverDuration returns the authoritative voiceover
+// duration for a narrated scene. It checks:
+//  1. Explicit voiceover_duration_seconds field.
+//  2. Probe of the actual audio file.
 //
-// Returns an error when neither path yields a positive duration, because
-// the timeline cannot start without knowing how long the voiceover bed
-// runs. A blank voiceoverURL is a non-event (duration=0; the scene
-// contributes only the final clip to the timeline).
+// If the voiceover exists but is unmeasurable, it returns an error —
+// generic duration_seconds is deliberately ignored here.
 func resolveSceneVoiceoverDuration(scene map[string]interface{}, voiceoverURL string, probe audioDurationProbe) (float64, error) {
 	if voiceoverURL == "" {
 		return 0, nil
@@ -137,15 +124,10 @@ func resolveSceneVoiceoverDuration(scene map[string]interface{}, voiceoverURL st
 	return 0, fmt.Errorf("voiceover duration unavailable for %q; provide voiceover_duration_seconds or a probeable audio asset", voiceoverURL)
 }
 
-// resolveSceneFinalClipDuration returns the final-clip duration for a
-// scene. Resolution order:
-//  1. Explicit `final_clip_duration_seconds` on the scene.
-//  2. Legacy alias `clip_duration_seconds` (only consulted when not zero).
-//  3. Default fallback 4.0.
-//
-// Generic `duration_seconds` is INTENTIONALLY NOT consulted: the narrated
-// path computes total scene duration from voiceover + final-clip, and
-// `duration_seconds` is the timeline-total stale placeholder.
+// resolveSceneFinalClipDuration returns the authoritative final clip
+// duration. Canonical key: final_clip_duration_seconds. Legacy alias:
+// clip_duration_seconds. Generic duration_seconds is intentionally NOT
+// consulted — it is a presentation placeholder, not a clip timing contract.
 func resolveSceneFinalClipDuration(scene map[string]interface{}) float64 {
 	if duration := payload.NormalizedDuration(scene["final_clip_duration_seconds"]); duration > 0 {
 		return duration
@@ -154,4 +136,72 @@ func resolveSceneFinalClipDuration(scene map[string]interface{}) float64 {
 		return duration
 	}
 	return 4.0
+}
+
+// sceneVoiceoverURL extracts the voiceover audio URL from a narrated scene.
+func sceneVoiceoverURL(scene map[string]interface{}) string {
+	if scene == nil {
+		return ""
+	}
+	if url := payload.FirstString(scene, "voiceover_link", "reference_voiceover", "voiceover_path"); url != "" {
+		return url
+	}
+	if bindings, ok := scene["bindings"].(map[string]interface{}); ok {
+		if voiceover, ok := bindings["voiceover"].(map[string]interface{}); ok {
+			if url := payload.FirstString(voiceover, "link", "url", "drive_link", "local_path"); url != "" {
+				return url
+			}
+		}
+	}
+	return ""
+}
+
+// sceneNarrationClipURL extracts the narration bed clip URL from a narrated scene.
+func sceneNarrationClipURL(scene map[string]interface{}) string {
+	if scene == nil {
+		return ""
+	}
+	if url := payload.FirstString(scene, "stock_link", "narration_clip_link"); url != "" {
+		return url
+	}
+	if bindings, ok := scene["bindings"].(map[string]interface{}); ok {
+		if stock, ok := bindings["stock"].(map[string]interface{}); ok {
+			if url := payload.FirstString(stock, "drive_link", "url", "clip_link"); url != "" {
+				return url
+			}
+		}
+	}
+	return sceneFinalClipURL(scene)
+}
+
+// sceneFinalClipURL extracts the final clip URL from a narrated scene.
+func sceneFinalClipURL(scene map[string]interface{}) string {
+	if scene == nil {
+		return ""
+	}
+	if url := firstClipURL(scene); url != "" {
+		return url
+	}
+	if bindings, ok := scene["bindings"].(map[string]interface{}); ok {
+		if clip, ok := bindings["clip"].(map[string]interface{}); ok {
+			if url := payload.FirstString(clip, "drive_link", "url", "clip_link"); url != "" {
+				return url
+			}
+		}
+	}
+	return ""
+}
+
+// firstClipURL returns the first available clip URL from a scene.
+func firstClipURL(scene map[string]interface{}) string {
+	if scene == nil {
+		return ""
+	}
+	if s := payload.FirstString(scene, "clip_link", "drive_link"); s != "" {
+		return s
+	}
+	if links := payload.NormalizeStringList(scene, "clip_links", "drive_links"); len(links) > 0 {
+		return links[0]
+	}
+	return ""
 }
