@@ -472,29 +472,6 @@ func normalizeVoiceoverList(payloadMap map[string]interface{}) []string {
 	return result
 }
 
-func normalizeSceneArray(value interface{}) []map[string]interface{} {
-	switch scenes := value.(type) {
-	case []map[string]interface{}:
-		out := make([]map[string]interface{}, 0, len(scenes))
-		for _, scene := range scenes {
-			out = append(out, contract.NormalizeSceneEntry(scene))
-		}
-		return out
-	case []interface{}:
-		out := make([]map[string]interface{}, 0, len(scenes))
-		for _, item := range scenes {
-			scene, ok := item.(map[string]interface{})
-			if !ok {
-				continue
-			}
-			out = append(out, contract.NormalizeSceneEntry(scene))
-		}
-		return out
-	default:
-		return nil
-	}
-}
-
 func sceneCountFromPayload(payloadMap map[string]interface{}) int {
 	if scenes, ok := payloadMap["scenes"].([]interface{}); ok {
 		return len(scenes)
