@@ -2,10 +2,9 @@
 # ============================================================
 # UPDATE WORKERS — Aggiorna codice worker su computer remoti
 # ============================================================
-# Azioni:
-#   - Scarica bundle worker piu recente dal master
-#   - Ricostruisce immagine Docker
-#   - Riavvia servizio worker
+# Fasi esplicite: SSH precheck, sudo precheck, bundle, deploy, verify.
+# sudo viene eseguito in modalità non interattiva per restare compatibile
+# con sudo classico e sudo-rs e per fallire prima di toccare il release tree.
 # ============================================================
 
 - name: Update workers
@@ -15,19 +14,45 @@
   vars:
     velox_dir: "/opt/velox"
     master_url: "{{ master_url | default('http://127.0.0.1:8000') }}"
+    ansible_become_method: sudo
+    ansible_become_flags: "-n"
 
   tasks:
-    # ── PRE-CHECK: connesione ────────────────────────────────
-    - name: Update | Test connesione SSH
+    # ── PRECHECK SSH (nessuna escalation) ─────────────────────
+    - name: Update | Precheck SSH connection
       ansible.builtin.ping:
+      become: false
 
-    - name: Update | Verifica master_url impostato
+    # ── PRECHECK SUDO (nessun prompt interattivo) ─────────────
+    - name: Update | Precheck passwordless sudo
+      ansible.builtin.command:
+        argv:
+          - sudo
+          - -n
+          - true
+      become: false
+      changed_when: false
+      failed_when: false
+      register: sudo_precheck
+
+    - name: Update | Require non-interactive sudo
+      ansible.builtin.assert:
+        that:
+          - sudo_precheck.rc == 0
+        fail_msg: >-
+          Non-interactive sudo is unavailable for {{ ansible_user | default('the SSH user') }}.
+          Configure passwordless sudo for the deployment account; interactive prompts are
+          deliberately unsupported by the worker deploy pipeline.
+      become: false
+
+    - name: Update | Verify master_url
       ansible.builtin.assert:
         that:
           - master_url | length > 0
         fail_msg: "master_url non impostato — impossibile scaricare bundle"
+      become: false
 
-    - name: Update | Verifica bundle locale aggiornato sul controller
+    - name: Update | Verify local bundle on controller
       ansible.builtin.stat:
         path: "{{ playbook_dir }}/../../../../DataServer/data/worker_downloads/worker_code_linux_x86_64.zip"
       delegate_to: localhost
@@ -36,10 +61,6 @@
       register: local_bundle_zip
 
     # ── BUILD BINARIO GO SULLA MACCHINA DI CONTROLLO ─────────
-    # Il bundle aggiornato viene poi estratto sul worker remoto; qui
-    # ricompiliamo l'agente sul controller e lo reiniettiamo nel tree
-    # estratto prima del rebuild Docker, così il binario non dipende
-    # da copie manuali nel container.
     - name: Update | Build Go worker agent on controller
       ansible.builtin.shell: |
         set -euo pipefail
@@ -65,8 +86,8 @@
       register: agent_build
       changed_when: "'BUILT' in (agent_build.stdout | default(''))"
 
-    # ── DOWNLOAD NUOVO BUNDLE ────────────────────────────────
-    - name: Update | Copia bundle locale aggiornato sul worker
+    # ── ACQUIRE BUNDLE ────────────────────────────────────────
+    - name: Update | Copy local bundle to worker
       ansible.builtin.copy:
         src: "{{ playbook_dir }}/../../../../DataServer/data/worker_downloads/worker_code_linux_x86_64.zip"
         dest: "/tmp/velox_worker_update.zip"
@@ -74,7 +95,7 @@
       when: local_bundle_zip.stat.exists | default(false)
       register: bundle_download
 
-    - name: Update | Scarica bundle worker dal master
+    - name: Update | Download worker bundle from master
       ansible.builtin.get_url:
         url: "{{ master_url }}/api/worker/bundle?platform=linux&arch=x86_64"
         dest: "/tmp/velox_worker_update.zip"
@@ -84,12 +105,12 @@
       register: bundle_download
       failed_when: false
 
-    - name: Update | Verifica download bundle
+    - name: Update | Inspect downloaded bundle
       ansible.builtin.stat:
         path: "/tmp/velox_worker_update.zip"
       register: bundle_stat
 
-    - name: "Update | Fallback: scarica bundle via curl"
+    - name: "Update | Fallback: download bundle with curl"
       ansible.builtin.shell: |
         set -euo pipefail
         curl -sf --max-time 120 "{{ master_url }}/api/worker/bundle?platform=linux&arch=x86_64" \
@@ -100,13 +121,13 @@
       register: bundle_fallback
       failed_when: false
 
-    - name: Update | Verifica bundle scaricato
+    - name: Update | Validate acquired bundle
       ansible.builtin.stat:
         path: "/tmp/velox_worker_update.zip"
       register: bundle_final
       failed_when: not bundle_final.stat.exists or bundle_final.stat.size == 0
 
-    # ── UNIFIED DEPLOY + ROLLBACK (shared task) ──────────────
+    # ── DEPLOY + VERIFY + CONDITIONAL ROLLBACK ───────────────
     - name: Update | Deploy worker release
       ansible.builtin.include_tasks:
         file: tasks/deploy_worker_release.yml
@@ -116,8 +137,8 @@
         reinject_scripts_dir: "{{ playbook_dir }}/../../../../RemoteCodex/scripts"
       when: bundle_final.stat is defined and bundle_final.stat.exists and bundle_final.stat.size > 0
 
-    # ── PULIZIA ──────────────────────────────────────────────
-    - name: Update | Rimuovi bundle temporaneo
+    # ── CLEANUP ───────────────────────────────────────────────
+    - name: Update | Remove temporary bundle
       ansible.builtin.file:
         path: "/tmp/velox_worker_update.zip"
         state: absent
