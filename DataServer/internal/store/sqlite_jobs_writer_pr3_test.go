@@ -70,7 +70,7 @@ import (
 // Origin: PR3RecordRenderFinished_TOCTOU_ConcurrentRevisionBump.
 //
 // The schema is shared across the two connections because both
-// open the SAME DSN `file::memory:?cache=shared` — SQLite backs
+// open the SAME DSN `file::memory:?cache=shared&_busy_timeout=5000` — SQLite backs
 // this with a process-wide shared in-memory cache.
 func TestTransition_TOCTOU_ConcurrentConnection(t *testing.T) {
 	_, repo := openTransitionTestDB(t)
@@ -80,7 +80,7 @@ func TestTransition_TOCTOU_ConcurrentConnection(t *testing.T) {
 
 	// Open a second *sql.DB to the SAME shared in-memory DSN. The
 	// schema set up by openTransitionTestDB is visible to db2.
-	db2, err := sql.Open("sqlite3", "file::memory:?cache=shared")
+	db2, err := sql.Open("sqlite3", "file::memory:?cache=shared&_busy_timeout=5000")
 	if err != nil {
 		t.Fatalf("open db2: %v", err)
 	}
@@ -213,7 +213,7 @@ func TestTransition_TerminalStatesRejectFurtherChanges(t *testing.T) {
 // Origin: PR3RecordRenderFinished_TOCTOU (per-connection), scaled
 // to N-way + a barrier to remove timing-dependent lerps. The
 // achievable writer count for SQLite under cache=shared is bounded
-// (`file::memory:?cache=shared` allows a small number of writers
+// (`file::memory:?cache=shared&_busy_timeout=5000` allows a small number of writers
 // before SQLITE_BUSY surfaces); we use a moderate N to keep this
 // race-stability focused on CAS semantics, not lock-time tuning.
 func TestTransition_ParallelConcurrent_ExactlyOneWins(t *testing.T) {

@@ -589,7 +589,7 @@ func openPost048TestDB(t *testing.T) *sql.DB {
 	// each goroutine a private database. cache=shared mirrors
 	// production semantics (multiple connections, one logical DB) and
 	// is the version SQLite itself recommends for race tests.
-	db, err := sql.Open("sqlite3", "file::memory:?cache=shared")
+	db, err := sql.Open("sqlite3", "file::memory:?cache=shared&_busy_timeout=5000")
 	if err != nil {
 		t.Fatalf("open sqlite (post-048, shared cache): %v", err)
 	}

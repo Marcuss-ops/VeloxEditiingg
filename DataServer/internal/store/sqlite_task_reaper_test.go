@@ -79,7 +79,7 @@ CREATE TABLE task_attempts (
 
 func openTaskReaperTestDB(t *testing.T) (*SQLiteStore, *SQLiteTaskRepository) {
 	t.Helper()
-	db, err := sql.Open("sqlite3", "file::memory:?cache=shared")
+	db, err := sql.Open("sqlite3", "file::memory:?cache=shared&_busy_timeout=5000")
 	if err != nil {
 		t.Fatalf("open sqlite (task reaper): %v", err)
 	}

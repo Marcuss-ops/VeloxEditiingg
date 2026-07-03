@@ -22,7 +22,7 @@ import (
 // timestamps at this layer.
 func openTransitionTestDB(t *testing.T) (*SQLiteStore, *SQLiteJobRepository) {
 	t.Helper()
-	db, err := sql.Open("sqlite3", "file::memory:?cache=shared")
+	db, err := sql.Open("sqlite3", "file::memory:?cache=shared&_busy_timeout=5000")
 	if err != nil {
 		t.Fatalf("open in-memory db: %v", err)
 	}

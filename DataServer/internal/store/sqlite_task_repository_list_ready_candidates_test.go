@@ -62,7 +62,7 @@ CREATE TABLE IF NOT EXISTS task_requirements (
 // relies on missing fields must be rejected here.
 func openCandidatesTestDB(t *testing.T) (*SQLiteTaskRepository, *sql.DB) {
 	t.Helper()
-	db, err := sql.Open("sqlite3", "file::memory:?cache=shared")
+	db, err := sql.Open("sqlite3", "file::memory:?cache=shared&_busy_timeout=5000")
 	if err != nil {
 		t.Fatalf("open sqlite (candidates test): %v", err)
 	}
