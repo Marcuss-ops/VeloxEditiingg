@@ -95,7 +95,6 @@ Each worker gets a single canonical unit:
 Supporting services:
 - `velox-worker-watchdog.service` + `.timer` — restarts stopped workers every 5min
 - `velox-auto-update.service` + `.timer` — OS + bundle update every 12h
-- `velox-worker-console.service` — Docker UI on port 8088 (optional)
 
 ## Adding a New Worker
 

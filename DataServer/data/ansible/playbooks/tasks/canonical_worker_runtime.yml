@@ -26,7 +26,7 @@
     while read -r unit _; do
       [ -n "$unit" ] || continue
       case "$unit" in
-        "$canonical"|velox-worker-console.service|velox-worker-watchdog.service)
+        "$canonical"|velox-worker-watchdog.service)
           continue
           ;;
         velox-worker.service|velox-worker-*.service)
@@ -51,7 +51,7 @@
     while read -r container; do
       [ -n "$container" ] || continue
       case "$container" in
-        "$canonical"|velox-worker-console)
+        "$canonical")
           continue
           ;;
         velox-worker|velox-worker-*)

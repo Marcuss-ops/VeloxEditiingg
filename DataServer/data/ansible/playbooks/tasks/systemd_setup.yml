@@ -5,7 +5,6 @@
 #
 # ACTIVE UNITS (Docker/Go):
 #   - velox-worker-<host>.service  → Docker container with Go binary
-#   - velox-worker-console.service → Docker UI console (port 8088)
 #   - velox-worker-watchdog.*      → Auto-restart monitor
 #   - velox-auto-update.*          → 12h OS + bundle update
 #
@@ -167,37 +166,6 @@
         "video_engine_cpp_bin": "/usr/local/bin/velox_video_engine"
       }
 
-- name: Build velox-worker-console Docker image (optional)
-  ansible.builtin.shell: |
-    set -e
-    DOCKERFILE="{{ velox_current_root }}/RemoteCodex/worker-console/Dockerfile.console"
-    CONTEXT="{{ velox_current_root }}/RemoteCodex/worker-console"
-    if [ ! -f "$DOCKERFILE" ]; then
-      echo "Dockerfile.console non presente — salto build worker-console"
-      exit 0
-    fi
-    if [ ! -f "{{ velox_current_root }}/RemoteCodex/worker-console/web/dist/index.html" ]; then
-      echo "worker-console dist missing — salto build"
-      exit 0
-    fi
-    if /usr/bin/docker buildx version >/dev/null 2>&1; then
-      export DOCKER_BUILDKIT=1
-    fi
-    /usr/bin/docker build \
-      -f "$DOCKERFILE" \
-      -t velox-worker-console:latest \
-      "$CONTEXT"
-    /usr/bin/docker image inspect velox-worker-console:latest >/dev/null 2>&1
-    echo "Image velox-worker-console:latest built successfully"
-  args:
-    executable: /bin/bash
-  register: console_image_build
-  changed_when: false
-  failed_when: false
-
-- name: Log worker-console image preparation result
-  ansible.builtin.debug:
-    msg: "{{ console_image_build.stdout | default('no output') }}"
 
 - name: Ensure velox console bin directory
   ansible.builtin.file:
@@ -205,76 +173,8 @@
     state: directory
     mode: "0755"
 
-- name: Install worker-console opener script
-  ansible.builtin.copy:
-    dest: /opt/velox/bin/velox-worker-console-open.sh
-    mode: "0755"
-    content: |
-      #!/usr/bin/env bash
-      set -euo pipefail
-      URL="${VELOX_CONSOLE_URL:-http://127.0.0.1:8088/#/console}"
-      # Avoid opening duplicate windows for the same console URL.
-      if pgrep -af "epiphany.*${URL}|firefox.*${URL}" >/dev/null 2>&1; then
-        exit 0
-      fi
-      # Prefer a Linux app-style window (GNOME Web), not Chrome.
-      if command -v epiphany >/dev/null 2>&1; then
-        nohup epiphany --application-mode "$URL" >/dev/null 2>&1 &
-      elif command -v firefox >/dev/null 2>&1; then
-        nohup firefox --new-window "$URL" >/dev/null 2>&1 &
-      elif command -v xdg-open >/dev/null 2>&1; then
-        nohup xdg-open "$URL" >/dev/null 2>&1 &
-      else
-        echo "No opener found. Open manually: $URL"
-      fi
 
-- name: Install worker-console systemd service (Docker)
-  ansible.builtin.copy:
-    dest: /etc/systemd/system/velox-worker-console.service
-    mode: "0644"
-    content: |
-      [Unit]
-      Description=Velox Worker Console (Docker)
-      After=network-online.target docker.service
-      Wants=network-online.target docker.service
-      StartLimitIntervalSec=0
 
-      [Service]
-      Type=simple
-      ExecStartPre=/bin/sh -c '/usr/bin/docker rm -f velox-worker-console >/dev/null 2>&1 || true'
-      ExecStartPre=/bin/sh -c '/usr/bin/docker image inspect velox-worker-console:latest >/dev/null'
-      ExecStart=/usr/bin/docker run --name velox-worker-console --rm -e MASTER_URL={{ master_url }} -p 8088:8088 velox-worker-console:latest
-      ExecStop=/bin/sh -c '/usr/bin/docker stop -t 15 velox-worker-console >/dev/null 2>&1 || true'
-      ExecStopPost=/bin/sh -c '/usr/bin/docker rm -f velox-worker-console >/dev/null 2>&1 || true'
-      Restart=always
-      RestartSec=2
-      TimeoutStartSec=120
-      StandardOutput=journal
-      StandardError=journal
-      SyslogIdentifier=velox-worker-console
-
-      [Install]
-      WantedBy=multi-user.target
-
-- name: Ensure XDG autostart directory exists
-  ansible.builtin.file:
-    path: /etc/xdg/autostart
-    state: directory
-    mode: "0755"
-
-- name: Install worker-console desktop autostart
-  ansible.builtin.copy:
-    dest: /etc/xdg/autostart/velox-worker-console.desktop
-    mode: "0644"
-    content: |
-      [Desktop Entry]
-      Type=Application
-      Name=Velox Worker Console
-      Comment=Open Velox Worker Console on login
-      Exec=/opt/velox/bin/velox-worker-console-open.sh
-      Terminal=false
-      X-GNOME-Autostart-enabled=true
-      NoDisplay=false
 
 - name: Stop worker service before rewriting unit
   ansible.builtin.systemd:
@@ -394,12 +294,6 @@
     enabled: true
     state: restarted
 
-- name: Enable and start worker-console service (optional)
-  ansible.builtin.systemd:
-    name: velox-worker-console
-    enabled: true
-    state: restarted
-  failed_when: false
 
 - name: Install showlog wrapper on controller (master)
   ansible.builtin.copy:
