@@ -134,7 +134,8 @@ type CreatorForwardingRunner struct {
 	enqueuer *enqueue.Enqueuer
 	identity string
 	metrics  *RunnerMetrics
-	resolver *creatorflow.Resolver // canonical forward-completed entry point
+	resolver     *creatorflow.Resolver // canonical forward-completed entry point
+	resolverOnce sync.Once             // guards lazyResolver against concurrent first-call race
 
 	sem chan struct{} // bounded concurrency
 
@@ -179,6 +180,11 @@ func NewCreatorForwardingRunner(cfg *RunnerConfig, dbStore *store.SQLiteStore, c
 // its own NewResolverMinimal on first use; both paths produce the
 // same job_id + forwarding_id because both go through Resolver.Resolve.
 //
+// MUST be called before Run() starts. Calling SetResolver concurrently
+// with lazyResolver (which fires resolverOnce) is a data race on
+// r.resolver. In practice SetResolver is a composition-root / startup
+// call, never called from a processing goroutine.
+//
 // Blocco 5 of the Verdetto (P1 #11): the runner's atomicEnqueueAndForward
 // delegates to Resolver.Resolve rather than building the Job+TaskSpec
 // inline + calling AtomicForwardAndEnqueue. This unifies the
@@ -195,11 +201,18 @@ func (r *CreatorForwardingRunner) SetResolver(rs *creatorflow.Resolver) {
 // on first use if SetResolver was not called. The minimal resolver
 // skips URL rewriting (the runner already received a complete payload
 // from the remote engine) but owns the full atomic + idempotency flow.
+//
+// Thread-safety: processLease is called from concurrent goroutines
+// (bounded by r.sem). Without a guard, two goroutines could both see
+// r.resolver == nil and each build a separate minimal Resolver — a
+// data race on the r.resolver field. sync.Once guarantees exactly one
+// initialisation across all goroutines; subsequent calls are lock-free.
 func (r *CreatorForwardingRunner) lazyResolver() *creatorflow.Resolver {
-	if r.resolver != nil {
-		return r.resolver
-	}
-	r.resolver = creatorflow.NewResolverMinimal(r.enqueuer, r.dbStore)
+	r.resolverOnce.Do(func() {
+		if r.resolver == nil {
+			r.resolver = creatorflow.NewResolverMinimal(r.enqueuer, r.dbStore)
+		}
+	})
 	return r.resolver
 }
 
@@ -293,7 +306,18 @@ func (r *CreatorForwardingRunner) tick(ctx context.Context) error {
 		return nil // remote creator not configured; no work to do
 	}
 
-	leases, err := r.dbStore.ClaimCreatorForwardings(ctx, r.identity, "cf", r.cfg.LeaseDuration, r.cfg.ClaimBatch)
+	// P0-02: cap the claim batch at Concurrency so every claimed lease
+	// can acquire the semaphore immediately without waiting. Leases
+	// that sit behind the semaphore cannot be renewed (renewLeaseLoop
+	// starts only after sem acquisition), so a ClaimBatch > Concurrency
+	// creates a window where claimed leases expire before they start
+	// processing. Capping at the source also avoids attempt_count
+	// inflation from claim-then-release cycles.
+	effectiveClaimBatch := r.cfg.ClaimBatch
+	if effectiveClaimBatch > r.cfg.Concurrency {
+		effectiveClaimBatch = r.cfg.Concurrency
+	}
+	leases, err := r.dbStore.ClaimCreatorForwardings(ctx, r.identity, "cf", r.cfg.LeaseDuration, effectiveClaimBatch)
 	if err != nil {
 		return fmt.Errorf("claim forwardings: %w", err)
 	}
@@ -386,6 +410,20 @@ func (r *CreatorForwardingRunner) processLease(ctx context.Context, lease store.
 		// CAS failed. The metric increment is owned by handleRetry
 		// (post-CAS).
 		if retryErr := r.handleRetry(ctx, lease, "POLL_ERROR", err.Error()); retryErr != nil {
+			return retryErr
+		}
+		return nil
+	}
+
+	// Defensive nil check: GetPipelineStatus should return (nil, error)
+	// on failure, but some HTTP client edge cases (e.g. redirect to
+	// empty body) can produce (nil, nil). Treat as a transient poll
+	// error rather than panicking on resp.Status.
+	if resp == nil {
+		log.Printf("[FORWARDING] nil response forwarding=%s source_job=%s: GetPipelineStatus returned nil without error",
+			lease.ForwardingID, lease.SourceJobID)
+		if retryErr := r.handleRetry(ctx, lease, "NIL_RESPONSE",
+			"GetPipelineStatus returned nil response without error"); retryErr != nil {
 			return retryErr
 		}
 		return nil

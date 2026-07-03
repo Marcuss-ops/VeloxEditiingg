@@ -171,6 +171,20 @@ func TestBuildSceneImagePayloadForMaster(t *testing.T) {
 	if len(sp) != 1 || sp[0] != srcImage {
 		t.Fatalf("want scene_image_paths [%q], got %v", srcImage, sp)
 	}
+	images, _ := result["images"].([]string)
+	if len(images) != 1 || images[0] != srcImage {
+		t.Fatalf("want images [%q], got %v", srcImage, images)
+	}
+	items, _ := result["items"].([]map[string]interface{})
+	if len(items) != 1 {
+		t.Fatalf("want 1 item, got %d", len(items))
+	}
+	if got, _ := items[0]["url"].(string); got != srcImage {
+		t.Fatalf("want item url %q, got %q", srcImage, got)
+	}
+	if got, _ := result["pipeline_id"].(string); got != "hybrid.v1" {
+		t.Fatalf("want pipeline_id hybrid.v1, got %q", got)
+	}
 	scenes, _ := result["scenes"].([]map[string]interface{})
 	if len(scenes) != 1 {
 		t.Fatalf("want 1 scene, got %d", len(scenes))
@@ -212,6 +226,17 @@ func TestBuildSceneImagePayloadForMaster_PreservesRemoteSources(t *testing.T) {
 	sp, _ := result["scene_image_paths"].([]string)
 	if len(sp) != 1 || sp[0] != sceneURL {
 		t.Fatalf("want remote scene image preserved, got %v", sp)
+	}
+	images, _ := result["images"].([]string)
+	if len(images) != 1 || images[0] != sceneURL {
+		t.Fatalf("want images [%q], got %v", sceneURL, images)
+	}
+	items, _ := result["items"].([]map[string]interface{})
+	if len(items) != 1 {
+		t.Fatalf("want 1 item, got %d", len(items))
+	}
+	if got, _ := items[0]["url"].(string); got != sceneURL {
+		t.Fatalf("want item url %q, got %q", sceneURL, got)
 	}
 
 	scenes, _ := result["scenes"].([]map[string]interface{})

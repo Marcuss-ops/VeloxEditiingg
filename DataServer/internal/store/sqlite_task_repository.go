@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"velox-server/internal/jobs"
 	"velox-server/internal/placement"
 	"velox-server/internal/taskattempts"
 	"velox-server/internal/taskgraph"
@@ -596,6 +597,31 @@ func (r *SQLiteTaskRepository) AcceptTaskAtomic(ctx context.Context, attempt *ta
 		// genuinely-missing rows).
 		return fmt.Errorf("task accept atomic attempt %s not PENDING or missing (canonical drift): %w",
 			attempt.ID, taskgraph.ErrTransitionConflict)
+	}
+
+	// 3. Job roll-up: once the worker acceptance is persisted, the parent
+	// Job must become RUNNING in the same transaction so artifact upload
+	// admission sees a consistent lifecycle state. We intentionally keep the
+	// BeginUpload gate strict and only promote promotable Job states here.
+	jobRes, err := tx.ExecContext(ctx,
+		`UPDATE jobs
+		 SET status = 'RUNNING',
+		     started_at = COALESCE(started_at, ?),
+		     updated_at = ?,
+		     revision = CASE
+		         WHEN status IN ('PENDING', 'RETRY_WAIT') THEN revision + 1
+		         ELSE revision
+		     END
+		 WHERE job_id = ?
+		   AND status IN ('PENDING', 'RETRY_WAIT', 'RUNNING')`,
+		now, now, attempt.JobID,
+	)
+	if err != nil {
+		return fmt.Errorf("task accept atomic job cas: %w", err)
+	}
+	if n, _ := jobRes.RowsAffected(); n != 1 {
+		return fmt.Errorf("task accept atomic job %s not promotable to %s: %w",
+			attempt.JobID, jobs.StatusRunning, taskgraph.ErrTransitionConflict)
 	}
 
 	if err := tx.Commit(); err != nil {

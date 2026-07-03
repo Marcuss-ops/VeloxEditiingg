@@ -562,6 +562,97 @@ func (s *SQLiteStore) MarkCreatorForwardingEnqueueRetry(ctx context.Context, for
 	return nil
 }
 
+// ── Idempotent Repair ──────────────────────────────────────────────────
+
+// EnsureForwarded is the repair-path idempotency primitive. It stamps
+// (status='FORWARDED', target_job_id=jobID) on a forwarding row that is
+// in any non-terminal state (PENDING, POLLING, RETRY_WAIT, READY_TO_FORWARD,
+// FORWARDING). This repairs the "Job exists but forwarding row is stuck"
+// desync that occurs when a crash interrupts the AtomicForwardAndEnqueue
+// transaction after the Job INSERT but before the FORWARDING→FORWARDED CAS.
+//
+// Semantics:
+//   - If the row is already FORWARDED with the same target_job_id → nil (no-op).
+//   - If the row is already FORWARDED with a different target_job_id →
+//     ErrTransitionConflict (divergent forwarding, operator intervention).
+//   - If the row is in FAILED or BLOCKED → ErrTransitionConflict (terminal,
+//     cannot repair).
+//   - If the row is in any leasable state → stamp FORWARDED + target_job_id.
+//
+// This method is the concrete implementation of the ForwardingRepository
+// interface method declared in creatorflow/resolver.go. The resolver calls
+// it from the idempotency fast-path (Job already exists) to repair the
+// forwarding row so it matches the Job state.
+func (s *SQLiteStore) EnsureForwarded(ctx context.Context, forwardingID, jobID string) error {
+	if forwardingID == "" || jobID == "" {
+		return fmt.Errorf("store: EnsureForwarded: missing required fields")
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	// First, check if already FORWARDED with the same job.
+	var existingJobID string
+	err := s.db.QueryRowContext(ctx,
+		`SELECT COALESCE(target_job_id, '') FROM creator_forwardings WHERE forwarding_id = ?`,
+		forwardingID,
+	).Scan(&existingJobID)
+	if err != nil {
+		return fmt.Errorf("store: EnsureForwarded lookup: %w", err)
+	}
+	if existingJobID == jobID {
+		// Already forwarded to the same job — idempotent no-op.
+		return nil
+	}
+	if existingJobID != "" {
+		// Already forwarded to a DIFFERENT job — divergent, refuse.
+		return fmt.Errorf("store: EnsureForwarded: %w: forwarding %s already has target_job_id=%s, requested=%s",
+			ErrTransitionConflict, forwardingID, existingJobID, jobID)
+	}
+
+	// Stamp FORWARDED on any non-terminal state.
+	result, err := s.db.ExecContext(ctx,
+		`UPDATE creator_forwardings
+		 SET status = 'FORWARDED',
+		     target_job_id = ?,
+		     forwarded_at = ?,
+		     locked_by = '', lease_id = '', lease_expires_at = '',
+		     updated_at = ?
+		 WHERE forwarding_id = ?
+		   AND status NOT IN ('FORWARDED', 'FAILED', 'BLOCKED')`,
+		jobID, now, now, forwardingID,
+	)
+	if err != nil {
+		return fmt.Errorf("store: EnsureForwarded: %w", err)
+	}
+	affected, _ := result.RowsAffected()
+	if affected == 0 {
+		// Re-SELECT to distinguish "another caller won the race and
+		// stamped FORWARDED with a different job_id" from "row is in
+		// FAILED/BLOCKED". The error message must be precise so the
+		// operator can diagnose the root cause.
+		var finalStatus, finalJobID string
+		if reErr := s.db.QueryRowContext(ctx,
+			`SELECT status, COALESCE(target_job_id, '') FROM creator_forwardings WHERE forwarding_id = ?`,
+			forwardingID,
+		).Scan(&finalStatus, &finalJobID); reErr != nil {
+			return fmt.Errorf("store: EnsureForwarded: %w: re-SELECT failed for forwarding %s: %v",
+				ErrTransitionConflict, forwardingID, reErr)
+		}
+		if finalStatus == "FORWARDED" && finalJobID == jobID {
+			// Idempotent success via race: another caller completed the
+			// same repair between our SELECT and UPDATE. Return nil.
+			return nil
+		}
+		if finalStatus == "FORWARDED" && finalJobID != "" && finalJobID != jobID {
+			return fmt.Errorf("store: EnsureForwarded: %w: forwarding %s already FORWARDED with target_job_id=%s, requested=%s (race lost)",
+				ErrTransitionConflict, forwardingID, finalJobID, jobID)
+		}
+		return fmt.Errorf("store: EnsureForwarded: %w: forwarding %s is in terminal state %s",
+			ErrTransitionConflict, forwardingID, finalStatus)
+	}
+	return nil
+}
+
 // ── Recovery / Sweep ────────────────────────────────────────────────────
 
 // ExpiredCreatorForwardingLeases returns forwarding records whose lease has

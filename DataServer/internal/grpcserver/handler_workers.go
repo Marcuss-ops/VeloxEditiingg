@@ -95,6 +95,17 @@ func (h *Handler) handleHeartbeat(workerID, sessionID string, hb *pb.Heartbeat) 
 		}
 	}
 
+	if sess != nil && hb.GetExtra() != nil {
+		if readiness, ok := hb.GetExtra().AsMap()["readiness"].(map[string]interface{}); ok {
+			sess.ready.Store(readinessStatusOK(readiness))
+			if detail, ok := readiness["detail"].(map[string]interface{}); ok {
+				if draining, ok := detail["drain_mode"].(bool); ok {
+					sess.draining.Store(draining)
+				}
+			}
+		}
+	}
+
 	// Issue 7 fix / Phase 4.2 hardening: if the persisted session is gone
 	// or revoked or expired, we MUST tear the active session down.
 	if h.dbStore != nil && sessionID != "" {
@@ -112,6 +123,11 @@ func (h *Handler) handleHeartbeat(workerID, sessionID string, hb *pb.Heartbeat) 
 		}
 		_ = h.dbStore.UpdateSessionLastSeen(sessionID)
 	}
+}
+
+func readinessStatusOK(readiness map[string]interface{}) bool {
+	status, ok := readiness["status"].(string)
+	return ok && status == "ok"
 }
 
 // handleCommandAck processes typed CommandAck via gRPC stream.

@@ -305,6 +305,9 @@ func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMasterEnvelo
 		if types := extractSupportedJobTypes(capsMap); len(types) > 0 {
 			sess.supportedJobTypes.Store(types)
 		}
+		if mpj := maxParallelJobsFromCapabilities(capsMap); mpj > 0 {
+			sess.maxParallelJobs.Store(int32(mpj))
+		}
 		executors, err := parseExecutorCapabilities(capsMap)
 		if err != nil {
 			log.Printf("[GRPC] Worker %s: failed to parse executor capabilities: %v", workerID, err)
@@ -312,6 +315,9 @@ func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMasterEnvelo
 		}
 		sess.replaceCapabilities(executors, capabilitiesBoolMap(capsMap))
 	}
+	sess.ready.Store(true)
+	sess.draining.Store(false)
+	sess.lastHeartbeatUnix.Store(time.Now().UTC().Unix())
 
 	// Issue 7 fix: persist the session to SQLite worker_sessions table.
 	if h.dbStore != nil {
@@ -863,6 +869,39 @@ func (s *workerSession) replaceCapabilities(
 	s.capabilitiesMu.Unlock()
 
 	s.capabilityRevision.Add(1)
+}
+
+func maxParallelJobsFromCapabilities(capsMap map[string]interface{}) int {
+	if capsMap == nil {
+		return 0
+	}
+	if mpj, ok := capsMap["max_parallel_jobs"]; ok {
+		switch v := mpj.(type) {
+		case float64:
+			return int(v)
+		case int:
+			return v
+		case int32:
+			return int(v)
+		case int64:
+			return int(v)
+		}
+	}
+	if host, ok := capsMap["host"].(map[string]interface{}); ok {
+		if mpj, ok := host["max_parallel_jobs"]; ok {
+			switch v := mpj.(type) {
+			case float64:
+				return int(v)
+			case int:
+				return v
+			case int32:
+				return int(v)
+			case int64:
+				return int(v)
+			}
+		}
+	}
+	return 0
 }
 
 // invalidateExecutor removes a single executor key from the session's

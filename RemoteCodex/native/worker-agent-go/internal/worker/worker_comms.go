@@ -12,6 +12,7 @@ import (
 
 	"velox-shared/controltransport"
 	pb "velox-shared/controltransport/pb"
+	"velox-worker-agent/internal/telemetry"
 	"velox-worker-agent/pkg/logger"
 
 	"google.golang.org/protobuf/types/known/structpb"
@@ -161,6 +162,17 @@ func (w *Worker) sendHeartbeat(ctx context.Context) error {
 	// Collect dynamic extra fields (recent_logs, capabilities, active_jobs,
 	// resources, current_job) into Heartbeat.Extra as structpb.Struct.
 	extraMap := make(map[string]interface{})
+
+	readySnap := telemetry.GlobalReady().Snapshot()
+	readyReasons := make([]interface{}, 0, len(readySnap.NotReadyReasons()))
+	for _, reason := range readySnap.NotReadyReasons() {
+		readyReasons = append(readyReasons, reason)
+	}
+	extraMap["readiness"] = map[string]interface{}{
+		"status":  map[bool]string{true: "ok", false: "not_ready"}[readySnap.IsReady()],
+		"reasons": readyReasons,
+		"detail":  readySnap.DetailMap(),
+	}
 
 	recentLogs, recentErrors := w.recentLogs.Snapshot(300, 100)
 	if len(recentLogs) > 0 {

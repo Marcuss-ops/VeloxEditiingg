@@ -378,11 +378,30 @@ func (r *Resolver) Resolve(ctx context.Context, req ResolveRequest) (*ResolveOut
 	// immediately so duplicate webhooks + retry storms don't write
 	// twice. We still surface the forwarding_id when available so the
 	// caller can audit-link to the row.
+	//
+	// P0-02 repair: if the forwarding row exists but is NOT yet FORWARDED
+	// (crash interrupted AtomicForwardAndEnqueue after Job INSERT but
+	// before the FORWARDED CAS), call EnsureForwarded to stamp it. This
+	// closes the "Job exists, forwarding row stuck in FORWARDING" window.
 	if existing, getErr := r.enqueuer.Jobs.Get(ctx, jobID); getErr == nil && existing != nil && existing.ID == jobID {
 		forwardingID := req.ForwardingID
 		if forwardingID == "" {
 			if cf, lookupErr := r.dbStore.GetCreatorForwardingBySource(ctx, req.SourceProvider, req.SourceJobID, targetExecutor); lookupErr == nil && cf != nil {
 				forwardingID = cf.ForwardingID
+			}
+		}
+		// Repair the forwarding row if it exists and is not yet FORWARDED.
+		// EnsureForwarded is idempotent: nil if already FORWARDED with the
+		// same job_id; ErrTransitionConflict if FORWARDED with a different
+		// job_id or in a terminal FAILED/BLOCKED state.
+		if forwardingID != "" {
+			if repairErr := r.dbStore.EnsureForwarded(ctx, forwardingID, jobID); repairErr != nil {
+				log.Printf("[CREATORFLOW] idempotency fast-path: EnsureForwarded failed forwarding=%s job=%s: %v",
+					forwardingID, jobID, repairErr)
+				// Non-fatal: the Job already exists, the forwarding row
+				// repair is best-effort. A reaper or operator can
+				// reconcile later. We still return the idempotent
+				// response so the caller doesn't re-enqueue.
 			}
 		}
 		return &ResolveOutput{

@@ -183,6 +183,30 @@ func buildSceneImagePayload(rawPayload map[string]interface{}, dataDir, videosDi
 	if err != nil {
 		return nil, err
 	}
+	if len(stagedSceneImagePaths) > 0 {
+		v2Out["images"] = append([]string(nil), stagedSceneImagePaths...)
+	}
+	items := make([]map[string]interface{}, 0, len(sceneEntries))
+	for _, scene := range sceneEntries {
+		imageURL := payload.FirstString(scene, "image_link", "image")
+		if imageURL == "" {
+			continue
+		}
+		duration := payload.NormalizedDuration(scene["duration_seconds"])
+		if duration <= 0 {
+			duration = perSceneDuration
+		}
+		items = append(items, map[string]interface{}{
+			"type":     "image",
+			"url":      imageURL,
+			"duration": duration,
+			"fit":      "cover",
+		})
+	}
+	if len(items) > 0 {
+		v2Out["items"] = items
+	}
+	v2Out["pipeline_id"] = "hybrid.v1"
 
 	// NOTE: voiceover/scene-image rewrite is intentionally NOT invoked here.
 	// The Enqueuer (constructed by the caller via NewEnqueuer) owns the
