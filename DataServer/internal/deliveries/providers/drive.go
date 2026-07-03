@@ -7,7 +7,6 @@ package providers
 
 import (
 	"context"
-	"log"
 
 	"velox-server/internal/deliveries"
 	integrationsDrive "velox-server/internal/integrations/drive"
@@ -35,40 +34,17 @@ func (d *DriveProvider) Name() string { return "drive" }
 // (artifact_id, destination_id) by the runner. Drive treats duplicate
 // uploads as idempotent when the source SHA-256 matches the previously
 // uploaded blob.
-//
-// Uses blobStore to read the artifact's bytes. Falls back to artifact.LocalPath
-// if the blob store is not configured (legacy path).
 func (d *DriveProvider) Deliver(ctx context.Context, artifact *store.Artifact, destination *deliveries.Destination, deliveryID, idempotencyKey string) (*deliveries.Result, error) {
 	if d == nil || d.service == nil {
 		return nil, deliveries.ErrProviderNotConfigured
 	}
-	if artifact == nil || destination == nil {
+	if destination == nil {
 		return nil, deliveries.ErrProviderPermanent
 	}
 
-	// Resolve the file path: prefer storage_key (canonical path) over LocalPath.
-	filePath := artifact.StorageKey
-	if filePath == "" {
-		filePath = artifact.LocalPath
-	}
-	if filePath == "" {
-		return nil, deliveries.ErrProviderPermanent
-	}
-
-	// If blobStore is available, verify the file exists at storage_key.
-	if d.blobStore != nil {
-		f, err := d.blobStore.ReadFinal(filePath)
-		if err != nil {
-			log.Printf("[DRIVE] Cannot read artifact %s at %s, falling back to LocalPath %s: %v",
-				artifact.ID, filePath, artifact.LocalPath, err)
-			if artifact.LocalPath != "" {
-				filePath = artifact.LocalPath
-			} else {
-				return nil, deliveries.ErrProviderPermanent
-			}
-		} else {
-			f.Close()
-		}
+	filePath, err := resolveArtifactFilePath(d.blobStore, artifact)
+	if err != nil {
+		return nil, err
 	}
 
 	uploadRes, err := d.service.UploadVideo(ctx, filePath, artifact.ID, destination.FolderID, deliveryID)
