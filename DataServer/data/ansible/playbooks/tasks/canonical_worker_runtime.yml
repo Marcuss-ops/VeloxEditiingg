@@ -15,7 +15,9 @@
     velox_worker_env_path: "/etc/velox-worker-{{ inventory_hostname }}.env"
     velox_worker_runtime_host_dir: "/var/lib/velox/workers/{{ inventory_hostname }}"
     velox_worker_runtime_container_dir: "/var/lib/velox-worker"
-    velox_worker_runtime_dir: "/var/lib/velox/workers/{{ inventory_hostname }}"
+    # Mirror prepare_worker_image.yml's anchor so this file is safe to include
+    # standalone (e.g. from normalize_worker_systemd.yml in isolation).
+    velox_current_root: "{{ velox_dir }}/current"
     velox_worker_health_port: "{{ 8081 + ((worker_id | default(inventory_hostname) | regex_replace('^host_([0-9]+)_.*$', '\\1')) | int) }}"
     velox_worker_heartbeat_masters: "{{ master_url }}"
     velox_worker_secondary_master_url: ""
@@ -134,6 +136,18 @@
         "allow_insecure_grpc_dev": true,
         "video_engine_cpp_bin": "/usr/local/bin/velox_video_engine"
       }
+
+# ── PRESERVE canonical override directory ─────────────────────
+# Admins may drop override files at
+#   /etc/systemd/system/velox-worker-<host>.service.d/*.conf
+# (ResourceControl, MemoryMax, Environment, etc.). The directory
+# itself must exist before the unit is (re)loaded or systemd will
+# silently ignore any drop-ins queued against a missing parent.
+- name: CanonicalRuntime | Create host-specific override directory for unit drop-ins
+  ansible.builtin.file:
+    path: "/etc/systemd/system/{{ velox_worker_unit_name }}.d"
+    state: directory
+    mode: "0755"
 
 - name: CanonicalRuntime | Install single canonical worker unit
   ansible.builtin.copy:
@@ -343,6 +357,52 @@
     name: "{{ velox_worker_unit_name }}"
     enabled: true
     state: restarted
+
+# ── Assert canonical unit actually came up ──────────────────────
+# A `state: restarted` return value only means we issued a restart
+# request, not that the unit is healthy. Probe with `systemctl
+# is-active` for up to 18s (~6 retries × 3s). If the unit is not
+# active, surface the journal for the last 60 lines so the operator
+# sees the real failure rather than a generic Ansible error.
+- name: CanonicalRuntime | Assert canonical unit is active after restart
+  ansible.builtin.command:
+    argv:
+      - systemctl
+      - is-active
+      - "{{ velox_worker_unit_name }}"
+  register: velox_worker_unit_active
+  retries: 6
+  delay: 3
+  until: velox_worker_unit_active.stdout | default('') == 'active'
+  changed_when: false
+  failed_when: false
+
+- name: CanonicalRuntime | Surface journal of canonical unit on activation failure
+  ansible.builtin.command:
+    argv:
+      - journalctl
+      - -u
+      - "{{ velox_worker_unit_name }}"
+      - -n
+      - "60"
+      - --no-pager
+  register: canonical_unit_journal
+  changed_when: false
+  failed_when: false
+  when:
+    - velox_worker_unit_active is defined
+    - (velox_worker_unit_active.stdout | default('')) != 'active'
+
+- name: CanonicalRuntime | Fail if canonical unit did not activate
+  ansible.builtin.fail:
+    msg: >-
+      Canonical worker unit {{ velox_worker_unit_name }} failed to activate.
+      systemctl is-active → {{ velox_worker_unit_active.stdout | default('unknown') }}.
+      Last 60 lines of journal:
+      {{ canonical_unit_journal.stdout | default('') }}
+  when:
+    - velox_worker_unit_active is defined
+    - (velox_worker_unit_active.stdout | default('')) != 'active'
 
 - name: CanonicalRuntime | Keep watchdog timer enabled
   ansible.builtin.systemd:
