@@ -171,6 +171,7 @@ func (r *httpSchemeResolver) Scheme() string { return "http" }
 type driveResolver struct {
 	store *Store
 	drive DriveDownloader
+	http  *http.Client
 }
 
 func (r *driveResolver) Scheme() string   { return "drive" }
@@ -179,6 +180,9 @@ func (r *driveResolver) ServerOnly() bool { return false }
 func (r *driveResolver) Open(ctx context.Context, reference string) (*Source, error) {
 	if r == nil || r.store == nil {
 		return nil, fmt.Errorf("asset store unavailable")
+	}
+	if src, err := r.openPublicDriveFile(ctx, reference); err == nil && src != nil {
+		return src, nil
 	}
 	if r.drive == nil {
 		return nil, newAcquisitionError("reference", "drive", "Drive authentication is unavailable", nil)
@@ -219,6 +223,26 @@ func (r *driveResolver) Open(ctx context.Context, reference string) (*Source, er
 		ExpectedSize:  meta.Size,
 		SourceType:    "drive",
 	}, nil
+}
+
+func (r *driveResolver) openPublicDriveFile(ctx context.Context, reference string) (*Source, error) {
+	downloadURL, fileID, ok := publicDriveDownloadURL(reference)
+	if !ok {
+		return nil, fmt.Errorf("not a public drive file reference")
+	}
+	httpSrc, err := (&httpResolver{store: r.store, http: r.http}).Open(ctx, downloadURL)
+	if err != nil {
+		return nil, err
+	}
+	if httpSrc.SuggestedName == "" || httpSrc.SuggestedName == "download" {
+		httpSrc.SuggestedName = "drive-" + fileID
+	}
+	httpSrc.SourceType = "drive_public"
+	if httpSrc.Metadata == nil {
+		httpSrc.Metadata = map[string]string{}
+	}
+	httpSrc.Metadata["original_reference"] = strings.TrimSpace(reference)
+	return httpSrc, nil
 }
 
 // cleanupCloser wraps an os.File and removes the underlying file on Close.
@@ -269,6 +293,22 @@ func looksLikeDriveURL(reference string) bool {
 	return paths.ExtractDriveID(trimmed) != ""
 }
 
+func publicDriveDownloadURL(reference string) (string, string, bool) {
+	trimmed := strings.TrimSpace(reference)
+	if trimmed == "" {
+		return "", "", false
+	}
+	lower := strings.ToLower(trimmed)
+	if !strings.Contains(lower, "drive.google.com") || strings.Contains(lower, "/folders/") {
+		return "", "", false
+	}
+	fileID := strings.TrimSpace(paths.ExtractDriveID(trimmed))
+	if fileID == "" {
+		return "", "", false
+	}
+	return "https://drive.usercontent.google.com/download?id=" + neturl.QueryEscape(fileID) + "&export=download&confirm=t", fileID, true
+}
+
 func isHTMLMediaType(mediaType string) bool {
 	lower := strings.ToLower(strings.TrimSpace(mediaType))
 	return strings.HasPrefix(lower, "text/html") || strings.HasPrefix(lower, "application/xhtml+xml")
@@ -295,7 +335,7 @@ func NewTypedResolversFromStore(store *Store, drive DriveDownloader, httpClient 
 	}
 	return []Resolver{
 		&veloxAssetResolver{store: store},
-		&driveResolver{store: store, drive: drive},
+		&driveResolver{store: store, drive: drive, http: httpClient},
 		&localFileResolver{store: store},
 		&httpResolver{store: store, http: httpClient},
 		&httpSchemeResolver{&httpResolver{store: store, http: httpClient}},
