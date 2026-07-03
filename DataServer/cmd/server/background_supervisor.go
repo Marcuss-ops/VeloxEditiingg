@@ -277,7 +277,7 @@ func effectiveMaxRetries(c RunnerClass, n int) int {
 // Rule matrix:
 //
 //	ClassOneShot,   maxRetries=*    → true  (fire-and-forget, no retry)
-//	ClassRestartable, maxRetries=0  → true  (bounded=0 → exit on first error)
+//	ClassRestartable, maxRetries<=0 → true  (bounded=0 or negative → exit on first error)
 //	ClassRestartable, maxRetries>0  → attempt > maxRetries
 //	ClassCritical,   maxRetries<=0  → false (0 or negative = infinite; only
 //	                                    ctx cancellation exits the loop)
