@@ -155,7 +155,52 @@ report_match "Committed key material outside deploy/" "$m"
 m="$(git grep -lE '\b-----BEGIN CERTIFICATE-----\b' -- "${GIT_GREP_BASE[@]}" || true)"
 report_match "Inline PEM-encoded certificate block(s)" "$m"
 
-# ── Operator mode: --include-untracked (local-disk scan) ───────────────────
+# ── Mutable GHCR refs on velox-{server,worker} ─────────────────────────────
+# In versioned source, velox-server and velox-worker MUST be referenced by
+# `@sha256:<64-hex>` (digest), preferably inside a Jinja template or Docker
+# metadata-action tag. Mutable tags (`:latest`, `:main`, `:master`, `:edge`,
+# `:nightly`, `:stable`, `:dev`, `:sha-<short>`, `:vX.Y.Z`, `:X.Y.Z`,
+# `:X.Y.Z-rc…`) are forbidden because the registry can overwrite them
+# without notice — exactly the guarantee AGENT-CONTRACT §6 / §1 establishes
+# (install by SHA-256 digest only; deploy.yml is the single resolver path).
+#
+# Exclusions (ADDITIONAL beyond GIT_GREP_BASE):
+#   * `*.md`                                         — any markdown (rule
+#                                                     prose, training refs,
+#                                                     AGENT-CONTRACT.md).
+#   * `scripts/operator/with-production-env.sh`      — references the
+#                                                     canonical literal
+#                                                     `ghcr.io/marcuss-ops/velox-server`
+#                                                     in an error-message
+#                                                     directive without a
+#                                                     trailing colon or `@sha256:`.
+#
+# Already covered by GIT_GREP_BASE: docs/SECURITY_RUNBOOK.md, *test fixtures.
+GIT_GREP_BASE_TAGS=(
+    "${GIT_GREP_BASE[@]}"
+    ':!*.md'
+    ':!scripts/operator/with-production-env.sh'
+)
+
+# (1) Mutable-tag references — any registry owner (catches forks too).
+#     Allowed form in versioned source: `@sha256:<64-hex>` digest only.
+m="$(git grep -nE 'ghcr\.io/[A-Za-z0-9._-]+/velox-(server|worker):(latest|LATEST|main|master|edge|nightly|stable|dev|sha-[A-Za-z0-9-]+|v?[0-9]+(\.[0-9]+){1,2}([-.+][A-Za-z0-9.-]+)?)' \
+    -- "${GIT_GREP_BASE_TAGS[@]}" || true)"
+report_match "Mutable GHCR tag reference on velox-{server,worker}" "$m"
+
+# (2) Canonical-owner non-digest refs — operator accidentally drops a tagged
+#     reference to the production namespace. Catches forms beyond the
+#     mutable-tag pattern above (e.g. `:mybranch`, `:test123`,
+#     `:date-20240917`, `:foobar`).
+#     Pattern: `ghcr.io/marcuss-ops/velox-{server,worker}:<token>`
+#     where `<token>` is one or more non-`@` chars. The `@sha256:…` digest
+#     form has `@` directly after the repo name, so this regex cannot fire
+#     on it. Plain prose references (no `:`) are also unaffected.
+m="$(git grep -nE 'ghcr\.io/marcuss-ops/velox-(server|worker):[A-Za-z0-9_./-]+' \
+    -- "${GIT_GREP_BASE_TAGS[@]}" || true)"
+report_match "Non-digest reference to canonical ghcr.io/marcuss-ops/velox-{server,worker}" "$m"
+
+# ── Operator mode: --include-untracked (local-disk scan) ────────────────────
 # When called with --include-untracked, ALSO scan .gitignore'd files that
 # exist on the local checkout. This catches the case where an operator
 # dropped a real credentials.json into DataServer/data/{youtube,drive}/
