@@ -29,6 +29,13 @@ set -euo pipefail
 readonly REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 readonly SCRIPT_NAME="$(basename "$0")"
 TMPDIR="${TMPDIR:-/tmp/velox-golden-e2e}"
+if [[ -n "${CMAKE_BIN:-}" ]]; then
+  readonly CMAKE="${CMAKE_BIN}"
+elif [[ -x /usr/bin/cmake ]]; then
+  readonly CMAKE="/usr/bin/cmake"
+else
+  readonly CMAKE="$(command -v cmake)"
+fi
 readonly LOGDIR="${TMPDIR}/logs"
 readonly CERTS_DIR="${TMPDIR}/certs"
 readonly DATA_DIR="${TMPDIR}/data"
@@ -80,9 +87,13 @@ trap cleanup EXIT
 phase0_deps() {
   log "[0/8] Dependencies"
   local missing=0
-  for cmd in openssl go cmake g++ sqlite3 python3 ffmpeg curl; do
+  for cmd in openssl go g++ sqlite3 python3 ffmpeg curl; do
     command -v "$cmd" >/dev/null 2>&1 || { warn "missing: $cmd"; missing=1; }
   done
+  if ! "$CMAKE" --version >/dev/null 2>&1; then
+    warn "cmake not runnable via CMAKE=${CMAKE}"
+    missing=1
+  fi
   if [[ "$missing" -eq 1 ]]; then
     die "Install missing dependencies and retry" 3
   fi
@@ -134,8 +145,8 @@ phase1_build() {
   log "  → velox_video_engine (cmake)"
   mkdir -p /tmp/velox-engine-build
   cd "${REPO_ROOT}/RemoteCodex/native/video-engine-cpp"
-  cmake -B /tmp/velox-engine-build -DCMAKE_BUILD_TYPE=Release 2>&1 | while IFS= read -r line; do warn "  cmake: $line"; done
-  cmake --build /tmp/velox-engine-build --parallel 2>&1 | while IFS= read -r line; do warn "  cmake build: $line"; done
+  "$CMAKE" -B /tmp/velox-engine-build -DCMAKE_BUILD_TYPE=Release 2>&1 | while IFS= read -r line; do warn "  cmake: $line"; done
+  "$CMAKE" --build /tmp/velox-engine-build --parallel 2>&1 | while IFS= read -r line; do warn "  cmake build: $line"; done
   # Find the engine binary via glob — CMakeLists target name may differ; don't hardcode.
   ENGINE_SRC="$(find /tmp/velox-engine-build -maxdepth 1 -type f -executable -name 'velox*' 2>/dev/null | head -1 || true)"
   if [[ -z "$ENGINE_SRC" ]]; then
