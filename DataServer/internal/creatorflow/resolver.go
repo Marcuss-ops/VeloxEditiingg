@@ -388,7 +388,7 @@ func (r *Resolver) Resolve(ctx context.Context, req ResolveRequest) (*ResolveOut
 		return &ResolveOutput{
 			JobID:        existing.ID,
 			ForwardingID: forwardingID,
-			Response:     buildIdempotentResolveResponse(existing, req.Payload),
+			Response:     buildIdempotentResolveResponse(existing),
 		}, nil
 	}
 
@@ -431,7 +431,7 @@ func (r *Resolver) Resolve(ctx context.Context, req ResolveRequest) (*ResolveOut
 	return &ResolveOutput{
 		JobID:        job.ID,
 		ForwardingID: forwardingID,
-		Response:     buildFreshResolveResponse(job, workerPayload),
+		Response:     buildFreshResolveResponse(job),
 	}, nil
 }
 
@@ -493,7 +493,7 @@ func (r *Resolver) ensureReadyForwarding(ctx context.Context, req ResolveRequest
 // idempotency fast-path (the Job already exists). The runner path
 // typically hits this on a duplicate poll + lease reclaim; the handler
 // path hits it on a duplicate webhook.
-func buildIdempotentResolveResponse(existing *jobs.Job, payload map[string]interface{}) map[string]interface{} {
+func buildIdempotentResolveResponse(existing *jobs.Job) map[string]interface{} {
 	resp := map[string]interface{}{
 		"ok":                true,
 		"job_id":            existing.ID,
@@ -531,7 +531,7 @@ func buildIdempotentResolveResponse(existing *jobs.Job, payload map[string]inter
 // with literal "PENDING"). The duplication is deliberate: the typed
 // constant stays in the domain model (jobs.Status) and the wire shape
 // stays as plain string.
-func buildFreshResolveResponse(job *jobs.Job, payload map[string]interface{}) map[string]interface{} {
+func buildFreshResolveResponse(job *jobs.Job) map[string]interface{} {
 	resp := map[string]interface{}{
 		"ok":                true,
 		"job_id":            job.ID,
