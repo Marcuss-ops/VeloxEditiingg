@@ -91,11 +91,16 @@ VeloxFrontend/
 # Operators store local env files under `.velox/`. The wrapper
 # `scripts/operator/with-production-env.sh` is the only sanctioned
 # reader of `.velox/production.env` and refuses any file mode looser
-# than `chmod 600`. The single tracked file in this directory is the
-# operator-facing seed `.velox/production.env.example`, which is
-# re-included (negated) below; every other file under `.velox/` is
-# operator-only and MUST NOT be committed.
-.velox/**
+# than `chmod 600`. The rule below ignores any `.velox/` directory
+# anywhere in the tree (root, `DataServer/.velox/`, `RemoteCodex/.velox/`,
+# etc.) -- the `**/` anchor matches at any depth. The single tracked
+# artifact is the operator-facing seed `.velox/production.env.example`
+# at the REPO ROOT, which is re-included (negated) just below; because
+# the negation is rooted (literal `.velox/...` is anchored to the
+# gitignore location), a nested `.velox/production.env.example` would
+# NOT be re-included and stays ignored. All other files under any
+# `.velox/` remain operator-only and MUST NOT be committed.
+**/.velox/**
 !.velox/production.env.example
 .cline/
 
