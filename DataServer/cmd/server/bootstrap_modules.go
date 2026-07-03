@@ -80,6 +80,10 @@ func buildModules(cfg *config.Config, p *persistenceDeps, j *jobsDeps, w *worker
 	assetSvc := voiceoverassets.NewAssetService(assetRepo, p.BlobStore, assetRegistry, clock.System{})
 
 	// ── Enqueuer (needs atomic creator + jobs repository + asset service) ──
+	// Production requires an explicit delivery plan. The same switch that
+	// permits the resolver's dev fallback also relaxes enqueue-time validation,
+	// so creation and finalization can never disagree about plan requirements.
+	t.AtomicCreator.WithDeliveryPlanPolicy(!cfg.Runtime.DeliveryGlobalFallback)
 	enqueuer := enqueue.NewEnqueuer(t.AtomicCreator, j.Repository, assetSvc)
 
 	// ── Register modules ────────────────────────────────────────────
