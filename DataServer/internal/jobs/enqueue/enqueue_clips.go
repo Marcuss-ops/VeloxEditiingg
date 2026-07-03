@@ -259,7 +259,18 @@ func supportsNarratedClipScenes(scenes []map[string]interface{}) bool {
 	return false
 }
 
+type audioDurationProbe func(string) float64
+
+// buildNarratedClipPayload is the canonical "voiceover bed + final clip"
+// timeline builder. Voiceover timing must come from an explicit
+// voiceover_duration_seconds value or from probing the actual audio asset.
+// Generic scene duration_seconds is deliberately ignored here because it is a
+// presentation placeholder, not an audio timing contract.
 func buildNarratedClipPayload(scenes []map[string]interface{}) ([]map[string]interface{}, []map[string]interface{}, []string, []map[string]interface{}, string, error) {
+	return buildNarratedClipPayloadWithDurationProbe(scenes, sharedmedia.DetectAudioDurationSecs)
+}
+
+func buildNarratedClipPayloadWithDurationProbe(scenes []map[string]interface{}, probe audioDurationProbe) ([]map[string]interface{}, []map[string]interface{}, []string, []map[string]interface{}, string, error) {
 	sceneEntries := make([]map[string]interface{}, 0, len(scenes))
 	items := make([]map[string]interface{}, 0, len(scenes)*2)
 	clips := make([]string, 0, len(scenes))
@@ -280,24 +291,12 @@ func buildNarratedClipPayload(scenes []map[string]interface{}) ([]map[string]int
 			finalClipURL = narrationURL
 		}
 
-		voiceoverDuration := payload.NormalizedDuration(scene["voiceover_duration_seconds"])
-		if voiceoverDuration <= 0 {
-			voiceoverDuration = payload.NormalizedDuration(scene["duration_seconds"])
+		voiceoverDuration, err := resolveSceneVoiceoverDuration(scene, voiceoverURL, probe)
+		if err != nil {
+			return nil, nil, nil, nil, "", fmt.Errorf("scenes[%d]: %w", i, err)
 		}
-		if voiceoverDuration <= 0 && voiceoverURL != "" {
-			voiceoverDuration = sharedmedia.DetectAudioDurationSecs(voiceoverURL)
-		}
-		if voiceoverDuration <= 0 {
-			voiceoverDuration = 4.0
-		}
-
-		finalClipDuration := payload.NormalizedDuration(scene["final_clip_duration_seconds"])
-		if finalClipDuration <= 0 {
-			finalClipDuration = payload.NormalizedDuration(scene["clip_duration_seconds"])
-		}
-		if finalClipDuration <= 0 {
-			finalClipDuration = 4.0
-		}
+		finalClipDuration := resolveSceneFinalClipDuration(scene)
+		totalDuration := voiceoverDuration + finalClipDuration
 
 		normalized := make(map[string]interface{}, len(scene)+6)
 		for k, v := range scene {
@@ -305,7 +304,7 @@ func buildNarratedClipPayload(scenes []map[string]interface{}) ([]map[string]int
 		}
 		normalized["clip_link"] = finalClipURL
 		normalized["clip_links"] = []string{finalClipURL}
-		normalized["duration_seconds"] = voiceoverDuration
+		normalized["duration_seconds"] = totalDuration
 		normalized["voiceover_duration_seconds"] = voiceoverDuration
 		normalized["final_clip_duration_seconds"] = finalClipDuration
 		if text := payload.FirstString(scene, "text", "description"); text != "" {
@@ -313,13 +312,21 @@ func buildNarratedClipPayload(scenes []map[string]interface{}) ([]map[string]int
 		}
 		sceneEntries = append(sceneEntries, normalized)
 
-		items = append(items, map[string]interface{}{
-			"type":     "video",
-			"url":      narrationURL,
-			"duration": voiceoverDuration,
-			"fit":      "contain",
-			"role":     "voiceover_bed",
-		})
+		if voiceoverURL != "" {
+			items = append(items, map[string]interface{}{
+				"type":     "video",
+				"url":      narrationURL,
+				"duration": voiceoverDuration,
+				"fit":      "contain",
+				"role":     "voiceover_bed",
+			})
+			audioTracks = append(audioTracks, map[string]interface{}{
+				"source_url":        voiceoverURL,
+				"volume":            1.0,
+				"start_time_offset": offsetSeconds,
+			})
+		}
+
 		items = append(items, map[string]interface{}{
 			"type":     "video",
 			"url":      finalClipURL,
@@ -328,18 +335,37 @@ func buildNarratedClipPayload(scenes []map[string]interface{}) ([]map[string]int
 			"role":     "scene_clip",
 		})
 		clips = append(clips, finalClipURL)
-
-		if voiceoverURL != "" {
-			audioTracks = append(audioTracks, map[string]interface{}{
-				"source_url":        voiceoverURL,
-				"volume":            1.0,
-				"start_time_offset": offsetSeconds,
-			})
-		}
-		offsetSeconds += voiceoverDuration + finalClipDuration
+		offsetSeconds += totalDuration
 	}
 
 	return sceneEntries, items, payload.DedupeStrings(clips), audioTracks, "clip_stock", nil
+}
+
+func resolveSceneVoiceoverDuration(scene map[string]interface{}, voiceoverURL string, probe audioDurationProbe) (float64, error) {
+	if voiceoverURL == "" {
+		return 0, nil
+	}
+	if duration := payload.NormalizedDuration(scene["voiceover_duration_seconds"]); duration > 0 {
+		return duration, nil
+	}
+	if probe != nil {
+		if duration := probe(voiceoverURL); duration > 0 {
+			return duration, nil
+		}
+	}
+	return 0, fmt.Errorf("voiceover duration unavailable for %q; provide voiceover_duration_seconds or a probeable audio asset", voiceoverURL)
+}
+
+func resolveSceneFinalClipDuration(scene map[string]interface{}) float64 {
+	if duration := payload.NormalizedDuration(scene["final_clip_duration_seconds"]); duration > 0 {
+		return duration
+	}
+	// clip_duration_seconds is the only supported legacy alias for the final
+	// clip. Generic duration_seconds is intentionally not consulted.
+	if duration := payload.NormalizedDuration(scene["clip_duration_seconds"]); duration > 0 {
+		return duration
+	}
+	return 4.0
 }
 
 func sceneVoiceoverURL(scene map[string]interface{}) string {
