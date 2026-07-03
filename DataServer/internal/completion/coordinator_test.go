@@ -563,6 +563,62 @@ func TestCoordinator_RecordUploadProgress_EmptyUploadIDRejected(t *testing.T) {
 // ────────────────────────────────────────────────────────────────────────
 
 
+// TestCoordinator_RecordUploadProgress_MonotonicProgress locks down
+// the MAX() semantics Verdetto P0 (Blocco 3) ships for the heartbeat
+// path. A worker that re-sends an older heartbeat (reordered TCP
+// segment, retry-with-backoff, debug retry button) MUST NOT regress
+// the canonical uploaded_bytes or updated_at columns on
+// task_output_declarations. The test sends the heartbeat sequence
+// 1000 → 800 → 1200 and asserts the persisted value is 1200 (the
+// MAX), not 800 (the last write).
+func TestCoordinator_RecordUploadProgress_MonotonicProgress(t *testing.T) {
+	db := openCoordinatorTestDB(t)
+	c := newTestCoordinator(db)
+	fence := validFence("task-monotonic", "attempt-monotonic")
+	plan, err := c.DeclareOutputs(context.Background(), DeclareOutputsCommand{
+		Fence: fence, JobID: "job-monotonic", OutputManifests: validManifests(),
+	})
+	if err != nil {
+		t.Fatalf("DeclareOutputs: %v", err)
+	}
+
+	// Stamp an upload_id on the declaration so the heartbeat can
+	// find it (mirrors the existing BumpsProgress test).
+	if _, err := db.Exec(
+		`UPDATE task_output_declarations SET upload_id = ? WHERE commit_id = ?`,
+		"upload-monotonic", plan.CommitID,
+	); err != nil {
+		t.Fatalf("set upload_id: %v", err)
+	}
+
+	// Three heartbeats in the order 1000 → 800 → 1200. The 800
+	// value simulates a stale/reordered heartbeat that arrived
+	// after the 1000 value; the 1200 is the genuine latest.
+	for _, bytes := range []int64{1000, 800, 1200} {
+		if err := c.RecordUploadProgress(context.Background(), RecordUploadProgressCommand{
+			Fence:         fence,
+			UploadID:      "upload-monotonic",
+			UploadedBytes: bytes,
+		}); err != nil {
+			t.Fatalf("RecordUploadProgress(UploadedBytes=%d): %v", bytes, err)
+		}
+	}
+
+	// Read the persisted uploaded_bytes. The MAX() guarantee means
+	// the value is 1200, NOT 800 (the last write) and NOT 1000
+	// (the first write).
+	var persisted int64
+	if err := db.QueryRow(
+		`SELECT uploaded_bytes FROM task_output_declarations WHERE upload_id = ?`,
+		"upload-monotonic",
+	).Scan(&persisted); err != nil {
+		t.Fatalf("read uploaded_bytes: %v", err)
+	}
+	if persisted != 1200 {
+		t.Errorf("persisted uploaded_bytes = %d, want 1200 (MAX() must reject the stale 800 heartbeat)", persisted)
+	}
+}
+
 // ────────────────────────────────────────────────────────────────────
 // Verdetto P0 #6: replay-safe commit token.
 //
@@ -883,10 +939,10 @@ func TestCoordinator_RecordAttemptCommitsCAS_HappyPath(t *testing.T) {
 	// Test-suite pollution guard: reset the budget before the test
 	// body so any bleed from a sibling test does not skew the
 	// counter assertions below.
-	_ = c.recordAttemptCommitsCAS(nil)
+	_ = c.recordAttemptCommitsCAS("test", nil)
 
 	// 1. nil input — counter resets, returns nil.
-	if err := c.recordAttemptCommitsCAS(nil); err != nil {
+	if err := c.recordAttemptCommitsCAS("test", nil); err != nil {
 		t.Errorf("nil input: want nil err, got %v", err)
 	}
 	if got := c.budget.Consecutive(); got != 0 {
@@ -895,7 +951,7 @@ func TestCoordinator_RecordAttemptCommitsCAS_HappyPath(t *testing.T) {
 
 	// 2. non-CAS err — counter unchanged, pointer-equal passthrough.
 	otherErr := errors.New("some non-CAS infrastructure error")
-	if err := c.recordAttemptCommitsCAS(otherErr); err != otherErr {
+	if err := c.recordAttemptCommitsCAS("test", otherErr); err != otherErr {
 		t.Errorf("non-CAS err: want pointer-equal passthrough (err=%v), got %v", otherErr, err)
 	}
 	if got := c.budget.Consecutive(); got != 0 {
@@ -906,7 +962,7 @@ func TestCoordinator_RecordAttemptCommitsCAS_HappyPath(t *testing.T) {
 	//    equal passthrough (caller wraps with ErrTransitionConflict
 	//    on its own path).
 	confErr := conflictErr("stale fence (recordAttemptCommitsCAS happy path)")
-	if err := c.recordAttemptCommitsCAS(confErr); err != confErr {
+	if err := c.recordAttemptCommitsCAS("test", confErr); err != confErr {
 		t.Errorf("under-threshold CAS: want pointer-equal passthrough, got %v", err)
 	}
 	if got := c.budget.Consecutive(); got != 1 {
@@ -930,7 +986,7 @@ func TestCoordinator_RecordAttemptCommitsCAS_CASExhaustionFallsBackToBudgetError
 	c := newTestCoordinator(db).(*coordinator)
 
 	// Test-suite pollution guard.
-	_ = c.recordAttemptCommitsCAS(nil)
+	_ = c.recordAttemptCommitsCAS("test", nil)
 
 	confErr := conflictErr("locked attempt_commits row (exhaustion test)")
 
@@ -938,7 +994,7 @@ func TestCoordinator_RecordAttemptCommitsCAS_CASExhaustionFallsBackToBudgetError
 	// so the 3rd consecutive conflict is the boundary; the 1st and
 	// 2nd must propagate the original ConfErr unchanged.
 	for i := 0; i < 2; i++ {
-		err := c.recordAttemptCommitsCAS(confErr)
+		err := c.recordAttemptCommitsCAS("test", confErr)
 		if err == nil {
 			t.Fatalf("iteration %d: want non-nil err (the original confErr), got nil", i+1)
 		}
@@ -956,8 +1012,13 @@ func TestCoordinator_RecordAttemptCommitsCAS_CASExhaustionFallsBackToBudgetError
 	// 3rd consecutive — boundary. Returned error wraps
 	// ErrConflictBudgetExhausted; original ErrTransitionConflict is
 	// NO LONGER in the errors.Is chain (documented quirk: original
-	// is %v-text, not %w-chain).
-	boundaryErr := c.recordAttemptCommitsCAS(confErr)
+	// is %v-text, not %w-chain). The key is eagerly removed from
+	// the per-key map (Blocco 3 per-key design), so BOTH
+	// Consecutive() and ConsecutiveForKey("test") return 0 after
+	// the boundary — the escalation error is the real signal, not
+	// the post-escalation counter. The pre-boundary counter check
+	// above (line ~1015) confirms the streak reached 2.
+	boundaryErr := c.recordAttemptCommitsCAS("test", confErr)
 	if boundaryErr == nil {
 		t.Fatal("3rd consecutive: want non-nil ErrConflictBudgetExhausted, got nil")
 	}
@@ -967,8 +1028,15 @@ func TestCoordinator_RecordAttemptCommitsCAS_CASExhaustionFallsBackToBudgetError
 	if errors.Is(boundaryErr, ErrTransitionConflict) {
 		t.Errorf("3rd consecutive: ErrTransitionConflict must NOT be in errors.Is chain (only %%v-formatted; got %v)", boundaryErr)
 	}
-	if got := c.budget.Consecutive(); got != 3 {
-		t.Errorf("budget.Consecutive() = %d, want 3 at boundary", got)
+	// Post-escalation: the key is eagerly removed (ConsecutiveForKey
+	// returns 0 for a non-existent key). This is the intended
+	// Blocco 3 behaviour — the budget is "armed" again, ready for a
+	// fresh streak if the caller retries.
+	if got := c.budget.ConsecutiveForKey("test"); got != 0 {
+		t.Errorf("budget.ConsecutiveForKey(\"test\") = %d, want 0 (eager-delete on escalation)", got)
+	}
+	if got := c.budget.Consecutive(); got != 0 {
+		t.Errorf("budget.Consecutive() = %d, want 0 (no active streaks after eager-delete)", got)
 	}
 
 	// The boundary error message SHOULD still reference the
@@ -981,7 +1049,7 @@ func TestCoordinator_RecordAttemptCommitsCAS_CASExhaustionFallsBackToBudgetError
 
 	// Reset and confirm the budget is reusable across Coordinator
 	// method exits (e.g., after Manual Restart in supervisor).
-	c.recordAttemptCommitsCAS(nil)
+	c.recordAttemptCommitsCAS("test", nil)
 	if got := c.budget.Consecutive(); got != 0 {
 		t.Errorf("after nil reset on boundary streak: budget.Consecutive() = %d, want 0", got)
 	}
@@ -1007,21 +1075,21 @@ func TestCoordinator_RecordAttemptCommitsCAS_NilBudgetBypass(t *testing.T) {
 	otherErr := errors.New("non-CAS err under nil-budget")
 
 	// nil input — must not panic, must return nil.
-	if err := c.recordAttemptCommitsCAS(nil); err != nil {
+	if err := c.recordAttemptCommitsCAS("test", nil); err != nil {
 		t.Errorf("nil-budget + nil input: want nil, got %v", err)
 	}
 
 	// 5 consecutive CAS errs — must all pass through pointer-equal,
 	// no panic, no counter (because there is no budget to count).
 	for i := 0; i < 5; i++ {
-		err := c.recordAttemptCommitsCAS(confErr)
+		err := c.recordAttemptCommitsCAS("test", confErr)
 		if err != confErr {
 			t.Errorf("iteration %d: nil-budget + CAS err want pointer-equal passthrough, got %v", i+1, err)
 		}
 	}
 
 	// Non-CAS err — must pass through pointer-equal.
-	if err := c.recordAttemptCommitsCAS(otherErr); err != otherErr {
+	if err := c.recordAttemptCommitsCAS("test", otherErr); err != otherErr {
 		t.Errorf("nil-budget + non-CAS err want pointer-equal passthrough, got %v", err)
 	}
 }

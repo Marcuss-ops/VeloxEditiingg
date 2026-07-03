@@ -70,7 +70,7 @@ func TestConflictBudget_Chaos_BusyBackToBack_Absorbed(t *testing.T) {
 		{"busy-3 (checkpoint wedge)",             driverBusyErr("checkpoint wedge")},
 	}
 	for i, s := range inputs {
-		got := b.Record(s.err)
+		got := b.Record(testKey, s.err)
 		if got == nil {
 			t.Errorf("step %d (%s): Record(busy) returned nil; expected passthrough", i+1, s.name)
 			continue
@@ -100,7 +100,7 @@ func TestConflictBudget_Chaos_BusyPastThreshold_NeverEscalates(t *testing.T) {
 	const N = 7 // > threshold to confirm even past threshold never escalates
 	for i := 0; i < N; i++ {
 		err := driverBusyErr("over-threshold busy burst")
-		got := b.Record(err)
+		got := b.Record(testKey, err)
 		if got == nil {
 			t.Errorf("iteration %d/%d: Record(busy) returned nil; expected passthrough", i+1, N)
 			continue
@@ -130,7 +130,7 @@ func TestConflictBudget_Chaos_BusyWrapPattern_Unchanged(t *testing.T) {
 	budget := NewConflictBudget(ConflictBudgetPolicy{ConsecutiveConflictThreshold: 3})
 	wrap := func(err error) error {
 		// Mirror coordinator.recordAttemptCommitsCAS verbatim:
-		budgetErr := budget.Record(err)
+		budgetErr := budget.Record(testKey, err)
 		if budgetErr == nil {
 			return err // under-threshold or reset — surface original err
 		}
@@ -170,7 +170,7 @@ func TestConflictBudget_Chaos_BusyThenConflict_FreshStreak(t *testing.T) {
 	b := NewConflictBudget(ConflictBudgetPolicy{ConsecutiveConflictThreshold: 3})
 	// Burst of busy.
 	for i := 0; i < 3; i++ {
-		if got := b.Record(driverBusyErr("burst")); got == nil {
+		if got := b.Record(testKey, driverBusyErr("burst")); got == nil {
 			t.Fatalf("burst step %d: Record(busy) returned nil; expected passthrough", i+1)
 		}
 	}
@@ -179,7 +179,7 @@ func TestConflictBudget_Chaos_BusyThenConflict_FreshStreak(t *testing.T) {
 	}
 	// Now a real conflict: fresh streak at 1.
 	cErr := conflictErr("stale fence")
-	if got := b.Record(cErr); got != nil && errors.Is(got, ErrConflictBudgetExhausted) {
+	if got := b.Record(testKey, cErr); got != nil && errors.Is(got, ErrConflictBudgetExhausted) {
 		t.Errorf("post-busy conflict escalated unexpectedly: %v", got)
 	}
 	if c := b.Consecutive(); c != 1 {
@@ -197,14 +197,14 @@ func TestConflictBudget_Chaos_BusyThenConflict_FreshStreak(t *testing.T) {
 func TestConflictBudget_Chaos_BusyThenNilReset_Idempotent(t *testing.T) {
 	b := NewConflictBudget(ConflictBudgetPolicy{ConsecutiveConflictThreshold: 3})
 	for i := 0; i < 3; i++ {
-		_ = b.Record(driverBusyErr("burst"))
+		_ = b.Record(testKey, driverBusyErr("burst"))
 	}
 	if c := b.Consecutive(); c != 0 {
 		t.Fatalf("pre-reset: counter = %d; want 0", c)
 	}
 	// nil reset (counter already 0 — should be no-op for the
 	// sink's ResetConflictBudget call but keep bookkeeping tidy).
-	if got := b.Record(nil); got != nil {
+	if got := b.Record(testKey, nil); got != nil {
 		t.Errorf("Record(nil) after busy burst returned %v; want nil", got)
 	}
 	if c := b.Consecutive(); c != 0 {
@@ -212,7 +212,7 @@ func TestConflictBudget_Chaos_BusyThenNilReset_Idempotent(t *testing.T) {
 	}
 	// Idempotency: a second Record(nil) must produce the same
 	// counter=0 / nil-return / no-side-effects contract.
-	if got := b.Record(nil); got != nil {
+	if got := b.Record(testKey, nil); got != nil {
 		t.Errorf("Record(nil) idempotent step returned %v; want nil", got)
 	}
 	if c := b.Consecutive(); c != 0 {
@@ -231,7 +231,7 @@ func TestConflictBudget_Chaos_BusyThenEscalationBoundary_Reachable(t *testing.T)
 	b := NewConflictBudget(ConflictBudgetPolicy{ConsecutiveConflictThreshold: 3})
 	// Burst of busy.
 	for i := 0; i < 3; i++ {
-		if got := b.Record(driverBusyErr("pre-boundary burst")); got == nil {
+		if got := b.Record(testKey, driverBusyErr("pre-boundary burst")); got == nil {
 			t.Fatalf("busy step %d: Record(busy) returned nil; expected passthrough", i+1)
 		}
 	}
@@ -241,7 +241,7 @@ func TestConflictBudget_Chaos_BusyThenEscalationBoundary_Reachable(t *testing.T)
 	cErr := conflictErr("stale fence")
 	// 2 conflicts: under threshold.
 	for step := 1; step <= 2; step++ {
-		if got := b.Record(cErr); got != nil && errors.Is(got, ErrConflictBudgetExhausted) {
+		if got := b.Record(testKey, cErr); got != nil && errors.Is(got, ErrConflictBudgetExhausted) {
 			t.Errorf("conflict #%d: unexpectedly escalated: %v", step, got)
 		}
 		if c := b.Consecutive(); c != step {
@@ -249,14 +249,20 @@ func TestConflictBudget_Chaos_BusyThenEscalationBoundary_Reachable(t *testing.T)
 		}
 	}
 	// Boundary: 3rd conflict escalates.
-	got := b.Record(cErr)
+	got := b.Record(testKey, cErr)
 	if got == nil {
 		t.Fatal("boundary 3rd conflict: Record returned nil; expected ErrConflictBudgetExhausted")
 	}
 	if !errors.Is(got, ErrConflictBudgetExhausted) {
 		t.Errorf("boundary: Record returned %v; expected errors.Is(_, ErrConflictBudgetExhausted)", got)
 	}
-	if c := b.Consecutive(); c != 3 {
-		t.Errorf("final counter = %d; want 3 (= threshold)", c)
+	// Blocco 3: the key is eagerly removed on escalation, so
+	// Consecutive() returns 0 (no active streaks) after the
+	// boundary. The escalation error is the real signal.
+	if c := b.Consecutive(); c != 0 {
+		t.Errorf("final counter = %d; want 0 (eager-delete on escalation, no active streaks)", c)
+	}
+	if c := b.ConsecutiveForKey(testKey); c != 0 {
+		t.Errorf("final ConsecutiveForKey(testKey) = %d; want 0 (key eagerly removed)", c)
 	}
 }

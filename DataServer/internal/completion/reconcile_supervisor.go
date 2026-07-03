@@ -135,16 +135,40 @@ type ReconcileMetrics interface {
 // hands work to Coordinator.ReconcileAttempt. One instance per
 // master, registered as a BackgroundRunner.
 type ReconcileSupervisor struct {
-	DB        *sql.DB
-	Coord     Coordinator
-	Metrics   ReconcileMetrics
-	Tick      time.Duration
-	Limit     int
-	lastTick  time.Time
-	seenIDs   map[string]time.Time
-	seenCap   int
-	seenMu    sync.Mutex
+	DB      *sql.DB
+	Coord   Coordinator
+	Metrics ReconcileMetrics
+	Tick    time.Duration
+	Limit   int
+	lastTick time.Time
+	seenIDs map[string]time.Time
+	seenCap int
+	seenMu  sync.Mutex
+	// Log is the sink for human-readable operational log lines
+	// (scan errors, dispatch errors, startup banner). Defaults
+	// to log.Printf; tests that intentionally exercise the
+	// bad-DB / stub-coord error paths inject a no-op or
+	// buffer-backed logger so the log line doesn't trip
+	// `go test`'s "unexpected stderr output" check (which would
+	// fail the package even when every individual test passes).
+	// The metric counters (IncReconcile / IncCommitDeadlineExceeded)
+	// are unaffected by Log — they are the test-facing
+	// observability surface and remain wired through the Metrics
+	// interface. LogFunc is the type alias; nil values are
+	// treated as no-op by TickOnce / dispatch / Run.
+	Log LogFunc
 }
+
+// LogFunc is the function signature the supervisor uses for
+// human-readable operational logs. Mirrors log.Printf's signature
+// so the default `log.Printf` binds directly. Tests inject a
+// no-op (or a buffer-backed logger) to suppress or capture the
+// log line without changing the production wiring.
+type LogFunc func(format string, args ...any)
+
+// noopLog is the fallback used when Log is nil. Distinct from a
+// nil function value so the supervisor never panics on a nil deref.
+func noopLog(format string, args ...any) {}
 
 // NewReconcileSupervisor builds a supervisor with default tick +
 // cap. Bootstrap wires the metrics sink + coordinator.
@@ -170,7 +194,18 @@ func NewReconcileSupervisor(db *sql.DB, coord Coordinator, metrics ReconcileMetr
 		seenIDs: make(map[string]time.Time),
 		seenCap: 10_000,
 		lastTick: time.Now().UTC(),
+		Log:     log.Printf, // default; tests override with a no-op or buffer
 	}
+}
+
+// logf routes a human-readable operational log through the
+// supervisor's Log sink. Centralised so the nil-guard is in one
+// place (a nil Log defaults to a no-op, never a panic).
+func (s *ReconcileSupervisor) logf(format string, args ...any) {
+	if s.Log == nil {
+		return
+	}
+	s.Log(format, args...)
 }
 
 type noopReconcileMetrics struct{}
@@ -182,7 +217,7 @@ func (noopReconcileMetrics) IncCommitDeadlineExceeded()   {}
 func (s *ReconcileSupervisor) Run(ctx context.Context) error {
 	t := time.NewTicker(s.Tick)
 	defer t.Stop()
-	log.Printf("[RECONCILE-SUPERVISOR] starting — tick=%s limit=%d", s.Tick, s.Limit)
+	s.logf("[RECONCILE-SUPERVISOR] starting — tick=%s limit=%d", s.Tick, s.Limit)
 	for {
 		select {
 		case <-ctx.Done():
@@ -198,7 +233,7 @@ func (s *ReconcileSupervisor) Run(ctx context.Context) error {
 func (s *ReconcileSupervisor) TickOnce(ctx context.Context, now time.Time) {
 	candidates, deadlineExpiredCount, err := s.scanCandidates(ctx)
 	if err != nil {
-		log.Printf("[RECONCILE-SUPERVISOR] scan: %v", err)
+		s.logf("[RECONCILE-SUPERVISOR] scan: %v", err)
 		return
 	}
 	if deadlineExpiredCount > 0 {
@@ -209,7 +244,7 @@ func (s *ReconcileSupervisor) TickOnce(ctx context.Context, now time.Time) {
 	if len(candidates) == 0 {
 		return
 	}
-	log.Printf("[RECONCILE-SUPERVISOR] tick=%s — %d candidates", now.Format(time.RFC3339), len(candidates))
+	s.logf("[RECONCILE-SUPERVISOR] tick=%s — %d candidates", now.Format(time.RFC3339), len(candidates))
 	for _, c := range candidates {
 		s.dispatch(ctx, c)
 	}
@@ -405,7 +440,7 @@ func (s *ReconcileSupervisor) dispatch(ctx context.Context, c ReconcileCandidate
 			s.Metrics.IncReconcile(string(c.Case), string(ActionNoop))
 			return
 		}
-		log.Printf("[RECONCILE-SUPERVISOR] dispatch %s (%s): %v", c.CommitID, c.Case, err)
+		s.logf("[RECONCILE-SUPERVISOR] dispatch %s (%s): %v", c.CommitID, c.Case, err)
 		s.Metrics.IncReconcile(string(c.Case), string(ActionEscalate))
 		return
 	}

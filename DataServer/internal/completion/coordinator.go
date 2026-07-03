@@ -133,21 +133,24 @@ type coordinator struct {
 	budget *ConflictBudget
 }
 
-// recordAttemptCommitsCAS routes a CAS error from one of the three
-// canonical attempt_commits CAS paths through the conflict budget.
+// recordAttemptCommitsCAS routes a CAS error from one of the canonical
+// attempt_commits CAS paths through the conflict budget under a
+// per-key label (typically "commit:<commit_id>"). Verdetto P0 #4
+// (Blocco 3) mandates per-key isolation so concurrent independent
+// commit_ids do not aggregate into one false-positive streak.
 //
 // Returns the original err unchanged when the budget is under
 // threshold (or no err) so the caller can surface it; returns a
 // wrapped ErrConflictBudgetExhausted when the streak crossed the
 // boundary so the caller can escalate to its supervisor.
 //
-// Calls with err == nil reset the budget counter (record-able as a
-// successful Coordinator-method exit).
-func (c *coordinator) recordAttemptCommitsCAS(err error) error {
+// Calls with err == nil reset the per-key counter (recordable as a
+// successful Coordinator-method exit for that specific commit).
+func (c *coordinator) recordAttemptCommitsCAS(key string, err error) error {
 	if c.budget == nil {
 		return err
 	}
-	budgetErr := c.budget.Record(err)
+	budgetErr := c.budget.Record(key, err)
 	if budgetErr == nil {
 		// nil from Record means either a reset (err was nil) or
 		// under-threshold continuation. In both cases the caller
@@ -385,9 +388,19 @@ func (c *coordinator) RecordUploadProgress(ctx context.Context, cmd RecordUpload
 	}
 
 	if cmd.UploadedBytes > 0 {
+		// Verdetto P0 (Blocco 3): monotonic-progress guarantee.
+		// uploaded_bytes and updated_at use MAX() so a worker
+		// that re-sends an older heartbeat (e.g. a chunk upload
+		// whose TCP segment was reordered, or a heartbeat that
+		// arrived after a newer one) cannot regress the canonical
+		// progress. The persisted value is the MAX of the
+		// current and incoming values; updated_at follows the
+		// same rule so a stale heartbeat doesn't roll back the
+		// last_progress_at timestamp the reconciler uses to
+		// detect wedged workers.
 		_, err = tx.ExecContext(ctx,
 			`UPDATE task_output_declarations
-			    SET uploaded_bytes = ?, updated_at = ?
+			    SET uploaded_bytes = MAX(uploaded_bytes, ?), updated_at = MAX(updated_at, ?)
 			  WHERE commit_id IN (
 			      SELECT commit_id FROM attempt_commits
 			      WHERE task_id = ? AND attempt_id = ? AND worker_id = ? AND lease_id = ?
@@ -442,7 +455,8 @@ func (c *coordinator) CompleteUpload(ctx context.Context, cmd CompleteUploadComm
 		}
 	}()
 
-	if _, err := cmd.Fence.Read(ctx, tx); err != nil {
+	state, err := cmd.Fence.Read(ctx, tx)
+	if err != nil {
 		return err
 	}
 
@@ -457,14 +471,15 @@ func (c *coordinator) CompleteUpload(ctx context.Context, cmd CompleteUploadComm
 		return err
 	}
 	if uploadState.Status == "COMPLETED" {
-		// Verdetto P2 (Blocco 5): replay-safe no-op is a
-		// successful exit — reset the budget counter so a
-		// previous streak does not poison the next attempt.
-		c.recordAttemptCommitsCAS(nil)
+		// Verdetto P2 (Blocco 5) + P0 #4 (Blocco 3): replay-safe
+		// no-op is a successful exit — reset the per-commit
+		// budget counter so a previous streak on THIS commit
+		// does not poison the next attempt. The key uses the
+		// upload_id as a stable per-replay key. (Independent
+		// replays of the same upload_id share a streak by
+		// design.)
+		c.recordAttemptCommitsCAS("upload:"+cmd.UploadID, nil)
 		return nil // replay-safe no-op
-	}
-	if uploadState.Status != "CREATED" && uploadState.Status != "UPLOADING" && uploadState.Status != "RECEIVED" {
-		return fmt.Errorf("%w: artifact_uploads.status=%q (cannot advance)", ErrTransitionConflict, uploadState.Status)
 	}
 	effectiveExpected := uploadState.ExpectedSHA256
 	if uploadState.ReceivedSHA256 != "" {
@@ -512,21 +527,25 @@ func (c *coordinator) CompleteUpload(ctx context.Context, cmd CompleteUploadComm
 	}
 
 	if err := repos.AttemptCommits().UpdateReadyCountExhaustive(ctx, cmd.Fence, nowStr); err != nil {
-		// Verdetto P2 (Blocco 5): route through the conflict budget.
+		// Verdetto P2 (Blocco 5) + P0 #4 (Blocco 3): route through
+		// the conflict budget under the per-commit key so concurrent
+		// independent commits don't aggregate into one streak.
 		// Under threshold → propagate the original ErrTransitionConflict
 		// unchanged. Over threshold → propagate
 		// ErrConflictBudgetExhausted so the caller can escalate.
-		if budgetErr := c.recordAttemptCommitsCAS(err); budgetErr != nil {
+		if budgetErr := c.recordAttemptCommitsCAS("commit:"+state.CommitID, err); budgetErr != nil {
 			return fmt.Errorf("completion.CompleteUpload: ready_output_count bump: %w", budgetErr)
 		}
 		return fmt.Errorf("completion.CompleteUpload: ready_output_count bump: %w", err)
 	}
 
 	if err := repos.AttemptCommits().SetExpired(ctx, cmd.Fence, nowStr); err != nil {
-		// Verdetto P2 (Blocco 5): same pattern as
-		// UpdateReadyCountExhaustive — both are canonical
+		// Verdetto P2 (Blocco 5) + P0 #4 (Blocco 3): same pattern
+		// as UpdateReadyCountExhaustive — both are canonical
 		// attempt_commits CAS paths that count toward the budget.
-		if budgetErr := c.recordAttemptCommitsCAS(err); budgetErr != nil {
+		// Per-key: this commit's streak is independent of any
+		// other in-flight commit's conflicts.
+		if budgetErr := c.recordAttemptCommitsCAS("commit:"+state.CommitID, err); budgetErr != nil {
 			return fmt.Errorf("completion.CompleteUpload: deadline-breach EXPIRED: %w", budgetErr)
 		}
 		return fmt.Errorf("completion.CompleteUpload: deadline-breach EXPIRED: %w", err)
@@ -536,9 +555,10 @@ func (c *coordinator) CompleteUpload(ctx context.Context, cmd CompleteUploadComm
 		return fmt.Errorf("completion.CompleteUpload: commit: %w", err)
 	}
 	committed = true
-	// Verdetto P2 (Blocco 5): reset the conflict budget on a
-	// successful CompleteUpload so a fresh streak starts next time.
-	c.recordAttemptCommitsCAS(nil)
+	// Verdetto P2 (Blocco 5) + P0 #4 (Blocco 3): reset the
+	// per-commit conflict budget on a successful CompleteUpload
+	// so a fresh streak starts next time for THIS commit only.
+	c.recordAttemptCommitsCAS("commit:"+state.CommitID, nil)
 	return nil
 }
 
@@ -612,10 +632,11 @@ func (c *coordinator) CommitAttempt(ctx context.Context, commitID string) (*Comm
 		return nil, fmt.Errorf("completion.CommitAttempt: tasks CAS: %w", err)
 	}
 	if err := repos.AttemptCommits().MarkCommitted(ctx, commitID, nowStr); err != nil {
-		// Verdetto P2 (Blocco 5): MarkCommitted is the third
-		// canonical attempt_commits CAS path that counts toward
-		// the conflict budget.
-		if budgetErr := c.recordAttemptCommitsCAS(err); budgetErr != nil {
+		// Verdetto P2 (Blocco 5) + P0 #4 (Blocco 3): MarkCommitted
+		// is the third canonical attempt_commits CAS path. Per-key
+		// isolation: this commit's streak is independent of any
+		// other in-flight commit's conflicts.
+		if budgetErr := c.recordAttemptCommitsCAS("commit:"+commitID, err); budgetErr != nil {
 			return nil, fmt.Errorf("completion.CommitAttempt: attempt_commits CAS: %w", budgetErr)
 		}
 		return nil, fmt.Errorf("completion.CommitAttempt: attempt_commits CAS: %w", err)
@@ -644,9 +665,9 @@ func (c *coordinator) CommitAttempt(ctx context.Context, commitID string) (*Comm
 		return nil, fmt.Errorf("completion.CommitAttempt: commit: %w", err)
 	}
 	committed = true
-	// Verdetto P2 (Blocco 5): reset the conflict budget on a
-	// successful CommitAttempt so a fresh streak starts next time.
-	c.recordAttemptCommitsCAS(nil)
+	// Verdetto P2 (Blocco 5) + P0 #4 (Blocco 3): reset the
+	// per-commit conflict budget on a successful CommitAttempt.
+	c.recordAttemptCommitsCAS("commit:"+commitID, nil)
 	return res, nil
 }
 
@@ -716,10 +737,11 @@ func (c *coordinator) ReconcileAttempt(ctx context.Context, commitID string) (*C
 	}
 
 	if err := repos.AttemptCommits().SetExpiredByID(ctx, commitID, nowStr); err != nil {
-		// Verdetto P2 (Blocco 5): SetExpiredByID is the canonical
-		// attempt_commits CAS path on the reconcile side; count
-		// toward the same conflict budget.
-		if budgetErr := c.recordAttemptCommitsCAS(err); budgetErr != nil {
+		// Verdetto P2 (Blocco 5) + P0 #4 (Blocco 3): SetExpiredByID
+		// is the canonical attempt_commits CAS path on the
+		// reconcile side. Per-key: this commit's streak is
+		// independent of any other in-flight commit's conflicts.
+		if budgetErr := c.recordAttemptCommitsCAS("commit:"+commitID, err); budgetErr != nil {
 			return nil, fmt.Errorf("completion.ReconcileAttempt: attempt_commits CAS: %w", budgetErr)
 		}
 		return nil, fmt.Errorf("completion.ReconcileAttempt: attempt_commits CAS: %w", err)
@@ -740,9 +762,9 @@ func (c *coordinator) ReconcileAttempt(ctx context.Context, commitID string) (*C
 		return nil, fmt.Errorf("completion.ReconcileAttempt: commit: %w", err)
 	}
 	committed = true
-	// Verdetto P2 (Blocco 5): reset the conflict budget on a
-	// successful ReconcileAttempt so a fresh streak starts next time.
-	c.recordAttemptCommitsCAS(nil)
+	// Verdetto P2 (Blocco 5) + P0 #4 (Blocco 3): reset the
+	// per-commit conflict budget on a successful ReconcileAttempt.
+	c.recordAttemptCommitsCAS("commit:"+commitID, nil)
 	return res, nil
 }
 

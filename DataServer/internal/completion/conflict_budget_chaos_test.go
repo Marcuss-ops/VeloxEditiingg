@@ -75,7 +75,7 @@ func TestConflictBudget_Chaos_NoEscalationUnderThreshold(t *testing.T) {
 	}
 
 	for i, s := range seq {
-		got := b.Record(s.input)
+		got := b.Record(testKey, s.input)
 		// Behaviour classification per input:
 		//   - ErrTransitionConflict under threshold: Record returns
 		//     nil (caller surfaces original err via wrapping). At
@@ -125,7 +125,7 @@ func TestConflictBudget_Chaos_MidSequenceNilResetClearsStreak(t *testing.T) {
 
 	// Build a partial streak.
 	for i := 0; i < 2; i++ {
-		if got := b.Record(cErr); got != nil && errors.Is(got, ErrConflictBudgetExhausted) {
+		if got := b.Record(testKey, cErr); got != nil && errors.Is(got, ErrConflictBudgetExhausted) {
 			t.Fatalf("pre-reset conflict #%d unexpectedly escalated: %v", i+1, got)
 		}
 	}
@@ -136,7 +136,7 @@ func TestConflictBudget_Chaos_MidSequenceNilResetClearsStreak(t *testing.T) {
 	// Inject a busy between partial streak and reset — busy must
 	// NOT touch the counter.
 	busyBetween := busyErr("checkpoint wedge")
-	if got := b.Record(busyBetween); got == nil || got.Error() != busyBetween.Error() {
+	if got := b.Record(testKey, busyBetween); got == nil || got.Error() != busyBetween.Error() {
 		t.Errorf("busy passthrough: got %v, expected passthrough %v", got, busyBetween)
 	}
 	if got := b.Consecutive(); got != 2 {
@@ -144,7 +144,7 @@ func TestConflictBudget_Chaos_MidSequenceNilResetClearsStreak(t *testing.T) {
 	}
 
 	// Mid-sequence nil reset.
-	if got := b.Record(nil); got != nil {
+	if got := b.Record(testKey, nil); got != nil {
 		t.Errorf("mid-sequence nil reset should not return error: %v", got)
 	}
 	if got := b.Consecutive(); got != 0 {
@@ -152,7 +152,7 @@ func TestConflictBudget_Chaos_MidSequenceNilResetClearsStreak(t *testing.T) {
 	}
 
 	// Post-reset: a fresh conflict starts a new streak at 1.
-	if got := b.Record(cErr); got != nil && errors.Is(got, ErrConflictBudgetExhausted) {
+	if got := b.Record(testKey, cErr); got != nil && errors.Is(got, ErrConflictBudgetExhausted) {
 		t.Errorf("post-reset conflict unexpectedly escalated: %v", got)
 	}
 	if got := b.Consecutive(); got != 1 {
@@ -202,11 +202,17 @@ func TestConflictBudget_Chaos_FinalSpecSequenceTriggersEscalation(t *testing.T) 
 		{"nil-reset-mid", nil,   expect{consec: 0, errMode: "nil"}},
 		{"conflict-2",    cErr,  expect{consec: 1, errMode: "nil"}},
 		{"conflict-3",    cErr,  expect{consec: 2, errMode: "nil"}},
-		{"conflict-4-final (boundary)", cErr, expect{consec: 3, errMode: "escalate"}},
+		// boundary step: counter is OBSERVED at 2 immediately
+		// before this Record call (from step 6). After the
+		// Record call returns the boundary error, eager-delete
+		// drops the key — so Consecutive() is 0 immediately
+		// after, not 3. The escalation err is the real
+		// signal here.
+		{"conflict-4-final (boundary)", cErr, expect{consec: 0, errMode: "escalate"}},
 	}
 
 	for i, s := range seq {
-		got := b.Record(s.input)
+		got := b.Record(testKey, s.input)
 
 		switch s.want.errMode {
 		case "passthrough":
@@ -237,24 +243,39 @@ func TestConflictBudget_Chaos_FinalSpecSequenceTriggersEscalation(t *testing.T) 
 	}
 
 	// Final invariants:
-	//   - counter at boundary = threshold; the budget remains
-	//     "armed" so a 4th consecutive conflict (had we not stopped
-	//     at the boundary) would escalate again.
+	//   - Blocco 3: the key is eagerly removed on escalation, so
+	//     Consecutive() returns 0 (no active streaks) after the
+	//     boundary. The escalation error is the real signal.
 	//   - the very last errMode was "escalate".
 	last := seq[len(seq)-1]
 	if last.want.errMode != "escalate" {
 		t.Fatalf("internal: last step should escalate; got %q", last.want.errMode)
 	}
-	if c := b.Consecutive(); c != 3 {
-		t.Errorf("final counter = %d, want 3 (= threshold)", c)
+	if c := b.Consecutive(); c != 0 {
+		t.Errorf("final counter = %d, want 0 (eager-delete on escalation, no active streaks)", c)
 	}
-	// Once escalated, the next consecutive conflict escalates again
-	// (we don't accidentally "double-escalate" — Record is a pure
-	// idempotent counter; one more Record(ErrTransitionConflict)
-	// simply keeps the counter at threshold+1 and returns wrapped
-	// exhausted err). Verify this is the behaviour:
-	if got := b.Record(cErr); !errors.Is(got, ErrConflictBudgetExhausted) {
-		t.Errorf("post-escalation conflict must continue to escalate; got %v", got)
+	if c := b.ConsecutiveForKey(testKey); c != 0 {
+		t.Errorf("final ConsecutiveForKey(testKey) = %d, want 0 (key eagerly removed)", c)
+	}
+	// Post-escalation: a fresh conflict on the same key starts a
+	// NEW streak at 1 (eager-delete re-arms the key). The next
+	// Record returns nil (under threshold, fresh streak), NOT
+	// ErrConflictBudgetExhausted. The old "counter stays at 3
+	// and every subsequent conflict escalates" behaviour was
+	// replaced by the eager-delete design in Blocco 3 — the
+	// escalation is a SIGNAL to the caller, not a permanent
+	// circuit-breaker.
+	// Record directly returns nil for under-threshold conflict
+	// (the wrap closure in coordinator.go::recordAttemptCommitsCAS
+	// surfaces the original err to callers — but Record's own
+	// contract is "passthrough only for non-CAS errors, nil for
+	// CAS-under-threshold, wrapped ErrConflictBudgetExhausted at
+	// boundary"). Post-escalation + under-threshold means nil.
+	if got := b.Record(testKey, cErr); got != nil && errors.Is(got, ErrConflictBudgetExhausted) {
+		t.Errorf("post-escalation conflict must start a fresh streak (under threshold, no escalation); got %v", got)
+	}
+	if got := b.ConsecutiveForKey(testKey); got != 1 {
+		t.Errorf("post-escalation ConsecutiveForKey(testKey) = %d, want 1 (fresh streak)", got)
 	}
 }
 
@@ -272,7 +293,7 @@ func TestConflictBudget_Chaos_WrapPatternMirrorsCoordinator(t *testing.T) {
 
 	// Mirror coordinator.recordAttemptCommitsCAS verbatim.
 	wrap := func(err error) error {
-		budgetErr := budget.Record(err)
+		budgetErr := budget.Record(testKey, err)
 		if budgetErr == nil {
 			return err // under-threshold or reset — surface original err
 		}
@@ -339,7 +360,13 @@ func TestConflictBudget_Chaos_WrapPatternMirrorsCoordinator(t *testing.T) {
 	if !errors.Is(got, ErrConflictBudgetExhausted) {
 		t.Errorf("step 7 wrap(conflict) = %v; expected ErrConflictBudgetExhausted", got)
 	}
-	if c := budget.Consecutive(); c != 3 {
-		t.Errorf("step 7: counter = %d, want 3 (= threshold)", c)
+	// Blocco 3: the key is eagerly removed on escalation, so
+	// Consecutive() returns 0 (no active streaks) after the
+	// boundary. The escalation error is the real signal.
+	if c := budget.Consecutive(); c != 0 {
+		t.Errorf("step 7: counter = %d, want 0 (eager-delete on escalation, no active streaks)", c)
+	}
+	if c := budget.ConsecutiveForKey(testKey); c != 0 {
+		t.Errorf("step 7: ConsecutiveForKey(testKey) = %d, want 0 (key eagerly removed)", c)
 	}
 }

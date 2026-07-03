@@ -25,10 +25,16 @@
 //     CAS paths above (task_attempts / tasks / jobs CAS conflicts
 //     propagate NOW without counting, by design);
 //   - resets on a successful Coordinator method exit;
-//   - on the 4th consecutive conflict (default), returns
+//   - on the 3rd consecutive conflict (default), returns
 //     ErrConflictBudgetExhausted so the caller can route to the
 //     appropriate restart policy — e.g. mapped to
 //     supervisor.ErrInfrastructure by the ReconciliationSupervisor.
+//     (The 3rd conflict is the boundary because Record uses
+//     `>=` against the threshold: threshold=3 means the 3rd
+//     conflict escalates. Earlier docs said "4th (3+1)" but that
+//     was an off-by-one typo; the test
+//     TestConflictBudget_EscalatesAtThresholdBoundary pins the
+//     actual invariant: 3rd consecutive = boundary.)
 //
 // The threshold and reset window are configurable. The counter is
 // concurrency-safe; the Coordinator's methods own their own
@@ -59,7 +65,7 @@ type ConflictBudgetPolicy struct {
 	// ConsecutiveConflictThreshold is the number of consecutive
 	// ErrTransitionConflict from the canonical attempt_commits
 	// CAS paths before the budget returns ErrConflictBudgetExhausted.
-	// With threshold=3 (default) the 4th consecutive conflict is the
+	// With threshold=3 (default) the 3rd consecutive conflict is the
 	// escalation boundary.
 	ConsecutiveConflictThreshold int
 
@@ -71,7 +77,7 @@ type ConflictBudgetPolicy struct {
 
 // DefaultConflictBudgetPolicy returns the canonical thresholds
 // matching Blocco 5's user spec: 3 consecutive conflicts allowed
-// (the 4th escalates), with a 5-minute reset window so a one-off
+// (the 3rd escalates), with a 5-minute reset window so a one-off
 // stale conflict at startup doesn't poison the counter long-term.
 func DefaultConflictBudgetPolicy() ConflictBudgetPolicy {
 	return ConflictBudgetPolicy{
@@ -83,14 +89,32 @@ func DefaultConflictBudgetPolicy() ConflictBudgetPolicy {
 // ConflictBudget counts consecutive ErrTransitionConflict on the
 // attempt_commits CAS paths and returns a wrapped
 // ErrConflictBudgetExhausted when the threshold is crossed.
+//
+// Verdetto P0 #4 (Blocco 3): the budget is PER-KEY, where the key
+// identifies the independent row operation (typically
+// "commit:<commit_id>"). Two different commit_ids hitting CAS
+// conflicts concurrently form TWO independent streaks; they do
+// NOT share a global counter. This prevents the false-positive
+// escalation where one stalled commit's conflicts cause an
+// unrelated commit's first few conflicts to be re-counted as part
+// of the same streak.
+//
+// Backward compat: the per-key API is additive. Callers that pass
+// a fixed dummy key (e.g. "test") behave identically to the old
+// single-counter design. The Coordinator passes the actual
+// commit_id as the key at every canonical attempt_commits CAS path.
 type ConflictBudget struct {
 	Policy ConflictBudgetPolicy
 
-	mu          sync.Mutex
-	consecutive int
-	firstErrAt  time.Time
-	lastErrAt   time.Time
-	nowFn       func() time.Time
+	mu sync.Mutex
+	// streaks is keyed by an arbitrary string (typically
+	// "commit:<commit_id>"). Each entry tracks its own consecutive
+	// counter + first/last error timestamps. Entries are
+	// eagerly removed on Record(key, nil) (success) and on
+	// escalation; the map size is bounded by the number of
+	// in-flight CAS operations at any moment.
+	streaks map[string]*streakState
+	nowFn   func() time.Time
 
 	// sink is the optional Prometheus instrumentation point. When
 	// non-nil, Record/Reset notify it of state-machine transitions
@@ -98,6 +122,15 @@ type ConflictBudget struct {
 	// threshold counts. Nil-safe; tests construct the budget
 	// without a sink (the default). See WithMetricsSink.
 	sink ConflictBudgetSink
+}
+
+// streakState is the per-key state held by ConflictBudget. Each
+// key (typically "commit:<commit_id>") has its own streakState so
+// independent operations don't share a counter.
+type streakState struct {
+	consecutive int
+	firstErrAt  time.Time
+	lastErrAt   time.Time
 }
 
 // ConflictBudgetSink is the optional completion-side contract the
@@ -156,6 +189,7 @@ func NewConflictBudget(p ConflictBudgetPolicy) *ConflictBudget {
 	return &ConflictBudget{
 		Policy: p,
 		nowFn:  time.Now,
+		streaks: make(map[string]*streakState),
 	}
 }
 
@@ -168,26 +202,54 @@ func (b *ConflictBudget) WithClock(nowFn func() time.Time) *ConflictBudget {
 	return b
 }
 
-// Record registers a Coordinator-method CAS outcome. err is one of:
+// Record registers a Coordinator-method CAS outcome for a specific
+// key. err is one of:
 //
-//   - nil → Reset + return nil. Callers invoke this from the
-//     successful exit path of each Coordinator method so a single
-//     completed commit clears the streak.
-//   - ErrTransitionConflict → +1 consecutive; if crossed threshold
-//     (consecutive >= ConsecutiveConflictThreshold), return
-//     ErrConflictBudgetExhausted wrapped with the streak summary;
-//     otherwise return nil so the caller can decide what to do
-//     (typically propagate ErrTransitionConflict unchanged to the
-//     outer caller — the worker over gRPC handles its retry).
+//   - nil → reset the streak for this key + return nil. Callers
+//     invoke this from the successful exit path of each Coordinator
+//     method so a single completed commit clears its own streak.
+//   - ErrTransitionConflict → +1 consecutive for this key; if
+//     crossed threshold (consecutive >= ConsecutiveConflictThreshold),
+//     return ErrConflictBudgetExhausted wrapped with the streak
+//     summary AND eagerly remove the key from the map; otherwise
+//     return nil so the caller can decide what to do (typically
+//     propagate ErrTransitionConflict unchanged to the outer
+//     caller — the worker over gRPC handles its retry).
 //   - anything else → no count change, return err unchanged so the
 //     caller can decide.
 //
 // The returned error is non-nil only when the Coordinator's caller
 // should escalate. Returning nil means: continue with whatever
 // fallback the caller has.
-func (b *ConflictBudget) Record(err error) error {
+//
+// Per-key isolation: two different keys form two independent
+// streaks. Verdetto P0 #4 (Blocco 3) mandates this so concurrent
+// independent commit_ids don't aggregate into one false-positive
+// escalation.
+//
+// Key granularity rationale: the key is typically
+// "commit:<commit_id>". All four canonical attempt_commits CAS
+// paths on the same commit_id (UpdateReadyCountExhaustive,
+// SetExpired, MarkCommitted, SetExpiredByID) therefore share one
+// streak. This is the CORRECT design — a commit_id that hits CAS
+// conflicts across multiple operations IS a wedged-lock-graph
+// symptom, and the budget SHOULD escalate on it. Keying per-
+// operation (e.g. "MarkCommitted:<commit_id>") would let the
+// budget never escalate because each operation gets a fresh
+// streak. Do NOT "fix" this by adding the operation prefix.
+//
+// Escalation semantics: when a key crosses the threshold, the key
+// is eagerly removed from the map and the next Record(key, err)
+// starts a fresh streak at 1. This is NOT a permanent circuit-
+// breaker — it is a SIGNAL to the caller (CompleteUpload /
+// CommitAttempt / ReconcileAttempt) to stop retrying on this path
+// and route ErrConflictBudgetExhausted to the supervisor's
+// restart policy. The caller is expected to NOT retry on the same
+// path; a "resurrected" streak from a different caller is fine
+// (the budget is reusable across Coordinator method exits).
+func (b *ConflictBudget) Record(key string, err error) error {
 	if err == nil {
-		b.Reset()
+		b.resetKey(key)
 		return nil
 	}
 	if !errors.Is(err, ErrTransitionConflict) {
@@ -199,26 +261,41 @@ func (b *ConflictBudget) Record(err error) error {
 	// own mutexes do not chain on the budget's CAS hot path.
 	b.mu.Lock()
 	now := b.nowFn()
-	if b.consecutive == 0 || (b.Policy.ResetWindow > 0 && now.Sub(b.firstErrAt) > b.Policy.ResetWindow) {
-		b.consecutive = 1
-		b.firstErrAt = now
-		b.lastErrAt = now
+	state := b.streaks[key]
+	if state == nil || (b.Policy.ResetWindow > 0 && now.Sub(state.firstErrAt) > b.Policy.ResetWindow) {
+		state = &streakState{
+			consecutive: 1,
+			firstErrAt:  now,
+			lastErrAt:   now,
+		}
+		b.streaks[key] = state
 	} else {
-		b.consecutive++
-		b.lastErrAt = now
+		state.consecutive++
+		state.lastErrAt = now
 	}
-	escalated := b.consecutive >= b.Policy.ConsecutiveConflictThreshold
-	streakSnapshot := b.consecutive
+	escalated := state.consecutive >= b.Policy.ConsecutiveConflictThreshold
+	streakSnapshot := state.consecutive
+	firstErrAt := state.firstErrAt
+	lastErrAt := state.lastErrAt
 	sink := b.sink
-	firstErrAt := b.firstErrAt
-	lastErrAt := b.lastErrAt
+	// Verdetto P0 #4 (Blocco 3): on escalation, eagerly remove
+	// the key from the map so the next Record(key, ...) on the
+	// same key starts a fresh streak. Without this, a stuck key
+	// would permanently occupy a map slot AND permanently stay
+	// at threshold (the next Record would see consecutive==3 and
+	// escalate again immediately, which is correct but blocks
+	// any "recover from the failure" path).
+	if escalated {
+		delete(b.streaks, key)
+	}
 	b.mu.Unlock()
 
 	wrapErr := func() error {
-		return fmt.Errorf("%w: consecutive=%d (since=%s last=%s) original=%v",
+		return fmt.Errorf("%w: consecutive=%d (since=%s last=%s) key=%s original=%v",
 			ErrConflictBudgetExhausted, streakSnapshot,
 			firstErrAt.Format(time.RFC3339Nano),
 			lastErrAt.Format(time.RFC3339Nano),
+			key,
 			err)
 	}
 	if sink == nil {
@@ -235,19 +312,20 @@ func (b *ConflictBudget) Record(err error) error {
 	return nil
 }
 
-// Reset clears the consecutive-conflict counter. Called automatically
-// on a successful Coordinator method exit (Record(nil)) and exposed
-// so callers can reset manually — e.g. when the master recovers
-// from a transient contention-out-of-band. Notifies the sink only
-// on a REAL reset (the prior streak was non-zero) so the reset
-// counter does not double-count trivial no-op resets on every
-// successful exit.
-func (b *ConflictBudget) Reset() {
+// resetKey clears the streak for a specific key. Called automatically
+// on Record(key, nil) and exposed via Reset (which iterates all
+// keys). Notifies the sink only on a REAL reset (the prior streak
+// was non-zero) so the reset counter does not double-count trivial
+// no-op resets on every successful exit.
+func (b *ConflictBudget) resetKey(key string) {
 	b.mu.Lock()
-	wasStreak := b.consecutive > 0
-	b.consecutive = 0
-	b.firstErrAt = time.Time{}
-	b.lastErrAt = time.Time{}
+	state, ok := b.streaks[key]
+	if !ok {
+		b.mu.Unlock()
+		return
+	}
+	wasStreak := state.consecutive > 0
+	delete(b.streaks, key)
 	sink := b.sink
 	b.mu.Unlock()
 
@@ -259,10 +337,61 @@ func (b *ConflictBudget) Reset() {
 	}
 }
 
-// Consecutive returns the current consecutive-conflict counter value.
-// Useful for tests and observability.
+// Reset clears every key's streak. Called manually — e.g. when
+// the master recovers from a transient contention-out-of-band.
+// Notifies the sink at most once per call, only if at least one
+// key had a non-zero streak. For per-key resets, callers should
+// use Record(key, nil) instead.
+func (b *ConflictBudget) Reset() {
+	b.mu.Lock()
+	wasStreak := false
+	for _, s := range b.streaks {
+		if s.consecutive > 0 {
+			wasStreak = true
+			break
+		}
+	}
+	b.streaks = make(map[string]*streakState)
+	sink := b.sink
+	b.mu.Unlock()
+
+	if wasStreak && sink != nil {
+		sink.ResetConflictBudget()
+	}
+}
+
+// Consecutive returns the MAX consecutive-conflict counter across
+// all keys. Useful for tests and observability where the caller
+// doesn't need per-key granularity. For per-key queries, use
+// ConsecutiveForKey.
+//
+// Returning the max (rather than the sum) preserves the semantics
+// of the old single-counter design: "how bad is the worst streak
+// right now?" The sum would conflate multiple healthy keys with
+// one stuck key.
 func (b *ConflictBudget) Consecutive() int {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.consecutive
+	max := 0
+	for _, s := range b.streaks {
+		if s.consecutive > max {
+			max = s.consecutive
+		}
+	}
+	return max
+}
+
+// ConsecutiveForKey returns the consecutive-conflict counter for a
+// specific key. Returns 0 if the key has no active streak — this
+// covers both "never seen this key" and "the key escalated and
+// was eagerly removed". The zero-default is intentional so
+// callers (tests, diagnostics) can use ConsecutiveForKey as a
+// presence-and-streak probe without a separate `hasKey` check.
+func (b *ConflictBudget) ConsecutiveForKey(key string) int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if state, ok := b.streaks[key]; ok {
+		return state.consecutive
+	}
+	return 0
 }
