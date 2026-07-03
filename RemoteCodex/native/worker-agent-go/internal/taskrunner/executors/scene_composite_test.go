@@ -163,8 +163,9 @@ func TestSceneComposite_Execute_Success(t *testing.T) {
 	if len(res.Outputs) != 1 {
 		t.Fatalf("len(Outputs) = %d, want 1", len(res.Outputs))
 	}
-	if got, want := res.Outputs[0].URI, "/tmp/out.mp4"; got != want {
-		t.Errorf("Output URI = %q, want %q (Payload output_path wins)", got, want)
+	wantURI := filepath.Join("/tmp/velox/scene-composite-test", "j-42.mp4")
+	if got, want := res.Outputs[0].URI, wantURI; got != want {
+		t.Errorf("Output URI = %q, want %q (local path, not payload output_path)", got, want)
 	}
 	if res.Outputs[0].Type != "render.output" {
 		t.Errorf("Output Type = %q, want render.output", res.Outputs[0].Type)

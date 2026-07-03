@@ -173,16 +173,24 @@ func resolvePipelineID(payload map[string]interface{}) string {
 	return "hybrid.v1"
 }
 
-// resolveOutputPath prefers spec.Payload["output_path"] (master override);
-// otherwise synthesizes <outputBase>/<jobID>.mp4.
+// resolveOutputPath synthesises <outputBase>/<jobID>.mp4 for the local
+// filesystem. The payload's "output_path" is intentionally ignored — it
+// refers to a path on the master and is not reachable inside the worker
+// container. The worker always renders into its own temp directory and
+// uploads the result to the master via the artifact API.
 func (s *SceneComposite) resolveOutputPath(spec executor.TaskSpec) (string, error) {
-	if p, _ := spec.Payload["output_path"].(string); p != "" {
-		return p, nil
-	}
 	if spec.JobID == "" {
 		return "", fmt.Errorf("scene.composite.v1: missing JobID; cannot synthesize output path")
 	}
 	return filepath.Join(s.outputBase, spec.JobID+".mp4"), nil
+}
+
+// PayloadOutputPath returns the master-originated output_path stored in
+// the spec payload (if any). Callers use this as the upload target
+// filename, NOT as a local render path.
+func PayloadOutputPath(spec executor.TaskSpec) string {
+	p, _ := spec.Payload["output_path"].(string)
+	return p
 }
 
 // hasAnyMediaSource scans the payload for any one of the canonical
