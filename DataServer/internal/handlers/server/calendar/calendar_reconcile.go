@@ -190,7 +190,7 @@ func submitCalendarJob(ctx context.Context, atomic *store.AtomicJobTaskCreator, 
 	spec := &taskgraph.TaskSpec{
 		Version:    taskgraph.SpecVersion,
 		JobID:      jobID,
-		ExecutorID: "scene.composite.v1@1",
+		ExecutorID: "scene.composite.v1",
 		Payload:    payload,
 	}
 	priority := 5

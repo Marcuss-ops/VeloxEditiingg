@@ -132,7 +132,7 @@ func CreateSmokeClipStock(cfg *config.Config, atomic *store.AtomicJobTaskCreator
 			Payload:    string(raw),
 		}
 		spec := &taskgraph.TaskSpec{
-			ExecutorID: "scene.composite.v1@1",
+			ExecutorID: "scene.composite.v1",
 			Version:    taskgraph.SpecVersion,
 		}
 		if err := atomic.CreateJobWithTask(c.Request.Context(), job, spec, 1); err != nil {

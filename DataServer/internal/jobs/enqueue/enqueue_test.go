@@ -12,6 +12,7 @@ import (
 	"velox-server/internal/jobs"
 	"velox-server/internal/routing"
 	"velox-server/internal/store"
+	"velox-server/internal/taskgraph"
 )
 
 func TestBuildSceneImagePayload(t *testing.T) {
@@ -222,6 +223,41 @@ func TestBuildSceneImagePayloadForMaster_PreservesRemoteSources(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(tempDir, "worker_downloads")); !os.IsNotExist(err) {
 		t.Fatalf("did not expect staged assets for remote sources")
+	}
+}
+
+func TestPrepareJobAndTask_UsesCanonicalSceneCompositeExecutorID(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	db, err := store.NewSQLiteStore(filepath.Join(tempDir, "velox.db"))
+	if err != nil {
+		t.Fatalf("new sqlite store: %v", err)
+	}
+	enq := NewEnqueuer(store.NewAtomicJobTaskCreator(db), nil, nil)
+
+	job, spec, _, err := enq.PrepareJobAndTask(context.Background(), map[string]interface{}{
+		"video_name":     "Jackie Chan",
+		"script_text":    "test",
+		"voiceover_path": "/tmp/voice.mp3",
+		"scenes": []interface{}{
+			map[string]interface{}{"text": "S1", "clip_link": "https://example.com/c1.mp4"},
+		},
+	}, costmodel.DefaultRequirements())
+	if err != nil {
+		t.Fatalf("PrepareJobAndTask: %v", err)
+	}
+	if job == nil || spec == nil {
+		t.Fatal("expected non-nil job and spec")
+	}
+	if spec.ExecutorID != "scene.composite.v1" {
+		t.Fatalf("spec.ExecutorID = %q, want %q", spec.ExecutorID, "scene.composite.v1")
+	}
+	if spec.Version != taskgraph.SpecVersion {
+		t.Fatalf("spec.Version = %d, want %d", spec.Version, taskgraph.SpecVersion)
+	}
+	if len(spec.RequiredCapabilities) != 1 || spec.RequiredCapabilities[0] != "artifact.commit.v1" {
+		t.Fatalf("RequiredCapabilities = %v, want [artifact.commit.v1]", spec.RequiredCapabilities)
 	}
 }
 
@@ -678,8 +714,8 @@ func TestEnqueueWithForwardingKey(t *testing.T) {
 	enq := newTestEnqueuer(t)
 
 	payload := map[string]interface{}{
-		"video_name":               "Forwarded Video",
-		"script_text":              "forwarded script",
+		"video_name":             "Forwarded Video",
+		"script_text":            "forwarded script",
 		routing.KeyForwardingKey: "remote_engine:creator-forward-1:scene.composite.v1",
 		"scenes": []interface{}{
 			map[string]interface{}{"scene": "intro", "voiceover": "v1"},

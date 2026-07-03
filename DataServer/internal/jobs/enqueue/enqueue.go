@@ -241,7 +241,7 @@ func compileSceneVideoJob(normalized map[string]interface{}, req costmodel.JobRe
 		Requirements: req,
 	}
 
-	executorID := "scene.composite.v1@1"
+	executorID := "scene.composite.v1"
 	if resolved := resolveInternalExecutorID(normalized); resolved != "" {
 		executorID = resolved
 	}
