@@ -108,9 +108,9 @@ func ArtifactRepositoryContract(t *testing.T, factory ArtifactRepositoryFactory)
 		}
 	})
 
-	// ── FinalizeAndComplete removed in PR 3.5-b (sole SUCCEEDED writer is
-	//     FinalizationRepository.FinalizeVerified). The contract test now
-	//     validates Insert + GetByID + ListByJob + direct status update.
+	// FinalizeAndComplete removed: sole SUCCEEDED writer is now
+	// FinalizationWriter.FinalizeVerified. The contract test here
+	// validates Insert + GetByID + ListByJob + direct status update.
 }
 
 // TestArtifactRepositoryContract_SQLite drives the suite against the SQLite backend.

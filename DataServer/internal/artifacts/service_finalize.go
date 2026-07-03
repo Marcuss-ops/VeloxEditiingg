@@ -12,31 +12,27 @@ import (
 	"velox-server/internal/store"
 )
 
-// =====================================================================
-// FASE 3 + 4: Finalize (orchestrates CAS RECEIVED->FINALIZING + atomic SUCCEEDED via finRepo)
-// =====================================================================
-
-// Finalize orchestrates Fase 3 + Fase 4 of the spec:
+// Package artifacts / service_finalize.go
 //
-//  1. Verify the upload session exists + is in a FINISHEABLE state.
-//     If it's already COMPLETED (idempotent retry), auth-match success
-//     returns the post-Finalize artifact as a no-op (spec: "doppia
-//     finalizzazione" → already-completed).
-//  2. Detect MIME from the staged blob (best-effort, falls back to the
+// Finalize orchestrates the verified-finalization pipeline:
+//
+//  1. Verify the upload session is in a finishable state. If already
+//     COMPLETED (idempotent retry), auth-match success returns the
+//     post-Finalize artifact via ArtifactReader.
+//  2. Detect MIME from the staged blob (best-effort, falls back to
 //     BeginUpload-declared mime).
-//  3. Promote the blob to its canonical storage_key (idempotent on
-//     retry because the key is content-addressable).
-//  4. CAS RECEIVED → FINALIZING on artifact_uploads (serializes
-//     concurrent Finalize callers at the SQL layer).
-//  5. Hand off to FinalizationRepository.FinalizeVerified — the
-//     SINGLE ATOMIC SQL transaction that flips jobs RUNNING →
-//     SUCCEEDED + artifacts STAGING → READY + job_attempts →
-//     SUCCEEDED + outbox events + delivery + FINALIZING → COMPLETED.
+//  3. Promote the blob to its canonical storage_key (idempotent —
+//     content-addressable).
+//  4. CAS RECEIVED → FINALIZING on artifact_uploads.
+//  5. Hand off to FinalizationWriter.FinalizeVerified — the sole
+//     atomic SQL transaction that flips jobs RUNNING → SUCCEEDED +
+//     artifacts STAGING → READY + per-destination job_deliveries +
+//     artifact_uploads FINALIZING → COMPLETED.
 //
-// The blob promotion runs BEFORE the SQL tx. If the SQL tx rolls back,
-// the spec's reconciler (chunk 5) deletes the orphan blob. This is
-// intentional — the spec calls out that "un blob orfano eliminabile è
-// preferibile rispetto a (artifact READY con file inesistente)".
+// Blob promotion runs BEFORE the SQL tx. If the SQL tx rolls back,
+// the reconciler deletes the orphan blob; this is intentional — "un
+// blob orfano eliminabile è preferibile rispetto a (artifact READY
+// con file inesistente)".
 func (s *Service) Finalize(ctx context.Context, cmd FinalizeArtifactCommand) (*store.Artifact, error) {
 	if cmd.UploadID == "" {
 		return nil, fmt.Errorf("artifacts: Finalize: empty uploadID")
@@ -77,7 +73,7 @@ func (s *Service) Finalize(ctx context.Context, cmd FinalizeArtifactCommand) (*s
 			return nil, fmt.Errorf("%w: completed upload=%s attempt=%d->%d",
 				ErrAttemptMismatch, cmd.UploadID, session.AttemptNumber, cmd.AttemptNumber)
 		}
-		art, lerr := loadArtifactByID(ctx, s.db, session.ArtifactID)
+		art, lerr := s.artifactReader.GetByID(ctx, session.ArtifactID)
 		if lerr != nil {
 			return nil, lerr
 		}
@@ -160,15 +156,15 @@ func (s *Service) Finalize(ctx context.Context, cmd FinalizeArtifactCommand) (*s
 			ErrUploadStateInvalid, cmd.UploadID, session.Status)
 	}
 
-	// PR 3.5-a: delegate to the single atomic SUCCEEDED write on
-	// finRepo. FinalizeVerified expects:
+	// Delegate to the single atomic SUCCEEDED write on finalizeWriter.
+	// FinalizeVerified expects:
 	//   - upload_id in FINALIZING state (we just flipped it via CAS)
 	//   - worker_id + lease_id matching the session
 	//   - revision matching the job's expected revision
-	// It performs: jobs CAS → SUCCEEDED, artifacts CAS → READY, attempts
-	// CAS → SUCCEEDED, outbox events, delivery idempotent creation, and
-	// FINALIZING → COMPLETED on artifact_uploads — all in one tx.
-	out, err := s.finRepo.FinalizeVerified(ctx, FinalizeVerifiedCommand{
+	// It performs: jobs CAS → SUCCEEDED, artifacts CAS → READY,
+	// per-destination job_deliveries (idempotent), and FINALIZING →
+	// COMPLETED on artifact_uploads — all in one tx.
+	out, err := s.finalizeWriter.FinalizeVerified(ctx, FinalizeVerifiedCommand{
 		UploadID:         cmd.UploadID,
 		ArtifactID:       session.ArtifactID,
 		JobID:            cmd.JobID,
@@ -194,7 +190,7 @@ func (s *Service) Finalize(ctx context.Context, cmd FinalizeArtifactCommand) (*s
 			if dupErr := s.materializeDuplicateFinalBlob(storageKey, altStorageKey); dupErr != nil {
 				return nil, fmt.Errorf("artifacts: duplicate final blob fallback: %w", dupErr)
 			}
-			out, err = s.finRepo.FinalizeVerified(ctx, FinalizeVerifiedCommand{
+			out, err = s.finalizeWriter.FinalizeVerified(ctx, FinalizeVerifiedCommand{
 				UploadID:         cmd.UploadID,
 				ArtifactID:       session.ArtifactID,
 				JobID:            cmd.JobID,
@@ -296,8 +292,8 @@ func detectMIME(path string) string {
 	return http.DetectContentType(sniff[:n])
 }
 
-// NOTE: PR 3.5-a DELETED:
-//   - FinalizeArtifactAndCompleteJob (the giant ~250-line tx method)
-//     Replaced entirely by FinalizationRepository.FinalizeVerified.
-//   - emitOutboxTx                  (orphan)
-//     The finalization repo has its own emitOutboxTx inside the tx.
+// Historical methods no longer present:
+//   - FinalizeArtifactAndCompleteJob (~250-line tx method): replaced
+//     by FinalizationWriter.FinalizeVerified.
+//   - emitOutboxTx: orphan; the finalize writer handles tx-scoped
+//     outbox emission internally (legacy outbox events retired).

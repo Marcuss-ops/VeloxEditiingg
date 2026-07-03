@@ -3,13 +3,10 @@
 // prevents workers from unilaterally promoting an artifact or declaring
 // a job SUCCEEDED.
 //
-// PR 2 collapses this state machine into a single transactional step
-// (FinalizeArtifactAndCompleteJob) with CAS guards on jobs / artifacts /
-// job_attempts / job_deliveries / outbox_events.
-//
-// The public surface is intentionally small so the gRPC handler in
-// internal/grpcserver can be rewritten to call Service.Finalize and
-// Service.FinalizeArtifactAndCompleteJob without exposing any
+// The ArtifactVerifiedFinalize step collapses the state machine into a
+// single transactional step with CAS guards on jobs / artifacts /
+// job_deliveries. The public surface is intentionally small so
+// handlers (HTTP/gRPC) can call Service.Finalize without exposing any
 // underlying tx control.
 package artifacts
 

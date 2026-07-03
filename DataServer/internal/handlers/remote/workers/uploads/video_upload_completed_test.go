@@ -23,13 +23,12 @@ import (
 )
 
 // TestUploadCompletedVideo_ArtifactsPipeline exercises the /api/v1/video/upload-completed
-// handler end-to-end through the artifacts.Service + Finalization pipeline
-// (file-1/4 of the canonical-SQL-gateway migration). It deliberately does
+// handler end-to-end through artifacts.Service + FinalizationWriter. It deliberately does
 // NOT cover the Completion flow (Coordinator.CommitAttempt → task_attempts
 // SUCCEEDED): that path lives in the Completion package's integration tests
 // because the two flows mark different tables (jobs+artifacts here;
-// task_attempts in Completion) and the PR 3.5-a single-writer contract
-// forbids coupling them inside one test.
+// task_attempts in Completion) and the single-writer contract on
+// jobs.status='SUCCEEDED' forbids coupling them inside one test.
 func TestUploadCompletedVideo_ArtifactsPipeline(t *testing.T) {
 	tmp := t.TempDir()
 	dbPath := filepath.Join(tmp, "test.db")
@@ -58,14 +57,21 @@ func TestUploadCompletedVideo_ArtifactsPipeline(t *testing.T) {
 		t.Fatalf("blob store: %v", err)
 	}
 
-	// Migration note: store.NewSQLiteUploadRepository is the typed
-	// artifact_uploads + artifact_upload_chunks repository that
-	// replaced artifacts.NewSQLiteRepository during file-1/4 of the
-	// canonical-SQL-gateway migration. The Service / Finalization
-	// surfaces that wrap it stay inside the artifacts package.
+	// store.NewSQLiteUploadRepository is the typed artifact_uploads +
+	// artifact_upload_chunks CRUD surface. The artifacts-package
+	// Service composes it with three narrow writers behind
+	// UploadSessionWriter / FinalizationWriter / ArtifactReader.
 	repo := store.NewSQLiteUploadRepository(db)
-	finRepo := artifacts.NewSQLiteFinalizationRepository(db)
-	artifactSvc := artifacts.NewService(repo, finRepo, bs, db, nil)
+	artifactReader := artifacts.NewSQLiteArtifactReader(db)
+	artifactSvc := artifacts.NewService(
+		repo,
+		artifacts.NewSQLiteUploadSessionWriter(db),
+		artifacts.NewSQLiteFinalizeWriter(db, artifactReader, nil),
+		artifactReader,
+		bs,
+		db,
+		nil,
+	)
 
 	now := time.Now().UTC().Format(time.RFC3339)
 
@@ -75,8 +81,8 @@ func TestUploadCompletedVideo_ArtifactsPipeline(t *testing.T) {
 	revision := 3
 
 	// Seed job in RUNNING state.
-	// PR-01 (migration 048): assigned_to/lease_id/lease_expiry were
-	// dropped from the jobs table. Worker + lease identity now lives
+	// migration 048: assigned_to/lease_id/lease_expiry were dropped
+	// from the jobs table. Worker + lease identity now lives
 	// on task_attempts (per-attempt) — see the seedAttempt helper in
 	// service_test.go for the canonical pattern.
 	_, err = db.Exec(`
@@ -97,11 +103,9 @@ func TestUploadCompletedVideo_ArtifactsPipeline(t *testing.T) {
 		t.Fatalf("seed task: %v", err)
 	}
 
-	// Seed task_attempt in a non-terminal state. The legacy
-	// RENDER_FINISHED gate was retired alongside job_attempts; the
-	// canonical BeginUpload gate now accepts any non-terminal attempt
-	// (terminal → ErrAttemptNotRenderFinished, see service_test.go
-	// TestBeginUpload_WrongAttemptStatus).
+	// Seed task_attempt in a non-terminal state. BeginUpload now
+	// accepts any non-terminal attempt (terminal →
+	// ErrAttemptNotRenderFinished).
 	_, err = db.Exec(`
 		INSERT INTO task_attempts (id, task_id, attempt_number, worker_id, lease_id, status, started_at, created_at, updated_at)
 		VALUES (?, ?, 1, ?, ?, 'RUNNING', ?, ?, ?)`,
@@ -204,10 +208,9 @@ func TestUploadCompletedVideo_ArtifactsPipeline(t *testing.T) {
 	}
 
 	// task_attempts.status is NOT asserted here on purpose:
-	// the artifacts.FinalizeVerified flow marks jobs+artifacts
-	// (the canonical writer surface per PR 3.5-a), while the
-	// Completion flow (Coordinator.CommitAttempt) is the separate
-	// path that marks task_attempts via the UoW adapter's
+	// artifacts.FinalizeVerified marks jobs+artifacts (the canonical
+	// writer surface); Completion (Coordinator.CommitAttempt) is the
+	// separate path that marks task_attempts via the UoW adapter's
 	// TaskAttemptRepository.MarkSucceeded. The /api/v1/video/upload-completed
 	// handler triggers the artifacts path, not Completion; asserting
 	// task_attempts here would couple the two flows incorrectly.
@@ -243,8 +246,16 @@ func TestUploadCompletedVideo_BeginUploadRejected_MissingJob(t *testing.T) {
 	}
 
 	repo := store.NewSQLiteUploadRepository(db)
-	finRepo := artifacts.NewSQLiteFinalizationRepository(db)
-	artifactSvc := artifacts.NewService(repo, finRepo, bs, db, nil)
+	artifactReader := artifacts.NewSQLiteArtifactReader(db)
+	artifactSvc := artifacts.NewService(
+		repo,
+		artifacts.NewSQLiteUploadSessionWriter(db),
+		artifacts.NewSQLiteFinalizeWriter(db, artifactReader, nil),
+		artifactReader,
+		bs,
+		db,
+		nil,
+	)
 
 	cfg := &config.Config{Runtime: config.RuntimeConfig{DataDir: tmp}}
 
@@ -299,8 +310,16 @@ func TestUploadCompletedVideo_MissingVideo(t *testing.T) {
 	}
 
 	repo := store.NewSQLiteUploadRepository(db)
-	finRepo := artifacts.NewSQLiteFinalizationRepository(db)
-	artifactSvc := artifacts.NewService(repo, finRepo, bs, db, nil)
+	artifactReader := artifacts.NewSQLiteArtifactReader(db)
+	artifactSvc := artifacts.NewService(
+		repo,
+		artifacts.NewSQLiteUploadSessionWriter(db),
+		artifacts.NewSQLiteFinalizeWriter(db, artifactReader, nil),
+		artifactReader,
+		bs,
+		db,
+		nil,
+	)
 
 	cfg := &config.Config{Runtime: config.RuntimeConfig{DataDir: tmp}}
 

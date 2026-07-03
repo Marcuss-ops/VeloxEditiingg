@@ -19,7 +19,7 @@ import (
 )
 
 // Reconciler sweeps the artifacts state once and applies four cleanup
-// rules from the PR 2 spec:
+// rules from the verified-finalization spec:
 //
 //  1. upload scaduto + staging presente  --> elimina staging, status EXPIRED
 //  2. blob finale senza riga DB dopo 24h --> elimina
@@ -62,8 +62,7 @@ import (
 // (graceful shutdown). Reconcile(ctx) is the one-shot callable that
 // callers (tests, admin commands) can invoke.
 //
-// Migration: the per-session repository moved to internal/store during
-// file-1/4 of the canonical-SQL-gateway migration. The Reconciler
+// The per-session repository is store.UploadRepository. The Reconciler
 // still holds a *sql.DB because rules 2/3/4 use direct SELECT / UPDATE
 // on the artifacts + outbox_events tables (sql-allowlist marker at
 // the top of this file); Rule 1 alone uses the typed repo via
@@ -95,7 +94,7 @@ type ReconcilerConfig struct {
 	BatchLimit int
 }
 
-// DefaultReconcilerConfig matches the PR 2 spec defaults.
+// DefaultReconcilerConfig matches the verified-finalization spec defaults.
 func DefaultReconcilerConfig() ReconcilerConfig {
 	return ReconcilerConfig{
 		OrphanBlobAge:    24 * time.Hour,

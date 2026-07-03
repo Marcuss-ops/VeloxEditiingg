@@ -1,16 +1,16 @@
-// Package artifacts / success_path_test.go — PR 3.5-a behavioral
+// Package artifacts / success_path_test.go
 //
 // Black-box verification of the SPEC invariants that the verified
 // finalization contract enforces:
 //
 //  1. JobResult success alone does NOT promote jobs.status to
-//     SUCCEEDED — the FinalizationRepository interface is the ONLY
+//     SUCCEEDED — FinalizationWriter.FinalizeVerified is the ONLY
 //     surface producing that transition (no JobResult handler
 //     short-circuit on this side of the worker/master trust line).
 //
-//  2. LifecycleService PR3.Start / PR3Fail / PR3Cancel / PR3Renew
-//     cannot produce jobs.status='SUCCEEDED'. Verified by absence of
-//     any such method in the JobRepository interface and by the
+//  2. LifecycleService's Start / Fail / Cancel / Renew paths cannot
+//     produce jobs.status='SUCCEEDED'. Verified by absence of any
+//     such method in the JobRepository interface and by the
 //     finalization scan in scan_test.go (cross-file invariant).
 //
 //  3. Only the verified-artifact path (status='FINALIZING' upload
@@ -22,23 +22,15 @@
 //     refuses with ErrUploadNotFound and the tx rolls back — no
 //     SUCCEEDED leak.
 //
-//  5. An artifact whose status is still 'STAGING' (or any value
-//     other than the FINALIZING artifact_uploads status) cannot
-//     promote — Step 1's 'FINALIZING only' precondition rejects
-//     with ErrUploadStateInvalid.
-//
-//  6. If job_attempts.status is NOT 'RENDER_FINISHED' when Finalize
-//     is called, the Step 4 CAS returns 0 rows and the entire tx
-//     rolls back (no partial mutations of jobs / artifacts /
-//     outbox_events / job_deliveries).
+//  5. An artifact whose upload session status is anything other than
+//     'FINALIZING' cannot promote — Step 1's 'FINALIZING only'
+//     precondition rejects with ErrUploadStateInvalid.
 //
 // The "happy path" test (TestFinalizeVerified_HappyPath) covers the
 // inverse: with all preconditions met, Finalize produces precisely
-// one SUCCEEDED on jobs, READY on artifacts, SUCCEEDED on the
-// attempt, COMPLETED on the upload, and one delivery row per
-// destination — idempotent across concurrent finishers per the
-// UNIQUE constraints. Legacy outbox events (ARTIFACT_READY,
-// JOB_SUCCEEDED, DELIVERY_CREATED) were removed in PR #2.
+// one SUCCEEDED on jobs, READY on artifacts, COMPLETED on the
+// upload, and one delivery row per destination — idempotent across
+// concurrent finishers per the UNIQUE constraints.
 package artifacts_test
 
 import (
@@ -54,17 +46,17 @@ import (
 	"velox-server/internal/artifacts"
 )
 
-// minimalSchema covers the columns FinalizeVerified / CreateArtifactAndUploadSession
-// actually touch. Migrations are not required for this test — we are
-// validating the FinalizationRepository in isolation, not the wider store.
+// minimalSchema covers the columns FinalizeVerified /
+// CreateArtifactAndUploadSession actually touch. Migrations are not
+// required for this test — we are validating the
+// FinalizationWriter in isolation, not the wider store.
 //
-// PR-01 (post-migration 048): the runtime columns assigned_to,
-// lease_id, lease_expiry were DROPPED from `jobs` by migration 048.
-// Worker / lease identity for the upload pipeline now lives on
-// `job_attempts`. The fixture below reflects that contract so the
-// tests above exercise the SAME shape as the real store — fixing any
-// future regression where someone re-adds the dropped columns to the
-// jobs CAS chain by mistake.
+// migration 048: assigned_to / lease_id / lease_expiry were DROPPED
+// from `jobs`. Worker / lease identity for the upload pipeline now
+// lives on `task_attempts`. The fixture below reflects that
+// contract so the tests above exercise the SAME shape as the real
+// store — fixing any future regression where someone re-adds the
+// dropped columns to the jobs CAS chain by mistake.
 const minimalSchema = `
 CREATE TABLE jobs (
 	job_id        TEXT PRIMARY KEY,
@@ -159,6 +151,15 @@ func openTestDB(t *testing.T) *sql.DB {
 	return db
 }
 
+// newPersistenceStack wires the 2 SQLite writer components behind the
+// narrow artifact-package interfaces. Test callers discard via `_` the
+// one their test does not exercise.
+func newPersistenceStack(db *sql.DB) (artifacts.UploadSessionWriter, artifacts.FinalizationWriter) {
+	reader := artifacts.NewSQLiteArtifactReader(db)
+	return artifacts.NewSQLiteUploadSessionWriter(db),
+		artifacts.NewSQLiteFinalizeWriter(db, reader, nil)
+}
+
 // fixture represents a minimal valid scenario:
 // RUNNING job, RENDER_FINISHED attempt, STAGING artifact, CREATED upload.
 type fixture struct {
@@ -174,10 +175,10 @@ type fixture struct {
 func setupVerifiedPipelineFixture(t *testing.T, db *sql.DB, f fixture) {
 	t.Helper()
 	now := time.Now().UTC().Format(time.RFC3339)
-	// PR-01: jobs.assigned_to / lease_id columns were dropped in
-	// migration 048; the jobs seed only carries the columns that still
+	// migration 048: jobs.assigned_to / lease_id columns were
+	// dropped; the jobs seed only carries the columns that still
 	// exist. Worker / lease identity is seed-attached via the
-	// job_attempts INSERT immediately below.
+	// task_attempts INSERT immediately below.
 	if _, err := db.Exec(`INSERT INTO jobs
 		(job_id, status, revision, updated_at, migrated_at)
 		VALUES (?, 'RUNNING', ?, ?, ?)`,
@@ -214,7 +215,7 @@ func flipUploadToFinalizing(t *testing.T, db *sql.DB, uploadID string) {
 
 func TestFinalizeVerified_HappyPath(t *testing.T) {
 	db := openTestDB(t)
-	fin := artifacts.NewSQLiteFinalizationRepository(db)
+	_, fin := newPersistenceStack(db)
 
 	f := fixture{
 		JobID: "J1", WorkerID: "worker-1", LeaseID: "lease-1",
@@ -248,7 +249,7 @@ func TestFinalizeVerified_HappyPath(t *testing.T) {
 		t.Fatalf("artifact post-state wrong: %+v", art)
 	}
 
-	// PR 3.5-a: writer must STAMP the master-computed SHA256 / size /
+	// The writer stamps the master-computed SHA256 / size /
 	// storage_key / mime_type onto the artifact row before the tx
 	// commits. The returned *store.Artifact is what callers should
 	// observe, so verify the in-memory view matches what the caller
@@ -284,12 +285,11 @@ func TestFinalizeVerified_HappyPath(t *testing.T) {
 		t.Errorf("jobs.status = %s; want SUCCEEDED", jobStatus)
 	}
 
-	// cleanup/remove-job-attempts-runtime: the post-finalize assertion
-	// on job_attempts.status='SUCCEEDED' was retired alongside the
-	// legacy CAS chain. Per-attempt close-out is now driven by the
-	// task_attempts layer (canonical) — see internal/taskattempts for
-	// the equivalent contract. The verified-finalization contract here
-	// is [jobs.status='SUCCEEDED', artifact_uploads.status='COMPLETED',
+	// The post-finalize assertion on job_attempts.status='SUCCEEDED'
+	// was retired alongside the legacy CAS chain. Per-attempt close-out
+	// is driven by the task_attempts layer (canonical). The
+	// verified-finalization contract here is
+	// [jobs.status='SUCCEEDED', artifact_uploads.status='COMPLETED',
 	// artifacts.status='READY'].
 
 	// artifact_uploads COMPLETED.
@@ -311,15 +311,15 @@ func TestFinalizeVerified_HappyPath(t *testing.T) {
 		t.Errorf("job_deliveries primary count = %d; want 1", deliveryCount)
 	}
 
-	// Legacy outbox events (ARTIFACT_READY, JOB_SUCCEEDED,
-	// DELIVERY_CREATED) removed in PR #2. Verify the outbox table
-	// is empty — no spurious emissions from the decommissioned path.
+	// Legacy outbox emissions (ARTIFACT_READY, JOB_SUCCEEDED,
+	// DELIVERY_CREATED) are decommissioned. Verify the outbox table
+	// is empty — no spurious emissions from the retired path.
 	var nOutbox int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM outbox_events`).Scan(&nOutbox); err != nil {
 		t.Fatal(err)
 	}
 	if nOutbox != 0 {
-		t.Errorf("outbox events = %d; want 0 (legacy outbox emissions removed in PR #2)", nOutbox)
+		t.Errorf("outbox events = %d; want 0 (legacy outbox emissions retired)", nOutbox)
 	}
 }
 
@@ -329,7 +329,7 @@ func TestFinalizeVerified_HappyPath(t *testing.T) {
 
 func TestFinalizeVerified_NoArtifactUpload(t *testing.T) {
 	db := openTestDB(t)
-	fin := artifacts.NewSQLiteFinalizationRepository(db)
+	_, fin := newPersistenceStack(db)
 
 	f := fixture{
 		JobID: "J4", WorkerID: "worker-1", LeaseID: "lease-1",
@@ -380,7 +380,7 @@ func TestFinalizeVerified_NoArtifactUpload(t *testing.T) {
 
 func TestFinalizeVerified_StagingArtifactCannotPromote(t *testing.T) {
 	db := openTestDB(t)
-	fin := artifacts.NewSQLiteFinalizationRepository(db)
+	_, fin := newPersistenceStack(db)
 
 	f := fixture{
 		JobID: "J5", WorkerID: "worker-1", LeaseID: "lease-1",
@@ -423,27 +423,18 @@ func TestFinalizeVerified_StagingArtifactCannotPromote(t *testing.T) {
 }
 
 // =====================================================================
-// SPEC 6 (retired): cleanup/remove-job-attempts-runtime retired the
-// job_attempts.status='RENDER_FINISHED' gate. The corresponding
-// `Step 4 job_attempts CAS` no longer exists in FinalizeVerified.
-// Per-attempt close-out now lives on task_attempts (canonical) and
-// is driven by taskingestion.Ingest. The transaction rollback still
-// holds for any of the surviving preconditions:
+// The legacy job_attempts.status='RENDER_FINISHED' gate was retired;
+// the corresponding Step 4 job_attempts CAS no longer exists in
+// FinalizeVerified. Per-attempt close-out lives on task_attempts
+// (canonical). The transaction rollback still holds for any of the
+// surviving preconditions:
 //   - artifact_uploads.status != FINALIZING (Step 1: ErrUploadStateInvalid)
 //   - jobs.status not in (RUNNING, AWAITING_ARTIFACT) (Step 2: ErrTransitionConflict)
 //   - artifacts.status != STAGING (Step 3: ErrTransitionConflict)
-// so the rollback invariants are preserved. This test is kept as a
-// shape placeholder — the canonical followup is a task_attempts-based
-// "attempt not in canonical-task-active state" test in
-// internal/taskingestion.
-// =====================================================================// (TestFinalizeVerified_AttemptNotRenderFinishedRollsBack retired
+// so the rollback invariants are preserved.
+// (TestFinalizeVerified_AttemptNotRenderFinishedRollsBack retired
 // alongside the job_attempts CAS chain. See comment above.)
-//
-// Spec-invariant coverage now lives in:
-//   - internal/taskingestion: per-attempt close-out driven by
-//     TaskReportIngestionService.Ingest (which closes task_attempts
-//     to SUCCEEDED on the happy path).
-//   - spec invariants #1–#5 above (all still enforced here).
+// =====================================================================
 
 // =====================================================================
 // Guard: empty-identity calls are rejected before any DB work.
@@ -451,7 +442,7 @@ func TestFinalizeVerified_StagingArtifactCannotPromote(t *testing.T) {
 
 func TestFinalizeVerified_RequiresUploadArtifactJobIDs(t *testing.T) {
 	db := openTestDB(t)
-	fin := artifacts.NewSQLiteFinalizationRepository(db)
+	_, fin := newPersistenceStack(db)
 	ctx := context.Background()
 
 	cases := []artifacts.FinalizeVerifiedCommand{
@@ -481,9 +472,9 @@ func TestFinalizeVerified_RequiresUploadArtifactJobIDs(t *testing.T) {
 
 func TestCreateArtifactAndUploadSession_Atomic(t *testing.T) {
 	db := openTestDB(t)
-	fin := artifacts.NewSQLiteFinalizationRepository(db)
+	uw, _ := newPersistenceStack(db)
 
-	err := fin.CreateArtifactAndUploadSession(context.Background(),
+	err := uw.CreateArtifactAndUploadSession(context.Background(),
 		artifacts.CreateArtifactAndUploadSessionCommand{
 			ArtifactID:    "art-c1",
 			UploadID:      "up-c1",
@@ -514,9 +505,9 @@ func TestCreateArtifactAndUploadSession_Atomic(t *testing.T) {
 
 func TestCreateArtifactAndUploadSession_RequiresIdentityFields(t *testing.T) {
 	db := openTestDB(t)
-	fin := artifacts.NewSQLiteFinalizationRepository(db)
+	uw, _ := newPersistenceStack(db)
 
-	if err := fin.CreateArtifactAndUploadSession(context.Background(),
+	if err := uw.CreateArtifactAndUploadSession(context.Background(),
 		artifacts.CreateArtifactAndUploadSessionCommand{}); err == nil {
 		t.Error("expected error for empty command")
 	}
@@ -526,13 +517,32 @@ func TestCreateArtifactAndUploadSession_RequiresIdentityFields(t *testing.T) {
 // Constructor guards.
 // =====================================================================
 
-func TestNewSQLiteFinalizationRepository_NilDB(t *testing.T) {
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("expected panic on nil *sql.DB; constructor must fail loudly")
-		}
-	}()
-	artifacts.NewSQLiteFinalizationRepository(nil)
+func TestNewSQLiteArtifactComponentsPanicOnNilDB(t *testing.T) {
+	cases := []struct {
+		name string
+		fn   func()
+	}{
+		{"ArtifactReader", func() { artifacts.NewSQLiteArtifactReader(nil) }},
+		{"UploadSessionWriter", func() { artifacts.NewSQLiteUploadSessionWriter(nil) }},
+		{"FinalizeWriter_NilDB", func() {
+			r, err := sql.Open("sqlite3", ":memory:")
+			if err != nil {
+				t.Fatalf("open in-memory sqlite: %v", err)
+			}
+			defer r.Close()
+			artifacts.NewSQLiteFinalizeWriter(nil, artifacts.NewSQLiteArtifactReader(r), nil)
+		}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			defer func() {
+				if rec := recover(); rec == nil {
+					t.Errorf("[%s] expected panic on nil *sql.DB; constructor must fail loudly", c.name)
+				}
+			}()
+			c.fn()
+		})
+	}
 }
 
 // =====================================================================
@@ -542,15 +552,13 @@ func TestNewSQLiteFinalizationRepository_NilDB(t *testing.T) {
 func setupJobAndAttempt(t *testing.T, db *sql.DB, jobID, workerID, leaseID string, revision, attemptNum int) {
 	t.Helper()
 	now := time.Now().UTC().Format(time.RFC3339)
-	// PR-01: jobs.assigned_to / lease_id dropped in migration 048.
-	// cleanup/remove-job-attempts-runtime: the legacy
-	// INSERT INTO job_attempts below is retired along with the
-	// production writer surface. Per-attempt identity now lives on
-	// task_attempts (canonical); the verification-finalization
-	// assertions in this package no longer depend on a row in
-	// job_attempts. workerID / leaseID are unused by this helper
-	// post-cleanup but retained in the call signature for caller
-	// symmetry with newer helpers — arguments are simply ignored.
+	// migration 048: jobs.assigned_to / lease_id dropped. Per-attempt
+	// identity now lives on task_attempts (canonical); the
+	// verification-finalization assertions in this package no longer
+	// depend on a row in job_attempts. workerID / leaseID are unused
+	// by this helper post-cleanup but retained in the call signature
+	// for caller symmetry with newer helpers — arguments are simply
+	// ignored.
 	if _, err := db.Exec(`INSERT INTO jobs
 		(job_id, status, revision, updated_at, migrated_at)
 		VALUES (?, 'RUNNING', ?, ?, ?)`,
@@ -561,11 +569,13 @@ func setupJobAndAttempt(t *testing.T, db *sql.DB, jobID, workerID, leaseID strin
 
 // Compile-time interface checks.
 var (
-	_ artifacts.FinalizationRepository = (*artifacts.SQLiteFinalizationRepository)(nil)
+	_ artifacts.UploadSessionWriter    = (*artifacts.SQLiteUploadSessionWriter)(nil)
+	_ artifacts.FinalizationWriter     = (*artifacts.SQLiteFinalizeWriter)(nil)
+	_ artifacts.ArtifactReader         = (*artifacts.SQLiteArtifactReader)(nil)
 )
 
 // =====================================================================
-// PR-01: post-migration 048 behavior — the existing tests above use the
+// post-migration-048 behavior — the existing tests above use the
 // post-048 minimalSchema; the tests below additionally prove the CAS
 // chain holds BOTH for a sequential re-finalize attempt (correctly
 // rejects with ErrUploadStateInvalid) AND for two concurrent finalizers
@@ -581,7 +591,7 @@ const post048Schema = minimalSchema
 
 func openPost048TestDB(t *testing.T) *sql.DB {
 	t.Helper()
-	// PR-01: use a connection-shared in-memory DSN so concurrent
+	// migration 048: use a connection-shared in-memory DSN so concurrent
 	// goroutines land on the same underlying DB instance. The plain
 	// ":memory:" is private to each pooled connection in
 	// mattn/go-sqlite3, which would silently defeat
@@ -605,10 +615,9 @@ func openPost048TestDB(t *testing.T) *sql.DB {
 
 // seedPost048JobAndArtifact seeds a post-048 jobs row (no assigned_to /
 // lease_id) plus a STAGING artifact and a FINALIZING upload — ready for
-// one FinalizeVerified call. cleanup/remove-job-attempts-runtime: the
-// historical job_attempts INSERT that lived here was retired because
-// per-attempt identity is now the task_attempts canonical layer
-// (taskingestion.Ingest). Verification of worker/lease/attempt
+// one FinalizeVerified call. The historical job_attempts INSERT that
+// lived here was retired because per-attempt identity is now the
+// task_attempts canonical layer. Verification of worker/lease/attempt
 // identity in this fixture is implicit — the orchestrator-driven
 // FinalizeVerified path trusts the artifact_uploads CAS chain.
 func seedPost048JobAndArtifact(t *testing.T, db *sql.DB, f fixture) {
@@ -648,7 +657,7 @@ func seedPost048JobAndArtifact(t *testing.T, db *sql.DB, f fixture) {
 //  3. Exactly one delivery row is inserted (UNIQUE (artifact_id, destination_id)).
 func TestArtifactFinalize_Post048SchemaIdempotent(t *testing.T) {
 	db := openPost048TestDB(t)
-	fin := artifacts.NewSQLiteFinalizationRepository(db)
+	_, fin := newPersistenceStack(db)
 
 	f := fixture{
 		JobID: "J-post-048", WorkerID: "worker-7", LeaseID: "lease-7",
@@ -733,7 +742,7 @@ func TestArtifactFinalize_Post048SchemaIdempotent(t *testing.T) {
 // SUCCEEDED)".
 func TestArtifactFinalize_Post048RejectsConcurrentFinalize(t *testing.T) {
 	db := openPost048TestDB(t)
-	fin := artifacts.NewSQLiteFinalizationRepository(db)
+	_, fin := newPersistenceStack(db)
 
 	f := fixture{
 		JobID: "J-race", WorkerID: "worker-race", LeaseID: "lease-race",

@@ -1,5 +1,22 @@
-// sql-allowlist: artifacts service loadJob / loadAttempt + uniqueness-gate read paths inside the SUCCEEDED-write pipeline; the atomic jobs.status=SUCCEEDED tx is owned by SQLiteFinalizationRepository (single-writer enforced by scan_test.go). Future refactor candidate for the read paths via internal/store typed repos.
-
+// Package artifacts / service.go
+//
+// Master-side authority on artifact state transitions
+// (BeginUpload → Receive → Finalize). Three phase boundaries:
+//
+//   - BeginUpload — validation + atomic insert via UploadSessionWriter.
+//   - Receive     — streaming + master-computed hash + post-write verify
+//                   via the typed store.UploadRepository.
+//   - Finalize    — blob promotion + FinalizationWriter atomic tx
+//                   (sole jobs.status='SUCCEEDED' writer) +
+//                   ArtifactReader post-tx read.
+//
+// The Service is the only layer that computes SHA-256 / size from the
+// actual bytes — workers cannot influence the canonical storage_key,
+// the artifact status, or the job status; they can only REQUEST a
+// transition that the master authorizes + verifies. The canonical
+// atomic SUCCEEDED write lives on FinalizationWriter; this struct
+// holds a reference to the writer and cannot itself produce a
+// SUCCEEDED without going through the atomic tx.
 package artifacts
 
 import (
@@ -26,73 +43,79 @@ import (
 // sweeps both orphaned upload sessions and orphaned final blobs.
 const defaultUploadTTL = 24 * time.Hour
 
-// Service is the master-side authority on artifact state transitions.
+// Service composes three narrow persistence surfaces (uploadWriter +
+// finalizeWriter + artifactReader), the typed store.UploadRepository for
+// per-session reads + non-finalizing status transitions, and the
+// blob store for staging + final-blob IO.
 //
-// The Service exposes three methods:
-//   - BeginUpload   (Fase 1: validation + atomic insert of artifacts + artifact_uploads via finRepo)
-//   - Receive       (Fase 2: streaming + master hash + post-write verify)
-//   - Finalize      (Fase 3 + 4: orchestration — promote blob + delegate SUCCEEDED-tx to finRepo)
-//
-// The Service is the only layer that computes SHA-256 / size from the
-// actual bytes — workers cannot influence the canonical storage_key,
-// the artifact status, or the job status; they can only REQUEST a
-// transition that the master authorizes + verifies.
-//
-// PR 3.5-a: the canonical atomic SUCCEEDED write lives on
-// FinalizationRepository (single SQL transaction across jobs +
-// artifacts + job_attempts + outbox + delivery + artifact_uploads
-// flip). This struct holds the *reference* to that repo but cannot
-// itself produce a SUCCEEDED without going through the atomic tx.
-//
-// Migration: the per-session CRUD repository moved to
-// internal/store as store.UploadRepository during file-1/4 of the
-// canonical-SQL-gateway migration. The Service now depends on the
-// typed store interface; raw db.ExecContext calls only remain on
-// Service.loadJob / loadAttempt (read paths gated by the
-// sql-allowlist marker at the top of this file).
+// LoadJob / loadAttempt keep raw SQL because the typed store does not
+// expose these specific joins yet; they are read-only and audited by
+// the SQL-ownership shape guard.
 type Service struct {
-	repo      store.UploadRepository
-	finRepo   FinalizationRepository // NEW in PR 3.5-a: sole writer of jobs.status='SUCCEEDED'
-	blobStore store.BlobStore
-	db        *sql.DB
-	clock     clock.Clock
+	repo           store.UploadRepository
+	uploadWriter   UploadSessionWriter
+	finalizeWriter FinalizationWriter
+	artifactReader ArtifactReader
+	blobStore      store.BlobStore
+	db             *sql.DB
+	clock          clock.Clock
 
 	uploadTTL time.Duration
 }
 
 // NewService composes the dependencies Service needs.
 //
-// repo: artifact uploads CRUD (State machine + ReadOnly loads).
-// finRepo: atomic single-tx SUCCEEDED write + atomic artifacts+artifact_uploads insert.
-// blobStore: FilesystemBlobStore in production, NopBlobStore in tests.
+// All six deps are required. Each nil check panics so a misconfigured
+// compose fails fast on startup rather than silently producing no
+// SUCCEEDED.
 //
-// The same *sql.DB is shared so the finalization tx can join with the
-// concurrent update on artifact_uploads (step 7 of FinalizeVerified).
+//   - repo: per-session CRUD (state machine + read loads + chunks).
+//   - uploadWriter: atomic paired-insert of artifacts + artifact_uploads.
+//   - finalizeWriter: atomic verified-finalization tx; the sole legal
+//     writer of jobs.status='SUCCEEDED'.
+//   - artifactReader: read-only artifact projection; consumed by the
+//     idempotent COMPLETED path and downstream callers.
+//   - blobStore: FilesystemBlobStore in production, NopBlobStore in tests.
 //
-// PR 3.5-a: finRepo is REQUIRED. Panic if nil so a misconfigured compose
-// always flakes on startup instead of silently producing no SUCCEEDED.
-//
-// Migration note: the repo parameter is now store.UploadRepository
-// (typed SQLite CRUD for artifact_uploads). The repo is shared with
-// store.NewSQLiteUploadRepository(db) at the same *sql.DB so a future
-// in-tx UpdateUploadStatus call can join through the same handle.
-func NewService(repo store.UploadRepository, finRepo FinalizationRepository, blobStore store.BlobStore, db *sql.DB, c clock.Clock) *Service {
+// The four artifacts-package SQLite components share the same *sql.DB
+// so the finalize tx can join with concurrent updates on
+// artifact_uploads.
+func NewService(
+	repo store.UploadRepository,
+	uploadWriter UploadSessionWriter,
+	finalizeWriter FinalizationWriter,
+	artifactReader ArtifactReader,
+	blobStore store.BlobStore,
+	db *sql.DB,
+	c clock.Clock,
+) *Service {
 	if c == nil {
 		c = clock.System{}
 	}
 	if repo == nil {
 		panic("artifacts: NewService requires a non-nil UploadRepository")
 	}
-	if finRepo == nil {
-		panic("artifacts: NewService requires a non-nil FinalizationRepository (sole writer of jobs.status='SUCCEEDED')")
+	if uploadWriter == nil {
+		panic("artifacts: NewService requires a non-nil UploadSessionWriter")
+	}
+	if finalizeWriter == nil {
+		panic("artifacts: NewService requires a non-nil FinalizationWriter (sole writer of jobs.status='SUCCEEDED')")
+	}
+	if artifactReader == nil {
+		panic("artifacts: NewService requires a non-nil ArtifactReader")
+	}
+	if blobStore == nil {
+		panic("artifacts: NewService requires a non-nil BlobStore")
 	}
 	return &Service{
-		repo:      repo,
-		finRepo:   finRepo,
-		blobStore: blobStore,
-		db:        db,
-		clock:     c,
-		uploadTTL: defaultUploadTTL,
+		repo:           repo,
+		uploadWriter:   uploadWriter,
+		finalizeWriter: finalizeWriter,
+		artifactReader: artifactReader,
+		blobStore:      blobStore,
+		db:             db,
+		clock:          c,
+		uploadTTL:      defaultUploadTTL,
 	}
 }
 
@@ -149,16 +172,15 @@ func (c *countingWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// jobState captures the columns BeginUpload / Finalize need from `jobs`.
-// Loaded with a single SELECT, then checked against the BeginUpload
-// auth fields in one place.
+// jobState captures the columns BeginUpload / Finalize need from
+// `jobs`. Loaded with a single SELECT, then checked against the
+// BeginUpload auth fields in one place.
 //
-// PR-01 (post-migration 048): the columns assigned_to, lease_id,
-// lease_expiry were dropped from `jobs`. Worker / lease identity now
-// lives on task_attempts (PR 4/5) and on the artifact_uploads CAS chain
-// (PR 3.5-a). The jobs row only carries status and revision in this
-// code path — auth is verified after loadJob at the artifact_uploads
-// and job_attempts layers.
+// migration 048 dropped assigned_to, lease_id, lease_expiry from
+// `jobs`. Worker / lease identity lives on task_attempts and on the
+// artifact_uploads CAS chain. The jobs row only carries status and
+// revision in this code path — auth is verified after loadJob at the
+// artifact_uploads and task_attempts layers.
 type jobState struct {
 	status   string
 	revision int
@@ -182,12 +204,15 @@ func (s *Service) loadJob(ctx context.Context, jobID string) (*jobState, error) 
 	return &j, nil
 }
 
-// loadAttempt reads auth-relevant columns of a `job_attempts` row.
+// loadAttempt reads auth-relevant columns of a `task_attempts` row.
 //
-// PR-01: post-migration 048, this is the canonical source of
-// worker_id / lease_id / attempt identity for the upload pipeline.
-// Anywhere else still selects assigned_to / lease_id from jobs WILL
-// FAIL because those columns are gone.
+// This is the canonical source of worker_id / lease_id / attempt
+// identity for the upload pipeline (migration 048 dropped those
+// columns from jobs). Anywhere else still selects assigned_to /
+// lease_id from jobs WILL FAIL because those columns are gone.
+//
+// NOTE: the function name is historical (pre-migration 048 it queried
+// job_attempts); the SQL now reads task_attempts joined to tasks.
 func (s *Service) loadAttempt(ctx context.Context, jobID string, attemptNumber int) (status, workerID, leaseID string, err error) {
 	row := s.db.QueryRowContext(ctx,
 		`SELECT COALESCE(ta.status, ''), COALESCE(ta.worker_id, ''), COALESCE(ta.lease_id, '')
@@ -225,35 +250,12 @@ func verifyStagedBlob(path string) (string, int64, error) {
 	return fmt.Sprintf("%x", h.Sum(nil)), n, nil
 }
 
-// loadArtifactByID is a small helper used by Finalize's idempotent
-// COMPLETED path.
-func loadArtifactByID(ctx context.Context, db *sql.DB, id string) (*store.Artifact, error) {
-	row := db.QueryRowContext(ctx, `
-		SELECT id, job_id, COALESCE(attempt_id, 0), type, storage_provider,
-		       COALESCE(storage_key, ''), COALESCE(storage_url, ''),
-		       COALESCE(local_path, ''), COALESCE(sha256, ''),
-		       COALESCE(size_bytes, 0), COALESCE(duration_seconds, 0),
-		       status, COALESCE(verified_at, ''), created_at
-		FROM artifacts WHERE id = ?`, id)
-	var a store.Artifact
-	var verifiedAt string
-	if err := row.Scan(&a.ID, &a.JobID, &a.AttemptID, &a.Type, &a.StorageProvider,
-		&a.StorageKey, &a.StorageURL, &a.LocalPath, &a.SHA256,
-		&a.SizeBytes, &a.DurationSeconds, &a.Status, &verifiedAt, &a.CreatedAt); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("loadArtifactByID: %w", err)
-	}
-	return &a, nil
-}
-
 // isNoSuchTable returns true when err is the SQLite "no such table"
 // / "no such column" error. Used to soft-skip over schema-roll phases
 // where outbox_events / job_deliveries may not yet exist.
 //
-// PR 3.5-a: KEEP this helper. The reconciler (reconciler.go) uses it
-// for the cleanup queries that have to tolerate partial-migration DBs.
+// The reconciler (reconciler.go) uses this for the cleanup queries
+// that have to tolerate partial-migration DBs.
 func isNoSuchTable(err error) bool {
 	if err == nil {
 		return false
@@ -270,12 +272,13 @@ func isNoSuchTable(err error) bool {
 
 // BeginUpload authorizes a worker-side upload session.
 //
-// Validation gates (PR 2 spec, Fase 1):
+// Validation gates:
 //   - job.status = RUNNING
-//   - job.assigned_to = worker_id
-//   - job.lease_id    = lease_id, lease not expired
+//   - job.assigned_to = worker_id (was removed; checked via loadAttempt)
+//   - job.lease_id    = lease_id, lease not expired (was removed;
+//                        checked via loadAttempt)
 //   - job.revision    = expected_revision
-//   - attempt.status  = RENDER_FINISHED, owner + lease match the job's
+//   - attempt.status  non-terminal (any RENDER_FINISHED / RUNNING / etc.)
 //   - no other artifact of the requested kind for this job is READY
 //
 // On success the artifacts + artifact_uploads rows are inserted
@@ -298,12 +301,11 @@ func (s *Service) BeginUpload(ctx context.Context, cmd BeginUploadCommand) (*sto
 	if job.status != string(store.JobStatusRunning) {
 		return nil, fmt.Errorf("%w: job=%s status=%s", ErrJobNotRunning, cmd.JobID, job.status)
 	}
-	// PR-01: assigned_to/lease_id/lease_expiry from jobs were dropped in
-	// migration 048. Worker + lease identity is verified at attempt
-	// level via loadAttempt below, and at the artifact_uploads CAS
-	// chain in FinalizeVerified. Lease expiry moves to PR-05
-	// (tasks.lease_expires_at). Keeping the lease_expiry check here
-	// would have resolved a column that no longer exists.
+	// migration 048: assigned_to/lease_id/lease_expiry from jobs were
+	// dropped. Worker + lease identity is verified at attempt level
+	// via loadAttempt below, and at the artifact_uploads CAS chain
+	// in FinalizeVerified. Keeping a lease_expiry check here would
+	// reference a column that no longer exists.
 	if cmd.ExpectedRevision != 0 && job.revision != cmd.ExpectedRevision {
 		return nil, fmt.Errorf("%w: job=%s revision=%d want=%d",
 			ErrRevisionMismatch, cmd.JobID, job.revision, cmd.ExpectedRevision)
@@ -323,14 +325,12 @@ func (s *Service) BeginUpload(ctx context.Context, cmd BeginUploadCommand) (*sto
 			ErrLeaseInvalid, cmd.JobID, cmd.AttemptNumber)
 	}
 	attStatus = strings.ToUpper(strings.TrimSpace(attStatus))
-	// cleanup/remove-job-attempts-runtime: the legacy
-	// RENDER_FINISHED/PROCESSING check from the job_attempts enum is
-	// gone. task_attempts lifecycle is PENDING → RUNNING → SUCCEEDED
-	// (closes on taskingestion.Ingest via TransitionTaskToTerminalAtomic);
-	// artifacts BeginUpload runs WHILE the task_attempts is
-	// non-terminal (worker active) and stamps its worker_id +
-	// lease_id into artifact_uploads. A terminal state on the
-	// attempt is the failure signal — accept any non-terminal.
+	// task_attempts lifecycle is PENDING → RUNNING → SUCCEEDED
+	// (closes on ingester via the atomic transition). BeginUpload
+	// runs WHILE task_attempts is non-terminal (worker active) and
+	// stamps worker_id + lease_id into artifact_uploads. A terminal
+	// state on the attempt is the failure signal — accept any
+	// non-terminal.
 	if attStatus == string(taskattempts.AttemptStatusSucceeded) ||
 		attStatus == string(taskattempts.AttemptStatusFailed) ||
 		attStatus == string(taskattempts.AttemptStatusCancelled) ||
@@ -353,7 +353,7 @@ func (s *Service) BeginUpload(ctx context.Context, cmd BeginUploadCommand) (*sto
 			ErrDuplicateReadyArtifact, cmd.JobID, cmd.Kind, existingID)
 	}
 
-	// ----- 4. allocate ids + temp key + atomic insert via finRepo -----
+	// ----- 4. allocate ids + temp key + atomic insert via uploadWriter -----
 	now := s.clock.Now()
 	uploadID, err := identity.NewHex128()
 	if err != nil {
@@ -365,10 +365,8 @@ func (s *Service) BeginUpload(ctx context.Context, cmd BeginUploadCommand) (*sto
 	}
 	tempKey := stagingTempKey(s.blobStore, uploadID)
 
-	// PR 3.5-a: atomic insert of artifacts + artifact_uploads via finRepo.
-	// The previous two-step pattern (artifacts INSERT + repo.CreateUploadSession)
-	// left STAGING rows orphaned when the upload INSERT failed.
-	if err := s.finRepo.CreateArtifactAndUploadSession(ctx, CreateArtifactAndUploadSessionCommand{
+	// Atomic insert of artifacts + artifact_uploads via UploadSessionWriter.
+	if err := s.uploadWriter.CreateArtifactAndUploadSession(ctx, CreateArtifactAndUploadSessionCommand{
 		ArtifactID:          artifactID,
 		UploadID:            uploadID,
 		JobID:               cmd.JobID,

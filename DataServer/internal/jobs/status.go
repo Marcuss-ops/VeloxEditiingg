@@ -14,14 +14,14 @@
 //	                                ↓
 //	                            FAILED
 //
-// PR-02: AWAITING_ARTIFACT was added between RUNNING and SUCCEEDED so
-// that handleTaskResult's maybeTransitionJob can mark "all tasks
-// succeeded" without writing the terminal SUCCEEDED itself. The actual
-// SUCCEEDED flip is reserved for the verified-finalization path
-// (`internal/artifacts/sqlite_finalization_repository.go`), which is
-// audited by `internal/artifacts/scan_test.go`. This makes Job-level
-// CAS writers deterministic and eliminates §P0.2 (two competing
-// SUCCEEDED writers). AWAITING_ARTIFACT is NOT terminal — the artifact
+// AWAITING_ARTIFACT was added between RUNNING and SUCCEEDED so the
+// maybeTransitionJob roll-up can mark "all tasks succeeded" without
+// writing the terminal SUCCEEDED itself. The actual SUCCEEDED flip is
+// reserved for the verified-finalization path
+// (`internal/artifacts/sqlite_finalize_writer.go`), audited by
+// `internal/artifacts/scan_test.go`. This makes Job-level CAS writers
+// deterministic (sole SUCCEEDED writer). AWAITING_ARTIFACT is NOT
+// terminal — the artifact
 // can still fail, transition to FAILED via artifact-timeout, or be
 // CANCELLED.
 package jobs

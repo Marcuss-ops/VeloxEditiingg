@@ -414,7 +414,7 @@ func (s *TaskReportIngestionService) IngestTaskResult(ctx context.Context, cmd I
 	// line maps to exactly one Job SetStatus write).
 	//
 	//   * AWAITING_ARTIFACT — the audit contract binds verified-finalization
-	//     (`artifacts/sqlite_finalization_repository.go`) downstream;
+	//     (`artifacts/sqlite_finalize_writer.go`) downstream;
 	//     a "forward-to-finalization" emission lets operators grep
 	//     Job arrivals at the verified-finalization gate.
 	//   * FAILED            — observability breadcrumb ONLY. The stuck-STAGING

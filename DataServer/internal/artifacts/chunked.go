@@ -57,12 +57,11 @@ type ChunkState struct {
 // It wraps the canonical artifacts.Service pipeline (BeginUpload → Receive → Finalize)
 // with chunk-level persistence via artifact_upload_chunks.
 //
-// Migration note: the per-session + per-chunk CRUD repository moved to
-// internal/store as store.UploadRepository during file-1/4 of the
-// canonical-SQL-gateway migration. The chunk service depends on the
-// typed store interface for chunktable + resumable state; raw SQL
-// stays only on the writer-finalize path inside the artifacts package
-// (the chunk file IO + assembly IO).
+// The per-session + per-chunk CRUD repository is
+// store.UploadRepository; the chunk service depends on it for
+// chunktable + resumable state. Raw SQL stays only on the
+// writer-finalize path inside the artifacts package (the chunk file
+// IO + assembly IO).
 type ChunkedUploadService struct {
 	artifactSvc *Service
 	repo        store.UploadRepository

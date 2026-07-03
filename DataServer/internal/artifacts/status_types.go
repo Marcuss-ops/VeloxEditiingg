@@ -2,13 +2,12 @@ package artifacts
 
 // ── Artifact statuses (artifacts table) ──────────────────────────────────────
 //
-// Upload-status enum (UploadStatus + UploadCreated etc.) migrated to
-// store/artifact_uploads.go during file-1/4 of the canonical-SQL-gateway
-// migration. Callers in this package now use store.UploadStatus /
-// store.UploadCreated etc. The ArtifactStatus + AttemptStatus blocks
-// below stay because their typed values are consumed via
-// taskattempts.AttemptStatusXxx + storage.go string comparisons, and
-// neither table is owned by a typed repository yet.
+// Upload-status enum (UploadStatus + UploadCreated etc.) lives on
+// store.UploadStatus in internal/store. Callers in this package
+// reference store.UploadCreated etc. directly. The ArtifactStatus +
+// AttemptStatus blocks below stay because their typed values are
+// consumed via taskattempts.AttemptStatusXxx + storage.go string
+// comparisons, and neither table is owned by a typed repository yet.
 
 // ArtifactStatus is the typed status for artifact rows.
 type ArtifactStatus string

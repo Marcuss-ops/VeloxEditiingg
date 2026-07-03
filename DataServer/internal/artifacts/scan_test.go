@@ -1,4 +1,4 @@
-// Package artifacts / scan_test.go — PR 3.5-a invariant.
+// Package artifacts / scan_test.go
 //
 // The SQL fragment  `SET status = 'SUCCEEDED'`  is the spec's atomic
 // CAS that flips a status to SUCCEEDED. The contract enforced here is
@@ -27,14 +27,11 @@ import (
 	"testing"
 )
 
-// cleanup/remove-job-attempts-runtime: forbid any writer on the
-// job_attempts table (case-insensitive, whitespace-tolerant).
-// Tracks every INSERT/UPDATE on job_attempts. The runtime writer
-// surface was removed (InsertJobAttempt / InsertJobAttemptTx /
-// UpdateJobAttemptStatus on store/store_attempts.go); no production
-// code path is allowed to revive it. READS are still permitted
-// (job_attempts.GetJobAttempts + the postgres-side started_at lookup
-// in postgres_jobs_repository.go) — SELECT is not in the regex.
+// forbid any writer on job_attempts (case-insensitive,
+// whitespace-tolerant). The runtime INSERT/UPDATE surface on
+// job_attempts has been removed (per-attempt identity lives on
+// task_attempts). READS are still permitted (SELECT is not in the
+// regex).
 var forbiddenJobAttemptsWrite = regexp.MustCompile(`(?i)(INSERT\s+INTO|UPDATE)\s+job_attempts\b`)
 
 // forbiddenSUCCEEDEDWrite is the SQL fragment we forbid outside the
@@ -45,22 +42,20 @@ var forbiddenSUCCEEDEDWrite = regexp.MustCompile(`(?i)SET\s+status\s*=\s*['"]SUC
 // allowedWriters is the EXPLICIT audited allowlist of files that
 // legitimately contain `SET status='SUCCEEDED'`.
 //
-// PR 3.5-a's sole-writer contract is JOBS-TABLE-SPECIFIC: only
-// sqlite_finalization_repository.go may flip jobs.status='SUCCEEDED'.
-// The other entries here are SEPARATE LIFECYCLES that the migration
-// does NOT touch — listing them explicitly records the audit trail
-// so a future regression that DOES target jobs.status is detected.
+// Sole-writer contract: only sqlite_finalize_writer.go may flip
+// jobs.status='SUCCEEDED'. The other entries here are SEPARATE
+// lifecycles (delivery, workflow) — listing them explicitly records
+// the audit trail so a future regression that DOES target jobs.status
+// is detected.
 //
 // Keyed by absolute relative path (NOT basename) so a copy-paste
 // regression in a subpackage is NOT silently allowed.
 var allowedWriters = map[string]bool{
-	// PR 3.5-a legal writer of jobs.status='SUCCEEDED' (verified
-	// finalization: jobs CAS + job_attempts CAS in single tx).
-	filepath.Join("internal", "artifacts", "sqlite_finalization_repository.go"): true,
-	// Phase 2.5: Coordinator.CommitAttempt is the canonical atomic
-	// SUCCEEDED tx writer for tasks + task_attempts + jobs. Listed
-	// alongside sqlite_finalization_repository.go during the
-	// cutover window; Phase 6.6 retires the legacy writer.
+	// Sole writer of jobs.status='SUCCEEDED' for the verified-
+	// finalization lifecycle (sole-writer enforced by scan_test.go).
+	filepath.Join("internal", "artifacts", "sqlite_finalize_writer.go"): true,
+	// Coordinator.CommitAttempt is the canonical atomic SUCCEEDED tx
+	// writer for tasks + task_attempts + jobs in the Completion flow.
 	filepath.Join("internal", "completion", "coordinator.go"): true,
 	// UoW adapter: the SQL gateway the coordinator speaks through
 	// (six typed repos bound to a single *sql.Tx). The
@@ -75,17 +70,15 @@ var allowedWriters = map[string]bool{
 	// Interface + commands: contains the regex literal in a doc
 	// comment EXPLAINING the contract. No executable SQL update.
 	filepath.Join("internal", "artifacts", "finalization_repository.go"): true,
-	// store_assembly.go's CompleteJobTx was removed in PR 3.5-b.
-	// The only writer of jobs.status='SUCCEEDED' is now
-	// sqlite_finalization_repository.go.
+	// store_assembly.go's CompleteJobTx was removed. The only writer
+	// of jobs.status='SUCCEEDED' in this package layer is now
+	// sqlite_finalize_writer.go.
 	// SEPARATE lifecycle: UPDATE job_deliveries SET status='SUCCEEDED'
-	// is delivery-completion (NOT jobs). PR 3.5-a does NOT touch
-	// delivery completion.
+	// is delivery-completion (NOT jobs).
 	filepath.Join("internal", "store", "store_deliveries.go"):       true,
 	filepath.Join("internal", "store", "store_deliveries_lease.go"): true,
 	// SEPARATE lifecycles: UPDATE workflow_steps / workflow_runs SET
 	// status='SUCCEEDED' is workflow-completion (NOT jobs).
-	// PR 3.5-a does NOT touch workflow completion.
 	filepath.Join("internal", "workflow", "sqlite_repository.go"):         true,
 	filepath.Join("internal", "workflow", "sqlite_repository_queries.go"): true,
 	filepath.Join("internal", "workflow", "sqlite_repository_steps.go"):   true,
@@ -104,28 +97,10 @@ var allowedTestFiles = map[string]bool{
 }
 
 // allowedJobAttemptsLegacyWriters is the explicit allowlist of files
-// that legitimately contain `INSERT INTO job_attempts` or
-// `UPDATE job_attempts` SQL fragments AFTER
-// cleanup/remove-job-attempts-runtime.
-//
-// After the cleanup, only:
-//  1. .sql migration files that historically created the table (still
-//     needed to provision the schema for backwards compat loads) —
-//     but Go source files don't apply.
-//  2. Test fixtures that pre-populate the table for smoke tests of
-//     read-side consumers (postgres_jobs_repository.go historic lease
-//     proxy lookup).
-//
-// Production source MUST stay empty here. If you find yourself adding
-// to this map for a new writer, you are reintroducing the runtime
-// surface that this PR explicitly retired.
-//
-// NOTE: success_path_test.go (a previously-allowlisted file) retired
-// the legacy job_attempts INSERTs alongside the production
-// FinalizeVerified step 4 cleanup — successful-finalization no
-// longer needs an attempt row in either job_attempts or
-// artifact_uploads; the canonical attempt identity is on task_attempts.
-// shrink the audit surface by the same number of DDL rows dropped.
+// that legitimately contain INSERT/UPDATE on job_attempts. Only test
+// fixtures pre-populate the table for smoke tests of read-side
+// consumers. Production source MUST stay empty here — adding a new
+// entry reintroduces the retired runtime writer surface.
 var allowedJobAttemptsLegacyWriters = map[string]bool{
 	filepath.Join("internal", "artifacts", "scan_test.go"):                                                  true,
 	filepath.Join("internal", "artifacts", "service_test.go"):                                               true,
@@ -253,20 +228,17 @@ func TestSucceededWriterIsFinalizationOnly(t *testing.T) {
 }
 
 // TestSucceededWriterCount guards the canonical writer's SUCCEEDED-flip
-// count. The verified-finalization contract requires:
+// count. Tripwire bounds:
 //
-//   - At least 2 distinct `SET status='SUCCEEDED'` statements
-//     (jobs.status and job_attempts.status), so simply deleting the
-//     job_attempts CAS would drop the count below the contract.
-//   - At most a small upper bound — typically 2 — so an accidental
-//     copy-paste regression inside the writer is detected.
+//   - At least 1 distinct `SET status='SUCCEEDED'` statement (jobs).
+//   - At most a small upper bound — small ceiling to catch a
+//     accidental copy-paste regression inside the writer.
 //
-// If you add a 3rd legitimate flips inside FinalizeVerified, UPDATE
-// THIS TEST (with reasoning) — the test is a tripwire, not a
-// permanent spec.
+// If you add a legitimate 3rd flip, UPDATE this test (with
+// reasoning) — the bound is a tripwire, not a permanent spec.
 func TestSucceededWriterCount(t *testing.T) {
 	root := findInternalRoot(t)
-	path := filepath.Join(root, "internal", "artifacts", "sqlite_finalization_repository.go")
+	path := filepath.Join(root, "internal", "artifacts", "sqlite_finalize_writer.go")
 	b, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read writer: %v", err)
@@ -274,9 +246,8 @@ func TestSucceededWriterCount(t *testing.T) {
 	matches := forbiddenSUCCEEDEDWrite.FindAll(b, -1)
 
 	const (
-		// cleanup/remove-job-attempts-runtime: the legacy job_attempts
-		// CAS was removed from FinalizeVerified — the canonical
-		// SUCCEEDED write is now solely the jobs CAS.
+		// The legacy job_attempts CAS was removed from FinalizeVerified;
+	// the canonical SUCCEEDED write is solely the jobs CAS.
 		minExpected = 1
 		maxExpected = 3 // small ceiling: catch accidental duplicate writers
 	)
@@ -295,14 +266,11 @@ func TestSucceededWriterCount(t *testing.T) {
 	}
 }
 
-// TestNoJobAttemptsWriter: cleanup/remove-job-attempts-runtime
-// enforces that no production .go file under internal/ contains
-// `INSERT INTO job_attempts` or `UPDATE job_attempts` SQL fragments.
-// Test fixtures are explicitly allowlisted.
+// TestNoJobAttemptsWriter: enforce that no production .go file under
+// internal/ contains INSERT INTO job_attempts or UPDATE job_attempts
+// SQL fragments. Test fixtures are explicitly allowlisted.
 //
-// READS (SELECT) are not in the regex — the postgres-side
-// RequeueExpiredLeases path is a read consumer awaiting its own
-// decommissioning (PR-07 follow-up).
+// READS (SELECT) are not in the regex.
 func TestNoJobAttemptsWriter(t *testing.T) {
 	root := findInternalRoot(t)
 	internalDir := filepath.Join(root, "internal")
@@ -341,7 +309,7 @@ func TestNoJobAttemptsWriter(t *testing.T) {
 	}
 	if len(violations) > 0 {
 		t.Fatalf("`INSERT INTO job_attempts` / `UPDATE job_attempts` SQL writer detected outside the legacy-fixture allowlist.\n"+
-			"cleanup/remove-job-attempts-runtime: the runtime writer surface has been retired. Per-attempt identity lives on task_attempts.\n"+
+			"the runtime writer surface on job_attempts has been retired. Per-attempt identity lives on task_attempts.\n"+
 			"Offending files (must be added to allowedJobAttemptsLegacyWriters with a documenting comment, "+
 			"OR rewritten to use task_attempts):\n"+
 			"  %v", violations)

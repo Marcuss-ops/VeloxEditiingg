@@ -1,21 +1,11 @@
-// Package artifacts / upload_commands.go
+// Package artifacts / upload_commands.go — Service inputs/outputs for
+// upload-session I/O. These contracts are NOT Repository I/O: callers
+// in handlers always construct them and pass them to Service methods.
 //
-// Upload-session I/O contracts (Service inputs/outputs). These types
-// used to live in artifacts/uploads.go alongside the SQLiteRepository
-// implementation. After file-1/4 of the canonical-SQL-gateway
-// migration moved the SQLiteRepository to store/artifact_uploads.go,
-// these contracts remain in the artifacts package because:
-//
-//   - They are NOT Repository I/O. The Repository never sees
-//     BeginUploadCommand or FinalizeArtifactCommand; callers always
-//     construct them in handlers and pass them to Service methods.
-//   - The ReceiveResult is what Service.Receive returns; it never
-//     comes back from any DB query.
-//
-// Migration note: hold these types in a dedicated file (rather than
-// inlining into service.go / service_receive.go / service_finalize.go)
-// so a future refactor that consolidates upload I/O can find them
-// without grepping across the three Service files.
+// Hold these types in a dedicated file (rather than inlining into
+// service.go / service_receive.go / service_finalize.go) so a future
+// refactor that consolidates upload I/O can find them without
+// grepping across the three Service files.
 package artifacts
 
 import "time"
@@ -45,7 +35,8 @@ type BeginUploadCommand struct {
 // FinalizeArtifactCommand is the master-side adapter from the gRPC
 // ArtifactUploaded message. It carries ONLY the IDs / auth fields —
 // the legacy `artifact_path`, `artifact_size`, `sha256` fields are
-// ignored because they cannot be trusted (see PR 2 spec, Fase 4).
+// ignored because they cannot be trusted (the master recomputes SHA
+// and size from the streamed bytes).
 type FinalizeArtifactCommand struct {
 	UploadID         string
 	JobID            string
@@ -55,16 +46,11 @@ type FinalizeArtifactCommand struct {
 	ExpectedRevision int
 }
 
-// PR 3.5-a: FinalizeArtifactAndCompleteJobCommand has been REMOVED.
-// The single legal writer of jobs.status = 'SUCCEEDED' is now the
-// artifacts.FinalizationRepository.FinalizeVerified method (see
-// internal/artifacts/sqlite_finalization_repository.go). Use
+// FinalizeArtifactAndCompleteJobCommand has been REMOVED. The single
+// legal writer of jobs.status = 'SUCCEEDED' is now the
+// artifacts.FinalizationWriter.FinalizeVerified method (see
+// internal/artifacts/sqlite_finalize_writer.go). Use
 // artifacts.FinalizeVerifiedCommand + Service.Finalize.
-//
-// Historically this struct lived in artifacts/uploads.go so
-// service.go's FinalizeArtifactAndCompleteJob method could use it
-// directly; that method itself was deleted as part of the same
-// migration.
 
 // ReceiveResult is what Service.Receive returns after streaming bytes.
 //

@@ -1,6 +1,6 @@
 // Package artifacts / service_test.go
 //
-// PR 2 chunk 6: integration tests for the artifacts.Service trust boundary.
+// Integration tests for the artifacts.Service trust boundary.
 //
 // Each test owns a file-backed SQLite DB in t.TempDir() with all
 // SQLite-schema migrations applied (via migrations.RunMigrations against
@@ -44,14 +44,16 @@ const (
 )
 
 type testEnv struct {
-	t      *testing.T
-	db     *sql.DB
-	bs     store.BlobStore
-	svc    *Service
-	repo   store.UploadRepository
-	fin    FinalizationRepository
-	clock  *manualClock
-	tmpDir string
+	t           *testing.T
+	db          *sql.DB
+	bs          store.BlobStore
+	svc         *Service
+	repo        store.UploadRepository
+	uploadWriter   UploadSessionWriter
+	finalizeWriter FinalizationWriter
+	artifactReader ArtifactReader
+	clock       *manualClock
+	tmpDir      string
 }
 
 // manualClock satisfies Clock for tests; advance via Advance().
@@ -103,24 +105,25 @@ func setupTestEnv(t *testing.T) *testEnv {
 	require.NoError(t, err, "NewFilesystemBlobStore")
 
 	clk := newManualClock()
-	// Migration note: store.NewSQLiteUploadRepository is the typed
-	// artifact_uploads + artifact_upload_chunks repository that
-	// replaced NewSQLiteRepository during file-1/4 of the
-	// canonical-SQL-gateway migration. Sharing the same *sql.DB
-	// ensures the finalization tx can still join with the concurrent
-	// UpdateUploadStatus on artifact_uploads.
+	// store.NewSQLiteUploadRepository is the typed artifact_uploads +
+	// artifact_upload_chunks CRUD surface. Sharing the same *sql.DB
+	// with the artifacts-package writers lets the finalize tx join
+	// with concurrent UpdateUploadStatus on artifact_uploads.
 	repo := store.NewSQLiteUploadRepository(db)
-	// PR 3.5-a: FinalizationRepository is REQUIRED by NewService. Sharing
-	// the same *sql.DB ensures the finalization tx can join with the
-	// concurrent update on artifact_uploads (FinalizeVerified step 7).
-	fin := NewSQLiteFinalizationRepository(db)
-	svc := NewService(repo, fin, bs, db, clk)
+	artifactReader := NewSQLiteArtifactReader(db)
+	uploadWriter := NewSQLiteUploadSessionWriter(db)
+	finalizeWriter := NewSQLiteFinalizeWriter(db, artifactReader, nil)
+	svc := NewService(repo, uploadWriter, finalizeWriter, artifactReader, bs, db, clk)
 
 	t.Cleanup(func() {
 		_ = db.Close()
 	})
 	return &testEnv{
-		t: t, db: db, bs: bs, svc: svc, repo: repo, fin: fin, clock: clk, tmpDir: tmp,
+		t: t, db: db, bs: bs, svc: svc, repo: repo,
+		uploadWriter:   uploadWriter,
+		finalizeWriter: finalizeWriter,
+		artifactReader: artifactReader,
+		clock: clk, tmpDir: tmp,
 	}
 }
 
@@ -129,8 +132,8 @@ func setupTestEnv(t *testing.T) *testEnv {
 // a minimal schema-defensive INSERT so future migrations that add
 // additional columns don't break this test.
 //
-// NOTE (PR-048 / canonical-cutover): assigned_to, lease_id, lease_expiry
-// were DROPPED from the jobs table; identity is now tracked strictly on
+// canonical-cutover: assigned_to, lease_id, lease_expiry were DROPPED
+// from the jobs table; identity is now tracked strictly on
 // task_attempts / artifact_uploads. The signature is preserved so the
 // 6 caller call-sites (Begin/Receive/Finalize tests) don't all need
 // editing — the dropped values are simply no longer persisted here.
@@ -278,11 +281,10 @@ func TestBeginUpload_WrongRevision(t *testing.T) {
 func TestBeginUpload_WrongAttemptStatus(t *testing.T) {
 	env := setupTestEnv(t)
 	env.seedJob("J4", "RUNNING", testWorkerID, testLeaseID, testRevision, env.clock.Now().Add(5*time.Minute))
-	// cleanup/remove-job-attempts-runtime: the legacy
-	// RENDER_FINISHED gate is gone. task_attempts now uses the
-	// terminal/non-terminal contract: non-terminal = OK to upload,
-	// terminal = ErrAttemptNotRenderFinished. Seed a SUCCEEDED
-	// task_attempt to exercise the terminal branch.
+	// task_attempts uses a terminal/non-terminal contract:
+	// non-terminal = OK to upload, terminal =
+	// ErrAttemptNotRenderFinished. Seed a SUCCEEDED task_attempt
+	// to exercise the terminal branch.
 	env.seedAttempt("J4", 1, "SUCCEEDED", testWorkerID, testLeaseID)
 
 	cmd := beginUploadDefaultCmd("J4")
@@ -434,10 +436,10 @@ func TestFinalize_DoubleFinalizeIdempotent(t *testing.T) {
 	require.Equal(t, first.ID, second.ID)
 	require.Equal(t, "READY", second.Status)
 
-	// Legacy outbox ARTIFACT_READY removed in PR #2. Verify no spurious emissions.
+	// Legacy outbox ARTIFACT_READY emissions: none expected.
 	var n int
 	require.NoError(t, env.db.QueryRow(`SELECT COUNT(*) FROM outbox_events WHERE event_type='ARTIFACT_READY'`).Scan(&n))
-	require.Equal(t, 0, n, "legacy ARTIFACT_READY outbox emission must be gone (PR #2)")
+	require.Equal(t, 0, n, "LEGACY ARTIFACT_READY outbox emission must be gone")
 
 	// Delivery: exactly one row for (artifact, primary).
 	require.NoError(t, env.db.QueryRow(`SELECT COUNT(*) FROM job_deliveries WHERE artifact_id=? AND destination_id='primary'`, first.ID).Scan(&n))
@@ -516,7 +518,7 @@ func TestFinalize_Concurrent(t *testing.T) {
 
 	var n int
 	require.NoError(t, env.db.QueryRow(`SELECT COUNT(*) FROM outbox_events WHERE event_type='ARTIFACT_READY'`).Scan(&n))
-	require.Equal(t, 0, n, "legacy ARTIFACT_READY outbox emission must be gone (PR #2)")
+	require.Equal(t, 0, n, "LEGACY ARTIFACT_READY outbox emission must be gone")
 
 	require.NoError(t, env.db.QueryRow(`SELECT COUNT(*) FROM job_deliveries WHERE artifact_id=? AND destination_id='primary'`, sess.ArtifactID).Scan(&n))
 	require.Equal(t, 1, n, "exactly one delivery row")

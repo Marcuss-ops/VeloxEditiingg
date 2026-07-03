@@ -65,10 +65,10 @@ type FailCommand struct {
 	Now              time.Time
 }
 
-// MarkSucceededCommand has been REMOVED in PR 3.5-a. SUCCEEDED is no
-// longer writable through JobRepository. The single legal path is
-// artifacts.FinalizationRepository.FinalizeVerified (internal/artifacts/
-// sqlite_finalization_repository.go), requested via artifacts.Service.Finalize.
+// MarkSucceededCommand has been REMOVED. SUCCEEDED is no longer
+// writable through JobRepository. The single legal path is
+// artifacts.FinalizationWriter.FinalizeVerified (internal/artifacts/
+// sqlite_finalize_writer.go), requested via artifacts.Service.Finalize.
 // Use artifacts.FinalizeVerifiedCommand + Service.Finalize.
 
 // CancelCommand transitions a job to CANCELLED. Idempotent for terminal

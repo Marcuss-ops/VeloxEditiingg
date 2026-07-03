@@ -17,10 +17,10 @@ import (
 // (YouTube, Drive) are available. The AssetService and Enqueuer are built
 // LATER in buildModules because they require the Drive/YouTube integration
 // services for typed-resolver construction.
-//
-// Fase 4c: WorkflowRepo (workflow.Repository) removed — write methods are
-// gated (Fase 4b) and the 4 outbox handlers are inert no-op stubs (Fase 4a).
-// No runtime path consumes a workflow.Repository any more.
+
+// workflow.Repository retired: write methods are gated and the outbox
+// handlers are no-op stubs. No runtime path consumes a
+// workflow.Repository any more.
 type assetDeps struct {
 	ArtifactSvc      *artifacts.Service
 	ChunkedUploadSvc *artifacts.ChunkedUploadService
@@ -42,27 +42,32 @@ func buildAssets(cfg *config.Config, p *persistenceDeps, j *jobsDeps) (*assetDep
 
 	// ── Artifacts.Service (sole SUCCEEDED gate) ─────────────────────
 	//
-	// Migration note: artifacts.NewSQLiteRepository was retired in
-	// file-1/4 of the canonical-SQL-gateway migration. The typed
-	// per-session CRUD now lives at store.NewSQLiteUploadRepository(db)
-	// (artifact_uploads + artifact_upload_chunks); the artifacts-package
-	// Service/ChunkedUploadService/Reconciler take store.UploadRepository.
+	// Three narrow SQLite components (artifact reader + upload-session
+	// writer + finalize writer) share the same *sql.DB so the finalize
+	// tx can join with concurrent updates on artifact_uploads. The
+	// delivery-plan resolver is wired into the finalize writer
+	// constructor (NOT method-chained) so the per-job destination set
+	// is resolved inside the same tx that INSERTs job_deliveries.
 	planResolver := deliveries.NewSQLiteDeliveryPlanResolver(p.SQLite.DB(), cfg.Runtime.DeliveryGlobalFallback)
-	finRepo := artifacts.NewSQLiteFinalizationRepository(p.SQLite.DB())
-	finRepo.WithPlanResolver(planResolver)
+	uploadRepo := store.NewSQLiteUploadRepository(p.SQLite.DB())
+	artifactReader := artifacts.NewSQLiteArtifactReader(p.SQLite.DB())
+	uploadWriter := artifacts.NewSQLiteUploadSessionWriter(p.SQLite.DB())
+	finalizeWriter := artifacts.NewSQLiteFinalizeWriter(p.SQLite.DB(), artifactReader, planResolver)
 	artifactSvc := artifacts.NewService(
-		store.NewSQLiteUploadRepository(p.SQLite.DB()),
-		finRepo,
+		uploadRepo,
+		uploadWriter,
+		finalizeWriter,
+		artifactReader,
 		p.BlobStore,
 		p.SQLite.DB(),
 		nil, // clock.System default (production)
 	)
-	log.Printf("[BOOTSTRAP] artifacts.Service ready (single-tx SUCCEEDED gate via FinalizationRepository.FinalizeVerified + DeliveryPlanResolver)")
+	log.Printf("[BOOTSTRAP] artifacts.Service ready (single-tx SUCCEEDED gate via FinalizationWriter + DeliveryPlanResolver)")
 
 	// ── Chunked upload service ───────────────────────────────────────
 	chunkedSvc := artifacts.NewChunkedUploadService(
 		artifactSvc,
-		store.NewSQLiteUploadRepository(p.SQLite.DB()),
+		uploadRepo,
 		p.BlobStore,
 		p.SQLite.DB(),
 	)
@@ -72,7 +77,7 @@ func buildAssets(cfg *config.Config, p *persistenceDeps, j *jobsDeps) (*assetDep
 	reconciler, recErr := artifacts.NewReconciler(
 		p.SQLite.DB(),
 		p.BlobStore,
-		store.NewSQLiteUploadRepository(p.SQLite.DB()),
+		uploadRepo,
 		nil, // clock.System default (production)
 		artifacts.DefaultReconcilerConfig(),
 	)
@@ -82,10 +87,10 @@ func buildAssets(cfg *config.Config, p *persistenceDeps, j *jobsDeps) (*assetDep
 	log.Printf("[BOOTSTRAP] artifacts.Reconciler ready (mandatory — 4 rules)")
 
 	// ── Outbox registry + dispatcher ────────────────────────────────
-	// PR 2: outbox.ProductionRegistry() is the canonical wiring location
-	// for all outbox handlers. Today the registry is empty (the dispatcher
+	// outbox.ProductionRegistry() is the canonical wiring location for
+	// all outbox handlers. Today the registry is empty (the dispatcher
 	// marks every emitted event as FAILED via the "no handler → MarkFailed"
-	// path); once PR 2 wires real handlers, this single call point picks
+	// path); once real handlers are wired, this single call point picks
 	// them up with no bootstrap change. The completeness invariant is
 	// asserted by internal/outbox/completeness_test.go.
 	outboxRegistry := outbox.ProductionRegistry()
@@ -96,8 +101,8 @@ func buildAssets(cfg *config.Config, p *persistenceDeps, j *jobsDeps) (*assetDep
 		MaxAttempts:  5,
 	})
 
-	// ── Drain residual legacy outbox events (PR #2) ────────────────
-	// Idempotent: only PENDING/PROCESSING events for these 4 types
+	// ── Drain residual legacy outbox events ────────────────────────
+	// Idempotent: only PENDING/PROCESSING events for these types
 	// are marked DISCARDED_LEGACY_CUTOVER; already PROCESSED or FAILED
 	// rows are left untouched. Safe to run on every restart.
 	legacyTypes := []string{

@@ -14,15 +14,13 @@
 //
 // Migration contract:
 //
-//   - The "BeginUpload → uploades + artifact (atomic)" path stays on
-//     artifacts.FinalizationRepository.CreateArtifactAndUploadSession
-//     in artifacts/sqlite_finalization_repository.go (PR 3.5-a legacy
-//     allowlist — its `SET status = 'SUCCEEDED'` writer is the sole
-//     legal writer of the SUCCEEDED terminal state, enforced by
-//     internal/artifacts/scan_test.go). Once file-3/4 of the
-//     migration lands, that entire file follows the same path to
-//     internal/store; for now it stays in artifacts with a duplicate
-//     copy of the nilOrString/formatTimePtr helpers inline.
+//   - The "BeginUpload → upload + artifact (atomic)" path stays on
+//     artifacts.UploadSessionWriter.CreateArtifactAndUploadSession
+//     in artifacts/sqlite_upload_session_writer.go. The verified-
+//     finalization tx that flips jobs.status='SUCCEEDED' lives in
+//     artifacts/sqlite_finalize_writer.go (the sole legal writer of
+//     the SUCCEEDED terminal state, enforced by
+//     internal/artifacts/scan_test.go).
 //
 //   - Once BeginUpload produces a session, all per-session mutations
 //     (UpdateUploadStatus, TransitionUploadStatus, DeleteUploadSession,
@@ -157,11 +155,10 @@ var (
 // artifact_uploads rows. All methods treat upload_id as the canonical
 // key. Application-level invariants (status state machine) live in
 // Service — SQL CHECK constraints only block blatantly malformed rows.
-//
-// PR 3.5-a: CreateUploadSession has been REMOVED. Use
-// FinalizationRepository.CreateArtifactAndUploadSession instead —
-// the atomic-tx replacement that inserts the artifacts + artifact_uploads
-// rows in one transaction.
+//// CreateUploadSession has been REMOVED. Use
+// artifacts.UploadSessionWriter.CreateArtifactAndUploadSession instead —
+//     the atomic-tx replacement that inserts the artifacts + artifact_uploads
+//     rows in one transaction.
 type UploadRepository interface {
 	GetUploadSession(ctx context.Context, uploadID string) (*UploadSession, error)
 	UpdateUploadStatus(ctx context.Context, uploadID string, fields UploadFields) error
@@ -508,10 +505,9 @@ func (r *SQLiteUploadRepository) DeleteChunks(ctx context.Context, uploadID stri
 //
 // nilOrString maps "" -> nil so the column stores NULL rather than "",
 // matching the migration's nullable TEXT columns for expected_sha256 /
-// received_sha256. Private to the store package — the finalization
-// repo (artifacts/sqlite_finalization_repository.go) maintains its
-// own small inline duplicate of this helper until file-3/4 of the
-// migration moves it to internal/store.
+// received_sha256. Private to the store package. The artifacts package
+// owns its own private copy in sqlite_upload_session_writer.go
+// (scoped to the BeginUpload paired-insert path).
 
 func nilOrString(s string) interface{} {
 	if s == "" {
