@@ -1,7 +1,7 @@
 # P0-01 — Baseline Verification Evidence
 
 **Date:** 3 July 2026  
-**Commit:** `0e81a3a` (HEAD of main)  
+**Commit:** `cfc304d` (HEAD of main)  
 **Operator:** Codebuff automated verification  
 **Repo:** `Marcuss-ops/VeloxEditiingg`  
 **Branch:** `main`  
@@ -20,6 +20,7 @@
 | CTest (8 sub-cases) | **PASS** (8/8) | <1s |
 | gofmt check | **PASS** (0 unformatted files) | <1s |
 | go vet (all 3 modules) | **PASS** | <1s |
+| `make verify-fast` (integrated) | **PASS** (VERIFY OK, exit 0) | 103s |
 | **Total wall-clock** | | **~7 min** |
 
 ---
@@ -161,4 +162,14 @@ Removed 3 `local_path` fields from `ops/jobs/jackie_chan_doc_voiceover.specscene
 
 ---
 
-**Verdict:** Baseline verification PASS from clean checkout. Branch protection remains the sole blocker (requires manual `gh auth login`).
+## Integrated `make verify-fast` Result
+
+**Command:** `SKIP_HEAVY=1 make verify` (from clean tree at commit `cfc304d`)  
+**Result:** `VERIFY OK` — exit 0  
+**Duration:** 103s  
+
+This validates the full integrated path: working-tree-dirty guard → 12 architecture checks (including new `check-dsn-busy-timeout`) → gofmt + git diff → go vet → go test -race for all 3 modules → guard-legacy-mutation. All steps passed in sequence.
+
+---
+
+**Verdict:** Baseline verification PASS from clean checkout. `make verify-fast` integrated path validated. Branch protection remains the sole blocker (requires manual `gh auth login`).

@@ -47,6 +47,7 @@ WORKER_HEALTH_PORT="${WORKER_HEALTH_PORT:-8181}"
 readonly ADMIN_TOKEN="e2e-test-admin-token"
 readonly WORKER_ID="e2e-worker-1"
 readonly WORKER_NAME="e2e-worker"
+readonly WORKER_SECRET="golden-e2e-worker-secret"
 BUNDLE_HASH=""
 
 # Binaries
@@ -233,7 +234,7 @@ phase4_worker() {
   "bundle_hash": "${BUNDLE_HASH}",
   "max_active_jobs": 1,
   "health_port": ${WORKER_HEALTH_PORT},
-  "protocol_version": "2026-06-worker-v1"
+  "protocol_version": "v3"
 }
 JSON
 
@@ -242,6 +243,7 @@ JSON
   setsid nohup env WORK_DIR="${TMPDIR}" \
     VELOX_VIDEO_ENGINE_CPP_BIN="${ENGINE_BIN}" \
     VELOX_BUNDLE_HASH="${BUNDLE_HASH}" \
+    VELOX_WORKER_SECRET="${WORKER_SECRET}" \
     VELOX_WORKER_CACHE_DIR="${WORKER_CACHE_DIR}" \
     VELOX_WORKER_BLOB_DIR="${WORKER_BLOB_DIR}" \
     VELOX_GRPC_TLS_CERT_FILE="${CERTS_DIR}/worker.crt" \
@@ -255,8 +257,7 @@ JSON
 
   # Wait for real registration, not just process startup.
   for i in $(seq 1 30); do
-    if grep -q "Worker authenticated via mTLS: ${WORKER_ID}" "$MASTER_LOG" 2>/dev/null || \
-       grep -q "Worker ${WORKER_ID} connected (session:" "$MASTER_LOG" 2>/dev/null || \
+    if grep -q "Worker ${WORKER_ID} connected (session:" "$MASTER_LOG" 2>/dev/null || \
        grep -q "Registration successful" "$WORKER_LOG" 2>/dev/null; then
       ok "worker registered (${i}s)"
       return 0
@@ -264,6 +265,14 @@ JSON
     if grep -q "worker_id mismatch" "$WORKER_LOG" 2>/dev/null; then
       tail -40 "$WORKER_LOG" 2>/dev/null || true
       die "worker registration failed due to TLS identity mismatch" 1
+    fi
+    if grep -q "credential required" "$WORKER_LOG" 2>/dev/null; then
+      tail -40 "$WORKER_LOG" 2>/dev/null || true
+      die "worker registration failed due to missing credential hash" 1
+    fi
+    if grep -q "protocol_version .* is not supported" "$WORKER_LOG" 2>/dev/null; then
+      tail -40 "$WORKER_LOG" 2>/dev/null || true
+      die "worker registration failed due to unsupported protocol_version" 1
     fi
     # Check worker didn't crash
     if ! kill -0 "$WPID" 2>/dev/null; then
