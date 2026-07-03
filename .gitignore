@@ -121,4 +121,9 @@ Thumbs.db
 # Accidentale recursive cp --parents artifact from local builds
 /DataServer/DataServer/
 
+# Stray grep-redirect artifact (filename created by a shell redirect that
+# captured a === GREP === banner instead of piping). One-off; rule keeps
+# any future recurrence from polluting git status.
+/DataServer/0 (the bug vector) ===
+
 DataServer/worker
