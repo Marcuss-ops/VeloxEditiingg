@@ -283,7 +283,6 @@ func (c *coordinator) DeclareOutputs(ctx context.Context, cmd DeclareOutputsComm
 		}
 	}
 
-	declIDs := make([]string, 0, len(cmd.OutputManifests))
 	for _, m := range cmd.OutputManifests {
 		if err := validateManifest(&m); err != nil {
 			return nil, fmt.Errorf("completion.DeclareOutputs: invalid manifest: %w", err)
@@ -310,9 +309,7 @@ func (c *coordinator) DeclareOutputs(ctx context.Context, cmd DeclareOutputsComm
 		if err != nil {
 			return nil, fmt.Errorf("completion.DeclareOutputs: insert declaration %s: %w", m.LogicalName, err)
 		}
-		declIDs = append(declIDs, declarationID)
 	}
-	_ = declIDs // reserved for future transport registry wiring
 
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("completion.DeclareOutputs: commit: %w", err)
@@ -858,4 +855,3 @@ func validateManifest(m *OutputManifest) error {
 	}
 	return nil
 }
-
