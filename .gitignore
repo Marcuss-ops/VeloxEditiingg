@@ -46,6 +46,14 @@ velox-master.pid
 # ── Operator credential store (master + ansible-vault tooling) ───────────────
 .velox-passwords.txt
 
+# NOTE: any literal secret kept under `.velox/` on a workstation is
+# gitignored below by `.velox/**`. The single tracked file in that
+# directory is the operator-facing seed:
+#     `.velox/production.env.example`
+# which operators `cp` to `.velox/production.env` and `chmod 600` —
+# the wrapper `scripts/operator/with-production-env.sh` is the only
+# sanctioned reader and explicitly refuses any looser file mode.
+
 # ── Secrets & credentials (DataServer runtime store) ─────────────────────────
 DataServer/data/secrets/
 DataServer/data/drive/credentials/
@@ -80,7 +88,15 @@ VeloxFrontend/
 .env
 .env.*
 *.env
-.velox/
+# Operators store local env files under `.velox/`. The wrapper
+# `scripts/operator/with-production-env.sh` is the only sanctioned
+# reader of `.velox/production.env` and refuses any file mode looser
+# than `chmod 600`. The single tracked file in this directory is the
+# operator-facing seed `.velox/production.env.example`, which is
+# re-included (negated) below; every other file under `.velox/` is
+# operator-only and MUST NOT be committed.
+.velox/**
+!.velox/production.env.example
 .cline/
 
 # ── Pilot triage notes (transient -- per-checkpoint scratch from AI assistance) ──
