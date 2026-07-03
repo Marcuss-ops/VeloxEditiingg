@@ -60,7 +60,14 @@ log "check-single-writer"
 log "check-task-runtime-invariants"
 ./scripts/ci/check-task-runtime-invariants.sh
 log "check-completion-protocol-invariants"
-./scripts/ci/check-completion-protocol-invariants.sh
+# Seed a fresh empty-schema DB (same pattern as .github/workflows/ci.yml
+# Phase 1.5 step) so the 4 invariant closure queries have a target.
+# Empty DB → 0 rows → exit 0. Without this the script exits 2
+# (DB_PATH required) when invoked standalone via `make verify`.
+CP_DB="$(mktemp /tmp/velox-cp-fixture.XXXXXX.db)"
+trap 'rm -f "$CP_DB"' EXIT
+(cd "$REPO_ROOT/DataServer" && go run ./cmd/seed-velox-db-fixture "$CP_DB")
+./scripts/ci/check-completion-protocol-invariants.sh "$CP_DB"
 log "check-db-access"
 ./scripts/ci/check-db-access.sh
 log "check-registry"

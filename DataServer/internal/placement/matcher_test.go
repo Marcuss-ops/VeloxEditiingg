@@ -281,10 +281,10 @@ func TestMatcherSkipsIncompatibleAndSelectsNextCompatible(t *testing.T) {
 	candidates := []TaskCandidate{
 		{
 			// Task A: requires unsupported executor, higher priority
-			TaskID:   "t-unsupported",
-			Priority: 100,
+			TaskID:    "t-unsupported",
+			Priority:  100,
 			CreatedAt: now,
-			Executor: ExecutorKey{ID: "ffmpeg.v1", Version: 1},
+			Executor:  ExecutorKey{ID: "ffmpeg.v1", Version: 1},
 		},
 		{
 			// Task B: supported executor, lower priority
@@ -316,5 +316,3 @@ func TestMatcherSkipsIncompatibleAndSelectsNextCompatible(t *testing.T) {
 		t.Fatalf("expected t-unsupported to be rejected as unsupported_executor, rejections: %+v", result.Rejections)
 	}
 }
-
-

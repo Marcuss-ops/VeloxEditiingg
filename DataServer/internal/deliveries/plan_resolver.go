@@ -46,7 +46,7 @@ var ErrNoExplicitPlan = errors.New("deliveries: no explicit delivery plan and gl
 type PlanContext struct {
 	DestinationID string
 	Priority      int
-	RetryBudget   int           // max attempts before FAILED
+	RetryBudget   int             // max attempts before FAILED
 	Backoff       []time.Duration // optional per-plan override; nil → runner default
 	AcquiredAt    time.Time
 }
@@ -55,9 +55,9 @@ type PlanContext struct {
 // the job_id the plan was bound to. Used by FinalizeVerified to pass
 // the plan to DeliveryRunner at job_deliveries INSERT time.
 type Plan struct {
-	JobID       string
+	JobID        string
 	Destinations []PlanContext
-	ResolvedAt  time.Time
+	ResolvedAt   time.Time
 }
 
 // SQLiteDeliveryPlanResolver implements artifacts.DeliveryPlanResolver
@@ -129,9 +129,9 @@ func (r *SQLiteDeliveryPlanResolver) ResolvePlan(ctx context.Context, jobID, art
 	plan := &Plan{JobID: jobID, ResolvedAt: time.Now().UTC()}
 	for rows.Next() {
 		var (
-			destID    string
-			priority  int
-			retryBud  int
+			destID   string
+			priority int
+			retryBud int
 		)
 		if err := rows.Scan(&destID, &priority, &retryBud); err != nil {
 			return nil, fmt.Errorf("deliveries: ResolvePlan plans scan: %w", err)

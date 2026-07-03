@@ -4,17 +4,17 @@
 //
 // Verifies the contract on the production 068_task_requirements pair:
 //
-//   1. UP applies the schema_migrations row for v68 plus
-//      `task_requirements` + `idx_task_requirements_task_id`.
-//   2. RunDown(68) DROPs the table + index AND removes the v68
-//      tracking row from schema_migrations.
-//   3. Re-applying UP cleanly puts the v68 pair back, re-recording
-//      the tracking row with the SAME checksum (no drift).
+//  1. UP applies the schema_migrations row for v68 plus
+//     `task_requirements` + `idx_task_requirements_task_id`.
+//  2. RunDown(68) DROPs the table + index AND removes the v68
+//     tracking row from schema_migrations.
+//  3. Re-applying UP cleanly puts the v68 pair back, re-recording
+//     the tracking row with the SAME checksum (no drift).
 //
 // Validation invariant for the UP -> DOWN -> UP idempotency on the
 // `task_requirements` subset:
 //
-//   snapshot(preUP) == snapshot(postDownAndUP)
+//	snapshot(preUP) == snapshot(postDownAndUP)
 //
 // Mirrors the existing testdata-based migrations_test.go pattern
 // (uses openTestDB + tableExists helpers). Embeds the production

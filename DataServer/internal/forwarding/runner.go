@@ -69,7 +69,7 @@ func DefaultRunnerConfig() *RunnerConfig {
 		PollInterval:  5 * time.Second,
 		LeaseDuration: 5 * time.Minute,
 		ClaimBatch:    20,
-		MaxAttempts:    12,
+		MaxAttempts:   12,
 		Concurrency:   4,
 		BackoffSchedule: []time.Duration{
 			30 * time.Second,
@@ -128,13 +128,13 @@ func (m *RunnerMetrics) Snapshot() map[string]int64 {
 // jobs and transitions completed results atomically to FORWARDED (Job+Task
 // creation + forwarding status update in a single SQLite transaction).
 type CreatorForwardingRunner struct {
-	cfg       *RunnerConfig
-	dbStore   *store.SQLiteStore
-	client    *remoteengine.Client
-	enqueuer  *enqueue.Enqueuer
-	identity  string
-	metrics   *RunnerMetrics
-	resolver  *creatorflow.Resolver // canonical forward-completed entry point
+	cfg      *RunnerConfig
+	dbStore  *store.SQLiteStore
+	client   *remoteengine.Client
+	enqueuer *enqueue.Enqueuer
+	identity string
+	metrics  *RunnerMetrics
+	resolver *creatorflow.Resolver // canonical forward-completed entry point
 
 	sem chan struct{} // bounded concurrency
 
@@ -305,9 +305,9 @@ func (r *CreatorForwardingRunner) tick(ctx context.Context) error {
 	log.Printf("[FORWARDING] claimed %d forwardings", len(leases))
 
 	var (
-		wg          sync.WaitGroup
-		errMu       sync.Mutex
-		aggregated  error
+		wg         sync.WaitGroup
+		errMu      sync.Mutex
+		aggregated error
 	)
 	for _, lease := range leases {
 		wg.Add(1)

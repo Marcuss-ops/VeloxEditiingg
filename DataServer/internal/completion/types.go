@@ -65,6 +65,7 @@ var (
 // workers populate this when sending TaskOutputDeclared. Until the
 // proto regen lands (Fase 1.4 deferred), the master reads it from the
 // typed Go struct.
+//
 //nolint:revive
 type OutputManifest struct {
 	OutputKind     string `json:"output_kind"`

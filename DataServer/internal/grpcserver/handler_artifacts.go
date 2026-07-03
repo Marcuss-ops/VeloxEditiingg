@@ -118,14 +118,14 @@ func (h *Handler) handleArtifactUploaded(workerID string, a *pb.ArtifactUploaded
 //
 // Why a custom wrapper type instead of status.Errorf:
 //
-//   google.golang.org/grpc/status.Errorf delegates to fmt.Sprintf,
-//   NOT fmt.Errorf, so the %w directive is rendered as literal text
-//   ("artifact commit refused: %!w(MISSING)") instead of wrapping.
-//   To preserve the registry.ErrCapabilityNotReady sentinel in the
-//   errors.Is chain AND surface the right gRPC code, we need BOTH a
-//   proper Unwrap() AND a GRPCStatus() interface implementation.
-//   status.Errorf alone gives us neither. artCommitGateError below
-//   is the minimal correct shape.
+//	google.golang.org/grpc/status.Errorf delegates to fmt.Sprintf,
+//	NOT fmt.Errorf, so the %w directive is rendered as literal text
+//	("artifact commit refused: %!w(MISSING)") instead of wrapping.
+//	To preserve the registry.ErrCapabilityNotReady sentinel in the
+//	errors.Is chain AND surface the right gRPC code, we need BOTH a
+//	proper Unwrap() AND a GRPCStatus() interface implementation.
+//	status.Errorf alone gives us neither. artCommitGateError below
+//	is the minimal correct shape.
 func (h *Handler) checkArtifactCommitGate(workerID string) error {
 	if h.capabilityRegistry == nil {
 		return nil // Backward-compat — see godoc.

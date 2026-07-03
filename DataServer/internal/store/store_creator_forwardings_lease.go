@@ -94,8 +94,8 @@ func (s *SQLiteStore) ClaimCreatorForwardings(ctx context.Context, runnerID, lea
 
 	type claimedRow struct {
 		forwardingID, sourceProvider, sourceJobID, targetExecutorID string
-		attemptCount                                                 int
-		payloadJSON, payloadSHA256                                   string
+		attemptCount                                                int
+		payloadJSON, payloadSHA256                                  string
 	}
 	var claimed []claimedRow
 	for rows.Next() {

@@ -58,7 +58,7 @@ func TestCheckArtifactCommitGate_FailClosed_PermissionDenied(t *testing.T) {
 	reg := registry.NewCapabilityRegistry()
 	_ = reg.Register(registry.Probe{Name: "coordinator", Check: func() error { return nil }})
 	_ = reg.Register(registry.Probe{
-		Name: "spool",
+		Name:  "spool",
 		Check: func() error { return fmt.Errorf("staging dir unwritable") },
 	})
 	h := stubHandlerForGate(reg)

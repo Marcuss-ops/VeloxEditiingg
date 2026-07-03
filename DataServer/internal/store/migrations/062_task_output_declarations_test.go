@@ -100,7 +100,9 @@ func TestMigration062_IntegrityOK(t *testing.T) {
 
 // TestMigration062_UniqueQuadTuple exercises the canonical UNIQUE
 // constraint from the plan:
-//   UNIQUE(task_id, attempt_id, output_kind, logical_name)
+//
+//	UNIQUE(task_id, attempt_id, output_kind, logical_name)
+//
 // A second INSERT with the same quadruple MUST be rejected.
 // Inserts that differ on any one of the four components MUST be
 // accepted — the positive coverage guards against an

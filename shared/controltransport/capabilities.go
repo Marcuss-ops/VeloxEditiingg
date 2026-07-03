@@ -22,15 +22,15 @@
 // Adding a new capability
 // -----------------------
 //
-//   1. Append the constant below — kebab-case <<version-suffixed>>
-//      form ("<area>.<version>", e.g. "artifact.commit.v1") so old
-//      workers can advertise deprecated versions naturally without
-//      tripping the upgrade path.
-//   2. Bump HasCapability() to include any new ALL_CAPS alias only if
-//      you want it to be implicit-on (almost never — explicit
-//      advertising is the rule).
-//   3. Add a unit test in capabilities_test.go asserting the constant
-//      round-trips through Struct → JSON → Struct without distortion.
+//  1. Append the constant below — kebab-case <<version-suffixed>>
+//     form ("<area>.<version>", e.g. "artifact.commit.v1") so old
+//     workers can advertise deprecated versions naturally without
+//     tripping the upgrade path.
+//  2. Bump HasCapability() to include any new ALL_CAPS alias only if
+//     you want it to be implicit-on (almost never — explicit
+//     advertising is the rule).
+//  3. Add a unit test in capabilities_test.go asserting the constant
+//     round-trips through Struct → JSON → Struct without distortion.
 //
 // The capability namespace is forward-only: a master MUST accept any
 // string it does not understand and log a single verbose-WARN line per

@@ -61,14 +61,14 @@ import (
 type Status string
 
 const (
-	StatusRendering      Status = "RENDERING"
-	StatusOutputReady    Status = "OUTPUT_READY"
-	StatusUploadPending  Status = "UPLOAD_PENDING"
-	StatusUploading      Status = "UPLOADING"
-	StatusUploaded       Status = "UPLOADED"
-	StatusCommitted      Status = "COMMITTED"
-	StatusRejected       Status = "REJECTED"
-	StatusCleaned        Status = "CLEANED"
+	StatusRendering     Status = "RENDERING"
+	StatusOutputReady   Status = "OUTPUT_READY"
+	StatusUploadPending Status = "UPLOAD_PENDING"
+	StatusUploading     Status = "UPLOADING"
+	StatusUploaded      Status = "UPLOADED"
+	StatusCommitted     Status = "COMMITTED"
+	StatusRejected      Status = "REJECTED"
+	StatusCleaned       Status = "CLEANED"
 )
 
 // AllStatuses lists the closed vocabulary in lifecycle order. Callers
@@ -97,10 +97,10 @@ func (s Status) IsValid() bool {
 // Sentinel errors so callers can branch on syscall-equivalent
 // conditions from the store layer. Use errors.Is, not str match.
 var (
-	ErrNotFound        = errors.New("spool: row not found")
-	ErrCASConflict     = errors.New("spool: lifecycle CAS conflict")
-	ErrInvalidStatus   = errors.New("spool: invalid status input")
-	ErrDuplicateSpool  = errors.New("spool: duplicate (task_id, attempt_id, worker_spool_key)")
+	ErrNotFound       = errors.New("spool: row not found")
+	ErrCASConflict    = errors.New("spool: lifecycle CAS conflict")
+	ErrInvalidStatus  = errors.New("spool: invalid status input")
+	ErrDuplicateSpool = errors.New("spool: duplicate (task_id, attempt_id, worker_spool_key)")
 )
 
 // ────────────────────────────────────────────────────────────────────────
@@ -342,12 +342,12 @@ type scanDBI interface {
 
 func scanSpool(r scanDBI) (*SpoolEntry, error) {
 	var (
-		e        SpoolEntry
-		sizeB    sql.NullInt64
-		uploadB  sql.NullInt64
-		statusS  string
-		created  string
-		updated  string
+		e       SpoolEntry
+		sizeB   sql.NullInt64
+		uploadB sql.NullInt64
+		statusS string
+		created string
+		updated string
 	)
 	err := r.Scan(
 		&e.SpoolID, &e.TaskID, &e.AttemptID, &e.CommitID, &e.WorkerSpoolKey,

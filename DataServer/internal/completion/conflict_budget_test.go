@@ -94,6 +94,7 @@ func TestConflictBudget_NonConflictPassesThrough(t *testing.T) {
 //   - key was never recorded (truly absent)
 //   - key was recorded then nil-reset (eagerly removed)
 //   - key was recorded then escalated (eagerly removed)
+//
 // In all three cases ConsecutiveForKey must return 0, NOT panic
 // and NOT return a stale value from a sibling key.
 func TestConflictBudget_ConsecutiveForKey_ZeroDefault(t *testing.T) {
@@ -245,8 +246,8 @@ func TestConflictBudget_MixedPattern_OnlyConflictsCount(t *testing.T) {
 
 	// Pattern: conflict, conflict, other, conflict (4th in
 	// sequence but only 3rd counted).
-	_ = b.Record(testKey, cErr)        // counter=1
-	_ = b.Record(testKey, cErr)        // counter=2
+	_ = b.Record(testKey, cErr) // counter=1
+	_ = b.Record(testKey, cErr) // counter=2
 	returned := b.Record(testKey, otherErr)
 	if returned == nil || returned.Error() != otherErr.Error() {
 		t.Errorf("Record(otherErr) should pass through unchanged; got %v want %v", returned, otherErr)

@@ -11,13 +11,15 @@
 // test harness separately.
 //
 // Usage:
-//   go run ./DataServer/cmd/seed-velox-db-fixture <DB_PATH>
+//
+//	go run ./DataServer/cmd/seed-velox-db-fixture <DB_PATH>
 //
 // Exit codes:
-//   0 — DB created and migrations applied
-//   2 — missing DB_PATH argument
-//   3 — sqlite open failure
-//   4 — migration application failure
+//
+//	0 — DB created and migrations applied
+//	2 — missing DB_PATH argument
+//	3 — sqlite open failure
+//	4 — migration application failure
 //
 // The helper captures the canonical migration order through the
 // migrations.RunMigrations engine; do NOT inline the `.sql` files

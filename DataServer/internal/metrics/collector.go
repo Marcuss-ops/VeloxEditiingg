@@ -159,10 +159,10 @@ type Collector struct {
 	// before and at the threshold boundary. Buckets [1,2,3,5,10]
 	// cover the canonical default threshold=3 plus headroom for
 	// future policy bumps.
-	conflictStreakReset       *Family // velox_conflict_streak_reset_total
-	conflictEscalations       *Family // velox_conflict_escalations_total
-	conflictStayedUnder       *Family // velox_conflict_stayed_under_threshold_total
-	conflictStreakLength      *Family // velox_conflict_streak_length
+	conflictStreakReset  *Family // velox_conflict_streak_reset_total
+	conflictEscalations  *Family // velox_conflict_escalations_total
+	conflictStayedUnder  *Family // velox_conflict_stayed_under_threshold_total
+	conflictStreakLength *Family // velox_conflict_streak_length
 
 	// Book-keeping for diffs.
 	stateMu  sync.Mutex
@@ -865,18 +865,18 @@ var _ PlacementRejectionSink = (*Collector)(nil)
 // each transition independently:
 //
 //   - ResetConflictBudget()                 — Record(nil) on a non-zero streak
-//                                              (real reset, not a no-op reset).
+//     (real reset, not a no-op reset).
 //   - ObserveConflictStreakUnderThreshold(streak int)
-//                                            — ErrTransitionConflict incremented
-//                                              the streak but stayed under
-//                                              threshold (counter + histogram
-//                                              observation).
+//     — ErrTransitionConflict incremented
+//     the streak but stayed under
+//     threshold (counter + histogram
+//     observation).
 //   - EscalateConflictBudget(streak int)     — threshold crossed, the budget
-//                                              returns ErrConflictBudgetExhausted
-//                                              (counter + histogram observation
-//                                              at the runup length, which is
-//                                              the value of streak at the
-//                                              escalation decision).
+//     returns ErrConflictBudgetExhausted
+//     (counter + histogram observation
+//     at the runup length, which is
+//     the value of streak at the
+//     escalation decision).
 //
 // The histogram observation on the escalation path is INTENTIONAL:
 // it captures the runup length just before the threshold is crossed,

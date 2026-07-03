@@ -20,17 +20,17 @@ import (
 // offset applied to a transition that takes ~µs on a freshly-seeded
 // SQLite file:
 //
-//   closeAt < 0:   db.Close BEFORE the goroutine is started
-//                  (the goroutine acquires a closed-pool connection;
-//                  driver returns sql.ErrConnDone-style error).
-//   closeAt == 0:  goroutine runs and completes (wg.Wait blocks the
-//                  close); THEN db.Close. The UPDATE has committed by
-//                  the time db.Close runs.
-//   closeAt > 0:   sleep closeAt microseconds from the main goroutine,
-//                  then db.Close WHILE the transition is in flight.
-//                  Race window: depending on closeAt, the close hits
-//                  at (a) goroutine startup, (b) connection acquire,
-//                  (c) query execution, or (d) post-commit cleanup.
+//	closeAt < 0:   db.Close BEFORE the goroutine is started
+//	               (the goroutine acquires a closed-pool connection;
+//	               driver returns sql.ErrConnDone-style error).
+//	closeAt == 0:  goroutine runs and completes (wg.Wait blocks the
+//	               close); THEN db.Close. The UPDATE has committed by
+//	               the time db.Close runs.
+//	closeAt > 0:   sleep closeAt microseconds from the main goroutine,
+//	               then db.Close WHILE the transition is in flight.
+//	               Race window: depending on closeAt, the close hits
+//	               at (a) goroutine startup, (b) connection acquire,
+//	               (c) query execution, or (d) post-commit cleanup.
 //
 // runTrial returns the row state + the transition error so the
 // sub-tests can assert deterministic invariants.
@@ -241,6 +241,7 @@ func runCloseTrial(t *testing.T, dbPath string, closeAt int64) (status string, r
 //   - sql.ErrConnDone                              (driver-level)
 //   - ErrTransitionConflict                        (CAS predicate rejected; close raced before WHERE match)
 //   - any wrapped error whose message contains "database is closed"
+//
 // nil is NOT a "closed" outcome — it's the "committed" branch.
 func isExpectedCloseError(err error) bool {
 	if err == nil {

@@ -313,7 +313,7 @@ var ErrResolverNotComplete = fmt.Errorf("creatorflow: Resolve: payload is not co
 //     payload is not complete; return (nil, ErrResolverNotComplete).
 //  2. Deterministic IDs.
 //     - forwarding_key  = routing.FormatForwardingKey(source_provider,
-//       source_job_id, target_executor_id).
+//     source_job_id, target_executor_id).
 //     - job_id          = enqueue.DeriveForwardingJobID(forwarding_key).
 //     The UNIQUE index on creator_forwardings(source_provider,
 //     source_job_id, target_executor_id) makes the forwarding_id lookup
@@ -327,11 +327,11 @@ var ErrResolverNotComplete = fmt.Errorf("creatorflow: Resolve: payload is not co
 //     empty (test harness path + in-runner path).
 //  5. Forwarding-row promotion.
 //     - Sync (req.ForwardingID == ""): INSERT a PENDING row with a
-//       fresh UUID, then MarkCreatorForwardingReadySync promotes it
-//       to READY_TO_FORWARD. Concurrent calls converge on one row via
-//       the UNIQUE index.
+//     fresh UUID, then MarkCreatorForwardingReadySync promotes it
+//     to READY_TO_FORWARD. Concurrent calls converge on one row via
+//     the UNIQUE index.
 //     - Runner (req.ForwardingID != ""): UpsertCreatorForwardingPayload
-//       stamps payload + source_status onto the leasable PENDING/POLLING.
+//     stamps payload + source_status onto the leasable PENDING/POLLING.
 //     Both paths end in READY_TO_FORWARD so AtomicForwardAndEnqueue can
 //     take over.
 //  6. Atomic commit. dbStore.AtomicForwardAndEnqueue packs (READY_TO_FORWARD
@@ -436,10 +436,11 @@ func (r *Resolver) Resolve(ctx context.Context, req ResolveRequest) (*ResolveOut
 }
 
 // ensureReadyForwarding either
-//   (a) reuses the existing ForwardingID from the request (runner path) and
-//       stamps payload + source_status via the leasable guard, or
-//   (b) INSERTs a fresh PENDING row and promotes it to READY_TO_FORWARD via
-//       the leaseless MarkCreatorForwardingReadySync (handler sync path).
+//
+//	(a) reuses the existing ForwardingID from the request (runner path) and
+//	    stamps payload + source_status via the leasable guard, or
+//	(b) INSERTs a fresh PENDING row and promotes it to READY_TO_FORWARD via
+//	    the leaseless MarkCreatorForwardingReadySync (handler sync path).
 //
 // The payload is JSON-serialized here so both paths pass the same shape
 // into the atomic write. A marshal failure is treated as a fatal input

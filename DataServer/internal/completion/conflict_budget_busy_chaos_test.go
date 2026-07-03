@@ -24,12 +24,12 @@
 //     idempotent — no sink double-notify, no leftover timing fields).
 //
 // Sub-tests (6 total):
-//   1. TestConflictBudget_Chaos_BusyBackToBack_Absorbed
-//   2. TestConflictBudget_Chaos_BusyPastThreshold_NeverEscalates
-//   3. TestConflictBudget_Chaos_BusyWrapPattern_Unchanged
-//   4. TestConflictBudget_Chaos_BusyThenConflict_FreshStreak
-//   5. TestConflictBudget_Chaos_BusyThenNilReset_Idempotent
-//   6. TestConflictBudget_Chaos_BusyThenEscalationBoundary_Reachable
+//  1. TestConflictBudget_Chaos_BusyBackToBack_Absorbed
+//  2. TestConflictBudget_Chaos_BusyPastThreshold_NeverEscalates
+//  3. TestConflictBudget_Chaos_BusyWrapPattern_Unchanged
+//  4. TestConflictBudget_Chaos_BusyThenConflict_FreshStreak
+//  5. TestConflictBudget_Chaos_BusyThenNilReset_Idempotent
+//  6. TestConflictBudget_Chaos_BusyThenEscalationBoundary_Reachable
 package completion
 
 import (
@@ -66,8 +66,8 @@ func TestConflictBudget_Chaos_BusyBackToBack_Absorbed(t *testing.T) {
 		err  error
 	}{
 		{"busy-1 (writer lock held by worker-A)", driverBusyErr("writer lock held by worker-A")},
-		{"busy-2 (writer lock contested)",        driverBusyErr("writer lock contested")},
-		{"busy-3 (checkpoint wedge)",             driverBusyErr("checkpoint wedge")},
+		{"busy-2 (writer lock contested)", driverBusyErr("writer lock contested")},
+		{"busy-3 (checkpoint wedge)", driverBusyErr("checkpoint wedge")},
 	}
 	for i, s := range inputs {
 		got := b.Record(testKey, s.err)

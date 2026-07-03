@@ -14,19 +14,19 @@
 //
 // Three targeted chaos runs + one wrap-pattern run:
 //
-//   1. TestConflictBudget_Chaos_NoEscalationUnderThreshold — 4
-//      records: B C B C with threshold=3; counter stays ≤ 2, no
-//      escalation.
-//   2. TestConflictBudget_Chaos_MidSequenceNilResetClearsStreak —
-//      mid-sequence nil Record drops the counter back to 0 even
-//      after a partial streak.
-//   3. TestConflictBudget_Chaos_FinalSpecSequenceTriggersEscalation —
-//      the literal user-described chaos sequence in one golden run:
-//      [B, C, B, nil, C, C, C] with threshold=3. Each step's
-//      expectation (err / counter) asserted individually.
-//   4. TestConflictBudget_Chaos_WrapPatternMirrorsCoordinator — the
-//      same chaos sequence fed through the coordinator.go wrap
-//      closure, verifying the "keep input err separate" contract.
+//  1. TestConflictBudget_Chaos_NoEscalationUnderThreshold — 4
+//     records: B C B C with threshold=3; counter stays ≤ 2, no
+//     escalation.
+//  2. TestConflictBudget_Chaos_MidSequenceNilResetClearsStreak —
+//     mid-sequence nil Record drops the counter back to 0 even
+//     after a partial streak.
+//  3. TestConflictBudget_Chaos_FinalSpecSequenceTriggersEscalation —
+//     the literal user-described chaos sequence in one golden run:
+//     [B, C, B, nil, C, C, C] with threshold=3. Each step's
+//     expectation (err / counter) asserted individually.
+//  4. TestConflictBudget_Chaos_WrapPatternMirrorsCoordinator — the
+//     same chaos sequence fed through the coordinator.go wrap
+//     closure, verifying the "keep input err separate" contract.
 package completion
 
 import (
@@ -63,15 +63,15 @@ func TestConflictBudget_Chaos_NoEscalationUnderThreshold(t *testing.T) {
 	cErr := conflictErr("stale fence")
 
 	type step struct {
-		name      string
-		input     error
+		name       string
+		input      error
 		wantConsec int
 	}
 	seq := []step{
 		{"busy-1 (absorbed)", busyErr("worker-A holds writer lock"), 0}, // busy: passthrough, no count
-		{"conflict-1",        cErr,                                     1},
-		{"busy-2 (absorbed)", busyErr("checkpoint wedge"),              1}, // busy: passthrough, no count
-		{"conflict-2",        cErr,                                     2}, // threshold-1, OK
+		{"conflict-1", cErr, 1},
+		{"busy-2 (absorbed)", busyErr("checkpoint wedge"), 1}, // busy: passthrough, no count
+		{"conflict-2", cErr, 2},                               // threshold-1, OK
 	}
 
 	for i, s := range seq {
@@ -168,15 +168,15 @@ func TestConflictBudget_Chaos_MidSequenceNilResetClearsStreak(t *testing.T) {
 //
 // Sequence: [B, C, B, nil, C, C, C]  with threshold=3
 //
-//   step  input  expected consecutive  expected return
-//   ────  ─────  ────────────────────  ───────────────────────
-//   1     B      0                      busy err unchanged (passthrough)
-//   2     C      1                      nil (under threshold)
-//   3     B      1                      busy err unchanged (passthrough)
-//   4     nil    0                      nil (real reset; cleared counter)
-//   5     C      1                      nil (under threshold)
-//   6     C      2                      nil (under threshold)
-//   7     C      3 (boundary)           wrapped ErrConflictBudgetExhausted
+//	step  input  expected consecutive  expected return
+//	────  ─────  ────────────────────  ───────────────────────
+//	1     B      0                      busy err unchanged (passthrough)
+//	2     C      1                      nil (under threshold)
+//	3     B      1                      busy err unchanged (passthrough)
+//	4     nil    0                      nil (real reset; cleared counter)
+//	5     C      1                      nil (under threshold)
+//	6     C      2                      nil (under threshold)
+//	7     C      3 (boundary)           wrapped ErrConflictBudgetExhausted
 func TestConflictBudget_Chaos_FinalSpecSequenceTriggersEscalation(t *testing.T) {
 	b := NewConflictBudget(ConflictBudgetPolicy{ConsecutiveConflictThreshold: 3})
 	cErr := conflictErr("stale fence")
@@ -196,12 +196,12 @@ func TestConflictBudget_Chaos_FinalSpecSequenceTriggersEscalation(t *testing.T) 
 		input error
 		want  expect
 	}{
-		{"busy-1",        busy1, expect{consec: 0, errMode: "passthrough"}},
-		{"conflict-1",    cErr,  expect{consec: 1, errMode: "nil"}},
-		{"busy-2",        busy2, expect{consec: 1, errMode: "passthrough"}},
-		{"nil-reset-mid", nil,   expect{consec: 0, errMode: "nil"}},
-		{"conflict-2",    cErr,  expect{consec: 1, errMode: "nil"}},
-		{"conflict-3",    cErr,  expect{consec: 2, errMode: "nil"}},
+		{"busy-1", busy1, expect{consec: 0, errMode: "passthrough"}},
+		{"conflict-1", cErr, expect{consec: 1, errMode: "nil"}},
+		{"busy-2", busy2, expect{consec: 1, errMode: "passthrough"}},
+		{"nil-reset-mid", nil, expect{consec: 0, errMode: "nil"}},
+		{"conflict-2", cErr, expect{consec: 1, errMode: "nil"}},
+		{"conflict-3", cErr, expect{consec: 2, errMode: "nil"}},
 		// boundary step: counter is OBSERVED at 2 immediately
 		// before this Record call (from step 6). After the
 		// Record call returns the boundary error, eager-delete

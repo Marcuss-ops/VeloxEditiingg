@@ -34,17 +34,17 @@ type fakeS3Client struct {
 	existingParts []s3PartSummary
 
 	// Per-method override hooks. nil → fall through to default.
-	createFn        func(ctx context.Context, params interface{}) (multipartCreateResult, error)
-	uploadPartFn    func(ctx context.Context, params interface{}) (multipartUploadResult, error)
-	completeFn      func(ctx context.Context, params interface{}) (multipartCompleteResult, error)
-	abortFn         func(ctx context.Context, params interface{}) error
-	listPartsFn     func(ctx context.Context, params interface{}) (multipartListResult, error)
+	createFn     func(ctx context.Context, params interface{}) (multipartCreateResult, error)
+	uploadPartFn func(ctx context.Context, params interface{}) (multipartUploadResult, error)
+	completeFn   func(ctx context.Context, params interface{}) (multipartCompleteResult, error)
+	abortFn      func(ctx context.Context, params interface{}) error
+	listPartsFn  func(ctx context.Context, params interface{}) (multipartListResult, error)
 
 	// Counters.
-	createCalls atomic.Int32
-	uploadCalls atomic.Int32
-	completeCalls atomic.Int32
-	abortCalls atomic.Int32
+	createCalls    atomic.Int32
+	uploadCalls    atomic.Int32
+	completeCalls  atomic.Int32
+	abortCalls     atomic.Int32
 	listPartsCalls atomic.Int32
 }
 
@@ -460,13 +460,13 @@ func TestIsTransientS3Error(t *testing.T) {
 
 func TestParseS3URL(t *testing.T) {
 	cases := []struct {
-		name        string
-		url         string
-		fallbackID  string
-		wantBucket  string
-		wantKey     string
-		wantUpload  string
-		wantErr     bool
+		name       string
+		url        string
+		fallbackID string
+		wantBucket string
+		wantKey    string
+		wantUpload string
+		wantErr    bool
 	}{
 		{"s3 scheme", "s3://mybucket/path/to/file.mp4", "u-1", "mybucket", "path/to/file.mp4", "u-1", false},
 		{"https scheme", "https://s3.us-east-1.amazonaws.com/mybucket/file.mp4", "u-2", "mybucket", "file.mp4", "u-2", false},

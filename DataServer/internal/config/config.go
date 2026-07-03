@@ -87,7 +87,7 @@ func (c *Config) Validate() error {
 	// Worker policy: canonical, non-duplicated validator.
 	if err := ValidateProductionWorkers(c.Workers.AllowedWorkerIDs); err != nil {
 		return fmt.Errorf("config: VELOX_ALLOWED_WORKERS: %w", err)
-	}	// NopBlobStore is a development-only escape hatch.  It MUST NOT be
+	} // NopBlobStore is a development-only escape hatch.  It MUST NOT be
 	// active in production — this guard uses the canonical Server.GinMode
 	// and VELOX_ENVIRONMENT env var, centralised here so no caller can
 	// silently bypass it.

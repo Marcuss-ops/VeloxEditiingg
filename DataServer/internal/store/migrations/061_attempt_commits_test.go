@@ -210,11 +210,11 @@ func TestMigration061_RoundTrip(t *testing.T) {
 	}
 
 	var (
-		status         string
-		commitToken    string
-		committedAt    sql.NullString
-		requiredCount  int
-		taskRevision   int
+		status        string
+		commitToken   string
+		committedAt   sql.NullString
+		requiredCount int
+		taskRevision  int
 	)
 	err = db.QueryRow(
 		`SELECT status, commit_token_hash, committed_at,

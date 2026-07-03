@@ -125,13 +125,13 @@ func seedCandidateTask(t *testing.T, db *sql.DB,
 // (covered by the OR-NULL branch), 1 PENDING (excluded by status).
 //
 // Expected output order:
-//   * T-E  priority=30  created_at=t0+0s       (FIRST: top priority)
-//   * T-B  priority=20  created_at=t0+1s
-//   * T-A  priority=10  created_at=t0+2s       (LAST in priority FIFO)
-//   * T-N  priority=5   worker_id=NULL         (still surfaces)
+//   - T-E  priority=30  created_at=t0+0s       (FIRST: top priority)
+//   - T-B  priority=20  created_at=t0+1s
+//   - T-A  priority=10  created_at=t0+2s       (LAST in priority FIFO)
+//   - T-N  priority=5   worker_id=NULL         (still surfaces)
 //
 // This pins the ORDER BY priority DESC, created_at ASC clause, the
-// (worker_id='' OR worker_id IS NULL) WHERE branch, AND the
+// (worker_id=” OR worker_id IS NULL) WHERE branch, AND the
 // conversion from row → placement.TaskCandidate (ExecutorKey
 // populated from executor_id/executor_version, CreatedAt parsed from
 // a RFC3339 string).

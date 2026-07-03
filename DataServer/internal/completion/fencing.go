@@ -42,19 +42,19 @@ import (
 // Field inventory:
 //
 //   - TaskID    : the canonical task id (UUID, set at Job creation
-//                 and stable for the Task's whole lifetime).
+//     and stable for the Task's whole lifetime).
 //   - AttemptID : the canonical attempt id (UUID, minted at
-//                 ClaimNextWithAttemptAtomic and stamped on the task
-//                 row at the same instant).
+//     ClaimNextWithAttemptAtomic and stamped on the task
+//     row at the same instant).
 //   - WorkerID  : the worker advertising the report. Stable only for
-//                 the lifetime of the worker's claim.
+//     the lifetime of the worker's claim.
 //   - LeaseID   : the per-claim UUID that the master minted at Offer
-//                 time. A new Attempt bumps LeaseID; the same
-//                 LeaseID contractually bounds the InvariantReport.
+//     time. A new Attempt bumps LeaseID; the same
+//     LeaseID contractually bounds the InvariantReport.
 //   - Revision  : the master-side task_revision stamped on
-//                 attempt_commits at DeclareOutputs time. Re-read
-//                 and re-compared by the central gate function on
-//                 every subsequent transition.
+//     attempt_commits at DeclareOutputs time. Re-read
+//     and re-compared by the central gate function on
+//     every subsequent transition.
 type FenceTuple struct {
 	TaskID    string
 	AttemptID string
@@ -92,7 +92,7 @@ func (f FenceTuple) Validate() error {
 //
 // Predicates:
 //
-//   task_id = ? AND attempt_id = ? AND worker_id = ? AND lease_id = ? AND task_revision = ?
+//	task_id = ? AND attempt_id = ? AND worker_id = ? AND lease_id = ? AND task_revision = ?
 //
 // task_revision is included so that an inline CAS whose WHERE clause
 // uses SQLWhere is automatically revision-strict. This is a
@@ -159,11 +159,11 @@ func (f FenceTuple) Read(ctx context.Context, tx *sql.Tx) (*AttemptCommitState, 
 		return nil, fmt.Errorf("%w: %v", ErrFenceMismatch, verr)
 	}
 	var (
-		commitID      string
-		status        string
-		storedWorker  string
-		storedLease   string
-		storedRev     int
+		commitID     string
+		status       string
+		storedWorker string
+		storedLease  string
+		storedRev    int
 	)
 	err := tx.QueryRowContext(ctx, `
 		SELECT commit_id, status, worker_id, lease_id, task_revision
@@ -179,8 +179,8 @@ func (f FenceTuple) Read(ctx context.Context, tx *sql.Tx) (*AttemptCommitState, 
 		return nil, fmt.Errorf("completion.FenceTuple.Read: %w", err)
 	}
 	if storedWorker != f.WorkerID || storedLease != f.LeaseID || storedRev != f.Revision {
-	return nil, fmt.Errorf("%w: fence mismatch (stored worker_id=%q lease_id=%q revision=%d status=%q; supplied worker_id=%q lease_id=%q revision=%d)",
-		ErrTransitionConflict, storedWorker, storedLease, storedRev, status, f.WorkerID, f.LeaseID, f.Revision)
+		return nil, fmt.Errorf("%w: fence mismatch (stored worker_id=%q lease_id=%q revision=%d status=%q; supplied worker_id=%q lease_id=%q revision=%d)",
+			ErrTransitionConflict, storedWorker, storedLease, storedRev, status, f.WorkerID, f.LeaseID, f.Revision)
 	}
 	return &AttemptCommitState{CommitID: commitID, Status: status, TaskRevision: storedRev}, nil
 }
@@ -200,11 +200,11 @@ func (f FenceTuple) ReadOrMissing(ctx context.Context, tx *sql.Tx) (*AttemptComm
 		return nil, fmt.Errorf("%w: %v", ErrFenceMismatch, verr)
 	}
 	var (
-		commitID      string
-		status        string
-		storedWorker  string
-		storedLease   string
-		storedRev     int
+		commitID     string
+		status       string
+		storedWorker string
+		storedLease  string
+		storedRev    int
 	)
 	err := tx.QueryRowContext(ctx, `
 		SELECT commit_id, status, worker_id, lease_id, task_revision
@@ -219,8 +219,8 @@ func (f FenceTuple) ReadOrMissing(ctx context.Context, tx *sql.Tx) (*AttemptComm
 		return nil, fmt.Errorf("completion.FenceTuple.ReadOrMissing: %w", err)
 	}
 	if storedWorker != f.WorkerID || storedLease != f.LeaseID || storedRev != f.Revision {
-	return nil, fmt.Errorf("%w: fence mismatch (stored worker_id=%q lease_id=%q revision=%d status=%q; supplied worker_id=%q lease_id=%q revision=%d)",
-		ErrTransitionConflict, storedWorker, storedLease, storedRev, status, f.WorkerID, f.LeaseID, f.Revision)
+		return nil, fmt.Errorf("%w: fence mismatch (stored worker_id=%q lease_id=%q revision=%d status=%q; supplied worker_id=%q lease_id=%q revision=%d)",
+			ErrTransitionConflict, storedWorker, storedLease, storedRev, status, f.WorkerID, f.LeaseID, f.Revision)
 	}
 	return &AttemptCommitState{CommitID: commitID, Status: status, TaskRevision: storedRev}, nil
 }

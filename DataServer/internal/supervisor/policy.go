@@ -18,12 +18,12 @@
 // Classification:
 //
 //   - ErrInfrastructure:    DB closed, ctx deadline from infra, sql.ErrConnDone.
-//                          Consecutive > threshold → return to supervisor.
+//     Consecutive > threshold → return to supervisor.
 //   - ErrElementScoped:     Per-row failure already persisted
-//                          (MarkFailed/MarkRetry/BlockedAuth on the row).
-//                          Continue to the next element.
+//     (MarkFailed/MarkRetry/BlockedAuth on the row).
+//     Continue to the next element.
 //   - ErrLeaseLost:         CAS conflict from another runner.
-//                          Cancel in-flight via context; no row mutation.
+//     Cancel in-flight via context; no row mutation.
 //
 // The runners call supervisor.ClassifyError on every tick error,
 // record the verdict via supervisor.FailureTracker.Record, and
@@ -113,7 +113,7 @@ type RetryPolicy struct {
 func DefaultRetryPolicy() RetryPolicy {
 	return RetryPolicy{
 		ConsecutiveErrorThreshold: 5,
-		ResetWindow:              30 * time.Second,
+		ResetWindow:               30 * time.Second,
 	}
 }
 

@@ -36,10 +36,10 @@ import (
 // volatile in-memory goroutine. The CreatorForwardingRunner picks up
 // the row on its next tick and handles polling + forwarding durably.
 type Service struct {
-	enqueuer *enqueue.Enqueuer
-	client   *remoteengine.Client
-	dbStore  *store.SQLiteStore
-	dataDir  string
+	enqueuer  *enqueue.Enqueuer
+	client    *remoteengine.Client
+	dbStore   *store.SQLiteStore
+	dataDir   string
 	videosDir string
 	masterURL string
 }
@@ -74,7 +74,7 @@ func New(cfg *config.Config, enqueuer *enqueue.Enqueuer, dbStore *store.SQLiteSt
 // NewForwarder constructs a PurposeService stripped to the fields that the
 // authoritative ForwardCompleted needs:
 //
-//   enqueuer + dataDir + videosDir + masterURL.
+//	enqueuer + dataDir + videosDir + masterURL.
 //
 // client and dbStore are nil. As a consequence:
 //
@@ -196,7 +196,7 @@ func firstString(m map[string]interface{}, keys ...string) string {
 		}
 	}
 	return ""
-}// ForwardCompleted is a THIN SHIM that delegates to the canonical
+} // ForwardCompleted is a THIN SHIM that delegates to the canonical
 // Resolver. It is retained on the Service struct for backward
 // compatibility — every existing caller (pipeline.Handlers, tests) goes
 // through this method without modification.
@@ -298,8 +298,6 @@ func (s *Service) forwardCompletedForwarderOnly(ctx context.Context, result map[
 	}
 	return s.enqueuer.Enqueue(ctx, workerPayload, costmodel.DefaultRequirements())
 }
-
-
 
 func resolvePublicMasterURL(cfg *config.Config) string {
 	if cfg != nil {

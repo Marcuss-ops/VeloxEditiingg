@@ -48,7 +48,7 @@ func TestCapabilities_IsKnownCapability(t *testing.T) {
 		{CapabilityArtifactUploadCompletedV1, true},
 		{CapabilityTaskCommitAckV1, true},
 		{"", false},
-		{"artifact.commit.v0", false},   // deprecated-by-naming
+		{"artifact.commit.v0", false},      // deprecated-by-naming
 		{"artifact.commit.v2.beta", false}, // not yet a constant
 		{"executor.legacy.v1", false},
 		{"ARTIFACT.COMMIT.V1", false}, // case-sensitive (kebab norm)
@@ -69,12 +69,12 @@ func TestCapabilities_IsKnownCapability(t *testing.T) {
 // inspection.
 func TestCapabilities_AllCapabilitiesIsClosedSet(t *testing.T) {
 	declared := map[string]bool{
-		CapabilityArtifactCommitV1:            true,
-		CapabilityExecutorHybridV1:            true,
-		CapabilityTaskOutputDeclaredV1:        true,
-		CapabilityArtifactUploadPlanV1:        true,
-		CapabilityArtifactUploadCompletedV1:   true,
-		CapabilityTaskCommitAckV1:             true,
+		CapabilityArtifactCommitV1:          true,
+		CapabilityExecutorHybridV1:          true,
+		CapabilityTaskOutputDeclaredV1:      true,
+		CapabilityArtifactUploadPlanV1:      true,
+		CapabilityArtifactUploadCompletedV1: true,
+		CapabilityTaskCommitAckV1:           true,
 	}
 	allAsSet := map[string]bool{}
 	for _, c := range AllCapabilities {

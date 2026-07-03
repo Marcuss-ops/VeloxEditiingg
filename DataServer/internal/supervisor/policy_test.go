@@ -159,7 +159,7 @@ func TestFailureTracker_EscalatesAfterThreshold(t *testing.T) {
 func TestFailureTracker_ResetWindowRefreshesStreak(t *testing.T) {
 	tk := NewFailureTracker(RetryPolicy{
 		ConsecutiveErrorThreshold: 5,
-		ResetWindow:              1 * time.Second,
+		ResetWindow:               1 * time.Second,
 	})
 	now := time.Now()
 	mockNow := func() time.Time { return now }
@@ -312,13 +312,13 @@ func TestClosedDB_RunnerReturnsErrInfrastructureAfterN(t *testing.T) {
 	// exercising the consecutive-error contract.
 	tracker := NewFailureTracker(RetryPolicy{
 		ConsecutiveErrorThreshold: 3,
-		ResetWindow:              0,
+		ResetWindow:               0,
 	})
 
 	var (
-		escalated      atomic.Bool
-		cleanTicks     atomic.Int32
-		totalTicks     atomic.Int32
+		escalated  atomic.Bool
+		cleanTicks atomic.Int32
+		totalTicks atomic.Int32
 	)
 	for i := 0; i < 10; i++ {
 		err := probe()

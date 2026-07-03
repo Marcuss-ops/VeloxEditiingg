@@ -88,7 +88,7 @@ func (s *SQLiteStore) ClaimDeliveries(ctx context.Context, runnerID string, leas
 	type claimedRow struct {
 		deliveryID, artifactID, destID string
 		attemptCount                   int
-		maxAttempts                   int
+		maxAttempts                    int
 	}
 	var claimed []claimedRow
 	for rows.Next() {

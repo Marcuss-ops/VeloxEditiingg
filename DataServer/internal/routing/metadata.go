@@ -38,10 +38,10 @@ type InternalRoutingMetadata struct {
 // access patterns. Every file that previously used bare "_internal_*"
 // strings MUST import these constants instead.
 const (
-	KeyForwardingKey     = "_internal_forwarding_key"
-	KeyPipelineID        = "_internal_pipeline_id"
-	KeyExecutorID        = "_internal_executor_id"
-	KeyExecutorVersion   = "_internal_executor_version"
+	KeyForwardingKey   = "_internal_forwarding_key"
+	KeyPipelineID      = "_internal_pipeline_id"
+	KeyExecutorID      = "_internal_executor_id"
+	KeyExecutorVersion = "_internal_executor_version"
 )
 
 // FromPayload extracts InternalRoutingMetadata from a raw payload map.

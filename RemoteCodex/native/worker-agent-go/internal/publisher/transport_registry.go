@@ -9,18 +9,18 @@
 //
 // Two transports ship in-tree today:
 //
-//   master-stream.v1            dev / small / E2E; reuses the existing
-//                               master HTTP chunked upload handler
-//                               (DataServer/internal/handlers/remote/
-//                               workers/uploads/chunked.go).
+//	master-stream.v1            dev / small / E2E; reuses the existing
+//	                            master HTTP chunked upload handler
+//	                            (DataServer/internal/handlers/remote/
+//	                            workers/uploads/chunked.go).
 //
-//   object-store-multipart.v1   production; AWS SDK v2 S3-compatible
-//                               multipart upload with per-chunk
-//                               retry (SDK retry middleware), resume
-//                               after crash (ListParts + re-upload
-//                               only the missing ranges), and
-//                               ChecksumAlgorithm=SHA-256 (matches
-//                               the worker's manifest hash).
+//	object-store-multipart.v1   production; AWS SDK v2 S3-compatible
+//	                            multipart upload with per-chunk
+//	                            retry (SDK retry middleware), resume
+//	                            after crash (ListParts + re-upload
+//	                            only the missing ranges), and
+//	                            ChecksumAlgorithm=SHA-256 (matches
+//	                            the worker's manifest hash).
 //
 // Adding a new transport means: (a) implement Transport below,
 // (b) register it in NewRegistry. The selector reads the
@@ -54,8 +54,8 @@ import (
 // the worker registry and the master dispatcher bind to the same
 // literal.
 const (
-	TransportIDMasterStream          = "master-stream.v1"
-	TransportIDObjectStoreMultipart  = "object-store-multipart.v1"
+	TransportIDMasterStream         = "master-stream.v1"
+	TransportIDObjectStoreMultipart = "object-store-multipart.v1"
 )
 
 // Sentinel errors. Use errors.Is — string match on .Error() is forbidden
@@ -259,9 +259,10 @@ const chunkSize int64 = 8 * 1024 * 1024
 // Upload implements Transport.Upload for MasterStreamTransport.
 //
 // Wire shape (master side):
-//   POST {target.upload_url}  (init: returns upload_id + chunk_state)
-//   PUT  {target.upload_url}/{chunk_index}  (chunk body)
-//   POST {target.upload_url}/complete  (finalize: returns server SHA256)
+//
+//	POST {target.upload_url}  (init: returns upload_id + chunk_state)
+//	PUT  {target.upload_url}/{chunk_index}  (chunk body)
+//	POST {target.upload_url}/complete  (finalize: returns server SHA256)
 func (t *MasterStreamTransport) Upload(ctx context.Context, req UploadRequest) (*UploadResult, error) {
 	if req.LocalPath == "" {
 		return nil, fmt.Errorf("master-stream: LocalPath empty")
@@ -502,11 +503,11 @@ func (t *ObjectStoreMultipartTransport) ID() string { return TransportIDObjectSt
 // Upload implements Transport.Upload for ObjectStoreMultipartTransport.
 //
 // Wire flow (S3 multipart):
-//   1. CreateMultipartUpload  (returns S3UploadId)
-//   2. ListParts              (resume: if any parts already present,
-//                              resume rather than restart)
-//   3. For each missing part (1..N): UploadPart with ChecksumSHA256
-//   4. CompleteMultipartUpload (with the assembled parts list)
+//  1. CreateMultipartUpload  (returns S3UploadId)
+//  2. ListParts              (resume: if any parts already present,
+//     resume rather than restart)
+//  3. For each missing part (1..N): UploadPart with ChecksumSHA256
+//  4. CompleteMultipartUpload (with the assembled parts list)
 //
 // On retryable error (SDK 503, network reset, etc.) we retry the
 // per-part UploadPart call up to MaxRetries times with a 200ms
@@ -538,9 +539,9 @@ func (t *ObjectStoreMultipartTransport) Upload(ctx context.Context, req UploadRe
 
 	// 1) Create (or re-use) the multipart upload.
 	createRes, err := t.S3Client.CreateMultipartUpload(ctx, map[string]interface{}{
-		"bucket":       bucket,
-		"key":          key,
-		"upload_id":    s3UploadID,
+		"bucket":          bucket,
+		"key":             key,
+		"upload_id":       s3UploadID,
 		"checksum_sha256": req.WorkerSHA256,
 	})
 	if err != nil {

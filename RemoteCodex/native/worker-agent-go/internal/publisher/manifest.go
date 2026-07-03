@@ -104,11 +104,11 @@ func ComputeLocalManifest(ctx context.Context, path string) (*OutputManifest, er
 	}
 
 	// mimeSniffLen is the head-buffer size http.DetectContentType needs
-// for a confident guess. Go's stdlib does not expose this constant;
-// 512 is the de-facto public value.
-const mimeSniffLen = 512
+	// for a confident guess. Go's stdlib does not expose this constant;
+	// 512 is the de-facto public value.
+	const mimeSniffLen = 512
 
-// Sniff uses the first 512B we already hashed (truncated to that
+	// Sniff uses the first 512B we already hashed (truncated to that
 	// window). We reread a small head segment to keep this function
 	// the single entry point; the heavy byte-budget above stays
 	// single-pass.
@@ -395,8 +395,10 @@ func firstJSONFloat(s, key string) float64 {
 // first rune may be a leading sign (-/+) or a JSON string-opening
 // quote (`"`) — the quote is silently skipped so the value following
 // a JSON key can be read directly:
-//   firstJSONFloat(s, `"duration"`) → rest is `:"42.5", ...`
-//   firstNumber on that → "42.5"
+//
+//	firstJSONFloat(s, `"duration"`) → rest is `:"42.5", ...`
+//	firstNumber on that → "42.5"
+//
 // (the leading `"` is dropped; the digits and the dot survive).
 func firstNumber(s string) string {
 	var b strings.Builder

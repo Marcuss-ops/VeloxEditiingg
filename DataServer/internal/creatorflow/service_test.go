@@ -80,10 +80,10 @@ func TestForwardSchedulesAsyncPollAndWorkerHandoff(t *testing.T) {
 
 	mockCreator := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"ok":       true,
-			"status":   "running",
-			"trace_id": "creator-async-1",
-			"job_id":   "creator-async-1",
+			"ok":          true,
+			"status":      "running",
+			"trace_id":    "creator-async-1",
+			"job_id":      "creator-async-1",
 			"pipeline_id": "scene.composite.v1",
 		})
 	}))
@@ -179,9 +179,9 @@ func TestForwardCompletedEnqueuesWorkerJob(t *testing.T) {
 	)
 
 	svc := &Service{
-		enqueuer: enqueuer,
-		dbStore:  db,
-		dataDir:  tempDir,
+		enqueuer:  enqueuer,
+		dbStore:   db,
+		dataDir:   tempDir,
 		videosDir: filepath.Join(tempDir, "videos"),
 		masterURL: "",
 	}

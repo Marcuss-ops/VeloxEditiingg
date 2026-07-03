@@ -27,8 +27,8 @@ import (
 	"velox-server/internal/artifacts"
 	"velox-server/internal/ingest"
 	"velox-server/internal/jobs"
-	"velox-server/internal/placement"
 	velmetrics "velox-server/internal/metrics"
+	"velox-server/internal/placement"
 	"velox-server/internal/registry"
 	"velox-server/internal/store"
 	"velox-server/internal/taskattempts"
@@ -203,14 +203,14 @@ func NewHandler(
 		config = &HandlerConfig{PushMode: true}
 	}
 	return &Handler{
-		registry:        registry,
-		cmdMgr:          cmdMgr,
-		jobsRepo:        jobsRepo,
-		taskRepo:        taskRepo,
-		taskAttemptRepo: taskAttemptRepo,
-		artifactSvc:     artifactSvc,
-		dbStore:         dbStore,
-		config:          config,
+		registry:         registry,
+		cmdMgr:           cmdMgr,
+		jobsRepo:         jobsRepo,
+		taskRepo:         taskRepo,
+		taskAttemptRepo:  taskAttemptRepo,
+		artifactSvc:      artifactSvc,
+		dbStore:          dbStore,
+		config:           config,
 		authorizer:       NewAllowlistAuthorizer(config.AllowedWorkers, config.AllowInsecure),
 		placementMatcher: placement.NewMatcher(),
 		sessions:         make(map[string]*workerSession),
@@ -507,20 +507,20 @@ func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMasterEnvelo
 			case *pb.WorkerToMasterEnvelope_CommandAck:
 				h.handleCommandAck(workerID, m.CommandAck)
 
-		case *pb.WorkerToMasterEnvelope_ArtifactUploaded:
-			// Blocco 1 final-wire (P0 #2, #3, #4): invoke the
-			// capability gate before delegating. ArtifactUploaded
-			// is the on-the-wire "artifact.commit.v1" message and
-			// the canonical write path through artifacts.Service.
-			// A misconfigured/spool-broken/transport-empty master
-			// MUST NOT accept a commit because that would yield a
-			// SUCCEEDED job with no on-disk blob. See
-			// handler_artifacts.go::checkArtifactCommitGate for
-			// the fail-closed semantic (PermissionDenied).
-			if gateErr := h.checkArtifactCommitGate(workerID); gateErr != nil {
-				return gateErr
-			}
-			h.handleArtifactUploaded(workerID, m.ArtifactUploaded)
+			case *pb.WorkerToMasterEnvelope_ArtifactUploaded:
+				// Blocco 1 final-wire (P0 #2, #3, #4): invoke the
+				// capability gate before delegating. ArtifactUploaded
+				// is the on-the-wire "artifact.commit.v1" message and
+				// the canonical write path through artifacts.Service.
+				// A misconfigured/spool-broken/transport-empty master
+				// MUST NOT accept a commit because that would yield a
+				// SUCCEEDED job with no on-disk blob. See
+				// handler_artifacts.go::checkArtifactCommitGate for
+				// the fail-closed semantic (PermissionDenied).
+				if gateErr := h.checkArtifactCommitGate(workerID); gateErr != nil {
+					return gateErr
+				}
+				h.handleArtifactUploaded(workerID, m.ArtifactUploaded)
 
 			case *pb.WorkerToMasterEnvelope_Goodbye:
 				return nil
@@ -829,15 +829,15 @@ func (s *workerSession) placementSnapshot(workerID string) placement.WorkerSnaps
 	s.capabilitiesMu.RUnlock()
 
 	return placement.WorkerSnapshot{
-		WorkerID:          workerID,
-		SessionID:         s.sessionID,
-		Ready:             s.ready.Load(),
-		Draining:          s.draining.Load(),
-		SessionAlive:      true,
-		MaxParallelJobs:   int(s.maxParallelJobs.Load()),
-		ActiveJobs:        int(s.activeJobsCount.Load()),
-		Executors:         executors,
-		Capabilities:      caps,
+		WorkerID:           workerID,
+		SessionID:          s.sessionID,
+		Ready:              s.ready.Load(),
+		Draining:           s.draining.Load(),
+		SessionAlive:       true,
+		MaxParallelJobs:    int(s.maxParallelJobs.Load()),
+		ActiveJobs:         int(s.activeJobsCount.Load()),
+		Executors:          executors,
+		Capabilities:       caps,
 		CapabilityRevision: s.capabilityRevision.Load(),
 		LastHeartbeat: time.Unix(
 			s.lastHeartbeatUnix.Load(),

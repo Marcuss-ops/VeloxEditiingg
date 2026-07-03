@@ -373,9 +373,15 @@ func runServer(cfg *config.Config) error {
 			}
 			// RW-PROD-001 M1 follow-up: opt-in silently ignored when GRPCPort=0.
 			// Emit a loud WARN so misconfigured operators notice before deploy.
-			if strings.TrimSpace(os.Getenv("VELOX_GRPC_REQUIRE_TLS")) == "true" && cfg.Server.GRPCPort == 0 {
-				log.Printf("[WARN] RW-PROD-001 A5: VELOX_GRPC_REQUIRE_TLS=true but VELOX_GRPC_PORT=0; opt-in ignored, gRPC will not start. Set VELOX_GRPC_PORT>0 (e.g. 8443) to enable the TLS-only gRPC plane.")
-			}
+			//
+			// Verdetto Blocco 5 / sub-point (c): the former
+			//   if VELOX_GRPC_REQUIRE_TLS && cfg.Server.GRPCPort == 0
+			// check at this site was UNREACHABLE — the surrounding
+			// scope is guarded by `if cfg.Server.GRPCPort > 0`, so
+			// GRPCPort can never be 0 here. The dead warn was
+			// removed; future operator-facing visibility on
+			// misconfigured TLS-only gRPC environments will be
+			// handled in a non-dead-code path (Phase 6.5+).
 			grpcHandler := grpcserver.NewHandler(
 				w.Registry, w.CommandManager, jobsRepo, t.TaskRepository, t.AttemptRepository, a.ArtifactSvc, p.SQLite,
 				buildGRPCHandlerConfig(cfg, insecureDev),
@@ -405,30 +411,30 @@ func runServer(cfg *config.Config) error {
 			// handler_artifacts.go::checkArtifactCommitGate.
 			grpcHandler.SetCapabilityRegistry(capabilityRegistry)
 			log.Printf("[BOOTSTRAP] wired capability registry (artifact.commit.v1 gate) on gRPC handler")
-		gs, lis, gerr := grpcserver.StartGRPCServer(
-			cfg.Server.GRPCPort, grpcHandler,
-			cfg.Server.GRPCTLSCertFile, cfg.Server.GRPCTLSKeyFile, cfg.Server.GRPCTLSCAFile,
-		)
-		if gerr != nil {
-			// Blocco 1 (P0 #2, #3, #4): when GRPCPort > 0, a gRPC
-			// startup failure is a misconfiguration the operator
-			// MUST see loudly. Log-and-continue would mask the
-			// failure for the lifetime of the pod; k8s/systemd need
-			// the non-nil error so the pod can be restarted.
-			return fmt.Errorf("[SERVER] gRPC server failed to start on port %d: %w", cfg.Server.GRPCPort, gerr)
+			gs, lis, gerr := grpcserver.StartGRPCServer(
+				cfg.Server.GRPCPort, grpcHandler,
+				cfg.Server.GRPCTLSCertFile, cfg.Server.GRPCTLSKeyFile, cfg.Server.GRPCTLSCAFile,
+			)
+			if gerr != nil {
+				// Blocco 1 (P0 #2, #3, #4): when GRPCPort > 0, a gRPC
+				// startup failure is a misconfiguration the operator
+				// MUST see loudly. Log-and-continue would mask the
+				// failure for the lifetime of the pod; k8s/systemd need
+				// the non-nil error so the pod can be restarted.
+				return fmt.Errorf("[SERVER] gRPC server failed to start on port %d: %w", cfg.Server.GRPCPort, gerr)
+			}
+			if gs != nil {
+				grpcSrv = &grpcServerWrapper{Server: gs, Listener: lis}
+				// Verdetto P0 #5 (Blocco 2): grpcStarted = true ONLY
+				// after StartGRPCServer returns nil. The transport
+				// probe closure (step 6) captures this so a
+				// GRPCPort>0 + grpcStarted=false state fails /ready
+				// with a "transport: gRPC server failed to start"
+				// message instead of the previous "always nil" stub
+				// that masked gRPC misconfigurations.
+				grpcStarted = true
+			}
 		}
-		if gs != nil {
-			grpcSrv = &grpcServerWrapper{Server: gs, Listener: lis}
-			// Verdetto P0 #5 (Blocco 2): grpcStarted = true ONLY
-			// after StartGRPCServer returns nil. The transport
-			// probe closure (step 6) captures this so a
-			// GRPCPort>0 + grpcStarted=false state fails /ready
-			// with a "transport: gRPC server failed to start"
-			// message instead of the previous "always nil" stub
-			// that masked gRPC misconfigurations.
-			grpcStarted = true
-		}
-	}
 	}
 
 	// 6. Wire readiness checks.

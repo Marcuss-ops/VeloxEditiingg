@@ -82,7 +82,7 @@ type ConflictBudgetPolicy struct {
 func DefaultConflictBudgetPolicy() ConflictBudgetPolicy {
 	return ConflictBudgetPolicy{
 		ConsecutiveConflictThreshold: 3,
-		ResetWindow:                 5 * time.Minute,
+		ResetWindow:                  5 * time.Minute,
 	}
 }
 
@@ -143,19 +143,19 @@ type streakState struct {
 // each transition independently:
 //
 //   - ResetConflictBudget()                 — real reset (Record(nil) on
-//                                              a non-zero prior streak).
-//                                              No-op resets (streak=0) do
-//                                              NOT increment.
+//     a non-zero prior streak).
+//     No-op resets (streak=0) do
+//     NOT increment.
 //   - ObserveConflictStreakUnderThreshold(streak int)
-//                                            — Record(ErrTransitionConflict)
-//                                              that incremented the streak
-//                                              but stayed under threshold.
-//                                              streak is the POST-increment
-//                                              value (>= 1, <= threshold-1).
+//     — Record(ErrTransitionConflict)
+//     that incremented the streak
+//     but stayed under threshold.
+//     streak is the POST-increment
+//     value (>= 1, <= threshold-1).
 //   - EscalateConflictBudget(streak int)     — Record(ErrTransitionConflict)
-//                                              that crossed the threshold.
-//                                              streak is the POST-increment
-//                                              value (= threshold).
+//     that crossed the threshold.
+//     streak is the POST-increment
+//     value (= threshold).
 //
 // The metrics.Collector method set matches this interface via Go's
 // structural typing; bootstrap can wire it without an explicit cast.
@@ -187,8 +187,8 @@ func NewConflictBudget(p ConflictBudgetPolicy) *ConflictBudget {
 		p.ResetWindow = 5 * time.Minute
 	}
 	return &ConflictBudget{
-		Policy: p,
-		nowFn:  time.Now,
+		Policy:  p,
+		nowFn:   time.Now,
 		streaks: make(map[string]*streakState),
 	}
 }

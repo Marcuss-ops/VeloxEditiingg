@@ -208,6 +208,7 @@ func (s *spoofStubTaskRepo) ListReadyCandidates(_ context.Context, _ int) ([]pla
 func (s *spoofStubTaskRepo) ClaimTaskForWorkerAtomic(_ context.Context, _ taskgraph.ClaimTaskForWorkerCommand) (*taskgraph.TaskWithSpec, *taskattempts.TaskAttempt, error) {
 	panic("spoofStubTaskRepo.ClaimTaskForWorkerAtomic")
 }
+
 // IngestTaskResultAtomic mirrors the production-fan-out: ONE call
 // commits the Task close + typed-metrics/cache/cost persistence +
 // artifact registration as a single SQL transaction. A CAS conflict
@@ -515,7 +516,7 @@ func TestHandleTaskResult_RejectsIdentitySpoofing_HandlerLayerDrop(t *testing.T)
 	tr := &pb.TaskResult{
 		TaskId:        fx.taskID,
 		AttemptId:     fx.wireAttemptID,
-		AttemptNumber: 1, // matches canonical seeded attempt.AttemptNumber
+		AttemptNumber: 1,            // matches canonical seeded attempt.AttemptNumber
 		LeaseId:       fx.wireLease, // SPOOF: canonical is fx.canonicalLease
 		JobId:         fx.wireJobID,
 		Status:        "succeeded",
@@ -646,7 +647,7 @@ func TestHandleTaskResult_PersistTypedMetrics_F1(t *testing.T) {
 	tr := &pb.TaskResult{
 		TaskId:           fx.taskID,
 		AttemptId:        fx.wireAttemptID,
-		AttemptNumber:    1, // matches canonical seeded attempt.AttemptNumber
+		AttemptNumber:    1,                 // matches canonical seeded attempt.AttemptNumber
 		LeaseId:          fx.canonicalLease, // match canonical seed (sub-tests above already proved identity)
 		JobId:            fx.wireJobID,
 		Status:           "succeeded",

@@ -1337,13 +1337,13 @@ func TestClaimTaskForWorkerAtomic_Atomicity(t *testing.T) {
 
 	// Atomicity: task row preserved at READY + pre-state.
 	var (
-		status       string
-		storedWorker string
-		storedLease  string
-		revision     int
-		attemptIDCol sql.NullString
+		status        string
+		storedWorker  string
+		storedLease   string
+		revision      int
+		attemptIDCol  sql.NullString
 		attemptNumCol sql.NullInt64
-		leaseExpCol  sql.NullString
+		leaseExpCol   sql.NullString
 	)
 	err = s.db.QueryRowContext(ctx,
 		`SELECT status, COALESCE(worker_id, ''), COALESCE(lease_id, ''),

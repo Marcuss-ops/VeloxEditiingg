@@ -72,9 +72,9 @@ func (y *YouTubeProvider) Deliver(ctx context.Context, artifact *store.Artifact,
 	}
 
 	cfg := integrationsYouTube.UploadConfig{
-		Title:           artifact.ID,
-		Description:     "",
-		PrivacyStatus:   "private",
+		Title:            artifact.ID,
+		Description:      "",
+		PrivacyStatus:    "private",
 		IdempotencyToken: deliveryID,
 	}
 

@@ -11,17 +11,17 @@
 // Three capability surfaces are wired:
 //
 //   - coordinator — the completion.Coordinator (CommitAttempt,
-//                   CompleteUpload, ReconcileAttempt). The coordinator
-//                   is healthy iff *sql.DB ping succeeds AND the
-//                   uow factory is non-nil.
+//     CompleteUpload, ReconcileAttempt). The coordinator
+//     is healthy iff *sql.DB ping succeeds AND the
+//     uow factory is non-nil.
 //   - spool       — the artifact spool / chunked-upload staging dir.
-//                   Healthy iff staging dir exists and is writable.
+//     Healthy iff staging dir exists and is writable.
 //   - transport   — the (typed) transport registry used by the
-//                   forward-and-publish pipeline. Healthy iff the
-//                   registry is non-nil AND at least one transport
-//                   is registered (a registry with zero registered
-//                   transports cannot publish through any path, so
-//                   artefact.commit.v1 must refuse).
+//     forward-and-publish pipeline. Healthy iff the
+//     registry is non-nil AND at least one transport
+//     is registered (a registry with zero registered
+//     transports cannot publish through any path, so
+//     artefact.commit.v1 must refuse).
 //
 // Adding a new capability is one Register call; the registry stays
 // extensible without changing the gRPC handler.

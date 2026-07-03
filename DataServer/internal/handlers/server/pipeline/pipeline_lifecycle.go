@@ -107,8 +107,8 @@ func (h *Handlers) startPolling(jobID string, intervalSec int) {
 					}
 				}
 
-			if enqueue.ShouldForwardPipelineResult(forwardResult) {
-				if forwarded, fwdErr := h.forwardPipelineResultToWorker(context.Background(), forwardResult); fwdErr != nil {
+				if enqueue.ShouldForwardPipelineResult(forwardResult) {
+					if forwarded, fwdErr := h.forwardPipelineResultToWorker(context.Background(), forwardResult); fwdErr != nil {
 						pipelineLog("FORWARD: FAILED job_id=%s: %v", jobID, fwdErr)
 					} else {
 						workerJobID, _ := forwarded["job_id"].(string)

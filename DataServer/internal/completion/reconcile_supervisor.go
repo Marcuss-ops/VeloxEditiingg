@@ -15,7 +15,7 @@
 // Action dimension (3 values):
 //   - noop:        the row was already fixed by a concurrent writer
 //   - transition:  Coordinator.ReconcileAttempt advanced the row
-//                  to a terminal state (EXPIRED, COMMITTED, etc.)
+//     to a terminal state (EXPIRED, COMMITTED, etc.)
 //   - escalate:    unresolvable state, operator/DBA intervention
 //
 // The completion_reconcile_total{case,action} counter exposes the
@@ -135,15 +135,15 @@ type ReconcileMetrics interface {
 // hands work to Coordinator.ReconcileAttempt. One instance per
 // master, registered as a BackgroundRunner.
 type ReconcileSupervisor struct {
-	DB      *sql.DB
-	Coord   Coordinator
-	Metrics ReconcileMetrics
-	Tick    time.Duration
-	Limit   int
+	DB       *sql.DB
+	Coord    Coordinator
+	Metrics  ReconcileMetrics
+	Tick     time.Duration
+	Limit    int
 	lastTick time.Time
-	seenIDs map[string]time.Time
-	seenCap int
-	seenMu  sync.Mutex
+	seenIDs  map[string]time.Time
+	seenCap  int
+	seenMu   sync.Mutex
 	// Log is the sink for human-readable operational log lines
 	// (scan errors, dispatch errors, startup banner). Defaults
 	// to log.Printf; tests that intentionally exercise the
@@ -186,15 +186,15 @@ func NewReconcileSupervisor(db *sql.DB, coord Coordinator, metrics ReconcileMetr
 		metrics = noopReconcileMetrics{}
 	}
 	return &ReconcileSupervisor{
-		DB:      db,
-		Coord:   coord,
-		Metrics: metrics,
-		Tick:    15 * time.Second,
-		Limit:   500,
-		seenIDs: make(map[string]time.Time),
-		seenCap: 10_000,
+		DB:       db,
+		Coord:    coord,
+		Metrics:  metrics,
+		Tick:     15 * time.Second,
+		Limit:    500,
+		seenIDs:  make(map[string]time.Time),
+		seenCap:  10_000,
 		lastTick: time.Now().UTC(),
-		Log:     log.Printf, // default; tests override with a no-op or buffer
+		Log:      log.Printf, // default; tests override with a no-op or buffer
 	}
 }
 
@@ -211,7 +211,7 @@ func (s *ReconcileSupervisor) logf(format string, args ...any) {
 type noopReconcileMetrics struct{}
 
 func (noopReconcileMetrics) IncReconcile(string, string) {}
-func (noopReconcileMetrics) IncCommitDeadlineExceeded()   {}
+func (noopReconcileMetrics) IncCommitDeadlineExceeded()  {}
 
 // Run loops until ctx is done. Errors are logged and do NOT abort.
 func (s *ReconcileSupervisor) Run(ctx context.Context) error {

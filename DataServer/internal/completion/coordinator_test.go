@@ -100,19 +100,19 @@ func validManifests() []OutputManifest {
 // attemptCommitRow reads the attempt_commits row for the supplied
 // tuple and returns its column values for assertion in tests.
 type attemptCommitRow struct {
-	CommitID           string
-	TaskID             string
-	AttemptID          string
-	JobID              string
-	WorkerID           string
-	LeaseID            string
-	TaskRevision       int
-	Status             string
-	RequiredOutputCnt  int
-	ReadyOutputCnt     int
-	CommitTokenHash    string
-	CommitDeadlineAt   string
-	LastProgressAt     string
+	CommitID          string
+	TaskID            string
+	AttemptID         string
+	JobID             string
+	WorkerID          string
+	LeaseID           string
+	TaskRevision      int
+	Status            string
+	RequiredOutputCnt int
+	ReadyOutputCnt    int
+	CommitTokenHash   string
+	CommitDeadlineAt  string
+	LastProgressAt    string
 }
 
 func readAttemptCommitRow(t *testing.T, db *sql.DB, fence FenceTuple) attemptCommitRow {
@@ -296,13 +296,13 @@ func TestCoordinator_DeclareOutputs_MultipleManifests(t *testing.T) {
 	manifests := []OutputManifest{
 		{
 			OutputKind: "final_video", LogicalName: "out.mp4",
-			MimeType:  "video/mp4", SizeBytes: 1024,
+			MimeType: "video/mp4", SizeBytes: 1024,
 			SHA256:         strings.Repeat("1", 64),
 			WorkerSpoolKey: "spool-1",
 		},
 		{
 			OutputKind: "thumbnail", LogicalName: "thumb.jpg",
-			MimeType:  "image/jpeg", SizeBytes: 256,
+			MimeType: "image/jpeg", SizeBytes: 256,
 			SHA256:         strings.Repeat("2", 64),
 			WorkerSpoolKey: "spool-2",
 		},
@@ -340,13 +340,13 @@ func TestCoordinator_DeclareOutputs_PartialReplayMixed(t *testing.T) {
 	manifests := []OutputManifest{
 		{
 			OutputKind: "final_video", LogicalName: "out.mp4",
-			MimeType:  "video/mp4", SizeBytes: 1024,
+			MimeType: "video/mp4", SizeBytes: 1024,
 			SHA256:         strings.Repeat("1", 64),
 			WorkerSpoolKey: "spool-1",
 		},
 		{
 			OutputKind: "thumbnail", LogicalName: "thumb.jpg",
-			MimeType:  "image/jpeg", SizeBytes: 256,
+			MimeType: "image/jpeg", SizeBytes: 256,
 			SHA256:         strings.Repeat("2", 64),
 			WorkerSpoolKey: "spool-2",
 		},
@@ -364,8 +364,8 @@ func TestCoordinator_DeclareOutputs_PartialReplayMixed(t *testing.T) {
 		manifests[0],
 		{
 			OutputKind: "thumbnail", LogicalName: "thumb.jpg",
-			MimeType:  "image/jpeg", SizeBytes: 512, // changed size
-			SHA256:    strings.Repeat("3", 64),
+			MimeType: "image/jpeg", SizeBytes: 512, // changed size
+			SHA256: strings.Repeat("3", 64),
 		},
 	}
 	plan, err := c.DeclareOutputs(context.Background(), DeclareOutputsCommand{
@@ -562,7 +562,6 @@ func TestCoordinator_RecordUploadProgress_EmptyUploadIDRejected(t *testing.T) {
 // method calls commitID=="" with a fast-error before any SQL touch).
 // ────────────────────────────────────────────────────────────────────────
 
-
 // TestCoordinator_RecordUploadProgress_MonotonicProgress locks down
 // the MAX() semantics Verdetto P0 (Blocco 3) ships for the heartbeat
 // path. A worker that re-sends an older heartbeat (reordered TCP
@@ -712,7 +711,9 @@ func sha256HexFromRow(t *testing.T, db *sql.DB, fence FenceTuple) string {
 // CompleteUpload against this fixture.
 //
 // The artifact_uploads schema (migration 030) enforces
-//   FOREIGN KEY (job_id) REFERENCES jobs(job_id)
+//
+//	FOREIGN KEY (job_id) REFERENCES jobs(job_id)
+//
 // so a placeholder row in jobs is required even though our tests
 // never read it.
 func seedCompleteUploadFixture(t *testing.T, db *sql.DB, uploadID, artifactID, jobID, expectedSHA string) {
@@ -931,7 +932,7 @@ func errorsIs(err, target error) bool {
 //   - nil input          → counter reset, returns nil (success path)
 //   - non-CAS err input  → counter unchanged, returns pointer-equal err
 //   - CAS err below thr → counter +1, returns pointer-equal err (worker
-//                          retries on the same path)
+//     retries on the same path)
 func TestCoordinator_RecordAttemptCommitsCAS_HappyPath(t *testing.T) {
 	db := openCoordinatorTestDB(t)
 	c := newTestCoordinator(db).(*coordinator)

@@ -324,10 +324,10 @@ func (r *sqliteAttemptCommitRepo) GetCommitResult(ctx context.Context, commitID 
 		return nil, fmt.Errorf("completion.AttemptCommitRepository.GetCommitResult: commitID empty")
 	}
 	var (
-		res           CommitResult
-		committedAt   sql.NullString
-		taskStatus    sql.NullString
-		jobStatus     sql.NullString
+		res         CommitResult
+		committedAt sql.NullString
+		taskStatus  sql.NullString
+		jobStatus   sql.NullString
 	)
 	err := r.u.tx.QueryRowContext(ctx,
 		`SELECT ac.commit_id, ac.task_id, ac.attempt_id, ac.job_id,

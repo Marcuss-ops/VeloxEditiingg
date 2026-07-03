@@ -28,8 +28,8 @@ const (
 	// remains the v0 transport; the typed pair below is the one
 	// gated by CapabilityTaskOutputDeclaredV1 /
 	// CapabilityArtifactUploadCompletedV1.
-	MsgTaskOutputDeclared       ControlMessageType = "task_output_declared"
-	MsgArtifactUploadCompleted  ControlMessageType = "artifact_upload_completed"
+	MsgTaskOutputDeclared      ControlMessageType = "task_output_declared"
+	MsgArtifactUploadCompleted ControlMessageType = "artifact_upload_completed"
 )
 
 // --- Master → Worker ---
