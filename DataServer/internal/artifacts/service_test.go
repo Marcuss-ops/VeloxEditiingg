@@ -111,9 +111,10 @@ func setupTestEnv(t *testing.T) *testEnv {
 	// with concurrent UpdateUploadStatus on artifact_uploads.
 	repo := store.NewSQLiteUploadRepository(db)
 	artifactReader := NewSQLiteArtifactReader(db)
+	authReader := NewSQLiteAuthReader(db)
 	uploadWriter := NewSQLiteUploadSessionWriter(db)
 	finalizeWriter := NewSQLiteFinalizeWriter(db, artifactReader, nil)
-	svc := NewService(repo, uploadWriter, finalizeWriter, artifactReader, bs, db, clk)
+	svc := NewService(repo, uploadWriter, finalizeWriter, artifactReader, bs, authReader, clk)
 
 	t.Cleanup(func() {
 		_ = db.Close()

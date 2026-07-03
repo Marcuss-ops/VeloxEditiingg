@@ -458,6 +458,21 @@ func (r *Reconciler) deleteFinalFile(rel string) error {
 // emitted; outbox emission is best-effort and reported separately.
 // =====================================================================
 
+// isNoSuchTable returns true when err is the SQLite "no such table"
+// / "no such column" error. Used to soft-skip over schema-roll phases
+// where outbox_events / job_deliveries may not yet exist. The
+// Reconciler's quarantineArtifactTx uses this to surface a
+// status-only quarantine when the outbox_events schema is incomplete.
+func isNoSuchTable(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "no such table") ||
+		strings.Contains(msg, "no such column") ||
+		strings.Contains(msg, "Error 1")
+}
+
 // ErrArtifactAlreadyQuarantined is returned when the UPDATE matches 0
 // rows because a concurrent reconciler (or admin) has already flipped
 // the status. Callers should treat this as success (idempotent).

@@ -572,6 +572,7 @@ var (
 	_ artifacts.UploadSessionWriter    = (*artifacts.SQLiteUploadSessionWriter)(nil)
 	_ artifacts.FinalizationWriter     = (*artifacts.SQLiteFinalizeWriter)(nil)
 	_ artifacts.ArtifactReader         = (*artifacts.SQLiteArtifactReader)(nil)
+	_ artifacts.AuthReader             = (*artifacts.SQLiteAuthReader)(nil)
 )
 
 // =====================================================================

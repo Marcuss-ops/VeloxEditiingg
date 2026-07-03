@@ -51,6 +51,7 @@ func buildAssets(cfg *config.Config, p *persistenceDeps, j *jobsDeps) (*assetDep
 	planResolver := deliveries.NewSQLiteDeliveryPlanResolver(p.SQLite.DB(), cfg.Runtime.DeliveryGlobalFallback)
 	uploadRepo := store.NewSQLiteUploadRepository(p.SQLite.DB())
 	artifactReader := artifacts.NewSQLiteArtifactReader(p.SQLite.DB())
+	authReader := artifacts.NewSQLiteAuthReader(p.SQLite.DB())
 	uploadWriter := artifacts.NewSQLiteUploadSessionWriter(p.SQLite.DB())
 	finalizeWriter := artifacts.NewSQLiteFinalizeWriter(p.SQLite.DB(), artifactReader, planResolver)
 	artifactSvc := artifacts.NewService(
@@ -59,7 +60,7 @@ func buildAssets(cfg *config.Config, p *persistenceDeps, j *jobsDeps) (*assetDep
 		finalizeWriter,
 		artifactReader,
 		p.BlobStore,
-		p.SQLite.DB(),
+		authReader,
 		nil, // clock.System default (production)
 	)
 	log.Printf("[BOOTSTRAP] artifacts.Service ready (single-tx SUCCEEDED gate via FinalizationWriter + DeliveryPlanResolver)")
