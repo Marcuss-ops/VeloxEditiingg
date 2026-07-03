@@ -61,11 +61,13 @@ type PipelineRouteDeps struct {
 	Enqueuer *enqueue.Enqueuer
 	JobsRepo jobs.Repository
 	CmdMgr   *workers.CommandManager
-	// Resolver is the Blocco 5 forward-completed entry point. When
-	// wired, the pipeline handler delegates to Resolver.Resolve so the
-	// creator_forwardings row + Job row land in the same write path as
-	// the CreatorForwardingRunner. Optional; nil falls back to the
-	// legacy creatorflow.Service forwarder.
+	// Resolver is the canonical creatorflow.Resolver. The pipeline
+	// handler delegates forward-completed routes to Resolver.Resolve
+	// so the creator_forwardings row + Job row land in the same write
+	// path as the CreatorForwardingRunner. Required as of Blocco 4
+	// step #3 — the legacy creatorflow.Service forwarder fallback was
+	// removed. Nil here is a wiring bug; registerPipelineRoutes
+	// refuses to start if Resolver is nil.
 	Resolver *creatorflow.Resolver
 }
 
@@ -210,28 +212,25 @@ func registerGroupsRoutes(r *gin.Engine, auth gin.HandlerFunc, deps GroupsRouteD
 // but since jobs.Repository (the canonical surface) satisfies BOTH
 // interfaces by structural typing, the same value passes for both.
 //
-// Blocco 5: when deps.Resolver is set, use NewHandlersWithResolver so
-// the handler delegates to the canonical Resolver (the same instance
-// the CreatorForwardingRunner uses). Otherwise fall back to
-// NewHandlersFull which builds a Service shim.
+// Blocco 4 step #3: the legacy fallback to NewHandlersFull (which
+// constructed a forwarder Service shim) is gone. Resolver is the
+// SINGLE authoritative forward-completed entry point; the composition
+// root (buildAppComponents → appComponents.resolver) wires it
+// unconditionally. A nil Resolver at this layer is a wiring bug and
+// refuses to start (log.Fatal) — surfacing it at boot instead of
+// letting clients see 404s later.
 func registerPipelineRoutes(r *gin.Engine, auth gin.HandlerFunc, deps PipelineRouteDeps) {
 	if deps.Enqueuer == nil || deps.JobsRepo == nil {
 		return
 	}
-	if deps.Resolver != nil {
-		pipeline.NewHandlersWithResolver(
-			deps.Cfg,
-			deps.Enqueuer,
-			pipeline.NewRemoteClientFromConfig(deps.Cfg),
-			deps.Resolver,
-			deps.JobsRepo, deps.JobsRepo, deps.CmdMgr,
-		).RegisterRoutes(r, auth)
-		return
+	if deps.Resolver == nil {
+		log.Fatalf("[ROUTES] pipeline routes require a wired Resolver (PipelineRouteDeps.Resolver is nil); refusing to start (composition-root bug)")
 	}
-	pipeline.NewHandlersFull(
+	pipeline.NewHandlersWithResolver(
 		deps.Cfg,
 		deps.Enqueuer,
 		pipeline.NewRemoteClientFromConfig(deps.Cfg),
+		deps.Resolver,
 		deps.JobsRepo, deps.JobsRepo, deps.CmdMgr,
 	).RegisterRoutes(r, auth)
 }

@@ -9,11 +9,18 @@
 // now holds its dependencies on the struct so composition-root wiring
 // is explicit, tests construct their own graphs, and `go test -race`
 // stays clean across concurrent pipelines.
+//
+// Blocco 4 step #3: the legacy `forwarder *creatorflow.Service`
+// fallback is gone. forward-completed result routing now runs through
+// Resolver.Resolve exclusively; the composition root
+// (cmd/server/bootstrap_composition.go) constructs the canonical
+// Resolver and passes it via NewHandlersWithResolver. MasterURL is no
+// longer discovered via `hostname -I` — it must be set in cfg
+// (cfg.Workers.MasterURL or VELOX_MASTER_URL) at boot.
 package pipeline
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -37,22 +44,17 @@ import (
 // The struct carries the mandatory remote params (cfg, enqueuer, client,
 // resolver) plus optional cancel-side dependencies bundled in JobsDeps.
 //
-// Blocco 5 of the Verdetto (P1 #11):
-//   - resolver (creatorflow.Resolver) is the SINGLE authoritative
-//     forward-completed entry point. Built ONCE at construction time so
-//     resolvePublicMasterURL → detectPublicMasterURL → `hostname -I` does
-//     NOT run per request, and so the HTTP handler converges with the
-//     CreatorForwardingRunner on the same (job_id, forwarding_id).
-//   - forwarder (creatorflow.Service) is retained as a backward-
-//     compatibility shim for any test that constructs Handlers without
-//     a Resolver; it always delegates to the same Resolver if present.
+// Blocco 5 of the Verdetto (P1 #11) — Resolver is the SINGLE
+// authoritative forward-completed entry point. Built ONCE at
+// construction time so URL resolution does NOT run per request, and
+// so the HTTP handler converges with the CreatorForwardingRunner on
+// the same (job_id, forwarding_id).
 type Handlers struct {
-	cfg       *config.Config
-	enqueuer  *enqueue.Enqueuer
-	client    *remoteengine.Client
-	resolver  *creatorflow.Resolver
-	forwarder *creatorflow.Service
-	jobs      JobsDeps
+	cfg      *config.Config
+	enqueuer *enqueue.Enqueuer
+	client   *remoteengine.Client
+	resolver *creatorflow.Resolver
+	jobs     JobsDeps
 }
 
 // JobsDeps bundles the optional jobs-layer dependencies used by
@@ -73,9 +75,9 @@ type JobsDeps struct {
 //	client    — the *remoteengine.Client talking to the script service
 //	             (may be nil when VELOX_REMOTE_ENGINE_URL is unset).
 //
-// The resolver creatorflow.Resolver is pre-built here so the master-URL
-// resolution (which shells out to `hostname -I` when no VELOX_MASTER_URL
-// is set) happens once per process, not once per request.
+// The resolver creatorflow.Resolver must be wired by the composition root
+// (see NewHandlersWithResolver). MasterURL is resolved from cfg at boot
+// time — there is no per-request hostname discovery.
 //
 // Compose with WithJobsDeps to add the optional cancel deps.
 func NewHandlers(cfg *config.Config, enqueuer *enqueue.Enqueuer, client *remoteengine.Client) *Handlers {
@@ -85,8 +87,8 @@ func NewHandlers(cfg *config.Config, enqueuer *enqueue.Enqueuer, client *remotee
 // NewHandlersFull is the composition-root constructor that wires
 // every optional dependency (jobs reader/writer for cancellation
 // cleanup, worker command manager for per-worker cancel notifications).
-// Pre-builds the resolver + forwarder at construction time for the
-// same performance reason as NewHandlers.
+// Pre-builds the resolver at construction time for the same
+// performance reason as NewHandlers.
 func NewHandlersFull(
 	cfg *config.Config,
 	enqueuer *enqueue.Enqueuer,
@@ -117,10 +119,12 @@ func NewHandlersWithResolver(
 }
 
 // HandlersFactory is the shared construction helper for the three
-// public constructors above. resolver may be nil; in that case the
-// Handlers falls back to the legacy forwarder creatorflow.Service
-// (the service also delegates to the resolver lazily if a dbStore is
-// wired).
+// public constructors above. resolver may be nil; the Handlers panics
+// at request time if forward-completed is reached without a wired
+// resolver — composition-root callers must pass a non-nil resolver
+// (see cmd/server/bootstrap_composition.go::appComponents where
+// `creatorflow.NewResolver(cfg, m.Enqueuer, p.SQLite)` is unconditionally
+// built before the pipeline handler is constructed).
 func HandlersFactory(
 	cfg *config.Config,
 	enqueuer *enqueue.Enqueuer,
@@ -130,19 +134,12 @@ func HandlersFactory(
 	jobsWriter jobs.Writer,
 	cmdMgr *workers.CommandManager,
 ) *Handlers {
-	if resolver == nil {
-		// Lazily build via the canonical cfg + enqueuer constructor.
-		// We need a dbStore to construct the full Resolver; without
-		// one (forwarder-only path) we fall back to the Service.
-		resolver = creatorflow.NewResolver(cfg, enqueuer, nil)
-	}
 	return &Handlers{
-		cfg:       cfg,
-		enqueuer:  enqueuer,
-		client:    client,
-		resolver:  resolver,
-		forwarder: creatorflow.NewForwarder(cfg, enqueuer),
-		jobs:      JobsDeps{Reader: jobsReader, Writer: jobsWriter, CmdMgr: cmdMgr},
+		cfg:      cfg,
+		enqueuer: enqueuer,
+		client:   client,
+		resolver: resolver,
+		jobs:     JobsDeps{Reader: jobsReader, Writer: jobsWriter, CmdMgr: cmdMgr},
 	}
 }
 
@@ -324,59 +321,41 @@ func (h *Handlers) Generate() gin.HandlerFunc {
 // Resolver the CreatorForwardingRunner uses, so the handler's sync
 // forward path and the runner's async poll-and-forward path converge
 // on the same (job_id, forwarding_id) for the same input. The legacy
-// creatorflow.Service forwarder is retained as a fallback when the
-// resolver has no dbStore wired (forwarder-only handlers).
+// creatorflow.Service forwarder fallback was removed in Blocco 4 step
+// #3 — composition-root callers must wire a non-nil Resolver.
 func (h *Handlers) forwardPipelineResultToWorker(ctx context.Context, result map[string]interface{}) (map[string]interface{}, error) {
 	pipelineLog("FORWARD: building worker payload...")
 
-	// Prefer the canonical Resolver when wired — it is the forwarder
-	// shared with the CreatorForwardingRunner.
-	if h.resolver != nil && h.resolver.HasDBAccess() {
-		out, err := h.resolver.Resolve(ctx, creatorflow.ResolveRequest{
-			ForwardingID:     "", // sync handler path: INSERT PENDING row
-			SourceProvider:   "remote_engine",
-			SourceJobID:      firstStringResolver(result, "job_id", "trace_id", "id"),
-			TargetExecutorID: firstStringResolver(result, "executor_id", "pipeline_id"),
-			Payload:          result,
-		})
-		if err != nil {
-			if err == creatorflow.ErrResolverNotComplete {
-				return nil, nil
-			}
-			pipelineLog("FORWARD: Resolver.Resolve FAILED: %v", err)
-			return nil, err
-		}
-		if out != nil {
-			pipelineLog("FORWARD: enqueued via Resolver job_id=%s forwarding_id=%s",
-				out.JobID, out.ForwardingID)
-			return out.Response, nil
-		}
-		return nil, nil
+	if h.resolver == nil {
+		// Fail loud: this means cmd/server wiring is broken (the
+		// composition root unconditionally builds the Resolver
+		// before constructing Handlers). Hiding it behind a legacy
+		// forwarder fallback was removed in Blocco 4 step #3 because
+		// the forwarder shim was indistinguishable from a
+		// misconfigured Resolver at the URL-rewrite step.
+		return nil, fmt.Errorf("pipeline handler requires a wired resolver (composition root MUST pass creatorflow.Resolver)")
 	}
 
-	// Fallback: legacy forwarder (forwarder-only handlers).
-	pipelineLog("FORWARD: resolver not wired — falling back to creatorflow.Service.ForwardCompleted")
-	enqueued, err := h.forwarder.ForwardCompleted(ctx, result)
+	out, err := h.resolver.Resolve(ctx, creatorflow.ResolveRequest{
+		ForwardingID:     "", // sync handler path: INSERT PENDING row
+		SourceProvider:   "remote_engine",
+		SourceJobID:      firstStringResolver(result, "job_id", "trace_id", "id"),
+		TargetExecutorID: firstStringResolver(result, "executor_id", "pipeline_id"),
+		Payload:          result,
+	})
 	if err != nil {
-		pipelineLog("FORWARD: ForwardCompleted FAILED: %v", err)
+		if err == creatorflow.ErrResolverNotComplete {
+			return nil, nil
+		}
+		pipelineLog("FORWARD: Resolver.Resolve FAILED: %v", err)
 		return nil, err
 	}
-	if enqueued == nil {
-		return nil, fmt.Errorf("forward completed result returned no enqueue response")
+	if out != nil {
+		pipelineLog("FORWARD: enqueued via Resolver job_id=%s forwarding_id=%s",
+			out.JobID, out.ForwardingID)
+		return out.Response, nil
 	}
-
-	jobPayload, buildErr := enqueue.BuildPipelinePayload(result)
-	if buildErr == nil {
-		payloadJSON, _ := json.Marshal(jobPayload)
-		if len(payloadJSON) > 500 {
-			pipelineLog("FORWARD: payload built size=%d bytes title=%s scenes=%v",
-				len(payloadJSON), jobPayload["title"], jobPayload["scene_count"])
-		} else {
-			pipelineLog("FORWARD: payload built: %s", string(payloadJSON))
-		}
-	}
-	pipelineLog("FORWARD: enqueued to Velox queue job_id=%v", enqueued["job_id"])
-	return enqueued, nil
+	return nil, nil
 }
 
 // firstStringResolver reads the first non-empty string value from a map

@@ -6,7 +6,6 @@ import (
 	"errors"
 	"log"
 	"net/http"
-	"os/exec"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -116,12 +115,19 @@ func (h *ScriptHandlers) GenerateWithImagesHandler(cfg *config.Config) gin.Handl
 			payload = map[string]interface{}{}
 		}
 
+		// MasterURL resolution is mandatory in production. The shell-out
+		// `hostname -I` discovery was removed in Blocco 4 step #3: the
+		// creatorflow domain no longer shells out. Production deployments
+		// set cfg.Workers.MasterURL or VELOX_MASTER_URL via the
+		// remoteansible.ResolveMasterURL helper. Local dev/test fall back
+		// to an explicit localhost so the script handler remains
+		// self-contained on a developer's laptop.
 		resolvedMasterURL := remoteansible.ResolveMasterURL(cfg, c, "").URL
 		if resolvedMasterURL == "" || remoteansible.IsLocalhostURL(resolvedMasterURL) {
-			resolvedMasterURL = detectPublicMasterURL()
+			resolvedMasterURL = "http://127.0.0.1:8000"
 		}
 		if h.creator != nil && !shouldBypassCreator(payload) {
-			if creatorResponse, used, err := h.creator.Forward(c.Request.Context(), payload); err != nil {
+			if creatorResponse, used, err := h.creator.StartOrPersistForwarding(c.Request.Context(), payload); err != nil {
 				if assetErr, ok := voiceoverassets.AsAcquisitionError(err); ok {
 					c.JSON(http.StatusUnprocessableEntity, gin.H{
 						"ok":          false,
@@ -194,19 +200,11 @@ func (h *ScriptHandlers) GenerateWithImagesHandler(cfg *config.Config) gin.Handl
 	}
 }
 
-func detectPublicMasterURL() string {
-	out, err := exec.Command("hostname", "-I").Output()
-	if err == nil {
-		fields := strings.Fields(string(out))
-		if len(fields) > 0 {
-			ip := strings.TrimSpace(fields[0])
-			if ip != "" && !remoteansible.IsLocalhostURL(ip) {
-				return "http://" + ip + ":8000"
-			}
-		}
-	}
-	return remoteansible.DetectLocalMasterURL()
-}
+// detectPublicMasterURL was removed in Blocco 4 step #3: hostname
+// discovery (`hostname -I`) was a creatorflow-domain shim. Operators
+// set cfg.Workers.MasterURL or VELOX_MASTER_URL in production; dev/test
+// paths use the explicit `http://127.0.0.1:8000` fallback in
+// GenerateWithImagesHandler.
 
 func shouldBypassCreator(payload map[string]interface{}) bool {
 	if payload == nil {

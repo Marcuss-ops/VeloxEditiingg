@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log"
-	"os/exec"
 	"strings"
 	"time"
 
@@ -14,7 +13,6 @@ import (
 
 	"velox-server/internal/config"
 	"velox-server/internal/costmodel"
-	remoteansible "velox-server/internal/handlers/remote/ansible"
 	"velox-server/internal/jobs"
 	"velox-server/internal/jobs/enqueue"
 	"velox-server/internal/remoteengine"
@@ -26,15 +24,25 @@ import (
 // Service encapsulates the optional "creator" stage so multiple endpoints can
 // reuse the same remote-engine -> worker handoff path without duplicating it.
 //
-// PR15.7a: `queue` was removed. The *enqueue.Enqueuer
-// holds the JobQueue reference.
-// at the composition root if they need the concrete type. This collapses
-// two parallel fields that always pointed to the same underlying queue.
+// Blocco 4 step #3 collapsed the public surface to its minimum:
 //
-// PR-forwarding-runner: `dbStore` was added so Forward can persist a
-// durable creator_forwardings row (PENDING) instead of spawning a
-// volatile in-memory goroutine. The CreatorForwardingRunner picks up
-// the row on its next tick and handles polling + forwarding durably.
+//   - New(cfg, enqueuer, dbStore) constructs the optional creator stage.
+//   - StartOrPersistForwarding runs the remote creator exactly once and
+//     routes the result through Resolver.Resolve (sync forward) OR
+//     persists a creator_forwardings row (async poll).
+//
+// The legacy forwarder shim (NewForwarder, Service.ForwardCompleted,
+// Service.resolver, forwardCompletedForwarderOnly) is gone. Every
+// forward-completed path converges on Resolver.Resolve; the composition
+// root (cmd/server/bootstrap_composition.go) builds the Resolver shared
+// by the pipeline handler, the script handler, and the
+// CreatorForwardingRunner.
+//
+// MasterURL is mandatory in production (cfg.Workers.MasterURL or
+// VELOX_MASTER_URL). The Resolver skips URL rewriting when masterURL is
+// empty, so an unset masterURL is safe but means the worker fetches
+// scene-image references via the unrewritten URL — only acceptable in
+// dev/test.
 type Service struct {
 	enqueuer  *enqueue.Enqueuer
 	client    *remoteengine.Client
@@ -71,47 +79,26 @@ func New(cfg *config.Config, enqueuer *enqueue.Enqueuer, dbStore *store.SQLiteSt
 	}
 }
 
-// NewForwarder constructs a PurposeService stripped to the fields that the
-// authoritative ForwardCompleted needs:
+// StartOrPersistForwarding runs the remote creator stage exactly once
+// and routes the result through the canonical Resolver pipeline.
 //
-//	enqueuer + dataDir + videosDir + masterURL.
+// Two branches:
 //
-// client and dbStore are nil. As a consequence:
+//   - Remote result complete (enqueue.ShouldForwardPipelineResult):
+//     inject the deterministic forwarding key, build a one-shot Resolver
+//     from this Service's fields, call Resolve, wrap the response with
+//     the creator envelope (stage/job_id/status/creator_response),
+//     return (response, true, nil).
 //
-//   - ForwardCompleted is fully available (the only entry point that
-//     callers should use via this constructor).
-//   - Forward returns (nil, false, nil) without touching the network,
-//     which is the correct early-exit semantics for a forwarder-only
-//     service: there is no remote engine to talk to and no forwarding
-//     table to persist to.
+//   - Remote result incomplete but with job id (async/polling):
+//     persist a PENDING creator_forwardings row (durable; the
+//     CreatorForwardingRunner picks it up), return a polling-shaped
+//     response with creator_polling=true.
 //
-// This is the constructor handlers (e.g. pipeline.Generate) must use when
-// they only need the forward-completed path. It collapses the legacy free
-// function ForwardCompletedResult into a Service instance without dragging
-// unrelated dependencies (remote engine, SQLite store) into the wiring
-// graph of callers that do not need them.
-func NewForwarder(cfg *config.Config, enqueuer *enqueue.Enqueuer) *Service {
-	if cfg == nil || enqueuer == nil {
-		return nil
-	}
-	return &Service{
-		enqueuer:  enqueuer,
-		client:    nil,
-		dbStore:   nil,
-		dataDir:   strings.TrimSpace(cfg.Runtime.DataDir),
-		videosDir: strings.TrimSpace(cfg.Runtime.VideosDir),
-		masterURL: resolvePublicMasterURL(cfg),
-	}
-}
-
-// Forward tries the creator stage and, if it returns a complete payload,
-// forwards the resulting job to the worker queue.
-//
-// It returns:
-// - response: queue response enriched with creator metadata
-// - used: true only when the creator stage fully handled the request
-// - error: fatal creator/queue errors that should surface to callers
-func (s *Service) Forward(ctx context.Context, rawPayload map[string]interface{}) (map[string]interface{}, bool, error) {
+// Returns (nil, false, nil) when the creator is not configured or the
+// result is incomplete without a job id — the caller takes the
+// local-fallback path.
+func (s *Service) StartOrPersistForwarding(ctx context.Context, rawPayload map[string]interface{}) (map[string]interface{}, bool, error) {
 	if s == nil || s.client == nil || !s.client.IsConfigured() {
 		return nil, false, nil
 	}
@@ -122,19 +109,41 @@ func (s *Service) Forward(ctx context.Context, rawPayload map[string]interface{}
 	}
 
 	if enqueue.ShouldForwardPipelineResult(creatorResult) {
-		// PR-forwarding-deterministic-id: inject the forwarding key so
-		// the enqueuer derives a deterministic job_id instead of a
-		// random UUID. Two identical forwardings produce the same Job.
+		// PR-forwarding-deterministic-id: stamp the forwarding key into
+		// the payload so Resolver.Resolve derives the canonical job_id
+		// (and the UNIQUE constraint on creator_forwardings converges
+		// on one row across retries).
 		sourceJobID := firstString(creatorResult, "job_id", "trace_id", "id")
 		targetExecID := firstString(creatorResult, "executor_id", "pipeline_id")
 		if targetExecID == "" {
 			targetExecID = "scene.composite.v1"
 		}
-		creatorResult[routing.KeyForwardingKey] = routing.FormatForwardingKey("remote_engine", sourceJobID, targetExecID).String()
+		fwdKey := routing.FormatForwardingKey("remote_engine", sourceJobID, targetExecID).String()
+		creatorResult[routing.KeyForwardingKey] = fwdKey
 
-		workerResponse, err := s.ForwardCompleted(ctx, creatorResult)
-		if err != nil {
+		// Build a one-shot Resolver from this Service's wiring graph and
+		// delegate. Resolver.Resolve owns idempotency pre-check,
+		// (optionally) URL rewrite via BuildSceneImagePayloadForMaster,
+		// creator_forwardings row promotion, and the atomic
+		// AtomicForwardAndEnqueue that finalises the Job row.
+		rs := NewResolverFromDeps(s.enqueuer, s.dbStore, s.dataDir, s.videosDir, s.masterURL)
+		if rs == nil {
+			return nil, false, fmt.Errorf("creatorflow: StartOrPersistForwarding: resolver construction failed")
+		}
+		out, err := rs.Resolve(ctx, ResolveRequest{
+			ForwardingID:     "",
+			SourceProvider:   "remote_engine",
+			SourceJobID:      sourceJobID,
+			TargetExecutorID: targetExecID,
+			Payload:          creatorResult,
+		})
+		if err != nil && err != ErrResolverNotComplete {
 			return nil, false, err
+		}
+
+		var workerResponse map[string]interface{}
+		if out != nil {
+			workerResponse = out.Response
 		}
 
 		response := make(map[string]interface{}, len(workerResponse)+4)
@@ -142,7 +151,7 @@ func (s *Service) Forward(ctx context.Context, rawPayload map[string]interface{}
 			response[k] = v
 		}
 		response["creator_stage"] = "remote_engine"
-		response["creator_job_id"] = firstString(creatorResult, "job_id", "trace_id", "id")
+		response["creator_job_id"] = sourceJobID
 		response["creator_status"] = creatorResult["status"]
 		response["creator_response"] = creatorResult
 
@@ -153,6 +162,17 @@ func (s *Service) Forward(ctx context.Context, rawPayload map[string]interface{}
 	if creatorJobID == "" {
 		log.Printf("[CREATOR] remote result incomplete and missing job id, keeping local fallback")
 		return nil, false, nil
+	}
+
+	// Defense-in-depth: pre-Blocco-4 step #3 the deleted
+	// forwardCompletedForwarderOnly shim doubled as a nil-dbStore guard.
+	// With the shim gone, a literal `&Service{dbStore: nil}{}` construction
+	// (e.g. a future unit test) would panic on the InsertCreatorForwarding
+	// call. Reject that case loudly with a typed error so the caller sees
+	// the cause. Unreachable from `creatorflow.New` (which returns nil
+	// when dbStore is nil).
+	if s.dbStore == nil {
+		return nil, false, fmt.Errorf("creatorflow: StartOrPersistForwarding: nil dbStore (required for durable forwarding row)")
 	}
 
 	// PR-forwarding-runner: persist a durable forwarding record instead of
@@ -196,133 +216,23 @@ func firstString(m map[string]interface{}, keys ...string) string {
 		}
 	}
 	return ""
-} // ForwardCompleted is a THIN SHIM that delegates to the canonical
-// Resolver. It is retained on the Service struct for backward
-// compatibility — every existing caller (pipeline.Handlers, tests) goes
-// through this method without modification.
-//
-// The actual logic lives in (*Resolver).Resolve, which is the SINGLE
-// authoritative entry point. Blocco 5 of the Verdetto (P1 #11) moved
-// the forward-completed body out of this method and into the
-// Resolver so that CreatorForwardingRunner and the HTTP handler share
-// the same code path: URL rewriting + payload normalization +
-// AtomicForwardAndEnqueue + idempotent enqueue. Keeping a thin shim
-// here preserves the documented "SINGLE authoritative entry point"
-// contract (now relocated to Resolver) without breaking the existing
-// caller surface.
-//
-// Migration: new callers should construct a Resolver explicitly
-// (creatorflow.NewResolver(cfg, enqueuer, dbStore)) and call
-// rs.Resolve. This method remains for backward compatibility and will
-// be removed once the script/handler.go and pipeline/handler.go
-// callers are rewired to use the Resolver directly.
-func (s *Service) ForwardCompleted(ctx context.Context, result map[string]interface{}) (map[string]interface{}, error) {
-	if s == nil {
-		return nil, fmt.Errorf("creatorflow: ForwardCompleted: nil service")
-	}
-	if s.enqueuer == nil || s.enqueuer.Creator == nil {
-		return nil, fmt.Errorf("creatorflow: ForwardCompleted: creator unavailable")
-	}
-
-	// Lazy-build the resolver on first call so callers that never
-	// invoke ForwardCompleted (e.g. pure forwarders in tests) do not
-	// pay the construction cost. s.dbStore is nil on NewForwarder-
-	// constructed services (pure forwarders); in that case the
-	// resolver cannot INSERT a creator_forwardings row, so we fall
-	// back to the legacy enqueuer.Enqueue path. This preserves the
-	// distinction between forwarder-only and full Service.
-	if s.dbStore == nil {
-		return s.forwardCompletedForwarderOnly(ctx, result)
-	}
-
-	rs := s.resolver()
-	if rs == nil {
-		return nil, fmt.Errorf("creatorflow: ForwardCompleted: resolver construction failed")
-	}
-
-	out, err := rs.Resolve(ctx, ResolveRequest{
-		ForwardingID:     "",
-		SourceProvider:   "remote_engine",
-		SourceJobID:      firstString(result, "job_id", "trace_id", "id"),
-		TargetExecutorID: firstString(result, "executor_id", "pipeline_id"),
-		Payload:          result,
-	})
-	if err != nil {
-		if err == ErrResolverNotComplete {
-			return nil, nil
-		}
-		return nil, err
-	}
-	if out == nil {
-		return nil, nil
-	}
-	return out.Response, nil
 }
 
-// resolver returns the canonical Resolver for this Service. It is
-// called on demand by ForwardCompleted; the Service struct does NOT
-// hold a permanent Resolver to keep the NewForwarder constructor
-// (which produces a dbStore-less Service) cheap and side-effect-free.
-func (s *Service) resolver() *Resolver {
-	if s == nil {
-		return nil
-	}
-	return NewResolverFromDeps(s.enqueuer, s.dbStore, s.dataDir, s.videosDir, s.masterURL)
-}
-
-// forwardCompletedForwarderOnly preserves the legacy enqueuer.Enqueue
-// path for Service instances constructed via NewForwarder (which
-// intentionally leaves dbStore nil so the forwarder can be wired into
-// handlers that do NOT need creator_forwardings audit rows).
-func (s *Service) forwardCompletedForwarderOnly(ctx context.Context, result map[string]interface{}) (map[string]interface{}, error) {
-	if !enqueue.ShouldForwardPipelineResult(result) {
-		return nil, nil
-	}
-	workerPayload, err := enqueue.BuildPipelinePayload(result)
-	if err != nil {
-		return nil, fmt.Errorf("creatorflow: ForwardCompleted: build payload: %w", err)
-	}
-	masterURL := strings.TrimSpace(s.masterURL)
-	if masterURL == "" || remoteansible.IsLocalhostURL(masterURL) {
-		masterURL = detectPublicMasterURL()
-	}
-	if s.dataDir != "" && masterURL != "" {
-		workerPayload, err = enqueue.BuildSceneImagePayloadForMaster(workerPayload, s.dataDir, s.videosDir, masterURL)
-		if err != nil {
-			return nil, fmt.Errorf("creatorflow: ForwardCompleted: resolve master URL: %w", err)
-		}
-	}
-	fwdMeta := routing.FromPayload(result)
-	if fwdMeta.ForwardingKey != "" {
-		fwdMeta.InjectIntoPayload(workerPayload)
-	}
-	return s.enqueuer.Enqueue(ctx, workerPayload, costmodel.DefaultRequirements())
-}
-
+// resolvePublicMasterURL returns the master URL from cfg, then from the
+// shared config package, in that order. It does NOT shell out to
+// `hostname -I` — hostname discovery is the responsibility of the
+// ansible remote-resolution package and the dev/test fixtures, not of
+// the creatorflow domain. Production deployments MUST set
+// cfg.Workers.MasterURL (or VELOX_MASTER_URL); an empty return value is
+// safe because Resolver.Resolve skips URL rewriting when masterURL is
+// empty.
 func resolvePublicMasterURL(cfg *config.Config) string {
 	if cfg != nil {
 		if v := strings.TrimSpace(cfg.Workers.MasterURL); v != "" {
 			return v
 		}
 	}
-	if v := strings.TrimSpace(config.GetMasterURL()); v != "" {
-		return v
-	}
-	return detectPublicMasterURL()
-}
-
-func detectPublicMasterURL() string {
-	out, err := exec.Command("hostname", "-I").Output()
-	if err == nil {
-		fields := strings.Fields(string(out))
-		if len(fields) > 0 {
-			ip := strings.TrimSpace(fields[0])
-			if ip != "" && !remoteansible.IsLocalhostURL(ip) {
-				return "http://" + ip + ":8000"
-			}
-		}
-	}
-	return remoteansible.DetectLocalMasterURL()
+	return strings.TrimSpace(config.GetMasterURL())
 }
 
 // =============================================================================

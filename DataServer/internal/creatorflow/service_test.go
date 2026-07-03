@@ -104,7 +104,7 @@ func TestForwardSchedulesAsyncPollAndWorkerHandoff(t *testing.T) {
 		masterURL: "http://master.test",
 	}
 
-	response, used, err := svc.Forward(context.Background(), map[string]interface{}{
+	response, used, err := svc.StartOrPersistForwarding(context.Background(), map[string]interface{}{
 		"topic": "Async Creator",
 	})
 	if err != nil {
@@ -138,9 +138,15 @@ func TestForwardSchedulesAsyncPollAndWorkerHandoff(t *testing.T) {
 	}
 }
 
-// TestForwardCompletedEnqueuesWorkerJob verifies the unified ForwardCompleted
-// method properly converts a completed creator result into a Velox Job.
-func TestForwardCompletedEnqueuesWorkerJob(t *testing.T) {
+// TestResolverEnqueuesWorkerJob verifies the canonical Resolver path
+// after Blocco 4 step #3. ForwardCompleted (the legacy shim) is gone;
+// the sync forward path is now Resolver.Resolve end-to-end. This test
+// replaces TestForwardCompletedEnqueuesWorkerJob with equivalent
+// coverage on the canonical entry point — the assertions about
+// deterministic job_id, voiceover_paths canonicalisation, and the
+// payload-tag invariants are unchanged so the post-cutover behaviour
+// matches the pre-cutover contract exactly.
+func TestResolverEnqueuesWorkerJob(t *testing.T) {
 	tempDir := t.TempDir()
 	dbPath := filepath.Join(tempDir, "velox.db")
 	db, err := store.NewSQLiteStore(dbPath)
@@ -162,42 +168,43 @@ func TestForwardCompletedEnqueuesWorkerJob(t *testing.T) {
 		},
 	}
 
-	// Create a Service with minimal config — masterURL is empty so
-	// URL rewriting is a no-op (test doesn't need real master URL).
-	// Compute the canonical job_id that Resolver.Resolve will derive
-	// from (SourceProvider, SourceJobID, TargetExecutorID). The legacy
-	// expectation "creator-complete-1" was the upstream trace_id; the
-	// deterministic-id contract (Blocco 5 / PR-forwarding-deterministic-id)
-	// replaces it with a SHA-256-derived ID computed via the same
-	// DeriveForwardingJobID helper the SUT uses. Reusing the helper
-	// ties the test to the SUT's exact derivation so any future drift
-	// in the algorithm (prefix change, hash algo change) breaks the
-	// test loudly rather than silently passing against a hardcoded
-	// magic value.
+	// masterURL is empty so URL rewriting is a no-op (test doesn't
+	// need a real master URL). The Resolver correctly skips
+	// BuildSceneImagePayloadForMaster when either dataDir or
+	// masterURL is empty.
 	expectedJobID := jobenqueue.DeriveForwardingJobID(
 		routing.FormatForwardingKey("remote_engine", "creator-complete-1", "scene.composite.v1").String(),
 	)
 
-	svc := &Service{
-		enqueuer:  enqueuer,
-		dbStore:   db,
-		dataDir:   tempDir,
-		videosDir: filepath.Join(tempDir, "videos"),
-		masterURL: "",
+	rs := NewResolverFromDeps(enqueuer, db, tempDir, filepath.Join(tempDir, "videos"), "")
+	if rs == nil {
+		t.Fatalf("resolver construction failed")
 	}
 
-	response, err := svc.ForwardCompleted(context.Background(), result)
+	out, err := rs.Resolve(context.Background(), ResolveRequest{
+		ForwardingID:     "",
+		SourceProvider:   "remote_engine",
+		SourceJobID:      "creator-complete-1",
+		TargetExecutorID: "scene.composite.v1",
+		Payload:          result,
+	})
 	if err != nil {
-		t.Fatalf("ForwardCompleted: %v", err)
+		t.Fatalf("Resolve: %v", err)
 	}
-	if response["ok"] != true {
-		t.Fatalf("want ok=true, got %v", response["ok"])
+	if out == nil || out.Response == nil {
+		t.Fatalf("want non-nil Resolve output")
 	}
-	if response["job_id"] != expectedJobID {
-		t.Fatalf("want job_id %s, got %v", expectedJobID, response["job_id"])
+	if out.JobID != expectedJobID {
+		t.Fatalf("want job_id %s, got %s", expectedJobID, out.JobID)
 	}
-	if response["status"] != "PENDING" {
-		t.Fatalf("want pending response, got %v", response["status"])
+	if out.Response["ok"] != true {
+		t.Fatalf("want ok=true, got %v", out.Response["ok"])
+	}
+	if out.Response["job_id"] != expectedJobID {
+		t.Fatalf("want response job_id %s, got %v", expectedJobID, out.Response["job_id"])
+	}
+	if out.Response["status"] != "PENDING" {
+		t.Fatalf("want pending response, got %v", out.Response["status"])
 	}
 
 	j, jobErr := jobRepo.Get(context.Background(), expectedJobID)
@@ -214,16 +221,9 @@ func TestForwardCompletedEnqueuesWorkerJob(t *testing.T) {
 		t.Fatalf("want video name Creator Video, got %s", j.VideoName)
 	}
 	// PR15.6: drop the legacy `run_id` JSON tag assertion. The queue Job
-	// struct still maps RunID from the `run_id` alias (deferred to PR15.5
-	// jobs.Writer canonicalization). The canonical key is `job_run_id`
-	// inside the persisted payload map — assert that instead.
+	// struct still maps RunID from the `run_id` alias. The canonical
+	// key under the persisted payload is `job_run_id`.
 	payload := jobs.ToPayloadMap(j)
-	// PR15.6: voiceover_paths is canonical; legacy voiceover_path alias is dropped.
-	// jobs.ToPayloadMap parses j.Payload via ParsePayloadJSON which json.Unmarshal's
-	// the row blob — slices round-trip as []interface{}, not []string. Accept
-	// either shape (matching the tolerance in pipeline_bridge_test.go's
-	// TestBuildSceneVideoPayloadFromPipelineResult) so the test is robust
-	// to the JSON unmarshal round-trip.
 	var vpFirst interface{}
 	switch v := payload["voiceover_paths"].(type) {
 	case []string:
