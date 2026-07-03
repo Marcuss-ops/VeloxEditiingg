@@ -76,6 +76,8 @@ log "check-share-cert (RW-PROD-001 A7)"
 ./scripts/ci/check-share-cert.sh
 log "check-no-binaries"
 ./scripts/ci/check-no-binaries.sh
+log "check-dsn-busy-timeout (Blocco 5 / B1 follow-up)"
+./scripts/ci/check-dsn-busy-timeout.sh
 
 # ── 2. Go modules: gofmt + vet + test (-race) ──────────────────────────────
 #

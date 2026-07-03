@@ -85,6 +85,12 @@ jobs:
       - name: Guard — sql-ownership shape
         run: ./scripts/ci/check-sql-ownership.sh
 
+      # Blocco 5 / B1 follow-up: forbids in-mem SQLite DSNs that lack
+      # the canonical `_busy_timeout=5000` pragma. Catches SQLITE_BUSY
+      # flakes proactively. See scripts/ci/check-dsn-busy-timeout.sh.
+      - name: Guard — dsn busy-timeout shape (Blocco 5 / B1 follow-up)
+        run: ./scripts/ci/check-dsn-busy-timeout.sh
+
       - name: Verify — architectural, Go, native, docker-image
         run: make verify
 

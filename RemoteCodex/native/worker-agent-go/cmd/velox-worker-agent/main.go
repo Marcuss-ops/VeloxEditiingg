@@ -325,6 +325,15 @@ func main() {
 	if cfg.EngineVersion == "" {
 		cfg.EngineVersion = resolvedVersion
 	}
+	if strings.TrimSpace(cfg.VideoEngineCppBin) != "" && strings.TrimSpace(os.Getenv("VELOX_VIDEO_ENGINE_CPP_BIN")) == "" {
+		// Make the composition-root config authoritative for the native renderer.
+		// The render client resolves the engine path from VELOX_VIDEO_ENGINE_CPP_BIN,
+		// so mirror the validated config into the environment before pipeline wiring.
+		if err := os.Setenv("VELOX_VIDEO_ENGINE_CPP_BIN", strings.TrimSpace(cfg.VideoEngineCppBin)); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: failed to export VELOX_VIDEO_ENGINE_CPP_BIN from config: %v\n", err)
+			os.Exit(1)
+		}
+	}
 
 	// Create worker
 	// Option A (2026-06 fix): New() returns (*Worker, error) — a bad TLS or

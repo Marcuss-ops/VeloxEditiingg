@@ -32,13 +32,15 @@ TMPDIR="${TMPDIR:-/tmp/velox-golden-e2e}"
 readonly LOGDIR="${TMPDIR}/logs"
 readonly CERTS_DIR="${TMPDIR}/certs"
 readonly DATA_DIR="${TMPDIR}/data"
-readonly STAGING_DIR="${TMPDIR}/staging"
-readonly STORAGE_DIR="${TMPDIR}/storage"
-readonly MASTER_PORT=8180
-readonly GRPC_PORT=51851
+readonly STAGING_DIR="${DATA_DIR}/staging"
+readonly STORAGE_DIR="${DATA_DIR}/storage"
+MASTER_PORT="${MASTER_PORT:-8180}"
+GRPC_PORT="${GRPC_PORT:-51851}"
+WORKER_HEALTH_PORT="${WORKER_HEALTH_PORT:-8181}"
 readonly ADMIN_TOKEN="e2e-test-admin-token"
 readonly WORKER_ID="e2e-worker-1"
 readonly WORKER_NAME="e2e-worker"
+BUNDLE_HASH=""
 
 # Binaries
 readonly MASTER_BIN="${TMPDIR}/bin/velox-server"
@@ -89,8 +91,12 @@ phase0_deps() {
     VERSION="$(tr -d '[:space:]' < "${REPO_ROOT}/VERSION.txt")"
   fi
   log "version: ${VERSION}"
+  BUNDLE_HASH="golden-e2e-bundle-${VERSION}"
 
-  mkdir -p "$LOGDIR" "$CERTS_DIR" "$DATA_DIR" "$STAGING_DIR" "$STORAGE_DIR" "$(dirname "$MASTER_BIN")"
+  mkdir -p "$LOGDIR" "$CERTS_DIR" "$DATA_DIR" "$STAGING_DIR" "$STORAGE_DIR" "$(dirname "$MASTER_BIN")" "${TMPDIR}/tests/fixtures"
+  : > "${DATA_DIR}/velox.db"
+  printf '%s\n' "$BUNDLE_HASH" > "${TMPDIR}/BUNDLE_HASH.txt"
+  cp -f "${REPO_ROOT}/RemoteCodex/native/worker-agent-go/tests/fixtures/engine_selftest_baseline.sha256" "${TMPDIR}/tests/fixtures/engine_selftest_baseline.sha256"
 }
 
 # ─── Phase 1: Build binaries ─────────────────────────────────────────────────
@@ -207,16 +213,17 @@ phase4_worker() {
   "tls_cert_file": "${CERTS_DIR}/worker.crt",
   "tls_key_file": "${CERTS_DIR}/worker.key",
   "tls_ca_file": "${CERTS_DIR}/ca.crt",
-  "video_engine_binary": "${ENGINE_BIN}",
+  "video_engine_cpp_bin": "${ENGINE_BIN}",
+  "bundle_hash": "${BUNDLE_HASH}",
   "max_active_jobs": 1,
-  "health_port": 8181,
+  "health_port": ${WORKER_HEALTH_PORT},
   "protocol_version": "2026-06-worker-v1"
 }
 JSON
 
   # Boot worker with setsid+nohup
   cd "$TMPDIR"
-  setsid nohup env WORK_DIR="${TMPDIR}" "$WORKER_BIN" -config "$WORKER_CONFIG" </dev/null >"$WORKER_LOG" 2>&1 &
+  setsid nohup env WORK_DIR="${TMPDIR}" VELOX_VIDEO_ENGINE_CPP_BIN="${ENGINE_BIN}" VELOX_BUNDLE_HASH="${BUNDLE_HASH}" "$WORKER_BIN" -config "$WORKER_CONFIG" </dev/null >"$WORKER_LOG" 2>&1 &
   WPID=$!
   echo "$WPID" > "$WORKER_PIDFILE"
   disown "$WPID" 2>/dev/null
