@@ -409,45 +409,10 @@
     name: velox-worker-watchdog.timer
     enabled: true
     state: started
-  failed_when: false
+  failed_when: false    - name: CanonicalRuntime | Keep auto-update timer enabled
+      ansible.builtin.systemd:
+        name: velox-auto-update.timer
+        enabled: true
+        state: started
+      failed_when: false
 
-- name: CanonicalRuntime | Keep auto-update timer enabled
-  ansible.builtin.systemd:
-    name: velox-auto-update.timer
-    enabled: true
-    state: started
-  failed_when: false
-
-# ── Purge legacy worker-console bits (Dockerfile.console not in repo, console dead code) ──
-- name: CanonicalRuntime | Stop+disable any leftover worker-console unit and reset-failed
-  ansible.builtin.shell: |
-    set +e
-    /usr/bin/docker rm -f velox-worker-console >/dev/null 2>&1
-    systemctl stop velox-worker-console.service >/dev/null 2>&1
-    systemctl disable velox-worker-console.service >/dev/null 2>&1
-    systemctl reset-failed velox-worker-console.service >/dev/null 2>&1
-    rm -rf /etc/systemd/system/velox-worker-console.service.d
-    exit 0
-  args:
-    executable: /bin/bash
-  changed_when: false
-  failed_when: false
-
-- name: CanonicalRuntime | Remove legacy worker-console systemd unit file
-  ansible.builtin.file:
-    path: /etc/systemd/system/velox-worker-console.service
-    state: absent
-
-- name: CanonicalRuntime | Purge legacy worker-console opener script
-  ansible.builtin.file:
-    path: /opt/velox/bin/velox-worker-console-open.sh
-    state: absent
-
-- name: CanonicalRuntime | Purge legacy worker-console XDG desktop entry
-  ansible.builtin.file:
-    path: /etc/xdg/autostart/velox-worker-console.desktop
-    state: absent
-
-- name: CanonicalRuntime | Final daemon-reload after console purge
-  ansible.builtin.systemd:
-    daemon_reload: true

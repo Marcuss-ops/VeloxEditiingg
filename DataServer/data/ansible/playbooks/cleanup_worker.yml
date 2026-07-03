@@ -25,12 +25,6 @@
           systemctl stop "$BASE" 2>/dev/null || true
           systemctl disable "$BASE" 2>/dev/null || true
         done
-        for f in /etc/systemd/system/velox-worker-console.service; do
-          [ ! -f "$f" ] && continue
-          BASE=$(basename "$f")
-          systemctl stop "$BASE" 2>/dev/null || true
-          systemctl disable "$BASE" 2>/dev/null || true
-        done
       args:
         executable: /bin/bash
       changed_when: false
@@ -84,7 +78,6 @@
       ansible.builtin.shell: |
         set -euo pipefail
         docker images --filter "reference=velox-worker*" -q 2>/dev/null | xargs -r docker rmi 2>/dev/null || true
-        docker images --filter "reference=velox-worker-console*" -q 2>/dev/null | xargs -r docker rmi 2>/dev/null || true
         echo "Images removed"
       args:
         executable: /bin/bash

@@ -20,13 +20,6 @@
     master_url: "{{ master_url | default('http://127.0.0.1:8000') }}"
 
   tasks:
-    # Operator migration note: legacy `velox-worker-console.service`
-    # is no longer tolerated by the post-state assert (STEP 7). If
-    # your fleet predates this assertion AND any host still ships the
-    # console unit (transitional debug), remove it manually before
-    # the next run of this playbook — otherwise the gate will fail
-    # loudly to surface the mismatch.
-
     # ── STEP 1: Pulizia servizi vecchi ────────────────────────
     - name: Normalize | Stop all old velox-worker services
       ansible.builtin.shell: |
@@ -85,9 +78,10 @@
         for f in /etc/systemd/system/velox-worker-*.service; do
           [ ! -f "$f" ] && continue
           BASE=$(basename "$f")
-          # Only keep the canonical unit. Watchdog / auto-update /
-          # console are removed too: Step 7 assert forbids them in the
-          # post-state enumeration (canonical-only contract).
+          # Only keep the canonical unit. Watchdog and auto-update
+          # are canonical siblings; Step 7 assert forbids any other
+          # survivors in the post-state enumeration (canonical-only
+          # contract).
           if [ "$BASE" != "$KEEP" ]; then
             rm -f "$f"
             echo "Removed: $f"
@@ -153,10 +147,6 @@
     #   * The no-stragglers assert runs as a loop over the live
     #     enumeration; an empty list trivially passes the loop, so a
     #     separate canonical-present assert below closes that gap.
-    #   * `velox-worker-console.service` is intentionally NOT in
-    #     the whitelist. A leftover console instance on a real
-    #     worker host trips the gate. Legacy operators must remove
-    #     console manually (see migration note before STEP 1).
     - name: Normalize | Reload systemd daemon (refresh unit-file cache)
       ansible.builtin.shell: |
         set -euo pipefail

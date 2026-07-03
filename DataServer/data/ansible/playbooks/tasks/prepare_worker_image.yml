@@ -12,8 +12,7 @@
 #   * docker image inspect proves the tag is real
 #
 # This task does NOT touch systemd, runtime directories, watchdog,
-# timers, auto-update, or the worker console. Those belong to
-# canonical_worker_runtime.yml.
+# timers, or auto-update. Those belong to canonical_worker_runtime.yml.
 #
 # Required vars:
 #   velox_dir       — install root (e.g. /opt/velox)
