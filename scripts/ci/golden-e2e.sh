@@ -55,6 +55,8 @@ readonly WORKER_PIDFILE="${TMPDIR}/worker.pid"
 readonly WORKER_CONFIG="${TMPDIR}/worker.json"
 readonly JOB_FILE="${TMPDIR}/job.json"
 readonly MASTER_ENV="${TMPDIR}/master.env"
+readonly WORKER_CACHE_DIR="${TMPDIR}/cache"
+readonly WORKER_BLOB_DIR="${TMPDIR}/blobs"
 
 # ─── Helper functions ────────────────────────────────────────────────────────
 log()   { printf '\e[36m[%s]\e[0m %s\n' "${SCRIPT_NAME}" "$*"; }
@@ -93,7 +95,7 @@ phase0_deps() {
   log "version: ${VERSION}"
   BUNDLE_HASH="golden-e2e-bundle-${VERSION}"
 
-  mkdir -p "$LOGDIR" "$CERTS_DIR" "$DATA_DIR" "$STAGING_DIR" "$STORAGE_DIR" "$(dirname "$MASTER_BIN")" "${TMPDIR}/tests/fixtures"
+  mkdir -p "$LOGDIR" "$CERTS_DIR" "$DATA_DIR" "$STAGING_DIR" "$STORAGE_DIR" "$(dirname "$MASTER_BIN")" "${TMPDIR}/tests/fixtures" "$WORKER_CACHE_DIR" "$WORKER_BLOB_DIR"
   : > "${DATA_DIR}/velox.db"
   printf '%s\n' "$BUNDLE_HASH" > "${TMPDIR}/BUNDLE_HASH.txt"
   cp -f "${REPO_ROOT}/RemoteCodex/native/worker-agent-go/tests/fixtures/engine_selftest_baseline.sha256" "${TMPDIR}/tests/fixtures/engine_selftest_baseline.sha256"
@@ -181,6 +183,9 @@ ENV
   MPID=$!
   echo "$MPID" > "$MASTER_PIDFILE"
   disown "$MPID" 2>/dev/null
+  unset VELOX_MASTER_PORT VELOX_GRPC_PORT VELOX_DB_PATH VELOX_DATA_DIR VELOX_STAGING_DIR VELOX_STORAGE_DIR
+  unset VELOX_ADMIN_TOKEN VELOX_GRPC_TLS_CERT_FILE VELOX_GRPC_TLS_KEY_FILE VELOX_GRPC_TLS_CA_FILE
+  unset GIN_MODE VELOX_ALLOWED_WORKERS VELOX_CODE_VERSION
   log "master PID=$MPID"
 
   # Wait for /health
@@ -223,17 +228,31 @@ JSON
 
   # Boot worker with setsid+nohup
   cd "$TMPDIR"
-  setsid nohup env WORK_DIR="${TMPDIR}" VELOX_VIDEO_ENGINE_CPP_BIN="${ENGINE_BIN}" VELOX_BUNDLE_HASH="${BUNDLE_HASH}" "$WORKER_BIN" -config "$WORKER_CONFIG" </dev/null >"$WORKER_LOG" 2>&1 &
+  setsid nohup env WORK_DIR="${TMPDIR}" \
+    VELOX_VIDEO_ENGINE_CPP_BIN="${ENGINE_BIN}" \
+    VELOX_BUNDLE_HASH="${BUNDLE_HASH}" \
+    VELOX_WORKER_CACHE_DIR="${WORKER_CACHE_DIR}" \
+    VELOX_WORKER_BLOB_DIR="${WORKER_BLOB_DIR}" \
+    VELOX_GRPC_TLS_CERT_FILE="${CERTS_DIR}/worker.crt" \
+    VELOX_GRPC_TLS_KEY_FILE="${CERTS_DIR}/worker.key" \
+    VELOX_GRPC_TLS_CA_FILE="${CERTS_DIR}/ca.crt" \
+    "$WORKER_BIN" -config "$WORKER_CONFIG" </dev/null >"$WORKER_LOG" 2>&1 &
   WPID=$!
   echo "$WPID" > "$WORKER_PIDFILE"
   disown "$WPID" 2>/dev/null
   log "worker PID=$WPID"
 
-  # Wait for registration: worker should report in master log
+  # Wait for real registration, not just process startup.
   for i in $(seq 1 30); do
-    if grep -qE "${WORKER_ID}.*hello_ack|registered|Registration successful" "$MASTER_LOG" 2>/dev/null; then
+    if grep -q "Worker authenticated via mTLS: ${WORKER_ID}" "$MASTER_LOG" 2>/dev/null || \
+       grep -q "Worker ${WORKER_ID} connected (session:" "$MASTER_LOG" 2>/dev/null || \
+       grep -q "Registration successful" "$WORKER_LOG" 2>/dev/null; then
       ok "worker registered (${i}s)"
       return 0
+    fi
+    if grep -q "worker_id mismatch" "$WORKER_LOG" 2>/dev/null; then
+      tail -40 "$WORKER_LOG" 2>/dev/null || true
+      die "worker registration failed due to TLS identity mismatch" 1
     fi
     # Check worker didn't crash
     if ! kill -0 "$WPID" 2>/dev/null; then
