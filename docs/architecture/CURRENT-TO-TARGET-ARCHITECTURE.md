@@ -6,22 +6,56 @@
 **Ultima riconciliazione statica:** 3 luglio 2026  
 **Ambito:** master `DataServer`, worker `RemoteCodex`, contratti `shared`, persistenza, artifact, forwarding, supervisor, CI e percorso verso il rendering distribuito
 
-> Questo documento descrive come Velox funziona oggi, quale architettura deve raggiungere, quali invarianti devono essere garantite e quali gap restano aperti. Non sostituisce i cinque documenti canonici in `docs/100-percent-plan/`: li collega allo stato osservabile della codebase corrente.
+> Questo documento spiega come Velox funziona oggi, quale architettura deve raggiungere, quali invarianti devono essere garantite e quali gap restano aperti. Non sostituisce i cinque documenti canonici in `docs/100-percent-plan/`: li collega allo stato osservabile della codebase corrente.
 >
-> Una funzionalità è indicata come completata solo quando esistono codice su `main`, test verdi ed evidenza riproducibile. Commenti, checklist o workflow presenti nel repository non costituiscono da soli prova di completamento.
+> Una funzionalità è considerata completata soltanto quando esistono codice su `main`, test verdi ed evidenza riproducibile. Commenti, checklist o workflow presenti nel repository non costituiscono da soli prova di completamento.
 
 ---
 
-## 1. Obiettivo del sistema
+## 1. Sintesi esecutiva
+
+Velox ha già superato la fase di prototipo monolitico. La codebase corrente contiene:
+
+- master Go con HTTP e gRPC;
+- worker Go con executor registry;
+- motore C++/FFmpeg;
+- stato Job, Task e TaskAttempt persistente;
+- creazione atomica Job+Task;
+- protocollo Task-native;
+- forwarding creator persistente;
+- completion protocol con fencing e HMAC;
+- artifact, outbox e delivery;
+- supervisor con classi di criticità;
+- doctor e bootstrap worker;
+- cost model master-side;
+- cache e blob store worker.
+
+La direzione è corretta. Il sistema, però, non può ancora essere considerato completamente stabilizzato o production-certified.
+
+I gap principali sono:
+
+1. dimostrare una clean baseline completa e required;
+2. eliminare ogni false-success nei runner;
+3. rendere supervisor e readiness realmente fail-closed;
+4. chiudere failure window di forwarding, upload e completion;
+5. dimostrare il percorso reale master→worker→artifact→Job con E2E obbligatorio;
+6. completare recovery, mTLS, certificazione e soak;
+7. trasformare il percorso video da `1 Job → 1 Task monolitico` a `1 Job → RenderPlan → Task DAG`.
+
+La priorità non è aggiungere nuovi layer. La priorità è rendere affidabili, osservabili e recuperabili quelli esistenti.
+
+---
+
+## 2. Obiettivo del sistema
 
 Velox deve essere un runtime **headless, deterministico, server-side e CPU-first** per generare e comporre video tramite un master centrale e worker remoti.
 
-Il risultato finale desiderato è il seguente:
+Architettura finale:
 
 ```text
 Richiesta utente
     ↓
-Compilatore master
+Compiler Registry sul master
     ↓
 RenderPlan immutabile e versionato
     ↓
@@ -29,37 +63,44 @@ Job persistente
     ↓
 Task DAG persistente
     ↓
-Placement su worker compatibili
+Scheduler e placement
     ↓
-Esecuzione tramite executor registry
+Worker compatibile
     ↓
-Artifact intermedi e finali verificati
+Executor Registry
+    ↓
+Motore C++/FFmpeg
+    ↓
+Artifact intermedi/finali verificati
     ↓
 Finalizzazione atomica
+    ↓
+Outbox e delivery
     ↓
 Job SUCCEEDED
 ```
 
-Il sistema non deve diventare:
+Velox non deve diventare:
 
 - un editor grafico;
 - un renderer browser-based;
 - un clone di Premiere, After Effects o Blender;
-- un sistema dipendente da GPU;
-- una collezione di endpoint che avviano percorsi di esecuzione differenti e non riconciliabili.
+- un runtime dipendente da GPU;
+- una collezione di endpoint con percorsi di esecuzione paralleli;
+- un insieme di servizi che scrivono lo stesso stato da punti differenti.
 
-Il principio fondamentale è:
+Principio fondamentale:
 
 > **Un solo contratto di esecuzione, un solo proprietario per ogni stato, un solo percorso di mutazione.**
 
 ---
 
-## 2. Fonti canoniche e regole di autorità
+## 3. Fonti canoniche e ordine di autorità
 
-Le fonti architetturali correnti sono:
+Fonti architetturali correnti:
 
-- `README.md` per la struttura del repository;
-- `docs/architecture/OWNERSHIP.md` per owner e writer canonici;
+- `README.md` — struttura del repository;
+- `docs/architecture/OWNERSHIP.md` — owner e writer canonici;
 - `docs/100-percent-plan/00-TARGET-AND-DEFINITION-OF-DONE.md`;
 - `docs/100-percent-plan/01-RUNTIME-CONSISTENCY-AND-RECOVERY.md`;
 - `docs/100-percent-plan/02-CI-TESTING-AND-RELEASE.md`;
@@ -75,21 +116,21 @@ Ordine di autorità in caso di divergenza:
 4. documentazione canonica;
 5. commenti e documenti storici.
 
-Se un documento afferma che esiste un solo writer ma il codice permette due mutation path, lo stato reale è **non conforme** finché il secondo percorso non viene eliminato o ricondotto al writer canonico.
+Se un documento afferma che esiste un solo writer ma il codice permette due mutation path indipendenti, lo stato reale è non conforme fino alla convergenza.
 
 ---
 
-## 3. Principi architetturali non negoziabili
+## 4. Principi architetturali non negoziabili
 
-### 3.1 Single source of truth
+### 4.1 Single source of truth
 
 | Tipo di dato | Fonte autoritativa |
 |---|---|
 | Job, Task, TaskAttempt, lease, forwarding, upload, artifact, outbox e delivery | SQLite tramite repository |
-| File video, audio, immagini e blob pesanti | BlobStore/filesystem |
+| Video, audio, immagini e blob pesanti | BlobStore/filesystem |
 | Configurazione e secret | config validata, env e secret store approvati |
-| Cache worker | persistente ma ricostruibile, mai fonte business autoritativa |
-| Stato in memoria | solo proiezione o cache ricostruibile |
+| Cache worker | persistente ma ricostruibile |
+| Stato in memoria | proiezione o cache, mai autorità business |
 | Versione prodotto | `VERSION.txt` |
 
 Sono vietati:
@@ -98,17 +139,18 @@ Sono vietati:
 - mappe globali usate come coda autoritativa;
 - dual-write tra colonne canoniche e copie JSON mutabili;
 - fallback silenziosi verso storage alternativi;
-- percorsi DB scelti implicitamente in directory differenti.
+- più percorsi impliciti per il database;
+- blob pesanti salvati dentro SQLite.
 
-### 3.2 Single writer
+### 4.2 Single writer
 
 Ogni stato importante deve avere:
 
 - un owner;
 - un writer;
 - una API di mutazione;
-- un set di transizioni consentite;
-- test che impediscano la comparsa di un secondo writer.
+- una tabella di transizioni;
+- test di invariante full-tree.
 
 Forma obbligatoria:
 
@@ -132,11 +174,11 @@ Service B ─────────────► la stessa riga
 Worker ────────────────► reinventa lo stato master
 ```
 
-### 3.3 Registry-first
+### 4.3 Registry-first
 
 Nuove capacità devono entrare in un registry, resolver, compiler, estimator o sampler comune.
 
-È vietato aggiungere la stessa selezione in più punti:
+Sono vietati switch paralleli quando esiste già un registry:
 
 ```go
 switch videoMode { ... }
@@ -144,36 +186,36 @@ switch executorID { ... }
 if provider == "x" { ... }
 ```
 
-quando esiste già un registry canonico.
-
-### 3.4 Fail-closed
+### 4.4 Fail-closed
 
 Una dipendenza obbligatoria mancante deve:
 
 - impedire il bootstrap; oppure
 - rendere readiness falsa; oppure
-- restituire un errore tipizzato.
+- produrre un errore tipizzato.
 
-Non deve mai produrre:
+Non deve produrre:
 
 - successo apparente;
-- `nil` usato come “va bene”;
+- `nil` interpretato come successo per un loop permanente;
 - registry vuoto;
 - probe placeholder verde;
-- downgrade automatico a un percorso legacy.
+- downgrade automatico a un percorso legacy;
+- log di successo senza commit persistente.
 
-### 3.5 Idempotenza e fencing
+### 4.5 Idempotenza e fencing
 
-Ogni operazione ripetibile deve essere sicura dopo:
+Ogni operazione ripetibile deve restare corretta dopo:
 
 - retry di rete;
 - crash del master;
 - crash del worker;
 - replay gRPC;
 - lease scaduta;
-- esecuzione concorrente.
+- esecuzione concorrente;
+- riordino dei messaggi.
 
-L’identità minima di un’esecuzione Task è:
+Identità minima di un’esecuzione Task:
 
 ```text
 task_id
@@ -181,14 +223,14 @@ attempt_id
 worker_id
 lease_id
 revision
-attempt_number, dove previsto dal protocollo
+attempt_number, dove previsto
 ```
 
-Un report non deve poter modificare lo stato se la tupla non corrisponde al tentativo vincente corrente.
+Un report non può modificare lo stato se la tupla non corrisponde al tentativo vincente corrente.
 
 ---
 
-## 4. Struttura attuale del repository
+## 5. Struttura attuale del repository
 
 ```text
 DataServer/
@@ -228,30 +270,27 @@ shared/
     contratti Go, protobuf, payload e identità condivise
 ```
 
-La divisione generale è corretta: master, worker, contratti e motore nativo hanno responsabilità distinguibili. I principali gap non derivano dalla mancanza totale di moduli, ma dalla necessità di far convergere tutti i percorsi sugli stessi owner e di dimostrare la correttezza nei failure window.
+La separazione generale è corretta. I problemi principali non derivano dall’assenza totale di moduli, ma dalla necessità di far convergere tutti i percorsi sugli stessi owner e di provare la correttezza nei failure window.
 
 ---
 
 # PARTE I — COME FUNZIONA OGGI
 
-## 5. Ingresso e compilazione Job attuale
+## 6. Ingresso e compilazione Job
 
-### 5.1 Payload canonico
-
-Il percorso video usa il contratto `shared/contract.JobPayloadV2`.
+Il percorso video usa `shared/contract.JobPayloadV2`.
 
 L’Enqueuer:
 
-1. riceve una mappa al bordo HTTP o da creatorflow;
-2. risolve gli asset voiceover e scene image;
+1. riceve il payload da un handler HTTP o dal creator resolver;
+2. risolve voiceover e scene image;
 3. normalizza il payload;
 4. rimuove alias legacy dalle scritture canoniche;
-5. determina `job_id`, `job_run_id`, `video_name`, scenes e voiceover;
-6. compila un `jobs.Job`;
-7. compila un `taskgraph.TaskSpec`;
-8. chiama l’atomic creator per inserire Job e primo Task nella stessa transazione.
-
-Schema corrente:
+5. determina identità e metadati;
+6. compila `jobs.Job`;
+7. compila `taskgraph.TaskSpec`;
+8. delega a `AtomicJobTaskCreator`;
+9. inserisce Job e primo Task nella stessa transazione.
 
 ```mermaid
 flowchart TD
@@ -265,11 +304,13 @@ flowchart TD
     G --> H[(SQLite jobs + tasks + task spec)]
 ```
 
-### 5.2 Identità
+### Identità normale
 
-Per richieste normali, il Job può ricevere un UUID.
+Per richieste normali il Job può ricevere un UUID.
 
-Per forwarding da un sistema creator remoto, il `job_id` viene derivato deterministicamente dalla forwarding key:
+### Identità forwarding
+
+Per risultati provenienti da creatorflow:
 
 ```text
 source_provider
@@ -281,27 +322,27 @@ routing.FormatForwardingKey
 enqueue.DeriveForwardingJobID
 ```
 
-Questo consente a webhook duplicati, poller concorrenti e retry post-crash di convergere sullo stesso Job.
+Webhook duplicati, poller concorrenti e retry post-crash convergono sullo stesso Job.
 
-### 5.3 Limite corrente
+### Limite corrente
 
-Il sistema crea atomicamente Job e Task, ma il percorso video principale è ancora sostanzialmente:
+Il percorso video principale è ancora sostanzialmente:
 
 ```text
 1 Job → 1 Task scene.composite.v1@1
 ```
 
-Il Task contiene un payload ricco che il worker tratta come una composizione video completa. La struttura TaskGraph esiste, ma il vero split in più Task indipendenti non è ancora il percorso operativo completo del video standard.
+Il Task contiene un payload completo che il worker tratta come composizione monolitica. TaskGraph esiste, ma il video standard non è ancora compilato in un vero DAG di Task granulari.
 
 ---
 
-## 6. Stato Job, Task e TaskAttempt
+## 7. Job, Task e TaskAttempt
 
-### 6.1 Job
+### Job
 
-Il Job rappresenta il risultato business richiesto dall’utente.
+Rappresenta il risultato business richiesto dall’utente.
 
-Stati target essenziali:
+Stati essenziali:
 
 ```text
 PENDING
@@ -312,56 +353,50 @@ FAILED
 CANCELLED
 ```
 
-Il Job non deve essere usato come lease di esecuzione. Lease, attempt e worker assignment appartengono al Task.
+Il Job non deve possedere lease o worker assignment.
 
-### 6.2 Task
+### Task
 
-Il Task rappresenta una unità schedulabile.
-
-Responsabilità:
+Rappresenta una unità schedulabile e possiede:
 
 - dipendenze;
 - stato READY/LEASED/RUNNING/terminal;
-- executor ID e versione;
+- executor ID/version;
 - requisiti;
 - attempt number;
 - revision;
 - worker e lease correnti.
 
-### 6.3 TaskAttempt
+### TaskAttempt
 
-Il TaskAttempt rappresenta un’esecuzione concreta del Task.
+Rappresenta un’esecuzione concreta e possiede:
 
-Responsabilità:
-
-- worker che ha eseguito;
+- worker;
 - lease;
 - risultato;
 - metriche;
 - timing di fase;
-- output prodotti;
-- motivo tipizzato di errore o rifiuto;
+- output;
+- motivo tipizzato;
 - identità del tentativo vincente.
 
-### 6.4 Stato attuale
+### Stato attuale
 
-La codebase è stata migrata verso un modello Task-native:
+La codebase è migrata verso un modello Task-native:
 
-- i vecchi messaggi Job del protocollo sono stati rimossi;
+- i vecchi messaggi Job del protocollo sono rimossi;
 - il worker riceve TaskOffer e TaskLeaseGranted;
 - i TaskResult sono tipizzati;
 - l’ingestion service centralizza la chiusura del tentativo;
 - metriche tipizzate e artifact registration sono collegate all’ingestion.
 
-Resta necessario dimostrare che nessun percorso legacy o secondario aggiorni Job, Task o attempt fuori dai repository canonici.
+Resta obbligatorio mantenere test full-tree che impediscano nuove mutation laterali.
 
 ---
 
-## 7. Placement e dispatch attuali
+## 8. Placement e dispatch
 
 Il master possiede il cost model.
-
-Flusso previsto oggi:
 
 ```mermaid
 sequenceDiagram
@@ -381,33 +416,29 @@ sequenceDiagram
     W->>R: dispatch Task
 ```
 
-Il worker non deve selezionare autonomamente il tipo di lavoro tramite switch paralleli. Deve usare il registry degli executor.
+Il worker non deve selezionare il lavoro tramite switch paralleli. Deve usare il registry.
 
-Attualmente il composition root worker:
+Il composition root worker oggi:
 
 - costruisce `executor.Registry`;
 - costruisce il pipeline runner;
-- esegue un bootstrap fail-closed del motore C++ e di FFmpeg;
+- esegue bootstrap fail-closed del motore C++ e di FFmpeg;
 - registra `scene.composite.v1@1`;
-- costruisce cache persistente e blob store locali;
-- passa registry, cache e blob al worker runtime.
+- costruisce cache persistente e blob store;
+- passa registry, cache e blob al runtime.
 
-Questa è una buona base.
+Questa è una base corretta.
 
-Gap corrente:
+Gap:
 
-- il catalogo reale degli executor è ancora ristretto;
-- la maggior parte della pipeline completa passa da `scene.composite.v1@1`;
-- il placement non ha ancora dimostrato end-to-end cost, locality e multi-executor DAG;
-- la certificazione worker non è ancora chiusa per ogni hardware class.
+- catalogo executor reale ristretto;
+- la pipeline completa passa principalmente da scene composite;
+- cost, locality e multi-executor DAG non sono ancora dimostrati E2E;
+- la certificazione per hardware class non è chiusa.
 
 ---
 
-## 8. Esecuzione worker attuale
-
-Il worker riceve un contratto Task dal master.
-
-Flusso:
+## 9. Esecuzione worker
 
 ```text
 TaskLeaseGranted
@@ -430,22 +461,20 @@ TaskResult tipizzato
 Il worker deve:
 
 - eseguire, non pianificare;
-- rispettare il payload ricevuto;
+- rispettare il contratto;
 - non inventare Task;
 - non cambiare il DAG;
-- non scegliere un altro executor;
+- non scegliere un executor alternativo;
 - non dichiarare il Job riuscito;
 - produrre hash, size, metadati e metriche.
 
-La cache locale e il blob store worker sono ottimizzazioni ricostruibili. Non possono sostituire la registrazione artifact del master.
+Cache e blob locali sono ottimizzazioni ricostruibili, non autorità business.
 
 ---
 
-## 9. Ingestion del TaskResult
+## 10. Ingestion del TaskResult
 
-Il control plane master riceve un `TaskResult` tipizzato.
-
-Il percorso desiderato, in gran parte già introdotto, è:
+Percorso canonico:
 
 ```text
 gRPC handler
@@ -455,98 +484,95 @@ TaskReportIngestionService
 transazione atomica:
     - chiusura TaskAttempt
     - aggiornamento Task
-    - persistenza metriche tipizzate
+    - metriche tipizzate
     - cache/cost evidence
     - registrazione output
     ↓
-successivo roll-up Job e artifact completion
+completion/finalization
 ```
 
-L’handler deve limitarsi a:
+L’handler deve soltanto:
 
 - validare protocollo e identità;
-- tradurre errori in status gRPC;
+- tradurre gli errori in status gRPC;
 - delegare al servizio.
 
-Non deve ricostruire la stessa sequenza con SQL o repository separati.
+Non deve ricreare la sequenza con SQL o repository separati.
 
 ---
 
-## 10. Protocollo artifact e completion attuale
+## 11. Artifact e completion protocol
 
-La codebase contiene un protocollo esplicito di commit output.
-
-### 10.1 DeclareOutputs
-
-Il worker dichiara gli output attesi.
+### DeclareOutputs
 
 Il master:
 
 - valida la FenceTuple;
-- crea o riusa un `attempt_commit`;
-- genera un commit token deterministico con HMAC;
+- crea o riusa `attempt_commit`;
+- genera un commit token deterministico HMAC;
 - registra le dichiarazioni output;
-- restituisce un UploadPlan.
+- restituisce UploadPlan.
 
-### 10.2 Upload progress
+### RecordUploadProgress
 
-Il worker invia progressi per un upload.
-
-Il master aggiorna:
+Aggiorna:
 
 - `last_progress_at`;
 - deadline del commit;
 - byte caricati.
 
-Gap osservato: la documentazione promette monotonicità di `uploaded_bytes`, ma la mutation corrente assegna il valore ricevuto. Un heartbeat vecchio può quindi regredire il progresso. La query deve usare una semantica `MAX(existing, incoming)`.
+Gap osservato: il contratto dichiara progress monotono, mentre la mutation corrente assegna il valore ricevuto. Un heartbeat vecchio può regredire `uploaded_bytes`.
 
-### 10.3 CompleteUpload
+Target SQL:
 
-Il master verifica:
+```sql
+SET uploaded_bytes = MAX(uploaded_bytes, ?)
+```
+
+### CompleteUpload
+
+Verifica:
 
 - stato upload;
-- hash dichiarato dal worker;
-- hash verificato server-side;
+- hash worker;
+- hash server-side;
 - stato artifact;
-- conteggio degli output pronti.
+- conteggio output ready.
 
-Un artifact può diventare READY solo quando la verifica server-side è sufficiente.
+Un artifact può diventare READY solo dopo verifica sufficiente.
 
-### 10.4 CommitAttempt
+### CommitAttempt
 
 La transazione finale:
 
-- marca il TaskAttempt riuscito;
-- marca il Task riuscito;
-- marca il commit come COMMITTED;
-- aggiorna il Job quando le condizioni sono soddisfatte;
+- marca TaskAttempt;
+- marca Task;
+- marca il commit COMMITTED;
+- effettua il roll-up Job secondo il contratto canonico;
 - crea delivery;
-- inserisce evento outbox;
-- legge il CommitResult prima del commit SQL.
+- inserisce outbox;
+- legge CommitResult prima del commit SQL.
 
-### 10.5 Ambiguità da chiudere
+### Confine di ownership corrente
 
-`docs/architecture/OWNERSHIP.md` assegna la scrittura esclusiva di Job `SUCCEEDED` ad `internal/artifacts.Service`.
+Il gate `TestSucceededWriterIsFinalizationOnly` è stato promosso a must-pass e ora passa.
 
-Il completion coordinator contiene però un percorso che invoca la finalizzazione Job tramite il repository quando i Task sono terminati.
+`internal/completion/sqlite_uow.go` è considerato il gateway SQL autorizzato del Coordinator, nella stessa transazione atomica, non un writer business laterale.
 
-Questa divergenza deve essere risolta esplicitamente:
+La regola da preservare è:
 
-- o il coordinator delega all’unico finalizer artifact;
-- oppure la ownership canonica viene ridefinita attorno a un `FinalizationService` unico;
-- non sono consentiti due writer semanticamente equivalenti.
+- `artifacts.FinalizeVerified` governa la finalizzazione artifact/job del percorso artifact;
+- `Coordinator.CommitAttempt` governa attempt/task/commit e il relativo roll-up atomico;
+- nessun handler o runner può aggiungere un terzo percorso;
+- nessun Job può diventare SUCCEEDED prima dell’evidenza artifact richiesta.
 
-Il test `TestSucceededWriterIsFinalizationOnly`, oggi nella watchlist dei test noti come fallenti, è il segnale che questo contratto non è ancora stabilizzato.
+Resta utile rendere questa distinzione esplicita in ownership e nei test E2E, così l’allowlist del UoW non venga interpretata come permesso per nuovi writer.
 
 ---
 
-## 11. Creatorflow e forwarding attuali
+## 12. Creatorflow e forwarding
 
-Velox può ricevere risultati da un creator engine remoto.
-
-### 11.1 Stato persistente
-
-Il vecchio polling in goroutine non persistente è stato sostituito da `creator_forwardings`.
+Il polling volatile in goroutine è stato sostituito da `creator_forwardings` persistente.
 
 Stati concettuali:
 
@@ -561,11 +587,11 @@ BLOCKED
 FAILED
 ```
 
-### 11.2 Runner
+### Runner
 
 `CreatorForwardingRunner`:
 
-1. reclama righe PENDING/RETRY_WAIT;
+1. reclama righe;
 2. assegna lease;
 3. avvia renewal;
 4. interroga il creator remoto;
@@ -573,92 +599,83 @@ FAILED
 6. delega al Resolver;
 7. crea Job+Task e marca FORWARDED atomicamente.
 
-### 11.3 Resolver
+### Resolver
 
-`creatorflow.Resolver` è il punto canonico per convertire un risultato creator completo in Job Velox.
+`creatorflow.Resolver`:
 
-Responsabilità:
+- verifica completezza;
+- calcola forwarding key;
+- deriva job ID deterministico;
+- normalizza payload;
+- riscrive URL quando necessario;
+- assicura la forwarding row;
+- prepara Job e TaskSpec;
+- esegue `AtomicForwardAndEnqueue`.
 
-- verificare completezza;
-- calcolare forwarding key;
-- derivare job ID deterministico;
-- normalizzare payload;
-- riscrivere URL quando necessario;
-- assicurare la forwarding row;
-- preparare Job e TaskSpec;
-- eseguire `AtomicForwardAndEnqueue`.
+La convergenza è corretta.
 
-Questa convergenza è corretta.
-
-### 11.4 Gap di affidabilità
-
-Il runner attuale ha ancora failure window che possono risultare verdi:
+### Failure window ancora aperte
 
 - `processLease` non restituisce errore;
-- molte mutation failure vengono solo loggate;
-- `tick` può restituire `nil` anche quando la riga non è stata aggiornata;
-- metriche `Failed` o `Retried` possono aumentare anche se la transizione DB è fallita;
-- il claim batch può essere maggiore della concurrency, quindi lease già reclamate aspettano il semaphore senza renewal;
-- il resolver lazy è scritto da goroutine concorrenti senza una chiara sincronizzazione;
-- il fast path “Job già esistente” non garantisce sempre che la forwarding row sia stata riparata e marcata FORWARDED.
+- mutation failure possono essere solo loggate;
+- `tick` può restituire `nil` senza transizione persistita;
+- metriche possono aumentare prima della conferma DB;
+- ClaimBatch può superare Concurrency;
+- lease reclamate possono attendere il semaphore senza renewal;
+- resolver lazy è condiviso tra goroutine;
+- fast path “Job esistente” deve garantire repair della forwarding row.
 
-Conseguenza possibile:
+Possibile falso successo:
 
 ```text
 log = forwarded/retried/failed
 metric = incrementata
-SQLite = stato precedente o lease scaduta
+SQLite = stato precedente
 supervisor = runner sano
 ```
 
-Questa classe di falso successo è P0.
+Questo è P0.
 
 ---
 
-## 12. Outbox e delivery attuali
-
-Il modello corretto è:
+## 13. Outbox e delivery
 
 ```text
 Transazione business
     ↓
-outbox_event persistito nella stessa unità atomica
+outbox_event persistito
     ↓
 OutboxDispatcher
     ↓
 DeliveryRunner
     ↓
-Provider registry
+Provider Registry
     ↓
 delivery terminale o retry durabile
 ```
 
-Questo impedisce che il Job venga completato ma l’azione esterna venga persa dopo un crash.
-
-I runner di outbox e delivery sono classificati critical perché, se muoiono, il master continua a rispondere ma il flusso business non avanza.
-
-Resta obbligatorio dimostrare:
+Obblighi:
 
 - replay idempotente;
 - nessun evento perso;
 - nessuna delivery duplicata;
-- errori infrastrutturali propagati al supervisor;
-- retry con limite e motivo tipizzato;
+- errori infrastrutturali propagati;
+- retry tipizzati;
 - backlog e oldest-age osservabili.
+
+Outbox e delivery sono critical perché il server può restare vivo mentre il business flow è fermo.
 
 ---
 
-## 13. Supervisor e readiness attuali
+## 14. Supervisor e readiness
 
-### 13.1 Classi runner
-
-Il supervisor distingue:
+Classi:
 
 - `ClassOneShot`;
 - `ClassRestartable`;
 - `ClassCritical`.
 
-Tiene stati:
+Stati:
 
 ```text
 STARTING
@@ -668,17 +685,11 @@ STOPPED
 FAILED
 ```
 
-La readiness controlla i runner non-one-shot e deve diventare rossa se uno è morto.
+### Gap: uscita nil
 
-### 13.2 Gap attuali
+Un runner permanente che ritorna `nil` con context attivo viene considerato clean exit.
 
-#### Uscita `nil` di un runner permanente
-
-Un runner restartable o critical che ritorna `nil` mentre il context è attivo viene considerato “clean exit”.
-
-Per un loop permanente questa è una morte inattesa.
-
-Deve diventare:
+Target:
 
 ```text
 err == nil
@@ -690,55 +701,60 @@ ErrUnexpectedExit
 restart o fail-loud
 ```
 
-#### Chiusura completa del supervisor
+### Gap: supervisorDone
 
-`runServer` riceve gli errori critical tramite un canale, ma deve trattare anche la chiusura inattesa di `supervisorDone` come errore fatale.
+La chiusura inattesa dell’intero supervisor deve terminare `runServer` con errore.
 
-#### Semantica MaxRetries
+### Gap: MaxRetries
 
-`MaxRetries=0` deve significare:
+Semantica target:
 
-- zero retry per Restartable;
-- retry infinito per Critical.
+- Restartable + 0 = nessun retry;
+- Critical + 0 = infinito;
+- OneShot = nessun retry.
 
-La semantica deve essere centralizzata e testata.
+### Gap: transport probe
 
-#### Capability transport placeholder
+Il probe `transport` placeholder restituisce sempre `nil`.
 
-Il probe `transport` restituisce sempre `nil`.
+Deve essere sostituito da un check reale del TransportRegistry.
 
-Questo rende readiness positiva senza verificare la presenza del vero transport registry.
+### Gap: registration warning
 
-Un probe obbligatorio non può essere un placeholder verde.
-
-#### Errori di registrazione probe
-
-Un errore nel registrare una capability viene loggato come warning. In un percorso fail-closed, la composizione deve fallire.
+Un errore nel registrare una capability obbligatoria deve fallire il bootstrap, non produrre soltanto warning.
 
 ---
 
-## 14. CI attuale
+## 15. CI corrente
 
 Sono presenti:
 
 - `make verify`;
-- workflow workspace tests;
-- workflow routing invariants;
-- workflow typed metrics;
-- workflow pre-existing test watchlist;
-- altri gate di architettura e sicurezza.
+- workspace tests;
+- routing invariants;
+- typed metrics must-pass;
+- pre-existing test watchlist promossa a must-pass;
+- altri gate architetturali e security.
 
-Problemi attuali:
+### Stato aggiornato
 
-1. logica CI duplicata tra più workflow;
-2. setup Go e cache ripetuti;
-3. un workflow esegue test dichiarati già fallenti;
-4. un check permanentemente rosso perde valore operativo;
-5. non è ancora dimostrato che CTest, workload E2E reale e mTLS E2E siano required e impossibili da saltare;
-6. il combined status osservabile può non esporre check sufficienti sul commit;
-7. non esiste ancora evidenza canonica unica di una clean checkout verification completa.
+I quattro test della vecchia watchlist ora passano deterministicamente:
 
-La direzione target è:
+- `TestSucceededWriterIsFinalizationOnly`;
+- `TestBeginUpload_WrongAttemptStatus`;
+- `TestUploadCompletedVideo_CanonicalPipeline`;
+- `TestGenerateWithImages_UsesCreatorStageWhenConfigured`.
+
+Il gap non è più “correggere quei quattro test”. Il gap è:
+
+- rendere il gate required nella branch protection;
+- dimostrare una clean `make verify` completa;
+- evitare duplicazione di build logic tra workflow;
+- rendere CTest e workload E2E obbligatori;
+- impedire skip silenziosi;
+- pubblicare evidenza di release unica.
+
+Target:
 
 ```text
 make verify
@@ -752,13 +768,13 @@ make verify
     └── release evidence
 ```
 
-I workflow devono essere dispatcher sottili, non implementazioni duplicate del build.
+I workflow devono essere dispatcher sottili.
 
 ---
 
 # PARTE II — ARCHITETTURA TARGET
 
-## 15. Flusso end-to-end definitivo
+## 16. Flusso end-to-end definitivo
 
 ```mermaid
 sequenceDiagram
@@ -774,83 +790,75 @@ sequenceDiagram
     participant O as Outbox
 
     U->>API: Submit project/generation request
-    API->>C: Compile canonical immutable RenderPlan
+    API->>C: Compile immutable RenderPlan
     C->>DB: Atomic Job + DAG + dependencies
     S->>DB: List READY Tasks
     S->>W: TaskOffer
     W->>E: Validate executor/version
     W-->>S: TaskAccepted
-    S->>DB: Claim Task with attempt + lease + revision
+    S->>DB: Claim with attempt + lease + revision
     S->>W: TaskLeaseGranted
     W->>E: Execute exact contract
     E->>B: Upload staged output
-    W->>API: Declare/complete output with hashes
+    W->>API: Complete output with hashes
     API->>F: Verify artifact and fence
     F->>DB: Atomic Attempt + Task + Artifact + Job finalization
-    F->>O: Persist business event
+    F->>O: Persist event
     O-->>U: Delivery/result available
 ```
 
-### Invariante principale
-
-Il Job può diventare `SUCCEEDED` solo quando:
+Invariante principale:
 
 ```text
-tutti i Task richiesti sono terminali e validi
-AND
-il tentativo vincente è inequivocabile
-AND
-l’artifact finale esiste
-AND
-l’hash è verificato
-AND
-lo stato artifact è READY
-AND
-la finalizzazione e gli eventi durabili sono commit-tati
+Task richiesti terminali e validi
+AND winning attempt inequivocabile
+AND artifact finale presente
+AND hash verificato
+AND artifact READY
+AND finalizzazione/outbox commit-tati
+    ↓
+Job SUCCEEDED
 ```
 
 ---
 
-## 16. RenderPlan immutabile
-
-L’input utente non deve essere interpretato diversamente da ogni endpoint o worker.
+## 17. RenderPlan immutabile
 
 Target:
 
 ```text
 Endpoint specifico
     ↓
-Compiler specifico registrato
+Compiler registrato
     ↓
-RenderPlan comune, versionato, normalizzato
+RenderPlan comune e versionato
     ↓
 TaskSpec derivati
     ↓
 Executor generici
 ```
 
-Il RenderPlan deve contenere:
+RenderPlan deve includere:
 
-- versione schema;
+- schema version;
 - identità deterministica;
 - input canonici;
-- timeline;
-- layer;
-- asset references;
+- timeline e layer;
+- asset reference;
 - output contract;
-- color, codec, frame rate e time base;
-- executor e versioni richieste;
+- codec, color, frame rate e time base;
+- executor e versioni;
 - requisiti;
 - dipendenze;
-- policy determinismo e cache.
+- policy determinismo/cache.
 
-Il worker non deve ricevere il progetto grezzo e decidere autonomamente come dividerlo.
+Il worker non deve interpretare il progetto grezzo o decidere come dividerlo.
 
 ---
 
-## 17. Multi-Task DAG reale
+## 18. Multi-Task DAG
 
-Target:
+Esempio target:
 
 ```text
 Job
@@ -869,7 +877,7 @@ Job
 Ogni Task deve avere:
 
 - ID stabile;
-- executor ID e versione;
+- executor ID/version;
 - input artifact;
 - output atteso;
 - requirements;
@@ -878,26 +886,26 @@ Ogni Task deve avere:
 - determinism/cache policy;
 - state machine persistente.
 
-Il DAG deve essere pubblicato atomicamente con il Job o tramite una fase di compilazione che impedisca a un grafo parziale di diventare eseguibile.
+Il DAG deve essere pubblicato atomicamente o restare non eseguibile finché la compilazione non è completa e validata.
 
 ---
 
-## 18. Scheduler target
+## 19. Scheduler target
 
-Il master deve filtrare i worker per:
+Filtri:
 
-1. executor ID e versione;
+1. executor ID/version;
 2. resource class;
 3. temporal mode;
 4. deterministic requirement;
 5. cacheable requirement;
 6. slot disponibili;
 7. memoria e disco;
-8. stato drain/readiness;
+8. drain/readiness;
 9. banda;
 10. locality e cache evidence.
 
-Poi deve assegnare uno score:
+Score:
 
 ```text
 priority
@@ -911,25 +919,22 @@ priority
 - fairness penalty
 ```
 
-La decisione deve essere spiegabile e persistita.
+La decisione deve essere persistita e spiegabile.
 
 ---
 
-## 19. Cache e artifact target
+## 20. Cache e artifact target
 
-### 19.1 Cache
+### Cache hit valida
 
-Una cache hit è valida solo se:
+- key da input semantici canonici;
+- executor/engine version inclusi;
+- nessun path macchina o timestamp casuale;
+- blob presente;
+- hash verificato;
+- metadati compatibili.
 
-- la key deriva da input semantici canonici;
-- include executor e engine version;
-- non include path macchina o timestamp casuali;
-- l’artifact esiste;
-- hash e metadati sono compatibili.
-
-### 19.2 Artifact
-
-Stati concettuali:
+### Artifact states
 
 ```text
 DECLARED
@@ -940,227 +945,208 @@ QUARANTINED
 FAILED
 ```
 
-Nessun path locale worker può diventare output finale senza registrazione master.
+Nessun path locale worker diventa output finale senza registrazione master.
 
-### 19.3 Unico finalizer
+### Finalizzazione
 
-Deve esistere un solo servizio capace di:
+Deve restare un solo confine business autorizzato a:
 
-- selezionare il winning attempt;
-- verificare tutti gli output;
-- promuovere l’artifact;
+- scegliere il winning attempt;
+- verificare output;
+- promuovere artifact;
 - marcare Task e Job;
-- creare outbox e delivery;
-- restituire il risultato idempotente.
+- creare outbox/delivery;
+- restituire risultato idempotente.
 
-Il nome può essere `artifacts.Service` o `FinalizationService`, ma il writer deve essere unico.
+Adapter SQL e Unit of Work sono dettagli interni del medesimo confine, non nuovi owner.
 
 ---
 
-## 20. Recovery target
+## 21. Recovery target
 
 ### Master restart
 
-Dopo restart:
-
-- readiness resta falsa;
-- migrazioni e dipendenze vengono validate;
-- runner vengono avviati;
-- Task READY vengono riletti;
-- lease scadute vengono riconciliate;
-- outbox e delivery pending vengono riprese;
-- forwardings pending vengono riprese;
-- upload e artifact abbandonati vengono riconciliati;
-- readiness diventa vera solo dopo i probe reali.
+- readiness falsa;
+- dipendenze validate;
+- runner avviati;
+- Task READY riletti;
+- lease scadute riconciliate;
+- outbox/delivery riprese;
+- forwardings ripresi;
+- upload/artifact abbandonati riconciliati;
+- readiness vera solo dopo probe reali.
 
 ### Worker crash
 
-- il renewal manca;
-- la lease scade;
-- il tentativo precedente diventa stale/terminal;
-- viene creato un solo nuovo attempt;
-- il Task torna READY o FAILED;
-- il risultato tardivo del vecchio worker viene rifiutato;
-- rimane un solo artifact finale READY.
+- renewal mancante;
+- lease scaduta;
+- vecchio attempt stale/terminal;
+- un solo nuovo attempt;
+- Task READY o FAILED;
+- late result rifiutato;
+- un solo artifact finale READY.
 
 ### Network partition
 
 - nessuna split-brain finalization;
-- reconnect con sessione autenticata nuova;
-- report duplicati idempotenti;
-- lease e revision impediscono al vecchio worker di vincere;
-- ragioni di disconnect e recovery sono tipizzate.
+- nuova sessione autenticata;
+- replay idempotente;
+- lease/revision proteggono il winner;
+- reason tipizzati.
 
 ---
 
-# PARTE III — COSA MANCA
+# PARTE III — GAP ANALYSIS
 
-## 21. Mappa dei gap
+## 22. Mappa sintetica
 
 | Area | Oggi | Target | Gap |
 |---|---|---|---|
-| Baseline | workflow e test numerosi, alcuni noti fallimenti | una baseline sempre verde | correggere watchlist e clean verification |
-| Job creation | Job+Task atomici | Job+RenderPlan+DAG atomici | compilazione multi-Task mancante |
-| Executor | registry worker e scene composite reale | più executor reali | catalogo e contract test mancanti |
-| Forwarding | persistente e deterministico | nessun false success | error propagation e lease batch |
-| Completion | protocollo avanzato | unico finalizer | ownership SUCCEEDED ambigua |
-| Upload progress | valore assegnato | monotono | usare MAX e test out-of-order |
-| Retry budget | contatore coordinator | keyed e coerente | soglia e scope non corretti |
-| Supervisor | classi e readiness | permanent runner fail-loud | nil exit e supervisorDone |
-| Capability readiness | registry presente | probe reali | transport placeholder |
-| CI | più gate | make verify canonico | duplicazione e required gates |
+| Baseline | watchlist must-pass, vari gate | clean full verification required | branch protection ed evidenza completa |
+| Job creation | Job+Task atomici | Job+RenderPlan+DAG atomici | compilazione multi-Task |
+| Executor | registry + scene composite | più executor reali | catalogo e contract test |
+| Forwarding | persistente/deterministico | zero false-success | error propagation e lease batch |
+| Completion | fencing/HMAC/UoW | progress e retry coerenti | monotonicità e budget keyed |
+| Finalization | invariant writer test verde | proof E2E artifact-before-job | evidenza failure-window |
+| Supervisor | classi/readiness | permanent runner fail-loud | nil exit e supervisorDone |
+| Capability | registry presente | probe reali | transport placeholder |
+| CI | più must-pass gate | make verify canonico | required E2E/CTest e dedupe |
 | Recovery | componenti presenti | suite automatizzata | failure injection completa |
-| Operations | doctor/bootstrap parziali | worker certificato | mTLS, soak, rollout evidence |
-| Scale | TaskGraph e costmodel presenti | DAG, locality e sharding | implementazione e benchmark |
+| Operations | doctor/bootstrap | worker certificato | mTLS, soak, rollout evidence |
+| Scale | TaskGraph/costmodel | DAG/locality/sharding | implementazione e benchmark |
 
 ---
 
 # PARTE IV — PIANO DI INTERVENTO
 
-## 22. P0-01 — Ripristinare una baseline verde
+## 23. P0-01 — Rendere la baseline realmente obbligatoria
 
-### Obiettivo
+### Stato
 
-Nessuna attività architetturale successiva deve poggiare su test già rossi.
+I quattro test della watchlist sono verdi e promossi a must-pass.
 
 ### Azioni
 
-1. Correggere:
-   - `TestSucceededWriterIsFinalizationOnly`;
-   - `TestBeginUpload_WrongAttemptStatus`;
-   - `TestUploadCompletedVideo_CanonicalPipeline`;
-   - `TestGenerateWithImages_UsesCreatorStageWhenConfigured`.
-2. Stabilire se il problema è il test o il codice, senza allentare gli invarianti.
-3. Trasformare la watchlist in must-pass.
-4. Eseguire da clean checkout:
-   - `make verify-fast`;
-   - `make verify`;
-   - test race per moduli Go;
-   - CTest;
-   - architecture checks.
-5. Archiviare l’evidenza.
+1. rendere i gate must-pass required nella branch protection;
+2. eseguire `make verify-fast` da clean checkout;
+3. eseguire `make verify` con Docker e native toolchain;
+4. eseguire Go race per tutti i moduli;
+5. eseguire CTest e fallire se scopre zero test;
+6. verificare architecture, migration, registry, secret e DB-access checks;
+7. archiviare summary e durata;
+8. impedire neutral/skipped per gate mandatory.
 
-### Criteri di accettazione
+### Accettazione
 
-- zero test noti fallenti;
-- nessun workflow permanentemente rosso;
-- nessun skip di dipendenza obbligatoria;
-- output riproducibile.
+- zero test noti rossi;
+- required checks configurati;
+- nessuno skip critico;
+- clean verification riproducibile.
 
 ---
 
-## 23. P0-02 — Unificare definitivamente la finalizzazione
-
-### Problema
-
-La documentazione assegna `SUCCEEDED` ad artifacts finalization, mentre il coordinator contiene un percorso di roll-up Job.
+## 24. P0-02 — Eliminare false-success nel forwarding
 
 ### Azioni
 
-1. Cercare tutti i writer di:
-   - `jobs.status = SUCCEEDED`;
-   - `completed_at`;
-   - output finale;
-   - delivery creation.
-2. Scegliere un unico owner.
-3. Spostare tutte le chiamate nel servizio canonico.
-4. Far delegare completion coordinator e ingestion service.
-5. Aggiungere invariant scan full-tree.
-6. Rendere idempotente duplicate finalization.
-7. Testare crash prima/dopo blob promotion e DB commit.
+1. `processLease` deve restituire `error`;
+2. classificare element-scoped, lease-lost e infrastructure;
+3. raccogliere errori delle goroutine;
+4. propagare errori infrastrutturali da `tick`;
+5. incrementare metriche solo dopo CAS riuscito;
+6. imporre `effectiveClaimBatch <= Concurrency`;
+7. non reclamare lavoro che non può iniziare;
+8. iniettare Resolver nel costruttore;
+9. eliminare lazy init concorrente;
+10. riparare forwarding row nel fast path idempotente;
+11. aggiungere failure injection DB.
 
-### Criteri di accettazione
+### Accettazione
 
-- esattamente un simbolo di produzione autorizzato al flip;
-- `TestSucceededWriterIsFinalizationOnly` verde;
-- Job non riuscito senza artifact READY;
-- duplicate finalize non crea un secondo artifact.
-
----
-
-## 24. P0-03 — Eliminare i false-success nel forwarding
-
-### Azioni
-
-1. Modificare `processLease` affinché ritorni `error`.
-2. Classificare:
-   - element-scoped;
-   - lease-lost;
-   - infrastructure.
-3. Raccogliere gli errori delle goroutine.
-4. Propagare gli errori infrastrutturali da `tick`.
-5. Incrementare metriche solo dopo persistenza riuscita.
-6. Imporre:
-   ```text
-   effective_claim_batch <= concurrency
-   ```
-7. Avviare renewal prima di qualunque attesa lunga, oppure non reclamare prima della capacità.
-8. Rendere il Resolver dipendenza obbligatoria del costruttore.
-9. Riparare la forwarding row nel fast path idempotente.
-10. Aggiungere failure injection DB.
-
-### Criteri di accettazione
-
-- nessun log “forwarded” senza riga FORWARDED;
-- nessuna metrica terminale senza CAS riuscito;
-- runner critical scala al supervisor su DB outage;
+- nessun log forwarded senza FORWARDED;
+- nessuna metrica terminale senza persistenza;
+- DB outage scala al supervisor;
 - nessuna lease scade in attesa del semaphore;
-- retry post-crash converge sullo stesso Job.
+- retry converge sullo stesso Job.
 
 ---
 
-## 25. P0-04 — Correggere supervisor e readiness
+## 25. P0-03 — Correggere supervisor e readiness
 
 ### Azioni
 
-1. Introdurre `ErrUnexpectedExit`.
-2. Trattare `nil` da runner permanente come errore.
-3. Testare Restartable e Critical separatamente.
-4. Correggere la semantica `MaxRetries=0`.
-5. Aggiungere `supervisorDone` al main select come fatal se inatteso.
-6. Eliminare il probe transport placeholder.
-7. Collegare il vero registry.
-8. Rendere errori di registration fatal.
-9. Registrare `CapabilityRegistry.Readyz` nella health readiness.
-10. Imporre timeout breve a ogni probe.
+1. introdurre `ErrUnexpectedExit`;
+2. `nil` da runner permanente diventa errore;
+3. test Restartable/Critical;
+4. correggere `MaxRetries=0`;
+5. trattare `supervisorDone` inatteso come fatal;
+6. sostituire transport placeholder;
+7. registration error diventa bootstrap error;
+8. collegare `CapabilityRegistry.Readyz` alla health readiness;
+9. timeout breve per probe;
+10. testare runner death e recovery.
 
-### Criteri di accettazione
+### Accettazione
 
-- un runner permanente non può sparire silenziosamente;
-- readiness è rossa durante backoff/failure;
-- transport non configurato impedisce la capability;
-- startup non dichiara ready prima dei runner obbligatori.
+- runner permanente non sparisce silenziosamente;
+- readiness rossa in backoff/failure;
+- transport mancante non risulta ready;
+- master non serve ready con supervisor morto.
 
 ---
 
-## 26. P0-05 — Correggere completion retry e progress
+## 26. P0-04 — Correggere progress e conflict budget
 
 ### Azioni
 
-1. Rendere `uploaded_bytes` monotono.
-2. Testare heartbeat riordinati.
-3. Correggere la soglia conflict budget.
-4. Rendere il budget keyed per operation e commit, oppure contare solo lock/infrastructure contention.
-5. Non aggregare conflitti di Job indipendenti.
-6. Definire reset su successo della stessa chiave.
-7. Esportare metriche per:
-   - CAS conflict;
-   - budget escalation;
-   - reset;
-   - oldest unresolved commit.
+1. rendere `uploaded_bytes` monotono;
+2. testare sequenza `1000 → 800 → 1200`;
+3. allineare soglia documentata e codice;
+4. rendere budget keyed per operation+commit o contare solo contention infrastrutturale;
+5. evitare streak condivise tra commit indipendenti;
+6. reset sulla stessa chiave;
+7. metriche per conflict, escalation e reset;
+8. oldest unresolved commit.
 
-### Criteri di accettazione
+### Accettazione
 
 - progress non regredisce;
-- tre commit diversi non esauriscono una streak comune;
-- soglia documentata e implementazione coincidono;
-- escalation arriva al supervisor appropriato.
+- conflitti indipendenti non si sommano;
+- soglia implementata uguale alla documentazione;
+- escalation osservabile e supervisionata.
 
 ---
 
-## 27. P0-06 — Dimostrare un workload E2E reale
+## 27. P0-05 — Blindare il confine di finalizzazione
 
-### Fixture minima
+### Stato
+
+Il test single-writer è verde e il UoW completion è autorizzato come gateway interno.
+
+### Azioni
+
+1. documentare esplicitamente artifacts vs completion;
+2. cercare tutti i writer SUCCEEDED e completed_at;
+3. mantenere allowlist minima e motivata;
+4. impedire nuovi writer con invariant scan;
+5. verificare che Job non preceda artifact READY;
+6. test duplicate finalize;
+7. test crash prima/dopo blob promotion;
+8. test crash prima/dopo DB commit;
+9. test losing attempt.
+
+### Accettazione
+
+- nessun terzo writer;
+- Job non SUCCEEDED senza artifact richiesto;
+- duplicate finalize idempotente;
+- un solo final artifact READY.
+
+---
+
+## 28. P0-06 — Workload E2E reale
+
+Fixture minima:
 
 ```text
 1 Job
@@ -1171,17 +1157,17 @@ La documentazione assegna `SUCCEEDED` ad artifacts finalization, mentre il coord
 1 output H.264
 ```
 
-### Sequenza obbligatoria
+Sequenza:
 
-1. start master con DB e BlobStore temporanei;
-2. start worker reale;
+1. master con DB/BlobStore temporanei;
+2. worker reale;
 3. handshake gRPC v3;
-4. registry contiene scene composite;
+4. registry con scene composite;
 5. submit API;
 6. TaskOffer;
 7. TaskAccepted;
 8. TaskLeaseGranted;
-9. render C++/FFmpeg;
+9. C++/FFmpeg render;
 10. upload;
 11. hash server-side;
 12. artifact READY;
@@ -1192,21 +1178,19 @@ La documentazione assegna `SUCCEEDED` ad artifacts finalization, mentre il coord
 17. SHA-256;
 18. metriche non zero.
 
-### Criteri di accettazione
+Accettazione:
 
-- nessun mock del renderer;
-- nessun insert DB manuale;
+- nessun renderer mock;
+- nessun SQL manuale;
 - nessuna transizione saltata;
-- output e DB snapshot archiviati su failure;
-- test required per cambi runtime rilevanti.
+- output/log/DB snapshot archiviati su failure;
+- required per cambi runtime.
 
 ---
 
-## 28. P1-01 — Restringere le dipendenze ai confini
+## 29. P1-01 — Restringere le dipendenze ai confini
 
-### Azioni
-
-Sostituire dipendenze concrete larghe con interfacce consumer-owned:
+Usare interfacce consumer-owned:
 
 ```go
 type ForwardingRepository interface {
@@ -1223,45 +1207,38 @@ type JobReader interface {
 
 Non creare un framework DI.
 
-Obiettivo:
+Obiettivi:
 
 - business logic non conosce `*SQLiteStore`;
-- test usano fake stretti;
-- il composition root costruisce implementazioni concrete;
-- nessuna service locator o global singleton.
+- fake stretti nei test;
+- concrete implementation solo nel composition root;
+- niente global singleton o service locator.
 
 ---
 
-## 29. P1-02 — Consolidare CI
+## 30. P1-02 — Consolidare CI
 
-### Azioni
-
-1. Spostare la logica nei target:
-   - `make test-go`;
-   - `make test-native`;
-   - `make test-architecture`;
-   - `make test-e2e`;
-   - `make verify`.
-2. Usare workflow matrix con nomi di job distinti.
-3. Evitare copia di setup e comandi.
-4. Fallire se regex test matcha zero test.
-5. Fallire se CTest scopre zero test.
-6. Rendere required i gate corretti.
-7. Pubblicare summary unica.
+1. target canonici `make test-go`, `test-native`, `test-architecture`, `test-e2e`, `verify`;
+2. workflow matrix con job distinti;
+3. setup e logica non duplicati;
+4. regex test deve matchare almeno un test;
+5. CTest deve scoprire almeno un test;
+6. gate corretti required;
+7. summary unica;
+8. artifact di failure archiviati.
 
 ---
 
-## 30. P1-03 — Suite recovery
+## 31. P1-03 — Suite recovery
 
-Implementare test automatici per:
+Automatizzare:
 
-- crash master con READY Task;
-- crash master durante finalization;
-- worker crash prima e dopo accept;
-- worker crash durante render;
-- worker crash durante upload;
-- partition più corta della lease;
-- partition più lunga della lease;
+- master crash con READY Task;
+- master crash durante finalization;
+- worker crash prima/dopo accept;
+- crash durante render;
+- crash durante upload;
+- partition corta/lunga rispetto alla lease;
 - duplicate TaskResult;
 - stale result;
 - due worker in race;
@@ -1269,41 +1246,41 @@ Implementare test automatici per:
 - forwarding DB failure;
 - SIGTERM e drain.
 
-Ogni test deve verificare SQLite, BlobStore e metriche, non soltanto il return code.
+Ogni test verifica SQLite, BlobStore, metriche e artifact.
 
 ---
 
-## 31. P1-04 — Certificazione worker e mTLS
+## 32. P1-04 — Certificazione worker e mTLS
 
-### Minimo
+Minimo:
 
 - worker ID stabile;
 - certificato dedicato;
-- mapping identity-cert;
-- no plaintext in staging/production;
+- identity-cert mapping;
+- no plaintext in staging/prod;
 - doctor JSON versionato;
-- engine e FFmpeg reali;
+- engine/FFmpeg reali;
 - cache/blob/disk writable;
-- executor registry non vuoto;
+- registry non vuoto;
 - canary CPU;
 - 24h soak;
-- rollout e rollback per digest.
+- rollout/rollback per digest.
 
-Il doctor esistente e il bootstrap engine sono una base, ma il gate finale deve includere anche sessione master, identity e workload.
+Doctor e bootstrap esistenti sono una base. Il gate finale deve includere sessione master, identity e workload reale.
 
 ---
 
-## 32. P2 — RenderPlan, DAG e scala
+## 33. P2 — RenderPlan, DAG e scala
 
-Questa fase parte soltanto dopo i P0 runtime e CI.
+Questa fase parte dopo i P0 runtime/CI.
 
 Ordine:
 
-1. schema RenderPlan;
+1. RenderPlan schema;
 2. compiler registry;
 3. persistenza plan;
 4. multi-Task DAG;
-5. executor granulari reali;
+5. executor granulari;
 6. intermediate artifact contract;
 7. cache key deterministica;
 8. late composition;
@@ -1312,86 +1289,76 @@ Ordine:
 11. benchmark CPU;
 12. soak distribuito.
 
-Non implementare temporal sharding prima di avere:
+Non implementare sharding prima di:
 
 - artifact intermedi deterministici;
 - frame/timebase contract;
-- concat/mux compatibility validation;
+- concat/mux validation;
 - retry per shard;
-- confronto output sharded/non-sharded.
+- confronto sharded/non-sharded.
 
 ---
 
 # PARTE V — REGOLE DI IMPLEMENTAZIONE
 
-## 33. Cosa non fare
+## 34. Cosa non fare
 
-- Non aggiungere un nuovo package che duplica un owner esistente.
+- Non duplicare owner esistenti.
 - Non aggiungere un secondo registry.
-- Non aggiungere un `switch executorID` accanto al registry.
-- Non aggiungere un fallback legacy per “far passare” i test.
-- Non aggiungere nuove write API di compatibilità.
-- Non usare `log.Printf` come sostituto della persistenza.
-- Non incrementare una metrica prima del commit.
+- Non aggiungere switch executor accanto al registry.
+- Non aggiungere fallback legacy per far passare test.
+- Non aggiungere write API di compatibilità.
+- Non usare log come sostituto della persistenza.
+- Non incrementare metriche prima del commit.
 - Non dichiarare ready con probe placeholder.
-- Non considerare `nil` un successo per un loop permanente.
-- Non creare branch o PR per il normale flusso di lavoro del progetto: il lavoro concordato viene applicato direttamente a `main`.
-- Non introdurre astrazioni generiche per requisiti futuri non esistenti.
+- Non considerare nil un successo per loop permanenti.
+- Non introdurre astrazioni generiche per requisiti futuri.
+- Non creare branch o PR per il normale flusso concordato: lavoro e push avvengono direttamente su `main`.
 
 ---
 
-## 34. Strategia per modifiche sicure
+## 35. Workflow di modifica sicuro
 
-Per ogni intervento:
-
-1. individuare l’owner;
-2. scrivere il test che dimostra il bug;
-3. modificare una responsabilità;
-4. non cambiare contratti adiacenti senza necessità;
+1. identificare owner;
+2. scrivere test che dimostra il bug;
+3. cambiare una responsabilità;
+4. evitare refactor laterali;
 5. eseguire test targeted;
 6. eseguire `make verify`;
 7. controllare diff e stato;
 8. push su `main`;
 9. verificare commit remoto e ultimi cinque commit;
-10. aggiornare la checklist canonica soltanto con evidenza.
+10. aggiornare checklist solo con evidenza.
 
 ---
 
-## 35. Metriche minime
+## 36. Metriche minime
 
 ### Master
 
-- ready Task count;
-- leased/running Task;
+- READY/LEASED/RUNNING Task;
 - lease expiry;
-- stale report rejection;
-- duplicate report;
-- forwarding queue depth;
-- forwarding oldest age;
-- forwarding transition failures;
+- stale/duplicate report;
+- forwarding queue depth e oldest age;
+- forwarding transition failure;
 - unreconciled terminal Task;
-- outbox pending/oldest;
+- outbox pending e oldest;
 - delivery retry/failure;
 - upload verifying/stuck;
 - artifact quarantine;
 - conflict budget per key;
-- runner state e restart count.
+- runner state/restart.
 
 ### Worker
 
 - session active;
 - heartbeat age;
-- active Task;
-- available slots;
-- CPU;
-- RSS;
-- disk free;
-- temp bytes;
+- active Task e slot;
+- CPU/RSS/disk/temp;
 - cache hit bytes;
 - blob bytes;
-- render time;
-- upload time;
-- FFmpeg failure reason;
+- render/upload time;
+- FFmpeg reason;
 - executor rejection;
 - certificate lifetime.
 
@@ -1399,18 +1366,15 @@ Per ogni intervento:
 
 - wall-clock;
 - critical path;
-- total worker busy time;
+- worker busy time;
 - parallel efficiency;
 - cache ratio;
-- retry count;
-- straggler count;
-- cost/output minute.
+- retry/straggler;
+- cost per output minute.
 
 ---
 
-## 36. Definition of Done finale
-
-Velox raggiunge l’architettura target soltanto quando una release candidate riproducibile dimostra:
+## 37. Definition of Done finale
 
 ```text
 Clean checkout verification = PASS
@@ -1445,64 +1409,63 @@ Rollback by digest = PASS
 
 ---
 
-## 37. Stato sintetico
+## 38. Stato sintetico
 
 ### Già presente e nella direzione corretta
 
 - master/worker separati;
-- control plane gRPC Task-native;
-- Job+Task creation atomica;
-- TaskGraph e TaskAttempt persistenti;
+- gRPC Task-native;
+- Job+Task atomici;
+- TaskGraph/TaskAttempt persistenti;
 - payload V2;
-- executor registry worker;
+- executor registry;
 - scene composite reale;
-- cache e blob worker persistenti;
+- cache/blob worker;
 - forwarding persistente;
 - job ID deterministico;
 - Resolver comune;
 - completion protocol;
-- HMAC commit token;
-- fencing;
-- outbox e delivery;
-- supervisor con classi;
+- HMAC/fencing;
+- outbox/delivery;
+- supervisor;
 - readiness framework;
-- doctor e bootstrap worker;
+- doctor/bootstrap;
 - cost model master-side;
-- documentazione 100-percent-plan.
+- watchlist tests promossi a must-pass.
 
 ### Parzialmente stabilizzato
 
-- finalizzazione Job/artifact;
-- propagation degli errori runner;
-- retry e conflict budget;
-- readiness capability;
+- propagation errori runner;
+- retry/conflict budget;
+- capability readiness;
 - recovery automatica;
-- CI required gates;
+- CI required checks;
 - E2E reale;
 - mTLS production-like;
 - worker certification;
-- metriche complete.
+- metriche complete;
+- proof artifact-before-job su tutte le failure window.
 
 ### Ancora target
 
 - RenderPlan unico persistito;
 - compiler registry completo;
-- Job → multi-Task DAG per il video reale;
+- multi-Task DAG video;
 - executor granulari;
 - late composition;
 - cache distribuita verificata;
 - locality-aware scheduling;
 - temporal sharding;
-- critical path e parallel efficiency;
+- critical path/parallel efficiency;
 - soak distribuito certificato.
 
 ---
 
-## 38. Conclusione
+## 39. Conclusione
 
 Velox non necessita di una riscrittura totale.
 
-La struttura principale esiste e molte scelte sono corrette. Il rischio attuale è soprattutto nella distanza tra:
+Il rischio principale è nella distanza tra:
 
 ```text
 “il codice ha tentato l’operazione”
@@ -1511,20 +1474,19 @@ La struttura principale esiste e molte scelte sono corrette. Il rischio attuale 
 e:
 
 ```text
-“la transizione è stata realmente persistita,
+“la transizione è stata persistita,
 verificata, osservabile e recuperabile dopo crash”
 ```
 
-La priorità non è aggiungere più feature o più layer. La priorità è:
+Ordine corretto:
 
-1. rendere verde la baseline;
-2. eliminare ogni falso successo;
-3. fissare un solo finalizer;
-4. rendere runner e readiness realmente fail-closed;
-5. dimostrare il percorso E2E;
-6. chiudere recovery e certificazione;
-7. soltanto dopo, espandere il Job in un DAG distribuito e ottimizzato.
-
-Questa sequenza riduce il rischio senza introdurre una migrazione monolitica e mantiene l’architettura coerente con la regola fondamentale del progetto:
+1. rendere obbligatoria la baseline verde;
+2. eliminare false-success;
+3. blindare supervisor/readiness;
+4. correggere retry/progress;
+5. provare finalizzazione e artifact;
+6. dimostrare E2E;
+7. chiudere recovery e certificazione;
+8. solo dopo espandere Job in DAG distribuito.
 
 > **Ogni nuova capacità estende il percorso canonico esistente; non ne crea uno parallelo.**
