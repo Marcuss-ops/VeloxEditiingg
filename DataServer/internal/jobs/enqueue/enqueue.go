@@ -132,6 +132,15 @@ func (e *Enqueuer) PrepareJobAndTask(ctx context.Context, payloadMap map[string]
 		return nil, nil, 0, err
 	}
 
+	// Step 4/8 canonical-purity: a Job without an explicit delivery plan
+	// (and per-entry retry_budget > 0) must NEVER reach the workers.
+	// Without this preflight, FinalizeVerified discovers the missing plan
+	// AFTER the render has burned its budget — the diagnostic's
+	// "Validate delivery plan at enqueue or pre-render" regression.
+	if err := validateDeliveryPlanRequires(payloadMap); err != nil {
+		return nil, nil, 0, err
+	}
+
 	jobID, _ := normalized["job_id"].(string)
 
 	// PR-forwarding-deterministic-id: when a forwarding key is present,

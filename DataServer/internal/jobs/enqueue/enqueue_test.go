@@ -362,6 +362,9 @@ func TestPrepareJobAndTask_UsesCanonicalSceneCompositeExecutorID(t *testing.T) {
 		"video_name":     "Jackie Chan",
 		"script_text":    "test",
 		"voiceover_path": "/tmp/voice.mp3",
+		"delivery_plan": []interface{}{
+			map[string]interface{}{"destination_id": "drive-main", "retry_budget": 3, "priority": 0},
+		},
 		"scenes": []interface{}{
 			map[string]interface{}{"text": "S1", "clip_link": "https://example.com/c1.mp4"},
 		},
@@ -727,9 +730,12 @@ func TestEnqueueCreatesJobAndTaskAtomically(t *testing.T) {
 		"script_text": "hello world",
 		"scenes": []interface{}{
 			map[string]interface{}{"scene": "intro", "voiceover": "v1"},
+		},		"voiceover_paths": []string{"/tmp/v1.mp3"},
+		"delivery_plan": []interface{}{
+			map[string]interface{}{"destination_id": "drive-main", "retry_budget": 3, "priority": 0},
 		},
-		"voiceover_paths": []string{"/tmp/v1.mp3"},
 	}
+
 	req := costmodel.JobRequirements{
 		ResourceClass: costmodel.ResourceGPU,
 		TemporalMode:  costmodel.TemporalWindowed,
@@ -777,9 +783,12 @@ func TestEnqueueDefaultsPreserved(t *testing.T) {
 		"script_text": "hello world",
 		"scenes": []interface{}{
 			map[string]interface{}{"scene": "intro", "voiceover": "v1"},
+		},		"voiceover_paths": []string{"/tmp/v1.mp3"},
+		"delivery_plan": []interface{}{
+			map[string]interface{}{"destination_id": "drive-main", "retry_budget": 3, "priority": 0},
 		},
-		"voiceover_paths": []string{"/tmp/v1.mp3"},
 	}
+
 	req := costmodel.DefaultRequirements()
 
 	response, err := enq.Enqueue(context.Background(), payload, req)
@@ -843,6 +852,9 @@ func TestEnqueueWithForwardingKey(t *testing.T) {
 			map[string]interface{}{"scene": "intro", "voiceover": "v1"},
 		},
 		"voiceover_paths": []string{"/tmp/v-forward.mp3"},
+		"delivery_plan": []interface{}{
+			map[string]interface{}{"destination_id": "drive-main", "retry_budget": 3, "priority": 0},
+		},
 	}
 
 	response, err := enq.Enqueue(context.Background(), payload, costmodel.DefaultRequirements())
