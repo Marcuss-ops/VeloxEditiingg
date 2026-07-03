@@ -444,6 +444,29 @@ func normalizeScenes(payloadMap map[string]interface{}) ([]map[string]interface{
 	return nil, "", nil
 }
 
+func normalizeSceneArray(value interface{}) []map[string]interface{} {
+	switch scenes := value.(type) {
+	case []map[string]interface{}:
+		out := make([]map[string]interface{}, 0, len(scenes))
+		for _, scene := range scenes {
+			out = append(out, contract.NormalizeSceneEntry(scene))
+		}
+		return out
+	case []interface{}:
+		out := make([]map[string]interface{}, 0, len(scenes))
+		for _, item := range scenes {
+			scene, ok := item.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			out = append(out, contract.NormalizeSceneEntry(scene))
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
 func normalizeVoiceoverList(payloadMap map[string]interface{}) []string {
 	candidates := []string{
 		payload.FirstString(payloadMap, "voiceover_path", "voiceover", "unified_voiceover_link"),
