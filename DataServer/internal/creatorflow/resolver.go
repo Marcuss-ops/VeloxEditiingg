@@ -65,12 +65,129 @@ import (
 	"velox-server/internal/jobs/enqueue"
 	"velox-server/internal/routing"
 	"velox-server/internal/store"
+	"velox-server/internal/taskgraph"
 )
+
+// ── Repository interfaces (Blocco 4 del Verdetto) ──────────────────
+//
+// Resolver previously depended on concrete *store.SQLiteStore. This
+// package-local interface boundary lets the canonical Resolver unit
+// exercise against in-memory fakes for tests AND keeps the Resolver
+// from drifting into SQL specifics. ForwardingRepository owns the
+// four forwarding-table mutations Resolve needs; JobLookup owns the
+// idempotency Get().
+//
+// Method selection: each interface exposes ONLY what Resolve actually
+// calls today — no speculative methods. Extending the surface should
+// be a deliberate decision wired through the resolver body.
+//
+// ForwardingRepository surfaces the canonical store methods; non-store
+// implementations can satisfy the contract by re-implementing the
+// behaviour against any backing store. JobLookup is a one-method
+// surface because the idempotency fast-path is the only caller.
+
+type (
+	// ForwardingRepository owns the SQL lifecycle of a creator_forwardings
+	// row from Resolve's perspective. Every method is invoked once per
+	// Resolve call (or zero times on the idempotent fast-path), and the
+	// trust contract is identical to the corresponding SQLiteStore
+	// methods: CAS semantics, ErrTransitionConflict on conflict.
+	ForwardingRepository interface {
+		// GetCreatorForwardingBySource locates the canonical row for a
+		// (provider, source_job_id, target_executor_id) triple. Returns
+		// (nil, nil) when no row exists yet, mirroring store's idiom.
+		GetCreatorForwardingBySource(ctx context.Context, provider, sourceJobID, targetExecutorID string) (*store.CreatorForwarding, error)
+
+		// InsertCreatorForwarding creates the initial PENDING row for the
+		// handler sync path. The UNIQUE constraint on
+		// (source_provider, source_job_id, target_executor_id) makes
+		// concurrent calls converge.
+		InsertCreatorForwarding(ctx context.Context, cf *store.CreatorForwarding) error
+
+		// UpsertCreatorForwardingPayload stamps payload + source_status
+		// onto an existing row (runner path). Preserves status.
+		UpsertCreatorForwardingPayload(ctx context.Context, forwardingID, payloadJSON, payloadSHA256 string) error
+
+		// MarkCreatorForwardingReadySync promotes PENDING/POLLING →
+		// READY_TO_FORWARD without a lease CAS (handler sync path).
+		MarkCreatorForwardingReadySync(ctx context.Context, forwardingID, payloadJSON, payloadSHA256 string) error
+
+		// EnsureForwarded is the repair-path idempotency primitive. Idempotent
+		// across FORWARDED / FORWARDING / READY_TO_FORWARD states: writes
+		// (FORWARDING|FORWARDED ← FORWARDED, target_job_id=jobID) on any
+		// non-terminal state. Returns nil on FORWARDED (already there).
+		// Returns ErrTransitionConflict on terminal states (FAILED, BLOCKED).
+		EnsureForwarded(ctx context.Context, forwardingID, jobID string) error
+
+		// AtomicForwardAndEnqueue packs (READY_TO_FORWARD → FORWARDING →
+		// INSERT job/task/task_spec → FORWARDING → FORWARDED) in one tx.
+		AtomicForwardAndEnqueue(ctx context.Context, forwardingID string, job *jobs.Job, spec *taskgraph.TaskSpec, priority int) error
+	}
+
+	// JobLookup is the idempotency pre-check surface. The canonical
+	// implementation is jobs.Writer (writers implement Get); tests
+	// pass a fake that returns nil on cache miss.
+	JobLookup interface {
+		Get(ctx context.Context, id string) (*jobs.Job, error)
+	}
+)
+
+// ── Deep-clone helpers (Blocco 4 del Verdetto) ──────────────────────
+//
+// Resolve mutates the caller's payload map (injects _internal_forwarding_key
+// via fwdKey.InjectIntoPayload). The user spec mandates that the caller's
+// map is untouched after Resolve returns: clone req.Payload at entry. The
+// recursive walk is preferred over json-roundtrip (cheap + type-stable).
+// Maps and slices are deep-cloned; scalars (string, int, float, bool,
+// json.Number) carry through reference equality (immutable). Any other
+// type — depends on caller to be JSON-stable; if not, json.Marshal is the
+// fallback inside Resolve's payload-build step.
+
+func cloneValue(v interface{}) interface{} {
+	switch t := v.(type) {
+	case map[string]interface{}:
+		return cloneMap(t)
+	case []interface{}:
+		return cloneSlice(t)
+	default:
+		// scalars + structs + json.Number + nil: pass through
+		return v
+	}
+}
+
+func cloneMap(m map[string]interface{}) map[string]interface{} {
+	if m == nil {
+		return nil
+	}
+	out := make(map[string]interface{}, len(m))
+	for k, v := range m {
+		out[k] = cloneValue(v)
+	}
+	return out
+}
+
+func cloneSlice(s []interface{}) []interface{} {
+	if s == nil {
+		return nil
+	}
+	out := make([]interface{}, len(s))
+	for i, v := range s {
+		out[i] = cloneValue(v)
+	}
+	return out
+}
 
 // Resolver bundles the canonical dependencies for Resolve. Holding them on
 // a struct (not passing them per-call) means callers cannot accidentally
 // pass a stale dbStore or the wrong enqueuer — the Resolver is wired
 // once at composition root and reused.
+//
+// Blocco 4 del Verdetto: ForwardingRepository + JobLookup interfaces are
+// declared at the top of this file (Blocco 4 part-1 commit only — wires
+// into the Resolver struct in a follow-up commit once the cross-package
+// signature cascading is sequenced). Keeping the struct API surface on
+// *store.SQLiteStore for the part-1 commit avoids breaking Service +
+// runner callers in the same change-set.
 type Resolver struct {
 	enqueuer  *enqueue.Enqueuer
 	dbStore   *store.SQLiteStore
