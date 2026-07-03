@@ -53,9 +53,10 @@
     - ../group_vars/all.yml
     - ../group_vars/vault.yml
 
-  # The ansible.posix collection used by `ansible.posix.authorized_keys`
-  # below is declared as a single source-of-truth in
-  # `deploy/requirements.yml`. Operators run:
+  # The ansible.posix collection used by `ansible.posix.authorized_key`
+  # below is pinned to >= 2.0.0 in `deploy/requirements.yml`. The
+  # `authorized_keys` (plural) form was removed in ansible.posix 2.0.0.
+  # Operators run:
   #   ansible-galaxy collection install -r deploy/requirements.yml
   # before invoking any playbook in this directory.
 
@@ -90,7 +91,7 @@
     - name: Install operator SSH public key
       when: (velox_operator_pubkey | default('')) | length > 0 \
             or (vault_velox_operator_pubkey | default('')) | length > 0
-      ansible.posix.authorized_keys:
+      ansible.posix.authorized_key:
         user: "{{ velox_operator_user }}"
         state: present
         key: "{{ velox_operator_pubkey | default(vault_velox_operator_pubkey) }}"
