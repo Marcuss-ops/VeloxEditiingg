@@ -1,0 +1,273 @@
+---
+# ============================================================
+# CANONICAL WORKER RUNTIME
+# ============================================================
+# One host -> one systemd unit -> one Docker container -> one writable
+# runtime tree. Code remains read-only under /app; mutable state lives under
+# /var/lib/velox/workers/<inventory-host> on the host.
+# ============================================================
+
+- name: CanonicalRuntime | Resolve canonical identity and paths
+  ansible.builtin.set_fact:
+    velox_worker_identity: "{{ worker_id | default(inventory_hostname) }}"
+    velox_worker_unit_name: "velox-worker-{{ inventory_hostname }}.service"
+    velox_worker_container_name: "velox-worker-{{ inventory_hostname }}"
+    velox_worker_env_path: "/etc/velox-worker-{{ inventory_hostname }}.env"
+    velox_worker_runtime_host_dir: "/var/lib/velox/workers/{{ inventory_hostname }}"
+    velox_worker_runtime_container_dir: "/var/lib/velox-worker"
+    velox_worker_runtime_dir: "/var/lib/velox/workers/{{ inventory_hostname }}"
+    velox_worker_health_port: "{{ 8081 + ((worker_id | default(inventory_hostname) | regex_replace('^host_([0-9]+)_.*$', '\\1')) | int) }}"
+
+- name: CanonicalRuntime | Stop and remove legacy worker units
+  ansible.builtin.shell: |
+    set -euo pipefail
+    canonical="{{ velox_worker_unit_name }}"
+    changed=0
+    while read -r unit _; do
+      [ -n "$unit" ] || continue
+      case "$unit" in
+        "$canonical"|velox-worker-console.service|velox-worker-watchdog.service)
+          continue
+          ;;
+        velox-worker.service|velox-worker-*.service)
+          systemctl disable --now "$unit" >/dev/null 2>&1 || true
+          rm -f "/etc/systemd/system/$unit"
+          rm -rf "/etc/systemd/system/$unit.d"
+          echo "REMOVED_UNIT=$unit"
+          changed=1
+          ;;
+      esac
+    done < <(systemctl list-unit-files 'velox-worker*.service' --no-legend --no-pager 2>/dev/null || true)
+    exit 0
+  args:
+    executable: /bin/bash
+  register: legacy_unit_cleanup
+  changed_when: "'REMOVED_UNIT=' in (legacy_unit_cleanup.stdout | default(''))"
+
+- name: CanonicalRuntime | Remove stale legacy worker containers
+  ansible.builtin.shell: |
+    set -euo pipefail
+    canonical="{{ velox_worker_container_name }}"
+    while read -r container; do
+      [ -n "$container" ] || continue
+      case "$container" in
+        "$canonical"|velox-worker-console)
+          continue
+          ;;
+        velox-worker|velox-worker-*)
+          /usr/bin/docker rm -f "$container" >/dev/null 2>&1 || true
+          echo "REMOVED_CONTAINER=$container"
+          ;;
+      esac
+    done < <(/usr/bin/docker ps -a --format '{{ "{{.Names}}" }}' 2>/dev/null || true)
+  args:
+    executable: /bin/bash
+  register: legacy_container_cleanup
+  changed_when: "'REMOVED_CONTAINER=' in (legacy_container_cleanup.stdout | default(''))"
+
+- name: CanonicalRuntime | Create writable runtime directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "10001"
+    group: "10001"
+    mode: "0775"
+  loop:
+    - "{{ velox_worker_runtime_host_dir }}"
+    - "{{ velox_worker_runtime_host_dir }}/config"
+    - "{{ velox_worker_runtime_host_dir }}/work"
+    - "{{ velox_worker_runtime_host_dir }}/cache"
+    - "{{ velox_worker_runtime_host_dir }}/blobs"
+    - "{{ velox_worker_runtime_host_dir }}/assets_cache"
+
+- name: CanonicalRuntime | Write canonical worker config outside checkout
+  ansible.builtin.copy:
+    dest: "{{ velox_worker_runtime_host_dir }}/config/worker_config.json"
+    owner: "10001"
+    group: "10001"
+    mode: "0640"
+    content: |
+      {
+        "master_url": "{{ master_url }}",
+        "worker_id": "{{ velox_worker_identity }}",
+        "worker_name": "{{ inventory_hostname }}",
+        "work_dir": "{{ velox_worker_runtime_container_dir }}/work",
+        "log_level": "info",
+        "bundle_version": "{{ version_number | default('v1.0.6') }}",
+        "bundle_hash": "{{ bundle_hash | default('') }}",
+        "protocol_version": "{{ worker_protocol_version | default('2026-06-worker-v1') }}",
+        "engine_version": "{{ engine_version | default(version_number | default('v1.0.6')) }}",
+        "environment": "staging",
+        "max_active_jobs": 1,
+        "prometheus_port": 0,
+        "health_port": {{ velox_worker_health_port }},
+        "control_grpc_url": "{{ velox_worker_control_grpc_url }}",
+        "allow_insecure_grpc_dev": true,
+        "video_engine_cpp_bin": "/usr/local/bin/velox_video_engine"
+      }
+
+- name: CanonicalRuntime | Install single canonical worker unit
+  ansible.builtin.copy:
+    dest: "/etc/systemd/system/{{ velox_worker_unit_name }}"
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Velox Worker - {{ inventory_hostname }}
+      After=network-online.target docker.service
+      Wants=network-online.target docker.service
+      StartLimitIntervalSec=0
+
+      [Service]
+      Type=simple
+      EnvironmentFile={{ velox_worker_env_path }}
+      UnsetEnvironment=MASTER_PUBLIC_URL VELOX_MASTER_URL VELOX_MASTER_SERVER_URL VELOX_REMOTE_WORKER_URL
+      Environment=MASTER_URL={{ master_url }}
+      Environment=VELOX_HEARTBEAT_MASTERS={{ velox_worker_heartbeat_masters }}
+      WorkingDirectory={{ velox_dir }}
+      ExecStartPre=/bin/sh -c '/usr/bin/docker rm -f {{ velox_worker_container_name }} >/dev/null 2>&1 || true'
+      ExecStart=/usr/bin/docker run --name {{ velox_worker_container_name }} --rm --network host --env-file {{ velox_worker_env_path }} -e VELOX_VIDEO_ENGINE_CPP_BIN=/usr/local/bin/velox_video_engine -v {{ velox_dir }}/current:/app:ro -v {{ velox_worker_runtime_host_dir }}/cache:/home/velox/.cache -v {{ velox_worker_runtime_host_dir }}/blobs:{{ velox_worker_runtime_container_dir }}/blobs -v {{ velox_worker_runtime_host_dir }}/assets_cache:/app/RemoteCodex/assets_cache -v {{ velox_worker_runtime_host_dir }}:{{ velox_worker_runtime_container_dir }} ${VELOX_WORKER_IMAGE} -config {{ velox_worker_runtime_container_dir }}/config/worker_config.json -master ${MASTER_URL} -worker-id ${VELOX_WORKER_ID} -work-dir {{ velox_worker_runtime_container_dir }}/work
+      ExecStop=/bin/sh -c '/usr/bin/docker stop -t 20 {{ velox_worker_container_name }} >/dev/null 2>&1 || true'
+      ExecStopPost=/bin/sh -c '/usr/bin/docker rm -f {{ velox_worker_container_name }} >/dev/null 2>&1 || true'
+      TimeoutStopSec=35
+      KillMode=control-group
+      SuccessExitStatus=137 143
+      Restart=always
+      RestartSec=10
+      StandardOutput=journal
+      StandardError=journal
+      SyslogIdentifier={{ velox_worker_container_name }}
+
+      [Install]
+      WantedBy=multi-user.target
+
+- name: CanonicalRuntime | Install canonical watchdog service
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/velox-worker-watchdog.service
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Velox Worker Watchdog (canonical unit only)
+      After=network-online.target
+      Wants=network-online.target
+
+      [Service]
+      Type=oneshot
+      ExecStart=/bin/sh -c 'systemctl is-active --quiet {{ velox_worker_unit_name }} || systemctl restart {{ velox_worker_unit_name }}'
+      StandardOutput=journal
+      StandardError=journal
+      SyslogIdentifier=velox-worker-watchdog
+
+- name: CanonicalRuntime | Install canonical auto-update script
+  ansible.builtin.copy:
+    dest: /opt/velox/bin/auto-update.sh
+    mode: "0755"
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+
+      MASTER="${MASTER_URL:-}"
+      VELOX_DIR="{{ velox_dir }}"
+      CANONICAL_UNIT="{{ velox_worker_unit_name }}"
+      IMAGE="${VELOX_WORKER_IMAGE:-velox-worker:latest}"
+      LOG_PREFIX="[auto-update]"
+      log() { echo "$LOG_PREFIX $(date '+%Y-%m-%d %H:%M:%S') $*"; }
+
+      log "Starting OS update"
+      apt-get update -qq 2>&1 | tail -3
+      apt-get upgrade -y -qq --no-install-recommends 2>&1 | tail -5 || log "WARNING: OS upgrade had issues"
+
+      if [ -n "$MASTER" ]; then
+        WORKER_ZIP="/tmp/velox-update-$(date +%s).zip"
+        if curl -sf --max-time 60 "$MASTER/api/worker/bundle?platform=linux&arch=x86_64" -o "$WORKER_ZIP" && [ -s "$WORKER_ZIP" ]; then
+          rm -rf "$VELOX_DIR/current.new"
+          mkdir -p "$VELOX_DIR/current.new"
+          if unzip -qo "$WORKER_ZIP" -d "$VELOX_DIR/current.new"; then
+            if [ -d "$VELOX_DIR/current.new/refactored" ]; then
+              shopt -s dotglob nullglob
+              mv -f "$VELOX_DIR/current.new/refactored"/* "$VELOX_DIR/current.new"/ || true
+              rm -rf "$VELOX_DIR/current.new/refactored"
+            fi
+            if [ -f "$VELOX_DIR/current.new/RemoteCodex/native/worker-agent-go/Dockerfile" ]; then
+              rm -rf "$VELOX_DIR/current.old"
+              [ -d "$VELOX_DIR/current" ] && mv "$VELOX_DIR/current" "$VELOX_DIR/current.old"
+              mv "$VELOX_DIR/current.new" "$VELOX_DIR/current"
+              if /usr/bin/docker build --pull --no-cache \
+                -f "$VELOX_DIR/current/RemoteCodex/native/worker-agent-go/Dockerfile" \
+                -t "$IMAGE" "$VELOX_DIR/current"; then
+                rm -rf "$VELOX_DIR/current.old"
+                log "Bundle and image updated successfully"
+              else
+                log "ERROR: image build failed; restoring previous release"
+                rm -rf "$VELOX_DIR/current.failed"
+                mv "$VELOX_DIR/current" "$VELOX_DIR/current.failed"
+                mv "$VELOX_DIR/current.old" "$VELOX_DIR/current"
+                exit 1
+              fi
+            else
+              rm -rf "$VELOX_DIR/current.new"
+              log "WARNING: downloaded bundle has an invalid layout"
+            fi
+          fi
+          rm -f "$WORKER_ZIP"
+        else
+          rm -f "$WORKER_ZIP"
+          log "Bundle download skipped"
+        fi
+      fi
+
+      systemctl restart "$CANONICAL_UNIT"
+      sleep 5
+      systemctl is-active --quiet "$CANONICAL_UNIT"
+      log "Auto-update completed for $CANONICAL_UNIT"
+
+- name: CanonicalRuntime | Install auto-update service with host env
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/velox-auto-update.service
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Velox Worker Auto-Update (canonical host runtime)
+      After=network-online.target
+      Wants=network-online.target
+
+      [Service]
+      Type=oneshot
+      EnvironmentFile={{ velox_worker_env_path }}
+      ExecStart=/opt/velox/bin/auto-update.sh
+      StandardOutput=journal
+      StandardError=journal
+      SyslogIdentifier=velox-auto-update
+      TimeoutStartSec=600
+
+- name: CanonicalRuntime | Reload systemd after cleanup and unit writes
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: CanonicalRuntime | Reset canonical unit failure state
+  ansible.builtin.command:
+    argv:
+      - systemctl
+      - reset-failed
+      - "{{ velox_worker_unit_name }}"
+  changed_when: false
+  failed_when: false
+
+- name: CanonicalRuntime | Enable and restart canonical unit
+  ansible.builtin.systemd:
+    name: "{{ velox_worker_unit_name }}"
+    enabled: true
+    state: restarted
+
+- name: CanonicalRuntime | Keep watchdog timer enabled
+  ansible.builtin.systemd:
+    name: velox-worker-watchdog.timer
+    enabled: true
+    state: started
+  failed_when: false
+
+- name: CanonicalRuntime | Keep auto-update timer enabled
+  ansible.builtin.systemd:
+    name: velox-auto-update.timer
+    enabled: true
+    state: started
+  failed_when: false
