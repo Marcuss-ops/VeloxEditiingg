@@ -37,16 +37,31 @@ import (
 //
 // PR #3: Queue (JobQueue) removed. The Enqueuer now compiles a Job+TaskSpec
 // and delegates to Creator (AtomicJobTaskCreator) for atomic insertion.
+//
+// PR-delivery-plan-precondition: a PlanResolver is MANDATORY. The Enqueuer
+// calls ResolvePlan (NOT ResolveDestinations) BEFORE every atomic create so
+// the per-job retry_budget is validated upfront and propagated to the Job's
+// MaxRetries. This eliminates the late re-resolve in FinalizeVerified and
+// surfaces missing-plan errors at enqueue time as actionable rejections.
 type Enqueuer struct {
-	Creator   *store.AtomicJobTaskCreator
-	Jobs      jobs.Reader
-	Voiceover *assetbridge.AssetService
+	Creator      *store.AtomicJobTaskCreator
+	Jobs         jobs.Reader
+	Voiceover    *assetbridge.AssetService
+	PlanResolver PlanResolver
 }
 
-// NewEnqueuer constructs an Enqueuer with mandatory Creator + Jobs.
+// NewEnqueuer constructs an Enqueuer with mandatory Creator + Jobs + PlanResolver.
 // The voiceover service is optional (nil-safe: voiceover resolution is skipped).
-func NewEnqueuer(creator *store.AtomicJobTaskCreator, jobsRepo jobs.Reader, voiceover *assetbridge.AssetService) *Enqueuer {
-	return &Enqueuer{Creator: creator, Jobs: jobsRepo, Voiceover: voiceover}
+//
+// The PlanResolver precondition is mandatory: passing nil triggers a panic
+// at construction time so misconfiguration is caught at boot, not on the
+// first enqueue in production. This is a fail-fast for an architectural
+// invariant, not a runtime error.
+func NewEnqueuer(creator *store.AtomicJobTaskCreator, jobsRepo jobs.Reader, voiceover *assetbridge.AssetService, planResolver PlanResolver) *Enqueuer {
+	if planResolver == nil {
+		panic("enqueue.NewEnqueuer: planResolver is required (delivery plan precondition must be enforced at enqueue time)")
+	}
+	return &Enqueuer{Creator: creator, Jobs: jobsRepo, Voiceover: voiceover, PlanResolver: planResolver}
 }
 
 // =============================================================================
@@ -84,6 +99,12 @@ func (e *Enqueuer) Enqueue(ctx context.Context, payloadMap map[string]interface{
 		return nil, err
 	}
 
+	// The delivery-plan precondition (ResolvePlan + retry_budget > 0 +
+	// MaxRetries propagation) is enforced inside PrepareJobAndTask so it
+	// cannot be bypassed by AtomicForwardAndEnqueue or any other caller
+	// of the prep helper. See enforceDeliveryPlanPrecondition in
+	// PrepareJobAndTask for the full contract.
+
 	jobID := job.ID
 	normalized := spec.Payload
 
@@ -103,6 +124,60 @@ func (e *Enqueuer) Enqueue(ctx context.Context, payloadMap map[string]interface{
 	}
 
 	return buildSceneVideoResponse(normalized), nil
+}
+
+// enforceDeliveryPlanPrecondition resolves the per-job delivery plan and
+// enforces three invariants:
+//   1. The resolver must return a non-nil plan (ErrNoExplicitPlan surfaces
+//      as a validationError with a clear "create job_delivery_plans rows"
+//      hint so operators know exactly what to do).
+//   2. The plan must carry at least one destination (an explicit plan with
+//      zero destinations is treated as missing).
+//   3. Every destination's retry_budget must be > 0 (the per-delivery
+//      delivery_plan_payload.go validator already rejects retry_budget<=0
+//      at parse time; this is the runtime counterpart at enqueue time).
+//
+// On success, the Job's MaxRetries is set to the MAX retry_budget across
+// all destinations so the job-level budget can cover the worst-case
+// per-delivery retry chain. Per-delivery retry_budget is still authoritative
+// at INSERT time (see deliveries/runner.go: lease carries per-row value).
+func (e *Enqueuer) enforceDeliveryPlanPrecondition(ctx context.Context, jobID string, job *jobs.Job) error {
+	if e == nil || e.PlanResolver == nil {
+		// Defensive: NewEnqueuer panics if PlanResolver is nil, so this branch
+		// is only reachable via direct struct manipulation in tests. Treat
+		// as a hard precondition failure.
+		return &validationError{field: "delivery_plan", message: "no plan resolver configured; cannot enforce delivery plan precondition"}
+	}
+	plan, err := e.PlanResolver.ResolvePlan(ctx, jobID, "")
+	if err != nil {
+		// Wrap the original error so errors.Is(err, deliveries.ErrNoExplicitPlan)
+		// works at the call site, while still surfacing an actionable
+		// "create job_delivery_plans rows" hint in the formatted message.
+		return &validationError{
+			field:   "delivery_plan",
+			message: fmt.Sprintf("resolve failed: %v; create job_delivery_plans rows for this job before enqueueing", err),
+			wrapped: err,
+		}
+	}
+	if plan == nil || len(plan.Destinations) == 0 {
+		return &validationError{field: "delivery_plan", message: "no explicit delivery plan; create job_delivery_plans rows for this job before enqueueing"}
+	}
+	maxRetry := 0
+	for i, d := range plan.Destinations {
+		if d.RetryBudget <= 0 {
+			return &validationError{field: fmt.Sprintf("delivery_plan[%d].retry_budget", i), message: "must be > 0"}
+		}
+		if d.RetryBudget > maxRetry {
+			maxRetry = d.RetryBudget
+		}
+	}
+	// Propagate retry_budget to the Job: the job-level MaxRetries covers
+	// the worst-case per-destination retry chain so the job can outlive
+	// any single destination's retries.
+	if job != nil {
+		job.MaxRetries = maxRetry
+	}
+	return nil
 }
 
 // PrepareJobAndTask normalizes the payload, resolves assets, and compiles
@@ -158,8 +233,27 @@ func (e *Enqueuer) PrepareJobAndTask(ctx context.Context, payloadMap map[string]
 		normalized["job_id"] = jobID
 	}
 
-	// PR #3: compile Job+TaskSpec.
+	// PR #3: compile Job+TaskSpec. MaxRetries is set to 0 here and
+	// overwritten by enforceDeliveryPlanPrecondition below — single owner
+	// of the field is the plan precondition.
 	job, spec, priority := compileSceneVideoJob(normalized, req)
+
+	// PR-delivery-plan-precondition: ResolvePlan (NOT ResolveDestinations)
+	// is called here so the precondition is enforced for BOTH the public
+	// Enqueue path AND the internal PrepareJobAndTask path (used by
+	// AtomicForwardAndEnqueue, which combines Job+Task creation with a
+	// creator_forwardings status update in a single SQLite transaction
+	// and would otherwise bypass the precondition). The plan carries
+	// retry_budget per destination, which we validate upfront (>0) and
+	// propagate to the Job's MaxRetries. This eliminates the late
+	// re-resolve in FinalizeVerified and surfaces missing-plan errors at
+	// enqueue time as actionable rejections. The contract is strict: a
+	// nil plan, an empty destinations list, or any retry_budget <= 0
+	// rejects the enqueue with an explicit validationError.
+	if err := e.enforceDeliveryPlanPrecondition(ctx, jobID, job); err != nil {
+		return nil, nil, 0, err
+	}
+
 	return job, spec, priority, nil
 }
 
@@ -200,7 +294,11 @@ func compileSceneVideoJob(normalized map[string]interface{}, req costmodel.JobRe
 		VideoName:    videoName,
 		ProjectID:    projectID,
 		RunID:        jobRunID,
-		MaxRetries:   3,
+		// MaxRetries is set by enforceDeliveryPlanPrecondition (the
+		// delivery-plan resolver propagates max(retry_budget) per
+		// destination). It is intentionally left at 0 here so the
+		// single owner of the field is explicit.
+		MaxRetries:   0,
 		Payload:      string(raw),
 		Requirements: req,
 	}
@@ -654,8 +752,48 @@ func DeriveForwardingJobID(forwardingKey string) string {
 type validationError struct {
 	field   string
 	message string
+	wrapped error // optional underlying cause (e.g. deliveries.ErrNoExplicitPlan)
 }
 
 func (e *validationError) Error() string {
 	return e.field + ": " + e.message
+}
+
+// Unwrap returns the underlying cause so errors.Is / errors.As can
+// inspect the original resolver error (e.g. deliveries.ErrNoExplicitPlan).
+// Without this, callers can only inspect the formatted message, which is
+// fragile across message refactors.
+func (e *validationError) Unwrap() error {
+	return e.wrapped
+}
+
+// =============================================================================
+// PR-delivery-plan-precondition: types for the enqueue-time plan resolver
+// =============================================================================
+
+// PlanDestination is a minimal subset of the per-destination plan that the
+// Enqueuer needs to enforce the precondition. Defined locally to decouple
+// the enqueue contract from the deliveries package (no import edge) and
+// to allow the precondition to be unit-tested with a hand-rolled mock.
+type PlanDestination struct {
+	DestinationID string
+	Priority      int
+	RetryBudget   int
+}
+
+// ResolvedPlan is the per-job delivery plan returned by PlanResolver.
+// Destinations is the full per-destination slice with retry_budget.
+type ResolvedPlan struct {
+	JobID        string
+	Destinations []PlanDestination
+}
+
+// PlanResolver is the contract Enqueuer needs at enqueue time. We use
+// ResolvePlan (NOT ResolveDestinations) so the per-destination retry_budget
+// is available for validation AND propagation to the Job. The
+// deliveries.SQLiteDeliveryPlanResolver implements this contract via a
+// thin adapter at the composition root; in tests, a hand-rolled mock
+// struct satisfies the interface directly.
+type PlanResolver interface {
+	ResolvePlan(ctx context.Context, jobID, artifactID string) (*ResolvedPlan, error)
 }

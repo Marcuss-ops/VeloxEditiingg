@@ -3,13 +3,16 @@ package enqueue
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"velox-server/internal/costmodel"
+	"velox-server/internal/deliveries"
 	"velox-server/internal/jobs"
 	"velox-server/internal/routing"
 	"velox-server/internal/store"
@@ -356,7 +359,7 @@ func TestPrepareJobAndTask_UsesCanonicalSceneCompositeExecutorID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new sqlite store: %v", err)
 	}
-	enq := NewEnqueuer(store.NewAtomicJobTaskCreator(db), nil, nil)
+	enq := NewEnqueuer(store.NewAtomicJobTaskCreator(db), nil, nil, newTestPlanResolver())
 
 	job, spec, _, err := enq.PrepareJobAndTask(context.Background(), map[string]interface{}{
 		"video_name":     "Jackie Chan",
@@ -374,6 +377,13 @@ func TestPrepareJobAndTask_UsesCanonicalSceneCompositeExecutorID(t *testing.T) {
 	}
 	if job == nil || spec == nil {
 		t.Fatal("expected non-nil job and spec")
+	}
+	// PR-delivery-plan-precondition: the happy-path mock returns
+	// RetryBudget=5 so the precondition must propagate that to job.MaxRetries.
+	// This is a one-line proof that the move-into-PrepareJobAndTask
+	// does not break the existing happy-path tests.
+	if job.MaxRetries != 5 {
+		t.Errorf("job.MaxRetries = %d, want 5 (from newTestPlanResolver happy-path mock)", job.MaxRetries)
 	}
 	if spec.ExecutorID != "scene.composite.v1" {
 		t.Fatalf("spec.ExecutorID = %q, want %q", spec.ExecutorID, "scene.composite.v1")
@@ -707,7 +717,10 @@ func TestBuildSceneImagePayload_RoundTrip(t *testing.T) {
 // =============================================================================
 
 // newTestEnqueuer creates an Enqueuer backed by an in-memory SQLite store
-// for integration-level testing of the atomic creation path.
+// for integration-level testing of the atomic creation path. The
+// PlanResolver is the happy-path mock so non-precondition tests do not
+// have to configure it. Precondition tests use a custom mockPlanResolver
+// directly via NewEnqueuer.
 func newTestEnqueuer(t *testing.T) *Enqueuer {
 	t.Helper()
 	db, err := store.NewSQLiteStore(t.TempDir() + "/test.db")
@@ -716,7 +729,7 @@ func newTestEnqueuer(t *testing.T) *Enqueuer {
 	}
 	jobRepo := store.NewSQLiteJobRepository(db)
 	atomic := store.NewAtomicJobTaskCreator(db)
-	return NewEnqueuer(atomic, jobRepo, nil)
+	return NewEnqueuer(atomic, jobRepo, nil, newTestPlanResolver())
 }
 
 // TestEnqueueCreatesJobAndTaskAtomically verifies that Enqueue creates
@@ -838,6 +851,214 @@ func TestDeriveForwardingJobID_DifferentKeys(t *testing.T) {
 	}
 }
 
+// =============================================================================
+// PR-delivery-plan-precondition: tests for the enqueue-time plan resolver.
+// The mockPlanResolver is a hand-rolled PlanResolver that returns a
+// configured plan/error without any DB interaction so the precondition
+// can be unit-tested in isolation from the deliveries stack.
+// =============================================================================
+
+// mockPlanResolver implements PlanResolver for tests. It returns the
+// configured plan or error verbatim, with a defensive copy of the
+// destinations slice so tests cannot accidentally mutate shared state.
+type mockPlanResolver struct {
+	plan *ResolvedPlan
+	err  error
+}
+
+func (m *mockPlanResolver) ResolvePlan(_ context.Context, _, _ string) (*ResolvedPlan, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	if m.plan == nil {
+		return nil, nil
+	}
+	out := &ResolvedPlan{JobID: m.plan.JobID}
+	out.Destinations = append(out.Destinations, m.plan.Destinations...)
+	return out, nil
+}
+
+// newTestPlanResolver returns a happy-path PlanResolver (single
+// destination, retry_budget=5) used by the existing non-precondition
+// tests. Precondition tests construct their own mockPlanResolver to
+// exercise the rejection paths.
+func newTestPlanResolver() PlanResolver {
+	return &mockPlanResolver{
+		plan: &ResolvedPlan{
+			JobID: "test-job",
+			Destinations: []PlanDestination{
+				{DestinationID: "destination-main", Priority: 0, RetryBudget: 5},
+			},
+		},
+	}
+}
+
+// TestNewEnqueuer_PanicsOnNilPlanResolver verifies the fail-fast invariant
+// for misconfiguration: a nil PlanResolver must panic at construction so
+// the gap is caught at boot, not on the first production enqueue.
+func TestNewEnqueuer_PanicsOnNilPlanResolver(t *testing.T) {
+	t.Parallel()
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("NewEnqueuer(nil PlanResolver) should panic, did not")
+		}
+	}()
+	_ = NewEnqueuer(nil, nil, nil, nil)
+}
+
+// TestEnqueue_Precondition_RejectsMissingPlan verifies that an enqueue is
+// rejected when the PlanResolver returns an error (e.g. ErrNoExplicitPlan
+// from the real SQLiteDeliveryPlanResolver). The atomic create must NOT
+// happen and the error must surface a clear "delivery_plan" hint.
+func TestEnqueue_Precondition_RejectsMissingPlan(t *testing.T) {
+	t.Parallel()
+	tempDir := t.TempDir()
+	db, err := store.NewSQLiteStore(filepath.Join(tempDir, "test.db"))
+	if err != nil {
+		t.Fatalf("sqlite store: %v", err)
+	}
+	enq := NewEnqueuer(
+		store.NewAtomicJobTaskCreator(db),
+		store.NewSQLiteJobRepository(db),
+		nil,
+		&mockPlanResolver{err: errors.New("deliveries: no explicit delivery plan and global fallback is disabled: job_id=test")},
+	)
+
+	payload := map[string]interface{}{
+		"video_name":      "no-plan",
+		"script_text":     "test",
+		"scenes":          []interface{}{map[string]interface{}{"scene": "intro", "voiceover": "v1"}},
+		"voiceover_paths": []string{"/tmp/v.mp3"},
+	}
+	_, err = enq.Enqueue(context.Background(), payload, costmodel.DefaultRequirements())
+	if err == nil {
+		t.Fatal("want error when plan missing, got nil")
+	}
+	if !strings.Contains(err.Error(), "delivery_plan") {
+		t.Errorf("want error to mention delivery_plan, got %v", err)
+	}
+}
+
+// TestEnqueue_Precondition_RejectsEmptyDestinations verifies that an
+// enqueue is rejected when the plan has zero destinations (treated as
+// "no explicit plan").
+func TestEnqueue_Precondition_RejectsEmptyDestinations(t *testing.T) {
+	t.Parallel()
+	tempDir := t.TempDir()
+	db, err := store.NewSQLiteStore(filepath.Join(tempDir, "test.db"))
+	if err != nil {
+		t.Fatalf("sqlite store: %v", err)
+	}
+	enq := NewEnqueuer(
+		store.NewAtomicJobTaskCreator(db),
+		store.NewSQLiteJobRepository(db),
+		nil,
+		&mockPlanResolver{plan: &ResolvedPlan{JobID: "test"}},
+	)
+
+	payload := map[string]interface{}{
+		"video_name":      "empty-dest",
+		"script_text":     "test",
+		"scenes":          []interface{}{map[string]interface{}{"scene": "intro", "voiceover": "v1"}},
+		"voiceover_paths": []string{"/tmp/v.mp3"},
+	}
+	_, err = enq.Enqueue(context.Background(), payload, costmodel.DefaultRequirements())
+	if err == nil {
+		t.Fatal("want error when destinations empty, got nil")
+	}
+	if !strings.Contains(err.Error(), "no explicit delivery plan") {
+		t.Errorf("want error to mention missing plan, got %v", err)
+	}
+}
+
+// TestEnqueue_Precondition_RejectsZeroRetryBudget verifies that an
+// enqueue is rejected when any destination has retry_budget <= 0. The
+// per-delivery delivery_plan_payload.go validator already rejects at
+// parse time; this is the runtime counterpart at enqueue time.
+func TestEnqueue_Precondition_RejectsZeroRetryBudget(t *testing.T) {
+	t.Parallel()
+	tempDir := t.TempDir()
+	db, err := store.NewSQLiteStore(filepath.Join(tempDir, "test.db"))
+	if err != nil {
+		t.Fatalf("sqlite store: %v", err)
+	}
+	enq := NewEnqueuer(
+		store.NewAtomicJobTaskCreator(db),
+		store.NewSQLiteJobRepository(db),
+		nil,
+		&mockPlanResolver{plan: &ResolvedPlan{
+			JobID: "test",
+			Destinations: []PlanDestination{
+				{DestinationID: "d1", Priority: 0, RetryBudget: 5},
+				{DestinationID: "d2", Priority: 1, RetryBudget: 0}, // INVALID
+			},
+		}},
+	)
+
+	payload := map[string]interface{}{
+		"video_name":      "zero-budget",
+		"script_text":     "test",
+		"scenes":          []interface{}{map[string]interface{}{"scene": "intro", "voiceover": "v1"}},
+		"voiceover_paths": []string{"/tmp/v.mp3"},
+	}
+	_, err = enq.Enqueue(context.Background(), payload, costmodel.DefaultRequirements())
+	if err == nil {
+		t.Fatal("want error when retry_budget=0, got nil")
+	}
+	if !strings.Contains(err.Error(), "retry_budget") {
+		t.Errorf("want error to mention retry_budget, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "must be > 0") {
+		t.Errorf("want error to mention 'must be > 0', got %v", err)
+	}
+}
+
+// TestEnqueue_Precondition_PropagatesMaxRetryBudget verifies that the
+// Job's MaxRetries is set to the max retry_budget across destinations
+// so the job-level budget can cover the worst-case per-destination
+// retry chain. Per-delivery retry_budget is still authoritative at
+// INSERT time (see deliveries/runner.go: lease carries per-row value).
+func TestEnqueue_Precondition_PropagatesMaxRetryBudget(t *testing.T) {
+	t.Parallel()
+	tempDir := t.TempDir()
+	db, err := store.NewSQLiteStore(filepath.Join(tempDir, "test.db"))
+	if err != nil {
+		t.Fatalf("sqlite store: %v", err)
+	}
+	enq := NewEnqueuer(
+		store.NewAtomicJobTaskCreator(db),
+		store.NewSQLiteJobRepository(db),
+		nil,
+		&mockPlanResolver{plan: &ResolvedPlan{
+			JobID: "test",
+			Destinations: []PlanDestination{
+				{DestinationID: "d1", Priority: 0, RetryBudget: 3},
+				{DestinationID: "d2", Priority: 1, RetryBudget: 7}, // max
+				{DestinationID: "d3", Priority: 2, RetryBudget: 5},
+			},
+		}},
+	)
+
+	payload := map[string]interface{}{
+		"video_name":      "max-retry",
+		"script_text":     "test",
+		"scenes":          []interface{}{map[string]interface{}{"scene": "intro", "voiceover": "v1"}},
+		"voiceover_paths": []string{"/tmp/v.mp3"},
+	}
+	response, err := enq.Enqueue(context.Background(), payload, costmodel.DefaultRequirements())
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	jobID, _ := response["job_id"].(string)
+	j, err := enq.Jobs.Get(context.Background(), jobID)
+	if err != nil {
+		t.Fatalf("Get job: %v", err)
+	}
+	if j.MaxRetries != 7 {
+		t.Errorf("MaxRetries = %d, want 7 (max of [3, 7, 5])", j.MaxRetries)
+	}
+}
+
 // TestEnqueueWithForwardingKey verifies that when a payload carries
 // _internal_forwarding_key, the job_id is deterministic.
 func TestEnqueueWithForwardingKey(t *testing.T) {
@@ -876,5 +1097,176 @@ func TestEnqueueWithForwardingKey(t *testing.T) {
 	jobID2, _ := response2["job_id"].(string)
 	if jobID2 != jobID {
 		t.Errorf("retry job_id = %q, want same %q", jobID2, jobID)
+	}
+}
+
+// =============================================================================
+// PR-delivery-plan-precondition: integration test that uses the REAL
+// DB-backed *deliveries.SQLiteDeliveryPlanResolver (not a hand-rolled
+// mock) via a local planResolverAdapter. This proves the precondition
+// reads from the real job_delivery_plans table, propagates max(retry_budget)
+// to job.MaxRetries, and surfaces the production ErrNoExplicitPlan path
+// when no plan rows exist. The adapter mirrors the production one in
+// cmd/server/bootstrap_modules.go to avoid an import cycle between
+// enqueue and deliveries.
+// =============================================================================
+
+// planResolverAdapter bridges *deliveries.SQLiteDeliveryPlanResolver to
+// enqueue.PlanResolver for the integration test. It is the test-side
+// twin of deliveryPlanResolverAdapter in cmd/server/bootstrap_modules.go;
+// the duplication is intentional (composition-root adapter for prod, local
+// adapter for the test) to keep the enqueue package decoupled from
+// deliveries.
+type planResolverAdapter struct {
+	inner *deliveries.SQLiteDeliveryPlanResolver
+}
+
+func (a *planResolverAdapter) ResolvePlan(ctx context.Context, jobID, artifactID string) (*ResolvedPlan, error) {
+	if a == nil || a.inner == nil {
+		return nil, nil
+	}
+	plan, err := a.inner.ResolvePlan(ctx, jobID, artifactID)
+	if err != nil {
+		return nil, err
+	}
+	if plan == nil {
+		return nil, nil
+	}
+	out := &ResolvedPlan{JobID: plan.JobID}
+	for _, d := range plan.Destinations {
+		out.Destinations = append(out.Destinations, PlanDestination{
+			DestinationID: d.DestinationID,
+			Priority:      d.Priority,
+			RetryBudget:   d.RetryBudget,
+		})
+	}
+	return out, nil
+}
+
+// TestEnforceDeliveryPlanPrecondition_IntegrationWithRealResolver
+// exercises enforceDeliveryPlanPrecondition end-to-end against a real
+// SQLite database with explicit job_delivery_plans rows. It validates
+// that the precondition:
+//
+//  1. Reads from job_delivery_plans (NOT the global delivery_destinations
+//     fallback) when GlobalFallback is disabled (production mode).
+//  2. Propagates max(retry_budget) across destinations to job.MaxRetries.
+//  3. Accepts a multi-destination plan with varying retry_budget values.
+//
+// The test calls enforceDeliveryPlanPrecondition directly (rather than
+// going through Enqueue) so the precondition's effect on job.MaxRetries
+// is observable without the atomic-create path inserting conflicting
+// job_delivery_plans rows of its own.
+func TestEnforceDeliveryPlanPrecondition_IntegrationWithRealResolver(t *testing.T) {
+	t.Parallel()
+	tempDir := t.TempDir()
+	db, err := store.NewSQLiteStore(filepath.Join(tempDir, "test.db"))
+	if err != nil {
+		t.Fatalf("sqlite store: %v", err)
+	}
+
+	ctx := context.Background()
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	// Disable FK constraints for this test. The precondition does NOT
+	// depend on the job_delivery_plans → jobs / job_delivery_plans →
+	// delivery_destinations FKs being enforced: it only reads from
+	// job_delivery_plans. Disabling FKs lets the test insert
+	// job_delivery_plans rows directly without having to keep a
+	// placeholder Job + delivery_destinations rows in sync with the
+	// production schema (which has additional NOT NULL columns like
+	// delivery_destinations.provider that are irrelevant here). In
+	// production, the FKs are enforced and the operator must create the
+	// per-job plan rows before enqueueing — that contract is verified
+	// by the unit test TestEnqueue_Precondition_RejectsMissingPlan.
+	if _, err := db.DB().ExecContext(ctx, "PRAGMA foreign_keys = OFF"); err != nil {
+		t.Fatalf("disable foreign keys: %v", err)
+	}
+
+	const jobID = "integration-test-job-1"
+
+	// Insert explicit per-job plan rows with varying retry_budget so the
+	// precondition's max() calculation has a meaningful signal: 3, 7, 5
+	// → MaxRetries must be 7.
+	retryBudgets := []struct {
+		destID string
+		retry  int
+	}{
+		{"dest-a", 3},
+		{"dest-b", 7},
+		{"dest-c", 5},
+	}
+	for _, d := range retryBudgets {
+		if _, execErr := db.DB().ExecContext(ctx,
+			`INSERT INTO job_delivery_plans (job_id, destination_id, enabled, priority, retry_budget, created_at, updated_at) VALUES (?, ?, 1, 0, ?, ?, ?)`,
+			jobID, d.destID, d.retry, now, now,
+		); execErr != nil {
+			t.Fatalf("insert job_delivery_plan %s: %v", d.destID, execErr)
+		}
+	}
+
+	// Real DB-backed resolver, production mode (no global fallback).
+	realResolver := deliveries.NewSQLiteDeliveryPlanResolver(db.DB(), false)
+	adapter := &planResolverAdapter{inner: realResolver}
+
+	enq := NewEnqueuer(
+		store.NewAtomicJobTaskCreator(db),
+		store.NewSQLiteJobRepository(db),
+		nil,
+		adapter,
+	)
+
+	job := &jobs.Job{ID: jobID}
+	if preErr := enq.enforceDeliveryPlanPrecondition(ctx, jobID, job); preErr != nil {
+		t.Fatalf("enforceDeliveryPlanPrecondition: %v", preErr)
+	}
+	if job.MaxRetries != 7 {
+		t.Errorf("MaxRetries = %d, want 7 (max of [3, 7, 5])", job.MaxRetries)
+	}
+}
+
+// TestEnforceDeliveryPlanPrecondition_IntegrationRejectsMissingPlan
+// exercises the production rejection path: GlobalFallback=false (no
+// fallback to global delivery_destinations) AND no per-job
+// job_delivery_plans rows → the precondition must reject with a
+// validation error whose message mentions "delivery_plan" so operators
+// know exactly what to do (create the missing plan rows).
+func TestEnforceDeliveryPlanPrecondition_IntegrationRejectsMissingPlan(t *testing.T) {
+	t.Parallel()
+	tempDir := t.TempDir()
+	db, err := store.NewSQLiteStore(filepath.Join(tempDir, "test.db"))
+	if err != nil {
+		t.Fatalf("sqlite store: %v", err)
+	}
+
+	ctx := context.Background()
+	const jobID = "missing-plan-job-1"
+
+	// Real resolver, production mode. job_delivery_plans is empty for
+	// this job_id and GlobalFallback is false, so the precondition must
+	// surface deliveries.ErrNoExplicitPlan wrapped in a validationError.
+	realResolver := deliveries.NewSQLiteDeliveryPlanResolver(db.DB(), false)
+	adapter := &planResolverAdapter{inner: realResolver}
+
+	enq := NewEnqueuer(
+		store.NewAtomicJobTaskCreator(db),
+		store.NewSQLiteJobRepository(db),
+		nil,
+		adapter,
+	)
+
+	job := &jobs.Job{ID: jobID}
+	preErr := enq.enforceDeliveryPlanPrecondition(ctx, jobID, job)
+	if preErr == nil {
+		t.Fatal("want error when plan missing, got nil")
+	}
+	if !strings.Contains(preErr.Error(), "delivery_plan") {
+		t.Errorf("want error to mention delivery_plan, got %v", preErr)
+	}
+	if !errors.Is(preErr, deliveries.ErrNoExplicitPlan) && !strings.Contains(preErr.Error(), "no explicit delivery plan") {
+		t.Errorf("want error to surface ErrNoExplicitPlan or 'no explicit delivery plan', got %v", preErr)
+	}
+	if job.MaxRetries != 0 {
+		t.Errorf("MaxRetries = %d on rejection, want 0 (no propagation when precondition fails)", job.MaxRetries)
 	}
 }
