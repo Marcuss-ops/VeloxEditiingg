@@ -1,0 +1,102 @@
+---
+# ============================================================
+# PREPARE WORKER IMAGE
+# ============================================================
+# Sole responsibility: produce the worker Docker image on the host.
+#
+#   * Read BUILD_INFO.json from the freshly-staged release
+#   * Derive image tag from (version, git_commit)
+#   * Resolve Dockerfile + build context paths
+#   * Verify the Go worker-agent binary is present in the context
+#   * Always rebuild the image so Go agent updates land
+#   * docker image inspect proves the tag is real
+#
+# This task does NOT touch systemd, runtime directories, watchdog,
+# timers, auto-update, or the worker console. Those belong to
+# canonical_worker_runtime.yml.
+#
+# Required vars:
+#   velox_dir       — install root (e.g. /opt/velox)
+#   version_number  — fallback when BUILD_INFO.json absent
+#
+# Emits:
+#   _worker_image_version
+#   _worker_image_commit
+#   _worker_image_tag
+#   velox_current_root
+#   velox_worker_dockerfile_host
+#   velox_worker_docker_context
+# ============================================================
+
+- name: PrepareImage | Read BUILD_INFO.json
+  ansible.builtin.shell: |
+    set -euo pipefail
+    BUILD_INFO="{{ velox_dir }}/current/RemoteCodex/BUILD_INFO.json"
+    if [ -f "$BUILD_INFO" ]; then
+      python3 -c "import json,sys; d=json.load(open('$BUILD_INFO')); print(d.get('version','v1.0.6')); print(d.get('git_commit','unknown')[:7])"
+    else
+      echo "{{ version_number | default('v1.0.6') }}"
+      echo "unknown"
+    fi
+  register: _build_info
+  changed_when: false
+  failed_when: false
+
+- name: PrepareImage | Set image tag facts
+  ansible.builtin.set_fact:
+    _worker_image_version: "{{ _build_info.stdout_lines[0] | default(version_number | default('v1.0.6')) }}"
+    _worker_image_commit: "{{ _build_info.stdout_lines[1] | default('unknown') }}"
+    _worker_image_tag: "velox-worker:{{ _build_info.stdout_lines[0] | default(version_number | default('v1.0.6')) }}-{{ (_build_info.stdout_lines[1] | default('unknown'))[:7] }}"
+
+- name: PrepareImage | Resolve build context paths
+  ansible.builtin.set_fact:
+    velox_current_root: "{{ velox_dir }}/current"
+    velox_worker_dockerfile_host: "{{ velox_dir }}/current/RemoteCodex/native/worker-agent-go/Dockerfile"
+    velox_worker_docker_context: "{{ velox_dir }}/current"
+
+- name: PrepareImage | Verify worker agent binary is in build context
+  ansible.builtin.stat:
+    path: "{{ velox_worker_docker_context }}/RemoteCodex/native/worker-agent-go/bin/velox-worker-agent"
+  register: worker_agent_binary_stat
+
+- name: PrepareImage | Fail if worker agent binary is missing from build context
+  ansible.builtin.fail:
+    msg: >-
+      Missing velox-worker-agent binary at
+      {{ velox_worker_docker_context }}/RemoteCodex/native/worker-agent-go/bin/velox-worker-agent.
+      Rebuild the agent on the controller before the Docker build.
+  when: not worker_agent_binary_stat.stat.exists
+
+- name: PrepareImage | Build velox-worker Docker image
+  ansible.builtin.shell: |
+    set -e
+    DOCKERFILE="{{ velox_worker_dockerfile_host }}"
+    CONTEXT="{{ velox_worker_docker_context }}"
+    if [ -z "$DOCKERFILE" ] || [ -z "$CONTEXT" ]; then
+      echo "Dockerfile or context missing — cannot build"
+      exit 1
+    fi
+    if [ ! -f "$DOCKERFILE" ]; then
+      echo "Dockerfile.worker missing at $DOCKERFILE"
+      exit 1
+    fi
+    if /usr/bin/docker buildx version >/dev/null 2>&1; then
+      export DOCKER_BUILDKIT=1
+    fi
+    /usr/bin/docker build \
+      --pull \
+      --no-cache \
+      -f "$DOCKERFILE" \
+      -t "{{ _worker_image_tag }}" \
+      "$CONTEXT"
+    /usr/bin/docker image inspect "{{ _worker_image_tag }}" >/dev/null 2>&1
+    echo "Image {{ _worker_image_tag }} built successfully"
+  args:
+    executable: /bin/bash
+  register: worker_image_build
+  changed_when: "'built successfully' in (worker_image_build.stdout | default(''))"
+  failed_when: worker_image_build.rc != 0
+
+- name: PrepareImage | Log image preparation result
+  ansible.builtin.debug:
+    msg: "{{ worker_image_build.stdout | default('no output') }}"

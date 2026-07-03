@@ -130,9 +130,9 @@
         _release_swapped: true
 
     # ── CONVERGE ──────────────────────────────────────────────
-    - name: DeployWorker | Build image and install baseline systemd assets
+    - name: DeployWorker | Build worker Docker image (sole owner = prepare_worker_image)
       ansible.builtin.include_tasks:
-        file: systemd_setup.yml
+        file: prepare_worker_image.yml
 
     - name: DeployWorker | Converge canonical runtime and remove legacy units
       ansible.builtin.include_tasks:
@@ -229,7 +229,7 @@
 
     - name: DeployWorker | Rebuild and converge restored release
       ansible.builtin.include_tasks:
-        file: systemd_setup.yml
+        file: prepare_worker_image.yml
       when: not (_canonical_runtime_healthy | bool)
 
     - name: DeployWorker | Reapply canonical runtime after rollback

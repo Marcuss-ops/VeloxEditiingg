@@ -9,7 +9,8 @@
 #   - Config systemd + watchdog + auto-update
 #   - Avvio servizio
 #
-# Incluse: tasks/systemd_setup.yml (single source of truth)
+# Incluse: tasks/prepare_worker_image.yml + tasks/canonical_worker_runtime.yml
+# (single source of truth per PR-1 split)
 # ============================================================
 
 - name: Install workers

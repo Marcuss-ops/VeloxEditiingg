@@ -6,8 +6,9 @@
 #   - Unmask servizio velox-worker
 #   - Stop e disable di TUTTI i vecchi servizi (velox-worker-*.service)
 #   - Rimozione vecchie unit file e override directories
-#   - include tasks/systemd_setup.yml (single source of truth)
-#     → env file, Docker build, config, systemd unit, watchdog, auto-update
+#   - include deploy_worker_release (single source of truth)
+#     → prepare_worker_image (image build) + canonical_worker_runtime
+#       (env file, config, systemd unit, watchdog, auto-update)
 #   - Verifica stato + heartbeat sul master
 # ============================================================
 
@@ -184,6 +185,6 @@
           ========================================
           Worker ID: {{ worker_id | default(inventory_hostname) }}
           Service:   velox-worker-{{ inventory_hostname }}
-          Env file:  /etc/velox-worker.env
+          Env file:  /etc/velox-worker-{{ inventory_hostname }}.env
           Master:    {{ master_url }}
           ========================================

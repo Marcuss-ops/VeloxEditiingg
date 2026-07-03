@@ -17,6 +17,15 @@
     velox_worker_runtime_container_dir: "/var/lib/velox-worker"
     velox_worker_runtime_dir: "/var/lib/velox/workers/{{ inventory_hostname }}"
     velox_worker_health_port: "{{ 8081 + ((worker_id | default(inventory_hostname) | regex_replace('^host_([0-9]+)_.*$', '\\1')) | int) }}"
+    velox_worker_heartbeat_masters: "{{ master_url }}"
+    velox_worker_secondary_master_url: ""
+    velox_worker_control_grpc_url: >-
+      {{
+        master_url
+        | regex_replace('^https?://', '')
+        | regex_replace('/.*$', '')
+        | regex_replace(':8000$', ':9000')
+      }}
 
 - name: CanonicalRuntime | Stop and remove legacy worker units
   ansible.builtin.shell: |
@@ -79,6 +88,26 @@
     - "{{ velox_worker_runtime_host_dir }}/cache"
     - "{{ velox_worker_runtime_host_dir }}/blobs"
     - "{{ velox_worker_runtime_host_dir }}/assets_cache"
+
+- name: CanonicalRuntime | Write per-host env file (consumed by systemd unit EnvironmentFile)
+  ansible.builtin.copy:
+    dest: "{{ velox_worker_env_path }}"
+    mode: "0600"
+    content: |
+      MASTER_URL={{ master_url }}
+      VELOX_HEARTBEAT_MASTERS={{ velox_worker_heartbeat_masters }}
+      VELOX_SECONDARY_MASTER_URL={{ velox_worker_secondary_master_url }}
+      WORKER_NAME={{ inventory_hostname }}
+      VELOX_WORKER_ID={{ worker_id | default(inventory_hostname) }}
+      VELOX_DIR={{ velox_dir }}
+      VELOX_BUNDLE_VERSION={{ version_number | default('v1.0.6') }}
+      VELOX_VERSION_NUMBER={{ version_number | default('v1.0.6') }}
+      VELOX_WORKER_PROTOCOL_VERSION={{ worker_protocol_version | default('2026-06-worker-v1') }}
+      VELOX_ENGINE_VERSION={{ engine_version | default(version_number | default('v1.0.6')) }}
+      VELOX_HEALTH_PORT={{ velox_worker_health_port }}
+      VELOX_WORKER_IMAGE={{ _worker_image_tag }}
+      VELOX_WORKER_IMAGE_VERSION={{ _worker_image_version }}
+      VELOX_WORKER_IMAGE_COMMIT={{ _worker_image_commit }}
 
 - name: CanonicalRuntime | Write canonical worker config outside checkout
   ansible.builtin.copy:
@@ -156,6 +185,23 @@
       StandardOutput=journal
       StandardError=journal
       SyslogIdentifier=velox-worker-watchdog
+
+- name: CanonicalRuntime | Install canonical watchdog timer (5m)
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/velox-worker-watchdog.timer
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Velox Worker Watchdog Timer (canonical)
+
+      [Timer]
+      OnBootSec=5min
+      OnUnitActiveSec=5min
+      AccuracySec=30s
+      Unit=velox-worker-watchdog.service
+
+      [Install]
+      WantedBy=timers.target
 
 - name: CanonicalRuntime | Install canonical auto-update script
   ansible.builtin.copy:
@@ -239,6 +285,46 @@
       SyslogIdentifier=velox-auto-update
       TimeoutStartSec=600
 
+# ── Bootstrap fixture: engine_selftest_baseline.sha256 ─────────
+# Without this file the worker's engine_selftest baseline check has
+# nothing to compare against and the worker can silently misreport
+# engine readiness. Source lives under the native Go agent tree;
+# we copy it into the canonical tests/fixtures path consumed by both
+# in-tree and containerized workers.
+- name: CanonicalRuntime | Ensure bootstrap fixture directory exists in release tree
+  ansible.builtin.file:
+    path: "{{ velox_current_root }}/RemoteCodex/tests/fixtures"
+    state: directory
+    mode: "0755"
+
+- name: CanonicalRuntime | Copy engine selftest baseline fixture into canonical runtime path
+  ansible.builtin.copy:
+    src: "{{ velox_current_root }}/RemoteCodex/native/worker-agent-go/tests/fixtures/engine_selftest_baseline.sha256"
+    dest: "{{ velox_current_root }}/RemoteCodex/tests/fixtures/engine_selftest_baseline.sha256"
+    remote_src: true
+    mode: "0644"
+
+- name: CanonicalRuntime | Install canonical auto-update timer (12h)
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/velox-auto-update.timer
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Velox Worker Auto-Update Timer (canonical, 12h)
+
+      [Timer]
+      # Defer first run 12h after boot so the worker is stable before update.
+      OnBootSec=12h
+      OnUnitActiveSec=12h
+      # Jitter up to 30 min so workers don't all update at the same instant.
+      RandomizedDelaySec=1800
+      AccuracySec=60s
+      Unit=velox-auto-update.service
+      Persistent=true
+
+      [Install]
+      WantedBy=timers.target
+
 - name: CanonicalRuntime | Reload systemd after cleanup and unit writes
   ansible.builtin.systemd:
     daemon_reload: true
@@ -271,3 +357,37 @@
     enabled: true
     state: started
   failed_when: false
+
+# ── Purge legacy worker-console bits (Dockerfile.console not in repo, console dead code) ──
+- name: CanonicalRuntime | Stop+disable any leftover worker-console unit and reset-failed
+  ansible.builtin.shell: |
+    set +e
+    /usr/bin/docker rm -f velox-worker-console >/dev/null 2>&1
+    systemctl stop velox-worker-console.service >/dev/null 2>&1
+    systemctl disable velox-worker-console.service >/dev/null 2>&1
+    systemctl reset-failed velox-worker-console.service >/dev/null 2>&1
+    rm -rf /etc/systemd/system/velox-worker-console.service.d
+    exit 0
+  args:
+    executable: /bin/bash
+  changed_when: false
+  failed_when: false
+
+- name: CanonicalRuntime | Remove legacy worker-console systemd unit file
+  ansible.builtin.file:
+    path: /etc/systemd/system/velox-worker-console.service
+    state: absent
+
+- name: CanonicalRuntime | Purge legacy worker-console opener script
+  ansible.builtin.file:
+    path: /opt/velox/bin/velox-worker-console-open.sh
+    state: absent
+
+- name: CanonicalRuntime | Purge legacy worker-console XDG desktop entry
+  ansible.builtin.file:
+    path: /etc/xdg/autostart/velox-worker-console.desktop
+    state: absent
+
+- name: CanonicalRuntime | Final daemon-reload after console purge
+  ansible.builtin.systemd:
+    daemon_reload: true

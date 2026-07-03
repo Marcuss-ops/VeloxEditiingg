@@ -25,6 +25,12 @@
           systemctl stop "$BASE" 2>/dev/null || true
           systemctl disable "$BASE" 2>/dev/null || true
         done
+        for f in /etc/systemd/system/velox-worker-console.service; do
+          [ ! -f "$f" ] && continue
+          BASE=$(basename "$f")
+          systemctl stop "$BASE" 2>/dev/null || true
+          systemctl disable "$BASE" 2>/dev/null || true
+        done
       args:
         executable: /bin/bash
       changed_when: false
@@ -130,6 +136,7 @@
       loop:
         - "{{ velox_dir }}/worker_config.json"
         - /etc/velox-worker.env
+        - /etc/velox-worker-{{ inventory_hostname }}.env
 
     # ── STEP 5: Verify clean state ────────────────────────────
     - name: Cleanup | Verify — remaining systemd units
