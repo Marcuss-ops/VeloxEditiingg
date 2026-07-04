@@ -1,43 +1,6 @@
 package artifacts
 
-// Package artifacts / service_finalize.go
-//
-// Finalize orchestrates the verified-finalization pipeline. The 388-
-// line monolith has been split into private helpers per the action-
-// plan P0 refactor:
-//
-//  1. validateFinalizeSession           (this file, private) — upload
-//     session load + auth match (job-id / worker / lease / revision /
-//     attempt) + idempotent COMPLETED shortcut (returns the
-//     post-Finalize artifact via ArtifactReader when the previous tx
-//     already committed).
-//
-//  2. detectMIME                         (blob_verification.go,
-//     package-private) — content sniff of the staged blob; falls
-//     back to BeginUpload-declared mime; falls back to
-//     application/octet-stream.
-//
-//  3. PromoteToCanonical                 (storage.go, package-private)
-//     — promotes the blob to its content-addressable canonical
-//     storage_key BEFORE the SQL tx.
-//
-//  4. CAS RECEIVED → FINALIZING          (this file's orchestrator)
-//     — sql-level gate against concurrent Finalize callers.
-//
-//  5. buildFinalizeVerifiedCommand       (this file, private) — pure
-//     struct mapping for the verified-writer command.
-//
-//  6. finalizeWithDuplicateStorageFallback (this file, private) —
-//     single-shot FinalizeVerified with a UNIQUE-constraint
-//     retry against an alt storage_key. The three
-//     supporting helpers (isArtifactStorageKeyConflict,
-//     makeDuplicateStorageKey, materializeDuplicateFinalBlob) live
-//     in service_duplicate_blob.go of the same package.
-//
-// Blob promotion runs BEFORE the SQL tx. If the SQL tx rolls back
-// after the duplicate-fallback retry, the reconciler deletes the
-// orphan blob; "un blob orfano eliminabile è preferibile rispetto a
-// (artifact READY con file inesistente)".
+// Finalize orchestrates verified artifact finalization: validate session, promote staged blob, CAS upload to FINALIZING, then delegate the atomic DB transition to FinalizationWriter.
 
 import (
 	"context"
@@ -48,16 +11,9 @@ import (
 	"velox-server/internal/store"
 )
 
-// Finalize orchestrates the verified-finalization pipeline. Linear:
-//
-//	validate session → [idempotent COMPLETED short-circuit]
-//	detect MIME → promote canonical blob
-//	CAS RECEIVED → FINALIZING
-//	build verified-writer command → write (with duplicate-key fallback)
-//
-// Public surface of `package artifacts` is unchanged: Finalize, its
-// parameters, and its return values are byte-identical to the prior
-// monolithic implementation.
+// Finalize orchestrates verified artifact finalization. See the
+// package doc for the linear pipeline; this method is the single
+// public entry point.
 func (s *Service) Finalize(ctx context.Context, cmd FinalizeArtifactCommand) (*store.Artifact, error) {
 	session, idempotentArtifact, err := s.validateFinalizeSession(ctx, cmd)
 	if err != nil {
