@@ -1,0 +1,68 @@
+# Velox — root-level Ansible inventory (TEMPLATE).
+# ────────────────────────────────────────────────────────────────────────────
+# THIS FILE IS A TEMPLATE. Copy to a local `inventory/production.ini` and
+# fill in real IPs/hostnames. The active inventory is operator-local and is
+# NOT committed (`**/production.ini` is excluded by the root `.gitignore`,
+# plus the explicit `inventory/production.ini` exclusion below).
+#
+# Why a separate root-level inventory (not just deploy/inventory/production.ini)?
+# ─────────────────────────────────────────────────────────────────────────────
+# The deploy/ inventory is reserved for the deploy-time playbooks
+# (bootstrap-ssh.yml, deploy-master-config.yml, rollback.yml) which mutate
+# /etc on the master host. The root-level `inventory/production.ini` is the
+# canonical inventory for *runtime* references:
+#   * `make canonical-dry PLAYBOOK=...` (the sourceable-wrapper + this-inventory
+#     pattern; replaces the brittle `ansible-playbook -i with-production-env.sh`)
+#   * any future runtime dry-run playbooks that don't fit the deploy-time
+#     contract (e.g. fleet-wide shadow-mode probes, audit runs).
+# Keeping the two inventories side-by-side matches the spirit of the rules
+# in scripts/ci/check-architecture.sh ("behaviour tests belong elsewhere"):
+# deploy-time mutations and runtime dry-runs are separate concerns.
+#
+# Canonical production topology
+# ──────────────────────────────────────────────────────────────────────────
+# The master hosts the gRPC :9000 + REST :8000 listeners and admits any
+# N >= 1 external workers under [velox_workers] (fleet size is unbounded —
+# operators may scale up or down as needed). The canonical allowlist
+# invariants (non-empty, non-wildcard, unique worker_id) are enforced by:
+#   * ValidateProductionWorkers in DataServer/internal/config/workers_validator.go
+#     (fail-fast at server start, mirrored from
+#      deploy/group_vars/all.yml → deploy/templates/velox-server.env.j2
+#      → /etc/velox-server.env).
+#   * DataServer/data/ansible/playbooks/tasks/prechecks.yml
+#     (asserts `[velox_workers]` is non-empty and each host declares a
+#     non-empty worker_id).
+#
+# Bootstrapping a new operator workstation:
+#   cp inventory/production.ini.example inventory/production.ini
+#   $EDITOR inventory/production.ini        # fill CHANGE_ME values
+#
+# Connection requirements (must remain identical to deploy-side inventory):
+#   * SSH key-based auth as user `velox-deploy` (created by bootstrap-ssh).
+#   * sudo from `velox-deploy` to root (passwordless).
+#   * Python 3 on the remote host.
+#
+# Hostgroups:
+#   [velox_master]   — runs the master server. Single host.
+#   [velox_workers]  — runs worker agents. N >= 1 hosts.
+#
+# Per-host vars:
+#   worker_id        — stable identifier the master uses for gate/ACL.
+#                      MUST match a value listed in `velox_allowed_workers`
+#                      in deploy/group_vars/all.yml AND mirror
+#                      /etc/velox-server.env `VELOX_ALLOWED_WORKERS`.
+
+[velox_master]
+velox-master ansible_host=CHANGE_ME ansible_user=velox-deploy
+
+[velox_workers]
+velox-worker-1 ansible_host=CHANGE_ME ansible_user=velox-deploy worker_id=velox-worker-1
+velox-worker-2 ansible_host=CHANGE_ME ansible_user=velox-deploy worker_id=velox-worker-2
+# Add more workers as needed; the canonical invariant is allowlist-shape
+# (non-empty, non-wildcard, unique worker_id), NOT a hard fleet size.
+
+[velox_master:vars]
+ansible_python_interpreter=/usr/bin/python3
+
+[velox_workers:vars]
+ansible_python_interpreter=/usr/bin/python3

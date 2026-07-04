@@ -76,7 +76,7 @@ gh api \
   -H "X-GitHub-Api-Version: 2022-11-28" \
   "$PROTECT_PATH" \
   -o /tmp/velox-branch-protection-resp.json \
-  -w '%{http_code}' 2>/dev/null) || http_code="000"
+  -w '%{http_code}' 2>/dev/null || http_code="000"
 
 # Capture HTTP status. Expected responses:
 #   204 No Content — successful DELETE

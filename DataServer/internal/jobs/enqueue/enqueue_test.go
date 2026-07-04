@@ -961,6 +961,9 @@ func TestEnqueue_Precondition_RejectsEmptyDestinations(t *testing.T) {
 		"script_text":     "test",
 		"scenes":          []interface{}{map[string]interface{}{"scene": "intro", "voiceover": "v1"}},
 		"voiceover_paths": []string{"/tmp/v.mp3"},
+		"delivery_plan": []interface{}{
+			map[string]interface{}{"destination_id": "d1", "priority": 0, "retry_budget": 3},
+		},
 	}
 	_, err = enq.Enqueue(context.Background(), payload, costmodel.DefaultRequirements())
 	if err == nil {
@@ -1000,6 +1003,9 @@ func TestEnqueue_Precondition_RejectsZeroRetryBudget(t *testing.T) {
 		"script_text":     "test",
 		"scenes":          []interface{}{map[string]interface{}{"scene": "intro", "voiceover": "v1"}},
 		"voiceover_paths": []string{"/tmp/v.mp3"},
+		"delivery_plan": []interface{}{
+			map[string]interface{}{"destination_id": "d1", "priority": 0, "retry_budget": 3},
+		},
 	}
 	_, err = enq.Enqueue(context.Background(), payload, costmodel.DefaultRequirements())
 	if err == nil {
@@ -1044,6 +1050,9 @@ func TestEnqueue_Precondition_PropagatesMaxRetryBudget(t *testing.T) {
 		"script_text":     "test",
 		"scenes":          []interface{}{map[string]interface{}{"scene": "intro", "voiceover": "v1"}},
 		"voiceover_paths": []string{"/tmp/v.mp3"},
+		"delivery_plan": []interface{}{
+			map[string]interface{}{"destination_id": "d1", "priority": 0, "retry_budget": 3},
+		},
 	}
 	response, err := enq.Enqueue(context.Background(), payload, costmodel.DefaultRequirements())
 	if err != nil {
