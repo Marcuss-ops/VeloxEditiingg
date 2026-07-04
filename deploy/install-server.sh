@@ -37,6 +37,79 @@ ok()   { echo -e "${GREEN}[  OK]${NC} $*"; }
 warn() { echo -e "${YELLOW}[WARN]${NC} $*"; }
 fail() { echo -e "${RED}[FAIL]${NC} $*"; exit 1; }
 
+# preflight_ffprobe_invariant enforces the host-level precondition for
+# the VELOX_FFPROBE_VERIFY_ON_FINALIZE tripwire (RW-PROD-008 A4). When
+# the env var is set to the strict literal "true", the master requires
+# the `ffprobe` binary on PATH; without it, the Go gate surfaces
+# ErrFFProbeInvariantMissingBinary on every Finalize and loses the
+# tripwire's signal-to-noise advantage over a count-mismatch trip.
+# The check is a NO-OP when the env var is unset or commented out, so
+# default installs are unaffected.
+#
+# Detection semantics (mirror the Go gate's `os.Getenv(...) == "true"`
+# literal check EXACTLY so a production deploy never trips a count-
+# mismatch false-positive on a typo'd value):
+#   - Strict literal "true"  → enabled.
+#   - Anything else (unset,
+#     commented-out, "1",
+#     "TRUE", "yes", missing
+#     key, malformed line)
+#                                → no-op.
+# We accept systemd EnvironmentFile= canonical forms (bare `=true`,
+# quoted `="true"` / `='true'`, with optional trailing whitespace +
+# inline comment EOL) because systemd normalizes these to the same
+# env var value the Go gate will see.
+preflight_ffprobe_invariant() {
+    local env_file="$1"
+    # Defensive fail-loud: at the call site (Step 4a, between the
+    # env-file install at Step 4 and the validator at Step 4b) a
+    # missing env file is a regression, not a benign no-op. Matches
+    # the installer's audit-verdict #3 fail-fast mandate.
+    [[ -f "$env_file" ]] || fail "preflight_ffprobe_invariant: env file $env_file missing at Step 4a (Step 4 should have installed it from ${ENV_TEMPLATE:-<unknown>})"
+
+    local enabled=0
+    local raw_line val
+    # Read the first matching line, ignore the rest (operators don't
+    # duplicate env keys; tee + comment-by-`#` is the only valid
+    # second occurrence and operators don't author it).
+    raw_line="$(grep -E '^[[:space:]]*VELOX_FFPROBE_VERIFY_ON_FINALIZE=' "$env_file" 2>/dev/null | head -1 || true)"
+    if [[ -n "$raw_line" ]]; then
+        # Strip the leading key prefix.
+        val="${raw_line#*=}"
+        # Strip inline trailing comment after whitespace (default
+        # systemd EnvironmentFile= semantic: `#` outside quotes,
+        # preceded by whitespace or EOL). Doesn't perfectly handle
+        # `="true # inside quotes"` (matches a malformed operator
+        # line — systemd preserves the `#` so the gate would also
+        # NOT enable on this input; preflight agrees on no-op).
+        val="${val%% \#*}"
+        val="${val%%	#*}"
+        # Trim leading and trailing whitespace.
+        val="${val#"${val%%[![:space:]]*}"}"
+        val="${val%"${val##*[![:space:]]}"}"
+        # Strip surrounding single or double quotes (systemd
+        # EnvironmentFile= strips these too; preflight agrees).
+        case "$val" in
+            \"*\") val="${val#\"}"; val="${val%\"}" ;;
+            \'*\') val="${val#\'}"; val="${val%\'}" ;;
+        esac
+        # Trim again after quote removal.
+        val="${val#"${val%%[![:space:]]*}"}"
+        val="${val%"${val##*[![:space:]]}"}"
+        # Strict-literal match (NOT a substring test).
+        if [[ "$val" == "true" ]]; then
+            enabled=1
+        fi
+    fi
+
+    if [[ "$enabled" -eq 1 ]]; then
+        log "VELOX_FFPROBE_VERIFY_ON_FINALIZE=true detected. Verifying ffprobe on PATH..."
+        command -v ffprobe >/dev/null 2>&1 \
+            || fail "ffprobe binary missing from PATH. The VELOX_FFPROBE_VERIFY_ON_FINALIZE tripwire requires ffprobe (install via 'apt-get install -y ffmpeg' or distro equivalent). Either install ffprobe and re-run, or comment out VELOX_FFPROBE_VERIFY_ON_FINALIZE in $env_file to skip the tripwire."
+        ok "ffprobe binary found at $(command -v ffprobe)"
+    fi
+}
+
 # ─── Check prerequisites ────────────────────────────────────────────────────
 
 if [[ $EUID -ne 0 ]]; then
@@ -125,6 +198,14 @@ VALIDATOR="${SCRIPT_DIR}/validate-master-env.sh"
 if [[ ! -r "$VALIDATOR" ]]; then
     fail "validator not found at $VALIDATOR — re-pull deploy/ tree. Audit verdict block #3 requires the validator BEFORE any systemd operation."
 fi
+# Step 4a: ffprobe tripwire preflight (RW-PROD-008 A4). NO-OP unless
+# the operator uncommented VELOX_FFPROBE_VERIFY_ON_FINALIZE=true. If
+# they did, the ffprobe binary MUST be on PATH or the install fails
+# fast — better here than on the first Finalize RPC. Runs BEFORE the
+# validator so a missing env file at this stage trips the explicit
+# preflight message (validator's generic rc=2 is too opaque).
+preflight_ffprobe_invariant "$ENV_DST"
+
 log "Validating $ENV_DST..."
 # Capture the validator's exit code so we can distinguish:
 #   rc=2 → env file unreadable / missing / malformed at line 1

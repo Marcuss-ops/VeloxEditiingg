@@ -73,6 +73,14 @@ velox-worker-2 ansible_host=CHANGE_ME ansible_user=velox-deploy worker_id=velox-
 
 [velox_master:vars]
 ansible_python_interpreter=/usr/bin/python3
+# Host precondition for the VELOX_FFPROBE_VERIFY_ON_FINALIZE tripwire
+# (RW-PROD-008 A4). When the master env file enables that flag, the
+# master host MUST have the `ffprobe` binary on PATH. The
+# deploy/install-server.sh preflight blocks the install when the flag
+# is on but ffprobe is missing — but ansible-side, you can harden by
+# adding an `apt: name=ffmpeg` task before deploy-master-config.yml
+# enables the tripwire. Workers do NOT need ffprobe: the gate runs
+# master-side only (per RW-PROD-008 A4 scope).
 
 [velox_workers:vars]
 ansible_python_interpreter=/usr/bin/python3
