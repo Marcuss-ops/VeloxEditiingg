@@ -20,12 +20,12 @@ func TestBuildNarratedClipPayload_UsesRealVoiceoverDurationNotScenePlaceholder(t
 		},
 	}
 
-	entries, items, _, tracks, mode, err := buildNarratedClipPayload(scenes, withProbe(func(url string) float64 {
+	entries, items, _, tracks, mode, err := buildNarratedClipPayload(scenes, narratedClipOptions{probe: func(url string) float64 {
 		if url != "https://example.com/voice.mp3" {
 			t.Fatalf("unexpected probe URL: %q", url)
 		}
 		return 7.25
-	}))
+	}})
 	if err != nil {
 		t.Fatalf("buildNarratedClipPayload: %v", err)
 	}
@@ -160,10 +160,10 @@ func TestBuildNarratedClipPayload_MixedScenesKeepCanonicalOffsets(t *testing.T) 
 		},
 	}
 
-	entries, items, _, tracks, _, err := buildNarratedClipPayload(scenes, withProbe(func(string) float64 {
+	entries, items, _, tracks, _, err := buildNarratedClipPayload(scenes, narratedClipOptions{probe: func(string) float64 {
 		t.Fatal("probe must not run when explicit voiceover duration is present")
 		return 0
-	}))
+	}})
 	if err != nil {
 		t.Fatalf("build narrated payload: %v", err)
 	}
@@ -201,10 +201,10 @@ func TestBuildNarratedClipPayload_ExplicitDurationWinsWithoutProbe(t *testing.T)
 		},
 	}
 
-	_, items, _, tracks, _, err := buildNarratedClipPayload(scenes, withProbe(func(string) float64 {
+	_, items, _, tracks, _, err := buildNarratedClipPayload(scenes, narratedClipOptions{probe: func(string) float64 {
 		t.Fatal("probe must not run for explicit voiceover_duration_seconds")
 		return 0
-	}))
+	}})
 	if err != nil {
 		t.Fatalf("build narrated payload: %v", err)
 	}
@@ -228,7 +228,7 @@ func TestBuildNarratedClipPayload_RejectsUnmeasurableVoiceover(t *testing.T) {
 		},
 	}
 
-	_, _, _, _, _, err := buildNarratedClipPayload(scenes, withProbe(func(string) float64 { return 0 }))
+	_, _, _, _, _, err := buildNarratedClipPayload(scenes, narratedClipOptions{probe: func(string) float64 { return 0 }})
 	if err == nil {
 		t.Fatal("expected an error for an unmeasurable voiceover")
 	}
@@ -309,10 +309,10 @@ func TestBuildNarratedClipPayload_LongFinalClipPreservesOffsetAfterBed(t *testin
 		},
 	}
 
-	entries, items, _, tracks, _, err := buildNarratedClipPayload(scenes, withProbe(func(string) float64 {
+	entries, items, _, tracks, _, err := buildNarratedClipPayload(scenes, narratedClipOptions{probe: func(string) float64 {
 		t.Fatal("probe must not run when explicit voiceover_duration_seconds is present")
 		return 0
-	}))
+	}})
 	if err != nil {
 		t.Fatalf("buildNarratedClipPayload: %v", err)
 	}
@@ -357,10 +357,10 @@ func TestBuildNarratedClipPayload_VoiceoverFreeSceneEmitsNoAudioBed(t *testing.T
 		},
 	}
 
-	entries, items, clips, tracks, mode, err := buildNarratedClipPayload(scenes, withProbe(func(string) float64 {
+	entries, items, clips, tracks, mode, err := buildNarratedClipPayload(scenes, narratedClipOptions{probe: func(string) float64 {
 		t.Fatal("probe must never run when there is no voiceover URL")
 		return 0
-	}))
+	}})
 	if err != nil {
 		t.Fatalf("buildNarratedClipPayload: %v", err)
 	}

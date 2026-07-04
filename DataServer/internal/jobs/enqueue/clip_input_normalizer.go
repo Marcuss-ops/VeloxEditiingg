@@ -39,7 +39,7 @@ func normalizeClipPayload(rawPayload map[string]interface{}) ([]map[string]inter
 // per-scene clip_item list.
 func normalizeScenesInput(rawPayload map[string]interface{}, scenes []map[string]interface{}) ([]map[string]interface{}, []map[string]interface{}, []string, []map[string]interface{}, string, error) {
 	if supportsNarratedClipScenes(scenes) {
-		return buildNarratedClipPayload(scenes, withFallbackURLs(sceneFallbackNarrationClipURLs(rawPayload)))
+		return buildNarratedClipPayload(scenes, narratedClipOptions{fallbackNarrationClipURLs: sceneFallbackNarrationClipURLs(rawPayload)})
 	}
 
 	sceneEntries := make([]map[string]interface{}, 0, len(scenes))

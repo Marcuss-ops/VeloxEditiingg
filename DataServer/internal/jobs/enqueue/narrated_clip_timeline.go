@@ -23,25 +23,6 @@ type narratedClipOptions struct {
 	probe                     audioDurationProbe
 }
 
-// narratedClipOption is a functional-option setter for buildNarratedClipPayload.
-// Package-private; the helpers below are also package-private (no new
-// exported surface added by this refactor).
-type narratedClipOption func(*narratedClipOptions)
-
-// withProbe overrides the audio-duration detector. Used by tests to
-// inject a deterministic probe (typically `func(string) float64 { return X }`).
-func withProbe(p audioDurationProbe) narratedClipOption {
-	return func(o *narratedClipOptions) { o.probe = p }
-}
-
-// withFallbackURLs supplies a per-scene fallback narration-URL pool
-// sourced from the raw payload's top-level stock_clip_paths /
-// intro_clip_paths. When a scene lacks its own stock_link, the i-th
-// entry of this pool is borrowed as the narration bed.
-func withFallbackURLs(urls []string) narratedClipOption {
-	return func(o *narratedClipOptions) { o.fallbackNarrationClipURLs = urls }
-}
-
 // sceneFallbackNarrationClipURLs returns the top-level stock paths
 // declared at the payload root (rather than per-scene bindings). Used
 // when a scene has no explicit `stock_link` / `narration_clip_link`
@@ -81,15 +62,16 @@ func supportsNarratedClipScenes(scenes []map[string]interface{}) bool {
 //   - the final clip emits an audio_track starting after the voiceover
 //     bed so the original clip audio survives the worker's final mux step
 //
-// Optional knobs are passed as functional options. The two
-// production-relevant options are WithProbe (test override) and
-// WithFallbackURLs (raw-payload top-level stock pool).
-func buildNarratedClipPayload(scenes []map[string]interface{}, opts ...narratedClipOption) ([]map[string]interface{}, []map[string]interface{}, []string, []map[string]interface{}, string, error) {
-	o := &narratedClipOptions{probe: sharedmedia.DetectAudioDurationSecs}
-	for _, opt := range opts {
-		opt(o)
+// opts carries detection-time overrides. probe=nil keeps the default
+// sharedmedia.DetectAudioDurationSecs detector; fallbackNarrationClipURLs
+// (raw payload's top-level stock_clip_paths / intro_clip_paths pool) is
+// the per-scene fallback narration URL pool. Pass narratedClipOptions{}
+// for production defaults.
+func buildNarratedClipPayload(scenes []map[string]interface{}, opts narratedClipOptions) ([]map[string]interface{}, []map[string]interface{}, []string, []map[string]interface{}, string, error) {
+	probe := opts.probe
+	if probe == nil {
+		probe = sharedmedia.DetectAudioDurationSecs
 	}
-	probe := o.probe
 
 	sceneEntries := make([]map[string]interface{}, 0, len(scenes))
 	items := make([]map[string]interface{}, 0, len(scenes)*2)
@@ -98,7 +80,7 @@ func buildNarratedClipPayload(scenes []map[string]interface{}, opts ...narratedC
 	offsetSeconds := 0.0
 
 	for i, scene := range scenes {
-		narrationURL := sceneNarrationClipURL(scene, o.fallbackNarrationClipURLs, i)
+		narrationURL := sceneNarrationClipURL(scene, opts.fallbackNarrationClipURLs, i)
 		finalClipURL := sceneFinalClipURL(scene)
 		voiceoverURL := sceneVoiceoverURL(scene)
 		if finalClipURL == "" && narrationURL == "" {
