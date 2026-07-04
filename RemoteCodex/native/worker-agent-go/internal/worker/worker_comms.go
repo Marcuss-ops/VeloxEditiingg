@@ -38,7 +38,7 @@ const (
 //
 // Used at worker init time to size the concurrency limiter; runtime
 // capacity is read from w.concurrencyLimiter.MaxActiveJobs() everywhere
-// else (PR-3.5 invariant: single source of truth for max_parallel_jobs).
+// else (single source of truth for max_parallel_jobs).
 func detectMaxParallelJobs() int {
 	cpuCount := runtime.NumCPU()
 	if cpuCount <= 0 {
@@ -139,7 +139,7 @@ func (w *Worker) getStatus() Status {
 }
 
 // sendHeartbeat sends a single heartbeat to the master via transport.Send().
-// PR-3.5: capabilities are derived from Worker.capabilitiesMap() —
+// Capabilities are derived from Worker.capabilitiesMap() —
 // the same single helper buildHello uses. Any wire-shape change
 // touches ONE function; hello and heartbeat stay in lock-step.
 func (w *Worker) sendHeartbeat(ctx context.Context) error {
@@ -184,7 +184,7 @@ func (w *Worker) sendHeartbeat(ctx context.Context) error {
 		extraMap["recent_errors_count"] = len(recentErrors)
 	}
 
-	// PR-3.6 / F4: attach typed WorkerResourceCounters.
+	// Attach typed WorkerResourceCounters.
 	if w.sampler != nil {
 		if snap := w.sampler.Latest(); snap != nil {
 			if m := snap.ToWireMap(); m != nil {

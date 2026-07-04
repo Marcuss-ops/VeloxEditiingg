@@ -1,6 +1,6 @@
-// Package executor — capability report builder (PR-3.5).
+// Package executor — capability report builder.
 //
-// PR-3.5 derives the worker's hello / heartbeat capability payload
+// Derives the worker's hello / heartbeat capability payload
 // directly from Registry.Descriptors(). This file is the SINGLE
 // place where the mapping lives: every hello and every heartbeat on
 // the wire end up here, so a change in executor shape ONLY requires
@@ -17,7 +17,7 @@ import (
 //
 // Invariants:
 //   - Host and Executors are non-nil.
-//   - SchemaVersion is api.CapabilitySchemaVersion (== 1 in PR-3.5).
+//   - SchemaVersion is api.CapabilitySchemaVersion.
 //   - Nil registry PANICS — this is consistent with WithRegistry(nil)
 //     panic-on-nil. Empty registry is valid and yields an empty
 //     Executors slice; callers who want an empty registry should

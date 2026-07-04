@@ -36,9 +36,8 @@ type workerOptions struct {
 // WithRegistry replaces the default (empty) executor registry. The
 // caller owns the registry — Register calls after New() still take
 // effect because the worker holds the same pointer.
-//
-// PR-3.5: this is the single supported way to surface hello/heartbeat
-// capabilities. PR-3.6 will use the same registry for dispatch.
+//// This is the single supported way to surface hello/heartbeat
+	// capabilities.
 //
 // Passing nil panics loudly. The previous silent fallback to a fresh
 // empty registry masked operator bugs (worker booted, advertised zero
@@ -53,7 +52,7 @@ func WithRegistry(reg *executor.Registry) Option {
 	}
 }
 
-// WithCache (PR-3.7) wires a persistent local cache into the worker.
+// WithCache wires a persistent local cache into the worker.
 // The same instance is exposed via Worker.cache and is threaded into
 // the TaskRunner built by New() so cache hits/misses/evictions/
 // corruptions appear in TaskExecutionReport.Metrics.
@@ -68,12 +67,10 @@ func WithCache(c *cache.PersistedLocalCache) Option {
 	return func(o *workerOptions) {
 		o.cache = c
 	}
-}
-
-// WithBlobs (PR-3.7) wires a content-addressed blob store into the
-// worker. Same instance is exposed via Worker.blobs and threaded
-// into the TaskRunner built by New(); the upload queue is consumed
-// by PR-3.8 master-side transport.
+}// WithBlobs wires a content-addressed blob store into the
+	// worker. Same instance is exposed via Worker.blobs and threaded
+	// into the TaskRunner built by New(); the upload queue is consumed
+	// by master-side transport.
 //
 // Passing nil panics loudly; omit WithBlobs to fall back to noop.
 func WithBlobs(b *blob.BlobArtifacts) Option {
@@ -89,10 +86,9 @@ func WithBlobs(b *blob.BlobArtifacts) Option {
 // Returns an error if the initial transport setup fails (bad TLS config,
 // missing control_grpc_url, insecure flag mismatch). Callers MUST check
 // the error before calling Start().
-//
-// Options (PR-3.5): pass worker.WithRegistry(reg) to install a custom
-// executor registry; otherwise an empty registry is used so hello is
-// emitted immediately and dispatch upgrades in PR-3.6 are non-breaking.
+//// Options: pass worker.WithRegistry(reg) to install a custom
+	// executor registry; otherwise an empty registry is used so hello is
+	// emitted immediately and dispatch upgrades are non-breaking.
 func New(cfg *config.WorkerConfig, version string, opts ...Option) (*Worker, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid worker config: %w", err)
@@ -180,8 +176,8 @@ func New(cfg *config.WorkerConfig, version string, opts ...Option) (*Worker, err
 		return nil, fmt.Errorf("transport factory: %w", err)
 	}
 
-	// PR-3.7: build the TaskRunner from registry + cache + blobs. The
-	// runner is shared by future executeTask routes (PR-3.8) and is also
+	// Build the TaskRunner from registry + cache + blobs. The
+	// runner is shared by future executeTask routes and is also
 	// where cache + blob counters get surfaced as report.Metrics entries.
 	tr := taskrunner.NewTaskRunner(wo.registry, log)
 	if wo.cache != nil {
@@ -225,7 +221,7 @@ func New(cfg *config.WorkerConfig, version string, opts ...Option) (*Worker, err
 		cache:              wo.cache,
 		blobs:              wo.blobs,
 		taskRunner:         tr,
-		// PR-3.6 / F4: resource sampler. Empty procRoot/sysRoot
+		// Resource sampler. Empty procRoot/sysRoot
 		// defaults to /proc + /sys. cfg.WorkDir may be empty on
 		// minimal test setups; the sampler tolerates that path
 		// (statvfs + resolveWorkDirDevice degrade to best-effort).

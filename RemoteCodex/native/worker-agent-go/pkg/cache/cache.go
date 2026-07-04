@@ -1,7 +1,7 @@
 // Package cache provides a persistent, content-addressed local cache
 // with LRU eviction, leases/pins, and SHA-256 hash verification.
 //
-// PR-3.7 design invariants:
+// Design invariants:
 //   - SHA-256 keyed (industry default; matches git-style content addressing).
 //   - On-disk layout: $root/<2-hex-prefix>/<full-hex> for sharded directories.
 //   - LRU eviction: byte-budget based. Default 256 MiB, configurable via
@@ -164,7 +164,7 @@ func (c *PersistedLocalCache) Get(_ context.Context, hash string) ([]byte, bool,
 		return nil, false, fmt.Errorf("cache: read %s: %w", hash, err)
 	}
 
-	// Always verify hash on read (PR-3.7 invariant).
+	// Always verify hash on read.
 	sum := sha256.Sum256(data)
 	if got := hex.EncodeToString(sum[:]); got != hash {
 		c.corruptions.Add(1)

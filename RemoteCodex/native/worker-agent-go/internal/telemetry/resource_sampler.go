@@ -19,7 +19,7 @@
 //   - /proc/net/dev: cumulative byte counters. Emit cumulative total.
 //   - syscall.Statvfs: instant Bsize/Bavail/Blocks free bytes.
 //
-// PR-3.6 invariants:
+// Invariants:
 //   - One Sampler instance per worker; the same instance owns the proc
 //     reader closures and the emit-cadence cursor.
 //   - All /proc reads tolerate missing files (containers / chroots /
@@ -67,7 +67,7 @@ type SampledResources struct {
 	MemoryUsedBytes      int64
 	SwapUsedBytes        int64
 
-	// Worker-local temp disk accounting. PR-3.6 keeps these on the
+	// Worker-local temp disk accounting. Keeps these on the
 	// typed envelope (proto_worker_temp_bytes_written /
 	// proto_worker_temp_files_open) so master-side cost basis
 	// (F1 handler_jobs_metrics.go::executionMetricsToCostBasis) can
@@ -116,7 +116,7 @@ type SampledResources struct {
 }
 
 // SampledHost is the boot-time / one-shot host layer used by
-// api.HostInfo (PR-3.6 future markers at worker.go:177-183).
+// api.HostInfo (future markers at worker.go:177-183).
 // SampledHost is cheap to recompute; the worker stores it on *Worker
 // and refreshes it on a slow cadence (1 minute) so HasGPU / RAMBytes
 // DiskFreeBytes reflect current reality (e.g. nvidia module loaded

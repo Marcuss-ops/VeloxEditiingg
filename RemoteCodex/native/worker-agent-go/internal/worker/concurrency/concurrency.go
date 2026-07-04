@@ -1,6 +1,6 @@
 // Package concurrency provides semaphore-based concurrency limiting for job execution.
 //
-// PR-3.5 redesign: the implementation is now TRULY resizable.
+// The implementation is now TRULY resizable.
 // SetMaxActiveJobs atomically updates the cap AND broadcasts to any
 // waiters blocked at capacity so they can evaluate the new ceiling
 // immediately. Public API (NewConcurrencyLimiter / Acquire / Release /
@@ -101,7 +101,7 @@ func NewConcurrencyLimiter(maxActiveJobs int) *ConcurrencyLimiter {
 // success, ctx.Err() if the caller's context is canceled, or "limiter
 // stopped" if the limiter was Stop()ed.
 //
-// PR-3.5 priority handling (post-review fix): priority is stats-only.
+// Priority handling (post-review fix): priority is stats-only.
 // All callers share one slot counter and one cap. Removing the
 // temporary-cap-bump preemption closes a race where two concurrent
 // priority>=3 calls could each snapshot the same cap, both bump, and
@@ -249,14 +249,14 @@ func (cl *ConcurrencyLimiter) Release() {
 }
 
 // MaxActiveJobs returns the configured (advertised) maximum concurrent
-// jobs. PR-3.5 race-free: atomic load so concurrent SetMaxActiveJobs
+// jobs. Race-free: atomic load so concurrent SetMaxActiveJobs
 // writes cannot produce torn reads on the wire.
 func (cl *ConcurrencyLimiter) MaxActiveJobs() int {
 	return int(atomic.LoadInt64(&cl.maxActiveJobs))
 }
 
 // SetMaxActiveJobs updates the maximum concurrent jobs limit at runtime.
-// PR-3.5 invariant: the new value IS effective capacity. The atomic
+// The new value IS effective capacity. The atomic
 // store is paired with cond.Broadcast so any queued waiters blocked at
 // the old cap re-evaluate admission.
 func (cl *ConcurrencyLimiter) SetMaxActiveJobs(max int) {
@@ -269,7 +269,7 @@ func (cl *ConcurrencyLimiter) SetMaxActiveJobs(max int) {
 	cl.mu.Unlock()
 }
 
-// Stats returns the current concurrency statistics. PR-3.5 race-free
+// Stats returns the current concurrency statistics. Race-free
 // atomic reads across the board.
 func (cl *ConcurrencyLimiter) Stats() ConcurrencyStats {
 	active := atomic.LoadInt32(&cl.activeJobs)
@@ -292,7 +292,7 @@ func (cl *ConcurrencyLimiter) Stats() ConcurrencyStats {
 
 // CanAcceptJob is a best-effort non-blocking check. Returns true if a
 // slot is currently free. May become stale immediately on return; use
-// Acquire for guaranteed admission. PR-3.5 (post-review fix):
+// Acquire for guaranteed admission.
 // priority no longer influences admission decisions. Callers that
 // need priority semantics should layer their own admission gate
 // outside this limiter.

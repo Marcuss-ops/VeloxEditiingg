@@ -1,8 +1,8 @@
 // Package blob provides content-addressed blob storage with publish-time
 // hash verification and an in-memory upload queue for master-side
-// publication (PR-3.8 will consume the queue via the master transport).
+// publication (consumed via the master transport).
 //
-// PR-3.7 invariants:
+// Invariants:
 //   - Put verifies hash matches data; returns ErrHashMismatch on mismatch
 //     WITHOUT persisting. This protects against silent upstream corruption.
 //   - Get hashverifies on read; corruption bumps the corruption counter and
@@ -52,10 +52,8 @@ type BlobStats struct {
 	Bytes           int64 `json:"bytes"`
 	Entries         int   `json:"entries"`
 	QueueDepth      int   `json:"queue_depth"`
-}
-
-// UploadJob is one pending master-upload job. PR-3.8's transport
-// implementation will pull these off the channel.
+}// UploadJob is one pending master-upload job. The transport
+	// implementation will pull these off the channel.
 type UploadJob struct {
 	Hash       string    `json:"hash"`
 	SizeBytes  int64     `json:"size_bytes"`
@@ -90,7 +88,7 @@ type BlobArtifacts struct {
 }
 
 // NewBlobArtifacts constructs the store and starts one background
-// processor goroutine that drains uploadCh. PR-3.8 will replace the
+// processor goroutine that drains uploadCh. It will replace the
 // noop processor body with a master-transport publish call.
 func NewBlobArtifacts(opts BlobOptions) (*BlobArtifacts, error) {
 	if opts.Root == "" {
@@ -226,14 +224,12 @@ func (b *BlobArtifacts) Close() error {
 	})
 	b.uploadWG.Wait()
 	return nil
-}
-
-// processUploads drains uploadCh. PR-3.8 will replace the noop sink
-// with a master-transport publish call (see UploadJob).
+}// processUploads drains uploadCh. It will replace the noop sink
+	// with a master-transport publish call (see UploadJob).
 func (b *BlobArtifacts) processUploads() {
 	defer b.uploadWG.Done()
 	for range b.uploadCh {
-		// PR-3.7 stub: count received, do nothing.
+		// Stub: count received, do nothing.
 	}
 }
 
