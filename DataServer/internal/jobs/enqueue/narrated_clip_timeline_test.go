@@ -306,7 +306,7 @@ func TestBuildNarratedClipPayload_OffsetClock(t *testing.T) {
 	probe := func(string) float64 { probeCalls++; return 5.0 }
 
 	_, items, clips, audioTracks, mode, err := buildNarratedClipPayload(
-		scenes, withProbe(probe),
+		scenes, narratedClipOptions{probe: probe},
 	)
 	if err != nil {
 		t.Fatalf("buildNarratedClipPayload: %v", err)
@@ -366,7 +366,7 @@ func TestBuildNarratedClipPayload_RequiresClipOrNarration(t *testing.T) {
 	scenes := []map[string]interface{}{
 		{"text": "scene with no clip nor narration"},
 	}
-	if _, _, _, _, _, err := buildNarratedClipPayload(scenes); err == nil {
+	if _, _, _, _, _, err := buildNarratedClipPayload(scenes, narratedClipOptions{}); err == nil {
 		t.Fatal("want error when scene has neither clip nor narration; got nil")
 	}
 }
@@ -394,7 +394,7 @@ func TestBuildNarratedClipPayload_FallbackPoolCoveredBySceneIndex(t *testing.T) 
 	}
 	_, items, _, audioTracks, mode, err := buildNarratedClipPayload(
 		scenes,
-		withFallbackURLs([]string{"https://fallback/0.mp4"}),
+		narratedClipOptions{fallbackNarrationClipURLs: []string{"https://fallback/0.mp4"}},
 	)
 	if err != nil {
 		t.Fatalf("want success when fallback pool + per-scene clip; got err: %v", err)
