@@ -148,7 +148,13 @@ CREATE TABLE job_deliveries (
 // schema applied. Each call gets its own DB \u2014 tests are isolated.
 func openPropagationDB(t *testing.T) *sql.DB {
 	t.Helper()
-	db, err := sql.Open("sqlite3", ":memory:")
+	// Shared-cache in-memory DSN so concurrent goroutines (and the
+	// background-connection path go-sqlite3 may take on a busy pool)
+	// land on the SAME underlying DB instance. The plain ":memory:"
+	// DSN is private to each pooled connection — a 2nd connection
+	// gets a fresh empty DB and surfaces "no such table:
+	// job_delivery_plans". Mirrors openPost048TestDB above.
+	db, err := sql.Open("sqlite3", "file::memory:?cache=shared&_busy_timeout=5000")
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}

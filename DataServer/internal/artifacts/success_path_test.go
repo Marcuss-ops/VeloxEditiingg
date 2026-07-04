@@ -116,6 +116,7 @@ CREATE TABLE job_deliveries (
 	artifact_id      TEXT,
 	destination_id   TEXT,
 	status           TEXT,
+	max_attempts     INTEGER NOT NULL DEFAULT 5,
 	idempotency_key  TEXT,
 	remote_id        TEXT,
 	remote_url       TEXT,
@@ -569,10 +570,10 @@ func setupJobAndAttempt(t *testing.T, db *sql.DB, jobID, workerID, leaseID strin
 
 // Compile-time interface checks.
 var (
-	_ artifacts.UploadSessionWriter    = (*artifacts.SQLiteUploadSessionWriter)(nil)
-	_ artifacts.FinalizationWriter     = (*artifacts.SQLiteFinalizeWriter)(nil)
-	_ artifacts.ArtifactReader         = (*artifacts.SQLiteArtifactReader)(nil)
-	_ artifacts.AuthReader             = (*artifacts.SQLiteAuthReader)(nil)
+	_ artifacts.UploadSessionWriter = (*artifacts.SQLiteUploadSessionWriter)(nil)
+	_ artifacts.FinalizationWriter  = (*artifacts.SQLiteFinalizeWriter)(nil)
+	_ artifacts.ArtifactReader      = (*artifacts.SQLiteArtifactReader)(nil)
+	_ artifacts.AuthReader          = (*artifacts.SQLiteAuthReader)(nil)
 )
 
 // =====================================================================
