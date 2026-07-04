@@ -20,6 +20,16 @@ func openTestDB(t *testing.T) *sql.DB {
 	t.Helper()
 	// Append `_busy_timeout=5000` so concurrent goroutines don't
 	// immediately trip SQLITE_BUSY when the migration-runner takes the writer lock.
+	// Canonical DSN pattern for in-memory shared test DBs across
+	// DataServer/internal/store/*_test.go is
+	//   file:<name>?mode=memory&cache=shared&_busy_timeout=5000
+	// `cache=shared` lets sibling goroutines share the same in-memory db, but
+	// creates writer/reader contention: while the migration-runner holds the
+	// writer lock, a concurrent reader blocks; without `_busy_timeout=5000`
+	// that reader returns SQLITE_BUSY immediately instead of waiting it out.
+	// Keep both flags together when copying this DSN into new tests.
+	// This helper is the single source of truth for the migrations-package
+	// tests.
 	db, err := sql.Open("sqlite3", fmt.Sprintf("file:%s?mode=memory&cache=shared&_busy_timeout=5000", t.Name()))
 	if err != nil {
 		t.Fatalf("open in-memory db: %v", err)
