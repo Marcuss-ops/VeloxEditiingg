@@ -95,6 +95,7 @@ func mergeExecutorsInto(w *WorkerProfile, caps map[string]interface{}) {
 	if !ok || len(raw) == 0 {
 		return
 	}
+	seenDeterministic := false
 	for _, item := range raw {
 		m, ok := item.(map[string]interface{})
 		if !ok {
@@ -107,7 +108,12 @@ func mergeExecutorsInto(w *WorkerProfile, caps map[string]interface{}) {
 			w.TemporalMode = mergeTemporalMode(w.TemporalMode, TemporalMode(tm))
 		}
 		if d, ok := m["deterministic"].(bool); ok {
-			w.Deterministic = w.Deterministic && d
+			if !seenDeterministic {
+				w.Deterministic = d
+				seenDeterministic = true
+			} else {
+				w.Deterministic = w.Deterministic && d
+			}
 		}
 		if c, ok := m["cacheable"].(bool); ok && c {
 			w.Cacheable = true
