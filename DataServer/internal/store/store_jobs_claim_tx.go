@@ -1,26 +1,14 @@
 package store
 
-// store_jobs_claim_tx.go — shared private helper for the two
-// exported job-claim paths in this package:
+// store_jobs_claim_tx.go — shared private write-side helper for the
+// two exported job-claim paths (FIFO + ranked/cost-model):
 //
-//   * ClaimNextPendingJob           (FIFO, in store_jobs_claim_fifo.go)
-//   * ClaimNextPendingJobForWorker  (ranked/cost-model,
-//                                    in store_jobs_claim_ranked.go)
+//   - ClaimNextPendingJob          (store_jobs_claim_fifo.go)
+//   - ClaimNextPendingJobForWorker (store_jobs_claim_ranked.go)
 //
-// claimJobTx is the single source of truth for the write side of a
-// job claim: it builds the result_json overlay, runs the UPDATE jobs
-// CAS gated on PENDING, and appends the LEASED history entry. It does
-// NOT commit and does NOT log the job_claimed event — the caller
-// owns tx lifecycle (begin/commit/rollback) and the path-specific
-// `LogJobEvent` payload (ranked adds rank_score / rank_eligible /
-// rank_bandwidth_fit on top of the FIFO base).
-//
-// Pruning regression insurance: this helper replaces the per-row CAS
-// body that was duplicated in both FIFO and ranked paths before
-// Blocco 5 step #2 (same PR-stack as the supervisor canonical-purity
-// split done in step #1). Future claim-shape changes MUST land here
-// first — a copy-paste between the two callers reintroduces the
-// duplication this file is meant to retire.
+// claimJobTx runs the per-row write side (result_json overlay, CAS
+// gated on PENDING, LEASED history append) and does NOT commit; the
+// caller owns tx lifecycle and the path-specific LogJobEvent payload.
 
 import (
 	"bytes"
@@ -60,34 +48,9 @@ type leaseOutcome struct {
 	Requirements costmodel.JobRequirements
 }
 
-// claimJobTx is the SHARED write-side helper for both the FIFO claim
-// path (ClaimNextPendingJob) and the ranked-cost claim path
-// (ClaimNextPendingJobForWorker).
-//
-// Sequence (all on the supplied open tx, NO commit):
-//  1. Merge existing result_json (when present) into a map, overlay
-//     LEASED-state fields (status, lease_id, lease_expiry, attempt,
-//     contract_version=3, updated_at).
-//  2. UPDATE jobs SET ... WHERE job_id = ? AND UPPER(status) = 'PENDING'
-//     (CAS gated on PENDING — zero affected rows → ErrClaimCASLost).
-//  3. Append LEASED history entry via replaceJobHistoryTx.
-//
-// historyMessage is the human-readable line stamped into job_history;
-// FIFO passes `Job assigned to worker <id>`, ranked passes
-// `Job assigned to worker <id> (rank-path)`.
-//
-// requirements is passed through (the caller already has it from the
-// pre-CAS row scan); claimJobTx echoes it into the returned
-// leaseOutcome so callers don't need a second scan.
-//
-// newRetry is the post-CAS retry count (prior_retry + 1). The caller
-// is responsible for the +1 because it has the prior retry count
-// locally from the candidate scan.
-//
-// ctx is reserved for future cancellation passthrough; the current
-// implementation does not currently respect ctx cancellation mid-CAS
-// because SQLite transactions are atomic and cannot be interrupted
-// safely mid-statement.
+// claimJobTx runs the shared write-side on the supplied open tx
+// (NO commit): result_json overlay, CAS UPDATE gated on PENDING,
+// append LEASED history. Zero-affected UPDATE returns ErrClaimCASLost.
 func (s *SQLiteStore) claimJobTx(
 	_ context.Context,
 	tx *sql.Tx,
@@ -115,8 +78,7 @@ func (s *SQLiteStore) claimJobTx(
 	leaseExpiry := now.UTC().Add(30 * time.Minute).Format(time.RFC3339)
 	leaseID := uuid.NewString()
 
-	// ── result_json overlay (PR #7/#9: lease_id, attempt, lease_expiry
-	// kept for ClaimNextResult parsing — runtime fields removed).
+	// ── result_json overlay (LEASE-state fields kept for downstream parsing).
 	resultMap := make(map[string]any)
 	if sourceResultJSON != "" {
 		_ = json.Unmarshal([]byte(sourceResultJSON), &resultMap)
@@ -134,7 +96,7 @@ func (s *SQLiteStore) claimJobTx(
 		return zero, err
 	}
 
-	// ── CAS-gated UPDATE. PR #9: assigned_to column dropped.
+	// ── CAS-gated UPDATE (status must be 'PENDING'); zero affected → ErrClaimCASLost.
 	res, err := tx.Exec(
 		`UPDATE jobs
 		 SET status = ?, worker_name = ?, attempt = ?,
