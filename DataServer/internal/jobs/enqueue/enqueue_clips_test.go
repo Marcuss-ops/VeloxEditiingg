@@ -232,6 +232,114 @@ func TestResolveSceneFinalClipDuration_HasUnambiguousFallbacks(t *testing.T) {
 	}
 }
 
+// TestBuildNarratedClipPayload_LongFinalClipPreservesOffsetAfterBed nails down
+// the asymmetry where the final clip is much longer than the voiceover bed.
+// This is the canonical "voiceover narration + long stock footage" news/doc
+// pattern: the voiceover is short (a sentence), but the underlying clip spans
+// tens of seconds. The progressive offset for the NEXT voiceover must accumulate
+// the voiceover bed duration AND the long final clip duration — not collapse
+// either value.
+func TestBuildNarratedClipPayload_LongFinalClipPreservesOffsetAfterBed(t *testing.T) {
+	t.Parallel()
+
+	scenes := []map[string]interface{}{
+		{
+			"stock_link":                  "stock-1.mp4",
+			"clip_link":                   "final-1.mp4",
+			"voiceover_link":              "voice-1.mp3",
+			"voiceover_duration_seconds":  2.0,
+			"final_clip_duration_seconds": 30.0,
+		},
+		{
+			"stock_link":                  "stock-2.mp4",
+			"clip_link":                   "final-2.mp4",
+			"voiceover_link":              "voice-2.mp3",
+			"voiceover_duration_seconds":  5.0,
+			"final_clip_duration_seconds": 2.0,
+		},
+	}
+
+	entries, items, _, tracks, _, err := buildNarratedClipPayloadWithDurationProbe(scenes, func(string) float64 {
+		t.Fatal("probe must not run when explicit voiceover_duration_seconds is present")
+		return 0
+	})
+	if err != nil {
+		t.Fatalf("buildNarratedClipPayloadWithDurationProbe: %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("entries = %d, want 2", len(entries))
+	}
+	if len(items) != 4 {
+		t.Fatalf("items = %d, want 4 (2 voiceover_bed + 2 scene_clip)", len(items))
+	}
+	if len(tracks) != 2 {
+		t.Fatalf("audio tracks = %d, want 2", len(tracks))
+	}
+	// Scene 1: voiceover bed (2s) followed by long final clip (30s).
+	assertDuration(t, entries[0]["voiceover_duration_seconds"], 2.0, "scene-1 voiceover duration")
+	assertDuration(t, entries[0]["final_clip_duration_seconds"], 30.0, "scene-1 long final clip duration")
+	assertDuration(t, entries[0]["duration_seconds"], 32.0, "scene-1 total duration")
+	assertDuration(t, items[0]["duration"], 2.0, "scene-1 voiceover_bed item duration")
+	assertDuration(t, items[1]["duration"], 30.0, "scene-1 scene_clip item duration (long)")
+	// Scene 1 audio track: offset 0.
+	assertDuration(t, tracks[0]["start_time_offset"], 0, "scene-1 audio offset")
+	// Scene 2 audio track: offset MUST be 32 (2+30), proving the long final clip
+	// is fully accounted for in the progressive offset.
+	assertDuration(t, tracks[1]["start_time_offset"], 32, "scene-2 audio offset after long final clip")
+	assertDuration(t, entries[1]["duration_seconds"], 7.0, "scene-2 total duration")
+}
+
+// TestBuildNarratedClipPayload_VoiceoverFreeSceneEmitsNoAudioTrack nails down
+// contract rule 6: a scene with no voiceover_link MUST NOT emit a synthetic
+// voiceover_bed item or an audio track. The existing mixed test only checks
+// the track count for the entire payload; this single-scene test makes the
+// per-scene behavior explicit and fails fast if someone reintroduces a
+// "fallback audio bed" shortcut.
+func TestBuildNarratedClipPayload_VoiceoverFreeSceneEmitsNoAudioBed(t *testing.T) {
+	t.Parallel()
+
+	scenes := []map[string]interface{}{
+		{
+			"clip_link":                   "final-only.mp4",
+			"duration_seconds":            7.0,
+			"final_clip_duration_seconds": 7.0,
+			// deliberately no voiceover_link / reference_voiceover / etc.
+		},
+	}
+
+	entries, items, clips, tracks, mode, err := buildNarratedClipPayloadWithDurationProbe(scenes, func(string) float64 {
+		t.Fatal("probe must never run when there is no voiceover URL")
+		return 0
+	})
+	if err != nil {
+		t.Fatalf("buildNarratedClipPayloadWithDurationProbe: %v", err)
+	}
+	if mode != "clip_stock" {
+		t.Fatalf("mode = %q, want clip_stock", mode)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("entries = %d, want 1", len(entries))
+	}
+	if len(items) != 1 {
+		t.Fatalf("items = %d, want 1 (scene_clip only — no synthetic voiceover_bed)", len(items))
+	}
+	if role, _ := items[0]["role"].(string); role != "scene_clip" {
+		t.Fatalf("items[0].role = %q, want scene_clip", role)
+	}
+	if got := items[0]["url"]; got != "final-only.mp4" {
+		t.Fatalf("items[0].url = %v, want final-only.mp4", got)
+	}
+	if len(tracks) != 0 {
+		t.Fatalf("audio tracks = %d, want 0 — no synthetic audio bed on voiceover-free scenes", len(tracks))
+	}
+	assertDuration(t, entries[0]["voiceover_duration_seconds"], 0, "no voiceover")
+	assertDuration(t, entries[0]["final_clip_duration_seconds"], 7.0, "final clip duration")
+	assertDuration(t, entries[0]["duration_seconds"], 7.0, "equal to final_clip when no voiceover")
+	if len(clips) != 1 || clips[0] != "final-only.mp4" {
+		t.Fatalf("clips = %#v, want only final clip", clips)
+	}
+}
+
 func assertDuration(t *testing.T, got interface{}, want float64, label string) {
 	t.Helper()
 	value, ok := got.(float64)
