@@ -36,6 +36,16 @@ func (noopPlanResolver) ResolvePlan(_ context.Context, _, _ string) (*jobenqueue
 	}, nil
 }
 
+// seedDriveMain inserts the "drive-main" destination into delivery_destinations
+// so the atomic Job+Task creator's per-destination validation passes.
+func seedDriveMain(t *testing.T, db *store.SQLiteStore) {
+	t.Helper()
+	_, err := db.DB().Exec(`INSERT INTO delivery_destinations (destination_id, provider, name, enabled, configuration_json, created_at, updated_at) VALUES ('drive-main', 'google_drive', 'Drive Main', 1, '{}', datetime('now'), datetime('now'))`)
+	if err != nil {
+		t.Fatalf("seed delivery_destinations: %v", err)
+	}
+}
+
 func TestGenerateWithImages_EnqueuesSceneImageJob(t *testing.T) {
 	tempDir := t.TempDir()
 	dbPath := filepath.Join(tempDir, "velox.db")
@@ -43,6 +53,7 @@ func TestGenerateWithImages_EnqueuesSceneImageJob(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new sqlite store: %v", err)
 	}
+	seedDriveMain(t, db)
 	jobRepo := store.NewJobsRepository(store.NewSQLiteJobRepository(db))
 	atomic := store.NewAtomicJobTaskCreator(db)
 
@@ -188,6 +199,7 @@ func TestGenerateWithImages_UsesCreatorStageWhenConfigured(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new sqlite store: %v", err)
 	}
+	seedDriveMain(t, db)
 	jobRepo := store.NewSQLiteJobRepository(db)
 	atomic := store.NewAtomicJobTaskCreator(db)
 
@@ -304,6 +316,7 @@ func TestGenerateWithImages_BypassesCreatorForRenderReadyPayload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new sqlite store: %v", err)
 	}
+	seedDriveMain(t, db)
 	_ = store.NewSQLiteJobRepository(db)
 	atomic := store.NewAtomicJobTaskCreator(db)
 
@@ -371,6 +384,7 @@ func TestGenerateFromClips_EnqueuesClipJob(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new sqlite store: %v", err)
 	}
+	seedDriveMain(t, db)
 	jobRepo := store.NewJobsRepository(store.NewSQLiteJobRepository(db))
 	atomic := store.NewAtomicJobTaskCreator(db)
 
@@ -504,6 +518,7 @@ func TestSubmitJob_SlideshowVideo_EnqueuesImagesPipelineJob(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new sqlite store: %v", err)
 	}
+	seedDriveMain(t, db)
 	jobRepo := store.NewJobsRepository(store.NewSQLiteJobRepository(db))
 	atomic := store.NewAtomicJobTaskCreator(db)
 

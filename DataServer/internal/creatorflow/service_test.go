@@ -167,6 +167,11 @@ func TestResolverEnqueuesWorkerJob(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sqlite store: %v", err)
 	}
+	// Seed drive-main so the atomic creator's per-destination validation passes.
+	_, err = db.DB().Exec(`INSERT INTO delivery_destinations (destination_id, provider, name, enabled, configuration_json, created_at, updated_at) VALUES ('drive-main', 'google_drive', 'Drive Main', 1, '{}', datetime('now'), datetime('now'))`)
+	if err != nil {
+		t.Fatalf("seed delivery_destinations: %v", err)
+	}
 	jobRepo := store.NewSQLiteJobRepository(db)
 	enqueuer := newTestEnqueuer(t, db)
 
