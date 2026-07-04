@@ -229,9 +229,7 @@ func (s *Service) buildFinalizeVerifiedCommand(
 // finalizeWithDuplicateStorageFallback invokes the atomic verified-
 // writer once. If the writer returns the UNIQUE-constraint conflict
 // that signals another artifact row already owns the same
-// (storage_provider, storage_key) tuple (rare; the reconciler should
-// have cleaned the orphan — but rare upgrades + storage migrations
-// have surfaced this conflict historically), the helper:
+// (storage_provider, storage_key) tuple, the helper:
 //
 //  1. Derives an alt storage_key from the artifact id.
 //  2. Materializes a hardlink (or copy fallback) of the original
