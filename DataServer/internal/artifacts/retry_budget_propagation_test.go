@@ -723,3 +723,137 @@ func TestFinalizeVerified_MarksTaskSucceeded(t *testing.T) {
 		})
 	}
 }
+
+// =====================================================================
+// Spec 8 (Phase 1.5 / Q1-Q5): verified-finalize atomic closure
+//
+// After a successful FinalizeVerified commit, all five tables must
+// observe terminal states in a SINGLE atomic tx:
+//   - jobs.status              == 'SUCCEEDED'
+//   - tasks.status             == 'SUCCEEDED' (Q5 invariant:
+//                                   no RUNNING/LEASED/PENDING survivor)
+//   - artifacts.status         == 'READY'
+//   - artifact_uploads.status  == 'COMPLETED'
+//   - job_deliveries           has ≥1 row (per-destination INSERT)
+//
+// Pre-P0.1 (commit 427f4ce): tasks.status could stay RUNNING/LEASED/PENDING
+// after a verified finalization, landing the canonical
+// "jobs SUCCEEDED + tasks RUNNING" desync that Phase 1.5 invariant Q5
+// (scripts/ci/check-completion-protocol-invariants.sh) treats as a
+// production regression. TestFinalizeVerified_MarksTaskSucceeded
+// already pins the per-status sweep for tasks; this test extends that
+// premise to the full five-table closure contract so a regression on
+// any leg trips one easy-to-diagnose failure.
+//
+// =====================================================================
+
+func TestFinalizeVerified_ClosesAllStateTablesAtomically(t *testing.T) {
+	db := openPropagationDB(t)
+	jobID := "J-Q5"
+	workerID := "w"
+	leaseID := "l"
+	artifactID := "art-Q5"
+	uploadID := "up-Q5"
+
+	seedPhase5Fixture(t, db, phase5Fixture{
+		JobID: jobID, WorkerID: workerID, LeaseID: leaseID,
+		Revision: 1, AttemptNumber: 1,
+		ArtifactID: artifactID, UploadID: uploadID,
+	})
+
+	// Seed a task in RUNNING so the Q5 sweep can flip it. This
+	// exercises P0.1 (commit 427f4ce): artifact finalization is a
+	// legitimate task-closure path that does NOT route through
+	// CommitAttempt; the desync "jobs SUCCEEDED + tasks RUNNING"
+	// only resolves if markTaskSucceededTx (Step 2.5) runs inside
+	// the same FinalizeVerified tx.
+	now := time.Now().UTC().Format(time.RFC3339)
+	if _, err := db.Exec(`INSERT INTO tasks (
+        task_id, job_id, project_id, render_plan_id, executor_id, executor_version,
+        status, priority, revision, attempt_count, worker_id, lease_id,
+        created_at, updated_at)
+        VALUES ('task-Q5', ?, 'proj', 'rp-Q5', 'executor.scene_composite', 1,
+                'RUNNING', 0, 0, 0, 'w', 'l', ?, ?)`,
+		jobID, now, now); err != nil {
+		t.Fatalf("seed tasks[RUNNING]: %v", err)
+	}
+
+	// Seed a per-job delivery plan so insertPendingDeliveriesTx stamps
+	// ≥1 row in job_deliveries. retry_budget=3 is arbitrary here; the
+	// assertion target is row COUNT not max_attempts (covered by
+	// TestFinalizeVerified_StampsRetryBudgetFromPlan above).
+	seedDeliveryPlans(t, db, jobID, []phase5Plan{
+		{"primary", 1, 3, true},
+	})
+
+	resolver := deliveries.NewSQLiteDeliveryPlanResolver(db, false)
+	runFinalize(t, db, resolver, artifacts.FinalizeVerifiedCommand{
+		UploadID:         uploadID,
+		ArtifactID:       artifactID,
+		JobID:            jobID,
+		WorkerID:         workerID,
+		LeaseID:          leaseID,
+		AttemptNumber:    1,
+		ExpectedRevision: 1,
+		StorageProvider:  "local",
+		StorageKey:       "artifacts/" + jobID + "/1",
+		SHA256:           "deadbeef",
+		SizeBytes:        1024,
+		MIMEType:         "video/mp4",
+		VerifiedAt:       time.Now().UTC(),
+	})
+
+	// (1) jobs.status = SUCCEEDED
+	var jobsStatus string
+	if err := db.QueryRow(`SELECT status FROM jobs WHERE job_id = ?`, jobID).Scan(&jobsStatus); err != nil {
+		t.Fatalf("read jobs.status: %v", err)
+	}
+	if jobsStatus != "SUCCEEDED" {
+		t.Errorf("jobs.status = %q, want SUCCEEDED", jobsStatus)
+	}
+
+	// (2) tasks.status = SUCCEEDED (Q5 invariant enforcer: pre-P0.1 this
+	// could remain RUNNING/LEASED when finalization was the closure path).
+	var taskStatus string
+	if err := db.QueryRow(`SELECT status FROM tasks WHERE job_id = ?`, jobID).Scan(&taskStatus); err != nil {
+		t.Fatalf("read tasks.status: %v", err)
+	}
+	if taskStatus != "SUCCEEDED" {
+		t.Errorf("tasks.status = %q, want SUCCEEDED (Q5 invariant enforcer)", taskStatus)
+	}
+
+	// (3) artifacts.status = READY. Pre-fix this could stay STAGING if
+	// the jobs CAS at Step 2 detected a stale status and aborted (we
+	// now expect the closure tx to complete end-to-end).
+	var artStatus string
+	if err := db.QueryRow(`SELECT status FROM artifacts WHERE id = ?`, artifactID).Scan(&artStatus); err != nil {
+		t.Fatalf("read artifacts.status: %v", err)
+	}
+	if artStatus != "READY" {
+		t.Errorf("artifacts.status = %q, want READY", artStatus)
+	}
+
+	// (4) artifact_uploads.status = COMPLETED. The non-validator step
+	// (completeUploadTx) flips FINALIZING→COMPLETED; if it ran in a
+	// separate post-commit UPDATE a process crash between commit and
+	// UPDATE would leave this stuck in FINALIZING.
+	var upStatus string
+	if err := db.QueryRow(`SELECT status FROM artifact_uploads WHERE upload_id = ?`, uploadID).Scan(&upStatus); err != nil {
+		t.Fatalf("read artifact_uploads.status: %v", err)
+	}
+	if upStatus != "COMPLETED" {
+		t.Errorf("artifact_uploads.status = %q, want COMPLETED", upStatus)
+	}
+
+	// (5) job_deliveries: ≥1 row exists for this artifact. The closure
+	// tx must materialize job_deliveries rows so the
+	// deliver/lease/runner stack has a durable attempt cap to consult
+	// on the next match.
+	var deliveryCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM job_deliveries WHERE artifact_id = ?`, artifactID).Scan(&deliveryCount); err != nil {
+		t.Fatalf("count job_deliveries: %v", err)
+	}
+	if deliveryCount != 1 {
+		t.Errorf("job_deliveries row count = %d, want exactly 1 (insertPendingDeliveriesTx wrote a different count; resolver non-fallback GlobalFallback=false on job_id with one plan must stamp exactly one row)", deliveryCount)
+	}
+}
