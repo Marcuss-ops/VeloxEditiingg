@@ -36,11 +36,11 @@ func (noopPlanResolver) ResolvePlan(_ context.Context, _, _ string) (*jobenqueue
 	}, nil
 }
 
-// seedDriveMain inserts the "drive-main" destination into delivery_destinations
+// seedDestinationMain inserts the "destination-main" destination into delivery_destinations
 // so the atomic Job+Task creator's per-destination validation passes.
-func seedDriveMain(t *testing.T, db *store.SQLiteStore) {
+func seedDestinationMain(t *testing.T, db *store.SQLiteStore) {
 	t.Helper()
-	_, err := db.DB().Exec(`INSERT INTO delivery_destinations (destination_id, provider, name, enabled, configuration_json, created_at, updated_at) VALUES ('drive-main', 'google_drive', 'Drive Main', 1, '{}', datetime('now'), datetime('now'))`)
+	_, err := db.DB().Exec(`INSERT INTO delivery_destinations (destination_id, provider, name, enabled, configuration_json, created_at, updated_at) VALUES ('destination-main', 'google_drive', 'Drive Main', 1, '{}', datetime('now'), datetime('now'))`)
 	if err != nil {
 		t.Fatalf("seed delivery_destinations: %v", err)
 	}
@@ -53,7 +53,7 @@ func TestGenerateWithImages_EnqueuesSceneImageJob(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new sqlite store: %v", err)
 	}
-	seedDriveMain(t, db)
+	seedDestinationMain(t, db)
 	jobRepo := store.NewJobsRepository(store.NewSQLiteJobRepository(db))
 	atomic := store.NewAtomicJobTaskCreator(db)
 
@@ -80,7 +80,7 @@ func TestGenerateWithImages_EnqueuesSceneImageJob(t *testing.T) {
 		"voiceover_path":      "https://drive.google.com/file/d/17zAf__wEHsq6Wcs8Oguy7P9Ky_kH2CtV/view?usp=drive_link",
 		"drive_output_folder": "https://drive.google.com/drive/u/1/folders/1W4k13-sjPCr1Lynu29D3UJSGRPFSoHal",
 		"delivery_plan": []interface{}{
-			map[string]interface{}{"destination_id": "drive-main", "retry_budget": 3, "priority": 0},
+			map[string]interface{}{"destination_id": "destination-main", "retry_budget": 3, "priority": 0},
 		},
 		"scenes": []interface{}{
 			map[string]interface{}{
@@ -199,7 +199,7 @@ func TestGenerateWithImages_UsesCreatorStageWhenConfigured(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new sqlite store: %v", err)
 	}
-	seedDriveMain(t, db)
+	seedDestinationMain(t, db)
 	jobRepo := store.NewSQLiteJobRepository(db)
 	atomic := store.NewAtomicJobTaskCreator(db)
 
@@ -258,7 +258,7 @@ func TestGenerateWithImages_UsesCreatorStageWhenConfigured(t *testing.T) {
 		"video_name":     "Creator Video",
 		"voiceover_path": "https://example.com/voice.mp3",
 		"delivery_plan": []interface{}{
-			map[string]interface{}{"destination_id": "drive-main", "retry_budget": 3, "priority": 0},
+			map[string]interface{}{"destination_id": "destination-main", "retry_budget": 3, "priority": 0},
 		},
 		"scenes": []interface{}{
 			map[string]interface{}{"text": "Scene 1", "image_link": "https://example.com/scene1.png"},
@@ -316,7 +316,7 @@ func TestGenerateWithImages_BypassesCreatorForRenderReadyPayload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new sqlite store: %v", err)
 	}
-	seedDriveMain(t, db)
+	seedDestinationMain(t, db)
 	_ = store.NewSQLiteJobRepository(db)
 	atomic := store.NewAtomicJobTaskCreator(db)
 
@@ -355,7 +355,7 @@ func TestGenerateWithImages_BypassesCreatorForRenderReadyPayload(t *testing.T) {
 		"script_text":    "Roman engineering script",
 		"voiceover_path": voicePath,
 		"delivery_plan": []interface{}{
-			map[string]interface{}{"destination_id": "drive-main", "retry_budget": 3, "priority": 0},
+			map[string]interface{}{"destination_id": "destination-main", "retry_budget": 3, "priority": 0},
 		},
 		"scenes_json": `[
 			{"text":"Scene 1","image_link":"https://drive.google.com/file/d/1QoPBq8z2DB9OUXyjIT3HwgKOYzihF8Mh/view","duration_seconds":5},
@@ -384,7 +384,7 @@ func TestGenerateFromClips_EnqueuesClipJob(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new sqlite store: %v", err)
 	}
-	seedDriveMain(t, db)
+	seedDestinationMain(t, db)
 	jobRepo := store.NewJobsRepository(store.NewSQLiteJobRepository(db))
 	atomic := store.NewAtomicJobTaskCreator(db)
 
@@ -406,7 +406,7 @@ func TestGenerateFromClips_EnqueuesClipJob(t *testing.T) {
 	payload := map[string]interface{}{
 		"video_name": "Jackie Chan Funniest Moments",
 		"delivery_plan": []interface{}{
-			map[string]interface{}{"destination_id": "drive-main", "retry_budget": 3, "priority": 0},
+			map[string]interface{}{"destination_id": "destination-main", "retry_budget": 3, "priority": 0},
 		},
 		"scenes": []interface{}{
 			map[string]interface{}{
@@ -518,7 +518,7 @@ func TestSubmitJob_SlideshowVideo_EnqueuesImagesPipelineJob(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new sqlite store: %v", err)
 	}
-	seedDriveMain(t, db)
+	seedDestinationMain(t, db)
 	jobRepo := store.NewJobsRepository(store.NewSQLiteJobRepository(db))
 	atomic := store.NewAtomicJobTaskCreator(db)
 
@@ -541,7 +541,7 @@ func TestSubmitJob_SlideshowVideo_EnqueuesImagesPipelineJob(t *testing.T) {
 		"voiceover_path": "https://example.com/voice.mp3",
 		"orientation":    "vertical",
 		"delivery_plan": []interface{}{
-			map[string]interface{}{"destination_id": "drive-main", "retry_budget": 3, "priority": 0},
+			map[string]interface{}{"destination_id": "destination-main", "retry_budget": 3, "priority": 0},
 		},
 		"scenes": []interface{}{
 			map[string]interface{}{"text": "Scene 1", "image_link": "https://example.com/1.jpg"},
