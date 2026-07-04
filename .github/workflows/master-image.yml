@@ -209,6 +209,8 @@ jobs:
         working-directory: ${{ env.BUILD_DIR }}
         env:
           VERSION: ${{ steps.version.outputs.tag }}
+        run: |
+          set -euo pipefail
           # BuildTime anchored to the HEAD commit so two rebuilds of the
           # SAME commit produce byte-identical `-X main.BuildTime=...`
           # strings, honouring the Reproducible Builds contract. The
@@ -217,9 +219,15 @@ jobs:
           # the binary non-reproducible. The corresponding `make`-driven
           # builds in the worker-agent pipeline prefer SOURCE_DATE_EPOCH
           # when present and fall back to the same git commit timestamp.
-          BUILD_TIME: ${{ steps.version.outputs.tag }}-$(git log -1 --format=%cI)
-        run: |
-          set -euo pipefail
+          #
+          # NOTE: BUILD_TIME MUST be computed inside the `run:` script,
+          # NOT in the `env:` block. GitHub Actions `env:` values are
+          # literal strings — `$(...)` is NOT shell-evaluated there, so
+          # the previous `env: BUILD_TIME: ...-$(git log ...)` passed
+          # the literal command-substitution text to the Go linker's
+          # -X flag, which choked on the parentheses and printed link
+          # usage instead of building.
+          BUILD_TIME="${VERSION}-$(git log -1 --format=%cI)"
           go build \
             -trimpath \
             -ldflags "-s -w -X main.Version=${VERSION} -X main.BuildTime=${BUILD_TIME}" \
