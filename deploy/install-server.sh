@@ -38,25 +38,32 @@ warn() { echo -e "${YELLOW}[WARN]${NC} $*"; }
 fail() { echo -e "${RED}[FAIL]${NC} $*"; exit 1; }
 
 # preflight_ffprobe_invariant enforces the host-level precondition for
-# the VELOX_FFPROBE_VERIFY_ON_FINALIZE tripwire (RW-PROD-008 A4). When
-# the env var is set to the strict literal "true", the master requires
-# the `ffprobe` binary on PATH; without it, the Go gate surfaces
-# ErrFFProbeInvariantMissingBinary on every Finalize and loses the
+# the VELOX_FFPROBE_VERIFY_ON_FINALIZE tripwire (RW-PROD-008 A4).
+# When the env var is set to ANY active trip mode — `shadow`,
+# `enforce`, or the legacy alias `true` — the master requires the
+# `ffprobe` binary on PATH. Without it, the Go gate surfaces
+# `ErrFFProbeInvariantMissingBinary` on every Finalize and loses the
 # tripwire's signal-to-noise advantage over a count-mismatch trip.
-# The check is a NO-OP when the env var is unset or commented out, so
-# default installs are unaffected.
+# The check is a NO-OP when the env var is unset, set to `off`, or
+# commented out, so default installs are unaffected.
 #
-# Detection semantics (mirror the Go gate's `os.Getenv(...) == "true"`
-# literal check EXACTLY so a production deploy never trips a count-
-# mismatch false-positive on a typo'd value):
-#   - Strict literal "true"  → enabled.
-#   - Anything else (unset,
-#     commented-out, "1",
-#     "TRUE", "yes", missing
-#     key, malformed line)
-#                                → no-op.
-# We accept systemd EnvironmentFile= canonical forms (bare `=true`,
-# quoted `="true"` / `='true'`, with optional trailing whitespace +
+# Detection semantics (mirror the Go gate's parseFFProbeMode() in
+# DataServer/internal/artifacts/service_finalize_ffprobe.go EXACTLY
+# so a production deploy never trips a count-mismatch false-positive
+# on a typo'd value):
+#   - "shadow"             → enabled (log-only, no abort).
+#   - "enforce" | "true"   → enabled (log + abort on trip).
+#   - anything else (unset,
+#     commented-out, "off",
+#     "1", "TRUE", "yes",
+#     missing key, typos,
+#                         → noop.
+#                            failure modes)
+# Stays on env-files shipped before the tri-state intro (the legacy
+# alias `true` keeps the same hard-trip behavior they were
+# configured for).
+# We accept systemd EnvironmentFile= canonical forms (bare =VAL,
+# quoted ="VAL" / ='VAL', with optional trailing whitespace +
 # inline comment EOL) because systemd normalizes these to the same
 # env var value the Go gate will see.
 preflight_ffprobe_invariant() {
@@ -68,44 +75,60 @@ preflight_ffprobe_invariant() {
     [[ -f "$env_file" ]] || fail "preflight_ffprobe_invariant: env file $env_file missing at Step 4a (Step 4 should have installed it from ${ENV_TEMPLATE:-<unknown>})"
 
     local enabled=0
+    local mode=""
     local raw_line val
     # Read the first matching line, ignore the rest (operators don't
     # duplicate env keys; tee + comment-by-`#` is the only valid
     # second occurrence and operators don't author it).
     raw_line="$(grep -E '^[[:space:]]*VELOX_FFPROBE_VERIFY_ON_FINALIZE=' "$env_file" 2>/dev/null | head -1 || true)"
     if [[ -n "$raw_line" ]]; then
-        # Strip the leading key prefix.
+        # Strip the leading key prefix. Do NOT trim leading/trailing
+        # whitespace on the value — systemd EnvironmentFile= does
+        # NOT strip whitespace, and parseFFProbeMode() in the Go
+        # gate doesn't either, so a value of `= shadow` would
+        # silently be Off at runtime even though the preflight
+        # nominally said enabled. The strict-literal contract is
+        # canonical here so preflight and runtime agree 1:1.
         val="${raw_line#*=}"
-        # Strip inline trailing comment after whitespace (default
-        # systemd EnvironmentFile= semantic: `#` outside quotes,
-        # preceded by whitespace or EOL). Doesn't perfectly handle
-        # `="true # inside quotes"` (matches a malformed operator
-        # line — systemd preserves the `#` so the gate would also
-        # NOT enable on this input; preflight agrees on no-op).
+        # Strip inline trailing comment after whitespace (systemd
+        # EnvironmentFile= semantic: `#` outside quotes, preceded by
+        # whitespace or EOL). Doesn't handle `="shadow # inside
+        # quotes"` (malformed operator line; systemd preserves the
+        # `#` so the gate would also NOT enable on this input;
+        # preflight agrees on no-op).
         val="${val%% \#*}"
         val="${val%%	#*}"
-        # Trim leading and trailing whitespace.
-        val="${val#"${val%%[![:space:]]*}"}"
-        val="${val%"${val##*[![:space:]]}"}"
         # Strip surrounding single or double quotes (systemd
         # EnvironmentFile= strips these too; preflight agrees).
         case "$val" in
             \"*\") val="${val#\"}"; val="${val%\"}" ;;
             \'*\') val="${val#\'}"; val="${val%\'}" ;;
         esac
-        # Trim again after quote removal.
-        val="${val#"${val%%[![:space:]]*}"}"
-        val="${val%"${val##*[![:space:]]}"}"
-        # Strict-literal match (NOT a substring test).
-        if [[ "$val" == "true" ]]; then
+        # Tri-state strict-literal match — exactly mirrors Go gate
+        # parseFFProbeMode() in DataServer/internal/artifacts/
+        # service_finalize_ffprobe.go. Anything outside this set
+        # (unset, "off", "1", "TRUE", typos like "Shadow" /
+        # "enable" / surrounding whitespace, missing key) falls
+        # through to enabled=0 (no-op). The strict-literal set is
+        # identical to the Go gate's "shadow"/"enforce"/"true"
+        # accept list so an operator typo at install time disables
+        # the tripwire visibly rather than silently enabling it.
+        if [[ "$val" == "shadow" ]]; then
             enabled=1
+            mode="shadow"
+        elif [[ "$val" == "enforce" ]]; then
+            enabled=1
+            mode="enforce"
+        elif [[ "$val" == "true" ]]; then
+            enabled=1
+            mode="enforce (legacy alias)"
         fi
     fi
 
     if [[ "$enabled" -eq 1 ]]; then
-        log "VELOX_FFPROBE_VERIFY_ON_FINALIZE=true detected. Verifying ffprobe on PATH..."
+        log "VELOX_FFPROBE_VERIFY_ON_FINALIZE=$mode detected. Verifying ffprobe on PATH..."
         command -v ffprobe >/dev/null 2>&1 \
-            || fail "ffprobe binary missing from PATH. The VELOX_FFPROBE_VERIFY_ON_FINALIZE tripwire requires ffprobe (install via 'apt-get install -y ffmpeg' or distro equivalent). Either install ffprobe and re-run, or comment out VELOX_FFPROBE_VERIFY_ON_FINALIZE in $env_file to skip the tripwire."
+            || fail "ffprobe binary missing from PATH. The VELOX_FFPROBE_VERIFY_ON_FINALIZE tripwire (mode=$mode) requires ffprobe (install via 'apt-get install -y ffmpeg' or distro equivalent). Either install ffprobe and re-run, or comment out VELOX_FFPROBE_VERIFY_ON_FINALIZE in $env_file to skip the tripwire."
         ok "ffprobe binary found at $(command -v ffprobe)"
     fi
 }

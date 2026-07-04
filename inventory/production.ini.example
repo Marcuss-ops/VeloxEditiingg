@@ -74,13 +74,27 @@ velox-worker-2 ansible_host=CHANGE_ME ansible_user=velox-deploy worker_id=velox-
 [velox_master:vars]
 ansible_python_interpreter=/usr/bin/python3
 # Host precondition for the VELOX_FFPROBE_VERIFY_ON_FINALIZE tripwire
-# (RW-PROD-008 A4). When the master env file enables that flag, the
-# master host MUST have the `ffprobe` binary on PATH. The
-# deploy/install-server.sh preflight blocks the install when the flag
-# is on but ffprobe is missing — but ansible-side, you can harden by
-# adding an `apt: name=ffmpeg` task before deploy-master-config.yml
-# enables the tripwire. Workers do NOT need ffprobe: the gate runs
-# master-side only (per RW-PROD-008 A4 scope).
+# (RW-PROD-008 A4). When the master env file enables that flag to
+# ANY active mode (shadow / enforce / true), the master host MUST
+# have the `ffprobe` binary on PATH. `deploy/install-server.sh` has
+# a `preflight_ffprobe_invariant` step that hard-fails the install
+# when the flag is on but ffprobe is missing — ansible-side you can
+# harden by adding an `apt: name=ffmpeg` task before
+# deploy-master-config.yml enables the tripwire, so even a bare
+# bootstrap (no installer run) lands with the binary on PATH.
+#
+# Cluster-wide rollout plan (per RW-PROD-008 A4 scope):
+#   Stage 1 — master alone, `VELOX_FFPROBE_VERIFY_ON_FINALIZE=shadow`
+#             in /etc/velox-server.env (capture journalctl for 24h;
+#             see docs/rw-prod/RW-PROD-008-A4-shadow-rollout.md).
+#   Stage 2 — same master, flip to `=enforce` after the 24h clean
+#             signal confirms the gate's calibration on real
+#             traffic (catches the amix-collapse regression loudly
+#             instead of silently).
+#   Stage 3 — worker port: deferred to a future scope; the gate
+#             currently runs master-side only. Workers do NOT need
+#             ffprobe yet, so DO NOT install ffmpeg on worker hosts
+#             tonight.
 
 [velox_workers:vars]
 ansible_python_interpreter=/usr/bin/python3
