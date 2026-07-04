@@ -133,9 +133,9 @@ func (e *Enqueuer) enforceDeliveryPlanPrecondition(ctx context.Context, jobID st
 }
 
 // validatePlanPayload enforces the precondition invariants on an
-// already-resolved plan (no DB hit). Reusable by *Tx callers
-// (AtomicForwardAndEnqueue) that read plan rows from a transaction
-// they own.
+// already-resolved plan (no DB hit). Used by enforceDeliveryPlanPrecondition;
+// *Tx callers (AtomicForwardAndEnqueue) get the analogous gate via
+// store.validateDeliveryDestinationTx inside CreateJobWithTaskTx.
 //
 // Invariants: plan must be non-nil and carry >=1 destination; every
 // destination's retry_budget > 0. On success, writes the MAX
