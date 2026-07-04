@@ -29,31 +29,72 @@
         | regex_replace(':8000$', ':9000')
       }}
 
-- name: CanonicalRuntime | Stop and remove legacy worker units
+# ── HOSTILE LEGACY UNIT CLEANUP ───────────────────────────────
+# One host -> one systemd unit. Any non-canonical `velox-worker*.service`
+# file (including the bare `velox-worker.service` with no suffix and any
+# random nested-name sibling like `velox-worker-velox-worker-N.service`)
+# is treated as hostile: stop it (in case it's running), disable it
+# (so it won't come back at boot), and MASK it (so a stray file or
+# symlink can never be re-enabled, even by a future `daemon-reload` or
+# a package install that drops a same-named drop-in). The two exempt
+# units are the canonical worker unit (the only runtime worker) and
+# the per-host watchdog service (an `oneshot` that re-arms the canonical
+# unit). Auto-update is `velox-auto-update.service`, which does NOT
+# match the `velox-worker*.service` glob and falls outside this block.
+# Order matters: stop (runtime) -> disable (boot) -> mask (any future
+# activation). The mask leaves a symlink to /dev/null at the unit file
+# path that systemd treats as a permanent block; the next `daemon-reload`
+# (at task "Reload systemd after cleanup and unit writes") picks it up
+# so any leftover `systemctl start` will fail with "Unit ... is masked."
+- name: CanonicalRuntime | Stop, disable and mask legacy worker units (hostile cleanup)
   ansible.builtin.shell: |
     set -euo pipefail
     canonical="{{ velox_worker_unit_name }}"
+    declare -A seen=()
     changed=0
-    while read -r unit _; do
-      [ -n "$unit" ] || continue
+    consider() {
+      local unit="$1"
+      [ -n "$unit" ] || return 0
+      [ -z "${seen[$unit]:-}" ] || return 0
+      seen[$unit]=1
       case "$unit" in
         "$canonical"|velox-worker-watchdog.service)
-          continue
+          return 0
+          ;;
+        # Template units are not used in the canonical runtime; leave them
+        # alone so a future `velox-worker@<instance>.service` (e.g. from
+        # a transient generator) is not silently masked by our glob.
+        velox-worker@*)
+          return 0
           ;;
         velox-worker.service|velox-worker-*.service)
-          systemctl disable --now "$unit" >/dev/null 2>&1 || true
-          rm -f "/etc/systemd/system/$unit"
-          rm -rf "/etc/systemd/system/$unit.d"
-          echo "REMOVED_UNIT=$unit"
+          systemctl stop    "$unit" >/dev/null 2>&1 || true
+          systemctl disable "$unit" >/dev/null 2>&1 || true
+          systemctl mask    "$unit" >/dev/null 2>&1 || true
+          echo "MASKED_UNIT=$unit"
           changed=1
           ;;
       esac
+    }
+    # 1. Iterate velox-worker*.service FILES (enabled/disabled/masked/static
+    #    drop-ins in /etc/systemd/system or /usr/lib). Catches the common
+    #    case where a previous deploy left a unit file on disk.
+    while read -r unit _; do
+      consider "$unit"
     done < <(systemctl list-unit-files 'velox-worker*.service' --no-legend --no-pager 2>/dev/null || true)
+    # 2. Also iterate velox-worker*.service UNITS in systemd's runtime
+    #    memory. Catches a unit that was started then file-deleted but
+    #    never daemon-reloaded, or a unit created at runtime by a
+    #    transient generator. Both passes are needed because the file
+    #    view and the runtime view can drift between deploys.
+    while read -r unit _; do
+      consider "$unit"
+    done < <(systemctl list-units 'velox-worker*.service' --all --no-legend --no-pager 2>/dev/null || true)
     exit 0
   args:
     executable: /bin/bash
   register: legacy_unit_cleanup
-  changed_when: "'REMOVED_UNIT=' in (legacy_unit_cleanup.stdout | default(''))"
+  changed_when: "'MASKED_UNIT=' in (legacy_unit_cleanup.stdout | default(''))"
 
 - name: CanonicalRuntime | Remove stale legacy worker containers
   ansible.builtin.shell: |
@@ -195,6 +236,10 @@
 
       [Service]
       Type=oneshot
+      # CANONICAL-ONLY: never use `velox-worker*.service` here. The watchdog
+      # is a one-job unit: probe the exact canonical unit and re-arm it if
+      # it's down. A wildcard would re-introduce the very failure mode
+      # the hostile-cleanup block above is designed to prevent.
       ExecStart=/bin/sh -c 'systemctl is-active --quiet {{ velox_worker_unit_name }} || systemctl restart {{ velox_worker_unit_name }}'
       StandardOutput=journal
       StandardError=journal
@@ -236,6 +281,11 @@
       apt-get update -qq 2>&1 | tail -3
       apt-get upgrade -y -qq --no-install-recommends 2>&1 | tail -5 || log "WARNING: OS upgrade had issues"
 
+      # CANONICAL-ONLY: `$CANONICAL_UNIT` is always set to
+      # `velox-worker-{{ inventory_hostname }}.service` (see fact resolution
+      # at the top of this file). Never use a `velox-worker*.service`
+      # wildcard here either — a wildcard could re-introduce a hostile
+      # unit that the cleanup block above just masked.
       if [ -n "$MASTER" ]; then
         WORKER_ZIP="/tmp/velox-update-$(date +%s).zip"
         if curl -sf --max-time 60 "$MASTER/api/worker/bundle?platform=linux&arch=x86_64" -o "$WORKER_ZIP" && [ -s "$WORKER_ZIP" ]; then
