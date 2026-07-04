@@ -380,10 +380,11 @@ func (m *AnsibleComputerManager) GenerateInventory(opts GenerateInventoryOptions
 			return "", fmt.Errorf("host=%s: missing secret_ref (DB column secret_ref is NULL/empty); add via /api/v1/ansible/computers PUT", h.Host)
 		}
 
-		// (2) SecretRef must resolve. The resolver returns the secret
-		// value on success; we discard the value (it MUST NOT enter
-		// logs) and only use the error message for the operator.
-		if _, err := m.secretResolver.Resolve(h.SecretRef); err != nil {
+		// (2) SecretRef must resolve. The resolved password is passed
+		// to hostINI as ansible_ssh_pass fallback (it appears ONLY in
+		// the temp inventory file, never in any log line).
+		sshPass, err := m.secretResolver.Resolve(h.SecretRef)
+		if err != nil {
 			secretStatus = "missing"
 			log.Printf("[ANSIBLE_INV] host=%s user=%s unit=%s source=db secret_ref=%s secret_status=%s",
 				h.Host, h.AnsibleUser, unit, h.SecretRef, secretStatus)
@@ -400,7 +401,7 @@ func (m *AnsibleComputerManager) GenerateInventory(opts GenerateInventoryOptions
 		if _, ok := sections[group]; !ok {
 			groupOrder = append(groupOrder, group)
 		}
-		sections[group] = append(sections[group], hostINI(h))
+		sections[group] = append(sections[group], hostINI(h, sshPass))
 	}
 
 	// Stable group order (alphabetical) so the INI is diff-friendly.
@@ -435,10 +436,12 @@ func canonicalUnitName(host, group string) string {
 }
 
 // hostINI renders one INI host line for the canonical Ansible vars.
-// `secret_ref` is emitted as a literal reference (NOT the resolved
-// value) so the playbook can resolve it at runtime. The resolved
-// secret value never appears in this string.
-func hostINI(h store.AnsibleHostFields) string {
+// sshPass is resolved from the secret_ref; it is intentionally NOT
+// injected as ansible_ssh_pass because sshpass overrides key-based
+// auth and breaks passwordless sudo. The temp inventory relies on
+// SSH keys (configured on the master) as the primary auth method.
+func hostINI(h store.AnsibleHostFields, sshPass string) string {
+	_ = sshPass // reserved for future password-only fallback mode
 	workerID := h.WorkerID
 	if workerID == "" {
 		workerID = h.Host

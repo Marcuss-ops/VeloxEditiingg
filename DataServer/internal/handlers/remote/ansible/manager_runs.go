@@ -388,6 +388,7 @@ func (m *AnsibleRunManager) RunPlaybook(playbook string, hosts []string, action 
 		defer os.Remove(tmpFile.Name())
 
 		cmd := exec.Command("ansible-playbook", args...)
+		cmd.Env = append(os.Environ(), "ANSIBLE_HOST_KEY_CHECKING=False")
 		output, cmdErr := cmd.CombinedOutput()
 		endTime := time.Now().Unix()
 

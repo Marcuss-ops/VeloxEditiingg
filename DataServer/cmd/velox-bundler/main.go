@@ -131,10 +131,10 @@ func walkDirToZip(zw *zip.Writer, baseDir, dir string) {
 		}
 		relSlash := filepath.ToSlash(rel)
 
-		// Skip .git directories and testdata directories.
+		// Skip .git, build, testdata, and hidden directories.
 		if d.IsDir() {
 			name := filepath.Base(path)
-			if name == ".git" || name == "testdata" || strings.HasPrefix(name, ".") && name != "." && name != ".." {
+			if name == ".git" || name == "build" || name == "testdata" || strings.HasPrefix(name, ".") && name != "." && name != ".." {
 				return filepath.SkipDir
 			}
 			return nil

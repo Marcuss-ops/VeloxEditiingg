@@ -274,8 +274,9 @@ func TestGenerateInventory_FailsOnInvalidSecretRef(t *testing.T) {
 }
 
 // TestGenerateInventory_NeverLogsSecretValue: the resolved secret
-// value MUST NOT appear in any log line. The secret_ref SCHEME may
-// appear (e.g., "file:ssh_host_x") but not the resolved bytes.
+// value MUST NOT appear in any log line. It IS expected in the INI
+// as ansible_ssh_pass (password-fallback for SSH auth). The
+// secret_ref SCHEME may appear in logs (e.g., "file:ssh_host_x").
 func TestGenerateInventory_NeverLogsSecretValue(t *testing.T) {
 	const secretValue = "SUPERSECRET-NEVER-LOG-12345"
 	m, secretsDir := newTestManager(t)
@@ -292,11 +293,14 @@ func TestGenerateInventory_NeverLogsSecretValue(t *testing.T) {
 		t.Fatalf("GenerateInventory: %v", err)
 	}
 
-	// Check both the log buffer and the INI string for the resolved
-	// secret value. Either leaking it is a P0.5 contract violation.
+	// MUST NOT appear in any log line (P0.5 contract).
 	if strings.Contains(logBuf.String(), secretValue) {
 		t.Errorf("RESOLVED SECRET VALUE LEAKED INTO LOG:\n%s", logBuf.String())
 	}
+
+	// Sanity: the secret value should NOT appear in INI (password
+	// fallback is deliberately excluded to avoid sshpass overriding
+	// key-based auth). The secret_ref SCHEME may appear in logs.
 	if strings.Contains(ini, secretValue) {
 		t.Errorf("RESOLVED SECRET VALUE LEAKED INTO INI:\n%s", ini)
 	}
