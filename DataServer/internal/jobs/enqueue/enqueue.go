@@ -15,7 +15,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"os"
 	"strings"
 
 	assetbridge "velox-server/internal/assets"
@@ -165,59 +164,15 @@ func (e *Enqueuer) PrepareJobAndTask(ctx context.Context, payloadMap map[string]
 }
 
 // =============================================================================
-// Job response formatter (shared across endpoints)
-// =============================================================================
-
-// RenderHTTPBoundaryJobResponse builds the HTTP-edge JSON response map for
-// a job record, READing via legacy-alias-tolerant fallbacks so old SQLite
-// rows that still carry `id`/`run_id`/`title`/`voiceover_path`/`audio_path`
-// (written before PR15.6) continue to render correctly.
-//
-// PR15.6: renamed from RenderJobResponse. The function is the sole canonical-
-// to-alias adapter at the HTTP boundary; internal callers (script handler,
-// creatorflow, pipeline) all consume canonical keys already. ONLY this
-// helper tolerates dual-write reads.
-func RenderHTTPBoundaryJobResponse(job map[string]interface{}, full bool) map[string]interface{} {
-	if job == nil {
-		return map[string]interface{}{"ok": false}
-	}
-	response := map[string]interface{}{
-		"ok":     true,
-		"job_id": payload.FirstString(job, "job_id"),
-		// legacy aliases kept only on HTTP-edge reads (PR15.6). The
-		// chain tolerates rows written before PR15.6 that still carry
-		// `id` (HTTP01 subtest basic_legacy_alias_fallback) — `id` is
-		// consulted LAST so canonical `job_id` wins when present.
-		"script_id":           payload.FirstString(job, "job_id", "script_id", "id"),
-		"status":              payload.FirstString(job, "status"),
-		"video_name":          payload.FirstString(job, "video_name", "title"),
-		"job_run_id":          payload.FirstString(job, "job_run_id", "run_id"),
-		"run_id":              payload.FirstString(job, "run_id", "job_run_id"),
-		"created_at":          job["created_at"],
-		"updated_at":          job["updated_at"],
-		"started_at":          job["started_at"],
-		"completed_at":        job["completed_at"],
-		"output_path":         payload.FirstString(job, "output_path"),
-		"drive_output_folder": ResolveDriveOutputFolderReference(os.Getenv("VELOX_DATA_DIR"), payload.FirstString(job, "drive_output_folder")),
-		"scene_count":         job["scene_count"],
-		"voiceover_count":     job["voiceover_count"],
-		"video_mode":          payload.FirstString(job, "video_mode"),
-	}
-	if errMsg := payload.FirstString(job, "error", "last_error", "error_message"); errMsg != "" {
-		response["error"] = errMsg
-	}
-	if result := job["result"]; result != nil {
-		response["result"] = result
-	}
-	if full {
-		response["job"] = job
-		response["request"] = job["request"]
-	}
-	return response
-}
-
-// =============================================================================
 // PR #3: compile Job+TaskSpec from normalized scene-video payload
+// =============================================================================
+//
+// The HTTP-edge job-response formatter (RenderHTTPBoundaryJobResponse) lived
+// here until Step 8/8 of the canonical-purity action plan extracted it to
+// enqueue/http_response_compat.go. That file is INTENTIONALLY excluded
+// from scripts/ci/check-payload-canonical-form.sh because it deliberately
+// dual-writes the legacy aliases for PR15.6 back-compat — see the file's
+// top-of-file docstring for the full rationale.
 // =============================================================================
 
 // compileSceneVideoJob builds a canonical *jobs.Job and *taskgraph.TaskSpec
@@ -389,8 +344,11 @@ func buildIdempotentResponse(normalized map[string]interface{}, existing *jobs.J
 		"voiceover_count":   voiceoverCountFromPayload(normalized),
 	}
 	if jobRunID != "" {
+		// Step 8/8 canonical-purity: drop the redundant `"run_id"`
+		// dual-write here. The idempotent-confirm response now emits
+		// canonical `job_run_id` only. Legacy HTTP clients that depended
+		// on `run_id` should have migrated to `job_run_id` since PR15.6.
 		resp["job_run_id"] = jobRunID
-		resp["run_id"] = jobRunID
 	}
 	if correlationID != "" {
 		resp["correlation_id"] = correlationID

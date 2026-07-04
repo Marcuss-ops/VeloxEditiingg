@@ -80,6 +80,10 @@ log "check-no-console-service (Step 3/8 canonical-purity)"
 ./scripts/ci/check-no-console-service.sh
 log "check-no-legacy-assets-cache (Step 6/8 canonical-purity)"
 ./scripts/ci/check-no-legacy-assets-cache.sh
+log "test-check-payload-canonical-form (Step 8/8 closure gate self-test)"
+./scripts/ci/test-check-payload-canonical-form.sh
+log "check-payload-canonical-form (Step 7+8/8 canonical-purity closure)"
+./scripts/ci/check-payload-canonical-form.sh
 log "check-dsn-busy-timeout (Blocco 5 / B1 follow-up)"
 ./scripts/ci/check-dsn-busy-timeout.sh
 
