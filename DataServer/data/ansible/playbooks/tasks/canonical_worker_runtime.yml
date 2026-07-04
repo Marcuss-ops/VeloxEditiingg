@@ -151,6 +151,13 @@
       VELOX_WORKER_IMAGE={{ _worker_image_tag }}
       VELOX_WORKER_IMAGE_VERSION={{ _worker_image_version }}
       VELOX_WORKER_IMAGE_COMMIT={{ _worker_image_commit }}
+      # P0.4: route the worker's runtime state (worker_state.json, etc.)
+      # to the canonical per-host mount, NOT /opt/velox. The container
+      # path /var/lib/velox-worker is the mount target for the host's
+      # /var/lib/velox/workers/<host>/. Without this, the Go default
+      # /var/lib/velox/worker would point at a non-existent path inside
+      # the container and state writes would land in an unbacked location.
+      VELOX_STATE_DIR={{ velox_worker_runtime_container_dir }}
 
 - name: CanonicalRuntime | Write canonical worker config outside checkout
   ansible.builtin.copy:
