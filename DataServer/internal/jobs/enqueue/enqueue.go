@@ -115,24 +115,20 @@ func (e *Enqueuer) Enqueue(ctx context.Context, payloadMap map[string]interface{
 		return nil, fmt.Errorf("enqueue: atomic create: %w", err)
 	}
 
-	// PR-delivery-plan-precondition: ResolvePlan reads job_delivery_plans
-	// AFTER the atomic create so the same call's tx has just committed
-	// the plan rows. Without this reorder the resolver would see an
-	// empty plan on every first-time job submit (ErrNoExplicitPlan) and
-	// operators would have to manual-INSERT plan rows before each POST
-	// — confirmed on the Jackie Chan doc-voiceover real run that this
-	// issue tracker originated from.
+	// ResolvePlan runs AFTER the atomic create so the resolver sees the
+	// plan rows the same tx just committed. Without this order, the
+	// resolver would see an empty plan on every first-time job submit
+	// (ErrNoExplicitPlan) and operators would have to manual-INSERT
+	// plan rows before each POST.
 	//
-	// Trade-off accepted: there is a small race window between the
-	// atomic tx commit and the precondition run where a matcher could
-	// briefly pick up the PENDING task. The task will be re-resolved
-	// on the worker (deliveries.SQLiteDeliveryPlanResolver runs at claim
-	// time too) and land in WAITING_FOR_PLAN state on plan-miss, so
-	// observability is preserved. The at-INSERT column
-	// `jobs.max_retries` is left at 0 from compileSceneVideoJob; per-row
-	// delivery retry_budget remains authoritative at lease time (see
-	// deliveries/runner.go lease), so the column being 0 does not
-	// regress delivery correctness.
+	// Trade-off: there is a small race window between the tx commit
+	// and the precondition run where a matcher could briefly pick up
+	// the PENDING task. The task is re-resolved on the worker
+	// (deliveries.SQLiteDeliveryPlanResolver runs at claim time too)
+	// and lands in WAITING_FOR_PLAN on plan-miss, so observability is
+	// preserved. jobs.max_retries stays at 0 from compileSceneVideoJob;
+	// per-row delivery retry_budget remains authoritative at lease time,
+	// so the column being 0 does not regress delivery correctness.
 	if err := e.enforceDeliveryPlanPrecondition(ctx, jobID, job); err != nil {
 		return nil, fmt.Errorf("enqueue: post-create plan precondition: %w", err)
 	}

@@ -51,8 +51,6 @@ func TestBuildSceneImagePayload(t *testing.T) {
 		}
 	}
 
-	// PR15.6: voiceover_paths is canonical. Legacy voiceover_path alias is
-	// dropped from writers; the HTTP-edge adapter still reads it for old rows.
 	vp, _ := result["voiceover_paths"].([]string)
 	if len(vp) != 1 || vp[0] != "/tmp/test-voiceover.mp3" {
 		t.Errorf("voiceover_paths: got %v, want [/tmp/test-voiceover.mp3]", result["voiceover_paths"])
@@ -78,9 +76,6 @@ func TestBuildSceneImagePayload(t *testing.T) {
 	if len(paths) != 2 {
 		t.Errorf("want 2 scene_image_paths, got %d", len(paths))
 	}
-	// refactor/payload-v2-single-shape: the canonical V2 writer does NOT
-	// emit a `parameters` sub-map mirror. Asserting its absence is now
-	// the strict invariant — every field reads from top-level only.
 	if v, present := result["parameters"]; present {
 		t.Errorf("`parameters` sub-map must NOT be present in canonical V2 writes, got %v", v)
 	}
@@ -160,7 +155,6 @@ func TestBuildSceneImagePayloadForMaster(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// PR15.6: voiceover_paths is the canonical key.
 	vp, _ := result["voiceover_paths"].([]string)
 	if len(vp) != 1 || vp[0] != srcVoice {
 		t.Fatalf("want voiceover_paths [%q], got %v", srcVoice, vp)
@@ -215,7 +209,6 @@ func TestBuildSceneImagePayloadForMaster_PreservesRemoteSources(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// PR15.6: voiceover_paths (canonical) replaced voiceover_path/audio_path aliases.
 	vp, _ := result["voiceover_paths"].([]string)
 	if len(vp) != 1 || vp[0] != voiceURL {
 		t.Fatalf("want remote voiceover preserved in voiceover_paths [%q], got %v", voiceURL, vp)
@@ -381,16 +374,15 @@ func TestPrepareJobAndTask_UsesCanonicalSceneCompositeExecutorID(t *testing.T) {
 	if job == nil || spec == nil {
 		t.Fatal("expected non-nil job and spec")
 	}
-	// After PR-delivery-plan-precondition moved out of PrepareJobAndTask
-	// and into the post-CreateJobWithTask slot, PrepareJobAndTask now
-	// pre-computes MaxRetries from the payload's delivery_plan via
-	// extractPlanMaxRetry so jobs.max_retries reflects the worst-case
-	// per-destination retry budget AT INSERT time. The payload below
-	// has one delivery_plan entry with retry_budget=3, so Prepare-time
-	// MaxRetries == 3. The post-create resolver-based precondition
-	// remains a consistency check; the in-memory struct can be
-	// re-written by enforceDeliveryPlanPrecondition but the DB column
-	// value was committed by extractPlanMaxRetry.
+	// PrepareJobAndTask pre-computes MaxRetries from the payload's
+	// delivery_plan via extractPlanMaxRetry (so jobs.max_retries
+	// reflects the worst-case per-destination budget AT INSERT time).
+	// The post-create resolver-based precondition is a consistency
+	// check; the in-memory struct can be re-written by
+	// enforceDeliveryPlanPrecondition but the DB column value was
+	// committed by extractPlanMaxRetry. Payload below has one
+	// delivery_plan entry with retry_budget=3, so Prepare-time
+	// MaxRetries == 3.
 	if job.MaxRetries != 3 {
 		t.Errorf("job.MaxRetries = %d, want 3 (PrepareJobAndTask extracts it from payload delivery_plan; precondition validates post-create)", job.MaxRetries)
 	}
@@ -418,7 +410,7 @@ func TestBuildSceneImagePayload_PreservesIDs(t *testing.T) {
 	if result["job_id"] != "custom-id" || result["job_run_id"] != "custom-run" || result["correlation_id"] != "custom-corr" {
 		t.Errorf("IDs not preserved: %v %v %v", result["job_id"], result["job_run_id"], result["correlation_id"])
 	}
-	// PR15.6: id / run_id / title aliases must NOT be written.
+
 	for _, alias := range []string{"id", "run_id", "title"} {
 		if _, present := result[alias]; present {
 			t.Errorf("%s alias must NOT be present in canonical writer, got %v", alias, result[alias])
@@ -518,7 +510,7 @@ func TestBuildPipelinePayload(t *testing.T) {
 		if payload["video_name"] != "Pipeline Video" || payload["job_type"] != "process_video" {
 			t.Errorf("unexpected: %v %v", payload["video_name"], payload["job_type"])
 		}
-		// PR15.6: title / voiceover_path / audio_path / run_id aliases must NOT be present.
+
 		for _, alias := range []string{"title", "voiceover_path", "audio_path", "run_id", "id"} {
 			if _, present := payload[alias]; present {
 				t.Errorf("%q alias must NOT be present in canonical pipeline payload, got %v", alias, payload[alias])
@@ -654,8 +646,7 @@ func TestRenderHTTPBoundaryJobResponse(t *testing.T) {
 
 	t.Run("basic_legacy_alias_fallback", func(t *testing.T) {
 		t.Parallel()
-		// PR15.6: HTTP-edge adapter tolerates legacy aliases on read for
-		// backwards compat with old SQLite rows.
+		// HTTP-edge adapter tolerates legacy aliases on read for backwards compat with old SQLite rows.
 		job := map[string]interface{}{
 			"id": "j1", "status": "COMPLETED", "title": "V",
 		}
@@ -719,12 +710,6 @@ func TestBuildSceneImagePayload_RoundTrip(t *testing.T) {
 	}
 }
 
-// =============================================================================
-// PR #3: Enqueuer.Enqueue now uses AtomicJobTaskCreator for atomic Job+Task
-// creation instead of JobQueue.SubmitJob (Job-only). Tests verify that
-// the Enqueue path produces correct Job+Task rows.
-// =============================================================================
-
 // newTestEnqueuer creates an Enqueuer backed by an in-memory SQLite store
 // for integration-level testing of the atomic creation path. The
 // PlanResolver is the happy-path mock so non-precondition tests do not
@@ -782,7 +767,7 @@ func seedDestinations(t *testing.T, db *store.SQLiteStore, pairs map[string]bool
 }
 
 // TestEnqueueCreatesJobAndTaskAtomically verifies that Enqueue creates
-// both a Job and a Task row atomically (the PR #3 invariant).
+// both a Job and a Task row atomically.
 func TestEnqueueCreatesJobAndTaskAtomically(t *testing.T) {
 	t.Parallel()
 	enq := newTestEnqueuer(t)
@@ -901,10 +886,10 @@ func TestDeriveForwardingJobID_DifferentKeys(t *testing.T) {
 }
 
 // =============================================================================
-// PR-delivery-plan-precondition: tests for the enqueue-time plan resolver.
-// The mockPlanResolver is a hand-rolled PlanResolver that returns a
-// configured plan/error without any DB interaction so the precondition
-// can be unit-tested in isolation from the deliveries stack.
+// Tests for the enqueue-time plan resolver. The mockPlanResolver is a
+// hand-rolled PlanResolver that returns a configured plan/error without
+// any DB interaction so the precondition can be unit-tested in isolation
+// from the deliveries stack.
 // =============================================================================
 
 // mockPlanResolver implements PlanResolver for tests. It returns the
@@ -986,17 +971,12 @@ func TestEnqueue_Precondition_RejectsMissingPlan(t *testing.T) {
 	if !strings.Contains(err.Error(), "delivery_plan") {
 		t.Errorf("want error to mention delivery_plan, got %v", err)
 	}
-}
-
-// TestEnqueue_Precondition_RejectsEmptyDestinations verifies that an
+}// TestEnqueue_Precondition_RejectsEmptyDestinations verifies that an
 // enqueue is rejected when the plan has zero destinations (treated as
-// "no explicit plan"). After PR-delivery-plan-precondition moved out
-// of PrepareJobAndTask and into the post-CreateJobWithTask slot, the
-// atomic create runs FIRST with the payload's delivery_plan. The
-// atomic create's parse-time validateDeliveryDestinationTx queries
-// delivery_destinations by payload destination_id "d1", so d1 must be
-// seeded or the test would fail at INSERT time before any
-// precondition check.
+// "no explicit plan"). The atomic create runs FIRST with the payload's
+// delivery_plan, so the payload's destination_id "d1" must be seeded;
+// otherwise validateDeliveryDestinationTx rejects the insert before
+// the precondition check.
 func TestEnqueue_Precondition_RejectsEmptyDestinations(t *testing.T) {
 	t.Parallel()
 	tempDir := t.TempDir()
@@ -1032,12 +1012,10 @@ func TestEnqueue_Precondition_RejectsEmptyDestinations(t *testing.T) {
 
 // TestEnqueue_Precondition_RejectsZeroRetryBudget verifies that an
 // enqueue is rejected when any destination has retry_budget <= 0. The
-// per-delivery delivery_plan_payload.go validator already rejects at
-// parse time; this is the runtime counterpart at enqueue time. After
-// PR-delivery-plan-precondition moved out of PrepareJobAndTask and
-// into the post-CreateJobWithTask slot, the atomic create runs FIRST
-// with the payload's delivery_plan, so the payload's destination_id
-// "d1" must be seeded to reach the precondition check.
+// per-delivery delivery_plan_payload.go validator already rejects at	// parse time; this is the runtime counterpart at enqueue time.
+	// The atomic create runs FIRST with the payload's delivery_plan,
+	// so the payload's destination_id "d1" must be seeded to reach
+	// the precondition check.
 func TestEnqueue_Precondition_RejectsZeroRetryBudget(t *testing.T) {
 	t.Parallel()
 	tempDir := t.TempDir()
@@ -1180,14 +1158,14 @@ func TestEnqueueWithForwardingKey(t *testing.T) {
 }
 
 // =============================================================================
-// PR-delivery-plan-precondition: integration test that uses the REAL
-// DB-backed *deliveries.SQLiteDeliveryPlanResolver (not a hand-rolled
-// mock) via a local planResolverAdapter. This proves the precondition
-// reads from the real job_delivery_plans table, propagates max(retry_budget)
-// to job.MaxRetries, and surfaces the production ErrNoExplicitPlan path
-// when no plan rows exist. The adapter mirrors the production one in
-// cmd/server/bootstrap_modules.go to avoid an import cycle between
-// enqueue and deliveries.
+// Integration test that uses the REAL DB-backed
+// *deliveries.SQLiteDeliveryPlanResolver (not a hand-rolled mock) via
+// a local planResolverAdapter. This proves the precondition reads
+// from the real job_delivery_plans table, propagates max(retry_budget)
+// to job.MaxRetries, and surfaces the production ErrNoExplicitPlan
+// path when no plan rows exist. The adapter mirrors the production
+// one in cmd/server/bootstrap_modules.go to avoid an import cycle
+// between enqueue and deliveries.
 // =============================================================================
 
 // planResolverAdapter bridges *deliveries.SQLiteDeliveryPlanResolver to
