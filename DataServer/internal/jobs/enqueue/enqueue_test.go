@@ -724,15 +724,55 @@ func TestBuildSceneImagePayload_RoundTrip(t *testing.T) {
 // PlanResolver is the happy-path mock so non-precondition tests do not
 // have to configure it. Precondition tests use a custom mockPlanResolver
 // directly via NewEnqueuer.
+//
+// Seeds "drive-main" + "destination-main" into delivery_destinations so
+// store.validateDeliveryDestinationTx (called inside AtomicJobTaskCreator
+// during the per-destination JWT check) has a stable set to query
+// against. The seed is also the reason helper-using tests like
+// TestEnqueueCreatesJobAndTaskAtomically / TestEnqueueDefaultsPreserved /
+// TestEnqueueWithForwardingKey that pass `delivery_plan: [{destination_id:
+// "drive-main", ...}]` stop failing with "destination_id \"drive-main\"
+// does not exist" — the seeded row makes validateDeliveryDestinationTx
+// return nil for those ids.
 func newTestEnqueuer(t *testing.T) *Enqueuer {
 	t.Helper()
 	db, err := store.NewSQLiteStore(t.TempDir() + "/test.db")
 	if err != nil {
 		t.Fatalf("sqlite store: %v", err)
 	}
+	seedDestinations(t, db, map[string]bool{
+		"drive-main": true,
+	})
 	jobRepo := store.NewSQLiteJobRepository(db)
 	atomic := store.NewAtomicJobTaskCreator(db)
 	return NewEnqueuer(atomic, jobRepo, nil, newTestPlanResolver())
+}
+
+// seedDestinations seeds the delivery_destinations table with the
+// given (id, enabled) pairs so the per-destination validator
+// (store.validateDeliveryDestinationTx, called inside the atomic
+// creator's parse-time plan check) has a stable set to query against.
+//
+// Mirrors the helper of the same name in
+// DataServer/internal/store/atomic_job_task_test.go. Duplicated here
+// (not exported) because:
+//   - importing store's test internals would couple this file to
+//     non-production symbols,
+//   - tests in this package need different default seeds than tests
+//     in store (e.g. "drive-main" vs the multi-dest IDs the store
+//     package tests exercise).
+func seedDestinations(t *testing.T, db *store.SQLiteStore, pairs map[string]bool) {
+	t.Helper()
+	for id, enabled := range pairs {
+		if err := db.InsertDeliveryDestination(&store.DeliveryDestination{
+			DestinationID: id,
+			Provider:      "drive",
+			Name:          id,
+			Enabled:       enabled,
+		}); err != nil {
+			t.Fatalf("seed destination %q: %v", id, err)
+		}
+	}
 }
 
 // TestEnqueueCreatesJobAndTaskAtomically verifies that Enqueue creates
@@ -1034,6 +1074,20 @@ func TestEnqueue_Precondition_PropagatesMaxRetryBudget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sqlite store: %v", err)
 	}
+	// Seed d1 so the atomic creator's per-destination validator agrees
+	// with the payload's `delivery_plan` (the only destination_id the
+	// payload carries). The precondition mock passes (mock returns
+	// all valid retry_budget), so control reaches the atomic create
+	// path where parse-time validateDeliveryDestinationTx reads the
+	// payload's delivery_plan and queries delivery_destinations by
+	// the payload's id "d1". Without this seed the test fails with
+	// `"d1" does not exist`. d2/d3 are part of the mockPlanResolver's
+	// destinations slice but are NOT exercised by the payload's
+	// delivery_plan, so they don't need seeding here — the precondition
+	// step only reads their retry_budget, never their ids.
+	seedDestinations(t, db, map[string]bool{
+		"d1": true,
+	})
 	enq := NewEnqueuer(
 		store.NewAtomicJobTaskCreator(db),
 		store.NewSQLiteJobRepository(db),
