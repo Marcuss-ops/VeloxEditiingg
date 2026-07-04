@@ -1,7 +1,7 @@
 package store
 
 // store_jobs_claim_ranked.go — ranked/cost-model claim path
-// (PR-04.6 sibling of the FIFO path in store_jobs_claim_fifo.go).
+// (sibling of the FIFO path in store_jobs_claim_fifo.go).
 //
 // Flow:
 //  1. Over-fetch PENDING candidates (4× cap) into a bounded

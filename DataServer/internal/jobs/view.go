@@ -72,7 +72,7 @@ type QueueItem struct {
 	Payload map[string]interface{} `json:"-"`
 
 	// Requirements is the per-job placement needs surfaced to the
-	// transport layer (PR-04.5). Consumers (gRPC workers, future
+	// transport layer. Consumers (gRPC workers, future
 	// rank sites, HTTP debug endpoints) read this directly. Empty
 	// ⇒ no per-job constraint (permissive default preserved).
 	Requirements costmodel.JobRequirements `json:"requirements,omitempty"`

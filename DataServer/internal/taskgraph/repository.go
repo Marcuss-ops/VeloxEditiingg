@@ -105,7 +105,7 @@ type Writer interface {
 	// never wrongly reaped. limit caps how many tasks are scanned per
 	// call (0 defaults to 100).
 	//
-	// PR-05: replaces the Job-side zombie reaper. PR-04 transforms
+	// PR-05: replaces the Job-side zombie reaper. The sweep is transformed into
 	// this method SELECT-only so the per-row atomic path owns the write.
 	RequeueExpiredLeases(ctx context.Context, nowRFC3339 string, limit int) (candidates []RequeueCandidate, err error)
 
@@ -115,7 +115,7 @@ type Writer interface {
 	// preserves audit invariant §9.5 (Task RUNNING ⇒ Attempt RUNNING)
 	// across crash windows. Returns ErrTransitionConflict on stale CAS.
 	//
-	// PR-04 / §9.5: supersedes the two-statement Start + Create sequence
+	// §9.5: supersedes the two-statement Start + Create sequence
 	// previously used in handleTaskAccepted.
 	AcceptTaskAtomic(ctx context.Context, attempt *taskattempts.TaskAttempt, revision int) error
 
@@ -196,7 +196,7 @@ type Writer interface {
 	// (taskattempts) on a hardened §9.5 violation (Task RUNNING with
 	// no matching attempt row).
 	//
-	// PR-04 / §9.5: supersedes the two-statement SetStatus|Fail +
+	// §9.5: supersedes the two-statement SetStatus|Fail +
 	// CompleteFinal sequence previously used in handleTaskResult.
 	TransitionTaskToTerminalAtomic(
 		ctx context.Context,
@@ -254,10 +254,10 @@ type Repository interface {
 // RequeueExpiredLeases. The reaper iterates it and per-row runs
 // ExpireTaskLeaseAtomic so the per-task CAS still holds.
 //
-// PR-04 / fix/task-expiry-atomic-transition: RequeueExpiredLeases is now
-// SELECT-only. The legacy "bulk UPDATE tasks to READY, bump attempt_count"
-// behavior is REMOVED — ExpireTaskLeaseAtomic owns the per-task write and
-// applies the audit-mandated retry budget + attempt close.
+// RequeueExpiredLeases is now SELECT-only. The legacy "bulk UPDATE
+// tasks to READY, bump attempt_count" behavior is REMOVED.
+// ExpireTaskLeaseAtomic owns the per-task write and applies the
+// audit-mandated retry budget + attempt close.
 type RequeueCandidate struct {
 	ID             string
 	LeaseID        string
@@ -268,7 +268,7 @@ type RequeueCandidate struct {
 
 // ExpireResult reports the outcome of ExpireTaskLeaseAtomic.
 //
-// PR-04 / fix/task-expiry-atomic-transition: the caller
+// the caller
 // (LifecycleService.ExpireTaskLease / TaskLeaseReaper) uses
 // AttemptsExhausted to decide whether to surface a Job-level failure
 // via jobsRepo.Fail downstream of the atomic.

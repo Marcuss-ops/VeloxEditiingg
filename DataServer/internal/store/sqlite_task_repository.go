@@ -329,7 +329,7 @@ func (r *SQLiteTaskRepository) Fail(ctx context.Context, id, reason string, revi
 }
 
 // =====================================================================
-// PR-04 / §9.5 invariant: Atomic Task + TaskAttempt transitions.
+// §9.5 invariant: Atomic Task + TaskAttempt transitions.
 //
 // The two-write pattern in handleTaskAccepted (Start + Create) and
 // handleTaskResult (SetStatus|Fail + CompleteFinal) leaves a window
@@ -521,7 +521,7 @@ func (r *SQLiteTaskRepository) ClaimNextWithAttemptAtomic(ctx context.Context, w
 //   - The CAS tuple gains attempt_id + attempt_number on the Task row stamp
 //     so a replay / stale-acceptance is bounded by both Task CAS and Attempt CAS.
 //
-// PR-04 / §9.5 closes the desync surface in handleTaskAccepted where a
+// §9.5 closes the desync surface in handleTaskAccepted where a
 // crash between h.taskRepo.Start and h.taskAttemptRepo.Create could
 // leave a Task in RUNNING with no active Attempt. POST-PR-2 the PENDING
 // attempt row is created atomically with the LEASED CAS at Claim time,
@@ -650,7 +650,7 @@ func (r *SQLiteTaskRepository) AcceptTaskAtomic(ctx context.Context, attempt *ta
 //     its attempt into Task terminal + no attempt, violating §9.5 more
 //     deeply than the pre-state.
 //
-// PR-04 / §9.5 closes the desync surface in handleTaskResult where a
+// §9.5 closes the desync surface in handleTaskResult where a
 // crash between h.taskRepo.SetStatus|Fail and h.taskAttemptRepo.CompleteFinal
 // could permanently strand Task terminal + Attempt RUNNING.
 func (r *SQLiteTaskRepository) TransitionTaskToTerminalAtomic(
@@ -1053,7 +1053,7 @@ func (r *SQLiteTaskRepository) RenewLease(ctx context.Context, id, workerID, lea
 }
 
 // ExpireTaskLeaseAtomic reaps a single task in one atomic transaction
-// following the audit-mandated contract for PR-04 / fix/task-expiry-atomic-transition:
+// following the audit-mandated contract for the atomic transition:
 //
 //  1. CAS-gate on (task_id, lease_id, lease_expires_at, worker_id) where
 //     lease_expires_at is the OBSERVED (pre-reap) value; a worker that
@@ -1383,7 +1383,7 @@ const defaultTaskLeaseTTL = 30 * time.Minute
 // are scanned per call (0 defaults to 100). nowRFC3339 must be a
 // RFC3339-encoded timestamp string (the format the column uses).
 //
-// PR-05 set up the master-side lease enforcement. PR-04 / audit
+// PR-05 set up the master-side lease enforcement. The audit
 // P0#4+P0#6 transforms this method into SELECT-only so per-task
 // ExpireTaskLeaseAtomic closes the attempt + applies retry budget +
 // CAS-gates on (task_id, lease_id, lease_expires_at, worker_id) in

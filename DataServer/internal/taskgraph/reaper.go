@@ -8,8 +8,7 @@
 // PR-05 follow-up splits them into independent runners so each has its own
 // ticker, its own log prefix, and its own lifecycle handle in the supervisor.
 //
-// PR-04 / fix/task-expiry-atomic-transition transforms the sweep from a
-// bulk reset into per-candidate atomic reap:
+// The sweep is transformed from a bulk reset into per-candidate atomic reap:
 //   - RequeueExpiredLeases now SELECT-only (returns []RequeueCandidate)
 //   - the reaper iterates candidates and calls LifecycleService.ExpireTaskLease
 //     which performs Task CAS + Attempt TIMED_OUT close + retry budget +

@@ -75,7 +75,7 @@ type HostSummary struct {
 }
 
 // ExecutorSummary is a single executor descriptor flattened from the
-// capabilities blob. ResourceClass is included (RFC PR-3.5+) so a
+// capabilities blob. ResourceClass is included so a
 // dispatcher can render "velox-worker-fleet: 4×cpu + 2×gpu" without
 // re-decoding the full capabilities map.
 type ExecutorSummary struct {

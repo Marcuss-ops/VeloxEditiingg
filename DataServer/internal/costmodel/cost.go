@@ -2,19 +2,17 @@
 // lower-is-better score + structured explanation) from a
 // WorkerProfile and a JobRequirements.
 //
-// PR-04 first slice: the model consumes the four canonical fields
-// exposed on executor.Descriptor (ResourceClass + TemporalMode +
+// The model consumes the four canonical fields exposed on
+// executor.Descriptor (ResourceClass + TemporalMode +
 // Deterministic + Cacheable) plus transient worker state (drain,
 // offline, capacity). WorkerProfiles are built from heartbeat
-// capabilities maps in worker_profile.go; rank scoring is wired in
-// in PR-04.5 — this package already implements the formula but
-// PR-04.4 only reads Eligible.
+// capabilities maps in worker_profile.go.
 //
 // Module boundaries: this package is duplicated in
 // RemoteCodex/native/worker-agent-go/internal/costmodel. See the
-// "Cost model pos: Duplicata in due" choice in PR-04 scope. Both
-// implementations stay in lock-step and are verified against each
-// other by the parity test in the worker-side mirror.
+// "Cost model pos: Duplicata in due" choice. Both implementations
+// stay in lock-step and are verified against each other by the
+// parity test in the worker-side mirror.
 package costmodel
 
 import "strings"
@@ -76,8 +74,8 @@ func (t TemporalMode) Valid() bool {
 // fields (ResourceClass == "" / TemporalMode == "") mean "no
 // requirement" — Score() does not gate eligibility on those fields
 // when the requirement is empty. This Permissive-Default behavior at
-// PR-04.4 preserves legacy queue routing until enqueue publishes
-// per-job requirements on QueueItem/Job (PR-04 follow-up).
+// The eligibility layer preserves legacy queue routing until enqueue publishes
+// per-job requirements on QueueItem/Job.
 type JobRequirements struct {
 	// ResourceClass: when set, Score gates by
 	//   resourceClassSatisfies(w.ResourceClass, j.ResourceClass).
@@ -103,14 +101,14 @@ func DefaultRequirements() JobRequirements {
 
 // ── Cost + Explanation ───────────────────────────────────────────────────────
 
-// Explanation is the structured breakdown required by PR-04.5
+// Explanation is the structured breakdown for scored placement
 // ("Return a structured explanation for the winning placement").
 // Lower is better for every numeric component; Score is their sum
 // when Eligible=true. IneligibilityReason is empty iff Eligible=true.
 //
 // Components are dimensionless cost weights (not seconds / bytes);
 // calibration is the responsibility of the per-executor estimator
-// (PR-04.2) and is intentionally out of scope here.
+// and is intentionally out of scope here.
 type Explanation struct {
 	// CapabilityFit: 0 for exact match, 1 for degraded fallback
 	// (e.g. job=ResourceGPU on a ResourceMixed worker). Unset
@@ -119,18 +117,17 @@ type Explanation struct {
 	// LoadFactor: ActiveJobs / max(MaxParallel, 1). Measured at the
 	// eligibility layer pulls 0+0 (MaxParallel == 0 ⇒ unknown).
 	LoadFactor float64
-	// DeterminismHit: 0 here (PR-04.4 admits non-deterministic
-	// worker for a Deterministic-true job). Reserved for PR-04.5.
+	// DeterminismHit: reserved for rank scoring.
 	DeterminismHit float64
-	// CacheableHint: 0 here; reserved for PR-04.5 (cache-hit bonus).
+	// CacheableHint: reserved for rank scoring (cache-hit bonus).
 	CacheableHint float64
-	// BandwidthFit: PR-04.6. 0 when the worker link is sufficient OR
+	// BandwidthFit: 0 when the worker link is sufficient OR
 	// unreported (legacy = unknown = pass-through); 1 when
 	// w.LinkBandwidthMbps > 0 AND w.LinkBandwidthMbps <
 	// j.MinBandwidthMbps (penalty, NOT rejection — preserves the
 	// "tolerable but penalized" convention set by CapabilityFit).
 	BandwidthFit float64
-	// ModeFit: 0 for exact match, 1 for fallback (reserved). PR-04.4
+	// ModeFit: 0 for exact match, 1 for fallback (reserved).
 	// is strict so ModeFit stays at 0 when eligible.
 	ModeFit float64
 	// IneligibilityReason: human-readable explanation when
@@ -150,22 +147,21 @@ type Cost struct {
 }
 
 // Score applies the canonical four-field + transient-state rule
-// set. The signature also returns Explanation so callers (PR-04.5)
+// set. The signature also returns Explanation so callers
 // can surface the breakdown per the "explainable score" acceptance
 // criteria without re-implementing the formula.
 //
 // Deterministic: identical (worker, job) inputs produce identical
 // (Cost, Explanation) outputs — verified by TestScore_Reproductive.
 //
-// ResourceClass compatibility matrix (PR-04.4):
+// ResourceClass compatibility matrix:
 //
 //	job: cpu   → w ∈ {cpu, mixed, io}
 //	job: mixed → w ∈ {mixed, gpu}
 //	job: gpu   → w ∈ {gpu} | (mixed with degraded penalty)
 //	job: io    → w ∈ {io, cpu, mixed}
-//
-// TemporalMode at PR-04.4: exact match required. Relaxation lands
-// in PR-04.5+ when the shard planner provides a temporal-mode
+//// TemporalMode: exact match required. Relaxation lands
+	// when the shard planner provides a temporal-mode
 // hierarchy.
 func Score(w WorkerProfile, j JobRequirements) (Cost, Explanation) {
 	var exp Explanation
@@ -188,7 +184,7 @@ func Score(w WorkerProfile, j JobRequirements) (Cost, Explanation) {
 	}
 
 	// 2. Four-field rules. Empty requirement fields pass through
-	// (preserves legacy behavior at PR-04.4 until enqueue publishes
+	// (preserves legacy behavior at the eligibility layer until enqueue publishes
 	// per-job requirements).
 	if j.ResourceClass != "" {
 		ok, penalty := resourceClassSatisfies(w.ResourceClass, j.ResourceClass)
@@ -214,11 +210,11 @@ func Score(w WorkerProfile, j JobRequirements) (Cost, Explanation) {
 		exp.LoadFactor = float64(w.ActiveJobs) / float64(w.MaxParallel)
 	}
 
-	// 4. BandwidthFit (PR-04.6). Penalty (NOT rejection) when the
+	// 4. BandwidthFit. Penalty (NOT rejection) when the
 	// job declares a MinBandwidthMbps > 0 and the worker reports a
 	// positive LinkBandwidthMbps strictly less than the minimum.
 	// Legacy / unreported workers (LinkBandwidthMbps == 0) are
-	// treated as "unknown" bandwidth and pass through so pre-PR-04.6
+	// treated as "unknown" bandwidth and pass through so legacy
 	// queue payloads keep today's routing.
 	if j.MinBandwidthMbps > 0 && w.LinkBandwidthMbps > 0 &&
 		w.LinkBandwidthMbps < j.MinBandwidthMbps {
@@ -232,13 +228,13 @@ func Score(w WorkerProfile, j JobRequirements) (Cost, Explanation) {
 // resourceClassSatisfies is the canonical compatibility check; ok
 // is eligibility, penalty is the per-pair degraded-fallback cost
 // component (0 if exact, 1 if degraded). Mixed-as-GPU is the only
-// degraded pair for PR-04.4 — other mismatches are outright
+// degraded pair — other mismatches are outright
 // rejections.
 func resourceClassSatisfies(w, j ResourceClass) (bool, float64) {
 	if !j.Valid() {
 		// Defensive: callers that publish invalid ResourceClass
 		// requirements are treated as "no requirement" — the
-		// permissive behavior at PR-04.4 reduces blast radius.
+		// permissive behavior at the eligibility layer reduces blast radius.
 		j = ""
 	}
 	if j == "" {

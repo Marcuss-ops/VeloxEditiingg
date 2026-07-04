@@ -87,7 +87,7 @@ func (h *Handler) handleTaskAccepted(workerID string, ta *pb.TaskAccepted) {
 	// than minting a new UUID, AND closes the canonical TaskAttempt
 	// PENDING → RUNNING inside AcceptTaskAtomic's atomic tx.
 	//
-	// PR-04 / §9.5 invariant preserved: Task LEASED → RUNNING AND Attempt
+	// §9.5 invariant preserved: Task LEASED → RUNNING AND Attempt
 	// PENDING → RUNNING commit in ONE transaction (AcceptTaskAtomic). The
 	// pre-PR-2 INSERT pattern (Start + Create) had a crash window; PR-2's
 	// earlier-minted PENDING row + this UPDATE path closes it.

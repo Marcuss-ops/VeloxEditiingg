@@ -7,7 +7,7 @@ import (
 )
 
 // Costmodel-dependency safety: jobs imports costmodel for the per-job
-// Requirements threading (PR-04.5). The reverse direction does NOT
+// Requirements threading. The reverse direction does NOT
 // hold — costmodel has no compile dependency on jobs (only on
 // "strings"). Adding Requirements to Job.Requirements is therefore a
 // forward-only edge and introduces no import cycle.

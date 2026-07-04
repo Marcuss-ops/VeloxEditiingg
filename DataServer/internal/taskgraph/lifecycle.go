@@ -18,7 +18,7 @@ type LifecycleService struct {
 	repo Repository
 	// jobsRepo is the canonical jobs-side surface ExpireTaskLease uses
 	// to read retry budgets (jobs.max_retries) and post-commit-update
-	// the Job aggregate when retries are exhausted. PR-04 wires this
+	// the Job aggregate when retries are exhausted. Wires this
 	// post-commit so the reap atomic stays single-domain.
 	jobsRepo JobsRetryQuerier
 	// now is overridable for tests; nil falls back to time.Now().UTC().
@@ -122,7 +122,7 @@ func (l *LifecycleService) RenewLease(ctx context.Context, id, workerID, leaseID
 }
 
 // RequeueExpiredLeases scans tasks whose lease has expired as
-// RequeueCandidate rows (PR-04: SELECT-only; the per-row atomic write
+// RequeueCandidate rows (SELECT-only; the per-row atomic write
 // is ExpireTaskLeaseAtomic). The caller-supplied nowRFC3339 lets the
 // supervisor pin the sweep time so the tick is deterministic across
 // goroutines.

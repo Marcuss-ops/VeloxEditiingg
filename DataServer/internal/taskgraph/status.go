@@ -13,7 +13,7 @@ const (
 	StatusCancelled Status = "CANCELLED"
 
 	// StatusTimedOut is set on a Task that the audit-mandated lease reaper
-	// (PR-04 / fix/task-expiry-atomic-transition) transitions when its
+	// transitions when its
 	// lease TTL elapses without a worker report OR with an active attempt
 	// whose worker crashed mid-flight. The corresponding TaskAttempt is
 	// closed as AttemptStatusTimedOut in the same atomic tx; the reaper
@@ -24,7 +24,7 @@ const (
 
 // IsTerminal reports whether a task in this state has finished its lifecycle.
 //
-// Audit §P0.4 / PR-04: StatusTimedOut is terminal so the Job roll-up
+// StatusTimedOut is terminal so the Job roll-up
 // (internal/taskingestion.TaskReportIngestionService.maybeTransitionJob)
 // correctly observes "all tasks terminal" after a reaper pass. Treating
 // StatusTimedOut as non-terminal would cause the roll-up to hang waiting

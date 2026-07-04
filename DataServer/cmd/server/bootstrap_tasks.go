@@ -41,8 +41,7 @@ type taskDeps struct {
 // buildTasks creates the task repositories, lifecycle service, atomic creator,
 // reaper, and observability service from the persistence layer.
 //
-// PR-04 / fix/task-expiry-atomic-transition: TaskLeaseReaper is now built
-// from the canonical LifecycleService (which owns the per-candidate atomic
+// TaskLeaseReaper is now built from the canonical LifecycleService (which owns the per-candidate atomic
 // reap + retry budget query + post-commit Job aggregate update). The
 // LifecycleService is wired with jobsRepo via SetJobsRepo in buildServerDeps
 // and runServer AFTER this function returns (buildJobs already produced
