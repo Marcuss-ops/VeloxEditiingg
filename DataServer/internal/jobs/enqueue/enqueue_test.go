@@ -970,8 +970,9 @@ func TestEnqueue_Precondition_RejectsMissingPlan(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "delivery_plan") {
 		t.Errorf("want error to mention delivery_plan, got %v", err)
-	}
-}// TestEnqueue_Precondition_RejectsEmptyDestinations verifies that an
+	}	}
+
+// TestEnqueue_Precondition_RejectsEmptyDestinations verifies that an
 // enqueue is rejected when the plan has zero destinations (treated as
 // "no explicit plan"). The atomic create runs FIRST with the payload's
 // delivery_plan, so the payload's destination_id "d1" must be seeded;
@@ -1011,8 +1012,8 @@ func TestEnqueue_Precondition_RejectsEmptyDestinations(t *testing.T) {
 }
 
 // TestEnqueue_Precondition_RejectsZeroRetryBudget verifies that an
-// enqueue is rejected when any destination has retry_budget <= 0. The
-// per-delivery delivery_plan_payload.go validator already rejects at	// parse time; this is the runtime counterpart at enqueue time.
+// enqueue is rejected when any destination has retry_budget <= 0. The	// per-delivery delivery_plan_payload.go validator already rejects at
+	// parse time; this is the runtime counterpart at enqueue time.
 	// The atomic create runs FIRST with the payload's delivery_plan,
 	// so the payload's destination_id "d1" must be seeded to reach
 	// the precondition check.
