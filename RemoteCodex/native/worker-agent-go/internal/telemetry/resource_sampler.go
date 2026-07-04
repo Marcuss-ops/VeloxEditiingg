@@ -119,7 +119,7 @@ type SampledResources struct {
 // api.HostInfo (PR-3.6 future markers at worker.go:177-183).
 // SampledHost is cheap to recompute; the worker stores it on *Worker
 // and refreshes it on a slow cadence (1 minute) so HasGPU / RAMBytes
-// / DiskFreeBytes reflect current reality (e.g. nvidia module loaded
+// DiskFreeBytes reflect current reality (e.g. nvidia module loaded
 // mid-flight).
 type SampledHost struct {
 	RAMBytes      int64

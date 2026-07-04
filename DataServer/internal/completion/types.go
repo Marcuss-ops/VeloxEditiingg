@@ -90,7 +90,7 @@ type DeclareOutputsCommand struct {
 // UploadPlan is the master's reply to DeclareOutputs.
 //
 // CommitID is the dedicated key the master uses to gate later upload
-// / commit operations on this exact Attempt. The worker carries it on
+// commit operations on this exact Attempt. The worker carries it on
 // every subsequent commit-protocol call.
 //
 // CommitToken is the OPAQUE bearer token the master hands the worker

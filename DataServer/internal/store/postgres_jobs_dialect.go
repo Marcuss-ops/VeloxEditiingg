@@ -2,7 +2,7 @@
 //
 // Postgres dialect for the shared job repository.  Uses $n placeholders
 // and no-op audit hooks (Phase 2 doesn't support job_history / job_events
-// / outbox_events).
+// outbox_events).
 
 package store
 

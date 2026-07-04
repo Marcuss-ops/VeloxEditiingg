@@ -338,7 +338,7 @@ func (w *Worker) AddActiveTaskLease(taskID, jobID, attemptID, leaseID string, at
 
 // RemoveActiveTaskLease deregisters a task-native lease so leaseRenewLoop
 // stops dispatching MsgTaskLeaseRenewal for it. Called on MsgLeaseRevoked
-// / canonical terminal-state transition (executeTask returns SUCCEEDED /
+// canonical terminal-state transition (executeTask returns SUCCEEDED /
 // FAILED / CANCELLED / TIMED_OUT). Empty taskID is a no-op.
 func (w *Worker) RemoveActiveTaskLease(taskID string) {
 	if taskID == "" {

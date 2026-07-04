@@ -316,7 +316,7 @@ func (cl *ConcurrencyLimiter) WaitingJobCount() int32 {
 // Start is a no-op for the resizable cond-based limiter — kept for
 // backwards-compat with prior callers (worker.go calls
 // w.concurrencyLimiter.Start(ctx)). The cond wakes on Release / Stop
-// / SetMaxActiveJobs automatically; no separate start goroutine needed.
+// SetMaxActiveJobs automatically; no separate start goroutine needed.
 func (cl *ConcurrencyLimiter) Start(_ context.Context) {
 	// intentional no-op
 }

@@ -76,7 +76,7 @@ func (h *YouTubeHandlers) ResolveChannelByLanguage(c *gin.Context) {
 //	operator-actionable, and the next handler call retries the read.
 //
 // Mutations on this file (CreateGroup / DeleteGroup / AddChannelToGroup
-// / RemoveChannelFromGroup) still call h.storage; their per-handler
+// RemoveChannelFromGroup) still call h.storage; their per-handler
 // audit-pass migration queues separately.
 func (h *YouTubeHandlers) ListGroups(c *gin.Context) {
 	groups := h.service.GetGroups()

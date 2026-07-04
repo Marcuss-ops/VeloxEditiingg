@@ -459,7 +459,7 @@ func (r *Reconciler) deleteFinalFile(rel string) error {
 // =====================================================================
 
 // isNoSuchTable returns true when err is the SQLite "no such table"
-// / "no such column" error. Used to soft-skip over schema-roll phases
+// "no such column" error. Used to soft-skip over schema-roll phases
 // where outbox_events / job_deliveries may not yet exist. The
 // Reconciler's quarantineArtifactTx uses this to surface a
 // status-only quarantine when the outbox_events schema is incomplete.

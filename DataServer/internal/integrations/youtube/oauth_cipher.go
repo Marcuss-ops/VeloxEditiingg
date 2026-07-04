@@ -25,7 +25,7 @@ package youtube
 type OAuthCipher interface {
 	// Encrypt takes plaintext bytes and returns the ciphertext that
 	// is then written into youtube_oauth_tokens.access_token_encrypted
-	// / refresh_token_encrypted. Implementations MUST be safe for
+	// refresh_token_encrypted. Implementations MUST be safe for
 	// concurrent callers (the boot hydrator and refresh path can both
 	// fire on the same Service from different goroutines).
 	Encrypt(plaintext []byte) ([]byte, error)
