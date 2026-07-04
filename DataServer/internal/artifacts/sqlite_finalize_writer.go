@@ -4,6 +4,17 @@
 // verified artifact. Sole writer of jobs.status='SUCCEEDED' (audit
 // invariant); the scan_test allowlist pins this file as the
 // authoritative anchor for that SQL fragment.
+//
+// FinalizeVerified is decomposed into 6 private *Tx step methods on
+// *SQLiteFinalizeWriter. Each step:
+//   - Receives the caller's *sql.Tx (does NOT open its own).
+//   - Performs ONE logical CAS / read / insert.
+//   - Returns a wrapped ErrTransitionConflict on RowsAffected != 1.
+//   - Does NOT commit, rollback, or call tx.End — those remain
+//     exclusively in the orchestrator so the whole flow stays
+//     atomic. The orchestrator's defer-Rollback is the single
+//     safety net; the steps must NEVER swallow that contract by
+//     issuing their own tx finalization.
 package artifacts
 
 import (
@@ -89,6 +100,8 @@ func NewSQLiteFinalizeWriter(db *sql.DB, reader ArtifactReader, resolver Deliver
 
 var _ FinalizationWriter = (*SQLiteFinalizeWriter)(nil)
 
+// ── CAS-precondition helper (shared by validateFinalizingUploadTx) ──────
+
 // uploadCASPrecondition is the per-row snapshot read at the
 // artifact_uploads CAS-precondition step. Batches the four auth
 // columns so the precondition check is one Scan.
@@ -120,6 +133,22 @@ func loadUploadSessionForCASInTx(ctx context.Context, tx *sql.Tx, uploadID strin
 	return out, nil
 }
 
+// ── FinalizeVerified orchestrator (single external tx boundary) ─────────
+
+// FinalizeVerified is the verified-finalization entry point. It opens
+// the *single* SQL transaction that wraps the entire finalization
+// flow, then dispatches to 6 private *Tx step methods in order:
+//
+//	1. validateFinalizingUploadTx — auth + state precondition
+//	2. markJobSucceededTx         — sole writer of jobs.status='SUCCEEDED'
+//	3. markArtifactReadyTx        — artifacts STAGING → READY
+//	4. resolveDeliveryDestinationsTx — per-job delivery plan
+//	5. insertPendingDeliveriesTx  — durable job_deliveries rows
+//	6. completeUploadTx           — artifact_uploads FINALIZING → COMPLETED
+//
+// The Commit + post-tx artifact read happen here, never inside the
+// steps. Any step error propagates up: the defer-Rollback reverts
+// the entire tx atomically.
 func (w *SQLiteFinalizeWriter) FinalizeVerified(ctx context.Context, cmd FinalizeVerifiedCommand) (*store.Artifact, error) {
 	if cmd.UploadID == "" || cmd.ArtifactID == "" || cmd.JobID == "" {
 		return nil, fmt.Errorf("artifacts: FinalizeVerified: upload/artifact/job ids are required")
@@ -136,25 +165,8 @@ func (w *SQLiteFinalizeWriter) FinalizeVerified(ctx context.Context, cmd Finaliz
 		}
 	}()
 
-	// Step 1: artifact_uploads CAS-precondition load. Tightened to
-	// 'FINALIZING' only — accepting 'RECEIVED' here would mask a
-	// missing orchestration step with a misleading late-stage
-	// ErrTransitionConflict at the COMPLETED flip below; rejecting
-	// here surfaces the precondition failure with the correct
-	// ErrUploadStateInvalid sentinel so the caller can retry.
-	pre, err := loadUploadSessionForCASInTx(ctx, tx, cmd.UploadID)
-	if err != nil {
+	if err := w.validateFinalizingUploadTx(ctx, tx, cmd); err != nil {
 		return nil, err
-	}
-	if pre.Status != "FINALIZING" {
-		return nil, fmt.Errorf("%w: upload=%s status=%s (expected FINALIZING — Service.Finalize must CAS RECEIVED->FINALIZING first)",
-			ErrUploadStateInvalid, cmd.UploadID, pre.Status)
-	}
-	if pre.WorkerID != cmd.WorkerID || pre.LeaseID != cmd.LeaseID || pre.AttemptNumber != cmd.AttemptNumber {
-		return nil, fmt.Errorf("%w: auth upload=%s worker=%s->%s lease=%s->%s attempt=%d->%d",
-			ErrTransitionConflict, cmd.UploadID,
-			pre.WorkerID, cmd.WorkerID, pre.LeaseID, cmd.LeaseID,
-			pre.AttemptNumber, cmd.AttemptNumber)
 	}
 
 	verifiedAt := cmd.VerifiedAt
@@ -163,159 +175,21 @@ func (w *SQLiteFinalizeWriter) FinalizeVerified(ctx context.Context, cmd Finaliz
 	}
 	nowStr := verifiedAt.UTC().Format(time.RFC3339)
 
-	// Step 2: jobs CAS — sole writer of jobs.status='SUCCEEDED'.
-	//
-	// WHERE allows status IN ('RUNNING', 'AWAITING_ARTIFACT'). The
-	// AWAITING_ARTIFACT branch is the post-task-completion state
-	// written elsewhere once all tasks succeed; this writer closes
-	// the loop to SUCCEEDED. RUNNING → SUCCEEDED is preserved for
-	// legacy workers without an artifact contract (defensive backward
-	// compat).
-	jobQuery := `
-		UPDATE jobs
-		SET status = 'SUCCEEDED',
-		    completed_at = ?,
-		    updated_at   = ?,
-		    revision     = revision + 1
-		WHERE job_id = ?
-		  AND status IN ('RUNNING', 'AWAITING_ARTIFACT')`
-	jobArgs := []interface{}{nowStr, nowStr, cmd.JobID}
-	if cmd.ExpectedRevision != 0 {
-		jobQuery += ` AND revision = ?`
-		jobArgs = append(jobArgs, cmd.ExpectedRevision)
+	if err := w.markJobSucceededTx(ctx, tx, cmd, nowStr); err != nil {
+		return nil, err
 	}
-	jobRes, err := tx.ExecContext(ctx, jobQuery, jobArgs...)
+	if err := w.markArtifactReadyTx(ctx, tx, cmd, nowStr); err != nil {
+		return nil, err
+	}
+	resolved, err := w.resolveDeliveryDestinationsTx(ctx, tx, cmd)
 	if err != nil {
-		return nil, fmt.Errorf("artifacts: FinalizeVerified jobs CAS: %w", err)
+		return nil, err
 	}
-	if n, _ := jobRes.RowsAffected(); n != 1 {
-		return nil, fmt.Errorf("%w: jobs affected=%d upload=%s",
-			ErrTransitionConflict, n, cmd.UploadID)
+	if err := w.insertPendingDeliveriesTx(ctx, tx, cmd, nowStr, resolved); err != nil {
+		return nil, err
 	}
-
-	// Step 3: artifacts CAS: STAGING → READY. Master-computed
-	// (storage_key, sha256, size, mime) stamped here; the tx commits
-	// them atomically with the Job flip so a partial state where Job
-	// is SUCCEEDED but artifacts is still STAGING cannot be observed.
-	res, err := tx.ExecContext(ctx, `
-		UPDATE artifacts
-		SET status = 'READY',
-		    storage_provider = ?,
-		    storage_key = ?,
-		    sha256 = ?, size_bytes = ?, mime_type = ?,
-		    verified_at = ?
-		WHERE id = ? AND job_id = ? AND status = 'STAGING'`,
-		cmd.StorageProvider, cmd.StorageKey,
-		cmd.SHA256, cmd.SizeBytes, cmd.MIMEType,
-		nowStr,
-		cmd.ArtifactID, cmd.JobID,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("artifacts: FinalizeVerified artifacts CAS: %w", err)
-	}
-	if n, _ := res.RowsAffected(); n != 1 {
-		return nil, fmt.Errorf("%w: artifacts affected=%d artifact=%s",
-			ErrTransitionConflict, n, cmd.ArtifactID)
-	}
-
-	// Step 4: per-job delivery destinations + per-destination max_attempts.
-	//
-	// Step 5/8 of the canonical-purity plan: switch from
-	// w.resolver.ResolveDestinations (which dropped retry_budget at the
-	// interface boundary) to a per-destination projection that carries
-	// MaxAttempts, then stamp it on the INSERT so the durable attempt
-	// cap survives worker restarts. Resolved inline because the
-	// resolution happens inside the same tx that INSERTs
-	// job_deliveries; splitting it out would force a destination slice
-	// across the writer boundary with no separation win.
-	var resolved []DeliveryDestination
-	if cmd.DestinationID != "" {
-		// Single-destination explicit path. The cmd-level
-		// DestinationID always wins over a per-job plan because it
-		// pins routing to one tail (override semantics). max_attempts
-		// defaults to 5 (schema default).
-		resolved = []DeliveryDestination{{
-			DestinationID: cmd.DestinationID,
-			MaxAttempts:   5,
-		}}
-	} else if w.resolver != nil {
-		rd, rerr := w.resolver.ResolveDestinations(ctx, cmd.JobID, cmd.ArtifactID)
-		if rerr != nil {
-			return nil, fmt.Errorf("artifacts: FinalizeVerified plan resolver: %w", rerr)
-		}
-		resolved = rd
-	} else {
-		// No resolver wired: legacy all-enabled-destinations SELECT
-		// inside the tx. max_attempts defaults to 5 because there is
-		// no per-plan budget to consult.
-		rows, qerr := tx.QueryContext(ctx,
-			`SELECT destination_id FROM delivery_destinations WHERE enabled = 1`)
-		if qerr == nil {
-			defer rows.Close()
-			for rows.Next() {
-				var did string
-				if err := rows.Scan(&did); err == nil && did != "" {
-					resolved = append(resolved, DeliveryDestination{
-						DestinationID: did,
-						MaxAttempts:   5,
-					})
-				}
-			}
-		}
-	}
-
-	for _, dest := range resolved {
-		deliveryID, err := identity.NewHex128()
-		if err != nil {
-			return nil, fmt.Errorf("generate delivery ID: %w", err)
-		}
-		// Defense-in-depth: a resolver that returned MaxAttempts=0
-		// (e.g. pre-069 plan read returning the table default but
-		// also explicitly zeroed) must NOT translate to
-		// job_deliveries.max_attempts=0 — the runner's
-		// `lease.AttemptNumber >= maxAttempts` branch would mark FAILED
-		// on attempt 1. Re-enforce the schema default here to keep the
-		// INSERT contract pinned.
-		maxAttempts := dest.MaxAttempts
-		if maxAttempts <= 0 {
-			maxAttempts = 5
-		}
-		_, err = tx.ExecContext(ctx, `
-			INSERT INTO job_deliveries (delivery_id, artifact_id, destination_id, status, max_attempts, idempotency_key, created_at, updated_at)
-			SELECT ?, ?, ?, 'PENDING', ?, ?, ?, ?
-			WHERE NOT EXISTS (
-				SELECT 1 FROM job_deliveries
-				WHERE artifact_id = ? AND destination_id = ?
-			)`,
-			deliveryID, cmd.ArtifactID, dest.DestinationID,
-			maxAttempts, cmd.ArtifactID+"_"+dest.DestinationID, nowStr, nowStr,
-			cmd.ArtifactID, dest.DestinationID,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("artifacts: FinalizeVerified job_deliveries insert (dest=%s, max_attempts=%d): %w",
-				dest.DestinationID, maxAttempts, err)
-		}
-	}
-
-	// Step 5: artifact_uploads CAS: FINALIZING → COMPLETED. Closing
-	// write of the verified-finalization tx; joining the same *sql.Tx
-	// avoids a liveness bug where a process crash between tx-commit
-	// and a separate post-commit UPDATE would leave the upload row
-	// stuck in FINALIZING forever, blocking retries even though jobs
-	// and artifacts are already SUCCEEDED.
-	res, err = tx.ExecContext(ctx, `
-		UPDATE artifact_uploads
-		SET status = 'COMPLETED',
-		    completed_at = ?
-		WHERE upload_id = ?
-		  AND status = 'FINALIZING'`,
-		nowStr, cmd.UploadID)
-	if err != nil {
-		return nil, fmt.Errorf("artifacts: FinalizeVerified artifact_uploads CAS: %w", err)
-	}
-	if n, _ := res.RowsAffected(); n != 1 {
-		return nil, fmt.Errorf("%w: upload affected=%d upload=%s",
-			ErrTransitionConflict, n, cmd.UploadID)
+	if err := w.completeUploadTx(ctx, tx, cmd, nowStr); err != nil {
+		return nil, err
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -335,4 +209,251 @@ func (w *SQLiteFinalizeWriter) FinalizeVerified(ctx context.Context, cmd Finaliz
 			cmd.ArtifactID)
 	}
 	return out, nil
+}
+
+// ── Step 1: validateFinalizingUploadTx ──────────────────────────────────
+
+// validateFinalizingUploadTx enforces the auth + state precondition on
+// the artifact_uploads row. This is the *only* place in the writer
+// where identity is checked at the SQL layer: the subsequent job and
+// artifact CASes are identity-free, so any drift here MUST be caught
+// before we start flipping other tables.
+//
+// Tightened to 'FINALIZING' only — accepting 'RECEIVED' here would
+// mask a missing orchestration step with a misleading late-stage
+// ErrTransitionConflict at the COMPLETED flip below; rejecting here
+// surfaces the precondition failure with the correct
+// ErrUploadStateInvalid sentinel so the caller can retry.
+func (w *SQLiteFinalizeWriter) validateFinalizingUploadTx(ctx context.Context, tx *sql.Tx, cmd FinalizeVerifiedCommand) error {
+	pre, err := loadUploadSessionForCASInTx(ctx, tx, cmd.UploadID)
+	if err != nil {
+		return err
+	}
+	if pre.Status != "FINALIZING" {
+		return fmt.Errorf("%w: upload=%s status=%s (expected FINALIZING — Service.Finalize must CAS RECEIVED->FINALIZING first)",
+			ErrUploadStateInvalid, cmd.UploadID, pre.Status)
+	}
+	if pre.WorkerID != cmd.WorkerID || pre.LeaseID != cmd.LeaseID || pre.AttemptNumber != cmd.AttemptNumber {
+		return fmt.Errorf("%w: auth upload=%s worker=%s->%s lease=%s->%s attempt=%d->%d",
+			ErrTransitionConflict, cmd.UploadID,
+			pre.WorkerID, cmd.WorkerID, pre.LeaseID, cmd.LeaseID,
+			pre.AttemptNumber, cmd.AttemptNumber)
+	}
+	return nil
+}
+
+// ── Step 2: markJobSucceededTx ──────────────────────────────────────────
+
+// markJobSucceededTx is the sole writer of jobs.status='SUCCEEDED'.
+// The audit contract enforced by scan_test.go pivots on this query
+// being anchored in this file.
+//
+// WHERE allows status IN ('RUNNING', 'AWAITING_ARTIFACT'). The
+// AWAITING_ARTIFACT branch is the post-task-completion state
+// written elsewhere once all tasks succeed; this writer closes
+// the loop to SUCCEEDED. RUNNING → SUCCEEDED is preserved for
+// legacy workers without an artifact contract (defensive backward
+// compat).
+//
+// Optional cmd.ExpectedRevision>0 adds an extra CAS guard
+// (optimistic concurrency) — when zero, the guard is omitted to
+// match the legacy "any in-flight run" semantic.
+func (w *SQLiteFinalizeWriter) markJobSucceededTx(ctx context.Context, tx *sql.Tx, cmd FinalizeVerifiedCommand, nowStr string) error {
+	jobQuery := `
+		UPDATE jobs
+		SET status = 'SUCCEEDED',
+		    completed_at = ?,
+		    updated_at   = ?,
+		    revision     = revision + 1
+		WHERE job_id = ?
+		  AND status IN ('RUNNING', 'AWAITING_ARTIFACT')`
+	jobArgs := []interface{}{nowStr, nowStr, cmd.JobID}
+	if cmd.ExpectedRevision != 0 {
+		jobQuery += ` AND revision = ?`
+		jobArgs = append(jobArgs, cmd.ExpectedRevision)
+	}
+	jobRes, err := tx.ExecContext(ctx, jobQuery, jobArgs...)
+	if err != nil {
+		return fmt.Errorf("artifacts: FinalizeVerified jobs CAS: %w", err)
+	}
+	if n, _ := jobRes.RowsAffected(); n != 1 {
+		return fmt.Errorf("%w: jobs affected=%d upload=%s",
+			ErrTransitionConflict, n, cmd.UploadID)
+	}
+	return nil
+}
+
+// ── Step 3: markArtifactReadyTx ─────────────────────────────────────────
+
+// markArtifactReadyTx flips artifacts.status: STAGING → READY and
+// stamps the master-computed (storage_provider, storage_key, sha256,
+// size, mime, verified_at) tuple atomically with the job flip. The
+// shared tx guarantees a partial state where Job is SUCCEEDED but
+// artifacts is still STAGING cannot be observed.
+func (w *SQLiteFinalizeWriter) markArtifactReadyTx(ctx context.Context, tx *sql.Tx, cmd FinalizeVerifiedCommand, nowStr string) error {
+	res, err := tx.ExecContext(ctx, `
+		UPDATE artifacts
+		SET status = 'READY',
+		    storage_provider = ?,
+		    storage_key = ?,
+		    sha256 = ?, size_bytes = ?, mime_type = ?,
+		    verified_at = ?
+		WHERE id = ? AND job_id = ? AND status = 'STAGING'`,
+		cmd.StorageProvider, cmd.StorageKey,
+		cmd.SHA256, cmd.SizeBytes, cmd.MIMEType,
+		nowStr,
+		cmd.ArtifactID, cmd.JobID,
+	)
+	if err != nil {
+		return fmt.Errorf("artifacts: FinalizeVerified artifacts CAS: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		return fmt.Errorf("%w: artifacts affected=%d artifact=%s",
+			ErrTransitionConflict, n, cmd.ArtifactID)
+	}
+	return nil
+}
+
+// ── Step 4: resolveDeliveryDestinationsTx ───────────────────────────────
+
+// resolveDeliveryDestinationsTx computes the per-job delivery
+// destination set inside the same tx that INSERTs into job_deliveries
+// (transactional safety for the per-job delivery plan).
+//
+// Resolution order:
+//  1. cmd.DestinationID explicit override → single-destination plan
+//     with max_attempts=5 (schema default). The cmd-level pin always
+//     wins over a per-job plan because it pins routing to one tail.
+//  2. w.resolver wired → delegated via DeliveryPlanResolver.
+//  3. nil resolver → legacy all-enabled-destinations SELECT inside
+//     the tx. max_attempts defaults to 5 because there is no
+//     per-plan budget to consult.
+//
+// Step 5/8 of the canonical-purity plan: switch from the legacy
+// resolver (which dropped retry_budget at the interface boundary) to
+// a per-destination projection that carries MaxAttempts, then stamp
+// it on the INSERT so the durable attempt cap survives worker
+// restarts. Resolved inline because the resolution happens inside
+// the same tx that INSERTs job_deliveries; splitting it out would
+// force a destination slice across the writer boundary with no
+// separation win.
+//
+// rows.Close is deferred inside the helper so cursor cleanup is
+// automatic even on early-return Scan errors.
+func (w *SQLiteFinalizeWriter) resolveDeliveryDestinationsTx(ctx context.Context, tx *sql.Tx, cmd FinalizeVerifiedCommand) ([]DeliveryDestination, error) {
+	if cmd.DestinationID != "" {
+		// Single-destination explicit path.
+		return []DeliveryDestination{{
+			DestinationID: cmd.DestinationID,
+			MaxAttempts:   5,
+		}}, nil
+	}
+	if w.resolver != nil {
+		rd, rerr := w.resolver.ResolveDestinations(ctx, cmd.JobID, cmd.ArtifactID)
+		if rerr != nil {
+			return nil, fmt.Errorf("artifacts: FinalizeVerified plan resolver: %w", rerr)
+		}
+		return rd, nil
+	}
+	// No resolver wired: legacy all-enabled-destinations SELECT
+	// inside the tx. max_attempts defaults to 5.
+	rows, qerr := tx.QueryContext(ctx,
+		`SELECT destination_id FROM delivery_destinations WHERE enabled = 1`)
+	if qerr != nil {
+		return nil, fmt.Errorf("artifacts: FinalizeVerified destinations SELECT: %w", qerr)
+	}
+	defer rows.Close()
+	var resolved []DeliveryDestination
+	for rows.Next() {
+		var did string
+		if err := rows.Scan(&did); err != nil {
+			return nil, fmt.Errorf("artifacts: FinalizeVerified destinations Scan: %w", err)
+		}
+		if did == "" {
+			continue
+		}
+		resolved = append(resolved, DeliveryDestination{
+			DestinationID: did,
+			MaxAttempts:   5,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("artifacts: FinalizeVerified destinations iter: %w", err)
+	}
+	return resolved, nil
+}
+
+// ── Step 5: insertPendingDeliveriesTx ───────────────────────────────────
+
+// insertPendingDeliveriesTx materializes one job_deliveries row per
+// resolved destination, idempotent on (artifact_id, destination_id)
+// via the WHERE NOT EXISTS guard so a re-run of the same tx (e.g.
+// after a transient commit error) cannot create duplicate delivery
+// rows.
+//
+// Defense-in-depth: a resolver that returned MaxAttempts=0
+// (e.g. pre-069 plan read returning the table default but also
+// explicitly zeroed) must NOT translate to
+// job_deliveries.max_attempts=0 — the runner's
+// `lease.AttemptNumber >= maxAttempts` branch would mark FAILED on
+// attempt 1. Re-enforce the schema default (5) here to keep the
+// INSERT contract pinned.
+//
+// idempotency_key = "<artifact_id>_<destination_id>" so the
+// deterministic uniqueness constraint at the SQL layer (see
+// migrations 0xx) is also a no-op when the same (artifact,
+// destination) pair is presented twice.
+func (w *SQLiteFinalizeWriter) insertPendingDeliveriesTx(ctx context.Context, tx *sql.Tx, cmd FinalizeVerifiedCommand, nowStr string, resolved []DeliveryDestination) error {
+	for _, dest := range resolved {
+		deliveryID, err := identity.NewHex128()
+		if err != nil {
+			return fmt.Errorf("generate delivery ID: %w", err)
+		}
+		maxAttempts := dest.MaxAttempts
+		if maxAttempts <= 0 {
+			maxAttempts = 5
+		}
+		_, err = tx.ExecContext(ctx, `
+			INSERT INTO job_deliveries (delivery_id, artifact_id, destination_id, status, max_attempts, idempotency_key, created_at, updated_at)
+			SELECT ?, ?, ?, 'PENDING', ?, ?, ?, ?
+			WHERE NOT EXISTS (
+				SELECT 1 FROM job_deliveries
+				WHERE artifact_id = ? AND destination_id = ?
+			)`,
+			deliveryID, cmd.ArtifactID, dest.DestinationID,
+			maxAttempts, cmd.ArtifactID+"_"+dest.DestinationID, nowStr, nowStr,
+			cmd.ArtifactID, dest.DestinationID,
+		)
+		if err != nil {
+			return fmt.Errorf("artifacts: FinalizeVerified job_deliveries insert (dest=%s, max_attempts=%d): %w",
+				dest.DestinationID, maxAttempts, err)
+		}
+	}
+	return nil
+}
+
+// ── Step 6: completeUploadTx ────────────────────────────────────────────
+
+// completeUploadTx is the closing write of the verified-finalization
+// tx: artifact_uploads FINALIZING → COMPLETED. Joining the same
+// *sql.Tx avoids a liveness bug where a process crash between
+// tx-commit and a separate post-commit UPDATE would leave the upload
+// row stuck in FINALIZING forever, blocking retries even though jobs
+// and artifacts are already SUCCEEDED.
+func (w *SQLiteFinalizeWriter) completeUploadTx(ctx context.Context, tx *sql.Tx, cmd FinalizeVerifiedCommand, nowStr string) error {
+	res, err := tx.ExecContext(ctx, `
+		UPDATE artifact_uploads
+		SET status = 'COMPLETED',
+		    completed_at = ?
+		WHERE upload_id = ?
+		  AND status = 'FINALIZING'`,
+		nowStr, cmd.UploadID)
+	if err != nil {
+		return fmt.Errorf("artifacts: FinalizeVerified artifact_uploads CAS: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		return fmt.Errorf("%w: upload affected=%d upload=%s",
+			ErrTransitionConflict, n, cmd.UploadID)
+	}
+	return nil
 }
