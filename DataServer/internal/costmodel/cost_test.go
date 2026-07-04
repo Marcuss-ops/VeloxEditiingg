@@ -4,7 +4,7 @@ import "testing"
 
 // ── Eligibility gates ────────────────────────────────────────────────────────
 
-// TestScore_GPUJobExcludesCPUWorker: PR-04 acceptance — a
+// TestScore_GPUJobExcludesCPUWorker: a
 // ResourceGPU-required job MUST NOT be eligible for a ResourceCPU
 // worker.
 func TestScore_GPUJobExcludesCPUWorker(t *testing.T) {
@@ -26,7 +26,7 @@ func TestScore_GPUJobExcludesCPUWorker(t *testing.T) {
 	}
 }
 
-// TestScore_DrainingExcluded: PR-04 §4.4 — draining workers are
+// TestScore_DrainingExcluded: draining workers are
 // excluded regardless of capability profile.
 func TestScore_DrainingExcluded(t *testing.T) {
 	w := WorkerProfile{
@@ -45,7 +45,7 @@ func TestScore_DrainingExcluded(t *testing.T) {
 	}
 }
 
-// TestScore_OfflineExcluded: PR-04 §4.4 — offline workers are
+// TestScore_OfflineExcluded: offline workers are
 // excluded regardless of capability profile.
 func TestScore_OfflineExcluded(t *testing.T) {
 	w := WorkerProfile{
@@ -78,7 +78,7 @@ func TestScore_AtCapacityExcluded(t *testing.T) {
 
 // TestScore_GPUJobOnMixedDegraded: ResourceMixed is a degraded fallback
 // for ResourceGPU-required jobs (Model admits with penalty=1 rather
-// than rejecting outright, so PR-04 can later tighten the rule).
+// than rejecting outright).
 func TestScore_GPUJobOnMixedDegraded(t *testing.T) {
 	w := WorkerProfile{
 		ResourceClass: ResourceMixed,
@@ -148,7 +148,7 @@ func TestBuildWorkerProfile_LegacySynthesized(t *testing.T) {
 	}
 }
 
-// TestBuildWorkerProfile_MergeExecutors: post-PR-04 workers surface
+// TestBuildWorkerProfile_MergeExecutors: workers surface
 // multiple executors via `executors` array — the merge policy
 // produces the canonical aggregate per worker_profile.go.
 func TestBuildWorkerProfile_MergeExecutors(t *testing.T) {
@@ -198,13 +198,11 @@ func TestBuildWorkerProfile_NotSchedulableBecomesDraining(t *testing.T) {
 	}
 }
 
-// ── Determinism semantics at PR-04.4 ────────────────────────────────────────
+// ── Determinism semantics ────────────────────────────────────────
 
-// TestScore_DeterministicStrict_PR04_4: PR-04.4 admits
-// non-deterministic worker for a Deterministic-true job — the
-// determinism field is informational-only at the eligibility
-// layer. PR-04.5 (rank=Score()) will lower the score for these
-// pairs.
+// TestScore_DeterministicStrict_PR04_4: a non-deterministic worker is
+// admitted for a Deterministic-true job — the determinism field is
+// informational-only at the eligibility layer.
 func TestScore_DeterministicStrict_PR04_4(t *testing.T) {
 	w := WorkerProfile{
 		ResourceClass: ResourceCPU,
@@ -218,7 +216,7 @@ func TestScore_DeterministicStrict_PR04_4(t *testing.T) {
 	}
 	c, _ := Score(w, j)
 	if !c.Eligible {
-		t.Fatalf("PR-04.4 admits non-deterministic worker for a Deterministic-true job (Rank adds penalty in PR-04.5)")
+		t.Fatalf("non-deterministic worker should be eligible for a Deterministic-true job (informational-only at eligibility)")
 	}
 }
 
@@ -249,13 +247,12 @@ func TestScore_Reproductive(t *testing.T) {
 	}
 }
 
-// ── Permissiveness invariant for PR-04.4 (incremental rollout) ────────────────
+// ── Permissiveness invariant ────────────────
 
 // TestDefaultRequirements_EmptyFieldsPreserveLegacyRouting: the
 // permissive default MUST NOT filter by the four canonical fields
 // when the requirement is empty. This is the load-bearing invariant
-// for PR-04.4's incremental rollout — tightening this default
-// silently breaks every legacy worker.
+// — tightening this default silently breaks every legacy worker.
 func TestDefaultRequirements_EmptyFieldsPreserveLegacyRouting(t *testing.T) {
 	j := DefaultRequirements()
 	if j.ResourceClass != "" {
@@ -268,8 +265,7 @@ func TestDefaultRequirements_EmptyFieldsPreserveLegacyRouting(t *testing.T) {
 	// Legacy worker (no `executors` capability field) — synthesized
 	// profile defaults to {cpu, frame_local}. Eligibility with the
 	// permissive default MUST remain true so today's queue routing
-	// doesn't regress when this PR lands. PR-04.5 (rank) is the
-	// separate change that gates per-job requirements end-to-end.
+// doesn't regress.
 	w := BuildWorkerProfile("legacy", true, false, "online", 0, 0, map[string]interface{}{
 		"supported_job_types": []interface{}{"process_video"},
 	})
@@ -284,7 +280,7 @@ func TestDefaultRequirements_EmptyFieldsPreserveLegacyRouting(t *testing.T) {
 
 // TestScore_LoadFactor: scoring well-populated active jobs vs spare
 // produces a strictly-increasing LoadFactor per the lower-is-better
-// convention. PR-04.4 doesn't consume this rank, but PR-04.5 will.
+// convention.
 func TestScore_LoadFactor(t *testing.T) {
 	w0 := WorkerProfile{ResourceClass: ResourceCPU, TemporalMode: TemporalFrameLocal, ActiveJobs: 0, MaxParallel: 4}
 	w3 := WorkerProfile{ResourceClass: ResourceCPU, TemporalMode: TemporalFrameLocal, ActiveJobs: 3, MaxParallel: 4}
@@ -296,7 +292,7 @@ func TestScore_LoadFactor(t *testing.T) {
 	}
 }
 
-// ── Bandwidth math (PR-04.6) ────────────────────────────────────────────────
+// ── Bandwidth math ────────────────────────────────────────────────
 
 // TestScore_BandwidthSufficient_PR04_6: worker link meets the
 // job's MinBandwidthMbps -> BandwidthFit stays at 0, score stays
@@ -350,9 +346,7 @@ func TestScore_BandwidthBothZero_PR04_6(t *testing.T) {
 }
 
 // TestScore_BandwidthLegacyWorker_PR04_6: A worker that hasn't
-// published link_bandwidth_mbps (w=0) MUST pass a MinBandwidthMbps
-// job without penalty -- pre-PR-04.6 workers must not be demoted by
-// the new score component.
+// published link_bandwidth_mbps (w=0) MUST pass a MinBandwidthMbps// job without penalty.
 func TestScore_BandwidthLegacyWorker_PR04_6(t *testing.T) {
 	w := WorkerProfile{ResourceClass: ResourceCPU, TemporalMode: TemporalFrameLocal /* LinkBandwidthMbps=0 */}
 	j := JobRequirements{ResourceClass: ResourceCPU, TemporalMode: TemporalFrameLocal, MinBandwidthMbps: 1000}
@@ -376,7 +370,7 @@ func TestScore_BandwidthEqual_PR04_6(t *testing.T) {
 	}
 }
 
-// ── BuildWorkerProfile bandwidth merge (PR-04.6) ────────────────────────────
+// ── BuildWorkerProfile bandwidth merge ────────────────────────────
 
 // TestBuildWorkerProfile_BandwidthMerge: per-executor
 // link_bandwidth_mbps merges most-permissive (max) across the

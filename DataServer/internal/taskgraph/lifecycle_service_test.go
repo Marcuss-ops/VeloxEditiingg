@@ -378,10 +378,7 @@ func TestLifecycleService_ExpireTaskLease_NoFailOnTerminalJob(t *testing.T) {
 
 // stubRepo is a minimal Repository stub for the RequeueExpiredLeases
 // delegation tests. Only the methods exercised by the new tests are wired;
-// everything else hits a panic so any accidental call is loud. PR-04
-// added AcceptTaskAtomic + TransitionTaskToTerminalAtomic to the Writer
-// interface; both are wired here as panics so the stub still satisfies
-// the full Repository contract.
+// everything else hits a panic so any accidental call is loud.
 type stubRepo struct {
 	requeueCalls    int
 	requeueNowStr   string
@@ -475,7 +472,7 @@ func (s *stubRepo) IngestTaskResultAtomic(_ context.Context, _ IngestResultComma
 
 // TestLifecycleService_RequeueExpiredLeases_DelegatesToRepo: the
 // supervisor-facing wrapper passes through (nowStr, limit) and returns
-// whatever the repo returned. PR-04 expanded the return shape to
+// whatever the repo returned. Expanded the return shape to
 // RequeueCandidate (carrying observed lease_id/lease_expires_at for the
 // subsequent atomic reap), so the test compares on the ID field of the
 // first candidate.

@@ -21,9 +21,7 @@ import (
 	"velox-server/internal/store"
 )
 
-// PR-04.5 + PR #8: job creation is now canonical through AtomicJobTaskCreator.
-// The legacy testSubmitQueue adapter was removed after Create was dropped
-// from jobs.Writer.
+// Job creation is now canonical through AtomicJobTaskCreator.
 
 // noopPlanResolver is the happy-path PlanResolver for tests that exercise the
 // basic enqueue path and do not need to configure delivery-plan rejection. It

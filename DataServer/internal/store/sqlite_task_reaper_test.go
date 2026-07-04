@@ -14,9 +14,9 @@ import (
 )
 
 // =====================================================================
-// PR-04 / audit §P0.4 + §P0.6: master-side task lease reap tests.
+// Master-side task lease reap tests (audit P0.4 + P0.6).
 //
-// PR-04 split the reap into two single-purpose methods:
+// The reap is split into two single-purpose methods:
 //
 //   - RequeueExpiredLeases (SELECT-only) — returns a slice of
 //     taskgraph.RequeueCandidate carrying the OBSERVED lease fields

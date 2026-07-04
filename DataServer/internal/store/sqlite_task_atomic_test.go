@@ -17,7 +17,7 @@ import (
 )
 
 // =====================================================================
-// PR-04 / §9.5 invariant: Task RUNNING ⇒ active Attempt RUNNING.
+// §9.5 invariant: Task RUNNING ⇒ active Attempt RUNNING.
 //
 // handleTaskAccepted and handleTaskResult previously committed two
 // independent statements (Task CAS + Attempt INSERT/UPDATE). A
@@ -631,9 +631,8 @@ func TestTransitionTaskToTerminalAtomic_RollsBackOnMissingAttempt(t *testing.T) 
 	}
 
 	// §9.5 preservation: Task stayed at RUNNING even though caller asked
-	// for SUCCEEDED. The desync was already present (PR-04 cannot
-	// retroactively heal an out-of-band orphan), but the guard refuses
-	// to deepen it.
+	// for SUCCEEDED. The desync was already present, but the guard
+	// refuses to deepen it.
 	var taskStatus string
 	if err := s.db.QueryRowContext(ctx,
 		`SELECT status FROM tasks WHERE task_id = ?`,
@@ -909,7 +908,7 @@ func TestClaimNextWithAttemptAtomic_UsesHistoricalMaxAttemptNumber(t *testing.T)
 }
 
 // =====================================================================
-// §9.5 invariant property-style scan for the full PR-04 happy path.
+// §9.5 invariant property-style scan for the full happy path.
 // =====================================================================
 
 // TestSqliteTaskAtomic_Invariant_TaskRunningInvActiveAttempt sweeps

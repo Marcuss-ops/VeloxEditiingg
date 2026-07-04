@@ -12,11 +12,11 @@ import (
 )
 
 // =====================================================================
-// PR-05 follow-up: TaskLeaseReaper extracted as a named runner.
-// PR-04 follow-up: reaper now calls LifecycleService.ExpireTaskLease
-// per candidate, so the reaper_test surface is split: countingRepo
-// stubs ExpireTaskLeaseAtomic on the Repository surface (no candidates
-// iterates through the real LifecycleService path).
+// TaskLeaseReaper extracted as a named runner; reaper now calls
+// LifecycleService.ExpireTaskLease per candidate, so the reaper_test
+// surface is split: countingRepo stubs ExpireTaskLeaseAtomic on the
+// Repository surface (no candidates iterates through the real
+// LifecycleService path).
 // =====================================================================
 
 // countingRepo records each RequeueExpiredLeases call's nowStr argument

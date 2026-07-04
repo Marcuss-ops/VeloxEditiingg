@@ -344,15 +344,8 @@ func TestCreateJobWithPlan_Idempotency(t *testing.T) {
 	if persisted.RunID != plan.RunID {
 		t.Fatalf("RunID write-back: want %q, got %q", plan.RunID, persisted.RunID)
 	}
-	// PR-04.5 territory: requirements persistence (dedicated columns
-	// job_required_resource_class / job_required_temporal_mode + the
-	// request_json._requirements sub-object mirror) is owned by the
-	// canonical jobs.Writer.Create path, NOT by store.AtomicJobTaskCreator
-	// (which takes a hand-rolled INSERT shortcut through the same SQLite
-	// tx for tight serialisability with the Task insert). Fase 2 keeps the
-	// signature for Requirements threading end-to-end but does NOT assert
-	// the dedicated-column write-back here. The end-to-end PR-04.5
-	// coverage lives in jobs.Writer / SQLiteJobRepository tests.
+	// The dedicated-column write-back coverage lives in jobs.Writer /
+	// SQLiteJobRepository tests.
 	if persisted.Status != jobs.StatusPending {
 		t.Fatalf("Status: want PENDING, got %q", persisted.Status)
 	}
