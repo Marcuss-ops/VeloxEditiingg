@@ -34,12 +34,8 @@ import (
 // that rewrites voiceover and scene-image payload references. Construct via
 // NewEnqueuer.
 //
-// A PlanResolver is mandatory: the Enqueuer calls ResolvePlan (NOT
-// ResolveDestinations) before every atomic create so the per-job
-// retry_budget is validated upfront and propagated to the Job's
-// MaxRetries. This eliminates the late re-resolve in FinalizeVerified
-// and surfaces missing-plan errors at enqueue time as actionable
-// rejections.
+// A PlanResolver is mandatory: NewEnqueuer panics on nil so
+// misconfiguration surfaces at boot.
 type Enqueuer struct {
 	Creator      *store.AtomicJobTaskCreator
 	Jobs         jobs.Reader
@@ -48,12 +44,10 @@ type Enqueuer struct {
 }
 
 // NewEnqueuer constructs an Enqueuer with mandatory Creator + Jobs + PlanResolver.
-// The voiceover service is optional (nil-safe: voiceover resolution is skipped).
+// The voiceover service is optional (nil-safe).
 //
-// The PlanResolver precondition is mandatory: passing nil triggers a panic
-// at construction time so misconfiguration is caught at boot, not on the
-// first enqueue in production. This is a fail-fast for an architectural
-// invariant, not a runtime error.
+// PlanResolver is mandatory: passing nil panics so misconfiguration
+// surfaces at construction time, not on the first enqueue.
 func NewEnqueuer(creator *store.AtomicJobTaskCreator, jobsRepo jobs.Reader, voiceover *assetbridge.AssetService, planResolver PlanResolver) *Enqueuer {
 	if planResolver == nil {
 		panic("enqueue.NewEnqueuer: planResolver is required (delivery plan precondition must be enforced at enqueue time)")
@@ -91,12 +85,6 @@ func (e *Enqueuer) Enqueue(ctx context.Context, payloadMap map[string]interface{
 		return nil, err
 	}
 
-	// The delivery-plan precondition (ResolvePlan + retry_budget > 0 +
-	// MaxRetries propagation) is enforced inside PrepareJobAndTask so it
-	// cannot be bypassed by AtomicForwardAndEnqueue or any other caller
-	// of the prep helper. See enforceDeliveryPlanPrecondition in
-	// PrepareJobAndTask for the full contract.
-
 	jobID := job.ID
 	normalized := spec.Payload
 
@@ -115,20 +103,10 @@ func (e *Enqueuer) Enqueue(ctx context.Context, payloadMap map[string]interface{
 		return nil, fmt.Errorf("enqueue: atomic create: %w", err)
 	}
 
-	// ResolvePlan runs AFTER the atomic create so the resolver sees the
-	// plan rows the same tx just committed. Without this order, the
-	// resolver would see an empty plan on every first-time job submit
-	// (ErrNoExplicitPlan) and operators would have to manual-INSERT
-	// plan rows before each POST.
-	//
-	// Trade-off: there is a small race window between the tx commit
-	// and the precondition run where a matcher could briefly pick up
-	// the PENDING task. The task is re-resolved on the worker
-	// (deliveries.SQLiteDeliveryPlanResolver runs at claim time too)
-	// and lands in WAITING_FOR_PLAN on plan-miss, so observability is
-	// preserved. jobs.max_retries stays at 0 from compileSceneVideoJob;
-	// per-row delivery retry_budget remains authoritative at lease time,
-	// so the column being 0 does not regress delivery correctness.
+	// ResolvePlan runs AFTER the atomic create so it sees the plan
+	// rows this call just committed. A small matcher race window
+	// exists before the precondition returns, but worker-side
+	// re-resolution lands on WAITING_FOR_PLAN so observability holds.
 	if err := e.enforceDeliveryPlanPrecondition(ctx, jobID, job); err != nil {
 		return nil, fmt.Errorf("enqueue: post-create plan precondition: %w", err)
 	}
@@ -136,39 +114,33 @@ func (e *Enqueuer) Enqueue(ctx context.Context, payloadMap map[string]interface{
 	return buildSceneVideoResponse(normalized), nil
 }
 
-// enforceDeliveryPlanPrecondition resolves the per-job delivery plan and
-// enforces three invariants:
-//  1. The resolver must return a non-nil plan (ErrNoExplicitPlan surfaces
-//     as a validationError with a clear "create job_delivery_plans rows"
-//     hint so operators know exactly what to do).
-//  2. The plan must carry at least one destination (an explicit plan with
-//     zero destinations is treated as missing).
-//  3. Every destination's retry_budget must be > 0 (the per-delivery
-//     delivery_plan_payload.go validator already rejects retry_budget<=0
-//     at parse time; this is the runtime counterpart at enqueue time).
-//
-// On success, the Job's MaxRetries is set to the MAX retry_budget across
-// all destinations so the job-level budget can cover the worst-case
-// per-delivery retry chain. Per-delivery retry_budget is still authoritative
-// at INSERT time (see deliveries/runner.go: lease carries per-row value).
+// enforceDeliveryPlanPrecondition resolves the per-job plan and applies
+// the precondition invariants. On success, the Job's MaxRetries is set
+// to the MAX retry_budget across destinations.
 func (e *Enqueuer) enforceDeliveryPlanPrecondition(ctx context.Context, jobID string, job *jobs.Job) error {
 	if e == nil || e.PlanResolver == nil {
-		// Defensive: NewEnqueuer panics if PlanResolver is nil, so this branch
-		// is only reachable via direct struct manipulation in tests. Treat
-		// as a hard precondition failure.
-		return &validationError{field: "delivery_plan", message: "no plan resolver configured; cannot enforce delivery plan precondition"}
+		return &validationError{field: "delivery_plan", message: "no plan resolver configured"}
 	}
 	plan, err := e.PlanResolver.ResolvePlan(ctx, jobID, "")
 	if err != nil {
-		// Wrap the original error so errors.Is(err, deliveries.ErrNoExplicitPlan)
-		// works at the call site, while still surfacing an actionable
-		// "create job_delivery_plans rows" hint in the formatted message.
 		return &validationError{
 			field:   "delivery_plan",
 			message: fmt.Sprintf("resolve failed: %v; create job_delivery_plans rows for this job before enqueueing", err),
 			wrapped: err,
 		}
 	}
+	return validatePlanPayload(plan, job)
+}
+
+// validatePlanPayload enforces the precondition invariants on an
+// already-resolved plan (no DB hit). Reusable by *Tx callers
+// (AtomicForwardAndEnqueue) that read plan rows from a transaction
+// they own.
+//
+// Invariants: plan must be non-nil and carry >=1 destination; every
+// destination's retry_budget > 0. On success, writes the MAX
+// retry_budget into job.MaxRetries.
+func validatePlanPayload(plan *ResolvedPlan, job *jobs.Job) error {
 	if plan == nil || len(plan.Destinations) == 0 {
 		return &validationError{field: "delivery_plan", message: "no explicit delivery plan; create job_delivery_plans rows for this job before enqueueing"}
 	}
@@ -181,9 +153,6 @@ func (e *Enqueuer) enforceDeliveryPlanPrecondition(ctx context.Context, jobID st
 			maxRetry = d.RetryBudget
 		}
 	}
-	// Propagate retry_budget to the Job: the job-level MaxRetries covers
-	// the worst-case per-destination retry chain so the job can outlive
-	// any single destination's retries.
 	if job != nil {
 		job.MaxRetries = maxRetry
 	}
@@ -242,25 +211,15 @@ func (e *Enqueuer) PrepareJobAndTask(ctx context.Context, payloadMap map[string]
 		normalized["job_id"] = jobID
 	}
 
-	// compileSceneVideoJob leaves MaxRetries at 0; the two writers
-	// below (extractPlanMaxRetry from the payload, then
-	// enforceDeliveryPlanPrecondition re-deriving from the DB) are
-	// the only owners of that field on the insert path.
+	// compileSceneVideoJob sets MaxRetries=0; extractPlanMaxRetry below
+	// is the single writer of that field on the insert path. The
+	// post-create precondition in Enqueue re-reads the plan from the
+	// DB for consistency gating but no longer mutates the committed
+	// value.
 	job, spec, priority := compileSceneVideoJob(normalized, req)
 
-	// Pre-compute MaxRetries from the payload's delivery_plan so
-	// jobs.max_retries reflects the worst-case per-destination budget
-	// AT INSERT time. The post-create resolver-based precondition
-	// (in Enqueue) re-reads the plan from the DB for consistency
-	// gating (presence + retry_budget > 0) and re-writes MaxRetries
-	// on the in-memory job struct, but the column value committed
-	// here is from the payload. In production this matches the
-	// resolver's view because the resolver reads from
-	// job_delivery_plans rows this tx just inserted.
-	if job.MaxRetries == 0 {
-		if maxRetry := extractPlanMaxRetry(normalized); maxRetry > 0 {
-			job.MaxRetries = maxRetry
-		}
+	if maxRetry := extractPlanMaxRetry(normalized); maxRetry > 0 {
+		job.MaxRetries = maxRetry
 	}
 
 	// The plan precondition (ResolvePlan + retry_budget > 0 + MaxRetries
@@ -308,10 +267,8 @@ func compileSceneVideoJob(normalized map[string]interface{}, req costmodel.JobRe
 		VideoName: videoName,
 		ProjectID: projectID,
 		RunID:     jobRunID,
-		// MaxRetries is set by enforceDeliveryPlanPrecondition (the
-		// delivery-plan resolver propagates max(retry_budget) per
-		// destination). It is intentionally left at 0 here so the
-		// single owner of the field is explicit.
+		// MaxRetries is set by extractPlanMaxRetry (single writer on
+		// the insert path). Left at 0 here so the owner is explicit.
 		MaxRetries:   0,
 		Payload:      string(raw),
 		Requirements: req,
@@ -766,20 +723,8 @@ func sceneVideoFingerprint(parts ...interface{}) string {
 }
 
 // extractPlanMaxRetry computes the maximum retry_budget across the
-// payload's delivery_plan entries. Used by PrepareJobAndTask to
-// pre-compute job.MaxRetries from the payload's delivery_plan so
-// jobs.max_retries reflects the worst-case per-destination retry
-// budget AT INSERT time. In production this matches the resolver's
-// view (because the resolver reads from job_delivery_plans rows this
-// tx just inserted), so the prepare-time computation is the single
-// source of truth that first writes the column. The post-create
-// resolver-based precondition still re-reads the plan from the DB
-// for consistency gating (presence + retry_budget > 0) but no
-// longer needs to mutate the column.
-//
-// Called from PrepareJobAndTask once compileSceneVideoJob has set
-// MaxRetries=0. Idempotent if MaxRetries is already set by an
-// upstream caller.
+// payload's delivery_plan entries. The single writer of job.MaxRetries
+// on the insert path.
 func extractPlanMaxRetry(payload map[string]interface{}) int {
 	if payload == nil {
 		return 0
