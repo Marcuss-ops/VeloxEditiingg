@@ -40,9 +40,9 @@ const defaultUploadTTL = 24 * time.Hour
 // three upload-finalization phases. Auth reads are isolated behind
 // AuthReader so the auth path never sees a raw *sql.DB.
 //
-// None of these fields are optional at runtime — NewService panics on
-// nil for each so a misconfigured composition fails fast at startup
-// instead of silently producing no SUCCEEDED.
+// None of these fields are optional at runtime — NewService panics
+// on nil for each so a misconfigured composition fails fast at
+// startup instead of silently producing no SUCCEEDED.
 type Service struct {
 	repo           store.UploadRepository
 	uploadWriter   UploadSessionWriter
@@ -51,6 +51,12 @@ type Service struct {
 	auth           AuthReader
 	blobStore      store.BlobStore
 	clock          clock.Clock
+	// deliveryCounter is the purpose-built typed reader used by
+	// the VELOX_FFPROBE_VERIFY_ON_FINALIZE invariant (see
+	// service_finalize_ffprobe.go). Required at construction:
+	// NewService panics if the caller passes nil so a production
+	// deployment cannot silently run the gate with no counter.
+	deliveryCounter JobDeliveryCounter
 
 	uploadTTL time.Duration
 }
@@ -66,6 +72,13 @@ type Service struct {
 //   - blobStore: FilesystemBlobStore in production, NopBlobStore in tests.
 //   - auth: read-only auth queries (job state, attempt identity,
 //     per-job uniqueness gate). Hides *sql.DB from Service.
+//   - c: clock; nil substitutes clock.System (production default).
+//   - deliveryCounter: JobDeliveryCounter typed reader consumed by
+//     the VELOX_FFPROBE_VERIFY_ON_FINALIZE gate (RW-PROD-008 A4).
+//     Required (panics on nil) so a production deployment never
+//     silently runs the gate with no counter wired. Future Postgres
+//     support can swap in a parallel implementation without touching
+//     Service.
 //
 // All artifacts-package SQLite components share the same *sql.DB so
 // the finalize tx can join with concurrent updates on
@@ -79,6 +92,7 @@ func NewService(
 	blobStore store.BlobStore,
 	auth AuthReader,
 	c clock.Clock,
+	deliveryCounter JobDeliveryCounter,
 ) *Service {
 	if c == nil {
 		c = clock.System{}
@@ -101,6 +115,9 @@ func NewService(
 	if auth == nil {
 		panic("artifacts: NewService requires a non-nil AuthReader")
 	}
+	if deliveryCounter == nil {
+		panic("artifacts: NewService requires a non-nil JobDeliveryCounter (post-finalize ffprobe invariant — RW-PROD-008 A4)")
+	}
 	return &Service{
 		repo:           repo,
 		uploadWriter:   uploadWriter,
@@ -109,6 +126,7 @@ func NewService(
 		auth:           auth,
 		blobStore:      blobStore,
 		clock:          c,
+		deliveryCounter: deliveryCounter,
 		uploadTTL:      defaultUploadTTL,
 	}
 }

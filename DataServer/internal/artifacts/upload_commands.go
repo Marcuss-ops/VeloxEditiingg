@@ -37,6 +37,14 @@ type BeginUploadCommand struct {
 // the legacy `artifact_path`, `artifact_size`, `sha256` fields are
 // ignored because they cannot be trusted (the master recomputes SHA
 // and size from the streamed bytes).
+//
+// DestinationID is the optional single-destination override that
+// pins the finalize writer to a single-delivery plan (mirrors the
+// writer's resolveDeliveryDestinationsTx branch 1). Empty (the
+// default) means "use the per-job plan resolver" — production
+// callers leave it empty unless they explicitly pin routing. The
+// pre-commit ffprobe gate (RW-PROD-008 A4) reads this field to
+// compute the expected audio-stream count for the invariant.
 type FinalizeArtifactCommand struct {
 	UploadID         string
 	JobID            string
@@ -44,6 +52,7 @@ type FinalizeArtifactCommand struct {
 	LeaseID          string
 	AttemptNumber    int
 	ExpectedRevision int
+	DestinationID    string
 }
 
 // FinalizeArtifactAndCompleteJobCommand has been REMOVED. The single

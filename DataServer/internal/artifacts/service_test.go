@@ -114,7 +114,8 @@ func setupTestEnv(t *testing.T) *testEnv {
 	authReader := NewSQLiteAuthReader(db)
 	uploadWriter := NewSQLiteUploadSessionWriter(db)
 	finalizeWriter := NewSQLiteFinalizeWriter(db, artifactReader, nil)
-	svc := NewService(repo, uploadWriter, finalizeWriter, artifactReader, bs, authReader, clk)
+	jobCounter := NewSQLiteJobDeliveryCounter(db)
+	svc := NewService(repo, uploadWriter, finalizeWriter, artifactReader, bs, authReader, clk, jobCounter)
 
 	t.Cleanup(func() {
 		_ = db.Close()

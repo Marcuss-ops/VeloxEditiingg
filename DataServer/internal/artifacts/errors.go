@@ -42,6 +42,13 @@ var (
 	ErrStorageKeyInvalid  = errors.New("artifacts: storage key / sha derivation error")
 	ErrBlobPromoteFailed  = errors.New("artifacts: blob promotion to final storage failed")
 	ErrOrphanedBlob       = errors.New("artifacts: blob promoted but SQL transaction rolled back")
+
+	// Post-finalize ffprobe invariant (RW-PROD-008 A4). Distinct
+	// from each other so a deploy-gate binary miss is triaged
+	// separately from a count-mismatch pipeline regression; both
+	// are caught by `errors.Is` per call site.
+	ErrFFProbeAudioCountMismatch     = errors.New("artifacts: ffprobe audio stream count does not match job_deliveries count")
+	ErrFFProbeInvariantMissingBinary = errors.New("artifacts: ffprobe invariant binary missing on PATH")
 )
 
 // translateStoreErr re-wraps a store-layer sentinel into the matching

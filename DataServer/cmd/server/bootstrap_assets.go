@@ -54,6 +54,11 @@ func buildAssets(cfg *config.Config, p *persistenceDeps, j *jobsDeps) (*assetDep
 	authReader := artifacts.NewSQLiteAuthReader(p.SQLite.DB())
 	uploadWriter := artifacts.NewSQLiteUploadSessionWriter(p.SQLite.DB())
 	finalizeWriter := artifacts.NewSQLiteFinalizeWriter(p.SQLite.DB(), artifactReader, planResolver)
+	// JobDeliveryCounter typed reader — required by NewService post
+	// the VELOX_FFPROBE_VERIFY_ON_FINALIZE gate (RW-PROD-008 A4).
+	// Production cannot silently run the gate without it; NewService
+	// panics on nil so a bootstrap miss is loud at startup.
+	deliveryCounter := artifacts.NewSQLiteJobDeliveryCounter(p.SQLite.DB())
 	artifactSvc := artifacts.NewService(
 		uploadRepo,
 		uploadWriter,
@@ -62,6 +67,7 @@ func buildAssets(cfg *config.Config, p *persistenceDeps, j *jobsDeps) (*assetDep
 		p.BlobStore,
 		authReader,
 		nil, // clock.System default (production)
+		deliveryCounter,
 	)
 	log.Printf("[BOOTSTRAP] artifacts.Service ready (single-tx SUCCEEDED gate via FinalizationWriter + DeliveryPlanResolver)")
 

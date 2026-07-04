@@ -43,6 +43,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"path/filepath"
 
 	"velox-server/internal/store"
 )
@@ -82,6 +83,25 @@ func (s *Service) Finalize(ctx context.Context, cmd FinalizeArtifactCommand) (*s
 		return nil, err
 	}
 
+	// Pre-commit ffprobe invariant (RW-PROD-008 A4). Runs AFTER blob
+	// promotion (file is on disk) and BEFORE the CAS RECEIVED →
+	// FINALIZING transition (so a gate failure aborts cleanly without
+	// any DB write: artifacts.status stays STAGING, jobs.status stays
+	// RUNNING, no job_deliveries stamped). The orphan-blob pattern the
+	// 24h Reconciler sweep already handles ("un blob orfano eliminabile
+	// è preferibile rispetto a (artifact READY con file inesistente)")
+	// covers the promoted-but-never-committed file.
+	//
+	// Gated on the env var VELOX_FFPROBE_VERIFY_ON_FINALIZE=true —
+	// no-op when unset. Mirrors the resolution order of
+	// SQLiteFinalizeWriter::resolveDeliveryDestinationsTx (override
+	// → job_delivery_plans WHERE enabled=1 → fallback all-enabled).
+	if err := s.runPreCommitFFProbeInvariant(ctx, cmd.JobID, cmd.DestinationID,
+		filepath.Join(s.blobStore.FinalDir(), filepath.FromSlash(storageKey)),
+	); err != nil {
+		return nil, err
+	}
+
 	// CAS-gate the RECEIVED → FINALIZING transition. This serializes
 	// concurrent Finalize callers at the SQL layer — only the first
 	// writer successfully flips status; the loser gets ErrTransitionConflict
@@ -114,7 +134,11 @@ func (s *Service) Finalize(ctx context.Context, cmd FinalizeArtifactCommand) (*s
 	}
 
 	command := s.buildFinalizeVerifiedCommand(cmd, session, storageKey, receivedSHA, receivedSize, mimeType)
-	return s.finalizeWithDuplicateStorageFallback(ctx, command)
+	art, err := s.finalizeWithDuplicateStorageFallback(ctx, command)
+	if err != nil {
+		return nil, err
+	}
+	return art, nil
 }
 
 // validateFinalizeSession loads + validates the upload session.
@@ -172,12 +196,17 @@ func (s *Service) validateFinalizeSession(ctx context.Context, cmd FinalizeArtif
 		if lerr != nil {
 			return nil, nil, lerr
 		}
-		if art == nil {
-			return nil, nil, fmt.Errorf("%w: completed upload=%s but artifact missing",
-				ErrTransitionConflict, cmd.UploadID)
-		}
-		return nil, art, nil
+	if art == nil {
+		return nil, nil, fmt.Errorf("%w: completed upload=%s but artifact missing",
+			ErrTransitionConflict, cmd.UploadID)
 	}
+	// Note: the pre-commit gate in the main Finalize path runs the
+	// ffprobe check on the first finalize. This COMPLETED short-
+	// circuit simply returns the cached artifact — no ffprobe re-run
+	// here, since the gate fired (and possibly tripped) before the
+	// tx commit that produced this exact artifact.
+	return nil, art, nil
+}
 
 	if session.Status != "RECEIVED" && session.Status != "FINALIZING" {
 		return nil, nil, fmt.Errorf("%w: upload_id=%s status=%s",

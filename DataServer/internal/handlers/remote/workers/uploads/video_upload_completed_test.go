@@ -71,6 +71,11 @@ func TestUploadCompletedVideo_ArtifactsPipeline(t *testing.T) {
 		bs,
 		artifacts.NewSQLiteAuthReader(db),
 		nil,
+		// JobDeliveryCounter typed reader — required by NewService
+		// post the VELOX_FFPROBE_VERIFY_ON_FINALIZE gate
+		// (RW-PROD-008 A4). Test wiring uses the same SQLite
+		// implementation production uses.
+		artifacts.NewSQLiteJobDeliveryCounter(db),
 	)
 
 	now := time.Now().UTC().Format(time.RFC3339)
@@ -255,6 +260,7 @@ func TestUploadCompletedVideo_BeginUploadRejected_MissingJob(t *testing.T) {
 		bs,
 		artifacts.NewSQLiteAuthReader(db),
 		nil,
+		artifacts.NewSQLiteJobDeliveryCounter(db),
 	)
 
 	cfg := &config.Config{Runtime: config.RuntimeConfig{DataDir: tmp}}
@@ -319,6 +325,7 @@ func TestUploadCompletedVideo_MissingVideo(t *testing.T) {
 		bs,
 		artifacts.NewSQLiteAuthReader(db),
 		nil,
+		artifacts.NewSQLiteJobDeliveryCounter(db),
 	)
 
 	cfg := &config.Config{Runtime: config.RuntimeConfig{DataDir: tmp}}
