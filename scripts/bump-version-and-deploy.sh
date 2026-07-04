@@ -51,7 +51,7 @@ wait_for_ansible_run() {
 
     if ! curl -sf \
       -H 'Content-Type: application/json' \
-      -H "X-Velox-Admin-Token: ${ADMIN_TOKEN}" \
+      -H "X-Admin-Token: ${ADMIN_TOKEN}" \
       "${MASTER_URL}/api/v1/admin/ansible/runs/${run_id}" \
       -o "$status_file"; then
       rm -f "$status_file"
@@ -122,7 +122,7 @@ if [[ "$APPLY_ANSIBLE" != "0" ]]; then
     if ! curl -sf \
       -X POST \
       -H 'Content-Type: application/json' \
-      -H "X-Velox-Admin-Token: ${ADMIN_TOKEN}" \
+      -H "X-Admin-Token: ${ADMIN_TOKEN}" \
       "${MASTER_URL}/api/v1/admin/ansible/computers/run_action" \
       -d "{\"action\":\"deploy_workers\",\"batch_size\":5,\"canary_percent\":10,\"computer_ids\":[\"$(printf '%s' "$TARGETS" | sed 's/,/\",\"/g')\"]}" \
       -o "$run_resp_file"; then
