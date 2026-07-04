@@ -133,8 +133,14 @@ jobs:
           # reliably distinguish `require velox-shared v0.0.0` from
           # a commented-out `// require velox-shared v0.0.0`.
           set +e
-          DS_REQ="$(cd DataServer && go list -m -f '{{.Version}}' velox-shared 2>/dev/null)"
-          W_REQ="$(cd RemoteCodex/native/worker-agent-go && go list -m -f '{{.Version}}' velox-shared 2>/dev/null)"
+          # GOWORK=off is REQUIRED: the repo-level go.work makes
+          # `go list -m` treat velox-shared as a workspace main module
+          # (Main: true, no Version field), so {{.Version}} returns empty.
+          # Disabling workspace resolution forces go to use the module-local
+          # replace directives in DataServer/go.mod and
+          # worker-agent-go/go.mod, which both declare velox-shared v0.0.0.
+          DS_REQ="$(cd DataServer && GOWORK=off go list -m -f '{{.Version}}' velox-shared 2>/dev/null)"
+          W_REQ="$(cd RemoteCodex/native/worker-agent-go && GOWORK=off go list -m -f '{{.Version}}' velox-shared 2>/dev/null)"
           set -e
           if [ -z "${DS_REQ}" ] || [ -z "${W_REQ}" ] || [ "${DS_REQ}" != "${W_REQ}" ]; then
             echo "::error::velox-shared require version drift between" >&2
