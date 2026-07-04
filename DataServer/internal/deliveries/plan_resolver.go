@@ -23,6 +23,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"velox-server/internal/artifacts"
 )
 
 // ErrNoExplicitPlan is returned when no per-job delivery plan exists and
@@ -74,8 +76,16 @@ func NewSQLiteDeliveryPlanResolver(db *sql.DB, globalFallback bool) *SQLiteDeliv
 	return &SQLiteDeliveryPlanResolver{db: db, GlobalFallback: globalFallback}
 }
 
-// ResolveDestinations returns the destination IDs that should receive the
-// artifact for the given job. Resolution order:
+// ResolveDestinations implements artifacts.DeliveryPlanResolver.
+//
+// Returns one artifacts.DeliveryDestination per resolved target so the
+// finalize writer can stamp durable max_attempts onto job_deliveries
+// at INSERT time (Step 5/8 canonical-purity). MaxAttempts defaults to
+// the schema default 5 when the resolved plan entry carries a
+// non-positive retry_budget — covers pre-migration-069 plans read
+// from SQLite with the implicit DEFAULT.
+//
+// Resolution order:
 //
 //  1. Look for per-job plans in job_delivery_plans WHERE enabled = 1.
 //     Returns these only (exact match for the "piano esplicito").
@@ -83,16 +93,33 @@ func NewSQLiteDeliveryPlanResolver(db *sql.DB, globalFallback bool) *SQLiteDeliv
 //     all enabled delivery_destinations (legacy dev mode).
 //  3. If no per-job plans exist AND GlobalFallback is false, return
 //     ErrNoExplicitPlan (production mode — operator must create a plan).
-func (r *SQLiteDeliveryPlanResolver) ResolveDestinations(ctx context.Context, jobID, artifactID string) ([]string, error) {
+func (r *SQLiteDeliveryPlanResolver) ResolveDestinations(ctx context.Context, jobID, artifactID string) ([]artifacts.DeliveryDestination, error) {
 	plan, err := r.ResolvePlan(ctx, jobID, artifactID)
 	if err != nil {
 		return nil, err
 	}
-	ids := make([]string, 0, len(plan.Destinations))
-	for _, d := range plan.Destinations {
-		ids = append(ids, d.DestinationID)
+	if plan == nil {
+		return nil, nil
 	}
-	return ids, nil
+	out := make([]artifacts.DeliveryDestination, 0, len(plan.Destinations))
+	for _, pc := range plan.Destinations {
+		budget := pc.RetryBudget
+		if budget <= 0 {
+			// Defensive default: pre-069 plans carry no retry_budget
+			// column, so the SQLite read yields the table DEFAULT (5)
+			// and a < 0 never appears. The < 0 branch covers future
+			// negative-budget entries that operators might author by
+			// mistake; safer than letting max_attempts=0 reach
+			// job_deliveries and the runner's >= branch terminate
+			// delivery on attempt 1.
+			budget = 5
+		}
+		out = append(out, artifacts.DeliveryDestination{
+			DestinationID: pc.DestinationID,
+			MaxAttempts:   budget,
+		})
+	}
+	return out, nil
 }
 
 // ResolvePlan returns the full plan (per-destination retry_budget + priority)

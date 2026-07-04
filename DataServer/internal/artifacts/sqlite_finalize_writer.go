@@ -33,27 +33,27 @@ import (
 // Preconditions:
 //   - cmd.UploadID, cmd.ArtifactID, cmd.JobID must be non-empty.
 //   - cmd.UploadID must be in FINALIZING state with worker_id + lease_id
-//     + attempt_number matching the cmd. The Service.Finalize path
+//   - attempt_number matching the cmd. The Service.Finalize path
 //     performs the RECEIVED→FINALIZING CAS before delegating here.
 //
 // Error behavior:
 //   - Empty identity field            → fmt.Errorf("... required").
 //   - Upload not in FINALIZING       → ErrUploadStateInvalid with the
-//                                       actual status surfaced (caller
-//                                       must transition first).
+//     actual status surfaced (caller
+//     must transition first).
 //   - worker/lease/attempt mismatch  → ErrTransitionConflict with both
-//                                       sides of the auth diff reported.
+//     sides of the auth diff reported.
 //   - jobs CAS affects != 1         → ErrTransitionConflict (status
-//                                       not in RUNNING/AWAITING_ARTIFACT,
-//                                       or revision mismatch).
+//     not in RUNNING/AWAITING_ARTIFACT,
+//     or revision mismatch).
 //   - artifacts CAS affects != 1    → ErrTransitionConflict (artifact
-//                                       not in STAGING, or id/job mismatch).
+//     not in STAGING, or id/job mismatch).
 //   - artifact_uploads FINALIZING→COMPLETED CAS affects != 1
-//                                   → ErrTransitionConflict (peer stole
-//                                       the FINALIZING slot mid-tx).
+//     → ErrTransitionConflict (peer stole
+//     the FINALIZING slot mid-tx).
 //   - Post-tx reader returns nil    → wrapped hard error (after a
-//                                       successful CAS on the same id
-//                                       the row MUST exist).
+//     successful CAS on the same id
+//     the row MUST exist).
 type FinalizationWriter interface {
 	FinalizeVerified(ctx context.Context, cmd FinalizeVerifiedCommand) (*store.Artifact, error)
 }
@@ -218,21 +218,36 @@ func (w *SQLiteFinalizeWriter) FinalizeVerified(ctx context.Context, cmd Finaliz
 			ErrTransitionConflict, n, cmd.ArtifactID)
 	}
 
-	// Step 4: per-job delivery destinations.
-	// Resolved inline because the resolution happens inside the same
-	// tx that INSERTs job_deliveries; splitting it out would force a
-	// destination slice across the writer boundary with no separation
-	// win.
-	var destIDs []string
+	// Step 4: per-job delivery destinations + per-destination max_attempts.
+	//
+	// Step 5/8 of the canonical-purity plan: switch from
+	// w.resolver.ResolveDestinations (which dropped retry_budget at the
+	// interface boundary) to a per-destination projection that carries
+	// MaxAttempts, then stamp it on the INSERT so the durable attempt
+	// cap survives worker restarts. Resolved inline because the
+	// resolution happens inside the same tx that INSERTs
+	// job_deliveries; splitting it out would force a destination slice
+	// across the writer boundary with no separation win.
+	var resolved []DeliveryDestination
 	if cmd.DestinationID != "" {
-		destIDs = []string{cmd.DestinationID}
+		// Single-destination explicit path. The cmd-level
+		// DestinationID always wins over a per-job plan because it
+		// pins routing to one tail (override semantics). max_attempts
+		// defaults to 5 (schema default).
+		resolved = []DeliveryDestination{{
+			DestinationID: cmd.DestinationID,
+			MaxAttempts:   5,
+		}}
 	} else if w.resolver != nil {
-		resolved, rerr := w.resolver.ResolveDestinations(ctx, cmd.JobID, cmd.ArtifactID)
+		rd, rerr := w.resolver.ResolveDestinations(ctx, cmd.JobID, cmd.ArtifactID)
 		if rerr != nil {
 			return nil, fmt.Errorf("artifacts: FinalizeVerified plan resolver: %w", rerr)
 		}
-		destIDs = resolved
+		resolved = rd
 	} else {
+		// No resolver wired: legacy all-enabled-destinations SELECT
+		// inside the tx. max_attempts defaults to 5 because there is
+		// no per-plan budget to consult.
 		rows, qerr := tx.QueryContext(ctx,
 			`SELECT destination_id FROM delivery_destinations WHERE enabled = 1`)
 		if qerr == nil {
@@ -240,30 +255,45 @@ func (w *SQLiteFinalizeWriter) FinalizeVerified(ctx context.Context, cmd Finaliz
 			for rows.Next() {
 				var did string
 				if err := rows.Scan(&did); err == nil && did != "" {
-					destIDs = append(destIDs, did)
+					resolved = append(resolved, DeliveryDestination{
+						DestinationID: did,
+						MaxAttempts:   5,
+					})
 				}
 			}
 		}
 	}
 
-	for _, destID := range destIDs {
+	for _, dest := range resolved {
 		deliveryID, err := identity.NewHex128()
 		if err != nil {
 			return nil, fmt.Errorf("generate delivery ID: %w", err)
 		}
+		// Defense-in-depth: a resolver that returned MaxAttempts=0
+		// (e.g. pre-069 plan read returning the table default but
+		// also explicitly zeroed) must NOT translate to
+		// job_deliveries.max_attempts=0 — the runner's
+		// `lease.AttemptNumber >= maxAttempts` branch would mark FAILED
+		// on attempt 1. Re-enforce the schema default here to keep the
+		// INSERT contract pinned.
+		maxAttempts := dest.MaxAttempts
+		if maxAttempts <= 0 {
+			maxAttempts = 5
+		}
 		_, err = tx.ExecContext(ctx, `
-			INSERT INTO job_deliveries (delivery_id, artifact_id, destination_id, status, idempotency_key, created_at, updated_at)
-			SELECT ?, ?, ?, 'PENDING', ?, ?, ?
+			INSERT INTO job_deliveries (delivery_id, artifact_id, destination_id, status, max_attempts, idempotency_key, created_at, updated_at)
+			SELECT ?, ?, ?, 'PENDING', ?, ?, ?, ?
 			WHERE NOT EXISTS (
 				SELECT 1 FROM job_deliveries
 				WHERE artifact_id = ? AND destination_id = ?
 			)`,
-			deliveryID, cmd.ArtifactID, destID,
-			cmd.ArtifactID+"_"+destID, nowStr, nowStr,
-			cmd.ArtifactID, destID,
+			deliveryID, cmd.ArtifactID, dest.DestinationID,
+			maxAttempts, cmd.ArtifactID+"_"+dest.DestinationID, nowStr, nowStr,
+			cmd.ArtifactID, dest.DestinationID,
 		)
 		if err != nil {
-			return nil, fmt.Errorf("artifacts: FinalizeVerified job_deliveries insert (dest=%s): %w", destID, err)
+			return nil, fmt.Errorf("artifacts: FinalizeVerified job_deliveries insert (dest=%s, max_attempts=%d): %w",
+				dest.DestinationID, maxAttempts, err)
 		}
 	}
 

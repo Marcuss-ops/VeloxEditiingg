@@ -72,13 +72,36 @@ type FinalizeVerifiedCommand struct {
 	DestinationID string
 }
 
-// DeliveryPlanResolver returns the destination IDs that should receive
-// the just-verified artifact. The finalize writer consumes the resolved
-// set inside the same *sql.Tx that INSERTs job_deliveries.
+// DeliveryDestination is the per-destination projection the finalize
+// writer consumes. Resolvers return one of these per (job_id,
+// artifact_id) pair; the writer reads MaxAttempts to stamp durable
+// attempt caps onto job_deliveries at INSERT time.
 //
-// Implementations decide the per-job destination set (GLOBAL +
-// per-job plans); the resolver stays outside the writer lock so the
-// planning logic is independently testable.
+// Step 5/8 of the canonical-purity plan: the rich per-destination
+// retry_budget lives on job_delivery_plans.retry_budget (migration 069)
+// and is surfaced here so durable max_attempts survives across worker
+// restarts and runner crashes.
+//
+// MaxAttempts == 0 is allowed in the projection but the writer
+// applies schema DEFAULT 5 at INSERT time so legacy plans inserted
+// before migration 069 (no retry_budget column) continue to behave
+// identically to the historical all-enable-destinations SELECT path.
+type DeliveryDestination struct {
+	DestinationID string
+	MaxAttempts   int
+}
+
+// DeliveryPlanResolver returns the per-destination set the finalize
+// writer should insert into job_deliveries. The writer consumes the
+// resolved set inside the same *sql.Tx that INSERTs job_deliveries.
+//
+// Implementations decide the per-job destination set (per-job plans +
+// optional global fallback); the resolver stays outside the writer
+// lock so the planning logic is independently testable.
+//
+// Step 5/8: the interface returns []DeliveryDestination (with
+// MaxAttempts) rather than []string. Older callers that only need the
+// destination IDs can ignore MaxAttempts; the writer always reads it.
 type DeliveryPlanResolver interface {
-	ResolveDestinations(ctx context.Context, jobID, artifactID string) ([]string, error)
+	ResolveDestinations(ctx context.Context, jobID, artifactID string) ([]DeliveryDestination, error)
 }
