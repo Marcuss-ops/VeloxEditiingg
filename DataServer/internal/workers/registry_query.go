@@ -182,8 +182,7 @@ func (r *Registry) GetWorkersByGroup(ctx context.Context, group string) []Worker
 // (last heartbeat within timeout + session active) but the consumer
 // is the master's own /health/readiness subsystem, NOT the operator
 // dashboards.
-// /
-// / Why a single tuple instead of a count:
+// Why a single tuple instead of a count:
 //
 //   - Dashboards already iterate GetActiveWorkers; a separate count
 //     function would be a third code path to maintain against drift.
@@ -248,62 +247,16 @@ func (r *Registry) GetActiveWorkers(ctx context.Context, timeout time.Duration) 
 }
 
 // GetSchedulableWorkers returns workers that can accept new jobs.
-//
-// This is the canonical dispatcher-facing entry — it is the call the
-// job-routing layer (queue consumer, dispatcher poller, gRPC handler)
-// issues before offering a new slot to a worker.
-//
-// PR-04.4: routes through GetEligibleWorkers (costmodel.Score).
-// The default permissive JobRequirements preserves today's queue
-// routing until enqueue publishes per-job requirements on
-// QueueItem/Job (a follow-up PR). Callers that want a per-job filter
-// should call GetEligibleWorkers directly with a populated
-// costmodel.JobRequirements.
-//
-// Drain-exclusion rule: see `GetEligibleWorkers` for the canonical
-// contract. This function surfaces the costmodel-derived result to
-// dispatcher callers — no inline filter here.
+// It routes through GetEligibleWorkers with default permissive
+// requirements so dispatcher callers use the canonical costmodel path.
 func (r *Registry) GetSchedulableWorkers(ctx context.Context) []WorkerInfo {
 	return r.GetEligibleWorkers(ctx, costmodel.DefaultRequirements())
 }
 
-// GetEligibleWorkers is the canonical cost-aware eligibility entry
-// point. PR-04.4 replaces the legacy boolean-AND
-// (revoked + drain + offline) with costmodel.Score on a
-// WorkerProfile composed by BuildWorkerProfile from heartbeat state
-// and the heartbeat `capabilities` map. Empty JobRequirements = no
-// four-field gate (preserves legacy behavior). Non-empty
-// JobRequirements = canonical four-field resource-class / temporal-
-// mode matching per DataServer/internal/costmodel/cost.go.
-//
-// Why this replaces a hand-rolled boolean AND:
-//   - The four canonical Descriptor fields (ResourceClass,
-//     TemporalMode, Deterministic, Cacheable) are now the single
-//     source of truth for "is this worker eligible for X".
-//   - Exhaustiveness: extensible to additional eligibility axes
-//     (multi-resource requirements, resource pressure) by extending
-//     costmodel.Score — never by editing call sites.
-//   - Rank: when per-job requirements appear (PR-04.5), a parallel
-//     off-by-default rank call site already exists in the same
-//     module, ready to flip on.
-//
-// Drain exclusion (CANONICAL CONTRACT — surfaced here for dispatcher
-// callers, not because this function performs the exclusion itself):
-// a worker with drain=true is NEVER eligible for new offers — even
-// with a fresh heartbeat and active session. The exclusion is
-// enforced by `costmodel.Score` via `WorkerProfile.IsDraining`
-// (short-circuit at the top of Score), with the explanation
-// "worker is draining" so operators can bisect drift at a glance.
-// A regression that strips the exclusion here will be caught by
-// The draining-exclusion behavior test in
-// registry_test.go validates the contract, not the
-// implementation.
-//
-// Forbidden patterns (see OWNERSHIP.md "Cost-aware eligibility"):
-//   - Hand-rolled boolean AND on WorkerInfo fields inside this
-//     package — use the cost-modeled path.
-//   - Per-job-type switch arms inside Registry methods for
-//     placement — they effectively re-create a parallel selector.
+// GetEligibleWorkers is the canonical cost-aware eligibility entry point.
+// It builds a WorkerProfile from each registered worker and accepts only
+// profiles that costmodel.Score marks eligible. Drain, offline and capacity
+// exclusions live in the costmodel path, not in ad-hoc registry filters.
 func (r *Registry) GetEligibleWorkers(ctx context.Context, req costmodel.JobRequirements) []WorkerInfo {
 	now := time.Now().UTC()
 	r.mu.RLock()

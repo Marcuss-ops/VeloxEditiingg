@@ -84,19 +84,12 @@ type JobRequirements struct {
 	ResourceClass ResourceClass
 	// TemporalMode: when set, Score requires exact match against w.TemporalMode.
 	TemporalMode TemporalMode
-	// Deterministic: PR-04.5-rank-only. PR-04.4 eligibility lets a
-	// non-deterministic worker serve a job that wants Deterministic
-	// (informational only; PR-04.5 will Rank this lower).
+	// Deterministic is currently informational at eligibility time.
 	Deterministic bool
-	// Cacheable: PR-04.5-rank-only. Informationally surfaced through
-	// Explanation.CacheableHint.
+	// Cacheable is currently surfaced as score explanation metadata.
 	Cacheable bool
-	// MinBandwidthMbps: PR-04.6-rank-side. When > 0, Score() assigns
-	// BandwidthFit = 1 if (w.LinkBandwidthMbps > 0 AND
-	// w.LinkBandwidthMbps < j.MinBandwidthMbps). Legacy / unreported
-	// workers (w == 0) are treated as "unknown" and pass through with
-	// no penalty so the rank path preserves legacy routing for
-	// pre-PR-04.6 queue payloads.
+	// MinBandwidthMbps applies a score penalty when the worker reports a
+	// positive bandwidth lower than the requested minimum.
 	MinBandwidthMbps float64
 }
 

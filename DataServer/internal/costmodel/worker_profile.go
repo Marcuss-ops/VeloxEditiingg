@@ -16,11 +16,9 @@ import "strings"
 type WorkerProfile struct {
 	WorkerID string
 
-	// Executor-registry surface (PR-3.5/PR-4): derived from the
-	// `executors` array inside the capabilities map. Defaults
-	// (cpu / frame_local / false / false) are applied by
-	// BuildWorkerProfile for legacy heartbeats that pre-date the
-	// CapabilityReport schema (PR-3.5+).
+	// Executor-registry surface derived from the `executors` array inside
+	// the capabilities map. Legacy heartbeats without executors fall back
+	// to cpu/frame_local/false/false.
 	ResourceClass ResourceClass
 	TemporalMode  TemporalMode
 	Deterministic bool
