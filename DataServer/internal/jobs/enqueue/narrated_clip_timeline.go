@@ -57,6 +57,11 @@ func supportsNarratedClipScenes(scenes []map[string]interface{}) bool {
 // Generic scene duration_seconds is deliberately ignored here because it is a
 // presentation placeholder, not an audio timing contract.
 //
+// Audio contract:
+//   - the voiceover emits an audio_track starting at the scene offset
+//   - the final clip emits an audio_track starting after the voiceover bed
+//     so the original clip audio survives the worker's final mux step
+//
 // New callers (carrying raw payloads with top-level stock_clip_paths)
 // should prefer buildNarratedClipPayloadFromRaw which threads the
 // fallback URL pool through narratedClipOptions.
@@ -144,6 +149,7 @@ func buildNarratedClipPayloadWithOptions(scenes []map[string]interface{}, opts n
 				"source_url":        voiceoverURL,
 				"volume":            1.0,
 				"start_time_offset": offsetSeconds,
+				"role":              "voiceover",
 			})
 		}
 
@@ -153,6 +159,12 @@ func buildNarratedClipPayloadWithOptions(scenes []map[string]interface{}, opts n
 			"duration": finalClipDuration,
 			"fit":      "contain",
 			"role":     "scene_clip",
+		})
+		audioTracks = append(audioTracks, map[string]interface{}{
+			"source_url":        finalClipURL,
+			"volume":            1.0,
+			"start_time_offset": offsetSeconds + voiceoverDuration,
+			"role":              "scene_clip_audio",
 		})
 		clips = append(clips, finalClipURL)
 		offsetSeconds += totalDuration

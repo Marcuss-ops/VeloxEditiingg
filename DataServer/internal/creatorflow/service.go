@@ -108,6 +108,20 @@ func (s *Service) StartOrPersistForwarding(ctx context.Context, rawPayload map[s
 		return nil, false, err
 	}
 
+	// Propagate delivery_plan from the original request into the creator
+	// result so the enqueue-time validateDeliveryPlanRequires preflight
+	// passes inside Resolver.Resolve → PrepareJobAndTask. Without this,
+	// the pipeline builder drops the field and every creator-originated
+	// enqueue is rejected with "delivery_plan is required", causing the
+	// handler to fall back to the local enqueue path (which may fail with
+	// a VOICEOVER_ASSET_UNAVAILABLE if the original voiceover_path is a
+	// remote URL the local asset service cannot resolve).
+	if dp, ok := rawPayload["delivery_plan"]; ok && dp != nil {
+		if _, exists := creatorResult["delivery_plan"]; !exists {
+			creatorResult["delivery_plan"] = dp
+		}
+	}
+
 	if enqueue.ShouldForwardPipelineResult(creatorResult) {
 		// PR-forwarding-deterministic-id: stamp the forwarding key into
 		// the payload so Resolver.Resolve derives the canonical job_id

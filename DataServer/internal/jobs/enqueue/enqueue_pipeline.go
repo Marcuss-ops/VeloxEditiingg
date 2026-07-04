@@ -99,6 +99,15 @@ func BuildPipelinePayload(result map[string]interface{}) (map[string]interface{}
 		jobPayload["correlation_id"] = corrID
 	}
 
+	// Carry through delivery_plan (canonical top-level key, see
+	// shared/contract/canonical_payload.go) so the enqueue-time
+	// validateDeliveryPlanRequires preflight passes for pipeline-originated
+	// jobs. Without this, the pipeline builder drops the field and every
+	// pipeline-sourced enqueue is rejected with "delivery_plan is required".
+	if dp, ok := flat["delivery_plan"]; ok && dp != nil {
+		jobPayload["delivery_plan"] = dp
+	}
+
 	return jobPayload, nil
 }
 

@@ -39,10 +39,11 @@ func TestBuildNarratedClipPayload_UsesRealVoiceoverDurationNotScenePlaceholder(t
 	assertDuration(t, entries[0]["voiceover_duration_seconds"], 7.25, "canonical voiceover duration")
 	assertDuration(t, entries[0]["final_clip_duration_seconds"], 2.5, "canonical final clip duration")
 	assertDuration(t, entries[0]["duration_seconds"], 9.75, "total scene duration")
-	if len(tracks) != 1 {
-		t.Fatalf("audio tracks = %d, want 1", len(tracks))
+	if len(tracks) != 2 {
+		t.Fatalf("audio tracks = %d, want 2", len(tracks))
 	}
-	assertDuration(t, tracks[0]["start_time_offset"], 0, "first audio offset")
+	assertDuration(t, tracks[0]["start_time_offset"], 0, "voiceover audio offset")
+	assertDuration(t, tracks[1]["start_time_offset"], 7.25, "final clip audio offset")
 }
 
 func TestNormalizeClipPayload_UsesTopLevelStockClipForNarrationBed(t *testing.T) {
@@ -84,12 +85,14 @@ func TestNormalizeClipPayload_UsesTopLevelStockClipForNarrationBed(t *testing.T)
 	if len(clips) != 1 || clips[0] != "https://example.com/final-1.mp4" {
 		t.Fatalf("clips = %#v, want only final clip", clips)
 	}
-	if len(tracks) != 1 {
-		t.Fatalf("audio tracks = %d, want 1", len(tracks))
+	if len(tracks) != 2 {
+		t.Fatalf("audio tracks = %d, want 2", len(tracks))
 	}
 	assertDuration(t, entries[0]["voiceover_duration_seconds"], 6.0, "voiceover duration")
 	assertDuration(t, entries[0]["final_clip_duration_seconds"], 2.0, "final clip duration")
 	assertDuration(t, entries[0]["duration_seconds"], 8.0, "scene duration")
+	assertDuration(t, tracks[0]["start_time_offset"], 0, "voiceover audio offset")
+	assertDuration(t, tracks[1]["start_time_offset"], 6.0, "final clip audio offset")
 }
 
 func TestBuildNarratedClipPayload_MixedScenesKeepCanonicalOffsets(t *testing.T) {
@@ -133,11 +136,14 @@ func TestBuildNarratedClipPayload_MixedScenesKeepCanonicalOffsets(t *testing.T) 
 	if role, _ := items[2]["role"].(string); role != "scene_clip" {
 		t.Fatalf("voiceover-free scene emitted role %q, want scene_clip", role)
 	}
-	if len(tracks) != 2 {
-		t.Fatalf("audio tracks = %d, want 2", len(tracks))
+	if len(tracks) != 5 {
+		t.Fatalf("audio tracks = %d, want 5", len(tracks))
 	}
-	assertDuration(t, tracks[0]["start_time_offset"], 0, "first audio offset")
-	assertDuration(t, tracks[1]["start_time_offset"], 10, "third-scene audio offset")
+	assertDuration(t, tracks[0]["start_time_offset"], 0, "first voiceover offset")
+	assertDuration(t, tracks[1]["start_time_offset"], 5, "first final clip audio offset")
+	assertDuration(t, tracks[2]["start_time_offset"], 7, "second final clip audio offset")
+	assertDuration(t, tracks[3]["start_time_offset"], 10, "third voiceover offset")
+	assertDuration(t, tracks[4]["start_time_offset"], 14, "third final clip audio offset")
 	assertDuration(t, entries[1]["voiceover_duration_seconds"], 0, "missing voiceover duration")
 	assertDuration(t, entries[1]["duration_seconds"], 3, "voiceover-free total duration")
 }
@@ -164,7 +170,11 @@ func TestBuildNarratedClipPayload_ExplicitDurationWinsWithoutProbe(t *testing.T)
 	}
 	assertDuration(t, items[0]["duration"], 6.5, "explicit voiceover duration")
 	assertDuration(t, items[1]["duration"], 0.25, "short final clip duration")
-	assertDuration(t, tracks[0]["start_time_offset"], 0, "audio offset")
+	if len(tracks) != 2 {
+		t.Fatalf("audio tracks = %d, want 2", len(tracks))
+	}
+	assertDuration(t, tracks[0]["start_time_offset"], 0, "voiceover audio offset")
+	assertDuration(t, tracks[1]["start_time_offset"], 6.5, "final clip audio offset")
 }
 
 func TestBuildNarratedClipPayload_RejectsUnmeasurableVoiceover(t *testing.T) {
@@ -272,8 +282,8 @@ func TestBuildNarratedClipPayload_LongFinalClipPreservesOffsetAfterBed(t *testin
 	if len(items) != 4 {
 		t.Fatalf("items = %d, want 4 (2 voiceover_bed + 2 scene_clip)", len(items))
 	}
-	if len(tracks) != 2 {
-		t.Fatalf("audio tracks = %d, want 2", len(tracks))
+	if len(tracks) != 4 {
+		t.Fatalf("audio tracks = %d, want 4", len(tracks))
 	}
 	// Scene 1: voiceover bed (2s) followed by long final clip (30s).
 	assertDuration(t, entries[0]["voiceover_duration_seconds"], 2.0, "scene-1 voiceover duration")
@@ -281,20 +291,20 @@ func TestBuildNarratedClipPayload_LongFinalClipPreservesOffsetAfterBed(t *testin
 	assertDuration(t, entries[0]["duration_seconds"], 32.0, "scene-1 total duration")
 	assertDuration(t, items[0]["duration"], 2.0, "scene-1 voiceover_bed item duration")
 	assertDuration(t, items[1]["duration"], 30.0, "scene-1 scene_clip item duration (long)")
-	// Scene 1 audio track: offset 0.
-	assertDuration(t, tracks[0]["start_time_offset"], 0, "scene-1 audio offset")
-	// Scene 2 audio track: offset MUST be 32 (2+30), proving the long final clip
-	// is fully accounted for in the progressive offset.
-	assertDuration(t, tracks[1]["start_time_offset"], 32, "scene-2 audio offset after long final clip")
+	// Scene 1: voiceover at 0, original clip audio after the 2s bed.
+	assertDuration(t, tracks[0]["start_time_offset"], 0, "scene-1 voiceover offset")
+	assertDuration(t, tracks[1]["start_time_offset"], 2, "scene-1 final clip audio offset")
+	// Scene 2: voiceover MUST begin at 32 (2+30), proving the long final clip
+	// is fully accounted for in the progressive offset; clip audio starts after that bed.
+	assertDuration(t, tracks[2]["start_time_offset"], 32, "scene-2 voiceover offset after long final clip")
+	assertDuration(t, tracks[3]["start_time_offset"], 37, "scene-2 final clip audio offset")
 	assertDuration(t, entries[1]["duration_seconds"], 7.0, "scene-2 total duration")
 }
 
-// TestBuildNarratedClipPayload_VoiceoverFreeSceneEmitsNoAudioTrack nails down
+// TestBuildNarratedClipPayload_VoiceoverFreeSceneEmitsNoAudioBed nails down
 // contract rule 6: a scene with no voiceover_link MUST NOT emit a synthetic
-// voiceover_bed item or an audio track. The existing mixed test only checks
-// the track count for the entire payload; this single-scene test makes the
-// per-scene behavior explicit and fails fast if someone reintroduces a
-// "fallback audio bed" shortcut.
+// voiceover_bed item. The scene_clip itself still emits an audio track so the
+// final clip's original audio survives the worker mux step.
 func TestBuildNarratedClipPayload_VoiceoverFreeSceneEmitsNoAudioBed(t *testing.T) {
 	t.Parallel()
 
@@ -329,9 +339,10 @@ func TestBuildNarratedClipPayload_VoiceoverFreeSceneEmitsNoAudioBed(t *testing.T
 	if got := items[0]["url"]; got != "final-only.mp4" {
 		t.Fatalf("items[0].url = %v, want final-only.mp4", got)
 	}
-	if len(tracks) != 0 {
-		t.Fatalf("audio tracks = %d, want 0 — no synthetic audio bed on voiceover-free scenes", len(tracks))
+	if len(tracks) != 1 {
+		t.Fatalf("audio tracks = %d, want 1 — final clip audio only", len(tracks))
 	}
+	assertDuration(t, tracks[0]["start_time_offset"], 0, "voiceover-free final clip audio offset")
 	assertDuration(t, entries[0]["voiceover_duration_seconds"], 0, "no voiceover")
 	assertDuration(t, entries[0]["final_clip_duration_seconds"], 7.0, "final clip duration")
 	assertDuration(t, entries[0]["duration_seconds"], 7.0, "equal to final_clip when no voiceover")

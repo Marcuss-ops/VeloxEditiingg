@@ -15,9 +15,9 @@ import (
 // and video mode consumed by BuildClipPayloadForMaster.
 func normalizeClipPayload(rawPayload map[string]interface{}) ([]map[string]interface{}, []map[string]interface{}, []string, []map[string]interface{}, string, error) {
 	if scenes := normalizeSceneArray(rawPayload["scenes"]); len(scenes) > 0 {
-	if supportsNarratedClipScenes(scenes) {
-		return buildNarratedClipPayloadFromRaw(rawPayload, scenes)
-	}
+		if supportsNarratedClipScenes(scenes) {
+			return buildNarratedClipPayloadFromRaw(rawPayload, scenes)
+		}
 		sceneEntries := make([]map[string]interface{}, 0, len(scenes))
 		items := make([]map[string]interface{}, 0, len(scenes))
 		clips := make([]string, 0, len(scenes))

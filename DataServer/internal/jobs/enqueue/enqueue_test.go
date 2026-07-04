@@ -327,11 +327,14 @@ esac
 	}
 
 	audioTracks, ok := result["audio_tracks"].([]map[string]interface{})
-	if !ok || len(audioTracks) != 2 {
-		t.Fatalf("want 2 audio tracks, got %#v", result["audio_tracks"])
+	if !ok || len(audioTracks) != 4 {
+		t.Fatalf("want 4 audio tracks, got %#v", result["audio_tracks"])
 	}
-	if got := asFloat(audioTracks[1]["start_time_offset"]); got != 13.0 {
+	if got := asFloat(audioTracks[2]["start_time_offset"]); got != 13.0 {
 		t.Fatalf("want second voiceover offset 13.0, got %v", got)
+	}
+	if got := asFloat(audioTracks[3]["start_time_offset"]); got != 26.0 {
+		t.Fatalf("want second final clip audio offset 26.0, got %v", got)
 	}
 }
 
@@ -743,7 +746,7 @@ func TestEnqueueCreatesJobAndTaskAtomically(t *testing.T) {
 		"script_text": "hello world",
 		"scenes": []interface{}{
 			map[string]interface{}{"scene": "intro", "voiceover": "v1"},
-		},		"voiceover_paths": []string{"/tmp/v1.mp3"},
+		}, "voiceover_paths": []string{"/tmp/v1.mp3"},
 		"delivery_plan": []interface{}{
 			map[string]interface{}{"destination_id": "drive-main", "retry_budget": 3, "priority": 0},
 		},
@@ -796,7 +799,7 @@ func TestEnqueueDefaultsPreserved(t *testing.T) {
 		"script_text": "hello world",
 		"scenes": []interface{}{
 			map[string]interface{}{"scene": "intro", "voiceover": "v1"},
-		},		"voiceover_paths": []string{"/tmp/v1.mp3"},
+		}, "voiceover_paths": []string{"/tmp/v1.mp3"},
 		"delivery_plan": []interface{}{
 			map[string]interface{}{"destination_id": "drive-main", "retry_budget": 3, "priority": 0},
 		},

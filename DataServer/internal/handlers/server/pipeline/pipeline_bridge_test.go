@@ -14,14 +14,30 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"velox-server/internal/config"
+	"velox-server/internal/creatorflow"
 	"velox-server/internal/jobs/enqueue"
 	"velox-server/internal/remoteengine"
+	"velox-server/internal/routing"
 	"velox-server/internal/store"
 )
 
 // PR-04.5 + PR #8: job creation is now canonical through AtomicJobTaskCreator.
 // The legacy testSubmitQueue adapter was removed after Create was dropped
 // from jobs.Writer.
+
+// noopPlanResolver is the happy-path PlanResolver for tests that exercise the
+// basic enqueue path and do not need to configure delivery-plan rejection. It
+// mirrors enqueue.newTestPlanResolver in the enqueue package's own tests.
+type noopPlanResolver struct{}
+
+func (noopPlanResolver) ResolvePlan(_ context.Context, _, _ string) (*enqueue.ResolvedPlan, error) {
+	return &enqueue.ResolvedPlan{
+		JobID: "test-job",
+		Destinations: []enqueue.PlanDestination{
+			{DestinationID: "destination-main", Priority: 0, RetryBudget: 5},
+		},
+	}, nil
+}
 
 func TestBuildSceneVideoPayloadFromPipelineResult(t *testing.T) {
 	tempDir := t.TempDir()
@@ -146,16 +162,19 @@ func TestPipelineGenerateForwardsCompletedResultToQueue(t *testing.T) {
 			"status":   "completed",
 			"trace_id": "trace_123",
 			"result": map[string]interface{}{
-				"title":         "Test Video",
-				"script_text":   "This is the generated script.",
-				"json_path":     jsonPath,
-				"markdown_path": markdownPath,
-				"voiceover": map[string]interface{}{
-					"local_path": voicePath,
-				},
-				"metadata": []map[string]interface{}{
-					{"title": "Test Video"},
-				},
+			"title":         "Test Video",
+			"script_text":   "This is the generated script.",
+			"json_path":     jsonPath,
+			"markdown_path": markdownPath,
+			"voiceover": map[string]interface{}{
+				"local_path": voicePath,
+			},
+			"delivery_plan": []interface{}{
+				map[string]interface{}{"destination_id": "drive-main", "retry_budget": 3, "priority": 0},
+			},
+			"metadata": []map[string]interface{}{
+				{"title": "Test Video"},
+			},
 			},
 		})
 	}))
@@ -179,7 +198,12 @@ func TestPipelineGenerateForwardsCompletedResultToQueue(t *testing.T) {
 	atomic := store.NewAtomicJobTaskCreator(db)
 	// PR15.7a: previously wired via InitPipelineEnqueuer global;
 	// after the refactor it is now an explicit constructor argument.
-	testEnqueuer := enqueue.NewEnqueuer(atomic, nil, nil)
+	testEnqueuer := enqueue.NewEnqueuer(atomic, jobRepo, nil, noopPlanResolver{})
+
+	// Blocco 5: the pipeline handler now requires a wired creatorflow.Resolver
+	// for the forward-completed path. NewHandlers (no resolver) panics at
+	// request time; NewHandlersWithResolver is the composition-root form.
+	resolver := creatorflow.NewResolverFromDeps(testEnqueuer, db, tempDir, filepath.Join(tempDir, "videos"), "")
 
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
@@ -191,7 +215,7 @@ func TestPipelineGenerateForwardsCompletedResultToQueue(t *testing.T) {
 			RemoteEngineRetries:   1,
 		},
 	}
-	pipelineHandlers := NewHandlers(pipelineCfg, testEnqueuer, remoteClient)
+	pipelineHandlers := NewHandlersWithResolver(pipelineCfg, testEnqueuer, remoteClient, resolver, jobRepo, nil, nil)
 	r.POST("/api/remote/pipeline/generate", pipelineHandlers.Generate())
 
 	reqBody, _ := json.Marshal(map[string]interface{}{
@@ -215,12 +239,19 @@ func TestPipelineGenerateForwardsCompletedResultToQueue(t *testing.T) {
 		t.Fatalf("want worker_forwarded=true, got %v body=%s", resp["worker_forwarded"], w.Body.String())
 	}
 
+	// The Resolver derives a deterministic job_id from the forwarding key
+	// (remote_engine:trace_123:scene.composite.v1), NOT from the trace_id
+	// itself. The job must be looked up by the derived ID.
+	expectedJobID := enqueue.DeriveForwardingJobID(
+		routing.FormatForwardingKey("remote_engine", "trace_123", "scene.composite.v1").String(),
+	)
+
 	deadline := time.Now().Add(2 * time.Second)
 	for {
-		j, jobErr := jobRepo.Get(context.Background(), "trace_123")
+		j, jobErr := jobRepo.Get(context.Background(), expectedJobID)
 		if jobErr == nil && j != nil {
-			if j.ID != "trace_123" {
-				t.Fatalf("want job_id trace_123, got %s", j.ID)
+			if j.ID != expectedJobID {
+				t.Fatalf("want job_id %s, got %s", expectedJobID, j.ID)
 			}
 			if j.VideoName != "Test Video" {
 				t.Fatalf("want video name Test Video, got %s", j.VideoName)

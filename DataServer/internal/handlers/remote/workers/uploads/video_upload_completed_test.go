@@ -69,7 +69,7 @@ func TestUploadCompletedVideo_ArtifactsPipeline(t *testing.T) {
 		artifacts.NewSQLiteFinalizeWriter(db, artifactReader, nil),
 		artifactReader,
 		bs,
-		db,
+		artifacts.NewSQLiteAuthReader(db),
 		nil,
 	)
 
@@ -253,7 +253,7 @@ func TestUploadCompletedVideo_BeginUploadRejected_MissingJob(t *testing.T) {
 		artifacts.NewSQLiteFinalizeWriter(db, artifactReader, nil),
 		artifactReader,
 		bs,
-		db,
+		artifacts.NewSQLiteAuthReader(db),
 		nil,
 	)
 
@@ -317,7 +317,7 @@ func TestUploadCompletedVideo_MissingVideo(t *testing.T) {
 		artifacts.NewSQLiteFinalizeWriter(db, artifactReader, nil),
 		artifactReader,
 		bs,
-		db,
+		artifacts.NewSQLiteAuthReader(db),
 		nil,
 	)
 

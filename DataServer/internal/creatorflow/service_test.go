@@ -52,13 +52,27 @@ func validPlan() RenderPlan {
 	}
 }
 
+// noopPlanResolver is the happy-path PlanResolver for tests that exercise the
+// basic enqueue path and do not need to configure delivery-plan rejection. It
+// mirrors enqueue.newTestPlanResolver in the enqueue package's own tests.
+type noopPlanResolver struct{}
+
+func (noopPlanResolver) ResolvePlan(_ context.Context, _, _ string) (*jobenqueue.ResolvedPlan, error) {
+	return &jobenqueue.ResolvedPlan{
+		JobID: "test-job",
+		Destinations: []jobenqueue.PlanDestination{
+			{DestinationID: "destination-main", Priority: 0, RetryBudget: 5},
+		},
+	}, nil
+}
+
 // newTestEnqueuer creates an Enqueuer backed by an in-memory SQLite store
 // with AtomicJobTaskCreator for atomic Job+Task creation (PR #3).
 func newTestEnqueuer(t *testing.T, db *store.SQLiteStore) *jobenqueue.Enqueuer {
 	t.Helper()
 	jobRepo := store.NewSQLiteJobRepository(db)
 	atomic := store.NewAtomicJobTaskCreator(db)
-	return jobenqueue.NewEnqueuer(atomic, jobRepo, nil)
+	return jobenqueue.NewEnqueuer(atomic, jobRepo, nil, noopPlanResolver{})
 }
 
 // PR15.7a: both tests construct svc literal with enqueuer field, no queue
@@ -161,10 +175,12 @@ func TestResolverEnqueuesWorkerJob(t *testing.T) {
 		"status":   "completed",
 		"trace_id": "creator-complete-1",
 		"result": map[string]interface{}{
-			"title":          "Creator Video",
-			"script_text":    "Creator script",
-			"scenes_json":    `[{"text":"Scene 1","image_link":"https://example.com/scene1.png"}]`,
-			"voiceover_path": "https://example.com/voice.mp3",
+			"title":          "Creator Video",		"script_text":    "Creator script",
+		"scenes_json":    `[{"text":"Scene 1","image_link":"https://example.com/scene1.png"}]`,
+		"voiceover_path": "https://example.com/voice.mp3",
+		"delivery_plan": []interface{}{
+			map[string]interface{}{"destination_id": "drive-main", "retry_budget": 3, "priority": 0},
+		},
 		},
 	}
 

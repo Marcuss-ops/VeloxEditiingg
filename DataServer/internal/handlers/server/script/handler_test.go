@@ -24,6 +24,20 @@ import (
 // The legacy testSubmitQueue adapter was removed after Create was dropped
 // from jobs.Writer.
 
+// noopPlanResolver is the happy-path PlanResolver for tests that exercise the
+// basic enqueue path and do not need to configure delivery-plan rejection. It
+// mirrors enqueue.newTestPlanResolver in the enqueue package's own tests.
+type noopPlanResolver struct{}
+
+func (noopPlanResolver) ResolvePlan(_ context.Context, _, _ string) (*jobenqueue.ResolvedPlan, error) {
+	return &jobenqueue.ResolvedPlan{
+		JobID: "test-job",
+		Destinations: []jobenqueue.PlanDestination{
+			{DestinationID: "destination-main", Priority: 0, RetryBudget: 5},
+		},
+	}, nil
+}
+
 func TestGenerateWithImages_EnqueuesSceneImageJob(t *testing.T) {
 	tempDir := t.TempDir()
 	dbPath := filepath.Join(tempDir, "velox.db")
@@ -45,7 +59,7 @@ func TestGenerateWithImages_EnqueuesSceneImageJob(t *testing.T) {
 	}
 
 	// Voiceover nil: this test exercises the basic enqueue path, no asset rewrite.
-	enqueuer := jobenqueue.NewEnqueuer(atomic, nil, nil)
+	enqueuer := jobenqueue.NewEnqueuer(atomic, nil, nil, noopPlanResolver{})
 
 	r := gin.New()
 	RegisterRoutes(r.Group("/api/script"), cfg, db, enqueuer)
@@ -56,6 +70,9 @@ func TestGenerateWithImages_EnqueuesSceneImageJob(t *testing.T) {
 		"language":            "it",
 		"voiceover_path":      "https://drive.google.com/file/d/17zAf__wEHsq6Wcs8Oguy7P9Ky_kH2CtV/view?usp=drive_link",
 		"drive_output_folder": "https://drive.google.com/drive/u/1/folders/1W4k13-sjPCr1Lynu29D3UJSGRPFSoHal",
+		"delivery_plan": []interface{}{
+			map[string]interface{}{"destination_id": "drive-main", "retry_budget": 3, "priority": 0},
+		},
 		"scenes": []interface{}{
 			map[string]interface{}{
 				"text":       "Se vi dicessi che esiste un angolo del mondo dove il tempo non è semplicemente rallentato.",
@@ -222,7 +239,7 @@ func TestGenerateWithImages_UsesCreatorStageWhenConfigured(t *testing.T) {
 	// Resolver's idempotency fast-path calls enqueuer.Jobs.Get to
 	// short-circuit duplicate webhooks. Without a non-nil Jobs handle,
 	// the fast path dereferences nil and the handler panics.
-	enqueuer := jobenqueue.NewEnqueuer(atomic, jobRepo, voiceoverSvc)
+	enqueuer := jobenqueue.NewEnqueuer(atomic, jobRepo, voiceoverSvc, noopPlanResolver{})
 
 	r := gin.New()
 	RegisterRoutes(r.Group("/api/script"), cfg, db, enqueuer)
@@ -230,6 +247,9 @@ func TestGenerateWithImages_UsesCreatorStageWhenConfigured(t *testing.T) {
 	reqBody, _ := json.Marshal(map[string]interface{}{
 		"video_name":     "Creator Video",
 		"voiceover_path": "https://example.com/voice.mp3",
+		"delivery_plan": []interface{}{
+			map[string]interface{}{"destination_id": "drive-main", "retry_budget": 3, "priority": 0},
+		},
 		"scenes": []interface{}{
 			map[string]interface{}{"text": "Scene 1", "image_link": "https://example.com/scene1.png"},
 		},
@@ -313,7 +333,7 @@ func TestGenerateWithImages_BypassesCreatorForRenderReadyPayload(t *testing.T) {
 
 	// PR15.7a: bypass path. Creator stage is short-circuited, no asset rewrite
 	// expected; voiceover nil is fine.
-	enqueuer := jobenqueue.NewEnqueuer(atomic, nil, nil)
+	enqueuer := jobenqueue.NewEnqueuer(atomic, nil, nil, noopPlanResolver{})
 
 	r := gin.New()
 	RegisterRoutes(r.Group("/api/script"), cfg, db, enqueuer)
@@ -323,6 +343,9 @@ func TestGenerateWithImages_BypassesCreatorForRenderReadyPayload(t *testing.T) {
 		"video_name":     "Roman Aqueducts Fixed Job",
 		"script_text":    "Roman engineering script",
 		"voiceover_path": voicePath,
+		"delivery_plan": []interface{}{
+			map[string]interface{}{"destination_id": "drive-main", "retry_budget": 3, "priority": 0},
+		},
 		"scenes_json": `[
 			{"text":"Scene 1","image_link":"https://drive.google.com/file/d/1QoPBq8z2DB9OUXyjIT3HwgKOYzihF8Mh/view","duration_seconds":5},
 			{"text":"Scene 2","image_link":"https://drive.google.com/file/d/1S6NiFUeLEAQwtGZISX96nRsv6sv_p7f_/view","duration_seconds":5}
@@ -363,13 +386,16 @@ func TestGenerateFromClips_EnqueuesClipJob(t *testing.T) {
 		},
 	}
 
-	enqueuer := jobenqueue.NewEnqueuer(atomic, nil, nil)
+	enqueuer := jobenqueue.NewEnqueuer(atomic, nil, nil, noopPlanResolver{})
 
 	r := gin.New()
 	RegisterRoutes(r.Group("/api/script"), cfg, db, enqueuer)
 
 	payload := map[string]interface{}{
 		"video_name": "Jackie Chan Funniest Moments",
+		"delivery_plan": []interface{}{
+			map[string]interface{}{"destination_id": "drive-main", "retry_budget": 3, "priority": 0},
+		},
 		"scenes": []interface{}{
 			map[string]interface{}{
 				"text":                        "Intro clip",
@@ -451,8 +477,8 @@ func TestGenerateFromClips_EnqueuesClipJob(t *testing.T) {
 		t.Fatalf("want 4 stored items, got %#v", stored["items"])
 	}
 	audioTracks, ok := stored["audio_tracks"].([]interface{})
-	if !ok || len(audioTracks) != 2 {
-		t.Fatalf("want 2 stored audio tracks, got %#v", stored["audio_tracks"])
+	if !ok || len(audioTracks) != 4 {
+		t.Fatalf("want 4 stored audio tracks, got %#v", stored["audio_tracks"])
 	}
 	firstTrack, ok := audioTracks[0].(map[string]interface{})
 	if !ok {
@@ -461,9 +487,9 @@ func TestGenerateFromClips_EnqueuesClipJob(t *testing.T) {
 	if got := firstTrack["source_url"]; got != "https://example.com/voice-intro.mp3" {
 		t.Fatalf("want first audio source preserved, got %#v", got)
 	}
-	secondTrack, ok := audioTracks[1].(map[string]interface{})
+	secondTrack, ok := audioTracks[2].(map[string]interface{})
 	if !ok {
-		t.Fatalf("want second audio track object, got %#v", audioTracks[1])
+		t.Fatalf("want second voiceover track object, got %#v", audioTracks[2])
 	}
 	if got := secondTrack["start_time_offset"]; got != float64(7.5) {
 		t.Fatalf("want second audio offset 7.5, got %#v", got)
@@ -493,7 +519,7 @@ func TestSubmitJob_SlideshowVideo_EnqueuesImagesPipelineJob(t *testing.T) {
 		},
 	}
 
-	enqueuer := jobenqueue.NewEnqueuer(atomic, nil, nil)
+	enqueuer := jobenqueue.NewEnqueuer(atomic, nil, nil, noopPlanResolver{})
 	r := gin.New()
 	RegisterRoutes(r.Group("/api/script"), cfg, db, enqueuer)
 
@@ -501,6 +527,9 @@ func TestSubmitJob_SlideshowVideo_EnqueuesImagesPipelineJob(t *testing.T) {
 		"video_name":     "Slideshow Demo",
 		"voiceover_path": "https://example.com/voice.mp3",
 		"orientation":    "vertical",
+		"delivery_plan": []interface{}{
+			map[string]interface{}{"destination_id": "drive-main", "retry_budget": 3, "priority": 0},
+		},
 		"scenes": []interface{}{
 			map[string]interface{}{"text": "Scene 1", "image_link": "https://example.com/1.jpg"},
 			map[string]interface{}{"text": "Scene 2", "image_link": "https://example.com/2.jpg"},
