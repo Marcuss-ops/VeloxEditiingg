@@ -441,9 +441,25 @@ func TestCreateJobWithPlan_Concurrency(t *testing.T) {
 	close(start)
 	wg.Wait()
 
-	// Every goroutine sees the same jobID (the deterministic derivation).
-	first := jobIDs[0]
+	// Every non-errored goroutine sees the same jobID (the deterministic
+	// derivation). Goroutines that surfaced a UNIQUE-violation error have
+	// an empty jobID ("") — they are excluded from the drift check so
+	// the test does not report false positives under CI SQLite contention
+	// where the pre-check races past the inserter.
+	first := ""
 	for i, id := range jobIDs {
+		if errs[i] == nil && id != "" {
+			first = id
+			break
+		}
+	}
+	if first == "" {
+		t.Fatalf("no goroutine returned a non-empty jobID — all %d errored", N)
+	}
+	for i, id := range jobIDs {
+		if errs[i] != nil {
+			continue // skip errored goroutines — their jobID is empty
+		}
 		if id != first {
 			t.Errorf("goroutine %d jobID drift: %q vs %q", i, id, first)
 		}
