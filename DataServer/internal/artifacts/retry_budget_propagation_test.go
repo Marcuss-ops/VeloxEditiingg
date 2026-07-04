@@ -142,6 +142,25 @@ CREATE TABLE job_deliveries (
     updated_at           TEXT,
     UNIQUE (artifact_id, destination_id)
 );
+CREATE TABLE tasks (
+    task_id            TEXT PRIMARY KEY,
+    job_id             TEXT NOT NULL,
+    project_id         TEXT NOT NULL DEFAULT '',
+    render_plan_id     TEXT NOT NULL DEFAULT '',
+    executor_id        TEXT NOT NULL DEFAULT '',
+    executor_version   INTEGER NOT NULL DEFAULT 0,
+    status             TEXT NOT NULL DEFAULT 'PENDING',
+    priority           INTEGER NOT NULL DEFAULT 0,
+    revision           INTEGER NOT NULL DEFAULT 0,
+    attempt_count      INTEGER NOT NULL DEFAULT 0,
+    worker_id          TEXT NOT NULL DEFAULT '',
+    lease_id           TEXT NOT NULL DEFAULT '',
+    ready_at           TEXT,
+    started_at         TEXT,
+    completed_at       TEXT,
+    created_at         TEXT NOT NULL,
+    updated_at         TEXT NOT NULL
+);
 `
 
 // openPropagationDB returns a fresh in-memory SQLite with the phase-5
@@ -632,5 +651,75 @@ func TestFinalizeVerified_ZeroMaxAttemptsRevertsToDefault(t *testing.T) {
 	}
 	if got != 5 {
 		t.Errorf("zero-budget resolver: max_attempts = %d; want 5 (defense-in-depth default)", got)
+	}
+}
+
+// =====================================================================
+// Spec 7 (Phase 1.5 / Q5): Step 2.5 stamp of tasks.status='SUCCEEDED'
+//
+// Without Step 2.5 the closure tx lands on
+//   jobs.status='SUCCEEDED'  AND  tasks.status='RUNNING' | 'LEASED' | 'PENDING'
+// which Phase 1.5 invariant Q5 (scripts/ci/check-completion-protocol-invariants.sh)
+// treats as a desync. This test seeds a task in each pre-fix surviving
+// status, then asserts the sweep flips it to SUCCEEDED.
+//
+// Note: there is no existing tasks row for the seeded job in the other
+// 5 specs — those run cleanly because markTaskSucceededTx intentionally
+// treats RowsAffected == 0 as non-fatal (legacy job-only ingestion paths
+// pre-migration-039 may legitimately have no tasks row).
+// =====================================================================
+
+func TestFinalizeVerified_MarksTaskSucceeded(t *testing.T) {
+	cases := []struct {
+		name       string
+		seedStatus string // pre-fix task status that the sweep must flip
+	}{
+		{"RUNNING flips to SUCCEEDED", "RUNNING"},
+		{"LEASED flips to SUCCEEDED", "LEASED"},
+		{"PENDING flips to SUCCEEDED (fast-abort-finalization)", "PENDING"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			db := openPropagationDB(t)
+			seedPhase5Fixture(t, db, phase5Fixture{
+				JobID: "J-task", WorkerID: "w", LeaseID: "l",
+				Revision: 1, AttemptNumber: 1,
+				ArtifactID: "art-task", UploadID: "up-task",
+			})
+			now := time.Now().UTC().Format(time.RFC3339)
+			if _, err := db.Exec(`INSERT INTO tasks (
+                task_id, job_id, project_id, render_plan_id, executor_id, executor_version,
+                status, priority, revision, attempt_count, worker_id, lease_id,
+                created_at, updated_at)
+                VALUES ('task-J-task', 'J-task', 'proj', 'rp-J-task', 'executor.scene_composite', 1,
+                        ?, 0, 0, 0, 'w', 'l', ?, ?)`,
+				c.seedStatus, now, now); err != nil {
+				t.Fatalf("seed tasks[%s]: %v", c.seedStatus, err)
+			}
+
+			runFinalize(t, db, nil, artifacts.FinalizeVerifiedCommand{
+				UploadID:         "up-task",
+				ArtifactID:       "art-task",
+				JobID:            "J-task",
+				WorkerID:         "w",
+				LeaseID:          "l",
+				AttemptNumber:    1,
+				ExpectedRevision: 1,
+				StorageProvider:  "local",
+				StorageKey:       "artifacts/J-task/1",
+				SHA256:           "deadbeef",
+				SizeBytes:        1024,
+				MIMEType:         "video/mp4",
+				VerifiedAt:       time.Now().UTC(),
+			})
+
+			var got string
+			if err := db.QueryRow(`SELECT status FROM tasks WHERE job_id = ?`, "J-task").Scan(&got); err != nil {
+				t.Fatalf("read task status after FinalizeVerified: %v", err)
+			}
+			if got != "SUCCEEDED" {
+				t.Errorf("Step 2.5 missed: tasks[%s].status post-FinalizeVerified = %s; want SUCCEEDED (Q5 invariant enforcer)", c.seedStatus, got)
+			}
+		})
 	}
 }

@@ -3,7 +3,7 @@
 #
 # Phase 1.5 of the Artifact Commit Protocol — CI gate.
 #
-# Runs four SQL invariant queries against a SQLite database. Each
+# Runs five SQL invariant queries against a SQLite database. Each
 # query asserts that the desired post-condition of the protocol
 # holds; any non-empty result set fires a CI failure with the
 # offending rows surfaced in the log.
@@ -43,6 +43,18 @@
 #       or FAILED artifact is a Phase 5 cross-link bug — Drive
 #       landing on bytes that don't exist.
 #
+#   Q5 (job_SucceededWithTaskStillRunning)
+#       A job with status='SUCCEEDED' MUST NOT have any
+#       associated task still in status 'RUNNING' or 'LEASED'.
+#       The desync surfaced when the closure tx (sqlite_finalize_writer.go
+#       Step 2) flipped jobs.status='SUCCEEDED' while the canonical
+#       tasks row stayed at RUNNING/LEASED/PENDING. Step 2.5
+#       (markTaskSucceededTx) sweeps that row inside the same
+#       tx; this query is the post-commit gate that catches any
+#       future regressions. PENDING is excluded intentionally
+#       because Step 2.5 accepts it (fast-abort-finalization can
+#       promote a job to SUCCEEDED before the claimant flip runs).
+#
 # USAGE
 # ─────
 #   ./scripts/ci/check-completion-protocol-invariants.sh [DB_PATH]
@@ -50,7 +62,7 @@
 #
 # BUDGET
 # ──────
-# Each query is wrapped in `timeout 1`. Worst-case total ≈ 4 s (4
+# Each query is wrapped in `timeout 1`. Worst-case total ≈ 5 s (5
 # queries × 1 s) which is the safety ceiling — on an empty CI
 # fixture the actual runtime is sub-100 ms, on a populated
 # production DB it's typically <500 ms. sqlite3 buffers row output
@@ -59,7 +71,7 @@
 # (timeout) and the script exits 1.
 #
 # Exit codes:
-#   0 — all four queries returned 0 rows
+#   0 — all five queries returned 0 rows
 #   1 — at least one query returned ≥1 offending rows OR a query
 #       timed out (>1 s) OR a query errored
 #   2 — DB_PATH not provided or unreadable
@@ -133,7 +145,7 @@ run_query() {
   fi
 }
 
-# ─── Run the four invariants ──────────────────────────────────────────────
+# ─── Run the five invariants ──────────────────────────────────────────────
 run_query "Q1 job_SucceededWithoutReadyArtifact" "
 SELECT j.job_id
 FROM jobs j
@@ -170,6 +182,14 @@ JOIN artifacts a ON a.id = d.artifact_id
 WHERE a.status != 'READY';
 "
 
+run_query "Q5 job_SucceededWithTaskStillRunning" "
+SELECT t.task_id, j.job_id
+FROM tasks t
+JOIN jobs  j ON j.job_id = t.job_id
+WHERE j.status = 'SUCCEEDED'
+  AND t.status IN ('RUNNING', 'LEASED');
+"
+
 # ─── Summary ─────────────────────────────────────────────────────────────
 if (( violations > 0 )); then
   printf '\nFAIL: %d invariant violation(s):\n' "$violations" >&2
@@ -179,5 +199,5 @@ if (( violations > 0 )); then
   exit 1
 fi
 
-printf '\nOK   all 4 completion-protocol invariants hold on %s\n' "$DB_PATH"
+printf '\nOK   all 5 completion-protocol invariants hold on %s\n' "$DB_PATH"
 exit 0

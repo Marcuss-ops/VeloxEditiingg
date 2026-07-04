@@ -5,8 +5,10 @@
 // invariant); the scan_test allowlist pins this file as the
 // authoritative anchor for that SQL fragment.
 //
-// FinalizeVerified is decomposed into 6 private *Tx step methods on
-// *SQLiteFinalizeWriter. Each step:
+// FinalizeVerified is decomposed into 7 private *Tx step methods on
+// *SQLiteFinalizeWriter (Step 2.5 is the tasks sweep that closes the
+// documented "jobs SUCCEEDED but tasks RUNNING/LEASED/PENDING" desync
+// enforced by invariant Q5). Each step:
 //   - Receives the caller's *sql.Tx (does NOT open its own).
 //   - Performs ONE logical CAS / read / insert.
 //   - Returns a wrapped ErrTransitionConflict on RowsAffected != 1.
@@ -141,6 +143,7 @@ func loadUploadSessionForCASInTx(ctx context.Context, tx *sql.Tx, uploadID strin
 //
 //	1. validateFinalizingUploadTx — auth + state precondition
 //	2. markJobSucceededTx         — sole writer of jobs.status='SUCCEEDED'
+//	2.5 markTaskSucceededTx       — sweeps tasks[RUNNING/LEASED/PENDING] → SUCCEEDED
 //	3. markArtifactReadyTx        — artifacts STAGING → READY
 //	4. resolveDeliveryDestinationsTx — per-job delivery plan
 //	5. insertPendingDeliveriesTx  — durable job_deliveries rows
@@ -176,6 +179,9 @@ func (w *SQLiteFinalizeWriter) FinalizeVerified(ctx context.Context, cmd Finaliz
 	nowStr := verifiedAt.UTC().Format(time.RFC3339)
 
 	if err := w.markJobSucceededTx(ctx, tx, cmd, nowStr); err != nil {
+		return nil, err
+	}
+	if err := w.markTaskSucceededTx(ctx, tx, cmd, nowStr); err != nil {
 		return nil, err
 	}
 	if err := w.markArtifactReadyTx(ctx, tx, cmd, nowStr); err != nil {
@@ -280,6 +286,69 @@ func (w *SQLiteFinalizeWriter) markJobSucceededTx(ctx context.Context, tx *sql.T
 		return fmt.Errorf("%w: jobs affected=%d upload=%s",
 			ErrTransitionConflict, n, cmd.UploadID)
 	}
+	return nil
+}
+
+// ── Step 2.5: markTaskSucceededTx ──────────────────────────────────────
+//
+// markTaskSucceededTx sweeps the canonical `tasks` row for this job_id
+// to SUCCEEDED inside the same tx that flipped jobs.status='SUCCEEDED'
+// in Step 2. Closes the well-known desync surfaced by Phase 1.5
+// invariant Q5 (scripts/ci/check-completion-protocol-invariants.sh):
+// a job that the closure tx commits as SUCCEEDED while a worker
+// release / fast-abort-finalization has stranded the corresponding
+// task in RUNNING/LEASED/PENDING.
+//
+// WHERE accepts status IN ('RUNNING','LEASED','PENDING') so we cover:
+//   - the common case: task was RUNNING when the worker submitted the
+//     verified-finalize RPC (Lease → RUNNING closed cleanly),
+//   - the fast-abort case: task was PENDING (master promoted Job =
+//     SUCCEEDED before the claimant flip ran),
+//   - the defensive case: a still-LEASED task whose offer never
+//     produced an AcceptTaskAtomic.
+//
+// RowsAffected == 0 is INTENTIONALLY not a Tx-fatal condition: not
+// every job has a tasks row (legacy job-only ingestion paths pre-
+// migration-039 may legitimately have no tasks row at INSERT time).
+// The Q5 invariant is the post-fix gate that catches
+// real desync; this step enforces it forward.
+//
+// HARD DEPENDENCY: this writer requires migration 039 (the
+// DataServer/internal/store/migrations/sqlite/039_tasks.sql create
+// of the `tasks` table). RunMigrations
+// (DataServer/internal/store/migrations/runner.go) auto-applies
+// every embedded pending migration in version order on the master
+// boot path, so a healthy production deploy always has 039 in place
+// before any finalize RPC reaches this writer.
+//
+// On a half-migrated pre-039 DB the UPDATE below surfaces
+// "no such table: tasks" and rolls the entire finalization tx back
+// — this is the intended fail-fast signal so a half-migrated
+// deploy cannot silently land Q5-flagged SUCCEEDED jobs.
+//
+// TEST FIXTURES: openPropagationDB in retry_budget_propagation_test.go
+// bypasses RunMigrations and MUST ship its own `tasks` table mirroring
+// DataServer/internal/store/migrations/sqlite/039_tasks.sql, or
+// FinalizeVerified will roll back at Step 2.5 with the same
+// `no such table: tasks` error. Static fixtures that produce jobs via
+// direct INSERT into `jobs` (no `tasks` row) are still safe —
+// RowsAffected == 0 at Step 2.5 is non-fatal by design.
+func (w *SQLiteFinalizeWriter) markTaskSucceededTx(ctx context.Context, tx *sql.Tx, cmd FinalizeVerifiedCommand, nowStr string) error {
+	_, err := tx.ExecContext(ctx, `
+		UPDATE tasks
+		SET status = 'SUCCEEDED',
+		    completed_at = ?,
+		    updated_at   = ?
+		WHERE job_id = ?
+		  AND status IN ('RUNNING', 'LEASED', 'PENDING')`,
+		nowStr, nowStr, cmd.JobID,
+	)
+	if err != nil {
+		return fmt.Errorf("artifacts: FinalizeVerified tasks sweep: %w", err)
+	}
+	// n intentionally not asserted: see doc above. The tx only commits
+	// the flip if subsequent steps succeed, so a partial "no task row
+	// updated" pass is fine — repair via Q5 / reconciliation if needed.
 	return nil
 }
 
