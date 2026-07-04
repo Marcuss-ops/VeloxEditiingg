@@ -1,6 +1,7 @@
 package enqueue
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -19,14 +20,14 @@ func TestBuildNarratedClipPayload_UsesRealVoiceoverDurationNotScenePlaceholder(t
 		},
 	}
 
-	entries, items, _, tracks, mode, err := buildNarratedClipPayloadWithDurationProbe(scenes, func(url string) float64 {
+	entries, items, _, tracks, mode, err := buildNarratedClipPayload(scenes, withProbe(func(url string) float64 {
 		if url != "https://example.com/voice.mp3" {
 			t.Fatalf("unexpected probe URL: %q", url)
 		}
 		return 7.25
-	})
+	}))
 	if err != nil {
-		t.Fatalf("buildNarratedClipPayloadWithDurationProbe: %v", err)
+		t.Fatalf("buildNarratedClipPayload: %v", err)
 	}
 	if mode != "clip_stock" {
 		t.Fatalf("mode = %q, want clip_stock", mode)
@@ -44,6 +45,45 @@ func TestBuildNarratedClipPayload_UsesRealVoiceoverDurationNotScenePlaceholder(t
 	}
 	assertDuration(t, tracks[0]["start_time_offset"], 0, "voiceover audio offset")
 	assertDuration(t, tracks[1]["start_time_offset"], 7.25, "final clip audio offset")
+}
+
+// TestNormalizeClipPayload_ScenesJSONWithTopLevelStockPoolPreservesFallback
+// nails down the contract: when a `scenes_json` payload carries voiceover
+// scenes AND a top-level `stock_clip_paths` pool, the narration bed
+// MUST borrow from the pool (i.e. rawPayload is preserved across the
+// JSON parse hop). This guards the refactor of normalizeClipPayload
+// from per-form functions — the original recursive call into
+// normalizeClipPayload(map{"scenes": scenes}) lost the rawPayload and
+// silently dropped the fallback pool; the new normalizeScenesInput
+// receives the original rawPayload directly.
+func TestNormalizeClipPayload_ScenesJSONWithTopLevelStockPoolPreservesFallback(t *testing.T) {
+	t.Parallel()
+
+	scenes := []map[string]interface{}{
+		{
+			"text":                        "Jackie Chan scene",
+			"clip_link":                   "https://example.com/final-1.mp4",
+			"reference_voiceover":         "https://example.com/voice-1.mp3",
+			"voiceover_duration_seconds":  6.0,
+			"final_clip_duration_seconds": 2.0,
+		},
+	}
+	scenesJSON, _ := json.Marshal(scenes)
+	rawPayload := map[string]interface{}{
+		"stock_clip_paths": []interface{}{"https://example.com/stock-1.mp4"},
+		"scenes_json":      string(scenesJSON),
+	}
+
+	_, items, _, _, _, err := normalizeClipPayload(rawPayload)
+	if err != nil {
+		t.Fatalf("normalizeClipPayload: %v", err)
+	}
+	if len(items) < 2 {
+		t.Fatalf("items = %d, want at least 2 (voiceover_bed + scene_clip)", len(items))
+	}
+	if got := items[0]["url"]; got != "https://example.com/stock-1.mp4" {
+		t.Fatalf("voiceover bed url = %v, want top-level stock clip preserved across scenes_json parse", got)
+	}
 }
 
 func TestNormalizeClipPayload_UsesTopLevelStockClipForNarrationBed(t *testing.T) {
@@ -120,10 +160,10 @@ func TestBuildNarratedClipPayload_MixedScenesKeepCanonicalOffsets(t *testing.T) 
 		},
 	}
 
-	entries, items, _, tracks, _, err := buildNarratedClipPayloadWithDurationProbe(scenes, func(string) float64 {
+	entries, items, _, tracks, _, err := buildNarratedClipPayload(scenes, withProbe(func(string) float64 {
 		t.Fatal("probe must not run when explicit voiceover duration is present")
 		return 0
-	})
+	}))
 	if err != nil {
 		t.Fatalf("build narrated payload: %v", err)
 	}
@@ -161,10 +201,10 @@ func TestBuildNarratedClipPayload_ExplicitDurationWinsWithoutProbe(t *testing.T)
 		},
 	}
 
-	_, items, _, tracks, _, err := buildNarratedClipPayloadWithDurationProbe(scenes, func(string) float64 {
+	_, items, _, tracks, _, err := buildNarratedClipPayload(scenes, withProbe(func(string) float64 {
 		t.Fatal("probe must not run for explicit voiceover_duration_seconds")
 		return 0
-	})
+	}))
 	if err != nil {
 		t.Fatalf("build narrated payload: %v", err)
 	}
@@ -188,7 +228,7 @@ func TestBuildNarratedClipPayload_RejectsUnmeasurableVoiceover(t *testing.T) {
 		},
 	}
 
-	_, _, _, _, _, err := buildNarratedClipPayloadWithDurationProbe(scenes, func(string) float64 { return 0 })
+	_, _, _, _, _, err := buildNarratedClipPayload(scenes, withProbe(func(string) float64 { return 0 }))
 	if err == nil {
 		t.Fatal("expected an error for an unmeasurable voiceover")
 	}
@@ -269,12 +309,12 @@ func TestBuildNarratedClipPayload_LongFinalClipPreservesOffsetAfterBed(t *testin
 		},
 	}
 
-	entries, items, _, tracks, _, err := buildNarratedClipPayloadWithDurationProbe(scenes, func(string) float64 {
+	entries, items, _, tracks, _, err := buildNarratedClipPayload(scenes, withProbe(func(string) float64 {
 		t.Fatal("probe must not run when explicit voiceover_duration_seconds is present")
 		return 0
-	})
+	}))
 	if err != nil {
-		t.Fatalf("buildNarratedClipPayloadWithDurationProbe: %v", err)
+		t.Fatalf("buildNarratedClipPayload: %v", err)
 	}
 	if len(entries) != 2 {
 		t.Fatalf("entries = %d, want 2", len(entries))
@@ -317,12 +357,12 @@ func TestBuildNarratedClipPayload_VoiceoverFreeSceneEmitsNoAudioBed(t *testing.T
 		},
 	}
 
-	entries, items, clips, tracks, mode, err := buildNarratedClipPayloadWithDurationProbe(scenes, func(string) float64 {
+	entries, items, clips, tracks, mode, err := buildNarratedClipPayload(scenes, withProbe(func(string) float64 {
 		t.Fatal("probe must never run when there is no voiceover URL")
 		return 0
-	})
+	}))
 	if err != nil {
-		t.Fatalf("buildNarratedClipPayloadWithDurationProbe: %v", err)
+		t.Fatalf("buildNarratedClipPayload: %v", err)
 	}
 	if mode != "clip_stock" {
 		t.Fatalf("mode = %q, want clip_stock", mode)

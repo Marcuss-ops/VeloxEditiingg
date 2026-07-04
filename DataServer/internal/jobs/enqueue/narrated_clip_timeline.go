@@ -23,6 +23,25 @@ type narratedClipOptions struct {
 	probe                     audioDurationProbe
 }
 
+// narratedClipOption is a functional-option setter for buildNarratedClipPayload.
+// Package-private; the helpers below are also package-private (no new
+// exported surface added by this refactor).
+type narratedClipOption func(*narratedClipOptions)
+
+// withProbe overrides the audio-duration detector. Used by tests to
+// inject a deterministic probe (typically `func(string) float64 { return X }`).
+func withProbe(p audioDurationProbe) narratedClipOption {
+	return func(o *narratedClipOptions) { o.probe = p }
+}
+
+// withFallbackURLs supplies a per-scene fallback narration-URL pool
+// sourced from the raw payload's top-level stock_clip_paths /
+// intro_clip_paths. When a scene lacks its own stock_link, the i-th
+// entry of this pool is borrowed as the narration bed.
+func withFallbackURLs(urls []string) narratedClipOption {
+	return func(o *narratedClipOptions) { o.fallbackNarrationClipURLs = urls }
+}
+
 // sceneFallbackNarrationClipURLs returns the top-level stock paths
 // declared at the payload root (rather than per-scene bindings). Used
 // when a scene has no explicit `stock_link` / `narration_clip_link`
@@ -54,56 +73,32 @@ func supportsNarratedClipScenes(scenes []map[string]interface{}) bool {
 // buildNarratedClipPayload is the canonical "voiceover bed + final clip"
 // timeline builder. Voiceover timing must come from an explicit
 // voiceover_duration_seconds value or from probing the actual audio asset.
-// Generic scene duration_seconds is deliberately ignored here because it is a
-// presentation placeholder, not an audio timing contract.
+// Generic scene duration_seconds is deliberately ignored here because it
+// is a presentation placeholder, not an audio timing contract.
 //
 // Audio contract:
 //   - the voiceover emits an audio_track starting at the scene offset
-//   - the final clip emits an audio_track starting after the voiceover bed
-//     so the original clip audio survives the worker's final mux step
+//   - the final clip emits an audio_track starting after the voiceover
+//     bed so the original clip audio survives the worker's final mux step
 //
-// New callers (carrying raw payloads with top-level stock_clip_paths)
-// should prefer buildNarratedClipPayloadFromRaw which threads the
-// fallback URL pool through narratedClipOptions.
-func buildNarratedClipPayload(scenes []map[string]interface{}) ([]map[string]interface{}, []map[string]interface{}, []string, []map[string]interface{}, string, error) {
-	return buildNarratedClipPayloadWithDurationProbe(scenes, sharedmedia.DetectAudioDurationSecs)
-}
+// Optional knobs are passed as functional options. The two
+// production-relevant options are WithProbe (test override) and
+// WithFallbackURLs (raw-payload top-level stock pool).
+func buildNarratedClipPayload(scenes []map[string]interface{}, opts ...narratedClipOption) ([]map[string]interface{}, []map[string]interface{}, []string, []map[string]interface{}, string, error) {
+	o := &narratedClipOptions{probe: sharedmedia.DetectAudioDurationSecs}
+	for _, opt := range opts {
+		opt(o)
+	}
+	probe := o.probe
 
-func buildNarratedClipPayloadWithDurationProbe(scenes []map[string]interface{}, probe audioDurationProbe) ([]map[string]interface{}, []map[string]interface{}, []string, []map[string]interface{}, string, error) {
-	return buildNarratedClipPayloadWithOptions(scenes, narratedClipOptions{probe: probe})
-}
-
-// buildNarratedClipPayloadFromRaw is the entry point for callers that
-// still have access to the raw top-level payload (e.g. the script/
-// generate-from-clips handler). It threads top-level stock_clip_paths /
-// intro_clip_paths down as per-scene fallback narration URLs so a scene
-// without its own stock_link borrows from the payload pool.
-func buildNarratedClipPayloadFromRaw(rawPayload map[string]interface{}, scenes []map[string]interface{}) ([]map[string]interface{}, []map[string]interface{}, []string, []map[string]interface{}, string, error) {
-	return buildNarratedClipPayloadWithOptions(scenes, narratedClipOptions{
-		fallbackNarrationClipURLs: sceneFallbackNarrationClipURLs(rawPayload),
-		probe:                     sharedmedia.DetectAudioDurationSecs,
-	})
-}
-
-// buildNarratedClipPayloadWithOptions is the merge of Velox Maintainer's
-// buildNarratedClipPayloadWithDurationProbe (same iteration logic, same
-// role tagging, same audio_tracks envelope) plus the per-scene
-// fallback-URL pool passed via narratedClipOptions. When fallbackURLs
-// is nil/short or the current scene is outside its range, the legacy
-// single-arg sceneNarrationClipURL behaviour is preserved.
-func buildNarratedClipPayloadWithOptions(scenes []map[string]interface{}, opts narratedClipOptions) ([]map[string]interface{}, []map[string]interface{}, []string, []map[string]interface{}, string, error) {
 	sceneEntries := make([]map[string]interface{}, 0, len(scenes))
 	items := make([]map[string]interface{}, 0, len(scenes)*2)
 	clips := make([]string, 0, len(scenes))
 	audioTracks := make([]map[string]interface{}, 0, len(scenes))
 	offsetSeconds := 0.0
-	probe := opts.probe
-	if probe == nil {
-		probe = sharedmedia.DetectAudioDurationSecs
-	}
 
 	for i, scene := range scenes {
-		narrationURL := sceneNarrationClipURL(scene, opts.fallbackNarrationClipURLs, i)
+		narrationURL := sceneNarrationClipURL(scene, o.fallbackNarrationClipURLs, i)
 		finalClipURL := sceneFinalClipURL(scene)
 		voiceoverURL := sceneVoiceoverURL(scene)
 		if finalClipURL == "" && narrationURL == "" {
@@ -230,11 +225,11 @@ func sceneVoiceoverURL(scene map[string]interface{}) string {
 // sceneNarrationClipURL extracts the narration bed clip URL from a
 // narrated scene. The optional fallbackURLs pool lets the caller
 // supply a top-level stock_clip_paths / intro_clip_paths array whose
-// i-th entry borrowed as narration bed when the scene itself does
+// i-th entry is borrowed as narration bed when the scene itself does
 // not declare a stock_link. Behaviour:
 //
 //   - scene.stock_link / scene.narration_clip_link / bindings.stock.*
-//     → use it (legacy precedence, per-scene wins over pool);
+//     → use it (per-scene wins over pool);
 //   - else, if sceneIndex is in range for fallbackURLs, use that;
 //   - else, fall through to sceneFinalClipURL.
 //

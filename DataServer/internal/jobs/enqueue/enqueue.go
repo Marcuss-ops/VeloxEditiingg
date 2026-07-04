@@ -2,11 +2,10 @@
 // l'inoltro di job video (process_video) nella coda. Usato da endpoint canonici come
 // script/generate-with-images e pipeline.
 //
-// PR #3 (refactor/single-execution-create): Enqueuer is now a Compiler — it
-// normalizes, validates, resolves voiceover/scene-image assets, compiles a
-// TaskSpec, and delegates to store.AtomicJobTaskCreator for atomic Job+Task
-// creation. The JobQueue interface and writerAdapter are eliminated. ALL
-// producers (HTTP, creator result, calendar) route through the single atomic
+// The Enqueuer is a Compiler: it normalizes, validates, resolves
+// voiceover/scene-image assets, compiles a TaskSpec, and delegates to
+// store.AtomicJobTaskCreator for atomic Job+Task creation. All producers
+// (HTTP, creator result, calendar) route through the single atomic
 // creation path.
 package enqueue
 
@@ -35,14 +34,12 @@ import (
 // that rewrites voiceover and scene-image payload references. Construct via
 // NewEnqueuer.
 //
-// PR #3: Queue (JobQueue) removed. The Enqueuer now compiles a Job+TaskSpec
-// and delegates to Creator (AtomicJobTaskCreator) for atomic insertion.
-//
-// PR-delivery-plan-precondition: a PlanResolver is MANDATORY. The Enqueuer
-// calls ResolvePlan (NOT ResolveDestinations) BEFORE every atomic create so
-// the per-job retry_budget is validated upfront and propagated to the Job's
-// MaxRetries. This eliminates the late re-resolve in FinalizeVerified and
-// surfaces missing-plan errors at enqueue time as actionable rejections.
+// A PlanResolver is mandatory: the Enqueuer calls ResolvePlan (NOT
+// ResolveDestinations) before every atomic create so the per-job
+// retry_budget is validated upfront and propagated to the Job's
+// MaxRetries. This eliminates the late re-resolve in FinalizeVerified
+// and surfaces missing-plan errors at enqueue time as actionable
+// rejections.
 type Enqueuer struct {
 	Creator      *store.AtomicJobTaskCreator
 	Jobs         jobs.Reader
@@ -72,19 +69,14 @@ func NewEnqueuer(creator *store.AtomicJobTaskCreator, jobsRepo jobs.Reader, voic
 // the atomic creator + asset service so rewrite invariants are applied
 // exactly once before the atomic Job+Task creation.
 //
-// PR #3: instead of delegating to Queue.SubmitJob (Job-only), the Enqueuer
-// now compiles a Job+TaskSpec from the normalized payload and calls
-// Creator.CreateJobWithTask(ctx, job, spec, priority) for atomic
-// Job+Task insertion. Jobs is used for idempotency pre-check.
+// Callers MUST publish the per-job `costmodel.JobRequirements` for the
+// eligibility layer + future-rank site to consume.
 //
-// PR-04.5: callers MUST publish the per-job `costmodel.JobRequirements`
-// for the eligibility layer + future-rank site to consume.
-//
-// PR-forwarding-deterministic-id: when the payload carries
-// `_internal_forwarding_key`, the job_id is derived deterministically
-// from that key (via DeriveForwardingJobID) instead of generating a
-// random UUID. This ensures concurrent pollers, duplicate webhooks, and
-// post-crash retries always produce the same Job ID.
+// When the payload carries `_internal_forwarding_key`, the job_id is
+// derived deterministically from that key (via DeriveForwardingJobID)
+// instead of generating a random UUID. This ensures concurrent
+// pollers, duplicate webhooks, and post-crash retries always produce
+// the same Job ID.
 //
 // Callers that need the Job+TaskSpec without a DB write (e.g. for an
 // atomic multi-table transaction with creator_forwardings) should use
@@ -228,10 +220,10 @@ func (e *Enqueuer) PrepareJobAndTask(ctx context.Context, payloadMap map[string]
 		return nil, nil, 0, err
 	}
 
-	// Step 4/8 canonical-purity: a Job without an explicit delivery plan
-	// (and per-entry retry_budget > 0) must NEVER reach the workers.
-	// Without this preflight, FinalizeVerified discovers the missing plan
-	// AFTER the render has burned its budget — the diagnostic's
+	// A Job without an explicit delivery plan (and per-entry retry_budget > 0)
+	// must never reach the workers. Without this preflight,
+	// FinalizeVerified would discover the missing plan AFTER the render
+	// has burned its budget — the diagnostic's
 	// "Validate delivery plan at enqueue or pre-render" regression.
 	if err := validateDeliveryPlanRequires(payloadMap); err != nil {
 		return nil, nil, 0, err
@@ -239,11 +231,10 @@ func (e *Enqueuer) PrepareJobAndTask(ctx context.Context, payloadMap map[string]
 
 	jobID, _ := normalized["job_id"].(string)
 
-	// PR-forwarding-deterministic-id: when a forwarding key is present,
-	// derive the job_id deterministically regardless of any auto-generated
-	// ID from NewJobPayloadV2 or SetIdentity. This ensures concurrent
-	// pollers, duplicate webhooks, and post-crash retries always produce
-	// the same Job ID.
+	// When a forwarding key is present, derive the job_id
+	// deterministically regardless of any auto-generated ID from
+	// NewJobPayloadV2 or SetIdentity. Concurrent pollers, duplicate
+	// webhooks, and post-crash retries must converge on the same Job ID.
 	fwdMeta := routing.FromPayload(normalized)
 	if fwdMeta.ForwardingKey != "" {
 		jobID = DeriveForwardingJobID(fwdMeta.ForwardingKey.String())
@@ -255,19 +246,20 @@ func (e *Enqueuer) PrepareJobAndTask(ctx context.Context, payloadMap map[string]
 		normalized["job_id"] = jobID
 	}
 
-	// PR #3: compile Job+TaskSpec. MaxRetries is set to 0 here and
-	// overwritten by enforceDeliveryPlanPrecondition below — single owner
+	// compileSceneVideoJob leaves MaxRetries at 0; the two writers
+	// below (extractPlanMaxRetry from the payload, then
+	// enforceDeliveryPlanPrecondition re-deriving from the DB) are
+	// the only owners of that field on the insert path.
 	job, spec, priority := compileSceneVideoJob(normalized, req)
 
-	// PR-delivery-plan-precondition (prepare-time MaxRetries extraction):
-	// compute max retry_budget from the payload's delivery_plan so
-	// job.MaxRetries is correct AT INSERT time and reflects the
-	// worst-case per-destination budget in jobs.max_retries. The
-	// post-create resolver-based precondition in Enqueue remains the
-	// authoritative consistency check against the DB; it can still
-	// re-write MaxRetries on its in-memory job struct, but the column
-	// value committed here is from the payload. In production this
-	// matches the resolver's view because the resolver reads from
+	// Pre-compute MaxRetries from the payload's delivery_plan so
+	// jobs.max_retries reflects the worst-case per-destination budget
+	// AT INSERT time. The post-create resolver-based precondition
+	// (in Enqueue) re-reads the plan from the DB for consistency
+	// gating (presence + retry_budget > 0) and re-writes MaxRetries
+	// on the in-memory job struct, but the column value committed
+	// here is from the payload. In production this matches the
+	// resolver's view because the resolver reads from
 	// job_delivery_plans rows this tx just inserted.
 	if job.MaxRetries == 0 {
 		if maxRetry := extractPlanMaxRetry(normalized); maxRetry > 0 {
@@ -275,37 +267,31 @@ func (e *Enqueuer) PrepareJobAndTask(ctx context.Context, payloadMap map[string]
 		}
 	}
 
-	// PR-delivery-plan-precondition moved out of this helper: it now runs
-	// AFTER the atomic create on the public Enqueue path, so the
-	// resolver reads job_delivery_plans rows the same call's tx just
-	// inserted (resolving the "manual preinsert required" production bug).
-	// The at-INSERT safety net (validateDeliveryDestinationTx inside
-	// CreateJobWithTaskTx) and the payload-shape validator
-	// CreateJobWithTaskTx) and the payload-shape validator
-	// (validateDeliveryPlanRequires above) still run synchronously before
-	// commit, so *Tx-variant callers (AtomicForwardAndEnqueue etc.) keep
-	// their guard against malformed delivery contracts without depending
-	// on a post-commit DB resolver round-trip.
-	//
-	// Contract change: PrepareJobAndTask now leaves job.MaxRetries at 0;
-	// the post-create precondition (in Enqueue) sets it to max(retry_budget)
-	// across the resolved plan. Callers that previously inspected
-	// MaxRetries at Prepare-time must adjust accordingly.
+	// ResolvePlan (NOT ResolveDestinations) is called here so the
+	// precondition is enforced for BOTH the public Enqueue path AND the
+	// internal PrepareJobAndTask path (used by AtomicForwardAndEnqueue,
+	// which combines Job+Task creation with a creator_forwardings status
+	// update in a single SQLite transaction and would otherwise bypass
+	// the precondition). The plan carries retry_budget per destination,
+	// which is validated upfront (>0) and propagated to the Job's
+	// MaxRetries. A nil plan, an empty destinations list, or any
+	// retry_budget <= 0 rejects the enqueue with an explicit
+	// validationError.
+	if err := e.enforceDeliveryPlanPrecondition(ctx, jobID, job); err != nil {
+		return nil, nil, 0, err
+	}
+
+	// PrepareJobAndTask runs the precondition synchronously so *Tx-variant
+	// callers (AtomicForwardAndEnqueue etc.) get the same guard as the
+	// public path, without depending on a post-commit DB resolver
+	// round-trip. The public Enqueue method additionally runs a
+	// post-create precondition so the resolver reads job_delivery_plans
+	// rows the same call's atomic create just committed (resolving the
+	// "manual preinsert required" production bug surfaced on the Jackie
+	// Chan doc-voiceover real run).
 
 	return job, spec, priority, nil
 }
-
-// =============================================================================
-// PR #3: compile Job+TaskSpec from normalized scene-video payload
-// =============================================================================
-//
-// The HTTP-edge job-response formatter (RenderHTTPBoundaryJobResponse) lived
-// here until Step 8/8 of the canonical-purity action plan extracted it to
-// enqueue/http_response_compat.go. That file is INTENTIONALLY excluded
-// from scripts/ci/check-payload-canonical-form.sh because it deliberately
-// dual-writes the legacy aliases for PR15.6 back-compat — see the file's
-// top-of-file docstring for the full rationale.
-// =============================================================================
 
 // compileSceneVideoJob builds a canonical *jobs.Job and *taskgraph.TaskSpec
 // from a normalized scene-video payload. The caller owns the atomic creation.
@@ -358,10 +344,9 @@ func compileSceneVideoJob(normalized map[string]interface{}, req costmodel.JobRe
 }
 
 func normalizeSceneVideoPayload(payloadMap map[string]interface{}) (map[string]interface{}, error) {
-	// refactor/payload-v2-single-shape: build the canonical typed
-	// envelope, then project to the downstream map. No `parameters`
-	// sub-map. No legacy alias keys. Single source of truth is the
-	// contract.JobPayloadV2 struct.
+	// Build the canonical typed envelope, then project to the downstream
+	// map. No `parameters` sub-map, no legacy alias keys. Single source
+	// of truth is the contract.JobPayloadV2 struct.
 	base := contract.NewJobPayloadV2(payloadMap)
 
 	title := strings.TrimSpace(base.VideoName)
@@ -480,10 +465,8 @@ func buildIdempotentResponse(normalized map[string]interface{}, existing *jobs.J
 		"voiceover_count":   voiceoverCountFromPayload(normalized),
 	}
 	if jobRunID != "" {
-		// Step 8/8 canonical-purity: drop the redundant `"run_id"`
-		// dual-write here. The idempotent-confirm response now emits
-		// canonical `job_run_id` only. Legacy HTTP clients that depended
-		// on `run_id` should have migrated to `job_run_id` since PR15.6.
+		// Drop the redundant `run_id` dual-write: the idempotent-confirm
+		// response emits canonical `job_run_id` only.
 		resp["job_run_id"] = jobRunID
 	}
 	if correlationID != "" {
@@ -716,9 +699,9 @@ func copyTimelinePayloadFields(out, src map[string]interface{}) {
 	if audioURL := strings.TrimSpace(payload.FirstString(src, "audio_url")); audioURL != "" {
 		out["audio_url"] = audioURL
 	}
-	// PR-forwarding-deterministic-id: preserve the forwarding metadata so
-	// normalizeSceneVideoPayload carries it into the normalized payload
-	// consumed by Enqueue → DeriveForwardingJobID.
+	// Preserve the forwarding metadata so normalizeSceneVideoPayload
+	// carries it into the normalized payload consumed by
+	// Enqueue → DeriveForwardingJobID.
 	if meta.ForwardingKey != "" {
 		out[routing.KeyForwardingKey] = meta.ForwardingKey.String()
 	}
@@ -875,10 +858,6 @@ func (e *validationError) Unwrap() error {
 	return e.wrapped
 }
 
-// =============================================================================
-// PR-delivery-plan-precondition: types for the enqueue-time plan resolver
-// =============================================================================
-
 // PlanDestination is a minimal subset of the per-destination plan that the
 // Enqueuer needs to enforce the precondition. Defined locally to decouple
 // the enqueue contract from the deliveries package (no import edge) and
@@ -896,12 +875,13 @@ type ResolvedPlan struct {
 	Destinations []PlanDestination
 }
 
-// PlanResolver is the contract Enqueuer needs at enqueue time. We use
-// ResolvePlan (NOT ResolveDestinations) so the per-destination retry_budget
-// is available for validation AND propagation to the Job. The
-// deliveries.SQLiteDeliveryPlanResolver implements this contract via a
-// thin adapter at the composition root; in tests, a hand-rolled mock
-// struct satisfies the interface directly.
+// PlanResolver is the contract Enqueuer needs at enqueue time.
+// ResolvePlan (NOT ResolveDestinations) is the chosen method so the
+// per-destination retry_budget is available for validation AND
+// propagation to the Job. The deliveries.SQLiteDeliveryPlanResolver
+// implements this contract via a thin adapter at the composition
+// root; in tests, a hand-rolled mock struct satisfies the interface
+// directly.
 type PlanResolver interface {
 	ResolvePlan(ctx context.Context, jobID, artifactID string) (*ResolvedPlan, error)
 }
