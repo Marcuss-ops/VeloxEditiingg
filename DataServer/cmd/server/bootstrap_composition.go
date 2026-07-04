@@ -23,6 +23,7 @@ import (
 	"velox-server/internal/ingest"
 	velmetrics "velox-server/internal/metrics"
 	"velox-server/internal/registry"
+	"velox-server/internal/supervisor"
 )
 
 // appComponents holds every dependency the master process needs at
@@ -64,7 +65,7 @@ type appComponents struct {
 	// Supervisor owns long-lived background runners. Built in
 	// buildAppComponents AFTER every other dependency so a runner
 	// hook into a missing dep is a structural composition bug.
-	supervisor *BackgroundSupervisor
+	supervisor *supervisor.Supervisor
 
 	// health is a thin alias of modules.Health. Hoisted here so
 	// registerReadinessChecks does not need to reach into modules.
@@ -275,11 +276,11 @@ func wirePostBuild(j *jobsDeps, t *taskDeps) error {
 //                       removed and the supervisor logs WARN.
 //   - ClassOneShot:     manifest-generator. Run once on startup;
 //                       failure is non-fatal (logged WARN).
-func buildSupervisor(a *assetDeps, m *moduleDeps, j *jobsDeps, p *persistenceDeps, w *workerDeps, t *taskDeps, metricsCollector *velmetrics.Collector) (*BackgroundSupervisor, error) {
-	sup := NewBackgroundSupervisor()
+func buildSupervisor(a *assetDeps, m *moduleDeps, j *jobsDeps, p *persistenceDeps, w *workerDeps, t *taskDeps, metricsCollector *velmetrics.Collector) (*supervisor.Supervisor, error) {
+	sup := supervisor.New()
 
 	criticalMaxRetries, criticalFailAfter := criticalRetryConfigFromEnv()
-	criticalPolicy := RestartPolicy{
+	criticalPolicy := supervisor.RestartPolicy{
 		MaxRetries:     criticalMaxRetries,
 		InitialBackoff: 1 * time.Second,
 		MaxBackoff:     30 * time.Second,
@@ -293,7 +294,7 @@ func buildSupervisor(a *assetDeps, m *moduleDeps, j *jobsDeps, p *persistenceDep
 			criticalFailAfter)
 	}
 	const restartableMaxRetries = 5
-	restartablePolicy := RestartPolicy{
+	restartablePolicy := supervisor.RestartPolicy{
 		MaxRetries:     restartableMaxRetries,
 		InitialBackoff: 500 * time.Millisecond,
 		MaxBackoff:     30 * time.Second,
@@ -302,9 +303,9 @@ func buildSupervisor(a *assetDeps, m *moduleDeps, j *jobsDeps, p *persistenceDep
 
 	// ── ClassCritical ────────────────────────────────────────────────
 	if a.OutboxDispatcher != nil {
-		if err := sup.Register(&SupervisedRunner{
+		if err := sup.Register(supervisor.Runner{
 			Name:   "outbox-dispatcher",
-			Class:  ClassCritical,
+			Class:  supervisor.ClassCritical,
 			Policy: criticalPolicy,
 			Run: func(ctx context.Context) error {
 				log.Printf("[BOOTSTRAP] Outbox dispatcher started — polling outbox_events")
@@ -315,9 +316,9 @@ func buildSupervisor(a *assetDeps, m *moduleDeps, j *jobsDeps, p *persistenceDep
 		}
 	}
 	if m.DeliveryRunner != nil {
-		if err := sup.Register(&SupervisedRunner{
+		if err := sup.Register(supervisor.Runner{
 			Name:   "delivery-runner",
-			Class:  ClassCritical,
+			Class:  supervisor.ClassCritical,
 			Policy: criticalPolicy,
 			Run: func(ctx context.Context) error {
 				log.Printf("[BOOTSTRAP] DeliveryRunner started — polling PENDING job_deliveries")
@@ -328,9 +329,9 @@ func buildSupervisor(a *assetDeps, m *moduleDeps, j *jobsDeps, p *persistenceDep
 		}
 	}
 	if m.ForwardingRunner != nil {
-		if err := sup.Register(&SupervisedRunner{
+		if err := sup.Register(supervisor.Runner{
 			Name:   "creator-forwarding-runner",
-			Class:  ClassCritical,
+			Class:  supervisor.ClassCritical,
 			Policy: criticalPolicy,
 			Run: func(ctx context.Context) error {
 				log.Printf("[BOOTSTRAP] CreatorForwardingRunner started — polling creator_forwardings")
@@ -341,9 +342,9 @@ func buildSupervisor(a *assetDeps, m *moduleDeps, j *jobsDeps, p *persistenceDep
 		}
 	}
 	if t.TaskLeaseReaper != nil {
-		if err := sup.Register(&SupervisedRunner{
+		if err := sup.Register(supervisor.Runner{
 			Name:   "task-lease-reaper",
-			Class:  ClassCritical,
+			Class:  supervisor.ClassCritical,
 			Policy: criticalPolicy,
 			Run: func(ctx context.Context) error {
 				return t.TaskLeaseReaper.Run(ctx)
@@ -369,9 +370,9 @@ func buildSupervisor(a *assetDeps, m *moduleDeps, j *jobsDeps, p *persistenceDep
 
 	// ── ClassRestartable ─────────────────────────────────────────────
 	if a.Reconciler != nil {
-		if err := sup.Register(&SupervisedRunner{
+		if err := sup.Register(supervisor.Runner{
 			Name:   "artifact-reconciler",
-			Class:  ClassRestartable,
+			Class:  supervisor.ClassRestartable,
 			Policy: restartablePolicy,
 			Run: func(ctx context.Context) error {
 				log.Printf("[BOOTSTRAP] artifacts.Reconciler started (4 rules: expired-uploads + staging, orphan-final-blobs, READY-no-blob QUARANTINED, stuck-STAGING; 15m tick)")
@@ -383,9 +384,9 @@ func buildSupervisor(a *assetDeps, m *moduleDeps, j *jobsDeps, p *persistenceDep
 		}
 	}
 	if t.TaskLifecycle != nil {
-		if err := sup.Register(&SupervisedRunner{
+		if err := sup.Register(supervisor.Runner{
 			Name:   "taskgraph-dispatcher",
-			Class:  ClassRestartable,
+			Class:  supervisor.ClassRestartable,
 			Policy: restartablePolicy,
 			Run: func(ctx context.Context) error {
 				ticker := time.NewTicker(2 * time.Second)
@@ -420,9 +421,9 @@ func buildSupervisor(a *assetDeps, m *moduleDeps, j *jobsDeps, p *persistenceDep
 	if metricsCollector != nil && p.SQLite != nil && p.Outbox != nil {
 		labelRes := velmetrics.NewSQLiteLabelResolver(p.SQLite.DB())
 		costFactors := velmetrics.LoadCostFactorsFromEnv()
-		if err := sup.Register(&SupervisedRunner{
+		if err := sup.Register(supervisor.Runner{
 			Name:   "metrics-supervisor",
-			Class:  ClassRestartable,
+			Class:  supervisor.ClassRestartable,
 			Policy: restartablePolicy,
 			Run: func(ctx context.Context) error {
 				supv := velmetrics.NewSupervisor(metricsCollector, labelRes, p.Outbox, costFactors)
@@ -441,9 +442,9 @@ func buildSupervisor(a *assetDeps, m *moduleDeps, j *jobsDeps, p *persistenceDep
 	// loop is needed even if the manifest endpoint is briefly
 	// unreachable.
 	if w.UpdateHandler != nil {
-		if err := sup.Register(&SupervisedRunner{
+		if err := sup.Register(supervisor.Runner{
 			Name:  "manifest-generator",
-			Class: ClassOneShot,
+			Class: supervisor.ClassOneShot,
 			Run: func(_ context.Context) error {
 				if err := w.UpdateHandler.GenerateManifestV2(); err != nil {
 					log.Printf("[BOOTSTRAP] Manifest auto-generation skipped: %v", err)

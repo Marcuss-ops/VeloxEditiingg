@@ -156,3 +156,16 @@ Thumbs.db
 /DataServer/0 (the bug vector) ===
 
 DataServer/worker
+
+# ── Transient git scratch notes (per-checkpoint scratch from AI assistance) ──
+# These `*.git_msg_*` files accumulate during AI-assisted commit-message
+# staging work — same role as the `.pilot/*.txt` block above but for git-side
+# scaffolding. Throwaway operator-facing artifacts, never commit.
+**/.git_msg_*
+
+# ── Worker agent compiled binaries (NEVER commit — local build artifact) ──
+# `installer.exe` is produced by gobuild inside the native worker-agent Go
+# module and sits next to `velox-worker-agent` (also gitignored above). Catching
+# it by exact path keeps the rule scoped; a future binary at this location
+# would be discovered manually rather than silently auto-tracked.
+RemoteCodex/native/worker-agent-go/installer.exe

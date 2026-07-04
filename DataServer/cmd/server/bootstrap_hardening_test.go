@@ -18,6 +18,7 @@ import (
 	"velox-server/internal/config"
 	"velox-server/internal/jobs"
 	"velox-server/internal/store"
+	"velox-server/internal/supervisor"
 	"velox-server/internal/taskgraph"
 )
 
@@ -85,8 +86,8 @@ func TestBootstrapFailsWhenOutboxUnavailable(t *testing.T) {
 
 	// Create a job in PENDING, then advance to RUNNING so Fail
 	// can run (Fail accepts non-terminal jobs).
-	atomic := store.NewAtomicJobTaskCreator(sqliteStore)
-	if err := atomic.CreateJobWithTask(ctx, &jobs.Job{ID: jobID, MaxRetries: 3}, &taskgraph.TaskSpec{Version: 1}, 0); err != nil {
+	atomic_v := store.NewAtomicJobTaskCreator(sqliteStore)
+	if err := atomic_v.CreateJobWithTask(ctx, &jobs.Job{ID: jobID, MaxRetries: 3}, &taskgraph.TaskSpec{Version: 1}, 0); err != nil {
 		t.Fatalf("CreateJobWithTask: %v", err)
 	}
 
@@ -179,12 +180,12 @@ func TestSupervisorStopsAllRunners(t *testing.T) {
 	var started atomic.Int32
 	var stopped atomic.Int32
 
-	sup := NewBackgroundSupervisor()
+	sup := supervisor.New()
 	for i := 0; i < 3; i++ {
 		name := string(rune('a' + i))
-		_ = sup.Register(RunnerFunc{
-			name: name,
-			fn: func(ctx context.Context) error {
+		_ = sup.Register(supervisor.Runner{
+			Name: name, Class: supervisor.ClassOneShot,
+			Run: func(ctx context.Context) error {
 				started.Add(1)
 				<-ctx.Done()
 				stopped.Add(1)
@@ -235,12 +236,12 @@ func TestSupervisorPropagatesRunnerFailure(t *testing.T) {
 	var stopped atomic.Int32
 	readyCh := make(chan struct{})
 
-	sup := NewBackgroundSupervisor()
+	sup := supervisor.New()
 
 	// Runner A: runs normally until cancelled.
-	_ = sup.Register(RunnerFunc{
-		name: "runner-ok",
-		fn: func(ctx context.Context) error {
+	_ = sup.Register(supervisor.Runner{
+		Name: "runner-ok", Class: supervisor.ClassOneShot,
+		Run: func(ctx context.Context) error {
 			<-ctx.Done()
 			stopped.Add(1)
 			return ctx.Err()
@@ -248,17 +249,17 @@ func TestSupervisorPropagatesRunnerFailure(t *testing.T) {
 	})
 
 	// Runner B: fails immediately with a non-nil error.
-	_ = sup.Register(RunnerFunc{
-		name: "runner-fail",
-		fn: func(ctx context.Context) error {
+	_ = sup.Register(supervisor.Runner{
+		Name: "runner-fail", Class: supervisor.ClassOneShot,
+		Run: func(ctx context.Context) error {
 			return errors.New("simulated runner failure")
 		},
 	})
 
 	// Runner C: runs until cancelled.
-	_ = sup.Register(RunnerFunc{
-		name: "runner-also-ok",
-		fn: func(ctx context.Context) error {
+	_ = sup.Register(supervisor.Runner{
+		Name: "runner-also-ok", Class: supervisor.ClassOneShot,
+		Run: func(ctx context.Context) error {
 			close(readyCh) // signal it started
 			<-ctx.Done()
 			stopped.Add(1)
@@ -385,19 +386,20 @@ func TestReadyPassesAfterDependenciesStart(t *testing.T) {
 func TestSupervisorRejectsDuplicateRunnerName(t *testing.T) {
 	t.Parallel()
 
-	sup := NewBackgroundSupervisor()
+	sup := supervisor.New()
 
-	err := sup.Register(RunnerFunc{
-		name: "unique",
-		fn:   func(ctx context.Context) error { return nil },
+	err := sup.Register(supervisor.Runner{
+		Name: "unique", Class: supervisor.ClassOneShot,
+		Run: func(ctx context.Context) error { return nil },
 	})
 	if err != nil {
 		t.Fatalf("first Register: %v", err)
 	}
 
-	err = sup.Register(RunnerFunc{
-		name: "unique", // duplicate
-		fn:   func(ctx context.Context) error { return nil },
+	err = sup.Register(supervisor.Runner{
+		Name: "unique", // duplicate
+		Class: supervisor.ClassOneShot,
+		Run: func(ctx context.Context) error { return nil },
 	})
 	if err == nil {
 		t.Fatal("expected duplicate runner name to be rejected")

@@ -211,10 +211,3 @@ func runUntilShutdown(c *appComponents, t *transportBundle) error {
 	return nil
 }
 
-// Compile-time check: ensure legacy BackgroundRunner types (e.g.
-// metrics.Supervisor passed via RunnerFunc) keep working through
-// the back-compat Register branch. The BackgroundSupervisor.Register
-// (interface{}) switch still accepts these types; the check here
-// pins the contract at compile time so a future refactor that drops
-// RunnerFunc fails the build loudly.
-var _ BackgroundRunner = RunnerFunc{}
