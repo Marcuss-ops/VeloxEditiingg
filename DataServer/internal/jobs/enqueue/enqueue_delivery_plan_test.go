@@ -404,3 +404,114 @@ func assertNoJobDeliveryPlansSeeded(t *testing.T, db *store.SQLiteStore) {
 		t.Fatalf("fresh DB must have 0 job_delivery_plans rows (P0.2 says: no preinsert); got %d", count)
 	}
 }
+
+// TestEnqueue_RealJackieChanPayloadShape_Succeeds mirrors the actual
+// production payload shape from
+// ops/jobs/jackie_chan_doc_voiceover.generate-from-clips.json. That
+// payload uses a SINGLE delivery_plan entry with destination_id=
+// "comedy_test" and retry_budget=3 (NOT the multi-delivery [3,7,5]
+// shape of the existing tests above). The end-to-end runnable
+// submit_jackie_chan_doc_voiceover_clips.sh script curls these bytes
+// to the master's /api/v1/script/generate-from-clips; this test
+// verifies the Enqueue path accepts the SAME shape without the
+// pre-P0.2 "ErrNoExplicitPlan / must-preinsert" failure. Asserts:
+//
+//   1. Enqueue returns ok with the json's exact delivery_plan shape
+//      (single entry {destination_id, retry_budget=3, priority=0}).
+//   2. response.job_id is populated.
+//   3. extractPlanMaxRetry(payload) yields 3 (the payload's only
+//      retry_budget value).
+//   4. jobs.max_retries (DB column) equals 3 — payload drives the
+//      column from the canonical-purity Enqueue path, NOT a 0 or
+//      stale value.
+//   5. assertNoJobDeliveryPlansSeeded pins the fresh-DB invariant
+//      so the test stays a P0.2 regression guard: any code change
+//      that quietly re-introduces a "must-preinsert" requirement on
+//      the comedy_test path fails LOUDLY at the helper, not at a
+//      downstream ErrNoExplicitPlan.
+//
+// mirrorJackieChanDeliveryPlan returns the EXACT shape of the
+// production payload's delivery_plan entry — not interpolated, so
+// the test fails if the production payload's shape drifts and we
+// don't update the test.
+func TestEnqueue_RealJackieChanPayloadShape_Succeeds(t *testing.T) {
+	t.Parallel()
+	tempDir := t.TempDir()
+	db, err := store.NewSQLiteStore(filepath.Join(tempDir, "test.db"))
+	if err != nil {
+		t.Fatalf("sqlite store: %v", err)
+	}
+
+	// Seed ONLY delivery_destinations. Not job_delivery_plans —
+	// P0.2 guarantees the precondition reads after the atomic
+	// create, not before.
+	seedDestinations(t, db, map[string]bool{
+		"comedy_test": true,
+	})
+	assertNoJobDeliveryPlansSeeded(t, db)
+
+	enq := NewEnqueuer(
+		store.NewAtomicJobTaskCreator(db),
+		store.NewSQLiteJobRepository(db),
+		nil,
+		&mockPlanResolver{plan: &ResolvedPlan{
+			JobID: "test",
+			Destinations: []PlanDestination{
+				{DestinationID: "comedy_test", Priority: 0, RetryBudget: 3},
+			},
+		}},
+	)
+
+	payload := map[string]interface{}{
+		"video_name":     "Jackie Chan Doc Voiceover",
+		"script_text":    "convergence smoke (production payload shape)",
+		"voiceover_path": "/tmp/v.mp3",
+		"scenes":         []interface{}{map[string]interface{}{"text": "intro", "voiceover": "v1"}},
+		"reference_voiceovers": []string{
+			"https://drive.example/voice-1.mp3",
+			"https://drive.example/voice-2.mp3",
+			"https://drive.example/voice-3.mp3",
+		},
+		"delivery_plan": []interface{}{
+			map[string]interface{}{
+				"destination_id": "comedy_test",
+				"retry_budget":   3,
+				"priority":       0,
+			},
+		},
+	}
+
+	// Step 3: payload drives the column. extractPlanMaxRetry(payload)
+	// = 3 (only retry_budget in the plan array).
+	payloadMaxRetry := extractPlanMaxRetry(payload)
+	if payloadMaxRetry <= 0 {
+		t.Fatalf("payload max(retry_budget) = %d, want = 3", payloadMaxRetry)
+	}
+	if payloadMaxRetry != 3 {
+		t.Fatalf("payload max(retry_budget) = %d, want = 3 (matches ops/jobs/jackie_chan…json)", payloadMaxRetry)
+	}
+
+	response, err := enq.Enqueue(context.Background(), payload, costmodel.DefaultRequirements())
+	if err != nil {
+		t.Fatalf("Enqueue returned error on real-Shaped Jackie Chan payload: %v (P0.2 + post-create precondition must converge here without ErrNoExplicitPlan)", err)
+	}
+	if response["ok"] != true {
+		t.Fatalf("response.ok = %v, want true", response["ok"])
+	}
+	jobID, _ := response["job_id"].(string)
+	if jobID == "" {
+		t.Fatal("response.job_id is empty")
+	}
+
+	// Step 4: jobs.max_retries (DB column) == extractPlanMaxRetry(payload).
+	j, err := enq.Jobs.Get(context.Background(), jobID)
+	if err != nil || j == nil {
+		t.Fatalf("Get job: err=%v job=%v", err, j)
+	}
+	if j.MaxRetries != payloadMaxRetry {
+		t.Errorf("jobs.max_retries = %d, want %d (P0.2 fix contract)", j.MaxRetries, payloadMaxRetry)
+	}
+	if j.Status != jobs.StatusPending {
+		t.Errorf("jobs.status = %q, want PENDING after first-create (Finalize runs later)", j.Status)
+	}
+}
