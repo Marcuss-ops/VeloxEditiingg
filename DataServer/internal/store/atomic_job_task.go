@@ -211,22 +211,17 @@ func (c *AtomicJobTaskCreator) CreateJobWithTaskTx(
 
 func insertDeliveryPlanTx(ctx context.Context, tx *sql.Tx, jobID string, plan []deliveryPlanEntry, now string) error {
 	for _, entry := range plan {
-		var globallyEnabled int
-		err := tx.QueryRowContext(ctx,
-			`SELECT enabled FROM delivery_destinations WHERE destination_id = ?`,
-			entry.DestinationID,
-		).Scan(&globallyEnabled)
-		if err == sql.ErrNoRows {
-			return fmt.Errorf("destination_id %q does not exist", entry.DestinationID)
-		}
-		if err != nil {
-			return fmt.Errorf("validate destination_id %q: %w", entry.DestinationID, err)
-		}
-		if globallyEnabled != 1 {
-			return fmt.Errorf("destination_id %q is globally disabled", entry.DestinationID)
+		// Per-destination existence + globally-enabled check is delegated
+		// to validateDeliveryDestinationTx (see delivery_plan_validator.go)
+		// so the check can be unit-tested without constructing a full
+		// Job + TaskSpec, and so future canonical writers (completion
+		// coordinator, etc.) can reuse the same guard without depending
+		// on the atomic creator type.
+		if err := validateDeliveryDestinationTx(ctx, tx, entry.DestinationID); err != nil {
+			return err
 		}
 
-		_, err = tx.ExecContext(ctx,
+		_, err := tx.ExecContext(ctx,
 			`INSERT INTO job_delivery_plans (
 				job_id, destination_id, enabled, priority, retry_budget,
 				metadata_json, created_at, updated_at
