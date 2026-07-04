@@ -263,28 +263,22 @@ func (e *Enqueuer) PrepareJobAndTask(ctx context.Context, payloadMap map[string]
 		}
 	}
 
-	// ResolvePlan (NOT ResolveDestinations) is called here so the
-	// precondition is enforced for BOTH the public Enqueue path AND the
-	// internal PrepareJobAndTask path (used by AtomicForwardAndEnqueue,
-	// which combines Job+Task creation with a creator_forwardings status
-	// update in a single SQLite transaction and would otherwise bypass
-	// the precondition). The plan carries retry_budget per destination,
-	// which is validated upfront (>0) and propagated to the Job's
-	// MaxRetries. A nil plan, an empty destinations list, or any
-	// retry_budget <= 0 rejects the enqueue with an explicit
-	// validationError.
-	if err := e.enforceDeliveryPlanPrecondition(ctx, jobID, job); err != nil {
-		return nil, nil, 0, err
-	}
-
-	// PrepareJobAndTask runs the precondition synchronously so *Tx-variant
-	// callers (AtomicForwardAndEnqueue etc.) get the same guard as the
-	// public path, without depending on a post-commit DB resolver
-	// round-trip. The public Enqueue method additionally runs a
-	// post-create precondition so the resolver reads job_delivery_plans
-	// rows the same call's atomic create just committed (resolving the
-	// "manual preinsert required" production bug surfaced on the Jackie
-	// Chan doc-voiceover real run).
+	// The plan precondition (ResolvePlan + retry_budget > 0 + MaxRetries
+	// propagation) is enforced POST-create in Enqueue(). PrepareJobAndTask
+	// stays pure: it only validates the payload shape via
+	// validateDeliveryPlanRequires (above) and pre-computes
+	// job.MaxRetries from the payload's delivery_plan (above) so the
+	// insert-time column matches the resolver's view at INSERT time.
+	//
+	// *Tx-variant callers (AtomicForwardAndEnqueue etc.) get the same
+	// guard via validateDeliveryDestinationTx inside CreateJobWithTaskTx,
+	// which rejects malformed delivery contracts in the same SQLite tx.
+	// The public Enqueue path additionally runs a post-create resolver
+	// round-trip purely so observability on the new-submit hot path
+	// surfaces an actionable "missing plan" hint before the worker
+	// invests in a lease — the canonical fix for the "manual preinsert
+	// required" production bug surfaced on the Jackie Chan doc-voiceover
+	// real run.
 
 	return job, spec, priority, nil
 }
