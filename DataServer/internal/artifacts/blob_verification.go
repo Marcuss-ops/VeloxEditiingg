@@ -9,6 +9,10 @@
 //     and ReconcilerCleanup.
 //   - countingWriter: pipe-through byte counter for io.MultiWriter.
 //   - verifyStagedBlob: post-write end-to-end re-hash (trust boundary).
+//   - detectMIME: content sniff of the staged blob (first 512 bytes
+//     via http.DetectContentType); falls back to "" on read error.
+//     Called by Finalize to derive the canonical storage_key
+//     extension after BeginUpload-declared mime resolution.
 //
 // Centralized so the same hash + size semantics apply to staging,
 // Receive, Finalize, and ReconcilerCleanup.
@@ -19,6 +23,7 @@ import (
 	"fmt"
 	"io"
 	"mime"
+	"net/http"
 	"os"
 	"path/filepath"
 
@@ -89,4 +94,24 @@ func verifyStagedBlob(path string) (string, int64, error) {
 		return "", 0, fmt.Errorf("verifyStagedBlob read: %w", err)
 	}
 	return fmt.Sprintf("%x", h.Sum(nil)), n, nil
+}
+
+// detectMIME sniffs the first 512 bytes of path and returns the
+// canonical MIME type via http.DetectContentType. Falls back to ""
+// when the file cannot be read (caller treats "" as "no signal,
+// use BeginUpload-declared mime or application/octet-stream").
+//
+// Co-located with mimeToExt because the two form the MIME pipeline:
+// detectMIME produces the type, mimeToExt produces the canonical
+// file extension. Keeping them in the same file prevents drift
+// between detection and extension mapping.
+func detectMIME(path string) string {
+	f, err := os.Open(filepath.Clean(path))
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	var sniff [512]byte
+	n, _ := io.ReadFull(f, sniff[:])
+	return http.DetectContentType(sniff[:n])
 }

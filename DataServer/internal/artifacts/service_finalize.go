@@ -12,9 +12,10 @@ package artifacts
 //     post-Finalize artifact via ArtifactReader when the previous tx
 //     already committed).
 //
-//  2. detectMIME                         (this file, private) — content
-//     sniff of the staged blob; falls back to BeginUpload-declared
-//     mime; falls back to application/octet-stream.
+//  2. detectMIME                         (blob_verification.go,
+//     package-private) — content sniff of the staged blob; falls
+//     back to BeginUpload-declared mime; falls back to
+//     application/octet-stream.
 //
 //  3. PromoteToCanonical                 (storage.go, package-private)
 //     — promotes the blob to its content-addressable canonical
@@ -41,10 +42,7 @@ package artifacts
 import (
 	"context"
 	"fmt"
-	"io"
 	"net/http"
-	"os"
-	"path/filepath"
 
 	"velox-server/internal/store"
 )
@@ -120,9 +118,7 @@ func (s *Service) Finalize(ctx context.Context, cmd FinalizeArtifactCommand) (*s
 }
 
 // validateFinalizeSession loads + validates the upload session.
-//
-// 3-tuple return semantics (deviates from the original spec's
-// `(ctx, sessionID, requesterID) error` to preserve behavior):
+// 3-tuple return: dual-path COMPLETED vs FINALIZING dispatch.
 //
 //   - (session, nil, nil):    session is RECEIVED/FINALIZING; caller
 //     proceeds with the finalize pipeline.
@@ -130,12 +126,9 @@ func (s *Service) Finalize(ctx context.Context, cmd FinalizeArtifactCommand) (*s
 //     returns the artifact immediately (no further work).
 //   - (nil, nil, err):        validation failed; caller propagates err.
 //
-// Why 3 values and not just error: the COMPLETED-vs-FINALIZING
-// branching in the original monolith needs to surface BOTH the
-// "yes, just return this cached artifact" AND the "yes, proceed
-// with the pipeline" decisions. Collapsing to a single error return
-// would force the caller to re-load the session and dispatch the
-// idempotent-vs-finalize decision itself — fragile and racy.
+// The 3-tuple is required so the orchestrator can dispatch the
+// idempotent-vs-finalize decision without re-loading the session
+// (which would be racy).
 func (s *Service) validateFinalizeSession(ctx context.Context, cmd FinalizeArtifactCommand) (*store.UploadSession, *store.Artifact, error) {
 	if cmd.UploadID == "" {
 		return nil, nil, fmt.Errorf("artifacts: Finalize: empty uploadID")
@@ -218,14 +211,10 @@ func (s *Service) validateFinalizeSession(ctx context.Context, cmd FinalizeArtif
 
 // buildFinalizeVerifiedCommand constructs the writer command from
 // pre-validated session data + the just-promoted storage key + the
-// just-detected MIME type. Pure struct mapping — no error possible.
-//
-// Note: the original spec called for an `error` return; it is
-// intentionally elided here because every field is computed from
-// in-memory validated inputs (no fallible operations like JSON
-// marshal or DB reads). If a future change introduces a fallible
-// mapping (e.g. keyed-JSON-derived artifact_id), reintroduce the
-// error return deliberately, not by accident.
+// just-detected MIME type. Pure struct mapping — no fallible
+// operations in any field, so the error return is omitted.
+// Reintroduce it deliberately (not by accident) if a future change
+// adds a fallible mapping (e.g. keyed-JSON-derived artifact_id).
 func (s *Service) buildFinalizeVerifiedCommand(
 	cmd FinalizeArtifactCommand,
 	session *store.UploadSession,
@@ -285,20 +274,3 @@ func (s *Service) finalizeWithDuplicateStorageFallback(ctx context.Context, comm
 	return s.finalizeWriter.FinalizeVerified(ctx, command)
 }
 
-// detectMIME sniffs the first 512 bytes and returns the canonical
-// MIME type. Falls back to "" when the file cannot be read.
-//
-// Module-local helper (not in service_mime.go) to minimize file
-// count in this package — the function is small, pure, and only
-// called from Finalize. Moving it out is mechanical if a future
-// refactor adds call sites in other methods.
-func detectMIME(path string) string {
-	f, err := os.Open(filepath.Clean(path))
-	if err != nil {
-		return ""
-	}
-	defer f.Close()
-	var sniff [512]byte
-	n, _ := io.ReadFull(f, sniff[:])
-	return http.DetectContentType(sniff[:n])
-}
