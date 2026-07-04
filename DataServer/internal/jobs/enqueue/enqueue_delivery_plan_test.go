@@ -2,10 +2,13 @@ package enqueue
 
 import (
 	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"velox-server/internal/costmodel"
+	"velox-server/internal/jobs"
+	"velox-server/internal/store"
 )
 
 // Step 4/8 canonical-purity preflight tests.
@@ -247,5 +250,157 @@ func TestEnqueue_PropagatesDeliveryPlanPreflightError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "retry_budget") || !strings.Contains(err.Error(), "must be > 0") {
 		t.Fatalf("want retry_budget error, got %v", err)
+	}
+}
+
+// TestEnqueue_NoPreinsertDeliveryPlan_PropagatesMaxRetriesFromPayload is
+// the integration regression for P0.2 (the "manual preinsert required"
+// production bug surfaced on the Jackie Chan doc-voiceover real run).
+//
+// Pre-P0.2: PrepareJobAndTask called enforceDeliveryPlanPrecondition
+// BEFORE CreateJobWithTask, so the resolver was queried for a job_id
+// whose job_delivery_plans rows did not exist yet. Operators had to
+// manually INSERT those rows before each POST — the operator runbook
+// complained that ErrNoExplicitPlan surfaced on every first-time job
+// submit.
+//
+// Post-P0.2 (commit 54a794b): PrepareJobAndTask no longer queries the
+// resolver; the post-create precondition in Enqueue reads
+// job_delivery_plans AFTER the atomic create (mockPlanResolver
+// impersonates the production resolver's read view).
+//
+// This test verifies the post-P0.2 contract on the Enqueue path:
+//
+//  1. Enqueue succeeds with a payload-only delivery_plan (NO test-side
+//     pre-insert of job_delivery_plans rows).
+//  2. response.job_id is populated.
+//  3. payloadMaxRetries (the payload's max(retry_budget)) > 0 — the
+//     assertion target requiring the payload to drive the column
+//     (Pre-P0.2, the column stayed at compileSceneVideoJob's default
+//     0 because the resolver precreate branch never reached
+//     extractPlanMaxRetry).
+//  4. jobs.max_retries (DB column, read via Jobs repository) equals
+//     payloadMaxRetries — payload-driven, not 0, not stale.
+//
+// seedDestinations seeds delivery_destinations (the master list of
+// allowed delivery targets — production pre-flight); it does NOT
+// touch job_delivery_plans. The fresh-DB invariant is asserted
+// explicitly so a regression that quietly re-introduces a
+// "must preinsert job_delivery_plans" scheme fails LOUDLY at the
+// assertNoJobDeliveryPlansSeeded helper, not silently in Enqueue.
+func TestEnqueue_NoPreinsertDeliveryPlan_PropagatesMaxRetriesFromPayload(t *testing.T) {
+	t.Parallel()
+	tempDir := t.TempDir()
+	db, err := store.NewSQLiteStore(filepath.Join(tempDir, "test.db"))
+	if err != nil {
+		t.Fatalf("sqlite store: %v", err)
+	}
+
+	// Seed d1/d2/d3 in delivery_destinations (production pre-flight,
+	// NOT job_delivery_plans preinsert). P0.2 fixes the
+	// "must-preinsert job_delivery_plans" — the test deliberately
+	// stops short of preinserting plan rows so the regression guard
+	// stays meaningful.
+	seedDestinations(t, db, map[string]bool{
+		"d1": true,
+		"d2": true,
+		"d3": true,
+	})
+
+	// Fresh-DB invariant: zero job_delivery_plans rows. Pinning this
+	// makes the test a P0.2 regression guard: any helper that
+	// introduces a preinsert trips here before Enqueue is even
+	// called, so the assertion that fails matches "we silently
+	// regressed to requiring operator preinsert" — not a downstream
+	// ErrNoExplicitPlan.
+	assertNoJobDeliveryPlansSeeded(t, db)
+
+	enq := NewEnqueuer(
+		store.NewAtomicJobTaskCreator(db),
+		store.NewSQLiteJobRepository(db),
+		nil,
+		&mockPlanResolver{plan: &ResolvedPlan{
+			JobID: "test",
+			Destinations: []PlanDestination{
+				{DestinationID: "d1", Priority: 0, RetryBudget: 3},
+				{DestinationID: "d2", Priority: 1, RetryBudget: 7}, // max
+				{DestinationID: "d3", Priority: 2, RetryBudget: 5},
+			},
+		}},
+	)
+
+	payload := map[string]interface{}{
+		"video_name":      "no-preinsert-success",
+		"script_text":     "test",
+		"scenes":          []interface{}{map[string]interface{}{"scene": "intro", "voiceover": "v1"}},
+		"voiceover_paths": []string{"/tmp/v.mp3"},
+		"delivery_plan": []interface{}{
+			map[string]interface{}{"destination_id": "d1", "priority": 0, "retry_budget": 3},
+			map[string]interface{}{"destination_id": "d2", "priority": 1, "retry_budget": 7}, // max
+			map[string]interface{}{"destination_id": "d3", "priority": 2, "retry_budget": 5},
+		},
+	}
+
+	// Step 3 of the spec: payloadMaxRetries > 0. The payload defines
+	// [3, 7, 5]; expected max = 7. extractPlanMaxRetry is the SAME
+	// function PrepareJobAndTask calls internally, so this binds
+	// the test's payload-shape computation to the production
+	// column-driven computation.
+	payloadMaxRetry := extractPlanMaxRetry(payload)
+	if payloadMaxRetry <= 0 {
+		t.Fatalf("payload max(retry_budget) = %d, want > 0 (P0.2 fix contract: payload drives the column)", payloadMaxRetry)
+	}
+	if payloadMaxRetry != 7 {
+		t.Errorf("payload max(retry_budget) = %d, want 7", payloadMaxRetry)
+	}
+
+	response, err := enq.Enqueue(context.Background(), payload, costmodel.DefaultRequirements())
+	if err != nil {
+		t.Fatalf("Enqueue returned error on no-preinsert path: %v", err)
+	}
+	if response["ok"] != true {
+		t.Fatalf("response.ok = %v, want true", response["ok"])
+	}
+
+	// Step 2 of the spec: job_id is populated.
+	jobID, _ := response["job_id"].(string)
+	if jobID == "" {
+		t.Fatal("response.job_id is empty")
+	}
+
+	// Step 4 of the spec: jobs.max_retries (DB column) equals
+	// payloadMaxRetries. Jobs.Get reads the column through the typed
+	// repository, so the assertion captures BOTH the in-tx INSERT
+	// value AND the post-commit read view.
+	j, err := enq.Jobs.Get(context.Background(), jobID)
+	if err != nil || j == nil {
+		t.Fatalf("Get job: err=%v job=%v", err, j)
+	}
+	if j.MaxRetries != payloadMaxRetry {
+		t.Errorf("jobs.max_retries = %d, want %d (payload max(retry_budget)); P0.2 fix regression",
+			j.MaxRetries, payloadMaxRetry)
+	}
+	if j.Status != jobs.StatusPending {
+		t.Errorf("jobs.status = %q, want PENDING", j.Status)
+	}
+}
+
+// assertNoJobDeliveryPlansSeeded pins the fresh-DB invariant: zero
+// rows in job_delivery_plans. Pinning this assertion (instead of
+// trusting the test fixture's silence) makes the test a P0.2
+// regression guard: any helper change that could quietly preinsert
+// job_delivery_plans trips this helper before Enqueue runs, so we
+// fail LOUDLY with the right diagnostic instead of producing a
+// spurious "PASS" that hides a regression of the production
+// "must-preinsert" error path.
+func assertNoJobDeliveryPlansSeeded(t *testing.T, db *store.SQLiteStore) {
+	t.Helper()
+	var count int
+	if err := db.DB().QueryRowContext(context.Background(),
+		`SELECT COUNT(*) FROM job_delivery_plans`).Scan(&count); err != nil {
+		t.Fatalf("count job_delivery_plans: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("fresh DB must have 0 job_delivery_plans rows (P0.2 says: no preinsert); got %d", count)
 	}
 }
