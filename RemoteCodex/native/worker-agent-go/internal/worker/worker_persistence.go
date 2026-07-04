@@ -27,19 +27,24 @@ type persistedState struct {
 	SavedAt time.Time `json:"saved_at"`
 }
 
-// stateFilePath builds the path to the local state file.
-func stateFilePath(workDir string) string {
-	return filepath.Join(workDir, "worker_state.json")
+// stateFilePath builds the path to the local state file under the
+// canonical runtime directory (cfg.StateDir, env VELOX_STATE_DIR).
+// Worker state must NEVER live under WorkDir, which points at the
+// release checkout (/opt/velox by default) and is mounted read-only
+// inside the container at /app. The runtime dir is a host-backed
+// volume mount so writes here survive container restarts.
+func stateFilePath(stateDir string) string {
+	return filepath.Join(stateDir, "worker_state.json")
 }
 
 // saveLocalState persists the current in-memory state to a JSON file.
 func (w *Worker) saveLocalState() error {
-	workDir := w.config.WorkDir
-	if workDir == "" {
+	stateDir := w.config.StateDir
+	if stateDir == "" {
 		return nil
 	}
-	if err := os.MkdirAll(workDir, 0755); err != nil {
-		w.logger.Warn("[PERSIST] Cannot create work directory %s: %v", workDir, err)
+	if err := os.MkdirAll(stateDir, 0755); err != nil {
+		w.logger.Warn("[PERSIST] Cannot create state directory %s: %v", stateDir, err)
 		return err
 	}
 
@@ -57,7 +62,7 @@ func (w *Worker) saveLocalState() error {
 	}
 	w.commandMu.Unlock()
 
-	path := stateFilePath(workDir)
+	path := stateFilePath(stateDir)
 	tmpPath := path + ".tmp"
 
 	data, err := json.Marshal(state)
@@ -92,12 +97,12 @@ func (w *Worker) saveLocalState() error {
 // "active_jobs" and "pending_lease_jobs" maps. Those fields are simply
 // ignored on load — Go json.Unmarshal silently drops unknown JSON keys.
 func (w *Worker) loadLocalState() {
-	workDir := w.config.WorkDir
-	if workDir == "" {
+	stateDir := w.config.StateDir
+	if stateDir == "" {
 		return
 	}
 
-	path := stateFilePath(workDir)
+	path := stateFilePath(stateDir)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if !os.IsNotExist(err) {
