@@ -2,8 +2,9 @@
 //
 // Pure isolated unit tests for narrated_clip_timeline.go. No DB,
 // no migrations, no filesystem fixtures. Audio probes are injected
-// via withProbe so the duration resolver is deterministic without
-// touching sharedmedia.DetectAudioDurationSecs. The closest cousin
+// via the narratedClipOptions.probe field so the duration resolver
+// is deterministic without touching sharedmedia.DetectAudioDurationSecs.
+// The closest cousin
 // is BuildClipPayloadForMaster_UsesDetectedVoiceoverDurationForOffsets
 // (enqueue_test.go) which uses PATH-stubbed ffprobe; this file
 // keeps the probe as an in-process closure so tests stay atomic and
@@ -265,7 +266,7 @@ func TestSupportsNarratedClipScenes(t *testing.T) {
 
 // =====================================================================
 // buildNarratedClipPayload: 6-tuple return. Probe injection through
-// withProbe to verify the audio-track offset clock walks correctly
+// narratedClipOptions.probe to verify the audio-track offset clock walks correctly
 // across many scenes. Each scene contributes:
 //   - 1 video item (voiceover_bed, if voiceover present)
 //   - 1 video item (scene_clip — final)
