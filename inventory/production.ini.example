@@ -1,5 +1,15 @@
 # Velox — root-level Ansible inventory (TEMPLATE).
 # ────────────────────────────────────────────────────────────────────────────
+#
+# ── NON-CANONICAL ────────────────────────────────────────────────────────────
+# This file is a DEVELOPER REFERENCE ONLY. It is NOT consumed at deploy time.
+# The canonical inventory is generated at deploy time from the `ansible_hosts`
+# DB table (migration 004) by AnsibleComputerManager.GenerateInventory() in
+# DataServer/internal/handlers/remote/ansible/manager_computers.go. Static
+# inventory files (this one) MUST NOT be used as a deploy input. See the
+# doc-comment at the top of manager_computers.go for the full contract.
+# ─────────────────────────────────────────────────────────────────────────────
+# THIS FILE IS A TEMPLATE. Copy to a local `inventory/production.ini` and
 # THIS FILE IS A TEMPLATE. Copy to a local `inventory/production.ini` and
 # fill in real IPs/hostnames. The active inventory is operator-local and is
 # NOT committed (`**/production.ini` is excluded by the root `.gitignore`,

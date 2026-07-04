@@ -1,8 +1,11 @@
 package ansible
 
 import (
+	"fmt"
 	"log"
 	"path/filepath"
+	"sort"
+	"strings"
 	"time"
 
 	"velox-server/internal/store"
@@ -48,13 +51,25 @@ type AnsibleComputerStore interface {
 
 // AnsibleComputerManager owns the Ansible computers inventory.
 //
+// ── DB-as-source-of-truth inventory (P0.5) ───────────────────────
+//
+// The `ansible_hosts` table (migration 004) is the SINGLE source of
+// truth for inventory. The static `inventory/production.ini.example`
+// file is NON-CANONICAL: it exists only as a developer reference and
+// MUST NOT be used as a deploy input. Every read goes through the
+// SQLite store via ListAnsibleHosts / GetAnsibleHost. Inventory
+// generation at deploy time is driven by GenerateInventory() which
+// builds the INI from DB rows and validates each secret_ref against
+// the SecretResolver. On missing/invalid secret_ref the deploy FAILS
+// LOUDLY — there is no silent fallback to the static file.
+//
 // PR-ANSIBLE-SOT: the previous in-RAM `computers map[string]AnsibleComputer`
 // mirror is REMOVED. SQLite (`ansible_hosts`) is the single source of
 // truth — every read (`GetComputer`, `ListComputers`, `Count`,
-// `CountEnabled`, `GetSecretRef`) hits the store on every call. The
-// bootstrap-time `loadFromSQLite` + `SetStore` are gone; the store is
-// mandatory at construction. Linear DB roundtrips replace the O(N)
-// in-RAM loops that the mirror allowed.
+// `CountEnabled`, `GetSecretRef`, `GenerateInventory`) hits the store
+// on every call. The bootstrap-time `loadFromSQLite` + `SetStore` are
+// gone; the store is mandatory at construction. Linear DB roundtrips
+// replace the O(N) in-RAM loops that the mirror allowed.
 type AnsibleComputerManager struct {
 	dataDir        string
 	store          AnsibleComputerStore
@@ -282,4 +297,154 @@ func (m *AnsibleComputerManager) GetSecretRef(host string) string {
 // Pure helper; doesn't hit the store.
 func (m *AnsibleComputerManager) ResolveSecret(secretRef string) (string, error) {
 	return m.secretResolver.Resolve(secretRef)
+}
+
+// GenerateInventoryOptions configures inventory generation.
+type GenerateInventoryOptions struct {
+	// IncludeDisabled forces inclusion of disabled rows. Default false:
+	// disabled hosts are skipped (no log line, no INI entry). Useful
+	// for audit-only flows that want to see the full DB state.
+	IncludeDisabled bool
+}
+
+// GenerateInventory builds an Ansible INI inventory string from the
+// `ansible_hosts` DB rows. The static `inventory/production.ini.example`
+// is non-canonical and MUST NOT be used as a deploy input — this
+// method is the only sanctioned way to produce an inventory at deploy
+// time.
+//
+// Per-host contract (enforced in this order, fail-fast on the first
+// violation):
+//  1. Enabled == false (and !opts.IncludeDisabled) → SKIP silently
+//  2. SecretRef == ""                                → fail with
+//     `host=<host>: missing secret_ref (DB column secret_ref is
+//     NULL/empty); add via /api/v1/ansible/computers PUT`
+//  3. secretResolver.Resolve(SecretRef) returns error → fail with
+//     `host=<host>: invalid secret_ref=<ref>: <error>`. The error
+//     message from the resolver is preserved (e.g., "read secret file
+//     /var/lib/velox/secrets/ansible/ssh_host_x: no such file or
+//     directory" or "environment variable FOO not set") but the
+//     RESOLVED SECRET VALUE itself is NEVER included in the error
+//     or in the structured log line.
+//
+// Per-host structured log (printed BEFORE the INI is emitted, so the
+// operator sees the full per-host audit even on partial-failure):
+//
+//	[ANSIBLE_INV] host=<host> user=<user> unit=<unit> source=db secret_status=ok|missing
+//
+// `unit` is the canonical systemd unit name derived from the host's
+// group: `velox-worker-<host>.service` for groups containing "worker"
+// (default for the empty/unknown case), `velox-server.service`
+// otherwise. The secret VALUE never appears in any log line; the
+// `secret_ref` SCHEME (e.g., "file:ssh_host_x") may.
+//
+// Returns the INI string with one section per unique host_group. The
+// INI is suitable for `ansible-playbook -i <(echo "$INI") ...` or
+// for writing to a temp file consumed by the playbook runner.
+func (m *AnsibleComputerManager) GenerateInventory(opts GenerateInventoryOptions) (string, error) {
+	if m.store == nil {
+		return "", fmt.Errorf("ansible store not configured")
+	}
+	hosts, err := m.store.ListAnsibleHosts()
+	if err != nil {
+		return "", fmt.Errorf("list ansible_hosts: %w", err)
+	}
+
+	// Per-group section buffers. A stable order (sorted group names,
+	// then sorted host names within a group) keeps the INI diff-friendly.
+	sections := map[string][]string{}
+	groupOrder := []string{}
+
+	for _, h := range hosts {
+		if !h.Enabled && !opts.IncludeDisabled {
+			continue
+		}
+
+		// Compute the effective group FIRST so the unit name and the
+		// INI section header agree. An empty DB group falls back to
+		// "velox_workers" for both — otherwise the audit log would
+		// say "velox-server.service" while the INI emits
+		// "[velox_workers]" for the same host, which is confusing.
+		group := h.Group
+		if group == "" {
+			group = "velox_workers"
+		}
+		unit := canonicalUnitName(h.Host, group)
+		secretStatus := "ok"
+
+		// (1) SecretRef must be non-empty.
+		if h.SecretRef == "" {
+			secretStatus = "missing"
+			log.Printf("[ANSIBLE_INV] host=%s user=%s unit=%s source=db secret_ref=%s secret_status=%s",
+				h.Host, h.AnsibleUser, unit, h.SecretRef, secretStatus)
+			return "", fmt.Errorf("host=%s: missing secret_ref (DB column secret_ref is NULL/empty); add via /api/v1/ansible/computers PUT", h.Host)
+		}
+
+		// (2) SecretRef must resolve. The resolver returns the secret
+		// value on success; we discard the value (it MUST NOT enter
+		// logs) and only use the error message for the operator.
+		if _, err := m.secretResolver.Resolve(h.SecretRef); err != nil {
+			secretStatus = "missing"
+			log.Printf("[ANSIBLE_INV] host=%s user=%s unit=%s source=db secret_ref=%s secret_status=%s",
+				h.Host, h.AnsibleUser, unit, h.SecretRef, secretStatus)
+			return "", fmt.Errorf("host=%s: invalid secret_ref=%q: %v", h.Host, h.SecretRef, err)
+		}
+
+		// Success log line. The secret_ref SCHEME appears in the log
+		// (e.g., "file:ssh_host_x") for operator audit — that's a
+		// reference, not the resolved value, and never reveals the
+		// credential itself.
+		log.Printf("[ANSIBLE_INV] host=%s user=%s unit=%s source=db secret_ref=%s secret_status=%s",
+			h.Host, h.AnsibleUser, unit, h.SecretRef, secretStatus)
+
+		if _, ok := sections[group]; !ok {
+			groupOrder = append(groupOrder, group)
+		}
+		sections[group] = append(sections[group], hostINI(h))
+	}
+
+	// Stable group order (alphabetical) so the INI is diff-friendly.
+	sort.Strings(groupOrder)
+
+	var b strings.Builder
+	for _, g := range groupOrder {
+		fmt.Fprintf(&b, "[%s]\n", g)
+		// Stable host order within a group.
+		hostLines := sections[g]
+		sort.Strings(hostLines)
+		for _, line := range hostLines {
+			b.WriteString(line)
+			b.WriteString("\n")
+		}
+		b.WriteString("\n")
+	}
+	return b.String(), nil
+}
+
+// canonicalUnitName maps a host + group to the canonical systemd unit
+// the deploy will touch. Worker hosts use `velox-worker-<host>.service`
+// (per canonical_worker_runtime.yml line 13). Master / non-worker
+// hosts use `velox-server.service`. Group detection is a substring
+// match on "worker" so a custom group like "velox_workers_canary"
+// still resolves to the worker unit.
+func canonicalUnitName(host, group string) string {
+	if strings.Contains(strings.ToLower(group), "worker") {
+		return "velox-worker-" + host + ".service"
+	}
+	return "velox-server.service"
+}
+
+// hostINI renders one INI host line for the canonical Ansible vars.
+// `secret_ref` is emitted as a literal reference (NOT the resolved
+// value) so the playbook can resolve it at runtime. The resolved
+// secret value never appears in this string.
+func hostINI(h store.AnsibleHostFields) string {
+	workerID := h.WorkerID
+	if workerID == "" {
+		workerID = h.Host
+	}
+	return fmt.Sprintf(
+		"%s ansible_host=%s ansible_user=%s ansible_python_interpreter=/usr/bin/python3 worker_id=%s secret_ref=%s",
+		h.Host, h.Host, h.AnsibleUser, workerID, h.SecretRef,
+	)
 }
