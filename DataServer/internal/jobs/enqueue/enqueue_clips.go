@@ -116,6 +116,10 @@ func BuildClipPayloadForMaster(rawPayload map[string]interface{}, dataDir, video
 	for k, v := range rawPayload {
 		normalized[k] = v
 	}
+	// WRITE-path complement of http_response_compat.go (READ-path dual-write
+	// for pre-PR15.6 clients). Both paths are independently load-bearing:
+	// removing the strip fails the canonical-form gate; the adapter is
+	// allowlisted in scripts/ci/check-payload-canonical-form.sh.
 	for _, alias := range []string{"id", "run_id", "title", "voiceover_path", "audio_path"} {
 		delete(normalized, alias)
 	}
