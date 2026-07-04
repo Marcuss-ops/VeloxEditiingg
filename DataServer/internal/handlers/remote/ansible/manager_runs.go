@@ -1,11 +1,17 @@
 package ansible
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
+	"time"
 
 	"velox-server/internal/store"
 )
@@ -317,10 +323,124 @@ func (m *AnsibleRunManager) GetRun(runID string) (AnsibleRunRecord, bool) {
 	return run, true
 }
 
-// PR 1: AnsibleRunManager.RunPlaybook was a fake-executor method that
-// minted a `StatusExecutorMissing` row each time it was called without
-// actually invoking ansible-playbook. The HTTP-layer callers now return
-// ErrExecutorRemoved synchronously from handlers.go / runDeployWorkers so
-// no fake run records are written. PR 1 deletes the method entirely;
-// future PR wiring a real executor lands under
-// internal/ansible/executor and registers a typed handler here.
+// RunPlaybook executes ansible-playbook with the given playbook and hosts.
+// It generates inventory from the DB, writes it to a temp file, creates a run
+// record, and starts ansible-playbook in a goroutine. The run_id is returned
+// immediately so the HTTP handler can surface it to the caller.
+func (m *AnsibleRunManager) RunPlaybook(playbook string, hosts []string, action string, masterURL string, batchSize int, canaryPercent float64) (string, error) {
+	if m.computerMgr == nil {
+		return "", fmt.Errorf("ansible computer manager not configured")
+	}
+
+	// Generate inventory from DB.
+	inventory, err := m.computerMgr.GenerateInventory(GenerateInventoryOptions{})
+	if err != nil {
+		return "", fmt.Errorf("generate inventory: %w", err)
+	}
+
+	// Create a unique run ID.
+	runID := newRunID()
+	playbookPath := filepath.Join(m.playbookDir, playbook)
+
+	// Build extra vars.
+	extraVars := buildExtraVars(masterURL, batchSize, canaryPercent)
+
+	// Write inventory to a temp file.
+	tmpFile, err := os.CreateTemp("", "velox-ansible-inventory-*.ini")
+	if err != nil {
+		return "", fmt.Errorf("create temp inventory file: %w", err)
+	}
+	if _, err := tmpFile.WriteString(inventory); err != nil {
+		tmpFile.Close()
+		os.Remove(tmpFile.Name())
+		return "", fmt.Errorf("write inventory: %w", err)
+	}
+	tmpFile.Close()
+
+	// Build ansible-playbook command args.
+	args := []string{"-i", tmpFile.Name()}
+	if len(hosts) > 0 {
+		args = append(args, "--limit", strings.Join(hosts, ","))
+	}
+	args = append(args, playbookPath)
+	for k, v := range extraVars {
+		args = append(args, "-e", fmt.Sprintf("%s=%s", k, v))
+	}
+
+	// Create the run record.
+	now := time.Now().Unix()
+	run := AnsibleRunRecord{
+		ID:        runID,
+		Action:    action,
+		Playbook:  playbook,
+		Hosts:     hosts,
+		Status:    "running",
+		StartedAt: now,
+		MasterURL: masterURL,
+	}
+	if err := m.CreateRun(run); err != nil {
+		os.Remove(tmpFile.Name())
+		return "", fmt.Errorf("create run record: %w", err)
+	}
+
+	// Execute ansible-playbook in a goroutine.
+	go func() {
+		defer os.Remove(tmpFile.Name())
+
+		cmd := exec.Command("ansible-playbook", args...)
+		output, cmdErr := cmd.CombinedOutput()
+		endTime := time.Now().Unix()
+
+		exitCode := 0
+		status := "ok"
+		if cmdErr != nil {
+			status = "failed"
+			if exitErr, ok := cmdErr.(*exec.ExitError); ok {
+				exitCode = exitErr.ExitCode()
+			} else {
+				exitCode = -1
+			}
+		}
+
+		updateErr := m.UpdateRun(runID, func(r *AnsibleRunRecord) {
+			r.Status = status
+			r.EndedAt = endTime
+			r.ReturnCode = exitCode
+			r.Output = string(output)
+		})
+		if updateErr != nil {
+			log.Printf("[ANSIBLE] UpdateRun %s: %v", runID, updateErr)
+		}
+
+		log.Printf("[ANSIBLE] Run %s %s (rc=%d, hosts=%v)", runID, status, exitCode, hosts)
+	}()
+
+	return runID, nil
+}
+
+func newRunID() string {
+	b := make([]byte, 4)
+	if _, err := rand.Read(b); err != nil {
+		// Fallback: use nanoseconds as entropy.
+		now := time.Now().UnixNano()
+		b[0] = byte(now >> 24)
+		b[1] = byte(now >> 16)
+		b[2] = byte(now >> 8)
+		b[3] = byte(now)
+	}
+	return fmt.Sprintf("run_%d_%s", time.Now().Unix(), hex.EncodeToString(b))
+}
+
+func buildExtraVars(masterURL string, batchSize int, canaryPercent float64) map[string]string {
+	vars := map[string]string{}
+	if masterURL != "" {
+		vars["master_url"] = masterURL
+	}
+	if batchSize > 0 {
+		vars["batch_size"] = fmt.Sprintf("%d", batchSize)
+	}
+	if canaryPercent > 0 {
+		vars["canary_percent"] = fmt.Sprintf("%.2f", canaryPercent)
+	}
+	return vars
+}

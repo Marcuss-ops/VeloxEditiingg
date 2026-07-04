@@ -75,6 +75,12 @@ func (m *AnsibleModule) RegisterRoutes(r *gin.Engine) {
 	v1Admin.POST("/ansible/computers", m.handlers.AnsibleComputersSaveHandler)
 	v1Admin.DELETE("/ansible/computers/:id", m.handlers.AnsibleComputersDeleteHandler)
 	v1Admin.GET("/ansible/computers/logs/:id", m.handlers.AnsibleComputersLogsHandler)
+	v1Admin.POST("/ansible/computers/run_action", m.handlers.RunActionHandler)
+	v1Admin.POST("/ansible/computers/test_ssh", m.handlers.TestSSHHandler)
+	v1Admin.POST("/ansible/shell", m.handlers.RunShellHandler)
+	v1Admin.GET("/ansible/capabilities", m.handlers.GetCapabilitiesHandler)
+	v1Admin.GET("/ansible/runs", m.handlers.GetRunsHandler)
+	v1Admin.GET("/ansible/runs/:id", m.handlers.GetRunHandler)
 
 	if ansibleManager.Ready() {
 		log.Printf("[ANSIBLE] Routes registered (playbooks: %s)", m.cfg.Ansible.PlaybookDir)

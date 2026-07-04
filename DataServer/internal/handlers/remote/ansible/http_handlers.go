@@ -154,7 +154,7 @@ func (h *AnsibleHandlers) RunActionHandler(c *gin.Context) {
 	}
 
 	if body.Action == "deploy_workers" || body.Action == "rollout_update" {
-		_, err := h.runDeployWorkers(targets, body.BatchSize, body.CanaryPercent)
+		runID, err := h.runDeployWorkers(targets, body.BatchSize, body.CanaryPercent)
 		if err != nil {
 			// PR 1: ErrExecutorRemoved → HTTP 501 Not Implemented so
 			// operators see a clear capability-missing signal rather
@@ -170,7 +170,7 @@ func (h *AnsibleHandlers) RunActionHandler(c *gin.Context) {
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{
-			"run_id":  "",
+			"run_id":  runID,
 			"status":  "queued",
 			"action":  "deploy_workers",
 			"targets": targets,
@@ -178,7 +178,7 @@ func (h *AnsibleHandlers) RunActionHandler(c *gin.Context) {
 		return
 	}
 
-	_, err := h.runActionForTargets(body.Action, targets)
+	runID, err := h.runActionForTargets(body.Action, targets)
 	if err != nil {
 		if errors.Is(err, ErrExecutorRemoved) {
 			c.JSON(http.StatusNotImplemented, gin.H{
@@ -192,7 +192,7 @@ func (h *AnsibleHandlers) RunActionHandler(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"run_id":  "",
+		"run_id":  runID,
 		"status":  "queued",
 		"action":  body.Action,
 		"targets": targets,

@@ -53,5 +53,12 @@
       "reference_voiceover": "https://drive.google.com/file/d/1Tje9vCtVO3GWw6YX3xZplR1YLYhEk2Zg/view?usp=drivesdk",
       "stock_fallback": true
     }
+  ],
+  "delivery_plan": [
+    {
+      "destination_id": "comedy_test",
+      "retry_budget": 3,
+      "priority": 0
+    }
   ]
 }

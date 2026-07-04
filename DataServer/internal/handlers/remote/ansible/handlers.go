@@ -7,9 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"velox-server/internal/config"
-	"velox-shared/payload"
-
 	"github.com/gin-gonic/gin"
 )
 
@@ -118,18 +115,14 @@ func (h *AnsibleHandlers) resolveComputerIDs(ids []string) []string {
 	return out
 }
 
-// runDeployWorkers is the canary/batch deploy entry-point. PR 1 deletes
-// the in-process ansible-playbook executor stub, so every deploy path
-// resolves synchronously with ErrExecutorRemoved without spawning a
-// background goroutine and without minting a fake run record.
+// runDeployWorkers is the canary/batch deploy entry-point. It generates
+// inventory from the DB, builds the ansible-playbook command, and returns
+// a run_id that the caller can poll for completion.
 func (h *AnsibleHandlers) runDeployWorkers(targets []string, batchSize int, canaryPercent float64) (string, error) {
 	if h.manager == nil {
 		return "", context.Canceled
 	}
-	_ = targets
-	_ = batchSize
-	_ = canaryPercent
-	return "", ErrExecutorRemoved
+	return h.manager.RunPlaybook("update_workers.yml", targets, "deploy_workers", h.masterURL, batchSize, canaryPercent)
 }
 
 func (h *AnsibleHandlers) runActionForTargets(action string, targets []string) (string, error) {
@@ -146,14 +139,10 @@ func (h *AnsibleHandlers) runActionForTargets(action string, targets []string) (
 		"test_ssh":          "preflight_workers.yml",
 	}
 
-	if _, ok := playbookByAction[action]; !ok {
+	playbook, ok := playbookByAction[action]
+	if !ok {
 		return "", fmt.Errorf("unsupported action: %s", action)
 	}
 
-	// PR 1 — ansible RunPlaybook executor removed. The action mapping is
-	// still surfaced via /ansible/capabilities so the SPA can render the
-	// intended playbook, but the route resolves with ErrExecutorRemoved
-	// without minting a fake run record.
-	_ = payload.FirstNonEmpty(h.masterURL, config.GetAnsibleMasterURL(), DetectLocalMasterURL())
-	return "", ErrExecutorRemoved
+	return h.manager.RunPlaybook(playbook, targets, action, h.masterURL, 0, 0)
 }
