@@ -26,6 +26,65 @@
       ActiveState={{ _worker_service.status.ActiveState | default('unknown') }},
       SubState={{ _worker_service.status.SubState | default('unknown') }}
 
+# ── HOSTILE-ISOLATION ASSERT: only canonical + watchdog may be active ──
+# A worker host must have exactly one runtime `velox-worker*.service`
+# unit. The canonical unit is the one the deploy just (re)started; the
+# watchdog is an exempt `oneshot` sibling that re-arms the canonical
+# unit. `velox-worker@*.service` template units are exempt too: the
+# canonical runtime never uses templates. Any OTHER unit in `active`,
+# `activating` or `failed` state means a hostile or stale unit is
+# competing for the worker's Docker container name and would silently
+# corrupt the runtime.
+- name: Verify | List all active velox-worker*.service units (excluding template instances)
+  ansible.builtin.shell: |
+    systemctl list-units 'velox-worker*.service' \
+      --state=active,activating,failed \
+      --plain --no-legend 2>/dev/null \
+      | awk '$1 !~ /^velox-worker@/ {print $1}' || true
+  register: _active_worker_units
+  changed_when: false
+
+- name: Verify | Assert only canonical and watchdog worker units are active
+  ansible.builtin.assert:
+    that:
+      - >-
+        {{
+          _active_worker_units.stdout_lines | default([])
+          | difference([velox_worker_unit_name, 'velox-worker-watchdog.service'])
+          | length
+        }} == 0
+    fail_msg: >-
+      Stray active velox-worker*.service unit(s) detected. A worker host
+      must run only {{ velox_worker_unit_name }} (the canonical unit) and
+      velox-worker-watchdog.service (the oneshot re-armer). Offenders:
+      {{ _active_worker_units.stdout | default('') }}
+
+# ── HOSTILE-ISOLATION ASSERT: non-canonical unit files must be masked ──
+# Masked units (symlink to /dev/null) CANNOT be started. A disabled unit,
+# in contrast, is only one `systemctl start` away from running. We require
+# that any non-canonical `velox-worker*.service` unit file be in state
+# `masked` (or absent) so the hostile-cleanup contract enforced at
+# deploy time is also enforced at verify time. Filter is pushed into
+# awk (not Jinja) so the output is already a clean list of offenders.
+- name: Verify | List non-canonical velox-worker*.service unit files that are NOT masked
+  ansible.builtin.shell: |
+    systemctl list-unit-files 'velox-worker*.service' \
+      --no-legend --no-pager 2>/dev/null \
+      | awk '$1 !~ /^({{ velox_worker_unit_name }}|velox-worker-watchdog\.service)$/ && $2 != "masked" {print $1, $2}' \
+      || true
+  register: _unmasked_non_canonical
+  changed_when: false
+
+- name: Verify | Assert no non-canonical worker unit file is unmasked
+  ansible.builtin.assert:
+    that:
+      - _unmasked_non_canonical.stdout | default('') == ''
+    fail_msg: >-
+      Non-canonical velox-worker*.service unit file(s) found in unmasked
+      state (must be 'masked' or absent). Run canonical_worker_runtime.yml
+      to re-hostile-cleanup. Offenders:
+      {{ _unmasked_non_canonical.stdout | default('') }}
+
 - name: Verify | Inspect canonical Docker container
   ansible.builtin.command:
     argv:
