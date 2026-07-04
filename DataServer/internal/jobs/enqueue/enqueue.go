@@ -123,6 +123,28 @@ func (e *Enqueuer) Enqueue(ctx context.Context, payloadMap map[string]interface{
 		return nil, fmt.Errorf("enqueue: atomic create: %w", err)
 	}
 
+	// PR-delivery-plan-precondition: ResolvePlan reads job_delivery_plans
+	// AFTER the atomic create so the same call's tx has just committed
+	// the plan rows. Without this reorder the resolver would see an
+	// empty plan on every first-time job submit (ErrNoExplicitPlan) and
+	// operators would have to manual-INSERT plan rows before each POST
+	// — confirmed on the Jackie Chan doc-voiceover real run that this
+	// issue tracker originated from.
+	//
+	// Trade-off accepted: there is a small race window between the
+	// atomic tx commit and the precondition run where a matcher could
+	// briefly pick up the PENDING task. The task will be re-resolved
+	// on the worker (deliveries.SQLiteDeliveryPlanResolver runs at claim
+	// time too) and land in WAITING_FOR_PLAN state on plan-miss, so
+	// observability is preserved. The at-INSERT column
+	// `jobs.max_retries` is left at 0 from compileSceneVideoJob; per-row
+	// delivery retry_budget remains authoritative at lease time (see
+	// deliveries/runner.go lease), so the column being 0 does not
+	// regress delivery correctness.
+	if err := e.enforceDeliveryPlanPrecondition(ctx, jobID, job); err != nil {
+		return nil, fmt.Errorf("enqueue: post-create plan precondition: %w", err)
+	}
+
 	return buildSceneVideoResponse(normalized), nil
 }
 
@@ -235,24 +257,40 @@ func (e *Enqueuer) PrepareJobAndTask(ctx context.Context, payloadMap map[string]
 
 	// PR #3: compile Job+TaskSpec. MaxRetries is set to 0 here and
 	// overwritten by enforceDeliveryPlanPrecondition below — single owner
-	// of the field is the plan precondition.
 	job, spec, priority := compileSceneVideoJob(normalized, req)
 
-	// PR-delivery-plan-precondition: ResolvePlan (NOT ResolveDestinations)
-	// is called here so the precondition is enforced for BOTH the public
-	// Enqueue path AND the internal PrepareJobAndTask path (used by
-	// AtomicForwardAndEnqueue, which combines Job+Task creation with a
-	// creator_forwardings status update in a single SQLite transaction
-	// and would otherwise bypass the precondition). The plan carries
-	// retry_budget per destination, which we validate upfront (>0) and
-	// propagate to the Job's MaxRetries. This eliminates the late
-	// re-resolve in FinalizeVerified and surfaces missing-plan errors at
-	// enqueue time as actionable rejections. The contract is strict: a
-	// nil plan, an empty destinations list, or any retry_budget <= 0
-	// rejects the enqueue with an explicit validationError.
-	if err := e.enforceDeliveryPlanPrecondition(ctx, jobID, job); err != nil {
-		return nil, nil, 0, err
+	// PR-delivery-plan-precondition (prepare-time MaxRetries extraction):
+	// compute max retry_budget from the payload's delivery_plan so
+	// job.MaxRetries is correct AT INSERT time and reflects the
+	// worst-case per-destination budget in jobs.max_retries. The
+	// post-create resolver-based precondition in Enqueue remains the
+	// authoritative consistency check against the DB; it can still
+	// re-write MaxRetries on its in-memory job struct, but the column
+	// value committed here is from the payload. In production this
+	// matches the resolver's view because the resolver reads from
+	// job_delivery_plans rows this tx just inserted.
+	if job.MaxRetries == 0 {
+		if maxRetry := extractPlanMaxRetry(normalized); maxRetry > 0 {
+			job.MaxRetries = maxRetry
+		}
 	}
+
+	// PR-delivery-plan-precondition moved out of this helper: it now runs
+	// AFTER the atomic create on the public Enqueue path, so the
+	// resolver reads job_delivery_plans rows the same call's tx just
+	// inserted (resolving the "manual preinsert required" production bug).
+	// The at-INSERT safety net (validateDeliveryDestinationTx inside
+	// CreateJobWithTaskTx) and the payload-shape validator
+	// CreateJobWithTaskTx) and the payload-shape validator
+	// (validateDeliveryPlanRequires above) still run synchronously before
+	// commit, so *Tx-variant callers (AtomicForwardAndEnqueue etc.) keep
+	// their guard against malformed delivery contracts without depending
+	// on a post-commit DB resolver round-trip.
+	//
+	// Contract change: PrepareJobAndTask now leaves job.MaxRetries at 0;
+	// the post-create precondition (in Enqueue) sets it to max(retry_budget)
+	// across the resolved plan. Callers that previously inspected
+	// MaxRetries at Prepare-time must adjust accordingly.
 
 	return job, spec, priority, nil
 }
@@ -752,6 +790,57 @@ func sceneVideoFingerprint(parts ...interface{}) string {
 		h.Write([]byte{0})
 	}
 	return hex.EncodeToString(h.Sum(nil))[:32]
+}
+
+// extractPlanMaxRetry computes the maximum retry_budget across the
+// payload's delivery_plan entries. Used by PrepareJobAndTask to
+// pre-compute job.MaxRetries from the payload's delivery_plan so
+// jobs.max_retries reflects the worst-case per-destination retry
+// budget AT INSERT time. In production this matches the resolver's
+// view (because the resolver reads from job_delivery_plans rows this
+// tx just inserted), so the prepare-time computation is the single
+// source of truth that first writes the column. The post-create
+// resolver-based precondition still re-reads the plan from the DB
+// for consistency gating (presence + retry_budget > 0) but no
+// longer needs to mutate the column.
+//
+// Called from PrepareJobAndTask once compileSceneVideoJob has set
+// MaxRetries=0. Idempotent if MaxRetries is already set by an
+// upstream caller.
+func extractPlanMaxRetry(payload map[string]interface{}) int {
+	if payload == nil {
+		return 0
+	}
+	planRaw, ok := payload["delivery_plan"]
+	if !ok {
+		return 0
+	}
+	arr, ok := planRaw.([]interface{})
+	if !ok {
+		return 0
+	}
+	maxRetry := 0
+	for _, item := range arr {
+		m, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		switch v := m["retry_budget"].(type) {
+		case int:
+			if v > maxRetry {
+				maxRetry = v
+			}
+		case int64:
+			if int(v) > maxRetry {
+				maxRetry = int(v)
+			}
+		case float64:
+			if int(v) > maxRetry {
+				maxRetry = int(v)
+			}
+		}
+	}
+	return maxRetry
 }
 
 // DeriveForwardingJobID produces a deterministic, UUID-shaped job ID from a

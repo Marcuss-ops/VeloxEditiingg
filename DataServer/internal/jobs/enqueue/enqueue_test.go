@@ -381,12 +381,18 @@ func TestPrepareJobAndTask_UsesCanonicalSceneCompositeExecutorID(t *testing.T) {
 	if job == nil || spec == nil {
 		t.Fatal("expected non-nil job and spec")
 	}
-	// PR-delivery-plan-precondition: the happy-path mock returns
-	// RetryBudget=5 so the precondition must propagate that to job.MaxRetries.
-	// This is a one-line proof that the move-into-PrepareJobAndTask
-	// does not break the existing happy-path tests.
-	if job.MaxRetries != 5 {
-		t.Errorf("job.MaxRetries = %d, want 5 (from newTestPlanResolver happy-path mock)", job.MaxRetries)
+	// After PR-delivery-plan-precondition moved out of PrepareJobAndTask
+	// and into the post-CreateJobWithTask slot, PrepareJobAndTask now
+	// pre-computes MaxRetries from the payload's delivery_plan via
+	// extractPlanMaxRetry so jobs.max_retries reflects the worst-case
+	// per-destination retry budget AT INSERT time. The payload below
+	// has one delivery_plan entry with retry_budget=3, so Prepare-time
+	// MaxRetries == 3. The post-create resolver-based precondition
+	// remains a consistency check; the in-memory struct can be
+	// re-written by enforceDeliveryPlanPrecondition but the DB column
+	// value was committed by extractPlanMaxRetry.
+	if job.MaxRetries != 3 {
+		t.Errorf("job.MaxRetries = %d, want 3 (PrepareJobAndTask extracts it from payload delivery_plan; precondition validates post-create)", job.MaxRetries)
 	}
 	if spec.ExecutorID != "scene.composite.v1" {
 		t.Fatalf("spec.ExecutorID = %q, want %q", spec.ExecutorID, "scene.composite.v1")
@@ -984,7 +990,13 @@ func TestEnqueue_Precondition_RejectsMissingPlan(t *testing.T) {
 
 // TestEnqueue_Precondition_RejectsEmptyDestinations verifies that an
 // enqueue is rejected when the plan has zero destinations (treated as
-// "no explicit plan").
+// "no explicit plan"). After PR-delivery-plan-precondition moved out
+// of PrepareJobAndTask and into the post-CreateJobWithTask slot, the
+// atomic create runs FIRST with the payload's delivery_plan. The
+// atomic create's parse-time validateDeliveryDestinationTx queries
+// delivery_destinations by payload destination_id "d1", so d1 must be
+// seeded or the test would fail at INSERT time before any
+// precondition check.
 func TestEnqueue_Precondition_RejectsEmptyDestinations(t *testing.T) {
 	t.Parallel()
 	tempDir := t.TempDir()
@@ -992,6 +1004,7 @@ func TestEnqueue_Precondition_RejectsEmptyDestinations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sqlite store: %v", err)
 	}
+	seedDestinations(t, db, map[string]bool{"d1": true})
 	enq := NewEnqueuer(
 		store.NewAtomicJobTaskCreator(db),
 		store.NewSQLiteJobRepository(db),
@@ -1020,7 +1033,11 @@ func TestEnqueue_Precondition_RejectsEmptyDestinations(t *testing.T) {
 // TestEnqueue_Precondition_RejectsZeroRetryBudget verifies that an
 // enqueue is rejected when any destination has retry_budget <= 0. The
 // per-delivery delivery_plan_payload.go validator already rejects at
-// parse time; this is the runtime counterpart at enqueue time.
+// parse time; this is the runtime counterpart at enqueue time. After
+// PR-delivery-plan-precondition moved out of PrepareJobAndTask and
+// into the post-CreateJobWithTask slot, the atomic create runs FIRST
+// with the payload's delivery_plan, so the payload's destination_id
+// "d1" must be seeded to reach the precondition check.
 func TestEnqueue_Precondition_RejectsZeroRetryBudget(t *testing.T) {
 	t.Parallel()
 	tempDir := t.TempDir()
@@ -1028,6 +1045,7 @@ func TestEnqueue_Precondition_RejectsZeroRetryBudget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sqlite store: %v", err)
 	}
+	seedDestinations(t, db, map[string]bool{"d1": true})
 	enq := NewEnqueuer(
 		store.NewAtomicJobTaskCreator(db),
 		store.NewSQLiteJobRepository(db),
@@ -1074,19 +1092,12 @@ func TestEnqueue_Precondition_PropagatesMaxRetryBudget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sqlite store: %v", err)
 	}
-	// Seed d1 so the atomic creator's per-destination validator agrees
-	// with the payload's `delivery_plan` (the only destination_id the
-	// payload carries). The precondition mock passes (mock returns
-	// all valid retry_budget), so control reaches the atomic create
-	// path where parse-time validateDeliveryDestinationTx reads the
-	// payload's delivery_plan and queries delivery_destinations by
-	// the payload's id "d1". Without this seed the test fails with
-	// `"d1" does not exist`. d2/d3 are part of the mockPlanResolver's
-	// destinations slice but are NOT exercised by the payload's
-	// delivery_plan, so they don't need seeding here — the precondition
-	// step only reads their retry_budget, never their ids.
+	// Seed d1/d2/d3 so the atomic creator's parse-time validator has
+	// all three destinations in scope (matching the payload below).
 	seedDestinations(t, db, map[string]bool{
 		"d1": true,
+		"d2": true,
+		"d3": true,
 	})
 	enq := NewEnqueuer(
 		store.NewAtomicJobTaskCreator(db),
@@ -1109,6 +1120,8 @@ func TestEnqueue_Precondition_PropagatesMaxRetryBudget(t *testing.T) {
 		"voiceover_paths": []string{"/tmp/v.mp3"},
 		"delivery_plan": []interface{}{
 			map[string]interface{}{"destination_id": "d1", "priority": 0, "retry_budget": 3},
+			map[string]interface{}{"destination_id": "d2", "priority": 1, "retry_budget": 7}, // max
+			map[string]interface{}{"destination_id": "d3", "priority": 2, "retry_budget": 5},
 		},
 	}
 	response, err := enq.Enqueue(context.Background(), payload, costmodel.DefaultRequirements())
