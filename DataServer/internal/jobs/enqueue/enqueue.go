@@ -128,14 +128,14 @@ func (e *Enqueuer) Enqueue(ctx context.Context, payloadMap map[string]interface{
 
 // enforceDeliveryPlanPrecondition resolves the per-job delivery plan and
 // enforces three invariants:
-//   1. The resolver must return a non-nil plan (ErrNoExplicitPlan surfaces
-//      as a validationError with a clear "create job_delivery_plans rows"
-//      hint so operators know exactly what to do).
-//   2. The plan must carry at least one destination (an explicit plan with
-//      zero destinations is treated as missing).
-//   3. Every destination's retry_budget must be > 0 (the per-delivery
-//      delivery_plan_payload.go validator already rejects retry_budget<=0
-//      at parse time; this is the runtime counterpart at enqueue time).
+//  1. The resolver must return a non-nil plan (ErrNoExplicitPlan surfaces
+//     as a validationError with a clear "create job_delivery_plans rows"
+//     hint so operators know exactly what to do).
+//  2. The plan must carry at least one destination (an explicit plan with
+//     zero destinations is treated as missing).
+//  3. Every destination's retry_budget must be > 0 (the per-delivery
+//     delivery_plan_payload.go validator already rejects retry_budget<=0
+//     at parse time; this is the runtime counterpart at enqueue time).
 //
 // On success, the Job's MaxRetries is set to the MAX retry_budget across
 // all destinations so the job-level budget can cover the worst-case
@@ -288,12 +288,12 @@ func compileSceneVideoJob(normalized map[string]interface{}, req costmodel.JobRe
 	raw, _ := json.Marshal(normalized)
 
 	job := &jobs.Job{
-		ID:           jobID,
-		Type:         jobType,
-		Status:       jobs.StatusPending,
-		VideoName:    videoName,
-		ProjectID:    projectID,
-		RunID:        jobRunID,
+		ID:        jobID,
+		Type:      jobType,
+		Status:    jobs.StatusPending,
+		VideoName: videoName,
+		ProjectID: projectID,
+		RunID:     jobRunID,
 		// MaxRetries is set by enforceDeliveryPlanPrecondition (the
 		// delivery-plan resolver propagates max(retry_budget) per
 		// destination). It is intentionally left at 0 here so the
@@ -647,7 +647,26 @@ func copyTimelinePayloadFields(out, src map[string]interface{}) {
 	if out == nil || src == nil {
 		return
 	}
-	for _, key := range []string{"images", "clips", "items", "audio_tracks", "clip_segments", "intro_clip_paths", "stock_clip_paths", "fit", "effect", "orientation"} {
+	for _, key := range []string{
+		"images",
+		"clips",
+		"items",
+		"audio_tracks",
+		"clip_segments",
+		"intro_clip_paths",
+		"stock_clip_paths",
+		"fit",
+		"effect",
+		"orientation",
+		// Preserve the explicit delivery contract through normalization so
+		// taskSpec.Payload still satisfies AtomicJobTaskCreator's parse-time
+		// delivery-plan requirement.
+		"delivery_plan",
+		"delivery_destination_ids",
+		"delivery_destination_id",
+		"destination_ids",
+		"destination_id",
+	} {
 		if value, ok := src[key]; ok && value != nil {
 			out[key] = value
 		}
