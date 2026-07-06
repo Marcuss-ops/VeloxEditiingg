@@ -33,6 +33,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"velox-worker-agent/internal/oteltrace"
 )
 
 // ErrCacheCorruption is returned by Get when the on-disk content's
@@ -135,7 +137,12 @@ func (c *PersistedLocalCache) Stats() CacheStats {
 
 // Get returns the bytes stored under hash, or (nil, false, nil) on miss.
 // On corruption, returns (nil, false, ErrCacheCorruption).
-func (c *PersistedLocalCache) Get(_ context.Context, hash string) ([]byte, bool, error) {
+//
+// Scorecard v2 / Step 15: starts a "cache_lookup" span for distributed tracing.
+func (c *PersistedLocalCache) Get(ctx context.Context, hash string) ([]byte, bool, error) {
+	ctx, span := oteltrace.StartSpan(ctx, "cache_lookup")
+	defer span.End()
+
 	if !isValidHash(hash) {
 		return nil, false, errors.New("cache: invalid hash format")
 	}

@@ -6,11 +6,19 @@ import (
 	"os"
 
 	"velox-worker-agent/internal/executor"
+	"velox-worker-agent/internal/oteltrace"
 	"velox-worker-agent/internal/taskrunner"
 	"velox-worker-agent/pkg/api"
 )
 
+// Scorecard v2 / Step 15: starts an "upload" span for distributed tracing.
 func (w *Worker) uploadTaskOutputs(ctx context.Context, pte *PendingTaskExecution, report *taskrunner.TaskExecutionReport) error {
+	ctx, span := oteltrace.StartSpan(ctx, "upload",
+		oteltrace.AttrJobID(pte.JobID),
+		oteltrace.AttrTaskID(pte.TaskID),
+	)
+	defer span.End()
+
 	if report == nil || len(report.Outputs) == 0 {
 		return nil
 	}

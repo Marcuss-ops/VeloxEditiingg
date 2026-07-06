@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"velox-worker-agent/internal/executor"
+	"velox-worker-agent/internal/oteltrace"
 	"velox-worker-agent/internal/telemetry"
 	"velox-worker-agent/pkg/logger"
 )
@@ -162,10 +163,17 @@ func (r *TaskRunner) Run(parent context.Context, spec executor.TaskSpec) (TaskEx
 	// Phase: spec.Validate runs FIRST. The PR-3 doc invariant: validate
 	// task before resource acquisition. We expand to "validate before
 	// resolve"; corrupt spec is the cheapest failure to return.
+	// Scorecard v2 / Step 15: starts a "validate" span for distributed tracing.
+	_, validateSpan := oteltrace.StartSpan(parent, "validate",
+		oteltrace.AttrJobID(spec.JobID),
+		oteltrace.AttrExecutorID(spec.ExecutorID),
+	)
 	if err := spec.Validate(); err != nil {
+		validateSpan.End()
 		return r.completeError(report, appendPhase, CodeValidationFailed,
 			fmt.Sprintf("spec validation: %v", err)), nil
 	}
+	validateSpan.End()
 	appendPhase(r.runPhase(PhaseCacheLookup, func() error { return nil }, overallStart))
 
 	// Phase: resolve executor from the registry.
@@ -211,7 +219,13 @@ func (r *TaskRunner) Run(parent context.Context, spec executor.TaskSpec) (TaskEx
 	appendPhase(r.runPhase(PhasePrefetch, func() error { return nil }, overallStart))
 
 	// Phase: Execute with panic containment + cancellation mapping.
+	// Scorecard v2 / Step 15: starts a "render" span for distributed tracing.
+	_, renderSpan := oteltrace.StartSpan(rc.ctx, "render",
+		oteltrace.AttrJobID(spec.JobID),
+		oteltrace.AttrExecutorID(spec.ExecutorID),
+	)
 	result, execErr := r.runExecute(rc, exec, spec, appendPhase)
+	renderSpan.End()
 
 	// Map internal err into a stable Code for the report.
 	switch {
