@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"velox-server/internal/alertengine"
 	"velox-server/internal/app"
 	"velox-server/internal/config"
 	"velox-server/internal/creatorflow"
@@ -418,6 +419,33 @@ func buildSupervisor(a *assetDeps, m *moduleDeps, j *jobsDeps, p *persistenceDep
 	// missing ⇒ runner NOT registered (master still serves
 	// /metrics but skips the supervisor projection — pre-PR-3
 	// deploys without the metrics surface fall through cleanly).
+	// ── Alert Engine (Step 6 / Velox Metrics Center) ────────────────
+	// Evaluates 5 rules every 30s: error_rate, p95_wall_ms, worker
+	// offline, disk_free, ffmpeg_speed_ratio. Logs structured alerts
+	// and optionally calls Slack/Telegram webhook via env vars.
+	if t.Observability != nil {
+		alertDeps := alertengine.DefaultRuleDeps()
+		alertDeps.Obs = t.Observability
+		alertDeps.DataDir = os.Getenv("VELOX_DATA_DIR")
+		alertDeps.ErrorRatePct = alertengine.EnvFloat("VELOX_ALERT_ERROR_RATE_PCT", 5.0)
+		alertDeps.P95WallMs = int64(alertengine.EnvFloat("VELOX_ALERT_P95_WALL_MS", 300_000))
+		alertDeps.DiskFreeGB = alertengine.EnvFloat("VELOX_ALERT_DISK_FREE_GB", 10.0)
+		alertDeps.FFmpegMin = alertengine.EnvFloat("VELOX_ALERT_FFMPEG_MIN", 1.5)
+
+		engine := alertengine.New(30*time.Second, alertengine.NewNotifierFromEnv())
+		for _, r := range alertengine.MakeRules(alertDeps) {
+			engine.AddRule(r)
+		}
+		if err := sup.Register(supervisor.Runner{
+			Name:   "alert-engine",
+			Class:  supervisor.ClassRestartable,
+			Policy: restartablePolicy,
+			Run:    engine.Run,
+		}); err != nil {
+			return nil, fmt.Errorf("supervisor register alert-engine: %w", err)
+		}
+	}
+
 	if metricsCollector != nil && p.SQLite != nil && p.Outbox != nil {
 		labelRes := velmetrics.NewSQLiteLabelResolver(p.SQLite.DB())
 		costFactors := velmetrics.LoadCostFactorsFromEnv()
