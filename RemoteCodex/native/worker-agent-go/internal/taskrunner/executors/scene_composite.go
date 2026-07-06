@@ -117,6 +117,7 @@ func (s *SceneComposite) Validate(spec executor.TaskSpec) error {
 // property to the master scheduler.
 func (s *SceneComposite) Execute(ctx context.Context, _ executor.ExecutionContext, spec executor.TaskSpec) (executor.ExecutionResult, error) {
 	startedAt := time.Now().UTC()
+	metrics := map[string]interface{}{}
 
 	outputPath, err := s.resolveOutputPath(spec)
 	if err != nil {
@@ -129,7 +130,12 @@ func (s *SceneComposite) Execute(ctx context.Context, _ executor.ExecutionContex
 		}, nil
 	}
 
+	// Phase: pipeline run. We wrap the single-runner-call path
+	// with a wall-clock timer so operators can compare pipeline time
+	// against total engine time without needing pipeline-level
+	// RunWithMetrics (which arrives in a follow-up).
 	pipelineID := resolvePipelineID(spec.Payload)
+	pipelineStart := time.Now()
 	if err := s.pipelineRunner.Run(ctx, pipelineID, spec.JobID, spec.Payload, outputPath); err != nil {
 		return executor.ExecutionResult{
 			Status:      "failed",
@@ -139,14 +145,18 @@ func (s *SceneComposite) Execute(ctx context.Context, _ executor.ExecutionContex
 			CompletedAt: time.Now().UTC(),
 		}, nil
 	}
+	metrics["pipeline.total_ms"] = time.Since(pipelineStart).Milliseconds()
+	metrics["pipeline.id"] = pipelineID
 
 	// Compute output file hash and size for artifact metadata.
 	// Hash is mandatory per fix/artifact-metadata — dispatchTaskRunner
 	// rejects succeeded tasks with empty-hash outputs.
 	// Uses streaming hash (io.Copy) to avoid loading large video files
-	// into memory.
+	// into memory. Time is recorded so operators can distinguish
+	// slow-disk from slow-encode.
 	var outputHash string
 	var outputSize int64
+	hashStart := time.Now()
 	if f, err := os.Open(outputPath); err == nil {
 		defer f.Close()
 		h := sha256.New()
@@ -155,10 +165,14 @@ func (s *SceneComposite) Execute(ctx context.Context, _ executor.ExecutionContex
 			outputSize = n
 		}
 	}
+	metrics["output.hash_ms"] = time.Since(hashStart).Milliseconds()
+	metrics["output.bytes"] = outputSize
+	metrics["executor.total_ms"] = time.Since(startedAt).Milliseconds()
 
 	return executor.ExecutionResult{
 		Status:      "succeeded",
 		Outputs:     []executor.ArtifactRef{{Type: "render.output", Hash: outputHash, URI: outputPath, SizeBytes: outputSize}},
+		Metrics:     metrics,
 		StartedAt:   startedAt,
 		CompletedAt: time.Now().UTC(),
 	}, nil
