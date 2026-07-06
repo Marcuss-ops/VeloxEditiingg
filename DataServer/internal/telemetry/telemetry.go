@@ -5,8 +5,12 @@
 //
 //	""        (default) — no-op tracer (zero overhead)
 //	"stdout"  — prints spans to stderr (dev/debug)
-//	"otlp"    — exports to OTLP collector (production, requires
+//	"otlp"    — exports to OTLP collector via gRPC (production, requires
 //	           VELOX_OTEL_ENDPOINT)
+//
+// Scorecard v2 / Step 17: OTLP exporter now wired. Set
+// VELOX_OTEL_EXPORTER=otlp and VELOX_OTEL_ENDPOINT=host:port
+// (e.g. "otel-collector:4317") for production tracing.
 //
 // Scorecard v2 / Step 15c: W3C TraceContext propagation is initialized
 // globally so gRPC interceptors (otelgrpc) can extract/inject trace
@@ -24,6 +28,7 @@ import (
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/exporters/stdout/stdouttrace"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/resource"
@@ -37,11 +42,9 @@ var (
 	tracer     trace.Tracer
 	tracerOnce sync.Once
 
-	// propagatorInit ensures W3C propagation is set exactly once.
-	// Called from initStdoutTracer (when VELOX_OTEL_EXPORTER=stdout)
-	// and from any future otlp/jaeger path. The no-op default path
-	// (VELOX_OTEL_EXPORTER="") does NOT set it — when tracing is off,
-	// propagation is also off (zero overhead).
+	// propagatorOnce ensures W3C propagation is set exactly once.
+	// Called from initStdoutTracer and initOTLPTracer.
+	// The no-op default path does NOT set it — zero overhead when tracing is off.
 	propagatorOnce sync.Once
 )
 
@@ -63,22 +66,30 @@ func initTracer() trace.Tracer {
 	case "stdout":
 		return initStdoutTracer()
 	case "otlp":
-		log.Printf("[TELEMETRY] OTLP exporter requested but not yet wired — falling back to no-op")
-		return noop.NewTracerProvider().Tracer("velox-server")
+		return initOTLPTracer()
 	default:
 		return noop.NewTracerProvider().Tracer("velox-server")
 	}
 }
 
 // initPropagator sets the global TextMapPropagator to W3C TraceContext.
-// Called exactly once from initStdoutTracer (and future otlp paths).
-// The propagation package provides TraceContext{} which handles the
-// standard "traceparent" and "tracestate" headers.
+// Called exactly once from initStdoutTracer and initOTLPTracer.
 func initPropagator() {
 	propagatorOnce.Do(func() {
 		otel.SetTextMapPropagator(propagation.TraceContext{})
 		log.Printf("[TELEMETRY] W3C TraceContext propagator initialized")
 	})
+}
+
+// buildResource constructs the canonical Resource (service.name,
+// service.version) for both stdout and OTLP tracer providers.
+func buildResource() *resource.Resource {
+	res := resource.NewWithAttributes(
+		semconv.SchemaURL,
+		semconv.ServiceName("velox-server"),
+		semconv.ServiceVersion(os.Getenv("VELOX_VERSION")),
+	)
+	return res
 }
 
 // initStdoutTracer creates a tracer that prints spans to stderr.
@@ -90,25 +101,52 @@ func initStdoutTracer() trace.Tracer {
 		return noop.NewTracerProvider().Tracer("velox-server")
 	}
 
-	res := resource.NewWithAttributes(
-		semconv.SchemaURL,
-		semconv.ServiceName("velox-server"),
-		semconv.ServiceVersion(os.Getenv("VELOX_VERSION")),
-	)
-
 	tp := sdktrace.NewTracerProvider(
 		sdktrace.WithBatcher(exp),
-		sdktrace.WithResource(res),
+		sdktrace.WithResource(buildResource()),
 		sdktrace.WithSampler(sdktrace.AlwaysSample()),
 	)
 
 	otel.SetTracerProvider(tp)
-
-	// Initialize W3C TraceContext propagation so otelgrpc can
-	// extract/inject traceparent from gRPC metadata.
 	initPropagator()
 
 	log.Printf("[TELEMETRY] stdout tracer provider + W3C propagator initialized")
+	return tp.Tracer("velox-server")
+}
+
+// initOTLPTracer creates a tracer that exports spans to an OTLP
+// collector via gRPC. Reads VELOX_OTEL_ENDPOINT (host:port, e.g.
+// "otel-collector:4317"). Uses insecure credentials by default;
+// set VELOX_OTEL_INSECURE=false to require TLS (not yet wired).
+func initOTLPTracer() trace.Tracer {
+	endpoint := os.Getenv("VELOX_OTEL_ENDPOINT")
+	if endpoint == "" {
+		log.Printf("[TELEMETRY] OTLP exporter requested but VELOX_OTEL_ENDPOINT is empty — falling back to no-op")
+		return noop.NewTracerProvider().Tracer("velox-server")
+	}
+
+	log.Printf("[TELEMETRY] OTLP gRPC exporter connecting to %s", endpoint)
+
+	exp, err := otlptracegrpc.New(
+		context.Background(),
+		otlptracegrpc.WithEndpoint(endpoint),
+		otlptracegrpc.WithInsecure(),
+	)
+	if err != nil {
+		log.Printf("[TELEMETRY] OTLP gRPC exporter init failed: %v — falling back to no-op", err)
+		return noop.NewTracerProvider().Tracer("velox-server")
+	}
+
+	tp := sdktrace.NewTracerProvider(
+		sdktrace.WithBatcher(exp),
+		sdktrace.WithResource(buildResource()),
+		sdktrace.WithSampler(sdktrace.AlwaysSample()),
+	)
+
+	otel.SetTracerProvider(tp)
+	initPropagator()
+
+	log.Printf("[TELEMETRY] OTLP gRPC tracer provider + W3C propagator initialized — endpoint=%s", endpoint)
 	return tp.Tracer("velox-server")
 }
 
