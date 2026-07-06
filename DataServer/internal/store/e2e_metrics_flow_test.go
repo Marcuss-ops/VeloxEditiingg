@@ -4,16 +4,13 @@
 //
 // Simulates the full metrics lifecycle:
 //   1. Worker generates TaskResult with typed execution metrics
-//   2. DataServer persists metrics to task_attempt_metrics
+//   2. DataServer persists via IngestTaskResultAtomic (single atomic tx)
 //   3. Observability API returns correct Overview / ScalarMetric
 //   4. Daily rollup aggregates and persists correctly
 //
-// Every metric field must arrive intact from worker to DB to API.
-// Note: IngestTaskResultAtomic's INSERT doesn't yet include the 13
-// engine phase columns from migration 070 (pipeline_resolve_ms, etc.),
-// so metrics are inserted directly via SQL to validate the read path.
-// When the production INSERT is updated to match the full schema, this
-// test should be updated to call IngestTaskResultAtomic directly.
+// Every metric field must arrive intact from worker to DB to API,
+// going through the production code path (IngestTaskResultAtomic).
+
 package store
 
 import (
@@ -23,16 +20,19 @@ import (
 
 	"velox-server/internal/metrics"
 	"velox-server/internal/observability"
+	"velox-server/internal/taskattempts"
+	"velox-server/internal/taskgraph"
 )
 
 // TestE2E_MetricsFlow_WorkerToDBToAPI verifies the complete end-to-end
-// metrics lifecycle: worker → DB persistence → API → daily rollup.
+// metrics lifecycle: worker → IngestTaskResultAtomic → API → daily rollup.
 func TestE2E_MetricsFlow_WorkerToDBToAPI(t *testing.T) {
 	store := openTestDB(t)
 	defer store.Close()
 	ctx := context.Background()
 
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := time.Now().UTC()
+	nowStr := now.Format(time.RFC3339)
 
 	const (
 		jobID      = "e2e-job-001"
@@ -43,73 +43,127 @@ func TestE2E_MetricsFlow_WorkerToDBToAPI(t *testing.T) {
 		executorID = "scene.composite.v1"
 	)
 
-	// ── 0. Seed job, task, and attempt directly ───────────────────────
+	// ── 0. Seed job, task, and attempt ─────────────────────────────────
+	// The task must be in RUNNING status with matching (worker_id, lease_id,
+	// attempt_id) for IngestTaskResultAtomic's CAS gate to pass.
 	seedDestinations(t, store, map[string]bool{"drive-main": true})
 
 	execQuery(t, store, ctx,
 		`INSERT INTO jobs (job_id, status, max_retries, revision, created_at, updated_at, migrated_at)
-		 VALUES (?, 'SUCCEEDED', 3, 0, ?, ?, ?)`,
-		jobID, now, now, now,
+		 VALUES (?, 'RUNNING', 3, 0, ?, ?, ?)`,
+		jobID, nowStr, nowStr, nowStr,
 	)
 
 	execQuery(t, store, ctx,
 		`INSERT INTO tasks
 		 (task_id, job_id, project_id, render_plan_id, executor_id, executor_version,
 		  status, priority, revision, attempt_count, attempt_number,
-		  worker_id, lease_id, attempt_id, started_at, completed_at, created_at, updated_at)
+		  worker_id, lease_id, attempt_id, started_at, created_at, updated_at)
 		 VALUES (?, ?, '', '', ?, 3,
-		         'SUCCEEDED', 0, 0, 1, 1,
-		         ?, ?, ?, ?, ?, ?, ?)`,
-		taskID, jobID, executorID, workerID, leaseID, attemptID, now, now, now, now,
+		         'RUNNING', 0, 0, 1, 1,
+		         ?, ?, ?, ?, ?, ?)`,
+		taskID, jobID, executorID, workerID, leaseID, attemptID, nowStr, nowStr, nowStr,
 	)
 
 	execQuery(t, store, ctx,
 		`INSERT INTO task_specs (task_id, spec_version, spec_hash, executor_id, payload_json, created_at)
 		 VALUES (?, 1, '', ?, '{}', ?)`,
-		taskID, executorID, now,
+		taskID, executorID, nowStr,
 	)
 
+	// PENDING → used by IngestTaskResultAtomic's attempt CAS.
 	execQuery(t, store, ctx,
 		`INSERT INTO task_attempts
 		 (id, task_id, job_id, attempt_number, worker_id, lease_id, status,
 		  started_at, completed_at, error_code, error_message, report_version,
-		  created_at, updated_at,
-		  git_sha, worker_version, engine_version, ffmpeg_version, config_hash, docker_image_digest)
-		 VALUES (?, ?, ?, 1, ?, ?, 'SUCCEEDED',
+		  created_at, updated_at)
+		 VALUES (?, ?, ?, 1, ?, ?, 'PENDING',
 		         ?, ?, '', '', 0,
-		         ?, ?,
-		         'abc1234', 'v4.2.1', 'velox-engine/v2.8.0', 'n7.0.2', 'sha256:def5678', 'sha256:ghi9012')`,
-		attemptID, taskID, jobID, workerID, leaseID, now, now, now, now,
+		         ?, ?)`,
+		attemptID, taskID, jobID, workerID, leaseID,
+		nowStr, nowStr, nowStr, nowStr,
 	)
 
-	// ── 1. Insert typed execution metrics directly ────────────────────
+	// ── 1. Ingest via the production code path ────────────────────────
+	taskRepo := NewSQLiteTaskRepository(store)
+	cmd := taskgraph.IngestResultCommand{
+		TaskID:        taskID,
+		WorkerID:      workerID,
+		LeaseID:       leaseID,
+		AttemptID:     attemptID,
+		TaskStatus:    taskgraph.StatusSucceeded,
+		AttemptStatus: taskattempts.AttemptStatusSucceeded,
+		// Scorecard v2 / Step 8: versioning.
+		GitSHA:            "abc1234",
+		WorkerVersion:     "v4.2.1",
+		EngineVersion:     "velox-engine/v2.8.0",
+		FFmpegVersion:     "n7.0.2",
+		ConfigHash:        "sha256:def5678",
+		DockerImageDigest: "sha256:ghi9012",
+		Metrics: taskattempts.AttemptMetrics{
+			AttemptID: attemptID,
+			// Legacy 7 carry-over.
+			InputBytes:          2097152,
+			OutputBytes:         1048576,
+			BytesFromDrive:      524288,
+			BytesFromBlobstore:  524288,
+			BytesFromLocalCache: 1048576,
+			CPUTimeMS:           18432,
+			GPUTimeMS:           4096,
+			PeakRSSBytes:        1073741824,
+			PeakVRAMBytes:       268435456,
+			// Scorecard v1.
+			FramesDecoded:         1800,
+			FramesComposited:      1800,
+			FramesEncoded:         1800,
+			FFmpegSpeedRatio:      2.34,
+			EncodePasses:          1,
+			FinalConcatStreamCopy: true,
+			ConcatMode:            "stream_copy",
+			TempBytesWritten:      524288000,
+			DuplicateDownloadBytes: 262144,
+			MediaDurationSeconds:  120.5,
+			WallClockSeconds:      51.5,
+			// Scorecard v2 / engine phase timing (migration 070).
+			PipelineResolveMs:    120,
+			PipelineValidateMs:   85,
+			PipelineCompileMs:    340,
+			PipelineRenderMs:     18200,
+			PipelineTotalMs:      18745,
+			NativeTotalMs:        19150,
+			NativeProcessWaitMs:  405,
+			EngineAssetDownloadMs: 2500,
+			EngineSegmentBuildMs: 8200,
+			EngineConcatMs:       2100,
+			EngineAudioDownloadMs: 1500,
+			EngineMuxAudioMs:     900,
+			EngineCopyFinalMs:    350,
+			// Output quality.
+			FFprobeValid:    1,
+			DurationDiffSec: 0.03,
+			HasVideoStream:  true,
+			HasAudioStream:  true,
+			OutputFileSize:  52428800,
+			// Resources.
+			CPUPercentPeak: 85.5,
+			RSSPeakBytes:   1073741824,
+			// Cache counters.
+			AssetCacheHitCount:  45,
+			AssetCacheMissCount: 3,
+			BlobCacheHitCount:   12,
+			BlobCacheMissCount:  1,
+			RenderCacheHitCount: 1,
+		},
+	}
+	if err := taskRepo.IngestTaskResultAtomic(ctx, cmd); err != nil {
+		t.Fatalf("IngestTaskResultAtomic: %v", err)
+	}
+
+	// Promote job to SUCCEEDED so Overview picks it up.
+	// IngestTaskResultAtomic transitions Task+Attempt, not the parent Job.
 	execQuery(t, store, ctx,
-		`INSERT INTO task_attempt_metrics (
-			attempt_id, input_bytes, output_bytes,
-			bytes_from_drive, bytes_from_blobstore, bytes_from_local_cache,
-			cpu_time_ms, gpu_time_ms, peak_rss_bytes, peak_vram_bytes,
-			frames_decoded, frames_composited, frames_encoded,
-			ffmpeg_speed_ratio, encode_passes,
-			final_concat_stream_copy, concat_mode,
-			temp_bytes_written, duplicate_download_bytes,
-			media_duration_seconds, wall_clock_seconds,
-			cpu_percent_peak, rss_peak_bytes,
-			asset_cache_hit_count, asset_cache_miss_count,
-			blob_cache_hit_count, blob_cache_miss_count,
-			render_cache_hit_count
-		) VALUES (?, 2097152, 1048576,
-		          524288, 524288, 1048576,
-		          18432, 4096, 1073741824, 268435456,
-		          1800, 1800, 1800,
-		          2.34, 1,
-		          1, 'stream_copy',
-		          524288000, 262144,
-		          120.5, 51.5,
-		          85.5, 1073741824,
-		          45, 3,
-		          12, 1,
-		          1)`,
-		attemptID,
+		`UPDATE jobs SET status = 'SUCCEEDED', completed_at = ?, updated_at = ? WHERE job_id = ?`,
+		nowStr, nowStr, jobID,
 	)
 
 	// ── 2. Verify metrics persisted intact (via SQLiteLabelResolver) ──
@@ -159,6 +213,19 @@ func TestE2E_MetricsFlow_WorkerToDBToAPI(t *testing.T) {
 	if storedMetrics.BlobCacheMissCount != 1 {
 		t.Errorf("BlobCacheMissCount = %d; want 1", storedMetrics.BlobCacheMissCount)
 	}
+	// Engine phase timing (migration 070 — the key columns we just added).
+	if storedMetrics.PipelineRenderMs != 18200 {
+		t.Errorf("PipelineRenderMs = %d; want 18200", storedMetrics.PipelineRenderMs)
+	}
+	if storedMetrics.PipelineTotalMs != 18745 {
+		t.Errorf("PipelineTotalMs = %d; want 18745", storedMetrics.PipelineTotalMs)
+	}
+	if storedMetrics.EngineSegmentBuildMs != 8200 {
+		t.Errorf("EngineSegmentBuildMs = %d; want 8200", storedMetrics.EngineSegmentBuildMs)
+	}
+	if storedMetrics.EngineConcatMs != 2100 {
+		t.Errorf("EngineConcatMs = %d; want 2100", storedMetrics.EngineConcatMs)
+	}
 
 	// ── 3. Verify version fields persisted on the attempt ─────────────
 	attemptRepo := NewSQLiteTaskAttemptRepository(store)
@@ -189,7 +256,6 @@ func TestE2E_MetricsFlow_WorkerToDBToAPI(t *testing.T) {
 	}
 
 	// ── 4. Verify observability Overview API ──────────────────────────
-	taskRepo := NewSQLiteTaskRepository(store)
 	jobsReader := NewSQLiteJobRepository(store)
 	obsSvc, err := observability.NewService(taskRepo, attemptRepo)
 	if err != nil {
@@ -228,8 +294,7 @@ func TestE2E_MetricsFlow_WorkerToDBToAPI(t *testing.T) {
 		scalar.Avg, scalar.P95, scalar.Samples)
 
 	// ── 6. Compute and verify daily rollup ────────────────────────────
-	// Use today since the attempt's updated_at is set to now.
-	today := time.Now().UTC().Format("2006-01-02")
+	today := now.Format("2006-01-02")
 	if err := resolver.ComputeDailyRollups(ctx, today); err != nil {
 		t.Fatalf("ComputeDailyRollups: %v", err)
 	}
@@ -263,7 +328,7 @@ func TestE2E_MetricsFlow_WorkerToDBToAPI(t *testing.T) {
 	}
 	t.Logf("Rollup (global): avg=%.2f p95=%.2f samples=%d", avgVal, p95Val, sampleCount)
 
-	t.Log("E2E metrics flow: PASS — 13 metric fields verified, overview OK, rollups OK")
+	t.Log("E2E metrics flow: PASS — 16 metric fields verified (incl. 4 engine phase), overview OK, rollups OK")
 }
 
 // execQuery is a helper that runs an ExecContext and fatals on error.
