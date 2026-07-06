@@ -805,6 +805,21 @@ func (c *Collector) ScanAttemptWithLabels(
 	if status == taskattempts.AttemptStatusFailed && am.ErrorComponent != "" {
 		c.RecordErrorClassification("", am.ErrorComponent, am.ErrorPhase)
 	}
+	// Scorecard v2 / Step 17: accumulate waste counters when the
+	// worker reported waste fields. Only emit non-zero values to
+	// avoid spamming the counter with zero-increment noise.
+	if am.RetryCount > 0 {
+		c.RecordWaste("retry_count", uint64(am.RetryCount))
+	}
+	if am.WastedCPUMS > 0 {
+		c.RecordWaste("wasted_cpu_ms", uint64(am.WastedCPUMS))
+	}
+	if am.WastedDownloadBytes > 0 {
+		c.RecordWaste("wasted_download_bytes", uint64(am.WastedDownloadBytes))
+	}
+	if am.WastedCostEstimate > 0 {
+		c.RecordWaste("wasted_cost_estimate", uint64(am.WastedCostEstimate*1_000_000))
+	}
 	// Scorecard v2: engine-aggregate phase columns are stamped by
 	// the supervisor tick (tickOnce) which prefers detailed phase
 	// rows and falls back to the aggregate columns only when no
