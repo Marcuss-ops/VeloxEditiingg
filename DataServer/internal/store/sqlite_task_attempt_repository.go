@@ -371,6 +371,10 @@ func (r *SQLiteTaskAttemptRepository) PersistMetrics(ctx context.Context, metric
 	if metrics.HasAudioStream {
 		hasAudio = 1
 	}
+	errorRetryable := 0
+	if metrics.ErrorRetryable {
+		errorRetryable = 1
+	}
 	_, err := r.store.db.ExecContext(ctx,
 		`INSERT OR REPLACE INTO task_attempt_metrics (
 			attempt_id, input_bytes, output_bytes,
@@ -399,7 +403,9 @@ func (r *SQLiteTaskAttemptRepository) PersistMetrics(ctx context.Context, metric
 			active_workers_at_start,
 			scene_count, segment_count, total_input_duration_sec,
 			resolution_width, resolution_height, fps,
-			audio_track_count, subtitle_count, template_id
+			audio_track_count, subtitle_count, template_id,
+			error_component, error_phase,
+			error_retryable, error_message_hash
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 		          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 		          ?, ?, ?, ?, ?, ?, ?,
@@ -407,7 +413,8 @@ func (r *SQLiteTaskAttemptRepository) PersistMetrics(ctx context.Context, metric
 		          ?, ?, ?, ?, ?, ?, ?,
 		          ?, ?, ?, ?, ?, ?, ?, ?,
 		          ?, ?, ?, ?, ?,
-		          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+		          ?, ?, ?, ?)`,
 		metrics.AttemptID, metrics.InputBytes, metrics.OutputBytes,
 		metrics.BytesFromDrive, metrics.BytesFromBlobstore, metrics.BytesFromLocalCache,
 		metrics.CPUTimeMS, metrics.GPUTimeMS, metrics.PeakRSSBytes, metrics.PeakVRAMBytes,
@@ -435,6 +442,8 @@ func (r *SQLiteTaskAttemptRepository) PersistMetrics(ctx context.Context, metric
 		metrics.SceneCount, metrics.SegmentCount, metrics.TotalInputDurationSec,
 		metrics.ResolutionWidth, metrics.ResolutionHeight, metrics.FPS,
 		metrics.AudioTrackCount, metrics.SubtitleCount, metrics.TemplateID,
+		metrics.ErrorComponent, metrics.ErrorPhase,
+		errorRetryable, metrics.ErrorMessageHash,
 	)
 	if err != nil {
 		return fmt.Errorf("metrics persist: %w", err)
@@ -651,14 +660,16 @@ func (r *SQLiteTaskAttemptRepository) GetMetrics(ctx context.Context, attemptID 
 		        active_workers_at_start,
 		        scene_count, segment_count, total_input_duration_sec,
 		        resolution_width, resolution_height, fps,
-		        audio_track_count, subtitle_count, template_id
+		        audio_track_count, subtitle_count, template_id,
+		        error_component, error_phase,
+		        error_retryable, error_message_hash
 		 FROM task_attempt_metrics WHERE attempt_id = ?`,
 		attemptID,
 	)
 	var m taskattempts.AttemptMetrics
 	var concatMode string
 	var streamCopy int
-	var ffprobeValid, hasVideo, hasAudio int
+	var ffprobeValid, hasVideo, hasAudio, errorRetryable int
 	err := row.Scan(
 		&m.AttemptID, &m.InputBytes, &m.OutputBytes,
 		&m.BytesFromDrive, &m.BytesFromBlobstore, &m.BytesFromLocalCache,
@@ -687,6 +698,8 @@ func (r *SQLiteTaskAttemptRepository) GetMetrics(ctx context.Context, attemptID 
 		&m.SceneCount, &m.SegmentCount, &m.TotalInputDurationSec,
 		&m.ResolutionWidth, &m.ResolutionHeight, &m.FPS,
 		&m.AudioTrackCount, &m.SubtitleCount, &m.TemplateID,
+		&m.ErrorComponent, &m.ErrorPhase,
+		&errorRetryable, &m.ErrorMessageHash,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -699,5 +712,6 @@ func (r *SQLiteTaskAttemptRepository) GetMetrics(ctx context.Context, attemptID 
 	m.FFprobeValid = ffprobeValid
 	m.HasVideoStream = hasVideo != 0
 	m.HasAudioStream = hasAudio != 0
+	m.ErrorRetryable = errorRetryable != 0
 	return &m, nil
 }

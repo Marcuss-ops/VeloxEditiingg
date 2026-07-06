@@ -586,7 +586,7 @@ func (r *SQLiteLabelResolver) GetMetrics(ctx context.Context, attemptID string) 
 	var m taskattempts.AttemptMetrics
 	var concatMode string
 	var streamCopy int
-	var ffprobeValid, hasVideo, hasAudio int
+	var ffprobeValid, hasVideo, hasAudio, errorRetryable int
 	err := r.DB.QueryRowContext(ctx, `
 		SELECT attempt_id, input_bytes, output_bytes,
 		       bytes_from_drive, bytes_from_blobstore, bytes_from_local_cache,
@@ -608,7 +608,9 @@ func (r *SQLiteLabelResolver) GetMetrics(ctx context.Context, attemptID string) 
 		       active_workers_at_start,
 		       scene_count, segment_count, total_input_duration_sec,
 		       resolution_width, resolution_height, fps,
-		       audio_track_count, subtitle_count, template_id
+		       audio_track_count, subtitle_count, template_id,
+		       error_component, error_phase,
+		       error_retryable, error_message_hash
 		FROM task_attempt_metrics WHERE attempt_id = ?`,
 		attemptID,
 	).Scan(
@@ -633,6 +635,8 @@ func (r *SQLiteLabelResolver) GetMetrics(ctx context.Context, attemptID string) 
 		&m.SceneCount, &m.SegmentCount, &m.TotalInputDurationSec,
 		&m.ResolutionWidth, &m.ResolutionHeight, &m.FPS,
 		&m.AudioTrackCount, &m.SubtitleCount, &m.TemplateID,
+		&m.ErrorComponent, &m.ErrorPhase,
+		&errorRetryable, &m.ErrorMessageHash,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -645,6 +649,7 @@ func (r *SQLiteLabelResolver) GetMetrics(ctx context.Context, attemptID string) 
 	m.FFprobeValid = ffprobeValid
 	m.HasVideoStream = hasVideo != 0
 	m.HasAudioStream = hasAudio != 0
+	m.ErrorRetryable = errorRetryable != 0
 	return &m, nil
 }
 

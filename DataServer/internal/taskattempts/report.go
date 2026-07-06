@@ -145,6 +145,12 @@ type AttemptMetrics struct {
 	AudioTrackCount        int     `json:"audio_track_count"`
 	SubtitleCount          int     `json:"subtitle_count"`
 	TemplateID             string  `json:"template_id"`
+
+	// Scorecard v2 / Step 13: error classification refinement.
+	ErrorComponent    string `json:"error_component,omitempty"`
+	ErrorPhase        string `json:"error_phase,omitempty"`
+	ErrorRetryable    bool   `json:"error_retryable"`
+	ErrorMessageHash  string `json:"error_message_hash,omitempty"`
 }
 
 // AttemptCacheStats is the per-attempt cache snapshot extracted from the

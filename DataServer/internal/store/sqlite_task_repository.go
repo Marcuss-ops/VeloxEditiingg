@@ -939,6 +939,10 @@ func (r *SQLiteTaskRepository) IngestTaskResultAtomic(ctx context.Context, cmd t
 		if cmd.Metrics.HasAudioStream {
 			hasAudio = 1
 		}
+		errorRetryable := 0
+		if cmd.Metrics.ErrorRetryable {
+			errorRetryable = 1
+		}
 		_, err = tx.ExecContext(ctx,
 			`INSERT OR REPLACE INTO task_attempt_metrics (
 				attempt_id, input_bytes, output_bytes,
@@ -961,13 +965,16 @@ func (r *SQLiteTaskRepository) IngestTaskResultAtomic(ctx context.Context, cmd t
 				active_workers_at_start,
 				scene_count, segment_count, total_input_duration_sec,
 				resolution_width, resolution_height, fps,
-				audio_track_count, subtitle_count, template_id
+				audio_track_count, subtitle_count, template_id,
+				error_component, error_phase,
+				error_retryable, error_message_hash
 			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			          ?, ?, ?, ?, ?, ?, ?,
 			          ?, ?, ?, ?, ?, ?, ?, ?,
 			          ?, ?, ?, ?, ?,
-			          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+			          ?, ?, ?, ?)`,
 			cmd.Metrics.AttemptID, cmd.Metrics.InputBytes, cmd.Metrics.OutputBytes,
 			cmd.Metrics.BytesFromDrive, cmd.Metrics.BytesFromBlobstore, cmd.Metrics.BytesFromLocalCache,
 			cmd.Metrics.CPUTimeMS, cmd.Metrics.GPUTimeMS, cmd.Metrics.PeakRSSBytes, cmd.Metrics.PeakVRAMBytes,
@@ -989,6 +996,8 @@ func (r *SQLiteTaskRepository) IngestTaskResultAtomic(ctx context.Context, cmd t
 			cmd.Metrics.SceneCount, cmd.Metrics.SegmentCount, cmd.Metrics.TotalInputDurationSec,
 			cmd.Metrics.ResolutionWidth, cmd.Metrics.ResolutionHeight, cmd.Metrics.FPS,
 			cmd.Metrics.AudioTrackCount, cmd.Metrics.SubtitleCount, cmd.Metrics.TemplateID,
+			cmd.Metrics.ErrorComponent, cmd.Metrics.ErrorPhase,
+			errorRetryable, cmd.Metrics.ErrorMessageHash,
 		)
 		if err != nil {
 			return fmt.Errorf("task ingest atomic metrics: %w", err)

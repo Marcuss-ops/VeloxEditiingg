@@ -110,6 +110,13 @@ type Collector struct {
 	masterOutboxPending *Family
 	heartbeatAge        *Family // per worker; emitted on each refresh
 
+	// Error classification (Scorecard v2 / Step 13).
+	// Single counter family with labels {error_code, component, phase}
+	// for failure-reason attribution. error_code is the canonical
+	// closed-enum code (CanonicalErrorCode); component/phase are
+	// low-cardinality enums (CanonicalErrorComponents / CanonicalErrorPhases).
+	errorClassification *Family // velox_error_classification_total
+
 	// Compute outcomes — SPEC §14: ONE family classified by outcome,
 	// plus a sibling family for failure-reason attribution. Outcomes:
 	// useful | failed | cancelled | stale | speculative_lost.
@@ -368,6 +375,12 @@ func NewCollector(reg *Registry) *Collector {
 		"ConflictBudget observations of ErrTransitionConflict that incremented the streak but stayed under threshold",
 		[]string{},
 	)
+	c.errorClassification = NewCounterFamily(
+		"velox_error_classification_total",
+		"Error count classified by canonical error_code, component, and phase",
+		[]string{"error_code", "component", "phase"},
+	)
+
 	c.conflictStreakLength = NewHistogramFamily(
 		"velox_conflict_streak_length",
 		"Distribution of consecutive-conflict streak lengths observed on the attempt_commits CAS path",
@@ -432,6 +445,7 @@ func (c *Collector) allFamilies() []*Family {
 		c.reconcileTotal,
 		c.commitDeadlineExceeded,
 		c.placementRejections,
+		c.errorClassification,
 		c.conflictStreakReset,
 		c.conflictEscalations,
 		c.conflictStayedUnder,
@@ -958,6 +972,27 @@ func (c *Collector) EscalateConflictBudget(streak int) {
 	}
 	c.conflictEscalations.Inc([]string{}, 1)
 	c.conflictStreakLength.Observe([]string{}, float64(streak))
+}
+
+// ── Error classification (Scorecard v2 / Step 13) ─────────────────────
+
+// RecordErrorClassification increments velox_error_classification_total
+// for a single error observation. All three labels are low-cardinality
+// closed enums — never pass job_id or free-form strings here.
+// errorCode must be a CanonicalErrorCode; component must be from
+// CanonicalErrorComponents; phase must be from CanonicalErrorPhases.
+// Empty strings default to "unknown".
+func (c *Collector) RecordErrorClassification(errorCode, component, phase string) {
+	if errorCode == "" {
+		errorCode = "UNKNOWN"
+	}
+	if component == "" {
+		component = "unknown"
+	}
+	if phase == "" {
+		phase = "unknown"
+	}
+	c.errorClassification.Inc([]string{errorCode, component, phase}, 1)
 }
 
 // ── Engine phase + segment timing (Scorecard v2 / Step 7) ────────────────
