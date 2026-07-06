@@ -105,4 +105,7 @@ type IngestResultCommand struct {
 	FFmpegVersion     string
 	ConfigHash        string
 	DockerImageDigest string
+	// Scorecard v2 / Step 15: OpenTelemetry tracing correlation.
+	TraceID string
+	SpanID  string
 }

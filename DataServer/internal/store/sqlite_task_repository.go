@@ -917,6 +917,23 @@ func (r *SQLiteTaskRepository) IngestTaskResultAtomic(ctx context.Context, cmd t
 		}
 	}
 
+	// 2b. Scorecard v2 / Step 15: persist OpenTelemetry trace context
+	// on the attempt row. Same pattern as versioning — silent no-op
+	// when both fields are empty (older workers, non-tracing envs).
+	if cmd.TraceID != "" || cmd.SpanID != "" {
+		_, err = tx.ExecContext(ctx,
+			`UPDATE task_attempts
+			 SET trace_id = ?, span_id = ?, updated_at = ?
+			 WHERE task_id = ? AND worker_id = ? AND lease_id = ?`,
+			cmd.TraceID, cmd.SpanID,
+			now,
+			cmd.TaskID, cmd.WorkerID, cmd.LeaseID,
+		)
+		if err != nil {
+			return fmt.Errorf("task ingest atomic tracing: %w", err)
+		}
+	}
+
 	// 3. Persist typed execution metrics (idempotent INSERT OR REPLACE).
 	if cmd.Metrics.AttemptID != "" {
 		streamCopy := 0

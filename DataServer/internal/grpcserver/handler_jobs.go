@@ -12,9 +12,11 @@ import (
 	"velox-server/internal/store"
 	"velox-server/internal/taskattempts"
 	"velox-server/internal/taskgraph"
+	"velox-server/internal/telemetry"
 	"velox-shared/controltransport"
 	pb "velox-shared/controltransport/pb"
 
+	"go.opentelemetry.io/otel/attribute"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -91,7 +93,17 @@ func (h *Handler) handleTaskAccepted(workerID string, ta *pb.TaskAccepted) {
 	// PENDING → RUNNING commit in ONE transaction (AcceptTaskAtomic). The
 	// pre-PR-2 INSERT pattern (Start + Create) had a crash window; PR-2's
 	// earlier-minted PENDING row + this UPDATE path closes it.
-	ctx := context.Background()
+	//
+	// Scorecard v2 / Step 15: start a "claim_task" span for distributed
+	// tracing. The trace context flows from the gRPC metadata through
+	// context propagation.
+	ctx, span := telemetry.StartSpan(context.Background(), "claim_task",
+		attribute.String("velox.task_id", taskID),
+		attribute.String("velox.worker_id", workerID),
+		attribute.String("velox.attempt_id", attemptID),
+	)
+	defer span.End()
+
 	attempt := &taskattempts.TaskAttempt{
 		ID:            attemptID,
 		TaskID:        taskID,
@@ -388,7 +400,19 @@ func (h *Handler) handleTaskResult(workerID string, tr *pb.TaskResult) {
 	typedCache := deriveCacheStats(attemptID, typedMetrics)
 	typedCost := executionMetricsToCostBasis(attemptID, tr.GetExecutionMetrics())
 
-	ctx := context.Background()
+	// Scorecard v2 / Step 15: start an "ingest_result" span.
+	ctx, span := telemetry.StartSpan(context.Background(), "ingest_result",
+		attribute.String("velox.task_id", taskID),
+		attribute.String("velox.worker_id", workerID),
+		attribute.String("velox.attempt_id", attemptID),
+	)
+	defer span.End()
+
+	// Populate trace context from the current span so downstream
+	// persistence paths (IngestTaskResultAtomic) can stamp it on
+	// the attempt row.
+	traceID := telemetry.TraceIDFromContext(ctx)
+	spanID := telemetry.SpanIDFromContext(ctx)
 
 	// PR-2 / attempt_number wire-strict-compare — now sourced directly
 	// from the proto (no longer resolved via a canonical lookup because
@@ -414,6 +438,8 @@ func (h *Handler) handleTaskResult(workerID string, tr *pb.TaskResult) {
 		TypedMetrics:    typedMetrics,
 		CacheStats:      typedCache,
 		CostBasis:       typedCost,
+		TraceID:         traceID,
+		SpanID:          spanID,
 	})
 	if err != nil {
 		log.Printf("[GRPC] TaskResult ingest for task=%s attempt=%s FAILED: %v", taskID, attemptID, err)

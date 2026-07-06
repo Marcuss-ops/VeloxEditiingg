@@ -80,6 +80,9 @@ type IngestCommand struct {
 	FFmpegVersion     string
 	ConfigHash        string
 	DockerImageDigest string
+	// Scorecard v2 / Step 15: tracing correlation from gRPC metadata.
+	TraceID string
+	SpanID  string
 }
 
 // DeclaredArtifact is one worker-claimed artifact. Mirrors the proto
@@ -362,6 +365,9 @@ func (s *TaskReportIngestionService) IngestTaskResult(ctx context.Context, cmd I
 		FFmpegVersion:     cmd.FFmpegVersion,
 		ConfigHash:        cmd.ConfigHash,
 		DockerImageDigest: cmd.DockerImageDigest,
+		// Scorecard v2 / Step 15: tracing.
+		TraceID: cmd.TraceID,
+		SpanID:  cmd.SpanID,
 	})
 
 	// fix/atomic-ingestion: IngestTaskResultAtomic succeeded — the Task +

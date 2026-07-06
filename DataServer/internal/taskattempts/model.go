@@ -56,4 +56,10 @@ type TaskAttempt struct {
 	FFmpegVersion     string `json:"ffmpeg_version,omitempty"`
 	ConfigHash        string `json:"config_hash,omitempty"`
 	DockerImageDigest string `json:"docker_image_digest,omitempty"`
+	// Scorecard v2 / Step 15: OpenTelemetry distributed tracing correlation.
+	// trace_id is the W3C trace ID (32 hex chars); span_id is the parent
+	// span that dispatched this attempt (16 hex chars). Both are propagated
+	// via gRPC metadata and persisted at claim + report time.
+	TraceID string `json:"trace_id,omitempty"`
+	SpanID  string `json:"span_id,omitempty"`
 }

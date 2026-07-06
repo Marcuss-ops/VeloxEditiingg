@@ -10,6 +10,7 @@
 package enqueue
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -22,10 +23,9 @@ import (
 	"velox-server/internal/routing"
 	"velox-server/internal/store"
 	"velox-server/internal/taskgraph"
+	"velox-server/internal/telemetry"
 	"velox-shared/contract"
 	"velox-shared/payload"
-
-	"context"
 
 	"github.com/google/uuid"
 )
@@ -160,15 +160,21 @@ func validatePlanPayload(plan *ResolvedPlan, job *jobs.Job) error {
 }
 
 // PrepareJobAndTask normalizes the payload, resolves assets, and compiles
-// a Job+TaskSpec WITHOUT writing to the database. This is the extraction of
-// the pure business logic from Enqueue, intended for callers that need to
-// manage the atomic write themselves (e.g. AtomicForwardAndEnqueue which
-// combines the Job+Task+TaskSpec creation with a creator_forwardings status
-// update in a single SQLite transaction).
+// a Job+TaskSpec WITHOUT writing to the database.
 //
-// Returns the prepared Job, TaskSpec, priority, and the normalized payload
-// embedded in spec.Payload.
+// Scorecard v2 / Step 15: starts a "schedule_task" span for distributed
+// tracing. The span context propagates through the returned Job ID so
+// downstream claim/execute/report spans link to this root span.
 func (e *Enqueuer) PrepareJobAndTask(ctx context.Context, payloadMap map[string]interface{}, req costmodel.JobRequirements) (*jobs.Job, *taskgraph.TaskSpec, int, error) {
+	ctx, span := telemetry.StartSpan(ctx, "schedule_task")
+	defer span.End()
+
+	return e.prepareJobAndTask(ctx, payloadMap, req)
+}
+
+// prepareJobAndTask is the internal implementation extracted so the
+// span wrapper above keeps the defer span.End() clean.
+func (e *Enqueuer) prepareJobAndTask(ctx context.Context, payloadMap map[string]interface{}, req costmodel.JobRequirements) (*jobs.Job, *taskgraph.TaskSpec, int, error) {
 	if e == nil || e.Creator == nil {
 		return nil, nil, 0, fmt.Errorf("creator unavailable")
 	}
