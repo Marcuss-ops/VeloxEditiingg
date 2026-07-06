@@ -7,9 +7,13 @@
 //	""        (default) — no-op tracer (zero overhead)
 //	"stdout"  — prints spans to stderr (dev/debug)
 //
-// The worker propagates trace context via context.Context (not gRPC
-// metadata — the worker receives context from the gRPC interceptor
-// when the master propagates via otelgrpc).
+// The worker propagates trace context via gRPC metadata — the
+// otelgrpc client interceptor (Step 18) injects W3C traceparent
+// automatically when the global propagator is initialized.
+// Scorecard v2 / Step 18+: W3C TraceContext propagation is initialized
+// globally so the otelgrpc client interceptor can inject traceparent
+// into outbound gRPC metadata. Without this, the worker's spans would
+// never be linked to the master's spans — they'd be orphan root spans.
 package oteltrace
 
 import (
@@ -21,6 +25,7 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/stdout/stdouttrace"
+	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
@@ -31,6 +36,9 @@ import (
 var (
 	tracer     trace.Tracer
 	tracerOnce sync.Once
+
+	// propagatorOnce ensures W3C propagation is set exactly once.
+	propagatorOnce sync.Once
 )
 
 // Tracer returns the global worker tracer. Safe for concurrent use.
@@ -67,8 +75,23 @@ func initStdoutTracer() trace.Tracer {
 		sdktrace.WithSampler(sdktrace.AlwaysSample()),
 	)
 	otel.SetTracerProvider(tp)
-	log.Printf("[OTELTRACE] worker stdout tracer initialized")
+
+	// Initialize W3C TraceContext propagation so the otelgrpc client
+	// interceptor (grpc_stream.go) can inject traceparent into
+	// outbound gRPC metadata.
+	initPropagator()
+
+	log.Printf("[OTELTRACE] worker stdout tracer + W3C propagator initialized")
 	return tp.Tracer("velox-worker-agent")
+}
+
+// initPropagator sets the global TextMapPropagator to W3C TraceContext.
+// Called exactly once from initStdoutTracer (and future otlp paths).
+func initPropagator() {
+	propagatorOnce.Do(func() {
+		otel.SetTextMapPropagator(propagation.TraceContext{})
+		log.Printf("[OTELTRACE] W3C TraceContext propagator initialized")
+	})
 }
 
 // StartSpan starts a span with the given name and optional attributes.
