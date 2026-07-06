@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
@@ -69,9 +70,16 @@ int ffmpegThreadsForSceneWorkers(size_t workerCount) {
 
 struct SceneWorkResult {
     size_t index{0};
+    size_t worker_id{0};
     fs::path segmentPath;
     bool success{false};
     std::string error;
+
+    // Per-segment wall-clock counters (populated by worker thread)
+    double total_ms{0};
+    double asset_download_ms{0};
+    double segment_build_ms{0};
+    int64_t output_bytes{0};
 };
 
 size_t determineSceneWorkerCount(size_t renderCount) {
@@ -105,16 +113,23 @@ SceneWorkResult buildSceneWorkItem(
     result.index = index;
     result.segmentPath = workDir / ("segment_" + std::to_string(index) + ".mp4");
 
+    auto tStart = std::chrono::steady_clock::now();
+
     fs::path imagePath;
-    if (index < sceneImagePaths.size()) {
-        const auto imagePathStr = sceneImagePaths[index];
-        if (!json::trim(imagePathStr).empty()) {
-            const auto candidatePath = workDir / ("scene_" + std::to_string(index) + ".jpg");
-            if (file::downloadAsset(imagePathStr, candidatePath, cacheDir))
-                imagePath = candidatePath;
+    {
+        auto dlStart = std::chrono::steady_clock::now();
+        if (index < sceneImagePaths.size()) {
+            const auto imagePathStr = sceneImagePaths[index];
+            if (!json::trim(imagePathStr).empty()) {
+                const auto candidatePath = workDir / ("scene_" + std::to_string(index) + ".jpg");
+                if (file::downloadAsset(imagePathStr, candidatePath, cacheDir))
+                    imagePath = candidatePath;
+            }
+        } else if (index < scenes.size()) {
+            imagePath = firstAvailableImage(scenes[index], workDir, index, cacheDir);
         }
-    } else if (index < scenes.size()) {
-        imagePath = firstAvailableImage(scenes[index], workDir, index, cacheDir);
+        result.asset_download_ms = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - dlStart).count();
     }
 
     double duration = 0.0;
@@ -132,10 +147,22 @@ SceneWorkResult buildSceneWorkItem(
         result.error = "no duration available for scene " + std::to_string(index);
         return result;
     }
-    if (!media::buildSceneSegment(imagePath, result.segmentPath, duration)) {
-        result.error = "failed to build segment " + std::to_string(index);
-        return result;
+
+    {
+        auto encStart = std::chrono::steady_clock::now();
+        if (!media::buildSceneSegment(imagePath, result.segmentPath, duration)) {
+            result.error = "failed to build segment " + std::to_string(index);
+            return result;
+        }
+        result.segment_build_ms = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - encStart).count();
     }
+
+    std::error_code ec;
+    auto sz = fs::file_size(result.segmentPath, ec);
+    result.output_bytes = ec ? 0 : static_cast<int64_t>(sz);
+    result.total_ms = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - tStart).count();
     result.success = true;
     return result;
 }
@@ -319,13 +346,14 @@ int cmdFullVideo(int argc, char** argv) {
         workers.reserve(workerCount);
 
         for (size_t t = 0; t < workerCount; ++t) {
-            workers.emplace_back([&]() {
+            workers.emplace_back([&, workerID = t]() {
                 while (true) {
                     const size_t index = nextIndex.fetch_add(1);
                     if (index >= renderCount) break;
                     results[index] = buildSceneWorkItem(
                         index, renderCount, sceneImagePaths, scenes,
                         workDir, perSceneDuration, voiceoverDurationSeconds, assetCacheDir);
+                    results[index].worker_id = workerID;
                 }
             });
         }

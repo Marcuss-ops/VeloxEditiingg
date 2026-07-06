@@ -1,6 +1,7 @@
 #include "velox/services/file_utils.hpp"
 #include "json_utils.hpp"
 #include <array>
+#include <chrono>
 #include <fstream>
 #include <sstream>
 #include <regex>
@@ -65,6 +66,17 @@ std::string shellQuote(const std::string& s) {
 bool runCommand(const std::string& cmd) {
     int rc = std::system(cmd.c_str());
     return rc == 0;
+}
+
+CommandResult runCommandTimed(const std::string& cmd) {
+    CommandResult res;
+    auto start = std::chrono::steady_clock::now();
+    int rc = std::system(cmd.c_str());
+    auto end = std::chrono::steady_clock::now();
+    res.wall_ms = std::chrono::duration<double, std::milli>(end - start).count();
+    res.exit_code = rc;
+    res.ok = (rc == 0);
+    return res;
 }
 
 std::string captureCommandOutput(const std::string& cmd) {

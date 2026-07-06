@@ -270,13 +270,19 @@ bool buildSceneSegment(const fs::path& imagePath, const fs::path& segmentPath, d
     if (!imagePath.empty() && fs::exists(imagePath)) {
         const std::string args = buildSceneSegmentArgs(imagePath, segmentPath, duration, params);
         const std::string cmd = "ffmpeg -y -hide_banner -loglevel error " + args;
-        return file::runCommand(cmd);
+        file::CommandResult r = file::runCommandTimed(cmd);
+        std::cerr << "{\"metric\":\"ffmpeg.scene_segment_ms\",\"value\":" << r.wall_ms
+                  << ",\"ok\":" << (r.ok ? "true" : "false")
+                  << ",\"exit_code\":" << r.exit_code << "}" << std::endl;
+        return r.ok;
     }
-    // Color-source fallback (no imagePath). Reuse buildColorSegmentArgs with
-    // the configured params.color_hex.
     const std::string args = buildColorSegmentArgs(segmentPath, duration, params, params.color_hex);
     const std::string cmd = "ffmpeg -y -hide_banner -loglevel error " + args;
-    return file::runCommand(cmd);
+    file::CommandResult r = file::runCommandTimed(cmd);
+    std::cerr << "{\"metric\":\"ffmpeg.color_segment_ms\",\"value\":" << r.wall_ms
+              << ",\"ok\":" << (r.ok ? "true" : "false")
+              << ",\"exit_code\":" << r.exit_code << "}" << std::endl;
+    return r.ok;
 }
 
 bool buildVideoSegment(const fs::path& clipPath, const fs::path& segmentPath, double duration, const SceneSegmentParams& params) {
@@ -285,7 +291,11 @@ bool buildVideoSegment(const fs::path& clipPath, const fs::path& segmentPath, do
     }
     const std::string args = buildVideoSegmentArgs(clipPath, segmentPath, duration, params);
     const std::string cmd = "ffmpeg -y -hide_banner -loglevel error " + args;
-    return file::runCommand(cmd);
+    file::CommandResult r = file::runCommandTimed(cmd);
+    std::cerr << "{\"metric\":\"ffmpeg.clip_segment_ms\",\"value\":" << r.wall_ms
+              << ",\"ok\":" << (r.ok ? "true" : "false")
+              << ",\"exit_code\":" << r.exit_code << "}" << std::endl;
+    return r.ok;
 }
 
 bool concatSegments(const std::vector<fs::path>& segments, const fs::path& outputPath, const fs::path& workDir) {
@@ -300,7 +310,11 @@ bool concatSegments(const std::vector<fs::path>& segments, const fs::path& outpu
     std::ostringstream cmd;
     cmd << "ffmpeg -y -hide_banner -loglevel error -f concat -safe 0 -i " << file::shellQuote(listPath.string())
         << " -c copy " << file::shellQuote(outputPath.string());
-    return file::runCommand(cmd.str());
+    file::CommandResult r = file::runCommandTimed(cmd.str());
+    std::cerr << "{\"metric\":\"ffmpeg.concat_ms\",\"value\":" << r.wall_ms
+              << ",\"ok\":" << (r.ok ? "true" : "false")
+              << ",\"exit_code\":" << r.exit_code << "}" << std::endl;
+    return r.ok;
 }
 
 bool muxAudio(const fs::path& videoPath, const fs::path& audioPath, const fs::path& outputPath, double volume, double startOffset) {
@@ -309,7 +323,6 @@ bool muxAudio(const fs::path& videoPath, const fs::path& audioPath, const fs::pa
         << " -i " << file::shellQuote(audioPath.string())
         << " -map 0:v:0 -map 1:a:0 -c:v copy -c:a aac";
 
-    // Build audio filter chain: volume + optional delay
     std::ostringstream af;
     bool hasFilter = false;
     if (volume > 0.0 && volume != 1.0) {
@@ -328,7 +341,11 @@ bool muxAudio(const fs::path& videoPath, const fs::path& audioPath, const fs::pa
 
     cmd << " -shortest -movflags +faststart "
         << file::shellQuote(outputPath.string());
-    return file::runCommand(cmd.str());
+    file::CommandResult r = file::runCommandTimed(cmd.str());
+    std::cerr << "{\"metric\":\"ffmpeg.mux_audio_ms\",\"value\":" << r.wall_ms
+              << ",\"ok\":" << (r.ok ? "true" : "false")
+              << ",\"exit_code\":" << r.exit_code << "}" << std::endl;
+    return r.ok;
 }
 
 } // namespace velox::media
