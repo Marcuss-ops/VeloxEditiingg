@@ -18,6 +18,7 @@ import (
 	"velox-shared/controltransport"
 	pb "velox-shared/controltransport/pb"
 
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
@@ -116,7 +117,12 @@ func (t *GRPCStreamTransport) Connect(ctx context.Context, hello controltranspor
 		transportCreds = grpc.WithTransportCredentials(insecure.NewCredentials())
 	}
 
-	conn, err := grpc.DialContext(ctx, t.grpcURL, transportCreds)
+	// Scorecard v2 / Step 18: add OpenTelemetry gRPC client stats
+	// handler so the worker automatically propagates W3C trace context
+	// (traceparent) in gRPC metadata to the master.
+	otelHandler := otelgrpc.NewClientHandler()
+
+	conn, err := grpc.DialContext(ctx, t.grpcURL, transportCreds, grpc.WithStatsHandler(otelHandler))
 	if err != nil {
 		t.mu.Lock()
 		t.state = stateDisconnected
