@@ -800,6 +800,11 @@ func (c *Collector) ScanAttemptWithLabels(
 	}
 	c.RecordAttempt(*am, cache, cb, execID, execVer, workerClass)
 	c.RecordAttemptOutcome(status, "", am.CPUTimeMS)
+	// Scorecard v2 / Step 13: classify errors when the attempt
+	// failed and the worker populated error classification fields.
+	if status == taskattempts.AttemptStatusFailed && am.ErrorComponent != "" {
+		c.RecordErrorClassification("", am.ErrorComponent, am.ErrorPhase)
+	}
 	// Scorecard v2: engine-aggregate phase columns are stamped by
 	// the supervisor tick (tickOnce) which prefers detailed phase
 	// rows and falls back to the aggregate columns only when no
