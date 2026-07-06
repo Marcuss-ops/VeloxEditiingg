@@ -2,7 +2,7 @@
 
 > **Owner:** video-engine  
 > **Last updated:** 2026-07-06  
-> **Version:** Scorecard v2 (Steps 1–13)  
+> **Version:** Scorecard v2 (Steps 1–18)  
 > **Cardinality discipline:** NEVER put `job_id`, `task_id`, `attempt_id`, `hash`, or `video_title` in a Prometheus label. Use SQL for those dimensions.
 
 ## Legend
@@ -23,7 +23,7 @@
 | 1  | `velox_project_render_speed_ratio`         | G    | Media duration / wall clock (>1 = faster than realtime) | ratio   | `executor_id`, `worker_class`  | `task_attempt_metrics.media_duration_seconds / wall_clock_seconds` | 90d  | N  |
 | 2  | `velox_compute_seconds_total`              | C    | CPU seconds classified by terminal outcome           | seconds   | `outcome`                       | `task_attempt_metrics.cpu_time_ms / 1000` | 90d  | N  |
 | 3  | `velox_compute_failure_reasons_total`      | C    | Failed attempts by reason code                       | count     | `reason`                        | `task_attempts.error_code`                | 90d  | N  |
-| 4  | `velox_error_classification_total`         | C    | Errors by canonical code × component × phase         | count     | `error_code`, `component`, `phase` | `task_attempt_metrics.error_component, error_phase, error_retryable` | 90d | N |
+| 4  | `velox_error_classification_total`         | C    | Errors by canonical code × component × phase         | count     | `error_code`, `component`, `phase` | `task_attempt_metrics.error_component, error_phase, error_retryable` (populated by supervisor tick) | 90d | N |
 
 ---
 
@@ -138,6 +138,7 @@
 | 49 | `velox_cost_network_gb_per_output_minute`           | G    | Network egress cost per output minute (€ × 1e6)       | micro-EUR     | `worker_class` | `task_attempt_cost_basis.*` aggregated per tick              | 90d  | N  |
 | 50 | `velox_cost_storage_gb_written_per_output_minute`   | G    | Storage cost per output minute (€ × 1e6)              | micro-EUR     | `worker_class` | `task_attempt_cost_basis.*` aggregated per tick              | 90d  | N  |
 | 51 | `velox_cost_total_per_output_minute`                | G    | Total cost per output minute (€ × 1e6)                | micro-EUR     | `worker_class` | `task_attempt_cost_basis.*` aggregated per tick              | 90d  | N  |
+| 52 | `velox_waste_total`                          | C    | Waste/cost totals by type (retry_count\|wasted_cpu_ms\|wasted_download_bytes\|wasted_cost_estimate) | mixed | `waste_type` | `task_attempt_metrics.retry_count, wasted_cpu_ms, wasted_download_bytes, wasted_cost_estimate` | 90d | N |
 
 ---
 
@@ -145,8 +146,8 @@
 
 | #  | Metric Name                                   | Type | Description                                           | Unit  | Labels          | DB Source                                                     | Ret. | HC |
 | -- | --------------------------------------------- | ---- | ----------------------------------------------------- | ----- | --------------- | ------------------------------------------------------------- | ---- | -- |
-| 52 | `velox_completion_reconcile_total`            | C    | Reconcile supervisor dispatch count by case × action  | count | `case`, `action` | `task_attempts` terminal-state scan + commit deadline check  | 90d  | N  |
-| 53 | `velox_commit_deadline_exceeded_total`        | C    | Attempts whose commit_deadline_at crossed              | count | _(none)_        | `task_attempts.commit_deadline_at < now`                     | 90d  | N  |
+| 53 | `velox_completion_reconcile_total`            | C    | Reconcile supervisor dispatch count by case × action  | count | `case`, `action` | `task_attempts` terminal-state scan + commit deadline check  | 90d  | N  |
+| 54 | `velox_commit_deadline_exceeded_total`        | C    | Attempts whose commit_deadline_at crossed              | count | _(none)_        | `task_attempts.commit_deadline_at < now`                     | 90d  | N  |
 
 ---
 
@@ -154,7 +155,7 @@
 
 | #  | Metric Name                                   | Type | Description                                           | Unit  | Labels    | DB Source                              | Ret. | HC |
 | -- | --------------------------------------------- | ---- | ----------------------------------------------------- | ----- | --------- | -------------------------------------- | ---- | -- |
-| 54 | `velox_placement_rejections_total`            | C    | Placement matcher rejections by reason code            | count | `reason`  | `tasks` / placement pipeline          | 90d  | N  |
+| 55 | `velox_placement_rejections_total`            | C    | Placement matcher rejections by reason code            | count | `reason`  | `tasks` / placement pipeline          | 90d  | N  |
 
 ### Placement Rejection Codes
 
@@ -166,10 +167,10 @@
 
 | #  | Metric Name                                      | Type | Description                                           | Unit  | Labels | DB Source                                        | Ret. | HC |
 | -- | ------------------------------------------------ | ---- | ----------------------------------------------------- | ----- | ------ | ------------------------------------------------ | ---- | -- |
-| 55 | `velox_conflict_streak_reset_total`               | C    | ConflictBudget streak resets (Record(nil) on non-zero)  | count | _(none)_ | `attempt_commits` CAS path                      | 90d  | N  |
-| 56 | `velox_conflict_escalations_total`                | C    | ConflictBudget escalations to ErrConflictBudgetExhausted | count | _(none)_ | `attempt_commits` CAS path                      | 90d  | N  |
-| 57 | `velox_conflict_stayed_under_threshold_total`     | C    | Conflict observations that incremented streak under threshold | count | _(none)_ | `attempt_commits` CAS path                      | 90d  | N  |
-| 58 | `velox_conflict_streak_length`                    | H    | Distribution of consecutive-conflict streak lengths    | count  | _(none)_ | `attempt_commits` CAS path (buckets: 1,2,3,5,10) | 90d  | N  |
+| 56 | `velox_conflict_streak_reset_total`               | C    | ConflictBudget streak resets (Record(nil) on non-zero)  | count | _(none)_ | `attempt_commits` CAS path                      | 90d  | N  |
+| 57 | `velox_conflict_escalations_total`                | C    | ConflictBudget escalations to ErrConflictBudgetExhausted | count | _(none)_ | `attempt_commits` CAS path                      | 90d  | N  |
+| 58 | `velox_conflict_stayed_under_threshold_total`     | C    | Conflict observations that incremented streak under threshold | count | _(none)_ | `attempt_commits` CAS path                      | 90d  | N  |
+| 59 | `velox_conflict_streak_length`                    | H    | Distribution of consecutive-conflict streak lengths    | count  | _(none)_ | `attempt_commits` CAS path (buckets: 1,2,3,5,10) | 90d  | N  |
 
 ---
 
@@ -189,9 +190,11 @@ These dimensions exist in SQLite / Postgres (`task_attempt_metrics`, `task_attem
 | L8 | `queue_ms`, `lease_wait_ms`, `time_to_first_worker_ms`, `pending_tasks_at_start`, `active_workers_at_start` | `task_attempt_metrics` | Queue / wait-time metrics | ms / count | 074 |
 | L9 | `scene_count`, `segment_count`, `total_input_duration_sec`, `resolution_width`, `resolution_height`, `fps`, `audio_track_count`, `subtitle_count`, `template_id` | `task_attempt_metrics` | Input context for normalization | mixed | 075 |
 | L10 | `error_component`, `error_phase`, `error_retryable`, `error_message_hash` | `task_attempt_metrics` | Structured error metadata | mixed | 076 |
-| L11 | `pipeline_resolve_ms` … `engine_copy_final_ms`  | `task_attempt_metrics`   | Engine-aggregate phase columns (13 total)              | ms         | 070       |
-| L12 | `cache_hits`, `cache_misses`, `cache_evictions`, `cache_corruptions`, `cache_bytes_used`, `cache_entries` | `task_attempt_cache_stats` | Per-attempt cache snapshot | mixed | 054 |
-| L13 | `cpu_price_per_second`, `storage_price_per_gb`, `network_price_per_gb`, `cpu_time_seconds_total`, `storage_gb_written`, `network_gb_egressed`, `output_minutes_total` | `task_attempt_cost_basis` | Cost envelope per attempt | mixed | 054 |
+| L11 | `asset_cache_hit_count`, `asset_cache_miss_count`, `blob_cache_hit_count`, `blob_cache_miss_count`, `render_cache_hit_count` | `task_attempt_metrics` | Granular per-tier cache hit/miss counters | count | 077 |
+| L12 | `retry_count`, `wasted_cpu_ms`, `wasted_download_bytes`, `wasted_cost_estimate` | `task_attempt_metrics` | Waste/cost attribution per attempt | mixed | 078 |
+| L13 | `pipeline_resolve_ms` … `engine_copy_final_ms`  | `task_attempt_metrics`   | Engine-aggregate phase columns (13 total)              | ms         | 070       |
+| L14 | `cache_hits`, `cache_misses`, `cache_evictions`, `cache_corruptions`, `cache_bytes_used`, `cache_entries` | `task_attempt_cache_stats` | Per-attempt cache snapshot | mixed | 054 |
+| L15 | `cpu_price_per_second`, `storage_price_per_gb`, `network_price_per_gb`, `cpu_time_seconds_total`, `storage_gb_written`, `network_gb_egressed`, `output_minutes_total` | `task_attempt_cost_basis` | Cost envelope per attempt | mixed | 054 |
 
 ---
 
@@ -231,7 +234,7 @@ These dimensions exist in SQLite / Postgres (`task_attempt_metrics`, `task_attem
 | ---------------------- | -------------------- | -------- | ------------------------------------------------ |
 | Worker heartbeat       | gRPC push            | ~15s     | `worker_*`, `ffmpeg_*` (in-band), `cache_*`      |
 | Worker TaskResult      | gRPC push            | per-job  | `compute_*`, `render_speed`, `video_*`, `cache_*` |
-| Supervisor tick        | Poll (DB scan)       | 15s      | `cost_*`, `heartbeat_age`, `master_*`, `engine_*` |
+| Supervisor tick        | Poll (DB scan)       | 15s      | `cost_*`, `error_classification`, `heartbeat_age`, `master_*`, `engine_*` |
 | Reconcile supervisor   | Poll + CAS dispatch  | per-tick | `reconcile_total`, `commit_deadline_exceeded`     |
 | Placement pipeline     | gRPC claim path      | per-claim| `placement_rejections`                           |
 | ConflictBudget CAS     | CAS collision path   | per-call | `conflict_streak_*`, `conflict_escalations`      |
@@ -261,7 +264,54 @@ These dimensions exist in SQLite / Postgres (`task_attempt_metrics`, `task_attem
 
 ---
 
-## P. Change Log
+## P. Distributed Tracing (OpenTelemetry)
+
+| Setting                       | Description                                           | Default     |
+| ----------------------------- | ----------------------------------------------------- | ----------- |
+| `VELOX_OTEL_EXPORTER`         | Tracer backend: `""` (no-op), `"stdout"`, or `"otlp"` | `""`       |
+| `VELOX_OTEL_ENDPOINT`         | OTLP gRPC collector address (`host:port`)              | _(required when `EXPORTER=otlp`)_ |
+| `VELOX_VERSION`               | Service version tag on all spans                      | `""`       |
+
+### Architecture
+
+```
+Worker (otelgrpc client handler)                    Master (otelgrpc server handler)
+  ┌─────────────────────────┐                       ┌──────────────────────────────┐
+  │ cache_lookup span       │                       │ claim_task span              │
+  │ validate span           │── W3C traceparent ──▶│ ingest_result span           │
+  │ compile span            │   (gRPC metadata)    │ schedule_task span           │
+  │ render span             │                       │                              │
+  │ upload span             │                       │                              │
+  └─────────────────────────┘                       └──────────────────────────────┘
+           │                                                 │
+           └──────────── OTLP gRPC ─────────────────────────┘
+                              │
+                         ┌────▼────┐
+                         │  OTLP   │
+                         │Collector│  (e.g. otel-collector:4317)
+                         └────┬────┘
+                              │
+                    ┌─────────┼─────────┐
+                    ▼         ▼         ▼
+                Jaeger    Grafana    Honeycomb
+```
+
+### Spans (master + worker)
+
+| Span Name        | Side   | Trigger                              | Attributes                              |
+| ---------------- | ------ | ------------------------------------ | --------------------------------------- |
+| `schedule_task`  | Master | `PrepareJobAndTask` in enqueue       | `velox.job_id`                          |
+| `claim_task`     | Master | `handleTaskAccepted` via gRPC stream | `velox.task_id`, `velox.worker_id`, `velox.attempt_id` |
+| `ingest_result`  | Master | `handleTaskResult` via gRPC stream   | `velox.task_id`, `velox.worker_id`, `velox.attempt_id` |
+| `cache_lookup`   | Worker | `cache.Get`                          | `velox.worker_id`                       |
+| `validate`       | Worker | `spec.Validate` in task runner       | `velox.job_id`                          |
+| `compile`        | Worker | `hybrid.Compile`                     | `velox.job_id`                          |
+| `render`         | Worker | `exec.Execute` in task runner        | —                                       |
+| `upload`         | Worker | `uploadTaskOutputs`                  | `velox.job_id`, `velox.task_id`         |
+
+---
+
+## Q. Change Log
 
 | Date       | Change                                              | Migration |
 | ---------- | --------------------------------------------------- | --------- |
@@ -272,4 +322,10 @@ These dimensions exist in SQLite / Postgres (`task_attempt_metrics`, `task_attem
 | 2026-07-05 | Queue / wait metrics (Step 11)                      | 074       |
 | 2026-07-05 | Input context metrics (Step 12)                     | 075       |
 | 2026-07-06 | Error classification + canonical codes (Step 13)    | 076       |
-| 2026-07-06 | **Metric catalog created** (this document)          | —         |
+| 2026-07-06 | Tracing correlation — trace_id/span_id + OpenTelemetry SDK (Step 15) | 080 |
+| 2026-07-06 | Cache metrics refinement — per-tier hit/miss counts (Step 16) | 077 |
+| 2026-07-06 | Waste cost metrics (Step 17a)                      | 078       |
+| 2026-07-06 | Error classification wired to supervisor tick (Step 16) | —     |
+| 2026-07-06 | OTLP gRPC exporter support (Step 17b)              | —         |
+| 2026-07-06 | Worker otelgrpc client interceptor (Step 18)       | —         |
+| 2026-07-06 | **Metric catalog updated** (this revision)         | —         |
