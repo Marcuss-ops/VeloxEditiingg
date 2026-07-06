@@ -958,12 +958,16 @@ func (r *SQLiteTaskRepository) IngestTaskResultAtomic(ctx context.Context, cmd t
 				iowait_ms, open_fds_peak,
 				queue_ms, lease_wait_ms,
 				time_to_first_worker_ms, pending_tasks_at_start,
-				active_workers_at_start
+				active_workers_at_start,
+				scene_count, segment_count, total_input_duration_sec,
+				resolution_width, resolution_height, fps,
+				audio_track_count, subtitle_count, template_id
 			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			          ?, ?, ?, ?, ?, ?, ?,
 			          ?, ?, ?, ?, ?, ?, ?, ?,
-			          ?, ?, ?, ?, ?)`,
+			          ?, ?, ?, ?, ?,
+			          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			cmd.Metrics.AttemptID, cmd.Metrics.InputBytes, cmd.Metrics.OutputBytes,
 			cmd.Metrics.BytesFromDrive, cmd.Metrics.BytesFromBlobstore, cmd.Metrics.BytesFromLocalCache,
 			cmd.Metrics.CPUTimeMS, cmd.Metrics.GPUTimeMS, cmd.Metrics.PeakRSSBytes, cmd.Metrics.PeakVRAMBytes,
@@ -982,6 +986,9 @@ func (r *SQLiteTaskRepository) IngestTaskResultAtomic(ctx context.Context, cmd t
 			cmd.Metrics.QueueMS, cmd.Metrics.LeaseWaitMS,
 			cmd.Metrics.TimeToFirstWorkerMS, cmd.Metrics.PendingTasksAtStart,
 			cmd.Metrics.ActiveWorkersAtStart,
+			cmd.Metrics.SceneCount, cmd.Metrics.SegmentCount, cmd.Metrics.TotalInputDurationSec,
+			cmd.Metrics.ResolutionWidth, cmd.Metrics.ResolutionHeight, cmd.Metrics.FPS,
+			cmd.Metrics.AudioTrackCount, cmd.Metrics.SubtitleCount, cmd.Metrics.TemplateID,
 		)
 		if err != nil {
 			return fmt.Errorf("task ingest atomic metrics: %w", err)

@@ -605,7 +605,10 @@ func (r *SQLiteLabelResolver) GetMetrics(ctx context.Context, attemptID string) 
 		       iowait_ms, open_fds_peak,
 		       queue_ms, lease_wait_ms,
 		       time_to_first_worker_ms, pending_tasks_at_start,
-		       active_workers_at_start
+		       active_workers_at_start,
+		       scene_count, segment_count, total_input_duration_sec,
+		       resolution_width, resolution_height, fps,
+		       audio_track_count, subtitle_count, template_id
 		FROM task_attempt_metrics WHERE attempt_id = ?`,
 		attemptID,
 	).Scan(
@@ -627,6 +630,9 @@ func (r *SQLiteLabelResolver) GetMetrics(ctx context.Context, attemptID string) 
 		&m.QueueMS, &m.LeaseWaitMS,
 		&m.TimeToFirstWorkerMS, &m.PendingTasksAtStart,
 		&m.ActiveWorkersAtStart,
+		&m.SceneCount, &m.SegmentCount, &m.TotalInputDurationSec,
+		&m.ResolutionWidth, &m.ResolutionHeight, &m.FPS,
+		&m.AudioTrackCount, &m.SubtitleCount, &m.TemplateID,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil

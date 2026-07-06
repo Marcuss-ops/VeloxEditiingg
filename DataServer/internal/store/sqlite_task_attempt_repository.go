@@ -396,14 +396,18 @@ func (r *SQLiteTaskAttemptRepository) PersistMetrics(ctx context.Context, metric
 			iowait_ms, open_fds_peak,
 			queue_ms, lease_wait_ms,
 			time_to_first_worker_ms, pending_tasks_at_start,
-			active_workers_at_start
+			active_workers_at_start,
+			scene_count, segment_count, total_input_duration_sec,
+			resolution_width, resolution_height, fps,
+			audio_track_count, subtitle_count, template_id
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 		          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 		          ?, ?, ?, ?, ?, ?, ?,
 		          ?, ?, ?, ?, ?, ?,
 		          ?, ?, ?, ?, ?, ?, ?,
 		          ?, ?, ?, ?, ?, ?, ?, ?,
-		          ?, ?, ?, ?, ?)`,
+		          ?, ?, ?, ?, ?,
+		          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		metrics.AttemptID, metrics.InputBytes, metrics.OutputBytes,
 		metrics.BytesFromDrive, metrics.BytesFromBlobstore, metrics.BytesFromLocalCache,
 		metrics.CPUTimeMS, metrics.GPUTimeMS, metrics.PeakRSSBytes, metrics.PeakVRAMBytes,
@@ -428,6 +432,9 @@ func (r *SQLiteTaskAttemptRepository) PersistMetrics(ctx context.Context, metric
 		metrics.QueueMS, metrics.LeaseWaitMS,
 		metrics.TimeToFirstWorkerMS, metrics.PendingTasksAtStart,
 		metrics.ActiveWorkersAtStart,
+		metrics.SceneCount, metrics.SegmentCount, metrics.TotalInputDurationSec,
+		metrics.ResolutionWidth, metrics.ResolutionHeight, metrics.FPS,
+		metrics.AudioTrackCount, metrics.SubtitleCount, metrics.TemplateID,
 	)
 	if err != nil {
 		return fmt.Errorf("metrics persist: %w", err)
@@ -641,7 +648,10 @@ func (r *SQLiteTaskAttemptRepository) GetMetrics(ctx context.Context, attemptID 
 		        iowait_ms, open_fds_peak,
 		        queue_ms, lease_wait_ms,
 		        time_to_first_worker_ms, pending_tasks_at_start,
-		        active_workers_at_start
+		        active_workers_at_start,
+		        scene_count, segment_count, total_input_duration_sec,
+		        resolution_width, resolution_height, fps,
+		        audio_track_count, subtitle_count, template_id
 		 FROM task_attempt_metrics WHERE attempt_id = ?`,
 		attemptID,
 	)
@@ -674,6 +684,9 @@ func (r *SQLiteTaskAttemptRepository) GetMetrics(ctx context.Context, attemptID 
 		&m.QueueMS, &m.LeaseWaitMS,
 		&m.TimeToFirstWorkerMS, &m.PendingTasksAtStart,
 		&m.ActiveWorkersAtStart,
+		&m.SceneCount, &m.SegmentCount, &m.TotalInputDurationSec,
+		&m.ResolutionWidth, &m.ResolutionHeight, &m.FPS,
+		&m.AudioTrackCount, &m.SubtitleCount, &m.TemplateID,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil

@@ -134,6 +134,17 @@ type AttemptMetrics struct {
 	TimeToFirstWorkerMS    int64 `json:"time_to_first_worker_ms"`
 	PendingTasksAtStart    int64 `json:"pending_tasks_at_start"`
 	ActiveWorkersAtStart   int64 `json:"active_workers_at_start"`
+
+	// Scorecard v2 / Step 12: input context for normalization.
+	SceneCount             int     `json:"scene_count"`
+	SegmentCount           int     `json:"segment_count"`
+	TotalInputDurationSec  float64 `json:"total_input_duration_sec"`
+	ResolutionWidth        int     `json:"resolution_width"`
+	ResolutionHeight       int     `json:"resolution_height"`
+	FPS                    float64 `json:"fps"`
+	AudioTrackCount        int     `json:"audio_track_count"`
+	SubtitleCount          int     `json:"subtitle_count"`
+	TemplateID             string  `json:"template_id"`
 }
 
 // AttemptCacheStats is the per-attempt cache snapshot extracted from the
