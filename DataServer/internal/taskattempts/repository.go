@@ -66,6 +66,21 @@ type Writer interface {
 	// PersistCostBasis inserts or replaces the cost envelope so
 	// cost_per_output_minute is a 1-lookup read downstream.
 	PersistCostBasis(ctx context.Context, basis AttemptCostBasis) error
+
+	// PersistPhaseTimingsDetailed inserts or replaces detailed
+	// per-phase timing rows (component, action, phase_order, bytes,
+	// frames, metadata_json). Idempotent on (attempt_id, component,
+	// action). Replaces the simpler PersistPhaseTimings contract
+	// when the worker surfaces the richer Scorecard v2 shape.
+	PersistPhaseTimingsDetailed(ctx context.Context, attemptID string, timings []PhaseTimingDetailed) error
+
+	// PersistSegmentTimings inserts or replaces per-segment timing
+	// records from the C++ engine sidecar segments[] array.
+	// Idempotent on (attempt_id, segment_index). Callers should
+	// delete-and-reinsert the full slate for the attempt each time
+	// the worker reports, so the table stays in sync with the
+	// authoritative sidecar.
+	PersistSegmentTimings(ctx context.Context, attemptID string, segments []SegmentTiming) error
 }
 
 // MetricsReader is the read-side of the typed metrics envelope so the

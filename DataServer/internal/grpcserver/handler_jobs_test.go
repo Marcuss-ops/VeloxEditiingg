@@ -414,6 +414,12 @@ func (s *spoofStubAttemptRepo) GetCacheStats(_ context.Context, _ string) (*task
 func (s *spoofStubAttemptRepo) GetCostBasis(_ context.Context, _ string) (*taskattempts.AttemptCostBasis, error) {
 	panic("spoofStubAttemptRepo.GetCostBasis: not exercised in handler-level tests")
 }
+func (s *spoofStubAttemptRepo) PersistPhaseTimingsDetailed(_ context.Context, _ string, _ []taskattempts.PhaseTimingDetailed) error {
+	return nil
+}
+func (s *spoofStubAttemptRepo) PersistSegmentTimings(_ context.Context, _ string, _ []taskattempts.SegmentTiming) error {
+	return nil
+}
 
 // spoofStubOutputArts: taskoutput_artifacts.Repository.
 // Register MUST stay zero on the rejection path.

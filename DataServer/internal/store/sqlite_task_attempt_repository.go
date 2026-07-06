@@ -338,9 +338,11 @@ func (r *SQLiteTaskAttemptRepository) GetPhaseTimings(ctx context.Context, attem
 //
 // Scorecard v1 / migration 054: extended column list (frames_*, ffmpeg_*,
 // encode_passes, final_concat_stream_copy, concat_mode, temp_bytes_*,
-// duplicate_download_bytes, media/wall_clock_seconds). All DEFAULT 0
-// on the migration side so older workers that don't emit these fields
-// (zero structs) still persist cleanly.
+// duplicate_download_bytes, media/wall_clock_seconds).
+// Scorecard v2 / migration 070: engine-aggregate phase columns
+// (pipeline_*, native_*, engine_*). All DEFAULT 0 on the migration
+// side so older workers that don't emit these fields (zero structs)
+// still persist cleanly.
 func (r *SQLiteTaskAttemptRepository) PersistMetrics(ctx context.Context, metrics taskattempts.AttemptMetrics) error {
 	if metrics.AttemptID == "" {
 		return nil
@@ -362,9 +364,17 @@ func (r *SQLiteTaskAttemptRepository) PersistMetrics(ctx context.Context, metric
 			ffmpeg_speed_ratio, encode_passes,
 			final_concat_stream_copy, concat_mode,
 			temp_bytes_written, duplicate_download_bytes,
-			media_duration_seconds, wall_clock_seconds
+			media_duration_seconds, wall_clock_seconds,
+			pipeline_resolve_ms, pipeline_validate_ms,
+			pipeline_compile_ms, pipeline_render_ms, pipeline_total_ms,
+			native_total_ms, native_process_wait_ms,
+			engine_asset_download_ms, engine_segment_build_ms,
+			engine_concat_ms, engine_audio_download_ms,
+			engine_mux_audio_ms, engine_copy_final_ms
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-		          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+		          ?, ?, ?, ?, ?, ?, ?,
+		          ?, ?, ?, ?, ?, ?)`,
 		metrics.AttemptID, metrics.InputBytes, metrics.OutputBytes,
 		metrics.BytesFromDrive, metrics.BytesFromBlobstore, metrics.BytesFromLocalCache,
 		metrics.CPUTimeMS, metrics.GPUTimeMS, metrics.PeakRSSBytes, metrics.PeakVRAMBytes,
@@ -373,6 +383,12 @@ func (r *SQLiteTaskAttemptRepository) PersistMetrics(ctx context.Context, metric
 		streamCopy, concatMode,
 		metrics.TempBytesWritten, metrics.DuplicateDownloadBytes,
 		metrics.MediaDurationSeconds, metrics.WallClockSeconds,
+		metrics.PipelineResolveMs, metrics.PipelineValidateMs,
+		metrics.PipelineCompileMs, metrics.PipelineRenderMs, metrics.PipelineTotalMs,
+		metrics.NativeTotalMs, metrics.NativeProcessWaitMs,
+		metrics.EngineAssetDownloadMs, metrics.EngineSegmentBuildMs,
+		metrics.EngineConcatMs, metrics.EngineAudioDownloadMs,
+		metrics.EngineMuxAudioMs, metrics.EngineCopyFinalMs,
 	)
 	if err != nil {
 		return fmt.Errorf("metrics persist: %w", err)
@@ -474,6 +490,89 @@ func (r *SQLiteTaskAttemptRepository) GetCostBasis(ctx context.Context, attemptI
 	return &b, nil
 }
 
+// ── Detailed Phase Timings (migration 070) ───────────────────────────────
+
+// PersistPhaseTimingsDetailed inserts or replaces detailed phase timing
+// rows keyed by (attempt_id, component, action). Replaces the simpler
+// PersistPhaseTimings contract when the worker surfaces the richer
+// Scorecard v2 shape (component/action namespace + byte/frame counters).
+func (r *SQLiteTaskAttemptRepository) PersistPhaseTimingsDetailed(ctx context.Context, attemptID string, timings []taskattempts.PhaseTimingDetailed) error {
+	if attemptID == "" || len(timings) == 0 {
+		return nil
+	}
+	tx, err := r.store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("phase timings detailed begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	for _, pt := range timings {
+		_, err := tx.ExecContext(ctx,
+			`INSERT OR REPLACE INTO task_phase_timings (
+				attempt_id, phase, duration_ms, wall_start, wall_end,
+				phase_order, component, action,
+				status, error_code, error_message,
+				bytes_in, bytes_out, frames, metadata_json
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			attemptID, pt.Component+"."+pt.Action, pt.DurationMS,
+			pt.StartedAt.Format(time.RFC3339), pt.CompletedAt.Format(time.RFC3339),
+			pt.PhaseOrder, pt.Component, pt.Action,
+			pt.Status, pt.ErrorCode, pt.ErrorMessage,
+			pt.BytesIn, pt.BytesOut, pt.Frames, pt.MetadataJSON,
+		)
+		if err != nil {
+			return fmt.Errorf("phase timing detailed insert: %w", err)
+		}
+	}
+	return tx.Commit()
+}
+
+// ── Segment Timings (migration 070) ──────────────────────────────────────
+
+// PersistSegmentTimings replaces all segment rows for an attempt with
+// the authoritative sidecar records from the C++ engine. Delete-then-insert
+// under a transaction so the table never contains stale segments.
+func (r *SQLiteTaskAttemptRepository) PersistSegmentTimings(ctx context.Context, attemptID string, segments []taskattempts.SegmentTiming) error {
+	if attemptID == "" {
+		return nil
+	}
+	tx, err := r.store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("segment timings begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// Delete any prior rows for this attempt so the table mirrors the
+	// authoritative sidecar exactly.
+	if _, err := tx.ExecContext(ctx, `DELETE FROM task_attempt_segment_timings WHERE attempt_id = ?`, attemptID); err != nil {
+		return fmt.Errorf("segment timings delete: %w", err)
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	for _, seg := range segments {
+		_, err := tx.ExecContext(ctx,
+			`INSERT INTO task_attempt_segment_timings (
+				attempt_id, job_id, task_id, worker_id,
+				segment_index, scene_worker_index, source_type,
+				duration_ms, asset_download_ms, ffmpeg_encode_ms,
+				source_bytes, output_bytes, frames_encoded,
+				codec, preset, ffmpeg_threads,
+				status, error_code, error_message, metadata_json, created_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			attemptID, seg.JobID, seg.TaskID, seg.WorkerID,
+			seg.SegmentIndex, seg.SceneWorkerIndex, seg.SourceType,
+			seg.DurationMS, seg.AssetDownloadMS, seg.FfmpegEncodeMS,
+			seg.SourceBytes, seg.OutputBytes, seg.FramesEncoded,
+			seg.Codec, seg.Preset, seg.FfmpegThreads,
+			seg.Status, seg.ErrorCode, seg.ErrorMessage, seg.MetadataJSON, now,
+		)
+		if err != nil {
+			return fmt.Errorf("segment timing insert %d: %w", seg.SegmentIndex, err)
+		}
+	}
+	return tx.Commit()
+}
+
 // GetMetrics returns metrics for an attempt, or nil if not found.
 func (r *SQLiteTaskAttemptRepository) GetMetrics(ctx context.Context, attemptID string) (*taskattempts.AttemptMetrics, error) {
 	if attemptID == "" {
@@ -487,7 +586,13 @@ func (r *SQLiteTaskAttemptRepository) GetMetrics(ctx context.Context, attemptID 
 		        ffmpeg_speed_ratio, encode_passes,
 		        final_concat_stream_copy, concat_mode,
 		        temp_bytes_written, duplicate_download_bytes,
-		        media_duration_seconds, wall_clock_seconds
+		        media_duration_seconds, wall_clock_seconds,
+		        pipeline_resolve_ms, pipeline_validate_ms,
+		        pipeline_compile_ms, pipeline_render_ms, pipeline_total_ms,
+		        native_total_ms, native_process_wait_ms,
+		        engine_asset_download_ms, engine_segment_build_ms,
+		        engine_concat_ms, engine_audio_download_ms,
+		        engine_mux_audio_ms, engine_copy_final_ms
 		 FROM task_attempt_metrics WHERE attempt_id = ?`,
 		attemptID,
 	)
@@ -503,6 +608,12 @@ func (r *SQLiteTaskAttemptRepository) GetMetrics(ctx context.Context, attemptID 
 		&streamCopy, &concatMode,
 		&m.TempBytesWritten, &m.DuplicateDownloadBytes,
 		&m.MediaDurationSeconds, &m.WallClockSeconds,
+		&m.PipelineResolveMs, &m.PipelineValidateMs,
+		&m.PipelineCompileMs, &m.PipelineRenderMs, &m.PipelineTotalMs,
+		&m.NativeTotalMs, &m.NativeProcessWaitMs,
+		&m.EngineAssetDownloadMs, &m.EngineSegmentBuildMs,
+		&m.EngineConcatMs, &m.EngineAudioDownloadMs,
+		&m.EngineMuxAudioMs, &m.EngineCopyFinalMs,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil

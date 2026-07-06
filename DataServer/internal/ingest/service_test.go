@@ -422,6 +422,12 @@ func (s *stubIngestAttemptRepo) GetCacheStats(_ context.Context, _ string) (*tas
 func (s *stubIngestAttemptRepo) GetCostBasis(_ context.Context, _ string) (*taskattempts.AttemptCostBasis, error) {
 	panic("stubIngestAttemptRepo.GetCostBasis: not exercised by IngestTaskResult")
 }
+func (s *stubIngestAttemptRepo) PersistPhaseTimingsDetailed(_ context.Context, _ string, _ []taskattempts.PhaseTimingDetailed) error {
+	return nil
+}
+func (s *stubIngestAttemptRepo) PersistSegmentTimings(_ context.Context, _ string, _ []taskattempts.SegmentTiming) error {
+	return nil
+}
 
 // TestIngestionService_ValidateIdentityTuple_WireAttemptIDMismatch:
 // PR-2 strict-compare guard for the AttemptID half of the wire tuple.

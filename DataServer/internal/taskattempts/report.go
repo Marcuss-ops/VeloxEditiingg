@@ -93,6 +93,21 @@ type AttemptMetrics struct {
 	DuplicateDownloadBytes int64   `json:"duplicate_download_bytes"`
 	MediaDurationSeconds   float64 `json:"media_duration_seconds"`
 	WallClockSeconds       float64 `json:"wall_clock_seconds"`
+
+	// Scorecard v2 / engine-aggregate phase timing (migration 070).
+	PipelineResolveMs    int64 `json:"pipeline_resolve_ms"`
+	PipelineValidateMs   int64 `json:"pipeline_validate_ms"`
+	PipelineCompileMs    int64 `json:"pipeline_compile_ms"`
+	PipelineRenderMs     int64 `json:"pipeline_render_ms"`
+	PipelineTotalMs      int64 `json:"pipeline_total_ms"`
+	NativeTotalMs        int64 `json:"native_total_ms"`
+	NativeProcessWaitMs  int64 `json:"native_process_wait_ms"`
+	EngineAssetDownloadMs int64 `json:"engine_asset_download_ms"`
+	EngineSegmentBuildMs int64 `json:"engine_segment_build_ms"`
+	EngineConcatMs       int64 `json:"engine_concat_ms"`
+	EngineAudioDownloadMs int64 `json:"engine_audio_download_ms"`
+	EngineMuxAudioMs     int64 `json:"engine_mux_audio_ms"`
+	EngineCopyFinalMs    int64 `json:"engine_copy_final_ms"`
 }
 
 // AttemptCacheStats is the per-attempt cache snapshot extracted from the
@@ -203,6 +218,58 @@ func (b *AttemptCostBasis) Compute() {
 	storageCost := b.StorageGBWritten * b.StoragePricePerGB
 	networkCost := b.NetworkGBEgressed * b.NetworkPricePerGB
 	b.CostPerOutputMinute = (cpuCost + storageCost + networkCost) / b.OutputMinutesTotal
+}
+
+// PhaseTimingDetailed extends PhaseTiming with per-phase metadata the
+// C++ engine sidecar and Go pipeline runner surface: ordered phase
+// index, component/action namespacing, byte/frame counters, and a
+// free-form metadata_json for codec/preset/canvas details. The existing
+// PhaseTiming struct continues to work for lightweight phase records;
+// detailed records are persisted via PersistPhaseTimingsDetailed.
+type PhaseTimingDetailed struct {
+	AttemptID    string    `json:"attempt_id"`
+	JobID        string    `json:"job_id"`
+	TaskID       string    `json:"task_id"`
+	WorkerID     string    `json:"worker_id"`
+	ExecutorID   string    `json:"executor_id"`
+	PhaseOrder   int       `json:"phase_order"`
+	Component    string    `json:"component"`
+	Action       string    `json:"action"`
+	StartedAt    time.Time `json:"started_at"`
+	CompletedAt  time.Time `json:"completed_at"`
+	DurationMS   int64     `json:"duration_ms"`
+	Status       string    `json:"status"`
+	ErrorCode    string    `json:"error_code,omitempty"`
+	ErrorMessage string    `json:"error_message,omitempty"`
+	BytesIn      int64     `json:"bytes_in"`
+	BytesOut     int64     `json:"bytes_out"`
+	Frames       int64     `json:"frames"`
+	MetadataJSON string    `json:"metadata_json,omitempty"`
+}
+
+// SegmentTiming mirrors the C++ SegmentTiming struct emitted inside the
+// sidecar segments[] array. One row per timeline segment.
+type SegmentTiming struct {
+	AttemptID        string  `json:"attempt_id"`
+	JobID            string  `json:"job_id"`
+	TaskID           string  `json:"task_id"`
+	WorkerID         string  `json:"worker_id"`
+	SegmentIndex     int     `json:"segment_index"`
+	SceneWorkerIndex int     `json:"scene_worker_index"`
+	SourceType       string  `json:"source_type"`
+	DurationMS       float64 `json:"duration_ms"`
+	AssetDownloadMS  float64 `json:"asset_download_ms"`
+	FfmpegEncodeMS   float64 `json:"ffmpeg_encode_ms"`
+	SourceBytes      int64   `json:"source_bytes"`
+	OutputBytes      int64   `json:"output_bytes"`
+	FramesEncoded    int64   `json:"frames_encoded"`
+	Codec            string  `json:"codec"`
+	Preset           string  `json:"preset"`
+	FfmpegThreads    int     `json:"ffmpeg_threads"`
+	Status           string  `json:"status"`
+	ErrorCode        string  `json:"error_code,omitempty"`
+	ErrorMessage     string  `json:"error_message,omitempty"`
+	MetadataJSON     string  `json:"metadata_json,omitempty"`
 }
 
 // TaskExecutionReport is the typed, versioned, final report a worker emits
