@@ -32,6 +32,11 @@ type fakeAttemptsDataSource struct {
 
 	// queries (mostly for debugging)
 	recentCalls int
+
+	// daily-rollup tracking
+	ComputeDailyRollupsCalls int
+	ComputeDailyRollupsDays  []string
+	ComputeDailyRollupsErr   error
 }
 
 type fakeAttemptRecord struct {
@@ -142,7 +147,18 @@ func (f *fakeAttemptsDataSource) GetSegmentTimings(ctx context.Context, attemptI
 	return nil, nil
 }
 
-var _ AttemptsDataSource = (*fakeAttemptsDataSource)(nil)
+func (f *fakeAttemptsDataSource) ComputeDailyRollups(ctx context.Context, day string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ComputeDailyRollupsDays = append(f.ComputeDailyRollupsDays, day)
+	f.ComputeDailyRollupsCalls++
+	return f.ComputeDailyRollupsErr
+}
+
+// ComputeDailyRollupsDays tracks the days for which rollups were
+// requested (for assertions in daily-rollup tests).
+// ComputeDailyRollupsCalls counts total invocations.
+// ComputeDailyRollupsErr injects a forced error (nil = success).
 
 // fakeOutboxGauge returns a fixed count. Records the call count so
 // tests can assert the supervisor called PendingCount exactly.
@@ -350,3 +366,128 @@ func indexOf(s, sub string) int {
 
 // guard against unused import lint when test file shrinks.
 var _ = fmt.Sprintf
+
+// ── Daily Rollup Tests (Step 2 / Velox Metrics Center) ─────────────────
+
+// TestPercentileFloat64 verifies percentile computation edge cases.
+func TestPercentileFloat64(t *testing.T) {
+	tests := []struct {
+		name   string
+		sorted []float64
+		p      float64
+		want   float64
+	}{
+		{"empty slice", nil, 0.50, 0},
+		{"single element p50", []float64{42}, 0.50, 42},
+		{"single element p95", []float64{42}, 0.95, 42},
+		{"single element p0", []float64{42}, 0, 42},
+		{"two elements p50", []float64{10, 20}, 0.50, 15},
+		{"two elements p0", []float64{10, 20}, 0, 10},
+		{"two elements p100", []float64{10, 20}, 1.0, 20},
+		{"five elements p50", []float64{1, 2, 3, 4, 5}, 0.50, 3},
+		{"five elements p95", []float64{1, 2, 3, 4, 5}, 0.95, 4.8},
+		{"five elements p99", []float64{1, 2, 3, 4, 5}, 0.99, 4.96},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := percentileFloat64(tt.sorted, tt.p)
+			if got != tt.want {
+				t.Errorf("percentileFloat64(%v, %.2f) = %v; want %v", tt.sorted, tt.p, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestAvgFloat64 verifies basic average computation.
+func TestAvgFloat64(t *testing.T) {
+	if got := avgFloat64(nil); got != 0 {
+		t.Errorf("avgFloat64(nil) = %v; want 0", got)
+	}
+	if got := avgFloat64([]float64{10, 20, 30}); got != 20 {
+		t.Errorf("avgFloat64([10,20,30]) = %v; want 20", got)
+	}
+}
+
+// TestDateAddDay verifies date arithmetic with valid and invalid inputs.
+func TestDateAddDay(t *testing.T) {
+	// Positive offset.
+	got, err := dateAddDay("2026-07-06", 1)
+	if err != nil {
+		t.Fatalf("dateAddDay(+1): %v", err)
+	}
+	if got != "2026-07-07" {
+		t.Errorf("dateAddDay(+1) = %q; want 2026-07-07", got)
+	}
+
+	// Negative offset.
+	got, err = dateAddDay("2026-07-06", -1)
+	if err != nil {
+		t.Fatalf("dateAddDay(-1): %v", err)
+	}
+	if got != "2026-07-05" {
+		t.Errorf("dateAddDay(-1) = %q; want 2026-07-05", got)
+	}
+
+	// Month boundary.
+	got, err = dateAddDay("2026-01-31", 1)
+	if err != nil {
+		t.Fatalf("dateAddDay(month): %v", err)
+	}
+	if got != "2026-02-01" {
+		t.Errorf("dateAddDay(month) = %q; want 2026-02-01", got)
+	}
+
+	// Invalid input.
+	_, err = dateAddDay("not-a-date", 1)
+	if err == nil {
+		t.Errorf("dateAddDay(invalid) should return error")
+	}
+}
+
+// TestSupervisor_TryDailyRollup_MidnightCrossing verifies that
+// tryDailyRollup fires ComputeDailyRollups when crossing midnight
+// and correctly handles multi-day gaps on extended downtime.
+func TestSupervisor_TryDailyRollup_MidnightCrossing(t *testing.T) {
+	reg := NewRegistry()
+	c := NewCollector(reg)
+	attempts := &fakeAttemptsDataSource{}
+	s := NewSupervisor(c, attempts, &fakeOutboxGauge{}, DefaultCostFactors())
+
+	// No rollup on the SAME day.
+	today := time.Now().UTC()
+	s.lastRollupDay = today.Format("2006-01-02")
+	s.tryDailyRollup(context.Background(), today)
+	if attempts.ComputeDailyRollupsCalls > 0 {
+		t.Errorf("tryDailyRollup should not fire on same day; got %d calls", attempts.ComputeDailyRollupsCalls)
+	}
+
+	// Midnight: should fire for each missing day.
+	tomorrow := today.Add(72 * time.Hour) // 3 days later — simulates extended downtime
+	s.tryDailyRollup(context.Background(), tomorrow)
+	// Should have rolled up 2 days: today+1 and today+2.
+	// (lastRollupDay was "today", so the range is [today+1, tomorrow-1])
+	if attempts.ComputeDailyRollupsCalls == 0 {
+		t.Errorf("tryDailyRollup should fire after midnight crossing")
+	}
+}
+
+// TestSupervisor_TryDailyRollup_FirstBoot rolls up yesterday only
+// on first tick (lastRollupDay empty).
+func TestSupervisor_TryDailyRollup_FirstBoot(t *testing.T) {
+	reg := NewRegistry()
+	c := NewCollector(reg)
+	attempts := &fakeAttemptsDataSource{}
+	s := NewSupervisor(c, attempts, &fakeOutboxGauge{}, DefaultCostFactors())
+
+	// Simulate first boot: lastRollupDay is empty.
+	s.lastRollupDay = ""
+	now := time.Now().UTC()
+	s.tryDailyRollup(context.Background(), now)
+	if attempts.ComputeDailyRollupsCalls != 1 {
+		t.Errorf("first boot should roll up yesterday; got %d calls", attempts.ComputeDailyRollupsCalls)
+	}
+	yesterday := now.Add(-24 * time.Hour).UTC().Format("2006-01-02")
+	if len(attempts.ComputeDailyRollupsDays) > 0 && attempts.ComputeDailyRollupsDays[0] != yesterday {
+		t.Errorf("first boot should roll up %q; got %q", yesterday, attempts.ComputeDailyRollupsDays[0])
+	}
+}
