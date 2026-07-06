@@ -27,19 +27,33 @@ type ProgressFunc func(percent int, scene, total int, stage string)
 // needed for operator-visible telemetry. We parse only what the
 // sidecar contract guarantees — unrecognised keys are silently ignored.
 type engineSidecar struct {
-	Frames         int64   `json:"frames"`
-	Fps            float64 `json:"fps"`
-	SpeedX         float64 `json:"speed_x"`
-	EncodePasses   int64   `json:"encode_passes"`
-	TempBytes      int64   `json:"temp_bytes"`
-	DurationSec    float64 `json:"duration_seconds"`
-	ConcatMode     string  `json:"concat_mode"`
-	TotalSize      int64   `json:"total_size"`
-	OutTimeUs      int64   `json:"out_time_us"`
-	OutTimeMs      int64   `json:"out_time_ms"`
-	Bitrate        float64 `json:"bitrate"`
-	DupFrames      int64   `json:"dup_frames"`
-	DropFrames     int64   `json:"drop_frames"`
+	Frames         int64              `json:"frames"`
+	Fps            float64            `json:"fps"`
+	SpeedX         float64            `json:"speed_x"`
+	EncodePasses   int64              `json:"encode_passes"`
+	TempBytes      int64              `json:"temp_bytes"`
+	DurationSec    float64            `json:"duration_seconds"`
+	ConcatMode     string             `json:"concat_mode"`
+	TotalSize      int64              `json:"total_size"`
+	OutTimeUs      int64              `json:"out_time_us"`
+	OutTimeMs      int64              `json:"out_time_ms"`
+	Bitrate        float64            `json:"bitrate"`
+	DupFrames      int64              `json:"dup_frames"`
+	DropFrames     int64              `json:"drop_frames"`
+	PhaseMS        map[string]float64 `json:"phase_ms,omitempty"`
+	Segments       []segmentTiming    `json:"segments,omitempty"`
+}
+
+// segmentTiming mirrors the C++ SegmentTiming struct emitted inside the
+// sidecar segments[] array.
+type segmentTiming struct {
+	Index           int64   `json:"index"`
+	WorkerIndex     int64   `json:"worker_index"`
+	SourceType      string  `json:"source_type"`
+	TotalMs         float64 `json:"total_ms"`
+	AssetDownloadMs float64 `json:"asset_download_ms"`
+	FfmpegEncodeMs  float64 `json:"ffmpeg_encode_ms"`
+	OutputBytes     int64   `json:"output_bytes"`
 }
 
 // RenderClient executes RenderPlans via the C++ video engine.
@@ -219,6 +233,7 @@ func (c *RenderClient) RenderWithMetrics(ctx context.Context, p *plan.RenderPlan
 		metrics.Bitrate = sidecar.Bitrate
 		metrics.DupFrames = sidecar.DupFrames
 		metrics.DropFrames = sidecar.DropFrames
+		metrics.PhaseMS = sidecar.PhaseMS
 	}
 
 	metrics.TotalMs = time.Since(start).Milliseconds()

@@ -169,6 +169,10 @@ func (s *SceneComposite) Execute(ctx context.Context, _ executor.ExecutionContex
 	metrics["engine.bitrate"] = runMetrics.RenderMetrics.Bitrate
 	metrics["engine.dup_frames"] = runMetrics.RenderMetrics.DupFrames
 	metrics["engine.drop_frames"] = runMetrics.RenderMetrics.DropFrames
+	// C++ engine phase-level timings from sidecar phase_ms
+	for k, v := range runMetrics.RenderMetrics.PhaseMS {
+		metrics["engine."+k] = v
+	}
 
 	// Compute output file hash and size for artifact metadata.
 	// Hash is mandatory per fix/artifact-metadata — dispatchTaskRunner

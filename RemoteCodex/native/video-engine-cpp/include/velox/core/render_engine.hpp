@@ -1,4 +1,5 @@
 #pragma once
+#include "velox/core/metrics.hpp"
 #include "velox/plan/render_plan.hpp"
 #include "velox/services/ffmpeg_progress_parser.hpp"
 
@@ -46,6 +47,11 @@ public:
     // Used by the sidecar writer to populate fps / speed / frame / time.
     services::EngineProgress lastEncodeProgress() const { return last_progress_; }
 
+    // Phase-level metric accumulator. Reset on every render() call;
+    // snapshots are read by emitSidecar().
+    EngineMetrics& metrics() { return metrics_; }
+    const EngineMetrics& metrics() const { return metrics_; }
+
     // Esegue il rendering completo del RenderPlan dato
     RenderResult render(const plan::RenderPlan& plan);
 
@@ -59,6 +65,7 @@ private:
     std::atomic<double> duration_seconds_{0.0};
     std::string concat_mode_{"reencode"};
     services::EngineProgress last_progress_{};
+    EngineMetrics metrics_;
 };
 
 } // namespace velox::core

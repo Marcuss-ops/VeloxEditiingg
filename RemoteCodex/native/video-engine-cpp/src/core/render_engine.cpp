@@ -3,6 +3,7 @@
 #include "velox/services/media_utils.hpp"
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -45,9 +46,6 @@ namespace {
         return ec ? 0 : static_cast<int64_t>(sz);
     }
 
-    // Helper to run an ffmpeg invocation through the progress-capturing
-    // wrapper when a callback is wired; otherwise fall back to runCommand.
-    // Returns true on ffmpeg 0 exit.
     bool runFfmpegSegmentWithProgress(
         const std::string& full_cmd,
         const services::ProgressCallback& cb,
@@ -72,9 +70,6 @@ namespace {
         return ok && exit_code == 0;
     }
 
-    // Build a per-segment ffmpeg command line, with `-progress pipe:1 -nostats`
-    // injected among the canonical global flags. Caller supplies ONLY the
-    // arg-builder output (no "ffmpeg " prefix).
     std::string composeSegmentCmd(const std::string& args_only) {
         return "ffmpeg -y -hide_banner -loglevel error -progress pipe:1 -nostats " + args_only;
     }
@@ -92,13 +87,12 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
     duration_seconds_.store(0.0);
     concat_mode_ = "reencode";
     last_progress_ = services::EngineProgress{};
+    metrics_.reset();
 
     const auto onProgress = progress_cb_;
     auto recordProgress = [this](const services::EngineProgress& p) {
         last_progress_ = p;
         if (p.frame > 0) {
-            // Each block carries cumulative frame (since stream start);
-            // take the LAST observed value as the high-water mark.
             int64_t cur = frames_encoded_.load();
             if (p.frame > cur) frames_encoded_.store(p.frame);
         }
@@ -117,10 +111,14 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
     reportProgress(0, "starting");
 
     fs::path workBase = fs::temp_directory_path() / "velox_video_engine_plan";
-    fs::path workDir = file::makeTempDir(workBase, "plan_job_");
-    if (workDir.empty()) {
-        result.error = "failed to create temp work dir";
-        return result;
+    fs::path workDir;
+    {
+        ScopedTimer t(metrics_, "workdir_create_ms");
+        workDir = file::makeTempDir(workBase, "plan_job_");
+        if (workDir.empty()) {
+            result.error = "failed to create temp work dir";
+            return result;
+        }
     }
 
     struct CleanupGuard {
@@ -153,27 +151,50 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
         const int64_t expected_us = static_cast<int64_t>(item.duration_seconds * 1'000'000.0);
         total_duration_seconds += item.duration_seconds;
 
+        // Per-segment timing record
+        SegmentTiming seg;
+        seg.index = i;
+        seg.worker_index = 0;
+        auto segStart = std::chrono::steady_clock::now();
+
         std::string args_only;
         if (std::holds_alternative<plan::ImageSource>(item.source)) {
+            seg.source_type = "image";
             auto src = std::get<plan::ImageSource>(item.source);
             fs::path localImg = workDir / ("image_" + std::to_string(i) + ".jpg");
-            bool gotImage = file::downloadAsset(src.url, localImg, src.cache_key);
+            bool gotImage;
+            auto dlStart = std::chrono::steady_clock::now();
+            {
+                ScopedTimer t(metrics_, "asset_download_ms");
+                gotImage = file::downloadAsset(src.url, localImg, src.cache_key);
+            }
+            seg.asset_download_ms = std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - dlStart).count();
             if (gotImage) {
                 args_only = media::buildSceneSegmentArgs(localImg, segmentOut, item.duration_seconds, params);
             } else {
-                std::string hex = extractColorHex(item.source); // empty string for ImageSource
+                std::string hex = extractColorHex(item.source);
                 args_only = media::buildColorSegmentArgs(segmentOut, item.duration_seconds, params, hex);
             }
         } else if (std::holds_alternative<plan::VideoSource>(item.source)) {
+            seg.source_type = "video";
             auto src = std::get<plan::VideoSource>(item.source);
             fs::path localVid = workDir / ("video_" + std::to_string(i) + ".mp4");
-            bool gotVid = file::downloadAsset(src.url, localVid, src.cache_key);
+            bool gotVid;
+            auto dlStart = std::chrono::steady_clock::now();
+            {
+                ScopedTimer t(metrics_, "asset_download_ms");
+                gotVid = file::downloadAsset(src.url, localVid, src.cache_key);
+            }
+            seg.asset_download_ms = std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - dlStart).count();
             if (!gotVid) {
                 result.error = "failed to download video source for segment " + std::to_string(i);
                 return result;
             }
             args_only = media::buildVideoSegmentArgs(localVid, segmentOut, item.duration_seconds, params);
         } else if (std::holds_alternative<plan::ColorSource>(item.source)) {
+            seg.source_type = "color";
             auto color = std::get<plan::ColorSource>(item.source);
             args_only = media::buildColorSegmentArgs(segmentOut, item.duration_seconds, params, color.color_hex);
         }
@@ -183,16 +204,28 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
             return result;
         }
 
-        bool built = runFfmpegSegmentWithProgress(
-            composeSegmentCmd(args_only), wrapped_cb, expected_us);
-        if (!built) {
-            result.error = "failed to build timeline segment " + std::to_string(i);
-            return result;
+        {
+            auto encStart = std::chrono::steady_clock::now();
+            ScopedTimer t(metrics_, "segment_build_ms");
+            bool built = runFfmpegSegmentWithProgress(
+                composeSegmentCmd(args_only), wrapped_cb, expected_us);
+            if (!built) {
+                result.error = "failed to build timeline segment " + std::to_string(i);
+                return result;
+            }
+            seg.ffmpeg_encode_ms = std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - encStart).count();
         }
 
         encode_passes_.fetch_add(1);
-        temp_bytes_written_.fetch_add(fileSize(segmentOut));
+        const int64_t segBytes = fileSize(segmentOut);
+        temp_bytes_written_.fetch_add(segBytes);
         segmentPaths.push_back(segmentOut);
+
+        seg.output_bytes = segBytes;
+        seg.total_ms = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - segStart).count();
+        metrics_.addSegment(seg);
 
         int pct = 10 + static_cast<int>((static_cast<double>(i + 1) / plan.timeline.size()) * 60);
         reportProgress(pct, "building_segments");
@@ -205,9 +238,12 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
     // 2. Concatenate video segments
     reportProgress(75, "concatenating");
     fs::path videoOnly = workDir / "video_only.mp4";
-    if (!media::concatSegments(segmentPaths, videoOnly, workDir)) {
-        result.error = "failed to concatenate video segments";
-        return result;
+    {
+        ScopedTimer t(metrics_, "concat_ms");
+        if (!media::concatSegments(segmentPaths, videoOnly, workDir)) {
+            result.error = "failed to concatenate video segments";
+            return result;
+        }
     }
     temp_bytes_written_.fetch_add(fileSize(videoOnly));
     concat_mode_ = "stream_copy";
@@ -216,20 +252,26 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
     reportProgress(85, "muxing_audio");
     if (!plan.audio_tracks.empty()) {
         std::vector<std::pair<fs::path, const plan::AudioTrack*>> downloadedTracks;
-        for (size_t t = 0; t < plan.audio_tracks.size(); ++t) {
-            const auto& track = plan.audio_tracks[t];
-            fs::path localAudio = workDir / ("audio_track_" + std::to_string(t) + ".m4a");
-            if (file::downloadAsset(track.source_url, localAudio)) {
-                downloadedTracks.emplace_back(localAudio, &track);
-            } else {
-                std::cerr << "warning: failed to download audio track " << t << "\n";
+        {
+            ScopedTimer t(metrics_, "audio_download_ms");
+            for (size_t t = 0; t < plan.audio_tracks.size(); ++t) {
+                const auto& track = plan.audio_tracks[t];
+                fs::path localAudio = workDir / ("audio_track_" + std::to_string(t) + ".m4a");
+                if (file::downloadAsset(track.source_url, localAudio)) {
+                    downloadedTracks.emplace_back(localAudio, &track);
+                } else {
+                    std::cerr << "warning: failed to download audio track " << t << "\n";
+                }
             }
         }
 
         if (downloadedTracks.empty()) {
             std::cerr << "warning: no audio tracks downloaded, exporting video without audio\n";
             std::error_code ec;
-            fs::copy_file(videoOnly, outPath, fs::copy_options::overwrite_existing, ec);
+            {
+                ScopedTimer t(metrics_, "copy_final_ms");
+                fs::copy_file(videoOnly, outPath, fs::copy_options::overwrite_existing, ec);
+            }
             if (ec) {
                 result.error = "failed to copy final output (no audio)";
                 return result;
@@ -239,9 +281,17 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
             fs::path finalMuxed = workDir / "final_muxed.mp4";
             double vol = downloadedTracks[0].second->volume;
             double offset = downloadedTracks[0].second->start_time_offset;
-            if (media::muxAudio(videoOnly, downloadedTracks[0].first, finalMuxed, vol, offset)) {
+            bool muxOk;
+            {
+                ScopedTimer t(metrics_, "mux_audio_ms");
+                muxOk = media::muxAudio(videoOnly, downloadedTracks[0].first, finalMuxed, vol, offset);
+            }
+            if (muxOk) {
                 std::error_code ec;
-                fs::copy_file(finalMuxed, outPath, fs::copy_options::overwrite_existing, ec);
+                {
+                    ScopedTimer tCopy(metrics_, "copy_final_ms");
+                    fs::copy_file(finalMuxed, outPath, fs::copy_options::overwrite_existing, ec);
+                }
                 if (ec) {
                     result.error = "failed to copy final output";
                     return result;
@@ -284,9 +334,17 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
 
             if (file::runCommand(mixCmd.str())) {
                 fs::path finalMuxed = workDir / "final_muxed.mp4";
-                if (media::muxAudio(videoOnly, mixedAudio, finalMuxed)) {
+                bool muxOk;
+                {
+                    ScopedTimer t(metrics_, "mux_audio_ms");
+                    muxOk = media::muxAudio(videoOnly, mixedAudio, finalMuxed);
+                }
+                if (muxOk) {
                     std::error_code ec;
-                    fs::copy_file(finalMuxed, outPath, fs::copy_options::overwrite_existing, ec);
+                    {
+                        ScopedTimer tCopy(metrics_, "copy_final_ms");
+                        fs::copy_file(finalMuxed, outPath, fs::copy_options::overwrite_existing, ec);
+                    }
                     if (ec) {
                         result.error = "failed to copy final output";
                         return result;
@@ -300,7 +358,10 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
             } else {
                 std::cerr << "warning: audio mix failed, exporting video without audio\n";
                 std::error_code ec;
-                fs::copy_file(videoOnly, outPath, fs::copy_options::overwrite_existing, ec);
+                {
+                    ScopedTimer t(metrics_, "copy_final_ms");
+                    fs::copy_file(videoOnly, outPath, fs::copy_options::overwrite_existing, ec);
+                }
                 if (ec) {
                     result.error = "failed to copy final output (mix failed)";
                     return result;
@@ -310,7 +371,10 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
         }
     } else {
         std::error_code ec;
-        fs::copy_file(videoOnly, outPath, fs::copy_options::overwrite_existing, ec);
+        {
+            ScopedTimer t(metrics_, "copy_final_ms");
+            fs::copy_file(videoOnly, outPath, fs::copy_options::overwrite_existing, ec);
+        }
         if (ec) {
             result.error = "failed to copy final output (no audio tracks)";
             return result;
@@ -356,6 +420,40 @@ void RenderEngine::emitSidecar(const std::string& output_path) const {
     s << ",\"bitrate\":" << last.bitrate;
     s << ",\"duration_seconds\":" << duration_seconds_.load();
     s << ",\"output_path\":\"" << escapeProgressJsonString(outPath.string()) << "\"";
+
+    // ── Phase-level timings ────────────────────────────────────
+    s << ",\"phase_ms\":{";
+    {
+        auto pm = metrics_.phaseSnapshot();
+        bool first = true;
+        for (const auto& [name, ms] : pm) {
+            if (!first) s << ",";
+            first = false;
+            s << "\"" << name << "\":" << ms;
+        }
+    }
+    s << "}";
+
+    // ── Per-segment timing records ──────────────────────────────
+    s << ",\"segments\":[";
+    {
+        auto segs = metrics_.segmentsSnapshot();
+        for (size_t i = 0; i < segs.size(); ++i) {
+            if (i > 0) s << ",";
+            const auto& seg = segs[i];
+            s << "{";
+            s << "\"index\":" << seg.index;
+            s << ",\"worker_index\":" << seg.worker_index;
+            s << ",\"source_type\":\"" << seg.source_type << "\"";
+            s << ",\"total_ms\":" << seg.total_ms;
+            s << ",\"asset_download_ms\":" << seg.asset_download_ms;
+            s << ",\"ffmpeg_encode_ms\":" << seg.ffmpeg_encode_ms;
+            s << ",\"output_bytes\":" << seg.output_bytes;
+            s << "}";
+        }
+    }
+    s << "]";
+
     s << "}";
 
     if (!services::SidecarWriter::writeAtomic(sidecar, s.str())) {

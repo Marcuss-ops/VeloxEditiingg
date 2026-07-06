@@ -37,6 +37,10 @@ type RenderMetrics struct {
 	ProcessStartMs int64
 	ProcessWaitMs  int64
 	TotalMs        int64
+	// PhaseMS carries the per-phase engine timings from the C++ sidecar
+	// (engine.asset_download, engine.segment_build, engine.concat, …).
+	// Nil when no sidecar was read.
+	PhaseMS map[string]float64
 }
 
 // RenderClient exposes the underlying render client so callers outside
