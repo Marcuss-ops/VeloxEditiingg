@@ -117,6 +117,12 @@ type Collector struct {
 	// low-cardinality enums (CanonicalErrorComponents / CanonicalErrorPhases).
 	errorClassification *Family // velox_error_classification_total
 
+	// Waste/cost metrics (Scorecard v2 / Step 17).
+	// Single counter family with label {waste_type} for aggregate
+	// waste tracking. waste_type ∈ {retry_count, wasted_cpu_ms,
+	// wasted_download_bytes, wasted_cost_estimate}.
+	wasteTotal *Family // velox_waste_total
+
 	// Compute outcomes — SPEC §14: ONE family classified by outcome,
 	// plus a sibling family for failure-reason attribution. Outcomes:
 	// useful | failed | cancelled | stale | speculative_lost.
@@ -381,6 +387,12 @@ func NewCollector(reg *Registry) *Collector {
 		[]string{"error_code", "component", "phase"},
 	)
 
+	c.wasteTotal = NewCounterFamily(
+		"velox_waste_total",
+		"Waste/cost totals by type (retry_count, wasted_cpu_ms, wasted_download_bytes, wasted_cost_estimate)",
+		[]string{"waste_type"},
+	)
+
 	c.conflictStreakLength = NewHistogramFamily(
 		"velox_conflict_streak_length",
 		"Distribution of consecutive-conflict streak lengths observed on the attempt_commits CAS path",
@@ -446,6 +458,7 @@ func (c *Collector) allFamilies() []*Family {
 		c.commitDeadlineExceeded,
 		c.placementRejections,
 		c.errorClassification,
+		c.wasteTotal,
 		c.conflictStreakReset,
 		c.conflictEscalations,
 		c.conflictStayedUnder,
@@ -993,6 +1006,16 @@ func (c *Collector) RecordErrorClassification(errorCode, component, phase string
 		phase = "unknown"
 	}
 	c.errorClassification.Inc([]string{errorCode, component, phase}, 1)
+}
+
+// ── Waste/cost metrics (Scorecard v2 / Step 17) ──────────────────────────
+
+// RecordWaste increments velox_waste_total for a single waste type.
+// wasteType is one of: "retry_count", "wasted_cpu_ms",
+// "wasted_download_bytes", "wasted_cost_estimate".
+// value is the absolute value to increment (counter).
+func (c *Collector) RecordWaste(wasteType string, value uint64) {
+	c.wasteTotal.Inc([]string{wasteType}, value)
 }
 
 // ── Engine phase + segment timing (Scorecard v2 / Step 7) ────────────────

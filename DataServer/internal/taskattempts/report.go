@@ -151,6 +151,12 @@ type AttemptMetrics struct {
 	ErrorPhase        string `json:"error_phase,omitempty"`
 	ErrorRetryable    bool   `json:"error_retryable"`
 	ErrorMessageHash  string `json:"error_message_hash,omitempty"`
+
+	// Scorecard v2 / Step 17: waste/cost attribution.
+	RetryCount          int64   `json:"retry_count"`
+	WastedCPUMS         int64   `json:"wasted_cpu_ms"`
+	WastedDownloadBytes int64   `json:"wasted_download_bytes"`
+	WastedCostEstimate  float64 `json:"wasted_cost_estimate"`
 }
 
 // AttemptCacheStats is the per-attempt cache snapshot extracted from the

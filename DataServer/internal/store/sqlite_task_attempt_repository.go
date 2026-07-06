@@ -406,9 +406,11 @@ func (r *SQLiteTaskAttemptRepository) PersistMetrics(ctx context.Context, metric
 			scene_count, segment_count, total_input_duration_sec,
 			resolution_width, resolution_height, fps,
 			audio_track_count, subtitle_count, template_id,
-			error_component, error_phase,
-			error_retryable, error_message_hash
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+		error_component, error_phase,
+		error_retryable, error_message_hash,
+		retry_count, wasted_cpu_ms, wasted_download_bytes,
+		wasted_cost_estimate
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 		          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 		          ?, ?, ?, ?, ?, ?, ?,
 		          ?, ?, ?, ?, ?, ?,
@@ -446,6 +448,8 @@ func (r *SQLiteTaskAttemptRepository) PersistMetrics(ctx context.Context, metric
 		metrics.AudioTrackCount, metrics.SubtitleCount, metrics.TemplateID,
 		metrics.ErrorComponent, metrics.ErrorPhase,
 		errorRetryable, metrics.ErrorMessageHash,
+		metrics.RetryCount, metrics.WastedCPUMS, metrics.WastedDownloadBytes,
+		metrics.WastedCostEstimate,
 	)
 	if err != nil {
 		return fmt.Errorf("metrics persist: %w", err)
@@ -664,7 +668,9 @@ func (r *SQLiteTaskAttemptRepository) GetMetrics(ctx context.Context, attemptID 
 		        resolution_width, resolution_height, fps,
 		        audio_track_count, subtitle_count, template_id,
 		        error_component, error_phase,
-		        error_retryable, error_message_hash
+		        error_retryable, error_message_hash,
+		        retry_count, wasted_cpu_ms, wasted_download_bytes,
+		        wasted_cost_estimate
 		 FROM task_attempt_metrics WHERE attempt_id = ?`,
 		attemptID,
 	)
@@ -702,6 +708,8 @@ func (r *SQLiteTaskAttemptRepository) GetMetrics(ctx context.Context, attemptID 
 		&m.AudioTrackCount, &m.SubtitleCount, &m.TemplateID,
 		&m.ErrorComponent, &m.ErrorPhase,
 		&errorRetryable, &m.ErrorMessageHash,
+		&m.RetryCount, &m.WastedCPUMS, &m.WastedDownloadBytes,
+		&m.WastedCostEstimate,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil

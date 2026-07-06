@@ -984,13 +984,16 @@ func (r *SQLiteTaskRepository) IngestTaskResultAtomic(ctx context.Context, cmd t
 				resolution_width, resolution_height, fps,
 				audio_track_count, subtitle_count, template_id,
 				error_component, error_phase,
-				error_retryable, error_message_hash
+				error_retryable, error_message_hash,
+				retry_count, wasted_cpu_ms, wasted_download_bytes,
+				wasted_cost_estimate
 			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			          ?, ?, ?, ?, ?, ?, ?,
 			          ?, ?, ?, ?, ?, ?, ?, ?,
 			          ?, ?, ?, ?, ?,
 			          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+			          ?, ?, ?, ?,
 			          ?, ?, ?, ?)`,
 			cmd.Metrics.AttemptID, cmd.Metrics.InputBytes, cmd.Metrics.OutputBytes,
 			cmd.Metrics.BytesFromDrive, cmd.Metrics.BytesFromBlobstore, cmd.Metrics.BytesFromLocalCache,
@@ -1015,6 +1018,8 @@ func (r *SQLiteTaskRepository) IngestTaskResultAtomic(ctx context.Context, cmd t
 			cmd.Metrics.AudioTrackCount, cmd.Metrics.SubtitleCount, cmd.Metrics.TemplateID,
 			cmd.Metrics.ErrorComponent, cmd.Metrics.ErrorPhase,
 			errorRetryable, cmd.Metrics.ErrorMessageHash,
+			cmd.Metrics.RetryCount, cmd.Metrics.WastedCPUMS,
+			cmd.Metrics.WastedDownloadBytes, cmd.Metrics.WastedCostEstimate,
 		)
 		if err != nil {
 			return fmt.Errorf("task ingest atomic metrics: %w", err)

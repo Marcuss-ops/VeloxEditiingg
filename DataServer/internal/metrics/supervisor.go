@@ -610,7 +610,9 @@ func (r *SQLiteLabelResolver) GetMetrics(ctx context.Context, attemptID string) 
 		       resolution_width, resolution_height, fps,
 		       audio_track_count, subtitle_count, template_id,
 		       error_component, error_phase,
-		       error_retryable, error_message_hash
+		       error_retryable, error_message_hash,
+		       retry_count, wasted_cpu_ms, wasted_download_bytes,
+		       wasted_cost_estimate
 		FROM task_attempt_metrics WHERE attempt_id = ?`,
 		attemptID,
 	).Scan(
@@ -637,6 +639,8 @@ func (r *SQLiteLabelResolver) GetMetrics(ctx context.Context, attemptID string) 
 		&m.AudioTrackCount, &m.SubtitleCount, &m.TemplateID,
 		&m.ErrorComponent, &m.ErrorPhase,
 		&errorRetryable, &m.ErrorMessageHash,
+		&m.RetryCount, &m.WastedCPUMS, &m.WastedDownloadBytes,
+		&m.WastedCostEstimate,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
