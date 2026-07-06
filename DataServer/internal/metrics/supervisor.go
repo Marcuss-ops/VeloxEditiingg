@@ -64,6 +64,10 @@ type AttemptsDataSource interface {
 	GetMetrics(ctx context.Context, attemptID string) (*taskattempts.AttemptMetrics, error)
 	GetCacheStats(ctx context.Context, attemptID string) (*taskattempts.AttemptCacheStats, error)
 	GetCostBasis(ctx context.Context, attemptID string) (*taskattempts.AttemptCostBasis, error)
+	// Scorecard v2: detailed engine phase + segment timings for the
+	// per-phase/per-segment Prometheus histograms.
+	GetPhaseTimingsDetailed(ctx context.Context, attemptID string) ([]taskattempts.PhaseTimingDetailed, error)
+	GetSegmentTimings(ctx context.Context, attemptID string) ([]taskattempts.SegmentTiming, error)
 }
 
 // OutboxGauge is the minimal contract the supervisor needs from the
@@ -267,6 +271,47 @@ func (s *Supervisor) tickOnce(ctx context.Context, now time.Time) error {
 		if scanErr := s.collector.ScanAttemptWithLabels(ctx, s.attempts, id, execID, execVer, workerClass); scanErr != nil {
 			// Element-scoped: log once, skip aggregation.
 			log.Printf("[METRICS-SUPERVISOR] scan %s: %v", id, scanErr)
+		}
+
+		// 2a-bis. Scorecard v2: stamp engine phase + segment
+		// timings onto the per-phase and per-segment histograms.
+		// Prefer detailed phase rows (component.action → duration)
+		// from the extended task_phase_timings table; fall back to
+		// the aggregate columns in AttemptMetrics only when no
+		// detailed rows exist (older attempts predating migration
+		// 070).  worker_id comes from the timing rows themselves.
+		hasDetailed := false
+		if pts, ptErr := s.attempts.GetPhaseTimingsDetailed(ctx, id); ptErr == nil && len(pts) > 0 {
+			hasDetailed = true
+			for _, pt := range pts {
+				wid := pt.WorkerID
+				if wid == "" {
+					wid = "unknown"
+				}
+				s.collector.RecordEnginePhase(pt, execID, wid)
+			}
+		} else if ptErr != nil {
+			log.Printf("[METRICS-SUPERVISOR] phase timings %s: %v", id, ptErr)
+		}
+		// Fall back to aggregate columns only when no detailed rows exist.
+		if !hasDetailed {
+			if am, amErr := s.attempts.GetMetrics(ctx, id); amErr == nil && am != nil {
+				wid := "unknown"
+				// Try to get worker_id from segment rows (the
+				// aggregate columns don't carry worker_id).
+				s.collector.RecordEngineAggregate(am, execID, wid)
+			}
+		}
+		if segs, segErr := s.attempts.GetSegmentTimings(ctx, id); segErr == nil {
+			for _, seg := range segs {
+				wid := seg.WorkerID
+				if wid == "" {
+					wid = "unknown"
+				}
+				s.collector.RecordEngineSegment(seg, execID, wid)
+			}
+		} else {
+			log.Printf("[METRICS-SUPERVISOR] segment timings %s: %v", id, segErr)
 		}
 
 		// 2b. Cost aggregation: read AttemptCostBasis and roll
@@ -614,4 +659,82 @@ func (r *SQLiteLabelResolver) GetCostBasis(ctx context.Context, attemptID string
 	}
 	b.Compute()
 	return &b, nil
+}
+
+// GetPhaseTimingsDetailed returns all detailed phase timing rows for an
+// attempt from the extended task_phase_timings table (migration 070).
+// Returns an empty slice when no rows exist (not an error — older
+// attempts predating migration 070 have no detailed rows).
+func (r *SQLiteLabelResolver) GetPhaseTimingsDetailed(ctx context.Context, attemptID string) ([]taskattempts.PhaseTimingDetailed, error) {
+	if attemptID == "" {
+		return nil, nil
+	}
+	rows, err := r.DB.QueryContext(ctx, `
+		SELECT attempt_id, phase, duration_ms, wall_start, wall_end,
+		       phase_order, component, action,
+		       status, error_code, error_message,
+		       bytes_in, bytes_out, frames, metadata_json
+		FROM task_phase_timings WHERE attempt_id = ? ORDER BY phase_order ASC, wall_start ASC`,
+		attemptID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("supervisor: get phase timings detailed: %w", err)
+	}
+	defer rows.Close()
+
+	var results []taskattempts.PhaseTimingDetailed
+	for rows.Next() {
+		var pt taskattempts.PhaseTimingDetailed
+		pt.AttemptID = attemptID
+		var wallStart, wallEnd string
+		var phase string
+		if err := rows.Scan(&pt.AttemptID, &phase, &pt.DurationMS, &wallStart, &wallEnd,
+			&pt.PhaseOrder, &pt.Component, &pt.Action,
+			&pt.Status, &pt.ErrorCode, &pt.ErrorMessage,
+			&pt.BytesIn, &pt.BytesOut, &pt.Frames, &pt.MetadataJSON); err != nil {
+			continue
+		}
+		pt.StartedAt, _ = time.Parse(time.RFC3339, wallStart)
+		pt.CompletedAt, _ = time.Parse(time.RFC3339, wallEnd)
+		results = append(results, pt)
+	}
+	return results, rows.Err()
+}
+
+// GetSegmentTimings returns all segment timing rows for an attempt from
+// the task_attempt_segment_timings table (migration 070). Returns an
+// empty slice when no rows exist.
+func (r *SQLiteLabelResolver) GetSegmentTimings(ctx context.Context, attemptID string) ([]taskattempts.SegmentTiming, error) {
+	if attemptID == "" {
+		return nil, nil
+	}
+	rows, err := r.DB.QueryContext(ctx, `
+		SELECT attempt_id, job_id, task_id, worker_id,
+		       segment_index, scene_worker_index, source_type,
+		       duration_ms, asset_download_ms, ffmpeg_encode_ms,
+		       source_bytes, output_bytes, frames_encoded,
+		       codec, preset, ffmpeg_threads,
+		       status, error_code, error_message, metadata_json
+		FROM task_attempt_segment_timings WHERE attempt_id = ? ORDER BY segment_index ASC`,
+		attemptID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("supervisor: get segment timings: %w", err)
+	}
+	defer rows.Close()
+
+	var results []taskattempts.SegmentTiming
+	for rows.Next() {
+		var seg taskattempts.SegmentTiming
+		if err := rows.Scan(&seg.AttemptID, &seg.JobID, &seg.TaskID, &seg.WorkerID,
+			&seg.SegmentIndex, &seg.SceneWorkerIndex, &seg.SourceType,
+			&seg.DurationMS, &seg.AssetDownloadMS, &seg.FfmpegEncodeMS,
+			&seg.SourceBytes, &seg.OutputBytes, &seg.FramesEncoded,
+			&seg.Codec, &seg.Preset, &seg.FfmpegThreads,
+			&seg.Status, &seg.ErrorCode, &seg.ErrorMessage, &seg.MetadataJSON); err != nil {
+			continue
+		}
+		results = append(results, seg)
+	}
+	return results, rows.Err()
 }

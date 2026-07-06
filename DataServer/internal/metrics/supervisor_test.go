@@ -134,6 +134,14 @@ func (f *fakeAttemptsDataSource) GetCostBasis(ctx context.Context, attemptID str
 	return nil, nil
 }
 
+func (f *fakeAttemptsDataSource) GetPhaseTimingsDetailed(ctx context.Context, attemptID string) ([]taskattempts.PhaseTimingDetailed, error) {
+	return nil, nil
+}
+
+func (f *fakeAttemptsDataSource) GetSegmentTimings(ctx context.Context, attemptID string) ([]taskattempts.SegmentTiming, error) {
+	return nil, nil
+}
+
 var _ AttemptsDataSource = (*fakeAttemptsDataSource)(nil)
 
 // fakeOutboxGauge returns a fixed count. Records the call count so

@@ -56,6 +56,48 @@ A sibling counter family tracks failure-reason attribution:
 (`reason` is a CLOSED enum: the worker emits `worker.Code*`
 constants; free-form reason strings MUST NOT land in dashboards.)
 
+## Engine phase + segment timing (Scorecard v2 / Step 7)
+
+Two new histogram families capture per-phase and per-segment durations
+from the C++ engine sidecar and Go pipeline runner:
+
+  `velox_engine_phase_duration_seconds{executor_id, worker_id, phase, status}`
+  `velox_engine_segment_duration_seconds{executor_id, worker_id, source_type, status}`
+
+Cardinality discipline: NO job_id / task_id / attempt_id labels.
+The `worker_id` dimension is bounded by the fleet size (hundreds,
+not millions). Phases use dotted `component.action` names:
+
+  pipeline.resolve, pipeline.validate, pipeline.compile,
+  pipeline.render, native.total, native.process_wait,
+  engine.asset_download, engine.segment_build, engine.concat,
+  engine.audio_download, engine.mux_audio, engine.copy_final
+
+Segment `source_type` values mirror the C++ segment variant labels
+(clip, color, image, audio, concat, etc.).
+
+Buckets are sub-second granular for fast engine phases:
+
+  [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30]
+
+### Straggler detection surface
+
+The segment histogram supports time-series straggler detection via
+`histogram_quantile(0.99, ...)` grouped by `source_type`. For SQL
+point-in-time analysis, see `prometheus/engine-analysis.sql` — it
+contains queries for:
+
+  - Historical phase trends (p50/p95/p99 by hour/day)
+  - Slowest workers (by avg engine total time, per-worker phase breakdown)
+  - Straggler segments (5× baseline multiplier)
+  - Per-source-type straggler distribution
+
+### Grafana dashboard
+
+`dashboards/engine-metrics.json` — phase p95 by phase name, per-phase
+p50/p95/p99 spread, heatmap, segment p95 by source_type, top-5 workers
+by p95, and phase failure rate.
+
 ## Migration window
 
 The 4 retired split-out family names

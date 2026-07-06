@@ -149,6 +149,15 @@ type Collector struct {
 	// (e.g. capacity_full, unsupported_executor, missing_capability).
 	placementRejections *Family // velox_placement_rejections_total{reason}
 
+	// Engine phase timing histograms (Scorecard v2 / Step 7).
+	// Two histogram families capture per-phase and per-segment
+	// durations from the C++ engine sidecar and Go pipeline.
+	// Labels: executor_id, worker_id, phase, status (phase histogram)
+	//         executor_id, worker_id, source_type, status (segment histogram)
+	// NO job_id/task_id/attempt_id for cardinality reasons.
+	enginePhaseDurations   *Family // velox_engine_phase_duration_seconds
+	engineSegmentDurations *Family // velox_engine_segment_duration_seconds
+
 	// ConflictBudget (spec §14 Blocco 5) instrumentation. Three
 	// counters + one histogram capture the consecutive-err
 	// conflict path on the canonical attempt_commits CAS surface
@@ -366,6 +375,23 @@ func NewCollector(reg *Registry) *Collector {
 		[]float64{1, 2, 3, 5, 10},
 	)
 
+	// Engine phase timing histograms (Scorecard v2 / Step 7).
+	// Granular sub-second buckets because engine phases are fast
+	// (asset download, ffmpeg encode, concat, etc.).
+	enginePhaseBuckets := []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30}
+	c.enginePhaseDurations = NewHistogramFamily(
+		"velox_engine_phase_duration_seconds",
+		"Per-phase duration in seconds for C++ engine and Go pipeline phases",
+		[]string{"executor_id", "worker_id", "phase", "status"},
+		enginePhaseBuckets,
+	)
+	c.engineSegmentDurations = NewHistogramFamily(
+		"velox_engine_segment_duration_seconds",
+		"Per-segment duration in seconds from the C++ engine sidecar segments[]",
+		[]string{"executor_id", "worker_id", "source_type", "status"},
+		enginePhaseBuckets,
+	)
+
 	c.lastSeen = make(map[string]time.Time)
 
 	for _, f := range c.allFamilies() {
@@ -410,6 +436,8 @@ func (c *Collector) allFamilies() []*Family {
 		c.conflictEscalations,
 		c.conflictStayedUnder,
 		c.conflictStreakLength,
+		c.enginePhaseDurations,
+		c.engineSegmentDurations,
 	}
 }
 
@@ -745,6 +773,11 @@ func (c *Collector) ScanAttemptWithLabels(
 	}
 	c.RecordAttempt(*am, cache, cb, execID, execVer, workerClass)
 	c.RecordAttemptOutcome(status, "", am.CPUTimeMS)
+	// Scorecard v2: engine-aggregate phase columns are stamped by
+	// the supervisor tick (tickOnce) which prefers detailed phase
+	// rows and falls back to the aggregate columns only when no
+	// detailed rows exist for the attempt.  This avoids double-
+	// counting on the velox_engine_phase_duration_seconds histogram.
 	return nil
 }
 
@@ -925,4 +958,98 @@ func (c *Collector) EscalateConflictBudget(streak int) {
 	}
 	c.conflictEscalations.Inc([]string{}, 1)
 	c.conflictStreakLength.Observe([]string{}, float64(streak))
+}
+
+// ── Engine phase + segment timing (Scorecard v2 / Step 7) ────────────────
+
+// RecordEngineAggregate ingests the engine-aggregate phase columns from
+// an AttemptMetrics row into the engine phase histogram (dotted phase
+// names like "pipeline.resolve", "engine.asset_download"). Called from
+// ScanAttemptWithLabels after the existing RecordAttempt path, so the
+// per-phase histogram captures the same attempt→phase→duration mapping
+// that operators query in SQL.
+func (c *Collector) RecordEngineAggregate(am *taskattempts.AttemptMetrics, execID, workerID string) {
+	if am == nil {
+		return
+	}
+	// Pipeline phases.
+	if am.PipelineResolveMs > 0 {
+		c.enginePhaseDurations.Observe([]string{execID, workerID, "pipeline.resolve", "ok"}, float64(am.PipelineResolveMs)/1000)
+	}
+	if am.PipelineValidateMs > 0 {
+		c.enginePhaseDurations.Observe([]string{execID, workerID, "pipeline.validate", "ok"}, float64(am.PipelineValidateMs)/1000)
+	}
+	if am.PipelineCompileMs > 0 {
+		c.enginePhaseDurations.Observe([]string{execID, workerID, "pipeline.compile", "ok"}, float64(am.PipelineCompileMs)/1000)
+	}
+	if am.PipelineRenderMs > 0 {
+		c.enginePhaseDurations.Observe([]string{execID, workerID, "pipeline.render", "ok"}, float64(am.PipelineRenderMs)/1000)
+	}
+	if am.PipelineTotalMs > 0 {
+		c.enginePhaseDurations.Observe([]string{execID, workerID, "pipeline.total", "ok"}, float64(am.PipelineTotalMs)/1000)
+	}
+	// Native process.
+	if am.NativeTotalMs > 0 {
+		c.enginePhaseDurations.Observe([]string{execID, workerID, "native.total", "ok"}, float64(am.NativeTotalMs)/1000)
+	}
+	if am.NativeProcessWaitMs > 0 {
+		c.enginePhaseDurations.Observe([]string{execID, workerID, "native.process_wait", "ok"}, float64(am.NativeProcessWaitMs)/1000)
+	}
+	// Engine phases.
+	if am.EngineAssetDownloadMs > 0 {
+		c.enginePhaseDurations.Observe([]string{execID, workerID, "engine.asset_download", "ok"}, float64(am.EngineAssetDownloadMs)/1000)
+	}
+	if am.EngineSegmentBuildMs > 0 {
+		c.enginePhaseDurations.Observe([]string{execID, workerID, "engine.segment_build", "ok"}, float64(am.EngineSegmentBuildMs)/1000)
+	}
+	if am.EngineConcatMs > 0 {
+		c.enginePhaseDurations.Observe([]string{execID, workerID, "engine.concat", "ok"}, float64(am.EngineConcatMs)/1000)
+	}
+	if am.EngineAudioDownloadMs > 0 {
+		c.enginePhaseDurations.Observe([]string{execID, workerID, "engine.audio_download", "ok"}, float64(am.EngineAudioDownloadMs)/1000)
+	}
+	if am.EngineMuxAudioMs > 0 {
+		c.enginePhaseDurations.Observe([]string{execID, workerID, "engine.mux_audio", "ok"}, float64(am.EngineMuxAudioMs)/1000)
+	}
+	if am.EngineCopyFinalMs > 0 {
+		c.enginePhaseDurations.Observe([]string{execID, workerID, "engine.copy_final", "ok"}, float64(am.EngineCopyFinalMs)/1000)
+	}
+}
+
+// RecordEnginePhase ingests a single detailed phase timing row into the
+// engine phase histogram. Called from the supervisor tick for rows
+// returned by GetPhaseTimingsDetailed. The phase label is the dotted
+// component.action name (mirrors the DB insertion convention).
+func (c *Collector) RecordEnginePhase(pt taskattempts.PhaseTimingDetailed, execID, workerID string) {
+	if pt.DurationMS <= 0 {
+		return
+	}
+	phase := pt.Component + "." + pt.Action
+	if phase == "." {
+		return
+	}
+	status := pt.Status
+	if status == "" {
+		status = "ok"
+	}
+	c.enginePhaseDurations.Observe([]string{execID, workerID, phase, status}, float64(pt.DurationMS)/1000)
+}
+
+// RecordEngineSegment ingests a single segment timing row into the
+// engine segment histogram. Called from the supervisor tick for rows
+// returned by GetSegmentTimings. source_type is the segment type
+// (clip, color, image, audio, etc.).
+func (c *Collector) RecordEngineSegment(seg taskattempts.SegmentTiming, execID, workerID string) {
+	if seg.DurationMS <= 0 {
+		return
+	}
+	sourceType := seg.SourceType
+	if sourceType == "" {
+		sourceType = "unknown"
+	}
+	status := seg.Status
+	if status == "" {
+		status = "ok"
+	}
+	c.engineSegmentDurations.Observe([]string{execID, workerID, sourceType, status}, seg.DurationMS/1000)
 }
