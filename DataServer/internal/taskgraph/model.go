@@ -98,4 +98,11 @@ type IngestResultCommand struct {
 	CacheStats    taskattempts.AttemptCacheStats
 	CostBasis     taskattempts.AttemptCostBasis
 	Artifacts     []taskoutput_artifacts.OutputArtifact
+	// Scorecard v2 / Step 8: software versioning from the worker report.
+	GitSHA            string
+	WorkerVersion     string
+	EngineVersion     string
+	FFmpegVersion     string
+	ConfigHash        string
+	DockerImageDigest string
 }

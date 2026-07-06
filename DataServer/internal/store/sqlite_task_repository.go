@@ -896,6 +896,27 @@ func (r *SQLiteTaskRepository) IngestTaskResultAtomic(ctx context.Context, cmd t
 		// metrics/cache/cost/artifact writes below.
 	}
 
+	// 2a. Scorecard v2 / Step 8: persist versioning columns on the
+	// attempt row when the worker reports them. Only UPDATE when at
+	// least one field is non-empty — silent no-op for older workers.
+	if cmd.GitSHA != "" || cmd.WorkerVersion != "" || cmd.EngineVersion != "" ||
+		cmd.FFmpegVersion != "" || cmd.ConfigHash != "" || cmd.DockerImageDigest != "" {
+		_, err = tx.ExecContext(ctx,
+			`UPDATE task_attempts
+			 SET git_sha = ?, worker_version = ?, engine_version = ?,
+			     ffmpeg_version = ?, config_hash = ?, docker_image_digest = ?,
+			     updated_at = ?
+			 WHERE task_id = ? AND worker_id = ? AND lease_id = ?`,
+			cmd.GitSHA, cmd.WorkerVersion, cmd.EngineVersion,
+			cmd.FFmpegVersion, cmd.ConfigHash, cmd.DockerImageDigest,
+			now,
+			cmd.TaskID, cmd.WorkerID, cmd.LeaseID,
+		)
+		if err != nil {
+			return fmt.Errorf("task ingest atomic versioning: %w", err)
+		}
+	}
+
 	// 3. Persist typed execution metrics (idempotent INSERT OR REPLACE).
 	if cmd.Metrics.AttemptID != "" {
 		streamCopy := 0

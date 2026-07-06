@@ -49,4 +49,11 @@ type TaskAttempt struct {
 	ReportVersion int           `json:"report_version"`
 	CreatedAt     time.Time     `json:"created_at"`
 	UpdatedAt     time.Time     `json:"updated_at"`
+	// Scorecard v2 / Step 8: software versioning for regression tracing.
+	GitSHA            string `json:"git_sha,omitempty"`
+	WorkerVersion     string `json:"worker_version,omitempty"`
+	EngineVersion     string `json:"engine_version,omitempty"`
+	FFmpegVersion     string `json:"ffmpeg_version,omitempty"`
+	ConfigHash        string `json:"config_hash,omitempty"`
+	DockerImageDigest string `json:"docker_image_digest,omitempty"`
 }

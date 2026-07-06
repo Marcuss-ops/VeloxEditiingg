@@ -29,6 +29,8 @@ var attemptColumns = []string{
 	"id", "task_id", "job_id", "attempt_number", "worker_id", "lease_id",
 	"status", "started_at", "completed_at", "error_code", "error_message",
 	"report_version", "created_at", "updated_at",
+	"git_sha", "worker_version", "engine_version",
+	"ffmpeg_version", "config_hash", "docker_image_digest",
 }
 
 func scanAttempt(row interface{ Scan(...interface{}) error }) (*taskattempts.TaskAttempt, error) {
@@ -39,6 +41,8 @@ func scanAttempt(row interface{ Scan(...interface{}) error }) (*taskattempts.Tas
 		&a.ID, &a.TaskID, &a.JobID, &a.AttemptNumber, &a.WorkerID, &a.LeaseID,
 		&a.Status, &startedAt, &completedAt, &a.ErrorCode, &a.ErrorMessage,
 		&a.ReportVersion, &createdAt, &updatedAt,
+		&a.GitSHA, &a.WorkerVersion, &a.EngineVersion,
+		&a.FFmpegVersion, &a.ConfigHash, &a.DockerImageDigest,
 	)
 	if err != nil {
 		return nil, err

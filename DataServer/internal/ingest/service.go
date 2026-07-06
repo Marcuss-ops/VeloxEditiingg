@@ -72,6 +72,14 @@ type IngestCommand struct {
 	TypedMetrics taskattempts.AttemptMetrics
 	CacheStats   taskattempts.AttemptCacheStats
 	CostBasis    taskattempts.AttemptCostBasis
+
+	// Scorecard v2 / Step 8: software versioning from the worker report.
+	GitSHA            string
+	WorkerVersion     string
+	EngineVersion     string
+	FFmpegVersion     string
+	ConfigHash        string
+	DockerImageDigest string
 }
 
 // DeclaredArtifact is one worker-claimed artifact. Mirrors the proto
@@ -347,6 +355,13 @@ func (s *TaskReportIngestionService) IngestTaskResult(ctx context.Context, cmd I
 		CacheStats:    cs,
 		CostBasis:     cb,
 		Artifacts:     typedArtifacts,
+		// Scorecard v2 / Step 8: versioning.
+		GitSHA:            cmd.GitSHA,
+		WorkerVersion:     cmd.WorkerVersion,
+		EngineVersion:     cmd.EngineVersion,
+		FFmpegVersion:     cmd.FFmpegVersion,
+		ConfigHash:        cmd.ConfigHash,
+		DockerImageDigest: cmd.DockerImageDigest,
 	})
 
 	// fix/atomic-ingestion: IngestTaskResultAtomic succeeded — the Task +
