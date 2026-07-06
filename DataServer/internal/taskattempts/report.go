@@ -108,6 +108,15 @@ type AttemptMetrics struct {
 	EngineAudioDownloadMs int64 `json:"engine_audio_download_ms"`
 	EngineMuxAudioMs     int64 `json:"engine_mux_audio_ms"`
 	EngineCopyFinalMs    int64 `json:"engine_copy_final_ms"`
+
+	// Scorecard v2 / Step 9: output quality validation.
+	FFprobeValid       int     `json:"ffprobe_valid"`
+	DurationDiffSec    float64 `json:"duration_diff_sec"`
+	HasVideoStream     bool    `json:"has_video_stream"`
+	HasAudioStream     bool    `json:"has_audio_stream"`
+	OutputFileSize     int64   `json:"output_file_size"`
+	BlackFrameRatio    float64 `json:"black_frame_ratio"`
+	AudioSyncOffsetMS  int64   `json:"audio_sync_offset_ms"`
 }
 
 // AttemptCacheStats is the per-attempt cache snapshot extracted from the

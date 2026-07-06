@@ -927,6 +927,18 @@ func (r *SQLiteTaskRepository) IngestTaskResultAtomic(ctx context.Context, cmd t
 		if concatMode == "" {
 			concatMode = "n/a"
 		}
+		ffprobeValid := 0
+		if cmd.Metrics.FFprobeValid != 0 {
+			ffprobeValid = 1
+		}
+		hasVideo := 0
+		if cmd.Metrics.HasVideoStream {
+			hasVideo = 1
+		}
+		hasAudio := 0
+		if cmd.Metrics.HasAudioStream {
+			hasAudio = 1
+		}
 		_, err = tx.ExecContext(ctx,
 			`INSERT OR REPLACE INTO task_attempt_metrics (
 				attempt_id, input_bytes, output_bytes,
@@ -936,9 +948,13 @@ func (r *SQLiteTaskRepository) IngestTaskResultAtomic(ctx context.Context, cmd t
 				ffmpeg_speed_ratio, encode_passes,
 				final_concat_stream_copy, concat_mode,
 				temp_bytes_written, duplicate_download_bytes,
-				media_duration_seconds, wall_clock_seconds
+				media_duration_seconds, wall_clock_seconds,
+				ffprobe_valid, duration_diff_sec,
+				has_video_stream, has_audio_stream,
+				output_file_size, black_frame_ratio, audio_sync_offset_ms
 			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-			          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+			          ?, ?, ?, ?, ?, ?, ?)`,
 			cmd.Metrics.AttemptID, cmd.Metrics.InputBytes, cmd.Metrics.OutputBytes,
 			cmd.Metrics.BytesFromDrive, cmd.Metrics.BytesFromBlobstore, cmd.Metrics.BytesFromLocalCache,
 			cmd.Metrics.CPUTimeMS, cmd.Metrics.GPUTimeMS, cmd.Metrics.PeakRSSBytes, cmd.Metrics.PeakVRAMBytes,
@@ -947,6 +963,9 @@ func (r *SQLiteTaskRepository) IngestTaskResultAtomic(ctx context.Context, cmd t
 			streamCopy, concatMode,
 			cmd.Metrics.TempBytesWritten, cmd.Metrics.DuplicateDownloadBytes,
 			cmd.Metrics.MediaDurationSeconds, cmd.Metrics.WallClockSeconds,
+			ffprobeValid, cmd.Metrics.DurationDiffSec,
+			hasVideo, hasAudio,
+			cmd.Metrics.OutputFileSize, cmd.Metrics.BlackFrameRatio, cmd.Metrics.AudioSyncOffsetMS,
 		)
 		if err != nil {
 			return fmt.Errorf("task ingest atomic metrics: %w", err)

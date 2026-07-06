@@ -359,6 +359,18 @@ func (r *SQLiteTaskAttemptRepository) PersistMetrics(ctx context.Context, metric
 	if concatMode == "" {
 		concatMode = "n/a"
 	}
+	ffprobeValid := 0
+	if metrics.FFprobeValid != 0 {
+		ffprobeValid = 1
+	}
+	hasVideo := 0
+	if metrics.HasVideoStream {
+		hasVideo = 1
+	}
+	hasAudio := 0
+	if metrics.HasAudioStream {
+		hasAudio = 1
+	}
 	_, err := r.store.db.ExecContext(ctx,
 		`INSERT OR REPLACE INTO task_attempt_metrics (
 			attempt_id, input_bytes, output_bytes,
@@ -374,11 +386,15 @@ func (r *SQLiteTaskAttemptRepository) PersistMetrics(ctx context.Context, metric
 			native_total_ms, native_process_wait_ms,
 			engine_asset_download_ms, engine_segment_build_ms,
 			engine_concat_ms, engine_audio_download_ms,
-			engine_mux_audio_ms, engine_copy_final_ms
+			engine_mux_audio_ms, engine_copy_final_ms,
+			ffprobe_valid, duration_diff_sec,
+			has_video_stream, has_audio_stream,
+			output_file_size, black_frame_ratio, audio_sync_offset_ms
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 		          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 		          ?, ?, ?, ?, ?, ?, ?,
-		          ?, ?, ?, ?, ?, ?)`,
+		          ?, ?, ?, ?, ?, ?,
+		          ?, ?, ?, ?, ?, ?, ?)`,
 		metrics.AttemptID, metrics.InputBytes, metrics.OutputBytes,
 		metrics.BytesFromDrive, metrics.BytesFromBlobstore, metrics.BytesFromLocalCache,
 		metrics.CPUTimeMS, metrics.GPUTimeMS, metrics.PeakRSSBytes, metrics.PeakVRAMBytes,
@@ -393,6 +409,9 @@ func (r *SQLiteTaskAttemptRepository) PersistMetrics(ctx context.Context, metric
 		metrics.EngineAssetDownloadMs, metrics.EngineSegmentBuildMs,
 		metrics.EngineConcatMs, metrics.EngineAudioDownloadMs,
 		metrics.EngineMuxAudioMs, metrics.EngineCopyFinalMs,
+		ffprobeValid, metrics.DurationDiffSec,
+		hasVideo, hasAudio,
+		metrics.OutputFileSize, metrics.BlackFrameRatio, metrics.AudioSyncOffsetMS,
 	)
 	if err != nil {
 		return fmt.Errorf("metrics persist: %w", err)
@@ -596,13 +615,17 @@ func (r *SQLiteTaskAttemptRepository) GetMetrics(ctx context.Context, attemptID 
 		        native_total_ms, native_process_wait_ms,
 		        engine_asset_download_ms, engine_segment_build_ms,
 		        engine_concat_ms, engine_audio_download_ms,
-		        engine_mux_audio_ms, engine_copy_final_ms
+		        engine_mux_audio_ms, engine_copy_final_ms,
+		        ffprobe_valid, duration_diff_sec,
+		        has_video_stream, has_audio_stream,
+		        output_file_size, black_frame_ratio, audio_sync_offset_ms
 		 FROM task_attempt_metrics WHERE attempt_id = ?`,
 		attemptID,
 	)
 	var m taskattempts.AttemptMetrics
 	var concatMode string
 	var streamCopy int
+	var ffprobeValid, hasVideo, hasAudio int
 	err := row.Scan(
 		&m.AttemptID, &m.InputBytes, &m.OutputBytes,
 		&m.BytesFromDrive, &m.BytesFromBlobstore, &m.BytesFromLocalCache,
@@ -618,6 +641,9 @@ func (r *SQLiteTaskAttemptRepository) GetMetrics(ctx context.Context, attemptID 
 		&m.EngineAssetDownloadMs, &m.EngineSegmentBuildMs,
 		&m.EngineConcatMs, &m.EngineAudioDownloadMs,
 		&m.EngineMuxAudioMs, &m.EngineCopyFinalMs,
+		&ffprobeValid, &m.DurationDiffSec,
+		&hasVideo, &hasAudio,
+		&m.OutputFileSize, &m.BlackFrameRatio, &m.AudioSyncOffsetMS,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -627,5 +653,8 @@ func (r *SQLiteTaskAttemptRepository) GetMetrics(ctx context.Context, attemptID 
 	}
 	m.FinalConcatStreamCopy = streamCopy != 0
 	m.ConcatMode = concatMode
+	m.FFprobeValid = ffprobeValid
+	m.HasVideoStream = hasVideo != 0
+	m.HasAudioStream = hasAudio != 0
 	return &m, nil
 }

@@ -586,6 +586,7 @@ func (r *SQLiteLabelResolver) GetMetrics(ctx context.Context, attemptID string) 
 	var m taskattempts.AttemptMetrics
 	var concatMode string
 	var streamCopy int
+	var ffprobeValid, hasVideo, hasAudio int
 	err := r.DB.QueryRowContext(ctx, `
 		SELECT attempt_id, input_bytes, output_bytes,
 		       bytes_from_drive, bytes_from_blobstore, bytes_from_local_cache,
@@ -594,7 +595,10 @@ func (r *SQLiteLabelResolver) GetMetrics(ctx context.Context, attemptID string) 
 		       ffmpeg_speed_ratio, encode_passes,
 		       final_concat_stream_copy, concat_mode,
 		       temp_bytes_written, duplicate_download_bytes,
-		       media_duration_seconds, wall_clock_seconds
+		       media_duration_seconds, wall_clock_seconds,
+		       ffprobe_valid, duration_diff_sec,
+		       has_video_stream, has_audio_stream,
+		       output_file_size, black_frame_ratio, audio_sync_offset_ms
 		FROM task_attempt_metrics WHERE attempt_id = ?`,
 		attemptID,
 	).Scan(
@@ -606,6 +610,9 @@ func (r *SQLiteLabelResolver) GetMetrics(ctx context.Context, attemptID string) 
 		&streamCopy, &concatMode,
 		&m.TempBytesWritten, &m.DuplicateDownloadBytes,
 		&m.MediaDurationSeconds, &m.WallClockSeconds,
+		&ffprobeValid, &m.DurationDiffSec,
+		&hasVideo, &hasAudio,
+		&m.OutputFileSize, &m.BlackFrameRatio, &m.AudioSyncOffsetMS,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -615,6 +622,9 @@ func (r *SQLiteLabelResolver) GetMetrics(ctx context.Context, attemptID string) 
 	}
 	m.FinalConcatStreamCopy = streamCopy != 0
 	m.ConcatMode = concatMode
+	m.FFprobeValid = ffprobeValid
+	m.HasVideoStream = hasVideo != 0
+	m.HasAudioStream = hasAudio != 0
 	return &m, nil
 }
 
