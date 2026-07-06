@@ -435,6 +435,26 @@ func (h *Handler) handleTaskResult(workerID string, tr *pb.TaskResult, sess *wor
 	// canonical row triggers ErrIdentityMismatch in the ingestion
 	// service's ValidateIdentityTuple.
 
+	// Version correlation (Step 4 / Velox Metrics Center): read the
+	// worker's software versions from the session (stored on last
+	// heartbeat) and pass them through so IngestTaskResultAtomic can
+	// stamp them on the task_attempts row.
+	var gitSHA, workerVer, engineVer, ffmpegVer string
+	if sess != nil {
+		if v, ok := sess.gitSHA.Load().(string); ok {
+			gitSHA = v
+		}
+		if v, ok := sess.workerVersion.Load().(string); ok {
+			workerVer = v
+		}
+		if v, ok := sess.engineVersion.Load().(string); ok {
+			engineVer = v
+		}
+		if v, ok := sess.ffmpegVersion.Load().(string); ok {
+			ffmpegVer = v
+		}
+	}
+
 	res, err := h.ingestionSvc.IngestTaskResult(ctx, ingest.IngestCommand{
 		TaskID:          taskID,
 		AttemptID:       attemptID,
@@ -449,8 +469,12 @@ func (h *Handler) handleTaskResult(workerID string, tr *pb.TaskResult, sess *wor
 		TypedMetrics:    typedMetrics,
 		CacheStats:      typedCache,
 		CostBasis:       typedCost,
-		TraceID:         traceID,
-		SpanID:          spanID,
+		GitSHA:            gitSHA,
+		WorkerVersion:     workerVer,
+		EngineVersion:     engineVer,
+		FFmpegVersion:     ffmpegVer,
+		TraceID:           traceID,
+		SpanID:            spanID,
 	})
 	if err != nil {
 		log.Printf("[GRPC] TaskResult ingest for task=%s attempt=%s FAILED: %v", taskID, attemptID, err)

@@ -42,6 +42,25 @@ type WorkerReader interface {
 	GetWorker(workerID string) (map[string]any, error)
 }
 
+// VersionMetricsReader provides per-version metric queries for
+// regression comparison. Implemented by the store layer on
+// task_attempts + task_attempt_metrics.
+type VersionMetricsReader interface {
+	// ListMetricsByGitSHA returns metric snapshots for all attempts
+	// with the given git_sha. Returns an empty slice when no attempts
+	// match (not an error).
+	ListMetricsByGitSHA(ctx context.Context, gitSHA string) ([]VersionMetricSnapshot, error)
+}
+
+// VersionMetricSnapshot is a single attempt's metric values indexed
+// by catalog metric name, for regression comparison.
+type VersionMetricSnapshot struct {
+	AttemptID      string             `json:"attempt_id"`
+	WorkerID       string             `json:"worker_id"`
+	ExecutorID     string             `json:"executor_id"`
+	Metrics        map[string]float64 `json:"metrics"`
+}
+
 // ExecutionSummary is the aggregated execution diagnostics for a single task.
 type ExecutionSummary struct {
 	TaskID              string           `json:"task_id"`
@@ -76,10 +95,11 @@ type AttemptSummary struct {
 
 // Service is the read-only observability aggregation service.
 type Service struct {
-	tasks    TaskReader
-	attempts AttemptReader
-	jobs     JobReader
-	workers  WorkerReader
+	tasks          TaskReader
+	attempts       AttemptReader
+	jobs           JobReader
+	workers        WorkerReader
+	versionMetrics VersionMetricsReader
 }
 
 // NewService constructs the observability aggregation service.
@@ -100,6 +120,9 @@ func (s *Service) WithJobs(r JobReader) *Service { s.jobs = r; return s }
 
 // WithWorkers sets the worker reader for worker queries.
 func (s *Service) WithWorkers(r WorkerReader) *Service { s.workers = r; return s }
+
+// WithVersionMetrics sets the version metrics reader for regression comparison.
+func (s *Service) WithVersionMetrics(r VersionMetricsReader) *Service { s.versionMetrics = r; return s }
 
 // SummarizeTask returns the aggregated execution diagnostics for a task.
 func (s *Service) SummarizeTask(ctx context.Context, taskID string) (*ExecutionSummary, error) {

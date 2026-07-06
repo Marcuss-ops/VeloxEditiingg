@@ -39,4 +39,5 @@ func (m *ObservabilityModule) RegisterRoutes(r *gin.Engine) {
 	v1.GET("/jobs/:job_id", m.handlers.JobDetailHandler())
 	v1.GET("/workers", m.handlers.WorkersHandler())
 	v1.GET("/phases/trends", m.handlers.PhaseTrendsHandler())
+	v1.GET("/regressions", m.handlers.RegressionsHandler())
 }

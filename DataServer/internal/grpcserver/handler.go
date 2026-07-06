@@ -181,6 +181,14 @@ type workerSession struct {
 	draining atomic.Bool
 
 	lastHeartbeatUnix atomic.Int64
+
+	// Version correlation (Step 4 / Velox Metrics Center): software
+	// versions reported by the worker via heartbeat, stored on the
+	// session so they can be stamped on task_attempts at report time.
+	gitSHA        atomic.Value // string
+	workerVersion atomic.Value // string
+	engineVersion atomic.Value // string
+	ffmpegVersion atomic.Value // string
 }
 
 // NewHandler creates a new gRPC WorkerControl handler.

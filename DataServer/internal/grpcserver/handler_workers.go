@@ -85,6 +85,33 @@ func (h *Handler) handleHeartbeat(workerID, sessionID string, hb *pb.Heartbeat) 
 		}
 	}
 
+	// Version correlation (Step 4 / Velox Metrics Center): store the
+	// worker's software versions on the session so handleTaskResult can
+	// stamp them on task_attempts at report time.
+	//
+	// git_sha → hb.GetCodeVersion() (the deployed commit hash)
+	// engine_version → hb.GetEngineVersion()
+	// worker_version / ffmpeg_version → hb.GetExtra() map (if present)
+	if sess != nil {
+		if v := hb.GetCodeVersion(); v != "" {
+			sess.gitSHA.Store(v)
+		}
+		if v := hb.GetEngineVersion(); v != "" {
+			sess.engineVersion.Store(v)
+		}
+		// worker_version and ffmpeg_version come from the extra map
+		// (proto v3 does not carry top-level fields for these).
+		if hb.GetExtra() != nil {
+			extraMap := hb.GetExtra().AsMap()
+			if v, ok := extraMap["worker_version"].(string); ok && v != "" {
+				sess.workerVersion.Store(v)
+			}
+			if v, ok := extraMap["ffmpeg_version"].(string); ok && v != "" {
+				sess.ffmpegVersion.Store(v)
+			}
+		}
+	}
+
 	// F2: forward typed resource counters onto the Prometheus registry
 	// via the sink interface. NIL-tolerant — handlers running WITHOUT a
 	// metrics surface keep the registry.Heartbeat() side active and

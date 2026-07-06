@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"velox-server/internal/observability"
 	"velox-server/internal/taskattempts"
 )
 
@@ -736,4 +737,110 @@ func (r *SQLiteTaskAttemptRepository) GetMetrics(ctx context.Context, attemptID 
 	m.HasAudioStream = hasAudio != 0
 	m.ErrorRetryable = errorRetryable != 0
 	return &m, nil
+}
+
+// ── Version Metrics Query (Step 4 / Velox Metrics Center) ─────────────────
+
+// ListMetricsByGitSHA returns metric snapshots for all terminal attempts
+// with the given git_sha. Joins task_attempts with task_attempt_metrics
+// to fetch the key engine/pipeline metric columns.
+//
+// Implements observability.VersionMetricsReader.
+func (r *SQLiteTaskAttemptRepository) ListMetricsByGitSHA(ctx context.Context, gitSHA string) ([]observability.VersionMetricSnapshot, error) {
+	if gitSHA == "" {
+		return nil, nil
+	}
+
+	rows, err := r.store.db.QueryContext(ctx, `
+		SELECT
+			a.id,
+			a.worker_id,
+			COALESCE(t.executor_id, ''),
+			m.engine_asset_download_ms,
+			m.engine_segment_build_ms,
+			m.engine_concat_ms,
+			m.engine_mux_audio_ms,
+			m.engine_copy_final_ms,
+			m.engine_audio_download_ms,
+			m.pipeline_resolve_ms,
+			m.pipeline_validate_ms,
+			m.pipeline_compile_ms,
+			m.pipeline_render_ms,
+			m.pipeline_total_ms,
+			m.native_total_ms,
+			m.native_process_wait_ms,
+			m.output_bytes,
+			m.ffmpeg_speed_ratio,
+			m.queue_ms,
+			COALESCE(m.wall_clock_seconds, 0) * 1000,
+			m.cpu_time_ms,
+			m.input_bytes
+		FROM task_attempts a
+		JOIN task_attempt_metrics m ON m.attempt_id = a.id
+		LEFT JOIN tasks t ON t.task_id = a.task_id
+		WHERE a.git_sha = ?
+		  AND a.status IN ('SUCCEEDED', 'FAILED', 'CANCELLED')
+		ORDER BY a.updated_at DESC
+		LIMIT 500`,
+		gitSHA,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("ListMetricsByGitSHA query: %w", err)
+	}
+	defer rows.Close()
+
+	var results []observability.VersionMetricSnapshot
+	for rows.Next() {
+		var (
+			attemptID, workerID, executorID                                     string
+			engineAssetDownloadMs, engineSegmentBuildMs, engineConcatMs         float64
+			engineMuxAudioMs, engineCopyFinalMs, engineAudioDownloadMs         float64
+			pipelineResolveMs, pipelineValidateMs, pipelineCompileMs           float64
+			pipelineRenderMs, pipelineTotalMs                                  float64
+			nativeTotalMs, nativeProcessWaitMs                                  float64
+			outputBytes, ffmpegSpeedRatio, queueMs                              float64
+			wallClockMs, cpuTimeMs, inputBytes                                  float64
+		)
+		if err := rows.Scan(
+			&attemptID, &workerID, &executorID,
+			&engineAssetDownloadMs, &engineSegmentBuildMs, &engineConcatMs,
+			&engineMuxAudioMs, &engineCopyFinalMs, &engineAudioDownloadMs,
+			&pipelineResolveMs, &pipelineValidateMs, &pipelineCompileMs,
+			&pipelineRenderMs, &pipelineTotalMs,
+			&nativeTotalMs, &nativeProcessWaitMs,
+			&outputBytes, &ffmpegSpeedRatio, &queueMs,
+			&wallClockMs, &cpuTimeMs, &inputBytes,
+		); err != nil {
+			continue
+		}
+
+		snap := observability.VersionMetricSnapshot{
+			AttemptID:  attemptID,
+			WorkerID:   workerID,
+			ExecutorID: executorID,
+			Metrics: map[string]float64{
+				"engine.asset_download_ms":  engineAssetDownloadMs,
+				"engine.segment_build_ms":   engineSegmentBuildMs,
+				"engine.concat_ms":          engineConcatMs,
+				"engine.mux_audio_ms":       engineMuxAudioMs,
+				"engine.copy_final_ms":      engineCopyFinalMs,
+				"engine.audio_download_ms":  engineAudioDownloadMs,
+				"pipeline.resolve_ms":       pipelineResolveMs,
+				"pipeline.validate_ms":      pipelineValidateMs,
+				"pipeline.compile_ms":       pipelineCompileMs,
+				"pipeline.render_ms":        pipelineRenderMs,
+				"pipeline.total_ms":         pipelineTotalMs,
+				"native.total_ms":           nativeTotalMs,
+				"native.process_wait_ms":    nativeProcessWaitMs,
+				"output.bytes":              outputBytes,
+				"ffmpeg.speed_ratio":        ffmpegSpeedRatio,
+				"queue.ms":                  queueMs,
+				"task.wall_clock_ms":        wallClockMs,
+				"task.cpu_time_ms":          cpuTimeMs,
+				"input.bytes":               inputBytes,
+			},
+		}
+		results = append(results, snap)
+	}
+	return results, rows.Err()
 }
