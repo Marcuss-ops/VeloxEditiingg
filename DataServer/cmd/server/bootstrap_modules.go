@@ -15,10 +15,63 @@ import (
 	"velox-server/internal/forwarding"
 	"velox-server/internal/handlers/server/api"
 	"velox-server/internal/jobs/enqueue"
+	"velox-server/internal/metricscenter"
+	"velox-server/internal/observability"
 	"velox-server/internal/platform/clock"
 	"velox-server/internal/remoteengine"
 	"velox-server/internal/store"
+	"velox-server/internal/workers"
 )
+
+// workerRegistryAdapter adapts *workers.Registry to the
+// observability.WorkerReader interface, converting WorkerInfo
+// structs to map[string]any.
+type workerRegistryAdapter struct {
+	reg *workers.Registry
+}
+
+func (a *workerRegistryAdapter) ListWorkers() ([]map[string]any, error) {
+	if a.reg == nil {
+		return nil, nil
+	}
+	infos := a.reg.List(context.Background())
+	out := make([]map[string]any, len(infos))
+	for i, info := range infos {
+		out[i] = map[string]any{
+			"worker_id":       info.WorkerID,
+			"worker_name":     info.WorkerName,
+			"status":          info.ConnectionStatus,
+			"last_heartbeat":  info.LastHB,
+			"engine_version":  info.EngineVersion,
+			"code_version":    info.CodeVersion,
+			"worker_class":    info.Class,
+			"current_job":     info.CurrentJob,
+			"connection_status": info.ConnectionStatus,
+		}
+	}
+	return out, nil
+}
+
+func (a *workerRegistryAdapter) GetWorker(workerID string) (map[string]any, error) {
+	if a.reg == nil {
+		return nil, fmt.Errorf("worker registry not available")
+	}
+	info := a.reg.GetWorker(context.Background(), workerID)
+	if info == nil {
+		return nil, nil
+	}
+	return map[string]any{
+		"worker_id":       info.WorkerID,
+		"worker_name":     info.WorkerName,
+		"status":          info.ConnectionStatus,
+		"last_heartbeat":  info.LastHB,
+		"engine_version":  info.EngineVersion,
+		"code_version":    info.CodeVersion,
+		"worker_class":    info.Class,
+		"current_job":     info.CurrentJob,
+		"connection_status": info.ConnectionStatus,
+	}, nil
+}
 
 // deliveryPlanResolverAdapter bridges the concrete
 // *deliveries.SQLiteDeliveryPlanResolver to the enqueue.PlanResolver
@@ -145,6 +198,18 @@ func buildModules(cfg *config.Config, p *persistenceDeps, j *jobsDeps, w *worker
 	livestreamMod := app.NewLivestreamModule(ytMod.Service(), p.SQLite)
 	registry.Register(livestreamMod)
 	registry.Register(app.NewFrontendModule(cfg))
+
+	// ── Observability REST API ─────────────────────────────────────
+	if t.Observability != nil {
+		workerReader := &workerRegistryAdapter{reg: w.Registry}
+		obsSvc := t.Observability.WithJobs(j.Repository).WithWorkers(workerReader)
+		registry.Register(observability.NewModule(obsSvc))
+		log.Printf("[BOOTSTRAP] Observability REST API registered")
+	}
+
+	// ── Metrics Center Dashboard UI ────────────────────────────────
+	registry.Register(metricscenter.NewModule())
+	log.Printf("[BOOTSTRAP] Metrics Center dashboard registered")
 
 	// ── Delivery runner ─────────────────────────────────────────────
 	deliveryReg := deliveries.NewRegistry()
