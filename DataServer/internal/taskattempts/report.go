@@ -127,6 +127,13 @@ type AttemptMetrics struct {
 	NetworkTxBytes  int64   `json:"network_tx_bytes"`
 	IOWaitMS        int64   `json:"iowait_ms"`
 	OpenFDsPeak     int64   `json:"open_fds_peak"`
+
+	// Scorecard v2 / Step 11: queue and wait-time metrics.
+	QueueMS               int64 `json:"queue_ms"`
+	LeaseWaitMS            int64 `json:"lease_wait_ms"`
+	TimeToFirstWorkerMS    int64 `json:"time_to_first_worker_ms"`
+	PendingTasksAtStart    int64 `json:"pending_tasks_at_start"`
+	ActiveWorkersAtStart   int64 `json:"active_workers_at_start"`
 }
 
 // AttemptCacheStats is the per-attempt cache snapshot extracted from the

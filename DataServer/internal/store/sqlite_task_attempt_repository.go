@@ -393,13 +393,17 @@ func (r *SQLiteTaskAttemptRepository) PersistMetrics(ctx context.Context, metric
 			cpu_percent_peak, rss_peak_bytes,
 			disk_read_bytes, disk_write_bytes,
 			network_rx_bytes, network_tx_bytes,
-			iowait_ms, open_fds_peak
+			iowait_ms, open_fds_peak,
+			queue_ms, lease_wait_ms,
+			time_to_first_worker_ms, pending_tasks_at_start,
+			active_workers_at_start
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 		          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 		          ?, ?, ?, ?, ?, ?, ?,
 		          ?, ?, ?, ?, ?, ?,
 		          ?, ?, ?, ?, ?, ?, ?,
-		          ?, ?, ?, ?, ?, ?, ?, ?)`,
+		          ?, ?, ?, ?, ?, ?, ?, ?,
+		          ?, ?, ?, ?, ?)`,
 		metrics.AttemptID, metrics.InputBytes, metrics.OutputBytes,
 		metrics.BytesFromDrive, metrics.BytesFromBlobstore, metrics.BytesFromLocalCache,
 		metrics.CPUTimeMS, metrics.GPUTimeMS, metrics.PeakRSSBytes, metrics.PeakVRAMBytes,
@@ -421,6 +425,9 @@ func (r *SQLiteTaskAttemptRepository) PersistMetrics(ctx context.Context, metric
 		metrics.DiskReadBytes, metrics.DiskWriteBytes,
 		metrics.NetworkRxBytes, metrics.NetworkTxBytes,
 		metrics.IOWaitMS, metrics.OpenFDsPeak,
+		metrics.QueueMS, metrics.LeaseWaitMS,
+		metrics.TimeToFirstWorkerMS, metrics.PendingTasksAtStart,
+		metrics.ActiveWorkersAtStart,
 	)
 	if err != nil {
 		return fmt.Errorf("metrics persist: %w", err)
@@ -631,7 +638,10 @@ func (r *SQLiteTaskAttemptRepository) GetMetrics(ctx context.Context, attemptID 
 		        cpu_percent_peak, rss_peak_bytes,
 		        disk_read_bytes, disk_write_bytes,
 		        network_rx_bytes, network_tx_bytes,
-		        iowait_ms, open_fds_peak
+		        iowait_ms, open_fds_peak,
+		        queue_ms, lease_wait_ms,
+		        time_to_first_worker_ms, pending_tasks_at_start,
+		        active_workers_at_start
 		 FROM task_attempt_metrics WHERE attempt_id = ?`,
 		attemptID,
 	)
@@ -661,6 +671,9 @@ func (r *SQLiteTaskAttemptRepository) GetMetrics(ctx context.Context, attemptID 
 		&m.DiskReadBytes, &m.DiskWriteBytes,
 		&m.NetworkRxBytes, &m.NetworkTxBytes,
 		&m.IOWaitMS, &m.OpenFDsPeak,
+		&m.QueueMS, &m.LeaseWaitMS,
+		&m.TimeToFirstWorkerMS, &m.PendingTasksAtStart,
+		&m.ActiveWorkersAtStart,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil

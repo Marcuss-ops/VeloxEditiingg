@@ -955,11 +955,15 @@ func (r *SQLiteTaskRepository) IngestTaskResultAtomic(ctx context.Context, cmd t
 				cpu_percent_peak, rss_peak_bytes,
 				disk_read_bytes, disk_write_bytes,
 				network_rx_bytes, network_tx_bytes,
-				iowait_ms, open_fds_peak
+				iowait_ms, open_fds_peak,
+				queue_ms, lease_wait_ms,
+				time_to_first_worker_ms, pending_tasks_at_start,
+				active_workers_at_start
 			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			          ?, ?, ?, ?, ?, ?, ?,
-			          ?, ?, ?, ?, ?, ?, ?, ?)`,
+			          ?, ?, ?, ?, ?, ?, ?, ?,
+			          ?, ?, ?, ?, ?)`,
 			cmd.Metrics.AttemptID, cmd.Metrics.InputBytes, cmd.Metrics.OutputBytes,
 			cmd.Metrics.BytesFromDrive, cmd.Metrics.BytesFromBlobstore, cmd.Metrics.BytesFromLocalCache,
 			cmd.Metrics.CPUTimeMS, cmd.Metrics.GPUTimeMS, cmd.Metrics.PeakRSSBytes, cmd.Metrics.PeakVRAMBytes,
@@ -975,6 +979,9 @@ func (r *SQLiteTaskRepository) IngestTaskResultAtomic(ctx context.Context, cmd t
 			cmd.Metrics.DiskReadBytes, cmd.Metrics.DiskWriteBytes,
 			cmd.Metrics.NetworkRxBytes, cmd.Metrics.NetworkTxBytes,
 			cmd.Metrics.IOWaitMS, cmd.Metrics.OpenFDsPeak,
+			cmd.Metrics.QueueMS, cmd.Metrics.LeaseWaitMS,
+			cmd.Metrics.TimeToFirstWorkerMS, cmd.Metrics.PendingTasksAtStart,
+			cmd.Metrics.ActiveWorkersAtStart,
 		)
 		if err != nil {
 			return fmt.Errorf("task ingest atomic metrics: %w", err)
