@@ -8,9 +8,9 @@
 //	"otlp"    — exports to OTLP collector (production, requires
 //	           VELOX_OTEL_ENDPOINT)
 //
-// The package exposes a singleton Tracer and helper functions for
-// starting spans with standard Velox attributes. All spans are
-// created with the W3C trace context propagated via context.Context.
+// Scorecard v2 / Step 15c: W3C TraceContext propagation is initialized
+// globally so gRPC interceptors (otelgrpc) can extract/inject trace
+// context from inbound/outbound gRPC metadata automatically.
 //
 // Spans are NEVER created with high-cardinality labels (job_id,
 // task_id go into span attributes, not the span name).
@@ -25,6 +25,7 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/stdout/stdouttrace"
+	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
@@ -35,6 +36,13 @@ import (
 var (
 	tracer     trace.Tracer
 	tracerOnce sync.Once
+
+	// propagatorInit ensures W3C propagation is set exactly once.
+	// Called from initStdoutTracer (when VELOX_OTEL_EXPORTER=stdout)
+	// and from any future otlp/jaeger path. The no-op default path
+	// (VELOX_OTEL_EXPORTER="") does NOT set it — when tracing is off,
+	// propagation is also off (zero overhead).
+	propagatorOnce sync.Once
 )
 
 // Tracer returns the global Velox tracer. Safe for concurrent use.
@@ -62,8 +70,19 @@ func initTracer() trace.Tracer {
 	}
 }
 
+// initPropagator sets the global TextMapPropagator to W3C TraceContext.
+// Called exactly once from initStdoutTracer (and future otlp paths).
+// The propagation package provides TraceContext{} which handles the
+// standard "traceparent" and "tracestate" headers.
+func initPropagator() {
+	propagatorOnce.Do(func() {
+		otel.SetTextMapPropagator(propagation.TraceContext{})
+		log.Printf("[TELEMETRY] W3C TraceContext propagator initialized")
+	})
+}
+
 // initStdoutTracer creates a tracer that prints spans to stderr.
-// Useful for local development and debugging.
+// Also initializes the W3C propagator so gRPC context propagation works.
 func initStdoutTracer() trace.Tracer {
 	exp, err := stdouttrace.New(stdouttrace.WithPrettyPrint())
 	if err != nil {
@@ -84,7 +103,12 @@ func initStdoutTracer() trace.Tracer {
 	)
 
 	otel.SetTracerProvider(tp)
-	log.Printf("[TELEMETRY] stdout tracer provider initialized")
+
+	// Initialize W3C TraceContext propagation so otelgrpc can
+	// extract/inject traceparent from gRPC metadata.
+	initPropagator()
+
+	log.Printf("[TELEMETRY] stdout tracer provider + W3C propagator initialized")
 	return tp.Tracer("velox-server")
 }
 

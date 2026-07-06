@@ -37,6 +37,7 @@ import (
 	"velox-shared/controltransport"
 	pb "velox-shared/controltransport/pb"
 
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
@@ -129,6 +130,11 @@ type workerSession struct {
 	done      chan struct{}
 	doneOnce  sync.Once          // P0 #6: prevents double-close on session teardown/reconnect
 	cancel    context.CancelFunc // cancels the session context to terminate old goroutines
+
+	// gRPC request context (carries trace context via otelgrpc).
+	// Scorecard v2 / Step 15c: handlers use this instead of context.Background()
+	// so spans have proper parent-child trace relationships.
+	ctx    context.Context
 
 	// Serialized output: all stream.Send() calls go through sendCh → sessionWriter.
 	// No other goroutine may call stream.Send() directly.
@@ -271,7 +277,9 @@ func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMasterEnvelo
 	sessionID := fmt.Sprintf("grpc-%s-%d", workerID, time.Now().UnixNano())
 
 	// Issue 6 fix: create a cancellable context for the session.
-	sessionCtx, sessionCancel := context.WithCancel(context.Background())
+	// Scorecard v2 / Step 15c: derive from stream.Context() so the
+	// session inherits the trace context propagated by otelgrpc.
+	sessionCtx, sessionCancel := context.WithCancel(stream.Context())
 
 	// Issue 5 fix: create the send channel (buffered to avoid blocking producers).
 	sendCh := make(chan *outboundMessage, 64)
@@ -286,6 +294,7 @@ func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMasterEnvelo
 		stream:    stream,
 		done:      make(chan struct{}),
 		cancel:    sessionCancel,
+		ctx:       sessionCtx,
 		sendCh:    sendCh,
 		writerErr: make(chan error, 1),
 	}
@@ -502,13 +511,13 @@ func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMasterEnvelo
 				h.handleTaskRenewal(workerID, m.TaskLeaseRenewal)
 
 			case *pb.WorkerToMasterEnvelope_TaskAccepted:
-				h.handleTaskAccepted(workerID, m.TaskAccepted)
+				h.handleTaskAccepted(workerID, m.TaskAccepted, sess)
 
 			case *pb.WorkerToMasterEnvelope_TaskRejected:
 				h.handleTaskRejected(workerID, m.TaskRejected)
 
 			case *pb.WorkerToMasterEnvelope_TaskResult:
-				h.handleTaskResult(workerID, m.TaskResult)
+				h.handleTaskResult(workerID, m.TaskResult, sess)
 
 			case *pb.WorkerToMasterEnvelope_CommandAck:
 				h.handleCommandAck(workerID, m.CommandAck)
@@ -587,6 +596,12 @@ func StartGRPCServer(port int, handler *Handler, certFile, keyFile, caFile strin
 		log.Printf("[GRPC] WARNING: insecure gRPC server — dev mode only")
 		grpcOpts = append(grpcOpts, grpc.Creds(insecure.NewCredentials()))
 	}
+
+	// Add OpenTelemetry stats handler for gRPC trace context propagation.
+	// otelgrpc.NewServerHandler() extracts W3C traceparent from inbound
+	// gRPC metadata and injects it into the request context.
+	// Scorecard v2 / Step 15c.
+	grpcOpts = append(grpcOpts, grpc.StatsHandler(otelgrpc.NewServerHandler()))
 
 	srv := grpc.NewServer(grpcOpts...)
 	pb.RegisterWorkerControlServer(srv, handler)

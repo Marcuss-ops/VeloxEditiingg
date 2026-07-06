@@ -28,7 +28,7 @@ import (
 // (task_id, job_id, attempt_id, lease_id, attempt_number, revision) is
 // now MANDATORY. The handler rejects any TaskAccepted with missing or
 // zero-valued identity fields BEFORE touching the session or taskRepo.
-func (h *Handler) handleTaskAccepted(workerID string, ta *pb.TaskAccepted) {
+func (h *Handler) handleTaskAccepted(workerID string, ta *pb.TaskAccepted, sess *workerSession) {
 	if !h.config.PushMode {
 		return
 	}
@@ -45,7 +45,6 @@ func (h *Handler) handleTaskAccepted(workerID string, ta *pb.TaskAccepted) {
 		return
 	}
 
-	sess := h.getSession(workerID)
 	if sess == nil {
 		return
 	}
@@ -96,8 +95,14 @@ func (h *Handler) handleTaskAccepted(workerID string, ta *pb.TaskAccepted) {
 	//
 	// Scorecard v2 / Step 15: start a "claim_task" span for distributed
 	// tracing. The trace context flows from the gRPC metadata through
-	// context propagation.
-	ctx, span := telemetry.StartSpan(context.Background(), "claim_task",
+	// the otelgrpc stats handler + W3C propagator.
+	// Scorecard v2 / Step 15c: use session.ctx (derived from stream.Context())
+	// so the span inherits the parent trace context from the worker.
+	gRPCctx := context.Background()
+	if sess != nil && sess.ctx != nil {
+		gRPCctx = sess.ctx
+	}
+	ctx, span := telemetry.StartSpan(gRPCctx, "claim_task",
 		attribute.String("velox.task_id", taskID),
 		attribute.String("velox.worker_id", workerID),
 		attribute.String("velox.attempt_id", attemptID),
@@ -340,7 +345,7 @@ func (h *Handler) clearPendingOfferForTask(workerID, taskID string) {
 // as a misconfiguration and surfaces as a structured error log rather
 // than a silent no-op — better to fail loud than to leak TaskResults
 // without ever closing the Attempt.
-func (h *Handler) handleTaskResult(workerID string, tr *pb.TaskResult) {
+func (h *Handler) handleTaskResult(workerID string, tr *pb.TaskResult, sess *workerSession) {
 	taskID := tr.GetTaskId()
 	jobID := tr.GetJobId()
 	attemptID := tr.GetAttemptId()
@@ -401,7 +406,13 @@ func (h *Handler) handleTaskResult(workerID string, tr *pb.TaskResult) {
 	typedCost := executionMetricsToCostBasis(attemptID, tr.GetExecutionMetrics())
 
 	// Scorecard v2 / Step 15: start an "ingest_result" span.
-	ctx, span := telemetry.StartSpan(context.Background(), "ingest_result",
+	// Scorecard v2 / Step 15c: use session.ctx (derived from stream.Context())
+	// so the span inherits the parent trace context from the worker.
+	gRPCctx := context.Background()
+	if sess != nil && sess.ctx != nil {
+		gRPCctx = sess.ctx
+	}
+	ctx, span := telemetry.StartSpan(gRPCctx, "ingest_result",
 		attribute.String("velox.task_id", taskID),
 		attribute.String("velox.worker_id", workerID),
 		attribute.String("velox.attempt_id", attemptID),

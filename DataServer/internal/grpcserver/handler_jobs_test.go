@@ -528,7 +528,7 @@ func TestHandleTaskResult_RejectsIdentitySpoofing_HandlerLayerDrop(t *testing.T)
 		Status:        "succeeded",
 	}
 
-	handler.handleTaskResult(fx.workerID, tr)
+	handler.handleTaskResult(fx.workerID, tr, nil)
 
 	// The handler dropped the spoof — close-write + roll-up +
 	// artifact register MUST stay zero regardless of which validator
@@ -663,7 +663,7 @@ func TestHandleTaskResult_PersistTypedMetrics_F1(t *testing.T) {
 
 	// Need to satisfy the canonical-attempt tuple for the happy path
 	// (buildSpoofHandler pre-seeds it under canonicalLease).
-	handler.handleTaskResult(fx.workerID, tr)
+	handler.handleTaskResult(fx.workerID, tr, nil)
 
 	// 1) The scorecard writes MUT commit first: metrics, cache, cost.
 	// fix/atomic-ingestion: the production handler-side path now routes
@@ -797,7 +797,7 @@ func TestHandleTaskResult_PersistTypedMetrics_NilExecutionMetrics(t *testing.T) 
 		OutputArtifacts:  []*structpb.Struct{artItem},
 	}
 
-	handler.handleTaskResult(fx.workerID, tr)
+	handler.handleTaskResult(fx.workerID, tr, nil)
 
 	// Scorecard writes; nil em MUST still produce a row (zero values
 	// on bytes/frames/cost are acceptable baseline).
@@ -895,7 +895,7 @@ func TestHandleTaskResult_PersistTypedMetrics_StaleReplaySkipsMetrics(t *testing
 		ExecutionMetrics: em,
 	}
 
-	handler.handleTaskResult(fx.workerID, tr)
+	handler.handleTaskResult(fx.workerID, tr, nil)
 
 	// 1) Persist counters MUST stay zero — stale replay must NOT
 	// overwrite the canonical row's metrics via INSERT OR REPLACE.
