@@ -19,14 +19,19 @@ type fakeRenderClient struct {
 }
 
 func (f *fakeRenderClient) Render(_ context.Context, p *plan.RenderPlan) error {
+	_, err := f.RenderWithMetrics(context.Background(), p)
+	return err
+}
+
+func (f *fakeRenderClient) RenderWithMetrics(_ context.Context, p *plan.RenderPlan) (RenderMetrics, error) {
 	f.called = true
 	if p == nil || p.OutputPath == "" {
-		return nil
+		return RenderMetrics{}, nil
 	}
 	if err := os.MkdirAll(filepath.Dir(p.OutputPath), 0o755); err != nil {
-		return err
+		return RenderMetrics{}, err
 	}
-	return os.WriteFile(p.OutputPath, f.payload, 0o644)
+	return RenderMetrics{}, os.WriteFile(p.OutputPath, f.payload, 0o644)
 }
 
 // TestRunner_RenderClientAccessor: the accessor's contract is "return

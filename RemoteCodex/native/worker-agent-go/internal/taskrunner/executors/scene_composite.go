@@ -130,23 +130,45 @@ func (s *SceneComposite) Execute(ctx context.Context, _ executor.ExecutionContex
 		}, nil
 	}
 
-	// Phase: pipeline run. We wrap the single-runner-call path
-	// with a wall-clock timer so operators can compare pipeline time
-	// against total engine time without needing pipeline-level
-	// RunWithMetrics (which arrives in a follow-up).
+	// Phase: pipeline run. We use RunWithMetrics so callers get
+	// per-phase pipeline timings AND the native C++ engine sidecar
+	// counters (frames, speed_x, encode_passes, temp_bytes,
+	// duration_seconds) merged into the final task-scoped metrics map.
 	pipelineID := resolvePipelineID(spec.Payload)
 	pipelineStart := time.Now()
-	if err := s.pipelineRunner.Run(ctx, pipelineID, spec.JobID, spec.Payload, outputPath); err != nil {
+	runMetrics, err := s.pipelineRunner.RunWithMetrics(ctx, pipelineID, spec.JobID, spec.Payload, outputPath)
+	if err != nil {
 		return executor.ExecutionResult{
 			Status:      "failed",
 			ErrorCode:   "execute_failed",
-			ErrorDetail: fmt.Sprintf("pipeline.Runner.Run(%s): %v", pipelineID, err),
+			ErrorDetail: fmt.Sprintf("pipeline.Runner.RunWithMetrics(%s): %v", pipelineID, err),
 			StartedAt:   startedAt,
 			CompletedAt: time.Now().UTC(),
 		}, nil
 	}
 	metrics["pipeline.total_ms"] = time.Since(pipelineStart).Milliseconds()
 	metrics["pipeline.id"] = pipelineID
+	// Per-phase pipeline timings
+	metrics["pipeline.resolve_ms"] = runMetrics.ResolveMs
+	metrics["pipeline.validate_ms"] = runMetrics.ValidateMs
+	metrics["pipeline.compile_ms"] = runMetrics.CompileMs
+	metrics["pipeline.render_ms"] = runMetrics.RenderMs
+	metrics["pipeline.timeline_items"] = int64(runMetrics.TimelineItems)
+	metrics["pipeline.audio_tracks"] = int64(runMetrics.AudioTracks)
+	// Native engine sidecar counters
+	metrics["native.total_ms"] = runMetrics.RenderMetrics.TotalMs
+	metrics["native.plan_write_ms"] = runMetrics.RenderMetrics.PlanWriteMs
+	metrics["native.process_wait_ms"] = runMetrics.RenderMetrics.ProcessWaitMs
+	metrics["engine.frames"] = runMetrics.RenderMetrics.Frames
+	metrics["engine.fps"] = runMetrics.RenderMetrics.Fps
+	metrics["engine.speed_x"] = runMetrics.RenderMetrics.SpeedX
+	metrics["engine.encode_passes"] = runMetrics.RenderMetrics.EncodePasses
+	metrics["engine.temp_bytes"] = runMetrics.RenderMetrics.TempBytes
+	metrics["engine.duration_seconds"] = runMetrics.RenderMetrics.DurationSec
+	metrics["engine.concat_mode"] = runMetrics.RenderMetrics.ConcatMode
+	metrics["engine.bitrate"] = runMetrics.RenderMetrics.Bitrate
+	metrics["engine.dup_frames"] = runMetrics.RenderMetrics.DupFrames
+	metrics["engine.drop_frames"] = runMetrics.RenderMetrics.DropFrames
 
 	// Compute output file hash and size for artifact metadata.
 	// Hash is mandatory per fix/artifact-metadata — dispatchTaskRunner

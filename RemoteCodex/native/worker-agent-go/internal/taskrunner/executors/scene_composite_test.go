@@ -58,9 +58,14 @@ type fakeRenderClient struct {
 }
 
 func (f *fakeRenderClient) Render(_ context.Context, p *plan.RenderPlan) error {
+	_, err := f.RenderWithMetrics(context.Background(), p)
+	return err
+}
+
+func (f *fakeRenderClient) RenderWithMetrics(_ context.Context, p *plan.RenderPlan) (pipeline.RenderMetrics, error) {
 	f.called = true
 	f.lastPlan = p
-	return f.renderErr
+	return pipeline.RenderMetrics{}, f.renderErr
 }
 
 // newTestSceneComposite builds minimal pipeline + executor wiring.
