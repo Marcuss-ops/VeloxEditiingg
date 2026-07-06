@@ -598,7 +598,11 @@ func (r *SQLiteLabelResolver) GetMetrics(ctx context.Context, attemptID string) 
 		       media_duration_seconds, wall_clock_seconds,
 		       ffprobe_valid, duration_diff_sec,
 		       has_video_stream, has_audio_stream,
-		       output_file_size, black_frame_ratio, audio_sync_offset_ms
+		       output_file_size, black_frame_ratio, audio_sync_offset_ms,
+		       cpu_percent_peak, rss_peak_bytes,
+		       disk_read_bytes, disk_write_bytes,
+		       network_rx_bytes, network_tx_bytes,
+		       iowait_ms, open_fds_peak
 		FROM task_attempt_metrics WHERE attempt_id = ?`,
 		attemptID,
 	).Scan(
@@ -613,6 +617,10 @@ func (r *SQLiteLabelResolver) GetMetrics(ctx context.Context, attemptID string) 
 		&ffprobeValid, &m.DurationDiffSec,
 		&hasVideo, &hasAudio,
 		&m.OutputFileSize, &m.BlackFrameRatio, &m.AudioSyncOffsetMS,
+		&m.CPUPercentPeak, &m.RSSPeakBytes,
+		&m.DiskReadBytes, &m.DiskWriteBytes,
+		&m.NetworkRxBytes, &m.NetworkTxBytes,
+		&m.IOWaitMS, &m.OpenFDsPeak,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil

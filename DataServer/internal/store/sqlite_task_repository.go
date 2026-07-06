@@ -951,10 +951,15 @@ func (r *SQLiteTaskRepository) IngestTaskResultAtomic(ctx context.Context, cmd t
 				media_duration_seconds, wall_clock_seconds,
 				ffprobe_valid, duration_diff_sec,
 				has_video_stream, has_audio_stream,
-				output_file_size, black_frame_ratio, audio_sync_offset_ms
+				output_file_size, black_frame_ratio, audio_sync_offset_ms,
+				cpu_percent_peak, rss_peak_bytes,
+				disk_read_bytes, disk_write_bytes,
+				network_rx_bytes, network_tx_bytes,
+				iowait_ms, open_fds_peak
 			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-			          ?, ?, ?, ?, ?, ?, ?)`,
+			          ?, ?, ?, ?, ?, ?, ?,
+			          ?, ?, ?, ?, ?, ?, ?, ?)`,
 			cmd.Metrics.AttemptID, cmd.Metrics.InputBytes, cmd.Metrics.OutputBytes,
 			cmd.Metrics.BytesFromDrive, cmd.Metrics.BytesFromBlobstore, cmd.Metrics.BytesFromLocalCache,
 			cmd.Metrics.CPUTimeMS, cmd.Metrics.GPUTimeMS, cmd.Metrics.PeakRSSBytes, cmd.Metrics.PeakVRAMBytes,
@@ -966,6 +971,10 @@ func (r *SQLiteTaskRepository) IngestTaskResultAtomic(ctx context.Context, cmd t
 			ffprobeValid, cmd.Metrics.DurationDiffSec,
 			hasVideo, hasAudio,
 			cmd.Metrics.OutputFileSize, cmd.Metrics.BlackFrameRatio, cmd.Metrics.AudioSyncOffsetMS,
+			cmd.Metrics.CPUPercentPeak, cmd.Metrics.RSSPeakBytes,
+			cmd.Metrics.DiskReadBytes, cmd.Metrics.DiskWriteBytes,
+			cmd.Metrics.NetworkRxBytes, cmd.Metrics.NetworkTxBytes,
+			cmd.Metrics.IOWaitMS, cmd.Metrics.OpenFDsPeak,
 		)
 		if err != nil {
 			return fmt.Errorf("task ingest atomic metrics: %w", err)

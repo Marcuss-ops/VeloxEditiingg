@@ -35,7 +35,13 @@ CREATE TABLE task_attempts (
 	error_message   TEXT NOT NULL DEFAULT '',
 	report_version  INTEGER NOT NULL DEFAULT 0,
 	created_at      TEXT NOT NULL,
-	updated_at      TEXT NOT NULL
+	updated_at      TEXT NOT NULL,
+	git_sha              TEXT NOT NULL DEFAULT '',
+	worker_version       TEXT NOT NULL DEFAULT '',
+	engine_version       TEXT NOT NULL DEFAULT '',
+	ffmpeg_version       TEXT NOT NULL DEFAULT '',
+	config_hash          TEXT NOT NULL DEFAULT '',
+	docker_image_digest  TEXT NOT NULL DEFAULT ''
 );
 `
 	if _, err := db.Exec(schema); err != nil {

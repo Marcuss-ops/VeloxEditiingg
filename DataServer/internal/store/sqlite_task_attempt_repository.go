@@ -389,12 +389,17 @@ func (r *SQLiteTaskAttemptRepository) PersistMetrics(ctx context.Context, metric
 			engine_mux_audio_ms, engine_copy_final_ms,
 			ffprobe_valid, duration_diff_sec,
 			has_video_stream, has_audio_stream,
-			output_file_size, black_frame_ratio, audio_sync_offset_ms
+			output_file_size, black_frame_ratio, audio_sync_offset_ms,
+			cpu_percent_peak, rss_peak_bytes,
+			disk_read_bytes, disk_write_bytes,
+			network_rx_bytes, network_tx_bytes,
+			iowait_ms, open_fds_peak
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 		          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 		          ?, ?, ?, ?, ?, ?, ?,
 		          ?, ?, ?, ?, ?, ?,
-		          ?, ?, ?, ?, ?, ?, ?)`,
+		          ?, ?, ?, ?, ?, ?, ?,
+		          ?, ?, ?, ?, ?, ?, ?, ?)`,
 		metrics.AttemptID, metrics.InputBytes, metrics.OutputBytes,
 		metrics.BytesFromDrive, metrics.BytesFromBlobstore, metrics.BytesFromLocalCache,
 		metrics.CPUTimeMS, metrics.GPUTimeMS, metrics.PeakRSSBytes, metrics.PeakVRAMBytes,
@@ -412,6 +417,10 @@ func (r *SQLiteTaskAttemptRepository) PersistMetrics(ctx context.Context, metric
 		ffprobeValid, metrics.DurationDiffSec,
 		hasVideo, hasAudio,
 		metrics.OutputFileSize, metrics.BlackFrameRatio, metrics.AudioSyncOffsetMS,
+		metrics.CPUPercentPeak, metrics.RSSPeakBytes,
+		metrics.DiskReadBytes, metrics.DiskWriteBytes,
+		metrics.NetworkRxBytes, metrics.NetworkTxBytes,
+		metrics.IOWaitMS, metrics.OpenFDsPeak,
 	)
 	if err != nil {
 		return fmt.Errorf("metrics persist: %w", err)
@@ -618,7 +627,11 @@ func (r *SQLiteTaskAttemptRepository) GetMetrics(ctx context.Context, attemptID 
 		        engine_mux_audio_ms, engine_copy_final_ms,
 		        ffprobe_valid, duration_diff_sec,
 		        has_video_stream, has_audio_stream,
-		        output_file_size, black_frame_ratio, audio_sync_offset_ms
+		        output_file_size, black_frame_ratio, audio_sync_offset_ms,
+		        cpu_percent_peak, rss_peak_bytes,
+		        disk_read_bytes, disk_write_bytes,
+		        network_rx_bytes, network_tx_bytes,
+		        iowait_ms, open_fds_peak
 		 FROM task_attempt_metrics WHERE attempt_id = ?`,
 		attemptID,
 	)
@@ -644,6 +657,10 @@ func (r *SQLiteTaskAttemptRepository) GetMetrics(ctx context.Context, attemptID 
 		&ffprobeValid, &m.DurationDiffSec,
 		&hasVideo, &hasAudio,
 		&m.OutputFileSize, &m.BlackFrameRatio, &m.AudioSyncOffsetMS,
+		&m.CPUPercentPeak, &m.RSSPeakBytes,
+		&m.DiskReadBytes, &m.DiskWriteBytes,
+		&m.NetworkRxBytes, &m.NetworkTxBytes,
+		&m.IOWaitMS, &m.OpenFDsPeak,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil

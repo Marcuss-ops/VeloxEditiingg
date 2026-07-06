@@ -117,6 +117,16 @@ type AttemptMetrics struct {
 	OutputFileSize     int64   `json:"output_file_size"`
 	BlackFrameRatio    float64 `json:"black_frame_ratio"`
 	AudioSyncOffsetMS  int64   `json:"audio_sync_offset_ms"`
+
+	// Scorecard v2 / Step 10: per-attempt resource snapshot.
+	CPUPercentPeak  float64 `json:"cpu_percent_peak"`
+	RSSPeakBytes    int64   `json:"rss_peak_bytes"`
+	DiskReadBytes   int64   `json:"disk_read_bytes"`
+	DiskWriteBytes  int64   `json:"disk_write_bytes"`
+	NetworkRxBytes  int64   `json:"network_rx_bytes"`
+	NetworkTxBytes  int64   `json:"network_tx_bytes"`
+	IOWaitMS        int64   `json:"iowait_ms"`
+	OpenFDsPeak     int64   `json:"open_fds_peak"`
 }
 
 // AttemptCacheStats is the per-attempt cache snapshot extracted from the
