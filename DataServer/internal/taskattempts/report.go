@@ -157,6 +157,13 @@ type AttemptMetrics struct {
 	WastedCPUMS         int64   `json:"wasted_cpu_ms"`
 	WastedDownloadBytes int64   `json:"wasted_download_bytes"`
 	WastedCostEstimate  float64 `json:"wasted_cost_estimate"`
+
+	// Scorecard v2 / Step 16: granular cache hit/miss counters.
+	AssetCacheHitCount  int64 `json:"asset_cache_hit_count"`
+	AssetCacheMissCount int64 `json:"asset_cache_miss_count"`
+	BlobCacheHitCount   int64 `json:"blob_cache_hit_count"`
+	BlobCacheMissCount  int64 `json:"blob_cache_miss_count"`
+	RenderCacheHitCount int64 `json:"render_cache_hit_count"`
 }
 
 // AttemptCacheStats is the per-attempt cache snapshot extracted from the

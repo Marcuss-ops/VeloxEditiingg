@@ -612,7 +612,10 @@ func (r *SQLiteLabelResolver) GetMetrics(ctx context.Context, attemptID string) 
 		       error_component, error_phase,
 		       error_retryable, error_message_hash,
 		       retry_count, wasted_cpu_ms, wasted_download_bytes,
-		       wasted_cost_estimate
+		       wasted_cost_estimate,
+		       asset_cache_hit_count, asset_cache_miss_count,
+		       blob_cache_hit_count, blob_cache_miss_count,
+		       render_cache_hit_count
 		FROM task_attempt_metrics WHERE attempt_id = ?`,
 		attemptID,
 	).Scan(
@@ -641,6 +644,9 @@ func (r *SQLiteLabelResolver) GetMetrics(ctx context.Context, attemptID string) 
 		&errorRetryable, &m.ErrorMessageHash,
 		&m.RetryCount, &m.WastedCPUMS, &m.WastedDownloadBytes,
 		&m.WastedCostEstimate,
+		&m.AssetCacheHitCount, &m.AssetCacheMissCount,
+		&m.BlobCacheHitCount, &m.BlobCacheMissCount,
+		&m.RenderCacheHitCount,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil

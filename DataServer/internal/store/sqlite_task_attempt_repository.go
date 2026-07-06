@@ -409,7 +409,10 @@ func (r *SQLiteTaskAttemptRepository) PersistMetrics(ctx context.Context, metric
 		error_component, error_phase,
 		error_retryable, error_message_hash,
 		retry_count, wasted_cpu_ms, wasted_download_bytes,
-		wasted_cost_estimate
+		wasted_cost_estimate,
+		asset_cache_hit_count, asset_cache_miss_count,
+		blob_cache_hit_count, blob_cache_miss_count,
+		render_cache_hit_count
 	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 		          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 		          ?, ?, ?, ?, ?, ?, ?,
@@ -450,6 +453,9 @@ func (r *SQLiteTaskAttemptRepository) PersistMetrics(ctx context.Context, metric
 		errorRetryable, metrics.ErrorMessageHash,
 		metrics.RetryCount, metrics.WastedCPUMS, metrics.WastedDownloadBytes,
 		metrics.WastedCostEstimate,
+		metrics.AssetCacheHitCount, metrics.AssetCacheMissCount,
+		metrics.BlobCacheHitCount, metrics.BlobCacheMissCount,
+		metrics.RenderCacheHitCount,
 	)
 	if err != nil {
 		return fmt.Errorf("metrics persist: %w", err)
@@ -670,7 +676,10 @@ func (r *SQLiteTaskAttemptRepository) GetMetrics(ctx context.Context, attemptID 
 		        error_component, error_phase,
 		        error_retryable, error_message_hash,
 		        retry_count, wasted_cpu_ms, wasted_download_bytes,
-		        wasted_cost_estimate
+		        wasted_cost_estimate,
+		        asset_cache_hit_count, asset_cache_miss_count,
+		        blob_cache_hit_count, blob_cache_miss_count,
+		        render_cache_hit_count
 		 FROM task_attempt_metrics WHERE attempt_id = ?`,
 		attemptID,
 	)
@@ -710,6 +719,9 @@ func (r *SQLiteTaskAttemptRepository) GetMetrics(ctx context.Context, attemptID 
 		&errorRetryable, &m.ErrorMessageHash,
 		&m.RetryCount, &m.WastedCPUMS, &m.WastedDownloadBytes,
 		&m.WastedCostEstimate,
+		&m.AssetCacheHitCount, &m.AssetCacheMissCount,
+		&m.BlobCacheHitCount, &m.BlobCacheMissCount,
+		&m.RenderCacheHitCount,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil

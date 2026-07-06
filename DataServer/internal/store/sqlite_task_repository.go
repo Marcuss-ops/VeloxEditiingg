@@ -986,7 +986,10 @@ func (r *SQLiteTaskRepository) IngestTaskResultAtomic(ctx context.Context, cmd t
 				error_component, error_phase,
 				error_retryable, error_message_hash,
 				retry_count, wasted_cpu_ms, wasted_download_bytes,
-				wasted_cost_estimate
+				wasted_cost_estimate,
+				asset_cache_hit_count, asset_cache_miss_count,
+				blob_cache_hit_count, blob_cache_miss_count,
+				render_cache_hit_count
 			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			          ?, ?, ?, ?, ?, ?, ?,
@@ -1020,6 +1023,9 @@ func (r *SQLiteTaskRepository) IngestTaskResultAtomic(ctx context.Context, cmd t
 			errorRetryable, cmd.Metrics.ErrorMessageHash,
 			cmd.Metrics.RetryCount, cmd.Metrics.WastedCPUMS,
 			cmd.Metrics.WastedDownloadBytes, cmd.Metrics.WastedCostEstimate,
+			cmd.Metrics.AssetCacheHitCount, cmd.Metrics.AssetCacheMissCount,
+			cmd.Metrics.BlobCacheHitCount, cmd.Metrics.BlobCacheMissCount,
+			cmd.Metrics.RenderCacheHitCount,
 		)
 		if err != nil {
 			return fmt.Errorf("task ingest atomic metrics: %w", err)
