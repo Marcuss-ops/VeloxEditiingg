@@ -43,15 +43,10 @@ func NoRouteHandler(serveSPA gin.HandlerFunc, landing gin.HandlerFunc, darkEdito
 			return
 		}
 
-		// Dark Editor UI fallback (ensures /dark_editor_v2 is always proxied)
-		if (c.Request.Method == "GET" || c.Request.Method == "HEAD") && darkEditorProxy != nil {
-			if strings.HasPrefix(path, "/dark_editor_v2") &&
-				!strings.HasPrefix(path, "/dark_editor_v2/api") &&
-				!strings.HasPrefix(path, "/dark_editor_v2/temp") &&
-				!strings.HasPrefix(path, "/dark_editor_v2/projects") {
-				darkEditorProxy(c)
-				return
-			}
+		// Dark Editor proxy (all methods: GET, POST, PUT, DELETE, etc.)
+		if darkEditorProxy != nil && strings.HasPrefix(path, "/dark_editor_v2") {
+			darkEditorProxy(c)
+			return
 		}
 
 		// GET/HEAD requests: try SPA first, fall back to landing page for root
@@ -64,15 +59,6 @@ func NoRouteHandler(serveSPA gin.HandlerFunc, landing gin.HandlerFunc, darkEdito
 				// If the SPA wrote a response body, we're done
 				if c.Writer.Size() > 0 {
 					if !c.IsAborted() {
-						// Check if SPA signaled that file was not found
-						if spaNotFound, exists := c.Get("spa_file_not_found"); exists && spaNotFound.(bool) {
-							atomic.AddInt64(&blockedRequests, 1)
-							c.JSON(http.StatusNotFound, gin.H{
-								"error": "resource not found",
-								"path":  path,
-							})
-							return
-						}
 						atomic.AddInt64(&goHandledRequests, 1)
 					}
 					return
