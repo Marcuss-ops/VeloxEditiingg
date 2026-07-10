@@ -1,12 +1,17 @@
 # Velox Editing
 
-Monorepo personale (legacy). Worktree principale per lo sviluppo.
+Monorepo personale **WIP** di Marcus. Repository principale per lo sviluppo.
+
+**Prerequisiti**: `git` installato + accesso di rete a `github.com` (HTTPS).
 
 ## Struttura
 
-- `InstaeditLogin/` — modulo (Go + React) per il login OAuth federato
-  di Instaedit (social-scheduler). **Modulo attivo**.
-- (altri worktree sibling su altri path non sono parte integrante di Velox Editing)
+- [`InstaeditLogin/`](InstaeditLogin/) — modulo (Go + React) per il login
+  OAuth federato di Instaedit (social-scheduler). **Modulo attivo**.
+  Vedi [`InstaeditLogin/README.md`](InstaeditLogin/README.md) per i docs del
+  modulo e [`HANDOFF-LINUX.md`](InstaeditLogin/HANDOFF-LINUX.md) per le linee
+  guida operative.
+- (altri sibling worktree su altri path non sono parte integrante di Velox Editing)
 
 ## ⚠️ Setup del submodule `InstaeditLogin` per fresh clone
 
@@ -18,12 +23,22 @@ del modulo.
 Per popolarla correttamente, dopo il clone:
 
 ```bash
-# dentro al worktree appena clonato
-rmdir InstaeditLogin                                  # rimuove la cartella vuota
+# dentro al repository appena clonato
+rmdir InstaeditLogin 2>/dev/null || rm -rf InstaeditLogin    # rimuove la cartella vuota
 git clone https://github.com/Marcuss-ops/InstaeditLogin.git InstaeditLogin
 cd InstaeditLogin
 git checkout main
 ```
+
+> ⚠️ **Non eseguire `git submodule update --init`** — fallirà con errore
+> criptico (`No submodule mapping found in .gitmodules`) perché `.gitmodules`
+> è assente per scelta architetturale.
+
+> **Nota**: dopo questo workaround `InstaeditLogin/` diventa un **repo Git
+> indipendente** (non un submodule entry). `git diff --submodule=log` non
+> funzionerà dal parent; `git submodule update` resta inutilizzabile. È il
+> trade-off deliberato: meno automazione, ma il repo resta clona-bile da
+> zero senza dipendenze nascoste.
 
 ## Come aggiornare il submodule in futuro
 
@@ -38,10 +53,15 @@ git commit -m "chore: bump InstaeditLogin submodule"
 git push origin main
 ```
 
-Regole operative (vincolanti):
-- Tutti i commit vanno direttamente su `main` (no branch locali)
-- Push frequenti e atomici
-- Mai `git add .` nel parent (esistono dirty submodules sibling da non bundlare)
+## Convenzioni operative personali dell'autore
+
+- Tutti i commit vanno direttamente su `main` (no branch locali permanenti)
+- Push frequenti e atomici (un commit logico = un push)
+- Mai `git add .` nel parent (esistono sibling worktree dirty da non bundlare;
+  fare sempre `git add <path>` esplicito)
+- Push verso `VeloxEditiingg/main` da detached HEAD: `git push origin HEAD:main`
+  > `HEAD:main` è necessario perché `main` è checked-out in un altro worktree
+  > sibling (`VeloxLEgit/`). Da un branch locale basterebbe `git push origin main`.
 
 ## Status dei lavori
 
