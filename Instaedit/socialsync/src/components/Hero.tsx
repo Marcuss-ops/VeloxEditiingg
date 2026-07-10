@@ -32,6 +32,7 @@ export function Hero() {
           </a>
           <button
             onClick={() => setDemoOpen(true)}
+            data-testid="watch-demo-button"
             className="inline-flex items-center gap-2 px-[18px] py-[10px] rounded-xl text-sm font-semibold bg-white text-black border border-black no-underline hover:-translate-y-[1px] hover:bg-neutral-50 transition-all cursor-pointer"
           >
             Guarda demo

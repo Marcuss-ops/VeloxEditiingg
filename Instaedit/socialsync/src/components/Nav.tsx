@@ -59,7 +59,8 @@ export function Nav() {
         <button
           onClick={() => setOpen(!open)}
           className="md:hidden p-2"
-          aria-label="Menu"
+          aria-label="Toggle menu"
+          data-testid="mobile-menu-toggle"
         >
           {open ? <X size={24} /> : <Menu size={24} />}
         </button>
@@ -67,6 +68,7 @@ export function Nav() {
 
       {/* Mobile menu */}
       <div
+        data-testid="mobile-menu"
         className={cn(
           "md:hidden border-b border-neutral-100 bg-white flex-col px-6 pb-4 pt-2 gap-0",
           open ? "flex" : "hidden"

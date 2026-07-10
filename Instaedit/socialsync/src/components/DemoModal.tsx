@@ -19,6 +19,7 @@ export function DemoModal({ open, onClose }: Props) {
 
   return (
     <div
+      data-testid="demo-modal-backdrop"
       className={cn(
         "fixed inset-0 bg-black/60 flex items-center justify-center z-[100] p-6",
         open ? "flex" : "hidden"
@@ -30,7 +31,7 @@ export function DemoModal({ open, onClose }: Props) {
       <div className="bg-white rounded-xl max-w-[800px] w-full overflow-hidden shadow-[0_20px_60px_rgba(0,0,0,0.3)] animate-[modalIn_0.2s_ease]">
         <div className="flex justify-between items-center py-3.5 px-[18px] border-b border-neutral-100">
           <h3 className="text-[15px] font-semibold text-black">SocialSync — Demo rapida</h3>
-          <button onClick={onClose} className="text-[22px] leading-none p-1 cursor-pointer border-0 bg-transparent" aria-label="Chiudi">
+          <button onClick={onClose} data-testid="demo-modal-close" className="text-[22px] leading-none p-1 cursor-pointer border-0 bg-transparent" aria-label="Chiudi">
             <X size={22} />
           </button>
         </div>
