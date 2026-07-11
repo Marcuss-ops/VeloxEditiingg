@@ -1,0 +1,63 @@
+# ============================================================
+# SHARED — WORKER RESTART STABILITY TEST (3 CYCLES)
+# ============================================================
+# Restarts the worker 3 times consecutively, running full
+# verification after each restart. Ensures the worker survives
+# restarts without manual intervention.
+#
+# Required vars:
+#   master_url          — master API base URL
+#   inventory_hostname  — set automatically by Ansible
+#   version_number      — current version
+#
+# Optional:
+#   run_stability_test  — set to true to run (default: false)
+# ============================================================
+
+- name: StabilityTest | Three restart cycles
+  when: run_stability_test | default(false) | bool
+  block:
+    - name: StabilityTest | Capture pre-restart engine hash
+      ansible.builtin.command:
+        argv:
+          - docker
+          - exec
+          - "velox-worker-{{ inventory_hostname }}"
+          - sha256sum
+          - /usr/local/bin/velox_video_engine
+      register: _engine_hash_before
+      changed_when: false
+
+    - name: StabilityTest | Restart cycle
+      ansible.builtin.include_tasks:
+        file: restart_and_verify_worker.yml
+      loop:
+        - 1
+        - 2
+        - 3
+      loop_control:
+        loop_var: _restart_attempt
+
+    - name: StabilityTest | Verify engine unchanged after restarts
+      ansible.builtin.command:
+        argv:
+          - docker
+          - exec
+          - "velox-worker-{{ inventory_hostname }}"
+          - sha256sum
+          - /usr/local/bin/velox_video_engine
+      register: _engine_hash_after
+      changed_when: false
+
+    - name: StabilityTest | Assert engine hash unchanged
+      ansible.builtin.assert:
+        that:
+          - "_engine_hash_before.stdout.split() | first == _engine_hash_after.stdout.split() | first"
+        fail_msg: >-
+          C++ engine hash changed after restarts:
+          before={{ _engine_hash_before.stdout.split() | first | default('?') }}
+          after={{ _engine_hash_after.stdout.split() | first | default('?') }}
+
+    - name: StabilityTest | Log success
+      ansible.builtin.debug:
+        msg: "✅ 3 restart cycles passed — engine hash stable"

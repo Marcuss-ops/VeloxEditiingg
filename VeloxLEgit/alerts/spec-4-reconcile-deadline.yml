@@ -1,0 +1,82 @@
+# Prometheus alerting rules — Phase 4.3 (reconcile supervisor).
+#
+# Scope: this file consumes the metrics emitted by
+# DataServer/internal/completion/reconcile_supervisor.go:
+#
+#   velox_completion_reconcile_total{case, action}   counter
+#   velox_commit_deadline_exceeded_total            counter
+#
+# Cardinality discipline: 11 cases × 3 actions = 33 series (closed
+# enum). The `case` label is one of the strings enumerated in
+# completion.AllReconcileCases. The `action` label is one of
+# {noop, transition, escalate}. Renaming any of these strings is a
+# metrics break (and a CI check for any forbidden legacy names).
+#
+# Validate with `promtool check rules alerts/spec-4-reconcile-deadline.yml`
+# before opening the PR.
+
+groups:
+  - name: velox.reconcile_deadline
+    interval: 30s
+    rules:
+      # Phase 4.3 — commit-deadline breach is a load-bearing signal:
+      # workers that go silent for >2 minutes after DeclareOutputs
+      # indicate either a worker crash, a network partition, or an
+      # outbox stall. A sustained >0 rate fires so on-call can drill
+      # into the per-case breakdown via velox_completion_reconcile_total.
+      - alert: VeloxCommitDeadlineExceeded
+        expr: |
+          rate(velox_commit_deadline_exceeded_total[5m]) > 0
+        for: 10m
+        labels:
+          severity: warning
+          phase: completion_protocol
+        annotations:
+          summary: "Commit deadline exceeded at non-zero rate (5m)"
+          description: |
+            velox_commit_deadline_exceeded_total has been non-zero
+            for 10 minutes. The reconcile supervisor is escalating
+            stale attempt_commits rows to EXPIRED. Inspect
+            velox_completion_reconcile_total{case=~"deadline_expired|upload_stuck|missing_commit"}
+            for the anomaly breakdown and check the worker's lease
+            expiry (velox_master_worker_heartbeat_age_seconds) for
+            the source worker.
+
+      # Reconcile dispatch is escalating to operator: when the
+      # {action="escalate"} rate exceeds 1/min for 15m, fire so
+      # on-call can investigate the unresolvable state.
+      - alert: VeloxReconcileEscalateRate
+        expr: |
+          sum(rate(velox_completion_reconcile_total{action="escalate"}[5m])) > (1.0 / 60.0)
+        for: 15m
+        labels:
+          severity: warning
+          phase: completion_protocol
+        annotations:
+          summary: "Reconcile supervisor escalating >1/min (5m rolling)"
+          description: |
+            The reconcile supervisor has been escalating
+            (action=escalate) unresolvable attempt_commits states at
+            >1/min for 15 minutes. Operator/DBA intervention is
+            required. Drill into velox_completion_reconcile_total
+            by case label to identify the dominant anomaly.
+
+      # High noop rate: if the supervisor is dispatching the same
+      # (commit_id, case) repeatedly because a concurrent writer is
+      # racing it, the noop rate spikes. Acceptable as a steady-state
+      # signal but a sudden surge is informational.
+      - alert: VeloxReconcileNoopRateSpike
+        expr: |
+          sum(rate(velox_completion_reconcile_total{action="noop"}[10m])) > 10
+        for: 30m
+        labels:
+          severity: info
+          phase: completion_protocol
+        annotations:
+          summary: "Reconcile supervisor noop rate >10/s for 30m"
+          description: |
+            The reconcile supervisor's noop action rate is >10/s for
+            30 minutes. This means a concurrent writer is
+            consistently winning the CAS race ahead of the
+            supervisor. Not a fault, but worth checking that the
+            supervisor is not starved of work.

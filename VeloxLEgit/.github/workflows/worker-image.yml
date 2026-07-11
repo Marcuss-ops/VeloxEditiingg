@@ -1,0 +1,322 @@
+---
+# PR D — Worker Docker image release pipeline.
+# ----------------------------------------------------------------------------
+# Phase 1 of 100% Velox certification plan (cap. 2): every published digest
+# is sign + verify + baseline-recorded + bootstrap-tested under REAL deps
+# before the operator side ever sees a tag. NO `:latest`. NO fake-ffmpeg
+# bootstrap smoke. NO unsigned image accepted.
+# ----------------------------------------------------------------------------
+
+name: Worker image release
+
+on:
+  push:
+    tags:
+      - 'worker-v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version label (e.g. 1.2.3 or v1.2.3-rc1). The leading v is optional.'
+        required: true
+        default: ''
+      no_push:
+        description: 'Build + sign skipped locally — do NOT push, do NOT sign.'
+        required: false
+        default: 'false'
+        type: boolean
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: velox-worker
+  BUILD_DIR: RemoteCodex/native/worker-agent-go
+  DOCKERFILE: RemoteCodex/native/worker-agent-go/Dockerfile
+  BUILD_CONTEXT: .
+
+jobs:
+  build-publish:
+    name: Build, test, push, sign, verify, baseline, real-bootstrap
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Read VERSION.txt (canonical source)
+        id: read-version
+        run: |
+          set -euo pipefail
+          VERSION="$(tr -d '[:space:]' < VERSION.txt)"
+          if [ -z "$VERSION" ]; then
+            echo "::error::VERSION.txt is empty — refusing to publish." >&2
+            exit 1
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Resolved version from VERSION.txt: ${VERSION}"
+
+      - name: Resolve effective version + determine push
+        id: version
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "push" ]; then
+            TAG="${GITHUB_REF_NAME#worker-v}"
+          elif [ -n "${{ inputs.version }}" ]; then
+            INPUT="${{ inputs.version }}"
+            TAG="${INPUT#v}"
+          else
+            TAG="${{ steps.read-version.outputs.version }}"
+          fi
+          if [ -z "$TAG" ]; then
+            echo "::error::Could not resolve version." >&2
+            exit 1
+          fi
+          EXPECTED="${{ steps.read-version.outputs.version }}"
+          if [ -n "$EXPECTED" ] && [ "$TAG" != "$EXPECTED" ]; then
+            echo "::error::Resolved tag ($TAG) != canonical VERSION.txt ($EXPECTED). Refusing." >&2
+            exit 1
+          fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          SHORT_SHA="${GITHUB_SHA::7}"
+          echo "short_sha=${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+          if [ "${{ github.event_name }}" = "push" ]; then
+            SHOULD_PUSH="true"
+          else
+            if [ "${{ inputs.no_push }}" = "true" ]; then
+              SHOULD_PUSH="false"
+            else
+              SHOULD_PUSH="true"
+            fi
+          fi
+          echo "push=${SHOULD_PUSH}" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.8'
+          cache-dependency-path: ${{ env.BUILD_DIR }}/go.sum
+
+      - name: Run tests with race detector (fail-fast gate)
+        working-directory: ${{ env.BUILD_DIR }}
+        run: go test -race -timeout 5m ./internal/... ./pkg/...
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: steps.version.outputs.push == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Phase 1: NEVER tag :latest. metadata-action's `flavor: latest=false`
+      # disables all default tag-generation paths; the two explicit tags
+      # below (raw semver + sha-<short>) carry every release.
+      - name: "Compute image tags (NO :latest)"
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=${{ steps.version.outputs.tag }}
+            type=sha,prefix=sha-,format=short
+          flavor: |
+            latest=false
+
+      - name: Build + push image
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ env.BUILD_CONTEXT }}
+          file: ${{ env.DOCKERFILE }}
+          push: ${{ steps.version.outputs.push == 'true' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: true
+          sbom: true
+          cache-from: type=gha,scope=${{ github.workflow }}-${{ github.ref_name }}
+          cache-to:   type=gha,mode=max,scope=${{ github.workflow }}-${{ github.ref_name }}
+
+      - name: Extract image digest
+        id: digest
+        if: steps.build.outputs.digest != ''
+        run: |
+          set -euo pipefail
+          echo "digest=${{ steps.build.outputs.digest }}" >> "$GITHUB_OUTPUT"
+          echo "${{ steps.build.outputs.digest }}" > image-digest.txt
+          echo "## Image digest" >> "$GITHUB_STEP_SUMMARY"
+          echo ":package: \`${{ steps.build.outputs.digest }}\`" >> "$GITHUB_STEP_SUMMARY"
+          for t in ${{ steps.meta.outputs.tags }}; do
+            echo "- \`$t\`" >> "$GITHUB_STEP_SUMMARY"
+          done
+
+      - name: Upload digest artifact
+        if: steps.build.outputs.digest != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: worker-image-digest
+          path: image-digest.txt
+          if-no-files-found: error
+
+      - name: Install cosign
+        if: steps.digest.outputs.digest != '' && steps.version.outputs.push == 'true'
+        uses: sigstore/cosign-installer@v3
+        with:
+          cosign-release: 'v2.4.1'
+
+      - name: Cosign keyless sign (OIDC)
+        if: steps.digest.outputs.digest != '' && steps.version.outputs.push == 'true'
+        env:
+          COSIGN_EXPERIMENTAL: '1'
+        run: |
+          set -euo pipefail
+          IMAGE="${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}@${{ steps.digest.outputs.digest }}"
+          echo "Signing image: $IMAGE"
+          cosign sign --yes "$IMAGE"
+
+      # Phase 1 of 100% Velox certification plan (cap. 2): close the
+      # sign+verify loop inside CI. Mirrors prepare-host.sh's regex so
+      # the worker host and CI agree on the canonical signatory
+      # identity for the worker-image workflow file in this exact repo.
+      - name: Cosign keyless verify (OIDC, Phase 1)
+        if: steps.digest.outputs.digest != '' && steps.version.outputs.push == 'true'
+        env:
+          COSIGN_EXPERIMENTAL: '1'
+        run: |
+          set -euo pipefail
+          IMAGE="${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}@${{ steps.digest.outputs.digest }}"
+          echo "Verifying image: $IMAGE"
+          cosign verify \
+            --certificate-identity-regexp='^https://github.com/Marcuss-ops/VeloxLEgit/\.github/workflows/worker-image\.yml@refs/(tags/worker-v.+|heads/.+)' \
+            --certificate-oidc-issuer='https://token.actions.githubusercontent.com' \
+            "$IMAGE"
+
+      # Phase 1 baseline manifest (cap. 2): record canonical mapping
+      # digest -> version + bundle_hash + source_hash so certifiers
+      # + cap. 11 evidence pack can pin every running worker to a
+      # known bundle identity without an extra DB lookup.
+      - name: Record baseline manifest (Phase 1)
+        if: steps.digest.outputs.digest != ''
+        run: |
+          set -euo pipefail
+          VERSION="$(tr -d '[:space:]' < VERSION.txt 2>/dev/null || echo '')"
+          BUNDLE_HASH="$(tr -d '[:space:]' < RemoteCodex/BUNDLE_HASH.txt 2>/dev/null || echo '')"
+          SOURCE_HASH="$(python3 -c 'import json;print(json.load(open("RemoteCodex/BUILD_INFO.json")).get("source_hash",""))' 2>/dev/null || echo '')"
+          if [[ -z "$VERSION" ]]; then
+            echo "::error::VERSION.txt is empty at the build commit" >&2
+            exit 1
+          fi
+          python3 - <<PYEOF
+          import json, os
+          tags = "${{ steps.meta.outputs.tags }}".split()
+          manifest = {
+            "digest":         "${{ steps.digest.outputs.digest }}",
+            "registry_image": "${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}",
+            "tags":           tags,
+            "version":        "$VERSION",
+            "bundle_hash":    "$BUNDLE_HASH",
+            "source_hash":    "$SOURCE_HASH",
+            "github_run":     "${{ github.run_id }}",
+            "github_run_url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+            "workflow_file":  "worker-image.yml",
+          }
+          with open("worker-baseline-manifest.json", "w") as f:
+              json.dump(manifest, f, indent=2, sort_keys=True)
+          print(json.dumps(manifest, indent=2, sort_keys=True))
+          PYEOF
+
+      - name: Upload baseline manifest artifact
+        if: steps.digest.outputs.digest != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: worker-baseline-manifest
+          path: worker-baseline-manifest.json
+          if-no-files-found: error
+
+      # Phase 1 (cap. 2): REAL bootstrap smoke against the published
+      # image. NOT the fake-FFmpeg path of `make bootstrap-smoke`; this
+      # runs the binary against the production deps baked into the
+      # image, captures [BOOTSTRAP_REPORT] from stderr (worker-agent's
+      # new --bootstrap-report mode) and asserts verdict=OK + all 4
+      # canonical step PASS.
+      - name: "Real bootstrap smoke (Phase 1 cap. 2)"
+        if: steps.digest.outputs.digest != '' && steps.version.outputs.push == 'true'
+        run: |
+          set -euo pipefail
+          IMAGE="${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}@${{ steps.digest.outputs.digest }}"
+          BUNDLE_HASH="$(tr -d '[:space:]' < RemoteCodex/BUNDLE_HASH.txt 2>/dev/null || echo '')"
+          mkdir -p /tmp/velox-real-bootstrap
+          docker run --rm \
+            --name worker-real-bootstrap \
+            -e VELOX_WORKER_ID=ci-real-bootstrap \
+            -e VELOX_BUNDLE_HASH="$BUNDLE_HASH" \
+            -e VELOX_GRPC_MASTER_URL=127.0.0.1:9999 \
+            -v /tmp/velox-real-bootstrap:/var/lib/velox-worker \
+            "$IMAGE" \
+            --bootstrap-report > /tmp/velox-real-bootstrap/stdout.log 2> /tmp/velox-real-bootstrap/stderr.log
+          rc=$?
+          if [[ ! "$rc" =~ ^(0|1)$ ]]; then
+            echo "::error::bootstrap-report exited with $rc (expected 0=OK or 1=FAIL)"
+            cat /tmp/velox-real-bootstrap/stderr.log >&2 || true
+            exit 1
+          fi
+          JSON="$(awk '/^\[BOOTSTRAP_REPORT\]$/{flag=1;next}flag && /^\[/ {exit} flag' /tmp/velox-real-bootstrap/stderr.log)"
+          if [[ -z "$JSON" ]]; then
+            echo "::error::no [BOOTSTRAP_REPORT] JSON block"
+            cat /tmp/velox-real-bootstrap/stderr.log >&2 || true
+            exit 2
+          fi
+          echo "--- [BOOTSTRAP_REPORT] ---"
+          printf '%s\n' "$JSON"
+          echo "--- /[BOOTSTRAP_REPORT] ---"
+          printf '%s' "$JSON" > /tmp/velox-real-bootstrap/bootstrap-report.json
+          printf '%s' "$JSON" | python3 - <<'PYEOF'
+          import json, sys
+          d = json.load(sys.stdin)
+          verdict = d.get("verdict", "UNKNOWN")
+          steps = {s.get("name"): s.get("status") for s in d.get("steps", [])}
+          required = ("bundle_hash", "ffmpeg", "output_dir", "engine_self_render")
+          missing = [r for r in required if r not in steps]
+          if missing:
+              print(f"::error::bootstrap report missing required step: {missing}")
+              sys.exit(2)
+          bad = [r for r in required if steps.get(r) != "OK"]
+          if verdict != "OK" or bad:
+              print(f"::error::bootstrap verdict={verdict}, failed={bad}, all={steps}")
+              sys.exit(3)
+          print(f"OK: real-bootstrap verdict=OK; all 4 step PASS: {steps}")
+          PYEOF
+
+      # Phase 1 also keeps the legacy "stays up" smoke as a fast-fail
+      # before the slower real-bootstrap smoke. Companion to the
+      # health endpoint probe on the Dockerfile.
+      - name: "Smoke test: entrypoint stays up (no immediate crash)"
+        if: steps.digest.outputs.digest != '' && steps.version.outputs.push == 'true'
+        run: |
+          set -euo pipefail
+          IMAGE="${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}@${{ steps.digest.outputs.digest }}"
+          echo "Smoke testing entrypoint of: $IMAGE"
+          docker run --rm -d \
+            --name worker-smoke \
+            -e VELOX_WORKER_ID=ci-smoke \
+            -e VELOX_GRPC_MASTER_URL=127.0.0.1:9999 \
+            -p 8081:8081 \
+            "$IMAGE"
+          sleep 5
+          STATUS="$(docker inspect --format='{{.State.Running}}' worker-smoke || true)"
+          if [ "$STATUS" != "true" ]; then
+            echo "::error::Worker container did not stay running after 5s"
+            docker logs worker-smoke || true
+            docker rm -f worker-smoke || true
+            exit 1
+          fi
+          echo "Smoke OK — container stayed up."
+          docker rm -f worker-smoke

@@ -1,0 +1,66 @@
+# Velox — production Ansible inventory (TEMPLATE).
+# ────────────────────────────────────────────────────────────────────────────
+# THIS FILE IS A TEMPLATE. Copy to a local `production.ini` and fill in real
+# IPs/hostnames. The active inventory is generated and managed by the operator;
+# it is NOT committed (`**/production.ini` is excluded by the root .gitignore).
+#
+# Canonical production topology
+# ──────────────────────────────────────────────────────────────────────────
+# The master hosts the gRPC :9000 + REST :8000 listeners and admits any
+# N >= 1 external workers under [velox_workers] (the fleet size is NOT
+# bounded — operators may scale up or down as needed). The canonical
+# allowlist invariants (non-empty, non-wildcard, unique worker_id) are
+# enforced by:
+#   * ValidateProductionWorkers in DataServer/internal/config/workers_validator.go
+#     (fail-fast at server start, mirrored from this file by deploy/group_vars/all.yml
+#      → deploy/templates/velox-server.env.j2 → /etc/velox-server.env).
+#   * DataServer/data/ansible/playbooks/tasks/prechecks.yml
+#     (asserts `[velox_workers]` is non-empty and each host declares a
+#     non-empty worker_id).
+#
+# Bootstrapping a new node:
+#   cp deploy/inventory/production.ini.example deploy/inventory/production.ini
+#   $EDITOR deploy/inventory/production.ini   # fill in CHANGE_ME values
+#
+# Not a Velox machine — intentionally excluded:
+#   youtube_king is the operator's personal computer (Windows host) and is
+#   INTENTIONALLY NOT onboarded as a Velox worker. Do NOT add it under
+#   [velox_workers] in production.ini — it carries no Velox binary, no
+#   ansible_user, no worker_id, and no gRPC handshake. A reference is
+#   kept here ONLY as a guardrail against accidental re-onboarding.
+#
+# Scale-out guardrail:
+#   Operators may add or remove workers at will. The canonical invariant is
+#   the allowlist shape (non-empty, non-wildcard, unique worker_id) — the
+#   fleet size is unbounded. ValidateProductionWorkers fails closed at server
+#   start on a malformed allowlist, and DataServer/data/ansible/playbooks/
+#   tasks/prechecks.yml rejects the inventory before any play starts when
+#   [velox_workers] is empty or any worker_id is blank / '*'.
+#
+# Connection requirements:
+#   * SSH key-based auth as user `velox-deploy` (created by bootstrap-ssh).
+#   * sudo from `velox-deploy` to root (passwordless).
+#   * Python 3 on the remote host.
+#
+# Hostgroups:
+#   [velox_master]   — runs the master server. Single host.
+#   [velox_workers]  — runs worker agents. Any N >= 1 hosts (see canonical rule).
+#
+# Per-host vars:
+#   worker_id        — stable identifier the master uses for gate/ACL.
+#                      MUST match a value listed in `velox_allowed_workers`
+#                      in deploy/group_vars/all.yml AND mirror
+#                      /etc/velox-server.env `VELOX_ALLOWED_WORKERS`.
+
+[velox_master]
+velox-master ansible_host=CHANGE_ME ansible_user=velox-deploy
+
+[velox_workers]
+velox-worker-1 ansible_host=CHANGE_ME ansible_user=velox-deploy worker_id=velox-worker-1
+velox-worker-2 ansible_host=CHANGE_ME ansible_user=velox-deploy worker_id=velox-worker-2
+
+[velox_master:vars]
+ansible_python_interpreter=/usr/bin/python3
+
+[velox_workers:vars]
+ansible_python_interpreter=/usr/bin/python3

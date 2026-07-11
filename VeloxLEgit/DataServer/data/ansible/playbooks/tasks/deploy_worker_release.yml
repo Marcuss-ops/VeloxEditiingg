@@ -1,0 +1,243 @@
+# ============================================================
+# SHARED — DEPLOY WORKER RELEASE (ATOMIC + CONDITIONAL ROLLBACK)
+# ============================================================
+# Precondition checks happen in the caller. This task owns release staging,
+# canonical runtime convergence, verification, and rollback only when the
+# canonical unit is genuinely unhealthy.
+# ============================================================
+
+- name: DeployWorker | Initialize canonical deployment facts
+  ansible.builtin.set_fact:
+    velox_worker_unit_name: "velox-worker-{{ inventory_hostname }}.service"
+    velox_worker_container_name: "velox-worker-{{ inventory_hostname }}"
+    _release_swapped: false
+
+- name: DeployWorker | Unified release pipeline
+  block:
+    # ── DEPLOY ────────────────────────────────────────────────
+    - name: DeployWorker | Stop canonical worker service
+      ansible.builtin.systemd:
+        name: "{{ velox_worker_unit_name }}"
+        state: stopped
+      failed_when: false
+
+    - name: DeployWorker | Clean staging directory
+      ansible.builtin.file:
+        path: "{{ velox_dir }}/current.new"
+        state: absent
+      when: bundle_zip_path | default('') | length > 0
+
+    - name: DeployWorker | Create staging directory
+      ansible.builtin.file:
+        path: "{{ velox_dir }}/current.new"
+        state: directory
+        mode: "0755"
+      when: bundle_zip_path | default('') | length > 0
+
+    - name: DeployWorker | Extract bundle to staging
+      ansible.builtin.unarchive:
+        src: "{{ bundle_zip_path }}"
+        dest: "{{ velox_dir }}/current.new"
+        remote_src: true
+        mode: "0755"
+      when: bundle_zip_path | default('') | length > 0
+
+    - name: DeployWorker | Copy current to staging for no-bundle path
+      ansible.builtin.shell: |
+        set -euo pipefail
+        rsync -a "{{ velox_dir }}/current/" "{{ velox_dir }}/current.new/" \
+          --exclude=current.new --exclude=current.old
+      args:
+        executable: /bin/bash
+      when: bundle_zip_path | default('') | length == 0
+
+    - name: DeployWorker | Flatten legacy refactored layout in staging
+      ansible.builtin.shell: |
+        set -euo pipefail
+        if [ -d "{{ velox_dir }}/current.new/refactored" ]; then
+          shopt -s dotglob nullglob
+          mv -f "{{ velox_dir }}/current.new/refactored"/* "{{ velox_dir }}/current.new"/ || true
+          rm -rf "{{ velox_dir }}/current.new/refactored"
+        fi
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: DeployWorker | Verify Dockerfile in staging
+      ansible.builtin.stat:
+        path: "{{ velox_dir }}/current.new/RemoteCodex/native/worker-agent-go/Dockerfile"
+      register: _staging_dockerfile
+
+    - name: DeployWorker | Reject invalid bundle layout
+      ansible.builtin.assert:
+        that:
+          - _staging_dockerfile.stat.exists
+        fail_msg: "No Dockerfile in staging: {{ velox_dir }}/current.new"
+
+    - name: DeployWorker | Verify VERSION.txt in staging
+      ansible.builtin.stat:
+        path: "{{ velox_dir }}/current.new/VERSION.txt"
+      register: _staging_version
+
+    - name: DeployWorker | Warn if VERSION.txt is missing
+      ansible.builtin.debug:
+        msg: "VERSION.txt not found in staging"
+      when: not _staging_version.stat.exists
+
+    - name: DeployWorker | Ensure agent binary directories exist
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - "{{ velox_dir }}/current.new/RemoteCodex/bin"
+        - "{{ velox_dir }}/current.new/RemoteCodex/native/worker-agent-go/bin"
+      when: reinject_agent_src | default('') | length > 0
+
+    - name: DeployWorker | Copy fresh Go agent binary
+      ansible.builtin.copy:
+        src: "{{ reinject_agent_src }}"
+        dest: "{{ item }}"
+        mode: "0755"
+      loop:
+        - "{{ velox_dir }}/current.new/RemoteCodex/bin/velox-worker-agent"
+        - "{{ velox_dir }}/current.new/RemoteCodex/native/worker-agent-go/bin/velox-worker-agent"
+      when: reinject_agent_src | default('') | length > 0
+
+    - name: DeployWorker | Copy fresh helper scripts
+      ansible.builtin.copy:
+        src: "{{ reinject_scripts_dir | default('') }}/{{ item }}"
+        dest: "{{ velox_dir }}/current.new/RemoteCodex/scripts/{{ item }}"
+        mode: "0755"
+      loop:
+        - build-video-engine.sh
+        - worker-entrypoint.sh
+      when: reinject_scripts_dir | default('') | length > 0
+
+    - name: DeployWorker | Atomic release swap
+      ansible.builtin.shell: |
+        set -euo pipefail
+        rm -rf "{{ velox_dir }}/current.old"
+        if [ -d "{{ velox_dir }}/current" ]; then
+          mv "{{ velox_dir }}/current" "{{ velox_dir }}/current.old"
+        fi
+        mv "{{ velox_dir }}/current.new" "{{ velox_dir }}/current"
+      args:
+        executable: /bin/bash
+
+    - name: DeployWorker | Mark release as swapped
+      ansible.builtin.set_fact:
+        _release_swapped: true
+
+    # ── CONVERGE ──────────────────────────────────────────────
+    - name: DeployWorker | Build worker Docker image (sole owner = prepare_worker_image)
+      ansible.builtin.include_tasks:
+        file: prepare_worker_image.yml
+
+    - name: DeployWorker | Converge canonical runtime and remove legacy units
+      ansible.builtin.include_tasks:
+        file: canonical_worker_runtime.yml
+
+    # ── VERIFY ────────────────────────────────────────────────
+    - name: DeployWorker | Verify canonical worker
+      ansible.builtin.include_tasks:
+        file: verify_worker_post_deploy.yml
+
+    - name: DeployWorker | Remove old release after successful verification
+      ansible.builtin.file:
+        path: "{{ velox_dir }}/current.old"
+        state: absent
+
+  rescue:
+    # A master-side registration check may fail transiently after the local
+    # runtime has already converged. Never roll back a canonical unit that is
+    # active and serves a healthy endpoint.
+    - name: DeployWorker | Recovery inspect canonical unit
+      ansible.builtin.command:
+        argv:
+          - systemctl
+          - is-active
+          - --quiet
+          - "{{ velox_worker_unit_name }}"
+      register: _recovery_unit
+      changed_when: false
+      failed_when: false
+
+    - name: DeployWorker | Recovery inspect local health endpoint
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ velox_worker_health_port | default(8081) }}/health"
+        status_code: 200
+        timeout: 5
+      register: _recovery_health
+      failed_when: false
+
+    - name: DeployWorker | Classify recovery state
+      ansible.builtin.set_fact:
+        _canonical_runtime_healthy: >-
+          {{
+            (_recovery_unit.rc | default(1) == 0) and
+            (_recovery_health.status | default(0) == 200)
+          }}
+
+    - name: DeployWorker | Keep converged release when canonical runtime is healthy
+      ansible.builtin.debug:
+        msg: >-
+          Post-deploy verification failed after the canonical runtime became healthy;
+          keeping the current release and skipping destructive rollback.
+      when: _canonical_runtime_healthy | bool
+
+    - name: DeployWorker | Remove stale old release after healthy recovery
+      ansible.builtin.file:
+        path: "{{ velox_dir }}/current.old"
+        state: absent
+      when: _canonical_runtime_healthy | bool
+
+    - name: DeployWorker | Inspect rollback release
+      ansible.builtin.stat:
+        path: "{{ velox_dir }}/current.old"
+      register: _rollback_release
+      when: not (_canonical_runtime_healthy | bool)
+
+    - name: DeployWorker | Stop unhealthy canonical service before rollback
+      ansible.builtin.systemd:
+        name: "{{ velox_worker_unit_name }}"
+        state: stopped
+      failed_when: false
+      when: not (_canonical_runtime_healthy | bool)
+
+    - name: DeployWorker | Fail safely when rollback is unavailable
+      ansible.builtin.fail:
+        msg: >-
+          Deployment is unhealthy and current.old is unavailable; current release was
+          left in place for diagnosis instead of deleting additional state.
+      when:
+        - not (_canonical_runtime_healthy | bool)
+        - not (_release_swapped | bool) or not (_rollback_release.stat.exists | default(false))
+
+    - name: DeployWorker | Move failed release aside and restore previous release
+      ansible.builtin.shell: |
+        set -euo pipefail
+        rm -rf "{{ velox_dir }}/current.failed"
+        mv "{{ velox_dir }}/current" "{{ velox_dir }}/current.failed"
+        mv "{{ velox_dir }}/current.old" "{{ velox_dir }}/current"
+      args:
+        executable: /bin/bash
+      when:
+        - not (_canonical_runtime_healthy | bool)
+        - _release_swapped | bool
+        - _rollback_release.stat.exists | default(false)
+
+    - name: DeployWorker | Rebuild and converge restored release
+      ansible.builtin.include_tasks:
+        file: prepare_worker_image.yml
+      when: not (_canonical_runtime_healthy | bool)
+
+    - name: DeployWorker | Reapply canonical runtime after rollback
+      ansible.builtin.include_tasks:
+        file: canonical_worker_runtime.yml
+      when: not (_canonical_runtime_healthy | bool)
+
+    - name: DeployWorker | Mark deployment failed after successful rollback
+      ansible.builtin.fail:
+        msg: "Deployment failed; previous release restored and canonical runtime restarted"
+      when: not (_canonical_runtime_healthy | bool)

@@ -1,0 +1,210 @@
+---
+# ============================================================
+# NORMALIZE WORKER SYSTEMD — Pulizia e ricostruzione servizi
+# ============================================================
+# Obiettivo:
+#   - Unmask servizio velox-worker
+#   - Stop e disable di TUTTI i vecchi servizi (velox-worker-*.service)
+#   - Rimozione vecchie unit file e override directories
+#   - include deploy_worker_release (single source of truth)
+#     → prepare_worker_image (image build) + canonical_worker_runtime
+#       (env file, config, systemd unit, watchdog, auto-update)
+#   - Verifica stato + heartbeat sul master
+# ============================================================
+
+- name: Normalize worker systemd
+  hosts: velox_workers
+  gather_facts: true
+  vars:
+    velox_dir: "/opt/velox"
+    master_url: "{{ master_url | default('http://127.0.0.1:8000') }}"
+
+  tasks:
+    # ── STEP 1: Pulizia servizi vecchi ────────────────────────
+    - name: Normalize | Stop all old velox-worker services
+      ansible.builtin.shell: |
+        set -euo pipefail
+        for u in $(systemctl list-unit-files 'velox-worker*.service' --no-legend --no-pager 2>/dev/null | awk '{print $1}' | grep -v watchdog | grep -v auto-update || true); do
+          systemctl stop "$u" 2>/dev/null || true
+        done
+      args:
+        executable: /bin/bash
+      changed_when: false
+      failed_when: false
+
+    - name: Normalize | Disable all old velox-worker services
+      ansible.builtin.shell: |
+        set -euo pipefail
+        for u in $(systemctl list-unit-files 'velox-worker*.service' --no-legend --no-pager 2>/dev/null | awk '{print $1}' | grep -v watchdog | grep -v auto-update || true); do
+          systemctl disable "$u" 2>/dev/null || true
+        done
+      args:
+        executable: /bin/bash
+      changed_when: false
+      failed_when: false
+
+    - name: Normalize | Unmask velox-worker service
+      ansible.builtin.shell: |
+        set -euo pipefail
+        systemctl unmask "velox-worker-{{ inventory_hostname }}" 2>/dev/null || true
+      args:
+        executable: /bin/bash
+      changed_when: false
+      failed_when: false
+
+    - name: Normalize | Stop and disable any generic velox-worker.service
+      ansible.builtin.shell: |
+        set -euo pipefail
+        systemctl stop velox-worker.service 2>/dev/null || true
+        systemctl disable velox-worker.service 2>/dev/null || true
+        systemctl unmask velox-worker.service 2>/dev/null || true
+      args:
+        executable: /bin/bash
+      changed_when: false
+      failed_when: false
+
+    # ── STEP 2: Rimuovi vecchie unit file ─────────────────────
+    - name: Normalize | Remove old unit files (not the canonical one)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        # Step 2 narrows the cleanup to on-disk files in
+        # /etc/systemd/system/velox-worker-*.service. Step 7
+        # (below) asserts the broader system-wide canonical-only
+        # state via `systemctl list-unit-files`; the two are
+        # intentionally narrow-vs-broad, NOT duplicates. Step 2
+        # cannot see generator-supplied or /usr/lib units; Step 7
+        # catches those.
+        KEEP="velox-worker-{{ inventory_hostname }}.service"
+        for f in /etc/systemd/system/velox-worker-*.service; do
+          [ ! -f "$f" ] && continue
+          BASE=$(basename "$f")
+          # Only keep the canonical unit. Watchdog and auto-update
+          # are canonical siblings; Step 7 assert forbids any other
+          # survivors in the post-state enumeration (canonical-only
+          # contract).
+          if [ "$BASE" != "$KEEP" ]; then
+            rm -f "$f"
+            echo "Removed: $f"
+          fi
+        done
+      args:
+        executable: /bin/bash
+      register: removed_units
+      changed_when: "'Removed:' in (removed_units.stdout | default(''))"
+
+    - name: Normalize | Remove old override directories
+      ansible.builtin.shell: |
+        set -euo pipefail
+        KEEP_DIR="velox-worker-{{ inventory_hostname }}.service.d"
+        for d in /etc/systemd/system/velox-worker-*.service.d; do
+          [ ! -d "$d" ] && continue
+          BASE=$(basename "$d")
+          if [ "$BASE" != "$KEEP_DIR" ]; then
+            rm -rf "$d"
+            echo "Removed dir: $d"
+          fi
+        done
+      args:
+        executable: /bin/bash
+      register: removed_dirs
+      changed_when: "'Removed dir:' in (removed_dirs.stdout | default(''))"
+
+    # ── STEP 3: Unified deploy pipeline (single source of truth) ──
+    # deploy_worker_release → stop → staging → validate → swap → Docker build → verify → rollback
+    - name: Normalize | Deploy and rebuild worker
+      ansible.builtin.include_tasks:
+        file: tasks/deploy_worker_release.yml
+      vars:
+        bundle_zip_path: ""
+
+    - name: Normalize | Get journal logs
+      ansible.builtin.shell: |
+        journalctl -u "velox-worker-{{ inventory_hostname }}" --no-pager -n 30 2>/dev/null || true
+      args:
+        executable: /bin/bash
+      register: journal_output
+      changed_when: false
+      failed_when: false
+
+    - name: Normalize | Show recent journal
+      ansible.builtin.debug:
+        msg: "{{ journal_output.stdout_lines | default([]) }}"
+
+    # ── STEP 7: Assert Idempotency & Purity ───────────────────
+    # Hard-fail if the post-normalization state is not canonical-only.
+    #
+    # Operationally this is a *stricter idempotency gate*: every run
+    # must terminate with the host holding exactly one canonical
+    # `velox-worker-<inventory_hostname>.service` plus the two named
+    # siblings (watchdog, auto-update). Any other surviving unit, OR
+    # the absence of the canonical unit itself, fails the play.
+    #
+    # Notes:
+    #   * The `shell` task runs the real `systemctl list-unit-files`
+    #     even under `--check` mode: we assert *actual* on-host
+    #     state (post-deploy), not would-be state. No `|| true` —
+    #     a broken systemctl will surface loudly.
+    #   * The no-stragglers assert runs as a loop over the live
+    #     enumeration; an empty list trivially passes the loop, so a
+    #     separate canonical-present assert below closes that gap.
+    - name: Normalize | Reload systemd daemon (refresh unit-file cache)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        systemctl daemon-reload 2>/dev/null || true
+      args:
+        executable: /bin/bash
+      changed_when: false
+      failed_when: false
+
+
+    - name: Normalize | Enumerate surviving velox-worker units
+      ansible.builtin.shell: |
+        set -euo pipefail
+        systemctl list-unit-files 'velox-worker*.service' --no-legend --no-pager 2>/dev/null \
+          | awk '{print $1}'
+      args:
+        executable: /bin/bash
+      register: check_remaining_units
+      changed_when: false
+
+    - name: Normalize | Assert canonical unit present (no-empty-state guard)
+      ansible.builtin.assert:
+        that:
+          - check_remaining_units.stdout_lines | length > 0
+          - "'velox-worker-' ~ inventory_hostname ~ '.service' in check_remaining_units.stdout_lines"
+        fail_msg: |-
+          Idempotency fail: canonical unit `velox-worker-{{ inventory_hostname }}.service`
+          is missing from `systemctl list-unit-files`. Surviving: {{ check_remaining_units.stdout_lines | default([]) }}.
+        success_msg: "OK canonical present: velox-worker-{{ inventory_hostname }}.service"
+
+    - name: Normalize | Assert no non-canonical stragglers
+      ansible.builtin.assert:
+        that:
+          - >-
+            item in [
+              'velox-worker-' ~ inventory_hostname ~ '.service',
+              'velox-worker-watchdog.service',
+              'velox-auto-update.service'
+            ]
+        fail_msg: |-
+          Idempotency fail: non-canonical unit survived normalization -> {{ item }}.
+          Surviving full list: {{ check_remaining_units.stdout_lines | default([]) }}.
+      loop: "{{ check_remaining_units.stdout_lines | default([]) }}"
+
+    - name: Normalize | Summarize canonical purity result
+      ansible.builtin.debug:
+        msg: "Canonical purity OK: {{ check_remaining_units.stdout_lines | length }} surviving units, all whitelisted."
+
+
+    # ── STEP 8: Riepilogo finale ──────────────────────────────
+    - name: Normalize | Final summary
+      ansible.builtin.debug:
+        msg: |-
+          ========================================
+          NORMALIZE COMPLETE — {{ inventory_hostname }}
+          ========================================
+          Worker ID: {{ worker_id | default(inventory_hostname) }}
+          Service:   velox-worker-{{ inventory_hostname }}
+          Env file:  /etc/velox-worker-{{ inventory_hostname }}.env
+          Master:    {{ master_url }}
+          ========================================

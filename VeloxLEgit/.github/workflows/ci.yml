@@ -1,0 +1,109 @@
+# =============================================================================
+# Velox CI \u2014 single canonical job: `make verify`
+#
+# All verification logic lives in scripts/ci/** (and the root Makefile as
+# orchestrator). This workflow is a thin dispatcher: checkout, set up cache,
+# run `make verify`. Re-publishing steps here is a regression.
+# =============================================================================
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # ── Canonical verification ─────────────────────────────────────────────────
+  verify:
+    name: make verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      # ── fetch-depth: 0 is required so BASE_REF=origin/main (used by
+      # scripts/ci/lib/diff-scope.sh) is resolvable. Default shallow
+      # checkout only exposes refs/heads/<branch>; BASE_REF resolution
+      # silently fails and every scoped check goes red.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: DataServer/go.mod
+
+      - name: Cache Go build module cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('DataServer/go.sum', 'RemoteCodex/native/worker-agent-go/go.sum', 'shared/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Install cmake (native engine build)
+        run: sudo apt-get update && sudo apt-get install -y cmake
+
+      # ── Cheap label-shape checks first (fail-fast before make verify spins up).
+      # Spec §14 compute-outcome single-family shape: dashboards/,
+      # alerts/, prometheus/ MUST consume `velox_compute_seconds_total{outcome=…}`
+      # and `velox_compute_failure_reasons_total{reason=…}` — the 4
+      # retired split-out family names are FORBIDDEN. See
+      # scripts/ci/check-compute-outcome-labels.sh.
+      - name: Guard — compute-outcome labels (spec §14)
+        run: ./scripts/ci/check-compute-outcome-labels.sh
+
+      # Spec §14 Blocco 5 wrap-pattern enforcement: production callers
+      # of (*ConflictBudget).Record MUST funnel through
+      # (*coordinator).recordAttemptCommitsCAS or another helper that
+      # preserves the "keep input err separate" contract. A naive
+      # `err := budget.Record(e)` shadows the input and reintroduces
+      # the nil-return ambiguity the wrap-pattern dodges. See
+      # scripts/ci/check-conflict-budget-call-pattern.sh.
+      - name: Guard — conflict-budget call pattern (Blocco 5)
+        run: ./scripts/ci/check-conflict-budget-call-pattern.sh
+
+      # SQL-ownership shape guard (companion to the method-call-level
+      # check inside `make verify`): forbids imports of `database/sql`,
+      # usage of `sql.DB` / `sql.Tx` types, and any raw DML strings
+      # (INSERT/UPDATE/DELETE) outside the canonical SQL gateway at
+      # internal/store/** and the UoW adapter at
+      # internal/completion/sqlite_uow.go. Path-based allowlist only,
+      # no marker escape hatch — this is the target state, not a
+      # transition. See scripts/ci/check-sql-ownership.sh.
+      - name: Guard — sql-ownership shape
+        run: ./scripts/ci/check-sql-ownership.sh
+
+      # Blocco 5 / B1 follow-up: forbids in-mem SQLite DSNs that lack
+      # the canonical `_busy_timeout=5000` pragma. Catches SQLITE_BUSY
+      # flakes proactively. See scripts/ci/check-dsn-busy-timeout.sh.
+      - name: Guard — dsn busy-timeout shape (Blocco 5 / B1 follow-up)
+        run: ./scripts/ci/check-dsn-busy-timeout.sh
+
+      - name: Verify — architectural, Go, native, docker-image
+        run: make verify
+
+      # ── Phase 1.5: Artifact Commit Protocol invariant gate.
+      # Runs the 4 closure queries against a freshly-seeded DB (all
+      # migrations applied, zero rows). Empty DB → 0 rows → exit 0.
+      # Failure mode prints offending rows on stderr. Wall-clock
+      # observed in CI: ~30 ms on a populated DB; ceiling 1 s/query
+      # × 4 queries (timeout wrapper). See
+      # scripts/ci/check-completion-protocol-invariants.sh.
+      - name: Invariants — completion protocol (Phase 1.5)
+        run: |
+          DB="$(mktemp /tmp/velox-cp-fixture.XXXXXX.db)"
+          trap 'rm -f "$DB"' EXIT
+          (cd DataServer && go run ./cmd/seed-velox-db-fixture "$DB")
+          ./scripts/ci/check-completion-protocol-invariants.sh "$DB"

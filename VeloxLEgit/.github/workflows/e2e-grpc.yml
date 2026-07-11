@@ -1,0 +1,91 @@
+# =============================================================================
+# Velox CI — dedicated E2E gRPC control-plane matrix (PRs + on-demand)
+# =============================================================================
+# Runs `make e2e-grpc` (6-case matrix: plaintext/TLS/bad-cert/wrong-CA/etc.)
+# on every PR to main and on manual workflow_dispatch. NOT triggered on
+# push:to:main because ci.yml already owns the integrity-suite path;
+# running both would double the runner queue.
+#
+# Why a dedicated workflow instead of inlining into ci.yml:
+#   * ci.yml's job ceiling is the integrity suite (~10 min on warm cache).
+#     The gRPC matrix is genuinely separate work: it spawns a master + N
+#     workers per case and asserts TLS handshake verdicts, not go vet.
+#   * Operators re-running a flaky case can hit workflow_dispatch without
+#     gating on the integrity-suite path.
+#   * Per-workflow `timeout-minutes` is the natural place to encode the
+#     matrix budget (90s + bin build).
+#
+# Timeout: 10 min. CI runs typically complete in ~3 min (warm Go cache).
+# Artifacts on failure: /tmp/velox-e2e-grpc/ for 7 days (operator
+# post-mortem: master.log + worker-*.log + pki/).
+#
+# Note on the per-PR contract:
+#   * Fails the PR if ANY of the 6 cases does not pass.
+#   * Cancels in-progress runs on rerun-push to keep the queue short,
+#     but never cancels workflow_dispatch runs (operator intent).
+# =============================================================================
+
+name: E2E gRPC control plane
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: e2e-grpc-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  e2e-grpc:
+    name: make e2e-grpc (6-case matrix)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      # fetch-depth: 0 — keeps BASE_REF resolvable so any future scoped
+      # check (e.g. architectural-inventory vs the PR) doesn't silently
+      # turn red. Tested behaviour: PR pushes always reach github.ref =
+      # refs/pull/N/merge (merge commit), so checkout fetch-depth is
+      # the only way to also reach refs/heads/main for diff baselines.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: DataServer/go.mod
+          cache: true
+          cache-dependency-path: |
+            DataServer/go.sum
+            RemoteCodex/native/worker-agent-go/go.sum
+            shared/go.sum
+
+      - name: Sanity-check runner deps
+        # Cheaper than letting make e2e-grpc fail mid-flight.
+        run: |
+          openssl version
+          sqlite3 -version
+          command -v go && go version
+          command -v python3 && python3 --version
+          echo "deps present"
+
+      # The actual matrix run. Inner timeout buffer is smaller than the
+      # job timeout so the post-run "upload debug artifacts" step has
+      # budget to fire on failure.
+      - name: Run e2e-grpc matrix
+        timeout-minutes: 9
+        run: make e2e-grpc
+
+      - name: Upload debug artifacts (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-grpc-debug
+          path: |
+            /tmp/velox-e2e-grpc/
+          retention-days: 7
+          if-no-files-found: warn

@@ -1,0 +1,964 @@
+package migrations
+
+import (
+	"database/sql"
+	"embed"
+	"fmt"
+	"strings"
+	"testing"
+
+	_ "github.com/mattn/go-sqlite3"
+)
+
+//go:embed testdata/*.sql
+var testMigrationsFS embed.FS
+
+//go:embed testdata/duplicates/*.sql
+var duplicateMigrationsFS embed.FS
+
+func openTestDB(t *testing.T) *sql.DB {
+	t.Helper()
+	// Append `_busy_timeout=5000` so concurrent goroutines don't
+	// immediately trip SQLITE_BUSY when the migration-runner takes the writer lock.
+	// Canonical DSN pattern for in-memory shared test DBs across
+	// DataServer/internal/store/*_test.go is
+	//   file:<name>?mode=memory&cache=shared&_busy_timeout=5000
+	// `cache=shared` lets sibling goroutines share the same in-memory db, but
+	// creates writer/reader contention: while the migration-runner holds the
+	// writer lock, a concurrent reader blocks; without `_busy_timeout=5000`
+	// that reader returns SQLITE_BUSY immediately instead of waiting it out.
+	// Keep both flags together when copying this DSN into new tests.
+	// This helper is the single source of truth for the migrations-package
+	// tests.
+	db, err := sql.Open("sqlite3", fmt.Sprintf("file:%s?mode=memory&cache=shared&_busy_timeout=5000", t.Name()))
+	if err != nil {
+		t.Fatalf("open in-memory db: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	// Always enable FK enforcement for testing
+	_, _ = db.Exec("PRAGMA foreign_keys = ON")
+	return db
+}
+
+// ============================================================
+// discoverMigrations tests
+// ============================================================
+
+func TestDiscoverMigrations_AllVersions(t *testing.T) {
+	migs, err := discoverMigrations(testMigrationsFS, "testdata")
+	if err != nil {
+		t.Fatalf("discoverMigrations failed: %v", err)
+	}
+
+	// Self-updating count: the test asserts that discoverMigrations
+	// returns at least one migration and that the FIRST 8 follow the
+	// canonical version/name ordering produced by the runner. No
+	// hardcoded count — the file count at migrations/ root can
+	// shrink/grow as files relocate onto the recursive
+	// migrations/sqlite/ embed track (Path B architectural push) or
+	// new migrations land at the root. Mirrors the dynamic pattern
+	// already used by TestRunMigrations_FullLifecycle, TestAppliedVersions,
+	// TestPendingVersions, and TestIntegration_MigrationRunner_EndToEnd.
+	if len(migs) == 0 {
+		t.Fatal("expected discoverMigrations to return at least one migration, got 0")
+	}
+
+	expectedFirst8 := []struct {
+		Version int
+		Name    string
+	}{
+		{1, "initial"},
+		{2, "legacy_imports"},
+		{3, "youtube_canonical"},
+		{4, "ansible"},
+		{5, "legacy_cleanup"},
+		{6, "drive_links_source_of_truth"},
+		{7, "queue_persistence"},
+		{8, "drop_legacy_tables"},
+	}
+
+	compareLen := len(expectedFirst8)
+	if len(migs) < compareLen {
+		compareLen = len(migs)
+	}
+	for i := 0; i < compareLen; i++ {
+		if migs[i].Version != expectedFirst8[i].Version {
+			t.Errorf("migration[%d] version: got %d, want %d", i, migs[i].Version, expectedFirst8[i].Version)
+		}
+		if migs[i].Name != expectedFirst8[i].Name {
+			t.Errorf("migration[%d] name: got %q, want %q", i, migs[i].Name, expectedFirst8[i].Name)
+		}
+		if migs[i].Checksum == "" {
+			t.Errorf("migration[%d] checksum is empty", i)
+		}
+		if migs[i].SQL == "" {
+			t.Errorf("migration[%d] SQL is empty", i)
+		}
+	}
+}
+
+func TestDiscoverMigrations_SortedByVersion(t *testing.T) {
+	migs, err := discoverMigrations(testMigrationsFS, "testdata")
+	if err != nil {
+		t.Fatalf("discoverMigrations failed: %v", err)
+	}
+
+	for i := 1; i < len(migs); i++ {
+		if migs[i].Version <= migs[i-1].Version {
+			t.Errorf("migrations not sorted: %d (%d) after %d (%d)",
+				i, migs[i].Version, i-1, migs[i-1].Version)
+		}
+	}
+}
+
+// TestDiscoverMigrationsRejectsDuplicateVersions verifies that discoverMigrations
+// returns a hard error when two .sql files share the same version number.
+func TestDiscoverMigrationsRejectsDuplicateVersions(t *testing.T) {
+	// duplicateMigrationsFS embeds testdata/duplicates/ which contains
+	// 029_first.sql and 029_second.sql (same version)
+	_, err := discoverMigrations(duplicateMigrationsFS, "testdata/duplicates")
+	if err == nil {
+		t.Fatal("expected error for duplicate migration version, got nil")
+	}
+	if !strings.Contains(err.Error(), "duplicate migration version 029") {
+		t.Errorf("error message should mention 'duplicate migration version 029', got: %v", err)
+	}
+}
+
+func TestDiscoverMigrations_ChecksumStable(t *testing.T) {
+	migs1, _ := discoverMigrations(testMigrationsFS, "testdata")
+	migs2, _ := discoverMigrations(testMigrationsFS, "testdata")
+
+	for i := range migs1 {
+		if migs1[i].Checksum != migs2[i].Checksum {
+			t.Errorf("migration %03d_%s: checksum not stable: %s vs %s",
+				migs1[i].Version, migs1[i].Name, migs1[i].Checksum, migs2[i].Checksum)
+		}
+	}
+}
+
+// ============================================================
+// RunMigrations integration tests
+// ============================================================
+
+func TestRunMigrations_FullLifecycle(t *testing.T) {
+	db := openTestDB(t)
+
+	// First run: all migrations should be applied
+	if err := RunMigrations(db, testMigrationsFS, "testdata"); err != nil {
+		t.Fatalf("first RunMigrations failed: %v", err)
+	}
+
+	// Discover expected migration count
+	expectedMigs, _ := discoverMigrations(testMigrationsFS, "testdata")
+	expectedCount := len(expectedMigs)
+
+	// Verify schema_migrations has the expected number of entries
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&count); err != nil {
+		t.Fatalf("query schema_migrations count: %v", err)
+	}
+	if count != expectedCount {
+		t.Fatalf("expected %d schema_migrations entries, got %d", expectedCount, count)
+	}
+
+	// Verify each version has name, checksum, and applied_at
+	rows, err := db.Query(`SELECT version, name, checksum, applied_at FROM schema_migrations ORDER BY version`)
+	if err != nil {
+		t.Fatalf("query schema_migrations: %v", err)
+	}
+	defer rows.Close()
+
+	migIdx := 0
+	for rows.Next() {
+		var v int
+		var name, checksum, appliedAt string
+		if err := rows.Scan(&v, &name, &checksum, &appliedAt); err != nil {
+			t.Fatalf("scan row: %v", err)
+		}
+		if v != expectedMigs[migIdx].Version {
+			t.Errorf("row %d version: got %d, want %d", migIdx, v, expectedMigs[migIdx].Version)
+		}
+		if name == "" {
+			t.Errorf("version %d: empty name", v)
+		}
+		if checksum == "" {
+			t.Errorf("version %d: empty checksum", v)
+		}
+		if appliedAt == "" {
+			t.Errorf("version %d: empty applied_at", v)
+		}
+		migIdx++
+	}
+}
+
+func TestRunMigrations_Idempotent(t *testing.T) {
+	db := openTestDB(t)
+
+	// Discover expected count
+	expectedMigs, _ := discoverMigrations(testMigrationsFS, "testdata")
+	expectedCount := len(expectedMigs)
+
+	// Run twice
+	if err := RunMigrations(db, testMigrationsFS, "testdata"); err != nil {
+		t.Fatalf("first RunMigrations failed: %v", err)
+	}
+	if err := RunMigrations(db, testMigrationsFS, "testdata"); err != nil {
+		t.Fatalf("second RunMigrations (idempotent) failed: %v", err)
+	}
+
+	// Should still have the expected number of entries
+	var count int
+	db.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&count)
+	if count != expectedCount {
+		t.Errorf("expected %d entries after idempotent run, got %d", expectedCount, count)
+	}
+}
+
+func TestRunMigrations_ChecksumMismatch(t *testing.T) {
+	db := openTestDB(t)
+
+	// Apply migrations normally first
+	if err := RunMigrations(db, testMigrationsFS, "testdata"); err != nil {
+		t.Fatalf("first RunMigrations failed: %v", err)
+	}
+
+	// Tamper with the checksum in schema_migrations
+	if _, err := db.Exec(`UPDATE schema_migrations SET checksum = 'tampered' WHERE version = 3`); err != nil {
+		t.Fatalf("tamper checksum: %v", err)
+	}
+
+	// Second run should fail with checksum mismatch
+	err := RunMigrations(db, testMigrationsFS, "testdata")
+	if err == nil {
+		t.Fatal("expected checksum mismatch error, got nil")
+	}
+}
+
+// ============================================================
+// Migration 003: YouTube canonical tables
+// ============================================================
+
+func TestMigration003_YouTubeCanonicalTables(t *testing.T) {
+	db := openTestDB(t)
+	applyAllMigrations(t, db)
+
+	tables := []string{
+		"youtube_channels",
+		"youtube_groups",
+		"youtube_group_channels",
+		"youtube_tracked_niches",
+	}
+
+	for _, table := range tables {
+		if !tableExists(t, db, table) {
+			t.Errorf("migration 003: table %s does not exist", table)
+		}
+	}
+}
+
+func TestMigration003_YouTubeForeignKeys(t *testing.T) {
+	db := openTestDB(t)
+	applyAllMigrations(t, db)
+
+	// Verify FK on youtube_group_channels by attempting inserts
+	// First insert into parent tables
+	_, err := db.Exec(`INSERT INTO youtube_channels (channel_id, title, created_at, updated_at) VALUES ('UC_test', 'Test', datetime('now'), datetime('now'))`)
+	if err != nil {
+		t.Fatalf("insert channel: %v", err)
+	}
+
+	_, err = db.Exec(`INSERT INTO youtube_groups (name, group_type, created_at, updated_at) VALUES ('Test Group', 'manager', datetime('now'), datetime('now'))`)
+	if err != nil {
+		t.Fatalf("insert group: %v", err)
+	}
+
+	// Valid FK insert should succeed
+	_, err = db.Exec(`INSERT INTO youtube_group_channels (group_id, channel_id, position, added_at) VALUES (1, 'UC_test', 0, datetime('now'))`)
+	if err != nil {
+		t.Errorf("valid FK insert failed: %v", err)
+	}
+
+	// Invalid FK should fail
+	_, err = db.Exec(`INSERT INTO youtube_group_channels (group_id, channel_id, position, added_at) VALUES (999, 'nonexistent', 0, datetime('now'))`)
+	if err == nil {
+		t.Error("expected FK violation for invalid group_id, got nil")
+	}
+}
+
+func TestMigration003_UNIQUENameGroupType(t *testing.T) {
+	db := openTestDB(t)
+	applyAllMigrations(t, db)
+
+	// Insert first group
+	_, err := db.Exec(`INSERT INTO youtube_groups (name, group_type, created_at, updated_at) VALUES ('SameName', 'manager', datetime('now'), datetime('now'))`)
+	if err != nil {
+		t.Fatalf("first insert: %v", err)
+	}
+
+	// Same name, different type — should succeed (UNIQUE(name, group_type))
+	_, err = db.Exec(`INSERT INTO youtube_groups (name, group_type, created_at, updated_at) VALUES ('SameName', 'upload', datetime('now'), datetime('now'))`)
+	if err != nil {
+		t.Errorf("same name different type should be allowed: %v", err)
+	}
+
+	// Same name, same type — should fail
+	_, err = db.Exec(`INSERT INTO youtube_groups (name, group_type, created_at, updated_at) VALUES ('SameName', 'manager', datetime('now'), datetime('now'))`)
+	if err == nil {
+		t.Error("expected UNIQUE violation for duplicate (name, group_type), got nil")
+	}
+}
+
+// ============================================================
+// Migration 004: Ansible tables
+// ============================================================
+
+func TestMigration004_AnsibleTables(t *testing.T) {
+	db := openTestDB(t)
+	applyAllMigrations(t, db)
+
+	tables := []string{
+		"ansible_hosts",
+		"ansible_runs",
+		"ansible_run_hosts",
+	}
+
+	for _, table := range tables {
+		if !tableExists(t, db, table) {
+			t.Errorf("migration 004: table %s does not exist", table)
+		}
+	}
+}
+
+func TestMigration004_AnsibleRunCascadeDelete(t *testing.T) {
+	db := openTestDB(t)
+	applyAllMigrations(t, db)
+
+	// Insert a run and associate hosts
+	_, err := db.Exec(`INSERT INTO ansible_runs (run_id, action, status, created_at) VALUES ('test-run', 'deploy', 'success', datetime('now'))`)
+	if err != nil {
+		t.Fatalf("insert run: %v", err)
+	}
+
+	_, err = db.Exec(`INSERT INTO ansible_run_hosts (run_id, host) VALUES ('test-run', 'host-a')`)
+	if err != nil {
+		t.Fatalf("insert run host: %v", err)
+	}
+
+	// Delete the run — CASCADE should remove the association
+	_, err = db.Exec(`DELETE FROM ansible_runs WHERE run_id = 'test-run'`)
+	if err != nil {
+		t.Fatalf("delete run: %v", err)
+	}
+
+	var count int
+	db.QueryRow(`SELECT COUNT(*) FROM ansible_run_hosts WHERE run_id = 'test-run'`).Scan(&count)
+	if count != 0 {
+		t.Errorf("expected 0 run_hosts after cascade delete, got %d", count)
+	}
+}
+
+func TestMigration004_AnsibleHostsDefaults(t *testing.T) {
+	db := openTestDB(t)
+	applyAllMigrations(t, db)
+
+	// Insert with minimal fields
+	_, err := db.Exec(`INSERT INTO ansible_hosts (host, created_at, updated_at) VALUES ('test-host', datetime('now'), datetime('now'))`)
+	if err != nil {
+		t.Fatalf("insert host: %v", err)
+	}
+
+	// Verify defaults
+	var ansibleUser, secretRef string
+	var enabled int
+	err = db.QueryRow(`SELECT ansible_user, secret_ref, enabled FROM ansible_hosts WHERE host='test-host'`).Scan(&ansibleUser, &secretRef, &enabled)
+	if err != nil {
+		t.Fatalf("query host: %v", err)
+	}
+	if ansibleUser != "pierone" {
+		t.Errorf("default ansible_user: got %q, want %q", ansibleUser, "pierone")
+	}
+	if secretRef != "" {
+		t.Errorf("default secret_ref: got %q, want empty string", secretRef)
+	}
+	if enabled != 1 {
+		t.Errorf("default enabled: got %d, want 1", enabled)
+	}
+}
+
+// ============================================================
+// Migration 005: Legacy cleanup (soft) + Migration 008: DROP legacy
+// ============================================================
+
+func TestMigration005_AppliesCleanly(t *testing.T) {
+	db := openTestDB(t)
+	applyAllMigrations(t, db)
+
+	// Verify migration 005 is recorded
+	var checksum string
+	err := db.QueryRow(`SELECT checksum FROM schema_migrations WHERE version = 5`).Scan(&checksum)
+	if err != nil {
+		t.Fatalf("migration 005 not recorded: %v", err)
+	}
+	if checksum == "" {
+		t.Error("migration 005 checksum is empty")
+	}
+
+	// Verify migration 008 is recorded
+	var checksum008 string
+	err = db.QueryRow(`SELECT checksum FROM schema_migrations WHERE version = 8`).Scan(&checksum008)
+	if err != nil {
+		t.Fatalf("migration 008 not recorded: %v", err)
+	}
+
+	// Verify legacy tables are DROPPED by migration 008
+	legacyTables := []string{
+		"youtube_channel_metadata",
+		"youtube_manager_channels",
+		"youtube_manager_groups",
+		"ansible_computers",
+	}
+	for _, table := range legacyTables {
+		if tableExists(t, db, table) {
+			t.Errorf("migration 008 should have dropped %s", table)
+		}
+	}
+
+	// Verify legacy_json_registry exists
+	if !tableExists(t, db, "legacy_json_registry") {
+		t.Error("migration 008 should have created legacy_json_registry")
+	}
+}
+
+// ============================================================
+// applyMigration per-statement tolerance tests
+// ============================================================
+
+// TestApplyMigration_DuplicateColumnTolerated verifies the "duplicate
+// column name" tolerance introduced in applyMigration for ALTER TABLE
+// ADD COLUMN statements. The tolerance unblocks the Path B rollout
+// path for any pre-Path-B production DB that already applied the
+// legacy migrations/039_add_job_required_resource_columns.sql against
+// its jobs table: when the renamed sibling
+// 045_add_job_required_resource_columns.sql (on the recursive
+// migrations/sqlite/ embed track) replays the ALTER TABLE ADD COLUMN
+// on next boot through SQLiteMigrationsFS(), the duplicate-column
+// error is treated as a no-op and the schema_migrations entry is
+// recorded instead of aborting the boot.
+func TestApplyMigration_DuplicateColumnTolerated(t *testing.T) {
+	db := openTestDB(t)
+
+	// applyMigration itself does NOT call EnsureSchemaTable — that's
+	// the caller's responsibility (RunMigrations / EnsureApplied both
+	// do it before delegating). For a direct unit test of the
+	// duplicate-column tolerance pathway we must pre-establish the
+	// tracking table ourselves.
+	if err := EnsureSchemaTable(db); err != nil {
+		t.Fatalf("ensure schema_migrations table: %v", err)
+	}
+
+	if _, err := db.Exec(`CREATE TABLE jobs (id TEXT PRIMARY KEY)`); err != nil {
+		t.Fatalf("create jobs table: %v", err)
+	}
+
+	mig := Migration{
+		Version:  901,
+		Name:     "test_dup_col",
+		SQL:      "ALTER TABLE jobs ADD COLUMN foo TEXT NOT NULL DEFAULT '';",
+		Checksum: "checksum_add_col",
+	}
+
+	if err := applyMigration(db, mig); err != nil {
+		t.Fatalf("first applyMigration (add column) failed: %v", err)
+	}
+
+	// Simulate the Path B rollout: production DBs have the legacy
+	// 039 record for the column additions. Force a replay by
+	// clearing the schema_migrations entry; applyMigration then
+	// re-executes the SQL and trips the duplicate-column tolerance.
+	if _, err := db.Exec(`DELETE FROM schema_migrations WHERE version = ?`, mig.Version); err != nil {
+		t.Fatalf("clear schema_migrations entry for replay: %v", err)
+	}
+
+	if err := applyMigration(db, mig); err != nil {
+		t.Fatalf("second applyMigration should tolerate 'duplicate column name: foo', got: %v", err)
+	}
+
+	// The ALTER TABLE was silently skipped by the tolerance, so the
+	// column still exists exactly once.
+	var colCount int
+	if err := db.QueryRow(
+		`SELECT COUNT(*) FROM pragma_table_info('jobs') WHERE name = 'foo'`,
+	).Scan(&colCount); err != nil {
+		t.Fatalf("pragma_table_info(jobs): %v", err)
+	}
+	if colCount != 1 {
+		t.Errorf("expected foo column to exist exactly once after replay, got count=%d", colCount)
+	}
+
+	// schema_migrations entry is re-recorded by the second apply
+	// (without the tolerance, the surrounding tx would have rolled
+	// back and the entry would still be missing).
+	var recordedChecksum string
+	if err := db.QueryRow(
+		`SELECT checksum FROM schema_migrations WHERE version = ?`,
+		mig.Version,
+	).Scan(&recordedChecksum); err != nil {
+		t.Fatalf("schema_migrations lookup after replay: %v", err)
+	}
+	if recordedChecksum != mig.Checksum {
+		t.Errorf("expected checksum %q after replay, got %q", mig.Checksum, recordedChecksum)
+	}
+}
+
+// ============================================================
+// AppliedVersions / PendingVersions tests
+// ============================================================
+
+func TestAppliedVersions(t *testing.T) {
+	db := openTestDB(t)
+	applyAllMigrations(t, db)
+
+	expectedMigs, _ := discoverMigrations(testMigrationsFS, "testdata")
+	expectedCount := len(expectedMigs)
+
+	versions, err := AppliedVersions(db)
+	if err != nil {
+		t.Fatalf("AppliedVersions failed: %v", err)
+	}
+
+	if len(versions) != expectedCount {
+		t.Fatalf("expected %d applied versions, got %d", expectedCount, len(versions))
+	}
+
+	for i, v := range versions {
+		if v != expectedMigs[i].Version {
+			t.Errorf("versions[%d]: got %d, want %d", i, v, expectedMigs[i].Version)
+		}
+	}
+}
+
+func TestPendingVersions(t *testing.T) {
+	db := openTestDB(t)
+
+	expectedMigs, _ := discoverMigrations(testMigrationsFS, "testdata")
+	expectedCount := len(expectedMigs)
+
+	// ensureSchemaTable is needed before PendingVersions can query schema_migrations
+	if err := ensureSchemaTable(db); err != nil {
+		t.Fatalf("ensureSchemaTable failed: %v", err)
+	}
+
+	// Before applying anything, all migrations are pending
+	pending, err := PendingVersions(db, testMigrationsFS, "testdata")
+	if err != nil {
+		t.Fatalf("PendingVersions failed: %v", err)
+	}
+	if len(pending) != expectedCount {
+		t.Fatalf("expected %d pending migrations, got %d", expectedCount, len(pending))
+	}
+
+	// After applying, none should be pending
+	if err := RunMigrations(db, testMigrationsFS, "testdata"); err != nil {
+		t.Fatalf("RunMigrations failed: %v", err)
+	}
+
+	pending, err = PendingVersions(db, testMigrationsFS, "testdata")
+	if err != nil {
+		t.Fatalf("PendingVersions after apply failed: %v", err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("expected 0 pending after apply, got %d", len(pending))
+	}
+}
+
+// ============================================================
+// Integration: End-to-end migration + CRUD pipeline
+// ============================================================
+
+// TestIntegration_MigrationRunner_EndToEnd applies all migrations and then
+// performs INSERT/SELECT/UPDATE/DELETE operations against tables created by each
+// migration to verify the full pipeline works.
+func TestIntegration_MigrationRunner_EndToEnd(t *testing.T) {
+	db := openTestDB(t)
+	applyAllMigrations(t, db)
+
+	expectedMigs, _ := discoverMigrations(testMigrationsFS, "testdata")
+	expectedCount := len(expectedMigs)
+
+	// ---- Phase 1: Verify schema_migrations has all entries ----
+	var count int
+	db.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&count)
+	if count != expectedCount {
+		t.Fatalf("expected %d migrations, got %d", expectedCount, count)
+	}
+
+	rows, err := db.Query(`SELECT version, name, checksum, applied_at FROM schema_migrations ORDER BY version`)
+	if err != nil {
+		t.Fatalf("query schema_migrations: %v", err)
+	}
+	defer rows.Close()
+
+	migIdx := 0
+	for rows.Next() {
+		var v int
+		var name, checksum, appliedAt string
+		if err := rows.Scan(&v, &name, &checksum, &appliedAt); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		want := expectedMigs[migIdx]
+		if v != want.Version {
+			t.Errorf("row %d: expected version %d, got %d", migIdx, want.Version, v)
+		}
+		if name != want.Name {
+			t.Errorf("row %d: expected name %q, got %q", migIdx, want.Name, name)
+		}
+		if name == "" || checksum == "" || appliedAt == "" {
+			t.Errorf("version %d: missing name/checksum/applied_at", v)
+		}
+		migIdx++
+	}
+
+	// ---- Phase 2: Verify tables from Migration 001 (initial schema) ----
+	// Note: legacy tables (ansible_computers, youtube_channel_metadata, youtube_groups,
+	// youtube_manager_channels, youtube_manager_groups) are created by 001 but dropped by 008.
+	tables001 := []string{
+		"jobs", "job_history", "job_logs", "workers", "worker_flags",
+		"analytics_cache", "drive_links", "youtube_api_cache",
+		"dark_editor_projects", "dark_editor_folders", "dark_editor_assets",
+		"dark_editor_templates", "dark_editor_temp_files", "dark_editor_generations",
+		"youtube_channel_metrics", "youtube_revenue_metrics", "youtube_video_metrics",
+		"youtube_quota_usage", "calendar_events", "worker_validations",
+	}
+	for _, table := range tables001 {
+		if !tableExists(t, db, table) {
+			t.Errorf("migration 001: table %s missing", table)
+		}
+	}
+
+	// ---- Phase 3: Verify columns added by Migration 002 ----
+	colChecks := []struct {
+		table string
+		col   string
+	}{
+		{"workers", "display_name"},
+		{"workers", "ip_address"},
+		{"workers", "first_seen"},
+		{"workers", "current_job"},
+		{"workers", "code_version"},
+		{"workers", "bundle_version"},
+		{"workers", "bundle_hash"},
+		{"workers", "protocol_version"},
+		{"workers", "engine_version"},
+		{"workers", "capabilities"},
+	}
+	for _, cc := range colChecks {
+		if !columnExists(t, db, cc.table, cc.col) {
+			t.Errorf("migration 002: column %s.%s missing", cc.table, cc.col)
+		}
+	}
+
+	// Verify legacy_imports table was created by migration 002
+	if !tableExists(t, db, "legacy_imports") {
+		t.Error("migration 002: legacy_imports table missing")
+	}
+
+	// ---- Phase 4: Migration 003 — YouTube canonical CRUD ----
+
+	// 4a. Insert channels
+	_, err = db.Exec(`INSERT INTO youtube_channels (channel_id, title, display_name, language, view_count, subscriber_count, created_at, updated_at)
+		VALUES ('UC_a', 'Alpha', 'Alpha Display', 'en', 1000, 500, datetime('now'), datetime('now'))`)
+	if err != nil {
+		t.Fatalf("insert youtube_channels: %v", err)
+	}
+
+	// 4b. Insert groups
+	_, err = db.Exec(`INSERT INTO youtube_groups (name, group_type, description, created_at, updated_at)
+		VALUES ('Sports', 'manager', 'Sports channels', datetime('now'), datetime('now'))`)
+	if err != nil {
+		t.Fatalf("insert youtube_groups: %v", err)
+	}
+
+	// 4c. Add channel to group (membership with FK)
+	_, err = db.Exec(`INSERT INTO youtube_group_channels (group_id, channel_id, position, added_at) VALUES (1, 'UC_a', 0, datetime('now'))`)
+	if err != nil {
+		t.Errorf("insert youtube_group_channels: %v", err)
+	}
+
+	// 4d. Insert tracked niche
+	_, err = db.Exec(`INSERT INTO youtube_tracked_niches (niche, created_at) VALUES ('basketball', datetime('now'))`)
+	if err != nil {
+		t.Errorf("insert youtube_tracked_niches: %v", err)
+	}
+
+	// 4e. Verify reads
+	var channelTitle string
+	if err := db.QueryRow(`SELECT title FROM youtube_channels WHERE channel_id='UC_a'`).Scan(&channelTitle); err != nil {
+		t.Fatalf("query channel title: %v", err)
+	}
+	if channelTitle != "Alpha" {
+		t.Errorf("youtube channel title: got %q, want %q", channelTitle, "Alpha")
+	}
+
+	var groupName string
+	if err := db.QueryRow(`SELECT name FROM youtube_groups WHERE id=1`).Scan(&groupName); err != nil {
+		t.Fatalf("query group name: %v", err)
+	}
+	if groupName != "Sports" {
+		t.Errorf("group name: got %q, want %q", groupName, "Sports")
+	}
+
+	// 4f. Update channel
+	_, err = db.Exec(`UPDATE youtube_channels SET view_count = 2000 WHERE channel_id='UC_a'`)
+	if err != nil {
+		t.Errorf("update youtube_channels: %v", err)
+	}
+	var vc int64
+	if err := db.QueryRow(`SELECT view_count FROM youtube_channels WHERE channel_id='UC_a'`).Scan(&vc); err != nil {
+		t.Fatalf("query view_count after update: %v", err)
+	}
+	if vc != 2000 {
+		t.Errorf("view_count after update: got %d, want 2000", vc)
+	}
+
+	// 4g. Delete channel (should cascade to memberships)
+	_, err = db.Exec(`DELETE FROM youtube_channels WHERE channel_id='UC_a'`)
+	if err != nil {
+		t.Errorf("delete youtube_channels: %v", err)
+	}
+	var memberCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM youtube_group_channels WHERE channel_id='UC_a'`).Scan(&memberCount); err != nil {
+		t.Fatalf("query memberships after CASCADE delete: %v", err)
+	}
+	if memberCount != 0 {
+		t.Errorf("expected 0 memberships after CASCADE delete, got %d", memberCount)
+	}
+
+	// ---- Phase 5: Migration 004 — Ansible CRUD ----
+
+	// 5a. Insert hosts
+	_, err = db.Exec(`INSERT INTO ansible_hosts (host, ansible_user, enabled, host_group, created_at, updated_at)
+		VALUES ('vm-01', 'pierone', 1, 'production', datetime('now'), datetime('now'))`)
+	if err != nil {
+		t.Fatalf("insert ansible_hosts: %v", err)
+	}
+	_, err = db.Exec(`INSERT INTO ansible_hosts (host, ansible_user, enabled, host_group, created_at, updated_at)
+		VALUES ('vm-02', 'root', 0, 'staging', datetime('now'), datetime('now'))`)
+	if err != nil {
+		t.Fatalf("insert ansible_hosts: %v", err)
+	}
+
+	// 5b. Insert runs
+	_, err = db.Exec(`INSERT INTO ansible_runs (run_id, action, playbook, status, started_at, ended_at, return_code, created_at)
+		VALUES ('run-01', 'deploy', 'site.yml', 'success', 1000, 2000, 0, datetime('now'))`)
+	if err != nil {
+		t.Fatalf("insert ansible_runs: %v", err)
+	}
+
+	// 5c. Link hosts to run
+	_, err = db.Exec(`INSERT INTO ansible_run_hosts (run_id, host) VALUES ('run-01', 'vm-01')`)
+	if err != nil {
+		t.Fatalf("insert ansible_run_hosts: %v", err)
+	}
+	_, err = db.Exec(`INSERT INTO ansible_run_hosts (run_id, host) VALUES ('run-01', 'vm-02')`)
+	if err != nil {
+		t.Fatalf("insert ansible_run_hosts: %v", err)
+	}
+
+	// 5d. Verify reads
+	var hostCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM ansible_hosts`).Scan(&hostCount); err != nil {
+		t.Fatalf("query host count: %v", err)
+	}
+	if hostCount != 2 {
+		t.Errorf("expected 2 ansible hosts, got %d", hostCount)
+	}
+
+	var runHostCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM ansible_run_hosts WHERE run_id='run-01'`).Scan(&runHostCount); err != nil {
+		t.Fatalf("query run host count: %v", err)
+	}
+	if runHostCount != 2 {
+		t.Errorf("expected 2 run hosts, got %d", runHostCount)
+	}
+
+	// 5e. Filter: only enabled hosts
+	var enabledCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM ansible_hosts WHERE enabled=1`).Scan(&enabledCount); err != nil {
+		t.Fatalf("query enabled count: %v", err)
+	}
+	if enabledCount != 1 {
+		t.Errorf("expected 1 enabled host, got %d", enabledCount)
+	}
+
+	// 5f. CASCADE delete run
+	if _, err := db.Exec(`DELETE FROM ansible_runs WHERE run_id='run-01'`); err != nil {
+		t.Fatalf("delete run for CASCADE test: %v", err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM ansible_run_hosts WHERE run_id='run-01'`).Scan(&runHostCount); err != nil {
+		t.Fatalf("query run hosts after CASCADE: %v", err)
+	}
+	if runHostCount != 0 {
+		t.Errorf("expected 0 run hosts after CASCADE, got %d", runHostCount)
+	}
+
+	// ---- Phase 6: Migration 008 — Legacy tables dropped ----
+	legacyTables := []string{
+		"youtube_channel_metadata",
+		"youtube_manager_channels", "youtube_manager_groups",
+		"ansible_computers",
+	}
+	for _, table := range legacyTables {
+		if tableExists(t, db, table) {
+			t.Errorf("migration 008 should have dropped %s", table)
+		}
+	}
+
+	// Verify legacy_json_registry exists
+	if !tableExists(t, db, "legacy_json_registry") {
+		t.Error("migration 008 should have created legacy_json_registry")
+	}
+}
+
+// TestIntegration_NewSQLiteStore_AutoMigration verifies that NewSQLiteStore
+// auto-runs migrations on first open and is idempotent on subsequent opens.
+func TestIntegration_NewSQLiteStore_AutoMigration(t *testing.T) {
+	t.Parallel()
+
+	expectedMigs, _ := discoverMigrations(testMigrationsFS, "testdata")
+	expectedCount := len(expectedMigs)
+
+	dbPath := t.TempDir() + "/integration_test.db"
+
+	// ---- First open: should auto-apply all migrations ----
+	db, err := sql.Open("sqlite3", dbPath+"?_busy_timeout=5000&_journal_mode=WAL")
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+
+	// Apply migrations via testMigrationsFS (embed of *.sql in this dir)
+	if err := RunMigrations(db, testMigrationsFS, "testdata"); err != nil {
+		t.Fatalf("first RunMigrations: %v", err)
+	}
+
+	// Verify all applied
+	var migCount int
+	db.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&migCount)
+	if migCount != expectedCount {
+		t.Fatalf("expected %d migrations after first open, got %d", expectedCount, migCount)
+	}
+
+	// Store checksums for later verification
+	type migRow struct {
+		version  int
+		checksum string
+	}
+	var migs []migRow
+	mrows, _ := db.Query(`SELECT version, checksum FROM schema_migrations ORDER BY version`)
+	for mrows.Next() {
+		var mr migRow
+		mrows.Scan(&mr.version, &mr.checksum)
+		migs = append(migs, mr)
+	}
+	mrows.Close()
+	db.Close()
+
+	// ---- Second open: should NOT re-apply migrations ----
+	db2, err := sql.Open("sqlite3", dbPath+"?_busy_timeout=5000&_journal_mode=WAL")
+	if err != nil {
+		t.Fatalf("second open: %v", err)
+	}
+	defer db2.Close()
+
+	// Apply again — should be idempotent
+	if err := RunMigrations(db2, testMigrationsFS, "testdata"); err != nil {
+		t.Fatalf("second RunMigrations: %v", err)
+	}
+
+	var migCount2 int
+	db2.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&migCount2)
+	if migCount2 != expectedCount {
+		t.Fatalf("expected still %d migrations after second open, got %d", expectedCount, migCount2)
+	}
+
+	// Verify checksums unchanged
+	var i int
+	mrows2, _ := db2.Query(`SELECT version, checksum FROM schema_migrations ORDER BY version`)
+	for mrows2.Next() {
+		var v int
+		var cksum string
+		mrows2.Scan(&v, &cksum)
+		if i < len(migs) {
+			if migs[i].version != v {
+				t.Errorf("version mismatch at %d: got %d, want %d", i, v, migs[i].version)
+			}
+			if migs[i].checksum != cksum {
+				t.Errorf("checksum mismatch for version %d: got %s, want %s", v, cksum, migs[i].checksum)
+			}
+		}
+		i++
+	}
+	mrows2.Close()
+
+	// Verify we can query a table from migration 003
+	var channelCount int
+	db2.QueryRow(`SELECT COUNT(*) FROM youtube_channels`).Scan(&channelCount)
+	if channelCount != 0 {
+		t.Errorf("expected 0 channels, got %d", channelCount)
+	}
+}
+
+// ============================================================
+// Helpers
+// ============================================================
+
+// ensureSchemaTable is a thin wrapper around migrations.EnsureSchemaTable
+// exposed at package scope for tests that need to query schema_migrations
+// before RunMigrations has populated it. RunMigrations itself calls
+// EnsureSchemaTable internally, so this helper is only needed when a test
+// specifically wants to inspect pending vs applied state on an empty DB.
+func ensureSchemaTable(db *sql.DB) error {
+	return EnsureSchemaTable(db)
+}
+
+func applyAllMigrations(t *testing.T, db *sql.DB) {
+	t.Helper()
+	if err := RunMigrations(db, testMigrationsFS, "testdata"); err != nil {
+		t.Fatalf("RunMigrations failed: %v", err)
+	}
+}
+
+func tableExists(t *testing.T, db *sql.DB, name string) bool {
+	t.Helper()
+	var count int
+	err := db.QueryRow(
+		`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?`, name,
+	).Scan(&count)
+	if err != nil {
+		t.Fatalf("check table %s: %v", name, err)
+	}
+	return count > 0
+}
+
+func columnExists(t *testing.T, db *sql.DB, table, col string) bool {
+	t.Helper()
+	rows, err := db.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
+	if err != nil {
+		t.Fatalf("PRAGMA table_info(%s): %v", table, err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, colType string
+		var notnull int
+		var dflt sql.NullString
+		var pk int
+		if err := rows.Scan(&cid, &name, &colType, &notnull, &dflt, &pk); err != nil {
+			continue
+		}
+		if name == col {
+			return true
+		}
+	}
+	return false
+}

@@ -81,8 +81,10 @@ DataServer/velox-server
 RemoteCodex/native/worker-agent-go/bin/
 RemoteCodex/native/worker-agent-go/velox-worker-agent
 RemoteCodex/native/video-engine-cpp/build*/
-# ── External frontend repo (standalone — developed in VeloxFrontend/) ────
-VeloxFrontend/
+# ── External repos (standalone submodules — not tracked in this repo) ────
+Chronon3d/
+Instaedit/
+Pipeline Gen/
 
 # ── Environment & IDE ────────────────────────────────────────────────────────
 .env
@@ -169,3 +171,6 @@ DataServer/worker
 # it by exact path keeps the rule scoped; a future binary at this location
 # would be discovered manually rather than silently auto-tracked.
 RemoteCodex/native/worker-agent-go/installer.exe
+
+# ── External Courser repo (standalone — developed in Courser/courserpierone/) ────
+Courser/

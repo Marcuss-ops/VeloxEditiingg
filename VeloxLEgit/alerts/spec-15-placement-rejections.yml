@@ -1,0 +1,119 @@
+# Prometheus alerting rules — placement rejections.
+#
+# Scope: this file consumes the single-label counter family
+#   velox_placement_rejections_total{reason=...}
+# emitted by DataServer/internal/metrics/collector.go via
+# PlacementRejectionSink::RecordPlacementRejection. Reasons are a
+# closed enum of placement.RejectionCode values
+# (capacity_full, unsupported_executor, missing_capability, ...);
+# cardinality stays bounded by the enum (do not introduce free-form
+# strings as reason labels).
+#
+# The metric is bumped from two call sites:
+#   - recordPlacementRejections (matcher-side skips, handler_workers.go)
+#   - handleUnsupportedExecutorRejection (worker-side rejects, handler_jobs.go)
+#
+# Validate with `promtool check rules alerts/spec-15-placement-rejections.yml`
+# before opening the PR.
+
+groups:
+  - name: velox.placement_rejections
+    interval: 30s
+    rules:
+      # Steady-state total rejection rate: matcher should reject
+      # <0.05/s on a healthy fleet (occasional capacity_full under
+      # a load burst). A sustained >0.5/s for 5m is anomalous — either
+      # the matcher has a regression, the fleet is saturating, or
+      # capability advertisements are out of sync.
+      - alert: VeloxPlacementRejectionRateHigh
+        expr: |
+          sum(rate(velox_placement_rejections_total[5m])) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+          domain: placement
+        annotations:
+          summary: "Placement rejection rate > 0.5/s (5m rolling)"
+          description: |
+            Sum of velox_placement_rejections_total across all reasons
+            has averaged above 0.5/s for 5 minutes. Drill into the
+            placement-rejections Grafana dashboard (uid
+            velox-placement-rejections) for the per-reason breakdown.
+            Likely root causes: fleet saturation (capacity_full),
+            capability drift (unsupported_executor), or a matcher
+            regression.
+
+      # Capability drift: handleUnsupportedExecutorRejection bumps
+      # this counter when the placement snapshot claimed support for
+      # an executor the worker refuses to run. The baseline is ZERO —
+      # any sustained rate is a real bug. The matcher invalidates the
+      # executor pair on the session (sess.invalidateExecutor), but
+      # until all sessions reconnect (or the worker re-Hello's) the
+      # bad pair keeps firing.
+      - alert: VeloxPlacementRejectionUnsupportedExecutorElevated
+        expr: |
+          sum(rate(velox_placement_rejections_total{reason="unsupported_executor"}[5m])) > 0.02
+        for: 15m
+        labels:
+          severity: warning
+          domain: placement
+          reason: unsupported_executor
+        annotations:
+          summary: "unsupported_executor rejections > 0.02/s (15m)"
+          description: |
+            velox_placement_rejections_total{reason="unsupported_executor"}
+            has exceeded 0.02/s for 15 minutes. The placement snapshot
+            is advertising executors the worker refuses to run —
+            a capability-inconsistency bug. Inspect the worker's
+            executor BuildCapabilityReport() and the recent
+            worker-agent-go package version. The matcher invalidates
+            the (executor_id, executor_version) pair on the session,
+            but reconnecting workers may re-advertise it before the
+            fleet has reconciled.
+
+      # Fleet saturation: capacity_full is the legitimate signal that
+      # workers are full and matched tasks wait for a slot. A short
+      # spike during a load burst is fine; a sustained >2/s for 10m
+      # means the fleet is undersized for the offered load.
+      - alert: VeloxPlacementRejectionCapacitySaturation
+        expr: |
+          sum(rate(velox_placement_rejections_total{reason="capacity_full"}[5m])) > 2
+        for: 10m
+        labels:
+          severity: warning
+          domain: placement
+          reason: capacity_full
+        annotations:
+          summary: "capacity_full rejections > 2/s (10m rolling)"
+          description: |
+            velox_placement_rejections_total{reason="capacity_full"}
+            has been above 2/s for 10 minutes. The fleet is rejecting
+            placement candidates because every worker is at slot
+            saturation. Either scale up the worker fleet (more
+            worker_class="<X>" instances) or reduce submit-side
+            pressure on the master.
+
+      # Single-reason dominated rejections: parallel to spec §14's
+      # VeloxSingleReasonDominates on the failure-reason family. Flag
+      # any reason that drives >70% of total rejection traffic over
+      # 30m so on-call can drill in.
+      - alert: VeloxPlacementRejectionSingleReasonDominates
+        expr: |
+          (
+            max by (reason) (sum by (reason) (rate(velox_placement_rejections_total[30m])))
+            /
+            clamp_min(sum(rate(velox_placement_rejections_total[30m])), 0.001)
+          ) > 0.7
+        for: 30m
+        labels:
+          severity: info
+          domain: placement
+        annotations:
+          summary: "Single rejection reason drives >70% of fleet rejects (30m)"
+          description: |
+            A single `reason` label dominates the fleet's placement
+            rejection mix. Drill into the placement-rejections Grafana
+            dashboard to identify the offender. Note: this alert
+            often fires alongside VeloxPlacementRejectionCapacity
+            Saturation or VeloxPlacementRejectionUnsupportedExecutor
+            Elevated — the per-reason drill-down is the first step.

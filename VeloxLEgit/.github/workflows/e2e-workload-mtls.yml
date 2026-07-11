@@ -1,0 +1,137 @@
+# =============================================================================
+# Velox CI — dedicated E2E workload over mTLS (PR P1.7) (PRs + on-demand)
+# =============================================================================
+# Runs `make e2e-workload-mtls` on every PR to main and on manual
+# workflow_dispatch. NOT triggered on push:to:main because ci.yml
+# already owns the integrity-suite path.
+#
+# Why dedicated:
+#   * `make e2e-workload` (PR 5) runs in plaintext. The mTLS variant
+#     (PR 7) is a SEPARATE contract: cert+key generated via
+#     scripts/gen-worker-certs.sh, environment=staging on the worker,
+#     NO insecure fallback (fail-closed). Bundling the two flows into
+#     one matrix would muddy the cert/permissibility contract.
+#   * The mTLS variant has the same OS-level deps as the plain workload
+#     (ffmpeg, sqlite3, python3, openssl, curl) PLUS a sentinel env
+#     workflow that refuses to run without scripts/gen-worker-certs.sh
+#     — itself a fail-closed signal.
+#
+# Timeout: 30 min. Same wall-clock budget as e2e-workload (cold Go cache
+# ≈ 2 min + bin build ≈ 1.5 min + ffmpeg + cert gen (≈ 5s) + V1–V6 polls
+# up to 5 min). 30 min leaves room for operator-driven retry chains.
+#
+# Required env:
+#   E2E_EXPECTED_SHA256 — same contract as e2e-workload. Surface as a
+#   workflow_dispatch input (override) and default to the PINNED baseline
+#   on PR runs (canonical sha stable per FFmpeg version + libx264 build).
+# =============================================================================
+
+name: E2E workload-mTLS (PR 7)
+
+on:
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - 'docs/**'
+      - '**/*.md'
+      - '.gitignore'
+  workflow_dispatch:
+    inputs:
+      e2e_expected_sha256:
+        description: >-
+          Pin the rendered artifact SHA-256 (V3 enforcement). Leave blank
+          to use the canonical pinned baseline for the matching platform.
+        required: false
+        default: ''
+      e2e_workdir:
+        description: >-
+          WORKDIR override (default /tmp/velox-e2e-workload-mtls). Useful
+          when reproducing the test against a pre-built binary.
+        required: false
+        default: ''
+
+concurrency:
+  group: e2e-workload-mtls-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  e2e-workload-mtls:
+    name: make e2e-workload-mtls (mTLS, channel=staging)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    # ── Phase 0 — E2E_EXPECTED_SHA256 binding ────────────────────────────
+    # Same precedence as e2e-workload.yml: input > secret > fail-closed.
+    # The mTLS variant renders the same deterministic FFmpeg fixture, so
+    # the pin is identical to the plaintext workload — operators only
+    # need to track one E2E_EXPECTED_SHA256 secret across both workflows.
+    env:
+      E2E_EXPECTED_SHA256: ${{ secrets.E2E_EXPECTED_SHA256 }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: DataServer/go.mod
+          cache: true
+          cache-dependency-path: |
+            DataServer/go.sum
+            RemoteCodex/native/worker-agent-go/go.sum
+            shared/go.sum
+
+      # Pre-flight: cert generator MUST be executable, openssl/ffmpeg/sqlite/python
+      # MUST be on PATH. The run.sh pre-flight also checks these, but a
+      # clear error here is cheaper than the half-minute binary-build
+      # before failing.
+      - name: Pre-flight cert generator and mTLS-required deps (#fail-closed)
+        run: |
+          set -euo pipefail
+          [[ -x scripts/gen-worker-certs.sh ]] || { echo "::error::scripts/gen-worker-certs.sh missing or not executable" >&2; exit 1; }
+          openssl version
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            ffmpeg sqlite3 python3 jq 2>/dev/null || true
+          ffmpeg -version 2>&1 | head -1
+          sqlite3 -version
+          python3 --version
+          command -v curl && curl --version | head -1
+          echo "mTLS pre-flight OK"
+
+      - name: Pin E2E_EXPECTED_SHA256
+        run: |
+          set -euo pipefail
+          if [ -n "${{ inputs.e2e_expected_sha256 }}" ]; then
+            echo "E2E_EXPECTED_SHA256=${{ inputs.e2e_expected_sha256 }}" >> "$GITHUB_ENV"
+            echo "Using operator-supplied SHA baseline (workflow_dispatch input)"
+          elif [ -n "${E2E_EXPECTED_SHA256:-}" ]; then
+            echo "E2E_EXPECTED_SHA256 already set in env"
+          else
+            echo "::error::E2E_EXPECTED_SHA256 MUST be set on PR runs (pin in repo secret or override via workflow_dispatch input)." >&2
+            exit 1
+          fi
+
+      - name: Run e2e-workload-mtls
+        timeout-minutes: 25
+        env:
+          E2E_EXPECTED_SHA256: ${{ env.E2E_EXPECTED_SHA256 }}
+        run: |
+          if [ -n "${{ inputs.e2e_workdir }}" ]; then
+            export E2E_WORKDIR="${{ inputs.e2e_workdir }}"
+          fi
+          make e2e-workload-mtls
+
+      - name: Upload debug artifacts (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-workload-mtls-debug
+          path: |
+            /tmp/velox-e2e-workload-mtls/
+          retention-days: 7
+          if-no-files-found: warn

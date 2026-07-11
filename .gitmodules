@@ -1,0 +1,3 @@
+[submodule "VeloxFrontend"]
+	path = VeloxFrontend
+	url = https://github.com/Marcuss-ops/VeloxFrontend.git

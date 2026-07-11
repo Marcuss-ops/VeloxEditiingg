@@ -1,0 +1,956 @@
+package transport
+
+import (
+	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
+	"fmt"
+	"io"
+	"math/big"
+	"net"
+	"os"
+	"path/filepath"
+	"sync"
+	"testing"
+	"time"
+
+	"velox-shared/controltransport"
+	pb "velox-shared/controltransport/pb"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/protobuf/types/known/timestamppb"
+)
+
+// testStreamServer implements a minimal pb.WorkerControlServer for integration testing.
+// Uses typed envelopes (WorkerToMasterEnvelope / MasterToWorkerEnvelope).
+type testStreamServer struct {
+	pb.UnimplementedWorkerControlServer
+
+	mu           sync.Mutex
+	lastHello    *pb.Hello
+	lastWorkerID string
+	heartbeats   []*pb.Heartbeat
+	jobOfferCh   chan struct{} // signals when to send a JobOffer
+	sendJobOffer bool
+	gotGoodbye   bool
+	heartbeatCh  chan struct{} // closed after first heartbeat
+	goodbyeCh    chan struct{} // closed on Goodbye
+
+	// disconnect-reconnect testing: track how many connections were made
+	hbCount   int
+	connCount int
+}
+
+func newTestStreamServer() *testStreamServer {
+	return &testStreamServer{}
+}
+
+func (s *testStreamServer) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMasterEnvelope, pb.MasterToWorkerEnvelope]) error {
+	// Reset per-connection state so reconnections don't panic on double-close
+	// and heartbeat counting starts fresh for each connection.
+	s.mu.Lock()
+	s.heartbeatCh = make(chan struct{})
+	s.goodbyeCh = make(chan struct{})
+	s.jobOfferCh = make(chan struct{}, 1)
+	s.hbCount = 0
+	s.mu.Unlock()
+
+	// Wait for Hello
+	env, err := stream.Recv()
+	if err != nil {
+		return err
+	}
+
+	hello := env.GetHello()
+	if hello == nil {
+		return fmt.Errorf("expected hello, got %T", env.Msg)
+	}
+
+	s.mu.Lock()
+	s.lastHello = hello
+	s.lastWorkerID = env.WorkerId
+	s.connCount++
+	connNum := s.connCount
+	s.mu.Unlock()
+
+	// Send typed HelloAck
+	ack := &pb.MasterToWorkerEnvelope{
+		MessageId:       fmt.Sprintf("ack-conn-%d", connNum),
+		WorkerId:        env.WorkerId,
+		SessionId:       fmt.Sprintf("test-session-%d", connNum),
+		SequenceNumber:  1,
+		SentAt:          timestamppb.Now(),
+		ProtocolVersion: env.ProtocolVersion,
+		Msg:             &pb.MasterToWorkerEnvelope_HelloAck{HelloAck: &pb.HelloAck{}},
+	}
+	if err := stream.Send(ack); err != nil {
+		return err
+	}
+
+	// If configured to send a JobOffer, do it after a short delay
+	if s.sendJobOffer {
+		workerID := env.WorkerId
+		jobOfferID := fmt.Sprintf("test-job-%03d", connNum)
+		sessID := fmt.Sprintf("test-session-%d", connNum)
+		jobCh := s.jobOfferCh // capture per-connection channel to avoid racing with new connections
+		go func() {
+			select {
+			case <-jobCh:
+				jobOfferEnv := &pb.MasterToWorkerEnvelope{
+					MessageId:       fmt.Sprintf("job-offer-%03d", connNum),
+					WorkerId:        workerID,
+					SessionId:       sessID,
+					SentAt:          timestamppb.Now(),
+					ProtocolVersion: env.ProtocolVersion,
+					Msg: &pb.MasterToWorkerEnvelope_TaskOffer{
+						TaskOffer: &pb.TaskOffer{
+							TaskId:   "test-task-001",
+							JobId:    jobOfferID,
+							LeaseId:  "lease-001",
+							TaskSpec: nil,
+						},
+					},
+				}
+				_ = stream.Send(jobOfferEnv)
+			case <-time.After(5 * time.Second):
+			}
+		}()
+	}
+
+	// Main loop: receive typed messages until stream closes
+	for {
+		env, err := stream.Recv()
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("stream recv: %w", err)
+		}
+
+		switch m := env.Msg.(type) {
+		case *pb.WorkerToMasterEnvelope_Heartbeat:
+			s.mu.Lock()
+			s.heartbeats = append(s.heartbeats, m.Heartbeat)
+			s.hbCount++
+			n := s.hbCount
+			s.mu.Unlock()
+
+			if n == 1 {
+				close(s.heartbeatCh)
+			}
+
+			if s.sendJobOffer && n == 1 {
+				select {
+				case s.jobOfferCh <- struct{}{}:
+				default:
+				}
+			}
+
+		case *pb.WorkerToMasterEnvelope_Goodbye:
+			s.mu.Lock()
+			s.gotGoodbye = true
+			s.mu.Unlock()
+			close(s.goodbyeCh)
+			return nil
+
+		case *pb.WorkerToMasterEnvelope_TaskAccepted:
+			// Track it; no action needed for test
+
+		case *pb.WorkerToMasterEnvelope_TaskRejected:
+			// Track it; no action needed for test
+		}
+	}
+}
+
+// ---- Integration Tests ----
+
+func startTestGRPCServer(t *testing.T, srv pb.WorkerControlServer) (*grpc.Server, string) {
+	t.Helper()
+
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Failed to listen: %v", err)
+	}
+
+	gsrv := grpc.NewServer(
+		grpc.Creds(insecure.NewCredentials()),
+	)
+	pb.RegisterWorkerControlServer(gsrv, srv)
+
+	go func() {
+		_ = gsrv.Serve(lis)
+	}()
+
+	return gsrv, lis.Addr().String()
+}
+
+func TestGRPCStreamTransport_HelloHandshake(t *testing.T) {
+	ts := newTestStreamServer()
+	srv, addr := startTestGRPCServer(t, ts)
+	defer srv.Stop()
+
+	transport := NewGRPCStreamTransport(addr, "test-worker-001")
+	defer transport.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	hello := controltransport.WorkerHello{
+		WorkerID:        "test-worker-001",
+		WorkerName:      "test-worker",
+		Hostname:        "test-host",
+		Version:         "1.0.0",
+		ProtocolVersion: controltransport.ProtocolVersionCurrent,
+		Capabilities: map[string]interface{}{
+			"max_parallel_jobs": 2,
+		},
+	}
+
+	if err := transport.Connect(ctx, hello); err != nil {
+		t.Fatalf("Connect failed: %v", err)
+	}
+
+	// Verify server received Hello with correct fields
+	ts.mu.Lock()
+	lastHello := ts.lastHello
+	lastWorkerID := ts.lastWorkerID
+	ts.mu.Unlock()
+
+	if lastHello == nil {
+		t.Fatal("Server did not receive Hello message")
+	}
+	if lastWorkerID != "test-worker-001" {
+		t.Errorf("Hello WorkerId = %q, want %q", lastWorkerID, "test-worker-001")
+	}
+	if lastHello.GetWorkerName() != "test-worker" {
+		t.Errorf("Hello WorkerName = %q, want %q", lastHello.GetWorkerName(), "test-worker")
+	}
+
+	// Verify transport state is ready
+	if transport.state != stateReady {
+		t.Errorf("Transport state = %v, want stateReady", transport.state)
+	}
+	if transport.sessionID == "" {
+		t.Error("Transport sessionID is empty")
+	}
+}
+
+func TestGRPCStreamTransport_SendHeartbeat(t *testing.T) {
+	ts := newTestStreamServer()
+	srv, addr := startTestGRPCServer(t, ts)
+	defer srv.Stop()
+
+	transport := NewGRPCStreamTransport(addr, "test-worker-002")
+	defer transport.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Connect first
+	hello := controltransport.WorkerHello{
+		WorkerID:        "test-worker-002",
+		WorkerName:      "test-worker",
+		Hostname:        "test-host",
+		Version:         "1.0.0",
+		ProtocolVersion: controltransport.ProtocolVersionCurrent,
+	}
+	if err := transport.Connect(ctx, hello); err != nil {
+		t.Fatalf("Connect failed: %v", err)
+	}
+
+	// Send heartbeat
+	heartbeatMsg := controltransport.ControlMessage{
+		MessageID:       "hb-test-001",
+		Type:            controltransport.MsgHeartbeat,
+		WorkerID:        "test-worker-002",
+		SentAt:          time.Now().UTC(),
+		ProtocolVersion: controltransport.ProtocolVersionCurrent,
+		TypedPayload: &pb.Heartbeat{
+			Status:          "idle",
+			WorkerName:      "test-worker",
+			ActiveJobsCount: 0,
+		},
+	}
+
+	if err := transport.Send(ctx, heartbeatMsg); err != nil {
+		t.Fatalf("Send heartbeat failed: %v", err)
+	}
+
+	// Wait for server to receive heartbeat via channel notification
+	select {
+	case <-ts.heartbeatCh:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Timed out waiting for server to receive heartbeat")
+	}
+
+	ts.mu.Lock()
+	numHeartbeats := len(ts.heartbeats)
+	ts.mu.Unlock()
+
+	if numHeartbeats != 1 {
+		t.Fatalf("Expected 1 heartbeat, got %d", numHeartbeats)
+	}
+
+	ts.mu.Lock()
+	hb := ts.heartbeats[0]
+	ts.mu.Unlock()
+
+	if hb.GetStatus() != "idle" {
+		t.Errorf("Heartbeat Status = %q, want %q", hb.GetStatus(), "idle")
+	}
+	if hb.GetWorkerName() != "test-worker" {
+		t.Errorf("Heartbeat WorkerName = %q, want %q", hb.GetWorkerName(), "test-worker")
+	}
+}
+
+func TestGRPCStreamTransport_ReceiveTaskOffer(t *testing.T) {
+	ts := newTestStreamServer()
+	ts.sendJobOffer = true // Enable JobOffer after first heartbeat
+	srv, addr := startTestGRPCServer(t, ts)
+	defer srv.Stop()
+
+	transport := NewGRPCStreamTransport(addr, "test-worker-003")
+	defer transport.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Connect
+	hello := controltransport.WorkerHello{
+		WorkerID:        "test-worker-003",
+		WorkerName:      "test-worker",
+		Hostname:        "test-host",
+		Version:         "1.0.0",
+		ProtocolVersion: controltransport.ProtocolVersionCurrent,
+	}
+	if err := transport.Connect(ctx, hello); err != nil {
+		t.Fatalf("Connect failed: %v", err)
+	}
+
+	// Start receiving
+	recvCh, _, err := transport.Receive(ctx)
+	if err != nil {
+		t.Fatalf("Receive failed: %v", err)
+	}
+
+	// Send a heartbeat to trigger the JobOffer on the server side
+	heartbeatMsg := controltransport.ControlMessage{
+		MessageID:       "hb-test-001",
+		Type:            controltransport.MsgHeartbeat,
+		WorkerID:        "test-worker-003",
+		SentAt:          time.Now().UTC(),
+		ProtocolVersion: controltransport.ProtocolVersionCurrent,
+		TypedPayload: &pb.Heartbeat{
+			Status: "idle",
+		},
+	}
+	if err := transport.Send(ctx, heartbeatMsg); err != nil {
+		t.Fatalf("Send heartbeat failed: %v", err)
+	}
+
+	// Wait for JobOffer message on receive channel
+	var receivedJobOffer *controltransport.ControlMessage
+	select {
+	case msg, ok := <-recvCh:
+		if !ok {
+			t.Fatal("Receive channel closed unexpectedly")
+		}
+		receivedJobOffer = &msg
+	case <-time.After(3 * time.Second):
+		t.Fatal("Timed out waiting for JobOffer message")
+	}
+
+	if receivedJobOffer == nil {
+		t.Fatal("Received nil message")
+	}
+	if receivedJobOffer.Type != controltransport.MsgTaskOffer {
+		t.Errorf("Received message type = %q, want %q", receivedJobOffer.Type, controltransport.MsgTaskOffer)
+	}
+
+	// Verify TaskOffer typed payload contains task details
+	offer, ok := receivedJobOffer.TypedPayload.(*pb.TaskOffer)
+	if !ok || offer == nil {
+		t.Fatalf("TaskOffer TypedPayload is not *pb.TaskOffer: %T", receivedJobOffer.TypedPayload)
+	}
+	if offer.GetJobId() != "test-job-001" {
+		t.Errorf("TaskOffer JobId = %q, want %q", offer.GetJobId(), "test-job-001")
+	}
+}
+
+func TestGRPCStreamTransport_CloseSendsGoodbye(t *testing.T) {
+	ts := newTestStreamServer()
+	srv, addr := startTestGRPCServer(t, ts)
+	defer srv.Stop()
+
+	transport := NewGRPCStreamTransport(addr, "test-worker-004")
+	defer transport.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	hello := controltransport.WorkerHello{
+		WorkerID:        "test-worker-004",
+		WorkerName:      "test-worker",
+		Hostname:        "test-host",
+		Version:         "1.0.0",
+		ProtocolVersion: controltransport.ProtocolVersionCurrent,
+	}
+	if err := transport.Connect(ctx, hello); err != nil {
+		t.Fatalf("Connect failed: %v", err)
+	}
+
+	// Close the transport
+	if err := transport.Close(); err != nil {
+		t.Fatalf("Close failed: %v", err)
+	}
+
+	// Wait for Goodbye to reach the server
+	select {
+	case <-ts.goodbyeCh:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Timed out waiting for server to receive Goodbye")
+	}
+
+	ts.mu.Lock()
+	gotGoodbye := ts.gotGoodbye
+	ts.mu.Unlock()
+
+	if !gotGoodbye {
+		t.Error("Server did not receive Goodbye message on transport Close")
+	}
+
+	// Verify transport state is disconnected
+	if transport.state != stateDisconnected {
+		t.Errorf("Transport state after close = %v, want stateDisconnected", transport.state)
+	}
+}
+
+func TestGRPCStreamTransport_ConnectInvalidServer(t *testing.T) {
+	// Connect to a non-existent gRPC endpoint
+	transport := NewGRPCStreamTransport("127.0.0.1:19999", "test-worker-fail")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+
+	hello := controltransport.WorkerHello{
+		WorkerID:        "test-worker-fail",
+		ProtocolVersion: controltransport.ProtocolVersionCurrent,
+	}
+
+	err := transport.Connect(ctx, hello)
+	if err == nil {
+		t.Error("Expected error connecting to non-existent server, got nil")
+	}
+}
+
+func TestGRPCStreamTransport_SendBeforeConnect(t *testing.T) {
+	transport := NewGRPCStreamTransport("127.0.0.1:0", "test-worker")
+
+	ctx := context.Background()
+	msg := controltransport.ControlMessage{
+		Type: controltransport.MsgHeartbeat,
+	}
+
+	err := transport.Send(ctx, msg)
+	if err != controltransport.ErrNotConnected {
+		t.Errorf("Send before connect error = %v, want ErrNotConnected", err)
+	}
+}
+
+func TestGRPCStreamTransport_ReceiveBeforeConnect(t *testing.T) {
+	transport := NewGRPCStreamTransport("127.0.0.1:0", "test-worker")
+
+	ctx := context.Background()
+	_, _, err := transport.Receive(ctx)
+	if err != controltransport.ErrNotConnected {
+		t.Errorf("Receive before connect error = %v, want ErrNotConnected", err)
+	}
+}
+
+// ---- End-to-End: Disconnect + Reconnect ---- //
+
+// TestGRPCStreamTransport_DisconnectReconnect verifies that a worker can
+// disconnect from the master and reconnect cleanly with no data loss.
+//
+// Flow:
+//  1. Connect transport A, complete Hello handshake, start Receive
+//  2. Send heartbeat → receive JobOffer → verify it
+//  3. Close transport A (simulates network failure)
+//  4. Connect transport B with a fresh instance
+//  5. Send heartbeat → receive a new JobOffer → verify it
+//  6. Verify both connections were tracked by the server
+func TestGRPCStreamTransport_DisconnectReconnect(t *testing.T) {
+	ts := newTestStreamServer()
+	ts.sendJobOffer = true
+	srv, addr := startTestGRPCServer(t, ts)
+	defer srv.Stop()
+
+	// ---- Connection A ----
+	transportA := NewGRPCStreamTransport(addr, "test-worker-e2e")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	hello := controltransport.WorkerHello{
+		WorkerID:        "test-worker-e2e",
+		WorkerName:      "e2e-worker",
+		Hostname:        "e2e-host",
+		Version:         "1.0.0",
+		ProtocolVersion: controltransport.ProtocolVersionCurrent,
+	}
+	if err := transportA.Connect(ctx, hello); err != nil {
+		t.Fatalf("Connect A failed: %v", err)
+	}
+
+	// Start receiving on transport A
+	recvChA, errChA, err := transportA.Receive(ctx)
+	if err != nil {
+		t.Fatalf("Receive A failed: %v", err)
+	}
+
+	// Send heartbeat A to trigger JobOffer A
+	hbA := controltransport.ControlMessage{
+		MessageID:       "hb-a-001",
+		Type:            controltransport.MsgHeartbeat,
+		WorkerID:        "test-worker-e2e",
+		SentAt:          time.Now().UTC(),
+		ProtocolVersion: controltransport.ProtocolVersionCurrent,
+		TypedPayload: &pb.Heartbeat{
+			Status: "idle",
+		},
+	}
+	if err := transportA.Send(ctx, hbA); err != nil {
+		t.Fatalf("Send heartbeat A failed: %v", err)
+	}
+
+	// Receive JobOffer A
+	var offerA *controltransport.ControlMessage
+	select {
+	case msg, ok := <-recvChA:
+		if !ok {
+			t.Fatal("recvCh A closed unexpectedly")
+		}
+		offerA = &msg
+	case <-time.After(3 * time.Second):
+		t.Fatal("Timed out waiting for JobOffer A")
+	}
+	if offerA.Type != controltransport.MsgTaskOffer {
+		t.Fatalf("Offer A: want MsgTaskOffer, got %s", offerA.Type)
+	}
+	offerAPB, _ := offerA.TypedPayload.(*pb.TaskOffer)
+	if offerAPB == nil || offerAPB.GetJobId() != "test-job-001" {
+		t.Fatalf("Offer A: want test-job-001, got %v", offerAPB)
+	}
+
+	// ---- Disconnect A ----
+	if err := transportA.Close(); err != nil {
+		t.Fatalf("Close A failed: %v", err)
+	}
+
+	// Verify the error channel gets a signal (stream terminated)
+	select {
+	case <-errChA:
+		// Expected: errCh closed after disconnect
+	case <-time.After(2 * time.Second):
+		t.Fatal("errCh A did not close after transport close")
+	}
+
+	// Short pause to ensure server-side cleanup
+	time.Sleep(100 * time.Millisecond)
+
+	// ---- Reconnect: transport B ----
+	transportB := NewGRPCStreamTransport(addr, "test-worker-e2e")
+
+	if err := transportB.Connect(ctx, hello); err != nil {
+		t.Fatalf("Connect B failed: %v", err)
+	}
+	defer transportB.Close()
+
+	// Start receiving on transport B
+	recvChB, _, err := transportB.Receive(ctx)
+	if err != nil {
+		t.Fatalf("Receive B failed: %v", err)
+	}
+
+	// Send heartbeat B to trigger JobOffer B
+	hbB := controltransport.ControlMessage{
+		MessageID:       "hb-b-001",
+		Type:            controltransport.MsgHeartbeat,
+		WorkerID:        "test-worker-e2e",
+		SentAt:          time.Now().UTC(),
+		ProtocolVersion: controltransport.ProtocolVersionCurrent,
+		TypedPayload: &pb.Heartbeat{
+			Status: "idle",
+		},
+	}
+	if err := transportB.Send(ctx, hbB); err != nil {
+		t.Fatalf("Send heartbeat B failed: %v", err)
+	}
+
+	// Receive JobOffer B
+	var offerB *controltransport.ControlMessage
+	select {
+	case msg, ok := <-recvChB:
+		if !ok {
+			t.Fatal("recvCh B closed unexpectedly")
+		}
+		offerB = &msg
+	case <-time.After(3 * time.Second):
+		t.Fatal("Timed out waiting for JobOffer B")
+	}
+	if offerB.Type != controltransport.MsgTaskOffer {
+		t.Fatalf("Offer B: want MsgTaskOffer, got %s", offerB.Type)
+	}
+	offerBPB, _ := offerB.TypedPayload.(*pb.TaskOffer)
+	if offerBPB == nil || offerBPB.GetJobId() != "test-job-002" {
+		t.Fatalf("Offer B: want test-job-002 (2nd connection), got %v", offerBPB)
+	}
+
+	// ---- Verify server saw both connections ----
+	ts.mu.Lock()
+	connCount := ts.connCount
+	ts.mu.Unlock()
+
+	if connCount != 2 {
+		t.Errorf("Server connCount = %d, want 2 (both connections A and B)", connCount)
+	}
+}
+
+// ---- mTLS Integration Tests (Phase 7) ----
+
+// generateTestCertsDir generates CA, server, and client certificates in a temp
+// directory for mTLS testing. This avoids dependency on committed cert files.
+func generateTestCertsDir(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+
+	// Generate CA key and cert
+	caKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("Generate CA key: %v", err)
+	}
+	caTemplate := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "Test CA"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+	}
+	caDER, err := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatalf("Create CA cert: %v", err)
+	}
+	caCert, err := x509.ParseCertificate(caDER)
+	if err != nil {
+		t.Fatalf("Parse CA cert: %v", err)
+	}
+
+	// Write CA cert and key
+	os.WriteFile(filepath.Join(dir, "ca.crt"), pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER}), 0o644)
+	caKeyBytes, _ := x509.MarshalPKCS8PrivateKey(caKey)
+	os.WriteFile(filepath.Join(dir, "ca.key"), pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: caKeyBytes}), 0o644)
+
+	// Generate server cert signed by CA
+	serverKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("Generate server key: %v", err)
+	}
+	serverTemplate := &x509.Certificate{
+		SerialNumber: big.NewInt(2),
+		Subject:      pkix.Name{CommonName: "Test Server"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
+	}
+	serverDER, err := x509.CreateCertificate(rand.Reader, serverTemplate, caCert, &serverKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatalf("Create server cert: %v", err)
+	}
+	os.WriteFile(filepath.Join(dir, "server.crt"), pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: serverDER}), 0o644)
+	serverKeyBytes, _ := x509.MarshalPKCS8PrivateKey(serverKey)
+	os.WriteFile(filepath.Join(dir, "server.key"), pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: serverKeyBytes}), 0o644)
+
+	// Generate client cert signed by CA with worker ID in CommonName
+	clientKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("Generate client key: %v", err)
+	}
+	clientTemplate := &x509.Certificate{
+		SerialNumber: big.NewInt(3),
+		Subject:      pkix.Name{CommonName: "test-worker-mtls"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+	}
+	clientDER, err := x509.CreateCertificate(rand.Reader, clientTemplate, caCert, &clientKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatalf("Create client cert: %v", err)
+	}
+	os.WriteFile(filepath.Join(dir, "client.crt"), pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: clientDER}), 0o644)
+	clientKeyBytes, _ := x509.MarshalPKCS8PrivateKey(clientKey)
+	os.WriteFile(filepath.Join(dir, "client.key"), pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: clientKeyBytes}), 0o644)
+
+	return dir
+}
+
+// startTestMTLSServer creates a gRPC server with mTLS requiring client
+// certificates signed by the test CA. Certificates are generated dynamically.
+// Returns the certs directory so callers can configure client transport with
+// the same CA.
+func startTestMTLSServer(t *testing.T, srv pb.WorkerControlServer) (*grpc.Server, string, string) {
+	t.Helper()
+
+	certsDir := generateTestCertsDir(t)
+
+	serverCert, err := tls.LoadX509KeyPair(
+		filepath.Join(certsDir, "server.crt"),
+		filepath.Join(certsDir, "server.key"),
+	)
+	if err != nil {
+		t.Fatalf("Load server cert: %v", err)
+	}
+
+	caPEM, err := os.ReadFile(filepath.Join(certsDir, "ca.crt"))
+	if err != nil {
+		t.Fatalf("Read CA cert: %v", err)
+	}
+	certPool := x509.NewCertPool()
+	if !certPool.AppendCertsFromPEM(caPEM) {
+		t.Fatal("Failed to parse CA cert")
+	}
+
+	tlsConfig := &tls.Config{
+		Certificates: []tls.Certificate{serverCert},
+		ClientAuth:   tls.RequireAndVerifyClientCert,
+		ClientCAs:    certPool,
+		MinVersion:   tls.VersionTLS12,
+	}
+
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Failed to listen: %v", err)
+	}
+
+	gsrv := grpc.NewServer(grpc.Creds(credentials.NewTLS(tlsConfig)))
+	pb.RegisterWorkerControlServer(gsrv, srv)
+
+	go func() {
+		_ = gsrv.Serve(lis)
+	}()
+
+	return gsrv, lis.Addr().String(), certsDir
+}
+
+// TestGRPCStreamTransport_mTLS_Handshake verifies the full mTLS handshake.
+func TestGRPCStreamTransport_mTLS_Handshake(t *testing.T) {
+	ts := newTestStreamServer()
+	srv, addr, certsDir := startTestMTLSServer(t, ts)
+	defer srv.Stop()
+
+	transport := NewGRPCStreamTransport(addr, "test-worker-mtls-001")
+	if err := transport.WithTLS(
+		filepath.Join(certsDir, "client.crt"),
+		filepath.Join(certsDir, "client.key"),
+		filepath.Join(certsDir, "ca.crt"),
+	); err != nil {
+		t.Fatalf("WithTLS failed: %v", err)
+	}
+	defer transport.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	hello := controltransport.WorkerHello{
+		WorkerID:        "test-worker-mtls-001",
+		WorkerName:      "test-worker-mtls",
+		Hostname:        "mtls-test-host",
+		Version:         "1.0.0",
+		ProtocolVersion: controltransport.ProtocolVersionCurrent,
+	}
+
+	if err := transport.Connect(ctx, hello); err != nil {
+		t.Fatalf("mTLS Connect failed: %v", err)
+	}
+
+	// Verify server received Hello
+	ts.mu.Lock()
+	lastHello := ts.lastHello
+	ts.mu.Unlock()
+
+	if lastHello == nil {
+		t.Fatal("Server did not receive Hello over mTLS")
+	}
+	if lastHello.GetWorkerName() != "test-worker-mtls" {
+		t.Errorf("Hello WorkerName = %q, want %q", lastHello.GetWorkerName(), "test-worker-mtls")
+	}
+
+	// Verify transport is ready
+	if transport.state != stateReady {
+		t.Errorf("Transport state = %v, want stateReady", transport.state)
+	}
+}
+
+// TestGRPCStreamTransport_mTLS_NoClientCert verifies that a client without a
+// certificate is rejected by the mTLS server.
+func TestGRPCStreamTransport_mTLS_NoClientCert(t *testing.T) {
+	ts := newTestStreamServer()
+	srv, addr, _ := startTestMTLSServer(t, ts)
+	defer srv.Stop()
+
+	// Transport WITHOUT TLS — uses insecure credentials
+	transport := NewGRPCStreamTransport(addr, "test-worker-nocert")
+	defer transport.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	hello := controltransport.WorkerHello{
+		WorkerID:        "test-worker-nocert",
+		ProtocolVersion: controltransport.ProtocolVersionCurrent,
+	}
+
+	err := transport.Connect(ctx, hello)
+	if err == nil {
+		t.Error("Expected connection rejection for client without cert, got nil error")
+	}
+}
+
+// TestGRPCStreamTransport_mTLS_WrongCA verifies that a client with a
+// certificate signed by a different CA is rejected.
+func TestGRPCStreamTransport_mTLS_WrongCA(t *testing.T) {
+	ts := newTestStreamServer()
+	srv, addr, certsDir := startTestMTLSServer(t, ts)
+	defer srv.Stop()
+
+	// Generate a self-signed cert NOT signed by the test CA
+	wrongCert := generateSelfSignedCert(t)
+
+	transport := NewGRPCStreamTransport(addr, "test-worker-wrongca")
+
+	// Trust the server's CA (needed to verify the server during handshake)
+	caPEM, err := os.ReadFile(filepath.Join(certsDir, "ca.crt"))
+	if err != nil {
+		t.Fatalf("Read CA cert: %v", err)
+	}
+	serverCAPool := x509.NewCertPool()
+	if !serverCAPool.AppendCertsFromPEM(caPEM) {
+		t.Fatal("Failed to parse CA cert for server trust")
+	}
+
+	// Present a self-signed client cert (NOT signed by test CA)
+	transport.tlsConfig = &tls.Config{
+		Certificates: []tls.Certificate{wrongCert},
+		RootCAs:      serverCAPool,
+		MinVersion:   tls.VersionTLS12,
+	}
+	defer transport.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	hello := controltransport.WorkerHello{
+		WorkerID:        "test-worker-wrongca",
+		ProtocolVersion: controltransport.ProtocolVersionCurrent,
+	}
+
+	err = transport.Connect(ctx, hello)
+	if err == nil {
+		t.Error("Expected connection rejection for client with self-signed cert (wrong CA), got nil error")
+	}
+}
+
+// generateSelfSignedCert creates a real self-signed TLS certificate.
+func generateSelfSignedCert(t *testing.T) tls.Certificate {
+	t.Helper()
+
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("Generate key: %v", err)
+	}
+
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "wrong-ca-client"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+	}
+
+	certDER, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatalf("Create certificate: %v", err)
+	}
+
+	return tls.Certificate{
+		Certificate: [][]byte{certDER},
+		PrivateKey:  key,
+	}
+}
+
+// TestGRPCStreamTransport_mTLS_HeartbeatSend verifies heartbeat over mTLS.
+func TestGRPCStreamTransport_mTLS_HeartbeatSend(t *testing.T) {
+	ts := newTestStreamServer()
+	srv, addr, certsDir := startTestMTLSServer(t, ts)
+	defer srv.Stop()
+
+	transport := NewGRPCStreamTransport(addr, "test-worker-mtls-hb")
+	if err := transport.WithTLS(
+		filepath.Join(certsDir, "client.crt"),
+		filepath.Join(certsDir, "client.key"),
+		filepath.Join(certsDir, "ca.crt"),
+	); err != nil {
+		t.Fatalf("WithTLS failed: %v", err)
+	}
+	defer transport.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	hello := controltransport.WorkerHello{
+		WorkerID:        "test-worker-mtls-hb",
+		WorkerName:      "test-worker-mtls",
+		Hostname:        "mtls-test-host",
+		Version:         "1.0.0",
+		ProtocolVersion: controltransport.ProtocolVersionCurrent,
+	}
+	if err := transport.Connect(ctx, hello); err != nil {
+		t.Fatalf("Connect failed: %v", err)
+	}
+
+	heartbeatMsg := controltransport.ControlMessage{
+		MessageID:       "hb-mtls-001",
+		Type:            controltransport.MsgHeartbeat,
+		WorkerID:        "test-worker-mtls-hb",
+		SentAt:          time.Now().UTC(),
+		ProtocolVersion: controltransport.ProtocolVersionCurrent,
+		TypedPayload: &pb.Heartbeat{
+			Status: "idle",
+		},
+	}
+
+	if err := transport.Send(ctx, heartbeatMsg); err != nil {
+		t.Fatalf("Send heartbeat over mTLS failed: %v", err)
+	}
+
+	// Wait for server to process the heartbeat
+	select {
+	case <-ts.heartbeatCh:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Timed out waiting for heartbeat over mTLS")
+	}
+
+	ts.mu.Lock()
+	numHeartbeats := len(ts.heartbeats)
+	ts.mu.Unlock()
+	if numHeartbeats != 1 {
+		t.Fatalf("Expected 1 heartbeat over mTLS, got %d", numHeartbeats)
+	}
+}

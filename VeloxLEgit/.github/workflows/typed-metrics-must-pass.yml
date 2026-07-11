@@ -1,0 +1,107 @@
+# =============================================================================
+# Typed Metrics Must-Pass — CI gate that locks the 3 typed-metrics sub-tests
+# in `TestHandleTaskResult_PersistTypedMetrics_*` as MUST-PASS. Analogous to
+# the pre-existing-test-watchlist.yml gate but INVERTED: this gate FAILS the
+# PR if any of the 3 sub-tests regresses, rather than FAILing on a hidden
+# breakage inside the `make verify` log.
+#
+# Why a dedicated gate?
+# The 3 typed-metrics sub-tests (F1 / NilExecutionMetrics /
+# StaleReplaySkipsMetrics) pin the audit-mandated contract that
+# handleTaskResult -> ingestionSvc.IngestTaskResult ->
+# taskRepo.IngestTaskResultAtomic commits typed metrics + cache + cost +
+# artifact-register in ONE atomic SQL transaction. A silent regression in
+# the fan-out contract would let metrics drift out of sync with the Task
+# close-write, producing corrupt Prometheus data. The dedicated gate
+# surfaces this as a NAMED status check in the PR UI ("Typed Metrics
+# Must-Pass") rather than buried in the full `make verify` log.
+#
+# Locked-in tests (anchored regex, no prefix-only match):
+#   ^TestHandleTaskResult_PersistTypedMetrics_F1$
+#   ^TestHandleTaskResult_PersistTypedMetrics_NilExecutionMetrics$
+#   ^TestHandleTaskResult_PersistTypedMetrics_StaleReplaySkipsMetrics$
+#
+# Adding a new typed-metrics sub-test to this gate requires an explicit
+# edit to the -run regex below. Intentional: the gate is meant to lock
+# SPECIFIC tests by name, not a wildcard family, so a future maintainer
+# cannot silently widen the locked set.
+#
+# Trigger: push to main / pull_request / workflow_dispatch.
+# Status check name in the PR UI: "Typed Metrics Must-Pass".
+# Concurrency group is independent of the canonical ci workflow so this
+# gate runs in parallel with make verify rather than being hidden inside
+# its log.
+# =============================================================================
+
+name: Typed Metrics Must-Pass
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: typed-metrics-must-pass-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    name: Typed Metrics Must-Pass
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # fetch-depth: 1 is sufficient — this gate does not use BASE_REF
+          # or any deep-history diff-aware logic. Mirrors the shallow
+          # checkout policy from non-branch-diff workflows.
+          fetch-depth: 1
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          # Mirrors ci.yml + workspace-tests.yml. Use go-version-file so the
+          # Go toolchain version tracks DataServer/go.mod (single-source-
+          # of-truth) rather than a hardcoded "1.x" that drifts.
+          go-version-file: DataServer/go.mod
+
+      - name: Cache Go build module cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          # Mirror the canonical ci workflow's key shape so this gate
+          # warms the SAME cache as the other workspace gates (running
+          # in parallel on the same runner populates the cache once,
+          # all gates hit it).
+          key: ${{ runner.os }}-go-${{ hashFiles('DataServer/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Run Typed Metrics Must-Pass tests
+        working-directory: DataServer
+        # -count=1 : disable Go test result caching so the gate ALWAYS
+        #            physically runs every test, never serves stale PASS
+        #            from cache. Same rationale as workspace-tests.yml +
+        #            pre-existing-test-watchlist.yml.
+        # -v       : verbose, so the gate's CI log shows the 3 sub-tests
+        #            running by name. Avoids the silent-PASS failure mode
+        #            where a typo'd regex matches 0 tests and exits 0.
+        # -run     : anchored alternation regex locks exactly the 3
+        #            sub-tests by full name. Updating this regex is the
+        #            ONLY way to widen the locked set; future typed-
+        #            metrics sub-tests require an explicit edit.
+        # ./internal/grpcserver/ : the only package the 3 sub-tests
+        #            live in (handler_jobs_test.go).
+        run: |
+          go test -count=1 -v \
+            -run '^(TestHandleTaskResult_PersistTypedMetrics_F1|TestHandleTaskResult_PersistTypedMetrics_NilExecutionMetrics|TestHandleTaskResult_PersistTypedMetrics_StaleReplaySkipsMetrics)$' \
+            ./internal/grpcserver/

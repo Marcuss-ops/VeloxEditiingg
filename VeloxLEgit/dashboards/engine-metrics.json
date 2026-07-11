@@ -1,0 +1,385 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": { "type": "grafana", "uid": "-- Grafana --" },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "description": "Engine phase timing and segment straggler analysis per Scorecard v2. Reads velox_engine_phase_duration_seconds (histogram, labels: executor_id, worker_id, phase, status) and velox_engine_segment_duration_seconds (histogram, labels: executor_id, worker_id, source_type, status). Cardinality discipline: NO job_id/task_id/attempt_id labels.",
+  "editable": true,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Engine phase durations — p95 by phase (5m)",
+      "description": "histogram_quantile(0.95, rate(velox_engine_phase_duration_seconds_bucket[5m])) grouped by phase. Shows the p95 latency for each engine phase over rolling 5m windows.",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 12, "w": 12, "x": 0, "y": 0 },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "seconds",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": { "legend": false, "tooltip": false, "viz": false },
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": { "type": "linear" },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": { "group": "A", "mode": "none" },
+            "thresholdsStyle": { "mode": "off" }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [ { "color": "green", "value": null } ]
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "calcs": ["last", "mean", "max"], "displayMode": "table", "placement": "right", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "histogram_quantile(0.95, sum by (le, phase) (rate(velox_engine_phase_duration_seconds_bucket[5m])))",
+          "legendFormat": "{{phase}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Engine phase durations — p50/p99 spread (pipeline.resolve)",
+      "description": "p50 and p99 latency for pipeline.resolve specifically. Use the phase variable to switch between phases.",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 12, "w": 12, "x": 12, "y": 0 },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisLabel": "seconds",
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 1,
+            "showPoints": "never"
+          },
+          "unit": "s"
+        },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "p99" }, "properties": [ { "id": "custom.lineStyle", "value": { "fill": "dash", "dash": [5, 5] } } ] }
+        ]
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "right", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(velox_engine_phase_duration_seconds_bucket{phase=\"$phase\"}[5m])))",
+          "legendFormat": "p50",
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(velox_engine_phase_duration_seconds_bucket{phase=\"$phase\"}[5m])))",
+          "legendFormat": "p95",
+          "refId": "B"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(velox_engine_phase_duration_seconds_bucket{phase=\"$phase\"}[5m])))",
+          "legendFormat": "p99",
+          "refId": "C"
+        }
+      ]
+    },
+    {
+      "type": "heatmap",
+      "title": "Engine phase heatmap — all phases",
+      "description": "Heatmap of engine phase durations across all phases. Vertical axis = phase, color intensity = observation density.",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 12 },
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "scaleDistribution": { "type": "log" } },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {
+        "calculate": false,
+        "cellGap": 1,
+        "color": { "mode": "scheme", "scheme": "Spectral", "reverse": true },
+        "exemplars": { "color": "rgba(255,0,0,0.7)" },
+        "filterValues": { "le": 1e-9 },
+        "legend": { "show": true },
+        "rowsFrame": { "layout": "auto" },
+        "tooltip": { "mode": "single", "sort": "none" },
+        "yAxis": { "axisPlacement": "left", "reverse": false, "unit": "string" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "sum by (le, phase) (rate(velox_engine_phase_duration_seconds_bucket[5m]))",
+          "format": "heatmap",
+          "legendFormat": "{{le}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Segment durations by source_type (p95, 5m)",
+      "description": "p95 segment duration grouped by source_type (clip, color, image, audio, etc.). Straggler detection surface.",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 10, "w": 12, "x": 0, "y": 22 },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisLabel": "seconds",
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 1,
+            "showPoints": "never"
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "calcs": ["last", "max"], "displayMode": "table", "placement": "right", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "histogram_quantile(0.95, sum by (le, source_type) (rate(velox_engine_segment_duration_seconds_bucket[5m])))",
+          "legendFormat": "{{source_type}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Worst segment source_type (p95, 1h)",
+      "description": "The single source_type with the highest p95 segment duration over the last hour. A leading indicator for straggler hotspots.",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 5, "w": 6, "x": 12, "y": 22 },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 5 },
+              { "color": "red", "value": 15 }
+            ]
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "value_and_name"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "topk(1, histogram_quantile(0.95, sum by (le, source_type) (rate(velox_engine_segment_duration_seconds_bucket[1h]))))",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Segments above 5s threshold (stragglers, 1h)",
+      "description": "Count of segment observations where duration > 5 seconds in the last hour. Straggler alert surface (per-source-type baseline analysis available via engine-analysis.sql).",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 5, "w": 6, "x": 18, "y": 22 },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 10 },
+              { "color": "red", "value": 50 }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "value"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "count(velox_engine_segment_duration_seconds_bucket{le=\"+Inf\"}) - count(velox_engine_segment_duration_seconds_bucket{le=\"5\"})",
+          "legendFormat": "",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Phase duration by worker_id — top 5 workers (p95, 5m)",
+      "description": "p95 engine.segment_build duration for the top 5 workers by segment volume. Detects per-worker hotspots without job_id cardinality.",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 10, "w": 12, "x": 0, "y": 32 },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisLabel": "seconds",
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 1,
+            "showPoints": "never"
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "calcs": ["last", "mean"], "displayMode": "table", "placement": "right", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "topk(5, histogram_quantile(0.95, sum by (le, worker_id) (rate(velox_engine_phase_duration_seconds_bucket{phase=\"engine.segment_build\"}[5m]))))",
+          "legendFormat": "{{worker_id}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Phase failure rate by phase (status != ok)",
+      "description": "Rate of engine phase observations where status != 'ok'. Surfaces phase-specific failure hotspots.",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 10, "w": 12, "x": 12, "y": 32 },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisLabel": "observations / sec",
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 1,
+            "showPoints": "never",
+            "stacking": { "group": "A", "mode": "normal" }
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "right", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "sum by (phase) (rate(velox_engine_phase_duration_seconds_count{status!=\"ok\"}[5m]))",
+          "legendFormat": "{{phase}} ({{status}})",
+          "refId": "A"
+        }
+      ]
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": ["velox", "scorecard", "engine", "step-7"],
+  "templating": {
+    "list": [
+      {
+        "current": { "selected": false, "text": "Prometheus", "value": "Prometheus" },
+        "hide": 0,
+        "includeAll": false,
+        "label": "Datasource",
+        "multi": false,
+        "name": "DS_PROMETHEUS",
+        "options": [],
+        "query": "prometheus",
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "type": "datasource"
+      },
+      {
+        "current": { "selected": true, "text": "pipeline.resolve", "value": "pipeline.resolve" },
+        "hide": 0,
+        "includeAll": false,
+        "label": "Phase",
+        "multi": false,
+        "name": "phase",
+        "options": [
+          { "selected": true, "text": "pipeline.resolve", "value": "pipeline.resolve" },
+          { "selected": false, "text": "pipeline.validate", "value": "pipeline.validate" },
+          { "selected": false, "text": "pipeline.compile", "value": "pipeline.compile" },
+          { "selected": false, "text": "pipeline.render", "value": "pipeline.render" },
+          { "selected": false, "text": "engine.asset_download", "value": "engine.asset_download" },
+          { "selected": false, "text": "engine.segment_build", "value": "engine.segment_build" },
+          { "selected": false, "text": "engine.concat", "value": "engine.concat" },
+          { "selected": false, "text": "engine.audio_download", "value": "engine.audio_download" },
+          { "selected": false, "text": "engine.mux_audio", "value": "engine.mux_audio" },
+          { "selected": false, "text": "engine.copy_final", "value": "engine.copy_final" }
+        ],
+        "query": "pipeline.resolve,pipeline.validate,pipeline.compile,pipeline.render,engine.asset_download,engine.segment_build,engine.concat,engine.audio_download,engine.mux_audio,engine.copy_final",
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "type": "custom"
+      }
+    ]
+  },
+  "time": { "from": "now-6h", "to": "now" },
+  "timepicker": {},
+  "timezone": "",
+  "title": "Velox — Engine Phase Metrics (Scorecard v2)",
+  "uid": "velox-engine-metrics",
+  "version": 1,
+  "weekStart": ""
+}

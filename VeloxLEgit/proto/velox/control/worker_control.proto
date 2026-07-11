@@ -1,0 +1,521 @@
+syntax = "proto3";
+
+// Proto definition for Velox Worker-Control bidirectional stream.
+// Both master (DataServer) and worker (worker-agent-go) use this contract
+// for typed, versioned control-plane communication.
+//
+// Phase 2 (typed protobuf): message types are strongly typed with oneof
+// instead of the legacy TransportMessage { string type; Struct payload; }.
+// google.protobuf.Struct is retained only for genuinely dynamic fields
+// (extra, job_payload, params, configuration) — TaskResult.metrics is now
+// fully typed (TaskExecutionMetrics) per the scorecard-of-efficiency
+// design (taskattempts.report.go + observability.service.go).
+//
+// ProtocolVersion bumped to "v3" — old v2 workers (TaskResult.metrics as
+// google.protobuf.Struct) are no longer accepted at the gRPC handshake.
+// The PR-5 cutover is forward-only: drain the fleet before deploy.
+//
+// Phase E cutover (May 2026): the MasterToWorkerEnvelope oneof no longer
+// emits a forward-only JobAvailable notification. Wire-level field
+// number 21 is reserved-but-unused to preserve field-number compatibility
+// with previously-deployed workers/masters.
+
+package velox.control;
+
+option go_package = "velox-shared/controltransport/pb";
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/struct.proto";
+
+// ---------------------------------------------------------
+// Worker -> Master
+// ---------------------------------------------------------
+message WorkerToMasterEnvelope {
+  string message_id = 1;
+  string worker_id = 2;
+  string session_id = 3;
+  int64 sequence_number = 4;
+  google.protobuf.Timestamp sent_at = 5;
+  string protocol_version = 6;
+
+  oneof msg {
+    Hello hello = 10;
+    Heartbeat heartbeat = 11;
+    // 12 (LeaseRenewal) — superseded by TaskLeaseRenewal (23). Reserved.
+    // 13 (JobAccepted)  — superseded by TaskAccepted (20). Reserved.
+    // 14 (JobRejected)  — superseded by TaskRejected (21). Reserved.
+    // 15 (JobProgress)  — informational only; new workers use heartbeat extra.
+    TaskAccepted task_accepted = 20;
+    TaskRejected task_rejected = 21;
+    TaskResult task_result = 22;
+    TaskLeaseRenewal task_lease_renewal = 23;
+    CommandAck command_ack = 16;
+    // 17 (JobResult) — job-keyed execution report; superseded by TaskResult.
+    ArtifactUploaded artifact_uploaded = 18;
+    Goodbye goodbye = 19;
+
+    // Phase 3.3 / 3.5 (Artifact Commit Protocol) — typed
+    // declared-and-completed pipeline. The legacy ArtifactUploaded
+    // message (18) remains in place for backward compatibility with
+    // pre-v1-capability workers; the new TaskOutputDeclared /
+    // ArtifactUploadCompleted pair is the typed, fencing-aware
+    // successor and is the one referenced by CapabilityArtifactCommitV1.
+    TaskOutputDeclared task_output_declared = 32;
+    ArtifactUploadCompleted artifact_upload_completed = 33;
+  }
+
+  reserved 12, 13, 14, 15, 17, 34;
+}
+
+message Hello {
+  string worker_name = 1;
+  string hostname = 2;
+  string version = 3;
+  string bundle_version = 4;
+  string bundle_hash = 5;
+  string engine_version = 6;
+  string credential_hash = 7;
+  // Capability string literals (constants, not enum, so old workers
+  // can advertise older caps without rebuilding the proto).
+  //   "artifact.commit.v1"
+  //   "executor.hybrid.v1"
+  //   "task.output.declared.v1"
+  //   "artifact.upload.plan.v1"
+  //   "artifact.upload.completed.v1"
+  //   "task.commit.ack.v1"
+  //
+  // The Struct field is intentionally opaque (json-shaped map) so
+  // new capability strings ride in the wire without a regen. The
+  // canonical Go-side constants live in
+  // shared/controltransport/capabilities.go and are the wire surface
+  // — see the design note in that file for the proto-vs-impl
+  // divergence rationale.
+  google.protobuf.Struct capabilities = 8;
+}
+
+// Heartbeat carries typed resource counters plus the typed FFmpeg
+// counters and per-attempt metrics that the master aggregates for the
+// Project Performance Scorecard. `extra` is retained ONLY for free-form
+// worker logs; canonical metrics live on the typed sub-messages.
+message Heartbeat {
+  string worker_name = 1;
+  string worker_status = 2;
+  string status = 3;
+  string current_job = 4;
+  string code_version = 5;
+  string bundle_version = 6;
+  string bundle_hash = 7;
+  string protocol_version = 8;
+  string engine_version = 9;
+  int64 jobs_completed = 10;
+  int64 jobs_failed = 11;
+  int32 active_jobs_count = 12;
+  google.protobuf.Struct extra = 13;
+  // resources: typed counters (Linux /proc reads; sampled every 5s and
+  // averaged over the heartbeat period). Empty on builds that don't ship
+  // the resource sampler (macOS dev / unit tests); missing = "unknown"
+  // on the master side, not a falsy zero.
+  WorkerResourceCounters resources = 14;
+}
+
+message CommandAck {
+  string command_id = 1;
+  string command = 2;
+  string error = 3;
+}
+
+// TaskResult is the task-native execution report.
+//
+// PR-5 (typed metrics, scorecard v1): metrics is now the typed
+// TaskExecutionMetrics message. Legacy v2 clients sent a
+// google.protobuf.Struct here; v3 master rejects v2 TaskResults at the
+// typed-field check inside handler_jobs.go (an unmarshal of the
+// structpb-shaped wire payload into TaskExecutionMetrics will produce
+// a zero-value metrics — the master surfaces a WARN log and falls back
+// to scalar counters only). See migration 054 for the canonical schema
+// on `task_attempt_metrics`.
+message TaskResult {
+  string task_id = 1;
+  string job_id = 2;
+  string attempt_id = 3;
+  string status = 4; // "succeeded" or "failed"
+  string error_code = 5;
+  string error_detail = 6;
+  TaskExecutionMetrics execution_metrics = 7;
+  repeated PhaseMarker phase_markers = 8;
+  string executor_id = 9;
+  string executor_key = 10;
+  repeated google.protobuf.Struct output_artifacts = 11;
+  string lease_id = 12;
+  int32 attempt_number = 13;
+  int32 revision = 14;
+}
+
+message TaskLeaseRenewal {
+  string task_id = 1;
+  string attempt_id = 2;
+  string lease_id = 3;
+  google.protobuf.Timestamp requested_expiry = 4;
+  string job_id = 5;
+  int32 attempt_number = 6;
+  int32 revision = 7;
+}
+
+// PhaseMarker records one canonical phase timing.
+//
+// Canonical names (load-bearing for observability.aggregate scoring):
+//   queue, asset_wait, cache_lookup, download, decode, compile,
+//   simulate, render, composite, encode, upload, finalize.
+// Workers MUST emit only these names; free-form identifiers are
+// rejected by the master's IsCanonicalPhase() guard rail at ingest.
+message PhaseMarker {
+  string name = 1;
+  google.protobuf.Timestamp started_at = 2;
+  google.protobuf.Timestamp completed_at = 3;
+  string status = 4;
+  string notes = 5;
+}
+
+message ArtifactUploaded {
+  string job_id = 1;
+  string artifact_id = 2;
+  string artifact_type = 3;
+  string artifact_path = 4;
+  int64 artifact_size = 5;
+  string upload_status = 6;
+  string error = 7;
+  string upload_id = 8;
+  string lease_id = 9;
+  int32 attempt = 10;
+  int32 expected_revision = 11;
+}
+
+message Goodbye {}
+
+// ---------------------------------------------------------
+// Master -> Worker
+// ---------------------------------------------------------
+message MasterToWorkerEnvelope {
+  string message_id = 1;
+  string worker_id = 2;
+  string session_id = 3;
+  int64 sequence_number = 4;
+  google.protobuf.Timestamp sent_at = 5;
+  string protocol_version = 6;
+
+  oneof msg {
+    HelloAck hello_ack = 20;
+    // 22 (JobOffer) — superseded by TaskOffer (30). Reserved.
+    TaskOffer task_offer = 30;
+    // 23 (JobLeaseGranted) — superseded by TaskLeaseGranted (31). Reserved.
+    TaskLeaseGranted task_lease_granted = 31;
+    Command command = 24;
+    CancelJob cancel_job = 25;
+    Drain drain = 26;
+    ConfigurationUpdate configuration_update = 27;
+    LeaseRevoked lease_revoked = 28;
+    Ping ping = 29;
+
+    // Phase 3.4 / 3.6 (Artifact Commit Protocol) — typed
+    // upload-plan-and-commit-ack pipeline. The UploadPlan
+    // (Fase 3.4) carries the per-manifest upload targets plus the
+    // master's canonical commit_id; TaskCommitAck (Fase 3.6) is
+    // the master's terminal signal that the attempt is durable
+    // and the worker can clean up the local spool row.
+    ArtifactUploadPlan artifact_upload_plan = 32;
+    TaskCommitAck task_commit_ack = 33;
+  }
+
+  reserved 21, 22, 23, 34;
+}
+
+message HelloAck {}
+
+message TaskOffer {
+  string task_id = 1;
+  string job_id = 2;
+  string attempt_id = 3;
+  string executor_id = 4;
+  int32 executor_version = 5;
+  google.protobuf.Struct task_spec = 6;
+  string lease_id = 7;
+  google.protobuf.Timestamp lease_deadline = 8;
+  google.protobuf.Struct requirements = 9;
+  google.protobuf.Struct output_contract = 10;
+  int32 attempt_number = 11;
+  int32 revision = 12;
+  int32 job_revision = 13;
+}
+
+message TaskAccepted {
+  string task_id = 1;
+  string job_id = 2;
+  string attempt_id = 3;
+  string lease_id = 4;
+  int32 attempt_number = 5;
+  int32 revision = 6;
+}
+
+message TaskRejected {
+  string task_id = 1;
+  string reason = 2;
+  string attempt_id = 3;
+  string lease_id = 4;
+  int32 revision = 5;
+  string job_id = 6;
+  int32 attempt_number = 7;
+}
+
+message TaskLeaseGranted {
+  string task_id = 1;
+  string lease_id = 2;
+  string attempt_id = 3;
+  string job_id = 4;
+  int32 attempt_number = 5;
+  int32 revision = 6;
+  int32 job_revision = 7;
+}
+
+message Command {
+  string command_id = 1;
+  string command = 2;
+  google.protobuf.Timestamp timestamp = 3;
+  google.protobuf.Struct params = 4;
+}
+
+message CancelJob {
+  string job_id = 1;
+}
+
+message Drain {
+  string reason = 1;
+}
+
+message ConfigurationUpdate {
+  google.protobuf.Struct configuration = 1;
+}
+
+message LeaseRevoked {
+  string job_id = 1;
+  string reason = 2;
+}
+
+message Ping {}
+
+// ---------------------------------------------------------
+// Artifact Commit Protocol (Fase 3.3-3.6) — typed
+// declare / plan / complete / ack pipeline.
+//
+// Wire flow (per docs/completion-protocol.md):
+//
+//   1. worker → TaskOutputDeclared (32): after RENDERING the
+//      worker-side spool row is in OUTPUT_READY; the worker
+//      publishes the per-file manifest to the master.
+//   2. master → ArtifactUploadPlan (32): the master stamps
+//      attempt_commits with a canonical commit_id and replies
+//      with the per-manifest upload targets (URLs, chunk size,
+//      bearer token, expiry). The worker stores commit_id +
+//      upload_id on the spool row.
+//   3. worker → ArtifactUploadCompleted (33): the worker has
+//      finished the multipart transfer and reports the
+//      uploaded_bytes + worker_sha256 for the master's
+//      verification pass.
+//   4. master → TaskCommitAck (33): the master has durably
+//      committed the attempt; the worker can CLEAN the local
+//      spool row + delete the on-disk file.
+//
+// All four messages are gated by their respective capability
+// strings in shared/controltransport/capabilities.go; a v2
+// worker that has not published capability v1 will be routed
+// to the legacy ArtifactUploaded path by the master's dispatch.
+// ---------------------------------------------------------
+
+// OutputManifest is the per-file declaration carried inside
+// TaskOutputDeclared. The shape is the canonical one the master
+// stores on attempt_declarations: a logical output identity
+// (OutputKind, LogicalName, MimeType) + content hash (SHA256,
+// SizeBytes) + the worker-side identity (WorkerSpoolKey) the
+// master returns verbatim in the matching UploadTarget.
+//
+// proto3 field-number convention: most-frequently-set fields
+// get the lowest numbers (1-15 pack into one byte on the wire).
+// The master needs OutputKind+LogicalName for every row of every
+// attempt, so they lead.
+message OutputManifest {
+  string output_kind = 1;       // "final_video" | "thumbnail" | ...
+  string logical_name = 2;      // "out.mp4" — also the on-disk filename
+  string mime_type = 3;         // "video/mp4" | "image/png" | ...
+  int64 size_bytes = 4;         // total file size in bytes
+  string sha256 = 5;            // lowercase hex (64 chars)
+  string worker_spool_key = 6;  // worker's per-attempt UUID; carries
+                                // through to the UploadTarget so the
+                                // worker can correlate the plan back
+                                // to its local spool row
+}
+
+// UploadTarget is the per-manifest upload instructions carried
+// inside ArtifactUploadPlan. The transport_id is opaque to the
+// worker; it resolves to a transport plugin via the master's
+// transport registry (Fase 3.7) and is reported back verbatim
+// on the ArtifactUploadCompleted call.
+message UploadTarget {
+  string declaration_id = 1;    // master's attempt_declarations.id
+  string artifact_id = 2;       // master's attempt_artifacts.id (post-commit)
+  string upload_id = 3;         // worker's row key for the upload window
+  string transport_id = 4;      // "s3" | "gcs" | "azblob" | ...
+  string upload_url = 5;        // signed URL the worker PUTs to
+  int64 chunk_size = 6;         // recommended multipart chunk size
+  int64 expires_at_unix = 7;    // unix-seconds; upload window deadline
+}
+
+// TaskOutputDeclared is the worker's first message post-render.
+// The master replies with ArtifactUploadPlan (32). FenceTuple
+// (worker_id, lease_id, attempt_id, task_id, revision) is carried
+// verbatim across the four messages so the master can CAS-gate
+// every transition without an extra roundtrip.
+message TaskOutputDeclared {
+  string task_id = 1;
+  string job_id = 2;
+  string attempt_id = 3;
+  string lease_id = 4;
+  int32 attempt_number = 5;
+  int32 revision = 6;
+  repeated OutputManifest manifests = 7;
+}
+
+// ArtifactUploadPlan is the master's reply to TaskOutputDeclared.
+// The master stamps attempt_commits with a canonical commit_id
+// and returns the per-manifest upload targets. The worker stores
+// commit_id + upload_id on the local spool row and proceeds with
+// the multipart upload.
+message ArtifactUploadPlan {
+  string task_id = 1;
+  string attempt_id = 2;
+  string commit_id = 3;          // master's canonical DB key
+  string commit_token = 4;       // opaque bearer token (sha256-hashed
+                                 // on the attempt_commits row; plain
+                                 // form never persisted on master)
+  string lease_id = 5;
+  repeated UploadTarget targets = 6;
+}
+
+// ArtifactUploadCompleted is the worker's "bytes transferred"
+// signal. The master runs the verification pass
+// (CompleteUploadCommand equivalent on the DataServer side):
+// SHA-256 of the received bytes vs worker_sha256; on match,
+// transitions attempt_commits.status from UPLOADING to RECEIVED
+// and queues the canonical SUCCEEDED write.
+message ArtifactUploadCompleted {
+  string task_id = 1;
+  string attempt_id = 2;
+  string commit_id = 3;
+  string lease_id = 4;
+  string upload_id = 5;
+  int64 uploaded_bytes = 6;
+  string worker_sha256 = 7;
+}
+
+// TaskCommitAck is the master's terminal signal that the attempt
+// is durable: jobs.status='SUCCEEDED', attempt_commits.status=
+// 'COMMITTED', attempt_artifacts rows exist. The worker
+// transitions the local spool row from UPLOADED to COMMITTED and
+// can safely unlink the on-disk file (then mark the row CLEANED).
+//
+// FenceTuple is repeated so the master can fence late acks: a
+// worker that re-connects after lease-revocation MUST NOT see a
+// stale TaskCommitAck applied to a re-claimed attempt.
+message TaskCommitAck {
+  string task_id = 1;
+  string attempt_id = 2;
+  string commit_id = 3;
+  string job_id = 4;
+  string lease_id = 5;
+  int32 revision = 6;
+  google.protobuf.Timestamp committed_at = 7;
+}
+
+// ---------------------------------------------------------
+// Typed metrics (PR-5 / scorecard v1)
+// ---------------------------------------------------------
+
+// TaskExecutionMetrics replaces the legacy google.protobuf.Struct at
+// TaskResult.execution_metrics. All 12 Scorecard metrics derive from
+// this struct + a PhaseMarker list + a worker Counter/Histogram set.
+//
+// Cardinality discipline: this struct carries 1:1 fields (per-attempt
+// scalar counters). The Prometheus exporter on the master side adds
+// the SAFE labels (executor_id, executor_version, worker_class,
+// codec, preset, resolution_bucket, cache_source, phase). The UNSAFE
+// labels (job_id, task_id, artifact_id, hash, video_title) belong in
+// the structured log + DB, NOT here.
+message TaskExecutionMetrics {
+  // Legacy carry-over (7 base fields — present in v2 / migration 043).
+  int64 input_bytes = 1;
+  int64 output_bytes = 2;
+  int64 bytes_from_drive = 3;
+  int64 bytes_from_blobstore = 4;
+  int64 bytes_from_local_cache = 5;
+  int64 cpu_time_ms = 6;
+  int64 peak_rss_bytes = 7;
+
+  // Frame and FFmpeg counters (PR-2: scene.composite.v1 emits; the
+  // C++ engine parses -progress pipe:1 once PR-2 wires the bridge).
+  int64 frames_decoded = 8;
+  int64 frames_composited = 9;
+  int64 frames_encoded = 10;
+  double ffmpeg_speed_ratio = 11;
+
+  // Re-encode / amplification (PR-2 + final concat).
+  int32 encode_passes = 12;
+  bool final_concat_stream_copy = 13;
+  // concat_mode: "stream_copy" | "reencode" | "n/a".
+  string concat_mode = 14;
+
+  // Cost basis (PR-4 / costmodel integration; emitted by the worker
+  // so the master can compute cost_per_output_minute without
+  // re-asking for CPU pricing config).
+  double cpu_price_per_second = 15;
+  double storage_price_per_gb = 16;
+  double network_price_per_gb = 17;
+}
+
+// WorkerResourceCounters is the typed payload of Heartbeat.resources.
+// All values are PEAK-of-WINDOW snapshots: the worker samples the
+// underlying counters every 5 s and reports the peak observed between
+// successive heartbeats. Zero values are valid (report-the-truth for
+// idle workers).
+message WorkerResourceCounters {
+  // CPU.
+  double cpu_utilization_ratio = 1;     // 0.0-1.0
+  double cpu_iowait_ratio = 2;          // 0.0-1.0
+  double cpu_steal_ratio = 3;           // 0.0-1.0
+
+  // Memory.
+  int64 memory_used_bytes = 4;
+  int64 memory_available_bytes = 5;
+  int64 process_rss_bytes = 6;
+  int64 process_rss_peak_bytes = 7;
+  int64 swap_used_bytes = 8;
+  int64 major_page_faults_total = 9;
+
+  // Disk (worker-local mount: /opt/velox by default).
+  int64 disk_read_bytes_total = 10;
+  int64 disk_write_bytes_total = 11;
+  int64 disk_free_bytes = 12;
+  int64 temp_bytes_written = 13;        // sum since worker start
+  int32 temp_files_open = 14;           // gauge at heartbeat time
+
+  // Network.
+  int64 network_receive_bytes_total = 15;
+  int64 network_transmit_bytes_total = 16;
+  int64 network_retransmits_total = 17;
+
+  // Scheduler.
+  int32 active_tasks = 18;
+  int32 task_slots = 19;
+  double load1 = 20;                    // unix-style 1-minute loadavg
+  int32 run_queue = 21;                 // processes waiting on CPU
+
+  // Sampling book-keeping.
+  google.protobuf.Timestamp sampled_at = 22;
+}

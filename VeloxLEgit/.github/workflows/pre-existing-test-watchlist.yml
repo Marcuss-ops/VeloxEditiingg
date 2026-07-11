@@ -1,0 +1,147 @@
+# =============================================================================
+# Pre-existing Test Watchlist — CI gate that pins 4 specific tests known
+# to be flaky / failing on main as separate PR status checks.
+#
+# Why a dedicated gate?
+# The end-to-end `go test -count=1 ./...` run in workspace-tests.yml
+# surfaces any failures, but the resulting PR status check name is a
+# single "Workspace Tests" indicator with all failure causes bundled
+# into one log. The 4 tests listed below are KNOWN pre-existing failures
+# (last confirmed against `main` HEAD when this gate was first authored).
+# Pulling them out into a dedicated gate with a targeted `-run` filter
+# gives the PR author a sharper signal: each failing test's name
+# appears in the gate's status, not buried inside the aggregate run.
+#
+# The 4 watchlist tests (promoted to must-pass on main after Blocco 1
+# of the Verdetto landed; previously documented as "known FAIL" but
+# all 4 now pass deterministically against the post-cutover SUT):
+#   - TestSucceededWriterIsFinalizationOnly     (DataServer/internal/artifacts/)
+#       Asserts SucceededWriter is finalization-only (no other writer
+#       method). Passes after allowlisting internal/completion/sqlite_uow.go
+#       (the UoW adapter is the canonical SQL gateway the Coordinator
+#       speaks through; its `SET status = 'SUCCEEDED'` runs in the
+#       SAME atomic tx as coordinator.go).
+#   - TestBeginUpload_WrongAttemptStatus        (DataServer/internal/artifacts/)
+#       Asserts BeginUpload returns an error when the attempt is
+#       terminal. Passes after updating the seed to a terminal
+#       status (SUCCEEDED) per the new terminal/non-terminal contract
+#       that replaced the retired RENDER_FINISHED gate.
+#   - TestUploadCompletedVideo_CanonicalPipeline
+#       (DataServer/internal/handlers/remote/workers/uploads/)
+#       Canonical pipeline assertion for the cross-engine upload-
+#       completed-video flow. Passes after rewriting fixtures to
+#       match the post-migration-048 schema (jobs without dropped
+#       runtime columns; attempts seeded via tasks+task_attempts).
+#   - TestGenerateWithImages_UsesCreatorStageWhenConfigured
+#       (DataServer/internal/handlers/server/script/)
+#       Asserts the script-generation handler defers to the creator
+#       stage when configured. Passes after wiring jobRepo into the
+#       test's Enqueuer so the Resolver's idempotency fast-path has
+#       a non-nil Jobs handle.
+#
+# This gate uses the EXACT specification the user supplied — names
+# fixed in the `-run` regex below. The user explicitly chose this
+# framing (single-shot -run rather than per-test runs) to avoid
+# multiplying CI minutes 4x for 4 targeted tests. Failures surface
+# in PR status check as "Pre-existing Test Watchlist" with the failing
+# test's name in the job log.
+#
+# Fail-fast on the first failing test (-count=1 means no caching;
+# -run '^(...|...|...|...)$' regex runs each test once in alphabetical
+# order by Go's test-runner convention; the failing test's name shows
+# in the FAIL line).
+#
+# Trigger: push to main / pull_request / workflow_dispatch.
+# Permissions: contents: read (least-privilege, mirrors ci.yml).
+# Concurrency group "watchlist-${ref}" is independent of the
+# canonical ci-${ref} group so this gate runs IN PARALLEL with
+# make-verify, with parallel routing-invariants.yml and parallel
+# workspace-tests.yml.
+# =============================================================================
+
+name: Pre-existing Test Watchlist
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: watchlist-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    name: Pre-existing Test Watchlist
+    runs-on: ubuntu-latest
+    # 4-unit tests on the DataServer SQLite path with full isolation.
+    # Wall-clock observed locally when these tests run green: ~3 s.
+    # When failing, the FAIL line + stack-trace dominates the log;
+    # ceiling 10 minutes comfortably handles contention bursts and
+    # SQLite-migration plumbing.
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # fetch-depth: 1 is sufficient — this gate does not use
+          # BASE_REF or any deep-history diff-aware logic. Mirrors
+          # routing-invariants.yml and workspace-tests.yml's shallow
+          # checkout policy.
+          fetch-depth: 1
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          # Mirrors all sibling gates. The 4 watchlist tests all
+          # live in the DataServer module; go-version-file tracks
+          # DataServer/go.mod as the single-source-of-truth.
+          go-version-file: DataServer/go.mod
+
+      - name: Cache Go build module cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          # Cache key for DataServer only — the watchlist does not
+          # test anything in worker-agent-go or shared.
+          key: ${{ runner.os }}-go-${{ hashFiles('DataServer/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Run watchlist tests
+        working-directory: DataServer
+        # The exact user-supplied regex — names fixed verbatim:
+        #   TestSucceededWriterIsFinalizationOnly
+        #   TestBeginUpload_WrongAttemptStatus
+        #   TestUploadCompletedVideo_CanonicalPipeline
+        #   TestGenerateWithImages_UsesCreatorStageWhenConfigured
+        # Anchored with ^(...)$ so Go's -run pattern matches these
+        # EXACTLY (and not, e.g., TestSucceededWriterSync, which
+        # shares the TestSucceededWriter prefix).
+        # -count=1 disables Go test result caching so the gate ALWAYS
+        #      physically runs every test on demand.
+        # No -short: failing tests are full integration tests
+        #           (SQLite-backed); -short would erroneously swallow
+        #           the failure we want to surface.
+        run: |
+          go test -count=1 -v -run '^(TestSucceededWriterIsFinalizationOnly|TestBeginUpload_WrongAttemptStatus|TestUploadCompletedVideo_CanonicalPipeline|TestGenerateWithImages_UsesCreatorStageWhenConfigured)$' \
+            ./internal/artifacts/ \
+            ./internal/handlers/remote/workers/uploads/ \
+            ./internal/handlers/server/script/ \
+            2>&1 | tee /tmp/watchlist.log
+          EXIT=${PIPESTATUS[0]}
+          # Echo a one-line summary at the end of the run for easy
+          # log-skim: which tests passed, which failed.
+          echo
+          echo "─── Watchlist summary ────────────────────────────────"
+          grep -E '^(=== RUN|--- PASS|--- FAIL|panic:)' /tmp/watchlist.log | sed 's/^/  /' || true
+          echo "─────────────────────────────────────────────────────"
+          exit $EXIT

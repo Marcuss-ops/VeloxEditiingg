@@ -1,0 +1,68 @@
+---
+# ============================================================
+# PROVISION VELOX WORKER WRITABLE DIRS
+# ============================================================
+# TODO: not yet activated — see docs/worker_deployment.md section
+# "Runtime writable dirs (proposal)".
+#
+# Sole responsibility: create the host-side writable runtime tree
+# for the velox-worker container, so the container can persist
+# cache/sessions/scratch outside the immutable /app/RemoteCodex tree.
+#
+# Required vars:
+#   velox_worker_runtime_host_dir — install root for the writable
+#                                   runtime tree (default
+#                                   /var/lib/velox/workers/<host>,
+#                                   matches canonical_worker_runtime.yml)
+#
+# Emits: nothing; this playbook is side-effect only (idempotent
+# directory creation with ansible.builtin.file state=directory).
+#
+# This playbook is INTENTIONALLY MINIMAL. It does NOT touch:
+#   - the systemd unit (WorkingDirectory= change is in
+#     canonical_worker_runtime.yml);
+#   - the worker image (Dockerfile update is a separate track);
+#   - cleanup paths (cleanup_worker.yml tracks the new subdirs
+#     separately).
+#
+# Owner UID 10001 = the velox user inside the container (matches
+# canonical_worker_runtime.yml). If the canonical UID ever drifts,
+# update BOTH this file and canonical_worker_runtime.yml (TODO:
+# extract into group_vars/all.yml as velox_user_uid).
+# ============================================================
+
+- name: ProvisionVeloxWritableDirs | Create host-side writable runtime directories
+  hosts: velox_workers
+  gather_facts: true
+  vars:
+    velox_worker_runtime_host_dir: "/var/lib/velox/workers/{{ inventory_hostname }}"
+    # TODO: extract into group_vars/all.yml as velox_user_uid
+    # (shared with canonical_worker_runtime.yml).
+    velox_writable_dirs_owner: "10001"
+    velox_writable_dirs_group: "10001"
+    velox_writable_dirs_mode: "0775"
+  tasks:
+    # Parent directory must exist BEFORE the loop: ansible.builtin.file
+    # with state=directory does NOT create intermediate paths, so the
+    # subdir tasks below would fail on a fresh host if this task is
+    # missing. Standalone-safe (does not require canonical_worker_runtime
+    # to have run first).
+    - name: ProvisionVeloxWritableDirs | Ensure parent runtime directory exists
+      ansible.builtin.file:
+        path: "{{ velox_worker_runtime_host_dir }}"
+        state: directory
+        owner: "{{ velox_writable_dirs_owner }}"
+        group: "{{ velox_writable_dirs_group }}"
+        mode: "{{ velox_writable_dirs_mode }}"
+
+    - name: ProvisionVeloxWritableDirs | Ensure cache/sessions/scratch subdirs exist
+      ansible.builtin.file:
+        path: "{{ velox_worker_runtime_host_dir }}/{{ item }}"
+        state: directory
+        owner: "{{ velox_writable_dirs_owner }}"
+        group: "{{ velox_writable_dirs_group }}"
+        mode: "{{ velox_writable_dirs_mode }}"
+      loop:
+        - cache
+        - sessions
+        - scratch

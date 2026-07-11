@@ -1,0 +1,43 @@
+# ============================================================
+# INSTALLER HEARTBEAT — Verifica master
+# ============================================================
+# This preflight verifies the controller (master) is ready to serve the
+# worker fleet. The legacy /api/workers/register HTTP probe has been
+# removed: worker registration now goes through the gRPC WorkerControl
+# stream (typed Hello envelope) and the master rejects traffic if the
+# worker is not in the VELOX_ALLOWED_WORKERS allowlist (see
+# DataServer/internal/grpcserver/authorizer.go).
+#
+# Include in: prechecks.yml (pre-flight check)
+# Eseguito su: localhost (controller/master)
+# ============================================================
+
+- name: Heartbeat | Verifica master server reachable
+  uri:
+    url: "{{ master_url }}/health"
+    method: GET
+    return_content: yes
+    status_code: 200
+    timeout: 10
+  register: master_health
+  delegate_to: localhost
+  become: no
+
+- name: Heartbeat | Log master health
+  debug:
+    msg: "✅ Master reachable: {{ master_health.json.status | default('ok') }}"
+  delegate_to: localhost
+  become: no
+
+- name: Heartbeat | Riepilogo
+  debug:
+    msg: |-
+      ========================================
+      INSTALLER HEARTBEAT — Riepilogo
+      ========================================
+      Master: {{ master_url }}
+      Health: {{ '✅' if master_health.status == 200 else '❌' }} ({{ master_health.status }})
+      Worker registration: handled over gRPC (see VELOX_ALLOWED_WORKERS on master)
+      ========================================
+  delegate_to: localhost
+  become: no

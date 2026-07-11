@@ -1,0 +1,10 @@
+{
+  "version": "v1.2.0",
+  "git_commit": "142c7b1d",
+  "source_hash": "1e5b51cde515396a9fa762909cf8ca6584ccc564b325d2eebeea76175fe95c4d",
+  "protocol_version": "v3",
+  "engine_version": "v1.2.0",
+  "platform": "linux",
+  "arch": "x86_64",
+  "built_at": "2026-06-20T17:22:16Z"
+}

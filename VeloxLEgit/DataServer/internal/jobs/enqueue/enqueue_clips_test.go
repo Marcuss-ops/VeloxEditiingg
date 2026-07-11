@@ -1,0 +1,403 @@
+package enqueue
+
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+)
+
+func TestBuildNarratedClipPayload_UsesRealVoiceoverDurationNotScenePlaceholder(t *testing.T) {
+	t.Parallel()
+
+	scenes := []map[string]interface{}{
+		{
+			"text":                        "Jackie Chan scene",
+			"stock_link":                  "https://example.com/stock.mp4",
+			"clip_link":                   "https://example.com/final.mp4",
+			"voiceover_link":              "https://example.com/voice.mp3",
+			"duration_seconds":            99.0,
+			"final_clip_duration_seconds": 2.5,
+		},
+	}
+
+	entries, items, _, tracks, mode, err := buildNarratedClipPayload(scenes, narratedClipOptions{probe: func(url string) float64 {
+		if url != "https://example.com/voice.mp3" {
+			t.Fatalf("unexpected probe URL: %q", url)
+		}
+		return 7.25
+	}})
+	if err != nil {
+		t.Fatalf("buildNarratedClipPayload: %v", err)
+	}
+	if mode != "clip_stock" {
+		t.Fatalf("mode = %q, want clip_stock", mode)
+	}
+	if len(items) != 2 {
+		t.Fatalf("items = %d, want 2", len(items))
+	}
+	assertDuration(t, items[0]["duration"], 7.25, "voiceover bed duration")
+	assertDuration(t, items[1]["duration"], 2.5, "final clip duration")
+	assertDuration(t, entries[0]["voiceover_duration_seconds"], 7.25, "canonical voiceover duration")
+	assertDuration(t, entries[0]["final_clip_duration_seconds"], 2.5, "canonical final clip duration")
+	assertDuration(t, entries[0]["duration_seconds"], 9.75, "total scene duration")
+	if len(tracks) != 2 {
+		t.Fatalf("audio tracks = %d, want 2", len(tracks))
+	}
+	assertDuration(t, tracks[0]["start_time_offset"], 0, "voiceover audio offset")
+	assertDuration(t, tracks[1]["start_time_offset"], 7.25, "final clip audio offset")
+}
+
+// TestNormalizeClipPayload_ScenesJSONWithTopLevelStockPoolPreservesFallback
+// nails down the contract: when a `scenes_json` payload carries voiceover
+// scenes AND a top-level `stock_clip_paths` pool, the narration bed
+// MUST borrow from the pool (i.e. rawPayload is preserved across the
+// JSON parse hop). This guards the refactor of normalizeClipPayload
+// from per-form functions — the original recursive call into
+// normalizeClipPayload(map{"scenes": scenes}) lost the rawPayload and
+// silently dropped the fallback pool; the new normalizeScenesInput
+// receives the original rawPayload directly.
+func TestNormalizeClipPayload_ScenesJSONWithTopLevelStockPoolPreservesFallback(t *testing.T) {
+	t.Parallel()
+
+	scenes := []map[string]interface{}{
+		{
+			"text":                        "Jackie Chan scene",
+			"clip_link":                   "https://example.com/final-1.mp4",
+			"reference_voiceover":         "https://example.com/voice-1.mp3",
+			"voiceover_duration_seconds":  6.0,
+			"final_clip_duration_seconds": 2.0,
+		},
+	}
+	scenesJSON, _ := json.Marshal(scenes)
+	rawPayload := map[string]interface{}{
+		"stock_clip_paths": []interface{}{"https://example.com/stock-1.mp4"},
+		"scenes_json":      string(scenesJSON),
+	}
+
+	_, items, _, _, _, err := normalizeClipPayload(rawPayload)
+	if err != nil {
+		t.Fatalf("normalizeClipPayload: %v", err)
+	}
+	if len(items) < 2 {
+		t.Fatalf("items = %d, want at least 2 (voiceover_bed + scene_clip)", len(items))
+	}
+	if got := items[0]["url"]; got != "https://example.com/stock-1.mp4" {
+		t.Fatalf("voiceover bed url = %v, want top-level stock clip preserved across scenes_json parse", got)
+	}
+}
+
+func TestNormalizeClipPayload_UsesTopLevelStockClipForNarrationBed(t *testing.T) {
+	t.Parallel()
+
+	rawPayload := map[string]interface{}{
+		"stock_clip_paths": []interface{}{"https://example.com/stock-1.mp4"},
+		"scenes": []interface{}{
+			map[string]interface{}{
+				"text":                        "Jackie Chan scene",
+				"clip_link":                   "https://example.com/final-1.mp4",
+				"reference_voiceover":         "https://example.com/voice-1.mp3",
+				"voiceover_duration_seconds":  6.0,
+				"final_clip_duration_seconds": 2.0,
+				"stock_fallback":              true,
+			},
+		},
+	}
+
+	entries, items, clips, tracks, mode, err := normalizeClipPayload(rawPayload)
+	if err != nil {
+		t.Fatalf("normalizeClipPayload: %v", err)
+	}
+	if mode != "clip_stock" {
+		t.Fatalf("mode = %q, want clip_stock", mode)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("entries = %d, want 1", len(entries))
+	}
+	if len(items) != 2 {
+		t.Fatalf("items = %d, want 2", len(items))
+	}
+	if got := items[0]["url"]; got != "https://example.com/stock-1.mp4" {
+		t.Fatalf("voiceover bed url = %v, want stock clip", got)
+	}
+	if got := items[1]["url"]; got != "https://example.com/final-1.mp4" {
+		t.Fatalf("final scene clip url = %v, want final clip", got)
+	}
+	if len(clips) != 1 || clips[0] != "https://example.com/final-1.mp4" {
+		t.Fatalf("clips = %#v, want only final clip", clips)
+	}
+	if len(tracks) != 2 {
+		t.Fatalf("audio tracks = %d, want 2", len(tracks))
+	}
+	assertDuration(t, entries[0]["voiceover_duration_seconds"], 6.0, "voiceover duration")
+	assertDuration(t, entries[0]["final_clip_duration_seconds"], 2.0, "final clip duration")
+	assertDuration(t, entries[0]["duration_seconds"], 8.0, "scene duration")
+	assertDuration(t, tracks[0]["start_time_offset"], 0, "voiceover audio offset")
+	assertDuration(t, tracks[1]["start_time_offset"], 6.0, "final clip audio offset")
+}
+
+func TestBuildNarratedClipPayload_MixedScenesKeepCanonicalOffsets(t *testing.T) {
+	t.Parallel()
+
+	scenes := []map[string]interface{}{
+		{
+			"stock_link":                  "stock-1.mp4",
+			"clip_link":                   "final-1.mp4",
+			"voiceover_link":              "voice-1.mp3",
+			"voiceover_duration_seconds":  5.0,
+			"final_clip_duration_seconds": 2.0,
+		},
+		{
+			"clip_link":                   "final-2.mp4",
+			"duration_seconds":            999.0,
+			"final_clip_duration_seconds": 3.0,
+		},
+		{
+			"stock_link":                  "stock-3.mp4",
+			"clip_link":                   "final-3.mp4",
+			"voiceover_link":              "voice-3.mp3",
+			"voiceover_duration_seconds":  4.0,
+			"final_clip_duration_seconds": 1.0,
+		},
+	}
+
+	entries, items, _, tracks, _, err := buildNarratedClipPayload(scenes, narratedClipOptions{probe: func(string) float64 {
+		t.Fatal("probe must not run when explicit voiceover duration is present")
+		return 0
+	}})
+	if err != nil {
+		t.Fatalf("build narrated payload: %v", err)
+	}
+	if len(entries) != 3 {
+		t.Fatalf("entries = %d, want 3", len(entries))
+	}
+	if len(items) != 5 {
+		t.Fatalf("items = %d, want 5 (2 + 1 + 2)", len(items))
+	}
+	if role, _ := items[2]["role"].(string); role != "scene_clip" {
+		t.Fatalf("voiceover-free scene emitted role %q, want scene_clip", role)
+	}
+	if len(tracks) != 5 {
+		t.Fatalf("audio tracks = %d, want 5", len(tracks))
+	}
+	assertDuration(t, tracks[0]["start_time_offset"], 0, "first voiceover offset")
+	assertDuration(t, tracks[1]["start_time_offset"], 5, "first final clip audio offset")
+	assertDuration(t, tracks[2]["start_time_offset"], 7, "second final clip audio offset")
+	assertDuration(t, tracks[3]["start_time_offset"], 10, "third voiceover offset")
+	assertDuration(t, tracks[4]["start_time_offset"], 14, "third final clip audio offset")
+	assertDuration(t, entries[1]["voiceover_duration_seconds"], 0, "missing voiceover duration")
+	assertDuration(t, entries[1]["duration_seconds"], 3, "voiceover-free total duration")
+}
+
+func TestBuildNarratedClipPayload_ExplicitDurationWinsWithoutProbe(t *testing.T) {
+	t.Parallel()
+
+	scenes := []map[string]interface{}{
+		{
+			"clip_link":                   "final.mp4",
+			"voiceover_link":              "voice.mp3",
+			"voiceover_duration_seconds":  6.5,
+			"final_clip_duration_seconds": 0.25,
+			"duration_seconds":            500.0,
+		},
+	}
+
+	_, items, _, tracks, _, err := buildNarratedClipPayload(scenes, narratedClipOptions{probe: func(string) float64 {
+		t.Fatal("probe must not run for explicit voiceover_duration_seconds")
+		return 0
+	}})
+	if err != nil {
+		t.Fatalf("build narrated payload: %v", err)
+	}
+	assertDuration(t, items[0]["duration"], 6.5, "explicit voiceover duration")
+	assertDuration(t, items[1]["duration"], 0.25, "short final clip duration")
+	if len(tracks) != 2 {
+		t.Fatalf("audio tracks = %d, want 2", len(tracks))
+	}
+	assertDuration(t, tracks[0]["start_time_offset"], 0, "voiceover audio offset")
+	assertDuration(t, tracks[1]["start_time_offset"], 6.5, "final clip audio offset")
+}
+
+func TestBuildNarratedClipPayload_RejectsUnmeasurableVoiceover(t *testing.T) {
+	t.Parallel()
+
+	scenes := []map[string]interface{}{
+		{
+			"clip_link":        "final.mp4",
+			"voiceover_link":   "missing.mp3",
+			"duration_seconds": 42.0,
+		},
+	}
+
+	_, _, _, _, _, err := buildNarratedClipPayload(scenes, narratedClipOptions{probe: func(string) float64 { return 0 }})
+	if err == nil {
+		t.Fatal("expected an error for an unmeasurable voiceover")
+	}
+	if !strings.Contains(err.Error(), "voiceover duration unavailable") {
+		t.Fatalf("error = %q, want voiceover duration failure", err)
+	}
+	if !strings.Contains(err.Error(), "scenes[0]") {
+		t.Fatalf("error = %q, want scene index", err)
+	}
+}
+
+func TestResolveSceneFinalClipDuration_HasUnambiguousFallbacks(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		scene map[string]interface{}
+		want  float64
+	}{
+		{
+			name: "canonical_long_clip",
+			scene: map[string]interface{}{
+				"final_clip_duration_seconds": 18.75,
+				"clip_duration_seconds":       8.0,
+				"duration_seconds":            99.0,
+			},
+			want: 18.75,
+		},
+		{
+			name: "legacy_alias",
+			scene: map[string]interface{}{
+				"clip_duration_seconds": 1.25,
+				"duration_seconds":      99.0,
+			},
+			want: 1.25,
+		},
+		{
+			name: "generic_duration_is_not_a_clip_fallback",
+			scene: map[string]interface{}{
+				"duration_seconds": 99.0,
+			},
+			want: 4.0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assertDuration(t, resolveSceneFinalClipDuration(tt.scene), tt.want, tt.name)
+		})
+	}
+}
+
+// TestBuildNarratedClipPayload_LongFinalClipPreservesOffsetAfterBed nails down
+// the asymmetry where the final clip is much longer than the voiceover bed.
+// This is the canonical "voiceover narration + long stock footage" news/doc
+// pattern: the voiceover is short (a sentence), but the underlying clip spans
+// tens of seconds. The progressive offset for the NEXT voiceover must accumulate
+// the voiceover bed duration AND the long final clip duration — not collapse
+// either value.
+func TestBuildNarratedClipPayload_LongFinalClipPreservesOffsetAfterBed(t *testing.T) {
+	t.Parallel()
+
+	scenes := []map[string]interface{}{
+		{
+			"stock_link":                  "stock-1.mp4",
+			"clip_link":                   "final-1.mp4",
+			"voiceover_link":              "voice-1.mp3",
+			"voiceover_duration_seconds":  2.0,
+			"final_clip_duration_seconds": 30.0,
+		},
+		{
+			"stock_link":                  "stock-2.mp4",
+			"clip_link":                   "final-2.mp4",
+			"voiceover_link":              "voice-2.mp3",
+			"voiceover_duration_seconds":  5.0,
+			"final_clip_duration_seconds": 2.0,
+		},
+	}
+
+	entries, items, _, tracks, _, err := buildNarratedClipPayload(scenes, narratedClipOptions{probe: func(string) float64 {
+		t.Fatal("probe must not run when explicit voiceover_duration_seconds is present")
+		return 0
+	}})
+	if err != nil {
+		t.Fatalf("buildNarratedClipPayload: %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("entries = %d, want 2", len(entries))
+	}
+	if len(items) != 4 {
+		t.Fatalf("items = %d, want 4 (2 voiceover_bed + 2 scene_clip)", len(items))
+	}
+	if len(tracks) != 4 {
+		t.Fatalf("audio tracks = %d, want 4", len(tracks))
+	}
+	// Scene 1: voiceover bed (2s) followed by long final clip (30s).
+	assertDuration(t, entries[0]["voiceover_duration_seconds"], 2.0, "scene-1 voiceover duration")
+	assertDuration(t, entries[0]["final_clip_duration_seconds"], 30.0, "scene-1 long final clip duration")
+	assertDuration(t, entries[0]["duration_seconds"], 32.0, "scene-1 total duration")
+	assertDuration(t, items[0]["duration"], 2.0, "scene-1 voiceover_bed item duration")
+	assertDuration(t, items[1]["duration"], 30.0, "scene-1 scene_clip item duration (long)")
+	// Scene 1: voiceover at 0, original clip audio after the 2s bed.
+	assertDuration(t, tracks[0]["start_time_offset"], 0, "scene-1 voiceover offset")
+	assertDuration(t, tracks[1]["start_time_offset"], 2, "scene-1 final clip audio offset")
+	// Scene 2: voiceover MUST begin at 32 (2+30), proving the long final clip
+	// is fully accounted for in the progressive offset; clip audio starts after that bed.
+	assertDuration(t, tracks[2]["start_time_offset"], 32, "scene-2 voiceover offset after long final clip")
+	assertDuration(t, tracks[3]["start_time_offset"], 37, "scene-2 final clip audio offset")
+	assertDuration(t, entries[1]["duration_seconds"], 7.0, "scene-2 total duration")
+}
+
+// TestBuildNarratedClipPayload_VoiceoverFreeSceneEmitsNoAudioBed nails down
+// contract rule 6: a scene with no voiceover_link MUST NOT emit a synthetic
+// voiceover_bed item. The scene_clip itself still emits an audio track so the
+// final clip's original audio survives the worker mux step.
+func TestBuildNarratedClipPayload_VoiceoverFreeSceneEmitsNoAudioBed(t *testing.T) {
+	t.Parallel()
+
+	scenes := []map[string]interface{}{
+		{
+			"clip_link":                   "final-only.mp4",
+			"duration_seconds":            7.0,
+			"final_clip_duration_seconds": 7.0,
+			// deliberately no voiceover_link / reference_voiceover / etc.
+		},
+	}
+
+	entries, items, clips, tracks, mode, err := buildNarratedClipPayload(scenes, narratedClipOptions{probe: func(string) float64 {
+		t.Fatal("probe must never run when there is no voiceover URL")
+		return 0
+	}})
+	if err != nil {
+		t.Fatalf("buildNarratedClipPayload: %v", err)
+	}
+	if mode != "clip_stock" {
+		t.Fatalf("mode = %q, want clip_stock", mode)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("entries = %d, want 1", len(entries))
+	}
+	if len(items) != 1 {
+		t.Fatalf("items = %d, want 1 (scene_clip only — no synthetic voiceover_bed)", len(items))
+	}
+	if role, _ := items[0]["role"].(string); role != "scene_clip" {
+		t.Fatalf("items[0].role = %q, want scene_clip", role)
+	}
+	if got := items[0]["url"]; got != "final-only.mp4" {
+		t.Fatalf("items[0].url = %v, want final-only.mp4", got)
+	}
+	if len(tracks) != 1 {
+		t.Fatalf("audio tracks = %d, want 1 — final clip audio only", len(tracks))
+	}
+	assertDuration(t, tracks[0]["start_time_offset"], 0, "voiceover-free final clip audio offset")
+	assertDuration(t, entries[0]["voiceover_duration_seconds"], 0, "no voiceover")
+	assertDuration(t, entries[0]["final_clip_duration_seconds"], 7.0, "final clip duration")
+	assertDuration(t, entries[0]["duration_seconds"], 7.0, "equal to final_clip when no voiceover")
+	if len(clips) != 1 || clips[0] != "final-only.mp4" {
+		t.Fatalf("clips = %#v, want only final clip", clips)
+	}
+}
+
+func assertDuration(t *testing.T, got interface{}, want float64, label string) {
+	t.Helper()
+	value, ok := got.(float64)
+	if !ok {
+		t.Fatalf("%s: got %T(%v), want float64(%v)", label, got, got, want)
+	}
+	if value != want {
+		t.Fatalf("%s: got %v, want %v", label, value, want)
+	}
+}

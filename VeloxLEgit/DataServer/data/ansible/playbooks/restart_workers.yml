@@ -1,0 +1,60 @@
+---
+# ============================================================
+# RESTART WORKERS — Riavvio servizio worker su computer remoti
+# ============================================================
+# Azioni:
+#   - Test connesione SSH
+#   - Riavvio servizio systemd velox-worker-HOST
+#   - Verifica stato post-riavvio
+# ============================================================
+
+- name: Restart workers
+  hosts: velox_workers
+  gather_facts: false
+
+  tasks:
+    # ── PRECHECK ─────────────────────────────────────────────
+    - name: Restart | Test connesione SSH
+      ansible.builtin.ping:
+
+    # ── RIAVVIO ──────────────────────────────────────────────
+    - name: Restart | Riavvia servizio worker
+      ansible.builtin.systemd:
+        name: "velox-worker-{{ inventory_hostname }}"
+        state: restarted
+        daemon_reload: true
+        enabled: true
+      register: restart_result
+
+    - name: Restart | Attendi stabilizzazione servizio
+      ansible.builtin.pause:
+        seconds: 3
+
+    # ── VERIFICA ─────────────────────────────────────────────
+    - name: Restart | Verifica stato servizio
+      ansible.builtin.systemd:
+        name: "velox-worker-{{ inventory_hostname }}"
+      register: final_status
+
+    - name: Restart | Fail if service not active
+      ansible.builtin.fail:
+        msg: "Worker {{ inventory_hostname }} non attivo dopo restart — stato: {{ final_status.status.ActiveState | default('unknown') }}"
+      when: final_status.status.ActiveState | default('unknown') != 'active'
+
+    - name: Restart | Log risultato
+      ansible.builtin.debug:
+        msg: >-
+          ✅ Worker {{ inventory_hostname }} riavviato con successo
+
+    - name: Restart | Mostra log recenti del servizio
+      ansible.builtin.shell: |
+        journalctl -u "velox-worker-{{ inventory_hostname }}" --no-pager -n 10 2>/dev/null || true
+      args:
+        executable: /bin/bash
+      register: journal_output
+      changed_when: false
+      failed_when: false
+
+    - name: Restart | Ultime righe di log
+      ansible.builtin.debug:
+        msg: "{{ journal_output.stdout_lines | default([]) }}"

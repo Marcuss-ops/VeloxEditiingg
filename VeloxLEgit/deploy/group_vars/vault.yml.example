@@ -1,0 +1,37 @@
+---
+# Velox — SECRET group variables (operator-populated, ansible-vault encrypted).
+# ────────────────────────────────────────────────────────────────────────────
+# This file is committed ONLY as a placeholder. The real vault file MUST be
+# created locally and encrypted with `ansible-vault` before use:
+#
+#   1. cp deploy/group_vars/vault.yml.example deploy/group_vars/vault.yml
+#   2. $EDITOR deploy/group_vars/vault.yml   # fill in real values
+#   3. ansible-vault encrypt deploy/group_vars/vault.yml
+#
+# Decryption requires a vault password. Provide via one of:
+#   --ask-vault-pass                              (interactive)
+#   --vault-password-file ~/.vault-velox          (file; perms 0600)
+#   $ANSIBLE_VAULT_PASSWORD                       (env var; for CI Secrets)
+#
+# Git hygiene:
+#   * The plain-text form (`vault.yml`, no `.example` suffix) is NOT
+#     committed. Add `deploy/group_vars/vault.yml` to your `.gitignore`.
+#   * The encrypted form IS safe to commit so CI can decrypt at runtime.
+
+# ── Master REST API token (consumed by velox-server.env.j2) ─────────────────
+vault_velox_admin_token: ""
+
+# ── Container registry pull credentials (used by worker image runtime) ──────
+vault_velox_registry_username: ""
+vault_velox_registry_token: ""
+
+# ── Per-worker secrets minted at install time (one entry per worker) ────────
+# MUST be sourced from a secrets manager (1Password, Bitwarden, Vault, etc.)
+vault_velox_worker_credential_1: ""
+vault_velox_worker_credential_2: ""
+vault_velox_worker_credential_3: ""
+
+# ── Optional: operator SSH public key (consumed by bootstrap-ssh.yml) ───────
+# When set, bootstrap-ssh.yml reads it here instead of requiring the operator
+# to pass --extra-vars on every invocation.
+vault_velox_operator_pubkey: ""

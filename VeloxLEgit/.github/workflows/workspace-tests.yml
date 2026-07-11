@@ -1,0 +1,136 @@
+# =============================================================================
+# Workspace Tests — CI gate that runs `go test -count=1 ./...` end-to-end
+# across every Go module in the workspace.
+#
+# Why a dedicated gate?
+# The canonical CI workflow (.github/workflows/ci.yml) runs `make verify`,
+# which dispatches to scripts/ci/verify.sh and exercises architecture
+# guards + go-vet + race-aware go-tests + cmake/ctest + docker-image
+# builds. But the canonical workflow's test surface hides `go test
+# ./...` failures inside a monolithic log. A dedicated gate surfaces the
+# per-module test pass/fail status as its OWN PR status check
+# ("Workspace Tests") so PR reviewers can see test breakage even when
+# the rest of the verify pipeline is green.
+#
+# This is the second gate in the test-routes group. The first is
+# routing-invariants.yml (typed routing-method contracts in
+# ./internal/{creatorflow,routing,forwarding}/.../). Future gateways
+# (e.g. typed-metrics contracts, hand-rolled SQL sentinel migrations)
+# belong in their own dedicated workflow files following the same
+# pattern.
+#
+# Why `go test ./...` per module rather than `./...` at the workspace
+# root?
+# The repository is a Go workspace (go.work) with three modules:
+#   ./DataServer                                  (module: velox-server)
+#   ./RemoteCodex/native/worker-agent-go          (module: velox-worker-agent)
+#   ./shared                                      (module: velox-shared, via replace)
+# Go workspace semantics forbid `go test ./...` at the workspace root
+# since the root directory is not itself a module. The gate runs the
+# user's specification per module by issuing three sequential `cd &&
+# go test -count=1 ./...` invocations under a single job.
+#
+# Trade-off: sequential per-module runs surface ALL failures in a
+# single log line. A matrix strategy (3 jobs, parallel) would give
+# per-module PR status names but triple the CI minute cost. Sequential
+# is the right call for a 3-module workspace; matrix strategy becomes
+# attractive past ~6 modules.
+#
+# Trigger: push to main / pull_request / workflow_dispatch.
+# Status check name in the PR UI: "Workspace Tests".
+# Permissions: contents: read (least-privilege).
+# Concurrency group "workspace-tests-${ref}" is independent of the
+# canonical ci-${ref} group so this gate runs IN PARALLEL with
+# make-verify rather than hidden inside it.
+# =============================================================================
+
+name: Workspace Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: workspace-tests-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    name: Workspace Tests
+    runs-on: ubuntu-latest
+    # Sequential per-module test run. Worst-case wall clock observed
+    # locally: ~6 minutes DataServer + ~30 s worker-agent + ~10 s
+    # shared; ceiling padded to 15 minutes. If a future module grows
+    # past 5 minutes independently, consider splitting into a matrix
+    # strategy with parallel jobs.
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # fetch-depth: 1 is sufficient — this gate does not use
+          # BASE_REF or any deep-history diff-aware logic. Mirrors
+          # routing-invariants.yml's shallow checkout policy.
+          fetch-depth: 1
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          # go-version-file tracks DataServer/go.mod (single-source-
+          # of-truth) — mirrors routing-invariants.yml. The shared
+          # module's go.mod and worker-agent-go's go.mod should
+          # declare compatible Go toolchain versions; if any future
+          # module's go.mod pins a different major Go version,
+          # lift this into a per-module setup step in a matrix.
+          go-version-file: DataServer/go.mod
+
+      - name: Cache Go build module cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          # Cache key spans every module's go.sum so a cache hit
+          # warms the entire workspace in a single cache write.
+          # Mirrors canonical ci.yml's key shape.
+          key: ${{ runner.os }}-go-${{ hashFiles('DataServer/go.sum', 'RemoteCodex/native/worker-agent-go/go.sum', 'shared/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Run DataServer tests
+        working-directory: DataServer
+        # -count=1 disables Go test result caching so the gate ALWAYS
+        #      physically runs every test, never serves stale PASS from
+        #      a cached result.
+        # ./...                every package in the DataServer module.
+        # No -short: this gate deliberately exercises the FULL test
+        #           surface (race-aware + integration style). The
+        #           cheaper `-short` mode is reserved for the
+        #           routing-invariants.yml gate (which is precisely
+        #           focused on its 3 typed-routing packages).
+        run: go test -count=1 ./...
+
+      - name: Run worker-agent-go tests
+        # worker-agent-go is a sibling module under RemoteCodex. The
+        # worker side shares velox-shared/taskcontract with DataServer
+        # via the workspace replacement; the per-module go.mod pins
+        # the worker-toolchain compat assertions this gate should catch.
+        working-directory: RemoteCodex/native/worker-agent-go
+        run: go test -count=1 ./...
+
+      - name: Run shared tests
+        # shared/ is the cross-module type contract. A failure here is
+        # the most-disruptive class of breakage because both
+        # DataServer and worker-agent-go compile against
+        # velox-shared/* — so it surfaces as compile errors in BOTH
+        # consumer modules in the canonical CI; running the gate
+        # explicitly here makes the failure locator obvious.
+        working-directory: shared
+        run: go test -count=1 ./...

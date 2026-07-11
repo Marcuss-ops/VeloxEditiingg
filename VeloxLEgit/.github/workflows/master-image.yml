@@ -1,0 +1,310 @@
+---
+# Master image release pipeline (velox-server).
+# ─────────────────────────────────────────────────────────────────────────────
+# Triggers (per HP #6 review):
+#   * push tag matching v* (e.g. refs/tags/v1.2.3)
+#   * push to main affecting any of the path patterns below, including
+#     `shared/**` so a protocol/contract/identity change in the
+#     velox-shared module also triggers a master image rebuild. The
+#     shared module currently lives OUTSIDE this repository
+#     (../shared relative to the repo root, resolved as
+#     `../../../../shared` from RemoteCodex/native/worker-agent-go).
+#     For GitHub `paths:` triggers to actually fire on shared
+#     changes, the velox-shared sources MUST be vendored or added as
+#     a git submodule under `shared/` inside this repository. Until
+#     that is done, this path filter documents intent but will not
+#     catch out-of-repo shared edits; pin a follow-up PR for it.
+#
+# What this workflow does end-to-end (HP #6 follow-up):
+#   1. Resolves the effective version from tag or input.
+#   2. Sanity-checks the in-tree vendoring of velox-shared (refuses
+#      to build if any of the three "shared module" invariants break).
+#   3. Runs `go test -race` (fail-fast gate for regressions).
+#   4. Builds the master binary via `go build` with LDFLAGS-injected version.
+#   5. Pushes the Debian-slim Docker image to GHCR (when not dry-run).
+#   6. Signs the image with cosign (keyless OIDC).
+#
+# Build context: project root — required because:
+#   - DataServer/Dockerfile's multi-stage build needs both
+#       shared/go.mod         (pre-download step)
+#       DataServer/go.mod     (pre-download step)
+#     visible from the same context root.
+#   - DataServer/go.mod replace directive is `../shared` (relative to
+#     DataServer/), which resolves to ./shared at the repo root.
+# `shared/` is vendored in-tree as part of this repo; see the comment
+# near the top of DataServer/go.mod for migration notes if/when
+# velox-shared is promoted to a real git submodule.
+
+name: Master image release
+
+on:
+  push:
+    tags:
+      - 'v*'
+    branches:
+      - main
+    paths:
+      - 'DataServer/**'
+      - 'deploy/**'
+      - 'shared/**'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version label (e.g. 1.2.3). The leading v is optional.'
+        required: true
+        default: ''
+      no_push:
+        description: 'Build + test locally — do NOT push, do NOT sign.'
+        required: false
+        default: 'false'
+        type: boolean
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: velox-server
+  BUILD_DIR: DataServer
+  DOCKERFILE: DataServer/Dockerfile
+  # Build context for `docker buildx` is the project root so that
+  # DataServer/go.mod's `replace velox-shared => ../../shared` resolves
+  # correctly ONLY when a `shared` build-context is also supplied. The
+  # workflow below does not yet clone velox-shared — see FAIL_FAST.
+  BUILD_CONTEXT: .
+
+jobs:
+  build-publish:
+    name: Build, test, push, sign
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # ── Parity check: velox-shared is vendored in-tree; refuse to
+      # attempt a multi-stage build if a developer accidentally drops
+      # it, OR if the two go.mod files silently drift apart in their
+      # `replace` paths. Cheap to detect, expensive to debug when
+      # discovered at the Docker layer-cache step instead of here.
+      - name: Verify in-tree shared module is present + go.mod parity (post-vendoring)
+        run: |
+          set -euo pipefail
+          echo "Sanity-checking velox-shared vendoring invariants…"
+
+          # Invariant 1: shared/ is present at the repo root.
+          if [ ! -f shared/go.mod ] || [ ! -f shared/go.sum ]; then
+            echo "::error::shared/go.mod or shared/go.sum is missing." >&2
+            echo "::error::velox-shared is expected to be vendored at" >&2
+            echo "::error::<repo-root>/shared/. If you are migrating" >&2
+            echo "::error::away from vendoring, update both go.mod" >&2
+            echo "::error::files AND switch the Dockerfile + workflow" >&2
+            echo "::error::to use --build-context shared=..." >&2
+            exit 1
+          fi
+
+          # Invariant 2: both go.mod files declare the in-tree replace.
+          if ! grep -Eq '^\s*replace\s+velox-shared\s+.*\.\./shared' DataServer/go.mod; then
+            echo "::error::DataServer/go.mod does not declare" >&2
+            echo "::error::  replace velox-shared …/../shared" >&2
+            echo "::error::expected path after this PR. Refusing to build." >&2
+            exit 1
+          fi
+          if ! grep -Eq '^\s*replace\s+velox-shared\s+.*\.\./\.\./\.\./shared' RemoteCodex/native/worker-agent-go/go.mod; then
+            echo "::error::RemoteCodex/native/worker-agent-go/go.mod does" >&2
+            echo "::error::not declare  replace velox-shared ……/shared" >&2
+            echo "::error::expected path after this PR. Refusing to build." >&2
+            exit 1
+          fi
+
+          # Invariant 3: both go.mod files declare the same
+          # `velox-shared` version. We delegate this to `go list -m`
+          # (Go is already on $PATH thanks to actions/setup-go@v5) so
+          # that every shape of `require` directive (inline,
+          # block-style, suffix `// indirect`, suffix `// reason`,
+          # pseudo-versions like `v0.0.0-2024…abcdef`) is parsed by
+          # the same Go module logic as a normal build. This is
+          # preferred over grep+awk because a bash parser cannot
+          # reliably distinguish `require velox-shared v0.0.0` from
+          # a commented-out `// require velox-shared v0.0.0`.
+          set +e
+          # GOWORK=off is REQUIRED: the repo-level go.work makes
+          # `go list -m` treat velox-shared as a workspace main module
+          # (Main: true, no Version field), so {{.Version}} returns empty.
+          # Disabling workspace resolution forces go to use the module-local
+          # replace directives in DataServer/go.mod and
+          # worker-agent-go/go.mod, which both declare velox-shared v0.0.0.
+          DS_REQ="$(cd DataServer && GOWORK=off go list -m -f '{{.Version}}' velox-shared 2>/dev/null)"
+          W_REQ="$(cd RemoteCodex/native/worker-agent-go && GOWORK=off go list -m -f '{{.Version}}' velox-shared 2>/dev/null)"
+          set -e
+          if [ -z "${DS_REQ}" ] || [ -z "${W_REQ}" ] || [ "${DS_REQ}" != "${W_REQ}" ]; then
+            echo "::error::velox-shared require version drift between" >&2
+            echo "::error::DataServer (${DS_REQ:-<unset>}) and" >&2
+            echo "::error::worker-agent-go (${W_REQ:-<unset>}). Refusing to build." >&2
+            exit 1
+          fi
+          echo "velox-shared vendoring invariants OK (${DS_REQ})."
+
+      # Read VERSION.txt (canonical source of truth per docs/architecture/OWNERSHIP.md,
+      # enforced as exactly-one at the repo root by scripts/ci/check-architecture.sh).
+      # Routed through a step because GitHub Actions cannot read a repo file directly
+      # into a workflow_dispatch input default.
+      - name: Read VERSION.txt (canonical source)
+        id: read-version
+        run: |
+          set -euo pipefail
+          VERSION="$(tr -d '[:space:]' < VERSION.txt)"
+          if [ -z "$VERSION" ]; then
+            echo "::error::VERSION.txt is empty — refusing to publish." >&2
+            exit 1
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Resolved version from VERSION.txt: ${VERSION}"
+
+      - name: Resolve effective version + determine push
+        id: version
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "push" ]; then
+            TAG="${GITHUB_REF_NAME#v}"
+          elif [ -n "${{ inputs.version }}" ]; then
+            INPUT="${{ inputs.version }}"
+            TAG="${INPUT#v}"
+          else
+            # workflow_dispatch with empty input: fall back to canonical VERSION.txt
+            TAG="${{ steps.read-version.outputs.version }}"
+          fi
+          if [ -z "$TAG" ]; then
+            echo "::error::Could not resolve version (push ref empty, dispatch input missing, VERSION.txt empty)." >&2
+            exit 1
+          fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          if [ "${{ github.event_name }}" = "push" ]; then
+            SHOULD_PUSH="true"
+          else
+            if [ "${{ inputs.no_push }}" = "true" ]; then
+              SHOULD_PUSH="false"
+            else
+              SHOULD_PUSH="true"
+            fi
+          fi
+          echo "push=${SHOULD_PUSH}" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.8'
+          cache-dependency-path: ${{ env.BUILD_DIR }}/go.sum
+
+      - name: Run tests with race detector (fail-fast gate)
+        working-directory: ${{ env.BUILD_DIR }}
+        run: go test -race -timeout 10m ./internal/... ./cmd/...
+
+      - name: Build velox-server binary
+        working-directory: ${{ env.BUILD_DIR }}
+        env:
+          VERSION: ${{ steps.version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          # BuildTime anchored to the HEAD commit so two rebuilds of the
+          # SAME commit produce byte-identical `-X main.BuildTime=...`
+          # strings, honouring the Reproducible Builds contract. The
+          # literal ISO 8601 timestamp from `git log -1 --format=%cI` is
+          # stable per-commit; the previous `$(date -u '+%Y%m%d')` made
+          # the binary non-reproducible. The corresponding `make`-driven
+          # builds in the worker-agent pipeline prefer SOURCE_DATE_EPOCH
+          # when present and fall back to the same git commit timestamp.
+          #
+          # NOTE: BUILD_TIME MUST be computed inside the `run:` script,
+          # NOT in the `env:` block. GitHub Actions `env:` values are
+          # literal strings — `$(...)` is NOT shell-evaluated there, so
+          # the previous `env: BUILD_TIME: ...-$(git log ...)` passed
+          # the literal command-substitution text to the Go linker's
+          # -X flag, which choked on the parentheses and printed link
+          # usage instead of building.
+          BUILD_TIME="${VERSION}-$(git log -1 --format=%cI)"
+          go build \
+            -trimpath \
+            -ldflags "-s -w -X main.Version=${VERSION} -X main.BuildTime=${BUILD_TIME}" \
+            -o ./bin/velox-server ./cmd/server
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: steps.version.outputs.push == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute image tags (NO :latest)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=match,pattern=v(.*),group=1
+            type=sha,prefix=sha-,format=short
+          flavor: |
+            latest=false
+
+      - name: Build + push image
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ env.BUILD_CONTEXT }}
+          file: ${{ env.DOCKERFILE }}
+          push: ${{ steps.version.outputs.push == 'true' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ steps.version.outputs.tag }}
+          provenance: true
+          sbom: true
+          cache-from: type=gha,scope=${{ github.workflow }}-${{ github.ref_name }}
+          cache-to:   type=gha,mode=max,scope=${{ github.workflow }}-${{ github.ref_name }}
+
+      - name: Extract image digest
+        id: digest
+        if: steps.build.outputs.digest != ''
+        run: |
+          set -euo pipefail
+          echo "digest=${{ steps.build.outputs.digest }}" >> "$GITHUB_OUTPUT"
+          echo "${{ steps.build.outputs.digest }}" > image-digest.txt
+          echo "## Image digest" >> "$GITHUB_STEP_SUMMARY"
+          echo ":package: \`${{ steps.build.outputs.digest }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "Tags:" >> "$GITHUB_STEP_SUMMARY"
+          for t in ${{ steps.meta.outputs.tags }}; do
+            echo "- \`$t\`" >> "$GITHUB_STEP_SUMMARY"
+          done
+
+      - name: Upload digest artifact
+        if: steps.build.outputs.digest != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: master-image-digest
+          path: image-digest.txt
+          if-no-files-found: error
+
+      - name: Install cosign
+        if: steps.digest.outputs.digest != '' && steps.version.outputs.push == 'true'
+        uses: sigstore/cosign-installer@v3
+        with:
+          cosign-release: 'v2.4.1'
+
+      - name: Cosign keyless sign (OIDC)
+        if: steps.digest.outputs.digest != '' && steps.version.outputs.push == 'true'
+        env:
+          COSIGN_EXPERIMENTAL: '1'
+        run: |
+          set -euo pipefail
+          IMAGE="${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}@${{ steps.digest.outputs.digest }}"
+          echo "Signing image: $IMAGE"
+          cosign sign --yes "$IMAGE"
