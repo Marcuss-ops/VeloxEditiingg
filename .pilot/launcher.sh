@@ -12,8 +12,9 @@ DB=$PILOT/velox.db
 BIN=/tmp/velox-server
 PORT=8080
 ADMIN=test-admin-token
-WORKER=/home/pierone/Pyt/VeloxLEgit/RemoteCodex/native/worker-agent-go/bin/velox-worker-agent
-ENGINE=/home/pierone/Pyt/VeloxLEgit/RemoteCodex/native/video-engine-cpp/build/velox_video_engine
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || realpath "$(dirname "$0")/.." 2>/dev/null || pwd)"
+WORKER="${REPO_ROOT}/RemoteCodex/native/worker-agent-go/bin/velox-worker-agent"
+ENGINE="${REPO_ROOT}/RemoteCodex/native/video-engine-cpp/build/velox_video_engine"
 
 start() {
   pkill -9 -f "$BIN serve" 2>/dev/null

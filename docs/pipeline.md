@@ -492,14 +492,14 @@ sudo journalctl -u velox-server --since "5 minutes ago" --no-pager |
 
 ### Ricostruzione Worker
 ```bash
-cd /home/pierone/Pyt/VeloxLEgit && make agent
+cd `<repo-root>` && make agent
 # Il binario viene prodotto in:
 #   RemoteCodex/native/worker-agent-go/bin/velox-worker-agent
 ```
 
 ### Ricostruzione Master
 ```bash
-cd /home/pierone/Pyt/VeloxLEgit/DataServer && go build -o /tmp/velox-server ./cmd/server
+cd `<repo-root>/DataServer` && go build -o /tmp/velox-server ./cmd/server
 ```
 
 ---

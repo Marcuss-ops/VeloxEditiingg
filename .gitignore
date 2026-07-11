@@ -174,3 +174,16 @@ RemoteCodex/native/worker-agent-go/installer.exe
 
 # ── External Courser repo (standalone — developed in Courser/courserpierone/) ────
 Courser/
+
+# ── Historical local mirror (deleted 2026-07-11) ────────────────────────────
+# VeloxLEgit/ was a 1.9 GB local mirror of the parent tree, removed during
+# the redundant-nested-repos cleanup. Anchored to repo root per
+# docs/gitignore-policy's highest-risk pattern rule, so a typo'd VeloxLEgit
+# deep inside another module would NOT be silently shadowed.
+/VeloxLEgit/
+
+# ── Transient ops evidence ──────────────────────────────────────────────────
+# Single-ticket report snapshots (rw-prod-001/003/004) were committed at
+# the time for audit, then removed in the same cleanup pass. Anchored at
+# `ops/` since that was and remains their canonical location.
+ops/rw-prod-*.json

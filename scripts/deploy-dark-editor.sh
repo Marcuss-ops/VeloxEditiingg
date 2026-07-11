@@ -4,7 +4,8 @@
 
 set -euo pipefail
 
-DARK_EDITOR_DIR="/home/pierone/Pyt/VeloxLEgit/VeloxFrontend/web/dark_editor"
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || realpath "$(dirname "$0")/.." 2>/dev/null || pwd)"
+DARK_EDITOR_DIR="${REPO_ROOT}/VeloxFrontend/web/dark_editor"
 DEPLOY_DIR="/opt/velox/current/dark_editor"
 DATA_SYMLINK_TARGET="/opt/velox/current/.velox/data/dark_editor"
 SERVICE="velox-dark-editor"

@@ -1,9 +1,0 @@
-{
-  "items": [
-    {"role": "voiceover_bed", "url": "https://example.com/stock-1.mp4"},
-    {"role": "scene_clip",    "url": "https://example.com/clip-1.mp4"},
-    {"role": "voiceover_bed", "url": "https://example.com/stock-2.mp4"},
-    {"role": "scene_clip",    "url": "https://example.com/clip-2.mp4"},
-    {"role": "voiceover_bed", "url": "https://example.com/stock-3.mp4"}
-  ]
-}
