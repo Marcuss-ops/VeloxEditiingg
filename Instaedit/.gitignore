@@ -1,0 +1,10 @@
+# Root .gitignore — VeloxEditiingg (parent repo)
+# /socialsync è un guardrail anti-resurrezione: la cartella è stata
+# rimossa in commit 979a8c7 (cleanup). Il blocco impedisce che rientri
+# accidentalmente nel tracking se ricreata localmente.
+
+node_modules/
+dist/
+.env
+*.local
+/socialsync
