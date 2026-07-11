@@ -221,8 +221,8 @@ fi
 ansible_bin=""
 if command -v ansible-playbook >/dev/null 2>&1; then
   ansible_bin="$(command -v ansible-playbook)"
-elif [[ -x "${HOME}/Projects/company/.venv/bin/ansible-playbook" ]]; then
-  ansible_bin="${HOME}/Projects/company/.venv/bin/ansible-playbook"
+elif [[ -x "${VELOX_VENV:-${HOME}/Projects/company/.venv}/bin/ansible-playbook" ]]; then
+  ansible_bin="${VELOX_VENV:-${HOME}/Projects/company/.venv}/bin/ansible-playbook"
 fi
 [[ -n "$ansible_bin" ]] \
   || fail "ansible-playbook not on PATH and venv fallback missing; install ansible-core in PATH or in /home/pierone/venv (cannot verify canonical-worker playbook)"
