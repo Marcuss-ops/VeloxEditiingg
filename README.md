@@ -485,3 +485,203 @@ make build
 - **PostgreSQL** è supportato come database enterprise (`VELOX_DB_DRIVER=postgres`).
 - **TLS** è supportato via `VELOX_TLS_CERT_FILE` e `VELOX_TLS_KEY_FILE`.
 - **S3/MinIO/R2** è supportato per storage oggetti.
+
+---
+
+## 7. Layout Operativo & Clone Pulito
+
+### 7.1 Struttura locale canonica
+
+```
+~/Projects/
+├── Velox/                           # QUESTA repo (master backend)
+│   ├── .git/                        # git principale
+│   ├── .gitmodules                  # dichiara VeloxFrontend
+│   ├── .gitignore                   # esclusioni (backups/, scratch, secrets)
+│   ├── VeloxFrontend/               # SUBMODULE CANONICO (.git = file ASCII)
+│   └── ...                          # refactored/, scripts/, docs/, VERSION.txt
+│
+├── backups/                         # FUORI da Velox, MAI tracked
+│   ├── VeloxLEgit_bundle_<ts>.bundle          # history completa
+│   ├── VeloxLEgit_tree_<ts>.tar               # file tree
+│   ├── VeloxLEgit_backup_<ts>.EMPTY_PLACEHOLDER  # vecchio placeholder vuoto
+│   ├── Instaedit_backup_<ts>/                 # backup pre-rimozione
+│   └── VeloxFrontend_dark_editor_stash_backup_<ts>.patch  # stash di sicurezza
+│
+└── ...                              # tool di sviluppo locali
+```
+
+**Regole:**
+- `VeloxFrontend/` è **solo** un submodule dichiarato in `.gitmodules`. Non ricrearlo manualmente dentro Velox.
+- `backups/` FUORI da Velox, dichiarato in `.gitignore` per evitare inclusioni accidentali di copie locali.
+- Non clonare altre repo Git dentro Velox (niente `VeloxLEgit/`, `Instaedit/`, `VeloxFrontend-work/`, etc. come sub-directory).
+
+### 7.2 Clone pulito (prima installazione)
+
+```bash
+mkdir -p ~/Projects
+cd ~/Projects
+
+# Clone con submodule canonico (portabilty completa)
+git clone --recurse-submodules \
+  https://github.com/Marcuss-ops/VeloxEditiingg.git Velox
+
+# Verifica
+cd ~/Projects/Velox
+git status                                # deve essere clean
+git submodule status                       # VeloxFrontend con HEAD corrente (no "missing")
+file VeloxFrontend/.git                    # ASCII text
+cat VeloxFrontend/.git                     # gitdir: ../.git/modules/VeloxFrontend
+
+# Per aggiornare una copia esistente
+git pull --ff-only                         # main allineato
+git submodule sync --recursive
+git submodule update --init --recursive
+```
+
+> **Nota sul typo**: il remote URL è `VeloxEditiingg.git` (typo storico). Funziona grazie al forwarding GitHub. Non rinominare a `VeloxEditing` se non in un commit dedicato.
+
+### 7.3 Smoke test di portabilità
+
+Prima di rilasciare modifiche strutturali (`.gitmodules`, submodule migrations, ecc.), esegui:
+
+```bash
+TS=$(date +%Y%m%d_%H%M%S)
+git clone --recurse-submodules \
+  https://github.com/Marcuss-ops/VeloxEditiingg.git \
+  /tmp/velox-clone-test-$TS
+cd /tmp/velox-clone-test-$TS
+test "$(file VeloxFrontend/.git | cut -d' ' -f2)" = "ASCII" && echo "CANONICAL submodule" || echo "BROKEN - not a canonical submodule"
+rm -rf /tmp/velox-clone-test-$TS
+```
+
+---
+
+## 8. Workflow Rules (`main` only)
+
+### 8.1 Branching policy
+
+- **Solo `main`**. MAI creare branch, PR, o feature branch.
+- Tutte le commit vanno direttamente su `main`.
+- Push frequenti: dopo ogni modifica completata, fate commit + push subito.
+
+### 8.2 Pre-commit checklist (OBBLIGATORIO)
+
+```bash
+# 1. Secret scan PRIMA di ogni commit
+rg -nE 'github_pat_[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{20,}|sk-[A-Za-z0-9]{20,}|xox[baprs]-|/home/[^/]+/Pyt' \
+   <file-da-stage>
+
+# SECRETS MAI A CHAT, MAI A TERMINALE. Solo al prompt di git push.
+```
+
+### 8.3 Standard workflow su main
+
+```bash
+cd ~/Projects/Velox
+
+# Single-purpose commit (atomicità semantica)
+git status                                 # check modifications
+git add <file-specifico>
+git commit -m "chore(<area>): <messaggio-descrittivo>"
+
+# Dry-run pre-push (cattura errori auth/branch protection PRIMA del push reale)
+git push --dry-run origin main
+
+# Push reale
+git push origin main
+
+# Verify
+git log --oneline --decorate --graph -5    # conferma push OK
+git fetch origin                            # origin/main aggiornato
+git log --oneline origin/main..HEAD         # deve essere vuoto (no divergenze)
+```
+
+### 8.4 Commit message conventions
+
+| Prefix    | Uso |
+|-----------|-----|
+| `chore:`  | Refactor minori, .gitignore, .gitmodules, struttura |
+| `feat:`   | Nuove feature |
+| `fix:`    | Bug fix |
+| `wip:`    | Work-in-progress (mark esplicito) |
+| `docs:`   | Documentazione only |
+| `refactor:` | Restructuring senza behavior change |
+| `test:`   | Solo test |
+
+Body del commit SEMPRE 1-3 righe che spiegano: cosa, perché, riferimenti a backup/related commits.
+
+### 8.5 Working dentro VeloxFrontend submodule
+
+```bash
+cd ~/Projects/Velox/VeloxFrontend
+git switch main
+git pull --ff-only origin main
+
+# Modifica i file
+git add web/dark_editor/<file>
+git commit -m "feat(dark-editor): <descrizione>"
+git push origin main
+
+# Torna nel repo Velox e bumpa il gitlink
+cd ~/Projects/Velox
+git add VeloxFrontend
+git commit -m "chore(frontend): bump VeloxFrontend submodule to <new-HEAD>"
+git push origin main
+```
+
+> **Mai** modificare `~/.git/modules/VeloxFrontend/**` a mano. Trattalo come submodule canonico.
+
+### 8.6 Submodule hygiene
+
+```bash
+# Verify integrità gitlink ASCII canonico (no manual clone)
+file VeloxFrontend/.git                    # ASCII text
+cat VeloxFrontend/.git                     # gitdir: ../.git/modules/VeloxFrontend
+
+# Se la struttura è rotta (es. .git è una directory piena):
+git submodule absorbgitdirs VeloxFrontend   # assorbe la struttura
+
+# Se manca il canon submodule declaration:
+# Crea/modifica .gitmodules (vedi Section 7.1)
+```
+
+### 8.7 Backup conventions
+
+```bash
+mkdir -p ~/Projects/backups
+TS=$(date +%Y%m%d_%H%M%S)
+
+# Backup pre-rimozione (es. submodule, cartella grossa)
+mv <PATH_DA_RIMUOVERE> ~/Projects/backups/<NOME>_backup_${TS}
+
+# Bundle git (history portable, valido per submodule o repo)
+git tag backup-orphan-<sha> <sha>           # workaround per gitlink orphan refs
+git bundle create \
+  ~/Projects/backups/<REPO>_bundle_${TS}.bundle \
+  backup-orphan-<sha>
+git tag -d backup-orphan-<sha>
+
+# Patch file (per stash o working tree changes)
+git diff > ~/Projects/backups/<REPO>_patch_${TS}.patch
+# oppure
+git stash show -p stash@{0} > ~/Projects/backups/<REPO>_stash_backup_${TS}.patch
+```
+
+### 8.8 PAT setup (GitHub Authentication)
+
+```bash
+# Identity (board-wide, una volta sola)
+git config --global user.name "Marcuss-ops"
+git config --global user.email "marcuss-ops@users.noreply.github.com"
+
+# Credential helper in cache (RAM only, 15min default)
+git config --global credential.helper 'cache --timeout=900'
+
+# Permessi ~/.gitconfig stretti (DEFENSE IN DEPTH)
+chmod 600 ~/.gitconfig
+```
+
+> I Personal Access Token (PAT) si generano manualmente su https://github.com/settings/tokens/new (revoca sempre i leakati!). Vanno inseriti **solo** al prompt interattivo di `git push` (no a terminale, no a chat, no in repo).
+> Tipi: fine-grained `github_pat_…` (consigliato, scope minimo) o classic `ghp_…` (scope `repo`).
+
