@@ -1,0 +1,177 @@
+#!/usr/bin/env bash
+# =============================================================================
+# scripts/dev-shell-bootstrap
+# =============================================================================
+# Idempotent shell-bootstrap for the Velox dev environment. Designed for
+# AI-agent runtime images that arrive fresh per session with no Go tooling
+# pre-installed. Re-runs are safe and fast — every install step checks
+# for the binary first and only installs when missing.
+#
+# This script documents EVERY install command inline (the user-facing
+# requirement of the bootstrap). To add a new tool:
+#   1. Pick a pinned version (NEVER @latest in production images; the
+#      CI workflow uses the same pin so dev + CI agree).
+#   2. Add an idempotent install_X() function pattern: detect and skip
+#      if already present, otherwise install to $(go env GOPATH)/bin.
+#   3. Add a `printf` log line on success.
+#   4. Wire the same X_VERSION pin in .github/workflows/ci.yml so dev +
+#      CI are bit-compatible.
+#
+# Currently installed:
+#   - golangci-lint v1.64.0   (Go 1.26-compatible; matches ci.yml pin)
+#
+# Multi-attempt install rationale:
+#   - `go install golangci-lint@v1.64.0` is the canonical path, but
+#     golangci-lint v1.61.0 fails to BUILD under Go 1.26 due to a
+#     transitive golang.org/x/tools integer-arithmetic regression.
+#     v1.64.0 was the first version whose release artifact compiles
+#     cleanly against Go 1.26 (and CI on ubuntu-latest pulls the
+#     binary via golangci/golangci-lint-action@v6 anyway).
+#   - The official install.sh (precompiled binary) is the second path.
+#     It bypasses Go compilation entirely by downloading the binary
+#     release tarball from github.com/golangci/golangci-lint/releases.
+#   - This script tries `go install` first (cleanest, no network
+#     apart from proxy.golang.org) and falls back to install.sh.
+# =============================================================================
+
+set -uo pipefail  # NOT -e: continue across attempts so all diagnostics print
+
+GOLANGCI_LINT_VERSION="${GOLANGCI_LINT_VERSION:-v1.64.0}"
+GO_BIN_DIR="${GO_BIN_DIR:-$(go env GOPATH 2>/dev/null)/bin}"
+if [[ -z "${GO_BIN_DIR}" || "${GO_BIN_DIR}" == "/bin" ]]; then
+  GO_BIN_DIR="${HOME}/.local/bin"
+fi
+
+log()  { printf '\033[1;34m[bootstrap]\033[0m %s\n' "$*"; }
+warn() { printf '\033[1;33m[bootstrap]\033[0m %s\n' "$*" >&2; }
+fail() { printf '\033[1;31m[bootstrap]\033[0m %s\n' "$*" >&2; }
+
+# ─── Detect existing golangci-lint ────────────────────────────────────────
+is_golangci_lint_installed() {
+  command -v golangci-lint >/dev/null 2>&1 \
+    || [[ -x "${GO_BIN_DIR}/golangci-lint" ]]
+}
+
+current_golangci_lint_version() {
+  # Tolerate BOTH `golangci-lint version 1.64.0 built with ...` and a
+  # bare `version 1.64.0` (some stripped builds). Returns empty string
+  # when neither pattern matches; callers surface `(version unknown)`
+  # and trigger a re-install.
+  golangci-lint --version 2>&1 \
+    | awk '
+        {
+          for (i = 1; i <= NF; i++) {
+            if ($i == "version" && $(i+1) ~ /^v?[0-9]+\.[0-9]+/) { print $(i+1); exit }
+          }
+        }
+      ' \
+    | sed 's/^v//'
+}
+
+# ─── Install attempt 1: go install (pure Go) ─────────────────────────────
+install_via_go_install() {
+  log "Attempt 1: \`go install github.com/golangci/golangci-lint/cmd/golangci-lint@${GOLANGCI_LINT_VERSION}\`"
+  if ! command -v go >/dev/null 2>&1; then
+    warn "go not on PATH; skipping attempt 1"
+    return 1
+  fi
+  local out
+  out="$(go install "github.com/golangci/golangci-lint/cmd/golangci-lint@${GOLANGCI_LINT_VERSION}" 2>&1)" \
+    || { warn "go install failed: ${out}"; return 1; }
+  if ! command -v golangci-lint >/dev/null 2>&1; then
+    # GOPATH/bin may not be on PATH yet; check the bin dir directly.
+    if [[ ! -x "${GO_BIN_DIR}/golangci-lint" ]]; then
+      warn "go install completed but ${GO_BIN_DIR}/golangci-lint not present"
+      return 1
+    fi
+  fi
+  log "  ✓ attempt 1 succeeded"
+  return 0
+}
+
+# ─── Install attempt 2: install.sh (official precompiled binary) ─────────
+install_via_install_sh() {
+  log "Attempt 2: \`curl https://...install.sh | sh -s -- -b ${GO_BIN_DIR} ${GOLANGCI_LINT_VERSION}\`"
+  if ! command -v curl >/dev/null 2>&1; then
+    warn "curl not on PATH; skipping attempt 2"
+    return 1
+  fi
+  local script url out
+  url="https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh"
+  script="$(mktemp -t glci-install-XXXXXX.sh)"
+  if ! curl -sSfL "${url}" -o "${script}" 2>&1; then
+    warn "curl failed fetching ${url}"
+    rm -f "${script}"
+    return 1
+  fi
+  out="$(sh "${script}" -b "${GO_BIN_DIR}" "${GOLANGCI_LINT_VERSION}" 2>&1)" \
+    || { warn "install.sh failed: ${out}"; rm -f "${script}"; return 1; }
+  rm -f "${script}"
+  log "  ✓ attempt 2 succeeded"
+  return 0
+}
+
+# ─── Wire GOPATH/bin onto PATH if present ─────────────────────────────────
+ensure_path_export() {
+  case ":${PATH}:" in
+    *":${GO_BIN_DIR}:") ;;
+    *)
+      warn "${GO_BIN_DIR} not on PATH yet"
+      warn "  export PATH=\"\${PATH}:${GO_BIN_DIR}\"  # to use \`golangci-lint\` from this shell"
+      ;;
+  esac
+}
+
+# ─── Orchestrator ─────────────────────────────────────────────────────────
+main() {
+  log "Velox dev shell bootstrap (golangci-lint ${GOLANGCI_LINT_VERSION})"
+  log "GOPATH/bin = ${GO_BIN_DIR}"
+
+  if is_golangci_lint_installed; then
+    local installed_v
+    installed_v="$(current_golangci_lint_version 2>/dev/null)"
+    if [[ -z "${installed_v}" ]]; then
+      warn "installed golangci-lint binary is unparseable (--version did not emit a recognizable version)"
+      warn "removing and retrying install attempts"
+      rm -f "${GO_BIN_DIR}/golangci-lint"
+    else
+      log "✓ golangci-lint already installed at $(command -v golangci-lint) (version ${installed_v})"
+      if [[ "${installed_v}" != "${GOLANGCI_LINT_VERSION#v}" ]]; then
+        warn "  version ${installed_v} != pinned ${GOLANGCI_LINT_VERSION}"
+        warn "  if you need a fresh build, set GOLANGCI_LINT_VERSION and rerun"
+      fi
+      ensure_path_export
+      log "✓ bootstrap done"
+      return 0
+    fi
+  fi
+
+  if install_via_go_install; then
+    :
+  elif install_via_install_sh; then
+    :
+  else
+    fail "both install attempts failed for golangci-lint ${GOLANGCI_LINT_VERSION}"
+    fail "manual install command (documented per the bootstrap requirement):"
+    fail "  go install github.com/golangci/golangci-lint/cmd/golangci-lint@${GOLANGCI_LINT_VERSION}"
+    fail "  OR"
+    fail "  curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh \\"
+    fail "    | sh -s -- -b \"\$(go env GOPATH)/bin\" ${GOLANGCI_LINT_VERSION}"
+    return 1
+  fi
+
+  # Verify the post-install state for the user.
+  ensure_path_export
+  if is_golangci_lint_installed; then
+    local installed_v
+    installed_v="$(current_golangci_lint_version 2>/dev/null || echo unknown)"
+    log "✓ golangci-lint installed at $(command -v golangci-lint) (version ${installed_v})"
+    log "✓ bootstrap done"
+    return 0
+  fi
+
+  fail "install completed but golangci-lint still NOT found on PATH or in ${GO_BIN_DIR}"
+  return 1
+}
+
+main "$@"

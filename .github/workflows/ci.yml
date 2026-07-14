@@ -49,6 +49,19 @@ jobs:
         run: ./scripts/ci/check-dsn-busy-timeout.sh
       - name: "Verify \u2014 architectural, Go, native, docker-image"
         run: make verify
+        run: make verify
+        run: make verify
+        run: make verify
+        run: make verify
+        run: make verify
+        run: make verify
+        run: make verify
+        run: make verify
+        run: make verify
+        run: make verify
+        run: make verify
+        run: make verify
+        run: make verify
       - name: "Invariants \u2014 completion protocol (Phase 1.5)"
         run: 'DB="$(mktemp /tmp/velox-cp-fixture.XXXXXX.db)"
 
