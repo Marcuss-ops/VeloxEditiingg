@@ -328,6 +328,19 @@ type SegmentTiming struct {
 	MetadataJSON     string  `json:"metadata_json,omitempty"`
 }
 
+// TaskAttemptReport is the master-side persisted raw worker report for a
+// single attempt. It stores the exact JSON payload received from the worker
+// plus derived metadata for audit, replay, and forward-compatible metric
+// extraction. The typed tables remain the source of truth for fast queries.
+type TaskAttemptReport struct {
+	AttemptID     string    `json:"attempt_id"`
+	ReportSchema  int       `json:"report_schema"`
+	ReportHash    string    `json:"report_hash"`
+	RawReportJSON string    `json:"raw_report_json"`
+	ReceivedAt    time.Time `json:"received_at"`
+	PersistedAt   time.Time `json:"persisted_at"`
+}
+
 // TaskExecutionReport is the typed, versioned, final report a worker emits
 // after completing (or failing) a task attempt. The master validates all
 // identity fields before persistence.

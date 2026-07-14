@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"time"
 
 	"velox-server/internal/jobs"
 	"velox-server/internal/taskattempts"
@@ -83,6 +84,9 @@ type IngestCommand struct {
 	// Scorecard v2 / Step 15: tracing correlation from gRPC metadata.
 	TraceID string
 	SpanID  string
+	// Step 16: raw worker report payload (JSON) for audit and replay.
+	RawReportJSON       string
+	RawReportReceivedAt time.Time
 }
 
 // DeclaredArtifact is one worker-claimed artifact. Mirrors the proto
@@ -368,6 +372,9 @@ func (s *TaskReportIngestionService) IngestTaskResult(ctx context.Context, cmd I
 		// Scorecard v2 / Step 15: tracing.
 		TraceID: cmd.TraceID,
 		SpanID:  cmd.SpanID,
+		// Step 16: raw worker report payload for audit/replay.
+		RawReportJSON:       cmd.RawReportJSON,
+		RawReportReceivedAt: cmd.RawReportReceivedAt,
 	})
 
 	// fix/atomic-ingestion: IngestTaskResultAtomic succeeded — the Task +

@@ -41,7 +41,9 @@ CREATE TABLE task_attempts (
 	engine_version       TEXT NOT NULL DEFAULT '',
 	ffmpeg_version       TEXT NOT NULL DEFAULT '',
 	config_hash          TEXT NOT NULL DEFAULT '',
-	docker_image_digest  TEXT NOT NULL DEFAULT ''
+	docker_image_digest  TEXT NOT NULL DEFAULT '',
+	trace_id             TEXT NOT NULL DEFAULT '',
+	span_id              TEXT NOT NULL DEFAULT ''
 );
 `
 	if _, err := db.Exec(schema); err != nil {

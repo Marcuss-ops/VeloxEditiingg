@@ -15,3 +15,8 @@ var ErrStaleReport = errors.New("taskattempts: stale report (worker or lease mis
 // ErrActiveAttemptExists is returned when creating a new attempt while a
 // non-terminal attempt already exists for the same task.
 var ErrActiveAttemptExists = errors.New("taskattempts: active attempt already exists for this task")
+
+// ErrReportConflict is returned when a raw worker report is ingested for an
+// attempt that already has a different report hash stored. Attempt reports
+// are immutable once persisted.
+var ErrReportConflict = errors.New("taskattempts: raw report conflict (attempt_id already has a different hash)")

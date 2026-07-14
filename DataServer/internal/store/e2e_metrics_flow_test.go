@@ -100,6 +100,9 @@ func TestE2E_MetricsFlow_WorkerToDBToAPI(t *testing.T) {
 		FFmpegVersion:     "n7.0.2",
 		ConfigHash:        "sha256:def5678",
 		DockerImageDigest: "sha256:ghi9012",
+		// Step 16: raw worker report payload for audit/replay.
+		RawReportJSON:       `{"task_id":"` + taskID + `","attempt_id":"` + attemptID + `","status":"succeeded"}`,
+		RawReportReceivedAt: now,
 		Metrics: taskattempts.AttemptMetrics{
 			AttemptID: attemptID,
 			// Legacy 7 carry-over.
@@ -328,7 +331,48 @@ func TestE2E_MetricsFlow_WorkerToDBToAPI(t *testing.T) {
 	}
 	t.Logf("Rollup (global): avg=%.2f p95=%.2f samples=%d", avgVal, p95Val, sampleCount)
 
-	t.Log("E2E metrics flow: PASS — 16 metric fields verified (incl. 4 engine phase), overview OK, rollups OK")
+	// ── 7. Verify raw worker report persisted for audit/replay ──────
+	var storedHash, storedJSON, storedReceived, storedPersisted string
+	if err := store.db.QueryRowContext(ctx,
+		`SELECT report_hash, raw_report_json, received_at, persisted_at
+		 FROM task_attempt_reports WHERE attempt_id = ?`,
+		attemptID,
+	).Scan(&storedHash, &storedJSON, &storedReceived, &storedPersisted); err != nil {
+		t.Fatalf("query task_attempt_reports: %v", err)
+	}
+	if storedJSON != cmd.RawReportJSON {
+		t.Errorf("raw_report_json = %q; want %q", storedJSON, cmd.RawReportJSON)
+	}
+	if storedReceived == "" {
+		t.Error("received_at is empty")
+	}
+	if storedPersisted == "" {
+		t.Error("persisted_at is empty")
+	}
+
+	// Idempotency: re-ingesting the same raw report should succeed.
+	if err := taskRepo.IngestTaskResultAtomic(ctx, cmd); err != nil {
+		t.Fatalf("re-ingest same raw report: %v", err)
+	}
+	var idempotentHash string
+	if err := store.db.QueryRowContext(ctx,
+		`SELECT report_hash FROM task_attempt_reports WHERE attempt_id = ?`,
+		attemptID,
+	).Scan(&idempotentHash); err != nil {
+		t.Fatalf("query task_attempt_reports after idempotent re-ingest: %v", err)
+	}
+	if idempotentHash != storedHash {
+		t.Errorf("report_hash changed after idempotent re-ingest: %s -> %s", storedHash, idempotentHash)
+	}
+
+	// Conflict: a different raw report for the same attempt must fail.
+	cmd2 := cmd
+	cmd2.RawReportJSON = `{"task_id":"` + taskID + `","attempt_id":"` + attemptID + `","status":"succeeded","extra":true}`
+	if err := taskRepo.IngestTaskResultAtomic(ctx, cmd2); err == nil {
+		t.Fatal("expected conflict error when re-ingesting different raw report for same attempt")
+	}
+
+	t.Log("E2E metrics flow: PASS — 16 metric fields verified (incl. 4 engine phase), overview OK, rollups OK, raw report OK")
 }
 
 // execQuery is a helper that runs an ExecContext and fatals on error.

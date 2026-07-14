@@ -17,6 +17,7 @@ import (
 	pb "velox-shared/controltransport/pb"
 
 	"go.opentelemetry.io/otel/attribute"
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -455,6 +456,18 @@ func (h *Handler) handleTaskResult(workerID string, tr *pb.TaskResult, sess *wor
 		}
 	}
 
+	// Serialize the complete TaskResult protobuf to JSON so the master can
+	// store the exact worker report for audit, replay, and forward-compatible
+	// metric extraction. If the proto cannot be serialized, reject the
+	// report: the raw payload is a required part of the audit trail.
+	rawJSON, mErr := protojson.Marshal(tr)
+	if mErr != nil {
+		log.Printf("[GRPC] Failed to marshal TaskResult to JSON for task=%s attempt=%s: %v", taskID, attemptID, mErr)
+		return
+	}
+	rawReportJSON := string(rawJSON)
+	receivedAt := time.Now().UTC()
+
 	res, err := h.ingestionSvc.IngestTaskResult(ctx, ingest.IngestCommand{
 		TaskID:          taskID,
 		AttemptID:       attemptID,
@@ -475,6 +488,8 @@ func (h *Handler) handleTaskResult(workerID string, tr *pb.TaskResult, sess *wor
 		FFmpegVersion:     ffmpegVer,
 		TraceID:           traceID,
 		SpanID:            spanID,
+		RawReportJSON:     rawReportJSON,
+		RawReportReceivedAt: receivedAt,
 	})
 	if err != nil {
 		log.Printf("[GRPC] TaskResult ingest for task=%s attempt=%s FAILED: %v", taskID, attemptID, err)

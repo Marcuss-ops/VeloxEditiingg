@@ -108,4 +108,7 @@ type IngestResultCommand struct {
 	// Scorecard v2 / Step 15: OpenTelemetry tracing correlation.
 	TraceID string
 	SpanID  string
+	// Step 16: raw worker report payload (JSON) for audit and replay.
+	RawReportJSON     string
+	RawReportReceivedAt time.Time
 }

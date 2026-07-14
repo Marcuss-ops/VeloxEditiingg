@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -1101,6 +1102,45 @@ func (r *SQLiteTaskRepository) IngestTaskResultAtomic(ctx context.Context, cmd t
 			}
 			return fmt.Errorf("task ingest atomic artifact %s: %w", a.ArtifactID, artErr)
 		}
+	}
+
+	// 7. Persist the raw worker report payload for audit/replay.
+	//    Re-ingestion with the same attempt_id + report_hash is idempotent.
+	//    A different hash for the same attempt_id is a conflict and aborts
+	//    the transaction, preserving the immutable attempt history.
+	if cmd.RawReportJSON != "" {
+		rawHash := fmt.Sprintf("%x", sha256.Sum256([]byte(cmd.RawReportJSON)))
+
+		var existingHash string
+		err := tx.QueryRowContext(ctx,
+			`SELECT report_hash FROM task_attempt_reports WHERE attempt_id = ?`,
+			cmd.AttemptID,
+		).Scan(&existingHash)
+		if err != nil && err != sql.ErrNoRows {
+			return fmt.Errorf("task ingest atomic raw report conflict check: %w", err)
+		}
+		if existingHash != "" && existingHash != rawHash {
+			return fmt.Errorf("task ingest atomic raw report conflict: attempt_id=%s existing_hash=%s new_hash=%s: %w",
+				cmd.AttemptID, existingHash, rawHash, taskattempts.ErrReportConflict)
+		}
+
+		receivedAt := now
+		if !cmd.RawReportReceivedAt.IsZero() {
+			receivedAt = cmd.RawReportReceivedAt.UTC().Format(time.RFC3339)
+		}
+
+		if existingHash == "" {
+			_, err = tx.ExecContext(ctx,
+				`INSERT INTO task_attempt_reports
+				 (attempt_id, report_schema, report_hash, raw_report_json, received_at, persisted_at)
+				 VALUES (?, ?, ?, ?, ?, ?)`,
+				cmd.AttemptID, 1, rawHash, cmd.RawReportJSON, receivedAt, now,
+			)
+			if err != nil {
+				return fmt.Errorf("task ingest atomic raw report: %w", err)
+			}
+		}
+		// existingHash == rawHash: idempotent no-op.
 	}
 
 	if err := tx.Commit(); err != nil {
