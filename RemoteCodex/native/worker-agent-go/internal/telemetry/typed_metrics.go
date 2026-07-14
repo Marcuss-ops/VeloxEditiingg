@@ -74,22 +74,22 @@ type TypedExecutionMetrics struct {
 	NetworkPricePerGb float64 `json:"network_price_per_gb"`
 
 	// ── Scorecard v2 / extra resource counters (migrations 054, 073) ────
-	GpuTimeMs            int64   `json:"gpu_time_ms"`
-	PeakVramBytes        int64   `json:"peak_vram_bytes"`
-	TempBytesWritten     int64   `json:"temp_bytes_written"`
-	DuplicateDownloadBytes int64 `json:"duplicate_download_bytes"`
-	MediaDurationSeconds float64 `json:"media_duration_seconds"`
-	WallClockSeconds     float64 `json:"wall_clock_seconds"`
+	GpuTimeMs              int64   `json:"gpu_time_ms"`
+	PeakVramBytes          int64   `json:"peak_vram_bytes"`
+	TempBytesWritten       int64   `json:"temp_bytes_written"`
+	DuplicateDownloadBytes int64   `json:"duplicate_download_bytes"`
+	MediaDurationSeconds   float64 `json:"media_duration_seconds"`
+	WallClockSeconds       float64 `json:"wall_clock_seconds"`
 
 	// ── Scorecard v2 / output quality validation (migration 072) ───────
-	FfprobeValid       int32   `json:"ffprobe_valid"`
-	DurationDiffSec    float64 `json:"duration_diff_sec"`
-	HasVideoStream     bool    `json:"has_video_stream"`
-	HasAudioStream     bool    `json:"has_audio_stream"`
-	OutputFileSize     int64   `json:"output_file_size"`
-	BlackFrameRatio    float64 `json:"black_frame_ratio"`
-	AudioSyncOffsetMs  int64   `json:"audio_sync_offset_ms"`
-	OutputSha256       string  `json:"output_sha256"`
+	FfprobeValid      int32   `json:"ffprobe_valid"`
+	DurationDiffSec   float64 `json:"duration_diff_sec"`
+	HasVideoStream    bool    `json:"has_video_stream"`
+	HasAudioStream    bool    `json:"has_audio_stream"`
+	OutputFileSize    int64   `json:"output_file_size"`
+	BlackFrameRatio   float64 `json:"black_frame_ratio"`
+	AudioSyncOffsetMs int64   `json:"audio_sync_offset_ms"`
+	OutputSha256      string  `json:"output_sha256"`
 
 	// ── Scorecard v2 / per-attempt resource snapshot (migration 073) ────
 	CpuPercentPeak float64 `json:"cpu_percent_peak"`

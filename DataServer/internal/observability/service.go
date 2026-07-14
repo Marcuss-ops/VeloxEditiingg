@@ -56,10 +56,10 @@ type VersionMetricsReader interface {
 // VersionMetricSnapshot is a single attempt's metric values indexed
 // by catalog metric name, for regression comparison.
 type VersionMetricSnapshot struct {
-	AttemptID      string             `json:"attempt_id"`
-	WorkerID       string             `json:"worker_id"`
-	ExecutorID     string             `json:"executor_id"`
-	Metrics        map[string]float64 `json:"metrics"`
+	AttemptID  string             `json:"attempt_id"`
+	WorkerID   string             `json:"worker_id"`
+	ExecutorID string             `json:"executor_id"`
+	Metrics    map[string]float64 `json:"metrics"`
 }
 
 // ExecutionSummary is the aggregated execution diagnostics for a single task.
@@ -231,32 +231,32 @@ func (s *Service) SummarizeJob(ctx context.Context, jobID string) (*ExecutionSum
 
 // OverviewResult is the aggregate system health snapshot returned by Overview().
 type OverviewResult struct {
-	JobsCompleted24h  int64   `json:"jobs_completed_24h"`
-	JobsFailed24h     int64   `json:"jobs_failed_24h"`
-	ErrorRate         float64 `json:"error_rate"`
-	P95RenderMS       int64   `json:"p95_render_ms"`
-	ActiveWorkers     int     `json:"active_workers"`
-	QueueDepth        int     `json:"queue_depth"`
-	TopSlowPhases     []PhaseStat   `json:"top_slow_phases"`
-	TopSlowWorkers    []WorkerStat  `json:"top_slow_workers"`
-	TopErrors         []ErrorStat   `json:"top_errors"`
+	JobsCompleted24h int64        `json:"jobs_completed_24h"`
+	JobsFailed24h    int64        `json:"jobs_failed_24h"`
+	ErrorRate        float64      `json:"error_rate"`
+	P95RenderMS      int64        `json:"p95_render_ms"`
+	ActiveWorkers    int          `json:"active_workers"`
+	QueueDepth       int          `json:"queue_depth"`
+	TopSlowPhases    []PhaseStat  `json:"top_slow_phases"`
+	TopSlowWorkers   []WorkerStat `json:"top_slow_workers"`
+	TopErrors        []ErrorStat  `json:"top_errors"`
 }
 
 // PhaseStat is a single phase aggregate for the overview.
 type PhaseStat struct {
-	Phase    string `json:"phase"`
-	AvgMS    int64  `json:"avg_ms"`
-	P95MS    int64  `json:"p95_ms"`
-	Samples  int    `json:"samples"`
+	Phase   string `json:"phase"`
+	AvgMS   int64  `json:"avg_ms"`
+	P95MS   int64  `json:"p95_ms"`
+	Samples int    `json:"samples"`
 }
 
 // WorkerStat is a single worker aggregate for the overview.
 type WorkerStat struct {
-	WorkerID     string  `json:"worker_id"`
-	JobCount     int     `json:"job_count"`
-	AvgMS        int64   `json:"avg_ms"`
-	P95MS        int64   `json:"p95_ms"`
-	ErrorRate    float64 `json:"error_rate"`
+	WorkerID  string  `json:"worker_id"`
+	JobCount  int     `json:"job_count"`
+	AvgMS     int64   `json:"avg_ms"`
+	P95MS     int64   `json:"p95_ms"`
+	ErrorRate float64 `json:"error_rate"`
 }
 
 // ErrorStat is a single error aggregate.
@@ -289,10 +289,10 @@ type PhaseTrendResult struct {
 
 // PhaseTrendDayPoint is a single day's aggregate for phase trends.
 type PhaseTrendDayPoint struct {
-	Date    string  `json:"date"`
-	AvgMS   int64   `json:"avg_ms"`
-	P95MS   int64   `json:"p95_ms"`
-	Samples int     `json:"samples"`
+	Date    string `json:"date"`
+	AvgMS   int64  `json:"avg_ms"`
+	P95MS   int64  `json:"p95_ms"`
+	Samples int    `json:"samples"`
 }
 
 // Overview returns the aggregate system health snapshot.

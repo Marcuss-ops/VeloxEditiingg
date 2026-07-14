@@ -44,16 +44,16 @@ const (
 )
 
 type testEnv struct {
-	t           *testing.T
-	db          *sql.DB
-	bs          store.BlobStore
-	svc         *Service
-	repo        store.UploadRepository
+	t              *testing.T
+	db             *sql.DB
+	bs             store.BlobStore
+	svc            *Service
+	repo           store.UploadRepository
 	uploadWriter   UploadSessionWriter
 	finalizeWriter FinalizationWriter
 	artifactReader ArtifactReader
-	clock       *manualClock
-	tmpDir      string
+	clock          *manualClock
+	tmpDir         string
 }
 
 // manualClock satisfies Clock for tests; advance via Advance().
@@ -125,7 +125,7 @@ func setupTestEnv(t *testing.T) *testEnv {
 		uploadWriter:   uploadWriter,
 		finalizeWriter: finalizeWriter,
 		artifactReader: artifactReader,
-		clock: clk, tmpDir: tmp,
+		clock:          clk, tmpDir: tmp,
 	}
 }
 

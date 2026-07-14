@@ -152,17 +152,17 @@ func (s *Service) validateFinalizeSession(ctx context.Context, cmd FinalizeArtif
 		if lerr != nil {
 			return nil, nil, lerr
 		}
-	if art == nil {
-		return nil, nil, fmt.Errorf("%w: completed upload=%s but artifact missing",
-			ErrTransitionConflict, cmd.UploadID)
+		if art == nil {
+			return nil, nil, fmt.Errorf("%w: completed upload=%s but artifact missing",
+				ErrTransitionConflict, cmd.UploadID)
+		}
+		// Note: the pre-commit gate in the main Finalize path runs the
+		// ffprobe check on the first finalize. This COMPLETED short-
+		// circuit simply returns the cached artifact — no ffprobe re-run
+		// here, since the gate fired (and possibly tripped) before the
+		// tx commit that produced this exact artifact.
+		return nil, art, nil
 	}
-	// Note: the pre-commit gate in the main Finalize path runs the
-	// ffprobe check on the first finalize. This COMPLETED short-
-	// circuit simply returns the cached artifact — no ffprobe re-run
-	// here, since the gate fired (and possibly tripped) before the
-	// tx commit that produced this exact artifact.
-	return nil, art, nil
-}
 
 	if session.Status != "RECEIVED" && session.Status != "FINALIZING" {
 		return nil, nil, fmt.Errorf("%w: upload_id=%s status=%s",
@@ -256,4 +256,3 @@ func (s *Service) finalizeWithDuplicateStorageFallback(ctx context.Context, comm
 	command.StorageKey = altStorageKey
 	return s.finalizeWriter.FinalizeVerified(ctx, command)
 }
-

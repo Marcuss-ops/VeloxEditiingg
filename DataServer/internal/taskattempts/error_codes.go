@@ -30,8 +30,8 @@ const (
 	ErrOutputValidation CanonicalErrorCode = "OUTPUT_VALIDATION_FAILED"
 
 	// Resource exhaustion.
-	ErrInsufficientDisk    CanonicalErrorCode = "INSUFFICIENT_DISK"
-	ErrOutOfMemory         CanonicalErrorCode = "OUT_OF_MEMORY"
+	ErrInsufficientDisk         CanonicalErrorCode = "INSUFFICIENT_DISK"
+	ErrOutOfMemory              CanonicalErrorCode = "OUT_OF_MEMORY"
 	ErrFileDescriptorsExhausted CanonicalErrorCode = "FILE_DESCRIPTORS_EXHAUSTED"
 
 	// Pipeline / plan failures.
@@ -40,15 +40,15 @@ const (
 	ErrUnsupportedCodec  CanonicalErrorCode = "UNSUPPORTED_CODEC"
 
 	// Upload / network failures.
-	ErrUploadFailed      CanonicalErrorCode = "UPLOAD_FAILED"
-	ErrUploadTimeout     CanonicalErrorCode = "UPLOAD_TIMEOUT"
+	ErrUploadFailed       CanonicalErrorCode = "UPLOAD_FAILED"
+	ErrUploadTimeout      CanonicalErrorCode = "UPLOAD_TIMEOUT"
 	ErrNetworkUnreachable CanonicalErrorCode = "NETWORK_UNREACHABLE"
 
 	// Worker / master lifecycle.
-	ErrWorkerLost            CanonicalErrorCode = "WORKER_LOST"
-	ErrLeaseExpired          CanonicalErrorCode = "LEASE_EXPIRED"
-	ErrTaskTimeout           CanonicalErrorCode = "TASK_TIMEOUT"
-	ErrTaskCancelled         CanonicalErrorCode = "TASK_CANCELLED"
+	ErrWorkerLost    CanonicalErrorCode = "WORKER_LOST"
+	ErrLeaseExpired  CanonicalErrorCode = "LEASE_EXPIRED"
+	ErrTaskTimeout   CanonicalErrorCode = "TASK_TIMEOUT"
+	ErrTaskCancelled CanonicalErrorCode = "TASK_CANCELLED"
 
 	// Unknown / catch-all.
 	ErrUnknown CanonicalErrorCode = "UNKNOWN"

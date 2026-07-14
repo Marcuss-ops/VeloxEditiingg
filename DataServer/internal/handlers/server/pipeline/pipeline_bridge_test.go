@@ -160,19 +160,19 @@ func TestPipelineGenerateForwardsCompletedResultToQueue(t *testing.T) {
 			"status":   "completed",
 			"trace_id": "trace_123",
 			"result": map[string]interface{}{
-			"title":         "Test Video",
-			"script_text":   "This is the generated script.",
-			"json_path":     jsonPath,
-			"markdown_path": markdownPath,
-			"voiceover": map[string]interface{}{
-				"local_path": voicePath,
-			},
-			"delivery_plan": []interface{}{
-				map[string]interface{}{"destination_id": "drive-main", "retry_budget": 3, "priority": 0},
-			},
-			"metadata": []map[string]interface{}{
-				{"title": "Test Video"},
-			},
+				"title":         "Test Video",
+				"script_text":   "This is the generated script.",
+				"json_path":     jsonPath,
+				"markdown_path": markdownPath,
+				"voiceover": map[string]interface{}{
+					"local_path": voicePath,
+				},
+				"delivery_plan": []interface{}{
+					map[string]interface{}{"destination_id": "drive-main", "retry_budget": 3, "priority": 0},
+				},
+				"metadata": []map[string]interface{}{
+					{"title": "Test Video"},
+				},
 			},
 		})
 	}))

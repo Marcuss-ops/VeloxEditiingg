@@ -141,13 +141,13 @@ func loadUploadSessionForCASInTx(ctx context.Context, tx *sql.Tx, uploadID strin
 // the *single* SQL transaction that wraps the entire finalization
 // flow, then dispatches to 6 private *Tx step methods in order:
 //
-//	1. validateFinalizingUploadTx — auth + state precondition
-//	2. markJobSucceededTx         — sole writer of jobs.status='SUCCEEDED'
-//	2.5 markTaskSucceededTx       — sweeps tasks[RUNNING/LEASED/PENDING] → SUCCEEDED
-//	3. markArtifactReadyTx        — artifacts STAGING → READY
-//	4. resolveDeliveryDestinationsTx — per-job delivery plan
-//	5. insertPendingDeliveriesTx  — durable job_deliveries rows
-//	6. completeUploadTx           — artifact_uploads FINALIZING → COMPLETED
+//  1. validateFinalizingUploadTx — auth + state precondition
+//  2. markJobSucceededTx         — sole writer of jobs.status='SUCCEEDED'
+//     2.5 markTaskSucceededTx       — sweeps tasks[RUNNING/LEASED/PENDING] → SUCCEEDED
+//  3. markArtifactReadyTx        — artifacts STAGING → READY
+//  4. resolveDeliveryDestinationsTx — per-job delivery plan
+//  5. insertPendingDeliveriesTx  — durable job_deliveries rows
+//  6. completeUploadTx           — artifact_uploads FINALIZING → COMPLETED
 //
 // The Commit + post-tx artifact read happen here, never inside the
 // steps. Any step error propagates up: the defer-Rollback reverts

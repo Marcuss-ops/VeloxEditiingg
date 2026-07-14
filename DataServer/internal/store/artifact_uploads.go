@@ -155,10 +155,11 @@ var (
 // artifact_uploads rows. All methods treat upload_id as the canonical
 // key. Application-level invariants (status state machine) live in
 // Service — SQL CHECK constraints only block blatantly malformed rows.
-//// CreateUploadSession has been REMOVED. Use
+// // CreateUploadSession has been REMOVED. Use
 // artifacts.UploadSessionWriter.CreateArtifactAndUploadSession instead —
-//     the atomic-tx replacement that inserts the artifacts + artifact_uploads
-//     rows in one transaction.
+//
+//	the atomic-tx replacement that inserts the artifacts + artifact_uploads
+//	rows in one transaction.
 type UploadRepository interface {
 	GetUploadSession(ctx context.Context, uploadID string) (*UploadSession, error)
 	UpdateUploadStatus(ctx context.Context, uploadID string, fields UploadFields) error

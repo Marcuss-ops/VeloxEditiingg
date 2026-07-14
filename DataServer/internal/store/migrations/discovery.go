@@ -22,10 +22,12 @@ import (
 )
 
 // SQLite migrations live under sqlite/*.sql.
+//
 //go:embed sqlite/*.sql
 var sqliteRootFS embed.FS
 
 // Postgres migrations live under postgres/*.sql.
+//
 //go:embed postgres/*.sql
 var postgresRootFS embed.FS
 

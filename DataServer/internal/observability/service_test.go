@@ -14,9 +14,9 @@ import (
 // ── Stub implementations ──────────────────────────────────────────────────
 
 type stubTaskReader struct {
-	tasks       map[string]*taskgraph.Task
-	listResult  []taskgraph.Task
-	listErr     error
+	tasks      map[string]*taskgraph.Task
+	listResult []taskgraph.Task
+	listErr    error
 }
 
 func (s *stubTaskReader) Get(_ context.Context, id string) (*taskgraph.Task, error) {
@@ -44,13 +44,13 @@ func (s *stubTaskReader) List(_ context.Context, _ taskgraph.Filter) ([]taskgrap
 }
 
 type stubAttemptReader struct {
-	attempts      map[string][]taskattempts.TaskAttempt
-	phaseTimings  map[string][]taskattempts.PhaseTiming
-	metrics       map[string]*taskattempts.AttemptMetrics
-	cacheStats    map[string]*taskattempts.AttemptCacheStats
-	listErr       error
-	phaseErr      error
-	metricsErr    error
+	attempts     map[string][]taskattempts.TaskAttempt
+	phaseTimings map[string][]taskattempts.PhaseTiming
+	metrics      map[string]*taskattempts.AttemptMetrics
+	cacheStats   map[string]*taskattempts.AttemptCacheStats
+	listErr      error
+	phaseErr     error
+	metricsErr   error
 }
 
 func (s *stubAttemptReader) Get(_ context.Context, id string) (*taskattempts.TaskAttempt, error) {
@@ -164,11 +164,11 @@ func newTestService() (*Service, *stubTaskReader, *stubAttemptReader, *stubJobRe
 	}
 	jobs := &stubJobReader{
 		counts: jobs.Counts{
-			jobs.StatusSucceeded:  10,
-			jobs.StatusFailed:     2,
-			jobs.StatusPending:    5,
-			jobs.StatusRunning:    3,
-			jobs.StatusCancelled:  1,
+			jobs.StatusSucceeded: 10,
+			jobs.StatusFailed:    2,
+			jobs.StatusPending:   5,
+			jobs.StatusRunning:   3,
+			jobs.StatusCancelled: 1,
 		},
 	}
 	workers := &stubWorkerReader{
@@ -377,14 +377,14 @@ func TestService_RecentScalarMetric_DerivedMetrics(t *testing.T) {
 	svc, tasks, attempts, _, _ := newTestService()
 	tasks.tasks["T-1"] = &taskgraph.Task{ID: "T-1", JobID: "J-1", Status: taskgraph.StatusSucceeded, AttemptCount: 1}
 	attempts.metrics["A-1"] = &taskattempts.AttemptMetrics{
-		AttemptID:            "A-1",
-		WallClockSeconds:     30,
-		MediaDurationSeconds: 60,
-		EngineSegmentBuildMs: 3000,
-		CPUTimeMS:            60000,
+		AttemptID:             "A-1",
+		WallClockSeconds:      30,
+		MediaDurationSeconds:  60,
+		EngineSegmentBuildMs:  3000,
+		CPUTimeMS:             60000,
 		EngineAssetDownloadMs: 2000,
-		BytesFromBlobstore:   4_000_000,
-		BytesFromDrive:       2_000_000,
+		BytesFromBlobstore:    4_000_000,
+		BytesFromDrive:        2_000_000,
 	}
 
 	result, err := svc.RecentScalarMetric(context.Background(), "render_factor")

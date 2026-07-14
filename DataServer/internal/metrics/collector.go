@@ -146,12 +146,12 @@ type Collector struct {
 	// pure derivations from task_attempt_metrics + cache_stats. They
 	// are stamped per-attempt so dashboards can aggregate percentiles
 	// directly without computing in PromQL.
-	renderFactor              *Family // velox_render_factor
-	encodeMsPerOutputMinute   *Family // velox_encode_ms_per_output_minute
-	cpuMsPerOutputMinute      *Family // velox_cpu_ms_per_output_minute
-	tempWriteAmplification    *Family // velox_temp_write_amplification
-	cacheHitRatio             *Family // velox_cache_hit_ratio
-	downloadThroughput        *Family // velox_download_throughput_bytes_per_second
+	renderFactor            *Family // velox_render_factor
+	encodeMsPerOutputMinute *Family // velox_encode_ms_per_output_minute
+	cpuMsPerOutputMinute    *Family // velox_cpu_ms_per_output_minute
+	tempWriteAmplification  *Family // velox_temp_write_amplification
+	cacheHitRatio           *Family // velox_cache_hit_ratio
+	downloadThroughput      *Family // velox_download_throughput_bytes_per_second
 
 	// Phase 4.3 — Reconcile supervisor counters. The supervisor in
 	// internal/completion/reconcile_supervisor.go writes
@@ -483,7 +483,7 @@ func (c *Collector) allFamilies() []*Family {
 		c.masterRssBytes, c.masterGoroutines, c.masterOutboxPending,
 		c.heartbeatAge,
 		c.computeSeconds,
-		c.computeFailureReasons,		c.costCpuPerMin, c.costNetworkPerMin, c.costStoragePerMin, c.costTotalPerMin,
+		c.computeFailureReasons, c.costCpuPerMin, c.costNetworkPerMin, c.costStoragePerMin, c.costTotalPerMin,
 		c.renderFactor, c.encodeMsPerOutputMinute, c.cpuMsPerOutputMinute,
 		c.tempWriteAmplification, c.cacheHitRatio, c.downloadThroughput,
 		c.reconcileTotal,

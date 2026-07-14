@@ -11,12 +11,12 @@
 //
 //   - ClassOneShot     — runs once, exits, never restarted. Setup tasks.
 //   - ClassRestartable — runs forever; bounded retries + exponential
-//                        backoff. After exhaustion the runner is removed
-//                        and the supervisor emits a WARN.
+//     backoff. After exhaustion the runner is removed
+//     and the supervisor emits a WARN.
 //   - ClassCritical    — runs forever; infinite retries (or bounded when
-//                        Policy.MaxRetries > 0). On exhaustion cancels
-//                        the supervisor-internal ctx and returns a fatal
-//                        error so Kubernetes restarts the pod.
+//     Policy.MaxRetries > 0). On exhaustion cancels
+//     the supervisor-internal ctx and returns a fatal
+//     error so Kubernetes restarts the pod.
 package supervisor
 
 import (
@@ -60,10 +60,10 @@ func (c RunnerClass) String() string {
 //
 //   - ClassOneShot:     ignored (always zero restarts).
 //   - ClassRestartable: bounded; after this many restarts the runner
-//                       is removed and the supervisor logs WARN.
+//     is removed and the supervisor logs WARN.
 //   - ClassCritical:    if zero, restart infinitely; if positive, restart
-//                       at most this many times before the supervisor
-//                       cancels its internal ctx and returns error.
+//     at most this many times before the supervisor
+//     cancels its internal ctx and returns error.
 //
 // InitialBackoff doubles after each attempt until MaxBackoff. Zero
 // values mean "no sleep between restarts" (typical default is 500ms → 30s).

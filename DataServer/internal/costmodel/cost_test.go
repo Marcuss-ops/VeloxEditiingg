@@ -265,7 +265,7 @@ func TestDefaultRequirements_EmptyFieldsPreserveLegacyRouting(t *testing.T) {
 	// Legacy worker (no `executors` capability field) — synthesized
 	// profile defaults to {cpu, frame_local}. Eligibility with the
 	// permissive default MUST remain true so today's queue routing
-// doesn't regress.
+	// doesn't regress.
 	w := BuildWorkerProfile("legacy", true, false, "online", 0, 0, map[string]interface{}{
 		"supported_job_types": []interface{}{"process_video"},
 	})

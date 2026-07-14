@@ -59,10 +59,10 @@ func TestPrepareJobAndTask_AcceptsLegacyDeliveryDestinationIDs(t *testing.T) {
 	// The validator's job is to ensure SCHEDULE-ABILITY, not to break
 	// consumers that the existing finalize path already supports.
 	payload := map[string]interface{}{
-		"video_name":              "Legacy Plan",
-		"script_text":             "legacy fallback path",
-		"voiceover_path":          "/tmp/v.mp3",
-		"scenes":                  []interface{}{map[string]interface{}{"text": "S1", "image_link": "https://example.com/i.png"}},
+		"video_name":               "Legacy Plan",
+		"script_text":              "legacy fallback path",
+		"voiceover_path":           "/tmp/v.mp3",
+		"scenes":                   []interface{}{map[string]interface{}{"text": "S1", "image_link": "https://example.com/i.png"}},
 		"delivery_destination_ids": []string{"drive-main", "video-main"},
 	}
 
@@ -416,19 +416,19 @@ func assertNoJobDeliveryPlansSeeded(t *testing.T, db *store.SQLiteStore) {
 // verifies the Enqueue path accepts the SAME shape without the
 // pre-P0.2 "ErrNoExplicitPlan / must-preinsert" failure. Asserts:
 //
-//   1. Enqueue returns ok with the json's exact delivery_plan shape
-//      (single entry {destination_id, retry_budget=3, priority=0}).
-//   2. response.job_id is populated.
-//   3. extractPlanMaxRetry(payload) yields 3 (the payload's only
-//      retry_budget value).
-//   4. jobs.max_retries (DB column) equals 3 — payload drives the
-//      column from the canonical-purity Enqueue path, NOT a 0 or
-//      stale value.
-//   5. assertNoJobDeliveryPlansSeeded pins the fresh-DB invariant
-//      so the test stays a P0.2 regression guard: any code change
-//      that quietly re-introduces a "must-preinsert" requirement on
-//      the comedy_test path fails LOUDLY at the helper, not at a
-//      downstream ErrNoExplicitPlan.
+//  1. Enqueue returns ok with the json's exact delivery_plan shape
+//     (single entry {destination_id, retry_budget=3, priority=0}).
+//  2. response.job_id is populated.
+//  3. extractPlanMaxRetry(payload) yields 3 (the payload's only
+//     retry_budget value).
+//  4. jobs.max_retries (DB column) equals 3 — payload drives the
+//     column from the canonical-purity Enqueue path, NOT a 0 or
+//     stale value.
+//  5. assertNoJobDeliveryPlansSeeded pins the fresh-DB invariant
+//     so the test stays a P0.2 regression guard: any code change
+//     that quietly re-introduces a "must-preinsert" requirement on
+//     the comedy_test path fails LOUDLY at the helper, not at a
+//     downstream ErrNoExplicitPlan.
 //
 // mirrorJackieChanDeliveryPlan returns the EXACT shape of the
 // production payload's delivery_plan entry — not interpolated, so

@@ -134,7 +134,7 @@ type workerSession struct {
 	// gRPC request context (carries trace context via otelgrpc).
 	// Scorecard v2 / Step 15c: handlers use this instead of context.Background()
 	// so spans have proper parent-child trace relationships.
-	ctx    context.Context
+	ctx context.Context
 
 	// Serialized output: all stream.Send() calls go through sendCh → sessionWriter.
 	// No other goroutine may call stream.Send() directly.

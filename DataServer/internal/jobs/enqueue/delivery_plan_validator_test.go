@@ -400,10 +400,10 @@ func TestIntFromAny(t *testing.T) {
 		{"uint32", uint32(15), 15},
 		{"uint64", uint64(16), 16},
 		{"float32_whole_value", float32(17), 17},
-		{"float32_truncates", float32(18.7), 18},                              // int() truncation
+		{"float32_truncates", float32(18.7), 18}, // int() truncation
 		{"float64_whole_value", float64(19), 19},
 		{"float64_truncates_negative", float64(-2.9), -2},
-		{"bool_true_collapses_to_zero", true, 0},                               // bool is not numeric
+		{"bool_true_collapses_to_zero", true, 0}, // bool is not numeric
 		{"string_collapses_to_zero", "35", 0},
 		{"map_collapses_to_zero", map[string]interface{}{}, 0},
 		{"slice_collapses_to_zero", []string{}, 0},

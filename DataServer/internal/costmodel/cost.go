@@ -160,8 +160,9 @@ type Cost struct {
 //	job: mixed → w ∈ {mixed, gpu}
 //	job: gpu   → w ∈ {gpu} | (mixed with degraded penalty)
 //	job: io    → w ∈ {io, cpu, mixed}
-//// TemporalMode: exact match required. Relaxation lands
-	// when the shard planner provides a temporal-mode
+//
+// // TemporalMode: exact match required. Relaxation lands
+// when the shard planner provides a temporal-mode
 // hierarchy.
 func Score(w WorkerProfile, j JobRequirements) (Cost, Explanation) {
 	var exp Explanation

@@ -52,8 +52,8 @@ type BlobStats struct {
 	Bytes           int64 `json:"bytes"`
 	Entries         int   `json:"entries"`
 	QueueDepth      int   `json:"queue_depth"`
-}// UploadJob is one pending master-upload job. The transport
-	// implementation will pull these off the channel.
+} // UploadJob is one pending master-upload job. The transport
+// implementation will pull these off the channel.
 type UploadJob struct {
 	Hash       string    `json:"hash"`
 	SizeBytes  int64     `json:"size_bytes"`
@@ -224,8 +224,8 @@ func (b *BlobArtifacts) Close() error {
 	})
 	b.uploadWG.Wait()
 	return nil
-}// processUploads drains uploadCh. It will replace the noop sink
-	// with a master-transport publish call (see UploadJob).
+} // processUploads drains uploadCh. It will replace the noop sink
+// with a master-transport publish call (see UploadJob).
 func (b *BlobArtifacts) processUploads() {
 	defer b.uploadWG.Done()
 	for range b.uploadCh {

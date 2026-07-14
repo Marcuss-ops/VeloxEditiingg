@@ -175,7 +175,7 @@ func TestTypedExecutionMetrics_RoundTrip(t *testing.T) {
 		CpuTimeMs:             42,
 		PeakRssBytes:          8589934592, // 8 GiB
 		FramesDecoded:         1234,
-		FramesComposited:     1234,
+		FramesComposited:      1234,
 		FramesEncoded:         1234,
 		FfmpegSpeedRatio:      2.71,
 		EncodePasses:          2,

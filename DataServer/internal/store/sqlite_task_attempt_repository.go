@@ -802,14 +802,14 @@ func (r *SQLiteTaskAttemptRepository) ListMetricsByGitSHA(ctx context.Context, g
 	var results []observability.VersionMetricSnapshot
 	for rows.Next() {
 		var (
-			attemptID, workerID, executorID                                     string
-			engineAssetDownloadMs, engineSegmentBuildMs, engineConcatMs         float64
-			engineMuxAudioMs, engineCopyFinalMs, engineAudioDownloadMs         float64
-			pipelineResolveMs, pipelineValidateMs, pipelineCompileMs           float64
-			pipelineRenderMs, pipelineTotalMs                                  float64
-			nativeTotalMs, nativeProcessWaitMs                                  float64
-			outputBytes, ffmpegSpeedRatio, queueMs                              float64
-			wallClockMs, cpuTimeMs, inputBytes                                  float64
+			attemptID, workerID, executorID                             string
+			engineAssetDownloadMs, engineSegmentBuildMs, engineConcatMs float64
+			engineMuxAudioMs, engineCopyFinalMs, engineAudioDownloadMs  float64
+			pipelineResolveMs, pipelineValidateMs, pipelineCompileMs    float64
+			pipelineRenderMs, pipelineTotalMs                           float64
+			nativeTotalMs, nativeProcessWaitMs                          float64
+			outputBytes, ffmpegSpeedRatio, queueMs                      float64
+			wallClockMs, cpuTimeMs, inputBytes                          float64
 		)
 		if err := rows.Scan(
 			&attemptID, &workerID, &executorID,
@@ -829,25 +829,25 @@ func (r *SQLiteTaskAttemptRepository) ListMetricsByGitSHA(ctx context.Context, g
 			WorkerID:   workerID,
 			ExecutorID: executorID,
 			Metrics: map[string]float64{
-				"engine.asset_download_ms":  engineAssetDownloadMs,
-				"engine.segment_build_ms":   engineSegmentBuildMs,
-				"engine.concat_ms":          engineConcatMs,
-				"engine.mux_audio_ms":       engineMuxAudioMs,
-				"engine.copy_final_ms":      engineCopyFinalMs,
-				"engine.audio_download_ms":  engineAudioDownloadMs,
-				"pipeline.resolve_ms":       pipelineResolveMs,
-				"pipeline.validate_ms":      pipelineValidateMs,
-				"pipeline.compile_ms":       pipelineCompileMs,
-				"pipeline.render_ms":        pipelineRenderMs,
-				"pipeline.total_ms":         pipelineTotalMs,
-				"native.total_ms":           nativeTotalMs,
-				"native.process_wait_ms":    nativeProcessWaitMs,
-				"output.bytes":              outputBytes,
-				"ffmpeg.speed_ratio":        ffmpegSpeedRatio,
-				"queue.ms":                  queueMs,
-				"task.wall_clock_ms":        wallClockMs,
-				"task.cpu_time_ms":          cpuTimeMs,
-				"input.bytes":               inputBytes,
+				"engine.asset_download_ms": engineAssetDownloadMs,
+				"engine.segment_build_ms":  engineSegmentBuildMs,
+				"engine.concat_ms":         engineConcatMs,
+				"engine.mux_audio_ms":      engineMuxAudioMs,
+				"engine.copy_final_ms":     engineCopyFinalMs,
+				"engine.audio_download_ms": engineAudioDownloadMs,
+				"pipeline.resolve_ms":      pipelineResolveMs,
+				"pipeline.validate_ms":     pipelineValidateMs,
+				"pipeline.compile_ms":      pipelineCompileMs,
+				"pipeline.render_ms":       pipelineRenderMs,
+				"pipeline.total_ms":        pipelineTotalMs,
+				"native.total_ms":          nativeTotalMs,
+				"native.process_wait_ms":   nativeProcessWaitMs,
+				"output.bytes":             outputBytes,
+				"ffmpeg.speed_ratio":       ffmpegSpeedRatio,
+				"queue.ms":                 queueMs,
+				"task.wall_clock_ms":       wallClockMs,
+				"task.cpu_time_ms":         cpuTimeMs,
+				"input.bytes":              inputBytes,
 			},
 		}
 		results = append(results, snap)

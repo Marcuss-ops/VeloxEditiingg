@@ -4,12 +4,12 @@
 // orchestrator. It is a linear flow that delegates:
 //
 //   - clip_input_normalizer.go    input-shape adapters + URL extractors
-//                                 (three explicit input forms; no registry,
-//                                 no per-format interface, no scene factory,
-//                                 no generic pipeline).
+//     (three explicit input forms; no registry,
+//     no per-format interface, no scene factory,
+//     no generic pipeline).
 //   - narrated_clip_timeline.go   voiceover-bed + final-clip timeline
-//                                 builder used when any scene carries a
-//                                 voiceover URL.
+//     builder used when any scene carries a
+//     voiceover URL.
 //
 // Hard constraint: no format registry, no per-format interface, no scene
 // factory, no generic pipeline builder. Three explicit functions cover

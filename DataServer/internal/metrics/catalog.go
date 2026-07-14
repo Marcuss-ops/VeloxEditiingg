@@ -7,10 +7,10 @@
 // at registration time: unknown names are rejected.
 //
 // Adding a new metric:
-//   1. Add an entry to MetricCatalog below with a unique key.
-//   2. Run tests — TestCatalog_NoDuplicateNames catches collisions.
-//   3. Add the validation test in TestCatalog_RequiredMetricsExist.
-//   4. Update docs/metrics-catalog.md.
+//  1. Add an entry to MetricCatalog below with a unique key.
+//  2. Run tests — TestCatalog_NoDuplicateNames catches collisions.
+//  3. Add the validation test in TestCatalog_RequiredMetricsExist.
+//  4. Update docs/metrics-catalog.md.
 //
 // Naming convention:
 //   - Lowercase, dot-separated: <component>.<metric>[_unit]

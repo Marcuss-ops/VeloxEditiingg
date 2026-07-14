@@ -247,7 +247,7 @@ func TestSucceededWriterCount(t *testing.T) {
 
 	const (
 		// The legacy job_attempts CAS was removed from FinalizeVerified;
-	// the canonical SUCCEEDED write is solely the jobs CAS.
+		// the canonical SUCCEEDED write is solely the jobs CAS.
 		minExpected = 1
 		maxExpected = 3 // small ceiling: catch accidental duplicate writers
 	)

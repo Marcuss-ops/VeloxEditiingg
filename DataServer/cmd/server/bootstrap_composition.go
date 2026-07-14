@@ -267,16 +267,16 @@ func wirePostBuild(j *jobsDeps, t *taskDeps) error {
 // using the SupervisedRunner taxonomy introduced in Blocco 1:
 //
 //   - ClassCritical:    outbox-dispatcher, delivery-runner,
-//                       creator-forwarding-runner, task-lease-reaper.
-//                       If any dies the master is dead in the water:
-//                       VELOX_CRITICAL_MAX_RETRIES bounds the budget
-//                       (0 = infinite; positive = fail-loud after).
+//     creator-forwarding-runner, task-lease-reaper.
+//     If any dies the master is dead in the water:
+//     VELOX_CRITICAL_MAX_RETRIES bounds the budget
+//     (0 = infinite; positive = fail-loud after).
 //   - ClassRestartable: artifact-reconciler, taskgraph dispatcher,
-//                       metrics-supervisor. Bounded retries with
-//                       backoff; after exhaustion the runner is
-//                       removed and the supervisor logs WARN.
+//     metrics-supervisor. Bounded retries with
+//     backoff; after exhaustion the runner is
+//     removed and the supervisor logs WARN.
 //   - ClassOneShot:     manifest-generator. Run once on startup;
-//                       failure is non-fatal (logged WARN).
+//     failure is non-fatal (logged WARN).
 func buildSupervisor(a *assetDeps, m *moduleDeps, j *jobsDeps, p *persistenceDeps, w *workerDeps, t *taskDeps, metricsCollector *velmetrics.Collector) (*supervisor.Supervisor, error) {
 	sup := supervisor.New()
 

@@ -180,12 +180,12 @@ func TestResolverEnqueuesWorkerJob(t *testing.T) {
 		"status":   "completed",
 		"trace_id": "creator-complete-1",
 		"result": map[string]interface{}{
-			"title":          "Creator Video",		"script_text":    "Creator script",
-		"scenes_json":    `[{"text":"Scene 1","image_link":"https://example.com/scene1.png"}]`,
-		"voiceover_path": "https://example.com/voice.mp3",
-		"delivery_plan": []interface{}{
-			map[string]interface{}{"destination_id": "drive-main", "retry_budget": 3, "priority": 0},
-		},
+			"title": "Creator Video", "script_text": "Creator script",
+			"scenes_json":    `[{"text":"Scene 1","image_link":"https://example.com/scene1.png"}]`,
+			"voiceover_path": "https://example.com/voice.mp3",
+			"delivery_plan": []interface{}{
+				map[string]interface{}{"destination_id": "drive-main", "retry_budget": 3, "priority": 0},
+			},
 		},
 	}
 

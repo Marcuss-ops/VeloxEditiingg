@@ -95,64 +95,64 @@ type AttemptMetrics struct {
 	WallClockSeconds       float64 `json:"wall_clock_seconds"`
 
 	// Scorecard v2 / engine-aggregate phase timing (migration 070).
-	PipelineResolveMs    int64 `json:"pipeline_resolve_ms"`
-	PipelineValidateMs   int64 `json:"pipeline_validate_ms"`
-	PipelineCompileMs    int64 `json:"pipeline_compile_ms"`
-	PipelineRenderMs     int64 `json:"pipeline_render_ms"`
-	PipelineTotalMs      int64 `json:"pipeline_total_ms"`
-	NativeTotalMs        int64 `json:"native_total_ms"`
-	NativeProcessWaitMs  int64 `json:"native_process_wait_ms"`
+	PipelineResolveMs     int64 `json:"pipeline_resolve_ms"`
+	PipelineValidateMs    int64 `json:"pipeline_validate_ms"`
+	PipelineCompileMs     int64 `json:"pipeline_compile_ms"`
+	PipelineRenderMs      int64 `json:"pipeline_render_ms"`
+	PipelineTotalMs       int64 `json:"pipeline_total_ms"`
+	NativeTotalMs         int64 `json:"native_total_ms"`
+	NativeProcessWaitMs   int64 `json:"native_process_wait_ms"`
 	EngineAssetDownloadMs int64 `json:"engine_asset_download_ms"`
-	EngineSegmentBuildMs int64 `json:"engine_segment_build_ms"`
-	EngineConcatMs       int64 `json:"engine_concat_ms"`
+	EngineSegmentBuildMs  int64 `json:"engine_segment_build_ms"`
+	EngineConcatMs        int64 `json:"engine_concat_ms"`
 	EngineAudioDownloadMs int64 `json:"engine_audio_download_ms"`
-	EngineMuxAudioMs     int64 `json:"engine_mux_audio_ms"`
-	EngineCopyFinalMs    int64 `json:"engine_copy_final_ms"`
+	EngineMuxAudioMs      int64 `json:"engine_mux_audio_ms"`
+	EngineCopyFinalMs     int64 `json:"engine_copy_final_ms"`
 
 	// Scorecard v2 / Step 9: output quality validation.
-	FFprobeValid       int     `json:"ffprobe_valid"`
-	DurationDiffSec    float64 `json:"duration_diff_sec"`
-	HasVideoStream     bool    `json:"has_video_stream"`
-	HasAudioStream     bool    `json:"has_audio_stream"`
-	OutputFileSize     int64   `json:"output_file_size"`
-	BlackFrameRatio    float64 `json:"black_frame_ratio"`
-	AudioSyncOffsetMS  int64   `json:"audio_sync_offset_ms"`
-	OutputSHA256       string  `json:"output_sha256"`
+	FFprobeValid      int     `json:"ffprobe_valid"`
+	DurationDiffSec   float64 `json:"duration_diff_sec"`
+	HasVideoStream    bool    `json:"has_video_stream"`
+	HasAudioStream    bool    `json:"has_audio_stream"`
+	OutputFileSize    int64   `json:"output_file_size"`
+	BlackFrameRatio   float64 `json:"black_frame_ratio"`
+	AudioSyncOffsetMS int64   `json:"audio_sync_offset_ms"`
+	OutputSHA256      string  `json:"output_sha256"`
 
 	// Scorecard v2 / Step 10: per-attempt resource snapshot.
-	CPUPercentPeak  float64 `json:"cpu_percent_peak"`
-	RSSPeakBytes    int64   `json:"rss_peak_bytes"`
-	DiskReadBytes   int64   `json:"disk_read_bytes"`
-	DiskWriteBytes  int64   `json:"disk_write_bytes"`
-	NetworkRxBytes  int64   `json:"network_rx_bytes"`
-	NetworkTxBytes  int64   `json:"network_tx_bytes"`
-	IOWaitMS        int64   `json:"iowait_ms"`
-	OpenFDsPeak     int64   `json:"open_fds_peak"`
+	CPUPercentPeak float64 `json:"cpu_percent_peak"`
+	RSSPeakBytes   int64   `json:"rss_peak_bytes"`
+	DiskReadBytes  int64   `json:"disk_read_bytes"`
+	DiskWriteBytes int64   `json:"disk_write_bytes"`
+	NetworkRxBytes int64   `json:"network_rx_bytes"`
+	NetworkTxBytes int64   `json:"network_tx_bytes"`
+	IOWaitMS       int64   `json:"iowait_ms"`
+	OpenFDsPeak    int64   `json:"open_fds_peak"`
 
 	// Scorecard v2 / Step 11: queue and wait-time metrics.
-	QueueMS               int64 `json:"queue_ms"`
-	LeaseWaitMS            int64 `json:"lease_wait_ms"`
-	TimeToFirstWorkerMS    int64 `json:"time_to_first_worker_ms"`
-	PendingTasksAtStart    int64 `json:"pending_tasks_at_start"`
-	ActiveWorkersAtStart   int64 `json:"active_workers_at_start"`
+	QueueMS              int64 `json:"queue_ms"`
+	LeaseWaitMS          int64 `json:"lease_wait_ms"`
+	TimeToFirstWorkerMS  int64 `json:"time_to_first_worker_ms"`
+	PendingTasksAtStart  int64 `json:"pending_tasks_at_start"`
+	ActiveWorkersAtStart int64 `json:"active_workers_at_start"`
 
 	// Scorecard v2 / Step 12: input context for normalization.
-	SceneCount             int     `json:"scene_count"`
-	SegmentCount           int     `json:"segment_count"`
-	CompletedSegments      int     `json:"completed_segments"`
-	TotalInputDurationSec  float64 `json:"total_input_duration_sec"`
-	ResolutionWidth        int     `json:"resolution_width"`
-	ResolutionHeight       int     `json:"resolution_height"`
-	FPS                    float64 `json:"fps"`
-	AudioTrackCount        int     `json:"audio_track_count"`
-	SubtitleCount          int     `json:"subtitle_count"`
-	TemplateID             string  `json:"template_id"`
+	SceneCount            int     `json:"scene_count"`
+	SegmentCount          int     `json:"segment_count"`
+	CompletedSegments     int     `json:"completed_segments"`
+	TotalInputDurationSec float64 `json:"total_input_duration_sec"`
+	ResolutionWidth       int     `json:"resolution_width"`
+	ResolutionHeight      int     `json:"resolution_height"`
+	FPS                   float64 `json:"fps"`
+	AudioTrackCount       int     `json:"audio_track_count"`
+	SubtitleCount         int     `json:"subtitle_count"`
+	TemplateID            string  `json:"template_id"`
 
 	// Scorecard v2 / Step 13: error classification refinement.
-	ErrorComponent    string `json:"error_component,omitempty"`
-	ErrorPhase        string `json:"error_phase,omitempty"`
-	ErrorRetryable    bool   `json:"error_retryable"`
-	ErrorMessageHash  string `json:"error_message_hash,omitempty"`
+	ErrorComponent   string `json:"error_component,omitempty"`
+	ErrorPhase       string `json:"error_phase,omitempty"`
+	ErrorRetryable   bool   `json:"error_retryable"`
+	ErrorMessageHash string `json:"error_message_hash,omitempty"`
 
 	// Scorecard v2 / Step 17: waste/cost attribution.
 	RetryCount          int64   `json:"retry_count"`

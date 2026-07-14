@@ -22,7 +22,7 @@ func TestSupervisor_Missing_ReportsNeverStartedRunner(t *testing.T) {
 	if err := sup.Register(Runner{
 		Name: "never-started", Class: ClassRestartable,
 		Policy: RestartPolicy{MaxRetries: 0, InitialBackoff: 1 * time.Millisecond, MaxBackoff: 1 * time.Millisecond},
-		Run: func(ctx context.Context) error { return nil },
+		Run:    func(ctx context.Context) error { return nil },
 	}); err != nil {
 		t.Fatalf("register: %v", err)
 	}

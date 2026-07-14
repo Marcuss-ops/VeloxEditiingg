@@ -109,7 +109,7 @@ type IngestResultCommand struct {
 	TraceID string
 	SpanID  string
 	// Step 16: raw worker report payload (JSON) for audit and replay.
-	RawReportJSON     string
+	RawReportJSON       string
 	RawReportReceivedAt time.Time
 	// PerformanceReport metadata supplied by the worker for idempotency
 	// and conflict detection in task_attempt_reports.

@@ -320,7 +320,7 @@ func TestGenerateInventory_DefaultsHostGroup(t *testing.T) {
 	st := m.store.(*stubAnsibleStore)
 	_ = st.UpsertAnsibleHost(store.AnsibleHostFields{
 		Host: "defaulted-host", AnsibleUser: "u", Enabled: true,
-		Group: "", // empty — should default to velox_workers
+		Group:     "", // empty — should default to velox_workers
 		SecretRef: writeSecretFile(t, secretsDir, "defaulted-host", "secret"),
 	})
 

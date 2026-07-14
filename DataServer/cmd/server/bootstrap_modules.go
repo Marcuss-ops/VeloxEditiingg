@@ -38,14 +38,14 @@ func (a *workerRegistryAdapter) ListWorkers() ([]map[string]any, error) {
 	out := make([]map[string]any, len(infos))
 	for i, info := range infos {
 		out[i] = map[string]any{
-			"worker_id":       info.WorkerID,
-			"worker_name":     info.WorkerName,
-			"status":          info.ConnectionStatus,
-			"last_heartbeat":  info.LastHB,
-			"engine_version":  info.EngineVersion,
-			"code_version":    info.CodeVersion,
-			"worker_class":    info.Class,
-			"current_job":     info.CurrentJob,
+			"worker_id":         info.WorkerID,
+			"worker_name":       info.WorkerName,
+			"status":            info.ConnectionStatus,
+			"last_heartbeat":    info.LastHB,
+			"engine_version":    info.EngineVersion,
+			"code_version":      info.CodeVersion,
+			"worker_class":      info.Class,
+			"current_job":       info.CurrentJob,
 			"connection_status": info.ConnectionStatus,
 		}
 	}
@@ -61,14 +61,14 @@ func (a *workerRegistryAdapter) GetWorker(workerID string) (map[string]any, erro
 		return nil, nil
 	}
 	return map[string]any{
-		"worker_id":       info.WorkerID,
-		"worker_name":     info.WorkerName,
-		"status":          info.ConnectionStatus,
-		"last_heartbeat":  info.LastHB,
-		"engine_version":  info.EngineVersion,
-		"code_version":    info.CodeVersion,
-		"worker_class":    info.Class,
-		"current_job":     info.CurrentJob,
+		"worker_id":         info.WorkerID,
+		"worker_name":       info.WorkerName,
+		"status":            info.ConnectionStatus,
+		"last_heartbeat":    info.LastHB,
+		"engine_version":    info.EngineVersion,
+		"code_version":      info.CodeVersion,
+		"worker_class":      info.Class,
+		"current_job":       info.CurrentJob,
 		"connection_status": info.ConnectionStatus,
 	}, nil
 }

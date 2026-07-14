@@ -5,10 +5,10 @@
 //
 //   - BeginUpload — validation + atomic insert via UploadSessionWriter.
 //   - Receive     — streaming + master-computed hash + post-write verify
-//                   via the typed store.UploadRepository.
+//     via the typed store.UploadRepository.
 //   - Finalize    — blob promotion + FinalizationWriter atomic tx
-//                   (sole jobs.status='SUCCEEDED' writer) +
-//                   ArtifactReader post-tx read.
+//     (sole jobs.status='SUCCEEDED' writer) +
+//     ArtifactReader post-tx read.
 //
 // The Service is the only layer that computes SHA-256 / size from the
 // actual bytes — workers cannot influence the canonical storage_key,
@@ -119,15 +119,15 @@ func NewService(
 		panic("artifacts: NewService requires a non-nil JobDeliveryCounter (post-finalize ffprobe invariant — RW-PROD-008 A4)")
 	}
 	return &Service{
-		repo:           repo,
-		uploadWriter:   uploadWriter,
-		finalizeWriter: finalizeWriter,
-		artifactReader: artifactReader,
-		auth:           auth,
-		blobStore:      blobStore,
-		clock:          c,
+		repo:            repo,
+		uploadWriter:    uploadWriter,
+		finalizeWriter:  finalizeWriter,
+		artifactReader:  artifactReader,
+		auth:            auth,
+		blobStore:       blobStore,
+		clock:           c,
 		deliveryCounter: deliveryCounter,
-		uploadTTL:      defaultUploadTTL,
+		uploadTTL:       defaultUploadTTL,
 	}
 }
 

@@ -571,7 +571,7 @@ func TestParseFFProbeModeMatrix(t *testing.T) {
 		// Valid trip modes.
 		{"shadow", ffprobeModeShadow},
 		{"enforce", ffprobeModeEnforce},
-		{"true", ffprobeModeEnforce},     // legacy alias preserved for env files shipped pre-tri-state
+		{"true", ffprobeModeEnforce}, // legacy alias preserved for env files shipped pre-tri-state
 		// Off class — empty value (line `VELOX_FFPROBE_VERIFY_ON_FINALIZE=` with nothing after).
 		{"", ffprobeModeOff},
 		// Off class — explicit OFF values.
@@ -594,10 +594,10 @@ func TestParseFFProbeModeMatrix(t *testing.T) {
 		// `= shadow` (leading space) silently install an enforced
 		// gate that the runtime treats as Off. Locked both sides via
 		// this matrix.
-		{" shadow", ffprobeModeOff}, // leading space
-		{"shadow ", ffprobeModeOff}, // trailing space
+		{" shadow", ffprobeModeOff},  // leading space
+		{"shadow ", ffprobeModeOff},  // trailing space
 		{"\tshadow", ffprobeModeOff}, // leading tab
-		{" true ", ffprobeModeOff},  // leading + trailing space around legacy value
+		{" true ", ffprobeModeOff},   // leading + trailing space around legacy value
 		{"shadow\t", ffprobeModeOff}, // trailing tab
 	}
 	for _, c := range cases {

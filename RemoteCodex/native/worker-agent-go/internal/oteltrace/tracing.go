@@ -101,8 +101,8 @@ func StartSpan(ctx context.Context, name string, attrs ...attribute.KeyValue) (c
 
 // ── Common attribute constructors ──────────────────────────────────────
 
-func AttrJobID(id string) attribute.KeyValue     { return attribute.String("velox.job_id", id) }
-func AttrTaskID(id string) attribute.KeyValue    { return attribute.String("velox.task_id", id) }
-func AttrWorkerID(id string) attribute.KeyValue  { return attribute.String("velox.worker_id", id) }
-func AttrStatus(s string) attribute.KeyValue     { return attribute.String("velox.status", s) }
+func AttrJobID(id string) attribute.KeyValue      { return attribute.String("velox.job_id", id) }
+func AttrTaskID(id string) attribute.KeyValue     { return attribute.String("velox.task_id", id) }
+func AttrWorkerID(id string) attribute.KeyValue   { return attribute.String("velox.worker_id", id) }
+func AttrStatus(s string) attribute.KeyValue      { return attribute.String("velox.status", s) }
 func AttrExecutorID(id string) attribute.KeyValue { return attribute.String("velox.executor_id", id) }

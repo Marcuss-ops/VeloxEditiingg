@@ -279,7 +279,7 @@ func TestBuildNarratedClipPayload_OffsetClock(t *testing.T) {
 	t.Parallel()
 	scenes := []map[string]interface{}{
 		{
-			"voiceover_duration_seconds": 3.0,
+			"voiceover_duration_seconds":  3.0,
 			"final_clip_duration_seconds": 2.0,
 			"bindings": map[string]interface{}{
 				"voiceover": map[string]interface{}{"link": "https://voice/1.mp3"},
@@ -295,7 +295,7 @@ func TestBuildNarratedClipPayload_OffsetClock(t *testing.T) {
 			},
 		},
 		{
-			"voiceover_duration_seconds": 2.0,
+			"voiceover_duration_seconds":  2.0,
 			"final_clip_duration_seconds": 2.0,
 			"bindings": map[string]interface{}{
 				"voiceover": map[string]interface{}{"link": "https://voice/3.mp3"},

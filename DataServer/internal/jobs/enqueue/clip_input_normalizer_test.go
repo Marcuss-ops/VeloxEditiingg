@@ -108,9 +108,9 @@ func TestNormalizeClipPayload_Dispatch(t *testing.T) {
 		raw := map[string]interface{}{
 			"scenes": []interface{}{
 				map[string]interface{}{
-					"clip_link":                  "https://clip/1.mp4",
-					"duration_seconds":           3.0,
-					"voiceover_duration_seconds": 3.0,
+					"clip_link":                   "https://clip/1.mp4",
+					"duration_seconds":            3.0,
+					"voiceover_duration_seconds":  3.0,
 					"final_clip_duration_seconds": 1.0,
 					"bindings": map[string]interface{}{
 						"voiceover": map[string]interface{}{"link": "https://voice/1.mp3"},
@@ -222,10 +222,10 @@ func TestNormalizeClipsAsInterface_MapEntriesHonorDurationPrecedence(t *testing.
 	//   3. if both are <= 0, default to 4.0
 	// Each entry probes one rung of that ladder.
 	entries, _, _, _, _, err := normalizeClipsAsInterface([]interface{}{
-		map[string]interface{}{"url": "https://a", "duration_seconds": 7.0},                    // canonical only → 7.0
+		map[string]interface{}{"url": "https://a", "duration_seconds": 7.0},                  // canonical only → 7.0
 		map[string]interface{}{"url": "https://b", "duration_seconds": 7.0, "duration": 3.0}, // alias wins (source quirk: alias is checked first)
-		map[string]interface{}{"url": "https://c", "duration": 9.0},                            // alias only → 9.0
-		map[string]interface{}{"url": "https://d"},                                             // neither → 4.0 default
+		map[string]interface{}{"url": "https://c", "duration": 9.0},                          // alias only → 9.0
+		map[string]interface{}{"url": "https://d"},                                           // neither → 4.0 default
 	})
 	if err != nil {
 		t.Fatalf("err: %v", err)

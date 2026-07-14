@@ -397,9 +397,9 @@ func TestSupervisorRejectsDuplicateRunnerName(t *testing.T) {
 	}
 
 	err = sup.Register(supervisor.Runner{
-		Name: "unique", // duplicate
+		Name:  "unique", // duplicate
 		Class: supervisor.ClassOneShot,
-		Run: func(ctx context.Context) error { return nil },
+		Run:   func(ctx context.Context) error { return nil },
 	})
 	if err == nil {
 		t.Fatal("expected duplicate runner name to be rejected")

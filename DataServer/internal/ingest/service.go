@@ -415,7 +415,7 @@ func (s *TaskReportIngestionService) IngestTaskResult(ctx context.Context, cmd I
 		ReportVersion:       cmd.ReportVersion,
 		ReportHash:          cmd.ReportHash,
 		// Scorecard v2 / Step 17: per-segment C++ sidecar timings.
-		SegmentTimings:      cmd.SegmentTimings,
+		SegmentTimings: cmd.SegmentTimings,
 		// Scorecard v2 / Step 18: partial phase metrics for FAILED attempts.
 		PartialPhaseMetrics: cmd.PartialPhaseMetrics,
 	})

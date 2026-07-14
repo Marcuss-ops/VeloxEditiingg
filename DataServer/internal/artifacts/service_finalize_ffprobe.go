@@ -4,19 +4,19 @@
 // var VELOX_FFPROBE_VERIFY_ON_FINALIZE which accepts a tri-state:
 //
 //   - "shadow"             : run ffprobe + log every outcome; NEVER
-//                            abort the finalize tx (production-safe
-//                            observability window for Stage 1 rollout)
+//     abort the finalize tx (production-safe
+//     observability window for Stage 1 rollout)
 //   - "enforce" | "true"   : run ffprobe + log; ABORT on count
-//                            mismatch (ErrFFProbeAudioCountMismatch)
-//                            or binary missing
-//                            (ErrFFProbeInvariantMissingBinary).
-//                            "true" is the legacy alias kept so
-//                            envfiles shipped before the tri-state
-//                            keep the same hard-trip behavior.
+//     mismatch (ErrFFProbeAudioCountMismatch)
+//     or binary missing
+//     (ErrFFProbeInvariantMissingBinary).
+//     "true" is the legacy alias kept so
+//     envfiles shipped before the tri-state
+//     keep the same hard-trip behavior.
 //   - "off" | unset | typos : noop. Strict case-sensitive match —
-//                            "Shadow", "SHADOW", "True", "1",
-//                            "yes" all NO-OP so a typo disables the
-//                            gate visibly rather than silently.
+//     "Shadow", "SHADOW", "True", "1",
+//     "yes" all NO-OP so a typo disables the
+//     gate visibly rather than silently.
 //
 // Strict semantics match the preflight_ffprobe_invariant bash helper
 // in deploy/install-server.sh EXACTLY — see the runbook at
@@ -47,19 +47,19 @@
 // Failure-mode policy:
 //
 //   - ffprobe missing on PATH        → log event=ffprobe_invariant_missing_binary
-//                                       enforce: return ErrFFProbeInvariantMissingBinary
-//                                       shadow:  return nil (log only)
+//     enforce: return ErrFFProbeInvariantMissingBinary
+//     shadow:  return nil (log only)
 //   - ffprobe timeout / parse error  → log event=ffprobe_invariant_mismatch
-//                                       (reason=ffprobe_exec, err=...)
-//                                       enforce: return ErrFFProbeAudioCountMismatch
-//                                       shadow:  return nil (log only)
+//     (reason=ffprobe_exec, err=...)
+//     enforce: return ErrFFProbeAudioCountMismatch
+//     shadow:  return nil (log only)
 //   - audio count != expected count  → log event=ffprobe_invariant_mismatch
-//                                       (expected_streams=N actual_streams=M)
-//                                       enforce: return ErrFFProbeAudioCountMismatch
-//                                       shadow:  return nil (log only)
+//     (expected_streams=N actual_streams=M)
+//     enforce: return ErrFFProbeAudioCountMismatch
+//     shadow:  return nil (log only)
 //   - audio count == expected count  → log event=ffprobe_invariant_match (shadow only)
-//                                       enforce: silent (preserves pre-shadow log noise floor)
-//                                       both: return nil
+//     enforce: silent (preserves pre-shadow log noise floor)
+//     both: return nil
 //
 // Counter wiring: the gate reads through Service.deliveryCounter,
 // a purpose-built JobDeliveryCounter typed reader (see

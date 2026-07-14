@@ -3,8 +3,8 @@
 // Webhook notifiers for Slack and Telegram. Configured via
 // environment variables:
 //
-//   VELOX_ALERT_WEBHOOK_URL  — the webhook URL to POST alerts to
-//   VELOX_ALERT_WEBHOOK_TYPE — "slack" or "telegram" (default: "slack")
+//	VELOX_ALERT_WEBHOOK_URL  — the webhook URL to POST alerts to
+//	VELOX_ALERT_WEBHOOK_TYPE — "slack" or "telegram" (default: "slack")
 package alertengine
 
 import (
@@ -48,12 +48,12 @@ func (n *SlackNotifier) Send(ctx context.Context, alert Alert) error {
 	payload := map[string]interface{}{
 		"attachments": []map[string]interface{}{
 			{
-				"color":     color,
-				"title":     fmt.Sprintf("[%s] %s", alert.Severity, alert.Name),
-				"text":      alert.Description,
-				"fields":    slackFields(alert),
-				"footer":    "Velox AlertEngine",
-				"ts":        alert.Timestamp.Unix(),
+				"color":  color,
+				"title":  fmt.Sprintf("[%s] %s", alert.Severity, alert.Name),
+				"text":   alert.Description,
+				"fields": slackFields(alert),
+				"footer": "Velox AlertEngine",
+				"ts":     alert.Timestamp.Unix(),
 			},
 		},
 	}

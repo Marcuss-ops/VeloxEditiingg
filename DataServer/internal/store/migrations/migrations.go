@@ -6,11 +6,11 @@
 //
 //   - runner.go     — the public RunMigrations orchestrator.
 //   - discovery.go  — embeds the SQLite/Postgres migration FS, defines
-//                     the Migration type, and lists / splits the SQL.
+//     the Migration type, and lists / splits the SQL.
 //   - apply.go      — forward (UP) per-migration transactions,
-//                     AppliedVersions / PendingVersions.
+//     AppliedVersions / PendingVersions.
 //   - down.go       — rollback-status introspection surface
-//                     (ListMigrationStatus / MigrationStatus).
+//     (ListMigrationStatus / MigrationStatus).
 //
 // Note: EnsureApplied and RunDown were retired in this split because
 // their only callers were in the test surface; production boot paths

@@ -185,7 +185,7 @@ func (s *SQLiteStore) ClaimNextPendingJobForWorker(
 	// Eligible=true; capture per-component breakdown for explain. ────
 	type scoredCandidate struct {
 		jobID, resultJSON, reqRC, reqTM, updatedAt string
-		retry                                     int64
+		retry                                      int64
 		reqDeterministic, reqCacheable             bool
 		reqMinBandwidthMbps                        float64
 		score                                      float64

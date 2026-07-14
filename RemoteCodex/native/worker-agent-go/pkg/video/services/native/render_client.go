@@ -27,46 +27,46 @@ type ProgressFunc func(percent int, scene, total int, stage string)
 // needed for operator-visible telemetry. We parse only what the
 // sidecar contract guarantees — unrecognised keys are silently ignored.
 type engineSidecar struct {
-	Frames         int64              `json:"frames"`
-	Fps            float64            `json:"fps"`
-	SpeedX         float64            `json:"speed_x"`
-	EncodePasses   int64              `json:"encode_passes"`
-	TempBytes      int64              `json:"temp_bytes"`
-	DurationSec    float64            `json:"duration_seconds"`
-	ConcatMode     string             `json:"concat_mode"`
-	TotalSize      int64              `json:"total_size"`
-	OutTimeUs      int64              `json:"out_time_us"`
-	OutTimeMs      int64              `json:"out_time_ms"`
-	Bitrate        float64            `json:"bitrate"`
-	DupFrames      int64              `json:"dup_frames"`
-	DropFrames     int64              `json:"drop_frames"`
-	PhaseMS        map[string]float64 `json:"phase_ms,omitempty"`
-	Segments       []segmentTiming    `json:"segments,omitempty"`
+	Frames       int64              `json:"frames"`
+	Fps          float64            `json:"fps"`
+	SpeedX       float64            `json:"speed_x"`
+	EncodePasses int64              `json:"encode_passes"`
+	TempBytes    int64              `json:"temp_bytes"`
+	DurationSec  float64            `json:"duration_seconds"`
+	ConcatMode   string             `json:"concat_mode"`
+	TotalSize    int64              `json:"total_size"`
+	OutTimeUs    int64              `json:"out_time_us"`
+	OutTimeMs    int64              `json:"out_time_ms"`
+	Bitrate      float64            `json:"bitrate"`
+	DupFrames    int64              `json:"dup_frames"`
+	DropFrames   int64              `json:"drop_frames"`
+	PhaseMS      map[string]float64 `json:"phase_ms,omitempty"`
+	Segments     []segmentTiming    `json:"segments,omitempty"`
 }
 
 // segmentTiming mirrors the C++ SegmentTiming struct emitted inside the
 // sidecar segments[] array.
 type segmentTiming struct {
-	Index           int64   `json:"index"`
-	WorkerIndex     int64   `json:"worker_index"`
-	SourceType      string  `json:"source_type"`
-	TotalMs         float64 `json:"total_ms"`
-	AssetDownloadMs float64 `json:"asset_download_ms"`
-	FfmpegEncodeMs  float64 `json:"ffmpeg_encode_ms"`
-	SourceBytes     int64   `json:"source_bytes"`
-	OutputBytes     int64   `json:"output_bytes"`
-	FramesEncoded   int64   `json:"frames_encoded"`
-	Codec           string  `json:"codec"`
-	Preset          string  `json:"preset"`
-	FfmpegThreads   int64   `json:"ffmpeg_threads"`
-	Status          string  `json:"status"`
-	ErrorCode       string  `json:"error_code"`
-	ErrorMessage    string  `json:"error_message"`
-	SourceURLHash   string  `json:"source_url_hash"`
-	CacheKey        string  `json:"cache_key"`
-	InputDurationMs float64 `json:"input_duration_ms"`
+	Index            int64   `json:"index"`
+	WorkerIndex      int64   `json:"worker_index"`
+	SourceType       string  `json:"source_type"`
+	TotalMs          float64 `json:"total_ms"`
+	AssetDownloadMs  float64 `json:"asset_download_ms"`
+	FfmpegEncodeMs   float64 `json:"ffmpeg_encode_ms"`
+	SourceBytes      int64   `json:"source_bytes"`
+	OutputBytes      int64   `json:"output_bytes"`
+	FramesEncoded    int64   `json:"frames_encoded"`
+	Codec            string  `json:"codec"`
+	Preset           string  `json:"preset"`
+	FfmpegThreads    int64   `json:"ffmpeg_threads"`
+	Status           string  `json:"status"`
+	ErrorCode        string  `json:"error_code"`
+	ErrorMessage     string  `json:"error_message"`
+	SourceURLHash    string  `json:"source_url_hash"`
+	CacheKey         string  `json:"cache_key"`
+	InputDurationMs  float64 `json:"input_duration_ms"`
 	OutputDurationMs float64 `json:"output_duration_ms"`
-	MetadataJSON    string  `json:"metadata_json"`
+	MetadataJSON     string  `json:"metadata_json"`
 }
 
 // RenderClient executes RenderPlans via the C++ video engine.

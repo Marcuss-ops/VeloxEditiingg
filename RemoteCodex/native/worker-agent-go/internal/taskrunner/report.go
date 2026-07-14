@@ -25,14 +25,14 @@ type SegmentTiming = executor.SegmentTiming
 //     (PhaseCacheLookup, PhasePrefetch, PhaseExecute, PhaseUpload,
 //     PhaseReport), in that order. Empty phases are not emitted.
 type TaskExecutionReport struct {
-	JobID       string                 `json:"job_id"`
-	ExecutorID  string                 `json:"executor_id"`
-	ExecutorKey string                 `json:"executor_key"` // canonical "id@version"
-	Status      string                 `json:"status"`
-	ErrorCode   string                 `json:"error_code,omitempty"`
-	ErrorDetail string                 `json:"error_detail,omitempty"`
-	Outputs     []executor.ArtifactRef `json:"outputs,omitempty"`
-	Metrics     map[string]interface{} `json:"metrics,omitempty"`
+	JobID       string                   `json:"job_id"`
+	ExecutorID  string                   `json:"executor_id"`
+	ExecutorKey string                   `json:"executor_key"` // canonical "id@version"
+	Status      string                   `json:"status"`
+	ErrorCode   string                   `json:"error_code,omitempty"`
+	ErrorDetail string                   `json:"error_detail,omitempty"`
+	Outputs     []executor.ArtifactRef   `json:"outputs,omitempty"`
+	Metrics     map[string]interface{}   `json:"metrics,omitempty"`
 	Segments    []executor.SegmentTiming `json:"segments,omitempty"`
 	// TypedMetrics is the proto-shaped 17-field mirror of the legacy
 	// `Metrics` dotted-key map. PR-3.6 (Scorecard v1) populates it

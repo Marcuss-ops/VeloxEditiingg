@@ -130,12 +130,12 @@ func runServer(cfg *config.Config) error {
 //
 // The four-arm select encodes the "fail-loud, never silent" contract
 // from Blocco 1 verdetti P0 #4 + P0 #5:
-//   * HTTP listener error → return (k8s/systemd restart)
-//   * supervisor critical error → wrap + return (k8s/systemd restart)
-//   * supervisor done with no signal → "unexpected exit" error
+//   - HTTP listener error → return (k8s/systemd restart)
+//   - supervisor critical error → wrap + return (k8s/systemd restart)
+//   - supervisor done with no signal → "unexpected exit" error
 //     (catches the false-success path where a critical runner died
 //     without ctx-cancellation)
-//   * SIGINT/SIGTERM → graceful shutdown
+//   - SIGINT/SIGTERM → graceful shutdown
 func runUntilShutdown(c *appComponents, t *transportBundle) error {
 	bgCtx, bgCancel := context.WithCancel(context.Background())
 	defer bgCancel()
@@ -210,4 +210,3 @@ func runUntilShutdown(c *appComponents, t *transportBundle) error {
 	log.Println("[SERVER] Server stopped")
 	return nil
 }
-

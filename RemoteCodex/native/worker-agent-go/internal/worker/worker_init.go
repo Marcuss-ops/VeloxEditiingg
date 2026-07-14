@@ -36,8 +36,8 @@ type workerOptions struct {
 // WithRegistry replaces the default (empty) executor registry. The
 // caller owns the registry — Register calls after New() still take
 // effect because the worker holds the same pointer.
-//// This is the single supported way to surface hello/heartbeat
-	// capabilities.
+// // This is the single supported way to surface hello/heartbeat
+// capabilities.
 //
 // Passing nil panics loudly. The previous silent fallback to a fresh
 // empty registry masked operator bugs (worker booted, advertised zero
@@ -67,10 +67,10 @@ func WithCache(c *cache.PersistedLocalCache) Option {
 	return func(o *workerOptions) {
 		o.cache = c
 	}
-}// WithBlobs wires a content-addressed blob store into the
-	// worker. Same instance is exposed via Worker.blobs and threaded
-	// into the TaskRunner built by New(); the upload queue is consumed
-	// by master-side transport.
+} // WithBlobs wires a content-addressed blob store into the
+// worker. Same instance is exposed via Worker.blobs and threaded
+// into the TaskRunner built by New(); the upload queue is consumed
+// by master-side transport.
 //
 // Passing nil panics loudly; omit WithBlobs to fall back to noop.
 func WithBlobs(b *blob.BlobArtifacts) Option {
@@ -86,9 +86,9 @@ func WithBlobs(b *blob.BlobArtifacts) Option {
 // Returns an error if the initial transport setup fails (bad TLS config,
 // missing control_grpc_url, insecure flag mismatch). Callers MUST check
 // the error before calling Start().
-//// Options: pass worker.WithRegistry(reg) to install a custom
-	// executor registry; otherwise an empty registry is used so hello is
-	// emitted immediately and dispatch upgrades are non-breaking.
+// // Options: pass worker.WithRegistry(reg) to install a custom
+// executor registry; otherwise an empty registry is used so hello is
+// emitted immediately and dispatch upgrades are non-breaking.
 func New(cfg *config.WorkerConfig, version string, opts ...Option) (*Worker, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid worker config: %w", err)
