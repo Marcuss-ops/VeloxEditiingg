@@ -11,10 +11,15 @@ import (
 // ============================================================
 // youtube_channels (canonical) tests
 // ============================================================
+//
+// Covers the youtube_channels table: CRUD, the canonical-update
+// guard rails (added_at preservation, metadata-only refresh, empty
+// defaults), the channel delete-atomic path, and the
+// ConnectChannelAtomic transactional upsert that joins channels
+// and oauth rows.
 
 func TestYouTubeChannelCRUD(t *testing.T) {
-	s := openTestDB(t)
-	defer s.Close()
+	s := newYouTubeTestStore(t)
 
 	err := s.UpsertYouTubeChannel("UC_test123", "Test Channel", "Test Display", "https://youtube.com/@test", "https://img.example.com/thumb.jpg", "en", "A test channel", 1500, 500, "2024-01-01T00:00:00Z", "2024-06-01T00:00:00Z", "")
 	if err != nil {
@@ -50,8 +55,7 @@ func TestYouTubeChannelCRUD(t *testing.T) {
 }
 
 func TestYouTubeChannelUpdatePreservesAddedAt(t *testing.T) {
-	s := openTestDB(t)
-	defer s.Close()
+	s := newYouTubeTestStore(t)
 
 	// First insert with specific added_at
 	s.UpsertYouTubeChannel("UC_test456", "Original Title", "", "", "", "", "", 0, 0, "2024-01-15T00:00:00Z", "", "")
@@ -75,8 +79,7 @@ func TestYouTubeChannelUpdatePreservesAddedAt(t *testing.T) {
 }
 
 func TestYouTubeChannelListAndDelete(t *testing.T) {
-	s := openTestDB(t)
-	defer s.Close()
+	s := newYouTubeTestStore(t)
 
 	// List empty
 	channels, err := s.ListYouTubeChannels()
@@ -119,8 +122,7 @@ func TestYouTubeChannelListAndDelete(t *testing.T) {
 }
 
 func TestYouTubeChannelUpdateMetadataRefresh(t *testing.T) {
-	s := openTestDB(t)
-	defer s.Close()
+	s := newYouTubeTestStore(t)
 
 	// Seed with rich data so we can assert WHICH columns the refresh
 	// changes vs which it preserves. Refresh is metadata-only: title and
@@ -183,8 +185,7 @@ func TestYouTubeChannelUpdateMetadataRefresh(t *testing.T) {
 }
 
 func TestYouTubeChannelEmptyDefaultValues(t *testing.T) {
-	s := openTestDB(t)
-	defer s.Close()
+	s := newYouTubeTestStore(t)
 
 	s.UpsertYouTubeChannel("UC_minimal", "", "", "", "", "", "", 0, 0, "", "", "")
 
@@ -203,496 +204,17 @@ func TestYouTubeChannelEmptyDefaultValues(t *testing.T) {
 }
 
 // ============================================================
-// youtube_groups (canonical) tests
+// youtube_channel DeleteAtomic tests
 // ============================================================
-
-func TestYouTubeGroupCRUD(t *testing.T) {
-	s := openTestDB(t)
-	defer s.Close()
-
-	// Create a group
-	id, err := s.UpsertYouTubeGroup("WNBA Zone", "manager", "WNBA basketball content", "unlisted")
-	if err != nil {
-		t.Fatalf("UpsertYouTubeGroup failed: %v", err)
-	}
-	if id <= 0 {
-		t.Errorf("expected positive group ID, got %d", id)
-	}
-
-	// Get by ID
-	gotID, err := s.GetYouTubeGroupID("WNBA Zone", "manager")
-	if err != nil {
-		t.Fatalf("GetYouTubeGroupID failed: %v", err)
-	}
-	if gotID != id {
-		t.Errorf("ID mismatch: got %d, want %d", gotID, id)
-	}
-
-	// List
-	groups, err := s.ListYouTubeGroups()
-	if err != nil {
-		t.Fatalf("ListYouTubeGroups failed: %v", err)
-	}
-	if len(groups) != 1 {
-		t.Fatalf("expected 1 group, got %d", len(groups))
-	}
-	if groups[0].Name != "WNBA Zone" {
-		t.Errorf("name: got %v, want %q", groups[0].Name, "WNBA Zone")
-	}
-	if groups[0].GroupType != "manager" {
-		t.Errorf("group_type: got %v, want %q", groups[0].GroupType, "manager")
-	}
-}
-
-func TestYouTubeGroupDifferentTypesSameName(t *testing.T) {
-	s := openTestDB(t)
-	defer s.Close()
-
-	// Same name, different types — allowed by UNIQUE(name, group_type)
-	id1, err := s.UpsertYouTubeGroup("MyGroup", "manager", "Manager group", "")
-	if err != nil {
-		t.Fatalf("first UpsertYouTubeGroup failed: %v", err)
-	}
-	id2, err := s.UpsertYouTubeGroup("MyGroup", "upload", "Upload group", "public")
-	if err != nil {
-		t.Fatalf("second UpsertYouTubeGroup failed: %v", err)
-	}
-	if id1 == id2 {
-		t.Error("expected different IDs for different group types")
-	}
-
-	groups, err := s.ListYouTubeGroups()
-	if err != nil {
-		t.Fatalf("ListYouTubeGroups failed: %v", err)
-	}
-	if len(groups) != 2 {
-		t.Fatalf("expected 2 groups, got %d", len(groups))
-	}
-
-	// Verify each type has correct data
-	var mgrID, uploadID int64
-	for _, g := range groups {
-		name := g.Name
-		gtype := g.GroupType
-		if name == "MyGroup" && gtype == "manager" {
-			mgrID = g.ID
-		}
-		if name == "MyGroup" && gtype == "upload" {
-			uploadID = g.ID
-			if g.Privacy != "public" {
-				t.Errorf("upload privacy: got %v, want public", g.Privacy)
-			}
-		}
-	}
-	if mgrID == 0 || uploadID == 0 {
-		t.Error("expected both group types to be present")
-	}
-}
-
-func TestYouTubeGroupDelete(t *testing.T) {
-	s := openTestDB(t)
-	defer s.Close()
-
-	id, _ := s.UpsertYouTubeGroup("DeleteMe", "manager", "", "")
-	if err := s.DeleteYouTubeGroup(id); err != nil {
-		t.Fatalf("DeleteYouTubeGroup failed: %v", err)
-	}
-
-	// Should not be listed
-	groups, _ := s.ListYouTubeGroups()
-	if len(groups) != 0 {
-		t.Errorf("expected 0 groups after delete, got %d", len(groups))
-	}
-}
-
-// ============================================================
-// youtube_group_channels tests
-// ============================================================
-
-func TestGroupChannelsAddAndList(t *testing.T) {
-	s := openTestDB(t)
-	defer s.Close()
-
-	// Create channel and group
-	s.UpsertYouTubeChannel("UC_group_a", "Channel A", "", "", "", "", "", 0, 0, "", "", "")
-	groupID, _ := s.UpsertYouTubeGroup("Test Group", "manager", "", "")
-
-	// Add channel to group
-	if err := s.AddChannelToGroup(groupID, "UC_group_a"); err != nil {
-		t.Fatalf("AddChannelToGroup failed: %v", err)
-	}
-
-	// List group channels
-	channels, err := s.ListGroupChannels(groupID)
-	if err != nil {
-		t.Fatalf("ListGroupChannels failed: %v", err)
-	}
-	if len(channels) != 1 || channels[0] != "UC_group_a" {
-		t.Errorf("expected [UC_group_a], got %v", channels)
-	}
-}
-
-func TestGroupChannelsRemove(t *testing.T) {
-	s := openTestDB(t)
-	defer s.Close()
-
-	s.UpsertYouTubeChannel("UC_remove", "Remove Me", "", "", "", "", "", 0, 0, "", "", "")
-	groupID, _ := s.UpsertYouTubeGroup("Remove Group", "manager", "", "")
-	s.AddChannelToGroup(groupID, "UC_remove")
-
-	// Remove
-	if err := s.RemoveChannelFromGroup(groupID, "UC_remove"); err != nil {
-		t.Fatalf("RemoveChannelFromGroup failed: %v", err)
-	}
-
-	channels, _ := s.ListGroupChannels(groupID)
-	if len(channels) != 0 {
-		t.Errorf("expected 0 channels after remove, got %d", len(channels))
-	}
-}
-
-func TestGroupChannelsIdempotentAdd(t *testing.T) {
-	s := openTestDB(t)
-	defer s.Close()
-
-	s.UpsertYouTubeChannel("UC_idem", "Idempotent", "", "", "", "", "", 0, 0, "", "", "")
-	groupID, _ := s.UpsertYouTubeGroup("Idem Group", "manager", "", "")
-
-	// Add twice — ON CONFLICT DO NOTHING
-	s.AddChannelToGroup(groupID, "UC_idem")
-	s.AddChannelToGroup(groupID, "UC_idem")
-
-	channels, _ := s.ListGroupChannels(groupID)
-	if len(channels) != 1 {
-		t.Errorf("expected 1 channel (idempotent), got %d", len(channels))
-	}
-}
-
-func TestGroupChannelsPositionAutoIncrement(t *testing.T) {
-	s := openTestDB(t)
-	defer s.Close()
-
-	s.UpsertYouTubeChannel("UC_pos1", "Pos1", "", "", "", "", "", 0, 0, "", "", "")
-	s.UpsertYouTubeChannel("UC_pos2", "Pos2", "", "", "", "", "", 0, 0, "", "", "")
-	groupID, _ := s.UpsertYouTubeGroup("Pos Group", "manager", "", "")
-
-	s.AddChannelToGroup(groupID, "UC_pos1")
-	s.AddChannelToGroup(groupID, "UC_pos2")
-
-	// List all memberships to verify position
-	memberships, err := s.ListAllGroupMemberships()
-	if err != nil {
-		t.Fatalf("ListAllGroupMemberships failed: %v", err)
-	}
-	if len(memberships) != 2 {
-		t.Fatalf("expected 2 memberships, got %d", len(memberships))
-	}
-	// Position should increment (0, 1)
-	if memberships[0].Position != 0 || memberships[0].ChannelID != "UC_pos1" {
-		t.Errorf("expected first position 0 for UC_pos1, got %v", memberships[0])
-	}
-	if memberships[1].Position != 1 || memberships[1].ChannelID != "UC_pos2" {
-		t.Errorf("expected second position 1 for UC_pos2, got %v", memberships[1])
-	}
-}
-
-func TestGroupChannelsAllMembershipsJoin(t *testing.T) {
-	s := openTestDB(t)
-	defer s.Close()
-
-	// Two groups with channels
-	s.UpsertYouTubeChannel("UC_g1a", "G1A", "", "", "", "", "", 0, 0, "", "", "")
-	s.UpsertYouTubeChannel("UC_g1b", "G1B", "", "", "", "", "", 0, 0, "", "", "")
-	s.UpsertYouTubeChannel("UC_g2a", "G2A", "", "", "", "", "", 0, 0, "", "", "")
-
-	g1, _ := s.UpsertYouTubeGroup("Group One", "manager", "", "")
-	g2, _ := s.UpsertYouTubeGroup("Group Two", "upload", "", "")
-
-	s.AddChannelToGroup(g1, "UC_g1a")
-	s.AddChannelToGroup(g1, "UC_g1b")
-	s.AddChannelToGroup(g2, "UC_g2a")
-
-	memberships, err := s.ListAllGroupMemberships()
-	if err != nil {
-		t.Fatalf("ListAllGroupMemberships failed: %v", err)
-	}
-	if len(memberships) != 3 {
-		t.Fatalf("expected 3 memberships, got %d", len(memberships))
-	}
-
-	// Verify group names in join results
-	found := map[string]bool{}
-	for _, m := range memberships {
-		key := m.GroupName + "/" + m.ChannelID
-		found[key] = true
-	}
-	if !found["Group One/UC_g1a"] || !found["Group One/UC_g1b"] || !found["Group Two/UC_g2a"] {
-		t.Errorf("missing expected memberships: got %v", memberships)
-	}
-}
-
-// ============================================================
-// youtube_tracked_niches tests
-// ============================================================
-
-func TestTrackedNichesAddAndList(t *testing.T) {
-	s := openTestDB(t)
-	defer s.Close()
-
-	// List empty
-	niches, err := s.ListYouTubeTrackedNiches()
-	if err != nil {
-		t.Fatalf("ListYouTubeTrackedNiches (empty) failed: %v", err)
-	}
-	if len(niches) != 0 {
-		t.Fatalf("expected 0 niches, got %d", len(niches))
-	}
-
-	// Add niches
-	if err := s.UpsertYouTubeTrackedNiche("wnba"); err != nil {
-		t.Fatalf("UpsertYouTubeTrackedNiche(wnba) failed: %v", err)
-	}
-	if err := s.UpsertYouTubeTrackedNiche("nba"); err != nil {
-		t.Fatalf("UpsertYouTubeTrackedNiche(nba) failed: %v", err)
-	}
-
-	niches, err = s.ListYouTubeTrackedNiches()
-	if err != nil {
-		t.Fatalf("ListYouTubeTrackedNiches failed: %v", err)
-	}
-	if len(niches) != 2 {
-		t.Fatalf("expected 2 niches, got %d", len(niches))
-	}
-	// Ordered by niche
-	if niches[0] != "nba" || niches[1] != "wnba" {
-		t.Errorf("expected order nba, wnba; got %v", niches)
-	}
-}
-
-func TestTrackedNichesIdempotent(t *testing.T) {
-	s := openTestDB(t)
-	defer s.Close()
-
-	s.UpsertYouTubeTrackedNiche("sports")
-	// Duplicate — ON CONFLICT DO NOTHING
-	if err := s.UpsertYouTubeTrackedNiche("sports"); err != nil {
-		t.Fatalf("duplicate UpsertYouTubeTrackedNiche failed: %v", err)
-	}
-
-	niches, _ := s.ListYouTubeTrackedNiches()
-	if len(niches) != 1 {
-		t.Errorf("expected 1 niche (idempotent), got %d", len(niches))
-	}
-}
-
-func TestTrackedNichesDelete(t *testing.T) {
-	s := openTestDB(t)
-	defer s.Close()
-
-	s.UpsertYouTubeTrackedNiche("delete-me")
-	if err := s.DeleteYouTubeTrackedNiche("delete-me"); err != nil {
-		t.Fatalf("DeleteYouTubeTrackedNiche failed: %v", err)
-	}
-
-	niches, _ := s.ListYouTubeTrackedNiches()
-	if len(niches) != 0 {
-		t.Errorf("expected 0 niches after delete, got %d", len(niches))
-	}
-}
-
-// ============================================================
-// YouTube API Cache tests
-// ============================================================
-
-func TestYouTubeCacheSetGet(t *testing.T) {
-	s := openTestDB(t)
-	defer s.Close()
-
-	if err := s.SetYouTubeCache("channel:UC_test", 1000, `{"title":"Test"}`); err != nil {
-		t.Fatalf("SetYouTubeCache failed: %v", err)
-	}
-
-	ts, data, err := s.GetYouTubeCache("channel:UC_test")
-	if err != nil {
-		t.Fatalf("GetYouTubeCache failed: %v", err)
-	}
-	if ts != 1000 {
-		t.Errorf("timestamp: got %d, want 1000", ts)
-	}
-	if data != `{"title":"Test"}` {
-		t.Errorf("data: got %q, want %q", data, `{"title":"Test"}`)
-	}
-}
-
-func TestYouTubeCacheMiss(t *testing.T) {
-	s := openTestDB(t)
-	defer s.Close()
-
-	ts, data, err := s.GetYouTubeCache("nonexistent")
-	if err != nil {
-		t.Fatalf("GetYouTubeCache(miss) failed: %v", err)
-	}
-	if ts != 0 || data != "" {
-		t.Errorf("expected zero value on miss, got ts=%d data=%q", ts, data)
-	}
-}
-
-func TestYouTubeCacheUpdate(t *testing.T) {
-	s := openTestDB(t)
-	defer s.Close()
-
-	key := "channel:UC_update"
-	s.SetYouTubeCache(key, 1000, `{"old": true}`)
-	s.SetYouTubeCache(key, 2000, `{"new": true}`)
-
-	ts, data, _ := s.GetYouTubeCache(key)
-	if ts != 2000 {
-		t.Errorf("timestamp: got %d, want 2000", ts)
-	}
-	if data != `{"new": true}` {
-		t.Errorf("data: got %q, want %q", data, `{"new": true}`)
-	}
-}
-
-func TestYouTubeCacheCleanup(t *testing.T) {
-	s := openTestDB(t)
-	defer s.Close()
-
-	s.SetYouTubeCache("stale", 1000, `{"stale": true}`)
-	s.SetYouTubeCache("fresh", 90000, `{"fresh": true}`)
-
-	// Cleanup uses time.Now().Unix() internally, so both entries will be deleted
-	// since their timestamps (1000, 90000) are in the past.
-	_, err := s.CleanupYouTubeCache(50000)
-	if err != nil {
-		t.Fatalf("CleanupYouTubeCache failed: %v", err)
-	}
-}
-
-func TestYouTubeOAuthTokenUpsertGetRevoke(t *testing.T) {
-	s := openTestDB(t)
-	defer s.Close()
-	// Ensure FK is enforced for the cascade test below, since the helper
-	// in this file does not always turn foreign_keys on.
-	_, _ = s.db.Exec("PRAGMA foreign_keys = ON")
-
-	// Seed a parent channel so the FK constraint allows the token row.
-	if err := s.UpsertYouTubeChannel("UC_oauth_test", "OAuth Test", "", "", "", "", "", 0, 0, "", "", ""); err != nil {
-		t.Fatalf("seed channel: %v", err)
-	}
-
-	access1 := []byte("encrypted-access-1")
-	refresh1 := []byte("encrypted-refresh-1")
-	if err := s.UpsertYouTubeOAuthToken("UC_oauth_test", access1, refresh1, "Bearer", "2026-12-31T23:59:59Z", "scope.read scope.write", 1); err != nil {
-		t.Fatalf("first UpsertYouTubeOAuthToken: %v", err)
-	}
-
-	row, err := s.GetYouTubeOAuthToken("UC_oauth_test")
-	if err != nil {
-		t.Fatalf("first GetYouTubeOAuthToken: %v", err)
-	}
-	if row == nil {
-		t.Fatal("expected non-nil row on existing channel")
-	}
-	if row.ChannelID != "UC_oauth_test" {
-		t.Errorf("channel_id: got %v, want UC_oauth_test", row.ChannelID)
-	}
-	if !bytes.Equal(row.AccessTokenEncrypted, access1) {
-		t.Errorf("access blob not stored verbatim: got %v, want %v", row.AccessTokenEncrypted, access1)
-	}
-	if !bytes.Equal(row.RefreshTokenEncrypted, refresh1) {
-		t.Errorf("refresh blob not stored verbatim: got %v, want %v", row.RefreshTokenEncrypted, refresh1)
-	}
-	if row.KeyVersion != int64(1) {
-		t.Errorf("key_version: got %v, want 1", row.KeyVersion)
-	}
-	if row.RevokedAt != "" {
-		t.Errorf("revoked_at should start empty, got %v", row.RevokedAt)
-	}
-
-	// Upsert path (replace blobs and bump updated_at)
-	access2 := []byte("encrypted-access-2")
-	refresh2 := []byte("encrypted-refresh-2")
-	if err := s.UpsertYouTubeOAuthToken("UC_oauth_test", access2, refresh2, "Bearer", "2027-01-01T00:00:00Z", "scope.read", 1); err != nil {
-		t.Fatalf("second UpsertYouTubeOAuthToken: %v", err)
-	}
-	row, _ = s.GetYouTubeOAuthToken("UC_oauth_test")
-	if !bytes.Equal(row.AccessTokenEncrypted, access2) {
-		t.Error("access blob not updated on second upsert")
-	}
-	if !bytes.Equal(row.RefreshTokenEncrypted, refresh2) {
-		t.Error("refresh blob not updated on second upsert")
-	}
-	if row.Expiry != "2027-01-01T00:00:00Z" {
-		t.Errorf("expiry: got %v, want 2027-01-01T00:00:00Z", row.Expiry)
-	}
-	if row.RevokedAt != "" {
-		t.Error("upsert must not touch revoked_at")
-	}
-
-	// MarkRevoked stamps a timestamp; idempotent on re-call.
-	if err := s.MarkYouTubeOAuthTokenRevoked("UC_oauth_test"); err != nil {
-		t.Fatalf("MarkYouTubeOAuthTokenRevoked: %v", err)
-	}
-	row, _ = s.GetYouTubeOAuthToken("UC_oauth_test")
-	if row.RevokedAt == "" {
-		t.Error("revoked_at should be set after MarkRevoked")
-	}
-	prevRevoked := row.RevokedAt
-	time.Sleep(20 * time.Millisecond)
-	if err := s.MarkYouTubeOAuthTokenRevoked("UC_oauth_test"); err != nil {
-		t.Fatalf("second MarkRevoked: %v", err)
-	}
-	row2, _ := s.GetYouTubeOAuthToken("UC_oauth_test")
-	if row2.RevokedAt != prevRevoked {
-		t.Errorf("second MarkRevoked changed revoked_at: before=%v, after=%v", prevRevoked, row2.RevokedAt)
-	}
-}
-
-func TestYouTubeOAuthTokenMissingChannel(t *testing.T) {
-	s := openTestDB(t)
-	defer s.Close()
-
-	row, err := s.GetYouTubeOAuthToken("UC_nonexistent")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if row != nil {
-		t.Errorf("expected nil row for missing channel, got %v", row)
-	}
-}
-
-func TestYouTubeOAuthTokenChannelFKDeleteCascade(t *testing.T) {
-	s := openTestDB(t)
-	defer s.Close()
-	_, _ = s.db.Exec("PRAGMA foreign_keys = ON")
-
-	if err := s.UpsertYouTubeChannel("UC_cascade", "", "", "", "", "", "", 0, 0, "", "", ""); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.UpsertYouTubeOAuthToken("UC_cascade", []byte("a"), []byte("r"), "Bearer", "", "", 1); err != nil {
-		t.Fatal(err)
-	}
-	row, err := s.GetYouTubeOAuthToken("UC_cascade")
-	if err != nil || row == nil {
-		t.Fatalf("expected token row to exist before channel delete: err=%v row=%v", err, row)
-	}
-	if err := s.DeleteYouTubeChannel("UC_cascade"); err != nil {
-		t.Fatal(err)
-	}
-	row, err = s.GetYouTubeOAuthToken("UC_cascade")
-	if err != nil {
-		t.Fatalf("unexpected error after delete: %v", err)
-	}
-	if row != nil {
-		t.Errorf("expected token row to be cascade-deleted, got %v", row)
-	}
-}
+//
+// DeleteChannelAtomic removes the group-channel memberships and the
+// youtube_channels row in one transaction; the youtube_oauth_tokens
+// row is cascade-deleted by the FK. We pin that contract here so a
+// future refactor cannot silently leave a token row orphaned when a
+// channel is deleted.
 
 func TestYouTubeChannelDeleteAtomic(t *testing.T) {
-	s := openTestDB(t)
-	defer s.Close()
-	_, _ = s.db.Exec("PRAGMA foreign_keys = ON")
+	s := newYouTubeTestStore(t)
 
 	if err := s.UpsertYouTubeChannel("UC_atomic", "Atomic Test", "", "", "", "", "", 0, 0, "", "", ""); err != nil {
 		t.Fatalf("seed channel: %v", err)
@@ -754,9 +276,7 @@ func TestYouTubeChannelDeleteAtomic(t *testing.T) {
 }
 
 func TestYouTubeChannelDeleteAtomicMissingChannel(t *testing.T) {
-	s := openTestDB(t)
-	defer s.Close()
-	_, _ = s.db.Exec("PRAGMA foreign_keys = ON")
+	s := newYouTubeTestStore(t)
 
 	deleted, err := s.DeleteChannelAtomic("UC_nonexistent")
 	if err != nil {
@@ -764,23 +284,6 @@ func TestYouTubeChannelDeleteAtomicMissingChannel(t *testing.T) {
 	}
 	if deleted != 0 {
 		t.Errorf("expected 0 memberships deleted, got %d", deleted)
-	}
-}
-
-func TestYouTubeCacheClear(t *testing.T) {
-	s := openTestDB(t)
-	defer s.Close()
-
-	s.SetYouTubeCache("a", 1, `{}`)
-	s.SetYouTubeCache("b", 2, `{}`)
-
-	if err := s.ClearYouTubeCache(); err != nil {
-		t.Fatalf("ClearYouTubeCache failed: %v", err)
-	}
-
-	_, data, _ := s.GetYouTubeCache("a")
-	if data != "" {
-		t.Error("expected empty data after clear")
 	}
 }
 
@@ -794,8 +297,8 @@ func TestYouTubeCacheClear(t *testing.T) {
 // exists), and (b) on re-auth / re-connect, only overwrite the seed-owned
 // metadata columns (title / thumbnail_url / last_sync_at) and preserve
 // user-edited typed columns (notes / language / view_count /
-// subscriber_count / display_name / channel_url). These two tests pin
-// both contracts; regressions either way should flip a CI guard.
+// subscriber_count / display_name / channel_url). The tests below pin
+// every contract; regressions either way should flip a CI guard.
 
 // TestConnectChannelAtomic_FirstTimeConnect: the parent channel row is
 // missing at the moment the method is called. We assert that:
@@ -808,13 +311,7 @@ func TestYouTubeCacheClear(t *testing.T) {
 //     row was cascade-deleted, confirming the parent-child FK committed
 //     through the same transaction.
 func TestConnectChannelAtomic_FirstTimeConnect(t *testing.T) {
-	s := openTestDB(t)
-	defer s.Close()
-	// Force FK = ON so we exercise the missing-parent failure mode
-	// the method is meant to repair.
-	if _, err := s.db.Exec("PRAGMA foreign_keys = ON"); err != nil {
-		t.Fatalf("enable FK pragma: %v", err)
-	}
+	s := newYouTubeTestStore(t)
 
 	// Parent row absent at start.
 	if row, _ := s.GetYouTubeChannel("UC_first_connect"); row != nil {
@@ -885,11 +382,7 @@ func TestConnectChannelAtomic_FirstTimeConnect(t *testing.T) {
 //     are preserved verbatim
 //   - added_at and created_at are preserved (they are NOT in the UPDATE SET)
 func TestConnectChannelAtomic_PreservesUserEdits(t *testing.T) {
-	s := openTestDB(t)
-	defer s.Close()
-	if _, err := s.db.Exec("PRAGMA foreign_keys = ON"); err != nil {
-		t.Fatalf("enable FK pragma: %v", err)
-	}
+	s := newYouTubeTestStore(t)
 
 	// Seed an "existing" channel the way an operator would have filled
 	// it via the post-OAuth edit path (notes/language/view/sub counts are
@@ -1021,102 +514,6 @@ func TestConnectChannelAtomic_PreservesUserEdits(t *testing.T) {
 }
 
 // ============================================================
-// TestUpsertYouTubeOAuthToken_PreservesRevokedAt
-// ============================================================
-//
-// Converse pin to TestConnectChannelAtomic_ResetsRevokedAtOnReauth.
-// The OAuth-leg UPDATE in ConnectChannelAtomic resets revoked_at to
-// NULL because that path is the explicit new-auth flow (a user
-// redoing OAuth must be reactivated). The auto-refresh path goes
-// through UpsertYouTubeOAuthToken, which must NOT reset revoked_at
-// — otherwise a routine token refresh would silently un-revoke a
-// credential an operator explicitly revoked. This test pins that
-// invariant by calling UpsertYouTubeOAuthToken on a previously-
-// revoked channel and asserting revoked_at is preserved verbatim.
-func TestUpsertYouTubeOAuthToken_PreservesRevokedAt(t *testing.T) {
-	s := openTestDB(t)
-	defer s.Close()
-	_, _ = s.db.Exec("PRAGMA foreign_keys = ON")
-
-	const channel = "UC_refresh_preserves_revoke"
-	if err := s.UpsertYouTubeChannel(channel, "Refresh Preserves Revoke", "", "", "", "", "", 0, 0, "", "", ""); err != nil {
-		t.Fatalf("seed channel: %v", err)
-	}
-	if err := s.UpsertYouTubeOAuthToken(channel, []byte("orig-access"), []byte("orig-refresh"), "Bearer", "2026-01-01T00:00:00Z", "scope.read", 1); err != nil {
-		t.Fatalf("seed oauth: %v", err)
-	}
-
-	// Mark the row revoked; persistRefreshedToken will later be called
-	// on this row to simulate a token refresh.
-	if err := s.MarkYouTubeOAuthTokenRevoked(channel); err != nil {
-		t.Fatalf("MarkYouTubeOAuthTokenRevoked: %v", err)
-	}
-	row, _ := s.GetYouTubeOAuthToken(channel)
-	if row == nil {
-		t.Fatal("setup: expected oauth row present after revoke")
-	}
-	originalRevokedAt := row.RevokedAt
-	if originalRevokedAt == "" {
-		t.Fatal("setup: revoked_at empty after MarkRevoked")
-	}
-	originalUpdatedAt := row.UpdatedAt
-	if originalUpdatedAt == "" {
-		t.Fatal("setup: updated_at empty")
-	}
-
-	// Simulate the refresh path: new encrypted access blob, same key
-	// version, new expiry. The other columns that persistRefreshedToken
-	// updates (refresh_token blob, scopes) are exercised too.
-	time.Sleep(20 * time.Millisecond) // ensure updated_at advances
-	newAccess := []byte("refresh-access-encrypted")
-	newRefresh := []byte("refresh-rotated-encrypted")
-	if err := s.UpsertYouTubeOAuthToken(channel, newAccess, newRefresh, "Bearer", "2030-12-31T23:59:59Z", "scope.read", 1); err != nil {
-		t.Fatalf("Upsert after revoke: %v", err)
-	}
-
-	row, _ = s.GetYouTubeOAuthToken(channel)
-	if row == nil {
-		t.Fatal("post: expected oauth row to remain after refresh upsert")
-	}
-
-	// The crucial invariant: revoked_at is NOT touched by the refresh path.
-	if gotRevokedAt := row.RevokedAt; gotRevokedAt != originalRevokedAt {
-		t.Errorf("revoked_at was reset on refresh path (was %q, now %q); auto-refresh MUST NOT un-revoke",
-			originalRevokedAt, gotRevokedAt)
-	}
-
-	// Sanity: the access blob did get rotated (this is the whole point
-	// of the refresh), so the test is exercising the right call.
-	if !bytes.Equal(row.AccessTokenEncrypted, newAccess) {
-		t.Errorf("access blob not rotated by refresh: got %v, want %v", row.AccessTokenEncrypted, newAccess)
-	}
-	if !bytes.Equal(row.RefreshTokenEncrypted, newRefresh) {
-		t.Errorf("refresh blob not rotated by refresh: got %v, want %v", row.RefreshTokenEncrypted, newRefresh)
-	}
-	if row.Expiry != "2030-12-31T23:59:59Z" {
-		t.Errorf("expiry not updated by refresh: got %v, want 2030-12-31T23:59:59Z", row.Expiry)
-	}
-	if upd := row.UpdatedAt; upd == "" {
-		t.Error("updated_at is empty after refresh")
-	} else if upd < originalUpdatedAt {
-		t.Errorf("updated_at did not advance (was %s, now %s)", originalUpdatedAt, upd)
-	}
-
-	// And the boot hydrator's view: ListActiveYouTubeOAuthTokens must
-	// still skip this channel even though the access blob was rotated.
-	active, err := s.ListActiveYouTubeOAuthTokens()
-	if err != nil {
-		t.Fatalf("ListActive: %v", err)
-	}
-	for _, r := range active {
-		if r.ChannelID == channel {
-			t.Errorf("ListActiveYouTubeOAuthTokens should still skip the revoked-and-refreshed channel; got %v", r)
-			break
-		}
-	}
-}
-
-// ============================================================
 // TestConnectChannelAtomic_ResetsRevokedAtOnReauth:
 // ============================================================
 //
@@ -1136,9 +533,7 @@ func TestUpsertYouTubeOAuthToken_PreservesRevokedAt(t *testing.T) {
 //  5. Assert revoked_at is now "" on the stored row.
 //  6. Assert ListActiveYouTubeOAuthTokens now returns the channel.
 func TestConnectChannelAtomic_ResetsRevokedAtOnReauth(t *testing.T) {
-	s := openTestDB(t)
-	defer s.Close()
-	_, _ = s.db.Exec("PRAGMA foreign_keys = ON")
+	s := newYouTubeTestStore(t)
 
 	const channel = "UC_reauth_after_revoke"
 	if err := s.UpsertYouTubeChannel(channel, "Reauth Test", "", "", "", "", "", 0, 0, "", "", ""); err != nil {
@@ -1233,51 +628,5 @@ func TestConnectChannelAtomic_ResetsRevokedAtOnReauth(t *testing.T) {
 	}
 	if ch.ThumbnailURL != "https://img.example.com/reauth.jpg" {
 		t.Errorf("thumbnail_url not updated by re-auth atomic: got %v", ch.ThumbnailURL)
-	}
-}
-
-// ============================================================
-// (Legacy tables youtube_channel_metadata and youtube_groups
-//  were dropped by migration 008. Use canonical tables
-//  youtube_channels and youtube_groups instead.)
-// ============================================================
-
-func TestYouTubeGroupsLegacy(t *testing.T) {
-	s := openTestDB(t)
-	defer s.Close()
-
-	// Skip if legacy table doesn't exist (dropped by migration 008)
-	var exists int
-	_ = s.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='youtube_groups'`).Scan(&exists)
-	if exists == 0 {
-		t.Skip("youtube_groups table dropped by migration 008")
-	}
-
-	// Create via canonical UpsertYouTubeGroup
-	groupID, err := s.UpsertYouTubeGroup("Legacy Group", "manager", "Old description", "public")
-	if err != nil {
-		t.Fatalf("UpsertYouTubeGroup failed: %v", err)
-	}
-	_ = s.AddChannelToGroup(groupID, "UC_a")
-	_ = s.AddChannelToGroup(groupID, "UC_b")
-
-	groups, err := s.ListYouTubeGroups()
-	if err != nil {
-		t.Fatalf("ListYouTubeGroups failed: %v", err)
-	}
-	if len(groups) != 1 {
-		t.Fatalf("expected 1 legacy group, got %d", len(groups))
-	}
-	if groups[0].Name != "Legacy Group" {
-		t.Errorf("name: got %v, want %q", groups[0].Name, "Legacy Group")
-	}
-
-	// Delete via canonical DeleteYouTubeGroup
-	if err := s.DeleteYouTubeGroup(groupID); err != nil {
-		t.Fatalf("DeleteYouTubeGroup failed: %v", err)
-	}
-	groups, _ = s.ListYouTubeGroups()
-	if len(groups) != 0 {
-		t.Errorf("expected 0 groups after delete, got %d", len(groups))
 	}
 }
