@@ -57,9 +57,16 @@ patterns. They may be arbitrarily long:
 - **CI workflows themselves.** Anything under `.github/workflows/`.
   These define the verification pipeline and may grow as the
   pipeline grows.
-- **Test infra shell scripts.** `tests/e2e/**` runbook shell scripts
-  that orchestrate end-to-end setup/teardown — keep readable, do
-  not let them grow past 632 LOC without splitting.
+- **Test infra shell scripts.** `tests/e2e/**` runbook scripts ARE
+  tracked `*.sh` files and obey the same 400 / 700 warn / refactor
+  threshold as every other tracked shell script (see §1.1). They
+  are NOT exempted by `scripts/ci/check-loc-thresholds.sh`; the
+  bash gate scans `find . -name '*.sh'` with no `tests/e2e/*`
+  `-not -path` clause. The only reason
+  `tests/e2e/grpc-control-plane/run.sh` (632 LOC) does not appear
+  as a violation today is that 632 < 700. If a fixture runbook
+  grows past 700 LOC, split it by scenario (setup / teardown /
+  per-test orchestration) before pushing.
 
 ### 1.3 CI enforcement — two prongs
 
