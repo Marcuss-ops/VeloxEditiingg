@@ -915,3 +915,53 @@ The **write_file transcription bug → forward-fix** narrative: the initial writ
 ### 17.8 Tool-preference deviation note
 
 The user requested `str_replace + write_file` for the extraction. `persistence.go` was created via `write_file` ✅. The `enqueue.go` deletion pivoted to `sed -i '232,279d'` because the multi-line `str_replace` anchor for the 47-line function body failed byte-exact-match (the recurring em-dash / column-alignment pain seen in earlier rounds). Net effect: identical from a Go semantics perspective; idiom-preference deviation only.
+
+---
+
+## 18. Round 3 — post-refactor allowlist cleanup
+
+> **Snapshot:** state of `main` after the long-file refactor plan lands. The `KNOWN_VIOLATIONS` arrays in `scripts/ci/check-loc-thresholds.sh` are now empty; the LOC gate stays green with **0 warnings + 0 errors**.
+>
+> This round covers the post-§10 work: eleven explicit refactors (per the original long-file reduction plan) plus three additional baseline carry-overs. The script's arrays are kept partitioned (`KNOWN_VIOLATIONS_BASELINE` / `KNOWN_VIOLATIONS_ROUND1`) for audit-trail continuity, with a comment block in the script listing each prior entry and its landing commit.
+
+### 18.1 Refactor commits that landed in Round 3
+
+| # | File | Commit | LOC delta (before → after) | Notes |
+| --- | --- | --- | --- | --- |
+| 1 | `DataServer/internal/store/sqlite_youtube_entities_test.go` | `21c7d45` | 1 283 → 4 per-domain files (largest ~430) | channels, groups, group-channels, video/entities + `testhelpers_test.go` |
+| 2 | `DataServer/internal/store/sqlite_task_atomic_test.go` | `157ffaa` | 1 521 → 4 per-domain files | claim, accept, terminal transition, retry/requeue + shared DB helper |
+| 3 | `RemoteCodex/.../pkg/config/config_test.go` | `30bf2a4` | 1 201 → 5 per-concern files | config_load / config_defaults / config_validation / config_tls / config_env |
+| 4 | `DataServer/internal/jobs/enqueue/enqueue_test.go` | `49b3b0a` | 1 331 → 4 per-scenario files + `enqueue_helpers_test.go` | payload builder, normalization, lifecycle/commit, idempotency/routing |
+| 5 | `DataServer/internal/completion/coordinator_test.go` | `0f509cc` | 1 096 → 5 phase files + `coordinator_helpers_test.go` | declare, progress, complete-upload, commit, reconcile |
+| 6 | `RemoteCodex/.../telemetry/resource_sampler.go` | `ac4986a` | 880 → 6 domain files + facade | cpu / memory / disk / network / process / host samplers |
+| 7 | `deploy/runtime/checklist-verify.sh` | `0c95df0` | 1 067 → 7 files (orchestrator + `lib/common.sh` + 5 category) | shell refactor with `BASH_SOURCE[1]` fallback for the canary sibling lookup |
+| 8 | `scripts/cert/certify-worker-2c-2d.sh` | `18c083f` | 794 → 6 files (entrypoint + 5 phase) | bootstrap_2c, static_certificate, dynamic_handshake, master_state, evidence_verdict |
+| 9 | `DataServer/internal/store/store_creator_forwardings_lease.go` | `4071410` | 758 → 3 per-concern files | forwarding_claim, forwarding_renew, forwarding_transitions |
+| 10 | `DataServer/internal/metrics/catalog.go` | `ff24515` | 703 → 12 per-family files (largest ~165) | facade + 11 family files, assembly via `registerMetricFamily(families ...[]MetricDefinition)` |
+| 11 | `RemoteCodex/.../internal/taskrunner/runner.go` | `c3e4c65` | 696 → 5 per-concern files | runner facade + execution / upload_lifecycle / error_mapping / report_metrics |
+| 12 | `DataServer/internal/grpcserver/handler.go` | (recent grpcserver refactor series) | 936 → 8 per-domain files | handler_config / handler_session / handler_jobs / etc. |
+| 13 | `DataServer/internal/store/sqlite_task_atomic.go` | (recent store refactor series) | 939 → 4 per-domain files | split residue paired with the `sqlite_task_atomic_test.go` split (row 2 above) |
+| 14 | `docs/architecture/CURRENT-TO-TARGET-ARCHITECTURE.md` | `a8d081a` | 1 492 → 6 files (largest ~430) | main index + 5 thematic chapters (current / target / invariants / failure-recovery / distributed-rendering-roadmap) |
+
+### 18.2 KNOWN_VIOLATIONS arrays emptied
+
+- **`KNOWN_VIOLATIONS_BASELINE`**: 3 → 0 entries. The three baseline carry-overs (`CURRENT-TO-TARGET-ARCHITECTURE.md`, `checklist-verify.sh`, `certify-worker-2c-2d.sh`) have all been split (rows 7, 8, 14 above).
+- **`KNOWN_VIOLATIONS_ROUND1`**: 6 → 0 entries. All six baseline violators (`sqlite_task_atomic.go`, `handler.go`, `enqueue_test.go`, `sqlite_task_atomic_test.go`, `sqlite_youtube_entities_test.go`, `config_test.go`) have been split (rows 1–4, 12, 13 above).
+- The script's arrays remain partitioned for the audit trail. A multi-line comment block above each empty array documents the prior entries and the landing commit of each.
+
+### 18.3 Verification
+
+The post-refactor verification was run on `main` after the script update landed; see the commit message of `chore(loc): post-refactor verification` for the full per-command result summary. Headline:
+
+- `go test ./...` (full DataServer + worker-agent-go modules): PASS
+- `bash scripts/ci/check-loc-thresholds.sh`: exit 0, **0 warnings + 0 errors**
+- `bash scripts/ci/check-architecture.sh`: exit 0
+- `bash scripts/ci/check-no-legacy.sh`: exit 0
+- `bash scripts/ci/check-sql-ownership.sh`: exit 0
+- `shellcheck` on the split bash files: not available in this dev env (the CI pipeline has the canonical shellcheck job; that gate is the source of truth for the `.sh` quality of the new files).
+
+### 18.4 Forward state
+
+- No file currently exceeds the §11 policy threshold. The LOC gate stays green.
+- The next long-file entry will be a fresh `KNOWN_VIOLATIONS_ROUNDn` addendum (start a new round) when the next refactor hotspot surfaces. The §10 hotspot tables remain stale by design (they are an *initial measurement*); they will be refreshed on a Round boundary by re-running the §12 measurement commands.
+- The §15.5 cumulative hotspot table at the time of writing still lists entries from earlier rounds that have since been split; treat the table as an "initial measurement" baseline, not a current state, until the next full re-measurement.

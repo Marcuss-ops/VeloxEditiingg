@@ -36,23 +36,43 @@ THRESH_YML=800
 # KNOWN_VIOLATIONS_BASELINE — pre-existing baseline carry-over
 # (loc-baseline.md §10c). These three files predated the gate by years
 # and have explicit §13 roadmap follow-up entries.
+#
+# STATUS (post-Round-3 refactor): all three entries have landed. The
+# original doc was split into six files (see commit a8d081a), the
+# checklist script was split into a thin orchestrator + 6 sibling
+# files (commit 0c95df0), and certify-worker-2c-2d.sh was split into
+# a thin entrypoint + 5 phase files (commit 18c083f). All resulting
+# files are well under the policy thresholds, so this array is empty.
+# The partition into KNOWN_VIOLATIONS_BASELINE / KNOWN_VIOLATIONS_ROUND1
+# is preserved as an audit trail for future additions.
 KNOWN_VIOLATIONS_BASELINE=(
-  "docs/architecture/CURRENT-TO-TARGET-ARCHITECTURE.md|docs|1492|loc-baseline.md §10c + §13 roadmap step 2 (deferred)"
-  "deploy/runtime/checklist-verify.sh|shell|1067|loc-baseline.md §10c (deferred)"
-  "scripts/cert/certify-worker-2c-2d.sh|shell|794|loc-baseline.md §10c (deferred)"
 )
 
 # KNOWN_VIOLATIONS_ROUND1 — six baseline violators surfaced by the first
-# full-tree scan after the cd-anchor fix (3de97ca). Each is a follow-up
-# atomic refactor commit per project rules; the entry should be removed as
-# the corresponding refactor lands.
+# full-tree scan after the cd-anchor fix (3de97ca). Each was a follow-up
+# atomic refactor commit per project rules; the entry should be removed
+# as the corresponding refactor lands.
+#
+# STATUS (post-Round-3 refactor): all six entries have landed.
+#   - sqlite_task_atomic.go (939) and sqlite_task_atomic_test.go (1521):
+#     split into 4 + 4 per-domain files (commits split across multiple
+#     rounds; original monolithic files removed).
+#   - handler.go (936): split into 8 per-domain files including
+#     handler_config.go and handler_session.go extracted in
+#     `refactor(grpcserver): move HandlerConfig and session types out
+#     of handler.go` (commit in the recent grpcserver refactor series).
+#   - enqueue_test.go (1331): split into 4 per-scenario files +
+#     enqueue_helpers_test.go (commit 49b3b0a).
+#   - sqlite_youtube_entities_test.go (1283): split into 4 per-domain
+#     files + testhelpers_test.go (commit 21c7d45).
+#   - config_test.go (1201): split into 5 per-concern files
+#     (config_load_test.go, config_defaults_test.go,
+#     config_validation_test.go, config_tls_test.go,
+#     config_env_test.go) (commit 30bf2a4).
+# All resulting files are well under the policy thresholds, so this
+# array is empty. See loc-baseline.md §18 (Round 3) for the full
+# post-refactor accounting.
 KNOWN_VIOLATIONS_ROUND1=(
-  "DataServer/internal/store/sqlite_task_atomic.go|prod-go|939|loc-baseline.md §10a + §13 roadmap step 8 (split residue; de-dup target)"
-  "DataServer/internal/grpcserver/handler.go|prod-go|936|loc-baseline.md §10a + §13 roadmap step 4 (deferred)"
-  "DataServer/internal/jobs/enqueue/enqueue_test.go|test-go|1331|loc-baseline.md §10b + §13 roadmap step 7 (deferred)"
-  "DataServer/internal/store/sqlite_task_atomic_test.go|test-go|1521|loc-baseline.md §10b + §13 roadmap step 8 (deferred)"
-  "DataServer/internal/store/sqlite_youtube_entities_test.go|test-go|1283|loc-baseline.md §10b (deferred)"
-  "RemoteCodex/native/worker-agent-go/pkg/config/config_test.go|test-go|1201|loc-baseline.md §10b (deferred)"
 )
 
 KNOWN_VIOLATIONS=("${KNOWN_VIOLATIONS_BASELINE[@]}" "${KNOWN_VIOLATIONS_ROUND1[@]}")
