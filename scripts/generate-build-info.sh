@@ -68,11 +68,11 @@ PROTOCOL_VERSION="2026-06-worker-v1"
 # we need ${VERSION}, ${GIT_COMMIT}, etc. to resolve at runtime.
 GENERATED_JSON=$(cat <<JSON
 {
-  "version": "v${VERSION}",
+  "version": "${VERSION}",
   "git_commit": "${GIT_COMMIT}",
   "source_hash": "${SOURCE_HASH}",
   "protocol_version": "${PROTOCOL_VERSION}",
-  "engine_version": "v${VERSION}",
+  "engine_version": "${VERSION}",
   "platform": "${PLATFORM}",
   "arch": "${ARCH}",
   "built_at": "${BUILT_AT}"
@@ -90,7 +90,7 @@ if [[ "$CHECK_MODE" == "true" ]]; then
   # Extract on-disk version via single-line python3 (avoids multi-line python -c escaping).
   # Compare against the canonical VERSION.txt (prefixed with v).
   DISK_VER="$(python3 -c "import json,sys; print(json.load(open('${TARGET}')).get('version',''))" 2>/dev/null || echo "")"
-  EXPECTED_VER="v${VERSION}"
+  EXPECTED_VER="${VERSION}"
   if [[ "$DISK_VER" != "$EXPECTED_VER" ]]; then
     echo "[gen-build-info] CHECK FAIL: BUILD_INFO.json version drifts from VERSION.txt" >&2
     echo "  on-disk version:  ${DISK_VER}" >&2
@@ -109,8 +109,8 @@ chmod 0644 "$TMP"
 mv -f "$TMP" "$TARGET"
 
 echo "[gen-build-info] wrote ${TARGET}"
-echo "  version:        v${VERSION}"
-echo "  engine_version: v${VERSION}"
+echo "  version:        ${VERSION}"
+echo "  engine_version: ${VERSION}"
 echo "  git_commit:     ${GIT_COMMIT}"
 echo "  source_hash:    ${SOURCE_HASH}"
 echo "  protocol:       ${PROTOCOL_VERSION}"

@@ -192,7 +192,7 @@ fi
 if [[ -f RemoteCodex/BUILD_INFO.json ]]; then
   build_info_version="$(python3 -c "import json,sys; print(json.load(open('RemoteCodex/BUILD_INFO.json')).get('version',''))" 2>/dev/null || echo "")"
   version_txt="$(tr -d '[:space:]' < VERSION.txt)"
-  expected="v${version_txt}"
+  expected="${version_txt}"
   if [[ "$build_info_version" != "$expected" ]]; then
     cat >&2 <<VIOLATION
 BUILD_INFO.json version drift:
