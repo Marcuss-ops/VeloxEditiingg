@@ -181,6 +181,12 @@ message TaskResult {
   int32 report_schema_version = 16;
   int32 report_version = 17;
   string report_hash = 18;
+
+  // Partial phase metrics captured when an attempt fails before all phases
+  // complete. Stored in task_phase_timings with status='PARTIAL' or
+  // 'FAILED' so the master can diagnose which phase/component caused the
+  // failure without losing the timings of the work already done.
+  repeated PhaseTimingDetailed partial_phase_metrics = 19;
 }
 
 message TaskLeaseRenewal {
@@ -206,6 +212,27 @@ message PhaseMarker {
   google.protobuf.Timestamp completed_at = 3;
   string status = 4;
   string notes = 5;
+}
+
+// PhaseTimingDetailed is the rich, per-phase record emitted when an
+// attempt terminates before all phases complete. It carries enough
+// context (component, action, byte/frame counters, error code) to
+// diagnose failures while reusing the same task_phase_timings storage
+// as successful attempts.
+message PhaseTimingDetailed {
+  int32 phase_order = 1;
+  string component = 2;
+  string action = 3;
+  google.protobuf.Timestamp started_at = 4;
+  google.protobuf.Timestamp completed_at = 5;
+  int64 duration_ms = 6;
+  string status = 7;
+  string error_code = 8;
+  string error_message = 9;
+  int64 bytes_in = 10;
+  int64 bytes_out = 11;
+  int64 frames = 12;
+  string metadata_json = 13;
 }
 
 message ArtifactUploaded {
@@ -563,6 +590,17 @@ message TaskExecutionMetrics {
   int64 blob_cache_hit_count = 41;
   int64 blob_cache_miss_count = 42;
   int64 render_cache_hit_count = 43;
+
+  // Scorecard v2 / Step 18: failure attribution and partial-progress
+  // counters for FAILED attempts. wasted_cpu_ms and wasted_download_bytes
+  // capture resources consumed before failure; completed_segments reports
+  // how many segments finished before the attempt stopped;
+  // error_component/error_phase classify the failure root cause.
+  int64 wasted_cpu_ms = 44;
+  int64 wasted_download_bytes = 45;
+  int32 completed_segments = 46;
+  string error_component = 47;
+  string error_phase = 48;
 }
 
 // WorkerResourceCounters is the typed payload of Heartbeat.resources.

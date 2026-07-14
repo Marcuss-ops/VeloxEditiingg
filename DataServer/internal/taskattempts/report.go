@@ -139,6 +139,7 @@ type AttemptMetrics struct {
 	// Scorecard v2 / Step 12: input context for normalization.
 	SceneCount             int     `json:"scene_count"`
 	SegmentCount           int     `json:"segment_count"`
+	CompletedSegments      int     `json:"completed_segments"`
 	TotalInputDurationSec  float64 `json:"total_input_duration_sec"`
 	ResolutionWidth        int     `json:"resolution_width"`
 	ResolutionHeight       int     `json:"resolution_height"`

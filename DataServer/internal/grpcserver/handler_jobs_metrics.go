@@ -30,6 +30,7 @@ package grpcserver
 import (
 	"log"
 	"sync"
+	"time"
 
 	"velox-server/internal/taskattempts"
 
@@ -139,7 +140,58 @@ func executionMetricsToAttemptMetrics(attemptID string, em *pb.TaskExecutionMetr
 	am.BlobCacheMissCount = em.GetBlobCacheMissCount()
 	am.RenderCacheHitCount = em.GetRenderCacheHitCount()
 
+	// Scorecard v2 / Step 18: failure attribution and partial-progress
+	// counters for FAILED attempts.
+	am.WastedCPUMS = em.GetWastedCpuMs()
+	am.WastedDownloadBytes = em.GetWastedDownloadBytes()
+	am.CompletedSegments = int(em.GetCompletedSegments())
+	am.ErrorComponent = em.GetErrorComponent()
+	am.ErrorPhase = em.GetErrorPhase()
+
 	return am
+}
+
+// partialPhaseTimingsFromProto maps the worker's partial phase metrics
+// (captured when an attempt fails before all phases complete) onto the
+// canonical taskattempts.PhaseTimingDetailed shape. Empty or nil input
+// returns nil.
+func partialPhaseTimingsFromProto(attemptID, taskID, jobID, workerID string, protoTimings []*pb.PhaseTimingDetailed) []taskattempts.PhaseTimingDetailed {
+	if len(protoTimings) == 0 {
+		return nil
+	}
+	timings := make([]taskattempts.PhaseTimingDetailed, 0, len(protoTimings))
+	for _, pt := range protoTimings {
+		if pt == nil {
+			continue
+		}
+		var startedAt, completedAt time.Time
+		if s := pt.GetStartedAt(); s != nil {
+			startedAt = s.AsTime()
+		}
+		if c := pt.GetCompletedAt(); c != nil {
+			completedAt = c.AsTime()
+		}
+		timings = append(timings, taskattempts.PhaseTimingDetailed{
+			AttemptID:    attemptID,
+			TaskID:       taskID,
+			JobID:        jobID,
+			WorkerID:     workerID,
+			PhaseOrder:   int(pt.GetPhaseOrder()),
+			Component:    pt.GetComponent(),
+			Action:       pt.GetAction(),
+			StartedAt:    startedAt,
+			CompletedAt:  completedAt,
+			DurationMS:   pt.GetDurationMs(),
+			Status:       pt.GetStatus(),
+			ErrorCode:    pt.GetErrorCode(),
+			ErrorMessage: pt.GetErrorMessage(),
+			BytesIn:      pt.GetBytesIn(),
+			BytesOut:     pt.GetBytesOut(),
+			Frames:       pt.GetFrames(),
+			MetadataJSON: pt.GetMetadataJson(),
+		})
+	}
+	return timings
 }
 
 // deriveCacheStats builds the per-attempt cache snapshot the persistence

@@ -116,6 +116,10 @@ type IngestResultCommand struct {
 	ReportSchemaVersion int32
 	ReportVersion       int32
 	ReportHash          string
-	// Scorecard v2 / Step 17: per-segment C++ sidecar timings.
+	// Scorecard v2 / Step 18: per-segment C++ sidecar timings.
 	SegmentTimings []taskattempts.SegmentTiming
+	// Scorecard v2 / Step 18: partial phase metrics captured when an
+	// attempt fails before all phases complete. Stored in
+	// task_phase_timings with status='PARTIAL' or 'FAILED'.
+	PartialPhaseMetrics []taskattempts.PhaseTimingDetailed
 }

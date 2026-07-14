@@ -94,6 +94,9 @@ type IngestCommand struct {
 	ReportHash          string
 	// Scorecard v2 / Step 17: per-segment C++ sidecar timings.
 	SegmentTimings []taskattempts.SegmentTiming
+	// Scorecard v2 / Step 18: partial phase metrics captured when an
+	// attempt fails before all phases complete.
+	PartialPhaseMetrics []taskattempts.PhaseTimingDetailed
 }
 
 // DeclaredArtifact is one worker-claimed artifact. Mirrors the proto
@@ -387,7 +390,9 @@ func (s *TaskReportIngestionService) IngestTaskResult(ctx context.Context, cmd I
 		ReportVersion:       cmd.ReportVersion,
 		ReportHash:          cmd.ReportHash,
 		// Scorecard v2 / Step 17: per-segment C++ sidecar timings.
-		SegmentTimings: cmd.SegmentTimings,
+		SegmentTimings:      cmd.SegmentTimings,
+		// Scorecard v2 / Step 18: partial phase metrics for FAILED attempts.
+		PartialPhaseMetrics: cmd.PartialPhaseMetrics,
 	})
 
 	// fix/atomic-ingestion: IngestTaskResultAtomic succeeded — the Task +

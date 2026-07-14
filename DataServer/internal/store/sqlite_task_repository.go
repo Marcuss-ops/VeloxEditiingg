@@ -997,7 +997,8 @@ func (r *SQLiteTaskRepository) IngestTaskResultAtomic(ctx context.Context, cmd t
 				asset_cache_hit_count, asset_cache_miss_count,
 				blob_cache_hit_count, blob_cache_miss_count,
 				render_cache_hit_count,
-				output_sha256
+				output_sha256,
+				completed_segments
 			) VALUES (			?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
@@ -1006,7 +1007,7 @@ func (r *SQLiteTaskRepository) IngestTaskResultAtomic(ctx context.Context, cmd t
 			          ?, ?, ?, ?, ?,
 			          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			          ?, ?, ?, ?, ?,
-			          ?, ?, ?, ?, ?)`,
+			          ?, ?, ?, ?, ?, ?)`,
 			cmd.Metrics.AttemptID, cmd.Metrics.InputBytes, cmd.Metrics.OutputBytes,
 			cmd.Metrics.BytesFromDrive, cmd.Metrics.BytesFromBlobstore, cmd.Metrics.BytesFromLocalCache,
 			cmd.Metrics.CPUTimeMS, cmd.Metrics.GPUTimeMS, cmd.Metrics.PeakRSSBytes, cmd.Metrics.PeakVRAMBytes,
@@ -1042,6 +1043,7 @@ func (r *SQLiteTaskRepository) IngestTaskResultAtomic(ctx context.Context, cmd t
 			cmd.Metrics.BlobCacheHitCount, cmd.Metrics.BlobCacheMissCount,
 			cmd.Metrics.RenderCacheHitCount,
 			cmd.Metrics.OutputSHA256,
+			cmd.Metrics.CompletedSegments,
 		)
 		if err != nil {
 			return fmt.Errorf("task ingest atomic metrics: %w", err)
@@ -1141,7 +1143,46 @@ func (r *SQLiteTaskRepository) IngestTaskResultAtomic(ctx context.Context, cmd t
 		}
 	}
 
-	// 8. Persist the raw worker report payload for audit/replay.
+	// 8. Persist partial phase metrics for FAILED attempts.
+	//    These capture per-phase progress before the attempt stopped,
+	//    stored in task_phase_timings with the detailed schema.
+	if len(cmd.PartialPhaseMetrics) > 0 {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM task_phase_timings WHERE attempt_id = ?`, cmd.AttemptID); err != nil {
+			return fmt.Errorf("task ingest atomic partial phase timings delete: %w", err)
+		}
+		nowPhase := time.Now().UTC().Format(time.RFC3339)
+		for _, pt := range cmd.PartialPhaseMetrics {
+			startedAt := nowPhase
+			completedAt := nowPhase
+			if !pt.StartedAt.IsZero() {
+				startedAt = pt.StartedAt.UTC().Format(time.RFC3339)
+			}
+			if !pt.CompletedAt.IsZero() {
+				completedAt = pt.CompletedAt.UTC().Format(time.RFC3339)
+			}
+			phase := pt.Component + "." + pt.Action
+			if phase == "." {
+				phase = "unknown"
+			}
+			_, err := tx.ExecContext(ctx,
+				`INSERT INTO task_phase_timings (
+					attempt_id, phase, duration_ms, wall_start, wall_end,
+					phase_order, component, action,
+					status, error_code, error_message,
+					bytes_in, bytes_out, frames, metadata_json
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				cmd.AttemptID, phase, pt.DurationMS, startedAt, completedAt,
+				pt.PhaseOrder, pt.Component, pt.Action,
+				pt.Status, pt.ErrorCode, pt.ErrorMessage,
+				pt.BytesIn, pt.BytesOut, pt.Frames, pt.MetadataJSON,
+			)
+			if err != nil {
+				return fmt.Errorf("task ingest atomic partial phase timing insert %s: %w", phase, err)
+			}
+		}
+	}
+
+	// 9. Persist the raw worker report payload for audit/replay.
 	//    Re-ingestion with the same attempt_id + report_hash is idempotent.
 	//    A different hash for the same attempt_id is a conflict and aborts
 	//    the transaction, preserving the immutable attempt history.
