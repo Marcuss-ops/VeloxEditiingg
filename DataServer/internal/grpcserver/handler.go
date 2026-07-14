@@ -945,45 +945,7 @@ func (s *workerSession) invalidateExecutor(key placement.ExecutorKey) {
 
 // extractPeerIP extracts the client IP address from the gRPC stream context
 // without the port (if possible).
-func (h *Handler) extractPeerIP(stream grpc.ServerStream) string {
-	p, ok := peer.FromContext(stream.Context())
-	if !ok {
-		return ""
-	}
-	addr := p.Addr.String()
-	if host, _, err := net.SplitHostPort(addr); err == nil {
-		return host
-	}
-	return addr
-}
-
 // extractWorkerIDFromStream extracts the worker identity from the client TLS certificate.
-func (h *Handler) extractWorkerIDFromStream(stream grpc.ServerStream) string {
-	p, ok := peer.FromContext(stream.Context())
-	if !ok {
-		return ""
-	}
-
-	tlsInfo, ok := p.AuthInfo.(credentials.TLSInfo)
-	if !ok {
-		return ""
-	}
-
-	if len(tlsInfo.State.PeerCertificates) == 0 {
-		return ""
-	}
-
-	clientCert := tlsInfo.State.PeerCertificates[0]
-	cn := clientCert.Subject.CommonName
-	if cn == "" {
-		if len(clientCert.DNSNames) > 0 {
-			cn = clientCert.DNSNames[0]
-		}
-	}
-
-	return strings.TrimSpace(cn)
-}
-
 // SetIngestionSvc installs the canonical TaskReportIngestionService so
 // handleTaskResult can delegate to it. Bootstrap calls this immediately
 // after NewHandler to wire the audit closure. Setting nil clears the
@@ -1035,48 +997,3 @@ func (h *Handler) ingestionService() *ingest.TaskReportIngestionService {
 //
 // Nil dbStore is safe: returns nil (skip validation) — this lets protocol-
 // level tests and boot-dry-run handlers operate without a live DB handle.
-func (h *Handler) validateCredentialHash(workerID string, declaredHash string) error {
-	if h.dbStore == nil {
-		return nil
-	}
-	// Check if this worker has a stored credential
-	hasCred, err := h.dbStore.HasWorkerCredential(workerID)
-	if err != nil {
-		log.Printf("[GRPC] Credential lookup failed for worker %s: %v", workerID, err)
-		if h.config.AllowInsecure {
-			return nil
-		}
-		return fmt.Errorf("credential lookup failed for %s", workerID)
-	}
-
-	if !hasCred {
-		// First registration: store the credential if one is provided
-		if declaredHash != "" {
-			if err := h.dbStore.SetWorkerCredential(workerID, declaredHash); err != nil {
-				return fmt.Errorf("store initial credential: %w", err)
-			}
-			log.Printf("[GRPC] Worker %s: initial credential stored", workerID)
-			return nil
-		}
-		if h.config.AllowInsecure {
-			log.Printf("[GRPC] Worker %s: no credential — allowing in insecure dev mode", workerID)
-			return nil
-		}
-		return fmt.Errorf("worker %s: credential required", workerID)
-	}
-
-	// Stored credential exists — validate the declared hash
-	if declaredHash == "" {
-		return fmt.Errorf("worker %s: credential required (existing credential stored)", workerID)
-	}
-
-	valid, err := h.dbStore.ValidateWorkerCredential(workerID, declaredHash)
-	if err != nil {
-		return fmt.Errorf("validate credential: %w", err)
-	}
-	if !valid {
-		return fmt.Errorf("worker %s: credential hash mismatch", workerID)
-	}
-
-	return nil
-}
