@@ -22,7 +22,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -227,54 +226,6 @@ func (e *Enqueuer) prepareJobAndTask(ctx context.Context, payloadMap map[string]
 	// real run.
 
 	return job, spec, priority, nil
-}
-
-// compileSceneVideoJob builds a canonical *jobs.Job and *taskgraph.TaskSpec
-// from a normalized scene-video payload. The caller owns the atomic creation.
-func compileSceneVideoJob(normalized map[string]interface{}, req costmodel.JobRequirements) (*jobs.Job, *taskgraph.TaskSpec, int) {
-	jobID, _ := normalized["job_id"].(string)
-	videoName, _ := normalized["video_name"].(string)
-	projectID, _ := normalized["project_id"].(string)
-	jobRunID, _ := normalized["job_run_id"].(string)
-	if jobRunID == "" {
-		jobRunID, _ = normalized["run_id"].(string)
-	}
-	jobType, _ := normalized["job_type"].(string)
-	if jobType == "" {
-		jobType = "process_video"
-	}
-	priority := payload.EnsureInt(normalized["priority"], 5)
-
-	raw, _ := json.Marshal(normalized)
-
-	job := &jobs.Job{
-		ID:        jobID,
-		Type:      jobType,
-		Status:    jobs.StatusPending,
-		VideoName: videoName,
-		ProjectID: projectID,
-		RunID:     jobRunID,
-		// MaxRetries is set by extractPlanMaxRetry (single writer on
-		// the insert path). Left at 0 here so the owner is explicit.
-		MaxRetries:   0,
-		Payload:      string(raw),
-		Requirements: req,
-	}
-
-	executorID := "scene.composite.v1"
-	if resolved := resolveInternalExecutorID(normalized); resolved != "" {
-		executorID = resolved
-	}
-
-	spec := &taskgraph.TaskSpec{
-		Version:              taskgraph.SpecVersion,
-		JobID:                jobID,
-		ExecutorID:           executorID,
-		Payload:              normalized,
-		RequiredCapabilities: resolveRequiredCapabilities(executorID),
-	}
-
-	return job, spec, priority
 }
 
 func buildSceneVideoResponse(normalized map[string]interface{}) map[string]interface{} {
