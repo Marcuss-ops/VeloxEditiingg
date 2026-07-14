@@ -82,7 +82,7 @@ func (r *SQLiteTaskRepository) AreDependenciesSatisfied(ctx context.Context, dep
 //
 // Query: SELECT task_id, job_id, revision, priority, created_at,
 // executor_id, executor_version FROM tasks WHERE status='READY'
-// AND (worker_id='' OR worker_id IS NULL) ORDER BY priority DESC,
+// AND (worker_id=” OR worker_id IS NULL) ORDER BY priority DESC,
 // created_at ASC LIMIT ?.
 //
 // limit <= 0 falls back to a safe default (placementCandidateBatch = 64).

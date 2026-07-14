@@ -105,7 +105,7 @@ type Collector struct {
 	masterOutboxPending *Family
 	heartbeatAge        *Family // per worker; emitted on each refresh
 
-		// Single counter family with labels {error_code, component, phase}
+	// Single counter family with labels {error_code, component, phase}
 	// for failure-reason attribution. error_code is the canonical
 	// closed-enum code (CanonicalErrorCode); component/phase are
 	// low-cardinality enums (CanonicalErrorComponents / CanonicalErrorPhases).

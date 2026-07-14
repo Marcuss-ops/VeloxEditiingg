@@ -124,4 +124,3 @@ func (h *Handler) extractWorkerIDFromStream(stream grpc.ServerStream) string {
 
 	return strings.TrimSpace(cn)
 }
-

@@ -109,4 +109,3 @@ func scanTask(row interface{ Scan(...interface{}) error }) (*taskgraph.Task, err
 
 // placementCandidateBatch is the default limit for ListReadyCandidates.
 const placementCandidateBatch = 64
-

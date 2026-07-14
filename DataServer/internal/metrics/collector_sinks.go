@@ -9,10 +9,10 @@
 // Three sink contracts live here:
 //
 //   - PlacementRejectionSink  (gRPC handler matches candidates skipped
-//                              by the placement matcher)
+//     by the placement matcher)
 //   - ConflictBudgetSink      (local interface mirrored in completion
-//                              package; the conflict-state-machine
-//                              triplet Reset/Observe/Escalate)
+//     package; the conflict-state-machine
+//     triplet Reset/Observe/Escalate)
 //   - IncReconcile / IncCommitDeadlineExceeded counters wired to
 //     the completion reconcile supervisor
 //   - RecordErrorClassification (Scorecard v2 / Step 13) stamps the
