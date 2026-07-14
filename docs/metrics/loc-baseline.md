@@ -149,7 +149,7 @@ remote/workers/management        219  | ###
 remote/workers/assets            208  | ###
 server/groups                    174  | ###
 remote/workers/sse               147  | ##
-<root> (orphan .go files  in handlers/)  144  | ##
+<root> (orphan .go files in handlers/)  144  | ##
 web/explorer                    138  | ##
 server/jobs                      137  | ##
 web/spa                          68  | ##
@@ -550,7 +550,8 @@ for area in scripts docs deploy shared; do
   echo "## $area"
   case "$area" in
     scripts|deploy) pattern='*.sh'; pattern2='*.py' ;;
-    docs|shared)    pattern='*.md'; pattern2='*.go' ;;
+    docs)           pattern='*.md' ;;
+    shared)         pattern='*.go'; pattern2='*.proto' ;;
   esac
   for d in $(ls -d $area/*/ 2>/dev/null); do
     total=$(find "$d" -type f \( -name "$pattern" -o -name "$pattern2" \) \
@@ -566,7 +567,7 @@ done
 
 ## 13. Next steps (roadmap)
 
-1. **Wire CI LOC gate** — add `.golangci.yml` `funlen` rule (Go) and a per-file-length check for `.sh`/`.md`/`.yml` in CI.
+1. **Wire CI LOC gate** — add `.golangci.yml` `funlen` rule (Go) and a per-file-length check for `.sh`/`.md`/`.yml` in CI; tracked under `docs/metrics/loc-todo.md` in the next step.
 2. **Refactor `DataServer/internal/store/sqlite_task_repository.go`** (2 045 LOC) — split per domain, keep public API identical.
 3. **Refactor `DataServer/internal/metrics/{collector.go,supervisor.go}`** — extract sub-aggregators under `metrics/<sub>/`.
 4. **Refactor `DataServer/internal/grpcserver/handler.go`** — one file per RPC service family.
