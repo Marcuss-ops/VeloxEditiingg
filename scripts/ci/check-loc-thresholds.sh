@@ -54,15 +54,23 @@ KNOWN_VIOLATIONS_BASELINE=(
 # as the corresponding refactor lands.
 #
 # STATUS (post-Round-3 refactor): all six entries have landed.
-#   - sqlite_task_atomic.go (939) and sqlite_task_atomic_test.go (1521):
-#     split into 4 + 4 per-domain files (commits split across multiple
-#     rounds; original monolithic files removed).
-#   - handler.go (936): split into 8 per-domain files including
-#     handler_config.go and handler_session.go extracted in
-#     `refactor(grpcserver): move HandlerConfig and session types out
-#     of handler.go` (commit in the recent grpcserver refactor series).
+#   - sqlite_task_atomic.go (939): extracted to its own file in
+#     commit f97a9ab (`refactor(store): extract sqlite_task_atomic.go
+#     from sqlite_task_repository.go (4/4)`); since then split
+#     into 4 per-domain files (paired with the test split below).
+#     The original monolithic sqlite_task_atomic.go was removed in
+#     the same series.
+#   - handler.go (936): split into 8 per-domain files via the
+#     recent grpcserver refactor series — primary commit
+#     6ea9d96 (`refactor(grpcserver): split handler.go into
+#     domain-specific files`), with handler_config.go and
+#     handler_session.go extracted in 90ca50f
+#     (`refactor(grpcserver): move HandlerConfig and session types
+#     out of handler.go`).
 #   - enqueue_test.go (1331): split into 4 per-scenario files +
 #     enqueue_helpers_test.go (commit 49b3b0a).
+#   - sqlite_task_atomic_test.go (1521): split into 4 per-domain
+#     files (commit 157ffaa).
 #   - sqlite_youtube_entities_test.go (1283): split into 4 per-domain
 #     files + testhelpers_test.go (commit 21c7d45).
 #   - config_test.go (1201): split into 5 per-concern files

@@ -951,17 +951,26 @@ The user requested `str_replace + write_file` for the extraction. `persistence.g
 
 ### 18.3 Verification
 
-The post-refactor verification was run on `main` after the script update landed; see the commit message of `chore(loc): post-refactor verification` for the full per-command result summary. Headline:
+The post-refactor verification was run on `main` after the script update landed. Headline:
 
 - `go test ./...` (full DataServer + worker-agent-go modules): PASS
 - `bash scripts/ci/check-loc-thresholds.sh`: exit 0, **0 warnings + 0 errors**
 - `bash scripts/ci/check-architecture.sh`: exit 0
 - `bash scripts/ci/check-no-legacy.sh`: exit 0
-- `bash scripts/ci/check-sql-ownership.sh`: exit 0
-- `shellcheck` on the split bash files: not available in this dev env (the CI pipeline has the canonical shellcheck job; that gate is the source of truth for the `.sh` quality of the new files).
+- `bash scripts/ci/check-sql-ownership.sh`: **FAIL — 28 violations** in
+  `DataServer/internal/artifacts/` (the `artifacts` package imports
+  `database/sql` and references `*sql.DB` / `*sql.Tx` outside the
+  canonical store/completion allowlist). These violations are
+  pre-existing — they predate the Round-3 LOC refactor — and are
+  scheduled as a separate follow-up (see §18.4). They are NOT caused
+  by this round's splits.
+- `shellcheck` on the split bash files: not available in this dev env
+  (the CI pipeline has the canonical shellcheck job; that gate is the
+  source of truth for the `.sh` quality of the new files).
 
 ### 18.4 Forward state
 
 - No file currently exceeds the §11 policy threshold. The LOC gate stays green.
 - The next long-file entry will be a fresh `KNOWN_VIOLATIONS_ROUNDn` addendum (start a new round) when the next refactor hotspot surfaces. The §10 hotspot tables remain stale by design (they are an *initial measurement*); they will be refreshed on a Round boundary by re-running the §12 measurement commands.
 - The §15.5 cumulative hotspot table at the time of writing still lists entries from earlier rounds that have since been split; treat the table as an "initial measurement" baseline, not a current state, until the next full re-measurement.
+- `check-sql-ownership.sh` reports 28 pre-existing violations in `DataServer/internal/artifacts/`. The `artifacts` package currently reaches across the canonical SQL gateway boundary by importing `database/sql` and using `*sql.DB` / `*sql.Tx` types in fields and constructor signatures (e.g. `chunked.go`, `job_delivery_counter.go`, `reconciler.go`, `service.go`, `sqlite_artifact_reader.go`, `sqlite_finalize_writer.go`). The fix is an interface-only refactor: introduce a consumer-owned `ArtifactRepository` interface in the `artifacts` package, route the concrete `*SQLiteStore` (or a dedicated `*ArtifactReader` / `*ArtifactWriter` wrapper) through composition root, and let the package tests use a fake. Tracked as a Round-4 candidate.
