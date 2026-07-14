@@ -26,6 +26,8 @@
 
 > Pipeline/ is currently empty in this snapshot (0 LOC tracked). If reintroduced it must be re-measured.
 
+> **Note on totals.** "Total measured LOC (top-level areas) = 198 439" is the sum of the per-area rows in §2 (each row measured by file extensions within its top-level directory). The per-language rows above are computed by walking the whole repository root for each extension (`.go`, `.sh`, `.md`, `.yml`, …). They cover a wider universe (including files outside the seven top-level areas) so they sum to a larger number (~211 661). Both views are correct; the per-area figure is the canonical measure used by §3–§9.
+
 ---
 
 ## 2. Heatmap — LOC per top-level area
@@ -56,7 +58,7 @@ Pipeline                                 0  |
 
 ## 3. Heatmap — DataServer/internal per package
 
-Top-15 packages. Bar scaled to max (`store` = 27 259).
+Per top-level sub-package inside `DataServer/internal`. Bar scaled to max (`store` = 27 259). The ASCII block above shows the 15 largest sub-packages for visual density; the table below is exhaustive (every direct-child sub-package found by `DataServer/internal/*/`).
 
 ```
 store                27259  | ##################################################
@@ -120,53 +122,77 @@ assets                1641  | ###
 
 ### 3a. Heatmap — DataServer/internal/handlers (sottopackage)
 
+Every Go file path encountered by `os.walk` under `DataServer/internal/handlers` is bucketed into its deepest file-bearing directory. Rows are listed top-down (parents first, then leaves). Bar scaled to max (`server/youtube` = 2 811). Sum of all rows = **21 235 LOC**, exactly matching the §3 `handlers` package total.
+
 ```
-server/youtube         2811  | ##################################################
-remote/ansible         2049  | ####################################
-server/darkeditor      1658  | ###############################
-server/api             1466  | ##########################
-server/drive           1485  | ##########################
-server/calendar        1399  | ########################
-server/pipeline         994  | ##################
-server/script           922  | ################
-remote/workers         1413  | ##########################
-remote/livestream       352  | ######
-server/audit            305  | #####
-server/smoke           255   | ####
-remote/install         240   | ####
-server/jobs            137   | ##
-server/groups          174   | ###
-remote (top-level)       0   |
-server (top-level)       0   |
-web (top-level)          0   |
-web/proxy              233   | ####
-web/explorer           138   | ##
-web/spa                 68   | ##
-server/health           11   | ##
+server/youtube                  2811  | ##################################################
+remote/ansible                  2049  | ####################################
+server/darkeditor               1658  | ###############################
+server/darkeditor/processors    1185  | ######################
+server/drive                    1485  | ##########################
+server/api                      1466  | ##########################
+remote/workers                  1413  | ##########################
+remote/workers/lifecycle         949  | ##################
+remote/workers/uploads           741  | #############
+server/calendar                 1399  | ########################
+server/pipeline                  994  | ##################
+server/script                    922  | ################
+server/youtube/creative          700  | ############
+server/youtube/videos            584  | ##########
+remote/livestream                352  | ######
+server/audit                     305  | #####
+server/smoke                     255  | ####
+remote/workers/validation        248  | ####
+remote/install                   240  | ####
+web/proxy                        233  | ####
+remote/workers/management        219  | ###
+remote/workers/assets            208  | ###
+server/groups                    174  | ###
+remote/workers/sse               147  | ##
+<root> (orphan .go files  in handlers/)  144  | ##
+web/explorer                    138  | ##
+server/jobs                      137  | ##
+web/spa                          68  | ##
+server/health                    11  | ##
 ```
 
 | Sub-package | LOC |
 | --- | ---: |
 | server/youtube | 2 811 |
+| server/youtube/creative | 700 |
+| server/youtube/videos | 584 |
 | remote/ansible | 2 049 |
-| darkeditor | 1 658 |
-| api | 1 466 |
-| drive | 1 485 |
+| server/darkeditor | 1 658 |
+| server/darkeditor/processors | 1 185 |
+| server/drive | 1 485 |
+| server/api | 1 466 |
 | remote/workers | 1 413 |
-| calendar | 1 399 |
-| pipeline | 994 |
-| script | 922 |
-| livestream | 352 |
-| audit | 305 |
-| smoke | 255 |
-| install | 240 |
-| groups | 174 |
-| jobs | 137 |
-| explorer | 138 |
+| remote/workers/lifecycle | 949 |
+| remote/workers/uploads | 741 |
+| remote/workers/validation | 248 |
+| remote/workers/management | 219 |
+| remote/workers/assets | 208 |
+| remote/workers/sse | 147 |
+| server/calendar | 1 399 |
+| server/pipeline | 994 |
+| server/script | 922 |
+| remote/livestream | 352 |
+| server/audit | 305 |
+| server/smoke | 255 |
+| remote/install | 240 |
+| web/proxy | 233 |
+| server/groups | 174 |
+| `<root>` (orphan `.go` files in `handlers/`) | 144 |
+| web/explorer | 138 |
+| server/jobs | 137 |
 | web/spa | 68 |
-| health | 11 |
+| server/health | 11 |
+| **Total** | **21 235** |
 
-> Note: `server`, `remote`, `web` root packages register 0 LOC at this depth because they only delegate to sub-packages (no top-level `.go` file).
+> Notes:
+> * The `<root>` row is `.go` files that live directly in `DataServer/internal/handlers/` (no subpackage).
+> * Sub-directories that contain their own `.go` files are listed as independent rows; they are **not** already summed into the parent row above them. To compute the cost of e.g. the whole `server/darkeditor/` subtree, add `server/darkeditor` and `server/darkeditor/processors`.
+> * Earlier draft of this section used `find -maxdepth` and family and under-counted several intermediate leaves (showing e.g. `darkeditor = 1 658` only). This version uses `os.walk` (any-depth) and is authoritative.
 
 ### 3b. Heatmap — DataServer/cmd
 
@@ -460,8 +486,10 @@ These thresholds will be promoted into a `golangci-lint` `funlen` rule (Go) plus
 
 ## 12. Methodology — how to reproduce
 
+The baseline was produced by the following reproducible commands. Re-run them after each refactor round and append a `## Round N — Delta vs. baseline` section below §14.
+
 ```bash
-# Top-level area totals
+# Top-level area totals (canonical scope behind §1 / §2)
 for area in DataServer RemoteCodex/native/worker-agent-go scripts docs shared deploy Pipeline; do
   total=$(find "$area" -type f \
     \( -name '*.go' -o -name '*.py' -o -name '*.ts' -o -name '*.tsx' \
@@ -470,15 +498,66 @@ for area in DataServer RemoteCodex/native/worker-agent-go scripts docs shared de
     -not -path '*/.git/*' -not -path '*/node_modules/*' \
     -not -path '*/venv/*' -not -path '*/__pycache__/*' \
     -not -path '*/target/*' -not -path '*/dist/*' -not -path '*/build/*' \
-    -exec wc -l {} + | tail -1 | awk '{print $1}')
+    -exec wc -l {} + 2>/dev/null | tail -1 | awk '{print $1}')
   echo "$area: ${total:-0}"
 done
 
-# Per-package breakdown
+# Per-extension global totals (drives §1 language columns)
+for ext in go sh md yml yaml json proto py ts tsx js jsx; do
+  total=$(find . -type f -name "*.$ext" \
+    -not -path '*/.git/*' -not -path '*/node_modules/*' \
+    -not -path '*/venv/*' -not -path '*/target/*' \
+    -exec wc -l {} + 2>/dev/null | tail -1 | awk '{print $1}')
+  echo ".$ext: ${total:-0}"
+done
+
+# DataServer/internal per-package (drives §3)
 for pkg in $(ls -d DataServer/internal/*/); do
-  total=$(find "$pkg" -type f -name '*.go' -exec wc -l {} + | tail -1 | awk '{print $1}')
+  total=$(find "$pkg" -type f -name '*.go' -exec wc -l {} + 2>/dev/null | tail -1 | awk '{print $1}')
   echo "$(basename $pkg)|${total:-0}"
 done | sort -t '|' -k2 -rn
+
+# DataServer/internal/handlers per-directory, ANY-depth
+python3 - <<'PY'
+import os, subprocess
+root = 'DataServer/internal/handlers'
+totals = {}
+for dp, _, fn in os.walk(root):
+    gos = [f for f in fn if f.endswith('.go')]
+    if not gos:
+        continue
+    rows = []
+    for f in gos:
+        out = subprocess.check_output(['wc', '-l', os.path.join(dp, f)]).decode().split()[0]
+        rows.append(int(out))
+    rel = os.path.relpath(dp, root)
+    totals['<root>' if rel == '.' else rel] = totals.get(rel if rel != '.' else '<root>', 0) + sum(rows)
+for k in sorted(totals, key=lambda x: (-totals[x], x)):
+    print(f'{k}|{totals[k]}')
+print(f'TOTAL|{sum(totals.values())}')
+PY
+
+# RemoteCodex worker-agent-go internal + pkg per package
+for mod in RemoteCodex/native/worker-agent-go/internal RemoteCodex/native/worker-agent-go/pkg; do
+  for pkg in $(ls -d "$mod"/*/); do
+    total=$(find "$pkg" -type f -name '*.go' -exec wc -l {} + 2>/dev/null | tail -1 | awk '{print $1}')
+    echo "$pkg|${total:-0}"
+  done | sort -t '|' -k2 -rn
+done
+
+# scripts / docs / deploy / shared per-subdir
+for area in scripts docs deploy shared; do
+  echo "## $area"
+  case "$area" in
+    scripts|deploy) pattern='*.sh'; pattern2='*.py' ;;
+    docs|shared)    pattern='*.md'; pattern2='*.go' ;;
+  esac
+  for d in $(ls -d $area/*/ 2>/dev/null); do
+    total=$(find "$d" -type f \( -name "$pattern" -o -name "$pattern2" \) \
+      -exec wc -l {} + 2>/dev/null | tail -1 | awk '{print $1}')
+    echo "  $(basename $d)|${total:-0}"
+  done | sort -t '|' -k2 -rn
+done
 ```
 
 > Repeat the run after each meaningful refactor round and append a section "Round N" with delta vs. baseline.
