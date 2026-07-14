@@ -48,9 +48,7 @@ package metrics
 
 import (
 	"context"
-	"runtime"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"velox-server/internal/taskattempts"
@@ -660,24 +658,6 @@ func (c *Collector) RecordWorker(workerID string, rs *ResourceSnapshot) {
 	c.stateMu.Unlock()
 }
 
-// RecordMasterHealth refreshes the master-side gauges every few seconds.
-// Called from a supervisor goroutine.
-func (c *Collector) RecordMasterHealth(outboxPending int) {
-	c.masterRssBytes.GaugeSet([]string{}, readProcessRSS())
-	c.masterGoroutines.GaugeSet([]string{}, int64(runtime.NumGoroutine()))
-	c.masterOutboxPending.GaugeSet([]string{}, int64(outboxPending))
-}
-
-// averageHeartbeatAge walks the lastSeen map and stamps each worker's
-// heartbeat-age gauge. Called from the supervisor loop.
-func (c *Collector) averageHeartbeatAge(now time.Time) {
-	c.stateMu.Lock()
-	defer c.stateMu.Unlock()
-	for w, ts := range c.lastSeen {
-		age := now.Sub(ts).Seconds()
-		c.heartbeatAge.GaugeSet([]string{w}, int64(age))
-	}
-}
 
 // ResourceSnapshot is the typed payload RecordWorker expects; this
 // matches pb.WorkerResourceCounters but stays decoupled from proto
@@ -704,32 +684,7 @@ type ResourceSnapshot struct {
 	SampledAt             time.Time
 }
 
-// ── cheap master-side helpers ─────────────────────────────────────────────
 
-var _rssCache atomic.Int64
-var _rssCacheAt atomic.Int64
-
-func readProcessRSS() int64 {
-	// Read /proc/self/status VmRSS. Cached for ~250ms because gauges
-	// are emitted in supervisor ticks and avoiding the syscall per
-	// tick keeps the loop cheap.
-	now := time.Now().UnixMilli()
-	if cached := _rssCache.Load(); now-_rssCacheAt.Load() < 250 {
-		if cached > 0 {
-			return cached
-		}
-	}
-	got := readRSSFromProc()
-	_rssCache.Store(got)
-	_rssCacheAt.Store(now)
-	return got
-}
-
-// AverageHeartbeatAge wraps averageHeartbeatAge for callers who want
-// to drive it from a parent goroutine.
-func (c *Collector) AverageHeartbeatAge(now time.Time) {
-	c.averageHeartbeatAge(now)
-}
 
 // IncReconcile stamps one observation on the reconcile supervisor's
 // {case, action} counter. Called from internal/completion's
