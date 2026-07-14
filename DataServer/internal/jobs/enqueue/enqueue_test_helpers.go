@@ -2,6 +2,7 @@ package enqueue
 
 import (
 	"context"
+	"strconv"
 	"testing"
 
 	"velox-server/internal/deliveries"
@@ -147,4 +148,28 @@ func (a *planResolverAdapter) ResolvePlan(ctx context.Context, jobID, artifactID
 		})
 	}
 	return out, nil
+}
+
+// asFloat parses a YAML/JSON-mapped value into float64, accepting the
+// transport encodings RoundTrippers produce when the source payload came
+// in from JSON, YAML, or a typed struct. Returns 0 on unknown types so
+// the caller can still surface "duration not set" via a positive vs.
+// zero check rather than crashing the test on map-iteration drift.
+//
+// Used by clip-payload tests where duration_seconds may arrive as
+// int, int64, float64, or string depending on the upstream Codec.
+func asFloat(v interface{}) float64 {
+	switch x := v.(type) {
+	case float64:
+		return x
+	case int:
+		return float64(x)
+	case int64:
+		return float64(x)
+	case string:
+		f, _ := strconv.ParseFloat(x, 64)
+		return f
+	default:
+		return 0
+	}
 }
