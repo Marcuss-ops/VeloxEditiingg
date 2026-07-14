@@ -132,32 +132,6 @@ func (e *Enqueuer) enforceDeliveryPlanPrecondition(ctx context.Context, jobID st
 	return validatePlanPayload(plan, job)
 }
 
-// validatePlanPayload enforces the precondition invariants on an
-// already-resolved plan (no DB hit). Used by enforceDeliveryPlanPrecondition;
-// *Tx callers (AtomicForwardAndEnqueue) get the analogous gate via
-// store.validateDeliveryDestinationTx inside CreateJobWithTaskTx.
-//
-// Invariants: plan must be non-nil and carry >=1 destination; every
-// destination's retry_budget > 0. On success, writes the MAX
-// retry_budget into job.MaxRetries.
-func validatePlanPayload(plan *ResolvedPlan, job *jobs.Job) error {
-	if plan == nil || len(plan.Destinations) == 0 {
-		return &validationError{field: "delivery_plan", message: "no explicit delivery plan; create job_delivery_plans rows for this job before enqueueing"}
-	}
-	maxRetry := 0
-	for i, d := range plan.Destinations {
-		if d.RetryBudget <= 0 {
-			return &validationError{field: fmt.Sprintf("delivery_plan[%d].retry_budget", i), message: "must be > 0"}
-		}
-		if d.RetryBudget > maxRetry {
-			maxRetry = d.RetryBudget
-		}
-	}
-	if job != nil {
-		job.MaxRetries = maxRetry
-	}
-	return nil
-}
 
 // PrepareJobAndTask normalizes the payload, resolves assets, and compiles
 // a Job+TaskSpec WITHOUT writing to the database.
@@ -296,7 +270,6 @@ func compileSceneVideoJob(normalized map[string]interface{}, req costmodel.JobRe
 	return job, spec, priority
 }
 
-func normalizeSceneVideoPayload(payloadMap map[string]interface{}) (map[string]interface{}, error) {
 	// Build the canonical typed envelope, then project to the downstream
 	// map. No `parameters` sub-map, no legacy alias keys. Single source
 	// of truth is the contract.JobPayloadV2 struct.
@@ -435,7 +408,6 @@ func buildIdempotentResponse(normalized map[string]interface{}, existing *jobs.J
 // Internal helpers
 // =============================================================================
 
-func normalizeScenes(payloadMap map[string]interface{}) ([]map[string]interface{}, string, error) {
 	if v, ok := payloadMap["scenes"]; ok {
 		switch scenes := v.(type) {
 		case []interface{}:
@@ -483,7 +455,6 @@ func normalizeScenes(payloadMap map[string]interface{}) ([]map[string]interface{
 	return nil, "", nil
 }
 
-func normalizeSceneArray(value interface{}) []map[string]interface{} {
 	switch scenes := value.(type) {
 	case []map[string]interface{}:
 		out := make([]map[string]interface{}, 0, len(scenes))
@@ -506,7 +477,6 @@ func normalizeSceneArray(value interface{}) []map[string]interface{} {
 	}
 }
 
-func normalizeVoiceoverList(payloadMap map[string]interface{}) []string {
 	candidates := []string{
 		payload.FirstString(payloadMap, "voiceover_path", "voiceover", "unified_voiceover_link"),
 	}
@@ -534,7 +504,6 @@ func normalizeVoiceoverList(payloadMap map[string]interface{}) []string {
 	return result
 }
 
-func sceneCountFromPayload(payloadMap map[string]interface{}) int {
 	if scenes, ok := payloadMap["scenes"].([]interface{}); ok {
 		return len(scenes)
 	}
@@ -550,7 +519,6 @@ func sceneCountFromPayload(payloadMap map[string]interface{}) int {
 	return 0
 }
 
-func voiceoverCountFromPayload(payloadMap map[string]interface{}) int {
 	if arr, ok := payloadMap["voiceover_paths"].([]string); ok {
 		return len(arr)
 	}
@@ -598,7 +566,6 @@ func (e *Enqueuer) resolveSceneImagePayload(ctx context.Context, payloadMap map[
 	return rewriteSceneImagePayloadFor(ctx, e.Voiceover, payloadMap)
 }
 
-func hasClipTimelinePayload(payloadMap map[string]interface{}) bool {
 	if payloadMap == nil {
 		return false
 	}
@@ -617,7 +584,6 @@ func hasClipTimelinePayload(payloadMap map[string]interface{}) bool {
 	return false
 }
 
-func copyTimelinePayloadFields(out, src map[string]interface{}) {
 	if out == nil || src == nil {
 		return
 	}
@@ -660,7 +626,6 @@ func copyTimelinePayloadFields(out, src map[string]interface{}) {
 	}
 }
 
-func syncAudioURLFromVoiceover(payloadMap map[string]interface{}) {
 	if payloadMap == nil {
 		return
 	}
@@ -673,7 +638,6 @@ func syncAudioURLFromVoiceover(payloadMap map[string]interface{}) {
 	}
 }
 
-func resolveInternalExecutorID(payloadMap map[string]interface{}) string {
 	if payloadMap == nil {
 		return ""
 	}
@@ -687,21 +651,7 @@ func resolveInternalExecutorID(payloadMap map[string]interface{}) string {
 	return meta.Executor.ID
 }
 
-// resolveRequiredCapabilities returns the capability strings a task requires
-// based on its executor. These are stored in task_requirements and consumed
-// by the placement matcher's capability gate (matcher.go Select).
-//
-// For now the mapping is executor-driven:
-//   - scene.composite.* → artifact.commit.v1
-//   - All other executors → nil (no extra capabilities yet)
-func resolveRequiredCapabilities(executorID string) []string {
-	if strings.HasPrefix(executorID, "scene.composite") {
-		return []string{"artifact.commit.v1"}
-	}
-	return nil
-}
 
-func sceneVideoFingerprint(parts ...interface{}) string {
 	h := sha256.New()
 	for _, part := range parts {
 		switch v := part.(type) {
@@ -728,10 +678,6 @@ func sceneVideoFingerprint(parts ...interface{}) string {
 	return hex.EncodeToString(h.Sum(nil))[:32]
 }
 
-// extractPlanMaxRetry computes the maximum retry_budget across the
-// payload's delivery_plan entries. The single writer of job.MaxRetries
-// on the insert path.
-func extractPlanMaxRetry(payload map[string]interface{}) int {
 	if payload == nil {
 		return 0
 	}
