@@ -29,6 +29,37 @@ func TestTypedExecutionMetrics_ToProto_AllFields(t *testing.T) {
 		CpuPricePerSecond:     0.000005,
 		StoragePricePerGb:     0.00012,
 		NetworkPricePerGb:     0.01,
+
+		// Scorecard v2 extensions.
+		GpuTimeMs:              111,
+		PeakVramBytes:          222,
+		TempBytesWritten:       333,
+		DuplicateDownloadBytes: 444,
+		MediaDurationSeconds:   55.5,
+		WallClockSeconds:       66.6,
+
+		FfprobeValid:      1,
+		DurationDiffSec:   0.12,
+		HasVideoStream:    true,
+		HasAudioStream:    true,
+		OutputFileSize:    777,
+		BlackFrameRatio:   0.01,
+		AudioSyncOffsetMs: 88,
+		OutputSha256:      "deadbeef",
+
+		CpuPercentPeak: 0.95,
+		DiskReadBytes:  1111,
+		DiskWriteBytes: 2222,
+		NetworkRxBytes: 3333,
+		NetworkTxBytes: 4444,
+		IowaitMs:       55,
+		OpenFdsPeak:    99,
+
+		AssetCacheHitCount:  1,
+		AssetCacheMissCount: 2,
+		BlobCacheHitCount:   3,
+		BlobCacheMissCount:  4,
+		RenderCacheHitCount: 5,
 	}
 	pb := in.ToProto()
 	if pb == nil {
@@ -58,6 +89,37 @@ func TestTypedExecutionMetrics_ToProto_AllFields(t *testing.T) {
 		{"CpuPricePerSecond", pb.GetCpuPricePerSecond(), in.CpuPricePerSecond, 1e-9},
 		{"StoragePricePerGb", pb.GetStoragePricePerGb(), in.StoragePricePerGb, 1e-9},
 		{"NetworkPricePerGb", pb.GetNetworkPricePerGb(), in.NetworkPricePerGb, 1e-9},
+
+		// Scorecard v2 extensions.
+		{"GpuTimeMs", pb.GetGpuTimeMs(), in.GpuTimeMs, 0},
+		{"PeakVramBytes", pb.GetPeakVramBytes(), in.PeakVramBytes, 0},
+		{"TempBytesWritten", pb.GetTempBytesWritten(), in.TempBytesWritten, 0},
+		{"DuplicateDownloadBytes", pb.GetDuplicateDownloadBytes(), in.DuplicateDownloadBytes, 0},
+		{"MediaDurationSeconds", pb.GetMediaDurationSeconds(), in.MediaDurationSeconds, 1e-9},
+		{"WallClockSeconds", pb.GetWallClockSeconds(), in.WallClockSeconds, 1e-9},
+
+		{"FfprobeValid", int64(pb.GetFfprobeValid()), int64(in.FfprobeValid), 0},
+		{"DurationDiffSec", pb.GetDurationDiffSec(), in.DurationDiffSec, 1e-9},
+		{"HasVideoStream", pb.GetHasVideoStream(), in.HasVideoStream, 0},
+		{"HasAudioStream", pb.GetHasAudioStream(), in.HasAudioStream, 0},
+		{"OutputFileSize", pb.GetOutputFileSize(), in.OutputFileSize, 0},
+		{"BlackFrameRatio", pb.GetBlackFrameRatio(), in.BlackFrameRatio, 1e-9},
+		{"AudioSyncOffsetMs", pb.GetAudioSyncOffsetMs(), in.AudioSyncOffsetMs, 0},
+		{"OutputSha256", pb.GetOutputSha256(), in.OutputSha256, 0},
+
+		{"CpuPercentPeak", pb.GetCpuPercentPeak(), in.CpuPercentPeak, 1e-9},
+		{"DiskReadBytes", pb.GetDiskReadBytes(), in.DiskReadBytes, 0},
+		{"DiskWriteBytes", pb.GetDiskWriteBytes(), in.DiskWriteBytes, 0},
+		{"NetworkRxBytes", pb.GetNetworkRxBytes(), in.NetworkRxBytes, 0},
+		{"NetworkTxBytes", pb.GetNetworkTxBytes(), in.NetworkTxBytes, 0},
+		{"IowaitMs", pb.GetIowaitMs(), in.IowaitMs, 0},
+		{"OpenFdsPeak", pb.GetOpenFdsPeak(), in.OpenFdsPeak, 0},
+
+		{"AssetCacheHitCount", pb.GetAssetCacheHitCount(), in.AssetCacheHitCount, 0},
+		{"AssetCacheMissCount", pb.GetAssetCacheMissCount(), in.AssetCacheMissCount, 0},
+		{"BlobCacheHitCount", pb.GetBlobCacheHitCount(), in.BlobCacheHitCount, 0},
+		{"BlobCacheMissCount", pb.GetBlobCacheMissCount(), in.BlobCacheMissCount, 0},
+		{"RenderCacheHitCount", pb.GetRenderCacheHitCount(), in.RenderCacheHitCount, 0},
 	}
 	for _, c := range cases {
 		switch g := c.got.(type) {
@@ -113,7 +175,7 @@ func TestTypedExecutionMetrics_RoundTrip(t *testing.T) {
 		CpuTimeMs:             42,
 		PeakRssBytes:          8589934592, // 8 GiB
 		FramesDecoded:         1234,
-		FramesComposited:      1234,
+		FramesComposited:     1234,
 		FramesEncoded:         1234,
 		FfmpegSpeedRatio:      2.71,
 		EncodePasses:          2,
@@ -122,6 +184,33 @@ func TestTypedExecutionMetrics_RoundTrip(t *testing.T) {
 		CpuPricePerSecond:     0.00001,
 		StoragePricePerGb:     0.001,
 		NetworkPricePerGb:     0.05,
+
+		GpuTimeMs:              11,
+		PeakVramBytes:          22,
+		TempBytesWritten:       33,
+		DuplicateDownloadBytes: 44,
+		MediaDurationSeconds:   5.5,
+		WallClockSeconds:       6.6,
+		FfprobeValid:           1,
+		DurationDiffSec:        0.1,
+		HasVideoStream:         true,
+		HasAudioStream:         true,
+		OutputFileSize:         77,
+		BlackFrameRatio:        0.02,
+		AudioSyncOffsetMs:      8,
+		OutputSha256:           "cafebabe",
+		CpuPercentPeak:         0.88,
+		DiskReadBytes:          111,
+		DiskWriteBytes:         222,
+		NetworkRxBytes:         333,
+		NetworkTxBytes:         444,
+		IowaitMs:               5,
+		OpenFdsPeak:            9,
+		AssetCacheHitCount:     10,
+		AssetCacheMissCount:    11,
+		BlobCacheHitCount:      12,
+		BlobCacheMissCount:     13,
+		RenderCacheHitCount:    14,
 	}
 	back := FromProto(in.ToProto())
 	if back != in {
@@ -151,10 +240,37 @@ func TestTypedExecutionMetrics_ProtoEmitMatch(t *testing.T) {
 		CpuPricePerSecond:     13.0,
 		StoragePricePerGb:     14.0,
 		NetworkPricePerGb:     15.0,
+
+		GpuTimeMs:              16,
+		PeakVramBytes:          17,
+		TempBytesWritten:       18,
+		DuplicateDownloadBytes: 19,
+		MediaDurationSeconds:   20.0,
+		WallClockSeconds:       21.0,
+		FfprobeValid:           22,
+		DurationDiffSec:        23.0,
+		HasVideoStream:         true,
+		HasAudioStream:         true,
+		OutputFileSize:         24,
+		BlackFrameRatio:        25.0,
+		AudioSyncOffsetMs:      26,
+		OutputSha256:           "sha256",
+		CpuPercentPeak:         27.0,
+		DiskReadBytes:          28,
+		DiskWriteBytes:         29,
+		NetworkRxBytes:         30,
+		NetworkTxBytes:         31,
+		IowaitMs:               32,
+		OpenFdsPeak:            33,
+		AssetCacheHitCount:     34,
+		AssetCacheMissCount:    35,
+		BlobCacheHitCount:      36,
+		BlobCacheMissCount:     37,
+		RenderCacheHitCount:    38,
 	}
 	pb := in.ToProto()
 	// Each non-zero Go field must round-trip. If a proto edit ever
-	// REQUIRES adding a 18th field on the Go side, the assertion list
+	// REQUIRES adding a new field on the Go side, the assertion list
 	// below must be extended in lock-step.
 	if pb.GetInputBytes() != 1 || pb.GetOutputBytes() != 2 ||
 		pb.GetBytesFromDrive() != 3 || pb.GetBytesFromBlobstore() != 4 ||
@@ -164,7 +280,21 @@ func TestTypedExecutionMetrics_ProtoEmitMatch(t *testing.T) {
 		pb.GetFfmpegSpeedRatio() != 11.0 || uint32(pb.GetEncodePasses()) != 12 ||
 		!pb.GetFinalConcatStreamCopy() || pb.GetConcatMode() != "stream_copy" ||
 		pb.GetCpuPricePerSecond() != 13.0 || pb.GetStoragePricePerGb() != 14.0 ||
-		pb.GetNetworkPricePerGb() != 15.0 {
-		t.Errorf("proto-emit mismatch (17-field contract violated): %+v", pb)
+		pb.GetNetworkPricePerGb() != 15.0 ||
+
+		pb.GetGpuTimeMs() != 16 || pb.GetPeakVramBytes() != 17 ||
+		pb.GetTempBytesWritten() != 18 || pb.GetDuplicateDownloadBytes() != 19 ||
+		pb.GetMediaDurationSeconds() != 20.0 || pb.GetWallClockSeconds() != 21.0 ||
+		pb.GetFfprobeValid() != 22 || pb.GetDurationDiffSec() != 23.0 ||
+		!pb.GetHasVideoStream() || !pb.GetHasAudioStream() ||
+		pb.GetOutputFileSize() != 24 || pb.GetBlackFrameRatio() != 25.0 ||
+		pb.GetAudioSyncOffsetMs() != 26 || pb.GetOutputSha256() != "sha256" ||
+		pb.GetCpuPercentPeak() != 27.0 || pb.GetDiskReadBytes() != 28 ||
+		pb.GetDiskWriteBytes() != 29 || pb.GetNetworkRxBytes() != 30 ||
+		pb.GetNetworkTxBytes() != 31 || pb.GetIowaitMs() != 32 ||
+		pb.GetOpenFdsPeak() != 33 || pb.GetAssetCacheHitCount() != 34 ||
+		pb.GetAssetCacheMissCount() != 35 || pb.GetBlobCacheHitCount() != 36 ||
+		pb.GetBlobCacheMissCount() != 37 || pb.GetRenderCacheHitCount() != 38 {
+		t.Errorf("proto-emit mismatch (extended field contract violated): %+v", pb)
 	}
 }

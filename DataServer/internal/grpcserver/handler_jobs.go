@@ -492,6 +492,9 @@ func (h *Handler) handleTaskResult(workerID string, tr *pb.TaskResult, sess *wor
 		SpanID:            spanID,
 		RawReportJSON:     rawReportJSON,
 		RawReportReceivedAt: receivedAt,
+		ReportSchemaVersion: tr.GetReportSchemaVersion(),
+		ReportVersion:       tr.GetReportVersion(),
+		ReportHash:          tr.GetReportHash(),
 	})
 	if err != nil {
 		log.Printf("[GRPC] TaskResult ingest for task=%s attempt=%s FAILED: %v", taskID, attemptID, err)

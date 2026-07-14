@@ -886,8 +886,15 @@ type TaskResult struct {
 	AttemptNumber    int32                  `protobuf:"varint,13,opt,name=attempt_number,json=attemptNumber,proto3" json:"attempt_number,omitempty"`
 	Revision         int32                  `protobuf:"varint,14,opt,name=revision,proto3" json:"revision,omitempty"`
 	SegmentTimings   []*SegmentTiming       `protobuf:"bytes,15,rep,name=segment_timings,json=segmentTimings,proto3" json:"segment_timings,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// PerformanceReport metadata: the worker emits exactly one report per
+	// attempt and stamps it with schema/version and a SHA-256 hash over the
+	// canonical raw report JSON. The master uses these fields for idempotency
+	// and conflict detection in task_attempt_reports.
+	ReportSchemaVersion int32  `protobuf:"varint,16,opt,name=report_schema_version,json=reportSchemaVersion,proto3" json:"report_schema_version,omitempty"`
+	ReportVersion       int32  `protobuf:"varint,17,opt,name=report_version,json=reportVersion,proto3" json:"report_version,omitempty"`
+	ReportHash          string `protobuf:"bytes,18,opt,name=report_hash,json=reportHash,proto3" json:"report_hash,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *TaskResult) Reset() {
@@ -1023,6 +1030,27 @@ func (x *TaskResult) GetSegmentTimings() []*SegmentTiming {
 		return x.SegmentTimings
 	}
 	return nil
+}
+
+func (x *TaskResult) GetReportSchemaVersion() int32 {
+	if x != nil {
+		return x.ReportSchemaVersion
+	}
+	return 0
+}
+
+func (x *TaskResult) GetReportVersion() int32 {
+	if x != nil {
+		return x.ReportVersion
+	}
+	return 0
+}
+
+func (x *TaskResult) GetReportHash() string {
+	if x != nil {
+		return x.ReportHash
+	}
+	return ""
 }
 
 type TaskLeaseRenewal struct {
@@ -2995,8 +3023,40 @@ type TaskExecutionMetrics struct {
 	CpuPricePerSecond float64 `protobuf:"fixed64,15,opt,name=cpu_price_per_second,json=cpuPricePerSecond,proto3" json:"cpu_price_per_second,omitempty"`
 	StoragePricePerGb float64 `protobuf:"fixed64,16,opt,name=storage_price_per_gb,json=storagePricePerGb,proto3" json:"storage_price_per_gb,omitempty"`
 	NetworkPricePerGb float64 `protobuf:"fixed64,17,opt,name=network_price_per_gb,json=networkPricePerGb,proto3" json:"network_price_per_gb,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// Scorecard v2 / Step 7-8: extra resource counters (migrations
+	// 054, 073). GPU time/VRAM, temp writes, duplicate downloads and
+	// timing context needed for normalization.
+	GpuTimeMs              int64   `protobuf:"varint,18,opt,name=gpu_time_ms,json=gpuTimeMs,proto3" json:"gpu_time_ms,omitempty"`
+	PeakVramBytes          int64   `protobuf:"varint,19,opt,name=peak_vram_bytes,json=peakVramBytes,proto3" json:"peak_vram_bytes,omitempty"`
+	TempBytesWritten       int64   `protobuf:"varint,20,opt,name=temp_bytes_written,json=tempBytesWritten,proto3" json:"temp_bytes_written,omitempty"`
+	DuplicateDownloadBytes int64   `protobuf:"varint,21,opt,name=duplicate_download_bytes,json=duplicateDownloadBytes,proto3" json:"duplicate_download_bytes,omitempty"`
+	MediaDurationSeconds   float64 `protobuf:"fixed64,22,opt,name=media_duration_seconds,json=mediaDurationSeconds,proto3" json:"media_duration_seconds,omitempty"`
+	WallClockSeconds       float64 `protobuf:"fixed64,23,opt,name=wall_clock_seconds,json=wallClockSeconds,proto3" json:"wall_clock_seconds,omitempty"`
+	// Scorecard v2 / Step 9: output quality validation (migration 072).
+	FfprobeValid      int32   `protobuf:"varint,24,opt,name=ffprobe_valid,json=ffprobeValid,proto3" json:"ffprobe_valid,omitempty"`
+	DurationDiffSec   float64 `protobuf:"fixed64,25,opt,name=duration_diff_sec,json=durationDiffSec,proto3" json:"duration_diff_sec,omitempty"`
+	HasVideoStream    bool    `protobuf:"varint,26,opt,name=has_video_stream,json=hasVideoStream,proto3" json:"has_video_stream,omitempty"`
+	HasAudioStream    bool    `protobuf:"varint,27,opt,name=has_audio_stream,json=hasAudioStream,proto3" json:"has_audio_stream,omitempty"`
+	OutputFileSize    int64   `protobuf:"varint,28,opt,name=output_file_size,json=outputFileSize,proto3" json:"output_file_size,omitempty"`
+	BlackFrameRatio   float64 `protobuf:"fixed64,29,opt,name=black_frame_ratio,json=blackFrameRatio,proto3" json:"black_frame_ratio,omitempty"`
+	AudioSyncOffsetMs int64   `protobuf:"varint,30,opt,name=audio_sync_offset_ms,json=audioSyncOffsetMs,proto3" json:"audio_sync_offset_ms,omitempty"`
+	OutputSha256      string  `protobuf:"bytes,31,opt,name=output_sha256,json=outputSha256,proto3" json:"output_sha256,omitempty"`
+	// Scorecard v2 / Step 10: per-attempt resource snapshot (migration 073).
+	CpuPercentPeak float64 `protobuf:"fixed64,32,opt,name=cpu_percent_peak,json=cpuPercentPeak,proto3" json:"cpu_percent_peak,omitempty"`
+	DiskReadBytes  int64   `protobuf:"varint,33,opt,name=disk_read_bytes,json=diskReadBytes,proto3" json:"disk_read_bytes,omitempty"`
+	DiskWriteBytes int64   `protobuf:"varint,34,opt,name=disk_write_bytes,json=diskWriteBytes,proto3" json:"disk_write_bytes,omitempty"`
+	NetworkRxBytes int64   `protobuf:"varint,35,opt,name=network_rx_bytes,json=networkRxBytes,proto3" json:"network_rx_bytes,omitempty"`
+	NetworkTxBytes int64   `protobuf:"varint,36,opt,name=network_tx_bytes,json=networkTxBytes,proto3" json:"network_tx_bytes,omitempty"`
+	IowaitMs       int64   `protobuf:"varint,37,opt,name=iowait_ms,json=iowaitMs,proto3" json:"iowait_ms,omitempty"`
+	OpenFdsPeak    int64   `protobuf:"varint,38,opt,name=open_fds_peak,json=openFdsPeak,proto3" json:"open_fds_peak,omitempty"`
+	// Scorecard v2 / Step 16: granular cache hit/miss counters (migration 077).
+	AssetCacheHitCount  int64 `protobuf:"varint,39,opt,name=asset_cache_hit_count,json=assetCacheHitCount,proto3" json:"asset_cache_hit_count,omitempty"`
+	AssetCacheMissCount int64 `protobuf:"varint,40,opt,name=asset_cache_miss_count,json=assetCacheMissCount,proto3" json:"asset_cache_miss_count,omitempty"`
+	BlobCacheHitCount   int64 `protobuf:"varint,41,opt,name=blob_cache_hit_count,json=blobCacheHitCount,proto3" json:"blob_cache_hit_count,omitempty"`
+	BlobCacheMissCount  int64 `protobuf:"varint,42,opt,name=blob_cache_miss_count,json=blobCacheMissCount,proto3" json:"blob_cache_miss_count,omitempty"`
+	RenderCacheHitCount int64 `protobuf:"varint,43,opt,name=render_cache_hit_count,json=renderCacheHitCount,proto3" json:"render_cache_hit_count,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *TaskExecutionMetrics) Reset() {
@@ -3144,6 +3204,188 @@ func (x *TaskExecutionMetrics) GetStoragePricePerGb() float64 {
 func (x *TaskExecutionMetrics) GetNetworkPricePerGb() float64 {
 	if x != nil {
 		return x.NetworkPricePerGb
+	}
+	return 0
+}
+
+func (x *TaskExecutionMetrics) GetGpuTimeMs() int64 {
+	if x != nil {
+		return x.GpuTimeMs
+	}
+	return 0
+}
+
+func (x *TaskExecutionMetrics) GetPeakVramBytes() int64 {
+	if x != nil {
+		return x.PeakVramBytes
+	}
+	return 0
+}
+
+func (x *TaskExecutionMetrics) GetTempBytesWritten() int64 {
+	if x != nil {
+		return x.TempBytesWritten
+	}
+	return 0
+}
+
+func (x *TaskExecutionMetrics) GetDuplicateDownloadBytes() int64 {
+	if x != nil {
+		return x.DuplicateDownloadBytes
+	}
+	return 0
+}
+
+func (x *TaskExecutionMetrics) GetMediaDurationSeconds() float64 {
+	if x != nil {
+		return x.MediaDurationSeconds
+	}
+	return 0
+}
+
+func (x *TaskExecutionMetrics) GetWallClockSeconds() float64 {
+	if x != nil {
+		return x.WallClockSeconds
+	}
+	return 0
+}
+
+func (x *TaskExecutionMetrics) GetFfprobeValid() int32 {
+	if x != nil {
+		return x.FfprobeValid
+	}
+	return 0
+}
+
+func (x *TaskExecutionMetrics) GetDurationDiffSec() float64 {
+	if x != nil {
+		return x.DurationDiffSec
+	}
+	return 0
+}
+
+func (x *TaskExecutionMetrics) GetHasVideoStream() bool {
+	if x != nil {
+		return x.HasVideoStream
+	}
+	return false
+}
+
+func (x *TaskExecutionMetrics) GetHasAudioStream() bool {
+	if x != nil {
+		return x.HasAudioStream
+	}
+	return false
+}
+
+func (x *TaskExecutionMetrics) GetOutputFileSize() int64 {
+	if x != nil {
+		return x.OutputFileSize
+	}
+	return 0
+}
+
+func (x *TaskExecutionMetrics) GetBlackFrameRatio() float64 {
+	if x != nil {
+		return x.BlackFrameRatio
+	}
+	return 0
+}
+
+func (x *TaskExecutionMetrics) GetAudioSyncOffsetMs() int64 {
+	if x != nil {
+		return x.AudioSyncOffsetMs
+	}
+	return 0
+}
+
+func (x *TaskExecutionMetrics) GetOutputSha256() string {
+	if x != nil {
+		return x.OutputSha256
+	}
+	return ""
+}
+
+func (x *TaskExecutionMetrics) GetCpuPercentPeak() float64 {
+	if x != nil {
+		return x.CpuPercentPeak
+	}
+	return 0
+}
+
+func (x *TaskExecutionMetrics) GetDiskReadBytes() int64 {
+	if x != nil {
+		return x.DiskReadBytes
+	}
+	return 0
+}
+
+func (x *TaskExecutionMetrics) GetDiskWriteBytes() int64 {
+	if x != nil {
+		return x.DiskWriteBytes
+	}
+	return 0
+}
+
+func (x *TaskExecutionMetrics) GetNetworkRxBytes() int64 {
+	if x != nil {
+		return x.NetworkRxBytes
+	}
+	return 0
+}
+
+func (x *TaskExecutionMetrics) GetNetworkTxBytes() int64 {
+	if x != nil {
+		return x.NetworkTxBytes
+	}
+	return 0
+}
+
+func (x *TaskExecutionMetrics) GetIowaitMs() int64 {
+	if x != nil {
+		return x.IowaitMs
+	}
+	return 0
+}
+
+func (x *TaskExecutionMetrics) GetOpenFdsPeak() int64 {
+	if x != nil {
+		return x.OpenFdsPeak
+	}
+	return 0
+}
+
+func (x *TaskExecutionMetrics) GetAssetCacheHitCount() int64 {
+	if x != nil {
+		return x.AssetCacheHitCount
+	}
+	return 0
+}
+
+func (x *TaskExecutionMetrics) GetAssetCacheMissCount() int64 {
+	if x != nil {
+		return x.AssetCacheMissCount
+	}
+	return 0
+}
+
+func (x *TaskExecutionMetrics) GetBlobCacheHitCount() int64 {
+	if x != nil {
+		return x.BlobCacheHitCount
+	}
+	return 0
+}
+
+func (x *TaskExecutionMetrics) GetBlobCacheMissCount() int64 {
+	if x != nil {
+		return x.BlobCacheMissCount
+	}
+	return 0
+}
+
+func (x *TaskExecutionMetrics) GetRenderCacheHitCount() int64 {
+	if x != nil {
+		return x.RenderCacheHitCount
 	}
 	return 0
 }
@@ -3461,7 +3703,7 @@ const file_velox_control_worker_control_proto_rawDesc = "" +
 	"\tcache_key\x18\x11 \x01(\tR\bcacheKey\x12#\n" +
 	"\rmetadata_json\x18\x12 \x01(\tR\fmetadataJson\x12*\n" +
 	"\x11input_duration_ms\x18\x13 \x01(\x01R\x0finputDurationMs\x12,\n" +
-	"\x12output_duration_ms\x18\x14 \x01(\x01R\x10outputDurationMs\"\xf5\x04\n" +
+	"\x12output_duration_ms\x18\x14 \x01(\x01R\x10outputDurationMs\"\xf1\x05\n" +
 	"\n" +
 	"TaskResult\x12\x17\n" +
 	"\atask_id\x18\x01 \x01(\tR\x06taskId\x12\x15\n" +
@@ -3482,7 +3724,11 @@ const file_velox_control_worker_control_proto_rawDesc = "" +
 	"\blease_id\x18\f \x01(\tR\aleaseId\x12%\n" +
 	"\x0eattempt_number\x18\r \x01(\x05R\rattemptNumber\x12\x1a\n" +
 	"\brevision\x18\x0e \x01(\x05R\brevision\x12E\n" +
-	"\x0fsegment_timings\x18\x0f \x03(\v2\x1c.velox.control.SegmentTimingR\x0esegmentTimings\"\x86\x02\n" +
+	"\x0fsegment_timings\x18\x0f \x03(\v2\x1c.velox.control.SegmentTimingR\x0esegmentTimings\x122\n" +
+	"\x15report_schema_version\x18\x10 \x01(\x05R\x13reportSchemaVersion\x12%\n" +
+	"\x0ereport_version\x18\x11 \x01(\x05R\rreportVersion\x12\x1f\n" +
+	"\vreport_hash\x18\x12 \x01(\tR\n" +
+	"reportHash\"\x86\x02\n" +
 	"\x10TaskLeaseRenewal\x12\x17\n" +
 	"\atask_id\x18\x01 \x01(\tR\x06taskId\x12\x1d\n" +
 	"\n" +
@@ -3652,7 +3898,7 @@ const file_velox_control_worker_control_proto_rawDesc = "" +
 	"\x06job_id\x18\x04 \x01(\tR\x05jobId\x12\x19\n" +
 	"\blease_id\x18\x05 \x01(\tR\aleaseId\x12\x1a\n" +
 	"\brevision\x18\x06 \x01(\x05R\brevision\x12=\n" +
-	"\fcommitted_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\vcommittedAt\"\xec\x05\n" +
+	"\fcommitted_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\vcommittedAt\"\xe3\x0e\n" +
 	"\x14TaskExecutionMetrics\x12\x1f\n" +
 	"\vinput_bytes\x18\x01 \x01(\x03R\n" +
 	"inputBytes\x12!\n" +
@@ -3673,7 +3919,33 @@ const file_velox_control_worker_control_proto_rawDesc = "" +
 	"concatMode\x12/\n" +
 	"\x14cpu_price_per_second\x18\x0f \x01(\x01R\x11cpuPricePerSecond\x12/\n" +
 	"\x14storage_price_per_gb\x18\x10 \x01(\x01R\x11storagePricePerGb\x12/\n" +
-	"\x14network_price_per_gb\x18\x11 \x01(\x01R\x11networkPricePerGb\"\x92\b\n" +
+	"\x14network_price_per_gb\x18\x11 \x01(\x01R\x11networkPricePerGb\x12\x1e\n" +
+	"\vgpu_time_ms\x18\x12 \x01(\x03R\tgpuTimeMs\x12&\n" +
+	"\x0fpeak_vram_bytes\x18\x13 \x01(\x03R\rpeakVramBytes\x12,\n" +
+	"\x12temp_bytes_written\x18\x14 \x01(\x03R\x10tempBytesWritten\x128\n" +
+	"\x18duplicate_download_bytes\x18\x15 \x01(\x03R\x16duplicateDownloadBytes\x124\n" +
+	"\x16media_duration_seconds\x18\x16 \x01(\x01R\x14mediaDurationSeconds\x12,\n" +
+	"\x12wall_clock_seconds\x18\x17 \x01(\x01R\x10wallClockSeconds\x12#\n" +
+	"\rffprobe_valid\x18\x18 \x01(\x05R\fffprobeValid\x12*\n" +
+	"\x11duration_diff_sec\x18\x19 \x01(\x01R\x0fdurationDiffSec\x12(\n" +
+	"\x10has_video_stream\x18\x1a \x01(\bR\x0ehasVideoStream\x12(\n" +
+	"\x10has_audio_stream\x18\x1b \x01(\bR\x0ehasAudioStream\x12(\n" +
+	"\x10output_file_size\x18\x1c \x01(\x03R\x0eoutputFileSize\x12*\n" +
+	"\x11black_frame_ratio\x18\x1d \x01(\x01R\x0fblackFrameRatio\x12/\n" +
+	"\x14audio_sync_offset_ms\x18\x1e \x01(\x03R\x11audioSyncOffsetMs\x12#\n" +
+	"\routput_sha256\x18\x1f \x01(\tR\foutputSha256\x12(\n" +
+	"\x10cpu_percent_peak\x18  \x01(\x01R\x0ecpuPercentPeak\x12&\n" +
+	"\x0fdisk_read_bytes\x18! \x01(\x03R\rdiskReadBytes\x12(\n" +
+	"\x10disk_write_bytes\x18\" \x01(\x03R\x0ediskWriteBytes\x12(\n" +
+	"\x10network_rx_bytes\x18# \x01(\x03R\x0enetworkRxBytes\x12(\n" +
+	"\x10network_tx_bytes\x18$ \x01(\x03R\x0enetworkTxBytes\x12\x1b\n" +
+	"\tiowait_ms\x18% \x01(\x03R\biowaitMs\x12\"\n" +
+	"\ropen_fds_peak\x18& \x01(\x03R\vopenFdsPeak\x121\n" +
+	"\x15asset_cache_hit_count\x18' \x01(\x03R\x12assetCacheHitCount\x123\n" +
+	"\x16asset_cache_miss_count\x18( \x01(\x03R\x13assetCacheMissCount\x12/\n" +
+	"\x14blob_cache_hit_count\x18) \x01(\x03R\x11blobCacheHitCount\x121\n" +
+	"\x15blob_cache_miss_count\x18* \x01(\x03R\x12blobCacheMissCount\x123\n" +
+	"\x16render_cache_hit_count\x18+ \x01(\x03R\x13renderCacheHitCount\"\x92\b\n" +
 	"\x16WorkerResourceCounters\x122\n" +
 	"\x15cpu_utilization_ratio\x18\x01 \x01(\x01R\x13cpuUtilizationRatio\x12(\n" +
 	"\x10cpu_iowait_ratio\x18\x02 \x01(\x01R\x0ecpuIowaitRatio\x12&\n" +

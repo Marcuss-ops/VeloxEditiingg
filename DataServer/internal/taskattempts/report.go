@@ -117,6 +117,7 @@ type AttemptMetrics struct {
 	OutputFileSize     int64   `json:"output_file_size"`
 	BlackFrameRatio    float64 `json:"black_frame_ratio"`
 	AudioSyncOffsetMS  int64   `json:"audio_sync_offset_ms"`
+	OutputSHA256       string  `json:"output_sha256"`
 
 	// Scorecard v2 / Step 10: per-attempt resource snapshot.
 	CPUPercentPeak  float64 `json:"cpu_percent_peak"`

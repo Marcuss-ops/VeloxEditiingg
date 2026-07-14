@@ -87,6 +87,11 @@ type IngestCommand struct {
 	// Step 16: raw worker report payload (JSON) for audit and replay.
 	RawReportJSON       string
 	RawReportReceivedAt time.Time
+	// PerformanceReport metadata supplied by the worker for idempotency
+	// and conflict detection in task_attempt_reports.
+	ReportSchemaVersion int32
+	ReportVersion       int32
+	ReportHash          string
 	// Scorecard v2 / Step 17: per-segment C++ sidecar timings.
 	SegmentTimings []taskattempts.SegmentTiming
 }
@@ -377,6 +382,10 @@ func (s *TaskReportIngestionService) IngestTaskResult(ctx context.Context, cmd I
 		// Step 16: raw worker report payload for audit/replay.
 		RawReportJSON:       cmd.RawReportJSON,
 		RawReportReceivedAt: cmd.RawReportReceivedAt,
+		// PerformanceReport metadata supplied by the worker.
+		ReportSchemaVersion: cmd.ReportSchemaVersion,
+		ReportVersion:       cmd.ReportVersion,
+		ReportHash:          cmd.ReportHash,
 		// Scorecard v2 / Step 17: per-segment C++ sidecar timings.
 		SegmentTimings: cmd.SegmentTimings,
 	})

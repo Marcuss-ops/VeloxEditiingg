@@ -15,6 +15,8 @@ package store
 
 import (
 	"context"
+	"crypto/sha256"
+	"fmt"
 	"testing"
 	"time"
 
@@ -103,6 +105,9 @@ func TestE2E_MetricsFlow_WorkerToDBToAPI(t *testing.T) {
 		// Step 16: raw worker report payload for audit/replay.
 		RawReportJSON:       `{"task_id":"` + taskID + `","attempt_id":"` + attemptID + `","status":"succeeded"}`,
 		RawReportReceivedAt: now,
+		// PerformanceReport metadata.
+		ReportSchemaVersion: 1,
+		ReportVersion:       1,
 		Metrics: taskattempts.AttemptMetrics{
 			AttemptID: attemptID,
 			// Legacy 7 carry-over.
@@ -333,11 +338,14 @@ func TestE2E_MetricsFlow_WorkerToDBToAPI(t *testing.T) {
 
 	// ── 7. Verify raw worker report persisted for audit/replay ──────
 	var storedHash, storedJSON, storedReceived, storedPersisted string
+	var storedReportSchema, storedReportVersion int
 	if err := store.db.QueryRowContext(ctx,
-		`SELECT report_hash, raw_report_json, received_at, persisted_at
+		`SELECT report_hash, raw_report_json, received_at, persisted_at,
+		        report_schema, report_version
 		 FROM task_attempt_reports WHERE attempt_id = ?`,
 		attemptID,
-	).Scan(&storedHash, &storedJSON, &storedReceived, &storedPersisted); err != nil {
+	).Scan(&storedHash, &storedJSON, &storedReceived, &storedPersisted,
+		&storedReportSchema, &storedReportVersion); err != nil {
 		t.Fatalf("query task_attempt_reports: %v", err)
 	}
 	if storedJSON != cmd.RawReportJSON {
@@ -348,6 +356,18 @@ func TestE2E_MetricsFlow_WorkerToDBToAPI(t *testing.T) {
 	}
 	if storedPersisted == "" {
 		t.Error("persisted_at is empty")
+	}
+	if storedReportSchema != 1 {
+		t.Errorf("report_schema = %d; want 1", storedReportSchema)
+	}
+	if storedReportVersion != 1 {
+		t.Errorf("report_version = %d; want 1", storedReportVersion)
+	}
+	// The command did not supply a worker hash, so the master should have
+	// computed it from the raw report JSON (backward-compat path).
+	expectedHash := fmt.Sprintf("%x", sha256.Sum256([]byte(cmd.RawReportJSON)))
+	if storedHash != expectedHash {
+		t.Errorf("report_hash = %q; want %q", storedHash, expectedHash)
 	}
 
 	// Idempotency: re-ingesting the same raw report should succeed.

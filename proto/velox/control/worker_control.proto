@@ -173,6 +173,14 @@ message TaskResult {
   int32 attempt_number = 13;
   int32 revision = 14;
   repeated SegmentTiming segment_timings = 15;
+
+  // PerformanceReport metadata: the worker emits exactly one report per
+  // attempt and stamps it with schema/version and a SHA-256 hash over the
+  // canonical raw report JSON. The master uses these fields for idempotency
+  // and conflict detection in task_attempt_reports.
+  int32 report_schema_version = 16;
+  int32 report_version = 17;
+  string report_hash = 18;
 }
 
 message TaskLeaseRenewal {
@@ -501,6 +509,42 @@ message TaskExecutionMetrics {
   double cpu_price_per_second = 15;
   double storage_price_per_gb = 16;
   double network_price_per_gb = 17;
+
+  // Scorecard v2 / Step 7-8: extra resource counters (migrations
+  // 054, 073). GPU time/VRAM, temp writes, duplicate downloads and
+  // timing context needed for normalization.
+  int64 gpu_time_ms = 18;
+  int64 peak_vram_bytes = 19;
+  int64 temp_bytes_written = 20;
+  int64 duplicate_download_bytes = 21;
+  double media_duration_seconds = 22;
+  double wall_clock_seconds = 23;
+
+  // Scorecard v2 / Step 9: output quality validation (migration 072).
+  int32 ffprobe_valid = 24;
+  double duration_diff_sec = 25;
+  bool has_video_stream = 26;
+  bool has_audio_stream = 27;
+  int64 output_file_size = 28;
+  double black_frame_ratio = 29;
+  int64 audio_sync_offset_ms = 30;
+  string output_sha256 = 31;
+
+  // Scorecard v2 / Step 10: per-attempt resource snapshot (migration 073).
+  double cpu_percent_peak = 32;
+  int64 disk_read_bytes = 33;
+  int64 disk_write_bytes = 34;
+  int64 network_rx_bytes = 35;
+  int64 network_tx_bytes = 36;
+  int64 iowait_ms = 37;
+  int64 open_fds_peak = 38;
+
+  // Scorecard v2 / Step 16: granular cache hit/miss counters (migration 077).
+  int64 asset_cache_hit_count = 39;
+  int64 asset_cache_miss_count = 40;
+  int64 blob_cache_hit_count = 41;
+  int64 blob_cache_miss_count = 42;
+  int64 render_cache_hit_count = 43;
 }
 
 // WorkerResourceCounters is the typed payload of Heartbeat.resources.

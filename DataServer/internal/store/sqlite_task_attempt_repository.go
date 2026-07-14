@@ -413,7 +413,8 @@ func (r *SQLiteTaskAttemptRepository) PersistMetrics(ctx context.Context, metric
 		wasted_cost_estimate,
 		asset_cache_hit_count, asset_cache_miss_count,
 		blob_cache_hit_count, blob_cache_miss_count,
-		render_cache_hit_count
+		render_cache_hit_count,
+		output_sha256
 	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 		          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 		          ?, ?, ?, ?, ?, ?, ?,
@@ -457,6 +458,7 @@ func (r *SQLiteTaskAttemptRepository) PersistMetrics(ctx context.Context, metric
 		metrics.AssetCacheHitCount, metrics.AssetCacheMissCount,
 		metrics.BlobCacheHitCount, metrics.BlobCacheMissCount,
 		metrics.RenderCacheHitCount,
+		metrics.OutputSHA256,
 	)
 	if err != nil {
 		return fmt.Errorf("metrics persist: %w", err)
@@ -686,7 +688,8 @@ func (r *SQLiteTaskAttemptRepository) GetMetrics(ctx context.Context, attemptID 
 		        wasted_cost_estimate,
 		        asset_cache_hit_count, asset_cache_miss_count,
 		        blob_cache_hit_count, blob_cache_miss_count,
-		        render_cache_hit_count
+		        render_cache_hit_count,
+		        output_sha256
 		 FROM task_attempt_metrics WHERE attempt_id = ?`,
 		attemptID,
 	)
@@ -729,6 +732,7 @@ func (r *SQLiteTaskAttemptRepository) GetMetrics(ctx context.Context, attemptID 
 		&m.AssetCacheHitCount, &m.AssetCacheMissCount,
 		&m.BlobCacheHitCount, &m.BlobCacheMissCount,
 		&m.RenderCacheHitCount,
+		&m.OutputSHA256,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil

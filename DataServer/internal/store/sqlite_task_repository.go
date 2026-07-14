@@ -996,7 +996,8 @@ func (r *SQLiteTaskRepository) IngestTaskResultAtomic(ctx context.Context, cmd t
 				wasted_cost_estimate,
 				asset_cache_hit_count, asset_cache_miss_count,
 				blob_cache_hit_count, blob_cache_miss_count,
-				render_cache_hit_count
+				render_cache_hit_count,
+				output_sha256
 			) VALUES (			?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
@@ -1004,7 +1005,7 @@ func (r *SQLiteTaskRepository) IngestTaskResultAtomic(ctx context.Context, cmd t
 			          ?, ?, ?, ?, ?, ?, ?, ?,
 			          ?, ?, ?, ?, ?,
 			          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-			          ?, ?, ?, ?,
+			          ?, ?, ?, ?, ?,
 			          ?, ?, ?, ?, ?)`,
 			cmd.Metrics.AttemptID, cmd.Metrics.InputBytes, cmd.Metrics.OutputBytes,
 			cmd.Metrics.BytesFromDrive, cmd.Metrics.BytesFromBlobstore, cmd.Metrics.BytesFromLocalCache,
@@ -1040,6 +1041,7 @@ func (r *SQLiteTaskRepository) IngestTaskResultAtomic(ctx context.Context, cmd t
 			cmd.Metrics.AssetCacheHitCount, cmd.Metrics.AssetCacheMissCount,
 			cmd.Metrics.BlobCacheHitCount, cmd.Metrics.BlobCacheMissCount,
 			cmd.Metrics.RenderCacheHitCount,
+			cmd.Metrics.OutputSHA256,
 		)
 		if err != nil {
 			return fmt.Errorf("task ingest atomic metrics: %w", err)
@@ -1144,7 +1146,12 @@ func (r *SQLiteTaskRepository) IngestTaskResultAtomic(ctx context.Context, cmd t
 	//    A different hash for the same attempt_id is a conflict and aborts
 	//    the transaction, preserving the immutable attempt history.
 	if cmd.RawReportJSON != "" {
-		rawHash := fmt.Sprintf("%x", sha256.Sum256([]byte(cmd.RawReportJSON)))
+		// Prefer the worker-provided deterministic hash; fall back to a
+		// locally-computed hash for pre-cutover workers that do not send it.
+		rawHash := cmd.ReportHash
+		if rawHash == "" {
+			rawHash = fmt.Sprintf("%x", sha256.Sum256([]byte(cmd.RawReportJSON)))
+		}
 
 		var existingHash string
 		err := tx.QueryRowContext(ctx,
@@ -1164,12 +1171,21 @@ func (r *SQLiteTaskRepository) IngestTaskResultAtomic(ctx context.Context, cmd t
 			receivedAt = cmd.RawReportReceivedAt.UTC().Format(time.RFC3339)
 		}
 
+		reportSchema := cmd.ReportSchemaVersion
+		if reportSchema <= 0 {
+			reportSchema = 1
+		}
+		reportVersion := cmd.ReportVersion
+		if reportVersion <= 0 {
+			reportVersion = 1
+		}
+
 		if existingHash == "" {
 			_, err = tx.ExecContext(ctx,
 				`INSERT INTO task_attempt_reports
-				 (attempt_id, report_schema, report_hash, raw_report_json, received_at, persisted_at)
-				 VALUES (?, ?, ?, ?, ?, ?)`,
-				cmd.AttemptID, 1, rawHash, cmd.RawReportJSON, receivedAt, now,
+				 (attempt_id, report_schema, report_version, report_hash, raw_report_json, received_at, persisted_at)
+				 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+				cmd.AttemptID, reportSchema, reportVersion, rawHash, cmd.RawReportJSON, receivedAt, now,
 			)
 			if err != nil {
 				return fmt.Errorf("task ingest atomic raw report: %w", err)

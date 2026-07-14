@@ -341,6 +341,38 @@ func (r *TaskRunner) mergeStatsInto(report *TaskExecutionReport, m map[string]in
 		FramesComposited:    positiveIntegerToInt64(m["frames.composited"]),
 		FramesEncoded:       positiveIntegerToInt64(m["frames.encoded"]),
 		ConcatMode:          stringFromMap(m["concat.mode"]),
+
+		// Scorecard v2 resource / cache / quality counters surfaced by
+		// executors as dotted keys. Missing keys stay zero.
+		GpuTimeMs:              positiveIntegerToInt64(m["gpu.time.ms"]),
+		PeakVramBytes:          positiveIntegerToInt64(m["vram.peak.bytes"]),
+		TempBytesWritten:       positiveIntegerToInt64(m["temp.bytes.written"]),
+		DuplicateDownloadBytes: positiveIntegerToInt64(m["duplicate.download.bytes"]),
+		MediaDurationSeconds:   floatFromMap(m["media.duration.seconds"]),
+		WallClockSeconds:       floatFromMap(m["wall.clock.seconds"]),
+
+		FfprobeValid:      int32(positiveIntegerToInt64(m["ffprobe.valid"])),
+		DurationDiffSec:   floatFromMap(m["duration.diff.sec"]),
+		HasVideoStream:    boolFromMap(m["has.video.stream"]),
+		HasAudioStream:    boolFromMap(m["has.audio.stream"]),
+		OutputFileSize:    positiveIntegerToInt64(m["output.file.size"]),
+		BlackFrameRatio:   floatFromMap(m["black.frame.ratio"]),
+		AudioSyncOffsetMs: positiveIntegerToInt64(m["audio.sync.offset.ms"]),
+		OutputSha256:      stringFromMap(m["output.sha256"]),
+
+		CpuPercentPeak: floatFromMap(m["cpu.percent.peak"]),
+		DiskReadBytes:  positiveIntegerToInt64(m["disk.read.bytes"]),
+		DiskWriteBytes: positiveIntegerToInt64(m["disk.write.bytes"]),
+		NetworkRxBytes: positiveIntegerToInt64(m["network.rx.bytes"]),
+		NetworkTxBytes: positiveIntegerToInt64(m["network.tx.bytes"]),
+		IowaitMs:       positiveIntegerToInt64(m["iowait.ms"]),
+		OpenFdsPeak:    positiveIntegerToInt64(m["open.fds.peak"]),
+
+		AssetCacheHitCount:  positiveIntegerToInt64(m["asset.cache.hit.count"]),
+		AssetCacheMissCount: positiveIntegerToInt64(m["asset.cache.miss.count"]),
+		BlobCacheHitCount:   positiveIntegerToInt64(m["blob.cache.hit.count"]),
+		BlobCacheMissCount:  positiveIntegerToInt64(m["blob.cache.miss.count"]),
+		RenderCacheHitCount: positiveIntegerToInt64(m["render.cache.hit.count"]),
 	}
 	if v, ok := m["ffmpeg.speed_ratio"].(float64); ok {
 		typed.FfmpegSpeedRatio = v
@@ -407,6 +439,32 @@ func stringFromMap(v any) string {
 		return s
 	}
 	return ""
+}
+
+func floatFromMap(v any) float64 {
+	if v == nil {
+		return 0
+	}
+	switch x := v.(type) {
+	case float64:
+		return x
+	case float32:
+		return float64(x)
+	case int64:
+		return float64(x)
+	case int32:
+		return float64(x)
+	case int:
+		return float64(x)
+	}
+	return 0
+}
+
+func boolFromMap(v any) bool {
+	if b, ok := v.(bool); ok {
+		return b
+	}
+	return false
 }
 
 // runExecute is the heart of PR-3.3: it invokes Executor.Execute under a

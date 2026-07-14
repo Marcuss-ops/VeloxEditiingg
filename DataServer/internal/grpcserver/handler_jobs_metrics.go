@@ -103,16 +103,41 @@ func executionMetricsToAttemptMetrics(attemptID string, em *pb.TaskExecutionMetr
 	am.EncodePasses = em.GetEncodePasses()
 	am.FinalConcatStreamCopy = em.GetFinalConcatStreamCopy()
 	am.ConcatMode = em.GetConcatMode()
-	// TempBytesWritten / DuplicateDownloadBytes / MediaDurationSeconds /
-	// WallClockSeconds are NOT yet carried on the typed proto
-	// (proto v3 / F1 cutover). They live on the SQL schema (migration 054)
-	// and will be surfaced on the wire in a follow-up proto bump.
-	// Persisted as zero today; the scorecard derived ratios already
-	// handle zero-side safely via early-return branches.
-	am.TempBytesWritten = 0
-	am.DuplicateDownloadBytes = 0
-	am.MediaDurationSeconds = 0
-	am.WallClockSeconds = 0
+
+	// Scorecard v2 resource counters (migrations 054, 073).
+	am.GPUTimeMS = em.GetGpuTimeMs()
+	am.PeakVRAMBytes = em.GetPeakVramBytes()
+	am.TempBytesWritten = em.GetTempBytesWritten()
+	am.DuplicateDownloadBytes = em.GetDuplicateDownloadBytes()
+	am.MediaDurationSeconds = em.GetMediaDurationSeconds()
+	am.WallClockSeconds = em.GetWallClockSeconds()
+
+	// Scorecard v2 output quality validation (migration 072 + 085).
+	am.FFprobeValid = int(em.GetFfprobeValid())
+	am.DurationDiffSec = em.GetDurationDiffSec()
+	am.HasVideoStream = em.GetHasVideoStream()
+	am.HasAudioStream = em.GetHasAudioStream()
+	am.OutputFileSize = em.GetOutputFileSize()
+	am.BlackFrameRatio = em.GetBlackFrameRatio()
+	am.AudioSyncOffsetMS = em.GetAudioSyncOffsetMs()
+	am.OutputSHA256 = em.GetOutputSha256()
+
+	// Scorecard v2 per-attempt resource snapshot (migration 073).
+	am.CPUPercentPeak = em.GetCpuPercentPeak()
+	am.RSSPeakBytes = em.GetPeakRssBytes() // same signal as PeakRSSBytes
+	am.DiskReadBytes = em.GetDiskReadBytes()
+	am.DiskWriteBytes = em.GetDiskWriteBytes()
+	am.NetworkRxBytes = em.GetNetworkRxBytes()
+	am.NetworkTxBytes = em.GetNetworkTxBytes()
+	am.IOWaitMS = em.GetIowaitMs()
+	am.OpenFDsPeak = em.GetOpenFdsPeak()
+
+	// Scorecard v2 granular cache hit/miss counters (migration 077).
+	am.AssetCacheHitCount = em.GetAssetCacheHitCount()
+	am.AssetCacheMissCount = em.GetAssetCacheMissCount()
+	am.BlobCacheHitCount = em.GetBlobCacheHitCount()
+	am.BlobCacheMissCount = em.GetBlobCacheMissCount()
+	am.RenderCacheHitCount = em.GetRenderCacheHitCount()
 
 	return am
 }

@@ -6,6 +6,7 @@ package worker
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"velox-worker-agent/internal/telemetry"
 	"velox-worker-agent/pkg/logger"
 
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -144,31 +146,24 @@ func (w *Worker) submitTaskResult(ctx context.Context, pte *PendingTaskExecution
 		Revision:      int32(pte.Revision),
 	}
 
+	// Stamp PerformanceReport metadata. The worker emits exactly one report
+	// per attempt; report_version tracks re-emissions (always 1 on first
+	// send) and report_schema_version tracks the report shape.
+	tr.ReportSchemaVersion = 1
+	tr.ReportVersion = 1
+
 	if report != nil {
 		tr.ExecutorKey = report.ExecutorKey
 
 		// Build typed execution_metrics.
 		if report.TypedMetrics != nil {
-			m := report.TypedMetrics
-			tr.ExecutionMetrics = &pb.TaskExecutionMetrics{
-				InputBytes:            m.InputBytes,
-				OutputBytes:           m.OutputBytes,
-				BytesFromDrive:        m.BytesFromDrive,
-				BytesFromBlobstore:    m.BytesFromBlobstore,
-				BytesFromLocalCache:   m.BytesFromLocalCache,
-				CpuTimeMs:             m.CpuTimeMs,
-				PeakRssBytes:          m.PeakRssBytes,
-				FramesDecoded:         m.FramesDecoded,
-				FramesComposited:      m.FramesComposited,
-				FramesEncoded:         m.FramesEncoded,
-				FfmpegSpeedRatio:      m.FfmpegSpeedRatio,
-				EncodePasses:          m.EncodePasses,
-				FinalConcatStreamCopy: m.FinalConcatStreamCopy,
-				ConcatMode:            m.ConcatMode,
-				CpuPricePerSecond:     m.CpuPricePerSecond,
-				StoragePricePerGb:     m.StoragePricePerGb,
-				NetworkPricePerGb:     m.NetworkPricePerGb,
+			m := *report.TypedMetrics
+			// Fall back to the first output artifact's hash when the
+			// executor didn't explicitly stamp output_sha256.
+			if m.OutputSha256 == "" && len(report.Outputs) > 0 {
+				m.OutputSha256 = report.Outputs[0].Hash
 			}
+			tr.ExecutionMetrics = m.ToProto()
 		}
 
 		// Build typed phase_markers.
@@ -226,6 +221,18 @@ func (w *Worker) submitTaskResult(ctx context.Context, pte *PendingTaskExecution
 				tr.OutputArtifacts = append(tr.OutputArtifacts, s)
 			}
 		}
+	}
+
+	// Compute the report hash over the canonical protojson serialization of
+	// the final TaskResult. The hash field itself is empty during hashing,
+	// then stamped onto the wire message so the master can use it for
+	// idempotency and conflict detection.
+	tr.ReportHash = ""
+	reportJSON, err := protojson.Marshal(tr)
+	if err != nil {
+		w.logger.Error("[TASK] Failed to marshal TaskResult to protojson for %s: %v", taskID, err)
+	} else {
+		tr.ReportHash = fmt.Sprintf("%x", sha256.Sum256(reportJSON))
 	}
 
 	resultMsg := controltransport.NewTypedMessage(

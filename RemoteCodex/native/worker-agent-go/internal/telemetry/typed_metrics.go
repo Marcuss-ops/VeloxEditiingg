@@ -72,10 +72,40 @@ type TypedExecutionMetrics struct {
 	CpuPricePerSecond float64 `json:"cpu_price_per_second"`
 	StoragePricePerGb float64 `json:"storage_price_per_gb"`
 	NetworkPricePerGb float64 `json:"network_price_per_gb"`
-	// TODO(PR-3.6): wire temp_bytes_written onto the typed envelope. The
-	// proto already carries it (int64) but the worker doesn't yet emit
-	// it. Master F1 handler_jobs_metrics.go zero-pads cost-basis
-	// storage_gb_written until this lands.
+
+	// ── Scorecard v2 / extra resource counters (migrations 054, 073) ────
+	GpuTimeMs            int64   `json:"gpu_time_ms"`
+	PeakVramBytes        int64   `json:"peak_vram_bytes"`
+	TempBytesWritten     int64   `json:"temp_bytes_written"`
+	DuplicateDownloadBytes int64 `json:"duplicate_download_bytes"`
+	MediaDurationSeconds float64 `json:"media_duration_seconds"`
+	WallClockSeconds     float64 `json:"wall_clock_seconds"`
+
+	// ── Scorecard v2 / output quality validation (migration 072) ───────
+	FfprobeValid       int32   `json:"ffprobe_valid"`
+	DurationDiffSec    float64 `json:"duration_diff_sec"`
+	HasVideoStream     bool    `json:"has_video_stream"`
+	HasAudioStream     bool    `json:"has_audio_stream"`
+	OutputFileSize     int64   `json:"output_file_size"`
+	BlackFrameRatio    float64 `json:"black_frame_ratio"`
+	AudioSyncOffsetMs  int64   `json:"audio_sync_offset_ms"`
+	OutputSha256       string  `json:"output_sha256"`
+
+	// ── Scorecard v2 / per-attempt resource snapshot (migration 073) ────
+	CpuPercentPeak float64 `json:"cpu_percent_peak"`
+	DiskReadBytes  int64   `json:"disk_read_bytes"`
+	DiskWriteBytes int64   `json:"disk_write_bytes"`
+	NetworkRxBytes int64   `json:"network_rx_bytes"`
+	NetworkTxBytes int64   `json:"network_tx_bytes"`
+	IowaitMs       int64   `json:"iowait_ms"`
+	OpenFdsPeak    int64   `json:"open_fds_peak"`
+
+	// ── Scorecard v2 / granular cache hit/miss counters (migration 077) ─
+	AssetCacheHitCount  int64 `json:"asset_cache_hit_count"`
+	AssetCacheMissCount int64 `json:"asset_cache_miss_count"`
+	BlobCacheHitCount   int64 `json:"blob_cache_hit_count"`
+	BlobCacheMissCount  int64 `json:"blob_cache_miss_count"`
+	RenderCacheHitCount int64 `json:"render_cache_hit_count"`
 }
 
 // ToProto serializes a TypedExecutionMetrics onto the typed wire
@@ -107,9 +137,37 @@ func (t TypedExecutionMetrics) ToProto() *pb.TaskExecutionMetrics {
 		CpuPricePerSecond:     t.CpuPricePerSecond,
 		StoragePricePerGb:     t.StoragePricePerGb,
 		NetworkPricePerGb:     t.NetworkPricePerGb,
-		// TODO(PR-3.6): temp_bytes_written (int64) — worker doesn't
-		// emit temp disk accounting yet. Master F1 zero-pads
-		// cost_basis.storage_gb_written in the interim.
+
+		// Scorecard v2 extensions.
+		GpuTimeMs:              t.GpuTimeMs,
+		PeakVramBytes:          t.PeakVramBytes,
+		TempBytesWritten:       t.TempBytesWritten,
+		DuplicateDownloadBytes: t.DuplicateDownloadBytes,
+		MediaDurationSeconds:   t.MediaDurationSeconds,
+		WallClockSeconds:       t.WallClockSeconds,
+
+		FfprobeValid:      t.FfprobeValid,
+		DurationDiffSec:   t.DurationDiffSec,
+		HasVideoStream:    t.HasVideoStream,
+		HasAudioStream:    t.HasAudioStream,
+		OutputFileSize:    t.OutputFileSize,
+		BlackFrameRatio:   t.BlackFrameRatio,
+		AudioSyncOffsetMs: t.AudioSyncOffsetMs,
+		OutputSha256:      t.OutputSha256,
+
+		CpuPercentPeak: t.CpuPercentPeak,
+		DiskReadBytes:  t.DiskReadBytes,
+		DiskWriteBytes: t.DiskWriteBytes,
+		NetworkRxBytes: t.NetworkRxBytes,
+		NetworkTxBytes: t.NetworkTxBytes,
+		IowaitMs:       t.IowaitMs,
+		OpenFdsPeak:    t.OpenFdsPeak,
+
+		AssetCacheHitCount:  t.AssetCacheHitCount,
+		AssetCacheMissCount: t.AssetCacheMissCount,
+		BlobCacheHitCount:   t.BlobCacheHitCount,
+		BlobCacheMissCount:  t.BlobCacheMissCount,
+		RenderCacheHitCount: t.RenderCacheHitCount,
 	}
 }
 
@@ -139,5 +197,35 @@ func FromProto(p *pb.TaskExecutionMetrics) TypedExecutionMetrics {
 		CpuPricePerSecond:     p.GetCpuPricePerSecond(),
 		StoragePricePerGb:     p.GetStoragePricePerGb(),
 		NetworkPricePerGb:     p.GetNetworkPricePerGb(),
+
+		GpuTimeMs:              p.GetGpuTimeMs(),
+		PeakVramBytes:          p.GetPeakVramBytes(),
+		TempBytesWritten:       p.GetTempBytesWritten(),
+		DuplicateDownloadBytes: p.GetDuplicateDownloadBytes(),
+		MediaDurationSeconds:   p.GetMediaDurationSeconds(),
+		WallClockSeconds:       p.GetWallClockSeconds(),
+
+		FfprobeValid:      p.GetFfprobeValid(),
+		DurationDiffSec:   p.GetDurationDiffSec(),
+		HasVideoStream:    p.GetHasVideoStream(),
+		HasAudioStream:    p.GetHasAudioStream(),
+		OutputFileSize:    p.GetOutputFileSize(),
+		BlackFrameRatio:   p.GetBlackFrameRatio(),
+		AudioSyncOffsetMs: p.GetAudioSyncOffsetMs(),
+		OutputSha256:      p.GetOutputSha256(),
+
+		CpuPercentPeak: p.GetCpuPercentPeak(),
+		DiskReadBytes:  p.GetDiskReadBytes(),
+		DiskWriteBytes: p.GetDiskWriteBytes(),
+		NetworkRxBytes: p.GetNetworkRxBytes(),
+		NetworkTxBytes: p.GetNetworkTxBytes(),
+		IowaitMs:       p.GetIowaitMs(),
+		OpenFdsPeak:    p.GetOpenFdsPeak(),
+
+		AssetCacheHitCount:  p.GetAssetCacheHitCount(),
+		AssetCacheMissCount: p.GetAssetCacheMissCount(),
+		BlobCacheHitCount:   p.GetBlobCacheHitCount(),
+		BlobCacheMissCount:  p.GetBlobCacheMissCount(),
+		RenderCacheHitCount: p.GetRenderCacheHitCount(),
 	}
 }

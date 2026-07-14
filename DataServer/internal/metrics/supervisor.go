@@ -701,7 +701,8 @@ func (r *SQLiteLabelResolver) GetMetrics(ctx context.Context, attemptID string) 
 		       wasted_cost_estimate,
 		       asset_cache_hit_count, asset_cache_miss_count,
 		       blob_cache_hit_count, blob_cache_miss_count,
-		       render_cache_hit_count
+		       render_cache_hit_count,
+		       output_sha256
 		FROM task_attempt_metrics WHERE attempt_id = ?`,
 		attemptID,
 	).Scan(
@@ -739,6 +740,7 @@ func (r *SQLiteLabelResolver) GetMetrics(ctx context.Context, attemptID string) 
 		&m.AssetCacheHitCount, &m.AssetCacheMissCount,
 		&m.BlobCacheHitCount, &m.BlobCacheMissCount,
 		&m.RenderCacheHitCount,
+		&m.OutputSHA256,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
