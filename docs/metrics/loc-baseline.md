@@ -594,3 +594,101 @@ done
 | `[infra]` | Ansible / k8s / docker / CI |
 
 > Re-run the measurement, classify each long file using these tags, and link each hotspot to a follow-up refactor.
+
+---
+
+## 15. Round 1 — Gate landed + prior splits recap
+
+> **Snapshot:** state of `main` after the LOC-gate rollout is shippable.
+> **Commits in this round (4 atomic commits, no force-push, no `--amend`):**
+> `0727aef`  `ci(infra): install LOC threshold gate` (initial; had a broken `cd` anchor that scanned only the `scripts/` subtree)
+> `3de97ca`  `fix(ci): correct LOC gate cd anchor and add `./` normalization` (anchor at repo root via `git rev-parse --show-toplevel`)
+> `6f551bf`  `fix(ci): extend KNOWN_VIOLATIONS to cover 6 baseline violators` (initial sed-based extension; entries fell outside the array’s closing paren — superseded)
+> `8313068`  `fix(ci): rewrite KNOWN_VIOLATIONS as partitioned sub-arrays + literal UTF-8` **← current HEAD**
+
+### 15.1 Gate enforcement (now active)
+
+* **File:** `scripts/ci/check-loc-thresholds.sh` (**+84 LOC**, deferral-friendly via `KNOWN_VIOLATIONS` allow-list).
+* **CI step:** `.github/workflows/ci.yml` → new step `LOC threshold gate` with `if: always()` (runs even if other steps fail).
+* **Lint:** `.golangci.yml` → `funlen: lines: 600` enabled (warn-only; inform but do not block).
+* **Threshold policy:** unchanged from §11 (prod-go>900, test-go>1200, shell>700, docs>1200, yaml>800).
+* **Result:** script exits **0** with **9 `::warning`** + **0 `::error`** on day-1.
+
+### 15.2 KNOWN_VIOLATIONS allow-list (9 entries, 2 sub-arrays)
+
+| Sub-array | Entries | Source |
+| --- | ---: | --- |
+| `KNOWN_VIOLATIONS_BASELINE` | 3 | §10c originals — `CURRENT-TO-TARGET-ARCHITECTURE.md` (1492), `checklist-verify.sh` (1067), `certify-worker-2c-2d.sh` (794) |
+| `KNOWN_VIOLATIONS_ROUND1` | 6 | Surface by Round 1 full-tree scan — `sqlite_task_atomic.go` (939), `handler.go` (936), `enqueue_test.go` (1331), `sqlite_task_atomic_test.go` (1521), `sqlite_youtube_entities_test.go` (1283), `config_test.go` (1201) |
+| **Total** | **9** | gate stays green; each entry is a scheduled refactor commit |
+
+The script normalises `find`’s `./X` output to `X` before matching, so a single entry covers both relative and absolute resolutions.
+
+### 15.3 Prior refactors that landed (since §10a snapshot)
+
+| File | Before | After | Mechanism | Commits |
+| --- | ---: | ---: | --- | --- |
+| `DataServer/internal/store/sqlite_task_repository.go` | **2 045** | **112** | 4-stage split (query/crud/lease/atomic) | `f97a9ab` + `f71e2df` + `d7eff6f` + `dc63c57` |
+| `DataServer/internal/completion/coordinator.go` | **865** | **502** | extracted `ingest.go` (≈310) | `952ae9f` (coordinator ingest split landed as `efdafd4`) |
+| `DataServer/internal/store/sqlite_task_attempt_repository.go` | **856** | **154** | 3-domain split (lifecycle/metrics/reports) | `952ae9f` + `7016ea6` |
+| `DataServer/internal/metrics/collector.go` | **1 188** | **576** | sub-aggregators under `metrics/<sub>/` + `collector_sinks.go` (≈400) | `9c…` series (worker + metrics flow) |
+| `RemoteCodex/.../worker-agent-go/internal/worker/worker.go` | **982** | (thin orchestrator-doc per `110bd3e`) | 4-stage split (lifecycle/registration/claimloop/artifacts) | `2c5392e` + `f50f873` + `9c04ac1` + `110bd3e` |
+
+The §10a hotspot table is now **out of date** — it lists the *initial measurement* of files that have since been split. Re-run §12 to refresh after each Round; reconcile §10a/§10b against the next gate pass.
+
+### 15.4 Pre-existing gate failures surfaced (non-blocking)
+
+The `0727aef` verification pass surfaced three issues that are NOT covered by the LOC gate but are real follow-ups:
+
+1. `gofmt -l …` — 6 files mis-formatted:
+   `DataServer/internal/grpcserver/handler.go`,
+   `DataServer/internal/grpcserver/handler_security.go`,
+   `DataServer/internal/metrics/collector.go`,
+   `DataServer/internal/metrics/collector_sinks.go`,
+   `DataServer/internal/store/sqlite_task_query.go`,
+   `DataServer/internal/store/sqlite_task_repository.go`.
+2. `go vet ./internal/alertengine` — `stubAttemptReader does not implement observability.AttemptReader (missing GetCacheStats)`.
+3. `go test -count=1 ./internal/store/...` — documented baseline failures in `e2e_metrics_flow_test.go` (3 known; pre-date this round).
+
+Each is a separate scheduled atomic commit (`style(go)`, `fix(alertengine)`, `test(store)`) — see Round-2 follow-ups below.
+
+### 15.5 Cumulative §10 hotspot table (post-Round-1)
+
+Longest prod-Go files still above the 900 LOC threshold:
+
+| LOC | Path | §10 entry | Round |
+| ---: | --- | --- | --- |
+| 936 | `DataServer/internal/grpcserver/handler.go` | §10a | Round-2 candidate |
+| 939 | `DataServer/internal/store/sqlite_task_atomic.go` | (Round-1 surface) | Round-2 candidate |
+| 828 | `DataServer/internal/jobs/enqueue/enqueue.go` | §10a | **Round-1 target** (per current pick) |
+| 502 | `DataServer/internal/completion/coordinator.go` | §10a | Round-3 candidate (finish 2/3/4 phases) |
+| 514 | `DataServer/internal/completion/unitofwork.go` | (Round-1 surface) | Round-3 candidate |
+
+Longest test-Go files:
+
+| LOC | Path | §10 entry | Round |
+| ---: | --- | --- | --- |
+| 1 521 | `DataServer/internal/store/sqlite_task_atomic_test.go` | §10b | Round-2 paired |
+| 1 331 | `DataServer/internal/jobs/enqueue/enqueue_test.go` | §10b | **Round-1 paired target** |
+| 1 283 | `DataServer/internal/store/sqlite_youtube_entities_test.go` | (Round-1 surface) | Round-3 candidate |
+| 1 201 | `RemoteCodex/.../pkg/config/config_test.go` | (Round-1 surface) | Round-3 candidate |
+
+### 15.6 Round-2 follow-ups (separate atomic commits)
+
+* **R2-A.** `refactor(jobs): extract normalize.go / assets.go / plan.go from enqueue.go` (828→~250).
+* **R2-B.** `refactor(jobs): split enqueue_test.go by scenario` (1 331→~3 ~440-LOC files).
+* **R2-C.** `style(go): gofmt-fix 6 files in grpcserver/metrics/store`.
+* **R2-D.** `fix(alertengine): add GetCacheStats stub on stubAttemptReader`.
+* **R2-E.** `test(store): repair e2e_metrics_flow baseline failures` (lock-step with R2-C gating).
+* **R2-F.** `refactor(store): continue sqlite_task_atomic.go split + paired test` (post-R2-A/B so the gate-friction is paid down on the cheapest target first).
+
+Each lands as one atomic commit on `main` + immediate push (no PRs, no branches, no force-push, no `--amend`). KNOWN_VIOLATIONS_ROUND1 entries are removed as the corresponding file lands under the threshold.
+
+### 15.7 Methodology re-statement
+
+* `make verify` now fails the build if a NEWLY-added long file breaches the §11 category threshold. KNOWN_VIOLATIONS overrides this for the 9 explicit entries; everything else triggers a `::error` annotation and a non-zero exit.
+* After every Round:
+  1. Re-run the §12 measurement commands.
+  2. Append a `## <Round N>` section here capturing delta (file → before → after → commit SHA → KNOWN_VIOLATIONS entry removed).
+  3. Move refactored files OUT of the relevant §10 sub-table.
+* This document is the single source of truth for LOC policy; the bash script enforces it.
