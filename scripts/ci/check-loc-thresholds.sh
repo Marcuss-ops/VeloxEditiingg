@@ -16,13 +16,14 @@
 # themselves are exempt per §10 / §11 policy annotations.
 #
 # KNOWN_VIOLATIONS list format:
-#   <find-relative-path>|<kind>|<approx-loc>|<loc-baseline-tracking-ref>
+#   <repo-relative-path>|<kind>|<approx-loc>|<tracking-ref>
+# Paths are repo-relative WITHOUT a leading "./". The script normalises
+# `find`'s "./X" output to "X" before matching so a single entry covers
+# both `./X` and `X` invocations.
 # Update ONLY when:
 #   (a) a file is fixed (remove the entry), or
 #   (b) you explicitly accept a new long-file carry-over (add the entry +
 #       the tracking-ref in docs/metrics/loc-baseline.md §10c).
-#
-# The path MUST start with "./" because `find .` emits paths with that prefix.
 set -u
 
 THRESH_PROD_GO=900
@@ -31,22 +32,28 @@ THRESH_SH=700
 THRESH_MD=1200
 THRESH_YML=800
 
-# KNOWN_VIOLATIONS — annotated baseline carry-over (see loc-baseline.md §10c).
-# The gate stays green for these; CI must not block on day-1. Each entry
-# carries a `path|kind|approx-loc|tracking-ref` tuple.
+# KNOWN_VIOLATIONS — annotated baseline carry-over (loc-baseline.md §10c).
+# The gate stays green for these; CI must not block on day-1.
 KNOWN_VIOLATIONS=(
-  "./docs/architecture/CURRENT-TO-TARGET-ARCHITECTURE.md|docs|1492|loc-baseline.md §10c + §13 roadmap step 2 (deferred)"
-  "./deploy/runtime/checklist-verify.sh|shell|1067|loc-baseline.md §10c (deferred)"
-  "./scripts/cert/certify-worker-2c-2d.sh|shell|794|loc-baseline.md §10c (deferred)"
+  "docs/architecture/CURRENT-TO-TARGET-ARCHITECTURE.md|docs|1492|loc-baseline.md §10c + §13 roadmap step 2 (deferred)"
+  "deploy/runtime/checklist-verify.sh|shell|1067|loc-baseline.md §10c (deferred)"
+  "scripts/cert/certify-worker-2c-2d.sh|shell|794|loc-baseline.md §10c (deferred)"
 )
 
 VIOLATIONS=0
 KNOWN_HITS=0
-SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
-cd "$SCRIPT_DIR/.."
+
+# Anchor at the repository root regardless of how/where this script is invoked.
+# `git rev-parse --show-toplevel` finds the root from whichever submodule the
+# caller cd'd into; the fallback is two `dirname ../..` levels up from the
+# canonical location `scripts/ci/check-loc-thresholds.sh`.
+ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || ROOT=$(cd "$(dirname "$0")/../.." && pwd)
+cd "$ROOT"
 
 is_known() {
-  local path="$1"
+  # Strip leading ./ emitted by `find .` so the path matches against the
+  # bare repo-relative entry in KNOWN_VIOLATIONS.
+  local path="${1#./}"
   for entry in "${KNOWN_VIOLATIONS[@]}"; do
     local p="${entry%%|*}"
     if [ "$p" = "$path" ]; then return 0; fi
