@@ -47,11 +47,8 @@
 package metrics
 
 import (
-	"context"
 	"sync"
 	"time"
-
-	"velox-server/internal/taskattempts"
 )
 
 // Collector is the registered metric surface for the master. It owns
