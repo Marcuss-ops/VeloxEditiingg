@@ -256,6 +256,9 @@ message MasterToWorkerEnvelope {
     // and the worker can clean up the local spool row.
     ArtifactUploadPlan artifact_upload_plan = 32;
     TaskCommitAck task_commit_ack = 33;
+    // Acknowledgement sent by the master after processing a TaskResult.
+    // Carries the attempt_id and an optional error (e.g. "report_conflict").
+    TaskResultAck task_result_ack = 35;
   }
 
   reserved 21, 22, 23, 34;
@@ -464,6 +467,21 @@ message TaskCommitAck {
   string lease_id = 5;
   int32 revision = 6;
   google.protobuf.Timestamp committed_at = 7;
+}
+
+// TaskResultAck is the master's acknowledgement of a TaskResult.
+// It is sent after the master has processed the report, whether the
+// attempt was ingested for the first time, was an idempotent replay,
+// or collided with an existing immutable report.
+message TaskResultAck {
+  string task_id = 1;
+  string job_id = 2;
+  string attempt_id = 3;
+  // Empty on success/idempotent acceptance. Populated with a stable
+  // machine-readable token when the master rejects the report, e.g.
+  // "report_conflict" when the same attempt already has a different
+  // report hash.
+  string error = 4;
 }
 
 // ---------------------------------------------------------

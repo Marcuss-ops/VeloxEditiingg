@@ -496,12 +496,44 @@ func (h *Handler) handleTaskResult(workerID string, tr *pb.TaskResult, sess *wor
 		ReportVersion:       tr.GetReportVersion(),
 		ReportHash:          tr.GetReportHash(),
 	})
+
+	// Build and send the TaskResultAck. We ACK both successful ingests
+	// and immutable-report conflicts so the worker can stop retrying.
+	// Internal errors (DB failures, identity mismatch, etc.) do NOT get
+	// an ACK, letting the worker retry.
+	ackError := ""
 	if err != nil {
-		log.Printf("[GRPC] TaskResult ingest for task=%s attempt=%s FAILED: %v", taskID, attemptID, err)
-		return
+		if errors.Is(err, taskattempts.ErrReportConflict) {
+			ackError = "report_conflict"
+			log.Printf("[GRPC] TaskResult conflict for task=%s attempt=%s: %v", taskID, attemptID, err)
+		} else {
+			log.Printf("[GRPC] TaskResult ingest for task=%s attempt=%s FAILED: %v", taskID, attemptID, err)
+			return
+		}
+	} else {
+		log.Printf("[GRPC] TaskResult ingest for task=%s done: closed=%v artNew=%d artSkip=%d jobXn=%v jobStatus=%q",
+			taskID, res.AttemptClosed, res.ArtifactsNew, res.ArtifactsSkips, res.JobTransitioned, res.JobNewStatus)
 	}
-	log.Printf("[GRPC] TaskResult ingest for task=%s done: closed=%v artNew=%d artSkip=%d jobXn=%v jobStatus=%q",
-		taskID, res.AttemptClosed, res.ArtifactsNew, res.ArtifactsSkips, res.JobTransitioned, res.JobNewStatus)
+
+	if sess != nil && sess.sendCh != nil {
+		ackEnv := &pb.MasterToWorkerEnvelope{
+			MessageId:       fmt.Sprintf("taskresultack-%s-%s-%d", workerID, taskID, time.Now().UnixNano()),
+			WorkerId:        workerID,
+			SentAt:          timestamppb.Now(),
+			ProtocolVersion: controltransport.ProtocolVersionCurrent,
+			Msg: &pb.MasterToWorkerEnvelope_TaskResultAck{
+				TaskResultAck: &pb.TaskResultAck{
+					TaskId:    taskID,
+					JobId:     jobID,
+					AttemptId: attemptID,
+					Error:     ackError,
+				},
+			},
+		}
+		if !safeSend(sess.sendCh, &outboundMessage{Envelope: ackEnv}) {
+			log.Printf("[GRPC] sendCh full/closed for TaskResultAck to worker %s", workerID)
+		}
+	}
 }
 
 // handleTaskRenewal processes a typed TaskLeaseRenewal via gRPC stream.
