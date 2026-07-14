@@ -768,3 +768,71 @@ Each lands as ONE atomic commit on `main` + push; each has its own §17+ delta a
 
 > R2-B is the highest-leverage next commit (KNOWN_VIOLATIONS_ROUND1 entry removal = gate-friction win). Pick that one first if schedule pressure is tight; R2-A.2 + R2-A.3 finish the §15.6 promise independently.
 
+---
+
+## 16b. Round 1 — Delta vs. baseline (completion-coordinator)
+
+> **Snapshot:** per-file detail on the completion-coordinator ingest.go extraction that pre-dates the LOC-gate rollout. Summarised upfront in §15.3 ("Prior refactors that landed"); expanded here with full per-commit LOC delta + the forward pipeline for the remaining 3 stages. Assumes `HEAD = 23de965` (`ci(infra): install golangci-lint v1.64.0`).
+
+> **Discrepancy surfaced.** This section treats **only Stage 1a as landed** because `validate.go` does not exist on disk at HEAD (`find DataServer/internal/completion -iname 'validate*'` returns no matches; the validate cluster still lives inside `coordinator.go::CompleteUpload`). The §15.6 four-phase blueprint is reflected as a forward TODO queue (Stages 1b / 1c / 1d), not as already-shipped work. If the working assumption is that an unmerged branch holds validate.go, this section is still correct on disk facts — pick it up again when the branch lands.
+
+> **Reference for the planned 4-phase split.** The godoc block at the top of `DataServer/internal/completion/ingest.go` documents the intended carve-out:
+>
+> * `DeclareOutputs` / `RecordUploadProgress` → `ingest.go` (**landed**)
+> * `CompleteUpload` (manifest, HMAC token verification, idempotency-key reconciliation) → `validate.go` (**planned**)
+> * `CommitAttempt` (UOW-bound atomic insert, idempotency-key consumer, attempt_commits row write) → `persist.go` (**planned**)
+> * `ReconcileAttempt` (lease-clock + Verdetto scoring + cross-store event emission) → `notify.go` (**planned**)
+
+### 16b.1 Per-file LOC delta (Stage 1a — ingest.go)
+
+| File | Before | After | Δ | First-introduced / last-touched commit | Authoring date |
+| --- | ---: | ---: | ---: | --- | --- |
+| `DataServer/internal/completion/coordinator.go` | **865** | **502** | **−363** | `efdafd4` (`refactor(completion): extract ingest.go from coordinator.go (1/4)`) | 2026-07-14 T15:41:17Z |
+| `DataServer/internal/completion/ingest.go` | — | **+405** (new) | **+405** | `efdafd4` | 2026-07-14 T15:41:17Z |
+| `DataServer/internal/completion/validate.go` | — | **0** (does not exist on disk) | — | — | — |
+| `DataServer/internal/completion/persist.go` | — | **0** (does not exist on disk) | — | — | — |
+| `DataServer/internal/completion/notify.go` | — | **0** (does not exist on disk) | — | — | — |
+| **Stage-1a net change** | **865** | **907** (coordinator 502 + ingest 405) | **+42** | — | — |
+
+The +42 net over the two-file extract is import-block boilerplate + ingest.go's package-header (logging the planned 4-phase structure per the godoc spec above) + a minor coordinator.go package-header update noting the split. The 363-LOC reduction on `coordinator.go` is the honest orchestrator win.
+
+### 16b.2 Imports partitioned (Stage 1a)
+
+* **`coordinator.go` orchestrator** keeps the lifecycle-dependency block (UOW bookkeeping + the gRPC server keep-alive wiring + the bucket-stable shim) and DROPS the ingest-side direct-bucket imports because the `attempt_commits` upsert path moved alongside its caller.
+* **`ingest.go` (declared scope)** owns the deterministic-token helper imports (`crypto/rand`, `crypto/sha256`, `encoding/hex`, `encoding/binary` for `generateDeterministicCommitToken`), the HMAC plumbing required for Verdetto P0 #6, and the ingest-side semantic validators (`validateManifest`).
+* Future `validate.go` / `persist.go` / `notify.go` will each take their own slice of the remaining imports; the carve-out boundary is owned by the method itself (call-graph-driven split, per §15.7).
+
+### 16b.3 Public-API contract preserved
+
+* `package completion` unchanged.
+* Exported names preserved on `coordinator.go`: `Coordinator`, `New`, `Validate`, `Ingest`, `Commit`, `Reconcile` — `Ingest` remains the orchestrator entry-point but its body now delegates to `ingest.go` methods.
+* New exported methods on the coordinator receiver that landed on `ingest.go`: `DeclareOutputs`, `RecordUploadProgress`. Both are called from `coordinator.go::Ingest`. No caller-side import or symbol change anywhere in `DataServer/...`.
+
+### 16b.4 Note on `validate.go` collision risk
+
+The planned `validate.go` overlaps conceptually with two existing names — `DataServer/internal/handlers/server/darkeditor/processors/*/validation/` and the worker's report-validation path in `RemoteCodex/.../pkg/config/`. Naming collisions are scoped by package — the planned `DataServer/internal/completion/validate.go` is unambiguous because of the package prefix. If extracted helpers reach for shared UUID / HMAC primitives during Stage 1b, promote those primitives to `internal/jobs` or `shared/contract` first (per §15.7 "promote before extract").
+
+### 16b.5 Verification (post-push, @ `efdafd4` HeadOfStage1a + rerun @ HEAD)
+
+* `go build ./internal/completion/...` → exit 0
+* `go vet ./internal/completion/...` → exit 0
+* `go test ./internal/completion/...` → exit 0 (all existing tests pass unchanged: `coordinator_test.go` + `reconcile_test.go` still cover the full pipeline end-to-end)
+* `go build ./...` (full `DataServer` module) → exit 0
+* `bash scripts/ci/check-loc-thresholds.sh` → exit 0, **9 `::warning` + 0 `::error`** at HEAD; completion-coordinator is NOT a `KNOWN_VIOLATIONS` entry — `coordinator.go` at 502 sits well below the 900 prod-go threshold post-split, and ingest.go at 405 sits below the 600 warn tier.
+
+### 16b.6 Stages 1b / 1c / 1d — forward TODO queue
+
+| Stage | Target file | Cluster | Source on `coordinator.go` | Forward commit | Lands |
+| --- | --- | --- | --- | --- | --- |
+| **1a** | `ingest.go` ✅ landed | ingest | `DeclareOutputs`, `RecordUploadProgress` | `efdafd4` (2026-07-14) | this section |
+| **1b (planned)** | `validate.go` 🚧 awaiting | validate | `CompleteUpload` (manifest, HMAC token verification, idempotency-key reconciliation) | `refactor(completion): extract validate.go from coordinator.go (2/4)` | next § after R2-B lands |
+| **1c (planned)** | `persist.go` 🚧 awaiting | persist | `CommitAttempt` (UOW-bound atomic insert, idempotency-key consumer, attempt_commits row write) | `refactor(completion): extract persist.go from coordinator.go (3/4)` | §XX+1 |
+| **1d (planned)** | `notify.go` 🚧 awaiting | notify | `ReconcileAttempt` (lease-clock + Verdetto scoring + cross-store event emission) | `refactor(completion): extract notify.go from coordinator.go (4/4)` | §XX+2 |
+
+Each forward stage is intended to land as ONE atomic commit on `main` + immediate push (no PRs, no branches, no force-push, no `--amend`), per project workflow rules §15.7. Stages 1b / 1c / 1d will most naturally slot AFTER R2-B/KNOWN_VIOLATIONS_ROUND1 churn settles — the completion-coordinator split is not on the LOC gate's known-violations list (502 LOC is below 900), so it is schedule-driven, not gate-driven.
+
+### 16b.7 Cumulative §10a hotspot reconciliation
+
+Prior to Stage 1a the §10a table listed `DataServer/internal/completion/coordinator.go` at **865 LOC**. Post-Stage-1a it lands at **502 LOC**, which moves it off the refactor-required tier. The next-above-the-threshold entry under `internal/completion/` would have been `unitofwork.go` at 514 LOC (a Round-3 candidate per §15.5); `coordinator.go` at 502 is now in the same risk band as `unitofwork.go` and is a Round-3 candidate in its own right.
+
+
