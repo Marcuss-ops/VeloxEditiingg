@@ -1,7 +1,8 @@
 // Package grpcserver / handler_config.go
 //
-// Dependency setters and typed accessors for the WorkerControl handler.
-// Extracted from handler.go to keep the core types file focused.
+// HandlerConfig and dependency setters / typed accessors for the
+// WorkerControl handler. Extracted from handler.go to keep the core
+// types file focused.
 package grpcserver
 
 import (
@@ -9,6 +10,19 @@ import (
 	velmetrics "velox-server/internal/metrics"
 	"velox-server/internal/registry"
 )
+
+// HandlerConfig holds configuration for the gRPC handler.
+type HandlerConfig struct {
+	// PushMode enables Phase 5+ behaviour: send JobOffer directly and
+	// let workers respond with JobAccepted.
+	PushMode bool
+	// AllowInsecure is dev-only: allow insecure gRPC connections
+	// (VELOX_GRPC_ALLOW_INSECURE_DEV).
+	AllowInsecure bool
+	// AllowedWorkers is a P0 comma-separated worker ID allowlist
+	// (VELOX_ALLOWED_WORKERS).
+	AllowedWorkers string
+}
 
 // SetIngestionSvc installs the canonical TaskReportIngestionService so
 // handleTaskResult can delegate to it. Bootstrap calls this immediately
@@ -46,11 +60,4 @@ func (h *Handler) SetPlacementRejectionSink(sink velmetrics.PlacementRejectionSi
 // paths, partial-wiring bootstrap variants) skips the gate entirely.
 func (h *Handler) SetCapabilityRegistry(r *registry.CapabilityRegistry) {
 	h.capabilityRegistry = r
-}
-
-// ingestionService returns the wired TaskReportIngestionService, or nil
-// if not configured. Exported as a typed accessor for tests that want
-// to verify the wiring contract.
-func (h *Handler) ingestionService() *ingest.TaskReportIngestionService {
-	return h.ingestionSvc
 }
