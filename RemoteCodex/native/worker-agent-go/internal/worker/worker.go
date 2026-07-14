@@ -4,6 +4,7 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"velox-shared/controltransport"

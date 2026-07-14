@@ -43,7 +43,7 @@ func (w *Worker) Start(ctx context.Context) error {
 		return fmt.Errorf("worker.Start precondition: %w", err)
 	}
 	logger.LogStartup(w.config.WorkerID, w.version, w.config.MasterURL)
-	w.logger.Debug("Work Directory: %s", w.config.WorkerDir)
+	w.logger.Debug("Work Directory: %s", w.config.WorkDir)
 
 	w.concurrencyLimiter.Start(ctx)
 	w.logger.Info("[CONCURRENCY] Started with max_active_jobs=%d", w.config.MaxActiveJobs)
