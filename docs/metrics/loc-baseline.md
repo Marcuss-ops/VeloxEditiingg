@@ -692,3 +692,79 @@ Each lands as one atomic commit on `main` + immediate push (no PRs, no branches,
   2. Append a `## <Round N>` section here capturing delta (file → before → after → commit SHA → KNOWN_VIOLATIONS entry removed).
   3. Move refactored files OUT of the relevant §10 sub-table.
 * This document is the single source of truth for LOC policy; the bash script enforces it.
+
+---
+
+## 16. Round 2 — enqueue.go split landed (R2-A.1 only)
+
+> **Snapshot:** state of `main` after R2-A.1 (`fd40e4c`).
+> **Commits in this round (1 atomic commit, no force-push, no `--amend`):**
+> `fd40e4c`  `refactor(jobs): extract normalize.go from enqueue.go (R2-A.1)` ← current HEAD
+
+### 16.1 File-level LOC delta
+
+| File | Before | After | Δ |
+| --- | ---: | ---: | ---: |
+| `DataServer/internal/jobs/enqueue/enqueue.go` | **828** | **436** | **−392** |
+| `DataServer/internal/jobs/enqueue/normalize.go` | — | **new (426)** | **+426** |
+| **R2-A.1 net change** | **828** | **862** | **+34** |
+
+The +34 net is import-block boilerplate + the layer-note godoc at the top of `enqueue.go` + the package godoc and R2-A.1 attribution block at the top of `normalize.go`. The 392-LOC extraction (14 funcs) is honest orchestrator-level reduction; enqueue.go now reads as the linear happy path Enqueue → PrepareJobAndTask → prepareJobAndTask → compileSceneVideoJob → Commit).
+
+### 16.2 Imports partitioned to match ownership
+
+- **`enqueue.go`** (orchestrator): keeps `context / crypto/sha256 / encoding/hex / encoding/json / fmt / strings + assetbridge + costmodel + jobs + routing + store + taskgraph + telemetry + payload + github.com/google/uuid`. **Drops** `velox-shared/contract` (only the moved funcs referenced it).
+- **`normalize.go`** (helpers): adds `velox-server/internal/jobs` (`validatePlanPayload`'s signature references `*jobs.Job`). Keeps `velox-shared/contract + velox-server/internal/routing + velox-shared/payload` plus the stdlib block.
+
+### 16.3 14 funcs moved verbatim (in original order, signatures + bodies byte-identical)
+
+1. `validatePlanPayload`
+2. `normalizeSceneVideoPayload`
+3. `normalizeScenes`
+4. `normalizeSceneArray`
+5. `normalizeVoiceoverList`
+6. `sceneCountFromPayload`
+7. `voiceoverCountFromPayload`
+8. `hasClipTimelinePayload`
+9. `copyTimelinePayloadFields`
+10. `syncAudioURLFromVoiceover`
+11. `resolveInternalExecutorID`
+12. `resolveRequiredCapabilities`
+13. `sceneVideoFingerprint`
+14. `extractPlanMaxRetry`
+
+### 16.4 Public-API contract preserved
+
+- `package enqueue` unchanged.
+- Exported names preserved: `Enqueuer`, `NewEnqueuer`, `DeriveForwardingJobID`, `PlanResolver`.
+- Same-package visibility: `validationError`, `PlanDestination`, `ResolvedPlan` (declared in `enqueue.go`) are referenced from `normalize.go` without re-export.
+- No caller-side import or symbol change anywhere in `DataServer/...`.
+
+### 16.5 Verification (post-push)
+
+- `go build ./internal/jobs/enqueue/...` → exit 0
+- `go vet ./internal/jobs/enqueue/...` → exit 0
+- `go test ./internal/jobs/enqueue/...` → exit 0 (all existing tests pass unchanged)
+- `go build ./...` (full `DataServer` module) → exit 0
+- `bash scripts/ci/check-loc-thresholds.sh` → exit 0, **9 `::warning` + 0 `::error`**
+
+`enqueue.go` was NOT in `KNOWN_VIOLATIONS_ROUND1` (was 828 < 900 prod-go threshold; only `enqueue_test.go` at 1 331 was flagged). Post-split it lands at 436 LOC, well below the 600 warn-tier. **No** `KNOWN_VIOLATIONS_ROUND1` entry was added or removed; effective count still **6**.
+
+### 16.6 Documentation drift to reconcile next round
+
+§15.6 R2-A description promised a 3-file extract (`normalize.go / assets.go / plan.go`). R2-A.1 only landed the **first** of those (the 14 funcs → `normalize.go`). The remaining two sub-files (`assets.go` for the voiceover/scene-image rewrite helpers + their `(e *Enqueuer)` receivers; `plan.go` for `enforceDeliveryPlanPrecondition` + `PlanDestination`/`ResolvedPlan`/`PlanResolver` declarations) are still in `enqueue.go`. Tracking ref updated below; follow-up `R2-A.2` + `R2-A.3` will land as separate atomic commits per project rules (one file per commit).
+
+### 16.7 Round-2 remainder (per §15.6)
+
+Each lands as ONE atomic commit on `main` + push; each has its own §17+ delta appended here:
+
+- **R2-B.** `refactor(jobs): split enqueue_test.go by scenario` (1 331 → ~3 ~440-LOC files: `enqueue_test_normalize.go`, `enqueue_test_lifecycle.go`, `enqueue_test_idempotency.go`). **Removes** the `DataServer/internal/jobs/enqueue/enqueue_test.go` entry from `KNOWN_VIOLATIONS_ROUND1` (drops the do-not-flag count from 9 → 8). Lands §17.
+- **R2-A.2.** `refactor(jobs): extract assets.go from enqueue.go` (rewriteVoiceoverPayloadFor + rewriteSceneImagePayloadFor + `resolveVoiceoverPayload`/`resolveSceneImagePayload` `(e *Enqueuer)` receivers). Lands §18.
+- **R2-A.3.** `refactor(jobs): extract plan.go from enqueue.go` (`enforceDeliveryPlanPrecondition` + `PlanDestination`/`ResolvedPlan`/`PlanResolver` declarations + `validatePlanPayload` [reuse from normalize.go via same-package]). Lands §19.
+- **R2-C.** `style(go): gofmt-fix 6 files in grpcserver/metrics/store` (pre-existing 6-format drift surfaced by Round-1 verification). Lands §20.
+- **R2-D.** `fix(alertengine): add GetCacheStats stub on stubAttemptReader` (closes one iface-mismatch surfaced by `go vet`). Lands §21.
+- **R2-E.** `test(store): repair e2e_metrics_flow baseline failures` (3 documented failures pre-date Round 1; lock-step with R2-C). Lands §22.
+- **R2-F.** `refactor(store): continue sqlite_task_atomic.go (939 + paired test 1521) split`. Lands §23.
+
+> R2-B is the highest-leverage next commit (KNOWN_VIOLATIONS_ROUND1 entry removal = gate-friction win). Pick that one first if schedule pressure is tight; R2-A.2 + R2-A.3 finish the §15.6 promise independently.
+
