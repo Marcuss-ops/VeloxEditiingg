@@ -625,68 +625,10 @@ func (c *Collector) RecordAttemptOutcome(status taskattempts.AttemptStatus, errC
 // RecordWorker stamps a worker's resource counters onto the per-worker
 // gauge set. The heartbeat period drives how often this is called from
 // watchdogs (default 15s).
-func (c *Collector) RecordWorker(workerID string, rs *ResourceSnapshot) {
-	if rs == nil {
-		return
-	}
-	wl := []string{workerID}
-	c.workerCPUUtil.GaugeSet(wl, int64(rs.CPUUtilRatio*1000000))
-	c.workerIOWait.GaugeSet(wl, int64(rs.CPUIOWaitRatio*1000000))
-	c.workerSteal.GaugeSet(wl, int64(rs.CPUStealRatio*1000000))
-	c.workerRSSBytes.GaugeSet(wl, rs.ProcessRSSBytes)
-	c.workerRSSPeak.GaugeSet(wl, rs.ProcessRSSPeakBytes)
-	c.workerMemoryUsed.GaugeSet(wl, rs.MemoryUsedBytes)
-	c.workerDiskFree.GaugeSet(wl, rs.DiskFreeBytes)
-	c.workerTempBytes.GaugeSet(wl, rs.TempBytesWritten)
-	c.workerActiveTasks.GaugeSet(wl, int64(rs.ActiveTasks))
-	c.workerTaskSlots.GaugeSet(wl, int64(rs.TaskSlots))
-	c.workerLoad1.GaugeSet(wl, int64(rs.Load1*1000))
-	c.workerRunQueue.GaugeSet(wl, int64(rs.RunQueue))
-
-	// Counter diffs (network cumulatives).
-	c.workerNetRxBytes.Inc(wl, rs.NetworkRxBytesDelta)
-	c.workerNetTxBytes.Inc(wl, rs.NetworkTxBytesDelta)
-	c.cacheEntries.GaugeSet(wl, int64(rs.CacheEntries))
-	c.cacheSizeBytes.GaugeSet(wl, rs.CacheBytesUsed)
-	c.cacheEvictions.Inc(wl, rs.CacheEvictionsDelta)
-	c.cacheCorruptions.Inc(wl, rs.CacheCorruptionsDelta)
-
-	// Heartbeat timestamp.
-	c.stateMu.Lock()
-	c.lastSeen[workerID] = rs.SampledAt
-	c.stateMu.Unlock()
-}
-
 
 // ResourceSnapshot is the typed payload RecordWorker expects; this
 // matches pb.WorkerResourceCounters but stays decoupled from proto
-// symbols (so internal/metrics has no cross-module dep).
-type ResourceSnapshot struct {
-	CPUUtilRatio          float64
-	CPUIOWaitRatio        float64
-	CPUStealRatio         float64
-	ProcessRSSBytes       int64
-	ProcessRSSPeakBytes   int64
-	MemoryUsedBytes       int64
-	DiskFreeBytes         int64
-	TempBytesWritten      int64
-	ActiveTasks           int32
-	TaskSlots             int32
-	Load1                 float64
-	RunQueue              int32
-	NetworkRxBytesDelta   uint64
-	NetworkTxBytesDelta   uint64
-	CacheEntries          int
-	CacheBytesUsed        int64
-	CacheEvictionsDelta   uint64
-	CacheCorruptionsDelta uint64
-	SampledAt             time.Time
-}
-
-
-
-// IncReconcile stamps one observation on the reconcile supervisor's
-// {case, action} counter. Called from internal/completion's
+// symbols (so internal/metrics has no cross-module dep). counter. Called from internal/completion's
 // ReconcileSupervisor after every Coordinator.ReconcileAttempt
 // dispatch (and once for every deadline-expired row that the
 // coordinator couldn't reach in this tick). The case/action
@@ -856,63 +798,3 @@ type AttemptReader interface {
 //
 // PR-2 / F2 / Scorecard v1: the in-band flow is processHeartbeat →
 // handlerWorkers.decodeResources → sink.RecordWorker(workerID, snapshot).
-type WorkerResourceSink interface {
-	RecordWorker(workerID string, snapshot *ResourceSnapshot)
-}
-
-// Compile-time guard: *Collector implements WorkerResourceSink by default.
-// Tests skipping this assertion would break RecordWorker wire-up silently.
-var _ WorkerResourceSink = (*Collector)(nil)
-
-// RecordPlacementRejection increments velox_placement_rejections_total
-// for a single reason code. Called from the gRPC handler's placement
-// pipeline: recordPlacementRejections for matcher-side skips and
-// handleUnsupportedExecutorRejection for worker-side executor mismatches.
-// PlacementRejectionSink is the contract the gRPC handler depends on
-// for forwarding placement rejection counters onto the Prometheus
-// registry. Defined here (consumed-by-handler) following the same
-// pattern as WorkerResourceSink.
-//
-// The placement pipeline calls RecordPlacementRejection for every
-// candidate the placement matcher skipped, producing a per-reason
-// time series (e.g. capacity_full, unsupported_executor).
-// Compile-time guard: *Collector implements ConflictBudgetSink.
-// Bootstrap wires the collector into the coordinator via the local
-// completion.ConflictBudgetSink interface; structural typing matches.// ResetConflictBudget increments velox_conflict_streak_reset_total
-// once per REAL reset (Record(nil) on a non-zero streak). No-op
-// resets (streak already zero) deliberately do not increment so the
-// counter measures actual transition density, not exit-rate noise.
-// ObserveConflictStreakUnderThreshold increments
-// velox_conflict_stayed_under_threshold_total AND observes the
-// histogram at the current streak length. Called inside Record
-// for ErrTransitionConflict observations that did NOT cross the
-// threshold. streak <= 0 is a no-op (the budget never decrements
-// the counter on non-conflict inputs).
-// EscalateConflictBudget increments velox_conflict_escalations_total
-// AND observes the histogram at the runup length. Called inside
-// Record for ErrTransitionConflict observations that crossed the
-// threshold; the same observation point records the runup shape.
-
-// RecordErrorClassification increments velox_error_classification_total
-// for a single error observation. All three labels are low-cardinality
-// closed enums — never pass job_id or free-form strings here.
-// errorCode must be a CanonicalErrorCode; component must be from
-// CanonicalErrorComponents; phase must be from CanonicalErrorPhases.
-// Empty strings default to "unknown".
-// ── Waste/cost metrics (Scorecard v2 / Step 17) ──────────────────────────
-
-
-// RecordEngineAggregate ingests the engine-aggregate phase columns from
-// an AttemptMetrics row into the engine phase histogram (dotted phase
-// names like "pipeline.resolve", "engine.asset_download"). Called from
-// ScanAttemptWithLabels after the existing RecordAttempt path, so the
-// per-phase histogram captures the same attempt→phase→duration mapping
-// that operators query in SQL.
-// RecordEnginePhase ingests a single detailed phase timing row into the
-// engine phase histogram. Called from the supervisor tick for rows
-// returned by GetPhaseTimingsDetailed. The phase label is the dotted
-// component.action name (mirrors the DB insertion convention).
-// RecordEngineSegment ingests a single segment timing row into the
-// engine segment histogram. Called from the supervisor tick for rows
-// returned by GetSegmentTimings. source_type is the segment type
-// (clip, color, image, audio, etc.).
