@@ -851,7 +851,10 @@ func (r *SQLiteLabelResolver) GetSegmentTimings(ctx context.Context, attemptID s
 		       duration_ms, asset_download_ms, ffmpeg_encode_ms,
 		       source_bytes, output_bytes, frames_encoded,
 		       codec, preset, ffmpeg_threads,
-		       status, error_code, error_message, metadata_json
+		       status, error_code, error_message,
+		       source_url_hash, cache_key,
+		       input_duration_ms, output_duration_ms,
+		       metadata_json
 		FROM task_attempt_segment_timings WHERE attempt_id = ? ORDER BY segment_index ASC`,
 		attemptID,
 	)
@@ -868,7 +871,10 @@ func (r *SQLiteLabelResolver) GetSegmentTimings(ctx context.Context, attemptID s
 			&seg.DurationMS, &seg.AssetDownloadMS, &seg.FfmpegEncodeMS,
 			&seg.SourceBytes, &seg.OutputBytes, &seg.FramesEncoded,
 			&seg.Codec, &seg.Preset, &seg.FfmpegThreads,
-			&seg.Status, &seg.ErrorCode, &seg.ErrorMessage, &seg.MetadataJSON); err != nil {
+			&seg.Status, &seg.ErrorCode, &seg.ErrorMessage,
+			&seg.SourceURLHash, &seg.CacheKey,
+			&seg.InputDurationMS, &seg.OutputDurationMS,
+			&seg.MetadataJSON); err != nil {
 			continue
 		}
 		results = append(results, seg)

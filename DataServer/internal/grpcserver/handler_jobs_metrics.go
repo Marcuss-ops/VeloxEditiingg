@@ -36,6 +36,48 @@ import (
 	pb "velox-shared/controltransport/pb"
 )
 
+// segmentTimingsFromProto maps the worker's per-segment C++ sidecar
+// timings onto the canonical taskattempts.SegmentTiming shape. Empty
+// or nil input returns nil.
+func segmentTimingsFromProto(attemptID, taskID, jobID, workerID string, protoSegments []*pb.SegmentTiming) []taskattempts.SegmentTiming {
+	if len(protoSegments) == 0 {
+		return nil
+	}
+	segments := make([]taskattempts.SegmentTiming, 0, len(protoSegments))
+	for _, ps := range protoSegments {
+		if ps == nil {
+			continue
+		}
+		segments = append(segments, taskattempts.SegmentTiming{
+			AttemptID:        attemptID,
+			TaskID:           taskID,
+			JobID:            jobID,
+			WorkerID:         workerID,
+			SegmentIndex:     int(ps.GetSegmentIndex()),
+			SceneWorkerIndex: int(ps.GetSceneWorkerIndex()),
+			SourceType:       ps.GetSourceType(),
+			DurationMS:       ps.GetDurationMs(),
+			AssetDownloadMS:  ps.GetAssetDownloadMs(),
+			FfmpegEncodeMS:   ps.GetFfmpegEncodeMs(),
+			SourceBytes:      ps.GetSourceBytes(),
+			OutputBytes:      ps.GetOutputBytes(),
+			FramesEncoded:    ps.GetFramesEncoded(),
+			Codec:            ps.GetCodec(),
+			Preset:           ps.GetPreset(),
+			FfmpegThreads:    int(ps.GetFfmpegThreads()),
+			Status:           ps.GetStatus(),
+			ErrorCode:        ps.GetErrorCode(),
+			ErrorMessage:     ps.GetErrorMessage(),
+			SourceURLHash:    ps.GetSourceUrlHash(),
+			CacheKey:         ps.GetCacheKey(),
+			InputDurationMS:  ps.GetInputDurationMs(),
+			OutputDurationMS: ps.GetOutputDurationMs(),
+			MetadataJSON:     ps.GetMetadataJson(),
+		})
+	}
+	return segments
+}
+
 // executionMetricsToAttemptMetrics builds the flat typed AttemptMetrics
 // the persistence layer expects. All 17 fields of pb.TaskExecutionMetrics
 // are mapped 1:1; missing fields on the wire default to zero (older

@@ -134,6 +134,29 @@ message CommandAck {
 // a zero-value metrics — the master surfaces a WARN log and falls back
 // to scalar counters only). See migration 054 for the canonical schema
 // on `task_attempt_metrics`.
+message SegmentTiming {
+  int32 segment_index = 1;
+  int32 scene_worker_index = 2;
+  string source_type = 3;
+  double duration_ms = 4;
+  double asset_download_ms = 5;
+  double ffmpeg_encode_ms = 6;
+  int64 source_bytes = 7;
+  int64 output_bytes = 8;
+  int64 frames_encoded = 9;
+  string codec = 10;
+  string preset = 11;
+  int32 ffmpeg_threads = 12;
+  string status = 13;
+  string error_code = 14;
+  string error_message = 15;
+  string source_url_hash = 16;
+  string cache_key = 17;
+  string metadata_json = 18;
+  double input_duration_ms = 19;
+  double output_duration_ms = 20;
+}
+
 message TaskResult {
   string task_id = 1;
   string job_id = 2;
@@ -149,6 +172,7 @@ message TaskResult {
   string lease_id = 12;
   int32 attempt_number = 13;
   int32 revision = 14;
+  repeated SegmentTiming segment_timings = 15;
 }
 
 message TaskLeaseRenewal {

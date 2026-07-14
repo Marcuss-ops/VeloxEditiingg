@@ -7,6 +7,10 @@ import (
 	"velox-worker-agent/internal/telemetry"
 )
 
+// SegmentTiming re-exports executor.SegmentTiming so consumers of the
+// taskrunner package can build segment lists without importing executor.
+type SegmentTiming = executor.SegmentTiming
+
 // TaskExecutionReport is the canonical per-task report the TaskRunner
 // emits on every Run call.
 //
@@ -29,6 +33,7 @@ type TaskExecutionReport struct {
 	ErrorDetail string                 `json:"error_detail,omitempty"`
 	Outputs     []executor.ArtifactRef `json:"outputs,omitempty"`
 	Metrics     map[string]interface{} `json:"metrics,omitempty"`
+	Segments    []executor.SegmentTiming `json:"segments,omitempty"`
 	// TypedMetrics is the proto-shaped 17-field mirror of the legacy
 	// `Metrics` dotted-key map. PR-3.6 (Scorecard v1) populates it
 	// alongside the map so the wire envelope carries both shapes

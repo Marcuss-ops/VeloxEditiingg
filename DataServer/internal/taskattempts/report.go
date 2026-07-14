@@ -325,6 +325,10 @@ type SegmentTiming struct {
 	Status           string  `json:"status"`
 	ErrorCode        string  `json:"error_code,omitempty"`
 	ErrorMessage     string  `json:"error_message,omitempty"`
+	SourceURLHash    string  `json:"source_url_hash,omitempty"`
+	CacheKey         string  `json:"cache_key,omitempty"`
+	InputDurationMS  float64 `json:"input_duration_ms"`
+	OutputDurationMS float64 `json:"output_duration_ms"`
 	MetadataJSON     string  `json:"metadata_json,omitempty"`
 }
 

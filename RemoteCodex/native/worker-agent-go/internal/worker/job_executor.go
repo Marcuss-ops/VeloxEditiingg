@@ -182,6 +182,32 @@ func (w *Worker) submitTaskResult(ctx context.Context, pte *PendingTaskExecution
 			})
 		}
 
+		// Build per-segment C++ sidecar timings.
+		for _, seg := range report.Segments {
+			tr.SegmentTimings = append(tr.SegmentTimings, &pb.SegmentTiming{
+				SegmentIndex:     int32(seg.SegmentIndex),
+				SceneWorkerIndex: int32(seg.SceneWorkerIndex),
+				SourceType:       seg.SourceType,
+				DurationMs:       seg.DurationMS,
+				AssetDownloadMs:  seg.AssetDownloadMS,
+				FfmpegEncodeMs:   seg.FfmpegEncodeMS,
+				SourceBytes:      seg.SourceBytes,
+				OutputBytes:      seg.OutputBytes,
+				FramesEncoded:    seg.FramesEncoded,
+				Codec:            seg.Codec,
+				Preset:           seg.Preset,
+				FfmpegThreads:    int32(seg.FfmpegThreads),
+				Status:           seg.Status,
+				ErrorCode:        seg.ErrorCode,
+				ErrorMessage:     seg.ErrorMessage,
+				SourceUrlHash:    seg.SourceURLHash,
+				CacheKey:         seg.CacheKey,
+				InputDurationMs:  seg.InputDurationMS,
+				OutputDurationMs: seg.OutputDurationMS,
+				MetadataJson:     seg.MetadataJSON,
+			})
+		}
+
 		// Build output_artifacts as repeated structpb.Struct.
 		// artifact_id is now separate from sha256; SizeBytes carries real byte count.
 		for _, ref := range report.Outputs {

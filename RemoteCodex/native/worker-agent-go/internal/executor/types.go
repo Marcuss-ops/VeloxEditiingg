@@ -186,6 +186,31 @@ type ExecutionContext interface {
 
 // ── Result ────────────────────────────────────────────────────────────────────
 
+// SegmentTiming mirrors the C++ SegmentTiming struct emitted inside the
+// sidecar segments[] array. One row per timeline segment.
+type SegmentTiming struct {
+	SegmentIndex     int
+	SceneWorkerIndex int
+	SourceType       string
+	DurationMS       float64
+	AssetDownloadMS  float64
+	FfmpegEncodeMS   float64
+	SourceBytes      int64
+	OutputBytes      int64
+	FramesEncoded    int64
+	Codec            string
+	Preset           string
+	FfmpegThreads    int
+	Status           string
+	ErrorCode        string
+	ErrorMessage     string
+	SourceURLHash    string
+	CacheKey         string
+	InputDurationMS  float64
+	OutputDurationMS float64
+	MetadataJSON     string
+}
+
 // ExecutionResult is the structured outcome of one Execute call.
 // The taskrunner converts this into the canonical TaskExecutionReport
 // reported back to the master (PR-1 metrics catalogue).
@@ -197,6 +222,8 @@ type ExecutionResult struct {
 	Outputs []ArtifactRef `json:"outputs,omitempty"`
 	// Metrics holds executor-defined measurements.
 	Metrics map[string]interface{} `json:"metrics,omitempty"`
+	// Segments holds per-segment C++ sidecar timings.
+	Segments []SegmentTiming `json:"segments,omitempty"`
 	// ErrorCode is a stable error code when Status == "failed"
 	// (e.g. "validation_failed", "executor_panic_contained", "lease_lost").
 	ErrorCode string `json:"error_code,omitempty"`

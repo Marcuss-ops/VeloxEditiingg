@@ -53,7 +53,20 @@ type segmentTiming struct {
 	TotalMs         float64 `json:"total_ms"`
 	AssetDownloadMs float64 `json:"asset_download_ms"`
 	FfmpegEncodeMs  float64 `json:"ffmpeg_encode_ms"`
+	SourceBytes     int64   `json:"source_bytes"`
 	OutputBytes     int64   `json:"output_bytes"`
+	FramesEncoded   int64   `json:"frames_encoded"`
+	Codec           string  `json:"codec"`
+	Preset          string  `json:"preset"`
+	FfmpegThreads   int64   `json:"ffmpeg_threads"`
+	Status          string  `json:"status"`
+	ErrorCode       string  `json:"error_code"`
+	ErrorMessage    string  `json:"error_message"`
+	SourceURLHash   string  `json:"source_url_hash"`
+	CacheKey        string  `json:"cache_key"`
+	InputDurationMs float64 `json:"input_duration_ms"`
+	OutputDurationMs float64 `json:"output_duration_ms"`
+	MetadataJSON    string  `json:"metadata_json"`
 }
 
 // RenderClient executes RenderPlans via the C++ video engine.
@@ -234,6 +247,31 @@ func (c *RenderClient) RenderWithMetrics(ctx context.Context, p *plan.RenderPlan
 		metrics.DupFrames = sidecar.DupFrames
 		metrics.DropFrames = sidecar.DropFrames
 		metrics.PhaseMS = sidecar.PhaseMS
+		metrics.Segments = make([]pipeline.SegmentTiming, 0, len(sidecar.Segments))
+		for _, seg := range sidecar.Segments {
+			metrics.Segments = append(metrics.Segments, pipeline.SegmentTiming{
+				SegmentIndex:     int(seg.Index),
+				SceneWorkerIndex: int(seg.WorkerIndex),
+				SourceType:       seg.SourceType,
+				DurationMS:       seg.TotalMs,
+				AssetDownloadMS:  seg.AssetDownloadMs,
+				FfmpegEncodeMS:   seg.FfmpegEncodeMs,
+				SourceBytes:      seg.SourceBytes,
+				OutputBytes:      seg.OutputBytes,
+				FramesEncoded:    seg.FramesEncoded,
+				Codec:            seg.Codec,
+				Preset:           seg.Preset,
+				FfmpegThreads:    int(seg.FfmpegThreads),
+				Status:           seg.Status,
+				ErrorCode:        seg.ErrorCode,
+				ErrorMessage:     seg.ErrorMessage,
+				SourceURLHash:    seg.SourceURLHash,
+				CacheKey:         seg.CacheKey,
+				InputDurationMS:  seg.InputDurationMs,
+				OutputDurationMS: seg.OutputDurationMs,
+				MetadataJSON:     seg.MetadataJSON,
+			})
+		}
 	}
 
 	metrics.TotalMs = time.Since(start).Milliseconds()

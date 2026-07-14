@@ -405,6 +405,7 @@ func (h *Handler) handleTaskResult(workerID string, tr *pb.TaskResult, sess *wor
 	typedMetrics := executionMetricsToAttemptMetrics(attemptID, tr.GetExecutionMetrics())
 	typedCache := deriveCacheStats(attemptID, typedMetrics)
 	typedCost := executionMetricsToCostBasis(attemptID, tr.GetExecutionMetrics())
+	segmentTimings := segmentTimingsFromProto(attemptID, taskID, jobID, workerID, tr.GetSegmentTimings())
 
 	// Scorecard v2 / Step 15: start an "ingest_result" span.
 	// Scorecard v2 / Step 15c: use session.ctx (derived from stream.Context())
@@ -482,6 +483,7 @@ func (h *Handler) handleTaskResult(workerID string, tr *pb.TaskResult, sess *wor
 		TypedMetrics:    typedMetrics,
 		CacheStats:      typedCache,
 		CostBasis:       typedCost,
+		SegmentTimings:  segmentTimings,
 		GitSHA:            gitSHA,
 		WorkerVersion:     workerVer,
 		EngineVersion:     engineVer,

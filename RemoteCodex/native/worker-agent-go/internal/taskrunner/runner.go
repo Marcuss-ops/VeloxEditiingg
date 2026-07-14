@@ -264,6 +264,7 @@ func (r *TaskRunner) Run(parent context.Context, spec executor.TaskSpec) (TaskEx
 	report.Status = "succeeded"
 	report.Outputs = result.Outputs
 	report.Metrics = result.Metrics
+	report.Segments = result.Segments
 	// PR-3.7: surface cache + blob counters as dotted-key entries.
 	// Merge runs AFTER assign so a nil result.Metrics is preserved as
 	// a fresh map, and an executor-provided map is widened rather than

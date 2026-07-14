@@ -9,6 +9,31 @@ import (
 	"velox-worker-agent/pkg/video/plan"
 )
 
+// SegmentTiming mirrors the C++ SegmentTiming struct emitted inside the
+// sidecar segments[] array. One row per timeline segment.
+type SegmentTiming struct {
+	SegmentIndex     int
+	SceneWorkerIndex int
+	SourceType       string
+	DurationMS       float64
+	AssetDownloadMS  float64
+	FfmpegEncodeMS   float64
+	SourceBytes      int64
+	OutputBytes      int64
+	FramesEncoded    int64
+	Codec            string
+	Preset           string
+	FfmpegThreads    int
+	Status           string
+	ErrorCode        string
+	ErrorMessage     string
+	SourceURLHash    string
+	CacheKey         string
+	InputDurationMS  float64
+	OutputDurationMS float64
+	MetadataJSON     string
+}
+
 // RenderClient is the interface for executing a RenderPlan.
 // Implemented by the native C++ render client.
 type RenderClient interface {
@@ -41,6 +66,8 @@ type RenderMetrics struct {
 	// (engine.asset_download, engine.segment_build, engine.concat, …).
 	// Nil when no sidecar was read.
 	PhaseMS map[string]float64
+	// Segments carries the per-segment C++ sidecar timings.
+	Segments []SegmentTiming
 }
 
 // RenderClient exposes the underlying render client so callers outside

@@ -195,10 +195,37 @@ func (s *SceneComposite) Execute(ctx context.Context, _ executor.ExecutionContex
 	metrics["output.bytes"] = outputSize
 	metrics["executor.total_ms"] = time.Since(startedAt).Milliseconds()
 
+	segments := make([]executor.SegmentTiming, 0, len(runMetrics.RenderMetrics.Segments))
+	for _, seg := range runMetrics.RenderMetrics.Segments {
+		segments = append(segments, executor.SegmentTiming{
+			SegmentIndex:     seg.SegmentIndex,
+			SceneWorkerIndex: seg.SceneWorkerIndex,
+			SourceType:       seg.SourceType,
+			DurationMS:       seg.DurationMS,
+			AssetDownloadMS:  seg.AssetDownloadMS,
+			FfmpegEncodeMS:   seg.FfmpegEncodeMS,
+			SourceBytes:      seg.SourceBytes,
+			OutputBytes:      seg.OutputBytes,
+			FramesEncoded:    seg.FramesEncoded,
+			Codec:            seg.Codec,
+			Preset:           seg.Preset,
+			FfmpegThreads:    seg.FfmpegThreads,
+			Status:           seg.Status,
+			ErrorCode:        seg.ErrorCode,
+			ErrorMessage:     seg.ErrorMessage,
+			SourceURLHash:    seg.SourceURLHash,
+			CacheKey:         seg.CacheKey,
+			InputDurationMS:  seg.InputDurationMS,
+			OutputDurationMS: seg.OutputDurationMS,
+			MetadataJSON:     seg.MetadataJSON,
+		})
+	}
+
 	return executor.ExecutionResult{
 		Status:      "succeeded",
 		Outputs:     []executor.ArtifactRef{{Type: "render.output", Hash: outputHash, URI: outputPath, SizeBytes: outputSize}},
 		Metrics:     metrics,
+		Segments:    segments,
 		StartedAt:   startedAt,
 		CompletedAt: time.Now().UTC(),
 	}, nil

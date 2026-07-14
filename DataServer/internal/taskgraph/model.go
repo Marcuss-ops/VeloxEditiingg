@@ -111,4 +111,6 @@ type IngestResultCommand struct {
 	// Step 16: raw worker report payload (JSON) for audit and replay.
 	RawReportJSON     string
 	RawReportReceivedAt time.Time
+	// Scorecard v2 / Step 17: per-segment C++ sidecar timings.
+	SegmentTimings []taskattempts.SegmentTiming
 }

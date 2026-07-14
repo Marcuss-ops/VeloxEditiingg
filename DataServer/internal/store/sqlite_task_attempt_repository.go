@@ -625,14 +625,20 @@ func (r *SQLiteTaskAttemptRepository) PersistSegmentTimings(ctx context.Context,
 				duration_ms, asset_download_ms, ffmpeg_encode_ms,
 				source_bytes, output_bytes, frames_encoded,
 				codec, preset, ffmpeg_threads,
-				status, error_code, error_message, metadata_json, created_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				status, error_code, error_message,
+				source_url_hash, cache_key,
+				input_duration_ms, output_duration_ms,
+				metadata_json, created_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			attemptID, seg.JobID, seg.TaskID, seg.WorkerID,
 			seg.SegmentIndex, seg.SceneWorkerIndex, seg.SourceType,
 			seg.DurationMS, seg.AssetDownloadMS, seg.FfmpegEncodeMS,
 			seg.SourceBytes, seg.OutputBytes, seg.FramesEncoded,
 			seg.Codec, seg.Preset, seg.FfmpegThreads,
-			seg.Status, seg.ErrorCode, seg.ErrorMessage, seg.MetadataJSON, now,
+			seg.Status, seg.ErrorCode, seg.ErrorMessage,
+			seg.SourceURLHash, seg.CacheKey,
+			seg.InputDurationMS, seg.OutputDurationMS,
+			seg.MetadataJSON, now,
 		)
 		if err != nil {
 			return fmt.Errorf("segment timing insert %d: %w", seg.SegmentIndex, err)

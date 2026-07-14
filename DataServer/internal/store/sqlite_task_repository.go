@@ -1104,7 +1104,42 @@ func (r *SQLiteTaskRepository) IngestTaskResultAtomic(ctx context.Context, cmd t
 		}
 	}
 
-	// 7. Persist the raw worker report payload for audit/replay.
+	// 7. Persist per-segment C++ sidecar timings (Scorecard v2 / Step 17).
+	if len(cmd.SegmentTimings) > 0 {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM task_attempt_segment_timings WHERE attempt_id = ?`, cmd.AttemptID); err != nil {
+			return fmt.Errorf("task ingest atomic segment timings delete: %w", err)
+		}
+		nowSeg := time.Now().UTC().Format(time.RFC3339)
+		for _, seg := range cmd.SegmentTimings {
+			_, err := tx.ExecContext(ctx,
+				`INSERT INTO task_attempt_segment_timings (
+					attempt_id, job_id, task_id, worker_id,
+					segment_index, scene_worker_index, source_type,
+					duration_ms, asset_download_ms, ffmpeg_encode_ms,
+					source_bytes, output_bytes, frames_encoded,
+					codec, preset, ffmpeg_threads,
+					status, error_code, error_message,
+					source_url_hash, cache_key,
+					input_duration_ms, output_duration_ms,
+					metadata_json, created_at
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				cmd.AttemptID, seg.JobID, seg.TaskID, seg.WorkerID,
+				seg.SegmentIndex, seg.SceneWorkerIndex, seg.SourceType,
+				seg.DurationMS, seg.AssetDownloadMS, seg.FfmpegEncodeMS,
+				seg.SourceBytes, seg.OutputBytes, seg.FramesEncoded,
+				seg.Codec, seg.Preset, seg.FfmpegThreads,
+				seg.Status, seg.ErrorCode, seg.ErrorMessage,
+				seg.SourceURLHash, seg.CacheKey,
+				seg.InputDurationMS, seg.OutputDurationMS,
+				seg.MetadataJSON, nowSeg,
+			)
+			if err != nil {
+				return fmt.Errorf("task ingest atomic segment timing insert %d: %w", seg.SegmentIndex, err)
+			}
+		}
+	}
+
+	// 8. Persist the raw worker report payload for audit/replay.
 	//    Re-ingestion with the same attempt_id + report_hash is idempotent.
 	//    A different hash for the same attempt_id is a conflict and aborts
 	//    the transaction, preserving the immutable attempt history.

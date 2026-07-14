@@ -87,6 +87,8 @@ type IngestCommand struct {
 	// Step 16: raw worker report payload (JSON) for audit and replay.
 	RawReportJSON       string
 	RawReportReceivedAt time.Time
+	// Scorecard v2 / Step 17: per-segment C++ sidecar timings.
+	SegmentTimings []taskattempts.SegmentTiming
 }
 
 // DeclaredArtifact is one worker-claimed artifact. Mirrors the proto
@@ -375,6 +377,8 @@ func (s *TaskReportIngestionService) IngestTaskResult(ctx context.Context, cmd I
 		// Step 16: raw worker report payload for audit/replay.
 		RawReportJSON:       cmd.RawReportJSON,
 		RawReportReceivedAt: cmd.RawReportReceivedAt,
+		// Scorecard v2 / Step 17: per-segment C++ sidecar timings.
+		SegmentTimings: cmd.SegmentTimings,
 	})
 
 	// fix/atomic-ingestion: IngestTaskResultAtomic succeeded — the Task +
