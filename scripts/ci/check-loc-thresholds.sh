@@ -40,6 +40,13 @@ KNOWN_VIOLATIONS=(
   "scripts/cert/certify-worker-2c-2d.sh|shell|794|loc-baseline.md §10c (deferred)"
 )
 
+  # === baseline violators emerged from prior refactor rounds ===
+  "DataServer/internal/store/sqlite_task_atomic.go|prod-go|939|loc-baseline.md u00a710c + u00a713 roadmap step 8 (split residue; de-dup target)"
+  "DataServer/internal/grpcserver/handler.go|prod-go|936|loc-baseline.md u00a710c + u00a713 roadmap step 4 (deferred)"
+  "DataServer/internal/jobs/enqueue/enqueue_test.go|test-go|1331|loc-baseline.md u00a710c + u00a713 roadmap step 7 (deferred)"
+  "DataServer/internal/store/sqlite_task_atomic_test.go|test-go|1521|loc-baseline.md u00a710c + u00a713 roadmap step 8 (deferred)"
+  "DataServer/internal/store/sqlite_youtube_entities_test.go|test-go|1283|loc-baseline.md u00a710c (deferred)"
+  "RemoteCodex/native/worker-agent-go/pkg/config/config_test.go|test-go|1201|loc-baseline.md u00a710c (deferred)"
 VIOLATIONS=0
 KNOWN_HITS=0
 
