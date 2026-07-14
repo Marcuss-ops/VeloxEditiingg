@@ -73,6 +73,10 @@ func (s *stubAttemptReader) GetMetrics(_ context.Context, attemptID string) (*ta
 	return m, nil
 }
 
+func (s *stubAttemptReader) GetCacheStats(_ context.Context, _ string) (*taskattempts.AttemptCacheStats, error) {
+	return nil, nil
+}
+
 type stubJobReader struct {
 	counts jobs.Counts
 }
