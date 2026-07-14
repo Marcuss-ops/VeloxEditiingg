@@ -410,7 +410,7 @@ func (r *SQLiteLabelResolver) GetSegmentTimings(ctx context.Context, attemptID s
 		var seg taskattempts.SegmentTiming
 		if err := rows.Scan(&seg.AttemptID, &seg.JobID, &seg.TaskID, &seg.WorkerID,
 			&seg.SegmentIndex, &seg.SceneWorkerIndex, &seg.SourceType,
-			&seg.DurationMS, &seg.AssetDownloadMS, &seg.FfmpegEncodeMs,
+			&seg.DurationMS, &seg.AssetDownloadMS, &seg.FfmpegEncodeMS,
 			&seg.SourceBytes, &seg.OutputBytes, &seg.FramesEncoded,
 			&seg.Codec, &seg.Preset, &seg.FfmpegThreads,
 			&seg.Status, &seg.ErrorCode, &seg.ErrorMessage,
