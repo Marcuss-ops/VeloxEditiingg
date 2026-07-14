@@ -3,10 +3,11 @@
 #
 # Project LOC gate. Reference: docs/metrics/loc-baseline.md §11.
 # Exits 1 if any tracked source file exceeds the project-policy threshold,
-# UNLESS the file appears in KNOWN_VIOLATIONS (annotated baseline carry-over).
+# UNLESS the file appears in KNOWN_VIOLATIONS (annotated baseline
+# carry-over).
 #
 # Thresholds per §11 (refactor-required boundary):
-#   prod Go (non-test, non-generated)   > 900  LOC
+#   prod Go (non-test, non-generated)   >  900 LOC
 #   test Go (*_test.go)                 > 1200 LOC
 #   shell (.sh)                         >  700 LOC
 #   docs (.md, excl. ./docs/archive)    > 1200 LOC
@@ -32,28 +33,34 @@ THRESH_SH=700
 THRESH_MD=1200
 THRESH_YML=800
 
-# KNOWN_VIOLATIONS — annotated baseline carry-over (loc-baseline.md §10c).
-# The gate stays green for these; CI must not block on day-1.
-KNOWN_VIOLATIONS=(
+# KNOWN_VIOLATIONS_BASELINE — pre-existing baseline carry-over
+# (loc-baseline.md §10c). These three files predated the gate by years
+# and have explicit §13 roadmap follow-up entries.
+KNOWN_VIOLATIONS_BASELINE=(
   "docs/architecture/CURRENT-TO-TARGET-ARCHITECTURE.md|docs|1492|loc-baseline.md §10c + §13 roadmap step 2 (deferred)"
   "deploy/runtime/checklist-verify.sh|shell|1067|loc-baseline.md §10c (deferred)"
   "scripts/cert/certify-worker-2c-2d.sh|shell|794|loc-baseline.md §10c (deferred)"
 )
 
-  # === baseline violators emerged from prior refactor rounds ===
-  "DataServer/internal/store/sqlite_task_atomic.go|prod-go|939|loc-baseline.md u00a710c + u00a713 roadmap step 8 (split residue; de-dup target)"
-  "DataServer/internal/grpcserver/handler.go|prod-go|936|loc-baseline.md u00a710c + u00a713 roadmap step 4 (deferred)"
-  "DataServer/internal/jobs/enqueue/enqueue_test.go|test-go|1331|loc-baseline.md u00a710c + u00a713 roadmap step 7 (deferred)"
-  "DataServer/internal/store/sqlite_task_atomic_test.go|test-go|1521|loc-baseline.md u00a710c + u00a713 roadmap step 8 (deferred)"
-  "DataServer/internal/store/sqlite_youtube_entities_test.go|test-go|1283|loc-baseline.md u00a710c (deferred)"
-  "RemoteCodex/native/worker-agent-go/pkg/config/config_test.go|test-go|1201|loc-baseline.md u00a710c (deferred)"
+# KNOWN_VIOLATIONS_ROUND1 — six baseline violators surfaced by the first
+# full-tree scan after the cd-anchor fix (3de97ca). Each is a follow-up
+# atomic refactor commit per project rules; the entry should be removed as
+# the corresponding refactor lands.
+KNOWN_VIOLATIONS_ROUND1=(
+  "DataServer/internal/store/sqlite_task_atomic.go|prod-go|939|loc-baseline.md §10a + §13 roadmap step 8 (split residue; de-dup target)"
+  "DataServer/internal/grpcserver/handler.go|prod-go|936|loc-baseline.md §10a + §13 roadmap step 4 (deferred)"
+  "DataServer/internal/jobs/enqueue/enqueue_test.go|test-go|1331|loc-baseline.md §10b + §13 roadmap step 7 (deferred)"
+  "DataServer/internal/store/sqlite_task_atomic_test.go|test-go|1521|loc-baseline.md §10b + §13 roadmap step 8 (deferred)"
+  "DataServer/internal/store/sqlite_youtube_entities_test.go|test-go|1283|loc-baseline.md §10b (deferred)"
+  "RemoteCodex/native/worker-agent-go/pkg/config/config_test.go|test-go|1201|loc-baseline.md §10b (deferred)"
+)
+
+KNOWN_VIOLATIONS=("${KNOWN_VIOLATIONS_BASELINE[@]}" "${KNOWN_VIOLATIONS_ROUND1[@]}")
+
 VIOLATIONS=0
 KNOWN_HITS=0
 
 # Anchor at the repository root regardless of how/where this script is invoked.
-# `git rev-parse --show-toplevel` finds the root from whichever submodule the
-# caller cd'd into; the fallback is two `dirname ../..` levels up from the
-# canonical location `scripts/ci/check-loc-thresholds.sh`.
 ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 cd "$ROOT"
 
