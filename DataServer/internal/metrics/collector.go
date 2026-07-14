@@ -142,6 +142,17 @@ type Collector struct {
 	costStoragePerMin *Family // velox_cost_storage_gb_written_per_output_minute
 	costTotalPerMin   *Family // velox_cost_total_per_output_minute
 
+	// Derived scorecard gauges (Scorecard v2 / Step 18). These are
+	// pure derivations from task_attempt_metrics + cache_stats. They
+	// are stamped per-attempt so dashboards can aggregate percentiles
+	// directly without computing in PromQL.
+	renderFactor              *Family // velox_render_factor
+	encodeMsPerOutputMinute   *Family // velox_encode_ms_per_output_minute
+	cpuMsPerOutputMinute      *Family // velox_cpu_ms_per_output_minute
+	tempWriteAmplification    *Family // velox_temp_write_amplification
+	cacheHitRatio             *Family // velox_cache_hit_ratio
+	downloadThroughput        *Family // velox_download_throughput_bytes_per_second
+
 	// Phase 4.3 — Reconcile supervisor counters. The supervisor in
 	// internal/completion/reconcile_supervisor.go writes
 	//   velox_completion_reconcile_total{case,action}
@@ -335,6 +346,29 @@ func NewCollector(reg *Registry) *Collector {
 		"Total cost per output minute (€ × 1e6) by worker class",
 		costLabels)
 
+	// Derived scorecard gauges (Scorecard v2 / Step 18). Single-label
+	// worker_class; values are pre-computed on the master so the
+	// exporter emits raw ratios/ms/bytes-per-second without forcing
+	// PromQL derivations.
+	c.renderFactor = NewGaugeFamily("velox_render_factor",
+		"Wall clock seconds per output second (lower is faster)",
+		costLabels)
+	c.encodeMsPerOutputMinute = NewGaugeFamily("velox_encode_ms_per_output_minute",
+		"Engine segment build milliseconds per output minute",
+		costLabels)
+	c.cpuMsPerOutputMinute = NewGaugeFamily("velox_cpu_ms_per_output_minute",
+		"CPU milliseconds per output minute",
+		costLabels)
+	c.tempWriteAmplification = NewGaugeFamily("velox_temp_write_amplification",
+		"Temp bytes written per output byte",
+		costLabels)
+	c.cacheHitRatio = NewGaugeFamily("velox_cache_hit_ratio",
+		"Cache hit ratio (0-1)",
+		costLabels)
+	c.downloadThroughput = NewGaugeFamily("velox_download_throughput_bytes_per_second",
+		"Download throughput in bytes per second",
+		costLabels)
+
 	// Phase 4.3 — reconcile supervisor counters. Cardinality
 	// discipline: 11 cases × 3 actions = 33 series (closed enum, no
 	// host-IDs or job-IDs). commit_deadline_exceeded_total has no
@@ -449,11 +483,9 @@ func (c *Collector) allFamilies() []*Family {
 		c.masterRssBytes, c.masterGoroutines, c.masterOutboxPending,
 		c.heartbeatAge,
 		c.computeSeconds,
-		c.computeFailureReasons,
-		c.costCpuPerMin,
-		c.costNetworkPerMin,
-		c.costStoragePerMin,
-		c.costTotalPerMin,
+		c.computeFailureReasons,		c.costCpuPerMin, c.costNetworkPerMin, c.costStoragePerMin, c.costTotalPerMin,
+		c.renderFactor, c.encodeMsPerOutputMinute, c.cpuMsPerOutputMinute,
+		c.tempWriteAmplification, c.cacheHitRatio, c.downloadThroughput,
 		c.reconcileTotal,
 		c.commitDeadlineExceeded,
 		c.placementRejections,
@@ -513,6 +545,29 @@ func (c *Collector) RecordAttempt(am taskattempts.AttemptMetrics, cache taskatte
 		c.videoStreamCopy.Inc([]string{}, 1)
 	} else if am.ConcatMode == "reencode" {
 		c.videoReencode.Inc([]string{"resolution_mismatch"}, 1)
+	}
+
+	// Derived scorecard gauges (Scorecard v2 / Step 18). Values are
+	// dimensionless ratios or normalized per-output-minute rates so
+	// operators can compare attempts directly.
+	workerClassLabel := []string{workerClass}
+	if rf := am.RenderFactor(); rf > 0 {
+		c.renderFactor.GaugeSet(workerClassLabel, int64(rf*1_000_000))
+	}
+	if em := am.EncodeMsPerOutputMinute(); em > 0 {
+		c.encodeMsPerOutputMinute.GaugeSet(workerClassLabel, int64(em))
+	}
+	if cm := am.CpuMsPerOutputMinute(); cm > 0 {
+		c.cpuMsPerOutputMinute.GaugeSet(workerClassLabel, int64(cm))
+	}
+	if ta := am.TempStorageAmplification(); ta > 0 {
+		c.tempWriteAmplification.GaugeSet(workerClassLabel, int64(ta*1_000_000))
+	}
+	if chr := cache.CacheHitRatio(); chr > 0 {
+		c.cacheHitRatio.GaugeSet(workerClassLabel, int64(chr*1_000_000))
+	}
+	if dt := am.DownloadThroughputBytesPerSec(); dt > 0 {
+		c.downloadThroughput.GaugeSet(workerClassLabel, int64(dt))
 	}
 }
 

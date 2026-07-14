@@ -3,6 +3,7 @@ package observability
 import (
 	"context"
 	"errors"
+	"math"
 	"testing"
 
 	"velox-server/internal/jobs"
@@ -46,6 +47,7 @@ type stubAttemptReader struct {
 	attempts      map[string][]taskattempts.TaskAttempt
 	phaseTimings  map[string][]taskattempts.PhaseTiming
 	metrics       map[string]*taskattempts.AttemptMetrics
+	cacheStats    map[string]*taskattempts.AttemptCacheStats
 	listErr       error
 	phaseErr      error
 	metricsErr    error
@@ -74,6 +76,10 @@ func (s *stubAttemptReader) GetMetrics(_ context.Context, attemptID string) (*ta
 		return nil, s.metricsErr
 	}
 	return s.metrics[attemptID], nil
+}
+
+func (s *stubAttemptReader) GetCacheStats(_ context.Context, attemptID string) (*taskattempts.AttemptCacheStats, error) {
+	return s.cacheStats[attemptID], nil
 }
 
 type stubJobReader struct {
@@ -364,6 +370,75 @@ func TestService_SummarizeJob_NotFound(t *testing.T) {
 	_, err := svc.SummarizeJob(context.Background(), "nonexistent")
 	if err == nil {
 		t.Error("SummarizeJob() should return error for nonexistent job")
+	}
+}
+
+func TestService_RecentScalarMetric_DerivedMetrics(t *testing.T) {
+	svc, tasks, attempts, _, _ := newTestService()
+	tasks.tasks["T-1"] = &taskgraph.Task{ID: "T-1", JobID: "J-1", Status: taskgraph.StatusSucceeded, AttemptCount: 1}
+	attempts.metrics["A-1"] = &taskattempts.AttemptMetrics{
+		AttemptID:            "A-1",
+		WallClockSeconds:     30,
+		MediaDurationSeconds: 60,
+		EngineSegmentBuildMs: 3000,
+		CPUTimeMS:            60000,
+		EngineAssetDownloadMs: 2000,
+		BytesFromBlobstore:   4_000_000,
+		BytesFromDrive:       2_000_000,
+	}
+
+	result, err := svc.RecentScalarMetric(context.Background(), "render_factor")
+	if err != nil {
+		t.Fatalf("RecentScalarMetric(render_factor) error: %v", err)
+	}
+	if result.Samples != 1 {
+		t.Fatalf("Samples = %d, want 1", result.Samples)
+	}
+	// 30 / 60 = 0.5
+	if math.Abs(result.Avg-0.5) > 1e-9 {
+		t.Errorf("Avg = %v, want 0.5", result.Avg)
+	}
+
+	// 60s media = 1 output minute; 3000ms encode -> 3000 ms/min.
+	result, err = svc.RecentScalarMetric(context.Background(), "encode_ms_per_output_minute")
+	if err != nil {
+		t.Fatalf("RecentScalarMetric(encode_ms_per_output_minute) error: %v", err)
+	}
+	if math.Abs(result.Avg-3000.0) > 1e-9 {
+		t.Errorf("Avg = %v, want 3000", result.Avg)
+	}
+
+	// 60s media = 1 output minute; 60000ms cpu -> 60000 ms/min.
+	result, err = svc.RecentScalarMetric(context.Background(), "cpu_ms_per_output_minute")
+	if err != nil {
+		t.Fatalf("RecentScalarMetric(cpu_ms_per_output_minute) error: %v", err)
+	}
+	if math.Abs(result.Avg-60000.0) > 1e-9 {
+		t.Errorf("Avg = %v, want 60000", result.Avg)
+	}
+
+	// 6_000_000 bytes / 2s = 3_000_000 bytes/sec.
+	result, err = svc.RecentScalarMetric(context.Background(), "download_throughput")
+	if err != nil {
+		t.Fatalf("RecentScalarMetric(download_throughput) error: %v", err)
+	}
+	if math.Abs(result.Avg-3_000_000.0) > 1e-9 {
+		t.Errorf("Avg = %v, want 3000000", result.Avg)
+	}
+
+	// cache_hit_ratio requires cache stats.
+	attempts.cacheStats = map[string]*taskattempts.AttemptCacheStats{
+		"A-1": {CacheHits: 75, CacheMisses: 25},
+	}
+	result, err = svc.RecentScalarMetric(context.Background(), "cache_hit_ratio")
+	if err != nil {
+		t.Fatalf("RecentScalarMetric(cache_hit_ratio) error: %v", err)
+	}
+	if result.Samples != 1 {
+		t.Fatalf("Samples = %d, want 1", result.Samples)
+	}
+	if math.Abs(result.Avg-0.75) > 1e-9 {
+		t.Errorf("Avg = %v, want 0.75", result.Avg)
 	}
 }
 

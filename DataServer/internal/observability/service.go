@@ -27,6 +27,7 @@ type AttemptReader interface {
 	ListByTaskID(ctx context.Context, taskID string) ([]taskattempts.TaskAttempt, error)
 	GetPhaseTimings(ctx context.Context, attemptID string) ([]taskattempts.PhaseTiming, error)
 	GetMetrics(ctx context.Context, attemptID string) (*taskattempts.AttemptMetrics, error)
+	GetCacheStats(ctx context.Context, attemptID string) (*taskattempts.AttemptCacheStats, error)
 }
 
 // JobReader provides job queries for observability aggregates.
@@ -560,7 +561,9 @@ type ScalarMetricResult struct {
 // RecentScalarMetric reads recent attempt_metrics rows and extracts a
 // named scalar field (e.g. "ffmpeg_speed_ratio"). Supported names:
 // ffmpeg_speed_ratio, cache_byte_hit_ratio, duplicate_download_ratio,
-// temp_storage_amplification, render_speed_ratio.
+// temp_storage_amplification, render_speed_ratio, render_factor,
+// encode_ms_per_output_minute, cpu_ms_per_output_minute,
+// download_throughput, cache_hit_ratio.
 func (s *Service) RecentScalarMetric(ctx context.Context, metricName string) (*ScalarMetricResult, error) {
 	recentTasks, err := s.tasks.List(ctx, taskgraph.Filter{Limit: 500})
 	if err != nil {
@@ -578,7 +581,11 @@ func (s *Service) RecentScalarMetric(ctx context.Context, metricName string) (*S
 			if mErr != nil || metrics == nil {
 				continue
 			}
-			v, ok := extractScalarMetric(metrics, metricName)
+			cs, csErr := s.attempts.GetCacheStats(ctx, a.ID)
+			if csErr != nil || cs == nil {
+				cs = &taskattempts.AttemptCacheStats{}
+			}
+			v, ok := extractScalarMetric(metrics, *cs, metricName)
 			if !ok || v == 0 {
 				continue
 			}
@@ -595,7 +602,7 @@ func (s *Service) RecentScalarMetric(ctx context.Context, metricName string) (*S
 	return result, nil
 }
 
-func extractScalarMetric(m *taskattempts.AttemptMetrics, name string) (float64, bool) {
+func extractScalarMetric(m *taskattempts.AttemptMetrics, cache taskattempts.AttemptCacheStats, name string) (float64, bool) {
 	switch name {
 	case "ffmpeg_speed_ratio":
 		return m.FFmpegSpeedRatio, true
@@ -607,6 +614,16 @@ func extractScalarMetric(m *taskattempts.AttemptMetrics, name string) (float64, 
 		return m.TempStorageAmplification(), true
 	case "render_speed_ratio":
 		return m.RenderSpeedRatio(), true
+	case "render_factor":
+		return m.RenderFactor(), true
+	case "encode_ms_per_output_minute":
+		return m.EncodeMsPerOutputMinute(), true
+	case "cpu_ms_per_output_minute":
+		return m.CpuMsPerOutputMinute(), true
+	case "download_throughput":
+		return m.DownloadThroughputBytesPerSec(), true
+	case "cache_hit_ratio":
+		return cache.CacheHitRatio(), true
 	default:
 		return 0, false
 	}
