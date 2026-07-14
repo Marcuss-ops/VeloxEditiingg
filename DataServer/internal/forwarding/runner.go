@@ -22,9 +22,7 @@
 package forwarding
 
 import (
-	"context"
 	"fmt"
-	"log"
 	"sync"
 	"time"
 
@@ -32,7 +30,6 @@ import (
 	"velox-server/internal/jobs/enqueue"
 	"velox-server/internal/remoteengine"
 	"velox-server/internal/store"
-	"velox-server/internal/supervisor"
 )
 
 // ── Runner ───────────────────────────────────────────────────────────────
@@ -134,65 +131,6 @@ func (r *CreatorForwardingRunner) Metrics() *RunnerMetrics {
 	return r.metrics
 }
 
-// Run is the durable tick loop. It blocks until ctx is cancelled or Stop is
-// called. The loop polls the database at cfg.PollInterval, claims up to
-// ClaimBatch claimable forwardings per cycle, and dispatches each to
-// processLease with bounded concurrency.
-//
-// Verdetto P1 #10 (Blocco 4): tick errors are CLASSIFIED rather than
-// logged-and-continued. Per-element errors (one bad forwarding) are
-// persisted on the row by processLease/handleRetry and don't count.
-// Lease-lost is propagated via context cancellation by processLease.
-// Infrastructure errors (DB closed, sql.ErrConnDone) accumulate in a
-// supervisor.FailureTracker; once the consecutive-err threshold trips,
-// Run returns the wrapped ErrInfrastructure to the BackgroundSupervisor
-// so the ClassRestartable / ClassCritical restart machinery kicks in.
-func (r *CreatorForwardingRunner) Run(ctx context.Context) error {
-	if r == nil {
-		return fmt.Errorf("forwarding: nil runner")
-	}
-	defer close(r.stoppedCh)
-
-	ticker := time.NewTicker(r.cfg.PollInterval)
-	defer ticker.Stop()
-
-	// Metrics refresh runs on a separate, slower cadence (every 30s)
-	// to avoid hitting the DB with COUNT/strftime queries every 5s.
-	metricsTicker := time.NewTicker(30 * time.Second)
-	defer metricsTicker.Stop()
-
-	tracker := supervisor.NewFailureTrackerWithClock(supervisor.DefaultRetryPolicy(), supervisor.RealClock{})
-
-	// Initial metrics snapshot on startup.
-	r.refreshMetrics(ctx)
-
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-r.stopCh:
-			return nil
-		case <-ticker.C:
-			err := r.tick(ctx)
-			if err == nil {
-				tracker.Reset()
-				continue
-			}
-			classified := supervisor.ClassifyError(err)
-			if escalated := tracker.Record(classified); escalated != nil {
-				return fmt.Errorf("forwarding runner: %w", escalated)
-			}
-			// Per-element errors are already persisted on disk by
-			// processLease / handleRetry / handleEnqueueRetry.
-			// Lease-lost cancels the in-flight context. Neither
-			// needs a log-and-continue entry; the runner silently
-			// proceeds to the next tick.
-		case <-metricsTicker.C:
-			r.refreshMetrics(ctx)
-		}
-	}
-}
-
 // Stop signals the runner to exit after the in-flight tick completes.
 func (r *CreatorForwardingRunner) Stop() {
 	r.mu.Lock()
@@ -203,70 +141,4 @@ func (r *CreatorForwardingRunner) Stop() {
 		close(r.stopCh)
 	}
 	<-r.stoppedCh
-}
-
-// tick performs one poll: claim up to ClaimBatch claimable forwardings,
-// then process each one with bounded concurrency. Errors from the
-// inner goroutines are aggregated under a mutex and the FIRST
-// classified error is returned to Run so the existing
-// supervisor.FailureTracker machinery can route it through the
-// ClassRestartable / ClassCritical restart policy. Per-element errors
-// are persisted on the row by processLease (so a single bad forwarding
-// does not poison the consecutive-error counter); lease-lost cancels
-// the in-flight context; infrastructure errors propagate.
-func (r *CreatorForwardingRunner) tick(ctx context.Context) error {
-	if r.client == nil || !r.client.IsConfigured() {
-		return nil // remote creator not configured; no work to do
-	}
-
-	// P0-02: cap the claim batch at Concurrency so every claimed lease
-	// can acquire the semaphore immediately without waiting. Leases
-	// that sit behind the semaphore cannot be renewed (renewLeaseLoop
-	// starts only after sem acquisition), so a ClaimBatch > Concurrency
-	// creates a window where claimed leases expire before they start
-	// processing. Capping at the source also avoids attempt_count
-	// inflation from claim-then-release cycles.
-	effectiveClaimBatch := r.cfg.ClaimBatch
-	if effectiveClaimBatch > r.cfg.Concurrency {
-		effectiveClaimBatch = r.cfg.Concurrency
-	}
-	leases, err := r.dbStore.ClaimCreatorForwardings(ctx, r.identity, "cf", r.cfg.LeaseDuration, effectiveClaimBatch)
-	if err != nil {
-		return fmt.Errorf("claim forwardings: %w", err)
-	}
-	if len(leases) == 0 {
-		return nil
-	}
-
-	r.metrics.Claimed.Add(int64(len(leases)))
-	log.Printf("[FORWARDING] claimed %d forwardings", len(leases))
-
-	var (
-		wg         sync.WaitGroup
-		errMu      sync.Mutex
-		aggregated error
-	)
-	for _, lease := range leases {
-		wg.Add(1)
-		go func(l store.CreatorForwardingLease) {
-			defer wg.Done()
-			// Acquire semaphore (bounded concurrency).
-			select {
-			case r.sem <- struct{}{}:
-			case <-ctx.Done():
-				return
-			}
-			defer func() { <-r.sem }()
-
-			if leaseErr := r.processLease(ctx, l); leaseErr != nil {
-				errMu.Lock()
-				if aggregated == nil {
-					aggregated = leaseErr
-				}
-				errMu.Unlock()
-			}
-		}(lease)
-	}
-	wg.Wait()
-	return aggregated
 }

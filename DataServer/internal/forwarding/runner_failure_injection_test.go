@@ -368,7 +368,7 @@ func TestProcessLease_MetricsAfterCAS(t *testing.T) {
 	// cause GetPipelineStatus to fail, triggering handleRetry.
 	// handleRetry will call MarkCreatorForwardingRetry which should
 	// succeed (the lease is valid), incrementing Retried.
-	err = r.processLease(ctx, leases[0])
+	_ = r.processLease(ctx, leases[0])
 	// processLease may return nil (retry handled) or an error (CAS fail).
 	// The key assertion is on the metric, not the return value.
 
