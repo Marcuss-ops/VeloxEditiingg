@@ -223,6 +223,14 @@ func (s *TaskReportIngestionService) SetLogger(l *log.Logger) {
 //     Any mismatch surfaces as ErrIdentityMismatch — the message cannot
 //     be trusted and is DROPPED upstream by handleTaskResult.
 //
+// Idempotent retry: a worker that already received a successful close
+// (attempt is terminal) may retry the same report after an ACK loss.
+// GetByTaskIDAndWorkerAndLease intentionally excludes terminal rows,
+// so when it returns nil we fall back to Reader.Get(attempt_id). If the
+// canonical row exists and the full tuple still matches, the retry is
+// allowed to proceed — IngestTaskResultAtomic's CAS + report_hash check
+// will safely no-op or conflict-detect.
+//
 // The function is exported so tests + non-gRPC callers can drive the
 // gate without the close-write + artifact-register side-effects.
 func (s *TaskReportIngestionService) ValidateIdentityTuple(ctx context.Context, cmd IngestCommand) error {
@@ -250,9 +258,20 @@ func (s *TaskReportIngestionService) ValidateIdentityTuple(ctx context.Context, 
 		return fmt.Errorf("ingest.ValidateIdentityTuple: lookup attempt (%s, %s, %s): %w",
 			cmd.TaskID, cmd.WorkerID, cmd.LeaseID, err)
 	}
+
+	// If no active attempt matches, the attempt may already be terminal
+	// (idempotent retry after a prior successful close). Fall back to a
+	// direct attempt_id lookup and validate the full tuple there.
 	if att == nil {
-		return fmt.Errorf("ingest.ValidateIdentityTuple: tuple (%s, %s, %s) not found: %w",
-			cmd.TaskID, cmd.WorkerID, cmd.LeaseID, taskattempts.ErrIdentityMismatch)
+		att, err = s.attemptRepo.Get(ctx, cmd.AttemptID)
+		if err != nil {
+			return fmt.Errorf("ingest.ValidateIdentityTuple: fallback lookup attempt %s: %w",
+				cmd.AttemptID, err)
+		}
+		if att == nil {
+			return fmt.Errorf("ingest.ValidateIdentityTuple: tuple (%s, %s, %s) not found: %w",
+				cmd.TaskID, cmd.WorkerID, cmd.LeaseID, taskattempts.ErrIdentityMismatch)
+		}
 	}
 
 	// PR-2 strict-compare the FULL wire tuple against the canonical row.
@@ -260,6 +279,12 @@ func (s *TaskReportIngestionService) ValidateIdentityTuple(ctx context.Context, 
 	if att.ID != cmd.AttemptID {
 		return fmt.Errorf("ingest.ValidateIdentityTuple: attempt_id mismatch (wire=%s db=%s task=%s): %w",
 			cmd.AttemptID, att.ID, cmd.TaskID, taskattempts.ErrIdentityMismatch)
+	}
+	if att.TaskID != cmd.TaskID || att.WorkerID != cmd.WorkerID || att.LeaseID != cmd.LeaseID {
+		return fmt.Errorf("ingest.ValidateIdentityTuple: identity tuple mismatch (wire=%s/%s/%s db=%s/%s/%s attempt=%s): %w",
+			cmd.TaskID, cmd.WorkerID, cmd.LeaseID,
+			att.TaskID, att.WorkerID, att.LeaseID,
+			att.ID, taskattempts.ErrIdentityMismatch)
 	}
 	if att.AttemptNumber != int(cmd.AttemptNumber) {
 		return fmt.Errorf("ingest.ValidateIdentityTuple: attempt_number mismatch (wire=%d db=%d task=%s): %w",

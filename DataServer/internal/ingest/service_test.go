@@ -364,9 +364,18 @@ func (s *stubIngestAttemptRepo) GetByTaskIDAndWorkerAndLease(_ context.Context, 
 	return nil, nil
 }
 
-// Panics for every other method so any accidental call is loud.
-func (s *stubIngestAttemptRepo) Get(_ context.Context, _ string) (*taskattempts.TaskAttempt, error) {
-	panic("stubIngestAttemptRepo.Get")
+// Get services the idempotent-retry fallback in ValidateIdentityTuple.
+// It returns the seeded attempt whose ID matches, if any.
+func (s *stubIngestAttemptRepo) Get(_ context.Context, id string) (*taskattempts.TaskAttempt, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, att := range s.attempts {
+		if att.ID == id {
+			cp := *att
+			return &cp, nil
+		}
+	}
+	return nil, nil
 }
 func (s *stubIngestAttemptRepo) ListByTaskID(_ context.Context, _ string) ([]taskattempts.TaskAttempt, error) {
 	panic("stubIngestAttemptRepo.ListByTaskID")

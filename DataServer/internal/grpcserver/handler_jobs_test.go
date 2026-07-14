@@ -366,9 +366,18 @@ func (s *spoofStubAttemptRepo) GetByTaskIDAndWorkerAndLease(_ context.Context, t
 	return nil, nil
 }
 
-// All other taskattempts.Repository methods panic-on-call as sentinels.
-func (s *spoofStubAttemptRepo) Get(_ context.Context, _ string) (*taskattempts.TaskAttempt, error) {
-	panic("spoofStubAttemptRepo.Get: not exercised")
+// Get services the idempotent-retry fallback in ValidateIdentityTuple.
+// Returns the seeded canonical attempt whose ID matches, if any.
+func (s *spoofStubAttemptRepo) Get(_ context.Context, id string) (*taskattempts.TaskAttempt, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, att := range s.attempts {
+		if att.ID == id {
+			cp := *att
+			return &cp, nil
+		}
+	}
+	return nil, nil
 }
 func (s *spoofStubAttemptRepo) ListByTaskID(_ context.Context, _ string) ([]taskattempts.TaskAttempt, error) {
 	panic("spoofStubAttemptRepo.ListByTaskID: not exercised")
