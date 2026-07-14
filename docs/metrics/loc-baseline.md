@@ -799,8 +799,21 @@ The +42 net over the two-file extract is import-block boilerplate + ingest.go's 
 ### 16b.2 Imports partitioned (Stage 1a)
 
 * **`coordinator.go` orchestrator** keeps the lifecycle-dependency block (UOW bookkeeping + the gRPC server keep-alive wiring + the bucket-stable shim) and DROPS the ingest-side direct-bucket imports because the `attempt_commits` upsert path moved alongside its caller.
-* **`ingest.go` (declared scope)** owns the deterministic-token helper imports (`crypto/rand`, `crypto/sha256`, `encoding/hex`, `encoding/binary` for `generateDeterministicCommitToken`), the HMAC plumbing required for Verdetto P0 #6, and the ingest-side semantic validators (`validateManifest`).
-* Future `validate.go` / `persist.go` / `notify.go` will each take their own slice of the remaining imports; the carve-out boundary is owned by the method itself (call-graph-driven split, per §15.7).
+* **`ingest.go` (declared scope)**: real import block (verbatim from disk at `@660dfa4`):
+  ```go
+  import (
+      "context"
+      "crypto/hmac"
+      "crypto/rand"
+      "crypto/sha256"
+      "database/sql"
+      "encoding/hex"
+      "fmt"
+      "strings"
+      "time"
+  )
+  ```
+  This set owns the deterministic-token helpers (`generateDeterministicCommitToken` → `crypto/sha256` / `crypto/rand` / `crypto/hmac` / `encoding/hex`), the heartbeat monotonic-progress clock (`time` + `context`), the semantic validators (`validateManifest` → `strings` / `fmt`), and the SQL raw-bucket upsert path (`database/sql` → `attempt_commits`, marked OUT-OF-UNITOFWORK-SCOPE per the package godoc until the HMAC plumbing has a clean UnitOfWork seam). Future `validate.go` / `persist.go` / `notify.go` will each take their own slice of the remaining imports; the carve-out boundary is owned by the method itself (call-graph-driven split).
 
 ### 16b.3 Public-API contract preserved
 
@@ -808,9 +821,9 @@ The +42 net over the two-file extract is import-block boilerplate + ingest.go's 
 * Exported names preserved on `coordinator.go`: `Coordinator`, `New`, `Validate`, `Ingest`, `Commit`, `Reconcile` — `Ingest` remains the orchestrator entry-point but its body now delegates to `ingest.go` methods.
 * New exported methods on the coordinator receiver that landed on `ingest.go`: `DeclareOutputs`, `RecordUploadProgress`. Both are called from `coordinator.go::Ingest`. No caller-side import or symbol change anywhere in `DataServer/...`.
 
-### 16b.4 Note on `validate.go` collision risk
+### 16b.4 Note on `validate.go` collision risk (per-package scoping)
 
-The planned `validate.go` overlaps conceptually with two existing names — `DataServer/internal/handlers/server/darkeditor/processors/*/validation/` and the worker's report-validation path in `RemoteCodex/.../pkg/config/`. Naming collisions are scoped by package — the planned `DataServer/internal/completion/validate.go` is unambiguous because of the package prefix. If extracted helpers reach for shared UUID / HMAC primitives during Stage 1b, promote those primitives to `internal/jobs` or `shared/contract` first (per §15.7 "promote before extract").
+The planned `validate.go` overlaps conceptually with two existing names — `DataServer/internal/handlers/server/darkeditor/processors/*/validation/` and the worker's report-validation path in `RemoteCodex/.../pkg/config/`. Because Go symbol visibility is per-package, the planned `DataServer/internal/completion/validate.go` is unambiguous at the call-site (`completion.Validate` vs. `darkeditor.processors.validation.Validate` vs. `pkgconfig.ValidateReport`). If extracting Stage 1b ever reaches for shared UUID / HMAC primitives, promote those primitives to `internal/jobs` or `shared/contract` first so Stages 1c / 1d can borrow without dragging in the worker-agent tree or the gRPC transport — but keep this pragmatic, not doctrinal; review promotion per call-site, not per project.
 
 ### 16b.5 Verification (post-push, @ `efdafd4` HeadOfStage1a + rerun @ HEAD)
 
