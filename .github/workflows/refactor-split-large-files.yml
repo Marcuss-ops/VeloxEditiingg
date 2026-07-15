@@ -1,0 +1,273 @@
+name: Split large test and archive files
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/refactor-split-large-files.yml
+
+permissions:
+  contents: write
+
+jobs:
+  refactor:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Split files by responsibility
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import subprocess
+
+          def body_after_imports(text: str) -> str:
+              package_at = text.index("package ")
+              import_at = text.index("import (", package_at)
+              import_end = text.index("\n)\n", import_at) + 3
+              return text[import_end:].lstrip("\n")
+
+          def write_go(path: str, package: str, imports: str, body: str, header: str = "") -> None:
+              content = f"{header}package {package}\n\nimport (\n{imports.rstrip()}\n)\n\n{body.strip()}\n"
+              Path(path).write_text(content, encoding="utf-8")
+
+          # ingest/service_test.go -> support, identity validation, result lifecycle
+          ingest_path = Path("DataServer/internal/ingest/service_test.go")
+          ingest = body_after_imports(ingest_path.read_text(encoding="utf-8"))
+          identity_marker = "// TestIngestionService_ValidateIdentityTuple_WireAttemptIDMismatch:"
+          result_marker = "// =====================================================================\n// Tests\n// ====================================================================="
+          identity_at = ingest.index(identity_marker)
+          result_at = ingest.index(result_marker)
+          write_go(
+              "DataServer/internal/ingest/service_test_support.go",
+              "ingest",
+              '''\t"context"
+\t"errors"
+\t"sync"
+\t"time"
+
+\t"velox-server/internal/jobs"
+\t"velox-server/internal/placement"
+\t"velox-server/internal/taskattempts"
+\t"velox-server/internal/taskgraph"
+\t"velox-server/internal/taskoutput_artifacts"''',
+              ingest[:identity_at],
+          )
+          write_go(
+              "DataServer/internal/ingest/service_identity_test.go",
+              "ingest",
+              '''\t"context"
+\t"errors"
+\t"testing"
+
+\t"velox-server/internal/taskattempts"''',
+              ingest[identity_at:result_at],
+          )
+          write_go(
+              "DataServer/internal/ingest/service_result_test.go",
+              "ingest",
+              '''\t"context"
+\t"errors"
+\t"strings"
+\t"testing"
+
+\t"velox-server/internal/jobs"
+\t"velox-server/internal/taskattempts"
+\t"velox-server/internal/taskgraph"
+\t"velox-server/internal/taskoutput_artifacts"''',
+              ingest[result_at:],
+          )
+          ingest_path.unlink()
+
+          # artifacts/service_test.go -> fixtures, upload/receive, finalize
+          artifacts_path = Path("DataServer/internal/artifacts/service_test.go")
+          artifacts_text = artifacts_path.read_text(encoding="utf-8")
+          artifacts = body_after_imports(artifacts_text)
+          begin_marker = "// =====================================================================\n// #region 1 — wrong worker (BeginUpload)"
+          finalize_marker = "// =====================================================================\n// #region 8 — doppia finalizzazione (idempotent path)"
+          begin_at = artifacts.index(begin_marker)
+          finalize_at = artifacts.index(finalize_marker)
+          write_go(
+              "DataServer/internal/artifacts/service_test_support.go",
+              "artifacts",
+              '''\t"bytes"
+\t"crypto/sha256"
+\t"database/sql"
+\t"encoding/hex"
+\t"io"
+\t"path/filepath"
+\t"strings"
+\t"sync"
+\t"testing"
+\t"time"
+
+\t_ "github.com/mattn/go-sqlite3"
+\t"github.com/stretchr/testify/require"
+
+\t"velox-server/internal/store"
+\t"velox-server/internal/store/migrations"''',
+              artifacts[:begin_at],
+              "// Package artifacts contains integration-test fixtures for the Service trust boundary.\n//\n",
+          )
+          write_go(
+              "DataServer/internal/artifacts/service_begin_receive_test.go",
+              "artifacts",
+              '''\t"context"
+\t"errors"
+\t"os"
+\t"strings"
+\t"testing"
+\t"time"
+
+\t"github.com/stretchr/testify/require"
+
+\t"velox-server/internal/store"''',
+              artifacts[begin_at:finalize_at],
+          )
+          write_go(
+              "DataServer/internal/artifacts/service_finalize_test.go",
+              "artifacts",
+              '''\t"context"
+\t"crypto/sha256"
+\t"encoding/hex"
+\t"errors"
+\t"io"
+\t"os"
+\t"path/filepath"
+\t"sync"
+\t"testing"
+\t"time"
+
+\t"github.com/stretchr/testify/require"
+
+\t"velox-server/internal/store"''',
+              artifacts[finalize_at:],
+          )
+          artifacts_path.unlink()
+
+          # creator forwarding tests -> helpers, claims, lifecycle, recovery/enqueue
+          forwarding_path = Path("DataServer/internal/store/store_creator_forwardings_test.go")
+          forwarding = body_after_imports(forwarding_path.read_text(encoding="utf-8"))
+          crud_marker = "// ── Insert + Get"
+          renew_marker = "// ── Renew"
+          recovery_marker = "// ── Recovery"
+          crud_at = forwarding.index(crud_marker)
+          renew_at = forwarding.index(renew_marker)
+          recovery_at = forwarding.index(recovery_marker)
+          write_go(
+              "DataServer/internal/store/store_creator_forwardings_test_support.go",
+              "store",
+              '''\t"context"
+\t"path/filepath"
+\t"testing"
+\t"time"''',
+              forwarding[:crud_at],
+          )
+          write_go(
+              "DataServer/internal/store/store_creator_forwardings_claim_test.go",
+              "store",
+              '''\t"context"
+\t"testing"
+\t"time"''',
+              forwarding[crud_at:renew_at],
+          )
+          write_go(
+              "DataServer/internal/store/store_creator_forwardings_lifecycle_test.go",
+              "store",
+              '''\t"context"
+\t"testing"
+\t"time"''',
+              forwarding[renew_at:recovery_at],
+          )
+          write_go(
+              "DataServer/internal/store/store_creator_forwardings_recovery_test.go",
+              "store",
+              '''\t"context"
+\t"testing"
+\t"time"
+
+\t"velox-server/internal/costmodel"
+\t"velox-server/internal/jobs"
+\t"velox-server/internal/taskgraph"''',
+              forwarding[recovery_at:],
+          )
+          forwarding_path.unlink()
+
+          # Archived architecture -> index plus three historical chapters.
+          doc_path = Path("docs/archive/architecture-pre-grpc.md")
+          doc = doc_path.read_text(encoding="utf-8")
+          section_1 = doc.index("## 1. Deploy del Master Server")
+          section_4 = doc.index("## 4. Ciclo di Vita Completo di un Job")
+          section_8 = doc.index("## 8. Progress Streaming (FFmpeg → Dashboard)")
+          title = "# Velox Architecture — Pre-gRPC Archive"
+          archive_note = "> Historical snapshot retained for reference. It is not the canonical current architecture."
+          Path("docs/archive/architecture-pre-grpc-deploy-workers.md").write_text(
+              f"{title}: Deploy and Workers\n\n{archive_note}\n\n{doc[section_1:section_4].strip()}\n",
+              encoding="utf-8",
+          )
+          Path("docs/archive/architecture-pre-grpc-job-pipeline.md").write_text(
+              f"{title}: Job and Video Pipeline\n\n{archive_note}\n\n{doc[section_4:section_8].strip()}\n",
+              encoding="utf-8",
+          )
+          Path("docs/archive/architecture-pre-grpc-runtime-artifacts.md").write_text(
+              f"{title}: Runtime, Artifacts and Delivery\n\n{archive_note}\n\n{doc[section_8:].strip()}\n",
+              encoding="utf-8",
+          )
+          doc_path.write_text(
+              f"""{title}
+
+{archive_note}
+
+The original long-form document has been separated by responsibility:
+
+- [Deploy, remote workers and master communication](architecture-pre-grpc-deploy-workers.md)
+- [Job lifecycle, native video pipeline and Go/C++ contract](architecture-pre-grpc-job-pipeline.md)
+- [Runtime concurrency, artifact pipeline, delivery and historical file layout](architecture-pre-grpc-runtime-artifacts.md)
+""",
+              encoding="utf-8",
+          )
+
+          go_files = [
+              "DataServer/internal/ingest/service_test_support.go",
+              "DataServer/internal/ingest/service_identity_test.go",
+              "DataServer/internal/ingest/service_result_test.go",
+              "DataServer/internal/artifacts/service_test_support.go",
+              "DataServer/internal/artifacts/service_begin_receive_test.go",
+              "DataServer/internal/artifacts/service_finalize_test.go",
+              "DataServer/internal/store/store_creator_forwardings_test_support.go",
+              "DataServer/internal/store/store_creator_forwardings_claim_test.go",
+              "DataServer/internal/store/store_creator_forwardings_lifecycle_test.go",
+              "DataServer/internal/store/store_creator_forwardings_recovery_test.go",
+          ]
+          subprocess.run(["gofmt", "-w", *go_files], check=True)
+
+          for path in go_files + [
+              "docs/archive/architecture-pre-grpc.md",
+              "docs/archive/architecture-pre-grpc-deploy-workers.md",
+              "docs/archive/architecture-pre-grpc-job-pipeline.md",
+              "docs/archive/architecture-pre-grpc-runtime-artifacts.md",
+          ]:
+              lines = len(Path(path).read_text(encoding="utf-8").splitlines())
+              if lines > 500:
+                  raise SystemExit(f"{path} remains too large: {lines} lines")
+              print(f"{lines:4d} {path}")
+          PY
+
+      - name: Run targeted Go tests
+        working-directory: DataServer
+        run: go test ./internal/ingest ./internal/artifacts ./internal/store
+
+      - name: Commit refactor directly to main
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm --ignore-unmatch .github/workflows/refactor-split-large-files.yml
+          git add -A
+          git commit -m "refactor(tests): split large test and archive files"
+          git push origin HEAD:main
