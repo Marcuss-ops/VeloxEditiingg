@@ -191,7 +191,7 @@ func TestHandleTaskResult_PersistTypedMetrics_StaleReplaySkipsMetrics(t *testing
 	attempts.seedCanonical(fx.taskID, fx.workerID, fx.canonicalLease)
 	taskRepo := &spoofStubTaskRepo{
 		transitionErr: store.ErrTransitionConflict,
-		listTasks: []taskgraph.Task{{ID: fx.taskID, JobID: fx.wireJobID, Status: taskgraph.StatusSucceeded}},
+		listTasks:     []taskgraph.Task{{ID: fx.taskID, JobID: fx.wireJobID, Status: taskgraph.StatusSucceeded}},
 	}
 	jobsRepo := &spoofStubJobsRepo{getJob: &jobs.Job{ID: fx.wireJobID, Status: jobs.StatusAwaitingArtifact, Revision: 0}}
 	outputArts := newSpoofStubOutputArts()

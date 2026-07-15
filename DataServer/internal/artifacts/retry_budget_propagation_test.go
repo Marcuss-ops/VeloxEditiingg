@@ -26,18 +26,73 @@ CREATE TABLE tasks (task_id TEXT PRIMARY KEY,job_id TEXT NOT NULL,project_id TEX
 
 func openPropagationDB(t *testing.T) *sql.DB {
 	t.Helper()
-	db,err:=sql.Open("sqlite3","file::memory:?cache=shared&_busy_timeout=5000"); if err!=nil { t.Fatal(err) }
-	t.Cleanup(func(){ _=db.Close() })
-	if _,err:=db.Exec(phase5Schema); err!=nil { t.Fatalf("apply schema: %v",err) }
-	if _,err:=db.Exec(`INSERT INTO delivery_destinations (destination_id,provider,name,enabled,created_at,updated_at) VALUES ('primary','youtube','Primary',1,'',''),('secondary','drive','Secondary',1,'','')`); err!=nil { t.Fatal(err) }
+	db, err := sql.Open("sqlite3", "file::memory:?cache=shared&_busy_timeout=5000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if _, err := db.Exec(phase5Schema); err != nil {
+		t.Fatalf("apply schema: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO delivery_destinations (destination_id,provider,name,enabled,created_at,updated_at) VALUES ('primary','youtube','Primary',1,'',''),('secondary','drive','Secondary',1,'','')`); err != nil {
+		t.Fatal(err)
+	}
 	return db
 }
 
-type phase5Fixture struct { JobID,WorkerID,LeaseID string; Revision,AttemptNumber int; ArtifactID,UploadID string }
-func seedPhase5Fixture(t *testing.T,db *sql.DB,f phase5Fixture){ t.Helper(); now:=time.Now().UTC().Format(time.RFC3339); if _,err:=db.Exec(`INSERT INTO jobs (job_id,status,revision,updated_at,migrated_at) VALUES (?,'RUNNING',?,?,?)`,f.JobID,f.Revision,now,now); err!=nil { t.Fatal(err) }; if _,err:=db.Exec(`INSERT INTO artifacts (id,job_id,attempt_id,type,storage_provider,status,created_at) VALUES (?,?,?,'render','local','STAGING',?)`,f.ArtifactID,f.JobID,f.AttemptNumber,now); err!=nil { t.Fatal(err) }; if _,err:=db.Exec(`INSERT INTO artifact_uploads (upload_id,artifact_id,job_id,attempt_number,worker_id,lease_id,status,created_at,expires_at,completed_at) VALUES (?,?,?,?,?,?,'FINALIZING',?,?,NULL)`,f.UploadID,f.ArtifactID,f.JobID,f.AttemptNumber,f.WorkerID,f.LeaseID,now,time.Now().Add(24*time.Hour).UTC().Format(time.RFC3339)); err!=nil { t.Fatal(err) } }
+type phase5Fixture struct {
+	JobID, WorkerID, LeaseID string
+	Revision, AttemptNumber  int
+	ArtifactID, UploadID     string
+}
 
-type phase5Plan struct { DestinationID string; Priority,RetryBudget int; Enabled bool }
-func seedDeliveryPlans(t *testing.T,db *sql.DB,jobID string,plans []phase5Plan){ t.Helper(); now:=time.Now().UTC().Format(time.RFC3339); for _,p:=range plans { enabled:=0; if p.Enabled { enabled=1 }; if _,err:=db.Exec(`INSERT INTO job_delivery_plans (job_id,destination_id,enabled,priority,retry_budget,metadata_json,created_at,updated_at) VALUES (?,?,?,?,?,'{}',?,?)`,jobID,p.DestinationID,enabled,p.Priority,p.RetryBudget,now,now); err!=nil { t.Fatal(err) } } }
-func runFinalize(t *testing.T,db *sql.DB,resolver artifacts.DeliveryPlanResolver,cmd artifacts.FinalizeVerifiedCommand)(*artifacts.SQLiteFinalizeWriter,*sql.DB){ t.Helper(); reader:=artifacts.NewSQLiteArtifactReader(db); fin:=artifacts.NewSQLiteFinalizeWriter(db,reader,resolver); if _,err:=fin.FinalizeVerified(context.Background(),cmd); err!=nil { t.Fatalf("FinalizeVerified: %v",err) }; return fin,db }
-type zeroBudgetResolver struct { dests []artifacts.DeliveryDestination }
-func (r *zeroBudgetResolver) ResolveDestinations(context.Context,string,string)([]artifacts.DeliveryDestination,error){ return r.dests,nil }
+func seedPhase5Fixture(t *testing.T, db *sql.DB, f phase5Fixture) {
+	t.Helper()
+	now := time.Now().UTC().Format(time.RFC3339)
+	if _, err := db.Exec(`INSERT INTO jobs (job_id,status,revision,updated_at,migrated_at) VALUES (?,'RUNNING',?,?,?)`, f.JobID, f.Revision, now, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO artifacts (id,job_id,attempt_id,type,storage_provider,status,created_at) VALUES (?,?,?,'render','local','STAGING',?)`, f.ArtifactID, f.JobID, f.AttemptNumber, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO artifact_uploads (upload_id,artifact_id,job_id,attempt_number,worker_id,lease_id,status,created_at,expires_at,completed_at) VALUES (?,?,?,?,?,?,'FINALIZING',?,?,NULL)`, f.UploadID, f.ArtifactID, f.JobID, f.AttemptNumber, f.WorkerID, f.LeaseID, now, time.Now().Add(24*time.Hour).UTC().Format(time.RFC3339)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+type phase5Plan struct {
+	DestinationID         string
+	Priority, RetryBudget int
+	Enabled               bool
+}
+
+func seedDeliveryPlans(t *testing.T, db *sql.DB, jobID string, plans []phase5Plan) {
+	t.Helper()
+	now := time.Now().UTC().Format(time.RFC3339)
+	for _, p := range plans {
+		enabled := 0
+		if p.Enabled {
+			enabled = 1
+		}
+		if _, err := db.Exec(`INSERT INTO job_delivery_plans (job_id,destination_id,enabled,priority,retry_budget,metadata_json,created_at,updated_at) VALUES (?,?,?,?,?,'{}',?,?)`, jobID, p.DestinationID, enabled, p.Priority, p.RetryBudget, now, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+func runFinalize(t *testing.T, db *sql.DB, resolver artifacts.DeliveryPlanResolver, cmd artifacts.FinalizeVerifiedCommand) (*artifacts.SQLiteFinalizeWriter, *sql.DB) {
+	t.Helper()
+	reader := artifacts.NewSQLiteArtifactReader(db)
+	fin := artifacts.NewSQLiteFinalizeWriter(db, reader, resolver)
+	if _, err := fin.FinalizeVerified(context.Background(), cmd); err != nil {
+		t.Fatalf("FinalizeVerified: %v", err)
+	}
+	return fin, db
+}
+
+type zeroBudgetResolver struct {
+	dests []artifacts.DeliveryDestination
+}
+
+func (r *zeroBudgetResolver) ResolveDestinations(context.Context, string, string) ([]artifacts.DeliveryDestination, error) {
+	return r.dests, nil
+}
