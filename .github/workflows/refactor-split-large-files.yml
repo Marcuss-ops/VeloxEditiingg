@@ -1,6 +1,8 @@
 name: Split requested large files
 
 on:
+  schedule:
+    - cron: "*/5 * * * *"
   workflow_run:
     workflows: [CI]
     types: [completed]
@@ -14,7 +16,7 @@ concurrency:
 
 jobs:
   refactor:
-    if: github.event.workflow_run.head_branch == 'main'
+    if: github.event_name == 'schedule' || github.event.workflow_run.head_branch == 'main'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout latest main
