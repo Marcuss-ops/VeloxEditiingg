@@ -14,7 +14,9 @@ concurrency:
 
 jobs:
   refactor:
-    if: github.actor == 'Marcuss-ops' && github.event.issue.title == '[velox] split requested large files'
+    if: >-
+      github.event.issue.title == '[velox] split requested large files v2' &&
+      github.event.issue.user.login == github.repository_owner
     runs-on: ubuntu-latest
     steps:
       - name: Checkout latest main
@@ -47,17 +49,18 @@ jobs:
               content = f"{header}package {package}\n\nimport (\n{imports.rstrip()}\n)\n\n{body.strip()}\n"
               Path(path).write_text(content, encoding="utf-8")
 
-          # Ingest: common fakes, identity validation, result lifecycle.
           ingest_path = Path("DataServer/internal/ingest/service_test.go")
-          ingest = body_after_imports(ingest_path.read_text(encoding="utf-8"))
-          identity_marker = "// TestIngestionService_ValidateIdentityTuple_WireAttemptIDMismatch:"
-          result_marker = "// =====================================================================\n// Tests\n// ====================================================================="
-          identity_at = ingest.index(identity_marker)
-          result_at = ingest.index(result_marker)
-          write_go(
-              "DataServer/internal/ingest/service_support_test.go",
-              "ingest",
-              '''\t"context"
+          if ingest_path.exists():
+              ingest = body_after_imports(ingest_path.read_text(encoding="utf-8"))
+              identity_marker = "// TestIngestionService_ValidateIdentityTuple_WireAttemptIDMismatch:"
+              result_marker = "// =====================================================================\n// Tests\n// ====================================================================="
+              if identity_marker in ingest and result_marker in ingest:
+                  identity_at = ingest.index(identity_marker)
+                  result_at = ingest.index(result_marker)
+                  write_go(
+                      "DataServer/internal/ingest/service_support_test.go",
+                      "ingest",
+                      '''\t"context"
 \t"errors"
 \t"sync"
 \t"time"
@@ -67,22 +70,22 @@ jobs:
 \t"velox-server/internal/taskattempts"
 \t"velox-server/internal/taskgraph"
 \t"velox-server/internal/taskoutput_artifacts"''',
-              ingest[:identity_at],
-          )
-          write_go(
-              "DataServer/internal/ingest/service_identity_test.go",
-              "ingest",
-              '''\t"context"
+                      ingest[:identity_at],
+                  )
+                  write_go(
+                      "DataServer/internal/ingest/service_identity_test.go",
+                      "ingest",
+                      '''\t"context"
 \t"errors"
 \t"testing"
 
 \t"velox-server/internal/taskattempts"''',
-              ingest[identity_at:result_at],
-          )
-          write_go(
-              "DataServer/internal/ingest/service_result_test.go",
-              "ingest",
-              '''\t"context"
+                      ingest[identity_at:result_at],
+                  )
+                  write_go(
+                      "DataServer/internal/ingest/service_result_test.go",
+                      "ingest",
+                      '''\t"context"
 \t"errors"
 \t"strings"
 \t"testing"
@@ -91,22 +94,24 @@ jobs:
 \t"velox-server/internal/taskattempts"
 \t"velox-server/internal/taskgraph"
 \t"velox-server/internal/taskoutput_artifacts"''',
-              ingest[result_at:],
-          )
-          ingest_path.unlink()
+                      ingest[result_at:],
+                  )
+                  ingest_path.unlink()
+              else:
+                  print("ingest service tests already split; preserving current focused files")
 
-          # Artifacts: reusable environment, upload/receive, finalization.
           artifacts_path = Path("DataServer/internal/artifacts/service_test.go")
-          artifacts_text = artifacts_path.read_text(encoding="utf-8")
-          artifacts = body_after_imports(artifacts_text)
-          begin_marker = "// =====================================================================\n// #region 1 — wrong worker (BeginUpload)"
-          finalize_marker = "// =====================================================================\n// #region 8 — doppia finalizzazione (idempotent path)"
-          begin_at = artifacts.index(begin_marker)
-          finalize_at = artifacts.index(finalize_marker)
-          write_go(
-              "DataServer/internal/artifacts/service_support_test.go",
-              "artifacts",
-              '''\t"bytes"
+          if artifacts_path.exists():
+              artifacts = body_after_imports(artifacts_path.read_text(encoding="utf-8"))
+              begin_marker = "// =====================================================================\n// #region 1 — wrong worker (BeginUpload)"
+              finalize_marker = "// =====================================================================\n// #region 8 — doppia finalizzazione (idempotent path)"
+              if begin_marker in artifacts and finalize_marker in artifacts:
+                  begin_at = artifacts.index(begin_marker)
+                  finalize_at = artifacts.index(finalize_marker)
+                  write_go(
+                      "DataServer/internal/artifacts/service_support_test.go",
+                      "artifacts",
+                      '''\t"bytes"
 \t"crypto/sha256"
 \t"database/sql"
 \t"encoding/hex"
@@ -122,13 +127,13 @@ jobs:
 
 \t"velox-server/internal/store"
 \t"velox-server/internal/store/migrations"''',
-              artifacts[:begin_at],
-              "// Package artifacts contains integration-test fixtures for the Service trust boundary.\n//\n",
-          )
-          write_go(
-              "DataServer/internal/artifacts/service_begin_receive_test.go",
-              "artifacts",
-              '''\t"context"
+                      artifacts[:begin_at],
+                      "// Package artifacts contains integration-test fixtures for the Service trust boundary.\n//\n",
+                  )
+                  write_go(
+                      "DataServer/internal/artifacts/service_begin_receive_test.go",
+                      "artifacts",
+                      '''\t"context"
 \t"errors"
 \t"os"
 \t"strings"
@@ -138,12 +143,12 @@ jobs:
 \t"github.com/stretchr/testify/require"
 
 \t"velox-server/internal/store"''',
-              artifacts[begin_at:finalize_at],
-          )
-          write_go(
-              "DataServer/internal/artifacts/service_finalize_test.go",
-              "artifacts",
-              '''\t"context"
+                      artifacts[begin_at:finalize_at],
+                  )
+                  write_go(
+                      "DataServer/internal/artifacts/service_finalize_test.go",
+                      "artifacts",
+                      '''\t"context"
 \t"crypto/sha256"
 \t"encoding/hex"
 \t"errors"
@@ -157,79 +162,88 @@ jobs:
 \t"github.com/stretchr/testify/require"
 
 \t"velox-server/internal/store"''',
-              artifacts[finalize_at:],
-          )
-          artifacts_path.unlink()
+                      artifacts[finalize_at:],
+                  )
+                  artifacts_path.unlink()
+              else:
+                  print("artifact service tests already split")
 
-          # Creator forwardings: fixtures, claims, lifecycle, recovery/enqueue.
           forwarding_path = Path("DataServer/internal/store/store_creator_forwardings_test.go")
-          forwarding = body_after_imports(forwarding_path.read_text(encoding="utf-8"))
-          crud_marker = "// ── Insert + Get"
-          renew_marker = "// ── Renew"
-          recovery_marker = "// ── Recovery"
-          crud_at = forwarding.index(crud_marker)
-          renew_at = forwarding.index(renew_marker)
-          recovery_at = forwarding.index(recovery_marker)
-          write_go(
-              "DataServer/internal/store/store_creator_forwardings_support_test.go",
-              "store",
-              '''\t"context"
+          if forwarding_path.exists():
+              forwarding = body_after_imports(forwarding_path.read_text(encoding="utf-8"))
+              crud_marker = "// ── Insert + Get"
+              renew_marker = "// ── Renew"
+              recovery_marker = "// ── Recovery"
+              if all(marker in forwarding for marker in (crud_marker, renew_marker, recovery_marker)):
+                  crud_at = forwarding.index(crud_marker)
+                  renew_at = forwarding.index(renew_marker)
+                  recovery_at = forwarding.index(recovery_marker)
+                  write_go(
+                      "DataServer/internal/store/store_creator_forwardings_support_test.go",
+                      "store",
+                      '''\t"context"
 \t"path/filepath"
 \t"testing"
 \t"time"''',
-              forwarding[:crud_at],
-          )
-          write_go(
-              "DataServer/internal/store/store_creator_forwardings_claim_test.go",
-              "store",
-              '''\t"context"
+                      forwarding[:crud_at],
+                  )
+                  write_go(
+                      "DataServer/internal/store/store_creator_forwardings_claim_test.go",
+                      "store",
+                      '''\t"context"
 \t"testing"
 \t"time"''',
-              forwarding[crud_at:renew_at],
-          )
-          write_go(
-              "DataServer/internal/store/store_creator_forwardings_lifecycle_test.go",
-              "store",
-              '''\t"context"
+                      forwarding[crud_at:renew_at],
+                  )
+                  write_go(
+                      "DataServer/internal/store/store_creator_forwardings_lifecycle_test.go",
+                      "store",
+                      '''\t"context"
 \t"testing"
 \t"time"''',
-              forwarding[renew_at:recovery_at],
-          )
-          write_go(
-              "DataServer/internal/store/store_creator_forwardings_recovery_test.go",
-              "store",
-              '''\t"context"
+                      forwarding[renew_at:recovery_at],
+                  )
+                  write_go(
+                      "DataServer/internal/store/store_creator_forwardings_recovery_test.go",
+                      "store",
+                      '''\t"context"
 \t"testing"
 \t"time"
 
 \t"velox-server/internal/costmodel"
 \t"velox-server/internal/jobs"
 \t"velox-server/internal/taskgraph"''',
-              forwarding[recovery_at:],
-          )
-          forwarding_path.unlink()
+                      forwarding[recovery_at:],
+                  )
+                  forwarding_path.unlink()
+              else:
+                  print("creator forwarding tests already split")
 
-          # Archived architecture: retain a small index and three historical chapters.
           doc_path = Path("docs/archive/architecture-pre-grpc.md")
-          doc = doc_path.read_text(encoding="utf-8")
-          section_1 = doc.index("## 1. Deploy del Master Server")
-          section_4 = doc.index("## 4. Ciclo di Vita Completo di un Job")
-          section_8 = doc.index("## 8. Progress Streaming (FFmpeg → Dashboard)")
-          archive_note = "> Snapshot storico mantenuto come riferimento; non descrive l'architettura canonica corrente."
-          Path("docs/archive/architecture-pre-grpc-deploy-workers.md").write_text(
-              f"# Velox Architecture Pre-gRPC — Deploy e Worker\n\n{archive_note}\n\n{doc[section_1:section_4].strip()}\n",
-              encoding="utf-8",
-          )
-          Path("docs/archive/architecture-pre-grpc-job-pipeline.md").write_text(
-              f"# Velox Architecture Pre-gRPC — Job e Video Pipeline\n\n{archive_note}\n\n{doc[section_4:section_8].strip()}\n",
-              encoding="utf-8",
-          )
-          Path("docs/archive/architecture-pre-grpc-runtime-artifacts.md").write_text(
-              f"# Velox Architecture Pre-gRPC — Runtime, Artifact e Delivery\n\n{archive_note}\n\n{doc[section_8:].strip()}\n",
-              encoding="utf-8",
-          )
-          doc_path.write_text(
-              f"""# Velox Architecture — Pre-gRPC Archive
+          if doc_path.exists():
+              doc = doc_path.read_text(encoding="utf-8")
+              markers = (
+                  "## 1. Deploy del Master Server",
+                  "## 4. Ciclo di Vita Completo di un Job",
+                  "## 8. Progress Streaming (FFmpeg → Dashboard)",
+              )
+              if all(marker in doc for marker in markers):
+                  section_1, section_4, section_8 = (doc.index(marker) for marker in markers)
+                  archive_note = "> Snapshot storico mantenuto come riferimento; non descrive l'architettura canonica corrente."
+                  Path("docs/archive/architecture-pre-grpc-deploy-workers.md").write_text(
+                      f"# Velox Architecture Pre-gRPC — Deploy e Worker\n\n{archive_note}\n\n{doc[section_1:section_4].strip()}\n",
+                      encoding="utf-8",
+                  )
+                  Path("docs/archive/architecture-pre-grpc-job-pipeline.md").write_text(
+                      f"# Velox Architecture Pre-gRPC — Job e Video Pipeline\n\n{archive_note}\n\n{doc[section_4:section_8].strip()}\n",
+                      encoding="utf-8",
+                  )
+                  Path("docs/archive/architecture-pre-grpc-runtime-artifacts.md").write_text(
+                      f"# Velox Architecture Pre-gRPC — Runtime, Artifact e Delivery\n\n{archive_note}\n\n{doc[section_8:].strip()}\n",
+                      encoding="utf-8",
+                  )
+                  doc_path.write_text(
+                      f"""# Velox Architecture — Pre-gRPC Archive
 
 {archive_note}
 
@@ -239,31 +253,24 @@ Il documento originale è stato separato per responsabilità:
 - [Ciclo di vita dei job, pipeline video nativa e contratto Go/C++](architecture-pre-grpc-job-pipeline.md)
 - [Runtime, concorrenza, artifact pipeline, delivery e struttura storica](architecture-pre-grpc-runtime-artifacts.md)
 """,
-              encoding="utf-8",
-          )
+                      encoding="utf-8",
+                  )
+              else:
+                  print("archived architecture document already split")
 
-          go_files = [
-              "DataServer/internal/ingest/service_support_test.go",
-              "DataServer/internal/ingest/service_identity_test.go",
-              "DataServer/internal/ingest/service_result_test.go",
-              "DataServer/internal/artifacts/service_support_test.go",
-              "DataServer/internal/artifacts/service_begin_receive_test.go",
-              "DataServer/internal/artifacts/service_finalize_test.go",
-              "DataServer/internal/store/store_creator_forwardings_support_test.go",
-              "DataServer/internal/store/store_creator_forwardings_claim_test.go",
-              "DataServer/internal/store/store_creator_forwardings_lifecycle_test.go",
-              "DataServer/internal/store/store_creator_forwardings_recovery_test.go",
-          ]
-          subprocess.run(["gofmt", "-w", *go_files], check=True)
+          go_files = sorted({
+              *Path("DataServer/internal/ingest").glob("service*_test.go"),
+              *Path("DataServer/internal/artifacts").glob("service*_test.go"),
+              *Path("DataServer/internal/store").glob("store_creator_forwardings*_test.go"),
+          })
+          subprocess.run(["gofmt", "-w", *(str(path) for path in go_files)], check=True)
 
-          checked = go_files + [
-              "docs/archive/architecture-pre-grpc.md",
-              "docs/archive/architecture-pre-grpc-deploy-workers.md",
-              "docs/archive/architecture-pre-grpc-job-pipeline.md",
-              "docs/archive/architecture-pre-grpc-runtime-artifacts.md",
+          checked = [
+              *go_files,
+              *Path("docs/archive").glob("architecture-pre-grpc*.md"),
           ]
-          for path in checked:
-              lines = len(Path(path).read_text(encoding="utf-8").splitlines())
+          for path in sorted(set(checked)):
+              lines = len(path.read_text(encoding="utf-8").splitlines())
               if lines > 500:
                   raise SystemExit(f"{path} remains too large: {lines} lines")
               print(f"{lines:4d} {path}")
@@ -280,11 +287,14 @@ Il documento originale è stato separato per responsabilità:
         shell: bash
         run: |
           set -euo pipefail
+          rm -f .github/workflows/refactor-split-large-files.yml
+          rm -f .github/workflows/issue-trigger-split-long-files.yml
+          rm -f scripts/ci/split-requested-long-files.py
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git rm .github/workflows/refactor-split-large-files.yml
           git add -A
-          git commit -m "refactor(tests): split large test and archive files"
+          git commit -m "refactor(tests/docs): split requested large files"
+          git pull --rebase origin main
           git push origin HEAD:main
 
       - name: Close trigger issue
