@@ -43,12 +43,14 @@ jobs:
           set -euo pipefail
           git pull --ff-only origin main
           python3 scripts/ci/split-next-long-files.py
+          python3 scripts/ci/split-user-requested-files.py
           export PATH="$(go env GOPATH)/bin:$PATH"
           goimports -w \
             DataServer/internal/grpcserver/handler_reports*.go \
             DataServer/internal/artifacts/retry_budget_*.go \
             DataServer/internal/ingest/service*_test.go \
-            DataServer/internal/artifacts/service*_test.go
+            DataServer/internal/artifacts/service*_test.go \
+            DataServer/internal/store/store_creator_forwardings*_test.go
 
       - name: Validate requested packages
         id: validate
@@ -58,9 +60,9 @@ jobs:
           set -o pipefail
           {
             echo '== go test =='
-            go test ./internal/grpcserver ./internal/artifacts ./internal/ingest
+            go test ./internal/grpcserver ./internal/artifacts ./internal/ingest ./internal/store
             echo '== go vet =='
-            go vet ./internal/grpcserver ./internal/artifacts ./internal/ingest
+            go vet ./internal/grpcserver ./internal/artifacts ./internal/ingest ./internal/store
           } 2>&1 | tee /tmp/requested-split-validation.log
 
       - name: Validate LOC and file layout
@@ -78,6 +80,8 @@ jobs:
               "grpcserver": list(Path("DataServer/internal/grpcserver").glob("handler_reports*.go")),
               "retry-budget": list(Path("DataServer/internal/artifacts").glob("retry_budget_*.go")),
               "ingest": list(Path("DataServer/internal/ingest").glob("service*_test.go")),
+              "artifact-service": list(Path("DataServer/internal/artifacts").glob("service*_test.go")),
+              "creator-forwardings": list(Path("DataServer/internal/store").glob("store_creator_forwardings*_test.go")),
           }
           for name, paths in groups.items():
               tests = []
@@ -85,7 +89,7 @@ jobs:
                   text = path.read_text(encoding="utf-8")
                   lines = len(text.splitlines())
                   print(f"{lines:4d} {path}")
-                  if lines > 600:
+                  if lines > 500:
                       raise SystemExit(f"{path} remains too large: {lines}")
                   tests.extend(re.findall(r"(?m)^func (Test\w+)\(", text))
               duplicates = sorted({test for test in tests if tests.count(test) > 1})
@@ -96,10 +100,11 @@ jobs:
               Path("docs/metrics/loc-baseline.md"),
               Path("docs/metrics/loc-baseline-policy.md"),
               Path("docs/metrics/loc-refactor-history.md"),
+              *sorted(Path("docs/archive").glob("architecture-pre-grpc*.md")),
           ):
               lines = len(path.read_text(encoding="utf-8").splitlines())
               print(f"{lines:4d} {path}")
-              if lines > 600:
+              if lines > 500:
                   raise SystemExit(f"{path} remains too large: {lines}")
           PY
           } 2>&1 | tee -a /tmp/requested-split-validation.log
@@ -165,6 +170,6 @@ jobs:
           git pull --rebase origin main
           git push origin HEAD:main
 
-          for issue in 21 22 23 24 26; do
+          for issue in 21 22 23 24 25 26 27; do
             gh issue close "$issue" --repo "$GITHUB_REPOSITORY" --reason completed --comment "Requested long-file refactor completed and validated on main." || true
           done
