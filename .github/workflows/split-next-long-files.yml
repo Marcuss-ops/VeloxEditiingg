@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - main
+  issues:
+    types:
+      - opened
 
 concurrency:
   group: split-next-long-files
@@ -11,7 +14,9 @@ concurrency:
 
 jobs:
   split:
-    if: contains(github.event.head_commit.message, '[split-next-long-files]')
+    if: >-
+      (github.event_name == 'push' && contains(github.event.head_commit.message, '[split-next-long-files]')) ||
+      (github.event_name == 'issues' && github.event.issue.title == '[automation] run next long-file split')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -111,6 +116,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          rm -f .split-next-long-files-trigger
           rm -f .github/workflows/split-next-long-files.yml
           rm -f .github/workflows/refactor-split-large-files.yml
           rm -f .github/workflows/issue-trigger-split-long-files.yml
