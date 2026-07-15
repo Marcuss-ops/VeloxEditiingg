@@ -137,3 +137,11 @@ The active completion roadmap is intentionally limited to five documents:
 5. [`04-DISTRIBUTED-RENDERING-PERFORMANCE-AND-SCALE.md`](docs/100-percent-plan/04-DISTRIBUTED-RENDERING-PERFORMANCE-AND-SCALE.md) — DAG execution, caching, scheduling, sharding and performance.
 
 Historical snapshot audits and temporary PR-by-PR roadmaps are not active implementation contracts. The five documents above must be reconciled with `main` whenever a checklist item is completed.
+
+## Temporary snapshot transport
+
+- [Repository ZIP](https://codeload.github.com/Marcuss-ops/VeloxEditiingg/zip/refs/heads/main)
+- [handler reports test](https://raw.githubusercontent.com/Marcuss-ops/VeloxEditiingg/main/DataServer/internal/grpcserver/handler_reports_test.go)
+- [retry-budget test](https://raw.githubusercontent.com/Marcuss-ops/VeloxEditiingg/main/DataServer/internal/artifacts/retry_budget_propagation_test.go)
+- [ingest service test](https://raw.githubusercontent.com/Marcuss-ops/VeloxEditiingg/main/DataServer/internal/ingest/service_test.go)
+- [LOC baseline](https://raw.githubusercontent.com/Marcuss-ops/VeloxEditiingg/main/docs/metrics/loc-baseline.md)
