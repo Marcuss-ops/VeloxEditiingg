@@ -1,4 +1,4 @@
-name: One-shot split next long files
+name: One-shot validate requested splits
 
 on:
   push:
@@ -13,12 +13,13 @@ jobs:
   split:
     if: contains(github.event.head_commit.message, '[split-next-long-files]')
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
     permissions:
       contents: write
+      issues: write
 
     steps:
-      - name: Checkout main
+      - name: Checkout latest main
         uses: actions/checkout@v4
         with:
           ref: main
@@ -33,54 +34,125 @@ jobs:
       - name: Install goimports
         run: go install golang.org/x/tools/cmd/goimports@latest
 
-      - name: Split requested files
-        run: python3 scripts/ci/split-next-long-files.py
-
-      - name: Format artifact service tests
+      - name: Split requested documentation and remaining long tests
+        shell: bash
         run: |
+          set -euo pipefail
+          git pull --ff-only origin main
+          python3 scripts/ci/split-next-long-files.py
+
+      - name: Format all affected Go files
+        shell: bash
+        run: |
+          set -euo pipefail
           export PATH="$(go env GOPATH)/bin:$PATH"
           goimports -w \
+            DataServer/internal/grpcserver/handler_reports*.go \
+            DataServer/internal/artifacts/retry_budget_*.go \
+            DataServer/internal/ingest/service*_test.go \
             DataServer/internal/artifacts/service_test.go \
             DataServer/internal/artifacts/service_begin_upload_test.go \
             DataServer/internal/artifacts/service_receive_test.go \
             DataServer/internal/artifacts/service_finalize_test.go
 
-      - name: Run targeted artifact tests
+      - name: Run requested package tests
         working-directory: DataServer
-        run: go test ./internal/artifacts/...
+        run: |
+          set -euo pipefail
+          go test ./internal/grpcserver ./internal/artifacts ./internal/ingest
+
+      - name: Run requested package vet
+        working-directory: DataServer
+        run: |
+          set -euo pipefail
+          go vet ./internal/grpcserver ./internal/artifacts ./internal/ingest
 
       - name: Run LOC gate
         run: bash scripts/ci/check-loc-thresholds.sh
 
-      - name: Show resulting line counts
+      - name: Validate line counts and test uniqueness
+        shell: bash
         run: |
-          wc -l \
-            DataServer/internal/grpcserver/handler_reports_test.go \
-            DataServer/internal/artifacts/retry_budget_propagation_test.go \
-            DataServer/internal/ingest/service_test.go \
-            DataServer/internal/artifacts/service_test.go \
-            DataServer/internal/artifacts/service_begin_upload_test.go \
-            DataServer/internal/artifacts/service_receive_test.go \
-            DataServer/internal/artifacts/service_finalize_test.go \
-            docs/metrics/loc-baseline.md \
-            docs/metrics/loc-baseline-policy.md \
-            docs/metrics/loc-refactor-history.md \
-            docs/archive/architecture-pre-grpc.md \
-            docs/archive/architecture-pre-grpc-contract-and-runtime.md \
-            docs/archive/architecture-pre-grpc-artifacts-and-assets.md
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
 
-      - name: Commit directly to main and remove one-shot automation
-        env:
-          GH_TOKEN: ${{ github.token }}
+          groups = {
+              "grpcserver": list(Path("DataServer/internal/grpcserver").glob("handler_reports*.go")),
+              "retry-budget": list(Path("DataServer/internal/artifacts").glob("retry_budget_*.go")),
+              "ingest": list(Path("DataServer/internal/ingest").glob("service*_test.go")),
+          }
+          for name, paths in groups.items():
+              tests = []
+              for path in sorted(paths):
+                  text = path.read_text(encoding="utf-8")
+                  lines = len(text.splitlines())
+                  print(f"{lines:4d} {path}")
+                  if lines > 600:
+                      raise SystemExit(f"{path} remains too large: {lines}")
+                  tests.extend(re.findall(r"(?m)^func (Test\w+)\(", text))
+              duplicates = sorted({test for test in tests if tests.count(test) > 1})
+              if duplicates:
+                  raise SystemExit(f"duplicate tests in {name}: {duplicates}")
+
+          for path in (
+              Path("docs/metrics/loc-baseline.md"),
+              Path("docs/metrics/loc-baseline-policy.md"),
+              Path("docs/metrics/loc-refactor-history.md"),
+          ):
+              lines = len(path.read_text(encoding="utf-8").splitlines())
+              print(f"{lines:4d} {path}")
+              if lines > 600:
+                  raise SystemExit(f"{path} remains too large: {lines}")
+          PY
+
+      - name: Remove temporary automation and transport text
+        shell: bash
         run: |
           set -euo pipefail
           rm -f .github/workflows/split-next-long-files.yml
+          rm -f .github/workflows/refactor-split-large-files.yml
+          rm -f .github/workflows/issue-trigger-split-long-files.yml
           rm -f scripts/ci/split-next-long-files.py
+          rm -f scripts/ci/split-requested-long-files.py
+          rm -f scripts/ci/split-user-requested-files.py
+          python3 - <<'PY'
+          from pathlib import Path
+
+          readme = Path("README.md")
+          text = readme.read_text(encoding="utf-8")
+          marker = "\n## Temporary snapshot transport\n"
+          if marker in text:
+              text = text.split(marker, 1)[0].rstrip() + "\n"
+              readme.write_text(text, encoding="utf-8")
+
+          ci = Path(".github/workflows/ci.yml")
+          text = ci.read_text(encoding="utf-8")
+          start_marker = "  # BEGIN ONE-SHOT REQUESTED LONG-FILE SPLIT\n"
+          end_marker = "  # END ONE-SHOT REQUESTED LONG-FILE SPLIT\n"
+          if start_marker in text and end_marker in text:
+              start = text.index(start_marker)
+              end = text.index(end_marker, start) + len(end_marker)
+              text = text[:start].rstrip() + "\n"
+              ci.write_text(text, encoding="utf-8")
+          PY
+
+      - name: Commit directly to main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
           git diff --cached --check
           git diff --cached --stat
-          git commit -m "refactor(tests/docs): split next long files"
+          git commit -m "refactor(tests/docs): split requested long files"
           git pull --rebase origin main
           git push origin HEAD:main
+
+          for issue in 21 22 23 24 26; do
+            gh issue close "$issue" --repo "$GITHUB_REPOSITORY" --reason completed --comment "Requested long-file refactor completed and validated on main." || true
+          done
