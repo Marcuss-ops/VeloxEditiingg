@@ -18,6 +18,8 @@ jobs:
       github.event.issue.title == '[automation] split remaining long files' &&
       github.event.issue.user.login == github.repository_owner
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+
     steps:
       - name: Checkout main
         uses: actions/checkout@v4
@@ -38,58 +40,97 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 scripts/ci/split-requested-long-files.py
+          git pull --ff-only origin main
+          python3 scripts/ci/split-next-long-files.py
 
           export PATH="$(go env GOPATH)/bin:$PATH"
           goimports -w \
-            DataServer/internal/grpcserver/handler_reports_test.go \
-            DataServer/internal/grpcserver/handler_reports_identity_test.go \
-            DataServer/internal/grpcserver/handler_reports_metrics_test.go \
-            DataServer/internal/grpcserver/handler_reports_ack_test.go \
-            DataServer/internal/artifacts/retry_budget_propagation_test.go \
-            DataServer/internal/artifacts/retry_budget_plan_test.go \
-            DataServer/internal/artifacts/retry_budget_limits_test.go \
-            DataServer/internal/ingest/service_test.go \
-            DataServer/internal/ingest/service_identity_test.go \
-            DataServer/internal/ingest/service_result_test.go \
-            DataServer/internal/ingest/service_rollup_test.go
-
-          wc -l DataServer/internal/grpcserver/handler_reports*.go \
+            DataServer/internal/grpcserver/handler_reports*.go \
             DataServer/internal/artifacts/retry_budget_*.go \
-            DataServer/internal/ingest/service*.go \
-            docs/metrics/loc-baseline.md docs/metrics/loc-refactor-history.md
+            DataServer/internal/ingest/service*_test.go \
+            DataServer/internal/artifacts/service_test.go \
+            DataServer/internal/artifacts/service_begin_upload_test.go \
+            DataServer/internal/artifacts/service_receive_test.go \
+            DataServer/internal/artifacts/service_finalize_test.go
 
-      - name: Run targeted tests
+      - name: Run targeted validation
         working-directory: DataServer
-        run: go test ./internal/grpcserver/... ./internal/artifacts/... ./internal/ingest/...
+        run: |
+          set -euo pipefail
+          go test ./internal/grpcserver ./internal/artifacts ./internal/ingest
+          go vet ./internal/grpcserver ./internal/artifacts ./internal/ingest
 
-      - name: Run LOC gate
-        run: bash scripts/ci/check-loc-thresholds.sh
+      - name: Run LOC and layout validation
+        run: |
+          set -euo pipefail
+          bash scripts/ci/check-loc-thresholds.sh
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          groups = {
+              "grpcserver": list(Path("DataServer/internal/grpcserver").glob("handler_reports*.go")),
+              "retry-budget": list(Path("DataServer/internal/artifacts").glob("retry_budget_*.go")),
+              "ingest": list(Path("DataServer/internal/ingest").glob("service*_test.go")),
+              "artifact-service": [
+                  Path("DataServer/internal/artifacts/service_test.go"),
+                  Path("DataServer/internal/artifacts/service_begin_upload_test.go"),
+                  Path("DataServer/internal/artifacts/service_receive_test.go"),
+                  Path("DataServer/internal/artifacts/service_finalize_test.go"),
+              ],
+          }
+          for name, paths in groups.items():
+              tests = []
+              for path in sorted(paths):
+                  text = path.read_text(encoding="utf-8")
+                  lines = len(text.splitlines())
+                  print(f"{lines:4d} {path}")
+                  if lines > 600:
+                      raise SystemExit(f"{path} remains too large: {lines}")
+                  tests.extend(re.findall(r"(?m)^func (Test\w+)\(", text))
+              duplicates = sorted({test for test in tests if tests.count(test) > 1})
+              if duplicates:
+                  raise SystemExit(f"duplicate tests in {name}: {duplicates}")
+
+          docs = (
+              Path("docs/metrics/loc-baseline.md"),
+              Path("docs/metrics/loc-baseline-policy.md"),
+              Path("docs/metrics/loc-refactor-history.md"),
+              Path("docs/archive/architecture-pre-grpc.md"),
+              Path("docs/archive/architecture-pre-grpc-contract-and-runtime.md"),
+              Path("docs/archive/architecture-pre-grpc-artifacts-and-assets.md"),
+          )
+          for path in docs:
+              text = path.read_text(encoding="utf-8")
+              lines = len(text.splitlines())
+              print(f"{lines:4d} {path}")
+              if lines > 600:
+                  raise SystemExit(f"{path} remains too large: {lines}")
+              if text.count("```") % 2:
+                  raise SystemExit(f"unbalanced Markdown fences: {path}")
+          PY
 
       - name: Commit directly to main
+        env:
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
-          rm .github/workflows/issue-trigger-split-long-files.yml
-          rm scripts/ci/split-requested-long-files.py
-          git config user.name "Agentic CLI"
+          rm -f .split-next-long-files-trigger
+          rm -f .github/workflows/issue-trigger-split-long-files.yml
+          rm -f .github/workflows/refactor-split-large-files.yml
+          rm -f .github/workflows/split-next-long-files.yml
+          rm -f scripts/ci/split-next-long-files.py
+          rm -f scripts/ci/split-requested-long-files.py
+          rm -f scripts/ci/split-user-requested-files.py
+
+          git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
+          git diff --cached --check
           git diff --cached --stat
-          git commit -m "refactor(tests/docs): split remaining long files"
+          git commit -m "refactor(tests/docs): split requested long files"
           git pull --rebase origin main
           git push origin HEAD:main
 
-      - name: Close trigger issue
-        env:
-          GH_TOKEN: ${{ github.token }}
-          ISSUE_NUMBER: ${{ github.event.issue.number }}
-          REPOSITORY: ${{ github.repository }}
-        run: |
-          curl --fail-with-body -L \
-            -X PATCH \
-            -H "Accept: application/vnd.github+json" \
-            -H "Authorization: Bearer ${GH_TOKEN}" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            "https://api.github.com/repos/${REPOSITORY}/issues/${ISSUE_NUMBER}" \
-            -d '{"state":"closed","state_reason":"completed"}'
+          gh issue close "${{ github.event.issue.number }}" --repo "$GITHUB_REPOSITORY" --reason completed --comment "Requested long-file refactor completed and validated on main."
