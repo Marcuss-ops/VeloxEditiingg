@@ -60,17 +60,67 @@ jobs:
             DataServer/internal/artifacts/service_receive_test.go \
             DataServer/internal/artifacts/service_finalize_test.go
 
-      - name: Run requested package tests
+      - name: Run requested package tests with concise diagnostics
         working-directory: DataServer
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
         run: |
-          set -euo pipefail
-          go test ./internal/grpcserver ./internal/artifacts ./internal/ingest
+          set +e
+          failed=0
+          for pkg in grpcserver artifacts ingest; do
+            go test "./internal/${pkg}" > "/tmp/${pkg}.test.log" 2>&1
+            status=$?
+            echo "${pkg}: go test exit ${status}"
+            if [ "$status" -ne 0 ]; then
+              failed=1
+            fi
+          done
+          if [ "$failed" -ne 0 ]; then
+            {
+              echo "Requested split validation failed during package tests."
+              for pkg in grpcserver artifacts ingest; do
+                echo
+                echo "### ${pkg}"
+                echo '```text'
+                tail -n 30 "/tmp/${pkg}.test.log"
+                echo '```'
+              done
+            } > /tmp/split-test-failure.md
+            gh issue comment 28 --repo "$GITHUB_REPOSITORY" --body-file /tmp/split-test-failure.md || true
+            exit 1
+          fi
 
-      - name: Run requested package vet
+      - name: Run requested package vet with concise diagnostics
         working-directory: DataServer
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
         run: |
-          set -euo pipefail
-          go vet ./internal/grpcserver ./internal/artifacts ./internal/ingest
+          set +e
+          failed=0
+          for pkg in grpcserver artifacts ingest; do
+            go vet "./internal/${pkg}" > "/tmp/${pkg}.vet.log" 2>&1
+            status=$?
+            echo "${pkg}: go vet exit ${status}"
+            if [ "$status" -ne 0 ]; then
+              failed=1
+            fi
+          done
+          if [ "$failed" -ne 0 ]; then
+            {
+              echo "Requested split validation failed during package vet."
+              for pkg in grpcserver artifacts ingest; do
+                echo
+                echo "### ${pkg}"
+                echo '```text'
+                tail -n 30 "/tmp/${pkg}.vet.log"
+                echo '```'
+              done
+            } > /tmp/split-vet-failure.md
+            gh issue comment 28 --repo "$GITHUB_REPOSITORY" --body-file /tmp/split-vet-failure.md || true
+            exit 1
+          fi
 
       - name: Run LOC gate
         run: bash scripts/ci/check-loc-thresholds.sh
@@ -87,6 +137,7 @@ jobs:
               "grpcserver": list(Path("DataServer/internal/grpcserver").glob("handler_reports*.go")),
               "retry-budget": list(Path("DataServer/internal/artifacts").glob("retry_budget_*.go")),
               "ingest": list(Path("DataServer/internal/ingest").glob("service*_test.go")),
+              "artifact-service": list(Path("DataServer/internal/artifacts").glob("service*_test.go")),
           }
           for name, paths in groups.items():
               tests = []
@@ -105,6 +156,9 @@ jobs:
               Path("docs/metrics/loc-baseline.md"),
               Path("docs/metrics/loc-baseline-policy.md"),
               Path("docs/metrics/loc-refactor-history.md"),
+              Path("docs/archive/architecture-pre-grpc.md"),
+              Path("docs/archive/architecture-pre-grpc-contract-and-runtime.md"),
+              Path("docs/archive/architecture-pre-grpc-artifacts-and-assets.md"),
           ):
               lines = len(path.read_text(encoding="utf-8").splitlines())
               print(f"{lines:4d} {path}")
@@ -159,6 +213,6 @@ jobs:
           git pull --rebase origin main
           git push origin HEAD:main
 
-          for issue in 21 22 23 24 26; do
+          for issue in 21 22 23 24 26 28; do
             gh issue close "$issue" --repo "$GITHUB_REPOSITORY" --reason completed --comment "Requested long-file refactor completed and validated on main." || true
           done
