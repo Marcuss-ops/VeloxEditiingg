@@ -92,7 +92,12 @@ jobs:
               "grpcserver": list(Path("DataServer/internal/grpcserver").glob("handler_reports*.go")),
               "retry-budget": list(Path("DataServer/internal/artifacts").glob("retry_budget_*.go")),
               "ingest": list(Path("DataServer/internal/ingest").glob("service*_test.go")),
-              "artifact-service": list(Path("DataServer/internal/artifacts").glob("service*_test.go")),
+              "artifact-service": [
+                  Path("DataServer/internal/artifacts/service_test.go"),
+                  Path("DataServer/internal/artifacts/service_begin_upload_test.go"),
+                  Path("DataServer/internal/artifacts/service_receive_test.go"),
+                  Path("DataServer/internal/artifacts/service_finalize_test.go"),
+              ],
           }
           for name, paths in groups.items():
               tests = []
@@ -190,6 +195,6 @@ jobs:
           git pull --rebase origin main
           git push origin HEAD:main
 
-          for issue in 21 22 23 24 25 26 27 28 29; do
+          for issue in 21 22 23 24 25 26 27 28 29 30; do
             gh issue close "$issue" --repo "$GITHUB_REPOSITORY" --reason completed --comment "Requested long-file refactor completed and validated on main." || true
           done
