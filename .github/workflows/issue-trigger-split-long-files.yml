@@ -34,26 +34,11 @@ jobs:
       - name: Install goimports
         run: go install golang.org/x/tools/cmd/goimports@latest
 
-      - name: Extract and run the installed splitter
+      - name: Split requested files
         shell: bash
         run: |
           set -euo pipefail
-          python3 <<'EXTRACT'
-          from pathlib import Path
-
-          workflow = Path('.github/workflows/one-shot-split-long-files.yml').read_text(encoding='utf-8')
-          start_marker = "          python3 <<'PY'\n"
-          end_marker = "\n          PY\n"
-          start = workflow.index(start_marker) + len(start_marker)
-          end = workflow.index(end_marker, start)
-          block = workflow[start:end]
-          lines = []
-          for line in block.splitlines():
-              lines.append(line[10:] if line.startswith('          ') else line)
-          Path('/tmp/split_remaining_long_files.py').write_text('\n'.join(lines) + '\n', encoding='utf-8')
-          EXTRACT
-
-          python3 /tmp/split_remaining_long_files.py
+          python3 scripts/ci/split-requested-long-files.py
 
           export PATH="$(go env GOPATH)/bin:$PATH"
           goimports -w \
@@ -85,13 +70,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          rm .github/workflows/one-shot-split-long-files.yml
           rm .github/workflows/issue-trigger-split-long-files.yml
+          rm scripts/ci/split-requested-long-files.py
           git config user.name "Agentic CLI"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
           git diff --cached --stat
           git commit -m "refactor(tests/docs): split remaining long files"
+          git pull --rebase origin main
           git push origin HEAD:main
 
       - name: Close trigger issue
