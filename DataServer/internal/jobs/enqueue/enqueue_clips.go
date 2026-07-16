@@ -162,13 +162,5 @@ func BuildClipPayloadForMaster(rawPayload map[string]interface{}, dataDir, video
 	if len(voiceoverPaths) > 0 && len(audioTracks) == 0 {
 		out["audio_url"] = voiceoverPaths[0]
 	}
-	// Carry through delivery_plan (canonical top-level key) from the raw
-	// payload so the enqueue-time validateDeliveryPlanRequires preflight
-	// passes. The V2 typed struct does not yet model this field, so ToMap
-	// drops it; without this carry-through, every clip enqueue is rejected
-	// with "delivery_plan is required".
-	if dp, ok := rawPayload["delivery_plan"]; ok && dp != nil {
-		out["delivery_plan"] = dp
-	}
 	return out, nil
 }

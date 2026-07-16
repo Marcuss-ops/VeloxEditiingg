@@ -76,6 +76,11 @@ type JobPayloadV2 struct {
 	Source         string `json:"source,omitempty"`
 	JobFingerprint string `json:"job_fingerprint,omitempty"`
 	Status         string `json:"status,omitempty"`
+
+	// Delivery contract. Mirrors the raw validated shape, which may be an
+	// array of maps or a single map depending on the ingress point. The
+	// enqueue-layer validator normalizes this downstream.
+	DeliveryPlan any `json:"delivery_plan,omitempty"`
 }
 
 // NewJobPayloadV2 reads a raw map (typically from JSON deserialization at
@@ -118,6 +123,7 @@ func NewJobPayloadV2(raw map[string]any) *JobPayloadV2 {
 		SubmittedVia:    payload.FirstString(raw, "submitted_via"),
 		Source:          payload.FirstString(raw, "source"),
 		Status:          "PENDING",
+		DeliveryPlan:    raw["delivery_plan"],
 	}
 	if scenesVal, ok := raw["scenes"]; ok {
 		switch s := scenesVal.(type) {
@@ -248,6 +254,9 @@ func (p *JobPayloadV2) ToMap() (map[string]any, error) {
 	}
 	if p.Status != "" {
 		out["status"] = p.Status
+	}
+	if p.DeliveryPlan != nil {
+		out["delivery_plan"] = p.DeliveryPlan
 	}
 	return out, nil
 }

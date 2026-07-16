@@ -290,10 +290,9 @@ func copyTimelinePayloadFields(out, src map[string]interface{}) {
 		"fit",
 		"effect",
 		"orientation",
-		// Preserve the explicit delivery contract through normalization so
+		// Preserve legacy delivery keys through normalization so
 		// taskSpec.Payload still satisfies AtomicJobTaskCreator's parse-time
 		// delivery-plan requirement.
-		"delivery_plan",
 		"delivery_destination_ids",
 		"delivery_destination_id",
 		"destination_ids",

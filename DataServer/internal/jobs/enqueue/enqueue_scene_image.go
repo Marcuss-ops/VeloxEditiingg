@@ -208,15 +208,6 @@ func buildSceneImagePayload(rawPayload map[string]interface{}, dataDir, videosDi
 	}
 	v2Out["pipeline_id"] = "hybrid.v1"
 
-	// Carry through delivery_plan (canonical top-level key) from the raw
-	// payload so the enqueue-time validateDeliveryPlanRequires preflight
-	// passes. The V2 typed struct does not yet model this field, so ToMap
-	// drops it; without this carry-through, every scene-image enqueue is
-	// rejected with "delivery_plan is required".
-	if dp, ok := rawPayload["delivery_plan"]; ok && dp != nil {
-		v2Out["delivery_plan"] = dp
-	}
-
 	// NOTE: voiceover/scene-image rewrite is intentionally NOT invoked here.
 	// The Enqueuer (constructed by the caller via NewEnqueuer) owns the
 	// rewrite step and applies it in Enqueue/Submit. Doing it here too

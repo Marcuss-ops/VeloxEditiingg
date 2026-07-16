@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 
+	"velox-shared/contract"
 	"velox-shared/payload"
 )
 
@@ -68,47 +69,30 @@ func BuildPipelinePayload(result map[string]interface{}) (map[string]interface{}
 		return nil, fmt.Errorf("scenes payload missing from pipeline result")
 	}
 
-	// PR15.6: canonical-only payload. Legacy alias keys (id/run_id/title/
-	// voiceover_path/audio_path) are emitted ONLY on the HTTP edge.
-	jobPayload := map[string]interface{}{
-		"job_id":                 payload.FirstString(flat, "job_id", "script_id", "trace_id"),
-		"job_run_id":             payload.FirstString(flat, "job_run_id", "run_id", "trace_id"),
-		"correlation_id":         payload.FirstString(flat, "correlation_id", "trace_id"),
-		"video_name":             title,
-		"script_text":            scriptText,
-		"scenes_json":            scenesJSON,
-		"voiceover_paths":        voiceovers,
-		"output_path":            payload.FirstString(flat, "output_path", "output_dir"),
-		"drive_output_folder":    payload.FirstString(flat, "drive_output_folder", "output_directory"),
-		"youtube_group":          payload.FirstString(flat, "youtube_group"),
-		"audio_language_for_srt": payload.FirstString(flat, "audio_language_for_srt", "audio_lang"),
-		"job_type":               "process_video",
-		"submitted_via":          "pipeline_generate_with_images",
-		"source":                 "pipeline_generate_with_images",
-		"priority":               1,
-		"timeout_secs":           3600,
-	}
+	// PR15.6: canonical-only payload via JobPayloadV2. Legacy alias keys
+	// (id/run_id/title/voiceover_path/audio_path) are emitted ONLY on the
+	// HTTP edge. delivery_plan is now carried by the typed envelope itself.
+	p := contract.NewJobPayloadV2(flat)
+	p.VideoName = title
+	p.ScriptText = scriptText
+	p.ScenesJSON = scenesJSON
+	p.VoiceoverPaths = voiceovers
+	p.OutputPath = payload.FirstString(flat, "output_path", "output_dir")
+	p.DriveOutput = payload.FirstString(flat, "drive_output_folder", "output_directory")
+	p.YoutubeGroup = payload.FirstString(flat, "youtube_group")
+	p.AudioLanguage = payload.FirstString(flat, "audio_language_for_srt", "audio_lang")
+	p.SubmittedVia = "pipeline_generate_with_images"
+	p.Source = "pipeline_generate_with_images"
+	p.Priority = 1
+	p.TimeoutSecs = 3600
+	p.Status = "PENDING"
+	p.SetIdentity(
+		payload.FirstString(flat, "job_id", "script_id", "trace_id"),
+		payload.FirstString(flat, "job_run_id", "run_id", "trace_id"),
+		payload.FirstString(flat, "correlation_id", "trace_id"),
+	)
 
-	if jobID := strings.TrimSpace(payload.FirstString(flat, "job_id", "script_id", "trace_id")); jobID != "" {
-		jobPayload["job_id"] = jobID
-	}
-	if runID := strings.TrimSpace(payload.FirstString(flat, "job_run_id", "run_id", "trace_id")); runID != "" {
-		jobPayload["job_run_id"] = runID
-	}
-	if corrID := strings.TrimSpace(payload.FirstString(flat, "correlation_id", "trace_id")); corrID != "" {
-		jobPayload["correlation_id"] = corrID
-	}
-
-	// Carry through delivery_plan (canonical top-level key, see
-	// shared/contract/canonical_payload.go) so the enqueue-time
-	// validateDeliveryPlanRequires preflight passes for pipeline-originated
-	// jobs. Without this, the pipeline builder drops the field and every
-	// pipeline-sourced enqueue is rejected with "delivery_plan is required".
-	if dp, ok := flat["delivery_plan"]; ok && dp != nil {
-		jobPayload["delivery_plan"] = dp
-	}
-
-	return jobPayload, nil
+	return p.ToMap()
 }
 
 // FlattenPipelineResult flattens a nested pipeline result by merging top-level
