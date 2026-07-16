@@ -108,7 +108,8 @@ scripts/operator/with-production-env.sh <command>
 Examples:
 
 - Submit a job: `scripts/operator/with-production-env.sh bash ops/jobs/submit_jackie_chan_doc_voiceover_clips.sh`
-- Run the canary: `scripts/operator/with-production-env.sh bash deploy/runtime/submit-canary.sh`
+- Run the local canary: `scripts/operator/with-production-env.sh bash deploy/runtime/submit-canary-local.sh`
+- Run the remote canary: `scripts/operator/with-production-env.sh bash deploy/runtime/submit-canary-remote.sh`
 - Probe readiness directly: `scripts/operator/with-production-env.sh curl -sS -H "Authorization: Bearer ${VELOX_ADMIN_TOKEN}" "${VELOX_MASTER_URL}/health/ready"`
 
 Skip the wrapper at your own risk: the master token and admin endpoints are not in the shell environment by default, and pasting them into a command line pollutes shell history and bypasses agent rule §2 ([`docs/architecture/AGENT-CONTRACT.md`](docs/architecture/AGENT-CONTRACT.md)).

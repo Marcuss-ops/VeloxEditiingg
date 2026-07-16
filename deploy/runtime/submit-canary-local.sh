@@ -1,8 +1,13 @@
 #!/usr/bin/env bash
-# deploy/runtime/submit-canary.sh
+# deploy/runtime/submit-canary-local.sh
 # ─────────────────────────────────────────────────────────────────────────────
-# End-to-end canary: prove that a freshly-deployed Velox worker can render a
-# minimal, deterministic scene.composite.v1 job to a verified artifact.
+# Local end-to-end canary: prove that a freshly-deployed Velox worker can
+# render a minimal, deterministic scene.composite.v1 job to a verified artifact.
+#
+# This script is the LOCAL counterpart of submit-canary-remote.sh. It assumes
+# the worker container runs on the same host as the verifier and uses docker
+# exec + file:// fixtures + direct SQLite access. For a remote topology use
+# submit-canary-remote.sh instead.
 #
 # Workflow:
 #   1. Pre-flight tools + env + read master reachability + worker container.
@@ -69,7 +74,7 @@
 
 set -euo pipefail
 
-emit_pass() { printf 'PASS: %s\n' "$*\n"; }
+emit_pass() { printf 'PASS: %s\n' "$*"; }
 emit_fail() { printf 'FAIL: %s\n' "$*" >&2; }
 emit_skip() { printf 'SKIP: %s\n' "$*" >&2; }
 

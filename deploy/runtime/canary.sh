@@ -2,9 +2,12 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # Section 15 (E2E Canary SUCCEEDED) split out of checklist-verify.sh as part
 # of the per-category refactor (sections 5-9 / deploy / security /
-# master_check / canary + lib/common.sh). This is the only section that
-# delegates to a sibling script (submit-canary.sh) and bridges its exit-code
-# contract to the record() pattern.
+# master_check / canary + lib/common.sh). This section delegates to the
+# local canary (submit-canary-local.sh), which assumes a co-located worker
+# and uses docker exec + file:// fixtures + direct SQLite access. For a
+# remote topology use submit-canary-remote.sh instead; it is intentionally
+# NOT wired into the checklist because it requires real remote assets and
+# no shared filesystem.
 #
 # Sourced by the orchestrator AFTER master_check.sh (the last section).
 # Depends on lib/common.sh for section_header, record, vrb and on the
@@ -12,16 +15,16 @@
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ═════════════════════════════════════════════════════════════════════════════
-# Section 15 — E2E Canary SUCCEEDED (delegates to submit-canary.sh)
+# Section 15 — E2E Canary SUCCEEDED (delegates to submit-canary-local.sh)
 # ═════════════════════════════════════════════════════════════════════════════
-# Bridges deploy/runtime/submit-canary.sh's exit-code contract to the
+# Bridges deploy/runtime/submit-canary-local.sh's exit-code contract to the
 # record() pattern:
 #
 #   rc == 0    → PASS  (detail = "PASS:" sentinel line)
 #   rc == 255  → SKIP  (detail = "SKIP:" sentinel — pre-flight gate)
 #   rc != 0    → FAIL  (detail = "FAIL:" sentinel)
 #
-# submit-canary.sh DOES NOT require a live master gRPC session — §14 has
+# submit-canary-local.sh DOES NOT require a live master gRPC session — §14 has
 # already verified the worker is registered. What it DOES need:
 #
 #   VELOX_ADMIN_TOKEN       cfg.Auth.AdminToken-equivalent bearer.
@@ -50,7 +53,7 @@
 section_15_canary() {
     section_header 15 "E2E Canary SUCCEEDED"
 
-    # Locate submit-canary.sh in canonical deploy locations. Mirror the
+    # Locate submit-canary-local.sh in canonical deploy locations. Mirror the
     # search strategy used by section_10 for prepare-host.sh.
     #
     # BASH_SOURCE[1] is this file (canary.sh) when sourced by the
@@ -64,10 +67,10 @@ section_15_canary() {
     local _canary_dir
     _canary_dir="$(cd "$(dirname "${BASH_SOURCE[1]:-${BASH_SOURCE[0]}}")" 2>/dev/null && pwd)"
     for p in \
-        /opt/velox-worker/submit-canary.sh \
-        /usr/local/bin/velox-submit-canary.sh \
-        "${VELOXWORK_CHECKLIST_PARENT:-}/submit-canary.sh" \
-        "${_canary_dir}/submit-canary.sh"; do
+        /opt/velox-worker/submit-canary-local.sh \
+        /usr/local/bin/velox-submit-canary-local.sh \
+        "${VELOXWORK_CHECKLIST_PARENT:-}/submit-canary-local.sh" \
+        "${_canary_dir}/submit-canary-local.sh"; do
         if [[ -r "$p" ]]; then
             script="$p"
             break
@@ -75,7 +78,7 @@ section_15_canary() {
     done
     if [[ -z "$script" ]]; then
         record 15 "E2E Canary SUCCEEDED" SKIP \
-            "submit-canary.sh not found in any of: /opt/velox-worker, /usr/local/bin, repo deploy/runtime, beside the verifier"
+            "submit-canary-local.sh not found in any of: /opt/velox-worker, /usr/local/bin, repo deploy/runtime, beside the verifier"
         return 0
     fi
 
