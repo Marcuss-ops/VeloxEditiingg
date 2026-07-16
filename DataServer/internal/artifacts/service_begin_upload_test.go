@@ -124,6 +124,29 @@ func TestBeginUpload_NoExistingReadyArtifactOfSameKind(t *testing.T) {
 }
 
 // =====================================================================
+// #region 17 — doppio worker sullo stesso task (second BeginUpload rejected)
+// =====================================================================
+
+func TestBeginUpload_DoubleWorkerSameTask_SecondRejected(t *testing.T) {
+	env := setupTestEnv(t)
+	env.seedJob("J17", "RUNNING", testWorkerID, testLeaseID, testRevision, env.clock.Now().Add(5*time.Minute))
+	env.seedAttempt("J17", 1, "RENDER_FINISHED", testWorkerID, testLeaseID)
+
+	// First worker succeeds.
+	cmd := beginUploadDefaultCmd("J17")
+	_, err := env.svc.BeginUpload(context.Background(), cmd)
+	require.NoError(t, err)
+
+	// Second worker tries to start an upload for the same attempt.
+	cmd2 := beginUploadDefaultCmd("J17")
+	cmd2.WorkerID = "worker-test-2"
+	cmd2.LeaseID = "lease-test-2"
+	_, err = env.svc.BeginUpload(context.Background(), cmd2)
+	require.Error(t, err)
+	require.True(t, errors.Is(err, ErrWrongJobOwner), "got %v want ErrWrongJobOwner", err)
+}
+
+// =====================================================================
 // EXTRA — empty input validation
 // =====================================================================
 

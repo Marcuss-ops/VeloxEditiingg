@@ -274,3 +274,39 @@ func TestFinalize_ArtifactREADYMeansBlobExists(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, art.SHA256, hex.EncodeToString(h.Sum(nil)), "disk SHA must match artifact SHA256")
 }
+
+// =====================================================================
+// #region 16 — doppio worker sullo stesso task: il secondo worker non
+// può finalizzare l'upload creato dal primo
+// =====================================================================
+
+func TestFinalize_DoubleWorkerSameTask_SecondRejected(t *testing.T) {
+	env := setupTestEnv(t)
+	env.seedJob("J16", "RUNNING", testWorkerID, testLeaseID, testRevision, env.clock.Now().Add(5*time.Minute))
+	env.seedAttempt("J16", 1, "RENDER_FINISHED", testWorkerID, testLeaseID)
+
+	cmd := beginUploadDefaultCmd("J16")
+	payload := []byte("double-worker-payload")
+	cmd.ExpectedSizeBytes = int64(len(payload))
+	cmd.ExpectedSHA256 = sha256Hex(payload)
+	sess, err := env.svc.BeginUpload(context.Background(), cmd)
+	require.NoError(t, err)
+	_, err = env.svc.Receive(context.Background(), sess.UploadID, uploadBytes(payload))
+	require.NoError(t, err)
+
+	// A different worker tries to finalize the same upload session.
+	_, err = env.svc.Finalize(context.Background(), FinalizeArtifactCommand{
+		UploadID: sess.UploadID, JobID: "J16", WorkerID: "worker-test-2",
+		LeaseID: "lease-test-2", AttemptNumber: 1, ExpectedRevision: testRevision,
+	})
+	require.Error(t, err)
+	require.True(t, errors.Is(err, ErrWrongJobOwner), "got %v want ErrWrongJobOwner", err)
+
+	// The legitimate worker can still finalize.
+	art, err := env.svc.Finalize(context.Background(), FinalizeArtifactCommand{
+		UploadID: sess.UploadID, JobID: "J16", WorkerID: testWorkerID,
+		LeaseID: testLeaseID, AttemptNumber: 1, ExpectedRevision: testRevision,
+	})
+	require.NoError(t, err)
+	require.Equal(t, "READY", art.Status)
+}
