@@ -73,5 +73,8 @@ sqlite3 -separator '|' -header "$DB" "
   >"$EVIDENCE_DIR/16-attempts.txt"
 
 rm_assert_invariant "$DB" "NR-1" 0
+# NR-2: the rejected second worker must not be able to finalize the task
+# using its stale lease_id.
+rm_assert_invariant "$DB" "NR-2" 0
 rm_end_scenario "$SCENARIO_ID" "double-attempt race detected; second claim rejected"
 rm_info "[$SCENARIO_ID] done"
