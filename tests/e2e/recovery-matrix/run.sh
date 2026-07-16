@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # =============================================================================
-# tests/e2e/recovery-matrix/run.sh — cap. 6 15-scenario orchestrator
+# tests/e2e/recovery-matrix/run.sh — cap. 6 17-scenario orchestrator
 # =============================================================================
-# Drives the 15 fault-injection scenarios + 7 invariants. Each scenario is
+# Drives the 17 fault-injection scenarios + 7 invariants. Each scenario is
 # a small bash script that pre-recovery mutates the SQLite db to simulate
 # the fault surface, then asserts the canonical invariant set.
 #
@@ -15,8 +15,8 @@
 # the rejection path is correct (NEGATIVE-pass).
 #
 # Modes:
-#   default      — runs all 15 scenarios, emits evidence/<date>/fleet-recovery/
-#   --scenario N — runs scenario N only (1..15)
+#   default      — runs all 17 scenarios, emits evidence/<date>/fleet-recovery/
+#   --scenario N — runs scenario N only (1..17)
 #   --dry-run    — bash -n + invariants shellcheck syntax; no DB mutations
 #   --help       — usage
 # =============================================================================
@@ -40,7 +40,7 @@ while (( $# > 0 )); do
       cat <<HELP
 Usage: bash run.sh [--scenario N] [--dry-run] [--help]
 
-  --scenario N     Run scenario N only (1..15). Default: run all 15.
+  --scenario N     Run scenario N only (1..17). Default: run all 17.
   --dry-run        bash -n + invariants shellcheck syntax; no DB mutations.
   --help           this help.
 HELP
@@ -258,7 +258,7 @@ run_scenario() {
 }
 
 if [[ "$RUN_ALL" == "1" ]]; then
-  for n in 01 02 03 04 05 06 07 08 09 10 11 12 13 14 15; do
+  for n in 01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 16 17; do
     # run_scenario returns 0 when the script completed (PASS or FAIL — both
     # are valid terminal states for the matrix). The per-scenario script
     # itself records its own verdict via rm_record_verdict; a return code
