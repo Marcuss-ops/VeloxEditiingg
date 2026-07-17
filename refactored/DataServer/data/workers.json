@@ -1,0 +1,90 @@
+{
+  "workers": {
+    "host_149_56_131_97": {
+      "worker_id": "host_149_56_131_97",
+      "worker_name": "velox-worker",
+      "display_name": "velox-worker",
+      "status": "idle",
+      "last_heartbeat": "2026-06-12T09:39:47Z",
+      "first_seen": "2026-06-12T09:35:47Z",
+      "current_job": "",
+      "drain": false,
+      "schedulable": true,
+      "worker_group": "",
+      "ip_address": "149.56.131.97",
+      "host": "149.56.131.97",
+      "code_version": "v1.0.5",
+      "bundle_version": "v1.0.1",
+      "recent_logs": [
+        "2026/06/12 09:35:46 [INFO] [host_149_56_131_97] [CONCURRENCY] Started with max_active_jobs=1",
+        "2026/06/12 09:35:47 [INFO] [host_149_56_131_97] [COMMANDS] Command polling started — checking every 30s",
+        "2026/06/12 09:35:47 [INFO] [host_149_56_131_97] [POLLING] Worker polling started — checking for jobs every 5s",
+        "2026/06/12 09:36:47 [INFO] [host_149_56_131_97] [POLLING] Status: alive — 12 polls sent, no jobs available (next check in 5s)",
+        "2026/06/12 09:37:47 [INFO] [host_149_56_131_97] [POLLING] Status: alive — 24 polls sent, no jobs available (next check in 5s)",
+        "2026/06/12 09:38:52 [INFO] [host_149_56_131_97] [POLLING] Status: alive — 37 polls sent, no jobs available (next check in 5s)"
+      ],
+      "metrics": {
+        "jobs_completed": 0,
+        "jobs_failed": 0
+      }
+    },
+    "host_51_222_204_158": {
+      "worker_id": "host_51_222_204_158",
+      "worker_name": "velox-worker",
+      "display_name": "velox-worker",
+      "status": "online",
+      "last_heartbeat": "2026-06-12T09:40:04Z",
+      "first_seen": "2026-06-12T09:40:04Z",
+      "current_job": "",
+      "drain": false,
+      "schedulable": true,
+      "worker_group": "",
+      "ip_address": "51.222.204.158",
+      "host": "51.222.204.158",
+      "code_version": "",
+      "bundle_version": ""
+    },
+    "host_host_57_129_132_133": {
+      "worker_id": "host_host_57_129_132_133",
+      "worker_name": "velox-worker",
+      "display_name": "velox-worker",
+      "status": "idle",
+      "last_heartbeat": "2026-06-12T09:40:03Z",
+      "first_seen": "2026-06-12T09:40:03Z",
+      "current_job": "",
+      "drain": false,
+      "schedulable": true,
+      "worker_group": "",
+      "ip_address": "57.129.132.133",
+      "host": "57.129.132.133",
+      "code_version": "v1.0.5",
+      "bundle_version": "v1.0.1",
+      "recent_logs": [
+        "2026/06/12 09:40:03 [INFO] [host_host_57_129_132_133] [CONCURRENCY] Started with max_active_jobs=1"
+      ],
+      "metrics": {
+        "jobs_completed": 0,
+        "jobs_failed": 0
+      }
+    }
+  },
+  "revoked": [
+    "worker-8e98ce85",
+    "local-worker-5",
+    "test-worker-shutdown",
+    "local-worker-3",
+    "compat-test-1",
+    "host_51.222.204.158",
+    "test-worker-status-20260409-104547",
+    "host_149.56.131.97",
+    "local-worker-4",
+    "host_51.91.11.105",
+    "worker-smoke-1",
+    "compat-test-2",
+    "local-worker-2",
+    "test-worker-concurrent-20260409-104547",
+    "worker149",
+    "host_57.129.132.133",
+    "test-worker-contract-20260409-104547"
+  ]
+}

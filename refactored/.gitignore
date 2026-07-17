@@ -1,0 +1,7 @@
+# Hand-managed by staging script. The actual exclusions live in the FORBIDDEN
+# regex used at commit time; this file exists so future commits to the
+# refactored/ tree don't accidentally re-introduce secrets/binaries.
+#
+# If you ever add a file to refactored/, run:
+#   scripts/stage-refactored-snapshot.sh   (see playbook in this commit's message)
+# That script applies the audit + FORBIDDEN filter before staging.
