@@ -110,6 +110,24 @@ func (h *Handlers) CreatePipelineRun() gin.HandlerFunc {
 			c.JSON(http.StatusBadRequest, gin.H{
 				"ok":    false,
 				"error": "idempotency_key is required",
+				"code":  "REQUIRED",
+				"field": "idempotency_key",
+			})
+			return
+		}
+
+		// ── Validate request BEFORE creating the pipeline_run ─────────
+		// All business-rule checks run here so a rejected request never
+		// creates a pipeline_run row. The validator returns a structured
+		// *ValidationError with field/code/message for a 400 response.
+		if valErr := ValidateCreateRequest(c.Request.Context(), h.store, &req, DefaultValidationConfig()); valErr != nil {
+			pipelineLog("CREATE: validation FAILED idem=%s field=%s code=%s: %s",
+				req.IdempotencyKey, valErr.Field, valErr.Code, valErr.Message)
+			c.JSON(http.StatusBadRequest, gin.H{
+				"ok":     false,
+				"error":  valErr.Message,
+				"code":   valErr.Code,
+				"field":  valErr.Field,
 			})
 			return
 		}
