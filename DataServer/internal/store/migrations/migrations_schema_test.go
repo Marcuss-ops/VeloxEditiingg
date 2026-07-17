@@ -31,6 +31,24 @@ func TestMigration090_YouTubeDomainDropped(t *testing.T) {
 			t.Errorf("migration 090 should have dropped %s", table)
 		}
 	}
+
+	// MIGRATION 090 must also drop the historical YouTube columns on
+	// domain tables. The cleanup of these columns is part of the YouTube
+	// domain exit; pin their absence here so a future schema drift is
+	// caught by the suite rather than discovered at runtime.
+	youtubeColumns := []struct {
+		table string
+		col   string
+	}{
+		{"calendar_events", "youtube_group"},
+		{"calendar_events", "youtube_links_json"},
+		{"dark_editor_folders", "youtube_group"},
+	}
+	for _, cc := range youtubeColumns {
+		if columnExists(t, db, cc.table, cc.col) {
+			t.Errorf("migration 090 should have dropped column %s.%s", cc.table, cc.col)
+		}
+	}
 }
 
 // ============================================================
