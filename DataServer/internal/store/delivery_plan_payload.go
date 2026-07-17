@@ -1,3 +1,28 @@
+// Package store / delivery_plan_payload.go
+//
+// Canonical delivery-plan parser shared by the atomic Job+Task creator
+// (internal/store/atomic_job_task.go::CreateJobWithTaskTx) and the
+// finalize-side resolver (internal/deliveries/plan_resolver.go).
+//
+// Canonical rename note (YouTube → Delivery, PR-15.8):
+//
+//	YouTubeGroup       → DestinationGroupID   (was: youtube_group_id)
+//	YouTubeChannelID   → ExternalDestinationID (was: youtube_channel; column on delivery_destinations)
+//	YouTubeVideoID     → RemoteMediaID        (was: youtube_video_id; persisted on job_deliveries.remote_id)
+//	YouTubeURL         → RemoteURL            (was: youtube_published_url)
+//	YouTubeStatus      → DeliveryStatus       (was: youtube_publish_status)
+//
+// All five YouTube-prefixed field names are absent from active Go
+// runtime code at this revision (verified by commit 7f8d3a4 +
+// post-PR-15.8 grep): the per-row model owns `destination_id` +
+// `metadata_json` and the durable delivery row owns `remote_id` +
+// `last_remote_status`. Velox no longer `SELECT`s `youtube_channels`,
+// `youtube_oauth_tokens`, or `youtube_groups` (those tables are
+// dropped in migration 090 and the social_repo is the authoritative
+// owner of platform metadata). Any future contributor reintroducing a
+// YouTube-prefixed field into this struct must replace it with the
+// canonical Destination-prefixed equivalent above AND open a new
+// migration; do NOT add it as an additional name.
 package store
 
 import (
