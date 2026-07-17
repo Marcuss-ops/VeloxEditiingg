@@ -171,14 +171,6 @@ type DriveConfig struct {
 	CredentialsDir string
 }
 
-// YouTubeConfig holds YouTube integration settings.
-type YouTubeConfig struct {
-	APIKey         string
-	TokensDir      string
-	PostingPath    string
-	CredentialsDir string
-}
-
 // AnsibleConfig holds Ansible deployment settings.
 type AnsibleConfig struct {
 	PlaybookDir string
@@ -217,7 +209,6 @@ type Config struct {
 	Auth     AuthConfig
 	Storage  StorageConfig
 	Drive    DriveConfig
-	YouTube  YouTubeConfig
 	Ansible  AnsibleConfig
 	Frontend FrontendConfig
 	Render   RenderConfig

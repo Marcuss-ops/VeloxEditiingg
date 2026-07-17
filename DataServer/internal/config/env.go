@@ -56,14 +56,4 @@ func GetDataDir() string {
 	return strings.TrimSpace(os.Getenv("VELOX_DATA_DIR"))
 }
 
-// GetYouTubeTokensDir returns VELOX_YOUTUBE_TOKENS_DIR (storage location for
-// YouTube OAuth tokens), or empty if unset.
-func GetYouTubeTokensDir() string {
-	return strings.TrimSpace(os.Getenv("VELOX_YOUTUBE_TOKENS_DIR"))
-}
 
-// GetYouTubePostingPath returns VELOX_YOUTUBE_POSTING_PATH (file path used to
-// persist YouTube upload queue state), or empty if unset.
-func GetYouTubePostingPath() string {
-	return strings.TrimSpace(os.Getenv("VELOX_YOUTUBE_POSTING_PATH"))
-}

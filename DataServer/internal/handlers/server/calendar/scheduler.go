@@ -152,7 +152,6 @@ func calendarEventsEqual(a, b store.CalendarEvent) bool {
 		a.Month == b.Month &&
 		a.Year == b.Year &&
 		a.Status == b.Status &&
-		a.YouTubeGroup == b.YouTubeGroup &&
 		a.ScriptText == b.ScriptText &&
 		a.Category == b.Category &&
 		a.JobID == b.JobID &&

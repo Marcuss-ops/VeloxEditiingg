@@ -178,27 +178,6 @@ func (s *SQLiteStore) GetTopChannels(limit int, period string) ([]ChannelStat, e
 		return nil, nil
 	}
 
-	// Get historical totals from structured table for enrichment
-	historicalTotals := make(map[string]struct {
-		Views   int64
-		Revenue float64
-	})
-	rows, _ := s.db.Query(`SELECT channel_id, SUM(views), SUM(estimated_revenue) FROM youtube_revenue_metrics GROUP BY channel_id`)
-	if rows != nil {
-		defer rows.Close()
-		for rows.Next() {
-			var id string
-			var v int64
-			var r float64
-			if err := rows.Scan(&id, &v, &r); err == nil {
-				historicalTotals[id] = struct {
-					Views   int64
-					Revenue float64
-				}{v, r}
-			}
-		}
-	}
-
 	channels := make([]ChannelStat, 0, len(channelsAny))
 	for _, ch := range channelsAny {
 		chMap, ok := ch.(map[string]any)
@@ -213,16 +192,6 @@ func (s *SQLiteStore) GetTopChannels(limit int, period string) ([]ChannelStat, e
 		id := asString(chMap["channel_id"])
 		views := asInt(chMap["views"])
 		revenue := asFloat(chMap["revenue"])
-
-		// Enrich with historical if larger
-		if h, ok := historicalTotals[id]; ok {
-			if int(h.Views) > views {
-				views = int(h.Views)
-			}
-			if h.Revenue > revenue {
-				revenue = h.Revenue
-			}
-		}
 
 		channels = append(channels, ChannelStat{
 			ChannelID:    id,
@@ -241,13 +210,6 @@ func (s *SQLiteStore) GetTopChannels(limit int, period string) ([]ChannelStat, e
 }
 
 func (s *SQLiteStore) GetDailyStats(days int) ([]DailyStat, error) {
-	// Try structured historical stats first
-	stats, err := s.GetYouTubeHistoricalStats(days)
-	if err == nil && len(stats) > 0 {
-		return stats, nil
-	}
-
-	// Fallback to cache
 	daysStr := "30"
 	if days > 0 && days <= 365 {
 		daysStr = fmt.Sprintf("%d", days)
@@ -260,7 +222,7 @@ func (s *SQLiteStore) GetDailyStats(days int) ([]DailyStat, error) {
 	if !ok {
 		return nil, nil
 	}
-	stats = make([]DailyStat, 0, len(dailyAny))
+	stats := make([]DailyStat, 0, len(dailyAny))
 	for _, d := range dailyAny {
 		dMap, ok := d.(map[string]any)
 		if !ok {
@@ -276,34 +238,6 @@ func (s *SQLiteStore) GetDailyStats(days int) ([]DailyStat, error) {
 }
 
 func (s *SQLiteStore) GetAnalyticsTotals(period string) (map[string]any, error) {
-	days := parseIntDef(period, 30)
-
-	// Try structured data first
-	stats, err := s.GetYouTubeHistoricalStats(days)
-	if err == nil && len(stats) > 0 {
-		totalViews := 0
-		totalRevenue := 0.0
-		for _, ds := range stats {
-			totalViews += ds.Views
-			totalRevenue += ds.Revenue
-		}
-
-		// Get channel count
-		var channelCount int
-		row := s.db.QueryRow(`SELECT COUNT(DISTINCT channel_id) FROM youtube_revenue_metrics WHERE date >= ?`,
-			time.Now().AddDate(0, 0, -days).Format("2006-01-02"))
-		row.Scan(&channelCount)
-
-		return map[string]any{
-			"views":    totalViews,
-			"revenue":  totalRevenue,
-			"channels": channelCount,
-			"period":   period,
-			"source":   "structured",
-		}, nil
-	}
-
-	// Fallback to cache
 	daysStr := period
 	if period == "7d" {
 		daysStr = "7"

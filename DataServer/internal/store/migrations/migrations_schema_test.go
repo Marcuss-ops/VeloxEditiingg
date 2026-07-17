@@ -7,76 +7,29 @@ import (
 )
 
 // ============================================================
-// Migration 003: YouTube canonical tables
+// Migration 090: YouTube domain dropped
 // ============================================================
 
-func TestMigration003_YouTubeCanonicalTables(t *testing.T) {
+func TestMigration090_YouTubeDomainDropped(t *testing.T) {
 	db := openTestDB(t)
 	applyAllMigrations(t, db)
 
-	tables := []string{
+	youtubeTables := []string{
 		"youtube_channels",
 		"youtube_groups",
 		"youtube_group_channels",
 		"youtube_tracked_niches",
+		"youtube_oauth_tokens",
+		"youtube_channel_metrics",
+		"youtube_revenue_metrics",
+		"youtube_video_metrics",
+		"youtube_quota_usage",
+		"youtube_api_cache",
 	}
-
-	for _, table := range tables {
-		if !tableExists(t, db, table) {
-			t.Errorf("migration 003: table %s does not exist", table)
+	for _, table := range youtubeTables {
+		if tableExists(t, db, table) {
+			t.Errorf("migration 090 should have dropped %s", table)
 		}
-	}
-}
-
-func TestMigration003_YouTubeForeignKeys(t *testing.T) {
-	db := openTestDB(t)
-	applyAllMigrations(t, db)
-
-	// Verify FK on youtube_group_channels by attempting inserts
-	// First insert into parent tables
-	_, err := db.Exec(`INSERT INTO youtube_channels (channel_id, title, created_at, updated_at) VALUES ('UC_test', 'Test', datetime('now'), datetime('now'))`)
-	if err != nil {
-		t.Fatalf("insert channel: %v", err)
-	}
-
-	_, err = db.Exec(`INSERT INTO youtube_groups (name, group_type, created_at, updated_at) VALUES ('Test Group', 'manager', datetime('now'), datetime('now'))`)
-	if err != nil {
-		t.Fatalf("insert group: %v", err)
-	}
-
-	// Valid FK insert should succeed
-	_, err = db.Exec(`INSERT INTO youtube_group_channels (group_id, channel_id, position, added_at) VALUES (1, 'UC_test', 0, datetime('now'))`)
-	if err != nil {
-		t.Errorf("valid FK insert failed: %v", err)
-	}
-
-	// Invalid FK should fail
-	_, err = db.Exec(`INSERT INTO youtube_group_channels (group_id, channel_id, position, added_at) VALUES (999, 'nonexistent', 0, datetime('now'))`)
-	if err == nil {
-		t.Error("expected FK violation for invalid group_id, got nil")
-	}
-}
-
-func TestMigration003_UNIQUENameGroupType(t *testing.T) {
-	db := openTestDB(t)
-	applyAllMigrations(t, db)
-
-	// Insert first group
-	_, err := db.Exec(`INSERT INTO youtube_groups (name, group_type, created_at, updated_at) VALUES ('SameName', 'manager', datetime('now'), datetime('now'))`)
-	if err != nil {
-		t.Fatalf("first insert: %v", err)
-	}
-
-	// Same name, different type — should succeed (UNIQUE(name, group_type))
-	_, err = db.Exec(`INSERT INTO youtube_groups (name, group_type, created_at, updated_at) VALUES ('SameName', 'upload', datetime('now'), datetime('now'))`)
-	if err != nil {
-		t.Errorf("same name different type should be allowed: %v", err)
-	}
-
-	// Same name, same type — should fail
-	_, err = db.Exec(`INSERT INTO youtube_groups (name, group_type, created_at, updated_at) VALUES ('SameName', 'manager', datetime('now'), datetime('now'))`)
-	if err == nil {
-		t.Error("expected UNIQUE violation for duplicate (name, group_type), got nil")
 	}
 }
 

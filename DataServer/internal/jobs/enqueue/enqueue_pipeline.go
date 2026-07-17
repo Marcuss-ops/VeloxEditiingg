@@ -79,7 +79,6 @@ func BuildPipelinePayload(result map[string]interface{}) (map[string]interface{}
 	p.VoiceoverPaths = voiceovers
 	p.OutputPath = payload.FirstString(flat, "output_path", "output_dir")
 	p.DriveOutput = payload.FirstString(flat, "drive_output_folder", "output_directory")
-	p.YoutubeGroup = payload.FirstString(flat, "youtube_group")
 	p.AudioLanguage = payload.FirstString(flat, "audio_language_for_srt", "audio_lang")
 	p.SubmittedVia = "pipeline_generate_with_images"
 	p.Source = "pipeline_generate_with_images"

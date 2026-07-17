@@ -240,7 +240,7 @@ func (r *RemotePipelineResult) ToWorkerPayload() map[string]interface{} {
 	}
 
 	// Start with the flattened raw map as a base so non-DTO fields
-	// (delivery_plan, output_path, youtube_group, etc.) are preserved.
+	// (delivery_plan, output_path, etc.) are preserved.
 	m := map[string]interface{}{}
 	if r.Raw != nil {
 		flat := flattenResult(r.Raw)

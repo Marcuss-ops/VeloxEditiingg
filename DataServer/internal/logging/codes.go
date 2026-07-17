@@ -129,58 +129,11 @@ const (
 	CodeInstallScriptNotFound        = "INSTALL_SCRIPT_NOT_FOUND"
 )
 
-// Uploads pipeline (replaces log.Printf in uploads/video.go + video_youtube.go)
+// Uploads pipeline (replaces log.Printf in uploads/video.go)
 const (
-	CodeUploadJobUpdateFail             = "UPLOAD_JOB_UPDATE_FAIL"
-	CodeUploadArtifactMarshalFail       = "UPLOAD_ARTIFACT_MARSHAL_FAIL"
-	CodeUploadVideoCompleted            = "UPLOAD_VIDEO_COMPLETED"
-	CodeYouTubeAutoUploadSkip           = "YOUTUBE_AUTO_UPLOAD_SKIP"
-	CodeYouTubeAutoUploadDefer          = "YOUTUBE_AUTO_UPLOAD_DEFER"
-	CodeYouTubeAutoUploadSkipMissing    = "YOUTUBE_AUTO_UPLOAD_SKIP_MISSING_JOB"
-	CodeYouTubeAutoUploadSkipAlready    = "YOUTUBE_AUTO_UPLOAD_SKIP_ALREADY_SCHEDULED"
-	CodeYouTubeAutoUploadSkipCompleted  = "YOUTUBE_AUTO_UPLOAD_SKIP_ALREADY_COMPLETED"
-	CodeYouTubeAutoUploadSkipWorkerDone = "YOUTUBE_AUTO_UPLOAD_SKIP_WORKER_PREV_SUCCESS"
-	CodeYouTubeAutoUploadSchedule       = "YOUTUBE_AUTO_UPLOAD_SCHEDULE_RECORDED"
-	CodeYouTubeAutoUploadStarted        = "YOUTUBE_AUTO_UPLOAD_STARTED"
-	CodeYouTubeAutoUploadCompleted      = "YOUTUBE_AUTO_UPLOAD_COMPLETED"
-	CodeYouTubeAutoUploadFailed         = "YOUTUBE_AUTO_UPLOAD_FAILED"
-	CodeYouTubeAutoUploadNeedsReauth    = "YOUTUBE_AUTO_UPLOAD_NEEDS_REAUTH"
-	CodeYouTubeAutoUploadPersistFail    = "YOUTUBE_AUTO_UPLOAD_STATUS_PERSIST_FAIL"
-)
-
-// YouTube domain (handlers + integration)
-const (
-	CodeYouTubeUploadFailed       = "YOUTUBE_UPLOAD_FAILED"
-	CodeYouTubeDirectUploadFailed = "YOUTUBE_DIRECT_UPLOAD_FAILED"
-	CodeYouTubeBatchStarted       = "YOUTUBE_BATCH_STARTED"
-	CodeYouTubeBatchItemStarted   = "YOUTUBE_BATCH_ITEM_STARTED"
-	CodeYouTubeBatchItemSkipped   = "YOUTUBE_BATCH_ITEM_SKIPPED"
-	CodeYouTubeBatchItemFailed    = "YOUTUBE_BATCH_ITEM_FAILED"
-	CodeYouTubeBatchItemCompleted = "YOUTUBE_BATCH_ITEM_COMPLETED"
-	CodeYouTubeBatchItemWaiting   = "YOUTUBE_BATCH_ITEM_WAITING"
-	CodeYouTubeBatchCleanup       = "YOUTUBE_BATCH_CLEANUP"
-
-	CodeYouTubeReviewStarted        = "YOUTUBE_REVIEW_STARTED"
-	CodeYouTubeReviewNoGroups       = "YOUTUBE_REVIEW_NO_GROUPS"
-	CodeYouTubeReviewRefreshingMeta = "YOUTUBE_REVIEW_REFRESHING_METADATA"
-	CodeYouTubeReviewOAuthFound     = "YOUTUBE_REVIEW_OAUTH_METADATA_FOUND"
-	CodeYouTubeReviewChannelFail    = "YOUTUBE_REVIEW_CHANNEL_INFO_FETCH_FAIL"
-	CodeYouTubeReviewResolved       = "YOUTUBE_REVIEW_CHANNEL_RESOLVED"
-	CodeYouTubePolicyDataDirMissing = "YOUTUBE_POLICY_DATA_DIR_MISSING"
-	CodeYouTubeRetentionCleanupDone = "YOUTUBE_RETENTION_CLEANUP_DONE"
-
-	CodeYouTubeListVideosSkip           = "YOUTUBE_LIST_VIDEOS_SKIP"
-	CodeYouTubeGroupPrivateChannelSkip  = "YOUTUBE_GROUP_PRIVATE_CHANNEL_SKIP"
-	CodeYouTubeGroupPrivateVideoSkip    = "YOUTUBE_GROUP_PRIVATE_VIDEO_SKIP"
-	CodeYouTubeAnalyticsFetchFail       = "YOUTUBE_ANALYTICS_FETCH_FAIL"
-	CodeYouTubeAnalyticsCacheUpdateFail = "YOUTUBE_ANALYTICS_CACHE_UPDATE_FAIL"
-
-	CodeYouTubeChannelTokenDeleted   = "YOUTUBE_CHANNEL_TOKEN_DELETED"
-	CodeYouTubeChannelTokenMovedTo   = "YOUTUBE_CHANNEL_TOKEN_MOVED_TO"
-	CodeYouTubeChannelTokenMovedFrom = "YOUTUBE_CHANNEL_TOKEN_MOVED_FROM"
-	CodeYouTubeTypesCacheCleanFail   = "YOUTUBE_TYPES_CACHE_CLEAN_FAIL"
-	CodeYouTubeTokensDirFail         = "YOUTUBE_TOKENS_DIR_FAIL"
-	CodeYouTubeOAuthCallbackFail     = "YOUTUBE_OAUTH_CALLBACK_FAIL"
+	CodeUploadJobUpdateFail       = "UPLOAD_JOB_UPDATE_FAIL"
+	CodeUploadArtifactMarshalFail = "UPLOAD_ARTIFACT_MARSHAL_FAIL"
+	CodeUploadVideoCompleted      = "UPLOAD_VIDEO_COMPLETED"
 )
 
 // Worker SSH/secret side-codes (handler-side supplements)
@@ -224,15 +177,11 @@ const (
 	ComponentWorkerBundle     = "workers.bundle"
 	ComponentWorkerValidation = "workers.validation"
 	ComponentWorkerLifecycle  = "workers.lifecycle"
-	ComponentYouTubeManager   = "youtube.manager"
-	ComponentYouTubeRoutes    = "youtube.routes"
-	ComponentYouTubeVideos    = "youtube.videos"
-	ComponentYouTubeAuto      = "youtube.auto_upload"
-	ComponentInstall          = "install"
-	ComponentUploads          = "uploads"
-	ComponentStore            = "store.sqlite"
-	ComponentDriveLink        = "store.drive_links"
-	ComponentDarkEditor       = "dark_editor"
+	ComponentInstall    = "install"
+	ComponentUploads    = "uploads"
+	ComponentStore      = "store.sqlite"
+	ComponentDriveLink  = "store.drive_links"
+	ComponentDarkEditor = "dark_editor"
 )
 
 // Level constants
@@ -359,54 +308,9 @@ var CodeDescriptions = map[string]string{
 	CodeSecretStaleRemoved:    "Removed stale secret file",
 
 	// Uploads pipeline.
-	CodeUploadJobUpdateFail:             "Failed to update job after upload",
-	CodeUploadArtifactMarshalFail:       "Failed to marshal artifact",
-	CodeUploadVideoCompleted:            "Video upload completed",
-	CodeYouTubeAutoUploadSkip:           "YouTube auto-upload skipped",
-	CodeYouTubeAutoUploadDefer:          "YouTube auto-upload deferred",
-	CodeYouTubeAutoUploadSkipMissing:    "YouTube auto-upload skipped (missing job)",
-	CodeYouTubeAutoUploadSkipAlready:    "YouTube auto-upload skipped (already scheduled)",
-	CodeYouTubeAutoUploadSkipCompleted:  "YouTube auto-upload skipped (already completed)",
-	CodeYouTubeAutoUploadSkipWorkerDone: "YouTube auto-upload skipped (worker prev success)",
-	CodeYouTubeAutoUploadSchedule:       "YouTube auto-upload schedule recorded",
-	CodeYouTubeAutoUploadStarted:        "YouTube auto-upload started",
-	CodeYouTubeAutoUploadCompleted:      "YouTube auto-upload completed",
-	CodeYouTubeAutoUploadFailed:         "YouTube auto-upload failed",
-	CodeYouTubeAutoUploadNeedsReauth:    "YouTube auto-upload needs reauth",
-	CodeYouTubeAutoUploadPersistFail:    "YouTube auto-upload status persist failed",
-
-	// YouTube domain.
-	CodeYouTubeUploadFailed:       "YouTube upload failed",
-	CodeYouTubeDirectUploadFailed: "YouTube direct upload failed",
-	CodeYouTubeBatchStarted:       "YouTube batch upload started",
-	CodeYouTubeBatchItemStarted:   "YouTube batch upload item started",
-	CodeYouTubeBatchItemSkipped:   "YouTube batch upload item skipped",
-	CodeYouTubeBatchItemFailed:    "YouTube batch upload item failed",
-	CodeYouTubeBatchItemCompleted: "YouTube batch upload item completed",
-	CodeYouTubeBatchItemWaiting:   "YouTube batch upload rate-limit delay",
-	CodeYouTubeBatchCleanup:       "YouTube batch upload cache cleanup",
-
-	CodeYouTubeReviewStarted:        "YouTube review started",
-	CodeYouTubeReviewNoGroups:       "YouTube review no groups found",
-	CodeYouTubeReviewRefreshingMeta: "YouTube review refreshing channel metadata",
-	CodeYouTubeReviewOAuthFound:     "YouTube review found OAuth metadata",
-	CodeYouTubeReviewChannelFail:    "YouTube review failed to fetch channel info",
-	CodeYouTubeReviewResolved:       "YouTube review resolved channel",
-	CodeYouTubePolicyDataDirMissing: "YouTube policy dataDir not set",
-	CodeYouTubeRetentionCleanupDone: "YouTube data retention cleanup done",
-
-	CodeYouTubeListVideosSkip:           "ListVideos skipped for channel",
-	CodeYouTubeGroupPrivateChannelSkip:  "Group-private list skipped channel",
-	CodeYouTubeGroupPrivateVideoSkip:    "Group-private list skipped video",
-	CodeYouTubeAnalyticsFetchFail:       "Analytics fetch failed",
-	CodeYouTubeAnalyticsCacheUpdateFail: "Analytics cache update failed",
-
-	CodeYouTubeChannelTokenDeleted:   "Deleted channel token file",
-	CodeYouTubeChannelTokenMovedTo:   "Moved channel token to new location",
-	CodeYouTubeChannelTokenMovedFrom: "Moved channel token from old location",
-	CodeYouTubeTypesCacheCleanFail:   "YouTube types cache clean failed",
-	CodeYouTubeTokensDirFail:         "Failed to read tokens directory",
-	CodeYouTubeOAuthCallbackFail:     "YouTube OAuth callback failed",
+	CodeUploadJobUpdateFail:       "Failed to update job after upload",
+	CodeUploadArtifactMarshalFail: "Failed to marshal artifact",
+	CodeUploadVideoCompleted:      "Video upload completed",
 
 	// Store sqlite.
 	CodeSQLitePingCloseAfterFail: "SQLite close after ping failure",

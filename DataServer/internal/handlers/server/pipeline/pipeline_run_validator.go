@@ -40,15 +40,6 @@ var supportedVideoFormats = map[string]bool{
 	"avi":  true,
 }
 
-// validPrivacyStatuses is the canonical set of YouTube privacy statuses
-// compatible with scheduled publishing.
-var validPrivacyStatuses = map[string]bool{
-	"private":   true,
-	"unlisted":  true,
-	"public":    true,
-	"scheduled": true,
-}
-
 // ValidateCreateRequest validates a CreatePipelineRunRequest against the
 // business rules BEFORE any remote call is made. It checks:
 //
@@ -56,15 +47,10 @@ var validPrivacyStatuses = map[string]bool{
 //     defence-in-depth).
 //  2. At least one delivery destination is specified and each destination
 //     exists + is enabled in delivery_destinations.
-//  3. When a channel_id is specified, the channel exists in
-//     youtube_channels AND has a non-revoked oauth token.
-//  4. When publish_at is specified, it parses as a valid RFC3339
+//  3. When publish_at is specified, it parses as a valid RFC3339
 //     timestamp with a valid timezone, and is in the future (within the
 //     configured min/max lead window).
-//  5. privacy_status (when specified) is one of the known values and
-//     is compatible with scheduling (private/scheduled when publish_at
-//     is set).
-//  6. output.format (when specified) is a supported video format.
+//  5. output.format (when specified) is a supported video format.
 //  7. generation.scene_count is within the configured maximum.
 //  8. The serialized request payload does not exceed the max payload size.
 //
@@ -148,18 +134,7 @@ func ValidateCreateRequest(
 				}
 			}
 
-			// 3. channel_id exists + authorized (YouTube provider).
-			if d.ChannelID != "" {
-				if err := validateChannelAuthorized(ctx, db, d.ChannelID); err != nil {
-					return &ValidationError{
-						Field:   prefix + ".channel_id",
-						Code:    err.Code,
-						Message: err.Message,
-					}
-				}
-			}
-
-			// 4. publish_at: valid timestamp + timezone + in the future.
+			// 3. publish_at: valid timestamp + timezone + in the future.
 			if d.PublishAt != "" {
 				privacy := ""
 				if req.VideoMetadata != nil {
@@ -172,17 +147,6 @@ func ValidateCreateRequest(
 						Message: err.Message,
 					}
 				}
-			}
-		}
-	}
-
-	// 5. privacy_status (global, from video_metadata).
-	if req.VideoMetadata != nil && req.VideoMetadata.PrivacyStatus != "" {
-		if !validPrivacyStatuses[strings.ToLower(req.VideoMetadata.PrivacyStatus)] {
-			return &ValidationError{
-				Field:   "video_metadata.privacy_status",
-				Code:    "UNSUPPORTED_PRIVACY",
-				Message: fmt.Sprintf("privacy_status %q is not supported (valid: private, unlisted, public, scheduled)", req.VideoMetadata.PrivacyStatus),
 			}
 		}
 	}
@@ -227,34 +191,6 @@ func ValidateCreateRequest(
 		}
 	}
 
-	return nil
-}
-
-// validateChannelAuthorized checks that a YouTube channel_id exists in
-// youtube_channels AND has a non-revoked oauth token in
-// youtube_oauth_tokens.
-func validateChannelAuthorized(ctx context.Context, db *store.SQLiteStore, channelID string) *internalValidationError {
-	ch, err := db.GetYouTubeChannel(channelID)
-	if err != nil || ch == nil {
-		return &internalValidationError{
-			Code:    "CHANNEL_NOT_FOUND",
-			Message: fmt.Sprintf("channel %q does not exist", channelID),
-		}
-	}
-
-	tok, err := db.GetYouTubeOAuthToken(channelID)
-	if err != nil || tok == nil {
-		return &internalValidationError{
-			Code:    "CHANNEL_NOT_AUTHORIZED",
-			Message: fmt.Sprintf("channel %q has no OAuth token — re-authentication required", channelID),
-		}
-	}
-	if tok.RevokedAt != "" {
-		return &internalValidationError{
-			Code:    "CHANNEL_TOKEN_REVOKED",
-			Message: fmt.Sprintf("channel %q OAuth token has been revoked — re-authentication required", channelID),
-		}
-	}
 	return nil
 }
 

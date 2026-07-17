@@ -203,6 +203,22 @@ func TestGenerateWithImages_UsesCreatorStageWhenConfigured(t *testing.T) {
 	jobRepo := store.NewSQLiteJobRepository(db)
 	atomic := store.NewAtomicJobTaskCreator(db)
 
+	assetServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/voice.mp3":
+			w.Header().Set("Content-Type", "audio/mpeg")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("voice"))
+		case "/scene1.png":
+			w.Header().Set("Content-Type", "image/png")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("image"))
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer assetServer.Close()
+
 	mockCreator := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/script/generate-with-images" {
 			t.Fatalf("unexpected path: %s", r.URL.Path)
@@ -222,7 +238,9 @@ func TestGenerateWithImages_UsesCreatorStageWhenConfigured(t *testing.T) {
 					{"text":"Scene 1","image_link":"` + imagePath + `","duration_seconds":4}
 				]`,
 				"voiceover_path": voicePath,
-				"youtube_group":  "amish",
+				"delivery_plan": []interface{}{
+					map[string]interface{}{"destination_id": "destination-main", "retry_budget": 3, "priority": 0},
+				},
 			},
 		})
 	}))
@@ -256,12 +274,12 @@ func TestGenerateWithImages_UsesCreatorStageWhenConfigured(t *testing.T) {
 
 	reqBody, _ := json.Marshal(map[string]interface{}{
 		"video_name":     "Creator Video",
-		"voiceover_path": "https://example.com/voice.mp3",
+		"voiceover_path": assetServer.URL + "/voice.mp3",
 		"delivery_plan": []interface{}{
 			map[string]interface{}{"destination_id": "destination-main", "retry_budget": 3, "priority": 0},
 		},
 		"scenes": []interface{}{
-			map[string]interface{}{"text": "Scene 1", "image_link": "https://example.com/scene1.png"},
+			map[string]interface{}{"text": "Scene 1", "image_link": assetServer.URL + "/scene1.png"},
 		},
 	})
 

@@ -55,13 +55,13 @@ func TestIntegration_MigrationRunner_EndToEnd(t *testing.T) {
 	// ---- Phase 2: Verify tables from Migration 001 (initial schema) ----
 	// Note: legacy tables (ansible_computers, youtube_channel_metadata, youtube_groups,
 	// youtube_manager_channels, youtube_manager_groups) are created by 001 but dropped by 008.
+	// YouTube domain tables are dropped by migration 090.
 	tables001 := []string{
 		"jobs", "job_history", "job_logs", "workers", "worker_flags",
-		"analytics_cache", "drive_links", "youtube_api_cache",
+		"analytics_cache", "drive_links",
 		"dark_editor_projects", "dark_editor_folders", "dark_editor_assets",
 		"dark_editor_templates", "dark_editor_temp_files", "dark_editor_generations",
-		"youtube_channel_metrics", "youtube_revenue_metrics", "youtube_video_metrics",
-		"youtube_quota_usage", "calendar_events", "worker_validations",
+		"calendar_events", "worker_validations",
 	}
 	for _, table := range tables001 {
 		if !tableExists(t, db, table) {
@@ -96,75 +96,23 @@ func TestIntegration_MigrationRunner_EndToEnd(t *testing.T) {
 		t.Error("migration 002: legacy_imports table missing")
 	}
 
-	// ---- Phase 4: Migration 003 — YouTube canonical CRUD ----
-
-	// 4a. Insert channels
-	_, err = db.Exec(`INSERT INTO youtube_channels (channel_id, title, display_name, language, view_count, subscriber_count, created_at, updated_at)
-		VALUES ('UC_a', 'Alpha', 'Alpha Display', 'en', 1000, 500, datetime('now'), datetime('now'))`)
-	if err != nil {
-		t.Fatalf("insert youtube_channels: %v", err)
+	// ---- Phase 4: Migration 090 — YouTube domain dropped ----
+	youtubeTables := []string{
+		"youtube_channels",
+		"youtube_groups",
+		"youtube_group_channels",
+		"youtube_tracked_niches",
+		"youtube_oauth_tokens",
+		"youtube_channel_metrics",
+		"youtube_revenue_metrics",
+		"youtube_video_metrics",
+		"youtube_quota_usage",
+		"youtube_api_cache",
 	}
-
-	// 4b. Insert groups
-	_, err = db.Exec(`INSERT INTO youtube_groups (name, group_type, description, created_at, updated_at)
-		VALUES ('Sports', 'manager', 'Sports channels', datetime('now'), datetime('now'))`)
-	if err != nil {
-		t.Fatalf("insert youtube_groups: %v", err)
-	}
-
-	// 4c. Add channel to group (membership with FK)
-	_, err = db.Exec(`INSERT INTO youtube_group_channels (group_id, channel_id, position, added_at) VALUES (1, 'UC_a', 0, datetime('now'))`)
-	if err != nil {
-		t.Errorf("insert youtube_group_channels: %v", err)
-	}
-
-	// 4d. Insert tracked niche
-	_, err = db.Exec(`INSERT INTO youtube_tracked_niches (niche, created_at) VALUES ('basketball', datetime('now'))`)
-	if err != nil {
-		t.Errorf("insert youtube_tracked_niches: %v", err)
-	}
-
-	// 4e. Verify reads
-	var channelTitle string
-	if err := db.QueryRow(`SELECT title FROM youtube_channels WHERE channel_id='UC_a'`).Scan(&channelTitle); err != nil {
-		t.Fatalf("query channel title: %v", err)
-	}
-	if channelTitle != "Alpha" {
-		t.Errorf("youtube channel title: got %q, want %q", channelTitle, "Alpha")
-	}
-
-	var groupName string
-	if err := db.QueryRow(`SELECT name FROM youtube_groups WHERE id=1`).Scan(&groupName); err != nil {
-		t.Fatalf("query group name: %v", err)
-	}
-	if groupName != "Sports" {
-		t.Errorf("group name: got %q, want %q", groupName, "Sports")
-	}
-
-	// 4f. Update channel
-	_, err = db.Exec(`UPDATE youtube_channels SET view_count = 2000 WHERE channel_id='UC_a'`)
-	if err != nil {
-		t.Errorf("update youtube_channels: %v", err)
-	}
-	var vc int64
-	if err := db.QueryRow(`SELECT view_count FROM youtube_channels WHERE channel_id='UC_a'`).Scan(&vc); err != nil {
-		t.Fatalf("query view_count after update: %v", err)
-	}
-	if vc != 2000 {
-		t.Errorf("view_count after update: got %d, want 2000", vc)
-	}
-
-	// 4g. Delete channel (should cascade to memberships)
-	_, err = db.Exec(`DELETE FROM youtube_channels WHERE channel_id='UC_a'`)
-	if err != nil {
-		t.Errorf("delete youtube_channels: %v", err)
-	}
-	var memberCount int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM youtube_group_channels WHERE channel_id='UC_a'`).Scan(&memberCount); err != nil {
-		t.Fatalf("query memberships after CASCADE delete: %v", err)
-	}
-	if memberCount != 0 {
-		t.Errorf("expected 0 memberships after CASCADE delete, got %d", memberCount)
+	for _, table := range youtubeTables {
+		if tableExists(t, db, table) {
+			t.Errorf("migration 090 should have dropped %s", table)
+		}
 	}
 
 	// ---- Phase 5: Migration 004 — Ansible CRUD ----
@@ -333,10 +281,10 @@ func TestIntegration_NewSQLiteStore_AutoMigration(t *testing.T) {
 	}
 	mrows2.Close()
 
-	// Verify we can query a table from migration 003
-	var channelCount int
-	db2.QueryRow(`SELECT COUNT(*) FROM youtube_channels`).Scan(&channelCount)
-	if channelCount != 0 {
-		t.Errorf("expected 0 channels, got %d", channelCount)
+	// Verify we can query a table from migration 001
+	var calendarCount int
+	db2.QueryRow(`SELECT COUNT(*) FROM calendar_events`).Scan(&calendarCount)
+	if calendarCount != 0 {
+		t.Errorf("expected 0 calendar events, got %d", calendarCount)
 	}
 }

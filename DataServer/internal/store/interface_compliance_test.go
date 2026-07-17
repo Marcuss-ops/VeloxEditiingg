@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"velox-server/internal/handlers/remote/ansible"
-	"velox-server/internal/integrations/youtube"
 	"velox-server/internal/store"
 )
 
@@ -18,7 +17,6 @@ import (
 // all the methods required by each interface.
 // ============================================================
 
-var _ youtube.YouTubeStore = (*store.SQLiteStore)(nil)
 var _ ansible.AnsibleComputerStore = (*store.SQLiteStore)(nil)
 
 // ============================================================
@@ -27,23 +25,6 @@ var _ ansible.AnsibleComputerStore = (*store.SQLiteStore)(nil)
 // These verify that the SQLiteStore methods actually work when
 // accessed through the interface types, not just at compile time.
 // ============================================================
-
-func TestInterface_YouTubeStore_CompileTime(t *testing.T) {
-	// This test exists as documentation — the real check is the
-	// compile-time assertion above. If the code compiles, the
-	// interface is satisfied.
-	//
-	// SQLiteStore implements:
-	//   - ListYouTubeGroups()
-	//   - UpsertYouTubeGroup(name, groupType, description, privacy)
-	//   - GetYouTubeCache(key) / SetYouTubeCache(key, ts, data)
-	//   - CleanupYouTubeCache(maxAge) / ClearYouTubeCache()
-	//   - MigrateYouTubeCache(entries)
-
-	s := newTestStore(t)
-	var ytStore youtube.YouTubeStore = s
-	_ = ytStore // suppress unused warning
-}
 
 func TestInterface_AnsibleComputerStore_CompileTime(t *testing.T) {
 	// This test exists as documentation — the real check is the
@@ -57,54 +38,6 @@ func TestInterface_AnsibleComputerStore_CompileTime(t *testing.T) {
 	s := newTestStore(t)
 	var acStore ansible.AnsibleComputerStore = s
 	_ = acStore // suppress unused warning
-}
-
-// ============================================================
-// Runtime method tests through YouTubeStore interface
-// ============================================================
-
-func TestInterface_YouTubeStore_Cache(t *testing.T) {
-	s := newTestStore(t)
-	var ytStore youtube.YouTubeStore = s
-
-	// Set and Get via interface
-	if err := ytStore.SetYouTubeCache("test-key", 1000, `{"value":1}`); err != nil {
-		t.Fatalf("SetYouTubeCache via interface: %v", err)
-	}
-
-	ts, data, err := ytStore.GetYouTubeCache("test-key")
-	if err != nil {
-		t.Fatalf("GetYouTubeCache via interface: %v", err)
-	}
-	if ts != 1000 {
-		t.Errorf("timestamp: got %d, want 1000", ts)
-	}
-	if data != `{"value":1}` {
-		t.Errorf("data: got %q, want %q", data, `{"value":1}`)
-	}
-
-	// Miss
-	ts, data, err = ytStore.GetYouTubeCache("nonexistent")
-	if err != nil {
-		t.Fatalf("GetYouTubeCache miss via interface: %v", err)
-	}
-	if ts != 0 || data != "" {
-		t.Errorf("expected zero value on miss, got ts=%d data=%q", ts, data)
-	}
-
-	// Clear via interface
-	if err := ytStore.ClearYouTubeCache(); err != nil {
-		t.Fatalf("ClearYouTubeCache via interface: %v", err)
-	}
-
-	_, data, _ = ytStore.GetYouTubeCache("test-key")
-	if data != "" {
-		t.Error("expected empty after clear via interface")
-	}
-}
-
-func TestInterface_YouTubeStore_LegacyGroups(t *testing.T) {
-	t.Skip("ListYouTubeGroups and UpsertYouTubeGroup canonical (PR15.4 dropped the historical V2 suffix)")
 }
 
 // ============================================================

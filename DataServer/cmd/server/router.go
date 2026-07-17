@@ -13,7 +13,6 @@ import (
 	workerhandlersuploads "velox-server/internal/handlers/remote/workers/uploads"
 	"velox-server/internal/handlers/server/api"
 	"velox-server/internal/handlers/server/darkeditor"
-	"velox-server/internal/handlers/server/groups"
 	"velox-server/internal/handlers/server/pipeline"
 	scripthandlers "velox-server/internal/handlers/server/script"
 	"velox-server/internal/jobs"
@@ -45,12 +44,6 @@ type ScriptRouteDeps struct {
 	Cfg         *config.Config
 	SQLiteStore *store.SQLiteStore
 	Enqueuer    *enqueue.Enqueuer
-}
-
-// GroupsRouteDeps carries the deps for /api/v1/groups routes (the
-// WebDAV-style group manager mounted under admin auth).
-type GroupsRouteDeps struct {
-	SQLiteStore *store.SQLiteStore
 }
 
 // PipelineRouteDeps carries the deps for the /api/script-* and
@@ -105,7 +98,6 @@ type MetricsRouteDeps struct {
 // same auth source.
 type RouterBundle struct {
 	Script     ScriptRouteDeps
-	Groups     GroupsRouteDeps
 	Pipeline   PipelineRouteDeps
 	Darkeditor DarkeditorRouteDeps
 	Upload     UploadRouteDeps
@@ -162,7 +154,6 @@ func newRouter(cfg *config.Config, bundle RouterBundle, registry interface {
 
 	// ── Remaining (non-module) routes wired per their own deps bundle ───
 	registerScriptRoutes(r, bundle.Script)
-	registerGroupsRoutes(r, auth, bundle.Groups)
 	registerPipelineRoutes(r, auth, bundle.Pipeline)
 	registerDarkeditorRoutes(r, bundle.Darkeditor)
 	registerUploadRoutes(r, bundle.Upload)
@@ -193,19 +184,6 @@ func logRegisteredRoutesAtBoot(r *gin.Engine) {
 	for _, route := range r.Routes() {
 		log.Printf("[ROUTE] %s %s", route.Method, route.Path)
 	}
-}
-
-// registerGroupsRoutes mounts the /api/v1/groups routes under the
-// supplied admin-auth middleware. Nil-tolerant on the store.
-func registerGroupsRoutes(r *gin.Engine, auth gin.HandlerFunc, deps GroupsRouteDeps) {
-	if deps.SQLiteStore == nil {
-		return
-	}
-	groupsGroup := r.Group("/api/v1/groups")
-	if auth != nil {
-		groupsGroup.Use(auth)
-	}
-	groups.NewHandlers(deps.SQLiteStore).RegisterRoutes(groupsGroup)
 }
 
 // registerPipelineRoutes mounts /api/script-* and /api/remote/pipeline.

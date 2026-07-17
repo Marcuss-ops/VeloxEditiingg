@@ -40,9 +40,6 @@ func mergeCalendarEvent(existing, incoming *store.CalendarEvent) *store.Calendar
 	if strings.TrimSpace(incoming.Status) != "" {
 		merged.Status = incoming.Status
 	}
-	if strings.TrimSpace(incoming.YouTubeGroup) != "" {
-		merged.YouTubeGroup = incoming.YouTubeGroup
-	}
 	if incoming.StockFootage != nil {
 		merged.StockFootage = incoming.StockFootage
 	}
@@ -63,9 +60,6 @@ func mergeCalendarEvent(existing, incoming *store.CalendarEvent) *store.Calendar
 	}
 	if strings.TrimSpace(incoming.ScriptText) != "" {
 		merged.ScriptText = incoming.ScriptText
-	}
-	if incoming.YouTubeLinks != nil {
-		merged.YouTubeLinks = incoming.YouTubeLinks
 	}
 	if strings.TrimSpace(incoming.Category) != "" {
 		merged.Category = incoming.Category

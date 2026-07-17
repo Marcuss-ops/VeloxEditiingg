@@ -2,16 +2,13 @@
 package livestream
 
 import (
-	"fmt"
 	"net/http"
 	"time"
 
-	"velox-server/internal/integrations/youtube"
 	"velox-server/internal/store"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
-	yt "google.golang.org/api/youtube/v3"
 )
 
 type LiveStreamConfig struct {
@@ -41,15 +38,13 @@ type LiveStreamConfig struct {
 }
 
 type LivestreamHandlers struct {
-	ytService *youtube.Service
-	dbStore   *store.SQLiteStore
+	dbStore *store.SQLiteStore
 }
 
 // NewLivestreamHandlers creates a new LivestreamHandlers instance.
-func NewLivestreamHandlers(ytService *youtube.Service, dbStore *store.SQLiteStore) *LivestreamHandlers {
+func NewLivestreamHandlers(dbStore *store.SQLiteStore) *LivestreamHandlers {
 	return &LivestreamHandlers{
-		ytService: ytService,
-		dbStore:   dbStore,
+		dbStore: dbStore,
 	}
 }
 
@@ -75,87 +70,6 @@ func (h *LivestreamHandlers) CreateStream(c *gin.Context) {
 	req.Status = "created"
 	req.CreatedAt = time.Now()
 	req.LatencyPreference = "normal"
-
-	if req.Platform == "youtube" && h.ytService != nil {
-		channelID := req.ChannelID
-		if channelID == "" {
-			channels := h.ytService.GetChannels()
-			if len(channels) > 0 {
-				channelID = channels[0].ID
-				req.ChannelID = channelID
-			} else {
-				c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "No authenticated YouTube channels found"})
-				return
-			}
-		}
-
-		ctx := c.Request.Context()
-		ytClient, err := h.ytService.GetYouTubeService(ctx, channelID)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": fmt.Sprintf("Failed to get YouTube service: %v", err)})
-			return
-		}
-
-		// 1. Create LiveBroadcast
-		broadcast := &yt.LiveBroadcast{
-			Snippet: &yt.LiveBroadcastSnippet{
-				Title:       req.Name,
-				Description: req.Description,
-			},
-			Status: &yt.LiveBroadcastStatus{
-				PrivacyStatus:           "private",
-				SelfDeclaredMadeForKids: req.IsForKids,
-			},
-		}
-		if req.ScheduledStartTime != "" {
-			broadcast.Snippet.ScheduledStartTime = req.ScheduledStartTime
-		} else {
-			broadcast.Snippet.ScheduledStartTime = time.Now().Add(10 * time.Minute).Format(time.RFC3339)
-		}
-		if req.ScheduledEndTime != "" {
-			broadcast.Snippet.ScheduledEndTime = req.ScheduledEndTime
-		}
-
-		bCall := ytClient.LiveBroadcasts.Insert([]string{"snippet", "status"}, broadcast)
-		createdBroadcast, err := bCall.Do()
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": fmt.Sprintf("Failed to create YouTube LiveBroadcast: %v", err)})
-			return
-		}
-		req.BroadcastID = createdBroadcast.Id
-
-		// 2. Create LiveStream Ingest
-		stream := &yt.LiveStream{
-			Snippet: &yt.LiveStreamSnippet{
-				Title: req.Name + " Ingest",
-			},
-			Cdn: &yt.CdnSettings{
-				IngestionType: "rtmp",
-				FrameRate:     "variable",
-				Resolution:    "variable",
-			},
-		}
-		sCall := ytClient.LiveStreams.Insert([]string{"snippet", "cdn"}, stream)
-		createdStream, err := sCall.Do()
-		if err != nil {
-			_ = ytClient.LiveBroadcasts.Delete(createdBroadcast.Id).Do()
-			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": fmt.Sprintf("Failed to create YouTube LiveStream: %v", err)})
-			return
-		}
-		req.YouTubeStreamID = createdStream.Id
-		req.StreamKey = createdStream.Cdn.IngestionInfo.StreamName
-		req.StreamURL = createdStream.Cdn.IngestionInfo.IngestionAddress
-
-		// 3. Bind Broadcast and Stream
-		bindCall := ytClient.LiveBroadcasts.Bind(createdBroadcast.Id, []string{"id"}).StreamId(createdStream.Id)
-		_, err = bindCall.Do()
-		if err != nil {
-			_ = ytClient.LiveStreams.Delete(createdStream.Id).Do()
-			_ = ytClient.LiveBroadcasts.Delete(createdBroadcast.Id).Do()
-			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": fmt.Sprintf("Failed to bind YouTube Broadcast and Stream: %v", err)})
-			return
-		}
-	}
 
 	// Persist to SQLite
 	cfg := map[string]interface{}{
@@ -236,18 +150,6 @@ func (h *LivestreamHandlers) DeleteStream(c *gin.Context) {
 		return
 	}
 
-	// Delete YouTube resources if present
-	if row.Platform == "youtube" && row.BroadcastID != "" && h.ytService != nil {
-		ctx := c.Request.Context()
-		ytClient, err := h.ytService.GetYouTubeService(ctx, row.ChannelID)
-		if err == nil {
-			_ = ytClient.LiveBroadcasts.Delete(row.BroadcastID).Do()
-			if row.YTStreamID != "" {
-				_ = ytClient.LiveStreams.Delete(row.YTStreamID).Do()
-			}
-		}
-	}
-
 	if err := h.dbStore.DeleteLivestream(id); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": err.Error()})
 		return
@@ -273,23 +175,6 @@ func (h *LivestreamHandlers) GetStatus(c *gin.Context) {
 	health := "good"
 	status := row.Status
 
-	if row.Platform == "youtube" && row.YTStreamID != "" && h.ytService != nil {
-		ctx := c.Request.Context()
-		ytClient, err := h.ytService.GetYouTubeService(ctx, row.ChannelID)
-		if err == nil {
-			call := ytClient.LiveStreams.List([]string{"status"}).Id(row.YTStreamID)
-			resp, err := call.Do()
-			if err == nil && len(resp.Items) > 0 {
-				ytStatus := resp.Items[0].Status
-				if ytStatus.StreamStatus == "inactive" {
-					health = "error"
-				} else if ytStatus.HealthStatus != nil {
-					health = ytStatus.HealthStatus.Status
-				}
-			}
-		}
-	}
-
 	c.JSON(http.StatusOK, gin.H{
 		"ok":     true,
 		"id":     row.ID,
@@ -310,21 +195,6 @@ func (h *LivestreamHandlers) transitionStream(c *gin.Context, transitionState st
 	if err != nil || row == nil {
 		c.JSON(http.StatusNotFound, gin.H{"ok": false, "error": "Stream not found"})
 		return
-	}
-
-	if row.Platform == "youtube" && row.BroadcastID != "" && h.ytService != nil {
-		ctx := c.Request.Context()
-		ytClient, err := h.ytService.GetYouTubeService(ctx, row.ChannelID)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": err.Error()})
-			return
-		}
-		call := ytClient.LiveBroadcasts.Transition(transitionState, row.BroadcastID, []string{"id", "status"})
-		_, err = call.Do()
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": fmt.Sprintf("YouTube transition to %s failed: %v", transitionState, err)})
-			return
-		}
 	}
 
 	row.Status = transitionState

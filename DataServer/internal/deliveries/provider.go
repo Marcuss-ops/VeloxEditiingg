@@ -1,9 +1,9 @@
 // Package deliveries is the delivery provider abstraction layer.
 //
 // Goal:
-//   - Decouple Velox's main flow from Drive / YouTube specifics.
+//   - Decouple Velox's main flow from Drive / social-platform specifics.
 //   - Allow providers to live as long-lived adapters (DriveProvider,
-//     YouTubeProvider) or skeleton stubs (S3Provider, LocalExportProvider)
+//     SocialGatewayProvider) or skeleton stubs (S3Provider, LocalExportProvider)
 //     that return ErrProviderNotConfigured until a future deployment adds
 //     the wiring.
 //   - Make DeliveryRunner the single durable entry point for "push this
@@ -30,6 +30,10 @@ import (
 // (S3, LocalExport) until environment wiring is added. The runner treats
 // this as a permanent failure with status FAILED, no retry.
 var ErrProviderNotConfigured = errors.New("deliveries: provider not configured")
+
+// ErrProviderTransient marks a retryable error (network timeout, 5xx, etc.).
+// The runner applies exponential backoff.
+var ErrProviderTransient = errors.New("deliveries: transient error")
 
 // ErrProviderPermanent marks an error as non-retryable. The runner will
 // move the delivery into FAILED and stop claiming it.
@@ -65,16 +69,20 @@ const (
 	ErrorClassRateLimit
 )
 
-// ClassifyError inspects an error and returns its ErrorClass. The default
-// is transient so the runner never silently retries forever; adapters
-// that want permanent treatment must return errors wrapping
-// ErrProviderPermanent.
+// ClassifyError inspects an error and returns its ErrorClass. Adapters
+// can return errors wrapping ErrProviderTransient, ErrProviderPermanent,
+// ErrProviderAuth, or ErrProviderRateLimit to control retry behavior.
+// The default for unknown errors is transient so the runner never
+// silently retries forever.
 func ClassifyError(err error) ErrorClass {
 	if err == nil {
 		return ErrorClassTransient
 	}
 	if errors.Is(err, ErrProviderPermanent) || errors.Is(err, ErrProviderNotConfigured) {
 		return ErrorClassPermanent
+	}
+	if errors.Is(err, ErrProviderTransient) {
+		return ErrorClassTransient
 	}
 	if errors.Is(err, ErrProviderAuth) {
 		return ErrorClassAuth
@@ -115,7 +123,7 @@ func (e *ProviderError) Unwrap() error {
 // artifact to the destination.
 type Provider interface {
 	// Name returns the canonical provider identifier (e.g. "drive",
-	// "youtube", "s3", "local_export"). Registry keys are case-sensitive.
+	// "social_gateway", "s3", "local_export"). Registry keys are case-sensitive.
 	Name() string
 
 	// Deliver performs the upload. Implementations must:

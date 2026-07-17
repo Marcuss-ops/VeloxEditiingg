@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 	"time"
 
 	"velox-server/internal/app"
@@ -110,8 +111,8 @@ func (a *deliveryPlanResolverAdapter) ResolvePlan(ctx context.Context, jobID, ar
 }
 
 // moduleDeps holds the module-level components built at bootstrap
-// (YouTube, Drive, Ansible, Livestream, Frontend) plus the
-// asset-level services that depend on them.
+// (Drive, Ansible, Frontend) plus the asset-level services that depend
+// on them.
 //
 // PR 1: the canonical Job+Task writer (store.AtomicJobTaskCreator) is
 // NOT stored on moduleDeps. buildTasks already constructs one in
@@ -132,8 +133,8 @@ type moduleDeps struct {
 }
 
 // buildModules creates all Gin modules, the asset service (which needs
-// Drive/YouTube resolvers), the enqueuer, the delivery registry +
-// runner, and registers everything into an app.Registry.
+// the Drive service), the enqueuer, the delivery registry + runner, and
+// registers everything into an app.Registry.
 //
 // The returned moduleDeps carries the per-module pointers so the caller
 // can wire them into the serverDeps compat path and the supervisor.
@@ -147,7 +148,7 @@ func buildModules(cfg *config.Config, p *persistenceDeps, j *jobsDeps, w *worker
 		return nil, fmt.Errorf("bootstrap: drive module: %w", err)
 	}
 
-	// ── Asset Service (needs Drive + YouTube services) ──────────────
+	// ── Asset Service (needs the Drive service) ──────────────
 	voiceoverStore := voiceoverassets.NewStore(cfg.Runtime.DataDir, cfg.Runtime.MaxVoiceoverBytes, []string{cfg.Runtime.DataDir})
 
 	// The drive module's Service() is already non-nil after NewDriveModule.
@@ -207,6 +208,12 @@ func buildModules(cfg *config.Config, p *persistenceDeps, j *jobsDeps, w *worker
 		driveProvider := deliveryProviders.NewDriveProvider(driveMod.Service(), p.BlobStore)
 		deliveryReg.Register(driveProvider)
 		log.Printf("[BOOTSTRAP] Delivery provider registered: drive")
+	}
+
+	if os.Getenv("SOCIAL_GATEWAY_URL") != "" {
+		socialGatewayProvider := deliveryProviders.NewSocialGatewayProvider(nil)
+		deliveryReg.Register(socialGatewayProvider)
+		log.Printf("[BOOTSTRAP] Delivery provider registered: %s", socialGatewayProvider.Name())
 	}
 
 	deliveryRunner := deliveries.NewDeliveryRunner(

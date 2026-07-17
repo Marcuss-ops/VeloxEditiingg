@@ -1,6 +1,6 @@
 // Package store provides database access layers for Velox.
 // SQLite is the single database used for jobs, workers, analytics, calendar,
-// drive links, YouTube data, and dark editor projects.
+// drive links, and dark editor projects.
 package store
 
 import (
@@ -286,10 +286,8 @@ func (s *SQLiteStore) postMigrationAdjustments() error {
 		{"calendar_events", "external_id", "TEXT DEFAULT ''"},
 		{"calendar_events", "source", "TEXT DEFAULT ''"},
 		{"calendar_events", "status", "TEXT DEFAULT 'draft'"},
-		{"calendar_events", "youtube_group", "TEXT DEFAULT ''"},
 		{"calendar_events", "titles_json", "TEXT DEFAULT '[]'"},
 		{"calendar_events", "script_text", "TEXT DEFAULT ''"},
-		{"calendar_events", "youtube_links_json", "TEXT DEFAULT '[]'"},
 		{"calendar_events", "voiceover_paths_json", "TEXT DEFAULT '[]'"},
 		{"calendar_events", "category", "TEXT DEFAULT ''"},
 		{"calendar_events", "job_id", "TEXT DEFAULT ''"},

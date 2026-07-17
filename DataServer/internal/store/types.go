@@ -24,7 +24,6 @@ type Folder struct {
 	Name          string    `json:"name"`
 	ParentID      *string   `json:"parent_id,omitempty"`
 	DriveFolderID *string   `json:"drive_folder_id,omitempty"`
-	YouTubeGroup  *string   `json:"youtube_group,omitempty"`
 	CreatedAt     time.Time `json:"created_at"`
 	UpdatedAt     time.Time `json:"updated_at"`
 }

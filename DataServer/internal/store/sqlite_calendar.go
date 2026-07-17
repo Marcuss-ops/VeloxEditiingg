@@ -19,7 +19,6 @@ type CalendarEvent struct {
 	Month             int         `json:"month"`
 	Year              int         `json:"year"`
 	Status            string      `json:"status,omitempty"`
-	YouTubeGroup      string      `json:"youtubeGroup,omitempty"`
 	StockFootage      []VideoClip `json:"stockFootage"`
 	InitialClips      []VideoClip `json:"initialClips"`
 	IntermediateClips []VideoClip `json:"intermediateClips"`
@@ -27,7 +26,6 @@ type CalendarEvent struct {
 	VoiceoverPaths    []string    `json:"voiceoverPaths,omitempty"`
 	Titles            []string    `json:"titles,omitempty"`
 	ScriptText        string      `json:"scriptText,omitempty"`
-	YouTubeLinks      []string    `json:"youtubeLinks,omitempty"`
 	Category          string      `json:"category,omitempty"`
 	JobID             string      `json:"jobId,omitempty"`
 	JobStatus         string      `json:"jobStatus,omitempty"`
@@ -83,20 +81,19 @@ func (s *SQLiteStore) CreateCalendarEvent(ctx context.Context, event *CalendarEv
 	finalClips, _ := json.Marshal(event.FinalClips)
 	voiceoverPaths, _ := json.Marshal(event.VoiceoverPaths)
 	titles, _ := json.Marshal(event.Titles)
-	youtubeLinks, _ := json.Marshal(event.YouTubeLinks)
 
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO calendar_events (
-			id, external_id, source, title, date, month, year, status, youtube_group,
+			id, external_id, source, title, date, month, year, status,
 			stock_footage, initial_clips, intermediate_clips, final_clips,
-			voiceover_paths_json, titles_json, script_text, youtube_links_json,
+			voiceover_paths_json, titles_json, script_text,
 			category, job_id, job_status, queued_at, queue_error,
 			created_at, updated_at
 		)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		event.ID, event.ExternalID, event.Source, event.Title, event.Date, event.Month, event.Year, event.Status, event.YouTubeGroup,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		event.ID, event.ExternalID, event.Source, event.Title, event.Date, event.Month, event.Year, event.Status,
 		string(stockFootage), string(initialClips), string(intermediateClips), string(finalClips),
-		string(voiceoverPaths), string(titles), event.ScriptText, string(youtubeLinks),
+		string(voiceoverPaths), string(titles), event.ScriptText,
 		event.Category, event.JobID, event.JobStatus, event.QueuedAt, event.QueueError,
 		event.CreatedAt.Format(time.RFC3339), event.UpdatedAt.Format(time.RFC3339),
 	)
@@ -106,20 +103,20 @@ func (s *SQLiteStore) CreateCalendarEvent(ctx context.Context, event *CalendarEv
 // GetCalendarEvent retrieves a calendar event by ID
 func (s *SQLiteStore) GetCalendarEvent(ctx context.Context, id string) (*CalendarEvent, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT id, external_id, source, title, date, month, year, status, youtube_group, stock_footage, initial_clips, intermediate_clips, final_clips,
-		        voiceover_paths_json, titles_json, script_text, youtube_links_json, category, job_id, job_status, queued_at, queue_error,
+		`SELECT id, external_id, source, title, date, month, year, status, stock_footage, initial_clips, intermediate_clips, final_clips,
+		        voiceover_paths_json, titles_json, script_text, category, job_id, job_status, queued_at, queue_error,
 		        created_at, updated_at
 		 FROM calendar_events WHERE id = ?`, id)
 
 	event := &CalendarEvent{}
 	var stockFootage, initialClips, intermediateClips, finalClips []byte
-	var voiceoverPaths, titles, youtubeLinks []byte
+	var voiceoverPaths, titles []byte
 	var createdAt, updatedAt sql.NullString
 	var queuedAt sql.NullString
 
 	err := row.Scan(&event.ID, &event.ExternalID, &event.Source, &event.Title, &event.Date, &event.Month, &event.Year,
-		&event.Status, &event.YouTubeGroup, &stockFootage, &initialClips, &intermediateClips, &finalClips,
-		&voiceoverPaths, &titles, &event.ScriptText, &youtubeLinks, &event.Category, &event.JobID, &event.JobStatus, &queuedAt, &event.QueueError,
+		&event.Status, &stockFootage, &initialClips, &intermediateClips, &finalClips,
+		&voiceoverPaths, &titles, &event.ScriptText, &event.Category, &event.JobID, &event.JobStatus, &queuedAt, &event.QueueError,
 		&createdAt, &updatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -145,9 +142,6 @@ func (s *SQLiteStore) GetCalendarEvent(ctx context.Context, id string) (*Calenda
 	}
 	if len(titles) > 0 {
 		json.Unmarshal(titles, &event.Titles)
-	}
-	if len(youtubeLinks) > 0 {
-		json.Unmarshal(youtubeLinks, &event.YouTubeLinks)
 	}
 	if createdAt.Valid {
 		event.CreatedAt, _ = time.Parse(time.RFC3339, createdAt.String)
@@ -169,20 +163,20 @@ func (s *SQLiteStore) GetCalendarEventByExternalID(ctx context.Context, external
 	}
 
 	row := s.db.QueryRowContext(ctx,
-		`SELECT id, external_id, source, title, date, month, year, status, youtube_group, stock_footage, initial_clips, intermediate_clips, final_clips,
-		        voiceover_paths_json, titles_json, script_text, youtube_links_json, category, job_id, job_status, queued_at, queue_error,
+		`SELECT id, external_id, source, title, date, month, year, status, stock_footage, initial_clips, intermediate_clips, final_clips,
+		        voiceover_paths_json, titles_json, script_text, category, job_id, job_status, queued_at, queue_error,
 		        created_at, updated_at
 		 FROM calendar_events WHERE external_id = ?`, strings.TrimSpace(externalID))
 
 	event := &CalendarEvent{}
 	var stockFootage, initialClips, intermediateClips, finalClips []byte
-	var voiceoverPaths, titles, youtubeLinks []byte
+	var voiceoverPaths, titles []byte
 	var createdAt, updatedAt sql.NullString
 	var queuedAt sql.NullString
 
 	err := row.Scan(&event.ID, &event.ExternalID, &event.Source, &event.Title, &event.Date, &event.Month, &event.Year,
-		&event.Status, &event.YouTubeGroup, &stockFootage, &initialClips, &intermediateClips, &finalClips,
-		&voiceoverPaths, &titles, &event.ScriptText, &youtubeLinks, &event.Category, &event.JobID, &event.JobStatus, &queuedAt, &event.QueueError,
+		&event.Status, &stockFootage, &initialClips, &intermediateClips, &finalClips,
+		&voiceoverPaths, &titles, &event.ScriptText, &event.Category, &event.JobID, &event.JobStatus, &queuedAt, &event.QueueError,
 		&createdAt, &updatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -208,9 +202,6 @@ func (s *SQLiteStore) GetCalendarEventByExternalID(ctx context.Context, external
 	}
 	if len(titles) > 0 {
 		json.Unmarshal(titles, &event.Titles)
-	}
-	if len(youtubeLinks) > 0 {
-		json.Unmarshal(youtubeLinks, &event.YouTubeLinks)
 	}
 	if createdAt.Valid {
 		event.CreatedAt, _ = time.Parse(time.RFC3339, createdAt.String)
@@ -235,15 +226,14 @@ func (s *SQLiteStore) UpdateCalendarEvent(ctx context.Context, event *CalendarEv
 	finalClips, _ := json.Marshal(event.FinalClips)
 	voiceoverPaths, _ := json.Marshal(event.VoiceoverPaths)
 	titles, _ := json.Marshal(event.Titles)
-	youtubeLinks, _ := json.Marshal(event.YouTubeLinks)
 
 	result, err := s.db.ExecContext(ctx,
-		`UPDATE calendar_events SET external_id=?, source=?, title=?, date=?, month=?, year=?, status=?, youtube_group=?, stock_footage=?, initial_clips=?, intermediate_clips=?, final_clips=?,
-		 voiceover_paths_json=?, titles_json=?, script_text=?, youtube_links_json=?, category=?, job_id=?, job_status=?, queued_at=?, queue_error=?, updated_at=?
+		`UPDATE calendar_events SET external_id=?, source=?, title=?, date=?, month=?, year=?, status=?, stock_footage=?, initial_clips=?, intermediate_clips=?, final_clips=?,
+		 voiceover_paths_json=?, titles_json=?, script_text=?, category=?, job_id=?, job_status=?, queued_at=?, queue_error=?, updated_at=?
 		 WHERE id = ?`,
-		event.ExternalID, event.Source, event.Title, event.Date, event.Month, event.Year, event.Status, event.YouTubeGroup,
+		event.ExternalID, event.Source, event.Title, event.Date, event.Month, event.Year, event.Status,
 		string(stockFootage), string(initialClips), string(intermediateClips), string(finalClips),
-		string(voiceoverPaths), string(titles), event.ScriptText, string(youtubeLinks), event.Category, event.JobID, event.JobStatus, event.QueuedAt, event.QueueError,
+		string(voiceoverPaths), string(titles), event.ScriptText, event.Category, event.JobID, event.JobStatus, event.QueuedAt, event.QueueError,
 		event.UpdatedAt.Format(time.RFC3339), event.ID,
 	)
 	if err != nil {
@@ -266,9 +256,8 @@ func (s *SQLiteStore) ListCalendarEvents(ctx context.Context, filter CalendarEve
 	if filter.Limit <= 0 {
 		filter.Limit = 100
 	}
-
-	query := `SELECT id, external_id, source, title, date, month, year, status, youtube_group, stock_footage, initial_clips, intermediate_clips, final_clips,
-	                 voiceover_paths_json, titles_json, script_text, youtube_links_json, category, job_id, job_status, queued_at, queue_error, created_at, updated_at
+	query := `SELECT id, external_id, source, title, date, month, year, status, stock_footage, initial_clips, intermediate_clips, final_clips,
+		                 voiceover_paths_json, titles_json, script_text, category, job_id, job_status, queued_at, queue_error, created_at, updated_at
 	          FROM calendar_events WHERE 1=1`
 	args := []interface{}{}
 
@@ -301,12 +290,12 @@ func (s *SQLiteStore) ListCalendarEvents(ctx context.Context, filter CalendarEve
 	for rows.Next() {
 		event := &CalendarEvent{}
 		var stockFootage, initialClips, intermediateClips, finalClips []byte
-		var voiceoverPaths, titles, youtubeLinks []byte
+		var voiceoverPaths, titles []byte
 		var createdAt, updatedAt, queuedAt sql.NullString
 
-		if err := rows.Scan(&event.ID, &event.ExternalID, &event.Source, &event.Title, &event.Date, &event.Month, &event.Year, &event.Status, &event.YouTubeGroup,
+		if err := rows.Scan(&event.ID, &event.ExternalID, &event.Source, &event.Title, &event.Date, &event.Month, &event.Year, &event.Status,
 			&stockFootage, &initialClips, &intermediateClips, &finalClips,
-			&voiceoverPaths, &titles, &event.ScriptText, &youtubeLinks, &event.Category, &event.JobID, &event.JobStatus, &queuedAt, &event.QueueError,
+			&voiceoverPaths, &titles, &event.ScriptText, &event.Category, &event.JobID, &event.JobStatus, &queuedAt, &event.QueueError,
 			&createdAt, &updatedAt); err != nil {
 			continue
 		}
@@ -328,9 +317,6 @@ func (s *SQLiteStore) ListCalendarEvents(ctx context.Context, filter CalendarEve
 		}
 		if len(titles) > 0 {
 			json.Unmarshal(titles, &event.Titles)
-		}
-		if len(youtubeLinks) > 0 {
-			json.Unmarshal(youtubeLinks, &event.YouTubeLinks)
 		}
 		if createdAt.Valid {
 			event.CreatedAt, _ = time.Parse(time.RFC3339, createdAt.String)
@@ -348,8 +334,8 @@ func (s *SQLiteStore) ListCalendarEvents(ctx context.Context, filter CalendarEve
 
 // GetCalendarEventsByDateRange retrieves events within a date range
 func (s *SQLiteStore) GetCalendarEventsByDateRange(ctx context.Context, startMonth, startYear, endMonth, endYear int) ([]*CalendarEvent, error) {
-	query := `SELECT id, external_id, source, title, date, month, year, status, youtube_group, stock_footage, initial_clips, intermediate_clips, final_clips,
-	                 voiceover_paths_json, titles_json, script_text, youtube_links_json, category, job_id, job_status, queued_at, queue_error, created_at, updated_at 
+	query := `SELECT id, external_id, source, title, date, month, year, status, stock_footage, initial_clips, intermediate_clips, final_clips,
+		                 voiceover_paths_json, titles_json, script_text, category, job_id, job_status, queued_at, queue_error, created_at, updated_at 
 			  FROM calendar_events 
 			  WHERE (year > ? OR (year = ? AND month >= ?)) 
 			    AND (year < ? OR (year = ? AND month <= ?))
@@ -365,12 +351,12 @@ func (s *SQLiteStore) GetCalendarEventsByDateRange(ctx context.Context, startMon
 	for rows.Next() {
 		event := &CalendarEvent{}
 		var stockFootage, initialClips, intermediateClips, finalClips []byte
-		var voiceoverPaths, titles, youtubeLinks []byte
+		var voiceoverPaths, titles []byte
 		var createdAt, updatedAt, queuedAt sql.NullString
 
-		if err := rows.Scan(&event.ID, &event.ExternalID, &event.Source, &event.Title, &event.Date, &event.Month, &event.Year, &event.Status, &event.YouTubeGroup,
+		if err := rows.Scan(&event.ID, &event.ExternalID, &event.Source, &event.Title, &event.Date, &event.Month, &event.Year, &event.Status,
 			&stockFootage, &initialClips, &intermediateClips, &finalClips,
-			&voiceoverPaths, &titles, &event.ScriptText, &youtubeLinks, &event.Category, &event.JobID, &event.JobStatus, &queuedAt, &event.QueueError,
+			&voiceoverPaths, &titles, &event.ScriptText, &event.Category, &event.JobID, &event.JobStatus, &queuedAt, &event.QueueError,
 			&createdAt, &updatedAt); err != nil {
 			continue
 		}
@@ -392,9 +378,6 @@ func (s *SQLiteStore) GetCalendarEventsByDateRange(ctx context.Context, startMon
 		}
 		if len(titles) > 0 {
 			json.Unmarshal(titles, &event.Titles)
-		}
-		if len(youtubeLinks) > 0 {
-			json.Unmarshal(youtubeLinks, &event.YouTubeLinks)
 		}
 		if createdAt.Valid {
 			event.CreatedAt, _ = time.Parse(time.RFC3339, createdAt.String)

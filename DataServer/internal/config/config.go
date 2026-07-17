@@ -36,7 +36,6 @@ func FromEnv() *Config {
 	auth := loadAuthConfig()
 	storage := loadStorageConfig()
 	drive := loadDriveConfig(secretsDir, dataDir)
-	youtube := loadYouTubeConfig(secretsDir, dataDir)
 	ansible := loadAnsibleConfig(runtime.DataDir)
 	frontend := loadFrontendConfig()
 	render := loadRenderConfig()
@@ -51,7 +50,6 @@ func FromEnv() *Config {
 		Auth:     auth,
 		Storage:  storage,
 		Drive:    drive,
-		YouTube:  youtube,
 		Ansible:  ansible,
 		Frontend: frontend,
 		Render:   render,

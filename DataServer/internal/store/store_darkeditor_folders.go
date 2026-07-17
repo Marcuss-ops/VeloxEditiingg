@@ -8,7 +8,7 @@ import (
 )
 
 func (s *SQLiteStore) ListFolders(ctx context.Context) ([]*Folder, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, name, parent_id, drive_folder_id, youtube_group, created_at, updated_at FROM dark_editor_folders ORDER BY created_at ASC`)
+	rows, err := s.db.QueryContext(ctx, `SELECT id, name, parent_id, drive_folder_id, created_at, updated_at FROM dark_editor_folders ORDER BY created_at ASC`)
 	if err != nil {
 		return nil, err
 	}
@@ -17,9 +17,9 @@ func (s *SQLiteStore) ListFolders(ctx context.Context) ([]*Folder, error) {
 	folders := []*Folder{}
 	for rows.Next() {
 		var folder Folder
-		var parentID, driveFolderID, youtubeGroup sql.NullString
+		var parentID, driveFolderID sql.NullString
 		var createdAt, updatedAt sql.NullString
-		if err := rows.Scan(&folder.ID, &folder.Name, &parentID, &driveFolderID, &youtubeGroup, &createdAt, &updatedAt); err != nil {
+		if err := rows.Scan(&folder.ID, &folder.Name, &parentID, &driveFolderID, &createdAt, &updatedAt); err != nil {
 			continue
 		}
 		if parentID.Valid {
@@ -27,9 +27,6 @@ func (s *SQLiteStore) ListFolders(ctx context.Context) ([]*Folder, error) {
 		}
 		if driveFolderID.Valid {
 			folder.DriveFolderID = &driveFolderID.String
-		}
-		if youtubeGroup.Valid {
-			folder.YouTubeGroup = &youtubeGroup.String
 		}
 		if createdAt.Valid && createdAt.String != "" {
 			if t, err := time.Parse(time.RFC3339, createdAt.String); err == nil {
@@ -47,11 +44,11 @@ func (s *SQLiteStore) ListFolders(ctx context.Context) ([]*Folder, error) {
 }
 
 func (s *SQLiteStore) GetFolder(ctx context.Context, id string) (*Folder, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT id, name, parent_id, drive_folder_id, youtube_group, created_at, updated_at FROM dark_editor_folders WHERE id = ?`, id)
+	row := s.db.QueryRowContext(ctx, `SELECT id, name, parent_id, drive_folder_id, created_at, updated_at FROM dark_editor_folders WHERE id = ?`, id)
 	var folder Folder
-	var parentID, driveFolderID, youtubeGroup sql.NullString
+	var parentID, driveFolderID sql.NullString
 	var createdAt, updatedAt sql.NullString
-	err := row.Scan(&folder.ID, &folder.Name, &parentID, &driveFolderID, &youtubeGroup, &createdAt, &updatedAt)
+	err := row.Scan(&folder.ID, &folder.Name, &parentID, &driveFolderID, &createdAt, &updatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -63,9 +60,6 @@ func (s *SQLiteStore) GetFolder(ctx context.Context, id string) (*Folder, error)
 	}
 	if driveFolderID.Valid {
 		folder.DriveFolderID = &driveFolderID.String
-	}
-	if youtubeGroup.Valid {
-		folder.YouTubeGroup = &youtubeGroup.String
 	}
 	if createdAt.Valid && createdAt.String != "" {
 		if t, err := time.Parse(time.RFC3339, createdAt.String); err == nil {

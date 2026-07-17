@@ -98,7 +98,6 @@ func (c *appComponents) routerBundle() RouterBundle {
 			SQLiteStore: c.persistence.SQLite,
 			Enqueuer:    c.modules.Enqueuer,
 		},
-		Groups: GroupsRouteDeps{SQLiteStore: c.persistence.SQLite},
 		Pipeline: PipelineRouteDeps{
 			Cfg:      c.cfg,
 			Enqueuer: c.modules.Enqueuer,

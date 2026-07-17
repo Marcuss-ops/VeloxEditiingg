@@ -170,10 +170,6 @@ func buildSceneImagePayload(rawPayload map[string]interface{}, dataDir, videosDi
 	v2.Status = "PENDING"
 	v2.TotalDurationSecs = totalDuration
 	v2.SceneDurationSecs = perSceneDuration
-	if youtubeGroup := payload.FirstString(rawPayload, "youtube_group", "channel_id"); youtubeGroup != "" {
-		v2.YoutubeGroup = youtubeGroup
-		v2.ChannelID = youtubeGroup
-	}
 
 	// Single source of truth: project the typed envelope. Duration
 	// fields now flow through ToMap's canonical marshaling rather than

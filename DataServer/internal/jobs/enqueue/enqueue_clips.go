@@ -141,10 +141,6 @@ func BuildClipPayloadForMaster(rawPayload map[string]interface{}, dataDir, video
 	v2.Source = "script_generate_from_clips"
 	v2.Version = "v2"
 	v2.Status = "PENDING"
-	if youtubeGroup := payload.FirstString(rawPayload, "youtube_group", "channel_id"); youtubeGroup != "" {
-		v2.YoutubeGroup = youtubeGroup
-		v2.ChannelID = youtubeGroup
-	}
 
 	out, err := v2.ToMap()
 	if err != nil {

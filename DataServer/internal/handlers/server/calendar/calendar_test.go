@@ -104,7 +104,6 @@ func makeAgentEvent(d time.Time, externalID, title, script string) store.Calenda
 		Date:              d.Day(),
 		Month:             int(d.Month()),
 		Year:              d.Year(),
-		YouTubeGroup:      "WNBA Zone",
 		Category:          "wnba",
 		ScriptText:        script,
 		Titles:            []string{"Caitlin Clark Just Changed Everything", "The WNBA Was Not Ready For This"},
@@ -124,7 +123,6 @@ func incompleteAgentEvent() store.CalendarEvent {
 		Date:         time.Now().UTC().Day(),
 		Month:        int(time.Now().UTC().Month()),
 		Year:         time.Now().UTC().Year(),
-		YouTubeGroup: "WNBA Zone",
 		Category:     "wnba",
 		ScriptText:   "Test script without clips.",
 		Titles:       []string{"Test Title"},
@@ -155,7 +153,7 @@ func TestCalendarStore_PersistsFullEventPayload(t *testing.T) {
 	if got.Title != event.Title || got.Date != event.Date || got.Month != event.Month || got.Year != event.Year {
 		t.Fatalf("basic fields not preserved: %+v", got)
 	}
-	if got.YouTubeGroup != event.YouTubeGroup || got.Category != event.Category || got.ScriptText != event.ScriptText {
+	if got.Category != event.Category || got.ScriptText != event.ScriptText {
 		t.Fatalf("metadata not preserved: %+v", got)
 	}
 	if len(got.Titles) != len(event.Titles) || got.Titles[0] != event.Titles[0] {
@@ -206,7 +204,7 @@ func TestCalendarAPI_CreateQueuesAndReturnsAgentFields(t *testing.T) {
 	if got.ScriptText != fullAgentEvent().ScriptText {
 		t.Fatalf("script text not returned: %+v", got)
 	}
-	if got.YouTubeGroup != fullAgentEvent().YouTubeGroup || got.Category != fullAgentEvent().Category {
+	if got.Category != fullAgentEvent().Category {
 		t.Fatalf("agent fields missing: %+v", got)
 	}
 	if got.JobID == "" || got.Status != "queued" {
