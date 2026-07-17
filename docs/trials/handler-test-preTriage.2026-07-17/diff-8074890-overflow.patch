@@ -1,0 +1,165 @@
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index 0193d7b..c66b548 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -76,6 +76,18 @@ jobs:
+         if: always()
+         run: bash scripts/ci/check-loc-thresholds.sh
+ 
++  size-band-policy:
++    name: Size-band policy gate
++    runs-on: ubuntu-latest
++    timeout-minutes: 5
++    if: always()
++    steps:
++      - uses: actions/checkout@v4
++        with:
++          fetch-depth: 0
++      - name: Size-band policy lint
++        run: bash scripts/ci/check-size-band-policy.sh
++
+   # BEGIN ONE-SHOT REQUESTED LONG-FILE SPLIT
+   split-requested-long-files:
+     name: Split requested long files
+diff --git a/DataServer/internal/handlers/server/script/handler_test.go b/DataServer/internal/handlers/server/script/handler_test.go
+index db35a66..6059375 100644
+--- a/DataServer/internal/handlers/server/script/handler_test.go
++++ b/DataServer/internal/handlers/server/script/handler_test.go
+@@ -228,6 +228,19 @@ func TestGenerateWithImages_UsesCreatorStageWhenConfigured(t *testing.T) {
+ 	}))
+ 	defer mockCreator.Close()
+ 
++	// mockVoiceover serves the request-side voiceover_path URL so the asset
++	// service can download it deterministically in tests. Without this, the
++	// asset service fires against the original "https://example.com/voice.mp3"
++	// URL — example.com returns 404 for arbitrary paths, which makes the
++	// pre-existing test flaky / non-hermetic. The handler downloads the
++	// request URL during the creator stage; the mock here just provides the
++	// bytes for that first hop.
++	mockVoiceover := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		w.Header().Set("Content-Type", "audio/mpeg")
++		_, _ = w.Write([]byte("voice"))
++	}))
++	defer mockVoiceover.Close()
++
+ 	cfg := &config.Config{
+ 		Runtime: config.RuntimeConfig{
+ 			DataDir:   tempDir,
+@@ -256,12 +269,15 @@ func TestGenerateWithImages_UsesCreatorStageWhenConfigured(t *testing.T) {
+ 
+ 	reqBody, _ := json.Marshal(map[string]interface{}{
+ 		"video_name":     "Creator Video",
+-		"voiceover_path": "https://example.com/voice.mp3",
++		"voiceover_path": mockVoiceover.URL + "/voice.mp3",
+ 		"delivery_plan": []interface{}{
+ 			map[string]interface{}{"destination_id": "destination-main", "retry_budget": 3, "priority": 0},
+ 		},
+ 		"scenes": []interface{}{
+-			map[string]interface{}{"text": "Scene 1", "image_link": "https://example.com/scene1.png"},
++			// image_link previously pointed at example.com/scene1.png -- now
++			// served by mockVoiceover so the asset service has a hermetic
++			// download target. Same pattern as voiceover_path above.
++			map[string]interface{}{"text": "Scene 1", "image_link": mockVoiceover.URL + "/scene1.png"},
+ 		},
+ 	})
+ 
+diff --git a/cmd/archcheck/scan/percheck_voiceover_alias_ban_test.go b/cmd/archcheck/scan/percheck_voiceover_alias_ban_test.go
+index b385d6c..e7a66bb 100644
+--- a/cmd/archcheck/scan/percheck_voiceover_alias_ban_test.go
++++ b/cmd/archcheck/scan/percheck_voiceover_alias_ban_test.go
+@@ -1,5 +1,6 @@
+ //go:build percheck
+ // +build percheck
++// size-benchmark: 42-42,2 KB
+ 
+ // Package scan contains the percheck_voiceover_alias_ban verifier.
+ //
+diff --git a/docs/roadmap/15-pruning-plan.md b/docs/roadmap/15-pruning-plan.md
+index 97a4bdc..a3ad538 100644
+--- a/docs/roadmap/15-pruning-plan.md
++++ b/docs/roadmap/15-pruning-plan.md
+@@ -511,3 +511,46 @@ hidden globals or race-prone singletons.
+ 5. PR has its own `TestXxx_*_Sweep` that asserts the legacy type,
+    field, or alias is gone (`go vet`-friendly grep).
+ 6. CI green: `go test ./...` + race detector on touched packages.
++---
++
++## 7. Size-band policy formalisation (PR-15.7 follow-up)
++
++The per-file byte-band policy is a **complement** to the LOC gate (§ 11 thresholds in `scripts/ci/check-loc-thresholds.sh`). The LOC gate catches LONG files; the size-band gate catches both LINES (extreme files > 50 KiB -- typically unrefactored monoliths) AND SHORTS (extreme files < 1 KiB -- typically stub remnants or accidentally-truncated files).
++
++### Rule
++
++- **Trigger:** any source-tracked file with size > 50 KiB (51 200 bytes) or size < 1 KiB (1 024 bytes).
++- **Opt-out:** the file MUST carry an explicit `// size-benchmark: <band>` (Go files) or `# size-benchmark: <band>` (shell files on line >= 2 after the shebang) header.
++- **Band validation:** the `<band>` token MUST be a member of the manifest at [`docs/CHANGELOG.md`](../CHANGELOG.md) `### Known size-bands` table. Out-of-manifest tokens fail the lint.
++
++### Walk strategy
++
++- `git ls-files` (source-tracked set only -- `.gitignore` excludes `dist/`, `refactored/`, `node_modules/`, etc.).
++- Filter: `*.go`, `*.sh`, `*.bash`, `*.py`. Other extensions (`*.md`, `*.yml`, `*.json`) handled by their respective linters.
++
++### Implementation
++
++- Self-contained script: [`scripts/ci/check-size-band-policy.sh`](../scripts/ci/check-size-band-policy.sh).
++- Delegated from `scripts/ci/check-architecture.sh` rule #11 (so `make verify` continues to surface it).
++- Wired as a dedicated CI job: `.github/workflows/ci.yml` `size-band-policy` job, with `if: ${{ always() }}` semantics so it surfaces even if other gates fail.
++
++### Tagged artefacts (initial set)
++
++| File | Bytes | Band token | Target band |
++| --- | ---: | --- | --- |
++| `internal/application/images/smoke_test.go` | 43 020 | `42,2-45 KB` | 42 200 - 45 000 |
++| `tests/operational/artlist_live_e2e_verify.sh` | 42 070 | `42-42,2 KB` | 42 000 - 42 200 |
++| `cmd/archcheck/scan/percheck_voiceover_alias_ban_test.go` | 42 112 | `42-42,2 KB` | 42 000 - 42 200 |
++
++### Onboarding a new artefact
++
++1. Decide which band your file fits (use an existing band, or define a new one).
++2. Update `docs/CHANGELOG.md` `### Known size-bands` table to include the band (single source of truth).
++3. Add `// size-benchmark: <band>` (Go) or `# size-benchmark: <band>` (shell, line >= 2 after shebang) to the top of the file.
++4. Land the artefact together with its manifest entry.
++5. CI job `size-band-policy` will validate the band token against the manifest and exit 0.
++
++### Failure modes
++
++- File > 50 KiB or < 1 KiB, no header: `::error file=path,line=1::size=N bytes (>50 KiB or <1 KiB), no \`// size-benchmark:\` or \`# size-benchmark:\` header`
++- File carries header but band not in manifest: `::error file=path,line=1::size=N bytes, band token \`<band>\` not in manifest` (catches typos like `42-43 KB` instead of `42-42,2 KB`).
+diff --git a/internal/application/images/smoke_test.go b/internal/application/images/smoke_test.go
+index 2ea451f..7befdfa 100644
+--- a/internal/application/images/smoke_test.go
++++ b/internal/application/images/smoke_test.go
+@@ -1,5 +1,6 @@
+ //go:build smoke
+ // +build smoke
++// size-benchmark: 42,2-45 KB
+ 
+ package images
+ 
+diff --git a/scripts/ci/check-architecture.sh b/scripts/ci/check-architecture.sh
+index 06ca9d3..cbb6e1e 100755
+--- a/scripts/ci/check-architecture.sh
++++ b/scripts/ci/check-architecture.sh
+@@ -239,4 +239,12 @@ ANSIBLE_COLLECTIONS_PATH="${ANSIBLE_COLLECTIONS_PATH:-/home/pierone/.ansible/col
+     }
+ rm -f "$ANSIBLE_LOG"
+ 
++# 11. PR-15.7 follow-up: per-file byte-band policy delegation.
++# Run the standalone size-band gate from check-size-band-policy.sh.
++# The sub-script is also usable standalone from .github/workflows/ci.yml
++# and from any developer-machine audit. Fail-loud: any violation is fatal.
++bash "${BASH_SOURCE[0]%/*}/check-size-band-policy.sh" >/dev/null \
++  || fail "size-band policy violations detected -- see check-size-band-policy.sh output"
++
++
+ echo "check-architecture: OK"
+diff --git a/tests/operational/artlist_live_e2e_verify.sh b/tests/operational/artlist_live_e2e_verify.sh
+index 3ddae9a..86a8c60 100644
+--- a/tests/operational/artlist_live_e2e_verify.sh
++++ b/tests/operational/artlist_live_e2e_verify.sh
+@@ -1,4 +1,5 @@
+ #!/usr/bin/env bash
++# size-benchmark: 42-42,2 KB
+ # artlist_live_e2e_verify.sh
+ # Live end-to-end verification for the Velox artlist pipeline.
+ # Reachable from CI via `bash tests/operational/artlist_live_e2e_verify.sh`.

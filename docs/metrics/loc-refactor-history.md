@@ -501,3 +501,12 @@ git ls-files --error-unmatch scripts/ci/check-size-band-policy.sh \
 
 \\**Brief anchor.\` PR-15.7 (size-band policy slice).
 
+
+### 19.8 handler_test.go pre-triage archive (forward-pointer)
+
+Triage archive for the pre-existing `TestGenerateWithImages_UsesCreatorStageWhenConfigured`
+failure is preserved at `docs/trials/handler-test-preTriage.2026-07-17/` (2 files:
+`diff-8074890-overflow.patch` + `handler_test.go.iter12`, with SHA-256 integrity hashes
+in the directory README). The iter-1+2 mockVoiceover attempt was REVERTED per § 19.7's
+"small + well-bounded" criterion; the actual fix is deferred to a separate discrete
+follow-up issue. Brief anchor: PR-15.7 size-band policy slice + post-failure triage.
