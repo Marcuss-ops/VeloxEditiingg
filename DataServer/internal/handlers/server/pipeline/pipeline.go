@@ -205,6 +205,11 @@ func (h *Handlers) RegisterRoutes(r *gin.Engine, adminAuth gin.HandlerFunc) {
 	// backwards compatibility with clients that only stored the request_id.
 	r.POST("/api/v1/pipeline-runs", h.CreatePipelineRun())
 	r.GET("/api/v1/pipeline-runs/:id", h.PipelineRunStatus())
+	r.POST("/api/v1/pipeline-runs/:id/cancel", h.CancelPipelineRun())
+	r.POST("/api/v1/pipeline-runs/:id/retry", h.RetryPipelineRun())
+	r.GET("/api/v1/pipeline-runs/:id/timeline", h.PipelineRunTimeline())
+	r.GET("/api/v1/pipeline-runs/:id/artifacts", h.PipelineRunArtifacts())
+	r.GET("/api/v1/pipeline-runs/:id/deliveries", h.PipelineRunDeliveries())
 }
 
 // pipelineLog is the package-internal structured-log helper. Kept

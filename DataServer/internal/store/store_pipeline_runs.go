@@ -335,6 +335,31 @@ func (s *SQLiteStore) UpdatePipelineRunResult(ctx context.Context, id, resultJSO
 	return nil
 }
 
+// ClearPipelineRunError resets error_code, error_message and failed_stage
+// to empty strings on an existing pipeline_run. Used by the retry handler
+// to clear the error state before re-submitting. Updates updated_at.
+func (s *SQLiteStore) ClearPipelineRunError(ctx context.Context, id string) error {
+	if id == "" {
+		return fmt.Errorf("store: ClearPipelineRunError: empty id")
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	result, err := s.db.ExecContext(ctx,
+		`UPDATE pipeline_runs
+		 SET error_code = '', error_message = '', failed_stage = '',
+		     completed_at = '', updated_at = ?
+		 WHERE id = ?`,
+		now, id,
+	)
+	if err != nil {
+		return fmt.Errorf("store: ClearPipelineRunError: %w", err)
+	}
+	n, _ := result.RowsAffected()
+	if n == 0 {
+		return ErrPipelineRunNoRow
+	}
+	return nil
+}
+
 // UpdatePipelineRunError stamps error_code, error_message and failed_stage
 // onto an existing pipeline_run and transitions to FAILED. Updates
 // updated_at and completed_at.
