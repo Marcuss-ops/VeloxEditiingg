@@ -10,8 +10,8 @@
 # Allowed paths (per bounded context):
 #   * DataServer/internal/store/                          -- canonical data layer
 #   * DataServer/internal/{store,artifacts,workflow,jobs,
-#                         deliveries,assets,integrations,
-#                         youtube}/**/*_repository.go     -- per-bounded-context
+#                         deliveries,assets,integrations}/
+#                       **/*_repository.go         -- per-bounded-context
 #                                                           repos. The list is
 #                                                           explicit; do NOT
 #                                                           widen via a
@@ -52,7 +52,6 @@ hits="$(scoped_grep "$call_pattern" -- \
           ':!DataServer/internal/deliveries/**/*_repository.go' \
           ':!DataServer/internal/assets/**/*_repository.go' \
           ':!DataServer/internal/integrations/**/*_repository.go' \
-          ':!DataServer/internal/youtube/**/*_repository.go' \
           ':!DataServer/internal/audit/**' \
           ':!DataServer/internal/dbutil/**' \
           ':!DataServer/cmd/server/bootstrap.go' \

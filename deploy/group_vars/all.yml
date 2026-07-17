@@ -53,7 +53,7 @@ velox_allowed_workers: CHANGE_ME_ALLOWED_WORKERS
 velox_max_job_attempts: 3
 velox_worker_heartbeat_timeout: 120
 
-# ── Worker + server images (consumed by deploy.yml + playbooks) ────────────
+# ── Worker + server images (consumed by deploy.yml + playbooks) ─────────────
 # Both variables are overridden at deploy time via `ansible-playbook -e`.
 # The committed values are CHANGE_ME placeholders — operators MUST supply
 # pinned @sha256: digest references resolved by deploy.yml.
@@ -67,3 +67,36 @@ sshd_hardening_extra: ""
 
 # ── Backup root (consumed by rollback.yml) ──────────────────────────────────
 velox_env_backup_root: /var/backups/velox
+
+# ── External Social API (delivery destination) ──────────────────────────────
+# Canonical env vars surfaced to velox-server/internal/socialclient via
+# ConfigFromEnv(). Mirror the keys in socialclient/config.go exactly:
+# every name here MUST match a `SOCIAL_API_*` env consumed downstream.
+#
+# To avoid leaking anything in the versioned file, defaults are blank;
+# real values come from the ansible vault (deploy/group_vars/vault.yml) or
+# from /etc/velox-server.env at boot.
+#
+# Note: there are intentionally NO `VELOX_SOCIAL_*` or `YOUTUBE_*`
+# variants in this file. The social_repo contract uses unprefixed
+# `SOCIAL_*` names; socialclient/internal/socialclient is the canonical
+# reader. Operators that previously exported `VELOX_SOCIAL_*` env vars
+# should rename them when upgrading.
+velox_social_api_url: ""            # non-secret → SOCIAL_API_URL
+velox_social_api_timeout_ms: 30000  # non-secret → SOCIAL_API_TIMEOUT_MS (literal `_MS` matches socialclient)
+velox_social_api_retries: 3         # non-secret → SOCIAL_API_RETRIES
+velox_social_callback_base_url: ""  # non-secret → SOCIAL_CALLBACK_BASE_URL
+velox_social_artifact_public_url: "" # non-secret → SOCIAL_ARTIFACT_PUBLIC_URL (future-proof)
+
+# Legacy `SOCIAL_GATEWAY_*` aliases — accepted by socialclient.ConfigFromEnv()
+# for one deprecation cycle. URL/Callback are non-secret (here); the API key
+# secret lives in vault.yml.example under `vault_velox_social_gateway_api_key`.
+velox_social_gateway_url: ""
+velox_social_gateway_callback_base_url: ""
+
+# SECRETS moved to deploy/group_vars/vault.yml.example:
+#   vault_velox_social_api_token        → SOCIAL_API_TOKEN
+#   vault_velox_social_webhook_secret   → SOCIAL_WEBHOOK_SECRET
+#   vault_velox_social_gateway_api_key  → SOCIAL_GATEWAY_API_KEY
+# Operators MUST populate them in the ansible vault (encrypted). This
+# file is committed to the repo and cannot carry real secrets.

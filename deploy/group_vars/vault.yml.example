@@ -21,6 +21,16 @@
 # ── Master REST API token (consumed by velox-server.env.j2) ─────────────────
 vault_velox_admin_token: ""
 
+# ── External Social API secrets (consumed by velox-server.env.j2) ──────────
+# All three render directly into the active env file; operator / install
+# preflight verifies the rendered values are non-empty if a publish
+# destination is configured. These three keys are the ONLY Social-API
+# secrets Velox owns; do not introduce `VELOX_YOUTUBE_*` or similar
+# pre-removal naming here.
+vault_velox_social_api_token: ""        # → SOCIAL_API_TOKEN (canonical)
+vault_velox_social_webhook_secret: ""   # → SOCIAL_WEBHOOK_SECRET (future-proof)
+vault_velox_social_gateway_api_key: ""  # → SOCIAL_GATEWAY_API_KEY (legacy deprecation cycle)
+
 # ── Container registry pull credentials (used by worker image runtime) ──────
 vault_velox_registry_username: ""
 vault_velox_registry_token: ""
