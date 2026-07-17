@@ -71,7 +71,7 @@ func sampleDestination() *deliveries.Destination {
 	return &deliveries.Destination{
 		DestinationID:        "dest-1",
 		DeliveryMetadataJSON: `{"title":"hello"}`,
-		ConfigurationJSON:    `{"platform":"youtube","account_id":"acc_1"}`,
+		ConfigurationJSON:    "{}",
 		SocialDestinationID:  "social_dest_amish_youtube",
 	}
 }

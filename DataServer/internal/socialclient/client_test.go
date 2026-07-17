@@ -13,6 +13,7 @@ package socialclient
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net"
@@ -292,5 +293,175 @@ func TestClient_DerivedURLs_EmptyCallback(t *testing.T) {
 	}
 	if got := c.CallbackURL("delivery-1"); got != "" {
 		t.Fatalf("want empty CallbackURL when CallbackBaseURL is unset, got %q", got)
+	}
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Wire-shape assertions for DeliverArtifactRequest.
+//
+// Residuo 3 of the YouTube→Social closure: the request DTO carries
+// only the opaque-mode fields. These tests pin the wire JSON at the
+// top-level keys; legacy keys (platform / account_id / channel_id)
+// are NOT allowed at the top level even when an operator's metadata
+// blob legitimately contains them (the metadata blob is opaque
+// pass-through, NOT the legacy top-level routing plumbing).
+// ─────────────────────────────────────────────────────────────────────
+
+// TestClient_DeliverArtifact_WireShape_Minimal pins the wire JSON for
+// a minimal DeliverArtifactRequest: must contain external_delivery_id,
+// idempotency_key, social_destination_id, artifact + nothing else at
+// the top level (no metadata, no publish_at, no callback_url).
+func TestClient_DeliverArtifact_WireShape_Minimal(t *testing.T) {
+	bodyCh := make(chan []byte, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		bodyCh <- raw
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"social_delivery_id":"x","status":"accepted"}`))
+	}))
+	defer server.Close()
+
+	c := New(Config{BaseURL: server.URL})
+	_, err := c.DeliverArtifact(context.Background(), DeliverArtifactRequest{
+		ExternalDeliveryID:  "delivery_wm_min",
+		IdempotencyKey:      "idem_wm_min",
+		SocialDestinationID: "social_dest_wm_min",
+		Artifact:            ArtifactPayload{ArtifactID: "art_wm_min", SHA256: "sh", SizeBytes: 10, MimeType: "video/mp4"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var body []byte
+	select {
+	case body = <-bodyCh:
+	case <-time.After(1 * time.Second):
+		t.Fatal("timed out waiting for wire body")
+	}
+
+	var top map[string]any
+	if err := json.Unmarshal(body, &top); err != nil {
+		t.Fatalf("unmarshal wire JSON: %v\nbody=%s", err, body)
+	}
+
+	required := []string{
+		"external_delivery_id", "idempotency_key", "social_destination_id", "artifact",
+	}
+	for _, k := range required {
+		if _, ok := top[k]; !ok {
+			t.Errorf("wire JSON must contain top-level key %q; got=%v body=%s", k, top, body)
+		}
+	}
+
+	optional := []string{"metadata", "publish_at", "callback_url"}
+	for _, k := range optional {
+		if _, ok := top[k]; ok {
+			t.Errorf("wire JSON must NOT contain optional key %q on minimal request; top=%v", k, top)
+		}
+	}
+}
+
+// TestClient_DeliverArtifact_WireShape_Full pins the wire JSON for a
+// fully populated DeliverArtifactRequest: must contain all 7 wire keys
+// at the top level.
+func TestClient_DeliverArtifact_WireShape_Full(t *testing.T) {
+	bodyCh := make(chan []byte, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		bodyCh <- raw
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"social_delivery_id":"x","status":"accepted"}`))
+	}))
+	defer server.Close()
+
+	c := New(Config{BaseURL: server.URL})
+	_, err := c.DeliverArtifact(context.Background(), DeliverArtifactRequest{
+		ExternalDeliveryID:  "delivery_wm_full",
+		IdempotencyKey:      "idem_wm_full",
+		SocialDestinationID: "social_dest_wm_full",
+		Artifact:            ArtifactPayload{ArtifactID: "art_wm_full", SHA256: "sh", SizeBytes: 10, MimeType: "video/mp4"},
+		Metadata:            map[string]any{"title": "hello"},
+		PublishAt:           "2026-07-20T12:00:00Z",
+		CallbackURL:         "https://velox/cb",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var body []byte
+	select {
+	case body = <-bodyCh:
+	case <-time.After(1 * time.Second):
+		t.Fatal("timed out waiting for wire body")
+	}
+
+	var top map[string]any
+	if err := json.Unmarshal(body, &top); err != nil {
+		t.Fatalf("unmarshal wire JSON: %v\nbody=%s", err, body)
+	}
+
+	allKeys := []string{
+		"external_delivery_id", "idempotency_key", "social_destination_id",
+		"artifact", "metadata", "publish_at", "callback_url",
+	}
+	for _, k := range allKeys {
+		if _, ok := top[k]; !ok {
+			t.Errorf("wire JSON must contain top-level key %q on full request; got=%v body=%s", k, top, body)
+		}
+	}
+}
+
+// TestClient_DeliverArtifact_WireShape_LegacyKeysNeverPresent pins
+// the regression invariant: top-level wire JSON keys may NEVER
+// include platform, account_id, or channel_id even if an operator's
+// metadata blob legitimately contains those sub-keys. Metadata is
+// opaque pass-through, NOT the legacy top-level routing plumbing.
+func TestClient_DeliverArtifact_WireShape_LegacyKeysNeverPresent(t *testing.T) {
+	bodyCh := make(chan []byte, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		bodyCh <- raw
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"social_delivery_id":"x","status":"accepted"}`))
+	}))
+	defer server.Close()
+
+	c := New(Config{BaseURL: server.URL})
+	_, _ = c.DeliverArtifact(context.Background(), DeliverArtifactRequest{
+		ExternalDeliveryID:  "ext",
+		IdempotencyKey:      "idem",
+		SocialDestinationID: "social",
+		Artifact:            ArtifactPayload{ArtifactID: "a", SHA256: "s", SizeBytes: 0, MimeType: ""},
+		// Metadata CAN contain platform-shaped sub-keys — they're
+		// opaque pass-through. The test verifies these do NOT leak
+		// into the top-level wire JSON.
+		Metadata: map[string]any{
+			"title":      "hello",
+			"platform":   "youtube",
+			"account_id": "acc_42",
+			"channel_id": "UC_42",
+		},
+	})
+
+	var body []byte
+	select {
+	case body = <-bodyCh:
+	case <-time.After(1 * time.Second):
+		t.Fatal("timed out waiting for wire body")
+	}
+
+	var top map[string]any
+	if err := json.Unmarshal(body, &top); err != nil {
+		t.Fatalf("unmarshal wire JSON: %v\nbody=%s", err, body)
+	}
+
+	legacyKeys := []string{"platform", "account_id", "channel_id"}
+	for _, k := range legacyKeys {
+		if _, ok := top[k]; ok {
+			t.Errorf("wire JSON TOP-LEVEL must NOT contain legacy key %q (metadata may contain it); top=%v body=%s", k, top, body)
+		}
 	}
 }
