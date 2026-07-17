@@ -166,10 +166,12 @@ func (h *Handlers) CreatePipelineRun() gin.HandlerFunc {
 		// ── Remote engine guard ───────────────────────────────────────
 		if h.client == nil || !h.client.IsConfigured() {
 			// Mark the run as FAILED — the remote engine is required.
-			_ = h.store.UpdatePipelineRunError(c.Request.Context(), pr.ID,
-				"REMOTE_UNCONFIGURED", "remote engine not configured", "REMOTE_SUBMITTING")
+			if err := h.store.UpdatePipelineRunError(c.Request.Context(), pr.ID,
+				"REMOTE_UNCONFIGURED", "remote engine not configured", "REMOTE_SUBMITTING"); err != nil {
+				pipelineLog("CREATE: failed to mark REMOTE_UNCONFIGURED run=%s: %v", pr.ID, err)
+			}
 			c.JSON(http.StatusServiceUnavailable, gin.H{
-				"ok":              true,
+				"ok":              false,
 				"pipeline_run_id": pr.ID,
 				"request_id":      pr.RequestID,
 				"status":          string(pipelineruns.StatusFailed),
@@ -193,8 +195,10 @@ func (h *Handlers) CreatePipelineRun() gin.HandlerFunc {
 		result, err := h.client.StartPipeline(c.Request.Context(), remotePayload)
 		if err != nil {
 			pipelineLog("CREATE: remote call FAILED run=%s: %v", pr.ID, err)
-			_ = h.store.UpdatePipelineRunError(c.Request.Context(), pr.ID,
-				"REMOTE_CALL_FAILED", err.Error(), "REMOTE_SUBMITTING")
+			if markErr := h.store.UpdatePipelineRunError(c.Request.Context(), pr.ID,
+				"REMOTE_CALL_FAILED", err.Error(), "REMOTE_SUBMITTING"); markErr != nil {
+				pipelineLog("CREATE: failed to mark REMOTE_CALL_FAILED run=%s: %v", pr.ID, markErr)
+			}
 			c.JSON(http.StatusBadGateway, gin.H{
 				"ok":              false,
 				"pipeline_run_id": pr.ID,
@@ -267,8 +271,10 @@ func (h *Handlers) CreatePipelineRun() gin.HandlerFunc {
 		if jobID != "" {
 			if h.resolver == nil || !h.resolver.HasDBAccess() {
 				pipelineLog("CREATE: durable resolver unavailable run=%s job=%s", pr.ID, jobID)
-				_ = h.store.UpdatePipelineRunError(c.Request.Context(), pr.ID,
-					"RESOLVER_UNAVAILABLE", "durable forwarding is not configured", "FORWARDING")
+				if markErr := h.store.UpdatePipelineRunError(c.Request.Context(), pr.ID,
+					"RESOLVER_UNAVAILABLE", "durable forwarding is not configured", "FORWARDING"); markErr != nil {
+					pipelineLog("CREATE: failed to mark RESOLVER_UNAVAILABLE run=%s: %v", pr.ID, markErr)
+				}
 				c.JSON(http.StatusServiceUnavailable, gin.H{
 					"ok":              false,
 					"pipeline_run_id": pr.ID,
@@ -287,8 +293,10 @@ func (h *Handlers) CreatePipelineRun() gin.HandlerFunc {
 			if persistErr != nil {
 				pipelineLog("CREATE: failed to persist forwarding run=%s job=%s: %v",
 					pr.ID, jobID, persistErr)
-				_ = h.store.UpdatePipelineRunError(c.Request.Context(), pr.ID,
-					"FORWARDING_PERSIST_FAILED", persistErr.Error(), "FORWARDING")
+				if markErr := h.store.UpdatePipelineRunError(c.Request.Context(), pr.ID,
+					"FORWARDING_PERSIST_FAILED", persistErr.Error(), "FORWARDING"); markErr != nil {
+					pipelineLog("CREATE: failed to mark FORWARDING_PERSIST_FAILED run=%s: %v", pr.ID, markErr)
+				}
 				c.JSON(http.StatusInternalServerError, gin.H{
 					"ok":              false,
 					"pipeline_run_id": pr.ID,
@@ -331,8 +339,10 @@ func (h *Handlers) CreatePipelineRun() gin.HandlerFunc {
 
 		// ── No job_id in the response — contract violation ────────────
 		pipelineLog("CREATE: remote response missing job_id run=%s", pr.ID)
-		_ = h.store.UpdatePipelineRunError(c.Request.Context(), pr.ID,
-			"REMOTE_CONTRACT", "remote response missing job_id", "REMOTE_SUBMITTING")
+		if markErr := h.store.UpdatePipelineRunError(c.Request.Context(), pr.ID,
+			"REMOTE_CONTRACT", "remote response missing job_id", "REMOTE_SUBMITTING"); markErr != nil {
+			pipelineLog("CREATE: failed to mark REMOTE_CONTRACT run=%s: %v", pr.ID, markErr)
+		}
 		c.JSON(http.StatusBadGateway, gin.H{
 			"ok":              false,
 			"pipeline_run_id": pr.ID,
