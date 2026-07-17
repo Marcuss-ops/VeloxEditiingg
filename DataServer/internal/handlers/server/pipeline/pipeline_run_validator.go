@@ -10,19 +10,6 @@ import (
 	"velox-server/internal/store"
 )
 
-// ValidationError is a typed validation failure returned by
-// ValidateCreateRequest. It carries a field name and a human-readable
-// message so the handler can surface a structured 400 response.
-type ValidationError struct {
-	Field   string `json:"field"`
-	Message string `json:"message"`
-	Code    string `json:"code"`
-}
-
-func (e *ValidationError) Error() string {
-	return fmt.Sprintf("validation: %s: %s", e.Field, e.Message)
-}
-
 // ValidationConfig holds the tunable limits for pipeline run requests.
 // Zero values mean "no limit" — the handler uses DefaultValidationConfig
 // in production; tests can override individual fields.
@@ -241,15 +228,6 @@ func ValidateCreateRequest(
 	}
 
 	return nil
-}
-
-// internalValidationError is the generic internal error type for
-// sub-validators (channel auth, publish_at). It is NOT exported; the
-// top-level ValidateCreateRequest wraps it into a *ValidationError
-// with the correct field name.
-type internalValidationError struct {
-	Code    string
-	Message string
 }
 
 // validateChannelAuthorized checks that a YouTube channel_id exists in
