@@ -85,8 +85,8 @@ Job COMPLETED
 |-------|------|---------|-------------|
 | `video_name` | `string` | auto-generato | Nome del video |
 | `language` | `string` | `"it"` | Lingua per sottotitoli SRT |
-| `social_destination_id` | `string` | — | Identificativo della destinazione gestita dalla Social API (sostituisce il ritirato `youtube_group`); vedi `DataServer/internal/deliveries/plan_resolver.go` e `socialclient/internal/socialclient/requests.go`. |
-| `platform` | `string` | — | Piattaforma di pubblicazione trasmessa al Social API. Valori accettati: `"youtube"`, `"tiktok"`, `"instagram"`, ecc. (Velox non valida: la `Social API` è la fonte di verità.) |
+| `external_destination_id` | `string` | — | Identificativo opaco della destinazione gestita dalla Social API (rinominato da `social_destination_id` da migration 092; vedi `DataServer/internal/deliveries/provider.go` e `DataServer/internal/socialclient/requests.go`). Velox non conosce piattaforma / account / canale: la `Social API` risolve internamente dalla `external_destination_id`. |
+| `metadata` | `object` | — | Blob opaco pass-through al wire `metadata` della social_repo (campi come `title`, `description`, `platform`, `account_id`, `channel_id` sono inerti nel payload di delivery e vivono qui come pass-through). La piattaforma di pubblicazione è decisa dalla Social API; Velox non valida. |
 | `drive_output_folder` | `string` | — | Cartella Drive di destinazione |
 | `scene_duration_secs` | `number` | auto-detect | Durata di OGNI scena in secondi |
 | `total_duration_secs` | `number` | auto-detect | Durata TOTALE del video in secondi |
@@ -127,8 +127,11 @@ Il codice che lo implementa oggi vive in:
   "video_name": "Amish Stories",
   "source_text": "The Amish community lives a simple life...",
   "language": "en",
-  "social_destination_id": "social_amish",
-  "platform": "youtube",
+  "external_destination_id": "external_amish",
+  "metadata": {
+    "title": "Amish Stories",
+    "publish_at": "2026-07-20T12:00:00Z"
+  },
   "voiceover_path": "https://drive.google.com/file/d/XXX/view",
   "drive_output_folder": "https://drive.google.com/drive/u/1/folders/YYY",
   "scenes": [

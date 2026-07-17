@@ -177,6 +177,128 @@ The legacy deprecation aliases `SOCIAL_GATEWAY_URL`, `SOCIAL_GATEWAY_API_KEY`, `
 - `deploy/group_vars/{all,vault.yml.example}.yml` — operator configuration surface.
 - `deploy/{velox-server.env.example,templates/velox-server.env.j2}` — rendered env surface.
 
+### PR-15.14 — Residuo 4 closure: ExternalDestinationID canonical rename
+
+The opaque-mode identity is now uniformly `ExternalDestinationID`
+across the persistence layer, the in-process typed `Destination`
+struct, the validator shape, the socialclient request DTO, and the
+SocialGatewayProvider. The legacy `SocialDestinationID` alias is
+still populated by the store + runner + validator during the
+gradual-rename transition window (Residuo 5 is the dedicated
+alias-drop closing commit).
+
+**Removed (canonical naming)**:
+
+- Typed field `SocialDestinationID` on `socialclient.DeliverArtifactRequest`
+  (json tag `social_destination_id`) — superseded by `ExternalDestinationID`
+  (json tag `external_destination_id`).
+- Provider reads `destination.ExternalDestinationID` (canonical)
+  instead of `destination.SocialDestinationID` (deprecated alias).
+
+**Added**:
+
+- Migration `092_rename_social_to_external_destination_id.sql`
+  (sqlite + testdata mirror) — forward-only
+  `ALTER TABLE delivery_destinations ADD COLUMN
+  external_destination_id TEXT` + `UPDATE ... SET
+  external_destination_id = COALESCE(social_destination_id, '')` +
+  `ALTER TABLE delivery_destinations DROP COLUMN
+  social_destination_id`. NOT a `RENAME COLUMN` (banned by
+  `scripts/ci/check-migrations.sh` for portability — table-rebuild
+  pattern is required, but ADD/UPDATE/DROP achieves the same end
+  on SQLite >= 3.35.0 without breaking checksum parity).
+- Canonical JSON wire key `external_destination_id` (NO `omitempty`
+  on the request DTO so any drift between the runner's fail-closed
+  `DESTINATION_UNMAPPED` guard and the socialclient surfaces at
+  marshal time).
+- Sentinel `ErrDestinationUnmapped` message updated from
+  `social_destination_id required` to
+  `external_destination_id required` (canonical post-rename).
+- 4 NEW tests:
+  - `store/delivery_destination_opaque_test.go::TestDeliveryDestinationOpaqueStructShape`
+    — compile-time pin of dual-field shape (canonical ExternalDestinationID
+    + alias SocialDestinationID mirrored).
+  - `store/delivery_destination_opaque_test.go::TestDeliveryDestinationJSONOpaqueKeys`
+    — JSON serialization: canonical `external_destination_id` MUST
+    be present, legacy `account_id / channel_id / language /
+    social_destination_id` MUST be absent.
+  - `store/delivery_destination_opaque_test.go::TestDeliveryDestinationEmptyExternalDestinationIDOmitEmpty`
+    — empty canonical (with alias populated) is suppressed by `omitempty`.
+  - `jobs/enqueue/delivery_plan_validator_test.go::TestShapeFromMap_CanonicalExternalDestinationIDHonored`
+    + `TestShapeFromMap_CanonicalWinsOverLegacyAlias` — validator
+    precedence: canonical key wins, alias preserved verbatim when both
+    keys are present with differing values.
+- 4 UPDATED test fixtures: `socialclient/client_test.go` 4 fixtures
+  (HappyPath, WireShape_Minimal, WireShape_Full,
+  WireShape_LegacyKeysNeverPresent) + the required-keys arrays in
+  WireShape_Minimal (`external_destination_id` instead of
+  `social_destination_id`) and WireShape_Full — fully aligned with
+  the canonical wire key.
+- 2 sampleDestination fixture updates:
+  `providers/social_gateway_test.go::sampleDestination` +
+  `integration_test/social_repo_integration_test.go::sampleDestination`
+  now set `ExternalDestinationID` canonical (alias-deprecated
+  `SocialDestinationID` is intentionally left empty in the fixtures
+  to prove the canonical-only path works).
+
+**Behaviour changes (operator-visible)**:
+
+- The opaque-mode wire JSON OBJECT emitted by
+  `socialclient.DeliverArtifactRequest` now contains
+  `external_destination_id` in place of `social_destination_id`.
+  Server-side consumers (the social_repo) MUST update their
+  request handlers; client-side observers that grep the wire
+  body MUST update their patterns.
+- The runtime allow-closed error message after a missing opaque
+  destination backfill now reports
+  `delivery_plan[0].external_destination_id: ...` (canonical)
+  instead of `delivery_plan[0].social_destination_id: ...`
+  (legacy alias). Operators / observability tooling that grep
+  the field path MUST update.
+- The `Destination` typed struct in the `deliveries` package and
+  the `DeliveryDestination` typed struct in the `store` package
+  now carry BOTH `ExternalDestinationID` (canonical, sources all
+  dispatch reads + fail-closed guards) AND `SocialDestinationID`
+  (deprecated alias, mirror-symmetric with the canonical field).
+  The alias is consumed by no active code path; it is preserved
+  as a read-only bridge for callers that have not yet migrated.
+
+**Commit chain (3 atomic commits on `main`, NO branches, one commit per layer)**:
+
+| Hash | Subject |
+| --- | --- |
+| `ea38837` | `refactor(store): rename social_destination_id -> external_destination_id (Residuo 4 step 1)` |
+| `03acccb` | `refactor(validator+runner): rename social_destination_id -> external_destination_id (Residuo 4 step 2)` |
+| `83d8b2f` | `refactor(socialclient+provider): wire + provider rename social_destination_id -> external_destination_id (Residuo 4 step 3)` |
+
+The chain is the textbook gradual-rename: each layer holds BOTH names
+during its commit (next-commit renames the next layer), and every
+commit boundary compiles + tests PASS. Step 3 (the wire + provider
+flip) is necessarily atomic per Go's static-typing rule (struct field
+rename forces simultaneous provider mapping + test fixture updates).
+
+**Verification**:
+
+- `cd DataServer && go test ./internal/deliveries/... ./internal/socialclient/... ./internal/jobs/enqueue/... ./internal/integration_test/... ./internal/store/... -count=1`: PASS.
+- `cd DataServer && go test ./internal/socialclient/... -v -run WireShape`: PASS for all 3 WireShape_Minimal / Full / LegacyKeysNeverPresent.
+- `cd DataServer && go vet ./... && go build ./...`: PASS.
+- `bash scripts/ci/check-migrations.sh`: OK (146 files).
+- `git grep -nE 'social_destination_id' -- ':!docs/' ':!CHANGELOG.md' ':!docs/CHANGELOG.md' `: active code references are now confined to the legacy SocialDestinationID alias mirrors (store + runner + validator) + the migration testdata shadow of 091 (inert).
+- The 6 documented scenarios (acceptance / auth / rate-limit / transient 5xx / unreachable / retry idempotency) STILL PASS on both the enqueue pre-flight path and the runner dispatch path with the new canonical wire key.
+- Mock social_repo sniffer is `idempotency_key`-only, so the wire-key rename does NOT regress the dedup contract.
+
+**Refs**:
+
+- `DataServer/internal/store/migrations/sqlite/092_rename_social_to_external_destination_id.sql` — forward-only schema migration.
+- `DataServer/internal/store/migrations/testdata/092_rename_social_to_external_destination_id.sql` — byte-equivalent runner-required mirror.
+- `DataServer/internal/store/store_deliveries.go::DeliveryDestination` — typed struct post-migration schema (dual-field, alias-mirror).
+- `DataServer/internal/deliveries/provider.go::Destination` / `ErrDestinationUnmapped` — dual-field typed struct + canonical sentinel message.
+- `DataServer/internal/deliveries/runner.go::hydrateDestination` — reads `d.ExternalDestinationID` (canonical); guards `TrimSpace == ""`; mirrors to `SocialDestinationID` for gradual-rename consumers.
+- `DataServer/internal/jobs/enqueue/delivery_plan_validator.go::deliveryPlanShape` / `shapeFromMap` — canonical-first read with legacy-alias fallback; precedence: canonical wins, alias preserved verbatim.
+- `DataServer/internal/socialclient/requests.go::DeliverArtifactRequest.ExternalDestinationID` — canonical wire field (`json:"external_destination_id"`, NO omitempty).
+- `DataServer/internal/deliveries/providers/social_gateway.go::buildRequest` — reads `destination.ExternalDestinationID` (canonical) and forwards as `req.ExternalDestinationID`.
+- `docs/api_script_generate_with_images.md` — operator-facing JSON example updated to use `external_destination_id` + `metadata` blob (platform-shaped values live in metadata as opaque pass-through).
+
 ### PR-15.13 — Residuo 3 closure: opaque-mode wire contract
 
 The Social API wire contract now carries only the opaque-mode fields:
