@@ -1,18 +1,71 @@
-// Package images provides image-format detection and dimension validation
-// helpers for the Velox editor's application layer. The package is intentionally
-// small and dependency-free: it is the contract surface for the editor's image
-// renderer, the dark-editor thumbnail generator, and the worker bundle uploader.
+// Package images provides image-format detection and dimension-validation
+// helpers for the Velox editor's application layer.
 //
-// Symbols exported:
-//   - Format        : enumerated image format (PNG / JPEG / GIF / WEBP / Unknown).
-//   - Dimension     : width × height pair for a decoded image.
-//   - DetectFormat  : inspect magic bytes of an input buffer.
-//   - Validate      : confirm a Dimension is positive and within a max bound.
-//   - ErrUnsupportedFormat : sentinel returned by DetectFormat for unrecognized inputs.
+// Scope: small, dependency-free, contract surface for the editor's image
+// renderer, the dark-editor thumbnail generator, and the worker bundle
+// uploader. No I/O, no codec, no allocation beyond the Format / Dimension
+// value types.
 //
-// The companion test file smoke_test.go in this directory is a comprehensive
-// smoke-test for every exported symbol and is intentionally sized at 42,2–45 KB
-// to act as a benchmark for the repo's per-file size policy.
+// Exported symbols (one canonical reference for every public name in this
+// package; per-symbol godoc below carries the full contract):
+//
+//   - Format              enumerated image format (PNG / JPEG / GIF / WEBP /
+//                           Unknown), iota-ordered. Stringer (`String()`
+//                           returns the canonical lower-case name) and
+//                           IsZero (`FormatUnknown` reports true). Zero
+//                           value is FormatUnknown.
+//
+//   - Dimension           width × height pair for a decoded image (int
+//                           fields, no validation — use Validate for
+//                           positivity + bounds). String() renders the
+//                           pair as "WxH" (e.g. "1280x720").
+//
+//   - DetectFormat        func DetectFormat(data []byte) Format.
+//                           Inspects up to 12 leading bytes of data and
+//                           returns the matching Format. Each branch
+//                           matches the SHORTEST possible prefix (the
+//                           residual payload is not validated; callers
+//                           needing full parse use image.Decode):
+//                             - 3-byte inputs matching 0xFF 0xD8 0xFF
+//                               return FormatJPEG (lenient on exif-prefixed
+//                               JPEGs; the JPEG magic-byte check runs FIRST).
+//                             - <4-byte inputs that did NOT match the JPEG
+//                               signature return FormatUnknown.
+//                             - 4-byte inputs matching the PNG signature
+//                               (0x89 'P' 'N' 'G') return FormatPNG.
+//                             - 3-byte inputs matching the GIF literal
+//                               ASCII prefix ('G' 'I' 'F') return
+//                               FormatGIF (covers GIF87a and GIF89a).
+//                             - 12-byte inputs matching "RIFF????WEBP"
+//                               return FormatWEBP.
+//                           Detection is intentionally permissive (magic-byte
+//                           prefix only); for full parse use
+//                           image.Decode from the standard library.
+//
+//   - Validate            func Validate(dim Dimension, maxWidth, maxHeight
+//                           int) error. Returns nil iff dim is strictly
+//                           positive AND (only when the corresponding bound
+//                           is >0) within (maxWidth, maxHeight). A bound of
+//                           0 means "no limit on that axis". On failure,
+//                           returns a wrapped error naming the breached
+//                           dimension and the bound that was violated.
+//
+//   - ErrUnsupportedFormat  sentinel error reserved for future codec paths
+//                           that surface a typed error from the package
+//                           (currently unused by DetectFormat directly —
+//                           unknown formats return FormatUnknown).
+//
+//   - ErrEmptyBuffer      sentinel error reserved for callers that pass an
+//                           empty buffer directly (DetectFormat currently
+//                           returns FormatUnknown for empty input rather
+//                           than this sentinel; the sentinel exists for
+//                           API symmetry with future codecs).
+//
+// Build tag: the companion smoke_test.go in this directory exercises every
+// exported symbol and is sized at 42,2–45 KB to act as the per-file
+// size-policy benchmark artifact (see docs/CHANGELOG.md and the § 19
+// tracker entry in docs/metrics/loc-refactor-history.md for the audit
+// trail). The package itself is tag-free.
 
 package images
 
@@ -55,11 +108,16 @@ func (f Format) IsZero() bool {
 	return f == FormatUnknown
 }
 
-// ErrUnsupportedFormat is returned when the buffer cannot be decoded.
+// ErrUnsupportedFormat is reserved for future codec paths that surface a
+// typed error from the package. The current DetectFormat returns
+// FormatUnknown for unsupported inputs rather than this sentinel; the
+// sentinel exists for API symmetry with future codecs.
 var ErrUnsupportedFormat = errors.New("images: unsupported format")
 
-// ErrEmptyBuffer is returned when DetectFormat receives an empty or truncated
-// buffer.
+// ErrEmptyBuffer is reserved for callers that pass an empty or truncated
+// buffer directly. The current DetectFormat returns FormatUnknown for such
+// inputs rather than this sentinel; the sentinel exists for API symmetry
+// with future codecs.
 var ErrEmptyBuffer = errors.New("images: empty buffer")
 
 // Dimension is the width × height pair of a decoded image.
