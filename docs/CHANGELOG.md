@@ -180,4 +180,37 @@ All three MUST return exit 0. Verification timing at commit `66ec2be`:
 - `docs/api_script_generate_with_images.md` — `social_destination_id` + `platform` JSON example.
 - Root `CHANGELOG.md` PR-15.9 — twin conclusive record (this section is the mirror; root is the source-of-truth).
 
+---
+
+## YouTube→Social: cleanup finale (mirror)
+
+> Cross-reference: this section is the domain-specific **mirror** of the root [`CHANGELOG.md`](../CHANGELOG.md) `### YouTube→Social: cleanup finale` entry. Both files carry the same six-residue summary so the audit trail is durable regardless of which changelog a future reader opens first; the root is canonical.
+
+### Six residues closed
+
+| # | Residue | Migration / commit | Surface (production-visible effect) |
+| --- | --- | --- | --- |
+| 1 | **Migration drop** | `090_drop_youtube_domain.sql` (sqlite) + `010_drop_youtube_domain.sql` (postgres) + 10-commit chain (PR-15.9) + audit script `deploy/scripts/audit-no-youtube-residuals.sh` (PR-15.11) | All 10 `youtube_*` tables + 3 historical columns (on `calendar_events` + `dark_editor_folders`) DROPPED. |
+| 2 | **Destinazione opaque-mode** | `091_opaque_destination.sql` (PR-15.12) | `account_id / channel_id / language` columns DROPPED on `delivery_destinations`; opaque `social_destination_id` ADDED (nullable, fail-closed). |
+| 3 | **Socialclient refactor** | `DataServer/internal/socialclient/` package + `social_gateway.go` provider (Residuo 3, PR-15.13) | Wire contract reduced to 4 required keys + 3 optional keys. 3 wire-shape tests pin the contract. |
+| 4 | **Rename `SocialDestinationID` → `ExternalDestinationID`** | 3 atomic commits on `main` (PR-15.14: `ea38837` / `03acccb` / `83d8b2f`) + migration `092_rename_social_to_external_destination_id.sql` | All canonical reads reference `ExternalDestinationID`; `SocialDestinationID` is the deprecated alias mirror (Residuo 5 closes it). |
+| 5 | **Rimozione alias `SOCIAL_GATEWAY_*`** | PR-15.10 (commits `ca000bf` / `bb407b8` / `6aadcd9`) | Canonical-only env contract: `SOCIAL_API_*` 1:1. Operator playbook: rename `vault_velox_social_gateway_api_key` → `vault_velox_social_api_token`. |
+| 6 | **Migration `external_destination_id`** | Migration `092_rename_social_to_external_destination_id.sql` (forward-only ADD / UPDATE / DROP) + Migration `093_residuo4_closure_marker.sql` (idempotent `json_insert` audit marker on `$.residuo4_closed_at`) | Column rename closed + closure audit marker in place. |
+
+### CI guard
+
+`.github/workflows/no-youtube-regression.yml` (PR-15.16) hard-fails any PR / push / weekly Monday 06:00 UTC drift detection that introduces the 7 forbidden patterns outside the 10 pathspec exclusions (migrations + socialcontract + CHANGELOG + docs + MILESTONE doc + vault.yml.example + 2 NOTE-block files + workflow YAML self-exclusion).
+
+### Verification
+
+- All six residues live on `main`; `bash scripts/ci/check-migrations.sh` reports `OK (148 files)`.
+- `cd DataServer && go test ./internal/deliveries/... ./internal/socialclient/... ./internal/jobs/enqueue/... ./internal/integration_test/... ./internal/store/... -count=1`: PASS.
+- The 6 documented scenarios (acceptance / auth / rate-limit / transient 5xx / unreachable / retry idempotency) STILL PASS on the new `external_destination_id` canonical wire key.
+
+### Refs
+
+- Root [`CHANGELOG.md`](../CHANGELOG.md) `### YouTube→Social: cleanup finale` — canonical source-of-truth, more detail per residue + commit-chain table.
+- PR-15.8 + PR-15.9 + PR-15.10 + PR-15.11 + PR-15.12 + PR-15.13 + PR-15.14 + PR-15.16 — per-residue entries with detailed chain tables + Removed / Added / Changed records.
+
+
 

@@ -4,7 +4,50 @@
 
 - DataServer fallback SPA: long-dead default "frontend_standalone/web/dist" path replaced by "VeloxFrontend/web/dist" (submodule). Falls back to live handler when VELOX_SPA_DIR is unset AND submodule dist/ exists. Operators using VELOX_SPA_DIR are unaffected.
 
-## [Unreleased] - 2026-07-11
+## [Unreleased] - 2026-07-17
+
+### YouTube→Social: cleanup finale
+
+Six residues closed on `main` between PR-15.9 + PR-15.10 + PR-15.11 + PR-15.12 + PR-15.13 + PR-15.14 + PR-15.16. This section is the conclusive capstone a future reader reaches FIRST when investigating the YouTube → Social closure. Per-residue detail follows in the individual PR entries below.
+
+The six residues, in the order the closure landed:
+
+1. **Migration drop** — `DataServer/internal/store/migrations/sqlite/090_drop_youtube_domain.sql` (sqlite) + `DataServer/internal/store/migrations/postgres/010_drop_youtube_domain.sql` (postgres) drop all 10 YouTube tables + the 3 historical columns on `calendar_events` + `dark_editor_folders`. Operator-facing audit script: `deploy/scripts/audit-no-youtube-residuals.sh` (PR-15.11) returns exit `0 / 1 / 2 / 3 / 4` per outcome (CLEAN / RESIDUAL_FOUND / DB_NOT_FOUND / NOT_VELOX_SCHEMA / ARGV_OR_TOOL).
+
+2. **Destinazione opaque-mode** — `DataServer/internal/store/migrations/sqlite/091_opaque_destination.sql` DROPs the `account_id / channel_id / language` columns on `delivery_destinations` and ADDs the opaque `social_destination_id` (TEXT, nullable, fail-closed). Runtime guard: `runner.hydrateDestination` rejects empty `social_destination_id` with `ErrDestinationUnmapped` → delivery status code `DESTINATION_UNMAPPED` so operators see exactly which row needs backfill.
+
+3. **Socialclient refactor** — `DataServer/internal/socialclient/` typed Velox-side HTTP boundary replaces all direct YouTube plumbing. Wire contract: `external_delivery_id`, `idempotency_key`, `social_destination_id`, `artifact` (required 4) + `metadata`, `publish_at`, `callback_url` (optional 3). Three wire-shape tests (Minimal / Full / LegacyKeysNeverPresent) pin the contract at the actual HTTP boundary (httptest + json.Unmarshal top-level keys, NOT string-matching).
+
+4. **Rename `SocialDestinationID` → `ExternalDestinationID`** — gradual rename chain: 3 atomic commits on `main` (Commit 1 = store + migration 092, Commit 2 = validator + runner, Commit 3 = socialclient + provider). All canonical reads now reference `ExternalDestinationID`. The `SocialDestinationID` alias is preserved as a deprecated back-compat mirror (read-only bridge) until Residuo 5 closes it.
+
+5. **Rimozione alias `SOCIAL_GATEWAY_*`** — the legacy deprecation aliases `SOCIAL_GATEWAY_URL`, `SOCIAL_GATEWAY_API_KEY`, `SOCIAL_GATEWAY_CALLBACK_BASE_URL` are RETIRED (PR-15.10). Contract is now canonical-only: every `SOCIAL_*` env var resolves 1:1 to its corresponding `SOCIAL_API_*` name. Operator migration: rename in `/etc/velox-server.env` + ansible vault (`vault_velox_social_gateway_api_key` → `vault_velox_social_api_token`).
+
+6. **Migration `external_destination_id`** — `DataServer/internal/store/migrations/sqlite/092_rename_social_to_external_destination_id.sql` is the forward-only `ADD / UPDATE / DROP COLUMN` rename (NOT `RENAME COLUMN` — banned by `scripts/ci/check-migrations.sh` for portability). `DataServer/internal/store/migrations/sqlite/093_residuo4_closure_marker.sql` is the idempotent `json_insert` audit marker on `configuration_json` (`$.residuo4_closed_at`) that operators can verify with `SELECT count(*) FROM delivery_destinations WHERE json_extract(configuration_json, '$.residuo4_closed_at') IS NOT NULL`.
+
+**CI guard**: `.github/workflows/no-youtube-regression.yml` (PR-15.16) hard-fails any PR / push / weekly drift detector that introduces the 7 forbidden patterns (`google.golang.org/api/youtube | youtubeanalytics | VELOX_YOUTUBE | youtube_oauth | internal/integrations/youtube | handlers/server/youtube | providers.NewYouTubeProvider`) outside the 10 pathspec exclusions (migrations + socialcontract + CHANGELOG + docs + MILESTONE doc + vault.yml.example + 2 NOTE-block files + workflow YAML self-exclusion).
+
+**Verification on `main`**:
+
+- `bash scripts/ci/check-migrations.sh`: `OK (148 files)`.
+- `cd DataServer && go test ./internal/deliveries/... ./internal/socialclient/... ./internal/jobs/enqueue/... ./internal/integration_test/... ./internal/store/... -count=1`: PASS.
+- `cd DataServer && go vet ./... && go build ./...`: PASS.
+- `git grep -nE 'social_destination_id' -- ':!docs/' ':!CHANGELOG.md' ':!docs/CHANGELOG.md' ':!DataServer/internal/store/migrations/'`: aliased-mirror references only (read-only back-compat, full drop is Residuo 5).
+
+**Commit chain on `main`** (NO branches, all atomic, oldest → newest):
+
+| Hash | Subject | Residue |
+| --- | --- | --- |
+| `777a7f8` … `59ba4eb` (10 commits) | Chain cleanup (PR-15.9 close) | [1] Migration drop |
+| `5491f31` | `chore(deploy): add read-only YouTube-residue audit script for operators` | [1] audit script |
+| `ca000bf` / `bb407b8` / `6aadcd9` | `SOCIAL_GATEWAY_*` retirement chain (PR-15.10) | [5] Rimozione alias |
+| `85c10f8` / `cab7cc3` / `2dfaed6` | Opaque-mode destination chain (PR-15.12) | [2] Destinazione opaque-mode |
+| `71b0bb6` / `32bd74f` / `362718d` | Socialclient refactor chain (PR-15.13) | [3] Socialclient refactor |
+| `ea38837` | `refactor(store): rename social_destination_id -> external_destination_id (Residuo 4 step 1)` + migration 092 | [4] rename |
+| `03acccb` | `refactor(validator+runner): rename social_destination_id -> external_destination_id (Residuo 4 step 2)` | [4] validator + runner |
+| `83d8b2f` | `refactor(socialclient+provider): wire + provider rename (Residuo 4 step 3)` | [4] wire + provider |
+| `01810ea` | `docs(changelog+api_script): record Residuo 4 closure — PR-15.14` | [4] docs |
+| `9a46461` | `refactor(migrations): add Residuo 4 closure marker` | [6] migration marker (093) |
+| `59a91f7` | `ci(workflow): add no-youtube-regression guard` | CI guard (PR-15.16) |
 
 ### Submodule relationship
 - `VeloxEditiingg/.gitmodules` pins `VeloxFrontend` to commit `a2113ae` (intentional, by user request).
