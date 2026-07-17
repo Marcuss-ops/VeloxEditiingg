@@ -23,4 +23,5 @@
 ALTER TABLE creator_forwardings ADD COLUMN poll_attempts INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE creator_forwardings ADD COLUMN next_poll_at TEXT NOT NULL DEFAULT '';
 ALTER TABLE creator_forwardings ADD COLUMN last_polled_at TEXT NOT NULL DEFAULT '';
+ALTER TABLE creator_forwardings ADD COLUMN last_remote_status TEXT NOT NULL DEFAULT '';
 ALTER TABLE creator_forwardings ADD COLUMN last_error_class TEXT NOT NULL DEFAULT '';

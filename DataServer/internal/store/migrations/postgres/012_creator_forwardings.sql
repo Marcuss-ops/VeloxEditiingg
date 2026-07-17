@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS creator_forwardings (
     poll_attempts         INTEGER NOT NULL DEFAULT 0,
     next_poll_at          TEXT NOT NULL DEFAULT '',
     last_polled_at        TEXT NOT NULL DEFAULT '',
+    last_remote_status    TEXT NOT NULL DEFAULT '',
     locked_by             TEXT NOT NULL DEFAULT '',
     lease_id              TEXT NOT NULL DEFAULT '',
     lease_expires_at      TEXT NOT NULL DEFAULT '',

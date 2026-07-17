@@ -77,6 +77,7 @@ type CreatorForwarding struct {
 	PollAttempts     int    `json:"poll_attempts"`
 	NextPollAt       string `json:"next_poll_at,omitempty"`
 	LastPolledAt     string `json:"last_polled_at,omitempty"`
+	LastRemoteStatus string `json:"last_remote_status,omitempty"`
 	LockedBy         string `json:"locked_by,omitempty"`
 	LeaseID          string `json:"lease_id,omitempty"`
 	LeaseExpiresAt   string `json:"lease_expires_at,omitempty"`
@@ -118,7 +119,7 @@ func scanCreatorForwarding(row creatorForwardingRowScanner) (*CreatorForwarding,
 		&cf.TargetExecutorID, &cf.TargetJobID,
 		&cf.PayloadJSON, &cf.PayloadSHA256,
 		&cf.Status, &cf.AttemptCount, &cf.NextAttemptAt,
-		&cf.PollAttempts, &cf.NextPollAt, &cf.LastPolledAt,
+		&cf.PollAttempts, &cf.NextPollAt, &cf.LastPolledAt, &cf.LastRemoteStatus,
 		&cf.LockedBy, &cf.LeaseID, &cf.LeaseExpiresAt,
 		&cf.LastErrorCode, &cf.LastErrorMessage, &cf.LastErrorClass,
 		&cf.CreatedAt, &cf.UpdatedAt, &cf.ForwardedAt,
@@ -177,7 +178,7 @@ func (s *SQLiteStore) InsertCreatorForwarding(ctx context.Context, cf *CreatorFo
 		 (forwarding_id, source_provider, source_job_id, source_status,
 		  target_executor_id, target_job_id, payload_json, payload_sha256,
 		  status, attempt_count, next_attempt_at,
-		  poll_attempts, next_poll_at, last_polled_at,
+		  poll_attempts, next_poll_at, last_polled_at, last_remote_status,
 		  locked_by, lease_id, lease_expires_at,
 		  last_error_code, last_error_message, last_error_class,
 		  created_at, updated_at, forwarded_at)
@@ -189,7 +190,7 @@ func (s *SQLiteStore) InsertCreatorForwarding(ctx context.Context, cf *CreatorFo
 		cf.PayloadSHA256,
 		cf.Status, cf.AttemptCount,
 		cf.NextAttemptAt,
-		cf.PollAttempts, cf.NextPollAt, cf.LastPolledAt,
+		cf.PollAttempts, cf.NextPollAt, cf.LastPolledAt, cf.LastRemoteStatus,
 		cf.LockedBy, cf.LeaseID,
 		cf.LeaseExpiresAt,
 		cf.LastErrorCode, cf.LastErrorMessage, cf.LastErrorClass,
