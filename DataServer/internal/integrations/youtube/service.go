@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"golang.org/x/oauth2"
-	"google.golang.org/api/youtube/v3"
 	ytanalytics "google.golang.org/api/youtubeanalytics/v2"
 )
 
@@ -98,20 +97,6 @@ func (s *Service) QuotaManager() *QuotaManager { return s.quotaManager }
 // should preferentially call Service methods (which centralise the
 // SQL→domain mapping).
 func (s *Service) Repo() Repository { return s.repo }
-
-// --- Public API: Video Metadata (Delegated to VideoManager) ---
-
-func (s *Service) UpdateVideoMetadata(ctx context.Context, channelID string, videoID string, config UploadConfig) error {
-	return s.videoManager.UpdateVideoMetadata(ctx, channelID, videoID, config)
-}
-
-func (s *Service) DeleteVideo(ctx context.Context, channelID string, videoID string) error {
-	return s.videoManager.DeleteVideo(ctx, channelID, videoID)
-}
-
-func (s *Service) ListVideos(ctx context.Context, channelID string, maxResults int64) ([]*youtube.Video, error) {
-	return s.videoManager.ListVideos(ctx, channelID, maxResults)
-}
 
 // --- Public API: Quota/Analytics (Delegated to QuotaManager) ---
 
