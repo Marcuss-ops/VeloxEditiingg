@@ -8,41 +8,49 @@ import (
 
 // TestDeliveryDestinationOpaqueStructShape enforces (via the Go
 // compiler) that the DeliveryDestination struct does NOT carry the
-// legacy YouTube-specific fields (AccountID, ChannelID, Language). The
-// struct literal below would fail to compile if any of them were
-// re-added without a typed migration step.
+// legacy YouTube-specific fields (AccountID, ChannelID, Language).
 //
-// Together with migration 091 (forward-only DROP COLUMN) and the
-// destination_opaque_test.go in the deliveries package, this is the
-// tri-layered guard against YouTube-domain reintroduction.
+// Residuo 4 gradual rename: the struct now carries BOTH
+// ExternalDestinationID (canonical, json:"external_destination_id,omitempty")
+// AND SocialDestinationID (deprecated back-compat alias,
+// json:"-"). Both are populated here to mirror what SQL readers
+// produce after migration 092 lands.
 func TestDeliveryDestinationOpaqueStructShape(t *testing.T) {
 	_ = DeliveryDestination{
-		DestinationID:       "dst_test_opaque",
-		Provider:            "social_gateway",
-		SocialDestinationID: "social_dest_test",
-		FolderID:            "fld_1",
-		Name:                "Opaque Test",
-		Enabled:             true,
-		ConfigurationJSON:   "{}",
-		CreatedAt:           "2026-07-17T00:00:00Z",
-		UpdatedAt:           "2026-07-17T00:00:00Z",
+		DestinationID:         "dst_test_opaque",
+		Provider:              "social_gateway",
+		ExternalDestinationID: "external_dest_test",
+		SocialDestinationID:   "external_dest_test", // deprecated alias mirrors canonical
+		FolderID:              "fld_1",
+		Name:                  "Opaque Test",
+		Enabled:               true,
+		ConfigurationJSON:     "{}",
+		CreatedAt:             "2026-07-17T00:00:00Z",
+		UpdatedAt:             "2026-07-17T00:00:00Z",
 	}
 }
 
 // TestDeliveryDestinationJSONOpaqueKeys verifies the JSON serialisation
-// of the opaque DeliveryDestination model. Required snake_case keys
-// must appear; legacy YouTube keys must NOT appear in any form.
+// of the opaque DeliveryDestination model after the Residuo 4 gradual
+// rename:
+//   - Required top-level key: external_destination_id (canonical,
+//     post-rename).
+//   - Legacy YouTube keys MUST NOT appear (Residuo 2 invariant).
+//   - The deprecated SocialDestinationID alias is json:"-" so the
+//     social_destination_id key MUST NOT appear in the serialized
+//     JSON either; the field is back-compat reads only.
 func TestDeliveryDestinationJSONOpaqueKeys(t *testing.T) {
 	in := DeliveryDestination{
-		DestinationID:       "dst_test_opaque",
-		Provider:            "social_gateway",
-		SocialDestinationID: "social_dest_opaque_42",
-		FolderID:            "fld_42",
-		Name:                "Opaque Test",
-		Enabled:             true,
-		ConfigurationJSON:   `{"platform":"youtube"}`,
-		CreatedAt:           "2026-07-17T00:00:00Z",
-		UpdatedAt:           "2026-07-17T00:00:00Z",
+		DestinationID:         "dst_test_opaque",
+		Provider:              "social_gateway",
+		ExternalDestinationID: "external_dest_opaque_42",
+		SocialDestinationID:   "external_dest_opaque_42", // mirrors canonical after SQL read
+		FolderID:              "fld_42",
+		Name:                  "Opaque Test",
+		Enabled:               true,
+		ConfigurationJSON:     `{"platform":"youtube"}`,
+		CreatedAt:             "2026-07-17T00:00:00Z",
+		UpdatedAt:             "2026-07-17T00:00:00Z",
 	}
 	blob, err := json.Marshal(in)
 	if err != nil {
@@ -53,7 +61,7 @@ func TestDeliveryDestinationJSONOpaqueKeys(t *testing.T) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 	requiredKeys := []string{
-		"destination_id", "provider", "social_destination_id",
+		"destination_id", "provider", "external_destination_id",
 		"folder_id", "name", "enabled",
 		"configuration_json", "created_at", "updated_at",
 	}
@@ -62,7 +70,12 @@ func TestDeliveryDestinationJSONOpaqueKeys(t *testing.T) {
 			t.Errorf("required key %q missing in opaque JSON; got=%v", k, raw)
 		}
 	}
-	legacyKeys := []string{"account_id", "channel_id", "language"}
+	// Legacy key set spans BOTH Residuo 2 (YouTube) and Residuo 4
+	// (alias suppression during the gradual rename).
+	// social_destination_id MUST NOT appear in the wire JSON even when
+	// the deprecated alias field is populated, because the field is
+	// json:"-".
+	legacyKeys := []string{"account_id", "channel_id", "language", "social_destination_id"}
 	for _, k := range legacyKeys {
 		if _, ok := raw[k]; ok {
 			t.Errorf("LEGACY key %q leaked in opaque JSON — must NOT; blob=%s",
@@ -76,27 +89,31 @@ func TestDeliveryDestinationJSONOpaqueKeys(t *testing.T) {
 	}
 }
 
-// TestDeliveryDestinationEmptySocialDestinationIDOmitEmpty verifies
-// the omitempty tag on social_destination_id: an empty value must NOT
-// leak into the wire contract (operators reading the JSON must not see
-// "social_destination_id":"" — they should see the key absent and
-// infer the row is unmapped).
-func TestDeliveryDestinationEmptySocialDestinationIDOmitEmpty(t *testing.T) {
+// TestDeliveryDestinationEmptyExternalDestinationIDOmitEmpty verifies
+// the omitempty tag on external_destination_id (canonical, Renamed in
+// Residuo 4): an empty value MUST NOT leak into the wire contract.
+// Also verifies that the deprecated SocialDestinationID alias is
+// json:"-" so it never serializes regardless of its value.
+func TestDeliveryDestinationEmptyExternalDestinationIDOmitEmpty(t *testing.T) {
 	in := DeliveryDestination{
-		DestinationID:       "dst_unmapped",
-		Provider:            "social_gateway",
-		SocialDestinationID: "", // unmapped
-		Name:                "Unmapped",
-		Enabled:             true,
-		ConfigurationJSON:   "{}",
-		CreatedAt:           "2026-07-17T00:00:00Z",
-		UpdatedAt:           "2026-07-17T00:00:00Z",
+		DestinationID:         "dst_unmapped",
+		Provider:              "social_gateway",
+		ExternalDestinationID: "", // unmapped, canonical empty
+		SocialDestinationID:   "should-not-leak", // alias populated; json:"-" suppresses
+		Name:                  "Unmapped",
+		Enabled:               true,
+		ConfigurationJSON:     "{}",
+		CreatedAt:             "2026-07-17T00:00:00Z",
+		UpdatedAt:             "2026-07-17T00:00:00Z",
 	}
 	blob, err := json.Marshal(in)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
+	if strings.Contains(string(blob), `"external_destination_id"`) {
+		t.Errorf("empty ExternalDestinationID must be omitempty; blob=%s", string(blob))
+	}
 	if strings.Contains(string(blob), `"social_destination_id"`) {
-		t.Errorf("empty SocialDestinationID must be omitempty; blob=%s", string(blob))
+		t.Errorf("SocialDestinationID must be json:\"-\" (alias must not leak into wire JSON); blob=%s", string(blob))
 	}
 }
