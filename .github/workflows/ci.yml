@@ -76,6 +76,18 @@ jobs:
         if: always()
         run: bash scripts/ci/check-loc-thresholds.sh
 
+  size-band-policy:
+    name: Size-band policy gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: always()
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Size-band policy lint
+        run: bash scripts/ci/check-size-band-policy.sh
+
   # BEGIN ONE-SHOT REQUESTED LONG-FILE SPLIT
   split-requested-long-files:
     name: Split requested long files

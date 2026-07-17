@@ -511,3 +511,46 @@ hidden globals or race-prone singletons.
 5. PR has its own `TestXxx_*_Sweep` that asserts the legacy type,
    field, or alias is gone (`go vet`-friendly grep).
 6. CI green: `go test ./...` + race detector on touched packages.
+---
+
+## 7. Size-band policy formalisation (PR-15.7 follow-up)
+
+The per-file byte-band policy is a **complement** to the LOC gate (§ 11 thresholds in `scripts/ci/check-loc-thresholds.sh`). The LOC gate catches LONG files; the size-band gate catches both LINES (extreme files > 50 KiB -- typically unrefactored monoliths) AND SHORTS (extreme files < 1 KiB -- typically stub remnants or accidentally-truncated files).
+
+### Rule
+
+- **Trigger:** any source-tracked file with size > 50 KiB (51 200 bytes) or size < 1 KiB (1 024 bytes).
+- **Opt-out:** the file MUST carry an explicit `// size-benchmark: <band>` (Go files) or `# size-benchmark: <band>` (shell files on line >= 2 after the shebang) header.
+- **Band validation:** the `<band>` token MUST be a member of the manifest at [`docs/CHANGELOG.md`](../CHANGELOG.md) `### Known size-bands` table. Out-of-manifest tokens fail the lint.
+
+### Walk strategy
+
+- `git ls-files` (source-tracked set only -- `.gitignore` excludes `dist/`, `refactored/`, `node_modules/`, etc.).
+- Filter: `*.go`, `*.sh`, `*.bash`, `*.py`. Other extensions (`*.md`, `*.yml`, `*.json`) handled by their respective linters.
+
+### Implementation
+
+- Self-contained script: [`scripts/ci/check-size-band-policy.sh`](../scripts/ci/check-size-band-policy.sh).
+- Delegated from `scripts/ci/check-architecture.sh` rule #11 (so `make verify` continues to surface it).
+- Wired as a dedicated CI job: `.github/workflows/ci.yml` `size-band-policy` job, with `if: ${{ always() }}` semantics so it surfaces even if other gates fail.
+
+### Tagged artefacts (initial set)
+
+| File | Bytes | Band token | Target band |
+| --- | ---: | --- | --- |
+| `internal/application/images/smoke_test.go` | 43 020 | `42,2-45 KB` | 42 200 - 45 000 |
+| `tests/operational/artlist_live_e2e_verify.sh` | 42 070 | `42-42,2 KB` | 42 000 - 42 200 |
+| `cmd/archcheck/scan/percheck_voiceover_alias_ban_test.go` | 42 112 | `42-42,2 KB` | 42 000 - 42 200 |
+
+### Onboarding a new artefact
+
+1. Decide which band your file fits (use an existing band, or define a new one).
+2. Update `docs/CHANGELOG.md` `### Known size-bands` table to include the band (single source of truth).
+3. Add `// size-benchmark: <band>` (Go) or `# size-benchmark: <band>` (shell, line >= 2 after shebang) to the top of the file.
+4. Land the artefact together with its manifest entry.
+5. CI job `size-band-policy` will validate the band token against the manifest and exit 0.
+
+### Failure modes
+
+- File > 50 KiB or < 1 KiB, no header: `::error file=path,line=1::size=N bytes (>50 KiB or <1 KiB), no \`// size-benchmark:\` or \`# size-benchmark:\` header`
+- File carries header but band not in manifest: `::error file=path,line=1::size=N bytes, band token \`<band>\` not in manifest` (catches typos like `42-43 KB` instead of `42-42,2 KB`).

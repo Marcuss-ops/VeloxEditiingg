@@ -1,5 +1,6 @@
 //go:build smoke
 // +build smoke
+// size-benchmark: 42,2-45 KB
 
 package images
 

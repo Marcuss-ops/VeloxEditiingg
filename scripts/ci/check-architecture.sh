@@ -239,4 +239,12 @@ ANSIBLE_COLLECTIONS_PATH="${ANSIBLE_COLLECTIONS_PATH:-/home/pierone/.ansible/col
     }
 rm -f "$ANSIBLE_LOG"
 
+# 11. PR-15.7 follow-up: per-file byte-band policy delegation.
+# Run the standalone size-band gate from check-size-band-policy.sh.
+# The sub-script is also usable standalone from .github/workflows/ci.yml
+# and from any developer-machine audit. Fail-loud: any violation is fatal.
+bash "${BASH_SOURCE[0]%/*}/check-size-band-policy.sh" >/dev/null \
+  || fail "size-band policy violations detected -- see check-size-band-policy.sh output"
+
+
 echo "check-architecture: OK"

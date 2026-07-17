@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# size-benchmark: 42-42,2 KB
 # artlist_live_e2e_verify.sh
 # Live end-to-end verification for the Velox artlist pipeline.
 # Reachable from CI via `bash tests/operational/artlist_live_e2e_verify.sh`.
