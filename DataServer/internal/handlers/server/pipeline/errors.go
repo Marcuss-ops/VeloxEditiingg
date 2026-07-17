@@ -33,32 +33,52 @@
 package pipeline
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/gin-gonic/gin"
 )
 
 // writeHTTPError writes a JSON error response in the canonical
-// {"ok": false, "error": ...} shape.
+// {"ok": false, "error": ...} envelope.
 //
-// Callers wrap their error string with errors.New(...) or pass an
-// existing error directly. The primitive sets `ok` to false and
-// forwards err.Error() as the `error` field.
+// For simple errors (Status transport errors, network failures,
+// generic 5xx), the envelope is just {ok, error}.
+//
+// For typed *ValidationError errors (returned by ValidateCreateRequest),
+// the primitive auto-detects them via errors.As and enriches the
+// envelope with the structured fields:
+//
+//	{"ok": false, "error": "...", "code": "...", "field": "..."}
+//
+// In the ValidationError case, the "error" field is set to the clean
+// Message (not the formatted Error() string), so clients see only the
+// human-readable message in the envelope. The code and field keys are
+// omitted from the JSON when err is NOT a *ValidationError, so
+// transport errors don't carry empty/unused validation keys.
 //
 // Examples:
 //
 //	writeHTTPError(c, http.StatusBadGateway, err)
 //	writeHTTPError(c, http.StatusServiceUnavailable, errors.New("remote engine not configured"))
-//
-// For responses that need extra fields beyond the canonical envelope
-// (trace_id, hint, code, field, ...), callers can fall back to a plain
-// c.JSON call — but should keep the envelope consistent: start with
-// gin.H{"ok": false, "error": ...} and add fields under it.
+//	writeHTTPError(c, http.StatusBadRequest, valErr) // *ValidationError → structured envelope
 func writeHTTPError(c *gin.Context, statusCode int, err error) {
-	c.JSON(statusCode, gin.H{
+	body := gin.H{
 		"ok":    false,
 		"error": err.Error(),
-	})
+	}
+
+	// Auto-detect *ValidationError: enrich envelope with code + field.
+	// Transport errors (502/503/etc.) skip this branch and produce the
+	// canonical {ok, error} envelope without empty validation keys.
+	var valErr *ValidationError
+	if errors.As(err, &valErr) {
+		body["error"] = valErr.Message
+		body["code"] = valErr.Code
+		body["field"] = valErr.Field
+	}
+
+	c.JSON(statusCode, body)
 }
 
 // ValidationError is the typed validation failure returned by
