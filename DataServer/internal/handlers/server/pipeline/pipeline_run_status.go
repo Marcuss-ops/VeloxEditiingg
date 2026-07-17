@@ -98,5 +98,3 @@ func (h *Handlers) PipelineRunStatus() gin.HandlerFunc {
 		c.JSON(http.StatusOK, response)
 	}
 }
-
-

@@ -5,31 +5,31 @@
 // PR-DI-pipeline — Step 7 of the pipeline.go split.
 //
 // What lives here
-//   • buildCreateResponse            — 202 envelope for idempotent duplicates
-//                                       (POST /api/v1/pipeline-runs).
-//   • buildCreateResponseFromSyncForward
-//                                    — 202 envelope when the remote engine
-//                                       returned a complete result that was
-//                                       synchronously forwarded to the Velox
-//                                       worker queue (POST /api/v1/pipeline-runs).
-//   • buildPipelineRunProjection    — receiver method on *Handlers that
-//                                       builds the full status projection
-//                                       from a pipeline_runs row, enriching
-//                                       with worker/artifact/delivery state
-//                                       when a velox_job_id is set
-//                                       (GET /api/v1/pipeline-runs/:id).
-//   • forwardingStatus              — derives a top-level pipeline-run
-//                                       status string from the legacy
-//                                       creator_forwardings row (used by
-//                                       the same GET endpoint).
+//   - buildCreateResponse            — 202 envelope for idempotent duplicates
+//     (POST /api/v1/pipeline-runs).
+//   - buildCreateResponseFromSyncForward
+//     — 202 envelope when the remote engine
+//     returned a complete result that was
+//     synchronously forwarded to the Velox
+//     worker queue (POST /api/v1/pipeline-runs).
+//   - buildPipelineRunProjection    — receiver method on *Handlers that
+//     builds the full status projection
+//     from a pipeline_runs row, enriching
+//     with worker/artifact/delivery state
+//     when a velox_job_id is set
+//     (GET /api/v1/pipeline-runs/:id).
+//   - forwardingStatus              — derives a top-level pipeline-run
+//     status string from the legacy
+//     creator_forwardings row (used by
+//     the same GET endpoint).
 //
 // All four are pure data-shapers: they take an existing row + a few flags
 // and return a `gin.H` map for the JSON response. They do not mutate
 // state, do not call the store, and do not issue side effects.
 //
 // They were previously scattered:
-//   • buildCreateResponse + buildCreateResponseFromSyncForward → pipeline_create.go
-//   • buildPipelineRunProjection + forwardingStatus → pipeline_run_status.go
+//   - buildCreateResponse + buildCreateResponseFromSyncForward → pipeline_create.go
+//   - buildPipelineRunProjection + forwardingStatus → pipeline_run_status.go
 //
 // They are now consolidated here so that all response-shape logic lives
 // in a single file, which makes it easy to keep the wire format
