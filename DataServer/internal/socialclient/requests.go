@@ -50,24 +50,6 @@ type DeliverArtifactRequest struct {
 	// CallbackURL is the per-delivery webhook the social_repo will POST
 	// to when the publish completes. Empty omits the field.
 	CallbackURL string `json:"callback_url,omitempty"`
-
-	// Deprecated: the three YouTube-specific fields have been replaced
-	// by SocialDestinationID (single opaque reference, social-repo
-	// resolved). They are kept here with `json:"-"` for one commit so
-	// that the provider's buildRequest call sites continue to compile
-	// during the ABI-safe transition. They are NOT serialised into the
-	// wire JSON (transport logs will not show legacy keys).
-	//
-	// These fields will be REMOVED entirely in the next atomic commit
-	// (provider-cleanup: drop parsePlatformAndAccount + these typed
-	// fields). After that, the wire JSON carries ONLY
-	// external_delivery_id / idempotency_key / social_destination_id /
-	// artifact / metadata / publish_at / callback_url.
-	//
-	// Deprecated: removed in Residuo 3 provider-cleanup commit.
-	Platform  string `json:"-"`
-	AccountID string `json:"-"`
-	ChannelID string `json:"-"`
 }
 
 // ArtifactPayload is the typed view of the artifact reference inside

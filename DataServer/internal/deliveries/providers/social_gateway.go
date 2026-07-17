@@ -91,38 +91,20 @@ func (s *SocialGatewayProvider) Deliver(ctx context.Context, artifact *store.Art
 }
 
 // buildRequest constructs the socialclient.DeliverArtifactRequest
-// from the typed Destination + Artifact. The provider does NOT
-// validate `platform`, `account_id`, `channel_id` — those flow
-// verbatim from the destination row to the social_repo, which is the
-// authoritative validator for any platform-specific concern.
+// from the typed Destination + Artifact.
 //
-// `platform` is sourced from the destination's configuration_json blob
-// (operator-set, free-text). `account_id` and `channel_id` come from
-// the destination columns (which already exist in delivery_destinations).
-// This choice avoids feature-creep on migrations (no new column on
-// `delivery_destinations`) while keeping the typed wire contract
-// intact.
+// Opaque-mode (Residuo 3 of YouTube→Social closure): Velox forwards
+// ONLY the social_destination_id opaque reference; the social_repo
+// is the authoritative resolver for account, channel, and platform.
+// `metadata`, `publish_at`, and `artifact` carry through verbatim;
+// `configuration_json` is no longer parsed for platform/account_id
+// — those values are operator-facing observability only and are
+// inert in the wire contract.
 func (s *SocialGatewayProvider) buildRequest(artifact *store.Artifact, destination *deliveries.Destination, deliveryID, idempotencyKey string) (socialclient.DeliverArtifactRequest, error) {
-	platform, accountID, err := parsePlatformAndAccount(destination.ConfigurationJSON)
-	if err != nil {
-		// Malformed configuration_json is a permanent failure: retrying
-		// cannot fix it, only operator intervention can.
-		return socialclient.DeliverArtifactRequest{}, fmt.Errorf("%w: parse configuration_json: %v",
-			deliveries.ErrProviderPermanent, err)
-	}
-
 	req := socialclient.DeliverArtifactRequest{
-		ExternalDeliveryID: deliveryID,
-		IdempotencyKey:     idempotencyKey,
-		Platform:           platform,
-		AccountID:          accountID,
-		// ChannelID is the YouTube-specific semantic ID resolved by the
-		// external Social API from SocialDestinationID. Velox never
-		// owned this field; in opaque-mode Destination drops it
-		// entirely. Residuo 3 will remove the ChannelID field from the
-		// socialclient request shape itself; for now it is set to the
-		// empty string so `omitempty` drops it from the wire JSON.
-		ChannelID: "",
+		ExternalDeliveryID:  deliveryID,
+		IdempotencyKey:      idempotencyKey,
+		SocialDestinationID: destination.SocialDestinationID,
 
 		Artifact: socialclient.ArtifactPayload{
 			ArtifactID:  artifact.ID,
@@ -153,40 +135,6 @@ func (s *SocialGatewayProvider) buildRequest(artifact *store.Artifact, destinati
 
 	req.CallbackURL = s.client.CallbackURL(deliveryID)
 	return req, nil
-}
-
-// parsePlatformAndAccount reads `platform` and `account_id` from the
-// destination's configuration_json blob. Both are optional; missing
-// values are returned as empty strings so the request JSON omits them
-// (via the `omitempty` JSON tags).
-//
-// The blob is intentionally permissive: the social_repo is the
-// authoritative owner of platform semantics. Velox only forwards.
-func parsePlatformAndAccount(configurationJSON string) (platform, accountID string, err error) {
-	if configurationJSON == "" || configurationJSON == "{}" {
-		return "", "", nil
-	}
-	var cfg map[string]string
-	if err := json.Unmarshal([]byte(configurationJSON), &cfg); err != nil {
-		// We tolerate {}/non-object too: an operator may have authored
-		// `"platform": "youtube"` without braces. In that case treat the
-		// blob as a generic key/value block where top-level keys may be
-		// strings or arbitrary JSON — we only care about named keys.
-		var raw map[string]any
-		if err2 := json.Unmarshal([]byte(configurationJSON), &raw); err2 != nil {
-			return "", "", fmt.Errorf("configuration_json is neither a flat object nor a generic block: %v / %v", err, err2)
-		}
-		if v, ok := raw["platform"].(string); ok {
-			platform = v
-		}
-		if v, ok := raw["account_id"].(string); ok {
-			accountID = v
-		}
-		return platform, accountID, nil
-	}
-	platform = cfg["platform"]
-	accountID = cfg["account_id"]
-	return platform, accountID, nil
 }
 
 // mapSocialClientError translates a socialclient-typed sentinel into
