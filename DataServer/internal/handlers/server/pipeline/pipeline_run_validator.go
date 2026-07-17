@@ -234,19 +234,6 @@ func validatePublishAt(publishAt string, privacy string, cfg ValidationConfig) *
 		}
 	}
 
-	// Privacy/publish_at compatibility: when publish_at is set, the
-	// privacy status must be "private" or "scheduled" — YouTube does
-	// not honor scheduling for "public" or "unlisted" videos.
-	if privacy != "" {
-		p := strings.ToLower(privacy)
-		if p == "public" || p == "unlisted" {
-			return &internalValidationError{
-				Code:    "PRIVACY_INCOMPATIBLE_WITH_SCHEDULE",
-				Message: fmt.Sprintf(`privacy_status %q is incompatible with publish_at — use "private" or "scheduled"`, privacy),
-			}
-		}
-	}
-
 	return nil
 }
 

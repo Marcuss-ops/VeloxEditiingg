@@ -214,7 +214,7 @@ func validateVideoMetadata(metadata map[string]interface{}) error {
 	}
 	if privacy, ok := metadata["privacy_status"]; ok {
 		value, ok := privacy.(string)
-		if !ok || !isYouTubePrivacyStatus(value) {
+		if !ok || !isValidPrivacyStatus(value) {
 			return &validationError{field: "video_metadata.privacy_status", message: "must be private, unlisted, or public"}
 		}
 	}
@@ -230,7 +230,7 @@ func validateVideoMetadata(metadata map[string]interface{}) error {
 	return nil
 }
 
-func isYouTubePrivacyStatus(value string) bool {
+func isValidPrivacyStatus(value string) bool {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "private", "unlisted", "public":
 		return true
