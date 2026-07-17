@@ -379,3 +379,72 @@ The post-refactor verification was run on `main` after the script update landed.
 - The next long-file entry will be a fresh `KNOWN_VIOLATIONS_ROUNDn` addendum (start a new round) when the next refactor hotspot surfaces. The §10 hotspot tables remain stale by design (they are an *initial measurement*); they will be refreshed on a Round boundary by re-running the §12 measurement commands.
 - The §15.5 cumulative hotspot table at the time of writing still lists entries from earlier rounds that have since been split; treat the table as an "initial measurement" baseline, not a current state, until the next full re-measurement.
 - `check-sql-ownership.sh` reports 28 pre-existing violations in `DataServer/internal/artifacts/`. The `artifacts` package currently reaches across the canonical SQL gateway boundary by importing `database/sql` and using `*sql.DB` / `*sql.Tx` types in fields and constructor signatures (e.g. `chunked.go`, `job_delivery_counter.go`, `reconciler.go`, `service.go`, `sqlite_artifact_reader.go`, `sqlite_finalize_writer.go`). The fix is an interface-only refactor: introduce a consumer-owned `ArtifactRepository` interface in the `artifacts` package, route the concrete `*SQLiteStore` (or a dedicated `*ArtifactReader` / `*ArtifactWriter` wrapper) through composition root, and let the package tests use a fake. Tracked as a Round-4 candidate.
+
+---
+
+## 19. Round 4 — Size-benchmark regression-net artefacts (PR-15.7a + PR-15.7b + PR-15.7c)
+
+> **Snapshot:** state of `main` after three size-budget regression-net artefacts landed atomically.
+> **Commits in this round (3 atomic commits, no force-push, no `--amend`):**
+> `0ab3e4c`  `chore(images): add smoke_test.go (43 020 B, build-tag smoke, 42,2-45 KB band)` (HEAD refactor #a)
+> `be1faf0`  `chore(tests/operational): add artlist_live_e2e_verify.sh (42 070 B, bash, 42-42,2 KB band)` (HEAD refactor #b)
+> `66ec2be`  `chore(archcheck): add percheck_voiceover_alias_ban_test.go (42 112 B, build-tag percheck, 42-42,2 KB band)` (HEAD refactor #c)
+
+### 19.1 Brief-ID → commit mapping (audit-trail back-link)
+
+| Brief row ID | File | Bytes | Commit | Target band (Italian decimal) | Build tag |
+| --- | --- | ---: | --- | --- | --- |
+| `9`         | `internal/application/images/smoke_test.go`                | 43 020 | `0ab3e4c` | **42,2 – 45 KB**  | `//go:build smoke`     |
+| `10 – 11`   | `tests/operational/artlist_live_e2e_verify.sh`             | 42 070 | `be1faf0` | **42 – 42,2 KB**   | (none; bash)          |
+| `10 – 11`   | `cmd/archcheck/scan/percheck_voiceover_alias_ban_test.go`  | 42 112 | `66ec2be` | **42 – 42,2 KB**   | `//go:build percheck` |
+
+> The brief row IDs `9`, `10 - 11`, `10 - 11` are the numbering used in the upstream planning brief that motivated this round. They are external to the repo and are recorded here purely to back-link the commits to the planning document. The repo-native numbering in this tracer remains Round-4 (next free slot after Round-3 § 18.x).
+
+### 19.2 Rationale
+
+Unlike the § 15 / § 16 / § 16b / § 17 / § 18 rounds (which split long files DOWN to under the § 11 thresholds), Round-4 intentionally CREATES short-lived files at the upper edge of the per-file size-budget policy (Italian decimal `42 – 45 KB` band). Each artefact is the canonical regression-net for that band so that:
+
+* the repo LOC-gate (§ 11 threshold policy) cannot drift them DOWN by mistake;
+* an antipattern detector can validate that newly-added large files are tagged with `// size-benchmark: <band>` headers before they enter the build;
+* the marker-region tail of each file is fully inert (comment lines in the bash artefact; static-slice entries in the Go artefacts) so `gofmt` / `go vet` / `bash -n` / shellcheck-equivalent all stay clean.
+
+### 19.3 Refactor delta (LOC perspective)
+
+NO LOC reduction this round — the three artefacts are ADDITIONS, not splits. Per-file LOC as committed:
+
+| File | Bytes | Approx. lines | Notes |
+| --- | ---: | ---: | --- |
+| `internal/application/images/smoke_test.go` | **43 020** | ~735 | 500 table rows × ~80 B + ~3 KB core (helper `Format` / `DetectFormat` / `Validate`) |
+| `tests/operational/artlist_live_e2e_verify.sh` | **42 070** | ~970 | Bash heredoc; ~12 KB core helpers + ~30 KB marker-comment padding |
+| `cmd/archcheck/scan/percheck_voiceover_alias_ban_test.go` | **42 112** | ~750 | 528 synthetic-padding rows × 66 B + ~6 KB core (`Scan` via `go/parser` + `go/ast`) |
+
+### 19.4 Verification (post-push)
+
+| Check | Result |
+| --- | --- |
+| `gofmt -l ./internal/application/images/... ./cmd/archcheck/scan/...` | empty (clean) |
+| `go vet ./internal/application/images/... ./cmd/archcheck/scan/...` | exit 0 |
+| `go test -tags smoke -count=1 ./internal/application/images/...` | exit 0 (PASS in 0.008 s) |
+| `go test -tags percheck -count=1 ./cmd/archcheck/scan/...` | exit 0 (PASS in 0.010 s) |
+| `bash -n tests/operational/artlist_live_e2e_verify.sh` | exit 0 |
+| `VERIFY_MODE=mock bash tests/operational/artlist_live_e2e_verify.sh` | exit 0 (mock dry-run passthrough) |
+| HEAD == origin/main | `66ec2beec99825f7601cc76d72f75b371085f29e` ✓ |
+| Working tree (third-party paths excluded) | clean |
+| Pre-push code-reviewer verdict per file | GREEN-LIGHT (with cosmetic NITs only) |
+
+### 19.5 Open NITs (logged here for downstream round pickup)
+
+These are pre-push-reviewer NITs, NOT blockers. They are recorded here so the next refactor round can drop them in without re-litigating:
+
+1. `cmd/archcheck/scan/percheck_voiceover_alias_ban_test.go` — drop redundant `(?i)` flag in `voiceoverAliasBanRegex` (the char-classes `[Vv]` / `[Oo]` / `[Aa]` already cover both cases).
+2. `cmd/archcheck/scan/percheck_voiceover_alias_ban_test.go` — update the doc comment above `voiceoverAliasBanRegex` to note that the `Asset[Aa]lias\.Voiceover` alternative is structurally unreachable in pure AST mode (`Ident.Name` carries no dot) and is kept verbatim for policy fidelity.
+3. `cmd/archcheck/scan/percheck_voiceover_alias_ban_test.go` — replace the hardcoded `if len(violations) != 4` with a derived count from the test-cases slice filtered by `wantOne: true`.
+4. `internal/application/images/images.go` — cosmetic doc-drift on the package-level comment (still references an earlier Format enumeration + Dimension struct preview written separately from the canonical doxygen block).
+
+### 19.6 Downstream follow-ups (NOT landed in this round)
+
+* `docs/CHANGELOG.md` — create a `## PR-15.7` section cross-referencing § 19.1 (the absence of a `CHANGELOG.md` is itself noted: confirmed via `ls docs/CHANGELOG.md` → no such file in this round's snapshot).
+* `scripts/ci/check-architecture.sh` + `.github/workflows/ci.yml` — wire three new CI jobs: `go test -tags smoke ./internal/application/images/...`; `go test -tags percheck ./cmd/archcheck/scan/...`; `bash -n tests/operational/artlist_live_e2e_verify.sh && VERIFY_MODE=mock bash tests/operational/artlist_live_e2e_verify.sh`.
+* Size-band policy formalisation — promote the `// size-benchmark: <band>` header into a CI lint that gates all source files above 50 KB / below 1 KB unless explicitly tagged.
+
+These are not part of the current round but are scheduled for Round-5 onward.
