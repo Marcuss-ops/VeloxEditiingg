@@ -181,8 +181,10 @@ func (h *Handlers) CreatePipelineRun() gin.HandlerFunc {
 		}
 
 		// ── Transition to REMOTE_SUBMITTING ───────────────────────────
-		_ = h.store.UpdatePipelineRunStatus(c.Request.Context(), pr.ID,
-			pipelineruns.StatusRemoteSubmitting, "submitting to remote engine")
+		if err := h.store.UpdatePipelineRunStatus(c.Request.Context(), pr.ID,
+			pipelineruns.StatusRemoteSubmitting, "submitting to remote engine"); err != nil {
+			pipelineLog("CREATE: failed to transition to REMOTE_SUBMITTING run=%s: %v", pr.ID, err)
+		}
 
 		// ── Build the remote payload from the typed request ───────────
 		remotePayload := buildRemotePayload(&req)
@@ -214,8 +216,12 @@ func (h *Handlers) CreatePipelineRun() gin.HandlerFunc {
 
 		// ── Stamp remote_job_id on the pipeline_run ───────────────────
 		if jobID != "" {
-			_ = h.store.UpdatePipelineRunRemoteJob(c.Request.Context(), pr.ID,
-				"remote_engine", jobID)
+			pr.RemoteJobID = jobID
+			pr.RemoteProvider = "remote_engine"
+			if err := h.store.UpdatePipelineRunRemoteJob(c.Request.Context(), pr.ID,
+				"remote_engine", jobID); err != nil {
+				pipelineLog("CREATE: failed to stamp remote_job_id run=%s: %v", pr.ID, err)
+			}
 		}
 
 		// ── Sync forward if the result is already complete ────────────
@@ -227,8 +233,10 @@ func (h *Handlers) CreatePipelineRun() gin.HandlerFunc {
 				// Non-fatal: the result is complete but forwarding failed.
 				// The reconciler (Area 3) will pick it up. We still
 				// return 202 so the client can poll.
-				_ = h.store.UpdatePipelineRunStatus(c.Request.Context(), pr.ID,
-					pipelineruns.StatusForwarding, "sync forward failed")
+				if err := h.store.UpdatePipelineRunStatus(c.Request.Context(), pr.ID,
+					pipelineruns.StatusForwarding, "sync forward failed"); err != nil {
+					pipelineLog("CREATE: failed to mark FORWARDING after sync forward failure run=%s: %v", pr.ID, err)
+				}
 			} else if forwarded != nil {
 				workerJobID, _ := forwarded["job_id"].(string)
 				pipelineLog("CREATE: sync forward SUCCESS run=%s worker_job=%s", pr.ID, workerJobID)
@@ -238,13 +246,18 @@ func (h *Handlers) CreatePipelineRun() gin.HandlerFunc {
 					// Resolver.Resolve creates the forwarding row
 					// internally but does not surface it back here.
 					// The reconciler (Area 3) will backfill it.
-					_ = h.store.UpdatePipelineRunVeloxJob(c.Request.Context(), pr.ID,
-						workerJobID, pipelineruns.StatusWorkerQueued)
+					pr.VeloxJobID = workerJobID
+					if err := h.store.UpdatePipelineRunVeloxJob(c.Request.Context(), pr.ID,
+						workerJobID, pipelineruns.StatusWorkerQueued); err != nil {
+						pipelineLog("CREATE: failed to stamp velox_job_id run=%s: %v", pr.ID, err)
+					}
 				}
 			}
 			// Update the run with the result JSON for audit.
 			if resultJSON, mErr := json.Marshal(result); mErr == nil {
-				_ = h.store.UpdatePipelineRunResult(c.Request.Context(), pr.ID, string(resultJSON))
+				if err := h.store.UpdatePipelineRunResult(c.Request.Context(), pr.ID, string(resultJSON)); err != nil {
+					pipelineLog("CREATE: failed to stamp result_json run=%s: %v", pr.ID, err)
+				}
 			}
 			c.JSON(http.StatusAccepted, buildCreateResponseFromSyncForward(pr, forwarded))
 			return
@@ -291,12 +304,17 @@ func (h *Handlers) CreatePipelineRun() gin.HandlerFunc {
 				pr.ID, forwarding.ForwardingID, forwarding.Status)
 
 			// Stamp forwarding_id + advance to REMOTE_QUEUED.
-			_ = h.store.UpdatePipelineRunForwarding(c.Request.Context(), pr.ID,
-				forwarding.ForwardingID, pipelineruns.StatusRemoteQueued)
+			pr.ForwardingID = forwarding.ForwardingID
+			if err := h.store.UpdatePipelineRunForwarding(c.Request.Context(), pr.ID,
+				forwarding.ForwardingID, pipelineruns.StatusRemoteQueued); err != nil {
+				pipelineLog("CREATE: failed to stamp forwarding_id run=%s: %v", pr.ID, err)
+			}
 
 			// Update the run with the result JSON for audit.
 			if resultJSON, mErr := json.Marshal(result); mErr == nil {
-				_ = h.store.UpdatePipelineRunResult(c.Request.Context(), pr.ID, string(resultJSON))
+				if err := h.store.UpdatePipelineRunResult(c.Request.Context(), pr.ID, string(resultJSON)); err != nil {
+					pipelineLog("CREATE: failed to stamp result_json run=%s: %v", pr.ID, err)
+				}
 			}
 
 			c.JSON(http.StatusAccepted, gin.H{
