@@ -136,16 +136,17 @@ type Provider interface {
 // adapters can re-marshal it via the embedded raw if they need simple
 // field access without a dedicated struct.
 type Destination struct {
-	DestinationID     string
-	Provider          string
-	AccountID         string
-	FolderID          string
-	ChannelID         string
-	Language          string
-	Name              string
-	Enabled           bool
-	Configuration     []byte
-	ConfigurationJSON string
+	DestinationID        string
+	Provider             string
+	AccountID            string
+	FolderID             string
+	ChannelID            string
+	Language             string
+	Name                 string
+	Enabled              bool
+	Configuration        []byte
+	ConfigurationJSON    string
+	DeliveryMetadataJSON string
 }
 
 // Result captures the post-upload state. RemoteID/RemoteURL are the

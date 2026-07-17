@@ -256,6 +256,7 @@ type UploadConfig struct {
 	CategoryID       string   `json:"category_id"`
 	PrivacyStatus    string   `json:"privacy_status"` // private, unlisted, public
 	ThumbnailPath    string   `json:"thumbnail_path"`
+	PublishAt        string   `json:"publish_at,omitempty"`
 	ChannelID        string   `json:"channel_id"`
 	ChannelName      string   `json:"channel_name"`
 	IdempotencyToken string   `json:"idempotency_token,omitempty"`

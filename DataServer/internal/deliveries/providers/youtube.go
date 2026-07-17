@@ -6,6 +6,9 @@ package providers
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"strings"
 
 	"velox-server/internal/deliveries"
 	integrationsYouTube "velox-server/internal/integrations/youtube"
@@ -47,11 +50,9 @@ func (y *YouTubeProvider) Deliver(ctx context.Context, artifact *store.Artifact,
 		return nil, err
 	}
 
-	cfg := integrationsYouTube.UploadConfig{
-		Title:            artifact.ID,
-		Description:      "",
-		PrivacyStatus:    "private",
-		IdempotencyToken: deliveryID,
+	cfg, err := youtubeUploadConfig(artifact.ID, destination, deliveryID)
+	if err != nil {
+		return nil, err
 	}
 
 	uploadRes, err := y.service.UploadVideo(ctx, destination.ChannelID, filePath, cfg)
@@ -63,4 +64,54 @@ func (y *YouTubeProvider) Deliver(ctx context.Context, artifact *store.Artifact,
 		RemoteID:  uploadRes.VideoID,
 		RemoteURL: uploadRes.YouTubeURL,
 	}, nil
+}
+
+func youtubeUploadConfig(defaultTitle string, destination *deliveries.Destination, deliveryID string) (integrationsYouTube.UploadConfig, error) {
+	config := integrationsYouTube.UploadConfig{
+		Title:            defaultTitle,
+		PrivacyStatus:    "private",
+		ChannelID:        destination.ChannelID,
+		IdempotencyToken: deliveryID,
+	}
+	if strings.TrimSpace(destination.DeliveryMetadataJSON) == "" || destination.DeliveryMetadataJSON == "{}" {
+		return config, nil
+	}
+	var envelope map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(destination.DeliveryMetadataJSON), &envelope); err != nil {
+		return config, fmt.Errorf("%w: invalid delivery metadata: %v", deliveries.ErrProviderPermanent, err)
+	}
+	raw := json.RawMessage(destination.DeliveryMetadataJSON)
+	if nested, ok := envelope["video_metadata"]; ok {
+		raw = nested
+	}
+	var metadata struct {
+		Title         string   `json:"title"`
+		Description   string   `json:"description"`
+		Tags          []string `json:"tags"`
+		CategoryID    string   `json:"category_id"`
+		PrivacyStatus string   `json:"privacy_status"`
+		PublishAt     string   `json:"publish_at"`
+		ThumbnailPath string   `json:"thumbnail_path"`
+	}
+	if err := json.Unmarshal(raw, &metadata); err != nil {
+		return config, fmt.Errorf("%w: invalid video metadata: %v", deliveries.ErrProviderPermanent, err)
+	}
+	if strings.TrimSpace(metadata.Title) != "" {
+		config.Title = metadata.Title
+	}
+	config.Description = metadata.Description
+	config.Tags = metadata.Tags
+	config.CategoryID = metadata.CategoryID
+	if strings.TrimSpace(metadata.PrivacyStatus) != "" {
+		config.PrivacyStatus = strings.ToLower(strings.TrimSpace(metadata.PrivacyStatus))
+	}
+	config.PublishAt = strings.TrimSpace(metadata.PublishAt)
+	config.ThumbnailPath = strings.TrimSpace(metadata.ThumbnailPath)
+	// YouTube only accepts publishAt for a private video. Enforce the
+	// platform rule at the adapter boundary so a scheduled delivery cannot
+	// accidentally become public immediately.
+	if config.PublishAt != "" {
+		config.PrivacyStatus = "private"
+	}
+	return config, nil
 }

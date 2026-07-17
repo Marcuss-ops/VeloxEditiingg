@@ -36,6 +36,21 @@ func TestNormalizeSceneVideoPayloadPreservesAndValidatesVideoMetadata(t *testing
 	if metadata["channel_id"] != "channel-1" || metadata["publish_at"] != "2026-07-20T18:00:00+02:00" {
 		t.Fatalf("metadata was not preserved: %#v", metadata)
 	}
+	plan, ok := out["delivery_plan"].([]interface{})
+	if !ok || len(plan) != 1 {
+		t.Fatalf("delivery_plan = %#v", out["delivery_plan"])
+	}
+	planItem, ok := plan[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("delivery plan item = %#v", plan[0])
+	}
+	planMetadata, ok := planItem["metadata"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("delivery metadata = %#v", planItem["metadata"])
+	}
+	if _, ok := planMetadata["video_metadata"]; !ok {
+		t.Fatalf("delivery metadata does not carry video_metadata: %#v", planMetadata)
+	}
 }
 
 func TestNormalizeSceneVideoPayloadRejectsInvalidVideoMetadata(t *testing.T) {

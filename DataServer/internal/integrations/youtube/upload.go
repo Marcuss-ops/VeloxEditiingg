@@ -67,6 +67,7 @@ func (u *Uploader) UploadVideo(ctx context.Context, channelID string, videoPath 
 		},
 		Status: &youtube.VideoStatus{
 			PrivacyStatus:           config.PrivacyStatus,
+			PublishAt:               config.PublishAt,
 			SelfDeclaredMadeForKids: false,
 		},
 	}

@@ -282,6 +282,11 @@ func (r *DeliveryRunner) processLease(ctx context.Context, lease store.DeliveryL
 		}
 		return fmt.Errorf("hydrate destination: %w", err)
 	}
+	if metadata, metadataErr := r.dbStore.GetDeliveryPlanMetadata(ctx, lease.ArtifactID, lease.DestinationID); metadataErr != nil {
+		return fmt.Errorf("hydrate delivery metadata: %w", metadataErr)
+	} else {
+		dest.DeliveryMetadataJSON = metadata
+	}
 	artifact, err := r.hydrateArtifact(ctx, lease.ArtifactID)
 	if err != nil {
 		if err := r.dbStore.MarkDeliveryFailed(ctx, lease.DeliveryID, lease.RunnerID, lease.LeaseID, "ARTIFACT_NOT_FOUND", err.Error()); err != nil {

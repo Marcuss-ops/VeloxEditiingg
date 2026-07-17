@@ -138,8 +138,55 @@ func normalizeSceneVideoPayload(payloadMap map[string]interface{}) (map[string]i
 	if err != nil {
 		return nil, err
 	}
+	if err := attachVideoMetadataToDeliveryPlan(out); err != nil {
+		return nil, err
+	}
 	copyTimelinePayloadFields(out, payloadMap)
 	return out, nil
+}
+
+// attachVideoMetadataToDeliveryPlan copies the canonical video metadata into
+// each destination's persisted metadata envelope. The top-level
+// video_metadata remains the worker-facing contract; this nested copy is the
+// delivery-facing snapshot stored in job_delivery_plans.metadata_json so a
+// later DeliveryRunner process can reconstruct the upload without reading a
+// volatile request object.
+func attachVideoMetadataToDeliveryPlan(payloadMap map[string]interface{}) error {
+	metadata, ok := payloadMap["video_metadata"].(map[string]interface{})
+	if !ok || len(metadata) == 0 {
+		return nil
+	}
+	rawPlan, ok := payloadMap["delivery_plan"]
+	if !ok || rawPlan == nil {
+		return nil
+	}
+	attach := func(entry map[string]interface{}) {
+		entryMetadata, ok := entry["metadata"].(map[string]interface{})
+		if !ok {
+			entryMetadata = map[string]interface{}{}
+			entry["metadata"] = entryMetadata
+		}
+		if _, exists := entryMetadata["video_metadata"]; !exists {
+			entryMetadata["video_metadata"] = cloneMetadataMap(metadata)
+		}
+	}
+	switch plan := rawPlan.(type) {
+	case []interface{}:
+		for i, item := range plan {
+			entry, ok := item.(map[string]interface{})
+			if !ok {
+				return &validationError{field: fmt.Sprintf("delivery_plan[%d]", i), message: "must be an object"}
+			}
+			attach(entry)
+		}
+	case []map[string]interface{}:
+		for _, entry := range plan {
+			attach(entry)
+		}
+	case map[string]interface{}:
+		attach(plan)
+	}
+	return nil
 }
 
 func validateVideoMetadata(metadata map[string]interface{}) error {

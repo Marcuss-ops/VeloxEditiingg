@@ -20,6 +20,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -82,6 +83,32 @@ type DeliveryLease struct {
 	ConfigJSON    string
 	ArtifactID    string
 	DestinationID string
+}
+
+// GetDeliveryPlanMetadata returns the immutable per-destination metadata
+// snapshot associated with an artifact's job delivery plan. Missing metadata
+// is represented as an empty JSON object so providers can safely apply their
+// defaults.
+func (s *SQLiteStore) GetDeliveryPlanMetadata(ctx context.Context, artifactID, destinationID string) (string, error) {
+	if strings.TrimSpace(artifactID) == "" || strings.TrimSpace(destinationID) == "" {
+		return "", fmt.Errorf("store: GetDeliveryPlanMetadata: artifact_id and destination_id are required")
+	}
+	var metadata string
+	err := s.db.QueryRowContext(ctx, `
+		SELECT COALESCE(jdp.metadata_json, '{}')
+		FROM job_delivery_plans jdp
+		JOIN artifacts a ON a.job_id = jdp.job_id
+		WHERE a.id = ? AND jdp.destination_id = ? AND jdp.enabled = 1`, artifactID, destinationID).Scan(&metadata)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "{}", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("store: GetDeliveryPlanMetadata: %w", err)
+	}
+	if strings.TrimSpace(metadata) == "" {
+		return "{}", nil
+	}
+	return metadata, nil
 }
 
 // ErrDeliveryNoRow is returned when the lookup misses.
