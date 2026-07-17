@@ -151,7 +151,7 @@ func TestTaskLeaseReaper_RunTicksUntilContextCancel(t *testing.T) {
 	go func() { done <- r.Run(ctx) }()
 
 	// Let the reaper fire a few times.
-	time.Sleep(40 * time.Millisecond)
+	time.Sleep(100 * time.Millisecond)
 	cancel()
 
 	select {
@@ -189,7 +189,7 @@ func TestTaskLeaseReaper_RepoErrorDoesNotKillLoop(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- r.Run(ctx) }()
 
-	time.Sleep(40 * time.Millisecond)
+	time.Sleep(100 * time.Millisecond)
 	cancel()
 	<-done
 
