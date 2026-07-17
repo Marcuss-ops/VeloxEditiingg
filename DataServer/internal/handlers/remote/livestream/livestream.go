@@ -34,7 +34,6 @@ type LiveStreamConfig struct {
 	LatencyPreference  string    `json:"latency_preference"`
 	ChannelID          string    `json:"channel_id"`
 	BroadcastID        string    `json:"broadcast_id,omitempty"`
-	YouTubeStreamID    string    `json:"youtube_stream_id,omitempty"`
 }
 
 type LivestreamHandlers struct {
@@ -85,7 +84,6 @@ func (h *LivestreamHandlers) CreateStream(c *gin.Context) {
 		"duration":           req.Duration, "max_viewers": req.MaxViewers,
 		"latency_preference": req.LatencyPreference,
 		"channel_id":         req.ChannelID, "broadcast_id": req.BroadcastID,
-		"youtube_stream_id": req.YouTubeStreamID,
 	}
 	if err := h.dbStore.UpsertLivestream(store.ConfigToRow(cfg)); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": err.Error()})

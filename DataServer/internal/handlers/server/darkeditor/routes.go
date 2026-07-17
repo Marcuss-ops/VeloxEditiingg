@@ -25,9 +25,6 @@ func RegisterAPIRoutes(r *gin.Engine, h *Handler) {
 		// Upscaling
 		api.POST("/api/upscale", h.UpscaleImage)
 
-		// YouTube thumbnail grab
-		api.POST("/api/tools/youtube_grab", h.YouTubeGrab)
-
 		// ============== PROJECTS API ==============
 
 		api.GET("/api/projects", h.ListProjects)

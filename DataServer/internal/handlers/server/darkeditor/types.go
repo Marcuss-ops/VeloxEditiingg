@@ -67,17 +67,6 @@ type UpscaleResponse struct {
 	SavedAt  string `json:"saved_at,omitempty"`
 }
 
-// YouTubeGrabRequest is the request for YouTube thumbnail grab
-type YouTubeGrabRequest struct {
-	URL string `json:"url"`
-}
-
-// YouTubeGrabResponse is the response for YouTube thumbnail grab
-type YouTubeGrabResponse struct {
-	Filename string `json:"filename"`
-	VideoID  string `json:"video_id"`
-}
-
 // ============== PROJECT TYPES ==============
 
 // SaveProjectRequest is the request for saving a project

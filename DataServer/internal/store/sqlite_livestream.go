@@ -30,8 +30,7 @@ func (s *SQLiteStore) CreateLivestreamTable() error {
 			max_viewers      INTEGER NOT NULL DEFAULT 0,
 			latency_pref     TEXT NOT NULL DEFAULT 'normal',
 			channel_id       TEXT NOT NULL DEFAULT '',
-			broadcast_id     TEXT NOT NULL DEFAULT '',
-			yt_stream_id     TEXT NOT NULL DEFAULT ''
+			broadcast_id     TEXT NOT NULL DEFAULT ''
 		)
 	`)
 	return err
@@ -61,7 +60,6 @@ type LivestreamRow struct {
 	LatencyPref  string `json:"latency_pref"`
 	ChannelID    string `json:"channel_id"`
 	BroadcastID  string `json:"broadcast_id"`
-	YTStreamID   string `json:"yt_stream_id"`
 }
 
 // UpsertLivestream inserts or replaces a livestream record.
@@ -82,19 +80,18 @@ func (s *SQLiteStore) UpsertLivestream(row *LivestreamRow) error {
 	if row.AutoStop {
 		autoStop = 1
 	}
-	_, err := s.db.Exec(`
-		INSERT OR REPLACE INTO livestreams
+	_, err := s.db.Exec(`		 INSERT OR REPLACE INTO livestreams
 			(id, name, platform, stream_key, stream_url, description, is_for_kids,
 			 video_bitrate, audio_bitrate, status, video_order, protocol,
 			 auto_start, auto_stop, scheduled_start, scheduled_end, created_at,
-			 duration, max_viewers, latency_pref, channel_id, broadcast_id, yt_stream_id)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			 duration, max_viewers, latency_pref, channel_id, broadcast_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		row.ID, row.Name, row.Platform, row.StreamKey, row.StreamURL,
 		row.Description, isForKids, row.VideoBitrate, row.AudioBitrate,
 		row.Status, row.VideoOrder, row.Protocol, autoStart, autoStop,
 		row.SchedStart, row.SchedEnd, row.CreatedAt, row.Duration,
-		row.MaxViewers, row.LatencyPref, row.ChannelID, row.BroadcastID, row.YTStreamID,
+		row.MaxViewers, row.LatencyPref, row.ChannelID, row.BroadcastID,
 	)
 	return err
 }
@@ -109,7 +106,7 @@ func (s *SQLiteStore) ListLivestreams() ([]*LivestreamRow, error) {
 		SELECT id, name, platform, stream_key, stream_url, description, is_for_kids,
 		       video_bitrate, audio_bitrate, status, video_order, protocol,
 		       auto_start, auto_stop, scheduled_start, scheduled_end, created_at,
-		       duration, max_viewers, latency_pref, channel_id, broadcast_id, yt_stream_id
+		       duration, max_viewers, latency_pref, channel_id, broadcast_id
 		FROM livestreams
 		ORDER BY created_at DESC
 	`)
@@ -127,7 +124,7 @@ func (s *SQLiteStore) ListLivestreams() ([]*LivestreamRow, error) {
 			&r.Description, &isForKids, &r.VideoBitrate, &r.AudioBitrate,
 			&r.Status, &r.VideoOrder, &r.Protocol, &autoStart, &autoStop,
 			&r.SchedStart, &r.SchedEnd, &r.CreatedAt, &r.Duration,
-			&r.MaxViewers, &r.LatencyPref, &r.ChannelID, &r.BroadcastID, &r.YTStreamID,
+			&r.MaxViewers, &r.LatencyPref, &r.ChannelID, &r.BroadcastID,
 		); err != nil {
 			return nil, fmt.Errorf("scan livestream: %w", err)
 		}
@@ -151,14 +148,14 @@ func (s *SQLiteStore) GetLivestream(id string) (*LivestreamRow, error) {
 		SELECT id, name, platform, stream_key, stream_url, description, is_for_kids,
 		       video_bitrate, audio_bitrate, status, video_order, protocol,
 		       auto_start, auto_stop, scheduled_start, scheduled_end, created_at,
-		       duration, max_viewers, latency_pref, channel_id, broadcast_id, yt_stream_id
+		       duration, max_viewers, latency_pref, channel_id, broadcast_id
 		FROM livestreams WHERE id = ?
 	`, id).Scan(
 		&r.ID, &r.Name, &r.Platform, &r.StreamKey, &r.StreamURL,
 		&r.Description, &isForKids, &r.VideoBitrate, &r.AudioBitrate,
 		&r.Status, &r.VideoOrder, &r.Protocol, &autoStart, &autoStop,
 		&r.SchedStart, &r.SchedEnd, &r.CreatedAt, &r.Duration,
-		&r.MaxViewers, &r.LatencyPref, &r.ChannelID, &r.BroadcastID, &r.YTStreamID,
+		&r.MaxViewers, &r.LatencyPref, &r.ChannelID, &r.BroadcastID,
 	)
 	if err != nil {
 		return nil, err
@@ -206,7 +203,6 @@ func ToLivestreamConfigs(rows []*LivestreamRow) []map[string]interface{} {
 			"latency_preference":   r.LatencyPref,
 			"channel_id":           r.ChannelID,
 			"broadcast_id":         r.BroadcastID,
-			"youtube_stream_id":    r.YTStreamID,
 		}
 	}
 	return configs
@@ -280,9 +276,6 @@ func ConfigToRow(cfg map[string]interface{}) *LivestreamRow {
 	}
 	if v, ok := cfg["broadcast_id"].(string); ok {
 		r.BroadcastID = v
-	}
-	if v, ok := cfg["youtube_stream_id"].(string); ok {
-		r.YTStreamID = v
 	}
 	return r
 }
