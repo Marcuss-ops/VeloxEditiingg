@@ -48,6 +48,17 @@ func (u *Uploader) UploadVideo(ctx context.Context, channelID string, videoPath 
 		return nil, fmt.Errorf("failed to get YouTube service: %w", err)
 	}
 
+	// A worker can crash after YouTube accepted the upload but before the
+	// delivery row is marked SUCCEEDED. Search by the deterministic delivery
+	// tag before creating a new remote video.
+	if config.IdempotencyToken != "" {
+		if existing, lookupErr := findExistingDeliveryVideo(ctx, service, channelID, config.IdempotencyToken); lookupErr != nil {
+			return nil, fmt.Errorf("failed to verify existing delivery: %w", lookupErr)
+		} else if existing != nil {
+			return existing, nil
+		}
+	}
+
 	// Open the video file
 	file, err := os.Open(videoPath)
 	if err != nil {
@@ -132,6 +143,42 @@ func (u *Uploader) UploadVideo(ctx context.Context, channelID string, videoPath 
 	log.Printf("[OK] YouTube upload completed: channel=%s video_id=%s url=%s", channelID, result.VideoID, result.YouTubeURL)
 	u.service.quotaManager.TrackUsage(CostUpload)
 	return result, nil
+}
+
+func findExistingDeliveryVideo(ctx context.Context, service *youtube.Service, channelID, token string) (*UploadResult, error) {
+	needle := "velox-delivery:" + token
+	search, err := service.Search.List([]string{"id"}).ChannelId(channelID).Q(needle).Type("video").MaxResults(50).Context(ctx).Do()
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]string, 0, len(search.Items))
+	for _, item := range search.Items {
+		if item != nil && item.Id != nil && item.Id.VideoId != "" {
+			ids = append(ids, item.Id.VideoId)
+		}
+	}
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	videos, err := service.Videos.List([]string{"snippet", "status"}).Id(ids...).Context(ctx).Do()
+	if err != nil {
+		return nil, err
+	}
+	for _, video := range videos.Items {
+		if video == nil || video.Id == "" || video.Snippet == nil {
+			continue
+		}
+		for _, tag := range video.Snippet.Tags {
+			if tag == needle {
+				return &UploadResult{
+					ID: video.Id, VideoID: video.Id,
+					Status:     "uploaded",
+					YouTubeURL: fmt.Sprintf("https://www.youtube.com/watch?v=%s", video.Id),
+				}, nil
+			}
+		}
+	}
+	return nil, nil
 }
 
 // SetThumbnail sets the thumbnail for a YouTube video
