@@ -185,7 +185,7 @@ Run() loop (ticker ogni 5s)
        └─ ClaimDeliveries (UPDATE+RETURNING atomico)
             └─ Per ogni DeliveryLease reclamato (max Concurrency=2)
                  └─ processLease()
-                      ├─ Risolve provider via Registry (youtube | drive)
+                      ├─ Risolve provider via Registry (social_gateway | drive)
                       ├─ Hydrata Destination + Artifact dal DB
                       ├─ Avvia renewDeliveryLeaseLoop (heartbeat ogni lease/3 ≈ 100s)
                       ├─ Provider.Deliver()
@@ -513,7 +513,7 @@ WHERE delivery_id = '<DELIVERY_ID>';"
 ### Log Delivery Runner
 ```bash
 sudo journalctl -u velox-server --since "5 minutes ago" --no-pager |
-  grep -iE "delivery|DRIVE|YOUTUBE|blobstore|ReadFinal|Upload"
+  grep -iE "delivery|DRIVE|SOCIAL|blobstore|ReadFinal|Upload|socialclient"
 ```
 
 ### Ricostruzione Worker
@@ -541,6 +541,16 @@ cd `<repo-root>/DataServer` && go build -o /tmp/velox-server ./cmd/server
 | `VELOX_STAGING_DIR` | `$VELOX_DATA_DIR/staging` | Staging temporaneo upload |
 | `VELOX_DRIVE_CLIENT_ID` | — | Client ID OAuth Google Drive |
 | `VELOX_DRIVE_CLIENT_SECRET` | — | Client Secret OAuth Google Drive |
+| `SOCIAL_API_URL` | — | Base URL del Social API esterno (es. `https://social.example.com`). Letto da `socialclient/internal/socialclient/config.go::ConfigFromEnv()`. |
+| `SOCIAL_API_TOKEN` | — | Bearer inviato come `Authorization: Bearer <token>` verso la Social API. **SEGRETO**: popolato da `vault_velox_social_api_token` nel vault ansible. |
+| `SOCIAL_API_TIMEOUT_MS` | `30000` | Timeout singola chiamata HTTP verso la Social API (default 30s). |
+| `SOCIAL_API_RETRIES` | `3` | Hint di retry (Velox-side BackoffSchedule è canonico). |
+| `SOCIAL_CALLBACK_BASE_URL` | — | URL pubblicamente raggiungibile di Velox, usato per costruire `download_url` e `callback_url` delle delivery. |
+| `SOCIAL_ARTIFACT_PUBLIC_URL` | — | (forward-looking) CDN pubblico per fetch artefatti quando non si usa il meccanismo callback. |
+| `SOCIAL_WEBHOOK_SECRET` | — | (forward-looking, **SEGRETO**) HMAC per i callback `social_repo` → Velox. Da `vault_velox_social_webhook_secret`. |
+| `SOCIAL_GATEWAY_URL` (legacy) | — | Alias deprecato di `SOCIAL_API_URL` per uno solo ciclo di release. |
+| `SOCIAL_GATEWAY_API_KEY` (legacy) | — | Alias deprecato di `SOCIAL_API_TOKEN`. **SEGRETO**: `vault_velox_social_gateway_api_key`. |
+| `SOCIAL_GATEWAY_CALLBACK_BASE_URL` (legacy) | — | Alias deprecato di `SOCIAL_CALLBACK_BASE_URL`. |
 
 ### Worker (`/etc/velox-worker.env`)
 | Variabile | Descrizione |

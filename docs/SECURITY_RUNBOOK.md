@@ -63,9 +63,11 @@ These are operator-populated, never committed in plaintext form (the
 
 - `VELOX_ADMIN_TOKEN` (min 32 chars)
 - `VELOX_REMOTE_ENGINE_TOKEN`
-- `VELOX_SOCIAL_API_TOKEN` (bearer for the external Social API; replaces
-  the retired `VELOX_YT_OAUTH_TOKEN_KEY` whose YouTube-specific token
-  rotation is now the Social API repo's concern, not Velox's)
+- `SOCIAL_API_TOKEN` (bearer for the external **Social API**, source of
+  truth for any social-platform concern — OAuth, channels, tokens,
+  publish state — that was previously owned by Velox's `VELOX_YT_*`
+  YouTube-domain env set. The full YouTube-specific rotation story is
+  now the Social API repo's concern, not Velox's.)
 - `WORKER_TOKEN` / `VELOX_WORKER_TOKEN` (per-host worker credential)
 - `VELOX_NVIDIA_API_KEY` (optional, only when GPU inference used)
 
@@ -120,10 +122,19 @@ re-used for a different project.
 
 ### 3.4 operator-managed env
 
-`VELOX_ADMIN_TOKEN`, `WORKER_TOKEN`, `VELOX_YT_OAUTH_TOKEN_KEY`,
+`VELOX_ADMIN_TOKEN`, `WORKER_TOKEN`, `SOCIAL_API_TOKEN`
+(populated via `vault_velox_social_api_token` in the ansible vault —
+see `deploy/group_vars/vault.yml.example`),
 `VELOX_REMOTE_ENGINE_TOKEN`, `VELOX_NVIDIA_API_KEY`: operator-managed
 under `deploy/group_vars/vault.yml` (ansible-vault-encrypted). Use
 `ansible-vault rekey` to rotate. No external issuer involved.
+
+Historical note: the YouTube-domain env `VELOX_YT_OAUTH_TOKEN_KEY` is
+**retired**. Any operator carrying that env in their local
+`/etc/velox-server.env` or vault is on a pre-removal hostname; the
+modern equivalent is `vault_velox_social_api_token` in the ansible vault,
+which renders `SOCIAL_API_TOKEN` on the master. Cross-reference:
+deploy notes § 5.2 under `deploy/group_vars/vault.yml.example`.
 
 ---
 
