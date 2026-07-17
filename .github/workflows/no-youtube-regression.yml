@@ -1,0 +1,161 @@
+# =============================================================================
+# no-youtube-regression.yml — YouTube-domain CI guard.
+#
+# Purpose:
+#   Forbid re-introduction of any direct Velox-side YouTube integration after
+#   the YouTube → Social API closure (PR-15.8, PR-15.9, PR-15.10 + Residuo 4).
+#   Migration 090_drop_youtube_domain.sql + 091_opaque_destination.sql +
+#   092_rename_social_to_external_destination_id.sql + the typed model +
+#   validator + runner + socialclient + provider chains already CLOSED the
+#   domain. This workflow exists to keep it closed.
+#
+# Forbidden patterns (any one fires a failure):
+#   * google.golang.org/api/youtube       — direct YouTube Go API import
+#   * youtubeanalytics                    — direct YouTube analytics import
+#   * VELOX_YOUTUBE                       — deprecated env var prefix
+#   * youtube_oauth                       — OAuth subdomain
+#   * internal/integrations/youtube       — old integration directory
+#   * handlers/server/youtube             — old handler directory
+#   * providers.NewYouTubeProvider        — old provider constructor call
+#
+# Exclusions (pathspec-level, transparent):
+#   * .github/workflows/no-youtube-regression.yml
+#     SELF-EXCLUSION: this workflow file's header rationale + REGEX env
+#     var + Hints comment enumerate the forbidden disjuncts verbatim.
+#     Audit the rest of the repo; exempt this file.
+#   * DataServer/internal/store/migrations/      — historical SQL migrations
+#     carry forward-only YouTube references under the 003_youtube_*.sql /
+#     011_youtube_oauth_tokens.sql / 012_youtube_groups_rename.sql chain
+#     that MUST NOT be edited (violates the forward-only invariant of
+#     DataServer/internal/store/migrations/README.md).
+#   * **/socialcontract/**                       — Social API contract tests
+#     (forward-looking — these paths are reserved for the social_repo
+#     boundary tests that may legitimately reference YouTube for
+#     negative-pinning assertions).
+#   * **/social_contract/**                      — same rationale (alt
+#     casing/conventions).
+#   * CHANGELOG.md + docs/**                     — historical record:
+#     PR-15.8 / PR-15.9 / PR-15.10 / PR-15.14 document the closure
+#     story and legitimately cite "internal/integrations/youtube",
+#     "providers.NewYouTubeProvider", etc. as REMOVED artefacts. The
+#     audit MUST NOT trip on documented-history.
+#   * MILESTONE_PR_YOUTUBE_SOCIAL_SEPARATION.md  — project-root milestone
+#     doc that intentionally cites the audit pattern verbatim as a
+#     record of "this string should never re-appear in active code".
+#   * deploy/group_vars/vault.yml.example        — operator-facing vault
+#     template whose comment explicitly warns "do not introduce
+#     VELOX_YOUTUBE_* or similar". The warning itself cites the regex
+#     string as FORBIDDEN — it is a positive reference, not a code
+#     intro of the deprecated pattern.
+#
+# Two-file carve-out (with explanatory comment):
+#   * DataServer/internal/jobs/enqueue/delivery_plan_validator.go
+#   * DataServer/internal/store/delivery_plan_payload.go
+#     Both files carry a NOTE block documenting the canonical rename
+#     intent (PR-15.8: "YouTubeGroup → DestinationGroupID, ... "). The
+#     literal `youtube_oauth_tokens` is cited as a DROPPED legacy table
+#     ("Velox no longer SELECTs youtube_channels, youtube_oauth_tokens,
+#     or youtube_groups"). The carve-out is intentional — the NOTE is a
+#     documentation block for future contributors who would otherwise
+#     try to reintroduce a YouTube-prefixed field. When (and only when)
+#     a future contributor removes those NOTE blocks, they MUST also
+#     delete the corresponding carve-out exclusions inline below.
+#
+# Triggers:
+#   * push to main                                 — immediate fail-fast
+#   * pull_request to main                         — pre-merge gating
+#     (NO paths-ignore — every PR runs the audit so a doc-only edit
+#      introducing a YouTube pattern cannot slip through silently)
+#   * weekly Monday 06:00 UTC drift detector       — same model as
+#     dependency-scan.yml (catches newly-disclosed YouTube patterns
+#     in PRs that bypass direct CI somehow).
+#   * workflow_dispatch                            — manual re-run.
+#
+# Status check name in PR UI: "no-youtube-regression".
+# Author: Velox regression-guard initiative (Residuo 4 closure).
+# =============================================================================
+
+name: no-youtube-regression
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '0 6 * * 1'  # weekly Monday 06:00 UTC drift detector
+  workflow_dispatch:
+
+concurrency:
+  group: no-youtube-regression-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: YouTube regression guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout (full history)
+        uses: actions/checkout@v4
+        with:
+          # fetch-depth: 0 makes the full history searchable so future
+          # maintainers can `git blame` any match the audit surfaced.
+          fetch-depth: 0
+
+      - name: Run YouTube regression audit
+        env:
+          # Verbatim regex from the user-provided spec.
+          REGEX: 'google\.golang\.org/api/youtube|youtubeanalytics|VELOX_YOUTUBE|youtube_oauth|internal/integrations/youtube|handlers/server/youtube|providers.NewYouTubeProvider'
+        run: |
+          set -euo pipefail
+          echo "🔍 Running YouTube regression audit (active code paths)..."
+
+          matches=$(
+            git grep -nE "${REGEX}" -- \
+              ':!.github/workflows/no-youtube-regression.yml' \
+              ':!DataServer/internal/store/migrations/' \
+              ':!**/socialcontract/**' \
+              ':!**/social_contract/**' \
+              ':!CHANGELOG.md' \
+              ':!docs/**' \
+              ':!MILESTONE_PR_YOUTUBE_SOCIAL_SEPARATION.md' \
+              ':!deploy/group_vars/vault.yml.example' \
+              ':!DataServer/internal/jobs/enqueue/delivery_plan_validator.go' \
+              ':!DataServer/internal/store/delivery_plan_payload.go' \
+            || true
+          )
+
+          if [[ -n "${matches}" ]]; then
+            echo
+            echo "❌ YouTube regression detected:"
+            echo
+            echo "Removed-from-Velox patterns surfaced in active code / config."
+            echo "Pick the migrator for the caught disjunct:"
+            echo
+            echo "${matches}"
+            echo
+            echo "Hints (per disjunct):"
+            echo "  * google.golang.org/api/youtube | youtubeanalytics"
+            echo "      direct Go imports — run:"
+            echo "        cd DataServer && go mod tidy"
+            echo "      and remove the dependency."
+            echo "  * VELOX_YOUTUBE"
+            echo "      env var prefix — migrate to canonical SOCIAL_API_* names."
+            echo "      See PR-15.10 (deprecation cycle closed)."
+            echo "  * youtube_oauth"
+            echo "      OAuth subdomain — closures live in PR-15.8 + PR-15.9."
+            echo "  * internal/integrations/youtube"
+            echo "      legacy integration directory — closures live in PR-15.8."
+            echo "  * handlers/server/youtube"
+            echo "      legacy handler directory — closures live in PR-15.8."
+            echo "  * providers.NewYouTubeProvider"
+            echo "      legacy provider constructor — use social_gateway."
+            exit 1
+          fi
+
+          echo
+          echo "✅ No YouTube regression found — clean."
