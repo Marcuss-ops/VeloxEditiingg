@@ -51,7 +51,6 @@ func (s *SQLiteStore) InsertPipelineRun(ctx context.Context, pr *pipelineruns.Pi
 	if pr.IdempotencyKey == "" {
 		return nil, fmt.Errorf("store: InsertPipelineRun: idempotency_key is required")
 	}
-	now := time.Now().UTC().Format(time.RFC3339)
 	if pr.CreatedAt.IsZero() {
 		pr.CreatedAt = time.Now().UTC()
 	}
@@ -92,7 +91,6 @@ func (s *SQLiteStore) InsertPipelineRun(ctx context.Context, pr *pipelineruns.Pi
 
 	affected, _ := res.RowsAffected()
 	if affected == 1 {
-		_ = now // suppress unused warning on the now helper
 		return &InsertPipelineRunResult{Created: true, Run: pr}, nil
 	}
 
@@ -280,6 +278,30 @@ func (s *SQLiteStore) UpdatePipelineRunStatus(ctx context.Context, id string, st
 	result, err := s.db.ExecContext(ctx, stmt, args...)
 	if err != nil {
 		return fmt.Errorf("store: UpdatePipelineRunStatus: %w", err)
+	}
+	n, _ := result.RowsAffected()
+	if n == 0 {
+		return ErrPipelineRunNoRow
+	}
+	return nil
+}
+
+// UpdatePipelineRunVeloxJob stamps the velox_job_id onto an existing
+// pipeline_run and optionally advances the status. Used after a sync
+// forward succeeds and the Velox job is created. Updates updated_at.
+func (s *SQLiteStore) UpdatePipelineRunVeloxJob(ctx context.Context, id, veloxJobID string, status pipelineruns.Status) error {
+	if id == "" {
+		return fmt.Errorf("store: UpdatePipelineRunVeloxJob: empty id")
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	result, err := s.db.ExecContext(ctx,
+		`UPDATE pipeline_runs
+		 SET velox_job_id = ?, status = ?, updated_at = ?
+		 WHERE id = ?`,
+		veloxJobID, string(status), now, id,
+	)
+	if err != nil {
+		return fmt.Errorf("store: UpdatePipelineRunVeloxJob: %w", err)
 	}
 	n, _ := result.RowsAffected()
 	if n == 0 {

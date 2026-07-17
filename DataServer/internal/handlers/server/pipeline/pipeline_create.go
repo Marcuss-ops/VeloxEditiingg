@@ -206,7 +206,7 @@ func (h *Handlers) CreatePipelineRun() gin.HandlerFunc {
 
 		// ── Extract remote job id ─────────────────────────────────────
 		jobID := firstStringResolver(result, "job_id", "trace_id", "id")
-		status := firstStringResolver(result, "status", "")
+		status := firstStringResolver(result, "status")
 		if jobID != "" {
 			pipelineLog("CREATE: remote response run=%s job_id=%s status=%s",
 				pr.ID, jobID, status)
@@ -233,15 +233,20 @@ func (h *Handlers) CreatePipelineRun() gin.HandlerFunc {
 				workerJobID, _ := forwarded["job_id"].(string)
 				pipelineLog("CREATE: sync forward SUCCESS run=%s worker_job=%s", pr.ID, workerJobID)
 				if workerJobID != "" {
-					_ = h.store.UpdatePipelineRunForwarding(c.Request.Context(), pr.ID,
-						"", pipelineruns.StatusWorkerQueued)
+					// Stamp velox_job_id + advance to WORKER_QUEUED.
+					// forwarding_id is left empty in the sync path —
+					// Resolver.Resolve creates the forwarding row
+					// internally but does not surface it back here.
+					// The reconciler (Area 3) will backfill it.
+					_ = h.store.UpdatePipelineRunVeloxJob(c.Request.Context(), pr.ID,
+						workerJobID, pipelineruns.StatusWorkerQueued)
 				}
 			}
 			// Update the run with the result JSON for audit.
 			if resultJSON, mErr := json.Marshal(result); mErr == nil {
 				_ = h.store.UpdatePipelineRunResult(c.Request.Context(), pr.ID, string(resultJSON))
 			}
-			c.JSON(http.StatusAccepted, buildCreateResponseFromRemote(pr, result))
+			c.JSON(http.StatusAccepted, buildCreateResponseFromSyncForward(pr, forwarded))
 			return
 		}
 
@@ -343,9 +348,12 @@ func buildCreateResponse(pr *pipelineruns.PipelineRun, isDuplicate bool) gin.H {
 	return resp
 }
 
-// buildCreateResponseFromRemote builds the 202 response when the remote
-// engine returned a complete result that was synchronously forwarded.
-func buildCreateResponseFromRemote(pr *pipelineruns.PipelineRun, result map[string]interface{}) gin.H {
+// buildCreateResponseFromSyncForward builds the 202 response when the
+// remote engine returned a complete result that was synchronously
+// forwarded to the Velox worker queue. `forwarded` is the worker
+// response map returned by forwardPipelineResultToWorker (which wraps
+// Resolver.Resolve's ResolveOutput.Response).
+func buildCreateResponseFromSyncForward(pr *pipelineruns.PipelineRun, forwarded map[string]interface{}) gin.H {
 	resp := gin.H{
 		"ok":              true,
 		"pipeline_run_id": pr.ID,
@@ -354,11 +362,11 @@ func buildCreateResponseFromRemote(pr *pipelineruns.PipelineRun, result map[stri
 		"status_url":      "/api/v1/pipeline-runs/" + pr.ID,
 		"is_duplicate":    false,
 	}
-	if jobID, ok := result["job_id"].(string); ok && jobID != "" {
-		resp["remote_job_id"] = jobID
+	if pr.RemoteJobID != "" {
+		resp["remote_job_id"] = pr.RemoteJobID
 	}
-	if workerResult, ok := result["worker_forward_result"].(map[string]interface{}); ok {
-		if wjID, ok := workerResult["job_id"].(string); ok && wjID != "" {
+	if forwarded != nil {
+		if wjID, ok := forwarded["job_id"].(string); ok && wjID != "" {
 			resp["velox_job_id"] = wjID
 		}
 	}
