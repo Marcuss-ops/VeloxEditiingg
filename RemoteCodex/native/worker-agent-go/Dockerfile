@@ -155,7 +155,7 @@ ENV VELOX_HEALTH_PORT=8081
 WORKDIR /app
 
 # Runtime deps ONLY. Nothing build-time belongs here.
-#   * ca-certificates: outbound TLS (master handshake + YouTube API).
+#   * ca-certificates: outbound TLS (master handshake + Social API / Unity builds remote API).
 #   * ffmpeg:          runtime dep of the video engine.
 #   * curl:            HEALTHCHECK below.
 #   * libstdc++6:      C++ engine is dynamically linked against libstdc++

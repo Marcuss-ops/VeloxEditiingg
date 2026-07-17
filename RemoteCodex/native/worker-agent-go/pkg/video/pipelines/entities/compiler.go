@@ -18,7 +18,7 @@ type Request struct {
 	Script       string
 	AudioURL     string
 	EntityStyle  string // "image_overlay", "full_screen", "split"
-	OutputFormat string // "youtube", "tiktok", "instagram"
+	OutputFormat string // "youtube", "tiktok", "instagram", "" — empty defers to social_repo
 	Entities     []EntityInput
 }
 
@@ -151,7 +151,7 @@ func parseRequest(input map[string]interface{}) *Request {
 		Script:       toString(input["script"]),
 		AudioURL:     toString(input["audio_url"]),
 		EntityStyle:  toStringDefault(input["entity_style"], "full_screen"),
-		OutputFormat: toStringDefault(input["output_format"], "youtube"),
+		OutputFormat: toStringDefault(input["output_format"], ""),
 	}
 
 	// Parse pre-resolved entities if provided
