@@ -52,6 +52,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -263,6 +264,56 @@ func NewResolverFromDeps(enqueuer *enqueue.Enqueuer, dbStore *store.SQLiteStore,
 // the struct directly.
 func (r *Resolver) HasDBAccess() bool {
 	return r != nil && r.dbStore != nil
+}
+
+// PersistPendingRemoteForwarding records an incomplete remote-engine result
+// for the durable CreatorForwardingRunner. The operation is idempotent on
+// (sourceProvider, sourceJobID, targetExecutorID), so retries of the HTTP
+// request or concurrent callers converge on the same forwarding row.
+//
+// The remote payload is intentionally not stored here: the runner polls the
+// remote job by sourceJobID and persists the authoritative completed payload
+// through Resolver.Resolve. This keeps the PENDING row small and prevents an
+// incomplete response from being mistaken for a forwardable worker payload.
+func (r *Resolver) PersistPendingRemoteForwarding(
+	ctx context.Context,
+	sourceProvider, sourceJobID, targetExecutorID string,
+) (*store.CreatorForwarding, error) {
+	if r == nil || r.dbStore == nil {
+		return nil, fmt.Errorf("creatorflow: persist pending forwarding: resolver database access is required")
+	}
+	sourceProvider = strings.TrimSpace(sourceProvider)
+	sourceJobID = strings.TrimSpace(sourceJobID)
+	targetExecutorID = strings.TrimSpace(targetExecutorID)
+	if sourceProvider == "" || sourceJobID == "" {
+		return nil, fmt.Errorf("creatorflow: persist pending forwarding: source provider and source job id are required")
+	}
+	if targetExecutorID == "" {
+		targetExecutorID = "scene.composite.v1"
+	}
+
+	if existing, err := r.dbStore.GetCreatorForwardingBySource(ctx, sourceProvider, sourceJobID, targetExecutorID); err != nil {
+		if !errors.Is(err, store.ErrCreatorForwardingNoRow) {
+			return nil, fmt.Errorf("creatorflow: lookup pending forwarding: %w", err)
+		}
+	} else if existing != nil {
+		return existing, nil
+	}
+
+	inserted, err := r.dbStore.InsertCreatorForwarding(ctx, &store.CreatorForwarding{
+		ForwardingID:     "cf_" + uuid.NewString(),
+		SourceProvider:   sourceProvider,
+		SourceJobID:      sourceJobID,
+		TargetExecutorID: targetExecutorID,
+		Status:           string(store.CFStatusPending),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("creatorflow: persist pending forwarding: %w", err)
+	}
+	if inserted == nil || inserted.Forwarding == nil {
+		return nil, fmt.Errorf("creatorflow: persist pending forwarding: store returned no forwarding")
+	}
+	return inserted.Forwarding, nil
 }
 
 // ResolveRequest is the typed input for Resolver.Resolve.

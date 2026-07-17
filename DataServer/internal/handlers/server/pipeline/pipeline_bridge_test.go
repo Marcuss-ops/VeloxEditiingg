@@ -192,6 +192,9 @@ func TestPipelineGenerateForwardsCompletedResultToQueue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sqlite store: %v", err)
 	}
+	if _, err := db.DB().Exec(`INSERT INTO delivery_destinations (destination_id, provider, name, enabled, configuration_json, created_at, updated_at) VALUES ('drive-main', 'google_drive', 'Drive Main', 1, '{}', datetime('now'), datetime('now'))`); err != nil {
+		t.Fatalf("seed delivery destination: %v", err)
+	}
 	jobRepo := store.NewSQLiteJobRepository(db)
 	atomic := store.NewAtomicJobTaskCreator(db)
 	// PR15.7a: previously wired via InitPipelineEnqueuer global;
@@ -263,5 +266,76 @@ func TestPipelineGenerateForwardsCompletedResultToQueue(t *testing.T) {
 			t.Fatalf("job not found in queue: %v", jobErr)
 		}
 		time.Sleep(25 * time.Millisecond)
+	}
+}
+
+func TestPipelineGeneratePersistsAsyncForwardingIdempotently(t *testing.T) {
+	tempDir := t.TempDir()
+	mockEngine := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/script/generate-with-images" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"ok":          true,
+			"status":      "running",
+			"job_id":      "remote-async-1",
+			"pipeline_id": "scene.composite.v1",
+		})
+	}))
+	defer mockEngine.Close()
+
+	db, err := store.NewSQLiteStore(filepath.Join(tempDir, "velox.db"))
+	if err != nil {
+		t.Fatalf("sqlite store: %v", err)
+	}
+	jobRepo := store.NewSQLiteJobRepository(db)
+	atomic := store.NewAtomicJobTaskCreator(db)
+	testEnqueuer := enqueue.NewEnqueuer(atomic, jobRepo, nil, noopPlanResolver{})
+	resolver := creatorflow.NewResolverFromDeps(testEnqueuer, db, tempDir, filepath.Join(tempDir, "videos"), "")
+	client := remoteengine.NewClient(remoteengine.Config{URL: mockEngine.URL, TimeoutMS: 5000, Retries: 1})
+	cfg := &config.Config{Render: config.RenderConfig{RemoteEngineURL: mockEngine.URL, RemoteEngineTimeoutMS: 5000, RemoteEngineRetries: 1}}
+	h := NewHandlersWithResolver(cfg, testEnqueuer, client, resolver, jobRepo, nil, nil)
+
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.POST("/api/remote/pipeline/generate", h.Generate())
+
+	request := func() map[string]interface{} {
+		reqBody, _ := json.Marshal(map[string]interface{}{"topic": "Async test"})
+		req := httptest.NewRequest(http.MethodPost, "/api/remote/pipeline/generate", bytes.NewReader(reqBody))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		if w.Code != http.StatusAccepted {
+			t.Fatalf("want 202, got %d body=%s", w.Code, w.Body.String())
+		}
+		var response map[string]interface{}
+		if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+			t.Fatalf("decode response: %v", err)
+		}
+		return response
+	}
+
+	first := request()
+	second := request()
+	firstForwardingID, _ := first["forwarding_id"].(string)
+	secondForwardingID, _ := second["forwarding_id"].(string)
+	if firstForwardingID == "" || firstForwardingID != secondForwardingID {
+		t.Fatalf("forwarding ids did not converge: first=%q second=%q", firstForwardingID, secondForwardingID)
+	}
+
+	forwarding, err := db.GetCreatorForwardingBySource(context.Background(), "remote_engine", "remote-async-1", "scene.composite.v1")
+	if err != nil {
+		t.Fatalf("get forwarding: %v", err)
+	}
+	if forwarding == nil || forwarding.Status != string(store.CFStatusPending) {
+		t.Fatalf("want one PENDING forwarding, got %#v", forwarding)
+	}
+	var count int
+	if err := db.DB().QueryRow(`SELECT COUNT(*) FROM creator_forwardings WHERE source_provider = 'remote_engine' AND source_job_id = 'remote-async-1' AND target_executor_id = 'scene.composite.v1'`).Scan(&count); err != nil {
+		t.Fatalf("count forwardings: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("want exactly one forwarding row, got %d", count)
 	}
 }

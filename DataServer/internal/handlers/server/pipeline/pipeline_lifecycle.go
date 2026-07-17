@@ -1,15 +1,12 @@
 package pipeline
 
 import (
-	"context"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/gin-gonic/gin"
 
 	"velox-server/internal/jobs"
-	"velox-server/internal/jobs/enqueue"
 )
 
 // isTerminalStatus is the pure helper that classifies a remote-engine
@@ -18,138 +15,6 @@ import (
 func isTerminalStatus(status string) bool {
 	s := strings.ToLower(strings.TrimSpace(status))
 	return s == "completed" || s == "succeeded" || s == "done" || s == "failed" || s == "error"
-}
-
-// startPolling is the package-internal background polling helper that
-// replaces the previous `startPipelinePolling(client, jobID, int)` free
-// function.
-//
-// PR-DI-pipeline: the goroutine reads its dependencies (client,
-// enqueuer) from the receiver `h` rather than from package-level
-// globals, so concurrent pipelines running on the same process can
-// never observe each other's state. `h.startPolling` is also implicitly
-// nil-safe — if `h.client` is nil or unconfigured we drop the
-// goroutine, if `h.enqueuer` is nil we drop the goroutine.
-func (h *Handlers) startPolling(jobID string, intervalSec int) {
-	if h.client == nil || !h.client.IsConfigured() {
-		pipelineLog("POLL: client not configured — cannot poll job %s", jobID)
-		return
-	}
-	if h.enqueuer == nil {
-		pipelineLog("POLL: enqueuer not wired — cannot forward job %s", jobID)
-		return
-	}
-
-	go func() {
-		if intervalSec < 5 {
-			intervalSec = 30
-		}
-
-		ticker := time.NewTicker(time.Duration(intervalSec) * time.Second)
-		defer ticker.Stop()
-
-		startTime := time.Now()
-		maxPolls := (1800 + intervalSec - 1) / intervalSec
-		if maxPolls < 10 {
-			maxPolls = 10
-		}
-		if maxPolls > 120 {
-			maxPolls = 120
-		}
-
-		pipelineLog("POLL: started goroutine job_id=%s interval=%ds max_polls=%d timeout=%ds",
-			jobID, intervalSec, maxPolls, intervalSec*maxPolls)
-
-		for i := 0; i < maxPolls; i++ {
-			<-ticker.C
-			elapsed := time.Since(startTime).Round(time.Second)
-
-			pipelineLog("POLL: checking job_id=%s attempt=%d/%d elapsed=%s", jobID, i+1, maxPolls, elapsed)
-			status, err := h.client.GetPipelineStatus(context.Background(), jobID)
-			if err != nil {
-				pipelineLog("POLL: ERROR job_id=%s attempt=%d/%d: %v", jobID, i+1, maxPolls, err)
-				continue
-			}
-
-			pipelineLog("POLL: STATUS job_id=%s attempt=%d/%d status=%s progress=%.0f%% elapsed=%s",
-				jobID, i+1, maxPolls, status.Status, status.Progress, elapsed)
-
-			switch {
-			case status.Status == "completed" || status.Status == "succeeded" || status.Status == "done":
-				totalElapsed := time.Since(startTime).Round(time.Second)
-				pipelineLog("COMPLETE: job_id=%s progress=100%% total_elapsed=%s", jobID, totalElapsed)
-
-				if status.Result != nil {
-					if docURL, ok := status.Result["doc_url"].(string); ok {
-						pipelineLog("COMPLETE: job_id=%s doc_url=%s", jobID, docURL)
-					}
-					if jsonPath, ok := status.Result["json_path"].(string); ok {
-						pipelineLog("COMPLETE: job_id=%s json_path=%s", jobID, jsonPath)
-					}
-					if voiceoverURL, ok := status.Result["voiceover_url"].(string); ok {
-						pipelineLog("COMPLETE: job_id=%s voiceover_url=%s", jobID, voiceoverURL)
-					}
-					if scenesCount, ok := status.Result["scenes_count"]; ok {
-						pipelineLog("COMPLETE: job_id=%s scenes=%v", jobID, scenesCount)
-					}
-				}
-
-				pipelineLog("FORWARD: attempting worker handoff job_id=%s", jobID)
-				forwardResult := map[string]interface{}{
-					"ok":       true,
-					"status":   "completed",
-					"trace_id": jobID,
-				}
-				if status.Result != nil {
-					forwardResult["result"] = status.Result
-					for k, v := range status.Result {
-						forwardResult[k] = v
-					}
-				}
-
-				if enqueue.ShouldForwardPipelineResult(forwardResult) {
-					if forwarded, fwdErr := h.forwardPipelineResultToWorker(context.Background(), forwardResult); fwdErr != nil {
-						pipelineLog("FORWARD: FAILED job_id=%s: %v", jobID, fwdErr)
-					} else {
-						workerJobID, _ := forwarded["job_id"].(string)
-						pipelineLog("FORWARD: SUCCESS job_id=%s -> worker_job_id=%s total_elapsed=%s",
-							jobID, workerJobID, totalElapsed)
-					}
-				} else {
-					missing := []string{}
-					if status.Result != nil {
-						if _, ok := status.Result["scenes_json"]; !ok {
-							if _, ok2 := status.Result["json_path"]; !ok2 {
-								if _, ok3 := status.Result["scenes"]; !ok3 {
-									missing = append(missing, "scenes_json")
-								}
-							}
-						}
-						if _, ok := status.Result["voiceover_path"]; !ok {
-							if _, ok2 := status.Result["voiceover_url"]; !ok2 {
-								if _, ok3 := status.Result["voiceover"]; !ok3 {
-									missing = append(missing, "voiceover")
-								}
-							}
-						}
-					} else {
-						missing = append(missing, "result (nil)")
-					}
-					pipelineLog("FORWARD: SKIPPED job_id=%s — missing fields: %s", jobID, strings.Join(missing, ", "))
-				}
-				return
-
-			case status.Status == "failed" || status.Status == "error":
-				pipelineLog("FAILED: job_id=%s progress=%.0f%% elapsed=%s", jobID, status.Progress, time.Since(startTime).Round(time.Second))
-				return
-
-			default:
-				// Continue polling for running/queued/pending.
-			}
-		}
-
-		pipelineLog("TIMEOUT: job_id=%s exceeded %d polls (%d min)", jobID, maxPolls, intervalSec*maxPolls/60)
-	}()
 }
 
 // Status handles GET /api/remote/pipeline/status/:trace_id.

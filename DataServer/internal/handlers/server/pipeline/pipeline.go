@@ -285,24 +285,35 @@ func (h *Handlers) Generate() gin.HandlerFunc {
 				response["worker_forward_result"] = forwarded
 			}
 		} else if jobID != "" && !isTerminalStatus(status) {
-			// Async: spin up background polling. h.startPolling reads
-			// client/enqueuer from the receiver, so the goroutine
-			// captures the handler instance, not package state.
-			pollInterval := h.cfg.Render.RemoteEnginePollInterval
-			if pollInterval <= 0 {
-				pollInterval = 30
+			if h.resolver == nil || !h.resolver.HasDBAccess() {
+				pipelineLog("FORWARD: durable resolver unavailable for remote job=%s", jobID)
+				c.JSON(http.StatusServiceUnavailable, gin.H{
+					"ok":    false,
+					"error": "durable forwarding is not configured",
+				})
+				return
 			}
-			maxPolls := (1800 + pollInterval - 1) / pollInterval
-			if maxPolls > 120 {
-				maxPolls = 120
+
+			targetExecutor := firstStringResolver(result, "executor_id", "pipeline_id")
+			forwarding, persistErr := h.resolver.PersistPendingRemoteForwarding(
+				c.Request.Context(), "remote_engine", jobID, targetExecutor,
+			)
+			if persistErr != nil {
+				pipelineLog("FORWARD: failed to persist remote job=%s: %v", jobID, persistErr)
+				c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": persistErr.Error()})
+				return
 			}
-			pipelineLog("POLL: starting background polling job_id=%s status=%s interval=%ds max_polls=%d (~%d min timeout)",
-				jobID, status, pollInterval, maxPolls, pollInterval*maxPolls/60)
-			h.startPolling(jobID, pollInterval)
-			response["polling_enabled"] = true
-			response["poll_interval_sec"] = pollInterval
+
+			pipelineLog("FORWARD: persisted remote job=%s forwarding_id=%s status=%s",
+				jobID, forwarding.ForwardingID, forwarding.Status)
+			response["ok"] = true
+			response["remote_job_id"] = jobID
+			response["forwarding_id"] = forwarding.ForwardingID
+			response["forwarding_status"] = forwarding.Status
 			response["worker_forwarded"] = false
-			response["worker_forward_error"] = "pipeline result is not complete yet — background polling started"
+			response["worker_forward_error"] = "remote result is pending; durable forwarding runner will resume it"
+			c.JSON(http.StatusAccepted, response)
+			return
 		} else if jobID != "" {
 			pipelineLog("FORWARD: result NOT complete for job %s (status=%s) — missing scenes/voiceover", jobID, status)
 			response["worker_forwarded"] = false
