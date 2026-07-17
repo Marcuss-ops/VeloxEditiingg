@@ -13,6 +13,7 @@
 package pipeline
 
 import (
+	"errors"
 	"net/http"
 	"strings"
 
@@ -37,19 +38,15 @@ func (h *Handlers) Status() gin.HandlerFunc {
 
 		if h.client == nil || !h.client.IsConfigured() {
 			pipelineLog("STATUS: remote engine NOT configured")
-			c.JSON(http.StatusServiceUnavailable, gin.H{
-				"ok":       false,
-				"trace_id": traceID,
-				"error":    "remote engine not configured",
-				"hint":     "set VELOX_REMOTE_ENGINE_URL",
-			})
+			writeHTTPError(c, http.StatusServiceUnavailable,
+				errors.New("remote engine not configured \u2014 set VELOX_REMOTE_ENGINE_URL"))
 			return
 		}
 
 		status, err := h.client.GetPipelineStatus(c.Request.Context(), traceID)
 		if err != nil {
 			pipelineLog("STATUS: ERROR job_id=%s: %v", traceID, err)
-			c.JSON(http.StatusBadGateway, gin.H{"ok": false, "error": err.Error()})
+			writeHTTPError(c, http.StatusBadGateway, err)
 			return
 		}
 
