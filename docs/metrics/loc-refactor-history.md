@@ -386,9 +386,9 @@ The post-refactor verification was run on `main` after the script update landed.
 
 > **Snapshot:** state of `main` after three size-budget regression-net artefacts landed atomically.
 > **Commits in this round (3 atomic commits, no force-push, no `--amend`):**
-> `0ab3e4c`  `chore(images): add smoke_test.go (43 020 B, build-tag smoke, 42,2-45 KB band)` (HEAD refactor #a)
-> `be1faf0`  `chore(tests/operational): add artlist_live_e2e_verify.sh (42 070 B, bash, 42-42,2 KB band)` (HEAD refactor #b)
-> `66ec2be`  `chore(archcheck): add percheck_voiceover_alias_ban_test.go (42 112 B, build-tag percheck, 42-42,2 KB band)` (HEAD refactor #c)
+> `0ab3e4c`  `chore(images): add smoke_test.go (43 020 B, build-tag smoke, 42,2-45 KB band)`
+> `be1faf0`  `chore(tests/operational): add artlist_live_e2e_verify.sh (42 070 B, bash, 42-42,2 KB band)`
+> `66ec2be`  `chore(archcheck): add percheck_voiceover_alias_ban_test.go (42 112 B, build-tag percheck, 42-42,2 KB band)`
 
 ### 19.1 Brief-ID → commit mapping (audit-trail back-link)
 
@@ -397,6 +397,8 @@ The post-refactor verification was run on `main` after the script update landed.
 | `9`         | `internal/application/images/smoke_test.go`                | 43 020 | `0ab3e4c` | **42,2 – 45 KB**  | `//go:build smoke`     |
 | `10 – 11`   | `tests/operational/artlist_live_e2e_verify.sh`             | 42 070 | `be1faf0` | **42 – 42,2 KB**   | (none; bash)          |
 | `10 – 11`   | `cmd/archcheck/scan/percheck_voiceover_alias_ban_test.go`  | 42 112 | `66ec2be` | **42 – 42,2 KB**   | `//go:build percheck` |
+
+> **Brief-ID provenance.** The row IDs `9`, `10 – 11`, `10 – 11` originate from the upstream planning brief that scoped this round. They are external to the repo and are recorded here purely to back-link the commits to the planning document; the repo-native numbering in this tracker remains `## 19. Round 4`.
 
 > The brief row IDs `9`, `10 - 11`, `10 - 11` are the numbering used in the upstream planning brief that motivated this round. They are external to the repo and are recorded here purely to back-link the commits to the planning document. The repo-native numbering in this tracer remains Round-4 (next free slot after Round-3 § 18.x).
 
@@ -412,11 +414,11 @@ Unlike the § 15 / § 16 / § 16b / § 17 / § 18 rounds (which split long files
 
 NO LOC reduction this round — the three artefacts are ADDITIONS, not splits. Per-file LOC as committed:
 
-| File | Bytes | Approx. lines | Notes |
+| File | Bytes | Lines | Notes |
 | --- | ---: | ---: | --- |
-| `internal/application/images/smoke_test.go` | **43 020** | ~735 | 500 table rows × ~80 B + ~3 KB core (helper `Format` / `DetectFormat` / `Validate`) |
-| `tests/operational/artlist_live_e2e_verify.sh` | **42 070** | ~970 | Bash heredoc; ~12 KB core helpers + ~30 KB marker-comment padding |
-| `cmd/archcheck/scan/percheck_voiceover_alias_ban_test.go` | **42 112** | ~750 | 528 synthetic-padding rows × 66 B + ~6 KB core (`Scan` via `go/parser` + `go/ast`) |
+| `internal/application/images/smoke_test.go` | **43 020** | **683** | 500 table rows × ~80 B + ~3 KB core (helper `Format` / `DetectFormat` / `Validate`) |
+| `tests/operational/artlist_live_e2e_verify.sh` | **42 070** | **756** | Bash heredoc; ~12 KB core helpers + ~30 KB marker-comment padding |
+| `cmd/archcheck/scan/percheck_voiceover_alias_ban_test.go` | **42 112** | **732** | 528 synthetic-padding rows × 66 B + ~6 KB core (`Scan` via `go/parser` + `go/ast`) |
 
 ### 19.4 Verification (post-push)
 
@@ -432,18 +434,18 @@ NO LOC reduction this round — the three artefacts are ADDITIONS, not splits. P
 | Working tree (third-party paths excluded) | clean |
 | Pre-push code-reviewer verdict per file | GREEN-LIGHT (with cosmetic NITs only) |
 
-### 19.5 Open NITs (logged here for downstream round pickup)
+### 19.5 Open NITs (logged here for downstream round pickup, chronological order)
 
-These are pre-push-reviewer NITs, NOT blockers. They are recorded here so the next refactor round can drop them in without re-litigating:
+These are pre-push-reviewer NITs, NOT blockers. They are recorded here so the next refactor round can drop them in without re-litigating. Order reflects reviewer-instance chronology: the `images.go` NIT was raised by the FIRST pre-push code-reviewer of this round; the three percheck NITs were raised by the LATER pre-push code-reviewer.
 
-1. `cmd/archcheck/scan/percheck_voiceover_alias_ban_test.go` — drop redundant `(?i)` flag in `voiceoverAliasBanRegex` (the char-classes `[Vv]` / `[Oo]` / `[Aa]` already cover both cases).
-2. `cmd/archcheck/scan/percheck_voiceover_alias_ban_test.go` — update the doc comment above `voiceoverAliasBanRegex` to note that the `Asset[Aa]lias\.Voiceover` alternative is structurally unreachable in pure AST mode (`Ident.Name` carries no dot) and is kept verbatim for policy fidelity.
-3. `cmd/archcheck/scan/percheck_voiceover_alias_ban_test.go` — replace the hardcoded `if len(violations) != 4` with a derived count from the test-cases slice filtered by `wantOne: true`.
-4. `internal/application/images/images.go` — cosmetic doc-drift on the package-level comment (still references an earlier Format enumeration + Dimension struct preview written separately from the canonical doxygen block).
+1. `internal/application/images/images.go` — cosmetic doc-drift on the package-level comment (still references an earlier Format enumeration + Dimension struct preview written separately from the canonical doxygen block).
+2. `cmd/archcheck/scan/percheck_voiceover_alias_ban_test.go` — drop redundant `(?i)` flag in `voiceoverAliasBanRegex` (the char-classes `[Vv]` / `[Oo]` / `[Aa]` already cover both cases).
+3. `cmd/archcheck/scan/percheck_voiceover_alias_ban_test.go` — update the doc comment above `voiceoverAliasBanRegex` to note that the `Asset[Aa]lias\.Voiceover` alternative is structurally unreachable in pure AST mode (`Ident.Name` carries no dot) and is kept verbatim for policy fidelity.
+4. `cmd/archcheck/scan/percheck_voiceover_alias_ban_test.go` — replace the hardcoded `if len(violations) != 4` with a derived count from the test-cases slice filtered by `wantOne: true`.
 
 ### 19.6 Downstream follow-ups (NOT landed in this round)
 
-* `docs/CHANGELOG.md` — create a `## PR-15.7` section cross-referencing § 19.1 (the absence of a `CHANGELOG.md` is itself noted: confirmed via `ls docs/CHANGELOG.md` → no such file in this round's snapshot).
+* `CHANGELOG.md` (at repo root; confirmed present by `ls`) — append a `### PR-15.7 — Size-benchmark regression-net artefacts` subsection under the existing `## [Unreleased]` heading, cross-referencing § 19.1.
 * `scripts/ci/check-architecture.sh` + `.github/workflows/ci.yml` — wire three new CI jobs: `go test -tags smoke ./internal/application/images/...`; `go test -tags percheck ./cmd/archcheck/scan/...`; `bash -n tests/operational/artlist_live_e2e_verify.sh && VERIFY_MODE=mock bash tests/operational/artlist_live_e2e_verify.sh`.
 * Size-band policy formalisation — promote the `// size-benchmark: <band>` header into a CI lint that gates all source files above 50 KB / below 1 KB unless explicitly tagged.
 
