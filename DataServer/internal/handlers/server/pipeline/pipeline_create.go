@@ -210,7 +210,7 @@ func (h *Handlers) CreatePipelineRun() gin.HandlerFunc {
 		remotePayload := buildRemotePayload(&req)
 
 		// ── Call the remote engine ────────────────────────────────────
-		result, err := h.client.StartPipeline(c.Request.Context(), remotePayload)
+		result, err := h.client.StartPipeline(c.Request.Context(), remotePayload, pr.ID)
 		if err != nil {
 			pipelineLog("CREATE: remote call FAILED run=%s: %v", pr.ID, err)
 			if markErr := h.store.UpdatePipelineRunError(c.Request.Context(), pr.ID,

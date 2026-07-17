@@ -245,7 +245,7 @@ func (h *Handlers) RetryPipelineRun() gin.HandlerFunc {
 			pipelineLog("RETRY: failed to transition to REMOTE_SUBMITTING run=%s: %v", pr.ID, err)
 		}
 
-		result, remoteErr := h.client.StartPipeline(ctx, remotePayload)
+		result, remoteErr := h.client.StartPipeline(ctx, remotePayload, pr.ID)
 		if remoteErr != nil {
 			pipelineLog("RETRY: remote call FAILED run=%s: %v", pr.ID, remoteErr)
 			if markErr := h.store.UpdatePipelineRunError(ctx, pr.ID,

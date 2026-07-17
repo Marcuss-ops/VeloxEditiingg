@@ -103,7 +103,11 @@ func (s *Service) StartOrPersistForwarding(ctx context.Context, rawPayload map[s
 		return nil, false, nil
 	}
 
-	creatorResult, err := s.client.StartPipeline(ctx, rawPayload)
+	// Creatorflow legacy path: extract the idempotency key from the
+	// payload if present, so a timeout after remote job creation does
+	// not produce a duplicate on retry.
+	idemKey, _ := rawPayload["idempotency_key"].(string)
+	creatorResult, err := s.client.StartPipeline(ctx, rawPayload, idemKey)
 	if err != nil {
 		return nil, false, err
 	}

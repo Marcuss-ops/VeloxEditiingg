@@ -261,7 +261,10 @@ func (h *Handlers) Generate() gin.HandlerFunc {
 		}
 
 		pipelineLog("REMOTE: forwarding to %s/api/script/generate-with-images", h.cfg.Render.RemoteEngineURL)
-		result, err := h.client.StartPipeline(c.Request.Context(), reqPayload)
+		// Legacy Generate path: no pipeline_run row exists, so we extract
+		// the idempotency key from the payload if the client sent one.
+		idemKey, _ := reqPayload["idempotency_key"].(string)
+		result, err := h.client.StartPipeline(c.Request.Context(), reqPayload, idemKey)
 		if err != nil {
 			pipelineLog("REMOTE: request FAILED: %v", err)
 			c.JSON(http.StatusBadGateway, gin.H{"ok": false, "error": err.Error()})

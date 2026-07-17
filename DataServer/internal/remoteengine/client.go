@@ -1,9 +1,22 @@
+// Package remoteengine is the adapter to the external script/pipeline
+// generation service.
+//
+// Area 2 — Rigorous adapter contract:
+//   - Every HTTP failure, network timeout, and malformed response is
+//     wrapped into a *RemoteError so callers can branch on Class without
+//     string-matching.
+//   - The retry loops use IsRetryable() / IsPermanent() instead of
+//     strings.Contains(err.Error(), "4").
+//   - StartPipeline sends an Idempotency-Key header so a timeout after
+//     remote job creation does not produce a duplicate.
+
 package remoteengine
 
 import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -14,7 +27,7 @@ import (
 	"time"
 )
 
-// DefaultConfig returns config from environment
+// DefaultConfig returns config from environment.
 func DefaultConfig() Config {
 	timeoutMS := 60000 // default 60s
 	if v := os.Getenv("VELOX_REMOTE_ENGINE_TIMEOUT_MS"); v != "" {
@@ -36,7 +49,7 @@ func DefaultConfig() Config {
 	}
 }
 
-// NewClient creates a new remote engine client
+// NewClient creates a new remote engine client.
 func NewClient(cfg Config) *Client {
 	timeout := time.Duration(cfg.TimeoutMS) * time.Millisecond
 	if timeout <= 0 {
@@ -50,50 +63,95 @@ func NewClient(cfg Config) *Client {
 	}
 }
 
-// IsConfigured returns true if remote engine is configured
+// IsConfigured returns true if remote engine is configured.
 func (c *Client) IsConfigured() bool {
 	return c.config.URL != ""
 }
 
-// GenerateSimpleScript generates a single script from a topic
-func (c *Client) GenerateSimpleScript(ctx context.Context, req SimpleScriptRequest) (*SimpleScriptResponse, error) {
-	if !c.IsConfigured() {
-		return nil, fmt.Errorf("remote engine not configured (set VELOX_REMOTE_ENGINE_URL)")
-	}
+// ── Shared retry helper ──────────────────────────────────────────────────────
 
-	body, err := json.Marshal(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal request: %w", err)
-	}
-
-	var resp *SimpleScriptResponse
+// withRetry executes fn up to c.config.Retries times. If fn returns a
+// *RemoteError that is permanent (VALIDATION, AUTHENTICATION, PERMANENT),
+// the loop breaks immediately. If the error is retryable (RATE_LIMIT,
+// TRANSIENT, MALFORMED_RESPONSE), the loop applies backoff and retries.
+//
+// The backoff schedule follows RetrySchedule (1s, 5s, 15s, 30s, 60s, 5m)
+// with ±20% jitter. For RATE_LIMIT errors, RetryAfter is honoured if
+// the remote service provided it.
+func (c *Client) withRetry(ctx context.Context, fn func(attempt int) error) error {
 	var lastErr error
 
 	for attempt := 0; attempt < c.config.Retries; attempt++ {
-		resp, lastErr = c.doSimpleScriptRequest(ctx, body)
+		lastErr = fn(attempt)
 		if lastErr == nil {
-			return resp, nil
+			return nil
 		}
 
-		// Don't retry on client errors (4xx)
-		if strings.Contains(lastErr.Error(), "4") {
-			break
+		// If it's a typed RemoteError, use its classification.
+		var re *RemoteError
+		if errors.As(lastErr, &re) {
+			if re.IsPermanent() {
+				log.Printf("Remote engine permanent error (attempt %d/%d): %s", attempt+1, c.config.Retries, re)
+				return lastErr
+			}
+			log.Printf("Remote engine retryable error (attempt %d/%d): %s", attempt+1, c.config.Retries, re)
+		} else {
+			// Untyped error (should not happen after refactor, but be safe).
+			log.Printf("Remote engine error (attempt %d/%d): %v", attempt+1, c.config.Retries, lastErr)
 		}
 
-		log.Printf("Remote engine request failed (attempt %d/%d): %v", attempt+1, c.config.Retries, lastErr)
+		// Compute backoff.
+		backoff := RetrySchedule(attempt)
+		if re != nil && re.RetryAfter > 0 {
+			backoff = re.RetryAfter
+		}
+		backoff = AddJitter(backoff, int64(attempt)+time.Now().UnixNano())
 
-		// Exponential backoff
 		if attempt < c.config.Retries-1 {
-			backoff := time.Duration(100*(1<<attempt)) * time.Millisecond
 			select {
 			case <-ctx.Done():
-				return nil, ctx.Err()
+				return ctx.Err()
 			case <-time.After(backoff):
 			}
 		}
 	}
 
-	return nil, lastErr
+	return lastErr
+}
+
+// ── Simple script ────────────────────────────────────────────────────────────
+
+// GenerateSimpleScript generates a single script from a topic.
+func (c *Client) GenerateSimpleScript(ctx context.Context, req SimpleScriptRequest) (*SimpleScriptResponse, error) {
+	if !c.IsConfigured() {
+		return nil, ErrNotConfigured
+	}
+
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, &RemoteError{
+			Class:   RemoteErrorValidation,
+			Code:    "MARSHAL",
+			Message: fmt.Sprintf("failed to marshal request: %v", err),
+			Cause:   err,
+		}
+	}
+
+	var resp *SimpleScriptResponse
+
+	retryErr := c.withRetry(ctx, func(attempt int) error {
+		r, e := c.doSimpleScriptRequest(ctx, body)
+		if e != nil {
+			return e
+		}
+		resp = r
+		return nil
+	})
+
+	if retryErr != nil {
+		return nil, retryErr
+	}
+	return resp, nil
 }
 
 func (c *Client) doSimpleScriptRequest(ctx context.Context, body []byte) (*SimpleScriptResponse, error) {
@@ -101,7 +159,12 @@ func (c *Client) doSimpleScriptRequest(ctx context.Context, body []byte) (*Simpl
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+		return nil, &RemoteError{
+			Class:   RemoteErrorPermanent,
+			Code:    "REQUEST_BUILD",
+			Message: fmt.Sprintf("failed to create request: %v", err),
+			Cause:   err,
+		}
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
@@ -111,64 +174,60 @@ func (c *Client) doSimpleScriptRequest(ctx context.Context, body []byte) (*Simpl
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("request failed: %w", err)
+		return nil, ClassifyNetworkError(err)
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
+		return nil, ClassifyNetworkError(err)
 	}
 
 	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("remote engine error: %s - %s", resp.Status, string(respBody))
+		return nil, classifyHTTPResponse(resp, respBody, nil)
 	}
 
 	var result SimpleScriptResponse
 	if err := json.Unmarshal(respBody, &result); err != nil {
-		return nil, fmt.Errorf("failed to decode response: %w", err)
+		return nil, ClassifyDecodeError(err, string(respBody))
 	}
 
 	return &result, nil
 }
 
-// GenerateBatchScripts generates multiple scripts from topics
+// ── Batch scripts ────────────────────────────────────────────────────────────
+
+// GenerateBatchScripts generates multiple scripts from topics.
 func (c *Client) GenerateBatchScripts(ctx context.Context, req BatchScriptRequest) (*BatchScriptResponse, error) {
 	if !c.IsConfigured() {
-		return nil, fmt.Errorf("remote engine not configured (set VELOX_REMOTE_ENGINE_URL)")
+		return nil, ErrNotConfigured
 	}
 
 	body, err := json.Marshal(req)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal request: %w", err)
+		return nil, &RemoteError{
+			Class:   RemoteErrorValidation,
+			Code:    "MARSHAL",
+			Message: fmt.Sprintf("failed to marshal request: %v", err),
+			Cause:   err,
+		}
 	}
 
 	var resp *BatchScriptResponse
-	var lastErr error
 
-	for attempt := 0; attempt < c.config.Retries; attempt++ {
-		resp, lastErr = c.doBatchScriptRequest(ctx, body)
-		if lastErr == nil {
-			return resp, nil
+	retryErr := c.withRetry(ctx, func(attempt int) error {
+		r, e := c.doBatchScriptRequest(ctx, body)
+		if e != nil {
+			return e
 		}
+		resp = r
+		return nil
+	})
 
-		if strings.Contains(lastErr.Error(), "4") {
-			break
-		}
-
-		log.Printf("Remote engine request failed (attempt %d/%d): %v", attempt+1, c.config.Retries, lastErr)
-
-		if attempt < c.config.Retries-1 {
-			backoff := time.Duration(100*(1<<attempt)) * time.Millisecond
-			select {
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			case <-time.After(backoff):
-			}
-		}
+	if retryErr != nil {
+		return nil, retryErr
 	}
-
-	return nil, lastErr
+	return resp, nil
 }
 
 func (c *Client) doBatchScriptRequest(ctx context.Context, body []byte) (*BatchScriptResponse, error) {
@@ -176,7 +235,12 @@ func (c *Client) doBatchScriptRequest(ctx context.Context, body []byte) (*BatchS
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+		return nil, &RemoteError{
+			Class:   RemoteErrorPermanent,
+			Code:    "REQUEST_BUILD",
+			Message: fmt.Sprintf("failed to create request: %v", err),
+			Cause:   err,
+		}
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
@@ -186,59 +250,50 @@ func (c *Client) doBatchScriptRequest(ctx context.Context, body []byte) (*BatchS
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("request failed: %w", err)
+		return nil, ClassifyNetworkError(err)
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
+		return nil, ClassifyNetworkError(err)
 	}
 
 	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("remote engine error: %s - %s", resp.Status, string(respBody))
+		return nil, classifyHTTPResponse(resp, respBody, nil)
 	}
 
 	var result BatchScriptResponse
 	if err := json.Unmarshal(respBody, &result); err != nil {
-		return nil, fmt.Errorf("failed to decode response: %w", err)
+		return nil, ClassifyDecodeError(err, string(respBody))
 	}
 
 	return &result, nil
 }
 
-// GetPipelineStatus gets the status of a pipeline job
+// ── Pipeline status ──────────────────────────────────────────────────────────
+
+// GetPipelineStatus gets the status of a pipeline job.
 func (c *Client) GetPipelineStatus(ctx context.Context, traceID string) (*PipelineStatusResponse, error) {
 	if !c.IsConfigured() {
-		return nil, fmt.Errorf("remote engine not configured (set VELOX_REMOTE_ENGINE_URL)")
+		return nil, ErrNotConfigured
 	}
 
 	var resp *PipelineStatusResponse
-	var lastErr error
 
-	for attempt := 0; attempt < c.config.Retries; attempt++ {
-		resp, lastErr = c.doPipelineStatusRequest(ctx, traceID)
-		if lastErr == nil {
-			return resp, nil
+	retryErr := c.withRetry(ctx, func(attempt int) error {
+		r, e := c.doPipelineStatusRequest(ctx, traceID)
+		if e != nil {
+			return e
 		}
+		resp = r
+		return nil
+	})
 
-		if strings.Contains(lastErr.Error(), "4") {
-			break
-		}
-
-		log.Printf("Remote engine request failed (attempt %d/%d): %v", attempt+1, c.config.Retries, lastErr)
-
-		if attempt < c.config.Retries-1 {
-			backoff := time.Duration(100*(1<<attempt)) * time.Millisecond
-			select {
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			case <-time.After(backoff):
-			}
-		}
+	if retryErr != nil {
+		return nil, retryErr
 	}
-
-	return nil, lastErr
+	return resp, nil
 }
 
 func (c *Client) doPipelineStatusRequest(ctx context.Context, traceID string) (*PipelineStatusResponse, error) {
@@ -247,7 +302,12 @@ func (c *Client) doPipelineStatusRequest(ctx context.Context, traceID string) (*
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+		return nil, &RemoteError{
+			Class:   RemoteErrorPermanent,
+			Code:    "REQUEST_BUILD",
+			Message: fmt.Sprintf("failed to create request: %v", err),
+			Cause:   err,
+		}
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
@@ -260,24 +320,24 @@ func (c *Client) doPipelineStatusRequest(ctx context.Context, traceID string) (*
 	elapsed := time.Since(startTime).Round(time.Millisecond)
 	if err != nil {
 		log.Printf("[CLIENT] GetPipelineStatus FAILED after %s: %v", elapsed, err)
-		return nil, fmt.Errorf("request failed: %w", err)
+		return nil, ClassifyNetworkError(err)
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
+		return nil, ClassifyNetworkError(err)
 	}
 
 	if resp.StatusCode >= 400 {
 		log.Printf("[CLIENT] GetPipelineStatus HTTP %d after %s: %s", resp.StatusCode, elapsed, string(respBody))
-		return nil, fmt.Errorf("remote engine error: %s - %s", resp.Status, string(respBody))
+		return nil, classifyHTTPResponse(resp, respBody, nil)
 	}
 
 	// The remote engine wraps the job in {"job": {...}}
 	var wrapper remoteJobResponse
 	if err := json.Unmarshal(respBody, &wrapper); err != nil {
-		return nil, fmt.Errorf("failed to decode response: %w", err)
+		return nil, ClassifyDecodeError(err, string(respBody))
 	}
 
 	j := wrapper.Job
@@ -314,28 +374,50 @@ func (c *Client) doPipelineStatusRequest(ctx context.Context, traceID string) (*
 	return result, nil
 }
 
-// StartPipeline starts a new pipeline job
-func (c *Client) StartPipeline(ctx context.Context, payload map[string]interface{}) (map[string]interface{}, error) {
+// ── Start pipeline ───────────────────────────────────────────────────────────
+
+// StartPipeline starts a new pipeline job.
+//
+// The Idempotency-Key header is set to idempotencyKey when non-empty, so
+// a timeout after the remote service has already created the job does not
+// produce a duplicate on retry. The remote service must return the same
+// remote_job_id for the same key.
+//
+// idempotencyKey should be the pipeline_run_id (e.g. "run_...").
+func (c *Client) StartPipeline(ctx context.Context, payload map[string]interface{}, idempotencyKey string) (map[string]interface{}, error) {
 	if !c.IsConfigured() {
-		return nil, fmt.Errorf("remote engine not configured (set VELOX_REMOTE_ENGINE_URL)")
+		return nil, ErrNotConfigured
 	}
 
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal request: %w", err)
+		return nil, &RemoteError{
+			Class:   RemoteErrorValidation,
+			Code:    "MARSHAL",
+			Message: fmt.Sprintf("failed to marshal request: %v", err),
+			Cause:   err,
+		}
 	}
 
 	url := strings.TrimSuffix(c.config.URL, "/") + "/api/script/generate-with-images"
-	log.Printf("[CLIENT] StartPipeline POST %s body=%d bytes", url, len(body))
+	log.Printf("[CLIENT] StartPipeline POST %s body=%d bytes idempotency_key=%s", url, len(body), idempotencyKey)
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+		return nil, &RemoteError{
+			Class:   RemoteErrorPermanent,
+			Code:    "REQUEST_BUILD",
+			Message: fmt.Sprintf("failed to create request: %v", err),
+			Cause:   err,
+		}
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
 	if c.config.Token != "" {
 		httpReq.Header.Set("Authorization", "Bearer "+c.config.Token)
+	}
+	if idempotencyKey != "" {
+		httpReq.Header.Set("Idempotency-Key", idempotencyKey)
 	}
 
 	startTime := time.Now()
@@ -343,23 +425,23 @@ func (c *Client) StartPipeline(ctx context.Context, payload map[string]interface
 	elapsed := time.Since(startTime).Round(time.Millisecond)
 	if err != nil {
 		log.Printf("[CLIENT] StartPipeline FAILED after %s: %v", elapsed, err)
-		return nil, fmt.Errorf("request failed: %w", err)
+		return nil, ClassifyNetworkError(err)
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
+		return nil, ClassifyNetworkError(err)
 	}
 
 	if resp.StatusCode >= 400 {
 		log.Printf("[CLIENT] StartPipeline HTTP %d after %s: %s", resp.StatusCode, elapsed, string(respBody))
-		return nil, fmt.Errorf("remote engine error: %s - %s", resp.Status, string(respBody))
+		return nil, classifyHTTPResponse(resp, respBody, nil)
 	}
 
 	var result map[string]interface{}
 	if err := json.Unmarshal(respBody, &result); err != nil {
-		return nil, fmt.Errorf("failed to decode response: %w", err)
+		return nil, ClassifyDecodeError(err, string(respBody))
 	}
 
 	jobID, _ := result["job_id"].(string)
@@ -369,10 +451,12 @@ func (c *Client) StartPipeline(ctx context.Context, payload map[string]interface
 	return result, nil
 }
 
-// CancelPipeline cancels/deletes a running pipeline job
+// ── Cancel pipeline ──────────────────────────────────────────────────────────
+
+// CancelPipeline cancels/deletes a running pipeline job.
 func (c *Client) CancelPipeline(ctx context.Context, traceID string) error {
 	if !c.IsConfigured() {
-		return fmt.Errorf("remote engine not configured (set VELOX_REMOTE_ENGINE_URL)")
+		return ErrNotConfigured
 	}
 
 	url := fmt.Sprintf("%s/api/jobs/%s", strings.TrimSuffix(c.config.URL, "/"), traceID)
@@ -380,7 +464,12 @@ func (c *Client) CancelPipeline(ctx context.Context, traceID string) error {
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodDelete, url, nil)
 	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
+		return &RemoteError{
+			Class:   RemoteErrorPermanent,
+			Code:    "REQUEST_BUILD",
+			Message: fmt.Sprintf("failed to create request: %v", err),
+			Cause:   err,
+		}
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
@@ -393,22 +482,37 @@ func (c *Client) CancelPipeline(ctx context.Context, traceID string) error {
 	elapsed := time.Since(startTime).Round(time.Millisecond)
 	if err != nil {
 		log.Printf("[CLIENT] CancelPipeline FAILED after %s: %v", elapsed, err)
-		return fmt.Errorf("request failed: %w", err)
+		return ClassifyNetworkError(err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 400 {
 		respBody, _ := io.ReadAll(resp.Body)
 		log.Printf("[CLIENT] CancelPipeline HTTP %d after %s: %s", resp.StatusCode, elapsed, string(respBody))
-		return fmt.Errorf("remote engine error: %s - %s", resp.Status, string(respBody))
+		return classifyHTTPResponse(resp, respBody, nil)
 	}
 
 	log.Printf("[CLIENT] CancelPipeline OK job_id=%s elapsed=%s", traceID, elapsed)
 	return nil
 }
 
-// Close closes the client
+// Close closes the client.
 func (c *Client) Close() error {
 	c.httpClient.CloseIdleConnections()
 	return nil
+}
+
+// ── Internal HTTP classification ─────────────────────────────────────────────
+
+// classifyHTTPResponse builds a *RemoteError from an HTTP error response,
+// parsing the Retry-After header when present (for 429 responses).
+func classifyHTTPResponse(resp *http.Response, respBody []byte, cause error) *RemoteError {
+	re := ClassifyHTTPError(resp.StatusCode, string(respBody), cause)
+
+	// Parse Retry-After for 429 responses.
+	if resp.StatusCode == 429 {
+		re.RetryAfter = ParseRetryAfter(resp.Header.Get("Retry-After"))
+	}
+
+	return re
 }
