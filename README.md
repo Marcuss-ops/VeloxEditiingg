@@ -127,6 +127,23 @@ Override the env-file location with `VELOX_PRODUCTION_ENV=/path/to/file` if you 
 
 The canonical ownership map is [`docs/architecture/OWNERSHIP.md`](docs/architecture/OWNERSHIP.md). Every important state must have one owner, one writer and one mutation path.
 
+## Canonical-purity invariants (Steps 1–8)
+
+Every `process_video` payload that crosses the master enqueue boundary must conform to a single canonical flat shape. The Velox canonical-purity plan locks this contract across eight incremental steps. Each step is a non-regression bound on the source side, the runtime side, or the data side; the binding CI gate for each step is listed below. `make verify` invokes every gate in the order shown; a single red blocks the merge.
+
+| # | Invariant (one-line) | Binding source-of-truth | CI gate (script) |
+|---|---|---|---|
+| 1 | Contract test binds `items[].role` shape (scene/clip) on the read side. | `shared/contract/contract_test.go` (compile-time) | `go test -race ./shared/contract/...` |
+| 2 | Compiler honors `items[].role` + `scenes[]` ordering on the worker dispatch path. | `RemoteCodex/native/worker-agent-go/pkg/api/renderplan/validation.go` | `go test -race ./RemoteCodex/.../renderplan/...` |
+| 3 | `velox-worker-console.service` and its CI wiring are removed. | `scripts/ci/check-no-console-service.sh` | `check-no-console-service` (wired in `verify.sh`) |
+| 4 | `delivery_plan` is validated at enqueue (preflight), not at finalize. | `DataServer/internal/jobs/enqueue/delivery_plan_validator.go` | `go test -race ./DataServer/internal/jobs/enqueue/...` |
+| 5 | `retry_budget` propagates from `plan_resolver` into `FinalizeVerified` so `job_deliveries.max_attempts` reflects per-plan budget. | `DataServer/internal/artifacts/{finalization_repository.go, sqlite_finalize_writer.go}` + `DataServer/internal/deliveries/plan_resolver.go` | `go test -race ./DataServer/internal/artifacts/... ./DataServer/internal/deliveries/...` |
+| 6 | Worker mutable state lives off the legacy assets-cache mount. | `scripts/ci/check-no-legacy-assets-cache.sh` | `check-no-legacy-assets-cache` (wired in `verify.sh`) |
+| 7 | Payload canonical contract: `CanonicalTopLevelKeys` allowlist + `LegacyAliasKeys` denylist. | `shared/contract/canonical_payload.go` | `scripts/ci/check-payload-canonical-form.sh` (wired in `verify.sh`) |
+| 8 | Closure: (a) the source-side regex gate above, (b) a data-side semantic validator over `ops/jobs/*.json` fixtures, (c) this README's invariant table. | `shared/contract/cmd/validate-canonical-payload/main.go` | `scripts/ci/verify.sh` invokes the validator in the canonical-purity block |
+
+The two halves of Step 7+8 together (SOURCE side grep + DATA side semantic) form the closure: the writer cannot emit a forbidden alias into the source tree, and the operator cannot submit a fixture whose preflight would reject it on the master.
+
 ## Canonical path to 100%
 
 The active completion roadmap is intentionally limited to five documents:

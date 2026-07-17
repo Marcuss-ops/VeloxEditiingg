@@ -84,6 +84,15 @@ log "test-check-payload-canonical-form (Step 8/8 closure gate self-test)"
 ./scripts/ci/test-check-payload-canonical-form.sh
 log "check-payload-canonical-form (Step 7+8/8 canonical-purity closure)"
 ./scripts/ci/check-payload-canonical-form.sh
+log "test-validate-canonical-payload (Step 8/8 closure — semantic validator self-test)"
+./scripts/ci/test-validate-canonical-payload.sh
+log "validate-canonical-payload (Step 8/8 closure — semantic validator over ops/jobs/*.json fixtures)"
+# Step 8/8 closure DATA-side counterpart to check-payload-canonical-form.sh
+# (SOURCE-side). Walks every *.json under ops/jobs/ and drives
+# contract.ValidatePayload over the parsed map — the same gate the master
+# enqueue preflight invokes at runtime, so a green run here means every
+# operator fixture will survive the canonical-purity preflight on submit.
+(cd "$REPO_ROOT/shared" && go run ./contract/cmd/validate-canonical-payload "$REPO_ROOT")
 log "check-dsn-busy-timeout (Blocco 5 / B1 follow-up)"
 ./scripts/ci/check-dsn-busy-timeout.sh
 
