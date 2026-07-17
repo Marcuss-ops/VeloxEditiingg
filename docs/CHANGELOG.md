@@ -35,8 +35,8 @@
 
 | Band token      | Byte range       | Use case                                           | Existing artefacts |
 | ---             | ---:             | ---                                                | ---                |
-| `42 – 42,2 KB`  | 42 000 – 42 200  | bash policy dry-runs; per-check AST scans          | `be1faf0`, `66ec2be` |
-| `42,2 – 45 KB`  | 42 200 – 45 000  | Go test files with broad build-tag fixture matrices | `0ab3e4c` |
+| `42 - 42,2 KB`  | 42 000 - 42 200  | bash policy dry-runs; per-check AST scans          | `be1faf0`, `66ec2be` |
+| `42,2 - 45 KB`  | 42 200 - 45 000  | Go test files with broad build-tag fixture matrices | `0ab3e4c` |
 
 > To register a new band: add a row here, set the band token at the top of the artefact, then land the artefact. The lint script (when wired) reads the manifest from this table only.
 
@@ -70,8 +70,37 @@ All three MUST return exit 0. Verification timing at commit `66ec2be`:
 
 ### Forward state
 
-- § 19.6 of the tracker schedules the **CI wiring** as a follow-up round: one job per verification command above, all landing in `.github/workflows/ci.yml`.
-- § 19.5 of the tracker schedules the **size-band lint formalisation** in `scripts/ci/check-architecture.sh` (reads the band manifest from the `### Known size-bands` table in this file).
-- New size-benchmark artefacts must be added to **this file** before landing on `main` — the hard-fail rule references the band manifest here as its single source of truth.
-- Marker-region padding at the tail of each artefact is intentionally inert (`#`-prefixed comments in the bash artefact; static-slice entries in the Go artefacts); the linter recognises and allows such regions under the same `// size-benchmark:` header.
-- Pre-commit code-reviewers (per file) returned **GREEN-LIGHT** with cosmetic NITs only, all carried forward in § 19.5 of the tracker for the next refactor round.
+**Shipped (PR-15.7 follow-up):**
+
+- § 19.6 of the tracker (CI wiring) is **shipped**: `size-band-policy`
+  job landed in `.github/workflows/ci.yml` with `if: always()` for parity
+  with the LOC gate.
+- § 19.5 of the tracker (size-band lint formalisation) is **shipped**:
+  `scripts/ci/check-size-band-policy.sh` is the standalone gate,
+  `scripts/ci/check-architecture.sh` rule #11 delegates to it via
+  `${BASH_SOURCE[0]%/*}/check-size-band-policy.sh`.
+
+**Onboarding for future artefacts (mandatory):**
+
+- Add the artefact row to the `### Artefacts` table above, with Build tag,
+  target band, and the commit SHA that landed the marker-region padding.
+- Reserve a band in the `### Known size-bands` table below (or pick an
+  existing band whose byte range covers the artefact). Canonical band-token
+  form: `<low>-<high> KB` with ASCII hyphen-minus and no interior spaces
+  around the hyphen. Contributors MAY use en-dash (–, U+2013) in the artefact
+  header -- the lint normalises on BOTH sides of the comparison.
+- Add the marker-region padding at the top of the artefact:
+  - Go: `// size-benchmark: <band>` on line 3 (after `//go:build ...`).
+  - Bash: `# size-benchmark: <band>` on line 2 (after the shebang).
+
+**Long-file grand-fathering (currently allowed):**
+
+- 50 legacy files currently exceed 50 000 bytes without `// size-benchmark:`
+  headers. They are listed in
+  `scripts/ci/check-size-band-policy.known-violations` and surface as
+  `::warning file=...` (auditable but NOT fail-loud). Each removal of an
+  entry requires a tracking-ref in `docs/metrics/loc-refactor-history.md`
+  § 19 (same SSOT discipline as `scripts/ci/check-loc-thresholds.sh`
+  `KNOWN_VIOLATIONS_BASELINE`).
+
+
