@@ -32,10 +32,6 @@ func (h *Handlers) PipelineRunStatus() gin.HandlerFunc {
 		}
 		idParam := strings.TrimSpace(c.Param("id"))
 		if idParam == "" {
-			// Backwards-compat: the old route used :request_id.
-			idParam = strings.TrimSpace(c.Param("request_id"))
-		}
-		if idParam == "" {
 			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "id is required"})
 			return
 		}
