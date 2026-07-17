@@ -182,7 +182,7 @@ func (s *SQLiteStore) InsertCreatorForwarding(ctx context.Context, cf *CreatorFo
 		  locked_by, lease_id, lease_expires_at,
 		  last_error_code, last_error_message, last_error_class,
 		  created_at, updated_at, forwarded_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		cf.ForwardingID, cf.SourceProvider, cf.SourceJobID, cf.SourceStatus,
 		cf.TargetExecutorID,
 		nullIfEmpty(cf.TargetJobID),
@@ -226,6 +226,7 @@ func (s *SQLiteStore) GetCreatorForwarding(ctx context.Context, forwardingID str
 		        COALESCE(payload_json, ''), COALESCE(payload_sha256, ''),
 		        status, attempt_count, COALESCE(next_attempt_at, ''),
 		        poll_attempts, COALESCE(next_poll_at, ''), COALESCE(last_polled_at, ''),
+		        COALESCE(last_remote_status, ''),
 		        COALESCE(locked_by, ''), COALESCE(lease_id, ''), COALESCE(lease_expires_at, ''),
 		        COALESCE(last_error_code, ''), COALESCE(last_error_message, ''), COALESCE(last_error_class, ''),
 		        created_at, updated_at, COALESCE(forwarded_at, '')
@@ -245,6 +246,7 @@ func (s *SQLiteStore) GetCreatorForwardingBySource(ctx context.Context, provider
 		        COALESCE(payload_json, ''), COALESCE(payload_sha256, ''),
 		        status, attempt_count, COALESCE(next_attempt_at, ''),
 		        poll_attempts, COALESCE(next_poll_at, ''), COALESCE(last_polled_at, ''),
+		        COALESCE(last_remote_status, ''),
 		        COALESCE(locked_by, ''), COALESCE(lease_id, ''), COALESCE(lease_expires_at, ''),
 		        COALESCE(last_error_code, ''), COALESCE(last_error_message, ''), COALESCE(last_error_class, ''),
 		        created_at, updated_at, COALESCE(forwarded_at, '')
@@ -266,6 +268,7 @@ func (s *SQLiteStore) GetCreatorForwardingByRemoteJob(ctx context.Context, provi
 		        COALESCE(payload_json, ''), COALESCE(payload_sha256, ''),
 		        status, attempt_count, COALESCE(next_attempt_at, ''),
 		        poll_attempts, COALESCE(next_poll_at, ''), COALESCE(last_polled_at, ''),
+		        COALESCE(last_remote_status, ''),
 		        COALESCE(locked_by, ''), COALESCE(lease_id, ''), COALESCE(lease_expires_at, ''),
 		        COALESCE(last_error_code, ''), COALESCE(last_error_message, ''), COALESCE(last_error_class, ''),
 		        created_at, updated_at, COALESCE(forwarded_at, '')

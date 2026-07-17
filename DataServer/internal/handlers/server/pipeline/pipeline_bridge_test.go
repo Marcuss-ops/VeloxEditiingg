@@ -259,8 +259,8 @@ func TestPipelineGenerateForwardsCompletedResultToQueue(t *testing.T) {
 	expectedJobID := enqueue.DeriveForwardingJobID(
 		routing.FormatForwardingKey("remote_engine", "trace_123", "scene.composite.v1").String(),
 	)
-	if _, err := jobRepo.Get(context.Background(), expectedJobID); err == nil {
-		t.Fatalf("did not expect a Velox job to be created synchronously")
+	if job, err := jobRepo.Get(context.Background(), expectedJobID); err == nil && job != nil {
+		t.Fatalf("did not expect a Velox job to be created synchronously, got %v", job)
 	}
 }
 
