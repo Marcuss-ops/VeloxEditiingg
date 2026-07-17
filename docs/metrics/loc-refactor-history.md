@@ -450,3 +450,54 @@ These are pre-push-reviewer NITs, NOT blockers. They are recorded here so the ne
 * Size-band policy formalisation — promote the `// size-benchmark: <band>` header into a CI lint that gates all source files above 50 KB / below 1 KB unless explicitly tagged.
 
 These are not part of the current round but are scheduled for Round-5 onward.
+### 19.7 8-file surface-area audit (post-recovery)
+
+Following the 8074890 commit's claim of an 8-file atomic surface area, an
+audit on 2026-07-17 found that 2 of the 8 files were never committed (untracked
+on disk). The committed CI workflow at `.github/workflows/ci.yml:89` AND
+`scripts/ci/check-architecture.sh:246-247` both reference these scripts, which
+means CI would fail on any fresh checkout. This sub-section records the audit
+findings and the recovery commit.
+
+\`\`\`
+Canonical 8-file inventory (post-audit):
+
+  #  File                                                          Commit       Size       Status
+  -  ----                                                          ------       ----       ------
+  1  scripts/ci/check-size-band-policy.sh                          9d111c4    ~8.0 KB    NEW (recovery, audited 2026-07-17)
+  2  scripts/ci/check-size-band-policy.known-violations            9d111c4    ~4.0 KB    NEW (recovery, 50-path baseline / grandfathering)
+  3  scripts/ci/check-architecture.sh                             77868b3      ~11.1 KB   rule #11 wiring; calls file #1
+  4  .github/workflows/ci.yml                                     77868b3      ~6.4 KB    size-band-policy job (\`if: always()\`); calls file #1
+  5  docs/CHANGELOG.md                                            8074890      ~7.1 KB    manifest normalisation + Forward-state restructured
+  6  cmd/archcheck/scan/percheck_voiceover_alias_ban_test.go       77868b3      ~42.1 KB   artifact: \`// size-benchmark: 42-42,2 KB\`
+  7  internal/application/images/smoke_test.go                    77868b3      ~43.0 KB   artifact: \`// size-benchmark: 42,2-45 KB\`
+  8  tests/operational/artlist_live_e2e_verify.sh                 77868b3      ~42.1 KB   artifact: \`# size-benchmark: 42-42,2 KB\` (post-shebang)
+\`\`\`
+
+\\**Audit findings.\`
+
+* Files #3-#8 landed cleanly on main across the 8074890 -> 77868b3 cycle.
+* Files #1-#2 were held in working tree following a botched amend cycle in
+  earlier sessions and never landed on main despite CI depending on them.
+* Per the discrete-PR clause (\`NEVER amend 0ab3e4c / be1faf0 / 66ec2be / ac5d0f6\`),
+  this is a separate follow-up commit on main only.
+
+\\**Verification commands.\`
+
+\`\`\`bash
+# gate should exit 0 against the 50-path baseline + 3 artifacts
+bash scripts/ci/check-size-band-policy.sh
+
+# confirm the 3 size-benchmark files carry a band header
+grep -lE '^//[[:space:]]+size-benchmark:|^#[[:space:]]+size-benchmark:' \
+  cmd/archcheck/scan/percheck_voiceover_alias_ban_test.go \
+  internal/application/images/smoke_test.go \
+  tests/operational/artlist_live_e2e_verify.sh
+
+# confirm the 2 recovered scripts are committed
+git ls-files --error-unmatch scripts/ci/check-size-band-policy.sh \
+                                scripts/ci/check-size-band-policy.known-violations
+\`\`\`
+
+\\**Brief anchor.\` PR-15.7 (size-band policy slice).
+
