@@ -348,53 +348,6 @@ func (h *Handlers) CreatePipelineRun() gin.HandlerFunc {
 	}
 }
 
-// buildCreateResponse builds the 202 response for an idempotent duplicate
-// (a request whose idempotency_key already existed). The isDuplicate
-// flag is included so the client can distinguish a fresh run from a
-// replayed one.
-func buildCreateResponse(pr *pipelineruns.PipelineRun, isDuplicate bool) gin.H {
-	resp := gin.H{
-		"ok":              true,
-		"pipeline_run_id": pr.ID,
-		"request_id":      pr.RequestID,
-		"status":          string(pr.Status),
-		"status_url":      "/api/v1/pipeline-runs/" + pr.ID,
-		"is_duplicate":    isDuplicate,
-	}
-	if pr.RemoteJobID != "" {
-		resp["remote_job_id"] = pr.RemoteJobID
-	}
-	if pr.ForwardingID != "" {
-		resp["forwarding_id"] = pr.ForwardingID
-	}
-	return resp
-}
-
-// buildCreateResponseFromSyncForward builds the 202 response when the
-// remote engine returned a complete result that was synchronously
-// forwarded to the Velox worker queue. `forwarded` is the worker
-// response map returned by forwardPipelineResultToWorker (which wraps
-// Resolver.Resolve's ResolveOutput.Response).
-func buildCreateResponseFromSyncForward(pr *pipelineruns.PipelineRun, forwarded map[string]interface{}) gin.H {
-	resp := gin.H{
-		"ok":              true,
-		"pipeline_run_id": pr.ID,
-		"request_id":      pr.RequestID,
-		"status":          string(pr.Status),
-		"status_url":      "/api/v1/pipeline-runs/" + pr.ID,
-		"is_duplicate":    false,
-	}
-	if pr.RemoteJobID != "" {
-		resp["remote_job_id"] = pr.RemoteJobID
-	}
-	if forwarded != nil {
-		if wjID, ok := forwarded["job_id"].(string); ok && wjID != "" {
-			resp["velox_job_id"] = wjID
-		}
-	}
-	return resp
-}
-
 // buildRemotePayload converts the typed CreatePipelineRunRequest into
 // the map[string]interface{} shape the remote engine's
 // /api/script/generate-with-images endpoint expects. The remote engine

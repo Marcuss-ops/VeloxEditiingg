@@ -1,7 +1,6 @@
 package pipeline
 
 import (
-	"context"
 	"database/sql"
 	"errors"
 	"net/http"
@@ -9,7 +8,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"velox-server/internal/pipelineruns"
 	"velox-server/internal/store"
 )
 
@@ -101,64 +99,4 @@ func (h *Handlers) PipelineRunStatus() gin.HandlerFunc {
 	}
 }
 
-// buildPipelineRunProjection builds the full status projection from a
-// pipeline_runs row. When the row has a velox_job_id, it enriches the
-// response with worker/artifact/delivery state from the job layer.
-func (h *Handlers) buildPipelineRunProjection(ctx context.Context, pr *pipelineruns.PipelineRun) gin.H {
-	response := gin.H{
-		"id":              pr.ID,
-		"request_id":      pr.RequestID,
-		"idempotency_key": pr.IdempotencyKey,
-		"status":          string(pr.Status),
-		"current_stage":   pr.CurrentStage,
-		"remote_provider": pr.RemoteProvider,
-		"remote_job_id":   pr.RemoteJobID,
-		"forwarding_id":   pr.ForwardingID,
-		"velox_job_id":    pr.VeloxJobID,
-		"artifact_id":     pr.ArtifactID,
-		"delivery_id":     pr.DeliveryID,
-		"created_at":      pr.CreatedAt,
-		"updated_at":      pr.UpdatedAt,
-	}
-	if !pr.CompletedAt.IsZero() {
-		response["completed_at"] = pr.CompletedAt
-	}
-	if pr.ErrorCode != "" {
-		response["error_code"] = pr.ErrorCode
-		response["error_message"] = pr.ErrorMessage
-		response["failed_stage"] = pr.FailedStage
-	}
 
-	// Enrich with worker/artifact/delivery when a velox_job_id is set.
-	if pr.VeloxJobID == "" {
-		return response
-	}
-	job, jobErr := h.store.GetJob(ctx, pr.VeloxJobID)
-	if jobErr == nil {
-		response["worker"] = gin.H{"job_id": pr.VeloxJobID, "status": job["status"]}
-		artifacts, _ := h.store.GetArtifactsByJob(pr.VeloxJobID, 1)
-		if len(artifacts) > 0 {
-			a := artifacts[0]
-			response["artifact"] = gin.H{"artifact_id": a.ID, "status": a.Status, "sha256": a.SHA256, "storage_url": a.StorageURL}
-			deliveries, _ := h.store.ListJobDeliveriesByJob(pr.VeloxJobID)
-			if len(deliveries) > 0 {
-				d := deliveries[0]
-				response["delivery"] = gin.H{"delivery_id": d.DeliveryID, "provider": d.DestinationID, "status": d.Status, "remote_id": d.RemoteID, "remote_url": d.RemoteURL}
-			}
-		}
-	}
-	return response
-}
-
-func forwardingStatus(f *store.CreatorForwarding) string {
-	switch f.Status {
-	case string(store.CFStatusForwarded):
-		return "WORKER_QUEUED"
-	case string(store.CFStatusFailed), string(store.CFStatusBlocked):
-		return "FAILED"
-	case string(store.CFStatusCancelled):
-		return "CANCELLED"
-	default:
-		return "REMOTE_QUEUED"
-	}
-}
