@@ -159,17 +159,18 @@ func (s *SQLiteStore) InsertDeliveryDestination(dest *DeliveryDestination) error
 // ListDeliveryDestinations returns all enabled destinations, optionally
 // filtered by provider. Returns at most `limit` rows (zero means default).
 //
-// Opaque-mode SQL: account_id, channel_id, language columns are dropped
-// (their column drop happens in the store commit / migration 091).
-// social_destination_id is NOT yet selected here \u2014 the column is added
-// by the follow-up store commit.
+// Opaque-mode SQL (Residuo 2 of YouTube → Social closure + migration 091):
+// the legacy account_id / channel_id / language columns have been dropped
+// from the delivery_destinations table. SocialDestinationID is the new
+// opaque reference resolved server-side by the Social API.
 func (s *SQLiteStore) ListDeliveryDestinations(provider string, limit int) ([]DeliveryDestination, error) {
 	if limit <= 0 {
 		limit = 200
 	}
-	query := `SELECT destination_id, provider, COALESCE(folder_id,''),
-	                 COALESCE(name,''),
-	                 enabled, COALESCE(configuration_json,''),
+	query := `SELECT destination_id, provider, COALESCE(social_destination_id, ''),
+	                 COALESCE(folder_id, ''),
+	                 COALESCE(name, ''),
+	                 enabled, COALESCE(configuration_json, ''),
 	                 created_at, updated_at
 	          FROM delivery_destinations`
 	args := []interface{}{}
@@ -191,7 +192,8 @@ func (s *SQLiteStore) ListDeliveryDestinations(provider string, limit int) ([]De
 	for rows.Next() {
 		var d DeliveryDestination
 		var enabledInt int
-		if err := rows.Scan(&d.DestinationID, &d.Provider, &d.FolderID,
+		if err := rows.Scan(&d.DestinationID, &d.Provider, &d.SocialDestinationID,
+			&d.FolderID,
 			&d.Name,
 			&enabledInt, &d.ConfigurationJSON,
 			&d.CreatedAt, &d.UpdatedAt); err != nil {
@@ -206,19 +208,22 @@ func (s *SQLiteStore) ListDeliveryDestinations(provider string, limit int) ([]De
 // GetDeliveryDestination returns a single destination by id, or
 // ErrDeliveryNoRow when missing (sql.ErrNoRows is normalized).
 //
-// Opaque-mode SQL (see ListDeliveryDestinations comment): the column
-// social_destination_id will be selected here once the store commit
-// adds it (migration 091).
+// Opaque-mode SQL (Residuo 2 of YouTube → Social closure + migration 091):
+// the legacy account_id / channel_id / language columns have been dropped
+// from the delivery_destinations table. SocialDestinationID is the new
+// opaque reference resolved server-side by the Social API.
 func (s *SQLiteStore) GetDeliveryDestination(ctx context.Context, destID string) (*DeliveryDestination, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT destination_id, provider, COALESCE(folder_id,''),
-		        COALESCE(name,''),
-		        enabled, COALESCE(configuration_json,''),
+		`SELECT destination_id, provider, COALESCE(social_destination_id, ''),
+		        COALESCE(folder_id, ''),
+		        COALESCE(name, ''),
+		        enabled, COALESCE(configuration_json, ''),
 		        created_at, updated_at
 		 FROM delivery_destinations WHERE destination_id = ?`, destID)
 	var d DeliveryDestination
 	var enabledInt int
-	err := row.Scan(&d.DestinationID, &d.Provider, &d.FolderID,
+	err := row.Scan(&d.DestinationID, &d.Provider, &d.SocialDestinationID,
+		&d.FolderID,
 		&d.Name,
 		&enabledInt, &d.ConfigurationJSON,
 		&d.CreatedAt, &d.UpdatedAt)
