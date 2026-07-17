@@ -56,10 +56,10 @@ func TestClient_DeliverArtifact_HappyPath(t *testing.T) {
 
 	c := New(Config{BaseURL: server.URL, APIKey: "tok"})
 	got, err := c.DeliverArtifact(context.Background(), DeliverArtifactRequest{
-		ExternalDeliveryID:  "ext-1",
-		IdempotencyKey:      "idem-1",
-		SocialDestinationID: "social_dest_happy_test",
-		Artifact:            ArtifactPayload{ArtifactID: "art-1", SHA256: "sh", SizeBytes: 10, MimeType: "video/mp4"},
+		ExternalDeliveryID:    "ext-1",
+		IdempotencyKey:        "idem-1",
+		ExternalDestinationID: "external_dest_happy_test",
+		Artifact:              ArtifactPayload{ArtifactID: "art-1", SHA256: "sh", SizeBytes: 10, MimeType: "video/mp4"},
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -324,10 +324,10 @@ func TestClient_DeliverArtifact_WireShape_Minimal(t *testing.T) {
 
 	c := New(Config{BaseURL: server.URL})
 	_, err := c.DeliverArtifact(context.Background(), DeliverArtifactRequest{
-		ExternalDeliveryID:  "delivery_wm_min",
-		IdempotencyKey:      "idem_wm_min",
-		SocialDestinationID: "social_dest_wm_min",
-		Artifact:            ArtifactPayload{ArtifactID: "art_wm_min", SHA256: "sh", SizeBytes: 10, MimeType: "video/mp4"},
+		ExternalDeliveryID:    "delivery_wm_min",
+		IdempotencyKey:        "idem_wm_min",
+		ExternalDestinationID: "external_dest_wm_min",
+		Artifact:              ArtifactPayload{ArtifactID: "art_wm_min", SHA256: "sh", SizeBytes: 10, MimeType: "video/mp4"},
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -346,7 +346,7 @@ func TestClient_DeliverArtifact_WireShape_Minimal(t *testing.T) {
 	}
 
 	required := []string{
-		"external_delivery_id", "idempotency_key", "social_destination_id", "artifact",
+		"external_delivery_id", "idempotency_key", "external_destination_id", "artifact",
 	}
 	for _, k := range required {
 		if _, ok := top[k]; !ok {
@@ -378,13 +378,13 @@ func TestClient_DeliverArtifact_WireShape_Full(t *testing.T) {
 
 	c := New(Config{BaseURL: server.URL})
 	_, err := c.DeliverArtifact(context.Background(), DeliverArtifactRequest{
-		ExternalDeliveryID:  "delivery_wm_full",
-		IdempotencyKey:      "idem_wm_full",
-		SocialDestinationID: "social_dest_wm_full",
-		Artifact:            ArtifactPayload{ArtifactID: "art_wm_full", SHA256: "sh", SizeBytes: 10, MimeType: "video/mp4"},
-		Metadata:            map[string]any{"title": "hello"},
-		PublishAt:           "2026-07-20T12:00:00Z",
-		CallbackURL:         "https://velox/cb",
+		ExternalDeliveryID:    "delivery_wm_full",
+		IdempotencyKey:        "idem_wm_full",
+		ExternalDestinationID: "external_dest_wm_full",
+		Artifact:              ArtifactPayload{ArtifactID: "art_wm_full", SHA256: "sh", SizeBytes: 10, MimeType: "video/mp4"},
+		Metadata:              map[string]any{"title": "hello"},
+		PublishAt:             "2026-07-20T12:00:00Z",
+		CallbackURL:           "https://velox/cb",
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -403,7 +403,7 @@ func TestClient_DeliverArtifact_WireShape_Full(t *testing.T) {
 	}
 
 	allKeys := []string{
-		"external_delivery_id", "idempotency_key", "social_destination_id",
+		"external_delivery_id", "idempotency_key", "external_destination_id",
 		"artifact", "metadata", "publish_at", "callback_url",
 	}
 	for _, k := range allKeys {
@@ -431,10 +431,10 @@ func TestClient_DeliverArtifact_WireShape_LegacyKeysNeverPresent(t *testing.T) {
 
 	c := New(Config{BaseURL: server.URL})
 	_, _ = c.DeliverArtifact(context.Background(), DeliverArtifactRequest{
-		ExternalDeliveryID:  "ext",
-		IdempotencyKey:      "idem",
-		SocialDestinationID: "social",
-		Artifact:            ArtifactPayload{ArtifactID: "a", SHA256: "s", SizeBytes: 0, MimeType: ""},
+		ExternalDeliveryID:    "ext",
+		IdempotencyKey:        "idem",
+		ExternalDestinationID: "external",
+		Artifact:              ArtifactPayload{ArtifactID: "a", SHA256: "s", SizeBytes: 0, MimeType: ""},
 		// Metadata CAN contain platform-shaped sub-keys — they're
 		// opaque pass-through. The test verifies these do NOT leak
 		// into the top-level wire JSON.

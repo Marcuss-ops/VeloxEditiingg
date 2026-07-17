@@ -93,18 +93,20 @@ func (s *SocialGatewayProvider) Deliver(ctx context.Context, artifact *store.Art
 // buildRequest constructs the socialclient.DeliverArtifactRequest
 // from the typed Destination + Artifact.
 //
-// Opaque-mode (Residuo 3 of YouTube→Social closure): Velox forwards
-// ONLY the social_destination_id opaque reference; the social_repo
-// is the authoritative resolver for account, channel, and platform.
-// `metadata`, `publish_at`, and `artifact` carry through verbatim;
-// `configuration_json` is no longer parsed for platform/account_id
-// — those values are operator-facing observability only and are
-// inert in the wire contract.
+// Opaque-mode (Residuo 3 + Residuo 4 of YouTube→Social closure):
+// Velox forwards ONLY the external_destination_id opaque reference
+// (canonical, renamed from social_destination_id by Residuo 4
+// migration 092); the social_repo is the authoritative resolver
+// for account, channel, and platform. `metadata`, `publish_at`,
+// and `artifact` carry through verbatim; `configuration_json` is
+// no longer parsed for platform/account_id — those values are
+// operator-facing observability only and are inert in the wire
+// contract.
 func (s *SocialGatewayProvider) buildRequest(artifact *store.Artifact, destination *deliveries.Destination, deliveryID, idempotencyKey string) (socialclient.DeliverArtifactRequest, error) {
 	req := socialclient.DeliverArtifactRequest{
-		ExternalDeliveryID:  deliveryID,
-		IdempotencyKey:      idempotencyKey,
-		SocialDestinationID: destination.SocialDestinationID,
+		ExternalDeliveryID:    deliveryID,
+		IdempotencyKey:        idempotencyKey,
+		ExternalDestinationID: destination.ExternalDestinationID,
 
 		Artifact: socialclient.ArtifactPayload{
 			ArtifactID:  artifact.ID,

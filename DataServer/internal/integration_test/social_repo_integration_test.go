@@ -383,18 +383,20 @@ func newRegistryWithSocialProvider(t *testing.T, client *socialclient.Client) (*
 }
 
 // sampleDestination mirrors the deliveries package's Destination shape.
-// Opaque-mode (Residuo 3 of the YouTube→Social closure):
+// Opaque-mode (Residuo 3 + Residuo 4 of the YouTube→Social closure):
 //   * ChannelID is gone from the typed Destination.
-//   * SocialDestinationID is the identifier the social_repo resolves server-side.
+//   * ExternalDestinationID is the canonical opaque identifier the
+//     social_repo resolves server-side (residual 4 rename promoted
+//     social_destination_id -> external_destination_id).
 //   * ConfigurationJSON is operator-facing observability only — content is
 //     inert in the wire contract (no longer parsed for platform/account_id).
 //   * DeliveryMetadataJSON flows through verbatim as `metadata` in the wire.
 func sampleDestination() *deliveries.Destination {
 	return &deliveries.Destination{
-		DestinationID:        "velox-dest-1",
-		DeliveryMetadataJSON: `{"title":"integration test"}`,
-		ConfigurationJSON:    "{}",
-		SocialDestinationID:  "social_dest_integration_youtube",
+		DestinationID:         "velox-dest-1",
+		DeliveryMetadataJSON:  `{"title":"integration test"}`,
+		ConfigurationJSON:     "{}",
+		ExternalDestinationID: "external_dest_integration_youtube",
 	}
 }
 

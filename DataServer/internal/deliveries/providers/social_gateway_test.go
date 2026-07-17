@@ -64,15 +64,17 @@ func sampleArtifact() *store.Artifact {
 }
 
 // sampleDestination returns an opaque-mode Destination with the
-// SocialDestinationID set so the provider can resolve account + channel
+// ExternalDestinationID set so the provider can resolve account + channel
 // server-side via the Social API. The legacy `channel_id` field is
-// gone from the typed struct (YouTube→Social closure).
+// gone from the typed struct (YouTube→Social closure); the
+// Residuo 4 rename promotes social_destination_id to
+// external_destination_id (canonical, post-rename).
 func sampleDestination() *deliveries.Destination {
 	return &deliveries.Destination{
-		DestinationID:        "dest-1",
-		DeliveryMetadataJSON: `{"title":"hello"}`,
-		ConfigurationJSON:    "{}",
-		SocialDestinationID:  "social_dest_amish_youtube",
+		DestinationID:         "dest-1",
+		DeliveryMetadataJSON:  `{"title":"hello"}`,
+		ConfigurationJSON:     "{}",
+		ExternalDestinationID: "external_dest_amish_youtube",
 	}
 }
 

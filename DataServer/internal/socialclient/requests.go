@@ -3,36 +3,37 @@ package socialclient
 // DeliverArtifactRequest is the typed payload Velox POSTs to the
 // social_repo's `/internal/v1/deliveries` endpoint.
 //
-// Opaque-mode wire contract (Residuo 3 of the YouTube→Social closure):
+// Opaque-mode wire contract (Residuo 3 + Residuo 4 of the
+// YouTube→Social closure):
 //
 //	{
-//	  "external_delivery_id":   "delivery_<uuid>",          // Velox job_deliveries.delivery_id
-//	  "idempotency_key":        "delivery_<uuid>|dest_X",  // artifact × destination stable
-//	  "social_destination_id":  "social_dest_<uuid>",      // opaque, social_repo-resolved
-//	  "artifact":               ArtifactPayload,
-//	  "metadata":               { ... title/desc/tags/... },  // unknown to Velox, passed through
-//	  "publish_at":             "2026-07-20T12:00:00Z",     // optional scheduling
-//	  "callback_url":           "https://velox/.../callback"  // optional webhook
+//	  "external_delivery_id":     "delivery_<uuid>",          // Velox job_deliveries.delivery_id
+//	  "idempotency_key":          "delivery_<uuid>|dest_X",  // artifact × destination stable
+//	  "external_destination_id":  "external_dest_<uuid>",   // opaque, social_repo-resolved
+//	  "artifact":                 ArtifactPayload,
+//	  "metadata":                 { ... title/desc/tags/... },  // unknown to Velox, passed through
+//	  "publish_at":               "2026-07-20T12:00:00Z",     // optional scheduling
+//	  "callback_url":             "https://velox/.../callback"  // optional webhook
 //	}
 //
 // Velox does NOT know the platform, the account, the channel, or any
 // other platform-specific concept: the social_repo is the
-// authoritative resolver from the opaque SocialDestinationID. Velox
+// authoritative resolver from the opaque ExternalDestinationID. Velox
 // only forwards what the operator set on
-// `delivery_destinations.social_destination_id` (column added by
-// migration 091 in the Residuo 2 closure).
+// `delivery_destinations.external_destination_id` (column renamed from
+// `social_destination_id` by migration 092 in the Residuo 4 closure).
 //
 // The DeliveryRunner hydrates destinations and fails-closed with
-// code DESTINATION_UNMAPPED on empty SocialDestinationID — see
+// code DESTINATION_UNMAPPED on empty ExternalDestinationID — see
 // internal/deliveries/runner.go::hydrateDestination — so this
 // field is never empty at DeliverArtifact time. The struct tags
-// reflect that contract: SocialDestinationID has NO `omitempty` so
+// reflect that contract: ExternalDestinationID has NO `omitempty` so
 // any drift between runner and socialclient is detected at marshal
 // time rather than producing a silent malformed JSON POST.
 type DeliverArtifactRequest struct {
-	ExternalDeliveryID  string `json:"external_delivery_id"`
-	IdempotencyKey      string `json:"idempotency_key"`
-	SocialDestinationID string `json:"social_destination_id"`
+	ExternalDeliveryID     string `json:"external_delivery_id"`
+	IdempotencyKey         string `json:"idempotency_key"`
+	ExternalDestinationID  string `json:"external_destination_id"`
 
 	Artifact ArtifactPayload `json:"artifact"`
 
