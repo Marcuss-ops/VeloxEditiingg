@@ -62,6 +62,7 @@ type JobPayloadV2 struct {
 	OutputVideoID   string           `json:"output_video_id,omitempty"`
 	SceneImagePaths []string         `json:"scene_image_paths,omitempty"`
 	ImageSourceMap  string           `json:"image_source_map,omitempty"`
+	VideoMetadata   map[string]any   `json:"video_metadata,omitempty"`
 
 	// Numeric metadata (sent as JSON numbers)
 	Priority          int     `json:"priority"`
@@ -124,6 +125,9 @@ func NewJobPayloadV2(raw map[string]any) *JobPayloadV2 {
 		Source:          payload.FirstString(raw, "source"),
 		Status:          "PENDING",
 		DeliveryPlan:    raw["delivery_plan"],
+	}
+	if metadata, ok := raw["video_metadata"].(map[string]any); ok {
+		p.VideoMetadata = cloneObject(metadata)
 	}
 	if scenesVal, ok := raw["scenes"]; ok {
 		switch s := scenesVal.(type) {
@@ -231,6 +235,9 @@ func (p *JobPayloadV2) ToMap() (map[string]any, error) {
 	if p.ImageSourceMap != "" {
 		out["image_source_map"] = p.ImageSourceMap
 	}
+	if len(p.VideoMetadata) > 0 {
+		out["video_metadata"] = cloneObject(p.VideoMetadata)
+	}
 	if p.SceneCount > 0 {
 		out["scene_count"] = p.SceneCount
 	}
@@ -259,6 +266,17 @@ func (p *JobPayloadV2) ToMap() (map[string]any, error) {
 		out["delivery_plan"] = p.DeliveryPlan
 	}
 	return out, nil
+}
+
+func cloneObject(in map[string]any) map[string]any {
+	if in == nil {
+		return nil
+	}
+	out := make(map[string]any, len(in))
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
 }
 
 // JobPayloadV2FromJSON parses a JSON byte slice back into a typed struct.

@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"velox-server/internal/jobs"
 	"velox-server/internal/routing"
@@ -63,6 +64,16 @@ func normalizeSceneVideoPayload(payloadMap map[string]interface{}) (map[string]i
 		return nil, &validationError{field: "video_name", message: "is required"}
 	}
 	base.VideoName = title
+	if rawMetadata, present := payloadMap["video_metadata"]; present && rawMetadata != nil {
+		metadata, ok := rawMetadata.(map[string]interface{})
+		if !ok {
+			return nil, &validationError{field: "video_metadata", message: "must be an object"}
+		}
+		if err := validateVideoMetadata(metadata); err != nil {
+			return nil, err
+		}
+		base.VideoMetadata = cloneMetadataMap(metadata)
+	}
 
 	scriptText := strings.TrimSpace(base.ScriptText)
 	if scriptText == "" {
@@ -129,6 +140,65 @@ func normalizeSceneVideoPayload(payloadMap map[string]interface{}) (map[string]i
 	}
 	copyTimelinePayloadFields(out, payloadMap)
 	return out, nil
+}
+
+func validateVideoMetadata(metadata map[string]interface{}) error {
+	if title, ok := metadata["title"]; ok {
+		if value, ok := title.(string); !ok || strings.TrimSpace(value) == "" {
+			return &validationError{field: "video_metadata.title", message: "must be a non-empty string"}
+		}
+	}
+	if description, ok := metadata["description"]; ok {
+		if _, ok := description.(string); !ok {
+			return &validationError{field: "video_metadata.description", message: "must be a string"}
+		}
+	}
+	if tags, ok := metadata["tags"]; ok && tags != nil {
+		switch values := tags.(type) {
+		case []interface{}:
+			for i, value := range values {
+				if _, ok := value.(string); !ok {
+					return &validationError{field: fmt.Sprintf("video_metadata.tags[%d]", i), message: "must be a string"}
+				}
+			}
+		case []string:
+		default:
+			return &validationError{field: "video_metadata.tags", message: "must be an array of strings"}
+		}
+	}
+	if privacy, ok := metadata["privacy_status"]; ok {
+		value, ok := privacy.(string)
+		if !ok || !isYouTubePrivacyStatus(value) {
+			return &validationError{field: "video_metadata.privacy_status", message: "must be private, unlisted, or public"}
+		}
+	}
+	if publishAt, ok := metadata["publish_at"]; ok && publishAt != nil {
+		value, ok := publishAt.(string)
+		if !ok || strings.TrimSpace(value) == "" {
+			return &validationError{field: "video_metadata.publish_at", message: "must be an RFC3339 timestamp"}
+		}
+		if _, err := time.Parse(time.RFC3339, value); err != nil {
+			return &validationError{field: "video_metadata.publish_at", message: "must be an RFC3339 timestamp"}
+		}
+	}
+	return nil
+}
+
+func isYouTubePrivacyStatus(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "private", "unlisted", "public":
+		return true
+	default:
+		return false
+	}
+}
+
+func cloneMetadataMap(metadata map[string]interface{}) map[string]interface{} {
+	out := make(map[string]interface{}, len(metadata))
+	for key, value := range metadata {
+		out[key] = value
+	}
+	return out
 }
 
 func normalizeScenes(payloadMap map[string]interface{}) ([]map[string]interface{}, string, error) {

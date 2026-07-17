@@ -55,6 +55,7 @@ var CanonicalTopLevelKeys = []string{
 	"scenes_json", "scenes",
 	"voiceover_paths",
 	"items", // Step 2/8: items[].role scene/clip contract (worker payload layer)
+	"video_metadata",
 	"audio_language_for_srt",
 	"video_mode", "output_path",
 	"drive_output_folder",
@@ -155,7 +156,8 @@ var ErrNonCanonicalKey = errors.New("contract: non-canonical key rejected")
 //     - job_id, video_name, script_text
 //  4. Canonical array fields, when present, must be array-shaped:
 //     - scenes, voiceover_paths, scene_image_paths, items
-//  5. delivery_plan, when present, must be array- OR single-map-shaped.
+//  5. video_metadata, when present, must be an object.
+//  6. delivery_plan, when present, must be array- OR single-map-shaped.
 //
 // Unknown keys are tolerated by ValidatePayload (see UnknownKeys); use
 // StrictValidatePayload if a hard reject is required.
@@ -202,7 +204,14 @@ func ValidatePayload(payload map[string]interface{}) error {
 		}
 	}
 
-	// Rule 5 — delivery_plan accepts either a single-map OR an array form.
+	if v, ok := payload["video_metadata"]; ok && v != nil {
+		if _, ok := v.(map[string]interface{}); !ok {
+			return fmt.Errorf("%w: %q must be an object (got %T)",
+				ErrShapeAnomaly, "video_metadata", v)
+		}
+	}
+
+	// Rule 6 — delivery_plan accepts either a single-map OR an array form.
 	// Per-entry shape validation lives in delivery_plan_validator.go to
 	// keep this file at the top-level boundary only.
 	if v, ok := payload["delivery_plan"]; ok && v != nil {
