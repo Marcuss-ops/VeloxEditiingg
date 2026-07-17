@@ -13,3 +13,5 @@ use (
 // for non-workspace builds (CI runners / container entrypoints that enter
 // a single sub-module without `go.work` on their lookup path).
 replace velox-shared v0.0.0 => ./shared
+
+use ./internal/application/images
