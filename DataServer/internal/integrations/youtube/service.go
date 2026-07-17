@@ -99,16 +99,6 @@ func (s *Service) QuotaManager() *QuotaManager { return s.quotaManager }
 // SQL→domain mapping).
 func (s *Service) Repo() Repository { return s.repo }
 
-// --- Public API: Upload (Delegated to Uploader) ---
-
-func (s *Service) UploadVideo(ctx context.Context, channelID string, videoPath string, config UploadConfig) (*UploadResult, error) {
-	return s.uploader.UploadVideo(ctx, channelID, videoPath, config)
-}
-
-func (s *Service) SetThumbnail(ctx context.Context, channelID string, videoID string, thumbnailPath string) (string, error) {
-	return s.uploader.SetThumbnail(ctx, channelID, videoID, thumbnailPath)
-}
-
 // --- Public API: Video Metadata (Delegated to VideoManager) ---
 
 func (s *Service) UpdateVideoMetadata(ctx context.Context, channelID string, videoID string, config UploadConfig) error {
