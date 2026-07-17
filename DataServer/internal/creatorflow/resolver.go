@@ -49,134 +49,15 @@ package creatorflow
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
-	"errors"
 	"fmt"
-	"log"
 	"strings"
-	"time"
-
-	"github.com/google/uuid"
 
 	"velox-server/internal/config"
 	"velox-server/internal/costmodel"
-	"velox-server/internal/jobs"
 	"velox-server/internal/jobs/enqueue"
 	"velox-server/internal/routing"
 	"velox-server/internal/store"
-	"velox-server/internal/taskgraph"
 )
-
-// ── Repository interfaces (Blocco 4 del Verdetto) ──────────────────
-//
-// Resolver previously depended on concrete *store.SQLiteStore. This
-// package-local interface boundary lets the canonical Resolver unit
-// exercise against in-memory fakes for tests AND keeps the Resolver
-// from drifting into SQL specifics. ForwardingRepository owns the
-// four forwarding-table mutations Resolve needs; JobLookup owns the
-// idempotency Get().
-//
-// Method selection: each interface exposes ONLY what Resolve actually
-// calls today — no speculative methods. Extending the surface should
-// be a deliberate decision wired through the resolver body.
-//
-// ForwardingRepository surfaces the canonical store methods; non-store
-// implementations can satisfy the contract by re-implementing the
-// behaviour against any backing store. JobLookup is a one-method
-// surface because the idempotency fast-path is the only caller.
-
-type (
-	// ForwardingRepository owns the SQL lifecycle of a creator_forwardings
-	// row from Resolve's perspective. Every method is invoked once per
-	// Resolve call (or zero times on the idempotent fast-path), and the
-	// trust contract is identical to the corresponding SQLiteStore
-	// methods: CAS semantics, ErrTransitionConflict on conflict.
-	ForwardingRepository interface {
-		// GetCreatorForwardingBySource locates the canonical row for a
-		// (provider, source_job_id, target_executor_id) triple. Returns
-		// (nil, nil) when no row exists yet, mirroring store's idiom.
-		GetCreatorForwardingBySource(ctx context.Context, provider, sourceJobID, targetExecutorID string) (*store.CreatorForwarding, error)
-
-		// InsertCreatorForwarding creates the initial PENDING row for the
-		// handler sync path. The UNIQUE constraint on
-		// (source_provider, source_job_id, target_executor_id) makes
-		// concurrent calls converge.
-		InsertCreatorForwarding(ctx context.Context, cf *store.CreatorForwarding) error
-
-		// UpsertCreatorForwardingPayload stamps payload + source_status
-		// onto an existing row (runner path). Preserves status.
-		UpsertCreatorForwardingPayload(ctx context.Context, forwardingID, payloadJSON, payloadSHA256 string) error
-
-		// MarkCreatorForwardingReadySync promotes PENDING/POLLING →
-		// READY_TO_FORWARD without a lease CAS (handler sync path).
-		MarkCreatorForwardingReadySync(ctx context.Context, forwardingID, payloadJSON, payloadSHA256 string) error
-
-		// EnsureForwarded is the repair-path idempotency primitive. Idempotent
-		// across FORWARDED / FORWARDING / READY_TO_FORWARD states: writes
-		// (FORWARDING|FORWARDED ← FORWARDED, target_job_id=jobID) on any
-		// non-terminal state. Returns nil on FORWARDED (already there).
-		// Returns ErrTransitionConflict on terminal states (FAILED, BLOCKED).
-		EnsureForwarded(ctx context.Context, forwardingID, jobID string) error
-
-		// AtomicForwardAndEnqueue packs (READY_TO_FORWARD → FORWARDING →
-		// INSERT job/task/task_spec → FORWARDING → FORWARDED) in one tx.
-		AtomicForwardAndEnqueue(ctx context.Context, forwardingID string, job *jobs.Job, spec *taskgraph.TaskSpec, priority int) error
-	}
-
-	// JobLookup is the idempotency pre-check surface. The canonical
-	// implementation is jobs.Writer (writers implement Get); tests
-	// pass a fake that returns nil on cache miss.
-	JobLookup interface {
-		Get(ctx context.Context, id string) (*jobs.Job, error)
-	}
-)
-
-// ── Deep-clone helpers (Blocco 4 del Verdetto) ──────────────────────
-//
-// Resolve mutates the caller's payload map (injects _internal_forwarding_key
-// via fwdKey.InjectIntoPayload). The user spec mandates that the caller's
-// map is untouched after Resolve returns: clone req.Payload at entry. The
-// recursive walk is preferred over json-roundtrip (cheap + type-stable).
-// Maps and slices are deep-cloned; scalars (string, int, float, bool,
-// json.Number) carry through reference equality (immutable). Any other
-// type — depends on caller to be JSON-stable; if not, json.Marshal is the
-// fallback inside Resolve's payload-build step.
-
-func cloneValue(v interface{}) interface{} {
-	switch t := v.(type) {
-	case map[string]interface{}:
-		return cloneMap(t)
-	case []interface{}:
-		return cloneSlice(t)
-	default:
-		// scalars + structs + json.Number + nil: pass through
-		return v
-	}
-}
-
-func cloneMap(m map[string]interface{}) map[string]interface{} {
-	if m == nil {
-		return nil
-	}
-	out := make(map[string]interface{}, len(m))
-	for k, v := range m {
-		out[k] = cloneValue(v)
-	}
-	return out
-}
-
-func cloneSlice(s []interface{}) []interface{} {
-	if s == nil {
-		return nil
-	}
-	out := make([]interface{}, len(s))
-	for i, v := range s {
-		out[i] = cloneValue(v)
-	}
-	return out
-}
 
 // Resolver bundles the canonical dependencies for Resolve. Holding them on
 // a struct (not passing them per-call) means callers cannot accidentally
@@ -184,10 +65,8 @@ func cloneSlice(s []interface{}) []interface{} {
 // once at composition root and reused.
 //
 // Blocco 4 del Verdetto: ForwardingRepository + JobLookup interfaces are
-// declared at the top of this file (Blocco 4 part-1 commit only — wires
-// into the Resolver struct in a follow-up commit once the cross-package
-// signature cascading is sequenced). Keeping the struct API surface on
-// *store.SQLiteStore for the part-1 commit avoids breaking Service +
+// declared in resolver_repositories.go. Keeping the struct API surface
+// on *store.SQLiteStore for the part-1 commit avoids breaking Service +
 // runner callers in the same change-set.
 type Resolver struct {
 	enqueuer  *enqueue.Enqueuer
@@ -266,97 +145,6 @@ func (r *Resolver) HasDBAccess() bool {
 	return r != nil && r.dbStore != nil
 }
 
-// PersistPendingRemoteForwarding records an incomplete remote-engine result
-// for the durable CreatorForwardingRunner. The operation is idempotent on
-// (sourceProvider, sourceJobID, targetExecutorID), so retries of the HTTP
-// request or concurrent callers converge on the same forwarding row.
-//
-// The remote payload is intentionally not stored here: the runner polls the
-// remote job by sourceJobID and persists the authoritative completed payload
-// through Resolver.Resolve. This keeps the PENDING row small and prevents an
-// incomplete response from being mistaken for a forwardable worker payload.
-func (r *Resolver) PersistPendingRemoteForwarding(
-	ctx context.Context,
-	sourceProvider, sourceJobID, targetExecutorID string,
-) (*store.CreatorForwarding, error) {
-	if r == nil || r.dbStore == nil {
-		return nil, fmt.Errorf("creatorflow: persist pending forwarding: resolver database access is required")
-	}
-	sourceProvider = strings.TrimSpace(sourceProvider)
-	sourceJobID = strings.TrimSpace(sourceJobID)
-	targetExecutorID = strings.TrimSpace(targetExecutorID)
-	if sourceProvider == "" || sourceJobID == "" {
-		return nil, fmt.Errorf("creatorflow: persist pending forwarding: source provider and source job id are required")
-	}
-	if targetExecutorID == "" {
-		targetExecutorID = "scene.composite.v1"
-	}
-
-	if existing, err := r.dbStore.GetCreatorForwardingBySource(ctx, sourceProvider, sourceJobID, targetExecutorID); err != nil {
-		if !errors.Is(err, store.ErrCreatorForwardingNoRow) {
-			return nil, fmt.Errorf("creatorflow: lookup pending forwarding: %w", err)
-		}
-	} else if existing != nil {
-		return existing, nil
-	}
-
-	inserted, err := r.dbStore.InsertCreatorForwarding(ctx, &store.CreatorForwarding{
-		ForwardingID:     "cf_" + uuid.NewString(),
-		SourceProvider:   sourceProvider,
-		SourceJobID:      sourceJobID,
-		TargetExecutorID: targetExecutorID,
-		Status:           string(store.CFStatusPending),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("creatorflow: persist pending forwarding: %w", err)
-	}
-	if inserted == nil || inserted.Forwarding == nil {
-		return nil, fmt.Errorf("creatorflow: persist pending forwarding: store returned no forwarding")
-	}
-	return inserted.Forwarding, nil
-}
-
-// ResolveRequest is the typed input for Resolver.Resolve.
-//
-//   - ForwardingID: optional. When set (the runner path), the resolver
-//     treats req.ForwardingID as the existing creator_forwardings row
-//     from the runner's lease and UPDATES its payload + source_status
-//     before the atomic enqueue. When empty (the handler sync path),
-//     the resolver INSERTs a fresh PENDING creator_forwardings row and
-//     immediately promotes it to READY_TO_FORWARD via the leaseless
-//     MarkCreatorForwardingReadySync transition.
-//   - SourceProvider: e.g. "remote_engine". Required.
-//   - SourceJobID: the remote engine's job id. Required.
-//   - TargetExecutorID: the executor that the Velox Job should route
-//     to. Optional; defaults to "scene.composite.v1".
-//   - Payload: the raw remote-engine response map. Required; must pass
-//     enqueue.ShouldForwardPipelineResult or Resolve returns (nil, nil)
-//     ("result not complete — caller should keep polling").
-type ResolveRequest struct {
-	ForwardingID     string
-	SourceProvider   string
-	SourceJobID      string
-	TargetExecutorID string
-	Payload          map[string]interface{}
-}
-
-// ResolveOutput is what every caller receives. JobID and ForwardingID
-// are guaranteed to be the SAME across the handler and runner paths for
-// the same (source_provider, source_job_id, target_executor_id) input.
-// Response is the HTTP-flavored envelope (job_id, status, ok, …) that
-// the handler returns to the client; the runner ignores it.
-type ResolveOutput struct {
-	JobID        string
-	ForwardingID string
-	Response     map[string]interface{}
-}
-
-// ErrResolverNotComplete is the sentinel for "payload not complete —
-// caller should keep polling". Returned via (*ResolveOutput, nil) plus
-// a nil error; the caller decides whether nil-output means "early exit"
-// (handler: respond 202 polling, runner: mark retry-wait).
-var ErrResolverNotComplete = fmt.Errorf("creatorflow: Resolve: payload is not complete enough to forward")
-
 // Resolve returns the canonical (job_id, forwarding_id) pair for the
 // input. Implementation invariants:
 //
@@ -434,52 +222,17 @@ func (r *Resolver) Resolve(ctx context.Context, req ResolveRequest) (*ResolveOut
 	// (crash interrupted AtomicForwardAndEnqueue after Job INSERT but
 	// before the FORWARDED CAS), call EnsureForwarded to stamp it. This
 	// closes the "Job exists, forwarding row stuck in FORWARDING" window.
-	if existing, getErr := r.enqueuer.Jobs.Get(ctx, jobID); getErr == nil && existing != nil && existing.ID == jobID {
-		forwardingID := req.ForwardingID
-		if forwardingID == "" {
-			if cf, lookupErr := r.dbStore.GetCreatorForwardingBySource(ctx, req.SourceProvider, req.SourceJobID, targetExecutor); lookupErr == nil && cf != nil {
-				forwardingID = cf.ForwardingID
-			}
-		}
-		// Repair the forwarding row if it exists and is not yet FORWARDED.
-		// EnsureForwarded is idempotent: nil if already FORWARDED with the
-		// same job_id; ErrTransitionConflict if FORWARDED with a different
-		// job_id or in a terminal FAILED/BLOCKED state.
-		if forwardingID != "" {
-			if repairErr := r.dbStore.EnsureForwarded(ctx, forwardingID, jobID); repairErr != nil {
-				log.Printf("[CREATORFLOW] idempotency fast-path: EnsureForwarded failed forwarding=%s job=%s: %v",
-					forwardingID, jobID, repairErr)
-				// Non-fatal: the Job already exists, the forwarding row
-				// repair is best-effort. A reaper or operator can
-				// reconcile later. We still return the idempotent
-				// response so the caller doesn't re-enqueue.
-			}
-		}
-		return &ResolveOutput{
-			JobID:        existing.ID,
-			ForwardingID: forwardingID,
-			Response:     buildIdempotentResolveResponse(existing),
-		}, nil
+	if out, hit := r.checkIdempotencyFastPath(ctx, req, jobID, targetExecutor); hit {
+		return out, nil
 	}
 
 	// 4. Build + rewrite worker payload. Skip rewriting when the
 	// resolver was constructed without dataDir+masterURL (in-runner
 	// path; the remote engine already produced a complete result).
-	workerPayload, err := enqueue.BuildPipelinePayload(req.Payload)
+	workerPayload, err := r.buildAndRewritePayload(req.Payload, fwdKey)
 	if err != nil {
-		return nil, fmt.Errorf("creatorflow: Resolve build worker payload: %w", err)
+		return nil, err
 	}
-	if r.dataDir != "" && r.masterURL != "" {
-		workerPayload, err = enqueue.BuildSceneImagePayloadForMaster(workerPayload, r.dataDir, r.videosDir, r.masterURL)
-		if err != nil {
-			return nil, fmt.Errorf("creatorflow: Resolve rewrite master URL: %w", err)
-		}
-	}
-	// Re-inject the forwarding key into the rewritten payload — both
-	// BuildPipelinePayload and BuildSceneImagePayloadForMaster produce
-	// fresh maps that drop the originally-injected key. This is the
-	// same step the legacy Service.ForwardCompleted performed.
-	fwdKey.InjectIntoPayload(workerPayload)
 
 	// 5. Promote the forwarding row to READY_TO_FORWARD.
 	forwardingID, err := r.ensureReadyForwarding(ctx, req, targetExecutor, workerPayload)
@@ -503,139 +256,4 @@ func (r *Resolver) Resolve(ctx context.Context, req ResolveRequest) (*ResolveOut
 		ForwardingID: forwardingID,
 		Response:     buildFreshResolveResponse(job),
 	}, nil
-}
-
-// ensureReadyForwarding either
-//
-//	(a) reuses the existing ForwardingID from the request (runner path) and
-//	    stamps payload + source_status via the leasable guard, or
-//	(b) INSERTs a fresh PENDING row and promotes it to READY_TO_FORWARD via
-//	    the leaseless MarkCreatorForwardingReadySync (handler sync path).
-//
-// The payload is JSON-serialized here so both paths pass the same shape
-// into the atomic write. A marshal failure is treated as a fatal input
-// error (the caller decides whether to surface it to the user).
-func (r *Resolver) ensureReadyForwarding(ctx context.Context, req ResolveRequest, targetExecutor string, workerPayload map[string]interface{}) (string, error) {
-	payloadJSON, payloadSHA256 := resolverMarshalPayload(workerPayload)
-	if payloadJSON == "" && payloadSHA256 == "" {
-		return "", fmt.Errorf("creatorflow: Resolve: worker payload is not JSON-serializable")
-	}
-
-	// (a) Runner path.
-	if req.ForwardingID != "" {
-		if err := r.dbStore.UpsertCreatorForwardingPayload(ctx, req.ForwardingID, payloadJSON, payloadSHA256); err != nil {
-			return "", fmt.Errorf("creatorflow: Resolve upsert payload: %w", err)
-		}
-		return req.ForwardingID, nil
-	}
-
-	// (b) Handler sync path: INSERT PENDING, then promote.
-	now := time.Now().UTC().Format(time.RFC3339)
-	cf := &store.CreatorForwarding{
-		ForwardingID:     "cf_" + uuid.NewString(),
-		SourceProvider:   req.SourceProvider,
-		SourceJobID:      req.SourceJobID,
-		TargetExecutorID: targetExecutor,
-		PayloadJSON:      payloadJSON,
-		PayloadSHA256:    payloadSHA256,
-		Status:           string(store.CFStatusPending),
-		AttemptCount:     0,
-		CreatedAt:        now,
-		UpdatedAt:        now,
-	}
-	inserted, err := r.dbStore.InsertCreatorForwarding(ctx, cf)
-	if err != nil {
-		return "", fmt.Errorf("creatorflow: Resolve insert forwarding: %w", err)
-	}
-	if inserted == nil || inserted.Forwarding == nil || inserted.Forwarding.ForwardingID == "" {
-		return "", fmt.Errorf("creatorflow: Resolve: insert returned empty row")
-	}
-
-	// Promote PENDING → READY_TO_FORWARD via the leaseless sync method.
-	if err := r.dbStore.MarkCreatorForwardingReadySync(ctx, inserted.Forwarding.ForwardingID, payloadJSON, payloadSHA256); err != nil {
-		return "", fmt.Errorf("creatorflow: Resolve mark READY_TO_FORWARD: %w", err)
-	}
-	log.Printf("[CREATORFLOW] sync handler path: promoted %s to READY_TO_FORWARD (source=%s source_job=%s target_executor=%s)",
-		inserted.Forwarding.ForwardingID, req.SourceProvider, req.SourceJobID, targetExecutor)
-	return inserted.Forwarding.ForwardingID, nil
-}
-
-// buildIdempotentResolveResponse is the response body for the
-// idempotency fast-path (the Job already exists). The runner path
-// typically hits this on a duplicate poll + lease reclaim; the handler
-// path hits it on a duplicate webhook.
-func buildIdempotentResolveResponse(existing *jobs.Job) map[string]interface{} {
-	resp := map[string]interface{}{
-		"ok":                true,
-		"job_id":            existing.ID,
-		"created":           false,
-		"status":            string(existing.Status),
-		"enqueue_confirmed": true,
-		"job_type":          "process_video",
-	}
-	if runID := strings.TrimSpace(existing.RunID); runID != "" {
-		resp["job_run_id"] = runID
-		resp["run_id"] = runID
-	}
-	return resp
-}
-
-// buildFreshResolveResponse is the response body for the freshly-created
-// path (Job did not exist before Resolve ran).
-//
-// Status string-typing consistency: `jobs.StatusPending` is a typed
-// `jobs.Status` constant (alias-shared with `store.JobStatus`). When
-// stored in a `map[string]interface{}`, the value's DYNAMIC TYPE is the
-// typed alias — not an untyped `string`. Downstream consumers that
-// compare to the untyped literal "PENDING" (e.g.
-// TestForwardCompletedEnqueuesWorkerJob) hit Go's interface-equality
-// rule: two interface values are equal iff both their dynamic type AND
-// dynamic value are equal. typed-string("PENDING") != string("PENDING")
-// even when both values spell PENDING.
-//
-// To keep both response builders (buildIdempotentResolveResponse +
-// buildFreshResolveResponse) wire-compatible with the HTTP/script
-// callers — which universally treat response["status"] as a plain
-// string — both builders cast to `string(...)`. This is the same
-// pattern that jobStatus comparisons throughout the codebase already
-// use (e.g. sqlite_writer.go does `string(j.Status)` for comparison
-// with literal "PENDING"). The duplication is deliberate: the typed
-// constant stays in the domain model (jobs.Status) and the wire shape
-// stays as plain string.
-func buildFreshResolveResponse(job *jobs.Job) map[string]interface{} {
-	resp := map[string]interface{}{
-		"ok":                true,
-		"job_id":            job.ID,
-		"created":           true,
-		"status":            string(jobs.StatusPending),
-		"enqueue_confirmed": true,
-		"job_type":          "process_video",
-	}
-	if runID := strings.TrimSpace(job.RunID); runID != "" {
-		resp["job_run_id"] = runID
-		resp["run_id"] = runID
-	}
-	return resp
-}
-
-// resolverMarshalPayload serializes a worker payload map to canonical
-// JSON + SHA-256. Empty inputs yield a literal "{}" payload — the
-// caller decides whether empty sha is a fatal input error. Mirrors the
-// runner's marshalPayload semantics so the two paths produce identical
-// payload_json/payload_sha256 bytes for the same input map.
-func resolverMarshalPayload(result map[string]interface{}) (payloadJSON, payloadSHA256 string) {
-	if result == nil {
-		raw := []byte("{}")
-		return string(raw), sha256HexResolver(raw)
-	}
-	raw, err := json.Marshal(result)
-	if err != nil {
-		return "", ""
-	}
-	return string(raw), sha256HexResolver(raw)
-}
-
-func sha256HexResolver(data []byte) string {
-	sum := sha256.Sum256(data)
-	return hex.EncodeToString(sum[:])
 }
