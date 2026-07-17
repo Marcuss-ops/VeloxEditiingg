@@ -197,7 +197,14 @@ func (h *Handlers) RegisterRoutes(r *gin.Engine, adminAuth gin.HandlerFunc) {
 	remote.POST("/generate", h.Generate())
 	remote.GET("/status/:trace_id", h.Status())
 	remote.DELETE("/cancel/:trace_id", h.Cancel())
-	r.GET("/api/v1/pipeline-runs/:request_id", h.PipelineRunStatus())
+
+	// Canonical, versioned pipeline-runs API. The POST creates a
+	// durable pipeline_run before the remote call; the GET returns the
+	// aggregated status projection. The :id param accepts either the
+	// pipeline_run id (run_...) or the request_id (req_...) for
+	// backwards compatibility with clients that only stored the request_id.
+	r.POST("/api/v1/pipeline-runs", h.CreatePipelineRun())
+	r.GET("/api/v1/pipeline-runs/:id", h.PipelineRunStatus())
 }
 
 // pipelineLog is the package-internal structured-log helper. Kept
