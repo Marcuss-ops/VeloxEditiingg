@@ -17,9 +17,6 @@ package youtube
 import (
 	"context"
 	"fmt"
-	"log"
-	"os"
-	"path/filepath"
 	"time"
 
 	"golang.org/x/oauth2"
@@ -54,6 +51,15 @@ type Service struct {
 // error and returns a non-nil error so the call site fails fast instead
 // of silently entering a degraded mode (the previous "store is optional
 // → in-memory-only" behaviour is removed entirely).
+//
+// Construction order:
+//  1. Validate cfg + repo (fail fast on programmer error).
+//  2. applyConfigDefaults (config.go) — fills empty TokensDir /
+//     YoutubePostingPath from env or documented default.
+//  3. Build the Service struct with config + repo + cache.
+//  4. wireServiceManagers (config.go) — installs AuthManager +
+//     Uploader + VideoManager + QuotaManager and triggers the OAuth
+//     config load.
 func NewService(cfg *ServiceConfig, repo Repository) (*Service, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("youtube.NewService: cfg is required")
@@ -62,20 +68,7 @@ func NewService(cfg *ServiceConfig, repo Repository) (*Service, error) {
 		return nil, fmt.Errorf("youtube.NewService: Repository is required")
 	}
 
-	if cfg.TokensDir == "" {
-		if env := os.Getenv("VELOX_YOUTUBE_TOKENS_DIR"); env != "" {
-			cfg.TokensDir = env
-		} else {
-			cfg.TokensDir = filepath.Join(cfg.DataDir, "secrets", "youtube", "tokens")
-		}
-	}
-	if cfg.YoutubePostingPath == "" {
-		if env := os.Getenv("VELOX_YOUTUBE_POSTING_PATH"); env != "" {
-			cfg.YoutubePostingPath = env
-		} else {
-			cfg.YoutubePostingPath = "YoutubePosting"
-		}
-	}
+	applyConfigDefaults(cfg)
 
 	s := &Service{
 		config: cfg,
@@ -83,14 +76,7 @@ func NewService(cfg *ServiceConfig, repo Repository) (*Service, error) {
 		cache:  NewCache(cfg.DataDir, 12*time.Hour, repo),
 	}
 
-	s.authManager = NewAuthManager(s)
-	s.uploader = NewUploader(s)
-	s.videoManager = NewVideoManager(s)
-	s.quotaManager = NewQuotaManager(s) // PR-YT-REPO: repo/db wiring done by app/youtube.go via the QuotaManager's own SetStore/SetDB.
-
-	if err := s.loadOAuthConfig(); err != nil {
-		log.Printf("[WARN] YouTube OAuth config not loaded: %v", err)
-	}
+	wireServiceManagers(s)
 
 	return s, nil
 }
