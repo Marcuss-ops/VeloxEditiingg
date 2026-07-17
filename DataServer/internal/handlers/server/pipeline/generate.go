@@ -106,8 +106,8 @@ func (h *Handlers) Generate() gin.HandlerFunc {
 		insertResult, err := h.store.InsertPipelineRun(c.Request.Context(), &pipelineruns.PipelineRun{
 			ID:                   runID,
 			RequestID:            requestID,
-			IdempotencyKey:     idemKey,
-			Status:             pipelineruns.StatusAccepted,
+			IdempotencyKey:       idemKey,
+			Status:               pipelineruns.StatusAccepted,
 			RequestedPayloadJSON: "{}",
 			CreatedAt:            now,
 			UpdatedAt:            now,
