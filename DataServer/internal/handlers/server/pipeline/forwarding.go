@@ -17,10 +17,10 @@
 // used to recover the canonical source_job_id and target_executor_id
 // from the worker payload before resolving.
 //
-// pipeline.go keeps the package-internal logger (pipelineLog) so the
-// "[PIPELINE]" diagnostic prefix in this file remains uniform with the
-// rest of the package — pipelineLog is callable from any sibling file
-// because they share the same Go package.
+// pipelineLog (the package-internal logger) lives in logging.go inside
+// the same Go package, so forwarding.go can call it without owning
+// the helper itself. The "[PIPELINE]" diagnostic prefix in this file
+// remains uniform with the rest of the package.
 package pipeline
 
 import (

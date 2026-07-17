@@ -1,7 +1,8 @@
 // Package pipeline: generate.go isolates the legacy POST /api/remote/pipeline/generate
-// handler into its own file. Same package as pipeline.go (so package-internal
-// symbols — pipelineLog, firstStringResolver, forwardPipelineResultToWorker,
-// isTerminalStatus — are visible without re-export).
+// handler into its own file. Same package as the rest of the split pipeline
+// package (so package-internal symbols — pipelineLog, firstStringResolver,
+// forwardPipelineResultToWorker, isTerminalStatus — are visible without
+// re-export).
 //
 // What this file owns:
 //   - h.Generate(): the handler.
@@ -20,12 +21,13 @@
 //   - voiceover asset acquisition error mapping
 //     (voiceoverassets.AsAcquisitionError → 422 with structured fields).
 //
-// What stays in pipeline.go for now (to be moved in later steps):
-//   - forwardPipelineResultToWorker → Step 4 / forwarding.go.
-//   - firstStringResolver             → Step 4 / forwarding.go.
-//   - pipelineLog                     → pipeline.go (cross-file logging
-//     convention preserved).
-//   - RegisterRoutes                  → Step 2 / routes.go.
+// What stays / what got moved:
+//   - forwardPipelineResultToWorker   → forwarding.go (Step 4 done).
+//   - firstStringResolver             → forwarding.go (Step 4 done).
+//   - pipelineLog                     → logging.go (Step 9 done) — the
+//     cross-file logging convention is preserved by keeping it package-
+//     internal and callable from any sibling file.
+//   - RegisterRoutes                  → routes.go (Step 2 done).
 //
 // The handler runs alongside POST /api/v1/pipeline-runs
 // (CreatePipelineRun, in pipeline_create.go) which is the durable,
