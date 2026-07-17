@@ -30,10 +30,14 @@
 //	                     → ToWorkerPayload), forward decision tree,
 //	                     response envelope + voiceover-asset error
 //	                     mapping.
-//	pipeline.go (this) — RegisterRoutes, the package-internal
-//	                     [PIPELINE] logger, the Resolver-based
-//	                     forwardPipelineResultToWorker helper, and
-//	                     the map-key probe firstStringResolver.
+//	routes.go          — h.RegisterRoutes() Gin mount surface for all
+//	                     pipeline endpoints (script-simple,
+//	                     script-multiple, /api/remote/pipeline/* group
+//	                     with optional adminAuth middleware, and the
+//	                     /api/v1/pipeline-runs family).
+//	pipeline.go (this) — package-internal [PIPELINE] logger,
+//	                     Resolver-based forwardPipelineResultToWorker
+//	                     helper, map-key probe firstStringResolver.
 //	pipeline_lifecycle.go  — Status / Cancel / isTerminalStatus.
 //	pipeline_create.go     — CreatePipelineRun + build helpers.
 //	pipeline_run_status.go — PipelineRunStatus + projection.
@@ -44,7 +48,7 @@
 //
 // Forwards pipeline.go → forwarding.go is the next planned step; until
 // then forwardPipelineResultToWorker + firstStringResolver stay co-
-// located with RegisterRoutes so the package compiles.
+// located in this file so the package compiles.
 package pipeline
 
 import (
@@ -53,41 +57,8 @@ import (
 	"log"
 	"strings"
 
-	"github.com/gin-gonic/gin"
-
 	"velox-server/internal/creatorflow"
 )
-
-// RegisterRoutes mounts all pipeline endpoints on the given engine.
-//
-//	adminAuth — when non-nil, applied to the operator routes
-//	             (generate/status/cancel). Pass nil for the trusted
-//	             network or test mounts.
-func (h *Handlers) RegisterRoutes(r *gin.Engine, adminAuth gin.HandlerFunc) {
-	r.POST("/api/script-simple", h.ScriptSimple())
-	r.POST("/api/script-multiple", h.ScriptBatch())
-
-	remote := r.Group("/api/remote/pipeline")
-	if adminAuth != nil {
-		remote.Use(adminAuth)
-	}
-	remote.POST("/generate", h.Generate())
-	remote.GET("/status/:trace_id", h.Status())
-	remote.DELETE("/cancel/:trace_id", h.Cancel())
-
-	// Canonical, versioned pipeline-runs API. The POST creates a
-	// durable pipeline_run before the remote call; the GET returns the
-	// aggregated status projection. The :id param accepts either the
-	// pipeline_run id (run_...) or the request_id (req_...) for
-	// backwards compatibility with clients that only stored the request_id.
-	r.POST("/api/v1/pipeline-runs", h.CreatePipelineRun())
-	r.GET("/api/v1/pipeline-runs/:id", h.PipelineRunStatus())
-	r.POST("/api/v1/pipeline-runs/:id/cancel", h.CancelPipelineRun())
-	r.POST("/api/v1/pipeline-runs/:id/retry", h.RetryPipelineRun())
-	r.GET("/api/v1/pipeline-runs/:id/timeline", h.PipelineRunTimeline())
-	r.GET("/api/v1/pipeline-runs/:id/artifacts", h.PipelineRunArtifacts())
-	r.GET("/api/v1/pipeline-runs/:id/deliveries", h.PipelineRunDeliveries())
-}
 
 // pipelineLog is the package-internal structured-log helper. Kept
 // package-level (not a method on Handlers) so sibling files can call
