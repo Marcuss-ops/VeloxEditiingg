@@ -37,6 +37,13 @@ triage fix is reverted, preserving the diff + the iter-state file lets a future 
 reproduce the investigation without re-deriving the cascade. /tmp is ephemeral; `docs/trials/`
 is git-tracked.
 
+## Build-tag safeguard
+
+ carries  on line 1 so the Go toolchain
+skips it during compile passes — it is a chain-of-custody snapshot, not live test
+code. Do not copy it back into the  package without
+re-reading the iter-1+2 commit context first.
+
 ## Forward follow-up
 
 If/when the test failure is fixed (separate issue), this archive can be deleted via:
