@@ -57,7 +57,6 @@ type JobPayloadV2 struct {
 	VideoMode       string           `json:"video_mode,omitempty"`
 	OutputPath      string           `json:"output_path,omitempty"`
 	DriveOutput     string           `json:"drive_output_folder,omitempty"`
-	YoutubeGroup    string           `json:"youtube_group,omitempty"`
 	ChannelID       string           `json:"channel_id,omitempty"`
 	OutputVideoID   string           `json:"output_video_id,omitempty"`
 	SceneImagePaths []string         `json:"scene_image_paths,omitempty"`
@@ -115,9 +114,7 @@ func NewJobPayloadV2(raw map[string]any) *JobPayloadV2 {
 		VideoMode:       payload.FirstString(raw, "video_mode"),
 		OutputPath:      payload.FirstString(raw, "output_path"),
 		DriveOutput:     payload.FirstString(raw, "drive_output_folder", "output_directory"),
-		YoutubeGroup:    payload.FirstString(raw, "youtube_group", "channel_id"),
-		ChannelID:       payload.FirstString(raw, "channel_id", "youtube_group"),
-		OutputVideoID:   payload.FirstString(raw, "output_video_id"),
+		ChannelID:       payload.FirstString(raw, "channel_id"),
 		SceneImagePaths: append([]string{}, payload.NormalizeStringList(raw, "scene_image_paths")...),
 		Priority:        payload.EnsureInt(raw["priority"], 1),
 		TimeoutSecs:     payload.EnsureInt(raw["timeout_secs"], 3600),
@@ -217,13 +214,7 @@ func (p *JobPayloadV2) ToMap() (map[string]any, error) {
 	if p.DriveOutput != "" {
 		out["drive_output_folder"] = p.DriveOutput
 	}
-	if p.YoutubeGroup != "" {
-		out["youtube_group"] = p.YoutubeGroup
-	}
 	if p.ChannelID != "" {
-		// Always emit channel_id when set, even if equal to youtube_group.
-		// The legacy writer mirrored both keys verbatim; legacy readers
-		// (calendar, smoke, calendar handlers) tolerate the duplicate.
 		out["channel_id"] = p.ChannelID
 	}
 	if p.OutputVideoID != "" {
@@ -305,7 +296,6 @@ func (p *JobPayloadV2) SceneVideoFingerprint() string {
 		p.ScriptText,
 		p.ScenesJSON,
 		strings.Join(p.VoiceoverPaths, "|"),
-		p.YoutubeGroup,
 		p.OutputPath,
 		p.AudioLanguage,
 	}

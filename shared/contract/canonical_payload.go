@@ -59,7 +59,7 @@ var CanonicalTopLevelKeys = []string{
 	"audio_language_for_srt",
 	"video_mode", "output_path",
 	"drive_output_folder",
-	"youtube_group", "channel_id", "output_video_id",
+	"channel_id", "output_video_id",
 	"scene_image_paths", "image_source_map",
 
 	// Numeric metadata

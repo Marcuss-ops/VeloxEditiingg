@@ -123,7 +123,6 @@ func normalizeSceneVideoPayload(payloadMap map[string]interface{}) (map[string]i
 		base.ScriptText,
 		base.ScenesJSON,
 		base.VoiceoverPaths,
-		base.YoutubeGroup,
 		base.OutputPath,
 		base.AudioLanguage,
 	)

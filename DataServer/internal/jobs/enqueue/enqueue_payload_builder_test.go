@@ -93,7 +93,7 @@ func TestBuildSceneImagePayload(t *testing.T) {
 	}
 }
 
-func TestBuildSceneImagePayload_YoutubeGroupAlias(t *testing.T) {
+func TestBuildSceneImagePayload_ChannelIDPreserved(t *testing.T) {
 	t.Parallel()
 	payload := map[string]interface{}{
 		"video_name": "YT Test", "channel_id": "amish",
@@ -104,8 +104,11 @@ func TestBuildSceneImagePayload_YoutubeGroupAlias(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result["youtube_group"] != "amish" || result["channel_id"] != "amish" {
-		t.Errorf("youtube_group/channel_id: got %v/%v", result["youtube_group"], result["channel_id"])
+	if result["channel_id"] != "amish" {
+		t.Errorf("channel_id: got %v, want amish", result["channel_id"])
+	}
+	if _, present := result["youtube_group"]; present {
+		t.Errorf("youtube_group must NOT be present in canonical V2 writes")
 	}
 }
 
