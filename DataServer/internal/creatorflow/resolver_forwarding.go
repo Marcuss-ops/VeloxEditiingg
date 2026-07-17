@@ -26,7 +26,7 @@ func (r *Resolver) PersistPendingRemoteForwarding(
 	ctx context.Context,
 	sourceProvider, sourceJobID, targetExecutorID string,
 ) (*store.CreatorForwarding, error) {
-	if r == nil || r.dbStore == nil {
+	if r == nil || r.forwardRepo == nil {
 		return nil, fmt.Errorf("creatorflow: persist pending forwarding: resolver database access is required")
 	}
 
@@ -40,7 +40,7 @@ func (r *Resolver) PersistPendingRemoteForwarding(
 		targetExecutorID = "scene.composite.v1"
 	}
 
-	if existing, err := r.dbStore.GetCreatorForwardingBySource(ctx, sourceProvider, sourceJobID, targetExecutorID); err != nil {
+	if existing, err := r.forwardRepo.GetCreatorForwardingBySource(ctx, sourceProvider, sourceJobID, targetExecutorID); err != nil {
 		if !errors.Is(err, store.ErrCreatorForwardingNoRow) {
 			return nil, fmt.Errorf("creatorflow: lookup pending forwarding: %w", err)
 		}
@@ -48,7 +48,7 @@ func (r *Resolver) PersistPendingRemoteForwarding(
 		return existing, nil
 	}
 
-	inserted, err := r.dbStore.InsertCreatorForwarding(ctx, &store.CreatorForwarding{
+	inserted, err := r.forwardRepo.InsertCreatorForwarding(ctx, &store.CreatorForwarding{
 		ForwardingID:     "cf_" + uuid.NewString(),
 		SourceProvider:   sourceProvider,
 		SourceJobID:      sourceJobID,
@@ -82,7 +82,7 @@ func (r *Resolver) ensureReadyForwarding(ctx context.Context, req ResolveRequest
 
 	// (a) Runner path.
 	if req.ForwardingID != "" {
-		if err := r.dbStore.UpsertCreatorForwardingPayload(ctx, req.ForwardingID, payloadJSON, payloadSHA256); err != nil {
+		if err := r.forwardRepo.UpsertCreatorForwardingPayload(ctx, req.ForwardingID, payloadJSON, payloadSHA256); err != nil {
 			return "", fmt.Errorf("creatorflow: Resolve upsert payload: %w", err)
 		}
 		return req.ForwardingID, nil
@@ -102,7 +102,7 @@ func (r *Resolver) ensureReadyForwarding(ctx context.Context, req ResolveRequest
 		CreatedAt:        now,
 		UpdatedAt:        now,
 	}
-	inserted, err := r.dbStore.InsertCreatorForwarding(ctx, cf)
+	inserted, err := r.forwardRepo.InsertCreatorForwarding(ctx, cf)
 	if err != nil {
 		return "", fmt.Errorf("creatorflow: Resolve insert forwarding: %w", err)
 	}
@@ -111,7 +111,7 @@ func (r *Resolver) ensureReadyForwarding(ctx context.Context, req ResolveRequest
 	}
 
 	// Promote PENDING → READY_TO_FORWARD via the leaseless sync method.
-	if err := r.dbStore.MarkCreatorForwardingReadySync(ctx, inserted.Forwarding.ForwardingID, payloadJSON, payloadSHA256); err != nil {
+	if err := r.forwardRepo.MarkCreatorForwardingReadySync(ctx, inserted.Forwarding.ForwardingID, payloadJSON, payloadSHA256); err != nil {
 		return "", fmt.Errorf("creatorflow: Resolve mark READY_TO_FORWARD: %w", err)
 	}
 	log.Printf("[CREATORFLOW] sync handler path: promoted %s to READY_TO_FORWARD (source=%s source_job=%s target_executor=%s)",

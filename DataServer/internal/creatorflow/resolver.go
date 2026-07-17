@@ -65,15 +65,16 @@ import (
 // once at composition root and reused.
 //
 // Blocco 4 del Verdetto: ForwardingRepository + JobLookup interfaces are
-// declared in resolver_repositories.go. Keeping the struct API surface
-// on *store.SQLiteStore for the part-1 commit avoids breaking Service +
-// runner callers in the same change-set.
+// declared in resolver_repositories.go. The Resolver now depends on these
+// interfaces rather than the concrete *store.SQLiteStore, which improves
+// testability and makes the dependency contract explicit.
 type Resolver struct {
-	enqueuer  *enqueue.Enqueuer
-	dbStore   *store.SQLiteStore
-	dataDir   string
-	videosDir string
-	masterURL string
+	enqueuer    *enqueue.Enqueuer
+	jobLookup   JobLookup
+	forwardRepo ForwardingRepository
+	dataDir     string
+	videosDir   string
+	masterURL   string
 }
 
 // NewResolver is the canonical constructor for the handler-side Resolver.
@@ -89,11 +90,12 @@ func NewResolver(cfg *config.Config, enqueuer *enqueue.Enqueuer, dbStore *store.
 		return nil
 	}
 	return &Resolver{
-		enqueuer:  enqueuer,
-		dbStore:   dbStore,
-		dataDir:   strings.TrimSpace(cfg.Runtime.DataDir),
-		videosDir: strings.TrimSpace(cfg.Runtime.VideosDir),
-		masterURL: resolvePublicMasterURL(cfg),
+		enqueuer:    enqueuer,
+		jobLookup:   enqueuer.Jobs,
+		forwardRepo: dbStore,
+		dataDir:     strings.TrimSpace(cfg.Runtime.DataDir),
+		videosDir:   strings.TrimSpace(cfg.Runtime.VideosDir),
+		masterURL:   resolvePublicMasterURL(cfg),
 	}
 }
 
@@ -109,8 +111,9 @@ func NewResolverMinimal(enqueuer *enqueue.Enqueuer, dbStore *store.SQLiteStore) 
 		return nil
 	}
 	return &Resolver{
-		enqueuer: enqueuer,
-		dbStore:  dbStore,
+		enqueuer:    enqueuer,
+		jobLookup:   enqueuer.Jobs,
+		forwardRepo: dbStore,
 	}
 }
 
@@ -125,11 +128,12 @@ func NewResolverFromDeps(enqueuer *enqueue.Enqueuer, dbStore *store.SQLiteStore,
 		return nil
 	}
 	return &Resolver{
-		enqueuer:  enqueuer,
-		dbStore:   dbStore,
-		dataDir:   strings.TrimSpace(dataDir),
-		videosDir: strings.TrimSpace(videosDir),
-		masterURL: strings.TrimSpace(masterURL),
+		enqueuer:    enqueuer,
+		jobLookup:   enqueuer.Jobs,
+		forwardRepo: dbStore,
+		dataDir:     strings.TrimSpace(dataDir),
+		videosDir:   strings.TrimSpace(videosDir),
+		masterURL:   strings.TrimSpace(masterURL),
 	}
 }
 
@@ -140,9 +144,10 @@ func NewResolverFromDeps(enqueuer *enqueue.Enqueuer, dbStore *store.SQLiteStore,
 // NewResolverFromDeps(_, nil, _, _, _) is a forwarder-only construct
 // (deprecated; NewResolverFromDeps now returns nil in that case) but
 // the guard remains as a defensive check for callers that constructed
-// the struct directly.
+// the struct directly. The actual dependency is the ForwardingRepository
+// interface, so any repository implementation satisfies this guard.
 func (r *Resolver) HasDBAccess() bool {
-	return r != nil && r.dbStore != nil
+	return r != nil && r.forwardRepo != nil
 }
 
 // Resolve returns the canonical (job_id, forwarding_id) pair for the
@@ -173,11 +178,11 @@ func (r *Resolver) HasDBAccess() bool {
 //     stamps payload + source_status onto the leasable PENDING/POLLING.
 //     Both paths end in READY_TO_FORWARD so AtomicForwardAndEnqueue can
 //     take over.
-//  6. Atomic commit. dbStore.AtomicForwardAndEnqueue packs (READY_TO_FORWARD
-//     → FORWARDING → INSERT job/task/task_spec → FORWARDING → FORWARDED)
-//     into a single SQLite tx. A crash mid-flight rolls the whole stack
-//     back; the next runner tick re-claims the PENDING/READY row and
-//     re-runs this method.
+//  6. Atomic commit. forwardRepo.AtomicForwardAndEnqueue packs
+//     (READY_TO_FORWARD → FORWARDING → INSERT job/task/task_spec →
+//     FORWARDING → FORWARDED) into a single SQLite tx. A crash mid-flight
+//     rolls the whole stack back; the next runner tick re-claims the
+//     PENDING/READY row and re-runs this method.
 //
 // The (resolver, request) tuple is intentionally not coupled to the
 // pass-through signature of the legacy Service.ForwardCompleted — the
@@ -185,7 +190,7 @@ func (r *Resolver) HasDBAccess() bool {
 // master-URL rewriting. The Resolver applies that step exactly once
 // for every caller.
 func (r *Resolver) Resolve(ctx context.Context, req ResolveRequest) (*ResolveOutput, error) {
-	if r == nil || r.enqueuer == nil || r.dbStore == nil {
+	if r == nil || r.enqueuer == nil || r.forwardRepo == nil {
 		return nil, fmt.Errorf("creatorflow: Resolve: resolver dependencies missing")
 	}
 	if req.Payload == nil {
@@ -247,7 +252,7 @@ func (r *Resolver) Resolve(ctx context.Context, req ResolveRequest) (*ResolveOut
 	}
 
 	// 7. Atomic FORWARDED transition.
-	if err := r.dbStore.AtomicForwardAndEnqueue(ctx, forwardingID, job, spec, priority); err != nil {
+	if err := r.forwardRepo.AtomicForwardAndEnqueue(ctx, forwardingID, job, spec, priority); err != nil {
 		return nil, fmt.Errorf("creatorflow: Resolve atomic: %w", err)
 	}
 

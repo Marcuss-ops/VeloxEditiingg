@@ -13,14 +13,14 @@ import (
 // EnsureForwarded. The caller (Resolve) should return the output
 // immediately when the second return value is true.
 func (r *Resolver) checkIdempotencyFastPath(ctx context.Context, req ResolveRequest, jobID, targetExecutor string) (*ResolveOutput, bool) {
-	existing, getErr := r.enqueuer.Jobs.Get(ctx, jobID)
+	existing, getErr := r.jobLookup.Get(ctx, jobID)
 	if getErr != nil || existing == nil || existing.ID != jobID {
 		return nil, false
 	}
 
 	forwardingID := req.ForwardingID
 	if forwardingID == "" {
-		if cf, lookupErr := r.dbStore.GetCreatorForwardingBySource(ctx, req.SourceProvider, req.SourceJobID, targetExecutor); lookupErr == nil && cf != nil {
+		if cf, lookupErr := r.forwardRepo.GetCreatorForwardingBySource(ctx, req.SourceProvider, req.SourceJobID, targetExecutor); lookupErr == nil && cf != nil {
 			forwardingID = cf.ForwardingID
 		}
 	}
@@ -30,7 +30,7 @@ func (r *Resolver) checkIdempotencyFastPath(ctx context.Context, req ResolveRequ
 	// same job_id; ErrTransitionConflict if FORWARDED with a different
 	// job_id or in a terminal FAILED/BLOCKED state.
 	if forwardingID != "" {
-		if repairErr := r.dbStore.EnsureForwarded(ctx, forwardingID, jobID); repairErr != nil {
+		if repairErr := r.forwardRepo.EnsureForwarded(ctx, forwardingID, jobID); repairErr != nil {
 			log.Printf("[CREATORFLOW] idempotency fast-path: EnsureForwarded failed forwarding=%s job=%s: %v",
 				forwardingID, jobID, repairErr)
 			// Non-fatal: the Job already exists, the forwarding row
