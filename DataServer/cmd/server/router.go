@@ -57,10 +57,11 @@ type GroupsRouteDeps struct {
 // /api/remote/pipeline routes (remote-engine fan-out +
 // creatorflow forwarder).
 type PipelineRouteDeps struct {
-	Cfg      *config.Config
-	Enqueuer *enqueue.Enqueuer
-	JobsRepo jobs.Repository
-	CmdMgr   *workers.CommandManager
+	Cfg         *config.Config
+	Enqueuer    *enqueue.Enqueuer
+	SQLiteStore *store.SQLiteStore
+	JobsRepo    jobs.Repository
+	CmdMgr      *workers.CommandManager
 	// Resolver is the canonical creatorflow.Resolver. The pipeline
 	// handler delegates forward-completed routes to Resolver.Resolve
 	// so the creator_forwardings row + Job row land in the same write
@@ -232,7 +233,7 @@ func registerPipelineRoutes(r *gin.Engine, auth gin.HandlerFunc, deps PipelineRo
 		pipeline.NewRemoteClientFromConfig(deps.Cfg),
 		deps.Resolver,
 		deps.JobsRepo, deps.JobsRepo, deps.CmdMgr,
-	).RegisterRoutes(r, auth)
+	).WithStore(deps.SQLiteStore).RegisterRoutes(r, auth)
 }
 
 // registerDarkeditorRoutes mounts the /api/darkeditor routes.

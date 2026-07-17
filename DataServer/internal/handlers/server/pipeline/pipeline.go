@@ -36,6 +36,7 @@ import (
 	"velox-server/internal/jobs"
 	"velox-server/internal/jobs/enqueue"
 	"velox-server/internal/remoteengine"
+	"velox-server/internal/store"
 	"velox-server/internal/workers"
 )
 
@@ -55,6 +56,7 @@ type Handlers struct {
 	client   *remoteengine.Client
 	resolver *creatorflow.Resolver
 	jobs     JobsDeps
+	store    *store.SQLiteStore
 }
 
 // JobsDeps bundles the optional jobs-layer dependencies used by
@@ -150,6 +152,12 @@ func (h *Handlers) WithJobsDeps(reader jobs.Reader, writer jobs.Writer, cmdMgr *
 	return h
 }
 
+// WithStore enables the durable aggregate status projection.
+func (h *Handlers) WithStore(db *store.SQLiteStore) *Handlers {
+	h.store = db
+	return h
+}
+
 // NewRemoteClientFromConfig constructs the canonical
 // *remoteengine.Client from a *config.Config at composition root.
 //
@@ -189,6 +197,7 @@ func (h *Handlers) RegisterRoutes(r *gin.Engine, adminAuth gin.HandlerFunc) {
 	remote.POST("/generate", h.Generate())
 	remote.GET("/status/:trace_id", h.Status())
 	remote.DELETE("/cancel/:trace_id", h.Cancel())
+	r.GET("/api/v1/pipeline-runs/:request_id", h.PipelineRunStatus())
 }
 
 // pipelineLog is the package-internal structured-log helper. Kept
