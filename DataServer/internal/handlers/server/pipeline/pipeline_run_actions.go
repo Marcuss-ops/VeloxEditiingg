@@ -284,7 +284,7 @@ func (h *Handlers) RetryPipelineRun() gin.HandlerFunc {
 			if err := h.store.UpdatePipelineRunRemoteJob(ctx, pr.ID, "remote_engine", jobID); err != nil {
 				pipelineLog("RETRY: failed to stamp remote_job_id run=%s: %v", pr.ID, err)
 			}
-		}		// Persist forwarding for async result, or handle sync forward.
+		} // Persist forwarding for async result, or handle sync forward.
 		if jobID == "" {
 			// Remote response missing job_id — contract violation.
 			pipelineLog("RETRY: remote response missing job_id run=%s", pr.ID)
@@ -406,10 +406,10 @@ func (h *Handlers) PipelineRunTimeline() gin.HandlerFunc {
 		}
 		if pr.ErrorCode != "" {
 			events = append(events, gin.H{
-				"timestamp":   pr.UpdatedAt,
-				"stage":       pr.FailedStage,
-				"event":       "error",
-				"error_code":  pr.ErrorCode,
+				"timestamp":     pr.UpdatedAt,
+				"stage":         pr.FailedStage,
+				"event":         "error",
+				"error_code":    pr.ErrorCode,
 				"error_message": pr.ErrorMessage,
 			})
 		}
@@ -443,14 +443,14 @@ func (h *Handlers) PipelineRunTimeline() gin.HandlerFunc {
 			attempts, _ := h.store.GetJobAttempts(veloxJobID, 50)
 			for _, a := range attempts {
 				events = append(events, gin.H{
-					"timestamp":   a.StartedAt,
-					"stage":       string(pipelineruns.StageWorker),
-					"event":       "job_attempt",
-					"job_id":      veloxJobID,
-					"attempt":     a.AttemptNumber,
-					"worker":      a.WorkerID,
-					"status":      a.Status,
-					"error":       a.ErrorCode,
+					"timestamp": a.StartedAt,
+					"stage":     string(pipelineruns.StageWorker),
+					"event":     "job_attempt",
+					"job_id":    veloxJobID,
+					"attempt":   a.AttemptNumber,
+					"worker":    a.WorkerID,
+					"status":    a.Status,
+					"error":     a.ErrorCode,
 				})
 			}
 		}
@@ -528,16 +528,16 @@ func (h *Handlers) PipelineRunArtifacts() gin.HandlerFunc {
 		result := make([]gin.H, 0, len(artifacts))
 		for _, a := range artifacts {
 			result = append(result, gin.H{
-				"artifact_id":   a.ID,
-				"job_id":        a.JobID,
-				"type":          a.Type,
-				"status":        a.Status,
-				"sha256":        a.SHA256,
-				"size_bytes":    a.SizeBytes,
-				"storage_url":   a.StorageURL,
-				"mime_type":     a.MimeType,
-				"verified_at":   a.VerifiedAt,
-				"created_at":    a.CreatedAt,
+				"artifact_id": a.ID,
+				"job_id":      a.JobID,
+				"type":        a.Type,
+				"status":      a.Status,
+				"sha256":      a.SHA256,
+				"size_bytes":  a.SizeBytes,
+				"storage_url": a.StorageURL,
+				"mime_type":   a.MimeType,
+				"verified_at": a.VerifiedAt,
+				"created_at":  a.CreatedAt,
 			})
 		}
 
@@ -595,14 +595,14 @@ func (h *Handlers) PipelineRunDeliveries() gin.HandlerFunc {
 		result := make([]gin.H, 0, len(deliveries))
 		for _, d := range deliveries {
 			item := gin.H{
-				"delivery_id":     d.DeliveryID,
-				"artifact_id":     d.ArtifactID,
-				"destination_id":  d.DestinationID,
-				"status":          d.Status,
-				"remote_id":       d.RemoteID,
-				"remote_url":      d.RemoteURL,
-				"created_at":      d.CreatedAt,
-				"updated_at":      d.UpdatedAt,
+				"delivery_id":    d.DeliveryID,
+				"artifact_id":    d.ArtifactID,
+				"destination_id": d.DestinationID,
+				"status":         d.Status,
+				"remote_id":      d.RemoteID,
+				"remote_url":     d.RemoteURL,
+				"created_at":     d.CreatedAt,
+				"updated_at":     d.UpdatedAt,
 			}
 			if d.IdempotencyKey != "" {
 				item["idempotency_key"] = d.IdempotencyKey

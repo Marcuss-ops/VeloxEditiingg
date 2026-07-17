@@ -125,10 +125,10 @@ func (h *Handlers) CreatePipelineRun() gin.HandlerFunc {
 			pipelineLog("CREATE: validation FAILED idem=%s field=%s code=%s: %s",
 				req.IdempotencyKey, valErr.Field, valErr.Code, valErr.Message)
 			c.JSON(http.StatusBadRequest, gin.H{
-				"ok":     false,
-				"error":  valErr.Message,
-				"code":   valErr.Code,
-				"field":  valErr.Field,
+				"ok":    false,
+				"error": valErr.Message,
+				"code":  valErr.Code,
+				"field": valErr.Field,
 			})
 			return
 		}

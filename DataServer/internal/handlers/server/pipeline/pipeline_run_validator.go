@@ -37,9 +37,9 @@ type ValidationConfig struct {
 func DefaultValidationConfig() ValidationConfig {
 	return ValidationConfig{
 		MaxSceneCount:   100,
-		MaxPayloadBytes: 512 * 1024, // 512 KB JSON payload
-		MinPublishLead:  1 * time.Minute,       // publish_at must be at least 1 min in the future
-		MaxPublishLead:  365 * 24 * time.Hour,  // ... and at most 1 year
+		MaxPayloadBytes: 512 * 1024,           // 512 KB JSON payload
+		MinPublishLead:  1 * time.Minute,      // publish_at must be at least 1 min in the future
+		MaxPublishLead:  365 * 24 * time.Hour, // ... and at most 1 year
 	}
 }
 
