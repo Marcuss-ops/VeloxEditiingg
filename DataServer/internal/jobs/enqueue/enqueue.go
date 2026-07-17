@@ -22,6 +22,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -401,6 +402,34 @@ func (e *validationError) Message() string {
 // fragile across message refactors.
 func (e *validationError) Unwrap() error {
 	return e.wrapped
+}
+
+// ValidationErrorField returns the structured field path (e.g.
+// "delivery_plan[0].social_destination_id") of the *validationError
+// wrapped inside err, or "" if err is not a validationError. Exposed
+// as a package-level helper so cross-package callers (the
+// integration_test package + future HTTP handlers + CLI tooling) can
+// extract the field path without needing access to the unexported
+// `validationError` type itself.
+//
+// Typical usage:
+//
+//	if got := enqueue.ValidationErrorField(err); got != "delivery_plan[0].social_destination_id" {
+//	    // fail the assertion
+//	}
+//
+// This helper intentionally returns "" (not an error) on a
+// non-validationError input so callers can use it in expression
+// position without short-circuiting their flow.
+func ValidationErrorField(err error) string {
+	if err == nil {
+		return ""
+	}
+	var verr *validationError
+	if errors.As(err, &verr) && verr != nil {
+		return verr.Field()
+	}
+	return ""
 }
 
 // PlanDestination is a minimal subset of the per-destination plan that the
