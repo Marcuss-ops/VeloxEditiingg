@@ -38,24 +38,22 @@ import (
 
 // newLiveProviderForServer builds a provider whose socialclient BaseURL
 // points at a running httptest server. Sets + clears env vars so tests
-// do not race against process-wide state.
+// do not race against process-wide state. Uses ONLY the canonical
+// SOCIAL_API_* names (the deprecated SOCIAL_GATEWAY_* aliases were
+// dropped on close-out of the deprecation cycle; the negative pin
+// lives in socialclient/config_test.go).
 func newLiveProviderForServer(t *testing.T, baseURL, callbackBase, apiKey string) *SocialGatewayProvider {
 	t.Helper()
 	t.Setenv("SOCIAL_API_URL", baseURL)
-	t.Setenv("SOCIAL_GATEWAY_URL", baseURL)
 	if callbackBase != "" {
 		t.Setenv("SOCIAL_CALLBACK_BASE_URL", callbackBase)
-		t.Setenv("SOCIAL_GATEWAY_CALLBACK_BASE_URL", callbackBase)
 	} else {
 		t.Setenv("SOCIAL_CALLBACK_BASE_URL", "")
-		t.Setenv("SOCIAL_GATEWAY_CALLBACK_BASE_URL", "")
 	}
 	if apiKey != "" {
 		t.Setenv("SOCIAL_API_TOKEN", apiKey)
-		t.Setenv("SOCIAL_GATEWAY_API_KEY", apiKey)
 	} else {
 		t.Setenv("SOCIAL_API_TOKEN", "")
-		t.Setenv("SOCIAL_GATEWAY_API_KEY", "")
 	}
 	cfg := socialclient.ConfigFromEnv()
 	return NewSocialGatewayProvider(cfg)

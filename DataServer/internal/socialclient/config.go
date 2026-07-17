@@ -34,9 +34,11 @@ import (
 )
 
 // Config is the typed view of the operator-facing configuration for the
-// Social API gateway. All fields map 1:1 to `SOCIAL_API_*` env vars;
-// legacy `SOCIAL_GATEWAY_*` vars are honored for one deprecation cycle
-// to ease the rollout on existing operators.
+// Social API gateway. Each field maps 1:1 to a `SOCIAL_API_*` env var;
+// no legacy alias is honored — operators that still carry a
+// `SOCIAL_GATEWAY_*` env in /etc/velox-server.env will see the provider
+// as not-configured (BaseURL="", ErrNotConfigured at DeliverArtifact time)
+// and must rename to the canonical `SOCIAL_API_*` form.
 type Config struct {
 	// BaseURL is the Social API base, e.g. "https://social.example.com".
 	// Empty BaseURL means Velox should refuse to publish via this
@@ -80,39 +82,32 @@ func (c Config) Validate() error {
 }
 
 // ConfigFromEnv reads the Social API configuration from the process
-// environment. The canonical variable names are `SOCIAL_API_*`; legacy
-// `SOCIAL_GATEWAY_*` env vars are honored ONLY when the canonical is
-// unset so a freshly-cloned operator who still has the old vars in
-// /etc/velox-server.env does not silently lose the provider.
+// environment. Every field maps 1:1 to a `SOCIAL_API_*` env var. The
+// prior `SOCIAL_GATEWAY_*` deprecation cycle is over and the legacy
+// aliases are intentionally NOT honored: an operator that still
+// carries only the legacy env in `/etc/velox-server.env` will observe
+// an empty BaseURL here and the delivery provider will surface
+// ErrNotConfigured at run time, which is the fail-closed shape we want.
 //
-// Variable map (canonical → legacy fallback):
+// Variable map (canonical only):
 //
-//	SOCIAL_API_URL                  ← SOCIAL_GATEWAY_URL
-//	SOCIAL_API_TOKEN                ← SOCIAL_GATEWAY_API_KEY
-//	SOCIAL_CALLBACK_BASE_URL        ← SOCIAL_GATEWAY_CALLBACK_BASE_URL
-//	SOCIAL_API_TIMEOUT_MS           (no legacy)
-//	SOCIAL_API_RETRIES              (no legacy)
+//	SOCIAL_API_URL                      required for live publish
+//	SOCIAL_API_TOKEN                    optional bearer (empty = dev mode)
+//	SOCIAL_API_TIMEOUT_MS               single-attempt HTTP timeout (default 30000)
+//	SOCIAL_API_RETRIES                  hint only; Velox-runnner-driven retry is canonical
+//	SOCIAL_CALLBACK_BASE_URL            Velox public URL for download_url / callback_url
 //
-// SOCIAL_API_TIMEOUT_MS = 30000 by default; SOCIAL_API_RETRIES = 0
-// by default (Velox-runnner-driven retry is canonical).
+// SOCIAL_API_TIMEOUT_MS defaults to 30000; SOCIAL_API_RETRIES defaults
+// to 0.
 func ConfigFromEnv() Config {
 	c := Config{
-		BaseURL:         firstNonEmpty(os.Getenv("SOCIAL_API_URL"), os.Getenv("SOCIAL_GATEWAY_URL")),
-		APIKey:          firstNonEmpty(os.Getenv("SOCIAL_API_TOKEN"), os.Getenv("SOCIAL_GATEWAY_API_KEY")),
-		CallbackBaseURL: firstNonEmpty(os.Getenv("SOCIAL_CALLBACK_BASE_URL"), os.Getenv("SOCIAL_GATEWAY_CALLBACK_BASE_URL")),
+		BaseURL:         os.Getenv("SOCIAL_API_URL"),
+		APIKey:          os.Getenv("SOCIAL_API_TOKEN"),
+		CallbackBaseURL: os.Getenv("SOCIAL_CALLBACK_BASE_URL"),
 		Timeout:         parseDurationMillis(os.Getenv("SOCIAL_API_TIMEOUT_MS"), 30*time.Second),
 		MaxRetries:      parseInt(os.Getenv("SOCIAL_API_RETRIES"), 0),
 	}
 	return c
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, v := range values {
-		if v != "" {
-			return v
-		}
-	}
-	return ""
 }
 
 func parseDurationMillis(raw string, def time.Duration) time.Duration {

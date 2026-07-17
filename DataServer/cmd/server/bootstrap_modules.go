@@ -234,9 +234,11 @@ func buildModules(cfg *config.Config, p *persistenceDeps, j *jobsDeps, w *worker
 	// The social_gateway provider is platform-agnostic — it talks to the
 	// external Social API through socialclient (HTTP). Registration is
 	// always attempted; the provider itself returns ErrProviderNotConfigured
-	// at DeliverArtifact time when SOCIAL_API_URL (or its SOCIAL_GATEWAY_URL
-	// legacy fallback) is unset, so the dev experience remains a clean
-	// "destination FAILED, not silently skipped" without nil-pointer risk.
+	// at DeliverArtifact time when SOCIAL_API_URL is unset, so the dev
+	// experience remains a clean "destination FAILED, not silently
+	// skipped" without nil-pointer risk. (The legacy SOCIAL_GATEWAY_URL
+	// alias was dropped on the close-out of the deprecation cycle — see
+	// CHANGELOG for the migration window.)
 	// socialClientCfg is computed earlier (above the Enqueuer wiring) so
 	// the validator and the provider share a single Config source.
 	socialGatewayProvider := deliveryProviders.NewSocialGatewayProvider(socialClientCfg)
