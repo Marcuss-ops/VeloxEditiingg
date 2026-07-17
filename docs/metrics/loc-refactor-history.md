@@ -504,4 +504,4 @@ git ls-files --error-unmatch scripts/ci/check-size-band-policy.sh \
 
 ### 19.8 handler_test.go pre-triage archive (forward-pointer)
 
-Triage archived at `docs/trials/handler-test-preTriage.2026-07-17/`; iter-1+2 mockVoiceover reverted per § 19.7; actual fix deferred.
+Triage archived at `docs/trials/handler-test-preTriage.2026-07-17/`; iter-1+2 mockVoiceover reverted per § 19.7; actual fix tracked at `docs/issues/2026-07-17-testgeneratorimages-creator-stage-pre-existing.md` (owner: enqueue+creatorflow, two-stage 404→canonical-purity cascade).
