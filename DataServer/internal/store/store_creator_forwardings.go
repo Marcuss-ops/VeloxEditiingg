@@ -102,6 +102,30 @@ type CreatorForwardingLease struct {
 // ErrCreatorForwardingNoRow is returned when a lookup misses.
 var ErrCreatorForwardingNoRow = errors.New("store: creator forwarding row not found")
 
+type creatorForwardingRowScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanCreatorForwarding(row creatorForwardingRowScanner) (*CreatorForwarding, error) {
+	var cf CreatorForwarding
+	err := row.Scan(
+		&cf.ForwardingID, &cf.SourceProvider, &cf.SourceJobID, &cf.SourceStatus,
+		&cf.TargetExecutorID, &cf.TargetJobID,
+		&cf.PayloadJSON, &cf.PayloadSHA256,
+		&cf.Status, &cf.AttemptCount, &cf.NextAttemptAt,
+		&cf.LockedBy, &cf.LeaseID, &cf.LeaseExpiresAt,
+		&cf.LastErrorCode, &cf.LastErrorMessage,
+		&cf.CreatedAt, &cf.UpdatedAt, &cf.ForwardedAt,
+	)
+	if err == sql.ErrNoRows {
+		return nil, ErrCreatorForwardingNoRow
+	}
+	if err != nil {
+		return nil, fmt.Errorf("store: scan creator forwarding: %w", err)
+	}
+	return &cf, nil
+}
+
 // InsertCreatorForwardingResult is returned by InsertCreatorForwarding to
 // distinguish between a new insert (Created=true, Forwarding set) and an
 // idempotent duplicate (Created=false, Forwarding returns the existing row
@@ -249,6 +273,26 @@ func (s *SQLiteStore) GetCreatorForwardingBySource(ctx context.Context, provider
 		return nil, fmt.Errorf("store: GetCreatorForwardingBySource: %w", err)
 	}
 	return &cf, nil
+}
+
+// GetCreatorForwardingByRemoteJob finds the durable handoff without requiring
+// the caller to know which executor was selected for the remote result.
+func (s *SQLiteStore) GetCreatorForwardingByRemoteJob(ctx context.Context, provider, sourceJobID string) (*CreatorForwarding, error) {
+	if provider == "" || sourceJobID == "" {
+		return nil, fmt.Errorf("store: GetCreatorForwardingByRemoteJob: missing required fields")
+	}
+	row := s.db.QueryRowContext(ctx,
+		`SELECT forwarding_id, source_provider, source_job_id, source_status,
+		        target_executor_id, COALESCE(target_job_id, ''),
+		        COALESCE(payload_json, ''), COALESCE(payload_sha256, ''),
+		        status, attempt_count, COALESCE(next_attempt_at, ''),
+		        COALESCE(locked_by, ''), COALESCE(lease_id, ''), COALESCE(lease_expires_at, ''),
+		        COALESCE(last_error_code, ''), COALESCE(last_error_message, ''),
+		        created_at, updated_at, COALESCE(forwarded_at, '')
+		 FROM creator_forwardings
+		 WHERE source_provider = ? AND source_job_id = ?
+		 ORDER BY created_at DESC LIMIT 1`, provider, sourceJobID)
+	return scanCreatorForwarding(row)
 }
 
 // UpsertCreatorForwardingPayload updates payload_json and payload_sha256
