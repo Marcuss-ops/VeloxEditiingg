@@ -55,10 +55,10 @@ func TestClient_DeliverArtifact_HappyPath(t *testing.T) {
 
 	c := New(Config{BaseURL: server.URL, APIKey: "tok"})
 	got, err := c.DeliverArtifact(context.Background(), DeliverArtifactRequest{
-		ExternalDeliveryID: "ext-1",
-		IdempotencyKey:     "idem-1",
-		Platform:           "youtube",
-		Artifact:           ArtifactPayload{ArtifactID: "art-1", SHA256: "sh", SizeBytes: 10, MimeType: "video/mp4"},
+		ExternalDeliveryID:  "ext-1",
+		IdempotencyKey:      "idem-1",
+		SocialDestinationID: "social_dest_happy_test",
+		Artifact:            ArtifactPayload{ArtifactID: "art-1", SHA256: "sh", SizeBytes: 10, MimeType: "video/mp4"},
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
