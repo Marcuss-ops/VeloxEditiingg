@@ -177,6 +177,109 @@ The legacy deprecation aliases `SOCIAL_GATEWAY_URL`, `SOCIAL_GATEWAY_API_KEY`, `
 - `deploy/group_vars/{all,vault.yml.example}.yml` — operator configuration surface.
 - `deploy/{velox-server.env.example,templates/velox-server.env.j2}` — rendered env surface.
 
+### PR-15.13 — Residuo 3 closure: opaque-mode wire contract
+
+The Social API wire contract now carries only the opaque-mode fields:
+`external_delivery_id`, `idempotency_key`, `social_destination_id`,
+`artifact`, `metadata`, `publish_at`, `callback_url`. The three
+YouTube-specific fields `Platform`, `AccountID`, `ChannelID` are
+gone from both the typed `DeliverArtifactRequest` and the
+`SocialGatewayProvider::buildRequest` call site; the social_repo is
+the authoritative resolver from `social_destination_id` for
+platform, account, channel, language, and credentials.
+
+**Removed (typed struct fields + provider plumbing)**:
+
+- `socialclient.DeliverArtifactRequest.Platform` / `AccountID` / `ChannelID`
+  — fields dropped from the wire DTO entirely.
+- `providers.parsePlatformAndAccount` helper — removed (it parsed
+  `destination.ConfigurationJSON` for `platform`/`account_id` and
+  was the only consumer of those keys in the wire DTO).
+
+**Added (wire contract)**:
+
+- `socialclient.DeliverArtifactRequest.SocialDestinationID string`
+  with `json:"social_destination_id"` tag (NO `omitempty` so any
+  drift between the runner's fail-closed `DESTINATION_UNMAPPED`
+  guard and the socialclient surfaces at marshal time as
+  `"social_destination_id":""` rather than a silent malformed
+  POST).
+
+**Behaviour changes**:
+
+- Operators with `delivery_destinations.configuration_json`
+  containing `{"platform":"youtube","account_id":"..."}` continue
+  to author the old shape without breakage, BUT it is now
+  **inert in the wire contract**: the values do not reach the
+  social_repo. The runner + provider only forward the opaque
+  `social_destination_id` and `delivery_metadata_json` (the latter
+  becomes the wire `metadata` blob, opaque pass-through).
+- Operators wanting per-artifact values to reach the social_repo
+  must use the `metadata` blob, not the inert `configuration_json`.
+
+**New tests (all in `internal/socialclient/client_test.go`)**:
+
+- `TestClient_DeliverArtifact_WireShape_Minimal` — pins the
+  minimal wire JSON: top-level keys must be EXACTLY four
+  (`external_delivery_id`, `idempotency_key`, `social_destination_id`,
+  `artifact`); `metadata`, `publish_at`, `callback_url` must NOT
+  appear when empty.
+- `TestClient_DeliverArtifact_WireShape_Full` — pins the full
+  wire JSON: all 7 top-level keys present.
+- `TestClient_DeliverArtifact_WireShape_LegacyKeysNeverPresent` —
+  regression invariant: top-level wire JSON keys may NEVER
+  include `platform`, `account_id`, or `channel_id`, **even if**
+  the operator's `metadata` blob legitimately contains those
+  sub-keys (metadata is opaque pass-through; legacy keys do not
+  belong at the top).
+
+These tests use httptest.NewServer + chan []byte body capture +
+json.Unmarshal on top-level keys — NOT string-matching — so
+metadata sub-keys do NOT false-positive on the legacy-key
+presence check.
+
+**Fixture cleanup**:
+
+- `providers/social_gateway_test.go::sampleDestination` and
+  `integration_test/social_repo_integration_test.go::sampleDestination`
+  simplify `ConfigurationJSON` from inert-keyed blobs to `"{}"`.
+  DeliveryMetadataJSON is kept (still forwarded as `metadata`).
+  Doc comments expanded to make the wire/observability split
+  explicit at the fixture level.
+
+**ABI-safe ordering (3 atomic commits, NO branches)**:
+
+| Hash     | Subject |
+| ---      | --- |
+| `71b0bb6` | `refactor(socialclient): opaque-mode wire — add social_destination_id, deprecate Platform/AccountID/ChannelID` |
+| `32bd74f` | `refactor(social_gateway): drop parsePlatformAndAccount + deprecated struct fields` |
+| `362718d` | `test(socialclient): pin opaque wire shape + clean inert fixtures` |
+
+The 2-step provider cleanup is the textbook refactor-2-step
+pattern: Commit 1 keeps the old fields typed-but-un-serialised
+(`json:"-"`) so callers still compile, Commit 2 drops them
+entirely along with `parsePlatformAndAccount`. Commit 3 is pure
+test layer (no struct change).
+
+**Verification**:
+
+- `cd DataServer && go test ./internal/socialclient/... ./internal/jobs/enqueue/... ./internal/delivery_destinations... -count=1`: PASS
+- `cd DataServer && go vet ./internal/socialclient/... ./internal/deliveries/...`: PASS
+- `cd DataServer && go build ./...`: PASS
+- `git grep -nE 'parsePlatformAndAccount|req\\.Platform|req\\.AccountID|req\\.ChannelID'`: 0 matches.
+- The 6 documented scenarios (acceptance / auth / rate-limit /
+  transient 5xx / unreachable / retry idempotency) STILL PASS on
+  both the enqueue pre-flight path (`Enqueuer.WithSocialValidator`)
+  and the runner dispatch path (`SocialGatewayProvider.Deliver`)
+  with the new wire shape — no behavioral regressions.
+
+**Refs**:
+
+- `DataServer/internal/socialclient/requests.go::DeliverArtifactRequest` — typed DTO + opaque-mode doc.
+- `DataServer/internal/socialclient/client.go::DeliverArtifact` — wire serializer (unchanged path, but the request shape changed).
+- `DataServer/internal/deliveries/providers/social_gateway.go::buildRequest` — simplified: only routes `destination.SocialDestinationID`.
+- `DataServer/internal/deliveries/runner.go::hydrateDestination` — fail-closed `DESTINATION_UNMAPPED` (Residuo 2, still the guardrail for the new wire shape).
+
 ### PR-15.12 — Residuo 2 closure: opaque-mode Destination model
 
 The Delivery destination model is now fully opaque-mode. Velox no longer
