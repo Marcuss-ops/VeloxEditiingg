@@ -14,17 +14,24 @@ import (
 // in store.delivery_destination_opaque_test.go and the migration 091
 // forward-only DROP COLUMN, this is the third line of defence against
 // YouTube-domain re-introduction.
+//
+// Residuo 4 gradual rename: ExternalDestinationID is canonical (new);
+// SocialDestinationID is the deprecated back-compat alias mirroring
+// ExternalDestinationID. Both fields present so the compile-time
+// shape pin spans the post-rename contract (canonical reads + alias
+// reads both produce the same value).
 func TestDestinationOpaqueStructShape(t *testing.T) {
 	_ = Destination{
-		DestinationID:        "dst_test_opaque",
-		Provider:             "social_gateway",
-		SocialDestinationID:  "social_dest_test",
-		FolderID:             "fld_1",
-		Name:                 "Opaque Test",
-		Enabled:              true,
-		Configuration:        []byte(`{}`),
-		ConfigurationJSON:    "{}",
-		DeliveryMetadataJSON: "",
+		DestinationID:         "dst_test_opaque",
+		Provider:              "social_gateway",
+		ExternalDestinationID: "external_dest_test",
+		SocialDestinationID:   "external_dest_test",
+		FolderID:              "fld_1",
+		Name:                  "Opaque Test",
+		Enabled:               true,
+		Configuration:         []byte(`{}`),
+		ConfigurationJSON:     "{}",
+		DeliveryMetadataJSON:  "",
 	}
 }
 

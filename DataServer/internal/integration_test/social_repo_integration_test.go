@@ -186,10 +186,17 @@ func newEnqueuerWithValidator(t *testing.T, validator enqueue.DestinationValidat
 	return enq
 }
 
-// payloadWithSocialDestination returns a minimal valid enqueue payload
-// containing one delivery_plan entry whose social_destination_id the
+// payloadWithExternalDestination returns a minimal valid enqueue
+// payload containing one delivery_plan entry whose
+// external_destination_id (canonical, post-Residuo-4 rename) the
 // pre-flight loop will validate through the supplied client.
-func payloadWithSocialDestination(socialDestID string) map[string]any {
+//
+// Residuo 4: the operator-facing payload key is now
+// `external_destination_id`. The legacy `social_destination_id` key
+// is still honored by `shapeFromMap` (deprecated alias path) — this
+// helper uses the canonical key exclusively so the canonical-only
+// contract is exercised end-to-end on the integration path.
+func payloadWithExternalDestination(externalDestID string) map[string]any {
 	return map[string]any{
 		"video_name":     "integration-test",
 		"script_text":    "test script",
@@ -200,7 +207,7 @@ func payloadWithSocialDestination(socialDestID string) map[string]any {
 		"delivery_plan": []any{
 			map[string]any{
 				"destination_id":        "velox-dest-1",
-				"social_destination_id": socialDestID,
+				"external_destination_id": externalDestID,
 				"platform":              "youtube",
 				"retry_budget":          3,
 			},
@@ -224,7 +231,7 @@ func TestIntegration_Preflight_Acceptance(t *testing.T) {
 	enq := newEnqueuerWithValidator(t, client)
 	_, _, _, err := enq.PrepareJobAndTask(
 		context.Background(),
-		payloadWithSocialDestination("social_dest_integration_ok"),
+		payloadWithExternalDestination("external_dest_integration_ok"),
 		costmodel.DefaultRequirements(),
 	)
 	if err != nil {
@@ -244,7 +251,7 @@ func TestIntegration_Preflight_AuthError(t *testing.T) {
 	enq := newEnqueuerWithValidator(t, client)
 	_, _, _, err := enq.PrepareJobAndTask(
 		context.Background(),
-		payloadWithSocialDestination("social_dest_integration_auth"),
+		payloadWithExternalDestination("external_dest_integration_auth"),
 		costmodel.DefaultRequirements(),
 	)
 	if err == nil {
@@ -253,12 +260,12 @@ func TestIntegration_Preflight_AuthError(t *testing.T) {
 	if !errors.Is(err, socialclient.ErrAuth) {
 		t.Fatalf("errors.Is must surface ErrAuth; got %v", err)
 	}
-	// Field path: must be the structured social_destination_id field.
-	// Cross-package access goes through the enqueue.ValidationErrorField
-	// helper so the test does not need to import the unexported
-	// *validationError type.
-	if got := enqueue.ValidationErrorField(err); got != "delivery_plan[0].social_destination_id" {
-		t.Errorf("ValidationErrorField = %q; want delivery_plan[0].social_destination_id", got)
+	// Field path: must be the structured external_destination_id field
+	// (canonical, post-Residuo-4 rename). Cross-package access goes
+	// through the enqueue.ValidationErrorField helper so the test does
+	// not need to import the unexported *validationError type.
+	if got := enqueue.ValidationErrorField(err); got != "delivery_plan[0].external_destination_id" {
+		t.Errorf("ValidationErrorField = %q; want delivery_plan[0].external_destination_id", got)
 	}
 }
 
@@ -274,7 +281,7 @@ func TestIntegration_Preflight_RateLimit(t *testing.T) {
 	enq := newEnqueuerWithValidator(t, client)
 	_, _, _, err := enq.PrepareJobAndTask(
 		context.Background(),
-		payloadWithSocialDestination("social_dest_integration_rl"),
+		payloadWithExternalDestination("external_dest_integration_rl"),
 		costmodel.DefaultRequirements(),
 	)
 	if err != nil {
@@ -292,7 +299,7 @@ func TestIntegration_Preflight_ServerError(t *testing.T) {
 	enq := newEnqueuerWithValidator(t, client)
 	_, _, _, err := enq.PrepareJobAndTask(
 		context.Background(),
-		payloadWithSocialDestination("social_dest_integration_5xx"),
+		payloadWithExternalDestination("external_dest_integration_5xx"),
 		costmodel.DefaultRequirements(),
 	)
 	if err != nil {
@@ -321,7 +328,7 @@ func TestIntegration_Preflight_Unreachable(t *testing.T) {
 	enq := newEnqueuerWithValidator(t, client)
 	_, _, _, err = enq.PrepareJobAndTask(
 		context.Background(),
-		payloadWithSocialDestination("social_dest_integration_unreachable"),
+		payloadWithExternalDestination("external_dest_integration_unreachable"),
 		costmodel.DefaultRequirements(),
 	)
 	if err != nil {
@@ -342,14 +349,14 @@ func TestIntegration_Preflight_RetryIdempotency(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		_, _, _, err := enq.PrepareJobAndTask(
 			context.Background(),
-			payloadWithSocialDestination("social_dest_integration_idem"),
+			payloadWithExternalDestination("external_dest_integration_idem"),
 			costmodel.DefaultRequirements(),
 		)
 		if err != nil {
 			t.Fatalf("attempt %d: pre-flight must succeed under dedup; got %v", i, err)
 		}
 	}
-	// Three PrepareJobAndTask calls with the SAME social_destination_id
+	// Three PrepareJobAndTask calls with the SAME external_destination_id
 	// produce three ValidateDestination POSTs against the mock — each
 	// call MUST NOT mutate the pre-flight outcome (the pre-flight loop
 	// is single-attempt by design).

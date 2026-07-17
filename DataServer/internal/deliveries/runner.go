@@ -496,7 +496,7 @@ func (r *DeliveryRunner) hydrateDestination(ctx context.Context, destID string) 
 	if d == nil {
 		return nil, fmt.Errorf("deliveries: destination %s not found", destID)
 	}
-	if strings.TrimSpace(d.SocialDestinationID) == "" {
+	if strings.TrimSpace(d.ExternalDestinationID) == "" {
 		return nil, fmt.Errorf("deliveries: destination %s: %w", destID, ErrDestinationUnmapped)
 	}
 	cfg := d.ConfigurationJSON
@@ -504,14 +504,15 @@ func (r *DeliveryRunner) hydrateDestination(ctx context.Context, destID string) 
 		cfg = "{}"
 	}
 	return &Destination{
-		DestinationID:       d.DestinationID,
-		Provider:            d.Provider,
-		SocialDestinationID: d.SocialDestinationID,
-		FolderID:            d.FolderID,
-		Name:                d.Name,
-		Enabled:             d.Enabled,
-		ConfigurationJSON:   d.ConfigurationJSON,
-		Configuration:       []byte(cfg),
+		DestinationID:         d.DestinationID,
+		Provider:              d.Provider,
+		ExternalDestinationID: d.ExternalDestinationID,
+		SocialDestinationID:   d.ExternalDestinationID,
+		FolderID:              d.FolderID,
+		Name:                  d.Name,
+		Enabled:               d.Enabled,
+		ConfigurationJSON:     d.ConfigurationJSON,
+		Configuration:         []byte(cfg),
 	}, nil
 }
 

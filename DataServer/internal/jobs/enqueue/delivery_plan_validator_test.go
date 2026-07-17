@@ -571,6 +571,47 @@ func TestShapeFromMap_SocialFields(t *testing.T) {
 			t.Errorf("platform = %q; want youtube", s.Platform)
 		}
 	})
+	// Residuo 4 (post-rename): canonical key
+	// `external_destination_id` MUST populate ExternalDestinationID +
+	// alias-mirror to SocialDestinationID. The legacy `social_destination_id`
+	// key falls back identically when only the legacy key is present.
+	t.Run("canonical_external_destination_id_honored", func(t *testing.T) {
+		t.Parallel()
+		s := shapeFromMap(map[string]interface{}{
+			"destination_id":          "social-amish",
+			"external_destination_id": "social_dest_amish",
+			"platform":                "youtube",
+		})
+		if s.ExternalDestinationID != "social_dest_amish" {
+			t.Errorf("ExternalDestinationID = %q; want social_dest_amish", s.ExternalDestinationID)
+		}
+		if s.SocialDestinationID != "social_dest_amish" {
+			t.Errorf("SocialDestinationID = %q; want social_dest_amish (alias mirrors canonical)", s.SocialDestinationID)
+		}
+		if s.Platform != "youtube" {
+			t.Errorf("Platform = %q; want youtube", s.Platform)
+		}
+	})
+	// Residuo 4 precedence: when BOTH canonical and legacy keys are
+	// present with DIFFERENT values, canonical wins (operator intent
+	// is the post-rename contract). The legacy alias is preserved
+	// verbatim so callers reading the old field still observe the
+	// value they wrote (no silent coercion).
+	t.Run("canonical_wins_over_legacy_alias_when_both_present", func(t *testing.T) {
+		t.Parallel()
+		s := shapeFromMap(map[string]interface{}{
+			"destination_id":          "social-amish",
+			"external_destination_id": "canonical_id",
+			"social_destination_id":   "legacy_id",
+			"platform":                "youtube",
+		})
+		if s.ExternalDestinationID != "canonical_id" {
+			t.Errorf("ExternalDestinationID = %q; want canonical_id", s.ExternalDestinationID)
+		}
+		if s.SocialDestinationID != "legacy_id" {
+			t.Errorf("SocialDestinationID = %q; want legacy_id (legacy alias preserved verbatim)", s.SocialDestinationID)
+		}
+	})
 }
 
 // =====================================================================
@@ -643,8 +684,8 @@ func TestValidateDeliveryPlanRequires_Preflight(t *testing.T) {
 		if stub.callCount() != 1 {
 			t.Errorf("validator call count = %d; want 1", stub.callCount())
 		}
-		if !strings.Contains(err.Error(), "delivery_plan[0].social_destination_id") {
-			t.Errorf("error %q does not contain delivery_plan[0].social_destination_id", err.Error())
+		if !strings.Contains(err.Error(), "delivery_plan[0].external_destination_id") {
+			t.Errorf("error %q does not contain delivery_plan[0].external_destination_id", err.Error())
 		}
 		if !strings.Contains(err.Error(), "social_dest_amish") {
 			t.Errorf("error %q does not contain social_dest_amish", err.Error())
@@ -661,8 +702,8 @@ func TestValidateDeliveryPlanRequires_Preflight(t *testing.T) {
 		var verr *validationError
 		if !errors.As(err, &verr) {
 			t.Errorf("errors.As must surface *validationError; got %T", err)
-		} else if verr.Field() != "delivery_plan[0].social_destination_id" {
-			t.Errorf("validationError.Field() = %q; want %q", verr.Field(), "delivery_plan[0].social_destination_id")
+		} else if verr.Field() != "delivery_plan[0].external_destination_id" {
+			t.Errorf("validationError.Field() = %q; want %q", verr.Field(), "delivery_plan[0].external_destination_id")
 		}
 	})
 
@@ -687,8 +728,8 @@ func TestValidateDeliveryPlanRequires_Preflight(t *testing.T) {
 		var verr *validationError
 		if !errors.As(err, &verr) {
 			t.Errorf("errors.As must surface *validationError; got %T", err)
-		} else if verr.Field() != "delivery_plan[0].social_destination_id" {
-			t.Errorf("validationError.Field() = %q; want %q", verr.Field(), "delivery_plan[0].social_destination_id")
+		} else if verr.Field() != "delivery_plan[0].external_destination_id" {
+			t.Errorf("validationError.Field() = %q; want %q", verr.Field(), "delivery_plan[0].external_destination_id")
 		}
 	})
 

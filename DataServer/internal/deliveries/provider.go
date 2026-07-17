@@ -49,16 +49,17 @@ var ErrProviderAuth = errors.New("deliveries: authentication/authorization error
 var ErrProviderRateLimit = errors.New("deliveries: rate limit exceeded")
 
 // ErrDestinationUnmapped is the sentinel returned when a delivery_destinations
-// row exists but `social_destination_id` is empty / Whitespace-only.
+// row exists but `external_destination_id` is empty / Whitespace-only
+// (canonical, renamed from `social_destination_id` by Residuo 4 migration 092).
 //
-// Opaque-mode contract (Residuo 2 of YouTube → Social closure): Velox no
-// longer knows about platforms/accounts/channels/languages. Without a
-// social_destination_id the runner cannot look anything up via the
+// Opaque-mode contract (Residuo 2 + Residuo 4 of YouTube → Social closure): Velox
+// no longer knows about platforms/accounts/channels/languages. Without an
+// external_destination_id the runner cannot look anything up via the
 // external Social API. Hydrate-time the runner gets this error BEFORE
 // claiming a lease so the delivery is marked FAILED with code
 // DESTINATION_UNMAPPED — operators see exactly which row is missing the
 // reference and backfill it.
-var ErrDestinationUnmapped = errors.New("deliveries: destination is unmapped (social_destination_id required)")
+var ErrDestinationUnmapped = errors.New("deliveries: destination is unmapped (external_destination_id required)")
 
 // ── Error classification ─────────────────────────────────────────────────────
 
@@ -152,27 +153,35 @@ type Provider interface {
 
 // Destination is the typed view of a delivery_destinations row.
 //
-// Opaque-mode (Residuo 2 of the YouTube→Social closure): the model no
-// longer carries the YouTube-specific fields `AccountID`, `ChannelID`,
-// `Language`. They are owned exclusively by the external Social API
-// repository, which resolves account + channel + language internally
-// from the opaque `SocialDestinationID`. `Provider` and
-// `ConfigurationJSON` are kept as the operator-facing knobs (machine
-// name + JSON blob forwarded verbatim to the social_repo).
+// Opaque-mode (Residuo 2 + Residuo 4 of the YouTube→Social closure): the
+// model no longer carries the YouTube-specific fields `AccountID`,
+// `ChannelID`, `Language`. They are owned exclusively by the external
+// Social API repository, which resolves account + channel + language
+// internally from the opaque `ExternalDestinationID` (canonical,
+// renamed from SocialDestinationID by Residuo 4 migration 092).
+// `Provider` and `ConfigurationJSON` are kept as the operator-facing
+// knobs (machine name + JSON blob forwarded verbatim to the social_repo).
 //
-// `Configuration` is the JSON blob deserialized into a typed structure;
-// adapters can re-marshal it via the embedded raw if they need simple
-// field access without a dedicated struct.
+// `Configuration` is the JSON blob deserialized into a typed
+// structure; adapters can re-marshal it via the embedded raw if they
+// need simple field access without a dedicated struct.
+//
+// ABI-safe gradual rename (Residuo 4): the typed struct carries BOTH
+// `ExternalDestinationID` (canonical, sources all dispatch reads
+// + fail-closed guards) AND a deprecated alias `SocialDestinationID`
+// (transient back-compat during the gradual rename until Residuo 5
+// drops it).
 type Destination struct {
-	DestinationID        string
-	Provider             string
-	SocialDestinationID  string
-	FolderID             string
-	Name                 string
-	Enabled              bool
-	Configuration        []byte
-	ConfigurationJSON    string
-	DeliveryMetadataJSON string
+	DestinationID         string
+	Provider              string
+	ExternalDestinationID string
+	SocialDestinationID   string
+	FolderID              string
+	Name                  string
+	Enabled               bool
+	Configuration         []byte
+	ConfigurationJSON     string
+	DeliveryMetadataJSON  string
 }
 
 // Result captures the post-upload state. RemoteID/RemoteURL are the

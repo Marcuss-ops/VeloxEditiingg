@@ -87,28 +87,34 @@ func (noopDestinationValidator) ValidateDestination(ctx context.Context, socialD
 	return nil
 }
 
-// deliveryPlanShape now carries an optional SocialDestinationID +
-// Platform pair per entry. Both are sourced from the operator-set
-// delivery_plan payload and FORWARD-ONLY: Velox does NOT validate
-// `platform` semantics (the social_repo is the authoritative owner
-// of platform semantics). The pair is used solely to delegate the
-// destination validation step to `POST /internal/v1/destinations/:id/validate`
-// when `social_destination_id` is present.
+// deliveryPlanShape carries an optional ExternalDestinationID (canonical,
+// Residuo 4) + a deprecated SocialDestinationID alias + Platform per entry.
+// All three are sourced from the operator-set delivery_plan payload and
+// are FORWARD-ONLY: Velox does NOT validate `platform` semantics (the
+// social_repo is the authoritative owner of platform semantics). The
+// ExternalDestinationID / SocialDestinationID pair is used solely to
+// delegate the destination validation step to
+// `POST /internal/v1/destinations/:id/validate` when an opaque id is
+// present.
 //
 // Mapping rationale:
 //   - DestinationID → the Velox-side row in `delivery_destinations`
-//   - SocialDestinationID → the social_repo-side opaque identifier
-//     (e.g. "social_dest_amish_youtube"). Optional; missing means
+//   - ExternalDestinationID → the social_repo-side opaque identifier
+//     (canonical, post-Residuo-4 rename). Optional; missing means
 //     "do not pre-flight" (legacy / drive destinations).
+//   - SocialDestinationID → deprecated back-compat alias read from
+//     `social_destination_id` JSON key, mirrored to canonical. Removed
+//     in Residuo 5.
 //   - Platform → the target platform string (e.g. "youtube",
 //     "tiktok", "instagram"); forwarded to the social_repo verbatim.
 type deliveryPlanShape struct {
-	DestinationID       string
-	Priority            int
-	RetryBudget         int
-	Enabled             bool
-	SocialDestinationID string
-	Platform            string
+	DestinationID         string
+	Priority              int
+	RetryBudget           int
+	Enabled               bool
+	ExternalDestinationID string
+	SocialDestinationID   string
+	Platform              string
 }
 
 // validateDeliveryPlanRequires is the canonical-purity preflight.
@@ -189,17 +195,19 @@ func validateDeliveryPlanRequires(ctx context.Context, payloadMap map[string]int
 			}
 		}
 		// Per-entry pre-flight against the social_repo. Empty
-		// social_destination_id means "no Social API routing for this
-		// entry" (legacy Drive-only destinations) and the loop skips
-		// the validation entirely.
-		socialDestID := strings.TrimSpace(e.SocialDestinationID)
+		// external_destination_id (canonical, post-Residuo-4 rename)
+		// means "no Social API routing for this entry" (legacy
+		// Drive-only destinations) and the loop skips the validation
+		// entirely. SocialDestinationID alias is read-back-compatible
+		// from the shape; if neither is set, skip pre-flight.
+		socialDestID := strings.TrimSpace(e.ExternalDestinationID)
 		if socialDestID != "" {
 			if perr := validator.ValidateDestination(ctx, socialDestID); perr != nil {
 				switch {
 				case errors.Is(perr, socialclient.ErrPermanent),
 					errors.Is(perr, socialclient.ErrAuth):
 					return &validationError{
-						field: fmt.Sprintf("delivery_plan[%d].social_destination_id", i),
+						field: msgExternalDestinationIDAt(i),
 						message: fmt.Sprintf("social destination %q rejected by social_repo (%v); enqueue refused to keep the job from becoming visibly un-routable",
 							socialDestID, perr),
 						wrapped: perr,
@@ -208,7 +216,7 @@ func validateDeliveryPlanRequires(ctx context.Context, payloadMap map[string]int
 					// Soft: ErrTransient / ErrRateLimit / ErrNotConfigured.
 					// Log a warning and continue. The DeliveryRunner's
 					// retry_budget at finalize is the recovery path.
-					log.Printf("[PREFLIGHT][enqueue] social_destination_id=%q for destination_id=%q skipped: %v (soft: enqueue continues; runner will re-attempt at finalize)",
+					log.Printf("[PREFLIGHT][enqueue] external_destination_id=%q for destination_id=%q skipped: %v (soft: enqueue continues; runner will re-attempt at finalize)",
 						socialDestID, id, perr)
 				}
 			}
@@ -348,14 +356,32 @@ func firstStringField(m map[string]interface{}, keys ...string) string {
 	return ""
 }
 
+// msgExternalDestinationIDAt returns the canonical field path used in
+// validationError messages for the social_repo opaque identifier at
+// index i in the delivery_plan array. Renamed from the legacy
+// `delivery_plan[0].social_destination_id` (Residuo 4 step 2 — validator).
+func msgExternalDestinationIDAt(i int) string {
+	return fmt.Sprintf("delivery_plan[%d].external_destination_id", i)
+}
+
 func shapeFromMap(m map[string]interface{}) deliveryPlanShape {
+	// Canonical `external_destination_id` (Residuo 4) is read first;
+	// the legacy `social_destination_id` alias is honored for back-compat
+	// read but mirrored into the canonical slot so downstream consumers
+	// always observe the value under ExternalDestinationID.
+	canonical := firstStringField(m, "external_destination_id", "social_destination_id")
+	alias := firstStringField(m, "social_destination_id")
+	if alias == "" {
+		alias = canonical
+	}
 	return deliveryPlanShape{
-		DestinationID:       firstStringField(m, "destination_id", "id"),
-		Priority:            intFromAny(m["priority"]),
-		RetryBudget:         intFromAny(m["retry_budget"]),
-		Enabled:             boolFromAny(m["enabled"], true),
-		SocialDestinationID: firstStringField(m, "social_destination_id"),
-		Platform:            firstStringField(m, "platform"),
+		DestinationID:         firstStringField(m, "destination_id", "id"),
+		Priority:              intFromAny(m["priority"]),
+		RetryBudget:           intFromAny(m["retry_budget"]),
+		Enabled:               boolFromAny(m["enabled"], true),
+		ExternalDestinationID: canonical,
+		SocialDestinationID:   alias,
+		Platform:              firstStringField(m, "platform"),
 	}
 }
 
