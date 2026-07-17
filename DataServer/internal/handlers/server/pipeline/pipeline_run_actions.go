@@ -139,6 +139,15 @@ func (h *Handlers) CancelPipelineRun() gin.HandlerFunc {
 				pipelineruns.StatusCancelled, "cancelled by user"); err != nil {
 				pipelineLog("CANCEL: failed to mark CANCELLED run=%s: %v", pr.ID, err)
 			}
+		} else {
+			// Legacy path: mark the creator_forwarding row as CANCELLED
+			// so the runner does not pick it up again.
+			if err := h.store.MarkCreatorForwardingCancelled(ctx,
+				forwarding.ForwardingID, "", "",
+				"CANCELLED_BY_USER", "cancelled by user"); err != nil {
+				pipelineLog("CANCEL: failed to mark forwarding CANCELLED run=%s fwd=%s: %v",
+					pr.ID, forwarding.ForwardingID, err)
+			}
 		}
 
 		c.JSON(http.StatusOK, gin.H{

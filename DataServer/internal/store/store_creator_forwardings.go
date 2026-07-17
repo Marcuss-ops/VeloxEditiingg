@@ -47,12 +47,13 @@ const (
 	CFStatusRetryWait      CreatorForwardingStatus = "RETRY_WAIT"
 	CFStatusForwarded      CreatorForwardingStatus = "FORWARDED"
 	CFStatusFailed         CreatorForwardingStatus = "FAILED"
+	CFStatusCancelled      CreatorForwardingStatus = "CANCELLED"
 	CFStatusBlocked        CreatorForwardingStatus = "BLOCKED"
 )
 
 // IsTerminal returns true for statuses that will never transition again.
 func (s CreatorForwardingStatus) IsTerminal() bool {
-	return s == CFStatusForwarded || s == CFStatusFailed || s == CFStatusBlocked
+	return s == CFStatusForwarded || s == CFStatusFailed || s == CFStatusCancelled || s == CFStatusBlocked
 }
 
 // IsLeasable returns true for statuses a runner can claim.
@@ -73,11 +74,15 @@ type CreatorForwarding struct {
 	Status           string `json:"status"`
 	AttemptCount     int    `json:"attempt_count"`
 	NextAttemptAt    string `json:"next_attempt_at,omitempty"`
+	PollAttempts     int    `json:"poll_attempts"`
+	NextPollAt       string `json:"next_poll_at,omitempty"`
+	LastPolledAt     string `json:"last_polled_at,omitempty"`
 	LockedBy         string `json:"locked_by,omitempty"`
 	LeaseID          string `json:"lease_id,omitempty"`
 	LeaseExpiresAt   string `json:"lease_expires_at,omitempty"`
 	LastErrorCode    string `json:"last_error_code,omitempty"`
 	LastErrorMessage string `json:"last_error_message,omitempty"`
+	LastErrorClass   string `json:"last_error_class,omitempty"`
 	CreatedAt        string `json:"created_at"`
 	UpdatedAt        string `json:"updated_at"`
 	ForwardedAt      string `json:"forwarded_at,omitempty"`
@@ -113,8 +118,9 @@ func scanCreatorForwarding(row creatorForwardingRowScanner) (*CreatorForwarding,
 		&cf.TargetExecutorID, &cf.TargetJobID,
 		&cf.PayloadJSON, &cf.PayloadSHA256,
 		&cf.Status, &cf.AttemptCount, &cf.NextAttemptAt,
+		&cf.PollAttempts, &cf.NextPollAt, &cf.LastPolledAt,
 		&cf.LockedBy, &cf.LeaseID, &cf.LeaseExpiresAt,
-		&cf.LastErrorCode, &cf.LastErrorMessage,
+		&cf.LastErrorCode, &cf.LastErrorMessage, &cf.LastErrorClass,
 		&cf.CreatedAt, &cf.UpdatedAt, &cf.ForwardedAt,
 	)
 	if err == sql.ErrNoRows {
@@ -171,10 +177,11 @@ func (s *SQLiteStore) InsertCreatorForwarding(ctx context.Context, cf *CreatorFo
 		 (forwarding_id, source_provider, source_job_id, source_status,
 		  target_executor_id, target_job_id, payload_json, payload_sha256,
 		  status, attempt_count, next_attempt_at,
+		  poll_attempts, next_poll_at, last_polled_at,
 		  locked_by, lease_id, lease_expires_at,
-		  last_error_code, last_error_message,
+		  last_error_code, last_error_message, last_error_class,
 		  created_at, updated_at, forwarded_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		cf.ForwardingID, cf.SourceProvider, cf.SourceJobID, cf.SourceStatus,
 		cf.TargetExecutorID,
 		nullIfEmpty(cf.TargetJobID),
@@ -182,9 +189,10 @@ func (s *SQLiteStore) InsertCreatorForwarding(ctx context.Context, cf *CreatorFo
 		cf.PayloadSHA256,
 		cf.Status, cf.AttemptCount,
 		cf.NextAttemptAt,
+		cf.PollAttempts, cf.NextPollAt, cf.LastPolledAt,
 		cf.LockedBy, cf.LeaseID,
 		cf.LeaseExpiresAt,
-		cf.LastErrorCode, cf.LastErrorMessage,
+		cf.LastErrorCode, cf.LastErrorMessage, cf.LastErrorClass,
 		cf.CreatedAt, cf.UpdatedAt,
 		cf.ForwardedAt,
 	)
@@ -216,27 +224,12 @@ func (s *SQLiteStore) GetCreatorForwarding(ctx context.Context, forwardingID str
 		        target_executor_id, COALESCE(target_job_id, ''),
 		        COALESCE(payload_json, ''), COALESCE(payload_sha256, ''),
 		        status, attempt_count, COALESCE(next_attempt_at, ''),
+		        poll_attempts, COALESCE(next_poll_at, ''), COALESCE(last_polled_at, ''),
 		        COALESCE(locked_by, ''), COALESCE(lease_id, ''), COALESCE(lease_expires_at, ''),
-		        COALESCE(last_error_code, ''), COALESCE(last_error_message, ''),
+		        COALESCE(last_error_code, ''), COALESCE(last_error_message, ''), COALESCE(last_error_class, ''),
 		        created_at, updated_at, COALESCE(forwarded_at, '')
 		 FROM creator_forwardings WHERE forwarding_id = ?`, forwardingID)
-	var cf CreatorForwarding
-	err := row.Scan(
-		&cf.ForwardingID, &cf.SourceProvider, &cf.SourceJobID, &cf.SourceStatus,
-		&cf.TargetExecutorID, &cf.TargetJobID,
-		&cf.PayloadJSON, &cf.PayloadSHA256,
-		&cf.Status, &cf.AttemptCount, &cf.NextAttemptAt,
-		&cf.LockedBy, &cf.LeaseID, &cf.LeaseExpiresAt,
-		&cf.LastErrorCode, &cf.LastErrorMessage,
-		&cf.CreatedAt, &cf.UpdatedAt, &cf.ForwardedAt,
-	)
-	if err == sql.ErrNoRows {
-		return nil, ErrCreatorForwardingNoRow
-	}
-	if err != nil {
-		return nil, fmt.Errorf("store: GetCreatorForwarding: %w", err)
-	}
-	return &cf, nil
+	return scanCreatorForwarding(row)
 }
 
 // GetCreatorForwardingBySource looks up a forwarding by the unique
@@ -250,29 +243,14 @@ func (s *SQLiteStore) GetCreatorForwardingBySource(ctx context.Context, provider
 		        target_executor_id, COALESCE(target_job_id, ''),
 		        COALESCE(payload_json, ''), COALESCE(payload_sha256, ''),
 		        status, attempt_count, COALESCE(next_attempt_at, ''),
+		        poll_attempts, COALESCE(next_poll_at, ''), COALESCE(last_polled_at, ''),
 		        COALESCE(locked_by, ''), COALESCE(lease_id, ''), COALESCE(lease_expires_at, ''),
-		        COALESCE(last_error_code, ''), COALESCE(last_error_message, ''),
+		        COALESCE(last_error_code, ''), COALESCE(last_error_message, ''), COALESCE(last_error_class, ''),
 		        created_at, updated_at, COALESCE(forwarded_at, '')
 		 FROM creator_forwardings
 		 WHERE source_provider = ? AND source_job_id = ? AND target_executor_id = ?`,
 		provider, sourceJobID, executorID)
-	var cf CreatorForwarding
-	err := row.Scan(
-		&cf.ForwardingID, &cf.SourceProvider, &cf.SourceJobID, &cf.SourceStatus,
-		&cf.TargetExecutorID, &cf.TargetJobID,
-		&cf.PayloadJSON, &cf.PayloadSHA256,
-		&cf.Status, &cf.AttemptCount, &cf.NextAttemptAt,
-		&cf.LockedBy, &cf.LeaseID, &cf.LeaseExpiresAt,
-		&cf.LastErrorCode, &cf.LastErrorMessage,
-		&cf.CreatedAt, &cf.UpdatedAt, &cf.ForwardedAt,
-	)
-	if err == sql.ErrNoRows {
-		return nil, ErrCreatorForwardingNoRow
-	}
-	if err != nil {
-		return nil, fmt.Errorf("store: GetCreatorForwardingBySource: %w", err)
-	}
-	return &cf, nil
+	return scanCreatorForwarding(row)
 }
 
 // GetCreatorForwardingByRemoteJob finds the durable handoff without requiring
@@ -286,8 +264,9 @@ func (s *SQLiteStore) GetCreatorForwardingByRemoteJob(ctx context.Context, provi
 		        target_executor_id, COALESCE(target_job_id, ''),
 		        COALESCE(payload_json, ''), COALESCE(payload_sha256, ''),
 		        status, attempt_count, COALESCE(next_attempt_at, ''),
+		        poll_attempts, COALESCE(next_poll_at, ''), COALESCE(last_polled_at, ''),
 		        COALESCE(locked_by, ''), COALESCE(lease_id, ''), COALESCE(lease_expires_at, ''),
-		        COALESCE(last_error_code, ''), COALESCE(last_error_message, ''),
+		        COALESCE(last_error_code, ''), COALESCE(last_error_message, ''), COALESCE(last_error_class, ''),
 		        created_at, updated_at, COALESCE(forwarded_at, '')
 		 FROM creator_forwardings
 		 WHERE source_provider = ? AND source_job_id = ?

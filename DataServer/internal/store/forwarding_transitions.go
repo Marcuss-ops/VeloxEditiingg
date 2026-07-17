@@ -214,6 +214,48 @@ func (s *SQLiteStore) MarkCreatorForwardingFailed(ctx context.Context, forwardin
 	return tx.Commit()
 }
 
+// MarkCreatorForwardingCancelled moves a leasable forwarding to CANCELLED
+// (operator or client initiated cancellation). Same full-CAS semantics as
+// MarkCreatorForwardingFailed: (forwarding_id, status, locked_by, lease_id).
+// When the caller is not a lease holder (e.g. the row is in PENDING with
+// no lock), pass empty strings for runnerID and leaseID.
+func (s *SQLiteStore) MarkCreatorForwardingCancelled(ctx context.Context, forwardingID, runnerID, leaseID, errorCode, errorMsg string) error {
+	if forwardingID == "" {
+		return fmt.Errorf("store: MarkCreatorForwardingCancelled: empty forwarding_id")
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("MarkCreatorForwardingCancelled begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	result, err := tx.ExecContext(ctx,
+		`UPDATE creator_forwardings
+		 SET status = 'CANCELLED',
+		     locked_by = '', lease_id = '', lease_expires_at = '',
+		     last_error_code = ?, last_error_message = ?,
+		     updated_at = ?
+		 WHERE forwarding_id = ?
+		   AND status IN ('PENDING', 'POLLING', 'RETRY_WAIT', 'READY_TO_FORWARD', 'FORWARDING')
+		   AND (? = '' OR locked_by = ?)
+		   AND (? = '' OR lease_id = ?)`,
+		nullIfEmpty(errorCode), nullIfEmpty(errorMsg), now, forwardingID,
+		runnerID, runnerID,
+		leaseID, leaseID,
+	)
+	if err != nil {
+		return fmt.Errorf("MarkCreatorForwardingCancelled: %w", err)
+	}
+	affected, _ := result.RowsAffected()
+	if affected == 0 {
+		return ErrTransitionConflict
+	}
+
+	return tx.Commit()
+}
+
 // MarkCreatorForwardingBlocked moves a leasable forwarding to BLOCKED
 // (operator intervention required). Same full-CAS semantics as
 // MarkCreatorForwardingFailed: (forwarding_id, status, locked_by, lease_id).
@@ -462,7 +504,7 @@ func (s *SQLiteStore) EnsureForwarded(ctx context.Context, forwardingID, jobID s
 		     locked_by = '', lease_id = '', lease_expires_at = '',
 		     updated_at = ?
 		 WHERE forwarding_id = ?
-		   AND status NOT IN ('FORWARDED', 'FAILED', 'BLOCKED')`,
+		   AND status NOT IN ('FORWARDED', 'FAILED', 'CANCELLED', 'BLOCKED')`,
 		jobID, now, now, forwardingID,
 	)
 	if err != nil {
@@ -516,9 +558,11 @@ func (s *SQLiteStore) ExpiredCreatorForwardingLeases(ctx context.Context, nowRFC
 		        target_executor_id, COALESCE(target_job_id, ''),
 		        COALESCE(payload_json, ''), COALESCE(payload_sha256, ''),
 		        status, attempt_count, COALESCE(next_attempt_at, ''),
+		        poll_attempts, COALESCE(next_poll_at, ''), COALESCE(last_polled_at, ''),
 		        COALESCE(locked_by, ''), COALESCE(lease_id, ''),
 		        COALESCE(lease_expires_at, ''),
 		        COALESCE(last_error_code, ''), COALESCE(last_error_message, ''),
+		        COALESCE(last_error_class, ''),
 		        created_at, updated_at, COALESCE(forwarded_at, '')
 		 FROM creator_forwardings
 		 WHERE status = 'POLLING'
@@ -541,8 +585,9 @@ func (s *SQLiteStore) ExpiredCreatorForwardingLeases(ctx context.Context, nowRFC
 			&cf.TargetExecutorID, &cf.TargetJobID,
 			&cf.PayloadJSON, &cf.PayloadSHA256,
 			&cf.Status, &cf.AttemptCount, &cf.NextAttemptAt,
+			&cf.PollAttempts, &cf.NextPollAt, &cf.LastPolledAt,
 			&cf.LockedBy, &cf.LeaseID, &cf.LeaseExpiresAt,
-			&cf.LastErrorCode, &cf.LastErrorMessage,
+			&cf.LastErrorCode, &cf.LastErrorMessage, &cf.LastErrorClass,
 			&cf.CreatedAt, &cf.UpdatedAt, &cf.ForwardedAt,
 		); err != nil {
 			return nil, fmt.Errorf("store: ExpiredCreatorForwardingLeases scan: %w", err)
@@ -566,9 +611,11 @@ func (s *SQLiteStore) ListReadyToForward(ctx context.Context, limit int) ([]Crea
 		        target_executor_id, COALESCE(target_job_id, ''),
 		        COALESCE(payload_json, ''), COALESCE(payload_sha256, ''),
 		        status, attempt_count, COALESCE(next_attempt_at, ''),
+		        poll_attempts, COALESCE(next_poll_at, ''), COALESCE(last_polled_at, ''),
 		        COALESCE(locked_by, ''), COALESCE(lease_id, ''),
 		        COALESCE(lease_expires_at, ''),
 		        COALESCE(last_error_code, ''), COALESCE(last_error_message, ''),
+		        COALESCE(last_error_class, ''),
 		        created_at, updated_at, COALESCE(forwarded_at, '')
 		 FROM creator_forwardings
 		 WHERE status = 'READY_TO_FORWARD'
@@ -590,8 +637,9 @@ func (s *SQLiteStore) ListReadyToForward(ctx context.Context, limit int) ([]Crea
 			&cf.TargetExecutorID, &cf.TargetJobID,
 			&cf.PayloadJSON, &cf.PayloadSHA256,
 			&cf.Status, &cf.AttemptCount, &cf.NextAttemptAt,
+			&cf.PollAttempts, &cf.NextPollAt, &cf.LastPolledAt,
 			&cf.LockedBy, &cf.LeaseID, &cf.LeaseExpiresAt,
-			&cf.LastErrorCode, &cf.LastErrorMessage,
+			&cf.LastErrorCode, &cf.LastErrorMessage, &cf.LastErrorClass,
 			&cf.CreatedAt, &cf.UpdatedAt, &cf.ForwardedAt,
 		); err != nil {
 			return nil, fmt.Errorf("store: ListReadyToForward scan: %w", err)

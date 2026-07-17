@@ -156,6 +156,8 @@ func forwardingStatus(f *store.CreatorForwarding) string {
 		return "WORKER_QUEUED"
 	case string(store.CFStatusFailed), string(store.CFStatusBlocked):
 		return "FAILED"
+	case string(store.CFStatusCancelled):
+		return "CANCELLED"
 	default:
 		return "REMOTE_QUEUED"
 	}
