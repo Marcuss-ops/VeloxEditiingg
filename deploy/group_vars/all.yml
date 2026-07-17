@@ -88,15 +88,8 @@ velox_social_api_retries: 3         # non-secret → SOCIAL_API_RETRIES
 velox_social_callback_base_url: ""  # non-secret → SOCIAL_CALLBACK_BASE_URL
 velox_social_artifact_public_url: "" # non-secret → SOCIAL_ARTIFACT_PUBLIC_URL (future-proof)
 
-# Legacy `SOCIAL_GATEWAY_*` aliases — accepted by socialclient.ConfigFromEnv()
-# for one deprecation cycle. URL/Callback are non-secret (here); the API key
-# secret lives in vault.yml.example under `vault_velox_social_gateway_api_key`.
-velox_social_gateway_url: ""
-velox_social_gateway_callback_base_url: ""
-
 # SECRETS moved to deploy/group_vars/vault.yml.example:
 #   vault_velox_social_api_token        → SOCIAL_API_TOKEN
 #   vault_velox_social_webhook_secret   → SOCIAL_WEBHOOK_SECRET
-#   vault_velox_social_gateway_api_key  → SOCIAL_GATEWAY_API_KEY
 # Operators MUST populate them in the ansible vault (encrypted). This
 # file is committed to the repo and cannot carry real secrets.
