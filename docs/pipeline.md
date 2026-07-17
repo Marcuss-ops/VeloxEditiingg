@@ -548,9 +548,6 @@ cd `<repo-root>/DataServer` && go build -o /tmp/velox-server ./cmd/server
 | `SOCIAL_CALLBACK_BASE_URL` | — | URL pubblicamente raggiungibile di Velox, usato per costruire `download_url` e `callback_url` delle delivery. |
 | `SOCIAL_ARTIFACT_PUBLIC_URL` | — | (forward-looking) CDN pubblico per fetch artefatti quando non si usa il meccanismo callback. |
 | `SOCIAL_WEBHOOK_SECRET` | — | (forward-looking, **SEGRETO**) HMAC per i callback `social_repo` → Velox. Da `vault_velox_social_webhook_secret`. |
-| `SOCIAL_GATEWAY_URL` (legacy) | — | Alias deprecato di `SOCIAL_API_URL` per uno solo ciclo di release. |
-| `SOCIAL_GATEWAY_API_KEY` (legacy) | — | Alias deprecato di `SOCIAL_API_TOKEN`. **SEGRETO**: `vault_velox_social_gateway_api_key`. |
-| `SOCIAL_GATEWAY_CALLBACK_BASE_URL` (legacy) | — | Alias deprecato di `SOCIAL_CALLBACK_BASE_URL`. |
 
 ### Worker (`/etc/velox-worker.env`)
 | Variabile | Descrizione |

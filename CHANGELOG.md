@@ -124,4 +124,57 @@ This section is the **conclusive Removed / Added / Changed record** of the YouTu
 - `docs/api_script_generate_with_images.md` — `social_destination_id` + `platform` JSON example.
 - `docs/CHANGELOG.md` PR-15.9 — twin conclusive record (mirror of this section).
 
+### PR-15.10 — `SOCIAL_GATEWAY_*` legacy alias honor-cycle retired
+
+The legacy deprecation aliases `SOCIAL_GATEWAY_URL`, `SOCIAL_GATEWAY_API_KEY`, `SOCIAL_GATEWAY_CALLBACK_BASE_URL` documented in PR-15.8 / PR-15.9 as "honored for one release cycle" alongside the canonical `SOCIAL_API_*` form are now **retired** (no longer honored). The contract is canonical-only: every operator-facing SOCIAL_* env var resolves 1:1 to its corresponding `SOCIAL_API_*` name.
+
+**BREAKING (operator-visible)**:
+
+- An operator that still sets `SOCIAL_GATEWAY_*` env vars in `/etc/velox-server.env` (or in the ansible vault) will see `socialclient.ConfigFromEnv()` return `BaseURL=""` (and `APIKey=""`, `CallbackBaseURL=""`). The delivery provider surfaces `ErrNotConfigured` at `DeliverArtifact` time (fail-closed), not a silent fallback.
+- Migration: rename the three legacy names in `/etc/velox-server.env` and in the ansible vault (`vault_velox_social_gateway_api_key` → `vault_velox_social_api_token`). Operators that already use the canonical `SOCIAL_API_*` names are unaffected.
+
+**Removed (source-of-truth)**:
+
+- `deploy/group_vars/all.yml` — non-secret defaults `velox_social_gateway_url`, `velox_social_gateway_callback_base_url`, and the `Legacy SOCIAL_GATEWAY_* aliases` comment block.
+- `deploy/group_vars/vault.yml.example` — secret `vault_velox_social_gateway_api_key`. Ansible Vault reference now points only at `vault_velox_social_api_token` + `vault_velox_social_webhook_secret`.
+- `deploy/velox-server.env.example` — commented-out legacy alias block (URL / API_KEY / CallbackBase) and the Secrets hint that referenced `vault_velox_social_gateway_api_key`.
+- `deploy/templates/velox-server.env.j2` — Jinja render of `SOCIAL_GATEWAY_URL`, `SOCIAL_GATEWAY_API_KEY`, `SOCIAL_GATEWAY_CALLBACK_BASE_URL`.
+- `DataServer/internal/socialclient/config.go::ConfigFromEnv` — `firstNonEmpty(canonical, legacy)` fallback for the three resolved fields. Doc comments on `type Config` and on `ConfigFromEnv()` rewritten to reflect canonical-only contract.
+- Helper `firstNonEmpty` in the same file — deleted (became unused after the fallback removal).
+- `DataServer/cmd/server/bootstrap_modules.go` — surgical comment update near line 237 (the "or its `SOCIAL_GATEWAY_URL` legacy fallback" parenthetical is replaced with a one-line breadcrumb to this CHANGELOG entry).
+- `DataServer/internal/deliveries/providers/social_gateway_test.go::newLiveProviderForServer` — companion `t.Setenv("SOCIAL_GATEWAY_*", ...)` calls removed; the helper now sets ONLY canonical `SOCIAL_API_*`.
+
+**Docs cleanup**:
+
+- `docs/pipeline.md` §14 — removed the three `(legacy)` rows from the master env table.
+
+**Tests (new)**:
+
+- `DataServer/internal/socialclient/config_test.go::TestConfigFromEnv_DropsLegacySocialGatewayAliases` — NEGATIVE pinning test. After setting ONLY the legacy aliases (canonical left empty), `ConfigFromEnv()` must return `BaseURL=""`, `APIKey=""`, `CallbackBaseURL=""` (with `Timeout=30s` and `MaxRetries=0` defaults unchanged). This locks the deprecation boundary closed.
+- `DataServer/internal/socialclient/config_test.go::TestConfigFromEnv_HonorsCanonicalSocialAPIEnvs` — POSITIVE companion. Sets canonical `SOCIAL_API_URL` / `SOCIAL_API_TOKEN` / `SOCIAL_CALLBACK_BASE_URL` / `SOCIAL_API_TIMEOUT_MS=7000` / `SOCIAL_API_RETRIES=2` and asserts every field is reflected in `ConfigFromEnv()`.
+
+**Commit chain (3 micro-commits, ordered lowest-risk → highest-risk)**:
+
+| Hash | Subject |
+| --- | --- |
+| `ca000bf` | `chore(ansible): drop legacy SOCIAL_GATEWAY_* vault vars and group_defaults` |
+| `bb407b8` | `chore(deploy): drop legacy SOCIAL_GATEWAY_* alias lines from env templates` |
+| `6aadcd9` | `refactor(socialclient): drop legacy SOCIAL_GATEWAY_* env fallback` (BREAKING) |
+
+**Verification**:
+
+- `go test ./internal/socialclient/... ./internal/deliveries/providers/...`: PASS.
+- `go vet ./internal/socialclient/... ./internal/deliveries/providers/...`: PASS.
+- `go build ./...`: PASS.
+- `git grep -nE 'SOCIAL_GATEWAY' -- ':!docs/' ':!CHANGELOG.md' ':!docs/CHANGELOG.md'`: 0 matches after the chain.
+- `git grep -nE 'vault_velox_social_gateway_'` -- deploy/: 0 matches.
+
+**Refs**:
+
+- `DataServer/internal/socialclient/config.go` — canonical-only reader.
+- `DataServer/internal/socialclient/config_test.go` — boundary tests.
+- `docs/pipeline.md` §14 — operational env registry (now legacy-free).
+- `deploy/group_vars/{all,vault.yml.example}.yml` — operator configuration surface.
+- `deploy/{velox-server.env.example,templates/velox-server.env.j2}` — rendered env surface.
+
 
