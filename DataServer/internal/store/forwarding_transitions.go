@@ -33,6 +33,39 @@ import (
 
 // ── State Transitions ──────────────────────────────────────────────────
 
+// RecordCreatorForwardingPoll updates the poll-tracking fields on a
+// creator_forwardings row without changing its status. It is called by
+// the runner after every successful remote poll so the row reflects the
+// latest poll attempt, the remote status, and when the next poll is due.
+func (s *SQLiteStore) RecordCreatorForwardingPoll(ctx context.Context, forwardingID, remoteStatus string, nextPollAt time.Time) error {
+	if forwardingID == "" {
+		return fmt.Errorf("store: RecordCreatorForwardingPoll: empty forwarding_id")
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	nextISO := ""
+	if !nextPollAt.IsZero() {
+		nextISO = nextPollAt.UTC().Format(time.RFC3339)
+	}
+	result, err := s.db.ExecContext(ctx,
+		`UPDATE creator_forwardings
+		 SET poll_attempts = poll_attempts + 1,
+		     last_polled_at = ?,
+		     last_remote_status = ?,
+		     next_poll_at = ?,
+		     updated_at = ?
+		 WHERE forwarding_id = ?`,
+		now, remoteStatus, nextISO, now, forwardingID,
+	)
+	if err != nil {
+		return fmt.Errorf("store: RecordCreatorForwardingPoll: %w", err)
+	}
+	affected, _ := result.RowsAffected()
+	if affected == 0 {
+		return ErrTransitionConflict
+	}
+	return nil
+}
+
 // MarkCreatorForwardingReadyToForward transitions a POLLING forwarding to
 // READY_TO_FORWARD after the remote creator has completed and the payload
 // has been persisted. CAS guard on (forwarding_id, status=POLLING, locked_by,
@@ -54,6 +87,7 @@ func (s *SQLiteStore) MarkCreatorForwardingReadyToForward(ctx context.Context, f
 		`UPDATE creator_forwardings
 		 SET status = 'READY_TO_FORWARD',
 		     source_status = 'completed',
+		     last_remote_status = 'completed',
 		     payload_json = ?, payload_sha256 = ?,
 		     locked_by = '', lease_id = '', lease_expires_at = '',
 		     updated_at = ?
@@ -127,10 +161,10 @@ func (s *SQLiteStore) MarkCreatorForwardingForwarded(ctx context.Context, forwar
 }
 
 // MarkCreatorForwardingRetry moves a POLLING forwarding to RETRY_WAIT with
-// the next attempt scheduled after a backoff delay. Sets last_error_code
-// and last_error_message for diagnostics. CAS on (forwarding_id,
-// status=POLLING, locked_by, lease_id).
-func (s *SQLiteStore) MarkCreatorForwardingRetry(ctx context.Context, forwardingID, runnerID, leaseID, errorCode, errorMsg string, nextAttemptAt time.Time) error {
+// the next attempt scheduled after a backoff delay. Sets last_error_code,
+// last_error_message and last_error_class for diagnostics. CAS on
+// (forwarding_id, status=POLLING, locked_by, lease_id).
+func (s *SQLiteStore) MarkCreatorForwardingRetry(ctx context.Context, forwardingID, runnerID, leaseID, errorCode, errorMsg, errorClass string, nextAttemptAt time.Time) error {
 	if forwardingID == "" || runnerID == "" || leaseID == "" {
 		return fmt.Errorf("store: MarkCreatorForwardingRetry: missing required fields")
 	}
@@ -148,13 +182,13 @@ func (s *SQLiteStore) MarkCreatorForwardingRetry(ctx context.Context, forwarding
 		 SET status = 'RETRY_WAIT',
 		     locked_by = '', lease_id = '', lease_expires_at = '',
 		     next_attempt_at = ?,
-		     last_error_code = ?, last_error_message = ?,
+		     last_error_code = ?, last_error_message = ?, last_error_class = ?,
 		     updated_at = ?
 		 WHERE forwarding_id = ?
 		   AND status = 'POLLING'
 		   AND locked_by = ?
 		   AND lease_id = ?`,
-		nextISO, nullIfEmpty(errorCode), nullIfEmpty(errorMsg), now,
+		nextISO, nullIfEmpty(errorCode), nullIfEmpty(errorMsg), nullIfEmpty(errorClass), now,
 		forwardingID, runnerID, leaseID,
 	)
 	if err != nil {
@@ -177,7 +211,7 @@ func (s *SQLiteStore) MarkCreatorForwardingRetry(ctx context.Context, forwarding
 // When the caller is not a lease holder (e.g. the row is in RETRY_WAIT with
 // no lock), pass empty strings for runnerID and leaseID — the CAS degrades
 // to forwarding_id + status only.
-func (s *SQLiteStore) MarkCreatorForwardingFailed(ctx context.Context, forwardingID, runnerID, leaseID, errorCode, errorMsg string) error {
+func (s *SQLiteStore) MarkCreatorForwardingFailed(ctx context.Context, forwardingID, runnerID, leaseID, errorCode, errorMsg, errorClass string) error {
 	if forwardingID == "" {
 		return fmt.Errorf("store: MarkCreatorForwardingFailed: empty forwarding_id")
 	}
@@ -193,13 +227,13 @@ func (s *SQLiteStore) MarkCreatorForwardingFailed(ctx context.Context, forwardin
 		`UPDATE creator_forwardings
 		 SET status = 'FAILED',
 		     locked_by = '', lease_id = '', lease_expires_at = '',
-		     last_error_code = ?, last_error_message = ?,
+		     last_error_code = ?, last_error_message = ?, last_error_class = ?,
 		     updated_at = ?
 		 WHERE forwarding_id = ?
 		   AND status IN ('PENDING', 'POLLING', 'RETRY_WAIT', 'READY_TO_FORWARD', 'FORWARDING')
 		   AND (? = '' OR locked_by = ?)
 		   AND (? = '' OR lease_id = ?)`,
-		nullIfEmpty(errorCode), nullIfEmpty(errorMsg), now, forwardingID,
+		nullIfEmpty(errorCode), nullIfEmpty(errorMsg), nullIfEmpty(errorClass), now, forwardingID,
 		runnerID, runnerID,
 		leaseID, leaseID,
 	)

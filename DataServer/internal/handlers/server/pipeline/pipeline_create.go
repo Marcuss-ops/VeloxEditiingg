@@ -9,7 +9,6 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
-	"velox-server/internal/jobs/enqueue"
 	"velox-server/internal/pipelineruns"
 	"velox-server/internal/remoteengine"
 )
@@ -254,14 +253,12 @@ func (h *Handlers) CreatePipelineRun() gin.HandlerFunc {
 			}
 		}
 
-		// ── Sync forward if the result is already complete ────────────
-		if enqueue.ShouldForwardPipelineResult(workerPayload) {
-			forwarded, _ := h.syncForwardResult(c.Request.Context(), pr, result, workerPayload)
-			c.JSON(http.StatusAccepted, buildCreateResponseFromSyncForward(pr, forwarded))
-			return
-		}
-
 		// ── Async path: persist a PENDING forwarding row ──────────────
+		//
+		// Area 3: the HTTP handler never polls or forwards synchronously.
+		// The CreatorForwardingRunner claims the PENDING row, polls the
+		// remote engine, and delegates the forward-completed step to
+		// creatorflow.Resolver.Resolve.
 		if jobID != "" {
 			if h.resolver == nil || !h.resolver.HasDBAccess() {
 				pipelineLog("CREATE: durable resolver unavailable run=%s job=%s", pr.ID, jobID)

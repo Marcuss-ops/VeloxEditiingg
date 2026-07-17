@@ -14,9 +14,9 @@ import (
 )
 
 // assetDeps holds the artifact pipeline components built before modules
-// (YouTube, Drive) are available. The AssetService and Enqueuer are built
-// LATER in buildModules because they require the Drive/YouTube integration
-// services for typed-resolver construction.
+// (Drive) are available. The AssetService and Enqueuer are built
+// LATER in buildModules because they require the Drive integration
+// service for typed-resolver construction.
 
 // workflow.Repository retired: write methods are gated and the outbox
 // handlers are no-op stubs. No runtime path consumes a
@@ -33,9 +33,9 @@ type assetDeps struct {
 // chunked-upload service, and outbox registry+dispatcher.
 //
 // The AssetService and Enqueuer are intentionally NOT built here —
-// they depend on the Drive/YouTube integration services which are
-// created by buildModules (after the module-level YouTube/Drive
-// constructors run).  Those fields are populated by buildModules
+// they depend on the Drive integration service which is
+// created by buildModules (after the module-level Drive
+// constructor runs).  Those fields are populated by buildModules
 // calling wireAssetServiceAndEnqueuer below.
 func buildAssets(cfg *config.Config, p *persistenceDeps, j *jobsDeps) (*assetDeps, error) {
 	_ = cfg

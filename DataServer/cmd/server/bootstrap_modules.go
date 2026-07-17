@@ -123,7 +123,6 @@ func (a *deliveryPlanResolverAdapter) ResolvePlan(ctx context.Context, jobID, ar
 type moduleDeps struct {
 	Registry         *app.Registry
 	Health           *app.HealthModule
-	YouTube          *app.YouTubeModule
 	Drive            *app.DriveModule
 	Ansible          *app.AnsibleModule
 	AssetService     *voiceoverassets.AssetService
@@ -141,12 +140,6 @@ type moduleDeps struct {
 func buildModules(cfg *config.Config, p *persistenceDeps, j *jobsDeps, w *workerDeps, a *assetDeps, t *taskDeps) (*moduleDeps, error) {
 	registry := app.NewRegistry()
 	auth := api.AdminAuthMiddleware(cfg)
-
-	// ── YouTube module ───────────────────────────────────────────────
-	ytMod, err := app.NewYouTubeModule(cfg, cfg.Runtime.DataDir, p.SQLite)
-	if err != nil {
-		return nil, fmt.Errorf("bootstrap: youtube module: %w", err)
-	}
 
 	// ── Drive module ─────────────────────────────────────────────────
 	driveMod, err := app.NewDriveModule(cfg, p.SQLite)
@@ -189,14 +182,11 @@ func buildModules(cfg *config.Config, p *persistenceDeps, j *jobsDeps, w *worker
 	healthMod := app.NewHealthModule()
 	registry.Register(healthMod)
 	registry.Register(app.NewWorkersModule(cfg, w.Registry, w.Lifecycle, w.UpdateHandler, auth, assetSvc, p.BlobStore))
-	registry.Register(ytMod)
 	registry.Register(driveMod)
 
 	ansibleMod := app.NewAnsibleModule(cfg, cfg.Runtime.DataDir, auth, p.SQLite)
 	registry.Register(ansibleMod)
 
-	livestreamMod := app.NewLivestreamModule(ytMod.Service(), p.SQLite)
-	registry.Register(livestreamMod)
 	registry.Register(app.NewFrontendModule(cfg))
 
 	// ── Observability REST API ─────────────────────────────────────
@@ -213,11 +203,6 @@ func buildModules(cfg *config.Config, p *persistenceDeps, j *jobsDeps, w *worker
 
 	// ── Delivery runner ─────────────────────────────────────────────
 	deliveryReg := deliveries.NewRegistry()
-	if ytMod != nil {
-		ytProvider := deliveryProviders.NewYouTubeProvider(ytMod.Service(), p.BlobStore)
-		deliveryReg.Register(ytProvider)
-		log.Printf("[BOOTSTRAP] Delivery provider registered: youtube")
-	}
 	if driveMod != nil {
 		driveProvider := deliveryProviders.NewDriveProvider(driveMod.Service(), p.BlobStore)
 		deliveryReg.Register(driveProvider)
@@ -253,7 +238,6 @@ func buildModules(cfg *config.Config, p *persistenceDeps, j *jobsDeps, w *worker
 	return &moduleDeps{
 		Registry:         registry,
 		Health:           healthMod,
-		YouTube:          ytMod,
 		Drive:            driveMod,
 		AssetService:     assetSvc,
 		Enqueuer:         enqueuer,

@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -216,7 +215,7 @@ func TestPipelineGenerateForwardsCompletedResultToQueue(t *testing.T) {
 			RemoteEngineRetries:   1,
 		},
 	}
-	pipelineHandlers := NewHandlersWithResolver(pipelineCfg, testEnqueuer, remoteClient, resolver, jobRepo, nil, nil)
+	pipelineHandlers := NewHandlersWithResolver(pipelineCfg, testEnqueuer, remoteClient, resolver, jobRepo, nil, nil).WithStore(db)
 	r.POST("/api/remote/pipeline/generate", pipelineHandlers.Generate())
 
 	reqBody, _ := json.Marshal(map[string]interface{}{
@@ -228,44 +227,40 @@ func TestPipelineGenerateForwardsCompletedResultToQueue(t *testing.T) {
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
-	if w.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d body=%s", w.Code, w.Body.String())
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("want 202, got %d body=%s", w.Code, w.Body.String())
 	}
 
 	var resp map[string]interface{}
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("response json: %v", err)
 	}
-	if resp["worker_forwarded"] != true {
-		t.Fatalf("want worker_forwarded=true, got %v body=%s", resp["worker_forwarded"], w.Body.String())
+	if resp["pipeline_run_id"] == "" {
+		t.Fatalf("want pipeline_run_id in response, got %s", w.Body.String())
+	}
+	if resp["forwarding_id"] == "" {
+		t.Fatalf("want forwarding_id in response, got %s", w.Body.String())
+	}
+	if resp["remote_job_id"] != "trace_123" {
+		t.Fatalf("want remote_job_id trace_123, got %v", resp["remote_job_id"])
 	}
 
-	// The Resolver derives a deterministic job_id from the forwarding key
-	// (remote_engine:trace_123:scene.composite.v1), NOT from the trace_id
-	// itself. The job must be looked up by the derived ID.
+	// Area 3: the handler must NOT forward synchronously. The durable
+	// CreatorForwardingRunner is responsible for polling and forwarding.
+	forwarding, err := db.GetCreatorForwardingBySource(context.Background(), "remote_engine", "trace_123", "scene.composite.v1")
+	if err != nil {
+		t.Fatalf("get forwarding: %v", err)
+	}
+	if forwarding == nil || forwarding.Status != string(store.CFStatusPending) {
+		t.Fatalf("want one PENDING forwarding, got %#v", forwarding)
+	}
+
+	// No Velox job should have been created yet.
 	expectedJobID := enqueue.DeriveForwardingJobID(
 		routing.FormatForwardingKey("remote_engine", "trace_123", "scene.composite.v1").String(),
 	)
-
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		j, jobErr := jobRepo.Get(context.Background(), expectedJobID)
-		if jobErr == nil && j != nil {
-			if j.ID != expectedJobID {
-				t.Fatalf("want job_id %s, got %s", expectedJobID, j.ID)
-			}
-			if j.VideoName != "Test Video" {
-				t.Fatalf("want video name Test Video, got %s", j.VideoName)
-			}
-			if j.RunID == "" {
-				t.Fatalf("want run id to be populated")
-			}
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("job not found in queue: %v", jobErr)
-		}
-		time.Sleep(25 * time.Millisecond)
+	if _, err := jobRepo.Get(context.Background(), expectedJobID); err == nil {
+		t.Fatalf("did not expect a Velox job to be created synchronously")
 	}
 }
 
@@ -294,7 +289,7 @@ func TestPipelineGeneratePersistsAsyncForwardingIdempotently(t *testing.T) {
 	resolver := creatorflow.NewResolverFromDeps(testEnqueuer, db, tempDir, filepath.Join(tempDir, "videos"), "")
 	client := remoteengine.NewClient(remoteengine.Config{URL: mockEngine.URL, TimeoutMS: 5000, Retries: 1})
 	cfg := &config.Config{Render: config.RenderConfig{RemoteEngineURL: mockEngine.URL, RemoteEngineTimeoutMS: 5000, RemoteEngineRetries: 1}}
-	h := NewHandlersWithResolver(cfg, testEnqueuer, client, resolver, jobRepo, nil, nil)
+	h := NewHandlersWithResolver(cfg, testEnqueuer, client, resolver, jobRepo, nil, nil).WithStore(db)
 
 	gin.SetMode(gin.TestMode)
 	r := gin.New()

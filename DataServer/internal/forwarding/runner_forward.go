@@ -66,7 +66,7 @@ func (r *CreatorForwardingRunner) atomicEnqueueAndForward(ctx context.Context, l
 		payloadJSON, payloadSHA256,
 	); err != nil {
 		log.Printf("[FORWARDING] mark ready-to-forward failed forwarding=%s: %v", lease.ForwardingID, err)
-		if retryErr := r.handleRetry(ctx, lease, "MARK_READY_ERROR", err.Error()); retryErr != nil {
+		if retryErr := r.handleRetry(ctx, lease, "MARK_READY_ERROR", err.Error(), ""); retryErr != nil {
 			return retryErr
 		}
 		return nil
@@ -96,7 +96,7 @@ func (r *CreatorForwardingRunner) atomicEnqueueAndForward(ctx context.Context, l
 			return errors.Join(supervisor.ErrElementScoped, err)
 		}
 		log.Printf("[FORWARDING] resolver.Resolve failed forwarding=%s: %v", lease.ForwardingID, err)
-		if retryErr := r.handleEnqueueRetry(ctx, lease, "ENQUEUE_FAILED", err.Error()); retryErr != nil {
+		if retryErr := r.handleEnqueueRetry(ctx, lease, "ENQUEUE_FAILED", err.Error(), ""); retryErr != nil {
 			return retryErr
 		}
 		return nil

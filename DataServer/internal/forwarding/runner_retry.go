@@ -21,7 +21,7 @@ import (
 // Returns an error classified by supervisor.ClassifyError. The
 // Verdetto P0 #1 contract: metrics (Failed / Retried) are persisted
 // only after the underlying SQL CAS returns nil.
-func (r *CreatorForwardingRunner) handleEnqueueRetry(ctx context.Context, lease store.CreatorForwardingLease, code, msg string) error {
+func (r *CreatorForwardingRunner) handleEnqueueRetry(ctx context.Context, lease store.CreatorForwardingLease, code, msg, errorClass string) error {
 	maxAttempts := r.cfg.MaxAttempts
 	if maxAttempts <= 0 {
 		maxAttempts = 12
@@ -31,6 +31,7 @@ func (r *CreatorForwardingRunner) handleEnqueueRetry(ctx context.Context, lease 
 			lease.ForwardingID, r.identity, lease.LeaseID,
 			"MAX_ENQUEUE_ATTEMPTS",
 			fmt.Sprintf("exhausted %d attempts: %s", maxAttempts, msg),
+			errorClass,
 		); err != nil {
 			return errors.Join(supervisor.ErrElementScoped,
 				fmt.Errorf("mark failed (max enqueue attempts): %w", err))
@@ -57,6 +58,7 @@ func (r *CreatorForwardingRunner) handleEnqueueRetry(ctx context.Context, lease 
 			lease.ForwardingID, r.identity, lease.LeaseID,
 			"ENQUEUE_RETRY_CAS_FAILED",
 			fmt.Sprintf("CAS failure on enqueue retry: %v", err),
+			"",
 		); ferr != nil {
 			return errors.Join(supervisor.ErrElementScoped,
 				fmt.Errorf("mark failed (CAS fallback): %w (orig=%v)", ferr, err))
@@ -76,7 +78,7 @@ func (r *CreatorForwardingRunner) handleEnqueueRetry(ctx context.Context, lease 
 // Verdetto P0 #1 contract: metrics (Failed / Retried) are persisted
 // only after the underlying SQL CAS returns nil. The caller no
 // longer adds the Retried metric — handleRetry owns it.
-func (r *CreatorForwardingRunner) handleRetry(ctx context.Context, lease store.CreatorForwardingLease, code, msg string) error {
+func (r *CreatorForwardingRunner) handleRetry(ctx context.Context, lease store.CreatorForwardingLease, code, msg, errorClass string) error {
 	maxAttempts := r.cfg.MaxAttempts
 	if maxAttempts <= 0 {
 		maxAttempts = 12
@@ -86,6 +88,7 @@ func (r *CreatorForwardingRunner) handleRetry(ctx context.Context, lease store.C
 			lease.ForwardingID, r.identity, lease.LeaseID,
 			"MAX_ATTEMPTS",
 			fmt.Sprintf("exhausted %d attempts: %s", maxAttempts, msg),
+			errorClass,
 		); err != nil {
 			return errors.Join(supervisor.ErrElementScoped,
 				fmt.Errorf("mark failed (max attempts): %w", err))
@@ -100,7 +103,7 @@ func (r *CreatorForwardingRunner) handleRetry(ctx context.Context, lease store.C
 	nextAttempt := time.Now().UTC().Add(backoff)
 	if err := r.dbStore.MarkCreatorForwardingRetry(ctx,
 		lease.ForwardingID, r.identity, lease.LeaseID,
-		code, msg, nextAttempt,
+		code, msg, errorClass, nextAttempt,
 	); err != nil {
 		return errors.Join(supervisor.ErrElementScoped,
 			fmt.Errorf("mark retry: %w", err))

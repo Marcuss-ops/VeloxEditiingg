@@ -14,12 +14,15 @@
 //   - the typed-DTO adoption (Area 2): the raw result map returned by
 //     remoteengine.Client.StartPipeline is parsed via
 //     remoteengine.ParseRemotePipelineResult and the worker payload is
-//     derived from `dto.ToWorkerPayload()`. The sync-forward,
-//     async-forward persistence, and response-envelope branches
-//     operate exclusively on the typed payload (with the legacy map
-//     consulted only for `status`).
-//   - voiceover asset acquisition error mapping
-//     (voiceoverassets.AsAcquisitionError → 422 with structured fields).
+//     derived from `dto.ToWorkerPayload()`. The async-forward
+//     persistence and response-envelope branches operate exclusively on
+//     the typed payload (with the legacy map consulted only for
+//     `status`).
+//   - Area 3: the handler now creates a pipeline_run, calls
+//     StartPipeline, stamps remote_job_id, persists a PENDING
+//     creator_forwardings row, and returns 202. No volatile polling or
+//     synchronous forwarding happens here — the durable
+//     CreatorForwardingRunner owns polling and forwarding.
 //
 // What stays / what got moved:
 //   - forwardPipelineResultToWorker   → forwarding.go (Step 4 done).
@@ -32,41 +35,48 @@
 // The handler runs alongside POST /api/v1/pipeline-runs
 // (CreatePipelineRun, in pipeline_create.go) which is the durable,
 // idempotent, versioned entry point; legacy Generate remains for
-// callers that still POST the raw map and don't persist a
-// pipeline_run row.
+// callers that still POST the raw map.
 package pipeline
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 
 	"velox-shared/payload"
 
-	voiceoverassets "velox-server/internal/assets"
-	"velox-server/internal/jobs/enqueue"
+	"velox-server/internal/pipelineruns"
 	"velox-server/internal/remoteengine"
 )
 
 // Generate handles POST /api/remote/pipeline/generate.
 //
-// Dependencies (enqueuer, remote engine client) are read from the
-// receiver `h` rather than from package-level globals, so two
-// concurrent tests or two pipelines mounted on different admin groups
-// cannot collide through shared state.
+// Dependencies (store, enqueuer, remote engine client, resolver) are
+// read from the receiver `h` rather than from package-level globals, so
+// two concurrent tests or two pipelines mounted on different admin
+// groups cannot collide through shared state.
 //
-// Area 2: the typed RemotePipelineResult DTO adoption is in force.
-// The raw `result map[string]interface{}` returned by StartPipeline
-// is parsed via ParseRemotePipelineResult and the worker payload is
-// derived from `dto.ToWorkerPayload()`. The sync-forward and async-
-// forward branches operate on the typed payload.
+// Area 3: the handler creates a pipeline_run, calls StartPipeline,
+// stamps remote_job_id, persists a PENDING creator_forwardings row,
+// and returns 202. No polling or synchronous forwarding happens here —
+// the durable CreatorForwardingRunner owns the rest of the lifecycle.
 func (h *Handlers) Generate() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if h.enqueuer == nil {
-			pipelineLog("REQUEST: enqueuer not wired — returning 503")
+		if h.store == nil {
 			c.JSON(http.StatusServiceUnavailable, gin.H{
 				"ok":    false,
-				"error": "pipeline enqueuer not wired (call NewHandlers(... enqueuer) at composition root)",
+				"error": "pipeline store not wired",
+			})
+			return
+		}
+		if h.client == nil || !h.client.IsConfigured() {
+			pipelineLog("REQUEST: remote engine NOT configured — returning 503")
+			c.JSON(http.StatusServiceUnavailable, gin.H{
+				"ok":    false,
+				"error": "remote engine not configured",
+				"hint":  "set VELOX_REMOTE_ENGINE_URL",
 			})
 			return
 		}
@@ -84,24 +94,48 @@ func (h *Handlers) Generate() gin.HandlerFunc {
 		sceneCount := reqPayload["scene_count"]
 		pipelineLog("REQUEST: received topic=%q language=%s style=%s scenes=%v", topic, language, style, sceneCount)
 
-		if h.client == nil || !h.client.IsConfigured() {
-			pipelineLog("REQUEST: remote engine NOT configured — returning 503")
-			c.JSON(http.StatusServiceUnavailable, gin.H{
-				"ok":    false,
-				"error": "remote engine not configured",
-				"hint":  "set VELOX_REMOTE_ENGINE_URL",
-			})
+		// Area 3: create a pipeline_run before calling the remote engine.
+		idemKey, _ := reqPayload["idempotency_key"].(string)
+		if idemKey == "" {
+			idemKey = "gen_" + uuid.NewString()
+		}
+		now := time.Now().UTC()
+		runID := "run_" + uuid.NewString()
+		requestID := "req_" + uuid.NewString()
+
+		insertResult, err := h.store.InsertPipelineRun(c.Request.Context(), &pipelineruns.PipelineRun{
+			ID:                   runID,
+			RequestID:            requestID,
+			IdempotencyKey:     idemKey,
+			Status:             pipelineruns.StatusAccepted,
+			RequestedPayloadJSON: "{}",
+			CreatedAt:            now,
+			UpdatedAt:            now,
+		})
+		if err != nil {
+			pipelineLog("REQUEST: failed to insert pipeline_run: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": "failed to create pipeline run"})
 			return
+		}
+		pr := insertResult.Run
+		if !insertResult.Created {
+			pipelineLog("REQUEST: idempotent duplicate idem=%s → run=%s", idemKey, pr.ID)
 		}
 
 		pipelineLog("REMOTE: forwarding to %s/api/script/generate-with-images", h.cfg.Render.RemoteEngineURL)
-		// Legacy Generate path: no pipeline_run row exists, so we extract
-		// the idempotency key from the payload if the client sent one.
-		idemKey, _ := reqPayload["idempotency_key"].(string)
-		result, err := h.client.StartPipeline(c.Request.Context(), reqPayload, idemKey)
+		result, err := h.client.StartPipeline(c.Request.Context(), reqPayload, pr.ID)
 		if err != nil {
-			pipelineLog("REMOTE: request FAILED: %v", err)
-			c.JSON(http.StatusBadGateway, gin.H{"ok": false, "error": err.Error()})
+			pipelineLog("REMOTE: request FAILED run=%s: %v", pr.ID, err)
+			_ = h.store.UpdatePipelineRunError(c.Request.Context(), pr.ID,
+				"REMOTE_CALL_FAILED", err.Error(), "REMOTE_SUBMITTING")
+			c.JSON(http.StatusBadGateway, gin.H{
+				"ok":              false,
+				"pipeline_run_id": pr.ID,
+				"request_id":      pr.RequestID,
+				"status":          string(pipelineruns.StatusFailed),
+				"error":           err.Error(),
+				"status_url":      "/api/v1/pipeline-runs/" + pr.ID,
+			})
 			return
 		}
 
@@ -112,49 +146,37 @@ func (h *Handlers) Generate() gin.HandlerFunc {
 		dto, _ := remoteengine.ParseRemotePipelineResult(result)
 		workerPayload := dto.ToWorkerPayload()
 
-		jobID, _ := workerPayload["job_id"].(string)
-		status, _ := result["status"].(string)
+		jobID := firstStringResolver(workerPayload, "job_id", "trace_id", "id")
+		status := firstStringResolver(result, "status")
 		if jobID != "" {
-			pipelineLog("REMOTE: response job_id=%s status=%s", jobID, status)
+			pipelineLog("REMOTE: response run=%s job_id=%s status=%s", pr.ID, jobID, status)
 		} else {
-			pipelineLog("REMOTE: response ok=%v status=%s", result["ok"], status)
+			pipelineLog("REMOTE: response run=%s ok=%v status=%s", pr.ID, result["ok"], status)
 		}
 
-		response := gin.H{}
-		for k, v := range result {
-			response[k] = v
-		}
-
-		// Try synchronous forward if the remote already returned a
-		// complete result.
-		if enqueue.ShouldForwardPipelineResult(workerPayload) {
-			pipelineLog("FORWARD: result complete — forwarding to Velox workers (sync)")
-			if forwarded, forwardErr := h.forwardPipelineResultToWorker(c.Request.Context(), workerPayload); forwardErr != nil {
-				if assetErr, ok := voiceoverassets.AsAcquisitionError(forwardErr); ok {
-					c.JSON(http.StatusUnprocessableEntity, gin.H{
-						"ok":          false,
-						"code":        assetErr.Code,
-						"field":       assetErr.Field,
-						"message":     assetErr.Message,
-						"source_type": assetErr.SourceType,
-					})
-					return
-				}
-				pipelineLog("FORWARD: FAILED: %v", forwardErr)
-				response["worker_forwarded"] = false
-				response["worker_forward_error"] = forwardErr.Error()
-			} else {
-				workerJobID, _ := forwarded["job_id"].(string)
-				pipelineLog("FORWARD: SUCCESS job_id=%s", workerJobID)
-				response["worker_forwarded"] = true
-				response["worker_forward_result"] = forwarded
+		// Stamp remote_job_id on the pipeline_run.
+		if jobID != "" {
+			pr.RemoteJobID = jobID
+			pr.RemoteProvider = "remote_engine"
+			if err := h.store.UpdatePipelineRunRemoteJob(c.Request.Context(), pr.ID, "remote_engine", jobID); err != nil {
+				pipelineLog("REQUEST: failed to stamp remote_job_id run=%s: %v", pr.ID, err)
 			}
-		} else if jobID != "" && !isTerminalStatus(status) {
+		}
+
+		// Area 3: persist a PENDING forwarding row and return 202.
+		// The handler never polls or forwards synchronously.
+		if jobID != "" {
 			if h.resolver == nil || !h.resolver.HasDBAccess() {
 				pipelineLog("FORWARD: durable resolver unavailable for remote job=%s", jobID)
+				_ = h.store.UpdatePipelineRunError(c.Request.Context(), pr.ID,
+					"RESOLVER_UNAVAILABLE", "durable forwarding is not configured", "FORWARDING")
 				c.JSON(http.StatusServiceUnavailable, gin.H{
-					"ok":    false,
-					"error": "durable forwarding is not configured",
+					"ok":              false,
+					"pipeline_run_id": pr.ID,
+					"request_id":      pr.RequestID,
+					"status":          string(pipelineruns.StatusFailed),
+					"error":           "durable forwarding is not configured",
+					"status_url":      "/api/v1/pipeline-runs/" + pr.ID,
 				})
 				return
 			}
@@ -165,26 +187,51 @@ func (h *Handlers) Generate() gin.HandlerFunc {
 			)
 			if persistErr != nil {
 				pipelineLog("FORWARD: failed to persist remote job=%s: %v", jobID, persistErr)
-				c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": persistErr.Error()})
+				_ = h.store.UpdatePipelineRunError(c.Request.Context(), pr.ID,
+					"FORWARDING_PERSIST_FAILED", persistErr.Error(), "FORWARDING")
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"ok":              false,
+					"pipeline_run_id": pr.ID,
+					"request_id":      pr.RequestID,
+					"status":          string(pipelineruns.StatusFailed),
+					"error":           persistErr.Error(),
+					"status_url":      "/api/v1/pipeline-runs/" + pr.ID,
+				})
 				return
 			}
 
 			pipelineLog("FORWARD: persisted remote job=%s forwarding_id=%s status=%s",
 				jobID, forwarding.ForwardingID, forwarding.Status)
-			response["ok"] = true
-			response["remote_job_id"] = jobID
-			response["forwarding_id"] = forwarding.ForwardingID
-			response["forwarding_status"] = forwarding.Status
-			response["worker_forwarded"] = false
-			response["worker_forward_error"] = "remote result is pending; durable forwarding runner will resume it"
-			c.JSON(http.StatusAccepted, response)
+
+			pr.ForwardingID = forwarding.ForwardingID
+			if err := h.store.UpdatePipelineRunForwarding(c.Request.Context(), pr.ID,
+				forwarding.ForwardingID, pipelineruns.StatusRemoteQueued); err != nil {
+				pipelineLog("REQUEST: failed to stamp forwarding_id run=%s: %v", pr.ID, err)
+			}
+
+			c.JSON(http.StatusAccepted, gin.H{
+				"ok":              true,
+				"pipeline_run_id": pr.ID,
+				"request_id":      pr.RequestID,
+				"remote_job_id":   jobID,
+				"forwarding_id":   forwarding.ForwardingID,
+				"status":          string(pipelineruns.StatusRemoteQueued),
+				"status_url":      "/api/v1/pipeline-runs/" + pr.ID,
+			})
 			return
-		} else if jobID != "" {
-			pipelineLog("FORWARD: result NOT complete for job %s (status=%s) — missing scenes/voiceover", jobID, status)
-			response["worker_forwarded"] = false
-			response["worker_forward_error"] = "pipeline result is not complete enough for worker handoff — missing scenes/voiceover"
 		}
 
-		c.JSON(http.StatusOK, response)
+		// No job_id in the response — contract violation.
+		pipelineLog("REQUEST: remote response missing job_id run=%s", pr.ID)
+		_ = h.store.UpdatePipelineRunError(c.Request.Context(), pr.ID,
+			"REMOTE_CONTRACT", "remote response missing job_id", "REMOTE_SUBMITTING")
+		c.JSON(http.StatusBadGateway, gin.H{
+			"ok":              false,
+			"pipeline_run_id": pr.ID,
+			"request_id":      pr.RequestID,
+			"status":          string(pipelineruns.StatusFailed),
+			"error":           "remote response missing job_id",
+			"status_url":      "/api/v1/pipeline-runs/" + pr.ID,
+		})
 	}
 }

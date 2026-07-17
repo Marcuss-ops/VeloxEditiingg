@@ -431,7 +431,7 @@ func TestMarkForwardingRetry(t *testing.T) {
 
 	l := leases[0]
 	nextAttempt := time.Now().UTC().Add(2 * time.Minute)
-	err = db.MarkCreatorForwardingRetry(ctx, l.ForwardingID, l.RunnerID, l.LeaseID, "POLL_FAILED", "connection refused", nextAttempt)
+	err = db.MarkCreatorForwardingRetry(ctx, l.ForwardingID, l.RunnerID, l.LeaseID, "POLL_FAILED", "connection refused", "TRANSIENT", nextAttempt)
 	if err != nil {
 		t.Fatalf("MarkCreatorForwardingRetry: %v", err)
 	}
@@ -463,7 +463,7 @@ func TestMarkForwardingFailed(t *testing.T) {
 
 	insertTestForwarding(t, db, "cf-fail", "openai", "creator-fail", "scene.composite.v1", "RETRY_WAIT")
 
-	err := db.MarkCreatorForwardingFailed(ctx, "cf-fail", "", "", "MAX_ATTEMPTS", "exhausted retries")
+	err := db.MarkCreatorForwardingFailed(ctx, "cf-fail", "", "", "MAX_ATTEMPTS", "exhausted retries", "PERMANENT")
 	if err != nil {
 		t.Fatalf("MarkCreatorForwardingFailed: %v", err)
 	}

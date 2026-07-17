@@ -8,6 +8,7 @@ import (
 	"log"
 	"time"
 
+	"velox-server/internal/remoteengine"
 	"velox-server/internal/store"
 	"velox-server/internal/supervisor"
 )
@@ -51,6 +52,22 @@ func (r *CreatorForwardingRunner) processLease(ctx context.Context, lease store.
 	// Poll remote creator for status — uses procCtx so lease loss
 	// cancels the in-flight request.
 	resp, err := r.client.GetPipelineStatus(procCtx, lease.SourceJobID)
+
+	// Record the poll attempt (best-effort; if the lease was lost we
+	// abandon without touching the row).
+	if procCtx.Err() == nil {
+		remoteStatus := ""
+		if resp != nil {
+			remoteStatus = resp.Status
+		}
+		// next_poll_at is set to now so the next tick can reclaim the
+		// row immediately. The actual scheduling is handled by the
+		// runner's PollInterval + claim query.
+		if recordErr := r.dbStore.RecordCreatorForwardingPoll(ctx, lease.ForwardingID, remoteStatus, time.Now().UTC()); recordErr != nil {
+			log.Printf("[FORWARDING] record poll failed forwarding=%s: %v", lease.ForwardingID, recordErr)
+		}
+	}
+
 	if err != nil {
 		log.Printf("[FORWARDING] poll failed forwarding=%s source_job=%s attempt=%d: %v",
 			lease.ForwardingID, lease.SourceJobID, lease.AttemptCount, err)
@@ -63,7 +80,11 @@ func (r *CreatorForwardingRunner) processLease(ctx context.Context, lease store.
 		// which returns an error if the MarkCreatorForwardingRetry
 		// CAS failed. The metric increment is owned by handleRetry
 		// (post-CAS).
-		if retryErr := r.handleRetry(ctx, lease, "POLL_ERROR", err.Error()); retryErr != nil {
+		errorClass := ""
+		if re, ok := err.(*remoteengine.RemoteError); ok {
+			errorClass = string(re.Class)
+		}
+		if retryErr := r.handleRetry(ctx, lease, "POLL_ERROR", err.Error(), errorClass); retryErr != nil {
 			return retryErr
 		}
 		return nil
@@ -77,7 +98,7 @@ func (r *CreatorForwardingRunner) processLease(ctx context.Context, lease store.
 		log.Printf("[FORWARDING] nil response forwarding=%s source_job=%s: GetPipelineStatus returned nil without error",
 			lease.ForwardingID, lease.SourceJobID)
 		if retryErr := r.handleRetry(ctx, lease, "NIL_RESPONSE",
-			"GetPipelineStatus returned nil response without error"); retryErr != nil {
+			"GetPipelineStatus returned nil response without error", ""); retryErr != nil {
 			return retryErr
 		}
 		return nil
@@ -86,11 +107,10 @@ func (r *CreatorForwardingRunner) processLease(ctx context.Context, lease store.
 	// Classify the remote status.
 	switch {
 	case isTerminalSuccess(resp.Status):
-		// Remote creator completed successfully.
+		// Remote creator completed successfully. The runner delegates
+		// the forward-completed path exclusively to the canonical
+		// creatorflow.Resolver.Resolve via atomicEnqueueAndForward.
 		if r.enqueuer != nil {
-			// Full atomic lifecycle: build Job+TaskSpec and enqueue+forward
-			// in a single SQLite transaction. The metrics + classification
-			// are owned by atomicEnqueueAndForward (post-CAS).
 			return r.atomicEnqueueAndForward(ctx, lease, resp.Result)
 		}
 		// Fallback: store payload for a separate forwarding service.
@@ -117,7 +137,7 @@ func (r *CreatorForwardingRunner) processLease(ctx context.Context, lease store.
 			// and report the element-scoped error so the tracker
 			// does not count it.
 			log.Printf("[FORWARDING] mark ready-to-forward failed forwarding=%s: %v", lease.ForwardingID, err)
-			if retryErr := r.handleRetry(ctx, lease, "MARK_READY_ERROR", err.Error()); retryErr != nil {
+			if retryErr := r.handleRetry(ctx, lease, "MARK_READY_ERROR", err.Error(), ""); retryErr != nil {
 				return retryErr
 			}
 			return nil
@@ -135,7 +155,7 @@ func (r *CreatorForwardingRunner) processLease(ctx context.Context, lease store.
 		}
 		if err := r.dbStore.MarkCreatorForwardingFailed(ctx,
 			lease.ForwardingID, r.identity, lease.LeaseID,
-			"REMOTE_FAILED", errMsg,
+			"REMOTE_FAILED", errMsg, "",
 		); err != nil {
 			// CAS failure: keep row visible (a reaper can retry) but report
 			// the failure so the supervisor knows the state didn't transition.
@@ -154,7 +174,7 @@ func (r *CreatorForwardingRunner) processLease(ctx context.Context, lease store.
 		nextAttempt := time.Now().UTC() // immediate re-claim eligibility
 		if err := r.dbStore.MarkCreatorForwardingRetry(ctx,
 			lease.ForwardingID, r.identity, lease.LeaseID,
-			"NOT_FINISHED", fmt.Sprintf("remote status: %s", resp.Status),
+			"NOT_FINISHED", fmt.Sprintf("remote status: %s", resp.Status), "",
 			nextAttempt,
 		); err != nil {
 			return errors.Join(supervisor.ErrElementScoped,
