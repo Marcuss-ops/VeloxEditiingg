@@ -43,15 +43,9 @@ DataServer/internal/handlers/remote/workers/runner_linux.go
 DataServer/internal/handlers/remote/workers/runner_windows.go
 DataServer/internal/handlers/server/drive/types.go
 DataServer/internal/handlers/server/health/health.go
-DataServer/internal/handlers/server/youtube/auto_grouping.go
-DataServer/internal/handlers/server/youtube/creative/handler.go
-DataServer/internal/handlers/server/youtube/videos/handler.go
 DataServer/internal/identity/generator.go
 DataServer/internal/identity/generator_test.go
 DataServer/internal/ingest/service_rollup_test.go
-DataServer/internal/integrations/youtube/membership_test.go
-DataServer/internal/integrations/youtube/storage.go
-DataServer/internal/integrations/youtube/upload_service.go
 DataServer/internal/metrics/fmt.go
 DataServer/internal/metrics/procstat.go
 DataServer/internal/metricscenter/module.go

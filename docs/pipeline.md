@@ -2,14 +2,26 @@
 
 ## 1. Panoramica
 
-La pipeline trasforma un job di rendering in un video finale consegnato su Google Drive o YouTube.  
-Un singolo job attraversa 6 fasi principali: **sottomissione → dispatch → esecuzione → finalizzazione (con promozione artefatto) → consegna → (opzionale) retry**.
+La pipeline trasforma un job di rendering in un artefatto finale consegnato
+su Google Drive **oppure** su una piattaforma social tramite la **Social
+API esterna**.  Velox possiede soltanto: sottomissione → dispatch → esecuzione
+→ finalizzazione (con promozione artefatto) → consegna → (opzionale) retry.
+Le preoccupazioni di social-platform (OAuth, canali, token, quota, stato di
+pubblicazione, scheduling) sono di proprietà della **repo social esterna**;
+Velox parla con essa attraverso il `socialclient` (HTTP) o, in fallback,
+attraverso il provider di consegna `social_gateway`.
+
+Un singolo job attraversa 6 fasi principali: **sottomissione → dispatch →
+esecuzione → finalizzazione (con promozione artefatto) → consegna →
+(opzionale) retry**.
 
 ```
-┌──────────┐   ┌──────────┐   ┌──────────┐   ┌──────────────┐   ┌──────────┐   ┌───────────┐
-│   API    │ → │  Master  │ → │  Worker  │ → │ Finalization │ → │ Delivery │ → │  Drive /  │
-│ Submit   │   │  Enqueue │   │  Render  │   │ + Storage    │   │  Runner  │   │  YouTube  │
-└──────────┘   └──────────┘   └──────────┘   └──────────────┘   └──────────┘   └───────────┘
+┌──────────┐   ┌──────────┐   ┌──────────┐   ┌──────────────┐   ┌──────────┐   ┌────────────────┐
+│   API    │ → │  Master  │ → │  Worker  │ → │ Finalization │ → │ Delivery │ → │  Drive  /      │
+│ Submit   │   │  Enqueue │   │  Render  │   │ + Storage    │   │  Runner  │   │  Social API    │
+└──────────┘   └──────────┘   └──────────┘   └──────────────┘   └──────────┘   └────────────────┘
+                                                                                (delegated via
+                                                                                 socialclient)
 ```
 
 ---
@@ -288,29 +300,45 @@ filePath = filepath.Join(d.blobStore.FinalDir(), filePath)  // ← risolve ad as
 uploadRes, _ := d.service.UploadVideo(ctx, filePath, ...)
 ```
 
-Stesso fix applicato a `YouTubeProvider`.
-
 ---
 
-## 8. Approfondimento Provider — YouTube
+## 8. Approfondimento Provider — Social API (delivery delegata)
 
-### YouTubeProvider
+### SocialGatewayProvider
 
-File: `DataServer/internal/deliveries/providers/youtube.go:17`
+File: `DataServer/internal/deliveries/providers/social_gateway.go:17`
 
-Struttura identica a DriveProvider:
-1. Legge artefatto dal blob store
-2. Risolve path assoluto con `filepath.Join(blobStore.FinalDir(), storageKey)`
-3. Chiama `service.UploadVideo(ctx, channelID, filePath, cfg)`
+`SocialGatewayProvider` è l'adapter **piattaforma-agnostico** che delega
+l'intera pubblicazione a un servizio Social API esterno.  Velox NON
+conosce OAuth, canali, token, quota, stato di pubblicazione, scheduling:
+invia solo metadati dell'artefatto al Social API e riceve un
+`social_delivery_id` che persiste nella riga `job_deliveries`.
 
-### YouTube Auth
+Struttura:
+1. Costruisce il payload (`socialclient.DeliverArtifactRequest`)
+2. POST a `${SOCIAL_API_URL}/internal/v1/deliveries`
+3. Riceve `{ social_delivery_id, status }` e ritorna `deliveries.Result`
 
-File: `DataServer/internal/integrations/youtube/auth.go:23`
+Riferimenti incrociati: §9 (delivery plan), §14 (`SOCIAL_API_URL`,
+`SOCIAL_API_TOKEN`).
 
-- OAuth2 credentials da `client_secret.json`
-- Token salvati nel DB (`youtube_oauth` table, via `store/youtube_oauth.go`)
-- Refresh automatico
-- Quota manager: blocca upload a 90% della quota giornaliera
+### socialclient
+
+File: `DataServer/internal/socialclient/` (nuovo package)
+
+Tutta la logica HTTP `POST /internal/v1/deliveries` vive qui
+(`client.go`, `config.go`, `requests.go`).  Il
+`SocialGatewayProvider` è un thin adapter che chiama
+`socialclient.New(cfg).DeliverArtifact(...)` e mappa la risposta su
+`deliveries.Result`.
+
+### Auth & Quota
+
+- NESSUNA auth Google/YouTube diretta in Velox.
+- NESSUNA tabella `youtube_oauth` (rimossa con migration 090).
+- NESSUNA tabella `youtube_quota_usage` (di competenza del servizio
+  Social API esterno).
+- Il bearer verso la Social API stessa è `SOCIAL_API_TOKEN` (env).
 
 ---
 
@@ -332,9 +360,9 @@ Tabella `delivery_destinations`:
 | Colonna | Descrizione |
 |---------|-------------|
 | `destination_id` | Identificativo univoco (es. `comedy_test`) |
-| `provider` | `drive` o `youtube` |
+| `provider` | `drive` o `social_gateway` |
 | `folder_id` | Cartella Drive di destinazione |
-| `channel_id` | Canale YouTube |
+| `channel_id` | ID canale remoto (semantico, NON validato da Velox) |
 | `enabled` | Se la destinazione è attiva |
 
 ### Retry Budget
@@ -370,7 +398,6 @@ Tabella `delivery_destinations`:
 | `delivery_destinations` | Configurazione destinazione (provider, folder_id, channel_id, enabled) |
 | `job_delivery_plans` | Piano per-job (destination, priority, retry_budget) |
 | `delivery_attempts` | Audit log per-tentativo (status, errore, timestamp) |
-| `youtube_oauth` | Token OAuth YouTube per canale |
 
 ---
 
@@ -381,7 +408,7 @@ DataServer/
 ├── cmd/server/
 │   ├── main.go                           # Entry point
 │   ├── bootstrap.go                      # Assembly componenti
-│   ├── bootstrap_modules.go              # Registrazione moduli (YouTube, Drive, Enqueuer, DeliveryRunner)
+│   ├── bootstrap_modules.go              # Registrazione moduli (socialclient, Drive, Enqueuer, DeliveryRunner)
 │   ├── bootstrap_persistence.go          # Init DB + BlobStore
 │   └── background_supervisor.go          # Ciclo vita runner (delivery-runner ClassCritical)
 ├── internal/
@@ -407,19 +434,18 @@ DataServer/
 │   │   ├── plan_resolver.go              # DeliveryPlanResolver (per-job o global fallback)
 │   │   ├── providers/
 │   │   │   ├── drive.go                  # DriveProvider (Deliver)
-│   │   │   ├── youtube.go                # YouTubeProvider (Deliver)
+│   │   │   ├── social_gateway.go         # SocialGatewayProvider (delega via socialclient)
 │   │   │   ├── s3.go                     # S3Provider (skeleton)
 │   │   │   └── localexport.go            # LocalExportProvider (skeleton)
+│   │   ├── socialclient/
+│   │   │   ├── client.go                 # HTTP client: POST /internal/v1/deliveries
+│   │   │   ├── config.go                 # SOCIAL_API_URL / TOKEN / TIMEOUT / RETRIES
+│   │   │   └── requests.go               # DeliverArtifactRequest/Response typed contract
 │   ├── integrations/
-│   │   ├── drive/
-│   │   │   ├── service.go                # NewService, getToken
-│   │   │   ├── service_files.go          # UploadFile, UploadVideo, DownloadFile
-│   │   │   └── auth.go                   # TokenManager (carica/salva/refresh token)
-│   │   └── youtube/
-│   │       ├── service.go                # NewService, UploadVideo
-│   │       ├── upload.go                 # Upload con quota manager
-│   │       ├── auth.go                   # OAuth2 client credentials
-│   │       └── oauth.go                  # Token DB save/load/refresh
+│   │   └── drive/
+│   │       ├── service.go                # NewService, getToken
+│   │       ├── service_files.go          # UploadFile, UploadVideo, DownloadFile
+│   │       └── auth.go                   # TokenManager (carica/salva/refresh token)
 │   └── handlers/server/jobs/handler.go   # POST /api/jobs/:kind handler
 └── cmd/server/router.go                  # Router wiring
 
@@ -441,7 +467,7 @@ ops/jobs/
 |-----|------|---------|-----|
 | Ambiguità su `output_path` tra master e worker | `scene_composite.go` | Rischio di trattare un path master-side come render path locale nel worker | Il worker ora ignora intenzionalmente `payload.output_path` e rende sempre in `outputBase/<jobID>.mp4`; il valore originale resta disponibile via `PayloadOutputPath()` |
 | `ReadFinal` non risolveva path assoluto | `blobstore.go:114` | Delivery falliva con `no such file or directory` su storage_key relativo | Aggiunto `filepath.Join(b.finalDir, filepath.Clean(storageKey))` |
-| Provider usava storage_key relativo per upload | `drive.go:71` / `youtube.go:71` | Drive/YouTube ricevevano path relativo → `failed to open file` | Aggiunto `filePath = filepath.Join(d.blobStore.FinalDir(), filePath)` dopo ReadFinal |
+| Provider usava storage_key relativo per upload | `drive.go:71` | Drive riceveva path relativo → `failed to open file` | Aggiunto `filePath = filepath.Join(d.blobStore.FinalDir(), filePath)` dopo ReadFinal |
 | Drive token mancanti | `drive/auth.go` | `PROVIDER_NOT_CONFIGURED` | Aggiunti `VELOX_DRIVE_CLIENT_ID` e `VELOX_DRIVE_CLIENT_SECRET` a `/etc/velox-server.env` |
 
 ---

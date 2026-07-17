@@ -25,8 +25,6 @@ SERVICE_DST="/etc/systemd/system/$SERVICE_NAME.service"
 # suffix is required so it is never read as a real config.
 ENV_TEMPLATE="$DEPLOY_DIR/velox-server.env.example"
 ENV_DST="/etc/velox-server.env"
-YOUTUBE_RUNTIME_CREDS_DIR="/etc/velox/secrets/youtube/credentials"
-YOUTUBE_RUNTIME_CREDS_FILE="$YOUTUBE_RUNTIME_CREDS_DIR/credentials.json"
 IMAGE_UID="10001"
 IMAGE_GID="10001"
 
@@ -154,41 +152,14 @@ docker info >/dev/null 2>&1 \
 log "Ensuring target directory tree and permissions..."
 mkdir -p /opt/velox/current
 mkdir -p /opt/velox/current/.velox/data
-mkdir -p /opt/velox/current/.velox/secrets/youtube/tokens
-mkdir -p "$YOUTUBE_RUNTIME_CREDS_DIR"
 mkdir -p /var/lib/velox/data
 mkdir -p /var/lib/velox/videos
 mkdir -p /etc/velox/secrets
 mkdir -p /etc/velox/certs
-mkdir -p /etc/velox/secrets/youtube/tokens
-mkdir -p /etc/velox/secrets/youtube/credentials
 chown root:root /opt/velox/current
 chmod 755 /opt/velox/current
 chown -R "${IMAGE_UID}:${IMAGE_GID}" /var/lib/velox
 ok "Directory tree ready: /opt/velox/current"
-
-# ─── Step 3b: Sync YouTube OAuth credentials ───────────────────────────────
-
-YOUTUBE_SOURCE_CREDS=""
-for candidate in \
-    "$REPO_ROOT/DataServer/data/youtube/credentials/credentials.json" \
-    "$REPO_ROOT/DataServer/.velox/secrets/youtube/credentials/credentials.json"
-do
-    if [[ -f "$candidate" ]]; then
-        YOUTUBE_SOURCE_CREDS="$candidate"
-        break
-    fi
-done
-
-if [[ -n "$YOUTUBE_SOURCE_CREDS" ]]; then
-    log "Syncing YouTube OAuth credentials to runtime..."
-    cp "$YOUTUBE_SOURCE_CREDS" "$YOUTUBE_RUNTIME_CREDS_FILE"
-    chown root:root "$YOUTUBE_RUNTIME_CREDS_FILE"
-    chmod 600 "$YOUTUBE_RUNTIME_CREDS_FILE"
-    ok "YouTube OAuth credentials deployed"
-else
-    warn "YouTube OAuth credentials not found in source tree; runtime will rely on existing files"
-fi
 
 # ─── Step 3: Deploy systemd service ─────────────────────────────────────────
 

@@ -22,8 +22,6 @@ velox_data_dir: /var/lib/velox/data
 velox_db_path: /var/lib/velox/data/velox.db
 velox_videos_dir: /var/lib/velox/videos
 velox_secrets_dir: /etc/velox/secrets
-velox_youtube_tokens_dir: /etc/velox/secrets/youtube/tokens
-velox_youtube_credentials_dir: /etc/velox/secrets/youtube/credentials
 
 # ── Worker policy ───────────────────────────────────────────────────────────
 # Each value MUST match a `worker_id` declared on the [velox_workers]

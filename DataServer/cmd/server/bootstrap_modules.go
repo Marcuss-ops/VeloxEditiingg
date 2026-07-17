@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"os"
 	"time"
 
 	"velox-server/internal/app"
@@ -20,6 +19,7 @@ import (
 	"velox-server/internal/observability"
 	"velox-server/internal/platform/clock"
 	"velox-server/internal/remoteengine"
+	"velox-server/internal/socialclient"
 	"velox-server/internal/store"
 	"velox-server/internal/workers"
 )
@@ -210,11 +210,19 @@ func buildModules(cfg *config.Config, p *persistenceDeps, j *jobsDeps, w *worker
 		log.Printf("[BOOTSTRAP] Delivery provider registered: drive")
 	}
 
-	if os.Getenv("SOCIAL_GATEWAY_URL") != "" {
-		socialGatewayProvider := deliveryProviders.NewSocialGatewayProvider(nil)
-		deliveryReg.Register(socialGatewayProvider)
-		log.Printf("[BOOTSTRAP] Delivery provider registered: %s", socialGatewayProvider.Name())
+	// The social_gateway provider is platform-agnostic — it talks to the
+	// external Social API through socialclient (HTTP). Registration is
+	// always attempted; the provider itself returns ErrProviderNotConfigured
+	// at DeliverArtifact time when SOCIAL_API_URL (or its SOCIAL_GATEWAY_URL
+	// legacy fallback) is unset, so the dev experience remains a clean
+	// "destination FAILED, not silently skipped" without nil-pointer risk.
+	socialClientCfg := socialclient.ConfigFromEnv()
+	if err := socialClientCfg.Validate(); err != nil {
+		log.Printf("[BOOTSTRAP] socialclient config invalid: %v — provider will refuse deliveries until fixed", err)
 	}
+	socialGatewayProvider := deliveryProviders.NewSocialGatewayProvider(socialClientCfg)
+	deliveryReg.Register(socialGatewayProvider)
+	log.Printf("[BOOTSTRAP] Delivery provider registered: %s (%s)", socialGatewayProvider.Name(), socialClientCfg)
 
 	deliveryRunner := deliveries.NewDeliveryRunner(
 		deliveries.DefaultRunnerConfig(),

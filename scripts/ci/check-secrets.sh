@@ -18,13 +18,20 @@
 # PR-5 (P0 security closure): the previous exclusion `DataServer/data/` from
 # the secrets regexes has been REMOVED. That exclusion was a bug: the
 # directory contains OAuth client_secret JSON files that MUST be scanned.
-# Real OAuth credentials under DataServer/data/{youtube,drive}/credentials/
+# Real GooglOAuth credentials under DataServer/data/drive/credentials/
 # are gitignored via the .gitignore entries that match the real file names
 # (`credentials.json`), so the regex will NOT fire in CI on a clean tree —
 # it WILL fire if an operator accidentally drops a freshly-generated
 # client_secret.json into the tree without renaming it. Spot-check on
 # local-disk files (git check-ignore) is a separate opt-in mode (see
 # --include-untracked below).
+#
+# Note: as of the YouTube-domain removal, VELOX does not own any
+# YouTube OAuth credentials or runtime dirs. Anything under
+# `DataServer/data/youtube/` is residual legacy; you should NOT be
+# dropping fresh credentials there. The CI scan still walks the path
+# for completeness but no longer expects a delivered deployment
+# secret to live there.
 #
 # Exit codes:
 #   0   no committed secret-shaped / identifier-shaped strings found
@@ -207,7 +214,10 @@ report_match "Non-digest reference to canonical ghcr.io/marcuss-ops/velox-{serve
 # (gitignored, so tree is clean) and wants to verify the regex catches IT
 # before committing any helper that processes the file.
 if (( INCLUDE_UNTRACKED )); then
-    # Walk the two known credential paths. If you add new ones, list them.
+    # Walk the known legacy credential paths. YouTube-specific dirs are
+    # listed for completeness (no fresh deployment-secret should land
+    # there after the YouTube-domain removal); Drive remains an active
+    # integration owned by Velox. If you add new ones, list them.
     for path in \
         DataServer/data/youtube/credentials/credentials.json \
         DataServer/data/drive/credentials/credentials.json; do

@@ -1,0 +1,70 @@
+package socialclient
+
+// DeliverArtifactRequest is the typed payload Velox POSTs to the
+// social_repo's `/internal/v1/deliveries` endpoint.
+//
+// The wire contract (per social_repo spec):
+//
+//	{
+//	  "external_delivery_id":  "delivery_<uuid>",          // Velox job_deliveries.delivery_id
+//	  "idempotency_key":       "delivery_<uuid>|dest_X",  // artifact × destination stable
+//	  "platform":              "youtube",                   // or tiktok, instagram, …
+//	  "account_id":            "social_account_<uuid>",    // Velox-side opaque ID
+//	  "channel_id":            "UC...",                     // semantic YouTube channel id
+//	  "artifact":              ArtifactPayload,
+//	  "metadata":              { ... title/desc/tags/... },  // unknown to Velox, passed through
+//	  "publish_at":            "2026-07-20T12:00:00Z",     // optional scheduling
+//	  "callback_url":          "https://velox/.../callback"  // optional webhook
+//	}
+//
+// Velox does NOT validate `platform`, `account_id`, `channel_id`, or
+// anything under `metadata`: the social_repo is the authoritative
+// owner of these. Velox only forwards what the operator set on the
+// `delivery_destinations.configuration_json` (and per-destination
+// columns) blob.
+type DeliverArtifactRequest struct {
+	ExternalDeliveryID string `json:"external_delivery_id"`
+	IdempotencyKey     string `json:"idempotency_key"`
+	Platform           string `json:"platform"`
+	AccountID          string `json:"account_id,omitempty"`
+	ChannelID          string `json:"channel_id,omitempty"`
+
+	Artifact ArtifactPayload `json:"artifact"`
+
+	// Metadata is unknown to Velox and passed through verbatim so the
+	// social_repo can pick title / description / tags / privacy /
+	// publish / etc. without Velox having to grow new fields every
+	// time the social_repo adds a feature. map[string]any keeps the
+	// JSON encoding close to what the operator authored.
+	Metadata map[string]any `json:"metadata,omitempty"`
+
+	// PublishAt is forwarded only if non-empty so the social_repo can
+	// schedule the publish outside Velox's loop. RFC3339 string.
+	PublishAt string `json:"publish_at,omitempty"`
+
+	// CallbackURL is the per-delivery webhook the social_repo will POST
+	// to when the publish completes. Empty omits the field.
+	CallbackURL string `json:"callback_url,omitempty"`
+}
+
+// ArtifactPayload is the typed view of the artifact reference inside
+// DeliverArtifactRequest. All fields are required except DownloadURL,
+// which is set when Velox's CallbackBaseURL is configured (the social_repo
+// will then download the bytes via this signed URL rather than
+// requiring Velox to push again on the delivery callback).
+type ArtifactPayload struct {
+	ArtifactID  string `json:"artifact_id"`
+	SHA256      string `json:"sha256"`
+	SizeBytes   int64  `json:"size_bytes"`
+	MimeType    string `json:"mime_type"`
+	DownloadURL string `json:"download_url,omitempty"`
+}
+
+// DeliverArtifactResponse is the typed view of the social_repo's
+// response. The runner persists SocialDeliveryID on
+// `job_deliveries.remote_id` so operators can correlate a Velox
+// delivery row with the social_repo's record by ID alone.
+type DeliverArtifactResponse struct {
+	SocialDeliveryID string `json:"social_delivery_id"`
+	Status           string `json:"status"`
+}

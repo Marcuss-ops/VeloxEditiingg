@@ -20,7 +20,7 @@ DataServer/                     # Master server (Go/Gin + gRPC)
 │   ├── handlers/               # HTTP and remote-worker handlers
 │   ├── identity/               # Canonical identity generation
 │   ├── ingest/                 # Task report ingestion
-│   ├── integrations/           # Drive and YouTube integrations
+│   ├── integrations/           # Drive integration (social platforms are delegated to external Social API)
 │   ├── jobs/                   # Job model, repository and lifecycle
 │   ├── logging/                # Structured logging
 │   ├── metrics/                # Runtime and cost metrics

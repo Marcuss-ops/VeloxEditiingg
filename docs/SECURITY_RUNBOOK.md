@@ -39,8 +39,8 @@ until §3 confirms a fresh rotation date.
 
 | Entry | Status | Exposed in |
 |---|---|---|
-| `youtube-uploader-safe` project — OAuth Web client (id `712843578597-…`) | **Active** — live on disk in `DataServer/data/youtube/credentials/credentials.json` (gitignored). Was present in **historical git commits** under `VeloxEditing/refactored/DataServer/` paths (see §4). |
-| `drive-uploading-…` project — OAuth Desktop client (id `964460747662-…`) | **Active** — same. |
+| YouTube OAuth project (`youtube-uploader-safe` web client id `712843578597-…`) | **Retired from Velox** — social-platform concerns (YouTube OAuth, channels, tokens, publishing state) now live in the external Social API repository. Any leftover `DataServer/data/youtube/` tree on historical clones is gitignored; see §5.2. |
+| `drive-uploading-…` project — OAuth Desktop client (id `964460747662-…`) | **Active** — live on disk in `DataServer/data/drive/credentials/credentials.json` (gitignored). Was present in **historical git commits** under `VeloxEditing/refactored/DataServer/` paths (see §4). |
 
 ### 2.2 Tailscale / Infrastructure
 
@@ -52,8 +52,8 @@ until §3 confirms a fresh rotation date.
 
 | Entry | Status | Exposed in |
 |---|---|---|
-| `veloxmanager.duckdns.org` | **Active** — YouTube OAuth callback URL. |
-| `marcus-ops.github.io/My-Video-Tool-Youtube-` | **Active** — YouTube OAuth JS origin. |
+| `veloxmanager.duckdns.org` | **Retired from Velox** — was YouTube OAuth callback URL. The Social API repo now owns any current OAuth callback URIs against this hostname. |
+| `marcus-ops.github.io/My-Video-Tool-Youtube-` | **Retired from Velox** — was YouTube OAuth JS origin. Same: belongs to the Social API repo now. |
 
 ### 2.4 Operator-managed env
 
@@ -63,8 +63,9 @@ These are operator-populated, never committed in plaintext form (the
 
 - `VELOX_ADMIN_TOKEN` (min 32 chars)
 - `VELOX_REMOTE_ENGINE_TOKEN`
-- `VELOX_YT_OAUTH_TOKEN_KEY` (base64 32-byte symmetric key for at-rest
-  token encryption)
+- `VELOX_SOCIAL_API_TOKEN` (bearer for the external Social API; replaces
+  the retired `VELOX_YT_OAUTH_TOKEN_KEY` whose YouTube-specific token
+  rotation is now the Social API repo's concern, not Velox's)
 - `WORKER_TOKEN` / `VELOX_WORKER_TOKEN` (per-host worker credential)
 - `VELOX_NVIDIA_API_KEY` (optional, only when GPU inference used)
 
@@ -170,7 +171,10 @@ hard-fail rule.
 `.gitignore` already covers:
 - `DataServer/data/secrets/`
 - `DataServer/data/drive/tokens/`
-- `DataServer/data/youtube/` (entire directory)
+- `DataServer/data/youtube/` (entire directory — kept gitignored solely
+  for backward-compatibility with operator checkouts that may still
+  carry residual historical artefacts after the YouTube-domain removal;
+  Velox no longer reads or writes anything under this path)
 - `DataServer/data/drive/credentials/` (added in PR-5)
 
 Operators copy `*.example` fixtures to `credentials.json` locally; the
