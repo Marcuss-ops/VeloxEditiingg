@@ -179,6 +179,27 @@ func buildModules(cfg *config.Config, p *persistenceDeps, j *jobsDeps, w *worker
 	planAdapter := &deliveryPlanResolverAdapter{inner: planResolver}
 	enqueuer := enqueue.NewEnqueuer(t.AtomicCreator, j.Repository, assetSvc, planAdapter)
 
+	// Compute the socialclient.Config ONCE here so the Enqueuer validator
+	// wiring AND the socialGatewayProvider below share the same
+	// configuration source (no risk of two reads disagreeing on the env).
+	socialClientCfg := socialclient.ConfigFromEnv()
+	if err := socialClientCfg.Validate(); err != nil {
+		log.Printf("[BOOTSTRAP] socialclient config invalid: %v — provider will refuse deliveries until fixed", err)
+	}
+
+	// Wire the Social API boundary as the per-entry destination validator.
+	// When SOCIAL_API_URL is unset, socialclient.Config{BaseURL=""} returns
+	// ErrNotConfigured from every ValidateDestination call; the enqueue
+	// pre-flight loop classifies ErrNotConfigured as SOFT (logged warning,
+	// enqueue continues), so dev / pre-rollout operators do not have to
+	// configure the social_repo to keep Velox accepting submissions.
+	// When SOCIAL_API_URL IS set, the validator hard-rejects entries with
+	// 4xx responses from the social_repo and lets 5xx / rate-limit fall
+	// through to the runner's retry_budget.
+	socialClient := socialclient.New(socialClientCfg)
+	enqueuer.WithSocialValidator(socialClient)
+	log.Printf("[BOOTSTRAP] Enqueuer wired with social destination validator (%s)", socialClientCfg)
+
 	// ── Register modules ────────────────────────────────────────────
 	healthMod := app.NewHealthModule()
 	registry.Register(healthMod)
@@ -216,10 +237,8 @@ func buildModules(cfg *config.Config, p *persistenceDeps, j *jobsDeps, w *worker
 	// at DeliverArtifact time when SOCIAL_API_URL (or its SOCIAL_GATEWAY_URL
 	// legacy fallback) is unset, so the dev experience remains a clean
 	// "destination FAILED, not silently skipped" without nil-pointer risk.
-	socialClientCfg := socialclient.ConfigFromEnv()
-	if err := socialClientCfg.Validate(); err != nil {
-		log.Printf("[BOOTSTRAP] socialclient config invalid: %v — provider will refuse deliveries until fixed", err)
-	}
+	// socialClientCfg is computed earlier (above the Enqueuer wiring) so
+	// the validator and the provider share a single Config source.
 	socialGatewayProvider := deliveryProviders.NewSocialGatewayProvider(socialClientCfg)
 	deliveryReg.Register(socialGatewayProvider)
 	log.Printf("[BOOTSTRAP] Delivery provider registered: %s (%s)", socialGatewayProvider.Name(), socialClientCfg)

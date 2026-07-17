@@ -122,6 +122,66 @@ func (c *Client) CallbackURL(deliveryID string) string {
 	return c.cfg.CallbackBaseURL + "/api/internal/deliveries/" + deliveryID + "/callback"
 }
 
+// ValidateDestination pre-flights a social destination against the
+// social_repo's `POST /internal/v1/destinations/:id/validate` endpoint.
+// Used by the enqueue-layer validator (jobs/enqueue/delivery_plan_validator.go)
+// to delegate destination validation to the social_repo before Velox
+// commits a Job + delivery_plan row. Single-attempt; the caller is
+// responsible for any soft-fail continuation policy.
+//
+// Mapping of upstream status codes mirrors DeliverArtifact:
+//
+//	200/2xx                   → returns (nil)
+//	401, 403                  → ErrAuth
+//	429                       → ErrRateLimit
+//	5xx                       → ErrTransient
+//	other 4xx                 → ErrPermanent
+//	network/timeout/cancelled → ErrTransient
+//	missing BaseURL           → ErrNotConfigured
+//	nil receiver              → ErrNotConfigured
+//
+// The endpoint contract is OWNED by the social_repo: documented as
+// `POST {BaseURL}/internal/v1/destinations/{id}/validate`. A 2xx
+// response means the destination is routable (channel bound, token
+// valid, platform enabled); 4xx means hard-rejectable; 5xx means
+// retry-able by the runner.
+func (c *Client) ValidateDestination(ctx context.Context, socialDestID string) error {
+	if c == nil {
+		return ErrNotConfigured
+	}
+	if c.cfg.BaseURL == "" {
+		return ErrNotConfigured
+	}
+	if socialDestID == "" {
+		// Refuse an empty path-segment rather than POST
+		// `/internal/v1/destinations//validate`. Empty
+		// social_destination_id is treated as a permanent caller error.
+		return fmt.Errorf("%w: empty social_destination_id", ErrPermanent)
+	}
+
+	url := c.cfg.BaseURL + "/internal/v1/destinations/" + socialDestID + "/validate"
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
+	if err != nil {
+		return fmt.Errorf("%w: build validate request: %v", ErrTransient, err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	if c.cfg.APIKey != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+c.cfg.APIKey)
+	}
+
+	resp, err := c.client.Do(httpReq)
+	if err != nil {
+		return fmt.Errorf("%w: validate request failed: %v", ErrTransient, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		respBody, _ := io.ReadAll(resp.Body)
+		return classifyStatusError(resp.StatusCode, string(bytes.TrimSpace(respBody)))
+	}
+	return nil
+}
+
 // classifyStatusError maps an HTTP status code to the canonical error
 // sentinel so the SocialGatewayProvider can wrap it with the matching
 // deliveries.* sentinel for the runner's retry classification.

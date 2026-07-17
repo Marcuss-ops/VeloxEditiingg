@@ -16,8 +16,14 @@
 package enqueue
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"strings"
+	"sync"
 	"testing"
+
+	"velox-server/internal/socialclient"
 )
 
 // =====================================================================
@@ -92,7 +98,7 @@ func TestValidateDeliveryPlanRequires_HappyPaths(t *testing.T) {
 		c := c
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			if err := validateDeliveryPlanRequires(c.in); err != nil {
+			if err := validateDeliveryPlanShapeOnly(c.in); err != nil {
 				t.Errorf("want no error; got %v", err)
 			}
 		})
@@ -265,7 +271,7 @@ func TestValidateDeliveryPlanRequires_RejectPaths(t *testing.T) {
 		c := c
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			err := validateDeliveryPlanRequires(c.in)
+			err := validateDeliveryPlanShapeOnly(c.in)
 			if err == nil {
 				t.Fatalf("want error (field=%s sub=%s); got nil", c.wantField, c.wantSub)
 			}
@@ -522,7 +528,7 @@ func TestValidateDeliveryPlanRequires_DisabledFalsyRetryBudgetTripOrder(t *testi
 			},
 		},
 	}
-	err := validateDeliveryPlanRequires(in)
+	err := validateDeliveryPlanShapeOnly(in)
 	if err == nil {
 		t.Fatal("want error; got nil")
 	}
@@ -531,4 +537,268 @@ func TestValidateDeliveryPlanRequires_DisabledFalsyRetryBudgetTripOrder(t *testi
 	if !strings.Contains(err.Error(), "is disabled") {
 		t.Errorf("want 'is disabled' to surface first; got %q", err.Error())
 	}
+}
+
+// =====================================================================
+// shapeFromMap: social_destination_id + platform surface for the
+// Social API pre-flight loop. Both fields are optional and ignored
+// when empty (legacy Drive-only entries).
+// =====================================================================
+
+func TestShapeFromMap_SocialFields(t *testing.T) {
+	t.Parallel()
+	t.Run("defaults_to_empty", func(t *testing.T) {
+		t.Parallel()
+		s := shapeFromMap(map[string]interface{}{"destination_id": "drive-main"})
+		if s.SocialDestinationID != "" {
+			t.Errorf("social_destination_id = %q; want ''", s.SocialDestinationID)
+		}
+		if s.Platform != "" {
+			t.Errorf("platform = %q; want ''", s.Platform)
+		}
+	})
+	t.Run("honors_both_fields", func(t *testing.T) {
+		t.Parallel()
+		s := shapeFromMap(map[string]interface{}{
+			"destination_id":        "social-amish",
+			"social_destination_id": "social_dest_amish",
+			"platform":              "youtube",
+		})
+		if s.SocialDestinationID != "social_dest_amish" {
+			t.Errorf("social_destination_id = %q; want social_dest_amish", s.SocialDestinationID)
+		}
+		if s.Platform != "youtube" {
+			t.Errorf("platform = %q; want youtube", s.Platform)
+		}
+	})
+}
+
+// =====================================================================
+// stubValidator: a hand-rolled DestinationValidator used to drive the
+// per-entry pre-flight loop from unit tests without involving the
+// real *socialclient.Client.
+// =====================================================================
+
+type stubValidator struct {
+	mu    sync.Mutex
+	calls []string
+	err   error
+}
+
+func (s *stubValidator) ValidateDestination(ctx context.Context, socialDestID string) error {
+	s.mu.Lock()
+	s.calls = append(s.calls, socialDestID)
+	s.mu.Unlock()
+	return s.err
+}
+
+func (s *stubValidator) callCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.calls)
+}
+
+// =====================================================================
+// validateDeliveryPlanRequires — pre-flight loop. Pins the
+// hard/soft classification of socialclient sentinels:
+//
+//	ErrPermanent | ErrAuth               → HARD fail (validationError)
+//	ErrTransient | ErrRateLimit | ErrNotConfigured → SOFT pass (nil return)
+//	missing social_destination_id       → loop skips pre-flight
+// =====================================================================
+
+func TestValidateDeliveryPlanRequires_Preflight(t *testing.T) {
+	t.Parallel()
+
+	planWithSocial := map[string]interface{}{
+		"delivery_plan": []interface{}{
+			map[string]interface{}{
+				"destination_id":        "velox-social-amish",
+				"social_destination_id": "social_dest_amish",
+				"platform":              "youtube",
+				"retry_budget":          5,
+			},
+		},
+	}
+	planWithoutSocial := map[string]interface{}{
+		"delivery_plan": []interface{}{
+			map[string]interface{}{
+				"destination_id": "drive-main",
+				"retry_budget":   5,
+			},
+		},
+	}
+
+	t.Run("hard_fail_on_ErrPermanent", func(t *testing.T) {
+		t.Parallel()
+		// Wrap the sentinel with %w so errors.Is(err, socialclient.ErrPermanent)
+		// returns true through the validator's *validationError chain. A bare
+		// errors.New(...) with the same text would NOT satisfy errors.Is and
+		// the validator would silently classify the failure as soft.
+		stub := &stubValidator{err: fmt.Errorf("wrapped: %w", socialclient.ErrPermanent)}
+		err := validateDeliveryPlanRequires(context.Background(), planWithSocial, stub)
+		if err == nil {
+			t.Fatal("want error from hard fail; got nil")
+		}
+		if stub.callCount() != 1 {
+			t.Errorf("validator call count = %d; want 1", stub.callCount())
+		}
+		if !strings.Contains(err.Error(), "delivery_plan[0].social_destination_id") {
+			t.Errorf("error %q does not contain delivery_plan[0].social_destination_id", err.Error())
+		}
+		if !strings.Contains(err.Error(), "social_dest_amish") {
+			t.Errorf("error %q does not contain social_dest_amish", err.Error())
+		}
+		// Pin the errors.Is contract: the validator wraps the socialclient
+		// sentinel in *validationError so callers using errors.Is can
+		// classify the failure without parsing the formatted message.
+		if !errors.Is(err, socialclient.ErrPermanent) {
+			t.Errorf("errors.Is must propagate ErrPermanent; got %v", err)
+		}
+		// Pin the errors.As contract so callers can read the structured
+		// field path (atomic creator, completion coordinator, delivery
+		// runner will reach for verr.Field to log the rejection reason).
+		var verr *validationError
+		if !errors.As(err, &verr) {
+			t.Errorf("errors.As must surface *validationError; got %T", err)
+		} else if verr.Field() != "delivery_plan[0].social_destination_id" {
+			t.Errorf("validationError.Field() = %q; want %q", verr.Field(), "delivery_plan[0].social_destination_id")
+		}
+	})
+
+	t.Run("hard_fail_on_ErrAuth", func(t *testing.T) {
+		t.Parallel()
+		stub := &stubValidator{err: fmt.Errorf("wrapped: %w", socialclient.ErrAuth)}
+		err := validateDeliveryPlanRequires(context.Background(), planWithSocial, stub)
+		if err == nil {
+			t.Fatal("want error from hard fail; got nil")
+		}
+		if stub.callCount() != 1 {
+			t.Errorf("validator call count = %d; want 1", stub.callCount())
+		}
+		if !strings.Contains(err.Error(), "rejected by social_repo") {
+			t.Errorf("error %q does not contain 'rejected by social_repo'", err.Error())
+		}
+		// Pin the errors.Is contract for the auth path.
+		if !errors.Is(err, socialclient.ErrAuth) {
+			t.Errorf("errors.Is must propagate ErrAuth; got %v", err)
+		}
+		// Pin the errors.As contract for the auth path.
+		var verr *validationError
+		if !errors.As(err, &verr) {
+			t.Errorf("errors.As must surface *validationError; got %T", err)
+		} else if verr.Field() != "delivery_plan[0].social_destination_id" {
+			t.Errorf("validationError.Field() = %q; want %q", verr.Field(), "delivery_plan[0].social_destination_id")
+		}
+	})
+
+	t.Run("soft_pass_on_ErrTransient", func(t *testing.T) {
+		t.Parallel()
+		stub := &stubValidator{err: fmt.Errorf("wrapped: %w", socialclient.ErrTransient)}
+		err := validateDeliveryPlanRequires(context.Background(), planWithSocial, stub)
+		if err != nil {
+			t.Errorf("soft pass on ErrTransient must NOT block enqueue; got %v", err)
+		}
+		if stub.callCount() != 1 {
+			t.Errorf("validator call count = %d; want 1 (soft path still calls validator)", stub.callCount())
+		}
+	})
+
+	t.Run("soft_pass_on_ErrRateLimit", func(t *testing.T) {
+		t.Parallel()
+		stub := &stubValidator{err: fmt.Errorf("wrapped: %w", socialclient.ErrRateLimit)}
+		err := validateDeliveryPlanRequires(context.Background(), planWithSocial, stub)
+		if err != nil {
+			t.Errorf("soft pass on ErrRateLimit must NOT block enqueue; got %v", err)
+		}
+		if stub.callCount() != 1 {
+			t.Errorf("validator call count = %d; want 1", stub.callCount())
+		}
+	})
+
+	t.Run("soft_pass_on_ErrNotConfigured", func(t *testing.T) {
+		t.Parallel()
+		stub := &stubValidator{err: fmt.Errorf("wrapped: %w", socialclient.ErrNotConfigured)}
+		err := validateDeliveryPlanRequires(context.Background(), planWithSocial, stub)
+		if err != nil {
+			t.Errorf("soft pass on ErrNotConfigured must NOT block enqueue; got %v", err)
+		}
+		if stub.callCount() != 1 {
+			t.Errorf("validator call count = %d; want 1", stub.callCount())
+		}
+	})
+
+	t.Run("cancelled_ctx_does_not_block_enqueue", func(t *testing.T) {
+		t.Parallel()
+		// A cancelled ctx arriving at the validator must NOT block
+		// enqueue: the socialclient returns ErrTransient (or equivalent)
+		// from a cancelled HTTP request, and the validator classifies
+		// ErrTransient as SOFT. The test stubs a transient response to
+		// simulate the canceled-ctx behaviour deterministically.
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		stub := &stubValidator{err: fmt.Errorf("wrapped: %w", socialclient.ErrTransient)}
+		if err := validateDeliveryPlanRequires(ctx, planWithSocial, stub); err != nil {
+			t.Errorf("cancelled ctx must still soft-pass (not block enqueue); got %v", err)
+		}
+		if stub.callCount() != 1 {
+			t.Errorf("validator call count = %d; want 1 (ctx-cancel must still flow through the validator)", stub.callCount())
+		}
+	})
+
+	t.Run("skipped_for_empty_social_destination_id", func(t *testing.T) {
+		t.Parallel()
+		stub := &stubValidator{err: nil}
+		err := validateDeliveryPlanRequires(context.Background(), planWithoutSocial, stub)
+		if err != nil {
+			t.Errorf("legacy drive-only entry: want nil; got %v", err)
+		}
+		if stub.callCount() != 0 {
+			t.Errorf("validator call count = %d; want 0 (pre-flight must skip empty social_destination_id)", stub.callCount())
+		}
+	})
+
+	t.Run("nil_validator_substitutes_noop", func(t *testing.T) {
+		t.Parallel()
+		err := validateDeliveryPlanRequires(context.Background(), planWithSocial, nil)
+		if err != nil {
+			t.Errorf("nil validator should fall back to noop; got %v", err)
+		}
+	})
+
+	t.Run("validator_called_per_entry", func(t *testing.T) {
+		t.Parallel()
+		multiPlan := map[string]interface{}{
+			"delivery_plan": []interface{}{
+				map[string]interface{}{
+					"destination_id":        "a",
+					"social_destination_id": "social_a",
+					"retry_budget":          3,
+				},
+				map[string]interface{}{
+					"destination_id":        "b",
+					"social_destination_id": "social_b",
+					"retry_budget":          3,
+				},
+				map[string]interface{}{
+					"destination_id":        "c",
+					"social_destination_id": "social_c",
+					"retry_budget":          3,
+				},
+			},
+		}
+		stub := &stubValidator{err: nil}
+		if err := validateDeliveryPlanRequires(context.Background(), multiPlan, stub); err != nil {
+			t.Errorf("want nil; got %v", err)
+		}
+		if stub.callCount() != 3 {
+			t.Errorf("validator call count = %d; want 3 (one per entry)", stub.callCount())
+		}
+		want := []string{"social_a", "social_b", "social_c"}
+		for i, w := range want {
+			if stub.calls[i] != w {
+				t.Errorf("call[%d] = %q; want %q", i, stub.calls[i], w)
+			}
+		}
+	})
 }

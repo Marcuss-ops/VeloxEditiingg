@@ -43,15 +43,24 @@ import (
 //
 // A PlanResolver is mandatory: NewEnqueuer panics on nil so
 // misconfiguration surfaces at boot.
+//
+// SocialValidator is OPTIONAL: use WithSocialValidator if a `*socialclient.Client`
+// has been wired at the composition root. When nil, the per-entry
+// pre-flight loop in validateDeliveryPlanRequires is a no-op
+// (NOOP_DESTINATION_VALIDATOR) so existing callers (Drive-only, dev
+// mode without a Social API configured) keep working unchanged.
 type Enqueuer struct {
-	Creator      *store.AtomicJobTaskCreator
-	Jobs         jobs.Reader
-	Voiceover    *assetbridge.AssetService
-	PlanResolver PlanResolver
+	Creator         *store.AtomicJobTaskCreator
+	Jobs            jobs.Reader
+	Voiceover       *assetbridge.AssetService
+	PlanResolver    PlanResolver
+	SocialValidator DestinationValidator
 }
 
 // NewEnqueuer constructs an Enqueuer with mandatory Creator + Jobs + PlanResolver.
-// The voiceover service is optional (nil-safe).
+// The voiceover service is optional (nil-safe). The SocialValidator is
+// optional — wire it via WithSocialValidator at the composition root
+// if the social_repo boundary is available in this environment.
 //
 // PlanResolver is mandatory: passing nil panics so misconfiguration
 // surfaces at construction time, not on the first enqueue.
@@ -60,6 +69,20 @@ func NewEnqueuer(creator *store.AtomicJobTaskCreator, jobsRepo jobs.Reader, voic
 		panic("enqueue.NewEnqueuer: planResolver is required (delivery plan precondition must be enforced at enqueue time)")
 	}
 	return &Enqueuer{Creator: creator, Jobs: jobsRepo, Voiceover: voiceover, PlanResolver: planResolver}
+}
+
+// WithSocialValidator returns the Enqueuer with a destination
+// validator wired in for the per-entry pre-flight loop in
+// validateDeliveryPlanRequires. The typical wiring is
+// `enqueuer.WithSocialValidator(socialclient.New(socialclient.ConfigFromEnv()))`
+// at the composition root; nil disables the pre-flight (legacy /
+// drive-only / dev consumers).
+func (e *Enqueuer) WithSocialValidator(v DestinationValidator) *Enqueuer {
+	if e == nil {
+		return e
+	}
+	e.SocialValidator = v
+	return e
 }
 
 // =============================================================================
@@ -176,7 +199,7 @@ func (e *Enqueuer) prepareJobAndTask(ctx context.Context, payloadMap map[string]
 	// FinalizeVerified would discover the missing plan AFTER the render
 	// has burned its budget — the diagnostic's
 	// "Validate delivery plan at enqueue or pre-render" regression.
-	if err := validateDeliveryPlanRequires(payloadMap); err != nil {
+	if err := validateDeliveryPlanRequires(ctx, payloadMap, e.SocialValidator); err != nil {
 		return nil, nil, 0, err
 	}
 
@@ -348,6 +371,28 @@ type validationError struct {
 
 func (e *validationError) Error() string {
 	return e.field + ": " + e.message
+}
+
+// Field returns the structured field path that produced the rejection
+// (e.g. "delivery_plan[0].social_destination_id"). Exposed via a
+// getter (rather than exporting the field) so the unexported
+// `field` stays a private invariant — but cross-package callers can
+// still reach the path via `errors.As(err, &verr); verr.Field()`.
+func (e *validationError) Field() string {
+	if e == nil {
+		return ""
+	}
+	return e.field
+}
+
+// Message returns the human-readable rejection message WITHOUT the
+// field-path prefix (use Error() if you want the field+message
+// concatenation). Exposed via a getter for the same reason as Field.
+func (e *validationError) Message() string {
+	if e == nil {
+		return ""
+	}
+	return e.message
 }
 
 // Unwrap returns the underlying cause so errors.Is / errors.As can

@@ -1,8 +1,13 @@
 package enqueue
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"log"
 	"strings"
+
+	"velox-server/internal/socialclient"
 )
 
 // delivery_plan_validator.go — Step 4/8 canonical-purity preflight.
@@ -16,6 +21,21 @@ import (
 // two stay in lockstep at enqueue and finalize. Intentionally
 // self-contained (no store import) to keep the enqueue surface narrow
 // and to avoid extending the public store API just for a gate.
+//
+// Canonical rename note (YouTube → Delivery, PR-15.8):
+//
+//	YouTubeGroup       → DestinationGroupID   (was: youtube_group_id)
+//	YouTubeChannelID   → ExternalDestinationID (was: youtube_channel)
+//	YouTubeVideoID     → RemoteMediaID        (was: youtube_video_id)
+//	YouTubeURL         → RemoteURL            (was: youtube_published_url)
+//	YouTubeStatus      → DeliveryStatus       (was: youtube_publish_status)
+//
+// The five YouTube-prefixed fields are absent from active Go runtime
+// code at this revision. Velox does NOT `SELECT` `youtube_channels`,
+// `youtube_oauth_tokens`, or `youtube_groups` anywhere (those tables
+// are dropped); destination validation is delegated to the external
+// Social API at `POST /internal/v1/destinations/:id/validate` (see
+// the optional pre-flight loop in `validateDeliveryPlanRequires`).
 //
 // Allowed payload shapes (mirroring the store parser):
 //   - delivery_plan: []map[string]interface{}{ ... }
@@ -34,21 +54,84 @@ import (
 //   - per-entry enabled == false  (same semantics as store parser)
 //   - per-entry destination_id missing, empty, or duplicated
 //   - per-entry priority < 0
+//   - per-entry social_destination_id present AND Social API pre-flight
+//     returns ErrPermanent / ErrAuth (4xx) — bad destination, hard fail
+//   - per-entry social_destination_id present AND Social API pre-flight
+//     returns ErrTransient / ErrNotConfigured (network / not built) —
+//     SOFT fail: logged as a warning, enqueue continues (the runner's
+//     retry_budget can still recover via FinalizeVerified)
 //   - delivery_plan of wrong root type (string, int, etc.)
 
 const defaultLegacyRetryBudget = 5
 
+// DestinationValidator is the minimal contract the enqueue-layer
+// validator needs from the Social API boundary. Production wires
+// `*socialclient.Client` here; tests can wire a hand-rolled stub.
+//
+// The contract is intentionally narrow: one method, ctx-aware,
+// single-attempt. The validator applies the hard/soft classification
+// policy ON TOP of this sentinel so the socialclient stays unaware of
+// enqueue semantics.
+type DestinationValidator interface {
+	ValidateDestination(ctx context.Context, socialDestID string) error
+}
+
+// noopDestinationValidator is the default validator used when no
+// *socialclient.Client has been wired in (legacy consumers, dev
+// mode without a Social API configured). It short-circuits the
+// per-entry pre-flight loop and skips any Social API call so the
+// existing happy-path unit tests still pass without DI plumbing.
+type noopDestinationValidator struct{}
+
+func (noopDestinationValidator) ValidateDestination(ctx context.Context, socialDestID string) error {
+	return nil
+}
+
+// deliveryPlanShape now carries an optional SocialDestinationID +
+// Platform pair per entry. Both are sourced from the operator-set
+// delivery_plan payload and FORWARD-ONLY: Velox does NOT validate
+// `platform` semantics (the social_repo is the authoritative owner
+// of platform semantics). The pair is used solely to delegate the
+// destination validation step to `POST /internal/v1/destinations/:id/validate`
+// when `social_destination_id` is present.
+//
+// Mapping rationale:
+//   - DestinationID → the Velox-side row in `delivery_destinations`
+//   - SocialDestinationID → the social_repo-side opaque identifier
+//     (e.g. "social_dest_amish_youtube"). Optional; missing means
+//     "do not pre-flight" (legacy / drive destinations).
+//   - Platform → the target platform string (e.g. "youtube",
+//     "tiktok", "instagram"); forwarded to the social_repo verbatim.
 type deliveryPlanShape struct {
-	DestinationID string
-	Priority      int
-	RetryBudget   int
-	Enabled       bool
+	DestinationID       string
+	Priority            int
+	RetryBudget         int
+	Enabled             bool
+	SocialDestinationID string
+	Platform            string
 }
 
 // validateDeliveryPlanRequires is the canonical-purity preflight.
 // Must be called from PrepareJobAndTask before the Job+TaskSpec is
 // handed to the atomic creator; on error, the Job is NOT queued.
-func validateDeliveryPlanRequires(payloadMap map[string]interface{}) error {
+//
+// The optional `validator` parameter performs a per-entry pre-flight
+// against the external Social API (`POST /internal/v1/destinations/:id/validate`).
+// Plug it in via Enqueuer.WithSocialValidator at the composition root;
+// pass `nil` (or the bundled `noopDestinationValidator{}`) for the
+// legacy paths that bypass the social_repo boundary (Drive-only,
+// pre-rollout dev mode).
+//
+// Sentinel handling on the per-entry pre-flight loop:
+//
+//	nil                       → OK, proceed.
+//	ErrPermanent / ErrAuth    → HARD fail: bad / unauthorized destination,
+//	                            enqueue is rejected with a validationError.
+//	ErrTransient / ErrRateLimit / ErrNotConfigured
+//	                          → SOFT warn: log and continue; the runner's
+//	                            per-destination retry_budget will re-resolve
+//	                            at FinalizeVerified.
+func validateDeliveryPlanRequires(ctx context.Context, payloadMap map[string]interface{}, validator DestinationValidator) error {
 	if payloadMap == nil {
 		return &validationError{
 			field:   "delivery_plan",
@@ -65,6 +148,10 @@ func validateDeliveryPlanRequires(payloadMap map[string]interface{}) error {
 			field:   "delivery_plan",
 			message: "is required for canonical-purity enqueue (provide delivery_plan or delivery_destination_ids)",
 		}
+	}
+
+	if validator == nil {
+		validator = noopDestinationValidator{}
 	}
 
 	seen := make(map[string]struct{}, len(entries))
@@ -101,8 +188,44 @@ func validateDeliveryPlanRequires(payloadMap map[string]interface{}) error {
 				message: "must be >= 0",
 			}
 		}
+		// Per-entry pre-flight against the social_repo. Empty
+		// social_destination_id means "no Social API routing for this
+		// entry" (legacy Drive-only destinations) and the loop skips
+		// the validation entirely.
+		socialDestID := strings.TrimSpace(e.SocialDestinationID)
+		if socialDestID != "" {
+			if perr := validator.ValidateDestination(ctx, socialDestID); perr != nil {
+				switch {
+				case errors.Is(perr, socialclient.ErrPermanent),
+					errors.Is(perr, socialclient.ErrAuth):
+					return &validationError{
+						field: fmt.Sprintf("delivery_plan[%d].social_destination_id", i),
+						message: fmt.Sprintf("social destination %q rejected by social_repo (%v); enqueue refused to keep the job from becoming visibly un-routable",
+							socialDestID, perr),
+						wrapped: perr,
+					}
+				default:
+					// Soft: ErrTransient / ErrRateLimit / ErrNotConfigured.
+					// Log a warning and continue. The DeliveryRunner's
+					// retry_budget at finalize is the recovery path.
+					log.Printf("[PREFLIGHT][enqueue] social_destination_id=%q for destination_id=%q skipped: %v (soft: enqueue continues; runner will re-attempt at finalize)",
+						socialDestID, id, perr)
+				}
+			}
+		}
 	}
 	return nil
+}
+
+// validateDeliveryPlanShapeOnly is the pure payload-shape validator,
+// preserved for the canonical-purity gate on paths where the Social
+// API boundary is intentionally NOT exercised (dev mode without a
+// configured social_repo, legacy consumers, fuzz harnesses). It is
+// the same loop validateDeliveryPlanRequires runs minus the
+// per-entry pre-flight. Callers that want both shape + pre-flight
+// must route through validateDeliveryPlanRequires.
+func validateDeliveryPlanShapeOnly(payloadMap map[string]interface{}) error {
+	return validateDeliveryPlanRequires(context.Background(), payloadMap, nil)
 }
 
 // extractDeliveryPlanShape walks the same shape rules as
@@ -227,10 +350,12 @@ func firstStringField(m map[string]interface{}, keys ...string) string {
 
 func shapeFromMap(m map[string]interface{}) deliveryPlanShape {
 	return deliveryPlanShape{
-		DestinationID: firstStringField(m, "destination_id", "id"),
-		Priority:      intFromAny(m["priority"]),
-		RetryBudget:   intFromAny(m["retry_budget"]),
-		Enabled:       boolFromAny(m["enabled"], true),
+		DestinationID:       firstStringField(m, "destination_id", "id"),
+		Priority:            intFromAny(m["priority"]),
+		RetryBudget:         intFromAny(m["retry_budget"]),
+		Enabled:             boolFromAny(m["enabled"], true),
+		SocialDestinationID: firstStringField(m, "social_destination_id"),
+		Platform:            firstStringField(m, "platform"),
 	}
 }
 
