@@ -24,7 +24,7 @@ func TestDataLayerAuditorPassesWithCleanStructure(t *testing.T) {
 	// Create legacy archive (allowed)
 	archiveDir := filepath.Join(tmpDir, "legacy_archive", "2026-04-01")
 	os.MkdirAll(archiveDir, 0755)
-	os.WriteFile(filepath.Join(archiveDir, "youtube_manager.json"), []byte(`{}`), 0644)
+	os.WriteFile(filepath.Join(archiveDir, "social_manager.json"), []byte(`{}`), 0644)
 
 	auditor := NewDataLayerAuditor(tmpDir, secretsDir, filepath.Join(tmpDir, "velox.db"))
 	result := auditor.Audit()
@@ -72,11 +72,11 @@ func TestDataLayerAuditorFailsOnLegacyFilesInRoot(t *testing.T) {
 	os.MkdirAll(secretsDir, 0755)
 
 	// Create primary
-	os.MkdirAll(filepath.Join(tmpDir, "youtube", "GroupYoutubeManager"), 0755)
-	os.WriteFile(filepath.Join(tmpDir, "youtube", "GroupYoutubeManager", "ChannelsSaved.json"), []byte(`{}`), 0644)
+	os.MkdirAll(filepath.Join(tmpDir, "social", "GroupSocialManager"), 0755)
+	os.WriteFile(filepath.Join(tmpDir, "social", "GroupSocialManager", "ChannelsSaved.json"), []byte(`{}`), 0644)
 
 	// Create legacy in WRONG location (should fail)
-	os.WriteFile(filepath.Join(tmpDir, "youtube", "groups.json"), []byte(`[]`), 0644)
+	os.WriteFile(filepath.Join(tmpDir, "social", "groups.json"), []byte(`[]`), 0644)
 
 	auditor := NewDataLayerAuditor(tmpDir, secretsDir, filepath.Join(tmpDir, "velox.db"))
 	result := auditor.Audit()
@@ -102,7 +102,7 @@ func TestDataLayerAuditorAllowsArchivedLegacyFiles(t *testing.T) {
 	// Create legacy ONLY in archive (should pass)
 	archiveDir := filepath.Join(tmpDir, "legacy_archive", "2026-04-01")
 	os.MkdirAll(archiveDir, 0755)
-	os.WriteFile(filepath.Join(archiveDir, "youtube_manager.json"), []byte(`{}`), 0644)
+	os.WriteFile(filepath.Join(archiveDir, "social_manager.json"), []byte(`{}`), 0644)
 
 	auditor := NewDataLayerAuditor(tmpDir, secretsDir, filepath.Join(tmpDir, "velox.db"))
 	result := auditor.Audit()
@@ -142,10 +142,10 @@ func TestCheckPrimaryFiles_PassesWhenPresent(t *testing.T) {
 	os.MkdirAll(secretsDir, 0755)
 
 	// Create all required primary files
-	os.MkdirAll(filepath.Join(tmpDir, "youtube", "GroupYoutubeManager"), 0755)
-	os.MkdirAll(filepath.Join(tmpDir, "youtube", "channels"), 0755)
-	os.WriteFile(filepath.Join(tmpDir, "youtube", "GroupYoutubeManager", "ChannelsSaved.json"), []byte(`{}`), 0644)
-	os.WriteFile(filepath.Join(tmpDir, "youtube", "channels", "channels.json"), []byte(`{}`), 0644)
+	os.MkdirAll(filepath.Join(tmpDir, "social", "GroupSocialManager"), 0755)
+	os.MkdirAll(filepath.Join(tmpDir, "social", "channels"), 0755)
+	os.WriteFile(filepath.Join(tmpDir, "social", "GroupSocialManager", "ChannelsSaved.json"), []byte(`{}`), 0644)
+	os.WriteFile(filepath.Join(tmpDir, "social", "channels", "channels.json"), []byte(`{}`), 0644)
 	os.WriteFile(filepath.Join(tmpDir, "workers.json"), []byte(`{}`), 0644)
 	os.WriteFile(filepath.Join(tmpDir, "velox.db"), []byte(``), 0644)
 	os.WriteFile(filepath.Join(tmpDir, "ansible_runs.json"), []byte(`{}`), 0644)
@@ -380,11 +380,11 @@ func TestAllowLegacy_SkippedAllowed(t *testing.T) {
 	os.MkdirAll(secretsDir, 0755)
 
 	// Create a known legacy file
-	os.MkdirAll(filepath.Join(tmpDir, "youtube", "GroupYoutubeManager"), 0755)
-	os.WriteFile(filepath.Join(tmpDir, "youtube", "GroupYoutubeManager", "ChannelsSaved.json"), []byte(`{}`), 0644)
+	os.MkdirAll(filepath.Join(tmpDir, "social", "GroupSocialManager"), 0755)
+	os.WriteFile(filepath.Join(tmpDir, "social", "GroupSocialManager", "ChannelsSaved.json"), []byte(`{}`), 0644)
 
 	auditor := NewDataLayerAuditor(tmpDir, secretsDir)
-	auditor.AllowLegacy("youtube/GroupYoutubeManager/ChannelsSaved.json")
+	auditor.AllowLegacy("social/GroupSocialManager/ChannelsSaved.json")
 
 	result := auditor.Audit()
 

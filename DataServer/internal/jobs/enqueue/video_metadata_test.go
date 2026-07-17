@@ -13,7 +13,7 @@ func TestNormalizeSceneVideoPayloadPreservesAndValidatesVideoMetadata(t *testing
 		},
 		"voiceover_paths": []interface{}{"https://example.com/voice.mp3"},
 		"delivery_plan": []interface{}{
-			map[string]interface{}{"destination_id": "youtube-main", "retry_budget": 3},
+			map[string]interface{}{"destination_id": "social-main", "retry_budget": 3},
 		},
 		"video_metadata": map[string]interface{}{
 			"title":          "Published title",

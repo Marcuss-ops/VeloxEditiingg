@@ -34,7 +34,7 @@ func openPropagationDB(t *testing.T) *sql.DB {
 	if _, err := db.Exec(phase5Schema); err != nil {
 		t.Fatalf("apply schema: %v", err)
 	}
-	if _, err := db.Exec(`INSERT INTO delivery_destinations (destination_id,provider,name,enabled,created_at,updated_at) VALUES ('primary','youtube','Primary',1,'',''),('secondary','drive','Secondary',1,'','')`); err != nil {
+	if _, err := db.Exec(`INSERT INTO delivery_destinations (destination_id,provider,name,enabled,created_at,updated_at) VALUES ('primary','social_gateway','Primary',1,'',''),('secondary','drive','Secondary',1,'','')`); err != nil {
 		t.Fatal(err)
 	}
 	return db

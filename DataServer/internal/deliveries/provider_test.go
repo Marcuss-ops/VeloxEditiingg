@@ -103,7 +103,7 @@ func TestRegistry_RegisterResolveNames(t *testing.T) {
 	}
 
 	// Register another
-	r.Register(&stubProvider{name: "youtube"})
+	r.Register(&stubProvider{name: "social_gateway"})
 	names = r.Names()
 	if len(names) != 2 {
 		t.Fatalf("want 2 names, got %d", len(names))

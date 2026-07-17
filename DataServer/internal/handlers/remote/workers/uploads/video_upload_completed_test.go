@@ -120,9 +120,9 @@ func TestUploadCompletedVideo_ArtifactsPipeline(t *testing.T) {
 	}
 
 	// Seed delivery destinations
-	_, err = db.Exec(`INSERT INTO delivery_destinations (destination_id, provider, name, enabled, created_at, updated_at) VALUES (1, 'youtube', 'YT', 1, ?, ?)`, now, now)
+	_, err = db.Exec(`INSERT INTO delivery_destinations (destination_id, provider, name, enabled, created_at, updated_at) VALUES (1, 'social_gateway', 'Social', 1, ?, ?)`, now, now)
 	if err != nil {
-		t.Fatalf("seed yt dest: %v", err)
+		t.Fatalf("seed social dest: %v", err)
 	}
 	_, err = db.Exec(`INSERT INTO delivery_destinations (destination_id, provider, name, enabled, created_at, updated_at) VALUES (2, 'drive', 'Drive', 1, ?, ?)`, now, now)
 	if err != nil {

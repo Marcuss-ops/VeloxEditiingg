@@ -327,14 +327,14 @@ func TestAtomicJobTaskCreator_HappyPath_MultiDestinationDeliveryPlan(t *testing.
 	seedDestinations(t, s, map[string]bool{
 		"drive-main": true,
 		"video-main": true,
-		"youtube-mr": true,
+		"social-mr": true,
 	})
 
 	const jobID = "job-multi-dest"
 	plan := []interface{}{
 		map[string]interface{}{"destination_id": "drive-main", "priority": 0, "retry_budget": 3, "enabled": true},
 		map[string]interface{}{"destination_id": "video-main", "priority": 1, "retry_budget": 7, "enabled": true},
-		map[string]interface{}{"destination_id": "youtube-mr", "priority": 2, "retry_budget": 5, "enabled": true},
+		map[string]interface{}{"destination_id": "social-mr", "priority": 2, "retry_budget": 5, "enabled": true},
 	}
 	job, spec := newTestJobAndSpec(jobID, map[string]interface{}{
 		"delivery_plan": plan,
@@ -370,7 +370,7 @@ func TestAtomicJobTaskCreator_HappyPath_MultiDestinationDeliveryPlan(t *testing.
 	want := []planRow{
 		{"drive-main", 0, 3},
 		{"video-main", 1, 7},
-		{"youtube-mr", 2, 5},
+		{"social-mr", 2, 5},
 	}
 	if len(got) != len(want) {
 		t.Fatalf("plan rows = %d; want %d", len(got), len(want))

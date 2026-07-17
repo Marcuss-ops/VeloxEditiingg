@@ -72,7 +72,7 @@ func TestClaimDeliveries_BasicClaim(t *testing.T) {
 	db := setupDeliveryTestDB(t)
 	ctx := context.Background()
 
-	insertTestDeliveryDestination(t, db, "dest-yt", "youtube")
+	insertTestDeliveryDestination(t, db, "dest-yt", "social_gateway")
 	insertTestArtifact(t, db, "art-1", "job-1", "/tmp/test.mp4")
 	insertTestJobDelivery(t, db, "del_art-1_dest-yt", "art-1", "dest-yt")
 
@@ -95,8 +95,8 @@ func TestClaimDeliveries_BasicClaim(t *testing.T) {
 	if leases[0].AttemptNumber != 1 {
 		t.Errorf("attempt_number = %d, want 1", leases[0].AttemptNumber)
 	}
-	if leases[0].Provider != "youtube" {
-		t.Errorf("provider = %q, want %q", leases[0].Provider, "youtube")
+	if leases[0].Provider != "social_gateway" {
+		t.Errorf("provider = %q, want %q", leases[0].Provider, "social_gateway")
 	}
 }
 
@@ -207,7 +207,7 @@ func TestMarkDeliverySucceeded(t *testing.T) {
 	db := setupDeliveryTestDB(t)
 	ctx := context.Background()
 
-	insertTestDeliveryDestination(t, db, "dest-s", "youtube")
+	insertTestDeliveryDestination(t, db, "dest-s", "social_gateway")
 	insertTestArtifact(t, db, "art-s", "job-s", "/tmp/s.mp4")
 	insertTestJobDelivery(t, db, "del_art-s_dest-s", "art-s", "dest-s")
 
@@ -217,7 +217,7 @@ func TestMarkDeliverySucceeded(t *testing.T) {
 	}
 
 	l := leases[0]
-	err = db.MarkDeliverySucceeded(ctx, l.DeliveryID, l.RunnerID, l.LeaseID, "yt-video-123", "https://youtube.com/watch?v=123")
+	err = db.MarkDeliverySucceeded(ctx, l.DeliveryID, l.RunnerID, l.LeaseID, "social-video-123", "https://social.example/watch?v=123")
 	if err != nil {
 		t.Fatalf("MarkDeliverySucceeded: %v", err)
 	}
@@ -229,8 +229,8 @@ func TestMarkDeliverySucceeded(t *testing.T) {
 	if jd.Status != "SUCCEEDED" {
 		t.Errorf("status = %q, want SUCCEEDED", jd.Status)
 	}
-	if jd.RemoteID != "yt-video-123" {
-		t.Errorf("remote_id = %q, want yt-video-123", jd.RemoteID)
+	if jd.RemoteID != "social-video-123" {
+		t.Errorf("remote_id = %q, want social-video-123", jd.RemoteID)
 	}
 	if jd.CompletedAt == "" {
 		t.Error("completed_at should be set")
@@ -282,7 +282,7 @@ func TestMarkDeliveryFailed(t *testing.T) {
 	db := setupDeliveryTestDB(t)
 	ctx := context.Background()
 
-	insertTestDeliveryDestination(t, db, "dest-f", "youtube")
+	insertTestDeliveryDestination(t, db, "dest-f", "social_gateway")
 	insertTestArtifact(t, db, "art-f", "job-f", "/tmp/f.mp4")
 	insertTestJobDelivery(t, db, "del_art-f_dest-f", "art-f", "dest-f")
 
@@ -313,7 +313,7 @@ func TestMarkDeliveryBlockedAuth(t *testing.T) {
 	db := setupDeliveryTestDB(t)
 	ctx := context.Background()
 
-	insertTestDeliveryDestination(t, db, "dest-a", "youtube")
+	insertTestDeliveryDestination(t, db, "dest-a", "social_gateway")
 	insertTestArtifact(t, db, "art-a", "job-a", "/tmp/a.mp4")
 	insertTestJobDelivery(t, db, "del_art-a_dest-a", "art-a", "dest-a")
 
@@ -428,7 +428,7 @@ func TestClaimDeliveries_SucceededDoubleClaim(t *testing.T) {
 	db := setupDeliveryTestDB(t)
 	ctx := context.Background()
 
-	insertTestDeliveryDestination(t, db, "dest-2x", "youtube")
+	insertTestDeliveryDestination(t, db, "dest-2x", "social_gateway")
 	insertTestArtifact(t, db, "art-2x", "job-2x", "/tmp/2x.mp4")
 	insertTestJobDelivery(t, db, "del_art-2x_dest-2x", "art-2x", "dest-2x")
 
@@ -438,7 +438,7 @@ func TestClaimDeliveries_SucceededDoubleClaim(t *testing.T) {
 		t.Fatalf("claim: %v len=%d", err, len(leases))
 	}
 	l := leases[0]
-	if err := db.MarkDeliverySucceeded(ctx, l.DeliveryID, l.RunnerID, l.LeaseID, "vid-1", "https://yt/1"); err != nil {
+	if err := db.MarkDeliverySucceeded(ctx, l.DeliveryID, l.RunnerID, l.LeaseID, "vid-1", "https://social.example/1"); err != nil {
 		t.Fatalf("succeed: %v", err)
 	}
 
