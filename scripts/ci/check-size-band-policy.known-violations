@@ -79,3 +79,5 @@ ops/jobs/submit_jackie_chan_doc_voiceover_clips.sh
 run_tests.sh
 shared/controltransport/pb/worker_control.pb.go
 shared/validation/validation_test.go
+DataServer/internal/costmodel/cost.go
+DataServer/internal/remoteengine/config.go
