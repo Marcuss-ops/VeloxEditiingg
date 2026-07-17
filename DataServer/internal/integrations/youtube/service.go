@@ -99,26 +99,6 @@ func (s *Service) QuotaManager() *QuotaManager { return s.quotaManager }
 // SQL→domain mapping).
 func (s *Service) Repo() Repository { return s.repo }
 
-// --- Public API: OAuth (Delegated to AuthManager) ---
-
-func (s *Service) GetOAuthStartURL(channelName string) string {
-	return s.authManager.GetOAuthStartURL(channelName)
-}
-
-func (s *Service) HandleOAuthCallback(ctx context.Context, code string, channelName string) (*Channel, error) {
-	return s.authManager.HandleOAuthCallback(ctx, code, channelName)
-}
-
-// ValidateOAuthAccessToken validates a channel's OAuth access token
-// against the live YouTube API.
-func (s *Service) ValidateOAuthAccessToken(ctx context.Context, channelID string) (map[string]interface{}, error) {
-	return s.authManager.ValidateStoredYouTubeCredentials(ctx, channelID)
-}
-
-func (s *Service) RevokeToken(ctx context.Context, channelID string) error {
-	return s.authManager.RevokeToken(ctx, channelID)
-}
-
 // --- Public API: Upload (Delegated to Uploader) ---
 
 func (s *Service) UploadVideo(ctx context.Context, channelID string, videoPath string, config UploadConfig) (*UploadResult, error) {
