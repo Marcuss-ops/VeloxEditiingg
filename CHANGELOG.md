@@ -177,4 +177,74 @@ The legacy deprecation aliases `SOCIAL_GATEWAY_URL`, `SOCIAL_GATEWAY_API_KEY`, `
 - `deploy/group_vars/{all,vault.yml.example}.yml` — operator configuration surface.
 - `deploy/{velox-server.env.example,templates/velox-server.env.j2}` — rendered env surface.
 
+### PR-15.11 — Operator-facing YouTube-residue audit script
+
+Operators can now run a read-only SQLite audit on the live Velox
+production DB to confirm that the YouTube domain is fully cleaned.
+The audit script reflects the same contract the test suite pins:
+
+- Migration `090_drop_youtube_domain.sql` is forward-only and
+  idempotent (checksum gate).
+- The end-to-end migration test
+  (`DataServer/internal/store/migrations/migrations_integration_test.go`,
+  `TestIntegration_MigrationRunner_EndToEnd`, phase 4) asserts that
+  none of the 10 YouTube tables exist after the chain.
+- The schema test
+  (`DataServer/internal/store/migrations/migrations_schema_test.go`,
+  `TestMigration090_YouTubeDomainDropped`) additionally asserts that
+  the 3 historical columns on `calendar_events` and
+  `dark_editor_folders` are absent.
+
+**Added**:
+
+- `deploy/scripts/audit-no-youtube-residuals.sh` — read-only SQLite
+  probe. Takes `<path-to-velox.db>` as argv and reports any leftover
+  `youtube_*` tables (anchored `youtube\_%` ESCAPE) plus any
+  `youtube_*` columns on `calendar_events` and `dark_editor_folders`
+  (via `pragma_table_info` filtered inline). Pattern matches
+  case-insensitively so it catches mixed-case identifiers like
+  `` `YouTube_Group` ``.
+
+**Exit codes**:
+
+| Code | Meaning |
+| ---: | --- |
+| `0` | CLEAN — no YouTube tables or columns remain |
+| `1` | RESIDUAL_FOUND — see report; remediation hint printed |
+| `2` | DB_NOT_FOUND — path missing / unreadable |
+| `3` | NOT_VELOX_SCHEMA — DB exists but is missing canonical Velox tables |
+| `4` | ARGV_OR_TOOL — `sqlite3` CLI missing or wrong invocation |
+
+**Sanity pre-check**: the script probes for the 5 canonical permanent
+tables (`jobs`, `artifacts`, `job_deliveries`, `calendar_events`,
+`dark_editor_folders`) before reporting residuals, so a non-Velox
+SQLite file is rejected with exit 3 rather than producing a misleading
+`` CLEAN '' report.
+
+**Operator usage**:
+
+```bash
+sudo ./deploy/scripts/audit-no-youtube-residuals.sh /var/lib/velox/data/velox.db
+#   exit 0  →  clean
+#   exit 1  →  scrap the report; investigate
+```
+
+**Verification on synthetic DBs** (run on this commit before push):
+
+| Scenario | DB shape | Exit | Outcome |
+| --- | --- | ---: | --- |
+| A. `bash -n` syntax check | n/a | n/a | OK |
+| B. Clean Velox-shaped DB | 5 canonical tables, no YouTube state | `0` | "CLEAN" reported |
+| C. Contaminated DB | + 4 YouTube tables + 3 YouTube columns | `1` | Full report listing all 7 residuals + remediation |
+| D. Non-Velox SQLite | only `foo` table | `3` | "does not look like a Velox schema" |
+| E. Nonexistent path | n/a | `2` | "DB not readable" |
+| F. No argv | n/a | `4` | usage error on stderr |
+| G. Mixed-case column `` `YouTube_Group` `` | 5 canonical + 1 mixed-case column | `1` | correctly detected via `lower(name)` |
+
+**Commit**:
+
+| Hash | Subject |
+| --- | --- |
+| `5491f31415deba20adc1fca21142a4c57b7a89fa` | `chore(deploy): add read-only YouTube-residue audit script for operators` |
+
 
