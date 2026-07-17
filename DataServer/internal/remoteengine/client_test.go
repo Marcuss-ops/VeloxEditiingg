@@ -402,8 +402,8 @@ func TestClient_CompletedWithoutScenes(t *testing.T) {
 			"status": "completed",
 			"ok":     true,
 			"result": map[string]interface{}{
-				"video_name":    "No Scenes Video",
-				"script_text":   "A script with no scenes.",
+				"video_name":     "No Scenes Video",
+				"script_text":    "A script with no scenes.",
 				"voiceover_path": "/tmp/voice.mp3",
 				// scenes_json and scenes are missing
 			},
@@ -799,9 +799,9 @@ func TestClient_GenerateSimpleScript_Success(t *testing.T) {
 		}
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"ok":      true,
-			"script":  "Once upon a time...",
-			"title":   "Test Script",
+			"ok":       true,
+			"script":   "Once upon a time...",
+			"title":    "Test Script",
 			"trace_id": "trace_simple",
 		})
 	}))

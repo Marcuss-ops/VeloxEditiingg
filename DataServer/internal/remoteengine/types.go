@@ -73,21 +73,3 @@ type PipelineStatusResponse struct {
 	CreatedAt time.Time              `json:"created_at,omitempty"`
 	UpdatedAt time.Time              `json:"updated_at,omitempty"`
 }
-
-// remoteJobResponse is the remote engine's raw job response wrapper.
-// The remote engine returns {"job": { ... }} at the top level.
-type remoteJobResponse struct {
-	Job remoteJobEnvelope `json:"job"`
-}
-
-type remoteJobEnvelope struct {
-	ID        string                 `json:"id"`
-	Type      string                 `json:"type"`
-	Status    string                 `json:"status"`
-	Progress  int                    `json:"progress"`
-	Payload   map[string]interface{} `json:"payload,omitempty"`
-	Result    map[string]interface{} `json:"result,omitempty"`
-	Error     string                 `json:"error,omitempty"`
-	CreatedAt string                 `json:"created_at,omitempty"`
-	UpdatedAt string                 `json:"updated_at,omitempty"`
-}

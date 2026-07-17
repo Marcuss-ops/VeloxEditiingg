@@ -152,13 +152,13 @@ func TestValidateInitialResponse_AllKnownStatuses(t *testing.T) {
 func TestParseRemotePipelineResult_Complete(t *testing.T) {
 	scenesJSON := `[{"text":"Scene 1","image_link":"https://example.com/1.png"},{"text":"Scene 2","image_link":"https://example.com/2.png"}]`
 	raw := map[string]interface{}{
-		"job_id":  "job_123",
-		"status":  "completed",
-		"ok":      true,
+		"job_id": "job_123",
+		"status": "completed",
+		"ok":     true,
 		"result": map[string]interface{}{
-			"video_name":    "Test Video",
-			"script_text":   "This is the script.",
-			"scenes_json":   scenesJSON,
+			"video_name":  "Test Video",
+			"script_text": "This is the script.",
+			"scenes_json": scenesJSON,
 			"voiceover": map[string]interface{}{
 				"local_path": "/tmp/voice.mp3",
 			},
@@ -198,10 +198,10 @@ func TestParseRemotePipelineResult_Complete(t *testing.T) {
 
 func TestParseRemotePipelineResult_FlatShape(t *testing.T) {
 	raw := map[string]interface{}{
-		"job_id":        "job_flat",
-		"status":        "running",
-		"video_name":    "Flat Video",
-		"script_text":   "Flat script.",
+		"job_id":         "job_flat",
+		"status":         "running",
+		"video_name":     "Flat Video",
+		"script_text":    "Flat script.",
 		"voiceover_path": "/tmp/flat.mp3",
 	}
 
@@ -229,9 +229,9 @@ func TestParseRemotePipelineResult_NilMap(t *testing.T) {
 
 func TestParseRemotePipelineResult_VoiceoverPathsSlice(t *testing.T) {
 	raw := map[string]interface{}{
-		"job_id":           "job_vp",
-		"status":           "completed",
-		"voiceover_paths":  []interface{}{"/tmp/v1.mp3", "/tmp/v2.mp3"},
+		"job_id":          "job_vp",
+		"status":          "completed",
+		"voiceover_paths": []interface{}{"/tmp/v1.mp3", "/tmp/v2.mp3"},
 	}
 
 	dto, _ := ParseRemotePipelineResult(raw)
@@ -327,8 +327,8 @@ func TestToWorkerPayload_RoundTrip(t *testing.T) {
 	dto := &RemotePipelineResult{
 		RemoteJobID: "job_123",
 		Script: ScriptResult{
-			Title:  "Test Video",
-			Text:   "This is the script.",
+			Title:    "Test Video",
+			Text:     "This is the script.",
 			JSONPath: "/tmp/scenes.json",
 		},
 		Scenes: scenes,
@@ -396,10 +396,10 @@ func TestToWorkerPayload_RoundTrip(t *testing.T) {
 
 func TestToWorkerPayload_PreservesRawFields(t *testing.T) {
 	raw := map[string]interface{}{
-		"job_id":       "job_1",
-		"status":       "completed",
+		"job_id":        "job_1",
+		"status":        "completed",
 		"delivery_plan": []interface{}{map[string]interface{}{"destination_id": "drive-main"}},
-		"output_path":  "/tmp/output",
+		"output_path":   "/tmp/output",
 	}
 	dto := &RemotePipelineResult{
 		RemoteJobID: "job_1",
