@@ -177,6 +177,93 @@ The legacy deprecation aliases `SOCIAL_GATEWAY_URL`, `SOCIAL_GATEWAY_API_KEY`, `
 - `deploy/group_vars/{all,vault.yml.example}.yml` — operator configuration surface.
 - `deploy/{velox-server.env.example,templates/velox-server.env.j2}` — rendered env surface.
 
+### PR-15.12 — Residuo 2 closure: opaque-mode Destination model
+
+The Delivery destination model is now fully opaque-mode. Velox no longer
+carries the YouTube-specific fields `AccountID`, `ChannelID`, `Language`
+either in the typed structs or in the SQLite schema. They are owned
+exclusively by the external Social API repository, which resolves them
+internally from the opaque `SocialDestinationID`. The migration is
+forward-only (no DOWN), version-pinned (SQLite >= 3.35.0), and
+ABI-safe-ordered: model → store → validator.
+
+**Removed (typed struct fields + SQL columns)**:
+
+- `data Destination.*` fields: `AccountID`, `ChannelID`, `Language`.
+- `data DeliveryDestination.*` fields: `AccountID`, `ChannelID`, `Language`.
+- SQLite column drop via migration `091_opaque_destination.sql`
+  (forward-only `ALTER TABLE delivery_destinations DROP COLUMN` × 3).
+
+**Added (opaque mode)**:
+
+- `data Destination.SocialDestinationID` — opaque identifier resolved by
+  the external Social API. Typed as `string`. JSON tag
+  `social_destination_id,omitempty` so an empty value never leaks into
+  the wire contract.
+- `data DeliveryDestination.SocialDestinationID` — symmetric to the
+  in-process type. Stored as `social_destination_id TEXT` (nullable, no
+  DEFAULT) so an unmapped row reads back as empty string after COALESCE.
+- Sentinel `errors.New("deliveries: destination is unmapped\n(social_destination_id required)")`
+  (`ErrDestinationUnmapped`) in `internal/deliveries/provider.go`.
+- Runtime guard in `runner.hydrateDestination`: rejects empty
+  `SocialDestinationID` at hydrate time, BEFORE dispatch. processLease
+  distinguishes `ErrDestinationUnmapped` from `ErrProviderNotConfigured`
+  with delivery-status code `DESTINATION_UNMAPPED`
+  (vs `DESTINATION_NOT_FOUND`).
+- Migration `091_opaque_destination.sql` (sqlite + testdata mirror) that
+  drops the 3 YouTube-specific columns and adds `social_destination_id`.
+- New opaque-mode unit tests:
+  - `internal/deliveries/destination_opaque_test.go`:
+    - `TestDestinationOpaqueStructShape` — compile-time assertion that
+      the typed Destination does not accept legacy fields.
+    - `TestErrDestinationUnmappedSentinel` +
+      `TestErrDestinationUnmappedIsCompatibleWithErrorsIs` — sentinel
+      stability + `errors.Is` round-trip.
+  - `internal/store/delivery_destination_opaque_test.go`:
+    - `TestDeliveryDestinationOpaqueStructShape` — compile-time.
+    - `TestDeliveryDestinationJSONOpaqueKeys` — JSON keys for the
+      persisted shape; legacy `account_id/channel_id/language` keys
+      confirmed absent.
+    - `TestDeliveryDestinationEmptySocialDestinationIDOmitEmpty` —
+      empty `social_destination_id` is suppressed by `omitempty`.
+
+**Behavior change (delivery dispatch)**:
+
+- A destination whose `social_destination_id` is empty / whitespace-only
+  is now dispatched into FAILED with code `DESTINATION_UNMAPPED`
+  (previously it would silently proceed via `social_gateway.buildRequest`
+  with `ChannelID=""` until the social_repo rejected it).
+- Operators that still have existing `delivery_destinations` rows with
+  empty `social_destination_id` post-migration MUST backfill before
+  enabling dispatch. The audit script
+  (`deploy/scripts/audit-no-youtube-residuals.sh`, PR-15.11) does not
+  probe `delivery_destinations` schema directly — it's a YouTube-residue
+  auditor only — so a follow-up operator checklist is recommended.
+
+**Commit chain (3 atomic commits on `main`, NO branches)**:
+
+| Hash | Subject |
+| --- | --- |
+| `85c10f8` | `refactor(deliveries): drop AccountID/ChannelID/Language from Destination, add SocialDestinationID` |
+| `cab7cc3` | `refactor(store): drop account_id/channel_id/language columns, add social_destination_id` |
+| TBD-COMMIT-3-HASH      | `refactor(deliveries): fail-closed on unmapped destinations + opaque-mode tests` |
+
+**Verification**:
+
+- `cd DataServer && go test ./internal/deliveries/... ./internal/jobs/enqueue/... ./internal/integration_test/... ./internal/store/... -count=1`: PASS.
+- `cd DataServer && go vet ./... && go build ./...`: PASS.
+- New tests cover: struct shape (compile-time), sentinel stability, `errors.Is` chain, JSON opaque keys, `omitempty` on empty opaque ID.
+- Existing tests untouched (the `BlockedAuth` fixture, the `sampleDestination` fixtures, and the `enqueue_test_helpers` seeds all use canonical fields only).
+- ABI-safe ordering verified: model landed before store before validator so the typed struct + SQL + runner agree at every commit boundary.
+
+**Refs**:
+
+- `DataServer/internal/deliveries/provider.go` — `ErrDestinationUnmapped` sentinel documented.
+- `DataServer/internal/deliveries/runner.go::hydrateDestination` — guard documented.
+- `DataServer/internal/store/migrations/sqlite/091_opaque_destination.sql` — forward-only schema migration.
+- `DataServer/internal/store/store_deliveries.go::DeliveryDestination` — typed struct post-migration schema.
+- `DataServer/internal/store/migrations/README.md` — forward-only invariant (do NOT edit shipped migrations).
+
 ### PR-15.11 — Operator-facing YouTube-residue audit script
 
 Operators can now run a read-only SQLite audit on the live Velox

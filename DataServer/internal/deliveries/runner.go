@@ -34,6 +34,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -277,8 +278,15 @@ func (r *DeliveryRunner) processLease(ctx context.Context, lease store.DeliveryL
 
 	dest, err := r.hydrateDestination(ctx, lease.DestinationID)
 	if err != nil {
-		if err := r.dbStore.MarkDeliveryFailed(ctx, lease.DeliveryID, lease.RunnerID, lease.LeaseID, "DESTINATION_NOT_FOUND", err.Error()); err != nil {
-			log.Printf("[DELIVERY] mark failed for %s: %v", lease.DeliveryID, err)
+		// Distinguish DESTINATION_NOT_FOUND (no row) from
+		// DESTINATION_UNMAPPED (row exists but social_destination_id is
+		// empty — opaque-mode fail-closed contract, see provider.go).
+		code := "DESTINATION_NOT_FOUND"
+		if errors.Is(err, ErrDestinationUnmapped) {
+			code = "DESTINATION_UNMAPPED"
+		}
+		if mErr := r.dbStore.MarkDeliveryFailed(ctx, lease.DeliveryID, lease.RunnerID, lease.LeaseID, code, err.Error()); mErr != nil {
+			log.Printf("[DELIVERY] mark failed for %s: %v", lease.DeliveryID, mErr)
 		}
 		return fmt.Errorf("hydrate destination: %w", err)
 	}
@@ -471,10 +479,15 @@ func classifyErrorCode(err error) string {
 // internal store type to the deliveries package's Destination shape that
 // provider adapters consume.
 //
-// Opaque-mode: the legacy YouTube-specific fields (AccountID, ChannelID,
-// Language) are gone from the typed Destination. `SocialDestinationID`
-// is the opaque identifier resolved by the external Social API; the
-// runner propagates it verbatim from the store row.
+// Opaque-mode fail-closed contract (Residuo 2 of YouTube → Social closure,
+// migration 091):
+//   * the YouTube-specific fields (AccountID, ChannelID, Language) are gone
+//     from the typed Destination;
+//   * SocialDestinationID is the opaque identifier resolved server-side by
+//     the external Social API; the runner propagates it verbatim;
+//   * if SocialDestinationID is empty / whitelist-only, hydrate MUST
+//     fail closed with ErrDestinationUnmapped so the runner records
+//     DESTINATION_UNMAPPED on the delivery row (operators backfill).
 func (r *DeliveryRunner) hydrateDestination(ctx context.Context, destID string) (*Destination, error) {
 	d, err := r.dbStore.GetDeliveryDestination(ctx, destID)
 	if err != nil {
@@ -482,6 +495,9 @@ func (r *DeliveryRunner) hydrateDestination(ctx context.Context, destID string) 
 	}
 	if d == nil {
 		return nil, fmt.Errorf("deliveries: destination %s not found", destID)
+	}
+	if strings.TrimSpace(d.SocialDestinationID) == "" {
+		return nil, fmt.Errorf("deliveries: destination %s: %w", destID, ErrDestinationUnmapped)
 	}
 	cfg := d.ConfigurationJSON
 	if cfg == "" {

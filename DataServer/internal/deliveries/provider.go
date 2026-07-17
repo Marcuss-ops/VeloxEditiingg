@@ -48,6 +48,18 @@ var ErrProviderAuth = errors.New("deliveries: authentication/authorization error
 // RetryAfter if provided, otherwise applies the default backoff.
 var ErrProviderRateLimit = errors.New("deliveries: rate limit exceeded")
 
+// ErrDestinationUnmapped is the sentinel returned when a delivery_destinations
+// row exists but `social_destination_id` is empty / Whitespace-only.
+//
+// Opaque-mode contract (Residuo 2 of YouTube → Social closure): Velox no
+// longer knows about platforms/accounts/channels/languages. Without a
+// social_destination_id the runner cannot look anything up via the
+// external Social API. Hydrate-time the runner gets this error BEFORE
+// claiming a lease so the delivery is marked FAILED with code
+// DESTINATION_UNMAPPED — operators see exactly which row is missing the
+// reference and backfill it.
+var ErrDestinationUnmapped = errors.New("deliveries: destination is unmapped (social_destination_id required)")
+
 // ── Error classification ─────────────────────────────────────────────────────
 
 // ErrorClass enumerates the retry classification of a provider error.
