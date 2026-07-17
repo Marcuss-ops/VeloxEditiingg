@@ -12,6 +12,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"velox-server/internal/jobs/enqueue"
 	"velox-server/internal/pipelineruns"
 	"velox-server/internal/remoteengine"
 	"velox-server/internal/store"
@@ -284,7 +285,16 @@ func (h *Handlers) RetryPipelineRun() gin.HandlerFunc {
 			if err := h.store.UpdatePipelineRunRemoteJob(ctx, pr.ID, "remote_engine", jobID); err != nil {
 				pipelineLog("RETRY: failed to stamp remote_job_id run=%s: %v", pr.ID, err)
 			}
-		} // Persist forwarding for async result, or handle sync forward.
+		}
+
+		// ── Sync forward if the result is already complete ────────────
+		if enqueue.ShouldForwardPipelineResult(workerPayload) {
+			forwarded, _ := h.syncForwardResult(ctx, pr, result, workerPayload)
+			c.JSON(http.StatusAccepted, buildCreateResponseFromSyncForward(pr, forwarded))
+			return
+		}
+
+		// Persist forwarding for async result.
 		if jobID == "" {
 			// Remote response missing job_id — contract violation.
 			pipelineLog("RETRY: remote response missing job_id run=%s", pr.ID)
@@ -340,6 +350,13 @@ func (h *Handlers) RetryPipelineRun() gin.HandlerFunc {
 		if err := h.store.UpdatePipelineRunForwarding(ctx, pr.ID,
 			forwarding.ForwardingID, pipelineruns.StatusRemoteQueued); err != nil {
 			pipelineLog("RETRY: failed to stamp forwarding_id run=%s: %v", pr.ID, err)
+		}
+
+		// Update the run with the result JSON for audit.
+		if resultJSON, mErr := json.Marshal(result); mErr == nil {
+			if err := h.store.UpdatePipelineRunResult(ctx, pr.ID, string(resultJSON)); err != nil {
+				pipelineLog("RETRY: failed to stamp result_json run=%s: %v", pr.ID, err)
+			}
 		}
 
 		c.JSON(http.StatusAccepted, gin.H{

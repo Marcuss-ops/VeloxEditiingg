@@ -25,10 +25,12 @@ package pipeline
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
 	"velox-server/internal/creatorflow"
+	"velox-server/internal/pipelineruns"
 )
 
 // forwardPipelineResultToWorker is the package-internal method that
@@ -74,6 +76,46 @@ func (h *Handlers) forwardPipelineResultToWorker(ctx context.Context, result map
 		return out.Response, nil
 	}
 	return nil, nil
+}
+
+// syncForwardResult handles the common sync-forward path for both
+// CreatePipelineRun and RetryPipelineRun. It forwards a completed remote
+// result to the Velox worker queue, updates the pipeline_run row, and
+// returns the forwarded worker response. If forwarding fails, the run is
+// marked as FORWARDING so a reconciler can retry.
+func (h *Handlers) syncForwardResult(ctx context.Context, pr *pipelineruns.PipelineRun, result, workerPayload map[string]interface{}) (map[string]interface{}, error) {
+	pipelineLog("FORWARD: result complete — forwarding to Velox workers (sync) run=%s", pr.ID)
+	forwarded, forwardErr := h.forwardPipelineResultToWorker(ctx, workerPayload)
+	if forwardErr != nil {
+		pipelineLog("FORWARD: sync forward FAILED run=%s: %v", pr.ID, forwardErr)
+		if err := h.store.UpdatePipelineRunStatus(ctx, pr.ID,
+			pipelineruns.StatusForwarding, "sync forward failed"); err != nil {
+			pipelineLog("FORWARD: failed to mark FORWARDING run=%s: %v", pr.ID, err)
+		} else {
+			pr.Status = pipelineruns.StatusForwarding
+		}
+	} else if forwarded != nil {
+		workerJobID, _ := forwarded["job_id"].(string)
+		pipelineLog("FORWARD: sync forward SUCCESS run=%s worker_job=%s", pr.ID, workerJobID)
+		if workerJobID != "" {
+			pr.VeloxJobID = workerJobID
+			if err := h.store.UpdatePipelineRunVeloxJob(ctx, pr.ID,
+				workerJobID, pipelineruns.StatusWorkerQueued); err != nil {
+				pipelineLog("FORWARD: failed to stamp velox_job_id run=%s: %v", pr.ID, err)
+			} else {
+				pr.Status = pipelineruns.StatusWorkerQueued
+			}
+		}
+	}
+
+	// Update the run with the result JSON for audit.
+	if resultJSON, mErr := json.Marshal(result); mErr == nil {
+		if err := h.store.UpdatePipelineRunResult(ctx, pr.ID, string(resultJSON)); err != nil {
+			pipelineLog("FORWARD: failed to stamp result_json run=%s: %v", pr.ID, err)
+		}
+	}
+
+	return forwarded, forwardErr
 }
 
 // firstStringResolver reads the first non-empty string value from a map

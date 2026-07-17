@@ -95,6 +95,8 @@ log "validate-canonical-payload (Step 8/8 closure — semantic validator over op
 (cd "$REPO_ROOT/shared" && go run ./contract/cmd/validate-canonical-payload "$REPO_ROOT")
 log "check-dsn-busy-timeout (Blocco 5 / B1 follow-up)"
 ./scripts/ci/check-dsn-busy-timeout.sh
+log "check-forwarding-resolver-only (Area 3 architectural invariant)"
+./scripts/ci/check-forwarding-resolver-only.sh
 
 # ── 2. Go modules: gofmt + vet + test (-race) ──────────────────────────────
 #

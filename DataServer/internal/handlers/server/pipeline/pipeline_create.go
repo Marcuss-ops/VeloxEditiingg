@@ -256,39 +256,7 @@ func (h *Handlers) CreatePipelineRun() gin.HandlerFunc {
 
 		// ── Sync forward if the result is already complete ────────────
 		if enqueue.ShouldForwardPipelineResult(workerPayload) {
-			pipelineLog("CREATE: result complete — forwarding to Velox workers (sync) run=%s", pr.ID)
-			forwarded, forwardErr := h.forwardPipelineResultToWorker(c.Request.Context(), workerPayload)
-			if forwardErr != nil {
-				pipelineLog("CREATE: sync forward FAILED run=%s: %v", pr.ID, forwardErr)
-				// Non-fatal: the result is complete but forwarding failed.
-				// The reconciler (Area 3) will pick it up. We still
-				// return 202 so the client can poll.
-				if err := h.store.UpdatePipelineRunStatus(c.Request.Context(), pr.ID,
-					pipelineruns.StatusForwarding, "sync forward failed"); err != nil {
-					pipelineLog("CREATE: failed to mark FORWARDING after sync forward failure run=%s: %v", pr.ID, err)
-				}
-			} else if forwarded != nil {
-				workerJobID, _ := forwarded["job_id"].(string)
-				pipelineLog("CREATE: sync forward SUCCESS run=%s worker_job=%s", pr.ID, workerJobID)
-				if workerJobID != "" {
-					// Stamp velox_job_id + advance to WORKER_QUEUED.
-					// forwarding_id is left empty in the sync path —
-					// Resolver.Resolve creates the forwarding row
-					// internally but does not surface it back here.
-					// The reconciler (Area 3) will backfill it.
-					pr.VeloxJobID = workerJobID
-					if err := h.store.UpdatePipelineRunVeloxJob(c.Request.Context(), pr.ID,
-						workerJobID, pipelineruns.StatusWorkerQueued); err != nil {
-						pipelineLog("CREATE: failed to stamp velox_job_id run=%s: %v", pr.ID, err)
-					}
-				}
-			}
-			// Update the run with the result JSON for audit.
-			if resultJSON, mErr := json.Marshal(result); mErr == nil {
-				if err := h.store.UpdatePipelineRunResult(c.Request.Context(), pr.ID, string(resultJSON)); err != nil {
-					pipelineLog("CREATE: failed to stamp result_json run=%s: %v", pr.ID, err)
-				}
-			}
+			forwarded, _ := h.syncForwardResult(c.Request.Context(), pr, result, workerPayload)
 			c.JSON(http.StatusAccepted, buildCreateResponseFromSyncForward(pr, forwarded))
 			return
 		}
@@ -412,7 +380,7 @@ func buildCreateResponseFromSyncForward(pr *pipelineruns.PipelineRun, forwarded 
 		"ok":              true,
 		"pipeline_run_id": pr.ID,
 		"request_id":      pr.RequestID,
-		"status":          string(pipelineruns.StatusWorkerQueued),
+		"status":          string(pr.Status),
 		"status_url":      "/api/v1/pipeline-runs/" + pr.ID,
 		"is_duplicate":    false,
 	}
