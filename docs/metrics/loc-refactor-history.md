@@ -466,17 +466,17 @@ Canonical 8-file inventory (post-audit):
   -  ----                                                          ------       ----       ------
   1  scripts/ci/check-size-band-policy.sh                          9d111c4    ~8.0 KB    NEW (recovery, audited 2026-07-17)
   2  scripts/ci/check-size-band-policy.known-violations            9d111c4    ~4.0 KB    NEW (recovery, 50-path baseline / grandfathering)
-  3  scripts/ci/check-architecture.sh                             77868b3      ~11.1 KB   rule #11 wiring; calls file #1
-  4  .github/workflows/ci.yml                                     77868b3      ~6.4 KB    size-band-policy job (\`if: always()\`); calls file #1
+  3  scripts/ci/check-architecture.sh                                   ~11.1 KB   rule #11 wiring; calls file #1
+  4  .github/workflows/ci.yml                                           ~6.4 KB    size-band-policy job (\`if: always()\`); calls file #1
   5  docs/CHANGELOG.md                                            8074890      ~7.1 KB    manifest normalisation + Forward-state restructured
-  6  cmd/archcheck/scan/percheck_voiceover_alias_ban_test.go       77868b3      ~42.1 KB   artifact: \`// size-benchmark: 42-42,2 KB\`
-  7  internal/application/images/smoke_test.go                    77868b3      ~43.0 KB   artifact: \`// size-benchmark: 42,2-45 KB\`
-  8  tests/operational/artlist_live_e2e_verify.sh                 77868b3      ~42.1 KB   artifact: \`# size-benchmark: 42-42,2 KB\` (post-shebang)
+  6  cmd/archcheck/scan/percheck_voiceover_alias_ban_test.go             ~42.1 KB   artifact: \`// size-benchmark: 42-42,2 KB\`
+  7  internal/application/images/smoke_test.go                          ~43.0 KB   artifact: \`// size-benchmark: 42,2-45 KB\`
+  8  tests/operational/artlist_live_e2e_verify.sh                       ~42.1 KB   artifact: \`# size-benchmark: 42-42,2 KB\` (post-shebang)
 \`\`\`
 
 \\**Audit findings.\`
 
-* Files #3-#8 landed cleanly on main across the 8074890 -> 77868b3 cycle.
+* Files #3-#8 landed cleanly on main across the 8074890 ->  cycle.
 * Files #1-#2 were held in working tree following a botched amend cycle in
   earlier sessions and never landed on main despite CI depending on them.
 * Per the discrete-PR clause (\`NEVER amend 0ab3e4c / be1faf0 / 66ec2be / ac5d0f6\`),
