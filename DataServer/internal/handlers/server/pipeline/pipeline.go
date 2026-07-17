@@ -31,33 +31,25 @@
 //	                     response envelope + voiceover-asset error
 //	                     mapping.
 //	routes.go          — h.RegisterRoutes() Gin mount surface for all
-//	                     pipeline endpoints (script-simple,
-//	                     script-multiple, /api/remote/pipeline/* group
-//	                     with optional adminAuth middleware, and the
-//	                     /api/v1/pipeline-runs family).
-//	pipeline.go (this) — package-internal [PIPELINE] logger,
-//	                     Resolver-based forwardPipelineResultToWorker
-//	                     helper, map-key probe firstStringResolver.
-//	pipeline_lifecycle.go  — Status / Cancel / isTerminalStatus.
-//	pipeline_create.go     — CreatePipelineRun + build helpers.
-//	pipeline_run_status.go — PipelineRunStatus + projection.
-//	pipeline_run_actions.go — lookupPipelineRun + cancel/retry/
-//	                     timeline/artifacts/deliveries.
-//	pipeline_run_validator.go — ValidateCreateRequest.
+//	                     pipeline endpoints.
+//	forwarding.go      — forwardPipelineResultToWorker + firstStringResolver.
+//	pipeline.go (this) — package doc + package-internal [PIPELINE]
+//	                     logger (pipelineLog). Keeping the logger
+//	                     here means every other sibling file can
+//	                     call it via package-internal visibility
+//	                     without owning the helper itself.
+//	pipeline_create.go     — CreatePipelineRun handler + buildRemotePayload
+//	                         (request-shape mapper).
+//	pipeline_run_status.go — PipelineRunStatus handler.
+//	pipeline_run_actions.go — lookupPipelineRun + CancelPipelineRun +
+//	                         RetryPipelineRun + PipelineRunTimeline +
+//	                         PipelineRunArtifacts + PipelineRunDeliveries.
+//	pipeline_run_validator.go — ValidateCreateRequest + ValidationError.
 //	pipeline_scripts.go    — ScriptSimple / ScriptBatch.
-//
-// Forwards pipeline.go → forwarding.go is the next planned step; until
-// then forwardPipelineResultToWorker + firstStringResolver stay co-
-// located in this file so the package compiles.
 package pipeline
 
 import (
-	"context"
-	"fmt"
 	"log"
-	"strings"
-
-	"velox-server/internal/creatorflow"
 )
 
 // pipelineLog is the package-internal structured-log helper. Kept
@@ -66,63 +58,4 @@ import (
 // remains uniform across all pipeline-installed routes.
 func pipelineLog(format string, args ...interface{}) {
 	log.Printf("[PIPELINE] "+format, args...)
-}
-
-// forwardPipelineResultToWorker is the package-internal method that
-// turns a remote-engine result map into a Velox job payload and
-// enqueues it through the canonical Resolver.Resolve entry point.
-//
-// Blocco 5 of the Verdetto (P1 #11): this method delegates to the same
-// Resolver the CreatorForwardingRunner uses, so the handler's sync
-// forward path and the runner's async poll-and-forward path converge
-// on the same (job_id, forwarding_id) for the same input. The legacy
-// creatorflow.Service forwarder fallback was removed in Blocco 4 step
-// #3 — composition-root callers must wire a non-nil Resolver.
-func (h *Handlers) forwardPipelineResultToWorker(ctx context.Context, result map[string]interface{}) (map[string]interface{}, error) {
-	pipelineLog("FORWARD: building worker payload...")
-
-	if h.resolver == nil {
-		// Fail loud: this means cmd/server wiring is broken (the
-		// composition root unconditionally builds the Resolver
-		// before constructing Handlers). Hiding it behind a legacy
-		// forwarder fallback was removed in Blocco 4 step #3 because
-		// the forwarder shim was indistinguishable from a
-		// misconfigured Resolver at the URL-rewrite step.
-		return nil, fmt.Errorf("pipeline handler requires a wired resolver (composition root MUST pass creatorflow.Resolver)")
-	}
-
-	out, err := h.resolver.Resolve(ctx, creatorflow.ResolveRequest{
-		ForwardingID:     "", // sync handler path: INSERT PENDING row
-		SourceProvider:   "remote_engine",
-		SourceJobID:      firstStringResolver(result, "job_id", "trace_id", "id"),
-		TargetExecutorID: firstStringResolver(result, "executor_id", "pipeline_id"),
-		Payload:          result,
-	})
-	if err != nil {
-		if err == creatorflow.ErrResolverNotComplete {
-			return nil, nil
-		}
-		pipelineLog("FORWARD: Resolver.Resolve FAILED: %v", err)
-		return nil, err
-	}
-	if out != nil {
-		pipelineLog("FORWARD: enqueued via Resolver job_id=%s forwarding_id=%s",
-			out.JobID, out.ForwardingID)
-		return out.Response, nil
-	}
-	return nil, nil
-}
-
-// firstStringResolver reads the first non-empty string value from a map
-// across the provided keys. Mirrors creatorflow.firstString but lives
-// here so the pipeline package does not need to export the helper.
-func firstStringResolver(m map[string]interface{}, keys ...string) string {
-	for _, key := range keys {
-		if v, ok := m[key]; ok {
-			if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
-				return strings.TrimSpace(s)
-			}
-		}
-	}
-	return ""
 }
