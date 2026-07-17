@@ -11,6 +11,7 @@ import (
 
 	"velox-server/internal/jobs/enqueue"
 	"velox-server/internal/pipelineruns"
+	"velox-server/internal/remoteengine"
 )
 
 // CreatePipelineRunRequest is the typed, versioned API contract for
@@ -228,8 +229,15 @@ func (h *Handlers) CreatePipelineRun() gin.HandlerFunc {
 			return
 		}
 
+		// Area 2: Parse the raw result into the typed DTO and derive
+		// the worker payload. The remote result must NOT be passed
+		// raw to the worker — it must first be converted to a typed
+		// RemotePipelineResult.
+		dto, _ := remoteengine.ParseRemotePipelineResult(result)
+		workerPayload := dto.ToWorkerPayload()
+
 		// ── Extract remote job id ─────────────────────────────────────
-		jobID := firstStringResolver(result, "job_id", "trace_id", "id")
+		jobID := firstStringResolver(workerPayload, "job_id", "trace_id", "id")
 		status := firstStringResolver(result, "status")
 		if jobID != "" {
 			pipelineLog("CREATE: remote response run=%s job_id=%s status=%s",
@@ -247,9 +255,9 @@ func (h *Handlers) CreatePipelineRun() gin.HandlerFunc {
 		}
 
 		// ── Sync forward if the result is already complete ────────────
-		if enqueue.ShouldForwardPipelineResult(result) {
+		if enqueue.ShouldForwardPipelineResult(workerPayload) {
 			pipelineLog("CREATE: result complete — forwarding to Velox workers (sync) run=%s", pr.ID)
-			forwarded, forwardErr := h.forwardPipelineResultToWorker(c.Request.Context(), result)
+			forwarded, forwardErr := h.forwardPipelineResultToWorker(c.Request.Context(), workerPayload)
 			if forwardErr != nil {
 				pipelineLog("CREATE: sync forward FAILED run=%s: %v", pr.ID, forwardErr)
 				// Non-fatal: the result is complete but forwarding failed.
@@ -304,7 +312,7 @@ func (h *Handlers) CreatePipelineRun() gin.HandlerFunc {
 				return
 			}
 
-			targetExecutor := firstStringResolver(result, "executor_id", "pipeline_id")
+			targetExecutor := firstStringResolver(workerPayload, "executor_id", "pipeline_id")
 			forwarding, persistErr := h.resolver.PersistPendingRemoteForwarding(
 				c.Request.Context(), "remote_engine", jobID, targetExecutor,
 			)

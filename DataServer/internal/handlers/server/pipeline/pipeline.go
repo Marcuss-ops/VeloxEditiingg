@@ -271,7 +271,14 @@ func (h *Handlers) Generate() gin.HandlerFunc {
 			return
 		}
 
-		jobID, _ := result["job_id"].(string)
+		// Area 2: Parse the raw result into the typed DTO and derive
+		// the worker payload. The remote result must NOT be passed
+		// raw to the worker — it must first be converted to a typed
+		// RemotePipelineResult.
+		dto, _ := remoteengine.ParseRemotePipelineResult(result)
+		workerPayload := dto.ToWorkerPayload()
+
+		jobID, _ := workerPayload["job_id"].(string)
 		status, _ := result["status"].(string)
 		if jobID != "" {
 			pipelineLog("REMOTE: response job_id=%s status=%s", jobID, status)
@@ -286,9 +293,9 @@ func (h *Handlers) Generate() gin.HandlerFunc {
 
 		// Try synchronous forward if the remote already returned a
 		// complete result.
-		if enqueue.ShouldForwardPipelineResult(result) {
+		if enqueue.ShouldForwardPipelineResult(workerPayload) {
 			pipelineLog("FORWARD: result complete — forwarding to Velox workers (sync)")
-			if forwarded, forwardErr := h.forwardPipelineResultToWorker(c.Request.Context(), result); forwardErr != nil {
+			if forwarded, forwardErr := h.forwardPipelineResultToWorker(c.Request.Context(), workerPayload); forwardErr != nil {
 				if assetErr, ok := voiceoverassets.AsAcquisitionError(forwardErr); ok {
 					c.JSON(http.StatusUnprocessableEntity, gin.H{
 						"ok":          false,
@@ -318,7 +325,7 @@ func (h *Handlers) Generate() gin.HandlerFunc {
 				return
 			}
 
-			targetExecutor := firstStringResolver(result, "executor_id", "pipeline_id")
+			targetExecutor := firstStringResolver(workerPayload, "executor_id", "pipeline_id")
 			forwarding, persistErr := h.resolver.PersistPendingRemoteForwarding(
 				c.Request.Context(), "remote_engine", jobID, targetExecutor,
 			)

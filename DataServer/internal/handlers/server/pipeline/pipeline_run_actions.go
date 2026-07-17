@@ -13,6 +13,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"velox-server/internal/pipelineruns"
+	"velox-server/internal/remoteengine"
 	"velox-server/internal/store"
 )
 
@@ -262,7 +263,13 @@ func (h *Handlers) RetryPipelineRun() gin.HandlerFunc {
 			return
 		}
 
-		jobID := firstStringResolver(result, "job_id", "trace_id", "id")
+		// Area 2: Parse the raw result into the typed DTO and derive
+		// the worker payload. The remote result must NOT be passed
+		// raw to the worker.
+		dto, _ := remoteengine.ParseRemotePipelineResult(result)
+		workerPayload := dto.ToWorkerPayload()
+
+		jobID := firstStringResolver(workerPayload, "job_id", "trace_id", "id")
 		if jobID != "" {
 			pr.RemoteJobID = jobID
 			if err := h.store.UpdatePipelineRunRemoteJob(ctx, pr.ID, "remote_engine", jobID); err != nil {
@@ -300,7 +307,7 @@ func (h *Handlers) RetryPipelineRun() gin.HandlerFunc {
 			return
 		}
 
-		targetExecutor := firstStringResolver(result, "executor_id", "pipeline_id")
+		targetExecutor := firstStringResolver(workerPayload, "executor_id", "pipeline_id")
 		forwarding, persistErr := h.resolver.PersistPendingRemoteForwarding(
 			ctx, "remote_engine", jobID, targetExecutor,
 		)

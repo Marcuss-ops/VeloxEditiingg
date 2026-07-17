@@ -459,9 +459,17 @@ func (c *Client) StartPipeline(ctx context.Context, payload map[string]interface
 		return nil, ClassifyDecodeError(err, string(respBody))
 	}
 
-	jobID, _ := result["job_id"].(string)
-	status, _ := result["status"].(string)
-	log.Printf("[CLIENT] StartPipeline OK job_id=%s status=%s elapsed=%s", jobID, status, elapsed)
+	// Area 2: Validate the initial response — the remote engine must
+	// return at least a job_id (with fallback to trace_id/id) and a
+	// known status (queued, running, completed, failed, cancelled).
+	// A contract violation is a PERMANENT error — no retry.
+	initial, valErr := ValidateInitialResponse(result)
+	if valErr != nil {
+		log.Printf("[CLIENT] StartPipeline CONTRACT VIOLATION after %s: %s", elapsed, valErr)
+		return nil, valErr
+	}
+
+	log.Printf("[CLIENT] StartPipeline OK job_id=%s status=%s elapsed=%s", initial.JobID, initial.Status, elapsed)
 
 	return result, nil
 }

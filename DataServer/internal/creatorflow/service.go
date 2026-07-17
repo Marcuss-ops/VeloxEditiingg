@@ -113,17 +113,23 @@ func (s *Service) StartOrPersistForwarding(ctx context.Context, rawPayload map[s
 	}
 
 	if enqueue.ShouldForwardPipelineResult(creatorResult) {
+		// Area 2: Parse the raw result into the typed DTO and derive
+		// the worker payload. The remote result must NOT be passed
+		// raw to the worker.
+		dto, _ := remoteengine.ParseRemotePipelineResult(creatorResult)
+		workerPayload := dto.ToWorkerPayload()
+
 		// PR-forwarding-deterministic-id: stamp the forwarding key into
 		// the payload so Resolver.Resolve derives the canonical job_id
 		// (and the UNIQUE constraint on creator_forwardings converges
 		// on one row across retries).
-		sourceJobID := firstString(creatorResult, "job_id", "trace_id", "id")
-		targetExecID := firstString(creatorResult, "executor_id", "pipeline_id")
+		sourceJobID := firstString(workerPayload, "job_id", "trace_id", "id")
+		targetExecID := firstString(workerPayload, "executor_id", "pipeline_id")
 		if targetExecID == "" {
 			targetExecID = "scene.composite.v1"
 		}
 		fwdKey := routing.FormatForwardingKey("remote_engine", sourceJobID, targetExecID).String()
-		creatorResult[routing.KeyForwardingKey] = fwdKey
+		workerPayload[routing.KeyForwardingKey] = fwdKey
 
 		// Build a one-shot Resolver from this Service's wiring graph and
 		// delegate. Resolver.Resolve owns idempotency pre-check,
@@ -139,7 +145,7 @@ func (s *Service) StartOrPersistForwarding(ctx context.Context, rawPayload map[s
 			SourceProvider:   "remote_engine",
 			SourceJobID:      sourceJobID,
 			TargetExecutorID: targetExecID,
-			Payload:          creatorResult,
+			Payload:          workerPayload,
 		})
 		if err != nil && err != ErrResolverNotComplete {
 			return nil, false, err
