@@ -470,6 +470,11 @@ func classifyErrorCode(err error) string {
 // hydrateDestination reads delivery_destinations by id and converts the
 // internal store type to the deliveries package's Destination shape that
 // provider adapters consume.
+//
+// Opaque-mode: the legacy YouTube-specific fields (AccountID, ChannelID,
+// Language) are gone from the typed Destination. `SocialDestinationID`
+// is the opaque identifier resolved by the external Social API; the
+// runner propagates it verbatim from the store row.
 func (r *DeliveryRunner) hydrateDestination(ctx context.Context, destID string) (*Destination, error) {
 	d, err := r.dbStore.GetDeliveryDestination(ctx, destID)
 	if err != nil {
@@ -483,16 +488,14 @@ func (r *DeliveryRunner) hydrateDestination(ctx context.Context, destID string) 
 		cfg = "{}"
 	}
 	return &Destination{
-		DestinationID:     d.DestinationID,
-		Provider:          d.Provider,
-		AccountID:         d.AccountID,
-		FolderID:          d.FolderID,
-		ChannelID:         d.ChannelID,
-		Language:          d.Language,
-		Name:              d.Name,
-		Enabled:           d.Enabled,
-		ConfigurationJSON: d.ConfigurationJSON,
-		Configuration:     []byte(cfg),
+		DestinationID:       d.DestinationID,
+		Provider:            d.Provider,
+		SocialDestinationID: d.SocialDestinationID,
+		FolderID:            d.FolderID,
+		Name:                d.Name,
+		Enabled:             d.Enabled,
+		ConfigurationJSON:   d.ConfigurationJSON,
+		Configuration:       []byte(cfg),
 	}, nil
 }
 

@@ -116,7 +116,13 @@ func (s *SocialGatewayProvider) buildRequest(artifact *store.Artifact, destinati
 		IdempotencyKey:     idempotencyKey,
 		Platform:           platform,
 		AccountID:          accountID,
-		ChannelID:          destination.ChannelID,
+		// ChannelID is the YouTube-specific semantic ID resolved by the
+		// external Social API from SocialDestinationID. Velox never
+		// owned this field; in opaque-mode Destination drops it
+		// entirely. Residuo 3 will remove the ChannelID field from the
+		// socialclient request shape itself; for now it is set to the
+		// empty string so `omitempty` drops it from the wire JSON.
+		ChannelID: "",
 
 		Artifact: socialclient.ArtifactPayload{
 			ArtifactID:  artifact.ID,

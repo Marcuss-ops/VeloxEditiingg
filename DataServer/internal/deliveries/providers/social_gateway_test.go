@@ -63,12 +63,16 @@ func sampleArtifact() *store.Artifact {
 	return &store.Artifact{ID: "art-1", SHA256: "abc", SizeBytes: 123, MimeType: "video/mp4"}
 }
 
+// sampleDestination returns an opaque-mode Destination with the
+// SocialDestinationID set so the provider can resolve account + channel
+// server-side via the Social API. The legacy `channel_id` field is
+// gone from the typed struct (YouTube→Social closure).
 func sampleDestination() *deliveries.Destination {
 	return &deliveries.Destination{
-		DestinationID:     "dest-1",
+		DestinationID:        "dest-1",
 		DeliveryMetadataJSON: `{"title":"hello"}`,
 		ConfigurationJSON:    `{"platform":"youtube","account_id":"acc_1"}`,
-		ChannelID:            "UC_chan_1",
+		SocialDestinationID:  "social_dest_amish_youtube",
 	}
 }
 

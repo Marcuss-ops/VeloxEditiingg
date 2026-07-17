@@ -376,12 +376,15 @@ func newRegistryWithSocialProvider(t *testing.T, client *socialclient.Client) (*
 }
 
 // sampleDestination mirrors the deliveries package's Destination shape.
+// Opaque-mode (Residuo 2 of the YouTube→Social closure): ChannelID is gone
+// from the typed Destination; SocialDestinationID is the identifier the
+// social_repo resolves server-side.
 func sampleDestination() *deliveries.Destination {
 	return &deliveries.Destination{
 		DestinationID:        "velox-dest-1",
 		DeliveryMetadataJSON: `{"title":"integration test"}`,
 		ConfigurationJSON:    `{"platform":"youtube","account_id":"acc_integration"}`,
-		ChannelID:            "UC_integration_chan",
+		SocialDestinationID:  "social_dest_integration_youtube",
 	}
 }
 

@@ -140,16 +140,22 @@ type Provider interface {
 
 // Destination is the typed view of a delivery_destinations row.
 //
+// Opaque-mode (Residuo 2 of the YouTube→Social closure): the model no
+// longer carries the YouTube-specific fields `AccountID`, `ChannelID`,
+// `Language`. They are owned exclusively by the external Social API
+// repository, which resolves account + channel + language internally
+// from the opaque `SocialDestinationID`. `Provider` and
+// `ConfigurationJSON` are kept as the operator-facing knobs (machine
+// name + JSON blob forwarded verbatim to the social_repo).
+//
 // `Configuration` is the JSON blob deserialized into a typed structure;
 // adapters can re-marshal it via the embedded raw if they need simple
 // field access without a dedicated struct.
 type Destination struct {
 	DestinationID        string
 	Provider             string
-	AccountID            string
+	SocialDestinationID  string
 	FolderID             string
-	ChannelID            string
-	Language             string
 	Name                 string
 	Enabled              bool
 	Configuration        []byte

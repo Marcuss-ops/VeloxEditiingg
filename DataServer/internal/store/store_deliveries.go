@@ -25,18 +25,25 @@ import (
 )
 
 // DeliveryDestination is the typed view of a delivery_destinations row.
+//
+// Opaque-mode (Residuo 2 of the YouTube→Social closure): the legacy
+// YouTube-specific fields `AccountID`, `ChannelID`, and `Language`
+// have been removed from the typed struct because Velox no longer
+// owns those concepts. The opaque `SocialDestinationID` resolves to
+// account + channel + language server-side via the external Social
+// API. The column `social_destination_id` will be added to the
+// `delivery_destinations` table by the follow-up store commit (Commit 2).
+// Until the migration lands the field stays zero-value.
 type DeliveryDestination struct {
-	DestinationID     string `json:"destination_id"`
-	Provider          string `json:"provider"`
-	AccountID         string `json:"account_id,omitempty"`
-	FolderID          string `json:"folder_id,omitempty"`
-	ChannelID         string `json:"channel_id,omitempty"`
-	Language          string `json:"language,omitempty"`
-	Name              string `json:"name"`
-	Enabled           bool   `json:"enabled"`
-	ConfigurationJSON string `json:"configuration_json"`
-	CreatedAt         string `json:"created_at"`
-	UpdatedAt         string `json:"updated_at"`
+	DestinationID       string `json:"destination_id"`
+	Provider            string `json:"provider"`
+	SocialDestinationID string `json:"social_destination_id,omitempty"`
+	FolderID            string `json:"folder_id,omitempty"`
+	Name                string `json:"name"`
+	Enabled             bool   `json:"enabled"`
+	ConfigurationJSON   string `json:"configuration_json"`
+	CreatedAt           string `json:"created_at"`
+	UpdatedAt           string `json:"updated_at"`
 }
 
 // JobDelivery is the per-(artifact, destination) join row.
@@ -138,12 +145,11 @@ func (s *SQLiteStore) InsertDeliveryDestination(dest *DeliveryDestination) error
 	}
 	_, err := s.db.ExecContext(context.Background(),
 		`INSERT OR IGNORE INTO delivery_destinations
-		 (destination_id, provider, account_id, folder_id, channel_id, language, name,
-		  enabled, configuration_json, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	 (destination_id, provider, folder_id, name,
+	  enabled, configuration_json, created_at, updated_at)
+	 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		dest.DestinationID, dest.Provider,
-		nullIfEmpty(dest.AccountID), nullIfEmpty(dest.FolderID),
-		nullIfEmpty(dest.ChannelID), nullIfEmpty(dest.Language),
+		nullIfEmpty(dest.FolderID),
 		dest.Name, enabled, dest.ConfigurationJSON,
 		dest.CreatedAt, dest.UpdatedAt,
 	)
@@ -152,12 +158,17 @@ func (s *SQLiteStore) InsertDeliveryDestination(dest *DeliveryDestination) error
 
 // ListDeliveryDestinations returns all enabled destinations, optionally
 // filtered by provider. Returns at most `limit` rows (zero means default).
+//
+// Opaque-mode SQL: account_id, channel_id, language columns are dropped
+// (their column drop happens in the store commit / migration 091).
+// social_destination_id is NOT yet selected here \u2014 the column is added
+// by the follow-up store commit.
 func (s *SQLiteStore) ListDeliveryDestinations(provider string, limit int) ([]DeliveryDestination, error) {
 	if limit <= 0 {
 		limit = 200
 	}
-	query := `SELECT destination_id, provider, COALESCE(account_id,''), COALESCE(folder_id,''),
-	                 COALESCE(channel_id,''), COALESCE(language,''), COALESCE(name,''),
+	query := `SELECT destination_id, provider, COALESCE(folder_id,''),
+	                 COALESCE(name,''),
 	                 enabled, COALESCE(configuration_json,''),
 	                 created_at, updated_at
 	          FROM delivery_destinations`
@@ -180,8 +191,8 @@ func (s *SQLiteStore) ListDeliveryDestinations(provider string, limit int) ([]De
 	for rows.Next() {
 		var d DeliveryDestination
 		var enabledInt int
-		if err := rows.Scan(&d.DestinationID, &d.Provider, &d.AccountID, &d.FolderID,
-			&d.ChannelID, &d.Language, &d.Name,
+		if err := rows.Scan(&d.DestinationID, &d.Provider, &d.FolderID,
+			&d.Name,
 			&enabledInt, &d.ConfigurationJSON,
 			&d.CreatedAt, &d.UpdatedAt); err != nil {
 			continue
@@ -194,17 +205,21 @@ func (s *SQLiteStore) ListDeliveryDestinations(provider string, limit int) ([]De
 
 // GetDeliveryDestination returns a single destination by id, or
 // ErrDeliveryNoRow when missing (sql.ErrNoRows is normalized).
+//
+// Opaque-mode SQL (see ListDeliveryDestinations comment): the column
+// social_destination_id will be selected here once the store commit
+// adds it (migration 091).
 func (s *SQLiteStore) GetDeliveryDestination(ctx context.Context, destID string) (*DeliveryDestination, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT destination_id, provider, COALESCE(account_id,''), COALESCE(folder_id,''),
-		        COALESCE(channel_id,''), COALESCE(language,''), COALESCE(name,''),
+		`SELECT destination_id, provider, COALESCE(folder_id,''),
+		        COALESCE(name,''),
 		        enabled, COALESCE(configuration_json,''),
 		        created_at, updated_at
 		 FROM delivery_destinations WHERE destination_id = ?`, destID)
 	var d DeliveryDestination
 	var enabledInt int
-	err := row.Scan(&d.DestinationID, &d.Provider, &d.AccountID, &d.FolderID,
-		&d.ChannelID, &d.Language, &d.Name,
+	err := row.Scan(&d.DestinationID, &d.Provider, &d.FolderID,
+		&d.Name,
 		&enabledInt, &d.ConfigurationJSON,
 		&d.CreatedAt, &d.UpdatedAt)
 	if err == sql.ErrNoRows {
