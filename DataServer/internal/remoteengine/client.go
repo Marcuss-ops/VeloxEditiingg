@@ -70,34 +70,49 @@ func (c *Client) IsConfigured() bool {
 
 // ── Shared retry helper ──────────────────────────────────────────────────────
 
-// withRetry executes fn up to c.config.Retries times. If fn returns a
-// *RemoteError that is permanent (VALIDATION, AUTHENTICATION, PERMANENT),
-// the loop breaks immediately. If the error is retryable (RATE_LIMIT,
-// TRANSIENT, MALFORMED_RESPONSE), the loop applies backoff and retries.
+// withRetry executes fn up to MaxRetries times. The retry policy is:
+//
+//   - VALIDATION, AUTHENTICATION, PERMANENT → break immediately (no retry).
+//   - RATE_LIMIT, TRANSIENT → retry with backoff up to MaxRetries.
+//   - MALFORMED_RESPONSE → retry up to MaxMalformedRetries, then promote
+//     to PERMANENT (limited retry, then permanent).
 //
 // The backoff schedule follows RetrySchedule (1s, 5s, 15s, 30s, 60s, 5m)
 // with ±20% jitter. For RATE_LIMIT errors, RetryAfter is honoured if
 // the remote service provided it.
 func (c *Client) withRetry(ctx context.Context, fn func(attempt int) error) error {
+	policy := DefaultRetryPolicy(c.config.Retries)
 	var lastErr error
+	malformedAttempts := 0
 
-	for attempt := 0; attempt < c.config.Retries; attempt++ {
+	for attempt := 0; attempt < policy.MaxRetries; attempt++ {
 		lastErr = fn(attempt)
 		if lastErr == nil {
 			return nil
 		}
 
-		// If it's a typed RemoteError, use its classification.
+		// Track malformed-specific attempts.
 		var re *RemoteError
-		if errors.As(lastErr, &re) {
-			if re.IsPermanent() {
-				log.Printf("Remote engine permanent error (attempt %d/%d): %s", attempt+1, c.config.Retries, re)
-				return lastErr
+		if errors.As(lastErr, &re) && re.Class == RemoteErrorMalformed {
+			malformedAttempts++
+		}
+
+		// Ask the policy whether to stop.
+		var stop bool
+		lastErr, stop = policy.ShouldStop(lastErr, malformedAttempts)
+		if stop {
+			if errors.As(lastErr, &re) {
+				log.Printf("Remote engine stopping (attempt %d/%d): %s", attempt+1, policy.MaxRetries, re)
 			}
-			log.Printf("Remote engine retryable error (attempt %d/%d): %s", attempt+1, c.config.Retries, re)
+			return lastErr
+		}
+
+		// Log the retryable error.
+		if errors.As(lastErr, &re) {
+			log.Printf("Remote engine retryable error (attempt %d/%d, malformed %d/%d): %s",
+				attempt+1, policy.MaxRetries, malformedAttempts, policy.MaxMalformedRetries, re)
 		} else {
-			// Untyped error (should not happen after refactor, but be safe).
-			log.Printf("Remote engine error (attempt %d/%d): %v", attempt+1, c.config.Retries, lastErr)
+			log.Printf("Remote engine error (attempt %d/%d): %v", attempt+1, policy.MaxRetries, lastErr)
 		}
 
 		// Compute backoff.
@@ -107,7 +122,7 @@ func (c *Client) withRetry(ctx context.Context, fn func(attempt int) error) erro
 		}
 		backoff = AddJitter(backoff, int64(attempt)+time.Now().UnixNano())
 
-		if attempt < c.config.Retries-1 {
+		if attempt < policy.MaxRetries-1 {
 			select {
 			case <-ctx.Done():
 				return ctx.Err()

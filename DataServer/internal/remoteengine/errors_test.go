@@ -3,6 +3,7 @@ package remoteengine
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -344,6 +345,253 @@ func TestTruncateBody(t *testing.T) {
 			t.Fatalf("rune count: got %d, want 51", len(runes))
 		}
 	})
+}
+
+// ── RetryPolicy ──────────────────────────────────────────────────────────────
+
+func TestDefaultRetryPolicy(t *testing.T) {
+	p := DefaultRetryPolicy(5)
+	if p.MaxRetries != 5 {
+		t.Fatalf("MaxRetries: got %d, want 5", p.MaxRetries)
+	}
+	if p.MaxMalformedRetries != DefaultMalformedRetryLimit {
+		t.Fatalf("MaxMalformedRetries: got %d, want %d", p.MaxMalformedRetries, DefaultMalformedRetryLimit)
+	}
+
+	// When maxRetries < DefaultMalformedRetryLimit, the malformed limit
+	// is clamped to maxRetries so we never exceed the overall cap.
+	p2 := DefaultRetryPolicy(1)
+	if p2.MaxMalformedRetries != 1 {
+		t.Fatalf("clamped MaxMalformedRetries: got %d, want 1", p2.MaxMalformedRetries)
+	}
+
+	// Zero or negative maxRetries defaults to 3.
+	p3 := DefaultRetryPolicy(0)
+	if p3.MaxRetries != 3 {
+		t.Fatalf("zero MaxRetries: got %d, want 3", p3.MaxRetries)
+	}
+}
+
+func TestRetryPolicy_ShouldStop_Permanent(t *testing.T) {
+	policy := DefaultRetryPolicy(5)
+
+	tests := []RemoteErrorClass{
+		RemoteErrorValidation,
+		RemoteErrorAuthentication,
+		RemoteErrorPermanent,
+	}
+	for _, class := range tests {
+		t.Run(string(class), func(t *testing.T) {
+			err := &RemoteError{Class: class, Message: "test"}
+			got, stop := policy.ShouldStop(err, 0)
+			if !stop {
+				t.Fatal("ShouldStop should return true for permanent errors")
+			}
+			if got != err {
+				t.Fatal("ShouldStop should return the same error for permanent")
+			}
+		})
+	}
+}
+
+func TestRetryPolicy_ShouldStop_Transient(t *testing.T) {
+	policy := DefaultRetryPolicy(5)
+	err := &RemoteError{Class: RemoteErrorTransient, Message: "timeout"}
+	got, stop := policy.ShouldStop(err, 0)
+	if stop {
+		t.Fatal("TRANSIENT should NOT stop")
+	}
+	if got != err {
+		t.Fatal("ShouldStop should return the same error for transient")
+	}
+}
+
+func TestRetryPolicy_ShouldStop_Malformed_LimitedRetry(t *testing.T) {
+	policy := DefaultRetryPolicy(10) // MaxMalformedRetries = 2
+
+	// Simulate a realistic error from ClassifyDecodeError which wraps
+	// ErrMalformedResponse in the Cause chain.
+	err := &RemoteError{
+		Class:   RemoteErrorMalformed,
+		Code:    "DECODE",
+		Message: "bad json",
+		Cause:   fmt.Errorf("%w: %s", ErrMalformedResponse, "unexpected end of JSON"),
+	}
+
+	// Below the limit: keep retrying.
+	got, stop := policy.ShouldStop(err, 0)
+	if stop {
+		t.Fatal("malformed attempt 0 should NOT stop")
+	}
+	got, stop = policy.ShouldStop(err, 1)
+	if stop {
+		t.Fatal("malformed attempt 1 should NOT stop")
+	}
+
+	// At the limit: promote to PERMANENT and stop.
+	got, stop = policy.ShouldStop(err, 2)
+	if !stop {
+		t.Fatal("malformed attempt 2 should STOP")
+	}
+
+	var re *RemoteError
+	if !errors.As(got, &re) {
+		t.Fatalf("promoted error should be *RemoteError, got %T", got)
+	}
+	if re.Class != RemoteErrorPermanent {
+		t.Fatalf("promoted class: got %s, want PERMANENT", re.Class)
+	}
+	if re.Code != "DECODE_RETRY_EXCEEDED" {
+		t.Fatalf("promoted code: got %s, want DECODE_RETRY_EXCEEDED", re.Code)
+	}
+	// The promoted error should wrap ErrMalformedRetryExceeded.
+	if !errors.Is(got, ErrMalformedRetryExceeded) {
+		t.Fatal("promoted error should wrap ErrMalformedRetryExceeded")
+	}
+	// The original cause should still be discoverable.
+	if !errors.Is(got, ErrMalformedResponse) {
+		t.Fatal("promoted error should still wrap ErrMalformedResponse")
+	}
+}
+
+func TestRetryPolicy_ShouldStop_NilError(t *testing.T) {
+	policy := DefaultRetryPolicy(3)
+	got, stop := policy.ShouldStop(nil, 0)
+	if stop {
+		t.Fatal("nil error should NOT stop")
+	}
+	if got != nil {
+		t.Fatalf("nil error should return nil, got %v", got)
+	}
+}
+
+func TestRetryPolicy_ShouldStop_UntypedError(t *testing.T) {
+	policy := DefaultRetryPolicy(3)
+	err := errors.New("some random error")
+	got, stop := policy.ShouldStop(err, 0)
+	if stop {
+		t.Fatal("untyped error should NOT stop (treated as transient)")
+	}
+	if got != err {
+		t.Fatal("ShouldStop should return the same untyped error")
+	}
+}
+
+// ── Integration: withRetry limited-then-permanent for MALFORMED ───────────────
+
+func TestWithRetry_MalformedPromotedAfterLimit(t *testing.T) {
+	// Create a client with Retries=5 but MaxMalformedRetries=2.
+	// The fn always returns a MALFORMED_RESPONSE error.
+	// After 2 malformed attempts, the error should be promoted to PERMANENT.
+	client := NewClient(Config{URL: "http://localhost:0", Retries: 5})
+
+	// Replace the httpClient so we never actually make network calls.
+	// withRetry uses fn, not httpClient, so this is safe.
+
+	callCount := 0
+	err := client.withRetry(context.Background(), func(attempt int) error {
+		callCount++
+		return &RemoteError{
+			Class:   RemoteErrorMalformed,
+			Code:    "DECODE",
+			Message: "truncated json",
+		}
+	})
+
+	// Should have been called exactly MaxMalformedRetries+1 = 3 times
+	// (attempt 0, 1, 2 — on the 3rd call the limit is hit and it stops).
+	// Actually: attempt 0 → malformedAttempts=1, ShouldStop(1) → no
+	//          attempt 1 → malformedAttempts=2, ShouldStop(2) → stop
+	// So 2 calls, then stops.
+	if callCount != 2 {
+		t.Fatalf("callCount: got %d, want 2", callCount)
+	}
+
+	var re *RemoteError
+	if !errors.As(err, &re) {
+		t.Fatalf("final error should be *RemoteError, got %T", err)
+	}
+	if re.Class != RemoteErrorPermanent {
+		t.Fatalf("promoted class: got %s, want PERMANENT", re.Class)
+	}
+	if !errors.Is(err, ErrMalformedRetryExceeded) {
+		t.Fatal("final error should wrap ErrMalformedRetryExceeded")
+	}
+}
+
+func TestWithRetry_PermanentStopsImmediately(t *testing.T) {
+	client := NewClient(Config{URL: "http://localhost:0", Retries: 5})
+
+	callCount := 0
+	err := client.withRetry(context.Background(), func(attempt int) error {
+		callCount++
+		return &RemoteError{
+			Class:   RemoteErrorValidation,
+			Code:    "HTTP_400",
+			Message: "bad request",
+		}
+	})
+
+	if callCount != 1 {
+		t.Fatalf("permanent error should only call fn once, got %d", callCount)
+	}
+
+	var re *RemoteError
+	if !errors.As(err, &re) {
+		t.Fatalf("error should be *RemoteError, got %T", err)
+	}
+	if re.Class != RemoteErrorValidation {
+		t.Fatalf("class: got %s, want VALIDATION", re.Class)
+	}
+}
+
+func TestWithRetry_TransientRetriesUntilSuccess(t *testing.T) {
+	client := NewClient(Config{URL: "http://localhost:0", Retries: 5})
+
+	callCount := 0
+	err := client.withRetry(context.Background(), func(attempt int) error {
+		callCount++
+		if callCount >= 2 {
+			return nil // success on 2nd attempt (1 retry with ~1s backoff)
+		}
+		return &RemoteError{
+			Class:   RemoteErrorTransient,
+			Code:    "HTTP_500",
+			Message: "server error",
+		}
+	})
+
+	if err != nil {
+		t.Fatalf("should succeed after retry, got %v", err)
+	}
+	if callCount != 2 {
+		t.Fatalf("callCount: got %d, want 2", callCount)
+	}
+}
+
+func TestWithRetry_RateLimitRetriesWithRetryAfter(t *testing.T) {
+	client := NewClient(Config{URL: "http://localhost:0", Retries: 3})
+
+	callCount := 0
+	err := client.withRetry(context.Background(), func(attempt int) error {
+		callCount++
+		if callCount >= 2 {
+			return nil
+		}
+		return &RemoteError{
+			Class:      RemoteErrorRateLimit,
+			Code:       "HTTP_429",
+			Message:    "rate limited",
+			RetryAfter: 1 * time.Millisecond, // very short for test speed
+		}
+	})
+
+	if err != nil {
+		t.Fatalf("should succeed after retry, got %v", err)
+	}
+	if callCount != 2 {
+		t.Fatalf("callCount: got %d, want 2", callCount)
+	}
 }
 
 // ── Sentinel errors ──────────────────────────────────────────────────────────

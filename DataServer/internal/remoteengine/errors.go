@@ -245,6 +245,91 @@ func ParseRetryAfter(header string) time.Duration {
 
 // ── Retry policy ─────────────────────────────────────────────────────────────
 
+// DefaultMalformedRetryLimit is the maximum number of retry attempts for
+// MALFORMED_RESPONSE errors before the error is promoted to PERMANENT.
+// The spec says "retry limitato, poi errore permanente" — a smaller limit
+// than general transient retries because a truncated JSON response is
+// unlikely to fix itself after many attempts.
+const DefaultMalformedRetryLimit = 2
+
+// ErrMalformedRetryExceeded is the sentinel wrapped into the Cause chain
+// when a MALFORMED_RESPONSE error is promoted to PERMANENT after
+// exceeding MaxMalformedRetries. Callers can use errors.Is to detect this.
+var ErrMalformedRetryExceeded = errors.New("remote engine: malformed response retry limit exceeded")
+
+// RetryPolicy encapsulates the full retry decision logic for the remote
+// engine client. It is consumed by withRetry and can be overridden in
+// tests via the RetryPolicy field on Client.
+//
+// Fields:
+//   - MaxRetries: overall attempt cap (from Config.Retries).
+//   - MaxMalformedRetries: per-call cap for MALFORMED_RESPONSE errors
+//     before promoting to PERMANENT. Defaults to DefaultMalformedRetryLimit.
+type RetryPolicy struct {
+	MaxRetries          int
+	MaxMalformedRetries int
+}
+
+// DefaultRetryPolicy returns the standard policy derived from the given
+// retry count. MaxMalformedRetries defaults to DefaultMalformedRetryLimit.
+func DefaultRetryPolicy(maxRetries int) RetryPolicy {
+	if maxRetries <= 0 {
+		maxRetries = 3
+	}
+	mr := DefaultMalformedRetryLimit
+	if mr > maxRetries {
+		mr = maxRetries
+	}
+	return RetryPolicy{
+		MaxRetries:          maxRetries,
+		MaxMalformedRetries: mr,
+	}
+}
+
+// ShouldStop returns true if the retry loop should break immediately
+// (no more retries). This is true when:
+//   - The error is permanent (VALIDATION, AUTHENTICATION, PERMANENT).
+//   - The error is MALFORMED_RESPONSE and malformedAttempts has reached
+//     MaxMalformedRetries — in this case the error is promoted to
+//     PERMANENT by wrapping ErrMalformedRetryExceeded into the Cause.
+//
+// Returns the (possibly modified) error and a bool indicating whether
+// the loop should stop.
+func (p RetryPolicy) ShouldStop(err error, malformedAttempts int) (error, bool) {
+	if err == nil {
+		return nil, false
+	}
+
+	var re *RemoteError
+	if !errors.As(err, &re) {
+		// Untyped error: treat as transient, keep retrying.
+		return err, false
+	}
+
+	if re.IsPermanent() {
+		return err, true
+	}
+
+	// MALFORMED_RESPONSE: limited retry, then permanent.
+	if re.Class == RemoteErrorMalformed {
+		if malformedAttempts >= p.MaxMalformedRetries {
+			// Promote to PERMANENT.
+			promoted := &RemoteError{
+				Class:      RemoteErrorPermanent,
+				StatusCode: re.StatusCode,
+				Code:       re.Code + "_RETRY_EXCEEDED",
+				Message:    fmt.Sprintf("malformed response after %d retries: %s", malformedAttempts, re.Message),
+				Body:       re.Body,
+				Cause:      fmt.Errorf("%w: %w", ErrMalformedRetryExceeded, re.Cause),
+			}
+			return promoted, true
+		}
+	}
+
+	// RATE_LIMIT, TRANSIENT: keep retrying.
+	return err, false
+}
+
 // RetrySchedule returns the backoff duration for the given attempt index
 // (0-based). The schedule follows the Area 2 specification:
 //
