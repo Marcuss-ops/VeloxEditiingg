@@ -151,6 +151,8 @@ func TestTaskLeaseReaper_RunTicksUntilContextCancel(t *testing.T) {
 	go func() { done <- r.Run(ctx) }()
 
 	// Let the reaper fire a few times.
+	// 20× physics headroom on 3 ticks at 5ms ticker — flake at 40ms
+	// under CI scheduler starvation (PR main: 0b039f4). Do not undo.
 	time.Sleep(100 * time.Millisecond)
 	cancel()
 
@@ -189,6 +191,8 @@ func TestTaskLeaseReaper_RepoErrorDoesNotKillLoop(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- r.Run(ctx) }()
 
+	// 20× physics headroom on 3 ticks at 5ms ticker — flake at 40ms
+	// under CI scheduler starvation (PR main: 0b039f4). Do not undo.
 	time.Sleep(100 * time.Millisecond)
 	cancel()
 	<-done
