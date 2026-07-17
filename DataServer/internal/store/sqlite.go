@@ -301,7 +301,7 @@ func (s *SQLiteStore) postMigrationAdjustments() error {
 		}
 	}
 
-	// YouTube metrics: ensure calendar_output columns
+	// Calendar output: ensure output result columns
 	if err := s.ensureColumn("calendar_events", "output_video_path", "TEXT"); err != nil {
 		return err
 	}

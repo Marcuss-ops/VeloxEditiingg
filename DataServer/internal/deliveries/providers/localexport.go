@@ -3,7 +3,7 @@
 // LocalExportProvider writes a copy of the artifact into a destination's
 // configured output directory. The run remains local (no external upload),
 // but it IS a real provider: it stamps remote_url with the new local
-// path so the JobViewAssembler can surface it via YouTube/Drive URLs.
+// path so the JobViewAssembler can surface it via Drive/social URLs.
 //
 // Useful for "gray-box" CI environments where external provider credentials
 // are unavailable but end-to-end delivery flow still needs to be exercised.

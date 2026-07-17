@@ -21,10 +21,6 @@ func TestDataLayerAuditorPassesWithCleanStructure(t *testing.T) {
 	os.MkdirAll(bundleDir, 0755)
 	os.WriteFile(filepath.Join(bundleDir, "manifest_v2.json"), []byte(`{}`), 0644)
 
-	// Create YouTube tokens directory (required for audit)
-	ytTokensDir := filepath.Join(secretsDir, "youtube", "tokens")
-	os.MkdirAll(ytTokensDir, 0755)
-
 	// Create legacy archive (allowed)
 	archiveDir := filepath.Join(tmpDir, "legacy_archive", "2026-04-01")
 	os.MkdirAll(archiveDir, 0755)
@@ -102,10 +98,6 @@ func TestDataLayerAuditorAllowsArchivedLegacyFiles(t *testing.T) {
 	bundleDir := filepath.Join(tmpDir, "bundle")
 	os.MkdirAll(bundleDir, 0755)
 	os.WriteFile(filepath.Join(bundleDir, "manifest_v2.json"), []byte(`{}`), 0644)
-
-	// Create YouTube tokens directory (required for audit)
-	ytTokensDir := filepath.Join(secretsDir, "youtube", "tokens")
-	os.MkdirAll(ytTokensDir, 0755)
 
 	// Create legacy ONLY in archive (should pass)
 	archiveDir := filepath.Join(tmpDir, "legacy_archive", "2026-04-01")
@@ -497,27 +489,12 @@ func TestAudit_WarningCount(t *testing.T) {
 	secretsDir := filepath.Join(tmpDir, "secrets")
 	os.MkdirAll(secretsDir, 0755)
 
-	// Create YouTube tokens directory to avoid warnings from checkPrimaryFiles
-	ytTokensDir := filepath.Join(secretsDir, "youtube", "tokens")
-	os.MkdirAll(ytTokensDir, 0755)
-
-	// Create some tokens
-	os.WriteFile(filepath.Join(ytTokensDir, "account_test.json"), []byte(`{}`), 0644)
-
 	auditor := NewDataLayerAuditor(tmpDir, secretsDir)
 	result := auditor.Audit()
 
-	// Should NOT have errors (no DB warning is expected since checkDatabase warns)
-	// Check that Info contains token info
-	found := false
-	for _, info := range result.Info {
-		if strings.Contains(info, "YouTube tokens") {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Errorf("Expected info about YouTube tokens, got: %v", result.Info)
+	// No domain-specific token directories are checked anymore.
+	if !result.Passed && len(result.Errors) > 0 {
+		t.Errorf("Expected no errors, got: %v", result.Errors)
 	}
 }
 

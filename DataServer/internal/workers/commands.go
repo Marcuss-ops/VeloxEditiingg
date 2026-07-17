@@ -203,7 +203,7 @@ func (tm *TokenManager) GenerateToken(workerID string) string {
 
 // ValidateWorkerCommandToken checks if a worker command token is valid and
 // returns the associated worker ID. Renamed from ValidateToken to eliminate
-// ambiguity with YouTube OAuth token validators.
+// ambiguity with social OAuth token validators.
 func (tm *TokenManager) ValidateWorkerCommandToken(token string) (string, bool) {
 	if tm.store == nil || token == "" {
 		return "", false

@@ -84,7 +84,7 @@ ARG VELOX_UID=10001
 ARG VELOX_GID=10001
 
 # Runtime deps only:
-#   - ca-certificates: outbound TLS to YouTube/Drive/Google APIs.
+#   - ca-certificates: outbound TLS to Drive/Google/social APIs.
 #   - tzdata:          timestamp formatting inside SQLite/datetime layer
 #                      (avoids the docker-default UTC-only behaviour).
 #   - curl:            HEALTHCHECK below (otherwise the probe would

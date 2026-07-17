@@ -1,7 +1,7 @@
 // Package deliveries runner: DB-driven delivery claim + lease + retry.
 //
 // DeliveryRunner is the durable analog of the legacy in-handler goroutines
-// (maybeAutoUploadDrive / maybeAutoUploadYouTube). It claims a batch
+// (maybeAutoUploadDrive). It claims a batch
 // of pending/retryable/expired deliveries per tick via the typed
 // ClaimDeliveries method (atomic UPDATE+RETURNING with lease columns),
 // dispatches to the right provider via the Registry, persists the outcome

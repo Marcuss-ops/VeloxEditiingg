@@ -12,7 +12,7 @@ darkeditor/
 ├── handlers.go            # Core image operation handlers
 ├── routes.go              # Route registration
 ├── background_removal.go  # Background removal integration
-├── youtube.go             # YouTube integration
+├── social.go              # Social platform integration (generic)
 ├── drive.go               # Google Drive integration
 └── processors/            # Image processing utilities
     ├── filters.go         # Filter implementations
@@ -33,7 +33,7 @@ darkeditor/
 | POST | `/dark_editor_v2/export` | Export in specific format |
 | POST | `/dark_editor_v2/generate` | AI image generation (NVIDIA FLUX) |
 | POST | `/dark_editor_v2/api/upscale` | Upscale image |
-| POST | `/dark_editor_v2/api/tools/youtube_grab` | Grab YouTube thumbnail |
+| POST | `/dark_editor_v2/api/tools/thumbnail_grab` | Grab thumbnail from URL |
 
 ### Available Filters
 
@@ -60,17 +60,17 @@ darkeditor/
 | GET | `/dark_editor_v2/api/remove-bg/models` | List available models |
 | GET | `/dark_editor_v2/api/remove-bg/health` | Health check |
 
-### YouTube Integration
+### Social Platform Integration
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| POST | `/dark_editor_v2/api/youtube/thumbnail` | Set video thumbnail |
-| POST | `/dark_editor_v2/api/youtube/thumbnail/upload` | Direct upload thumbnail |
-| GET | `/dark_editor_v2/api/youtube/channels` | List channels |
-| GET | `/dark_editor_v2/api/youtube/channels/:id/validate` | Validate channel |
-| GET | `/dark_editor_v2/api/youtube/videos/:id` | Get video info |
-| GET | `/dark_editor_v2/api/youtube/oauth/start` | Start OAuth flow |
-| GET | `/dark_editor_v2/api/youtube/health` | Health check |
+| POST | `/dark_editor_v2/api/social/thumbnail` | Set video thumbnail |
+| POST | `/dark_editor_v2/api/social/thumbnail/upload` | Direct upload thumbnail |
+| GET | `/dark_editor_v2/api/social/destinations` | List destinations |
+| GET | `/dark_editor_v2/api/social/destinations/:id/validate` | Validate destination |
+| GET | `/dark_editor_v2/api/social/videos/:id` | Get video info |
+| GET | `/dark_editor_v2/api/social/oauth/start` | Start OAuth flow |
+| GET | `/dark_editor_v2/api/social/health` | Health check |
 
 ### Google Drive Integration
 
@@ -128,13 +128,8 @@ handler := darkeditor.NewHandler(cfg)
 // Register routes
 darkeditor.RegisterAPIRoutes(r, handler)
 
-// With integrations
-integrations := &darkeditor.IntegrationHandlers{
-    BackgroundRemoval: bgHandler,
-    YouTube:           ytHandler,
-    Drive:             driveHandler,
-}
-darkeditor.RegisterAPIRoutesWithIntegrations(r, handler, integrations)
+// Register routes
+darkeditor.RegisterAPIRoutes(r, handler)
 ```
 
 ## Dependencies
@@ -143,7 +138,7 @@ darkeditor.RegisterAPIRoutesWithIntegrations(r, handler, integrations)
 - `github.com/disintegration/imaging` - Image processing
 - `github.com/google/uuid` - UUID generation
 - `velox-server/internal/store` - Project storage
-- `velox-server/internal/integrations/youtube` - YouTube API
+- `velox-server/internal/integrations/social` - Social platform API (generic)
 - `velox-server/internal/integrations/drive` - Google Drive API
 
 ## See Also

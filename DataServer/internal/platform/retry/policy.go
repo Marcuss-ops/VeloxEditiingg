@@ -1,6 +1,6 @@
 // Package retry provides a generic retry policy for both server-side and
 // worker-side operations. The Policy struct is shared; Classifier functions
-// are domain-specific (see YouTube upload and worker HTTP client).
+// are domain-specific (see social upload and worker HTTP client).
 //
 // Architecture guide §10: one Policy definition, per-domain Classifier.
 // Do not couple server and worker retry logic into a single package.

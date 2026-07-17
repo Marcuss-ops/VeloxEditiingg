@@ -47,7 +47,7 @@ func ServeSPA(cfg *config.Config) gin.HandlerFunc {
 			return
 		}
 		// SPA history fallback: serve index.html for any path that didn't match a static file,
-		// so client-side routes like /youtube/upload, /youtube_manager, /dashboard work.
+		// so client-side routes like /dashboard work.
 		// Paths with a file extension (e.g. .js, .css) that weren't found are clean 404 —
 		// we abort here instead of c.Next() so the browser sees text/plain, not the
 		// NoRoute handler's application/json which confuses module-loading browsers.

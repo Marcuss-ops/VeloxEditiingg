@@ -28,8 +28,6 @@ func APIExplorer(r *gin.Engine) gin.HandlerFunc {
 				category = "[NAV] Panoramica & Dashboard Principale"
 			} else if strings.Contains(path, "dashboard") || strings.Contains(path, "analytics") {
 				category = "[NAV] Views & Metriche"
-			} else if strings.Contains(path, "youtube") || strings.Contains(path, "channel") {
-				category = "[PLAY] YouTube Manager"
 			} else if strings.HasPrefix(path, "/api/v1/jobs") || path == "/jobs" || strings.HasPrefix(path, "/api/v1/queue") || strings.Contains(path, "job") {
 				category = "[CONFIG] Generazione & Jobs"
 			} else if strings.Contains(path, "worker") {

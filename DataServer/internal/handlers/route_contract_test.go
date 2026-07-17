@@ -1,7 +1,7 @@
 // Package handlers_test — route contract test.
 //
 // Enumerates every HTTP route registered via the module Registry pattern
-// (health, workers, youtube, drive, ansible, livestream, frontend) plus the
+// (health, workers, drive, ansible, livestream, frontend) plus the
 // router.go legacy handlers, and compares the resulting set against a
 // canonical whitelist. Pre-emptively catches:
 //   1. Accidentally registering an endpoint outside the contract
@@ -21,7 +21,6 @@ import (
 	"testing"
 
 	"velox-server/internal/app"
-	"velox-server/internal/handlers/server/api"
 
 	"github.com/gin-gonic/gin"
 )
@@ -47,14 +46,13 @@ func TestRouteContract_AllModules(t *testing.T) {
 
 	registry := app.NewRegistry()
 	registry.Register(app.NewHealthModule())
-	// Workers, YouTube, Drive, Ansible, Livestream, Frontend constructors
+	// Workers, Drive, Ansible, Livestream, Frontend constructors
 	// accept dependencies that vary across configurations; we feed nil
 	// where the test does not exercise the handler body (this test
 	// checks registration, not semantics).
 	// workers.New with nil lifecycle/asset deps only registers the
 	// /api/workers/commands GET fallback in this codebase; the full
 	// workers route scope is verified in per-module integration tests.
-	// youtube.New nil-derefs on cfg; full coverage in module-level integration.
 	// drive.New nil-derefs on cfg; full coverage in module-level integration.
 	// ansible.New panics on nil cfg — module is verified separately in
 	// its own integration suite; we skip it here to keep the
@@ -64,7 +62,7 @@ func TestRouteContract_AllModules(t *testing.T) {
 	registry.RegisterRoutes(r)
 
 	// This test exercises the contract for the modules whose constructors
-	// accept nil-safe dependencies. Other modules (youtube/drive/livestream/
+	// accept nil-safe dependencies. Other modules (drive/livestream/
 	// frontend/ansible/workers-asset) require a real *config.Config and
 	// per-module deps; their route enumeration lives in module-level tests.
 	want := []string{
@@ -116,29 +114,22 @@ func diffRoutes(want, got []string) routeDiff {
 	return diff
 }
 
-// TestRouteContract_PinRequestsRoutes verifies that the canonical
-// `/api/v1/youtube/oauth/callback` route is reachable (the test wiring
-// uses an in-memory recorder; if the route were missing, this test
-// would short-circuit before the recorder).
-func TestRouteContract_PinRequestsRoutes(t *testing.T) {
+// TestRouteContract_HealthRoute verifies that a basic registry route is
+// reachable (the test wiring uses an in-memory recorder).
+func TestRouteContract_HealthRoute(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	auth := api.AdminAuthMiddleware(nil)
-	r.GET("/api/v1/youtube/oauth/callback", func(c *gin.Context) {
-		// We can't meaningfully invoke the actual handler without a full
-		// YouTube service stack, so we trust the registration test above
-		// and only verify here that the route adds to the engine map.
+	r.GET("/api/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"ok": true})
-		auth(c)
 	})
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "/api/v1/youtube/oauth/callback", nil)
+	req := httptest.NewRequest("GET", "/api/health", nil)
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("unexpected: code=%d body=%s", w.Code, w.Body.String())
 	}
 	// Make sure that routesByMethod picks this up correctly.
-	if !reflect.DeepEqual(routesByMethod(t, r), []string{"GET /api/v1/youtube/oauth/callback"}) {
+	if !reflect.DeepEqual(routesByMethod(t, r), []string{"GET /api/health"}) {
 		t.Fatalf("routesByMethod mismatch: %v", routesByMethod(t, r))
 	}
 }

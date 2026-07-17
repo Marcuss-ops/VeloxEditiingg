@@ -150,20 +150,9 @@ func (a *DataLayerAuditor) checkPrimaryFiles(result *DataLayerAuditResult) {
 		}
 	}
 
-	// Check YouTube tokens
-	tokensDir := filepath.Join(a.secretsDir, "youtube", "tokens")
-	if !a.dirExists(tokensDir) {
-		result.Warnings = append(result.Warnings, "YouTube tokens directory missing: "+tokensDir)
-	} else {
-		tokenFiles, _ := os.ReadDir(tokensDir)
-		count := 0
-		for _, f := range tokenFiles {
-			if strings.HasPrefix(f.Name(), "account_") && strings.HasSuffix(f.Name(), ".json") {
-				count++
-			}
-		}
-		result.Info = append(result.Info, fmt.Sprintf("YouTube tokens: %d found", count))
-	}
+	// No domain-specific token directories are checked here anymore.
+	// OAuth secrets live in the Social service; Velox only keeps
+	// generic delivery destinations.
 }
 
 // checkDatabase verifies SQLite database integrity.

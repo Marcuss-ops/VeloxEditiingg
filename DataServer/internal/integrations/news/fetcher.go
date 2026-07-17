@@ -1,4 +1,4 @@
-// Package news provides external news fetching for YouTube manager niches
+// Package news provides external news fetching for content manager niches
 package news
 
 import (

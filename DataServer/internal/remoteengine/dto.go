@@ -148,7 +148,7 @@ type VoiceoverResult struct {
 	Paths []string // local paths or URLs to voiceover audio files
 }
 
-// VideoMetadata holds the YouTube-facing metadata for the finished video.
+// VideoMetadata holds the social-platform metadata for the finished video.
 type VideoMetadata struct {
 	Title         string   `json:"title,omitempty"`
 	Description   string   `json:"description,omitempty"`

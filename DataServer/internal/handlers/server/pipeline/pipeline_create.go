@@ -19,7 +19,7 @@ import (
 //
 // The `generation` block drives the remote script-generation service;
 // `output` describes the desired video format; `video_metadata` carries
-// the YouTube-facing metadata; `delivery_plan` is the list of
+// the social-platform metadata; `delivery_plan` is the list of
 // destinations the finished artifact should be delivered to.
 type CreatePipelineRunRequest struct {
 	IdempotencyKey string             `json:"idempotency_key" binding:"required"`
@@ -50,7 +50,7 @@ type OutputSpec struct {
 	FPS    int    `json:"fps"`
 }
 
-// VideoMetadataSpec carries the YouTube-facing metadata for the
+// VideoMetadataSpec carries the social-platform metadata for the
 // finished video.
 type VideoMetadataSpec struct {
 	Title         string   `json:"title"`

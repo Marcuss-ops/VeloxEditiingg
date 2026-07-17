@@ -29,7 +29,7 @@ if rg -q '\.UpdateJobResult\(' internal --glob '*.go'; then
   VIOLATIONS=1
 fi
 
-# Note: master_video_path / drive_url / youtube_url are still READ in
+# Note: master_video_path / drive_url / social_url are still READ in
 # assembler / query / assembly layers for backward-compatible read-only
 # API responses. The guard only catches direct WRITE mutations to those
 # columns via UPDATE/SET.

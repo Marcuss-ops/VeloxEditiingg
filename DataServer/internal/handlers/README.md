@@ -26,18 +26,18 @@ handlers/
 │   ├── darkeditor/        # Dark Editor - editor immagini AI (16 file)
 │   ├── diagnostics/       # Data layout diagnostics
 │   ├── drive/             # Google Drive handlers
-│   ├── groups/            # YouTube group management
+│   ├── groups/            # Social destination groups (legacy, removed)
 │   ├── health/            # Health check
 │   ├── jobs/              # Job CRUD, submission, normalization
 │   ├── master/            # Create-master (multi-title video)
 │   ├── pipeline/          # Pipeline generazione script
 │   ├── script/            # Script con immagini
 │   ├── video/             # Scene video, clip+stock, smoke test
-│   └── youtube/           # YouTube upload + management (22 file)
+│   └── social/            # Social delivery destinations (generic)
 └── remote/
     ├── ansible/           # Playbook Ansible per deploy
     ├── install/           # Script installazione worker
-    ├── livestream/        # YouTube Live stream management
+    ├── livestream/        # Live stream management (platform-agnostic)
     ├── submission/        # Multi-clip submission management
     └── workers/           # Registrazione, heartbeat, bundle
 ```

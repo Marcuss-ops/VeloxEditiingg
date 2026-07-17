@@ -3,7 +3,7 @@
 // SocialGatewayProvider is a generic, platform-agnostic delivery adapter.
 // It forwards artifact metadata (not the binary) to an external Social
 // Service, which is responsible for the actual upload to the target
-// platform (YouTube, Meta, TikTok, etc.).
+// platform (social networks).
 package providers
 
 import (
