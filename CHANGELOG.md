@@ -246,7 +246,7 @@ ABI-safe-ordered: model → store → validator.
 | --- | --- |
 | `85c10f8` | `refactor(deliveries): drop AccountID/ChannelID/Language from Destination, add SocialDestinationID` |
 | `cab7cc3` | `refactor(store): drop account_id/channel_id/language columns, add social_destination_id` |
-| TBD-COMMIT-3-HASH      | `refactor(deliveries): fail-closed on unmapped destinations + opaque-mode tests` |
+| `2dfaed6` | `refactor(deliveries): fail-closed on unmapped destinations + opaque-mode tests` |
 
 **Verification**:
 
