@@ -30,20 +30,52 @@
 #   * AccountID  — old top-level account reference
 #   * ChannelID  — old top-level channel reference
 #
-# Exclusions (pathspec-level, transparent):
+# Regex anchor (Go-struct-field shape):
+#   `^[[:space:]]+(Platform|AccountID|ChannelID)[[:space:]]+[A-Za-z*]`
+#   Anchors each disjunct to a line-start + whitespace + identifier + whitespace + type
+#   start. This is precisely the position a Go field declaration occupies
+#   inside a `type X struct { ... }` block, AND any line whose struct tag is
+#   `json:"platform"` / `json:"account_id"` / `json:"channel_id"`.
+#   Crucially it does NOT false-positive on:
+#     - Metadata sub-keys (`Metadata: map[string]any{"platform": "tiktok"}`)
+#       which is opaque pass-through, NOT top-level routing plumbing.
+#       Residuo 3 REMOVED Platform/AccountID/ChannelID as wire keys;
+#       Metadata is documented to LEGITIMATELY carry them.
+#     - Identifier suffixes (`LivestreamPlatform`, `PlatformKey`,
+#       `someChannelIDList`) — common in unrelated domains.
+#     - Comments (`// platform-agnostic`) — explanatory prose is allowed.
+#     - Field accesses (`req.Platform`, `t.AccountID`) — would only
+#       appear if the legacy fields were re-introduced, but tests can
+#       use them and `**/*_test.go` is already excluded.
+#
+# Exclusions (pathspec-level, transparent — mirror of no-youtube-regression.yml):
 #   * .github/workflows/ci-opaque-wire.yml
-#     SELF-EXCLUSION: this workflow file's header rationale + REGEX
+#     SELF-EXCLUSION: this workflow file's header rationale + REGEX env
 #     env var + Hints block enumerate the forbidden disjuncts verbatim.
 #     Audit the rest of the repo; exempt this file.
-#   * DataServer/internal/socialclient/**/*_test.go
+#   * **/*_test.go
 #     Tests legitimately assert the ABSENCE of legacy fields
-#     (TestDeliverArtifact_LegacyKeysNeverPresent, the wire-shape
-#     contract — see client_test.go). The audit MUST NOT trip on
-#     negative-pinning assertions that exist specifically to PREVENT
-#     re-introduction.
-#   * DataServer/internal/socialclient/testdata/**
-#     Future wire-shape fixture snapshots (mirrors of the canonical
-#     request body) that may name legacy keys as documented absence.
+#     (TestClient_DeliverArtifact_WireShape_LegacyKeysNeverPresent in
+#     client_test.go pins the regression invariant on wire keys).
+#     The audit MUST NOT trip on negative-pinning assertions.
+#   * **/testdata/**
+#     Wire-shape fixture snapshots that may name legacy keys as
+#     documented absence (mirrors of the canonical request body).
+#   * **/*.md
+#     NESTED markdown (docs/**, subdir READMEs) — git pathspec matches
+#     any `dir/file.md` form.
+#   * CHANGELOG.md
+#     ROOT-level historical record — `**/*.md` does NOT match a
+#     single top-level file at repo root. Add explicitly (mirrors
+#     no-youtube-regression.yml).
+#   * docs/**
+#     ROOT-level NESTED docs directory — belt-and-suspenders for
+#     `**/*.md` (mirrors no-youtube-regression.yml).
+#   * **/migrations/**
+#     Historical SQL migrations may carry forward-only references
+#     to the YouTube → Social closure under comments that cite the
+#     legacy field names. The audit MUST NOT trip on documented
+#     history under migrations/ (symmetry with the YouTube guard).
 #
 # Triggers:
 #   * push to main                              — immediate fail-fast
@@ -92,10 +124,12 @@ jobs:
 
       - name: Run opaque-wire regression audit
         env:
-          # Verbatim regex from the user-provided spec: top-level
-          # Platform / AccountID / ChannelID on DeliverArtifactRequest.
-          # Bar-pipe disjunction so each disjunct matches as a token.
-          REGEX: 'Platform|AccountID|ChannelID'
+          # Top-level field line-shape anchored. The bar-piped
+          # disjuncts are EACH constrained by leading whitespace +
+          # trailing identifier-start, so comments, identifier suffixes,
+          # map sub-keys, and field accesses do NOT trigger the gate.
+          # See the file header (Regex anchor) for the rationale.
+          REGEX: '^[[:space:]]+(Platform|AccountID|ChannelID)[[:space:]]+[A-Za-z*\[]'
         run: |
           set -euo pipefail
           echo "🔍 Running opaque-wire regression audit in DataServer/internal/socialclient/..."
@@ -104,8 +138,12 @@ jobs:
             git grep -nE "${REGEX}" -- \
               DataServer/internal/socialclient/ \
               ':!.github/workflows/ci-opaque-wire.yml' \
-              ':!DataServer/internal/socialclient/**/*_test.go' \
-              ':!DataServer/internal/socialclient/testdata/**' \
+              ':!**/*_test.go' \
+              ':!**/testdata/**' \
+              ':!**/migrations/**' \
+              ':!**/*.md' \
+              ':!CHANGELOG.md' \
+              ':!docs/**' \
             || true
           )
 
@@ -131,17 +169,29 @@ jobs:
             echo "Hints (per disjunct):"
             echo "  * Platform / AccountID / ChannelID are the legacy"
             echo "    per-platform-fields top-level fields on"
-            echo "    DeliverArtifactRequest. Residuo 3 removed them and"
-            echo "    replaced with the opaque ExternalDestinationID. The"
-            echo "    social_repo is the authoritative resolver."
+            echo "    socialclient.DeliverArtifactRequest. Residuo 3"
+            echo "    (PR-15.13) REMOVED them and replaced them with the"
+            echo "    single opaque ExternalDestinationID. The social_repo"
+            echo "    is the authoritative resolver from that opaque ID."
+            echo "    See CHANGELOG.md \u00a715.13 for the closure record."
             echo "  * If a PR legitimately needs to express platform-specific"
-            echo "    intent, push it into the Metadata map[string]any"
-            echo "    payload (social_repo picks title / description / tags /"
-            echo "    privacy / publish / etc. from there)."
-            echo "  * If the legacy keys appear in a NEGATIVE-PINNING test"
-            echo "    fixture (TestDeliverArtifact_LegacyKeysNeverPresent"
-            echo "    for example), the audit already excludes *_test.go —"
-            echo "    no operator action is needed."
+            echo "    intent (title, description, tags, privacy, publish,"
+            echo "    etc.), push it into the Metadata map[string]any"
+            echo "    payload. Metadata is opaque pass-through to social_repo"
+            echo "    and is documented to LEGITIMATELY contain sub-keys"
+            echo "    like{\"platform\": \"tiktok\"}."
+            echo "  * If the legacy names appear in a NEGATIVE-PINNING test"
+            echo "    fixture (TestClient_DeliverArtifact_WireShape_Legacy"
+            echo "    KeysNeverPresent in client_test.go for example), the"
+            echo "    audit already excludes *_test.go \u2014 no operator"
+            echo "    action is needed."
+            echo "  * Identifier SUFFIXES (LivestreamPlatform, PlatformKey,"
+            echo "    someChannelIDList) and COMMENTS that mention"
+            echo "    legacy fields are NOT caught because the regex is"
+            echo "    anchored to a Go struct-field line shape. If your"
+            echo "    match IS in such a context, the regex anchor is"
+            echo "    wrong \u2014 surface as a follow-up workflow tweak"
+            echo "    instead of working around the gate."
             exit 1
           fi
 
