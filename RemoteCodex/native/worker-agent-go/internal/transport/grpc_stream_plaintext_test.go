@@ -462,4 +462,3 @@ func TestGRPCStreamTransport_ReceiveBeforeConnect(t *testing.T) {
 		t.Errorf("Receive before connect error = %v, want ErrNotConnected", err)
 	}
 }
-

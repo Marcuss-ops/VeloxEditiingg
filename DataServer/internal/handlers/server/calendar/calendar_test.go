@@ -117,15 +117,15 @@ func makeAgentEvent(d time.Time, externalID, title, script string) store.Calenda
 
 func incompleteAgentEvent() store.CalendarEvent {
 	return store.CalendarEvent{
-		ExternalID:   "agent-test-wnba-002",
-		Source:       "agent",
-		Title:        "Video Without Clips",
-		Date:         time.Now().UTC().Day(),
-		Month:        int(time.Now().UTC().Month()),
-		Year:         time.Now().UTC().Year(),
-		Category:     "wnba",
-		ScriptText:   "Test script without clips.",
-		Titles:       []string{"Test Title"},
+		ExternalID: "agent-test-wnba-002",
+		Source:     "agent",
+		Title:      "Video Without Clips",
+		Date:       time.Now().UTC().Day(),
+		Month:      int(time.Now().UTC().Month()),
+		Year:       time.Now().UTC().Year(),
+		Category:   "wnba",
+		ScriptText: "Test script without clips.",
+		Titles:     []string{"Test Title"},
 	}
 }
 

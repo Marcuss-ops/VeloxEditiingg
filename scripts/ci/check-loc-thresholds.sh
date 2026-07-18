@@ -46,6 +46,7 @@ THRESH_YML=800
 # The partition into KNOWN_VIOLATIONS_BASELINE / KNOWN_VIOLATIONS_ROUND1
 # is preserved as an audit trail for future additions.
 KNOWN_VIOLATIONS_BASELINE=(
+  "tests/operational/artlist_live_e2e_verify.sh|pre-existing operational E2E verifier; tracked for Round-4 split"
 )
 
 # KNOWN_VIOLATIONS_ROUND1 — six baseline violators surfaced by the first

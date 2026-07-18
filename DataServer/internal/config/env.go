@@ -55,5 +55,3 @@ func GetAnsibleMasterURL() string {
 func GetDataDir() string {
 	return strings.TrimSpace(os.Getenv("VELOX_DATA_DIR"))
 }
-
-

@@ -46,11 +46,11 @@ type DeliveryDestination struct {
 	Provider              string `json:"provider"`
 	ExternalDestinationID string `json:"external_destination_id,omitempty"`
 	FolderID              string `json:"folder_id,omitempty"`
-	Name                string `json:"name"`
-	Enabled             bool   `json:"enabled"`
-	ConfigurationJSON   string `json:"configuration_json"`
-	CreatedAt           string `json:"created_at"`
-	UpdatedAt           string `json:"updated_at"`
+	Name                  string `json:"name"`
+	Enabled               bool   `json:"enabled"`
+	ConfigurationJSON     string `json:"configuration_json"`
+	CreatedAt             string `json:"created_at"`
+	UpdatedAt             string `json:"updated_at"`
 }
 
 // JobDelivery is the per-(artifact, destination) join row.

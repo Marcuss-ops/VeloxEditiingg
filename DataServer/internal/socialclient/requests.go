@@ -31,9 +31,9 @@ package socialclient
 // any drift between runner and socialclient is detected at marshal
 // time rather than producing a silent malformed JSON POST.
 type DeliverArtifactRequest struct {
-	ExternalDeliveryID     string `json:"external_delivery_id"`
-	IdempotencyKey         string `json:"idempotency_key"`
-	ExternalDestinationID  string `json:"external_destination_id"`
+	ExternalDeliveryID    string `json:"external_delivery_id"`
+	IdempotencyKey        string `json:"idempotency_key"`
+	ExternalDestinationID string `json:"external_destination_id"`
 
 	Artifact ArtifactPayload `json:"artifact"`
 

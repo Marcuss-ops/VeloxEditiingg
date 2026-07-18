@@ -6,11 +6,11 @@
 //
 // CONTRACT:
 //
-//   * delivery_destinations.ExternalDestinationID is the opaque-mode
+//   - delivery_destinations.ExternalDestinationID is the opaque-mode
 //     reference resolved server-side by the external Social API.
-//   * runner.hydrateDestination MUST fail closed with ErrDestinationUnmapped
+//   - runner.hydrateDestination MUST fail closed with ErrDestinationUnmapped
 //     when that column is empty / whitespace-only.
-//   * runner.processLease MUST mark the claimed delivery FAILED with
+//   - runner.processLease MUST mark the claimed delivery FAILED with
 //     errorCode "DESTINATION_UNMAPPED" (vs. "DESTINATION_NOT_FOUND" for
 //     missing rows). Operators monitor last_error_code to identify
 //     which row needs backfill.
@@ -95,10 +95,11 @@ func (f *fakeProvider) Deliver(ctx context.Context, _ *store.Artifact, _ *Destin
 // (database.Open + sqliteTunePragmas + migrations.RunMigrations) with
 // the per-test isolation of a fresh schema, and is documented as
 // preferable to forging an in-memory DSN:
-//   `store.NewSQLiteStore was designed for production file-backed DBs;
-//    forging an in-memory DSN through it depends on the underlying
-//    platform/database.Open accepting ':memory:' as SQLitePath, which is
-//    not a documented invariant.`
+//
+//	`store.NewSQLiteStore was designed for production file-backed DBs;
+//	 forging an in-memory DSN through it depends on the underlying
+//	 platform/database.Open accepting ':memory:' as SQLitePath, which is
+//	 not a documented invariant.`
 //
 // The fail-closed routing under test owns the runner.processLease
 // branch at line 280-288 of runner.go, which is invariant to

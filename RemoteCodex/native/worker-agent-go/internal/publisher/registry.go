@@ -20,8 +20,7 @@ func NewRegistry() *Registry {
 	_ = r.Register(&MasterStreamTransport{
 		HTTPClient: &http.Client{Timeout: 5 * time.Minute},
 	})
-	_ = r.Register(&ObjectStoreMultipartTransport{
-	})
+	_ = r.Register(&ObjectStoreMultipartTransport{})
 	return r
 }
 

@@ -190,10 +190,10 @@ func TestBuildAndRewritePayload_URLRewriteBranch(t *testing.T) {
 	reqPayload := map[string]interface{}{
 		"status": "completed",
 		"result": map[string]interface{}{
-			"title":           "Test Video",
-			"script_text":     "script content",
-			"scenes_json":     `[{"text":"Scene 1","image_link":"https://example.com/scene.png"}]`,
-			"voiceover_paths": []string{"https://example.com/voice.mp3"},
+			"title":               "Test Video",
+			"script_text":         "script content",
+			"scenes_json":         `[{"text":"Scene 1","image_link":"https://example.com/scene.png"}]`,
+			"voiceover_paths":     []string{"https://example.com/voice.mp3"},
 			"total_duration_secs": 10.0,
 		},
 	}

@@ -62,8 +62,8 @@ import (
 type mockSocialRepo struct {
 	server *httptest.Server
 
-	mu       sync.Mutex
-	mode     string // "ok", "auth", "rate_limit", "server_error", "dedup"
+	mu        sync.Mutex
+	mode      string // "ok", "auth", "rate_limit", "server_error", "dedup"
 	postCount int32
 
 	// dedupCache: idempotency_key → social_delivery_id (used in "dedup"
@@ -206,10 +206,10 @@ func payloadWithExternalDestination(externalDestID string) map[string]any {
 		},
 		"delivery_plan": []any{
 			map[string]any{
-				"destination_id":        "velox-dest-1",
+				"destination_id":          "velox-dest-1",
 				"external_destination_id": externalDestID,
-				"platform":              "youtube",
-				"retry_budget":          3,
+				"platform":                "youtube",
+				"retry_budget":            3,
 			},
 		},
 	}
@@ -384,13 +384,13 @@ func newRegistryWithSocialProvider(t *testing.T, client *socialclient.Client) (*
 
 // sampleDestination mirrors the deliveries package's Destination shape.
 // Opaque-mode (Residuo 3 + Residuo 4 of the YouTube→Social closure):
-//   * ChannelID is gone from the typed Destination.
-//   * ExternalDestinationID is the canonical opaque identifier the
+//   - ChannelID is gone from the typed Destination.
+//   - ExternalDestinationID is the canonical opaque identifier the
 //     social_repo resolves server-side (residual 4 rename promoted
 //     social_destination_id -> external_destination_id).
-//   * ConfigurationJSON is operator-facing observability only — content is
+//   - ConfigurationJSON is operator-facing observability only — content is
 //     inert in the wire contract (no longer parsed for platform/account_id).
-//   * DeliveryMetadataJSON flows through verbatim as `metadata` in the wire.
+//   - DeliveryMetadataJSON flows through verbatim as `metadata` in the wire.
 func sampleDestination() *deliveries.Destination {
 	return &deliveries.Destination{
 		DestinationID:         "velox-dest-1",

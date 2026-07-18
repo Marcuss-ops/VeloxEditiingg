@@ -327,7 +327,7 @@ func TestAtomicJobTaskCreator_HappyPath_MultiDestinationDeliveryPlan(t *testing.
 	seedDestinations(t, s, map[string]bool{
 		"drive-main": true,
 		"video-main": true,
-		"social-mr": true,
+		"social-mr":  true,
 	})
 
 	const jobID = "job-multi-dest"

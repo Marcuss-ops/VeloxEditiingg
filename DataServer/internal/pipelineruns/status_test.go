@@ -101,9 +101,9 @@ func TestDeriveStatus_RemotePhase(t *testing.T) {
 
 func TestDeriveStatus_ForwardingPhase(t *testing.T) {
 	cases := []struct {
-		name   string
-		fwd    string
-		want   Status
+		name string
+		fwd  string
+		want Status
 	}{
 		{"PENDING", "PENDING", StatusRemoteQueued},
 		{"POLLING", "POLLING", StatusRemoteQueued},
@@ -125,9 +125,9 @@ func TestDeriveStatus_ForwardingPhase(t *testing.T) {
 func TestDeriveStatus_JobPhase(t *testing.T) {
 	fwd := strPtr("FORWARDED")
 	cases := []struct {
-		name  string
-		job   string
-		want  Status
+		name string
+		job  string
+		want Status
 	}{
 		{"PENDING", "PENDING", StatusWorkerQueued},
 		{"LEASED", "LEASED", StatusRendering},

@@ -177,11 +177,11 @@ const (
 	ComponentWorkerBundle     = "workers.bundle"
 	ComponentWorkerValidation = "workers.validation"
 	ComponentWorkerLifecycle  = "workers.lifecycle"
-	ComponentInstall    = "install"
-	ComponentUploads    = "uploads"
-	ComponentStore      = "store.sqlite"
-	ComponentDriveLink  = "store.drive_links"
-	ComponentDarkEditor = "dark_editor"
+	ComponentInstall          = "install"
+	ComponentUploads          = "uploads"
+	ComponentStore            = "store.sqlite"
+	ComponentDriveLink        = "store.drive_links"
+	ComponentDarkEditor       = "dark_editor"
 )
 
 // Level constants

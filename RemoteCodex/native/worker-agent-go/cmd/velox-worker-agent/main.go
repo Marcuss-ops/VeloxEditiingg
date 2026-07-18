@@ -597,8 +597,8 @@ func dispatchBootstrap(
 ) (*bootstrap.Report, error) {
 	adapter := &pipelineRunnerAdapter{runner: runner}
 	report, err := bootstrap.Run(ctx, cfg, adapter, bootstrap.Options{
-		Logger:              log,
-		OutputDir:           cfg.OutputDir,
+		Logger:             log,
+		OutputDir:          cfg.OutputDir,
 		BaselineSHA256Path: filepath.Join(cfg.WorkDir, bootstrap.DefaultBaselineFixtureRel),
 	})
 	if report != nil {

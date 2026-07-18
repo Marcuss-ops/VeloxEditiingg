@@ -481,11 +481,11 @@ func classifyErrorCode(err error) string {
 //
 // Opaque-mode fail-closed contract (Residuo 2 of YouTube → Social closure,
 // migration 091):
-//   * the YouTube-specific fields (AccountID, ChannelID, Language) are gone
+//   - the YouTube-specific fields (AccountID, ChannelID, Language) are gone
 //     from the typed Destination;
-//   * ExternalDestinationID (canonical, opaque to Velox) is the social_repo
+//   - ExternalDestinationID (canonical, opaque to Velox) is the social_repo
 //     identifier resolved server-side; the runner propagates it verbatim;
-//   * if ExternalDestinationID is empty / whitespace-only, hydrate MUST
+//   - if ExternalDestinationID is empty / whitespace-only, hydrate MUST
 //     fail closed with ErrDestinationUnmapped so the runner records
 //     DESTINATION_UNMAPPED on the delivery row (operators backfill).
 //

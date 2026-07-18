@@ -391,3 +391,10 @@ media               55  | #
 > `shared/controltransport/pb/worker_control.pb.go` (4 460 LOC) is **all generated code**, kept for reference only.
 
 ---
+
+## 10c. Known LOC carry-over
+
+`tests/operational/artlist_live_e2e_verify.sh` remains above the shell LOC
+threshold as a pre-existing operational verifier. It is tracked for a future
+split; the CI baseline entry is intentionally explicit and removable when
+that refactor lands.

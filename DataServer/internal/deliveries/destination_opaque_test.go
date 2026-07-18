@@ -48,8 +48,8 @@ func TestErrDestinationUnmappedSentinel(t *testing.T) {
 }
 
 // TestErrDestinationUnmappedErrorsIsChain verifies that
-//   * errors.New wrap (no %w) does NOT inherit sentinel identity
-//   * fmt.Errorf %w wrap DOES inherit sentinel identity
+//   - errors.New wrap (no %w) does NOT inherit sentinel identity
+//   - fmt.Errorf %w wrap DOES inherit sentinel identity
 //
 // Mirrors the exact format string used in runner.hydrateDestination.
 func TestErrDestinationUnmappedErrorsIsChain(t *testing.T) {
