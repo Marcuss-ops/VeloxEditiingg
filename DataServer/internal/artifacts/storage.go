@@ -109,15 +109,14 @@ func PromoteToCanonical(blobStore store.BlobStore, stagingPath, sha256Hex, exten
 	}
 	defer src.Close()
 
-	// Temp file in the SAME directory as final target so rename(2)
-	// is atomic (POSIX). The suffix is keyed on the first 8 chars of
-	// sha256 so two crashed retries cannot collide on the temp file.
-	tempPath := finalPath + ".tmp." + sha256Hex[:8]
-	dst, err := os.OpenFile(filepath.Clean(tempPath),
-		os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	// Temp file in the SAME directory as final target so rename(2) is
+	// atomic (POSIX). CreateTemp supplies a unique name: concurrent
+	// finalizers for the same content must never share a staging file.
+	dst, err := os.CreateTemp(filepath.Dir(finalPath), filepath.Base(finalPath)+".tmp.*")
 	if err != nil {
 		return "", fmt.Errorf("artifacts: PromoteToCanonical create temp: %w", err)
 	}
+	tempPath := dst.Name()
 
 	cleanupTemp := func() { _ = os.Remove(tempPath) }
 
