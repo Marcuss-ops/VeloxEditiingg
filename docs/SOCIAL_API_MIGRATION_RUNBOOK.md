@@ -166,6 +166,42 @@ mirror (see `store/store_deliveries.go:180`, line
 **NOT** a fallback — it is a SQL-reader-mirror of the canonical
 column at read time.
 
+#### Cutover — alias window for `social_destination_id` is closed
+
+As of the universal deployment of Migration 092
+(`092_rename_social_to_external_destination_id.sql`), the alias
+window for the pre-Migration-092 column name
+`social_destination_id` is closed. Operators running
+pre-Migration-092 configs MUST upgrade before cutting traffic to
+the post-Residuo-4 Velox runtime.
+
+Upgrade procedure for operators on a pre-092 DB:
+
+  1. Apply Migration 092 via the standard Velox migration runner
+     (idempotent `UPDATE SET external_destination_id =
+     COALESCE(social_destination_id, '')` clause then DROPs
+     `social_destination_id`). The runner is SHA-256-checksum-pinned
+     on file content; tampering with the historical `.sql` triggers
+     checksum-integrity failure on next boot.
+  2. Verify the cutover took effect:
+       - §3.2 closure-marker pass (`$.residuo4_closed_at` count vs.
+         `total_rows` must be 100% on every row whose JSON is
+         well-formed).
+       - §3.4 `DESTINATION_UNMAPPED` rate trending to zero day-over-
+         day once the §1 back-fill cycle is complete.
+  3. Post-cutover invariant: the deprecated `SocialDestinationID`
+     struct field alias has been removed entirely from typed structs
+     (Residuo 5 closure, commit `348084a`). Operators MUST NOT
+     reintroduce the alias field — the runner no longer reads it,
+     and reintroducing it can only mask schema drift.
+
+Any new code or migration referencing `social_destination_id` MUST
+be redirected to `external_destination_id` per §1.4 + §3.5. The
+only mentions of `social_destination_id` in the on-disk artifacts
+after cutover are checksum-pinned SQL files (migration 092) and
+historical CHANGELOG anchors from the closure chain (PR-15.11 —
+PR-15.16).
+
 ---
 
 ## 2. Migrating legacy `configuration_json` (procedure b)
