@@ -161,11 +161,14 @@ forward-only. A bad `external_destination_id` value can only be
 corrected by another `UPDATE SET` overwriting it (no schema
 rollback path exists). The deprecated `SocialDestinationID` struct field alias
 in `store/store_deliveries.go` has been **removed entirely from
-typed structs** as of Residuo 5 closure (commit `348084a`) — see
-the Cutover block below for the current operator-facing contract.
-Historical read-back-compat mirror logic and the
+typed structs** as of Residuo 5 closure — see the Cutover block
+below for the current operator-facing contract. Historical
+read-back-compat mirror logic and the
 `dest.SocialDestinationID = dest.ExternalDestinationID` line are
-no longer present in the canonical source tree.
+no longer used in canonical code paths; the closing commit for
+the Residuo 5 follow-up is the only stable reference for now
+(track via `git log --grep 'Residuo 5'` until §5.5 promotes it to
+a PR anchor).
 
 #### Cutover — alias window for `social_destination_id` is closed
 
@@ -201,11 +204,14 @@ be redirected to `external_destination_id` per §1.4 + §3.5. The
 only mentions of `social_destination_id` in the on-disk artifacts
 after cutover are checksum-pinned SQL files (migration 092) and
 historical CHANGELOG anchors from the closure chain (PR-15.11 /
-PR-15.12 / PR-15.13 / PR-15.14 / PR-15.16). Operator-facing
-reintroduction of the alias is hard-prevented by the structural-
-drift gate `tests/e2e/recovery-matrix/scenarios/19-pipeline-md-stale-field-grep.sh`
-(extends to the runbook via the grep-family pattern on
-`parsePlatformAndAccount`).
+PR-15.12 / PR-15.13 / PR-15.14 / PR-15.16).Operator-facing reintroduction of the alias field in
+`docs/pipeline.md` is gated by
+`tests/e2e/recovery-matrix/scenarios/19-pipeline-md-stale-field-grep.sh`
+(4 invariants: `external_destination_id` presence, PR-15.13 +
+PR-15.14 cross-references, zero `\| \`channel_id\` \|` literal
+cells, zero `parsePlatformAndAccount` references). The same
+gate pattern is the planned shape for a runbook-specific
+scenario 20 [out of scope for this commit].
 
 ---
 
