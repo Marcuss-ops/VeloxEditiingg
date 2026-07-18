@@ -17,6 +17,8 @@
 #       `docker rmi velox-worker-console:latest` purge.
 #   * scripts/ci/check-no-console-service.sh
 #       this script, via the GREP_EXCLUDES allowlist.
+#   * README.md
+#       documents the invariant and is not an executable/service reference.
 #
 # Any other reference is a regression of Step 3/8 and fails the build.
 set -euo pipefail
@@ -33,6 +35,7 @@ VIOLATIONS=$(grep -RnE 'velox-worker-console' . \
   --exclude='normalize_worker_systemd.yml' \
   --exclude='cleanup-worker.sh' \
   --exclude='check-no-console-service.sh' \
+  --exclude='README.md' \
   || true)
 
 if [[ -n "$VIOLATIONS" ]]; then
