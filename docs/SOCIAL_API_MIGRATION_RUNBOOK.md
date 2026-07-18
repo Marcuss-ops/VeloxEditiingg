@@ -159,12 +159,13 @@ NEW `DESTINATION_UNMAPPED` rows since the §1.4 update window.
 **None possible** for failed back-fills — Migration 091 was
 forward-only. A bad `external_destination_id` value can only be
 corrected by another `UPDATE SET` overwriting it (no schema
-rollback path exists). The deprecated `SocialDestinationID` struct
-field alias in `store/store_deliveries.go` is a read-back-compat
-mirror (see `store/store_deliveries.go:180`, line
-`dest.SocialDestinationID = dest.ExternalDestinationID`) and is
-**NOT** a fallback — it is a SQL-reader-mirror of the canonical
-column at read time.
+rollback path exists). The deprecated `SocialDestinationID` struct field alias
+in `store/store_deliveries.go` has been **removed entirely from
+typed structs** as of Residuo 5 closure (commit `348084a`) — see
+the Cutover block below for the current operator-facing contract.
+Historical read-back-compat mirror logic and the
+`dest.SocialDestinationID = dest.ExternalDestinationID` line are
+no longer present in the canonical source tree.
 
 #### Cutover — alias window for `social_destination_id` is closed
 
@@ -199,8 +200,12 @@ Any new code or migration referencing `social_destination_id` MUST
 be redirected to `external_destination_id` per §1.4 + §3.5. The
 only mentions of `social_destination_id` in the on-disk artifacts
 after cutover are checksum-pinned SQL files (migration 092) and
-historical CHANGELOG anchors from the closure chain (PR-15.11 —
-PR-15.16).
+historical CHANGELOG anchors from the closure chain (PR-15.11 /
+PR-15.12 / PR-15.13 / PR-15.14 / PR-15.16). Operator-facing
+reintroduction of the alias is hard-prevented by the structural-
+drift gate `tests/e2e/recovery-matrix/scenarios/19-pipeline-md-stale-field-grep.sh`
+(extends to the runbook via the grep-family pattern on
+`parsePlatformAndAccount`).
 
 ---
 
