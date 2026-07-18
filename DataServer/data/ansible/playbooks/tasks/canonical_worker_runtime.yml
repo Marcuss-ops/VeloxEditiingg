@@ -145,7 +145,7 @@
       VELOX_DIR={{ velox_dir }}
       VELOX_BUNDLE_VERSION={{ version_number | default('v1.0.6') }}
       VELOX_VERSION_NUMBER={{ version_number | default('v1.0.6') }}
-      VELOX_WORKER_PROTOCOL_VERSION={{ worker_protocol_version | default('2026-06-worker-v1') }}
+      VELOX_WORKER_PROTOCOL_VERSION={{ worker_protocol_version | default('v3') }}
       VELOX_ENGINE_VERSION={{ engine_version | default(version_number | default('v1.0.6')) }}
       VELOX_HEALTH_PORT={{ velox_worker_health_port }}
       VELOX_WORKER_IMAGE={{ _worker_image_tag }}
@@ -174,7 +174,7 @@
         "log_level": "info",
         "bundle_version": "{{ version_number | default('v1.0.6') }}",
         "bundle_hash": "{{ bundle_hash | default('') }}",
-        "protocol_version": "{{ worker_protocol_version | default('2026-06-worker-v1') }}",
+        "protocol_version": "{{ worker_protocol_version | default('v3') }}",
         "engine_version": "{{ engine_version | default(version_number | default('v1.0.6')) }}",
         "environment": "staging",
         "max_active_jobs": 1,
@@ -474,4 +474,3 @@
     enabled: true
     state: started
   failed_when: false
-

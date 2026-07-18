@@ -54,17 +54,23 @@ readonly REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 readonly SCRIPT_NAME="$(basename "$0")"
 
 # ─── Configuration ───────────────────────────────────────────────────────────
-PILOT_DIR="${PILOT_DIR:-/tmp/velox-pilot}"
+PILOT_DIR="${PILOT_DIR:-/tmp/velox-pilot-$(date +%s)-$$}"
 readonly LOGDIR="${PILOT_DIR}/logs"
 readonly PID_DIR="${PILOT_DIR}"
 readonly DATA_DIR="${PILOT_DIR}/data"
 readonly STAGING_DIR="${PILOT_DIR}/staging"
 readonly STORAGE_DIR="${PILOT_DIR}/storage"
 
-readonly MASTER_PORT=8080
-readonly GRPC_PORT=50051
+pick_free_port() {
+  python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()'
+}
+
+readonly MASTER_PORT="${PILOT_MASTER_PORT:-$(pick_free_port)}"
+readonly GRPC_PORT="${PILOT_GRPC_PORT:-$(pick_free_port)}"
+readonly WORKER_HEALTH_PORT="${PILOT_WORKER_HEALTH_PORT:-$(pick_free_port)}"
 readonly ADMIN_TOKEN="test-admin-token"
 readonly WORKER_ID="pilot-worker-1"
+readonly DESTINATION_ID="e2e-local"
 
 # Binaries (built from repo)
 readonly MASTER_BIN="${PILOT_DIR}/bin/velox-server"
@@ -103,8 +109,8 @@ banner() { echo; echo "───────────────────
 cleanup() {
   if [[ "${SKIP_CLEANUP:-0}" != "1" ]]; then
     log "cleanup: stopping processes"
-    [[ -f "$MASTER_PIDFILE" ]] && kill "$(cat "$MASTER_PIDFILE")" 2>/dev/null || true
-    [[ -f "$WORKER_PIDFILE" ]] && kill "$(cat "$WORKER_PIDFILE")" 2>/dev/null || true
+    [[ -f "$MASTER_PIDFILE" ]] && kill -- "-$(cat "$MASTER_PIDFILE")" 2>/dev/null || true
+    [[ -f "$WORKER_PIDFILE" ]] && kill -- "-$(cat "$WORKER_PIDFILE")" 2>/dev/null || true
     wait 2>/dev/null || true
     # Remove pid files so subsequent cmd_status reports correctly.
     rm -f "$MASTER_PIDFILE" "$WORKER_PIDFILE"
@@ -161,8 +167,8 @@ cmd_build() {
     cmake -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE=Release 2>&1
     cmake --build "$BUILD_DIR" --parallel 2>&1
     local ENGINE_BINARY
-    ENGINE_BINARY="$(find "$BUILD_DIR" -maxdepth 1 -type f -executable -name 'velox*' 2>/dev/null | head -1 || true)"
-    if [[ -z "$ENGINE_BINARY" ]]; then
+    ENGINE_BINARY="${BUILD_DIR}/velox_video_engine"
+    if [[ ! -x "$ENGINE_BINARY" ]]; then
       warn "cmake build output listing:"
       ls -la "$BUILD_DIR" || true
       die "engine binary not found after cmake build" 2
@@ -180,8 +186,29 @@ cmd_build() {
 # ═══════════════════════════════════════════════════════════════════════════════
 # COMMAND: start
 # ═══════════════════════════════════════════════════════════════════════════════
+assert_port_free() {
+  local port="$1"
+  if ss -ltn "sport = :${port}" | grep -q LISTEN; then
+    die "required pilot port ${port} is occupied; set PILOT_*_PORT or stop its owner" 3
+  fi
+}
+
+init_database() {
+  [[ ! -e "${DATA_DIR}/velox.db" ]] ||
+    die "refusing to reuse existing database ${DATA_DIR}/velox.db; choose a new PILOT_DIR or remove it explicitly" 3
+  mkdir -p "$DATA_DIR"
+  log "  → applying canonical SQLite migrations"
+  (cd "$REPO_ROOT/DataServer" && go run ./cmd/seed-velox-db-fixture "${DATA_DIR}/velox.db")
+  sqlite3 "${DATA_DIR}/velox.db" \
+    "INSERT INTO delivery_destinations (destination_id, provider, name, enabled, configuration_json, created_at, updated_at) VALUES ('${DESTINATION_ID}', 'google_drive', 'Local E2E', 1, '{}', datetime('now'), datetime('now'));"
+}
+
 cmd_start() {
   banner "START: master"
+
+  assert_port_free "$MASTER_PORT"
+  assert_port_free "$GRPC_PORT"
+  init_database
 
   # Build if binaries don't exist
   if [[ ! -x "$MASTER_BIN" ]]; then
@@ -216,7 +243,7 @@ ENV
   export VELOX_ASSET_REWRITE_DEV_BYPASS=true
 
   cd "$PILOT_DIR"
-  setsid nohup "$MASTER_BIN" serve </dev/null >"$MASTER_LOG" 2>&1 &
+  setsid "$MASTER_BIN" serve </dev/null >"$MASTER_LOG" 2>&1 &
   local MPID=$!
   echo "$MPID" > "$MASTER_PIDFILE"
   disown "$MPID" 2>/dev/null
@@ -225,6 +252,9 @@ ENV
   # Wait for healthy
   for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
     if curl -fsS -o /dev/null "http://127.0.0.1:${MASTER_PORT}/health" 2>/dev/null; then
+      kill -0 "$MPID" 2>/dev/null || die "health answered after master PID exited" 1
+      ss -ltnp | grep -q "pid=${MPID}," || die "port ${MASTER_PORT} is not owned by master PID ${MPID}" 1
+      grep -q "Velox master listening on :${MASTER_PORT}" "$MASTER_LOG" || die "master listener identity missing" 1
       ok "master healthy (${i}s)"
       return 0
     fi
@@ -244,33 +274,21 @@ cmd_submit() {
   mkdir -p "$STAGING_DIR"
 
   # Generate test fixtures
-  log "  → voiceover.mp3 (2s silent)"
+  log "  → silent.aac (2s silent)"
   ffmpeg -hide_banner -loglevel error -y \
-    -f lavfi -i anullsrc=r=44100:cl=stereo -t 2 \
-    -c:a libmp3lame "${STAGING_DIR}/vo.mp3" 2>/dev/null || true
+    -f lavfi -i anullsrc=r=48000:cl=mono -t 2 \
+    -c:a aac -b:a 64k "${STAGING_DIR}/silent.aac" 2>/dev/null || true
 
-  log "  → scene1.png (teal 320x240)"
+  log "  → scene.png (teal 320x180)"
   ffmpeg -hide_banner -loglevel error -y \
-    -f lavfi -i color=c=teal:s=320x240:d=2 -frames:v 1 \
-    "${STAGING_DIR}/scene1.png" 2>/dev/null || true
+    -f lavfi -i color=c=0x008080:s=320x180:d=0.1 -frames:v 1 \
+    -vcodec png "${STAGING_DIR}/scene.png" 2>/dev/null || true
 
   # Verify fixtures
-  ls -la "${STAGING_DIR}/vo.mp3" "${STAGING_DIR}/scene1.png" 2>/dev/null || \
+  ls -la "${STAGING_DIR}/silent.aac" "${STAGING_DIR}/scene.png" 2>/dev/null || \
     warn "fixture files may be missing (ffmpeg might not support libmp3lame)"
 
-  # Write job JSON
-  cat > "$JOB_FILE" <<JSON
-{
-  "video_name": "VeloxPilot",
-  "script_text": "Pilot smoke test.",
-  "scenes_json": "[{\"text\":\"Pilot\",\"image\":\"file://${STAGING_DIR}/scene1.png\"}]",
-  "voiceover_path": "${STAGING_DIR}/vo.mp3",
-  "render_video": true,
-  "save_to_db": true,
-  "channel_id": "pilot",
-  "audio_language_for_srt": "en"
-}
-JSON
+  "${REPO_ROOT}/scripts/e2e/write-local-workload-fixture.sh" "$JOB_FILE" "$STAGING_DIR" "$DESTINATION_ID"
 
   # Submit
   local SUBMIT_OUT
@@ -315,6 +333,11 @@ cmd_work() {
   rm -f "$WORKER_LOG" "$WORKER_PIDFILE"
 
   # Write worker config (dev bypass: allow_insecure_grpc_dev: true)
+  local BUNDLE_HASH
+  BUNDLE_HASH="$("${REPO_ROOT}/scripts/e2e/write-local-bundle-identity.sh" "$PILOT_DIR" "$WORKER_BIN" "$ENGINE_BIN")"
+  mkdir -p "${PILOT_DIR}/tests/fixtures"
+  cp "${REPO_ROOT}/RemoteCodex/native/worker-agent-go/tests/fixtures/engine_selftest_baseline.sha256" \
+    "${PILOT_DIR}/tests/fixtures/engine_selftest_baseline.sha256"
   cat > "$WORKER_CONFIG" <<JSON
 {
   "master_url": "http://127.0.0.1:${MASTER_PORT}",
@@ -324,11 +347,15 @@ cmd_work() {
   "control_grpc_url": "127.0.0.1:${GRPC_PORT}",
   "job_delivery": "push",
   "allow_insecure_grpc_dev": true,
-  "video_engine_binary": "${ENGINE_BIN}",
+  "bundle_hash": "${BUNDLE_HASH}",
+  "video_engine_cpp_bin": "${ENGINE_BIN}",
+  "output_dir": "${PILOT_DIR}/runtime-output",
+  "temp_dir": "${PILOT_DIR}/runtime-temp",
   "data_dir": "${PILOT_DIR}",
+  "state_dir": "${PILOT_DIR}/state",
   "max_active_jobs": 1,
-  "health_port": 8181,
-  "protocol_version": "2026-06-worker-v1"
+  "health_port": ${WORKER_HEALTH_PORT},
+  "protocol_version": "v3"
 }
 JSON
 
@@ -337,8 +364,18 @@ JSON
   # VELOX_GRPC_ALLOW_INSECURE_DEV. Must pass it explicitly. Scoped to this
   # function so it does not leak into the calling shell on other subcommands.
   cd "$PILOT_DIR"
-  setsid nohup env \
+  local WORKER_TOKEN
+  WORKER_TOKEN="$(curl -fsS -m 10 -X POST \
+    -H "Content-Type: application/json" \
+    --data "{\"worker_id\":\"${WORKER_ID}\",\"worker_name\":\"pilot-worker\",\"protocol_version\":\"v3\",\"bundle_hash\":\"${BUNDLE_HASH}\"}" \
+    "http://127.0.0.1:${MASTER_PORT}/api/v1/workers/register" \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin)["session_id"])')" \
+    || die "worker HTTP registration/token bootstrap failed" 1
+  [[ -n "$WORKER_TOKEN" ]] || die "worker HTTP registration returned an empty token" 1
+  setsid env \
+    VELOX_ENV=dev \
     VELOX_ALLOW_INSECURE_GRPC_DEV=true \
+    WORKER_TOKEN="$WORKER_TOKEN" \
     "$WORKER_BIN" -config "$WORKER_CONFIG" \
     </dev/null >"$WORKER_LOG" 2>&1 &
   local WPID=$!
@@ -348,7 +385,8 @@ JSON
 
   # Wait for registration signal in master log
   for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
-    if grep -qE "${WORKER_ID}.*hello_ack|registered|Registration successful" "$MASTER_LOG" 2>/dev/null; then
+    if grep -qE "${WORKER_ID}.*(hello_ack|HelloAck)|Worker ${WORKER_ID} connected" "$MASTER_LOG" 2>/dev/null \
+      || grep -q "Registration successful" "$WORKER_LOG" 2>/dev/null; then
       ok "worker registered (${i}s)"
       return 0
     fi
@@ -425,23 +463,21 @@ cmd_stop() {
   if [[ -f "$WORKER_PIDFILE" ]]; then
     local WPID
     WPID="$(cat "$WORKER_PIDFILE")"
-    kill -TERM "$WPID" 2>/dev/null && log "worker TERM sent to PID=${WPID}" || true
+    kill -- -"$WPID" 2>/dev/null && log "worker process-group TERM sent to PGID=${WPID}" || true
     sleep 2
-    kill -KILL "$WPID" 2>/dev/null && log "worker KILL sent" || true
+    kill -- -"$WPID" 2>/dev/null && log "worker process-group KILL sent" || true
     rm -f "$WORKER_PIDFILE"
   fi
-  pkill -9 -f "$WORKER_BIN" 2>/dev/null || true
 
   # Master
   if [[ -f "$MASTER_PIDFILE" ]]; then
     local MPID
     MPID="$(cat "$MASTER_PIDFILE")"
-    kill -TERM "$MPID" 2>/dev/null && log "master TERM sent to PID=${MPID}" || true
+    kill -- -"$MPID" 2>/dev/null && log "master process-group TERM sent to PGID=${MPID}" || true
     sleep 2
-    kill -KILL "$MPID" 2>/dev/null && log "master KILL sent" || true
+    kill -- -"$MPID" 2>/dev/null && log "master process-group KILL sent" || true
     rm -f "$MASTER_PIDFILE"
   fi
-  pkill -9 -f "$MASTER_BIN" 2>/dev/null || true
 
   ok "processes stopped"
 }
@@ -454,6 +490,50 @@ cmd_log() {
     die "master log not found at ${MASTER_LOG} — start master first" 1
   fi
   tail -n 200 -F "$MASTER_LOG"
+}
+
+verify_completed_job() {
+  local db="$1"
+  local job_id="$2"
+  local video
+  local video_count
+  video_count="$(find "$STORAGE_DIR" -type f \( -name '*.mp4' -o -name '*.f4v' \) | wc -l)"
+  [[ "$video_count" -eq 1 ]] || die "expected exactly one final video artifact, found ${video_count}" 1
+  video="$(find "$STORAGE_DIR" -type f \( -name '*.mp4' -o -name '*.f4v' \) -print -quit)"
+  [[ -s "$video" ]] || die "final video is empty: ${video}" 1
+
+  local probe
+  probe="$(ffprobe -v error -show_entries stream=codec_type,codec_name,width,height,r_frame_rate -show_entries format=duration,size -of json "$video" 2>&1)" \
+    || die "ffprobe failed for ${video}: ${probe}" 1
+  grep -q '"codec_type": "video"' <<<"$probe" \
+    || die "final artifact has no video stream: ${video}" 1
+
+  local decode_log="${PILOT_DIR}/decode-errors.log"
+  ffmpeg -v error -i "$video" -f null - 2>"$decode_log" \
+    || die "decode command failed for ${video}" 1
+  [[ ! -s "$decode_log" ]] || { cat "$decode_log"; die "final video is not fully decodable" 1; }
+
+  local actual_sha actual_size recorded
+  actual_sha="$(sha256sum "$video" | awk '{print $1}')"
+  actual_size="$(stat -c '%s' "$video")"
+  recorded="$(sqlite3 "$db" "SELECT status || '|' || sha256 || '|' || size_bytes || '|' || COALESCE(verified_at,'') FROM artifacts WHERE job_id='${job_id}' ORDER BY created_at DESC LIMIT 1;" 2>/dev/null || true)"
+  local recorded_status recorded_sha recorded_size recorded_verified
+  IFS='|' read -r recorded_status recorded_sha recorded_size recorded_verified <<<"$recorded"
+  [[ "$recorded_status" == "READY" && "$recorded_sha" == "$actual_sha" \
+    && "$recorded_size" == "$actual_size" && -n "$recorded_verified" ]] \
+    || die "artifact DB verification mismatch: recorded=${recorded} actual=READY|${actual_sha}|${actual_size}|verified" 1
+
+  local task_state
+  task_state="$(sqlite3 "$db" "SELECT status || '|' || COALESCE(attempt_id,'') || '|' || COALESCE(winning_attempt_id,'') FROM tasks WHERE job_id='${job_id}';" 2>/dev/null || true)"
+  [[ "$task_state" == SUCCEEDED\|*\|* ]] || die "task did not succeed: ${task_state}" 1
+  local task_attempt task_winner
+  task_attempt="${task_state#*|}"; task_attempt="${task_attempt%%|*}"
+  task_winner="${task_state##*|}"
+  [[ -n "$task_winner" && "$task_winner" == "$task_attempt" ]] \
+    || die "succeeded task has no matching winning attempt: ${task_state}" 1
+
+  ok "video validated: ${video} (${actual_size} bytes, sha256=${actual_sha})"
+  ok "artifact READY and winning TaskAttempt verified"
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -495,14 +575,7 @@ cmd_all() {
     case "$STATUS" in
       SUCCEEDED)
         ok "job SUCCEEDED after ~$(( i * POLL_INTERVAL ))s"
-        # Assert MP4 in storage
-        local MP4_COUNT
-        MP4_COUNT="$(find "${STORAGE_DIR}" -name '*.mp4' 2>/dev/null | wc -l)"
-        if [[ "$MP4_COUNT" -eq 0 ]]; then
-          warn "no MP4 found in ${STORAGE_DIR}"
-          die "MP4 not produced (expected ≥1 .mp4 artifact in storage)" 1
-        fi
-        ok "${MP4_COUNT} MP4 artifact(s) found in storage"
+        verify_completed_job "$DB" "$JOB_ID"
         return 0
         ;;
       FAILED|TIMEOUT|REJECTED|CANCELLED)

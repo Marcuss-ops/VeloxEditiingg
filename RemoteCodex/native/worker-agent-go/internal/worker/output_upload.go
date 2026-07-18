@@ -36,6 +36,7 @@ func (w *Worker) uploadTaskOutputs(ctx context.Context, pte *PendingTaskExecutio
 
 	resp, err := w.apiClient.UploadCompletedVideo(ctx, api.UploadCompletedVideoRequest{
 		JobID:         pte.JobID,
+		AttemptID:     pte.AttemptID,
 		WorkerID:      w.config.WorkerID,
 		LeaseID:       pte.LeaseID,
 		AttemptNumber: pte.AttemptNumber,

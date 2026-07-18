@@ -52,6 +52,7 @@ type FinalizeVerifiedCommand struct {
 	UploadID         string
 	ArtifactID       string
 	JobID            string
+	AttemptID        string
 	WorkerID         string
 	LeaseID          string
 	AttemptNumber    int

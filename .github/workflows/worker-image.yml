@@ -195,7 +195,7 @@ jobs:
           IMAGE="${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}@${{ steps.digest.outputs.digest }}"
           echo "Verifying image: $IMAGE"
           cosign verify \
-            --certificate-identity-regexp='^https://github.com/Marcuss-ops/VeloxLEgit/\.github/workflows/worker-image\.yml@refs/(tags/worker-v.+|heads/.+)' \
+            --certificate-identity-regexp='^https://github.com/Marcuss-ops/VeloxEditiingg/\.github/workflows/worker-image\.yml@refs/(tags/worker-v.+|heads/.+)' \
             --certificate-oidc-issuer='https://token.actions.githubusercontent.com' \
             "$IMAGE"
 

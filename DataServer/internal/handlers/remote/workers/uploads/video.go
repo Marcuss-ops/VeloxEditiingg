@@ -41,6 +41,7 @@ func UploadCompletedVideo(cfg *config.Config, artifactSvc *artifacts.Service) gi
 		defer file.Close()
 
 		jobID := c.PostForm("job_id")
+		attemptID := c.PostForm("attempt_id")
 		workerID := c.PostForm("worker_id")
 		leaseID := c.PostForm("lease_id")
 		if jobID == "" {
@@ -98,6 +99,7 @@ func UploadCompletedVideo(cfg *config.Config, artifactSvc *artifacts.Service) gi
 		art, finErr := artifactSvc.Finalize(ctx, artifacts.FinalizeArtifactCommand{
 			UploadID:         session.UploadID,
 			JobID:            jobID,
+			AttemptID:        attemptID,
 			WorkerID:         workerID,
 			LeaseID:          leaseID,
 			ExpectedRevision: revision,

@@ -1,17 +1,19 @@
 name: CI
-true:
+
+on:
   push:
-    branches:
-      - main
+    branches: [main]
   pull_request:
-    branches:
-      - main
-  workflow_dispatch: null
+    branches: [main]
+  workflow_dispatch:
+
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
+
 permissions:
   contents: read
+
 jobs:
   verify:
     name: make verify
@@ -24,55 +26,36 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: DataServer/go.mod
-      - name: Cache Go build module cache
+      - name: Cache Go build and module caches
         uses: actions/cache@v4
         with:
-          path: '~/.cache/go-build
-
+          path: |
+            ~/.cache/go-build
             ~/go/pkg/mod
-
-            '
-          key: ${{ runner.os }}-go-${{ hashFiles('DataServer/go.sum', 'RemoteCodex/native/worker-agent-go/go.sum', 'shared/go.sum')
-            }}
-          restore-keys: '${{ runner.os }}-go-
-
-            '
-      - name: Install cmake (native engine build)
+          key: ${{ runner.os }}-go-${{ hashFiles('DataServer/go.sum', 'RemoteCodex/native/worker-agent-go/go.sum', 'shared/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+      - name: Install cmake
         run: sudo apt-get update && sudo apt-get install -y cmake
-      - name: "Guard — compute-outcome labels (spec §14)"
+      - name: Guard — compute-outcome labels
         run: ./scripts/ci/check-compute-outcome-labels.sh
-      - name: "Guard — conflict-budget call pattern (Blocco 5)"
+      - name: Guard — conflict-budget call pattern
         run: ./scripts/ci/check-conflict-budget-call-pattern.sh
-      - name: "Guard — sql-ownership shape"
+      - name: Guard — sql-ownership shape
         run: ./scripts/ci/check-sql-ownership.sh
-      - name: "Guard — dsn busy-timeout shape (Blocco 5 / B1 follow-up)"
+      - name: Guard — dsn busy-timeout shape
         run: ./scripts/ci/check-dsn-busy-timeout.sh
-      - name: "Verify — architectural, Go, native, docker-image"
+      - name: Verify — architecture, Go, native and Docker
         run: make verify
-        run: make verify
-        run: make verify
-        run: make verify
-        run: make verify
-        run: make verify
-        run: make verify
-        run: make verify
-        run: make verify
-        run: make verify
-        run: make verify
-        run: make verify
-        run: make verify
-        run: make verify
-      - name: "Invariants — completion protocol (Phase 1.5)"
-        run: 'DB="$(mktemp /tmp/velox-cp-fixture.XXXXXX.db)"
-
-          trap ''rm -f "$DB"'' EXIT
-
+      - name: Invariants — completion protocol
+        shell: bash
+        run: |
+          set -euo pipefail
+          DB="$(mktemp /tmp/velox-cp-fixture.XXXXXX.db)"
+          trap 'rm -f "$DB"' EXIT
           (cd DataServer && go run ./cmd/seed-velox-db-fixture "$DB")
-
           ./scripts/ci/check-completion-protocol-invariants.sh "$DB"
-
-          '
-      - name: "LOC threshold gate"
+      - name: LOC threshold gate
         if: always()
         run: bash scripts/ci/check-loc-thresholds.sh
 
@@ -87,88 +70,3 @@ jobs:
           fetch-depth: 0
       - name: Size-band policy lint
         run: bash scripts/ci/check-size-band-policy.sh
-
-  # BEGIN ONE-SHOT REQUESTED LONG-FILE SPLIT
-  split-requested-long-files:
-    name: Split requested long files
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    permissions:
-      contents: write
-      issues: write
-    steps:
-      - name: Checkout main
-        uses: actions/checkout@v4
-        with:
-          ref: main
-          fetch-depth: 0
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: DataServer/go.mod
-          cache: false
-      - name: Install goimports
-        run: go install golang.org/x/tools/cmd/goimports@latest
-      - name: Split files and format
-        shell: bash
-        run: |
-          set -euo pipefail
-          test -f scripts/ci/split-requested-long-files.py
-          python3 scripts/ci/split-requested-long-files.py
-          export PATH="$(go env GOPATH)/bin:$PATH"
-          goimports -w \
-            DataServer/internal/grpcserver/handler_reports_test.go \
-            DataServer/internal/grpcserver/handler_reports_identity_test.go \
-            DataServer/internal/grpcserver/handler_reports_metrics_test.go \
-            DataServer/internal/grpcserver/handler_reports_ack_test.go \
-            DataServer/internal/artifacts/retry_budget_propagation_test.go \
-            DataServer/internal/artifacts/retry_budget_plan_test.go \
-            DataServer/internal/artifacts/retry_budget_limits_test.go \
-            DataServer/internal/ingest/service_test.go \
-            DataServer/internal/ingest/service_identity_test.go \
-            DataServer/internal/ingest/service_result_test.go \
-            DataServer/internal/ingest/service_rollup_test.go
-          wc -l DataServer/internal/grpcserver/handler_reports*.go \
-            DataServer/internal/artifacts/retry_budget_*.go \
-            DataServer/internal/ingest/service*.go \
-            docs/metrics/loc-baseline.md docs/metrics/loc-refactor-history.md
-      - name: Run targeted tests
-        working-directory: DataServer
-        run: go test ./internal/grpcserver/... ./internal/artifacts/... ./internal/ingest/...
-      - name: Run LOC gate
-        run: bash scripts/ci/check-loc-thresholds.sh
-      - name: Commit directly to main and self-remove
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          rm -f .github/workflows/issue-trigger-split-long-files.yml
-          rm -f scripts/ci/split-requested-long-files.py
-          python3 <<'PY'
-          from pathlib import Path
-          path = Path('.github/workflows/ci.yml')
-          text = path.read_text(encoding='utf-8')
-          start = text.index('  # BEGIN ONE-SHOT REQUESTED LONG-FILE SPLIT\n')
-          end_marker = '  # END ONE-SHOT REQUESTED LONG-FILE SPLIT\n'
-          end = text.index(end_marker, start) + len(end_marker)
-          path.write_text(text[:start].rstrip() + '\n', encoding='utf-8')
-          PY
-          git config user.name "Agentic CLI"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git diff --cached --stat
-          git commit -m "refactor(tests/docs): split remaining long files"
-          git pull --rebase origin main
-          git push origin HEAD:main
-          for issue in 21 22 24; do
-            curl --silent --show-error --fail-with-body -L \
-              -X PATCH \
-              -H "Accept: application/vnd.github+json" \
-              -H "Authorization: Bearer ${GH_TOKEN}" \
-              -H "X-GitHub-Api-Version: 2022-11-28" \
-              "https://api.github.com/repos/${GITHUB_REPOSITORY}/issues/${issue}" \
-              -d '{"state":"closed","state_reason":"completed"}' || true
-          done
-  # END ONE-SHOT REQUESTED LONG-FILE SPLIT

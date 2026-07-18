@@ -48,6 +48,7 @@ type BeginUploadCommand struct {
 type FinalizeArtifactCommand struct {
 	UploadID         string
 	JobID            string
+	AttemptID        string
 	WorkerID         string
 	LeaseID          string
 	AttemptNumber    int

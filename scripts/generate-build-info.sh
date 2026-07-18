@@ -60,7 +60,7 @@ ARCH="$(uname -m)"
 SOURCE_HASH="$(sha256sum "${REPO_ROOT}/VERSION.txt" | awk '{print $1}')"
 
 # Protocol version — this is a constant versioned with the gRPC protobuf schema
-PROTOCOL_VERSION="2026-06-worker-v1"
+PROTOCOL_VERSION="v3"
 
 # ─── Build JSON ──────────────────────────────────────────────────────────────
 # Use $(cat <<JSON ... JSON) — NOT read -r — so multi-line content is captured.

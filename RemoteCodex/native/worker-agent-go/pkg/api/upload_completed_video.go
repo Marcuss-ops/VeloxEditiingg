@@ -16,6 +16,7 @@ import (
 
 type UploadCompletedVideoRequest struct {
 	JobID         string
+	AttemptID     string
 	WorkerID      string
 	LeaseID       string
 	AttemptNumber int
@@ -60,6 +61,7 @@ func (c *Client) UploadCompletedVideo(ctx context.Context, req UploadCompletedVi
 	}
 
 	_ = writer.WriteField("job_id", req.JobID)
+	_ = writer.WriteField("attempt_id", req.AttemptID)
 	_ = writer.WriteField("worker_id", req.WorkerID)
 	_ = writer.WriteField("lease_id", req.LeaseID)
 	_ = writer.WriteField("attempt", strconv.Itoa(req.AttemptNumber))

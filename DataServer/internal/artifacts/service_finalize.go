@@ -211,6 +211,7 @@ func (s *Service) buildFinalizeVerifiedCommand(
 		UploadID:         cmd.UploadID,
 		ArtifactID:       session.ArtifactID,
 		JobID:            cmd.JobID,
+		AttemptID:        cmd.AttemptID,
 		WorkerID:         cmd.WorkerID,
 		LeaseID:          cmd.LeaseID,
 		AttemptNumber:    session.AttemptNumber,

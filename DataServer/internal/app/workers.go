@@ -47,6 +47,7 @@ func (m *WorkersModule) Name() string {
 
 func (m *WorkersModule) RegisterRoutes(r *gin.Engine) {
 	if m.workerLifecycle != nil {
+		r.POST("/api/v1/workers/register", m.workerLifecycle.RegisterV2Handler())
 		workerAdmin := r.Group("/worker")
 		if m.adminAuth != nil {
 			workerAdmin.Use(m.adminAuth)

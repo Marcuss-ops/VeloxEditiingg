@@ -53,8 +53,10 @@ WORKER_PIDFILE="$WORKDIR/worker.pid"
 
 MASTER_PORT="${E2E_MASTER_PORT:-8080}"
 GRPC_PORT="${E2E_GRPC_PORT:-50051}"
+WORKER_HEALTH_PORT="${E2E_WORKER_HEALTH_PORT:-0}"
 ADMIN_TOKEN="e2e-workload-token"
 WORKER_ID="e2e-workload-worker-1"
+DESTINATION_ID="e2e-local"
 
 VERSION="$(tr -d '[:space:]' < "$REPO_ROOT/VERSION.txt" 2>/dev/null || echo "dev")"
 
@@ -68,15 +70,31 @@ info() { printf "${C_CYAN}.. %s${C_RST}\n" "$*"; }
 declare -a CHILD_PIDS=()
 push_pid() { CHILD_PIDS+=("$1"); }
 
+pick_free_port() {
+  python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()'
+}
+
+if [[ -z "${E2E_MASTER_PORT:-}" ]]; then MASTER_PORT="$(pick_free_port)"; fi
+if [[ -z "${E2E_GRPC_PORT:-}" ]]; then GRPC_PORT="$(pick_free_port)"; fi
+if [[ "$WORKER_HEALTH_PORT" == "0" ]]; then WORKER_HEALTH_PORT="$(pick_free_port)"; fi
+
+assert_port_free() {
+  local port="$1"
+  if ss -ltn "sport = :${port}" | grep -q LISTEN; then
+    fail "required E2E port ${port} is occupied; choose E2E_*_PORT explicitly"
+    exit 3
+  fi
+}
+
 kill_all() {
   local sig="${1:-TERM}"
   for pid in "${CHILD_PIDS[@]}"; do
-    kill -0 "$pid" 2>/dev/null && kill -"$sig" "$pid" 2>/dev/null || true
+    kill -0 "$pid" 2>/dev/null && kill -- -"$pid" 2>/dev/null || true
   done
   if [[ "$sig" == "TERM" ]]; then
     sleep 1
     for pid in "${CHILD_PIDS[@]}"; do
-      kill -0 "$pid" 2>/dev/null && kill -KILL "$pid" 2>/dev/null || true
+      kill -0 "$pid" 2>/dev/null && kill -- -"$pid" 2>/dev/null || true
     done
     for pid in "${CHILD_PIDS[@]}"; do wait "$pid" 2>/dev/null || true; done
   fi
@@ -97,7 +115,8 @@ phase_build() {
   info "Phase 1: building binaries"
   mkdir -p "$BIN_DIR"
 
-  if [[ -x "$MASTER_BIN" && -x "$WORKER_BIN" ]]; then
+  ENGINE_BIN="$WORKDIR/engine-build/velox_video_engine"
+  if [[ -x "$MASTER_BIN" && -x "$WORKER_BIN" && -x "$ENGINE_BIN" ]]; then
     info "binaries already built — skipping"
     return 0
   fi
@@ -111,6 +130,12 @@ phase_build() {
   (cd "$REPO_ROOT/RemoteCodex/native/worker-agent-go" && \
     go build -o "$WORKER_BIN" -ldflags "-s -w" ./cmd/velox-worker-agent) || {
     fail "worker build failed"; exit 2; }
+
+  info "  → velox_video_engine"
+  cmake -S "$REPO_ROOT/RemoteCodex/native/video-engine-cpp" \
+    -B "$WORKDIR/engine-build" -DCMAKE_BUILD_TYPE=Release >/dev/null
+  cmake --build "$WORKDIR/engine-build" --parallel >/dev/null
+  [[ -x "$ENGINE_BIN" ]] || { fail "engine build did not produce $ENGINE_BIN"; exit 2; }
 
   pass "build complete"
 }
@@ -160,6 +185,16 @@ phase_master_start() {
   info "Phase 3: starting master"
   mkdir -p "$DATA_DIR" "$STORAGE_DIR" "$LOG_DIR"
 
+  assert_port_free "$MASTER_PORT"
+  assert_port_free "$GRPC_PORT"
+  [[ ! -e "$DATA_DIR/velox.db" ]] || {
+    fail "refusing to reuse existing database $DATA_DIR/velox.db; choose a fresh E2E_WORKDIR"
+    exit 3
+  }
+  (cd "$REPO_ROOT/DataServer" && go run ./cmd/seed-velox-db-fixture "$DATA_DIR/velox.db") >/dev/null
+  sqlite3 "$DATA_DIR/velox.db" \
+    "INSERT INTO delivery_destinations (destination_id, provider, name, enabled, configuration_json, created_at, updated_at) VALUES ('$DESTINATION_ID', 'google_drive', 'Local E2E', 1, '{}', datetime('now'), datetime('now'));"
+
   cat > "$MASTER_ENV" <<ENV
 VELOX_MASTER_PORT=$MASTER_PORT
 VELOX_GRPC_PORT=$GRPC_PORT
@@ -178,7 +213,7 @@ ENV
   set -a; source "$MASTER_ENV"; set +a
   rm -f "$MASTER_LOG"
 
-  "$MASTER_BIN" serve >"$MASTER_LOG" 2>&1 &
+  setsid "$MASTER_BIN" serve >"$MASTER_LOG" 2>&1 &
   local pid=$!
   echo "$pid" > "$MASTER_PIDFILE"
   push_pid "$pid"
@@ -187,6 +222,9 @@ ENV
   # Wait for healthy
   for i in $(seq 1 20); do
     if curl -fsS -o /dev/null "http://127.0.0.1:${MASTER_PORT}/health" 2>/dev/null; then
+      kill -0 "$pid" 2>/dev/null || { fail "health answered after master PID exited"; exit 1; }
+      ss -ltnp | grep -q "pid=${pid}," || { fail "health port is not owned by master PID=$pid"; exit 1; }
+      grep -q "Velox master listening on :${MASTER_PORT}" "$MASTER_LOG" || { fail "master listener identity missing"; exit 1; }
       pass "master healthy after ${i}s"
       return 0
     fi
@@ -207,18 +245,7 @@ phase_submit() {
   local audio_path="$STAGING_DIR/silent.aac"
   [[ -f "$audio_path" ]] || audio_path="$STAGING_DIR/silent.mp3"
 
-  cat > "$WORKDIR/job.json" <<JSON
-{
-  "video_name": "VeloxE2EWorkload",
-  "script_text": "PR 5 E2E workload smoke test.",
-  "scenes_json": "[{\"text\":\"E2E\",\"image\":\"file://${scene_path}\"}]",
-  "voiceover_path": "${audio_path}",
-  "render_video": true,
-  "save_to_db": true,
-  "channel_id": "e2e-workload",
-  "audio_language_for_srt": "en"
-}
-JSON
+  "${REPO_ROOT}/scripts/e2e/write-local-workload-fixture.sh" "$WORKDIR/job.json" "$STAGING_DIR" "$DESTINATION_ID"
 
   local submit_out
   submit_out="$(curl -sS -m 15 -X POST \
@@ -242,6 +269,9 @@ JSON
 phase_worker_start() {
   info "Phase 5: starting worker"
 
+  local bundle_hash
+  bundle_hash="$(scripts/e2e/write-local-bundle-identity.sh "$WORKDIR" "$WORKER_BIN" "$ENGINE_BIN")"
+
   cat > "$WORKER_CFG" <<JSON
 {
   "master_url": "http://127.0.0.1:${MASTER_PORT}",
@@ -251,16 +281,34 @@ phase_worker_start() {
   "job_delivery": "push",
   "environment": "dev",
   "allow_insecure_grpc_dev": true,
+  "bundle_hash": "${bundle_hash}",
+  "video_engine_cpp_bin": "${ENGINE_BIN}",
+  "output_dir": "${WORKDIR}/runtime-output",
+  "temp_dir": "${WORKDIR}/runtime-temp",
   "data_dir": "${WORKDIR}",
+  "state_dir": "${WORKDIR}/state",
   "max_active_jobs": 1,
-  "health_port": 0,
+  "health_port": ${WORKER_HEALTH_PORT},
   "prometheus_port": 0,
   "protocol_version": "v3"
 }
 JSON
 
+  mkdir -p "$WORKDIR/tests/fixtures"
+  cp "$REPO_ROOT/RemoteCodex/native/worker-agent-go/tests/fixtures/engine_selftest_baseline.sha256" \
+    "$WORKDIR/tests/fixtures/engine_selftest_baseline.sha256"
+
+  local worker_token
+  worker_token="$(curl -fsS -m 10 -X POST \
+    -H "Content-Type: application/json" \
+    --data "{\"worker_id\":\"${WORKER_ID}\",\"worker_name\":\"e2e-worker\",\"protocol_version\":\"v3\",\"bundle_hash\":\"${bundle_hash}\"}" \
+    "http://127.0.0.1:${MASTER_PORT}/api/v1/workers/register" \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin)["session_id"])')" \
+    || { fail "worker HTTP registration/token bootstrap failed"; exit 1; }
+  [[ -n "$worker_token" ]] || { fail "worker HTTP registration returned an empty token"; exit 1; }
+
   rm -f "$WORKER_LOG"
-  VELOX_ALLOW_INSECURE_GRPC_DEV=true "$WORKER_BIN" --config "$WORKER_CFG" \
+  setsid env VELOX_ENV=dev VELOX_ALLOW_INSECURE_GRPC_DEV=true WORKER_TOKEN="$worker_token" "$WORKER_BIN" --config "$WORKER_CFG" \
     >"$WORKER_LOG" 2>&1 &
   local pid=$!
   echo "$pid" > "$WORKER_PIDFILE"
@@ -269,7 +317,8 @@ JSON
 
   # Wait for registration
   for i in $(seq 1 20); do
-    if grep -qE "HelloAck|✓ HelloAck|accepted registration" "$MASTER_LOG" 2>/dev/null; then
+    if grep -qE "Worker ${WORKER_ID} connected" "$MASTER_LOG" 2>/dev/null \
+      || grep -q "Registration successful" "$WORKER_LOG" 2>/dev/null; then
       pass "worker registered after ${i}s"
       sleep 2  # let the worker settle
       return 0
@@ -378,9 +427,7 @@ print(vid[0].get('codec_name',''))
   # ── Duration: 1.8s ≤ dur ≤ 2.2s. ──
   local dur
   dur="$(echo "$probe_json" | python3 -c "import sys,json;d=json.load(sys.stdin);f=d.get('format',{});print(f.get('duration','0'))" 2>/dev/null || echo 0)"
-  # Polarity note: awk exits 1 when d IS in range, 0 when out-of-range.
-  # `if ! awk …; then fail … fi` then fails only when d is OUT of range.
-  if ! awk -v d="$dur" 'BEGIN{ exit (d+0 >= 1.8 && d+0 <= 2.2) }'; then
+  if ! awk -v d="$dur" 'BEGIN{ exit !(d+0 >= 1.8 && d+0 <= 2.2) }'; then
     fail "ffprobe: duration=${dur}s (must be in 1.8..2.2s)"
     exit 1
   fi

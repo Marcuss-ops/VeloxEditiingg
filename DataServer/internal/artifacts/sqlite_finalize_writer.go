@@ -178,10 +178,10 @@ func (w *SQLiteFinalizeWriter) FinalizeVerified(ctx context.Context, cmd Finaliz
 	}
 	nowStr := verifiedAt.UTC().Format(time.RFC3339)
 
-	if err := w.markJobSucceededTx(ctx, tx, cmd, nowStr); err != nil {
+	if err := w.markTaskSucceededTx(ctx, tx, cmd, nowStr); err != nil {
 		return nil, err
 	}
-	if err := w.markTaskSucceededTx(ctx, tx, cmd, nowStr); err != nil {
+	if err := w.markJobSucceededTx(ctx, tx, cmd, nowStr); err != nil {
 		return nil, err
 	}
 	if err := w.markArtifactReadyTx(ctx, tx, cmd, nowStr); err != nil {
@@ -334,14 +334,50 @@ func (w *SQLiteFinalizeWriter) markJobSucceededTx(ctx context.Context, tx *sql.T
 // direct INSERT into `jobs` (no `tasks` row) are still safe —
 // RowsAffected == 0 at Step 2.5 is non-fatal by design.
 func (w *SQLiteFinalizeWriter) markTaskSucceededTx(ctx context.Context, tx *sql.Tx, cmd FinalizeVerifiedCommand, nowStr string) error {
+	if cmd.AttemptID != "" {
+		res, err := tx.ExecContext(ctx, `
+			UPDATE tasks
+			SET status = ?, completed_at = ?, updated_at = ?,
+			    winning_attempt_id = ?, winning_attempt_committed_at = ?,
+			    winning_attempt_terminal_pending = 0, revision = revision + 1
+			WHERE job_id = ? AND attempt_id = ?
+			  AND worker_id = ? AND lease_id = ?
+			  AND status IN ('RUNNING', 'LEASED', 'PENDING')`,
+			"SUCCEEDED", nowStr, nowStr, cmd.AttemptID, nowStr,
+			cmd.JobID, cmd.AttemptID, cmd.WorkerID, cmd.LeaseID,
+		)
+		if err != nil {
+			return fmt.Errorf("artifacts: FinalizeVerified task winner CAS: %w", err)
+		}
+		if n, _ := res.RowsAffected(); n != 1 {
+			return fmt.Errorf("%w: task winner affected=%d attempt=%s", ErrTransitionConflict, n, cmd.AttemptID)
+		}
+
+		attemptRes, err := tx.ExecContext(ctx, `
+			UPDATE task_attempts
+			SET status = ?, completed_at = COALESCE(completed_at, ?), updated_at = ?
+			WHERE id = ? AND task_id = (SELECT task_id FROM tasks WHERE job_id = ? AND attempt_id = ?)
+			  AND worker_id = ? AND lease_id = ?
+			  AND status NOT IN ('SUCCEEDED', 'FAILED', 'CANCELLED', 'TIMED_OUT')`,
+			"SUCCEEDED", nowStr, nowStr, cmd.AttemptID, cmd.JobID, cmd.AttemptID, cmd.WorkerID, cmd.LeaseID,
+		)
+		if err != nil {
+			return fmt.Errorf("artifacts: FinalizeVerified attempt winner CAS: %w", err)
+		}
+		if n, _ := attemptRes.RowsAffected(); n != 1 {
+			return fmt.Errorf("%w: attempt winner affected=%d attempt=%s", ErrTransitionConflict, n, cmd.AttemptID)
+		}
+		return nil
+	}
+
 	_, err := tx.ExecContext(ctx, `
 		UPDATE tasks
-		SET status = 'SUCCEEDED',
+		SET status = ?,
 		    completed_at = ?,
 		    updated_at   = ?
 		WHERE job_id = ?
 		  AND status IN ('RUNNING', 'LEASED', 'PENDING')`,
-		nowStr, nowStr, cmd.JobID,
+		"SUCCEEDED", nowStr, nowStr, cmd.JobID,
 	)
 	if err != nil {
 		return fmt.Errorf("artifacts: FinalizeVerified tasks sweep: %w", err)

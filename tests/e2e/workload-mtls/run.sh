@@ -411,9 +411,7 @@ print(vid[0].get('codec_name',''))
 
   local dur
   dur="$(echo "$probe_json" | python3 -c "import sys,json;d=json.load(sys.stdin);f=d.get('format',{});print(f.get('duration','0'))" 2>/dev/null || echo 0)"
-  # Awk exits 1 when d IS in range, 0 when out-of-range;
-  # `if ! awk …; then fail … fi` fails only when d is OUT of range.
-  if ! awk -v d="$dur" 'BEGIN{ exit (d+0 >= 1.8 && d+0 <= 2.2) }'; then
+  if ! awk -v d="$dur" 'BEGIN{ exit !(d+0 >= 1.8 && d+0 <= 2.2) }'; then
     fail "duration=${dur}s (must be in 1.8..2.2s)"; exit 1
   fi
   pass "ffprobe: duration=${dur}s (within 1.8..2.2s)"

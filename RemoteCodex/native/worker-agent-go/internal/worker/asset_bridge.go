@@ -68,6 +68,68 @@ func (w *Worker) resolveVoiceoverAudioPath(ctx context.Context, ref string, para
 	}
 }
 
+// resolveAudioPayload materializes transport-level velox-asset references
+// before the executor/engine sees the immutable task contract. The C++ engine
+// deliberately accepts filesystem paths and HTTP(S), not the master-only
+// velox-asset scheme.
+func (w *Worker) resolveAudioPayload(ctx context.Context, payload map[string]interface{}) (map[string]interface{}, error) {
+	if payload == nil {
+		return nil, nil
+	}
+	clone := make(map[string]interface{}, len(payload))
+	for key, value := range payload {
+		clone[key] = value
+	}
+
+	for _, key := range []string{"audio_path", "voiceover_path", "audio_url", "voiceover_url"} {
+		if raw, ok := clone[key].(string); ok && strings.HasPrefix(strings.TrimSpace(raw), "velox-asset://") {
+			resolved, err := w.resolveVoiceoverAudioPath(ctx, raw, clone)
+			if err != nil {
+				return nil, fmt.Errorf("resolve %s: %w", key, err)
+			}
+			clone[key] = resolved
+		}
+	}
+	if raw, ok := clone["voiceover_paths"].([]interface{}); ok {
+		items := append([]interface{}(nil), raw...)
+		for i, item := range items {
+			if ref, ok := item.(string); ok && strings.HasPrefix(strings.TrimSpace(ref), "velox-asset://") {
+				resolved, err := w.resolveVoiceoverAudioPath(ctx, ref, clone)
+				if err != nil {
+					return nil, fmt.Errorf("resolve voiceover_paths[%d]: %w", i, err)
+				}
+				items[i] = resolved
+			}
+		}
+		clone["voiceover_paths"] = items
+	}
+	if raw, ok := clone["audio_tracks"].([]interface{}); ok {
+		tracks := append([]interface{}(nil), raw...)
+		for i, item := range tracks {
+			track, ok := item.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			trackClone := make(map[string]interface{}, len(track))
+			for key, value := range track {
+				trackClone[key] = value
+			}
+			for _, key := range []string{"source_url", "audio_url", "url"} {
+				if ref, ok := trackClone[key].(string); ok && strings.HasPrefix(strings.TrimSpace(ref), "velox-asset://") {
+					resolved, err := w.resolveVoiceoverAudioPath(ctx, ref, clone)
+					if err != nil {
+						return nil, fmt.Errorf("resolve audio_tracks[%d].%s: %w", i, key, err)
+					}
+					trackClone[key] = resolved
+				}
+			}
+			tracks[i] = trackClone
+		}
+		clone["audio_tracks"] = tracks
+	}
+	return clone, nil
+}
+
 func (w *Worker) downloadVeloxAsset(ctx context.Context, assetID string) (string, error) {
 	cacheDir := w.voiceoverCacheDir()
 	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
