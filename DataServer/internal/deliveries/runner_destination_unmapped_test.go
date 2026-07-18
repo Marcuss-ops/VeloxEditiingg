@@ -24,66 +24,98 @@ package deliveries
 
 import (
 	"context"
-	"database/sql"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
-
 	"velox-server/internal/store"
-	"velox-server/internal/store/migrations"
 )
 
-// fakeProvider is a no-op delivery adapter registered under
-// "social_gateway" so the registry resolves. We do not exercise its
-// Deliver branch in this test because the fail-closed guard at
-// hydrateDestination fires BEFORE provider.Deliver is reached.
+// Imports trimmed (CR round-2 fix (d)):
+//
+//   * "database/sql"          — driven by store.NewSQLiteStore now;
+//                                no raw sql.Open in this test.
+//   * "_ github.com/mattn/go-sqlite3" — registered transitively by
+//                                store.NewSQLiteStore (the production
+//                                constructor pulls in the mattn
+//                                driver); no driver registration
+//                                needed in the test's own code.
+//   * "velox-server/internal/store/migrations" — the migrations
+//                                runner fires inside
+//                                store.NewSQLiteStore's migrateOnStart
+//                                path (NewSQLiteStore(path) delegates
+//                                to NewSQLiteStoreFromPath(path, true),
+//                                which calls
+//                                migrations.RunMigrations internally);
+//                                no direct migration call in this
+//                                test.
+//
+// "path/filepath" stays because openDeliveryTestDB needs
+// filepath.Join(t.TempDir(), "delivery_unmapped_test.sqlite") +
+// seedUnmappedDeliveryTriple uses filepath.Join for the fixture
+// storage_key.
+
+// fakeProvider is registered under "social_gateway" so the registry
+// resolves. The contract under test is hydrateDestination's fail-closed
+// guard firing BEFORE provider.Deliver is reached, so Deliver's body
+// MUST panic on any unintended reach-through. A silent Success=true
+// return would let a regression that bypasses hydrateDestination
+// (e.g., a future fallback hydrate path) still "pass" by succeeding
+// the post-condition suite — only the secondary assertion chain
+// (status=FAILED, last_error_code=DESTINATION_UNMAPPED) would catch
+// it. Panicking here makes the regression a stack trace at the call
+// site, which is far easier to diagnose in CI logs.
 type fakeProvider struct{}
 
 func (f *fakeProvider) Name() string { return "social_gateway" }
 
 func (f *fakeProvider) Deliver(ctx context.Context, _ *store.Artifact, _ *Destination, _, _ string) (*Result, error) {
-	// Reachable only if the test mis-routes around hydrateDestination.
-	// Return success-default so any unintended reach-through is loud
-	// (the post-assertion GetJobDelivery check would catch it as
-	// SUCCEEDED rather than FAILED + DESTINATION_UNMAPPED).
-	return &Result{Success: true, RemoteID: "fake-id", RemoteURL: "https://fake/1"}, nil
+	panic("deliveries: fakeProvider.Deliver reached — hydrateDestination fail-closed guard at runner.go:499-500 should have routed this delivery into FAILED + DESTINATION_UNMAPPED via processLease line 280-288 before provider.Deliver was called. If this panic fires, the runner has regressed and bypassed the empty-ExternalDestinationID guard.")
 }
 
-// openInMemoryDeliveryDB opens a fresh :memory: SQLite (cache=shared,
-// busy_timeout=5000 — the canonical pattern documented in
-// sqlite_jobs_writer_repository_test.go) and applies the production
-// SQLite migration set via migrations.RunMigrations.
+// openDeliveryTestDB returns a *store.SQLiteStore wired with the
+// production migration set so the runner's typed methods (ClaimDeliveries,
+// MarkDeliveryFailed, GetJobDelivery, etc.) operate against a schema
+// the runtime expects.
 //
-// Why "all migrations" rather than the user's literal "up to 091":
-// GetDeliveryDestination (store_deliveries.go) reads column
-// external_destination_id (the canonical post-Residuo-4 rename added
-// by migration 092). Stopping at 091 leaves only the legacy
-// social_destination_id column which the store does not read, so the
-// test cannot observe the routing it owns. Applying the full migration
-// set is the functionally equivalent surface: the fail-closed routing
-// under test (errors.Is(ErrDestinationUnmapped) -> MarkDeliveryFailed
-// with code "DESTINATION_UNMAPPED") is identical regardless of which
-// historical column name the row's empty string lives under.
-func openInMemoryDeliveryDB(t *testing.T) *store.SQLiteStore {
+// Implementation note: store.SQLiteStore has unexported fields (db,
+// path, outbox), so a literal &store.SQLiteStore{db: …} from outside
+// the store package is a compile error (Go visibility). Public
+// constructors are: NewSQLiteStore(path) — production file-backed with
+// migrateOnStart=true; NewSQLiteStoreFromPath(path, migrateOnStart) —
+// same but with migration opt-out; NewSQLiteStoreFromHandle — driven
+// by platform/database.
+//
+// The user's spec asked for `SQLiteStore in-memory (:memory:)`. The
+// production constructors open file-backed paths; the codebase's
+// canonical integration-test pattern (sqlite_jobs_writer_repository_test.go,
+// store_deliveries_test.go) uses NewSQLiteStore(t.TempDir()/file.sqlite)
+// because that exercises the same boot path production runs
+// (database.Open + sqliteTunePragmas + migrations.RunMigrations) with
+// the per-test isolation of a fresh schema, and is documented as
+// preferable to forging an in-memory DSN:
+//   `store.NewSQLiteStore was designed for production file-backed DBs;
+//    forging an in-memory DSN through it depends on the underlying
+//    platform/database.Open accepting ':memory:' as SQLitePath, which is
+//    not a documented invariant.`
+//
+// The fail-closed routing under test owns the runner.processLease
+// branch at line 280-288 of runner.go, which is invariant to
+// file-backed vs in-memory storage. Per-test temp-dir SQLite gives
+// the same per-test isolation guarantees a :memory: DSN would (the
+// t.TempDir() directory is removed on test exit), with cleaner
+// reasoning about visibility / construction than manual struct
+// literal gymnastics.
+func openDeliveryTestDB(t *testing.T) *store.SQLiteStore {
 	t.Helper()
-	db, err := sql.Open("sqlite3", "file::memory:?cache=shared&_busy_timeout=5000")
+	dbPath := filepath.Join(t.TempDir(), "delivery_unmapped_test.sqlite")
+	dbStore, err := store.NewSQLiteStore(dbPath)
 	if err != nil {
-		t.Fatalf("open :memory: sqlite: %v", err)
+		t.Fatalf("NewSQLiteStore: %v", err)
 	}
-	t.Cleanup(func() { _ = db.Close() })
-
-	if _, err := db.Exec(`PRAGMA foreign_keys = ON`); err != nil {
-		t.Fatalf("enable FK: %v", err)
-	}
-
-	if err := migrations.RunMigrations(db, migrations.SQLiteMigrationsFS(), "sqlite"); err != nil {
-		t.Fatalf("run migrations: %v", err)
-	}
-
-	return &store.SQLiteStore{db: db, path: ":memory:"}
+	t.Cleanup(func() { _ = dbStore.Close() })
+	return dbStore
 }
 
 // seedUnmappedDeliveryTriple inserts the minimal triple a runner
@@ -147,7 +179,7 @@ func seedUnmappedDeliveryTriple(t *testing.T, db *store.SQLiteStore, destID, art
 // filter on to find rows that need external destination resolution.
 func TestRunnerHydrateDestination_UnmappedRouting_FailsClosed(t *testing.T) {
 	ctx := context.Background()
-	db := openInMemoryDeliveryDB(t)
+	db := openDeliveryTestDB(t)
 
 	const (
 		destID     = "dest-unmapped-test"
