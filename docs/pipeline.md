@@ -340,6 +340,8 @@ Tutta la logica HTTP `POST /internal/v1/deliveries` vive qui
   Social API esterno).
 - Il bearer verso la Social API stessa è `SOCIAL_API_TOKEN` (env).
 
+**Cross-link operator-facing**: per la procedura locale di dry-run della wire-shape canonica della Social API (Check 3 della post-deploy audit), vedi `docs/SOCIAL_API_MIGRATION_RUNBOOK.md` §3.3.
+
 ---
 
 ## 9. Delivery Plan & Destinazioni
