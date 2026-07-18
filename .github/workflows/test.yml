@@ -68,7 +68,9 @@ jobs:
           python-version: "3.12"
 
       - name: Install ansible-lint
-        run: pip install --quiet ansible-lint
+        run: |
+          pip install --quiet ansible-lint
+          ansible-galaxy collection install ansible.posix
 
       - name: Lint playbooks
         working-directory: deploy/playbooks

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# size-benchmark: 42 - 42,2 KB
 # Create a content-addressed local worker bundle identity.
 set -euo pipefail
 

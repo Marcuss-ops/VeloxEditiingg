@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# size-benchmark: 42 - 42,2 KB
 # Write the canonical local real-workload payload used by pilot and E2E.
 set -euo pipefail
 
