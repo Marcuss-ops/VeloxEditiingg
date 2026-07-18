@@ -360,10 +360,12 @@ Tabella `delivery_destinations`:
 | Colonna | Descrizione |
 |---------|-------------|
 | `destination_id` | Identificativo univoco (es. `comedy_test`) |
-| `provider` | `drive` o `social_gateway` |
-| `folder_id` | Cartella Drive di destinazione |
-| `channel_id` | ID canale remoto (semantico, NON validato da Velox) |
+| `provider` | `drive` o `social_gateway` (chiave di **routing** interna a Velox — **NON** social platform) |
+| `folder_id` | Cartella Drive di destinazione (usato solo da `provider=drive`; ignorato da `provider=social_gateway`) |
+| `external_destination_id` | Identificativo **opaco** risolto server-side dalla Social API in (platform, account, channel, language, credentials). **Post PR-15.13** (Residuo 3 closure) + **PR-15.14** (Residuo 4 closure, migration 092 rename): Velox non conosce né propaga più le 3 colonne pre-closure (account_id, channel_id, language) come campi verso `social_repo`. L'`external_destination_id` è canonico post-migration 092 (precedentemente `social_destination_id`). Vuoto/whitespace-only al claim time del runner → fail-closed con codice `DESTINATION_UNMAPPED` (vedi `runner.go:499-500`). |
+| `name` | Nome descrittivo della destinazione |
 | `enabled` | Se la destinazione è attiva |
+| `configuration_json` | Blob JSON opaco Velox-internal. NON propagato verso `social_repo`. Eventuali sub-key platform-shaped legacy (`$.platform`, `$.account_id`, `$.channel_id`, `$.language`) restano qui solo per audit-trail — vedi `docs/SOCIAL_API_MIGRATION_RUNBOOK.md` §2. Per nuova intent platform-shaped, vedi il campo wire `metadata map[string]any` su `socialclient.DeliverArtifactRequest` (`DataServer/internal/socialclient/requests.go`). |
 
 ### Retry Budget
 
@@ -395,7 +397,7 @@ Tabella `delivery_destinations`:
 | Tabella | Ruolo |
 |---------|-------|
 | `job_deliveries` | Record delivery (status, lease_id, attempt_count, max_attempts, idempotency_key) |
-| `delivery_destinations` | Configurazione destinazione (provider, folder_id, channel_id, enabled) |
+| `delivery_destinations` | Schema **post-PR-15.13**: `provider`, `folder_id`, `external_destination_id`, `name`, `enabled`, `configuration_json`, `created_at`, `updated_at`. Evoluzione: migration `091_opaque_destination.sql` ha DROPPATO 3 colonne pre-closure (account_id, channel_id, language) (Residuo 2); migration `092_rename_social_to_external_destination_id.sql` ha rinominato `social_destination_id` → `external_destination_id` (Residuo 4). **Nessun campo propagato verso `social_repo` ricade sulle 3 colonne pre-closure (account_id, channel_id, language)** — il contratto wire è esclusivamente `external_destination_id` (opaco) + `metadata` (opaque pass-through). Riferimento incrociato: CHANGELOG.md §15.13 (Residuo 3 closure — `socialclient.DeliverArtifactRequest` typed boundary). |
 | `job_delivery_plans` | Piano per-job (destination, priority, retry_budget) |
 | `delivery_attempts` | Audit log per-tentativo (status, errore, timestamp) |
 
