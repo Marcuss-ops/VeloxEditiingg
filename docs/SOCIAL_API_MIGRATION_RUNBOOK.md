@@ -2,7 +2,7 @@
 
 > **Audience:** SRE / on-call. **Scope:** All operator procedures on the
 > Velox SQLite database and Socialclient wire-contract that arise
-> following the YouTube → Social closure (PR-15.11 through PR-15.17,
+> following the YouTube → Social closure (PR-15.11 through PR-15.16,
 > Migrations 090 → 093).
 > **Owner:** Velox core platform. **Review cadence:** every
 > PR-touching-deploy change touching `delivery_destinations`,
@@ -392,19 +392,33 @@ remediation hints in the workflow file header.
 ### 3.4 Check 4 — dispatch-time destination_unmapped rate
 
 The runner records every fail-closed dispatch into
-`job_deliveries.last_error_code` (see `runner.go:280-288`). Query
-the rate of new `DESTINATION_UNMAPPED` rows since the §1 back-fill
-window:
+`job_deliveries.last_error_code`, with the terminal timestamp on
+`job_deliveries.completed_at` (see `runner.go:280-288` and the
+`MarkDeliveryFailed` SQL UPDATE at
+`store/store_deliveries_lease.go:341-356` which sets
+`status='FAILED'`, `last_error_code`, `last_error_message`,
+`completed_at`). Query the rate of new `DESTINATION_UNMAPPED` rows
+since the §1 back-fill window:
 
 ```sql
-SELECT date(last_error_at)             AS day,
-       count(*)                          AS unmapped_count
+SELECT date(completed_at)             AS day,
+       count(*)                         AS unmapped_count
 FROM job_deliveries
 WHERE last_error_code = 'DESTINATION_UNMAPPED'
-  AND last_error_at >= '<TIMESTAMP-STARTING-OF-§1-WINDOW>'
+  AND status = 'FAILED'
+  AND completed_at >= '<TIMESTAMP-STARTING-OF-§1-WINDOW>'
 GROUP BY day
 ORDER BY day DESC;
 ```
+
+> **Note (belt-and-suspenders):** the `status = 'FAILED'` filter is
+> intentionally redundant with `last_error_code =
+> 'DESTINATION_UNMAPPED'` — `MarkDeliveryFailed` at
+> `store/store_deliveries_lease.go:341-356` SETs both columns in the
+> same UPDATE. Removing the `status = 'FAILED'` clause would still
+> match today's data; keeping it makes the audit robust against
+> future PENDING-row edge cases (test fixtures that stamp a
+> `last_error_code` before the terminal status).
 
 **Expected post-healthy-install envelope:**
 
@@ -438,14 +452,13 @@ echo "=== Check 1: youtube-residue audit on $DB_PATH ==="
 
 echo
 echo "=== Check 2: closure marker pass ==="
-sqlite3 "$DB_PATH" "$(cat <<'SQL'
+sqlite3 "$DB_PATH" <<'SQL'
 SELECT 'total='        || (SELECT count(*) FROM delivery_destinations)
      || ' marked='     || (SELECT count(*) FROM delivery_destinations
                              WHERE json_extract(configuration_json, '$.residuo4_closed_at') IS NOT NULL
                                AND json_valid(configuration_json) = 1)
      || ' malformed='  || (SELECT count(*) FROM delivery_destinations WHERE json_valid(configuration_json) = 0);
 SQL
-)"
 
 echo
 echo "=== Check 3: wire-shape dry-run ==="
@@ -468,10 +481,11 @@ echo "OK — opaque-wire clean."
 
 echo
 echo "=== Check 4: dispatch-time DESTINATION_UNMAPPED rate ==="
-sqlite3 -separator $'\t' "$DB_PATH" <<SQL
-SELECT date(last_error_at) AS day, count(*) AS unmapped_count
+sqlite3 -separator $'\t' "$DB_PATH" <<'SQL'
+SELECT date(completed_at) AS day, count(*) AS unmapped_count
 FROM job_deliveries
 WHERE last_error_code = 'DESTINATION_UNMAPPED'
+  AND status = 'FAILED'
 GROUP BY day
 ORDER BY day DESC
 LIMIT 7;
@@ -540,13 +554,13 @@ detector schedule baked into
 * Fail-closed coverage gap test:
   `TestRunnerHydrateDestination_UnmappedRouting_FailsClosed` in
   `DataServer/internal/deliveries/runner_destination_unmapped_test.go`
-  (PR-15.17 closure)
+  (commits `e4c5b58` + `39be2d0` — PR anchor pending CHANGELOG rebase)
 
 ### 5.3 CI gates
 
 * `.github/workflows/no-youtube-regression.yml` (PR-15.11) —
   forbids re-introduction of direct YouTube-domain imports.
-* `.github/workflows/ci-opaque-wire.yml` (PR-15.17) — forbids
+* `.github/workflows/ci-opaque-wire.yml` (commits `1927b8b` + `bf3b845` — PR anchor pending CHANGELOG rebase) — forbids
   re-introduction of top-level `Platform` / `AccountID` /
   `ChannelID` on `socialclient.DeliverArtifactRequest`.
 
@@ -558,15 +572,34 @@ detector schedule baked into
 
 ### 5.5 CHANGELOG anchors
 
-* PR-15.11 — Migration drop (closure of YouTube-domain)
-* PR-15.12 — Residuo 2 closure (opaque-mode Destination model)
-* PR-15.13 — Residuo 3 closure (socialclient refactor)
-* PR-15.14 — Residuo 4 closure (canonical rename
-  `SocialDestinationID → ExternalDestinationID`)
-* PR-15.15 — Residuo 5 closure (alias removal `SOCIAL_GATEWAY_*`)
-* PR-15.16 — Residuo 6 closure
-  (`external_destination_id` migration / `channel_id` retirement)
-* PR-15.17 — CI gates (Residuo 3 + fail-closed coverage gap)
+Anchors currently shipping in CHANGELOG.md on `main` (verified by
+`grep -nE 'PR-15\.(1[0-9])' CHANGELOG.md`):
+
+* **PR-15.10** — residuo 5 (Rimozione alias `SOCIAL_GATEWAY_*`)
+* **PR-15.11** — Migration drop (closure of YouTube-domain;
+  `090_drop_youtube_domain.sql` + `091_opaque_destination.sql`)
+* **PR-15.12** — Residuo 2 closure (opaque-mode Destination model;
+  `runner.hydrateDestination` fail-closed guard)
+* **PR-15.13** — Residuo 3 closure (socialclient refactor; removed
+  top-level `Platform` / `AccountID` / `ChannelID`)
+* **PR-15.14** — Residuo 4 closure (canonical rename
+  `SocialDestinationID → ExternalDestinationID` via migration 092)
+* **PR-15.16** — Residuo 6 closure (`external_destination_id`
+  migration / `channel_id` retirement)
+
+Operator follow-up (work landed on `main` but NOT yet anchored in
+CHANGELOG.md — track via commit hash until the next CHANGELOG
+rebase assigns a PR-N.NN anchor):
+
+* **Fail-closed coverage gap test:**
+  - `e4c5b58`  `test(deliveries): close Residuo 2 fail-closed coverage gap`
+  - `39be2d0`  `test(deliveries): fix build break + panic in fakeProvider`
+* **Opaque-wire CI guard (round-1, round-3 fix-ups):**
+  - `1927b8b`  `ci(workflow): add opaque-wire Residuo 3 guard`
+  - `bf3b845`  `ci(workflow): harden opaque-wire Residuo 3 guard`
+* **Residuo 5 (alias removal `SOCIAL_GATEWAY_*`):** pending
+  operator-side coordination. When landed, will surface as the
+  next PR-N.NN anchor.
 
 ---
 
@@ -614,6 +647,6 @@ When updating this runbook:
    fresh `velox-test.db` and confirm `=== ALL CHECKS PASS ===`.
 4. Pin the runbook to a CHANGELOG entry (e.g.
    `docs: SOCIAL_API_MIGRATION_RUNBOOK.md — first emission
-   (PR-15.17 follow-up)`).
+   `).
 5. The runbook is read-only — operators do not edit migration
    files; they only run SQL / bash / diagnostic queries.
