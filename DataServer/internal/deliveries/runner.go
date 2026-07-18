@@ -279,7 +279,7 @@ func (r *DeliveryRunner) processLease(ctx context.Context, lease store.DeliveryL
 	dest, err := r.hydrateDestination(ctx, lease.DestinationID)
 	if err != nil {
 		// Distinguish DESTINATION_NOT_FOUND (no row) from
-		// DESTINATION_UNMAPPED (row exists but social_destination_id is
+		// DESTINATION_UNMAPPED (row exists but external_destination_id is
 		// empty — opaque-mode fail-closed contract, see provider.go).
 		code := "DESTINATION_NOT_FOUND"
 		if errors.Is(err, ErrDestinationUnmapped) {
@@ -483,11 +483,15 @@ func classifyErrorCode(err error) string {
 // migration 091):
 //   * the YouTube-specific fields (AccountID, ChannelID, Language) are gone
 //     from the typed Destination;
-//   * SocialDestinationID is the opaque identifier resolved server-side by
-//     the external Social API; the runner propagates it verbatim;
-//   * if SocialDestinationID is empty / whitelist-only, hydrate MUST
+//   * ExternalDestinationID (canonical, opaque to Velox) is the social_repo
+//     identifier resolved server-side; the runner propagates it verbatim;
+//   * if ExternalDestinationID is empty / whitespace-only, hydrate MUST
 //     fail closed with ErrDestinationUnmapped so the runner records
 //     DESTINATION_UNMAPPED on the delivery row (operators backfill).
+//
+// Residuo 5 (this commit): the deprecated ABI-safe alias for the opaque
+// identifier has been removed; the typed Destination struct now carries
+// only `ExternalDestinationID` as the opaque identifier.
 func (r *DeliveryRunner) hydrateDestination(ctx context.Context, destID string) (*Destination, error) {
 	d, err := r.dbStore.GetDeliveryDestination(ctx, destID)
 	if err != nil {
@@ -507,7 +511,6 @@ func (r *DeliveryRunner) hydrateDestination(ctx context.Context, destID string) 
 		DestinationID:         d.DestinationID,
 		Provider:              d.Provider,
 		ExternalDestinationID: d.ExternalDestinationID,
-		SocialDestinationID:   d.ExternalDestinationID,
 		FolderID:              d.FolderID,
 		Name:                  d.Name,
 		Enabled:               d.Enabled,

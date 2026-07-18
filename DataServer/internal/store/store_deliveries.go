@@ -27,38 +27,25 @@ import (
 // DeliveryDestination is the typed view of a delivery_destinations row.
 //
 // Opaque-mode (Residuo 2 of the YouTube→Social closure): the legacy
-// YouTube-specific fields `AccountID`, `ChannelID`, and `Language`
-// have been removed from the typed struct because Velox no longer
-// owns those concepts. The opaque `ExternalDestinationID` resolves
-// to account + channel + language server-side via the external
-// Social API. The column `external_destination_id` was added by
-// migration 091 (Residuo 2 closure) and renamed from
-// `social_destination_id` by migration 092 (Residuo 4 — this commit).
+// YouTube-specific fields `AccountID`, `ChannelID`, and `Language` have
+// been removed from the typed struct because Velox no longer owns those
+// concepts. `ExternalDestinationID` (canonical, opaque to Velox) is the
+// only identifier routed to the social_repo; the social_repo resolves
+// account + channel + language server-side from this opaque reference.
 //
-// ABI-safe gradual rename (Residuo 4): the typed struct carries BOTH
-// `ExternalDestinationID` (canonical, json:"external_destination_id,omitempty")
-// AND a deprecated alias `SocialDestinationID` (json:"-" — kept for
-// back-compat reads until the validator + delivery_runner + socialclient
-// + provider layers rename in their own commits). The alias is
-// populated by SQL readers (after Scan, line sets it from canonical)
-// so consumers that haven't yet migrated continue to compile and
-// observe the same value via either field.
+// The column `external_destination_id` was added by migration 091
+// (Residuo 2 — DROPPED the legacy account_id / channel_id / language
+// columns) and renamed from `social_destination_id` by migration 092
+// (Residuo 4 — canonical-rename of the opaque-mode identifier).
 //
-// Deprecated: `SocialDestinationID` is removed in Residuo 5 (final
-// old-name-drop follow-up).
+// Residuo 5 (this commit): the deprecated ABI-safe back-compat alias
+// for the opaque identifier has been removed entirely. The only opaque
+// identifier in the typed struct is `ExternalDestinationID`.
 type DeliveryDestination struct {
 	DestinationID         string `json:"destination_id"`
 	Provider              string `json:"provider"`
 	ExternalDestinationID string `json:"external_destination_id,omitempty"`
-	// SocialDestinationID kept as back-compat alias during the
-	// gradual rename. `json:"-"` so the field is NEVER serialized and
-	// the legacy `social_destination_id` key never leaks into the
-	// wire JSON. SQL readers mirror ExternalDestinationID into this
-	// field after Scan; writers modify ExternalDestinationID only.
-	//
-	// Deprecated: removed in Residuo 5 (final-old-name-drop follow-up).
-	SocialDestinationID string `json:"-"`
-	FolderID            string `json:"folder_id,omitempty"`
+	FolderID              string `json:"folder_id,omitempty"`
 	Name                string `json:"name"`
 	Enabled             bool   `json:"enabled"`
 	ConfigurationJSON   string `json:"configuration_json"`
@@ -174,10 +161,6 @@ func (s *SQLiteStore) InsertDeliveryDestination(dest *DeliveryDestination) error
 		dest.Name, enabled, dest.ConfigurationJSON,
 		dest.CreatedAt, dest.UpdatedAt,
 	)
-	// Mirror the canonical field into the deprecated alias so callers
-	// reading either name observe the same value during the gradual
-	// rename (Residuo 4 step 1). Removed in Residuo 5.
-	dest.SocialDestinationID = dest.ExternalDestinationID
 	return err
 }
 
@@ -188,8 +171,7 @@ func (s *SQLiteStore) InsertDeliveryDestination(dest *DeliveryDestination) error
 // the legacy account_id / channel_id / language columns have been dropped
 // from the delivery_destinations table. ExternalDestinationID is the
 // canonical opaque reference (renamed from social_destination_id by
-// migration 092, Residuo 4 step 1); the deprecated SocialDestinationID
-// alias is populated from it for ABI-safe gradual rename.
+// migration 092, Residuo 4).
 func (s *SQLiteStore) ListDeliveryDestinations(provider string, limit int) ([]DeliveryDestination, error) {
 	if limit <= 0 {
 		limit = 200
@@ -227,10 +209,6 @@ func (s *SQLiteStore) ListDeliveryDestinations(provider string, limit int) ([]De
 			continue
 		}
 		d.Enabled = enabledInt != 0
-		// Mirror the canonical field into the deprecated alias so
-		// callers reading either name observe the same value during
-		// the gradual rename. Removed in Residuo 5.
-		d.SocialDestinationID = d.ExternalDestinationID
 		out = append(out, d)
 	}
 	return out, rows.Err()
@@ -243,8 +221,7 @@ func (s *SQLiteStore) ListDeliveryDestinations(provider string, limit int) ([]De
 // the legacy account_id / channel_id / language columns have been dropped
 // from the delivery_destinations table. ExternalDestinationID is the
 // canonical opaque reference (renamed from social_destination_id by
-// migration 092, Residuo 4 step 1); the deprecated SocialDestinationID
-// alias is populated from it for ABI-safe gradual rename.
+// migration 092, Residuo 4).
 func (s *SQLiteStore) GetDeliveryDestination(ctx context.Context, destID string) (*DeliveryDestination, error) {
 	row := s.db.QueryRowContext(ctx,
 		`SELECT destination_id, provider, COALESCE(external_destination_id, ''),
@@ -267,10 +244,6 @@ func (s *SQLiteStore) GetDeliveryDestination(ctx context.Context, destID string)
 		return nil, err
 	}
 	d.Enabled = enabledInt != 0
-	// Mirror the canonical field into the deprecated alias so
-	// callers reading either name observe the same value during the
-	// gradual rename. Removed in Residuo 5.
-	d.SocialDestinationID = d.ExternalDestinationID
 	return &d, nil
 }
 

@@ -8,24 +8,20 @@ import (
 
 // TestDestinationOpaqueStructShape enforces (via the Go compiler) that
 // the typed Destination struct does NOT carry the legacy YouTube-
-// specific fields (AccountID, ChannelID, Language). The struct literal
-// below would fail to compile if any of them were re-added without a
-// typed migration step. Together with the matching compile-time check
-// in store.delivery_destination_opaque_test.go and the migration 091
-// forward-only DROP COLUMN, this is the third line of defence against
-// YouTube-domain re-introduction.
-//
-// Residuo 4 gradual rename: ExternalDestinationID is canonical (new);
-// SocialDestinationID is the deprecated back-compat alias mirroring
-// ExternalDestinationID. Both fields present so the compile-time
-// shape pin spans the post-rename contract (canonical reads + alias
-// reads both produce the same value).
+// specific fields (AccountID, ChannelID, Language) and does NOT carry
+// the deprecated ABI-safe alias for the opaque identifier (dropped
+// in Residuo 5). The struct literal below would fail to compile if any
+// of them were re-added without a typed migration step. Together with
+// the matching compile-time check in
+// store.delivery_destination_opaque_test.go and the migrations 091 /
+// 092 forward-only DROP / RENAME chain, this is the third line of
+// defence against YouTube-domain re-introduction and the canonical
+// post-rename shape contract.
 func TestDestinationOpaqueStructShape(t *testing.T) {
 	_ = Destination{
 		DestinationID:         "dst_test_opaque",
 		Provider:              "social_gateway",
 		ExternalDestinationID: "external_dest_test",
-		SocialDestinationID:   "external_dest_test",
 		FolderID:              "fld_1",
 		Name:                  "Opaque Test",
 		Enabled:               true,

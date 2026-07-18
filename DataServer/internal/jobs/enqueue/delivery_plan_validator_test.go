@@ -540,41 +540,52 @@ func TestValidateDeliveryPlanRequires_DisabledFalsyRetryBudgetTripOrder(t *testi
 }
 
 // =====================================================================
-// shapeFromMap: social_destination_id + platform surface for the
+// shapeFromMap: external_destination_id + platform surface for the
 // Social API pre-flight loop. Both fields are optional and ignored
 // when empty (legacy Drive-only entries).
+//
+// Residuo 5 (this commit): the deprecated typed alias for the opaque
+// identifier has been dropped. The legacy `social_destination_id` JSON
+// payload key is still accepted for backward-compat reads of operator
+// payloads — both keys funnel into the canonical ExternalDestinationID
+// slot via shapeFromMap's firstStringField fallback. The pin below
+// keeps the back-compat behaviour OBSERVABLE on the canonical typed
+// field (not on a removed alias field).
 // =====================================================================
 
-func TestShapeFromMap_SocialFields(t *testing.T) {
+func TestShapeFromMap_ExternalDestinationIDAndPlatform(t *testing.T) {
 	t.Parallel()
 	t.Run("defaults_to_empty", func(t *testing.T) {
 		t.Parallel()
 		s := shapeFromMap(map[string]interface{}{"destination_id": "drive-main"})
-		if s.SocialDestinationID != "" {
-			t.Errorf("social_destination_id = %q; want ''", s.SocialDestinationID)
+		if s.ExternalDestinationID != "" {
+			t.Errorf("external_destination_id = %q; want ''", s.ExternalDestinationID)
 		}
 		if s.Platform != "" {
 			t.Errorf("platform = %q; want ''", s.Platform)
 		}
 	})
-	t.Run("honors_both_fields", func(t *testing.T) {
+	// Back-compat: the legacy `social_destination_id` JSON key is
+	// still honored for pre-rename operator payloads and feeds the
+	// canonical field. The typed alias is gone, so there's no second
+	// field to compare — what matters is the canonical slot is
+	// populated.
+	t.Run("legacy_social_destination_id_key_feeds_canonical", func(t *testing.T) {
 		t.Parallel()
 		s := shapeFromMap(map[string]interface{}{
 			"destination_id":        "social-amish",
 			"social_destination_id": "social_dest_amish",
 			"platform":              "youtube",
 		})
-		if s.SocialDestinationID != "social_dest_amish" {
-			t.Errorf("social_destination_id = %q; want social_dest_amish", s.SocialDestinationID)
+		if s.ExternalDestinationID != "social_dest_amish" {
+			t.Errorf("ExternalDestinationID = %q; want social_dest_amish (legacy JSON key back-compat read)", s.ExternalDestinationID)
 		}
 		if s.Platform != "youtube" {
 			t.Errorf("platform = %q; want youtube", s.Platform)
 		}
 	})
-	// Residuo 4 (post-rename): canonical key
-	// `external_destination_id` MUST populate ExternalDestinationID +
-	// alias-mirror to SocialDestinationID. The legacy `social_destination_id`
-	// key falls back identically when only the legacy key is present.
+	// Residuo 4 (post-rename): the canonical
+	// `external_destination_id` JSON key is the primary contract.
 	t.Run("canonical_external_destination_id_honored", func(t *testing.T) {
 		t.Parallel()
 		s := shapeFromMap(map[string]interface{}{
@@ -585,19 +596,16 @@ func TestShapeFromMap_SocialFields(t *testing.T) {
 		if s.ExternalDestinationID != "social_dest_amish" {
 			t.Errorf("ExternalDestinationID = %q; want social_dest_amish", s.ExternalDestinationID)
 		}
-		if s.SocialDestinationID != "social_dest_amish" {
-			t.Errorf("SocialDestinationID = %q; want social_dest_amish (alias mirrors canonical)", s.SocialDestinationID)
-		}
 		if s.Platform != "youtube" {
 			t.Errorf("Platform = %q; want youtube", s.Platform)
 		}
 	})
 	// Residuo 4 precedence: when BOTH canonical and legacy keys are
-	// present with DIFFERENT values, canonical wins (operator intent
-	// is the post-rename contract). The legacy alias is preserved
-	// verbatim so callers reading the old field still observe the
-	// value they wrote (no silent coercion).
-	t.Run("canonical_wins_over_legacy_alias_when_both_present", func(t *testing.T) {
+	// present with DIFFERENT values, canonical wins. The legacy key
+	// is NOT surfaced on a typed alias anymore (Residuo 5) — the
+	// canonical slot is the SINGLE source of truth, no silent
+	// coercion of a removed field.
+	t.Run("canonical_wins_over_legacy_key_when_both_present", func(t *testing.T) {
 		t.Parallel()
 		s := shapeFromMap(map[string]interface{}{
 			"destination_id":          "social-amish",
@@ -606,10 +614,7 @@ func TestShapeFromMap_SocialFields(t *testing.T) {
 			"platform":                "youtube",
 		})
 		if s.ExternalDestinationID != "canonical_id" {
-			t.Errorf("ExternalDestinationID = %q; want canonical_id", s.ExternalDestinationID)
-		}
-		if s.SocialDestinationID != "legacy_id" {
-			t.Errorf("SocialDestinationID = %q; want legacy_id (legacy alias preserved verbatim)", s.SocialDestinationID)
+			t.Errorf("ExternalDestinationID = %q; want canonical_id (canonical wins over legacy JSON key when both present)", s.ExternalDestinationID)
 		}
 	})
 }
@@ -645,7 +650,14 @@ func (s *stubValidator) callCount() int {
 //
 //	ErrPermanent | ErrAuth               → HARD fail (validationError)
 //	ErrTransient | ErrRateLimit | ErrNotConfigured → SOFT pass (nil return)
-//	missing social_destination_id       → loop skips pre-flight
+//	missing external_destination_id      → loop skips pre-flight
+//
+// Residuo 5 (this commit): the validator reads `ExternalDestinationID`
+// from the typed shape (canonical, post-Residuo-4 rename). The legacy
+// `social_destination_id` JSON key is still funneled into the same
+// canonical slot by shapeFromMap (back-compat for pre-rename operator
+// payloads), so the operator-visible wire contract has not regressed;
+// only the typed alias has been removed.
 // =====================================================================
 
 func TestValidateDeliveryPlanRequires_Preflight(t *testing.T) {
@@ -654,10 +666,10 @@ func TestValidateDeliveryPlanRequires_Preflight(t *testing.T) {
 	planWithSocial := map[string]interface{}{
 		"delivery_plan": []interface{}{
 			map[string]interface{}{
-				"destination_id":        "velox-social-amish",
-				"social_destination_id": "social_dest_amish",
-				"platform":              "youtube",
-				"retry_budget":          5,
+				"destination_id":          "velox-social-amish",
+				"external_destination_id": "social_dest_amish",
+				"platform":                "youtube",
+				"retry_budget":            5,
 			},
 		},
 	}
@@ -787,7 +799,7 @@ func TestValidateDeliveryPlanRequires_Preflight(t *testing.T) {
 		}
 	})
 
-	t.Run("skipped_for_empty_social_destination_id", func(t *testing.T) {
+	t.Run("skipped_for_empty_external_destination_id", func(t *testing.T) {
 		t.Parallel()
 		stub := &stubValidator{err: nil}
 		err := validateDeliveryPlanRequires(context.Background(), planWithoutSocial, stub)
@@ -795,7 +807,7 @@ func TestValidateDeliveryPlanRequires_Preflight(t *testing.T) {
 			t.Errorf("legacy drive-only entry: want nil; got %v", err)
 		}
 		if stub.callCount() != 0 {
-			t.Errorf("validator call count = %d; want 0 (pre-flight must skip empty social_destination_id)", stub.callCount())
+			t.Errorf("validator call count = %d; want 0 (pre-flight must skip empty external_destination_id)", stub.callCount())
 		}
 	})
 
@@ -812,19 +824,19 @@ func TestValidateDeliveryPlanRequires_Preflight(t *testing.T) {
 		multiPlan := map[string]interface{}{
 			"delivery_plan": []interface{}{
 				map[string]interface{}{
-					"destination_id":        "a",
-					"social_destination_id": "social_a",
-					"retry_budget":          3,
+					"destination_id":          "a",
+					"external_destination_id": "social_a",
+					"retry_budget":            3,
 				},
 				map[string]interface{}{
-					"destination_id":        "b",
-					"social_destination_id": "social_b",
-					"retry_budget":          3,
+					"destination_id":          "b",
+					"external_destination_id": "social_b",
+					"retry_budget":            3,
 				},
 				map[string]interface{}{
-					"destination_id":        "c",
-					"social_destination_id": "social_c",
-					"retry_budget":          3,
+					"destination_id":          "c",
+					"external_destination_id": "social_c",
+					"retry_budget":            3,
 				},
 			},
 		}

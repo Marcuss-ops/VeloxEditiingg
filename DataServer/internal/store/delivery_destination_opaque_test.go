@@ -8,19 +8,14 @@ import (
 
 // TestDeliveryDestinationOpaqueStructShape enforces (via the Go
 // compiler) that the DeliveryDestination struct does NOT carry the
-// legacy YouTube-specific fields (AccountID, ChannelID, Language).
-//
-// Residuo 4 gradual rename: the struct now carries BOTH
-// ExternalDestinationID (canonical, json:"external_destination_id,omitempty")
-// AND SocialDestinationID (deprecated back-compat alias,
-// json:"-"). Both are populated here to mirror what SQL readers
-// produce after migration 092 lands.
+// legacy YouTube-specific fields (AccountID, ChannelID, Language) and
+// does NOT carry the deprecated ABI-safe alias for the opaque
+// identifier (dropped in Residuo 5 / this commit).
 func TestDeliveryDestinationOpaqueStructShape(t *testing.T) {
 	_ = DeliveryDestination{
 		DestinationID:         "dst_test_opaque",
 		Provider:              "social_gateway",
 		ExternalDestinationID: "external_dest_test",
-		SocialDestinationID:   "external_dest_test", // deprecated alias mirrors canonical
 		FolderID:              "fld_1",
 		Name:                  "Opaque Test",
 		Enabled:               true,
@@ -32,19 +27,22 @@ func TestDeliveryDestinationOpaqueStructShape(t *testing.T) {
 
 // TestDeliveryDestinationJSONOpaqueKeys verifies the JSON serialisation
 // of the opaque DeliveryDestination model after the Residuo 4 gradual
-// rename:
+// rename and the Residuo 5 alias drop:
 //   - Required top-level key: external_destination_id (canonical,
 //     post-rename).
 //   - Legacy YouTube keys MUST NOT appear (Residuo 2 invariant).
-//   - The deprecated SocialDestinationID alias is json:"-" so the
-//     social_destination_id key MUST NOT appear in the serialized
-//     JSON either; the field is back-compat reads only.
+//   - The deprecated ABI-safe alias for the opaque identifier is gone
+//     from the typed struct (Residuo 5); the `social_destination_id`
+//     JSON key MUST NOT appear in the serialized wire contract. (The
+//     legacy JSON key is still accepted on inbound operator payloads
+//     by the delivery_plan_validator (see shapeFromMap /
+//     firstStringField), but only the canonical typed field surfaces
+//     it outbound.)
 func TestDeliveryDestinationJSONOpaqueKeys(t *testing.T) {
 	in := DeliveryDestination{
 		DestinationID:         "dst_test_opaque",
 		Provider:              "social_gateway",
 		ExternalDestinationID: "external_dest_opaque_42",
-		SocialDestinationID:   "external_dest_opaque_42", // mirrors canonical after SQL read
 		FolderID:              "fld_42",
 		Name:                  "Opaque Test",
 		Enabled:               true,
@@ -90,16 +88,20 @@ func TestDeliveryDestinationJSONOpaqueKeys(t *testing.T) {
 }
 
 // TestDeliveryDestinationEmptyExternalDestinationIDOmitEmpty verifies
-// the omitempty tag on external_destination_id (canonical, Renamed in
+// the omitempty tag on external_destination_id (canonical, renamed in
 // Residuo 4): an empty value MUST NOT leak into the wire contract.
-// Also verifies that the deprecated SocialDestinationID alias is
-// json:"-" so it never serializes regardless of its value.
+// Also verifies that the deprecated ABI-safe alias for the opaque
+// identifier is absent from the typed struct (Residuo 5) so the legacy
+// `social_destination_id` JSON key can never appear in the wire
+// contract regardless of operator intent. The strict absence of the
+// `social_destination_id` JSON key is pinned separately by
+// TestDeliveryDestinationJSONOpaqueKeys' legacyKeys set; this test
+// focuses on omitempty behaviour of the canonical empty value.
 func TestDeliveryDestinationEmptyExternalDestinationIDOmitEmpty(t *testing.T) {
 	in := DeliveryDestination{
 		DestinationID:         "dst_unmapped",
 		Provider:              "social_gateway",
 		ExternalDestinationID: "", // unmapped, canonical empty
-		SocialDestinationID:   "should-not-leak", // alias populated; json:"-" suppresses
 		Name:                  "Unmapped",
 		Enabled:               true,
 		ConfigurationJSON:     "{}",
@@ -112,8 +114,5 @@ func TestDeliveryDestinationEmptyExternalDestinationIDOmitEmpty(t *testing.T) {
 	}
 	if strings.Contains(string(blob), `"external_destination_id"`) {
 		t.Errorf("empty ExternalDestinationID must be omitempty; blob=%s", string(blob))
-	}
-	if strings.Contains(string(blob), `"social_destination_id"`) {
-		t.Errorf("SocialDestinationID must be json:\"-\" (alias must not leak into wire JSON); blob=%s", string(blob))
 	}
 }

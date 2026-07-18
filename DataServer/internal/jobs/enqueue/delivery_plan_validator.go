@@ -54,9 +54,9 @@ import (
 //   - per-entry enabled == false  (same semantics as store parser)
 //   - per-entry destination_id missing, empty, or duplicated
 //   - per-entry priority < 0
-//   - per-entry social_destination_id present AND Social API pre-flight
+//   - per-entry external_destination_id present AND Social API pre-flight
 //     returns ErrPermanent / ErrAuth (4xx) — bad destination, hard fail
-//   - per-entry social_destination_id present AND Social API pre-flight
+//   - per-entry external_destination_id present AND Social API pre-flight
 //     returns ErrTransient / ErrNotConfigured (network / not built) —
 //     SOFT fail: logged as a warning, enqueue continues (the runner's
 //     retry_budget can still recover via FinalizeVerified)
@@ -88,32 +88,33 @@ func (noopDestinationValidator) ValidateDestination(ctx context.Context, socialD
 }
 
 // deliveryPlanShape carries an optional ExternalDestinationID (canonical,
-// Residuo 4) + a deprecated SocialDestinationID alias + Platform per entry.
-// All three are sourced from the operator-set delivery_plan payload and
-// are FORWARD-ONLY: Velox does NOT validate `platform` semantics (the
-// social_repo is the authoritative owner of platform semantics). The
-// ExternalDestinationID / SocialDestinationID pair is used solely to
-// delegate the destination validation step to
-// `POST /internal/v1/destinations/:id/validate` when an opaque id is
-// present.
+// opaque-mode identifier post-Residuo 4) + Platform per entry. Both are
+// sourced from the operator-set delivery_plan payload and are
+// FORWARD-ONLY: Velox does NOT validate `platform` semantics (the
+// social_repo is the authoritative owner of platform semantics).
+// ExternalDestinationID is used solely to delegate the destination
+// validation step to `POST /internal/v1/destinations/:id/validate` when
+// an opaque id is present.
 //
 // Mapping rationale:
 //   - DestinationID → the Velox-side row in `delivery_destinations`
 //   - ExternalDestinationID → the social_repo-side opaque identifier
-//     (canonical, post-Residuo-4 rename). Optional; missing means
-//     "do not pre-flight" (legacy / drive destinations).
-//   - SocialDestinationID → deprecated back-compat alias read from
-//     `social_destination_id` JSON key, mirrored to canonical. Removed
-//     in Residuo 5.
+//     (canonical). Optional; missing means "do not pre-flight"
+//     (legacy / drive destinations).
 //   - Platform → the target platform string (e.g. "youtube",
 //     "tiktok", "instagram"); forwarded to the social_repo verbatim.
+//
+// Residuo 5 (this commit): the deprecated typed alias for the opaque
+// identifier is removed from the shape. The single canonical typed slot
+// is `ExternalDestinationID`. The legacy `social_destination_id` JSON
+// payload key remains accepted as a back-compat read in shapeFromMap;
+// both keys funnel into the canonical ExternalDestinationID slot.
 type deliveryPlanShape struct {
 	DestinationID         string
 	Priority              int
 	RetryBudget           int
 	Enabled               bool
 	ExternalDestinationID string
-	SocialDestinationID   string
 	Platform              string
 }
 
@@ -198,8 +199,10 @@ func validateDeliveryPlanRequires(ctx context.Context, payloadMap map[string]int
 		// external_destination_id (canonical, post-Residuo-4 rename)
 		// means "no Social API routing for this entry" (legacy
 		// Drive-only destinations) and the loop skips the validation
-		// entirely. SocialDestinationID alias is read-back-compatible
-		// from the shape; if neither is set, skip pre-flight.
+		// entirely. Residuo 5: the deprecated typed alias has been
+		// dropped; the canonical slot covers both the
+		// `external_destination_id` and the legacy `social_destination_id`
+		// JSON payload keys via shapeFromMap's firstStringField fallback.
 		socialDestID := strings.TrimSpace(e.ExternalDestinationID)
 		if socialDestID != "" {
 			if perr := validator.ValidateDestination(ctx, socialDestID); perr != nil {
@@ -365,22 +368,21 @@ func msgExternalDestinationIDAt(i int) string {
 }
 
 func shapeFromMap(m map[string]interface{}) deliveryPlanShape {
-	// Canonical `external_destination_id` (Residuo 4) is read first;
-	// the legacy `social_destination_id` alias is honored for back-compat
-	// read but mirrored into the canonical slot so downstream consumers
-	// always observe the value under ExternalDestinationID.
-	canonical := firstStringField(m, "external_destination_id", "social_destination_id")
-	alias := firstStringField(m, "social_destination_id")
-	if alias == "" {
-		alias = canonical
-	}
+	// Canonical `external_destination_id` (Residuo 4) is the primary JSON
+	// key. The legacy `social_destination_id` payload key is still
+	// accepted for backward-compat reads of operator-submitted delivery_plan
+	// payloads (the field has dropped from the TYPED shape in Residuo 5
+	// but the wire-key acceptance is intentionally preserved so pre-rename
+	// operator payloads keep working). Both keys funnel into the same
+	// canonical ExternalDestinationID slot — no second typed field is
+	// needed.
+	externalDestID := firstStringField(m, "external_destination_id", "social_destination_id")
 	return deliveryPlanShape{
 		DestinationID:         firstStringField(m, "destination_id", "id"),
 		Priority:              intFromAny(m["priority"]),
 		RetryBudget:           intFromAny(m["retry_budget"]),
 		Enabled:               boolFromAny(m["enabled"], true),
-		ExternalDestinationID: canonical,
-		SocialDestinationID:   alias,
+		ExternalDestinationID: externalDestID,
 		Platform:              firstStringField(m, "platform"),
 	}
 }
