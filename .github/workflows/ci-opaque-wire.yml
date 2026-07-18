@@ -1,0 +1,149 @@
+# =============================================================================
+# ci-opaque-wire.yml — opaque wire contract CI guard (Residuo 3 closure).
+#
+# Purpose:
+#   Forbid re-introduction of the legacy top-level `Platform` /
+#   `AccountID` / `ChannelID` fields on
+#   `socialclient.DeliverArtifactRequest` after the YouTube → Social
+#   closure (Residuo 3 of PR-15.13 + Residuo 4 canonical rename of
+#   `social_destination_id` -> `external_destination_id` via migration 092).
+#   Velox does NOT know the platform, the account, the channel, or any
+#   platform-specific concept — the social_repo is the authoritative
+#   resolver from the opaque `external_destination_id`.
+#
+# Scope:
+#   Targeted at `DataServer/internal/socialclient/` (where
+#   `DeliverArtifactRequest` is defined, requested, and consumed).
+#   Whole-tree scan was rejected because DataServer carries
+#   legitimate `Platform` / `ChannelID` fields in unrelated domains:
+#
+#     * DataServer/internal/handlers/remote/livestream/livestream.go
+#     * DataServer/internal/handlers/server/pipeline/pipeline_create.go
+#     * DataServer/internal/store/sqlite_livestream.go
+#     * DataServer/internal/store/sqlite_analytics.go
+#
+#   Those domains are NOT covered by Residuo 3 and would produce
+#   permanent false positives in a whole-tree regex.
+#
+# Forbidden patterns (any one fires a failure):
+#   * Platform   — old top-level field on DeliverArtifactRequest
+#   * AccountID  — old top-level account reference
+#   * ChannelID  — old top-level channel reference
+#
+# Exclusions (pathspec-level, transparent):
+#   * .github/workflows/ci-opaque-wire.yml
+#     SELF-EXCLUSION: this workflow file's header rationale + REGEX
+#     env var + Hints block enumerate the forbidden disjuncts verbatim.
+#     Audit the rest of the repo; exempt this file.
+#   * DataServer/internal/socialclient/**/*_test.go
+#     Tests legitimately assert the ABSENCE of legacy fields
+#     (TestDeliverArtifact_LegacyKeysNeverPresent, the wire-shape
+#     contract — see client_test.go). The audit MUST NOT trip on
+#     negative-pinning assertions that exist specifically to PREVENT
+#     re-introduction.
+#   * DataServer/internal/socialclient/testdata/**
+#     Future wire-shape fixture snapshots (mirrors of the canonical
+#     request body) that may name legacy keys as documented absence.
+#
+# Triggers:
+#   * push to main                              — immediate fail-fast
+#   * pull_request to main                      — pre-merge gating
+#     (NO paths-ignore — every PR runs the audit so a future
+#      contributor can't slip a re-introduction through silently.)
+#   * weekly Monday 06:00 UTC drift detector    — same model as
+#     no-youtube-regression.yml (catches newly-disclosed exits
+#     from other workflows' prune-trees).
+#   * workflow_dispatch                         — manual re-run.
+#
+# Status check name in PR UI: "ci-opaque-wire".
+# Author: Velox regression-guard initiative (Residuo 3 closure).
+# =============================================================================
+
+name: ci-opaque-wire
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '0 6 * * 1'  # weekly Monday 06:00 UTC drift detector
+  workflow_dispatch:
+
+concurrency:
+  group: ci-opaque-wire-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: Opaque-wire CI guard (Residuo 3)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout (full history)
+        uses: actions/checkout@v4
+        with:
+          # fetch-depth: 0 makes the full history searchable so future
+          # maintainers can `git blame` any match the audit surfaced.
+          fetch-depth: 0
+
+      - name: Run opaque-wire regression audit
+        env:
+          # Verbatim regex from the user-provided spec: top-level
+          # Platform / AccountID / ChannelID on DeliverArtifactRequest.
+          # Bar-pipe disjunction so each disjunct matches as a token.
+          REGEX: 'Platform|AccountID|ChannelID'
+        run: |
+          set -euo pipefail
+          echo "🔍 Running opaque-wire regression audit in DataServer/internal/socialclient/..."
+
+          matches=$(
+            git grep -nE "${REGEX}" -- \
+              DataServer/internal/socialclient/ \
+              ':!.github/workflows/ci-opaque-wire.yml' \
+              ':!DataServer/internal/socialclient/**/*_test.go' \
+              ':!DataServer/internal/socialclient/testdata/**' \
+            || true
+          )
+
+          if [[ -n "${matches}" ]]; then
+            echo
+            echo "❌ Opaque-wire regression detected:"
+            echo
+            echo "Forbidden top-level Platform / AccountID / ChannelID surfaced"
+            echo "in DataServer/internal/socialclient/ (the typed Velox-side"
+            echo "boundary against social_repo)."
+            echo
+            echo "These fields ARE allowed in unrelated domains"
+            echo "(DataServer/internal/handlers/remote/livestream/*,"
+            echo "DataServer/internal/store/sqlite_livestream.go,"
+            echo "DataServer/internal/store/sqlite_analytics.go,"
+            echo "DataServer/internal/handlers/server/pipeline/*) because"
+            echo "those domains are NOT covered by Residuo 3 — they predate"
+            echo "the YouTube → Social closure and are outside the opaque-wire"
+            echo "contract."
+            echo
+            echo "${matches}"
+            echo
+            echo "Hints (per disjunct):"
+            echo "  * Platform / AccountID / ChannelID are the legacy"
+            echo "    per-platform-fields top-level fields on"
+            echo "    DeliverArtifactRequest. Residuo 3 removed them and"
+            echo "    replaced with the opaque ExternalDestinationID. The"
+            echo "    social_repo is the authoritative resolver."
+            echo "  * If a PR legitimately needs to express platform-specific"
+            echo "    intent, push it into the Metadata map[string]any"
+            echo "    payload (social_repo picks title / description / tags /"
+            echo "    privacy / publish / etc. from there)."
+            echo "  * If the legacy keys appear in a NEGATIVE-PINNING test"
+            echo "    fixture (TestDeliverArtifact_LegacyKeysNeverPresent"
+            echo "    for example), the audit already excludes *_test.go —"
+            echo "    no operator action is needed."
+            exit 1
+          fi
+
+          echo
+          echo "✅ No opaque-wire regression found — clean."
