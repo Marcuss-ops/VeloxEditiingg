@@ -224,10 +224,11 @@ The legacy deprecation aliases `SOCIAL_GATEWAY_URL`, `SOCIAL_GATEWAY_API_KEY`, `
 
 A dedicated GitHub Actions workflow now forbids re-introduction of any
 direct Velox-side YouTube integration after the YouTube → Social API
-closure (PR-15.8 / PR-15.9 / PR-15.10 / PR-15.11-15.15 + Residuo 2 / 3 /
-4 chain). Migrations 090 / 091 / 092 / 093 + the typed model +
-validator + runner + socialclient + provider layers already CLOSED the
-domain runtime; this workflow exists to keep it closed at CI time.
+closure (PR-15.8 / PR-15.9 / PR-15.10 / PR-15.11 / PR-15.12 / PR-15.13
+/ PR-15.14 + Residuo 2 / 3 / 4 chain). Migrations 090 / 091 / 092 / 093
++ the typed model + validator + runner + socialclient + provider
+layers already CLOSED the domain runtime; this workflow exists to keep
+it closed at CI time.
 
 **Added**:
 
