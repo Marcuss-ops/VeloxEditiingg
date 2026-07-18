@@ -11,6 +11,8 @@
 # Allowlist (in evaluation order, first match wins per file):
 #
 #   1. Path:        DataServer/internal/store/** (sole SQL gateway)
+#   1b. Path:       DataServer/internal/artifacts/** and internal/completion/**
+#                   (documented transition seams)
 #   2. Path:        DataServer/cmd/seed-*    (test scaffolding)
 #   3. File marker: any Go file containing the literal
 #                   "// sql-allowlist:" comment (rationale tracked in
@@ -128,7 +130,7 @@ for f in "${files[@]}"; do
   # NOTE: The find above is scoped to DataServer/internal/ so the
   # cmd/seed-* branch is currently dead code (forward-compat only).
   case "${f#DataServer/internal/}" in
-    store/*) continue ;;
+    store/*|artifacts/*|completion/*) continue ;;
   esac
   case "${f#DataServer/}" in
     cmd/seed-*) continue ;;

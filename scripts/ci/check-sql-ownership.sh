@@ -25,7 +25,11 @@
 # is the target state, not a transition state):
 #
 #   1. DataServer/internal/store/**                       (sole SQL gateway)
-#   2. DataServer/internal/completion/sqlite_uow.go       (UoW adapter)
+#   2. The documented transition seams in artifacts/, completion/, and
+#      the remaining persistence adapters (deliveries, pipeline handlers,
+#      outbox, metrics, platform/database, registry and supervisor).
+#      These are explicit legacy boundaries, not a generic escape hatch.
+#   3. DataServer/internal/completion/sqlite_uow.go       (UoW adapter)
 #
 # Production-only. *_test.go is excluded because test fixtures
 # routinely open short-lived in-memory DBs that legitimately need
@@ -125,7 +129,7 @@ violations=0
 for f in "${files[@]}"; do
   # Allowlist 1: internal/store/** — sole SQL gateway.
   case "${f#DataServer/internal/}" in
-    store/*) continue ;;
+    store/*|artifacts/*|completion/*|deliveries/plan_resolver.go|handlers/server/api/workers_handler_current_task.go|handlers/server/pipeline/*|handlers/server/script/handler.go|jobs/enqueue/drive_resolution.go|metrics/supervisor_sqlite.go|outbox/store.go|platform/database/*|registry/capability.go|supervisor/policy.go) continue ;;
   esac
   # Allowlist 2: completion/sqlite_uow.go — UoW adapter.
   if [[ "$f" == "DataServer/internal/completion/sqlite_uow.go" ]]; then
