@@ -89,7 +89,7 @@
         mode: "0700"
 
     - name: Install operator SSH public key
-      when: (velox_operator_pubkey | default('')) | length > 0 \
+      when: (velox_operator_pubkey | default('')) | length > 0
             or (vault_velox_operator_pubkey | default('')) | length > 0
       ansible.posix.authorized_key:
         user: "{{ velox_operator_user }}"
