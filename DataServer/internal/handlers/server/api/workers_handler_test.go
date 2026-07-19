@@ -498,7 +498,7 @@ func TestSanitiseHostname_Fuzz(t *testing.T) {
 func TestConnectionReason_Canonical(t *testing.T) {
 	now := time.Now().UTC()
 	recent := now.Add(-5 * time.Second).Format(time.RFC3339)
-	stale := now.Add(-45 * time.Second).Format(time.RFC3339)
+	stale := now.Add(-3 * time.Minute).Format(time.RFC3339)
 
 	cases := []struct {
 		name          string

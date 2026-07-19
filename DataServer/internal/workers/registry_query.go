@@ -36,10 +36,10 @@ const (
 	StatusDraining     = "DRAINING"
 
 	// ConnectionStaleThreshold — heartbeat older than this demotes a
-	// session-active worker from CONNECTED to STALE. Operators see a
-	// STALE worker BEFORE the dispatcher's eviction timeout (default
-	// 120s) fires, giving time to triage.
-	ConnectionStaleThreshold = 30 * time.Second
+	// session-active worker from CONNECTED to STALE. Idle workers publish
+	// every 60s, so the read model must allow more than one idle interval
+	// plus normal scheduling/network jitter. 150s is 2.5x the idle period.
+	ConnectionStaleThreshold = 150 * time.Second
 
 	// ConnectionDisconnectedThreshold — heartbeat older than this
 	// bumps a worker to DISCONNECTED regardless of session state.
@@ -57,8 +57,8 @@ const (
 //  1. drain=true                                    → DRAINING
 //  2. !sessionActive OR (now - lastHB) ≥ 5min OR   → DISCONNECTED
 //     lastHB unparseable OR lastHB == ""
-//  3. sessionActive AND (now - lastHB) ≥ 30s       → STALE
-//  4. sessionActive AND (now - lastHB) < 30s       → CONNECTED
+//  3. sessionActive AND (now - lastHB) ≥ 150s      → STALE
+//  4. sessionActive AND (now - lastHB) < 150s      → CONNECTED
 func ConnectionStatus(sessionActive bool, lastHB string, drain bool, now time.Time) string {
 	if drain {
 		return StatusDraining
@@ -178,7 +178,7 @@ func (r *Registry) GetWorkersByGroup(ctx context.Context, group string) []Worker
 // HasAtLeastOneLive (RW-PROD-004 §3 A7) is the master-side readiness
 // helper for the worker-side /health/ready migration. Returns true iff
 // at least ONE registered worker is currently live within
-// HasAtLeastOneLiveTimeout (30s). The semantics match GetActiveWorkers
+// HasAtLeastOneLiveTimeout (150s). The semantics match GetActiveWorkers
 // (last heartbeat within timeout + session active) but the consumer
 // is the master's own /health/readiness subsystem, NOT the operator
 // dashboards.
@@ -209,7 +209,7 @@ func (r *Registry) HasAtLeastOneLive(ctx context.Context) bool {
 }
 
 // HasAtLeastOneLiveTimeout is the canonical freshness window for the
-// master-side readiness gate. Matches ConnectionStaleThreshold (30s)
+// master-side readiness gate. Matches ConnectionStaleThreshold (150s)
 // so a fresh heartbeat keeps the gate satisfied while a stale one
 // drops the gate in lockstep with operator dashboards.
 const HasAtLeastOneLiveTimeout = ConnectionStaleThreshold

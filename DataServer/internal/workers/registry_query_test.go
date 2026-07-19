@@ -74,7 +74,7 @@ func TestRegistry_HasAtLeastOneLive_OneLive(t *testing.T) {
 
 func TestRegistry_HasAtLeastOneLive_AllStale(t *testing.T) {
 	// Heartbeat from 5 minutes ago → older than HasAtLeastOneLiveTimeout
-	// (30s) AND ConnectionDisconnectedThreshold (5min), so the worker is
+	// (150s) AND ConnectionDisconnectedThreshold (5min), so the worker is
 	// DISCONNECTED in canonical ConnectionStatus semantics.
 	r := newRegistryWithLastHB(t, testLiveWorker, time.Now().UTC().Add(-5*time.Minute), true)
 	if r.HasAtLeastOneLive(context.Background()) {

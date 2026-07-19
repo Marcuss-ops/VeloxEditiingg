@@ -392,7 +392,7 @@ func TestRegistryGetStaleWorkers(t *testing.T) {
 // Tests the canonical scenarios for /api/v1/workers/:worker_id:
 //  1. CONNECTED — fresh session + fresh heartbeat
 //  2. session_drop — fresh heartbeat but revoked session → DISCONNECTED
-//  3. STALE — fresh session + heartbeat older than 30s but younger than 5min
+//  3. STALE — fresh session + heartbeat older than 150s but younger than 5min
 //  4. DISCONNECTED — heartbeat older than 5min, even with active session
 //  5. DRAINING — drain=true overrides freshness on a fresh session/heartbeat
 //
@@ -470,9 +470,9 @@ func TestRegistryConnectionStatus_SessionDropAndOldHeartbeat(t *testing.T) {
 			info.ConnectionStatus)
 	}
 
-	// ── 3. STALE — fresh session + heartbeat 60s ago ───────────────
+	// ── 3. STALE — fresh session + heartbeat 3min ago ───────────────
 	insertSession("w1", "sess-stale")
-	setHB("w1", 60*time.Second)
+	setHB("w1", 3*time.Minute)
 
 	info = reg.GetWorker(ctx, "w1")
 	if info == nil {
@@ -482,7 +482,7 @@ func TestRegistryConnectionStatus_SessionDropAndOldHeartbeat(t *testing.T) {
 		t.Errorf("step 3: expected SessionActive=true; got false")
 	}
 	if info.ConnectionStatus != StatusStale {
-		t.Errorf("step 3: expected STALE with fresh session + 60s-old heartbeat; got %q",
+		t.Errorf("step 3: expected STALE with fresh session + 3min-old heartbeat; got %q",
 			info.ConnectionStatus)
 	}
 

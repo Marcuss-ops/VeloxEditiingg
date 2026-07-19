@@ -71,8 +71,8 @@ type WorkerInfo struct {
 	SessionActive bool `json:"session_active"`
 
 	// ConnectionStatus — canonical derived state, one of:
-	//   CONNECTED:    session_active && (now - last_heartbeat) < 30s
-	//   STALE:        session_active && 30s ≤ (now - last_heartbeat) < 5min
+	//   CONNECTED:    session_active && (now - last_heartbeat) < 150s
+	//   STALE:        session_active && 150s ≤ (now - last_heartbeat) < 5min
 	//   DISCONNECTED: !session_active OR (now - last_heartbeat) ≥ 5min
 	//   DRAINING:     drain=true (overrides heartbeat freshness)
 	// Always serialized (no omitempty) so the legacy/fallback path emits

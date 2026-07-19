@@ -64,8 +64,8 @@ func TestNormalizeCapabilities_Nil(t *testing.T) {
 //  2. !sessionActive       → DISCONNECTED (no valid auth session)
 //  3. lastHB empty/unpars. → DISCONNECTED
 //  4. age ≥ 5min           → DISCONNECTED
-//  5. age ≥ 30s            → STALE
-//  6. age <  30s           → CONNECTED
+//  5. age ≥ 150s           → STALE
+//  6. age <  150s           → CONNECTED
 func hbOffset(now time.Time, age time.Duration) string {
 	return now.UTC().Add(-age).Format(time.RFC3339)
 }
@@ -95,15 +95,15 @@ func TestConnectionStatus_FreshSession_FreshHeartbeat_IsConnected(t *testing.T) 
 	}
 }
 
-func TestConnectionStatus_FreshSession_45sHeartbeat_IsStale(t *testing.T) {
+func TestConnectionStatus_FreshSession_3minHeartbeat_IsStale(t *testing.T) {
 	now := time.Now().UTC()
-	got := ConnectionStatus(true, hbOffset(now, 45*time.Second), false, now)
+	got := ConnectionStatus(true, hbOffset(now, 3*time.Minute), false, now)
 	if got != StatusStale {
-		t.Errorf("sessionActive + 45s-old heartbeat should be STALE (boundary 30s); got %s", got)
+		t.Errorf("sessionActive + 3min-old heartbeat should be STALE (boundary 150s); got %s", got)
 	}
 }
 
-func TestConnectionStatus_Boundary30s_IsStale(t *testing.T) {
+func TestConnectionStatus_Boundary150s_IsStale(t *testing.T) {
 	now := time.Now().UTC()
 	got := ConnectionStatus(true, hbOffset(now, ConnectionStaleThreshold), false, now)
 	if got != StatusStale {
@@ -111,7 +111,7 @@ func TestConnectionStatus_Boundary30s_IsStale(t *testing.T) {
 	}
 }
 
-func TestConnectionStatus_BoundaryJustUnder30s_IsConnected(t *testing.T) {
+func TestConnectionStatus_BoundaryJustUnder150s_IsConnected(t *testing.T) {
 	now := time.Now().UTC()
 	got := ConnectionStatus(true, hbOffset(now, ConnectionStaleThreshold-time.Second), false, now)
 	if got != StatusConnected {

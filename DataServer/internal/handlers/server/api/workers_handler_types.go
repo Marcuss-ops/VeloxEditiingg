@@ -42,10 +42,10 @@ var ConnectionStaleThreshold = workersreg.ConnectionStaleThreshold
 //	detached_session  — session_active=false (stream closed), all other
 //	                    signals ignored (precedence 2). Mirrors spec
 //	                    "Stream chiuso → detached_session senza
-//	                    aspettare 30s".
+//	                    aspettare 150s".
 //	heartbeat_stale   — session_active=true but last_heartbeat is stale,
 //	                    empty, or unparseable. With a fresh session the
-//	                    canonical state is STALE (30s-5min). With an old
+//	                    canonical state is STALE (150s-5min). With an old
 //	                    session the state is DISCONNECTED but the reason
 //	                    is still heartbeat_stale (the session is up but
 //	                    the heartbeat has stopped).
@@ -213,7 +213,7 @@ func redactSecretHex(s string) string {
 //  3. lastHB empty/unparseable OR
 //     session_active AND (now - lastHB) >= ConnectionStaleThreshold
 //     → "heartbeat_stale"
-//  4. fresh (session_active AND now - lastHB < 30s)       → ""
+//  4. fresh (session_active AND now - lastHB < 150s)      → ""
 //
 // Note on the third rule: spec text says "lastHB stale|empty" maps
 // to heartbeat_stale. detached_session (rule 2) wins over rule 3
