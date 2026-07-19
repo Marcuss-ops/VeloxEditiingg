@@ -1,0 +1,146 @@
+# ============================================================================
+# Velox Regression Race Check
+# ============================================================================
+#
+# Runs scripts/ci/run-split-regression.sh — the post-0d2158d regression
+# suite covering the 8 split orchestrators across 5 packages plus the
+# full DataServer and worker-agent modules with `go test -race -count=1`.
+#
+# Per group, the runner captures: label, cwd, pkg selector, exit rc, and
+# wall-clock seconds. Aggregate lands in /tmp/velox-regression-results.txt.
+#
+# Workflow outputs:
+#   * a build artifact (velox-regression-results) for forensic inspection
+#     and for downstream runs to diff against;
+#   * a job summary showing a unified diff vs the most recent prior
+#     successful run on this branch (or a "baseline" notice if none);
+#   * if any group rc != 0, the job itself fails so main-branch status
+#     and any PR-required-check wiring reflect the regression.
+#
+# Triggers:
+#   * push on main              (every merge / direct push is checked)
+#   * schedule                  (Mondays 06:00 UTC catches newly-broken
+#                                suites untouched by recent pushes)
+#   * workflow_dispatch         (ad-hoc operator run; not gated on PRs)
+#
+# Runner contract (scripts/ci/run-split-regression.sh):
+#   rc 0 == every group rc=0; rc 2 == at least one group rc != 0.
+# ============================================================================
+
+name: regression-race
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+# Never cancel in-progress runs — every run is a baseline candidate.
+# Mirrors golden-e2e's cancel-in-progress: false policy.
+concurrency:
+  group: regression-race-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  # Required so github-script can call listWorkflowRuns and feed a
+  # prior successful run id to the artifact download step.
+  actions: read
+
+jobs:
+  run-race-check:
+    name: post-0d2158d split-regression (race)
+    runs-on: ubuntu-latest
+    # Wall-clock budget ≈ 174s local + GitHub runner overhead + safety.
+    timeout-minutes: 15
+
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+
+      - name: install Go toolchain (from go.work)
+        uses: actions/setup-go@v5
+        with:
+          # go.work pins go 1.25.8 across both modules; a literal pin
+          # here would drift behind the workspace resolution.
+          go-version-file: go.work
+          cache: true
+
+      - name: run split regression
+        run: bash scripts/ci/run-split-regression.sh
+
+      - name: upload results artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: velox-regression-results
+          path: /tmp/velox-regression-results.txt
+          retention-days: 90
+          # Strict — a missing result artifact would silently mask a
+          # regression. Fail loudly on absence.
+          if-no-files-found: error
+
+      - name: find previous successful run (api)
+        if: always()
+        id: prev_run
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const runs = await github.rest.actions.listWorkflowRuns({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'regression-race.yml',
+              status: 'success',
+              branch: context.ref_name,
+            });
+            const prev = runs.data.workflow_runs.find(
+              r => r.id !== context.runId
+            );
+            if (prev) {
+              core.setOutput('prev_run_id', String(prev.id));
+              core.setOutput('prev_run_url', prev.html_url);
+            } else {
+              core.info(
+                'No previous successful run for regression-race on ' +
+                context.ref_name + '; this run is the baseline.'
+              );
+            }
+
+      - name: download previous results artifact
+        if: always() && steps.prev_run.outputs.prev_run_id != ''
+        # Transient download failures (retention expired, API hiccup)
+        # MUST NOT block the summary post; the fallback message below
+        # documents the gap so the operator still sees the current run.
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: velox-regression-results
+          run-id: ${{ steps.prev_run.outputs.prev_run_id }}
+          path: /tmp/previous-run
+
+      - name: post job summary diff
+        if: always()
+        run: |
+          {
+            echo "## Regression Race results (commit \`${GITHUB_SHA::7}\`)"
+            echo
+            if [ -s /tmp/previous-run/velox-regression-results.txt ]; then
+              echo "### Diff vs [previous successful run]"
+              echo "(run id: \`${{ steps.prev_run.outputs.prev_run_id }}\`)"
+              echo
+              echo '```diff'
+              diff -u \
+                /tmp/previous-run/velox-regression-results.txt \
+                /tmp/velox-regression-results.txt || true
+              echo '```'
+            else
+              echo "_No previous successful run on this branch — this run is the new baseline._"
+            fi
+            echo
+            echo "### Current run"
+            echo
+            echo '```text'
+            cat /tmp/velox-regression-results.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
