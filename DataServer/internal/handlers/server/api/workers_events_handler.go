@@ -64,6 +64,26 @@ func NewEventsHandler(reader EventsReader) *EventsHandler {
 //
 // Response: 200 WorkerEventsListResponse, 400 on missing :worker_id,
 // 503 on a nil reader.
+//
+// @Summary       List worker events (audit ledger)
+// @Description   Per-worker audit ledger for dashboards / on-call tooling.
+// @Description   SECURITY (canonical ownership §3): details_json is parsed
+// @Description   into a map and every string value is routed through
+// @Description   sanitiseHostname() so embedded IPs / paths / long-hex
+// @Description   cannot leak. Parse failures fall back to the raw string
+// @Description   (still sanitised) so the audit ledger is never silently
+// @Description   dropped.
+// @Tags          workers
+// @Produce       json
+// @Param         worker_id  path  string true  "Worker ID"
+// @Param         limit      query int    false "Optional page size, 1..1000 (default 100)"
+// @Param         event_type query string false "Optional exact match on event_type (no whitelist enforced)"
+// @Param         since      query string false "Optional RFC3339 lower bound on created_at"
+// @Success       200        {object} WorkerEventsListResponse   "Events payload"
+// @Failure       400        {object} map[string]string         "worker_id is required"
+// @Failure       500        {object} map[string]string         "list worker events error"
+// @Failure       503        {object} map[string]string         "events reader not available"
+// @Router        /api/v1/workers/{worker_id}/events [get]
 func (h *EventsHandler) ListWorkerEvents() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if h == nil || h.reader == nil {

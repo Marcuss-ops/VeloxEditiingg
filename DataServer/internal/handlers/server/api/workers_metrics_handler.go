@@ -73,6 +73,24 @@ func NewMetricsHandler(reader MetricsReader) *MetricsHandler {
 //
 // Response: 200 WorkerMetricsListResponse, 400 on missing
 // :worker_id path param, 503 on a nil reader.
+//
+// @Summary       List worker metrics samples
+// @Description   Read-only time-series projection over `worker_metric_samples`
+// @Description   for a single worker. NULL optional columns (load_average,
+// @Description   process_rss_bytes, network_rx_bytes, network_tx_bytes) are
+// @Description   pinned to nil pointers so the JSON render surface omits them
+// @Description   cleanly. No IPs / creds / TLS paths ever leave the store on
+// @Description   this surface (RW-PROD-005 §2).
+// @Tags          workers
+// @Produce       json
+// @Param         worker_id path     string true  "Worker ID"
+// @Param         limit     query    int    false "Optional page size, 1..1000 (default 100)"
+// @Param         since     query    string false "Optional RFC3339 lower bound on sampled_at"
+// @Success       200       {object} WorkerMetricsListResponse "Metrics payload"
+// @Failure       400       {object} map[string]string         "worker_id is required"
+// @Failure       500       {object} map[string]string         "list worker metrics error"
+// @Failure       503       {object} map[string]string         "metrics reader not available"
+// @Router        /api/v1/workers/{worker_id}/metrics [get]
 func (h *MetricsHandler) ListWorkerMetrics() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if h == nil || h.reader == nil {

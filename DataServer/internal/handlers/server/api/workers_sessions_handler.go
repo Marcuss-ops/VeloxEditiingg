@@ -60,6 +60,23 @@ func NewSessionsHandler(reader SessionsReader) *SessionsHandler {
 //
 // Response: 200 WorkerSessionsListResponse, 400 on missing :worker_id,
 // 503 on a nil reader.
+//
+// @Summary       List worker sessions
+// @Description   Per-worker session history for dashboards / on-call tooling.
+// @Description   SECURITY (canonical ownership §3): token_hash is NEVER
+// @Description   carried into the response; ip_address IS surfaced but goes
+// @Description   through sanitiseHostname() at the handler boundary
+// @Description   (IPv4 / IPv6 / long-hex redaction).
+// @Tags          workers
+// @Produce       json
+// @Param         worker_id       path  string true  "Worker ID"
+// @Param         limit           query int    false "Optional page size, 1..1000 (default 100)"
+// @Param         include_revoked query bool   false "Optional boolean (default false); include revoked sessions when true"
+// @Success       200             {object} WorkerSessionsListResponse "Sessions payload"
+// @Failure       400             {object} map[string]string          "worker_id is required"
+// @Failure       500             {object} map[string]string          "list worker sessions error"
+// @Failure       503             {object} map[string]string          "sessions reader not available"
+// @Router        /api/v1/workers/{worker_id}/sessions [get]
 func (h *SessionsHandler) ListWorkerSessions() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if h == nil || h.reader == nil {
